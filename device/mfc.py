@@ -365,6 +365,79 @@ class AsyncMFC:
             return
         self._emit_pressure_from_line_sync(line.strip())
 
+    async def handle_command(self, cmd: str, args: dict | None = None) -> None:
+        """
+        main/process에서 넘어오는 문자열 명령을 고수준 메서드로 라우팅한다.
+        - cmd: 'FLOW_SET', 'FLOW_ON', 'FLOW_OFF', 'VALVE_OPEN', 'VALVE_CLOSE',
+               'PS_ZEROING', 'MFC_ZEROING', 'SP4_ON', 'SP1_ON', 'SP1_SET',
+               'READ_FLOW_ALL', 'READ_PRESSURE'
+        - args: 필요한 인자 (channel, value 등)
+        """
+        args = args or {}
+        key = (cmd or "").strip().upper()
+
+        def _req(name: str, cast=float):
+            if name not in args:
+                raise KeyError(f"'{name}' is required for {key}")
+            try:
+                return cast(args[name])
+            except Exception as e:
+                raise ValueError(f"invalid {name} for {key}: {args[name]!r}") from e
+
+        try:
+            if key == "FLOW_SET":
+                ch = _req("channel", int)
+                val_ui = _req("value", float)
+                await self.set_flow(ch, val_ui)
+
+            elif key == "FLOW_ON":
+                ch = _req("channel", int)
+                await self.flow_on(ch)
+
+            elif key == "FLOW_OFF":
+                ch = _req("channel", int)
+                await self.flow_off(ch)
+
+            elif key == "VALVE_OPEN":
+                await self.valve_open()
+
+            elif key == "VALVE_CLOSE":
+                await self.valve_close()
+
+            elif key == "PS_ZEROING":
+                # 게이지 제로잉: no-reply 전송 후 간단 검증(READ_PRESSURE로 동작 확인) 대신
+                # 상태 로그 + 확정 이벤트만 방출 (필요시 검증 루프 추가 가능)
+                self._enqueue(self._mk_cmd("PS_ZEROING"), None, allow_no_reply=True, tag="[PS_ZEROING]")
+                await self._emit_status("압력 센서 Zeroing 명령 전송")
+                await self._emit_confirmed("PS_ZEROING")
+
+            elif key == "MFC_ZEROING":
+                ch = _req("channel", int)
+                self._enqueue(self._mk_cmd("MFC_ZEROING", channel=ch), None, allow_no_reply=True, tag=f"[MFC_ZEROING ch{ch}]")
+                await self._emit_status(f"Ch{ch} MFC Zeroing 명령 전송")
+                await self._emit_confirmed("MFC_ZEROING")
+
+            elif key == "SP4_ON":
+                await self.sp4_on()
+
+            elif key == "SP1_ON":
+                await self.sp1_on()
+
+            elif key == "SP1_SET":
+                val_ui = _req("value", float)
+                await self.sp1_set(val_ui)
+
+            elif key in ("READ_FLOW_ALL", "READ_FLOW"):  # 호환용
+                await self.read_flow_all()
+
+            elif key in ("READ_PRESSURE",):
+                await self.read_pressure()
+
+            else:
+                await self._emit_failed(key, "지원되지 않는 MFC 명령")
+        except Exception as e:
+            await self._emit_failed(key, f"예외: {e}")
+
     # ---- 폴링 on/off (Process와 연동) ----
     def set_process_status(self, should_poll: bool):
         """공정 시작/종료 시 폴링 제어."""
