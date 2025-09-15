@@ -6,7 +6,7 @@ import asyncio
 from typing import Optional
 from datetime import datetime
 
-from PySide6.QtWidgets import QApplication, QWidget, QMessageBox, QFileDialog, QPlainTextEdit
+from PySide6.QtWidgets import QApplication, QWidget, QMessageBox, QFileDialog, QPlainTextEdit, QStackedWidget
 from PySide6.QtCore import QCoreApplication, Qt, QTimer, Slot
 from PySide6.QtGui import QTextCursor
 from qasync import QEventLoop
@@ -40,6 +40,14 @@ class MainWindow(QWidget):
         super().__init__()
         self.ui = Ui_Form()
         self.ui.setupUi(self)
+
+        # --- 스택 및 페이지 매핑 (UI 객체명 고정)
+        self._stack = self.ui.stackedWidget
+        self._pages = {
+            "pc":  self.ui.page_3,  # Plasma Cleaning
+            "ch1": self.ui.page,    # CH1
+            "ch2": self.ui.page_2,  # CH2
+        }
 
         # --- Tab 키로 다음 필드로 이동 (QPlainTextEdit 전체 적용)
         for edit in self.findChildren(QPlainTextEdit):
@@ -162,6 +170,36 @@ class MainWindow(QWidget):
         self.ui.ch2_Start_button.clicked.connect(self._handle_start_clicked)
         self.ui.ch2_Stop_button.clicked.connect(self._handle_stop_clicked)
         self.ui.ch2_processList_button.clicked.connect(self._handle_process_list_clicked)
+
+        # --- 페이지 네비게이션 (UI에 존재하는 버튼들 직접 연결)
+        # Plasma Cleaning 페이지의 버튼
+        self.ui.pc_btnGoCh1.clicked.connect(lambda: self._switch_page("ch1"))
+        self.ui.pc_btnGoCh2.clicked.connect(lambda: self._switch_page("ch2"))
+
+        # CH1 페이지의 버튼
+        self.ui.ch1_btnGoPC.clicked.connect(lambda: self._switch_page("pc"))
+        self.ui.ch1_btnGoCh2.clicked.connect(lambda: self._switch_page("ch2"))
+
+        # CH2 페이지의 버튼
+        self.ui.ch2_btnGoPC.clicked.connect(lambda: self._switch_page("pc"))
+        self.ui.ch2_btnGoCh1.clicked.connect(lambda: self._switch_page("ch1"))
+
+    # ------------------------------------------------------------------
+    # Page 전환 함수
+    # ------------------------------------------------------------------
+    def _switch_page(self, key: str):
+        """'pc' | 'ch1' | 'ch2' 키로 스택 페이지 전환"""
+        page = self._pages.get(key)
+        if not page:
+            self.append_log("UI", f"페이지 키 '{key}' 를 찾을 수 없습니다.")
+            return
+
+        # 스택 전환
+        try:
+            self._stack.setCurrentWidget(page)
+        except Exception as e:
+            self.append_log("UI", f"페이지 전환 실패({key}): {e}")
+            return
 
     # ------------------------------------------------------------------
     # ProcessController 이벤트 펌프 (컨트롤러 → UI/로거/알림/다음 공정)
