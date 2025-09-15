@@ -8,6 +8,7 @@ from datetime import datetime
 
 from PySide6.QtWidgets import QApplication, QWidget, QMessageBox, QFileDialog, QPlainTextEdit
 from PySide6.QtCore import QCoreApplication, Qt, QTimer, Slot
+from PySide6.QtGui import QTextCursor
 from qasync import QEventLoop
 
 # === imports ===
@@ -71,6 +72,9 @@ class MainWindow(QWidget):
             request_status_read=self.faduino.force_rf_read,
         )
 
+        self._bg_started = False
+        self._bg_tasks = []
+
         # === Google Chat 알림(옵션) ===
         self.chat_notifier = ChatNotifier(CHAT_WEBHOOK_URL) if ENABLE_CHAT_NOTIFY else None
         if self.chat_notifier:
@@ -133,26 +137,6 @@ class MainWindow(QWidget):
 
         # === UI 버튼 연결 ===
         self._connect_ui_signals()
-
-        # === 백그라운드 태스크 시작 ===
-        loop = asyncio.get_event_loop()
-        self._bg_tasks = [
-            # 장치 내부 루프
-            loop.create_task(self.faduino.start()),
-            loop.create_task(self.mfc.start()),
-            loop.create_task(self.ig.start()),
-            loop.create_task(self.rf_pulse.start()),
-            # 이벤트 펌프(장치 → ProcessController)
-            loop.create_task(self._pump_faduino_events()),
-            loop.create_task(self._pump_mfc_events()),
-            loop.create_task(self._pump_ig_events()),
-            loop.create_task(self._pump_dc_events()),
-            loop.create_task(self._pump_rf_events()),
-            loop.create_task(self._pump_rfpulse_events()),
-            loop.create_task(self._pump_oes_events()),
-            # 컨트롤러 이벤트 펌프 (ProcessController → UI/로거/알림)
-            loop.create_task(self._pump_pc_events()),
-        ]
 
         # 로그 배치 flush
         self.ui.ch2_logMessage_edit.setMaximumBlockCount(2000)
@@ -386,6 +370,32 @@ class MainWindow(QWidget):
         self.process_controller.on_rga_finished()
 
     # ------------------------------------------------------------------
+    # 백그라운 태스크 시작 함수
+    # ------------------------------------------------------------------
+    def _ensure_background_started(self):
+        if self._bg_started:
+            return
+        self._bg_started = True
+        loop = asyncio.get_running_loop()
+        self._bg_tasks = [
+            # 장치 내부 루프
+            loop.create_task(self.faduino.start()),
+            loop.create_task(self.mfc.start()),
+            loop.create_task(self.ig.start()),
+            loop.create_task(self.rf_pulse.start()),
+            # 이벤트 펌프(장치 → PC)
+            loop.create_task(self._pump_faduino_events()),
+            loop.create_task(self._pump_mfc_events()),
+            loop.create_task(self._pump_ig_events()),
+            loop.create_task(self._pump_dc_events()),
+            loop.create_task(self._pump_rf_events()),
+            loop.create_task(self._pump_rfpulse_events()),
+            loop.create_task(self._pump_oes_events()),
+            # PC 이벤트 펌프 (PC → UI/로그/알림/다음공정)
+            loop.create_task(self._pump_pc_events()),
+        ]
+
+    # ------------------------------------------------------------------
     # 표시/입력 관련
     # ------------------------------------------------------------------
     @Slot(float, float)
@@ -530,6 +540,7 @@ class MainWindow(QWidget):
             self.append_log("MAIN", "경고: 이미 다른 공정이 실행 중이므로 새 공정을 시작하지 않습니다.")
             return
         try:
+            self._ensure_background_started()
             self.process_controller.start_process(params)
         except Exception as e:
             self.append_log("MAIN", f"오류: '{params.get('Process_name', '알 수 없는')} 공정' 시작에 실패했습니다. ({e})")
@@ -621,9 +632,7 @@ class MainWindow(QWidget):
         if self._log_ui_buf:
             block = "\n".join(self._log_ui_buf) + "\n"
             self._log_ui_buf.clear()
-            cursor = self.ui.ch2_logMessage_edit.textCursor()
-            cursor.movePosition(cursor.End)
-            self.ui.ch2_logMessage_edit.setTextCursor(cursor)
+            self.ui.ch2_logMessage_edit.moveCursor(QTextCursor.MoveOperation.End)
             self.ui.ch2_logMessage_edit.insertPlainText(block)
         # 파일
         if self._log_file_buf:
