@@ -55,8 +55,6 @@ IG_WATCHDOG_INTERVAL_MS = 2_000    # 연결 상태 감시 주기(ms)
 IG_RECONNECT_BACKOFF_START_MS = 1000   # 재연결 백오프 시작값(ms)
 IG_RECONNECT_BACKOFF_MAX_MS = 20_000   # 재연결 백오프 최대(ms)
 
-DEBUG_PRINT = True                 # 콘솔 디버그 출력 on/off
-
 # === Faduino ===
 FADUINO_POLLING_INTERVAL_MS = 1000
 FADUINO_WATCHDOG_INTERVAL_MS = 1000
