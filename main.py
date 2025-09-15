@@ -11,7 +11,7 @@ from PySide6.QtCore import QCoreApplication, Qt, QTimer, Slot, Signal
 from qasync import QEventLoop
 
 # === imports ===
-from ui import Ui_Form
+from ui.main_window import Ui_Form
 from controller.graph_controller import GraphController
 from controller.data_logger import DataLogger
 from controller.chat_notifier import ChatNotifier
@@ -20,7 +20,7 @@ from controller.chat_notifier import ChatNotifier
 from device.faduino import AsyncFaduino
 from device.ig import AsyncIG
 from device.mfc import AsyncMFC
-#from device.oes import run_measurement as run_oes_measurement
+from device.oes import OESAsync
 #from device.dc_power import RF_SAFE_FLOAT as _RF_SAFE_FLOAT  # (있으면) 사용, 없어도 무방
 from device.dc_power import DCPowerAsync
 from device.rf_power import RFPowerAsync
@@ -63,9 +63,21 @@ class MainWindow(QWidget):
         self.faduino = AsyncFaduino()
         self.mfc = AsyncMFC()
         self.ig = AsyncIG()
-        self.dc_power = DCPowerAsync()
-        self.rf_power = RFPowerAsync()
+
+        self.dc_power = DCPowerAsync(
+            send_dc_power=self.faduino.set_dc_power,
+            send_dc_power_unverified=self.faduino.set_dc_power_unverified,
+            request_status_read=self.faduino.force_dc_read,  # (선택)
+        )
+
+        self.rf_power = RFPowerAsync(
+            send_rf_power=self.faduino.set_rf_power,
+            send_rf_power_unverified=self.faduino.set_rf_power_unverified,
+            request_status_read=self.faduino.force_rf_read,  # (선택)
+        )
+
         self.rf_pulse = RFPulseAsync()
+        self.oes = OESAsync() 
 
         # === Google Chat 알림(옵션) ===
         self.chat_notifier = ChatNotifier(CHAT_WEBHOOK_URL) if ENABLE_CHAT_NOTIFY else None
@@ -76,15 +88,14 @@ class MainWindow(QWidget):
         self._connect_signals()
 
         # === 백그라운드 태스크 시작 ===
-        loop = asyncio.get_running_loop()
+        #loop = asyncio.get_running_loop()
         self._bg_tasks = [
             # 장치 내부 루프 (있다면)
             loop.create_task(self.faduino.start()),
             loop.create_task(self.mfc.start()),
             loop.create_task(self.ig.start()),
-            loop.create_task(self.dc_power.start()),
-            loop.create_task(self.rf_power.start()),
             loop.create_task(self.rf_pulse.start()),
+            loop.create_task(self._pump_oes_events()), 
 
             # 이벤트 펌프(장치 → UI/ProcessController 브릿지)
             loop.create_task(self._pump_faduino_events()),
@@ -117,53 +128,35 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
     def _connect_signals(self):
         # === DataLogger ===
-        self.process_controller.process_started.connect(self.data_logger.start_new_log_session,
-                                                       type=Qt.ConnectionType.QueuedConnection)
-        self.process_controller.process_finished.connect(self.data_logger.finalize_and_write_log,
-                                                        type=Qt.ConnectionType.QueuedConnection)
-
-        # 공정 시작 시 그래프 초기화
-        self.process_controller.process_started.connect(
-            lambda *args: self.graph_controller.reset(),
-            type=Qt.ConnectionType.QueuedConnection
-        )
+        self.process_controller.process_started.connect(self.data_logger.start_new_log_session)
+        self.process_controller.process_finished.connect(self.data_logger.finalize_and_write_log)
+        self.process_controller.process_started.connect(lambda *args: self.graph_controller.reset())
 
         # === 로그/상태 ===
         self.process_controller.log_message.connect(self.append_log)
-        self.process_controller.update_process_state.connect(self.on_update_process_state)
+        self.process_controller.update_process_state.connect(self._apply_process_state_message)
 
         # === ProcessController → 장치 (비동기 어댑터) ===
-        self.process_controller.update_faduino_port.connect(self._on_faduino_named,
-                                                            type=Qt.ConnectionType.QueuedConnection)
-        self.process_controller.mfc_command_requested.connect(self._on_mfc_command,
-                                                              type=Qt.ConnectionType.QueuedConnection)
-        self.process_controller.oes_command_requested.connect(self._on_oes_run,
-                                                              type=Qt.ConnectionType.QueuedConnection)
-        self.process_controller.dc_power_command_requested.connect(self._on_dc_start,
-                                                                   type=Qt.ConnectionType.QueuedConnection)
-        self.process_controller.dc_power_stop_requested.connect(self._on_dc_stop,
-                                                                type=Qt.ConnectionType.QueuedConnection)
-        self.process_controller.rf_power_command_requested.connect(self._on_rf_start,
-                                                                   type=Qt.ConnectionType.QueuedConnection)
-        self.process_controller.rf_power_stop_requested.connect(self._on_rf_stop,
-                                                                type=Qt.ConnectionType.QueuedConnection)
-        self.process_controller.rf_pulse_command_requested.connect(self._on_rfpulse_start,
-                                                                   type=Qt.ConnectionType.QueuedConnection)
-        self.process_controller.rf_pulse_stop_requested.connect(self._on_rfpulse_stop,
-                                                                type=Qt.ConnectionType.QueuedConnection)
-        self.process_controller.rga_external_scan_requested.connect(self._on_rga_scan,
-                                                                    type=Qt.ConnectionType.QueuedConnection)
-        self.process_controller.ig_command_requested.connect(self._on_ig_wait,
-                                                             type=Qt.ConnectionType.QueuedConnection)
-
+        self.process_controller.update_faduino_port.connect(self._on_faduino_named)
+        self.process_controller.mfc_command_requested.connect(self._on_mfc_command)
+        self.process_controller.oes_command_requested.connect(self._on_oes_run)
+        self.process_controller.dc_power_command_requested.connect(self._on_dc_start)
+        self.process_controller.dc_power_stop_requested.connect(self._on_dc_stop)
+        self.process_controller.rf_power_command_requested.connect(self._on_rf_start)
+        self.process_controller.rf_power_stop_requested.connect(self._on_rf_stop)
+        self.process_controller.rf_pulse_command_requested.connect(self._on_rfpulse_start)
+        self.process_controller.rf_pulse_stop_requested.connect(self._on_rfpulse_stop)
+        self.process_controller.rga_external_scan_requested.connect(self._on_rga_scan)
+        self.process_controller.ig_command_requested.connect(self._on_ig_wait)
+        self.process_controller.set_polling_targets.connect(self._apply_polling_targets)
+        
         # 폴링 on/off
-        self.process_controller.set_polling_targets.connect(self._apply_polling_targets,
-                                                            type=Qt.ConnectionType.QueuedConnection)
+        self.process_controller.set_polling_targets.connect(self._apply_polling_targets)
 
         # === UI 버튼 (CH2) ===
-        self.ui.ch2_Start_button.clicked.connect(self.on_start_button_clicked)
-        self.ui.ch2_Stop_button.clicked.connect(self.on_stop_button_clicked)
-        self.ui.ch2_processList_button.clicked.connect(self.on_process_list_button_clicked)
+        self.ui.ch2_Start_button.clicked.connect(self._handle_start_clicked)
+        self.ui.ch2_Stop_button.clicked.connect(self._handle_stop_clicked)
+        self.ui.ch2_processList_button.clicked.connect(self._handle_process_list_clicked)
 
         self.process_controller.process_status_changed.connect(self._on_process_status_changed)
         self._on_process_status_changed(False)
@@ -173,160 +166,134 @@ class MainWindow(QWidget):
 
         # === Google Chat 알림 (ProcessController의 신호만 연결) ===
         if self.chat_notifier is not None:
-            self.process_controller.process_started.connect(
-                self.chat_notifier.notify_process_started,
-                type=Qt.ConnectionType.QueuedConnection
-            )
-            self.process_controller.process_finished_detail.connect(
-                self.chat_notifier.notify_process_finished_detail,
-                type=Qt.ConnectionType.QueuedConnection
-            )
-            self.process_controller.process_aborted.connect(
-                lambda: self.chat_notifier.notify_text("🛑 공정이 중단되었습니다."),
-                type=Qt.ConnectionType.QueuedConnection
-            )
+            self.process_controller.process_started.connect(self.chat_notifier.notify_process_started)
+            self.process_controller.process_finished_detail.connect(self.chat_notifier.notify_process_finished_detail)
+            self.process_controller.process_aborted.connect(lambda: self.chat_notifier.notify_text("🛑 공정이 중단되었습니다."))
 
     # ------------------------------------------------------------------
     # 비동기 이벤트 펌프 (장치 → UI/ProcessController)
     # ------------------------------------------------------------------
     async def _pump_faduino_events(self):
-        q = self.faduino.event_q
-        while True:
-            ev = await q.get()
-            kind = getattr(ev, "kind", None)
-            if kind == "status":
-                self.append_log("Faduino", getattr(ev, "msg", ""))
-            elif kind == "command_confirmed":
-                self.process_controller.on_faduino_confirmed(getattr(ev, "cmd", ""))
-            elif kind == "command_failed":
-                why = getattr(ev, "why", "unknown")
-                self.process_controller.on_faduino_failed(getattr(ev, "cmd", ""), why)
-                if self.chat_notifier:
-                    self.chat_notifier.notify_error_with_src("Faduino", why)
-            elif kind == "dc_power":
-                p = getattr(ev, "power", 0.0)
-                v = getattr(ev, "voltage", 0.0)
-                c = getattr(ev, "current", 0.0)
-                # 데이터 로깅 & UI 갱신
-                try:
-                    self.data_logger.log_dc_power(p, v, c)
-                except Exception:
-                    pass
+        async for ev in self.faduino.events():
+            k = ev.kind
+            if k == "status":
+                self.append_log("Faduino", ev.message or "")
+            elif k == "command_confirmed":
+                self.process_controller.on_faduino_confirmed(ev.cmd or "")
+            elif k == "command_failed":
+                why = ev.reason or "unknown"
+                self.process_controller.on_faduino_failed(ev.cmd or "", why)
+                if self.chat_notifier: self.chat_notifier.notify_error_with_src("Faduino", why)
+            elif k == "dc_power":
+                p, v, c = ev.dc_p or 0.0, ev.dc_v or 0.0, ev.dc_c or 0.0
+                try: self.data_logger.log_dc_power(p, v, c)
+                except Exception: pass
                 self.handle_dc_power_display(p, v, c)
-                # 제어기에 전달(목표 도달/유지 판단은 제어기 내부)
                 self.dc_power.update_measurements(p, v, c)
-            elif kind == "rf_power":
-                f = getattr(ev, "forward", 0.0)
-                r = getattr(ev, "reflected", 0.0)
-                try:
-                    self.data_logger.log_rf_power(f, r)
-                except Exception:
-                    pass
+            elif k == "rf_power":
+                f, r = ev.rf_forward or 0.0, ev.rf_reflected or 0.0
+                try: self.data_logger.log_rf_power(f, r)
+                except Exception: pass
                 self.handle_rf_power_display(f, r)
                 self.rf_power.update_measurements(f, r)
 
     async def _pump_mfc_events(self):
-        q = self.mfc.event_q
-        while True:
-            ev = await q.get()
-            k = getattr(ev, "kind", None)
+        async for ev in self.mfc.events():
+            k = ev.kind
             if k == "status":
-                self.append_log("MFC", getattr(ev, "msg", ""))
+                self.append_log("MFC", ev.message or "")
             elif k == "command_confirmed":
-                self.process_controller.on_mfc_confirmed(getattr(ev, "cmd", ""))
+                self.process_controller.on_mfc_confirmed(ev.cmd or "")
             elif k == "command_failed":
-                cmd = getattr(ev, "cmd", "")
-                why = getattr(ev, "why", "unknown")
-                self.process_controller.on_mfc_failed(cmd, why)
-                if self.chat_notifier:
-                    self.chat_notifier.notify_error_with_src("MFC", f"{cmd}: {why}")
-            elif k == "update_flow":
-                gas = getattr(ev, "gas", "")
-                flow = float(getattr(ev, "flow", 0.0))
-                try:
-                    self.data_logger.log_mfc_flow(gas, flow)
-                except Exception:
-                    pass
+                why = ev.reason or "unknown"
+                self.process_controller.on_mfc_failed(ev.cmd or "", why)
+                if self.chat_notifier: self.chat_notifier.notify_error_with_src("MFC", f"{ev.cmd or ''}: {why}")
+            elif k == "flow":
+                gas = ev.gas or ""
+                flow = float(ev.value or 0.0)
+                try: self.data_logger.log_mfc_flow(gas, flow)
+                except Exception: pass
                 self.update_mfc_flow_ui(gas, flow)
-            elif k == "update_pressure":
-                pressure_str = getattr(ev, "pressure_str", "")
-                try:
-                    self.data_logger.log_mfc_pressure(pressure_str)
-                except Exception:
-                    pass
-                self.update_mfc_pressure_ui(pressure_str)
+            elif k == "pressure":
+                txt = ev.text or f"{ev.value:.3g}" if ev.value is not None else ""
+                try: self.data_logger.log_mfc_pressure(txt)
+                except Exception: pass
+                self.update_mfc_pressure_ui(txt)
 
     async def _pump_ig_events(self):
-        q = self.ig.event_q
-        while True:
-            ev = await q.get()
-            k = getattr(ev, "kind", None)
+        async for ev in self.ig.events():
+            k = ev.kind
             if k == "status":
-                self.append_log("IG", getattr(ev, "msg", ""))
-            elif k == "ok":
+                self.append_log("IG", ev.message or "")
+            elif k == "pressure":
+                pass  # 필요시 UI/로깅
+            elif k == "base_reached":
                 self.process_controller.on_ig_ok()
-            elif k == "failed":
-                why = getattr(ev, "why", "unknown")
+            elif k == "base_failed":
+                why = ev.message or "unknown"
                 self.process_controller.on_ig_failed("IG", why)
-                if self.chat_notifier:
-                    self.chat_notifier.notify_error("IG", why)
+                if self.chat_notifier: self.chat_notifier.notify_error("IG", why)
 
     async def _pump_dc_events(self):
-        q = self.dc_power.event_q
-        while True:
-            ev = await q.get()
-            k = getattr(ev, "kind", None)
+        async for ev in self.dc_power.events():
+            k = ev.kind
             if k == "status":
-                self.append_log("DCpower", getattr(ev, "msg", ""))
+                self.append_log("DCpower", ev.message or "")
             elif k == "state_changed":
-                # Faduino에 상태 전달(인터락/폴링 스위치 등에 필요 시)
-                try:
-                    self.faduino.on_dc_state_changed(bool(getattr(ev, "running", False)))
-                except Exception:
-                    pass
+                try: self.faduino.on_dc_state_changed(bool(ev.running))
+                except Exception: pass
             elif k == "target_reached":
                 self.process_controller.on_dc_target_reached()
             elif k == "power_off_finished":
                 self.process_controller.on_device_step_ok()
+            # 필요하면 k == "display" 에서 self.handle_dc_power_display(ev.power, ev.voltage, ev.current)
 
     async def _pump_rf_events(self):
-        q = self.rf_power.event_q
-        while True:
-            ev = await q.get()
-            k = getattr(ev, "kind", None)
+        async for ev in self.rf_power.events():
+            k = ev.kind
             if k == "status":
-                self.append_log("RFpower", getattr(ev, "msg", ""))
+                self.append_log("RFpower", ev.message or "")
             elif k == "state_changed":
-                try:
-                    self.faduino.on_rf_state_changed(bool(getattr(ev, "running", False)))
-                except Exception:
-                    pass
+                try: self.faduino.on_rf_state_changed(bool(ev.running))
+                except Exception: pass
             elif k == "target_reached":
                 self.process_controller.on_rf_target_reached()
             elif k == "target_failed":
-                why = getattr(ev, "why", "unknown")
+                why = ev.message or "unknown"
                 self.process_controller.on_step_failed("RF Power", why)
-                if self.chat_notifier:
-                    self.chat_notifier.notify_error_with_src("RF Power", why)
+                if self.chat_notifier: self.chat_notifier.notify_error_with_src("RF Power", why)
             elif k == "power_off_finished":
                 self.process_controller.on_device_step_ok()
+            # 필요하면 k == "display"로 화면/로깅 갱신
 
     async def _pump_rfpulse_events(self):
-        q = self.rf_pulse.event_q
-        while True:
-            ev = await q.get()
-            k = getattr(ev, "kind", None)
+        async for ev in self.rf_pulse.events():
+            k = ev.kind
             if k == "status":
-                self.append_log("RFPulse", getattr(ev, "msg", ""))
+                self.append_log("RFPulse", ev.message or "")
             elif k == "target_reached":
+                # RF Pulse도 공정단에서는 '타깃 도달'로 동일하게 처리
                 self.process_controller.on_rf_target_reached()
-            elif k == "target_failed":
-                why = getattr(ev, "why", "unknown")
+            elif k == "command_failed":
+                why = ev.reason or "unknown"
                 self.process_controller.on_step_failed("RF Pulse", why)
-                if self.chat_notifier:
-                    self.chat_notifier.notify_error_with_src("RF Pulse", why)
+                if self.chat_notifier: self.chat_notifier.notify_error_with_src("RF Pulse", why)
             elif k == "power_off_finished":
                 self.process_controller.on_rf_pulse_off_finished()
+
+    async def _pump_oes_events(self):
+        async for ev in self.oes.events():
+            if ev.kind == "status":
+                self.append_log("OES", ev.message or "")
+            elif ev.kind == "data":
+                self.graph_controller.update_oes_plot(ev.x, ev.y)
+            elif ev.kind == "finished":
+                if ev.success:
+                    self.process_controller.on_oes_ok()
+                else:
+                    self.process_controller.on_oes_failed("OES", "measure failed")
+                    if self.chat_notifier:
+                        self.chat_notifier.notify_error("OES", "measure failed")
 
     # ------------------------------------------------------------------
     # ProcessController → 장치 (비동기 어댑터)
@@ -338,21 +305,6 @@ class MainWindow(QWidget):
     @Slot(str, dict)
     def _on_mfc_command(self, cmd: str, args: dict):
         asyncio.create_task(self.mfc.handle_command(cmd, args))
-
-    @Slot(float, int)
-    def _on_oes_run(self, duration_sec: float, integration_ms: int):
-        async def run():
-            try:
-                async for x_data, y_data in run_oes_measurement(duration_sec, integration_ms):
-                    # 그래프 업데이트
-                    self.graph_controller.update_oes_plot(x_data, y_data)
-                # 완료
-                self.process_controller.on_oes_ok()
-            except Exception as e:
-                self.process_controller.on_oes_failed("OES", str(e))
-                if self.chat_notifier:
-                    self.chat_notifier.notify_error("OES", str(e))
-        asyncio.create_task(run())
 
     @Slot(float)
     def _on_dc_start(self, power_w: float):
@@ -381,14 +333,21 @@ class MainWindow(QWidget):
     @Slot()
     def _on_rga_scan(self):
         async def run():
+            # TODO: RGA 연동 또는 CSV 파서 구현 필요
+            self.append_log("RGA", "RGA 스캔은 아직 미구현 상태라 스킵합니다.")
+            self.process_controller.on_rga_finished()
+        asyncio.create_task(run())
+
+    @Slot(float, int)
+    def _on_oes_run(self, duration_sec: float, integration_ms: int):
+        async def run():
             try:
-                mass_axis, pressures = await external_scan()
-                self.graph_controller.update_rga_plot(mass_axis, pressures)
-                self.process_controller.on_rga_finished()
+                await self.oes.run_measurement(duration_sec, integration_ms)
+                # 결과 처리는 _pump_oes_events()에서 'finished' 이벤트로 처리됨
             except Exception as e:
-                self.process_controller.on_rga_failed("RGA", str(e))
+                self.process_controller.on_oes_failed("OES", str(e))
                 if self.chat_notifier:
-                    self.chat_notifier.notify_error("RGA", str(e))
+                    self.chat_notifier.notify_error("OES", str(e))
         asyncio.create_task(run())
 
     @Slot(float)
@@ -438,7 +397,7 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
     @Slot()
     @Slot(bool)
-    def on_process_list_button_clicked(self, _checked: bool=False):
+    def _handle_process_list_clicked(self, _checked: bool=False):
         file_path, _ = QFileDialog.getOpenFileName(
             self, "프로세스 리스트 파일 선택", "", "CSV Files (*.csv);;All Files (*)"
         )
@@ -554,7 +513,7 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
     @Slot()
     @Slot(bool)
-    def on_start_button_clicked(self, _checked: bool=False):
+    def _handle_start_clicked(self, _checked: bool=False):
         if self.process_controller.is_running:
             QMessageBox.warning(self, "실행 오류", "현재 다른 공정이 실행 중입니다.")
             return
@@ -602,7 +561,7 @@ class MainWindow(QWidget):
     # STOP/종료 (단일 경로)
     # ------------------------------------------------------------------
     @Slot()
-    def on_stop_button_clicked(self, _checked: bool=False):
+    def _handle_stop_clicked(self, _checked: bool=False):
         self.request_stop_all(user_initiated=True)
 
     def request_stop_all(self, user_initiated: bool):
@@ -667,7 +626,7 @@ class MainWindow(QWidget):
         # RF-Pulse는 컨트롤러 내부에서 자체 관리
 
     @Slot(str)
-    def on_update_process_state(self, message: str):
+    def _apply_process_state_message(self, message: str):
         self.ui.ch2_processState_edit.setPlainText(message)
 
     # ------------------------------------------------------------------
@@ -1006,13 +965,11 @@ class MainWindow(QWidget):
         self._delay_timer.start(duration_ms)
         return True
 
-
-def _escape(s: str) -> str:
-    try:
-        return s.replace("\n", "\\n")
-    except Exception:
-        return s
-
+    def _escape(s: str) -> str:
+        try:
+            return s.replace("\n", "\\n")
+        except Exception:
+            return s
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
