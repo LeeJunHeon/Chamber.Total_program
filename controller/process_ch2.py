@@ -218,6 +218,10 @@ class ProcessController:
 
         # 메인 러너 태스크
         self._runner_task: Optional[asyncio.Task] = None
+        
+        # === 전체 공정 경과 타이머 ===
+        self._proc_start_ns: int = 0
+        self._elapsed_task: Optional[asyncio.Task] = None
 
     # ===== 공정 시작/중단 API =====
 
@@ -246,13 +250,28 @@ class ProcessController:
             self._expect_group = None
 
             self.is_running = True
-            self._emit(PCEvent("status", {"running": True}))
-            self._emit(PCEvent("started", {"params": dict(self.current_params)}))
+
+            # 전체 공정 시작 시각 저장 + 기존 경과 타이머가 있으면 정리 후 재시작
+            self._proc_start_ns = monotonic_ns()
+            self._cancel_elapsed()       # (아래 4)항에서 추가하는 헬퍼)
+            self._elapsed_task = asyncio.create_task(self._elapsed_loop())
+
+            # 'status'는 호환성을 위해 running=True 유지, 추가 필드만 덧붙임
+            self._emit(PCEvent("status", {
+                "running": True,
+                "elapsed_sec": 0,
+                "elapsed_hms": "00:00:00",
+            }))
+            self._emit(PCEvent("started", {
+                "params": dict(self.current_params),
+                "t0_ns": self._proc_start_ns,           # 선택: 시작 시각 전달(메인이 안 써도 무해)
+            }))
 
             pname = self.current_params.get("process_note", "Untitled")
             self._emit_log("Process", f"=== '{pname}' 공정 시작 (총 {len(self.process_sequence)}단계) ===")
 
             self._runner_task = asyncio.create_task(self._runner())
+
         except Exception as e:
             self._emit_log("Process", f"공정 시작 오류: {e}")
             self._finish(False)
@@ -305,6 +324,7 @@ class ProcessController:
 
     def reset_controller(self) -> None:
         self._cancel_countdown()
+        self._cancel_elapsed()
         if self._expect_group:
             self._expect_group.cancel("reset")
             self._expect_group = None
@@ -636,6 +656,7 @@ class ProcessController:
 
         self.is_running = False
         self._cancel_countdown()
+        self._cancel_elapsed()
         if self._expect_group:
             self._expect_group.cancel("finish")
             self._expect_group = None
@@ -691,7 +712,7 @@ class ProcessController:
         steps: List[ProcessStep] = []
 
         # --- 초기화 ---
-        self._emit_log("Process", "전체 공정 모드로 시작 (Base Pressure 대기 포함).")
+        self._emit_log("Process", "공정 시작")
         steps.append(ProcessStep(
             action=ActionType.IG_CMD,
             value=base_pressure,
@@ -955,12 +976,22 @@ class ProcessController:
         return self.process_sequence[self._current_step_idx + 1:]
 
     def get_process_summary(self) -> Dict[str, Any]:
+        # 시작시각 기반 경과 계산 (is_running이 아닐 때는 0)
+        if self.is_running and self._proc_start_ns:
+            sec = int((monotonic_ns() - self._proc_start_ns) / 1_000_000_000)
+        else:
+            sec = 0
+        h = sec // 3600
+        m = (sec % 3600) // 60
+        s = sec % 60
+        hms = f"{h:02d}:{m:02d}:{s:02d}"
+
         return {
             'total_steps': len(self.process_sequence),
             'current_step': self._current_step_idx + 1,
             'progress': self.progress,
             'is_running': self.is_running,
-            'is_parallel': False,  # 병렬은 ExpectGroup으로 일괄 대기(필요 시 확장)
+            'is_parallel': False,
             'current_step_info': ({
                 'action': self.current_step.action.name,
                 'message': self.current_step.message,
@@ -969,6 +1000,9 @@ class ProcessController:
             'process_name': self.current_params.get('process_note', 'Untitled'),
             'stop_requested': self._stop_requested,
             'aborting': self._aborting,
+            # === 추가: 전체 공정 경과 ===
+            'elapsed_sec': sec,
+            'elapsed_hms': hms,
         }
 
     def validate_process_sequence(self) -> Tuple[bool, List[str]]:
@@ -1022,4 +1056,38 @@ class ProcessController:
 
     def _emit_state(self, text: str) -> None:
         self._emit(PCEvent("state", {"text": text}))
+
+    async def _elapsed_loop(self) -> None:
+        """
+        전체 공정 경과 타이머 (시작시각 기반, 1초 주기).
+        - self.is_running이 False가 되면 자동 종료
+        - 기존 'status' 이벤트에 elapsed 필드만 추가(호환성 유지)
+        """
+        last_sec = -1
+        try:
+            while self.is_running and self._proc_start_ns:
+                now_ns = monotonic_ns()
+                sec = int((now_ns - self._proc_start_ns) / 1_000_000_000)
+                if sec != last_sec:
+                    last_sec = sec
+                    h = sec // 3600
+                    m = (sec % 3600) // 60
+                    s = sec % 60
+                    hms = f"{h:02d}:{m:02d}:{s:02d}"
+                    # running=True는 유지 + 추가 필드만 덧붙임
+                    self._emit(PCEvent("status", {
+                        "running": True,
+                        "elapsed_sec": sec,
+                        "elapsed_hms": hms,
+                    }))
+                await asyncio.sleep(1.0)
+        except asyncio.CancelledError:
+            return
+
+    def _cancel_elapsed(self) -> None:
+        t = self._elapsed_task
+        if t and not t.done():
+            t.cancel()
+        self._elapsed_task = None
+
 

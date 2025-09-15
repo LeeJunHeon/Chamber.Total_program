@@ -5,6 +5,7 @@ import csv
 import asyncio
 from typing import Optional
 from datetime import datetime
+from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QWidget, QMessageBox, QFileDialog, QPlainTextEdit, QStackedWidget
 from PySide6.QtCore import QCoreApplication, Qt, QTimer, Slot
@@ -148,6 +149,17 @@ class MainWindow(QWidget):
 
         # 로그 배치 flush
         self.ui.ch2_logMessage_edit.setMaximumBlockCount(2000)
+
+        # 고정 로그 폴더 (UNC)
+        self._log_dir = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs")
+        try:
+            self._log_dir.mkdir(parents=True, exist_ok=True)  # 폴더 없으면 생성 시도
+        except Exception:
+            pass
+
+        # Start 전에는 파일 미정
+        self._log_file_path = None
+
         self._log_ui_buf = []
         self._log_file_buf = []
         self._log_flush_timer = QTimer(self)
@@ -218,6 +230,15 @@ class MainWindow(QWidget):
             elif kind == "status":
                 self._on_process_status_changed(bool(payload.get("running", False)))
             elif kind == "started":
+                # 1) 새 로그 파일명: YYYYMMDD_HHMMSS.txt
+                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                self._log_file_path = self._log_dir / f"{ts}.txt"
+                # 선택: 시작 라인 한 줄
+                self._log_file_buf.append(
+                    f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Logger] "
+                    f"새 로그 파일 시작: {self._log_file_path}\n"
+                )
+
                 # DataLogger, 그래프, 알림
                 try:
                     self.data_logger.start_new_log_session(payload.get("params", {}))
@@ -674,11 +695,13 @@ class MainWindow(QWidget):
             self.ui.ch2_logMessage_edit.insertPlainText(block)
         # 파일
         if self._log_file_buf:
+            path = self._log_file_path or (self._log_dir / "log.txt")  # Start 전엔 기본 파일
             try:
-                with open("log.txt", "a", encoding="utf-8") as f:
+                with open(path, "a", encoding="utf-8") as f:
                     f.writelines(self._log_file_buf)
             except Exception as e:
-                self.ui.ch2_logMessage_edit.appendPlainText(f"[Logger] 파일 로그 실패: {e}")
+                # UI에도 알림만 남기고 계속 진행
+                self.ui.ch2_logMessage_edit.appendPlainText(f"[Logger] 파일 기록 실패: {e}")
             finally:
                 self._log_file_buf.clear()
 
