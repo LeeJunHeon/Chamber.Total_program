@@ -22,6 +22,7 @@ from controller.chat_notifier import ChatNotifier
 from device.faduino import AsyncFaduino
 from device.ig import AsyncIG
 from device.mfc import AsyncMFC
+from device.rga import RGAAsync
 from device.oes import OESAsync
 from device.dc_power import DCPowerAsync
 from device.rf_power import RFPowerAsync
@@ -30,7 +31,7 @@ from device.rf_pulse import RFPulseAsync
 # ✅ CH2 공정 컨트롤러 (asyncio 순수 버전)
 from controller.process_ch2 import ProcessController
 
-from lib.config_ch2 import CHAT_WEBHOOK_URL, ENABLE_CHAT_NOTIFY
+from lib.config_ch2 import CHAT_WEBHOOK_URL, ENABLE_CHAT_NOTIFY, RGA_PROGRAM_PATH, RGA_CSV_PATH
 
 
 class MainWindow(QWidget):
@@ -70,6 +71,11 @@ class MainWindow(QWidget):
         self.ig = AsyncIG()
         self.rf_pulse = RFPulseAsync()
         self.oes = OESAsync()
+        self.rga = RGAAsync(
+            program_path=RGA_PROGRAM_PATH, 
+            csv_path=RGA_CSV_PATH,
+            debug_print=True,
+        )
         self.dc_power = DCPowerAsync(
             send_dc_power=self.faduino.set_dc_power,
             send_dc_power_unverified=self.faduino.set_dc_power_unverified,
@@ -100,13 +106,13 @@ class MainWindow(QWidget):
             asyncio.create_task(self.dc_power.start_process(float(value)))
 
         def cb_dc_stop():
-            asyncio.create_task(self.dc_power.stop_process())
+            asyncio.create_task(self.dc_power.cleanup())
 
         def cb_rf_power(value: float):
             asyncio.create_task(self.rf_power.start_process(float(value)))
 
         def cb_rf_stop():
-            asyncio.create_task(self.rf_power.stop_process())
+            asyncio.create_task(self.rf_power.cleanup())
 
         def cb_rfpulse_start(power: float, freq, duty):
             asyncio.create_task(self.rf_pulse.start_pulse_process(float(power), freq, duty))
@@ -356,6 +362,21 @@ class MainWindow(QWidget):
                 if self.chat_notifier:
                     self.chat_notifier.notify_error("IG", why)
 
+    async def _pump_rga_events(self):
+        async for ev in self.rga.events():
+            if ev.kind == "status":
+                self.append_log("RGA", ev.message or "")
+            elif ev.kind == "data":
+                # 그래프 업데이트
+                self.graph_controller.update_rga_plot(ev.mass_axis, ev.pressures)
+            elif ev.kind == "finished":
+                self.process_controller.on_rga_finished()
+            elif ev.kind == "failed":
+                why = ev.message or "RGA failed"
+                self.process_controller.on_rga_failed(why)
+                if self.chat_notifier:
+                    self.chat_notifier.notify_error("RGA", why)
+
     async def _pump_dc_events(self):
         async for ev in self.dc_power.events():
             k = ev.kind
@@ -424,9 +445,7 @@ class MainWindow(QWidget):
     # RGA dummy
     # ------------------------------------------------------------------
     async def _do_rga_scan(self):
-        self.append_log("RGA", "RGA 스캔은 아직 미구현 상태라 스킵합니다.")
-        # 바로 컨트롤러에 완료 알림
-        self.process_controller.on_rga_finished()
+        await self.rga.scan_once() 
 
     # ------------------------------------------------------------------
     # 백그라운 태스크 시작 함수
@@ -446,6 +465,7 @@ class MainWindow(QWidget):
             loop.create_task(self._pump_faduino_events()),
             loop.create_task(self._pump_mfc_events()),
             loop.create_task(self._pump_ig_events()),
+            loop.create_task(self._pump_rga_events()),
             loop.create_task(self._pump_dc_events()),
             loop.create_task(self._pump_rf_events()),
             loop.create_task(self._pump_rfpulse_events()),
@@ -786,12 +806,12 @@ class MainWindow(QWidget):
         async def _cleanup():
             try:
                 await asyncio.gather(
-                    self.rf_pulse.clenaup(),
+                    self.rf_pulse.cleanup(),
                     self.rf_power.cleanup(),
                     self.dc_power.cleanup(),
                     self.mfc.cleanup(),
                     self.ig.cleanup(),
-                    self.faduino.clenaup(),
+                    self.faduino.cleanup(),
                     return_exceptions=True
                 )
             except Exception:
