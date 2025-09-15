@@ -31,7 +31,7 @@ from device.rf_pulse import RFPulseAsync
 # ✅ CH2 공정 컨트롤러 (asyncio 순수 버전)
 from controller.process_ch2 import ProcessController
 
-from lib.config_ch2 import CHAT_WEBHOOK_URL, ENABLE_CHAT_NOTIFY, RGA_PROGRAM_PATH, RGA_CSV_PATH
+from lib.config_ch2 import CHAT_WEBHOOK_URL, ENABLE_CHAT_NOTIFY, RGA_PROGRAM_PATH, RGA_CSV_PATH, BUTTON_TO_PIN
 
 
 class MainWindow(QWidget):
@@ -89,6 +89,9 @@ class MainWindow(QWidget):
 
         self._bg_started = False
         self._bg_tasks = []
+
+        # === Fadunio 버튼 맵핑 ===
+        self._pin_to_name = {pin: name for name, pin in BUTTON_TO_PIN.items()}
 
         # === Google Chat 알림(옵션) ===
         self.chat_notifier = ChatNotifier(CHAT_WEBHOOK_URL) if ENABLE_CHAT_NOTIFY else None
@@ -274,6 +277,15 @@ class MainWindow(QWidget):
                         self.chat_notifier.notify_process_finished_detail(ok, detail)
                     except Exception:
                         pass
+                try:
+                    self.mfc.on_process_finished(ok)
+                except Exception:
+                    pass
+                try:
+                    self.faduino.on_process_finished(ok)
+                except Exception:
+                    pass
+
                 # 자동 큐 진행
                 self._start_next_process_from_queue(ok)
             elif kind == "aborted":
@@ -284,7 +296,7 @@ class MainWindow(QWidget):
                         pass
             elif kind == "polling_targets":
                 targets = payload.get("targets", {})
-                await self._apply_polling_targets_async(targets)
+                self._apply_polling_targets_async(targets)
             # kind == "polling" 은 UI에 표시만 원하면 처리 가능(지금은 생략)
 
     # ------------------------------------------------------------------
@@ -296,12 +308,31 @@ class MainWindow(QWidget):
             if k == "status":
                 self.append_log("Faduino", ev.message or "")
             elif k == "command_confirmed":
-                self.process_controller.on_faduino_confirmed(ev.cmd or "")
+                name = ev.cmd or ""
+                try:
+                    # "R,<pin>,<state>" → "MV"/"Ar"/"O2"/"N2"/"MS"/"G1"/"G2"/"G3"
+                    if name.startswith("R,"):
+                        _, pin_str, _ = name.split(",", 2)
+                        pin = int(pin_str)
+                        name = self._pin_to_name.get(pin, name)
+                except Exception:
+                    pass
+                self.process_controller.on_faduino_confirmed(name)
+
             elif k == "command_failed":
                 why = ev.reason or "unknown"
-                self.process_controller.on_faduino_failed(ev.cmd or "", why)
-                if self.chat_notifier:
-                    self.chat_notifier.notify_error_with_src("Faduino", why)
+                name = ev.cmd or ""
+                try:
+                    if name == "R" or name.startswith("R,"):
+                        # 실패 시 cmd가 "R"만 올 수도 있어 핀 파싱이 안될 수 있음
+                        if "," in name:
+                            _, pin_str, _ = name.split(",", 2)
+                            pin = int(pin_str)
+                            name = self._pin_to_name.get(pin, name)
+                except Exception:
+                    pass
+                self.process_controller.on_faduino_failed(name, why)
+
             elif k == "dc_power":
                 p, v, c = ev.dc_p or 0.0, ev.dc_v or 0.0, ev.dc_c or 0.0
                 try:
@@ -310,6 +341,7 @@ class MainWindow(QWidget):
                     pass
                 self.handle_dc_power_display(p, v, c)
                 self.dc_power.update_measurements(p, v, c)
+
             elif k == "rf_power":
                 f, r = ev.rf_forward or 0.0, ev.rf_reflected or 0.0
                 try:
@@ -373,7 +405,7 @@ class MainWindow(QWidget):
                 self.process_controller.on_rga_finished()
             elif ev.kind == "failed":
                 why = ev.message or "RGA failed"
-                self.process_controller.on_rga_failed(why)
+                self.process_controller.on_rga_failed("RGA", why)
                 if self.chat_notifier:
                     self.chat_notifier.notify_error("RGA", why)
 
@@ -731,10 +763,8 @@ class MainWindow(QWidget):
     async def _apply_polling_targets_async(self, targets: dict):
         # 기존의 Qt 시그널 대신 비동기 컨트롤러 메서드를 직접 호출
         try:
-            await asyncio.gather(
-                self.mfc.set_process_status(bool(targets.get('mfc', False))),
-                self.faduino.set_process_status(bool(targets.get('faduino', False))),
-            )
+            self.mfc.set_process_status(bool(targets.get('mfc', False))),
+            self.faduino.set_process_status(bool(targets.get('faduino', False))),
         except Exception:
             pass
         # RF-Pulse는 컨트롤러 내부에서 자체 관리

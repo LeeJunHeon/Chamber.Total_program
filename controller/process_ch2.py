@@ -287,17 +287,14 @@ class ProcessController:
         self._stop_requested = True
         self._emit_log("Process", "정지 요청을 받았습니다.")
 
-        # DELAY 중이라도, 러너 루프가 다음 스텝 진입 전에 안전 종료로 전환됨.
+        # ✅ 즉시 종료 절차로 진입 (러너의 '다음 틱'을 기다리지 않음)
+        self._start_normal_shutdown()
 
+        # 공정 미실행 상태일 수 있으니 러너가 없다면 기동
         if not self.is_running:
-            # 공정 미실행 → 강제 종료 절차만 수행
-            self._emit_log("Process", "정지 요청: 공정 미실행 → 강제 종료 시퀀스 수행")
-            self.process_sequence = self._create_shutdown_sequence(self.current_params or {}, force_all=True)
-            self._shutdown_in_progress = True
             self.is_running = True
             self._current_step_idx = -1
             self._runner_task = asyncio.create_task(self._runner())
-            return
 
     def emergency_stop(self) -> None:
         """비상정지: 즉시 차단 시퀀스로 전환"""
@@ -445,7 +442,12 @@ class ProcessController:
                         tokens.extend(self._send_and_collect_tokens(s))
                     fut = self._set_expect(tokens)
                     if fut is not None:
-                        await fut
+                        try:
+                            await fut
+                        except asyncio.CancelledError:
+                            # ✅ 종료 절차 전환 등으로 '대기'가 취소됨
+                            # 새 시퀀스(종료 스텝)으로 계속 진행
+                            continue  # while 루프의 다음 반복으로
                 else:
                     # 단일 스텝
                     self._apply_polling(step.polling)
@@ -467,7 +469,11 @@ class ProcessController:
             return
         fut = self._set_expect(tokens)
         if fut is not None:
-            await fut
+            try:
+                await fut
+            except asyncio.CancelledError:
+                # ✅ 종료 절차로 시퀀스가 교체됨
+                return  # 이 스텝을 종료하고 러너 루프로 복귀
 
     def _send_and_collect_tokens(self, step: ProcessStep) -> List[ExpectToken]:
         a = step.action
