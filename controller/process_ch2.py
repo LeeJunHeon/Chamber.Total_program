@@ -1,14 +1,90 @@
-# process_ch2.py — asyncio 기반 
+# process_ch2.py — pure asyncio ProcessController
+#  - Qt 의존성 제거 (UI만 Qt, 로직은 asyncio)
+#  - main.py와는 asyncio.Queue 기반 이벤트로 통신
+#  - 장비 명령은 콜백 함수로 주입 (DI)
 
+from __future__ import annotations
+
+import asyncio
 from dataclasses import dataclass
 from enum import Enum
 from time import monotonic_ns
-from typing import Optional, List, Tuple, Dict, Any
-
-from PyQt6.QtCore import Qt, QObject, QTimer, pyqtSignal as Signal, pyqtSlot as Slot
+from typing import Optional, List, Tuple, Dict, Any, Callable
 
 
-# -------------------- 액션/스텝 정의 --------------------
+# =========================
+# 이벤트/토큰 구조
+# =========================
+
+@dataclass
+class PCEvent:
+    """
+    ProcessController → main.py 로 내보내는 이벤트
+    kind:
+      - 'log'                : {'src', 'msg'}
+      - 'state'              : {'text'}
+      - 'status'             : {'running': bool}
+      - 'started'            : {'params': dict}
+      - 'finished'           : {'ok': bool, 'detail': dict}
+      - 'aborted'            : {}
+      - 'polling'            : {'active': bool}
+      - 'polling_targets'    : {'targets': {'mfc':bool,'faduino':bool,'rfpulse':bool}}
+    """
+    kind: str
+    payload: Dict[str, Any] | None = None
+
+
+@dataclass(frozen=True)
+class ExpectToken:
+    """해당 스텝 완료 판정을 위해 필요한 '확인 토큰'."""
+    kind: str        # 'MFC', 'FADUINO', 'DC_TARGET', 'RF_TARGET', 'IG_OK', 'RGA_OK', 'RFPULSE_OFF', 'GENERIC_OK', ...
+    spec: Any = None # 세부 식별자 (예: 명령 문자열)
+
+    def matches(self, other: "ExpectToken") -> bool:
+        return self.kind == other.kind and (self.spec is None or self.spec == other.spec)
+
+
+class ExpectGroup:
+    """여러 기대 토큰이 모두 충족되어야 완료되는 그룹."""
+    def __init__(self, tokens: List[ExpectToken]) -> None:
+        self._tokens: List[ExpectToken] = list(tokens)
+        self._fut: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+
+    @property
+    def future(self) -> asyncio.Future[bool]:
+        return self._fut
+
+    def empty(self) -> bool:
+        return not self._tokens
+
+    def match(self, incoming: ExpectToken) -> bool:
+        for i, t in enumerate(self._tokens):
+            if t.matches(incoming):
+                del self._tokens[i]
+                if not self._tokens and not self._fut.done():
+                    self._fut.set_result(True)
+                return True
+        return False
+
+    def match_generic_ok(self) -> bool:
+        """
+        하위 호환:
+        - 대기중인 토큰이 '정확히 1개'일 때, 장치에서 '일반 완료' 이벤트가 오면 완료로 간주.
+        """
+        if len(self._tokens) == 1 and not self._fut.done():
+            self._tokens.clear()
+            self._fut.set_result(True)
+            return True
+        return False
+
+    def cancel(self, reason: str = "cancelled") -> None:
+        if not self._fut.done():
+            self._fut.set_exception(asyncio.CancelledError(reason))
+
+
+# =========================
+# 액션/스텝 정의
+# =========================
 
 class ActionType(str, Enum):
     IG_CMD = "IG_CMD"
@@ -31,7 +107,7 @@ class ProcessStep:
     message: str
     value: Optional[float] = None
     params: Optional[Tuple] = None
-    duration: Optional[int] = None
+    duration: Optional[int] = None  # ms
     parallel: bool = False
     polling: bool = False
     no_wait: bool = False  # 확인 응답 없이 즉시 다음 스텝으로
@@ -53,7 +129,7 @@ class ProcessStep:
                 raise ValueError("MFC_CMD params는 (cmd:str, args:dict) 형태여야 합니다.")
         if self.action == ActionType.OES_RUN:
             if not self.params or len(self.params) != 2:
-                raise ValueError("OES_RUN params는 (process_time:float, integration_ms:int) 형태여야 합니다.")
+                raise ValueError("OES_RUN params는 (process_time_sec:float, integration_ms:int) 형태여야 합니다.")
         if self.action == ActionType.RF_PULSE_START:
             if self.value is None:
                 raise ValueError("RF_PULSE_START에는 value(타깃 파워)가 필요합니다.")
@@ -61,135 +137,541 @@ class ProcessStep:
                 raise ValueError("RF_PULSE_START params는 (freqHz|None, duty%|None) 형태여야 합니다.")
 
 
-class ParallelExecution:
-    """병렬 블록 진행 상황 추적"""
-    def __init__(self, steps: List[ProcessStep], end_index: int):
-        self.steps = steps
-        self.completed = 0
-        self.end_index = end_index
-        self.total = len(steps)
+# =========================
+# 프로세스 컨트롤러 (asyncio)
+# =========================
 
-    def mark_completed(self) -> bool:
-        self.completed += 1
-        return self.completed >= self.total
+class ProcessController:
+    """
+    순수 asyncio 버전의 공정 컨트롤러.
 
-    @property
-    def progress(self) -> float:
-        return self.completed / self.total if self.total > 0 else 1.0
+    통신 방식
+    --------
+    - 컨트롤러 → main.py : self.event_q(PCEvent)로 상태/로그/폴링 설정 등을 push
+    - main.py → 컨트롤러 : 장치 완료/실패 콜백(on_*)을 호출해 기대 토큰을 충족시킴
 
+    명령 송신은 생성자에서 전달받은 콜백을 통해 실행:
+      send_faduino(cmd:str, arg:Any) -> None
+      send_mfc(cmd:str, args:dict) -> None
+      send_dc_power(value:float) -> None
+      stop_dc_power() -> None
+      send_rf_power(value:float) -> None
+      stop_rf_power() -> None
+      start_rfpulse(power:float, freq:Optional[int], duty:Optional[int]) -> None
+      stop_rfpulse() -> None
+      ig_wait(base_pressure:float) -> None
+      rga_scan() -> None
+      oes_run(duration_sec:float, integration_ms:int) -> None
+    """
 
-# -------------------- 프로세스 컨트롤러 --------------------
+    # ===== 생성/DI =====
+    def __init__(
+        self,
+        *,
+        send_faduino: Callable[[str, Any], None],
+        send_mfc: Callable[[str, Dict[str, Any]], None],
+        send_dc_power: Callable[[float], None],
+        stop_dc_power: Callable[[], None],
+        send_rf_power: Callable[[float], None],
+        stop_rf_power: Callable[[], None],
+        start_rfpulse: Callable[[float, Optional[int], Optional[int]], None],
+        stop_rfpulse: Callable[[], None],
+        ig_wait: Callable[[float], None],
+        rga_scan: Callable[[], None],
+        oes_run: Callable[[float, int], None],
+    ) -> None:
+        self.event_q: asyncio.Queue[PCEvent] = asyncio.Queue()
+        self._send_faduino = send_faduino
+        self._send_mfc = send_mfc
+        self._send_dc_power = send_dc_power
+        self._stop_dc_power = stop_dc_power
+        self._send_rf_power = send_rf_power
+        self._stop_rf_power = stop_rf_power
+        self._start_rfpulse = start_rfpulse
+        self._stop_rfpulse = stop_rfpulse
+        self._ig_wait = ig_wait
+        self._rga_scan = rga_scan
+        self._oes_run = oes_run
 
-class ProcessController(QObject):
-    # 1) 장치로 보낼 신호
-    update_faduino_port = Signal(str, bool)
-    mfc_command_requested = Signal(str, dict)
-    oes_command_requested = Signal(float, int)
-    dc_power_command_requested = Signal(float)
-    dc_power_stop_requested = Signal()
-    rf_power_command_requested = Signal(float)
-    rf_power_stop_requested = Signal()
-    ig_command_requested = Signal(float)
-    rga_external_scan_requested = Signal()
-    rf_pulse_command_requested = Signal(float, object, object)  # (powerW, freqHz|None, duty%|None)
-    rf_pulse_stop_requested = Signal()
-
-    # 2) UI/상태
-    log_message = Signal(str, str)
-    process_status_changed = Signal(bool)
-    process_started = Signal(dict)
-    process_finished = Signal(bool)
-    process_finished_detail = Signal(bool, dict)   # (ok, detail)
-    update_process_state = Signal(str)
-
-    # 3) 폴링 제어 (UI에서 대상별 on/off를 반영)
-    set_polling = Signal(bool)
-    set_polling_targets = Signal(object)  # {'mfc': bool, 'faduino': bool, 'rfpulse': bool}
-
-    # 4) 비상정지 브로드캐스트
-    process_aborted = Signal()
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.process_sequence: List[ProcessStep] = []
-        self._current_step_idx = -1
-        self.is_running = False
+        # 런타임 상태
+        self.is_running: bool = False
         self.current_params: Dict[str, Any] = {}
+        self.process_sequence: List[ProcessStep] = []
+        self._current_step_idx: int = -1
 
-        # 정지/종료 흐름 상태
-        self._aborting = False               # 긴급 중단
-        self._in_emergency = False
-        self._stop_requested = False         # 일반 정지 요청
-        self._shutdown_in_progress = False   # 종료 시퀀스 실행 중
-        self._accept_completions = True      # 완료 신호 수락 여부
-
-        # 종료 중 실패 기록
-        self._shutdown_error = False
+        # 제어 플래그
+        self._stop_requested: bool = False
+        self._aborting: bool = False
+        self._in_emergency: bool = False
+        self._shutdown_in_progress: bool = False
+        self._shutdown_error: bool = False
         self._shutdown_failures: List[str] = []
 
-        # 스텝 타이머(정밀)
-        self.step_timer = QTimer(self)
-        self.step_timer.setSingleShot(True)
-        self.step_timer.setTimerType(Qt.TimerType.PreciseTimer)
-        self.step_timer.timeout.connect(self.on_step_completed)
+        # 대기/카운트다운
+        self._countdown_task: Optional[asyncio.Task] = None
+        self._countdown_total_ms: int = 0
+        self._countdown_start_ns: int = 0
+        self._countdown_base_msg: str = ""
 
-        # 병렬 실행 관리자
-        self._px: Optional[ParallelExecution] = None
+        # 기대 토큰
+        self._expect_group: Optional[ExpectGroup] = None
 
-        # 카운트다운 표시 타이머
-        self._countdown_timer = QTimer(self)
-        self._countdown_timer.setTimerType(Qt.TimerType.PreciseTimer)
-        self._countdown_timer.setInterval(1000)
-        self._countdown_timer.timeout.connect(self._on_countdown_tick)
-        self._countdown_active = False
-        self._countdown_start_ns = 0
-        self._countdown_total_ms = 0
-        self._countdown_base_message = ""
+        # 메인 러너 태스크
+        self._runner_task: Optional[asyncio.Task] = None
 
-        # DELAY 타이머 가드
-        self._delay_guard = QTimer(self)
-        self._delay_guard.setSingleShot(True)
-        self._delay_guard.timeout.connect(self._on_delay_guard)
-        self._delay_start_ns = 0
-        self._delay_total_ms = 0
+    # ===== 공정 시작/중단 API =====
 
-    # ==================== 시퀀스 구성 ====================
-
-    def start_process(self, params: Dict[str, Any]):
-        """UI에서 호출. 시퀀스 생성/검증 후 실행."""
+    def start_process(self, params: Dict[str, Any]) -> None:
         if self.is_running:
-            self.log_message.emit("Process", "오류: 이미 다른 공정이 실행 중입니다.")
+            self._emit_log("Process", "오류: 이미 다른 공정이 실행 중입니다.")
             return
+
         try:
             self.current_params = params or {}
             self.process_sequence = self._create_process_sequence(self.current_params)
-
             ok, errors = self.validate_process_sequence()
             if not ok:
-                for msg in errors:
-                    self.log_message.emit("Process", f"[시퀀스 오류] {msg}")
+                for m in errors:
+                    self._emit_log("Process", f"[시퀀스 오류] {m}")
                 raise ValueError("공정 시퀀스 검증 실패")
 
+            # 상태 초기화
             self._current_step_idx = -1
-            self.is_running = True
+            self._stop_requested = False
             self._aborting = False
             self._in_emergency = False
-            self._stop_requested = False
             self._shutdown_in_progress = False
             self._shutdown_error = False
             self._shutdown_failures.clear()
-            self._accept_completions = True
+            self._expect_group = None
 
-            self.process_status_changed.emit(True)
-            self.process_started.emit(self.current_params)
+            self.is_running = True
+            self._emit(PCEvent("status", {"running": True}))
+            self._emit(PCEvent("started", {"params": dict(self.current_params)}))
 
-            process_name = self.current_params.get('process_note', 'Untitled')
-            self.log_message.emit("Process", f"=== '{process_name}' 공정 시작 (총 {len(self.process_sequence)}단계) ===")
+            pname = self.current_params.get("process_note", "Untitled")
+            self._emit_log("Process", f"=== '{pname}' 공정 시작 (총 {len(self.process_sequence)}단계) ===")
 
-            self.on_step_completed()  # 첫 스텝 진입
+            self._runner_task = asyncio.create_task(self._runner())
         except Exception as e:
-            self.log_message.emit("Process", f"공정 시작 오류: {e}")
-            self._finish_process(False)
+            self._emit_log("Process", f"공정 시작 오류: {e}")
+            self._finish(False)
+
+    def request_stop(self) -> None:
+        if self._aborting:
+            self._emit_log("Process", "정지 요청: 이미 긴급 중단 처리 중입니다.")
+            return
+        if self._stop_requested or self._shutdown_in_progress:
+            self._emit_log("Process", "정지 요청: 이미 정지 처리 중입니다.")
+            return
+
+        self._stop_requested = True
+        self._emit_log("Process", "정지 요청을 받았습니다.")
+
+        # DELAY 중이라도, 러너 루프가 다음 스텝 진입 전에 안전 종료로 전환됨.
+
+        if not self.is_running:
+            # 공정 미실행 → 강제 종료 절차만 수행
+            self._emit_log("Process", "정지 요청: 공정 미실행 → 강제 종료 시퀀스 수행")
+            self.process_sequence = self._create_shutdown_sequence(self.current_params or {}, force_all=True)
+            self._shutdown_in_progress = True
+            self.is_running = True
+            self._current_step_idx = -1
+            self._runner_task = asyncio.create_task(self._runner())
+            return
+
+    def emergency_stop(self) -> None:
+        """비상정지: 즉시 차단 시퀀스로 전환"""
+        if not self.is_running:
+            return
+        if self._aborting:
+            self._emit_log("Process", "(중복) 긴급 중단 진행 중 - 추가 호출 무시")
+            return
+
+        self._emit_log("Process", "*** 비상 정지 활성화 ***")
+        self._in_emergency = True
+        self._aborting = True
+        self._shutdown_in_progress = True
+
+        # 진행 중 대기/기대 취소
+        self._cancel_countdown()
+        if self._expect_group:
+            self._expect_group.cancel("emergency")
+            self._expect_group = None
+
+        # 시퀀스 교체
+        self.process_sequence = self._create_emergency_shutdown_sequence()
+        self._current_step_idx = -1
+
+    def reset_controller(self) -> None:
+        self._cancel_countdown()
+        if self._expect_group:
+            self._expect_group.cancel("reset")
+            self._expect_group = None
+
+        self.is_running = False
+        self._stop_requested = False
+        self._aborting = False
+        self._in_emergency = False
+        self._shutdown_in_progress = False
+        self._shutdown_error = False
+        self._shutdown_failures.clear()
+        self.current_params.clear()
+        self.process_sequence.clear()
+        self._current_step_idx = -1
+        self._emit(PCEvent("status", {"running": False}))
+        self._emit_state("대기 중")
+        self._emit_log("Process", "프로세스 컨트롤러가 리셋되었습니다.")
+
+    # ===== main.py → 컨트롤러 : 장치 이벤트 콜백 =====
+    # (main에서 장치 이벤트를 받으면 아래 함수를 호출)
+
+    def on_mfc_confirmed(self, cmd: str) -> None:
+        self._match_token(ExpectToken("MFC", cmd))
+
+    def on_mfc_failed(self, cmd: str, why: str) -> None:
+        self._step_failed("MFC", f"{cmd}: {why}")
+
+    def on_faduino_confirmed(self, cmd: str) -> None:
+        self._match_token(ExpectToken("FADUINO", cmd))
+
+    def on_faduino_failed(self, cmd: str, why: str) -> None:
+        self._step_failed("Faduino", f"{cmd}: {why}")
+
+    def on_ig_ok(self) -> None:
+        self._match_token(ExpectToken("IG_OK"))
+
+    def on_ig_failed(self, src: str, why: str) -> None:
+        self._step_failed(src or "IG", why)
+
+    def on_rga_finished(self) -> None:
+        self._match_token(ExpectToken("RGA_OK"))
+
+    def on_rga_failed(self, src: str, why: str) -> None:
+        self._step_failed(src or "RGA", why)
+
+    def on_dc_target_reached(self) -> None:
+        self._match_token(ExpectToken("DC_TARGET"))
+
+    def on_rf_target_reached(self) -> None:
+        self._match_token(ExpectToken("RF_TARGET"))
+
+    def on_rf_target_failed(self, why: str) -> None:
+        self._step_failed("RF Power", why or "unknown")
+
+    def on_rf_pulse_off_finished(self) -> None:
+        self._match_token(ExpectToken("RFPULSE_OFF"))
+
+    def on_rf_pulse_failed(self, why: str) -> None:
+        self._step_failed("RFPulse", why or "unknown")
+
+    def on_device_step_ok(self) -> None:
+        # 하위 호환: "power_off_finished" 같은 일반 완료 이벤트
+        if self._expect_group:
+            self._expect_group.match_generic_ok()
+
+    def on_oes_ok(self) -> None:
+        # OES는 no_wait로 돌도록 구성(로그만)
+        self._emit_log("OES", "OES 측정 종료(정상). 메인 공정은 계속 진행됩니다.")
+
+    def on_oes_failed(self, src: str, why: str) -> None:
+        self._step_failed(src or "OES", why)
+
+    # =========================
+    # 내부: 러너/스텝 실행
+    # =========================
+
+    async def _runner(self) -> None:
+        try:
+            while True:
+                # 정지 요청 → 종료 절차로 전환
+                if (self._stop_requested and
+                    not (self._aborting or self._shutdown_in_progress) and
+                    not self._in_emergency):
+                    self._emit_log("Process", "정지 요청 감지 - 종료 절차를 시작합니다.")
+                    self._start_normal_shutdown()
+
+                self._current_step_idx += 1
+                if self._current_step_idx >= len(self.process_sequence):
+                    # 성공 판정
+                    if self._shutdown_in_progress:
+                        ok = not (self._aborting or self._in_emergency or self._stop_requested or self._shutdown_error)
+                    else:
+                        ok = not (self._aborting or self._in_emergency or self._stop_requested)
+                    self._finish(ok)
+                    return
+
+                step = self.process_sequence[self._current_step_idx]
+                self._emit_state(step.message)
+                self._emit_log("Process",
+                               f"[{'종료절차' if self._shutdown_in_progress else '공정'} "
+                               f"{self._current_step_idx+1}/{len(self.process_sequence)}] {step.message}")
+
+                # 병렬 블록 수집
+                if step.parallel:
+                    parallel_steps: List[ProcessStep] = []
+                    t = self._current_step_idx
+                    while t < len(self.process_sequence) and self.process_sequence[t].parallel:
+                        parallel_steps.append(self.process_sequence[t])
+                        t += 1
+                    self._current_step_idx = t - 1
+
+                    need_polling = any(s.polling for s in parallel_steps)
+                    self._apply_polling(need_polling)
+
+                    # 병렬 실행: 토큰 합쳐서 하나의 ExpectGroup으로 대기
+                    tokens: List[ExpectToken] = []
+                    for s in parallel_steps:
+                        tokens.extend(self._send_and_collect_tokens(s))
+                    fut = self._set_expect(tokens)
+                    if fut is not None:
+                        await fut
+                else:
+                    # 단일 스텝
+                    self._apply_polling(step.polling)
+                    await self._execute_step(step)
+        except asyncio.CancelledError:
+            self._finish(False)
+        except Exception as e:
+            self._emit_log("Process", f"러너 예외: {e}")
+            self._finish(False)
+
+    async def _execute_step(self, step: ProcessStep) -> None:
+        if step.action == ActionType.DELAY:
+            await self._sleep_with_countdown(step.duration or 100, step.message)
+            return
+
+        tokens = self._send_and_collect_tokens(step)
+        if step.no_wait or not tokens:
+            # 즉시 진행
+            return
+        fut = self._set_expect(tokens)
+        if fut is not None:
+            await fut
+
+    def _send_and_collect_tokens(self, step: ProcessStep) -> List[ExpectToken]:
+        a = step.action
+        tokens: List[ExpectToken] = []
+
+        if a == ActionType.DC_POWER_SET:
+            self._send_dc_power(float(step.value))
+            tokens.append(ExpectToken("DC_TARGET"))
+        elif a == ActionType.DC_POWER_STOP:
+            self._stop_dc_power()
+            tokens.append(ExpectToken("GENERIC_OK"))  # 하위 호환
+        elif a == ActionType.RF_POWER_SET:
+            self._send_rf_power(float(step.value))
+            tokens.append(ExpectToken("RF_TARGET"))
+        elif a == ActionType.RF_POWER_STOP:
+            self._stop_rf_power()
+            tokens.append(ExpectToken("GENERIC_OK"))  # 하위 호환
+        elif a == ActionType.RF_PULSE_START:
+            power = float(step.value or 0.0)
+            freq = step.params[0] if step.params else None
+            duty = step.params[1] if step.params else None
+            self._start_rfpulse(power, freq, duty)
+            tokens.append(ExpectToken("RF_TARGET"))  # 타깃 도달 동일 처리
+        elif a == ActionType.RF_PULSE_STOP:
+            self._stop_rfpulse()
+            tokens.append(ExpectToken("RFPULSE_OFF"))
+        elif a == ActionType.IG_CMD:
+            self._ig_wait(float(step.value))
+            tokens.append(ExpectToken("IG_OK"))
+        elif a == ActionType.RGA_SCAN:
+            self._rga_scan()
+            tokens.append(ExpectToken("RGA_OK"))
+        elif a == ActionType.FADUINO_CMD:
+            cmd, arg = step.params
+            self._send_faduino(cmd, arg)
+            tokens.append(ExpectToken("FADUINO", cmd))
+        elif a == ActionType.MFC_CMD:
+            cmd, args = step.params
+            self._send_mfc(cmd, dict(args))
+            tokens.append(ExpectToken("MFC", cmd))
+        elif a == ActionType.OES_RUN:
+            dur_sec, integ_ms = step.params
+            self._oes_run(float(dur_sec), int(integ_ms))
+            # OES는 no_wait로 운용(별도 토큰 없음)
+        else:
+            raise ValueError(f"알 수 없는 Action: {a}")
+
+        return tokens
+
+    def _set_expect(self, tokens: List[ExpectToken]) -> Optional[asyncio.Future[bool]]:
+        # 기존 대기 취소
+        if self._expect_group:
+            self._expect_group.cancel("replaced")
+            self._expect_group = None
+        if not tokens:
+            return None
+        self._expect_group = ExpectGroup(tokens)
+        return self._expect_group.future
+
+    def _match_token(self, token: ExpectToken) -> None:
+        if not self.is_running or not self._expect_group:
+            return
+        self._expect_group.match(token)
+
+    # =========================
+    # DELAY/카운트다운/폴링
+    # =========================
+
+    async def _sleep_with_countdown(self, duration_ms: int, base_message: str) -> None:
+        self._countdown_total_ms = int(duration_ms)
+        self._countdown_start_ns = monotonic_ns()
+        self._countdown_base_msg = base_message
+
+        # 카운트다운 태스크
+        self._cancel_countdown()
+        self._countdown_task = asyncio.create_task(self._countdown_loop())
+
+        try:
+            await asyncio.sleep(duration_ms / 1000.0)
+        finally:
+            self._cancel_countdown()
+
+    async def _countdown_loop(self) -> None:
+        try:
+            while True:
+                elapsed_ms = (monotonic_ns() - self._countdown_start_ns) // 1_000_000
+                remaining_ms = max(0, self._countdown_total_ms - int(elapsed_ms))
+                rem_s = remaining_ms // 1000
+                m, s = divmod(rem_s, 60)
+                tstr = f"{m}분 {s}초" if m > 0 else f"{s}초"
+                self._emit_state(f"{self._countdown_base_msg} (남은 시간: {tstr})")
+                if remaining_ms == 0:
+                    return
+                await asyncio.sleep(1)
+        except asyncio.CancelledError:
+            return
+
+    def _cancel_countdown(self) -> None:
+        if self._countdown_task and not self._countdown_task.done():
+            self._countdown_task.cancel()
+        self._countdown_task = None
+        self._countdown_total_ms = 0
+        self._countdown_start_ns = 0
+        self._countdown_base_msg = ""
+
+    def _apply_polling(self, active: bool) -> None:
+        self._emit(PCEvent("polling", {"active": bool(active)}))
+        self._emit(PCEvent("polling_targets", {"targets": self._compute_polling_targets(active)}))
+
+    def _compute_polling_targets(self, active: bool) -> Dict[str, bool]:
+        if not active:
+            return {'mfc': False, 'faduino': False, 'rfpulse': False}
+        info = self._get_common_process_info(self.current_params or {})
+        if info.get('use_rf_pulse', False):
+            return {'mfc': True, 'faduino': False, 'rfpulse': True}
+        return {'mfc': True, 'faduino': True, 'rfpulse': False}
+
+    # =========================
+    # 종료/실패 처리
+    # =========================
+
+    def _start_normal_shutdown(self) -> None:
+        if self._aborting:
+            self._emit_log("Process", "종료 절차 무시: 이미 긴급 중단 중입니다.")
+            return
+        if self._shutdown_in_progress:
+            self._emit_log("Process", "종료 절차 무시: 이미 종료 절차 진행 중입니다.")
+            return
+
+        self._shutdown_in_progress = True
+        self._emit_log("Process", "정지 요청 - 안전한 종료 절차를 시작합니다.")
+        self._cancel_countdown()
+        if self._expect_group:
+            self._expect_group.cancel("shutdown")
+            self._expect_group = None
+
+        try:
+            shutdown_steps = self._create_shutdown_sequence(self.current_params or {})
+            if shutdown_steps:
+                self._emit_log("Process", f"종료 절차 생성 완료: {len(shutdown_steps)}단계")
+                self.process_sequence = shutdown_steps
+                self._current_step_idx = -1  # 러너가 다음 틱에 처음부터 실행
+            else:
+                self._emit_log("Process", "종료 절차가 없어서 즉시 완료합니다.")
+                self._finish(False)
+        except Exception as e:
+            self._emit_log("Process", f"종료 절차 시작 오류: {e}")
+            self._finish(False)
+
+    def _step_failed(self, source: str, reason: str) -> None:
+        if not self.is_running:
+            return
+
+        full = f"[{source} - {reason}]"
+        cur = self.current_step
+
+        if self._aborting or self._shutdown_in_progress:
+            # 종료 중 실패는 기록 후 계속
+            step_no = self._current_step_idx + 1
+            act = cur.action.name if cur else "UNKNOWN"
+            self._shutdown_error = True
+            self._shutdown_failures.append(f"Step {step_no} {act}: {full}")
+            self._emit_log("Process", f"경고: 종료 중 단계 실패 → 계속 진행 ({act}, 사유: {full})")
+            # 종료 흐름에서의 진행은 러너가 계속 처리
+            # (특별히 토큰 대기 중이었다면 취소)
+            if self._expect_group:
+                self._expect_group.cancel("failure-during-shutdown")
+                self._expect_group = None
+            return
+
+        # 평시 실패 → 안전 종료로 전환
+        self._emit_log("Process", f"오류 발생: {full}. 종료 절차를 시작합니다.")
+        self._start_normal_shutdown()
+
+    def _finish(self, ok: bool) -> None:
+        if not self.is_running:
+            return
+
+        detail = {
+            "process_name": self.current_params.get("process_note",
+                                                    self.current_params.get("Process_name", "Untitled")),
+            "stopped": self._stop_requested,
+            "aborting": (self._aborting or self._in_emergency),
+            "errors": list(self._shutdown_failures),
+        }
+
+        self.is_running = False
+        self._cancel_countdown()
+        if self._expect_group:
+            self._expect_group.cancel("finish")
+            self._expect_group = None
+
+        # 상태 리셋
+        self._shutdown_in_progress = False
+        self._stop_requested = False
+        self._aborting = False
+        self._in_emergency = False
+
+        self._emit_log("Process", "=== 공정이 성공적으로 완료되었습니다 ===" if ok
+                       else "=== 공정이 중단되었습니다 ===")
+        if not ok and detail["errors"]:
+            self._emit_log("Process", f"[종료 중 실패 요약] 총 {len(detail['errors'])}건")
+            for item in detail["errors"]:
+                self._emit_log("Process", f" - {item}")
+
+        self._emit(PCEvent("status", {"running": False}))
+        self._emit_state("공정 완료" if ok else "공정 중단됨")
+        self._emit(PCEvent("finished", {"ok": ok, "detail": detail}))
+        if (self._aborting or self._in_emergency) and not ok:
+            self._emit(PCEvent("aborted", {}))
+
+    # =========================
+    # 시퀀스 생성/검증/요약
+    # =========================
+
+    def _get_common_process_info(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        return {
+            'use_ms': bool(params.get("use_ms", False)),
+            'use_dc': bool(params.get("use_dc_power", False)) and float(params.get("dc_power", 0)) > 0,
+            'use_rf': bool(params.get("use_rf_power", False)) and float(params.get("rf_power", 0)) > 0,
+            'use_rf_pulse': bool(params.get("use_rf_pulse", False)) and float(params.get("rf_pulse_power", 0)) > 0,
+            'gas_info': {"Ar": {"channel": 1}, "O2": {"channel": 2}, "N2": {"channel": 3}},
+            'gun_shutters': ["G1", "G2", "G3"],
+        }
 
     def _create_process_sequence(self, params: Dict[str, Any]) -> List[ProcessStep]:
         common_info = self._get_common_process_info(params)
@@ -209,47 +691,12 @@ class ProcessController(QObject):
         steps: List[ProcessStep] = []
 
         # --- 초기화 ---
-        self._add_initialization_steps(steps, base_pressure, gas_info)
-
-        # --- 가스 주입 ---
-        self._add_gas_injection_steps(steps, params, gas_info)
-
-        # --- 압력 제어 시작 ---
-        self._add_pressure_control_steps(steps, working_pressure)
-
-        # --- 파워/셔터 ---
-        self._add_power_and_shutter_steps(
-            steps, params, gun_shutters, use_dc, use_rf, use_ms,
-            dc_power, rf_power, shutter_delay_sec, shutter_delay_min
-        )
-
-        # --- 메인 공정 시간 ---
-        if process_time_sec > 0:
-            steps.append(ProcessStep(
-                action=ActionType.OES_RUN,
-                params=(process_time_sec, integration_ms),
-                message=f'OES 측정 시작 ({process_time_min}분, {integration_ms}ms)',
-                no_wait=True  # 백그라운드로 돌리고 즉시 다음 스텝(딜레이)로
-            ))
-            steps.append(ProcessStep(
-                action=ActionType.DELAY,
-                duration=self._ms_from_sec(process_time_sec),
-                message=f'메인 공정 진행 ({process_time_min}분)',
-                polling=True
-            ))
-
-        # --- 종료 시퀀스 ---
-        steps.extend(self._create_shutdown_sequence(params))
-        return steps
-
-    def _add_initialization_steps(self, steps: List[ProcessStep], base_pressure: float, gas_info: Dict):
-        self.log_message.emit("Process", "전체 공정 모드로 시작 (Base Pressure 대기 포함).")
+        self._emit_log("Process", "전체 공정 모드로 시작 (Base Pressure 대기 포함).")
         steps.append(ProcessStep(
             action=ActionType.IG_CMD,
             value=base_pressure,
             message=f'베이스 압력({base_pressure:.1e}) 도달 대기'
         ))
-
         # 모든 채널 Flow OFF
         for gas, info in gas_info.items():
             steps.append(ProcessStep(
@@ -257,12 +704,10 @@ class ProcessController(QObject):
                 params=('FLOW_OFF', {'channel': info["channel"]}),
                 message=f'Ch{info["channel"]}({gas}) Flow Off'
             ))
-
         steps.extend([
             ProcessStep(action=ActionType.MFC_CMD, params=('VALVE_OPEN', {}), message='MFC Valve Open'),
             ProcessStep(action=ActionType.MFC_CMD, params=('PS_ZEROING', {}), message='압력 센서 Zeroing'),
         ])
-
         for gas, info in gas_info.items():
             steps.append(ProcessStep(
                 action=ActionType.MFC_CMD,
@@ -270,11 +715,10 @@ class ProcessController(QObject):
                 message=f'Ch{info["channel"]}({gas}) Zeroing'
             ))
 
-    def _add_gas_injection_steps(self, steps: List[ProcessStep], params: Dict[str, Any], gas_info: Dict):
+        # --- 가스 주입 ---
         steps.append(ProcessStep(
             action=ActionType.FADUINO_CMD, params=('MV', True), message='메인 밸브 열기'
         ))
-
         for gas, info in gas_info.items():
             if params.get(f"use_{gas.lower()}", False):
                 flow_value = float(params.get(f"{gas.lower()}_flow", 0))
@@ -294,7 +738,7 @@ class ProcessController(QObject):
                     )
                 ])
 
-    def _add_pressure_control_steps(self, steps: List[ProcessStep], working_pressure: float):
+        # --- 압력 제어 시작 ---
         steps.extend([
             ProcessStep(action=ActionType.MFC_CMD, params=('SP4_ON', {}), message='압력 제어(SP4) 시작'),
             ProcessStep(action=ActionType.MFC_CMD, params=('SP1_SET', {'value': working_pressure}),
@@ -302,11 +746,7 @@ class ProcessController(QObject):
             ProcessStep(action=ActionType.DELAY, duration=60000, message='압력 안정화 대기 (60초)'),
         ])
 
-    def _add_power_and_shutter_steps(
-        self, steps: List[ProcessStep], params: Dict[str, Any],
-        gun_shutters: List[str], use_dc: bool, use_rf: bool, use_ms: bool,
-        dc_power: float, rf_power: float, shutter_delay_sec: float, shutter_delay_min: float
-    ):
+        # --- 파워/셔터 ---
         # Gun Shutter 열기
         for shutter in gun_shutters:
             if params.get(f"use_{shutter.lower()}", False):
@@ -323,7 +763,6 @@ class ProcessController(QObject):
                 message="Power_select: N2 가스 밸브(Ch3) ON"
             ))
 
-        # RF Pulse 여부
         use_rf_pulse = bool(params.get("use_rf_pulse", False)) and float(params.get("rf_pulse_power", 0)) > 0.0
         rf_pulse_power = float(params.get("rf_pulse_power", 0))
         rf_pulse_freq = params.get("rf_pulse_freq", None)
@@ -333,7 +772,6 @@ class ProcessController(QObject):
         if rf_pulse_duty is not None:
             rf_pulse_duty = int(rf_pulse_duty)
 
-        # DC/RF/RF Pulse 병렬 여부
         want_parallel = use_dc and (use_rf or use_rf_pulse)
 
         if use_dc:
@@ -369,7 +807,7 @@ class ProcessController(QObject):
         if shutter_delay_sec > 0:
             steps.append(ProcessStep(
                 action=ActionType.DELAY,
-                duration=self._ms_from_sec(shutter_delay_sec),
+                duration=int(round(shutter_delay_sec * 1000.0)),
                 message=f'Shutter Delay {shutter_delay_min}분'
             ))
 
@@ -378,8 +816,27 @@ class ProcessController(QObject):
                 action=ActionType.FADUINO_CMD, params=('MS', True), message='Main Shutter 열기'
             ))
 
+        # --- 메인 공정 시간 ---
+        if process_time_sec > 0:
+            steps.append(ProcessStep(
+                action=ActionType.OES_RUN,
+                params=(process_time_sec, integration_ms),
+                message=f'OES 측정 시작 ({process_time_min}분, {integration_ms}ms)',
+                no_wait=True  # 백그라운드로 돌리고 즉시 다음 DELAY로
+            ))
+            steps.append(ProcessStep(
+                action=ActionType.DELAY,
+                duration=int(round(process_time_sec * 1000.0)),
+                message=f'메인 공정 진행 ({process_time_min}분)',
+                polling=True
+            ))
+
+        # --- 종료 시퀀스 ---
+        steps.extend(self._create_shutdown_sequence(params))
+        return steps
+
     def _create_shutdown_sequence(self, params: Dict[str, Any], *, force_all: bool = False) -> List[ProcessStep]:
-        shutdown_steps: List[ProcessStep] = []
+        steps: List[ProcessStep] = []
         info = self._get_common_process_info(params)
 
         use_dc = force_all or info['use_dc']
@@ -388,509 +845,51 @@ class ProcessController(QObject):
         gas_info = info['gas_info']
         gun_shutters = info['gun_shutters']
 
-        shutdown_steps.append(ProcessStep(
+        steps.append(ProcessStep(
             action=ActionType.FADUINO_CMD, params=('MS', False), message='Main Shutter 닫기 (항상)'
         ))
 
         if use_dc:
-            shutdown_steps.append(ProcessStep(action=ActionType.DC_POWER_STOP, message='DC Power Off'))
+            steps.append(ProcessStep(action=ActionType.DC_POWER_STOP, message='DC Power Off'))
         if use_rf:
-            shutdown_steps.append(ProcessStep(action=ActionType.RF_POWER_STOP, message='RF Power Off'))
+            steps.append(ProcessStep(action=ActionType.RF_POWER_STOP, message='RF Power Off'))
         if use_rf_pulse:
-            shutdown_steps.append(ProcessStep(action=ActionType.RF_PULSE_STOP, message='RF Pulse Off'))
+            steps.append(ProcessStep(action=ActionType.RF_PULSE_STOP, message='RF Pulse Off'))
 
         for gas, info_ch in gas_info.items():
-            shutdown_steps.append(ProcessStep(
+            steps.append(ProcessStep(
                 action=ActionType.MFC_CMD,
                 params=('FLOW_OFF', {'channel': info_ch["channel"]}),
                 message=f'Ch{info_ch["channel"]}({gas}) Flow Off'
             ))
 
-        shutdown_steps.append(ProcessStep(
+        steps.append(ProcessStep(
             action=ActionType.MFC_CMD, params=('VALVE_OPEN', {}), message='전체 MFC Valve Open'
         ))
 
         for shutter in gun_shutters:
             if params.get(f"use_{shutter.lower()}", False) or force_all:
-                shutdown_steps.append(ProcessStep(
+                steps.append(ProcessStep(
                     action=ActionType.FADUINO_CMD, params=(shutter, False), message=f'Gun Shutter {shutter} 닫기'
                 ))
 
-        # Power_select OFF
         if bool(params.get("use_power_select", False)) or force_all:
-            shutdown_steps.append(ProcessStep(
+            steps.append(ProcessStep(
                 action=ActionType.FADUINO_CMD, params=("N2", False),
                 message="Power_select 종료: N2 가스 밸브(Ch3) OFF"
             ))
 
-        for gas in gas_info:
-            shutdown_steps.append(ProcessStep(
+        for gas in info['gas_info']:
+            steps.append(ProcessStep(
                 action=ActionType.FADUINO_CMD, params=(gas, False), message=f'Faduino {gas} 밸브 닫기'
             ))
 
-        shutdown_steps.append(ProcessStep(
+        steps.append(ProcessStep(
             action=ActionType.FADUINO_CMD, params=('MV', False), message='메인 밸브 닫기'
         ))
 
-        self.log_message.emit("Process", "종료 절차가 생성되었습니다.")
-        return shutdown_steps
-
-    def _get_common_process_info(self, params: Dict[str, Any]) -> Dict[str, Any]:
-        return {
-            'use_ms': bool(params.get("use_ms", False)),
-            'use_dc': bool(params.get("use_dc_power", False)) and float(params.get("dc_power", 0)) > 0,
-            'use_rf': bool(params.get("use_rf_power", False)) and float(params.get("rf_power", 0)) > 0,
-            'use_rf_pulse': bool(params.get("use_rf_pulse", False)) and float(params.get("rf_pulse_power", 0)) > 0,
-            'gas_info': {"Ar": {"channel": 1}, "O2": {"channel": 2}, "N2": {"channel": 3}},
-            'gun_shutters': ["G1", "G2", "G3"],
-        }
-
-    # ==================== 실행/진행 ====================
-
-    def _run_next_step(self, step: ProcessStep, step_index: int):
-        # 일반 정지 요청이 들어왔고 아직 종료절차가 아니라면: 종료 시퀀스로 전환
-        if (self._stop_requested and
-            not (self._aborting or self._shutdown_in_progress) and
-            not self._in_emergency):
-            self.log_message.emit("Process", "정지 요청 감지 - 종료 절차를 시작합니다.")
-            self._start_normal_shutdown()
-            return
-
-        if not self.is_running or self._aborting:
-            self.log_message.emit("Process", f"스텝 실행 중단: running={self.is_running}, aborting={self._aborting}")
-            return
-
-        action = step.action
-        message = step.message
-
-        self.update_process_state.emit(message)
-        self.log_message.emit("Process",
-                              f"[{'종료절차' if self._shutdown_in_progress else '공정'} {step_index + 1}/{len(self.process_sequence)}] {message}")
-
-        try:
-            if action == ActionType.DELAY:
-                duration = step.duration or 100
-                if step.polling:
-                    # 폴링 ON을 먼저 적용 후, 다음 틱에서 딜레이 시작
-                    def _start_delay_with_polling():
-                        self._apply_polling(True)
-                        self._start_precise_delay(duration, message)
-                    QTimer.singleShot(0, _start_delay_with_polling)
-                else:
-                    self._start_precise_delay(duration, message)
-                return
-
-            # 액션 → 핸들러
-            handlers = {
-                ActionType.DC_POWER_SET: lambda: self.dc_power_command_requested.emit(step.value),
-                ActionType.DC_POWER_STOP: lambda: self.dc_power_stop_requested.emit(),
-                ActionType.RF_POWER_SET: lambda: self.rf_power_command_requested.emit(step.value),
-                ActionType.RF_POWER_STOP: lambda: self.rf_power_stop_requested.emit(),
-                ActionType.RF_PULSE_START: lambda: self.rf_pulse_command_requested.emit(
-                    float(step.value or 0.0),
-                    step.params[0] if step.params else None,
-                    step.params[1] if step.params else None
-                ),
-                ActionType.RF_PULSE_STOP:  lambda: self.rf_pulse_stop_requested.emit(),
-                ActionType.IG_CMD:         lambda: self.ig_command_requested.emit(step.value),
-                ActionType.RGA_SCAN:       lambda: self.rga_external_scan_requested.emit(),
-                ActionType.FADUINO_CMD:    lambda: self.update_faduino_port.emit(*step.params),
-                ActionType.MFC_CMD:        lambda: self.mfc_command_requested.emit(*step.params),
-                ActionType.OES_RUN:        lambda: self.oes_command_requested.emit(*step.params),
-            }
-
-            handler = handlers.get(action)
-            if handler:
-                handler()
-                if step.no_wait:
-                    # 백그라운드 작업은 완료 신호를 기다리지 않고 다음으로
-                    self._accept_completions = False
-                    QTimer.singleShot(100, self._advance_after_nowait)
-            else:
-                raise ValueError(f"알 수 없는 Action: {action}")
-
-        except Exception as e:
-            self.log_message.emit("Process", f"스텝 실행 오류: {e}")
-            self.abort_process()
-
-    def on_step_completed(self):
-        sender = self.sender()
-        if sender is self.step_timer:
-            self._stop_countdown()
-            if self._delay_guard.isActive():
-                self._delay_guard.stop()
-
-        # 정지 요청 → 종료 절차
-        if (self._stop_requested and
-            not (self._aborting or self._shutdown_in_progress) and
-            not self._in_emergency):
-            self.log_message.emit("Process", "정지 요청 감지 - 종료 절차를 시작합니다.")
-            self._start_normal_shutdown()
-            return
-
-        if not self._accept_completions or not self.is_running:
-            self.log_message.emit("Process",
-                                  f"스텝 완료 무시: accept={self._accept_completions}, running={self.is_running}")
-            return
-
-        # 병렬 처리 블록
-        if self._px is not None:
-            if not self._px.mark_completed():
-                self.log_message.emit("Process", f"병렬 작업 진행 중: {self._px.completed}/{self._px.total}")
-                return
-            self.log_message.emit("Process", f"병렬 작업 {self._px.total}개 모두 완료")
-            self._current_step_idx = self._px.end_index
-            self._px = None
-
-        # 폴링 OFF
-        self._apply_polling(False)
-
-        # 다음 스텝
-        self._current_step_idx += 1
-        self.log_message.emit("Process",
-                              f"다음 스텝으로 진행: {self._current_step_idx + 1}/{len(self.process_sequence)}")
-
-        if self._current_step_idx >= len(self.process_sequence):
-            # 종료 절차 여부에 따라 성공 판정
-            if self._shutdown_in_progress:
-                success = not (self._aborting or self._in_emergency or self._stop_requested or self._shutdown_error)
-            else:
-                success = not (self._aborting or self._in_emergency or self._stop_requested)
-            self._finish_process(success)
-            return
-
-        current_step = self.process_sequence[self._current_step_idx]
-
-        if current_step.parallel:
-            # 병렬 블록 수집
-            parallel_steps: List[Tuple[ProcessStep, int]] = []
-            t = self._current_step_idx
-            while t < len(self.process_sequence) and self.process_sequence[t].parallel:
-                parallel_steps.append((self.process_sequence[t], t))
-                t += 1
-            self._px = ParallelExecution([s for (s, _) in parallel_steps], end_index=t - 1)
-            self._current_step_idx = self._px.end_index
-
-            need_polling = any(s.polling for s, _ in parallel_steps)
-            self._apply_polling(need_polling)
-
-            self.log_message.emit("Process", f"병렬 작업 {len(parallel_steps)}개 동시 시작...")
-            for step, idx in parallel_steps:
-                self._run_next_step(step, idx)
-        else:
-            self._apply_polling(current_step.polling)
-            self._run_next_step(current_step, self._current_step_idx)
-
-    # ==================== 장치 완료/실패 슬롯 ====================
-
-    @Slot()
-    def on_device_step_ok(self):
-        """어떤 장치에서든 '해당 스텝 완료' 신호가 들어왔을 때 호출."""
-        if not self.is_running:
-            return
-
-        # 긴급 종료 중엔 특정 스텝만 카운트
-        if self._aborting:
-            cs = self.current_step
-            if not cs or cs.action not in {
-                ActionType.FADUINO_CMD, ActionType.MFC_CMD,
-                ActionType.DC_POWER_STOP, ActionType.RF_POWER_STOP,
-                ActionType.RF_PULSE_STOP
-            }:
-                return
-
-        self.on_step_completed()
-
-    @Slot(str)
-    def on_mfc_confirmed(self, cmd: str):
-        """MFCController.command_confirmed(cmd) 연결"""
-        if not self.is_running:
-            return
-
-        if self._px is not None:
-            if any(s.action == ActionType.MFC_CMD and s.params and s.params[0] == cmd for s in self._px.steps):
-                self.on_device_step_ok()
-            else:
-                self.log_message.emit("MFC", f"확인 무시: '{cmd}' (현재 병렬 블록 기대와 불일치)")
-            return
-
-        step = self.current_step
-        if not step or step.action != ActionType.MFC_CMD:
-            self.log_message.emit("MFC",
-                                  f"확인 무시: '{cmd}' (현재 스텝: {step.action.name if step else '없음'})")
-            return
-        expected = step.params[0] if (step.params and len(step.params) >= 1) else None
-        if cmd == expected:
-            self.on_device_step_ok()
-        else:
-            self.log_message.emit("MFC", f"확인 무시: '{cmd}', 기대: '{expected}'")
-
-    @Slot(str, str)
-    def on_mfc_failed(self, cmd: str, why: str):
-        self.on_step_failed("MFC", f"{cmd}: {why}")
-
-    @Slot(str)
-    def on_faduino_confirmed(self, cmd: str):
-        """FaduinoController.command_confirmed(cmd) 연결"""
-        if not self.is_running:
-            return
-
-        if self._px is not None:
-            if any(s.action == ActionType.FADUINO_CMD for s in self._px.steps):
-                self.on_device_step_ok()
-            else:
-                self.log_message.emit("Faduino",
-                                      f"확인 무시: '{cmd}' (현재 병렬 블록에 FADUINO_CMD 없음)")
-            return
-
-        if self.current_step and self.current_step.action == ActionType.FADUINO_CMD:
-            self.on_device_step_ok()
-        else:
-            self.log_message.emit("Faduino",
-                                  f"확인 무시: '{cmd}' (현재 스텝: {self.current_step.action.name if self.current_step else '없음'})")
-
-    @Slot(str, str)
-    def on_faduino_failed(self, cmd: str, why: str):
-        self.on_step_failed("Faduino", f"{cmd}: {why}")
-
-    @Slot()
-    def on_ig_ok(self):
-        """IGController의 '대기 완료' 연결"""
-        self.on_device_step_ok()
-
-    @Slot(str, str)
-    def on_ig_failed(self, src: str, why: str):
-        self.on_step_failed(src or "IG", why)
-
-    @Slot()
-    def on_oes_ok(self):
-        """OES는 메인 DELAY와 병렬이므로 완료해도 시퀀스 진행 X"""
-        self.log_message.emit("OES", "OES 측정 종료(정상). 메인 공정은 계속 진행됩니다.")
-
-    @Slot(str, str)
-    def on_oes_failed(self, src: str, why: str):
-        self.on_step_failed(src or "OES", why)
-
-    @Slot()
-    def on_rga_finished(self):
-        self.on_step_completed()
-
-    @Slot(str, str)
-    def on_rga_failed(self, src: str, why: str):
-        self.on_step_failed(src or "RGA", why)
-
-    @Slot()
-    def on_dc_target_reached(self):
-        """DCPowerController.target_reached → DC_POWER_SET 스텝 완료"""
-        if not self.is_running:
-            return
-        if self._px is not None:
-            if any(s.action == ActionType.DC_POWER_SET for s in self._px.steps):
-                self.on_device_step_ok()
-            return
-        if self.current_step and self.current_step.action == ActionType.DC_POWER_SET:
-            self.on_device_step_ok()
-
-    @Slot()
-    def on_rf_target_reached(self):
-        """RF 일반 / RF Pulse 공용 완료 신호"""
-        if not self.is_running:
-            return
-        if self._px is not None:
-            if any(s.action in (ActionType.RF_POWER_SET, ActionType.RF_PULSE_START) for s in self._px.steps):
-                self.on_device_step_ok()
-            return
-        if self.current_step and self.current_step.action in (ActionType.RF_POWER_SET, ActionType.RF_PULSE_START):
-            self.on_device_step_ok()
-
-    @Slot()
-    def on_rf_pulse_off_finished(self):
-        """RFPulse power_off_finished → RF_PULSE_STOP 스텝 완료"""
-        if not self.is_running:
-            return
-        if self._px is not None:
-            if any(s.action == ActionType.RF_PULSE_STOP for s in self._px.steps):
-                self.on_device_step_ok()
-            return
-        if self.current_step and self.current_step.action == ActionType.RF_PULSE_STOP:
-            self.on_device_step_ok()
-
-    @Slot(str)
-    def on_rf_pulse_failed(self, why: str):
-        self.on_step_failed("RFPulse", why or "unknown")
-
-    # ==================== 실패 처리 ====================
-
-    def on_step_failed(self, source: str, reason: str):
-        if not self.is_running:
-            return
-
-        full_reason = f"[{source} - {reason}]"
-        cur = self.current_step
-
-        # 종료(일반/긴급) 중엔 실패를 기록하고 계속 진행
-        if self._aborting or self._shutdown_in_progress:
-            step_no = self._current_step_idx + 1
-            act_name = cur.action.name if cur else "UNKNOWN"
-            self._shutdown_error = True
-            self._shutdown_failures.append(f"Step {step_no} {act_name}: {full_reason}")
-            self.log_message.emit("Process",
-                                  f"경고: 종료 중 단계 실패 → 계속 진행 ({act_name}, 사유: {full_reason})")
-            self.on_step_completed()
-            return
-
-        # 평시 실패: 안전 종료로 전환
-        self.log_message.emit("Process", f"오류 발생: {full_reason}. 종료 절차를 시작합니다.")
-        self._start_normal_shutdown()
-
-    # ==================== 카운트다운/DALAY ====================
-
-    def _start_precise_delay(self, duration_ms: int, message: str):
-        self._delay_total_ms = int(duration_ms)
-        self._delay_start_ns = monotonic_ns()
-
-        # 메인 타이머 (정밀)
-        self.step_timer.start(self._delay_total_ms)
-
-        # 카운트다운 시작
-        self._start_countdown(self._delay_total_ms, message)
-
-        # 가드 타이머: 메인 타이머 + 2s 버퍼
-        guard_ms = self._delay_total_ms + 2000
-        if self._delay_guard.isActive():
-            self._delay_guard.stop()
-        self._delay_guard.start(guard_ms)
-
-        self.log_message.emit("Process",
-                              f"[DELAY start] {message} / {self._delay_total_ms}ms, guard={guard_ms}ms")
-
-    def _on_delay_guard(self):
-        if not self.is_running:
-            return
-        step = self.current_step
-        if step and step.action == ActionType.DELAY:
-            elapsed_ms = (monotonic_ns() - self._delay_start_ns) // 1_000_000
-            if elapsed_ms >= self._delay_total_ms:
-                if self.step_timer.isActive():
-                    self.step_timer.stop()
-                self.log_message.emit("Process", "[DELAY guard] 메인 타이머 지연/유실 감지 → 강제 완료")
-                self.on_step_completed()
-
-    def _start_countdown(self, duration_ms: int, base_message: str):
-        self._countdown_active = True
-        self._countdown_total_ms = int(duration_ms)
-        self._countdown_start_ns = monotonic_ns()
-        self._countdown_base_message = base_message
-        if not self._countdown_timer.isActive():
-            self._countdown_timer.start()
-        self._on_countdown_tick()
-
-    def _stop_countdown(self):
-        self._countdown_timer.stop()
-        self._countdown_total_ms = 0
-        self._countdown_start_ns = 0
-        self._countdown_base_message = ""
-        self._countdown_active = False
-
-    def _on_countdown_tick(self):
-        if self._stop_requested and not (self._aborting or self._shutdown_in_progress):
-            self.log_message.emit("Process", "정지 요청 감지 - 종료 절차를 시작합니다.")
-            self._stop_countdown()
-            self._start_normal_shutdown()
-            return
-
-        if not self._countdown_active or self._countdown_total_ms <= 0:
-            self._stop_countdown()
-            return
-
-        elapsed_ms = (monotonic_ns() - self._countdown_start_ns) // 1_000_000
-        remaining_ms = max(0, self._countdown_total_ms - int(elapsed_ms))
-
-        remaining_sec = remaining_ms // 1000
-        minutes = remaining_sec // 60
-        seconds = remaining_sec % 60
-        time_str = f"{minutes}분 {seconds}초" if minutes > 0 else f"{seconds}초"
-        self.update_process_state.emit(f"{self._countdown_base_message} (남은 시간: {time_str})")
-
-        if remaining_ms == 0:
-            self._stop_countdown()
-
-    # ==================== 종료/비상 ====================
-
-    def _finish_process(self, success: bool):
-        if not self.is_running:
-            return
-
-        # 리포트 컨텍스트(리셋 전에 캡처)
-        finish_ctx = {
-            "process_name": self.current_params.get("process_note",
-                                                    self.current_params.get("Process_name", "Untitled")),
-            "stopped": self._stop_requested,
-            "aborting": (self._aborting or self._in_emergency),
-            "errors": list(self._shutdown_failures),
-        }
-        try:
-            self.process_finished_detail.emit(success, finish_ctx)
-        except Exception:
-            pass
-
-        self.is_running = False
-        self._px = None
-        self.step_timer.stop()
-        self._stop_countdown()
-        self._apply_polling(False)
-
-        # 리셋 플래그
-        self._shutdown_in_progress = False
-        self._stop_requested = False
-        self._aborting = False
-        self._in_emergency = False
-        self._shutdown_error = False
-        self._shutdown_failures.clear()
-
-        if success:
-            self.log_message.emit("Process", "=== 공정이 성공적으로 완료되었습니다 ===")
-            self.update_process_state.emit("공정 완료")
-        else:
-            self.log_message.emit("Process", "=== 공정이 중단되었습니다 ===")
-            self.update_process_state.emit("공정 중단됨")
-            if finish_ctx["errors"]:
-                self.log_message.emit("Process", f"[종료 중 실패 요약] 총 {len(finish_ctx['errors'])}건")
-                for item in finish_ctx["errors"]:
-                    self.log_message.emit("Process", f" - {item}")
-            if self._aborting or self._in_emergency:
-                self.process_aborted.emit()
-
-        self.process_status_changed.emit(False)
-        self.process_finished.emit(success)
-
-    def abort_process(self):
-        """긴급 중단(즉시 차단 시퀀스)"""
-        if not self.is_running:
-            return
-        if self._aborting:
-            self.log_message.emit("Process", "(중복) 긴급 중단 진행 중 - 추가 호출 무시")
-            return
-
-        self.step_timer.stop()
-        self._stop_countdown()
-        self._apply_polling(False)
-        self._px = None
-
-        self.log_message.emit("Process", "공정 긴급 중단을 시작합니다...")
-        self._aborting = True
-        self._accept_completions = False
-        self._shutdown_in_progress = True
-
-        emergency_steps = self._create_emergency_shutdown_sequence()
-        if emergency_steps:
-            self.process_sequence = emergency_steps
-            self._current_step_idx = -1
-            self._px = None
-            self._accept_completions = True
-            self.on_step_completed()
-        else:
-            self._finish_process(False)
+        self._emit_log("Process", "종료 절차가 생성되었습니다.")
+        return steps
 
     def _create_emergency_shutdown_sequence(self) -> List[ProcessStep]:
         if not self.current_params:
@@ -933,74 +932,10 @@ class ProcessController(QObject):
             message='[긴급] 메인 밸브 즉시 닫기', no_wait=True
         ))
 
-        self.log_message.emit("Process", "긴급 종료 절차가 생성되었습니다.")
+        self._emit_log("Process", "긴급 종료 절차가 생성되었습니다.")
         return steps
 
-    def _start_normal_shutdown(self):
-        """일반 정지 요청 → 안전한 종료 절차 시작"""
-        if self._aborting:
-            self.log_message.emit("Process", "종료 절차 무시: 이미 긴급 중단 중입니다.")
-            return
-        if self._shutdown_in_progress:
-            self.log_message.emit("Process", "종료 절차 무시: 이미 종료 절차 진행 중입니다.")
-            return
-
-        self._shutdown_in_progress = True
-        self.log_message.emit("Process", "정지 요청 - 안전한 종료 절차를 시작합니다.")
-
-        self.step_timer.stop()
-        self._stop_countdown()
-        self._apply_polling(False)
-        self._px = None
-
-        try:
-            shutdown_steps = self._create_shutdown_sequence(self.current_params or {})
-            if shutdown_steps:
-                self.log_message.emit("Process", f"종료 절차 생성 완료: {len(shutdown_steps)}단계")
-                self.process_sequence = shutdown_steps
-                self._current_step_idx = -1
-                self._px = None
-                self._accept_completions = True
-                QTimer.singleShot(100, self.on_step_completed)
-            else:
-                self.log_message.emit("Process", "종료 절차가 없어서 즉시 완료합니다.")
-                self._finish_process(False)
-        except Exception as e:
-            self.log_message.emit("Process", f"종료 절차 시작 오류: {e}")
-            self._finish_process(False)
-
-    def request_stop(self):
-        """UI가 호출하는 '일반 정지'"""
-        if self._aborting:
-            self.log_message.emit("Process", "정지 요청: 이미 긴급 중단 처리 중입니다.")
-            return
-        if self._stop_requested or self._shutdown_in_progress:
-            self.log_message.emit("Process", "정지 요청: 이미 정지 처리 중입니다.")
-            return
-
-        self.log_message.emit("Process", "정지 요청을 받았습니다.")
-        self._stop_requested = True
-
-        # DELAY 중이면 타이머 중단 후 바로 종료 절차
-        if self.step_timer.isActive():
-            self.log_message.emit("Process", "현재 대기 타이머를 중단하고 종료 절차로 진입합니다.")
-            self.step_timer.stop()
-            self._stop_countdown()
-
-        if not self.is_running:
-            # 공정 미실행 → 강제 종료 시퀀스 수행
-            self.log_message.emit("Process", "정지 요청: 공정 미실행 → 강제 종료 시퀀스 수행")
-            self.process_sequence = self._create_shutdown_sequence(self.current_params or {}, force_all=True)
-            self._shutdown_in_progress = True
-            self.is_running = True
-            self._current_step_idx = -1
-            self._accept_completions = True
-            self.on_step_completed()
-            return
-
-        self._start_normal_shutdown()
-
-    # ==================== 조회/검증 ====================
+    # ===== 조회/검증 =====
 
     @property
     def current_step(self) -> Optional[ProcessStep]:
@@ -1025,8 +960,7 @@ class ProcessController(QObject):
             'current_step': self._current_step_idx + 1,
             'progress': self.progress,
             'is_running': self.is_running,
-            'is_parallel': self._px is not None,
-            'parallel_progress': self._px.progress if self._px else 0.0,
+            'is_parallel': False,  # 병렬은 ExpectGroup으로 일괄 대기(필요 시 확장)
             'current_step_info': ({
                 'action': self.current_step.action.name,
                 'message': self.current_step.message,
@@ -1038,7 +972,7 @@ class ProcessController(QObject):
         }
 
     def validate_process_sequence(self) -> Tuple[bool, List[str]]:
-        errors = []
+        errors: List[str] = []
         try:
             in_parallel = False
             for i, step in enumerate(self.process_sequence):
@@ -1047,24 +981,24 @@ class ProcessController(QObject):
                 elif not step.parallel and in_parallel:
                     in_parallel = False
 
-                step_num = i + 1
+                n = i + 1
                 if step.action == ActionType.DELAY and step.duration is None:
-                    errors.append(f"Step {step_num}: DELAY 액션에 duration이 없습니다.")
+                    errors.append(f"Step {n}: DELAY 액션에 duration이 없습니다.")
                 if step.action in [ActionType.DC_POWER_SET, ActionType.RF_POWER_SET, ActionType.IG_CMD]:
                     if step.value is None:
-                        errors.append(f"Step {step_num}: {step.action.name} 액션에 value가 없습니다.")
+                        errors.append(f"Step {n}: {step.action.name} 액션에 value가 없습니다.")
                 if step.action == ActionType.RF_PULSE_START:
                     if step.value is None:
-                        errors.append(f"Step {step_num}: RF_PULSE_START에 value(파워)가 없습니다.")
+                        errors.append(f"Step {n}: RF_PULSE_START에 value(파워)가 없습니다.")
                     if step.params is None or len(step.params) != 2:
-                        errors.append(f"Step {step_num}: RF_PULSE_START params=(freq, duty) 필요.")
+                        errors.append(f"Step {n}: RF_PULSE_START params=(freq, duty) 필요.")
                 if step.action in [ActionType.FADUINO_CMD, ActionType.MFC_CMD, ActionType.OES_RUN]:
                     if step.params is None:
-                        errors.append(f"Step {step_num}: {step.action.name} 액션에 params가 없습니다.")
+                        errors.append(f"Step {n}: {step.action.name} 액션에 params가 없습니다.")
                 if step.parallel and i > 0:
                     prev = self.process_sequence[i - 1]
                     if not prev.parallel:
-                        errors.append(f"Step {step_num}: 병렬 스텝이 비병렬 스텝 뒤에 있습니다.")
+                        errors.append(f"Step {n}: 병렬 스텝이 비병렬 스텝 뒤에 있습니다.")
         except Exception as e:
             errors.append(f"검증 중 오류 발생: {e}")
         return len(errors) == 0, errors
@@ -1072,96 +1006,20 @@ class ProcessController(QObject):
     def get_estimated_duration(self) -> int:
         return sum((s.duration or 0) for s in self.process_sequence if s.action == ActionType.DELAY)
 
-    def print_process_sequence(self):
-        print(f"\n=== 공정 시퀀스 (총 {len(self.process_sequence)}단계) ===")
-        for i, step in enumerate(self.process_sequence):
-            parallel_mark = "[병렬]" if step.parallel else ""
-            polling_mark = "[폴링]" if step.polling else ""
-            print(f"{i+1:3d}. {step.action.name:15s} {parallel_mark}{polling_mark}: {step.message}")
-            if step.value is not None:
-                print(f"     └─ value: {step.value}")
-            if step.params is not None:
-                print(f"     └─ params: {step.params}")
-            if step.duration is not None:
-                print(f"     └─ duration: {step.duration}ms")
-        est = self.get_estimated_duration()
-        print(f"\n예상 소요 시간: {est/1000:.1f}초 ({est/60000:.1f}분)")
-        print("=" * 50)
+    # =========================
+    # 유틸: 이벤트 방출
+    # =========================
 
-    # ==================== 안전/리셋 ====================
+    def _emit(self, ev: PCEvent) -> None:
+        try:
+            self.event_q.put_nowait(ev)
+        except asyncio.QueueFull:
+            # 이 케이스는 거의 없겠지만, 유실 방지를 위해 블록
+            asyncio.create_task(self.event_q.put(ev))
 
-    def stop_now(self):
-        """즉시 차단이 아닌 안전한 정지 요청으로 통일"""
-        self.request_stop()
+    def _emit_log(self, src: str, msg: str) -> None:
+        self._emit(PCEvent("log", {"src": src, "msg": msg}))
 
-    def emergency_stop(self):
-        self.log_message.emit("Process", "*** 비상 정지 활성화 ***")
-        self._in_emergency = True
-        # 즉시 차단 브로드캐스트(장치별 자체 안전 처리)
-        self.update_faduino_port.emit('MS', False)
-        self.dc_power_stop_requested.emit()
-        self.rf_power_stop_requested.emit()
-        self.rf_pulse_stop_requested.emit()
-        self.abort_process()
+    def _emit_state(self, text: str) -> None:
+        self._emit(PCEvent("state", {"text": text}))
 
-    def reset_controller(self):
-        self.step_timer.stop()
-        self._stop_countdown()
-        self.is_running = False
-        self._aborting = False
-        self._accept_completions = True
-        self._in_emergency = False
-        self._stop_requested = False
-        self._shutdown_error = False
-        self._shutdown_failures = []
-        self._current_step_idx = -1
-        self._px = None
-        self.process_sequence.clear()
-        self.current_params.clear()
-        self._apply_polling(False)
-        self.process_status_changed.emit(False)
-        self.update_process_state.emit("대기 중")
-        self.log_message.emit("Process", "프로세스 컨트롤러가 리셋되었습니다.")
-
-    def get_debug_status(self) -> Dict[str, Any]:
-        """디버깅용 상태 정보"""
-        return {
-            'is_running': self.is_running,
-            'current_step_idx': self._current_step_idx,
-            'total_steps': len(self.process_sequence),
-            'accept_completions': self._accept_completions,
-            'aborting': self._aborting,
-            'stop_requested': self._stop_requested,
-            'shutdown_in_progress': self._shutdown_in_progress,
-            'in_emergency': self._in_emergency,
-            'step_timer_active': self.step_timer.isActive(),
-            'countdown_active': self._countdown_active,
-            'parallel_execution': self._px is not None,
-            'current_step_action': self.current_step.action.name if self.current_step else None,
-            'current_step_message': self.current_step.message if self.current_step else None,
-        }
-
-    # ==================== 폴링 ====================
-
-    def _compute_polling_targets(self, active: bool) -> Dict[str, bool]:
-        """
-        active=False → 전부 False
-        active=True →
-          - RF Pulse 사용:  MFC=True, Faduino=False, RFPulse=True
-          - 그 외(DC/RF):  MFC=True, Faduino=True,  RFPulse=False
-        """
-        if not active:
-            return {'mfc': False, 'faduino': False, 'rfpulse': False}
-        info = self._get_common_process_info(self.current_params or {})
-        if info.get('use_rf_pulse', False):
-            return {'mfc': True, 'faduino': False, 'rfpulse': True}
-        return {'mfc': True, 'faduino': True, 'rfpulse': False}
-
-    def _apply_polling(self, active: bool):
-        self.set_polling.emit(active)
-        self.set_polling_targets.emit(self._compute_polling_targets(active))
-
-    # ==================== 타임/유틸 ====================
-
-    def _ms_from_sec(self, sec: float) -> int:
-        return int(round(sec * 1000.0))
