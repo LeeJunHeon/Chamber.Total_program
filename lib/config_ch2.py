@@ -43,7 +43,7 @@ RGA_CSV_PATH = Path(RGA_CSV_PATH)
 
 # DLL을 통해 연결
 # OES_PORT = "COM5"
-# OES_BAUD = 9600w
+# OES_BAUD = 9600
 
 # === IG ===
 IG_WAIT_TIMEOUT = 600              # 목표 압력 대기 총 한도(초). 예: 10분
