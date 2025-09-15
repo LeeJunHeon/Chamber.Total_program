@@ -19,10 +19,10 @@ from controller.chat_notifier import ChatNotifier
 # ✅ 실제 장비 모듈(비동기)
 from device.faduino import AsyncFaduino
 from device.ig import AsyncIG
-from device.rga import RGAController
+from device.rga import RGAAsync
 from device.mfc import AsyncMFC
-from device.oes import run_measurement as run_oes_measurement
-from device.dc_power import RF_SAFE_FLOAT as _RF_SAFE_FLOAT  # (있으면) 사용, 없어도 무방
+#from device.oes import run_measurement as run_oes_measurement
+#from device.dc_power import RF_SAFE_FLOAT as _RF_SAFE_FLOAT  # (있으면) 사용, 없어도 무방
 from device.dc_power import DCPowerAsync
 from device.rf_power import RFPowerAsync
 from device.rf_pulse import RFPulseAsync

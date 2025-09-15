@@ -175,7 +175,7 @@ class RFPulseEvent:
 Token = Tuple[Literal["ACK", "NAK", "FRAME"], Optional[bytes]]
 
 class _RFPProtocol(asyncio.Protocol):
-    def __init__(self, owner: "AsyncRFPulse"):
+    def __init__(self, owner: "RFPulseAsync"):
         self.owner = owner
         self.transport: Optional[asyncio.Transport] = None
         self._rx = bytearray()
@@ -244,7 +244,7 @@ class _RFPProtocol(asyncio.Protocol):
         self.owner._on_connection_lost(exc)
 
 # ===== 메인 컨트롤러 =====
-class AsyncRFPulse:
+class RFPulseAsync:
     def __init__(self, *, debug_print: bool = True):
         self.debug_print = debug_print
 
