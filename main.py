@@ -786,12 +786,12 @@ class MainWindow(QWidget):
         async def _cleanup():
             try:
                 await asyncio.gather(
-                    self.rf_pulse.cleanup(),
+                    self.rf_pulse.clenaup(),
                     self.rf_power.cleanup(),
                     self.dc_power.cleanup(),
                     self.mfc.cleanup(),
                     self.ig.cleanup(),
-                    self.faduino.cleanup(),
+                    self.faduino.clenaup(),
                     return_exceptions=True
                 )
             except Exception:

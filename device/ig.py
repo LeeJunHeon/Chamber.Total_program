@@ -179,7 +179,7 @@ class AsyncIG:
         self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="IGCmdWorker")
         await self._emit_status(f"IG 워치독/워커 시작")
 
-    async def stop(self):
+    async def cleanup(self):
         """모든 태스크 중지 및 포트 종료."""
         await self._emit_status("IG 종료 절차 시작")
         self._want_connected = False

@@ -123,7 +123,7 @@ class DCPowerAsync:
         if self._request_status_read is not None:
             self._control_task = asyncio.create_task(self._control_loop(), name="DCPowerControl")
 
-    async def stop_process(self):
+    async def cleanup(self):
         """제어 중지 및 출력 0."""
         # 루프 중지
         await self._cancel_task("_control_task")

@@ -294,7 +294,7 @@ class RFPulseAsync:
         self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="RFPCmdWorker")
         await self._emit_status("RFPulse 워치독/워커 시작")
 
-    async def stop(self):
+    async def cleanup(self):
         """안전 종료: 폴링 off → 큐 purge → safe off → 연결 종료."""
         self._closing = True
         self._want_connected = False
@@ -864,3 +864,28 @@ class RFPulseAsync:
     def _dbg(self, src: str, msg: str):
         if self.debug_print:
             print(f"[{src}] {msg}")
+
+    def _purge_pending(self, reason: str = "") -> int:
+        """
+        명령 큐/인플라이트를 폐기하고 콜백에 실패(None) 통지.
+        MFC와 동일한 패턴으로 구현하여 shutdown/polling off 시 충돌 방지.
+        """
+        purged = 0
+
+        # Inflight 하나 정리
+        if self._inflight is not None:
+            cmd = self._inflight
+            self._inflight = None
+            purged += 1
+            self._safe_callback(cmd.callback, None)
+
+        # 큐 비우기
+        while self._cmd_q:
+            c = self._cmd_q.popleft()
+            purged += 1
+            self._safe_callback(c.callback, None)
+
+        if reason:
+            # 비동기 로그는 태스크로
+            asyncio.create_task(self._emit_status(f"대기 중 명령 {purged}개 폐기 ({reason})"))
+        return purged

@@ -159,7 +159,7 @@ class RFPowerAsync:
         if self._request_status_read is not None:
             self._poll_task = asyncio.create_task(self._poll_loop(), name="RF_Poll")
 
-    async def stop_process(self):
+    async def cleanup(self):
         if self._is_ramping_down and not self._is_running:
             return
 
@@ -204,7 +204,7 @@ class RFPowerAsync:
                     self._ev_nowait(RFPowerEvent(kind="status", message="반사파 안정화 시간 초과. 즉시 중단합니다."))
                     self._ev_nowait(RFPowerEvent(kind="target_failed", message="반사파 안정화 시간(60s) 초과"))
                     # stop_process는 await 이므로 태스크로 분리
-                    asyncio.create_task(self.stop_process())
+                    asyncio.create_task(self.cleanup())
             return
         else:
             if self.state == "REF_P_WAITING":

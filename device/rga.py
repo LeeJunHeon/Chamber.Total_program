@@ -16,6 +16,7 @@ rga_async.py — asyncio 기반 RGA 컨트롤러 (외부 프로그램 실행 + C
 from __future__ import annotations
 import asyncio
 import csv
+import contextlib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import AsyncGenerator, Literal, Optional

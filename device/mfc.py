@@ -190,7 +190,7 @@ class AsyncMFC:
         self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="MFCCmdWorker")
         await self._emit_status("MFC 워치독/워커 시작")
 
-    async def stop(self):
+    async def cleanup(self):
         """컨트롤러 완전 종료."""
         await self._emit_status("MFC 종료 절차 시작")
         self._want_connected = False
