@@ -93,3 +93,46 @@
 [2025-09-15 11:19:04] [IG] COM11 연결 실패: could not open port 'COM11': FileNotFoundError(2, '지정된 파일을 찾을 수 없습니다.', None, 2)
 [2025-09-15 11:19:04] [IG] 재연결 시도 예약... (8000 ms)
 [2025-09-15 11:23:12] [MAIN] 입력 검증 통과 → 공정 시작
+[2025-09-15 11:25:30] [MAIN] 프로그램 창 닫힘 → 종료 절차 시작...
+[2025-09-15 11:25:30] [MAIN] 종료 시퀀스(closeEvent) 시작
+[2025-09-15 11:25:30] [MAIN] 종료 시퀀스 완료
+[2025-09-15 11:31:34] [MAIN] 입력 검증 통과 → 공정 시작
+[2025-09-15 11:31:34] [Faduino] Faduino 워치독/워커 시작
+[2025-09-15 11:31:34] [MFC] MFC 워치독/워커 시작
+[2025-09-15 11:31:34] [IG] IG 워치독/워커 시작
+[2025-09-15 11:31:34] [RFPulse] RFPulse 워치독/워커 시작
+[2025-09-15 11:31:34] [Process] 전체 공정 모드로 시작 (Base Pressure 대기 포함).
+[2025-09-15 11:31:34] [Process] 종료 절차가 생성되었습니다.
+[2025-09-15 11:31:34] [Process] === 'Single run' 공정 시작 (총 35단계) ===
+[2025-09-15 11:31:34] [Process] [공정 1/35] 베이스 압력(9.0e-06) 도달 대기
+[2025-09-15 11:31:34] [Faduino] 재연결 시도 예약... (500 ms)
+[2025-09-15 11:31:34] [MFC] 재연결 시도 예약... (500 ms)
+[2025-09-15 11:31:34] [IG] 재연결 시도 예약... (1000 ms)
+[2025-09-15 11:31:34] [IG] Base Pressure 대기 시작
+[2025-09-15 11:31:34] [RFPulse] 재연결 시도... (2000 ms)
+[2025-09-15 11:31:35] [MFC] COM12 연결 실패: could not open port 'COM12': FileNotFoundError(2, '지정된 파일을 찾을 수 없습니다.', None, 2)
+[2025-09-15 11:31:35] [MFC] 재연결 시도 예약... (1000 ms)
+[2025-09-15 11:31:35] [Faduino] COM13 연결 실패: could not open port 'COM13': FileNotFoundError(2, '지정된 파일을 찾을 수 없습니다.', None, 2)
+[2025-09-15 11:31:35] [Faduino] 재연결 시도 예약... (1000 ms)
+[2025-09-15 11:31:35] [IG] COM11 연결 실패: could not open port 'COM11': FileNotFoundError(2, '지정된 파일을 찾을 수 없습니다.', None, 2)
+[2025-09-15 11:31:35] [IG] 재연결 시도 예약... (2000 ms)
+[2025-09-15 11:31:36] [Faduino] COM13 연결 실패: could not open port 'COM13': FileNotFoundError(2, '지정된 파일을 찾을 수 없습니다.', None, 2)
+[2025-09-15 11:31:36] [Faduino] 재연결 시도 예약... (2000 ms)
+[2025-09-15 11:31:36] [MFC] COM12 연결 실패: could not open port 'COM12': FileNotFoundError(2, '지정된 파일을 찾을 수 없습니다.', None, 2)
+[2025-09-15 11:31:36] [MFC] 재연결 시도 예약... (2000 ms)
+[2025-09-15 11:31:36] [RFPulse] COM15 연결 실패: could not open port 'COM15': FileNotFoundError(2, '지정된 파일을 찾을 수 없습니다.', None, 2)
+[2025-09-15 11:31:36] [RFPulse] 재연결 시도... (4000 ms)
+[2025-09-15 11:31:37] [IG] COM11 연결 실패: could not open port 'COM11': FileNotFoundError(2, '지정된 파일을 찾을 수 없습니다.', None, 2)
+[2025-09-15 11:31:37] [IG] 재연결 시도 예약... (4000 ms)
+[2025-09-15 11:31:38] [MFC] COM12 연결 실패: could not open port 'COM12': FileNotFoundError(2, '지정된 파일을 찾을 수 없습니다.', None, 2)
+[2025-09-15 11:31:38] [MFC] 재연결 시도 예약... (4000 ms)
+[2025-09-15 11:31:38] [Faduino] COM13 연결 실패: could not open port 'COM13': FileNotFoundError(2, '지정된 파일을 찾을 수 없습니다.', None, 2)
+[2025-09-15 11:31:38] [Faduino] 재연결 시도 예약... (4000 ms)
+[2025-09-15 11:31:40] [RFPulse] COM15 연결 실패: could not open port 'COM15': FileNotFoundError(2, '지정된 파일을 찾을 수 없습니다.', None, 2)
+[2025-09-15 11:31:40] [RFPulse] 재연결 시도... (8000 ms)
+[2025-09-15 11:31:41] [IG] COM11 연결 실패: could not open port 'COM11': FileNotFoundError(2, '지정된 파일을 찾을 수 없습니다.', None, 2)
+[2025-09-15 11:31:41] [IG] 재연결 시도 예약... (8000 ms)
+[2025-09-15 11:31:42] [Faduino] COM13 연결 실패: could not open port 'COM13': FileNotFoundError(2, '지정된 파일을 찾을 수 없습니다.', None, 2)
+[2025-09-15 11:31:42] [Faduino] 재연결 시도 예약... (8000 ms)
+[2025-09-15 11:31:42] [MFC] COM12 연결 실패: could not open port 'COM12': FileNotFoundError(2, '지정된 파일을 찾을 수 없습니다.', None, 2)
+[2025-09-15 11:31:42] [MFC] 재연결 시도 예약... (8000 ms)

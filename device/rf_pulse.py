@@ -31,7 +31,7 @@ try:
 except Exception as e:
     raise RuntimeError("pyserial-asyncio가 필요합니다. `pip install pyserial-asyncio`") from e
 
-from lib.config_ch2 import RFPULSE_PORT, RFPULSE_BAUD, RFPULSE_ADDR
+from lib.config_ch2 import RFPULSE_PORT, RFPULSE_BAUD, RFPULSE_ADDR, DEBUG_PRINT
 
 # ===== 타이밍/타임아웃 상수 =====
 ACK_TIMEOUT_MS         = 2000   # 쓰기(설정) 명령 후 ACK/프레임 대기 시간
@@ -245,7 +245,7 @@ class _RFPProtocol(asyncio.Protocol):
 
 # ===== 메인 컨트롤러 =====
 class RFPulseAsync:
-    def __init__(self, *, debug_print: bool = True):
+    def __init__(self, *, debug_print: bool = DEBUG_PRINT):
         self.debug_print = debug_print
 
         # 연결/프로토콜

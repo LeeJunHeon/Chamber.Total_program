@@ -593,7 +593,7 @@ class MainWindow(QWidget):
         params["G3 Target"] = vals.get("G3_target_name", "")
 
         self.append_log("MAIN", "입력 검증 통과 → 공정 시작")
-        self.process_controller.start_process(params)
+        self._safe_start_process(params)
 
     # ------------------------------------------------------------------
     # STOP/종료 (단일 경로)

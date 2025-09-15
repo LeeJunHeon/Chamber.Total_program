@@ -14,7 +14,7 @@ CHAT_WEBHOOK_URL = os.environ.get("CHAT_WEBHOOK_URL") or _get_local("CHAT_WEBHOO
 ENABLE_CHAT_NOTIFY  = True  # 끄고 싶을 때 False
 
 # === 디버그 프린트 여부 ===
-DEBUG_PRINT = True
+DEBUG_PRINT = False
 
 # === 시리얼 포트 설정 ===
 IG_PORT = "COM11"
