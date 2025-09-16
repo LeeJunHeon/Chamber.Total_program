@@ -67,11 +67,11 @@ class ExpectGroup:
         return False
 
     def match_generic_ok(self) -> bool:
-        """
-        하위 호환:
-        - 대기중인 토큰이 '정확히 1개'일 때, 장치에서 '일반 완료' 이벤트가 오면 완료로 간주.
-        """
-        if len(self._tokens) == 1 and not self._fut.done():
+        if (
+            len(self._tokens) == 1
+            and self._tokens[0].kind == "GENERIC_OK"
+            and not self._fut.done()
+        ):
             self._tokens.clear()
             self._fut.set_result(True)
             return True
@@ -221,10 +221,17 @@ class ProcessController:
 
         # 메인 러너 태스크
         self._runner_task: Optional[asyncio.Task] = None
+
+        # ✅ 즉시 중단 신호 (모든 대기에서 경쟁)
+        self._abort_evt: asyncio.Event = asyncio.Event()
         
         # === 전체 공정 경과 타이머 ===
         self._proc_start_ns: int = 0
         self._elapsed_task: Optional[asyncio.Task] = None
+
+        # === 폴링 상태 캐시(에지 트리거용) ===
+        self._last_polling_active: Optional[bool] = None
+        self._last_polling_targets: Optional[dict] = None
 
     # ===== 공정 시작/중단 API =====
 
@@ -253,6 +260,12 @@ class ProcessController:
             self._expect_group = None
 
             self.is_running = True
+            # ✅ 이전 런의 abort 상태 초기화
+            self._abort_evt.clear()
+
+            # 폴링 상태 캐시 초기화(처음 1회는 반드시 이벤트 발행되도록)
+            self._last_polling_active = None
+            self._last_polling_targets = None
 
             # 전체 공정 시작 시각 저장 + 기존 경과 타이머가 있으면 정리 후 재시작
             self._proc_start_ns = monotonic_ns()
@@ -290,6 +303,9 @@ class ProcessController:
         self._stop_requested = True
         self._emit_log("Process", "정지 요청을 받았습니다.")
 
+        # ✅ 모든 대기 즉시 중단
+        self._abort_evt.set()
+
         # ✅ 즉시 종료 절차로 진입 (러너의 '다음 틱'을 기다리지 않음)
         self._start_normal_shutdown()
 
@@ -311,6 +327,9 @@ class ProcessController:
         self._in_emergency = True
         self._aborting = True
         self._shutdown_in_progress = True
+
+        # ✅ 어떤 대기든 즉시 끊는다
+        self._abort_evt.set()
 
         # 진행 중 대기/기대 취소
         self._cancel_countdown()
@@ -345,6 +364,14 @@ class ProcessController:
         self.current_params.clear()
         self.process_sequence.clear()
         self._current_step_idx = -1
+        
+        # 폴링 캐시 초기화
+        self._last_polling_active = None
+        self._last_polling_targets = None
+
+        self._abort_evt.clear()  # ✅ 리셋 시 abort 상태 초기화
+
+
         self._emit(PCEvent("status", {"running": False}))
         self._emit_state("대기 중")
         self._emit_log("Process", "프로세스 컨트롤러가 리셋되었습니다.")
@@ -392,9 +419,8 @@ class ProcessController:
         self._step_failed("RFPulse", why or "unknown")
 
     def on_device_step_ok(self) -> None:
-        # 하위 호환: "power_off_finished" 같은 일반 완료 이벤트
-        if self._expect_group:
-            self._expect_group.match_generic_ok()
+        # 일반 OK는 해당 스텝이 실제로 GENERIC_OK를 요구할 때만 인정
+        self._match_token(ExpectToken("GENERIC_OK"))
 
     def on_oes_ok(self) -> None:
         # OES는 no_wait로 돌도록 구성(로그만)
@@ -452,11 +478,16 @@ class ProcessController:
                     fut = self._set_expect(tokens)
                     if fut is not None:
                         try:
-                            await fut
+                            # ✅ abort와 경쟁
+                            aborted = await self._wait_or_abort(fut)
+                            if aborted:
+                                if self._expect_group:
+                                    self._expect_group.cancel("abort")
+                                    self._expect_group = None
+                                continue  # 종료 시퀀스로 넘어가게 루프 계속
                         except asyncio.CancelledError:
-                            # ✅ 종료 절차 전환 등으로 '대기'가 취소됨
-                            # 새 시퀀스(종료 스텝)으로 계속 진행
-                            continue  # while 루프의 다음 반복으로
+                            continue
+
                 else:
                     # 단일 스텝
                     self._apply_polling(step.polling)
@@ -479,10 +510,16 @@ class ProcessController:
         fut = self._set_expect(tokens)
         if fut is not None:
             try:
-                await fut
+                # ✅ abort와 경쟁
+                aborted = await self._wait_or_abort(fut)
+                if aborted:
+                    # 대기 중단/교체 처리
+                    if self._expect_group:
+                        self._expect_group.cancel("abort")
+                        self._expect_group = None
+                    return
             except asyncio.CancelledError:
-                # ✅ 종료 절차로 시퀀스가 교체됨
-                return  # 이 스텝을 종료하고 러너 루프로 복귀
+                return
 
     def _send_and_collect_tokens(self, step: ProcessStep) -> List[ExpectToken]:
         a = step.action
@@ -566,7 +603,9 @@ class ProcessController:
         self._countdown_task = asyncio.create_task(self._countdown_loop())
 
         try:
-            await asyncio.sleep(duration_ms / 1000.0)
+            aborted = await self._sleep_or_abort(duration_ms / 1000.0)
+            if aborted:
+                return  # ✅ 즉시 복귀 (러너가 종료 시퀀스로 전환됨)
         finally:
             # 종료 시에만 상태까지 정리
             self._cancel_countdown()
@@ -581,7 +620,7 @@ class ProcessController:
                 m, s = divmod(rem_s, 60)
                 tstr = f"{m}분 {s}초" if m > 0 else f"{s}초"
                 self._emit_state(f"{self._countdown_base_msg} (남은 시간: {tstr})")
-                if remaining_ms == 0:
+                if remaining_ms == 0 or self._abort_evt.is_set():
                     return
                 await asyncio.sleep(1)
         except asyncio.CancelledError:
@@ -596,8 +635,19 @@ class ProcessController:
         self._countdown_base_msg = ""
 
     def _apply_polling(self, active: bool) -> None:
-        self._emit(PCEvent("polling", {"active": bool(active)}))
-        self._emit(PCEvent("polling_targets", {"targets": self._compute_polling_targets(active)}))
+        active = bool(active)
+        targets = self._compute_polling_targets(active)
+
+        # 변화 없으면 아무 것도 내보내지 않음(노이즈 제거)
+        if self._last_polling_active == active and self._last_polling_targets == targets:
+            return
+
+        # 캐시 갱신 후, 실제로 바뀌었을 때만 이벤트 발생
+        self._last_polling_active = active
+        self._last_polling_targets = dict(targets)
+
+        self._emit(PCEvent("polling", {"active": active}))
+        self._emit(PCEvent("polling_targets", {"targets": targets}))
 
     def _compute_polling_targets(self, active: bool) -> Dict[str, bool]:
         if not active:
@@ -621,6 +671,9 @@ class ProcessController:
 
         self._shutdown_in_progress = True
         self._emit_log("Process", "정지 요청 - 안전한 종료 절차를 시작합니다.")
+
+        # ✅ 모든 대기 즉시 중단
+        self._abort_evt.set()
 
         # ✅ IG 폴링/재점등을 즉시 중단 (SIG 0 전송은 IG 내부에서 응답 무시로 처리)
         try:
@@ -706,6 +759,15 @@ class ProcessController:
         self._emit(PCEvent("status", {"running": False}))
         self._emit_state("공정 완료" if ok else "공정 중단됨")
         self._emit(PCEvent("finished", {"ok": ok, "detail": detail}))
+
+        # 다음 런을 위해 폴링 캐시 초기화
+        self._last_polling_active = None
+        self._last_polling_targets = None
+
+        # 다음 런 대비
+        self._abort_evt.clear()  # ✅ 다음 실행에 영향 없도록
+
+
         if (self._aborting or self._in_emergency) and not ok:
             self._emit(PCEvent("aborted", {}))
 
@@ -1118,5 +1180,34 @@ class ProcessController:
         if t and not t.done():
             t.cancel()
         self._elapsed_task = None
+
+    async def _wait_or_abort(self, coro: asyncio.Future | asyncio.Task | asyncio.coroutines.CoroWrapper) -> bool:
+        """
+        주어진 awaitable과 self._abort_evt.wait() 중 먼저 끝나는 쪽을 따른다.
+        반환값: True면 'abort가 먼저 왔다'는 뜻(즉시 상위 로직은 중단/종료 전환).
+        """
+        a = asyncio.create_task(coro) if not isinstance(coro, (asyncio.Task, asyncio.Future)) else coro
+        b = asyncio.create_task(self._abort_evt.wait())
+        done, pending = await asyncio.wait({a, b}, return_when=asyncio.FIRST_COMPLETED)
+        # 나머지 취소
+        for p in pending:
+            p.cancel()
+        if b in done:  # abort 우선
+            # 외부 대기 중이던 항목(토큰 대기 등)은 취소해 준다
+            try:
+                a.cancel()
+            except Exception:
+                pass
+            return True
+        # 정상 완료
+        return False
+
+    async def _sleep_or_abort(self, seconds: float) -> bool:
+        """
+        sleep(seconds)와 abort 이벤트를 경쟁. 
+        반환값: True면 abort가 먼저 발생.
+        """
+        return await self._wait_or_abort(asyncio.sleep(max(0.0, seconds)))
+
 
 

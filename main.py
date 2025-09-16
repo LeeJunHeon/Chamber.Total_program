@@ -140,14 +140,16 @@ class MainWindow(QWidget):
         def cb_oes_run(duration_sec: float, integration_ms: int):
             async def run():
                 try:
-                    # 1) 채널이 열려 있지 않으면 초기화 시도 (안전망)
+                    # 🔒 혹시라도 아직 펌프가 안 떠 있으면 보장
+                    self._ensure_background_started()
+
                     if getattr(self.oes, "sChannel", -1) < 0:
                         ok = await self.oes.initialize_device()
                         if not ok:
                             raise RuntimeError("OES 초기화 실패")
 
-                    # 2) 측정 시작
                     await self.oes.run_measurement(duration_sec, integration_ms)
+
                 except Exception as e:
                     self.process_controller.on_oes_failed("OES", str(e))
                     if self.chat_notifier:
@@ -420,13 +422,11 @@ class MainWindow(QWidget):
                 pass  # 필요 시 UI 반영
             elif k == "base_reached":
                 self.process_controller.on_ig_ok()
-                asyncio.create_task(self.ig.cleanup())  # ✅ 안전망
             elif k == "base_failed":
                 why = ev.message or "unknown"
                 self.process_controller.on_ig_failed("IG", why)
                 if self.chat_notifier:
                     self.chat_notifier.notify_error("IG", why)
-                asyncio.create_task(self.ig.cleanup())  # ✅ 안전망
 
     async def _pump_rga_events(self):
         async for ev in self.rga.events():
@@ -495,17 +495,44 @@ class MainWindow(QWidget):
 
     async def _pump_oes_events(self):
         async for ev in self.oes.events():
-            if ev.kind == "status":
-                self.append_log("OES", ev.message or "")
-            elif ev.kind == "data":
-                self.graph_controller.update_oes_plot(ev.x, ev.y)
-            elif ev.kind == "finished":
-                if ev.success:
-                    self.process_controller.on_oes_ok()
-                else:
-                    self.process_controller.on_oes_failed("OES", "measure failed")
-                    if self.chat_notifier:
-                        self.chat_notifier.notify_error("OES", "measure failed")
+            try:
+                k = getattr(ev, "kind", None)
+                if k == "status":
+                    self.append_log("OES", ev.message or "")
+                    continue
+
+                if k in ("data", "spectrum", "frame"):
+                    # 필드 호환 (x/y → wavelengths/intensities → lambda/counts 등)
+                    x = getattr(ev, "x", None)
+                    y = getattr(ev, "y", None)
+                    if x is None or y is None:
+                        x = getattr(ev, "wavelengths", getattr(ev, "lambda_axis", None))
+                        y = getattr(ev, "intensities", getattr(ev, "counts", None))
+
+                    if x is not None and y is not None:
+                        # UI 스레드 안전하게(혹시 모를 충돌 방지)
+                        self.graph_controller.update_oes_plot(x, y)
+                    else:
+                        self.append_log("OES", f"경고: 데이터 필드 없음: {ev!r}")
+                    continue
+
+                if k == "finished":
+                    if bool(getattr(ev, "success", False)):
+                        self.process_controller.on_oes_ok()
+                    else:
+                        why = getattr(ev, "message", "measure failed")
+                        self.process_controller.on_oes_failed("OES", why)
+                        if self.chat_notifier:
+                            self.chat_notifier.notify_error("OES", why)
+                    continue
+
+                self.append_log("OES", f"알 수 없는 이벤트: {ev!r}")
+
+            except Exception as e:
+                # 💡 핵심: 예외가 나도 펌프 태스크가 죽지 않도록
+                self.append_log("OES", f"이벤트 처리 예외: {e!r}")
+                continue
+
 
     # ------------------------------------------------------------------
     # RGA dummy

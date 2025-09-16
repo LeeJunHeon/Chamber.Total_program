@@ -188,9 +188,16 @@ class AsyncIG:
         await self._emit_status("IG 종료 절차 시작")
         self._want_connected = False
         self._waiting_active = False
-        self._suspend_reignite = True           # ✅ 재점등 금지
+        self._suspend_reignite = True
 
-        # 폴링 태스크
+        # 1) ⬇️ 먼저 장비 OFF를 보장
+        try:
+            await self._sig0_off_ignore_reply()   # allow_no_reply=True
+            await self._drain_until_idle(timeout_ms=300)  # 전송/갭 처리 완료 대기
+        except Exception:
+            pass
+
+        # 2) 폴링 태스크 중지
         if self._polling_task:
             self._polling_task.cancel()
             try:
@@ -199,7 +206,7 @@ class AsyncIG:
                 pass
             self._polling_task = None
 
-        # 명령 워커
+        # 3) 명령 워커 중지 (SIG 0 전송 이후에!)
         if self._cmd_worker_task:
             self._cmd_worker_task.cancel()
             try:
@@ -208,7 +215,7 @@ class AsyncIG:
                 pass
             self._cmd_worker_task = None
 
-        # 워치독
+        # 4) 워치독 중지
         if self._watchdog_task:
             self._watchdog_task.cancel()
             try:
@@ -217,10 +224,10 @@ class AsyncIG:
                 pass
             self._watchdog_task = None
 
-        # 큐/인플라이트 정리
+        # 5) 큐/인플라이트 정리(이 시점엔 보내야 할 건 이미 보냄)
         self._purge_pending("shutdown")
 
-        # 연결 종료
+        # 6) 포트 종료
         if self._transport:
             try:
                 self._transport.close()
@@ -231,6 +238,7 @@ class AsyncIG:
         self._connected = False
 
         await self._emit_status("IG 연결 종료됨")
+
 
     def enqueue(
         self,
@@ -601,6 +609,7 @@ class AsyncIG:
             await self._emit_base_reached()
             self._waiting_active = False
             self._last_wait_success = True
+            self._suspend_reignite = True
             # IG OFF 후 종료
             await self._sig0_off_ignore_reply()
 
@@ -729,3 +738,11 @@ class AsyncIG:
     def _dbg(self, src: str, msg: str):
         if self.debug_print:
             print(f"[{src}] {msg}")
+
+    async def _drain_until_idle(self, timeout_ms: int = 300):
+        """_inflight이 비고 큐가 빌 때까지 잠깐 대기(상한 시간 내)."""
+        deadline = time.monotonic() + max(0, timeout_ms) / 1000.0
+        while time.monotonic() < deadline:
+            if self._inflight is None and not self._cmd_q:
+                break
+            await asyncio.sleep(0.01)
