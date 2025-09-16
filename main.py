@@ -121,7 +121,8 @@ class MainWindow(QWidget):
             asyncio.create_task(self.rf_pulse.start_pulse_process(float(power), freq, duty))
 
         def cb_rfpulse_stop():
-            asyncio.create_task(self.rf_pulse.stop_process())
+            # stop_process는 동기 함수이므로 그냥 호출
+            self.rf_pulse.stop_process()
 
         def cb_ig_wait(base_pressure: float):
             asyncio.create_task(self.ig.wait_for_base_pressure(float(base_pressure)))
@@ -650,12 +651,80 @@ class MainWindow(QWidget):
         if self.process_controller.is_running:
             self.append_log("MAIN", "경고: 이미 다른 공정이 실행 중이므로 새 공정을 시작하지 않습니다.")
             return
+        # 프리플라이트(연결 확인) → 완료 후 공정 시작
+        asyncio.create_task(self._start_after_preflight(params))
+
+    async def _start_after_preflight(self, params: dict):
         try:
             self._ensure_background_started()
+            self.append_log("MAIN", "장비 연결 확인 중...")
+
+            ok, failed = await self._preflight_connect(params, timeout_s=5.0)  # RF Pulse 고려해 5초 권장
+            if not ok:
+                fail_list = ", ".join(failed) if failed else "알 수 없음"
+                self.append_log("MAIN", f"필수 장비 연결 실패: {fail_list} → 공정 시작 중단")
+                QMessageBox.critical(self, "장비 연결 실패",
+                                    f"다음 장비 연결을 확인하지 못했습니다:\n - {fail_list}\n\n"
+                                    "케이블/전원/포트 설정을 확인한 뒤 다시 시도하세요.")
+                self._start_next_process_from_queue(False)
+                return
+
+            self.append_log("MAIN", "장비 연결 확인 완료 → 공정 시작")
             self.process_controller.start_process(params)
         except Exception as e:
             self.append_log("MAIN", f"오류: '{params.get('Process_name', '알 수 없는')} 공정' 시작에 실패했습니다. ({e})")
             self._start_next_process_from_queue(False)
+
+
+    async def _wait_device_connected(self, dev, name: str, timeout_s: float) -> bool:
+        """장비 워치독이 포트를 실제로 열어 `_connected=True` 될 때까지 기다린다."""
+        try:
+            t0 = asyncio.get_running_loop().time()
+        except RuntimeError:
+            t0 = 0.0  # fallback
+        self.append_log(name, "연결 대기...")
+        while True:
+            try:
+                if bool(getattr(dev, "_connected", False)):
+                    self.append_log(name, "연결 확인")
+                    return True
+            except Exception:
+                pass
+            try:
+                now = asyncio.get_running_loop().time()
+            except RuntimeError:
+                now = t0 + timeout_s + 1.0
+            if now - t0 >= timeout_s:
+                self.append_log(name, "연결 확인 실패(타임아웃)")
+                return False
+            await asyncio.sleep(0.05)
+
+    async def _preflight_connect(self, params: dict, timeout_s: float = 5.0) -> tuple[bool, list[str]]:
+        """
+        필수 장비가 `_connected=True`가 될 때까지 대기.
+        - 기본 필수: Faduino, MFC, IG
+        - 선택 필수: RF Pulse를 사용할 때만 RFPulse 포함
+        반환: (모두연결OK, 실패장비이름목록)
+        """
+        need: list[tuple[str, object]] = [
+            ("Faduino", self.faduino),
+            ("MFC", self.mfc),
+            ("IG", self.ig),
+        ]
+        try:
+            use_rf_pulse = bool(params.get("use_rf_pulse", False) or params.get("use_rf_pulse_power", False))
+        except Exception:
+            use_rf_pulse = False
+        if use_rf_pulse:
+            need.append(("RFPulse", self.rf_pulse))
+
+        # 병렬 대기
+        results = await asyncio.gather(
+            *[self._wait_device_connected(dev, name, timeout_s) for name, dev in need],
+            return_exceptions=False
+        )
+        failed = [name for (name, _), ok in zip(need, results) if not ok]
+        return (len(failed) == 0, failed)
 
     # ------------------------------------------------------------------
     # 단일 실행
@@ -703,7 +772,7 @@ class MainWindow(QWidget):
         params["G2 Target"] = vals.get("G2_target_name", "")
         params["G3 Target"] = vals.get("G3_target_name", "")
 
-        self.append_log("MAIN", "입력 검증 통과 → 공정 시작")
+        self.append_log("MAIN", "입력 검증 통과 → 장비 연결 확인 시작")
         self._safe_start_process(params)
 
     # ------------------------------------------------------------------
