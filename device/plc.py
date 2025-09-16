@@ -41,118 +41,118 @@ from pymodbus.exceptions import ModbusException
 # === M (Coils) — FC1/FC5 ===
 PLC_COIL_MAP: Dict[str, int] = {
     # 인터락/기타
-    "R_P_1_OFF_TIMER": 1,
-    "R_P_2_OFF_TIMER": 2,
-    "L_R_P_OFF_TIMER": 3,
-    "R_V_1_인터락": 33,
-    "F_V_1_인터락": 34,
-    "M_V_1_인터락": 35,
-    "VENT_1_인터락": 36,
-    "TURBO_1_인터락": 37,
-    "DOOR_1_인터락": 38,
-    "G_V_1_인터락": 40,
-    "MAIN_SHUTTER_1_인터락": 42,
-    "Ar_1_GAS_인터락": 43,
-    "O2_1_GAS_인터락": 44,
-    "MAIN_1_GAS_인터락": 45,
-    "L_R_V_인터락": 49,
-    "L_PIN_인터락": 50,
-    "L_VENT_인터락": 52,
-    "R_V_2_인터락": 65,
-    "F_V_2_인터락": 66,
-    "M_V_2_인터락": 67,
-    "VENT_2_인터락": 68,
-    "TURBO_2_인터락": 69,
-    "DOOR_2_인터락": 70,
-    "G_V_2_인터락": 72,
-    "MAIN_SHUTTER_2_인터락": 74,
-    "Ar_2_GAS_인터락": 75,
-    "O2_2_GAS_인터락": 76,
-    "N2_2_GAS_인터락": 77,
-    "MAIN_2_GAS_인터락": 78,
+    "R_P_1_OFF_TIMER": 1,        # M00001
+    "R_P_2_OFF_TIMER": 2,        # M00002
+    "L_R_P_OFF_TIMER": 3,        # M00003
+    "R_V_1_인터락": 33,          # M00021
+    "F_V_1_인터락": 34,          # M00022
+    "M_V_1_인터락": 35,          # M00023
+    "VENT_1_인터락": 36,         # M00024
+    "TURBO_1_인터락": 37,        # M00025
+    "DOOR_1_인터락": 38,         # M00026
+    "G_V_1_인터락": 40,          # M00028
+    "MAIN_SHUTTER_1_인터락": 42, # M0002A
+    "Ar_1_GAS_인터락": 43,       # M0002B
+    "O2_1_GAS_인터락": 44,       # M0002C
+    "MAIN_1_GAS_인터락": 45,     # M0002D
+    "L_R_V_인터락": 49,          # M00031
+    "L_PIN_인터락": 50,          # M00032
+    "L_VENT_인터락": 52,         # M00034
+    "R_V_2_인터락": 65,          # M00041
+    "F_V_2_인터락": 66,          # M00042
+    "M_V_2_인터락": 67,          # M00043
+    "VENT_2_인터락": 68,         # M00044
+    "TURBO_2_인터락": 69,        # M00045
+    "DOOR_2_인터락": 70,         # M00046
+    "G_V_2_인터락": 72,          # M00048
+    "MAIN_SHUTTER_2_인터락": 74, # M0004A
+    "Ar_2_GAS_인터락": 75,       # M0004B
+    "O2_2_GAS_인터락": 76,       # M0004C
+    "N2_2_GAS_인터락": 77,       # M0004D
+    "MAIN_2_GAS_인터락": 78,     # M0004E
 
     # Z/MID 영역 — 워드/비트 재매핑 적용
-    "Z_M_P_1_STOP_SW": 176,
-    "Z_M_P_1_MID_SW": 192,
-    "Z_M_P_1_MID_CW": 177,
-    "Z_M_P_1_MID_CCW": 178,
-    "Z_M_P_2_MID_SW": 179,
-    "Z_M_P_2_MID_CW": 180,
-    "Z_M_P_2_MID_CCW": 181,
+    "Z_M_P_1_STOP_SW": 176,    # M00100
+    "Z_M_P_1_MID_SW":  192,    # M00110
+    "Z_M_P_1_MID_CW":  177,    # M00111
+    "Z_M_P_1_MID_CCW": 178,    # M00112
+    "Z_M_P_2_MID_SW":  179,    # M00113
+    "Z_M_P_2_MID_CW":  180,    # M00114
+    "Z_M_P_2_MID_CCW": 181,    # M00115
 
     # ===== SW(명령) 영역 =====
     # M0012y
-    "R_P_1_SW": 208,
-    "R_V_1_SW": 193,
-    "F_V_1_SW": 194,
-    "M_V_1_SW": 195,
-    "VENT_1_SW": 196,
-    "TURBO_1_SW": 197,
-    "DOOR_1_OPEN_SW": 198,
-    "DOOR_1_CLOSE_SW": 199,
-    "G_V_1_OPEN_SW": 200,
-    "G_V_1_CLOSE_SW": 201,
-    "MAIN_SHUTTER_1_SW": 202,
-    "Ar_1_GAS_SW": 203,
-    "O2_1_GAS_SW": 204,
-    "MAIN_1_GAS_SW": 205,
+    "R_P_1_SW":          208,  # M00120 
+    "R_V_1_SW":          193,  # M00121
+    "F_V_1_SW":          194,  # M00122
+    "M_V_1_SW":          195,  # M00123
+    "VENT_1_SW":         196,  # M00124
+    "TURBO_1_SW":        197,  # M00125
+    "DOOR_1_OPEN_SW":    198,  # M00126
+    "DOOR_1_CLOSE_SW":   199,  # M00127
+    "G_V_1_OPEN_SW":     200,  # M00128
+    "G_V_1_CLOSE_SW":    201,  # M00129
+    "MAIN_SHUTTER_1_SW": 202,  # M0012A
+    "Ar_1_GAS_SW":       203,  # M0012B
+    "O2_1_GAS_SW":       204,  # M0012C
+    "MAIN_1_GAS_SW":     205,  # M0012D
 
     # M0013y
-    "L_R_P_SW": 224,
-    "L_R_V_SW": 209,
-    "L_PIN_UP_SW": 210,
-    "L_PIN_DOWN_SW": 211,
-    "L_VENT_SW": 212,
-    "SW_RF_SELECT": 214,
-    "SHUTTER_2_SW": 216,
-    "SHUTTER_3_SW": 217,
-    "Z_M_P_1_SW": 218,
-    "Z_M_P_1_CW_SW": 219,
-    "Z_M_P_1_CCW_SW": 220,
-    "Z_M_P_2_SW": 221,
-    "Z_M_P_2_CW_SW": 222,
-    "Z_M_P_2_CCW_SW": 223,
+    "L_R_P_SW":          224,  # M00130
+    "L_R_V_SW":          209,  # M00131
+    "L_PIN_UP_SW":       210,  # M00132
+    "L_PIN_DOWN_SW":     211,  # M00133
+    "L_VENT_SW":         212,  # M00134
+    "SW_RF_SELECT":      214,  # M00136
+    "SHUTTER_2_SW":      216,  # M00138
+    "SHUTTER_3_SW":      217,  # M00139
+    "Z_M_P_1_SW":        218,  # M0013A
+    "Z_M_P_1_CW_SW":     219,  # M0013B
+    "Z_M_P_1_CCW_SW":    220,  # M0013C
+    "Z_M_P_2_SW":        221,  # M0013D
+    "Z_M_P_2_CW_SW":     222,  # M0013E
+    "Z_M_P_2_CCW_SW":    223,  # M0013F
 
     # M0014y
-    "R_P_2_SW": 240,
-    "R_V_2_SW": 225,
-    "F_V_2_SW": 226,
-    "M_V_2_SW": 227,
-    "VENT_2_SW": 228,
-    "TURBO_2_SW": 229,
-    "DOOR_2_OPEN_SW": 230,
-    "DOOR_2_CLOSE_SW": 231,
-    "G_V_2_OPEN_SW": 232,
-    "G_V_2_CLOSE_SW": 233,
-    "MAIN_SHUTTER_2_SW": 234,
-    "Ar_2_GAS_SW": 235,
-    "O2_2_GAS_SW": 236,
-    "N2_2_GAS_SW": 237,
-    "MAIN_2_GAS_SW": 238,
-    "SHUTTER_1_SW": 239,
+    "R_P_2_SW":          240,  # M00140 
+    "R_V_2_SW":          225,  # M00141
+    "F_V_2_SW":          226,  # M00142
+    "M_V_2_SW":          227,  # M00143
+    "VENT_2_SW":         228,  # M00144
+    "TURBO_2_SW":        229,  # M00145
+    "DOOR_2_OPEN_SW":    230,  # M00146
+    "DOOR_2_CLOSE_SW":   231,  # M00147
+    "G_V_2_OPEN_SW":     232,  # M00148
+    "G_V_2_CLOSE_SW":    233,  # M00149
+    "MAIN_SHUTTER_2_SW": 234,  # M0014A
+    "Ar_2_GAS_SW":       235,  # M0014B
+    "O2_2_GAS_SW":       236,  # M0014C
+    "N2_2_GAS_SW":       237,  # M0014D
+    "MAIN_2_GAS_SW":     238,  # M0014E
+    "SHUTTER_1_SW":      239,  # M0014F
 
     # 램프/기타
-    "Z_M_P_2_STOP_SW": 336,
-    "VENT_1_LAMP": 356,
-    "DOOR_1_OPEN_LAMP": 358,
-    "DOOR_1_CLOSE_LAMP": 359,
-    "G_V_1_OPEN_LAMP": 360,
-    "G_V_1_CLOSE_LAMP": 361,
-    "L_PIN_UP_LAMP": 370,
-    "L_PIN_DOWN_LAMP": 371,
-    "L_VENT_LAMP": 372,
-    "VENT_2_LAMP": 388,
-    "DOOR_2_OPEN_LAMP": 390,
-    "DOOR_2_CLOSE_LAMP": 391,
-    "G_V_2_OPEN_LAMP": 392,
-    "G_V_2_CLOSE_LAMP": 393,
-
-    "BUZZER_STOP_SW": 1616,
-    "GAUGE_1_A_INTERLOCK": 2416,
-    "GAUGE_1_B_INTERLOCK": 2576,
-    "L_GAUGE_A_INTERLOCK": 2736,
-    "GAUGE_2_A_INTERLOCK": 2896,
-    "GAUGE_2_B_INTERLOCK": 3056,
+    "Z_M_P_2_STOP_SW":   336,   # M00200
+    "VENT_1_LAMP":       356,   # M00224
+    "DOOR_1_OPEN_LAMP":  358,   # M00226
+    "DOOR_1_CLOSE_LAMP": 359,   # M00227
+    "G_V_1_OPEN_LAMP":   360,   # M00228
+    "G_V_1_CLOSE_LAMP":  361,   # M00229
+    "L_PIN_UP_LAMP":     370,   # M00232
+    "L_PIN_DOWN_LAMP":   371,   # M00233
+    "L_VENT_LAMP":       372,   # M00234
+    "VENT_2_LAMP":       388,   # M00244
+    "DOOR_2_OPEN_LAMP":  390,   # M00246
+    "DOOR_2_CLOSE_LAMP": 391,   # M00247
+    "G_V_2_OPEN_LAMP":   392,   # M00248
+    "G_V_2_CLOSE_LAMP":  393,   # M00249
+    
+    "BUZZER_STOP_SW":      1616,  # M01000
+    "GAUGE_1_A_INTERLOCK": 2416,  # M01500
+    "GAUGE_1_B_INTERLOCK": 2576,  # M01600
+    "L_GAUGE_A_INTERLOCK": 2736,  # M01700
+    "GAUGE_2_A_INTERLOCK": 2896,  # M01800
+    "GAUGE_2_B_INTERLOCK": 3056,  # M01900
 }
 
 # === D (Holding Registers) — FC3/FC6 ===
