@@ -373,8 +373,29 @@ class AsyncIG:
                 backoff = min(backoff * 2, IG_RECONNECT_BACKOFF_MAX_MS)
 
     def _on_connection_made(self, transport: asyncio.Transport):
-        # 이미 watchdog에서 플래그 처리
-        pass
+        # 연결 직후 버퍼 정리 및 라인 제어(가능한 경우)
+        try:
+            ser = getattr(transport, "serial", None)  # pyserial Serial 인스턴스
+            if ser is not None:
+                try:
+                    ser.reset_input_buffer()
+                except Exception:
+                    pass
+                try:
+                    ser.reset_output_buffer()
+                except Exception:
+                    pass
+                # 기존 QSerialPort 설정과 동일하게
+                try:
+                    ser.dtr = True
+                except Exception:
+                    pass
+                try:
+                    ser.rts = False
+                except Exception:
+                    pass
+        except Exception:
+            pass
 
     def _on_connection_lost(self, exc: Optional[Exception]):
         self._connected = False
@@ -435,7 +456,6 @@ class AsyncIG:
             try:
                 payload = cmd.cmd_str.encode("ascii")
                 self._transport.write(payload)
-                await self._transport.drain() if hasattr(self._transport, "drain") else None
             except Exception as e:
                 # 전송 실패 → 재연결 유도
                 self._dbg("IG", f"{cmd.tag} {sent_txt} 전송 오류: {e}")

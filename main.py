@@ -502,7 +502,7 @@ class MainWindow(QWidget):
             # 장치 내부 루프
             loop.create_task(self.faduino.start()),
             loop.create_task(self.mfc.start()),
-            #loop.create_task(self.ig.start()), ✅ IG는 on-demand (wait_for_base_pressure 내부에서 start)
+            loop.create_task(self.ig.start()),
             loop.create_task(self.rf_pulse.start()),
             # 이벤트 펌프(장치 → PC)
             loop.create_task(self._pump_faduino_events()),
@@ -664,27 +664,42 @@ class MainWindow(QWidget):
         # 프리플라이트(연결 확인) → 완료 후 공정 시작
         asyncio.create_task(self._start_after_preflight(params))
 
+    # (MainWindow 클래스 내부)
+    # 1) 재진입 안전한 비모달 표출 유틸을 "메서드"로 추가
+    def _post_critical(self, title: str, text: str) -> None:
+        QTimer.singleShot(0, lambda: QMessageBox.critical(self, title, text))
+
+    # 2) async 함수 안의 모달 호출을 유틸로 교체
     async def _start_after_preflight(self, params: dict):
         try:
             self._ensure_background_started()
             self.append_log("MAIN", "장비 연결 확인 중...")
 
-            ok, failed = await self._preflight_connect(params, timeout_s=5.0)  # RF Pulse 고려해 5초 권장
+            ok, failed = await self._preflight_connect(params, timeout_s=5.0)
             if not ok:
                 fail_list = ", ".join(failed) if failed else "알 수 없음"
                 self.append_log("MAIN", f"필수 장비 연결 실패: {fail_list} → 공정 시작 중단")
-                QMessageBox.critical(self, "장비 연결 실패",
-                                    f"다음 장비 연결을 확인하지 못했습니다:\n - {fail_list}\n\n"
-                                    "케이블/전원/포트 설정을 확인한 뒤 다시 시도하세요.")
+
+                # ⬇️ 모달 직접 호출 금지 → 이벤트 루프 턴 넘긴 뒤 띄우기
+                self._post_critical(
+                    "장비 연결 실패",
+                    f"다음 장비 연결을 확인하지 못했습니다:\n - {fail_list}\n\n"
+                    "케이블/전원/포트 설정을 확인한 뒤 다시 시도하세요."
+                )
                 self._start_next_process_from_queue(False)
                 return
 
             self.append_log("MAIN", "장비 연결 확인 완료 → 공정 시작")
             self.process_controller.start_process(params)
-        except Exception as e:
-            self.append_log("MAIN", f"오류: '{params.get('Process_name', '알 수 없는')} 공정' 시작에 실패했습니다. ({e})")
-            self._start_next_process_from_queue(False)
 
+        except Exception as e:
+            msg = f"오류: '{params.get('Process_name', '알 수 없는')} 공정' 시작에 실패했습니다. ({e})"
+            self.append_log("MAIN", msg)
+
+            # ⬇️ 예외 케이스도 동일하게 비모달로
+            self._post_critical("오류", msg)
+
+            self._start_next_process_from_queue(False)
 
     async def _wait_device_connected(self, dev, name: str, timeout_s: float) -> bool:
         """장비 워치독이 포트를 실제로 열어 `_connected=True` 될 때까지 기다린다."""
