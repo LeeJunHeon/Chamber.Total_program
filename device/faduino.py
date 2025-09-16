@@ -164,13 +164,24 @@ class AsyncFaduino:
 
     # ---------- 공용 API ----------
     async def start(self):
-        """워치독/커맨드 워커 시작(연결은 워치독이 관리)."""
-        if self._watchdog_task or self._cmd_worker_task:
+        """워치독/커맨드 워커 시작(연결은 워치독이 관리). 재호출/죽은 태스크 회복 안전."""
+        # 1) 죽은 태스크 정리
+        if self._watchdog_task and self._watchdog_task.done():
+            self._watchdog_task = None
+        if self._cmd_worker_task and self._cmd_worker_task.done():
+            self._cmd_worker_task = None
+
+        # 2) 이미 둘 다 살아 있으면 종료
+        if self._watchdog_task and self._cmd_worker_task:
             return
+
+        # 3) 재가동
         self._want_connected = True
         loop = asyncio.get_running_loop()
-        self._watchdog_task = loop.create_task(self._watchdog_loop(), name="FaduinoWatchdog")
-        self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="FaduinoCmdWorker")
+        if not self._watchdog_task:
+            self._watchdog_task = loop.create_task(self._watchdog_loop(), name="FaduinoWatchdog")
+        if not self._cmd_worker_task:
+            self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="FaduinoCmdWorker")
         await self._emit_status("Faduino 워치독/워커 시작")
 
     async def cleanup(self):
@@ -433,12 +444,21 @@ class AsyncFaduino:
             if cmd.allow_no_reply:
                 self._safe_callback(cmd.callback, None)
                 self._inflight = None
+                # (선택) 아주 짧게 라인 큐를 비워 stray 완화
+                t0 = time.monotonic()
+                while (time.monotonic() - t0) < 0.2:  # 최대 200ms
+                    try:
+                        line = self._line_q.get_nowait()
+                        self._dbg("Faduino", f"[DRAIN] no-reply 후 '{line}' 폐기")
+                    except asyncio.QueueEmpty:
+                        break
+                    await asyncio.sleep(0)
                 await asyncio.sleep(cmd.gap_ms / 1000.0)
                 continue
 
-            # wait reply (echo skip)
+            # wait reply (echo skip + 기대 매칭)
             try:
-                line = await self._read_one_line_skip_echo(sent_txt, cmd.timeout_ms / 1000.0)
+                line = await self._read_matching_line(sent_txt, cmd.timeout_ms / 1000.0)
             except asyncio.TimeoutError:
                 self._dbg("Faduino", f"[TIMEOUT] {cmd.tag} {sent_txt}")
                 self._inflight = None
@@ -473,6 +493,73 @@ class AsyncFaduino:
             if line == sent_no_cr:
                 continue  # echo skip
             return line
+        
+    def _expected_for(self, sent_no_cr: str) -> tuple[Optional[str], Optional[str]]:
+        """
+        (기대하는 정확한 ACK 문자열, 기대하는 OK_ 접두어)
+        - 쓰기(R/W/D): 정확한 ACK만 유효 (ACK_R / ACK_W / ACK_D)
+        - 읽기(S/P/r/d): 해당 OK_* 접두어만 유효
+        """
+        s = (sent_no_cr or "").lstrip()
+        if not s:
+            return (None, None)
+        if s.startswith("R,"):
+            return ("ACK_R", None)
+        if s.startswith("W,"):
+            return ("ACK_W", None)
+        if s.startswith("D,"):
+            return ("ACK_D", None)
+        if s[0] == "S":
+            return (None, "OK_S")
+        if s[0] == "P":
+            return (None, "OK_P")
+        if s[0] == "r":
+            return (None, "OK_r")
+        if s[0] == "d":
+            return (None, "OK_d")
+        return (None, None)
+
+    async def _read_matching_line(self, sent_no_cr: str, timeout_s: float) -> str:
+        """
+        - 에코는 무시 (기존 함수 재사용)
+        - 기대한 응답(ACK_* 또는 OK_*)만 수용
+        - 그 외 라인은 '떠돌이'로 기록하고 계속 대기 (타임아웃까지)
+        """
+        deadline = time.monotonic() + max(0.0, timeout_s)
+        expect_ack, expect_ok_prefix = self._expected_for(sent_no_cr)
+
+        while True:
+            remain = deadline - time.monotonic()
+            if remain <= 0:
+                raise asyncio.TimeoutError()
+            line = await self._read_one_line_skip_echo(sent_no_cr, remain)
+            if not line:
+                continue
+
+            recv = line.strip()
+
+            # 에러 프레임은 즉시 반환(콜백 측에서 파싱/실패처리)
+            if recv.startswith("ERROR"):
+                return recv
+
+            # 읽기 명령: OK_* 접두어만 수용
+            if expect_ok_prefix is not None:
+                if recv.startswith(expect_ok_prefix):
+                    return recv
+                # 다른 OK_/ACK_*는 현재 명령의 응답이 아님 → 떠돌이
+                self._dbg("Faduino", f"[STRAY] '{sent_no_cr}' 대기 중 '{recv}' 수신 → 무시")
+                continue
+
+            # 쓰기 명령: 정확한 ACK_*만 수용
+            if expect_ack is not None:
+                if recv == expect_ack:
+                    return recv
+                self._dbg("Faduino", f"[STRAY] '{sent_no_cr}' 대기 중 '{recv}' 수신 → 무시")
+                continue
+
+            # 그 외는 정의 안된 케이스 → 무시
+            self._dbg("Faduino", f"[STRAY] '{sent_no_cr}' 대기 중 알 수 없는 '{recv}' 수신 → 무시")
+
 
     # ---------- 내부: 폴링 ----------
     async def _poll_loop(self):
@@ -674,3 +761,16 @@ class AsyncFaduino:
     def _dbg(self, src: str, msg: str):
         if self.debug_print:
             print(f"[{src}] {msg}")
+
+    # 각 장치 클래스 내부
+    async def pause_watchdog(self):
+        self._want_connected = False
+        t = getattr(self, "_watchdog_task", None)
+        if t:
+            try:
+                t.cancel()
+                await t
+            except Exception:
+                pass
+            self._watchdog_task = None
+

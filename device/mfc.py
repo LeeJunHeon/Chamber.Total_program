@@ -190,13 +190,24 @@ class AsyncMFC:
 
     # ---------- 공용 API ----------
     async def start(self):
-        """워치독/커맨드 워커 시작(연결은 워치독이 관리)."""
-        if self._watchdog_task or self._cmd_worker_task:
+        """워치독/커맨드 워커 시작(연결은 워치독이 관리). 재호출/죽은 태스크 회복 안전."""
+        # 1) 죽은 태스크 정리
+        if self._watchdog_task and self._watchdog_task.done():
+            self._watchdog_task = None
+        if self._cmd_worker_task and self._cmd_worker_task.done():
+            self._cmd_worker_task = None
+
+        # 2) 이미 둘 다 살아 있으면 종료
+        if self._watchdog_task and self._cmd_worker_task:
             return
+
+        # 3) 재가동
         self._want_connected = True
         loop = asyncio.get_running_loop()
-        self._watchdog_task = loop.create_task(self._watchdog_loop(), name="MFCWatchdog")
-        self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="MFCCmdWorker")
+        if not self._watchdog_task:
+            self._watchdog_task = loop.create_task(self._watchdog_loop(), name="MFCWatchdog")
+        if not self._cmd_worker_task:
+            self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="MFCCmdWorker")
         await self._emit_status("MFC 워치독/워커 시작")
 
     async def cleanup(self):
@@ -1015,4 +1026,17 @@ class AsyncMFC:
             except Exception:
                 break
             await asyncio.sleep(0)  # 루프 양보
+
+    # 각 장치 클래스 내부
+    async def pause_watchdog(self):
+        self._want_connected = False
+        t = getattr(self, "_watchdog_task", None)
+        if t:
+            try:
+                t.cancel()
+                await t
+            except Exception:
+                pass
+            self._watchdog_task = None
+
 

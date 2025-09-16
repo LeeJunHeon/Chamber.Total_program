@@ -285,13 +285,24 @@ class RFPulseAsync:
 
     # ---------- 공용 API ----------
     async def start(self):
-        """워치독 + 명령 워커 시작."""
-        if self._watchdog_task or self._cmd_worker_task:
+        """워치독 + 명령 워커 시작(재호출/죽은 태스크 회복 안전)."""
+        # 1) 죽은 태스크 정리
+        if self._watchdog_task and self._watchdog_task.done():
+            self._watchdog_task = None
+        if self._cmd_worker_task and self._cmd_worker_task.done():
+            self._cmd_worker_task = None
+
+        # 2) 이미 둘 다 살아 있으면 종료
+        if self._watchdog_task and self._cmd_worker_task:
             return
+
+        # 3) 재가동
         self._want_connected = True
         loop = asyncio.get_running_loop()
-        self._watchdog_task = loop.create_task(self._watchdog_loop(), name="RFPWatchdog")
-        self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="RFPCmdWorker")
+        if not self._watchdog_task:
+            self._watchdog_task = loop.create_task(self._watchdog_loop(), name="RFPWatchdog")
+        if not self._cmd_worker_task:
+            self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="RFPCmdWorker")
         await self._emit_status("RFPulse 워치독/워커 시작")
 
     async def cleanup(self):

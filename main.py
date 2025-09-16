@@ -299,8 +299,20 @@ class MainWindow(QWidget):
                     except Exception:
                         pass
 
+                    # ✅ 공정 종료 이후에만 전체 cleanup 수행
+                    if getattr(self, "_pending_device_cleanup", False):
+                        try:
+                            await self._stop_device_watchdogs(light=False)
+                        except Exception:
+                            pass
+                        self._pending_device_cleanup = False
+
+                    # 종료 가드 해제
+                    self._pc_stopping = False
+
                     # 자동 큐 진행
                     self._start_next_process_from_queue(ok)
+
                 elif kind == "aborted":
                     if self.chat_notifier:
                         try:
@@ -309,8 +321,12 @@ class MainWindow(QWidget):
                             pass
                 elif kind == "polling_targets":
                     targets = payload.get("targets", {})
+                    self.append_log("Process", f"폴링 타깃 적용: {targets}")
                     self._apply_polling_targets(targets)
-                # kind == "polling" 은 UI에 표시만 원하면 처리 가능(지금은 생략)
+
+                elif kind == "polling":
+                    active = bool(payload.get("active", False))
+                    self.append_log("Process", f"폴링 {'ON' if active else 'OFF'}")
             finally:
                 # ★ 핵심: 매 이벤트 처리 후 한 번 양보 → Qt 페인팅/타이머/다른 코루틴이 돌 기회 제공
                 await asyncio.sleep(0)
@@ -669,6 +685,8 @@ class MainWindow(QWidget):
             self._update_ui_from_params(params)
             if self._try_handle_delay_step(params):   # delay 단계면 대기만 수행
                 return
+            norm = self._normalize_params_for_process(params)
+            self._prepare_log_file(norm)  # [추가] 다음 공정도 장비 연결부터 동일 파일에 기록
             QTimer.singleShot(100, lambda p=params: self._safe_start_process(self._normalize_params_for_process(p)))
         else:
             self.append_log("MAIN", "모든 공정이 완료되었습니다.")
@@ -814,6 +832,7 @@ class MainWindow(QWidget):
         params["G2 Target"] = vals.get("G2_target_name", "")
         params["G3 Target"] = vals.get("G3_target_name", "")
 
+        self._prepare_log_file(params)  # [추가] 장비 연결 전에 새 로그 파일 준비
         self.append_log("MAIN", "입력 검증 통과 → 장비 연결 확인 시작")
         self._safe_start_process(params)
 
@@ -825,13 +844,49 @@ class MainWindow(QWidget):
         self.request_stop_all(user_initiated=True)
 
     def request_stop_all(self, user_initiated: bool):
-        # 1) 공정만 중지
+        # 이미 종료 절차가 진행 중이면 중복 요청 차단
+        if getattr(self, "_pc_stopping", False):
+            self.append_log("MAIN", "정지 요청 무시: 이미 종료 절차 진행 중")
+            return
+
+        # (선택) 만약 워치독 워커가 죽어있다면 살려서 포트 재연결 가능 상태 보장
+        try:
+            self._ensure_background_started()
+        except Exception:
+            pass
+
+        # 0) ⚡ 라이트 정지: 폴링만 끄고(재연결은 장치별 pause로 일시중지), 포트는 열어둠
+        asyncio.create_task(self._stop_device_watchdogs(light=True))
+
+        # 이번에 종료 절차에 진입
+        self._pc_stopping = True
+        self._pending_device_cleanup = True  # 풀 cleanup은 공정 종료 후로 미룸
+
+        # 1) 공정 종료만 지시 (11단계)
         self.process_controller.request_stop()
 
-        # 2) 백그라운드 장치 워치독도 중지 (재연결 억제)
-        asyncio.create_task(self._stop_device_watchdogs())
+    async def _stop_device_watchdogs(self, *, light: bool = False):
+        """
+        light=True : 폴링만 즉시 중지(연결은 유지, 포트 닫지 않음)
+        light=False: 전체 정리(이벤트 펌프/워커/워치독 취소 + cleanup)
+        """
+        if light:
+            # 폴링만 중지 (연결/워커 유지)
+            try:
+                self.mfc.set_process_status(False)
+            except Exception:
+                pass
+            try:
+                self.faduino.set_process_status(False)
+            except Exception:
+                pass
+            try:
+                self.rf_pulse.set_process_status(False)
+            except Exception:
+                pass
+            return
 
-    async def _stop_device_watchdogs(self):
+        # ===== 기존 전체 정리 경로 =====
         # 0) 이벤트 펌프/백그라운드 태스크 먼저 취소 → 중복 소비/중복 로깅 방지
         try:
             for t in getattr(self, "_bg_tasks", []):
@@ -884,17 +939,40 @@ class MainWindow(QWidget):
         self.ui.ch2_logMessage_edit.moveCursor(QTextCursor.MoveOperation.End)
         self.ui.ch2_logMessage_edit.insertPlainText(line + "\n")
 
+    # === [추가] 새 로그 파일을 프리플라이트 전에 준비 ===
+    def _prepare_log_file(self, params: dict):
+        """프리플라이트(장비 연결) 시작 직전에 호출: 새 로그 파일 경로 생성 + 헤더 남김."""
+        from datetime import datetime
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._log_file_path = self._log_dir / f"{ts}.txt"
+        # 한 줄 알림은 append_log로 남겨 경로 세팅 직후 동일 파일에 기록되게 함
+        self.append_log("Logger", f"새 로그 파일 시작: {self._log_file_path}")
+        note = str(params.get("process_note", "") or params.get("Process_name", "") or "Run")
+        self.append_log("MAIN", f"=== '{note}' 공정 준비 (장비 연결부터 기록) ===")
+
     # ------------------------------------------------------------------
     # 폴링/상태
     # ------------------------------------------------------------------
     def _apply_polling_targets(self, targets: dict):
-        # 기존의 Qt 시그널 대신 비동기 컨트롤러 메서드를 직접 호출
+        """
+        ProcessController가 내려보낸 폴링 타깃을 그대로 각 장치에 적용한다.
+        - DC 경로:   {'mfc':True,  'faduino':True,  'rfpulse':False}
+        - RF-Pulse: {'mfc':True,  'faduino':False, 'rfpulse':True}
+        - 비활성:    모두 False
+        """
         try:
             self.mfc.set_process_status(bool(targets.get('mfc', False)))
+        except Exception:
+            pass
+        try:
             self.faduino.set_process_status(bool(targets.get('faduino', False)))
         except Exception:
             pass
-        # RF-Pulse는 컨트롤러 내부에서 자체 관리
+        try:
+            # ★ 누락되었던 부분: RF-Pulse 폴링도 명시적으로 토글
+            self.rf_pulse.set_process_status(bool(targets.get('rfpulse', False)))
+        except Exception:
+            pass
 
     def _apply_process_state_message(self, message: str):
         # 같은 텍스트면 스킵(불필요한 repaint 방지)
@@ -962,47 +1040,31 @@ class MainWindow(QWidget):
         self._shutdown_called = True
         self.append_log("MAIN", f"종료 시퀀스({reason}) 시작")
 
-        # 1) Stop 요청(큐/타이머 포함)
+        # 1) Stop 요청(라이트 정지 + 종료 11단계)
         self.request_stop_all(user_initiated=False)
 
-        # 2) 장치 정리(가능하면 비동기 cleanup 호출)
-        async def _cleanup():
-            try:
-                await asyncio.gather(
-                    self.rf_pulse.cleanup(),
-                    self.rf_power.cleanup(),
-                    self.dc_power.cleanup(),
-                    self.mfc.cleanup(),
-                    self.ig.cleanup(),
-                    self.faduino.cleanup(),
-                    self.oes.cleanup(),
-                    return_exceptions=True
-                )
-            except Exception:
-                pass
+        # 2) 즉시 cleanup()은 호출하지 않음.
+        #    finished/aborted 이벤트에서 _stop_device_watchdogs(light=False)로 한 번에 정리.
+        #    (안전장치) 그래도 10초 내에 종료 이벤트가 안 오면 강제 정리
+        def _force_cleanup():
+            if getattr(self, "_pending_device_cleanup", False):
+                self.append_log("MAIN", "강제 정리 타임아웃 → 풀 cleanup 강제 수행")
+                asyncio.create_task(self._stop_device_watchdogs(light=False))
+                self._pending_device_cleanup = False
+                self._pc_stopping = False
+                QTimer.singleShot(0, QCoreApplication.quit)
 
-        try:
-            asyncio.create_task(_cleanup())
-        except Exception:
-            pass
+        QTimer.singleShot(10_000, _force_cleanup)
 
-        # 3) Chat Notifier 정지
+        # 3) Chat Notifier 정지 등 부가 정리는 유지
         try:
             if self.chat_notifier:
                 self.chat_notifier.shutdown()
         except Exception:
             pass
+        # 4) Qt 앱 종료는 cleanup 이후에 최종적으로 수행되므로 여기선 스케줄만
+        self.append_log("MAIN", "종료 시퀀스 진행 중 (종료 11단계 대기)")
 
-        # 4) 백그라운드 태스크 취소
-        for t in getattr(self, "_bg_tasks", []):
-            try:
-                t.cancel()
-            except Exception:
-                pass
-
-        # 5) Qt 앱 종료
-        QTimer.singleShot(0, QCoreApplication.quit)
-        self.append_log("MAIN", "종료 시퀀스 완료")
 
     # ------------------------------------------------------------------
     # 입력 검증 / 파라미터 정규화 / delay 처리
