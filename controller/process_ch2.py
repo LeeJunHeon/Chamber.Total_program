@@ -160,6 +160,7 @@ class ProcessController:
       start_rfpulse(power:float, freq:Optional[int], duty:Optional[int]) -> None
       stop_rfpulse() -> None
       ig_wait(base_pressure:float) -> None
+      cancel_ig() -> None
       rga_scan() -> None
       oes_run(duration_sec:float, integration_ms:int) -> None
     """
@@ -177,6 +178,7 @@ class ProcessController:
         start_rfpulse: Callable[[float, Optional[int], Optional[int]], None],
         stop_rfpulse: Callable[[], None],
         ig_wait: Callable[[float], None],
+        cancel_ig: Callable[[], None],
         rga_scan: Callable[[], None],
         oes_run: Callable[[float, int], None],
     ) -> None:
@@ -190,6 +192,7 @@ class ProcessController:
         self._start_rfpulse = start_rfpulse
         self._stop_rfpulse = stop_rfpulse
         self._ig_wait = ig_wait
+        self._cancel_ig = cancel_ig
         self._rga_scan = rga_scan
         self._oes_run = oes_run
 
@@ -314,6 +317,12 @@ class ProcessController:
         if self._expect_group:
             self._expect_group.cancel("emergency")
             self._expect_group = None
+
+        # ✅ IG 즉시 중단
+        try:
+            self._cancel_ig()
+        except Exception:
+            pass
 
         # 시퀀스 교체
         self.process_sequence = self._create_emergency_shutdown_sequence()
@@ -612,6 +621,13 @@ class ProcessController:
 
         self._shutdown_in_progress = True
         self._emit_log("Process", "정지 요청 - 안전한 종료 절차를 시작합니다.")
+
+        # ✅ IG 폴링/재점등을 즉시 중단 (SIG 0 전송은 IG 내부에서 응답 무시로 처리)
+        try:
+            self._cancel_ig()
+        except Exception:
+            pass
+
         self._cancel_countdown()
         if self._expect_group:
             self._expect_group.cancel("shutdown")

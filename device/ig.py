@@ -35,6 +35,7 @@ from lib.config_ch2 import (
     IG_TIMEOUT_MS, IG_GAP_MS,
     IG_POLLING_INTERVAL_MS, IG_WATCHDOG_INTERVAL_MS,
     IG_RECONNECT_BACKOFF_START_MS, IG_RECONNECT_BACKOFF_MAX_MS,
+    IG_REIGNITE_MAX_ATTEMPTS, IG_REIGNITE_BACKOFF_MS,
     DEBUG_PRINT,
 )
 
@@ -166,6 +167,12 @@ class AsyncIG:
 
         self._first_read_delay_ms = 5000  # IG ON OK 후 첫 RDI 전 지연(1회)
 
+        # ✅ 재점등(자동 ON 재시도) 제어 플래그/카운터
+        self._suspend_reignite: bool = False     # 종료/취소 중 재점등 금지
+        self._total_reignite_attempts: int = 0   # 누적 재점등 횟수
+        # 선택: 마지막 성공 여부 초기화(이미 사용 중이면 안전을 위해 추가)
+        self._last_wait_success: bool = False
+
     # ---------------------------
     # 공용 API
     # ---------------------------
@@ -184,6 +191,7 @@ class AsyncIG:
         await self._emit_status("IG 종료 절차 시작")
         self._want_connected = False
         self._waiting_active = False
+        self._suspend_reignite = True           # ✅ 재점등 금지
 
         # 폴링 태스크
         if self._polling_task:
@@ -260,6 +268,12 @@ class AsyncIG:
         self._target_pressure = float(base_pressure)
         self._wait_start_s = time.monotonic()
         self._waiting_active = True
+
+        # ✅ 재점등 상태 초기화
+        self._suspend_reignite = False
+        self._total_reignite_attempts = 0
+        self._last_wait_success = False
+
         await self._emit_status("Base Pressure 대기 시작")
 
         # (A) IG ON (응답 필수)
@@ -306,6 +320,8 @@ class AsyncIG:
          - SIG 0 한 번 보내고 끝(응답 무시)
         """
         self._waiting_active = False
+        self._suspend_reignite = True            # ✅ 재점등 금지
+        self._total_reignite_attempts = 0
         if self._polling_task:
             self._polling_task.cancel()
             self._polling_task = None
@@ -521,7 +537,22 @@ class AsyncIG:
             return  # 빈 응답 → 다음 주기에 재시도
 
         if s.upper() == "IG OFF":
-            await self._emit_status("IG OFF 응답 감지 → 자동 재점등을 시도합니다.")
+            # ✅ 종료/취소 중에는 재점등 금지
+            if not self._waiting_active or self._suspend_reignite:
+                return
+
+            # ✅ 재점등 총 횟수 상한 (config에서 관리)
+            if self._total_reignite_attempts >= int(IG_REIGNITE_MAX_ATTEMPTS):
+                await self._emit_status(
+                    f"IG OFF 응답 반복 → 자동 재점등 중단(상한 {IG_REIGNITE_MAX_ATTEMPTS}회 초과). 폴링만 유지"
+                )
+                return
+
+            self._total_reignite_attempts += 1
+            await self._emit_status(
+                f"IG OFF 응답 감지 → 자동 재점등 시도({self._total_reignite_attempts}/{IG_REIGNITE_MAX_ATTEMPTS})"
+            )
+
             # 폴링 태스크 루프 내에서는 다음 콜로 재개
             ok = await self._try_re_on_with_backoff()
             if ok:
@@ -553,14 +584,23 @@ class AsyncIG:
             await self._sig0_off_ignore_reply()
 
     async def _try_re_on_with_backoff(self) -> bool:
-        """IG OFF → SIG 1 재점등; 백오프 [2s, 5s, 10s]."""
-        delays = [2.0, 5.0, 10.0]
-        for i, sec in enumerate(delays):
+        """IG OFF → SIG 1 재점등; config의 IG_REIGNITE_BACKOFF_MS 적용."""
+        # ✅ 종료/취소 중이면 즉시 중단
+        if not self._waiting_active or self._suspend_reignite:
+            return False
+
+        # ms 리스트를 초로 변환
+        delays_s = [max(0, int(ms)) / 1000.0 for ms in IG_REIGNITE_BACKOFF_MS] or [2.0, 5.0, 10.0]
+
+        for sec in delays_s:
+            if not self._waiting_active or self._suspend_reignite:
+                return False
             ok = await self._send_and_expect_ok("SIG 1", tag="[IG RE-ON]", retries=3)
             if ok:
                 return True
             await self._emit_status(f"재점등 실패 → {int(sec*1000)}ms 후 재시도")
             await asyncio.sleep(sec)
+
         return False
 
     async def _send_and_expect_ok(self, cmd: str, *, tag: str, retries: int) -> bool:

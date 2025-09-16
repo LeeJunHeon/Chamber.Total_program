@@ -127,6 +127,13 @@ class MainWindow(QWidget):
         def cb_ig_wait(base_pressure: float):
             asyncio.create_task(self.ig.wait_for_base_pressure(float(base_pressure)))
 
+        def cb_ig_cancel():
+            # IG 자동 재점등/폴링 즉시 중단 + SIG 0 (응답 무시)
+            try:
+                self.ig.cancel_wait()
+            except Exception:
+                pass
+
         def cb_rga_scan():
             asyncio.create_task(self._do_rga_scan())
 
@@ -150,6 +157,7 @@ class MainWindow(QWidget):
             start_rfpulse=cb_rfpulse_start,
             stop_rfpulse=cb_rfpulse_stop,
             ig_wait=cb_ig_wait,
+            cancel_ig=cb_ig_cancel,
             rga_scan=cb_rga_scan,
             oes_run=cb_oes_run,
         )
@@ -169,13 +177,6 @@ class MainWindow(QWidget):
 
         # Start 전에는 파일 미정
         self._log_file_path = None
-
-        self._log_ui_buf = []
-        self._log_file_buf = []
-        self._log_flush_timer = QTimer(self)
-        self._log_flush_timer.setInterval(100)
-        self._log_flush_timer.timeout.connect(self._flush_logs)
-        self._log_flush_timer.start()
 
         # 앱 종료 훅
         app = QCoreApplication.instance()
@@ -233,72 +234,79 @@ class MainWindow(QWidget):
             kind = ev.kind
             payload = ev.payload or {}
 
-            if kind == "log":
-                self.append_log(payload.get("src", "PC"), payload.get("msg", ""))
-            elif kind == "state":
-                self._apply_process_state_message(payload.get("text", ""))
-            elif kind == "status":
-                self._on_process_status_changed(bool(payload.get("running", False)))
-            elif kind == "started":
-                # 1) 새 로그 파일명: YYYYMMDD_HHMMSS.txt
-                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                self._log_file_path = self._log_dir / f"{ts}.txt"
-                # 선택: 시작 라인 한 줄
-                self._log_file_buf.append(
-                    f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Logger] "
-                    f"새 로그 파일 시작: {self._log_file_path}\n"
-                )
+            try:
+                if kind == "log":
+                    self.append_log(payload.get("src", "PC"), payload.get("msg", ""))
+                elif kind == "state":
+                    self._apply_process_state_message(payload.get("text", ""))
+                elif kind == "status":
+                    self._on_process_status_changed(bool(payload.get("running", False)))
+                elif kind == "started":
+                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    self._log_file_path = self._log_dir / f"{ts}.txt"
+                    # 파일에 즉시 한 줄 남김
+                    try:
+                        with open(self._log_file_path, "a", encoding="utf-8") as f:
+                            f.write(
+                                f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Logger] "
+                                f"새 로그 파일 시작: {self._log_file_path}\n"
+                            )
+                    except Exception:
+                        pass
 
-                # DataLogger, 그래프, 알림
-                try:
-                    self.data_logger.start_new_log_session(payload.get("params", {}))
-                except Exception:
-                    pass
-                self.graph_controller.reset()
-                if self.chat_notifier:
+                    # DataLogger, 그래프, 알림
                     try:
-                        self.chat_notifier.notify_process_started(payload.get("params", {}))
+                        self.data_logger.start_new_log_session(payload.get("params", {}))
                     except Exception:
                         pass
-            elif kind == "finished":
-                ok = bool(payload.get("ok", False))
-                detail = payload.get("detail", {})
-                # DataLogger 마무리
-                try:
-                    # finalize 함수 시그니처가 불명확하니 안전하게 호출
-                    self.data_logger.finalize_and_write_log(ok)
-                except TypeError:
+                    self.graph_controller.reset()
+                    if self.chat_notifier:
+                        try:
+                            self.chat_notifier.notify_process_started(payload.get("params", {}))
+                        except Exception:
+                            pass
+                elif kind == "finished":
+                    ok = bool(payload.get("ok", False))
+                    detail = payload.get("detail", {})
+                    # DataLogger 마무리
                     try:
-                        self.data_logger.finalize_and_write_log()
+                        # finalize 함수 시그니처가 불명확하니 안전하게 호출
+                        self.data_logger.finalize_and_write_log(ok)
+                    except TypeError:
+                        try:
+                            self.data_logger.finalize_and_write_log()
+                        except Exception:
+                            pass
+                    # 알림
+                    if self.chat_notifier:
+                        try:
+                            self.chat_notifier.notify_process_finished_detail(ok, detail)
+                        except Exception:
+                            pass
+                    try:
+                        self.mfc.on_process_finished(ok)
                     except Exception:
                         pass
-                # 알림
-                if self.chat_notifier:
                     try:
-                        self.chat_notifier.notify_process_finished_detail(ok, detail)
+                        self.faduino.on_process_finished(ok)
                     except Exception:
                         pass
-                try:
-                    self.mfc.on_process_finished(ok)
-                except Exception:
-                    pass
-                try:
-                    self.faduino.on_process_finished(ok)
-                except Exception:
-                    pass
 
-                # 자동 큐 진행
-                self._start_next_process_from_queue(ok)
-            elif kind == "aborted":
-                if self.chat_notifier:
-                    try:
-                        self.chat_notifier.notify_text("🛑 공정이 중단되었습니다.")
-                    except Exception:
-                        pass
-            elif kind == "polling_targets":
-                targets = payload.get("targets", {})
-                self._apply_polling_targets_async(targets)
-            # kind == "polling" 은 UI에 표시만 원하면 처리 가능(지금은 생략)
+                    # 자동 큐 진행
+                    self._start_next_process_from_queue(ok)
+                elif kind == "aborted":
+                    if self.chat_notifier:
+                        try:
+                            self.chat_notifier.notify_text("🛑 공정이 중단되었습니다.")
+                        except Exception:
+                            pass
+                elif kind == "polling_targets":
+                    targets = payload.get("targets", {})
+                    self._apply_polling_targets(targets)
+                # kind == "polling" 은 UI에 표시만 원하면 처리 가능(지금은 생략)
+            finally:
+                # ★ 핵심: 매 이벤트 처리 후 한 번 양보 → Qt 페인팅/타이머/다른 코루틴이 돌 기회 제공
+                await asyncio.sleep(0)
 
     # ------------------------------------------------------------------
     # 비동기 이벤트 펌프 (장치 → ProcessController)
@@ -804,42 +812,45 @@ class MainWindow(QWidget):
     def append_log(self, source: str, msg: str):
         now_ui = datetime.now().strftime("%H:%M:%S")
         now_file = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        self._log_ui_buf.append(f"[{now_ui}] [{source}] {msg}")
-        self._log_file_buf.append(f"[{now_file}] [{source}] {msg}\n")
+        line_ui = f"[{now_ui}] [{source}] {msg}"
+        line_file = f"[{now_file}] [{source}] {msg}\n"
 
-    def _flush_logs(self):
-        # UI
-        if self._log_ui_buf:
-            block = "\n".join(self._log_ui_buf) + "\n"
-            self._log_ui_buf.clear()
-            self.ui.ch2_logMessage_edit.moveCursor(QTextCursor.MoveOperation.End)
-            self.ui.ch2_logMessage_edit.insertPlainText(block)
-        # 파일
-        if self._log_file_buf:
-            path = self._log_file_path or (self._log_dir / "log.txt")  # Start 전엔 기본 파일
-            try:
-                with open(path, "a", encoding="utf-8") as f:
-                    f.writelines(self._log_file_buf)
-            except Exception as e:
-                # UI에도 알림만 남기고 계속 진행
-                self.ui.ch2_logMessage_edit.appendPlainText(f"[Logger] 파일 기록 실패: {e}")
-            finally:
-                self._log_file_buf.clear()
+        # 1) UI: 즉시(그러나 GUI 스레드 보장 위해 Qt 큐로 위임)
+        QTimer.singleShot(0, lambda s=line_ui: self._append_log_to_ui(s))
+
+        # 2) 파일: 즉시 append
+        path = self._log_file_path or (self._log_dir / "log.txt")
+        try:
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(line_file)
+        except Exception as e:
+            # 파일 실패도 UI에 바로 알림
+            QTimer.singleShot(0, lambda: self.ui.ch2_logMessage_edit.appendPlainText(f"[Logger] 파일 기록 실패: {e}"))
+
+    def _append_log_to_ui(self, line: str):
+        self.ui.ch2_logMessage_edit.moveCursor(QTextCursor.MoveOperation.End)
+        self.ui.ch2_logMessage_edit.insertPlainText(line + "\n")
 
     # ------------------------------------------------------------------
     # 폴링/상태
     # ------------------------------------------------------------------
-    async def _apply_polling_targets_async(self, targets: dict):
+    def _apply_polling_targets(self, targets: dict):
         # 기존의 Qt 시그널 대신 비동기 컨트롤러 메서드를 직접 호출
         try:
-            self.mfc.set_process_status(bool(targets.get('mfc', False))),
-            self.faduino.set_process_status(bool(targets.get('faduino', False))),
+            self.mfc.set_process_status(bool(targets.get('mfc', False)))
+            self.faduino.set_process_status(bool(targets.get('faduino', False)))
         except Exception:
             pass
         # RF-Pulse는 컨트롤러 내부에서 자체 관리
 
     def _apply_process_state_message(self, message: str):
-        self.ui.ch2_processState_edit.setPlainText(message)
+        # 같은 텍스트면 스킵(불필요한 repaint 방지)
+        if getattr(self, "_last_state_text", None) == message:
+            return
+        self._last_state_text = message
+
+        # Qt 이벤트 큐로 위임하여 항상 GUI 스레드에서 안전하게 반영
+        QTimer.singleShot(0, lambda m=message: self.ui.ch2_processState_edit.setPlainText(m))
 
     # ------------------------------------------------------------------
     # 기본 UI값/리셋

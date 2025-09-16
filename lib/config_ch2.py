@@ -55,6 +55,10 @@ IG_WATCHDOG_INTERVAL_MS = 2_000    # 연결 상태 감시 주기(ms)
 IG_RECONNECT_BACKOFF_START_MS = 1000   # 재연결 백오프 시작값(ms)
 IG_RECONNECT_BACKOFF_MAX_MS = 20_000   # 재연결 백오프 최대(ms)
 
+# ✅ IG 재점등(ON 재시도) 제어
+IG_REIGNITE_MAX_ATTEMPTS = 3                    # 총 재점등 시도 횟수 상한
+IG_REIGNITE_BACKOFF_MS = [2000, 5000, 10000]    # 각 시도 사이 대기(ms): 2s, 5s, 10s
+
 # === Faduino ===
 FADUINO_POLLING_INTERVAL_MS = 1000
 FADUINO_WATCHDOG_INTERVAL_MS = 1000
@@ -148,7 +152,7 @@ MFC_RECONNECT_BACKOFF_START_MS = 500    # 포트 오류/타임아웃 시 첫 재
 MFC_RECONNECT_BACKOFF_MAX_MS   = 8000   # 지수 백오프 최대 상한
 
 # === 전역 통일 상수 ===
-MFC_TIMEOUT   = 1000         # 모든 명령 timeout
+MFC_TIMEOUT   = 2000         # 모든 명령 timeout
 MFC_GAP_MS    = 1000         # 모든 인터커맨드 간격(gap)
 MFC_DELAY_MS  = 1000         # 모든 검증/재시도 지연
 MFC_DELAY_MS_VALVE = 5000    # 밸브 이동/재전송 대기(5초)
