@@ -89,7 +89,7 @@ class _IGProtocol(asyncio.Protocol):
             del self._rx[:-self._RX_MAX]
             self.owner._dbg("IG", f"수신 버퍼 과다(RX>{self._RX_MAX}); 최근 {self._RX_MAX}B만 보존.")
 
-        # 라인 파싱
+        # 라인 파싱: 한 콜백에서 가능한 모든 라인을 owner로 전달
         while True:
             i_cr = self._rx.find(b'\r')
             i_lf = self._rx.find(b'\n')
@@ -98,7 +98,7 @@ class _IGProtocol(asyncio.Protocol):
             idx = i_cr if i_lf == -1 else (i_lf if i_cr == -1 else min(i_cr, i_lf))
             line_bytes = self._rx[:idx]
 
-            # CRLF/LFCR 처리
+            # CRLF/LFCR 동시 처리
             drop = idx + 1
             if drop < len(self._rx):
                 ch = self._rx[idx]
@@ -107,7 +107,6 @@ class _IGProtocol(asyncio.Protocol):
                     drop += 1
             del self._rx[:drop]
 
-            # 길이 제한
             if len(line_bytes) > self._LINE_MAX:
                 self.owner._dbg("IG", f"Rx line too long (+{len(line_bytes)-self._LINE_MAX}B), truncating")
                 line_bytes = line_bytes[:self._LINE_MAX]
@@ -118,11 +117,9 @@ class _IGProtocol(asyncio.Protocol):
                 line = ""
 
             if line:
-                # 라인 전달(비동기 큐)
                 self.owner._on_line_from_serial(line)
-                break
 
-        # 선행 CR/LF 정리
+        # 선행 CR/LF 정리 (남은 경우만)
         while self._rx[:1] in (b'\r', b'\n'):
             del self._rx[0:1]
 
@@ -301,15 +298,19 @@ class AsyncIG:
 
         # 완료를 이 함수에서 기다림: True/False 반환
         # 폴링 태스크가 set by self._waiting_active False when done
-        while self._waiting_active:
-            await asyncio.sleep(0.05)
+        try:
+            while self._waiting_active:
+                await asyncio.sleep(0.05)
 
-        # 상태가 이미 처리되었고 SIG 0는 내부에서 처리
-        # 최종 성공/실패는 이벤트에서 이미 방출됨
-        # 여기서는 마지막 상태를 판단해서 반환
-        # (성공 시점에서 self._waiting_active False가 되고 바로 SIG 0 후 종료되므로 True 반환)
-        # 이를 추적하려면 플래그를 두자
-        return getattr(self, "_last_wait_success", False)
+            # 상태가 이미 처리되었고 SIG 0는 내부에서 처리
+            # 최종 성공/실패는 이벤트에서 이미 방출됨
+            # 여기서는 마지막 상태를 판단해서 반환
+            # (성공 시점에서 self._waiting_active False가 되고 바로 SIG 0 후 종료되므로 True 반환)
+            # 이를 추적하려면 플래그를 두자
+            return getattr(self, "_last_wait_success", False)
+        finally:
+            # ✅ IG는 베이스 압력 판정이 끝나면 곧바로 연결과 태스크를 정리한다.
+            await self.cleanup()
 
     def cancel_wait(self):
         """
@@ -496,8 +497,8 @@ class AsyncIG:
             line = await asyncio.wait_for(self._line_q.get(), timeout=remain)
             if not line:
                 continue
-            if line == sent_no_cr:
-                # 에코 스킵
+            # 공백/대소문자/양끝 제어문자 차이로 인한 오검출 방지
+            if line.strip().upper() == sent_no_cr.strip().upper():
                 continue
             return line
 

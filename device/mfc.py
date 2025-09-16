@@ -99,14 +99,17 @@ class _MFCProtocol(asyncio.Protocol):
             del self._rx[:-self._RX_MAX]
             self.owner._dbg("MFC", f"수신 버퍼 과다(RX>{self._RX_MAX}); 최근 {self._RX_MAX}B만 보존.")
 
+        processed = 0  # ✅ 이번 이벤트에서 처리한 라인 수를 바깥에 둔다
         while True:
             i_cr = self._rx.find(b'\r')
             i_lf = self._rx.find(b'\n')
             if i_cr == -1 and i_lf == -1:
                 break
+
             idx = i_cr if i_lf == -1 else (i_lf if i_cr == -1 else min(i_cr, i_lf))
             line_bytes = self._rx[:idx]
 
+            # CR/LF 혹은 LF/CR 쌍 같이 제거
             drop = idx + 1
             if drop < len(self._rx):
                 ch = self._rx[idx]
@@ -124,8 +127,14 @@ class _MFCProtocol(asyncio.Protocol):
             except Exception:
                 line = ""
 
-            if line:
-                self.owner._on_line_from_serial(line)
+            if not line:
+                continue
+
+            # ✅ 라인 하나를 바로 전달
+            self.owner._on_line_from_serial(line)
+            processed += 1
+            if processed >= 32:  # ✅ 과도 루프 안전장치
+                self.owner._dbg("MFC", "한 번에 32라인 초과 수신 → 루프 종료")
                 break
 
         # 선행 CR/LF 정리
@@ -450,6 +459,8 @@ class AsyncMFC:
                 self._poll_task.cancel()
                 self._poll_task = None
             self._poll_cycle_active = False
+            # ✅ 큐에 남은 폴링 읽기(R60/R5)만 정리
+            self._purge_poll_reads_only(cancel_inflight=True, reason="polling off")
 
     def on_process_finished(self, success: bool):
         """공정 종료 시 내부 상태 리셋."""
@@ -549,6 +560,9 @@ class AsyncMFC:
             sent_txt = cmd.cmd_str.strip()
             self._dbg("MFC", f"[SEND] {sent_txt} (tag={cmd.tag})")
 
+            # write (전송 직전: 잔류 라인 짧게 드레인 → 이전 no-reply 에코/ACK 제거)
+            await self._absorb_late_lines(20)  # 10~30ms 정도 권장
+
             # write
             try:
                 payload = cmd.cmd_str.encode("ascii")
@@ -624,7 +638,7 @@ class AsyncMFC:
                 self._poll_cycle_active = True
 
                 # R60 → flow 이벤트 + 모니터링
-                vals = await self._read_r60_values()
+                vals = await self._read_r60_values(tag="[POLL R60]")
                 if vals:
                     for ch, name in self.gas_map.items():
                         idx = ch - 1
@@ -968,3 +982,37 @@ class AsyncMFC:
     def _dbg(self, src: str, msg: str):
         if self.debug_print:
             print(f"[{src}] {msg}")
+
+    # --- 유틸 ---
+    def _is_poll_read_cmd(self, cmd_str: str, tag: str = "") -> bool:
+        return (tag or "").startswith("[POLL ")
+
+    def _purge_poll_reads_only(self, cancel_inflight: bool = True, reason: str = "") -> int:
+        purged = 0
+        if cancel_inflight and self._inflight and self._is_poll_read_cmd(self._inflight.cmd_str, self._inflight.tag):
+            self._safe_callback(self._inflight.callback, None)
+            self._inflight = None
+            purged += 1
+            self._dbg("MFC", f"[QUIESCE] 폴링 inflight 취소: {reason}")
+        kept = deque()
+        while self._cmd_q:
+            c = self._cmd_q.popleft()
+            if self._is_poll_read_cmd(c.cmd_str, c.tag):
+                purged += 1
+                continue
+            kept.append(c)
+        self._cmd_q = kept
+        if purged:
+            self._dbg("MFC", f"[QUIESCE] 폴링 읽기 {purged}건 제거: {reason}")
+        return purged
+
+    async def _absorb_late_lines(self, budget_ms: int = 60):
+        """짧은 시간 동안 라인 큐에 남은 잔류 에코/ACK를 비운다."""
+        deadline = time.monotonic() + (budget_ms / 1000.0)
+        while time.monotonic() < deadline:
+            try:
+                self._line_q.get_nowait()
+            except Exception:
+                break
+            await asyncio.sleep(0)  # 루프 양보
+

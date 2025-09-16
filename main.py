@@ -397,11 +397,13 @@ class MainWindow(QWidget):
                 pass  # 필요 시 UI 반영
             elif k == "base_reached":
                 self.process_controller.on_ig_ok()
+                asyncio.create_task(self.ig.cleanup())  # ✅ 안전망
             elif k == "base_failed":
                 why = ev.message or "unknown"
                 self.process_controller.on_ig_failed("IG", why)
                 if self.chat_notifier:
                     self.chat_notifier.notify_error("IG", why)
+                asyncio.create_task(self.ig.cleanup())  # ✅ 안전망
 
     async def _pump_rga_events(self):
         async for ev in self.rga.events():
@@ -500,7 +502,7 @@ class MainWindow(QWidget):
             # 장치 내부 루프
             loop.create_task(self.faduino.start()),
             loop.create_task(self.mfc.start()),
-            loop.create_task(self.ig.start()),
+            #loop.create_task(self.ig.start()), ✅ IG는 on-demand (wait_for_base_pressure 내부에서 start)
             loop.create_task(self.rf_pulse.start()),
             # 이벤트 펌프(장치 → PC)
             loop.create_task(self._pump_faduino_events()),

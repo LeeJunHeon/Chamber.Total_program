@@ -468,8 +468,41 @@ class RFPulseAsync:
                 await self._emit_status(f"{RFPULSE_PORT} 연결 실패: {e}")
                 backoff = min(backoff * 2, RFPULSE_RECONNECT_BACKOFF_MAX_MS)
 
-    def _on_connection_made(self, transport: asyncio.Transport):
-        pass
+    def _on_connection_made(self, transport):
+        """
+        포트 오픈 직후 DTR/RTS를 올려 물리 레벨을 안정화하고
+        남아있는 입력/출력 버퍼를 정리한다.
+        (이전 PyQt 버전에서 하던 것과 동일한 효과)
+        """
+        try:
+            ser = getattr(transport, "serial", None)  # pyserial Serial
+            if ser:
+                # DTR/RTS High
+                try:
+                    ser.setDTR(True)
+                except Exception:
+                    try:
+                        ser.dtr = True
+                    except Exception:
+                        pass
+                try:
+                    ser.setRTS(True)
+                except Exception:
+                    try:
+                        ser.rts = True
+                    except Exception:
+                        pass
+
+                # 잔여 프레임 정리(입/출력 버퍼)
+                try:
+                    ser.reset_input_buffer()
+                    ser.reset_output_buffer()
+                except Exception:
+                    pass
+        except Exception as e:
+            import asyncio
+            asyncio.create_task(self._emit_status(f"DTR/RTS 설정 실패: {e!r}"))
+
 
     def _on_connection_lost(self, exc: Optional[Exception]):
         self._connected = False
@@ -528,11 +561,21 @@ class RFPulseAsync:
             if gap_need > 0:
                 await asyncio.sleep(gap_need)
 
+            # exec일 때만 짧게 토큰 비우기
+            if cmd.kind == "exec":
+                deadline = time.monotonic() + 0.15
+                while time.monotonic() < deadline:
+                    try:
+                        self._tok_q.get_nowait()
+                    except asyncio.QueueEmpty:
+                        break
+
             # 전송
             try:
                 pkt = _build_packet(self.addr, cmd.cmd, cmd.data)
                 self._transport.write(pkt)
-                await self._transport.drain() if hasattr(self._transport, "drain") else None
+                if hasattr(self._transport, "drain"):
+                    await self._transport.drain()  # 있는 경우만 대기
                 self._last_send_mono = time.monotonic()
                 self._dbg("RFP TX", f"{cmd.tag or ('exec' if cmd.kind=='exec' else 'query')} "
                                     f"{self._cmd_label(cmd.cmd)} len={len(cmd.data)}")
