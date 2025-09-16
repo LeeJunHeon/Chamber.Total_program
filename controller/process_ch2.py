@@ -500,6 +500,11 @@ class ProcessController:
 
     async def _execute_step(self, step: ProcessStep) -> None:
         if step.action == ActionType.DELAY:
+            # ✅ 메인 공정 DELAY처럼 polling=True인 경우, 스텝 진입 순간 다시 한 번 확실히 ON 적용
+            if step.polling:
+                # 러너에서 직전에 _apply_polling(True)를 호출하지만,
+                # 병렬블록/즉시반환 스텝 뒤 신호 타이밍 문제로 유실될 수 있어 재보장
+                self._apply_polling(True)
             await self._sleep_with_countdown(step.duration or 100, step.message)
             return
 

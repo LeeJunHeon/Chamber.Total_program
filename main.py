@@ -140,15 +140,27 @@ class MainWindow(QWidget):
         def cb_oes_run(duration_sec: float, integration_ms: int):
             async def run():
                 try:
-                    # 🔒 혹시라도 아직 펌프가 안 떠 있으면 보장
+                    # ✅ 백그라운드 폴링 태스크 보장
                     self._ensure_background_started()
 
+                    # ✅ OES 초기화 보장
                     if getattr(self.oes, "sChannel", -1) < 0:
                         ok = await self.oes.initialize_device()
                         if not ok:
                             raise RuntimeError("OES 초기화 실패")
 
-                    # 그래프 클리어를 UI 큐에 예약
+                    # ✅ OES 측정 중에도 최근 폴링 타깃 재적용
+                    targets = getattr(self, "_last_polling_targets", None)
+                    if not targets:
+                        # 폴백: 전력 선택 상태로 추정
+                        # RF Pulse를 쓰는지 여부에 맞춰 기본 타깃 가정
+                        if getattr(self, "_use_rf_pulse", False):
+                            targets = {"mfc": True, "faduino": False, "rfpulse": True}
+                        else:
+                            targets = {"mfc": True, "faduino": True, "rfpulse": False}
+                    self._apply_polling_targets(targets)
+
+                    # 그래프 초기화 후 OES 실행
                     QTimer.singleShot(0, self.graph_controller.clear_oes_plot)
                     await self.oes.run_measurement(duration_sec, integration_ms)
 
@@ -324,8 +336,9 @@ class MainWindow(QWidget):
                         except Exception:
                             pass
                 elif kind == "polling_targets":
-                    targets = payload.get("targets", {})
-                    self.append_log("Process", f"폴링 타깃 적용: {targets}")
+                    targets = dict(ev.get("targets") or {})
+                    # ✅ 최근 폴링 타깃을 캐시해 둔다
+                    self._last_polling_targets = targets
                     self._apply_polling_targets(targets)
 
                 elif kind == "polling":
@@ -421,7 +434,16 @@ class MainWindow(QWidget):
             if k == "status":
                 self.append_log("IG", ev.message or "")
             elif k == "pressure":
-                pass  # 필요 시 UI 반영
+                try:
+                    # ev.value(부동소수) 우선, 없으면 ev.text 파싱
+                    val = float(ev.value) if ev.value is not None else None
+                    if val is not None:
+                        self.data_logger.log_ig_pressure(val)
+                    else:
+                        # text만 온 경우도 대비 (예: "3.2e-6 Torr")
+                        self.data_logger.log_ig_pressure(ev.text or "")
+                except Exception:
+                    pass
             elif k == "base_reached":
                 self.process_controller.on_ig_ok()
             elif k == "base_failed":
@@ -485,6 +507,16 @@ class MainWindow(QWidget):
             k = ev.kind
             if k == "status":
                 self.append_log("RFPulse", ev.message or "")
+            elif k == "power":
+                # 드라이버가 주기적으로 뿌리는 forward/reflected 값
+                try:
+                    fwd = float(ev.forward or 0.0)
+                    ref = float(ev.reflected or 0.0)
+                    self.data_logger.log_rfpulse_power(fwd, ref)
+                except Exception:
+                    pass
+                # 필요하면 UI에도 반영:
+                # self.handle_rfpulse_power_display(fwd, ref)
             elif k == "target_reached":
                 self.process_controller.on_rf_target_reached()
             elif k == "command_failed":
@@ -982,25 +1014,28 @@ class MainWindow(QWidget):
     # 폴링/상태
     # ------------------------------------------------------------------
     def _apply_polling_targets(self, targets: dict):
-        """
-        ProcessController가 내려보낸 폴링 타깃을 그대로 각 장치에 적용한다.
-        - DC 경로:   {'mfc':True,  'faduino':True,  'rfpulse':False}
-        - RF-Pulse: {'mfc':True,  'faduino':False, 'rfpulse':True}
-        - 비활성:    모두 False
-        """
+        mfc_on = bool(targets.get('mfc', False))
+        fadu_on = bool(targets.get('faduino', False))
+        rfp_on = bool(targets.get('rfpulse', False))
+
         try:
-            self.mfc.set_process_status(bool(targets.get('mfc', False)))
-        except Exception:
-            pass
+            self.mfc.set_process_status(mfc_on)
+            self.append_log("MFC", f"폴링 {'시작' if mfc_on else '중지'}")
+        except Exception as e:
+            self.append_log("MFC", f"폴링 토글 실패: {e}")
+
         try:
-            self.faduino.set_process_status(bool(targets.get('faduino', False)))
-        except Exception:
-            pass
+            self.faduino.set_process_status(fadu_on)
+            self.append_log("Faduino", f"폴링 {'시작' if fadu_on else '중지'}")
+        except Exception as e:
+            self.append_log("Faduino", f"폴링 토글 실패: {e}")
+
         try:
-            # ★ 누락되었던 부분: RF-Pulse 폴링도 명시적으로 토글
-            self.rf_pulse.set_process_status(bool(targets.get('rfpulse', False)))
-        except Exception:
-            pass
+            self.rf_pulse.set_process_status(rfp_on)
+            self.append_log("RFPulse", f"폴링 {'시작' if rfp_on else '중지'}")
+        except Exception as e:
+            self.append_log("RFPulse", f"폴링 토글 실패: {e}")
+
 
     def _apply_process_state_message(self, message: str):
         # 같은 텍스트면 스킵(불필요한 repaint 방지)
