@@ -148,6 +148,8 @@ class MainWindow(QWidget):
                         if not ok:
                             raise RuntimeError("OES 초기화 실패")
 
+                    # 그래프 클리어를 UI 큐에 예약
+                    QTimer.singleShot(0, self.graph_controller.clear_oes_plot)
                     await self.oes.run_measurement(duration_sec, integration_ms)
 
                 except Exception as e:
@@ -510,8 +512,7 @@ class MainWindow(QWidget):
                         y = getattr(ev, "intensities", getattr(ev, "counts", None))
 
                     if x is not None and y is not None:
-                        # UI 스레드 안전하게(혹시 모를 충돌 방지)
-                        self.graph_controller.update_oes_plot(x, y)
+                        self._post_update_oes_plot(x, y)   # ← UI 큐를 통해 그리기
                     else:
                         self.append_log("OES", f"경고: 데이터 필드 없음: {ev!r}")
                     continue
@@ -1334,7 +1335,10 @@ class MainWindow(QWidget):
         self._delay_timer.timeout.connect(lambda: self._on_delay_step_done(name))
         self._delay_timer.start(duration_ms)
         return True
-
+    
+    def _post_update_oes_plot(self, x, y) -> None:
+        # 항상 GUI 스레드(Qt 이벤트 큐)에서 안전하게 그리도록 보장
+        QTimer.singleShot(0, lambda xx=x, yy=y: self.graph_controller.update_oes_plot(xx, yy))
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

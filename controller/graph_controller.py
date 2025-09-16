@@ -153,7 +153,22 @@ class GraphController:
         if x_data is None or y_data is None:
             self.oes_curve.setData([], [])
             return
-        self.oes_curve.setData(x_data, y_data)
+
+        x = np.asarray(x_data, dtype=float).ravel()
+        y = np.asarray(y_data, dtype=float).ravel()
+
+        n = min(x.size, y.size)
+        if n == 0:
+            self.oes_curve.setData([], [])
+            return
+        x = x[:n]; y = y[:n]
+
+        valid = np.isfinite(x) & np.isfinite(y)
+        if not np.any(valid):
+            self.oes_curve.setData([], [])
+            return
+
+        self.oes_curve.setData(x[valid], y[valid])
 
     # ──────────────────────────────────────────────────────────────
     # Clear/Reset
