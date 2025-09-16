@@ -541,19 +541,25 @@ class ProcessController:
     # =========================
     # DELAY/카운트다운/폴링
     # =========================
-
     async def _sleep_with_countdown(self, duration_ms: int, base_message: str) -> None:
+        # 1) 이전 카운트다운만 중지(상태는 아직 설정 전이므로 초기화 영향 없음)
+        t = self._countdown_task
+        if t and not t.done():
+            t.cancel()
+        self._countdown_task = None
+
+        # 2) 이번 카운트다운 상태 설정
         self._countdown_total_ms = int(duration_ms)
         self._countdown_start_ns = monotonic_ns()
         self._countdown_base_msg = base_message
 
-        # 카운트다운 태스크
-        self._cancel_countdown()
+        # 3) 카운트다운 루프 시작
         self._countdown_task = asyncio.create_task(self._countdown_loop())
 
         try:
             await asyncio.sleep(duration_ms / 1000.0)
         finally:
+            # 종료 시에만 상태까지 정리
             self._cancel_countdown()
 
     async def _countdown_loop(self) -> None:
@@ -561,7 +567,8 @@ class ProcessController:
             while True:
                 elapsed_ms = (monotonic_ns() - self._countdown_start_ns) // 1_000_000
                 remaining_ms = max(0, self._countdown_total_ms - int(elapsed_ms))
-                rem_s = remaining_ms // 1000
+                # 표시 보정: 59999ms도 60초로 보이도록 천의 자리 올림
+                rem_s = (remaining_ms + 999) // 1000
                 m, s = divmod(rem_s, 60)
                 tstr = f"{m}분 {s}초" if m > 0 else f"{s}초"
                 self._emit_state(f"{self._countdown_base_msg} (남은 시간: {tstr})")
