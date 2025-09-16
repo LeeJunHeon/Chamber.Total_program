@@ -140,6 +140,13 @@ class MainWindow(QWidget):
         def cb_oes_run(duration_sec: float, integration_ms: int):
             async def run():
                 try:
+                    # 1) 채널이 열려 있지 않으면 초기화 시도 (안전망)
+                    if getattr(self.oes, "sChannel", -1) < 0:
+                        ok = await self.oes.initialize_device()
+                        if not ok:
+                            raise RuntimeError("OES 초기화 실패")
+
+                    # 2) 측정 시작
                     await self.oes.run_measurement(duration_sec, integration_ms)
                 except Exception as e:
                     self.process_controller.on_oes_failed("OES", str(e))
@@ -496,6 +503,16 @@ class MainWindow(QWidget):
     def _ensure_background_started(self):
         if self._bg_started:
             return
+        # 혹시 남아있는 태스크가 있으면(이상 상태) 정리
+        try:
+            self._bg_tasks = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done()]
+            if self._bg_tasks:
+                for t in self._bg_tasks:
+                    t.cancel()
+        except Exception:
+            pass
+        self._bg_tasks = []
+
         self._bg_started = True
         loop = asyncio.get_running_loop()
         self._bg_tasks = [
@@ -504,7 +521,7 @@ class MainWindow(QWidget):
             loop.create_task(self.mfc.start()),
             loop.create_task(self.ig.start()),
             loop.create_task(self.rf_pulse.start()),
-            # 이벤트 펌프(장치 → PC)
+            # 이벤트 펌프(장치 → PC/UI)
             loop.create_task(self._pump_faduino_events()),
             loop.create_task(self._pump_mfc_events()),
             loop.create_task(self._pump_ig_events()),
@@ -513,7 +530,7 @@ class MainWindow(QWidget):
             loop.create_task(self._pump_rf_events()),
             loop.create_task(self._pump_rfpulse_events()),
             loop.create_task(self._pump_oes_events()),
-            # PC 이벤트 펌프 (PC → UI/로그/알림/다음공정)
+            # PC 이벤트 펌프
             loop.create_task(self._pump_pc_events()),
         ]
 
@@ -808,20 +825,39 @@ class MainWindow(QWidget):
         self.request_stop_all(user_initiated=True)
 
     def request_stop_all(self, user_initiated: bool):
-        # 1) 정상 정지 요청
+        # 1) 공정만 중지
+        self.process_controller.request_stop()
+
+        # 2) 백그라운드 장치 워치독도 중지 (재연결 억제)
+        asyncio.create_task(self._stop_device_watchdogs())
+
+    async def _stop_device_watchdogs(self):
+        # 0) 이벤트 펌프/백그라운드 태스크 먼저 취소 → 중복 소비/중복 로깅 방지
         try:
-            self.process_controller.request_stop()
-        except Exception:
-            pass
+            for t in getattr(self, "_bg_tasks", []):
+                try:
+                    if t and not t.done():
+                        t.cancel()
+                except Exception:
+                    pass
+            if self._bg_tasks:
+                await asyncio.gather(*self._bg_tasks, return_exceptions=True)
+        finally:
+            self._bg_tasks = []
 
-        # 2) 대기 타이머 취소
-        self._cancel_delay_timer()
+        # 1) 장치 워치독/워커 정리(재연결 억제)
+        tasks = []
+        for dev in (self.ig, self.mfc, self.faduino, self.rf_pulse, self.dc_power, self.rf_power, self.oes):
+            if dev and hasattr(dev, "cleanup"):
+                try:
+                    tasks.append(dev.cleanup())
+                except Exception:
+                    pass
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
-        # 3) 자동 큐 중단/초기화
-        if self.process_queue:
-            if user_initiated:
-                self.append_log("MAIN", "자동 시퀀스가 사용자에 의해 중단되었습니다.")
-            self._clear_queue_and_reset_ui()
+        # 2) 다음 Start에서만 다시 올리도록 플래그 리셋
+        self._bg_started = False
 
     # ------------------------------------------------------------------
     # 로그
@@ -939,6 +975,7 @@ class MainWindow(QWidget):
                     self.mfc.cleanup(),
                     self.ig.cleanup(),
                     self.faduino.cleanup(),
+                    self.oes.cleanup(),
                     return_exceptions=True
                 )
             except Exception:
