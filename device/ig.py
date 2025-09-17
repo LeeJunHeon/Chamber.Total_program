@@ -334,7 +334,7 @@ class AsyncIG:
             # ✅ IG는 베이스 압력 판정이 끝나면 곧바로 연결과 태스크를 정리한다.
             await self.cleanup()
 
-    def cancel_wait(self):
+    async def cancel_wait(self):
         self._waiting_active = False
         self._suspend_reignite = True
         self._total_reignite_attempts = 0
@@ -342,15 +342,18 @@ class AsyncIG:
             self._polling_task.cancel()
             self._polling_task = None
 
-        # ✅ 연결 유무와 무관하게 direct-write 보장 경로를 즉시 비동기로 실행
-        try:
-            asyncio.get_running_loop().create_task(self._send_off_best_effort(wait_gap_ms=300))
-        except RuntimeError:
-            # 루프가 없으면 최후수단으로라도 큐 경로
-            self.enqueue("SIG 0", on_reply=None, timeout_ms=IG_TIMEOUT_MS, gap_ms=150,
-                        tag="[IG OFF] SIG 0 (cancel-fallback)", retries_left=0, allow_no_reply=True)
-
+        # 대기/인플라이트 명령은 정리
         self._purge_pending("user cancel / stop")
+
+        # 연결 상태와 무관하게 여기서 '직접' OFF 보장 경로를 기다림
+        try:
+            await self._send_off_best_effort(wait_gap_ms=300)
+        except asyncio.CancelledError:
+            # 종료 중 취소되면 조용히 상위로 전파
+            raise
+        except Exception:
+            # OFF 보장은 best-effort이므로 조용히 무시 가능(로그는 emit_status 안에서 남음)
+            pass
 
     async def events(self) -> AsyncGenerator[IGEvent, None]:
         """

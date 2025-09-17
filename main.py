@@ -128,11 +128,8 @@ class MainWindow(QWidget):
             asyncio.create_task(self.ig.wait_for_base_pressure(float(base_pressure)))
 
         def cb_ig_cancel():
-            # IG 자동 재점등/폴링 즉시 중단 + SIG 0 (응답 무시)
-            try:
-                self.ig.cancel_wait()
-            except Exception:
-                pass
+            # IG 자동 재점등/폴링 즉시 중단 + SIG 0 (best-effort, await 필요)
+            asyncio.create_task(self.ig.cancel_wait())
 
         def cb_rga_scan():
             asyncio.create_task(self._do_rga_scan())
@@ -436,13 +433,12 @@ class MainWindow(QWidget):
                 self.append_log("IG", ev.message or "")
             elif k == "pressure":
                 try:
-                    # ev.value(부동소수) 우선, 없으면 ev.text 파싱
-                    val = float(ev.value) if ev.value is not None else None
-                    if val is not None:
-                        self.data_logger.log_ig_pressure(val)
+                    if ev.pressure is not None:
+                        self.data_logger.log_ig_pressure(float(ev.pressure))
                     else:
-                        # text만 온 경우도 대비 (예: "3.2e-6 Torr")
-                        self.data_logger.log_ig_pressure(ev.text or "")
+                        # message로만 온 경우 간단히 로깅
+                        if ev.message:
+                            self.data_logger.log_ig_pressure(ev.message)
                 except Exception:
                     pass
             elif k == "base_reached":
@@ -976,6 +972,14 @@ class MainWindow(QWidget):
         finally:
             self._bg_tasks = []
 
+        # ▶ IG는 OFF 보장을 먼저 '대기'해서 끝내 둠(중복 OFF는 무해)
+        try:
+            if self.ig and hasattr(self.ig, "cancel_wait"):
+                # 너무 오래 끌지 않도록 짧은 상한
+                await asyncio.wait_for(self.ig.cancel_wait(), timeout=2.0)
+        except Exception:
+            pass
+
         # 1) 장치 워치독/워커 정리(재연결 억제)
         tasks = []
         for dev in (self.ig, self.mfc, self.faduino, self.rf_pulse, self.dc_power, self.rf_power, self.oes):
@@ -986,7 +990,6 @@ class MainWindow(QWidget):
                     pass
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
-
         # 2) 다음 Start에서만 다시 올리도록 플래그 리셋
         self._bg_started = False
 
