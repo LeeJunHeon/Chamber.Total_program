@@ -527,6 +527,11 @@ class MainWindow(QWidget):
                     self.chat_notifier.notify_error_with_src("RF Pulse", why)
             elif k == "power_off_finished":
                 self.process_controller.on_rf_pulse_off_finished()
+            elif k == "rf_status":
+                st = ev.rfstatus
+                # 필요하면 상태 텍스트로 로그/표시
+                if st is not None:
+                    self.append_log("RFPulse", f"STATUS on={int(st.rf_output_on)} req={int(st.rf_on_requested)} ...")
 
     async def _pump_oes_events(self):
         async for ev in self.oes.events():

@@ -153,8 +153,8 @@ class RFPulseEvent:
     cmd: Optional[str] = None
     reason: Optional[str] = None
     rfstatus: Optional[RfStatus] = None
-    forward_w: Optional[float] = None
-    reflected_w: Optional[float] = None
+    forward: Optional[float] = None     
+    reflected: Optional[float] = None   
 
 # ===== Protocol (바이트 토큰 스트리머) =====
 Token = Tuple[Literal["ACK", "NAK", "FRAME"], Optional[bytes]]
@@ -417,8 +417,8 @@ class RFPulseAsync:
             self._last_reflected_w = float(_u16le(r, 0) if len(r) >= 2 else 0.0)
         if (self._last_forward_w is not None) and (self._last_reflected_w is not None):
             await self._event_q.put(RFPulseEvent(kind="power",
-                                                 forward_w=self._last_forward_w,
-                                                 reflected_w=self._last_reflected_w))
+                                                forward=self._last_forward_w,
+                                                reflected=self._last_reflected_w))
 
     # ---------- 내부: 연결/워치독 ----------
     async def _watchdog_loop(self):
@@ -568,8 +568,13 @@ class RFPulseAsync:
 
             # 전송
             try:
+                if self._closing or not (self._connected and self._transport):
+                    self._inflight = None
+                    await asyncio.sleep(0)   # cancel-friendly
+                    continue
                 pkt = _build_packet(self.addr, cmd.cmd, cmd.data)
                 self._transport.write(pkt)
+
                 if hasattr(self._transport, "drain"):
                     await self._transport.drain()  # 있는 경우만 대기
                 self._last_send_mono = time.monotonic()
@@ -745,7 +750,7 @@ class RFPulseAsync:
 
                 if (self._last_forward_w is not None) and (self._last_reflected_w is not None):
                     await self._event_q.put(RFPulseEvent(
-                        kind="power", forward_w=self._last_forward_w, reflected_w=self._last_reflected_w
+                        kind="power", forward=self._last_forward_w, reflected=self._last_reflected_w
                     ))
 
                 self._poll_busy = False
