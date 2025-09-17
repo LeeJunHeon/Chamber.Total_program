@@ -185,20 +185,29 @@ class AsyncFaduino:
         await self._emit_status("Faduino 워치독/워커 시작")
 
     async def cleanup(self):
-        """컨트롤러 완전 종료 (폴링 중지, 큐 비움, 연결 해제)."""
+        """컨트롤러 완전 종료: 안전 OFF → 큐/태스크 정리 → 포트 종료."""
         await self._emit_status("Faduino 종료 절차 시작")
         self._want_connected = False
 
-        # 폴링 중지
+        # 1) 폴링 먼저 정지 + 읽기 즉시 정리
         await self._cancel_task("_poll_task")
-        # 워커/워치독 중지
+        self._poll_cycle_active = False
+        self._purge_reads_only(reason="cleanup")
+
+        # 2) 베스트 에포트 안전 OFF (연결되어 있고 워커가 살아있을 때만)
+        try:
+            await self._best_effort_safe_off()
+        except Exception:
+            pass
+
+        # 3) 대기/인플라이트 전부 정리
+        self._purge_pending("shutdown")
+
+        # 4) 워커/워치독 중지
         await self._cancel_task("_cmd_worker_task")
         await self._cancel_task("_watchdog_task")
 
-        # 큐 정리
-        self._purge_pending("shutdown")
-
-        # 연결 종료
+        # 5) 포트 종료
         if self._transport:
             try:
                 self._transport.close()
@@ -321,6 +330,8 @@ class AsyncFaduino:
                 self._poll_task.cancel()
                 self._poll_task = None
             self._poll_cycle_active = False
+            # ✅ Qt 버전과 동일: 폴링 OFF 즉시 읽기 계열만 정리
+            self._purge_reads_only(reason="polling off")
 
     def on_rf_state_changed(self, is_active: bool):
         self.is_rf_active = is_active
@@ -367,8 +378,19 @@ class AsyncFaduino:
                 backoff = min(backoff * 2, FADUINO_RECONNECT_BACKOFF_MAX_MS)
 
     def _on_connection_made(self, transport: asyncio.Transport):
-        # 옵션: DTR/RTS 제어가 필요한 장치면 여기서 serial 인스턴스를 얻어 설정 가능
-        pass
+        # pyserial-asyncio의 SerialTransport 는 .serial 을 노출함
+        try:
+            ser = getattr(transport, "serial", None)
+            if ser is not None:
+                # 버퍼 클리어 + 라인 상태 설정
+                ser.reset_input_buffer()
+                ser.reset_output_buffer()
+                # Qt 버전과 동일한 라인 제어
+                ser.dtr = True
+                ser.rts = False
+                self._dbg("Faduino", "DTR=1, RTS=0, buffers reset")
+        except Exception as e:
+            self._dbg("Faduino", f"connection setup skipped: {e}")
 
     def _on_connection_lost(self, exc: Optional[Exception]):
         self._connected = False
@@ -420,6 +442,9 @@ class AsyncFaduino:
             self._inflight = cmd
             sent_txt = cmd.cmd_str.strip()
             self._dbg("Faduino", f"[SEND] {sent_txt} (tag={cmd.tag})")
+
+            # ★ 전송 직전: 늦게 도착한 라인(에코/잡응답) 짧게 비움
+            await self._drain_input_soft(80)
 
             # write
             try:
@@ -565,7 +590,7 @@ class AsyncFaduino:
     async def _poll_loop(self):
         try:
             while True:
-                if self._poll_cycle_active:
+                if self._poll_cycle_active or self._has_pending_reads():
                     await asyncio.sleep(0.01)
                     continue
                 self._poll_cycle_active = True
@@ -774,3 +799,67 @@ class AsyncFaduino:
                 pass
             self._watchdog_task = None
 
+    def _is_read_cmd(self, cmd_str: str) -> bool:
+        s = (cmd_str or "").lstrip()
+        return bool(s) and s[0] in ("S", "P", "r", "d")
+
+    def _purge_reads_only(self, cancel_inflight: bool = True, reason: str = "") -> int:
+        purged = 0
+        # 인플라이트가 읽기면 취소
+        if cancel_inflight and self._inflight and self._is_read_cmd(self._inflight.cmd_str):
+            cb = self._inflight.callback
+            self._inflight = None
+            purged += 1
+            self._safe_callback(cb, None)
+        # 큐에서 읽기만 제거
+        kept: Deque[Command] = deque()
+        while self._cmd_q:
+            c = self._cmd_q.popleft()
+            if self._is_read_cmd(c.cmd_str):
+                purged += 1
+                self._safe_callback(c.callback, None)
+                continue
+            kept.append(c)
+        self._cmd_q = kept
+        if reason:
+            self._dbg("Faduino", f"[QUIESCE] read-only commands purged: {purged} ({reason})")
+        return purged
+    
+    async def _drain_input_soft(self, budget_ms: int = 80):
+        """라인 큐에 쌓인 지연 라인을 짧게 비움(다음 명령 응답 오염 방지)."""
+        t0 = time.monotonic()
+        dropped = 0
+        while (time.monotonic() - t0) * 1000 < budget_ms:
+            try:
+                _ = self._line_q.get_nowait()
+                dropped += 1
+            except asyncio.QueueEmpty:
+                break
+            await asyncio.sleep(0)  # 이벤트 루프 양보
+        if dropped and self.debug_print:
+            self._dbg("Faduino", f"[DRAIN] pre-send removed {dropped} stray lines")
+
+    def _has_pending_reads(self) -> bool:
+        if self._inflight and self._is_read_cmd(self._inflight.cmd_str):
+            return True
+        for c in self._cmd_q:
+            if self._is_read_cmd(c.cmd_str):
+                return True
+        return False
+
+    async def _best_effort_safe_off(self):
+        """종료 시 하드웨어를 예측 가능한 안전 상태로 내림."""
+        if not (self._connected and self._transport):
+            return
+        # Qt 버전과 동일: 릴레이 OFF(0~7) → RF DAC 0 → DC DAC 0
+        seq = [f"R,{pin},0" for pin in range(8)] + ["W,0", "D,0"]
+        for cmd in seq:
+            try:
+                # 응답이 없어도 다음으로 진행 (짧은 타임아웃)
+                _ = await self._send_and_wait_line(cmd, tag="[CLEAN]", timeout_ms=200, retries=0)
+            except Exception:
+                pass
+            await asyncio.sleep(max(1, FADUINO_GAP_MS) / 1000.0)
+        # 전송 잔여 시간
+        await asyncio.sleep(0.2)
+        
