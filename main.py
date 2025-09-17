@@ -33,7 +33,6 @@ from controller.process_ch2 import ProcessController
 
 from lib.config_ch2 import CHAT_WEBHOOK_URL, ENABLE_CHAT_NOTIFY, RGA_PROGRAM_PATH, RGA_CSV_PATH, BUTTON_TO_PIN
 
-
 class MainWindow(QWidget):
     # UI 로그 배치 플러시용(내부에서만 사용)
     _log_flush_timer: Optional[QTimer] = None
