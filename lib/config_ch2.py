@@ -172,8 +172,8 @@ MFC_RECONNECT_BACKOFF_START_MS = 1000    # 포트 오류/타임아웃 시 첫 �
 MFC_RECONNECT_BACKOFF_MAX_MS   = 20_000  # 지수 백오프 최대 상한
 
 # === 전역 통일 상수 ===
-MFC_TIMEOUT   = 1500         # 모든 명령 timeout
-MFC_GAP_MS    = 2000         # 모든 인터커맨드 간격(gap)
+MFC_TIMEOUT   = 1000         # 모든 명령 timeout
+MFC_GAP_MS    = 1000         # 모든 인터커맨드 간격(gap)
 MFC_DELAY_MS  = 1000         # 모든 검증/재시도 지연
 MFC_DELAY_MS_VALVE = 5000    # 밸브 이동/재전송 대기(5초)
 

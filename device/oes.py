@@ -136,6 +136,13 @@ class OESAsync:
             reason = "이미 실행 중" if self.is_running else "초기화 실패"
             await self._status(f"[경고] 측정 시작 불가: {reason}. 공정은 계속 진행됩니다.")
             return
+        
+        # 미초기화면 자동 초기화 시도 (종료 시 채널을 닫으므로 매번 필요)
+        if self.sChannel < 0:
+            ok = await self.initialize_device()
+            if not ok or self.sChannel < 0:
+                await self._status("[경고] 측정 시작 불가: 초기화 실패")
+                return
 
         # 세션 초기화
         self.is_running = True

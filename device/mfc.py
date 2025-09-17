@@ -428,21 +428,25 @@ class AsyncMFC:
                 await self.valve_close()
 
             elif key == "PS_ZEROING":
-                # 게이지 제로잉: no-reply 전송 후 간단 검증(READ_PRESSURE로 동작 확인) 대신
-                # 상태 로그 + 확정 이벤트만 방출 (필요시 검증 루프 추가 가능)
-                self._enqueue(self._mk_cmd("PS_ZEROING"), None, 
-                              allow_no_reply=True, tag="[PS_ZEROING]",
-                              gap_ms=MFC_GAP_MS)
+                # 워커가 gap_ms 만큼 쉬고 나서 호출 → 그 시점에 확인 이벤트 방출
+                def _ok_cb(_):
+                    asyncio.create_task(self._emit_confirmed("PS_ZEROING"))
+
+                self._enqueue(self._mk_cmd("PS_ZEROING"), _ok_cb,
+                            allow_no_reply=True, tag="[PS_ZEROING]",
+                            gap_ms=MFC_GAP_MS)  # 필요시 MFC_DELAY_MS 로 바꿔 더 길게도 가능
                 await self._emit_status("압력 센서 Zeroing 명령 전송")
-                await self._emit_confirmed("PS_ZEROING")
 
             elif key == "MFC_ZEROING":
                 ch = _req("channel", int)
-                self._enqueue(self._mk_cmd("MFC_ZEROING", channel=ch), None, 
-                              allow_no_reply=True, tag=f"[MFC_ZEROING ch{ch}]",
-                              gap_ms=MFC_GAP_MS)
+
+                def _ok_cb(_):
+                    asyncio.create_task(self._emit_confirmed("MFC_ZEROING"))
+
+                self._enqueue(self._mk_cmd("MFC_ZEROING", channel=ch), _ok_cb,
+                            allow_no_reply=True, tag=f"[MFC_ZEROING ch{ch}]",
+                            gap_ms=MFC_GAP_MS)  # 필요시 MFC_DELAY_MS 로 조절 가능
                 await self._emit_status(f"Ch{ch} MFC Zeroing 명령 전송")
-                await self._emit_confirmed("MFC_ZEROING")
 
             elif key == "SP4_ON":
                 await self.sp4_on()
@@ -611,9 +615,10 @@ class AsyncMFC:
 
             # no-reply
             if cmd.allow_no_reply:
-                self._safe_callback(cmd.callback, None)
+                # 먼저 inflight 해제, 그 다음 gap_ms만큼 대기, 마지막에 콜백 호출
                 self._inflight = None
                 await asyncio.sleep(cmd.gap_ms / 1000.0)
+                self._safe_callback(cmd.callback, None)
                 continue
 
             # wait reply (echo skip)
