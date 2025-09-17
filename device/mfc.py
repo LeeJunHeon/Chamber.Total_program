@@ -526,7 +526,9 @@ class AsyncMFC:
                 backoff = min(backoff * 2, MFC_RECONNECT_BACKOFF_MAX_MS)
 
     def _on_connection_made(self, transport: asyncio.Transport):
-        pass
+        # 연결 직후 잔류 라인/에코 정리
+        self._skip_echos.clear()
+        asyncio.create_task(self._absorb_late_lines(100))
 
     def _on_connection_lost(self, exc: Optional[Exception]):
         self._connected = False
@@ -553,7 +555,7 @@ class AsyncMFC:
         # ★ 1) 과거 no-reply 에코면 여기서 즉시 버림 (큐로 가지 않게)
         if self._skip_echos and line == self._skip_echos[0]:
             self._skip_echos.popleft()
-            self._ev_nowait(MFCEvent(kind="status", message=f"[ECHO] 과거 no-reply 에코 스킵: {line}"))
+            self._dbg("MFC", f"[ECHO] 과거 no-reply 에코 스킵: {line}")
             return
 
         # 2) 일반 라인은 큐로 전달
@@ -593,7 +595,6 @@ class AsyncMFC:
             try:
                 payload = cmd.cmd_str.encode("ascii")
                 self._transport.write(payload)
-                await self._transport.drain() if hasattr(self._transport, "drain") else None
             except Exception as e:
                 self._dbg("MFC", f"{cmd.tag} {sent_txt} 전송 오류: {e}")
                 self._inflight = None
@@ -652,7 +653,7 @@ class AsyncMFC:
             # ① 방금 보낸 명령의 에코
             if line == sent_no_cr:
                 # 추적 로그 (optional)
-                await self._emit_status(f"[ECHO] 현재 명령 에코 스킵: {line}")
+                self._dbg("MFC", f"[ECHO] 현재 명령 에코 스킵: {line}")
                 continue
             # ② 과거 no-reply 에코 (드물게 큐에 남아있을 수 있음)
             if self._skip_echos and line == self._skip_echos[0]:
@@ -665,6 +666,10 @@ class AsyncMFC:
     async def _poll_loop(self):
         try:
             while True:
+                # 연결 안 됐으면 대기
+                if not self._connected:                                
+                    await asyncio.sleep(MFC_POLLING_INTERVAL_MS / 1000.0)
+                    continue
                 # 중첩 금지
                 if self._poll_cycle_active:
                     await asyncio.sleep(0.01)
@@ -836,7 +841,7 @@ class AsyncMFC:
             line = await self._send_and_wait_line(self._mk_cmd("READ_SYSTEM_STATUS"),
                                                   tag=f"[VERIFY {cmd_key}]", timeout_ms=MFC_TIMEOUT)
             s = (line or "").strip().upper()
-            ok = bool(s and s.startswith("M") and expect_mask in s[1:2])
+            ok = bool(s and s.startswith("M") and s[1:2] == expect_mask)
             if ok:
                 await self._emit_status(f"{cmd_key} 활성화 확인")
                 return True
@@ -952,7 +957,7 @@ class AsyncMFC:
             no_cr = cmd_str.rstrip("\r")
             self._skip_echos.append(no_cr)
             # 추적 로그를 UI/챗으로도 올림
-            asyncio.create_task(self._emit_status(f"[ECHO] no-reply 등록: {no_cr}"))
+            self._dbg("MFC", f"[ECHO] no-reply 등록: {no_cr}")
 
     async def _send_and_wait_line(self, cmd_str: str, *, tag: str, timeout_ms: int, retries: int = 1) -> Optional[str]:
         fut: asyncio.Future[Optional[str]] = asyncio.get_running_loop().create_future()
@@ -1062,11 +1067,13 @@ class AsyncMFC:
         """짧은 시간 동안 라인 큐에 남은 잔류 에코/ACK를 비운다."""
         deadline = time.monotonic() + (budget_ms / 1000.0)
         while time.monotonic() < deadline:
+            drained = False
             try:
                 self._line_q.get_nowait()
+                drained = True
             except Exception:
-                break
-            await asyncio.sleep(0)  # 루프 양보
+                pass
+            await asyncio.sleep(0 if drained else 0.005)  # ★ 비었으면 아주 살짝 더 대기
 
     # 각 장치 클래스 내부
     async def pause_watchdog(self):
