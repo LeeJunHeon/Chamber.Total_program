@@ -182,6 +182,9 @@ class AsyncMFC:
         # 폴링 사이클 중첩 방지 플래그
         self._poll_cycle_active: bool = False
 
+        # ★ 과거 no-reply 명령의 에코를 1회성으로 버리기 위한 대기열
+        self._skip_echos: deque[str] = deque()
+
         # 안정화 상태
         self._stab_ch: Optional[int] = None
         self._stab_target_hw: float = 0.0
@@ -464,18 +467,19 @@ class AsyncMFC:
 
     # ---- 폴링 on/off (Process와 연동) ----
     def set_process_status(self, should_poll: bool):
-        """공정 시작/종료 시 폴링 제어."""
         if should_poll:
             if self._poll_task is None or self._poll_task.done():
+                self._ev_nowait(MFCEvent(kind="status", message="주기적 읽기(Polling) 시작"))
                 self._poll_task = asyncio.create_task(self._poll_loop())
         else:
-            # 폴링 중지 + 폴링용 읽기만 자연 소멸(큐는 워커 단일직렬이라 안전)
             if self._poll_task:
                 self._poll_task.cancel()
                 self._poll_task = None
             self._poll_cycle_active = False
-            # ✅ 큐에 남은 폴링 읽기(R60/R5)만 정리
-            self._purge_poll_reads_only(cancel_inflight=True, reason="polling off")
+            purged = self._purge_poll_reads_only(cancel_inflight=True, reason="polling off")
+            self._ev_nowait(MFCEvent(kind="status", message="주기적 읽기(Polling) 중지"))
+            if purged:
+                self._ev_nowait(MFCEvent(kind="status", message=f"[QUIESCE] 폴링 읽기 {purged}건 제거 (polling off)"))
 
     def on_process_finished(self, success: bool):
         """공정 종료 시 내부 상태 리셋."""
@@ -546,6 +550,13 @@ class AsyncMFC:
                 self._safe_callback(cmd.callback, None)
 
     def _on_line_from_serial(self, line: str):
+        # ★ 1) 과거 no-reply 에코면 여기서 즉시 버림 (큐로 가지 않게)
+        if self._skip_echos and line == self._skip_echos[0]:
+            self._skip_echos.popleft()
+            self._ev_nowait(MFCEvent(kind="status", message=f"[ECHO] 과거 no-reply 에코 스킵: {line}"))
+            return
+
+        # 2) 일반 라인은 큐로 전달
         try:
             self._line_q.put_nowait(line)
         except asyncio.QueueFull:
@@ -638,8 +649,16 @@ class AsyncMFC:
             line = await asyncio.wait_for(self._line_q.get(), timeout=remain)
             if not line:
                 continue
+            # ① 방금 보낸 명령의 에코
             if line == sent_no_cr:
-                continue  # echo skip
+                # 추적 로그 (optional)
+                await self._emit_status(f"[ECHO] 현재 명령 에코 스킵: {line}")
+                continue
+            # ② 과거 no-reply 에코 (드물게 큐에 남아있을 수 있음)
+            if self._skip_echos and line == self._skip_echos[0]:
+                self._skip_echos.popleft()
+                await self._emit_status(f"[ECHO] 과거 no-reply 에코 스킵(큐): {line}")
+                continue
             return line
 
     # ---------- 내부: 폴링 ----------
@@ -737,18 +756,29 @@ class AsyncMFC:
         return False
 
     async def _set_onoff_mask_and_verify(self, bits_target: str) -> bool:
-        """L0 적용 후 R69로 확인. 필요시 재시도(2회)."""
-        for attempt in range(1, 3):
+        """L0 적용 후 R69로 확인. 에코/반영 지연 고려해 재시도(최대 5회)."""
+        for attempt in range(1, 6):
             # L0 적용 (no-reply)
             self._enqueue(self._mk_cmd("SET_ONOFF_MASK", bits_target), None,
-                          allow_no_reply=True, tag=f"[L0 {bits_target}]")
-            # 검증
-            line = await self._send_and_wait_line(self._mk_cmd("READ_MFC_ON_OFF_STATUS"),
-                                                  tag="[VERIFY R69]", timeout_ms=MFC_TIMEOUT)
-            now = self._parse_r69_bits(line or "")
+                        allow_no_reply=True, tag=f"[L0 {bits_target}]")
+
+            # 장비 반영 시간 대기 (최소 200ms 보장)
+            await asyncio.sleep(max(MFC_DELAY_MS, 200) / 1000.0)
+
+            # 검증 (의미없는 빈 라인 방지용으로 최대 2회 읽기)
+            now = ""
+            for _ in range(2):
+                line = await self._send_and_wait_line(self._mk_cmd("READ_MFC_ON_OFF_STATUS"),
+                                                    tag="[VERIFY R69]", timeout_ms=MFC_TIMEOUT)
+                now = self._parse_r69_bits(line or "")
+                if now:
+                    break
+
             if now == bits_target:
                 await self._emit_status(f"L0 적용 확인: {bits_target}")
                 return True
+
+            await self._emit_status(f"[L0 검증 재시도] now={now or '∅'}, want={bits_target} (시도 {attempt}/5)")
             await asyncio.sleep(MFC_DELAY_MS / 1000.0)
         return False
 
@@ -911,11 +941,18 @@ class AsyncMFC:
 
     # ---------- 내부: 공통 송수신 ----------
     def _enqueue(self, cmd_str: str, on_reply: Optional[Callable[[Optional[str]], None]],
-                 *, timeout_ms: int = MFC_TIMEOUT, gap_ms: int = MFC_GAP_MS,
-                 tag: str = "", retries_left: int = 5, allow_no_reply: bool = False):
+                *, timeout_ms: int = MFC_TIMEOUT, gap_ms: int = MFC_GAP_MS,
+                tag: str = "", retries_left: int = 5, allow_no_reply: bool = False):
         if not cmd_str.endswith("\r"):
             cmd_str += "\r"
         self._cmd_q.append(Command(cmd_str, on_reply, timeout_ms, gap_ms, tag, retries_left, allow_no_reply))
+
+        # ★ no-reply 명령의 '에코 라인'은 나중에 도착해도 스킵하도록 등록
+        if allow_no_reply:
+            no_cr = cmd_str.rstrip("\r")
+            self._skip_echos.append(no_cr)
+            # 추적 로그를 UI/챗으로도 올림
+            asyncio.create_task(self._emit_status(f"[ECHO] no-reply 등록: {no_cr}"))
 
     async def _send_and_wait_line(self, cmd_str: str, *, tag: str, timeout_ms: int, retries: int = 1) -> Optional[str]:
         fut: asyncio.Future[Optional[str]] = asyncio.get_running_loop().create_future()
@@ -950,7 +987,7 @@ class AsyncMFC:
             purged += 1
             self._safe_callback(c.callback, None)
         if reason:
-            self._dbg("MFC", f"대기 중 명령 {purged}개 폐기 ({reason})")
+            self._ev_nowait(MFCEvent(kind="status", message=f"대기 중 명령 {purged}개 폐기 ({reason})"))
         return purged
 
     # ---------- 내부: 이벤트/로그 ----------
@@ -1018,7 +1055,7 @@ class AsyncMFC:
             kept.append(c)
         self._cmd_q = kept
         if purged:
-            self._dbg("MFC", f"[QUIESCE] 폴링 읽기 {purged}건 제거: {reason}")
+            self._ev_nowait(MFCEvent(kind="status", message=f"[QUIESCE] 폴링 읽기 {purged}건 제거: {reason}"))
         return purged
 
     async def _absorb_late_lines(self, budget_ms: int = 60):

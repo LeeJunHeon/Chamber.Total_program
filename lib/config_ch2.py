@@ -33,6 +33,26 @@ RFPULSE_BAUD = 9600
 RFPULSE_ADDR = 1
 RFPULSE_DEFAULT_DELAY_MS = 180
 
+# ===== 타이밍/타임아웃 상수 =====
+ACK_TIMEOUT_MS         = 2000   # 쓰기(설정) 명령 후 ACK/프레임 대기 시간
+QUERY_TIMEOUT_MS       = 4500   # 읽기(리드백) 명령 후 전체 대기 시간
+RECV_FRAME_TIMEOUT_MS  = 4000   # 저수준 프레임 대기 타임아웃
+CMD_GAP_MS             = 1500   # 명령 간 최소 간격(밀리초)
+POST_WRITE_DELAY_MS    = 1500   # 각 쓰기 명령 후 여유 대기(밀리초)
+
+# ★ ACK 뒤 CSR/데이터 프레임을 잠깐 더 기다리는 그레이스 윈도우
+ACK_FOLLOWUP_GRACE_MS  = 500
+
+# 폴링
+POLL_INTERVAL_MS       = 30_000
+POLL_QUERY_TIMEOUT_MS  = 9000
+POLL_START_DELAY_AFTER_RF_ON_MS = 800
+
+# 워치독/재연결(지수 백오프)
+RFPULSE_WATCHDOG_INTERVAL_MS        = 1000
+RFPULSE_RECONNECT_BACKOFF_START_MS  = 1000
+RFPULSE_RECONNECT_BACKOFF_MAX_MS    = 20_000
+
 # === RGA ===
 # RGA_PORT = "COM17" RGA를 직접 연결하지 않고 외부 프로그램을 사용
 # RGA_BAUD = 9600
@@ -65,7 +85,7 @@ FADUINO_WATCHDOG_INTERVAL_MS = 1000
 FADUINO_TIMEOUT_MS = 800
 FADUINO_GAP_MS = 1000
 FADUINO_RECONNECT_BACKOFF_START_MS = 1000
-FADUINO_RECONNECT_BACKOFF_MAX_MS = 8000
+FADUINO_RECONNECT_BACKOFF_MAX_MS = 20_000
 CLEAN_TIMEOUT = 100
 
 BUTTON_TO_PIN = {
@@ -148,8 +168,8 @@ MFC_STABILIZATION_INTERVAL_MS = 1000    # 1초마다 목표 대비 실제값 확
 MFC_WATCHDOG_INTERVAL_MS      = 1500    # 포트가 닫혔는지 주기적으로 점검
 
 # 재연결 백오프
-MFC_RECONNECT_BACKOFF_START_MS = 500    # 포트 오류/타임아웃 시 첫 재연결 대기시간
-MFC_RECONNECT_BACKOFF_MAX_MS   = 8000   # 지수 백오프 최대 상한
+MFC_RECONNECT_BACKOFF_START_MS = 1000    # 포트 오류/타임아웃 시 첫 재연결 대기시간
+MFC_RECONNECT_BACKOFF_MAX_MS   = 20_000  # 지수 백오프 최대 상한
 
 # === 전역 통일 상수 ===
 MFC_TIMEOUT   = 1000         # 모든 명령 timeout

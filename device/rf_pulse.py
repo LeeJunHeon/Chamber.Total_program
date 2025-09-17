@@ -31,27 +31,12 @@ try:
 except Exception as e:
     raise RuntimeError("pyserial-asyncio가 필요합니다. `pip install pyserial-asyncio`") from e
 
-from lib.config_ch2 import RFPULSE_PORT, RFPULSE_BAUD, RFPULSE_ADDR, DEBUG_PRINT
-
-# ===== 타이밍/타임아웃 상수 =====
-ACK_TIMEOUT_MS         = 2000   # 쓰기(설정) 명령 후 ACK/프레임 대기 시간
-QUERY_TIMEOUT_MS       = 4500   # 읽기(리드백) 명령 후 전체 대기 시간
-RECV_FRAME_TIMEOUT_MS  = 4000   # 저수준 프레임 대기 타임아웃
-CMD_GAP_MS             = 1500   # 명령 간 최소 간격(밀리초)
-POST_WRITE_DELAY_MS    = 1500   # 각 쓰기 명령 후 여유 대기(밀리초)
-
-# ★ ACK 뒤 CSR/데이터 프레임을 잠깐 더 기다리는 그레이스 윈도우
-ACK_FOLLOWUP_GRACE_MS  = 500
-
-# 폴링
-POLL_INTERVAL_MS       = 30_000
-POLL_QUERY_TIMEOUT_MS  = 9000
-POLL_START_DELAY_AFTER_RF_ON_MS = 800
-
-# 워치독/재연결(지수 백오프)
-RFPULSE_WATCHDOG_INTERVAL_MS        = 2000
-RFPULSE_RECONNECT_BACKOFF_START_MS  = 2000
-RFPULSE_RECONNECT_BACKOFF_MAX_MS    = 15000
+from lib.config_ch2 import (
+    RFPULSE_PORT, RFPULSE_BAUD, RFPULSE_ADDR, DEBUG_PRINT, ACK_TIMEOUT_MS,
+    QUERY_TIMEOUT_MS, RECV_FRAME_TIMEOUT_MS, CMD_GAP_MS, POST_WRITE_DELAY_MS,
+    ACK_FOLLOWUP_GRACE_MS, POLL_INTERVAL_MS, POLL_QUERY_TIMEOUT_MS, POLL_START_DELAY_AFTER_RF_ON_MS,
+    RFPULSE_WATCHDOG_INTERVAL_MS, RFPULSE_RECONNECT_BACKOFF_START_MS, RFPULSE_RECONNECT_BACKOFF_MAX_MS
+)
 
 # ===== AE Bus command numbers =====
 CMD_RF_OFF              = 1
