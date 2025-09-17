@@ -604,13 +604,20 @@ class ProcessController:
         self._countdown_start_ns = monotonic_ns()
         self._countdown_base_msg = base_message
 
+        # [추가] 카운트다운 시작 로그 1회
+        self._emit_log("Process", f"{base_message} 시작 ({int((duration_ms + 999) // 1000)}초 대기)")
+
         # 3) 카운트다운 루프 시작
         self._countdown_task = asyncio.create_task(self._countdown_loop())
 
         try:
             aborted = await self._sleep_or_abort(duration_ms / 1000.0)
             if aborted:
+                # [추가] 카운트다운 중단 로그 1회
+                self._emit_log("Process", f"{self._countdown_base_msg} 중단됨")
                 return  # ✅ 즉시 복귀 (러너가 종료 시퀀스로 전환됨)
+            # [추가] 카운트다운 정상 완료 로그 1회
+            self._emit_log("Process", f"{self._countdown_base_msg} 완료")
         finally:
             # 종료 시에만 상태까지 정리
             self._cancel_countdown()
@@ -740,6 +747,9 @@ class ProcessController:
             "aborting": (self._aborting or self._in_emergency),
             "errors": list(self._shutdown_failures),
         }
+        
+        # ✅ 리셋 전에 현재 상태를 캐싱
+        was_aborting = (self._aborting or self._in_emergency)
 
         self.is_running = False
         self._cancel_countdown()
@@ -772,8 +782,8 @@ class ProcessController:
         # 다음 런 대비
         self._abort_evt.clear()  # ✅ 다음 실행에 영향 없도록
 
-
-        if (self._aborting or self._in_emergency) and not ok:
+        # ✅ 리셋 후에 캐시로 판단
+        if was_aborting and not ok:
             self._emit(PCEvent("aborted", {}))
 
     # =========================
@@ -1125,10 +1135,6 @@ class ProcessController:
                 if step.action in [ActionType.FADUINO_CMD, ActionType.MFC_CMD, ActionType.OES_RUN]:
                     if step.params is None:
                         errors.append(f"Step {n}: {step.action.name} 액션에 params가 없습니다.")
-                if step.parallel and i > 0:
-                    prev = self.process_sequence[i - 1]
-                    if not prev.parallel:
-                        errors.append(f"Step {n}: 병렬 스텝이 비병렬 스텝 뒤에 있습니다.")
         except Exception as e:
             errors.append(f"검증 중 오류 발생: {e}")
         return len(errors) == 0, errors

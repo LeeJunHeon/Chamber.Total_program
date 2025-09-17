@@ -149,15 +149,12 @@ class MainWindow(QWidget):
                         if not ok:
                             raise RuntimeError("OES 초기화 실패")
 
-                    # ✅ OES 측정 중에도 최근 폴링 타깃 재적용
+                    # ✅ 폴링 타깃 결정
                     targets = getattr(self, "_last_polling_targets", None)
                     if not targets:
-                        # 폴백: 전력 선택 상태로 추정
-                        # RF Pulse를 쓰는지 여부에 맞춰 기본 타깃 가정
-                        if getattr(self, "_use_rf_pulse", False):
-                            targets = {"mfc": True, "faduino": False, "rfpulse": True}
-                        else:
-                            targets = {"mfc": True, "faduino": True, "rfpulse": False}
+                        params = getattr(self.process_controller, "current_params", {}) or {}
+                        use_rf_pulse = bool(params.get("use_rf_pulse", False))
+                        targets = {"mfc": True, "faduino": (not use_rf_pulse), "rfpulse": use_rf_pulse}
                     self._apply_polling_targets(targets)
 
                     # 그래프 초기화 후 OES 실행
@@ -336,16 +333,20 @@ class MainWindow(QWidget):
                         except Exception:
                             pass
                 elif kind == "polling_targets":
-                    targets = dict(ev.get("targets") or {})
-                    # ✅ 최근 폴링 타깃을 캐시해 둔다
+                    targets = dict(payload.get("targets") or {})   # ← 올바른 접근
                     self._last_polling_targets = targets
                     self._apply_polling_targets(targets)
-
                 elif kind == "polling":
                     active = bool(payload.get("active", False))
                     self.append_log("Process", f"폴링 {'ON' if active else 'OFF'}")
+                else:
+                    # 미지정 이벤트도 안전하게 무시/로그
+                    self.append_log("MAIN", f"알 수 없는 PC 이벤트 수신: {kind} {payload}")
+            except Exception as e:
+                # 💡 핵심: 여기서 잡고 계속 돈다(펌프가 죽지 않음)
+                self.append_log("MAIN", f"PC 이벤트 처리 예외: {e!r} (kind={kind})")
             finally:
-                # ★ 핵심: 매 이벤트 처리 후 한 번 양보 → Qt 페인팅/타이머/다른 코루틴이 돌 기회 제공
+                # Qt 페인팅/타이머/다른 코루틴에 양보
                 await asyncio.sleep(0)
 
     # ------------------------------------------------------------------
@@ -618,34 +619,38 @@ class MainWindow(QWidget):
         if for_p is None or ref_p is None:
             self.append_log("MAIN", "for.p, ref.p 값이 비어있습니다.")
             return
-        self.ui.ch2_forP_edit.setPlainText(f"{for_p:.2f}")
-        self.ui.ch2_refP_edit.setPlainText(f"{ref_p:.2f}")
+        QTimer.singleShot(0, lambda: (
+            self.ui.ch2_forP_edit.setPlainText(f"{for_p:.2f}"),
+            self.ui.ch2_refP_edit.setPlainText(f"{ref_p:.2f}")
+        ))
 
     @Slot(float, float, float)
     def handle_dc_power_display(self, power, voltage, current):
         if power is None or voltage is None or current is None:
             self.append_log("MAIN", "power, voltage, current값이 비어있습니다.")
             return
-        self.ui.ch2_Power_edit.setPlainText(f"{power:.3f}")
-        self.ui.ch2_Voltage_edit.setPlainText(f"{voltage:.3f}")
-        self.ui.ch2_Current_edit.setPlainText(f"{current:.3f}")
+        QTimer.singleShot(0, lambda: (
+            self.ui.ch2_Power_edit.setPlainText(f"{power:.3f}"),
+            self.ui.ch2_Voltage_edit.setPlainText(f"{voltage:.3f}"),
+            self.ui.ch2_Current_edit.setPlainText(f"{current:.3f}")
+        ))
 
     @Slot(str)
     def update_mfc_pressure_ui(self, pressure_value):
-        self.ui.ch2_workingPressure_edit.setPlainText(pressure_value)
+        QTimer.singleShot(0, lambda: self.ui.ch2_workingPressure_edit.setPlainText(pressure_value))
 
     @Slot(str, float)
     def update_mfc_flow_ui(self, gas_name, flow_value):
-        if gas_name == "Ar":
-            self.ui.ch2_arFlow_edit.setPlainText(f"{flow_value:.1f}")
-        elif gas_name == "O2":
-            self.ui.ch2_o2Flow_edit.setPlainText(f"{flow_value:.1f}")
-        elif gas_name == "N2":
-            self.ui.ch2_n2Flow_edit.setPlainText(f"{flow_value:.1f}")
+        def _set():
+            t = f"{flow_value:.1f}"
+            if gas_name == "Ar": self.ui.ch2_arFlow_edit.setPlainText(t)
+            elif gas_name == "O2": self.ui.ch2_o2Flow_edit.setPlainText(t)
+            elif gas_name == "N2": self.ui.ch2_n2Flow_edit.setPlainText(t)
+        QTimer.singleShot(0, _set)
 
     def _on_process_status_changed(self, running: bool):
         self.ui.ch2_Start_button.setEnabled(not running)
-        self.ui.ch2_Stop_button.setEnabled(True)
+        self.ui.ch2_Stop_button.setEnabled(running)
 
     # ------------------------------------------------------------------
     # 파일 로딩 / 파라미터 UI 반영

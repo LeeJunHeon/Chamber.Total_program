@@ -427,13 +427,17 @@ class AsyncMFC:
             elif key == "PS_ZEROING":
                 # 게이지 제로잉: no-reply 전송 후 간단 검증(READ_PRESSURE로 동작 확인) 대신
                 # 상태 로그 + 확정 이벤트만 방출 (필요시 검증 루프 추가 가능)
-                self._enqueue(self._mk_cmd("PS_ZEROING"), None, allow_no_reply=True, tag="[PS_ZEROING]")
+                self._enqueue(self._mk_cmd("PS_ZEROING"), None, 
+                              allow_no_reply=True, tag="[PS_ZEROING]",
+                              gap_ms=MFC_GAP_MS)
                 await self._emit_status("압력 센서 Zeroing 명령 전송")
                 await self._emit_confirmed("PS_ZEROING")
 
             elif key == "MFC_ZEROING":
                 ch = _req("channel", int)
-                self._enqueue(self._mk_cmd("MFC_ZEROING", channel=ch), None, allow_no_reply=True, tag=f"[MFC_ZEROING ch{ch}]")
+                self._enqueue(self._mk_cmd("MFC_ZEROING", channel=ch), None, 
+                              allow_no_reply=True, tag=f"[MFC_ZEROING ch{ch}]",
+                              gap_ms=MFC_GAP_MS)
                 await self._emit_status(f"Ch{ch} MFC Zeroing 명령 전송")
                 await self._emit_confirmed("MFC_ZEROING")
 

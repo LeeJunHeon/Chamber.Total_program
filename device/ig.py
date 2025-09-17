@@ -189,11 +189,10 @@ class AsyncIG:
         self._waiting_active = False
         self._suspend_reignite = True
 
-        # 1) OFF를 최우선 보장
+        # 1) OFF direct-write 보장 + 짧은 드레인
         try:
-            sent = await self._send_off_best_effort(wait_gap_ms=250)
-            if not sent:
-                await self._emit_status("경고: IG OFF 전송 보장 실패(연결/포트 문제)")
+            _ = await self._send_off_best_effort(wait_gap_ms=400)
+            await self._drain_until_idle(timeout_ms=600)  # fallback enqueue 대비
         except Exception:
             pass
 
@@ -287,7 +286,7 @@ class AsyncIG:
         ok = await self._send_and_expect_ok("SIG 1", tag="[IG ON]", retries=5)
         if not ok:
             await self._emit_failed("IG ON 실패")
-            await self._sig0_off_ignore_reply()
+            await self._send_off_best_effort(wait_gap_ms=200)  # direct-write 경로 사용
             self._waiting_active = False
             return False
 
@@ -329,15 +328,16 @@ class AsyncIG:
         if self._polling_task:
             self._polling_task.cancel()
             self._polling_task = None
+
+        # ✅ 연결 유무와 무관하게 direct-write 보장 경로를 즉시 비동기로 실행
+        try:
+            asyncio.get_running_loop().create_task(self._send_off_best_effort(wait_gap_ms=300))
+        except RuntimeError:
+            # 루프가 없으면 최후수단으로라도 큐 경로
+            self.enqueue("SIG 0", on_reply=None, timeout_ms=IG_TIMEOUT_MS, gap_ms=150,
+                        tag="[IG OFF] SIG 0 (cancel-fallback)", retries_left=0, allow_no_reply=True)
+
         self._purge_pending("user cancel / stop")
-
-        # 우선 큐잉
-        self.enqueue("SIG 0", on_reply=None, timeout_ms=IG_TIMEOUT_MS, gap_ms=150,
-                    tag="[IG OFF] SIG 0 (cancel)", retries_left=0, allow_no_reply=True)
-
-        # 연결이 없으면 즉시 보장 경로로 한 번 쏘기 (fire-and-forget)
-        if not (self._connected and self._transport):
-            asyncio.create_task(self._send_off_best_effort(wait_gap_ms=200))
 
     async def events(self) -> AsyncGenerator[IGEvent, None]:
         """
@@ -666,51 +666,50 @@ class AsyncIG:
             return await asyncio.wait_for(fut, timeout=(timeout_ms / 1000.0) + 2.0)
         except asyncio.TimeoutError:
             return None
-
-    async def _sig0_off_ignore_reply(self):
-        """IG OFF(SIG 0)를 보내되 응답은 기다리지 않음."""
-        self.enqueue("SIG 0", on_reply=None, timeout_ms=IG_TIMEOUT_MS, gap_ms=150,
-                     tag="[IG OFF] SIG 0", retries_left=3, allow_no_reply=True)
         
-    async def _send_off_best_effort(self, wait_gap_ms: int = 200) -> bool:
+    async def _send_off_best_effort(self, wait_gap_ms: int = 300) -> bool:
         """
-        IG OFF(SIG 0)를 최대한 보장해서 보낸다.
-        - 연결(transport) 살아있으면: 워커 경유 allow_no_reply로 송신 → 잠깐 대기
-        - 연결이 없으면: blocking pyserial로 포트를 잠깐 열어 1회 송신 후 닫기
-        반환: 직렬 write까지 갔으면 True (하드웨어 수신 100% 단언 X)
+        IG OFF(SIG 0) 보장:
+        - 연결 O: 큐 우회, 직렬 포트에 직접 write(+flush) 후 짧게 대기
+        - 연결 X: 기존 blocking one-shot 유지
         """
-        # 1) 현재 연결 경로 사용
+        # 1) 연결 O : DIRECT write(+flush)
         if self._connected and self._transport:
-            self.enqueue("SIG 0", on_reply=None, timeout_ms=IG_TIMEOUT_MS, gap_ms=150,
-                        tag="[IG OFF] SIG 0 (transport)", retries_left=0, allow_no_reply=True)
-            await asyncio.sleep(max(0, wait_gap_ms) / 1000.0)
-            self._dbg("IG", "OFF delivered via transport path")
-            return True
+            try:
+                ser = getattr(self._transport, "serial", None)
+                if ser is not None:
+                    ser.write(b"SIG 0\r")
+                    ser.flush()
+                else:
+                    # 플랫폼에 따라 .serial이 없을 수 있으니 transport로라도 전송
+                    self._transport.write(b"SIG 0\r")
+                await asyncio.sleep(max(0, wait_gap_ms) / 1000.0)
+                await self._emit_status("IG OFF direct-write 전송 완료")
+                return True
+            except Exception as e:
+                await self._emit_status(f"IG OFF direct-write 실패: {e!r} → fallback enqueue")
+                # 마지막 안전망: 그래도 큐로 한 번은 시도
+                self.enqueue("SIG 0", on_reply=None, timeout_ms=IG_TIMEOUT_MS, gap_ms=150,
+                            tag="[IG OFF] SIG 0 (fallback enqueue)", retries_left=0, allow_no_reply=True)
+                await asyncio.sleep(max(0, wait_gap_ms) / 1000.0)
+                return True
 
-        # 2) 연결 없음 → blocking 한 번 쓰기
+        # 2) 연결 X : 기존 blocking one-shot 그대로 유지 (아래 현행 코드 유지)
         async def _do_blocking_off():
             def _blocking_off_once():
                 import serial, time as _t
                 with serial.Serial(IG_PORT, IG_BAUD, timeout=0.2, write_timeout=0.5) as ser:
-                    try:
-                        ser.reset_input_buffer()
-                    except Exception:
-                        pass
-                    try:
-                        ser.reset_output_buffer()
-                    except Exception:
-                        pass
-                    try:
-                        ser.dtr = True
-                    except Exception:
-                        pass
-                    try:
-                        ser.rts = False
-                    except Exception:
-                        pass
-                    ser.write(b"SIG 0\r")  # EOL 변경 없이 CR 그대로
+                    try: ser.reset_input_buffer()
+                    except Exception: pass
+                    try: ser.reset_output_buffer()
+                    except Exception: pass
+                    try: ser.dtr = True
+                    except Exception: pass
+                    try: ser.rts = False
+                    except Exception: pass
+                    ser.write(b"SIG 0\r")
                     ser.flush()
-                    _t.sleep(0.12)  # 드레인 여유
+                    _t.sleep(0.12)
             try:
                 await asyncio.to_thread(_blocking_off_once)
                 self._dbg("IG", "OFF delivered via blocking path (one-shot open/write/close)")
