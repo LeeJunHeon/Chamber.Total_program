@@ -4,7 +4,7 @@ import asyncio
 import json
 import ssl
 import urllib.request
-from typing import Optional, List, Dict, Any
+from typing import Optional, List, Dict, Any, Set
 
 
 class ChatNotifier(QObject):
@@ -25,7 +25,8 @@ class ChatNotifier(QObject):
 
         # 실행 컨텍스트
         self._last_started_params: Optional[dict] = None
-        self._errors: List[str] = []
+        self._errors: List[str] = []          # 누적 오류(집계용)
+        self._error_seen: Set[str] = set()    # 종료 리포트 중복 방지
         self._finished_sent: bool = False
 
         # 내부 상태
@@ -40,6 +41,8 @@ class ChatNotifier(QObject):
 
     def shutdown(self):
         """앱 종료 직전 호출. 버퍼를 스케줄하고 남은 태스크는 이벤트 루프가 처리."""
+        # 오류 집계 카드를 최신 상태로 반영해둔다
+        self._upsert_error_card()
         self.flush()
         try:
             loop = asyncio.get_running_loop()
@@ -91,8 +94,13 @@ class ChatNotifier(QObject):
 
     def flush(self):
         """버퍼에 쌓인 메시지를 모두 비동기 전송으로 스케줄(비차단)."""
+        if self._errors:
+            # flush 직전에 집계 카드 1장으로 정리
+            self._upsert_error_card()
+
         if not self._buffer:
             return
+
         pending = self._buffer[:]
         self._buffer.clear()
         for pl in pending:
@@ -131,6 +139,48 @@ class ChatNotifier(QObject):
             ]
         }
         self._post_json(payload, urgent=urgent)
+
+    # ----- 오류 집계 카드 전용 -----
+    def _remove_error_card_from_buffer(self):
+        """버퍼에서 기존 오류 집계 카드 제거."""
+        kept: List[dict] = []
+        for pl in self._buffer:
+            try:
+                cid = pl["cardsV2"][0].get("cardId")
+            except Exception:
+                cid = None
+            if cid != "error-aggregate":
+                kept.append(pl)
+        self._buffer = kept
+
+    def _upsert_error_card(self):
+        """누적된 self._errors를 한 장의 '장비 오류' 카드로 버퍼에 유지."""
+        # 기존 집계 카드는 제거
+        self._remove_error_card_from_buffer()
+        if not self._errors:
+            return
+
+        bullets = "<br>".join(f"• {e}" for e in self._errors)
+        widgets = [
+            {"textParagraph": {"text": "<b>❌ 장비 오류</b>"}},
+            {"textParagraph": {"text": f"{bullets}"}}
+        ]
+        payload = {
+            "cardsV2": [
+                {
+                    "cardId": "error-aggregate",   # ← 버퍼에서 식별/치환용
+                    "card": {
+                        "header": {"title": "Sputter Controller", "subtitle": "Status Notification"},
+                        "sections": [{"widgets": widgets}],
+                    },
+                }
+            ]
+        }
+        # 지연모드일 때만 버퍼에 올려두고, 즉시 모드면 바로 전송
+        if self._defer:
+            self._buffer.append(payload)
+        else:
+            self._schedule_post(payload)
 
     # ---------- 포맷 헬퍼 ----------
     def _b(self, params: dict, key: str) -> bool:
@@ -179,8 +229,9 @@ class ChatNotifier(QObject):
         # 실행 컨텍스트 초기화
         self._last_started_params = dict(params) if params else None
         self._errors.clear()
+        self._error_seen.clear()
         self._finished_sent = False
-        self._buffer.clear()
+        self._buffer.clear()  # 이전 집계 카드 등 모두 제거
 
         name = (params or {}).get("process_note") or (params or {}).get("Process_name") or "Untitled"
         guns = self._guns_and_targets(params or {})
@@ -233,14 +284,19 @@ class ChatNotifier(QObject):
                     fields = {"공정 이름": name, "원인": "알 수 없음"}
 
         self._post_card("공정 종료", subtitle, status, fields)
+
+        # 종료 카드와 함께 누적 오류 집계 카드 1장도 같이 나가도록 반영
+        self._upsert_error_card()
         self.flush()
         self._finished_sent = True
         self._errors.clear()
+        self._error_seen.clear()
 
     @Slot(bool)
     def notify_process_finished(self, ok: bool):
         # 상세 카드가 이미 나갔다면 중복 방지
         if self._finished_sent:
+            self._upsert_error_card()
             self.flush()
             return
         self._post_card(
@@ -248,8 +304,11 @@ class ChatNotifier(QObject):
             "SUCCESS" if ok else "FAIL",
             fields={"공정 이름": (self._last_started_params or {}).get("process_note", "Untitled")}
         )
+        self._upsert_error_card()
         self.flush()
         self._finished_sent = True
+        self._errors.clear()
+        self._error_seen.clear()
 
     @Slot(str)
     def notify_text(self, text: str):
@@ -257,12 +316,18 @@ class ChatNotifier(QObject):
 
     @Slot(str)
     def notify_error(self, reason: str):
-        pretty = reason or "unknown"
+        """개별 카드 생성 X → 내부 누적만, 집계 카드 1장으로 관리"""
+        pretty = (reason or "unknown").strip()
         self._errors.append(pretty)
-        self._post_card("장비 오류", pretty, "FAIL", urgent=False)
+        self._error_seen.add(pretty)
+        # 버퍼에 집계 카드 1장을 업데이트(치환)만 해둔다
+        self._upsert_error_card()
 
     @Slot(str, str)
     def notify_error_with_src(self, src: str, reason: str):
-        pretty = f"[{src}] {reason}" if src else (reason or "unknown")
+        """개별 카드 생성 X → 내부 누적만, 집계 카드 1장으로 관리"""
+        base = (reason or "unknown").strip()
+        pretty = f"[{src}] {base}" if src else base
         self._errors.append(pretty)
-        self._post_card("장비 오류", pretty, "FAIL", urgent=False)
+        self._error_seen.add(pretty)
+        self._upsert_error_card()

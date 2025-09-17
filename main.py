@@ -9,7 +9,7 @@ from pathlib import Path
 
 from PySide6.QtWidgets import QApplication, QWidget, QMessageBox, QFileDialog, QPlainTextEdit, QStackedWidget
 from PySide6.QtCore import QCoreApplication, Qt, QTimer, Slot
-from PySide6.QtGui import QTextCursor
+from PySide6.QtGui import QTextCursor, QCloseEvent
 from qasync import QEventLoop
 
 # === imports ===
@@ -87,8 +87,8 @@ class MainWindow(QWidget):
             request_status_read=self.faduino.force_rf_read,
         )
 
-        self._bg_started = False
-        self._bg_tasks = []
+        self._bg_started: bool = False
+        self._bg_tasks: list[asyncio.Task] = []
 
         # === Fadunio 버튼 맵핑 ===
         self._pin_to_name = {pin: name for name, pin in BUTTON_TO_PIN.items()}
@@ -577,7 +577,7 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
     # 백그라운 태스크 시작 함수
     # ------------------------------------------------------------------
-    def _ensure_background_started(self):
+    def _ensure_background_started(self) -> None:
         if self._bg_started:
             return
         # 혹시 남아있는 태스크가 있으면(이상 상태) 정리
@@ -909,6 +909,12 @@ class MainWindow(QWidget):
         self.request_stop_all(user_initiated=True)
 
     def request_stop_all(self, user_initiated: bool):
+        # 지연(step: delay N s/m/h) 예약 취소
+        try:
+            self._cancel_delay_timer()
+        except Exception:
+            pass
+
         # 이미 종료 절차가 진행 중이면 중복 요청 차단
         if getattr(self, "_pc_stopping", False):
             self.append_log("MAIN", "정지 요청 무시: 이미 종료 절차 진행 중")
@@ -930,7 +936,7 @@ class MainWindow(QWidget):
         # 1) 공정 종료만 지시 (11단계)
         self.process_controller.request_stop()
 
-    async def _stop_device_watchdogs(self, *, light: bool = False):
+    async def _stop_device_watchdogs(self, *, light: bool = False) -> None:
         """
         light=True : 폴링만 즉시 중지(연결은 유지, 포트 닫지 않음)
         light=False: 전체 정리(이벤트 펌프/워커/워치독 취소 + cleanup)
@@ -982,7 +988,7 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
     # 로그
     # ------------------------------------------------------------------
-    def append_log(self, source: str, msg: str):
+    def append_log(self, source: str, msg: str) -> None:
         now_ui = datetime.now().strftime("%H:%M:%S")
         now_file = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         line_ui = f"[{now_ui}] [{source}] {msg}"
@@ -1096,7 +1102,7 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
     # 종료/정리(단일 경로)
     # ------------------------------------------------------------------
-    def closeEvent(self, event):
+    def closeEvent(self, event: QCloseEvent) -> None:
         self.append_log("MAIN", "프로그램 창 닫힘 → 종료 절차 시작...")
         self._shutdown_once("closeEvent")
         event.accept()
@@ -1107,6 +1113,12 @@ class MainWindow(QWidget):
             return
         self._shutdown_called = True
         self.append_log("MAIN", f"종료 시퀀스({reason}) 시작")
+
+        # 종료 중 예약된 delay 타이머가 뒤늦게 시작되는 것 방지
+        try:
+            self._cancel_delay_timer()
+        except Exception:
+            pass
 
         # 1) Stop 요청(라이트 정지 + 종료 11단계)
         self.request_stop_all(user_initiated=False)

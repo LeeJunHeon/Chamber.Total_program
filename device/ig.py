@@ -175,13 +175,22 @@ class AsyncIG:
     # ---------------------------
     async def start(self):
         """워치독/커맨드 워커 시작. (연결은 워치독이 담당)"""
-        if self._watchdog_task or self._cmd_worker_task:
+        # 죽은 태스크 정리
+        if self._watchdog_task and self._watchdog_task.done():
+            self._watchdog_task = None
+        if self._cmd_worker_task and self._cmd_worker_task.done():
+            self._cmd_worker_task = None
+
+        if self._watchdog_task and self._cmd_worker_task:
             return
+        
         self._want_connected = True
         loop = asyncio.get_running_loop()
-        self._watchdog_task = loop.create_task(self._watchdog_loop(), name="IGWatchdog")
-        self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="IGCmdWorker")
-        await self._emit_status(f"IG 워치독/워커 시작")
+        if not self._watchdog_task:
+            self._watchdog_task = loop.create_task(self._watchdog_loop(), name="IGWatchdog")
+        if not self._cmd_worker_task:
+            self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="IGCmdWorker")
+        await self._emit_status("IG 워치독/워커 시작")
 
     async def cleanup(self):
         await self._emit_status("IG 종료 절차 시작")
@@ -267,6 +276,10 @@ class AsyncIG:
         시간 초과 시 SIG 0 후 False.
         (진행 중 이벤트는 events() 제너레이터로도 전달)
         """
+        if self._waiting_active:
+            await self._emit_status("이미 Base Pressure 대기 중입니다.")
+            return False
+
         # 워치독이 연결을 시도/유지
         if not self._watchdog_task:
             await self.start()
@@ -385,35 +398,39 @@ class AsyncIG:
         try:
             ser = getattr(transport, "serial", None)  # pyserial Serial 인스턴스
             if ser is not None:
-                try:
-                    ser.reset_input_buffer()
-                except Exception:
-                    pass
-                try:
-                    ser.reset_output_buffer()
-                except Exception:
-                    pass
-                # 기존 QSerialPort 설정과 동일하게
-                try:
-                    ser.dtr = True
-                except Exception:
-                    pass
-                try:
-                    ser.rts = False
-                except Exception:
-                    pass
+                try: ser.reset_input_buffer()
+                except Exception: pass
+                try: ser.reset_output_buffer()
+                except Exception: pass
+                try: ser.dtr = True
+                except Exception: pass
+                try: ser.rts = False
+                except Exception: pass
+        except Exception:
+            pass
+
+        # 라인 큐 비우기
+        try:
+            while True:
+                self._line_q.get_nowait()
         except Exception:
             pass
 
     def _on_connection_lost(self, exc: Optional[Exception]):
         self._connected = False
         if self._transport:
-            try:
-                self._transport.close()
-            except Exception:
-                pass
+            try: self._transport.close()
+            except Exception: pass
         self._transport = None
         self._protocol = None
+
+        # 라인 큐 비우기
+        try:
+            while True:
+                self._line_q.get_nowait()
+        except Exception:
+            pass
+
         self._dbg("IG", f"연결 끊김: {exc}")
         # 인플라이트 명령 재시도/취소 정책
         if self._inflight is not None:
@@ -462,6 +479,9 @@ class AsyncIG:
             self._dbg("IG", f"[SEND] {sent_txt} (tag={cmd.tag})")
 
             try:
+                # 직전 잔류 응답 드레인
+                await self._absorb_late_lines(30)
+
                 payload = cmd.cmd_str.encode("ascii")
                 self._transport.write(payload)
             except Exception as e:
@@ -537,6 +557,10 @@ class AsyncIG:
         """주기적 RDI 폴링."""
         try:
             while self._waiting_active:
+                if not self._connected:
+                    await asyncio.sleep(max(0.0, interval_ms / 1000.0))
+                    continue
+
                 # 타임아웃은 개별 명령에 부여
                 line = await self._send_and_wait_line("RDI", tag="[POLL RDI]", timeout_ms=IG_TIMEOUT_MS)
                 if not self._waiting_active:
@@ -649,23 +673,36 @@ class AsyncIG:
 
     async def _send_and_wait_line(self, cmd: str, *, tag: str, timeout_ms: int, retries: int = 1) -> Optional[str]:
         """
-        큐를 통해 cmd를 보내고 한 줄 응답을 기다린다(에코 스킵).
-        retries: 타임아웃 시 재시도 횟수(타임아웃에만 적용).
+        cmd를 큐로 보내고 한 줄 응답을 기다린다(에코 스킵).
+        재시도는 이 함수가 직접 수행하며, 워커에는 retries_left=0으로 넣는다.
         """
-        fut: asyncio.Future[Optional[str]] = asyncio.get_running_loop().create_future()
+        attempts = max(0, int(retries)) + 1
+        for attempt in range(attempts):
+            fut: asyncio.Future[Optional[str]] = asyncio.get_running_loop().create_future()
 
-        def _cb(line: Optional[str]):
-            if not fut.done():
-                fut.set_result(line)
+            def _cb(line: Optional[str]):
+                if not fut.done():
+                    fut.set_result(line)
 
-        self.enqueue(
-            cmd, _cb, timeout_ms=timeout_ms, gap_ms=IG_GAP_MS, tag=tag,
-            retries_left=max(0, int(retries)), allow_no_reply=False
-        )
-        try:
-            return await asyncio.wait_for(fut, timeout=(timeout_ms / 1000.0) + 2.0)
-        except asyncio.TimeoutError:
-            return None
+            # 워커 쪽 재시도는 끈다(retries_left=0)
+            self.enqueue(
+                cmd, _cb, timeout_ms=timeout_ms, gap_ms=IG_GAP_MS,
+                tag=tag, retries_left=0, allow_no_reply=False
+            )
+            try:
+                # 워커 타임아웃 + 약간의 마진(네고 가능)
+                return await asyncio.wait_for(fut, timeout=(timeout_ms / 1000.0) + 0.5)
+            except asyncio.TimeoutError:
+                # 마지막 시도가 아니면 연결을 닫아 워치독이 재연결하게 하고 재시도
+                if attempt < attempts - 1:
+                    if self._transport:
+                        try: self._transport.close()
+                        except Exception: pass
+                    self._connected = False
+                    await asyncio.sleep(0)  # 이벤트 루프 양보
+                    continue
+                # 모두 실패
+                return None
         
     async def _send_off_best_effort(self, wait_gap_ms: int = 300) -> bool:
         """
@@ -787,6 +824,9 @@ class AsyncIG:
         if self.debug_print:
             print(f"[{src}] {msg}")
 
+    # ---------------------------
+    # 내부: 유틸
+    # ---------------------------
     async def _drain_until_idle(self, timeout_ms: int = 300):
         """_inflight이 비고 큐가 빌 때까지 잠깐 대기(상한 시간 내)."""
         deadline = time.monotonic() + max(0, timeout_ms) / 1000.0
@@ -794,3 +834,17 @@ class AsyncIG:
             if self._inflight is None and not self._cmd_q:
                 break
             await asyncio.sleep(0.01)
+
+    async def _absorb_late_lines(self, budget_ms: int = 40):
+        """짧게 라인 큐를 비워 이전 명령의 늦은 응답/에코가 다음 명령에 섞이는 것을 방지."""
+        deadline = time.monotonic() + max(0, budget_ms) / 1000.0
+        drained = 0
+        while time.monotonic() < deadline:
+            try:
+                _ = self._line_q.get_nowait()
+                drained += 1
+            except asyncio.QueueEmpty:
+                await asyncio.sleep(0.005)
+        if drained and self.debug_print:
+            print(f"[IG] absorbed {drained} stale lines")
+
