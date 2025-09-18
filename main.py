@@ -1,7 +1,7 @@
 # main.py
 # -*- coding: utf-8 -*-
 import re, csv, sys, traceback, asyncio
-from typing import Optional, TypedDict, Mapping, Any, Coroutine, Callable, Literal, Sequence
+from typing import Optional, TypedDict, Mapping, Any, Coroutine, Callable, Literal, Sequence, Deque
 from datetime import datetime
 from pathlib import Path
 from collections import deque
@@ -31,10 +31,101 @@ from device.rf_pulse import RFPulseAsync
 from controller.process_ch2 import ProcessController
 
 from lib.config_ch2 import (
-    CHAT_WEBHOOK_URL, ENABLE_CHAT_NOTIFY, RGA_PROGRAM_PATH, RGA_CSV_PATH, BUTTON_TO_PIN,
+    CHAT_WEBHOOK_URL, ENABLE_CHAT_NOTIFY, BUTTON_TO_PIN,
     IG_RECONNECT_BACKOFF_MAX_MS, FADUINO_RECONNECT_BACKOFF_MAX_MS,
     MFC_RECONNECT_BACKOFF_MAX_MS, RFPULSE_RECONNECT_BACKOFF_MAX_MS,
 )
+
+RawParams = TypedDict('RawParams', {
+    # 파일/CSV 및 내부 공용 키 (대부분 Optional 취급; total=False 덕분에 부분 딕셔너리 허용)
+    'Process_name': str,
+    'process_note': str,
+
+    'base_pressure': float | str,
+    'working_pressure': float | str,
+    'process_time': float | str,
+    'shutter_delay': float | str,
+    'integration_time': int | str,
+
+    'Ar': Literal['T','F'] | bool,
+    'O2': Literal['T','F'] | bool,
+    'N2': Literal['T','F'] | bool,
+    'Ar_flow': float | str,
+    'O2_flow': float | str,
+    'N2_flow': float | str,
+
+    'use_dc_power': Literal['T','F'] | bool,
+    'use_rf_power': Literal['T','F'] | bool,
+    'use_rf_pulse': Literal['T','F'] | bool,
+    'use_rf_pulse_power': Literal['T','F'] | bool,
+    'dc_power': float | str,
+    'rf_power': float | str,
+    'rf_pulse_power': float | str,
+    'rf_pulse_freq': int | str | None,
+    'rf_pulse_duty_cycle': int | str | None,
+
+    'gun1': Literal['T','F'] | bool,
+    'gun2': Literal['T','F'] | bool,
+    'gun3': Literal['T','F'] | bool,
+    'main_shutter': Literal['T','F'] | bool,
+
+    # ★ CSV/로그에 쓰이는 공백 포함 키(그대로 둬야 함)
+    'G1 Target': str,
+    'G2 Target': str,
+    'G3 Target': str,
+
+    'power_select': Literal['T','F'] | bool,
+}, total=False)
+
+
+NormParams = TypedDict('NormParams', {
+    # 실행에 필요한 정규화 파라미터(숫자/불리언 확정)
+    'base_pressure': float,
+    'working_pressure': float,
+    'process_time': float,
+    'shutter_delay': float,
+    'integration_time': int,
+
+    'use_ar': bool,
+    'use_o2': bool,
+    'use_n2': bool,
+    'ar_flow': float,
+    'o2_flow': float,
+    'n2_flow': float,
+
+    'use_dc_power': bool,
+    'dc_power': float,
+    'use_rf_power': bool,
+    'rf_power': float,
+    'use_rf_pulse': bool,
+    'rf_pulse_power': float,
+    'rf_pulse_freq': int | None,
+    'rf_pulse_duty': int | None,
+
+    'use_g1': bool,
+    'use_g2': bool,
+    'use_g3': bool,
+    'use_ms': bool,
+
+    'process_note': str,
+
+    # 내부에서 쓰는 식별자 키(언더스코어)와
+    'G1_target_name': str,
+    'G2_target_name': str,
+    'G3_target_name': str,
+
+    # ★ DataLogger/CSV 호환을 위한 공백 포함 별칭도 함께 둠
+    'G1 Target': str,
+    'G2 Target': str,
+    'G3 Target': str,
+
+    'use_power_select': bool,
+}, total=False)
+
+# 자주 쓰는 맵/타깃 타입 별칭
+ParamsMap = Mapping[str, Any]
+TargetsMap = Mapping[Literal["mfc", "faduino", "rfpulse"], bool]
+
 
 class MainWindow(QWidget):
     def __init__(self, loop: asyncio.AbstractEventLoop | None = None):
@@ -44,8 +135,8 @@ class MainWindow(QWidget):
         self._loop = loop or asyncio.get_event_loop()
 
         # --- 스택 및 페이지 매핑 (UI 객체명 고정)
-        self._stack = self.ui.stackedWidget
-        self._pages = {
+        self._stack: QStackedWidget = self.ui.stackedWidget
+        self._pages: dict[str, QWidget] = {
             "pc":  self.ui.page_3,  # Plasma Cleaning
             "ch1": self.ui.page,    # CH1
             "ch2": self.ui.page_2,  # CH2
@@ -56,49 +147,48 @@ class MainWindow(QWidget):
             edit.setTabChangesFocus(True)
 
         self._set_default_ui_values()
-        self.process_queue = []
-        self.current_process_index = -1
-        self._shutdown_called = False
+        self.process_queue: list[RawParams] = []
+        self.current_process_index: int = -1
+        self._shutdown_called: bool = False
         self._delay_task: Optional[asyncio.Task] = None
         self._force_cleanup_task: Optional[asyncio.Task] = None
 
         # === 컨트롤러 (메인 스레드에서 생성) ===
-        self.graph_controller = GraphController(self.ui.ch2_rgaGraph_widget, self.ui.ch2_oesGraph_widget)
-        self.data_logger = DataLogger()
+        self.graph_controller: GraphController = GraphController(self.ui.ch2_rgaGraph_widget, self.ui.ch2_oesGraph_widget)
+        self.data_logger: DataLogger = DataLogger()
 
         # === 비동기 장치 ===
-        self.faduino = AsyncFaduino()
-        self.mfc = AsyncMFC()
-        self.ig = AsyncIG()
-        self.rf_pulse = RFPulseAsync()
-        self.oes = OESAsync()
-        self.rga = RGAAsync()
-        self.dc_power = DCPowerAsync(
+        self.faduino: AsyncFaduino = AsyncFaduino()
+        self.mfc: AsyncMFC = AsyncMFC()
+        self.ig: AsyncIG = AsyncIG()
+        self.rf_pulse: RFPulseAsync = RFPulseAsync()
+        self.oes: OESAsync = OESAsync()
+        self.rga: RGAAsync = RGAAsync()
+        self.dc_power: DCPowerAsync = DCPowerAsync(
             send_dc_power=self.faduino.set_dc_power,
             send_dc_power_unverified=self.faduino.set_dc_power_unverified,
             request_status_read=self.faduino.force_dc_read,
         )
-        self.rf_power = RFPowerAsync(
+        self.rf_power: RFPowerAsync = RFPowerAsync(
             send_rf_power=self.faduino.set_rf_power,
             send_rf_power_unverified=self.faduino.set_rf_power_unverified,
             request_status_read=self.faduino.force_rf_read,
         )
 
         self._advancing: bool = False
-
         self._bg_started: bool = False
-        self._bg_tasks: list[asyncio.Task] = []
+        self._bg_tasks: list[asyncio.Task[Any]] = []
 
         # === Fadunio 버튼 맵핑 ===
-        self._pin_to_name = {pin: name for name, pin in BUTTON_TO_PIN.items()}
+        self._pin_to_name: dict[int, str] = {pin: name for name, pin in BUTTON_TO_PIN.items()}
 
         # === Google Chat 알림(옵션) ===
-        self.chat_notifier = ChatNotifier(CHAT_WEBHOOK_URL) if ENABLE_CHAT_NOTIFY else None
+        self.chat_notifier: ChatNotifier | None = ChatNotifier(CHAT_WEBHOOK_URL) if ENABLE_CHAT_NOTIFY else None
         if self.chat_notifier:
             self.chat_notifier.start()
 
         # === 폴링 데이터 로그창 출력 여부 ===
-        self._verbose_polling_log = True  # 필요시 UI 토글로 바꿔도 됨
+        self._verbose_polling_log: bool = True  # 필요시 UI 토글로 바꿔도 됨
 
         # === ProcessController 콜백 주입 (동기 함수 내부에서 코루틴 스케줄) ===
         def cb_faduino(cmd: str, arg):
@@ -179,17 +269,23 @@ class MainWindow(QWidget):
         self.ui.ch2_logMessage_edit.setMaximumBlockCount(2000)
 
         # 고정 로그 폴더 (UNC)
-        self._log_dir = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs")
+        self._log_dir: Path = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs")
         try:
             self._log_dir.mkdir(parents=True, exist_ok=True)  # 폴더 없으면 생성 시도
         except Exception:
             pass
 
         # Start 전에는 파일 미정
-        self._log_file_path = None
+        self._log_file_path: Path | None = None
 
         # ✅ Start 전 로그를 임시로 쌓아둘 버퍼(최근 1000줄)
-        self._prestart_buf = deque(maxlen=1000)
+        self._prestart_buf: Deque[str] = deque(maxlen=1000)
+
+        # 선택적으로 쓰는 내부 상태 캐시들 초기화
+        self._last_polling_targets: dict[str, bool] | None = None
+        self._last_state_text: str | None = None
+        self._pc_stopping: bool = False
+        self._pending_device_cleanup: bool = False
 
         # # 앱 종료 훅
         # app = QCoreApplication.instance()
@@ -205,7 +301,7 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
     # UI 버튼 연결만 유지 (컨트롤러 ↔ UI는 이벤트 큐로 처리)
     # ------------------------------------------------------------------
-    def _connect_ui_signals(self):
+    def _connect_ui_signals(self) -> None:
         self.ui.ch2_Start_button.clicked.connect(self._handle_start_clicked)
         self.ui.ch2_Stop_button.clicked.connect(self._handle_stop_clicked)
         self.ui.ch2_processList_button.clicked.connect(self._handle_process_list_clicked)
@@ -226,7 +322,7 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
     # Page 전환 함수
     # ------------------------------------------------------------------
-    def _switch_page(self, key: str):
+    def _switch_page(self, key: Literal["pc", "ch1", "ch2"]) -> None:
         """'pc' | 'ch1' | 'ch2' 키로 스택 페이지 전환"""
         page = self._pages.get(key)
         if not page:
@@ -636,7 +732,7 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
     # RGA dummy
     # ------------------------------------------------------------------
-    async def _do_rga_scan(self):
+    async def _do_rga_scan(self) -> None:
         await self.rga.scan_once() 
 
     # ------------------------------------------------------------------
@@ -677,14 +773,14 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
     # 표시/입력 관련
     # ------------------------------------------------------------------
-    def handle_rf_power_display(self, for_p, ref_p):
+    def handle_rf_power_display(self, for_p: float, ref_p: float) -> None:
         if for_p is None or ref_p is None:
             self.append_log("MAIN", "for.p, ref.p 값이 비어있습니다.")
             return
         self._soon(self.ui.ch2_forP_edit.setPlainText, f"{for_p:.2f}")
         self._soon(self.ui.ch2_refP_edit.setPlainText, f"{ref_p:.2f}")
 
-    def handle_dc_power_display(self, power, voltage, current):
+    def handle_dc_power_display(self, power: float, voltage: float, current: float) -> None:
         if power is None or voltage is None or current is None:
             self.append_log("MAIN", "power, voltage, current값이 비어있습니다.")
             return
@@ -702,14 +798,14 @@ class MainWindow(QWidget):
     #     elif gas_name == "O2": loop.call_soon(self.ui.ch2_o2Flow_edit.setPlainText, t)
     #     elif gas_name == "N2": loop.call_soon(self.ui.ch2_n2Flow_edit.setPlainText, t)
 
-    def _on_process_status_changed(self, running: bool):
+    def _on_process_status_changed(self, running: bool) -> None:
         self.ui.ch2_Start_button.setEnabled(not running)
         self.ui.ch2_Stop_button.setEnabled(True)
 
     # ------------------------------------------------------------------
     # 파일 로딩 / 파라미터 UI 반영
     # ------------------------------------------------------------------
-    def _handle_process_list_clicked(self, _checked: bool = False):
+    def _handle_process_list_clicked(self, _checked: bool = False) -> None:
         file_path, _ = QFileDialog.getOpenFileName(
             self, "프로세스 리스트 파일 선택", "", "CSV Files (*.csv);;All Files (*)"
         )
@@ -735,7 +831,7 @@ class MainWindow(QWidget):
         except Exception as e:
             self.append_log("File", f"파일 처리 중 오류 발생: {e}")
 
-    def _update_ui_from_params(self, params: dict):
+    def _update_ui_from_params(self, params: RawParams) -> None:
         if self.process_queue:
             total = len(self.process_queue)
             current = self.current_process_index + 1
@@ -786,7 +882,7 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
     # 자동 시퀀스 진행
     # ------------------------------------------------------------------
-    def _start_next_process_from_queue(self, was_successful: bool):
+    def _start_next_process_from_queue(self, was_successful: bool) -> None:
         if getattr(self, "_advancing", False):
             self.append_log("MAIN", "자동 진행 중복 호출 무시")
             return
@@ -822,11 +918,11 @@ class MainWindow(QWidget):
         finally:
             self._advancing = False
 
-    async def _start_process_later(self, params: dict, delay_s: float = 0.1):
+    async def _start_process_later(self, params: RawParams, delay_s: float = 0.1) -> None:
         await asyncio.sleep(delay_s)
         self._safe_start_process(self._normalize_params_for_process(params))
 
-    def _safe_start_process(self, params: dict):
+    def _safe_start_process(self, params: NormParams) -> None:
         if self.process_controller.is_running:
             self.append_log("MAIN", "경고: 이미 다른 공정이 실행 중이므로 새 공정을 시작하지 않습니다.")
             return
@@ -839,10 +935,9 @@ class MainWindow(QWidget):
         self._soon(QMessageBox.critical, self, title, text)
 
     # 2) async 함수 안의 모달 호출을 유틸로 교체
-    async def _start_after_preflight(self, params: dict):
+    async def _start_after_preflight(self, params: NormParams) -> None:
         try:
             self._ensure_background_started()
-            self.append_log("MAIN", "장비 연결 확인 중...")
 
             # 워치독 최대 백오프를 고려해 프리플라이트 대기시간을 동적 산정
             use_rf_pulse = bool(params.get("use_rf_pulse") or params.get("use_rf_pulse_power"))
@@ -883,17 +978,16 @@ class MainWindow(QWidget):
 
             self._start_next_process_from_queue(False)
 
-    async def _wait_device_connected(self, dev, name: str, timeout_s: float) -> bool:
+    async def _wait_device_connected(self, dev: object, name: str, timeout_s: float) -> bool:
         """장비 워치독이 포트를 실제로 열어 `_connected=True` 될 때까지 기다린다."""
         try:
             t0 = asyncio.get_running_loop().time()
         except RuntimeError:
             t0 = 0.0  # fallback
-        self.append_log(name, "연결 대기...")
         while True:
             try:
                 if bool(getattr(dev, "_connected", False)):
-                    self.append_log(name, "연결 확인")
+                    self.append_log(name, "연결 성공")
                     return True
             except Exception:
                 pass
@@ -906,7 +1000,7 @@ class MainWindow(QWidget):
                 return False
             await asyncio.sleep(0.05)
 
-    async def _preflight_connect(self, params: dict, timeout_s: float = 5.0) -> tuple[bool, list[str]]:
+    async def _preflight_connect(self, params: ParamsMap, timeout_s: float = 5.0) -> tuple[bool, list[str]]:
         """
         필수 장비가 `_connected=True`가 될 때까지 대기.
         - 기본 필수: Faduino, MFC, IG
@@ -1112,12 +1206,12 @@ class MainWindow(QWidget):
                 f"[Logger] 파일 기록 실패: {e}"
             )
 
-    def _append_log_to_ui(self, line: str):
+    def _append_log_to_ui(self, line: str) -> None:
         self.ui.ch2_logMessage_edit.moveCursor(QTextCursor.MoveOperation.End)
         self.ui.ch2_logMessage_edit.insertPlainText(line + "\n")
 
     # === [추가] 새 로그 파일을 프리플라이트 전에 준비 ===
-    def _prepare_log_file(self, params: dict):
+    def _prepare_log_file(self, params: ParamsMap) -> None:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._log_file_path = self._log_dir / f"{ts}.txt"
 
@@ -1139,7 +1233,7 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
     # 폴링/상태
     # ------------------------------------------------------------------
-    def _apply_polling_targets(self, targets: dict):
+    def _apply_polling_targets(self, targets: TargetsMap) -> None:
         # 백그라운드(워커/워치독) 기동 보장
         try:
             self._ensure_background_started()
@@ -1166,7 +1260,7 @@ class MainWindow(QWidget):
             self.append_log("RFPulse", f"폴링 토글 실패: {e}")
 
 
-    def _apply_process_state_message(self, message: str):
+    def _apply_process_state_message(self, message: str) -> None:
         # 같은 텍스트면 스킵(불필요한 repaint 방지)
         if getattr(self, "_last_state_text", None) == message:
             return
@@ -1229,7 +1323,7 @@ class MainWindow(QWidget):
             except Exception:
                 pass
 
-    def _clear_queue_and_reset_ui(self):
+    def _clear_queue_and_reset_ui(self) -> None:
         self.process_queue = []
         self.current_process_index = -1
         self._reset_ui_after_process()
@@ -1250,7 +1344,7 @@ class MainWindow(QWidget):
         event.accept()
         super().closeEvent(event)
 
-    def _shutdown_once(self, reason: str):
+    def _shutdown_once(self, reason: str) -> None:
         if self._shutdown_called:
             return
         self._shutdown_called = True
@@ -1289,7 +1383,7 @@ class MainWindow(QWidget):
         # 4) Qt 앱 종료는 cleanup 이후에 최종적으로 수행되므로 여기선 스케줄만
         self.append_log("MAIN", "종료 시퀀스 진행 중 (종료 11단계 대기)")
 
-    async def _fast_quit(self):
+    async def _fast_quit(self) -> None:
         # 0) 지연(step delay) 등 예약 취소 + 채팅 노티 중지
         self._cancel_delay_task()
         try:
@@ -1337,7 +1431,7 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
     # 입력 검증 / 파라미터 정규화 / delay 처리
     # ------------------------------------------------------------------
-    def _validate_single_run_inputs(self) -> dict | None:
+    def _validate_single_run_inputs(self) -> dict[str, Any] | None:
         # 건 선택
         use_g1 = self.ui.ch2_G1_checkbox.isChecked()
         use_g2 = self.ui.ch2_G2_checkbox.isChecked()
@@ -1475,7 +1569,7 @@ class MainWindow(QWidget):
             "use_power_select": self.ui.ch2_powerSelect_checkbox.isChecked(),
         }
 
-    def _normalize_params_for_process(self, raw: dict) -> dict:
+    def _normalize_params_for_process(self, raw: RawParams) -> NormParams:
         def tf(v): return str(v).strip().upper() in ("T", "TRUE", "1", "Y", "YES")
         def fget(key, default="0"):
             try:
@@ -1559,7 +1653,7 @@ class MainWindow(QWidget):
             # 종료/정지 시 취소되는 정상 경로
             pass
 
-    def _try_handle_delay_step(self, params: dict) -> bool:
+    def _try_handle_delay_step(self, params: ParamsMap) -> bool:
         name = str(params.get("Process_name") or params.get("process_note", "")).strip()
         if not name:
             return False
@@ -1586,12 +1680,12 @@ class MainWindow(QWidget):
         self._set_task_later("_delay_task", self._delay_sleep_then_continue(name, duration_s), name=f"Delay:{name}")
         return True
         
-    def _post_update_oes_plot(self, x, y) -> None:
+    def _post_update_oes_plot(self, x: Sequence[float], y: Sequence[float]) -> None:
         self._soon(self.graph_controller.update_oes_plot, x, y)
 
     # === 유틸 ===
     # 현재 태스크의 자식이 아닌 '루트 태스크'로 분리 생성
-    def _spawn_detached(self, coro, *, store: bool = False, name: str | None = None):
+    def _spawn_detached(self, coro: Coroutine[Any, Any, Any], *, store: bool = False, name: str | None = None) -> None:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -1603,7 +1697,7 @@ class MainWindow(QWidget):
         loop.call_soon(_create)
 
     # 나중에 생성될 태스크 핸들을 self.<attr>에 기록(지연 생성)
-    def _set_task_later(self, attr_name: str, coro, *, name: str | None = None):
+    def _set_task_later(self, attr_name: str, coro: Coroutine[Any, Any, Any], *, name: str | None = None) -> None:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -1614,7 +1708,7 @@ class MainWindow(QWidget):
         loop.call_soon(_create_and_set)
 
     # 콘솔 traceback 가로채서 append_log로만 남기기
-    def _install_exception_hooks(self):
+    def _install_exception_hooks(self) -> None:
         # 실행 중 루프가 있으면 그걸, 아니면 주입된 루프(self._loop) 사용
         try:
             target_loop = asyncio.get_running_loop()
@@ -1640,13 +1734,13 @@ class MainWindow(QWidget):
         sys.excepthook = excepthook
         target_loop.set_exception_handler(loop_exception_handler)
 
-    def _loop_from_anywhere(self):
+    def _loop_from_anywhere(self) -> asyncio.AbstractEventLoop:
         try:
             return asyncio.get_running_loop()
         except RuntimeError:
             return self._loop
 
-    def _soon(self, fn, *args, **kwargs):
+    def _soon(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
         self._loop_from_anywhere().call_soon(fn, *args, **kwargs)
 
 if __name__ == "__main__":
