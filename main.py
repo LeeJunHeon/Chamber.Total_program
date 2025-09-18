@@ -5,6 +5,7 @@ from typing import Optional, TypedDict, Mapping, Any, Coroutine, Callable, Liter
 from datetime import datetime
 from pathlib import Path
 from collections import deque
+import contextlib
 
 from PySide6.QtWidgets import QApplication, QWidget, QMessageBox, QFileDialog, QPlainTextEdit, QStackedWidget
 from PySide6.QtCore import QCoreApplication
@@ -21,8 +22,8 @@ from controller.chat_notifier import ChatNotifier
 from device.faduino import AsyncFaduino
 from device.ig import AsyncIG
 from device.mfc import AsyncMFC
-from device.rga import RGAAsync
 from device.oes import OESAsync
+from device.rga import RGAAsync
 from device.dc_power import DCPowerAsync
 from device.rf_power import RFPowerAsync
 from device.rf_pulse import RFPulseAsync
@@ -738,37 +739,37 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
     # 백그라운 태스크 시작 함수
     # ------------------------------------------------------------------
-    def _ensure_background_started(self) -> None:
-        if self._bg_started:
-            return
-        # 혹시 남아있는 태스크가 있으면(이상 상태) 정리
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = self._loop
+    def _ensure_task_alive(self, name: str, coro_factory: Callable[[], Coroutine[Any, Any, Any]]) -> None:
+        """이름으로 태스크가 살아있는지 확인하고 없으면 새로 띄움(중복 방지)."""
+        # 죽은 태스크는 리스트에서 제거
         self._bg_tasks = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done()]
         for t in self._bg_tasks:
-            loop.call_soon(t.cancel)  # 예약 취소만
+            try:
+                if t.get_name() == name and not t.done():
+                    return  # 이미 살아있음
+            except Exception:
+                pass
+        # 없으면 새로 생성
+        self._spawn_detached(coro_factory(), store=True, name=name)
 
-        # 기존 잔여 취소 예약 코드는 유지
-        self._bg_tasks = []
-        # ✅ 루프 콜백에서 루트 태스크로 생성 + 리스트에 보관
-        self._spawn_detached(self.faduino.start(), store=True, name="Faduino.start")
-        self._spawn_detached(self.mfc.start(),      store=True, name="MFC.start")
-        self._spawn_detached(self.ig.start(),       store=True, name="IG.start")
-        self._spawn_detached(self.rf_pulse.start(), store=True, name="RFPulse.start")
+    def _ensure_background_started(self) -> None:
+        # 언제 불려도 안전하게 "필수 태스크가 살아있음"을 보장
+        self._ensure_task_alive("Faduino.start", self.faduino.start)
+        self._ensure_task_alive("MFC.start",      self.mfc.start)
+        self._ensure_task_alive("IG.start",       self.ig.start)
+        self._ensure_task_alive("RFPulse.start",  self.rf_pulse.start)
 
-        self._spawn_detached(self._pump_faduino_events(), store=True, name="Pump.Faduino")
-        self._spawn_detached(self._pump_mfc_events(),     store=True, name="Pump.MFC")
-        self._spawn_detached(self._pump_ig_events(),      store=True, name="Pump.IG")
-        self._spawn_detached(self._pump_rga_events(),     store=True, name="Pump.RGA")
-        self._spawn_detached(self._pump_dc_events(),      store=True, name="Pump.DC")
-        self._spawn_detached(self._pump_rf_events(),      store=True, name="Pump.RF")
-        self._spawn_detached(self._pump_rfpulse_events(), store=True, name="Pump.RFPulse")
-        self._spawn_detached(self._pump_oes_events(),     store=True, name="Pump.OES")
-        self._spawn_detached(self._pump_pc_events(),      store=True, name="Pump.PC")
+        self._ensure_task_alive("Pump.Faduino",   self._pump_faduino_events)
+        self._ensure_task_alive("Pump.MFC",       self._pump_mfc_events)
+        self._ensure_task_alive("Pump.IG",        self._pump_ig_events)
+        self._ensure_task_alive("Pump.RGA",       self._pump_rga_events)
+        self._ensure_task_alive("Pump.DC",        self._pump_dc_events)
+        self._ensure_task_alive("Pump.RF",        self._pump_rf_events)
+        self._ensure_task_alive("Pump.RFPulse",   self._pump_rfpulse_events)
+        self._ensure_task_alive("Pump.OES",       self._pump_oes_events)
+        self._ensure_task_alive("Pump.PC",        self._pump_pc_events)
 
-        self._bg_started = True
+        self._bg_started = True  # 플래그는 호환을 위해 유지
 
     # ------------------------------------------------------------------
     # 표시/입력 관련
@@ -939,31 +940,29 @@ class MainWindow(QWidget):
         try:
             self._ensure_background_started()
 
-            # 워치독 최대 백오프를 고려해 프리플라이트 대기시간을 동적 산정
+            # 프리플라이트 동안 Start 비활성화(중복 클릭 방지)
+            self._on_process_status_changed(True)
+
+            # 타임아웃은 짧게 고정: RF Pulse 사용 시 10초, 아니면 8초
             use_rf_pulse: bool = bool(params.get("use_rf_pulse", False))
-            max_backoff_ms = max(
-                IG_RECONNECT_BACKOFF_MAX_MS,
-                FADUINO_RECONNECT_BACKOFF_MAX_MS,
-                MFC_RECONNECT_BACKOFF_MAX_MS,
-                (RFPULSE_RECONNECT_BACKOFF_MAX_MS if use_rf_pulse else 0),
-            )
-            timeout = max(5.0, max_backoff_ms / 1000.0 + 2.0)  # 여유 2초
+            timeout = 10.0 if use_rf_pulse else 8.0
             ok, failed = await self._preflight_connect(params, timeout_s=timeout)
 
             if not ok:
                 fail_list = ", ".join(failed) if failed else "알 수 없음"
                 self.append_log("MAIN", f"필수 장비 연결 실패: {fail_list} → 공정 시작 중단")
 
-                # ⬇️ 모달 직접 호출 금지 → 이벤트 루프 턴 넘긴 뒤 띄우기
                 self._post_critical(
                     "장비 연결 실패",
                     f"다음 장비 연결을 확인하지 못했습니다:\n - {fail_list}\n\n"
                     "케이블/전원/포트 설정을 확인한 뒤 다시 시도하세요."
                 )
+                # 실패 시 버튼 즉시 복구
+                self._on_process_status_changed(False)
                 self._start_next_process_from_queue(False)
                 return
             
-            # ✅ 추가: 전환 전 캐시 초기화
+            # ✅ 전환 전 캐시 초기화
             self._last_polling_targets = None
 
             self.append_log("MAIN", "장비 연결 확인 완료 → 공정 시작")
@@ -973,25 +972,22 @@ class MainWindow(QWidget):
             note = params.get("process_note", "알 수 없는")
             msg = f"오류: '{note}' 공정 시작에 실패했습니다. ({e})"
             self.append_log("MAIN", msg)
-
-            # ⬇️ 예외 케이스도 동일하게 비모달로
             self._post_critical("오류", msg)
-
             self._start_next_process_from_queue(False)
+            # 예외 시 버튼 복구
+            self._on_process_status_changed(False)
+
 
     async def _wait_device_connected(self, dev: object, name: str, timeout_s: float) -> bool:
-        """장비 워치독이 포트를 실제로 열어 `_connected=True` 될 때까지 기다린다."""
+        """장비 워치독이 실제로 붙을 때까지(공개 API 우선) 대기"""
         try:
             t0 = asyncio.get_running_loop().time()
         except RuntimeError:
-            t0 = 0.0  # fallback
+            t0 = 0.0
         while True:
-            try:
-                if bool(getattr(dev, "_connected", False)):
-                    self.append_log(name, "연결 성공")
-                    return True
-            except Exception:
-                pass
+            if self._is_dev_connected(dev):
+                self.append_log(name, "연결 성공")
+                return True
             try:
                 now = asyncio.get_running_loop().time()
             except RuntimeError:
@@ -999,14 +995,13 @@ class MainWindow(QWidget):
             if now - t0 >= timeout_s:
                 self.append_log(name, "연결 확인 실패(타임아웃)")
                 return False
-            await asyncio.sleep(0.05)
+            await asyncio.sleep(0.2)
 
-    async def _preflight_connect(self, params: ParamsMap, timeout_s: float = 5.0) -> tuple[bool, list[str]]:
+    async def _preflight_connect(self, params: ParamsMap, timeout_s: float = 8.0) -> tuple[bool, list[str]]:
         """
-        필수 장비가 `_connected=True`가 될 때까지 대기.
+        필수 장비 연결 대기.
         - 기본 필수: Faduino, MFC, IG
-        - 선택 필수: RF Pulse를 사용할 때만 RFPulse 포함
-        반환: (모두연결OK, 실패장비이름목록)
+        - 선택 필수: RF Pulse 사용 시 RFPulse 포함
         """
         need: list[tuple[str, object]] = [
             ("Faduino", self.faduino),
@@ -1020,13 +1015,23 @@ class MainWindow(QWidget):
         if use_rf_pulse:
             need.append(("RFPulse", self.rf_pulse))
 
-        # 병렬 대기
-        results = await asyncio.gather(
-            *[self._wait_device_connected(dev, name, timeout_s) for name, dev in need],
-            return_exceptions=False
-        )
+        # 진행 로그 태스크 시작
+        stop_evt = asyncio.Event()
+        prog_task = asyncio.create_task(self._preflight_progress_log(need, stop_evt))
+
+        try:
+            results = await asyncio.gather(
+                *[self._wait_device_connected(dev, name, timeout_s) for name, dev in need],
+                return_exceptions=False
+            )
+        finally:
+            stop_evt.set()
+            with contextlib.suppress(Exception):
+                await prog_task
+
         failed = [name for (name, _), ok in zip(need, results) if not ok]
         return (len(failed) == 0, failed)
+
 
     # ------------------------------------------------------------------
     # 단일 실행
@@ -1427,6 +1432,8 @@ class MainWindow(QWidget):
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
+        await asyncio.sleep(0.3)
+
         # 3) 앱 종료
         QCoreApplication.quit()
 
@@ -1744,6 +1751,35 @@ class MainWindow(QWidget):
 
     def _soon(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
         self._loop_from_anywhere().call_soon(fn, *args, **kwargs)
+
+    # === 연결 상태 판단: 공개 API 우선 ===
+    def _is_dev_connected(self, dev: object) -> bool:
+        try:
+            v = getattr(dev, "is_connected", None)
+            if callable(v):   # is_connected()
+                return bool(v())
+            if isinstance(v, bool):  # is_connected 프로퍼티
+                return v
+        except Exception:
+            pass
+        # fallback: 내부 플래그
+        try:
+            return bool(getattr(dev, "_connected", False))
+        except Exception:
+            return False
+
+    # === 프리플라이트 진행상황을 1초마다 로그로 출력 ===
+    async def _preflight_progress_log(self, need: list[tuple[str, object]], stop_evt: asyncio.Event) -> None:
+        try:
+            while not stop_evt.is_set():
+                missing = [name for name, dev in need if not self._is_dev_connected(dev)]
+                txt = ", ".join(missing) if missing else "모두 연결됨"
+                self.append_log("MAIN", f"연결 대기 중: {txt}")
+                await asyncio.wait_for(stop_evt.wait(), timeout=1.0)
+        except asyncio.TimeoutError:
+            pass  # 주기적 로그 지속
+        except Exception as e:
+            self.append_log("MAIN", f"프리플라이트 진행 로그 예외: {e!r}")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

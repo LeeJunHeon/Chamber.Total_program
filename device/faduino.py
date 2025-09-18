@@ -153,8 +153,8 @@ class AsyncFaduino:
         self._reconnect_backoff_ms = FADUINO_RECONNECT_BACKOFF_START_MS
 
         # 런타임 상태
-        self.expected_relay_mask = 0
-        self._is_first_poll = True
+        # self.expected_relay_mask = 0
+        # self._is_first_poll = True
         self._poll_cycle_active: bool = False
         self.is_rf_active = False
         self.is_dc_active = False
@@ -237,14 +237,15 @@ class AsyncFaduino:
         cmd = f"R,{pin},{1 if state else 0}"
         def on_reply(line: Optional[str], pin=pin, state=state):
             if (line or '').strip() == 'ACK_R':
-                if state: self.expected_relay_mask |= (1 << pin)
-                else:     self.expected_relay_mask &= ~(1 << pin)
-                self._ev_nowait(FaduinoEvent(kind="command_confirmed", cmd=f"R,{pin},{1 if state else 0}"))
+                # ★ 마스크 갱신/검증 삭제
+                self._ev_nowait(FaduinoEvent(kind="command_confirmed",
+                                            cmd=f"R,{pin},{1 if state else 0}"))
                 self._log_status_sync(f"Relay({pin}) → {'ON' if state else 'OFF'}")
             else:
                 self._ev_nowait(FaduinoEvent(kind="command_failed", cmd="R",
-                                             reason=f"Relay({pin}) 응답 불일치: {repr(line)}"))
-        self._enqueue(cmd, on_reply, timeout_ms=FADUINO_TIMEOUT_MS, gap_ms=FADUINO_GAP_MS, tag=f'[R {pin}]')
+                                            reason=f"Relay({pin}) 응답 불일치: {repr(line)}"))
+        self._enqueue(cmd, on_reply, timeout_ms=FADUINO_TIMEOUT_MS,
+                    gap_ms=FADUINO_GAP_MS, tag=f'[R {pin}]')
 
     async def set_rf_power(self, value: int):
         v = self._clamp_dac(value)
@@ -308,22 +309,21 @@ class AsyncFaduino:
             self._update_dc_sync(dc_p, dc_v, dc_c)
 
     async def force_pin_read(self):
-        line = await self._send_and_wait_line('P', tag='[FORCE P]', timeout_ms=FADUINO_TIMEOUT_MS)
-        p = self._parse_ok_and_compute(line or "")
-        if p and p.get("type") == "OK_P":
-            relay_mask = int(p["relay_mask"])
-            self._initial_sync_if_needed(relay_mask)
-            if relay_mask != self.expected_relay_mask:
-                await self._emit_status(
-                    f"[경고] 릴레이 상태 불일치! 예상 {self.expected_relay_mask}, 실제 {relay_mask}"
-                )
+        """이전: P 읽고 relay 불일치 경고. 
+        지금: 릴레이 확인 비활성화(NO-OP). 유지보수용으로 P만 한번 보내고 결과는 무시."""
+        try:
+            _ = await self._send_and_wait_line('P', tag='[FORCE P]',
+                                            timeout_ms=FADUINO_TIMEOUT_MS)
+        except Exception:
+            pass
+        return
 
     # ---- 폴링 on/off (Process와 연동) ----
     def set_process_status(self, should_poll: bool):
         """공정 시작/종료 시 폴링 제어."""
         if should_poll:
             if self._poll_task is None or self._poll_task.done():
-                self._is_first_poll = True
+                # self._is_first_poll = True   # ★ 삭제
                 self._poll_cycle_active = False
                 self._poll_task = asyncio.create_task(self._poll_loop())
         else:
@@ -331,8 +331,8 @@ class AsyncFaduino:
                 self._poll_task.cancel()
                 self._poll_task = None
             self._poll_cycle_active = False
-            # ✅ Qt 버전과 동일: 폴링 OFF 즉시 읽기 계열만 정리
             self._purge_reads_only(reason="polling off")
+
 
     def on_rf_state_changed(self, is_active: bool):
         self.is_rf_active = is_active
@@ -606,19 +606,20 @@ class AsyncFaduino:
         except asyncio.CancelledError:
             self._poll_cycle_active = False
 
-    def _handle_S_line_sync(self, line: Optional[str], rf_only: bool = False, dc_only: bool = False):
+    def _handle_S_line_sync(self, line: Optional[str],
+                            rf_only: bool = False, dc_only: bool = False):
         p = self._parse_ok_and_compute(line or "")
         if p and p.get("type") == "ERROR":
-            self._ev_nowait(FaduinoEvent(kind="command_failed", cmd="Faduino", reason=p.get("msg", "ERROR")))
+            self._ev_nowait(FaduinoEvent(kind="command_failed", cmd="Faduino",
+                                        reason=p.get("msg", "ERROR")))
             return
         if not p or p.get("type") != "OK_S":
             return
-        relay_mask = int(p["relay_mask"])
-        if self._initial_sync_if_needed(relay_mask):
-            pass
-        else:
-            if relay_mask != self.expected_relay_mask:
-                self._log_status_sync(f"[경고] 릴레이 상태 불일치! 예상 {self.expected_relay_mask}, 실제 {relay_mask}")
+
+        # ★ relay_mask 관련 초기 동기화/비교/경고 전부 제거
+        # if self._initial_sync_if_needed(...): pass
+        # else: if relay_mask != self.expected_relay_mask: 경고 ...  → 삭제
+
         if not dc_only and self.is_rf_active and "rf" in p:
             rf_for, rf_ref = p["rf"]
             self._update_rf_sync(rf_for, rf_ref)
@@ -732,13 +733,13 @@ class AsyncFaduino:
         self.dc_voltage, self.dc_current = dc_v, dc_c
         self._ev_nowait(FaduinoEvent(kind="dc_power", dc_p=dc_p, dc_v=dc_v, dc_c=dc_c))
 
-    def _initial_sync_if_needed(self, relay_mask: int) -> bool:
-        if self._is_first_poll:
-            self.expected_relay_mask = int(relay_mask)
-            self._is_first_poll = False
-            self._log_status_sync(f"초기 릴레이 상태 동기화 완료: {relay_mask}")
-            return True
-        return False
+    # def _initial_sync_if_needed(self, relay_mask: int) -> bool:
+    #     if self._is_first_poll:
+    #         self.expected_relay_mask = int(relay_mask)
+    #         self._is_first_poll = False
+    #         self._log_status_sync(f"초기 릴레이 상태 동기화 완료: {relay_mask}")
+    #         return True
+    #     return False
 
     # ---------- 내부: 유틸 ----------
     def _clamp_dac(self, value: int) -> int:
