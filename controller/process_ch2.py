@@ -670,16 +670,28 @@ class ProcessController:
         active = bool(active)
         targets = self._compute_polling_targets(active)
 
-        # 변화 없으면 아무 것도 내보내지 않음(노이즈 제거)
-        if self._last_polling_active == active and self._last_polling_targets == targets:
-            return
+        prev_active = self._last_polling_active
+        prev_targets = self._last_polling_targets
 
-        # 캐시 갱신 후, 실제로 바뀌었을 때만 이벤트 발생
-        self._last_polling_active = active
-        self._last_polling_targets = dict(targets)
+        state_changed = (prev_active != active)
+        targets_changed = (prev_targets != targets)
 
-        self._emit(PCEvent("polling", {"active": active}))
-        self._emit(PCEvent("polling_targets", {"targets": targets}))
+        # === 로그: '상태 변화'에만 1회 출력(타깃 변화는 로그 X) ===
+        if state_changed:
+            if active:
+                # 처음 켜질 때도 로그 나오게(prev_active가 None이어도)
+                self._emit_log("Process", "폴링 시작")
+            else:
+                # 초기 상태(None)→False로 들어오는 첫 호출은 로그 생략
+                if prev_active is not None:
+                    self._emit_log("Process", "폴링 중지")
+
+        # === 이벤트: 상태/타깃 중 하나라도 바뀌면 UI로 알림 ===
+        if state_changed or targets_changed:
+            self._last_polling_active = active
+            self._last_polling_targets = dict(targets)
+            self._emit(PCEvent("polling", {"active": active}))
+            self._emit(PCEvent("polling_targets", {"targets": targets}))
 
     def _compute_polling_targets(self, active: bool) -> Dict[str, bool]:
         if not active:
@@ -703,6 +715,9 @@ class ProcessController:
 
         self._shutdown_in_progress = True
         self._emit_log("Process", "정지 요청 - 안전한 종료 절차를 시작합니다.")
+    
+        # ⬇️ 폴링 즉시 OFF (로그는 1회만 출력됨)
+        self._apply_polling(False)
 
         # ✅ 모든 대기 즉시 중단
         self._abort_evt.set()

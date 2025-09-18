@@ -388,10 +388,6 @@ class MainWindow(QWidget):
 
                     # 실제 장치 토글
                     self._apply_polling_targets(targets)
-
-                    # (기존 로그 유지)
-                    self.append_log("Process", f"폴링 {'ON' if active else 'OFF'}")
-
                 else:
                     # 미지정 이벤트도 안전하게 무시/로그
                     self.append_log("MAIN", f"알 수 없는 PC 이벤트 수신: {kind} {payload}")
@@ -1111,19 +1107,16 @@ class MainWindow(QWidget):
 
         try:
             self.mfc.set_process_status(mfc_on)
-            self.append_log("MFC", f"폴링 {'시작' if mfc_on else '중지'}")
         except Exception as e:
             self.append_log("MFC", f"폴링 토글 실패: {e}")
 
         try:
             self.faduino.set_process_status(fadu_on)
-            self.append_log("Faduino", f"폴링 {'시작' if fadu_on else '중지'}")
         except Exception as e:
             self.append_log("Faduino", f"폴링 토글 실패: {e}")
 
         try:
             self.rf_pulse.set_process_status(rfp_on)
-            self.append_log("RFPulse", f"폴링 {'시작' if rfp_on else '중지'}")
         except Exception as e:
             self.append_log("RFPulse", f"폴링 토글 실패: {e}")
 
@@ -1230,10 +1223,11 @@ class MainWindow(QWidget):
                 self._pc_stopping = False
                 asyncio.get_running_loop().call_soon(QCoreApplication.quit)
 
-        # 이전 타스크 취소 후 새로 스케줄
+        # 이전 태스크 취소 후 새로 스케줄
         if self._force_cleanup_task and not self._force_cleanup_task.done():
             self._force_cleanup_task.cancel()
-        self._force_cleanup_task = asyncio.create_task(_force_cleanup_after(10.0))
+        # ✅ 종료 스텝 확인 타임아웃(예: 2.5s) × 여러 스텝 고려 → 약 30s 권장
+        self._force_cleanup_task = asyncio.create_task(_force_cleanup_after(30.0))
 
         # 3) Chat Notifier 정지 등 부가 정리는 유지
         try:
