@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from enum import Enum
 from time import monotonic_ns
 from typing import Optional, List, Tuple, Dict, Any, Callable
+from lib.config_ch2 import SHUTDOWN_STEP_TIMEOUT_MS, SHUTDOWN_STEP_GAP_MS
 
 
 # =========================
@@ -478,16 +479,25 @@ class ProcessController:
                     fut = self._set_expect(tokens)
                     if fut is not None:
                         try:
-                            # ✅ abort와 경쟁
-                            aborted = await self._wait_or_abort(fut)
-                            if aborted:
-                                if self._expect_group:
-                                    self._expect_group.cancel("abort")
-                                    self._expect_group = None
-                                continue  # 종료 시퀀스로 넘어가게 루프 계속
+                            if self._shutdown_in_progress:
+                                # ✅ 종료 시퀀스: abort 무시 + 타임아웃
+                                try:
+                                    await asyncio.wait_for(fut, timeout=max(0.001, SHUTDOWN_STEP_TIMEOUT_MS) / 1000.0)
+                                except asyncio.TimeoutError:
+                                    self._emit_log("Process", "종료(병렬) 스텝 확인 시간 초과 → 다음으로")
+                                # 병렬 블록 이후도 간격 보장
+                                if SHUTDOWN_STEP_GAP_MS > 0:
+                                    await asyncio.sleep(SHUTDOWN_STEP_GAP_MS / 1000.0)
+                            else:
+                                # 평시: abort와 경쟁
+                                aborted = await self._wait_or_abort(fut, allow_abort=not self._in_emergency)
+                                if aborted:
+                                    if self._expect_group:
+                                        self._expect_group.cancel("abort")
+                                        self._expect_group = None
+                                    continue
                         except asyncio.CancelledError:
                             continue
-
                 else:
                     # 단일 스텝
                     self._apply_polling(step.polling)
@@ -510,21 +520,31 @@ class ProcessController:
 
         tokens = self._send_and_collect_tokens(step)
         if step.no_wait or not tokens:
-            # 즉시 진행
             return
+
         fut = self._set_expect(tokens)
         if fut is not None:
             try:
-                # ✅ abort와 경쟁
-                aborted = await self._wait_or_abort(fut)
-                if aborted:
-                    # 대기 중단/교체 처리
-                    if self._expect_group:
-                        self._expect_group.cancel("abort")
-                        self._expect_group = None
-                    return
+                if self._shutdown_in_progress:
+                    # ✅ 종료 시퀀스: abort 무시 + 타임아웃 대기
+                    try:
+                        await asyncio.wait_for(fut, timeout=max(0.001, SHUTDOWN_STEP_TIMEOUT_MS) / 1000.0)
+                    except asyncio.TimeoutError:
+                        self._emit_log("Process", "종료 스텝 확인 시간 초과 → 다음 스텝 진행")
+                else:
+                    # 평시: abort와 경쟁(비상 상황이면 abort 무시하지 않고 즉시 전환)
+                    aborted = await self._wait_or_abort(fut, allow_abort=not self._in_emergency)
+                    if aborted:
+                        if self._expect_group:
+                            self._expect_group.cancel("abort")
+                            self._expect_group = None
+                        return
             except asyncio.CancelledError:
                 return
+
+        # ✅ 종료 시퀀스일 때는 스텝 간 최소 간격 보장
+        if self._shutdown_in_progress and SHUTDOWN_STEP_GAP_MS > 0:
+            await asyncio.sleep(SHUTDOWN_STEP_GAP_MS / 1000.0)
 
     def _send_and_collect_tokens(self, step: ProcessStep) -> List[ExpectToken]:
         a = step.action
@@ -611,11 +631,11 @@ class ProcessController:
         self._countdown_task = asyncio.create_task(self._countdown_loop())
 
         try:
-            aborted = await self._sleep_or_abort(duration_ms / 1000.0)
+            allow_abort = not self._shutdown_in_progress and not self._in_emergency
+            aborted = await self._sleep_or_abort(duration_ms / 1000.0, allow_abort=allow_abort)
             if aborted:
-                # [추가] 카운트다운 중단 로그 1회
                 self._emit_log("Process", f"{self._countdown_base_msg} 중단됨")
-                return  # ✅ 즉시 복귀 (러너가 종료 시퀀스로 전환됨)
+                return
             # [추가] 카운트다운 정상 완료 로그 1회
             self._emit_log("Process", f"{self._countdown_base_msg} 완료")
         finally:
@@ -686,6 +706,7 @@ class ProcessController:
 
         # ✅ 모든 대기 즉시 중단
         self._abort_evt.set()
+        self._abort_evt = asyncio.Event()     # ✅ 종료 시퀀스용 새 abort 이벤트
 
         # ✅ IG 폴링/재점등을 즉시 중단 (SIG 0 전송은 IG 내부에서 응답 무시로 처리)
         try:
@@ -1192,33 +1213,31 @@ class ProcessController:
             t.cancel()
         self._elapsed_task = None
 
-    async def _wait_or_abort(self, coro: asyncio.Future | asyncio.Task | asyncio.coroutines.CoroWrapper) -> bool:
+    async def _wait_or_abort(self, awaitable, *, allow_abort: bool = True) -> bool:
         """
-        주어진 awaitable과 self._abort_evt.wait() 중 먼저 끝나는 쪽을 따른다.
-        반환값: True면 'abort가 먼저 왔다'는 뜻(즉시 상위 로직은 중단/종료 전환).
+        allow_abort=False면 abort 신호를 무시하고 awaitable이 끝날 때까지 기다린다.
+        반환값: True면 'abort가 먼저 왔다'는 뜻.
         """
-        a = asyncio.create_task(coro) if not isinstance(coro, (asyncio.Task, asyncio.Future)) else coro
+        if not allow_abort:
+            await awaitable
+            return False
+
+        a = asyncio.create_task(awaitable) if not isinstance(awaitable, (asyncio.Task, asyncio.Future)) else awaitable
         b = asyncio.create_task(self._abort_evt.wait())
         done, pending = await asyncio.wait({a, b}, return_when=asyncio.FIRST_COMPLETED)
-        # 나머지 취소
         for p in pending:
             p.cancel()
-        if b in done:  # abort 우선
-            # 외부 대기 중이던 항목(토큰 대기 등)은 취소해 준다
+        if b in done:
             try:
                 a.cancel()
             except Exception:
                 pass
             return True
-        # 정상 완료
         return False
 
-    async def _sleep_or_abort(self, seconds: float) -> bool:
-        """
-        sleep(seconds)와 abort 이벤트를 경쟁. 
-        반환값: True면 abort가 먼저 발생.
-        """
-        return await self._wait_or_abort(asyncio.sleep(max(0.0, seconds)))
+    async def _sleep_or_abort(self, seconds: float, *, allow_abort: bool = True) -> bool:
+        return await self._wait_or_abort(asyncio.sleep(max(0.0, seconds)), allow_abort=allow_abort)
+
 
 
 

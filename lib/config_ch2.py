@@ -16,6 +16,10 @@ ENABLE_CHAT_NOTIFY  = True  # 끄고 싶을 때 False
 # === 디버그 프린트 여부 ===
 DEBUG_PRINT = False
 
+# ===== 종료 시퀀스 대기 정책(필요시 조정) =====
+SHUTDOWN_STEP_TIMEOUT_MS = 2500   # 각 종료 스텝의 '확인 대기' 최대 시간
+SHUTDOWN_STEP_GAP_MS     = 500    # 종료 스텝 간 최소 간격(물리 반영 시간)
+
 # === 시리얼 포트 설정 ===
 IG_PORT = "COM11"
 IG_BAUD = 9600
