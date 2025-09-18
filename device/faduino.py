@@ -88,17 +88,22 @@ class _FaduinoProtocol(asyncio.Protocol):
             del self._rx[:-self._RX_MAX]
             self.owner._dbg("Faduino", f"수신 버퍼 과다(RX>{self._RX_MAX}); 최근 {self._RX_MAX}B만 보존.")
 
-        while True:
+        processed = 0
+        MAX_LINES_PER_CALL = 64  # 과도한 점유 방지용 가드
+
+        while processed < MAX_LINES_PER_CALL:
             i_cr = self._rx.find(b'\r')
             i_lf = self._rx.find(b'\n')
             if i_cr == -1 and i_lf == -1:
-                break
+                break  # 더 이상 완결 라인이 없음
+
             idx = i_cr if i_lf == -1 else (i_lf if i_cr == -1 else min(i_cr, i_lf))
             line_bytes = self._rx[:idx]
 
             drop = idx + 1
             if drop < len(self._rx):
-                ch = self._rx[idx]; nxt = self._rx[idx+1]
+                ch = self._rx[idx]
+                nxt = self._rx[idx + 1]
                 if (ch == 13 and nxt == 10) or (ch == 10 and nxt == 13):
                     drop += 1
             del self._rx[:drop]
@@ -114,8 +119,10 @@ class _FaduinoProtocol(asyncio.Protocol):
 
             if line:
                 self.owner._on_line_from_serial(line)
-                break
+                processed += 1
+                continue  # ← 다음 완결 라인 계속 처리
 
+        # 남은 단독 CR/LF는 정리
         while self._rx[:1] in (b'\r', b'\n'):
             del self._rx[0:1]
 

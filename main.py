@@ -8,7 +8,7 @@ from collections import deque
 import contextlib
 
 from PySide6.QtWidgets import QApplication, QWidget, QMessageBox, QFileDialog, QPlainTextEdit, QStackedWidget
-from PySide6.QtCore import QCoreApplication
+from PySide6.QtCore import QCoreApplication, QTimer
 from PySide6.QtGui import QTextCursor, QCloseEvent
 from qasync import QEventLoop
 
@@ -240,6 +240,7 @@ class MainWindow(QWidget):
                         use_rf_pulse = bool(params.get("use_rf_pulse", False))
                         targets = {"mfc": True, "faduino": (not use_rf_pulse), "rfpulse": use_rf_pulse}
                     self._apply_polling_targets(targets)
+
                     asyncio.get_running_loop().call_soon(self.graph_controller.clear_oes_plot)
                     await self.oes.run_measurement(duration_sec, integration_ms)
                 except Exception as e:
@@ -715,7 +716,8 @@ class MainWindow(QWidget):
                         y = getattr(ev, "intensities", getattr(ev, "counts", None))
 
                     if x is not None and y is not None:
-                        self._post_update_oes_plot(x, y)   # ← UI 큐를 통해 그리기
+                        # 1) 그래프 업데이트 (그대로 유지)
+                        self._post_update_oes_plot(x, y)
                     else:
                         self.append_log("OES", f"경고: 데이터 필드 없음: {ev!r}")
                     continue
@@ -1698,7 +1700,8 @@ class MainWindow(QWidget):
         return True
         
     def _post_update_oes_plot(self, x: Sequence[float], y: Sequence[float]) -> None:
-        self._soon(self.graph_controller.update_oes_plot, x, y)
+        # Qt 이벤트 루프에서 안전하게 실행(렌더 스레드 보장)
+        QTimer.singleShot(0, lambda: self.graph_controller.update_oes_plot(x, y))
 
     # === 유틸 ===
     # 현재 태스크의 자식이 아닌 '루트 태스크'로 분리 생성
@@ -1788,6 +1791,7 @@ class MainWindow(QWidget):
             pass  # 주기적 로그 지속
         except Exception as e:
             self.append_log("MAIN", f"프리플라이트 진행 로그 예외: {e!r}")
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
