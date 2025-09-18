@@ -95,6 +95,9 @@ class MainWindow(QWidget):
         if self.chat_notifier:
             self.chat_notifier.start()
 
+        # === 폴링 데이터 로그창 출력 여부 ===
+        self._verbose_polling_log = True  # 필요시 UI 토글로 바꿔도 됨
+
         # === ProcessController 콜백 주입 (동기 함수 내부에서 코루틴 스케줄) ===
         def cb_faduino(cmd: str, arg):
             asyncio.create_task(self.faduino.handle_named_command(cmd, arg))
@@ -278,6 +281,7 @@ class MainWindow(QWidget):
                             self.chat_notifier.notify_process_started(payload.get("params", {}))
                         except Exception:
                             pass
+                    self._last_polling_targets = None
                 elif kind == "finished":
                     ok = bool(payload.get("ok", False))
                     detail = payload.get("detail", {})
@@ -318,20 +322,67 @@ class MainWindow(QWidget):
 
                     # 자동 큐 진행
                     self._start_next_process_from_queue(ok)
-
+                    self._last_polling_targets = None
                 elif kind == "aborted":
                     if self.chat_notifier:
                         try:
                             self.chat_notifier.notify_text("🛑 공정이 중단되었습니다.")
                         except Exception:
                             pass
+                    # ✅ 공정 중단 시에도 큐/상태 정리 + UI 초기화
+                    try:
+                        self._clear_queue_and_reset_ui()
+                    except Exception:
+                        pass
+
+                    # (선택) 종료 대기 중이던 워치독 정리까지
+                    if getattr(self, "_pending_device_cleanup", False):
+                        try:
+                            await self._stop_device_watchdogs(light=False)
+                        except Exception:
+                            pass
+                        self._pending_device_cleanup = False
+
+                    # 종료 가드 해제
+                    self._pc_stopping = False
                 elif kind == "polling_targets":
                     targets = dict(payload.get("targets") or {})   # ← 올바른 접근
                     self._last_polling_targets = targets
                     self._apply_polling_targets(targets)
                 elif kind == "polling":
                     active = bool(payload.get("active", False))
+
+                    # 백그라운드(워커/워치독) 기동 보장
+                    try:
+                        self._ensure_background_started()
+                    except Exception:
+                        pass
+
+                    # 최근 polling_targets가 있으면 그대로 적용,
+                    # 없으면 현재 파라미터로 기본 타깃맵을 만들어 적용
+                    targets = getattr(self, "_last_polling_targets", None)
+                    if not targets:
+                        params = getattr(self.process_controller, "current_params", {}) or {}
+                        use_rf_pulse = bool(params.get("use_rf_pulse", False))
+                        targets = {
+                            "mfc":     active,
+                            "faduino": (active and not use_rf_pulse),
+                            "rfpulse": (active and use_rf_pulse),
+                        }
+                    else:
+                        # targets는 “어디를 폴링할지”만 담고, on/off는 polling의 active로 강제
+                        targets = {
+                            "mfc":     (active and bool(targets.get("mfc", False))),
+                            "faduino": (active and bool(targets.get("faduino", False))),
+                            "rfpulse": (active and bool(targets.get("rfpulse", False))),
+                        }
+
+                    # 실제 장치 토글
+                    self._apply_polling_targets(targets)
+
+                    # (기존 로그 유지)
                     self.append_log("Process", f"폴링 {'ON' if active else 'OFF'}")
+
                 else:
                     # 미지정 이벤트도 안전하게 무시/로그
                     self.append_log("MAIN", f"알 수 없는 PC 이벤트 수신: {kind} {payload}")
@@ -413,13 +464,18 @@ class MainWindow(QWidget):
                     self.data_logger.log_mfc_flow(gas, flow)
                 except Exception:
                     pass
+                if self._verbose_polling_log:
+                    self.append_log("MFC", f"[poll] {gas}: {flow:.2f} sccm")
                 self.update_mfc_flow_ui(gas, flow)
+
             elif k == "pressure":
                 txt = ev.text or (f"{ev.value:.3g}" if ev.value is not None else "")
                 try:
                     self.data_logger.log_mfc_pressure(txt)
                 except Exception:
                     pass
+                if self._verbose_polling_log:
+                    self.append_log("MFC", f"[poll] ChamberP: {txt}")
                 self.update_mfc_pressure_ui(txt)
 
     async def _pump_ig_events(self):
@@ -1034,6 +1090,12 @@ class MainWindow(QWidget):
     # 폴링/상태
     # ------------------------------------------------------------------
     def _apply_polling_targets(self, targets: dict):
+        # 백그라운드(워커/워치독) 기동 보장
+        try:
+            self._ensure_background_started()
+        except Exception:
+            pass
+
         mfc_on = bool(targets.get('mfc', False))
         fadu_on = bool(targets.get('faduino', False))
         rfp_on = bool(targets.get('rfpulse', False))
@@ -1085,23 +1147,41 @@ class MainWindow(QWidget):
         self.ui.ch2_rfPulseDutyCycle_edit.setPlainText("")
 
     def _reset_ui_after_process(self):
+        # 1) 입력 위젯 기본값 적용
         self._set_default_ui_values()
-        for cb in [
-            self.ui.ch2_G1_checkbox, self.ui.ch2_G2_checkbox, self.ui.ch3_G3_checkbox,
-            self.ui.ch2_Ar_checkbox, self.ui.ch2_O2_checkbox, self.ui.ch2_N2_checkbox,
-            self.ui.ch2_mainShutter_checkbox, self.ui.ch2_rfPulsePower_checkbox,
-            self.ui.ch2_dcPower_checkbox, self.ui.ch2_powerSelect_checkbox
-        ]:
-            cb.setChecked(False)
+
+        # 2) 체크박스 일괄 OFF (오타 수정: ch3_G3 → ch2_G3)
+        checkbox_names = (
+            "ch2_G1_checkbox", "ch2_G2_checkbox", "ch2_G3_checkbox",
+            "ch2_Ar_checkbox", "ch2_O2_checkbox", "ch2_N2_checkbox",
+            "ch2_mainShutter_checkbox", "ch2_rfPulsePower_checkbox",
+            "ch2_dcPower_checkbox", "ch2_powerSelect_checkbox",
+        )
+        for name in checkbox_names:
+            cb = getattr(self.ui, name, None)
+            if cb is not None:
+                cb.setChecked(False)
+
+        # 3) 상태 라벨/표시값 초기화
         self.ui.ch2_processState_edit.setPlainText("대기 중")
-        self.ui.ch2_Power_edit.setPlainText("0.00")
-        self.ui.ch2_Voltage_edit.setPlainText("0.00")
-        self.ui.ch2_Current_edit.setPlainText("0.00")
+        self.ui.ch2_Power_edit.setPlainText("0.000")
+        self.ui.ch2_Voltage_edit.setPlainText("0.000")
+        self.ui.ch2_Current_edit.setPlainText("0.000")
         self.ui.ch2_forP_edit.setPlainText("0.0")
         self.ui.ch2_refP_edit.setPlainText("0.0")
         self.ui.ch2_rfPulsePower_edit.setPlainText("0")
         self.ui.ch2_rfPulseFreq_edit.setPlainText("")
         self.ui.ch2_rfPulseDutyCycle_edit.setPlainText("")
+
+        # 4) 버튼 상태: 공정 미실행 상태로(Start=활성, Stop=비활성)
+        self._on_process_status_changed(False)
+
+        # 5) 그래프도 초기화(다음 런을 위해 깨끗하게)
+        if hasattr(self, "graph_controller") and self.graph_controller:
+            try:
+                self.graph_controller.reset()
+            except Exception:
+                pass
 
     def _clear_queue_and_reset_ui(self):
         self.process_queue = []
@@ -1161,6 +1241,13 @@ class MainWindow(QWidget):
         try:
             if self.chat_notifier:
                 self.chat_notifier.shutdown()
+        except Exception:
+            pass
+
+        # ▶ IG 대기 태스크가 떠있을 수 있으므로 빠르게 취소 (명령은 아니고 내부 상태 해제)
+        try:
+            if self.ig and hasattr(self.ig, "cancel_wait"):
+                await asyncio.wait_for(self.ig.cancel_wait(), timeout=1.0)
         except Exception:
             pass
 

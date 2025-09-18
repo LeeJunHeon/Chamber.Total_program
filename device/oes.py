@@ -132,16 +132,16 @@ class OESAsync:
 
     async def run_measurement(self, duration_sec: float, integration_time_ms: int):
         """측정 시작 → duration 종료까지 주기 수집."""
-        if self.is_running or self.sChannel < 0:
-            reason = "이미 실행 중" if self.is_running else "초기화 실패"
-            await self._status(f"[경고] 측정 시작 불가: {reason}. 공정은 계속 진행됩니다.")
+        # 이미 실행 중이면만 차단
+        if self.is_running:
+            await self._status(f"[경고] 측정 시작 불가: 이미 실행 중. 공정은 계속 진행됩니다.")
             return
-        
-        # 미초기화면 자동 초기화 시도 (종료 시 채널을 닫으므로 매번 필요)
+
+        # 채널이 닫혀 있으면 여기서 자동 초기화 시도
         if self.sChannel < 0:
             ok = await self.initialize_device()
             if not ok or self.sChannel < 0:
-                await self._status("[경고] 측정 시작 불가: 초기화 실패")
+                await self._status("[경고] 측정 시작 불가: OES 초기화 실패")
                 return
 
         # 세션 초기화
