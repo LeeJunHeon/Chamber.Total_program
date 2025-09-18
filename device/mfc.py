@@ -524,6 +524,9 @@ class AsyncMFC:
                 )
                 self._transport = transport
                 self._protocol = protocol  # type: ignore
+
+                await asyncio.sleep(0.25)
+
                 self._connected = True
                 self._ever_connected = True
                 backoff = MFC_RECONNECT_BACKOFF_START_MS
@@ -888,7 +891,8 @@ class AsyncMFC:
 
     async def _read_r69_bits(self) -> Optional[str]:
         line = await self._send_and_wait_line(self._mk_cmd("READ_MFC_ON_OFF_STATUS"),
-                                              tag="[READ R69]", timeout_ms=MFC_TIMEOUT)
+                                              tag="[READ R69]", timeout_ms=MFC_TIMEOUT,
+                                              retries=3)
         return self._parse_r69_bits(line or "")
 
     def _parse_r60_values(self, line: str) -> Optional[list[float]]:

@@ -245,7 +245,7 @@ class MainWindow(QWidget):
                 except Exception as e:
                     self.process_controller.on_oes_failed("OES", str(e))
                     if self.chat_notifier:
-                        self.chat_notifier.notify_error("OES", str(e))
+                        self.chat_notifier.notify_error_with_src("OES", str(e))
             self._spawn_detached(run())
 
         self.process_controller = ProcessController(
@@ -616,7 +616,7 @@ class MainWindow(QWidget):
                 why = ev.message or "unknown"
                 self.process_controller.on_ig_failed("IG", why)
                 if self.chat_notifier:
-                    self.chat_notifier.notify_error("IG", why)
+                    self.chat_notifier.notify_error_with_src("IG", why)
 
     async def _pump_rga_events(self) -> None:
         async for ev in self.rga.events():
@@ -631,7 +631,7 @@ class MainWindow(QWidget):
                 why = ev.message or "RGA failed"
                 self.process_controller.on_rga_failed("RGA", why)
                 if self.chat_notifier:
-                    self.chat_notifier.notify_error("RGA", why)
+                    self.chat_notifier.notify_error_with_src("RGA", why)
 
     async def _pump_dc_events(self) -> None:
         async for ev in self.dc_power.events():
@@ -727,7 +727,7 @@ class MainWindow(QWidget):
                         why = getattr(ev, "message", "measure failed")
                         self.process_controller.on_oes_failed("OES", why)
                         if self.chat_notifier:
-                            self.chat_notifier.notify_error("OES", why)
+                            self.chat_notifier.notify_error_with_src("OES", why)
                     continue
 
                 self.append_log("OES", f"알 수 없는 이벤트: {ev!r}")
