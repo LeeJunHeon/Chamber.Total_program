@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 ################################################################################
-## Form generated from reading UI file 'CH1&2bhePFE.ui'
+## Form generated from reading UI file 'CH1&2RpRbgl.ui'
 ##
 ## Created by: Qt User Interface Compiler version 6.9.1
 ##
@@ -561,9 +561,9 @@ class Ui_Form(object):
         self.ch2_g2Target_name = QPlainTextEdit(self.page_2)
         self.ch2_g2Target_name.setObjectName(u"ch2_g2Target_name")
         self.ch2_g2Target_name.setGeometry(QRect(80, 280, 61, 31))
-        self.ch3_G3_checkbox = QCheckBox(self.page_2)
-        self.ch3_G3_checkbox.setObjectName(u"ch3_G3_checkbox")
-        self.ch3_G3_checkbox.setGeometry(QRect(150, 260, 41, 24))
+        self.ch2_G3_checkbox = QCheckBox(self.page_2)
+        self.ch2_G3_checkbox.setObjectName(u"ch2_G3_checkbox")
+        self.ch2_G3_checkbox.setGeometry(QRect(150, 260, 41, 24))
         self.ch2_integrationTime_label = QLabel(self.page_2)
         self.ch2_integrationTime_label.setObjectName(u"ch2_integrationTime_label")
         self.ch2_integrationTime_label.setGeometry(QRect(10, 160, 121, 21))
@@ -739,8 +739,8 @@ class Ui_Form(object):
         QWidget.setTabOrder(self.ch2_mainShutter_checkbox, self.ch2_powerSelect_checkbox)
         QWidget.setTabOrder(self.ch2_powerSelect_checkbox, self.ch2_G1_checkbox)
         QWidget.setTabOrder(self.ch2_G1_checkbox, self.ch2_G2_checkbox)
-        QWidget.setTabOrder(self.ch2_G2_checkbox, self.ch3_G3_checkbox)
-        QWidget.setTabOrder(self.ch3_G3_checkbox, self.ch2_g1Target_name)
+        QWidget.setTabOrder(self.ch2_G2_checkbox, self.ch2_G3_checkbox)
+        QWidget.setTabOrder(self.ch2_G3_checkbox, self.ch2_g1Target_name)
         QWidget.setTabOrder(self.ch2_g1Target_name, self.ch2_g2Target_name)
         QWidget.setTabOrder(self.ch2_g2Target_name, self.ch2_g3Target_name)
         QWidget.setTabOrder(self.ch2_g3Target_name, self.ch2_Ar_checkbox)
@@ -771,7 +771,7 @@ class Ui_Form(object):
 
         self.retranslateUi(Form)
 
-        self.stackedWidget.setCurrentIndex(1)
+        self.stackedWidget.setCurrentIndex(2)
 
 
         QMetaObject.connectSlotsByName(Form)
@@ -872,7 +872,7 @@ class Ui_Form(object):
         self.ch2_forP_label.setText(QCoreApplication.translate("Form", u"For. P", None))
         self.ch2_Start_button.setText(QCoreApplication.translate("Form", u"START", None))
         self.ch2_G2_checkbox.setText(QCoreApplication.translate("Form", u"G2", None))
-        self.ch3_G3_checkbox.setText(QCoreApplication.translate("Form", u"G3", None))
+        self.ch2_G3_checkbox.setText(QCoreApplication.translate("Form", u"G3", None))
         self.ch2_integrationTime_label.setText(QCoreApplication.translate("Form", u"Integration Time", None))
         self.ch2_processList_button.setText(QCoreApplication.translate("Form", u"Select File", None))
         self.ch2_mainShutter_checkbox.setText(QCoreApplication.translate("Form", u"M.S. Open", None))

@@ -272,7 +272,11 @@ class MainWindow(QWidget):
 
                     # DataLogger, 그래프, 알림
                     try:
-                        self.data_logger.start_new_log_session(payload.get("params", {}))
+                        params_for_log = payload.get("params", {})
+                        # 한 틱(50ms) 늦춰서 세션 초기화 → 직전 finalize가 먼저 스냅샷/쓰기 잡도록
+                        asyncio.get_running_loop().call_later(
+                            0.05, self.data_logger.start_new_log_session, params_for_log
+                        )
                     except Exception:
                         pass
                     self.graph_controller.reset()
@@ -284,17 +288,24 @@ class MainWindow(QWidget):
                     self._last_polling_targets = None
                 elif kind == "finished":
                     ok = bool(payload.get("ok", False))
-                    detail = payload.get("detail", {})
-                    # DataLogger 마무리
+                    detail = payload.get("detail", {}) or {}
+
+                    # ✅ (선택) process_ch2.py가 ok_for_log를 줄 수도 있으니 우선 사용, 없으면 ok
+                    ok_for_log = bool(detail.get("ok_for_log", ok))
+
+                    # 1) DataLogger를 먼저 마무리 (성공 시만 기록하는 정책은 내부에서 ok로 필터링)
                     try:
-                        # finalize 함수 시그니처가 불명확하니 안전하게 호출
-                        self.data_logger.finalize_and_write_log(ok)
+                        self.data_logger.finalize_and_write_log(ok_for_log)
                     except TypeError:
                         try:
                             self.data_logger.finalize_and_write_log()
-                        except Exception:
-                            pass
-                    # 알림
+                        except Exception as e:
+                            self.append_log("Logger", f"DataLogger finalize 예외: {e!r}")
+
+                    # 2) ✨ I/O/NAS 환경 고려: 아주 짧게 이벤트 루프에 양보
+                    await asyncio.sleep(0.20)  # 0.2~0.3 권장 (NAS면 0.3까지 고려)
+
+                    # 3) 그 다음에 후처리/다음 공정 진행
                     if self.chat_notifier:
                         try:
                             self.chat_notifier.notify_process_finished_detail(ok, detail)
@@ -309,7 +320,6 @@ class MainWindow(QWidget):
                     except Exception:
                         pass
 
-                    # ✅ 공정 종료 이후에만 전체 cleanup 수행
                     if getattr(self, "_pending_device_cleanup", False):
                         try:
                             await self._stop_device_watchdogs(light=False)
@@ -317,7 +327,6 @@ class MainWindow(QWidget):
                             pass
                         self._pending_device_cleanup = False
 
-                    # 종료 가드 해제
                     self._pc_stopping = False
 
                     # 자동 큐 진행
@@ -768,7 +777,7 @@ class MainWindow(QWidget):
         # 체크박스
         self.ui.ch2_G1_checkbox.setChecked(params.get('gun1', 'F') == 'T')
         self.ui.ch2_G2_checkbox.setChecked(params.get('gun2', 'F') == 'T')
-        self.ui.ch3_G3_checkbox.setChecked(params.get('gun3', 'F') == 'T')  # UI 이름 그대로 사용
+        self.ui.ch2_G3_checkbox.setChecked(params.get('gun3', 'F') == 'T')  # UI 이름 그대로 사용
         self.ui.ch2_Ar_checkbox.setChecked(params.get('Ar', 'F') == 'T')
         self.ui.ch2_O2_checkbox.setChecked(params.get('O2', 'F') == 'T')
         self.ui.ch2_N2_checkbox.setChecked(params.get('N2', 'F') == 'T')
@@ -802,7 +811,7 @@ class MainWindow(QWidget):
                 return
             norm = self._normalize_params_for_process(params)
             self._prepare_log_file(norm)  # [추가] 다음 공정도 장비 연결부터 동일 파일에 기록
-            asyncio.create_task(self._start_process_later(params, 0.1))
+            asyncio.create_task(self._start_process_later(params, 0.25))
         else:
             self.append_log("MAIN", "모든 공정이 완료되었습니다.")
             self._clear_queue_and_reset_ui()
@@ -1286,7 +1295,7 @@ class MainWindow(QWidget):
         # 건 선택
         use_g1 = self.ui.ch2_G1_checkbox.isChecked()
         use_g2 = self.ui.ch2_G2_checkbox.isChecked()
-        use_g3 = self.ui.ch3_G3_checkbox.isChecked()
+        use_g3 = self.ui.ch2_G3_checkbox.isChecked()
         checked_count = int(use_g1) + int(use_g2) + int(use_g3)
         if checked_count == 0 or checked_count == 3:
             msg_box = QMessageBox(self)
