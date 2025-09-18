@@ -1,7 +1,7 @@
 # main.py
 # -*- coding: utf-8 -*-
 import re, csv, sys, traceback, asyncio
-from typing import Optional, TypedDict, Mapping, Any, Coroutine, Callable, Literal, Sequence, Deque
+from typing import Optional, TypedDict, Mapping, Any, Coroutine, Callable, Literal, Sequence, Deque, cast
 from datetime import datetime
 from pathlib import Path
 from collections import deque
@@ -191,10 +191,10 @@ class MainWindow(QWidget):
         self._verbose_polling_log: bool = True  # 필요시 UI 토글로 바꿔도 됨
 
         # === ProcessController 콜백 주입 (동기 함수 내부에서 코루틴 스케줄) ===
-        def cb_faduino(cmd: str, arg):
+        def cb_faduino(cmd: str, arg: Any) -> None:
             self._spawn_detached(self.faduino.handle_named_command(cmd, arg))
 
-        def cb_mfc(cmd: str, args: dict):
+        def cb_mfc(cmd: str, args: Mapping[str, Any]) -> None:
             self._spawn_detached(self.mfc.handle_command(cmd, args))
 
         def cb_dc_power(value: float):
@@ -209,7 +209,7 @@ class MainWindow(QWidget):
         def cb_rf_stop():
             self._spawn_detached(self.rf_power.cleanup())
 
-        def cb_rfpulse_start(power: float, freq, duty):
+        def cb_rfpulse_start(power: float, freq: int | None, duty: int | None) -> None:
             self._spawn_detached(self.rf_pulse.start_pulse_process(float(power), freq, duty))
 
         def cb_rfpulse_stop():
@@ -282,7 +282,7 @@ class MainWindow(QWidget):
         self._prestart_buf: Deque[str] = deque(maxlen=1000)
 
         # 선택적으로 쓰는 내부 상태 캐시들 초기화
-        self._last_polling_targets: dict[str, bool] | None = None
+        self._last_polling_targets: TargetsMap | None = None
         self._last_state_text: str | None = None
         self._pc_stopping: bool = False
         self._pending_device_cleanup: bool = False
@@ -339,7 +339,7 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
     # ProcessController 이벤트 펌프 (컨트롤러 → UI/로거/알림/다음 공정)
     # ------------------------------------------------------------------
-    async def _pump_pc_events(self):
+    async def _pump_pc_events(self) -> None:
         q = self.process_controller.event_q
         while True:
             ev = await q.get()
@@ -506,7 +506,7 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
     # 비동기 이벤트 펌프 (장치 → ProcessController)
     # ------------------------------------------------------------------
-    async def _pump_faduino_events(self):
+    async def _pump_faduino_events(self) -> None:
         async for ev in self.faduino.events():
             k = ev.kind
             if k == "status":
@@ -555,7 +555,7 @@ class MainWindow(QWidget):
                 self.handle_rf_power_display(f, r)
                 self.rf_power.update_measurements(f, r)
 
-    async def _pump_mfc_events(self):
+    async def _pump_mfc_events(self) -> None:
         async for ev in self.mfc.events():
             k = ev.kind
             if k == "status":
@@ -586,7 +586,7 @@ class MainWindow(QWidget):
                 if self._verbose_polling_log:
                     self.append_log("MFC", f"[poll] ChamberP: {txt}")
 
-    async def _pump_ig_events(self):
+    async def _pump_ig_events(self) -> None:
         async for ev in self.ig.events():
             k = ev.kind
             if k == "status":
@@ -609,7 +609,7 @@ class MainWindow(QWidget):
                 if self.chat_notifier:
                     self.chat_notifier.notify_error("IG", why)
 
-    async def _pump_rga_events(self):
+    async def _pump_rga_events(self) -> None:
         async for ev in self.rga.events():
             if ev.kind == "status":
                 self.append_log("RGA", ev.message or "")
@@ -624,7 +624,7 @@ class MainWindow(QWidget):
                 if self.chat_notifier:
                     self.chat_notifier.notify_error("RGA", why)
 
-    async def _pump_dc_events(self):
+    async def _pump_dc_events(self) -> None:
         async for ev in self.dc_power.events():
             k = ev.kind
             if k == "status":
@@ -639,7 +639,7 @@ class MainWindow(QWidget):
             elif k == "power_off_finished":
                 self.process_controller.on_device_step_ok()
 
-    async def _pump_rf_events(self):
+    async def _pump_rf_events(self) -> None:
         async for ev in self.rf_power.events():
             k = ev.kind
             if k == "status":
@@ -659,7 +659,7 @@ class MainWindow(QWidget):
             elif k == "power_off_finished":
                 self.process_controller.on_device_step_ok()
 
-    async def _pump_rfpulse_events(self):
+    async def _pump_rfpulse_events(self) -> None:
         async for ev in self.rf_pulse.events():
             k = ev.kind
             if k == "status":
@@ -689,7 +689,7 @@ class MainWindow(QWidget):
                 if st is not None:
                     self.append_log("RFPulse", f"STATUS on={int(st.rf_output_on)} req={int(st.rf_on_requested)} ...")
 
-    async def _pump_oes_events(self):
+    async def _pump_oes_events(self) -> None:
         async for ev in self.oes.events():
             try:
                 k = getattr(ev, "kind", None)
@@ -773,14 +773,14 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
     # 표시/입력 관련
     # ------------------------------------------------------------------
-    def handle_rf_power_display(self, for_p: float, ref_p: float) -> None:
+    def handle_rf_power_display(self, for_p: Optional[float], ref_p: Optional[float]) -> None:
         if for_p is None or ref_p is None:
             self.append_log("MAIN", "for.p, ref.p 값이 비어있습니다.")
             return
         self._soon(self.ui.ch2_forP_edit.setPlainText, f"{for_p:.2f}")
         self._soon(self.ui.ch2_refP_edit.setPlainText, f"{ref_p:.2f}")
 
-    def handle_dc_power_display(self, power: float, voltage: float, current: float) -> None:
+    def handle_dc_power_display(self, power: Optional[float], voltage: Optional[float], current: Optional[float]) -> None:
         if power is None or voltage is None or current is None:
             self.append_log("MAIN", "power, voltage, current값이 비어있습니다.")
             return
@@ -821,7 +821,7 @@ class MainWindow(QWidget):
                 self.current_process_index = -1
                 for row in reader:
                     row['Process_name'] = row.get('#', f'공정 {len(self.process_queue) + 1}')
-                    self.process_queue.append(row)
+                    self.process_queue.append(cast(RawParams, row))
 
                 if not self.process_queue:
                     self.append_log("File", "파일에 처리할 공정이 없습니다.")
@@ -940,7 +940,7 @@ class MainWindow(QWidget):
             self._ensure_background_started()
 
             # 워치독 최대 백오프를 고려해 프리플라이트 대기시간을 동적 산정
-            use_rf_pulse = bool(params.get("use_rf_pulse") or params.get("use_rf_pulse_power"))
+            use_rf_pulse: bool = bool(params.get("use_rf_pulse", False))
             max_backoff_ms = max(
                 IG_RECONNECT_BACKOFF_MAX_MS,
                 FADUINO_RECONNECT_BACKOFF_MAX_MS,
@@ -970,7 +970,8 @@ class MainWindow(QWidget):
             self.process_controller.start_process(params)
 
         except Exception as e:
-            msg = f"오류: '{params.get('Process_name', '알 수 없는')} 공정' 시작에 실패했습니다. ({e})"
+            note = params.get("process_note", "알 수 없는")
+            msg = f"오류: '{note}' 공정 시작에 실패했습니다. ({e})"
             self.append_log("MAIN", msg)
 
             # ⬇️ 예외 케이스도 동일하게 비모달로
@@ -1079,7 +1080,8 @@ class MainWindow(QWidget):
 
         self._prepare_log_file(params)  # [추가] 장비 연결 전에 새 로그 파일 준비
         self.append_log("MAIN", "입력 검증 통과 → 장비 연결 확인 시작")
-        self._safe_start_process(params)
+        params_norm = cast(NormParams, params)
+        self._safe_start_process(params_norm)
 
     # ------------------------------------------------------------------
     # STOP/종료 (단일 경로)

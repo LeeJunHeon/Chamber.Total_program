@@ -131,6 +131,7 @@ class AsyncFaduino:
         self._transport: Optional[asyncio.Transport] = None
         self._protocol: Optional[_FaduinoProtocol] = None
         self._connected: bool = False
+        self._ever_connected: bool = False
 
         # 명령 큐/인플라이트
         self._cmd_q: Deque[Command] = deque()
@@ -356,8 +357,9 @@ class AsyncFaduino:
                 await asyncio.sleep(FADUINO_WATCHDOG_INTERVAL_MS / 1000.0)
                 continue
 
-            await self._emit_status(f"재연결 시도 예약... ({backoff} ms)")
-            await asyncio.sleep(backoff / 1000.0)
+            if self._ever_connected:
+                await self._emit_status(f"재연결 시도 예약... ({backoff} ms)")
+                await asyncio.sleep(backoff / 1000.0)
 
             if not self._want_connected or self._connected:
                 continue
@@ -370,6 +372,7 @@ class AsyncFaduino:
                 self._transport = transport
                 self._protocol = protocol  # type: ignore
                 self._connected = True
+                self._ever_connected = True
                 backoff = FADUINO_RECONNECT_BACKOFF_START_MS
                 self._rx_clear_pending_echo = False
                 await self._emit_status(f"{FADUINO_PORT} 연결 성공 (asyncio)")
@@ -862,4 +865,4 @@ class AsyncFaduino:
             await asyncio.sleep(max(1, FADUINO_GAP_MS) / 1000.0)
         # 전송 잔여 시간
         await asyncio.sleep(0.2)
-        
+

@@ -237,6 +237,7 @@ class RFPulseAsync:
         self._transport: Optional[asyncio.Transport] = None
         self._protocol: Optional[_RFPProtocol] = None
         self._connected: bool = False
+        self._ever_connected: bool = False 
 
         # 명령 큐/상태
         self._cmd_q: Deque[RfCommand] = deque()
@@ -432,8 +433,9 @@ class RFPulseAsync:
                 await asyncio.sleep(RFPULSE_WATCHDOG_INTERVAL_MS / 1000.0)
                 continue
 
-            await self._emit_status(f"재연결 시도... ({backoff} ms)")
-            await asyncio.sleep(backoff / 1000.0)
+            if self._ever_connected:
+                await self._emit_status(f"재연결 시도... ({backoff} ms)")
+                await asyncio.sleep(backoff / 1000.0)
 
             if not self._want_connected:
                 continue
@@ -458,6 +460,7 @@ class RFPulseAsync:
                 self._transport = transport
                 self._protocol = protocol  # type: ignore
                 self._connected = True
+                self._ever_connected = True
                 backoff = RFPULSE_RECONNECT_BACKOFF_START_MS
                 await self._emit_status(f"{RFPULSE_PORT} 연결 성공 (asyncio)")
             except Exception as e:

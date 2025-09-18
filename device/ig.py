@@ -137,6 +137,7 @@ class AsyncIG:
         self._transport: Optional[asyncio.Transport] = None
         self._protocol: Optional[_IGProtocol] = None
         self._connected: bool = False
+        self._ever_connected: bool = False
 
         # 명령 큐/인플라이트
         self._cmd_q: Deque[Command] = deque()
@@ -374,8 +375,9 @@ class AsyncIG:
                 await asyncio.sleep(IG_WATCHDOG_INTERVAL_MS / 1000.0)
                 continue
 
-            await self._emit_status(f"재연결 시도 예약... ({backoff} ms)")
-            await asyncio.sleep(backoff / 1000.0)
+            if self._ever_connected:
+                await self._emit_status(f"재연결 시도 예약... ({backoff} ms)")
+                await asyncio.sleep(backoff / 1000.0)
 
             if not self._want_connected or self._connected:
                 continue
@@ -389,6 +391,7 @@ class AsyncIG:
                 self._transport = transport
                 self._protocol = protocol  # type: ignore
                 self._connected = True
+                self._ever_connected = True
                 backoff = IG_RECONNECT_BACKOFF_START_MS
                 await self._emit_status(f"{IG_PORT} 연결 성공 (asyncio)")
                 # 포트 열리면 pending 명령 송신은 워커가 처리
