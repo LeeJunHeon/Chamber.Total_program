@@ -1,4 +1,4 @@
-# process_ch2.py — pure asyncio ProcessController
+# process_ch2.py
 #  - Qt 의존성 제거 (UI만 Qt, 로직은 asyncio)
 #  - main.py와는 asyncio.Queue 기반 이벤트로 통신
 #  - 장비 명령은 콜백 함수로 주입 (DI)
