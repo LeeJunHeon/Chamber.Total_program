@@ -421,6 +421,14 @@ class MainWindow(QWidget):
                     except Exception:
                         pass
 
+                    # ✅ Stop 경로(사용자 중단 포함)에서는 UI를 즉시 초기화
+                    if getattr(self, "_pc_stopping", False):
+                        try:
+                            self._clear_queue_and_reset_ui()
+                        except Exception:
+                            pass
+                        self._last_polling_targets = None
+
                     if getattr(self, "_pending_device_cleanup", False):
                         try:
                             # ✅ 여기서 기다리지 말고 예약만
