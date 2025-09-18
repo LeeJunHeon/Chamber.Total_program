@@ -1,16 +1,13 @@
 # main.py
 # -*- coding: utf-8 -*-
-import sys
-import re
-import csv
-import asyncio
-from typing import Optional
+import re, csv, sys, traceback, asyncio
+from typing import Optional, TypedDict, Mapping, Any, Coroutine, Callable, Literal, Sequence
 from datetime import datetime
 from pathlib import Path
 from collections import deque
 
 from PySide6.QtWidgets import QApplication, QWidget, QMessageBox, QFileDialog, QPlainTextEdit, QStackedWidget
-from PySide6.QtCore import QCoreApplication, Qt, Slot
+from PySide6.QtCore import QCoreApplication
 from PySide6.QtGui import QTextCursor, QCloseEvent
 from qasync import QEventLoop
 
@@ -40,10 +37,11 @@ from lib.config_ch2 import (
 )
 
 class MainWindow(QWidget):
-    def __init__(self):
+    def __init__(self, loop: asyncio.AbstractEventLoop | None = None):
         super().__init__()
         self.ui = Ui_Form()
         self.ui.setupUi(self)
+        self._loop = loop or asyncio.get_event_loop()
 
         # --- 스택 및 페이지 매핑 (UI 객체명 고정)
         self._stack = self.ui.stackedWidget
@@ -74,11 +72,7 @@ class MainWindow(QWidget):
         self.ig = AsyncIG()
         self.rf_pulse = RFPulseAsync()
         self.oes = OESAsync()
-        self.rga = RGAAsync(
-            program_path=RGA_PROGRAM_PATH, 
-            csv_path=RGA_CSV_PATH,
-            debug_print=True,
-        )
+        self.rga = RGAAsync()
         self.dc_power = DCPowerAsync(
             send_dc_power=self.faduino.set_dc_power,
             send_dc_power_unverified=self.faduino.set_dc_power_unverified,
@@ -89,6 +83,8 @@ class MainWindow(QWidget):
             send_rf_power_unverified=self.faduino.set_rf_power_unverified,
             request_status_read=self.faduino.force_rf_read,
         )
+
+        self._advancing: bool = False
 
         self._bg_started: bool = False
         self._bg_tasks: list[asyncio.Task] = []
@@ -203,7 +199,6 @@ class MainWindow(QWidget):
         # 초기 상태
         self._on_process_status_changed(False)
 
-                
         # ✅ 콘솔로 안 찍고 로그로만 받게 훅 설치
         self._install_exception_hooks()
 
@@ -524,8 +519,7 @@ class MainWindow(QWidget):
                 self.append_log("RGA", ev.message or "")
             elif ev.kind == "data":
                 # 그래프 업데이트
-                asyncio.get_running_loop().call_soon(self.graph_controller.update_rga_plot,
-                                     ev.mass_axis, ev.pressures)
+                self._soon(self.graph_controller.update_rga_plot, ev.mass_axis, ev.pressures)
             elif ev.kind == "finished":
                 self.process_controller.on_rga_finished()
             elif ev.kind == "failed":
@@ -654,11 +648,11 @@ class MainWindow(QWidget):
         # 혹시 남아있는 태스크가 있으면(이상 상태) 정리
         try:
             loop = asyncio.get_running_loop()
-            self._bg_tasks = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done()]
-            for t in self._bg_tasks:
-                loop.call_soon(t.cancel)  # 예약 취소만
-        except Exception:
-            pass
+        except RuntimeError:
+            loop = self._loop
+        self._bg_tasks = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done()]
+        for t in self._bg_tasks:
+            loop.call_soon(t.cancel)  # 예약 취소만
 
         # 기존 잔여 취소 예약 코드는 유지
         self._bg_tasks = []
@@ -683,30 +677,24 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
     # 표시/입력 관련
     # ------------------------------------------------------------------
-    @Slot(float, float)
     def handle_rf_power_display(self, for_p, ref_p):
         if for_p is None or ref_p is None:
             self.append_log("MAIN", "for.p, ref.p 값이 비어있습니다.")
             return
-        loop = asyncio.get_running_loop()
-        loop.call_soon(self.ui.ch2_forP_edit.setPlainText, f"{for_p:.2f}")
-        loop.call_soon(self.ui.ch2_refP_edit.setPlainText, f"{ref_p:.2f}")
+        self._soon(self.ui.ch2_forP_edit.setPlainText, f"{for_p:.2f}")
+        self._soon(self.ui.ch2_refP_edit.setPlainText, f"{ref_p:.2f}")
 
-    @Slot(float, float, float)
     def handle_dc_power_display(self, power, voltage, current):
         if power is None or voltage is None or current is None:
             self.append_log("MAIN", "power, voltage, current값이 비어있습니다.")
             return
-        loop = asyncio.get_running_loop()
-        loop.call_soon(self.ui.ch2_Power_edit.setPlainText,   f"{power:.3f}")
-        loop.call_soon(self.ui.ch2_Voltage_edit.setPlainText, f"{voltage:.3f}")
-        loop.call_soon(self.ui.ch2_Current_edit.setPlainText, f"{current:.3f}")
+        self._soon(self.ui.ch2_Power_edit.setPlainText,   f"{power:.3f}")
+        self._soon(self.ui.ch2_Voltage_edit.setPlainText, f"{voltage:.3f}")
+        self._soon(self.ui.ch2_Current_edit.setPlainText, f"{current:.3f}")
 
-    # @Slot(str)
     # def update_mfc_pressure_ui(self, pressure_value):
     #     asyncio.get_running_loop().call_soon(self.ui.ch2_workingPressure_edit.setPlainText, pressure_value)
 
-    # @Slot(str, float)
     # def update_mfc_flow_ui(self, gas_name, flow_value):
     #     t = f"{flow_value:.1f}"
     #     loop = asyncio.get_running_loop()
@@ -716,13 +704,11 @@ class MainWindow(QWidget):
 
     def _on_process_status_changed(self, running: bool):
         self.ui.ch2_Start_button.setEnabled(not running)
-        self.ui.ch2_Stop_button.setEnabled(running)
+        self.ui.ch2_Stop_button.setEnabled(True)
 
     # ------------------------------------------------------------------
     # 파일 로딩 / 파라미터 UI 반영
     # ------------------------------------------------------------------
-    @Slot()
-    @Slot(bool)
     def _handle_process_list_clicked(self, _checked: bool = False):
         file_path, _ = QFileDialog.getOpenFileName(
             self, "프로세스 리스트 파일 선택", "", "CSV Files (*.csv);;All Files (*)"
@@ -801,33 +787,40 @@ class MainWindow(QWidget):
     # 자동 시퀀스 진행
     # ------------------------------------------------------------------
     def _start_next_process_from_queue(self, was_successful: bool):
-        if self.process_controller.is_running and self.current_process_index > -1:
-            self.append_log("MAIN", "경고: 다음 공정 자동 전환 시점에 이미 다른 공정이 실행 중입니다.")
+        if getattr(self, "_advancing", False):
+            self.append_log("MAIN", "자동 진행 중복 호출 무시")
             return
-
-        if not was_successful:
-            self.append_log("MAIN", "이전 공정이 실패하여 자동 시퀀스를 중단합니다.")
-            self._clear_queue_and_reset_ui()
-            return
-
-        self.current_process_index += 1
-        if self.current_process_index < len(self.process_queue):
-            params = self.process_queue[self.current_process_index]
-            self._update_ui_from_params(params)
-            if self._try_handle_delay_step(params):   # delay 단계면 대기만 수행
+        self._advancing = True
+        try:
+            # === 기존 본문 그대로 ===
+            if self.process_controller.is_running and self.current_process_index > -1:
+                self.append_log("MAIN", "경고: 다음 공정 자동 전환 시점에 이미 다른 공정이 실행 중입니다.")
                 return
-            norm = self._normalize_params_for_process(params)
 
-            # 자동 큐 전체를 하나의 파일로 기록: 첫 공정에서만 생성, 이후에는 유지
-            if not getattr(self, "_log_file_path", None):
-                self._prepare_log_file(norm)
+            if not was_successful:
+                self.append_log("MAIN", "이전 공정이 실패하여 자동 시퀀스를 중단합니다.")
+                self._clear_queue_and_reset_ui()
+                return
+
+            self.current_process_index += 1
+            if self.current_process_index < len(self.process_queue):
+                params = self.process_queue[self.current_process_index]
+                self._update_ui_from_params(params)
+                if self._try_handle_delay_step(params):
+                    return
+                norm = self._normalize_params_for_process(params)
+
+                if not getattr(self, "_log_file_path", None):
+                    self._prepare_log_file(norm)
+                else:
+                    self.append_log("Logger", f"같은 세션 파일 계속 사용: {self._log_file_path.name}")
+
+                self._spawn_detached(self._start_process_later(params, 0.25))
             else:
-                self.append_log("Logger", f"같은 세션 파일 계속 사용: {self._log_file_path.name}")
-
-            self._spawn_detached(self._start_process_later(params, 0.25))
-        else:
-            self.append_log("MAIN", "모든 공정이 완료되었습니다.")
-            self._clear_queue_and_reset_ui()
+                self.append_log("MAIN", "모든 공정이 완료되었습니다.")
+                self._clear_queue_and_reset_ui()
+        finally:
+            self._advancing = False
 
     async def _start_process_later(self, params: dict, delay_s: float = 0.1):
         await asyncio.sleep(delay_s)
@@ -843,7 +836,7 @@ class MainWindow(QWidget):
     # (MainWindow 클래스 내부)
     # 1) 재진입 안전한 비모달 표출 유틸을 "메서드"로 추가
     def _post_critical(self, title: str, text: str) -> None:
-        asyncio.get_running_loop().call_soon(QMessageBox.critical, self, title, text)
+        self._soon(QMessageBox.critical, self, title, text)
 
     # 2) async 함수 안의 모달 호출을 유틸로 교체
     async def _start_after_preflight(self, params: dict):
@@ -874,6 +867,9 @@ class MainWindow(QWidget):
                 )
                 self._start_next_process_from_queue(False)
                 return
+            
+            # ✅ 추가: 전환 전 캐시 초기화
+            self._last_polling_targets = None
 
             self.append_log("MAIN", "장비 연결 확인 완료 → 공정 시작")
             self.process_controller.start_process(params)
@@ -940,8 +936,6 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
     # 단일 실행
     # ------------------------------------------------------------------
-    @Slot()
-    @Slot(bool)
     def _handle_start_clicked(self, _checked: bool = False):
         if self.process_controller.is_running:
             QMessageBox.warning(self, "실행 오류", "현재 다른 공정이 실행 중입니다.")
@@ -996,7 +990,6 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
     # STOP/종료 (단일 경로)
     # ------------------------------------------------------------------
-    @Slot()
     def _handle_stop_clicked(self, _checked: bool = False):
         self.request_stop_all(user_initiated=True)
 
@@ -1048,7 +1041,7 @@ class MainWindow(QWidget):
 
         # ===== 기존 전체 정리 경로 =====
         # 0) 이벤트 펌프/백그라운드 태스크 먼저 취소 → 같은 틱 재귀 취소 방지
-        loop = asyncio.get_running_loop()
+        loop = self._loop_from_anywhere()
         try:
             current = asyncio.current_task()
             live = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done() and t is not current]
@@ -1091,7 +1084,10 @@ class MainWindow(QWidget):
         line_ui = f"[{now_ui}] [{source}] {msg}"
         line_file = f"[{now_file}] [{source}] {msg}\n"
 
-        loop = asyncio.get_running_loop()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = self._loop
         loop.call_soon(self._append_log_to_ui, line_ui)
 
         # 세션 파일이 없으면 파일에 쓰지 않고 메모리 버퍼에만 저장
@@ -1107,7 +1103,11 @@ class MainWindow(QWidget):
             with open(self._log_file_path, "a", encoding="utf-8") as f:
                 f.write(line_file)
         except Exception as e:
-            asyncio.get_running_loop().call_soon(
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = self._loop
+            loop.call_soon(
                 self.ui.ch2_logMessage_edit.appendPlainText,
                 f"[Logger] 파일 기록 실패: {e}"
             )
@@ -1172,8 +1172,7 @@ class MainWindow(QWidget):
             return
         self._last_state_text = message
 
-        # Qt 이벤트 큐로 위임하여 항상 GUI 스레드에서 안전하게 반영
-        asyncio.get_running_loop().call_soon(self.ui.ch2_processState_edit.setPlainText, message)
+        self._soon(self.ui.ch2_processState_edit.setPlainText, message)
 
     # ------------------------------------------------------------------
     # 기본 UI값/리셋
@@ -1547,6 +1546,8 @@ class MainWindow(QWidget):
 
     def _on_delay_step_done(self, step_name: str):
         self._delay_task = None
+        # ✅ 추가: 다음 상태 텍스트는 무조건 반영되도록 캐시 리셋
+        self._last_state_text = None
         self.append_log("Process", f"'{step_name}' 지연 완료 → 다음 공정으로 진행")
         self._start_next_process_from_queue(True)
 
@@ -1573,21 +1574,28 @@ class MainWindow(QWidget):
 
         unit_txt = {"s": "초", "m": "분", "h": "시간", "d": "일"}[unit]
         self.append_log("Process", f"'{name}' 단계 감지: {amount}{unit_txt} 대기 시작")
-        asyncio.get_running_loop().call_soon(
-            self.ui.ch2_processState_edit.setPlainText, f"지연 대기 중: {amount}{unit_txt}"
-        )
+
+        # 폴링 OFF로 전환(잔여 측정/명령 혼입 방지)
+        self._apply_polling_targets({"mfc": False, "faduino": False, "rfpulse": False})
+        self._last_polling_targets = None
+
+        # 상태 문구는 단일 경로로만
+        self._soon(self.ui.ch2_processState_edit.setPlainText, f"지연 대기 중: {amount}{unit_txt}")
 
         self._cancel_delay_task()
         self._set_task_later("_delay_task", self._delay_sleep_then_continue(name, duration_s), name=f"Delay:{name}")
         return True
         
     def _post_update_oes_plot(self, x, y) -> None:
-        asyncio.get_running_loop().call_soon(self.graph_controller.update_oes_plot, x, y)
+        self._soon(self.graph_controller.update_oes_plot, x, y)
 
     # === 유틸 ===
     # 현재 태스크의 자식이 아닌 '루트 태스크'로 분리 생성
     def _spawn_detached(self, coro, *, store: bool = False, name: str | None = None):
-        loop = asyncio.get_running_loop()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = self._loop
         def _create():
             t = loop.create_task(coro, name=name)
             if store:
@@ -1596,7 +1604,10 @@ class MainWindow(QWidget):
 
     # 나중에 생성될 태스크 핸들을 self.<attr>에 기록(지연 생성)
     def _set_task_later(self, attr_name: str, coro, *, name: str | None = None):
-        loop = asyncio.get_running_loop()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = self._loop
         def _create_and_set():
             t = loop.create_task(coro, name=name)
             setattr(self, attr_name, t)
@@ -1604,14 +1615,17 @@ class MainWindow(QWidget):
 
     # 콘솔 traceback 가로채서 append_log로만 남기기
     def _install_exception_hooks(self):
-        import sys, traceback
-        loop = asyncio.get_running_loop()
+        # 실행 중 루프가 있으면 그걸, 아니면 주입된 루프(self._loop) 사용
+        try:
+            target_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            target_loop = self._loop  # __init__ 초반에 이미 채워둠
 
         def excepthook(exctype, value, tb):
             txt = ''.join(traceback.format_exception(exctype, value, tb)).rstrip()
             self.append_log("EXC", txt)
 
-        def loop_exception_handler(loop, context):
+        def loop_exception_handler(loop_, context):
             exc = context.get("exception")
             msg = context.get("message", "")
             if exc:
@@ -1624,13 +1638,22 @@ class MainWindow(QWidget):
                 self.append_log("Asyncio", msg)
 
         sys.excepthook = excepthook
-        loop.set_exception_handler(loop_exception_handler)
+        target_loop.set_exception_handler(loop_exception_handler)
+
+    def _loop_from_anywhere(self):
+        try:
+            return asyncio.get_running_loop()
+        except RuntimeError:
+            return self._loop
+
+    def _soon(self, fn, *args, **kwargs):
+        self._loop_from_anywhere().call_soon(fn, *args, **kwargs)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     loop = QEventLoop(app)          # Qt + asyncio 루프 통합
     asyncio.set_event_loop(loop)
-    w = MainWindow()
+    w = MainWindow(loop)
     w.show()
     with loop:
         loop.run_forever()

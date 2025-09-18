@@ -22,7 +22,7 @@ from pathlib import Path
 from typing import AsyncGenerator, Literal, Optional
 
 import numpy as np
-from lib.config_ch2 import RGA_PROGRAM_PATH, RGA_CSV_PATH
+from lib.config_ch2 import RGA_PROGRAM_PATH, RGA_CSV_PATH, DEBUG_PRINT
 
 
 # ===== 이벤트 모델 =====
@@ -45,7 +45,7 @@ class RGAAsync:
         *,
         program_path: str | Path = RGA_PROGRAM_PATH,
         csv_path: str | Path = RGA_CSV_PATH,
-        debug_print: bool = True,
+        debug_print: bool = DEBUG_PRINT,
     ):
         self.program_path = Path(program_path)
         self.csv_path = Path(csv_path)

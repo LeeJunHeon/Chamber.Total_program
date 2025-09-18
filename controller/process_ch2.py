@@ -210,6 +210,9 @@ class ProcessController:
         self._shutdown_in_progress: bool = False
         self._shutdown_error: bool = False
         self._shutdown_failures: List[str] = []
+    
+        # ✅ 추가: 런타임 실패 전파 플래그
+        self._process_failed: bool = False
 
         # 대기/카운트다운
         self._countdown_task: Optional[asyncio.Task] = None
@@ -259,6 +262,9 @@ class ProcessController:
             self._shutdown_error = False
             self._shutdown_failures.clear()
             self._expect_group = None
+
+            # ✅ 추가: 이번 런은 실패 아님으로 초기화
+            self._process_failed = False
 
             self.is_running = True
             # ✅ 이전 런의 abort 상태 초기화
@@ -365,6 +371,9 @@ class ProcessController:
         self.current_params.clear()
         self.process_sequence.clear()
         self._current_step_idx = -1
+
+        # ✅ 추가: 리셋 시에도 초기화
+        self._process_failed = False
         
         # 폴링 캐시 초기화
         self._last_polling_active = None
@@ -447,10 +456,12 @@ class ProcessController:
                 self._current_step_idx += 1
                 if self._current_step_idx >= len(self.process_sequence):
                     # 성공 판정
+                    # ✅ 변경: 실패 플래그를 일괄 반영
+                    base_ok = not (self._aborting or self._in_emergency or self._stop_requested)
                     if self._shutdown_in_progress:
-                        ok = not (self._aborting or self._in_emergency or self._stop_requested or self._shutdown_error)
+                        ok = base_ok and not self._shutdown_error and not self._process_failed
                     else:
-                        ok = not (self._aborting or self._in_emergency or self._stop_requested)
+                        ok = base_ok and not self._process_failed
                     self._finish(ok)
                     return
 
@@ -767,6 +778,13 @@ class ProcessController:
                 self._expect_group.cancel("failure-during-shutdown")
                 self._expect_group = None
             return
+        
+        # ✅ 추가: 평시 실패 → 이번 런은 '실패'로 확정
+        self._process_failed = True
+        # (선택) 실패 요약도 미리 남겨두면 finished에서 보여줌
+        step_no = self._current_step_idx + 1
+        act = cur.action.name if cur else "UNKNOWN"
+        self._shutdown_failures.append(f"Step {step_no} {act}: {full}")
 
         # 평시 실패 → 안전 종료로 전환
         self._emit_log("Process", f"오류 발생: {full}. 종료 절차를 시작합니다.")

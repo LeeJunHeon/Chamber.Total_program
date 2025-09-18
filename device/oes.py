@@ -9,7 +9,7 @@ from typing import AsyncGenerator, Literal, Optional
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
-from lib.config_ch2 import OES_AVG_COUNT
+from lib.config_ch2 import OES_AVG_COUNT, DEBUG_PRINT
 
 EventKind = Literal["status", "data", "finished"]
 
@@ -29,7 +29,7 @@ class OESAsync:
         save_directory: str = r"\\VanaM_NAS\VanaM_Sputter\OES\CH2",
         sample_interval_s: float = 1.0,
         avg_count: int = OES_AVG_COUNT,
-        debug_print: bool = True,
+        debug_print: bool = DEBUG_PRINT,
     ):
         self._dll_path = dll_path
         self._save_dir = Path(save_directory); self._save_dir.mkdir(parents=True, exist_ok=True)
