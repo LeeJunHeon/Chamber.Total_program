@@ -530,9 +530,22 @@ class AsyncMFC:
                 backoff = min(backoff * 2, MFC_RECONNECT_BACKOFF_MAX_MS)
 
     def _on_connection_made(self, transport: asyncio.Transport):
-        # 연결 직후 잔류 라인/에코 정리
+        self._transport = transport  # 이미 너의 코드에 있으면 생략
+        # ★ pyserial 객체 접근 → 입력/출력 버퍼 리셋 & 라인 제어
+        ser = getattr(transport, "serial", None)
+        if ser:
+            try:
+                ser.reset_input_buffer()
+                ser.reset_output_buffer()
+                # Qt 버전이 하던 것과 유사하게
+                ser.dtr = True
+                ser.rts = False
+            except Exception:
+                pass
+
+        # 잔여 라인/에코 정리
         self._skip_echos.clear()
-        asyncio.create_task(self._absorb_late_lines(100))
+        asyncio.create_task(self._absorb_late_lines(150))  # 100 → 150ms로 살짝 증대
 
     def _on_connection_lost(self, exc: Optional[Exception]):
         self._connected = False
@@ -592,8 +605,14 @@ class AsyncMFC:
             sent_txt = cmd.cmd_str.strip()
             self._dbg("MFC", f"[SEND] {sent_txt} (tag={cmd.tag})")
 
-            # write (전송 직전: 잔류 라인 짧게 드레인 → 이전 no-reply 에코/ACK 제거)
-            await self._absorb_late_lines(20)  # 10~30ms 정도 권장
+            # write (전송 직전: OS 입력버퍼 리셋 + 짧은 드레인)
+            ser = getattr(self._transport, "serial", None)
+            if ser:
+                try:
+                    ser.reset_input_buffer()    # ★ OS 입력버퍼 싹 비우기
+                except Exception:
+                    pass
+            await self._absorb_late_lines(60)   # ★ 20 → 60ms로 상향
 
             # write
             try:
@@ -672,8 +691,12 @@ class AsyncMFC:
         try:
             while True:
                 # 연결 안 됐으면 대기
-                if not self._connected:                                
+                if not self._connected:
                     await asyncio.sleep(MFC_POLLING_INTERVAL_MS / 1000.0)
+                    continue
+                # ★ 비-폴링 명령이 대기/진행 중이면 폴링 양보
+                if self._has_pending_non_poll_cmds():
+                    await asyncio.sleep(0.02)
                     continue
                 # 중첩 금지
                 if self._poll_cycle_active:
@@ -1048,6 +1071,14 @@ class AsyncMFC:
     # --- 유틸 ---
     def _is_poll_read_cmd(self, cmd_str: str, tag: str = "") -> bool:
         return (tag or "").startswith("[POLL ")
+    
+    def _has_pending_non_poll_cmds(self) -> bool:
+        if self._inflight and not self._is_poll_read_cmd(self._inflight.cmd_str, self._inflight.tag):
+            return True
+        for c in self._cmd_q:
+            if not self._is_poll_read_cmd(c.cmd_str, c.tag):
+                return True
+        return False
 
     def _purge_poll_reads_only(self, cancel_inflight: bool = True, reason: str = "") -> int:
         purged = 0
