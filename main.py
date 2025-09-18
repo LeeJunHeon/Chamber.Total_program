@@ -6,6 +6,7 @@ import asyncio
 from typing import Optional
 from datetime import datetime
 from pathlib import Path
+from collections import deque
 
 from PySide6.QtWidgets import QApplication, QWidget, QMessageBox, QFileDialog, QPlainTextEdit, QStackedWidget
 from PySide6.QtCore import QCoreApplication, Qt, Slot
@@ -31,7 +32,11 @@ from device.rf_pulse import RFPulseAsync
 # ✅ CH2 공정 컨트롤러 (asyncio 순수 버전)
 from controller.process_ch2 import ProcessController
 
-from lib.config_ch2 import CHAT_WEBHOOK_URL, ENABLE_CHAT_NOTIFY, RGA_PROGRAM_PATH, RGA_CSV_PATH, BUTTON_TO_PIN
+from lib.config_ch2 import (
+    CHAT_WEBHOOK_URL, ENABLE_CHAT_NOTIFY, RGA_PROGRAM_PATH, RGA_CSV_PATH, BUTTON_TO_PIN,
+    IG_RECONNECT_BACKOFF_MAX_MS, FADUINO_RECONNECT_BACKOFF_MAX_MS,
+    MFC_RECONNECT_BACKOFF_MAX_MS, RFPULSE_RECONNECT_BACKOFF_MAX_MS,
+)
 
 class MainWindow(QWidget):
     def __init__(self):
@@ -100,68 +105,60 @@ class MainWindow(QWidget):
 
         # === ProcessController 콜백 주입 (동기 함수 내부에서 코루틴 스케줄) ===
         def cb_faduino(cmd: str, arg):
-            asyncio.create_task(self.faduino.handle_named_command(cmd, arg))
+            self._spawn_detached(self.faduino.handle_named_command(cmd, arg))
 
         def cb_mfc(cmd: str, args: dict):
-            asyncio.create_task(self.mfc.handle_command(cmd, args))
+            self._spawn_detached(self.mfc.handle_command(cmd, args))
 
         def cb_dc_power(value: float):
-            asyncio.create_task(self.dc_power.start_process(float(value)))
+            self._spawn_detached(self.dc_power.start_process(float(value)))
 
         def cb_dc_stop():
-            asyncio.create_task(self.dc_power.cleanup())
+            self._spawn_detached(self.dc_power.cleanup())
 
         def cb_rf_power(value: float):
-            asyncio.create_task(self.rf_power.start_process(float(value)))
+            self._spawn_detached(self.rf_power.start_process(float(value)))
 
         def cb_rf_stop():
-            asyncio.create_task(self.rf_power.cleanup())
+            self._spawn_detached(self.rf_power.cleanup())
 
         def cb_rfpulse_start(power: float, freq, duty):
-            asyncio.create_task(self.rf_pulse.start_pulse_process(float(power), freq, duty))
+            self._spawn_detached(self.rf_pulse.start_pulse_process(float(power), freq, duty))
 
         def cb_rfpulse_stop():
-            # stop_process는 동기 함수이므로 그냥 호출
+            # stop_process는 동기 함수이므로 그대로 호출
             self.rf_pulse.stop_process()
 
         def cb_ig_wait(base_pressure: float):
-            asyncio.create_task(self.ig.wait_for_base_pressure(float(base_pressure)))
+            self._spawn_detached(self.ig.wait_for_base_pressure(float(base_pressure)))
 
         def cb_ig_cancel():
-            asyncio.create_task(self.ig.cancel_wait())
+            self._spawn_detached(self.ig.cancel_wait())
 
         def cb_rga_scan():
-            asyncio.create_task(self._do_rga_scan())
+            self._spawn_detached(self._do_rga_scan())
 
         def cb_oes_run(duration_sec: float, integration_ms: int):
             async def run():
                 try:
-                    # ✅ 백그라운드 폴링 태스크 보장
                     self._ensure_background_started()
-
-                    # ✅ OES 초기화 보장
                     if getattr(self.oes, "sChannel", -1) < 0:
                         ok = await self.oes.initialize_device()
                         if not ok:
                             raise RuntimeError("OES 초기화 실패")
-
-                    # ✅ 폴링 타깃 결정
                     targets = getattr(self, "_last_polling_targets", None)
                     if not targets:
                         params = getattr(self.process_controller, "current_params", {}) or {}
                         use_rf_pulse = bool(params.get("use_rf_pulse", False))
                         targets = {"mfc": True, "faduino": (not use_rf_pulse), "rfpulse": use_rf_pulse}
                     self._apply_polling_targets(targets)
-
-                    # 그래프 초기화 후 OES 실행
                     asyncio.get_running_loop().call_soon(self.graph_controller.clear_oes_plot)
                     await self.oes.run_measurement(duration_sec, integration_ms)
-
                 except Exception as e:
                     self.process_controller.on_oes_failed("OES", str(e))
                     if self.chat_notifier:
                         self.chat_notifier.notify_error("OES", str(e))
-            asyncio.create_task(run())
+            self._spawn_detached(run())
 
         self.process_controller = ProcessController(
             send_faduino=cb_faduino,
@@ -194,6 +191,9 @@ class MainWindow(QWidget):
         # Start 전에는 파일 미정
         self._log_file_path = None
 
+        # ✅ Start 전 로그를 임시로 쌓아둘 버퍼(최근 1000줄)
+        self._prestart_buf = deque(maxlen=1000)
+
         # # 앱 종료 훅
         # app = QCoreApplication.instance()
         # if app is not None:
@@ -201,6 +201,10 @@ class MainWindow(QWidget):
 
         # 초기 상태
         self._on_process_status_changed(False)
+
+                
+        # ✅ 콘솔로 안 찍고 로그로만 받게 훅 설치
+        self._install_exception_hooks()
 
     # ------------------------------------------------------------------
     # UI 버튼 연결만 유지 (컨트롤러 ↔ UI는 이벤트 큐로 처리)
@@ -262,14 +266,18 @@ class MainWindow(QWidget):
                     if not getattr(self, "_log_file_path", None):
                         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                         self._log_file_path = self._log_dir / f"{ts}.txt"
+
+                        # ✅ 먼저 버퍼를 덤프
                         try:
-                            with open(self._log_file_path, "a", encoding="utf-8") as f:
-                                f.write(
-                                    f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Logger] "
-                                    f"새 로그 파일 시작: {self._log_file_path}\n"
-                                )
+                            if self._prestart_buf:
+                                with open(self._log_file_path, "a", encoding="utf-8") as f:
+                                    f.writelines(self._prestart_buf)
+                                self._prestart_buf.clear()
                         except Exception:
                             pass
+
+                        # 그 다음 헤더 라인
+                        self.append_log("Logger", f"새 로그 파일 시작: {self._log_file_path}")
                     else:
                         # 이미 세션 파일이 있으면 안내만
                         self.append_log("Logger", f"세션 파일 유지: {self._log_file_path.name}")
@@ -322,10 +330,14 @@ class MainWindow(QWidget):
 
                     if getattr(self, "_pending_device_cleanup", False):
                         try:
-                            await self._stop_device_watchdogs(light=False)
+                            # ✅ 여기서 기다리지 말고 예약만
+                            self._spawn_detached(self._stop_device_watchdogs(light=False), name="FullCleanup")
                         except Exception:
                             pass
                         self._pending_device_cleanup = False
+                        # 종료 플로우이면 다음 공정 안 돌리고 펌프 루프 종료
+                        self._pc_stopping = False
+                        break  # ← while True 탈출(이 펌프 태스크는 정상 종료)
 
                     self._pc_stopping = False
 
@@ -347,13 +359,14 @@ class MainWindow(QWidget):
                     # (선택) 종료 대기 중이던 워치독 정리까지
                     if getattr(self, "_pending_device_cleanup", False):
                         try:
-                            await self._stop_device_watchdogs(light=False)
+                            # 기다리지 말고 예약만
+                            self._spawn_detached(self._stop_device_watchdogs(light=False), name="FullCleanup")
                         except Exception:
                             pass
                         self._pending_device_cleanup = False
+                        self._pc_stopping = False
+                        break  # ← 이벤트 펌프 종료(“finished”와 동일한 패턴)
 
-                    # 종료 가드 해제
-                    self._pc_stopping = False
                 elif kind == "polling_targets":
                     targets = dict(payload.get("targets") or {})   # ← 올바른 접근
                     self._last_polling_targets = targets
@@ -471,7 +484,6 @@ class MainWindow(QWidget):
                     pass
                 if self._verbose_polling_log:
                     self.append_log("MFC", f"[poll] {gas}: {flow:.2f} sccm")
-                self.update_mfc_flow_ui(gas, flow)
 
             elif k == "pressure":
                 txt = ev.text or (f"{ev.value:.3g}" if ev.value is not None else "")
@@ -481,7 +493,6 @@ class MainWindow(QWidget):
                     pass
                 if self._verbose_polling_log:
                     self.append_log("MFC", f"[poll] ChamberP: {txt}")
-                self.update_mfc_pressure_ui(txt)
 
     async def _pump_ig_events(self):
         async for ev in self.ig.events():
@@ -647,27 +658,26 @@ class MainWindow(QWidget):
                 loop.call_soon(t.cancel)  # 예약 취소만
         except Exception:
             pass
-        self._bg_tasks = []
 
-        loop = asyncio.get_running_loop()
-        self._bg_tasks = [
-            # 장치 내부 루프 (★ 추가 4개)
-            loop.create_task(self.faduino.start()),
-            loop.create_task(self.mfc.start()),
-            loop.create_task(self.ig.start()),
-            loop.create_task(self.rf_pulse.start()),
-            # 이벤트 펌프(장치 → PC/UI)
-            loop.create_task(self._pump_faduino_events()),
-            loop.create_task(self._pump_mfc_events()),
-            loop.create_task(self._pump_ig_events()),
-            loop.create_task(self._pump_rga_events()),
-            loop.create_task(self._pump_dc_events()),
-            loop.create_task(self._pump_rf_events()),
-            loop.create_task(self._pump_rfpulse_events()),
-            loop.create_task(self._pump_oes_events()),
-            loop.create_task(self._pump_pc_events()),
-        ]
-        self._bg_started = True  # ← 태스크 생성 후에 True로 세팅(에러 시 false 유지)
+        # 기존 잔여 취소 예약 코드는 유지
+        self._bg_tasks = []
+        # ✅ 루프 콜백에서 루트 태스크로 생성 + 리스트에 보관
+        self._spawn_detached(self.faduino.start(), store=True, name="Faduino.start")
+        self._spawn_detached(self.mfc.start(),      store=True, name="MFC.start")
+        self._spawn_detached(self.ig.start(),       store=True, name="IG.start")
+        self._spawn_detached(self.rf_pulse.start(), store=True, name="RFPulse.start")
+
+        self._spawn_detached(self._pump_faduino_events(), store=True, name="Pump.Faduino")
+        self._spawn_detached(self._pump_mfc_events(),     store=True, name="Pump.MFC")
+        self._spawn_detached(self._pump_ig_events(),      store=True, name="Pump.IG")
+        self._spawn_detached(self._pump_rga_events(),     store=True, name="Pump.RGA")
+        self._spawn_detached(self._pump_dc_events(),      store=True, name="Pump.DC")
+        self._spawn_detached(self._pump_rf_events(),      store=True, name="Pump.RF")
+        self._spawn_detached(self._pump_rfpulse_events(), store=True, name="Pump.RFPulse")
+        self._spawn_detached(self._pump_oes_events(),     store=True, name="Pump.OES")
+        self._spawn_detached(self._pump_pc_events(),      store=True, name="Pump.PC")
+
+        self._bg_started = True
 
     # ------------------------------------------------------------------
     # 표시/입력 관련
@@ -691,17 +701,17 @@ class MainWindow(QWidget):
         loop.call_soon(self.ui.ch2_Voltage_edit.setPlainText, f"{voltage:.3f}")
         loop.call_soon(self.ui.ch2_Current_edit.setPlainText, f"{current:.3f}")
 
-    @Slot(str)
-    def update_mfc_pressure_ui(self, pressure_value):
-        asyncio.get_running_loop().call_soon(self.ui.ch2_workingPressure_edit.setPlainText, pressure_value)
+    # @Slot(str)
+    # def update_mfc_pressure_ui(self, pressure_value):
+    #     asyncio.get_running_loop().call_soon(self.ui.ch2_workingPressure_edit.setPlainText, pressure_value)
 
-    @Slot(str, float)
-    def update_mfc_flow_ui(self, gas_name, flow_value):
-        t = f"{flow_value:.1f}"
-        loop = asyncio.get_running_loop()
-        if gas_name == "Ar":  loop.call_soon(self.ui.ch2_arFlow_edit.setPlainText, t)
-        elif gas_name == "O2": loop.call_soon(self.ui.ch2_o2Flow_edit.setPlainText, t)
-        elif gas_name == "N2": loop.call_soon(self.ui.ch2_n2Flow_edit.setPlainText, t)
+    # @Slot(str, float)
+    # def update_mfc_flow_ui(self, gas_name, flow_value):
+    #     t = f"{flow_value:.1f}"
+    #     loop = asyncio.get_running_loop()
+    #     if gas_name == "Ar":  loop.call_soon(self.ui.ch2_arFlow_edit.setPlainText, t)
+    #     elif gas_name == "O2": loop.call_soon(self.ui.ch2_o2Flow_edit.setPlainText, t)
+    #     elif gas_name == "N2": loop.call_soon(self.ui.ch2_n2Flow_edit.setPlainText, t)
 
     def _on_process_status_changed(self, running: bool):
         self.ui.ch2_Start_button.setEnabled(not running)
@@ -813,7 +823,7 @@ class MainWindow(QWidget):
             else:
                 self.append_log("Logger", f"같은 세션 파일 계속 사용: {self._log_file_path.name}")
 
-            asyncio.create_task(self._start_process_later(params, 0.25))
+            self._spawn_detached(self._start_process_later(params, 0.25))
         else:
             self.append_log("MAIN", "모든 공정이 완료되었습니다.")
             self._clear_queue_and_reset_ui()
@@ -827,7 +837,7 @@ class MainWindow(QWidget):
             self.append_log("MAIN", "경고: 이미 다른 공정이 실행 중이므로 새 공정을 시작하지 않습니다.")
             return
         # 프리플라이트(연결 확인) → 완료 후 공정 시작
-        asyncio.create_task(self._start_after_preflight(params))
+        self._spawn_detached(self._start_after_preflight(params))
 
     # (MainWindow 클래스 내부)
     # 1) 재진입 안전한 비모달 표출 유틸을 "메서드"로 추가
@@ -840,7 +850,17 @@ class MainWindow(QWidget):
             self._ensure_background_started()
             self.append_log("MAIN", "장비 연결 확인 중...")
 
-            ok, failed = await self._preflight_connect(params, timeout_s=5.0)
+            # 워치독 최대 백오프를 고려해 프리플라이트 대기시간을 동적 산정
+            use_rf_pulse = bool(params.get("use_rf_pulse") or params.get("use_rf_pulse_power"))
+            max_backoff_ms = max(
+                IG_RECONNECT_BACKOFF_MAX_MS,
+                FADUINO_RECONNECT_BACKOFF_MAX_MS,
+                MFC_RECONNECT_BACKOFF_MAX_MS,
+                (RFPULSE_RECONNECT_BACKOFF_MAX_MS if use_rf_pulse else 0),
+            )
+            timeout = max(5.0, max_backoff_ms / 1000.0 + 2.0)  # 여유 2초
+            ok, failed = await self._preflight_connect(params, timeout_s=timeout)
+
             if not ok:
                 fail_list = ", ".join(failed) if failed else "알 수 없음"
                 self.append_log("MAIN", f"필수 장비 연결 실패: {fail_list} → 공정 시작 중단")
@@ -995,7 +1015,7 @@ class MainWindow(QWidget):
             pass
 
         # 0) ⚡ 라이트 정지: 폴링만 끄고(재연결은 장치별 pause로 일시중지), 포트는 열어둠
-        asyncio.create_task(self._stop_device_watchdogs(light=True))
+        self._spawn_detached(self._stop_device_watchdogs(light=True))
 
         # 이번에 종료 절차에 진입
         self._pc_stopping = True
@@ -1029,7 +1049,8 @@ class MainWindow(QWidget):
         # 0) 이벤트 펌프/백그라운드 태스크 먼저 취소 → 같은 틱 재귀 취소 방지
         loop = asyncio.get_running_loop()
         try:
-            live = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done()]
+            current = asyncio.current_task()
+            live = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done() and t is not current]
             for t in live:
                 loop.call_soon(t.cancel)
             if live:
@@ -1040,22 +1061,16 @@ class MainWindow(QWidget):
         # ▶ IG는 OFF 보장을 먼저 '대기'해서 끝내 둠(중복 OFF는 무해)
         try:
             if self.ig and hasattr(self.ig, "cancel_wait"):
-                t = asyncio.create_task(self.ig.cancel_wait())
                 try:
-                    await asyncio.wait_for(t, timeout=2.0)
+                    await asyncio.wait_for(self.ig.cancel_wait(), timeout=2.0)
                 except asyncio.TimeoutError:
-                    # 타임아웃이면 Task를 취소하고 반드시 수거해 경고 방지
-                    t.cancel()
-                    try:
-                        await t
-                    except asyncio.CancelledError:
-                        pass
+                    pass
         except Exception:
             pass
 
         # 1) 장치 워치독/워커 정리(재연결 억제)
         tasks = []
-        for dev in (self.ig, self.mfc, self.faduino, self.rf_pulse, self.dc_power, self.rf_power, self.oes):
+        for dev in (self.ig, self.mfc, self.faduino, self.rf_pulse, self.dc_power, self.rf_power, self.oes, self.rga):
             if dev and hasattr(dev, "cleanup"):
                 try:
                     tasks.append(dev.cleanup())
@@ -1078,10 +1093,15 @@ class MainWindow(QWidget):
         loop = asyncio.get_running_loop()
         loop.call_soon(self._append_log_to_ui, line_ui)
 
-        # 세션 파일이 준비되지 않은 상태에서는 UI에만 출력하고 파일 기록은 하지 않는다.
+        # 세션 파일이 없으면 파일에 쓰지 않고 메모리 버퍼에만 저장
         if not getattr(self, "_log_file_path", None):
+            try:
+                self._prestart_buf.append(line_file)
+            except Exception:
+                pass
             return
 
+        # 세션 파일이 있으면 바로 파일에 기록
         try:
             with open(self._log_file_path, "a", encoding="utf-8") as f:
                 f.write(line_file)
@@ -1097,10 +1117,20 @@ class MainWindow(QWidget):
 
     # === [추가] 새 로그 파일을 프리플라이트 전에 준비 ===
     def _prepare_log_file(self, params: dict):
-        """프리플라이트(장비 연결) 시작 직전에 호출: 새 로그 파일 경로 생성 + 헤더 남김."""
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._log_file_path = self._log_dir / f"{ts}.txt"
-        # 한 줄 알림은 append_log로 남겨 경로 세팅 직후 동일 파일에 기록되게 함
+
+        # ✅ Start 이전에 쌓아둔 버퍼를 먼저 파일에 한 번에 기록(시간 순서 유지)
+        try:
+            if self._prestart_buf:
+                with open(self._log_file_path, "a", encoding="utf-8") as f:
+                    f.writelines(self._prestart_buf)
+                self._prestart_buf.clear()
+        except Exception:
+            # 버퍼 덤프에 실패해도 공정은 계속
+            pass
+
+        # 이후 안내/헤더 라인 기록
         self.append_log("Logger", f"새 로그 파일 시작: {self._log_file_path}")
         note = str(params.get("process_note", "") or params.get("Process_name", "") or "Run")
         self.append_log("MAIN", f"=== '{note}' 공정 준비 (장비 연결부터 기록) ===")
@@ -1205,13 +1235,18 @@ class MainWindow(QWidget):
         self._reset_ui_after_process()
         # 다음 실행부터는 새 파일로 시작
         self._log_file_path = None
+        # ✅ Start 전 로그 버퍼도 초기화(세션 간 혼입 방지)
+        try:
+            self._prestart_buf.clear()
+        except Exception:
+            pass
 
     # ------------------------------------------------------------------
     # 종료/정리(단일 경로)
     # ------------------------------------------------------------------
     def closeEvent(self, event: QCloseEvent) -> None:
         self.append_log("MAIN", "프로그램 창 닫힘 → 빠른 종료 경로 진입(장비 명령 전송 없음).")
-        asyncio.create_task(self._fast_quit())
+        self._spawn_detached(self._fast_quit())
         event.accept()
         super().closeEvent(event)
 
@@ -1243,7 +1278,7 @@ class MainWindow(QWidget):
         if self._force_cleanup_task and not self._force_cleanup_task.done():
             self._force_cleanup_task.cancel()
         # ✅ 종료 스텝 확인 타임아웃(예: 2.5s) × 여러 스텝 고려 → 약 30s 권장
-        self._force_cleanup_task = asyncio.create_task(_force_cleanup_after(30.0))
+        self._set_task_later("_force_cleanup_task", _force_cleanup_after(30.0), name="ForceCleanup")
 
         # 3) Chat Notifier 정지 등 부가 정리는 유지
         try:
@@ -1272,7 +1307,8 @@ class MainWindow(QWidget):
 
         # 1) 백그라운드 태스크 취소는 같은 틱 이후로 미룸 → 재귀 취소 폭주 방지
         loop = asyncio.get_running_loop()
-        live = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done()]
+        current = asyncio.current_task()
+        live = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done() and t is not current]
         for t in live:
             loop.call_soon(t.cancel)
         if live:
@@ -1541,11 +1577,53 @@ class MainWindow(QWidget):
         )
 
         self._cancel_delay_task()
-        self._delay_task = asyncio.create_task(self._delay_sleep_then_continue(name, duration_s))
+        self._set_task_later("_delay_task", self._delay_sleep_then_continue(name, duration_s), name=f"Delay:{name}")
         return True
         
     def _post_update_oes_plot(self, x, y) -> None:
         asyncio.get_running_loop().call_soon(self.graph_controller.update_oes_plot, x, y)
+
+    # === 유틸 ===
+    # 현재 태스크의 자식이 아닌 '루트 태스크'로 분리 생성
+    def _spawn_detached(self, coro, *, store: bool = False, name: str | None = None):
+        loop = asyncio.get_running_loop()
+        def _create():
+            t = loop.create_task(coro, name=name)
+            if store:
+                self._bg_tasks.append(t)
+        loop.call_soon(_create)
+
+    # 나중에 생성될 태스크 핸들을 self.<attr>에 기록(지연 생성)
+    def _set_task_later(self, attr_name: str, coro, *, name: str | None = None):
+        loop = asyncio.get_running_loop()
+        def _create_and_set():
+            t = loop.create_task(coro, name=name)
+            setattr(self, attr_name, t)
+        loop.call_soon(_create_and_set)
+
+    # 콘솔 traceback 가로채서 append_log로만 남기기
+    def _install_exception_hooks(self):
+        import sys, traceback
+        loop = asyncio.get_running_loop()
+
+        def excepthook(exctype, value, tb):
+            txt = ''.join(traceback.format_exception(exctype, value, tb)).rstrip()
+            self.append_log("EXC", txt)
+
+        def loop_exception_handler(loop, context):
+            exc = context.get("exception")
+            msg = context.get("message", "")
+            if exc:
+                try:
+                    txt = ''.join(traceback.format_exception(type(exc), exc, exc.__traceback__)).rstrip()
+                except Exception:
+                    txt = f"{exc!r}"
+                self.append_log("Asyncio", txt)
+            elif msg:
+                self.append_log("Asyncio", msg)
+
+        sys.excepthook = excepthook
+        loop.set_exception_handler(loop_exception_handler)
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
