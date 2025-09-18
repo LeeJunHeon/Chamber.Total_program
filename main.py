@@ -258,25 +258,25 @@ class MainWindow(QWidget):
                 elif kind == "status":
                     self._on_process_status_changed(bool(payload.get("running", False)))
                 elif kind == "started":
-                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                    self._log_file_path = self._log_dir / f"{ts}.txt"
-                    # 파일에 즉시 한 줄 남김
-                    try:
-                        with open(self._log_file_path, "a", encoding="utf-8") as f:
-                            f.write(
-                                f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Logger] "
-                                f"새 로그 파일 시작: {self._log_file_path}\n"
-                            )
-                    except Exception:
-                        pass
+                    # 세션 파일이 없을 때만 생성. 이미 있으면 그대로 사용.
+                    if not getattr(self, "_log_file_path", None):
+                        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        self._log_file_path = self._log_dir / f"{ts}.txt"
+                        try:
+                            with open(self._log_file_path, "a", encoding="utf-8") as f:
+                                f.write(
+                                    f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] [Logger] "
+                                    f"새 로그 파일 시작: {self._log_file_path}\n"
+                                )
+                        except Exception:
+                            pass
+                    else:
+                        # 이미 세션 파일이 있으면 안내만
+                        self.append_log("Logger", f"세션 파일 유지: {self._log_file_path.name}")
 
-                    # DataLogger, 그래프, 알림
+                    # DataLogger/그래프/알림 등 나머지 로직은 그대로
                     try:
-                        params_for_log = payload.get("params", {})
-                        # 한 틱(50ms) 늦춰서 세션 초기화 → 직전 finalize가 먼저 스냅샷/쓰기 잡도록
-                        asyncio.get_running_loop().call_later(
-                            0.05, self.data_logger.start_new_log_session, params_for_log
-                        )
+                        self.data_logger.start_new_log_session(payload.get("params", {}))
                     except Exception:
                         pass
                     self.graph_controller.reset()
@@ -806,7 +806,13 @@ class MainWindow(QWidget):
             if self._try_handle_delay_step(params):   # delay 단계면 대기만 수행
                 return
             norm = self._normalize_params_for_process(params)
-            self._prepare_log_file(norm)  # [추가] 다음 공정도 장비 연결부터 동일 파일에 기록
+
+            # 자동 큐 전체를 하나의 파일로 기록: 첫 공정에서만 생성, 이후에는 유지
+            if not getattr(self, "_log_file_path", None):
+                self._prepare_log_file(norm)
+            else:
+                self.append_log("Logger", f"같은 세션 파일 계속 사용: {self._log_file_path.name}")
+
             asyncio.create_task(self._start_process_later(params, 0.25))
         else:
             self.append_log("MAIN", "모든 공정이 완료되었습니다.")
@@ -919,9 +925,15 @@ class MainWindow(QWidget):
         if self.process_controller.is_running:
             QMessageBox.warning(self, "실행 오류", "현재 다른 공정이 실행 중입니다.")
             return
-
+        
         # 자동 시퀀스
         if self.process_queue:
+            # 세션 파일이 아직 없으면 첫 공정 이름으로 노트 달아서 선생성
+            if not getattr(self, "_log_file_path", None):
+                first = self.process_queue[0] if self.process_queue else {}
+                note = f"AutoRun: {first.get('Process_name', 'Run')}"
+                self._prepare_log_file({"process_note": note})
+
             self.append_log("MAIN", "입력받은 파일로 자동 공정 시퀀스를 시작합니다.")
             self.current_process_index = -1
             self._start_next_process_from_queue(True)
@@ -1066,15 +1078,18 @@ class MainWindow(QWidget):
         loop = asyncio.get_running_loop()
         loop.call_soon(self._append_log_to_ui, line_ui)
 
-        # 2) 파일: 즉시 append
-        path = self._log_file_path or (self._log_dir / "log.txt")
+        # 세션 파일이 준비되지 않은 상태에서는 UI에만 출력하고 파일 기록은 하지 않는다.
+        if not getattr(self, "_log_file_path", None):
+            return
+
         try:
-            with open(path, "a", encoding="utf-8") as f:
+            with open(self._log_file_path, "a", encoding="utf-8") as f:
                 f.write(line_file)
         except Exception as e:
-            # 파일 실패도 UI에 바로 알림
-            asyncio.get_running_loop().call_soon(self.ui.ch2_logMessage_edit.appendPlainText,
-                                     f"[Logger] 파일 기록 실패: {e}")
+            asyncio.get_running_loop().call_soon(
+                self.ui.ch2_logMessage_edit.appendPlainText,
+                f"[Logger] 파일 기록 실패: {e}"
+            )
 
     def _append_log_to_ui(self, line: str):
         self.ui.ch2_logMessage_edit.moveCursor(QTextCursor.MoveOperation.End)
@@ -1083,7 +1098,6 @@ class MainWindow(QWidget):
     # === [추가] 새 로그 파일을 프리플라이트 전에 준비 ===
     def _prepare_log_file(self, params: dict):
         """프리플라이트(장비 연결) 시작 직전에 호출: 새 로그 파일 경로 생성 + 헤더 남김."""
-        from datetime import datetime
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._log_file_path = self._log_dir / f"{ts}.txt"
         # 한 줄 알림은 append_log로 남겨 경로 세팅 직후 동일 파일에 기록되게 함
@@ -1189,6 +1203,8 @@ class MainWindow(QWidget):
         self.process_queue = []
         self.current_process_index = -1
         self._reset_ui_after_process()
+        # 다음 실행부터는 새 파일로 시작
+        self._log_file_path = None
 
     # ------------------------------------------------------------------
     # 종료/정리(단일 경로)
