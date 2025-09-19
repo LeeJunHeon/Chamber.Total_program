@@ -319,20 +319,46 @@ class AsyncIG:
         if self._waiting_active:
             self._polling_task = asyncio.create_task(self._poll_rdi_loop(interval_ms))
 
-        # 완료를 이 함수에서 기다림: True/False 반환
-        # 폴링 태스크가 set by self._waiting_active False when done
         try:
+            # 하드 타임아웃: 내부 timeout + 첫 지연 + 여유
+            try:
+                limit_s = float(IG_WAIT_TIMEOUT)
+            except Exception:
+                limit_s = 120.0
+            hard_deadline = self._wait_start_s + limit_s + (self._first_read_delay_ms/1000.0) + 5.0
+
             while self._waiting_active:
+                # 폴링 태스크가 예기치 않게 종료했는지 감시
+                if self._polling_task and self._polling_task.done() and self._waiting_active:
+                    err = None
+                    try:
+                        err = self._polling_task.exception()
+                    except Exception:
+                        pass
+                    await self._emit_status(f"폴링 태스크 조기 종료: {repr(err)}")
+                    await self._emit_failed("PollingTaskExited")
+                    self._waiting_active = False
+                    try:
+                        await self._send_off_best_effort(wait_gap_ms=200)
+                    except Exception:
+                        pass
+                    break
+
+                # 최종 안전망: 하드 타임아웃
+                if time.monotonic() > hard_deadline:
+                    await self._emit_status("하드 타임아웃: 상위 가드에 의해 종료")
+                    await self._emit_failed("HardTimeout")
+                    self._waiting_active = False
+                    try:
+                        await self._send_off_best_effort(wait_gap_ms=200)
+                    except Exception:
+                        pass
+                    break
+
                 await asyncio.sleep(0.05)
 
-            # 상태가 이미 처리되었고 SIG 0는 내부에서 처리
-            # 최종 성공/실패는 이벤트에서 이미 방출됨
-            # 여기서는 마지막 상태를 판단해서 반환
-            # (성공 시점에서 self._waiting_active False가 되고 바로 SIG 0 후 종료되므로 True 반환)
-            # 이를 추적하려면 플래그를 두자
             return getattr(self, "_last_wait_success", False)
         finally:
-            # ✅ IG는 베이스 압력 판정이 끝나면 곧바로 연결과 태스크를 정리한다.
             await self.cleanup()
 
     async def cancel_wait(self):
@@ -560,31 +586,52 @@ class AsyncIG:
     # 내부: Base Pressure 흐름
     # ---------------------------
     async def _poll_rdi_loop(self, interval_ms: int):
-        """주기적 RDI 폴링."""
+        """주기적 RDI 폴링(미도달 시 대기→재시도, 예외 안전)."""
         try:
+            # IG_WAIT_TIMEOUT이 비정상이어도 안전하게 숫자로
+            try:
+                wait_limit_s = float(IG_WAIT_TIMEOUT)
+            except Exception:
+                wait_limit_s = 120.0  # 합리적 기본값
+
             while self._waiting_active:
                 if not self._connected:
                     await asyncio.sleep(max(0.0, interval_ms / 1000.0))
                     continue
 
-                # 타임아웃은 개별 명령에 부여
+                # 1) RDI 1회 시도 (타임아웃은 per-command)
                 line = await self._send_and_wait_line("RDI", tag="[POLL RDI]", timeout_ms=IG_TIMEOUT_MS)
                 if not self._waiting_active:
                     break
-                await self._handle_rdi_line(line)
 
-                # 전체 대기 시간 초과 판정
-                if (time.monotonic() - self._wait_start_s) > float(IG_WAIT_TIMEOUT):
-                    await self._emit_status(f"시간 초과({IG_WAIT_TIMEOUT}초): 목표 압력 미도달")
+                # 2) 처리: 도달/IG OFF/파싱 실패/미도달 모두 내부에서 결정
+                await self._handle_rdi_line(line)
+                if not self._waiting_active:
+                    break  # 도달 또는 실패 처리로 종료된 경우
+
+                # 3) 전체 대기 시간 초과 → 실패로 종료
+                if (time.monotonic() - self._wait_start_s) > wait_limit_s:
+                    await self._emit_status(f"시간 초과({wait_limit_s:.1f}s): 목표 압력 미도달")
                     await self._emit_failed("Timeout")
                     self._waiting_active = False
-                    # IG OFF 보장 후 종료
                     await self._send_off_best_effort(wait_gap_ms=200)
                     break
 
+                # 4) 목표 미도달이면 interval 만큼 기다렸다 다음 RDI 반복
                 await asyncio.sleep(max(0.0, interval_ms / 1000.0))
+
         except asyncio.CancelledError:
+            # 정상 취소
             pass
+        except Exception as e:
+            # 조용히 죽지 않도록 실패 전환
+            await self._emit_status(f"폴링 태스크 예외: {e!r}")
+            await self._emit_failed("InternalError")
+            self._waiting_active = False
+            try:
+                await self._send_off_best_effort(wait_gap_ms=200)
+            except Exception:
+                pass
 
     async def _handle_rdi_line(self, line: Optional[str]):
         """RDI 응답 처리(IG OFF → 재점등, 파싱, 도달 판정)."""
@@ -798,33 +845,35 @@ class AsyncIG:
         except Exception as e:
             self._dbg("IG", f"콜백 오류: {e}")
 
+    def _q_put_event_nowait(self, ev: IGEvent):
+        """이벤트 큐가 가득 차면 가장 오래된 항목을 버리고 새 이벤트를 넣는다."""
+        try:
+            self._event_q.put_nowait(ev)
+        except asyncio.QueueFull:
+            try:
+                _ = self._event_q.get_nowait()
+            except Exception:
+                pass
+            try:
+                self._event_q.put_nowait(ev)
+            except Exception:
+                pass
+
     async def _emit_status(self, msg: str):
         if self.debug_print:
             print(f"[IG][status] {msg}")
-        try:
-            await self._event_q.put(IGEvent(kind="status", message=msg))
-        except Exception:
-            pass
+        self._q_put_event_nowait(IGEvent(kind="status", message=msg))
 
     async def _emit_pressure(self, p: float):
         if self.debug_print:
             print(f"[IG][pressure] {p:.3e}")
-        try:
-            await self._event_q.put(IGEvent(kind="pressure", pressure=p))
-        except Exception:
-            pass
+        self._q_put_event_nowait(IGEvent(kind="pressure", pressure=p))
 
     async def _emit_base_reached(self):
-        try:
-            await self._event_q.put(IGEvent(kind="base_reached"))
-        except Exception:
-            pass
+        self._q_put_event_nowait(IGEvent(kind="base_reached"))
 
     async def _emit_failed(self, why: str):
-        try:
-            await self._event_q.put(IGEvent(kind="base_failed", message=why))
-        except Exception:
-            pass
+        self._q_put_event_nowait(IGEvent(kind="base_failed", message=why))
 
     def _dbg(self, src: str, msg: str):
         if self.debug_print:

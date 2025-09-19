@@ -611,14 +611,7 @@ class AsyncMFC:
             sent_txt = cmd.cmd_str.strip()
             self._dbg("MFC", f"[SEND] {sent_txt} (tag={cmd.tag})")
 
-            # write (전송 직전: OS 입력버퍼 리셋 + 짧은 드레인)
-            ser = getattr(self._transport, "serial", None)
-            if ser:
-                try:
-                    ser.reset_input_buffer()    # ★ OS 입력버퍼 싹 비우기
-                except Exception:
-                    pass
-            await self._absorb_late_lines(60)   # ★ 20 → 60ms로 상향
+            await self._absorb_late_lines(15)
 
             # write
             try:
