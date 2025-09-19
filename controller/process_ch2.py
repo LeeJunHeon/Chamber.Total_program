@@ -29,7 +29,8 @@ class PCEvent:
       - 'finished'           : {'ok': bool, 'detail': dict}
       - 'aborted'            : {}
       - 'polling'            : {'active': bool}
-      - 'polling_targets'    : {'targets': {'mfc':bool,'faduino':bool,'rfpulse':bool}}
+      - 'polling_targets'    : {'targets': {'mfc':bool,'plc':bool,'faduino':bool,'rfpulse':bool}}
+        # 주: 하위호환을 위해 'faduino' 키도 계속 내보냄(메인에서 아직 사용 중)
     """
     kind: str
     payload: Dict[str, Any] | None = None
@@ -38,7 +39,7 @@ class PCEvent:
 @dataclass(frozen=True)
 class ExpectToken:
     """해당 스텝 완료 판정을 위해 필요한 '확인 토큰'."""
-    kind: str        # 'MFC', 'FADUINO', 'DC_TARGET', 'RF_TARGET', 'IG_OK', 'RGA_OK', 'RFPULSE_OFF', 'GENERIC_OK', ...
+    kind: str        # 'MFC', "PLC", 'FADUINO', 'DC_TARGET', 'RF_TARGET', 'IG_OK', 'RGA_OK', 'RFPULSE_OFF', 'GENERIC_OK', ...
     spec: Any = None # 세부 식별자 (예: 명령 문자열)
 
     def matches(self, other: "ExpectToken") -> bool:
@@ -91,7 +92,7 @@ class ActionType(str, Enum):
     IG_CMD = "IG_CMD"
     RGA_SCAN = "RGA_SCAN"
     MFC_CMD = "MFC_CMD"
-    FADUINO_CMD = "FADUINO_CMD"
+    PLC_CMD = "PLC_CMD"          # 🔁 교체
     DELAY = "DELAY"
     DC_POWER_SET = "DC_POWER_SET"
     RF_POWER_SET = "RF_POWER_SET"
@@ -122,9 +123,9 @@ class ProcessStep:
         if self.action in (ActionType.DC_POWER_SET, ActionType.RF_POWER_SET, ActionType.IG_CMD):
             if self.value is None:
                 raise ValueError(f"{self.action.name} 액션은 value가 필요합니다.")
-        if self.action == ActionType.FADUINO_CMD:
+        if self.action == ActionType.PLC_CMD:
             if not self.params or len(self.params) != 2:
-                raise ValueError("FADUINO_CMD params는 (cmd:str, arg:any) 형태여야 합니다.")
+                raise ValueError("PLC_CMD params는 (name:str, on:any) 형태여야 합니다.")
         if self.action == ActionType.MFC_CMD:
             if not self.params or len(self.params) != 2 or not isinstance(self.params[1], dict):
                 raise ValueError("MFC_CMD params는 (cmd:str, args:dict) 형태여야 합니다.")
@@ -170,7 +171,7 @@ class ProcessController:
     def __init__(
         self,
         *,
-        send_faduino: Callable[[str, Any], None],
+        send_plc: Callable[[str, Any], None],      # 🔁 이름/의미 교체
         send_mfc: Callable[[str, Dict[str, Any]], None],
         send_dc_power: Callable[[float], None],
         stop_dc_power: Callable[[], None],
@@ -184,7 +185,7 @@ class ProcessController:
         oes_run: Callable[[float, int], None],
     ) -> None:
         self.event_q: asyncio.Queue[PCEvent] = asyncio.Queue()
-        self._send_faduino = send_faduino
+        self._send_plc = send_plc                   # 🔁 보관 멤버도 교체
         self._send_mfc = send_mfc
         self._send_dc_power = send_dc_power
         self._stop_dc_power = stop_dc_power
@@ -395,11 +396,12 @@ class ProcessController:
     def on_mfc_failed(self, cmd: str, why: str) -> None:
         self._step_failed("MFC", f"{cmd}: {why}")
 
-    def on_faduino_confirmed(self, cmd: str) -> None:
-        self._match_token(ExpectToken("FADUINO", cmd))
+    def on_plc_confirmed(self, cmd: str) -> None:
+        self._match_token(ExpectToken("PLC", cmd))
 
-    def on_faduino_failed(self, cmd: str, why: str) -> None:
-        self._step_failed("Faduino", f"{cmd}: {why}")
+    def on_plc_failed(self, cmd: str, why: str) -> None:
+        self._step_failed("PLC", f"{cmd}: {why}")
+
 
     def on_ig_ok(self) -> None:
         self._match_token(ExpectToken("IG_OK"))
@@ -588,10 +590,10 @@ class ProcessController:
         elif a == ActionType.RGA_SCAN:
             self._rga_scan()
             tokens.append(ExpectToken("RGA_OK"))
-        elif a == ActionType.FADUINO_CMD:
-            cmd, arg = step.params
-            self._send_faduino(cmd, arg)
-            tokens.append(ExpectToken("FADUINO", cmd))
+        elif a == ActionType.PLC_CMD:
+            name, on = step.params
+            self._send_plc(name, on)
+            tokens.append(ExpectToken("PLC", name))
         elif a == ActionType.MFC_CMD:
             cmd, args = step.params
             self._send_mfc(cmd, dict(args))
@@ -706,11 +708,12 @@ class ProcessController:
 
     def _compute_polling_targets(self, active: bool) -> Dict[str, bool]:
         if not active:
-            return {'mfc': False, 'faduino': False, 'rfpulse': False}
-        info = self._get_common_process_info(self.current_params or {})
+            return {'mfc': False, 'plc': False, 'faduino': False, 'rfpulse': False}
+        info = self._get_common_process_info(...)
         if info.get('use_rf_pulse', False):
-            return {'mfc': True, 'faduino': False, 'rfpulse': True}
-        return {'mfc': True, 'faduino': True, 'rfpulse': False}
+            return {'mfc': True, 'plc': True, 'faduino': False, 'rfpulse': True}
+        # 주: DC 파워는 여전히 Faduino 경로이므로 필요 시 faduino도 True 가능
+        return {'mfc': True, 'plc': True, 'faduino': True, 'rfpulse': False}
 
     # =========================
     # 종료/실패 처리
@@ -898,14 +901,14 @@ class ProcessController:
 
         # --- 가스 주입 ---
         steps.append(ProcessStep(
-            action=ActionType.FADUINO_CMD, params=('MV', True), message='메인 밸브 열기'
+            action=ActionType.PLC_CMD, params=('MV', True), message='메인 밸브 열기'
         ))
         for gas, info in gas_info.items():
             if params.get(f"use_{gas.lower()}", False):
                 flow_value = float(params.get(f"{gas.lower()}_flow", 0))
                 steps.extend([
                     ProcessStep(
-                        action=ActionType.FADUINO_CMD, params=(gas, True), message=f'{gas} 밸브 열기'
+                        action=ActionType.PLC_CMD, params=(gas, True), message=f'{gas} 밸브 열기'
                     ),
                     ProcessStep(
                         action=ActionType.MFC_CMD,
@@ -932,7 +935,7 @@ class ProcessController:
         for shutter in gun_shutters:
             if params.get(f"use_{shutter.lower()}", False):
                 steps.append(ProcessStep(
-                    action=ActionType.FADUINO_CMD,
+                    action=ActionType.PLC_CMD,
                     params=(shutter, True),
                     message=f'Gun Shutter {shutter} 열기'
                 ))
@@ -940,7 +943,7 @@ class ProcessController:
         # Power_select: N2(채널3) 릴레이 ON
         if bool(params.get("use_power_select", False)):
             steps.append(ProcessStep(
-                action=ActionType.FADUINO_CMD, params=("N2", True),
+                action=ActionType.PLC_CMD, params=("N2", True),
                 message="Power_select: N2 가스 밸브(Ch3) ON"
             ))
 
@@ -994,7 +997,7 @@ class ProcessController:
 
         if use_ms:
             steps.append(ProcessStep(
-                action=ActionType.FADUINO_CMD, params=('MS', True), message='Main Shutter 열기'
+                action=ActionType.PLC_CMD, params=('MS', True), message='Main Shutter 열기'
             ))
 
         # --- 메인 공정 시간 ---
@@ -1027,7 +1030,7 @@ class ProcessController:
         gun_shutters = info['gun_shutters']
 
         steps.append(ProcessStep(
-            action=ActionType.FADUINO_CMD, params=('MS', False), message='Main Shutter 닫기 (항상)'
+            action=ActionType.PLC_CMD, params=('MS', False), message='Main Shutter 닫기 (항상)'
         ))
 
         if use_dc:
@@ -1051,22 +1054,22 @@ class ProcessController:
         for shutter in gun_shutters:
             if params.get(f"use_{shutter.lower()}", False) or force_all:
                 steps.append(ProcessStep(
-                    action=ActionType.FADUINO_CMD, params=(shutter, False), message=f'Gun Shutter {shutter} 닫기'
+                    action=ActionType.PLC_CMD, params=(shutter, False), message=f'Gun Shutter {shutter} 닫기'
                 ))
 
         if bool(params.get("use_power_select", False)) or force_all:
             steps.append(ProcessStep(
-                action=ActionType.FADUINO_CMD, params=("N2", False),
+                action=ActionType.PLC_CMD, params=("N2", False),
                 message="Power_select 종료: N2 가스 밸브(Ch3) OFF"
             ))
 
         for gas in info['gas_info']:
             steps.append(ProcessStep(
-                action=ActionType.FADUINO_CMD, params=(gas, False), message=f'Faduino {gas} 밸브 닫기'
+                action=ActionType.PLC_CMD, params=(gas, False), message=f'Faduino {gas} 밸브 닫기'
             ))
 
         steps.append(ProcessStep(
-            action=ActionType.FADUINO_CMD, params=('MV', False), message='메인 밸브 닫기'
+            action=ActionType.PLC_CMD, params=('MV', False), message='메인 밸브 닫기'
         ))
 
         self._emit_log("Process", "종료 절차가 생성되었습니다.")
@@ -1080,7 +1083,7 @@ class ProcessController:
         steps: List[ProcessStep] = []
 
         steps.append(ProcessStep(
-            action=ActionType.FADUINO_CMD, params=('MS', False),
+            action=ActionType.PLC_CMD, params=('MS', False),
             message='[긴급] Main Shutter 즉시 닫기', no_wait=True
         ))
 
@@ -1104,12 +1107,12 @@ class ProcessController:
         for gas in ["Ar", "O2", "N2"]:
             if self.current_params.get(f"use_{gas.lower()}", False):
                 steps.append(ProcessStep(
-                    action=ActionType.FADUINO_CMD, params=(gas, False),
+                    action=ActionType.PLC_CMD, params=(gas, False),
                     message=f'[긴급] {gas} 가스 즉시 차단', no_wait=True
                 ))
 
         steps.append(ProcessStep(
-            action=ActionType.FADUINO_CMD, params=('MV', False),
+            action=ActionType.PLC_CMD, params=('MV', False),
             message='[긴급] 메인 밸브 즉시 닫기', no_wait=True
         ))
 
@@ -1186,7 +1189,7 @@ class ProcessController:
                         errors.append(f"Step {n}: RF_PULSE_START에 value(파워)가 없습니다.")
                     if step.params is None or len(step.params) != 2:
                         errors.append(f"Step {n}: RF_PULSE_START params=(freq, duty) 필요.")
-                if step.action in [ActionType.FADUINO_CMD, ActionType.MFC_CMD, ActionType.OES_RUN]:
+                if step.action in [ActionType.PLC_CMD, ActionType.MFC_CMD, ActionType.OES_RUN]:
                     if step.params is None:
                         errors.append(f"Step {n}: {step.action.name} 액션에 params가 없습니다.")
         except Exception as e:

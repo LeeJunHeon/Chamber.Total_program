@@ -159,6 +159,21 @@ class MainWindow(QWidget):
         self.graph_controller: GraphController = GraphController(self.ui.ch2_rgaGraph_widget, self.ui.ch2_oesGraph_widget)
         self.data_logger: DataLogger = DataLogger()
 
+        # ✅ PLC 로그 어댑터 (printf 스타일 → append_log)
+        def _plc_log(fmt, *args):
+            try:
+                msg = (fmt % args) if args else str(fmt)
+            except Exception:
+                msg = str(fmt)
+            self.append_log("PLC", msg)
+
+        # ✅ PLC 인스턴스
+        self.plc: AsyncPLC = AsyncPLC(logger=_plc_log)
+
+        # ✅ 프리플라이트 연동을 위한 연결상태 프로퍼티 주입(AsyncFaduinoPLC엔 기본 제공X)
+        setattr(self.plc, "is_connected",
+                lambda: bool(getattr(self.plc, "_plc", None) and self.plc._plc._is_connected()))
+
         # === 비동기 장치 ===
         self.faduino: AsyncFaduino = AsyncFaduino()
         self.mfc: AsyncMFC = AsyncMFC()
@@ -194,7 +209,42 @@ class MainWindow(QWidget):
 
         # === ProcessController 콜백 주입 (동기 함수 내부에서 코루틴 스케줄) ===
         def cb_faduino(cmd: str, arg: Any) -> None:
-            self._spawn_detached(self.faduino.handle_named_command(cmd, arg))
+            async def run():
+                name = str(cmd)
+                on = bool(arg)
+                try:
+                    # ===== Faduino 명칭 → PLC 고수준 API 매핑(Ch.2 기준) =====
+                    # MV : 메인 가스 밸브
+                    if name == "MV":
+                        await self.plc.gas(2, "MAIN", on=on)
+
+                    # 가스(Ar/O2/N2)
+                    elif name in ("Ar", "O2", "N2"):
+                        await self.plc.gas(2, name, on=on)
+
+                    # MS : 메인 셔터 (단일 스위치 래치, True=OPEN, False=CLOSE)
+                    elif name == "MS":
+                        await self.plc.main_shutter(2, open=on)
+
+                    # G1/G2/G3 : 건 셔터 (PLC: SHUTTER_1/2/3_SW)
+                    elif name in ("G1", "G2", "G3"):
+                        idx = {"G1": 1, "G2": 2, "G3": 3}[name]
+                        await self.plc.write_switch(f"SHUTTER_{idx}_SW", on)
+
+                    # (옵션) 혹시 이름이 PLC 코일명 그대로 올 때: 래치로 그대로 씀
+                    else:
+                        await self.plc.write_switch(name, on)
+
+                    # ✅ ProcessController 토큰 만족(확인)
+                    self.process_controller.on_faduino_confirmed(name)
+
+                except Exception as e:
+                    # ❌ 실패 토큰 보고 + 로그
+                    self.process_controller.on_faduino_failed(name, str(e))
+                    self.append_log("PLC", f"명령 실패: {name} -> {on}: {e!r}")
+
+            self._spawn_detached(run())
+
 
         def cb_mfc(cmd: str, args: Mapping[str, Any]) -> None:
             self._spawn_detached(self.mfc.handle_command(cmd, args))
@@ -769,6 +819,8 @@ class MainWindow(QWidget):
         self._ensure_task_alive("MFC.start",      self.mfc.start)
         self._ensure_task_alive("IG.start",       self.ig.start)
         self._ensure_task_alive("RFPulse.start",  self.rf_pulse.start)
+            # ✅ PLC 연결
+        self._ensure_task_alive("PLC.connect",     self.plc.connect)
 
         self._ensure_task_alive("Pump.Faduino",   self._pump_faduino_events)
         self._ensure_task_alive("Pump.MFC",       self._pump_mfc_events)
@@ -1016,6 +1068,7 @@ class MainWindow(QWidget):
         """
         need: list[tuple[str, object]] = [
             ("Faduino", self.faduino),
+            ("PLC", self.plc),          # ✅ 릴레이 제어용(가스/셔터/밸브)
             ("MFC", self.mfc),
             ("IG", self.ig),
         ]
@@ -1182,6 +1235,14 @@ class MainWindow(QWidget):
                     tasks.append(dev.cleanup())
                 except Exception:
                     pass
+
+        # ✅ PLC는 cleanup이 아니라 close()
+        try:
+            if self.plc and hasattr(self.plc, "close"):
+                tasks.append(self.plc.close())
+        except Exception:
+            pass
+
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
         # 2) 다음 Start에서만 다시 올리도록 플래그 리셋
@@ -1442,6 +1503,13 @@ class MainWindow(QWidget):
                 pass
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+
+        # ✅ PLC는 cleanup이 아니라 close()
+        try:
+            if self.plc and hasattr(self.plc, "close"):
+                tasks.append(self.plc.close())
+        except Exception:
+            pass
 
         await asyncio.sleep(0.3)
 
