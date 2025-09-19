@@ -54,6 +54,16 @@ from lib.config_ch2 import (
     MFC_SP1_VERIFY_TOL,
 )
 
+# Qt가 해주던 여유·드레인 구간을 asyncio에서도 보장
+try: from lib.config_ch2 import MFC_POST_OPEN_QUIET_MS
+except Exception: MFC_POST_OPEN_QUIET_MS = 600   # 포트 오픈 직후 quiet(잔여 라인 토해내는 시간)
+
+try: from lib.config_ch2 import MFC_ALLOW_NO_REPLY_DRAIN_MS
+except Exception: MFC_ALLOW_NO_REPLY_DRAIN_MS = 80  # no-reply 후 늦은 에코 흡수
+
+try: from lib.config_ch2 import MFC_FIRST_CMD_EXTRA_TIMEOUT_MS
+except Exception: MFC_FIRST_CMD_EXTRA_TIMEOUT_MS = 500  # 오픈 직후 첫 응답 여유
+
 # =============== 이벤트 모델 ===============
 EventKind = Literal["status", "flow", "pressure", "command_confirmed", "command_failed"]
 
@@ -191,6 +201,10 @@ class AsyncMFC:
         self._stab_target_hw: float = 0.0
         self._stab_attempts: int = 0
         self._stab_pending_cmd: Optional[str] = None  # FLOW_ON 확정 시점 관리
+
+        # Qt의 clear+soft-drain 타이밍을 모사하기 위한 플래그
+        self._last_connect_mono: float = 0.0
+        self._just_reopened: bool = False
 
     # ---------- 공용 API ----------
     async def start(self):
@@ -383,7 +397,11 @@ class AsyncMFC:
 
     async def read_pressure(self):
         """R5(예: READ_PRESSURE) 읽고 UI 문자열/숫자로 이벤트."""
-        line = await self._send_and_wait_line(self._mk_cmd("READ_PRESSURE"), tag="[READ_PRESSURE]", timeout_ms=MFC_TIMEOUT)
+        line = await self._send_and_wait_line(
+            self._mk_cmd("READ_PRESSURE"),
+            tag="[READ_PRESSURE]", timeout_ms=MFC_TIMEOUT,
+            expect_prefixes=("P", "S")  # 장비에 따라 'P...', 'S1+..' 등
+        )
         if not (line and line.strip()):
             await self._emit_failed("READ_PRESSURE", "응답 없음")
             return
@@ -536,22 +554,27 @@ class AsyncMFC:
                 backoff = min(backoff * 2, MFC_RECONNECT_BACKOFF_MAX_MS)
 
     def _on_connection_made(self, transport: asyncio.Transport):
-        self._transport = transport  # 이미 너의 코드에 있으면 생략
-        # ★ pyserial 객체 접근 → 입력/출력 버퍼 리셋 & 라인 제어
+        self._transport = transport
         ser = getattr(transport, "serial", None)
         if ser:
             try:
                 ser.reset_input_buffer()
                 ser.reset_output_buffer()
-                # Qt 버전이 하던 것과 유사하게
                 ser.dtr = True
                 ser.rts = False
             except Exception:
                 pass
 
-        # 잔여 라인/에코 정리
+        self._last_connect_mono = time.monotonic()
+        self._just_reopened = True
+
         self._skip_echos.clear()
-        asyncio.create_task(self._absorb_late_lines(150))  # 100 → 150ms로 살짝 증대
+
+        async def _post_open_quiet():
+            # Qt 오픈 직후 clear(AllDirections)+soft-drain을 대체
+            await asyncio.sleep(MFC_POST_OPEN_QUIET_MS / 1000.0)
+            await self._drain_os_and_queues(int(MFC_POST_OPEN_QUIET_MS * 0.6))
+        asyncio.create_task(_post_open_quiet())
 
     def _on_connection_lost(self, exc: Optional[Exception]):
         self._connected = False
@@ -611,7 +634,16 @@ class AsyncMFC:
             sent_txt = cmd.cmd_str.strip()
             self._dbg("MFC", f"[SEND] {sent_txt} (tag={cmd.tag})")
 
-            await self._absorb_late_lines(15)
+            # 연결 직후라면 quiet 구간을 보장한 뒤 한 번 더 강하게 드레인
+            if self._just_reopened and self._last_connect_mono > 0.0:
+                remain = (self._last_connect_mono + (MFC_POST_OPEN_QUIET_MS / 1000.0)) - time.monotonic()
+                if remain > 0:
+                    await asyncio.sleep(remain)
+                await self._drain_os_and_queues(120)
+                self._just_reopened = False
+            else:
+                # 평상시에도 Qt처럼 전송 직전 OS 드레인
+                await self._drain_os_and_queues(60)
 
             # write
             try:
@@ -633,9 +665,10 @@ class AsyncMFC:
 
             # no-reply
             if cmd.allow_no_reply:
-                # 먼저 inflight 해제, 그 다음 gap_ms만큼 대기, 마지막에 콜백 호출
                 self._inflight = None
                 await asyncio.sleep(cmd.gap_ms / 1000.0)
+                # 늦게 도착하는 에코/ACK가 다음 명령 응답 칸에 끼지 않게, OS 포함 드레인
+                await self._drain_os_and_queues(MFC_ALLOW_NO_REPLY_DRAIN_MS)
                 self._safe_callback(cmd.callback, None)
                 continue
 
@@ -645,18 +678,27 @@ class AsyncMFC:
             except asyncio.TimeoutError:
                 self._dbg("MFC", f"[TIMEOUT] {cmd.tag} {sent_txt}")
                 self._inflight = None
+
+                # 오픈 직후 2초 이내 or 첫 타임아웃은 포트 유지 재시도(quiet+드레인 효과를 살린다)
+                if cmd.retries_left > 0 and (time.monotonic() - self._last_connect_mono) < 2.0:
+                    cmd.retries_left -= 1
+                    self._cmd_q.appendleft(cmd)
+                    await self._drain_os_and_queues(100)
+                    await asyncio.sleep(max(0.15, cmd.gap_ms / 1000.0))
+                    continue
+
+                # 그 외는 기존처럼 재연결
                 if cmd.retries_left > 0:
                     cmd.retries_left -= 1
-                    self._dbg("MFC", f"{cmd.tag} {sent_txt} 재시도 남은횟수={cmd.retries_left}")
                     self._cmd_q.appendleft(cmd)
-                    if self._transport:
-                        try: self._transport.close()
-                        except Exception: pass
-                    self._connected = False
                 else:
                     self._safe_callback(cmd.callback, None)
-                    await asyncio.sleep(cmd.gap_ms / 1000.0)
+                if self._transport:
+                    try: self._transport.close()
+                    except Exception: pass
+                self._connected = False
                 continue
+
 
             recv_txt = (line or "").strip()
             self._dbg("MFC < 응답", f"{cmd.tag} {sent_txt} ← {recv_txt}")
@@ -772,8 +814,12 @@ class AsyncMFC:
     async def _verify_flow_set(self, ch: int, scaled_value: float) -> bool:
         """READ_FLOW_SET(ch)으로 확인; 불일치면 재설정 후 재확인(최대 5회)."""
         for attempt in range(1, 6):
-            line = await self._send_and_wait_line(self._mk_cmd("READ_FLOW_SET", channel=ch),
-                                                  tag=f"[VERIFY SET ch{ch}]", timeout_ms=MFC_TIMEOUT)
+            line = await self._send_and_wait_line(
+                self._mk_cmd("READ_FLOW_SET", channel=ch),
+                tag=f"[VERIFY SET ch{ch}]", timeout_ms=MFC_TIMEOUT,
+                expect_prefixes=(f"Q{4 + int(ch)}",)
+            )
+
             val = self._parse_q_value_with_prefixes(line or "", prefixes=(f"Q{4 + int(ch)}",))
             ok = (val is not None) and (abs(val - scaled_value) < 0.1)
             if ok:
@@ -822,9 +868,12 @@ class AsyncMFC:
         await asyncio.sleep(MFC_DELAY_MS_VALVE / 1000.0)
 
         for attempt in range(1, 6):
-            line = await self._send_and_wait_line(self._mk_cmd("READ_VALVE_POSITION"),
-                                                  tag=f"[VERIFY VALVE {origin_cmd}]",
-                                                  timeout_ms=MFC_TIMEOUT)
+            line = await self._send_and_wait_line(
+                self._mk_cmd("READ_VALVE_POSITION"),
+                tag=f"[VERIFY VALVE {origin_cmd}]",
+                timeout_ms=MFC_TIMEOUT, expect_prefixes=("V",)
+            )
+
             pos_ok = self._parse_valve_ok(origin_cmd, line or "")
             if pos_ok:
                 await self._emit_status(f"{origin_cmd} 완료")
@@ -865,8 +914,12 @@ class AsyncMFC:
         # 전송(no-reply)
         self._enqueue(self._mk_cmd(cmd_key), None, allow_no_reply=True, tag=f"[{cmd_key}]")
         for attempt in range(1, 6):
-            line = await self._send_and_wait_line(self._mk_cmd("READ_SYSTEM_STATUS"),
-                                                  tag=f"[VERIFY {cmd_key}]", timeout_ms=MFC_TIMEOUT)
+            line = await self._send_and_wait_line(
+                self._mk_cmd("READ_SYSTEM_STATUS"),
+                tag=f"[VERIFY {cmd_key}]", timeout_ms=MFC_TIMEOUT,
+                expect_prefixes=("M",)
+            )
+
             s = (line or "").strip().upper()
             ok = bool(s and s.startswith("M") and s[1:2] == expect_mask)
             if ok:
@@ -878,14 +931,19 @@ class AsyncMFC:
 
     # ---------- 내부: 단위 파서/도우미 ----------
     async def _read_r60_values(self, tag: str = "[READ R60]") -> Optional[list[float]]:
-        line = await self._send_and_wait_line(self._mk_cmd("READ_FLOW_ALL"), tag=tag, timeout_ms=MFC_TIMEOUT)
-        vals = self._parse_r60_values(line or "")
-        return vals
+        line = await self._send_and_wait_line(
+            self._mk_cmd("READ_FLOW_ALL"),
+            tag=tag, timeout_ms=MFC_TIMEOUT,
+            expect_prefixes=("Q0",)
+        )
+        return self._parse_r60_values(line or "")
 
     async def _read_r69_bits(self) -> Optional[str]:
-        line = await self._send_and_wait_line(self._mk_cmd("READ_MFC_ON_OFF_STATUS"),
-                                              tag="[READ R69]", timeout_ms=MFC_TIMEOUT,
-                                              retries=3)
+        line = await self._send_and_wait_line(
+            self._mk_cmd("READ_MFC_ON_OFF_STATUS"),
+            tag="[READ R69]", timeout_ms=MFC_TIMEOUT,
+            retries=3, expect_prefixes=("L0", "L")
+        )
         return self._parse_r69_bits(line or "")
 
     def _parse_r60_values(self, line: str) -> Optional[list[float]]:
@@ -987,19 +1045,41 @@ class AsyncMFC:
             # 추적 로그를 UI/챗으로도 올림
             self._dbg("MFC", f"[ECHO] no-reply 등록: {no_cr}")
 
-    async def _send_and_wait_line(self, cmd_str: str, *, tag: str, timeout_ms: int, retries: int = 1) -> Optional[str]:
+    async def _send_and_wait_line(
+        self,
+        cmd_str: str,
+        *,
+        tag: str,
+        timeout_ms: int,
+        retries: int = 1,
+        expect_prefixes: tuple[str, ...] = (),  # ← 추가
+    ) -> Optional[str]:
         fut: asyncio.Future[Optional[str]] = asyncio.get_running_loop().create_future()
 
         def _cb(line: Optional[str]):
+            if line is None:
+                if not fut.done():
+                    fut.set_result(None)
+                return
+            s = (line or "").strip()
+            # Qt처럼 접두사로 유효성 검사
+            if expect_prefixes and not any(s.startswith(p) for p in expect_prefixes):
+                return  # 유효하지 않은 라인은 무시(타임아웃 루프 계속)
             if not fut.done():
-                fut.set_result(line)
+                fut.set_result(s)
 
         self._enqueue(cmd_str, _cb, timeout_ms=timeout_ms, gap_ms=MFC_GAP_MS,
-                      tag=tag, retries_left=max(0, int(retries)), allow_no_reply=False)
+                    tag=tag, retries_left=max(0, int(retries)), allow_no_reply=False)
+
+        # 오픈 직후 첫 응답은 여유 부여
+        extra = 0.0
+        if self._last_connect_mono > 0.0 and (time.monotonic() - self._last_connect_mono) < 2.0:
+            extra = MFC_FIRST_CMD_EXTRA_TIMEOUT_MS / 1000.0
         try:
-            return await asyncio.wait_for(fut, timeout=(timeout_ms / 1000.0) + 2.0)
+            return await asyncio.wait_for(fut, timeout=(timeout_ms / 1000.0) + 2.0 + extra)
         except asyncio.TimeoutError:
             return None
+
 
     def _mk_cmd(self, key: str, *args, **kwargs) -> str:
         """MFC_COMMANDS 값이 함수/문자열 모두 허용."""
@@ -1122,5 +1202,52 @@ class AsyncMFC:
             except Exception:
                 pass
             self._watchdog_task = None
+
+    async def _drain_os_and_queues(self, budget_ms: int = 80):
+        """
+        Qt의 readAll/clear(AllDirections)+내부버퍼 clear를 asyncio로 모사.
+        - OS 입력버퍼 리셋(reset_input_buffer)
+        - Protocol 내부 raw buffer(_rx)와 라인 큐도 정리
+        - 짧게 회전하며 남은 라인이 있으면 조금 더 비움
+        """
+        if not self._transport:
+            return
+
+        # 1) reader 잠깐 멈추고 OS 입력버퍼 리셋(가장 확실)
+        try:
+            self._transport.pause_reading()
+        except Exception:
+            pass
+        try:
+            ser = getattr(self._transport, "serial", None)
+            if ser:
+                try:
+                    ser.reset_input_buffer()
+                except Exception:
+                    pass
+        finally:
+            try:
+                self._transport.resume_reading()
+            except Exception:
+                pass
+
+        # 2) Protocol 내부 바이트 버퍼도 청소
+        try:
+            if self._protocol and hasattr(self._protocol, "_rx"):
+                self._protocol._rx.clear()
+        except Exception:
+            pass
+
+        # 3) 라인 큐 비우기
+        deadline = time.monotonic() + (budget_ms / 1000.0)
+        while time.monotonic() < deadline:
+            drained = False
+            try:
+                self._line_q.get_nowait()
+                drained = True
+            except Exception:
+                pass
+            await asyncio.sleep(0 if drained else 0.005)
+
 
 

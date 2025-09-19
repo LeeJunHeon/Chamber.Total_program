@@ -124,7 +124,7 @@ NormParams = TypedDict('NormParams', {
 
 # 자주 쓰는 맵/타깃 타입 별칭
 ParamsMap = Mapping[str, Any]
-TargetsMap = Mapping[Literal["mfc", "faduino", "rfpulse"], bool]
+TargetsMap = Mapping[Literal["mfc", "plc", "faduino", "rfpulse"], bool]
 
 
 class MainWindow(QWidget):
@@ -171,10 +171,6 @@ class MainWindow(QWidget):
         # ✅ PLC 인스턴스
         self.plc: AsyncFaduinoPLC = AsyncFaduinoPLC(logger=_plc_log)
 
-        # ✅ 프리플라이트 연동을 위한 연결상태 프로퍼티 주입(AsyncFaduinoPLC엔 기본 제공X)
-        setattr(self.plc, "is_connected",
-                lambda: bool(getattr(self.plc, "_plc", None) and self.plc._plc._is_connected()))
-
         # === 비동기 장치 ===
         self.faduino: AsyncFaduino = AsyncFaduino()
         self.mfc: AsyncMFC = AsyncMFC()
@@ -209,45 +205,39 @@ class MainWindow(QWidget):
         self._verbose_polling_log: bool = True  # 필요시 UI 토글로 바꿔도 됨
 
         # === ProcessController 콜백 주입 (동기 함수 내부에서 코루틴 스케줄) ===
-
-        def cb_plc(cmd: str, arg: Any) -> None:
+        def cb_plc(cmd: str, on: Any, ch: int) -> None:
             async def run():
                 raw = str(cmd)
-                nname = raw.upper()       # 🔷 토큰/분기 모두 대문자 규격
-                on = bool(arg)
+                nname = raw.upper()
+                onb = bool(on)
                 try:
-                    # ===== Faduino식 심볼 → PLC API 매핑 (Ch.2 기준) =====
                     if nname == "MV":
-                        # 메인 가스 밸브
-                        await self.plc.gas(2, "MAIN", on=on)
+                        # ✅ 올바른 매핑: 메인 밸브 코일 (채널별)
+                        await self.plc.write_switch(f"M_V_{int(ch)}_SW", onb)
 
-                    elif nname in ("AR", "O2", "N2"):
-                        # 가스 ON/OFF
-                        await self.plc.gas(2, nname, on=on)
+                    elif nname in ("AR", "O2", "N2", "MAIN"):
+                        # ✅ 가스는 plc.gas(ch, gas)
+                        await self.plc.gas(int(ch), nname, on=onb)
 
                     elif nname == "MS":
-                        # 메인 셔터
-                        await self.plc.main_shutter(2, open=on)
+                        # ✅ 메인 셔터 (채널별)
+                        await self.plc.main_shutter(int(ch), open=onb)
 
                     elif nname in ("G1", "G2", "G3"):
-                        # 건 셔터: SHUTTER_1/2/3_SW
+                        # 건 셔터는 채널 독립
                         idx = int(nname[1])
-                        await self.plc.write_switch(f"SHUTTER_{idx}_SW", on)
+                        await self.plc.write_switch(f"SHUTTER_{idx}_SW", onb)
 
                     else:
-                        # (옵션) PLC 코일명을 직접 넘긴 경우 그대로 씀
-                        await self.plc.write_switch(raw, on)
+                        # 예: SW_RF_SELECT 등 채널 독립 키는 그대로
+                        await self.plc.write_switch(raw, onb)
 
-                    # 🔷 PLC 단계는 반드시 PLC용 확인 토큰으로 보고
                     self.process_controller.on_plc_confirmed(nname)
-
                 except Exception as e:
-                    # 🔷 PLC 실패 토큰으로 보고 + 로그/채팅 노티(있다면)
                     self.process_controller.on_plc_failed(nname, str(e))
                     if self.chat_notifier:
                         self.chat_notifier.notify_error_with_src("PLC", f"{nname}: {e}")
-                    self.append_log("PLC", f"명령 실패: {raw} -> {on}: {e!r}")
-
+                    self.append_log("PLC", f"명령 실패: {raw} -> {onb}: {e!r}")
             self._spawn_detached(run())
 
         def cb_mfc(cmd: str, args: Mapping[str, Any]) -> None:
