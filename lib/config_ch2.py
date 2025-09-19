@@ -21,18 +21,18 @@ SHUTDOWN_STEP_TIMEOUT_MS = 2500   # 각 종료 스텝의 '확인 대기' 최대 
 SHUTDOWN_STEP_GAP_MS     = 500    # 종료 스텝 간 최소 간격(물리 반영 시간)
 
 # === 시리얼 포트 설정 ===
-IG_PORT = "COM11"
+IG_PORT = "COM4"
 IG_BAUD = 9600
 
 #MFC_PORT = "COM12"
-MFC_PORT = "COM12"
+MFC_PORT = "COM11"
 MFC_BAUD = 9600
 
-FADUINO_PORT = "COM13"
+FADUINO_PORT = "COM10"
 FADUINO_BAUD = 9600
 
 # RFPulse 기본값
-RFPULSE_PORT = "COM15"        # 또는 "/dev/ttyUSB0"
+RFPULSE_PORT = "COM6"        # 또는 "/dev/ttyUSB0"
 RFPULSE_BAUD = 9600
 RFPULSE_ADDR = 1
 RFPULSE_DEFAULT_DELAY_MS = 180

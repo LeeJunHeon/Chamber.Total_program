@@ -22,6 +22,7 @@ from controller.chat_notifier import ChatNotifier
 from device.faduino import AsyncFaduino
 from device.ig import AsyncIG
 from device.mfc import AsyncMFC
+from device.plc import AsyncPLC
 from device.oes import OESAsync
 from device.rga import RGAAsync
 from device.dc_power import DCPowerAsync

@@ -69,10 +69,14 @@ class GraphController:
         self.rga_plot.addItem(self.rga_stem_item)
         self.rga_plot.addItem(self.rga_marker_item)
 
-        rga_layout = QVBoxLayout()
-        rga_layout.setContentsMargins(0, 0, 0, 0)
-        rga_layout.addWidget(self.rga_plot)
-        rga_widget.setLayout(rga_layout)
+        # 기존 레이아웃이 있으면 재사용, 없으면 생성 → 항상 addWidget으로 부착
+        layout = rga_widget.layout()
+        if layout is None:
+            layout = QVBoxLayout(rga_widget)
+            layout.setContentsMargins(0, 0, 0, 0)
+            rga_widget.setLayout(layout)
+        if layout.indexOf(self.rga_plot) == -1:
+            layout.addWidget(self.rga_plot)
 
         # ───── OES Plot ─────────────────────────────────────────────
         self.oes_plot = pg.PlotWidget()
@@ -101,10 +105,14 @@ class GraphController:
 
         self.oes_curve = self.oes_plot.plot(pen=pg.mkPen("r", width=1))
 
-        oes_layout = QVBoxLayout()
-        oes_layout.setContentsMargins(0, 0, 0, 0)
-        oes_layout.addWidget(self.oes_plot)
-        oes_widget.setLayout(oes_layout)
+        layout = oes_widget.layout()
+        if layout is None:
+            layout = QVBoxLayout(oes_widget)
+            layout.setContentsMargins(0, 0, 0, 0)
+            oes_widget.setLayout(layout)
+        if layout.indexOf(self.oes_plot) == -1:
+            layout.addWidget(self.oes_plot)
+
 
     # ──────────────────────────────────────────────────────────────
     # Update APIs
