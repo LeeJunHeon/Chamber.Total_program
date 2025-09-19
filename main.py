@@ -208,43 +208,46 @@ class MainWindow(QWidget):
         self._verbose_polling_log: bool = True  # 필요시 UI 토글로 바꿔도 됨
 
         # === ProcessController 콜백 주입 (동기 함수 내부에서 코루틴 스케줄) ===
-        def cb_faduino(cmd: str, arg: Any) -> None:
+
+        def cb_plc(cmd: str, arg: Any) -> None:
             async def run():
-                name = str(cmd)
+                raw = str(cmd)
+                nname = raw.upper()       # 🔷 토큰/분기 모두 대문자 규격
                 on = bool(arg)
                 try:
-                    # ===== Faduino 명칭 → PLC 고수준 API 매핑(Ch.2 기준) =====
-                    # MV : 메인 가스 밸브
-                    if name == "MV":
+                    # ===== Faduino식 심볼 → PLC API 매핑 (Ch.2 기준) =====
+                    if nname == "MV":
+                        # 메인 가스 밸브
                         await self.plc.gas(2, "MAIN", on=on)
 
-                    # 가스(Ar/O2/N2)
-                    elif name in ("Ar", "O2", "N2"):
-                        await self.plc.gas(2, name, on=on)
+                    elif nname in ("AR", "O2", "N2"):
+                        # 가스 ON/OFF
+                        await self.plc.gas(2, nname, on=on)
 
-                    # MS : 메인 셔터 (단일 스위치 래치, True=OPEN, False=CLOSE)
-                    elif name == "MS":
+                    elif nname == "MS":
+                        # 메인 셔터
                         await self.plc.main_shutter(2, open=on)
 
-                    # G1/G2/G3 : 건 셔터 (PLC: SHUTTER_1/2/3_SW)
-                    elif name in ("G1", "G2", "G3"):
-                        idx = {"G1": 1, "G2": 2, "G3": 3}[name]
+                    elif nname in ("G1", "G2", "G3"):
+                        # 건 셔터: SHUTTER_1/2/3_SW
+                        idx = int(nname[1])
                         await self.plc.write_switch(f"SHUTTER_{idx}_SW", on)
 
-                    # (옵션) 혹시 이름이 PLC 코일명 그대로 올 때: 래치로 그대로 씀
                     else:
-                        await self.plc.write_switch(name, on)
+                        # (옵션) PLC 코일명을 직접 넘긴 경우 그대로 씀
+                        await self.plc.write_switch(raw, on)
 
-                    # ✅ ProcessController 토큰 만족(확인)
-                    self.process_controller.on_faduino_confirmed(name)
+                    # 🔷 PLC 단계는 반드시 PLC용 확인 토큰으로 보고
+                    self.process_controller.on_plc_confirmed(nname)
 
                 except Exception as e:
-                    # ❌ 실패 토큰 보고 + 로그
-                    self.process_controller.on_faduino_failed(name, str(e))
-                    self.append_log("PLC", f"명령 실패: {name} -> {on}: {e!r}")
+                    # 🔷 PLC 실패 토큰으로 보고 + 로그/채팅 노티(있다면)
+                    self.process_controller.on_plc_failed(nname, str(e))
+                    if self.chat_notifier:
+                        self.chat_notifier.notify_error_with_src("PLC", f"{nname}: {e}")
+                    self.append_log("PLC", f"명령 실패: {raw} -> {on}: {e!r}")
 
             self._spawn_detached(run())
-
 
         def cb_mfc(cmd: str, args: Mapping[str, Any]) -> None:
             self._spawn_detached(self.mfc.handle_command(cmd, args))
@@ -301,7 +304,7 @@ class MainWindow(QWidget):
             self._spawn_detached(run())
 
         self.process_controller = ProcessController(
-            send_plc=cb_faduino,
+            send_plc=cb_plc,
             send_mfc=cb_mfc,
             send_dc_power=cb_dc_power,
             stop_dc_power=cb_dc_stop,
