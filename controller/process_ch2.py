@@ -153,7 +153,7 @@ class ProcessController:
     - main.py → 컨트롤러 : 장치 완료/실패 콜백(on_*)을 호출해 기대 토큰을 충족시킴
 
     명령 송신은 생성자에서 전달받은 콜백을 통해 실행:
-      send_plc(cmd:str, arg:Any) -> None
+      send_plc(cmd:str, arg:Any, ch:int) -> None
       send_mfc(cmd:str, args:dict) -> None
       send_dc_power(value:float) -> None
       stop_dc_power() -> None
@@ -1045,7 +1045,7 @@ class ProcessController:
         gun_shutters = info['gun_shutters']
 
         steps.append(ProcessStep(
-            action=ActionType.PLC_CMD, params=('MS', False), message='Main Shutter 닫기 (항상)'
+            action=ActionType.PLC_CMD, params=('MS', False, 2), message='Main Shutter 닫기 (항상)'
         ))
 
         if use_dc:
@@ -1098,7 +1098,7 @@ class ProcessController:
         steps: List[ProcessStep] = []
 
         steps.append(ProcessStep(
-            action=ActionType.PLC_CMD, params=('MS', False),
+            action=ActionType.PLC_CMD, params=('MS', False, 2),
             message='[긴급] Main Shutter 즉시 닫기', no_wait=True
         ))
 
