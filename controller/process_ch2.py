@@ -124,8 +124,8 @@ class ProcessStep:
             if self.value is None:
                 raise ValueError(f"{self.action.name} 액션은 value가 필요합니다.")
         if self.action == ActionType.PLC_CMD:
-            if not self.params or len(self.params) != 2:
-                raise ValueError("PLC_CMD params는 (name:str, on:any) 형태여야 합니다.")
+            if not self.params or len(self.params) not in (2, 3):
+                raise ValueError("PLC_CMD params는 (name:str, on:any[, ch:int]) 형태여야 합니다.")
         if self.action == ActionType.MFC_CMD:
             if not self.params or len(self.params) != 2 or not isinstance(self.params[1], dict):
                 raise ValueError("MFC_CMD params는 (cmd:str, args:dict) 형태여야 합니다.")
@@ -171,7 +171,7 @@ class ProcessController:
     def __init__(
         self,
         *,
-        send_plc: Callable[[str, Any], None],      # 🔁 이름/의미 교체
+        send_plc: Callable[[str, Any, int], None],  # 🔁 (name, on, ch)
         send_mfc: Callable[[str, Dict[str, Any]], None],
         send_dc_power: Callable[[float], None],
         stop_dc_power: Callable[[], None],
@@ -597,11 +597,11 @@ class ProcessController:
             self._rga_scan()
             tokens.append(ExpectToken("RGA_OK"))
         elif a == ActionType.PLC_CMD:
-            name, on = step.params
+            name, on, *rest = step.params
+            ch = int(rest[0]) if rest else 1
             nname = self._norm_plc_name(name)
-            self._send_plc(nname, on)
+            self._send_plc(nname, on, ch)
             tokens.append(ExpectToken("PLC", nname))
-
         elif a == ActionType.MFC_CMD:
             cmd, args = step.params
             self._send_mfc(cmd, dict(args))
@@ -722,7 +722,7 @@ class ProcessController:
         info = self._get_common_process_info(self.current_params or {})
 
         if info.get('use_rf_pulse', False):
-            # RF Pulse 사용 시: rfpulse만 폴링, faduino 폴링은 끔
+            # RF Pulse 사용 시: rfpulse만 폴링, faduino 폴링은 끔(하위호환 키는 유지)
             return {'mfc': True, 'plc': True, 'faduino': False, 'rfpulse': True}
 
         # DC만/혹은 DC+연속 RF 조합: faduino 폴링이 필요한 경우가 있으므로 True
@@ -916,14 +916,14 @@ class ProcessController:
 
         # --- 가스 주입 ---
         steps.append(ProcessStep(
-            action=ActionType.PLC_CMD, params=('MV', True), message='메인 밸브 열기'
+            action=ActionType.PLC_CMD, params=('MV', True, 2), message='메인 밸브 열기'
         ))
         for gas, info in gas_info.items():
             if params.get(f"use_{gas.lower()}", False):
                 flow_value = float(params.get(f"{gas.lower()}_flow", 0))
                 steps.extend([
                     ProcessStep(
-                        action=ActionType.PLC_CMD, params=(gas, True), message=f'{gas} 밸브 열기'
+                        action=ActionType.PLC_CMD, params=(gas, True, 2), message=f'{gas} 밸브 열기'
                     ),
                     ProcessStep(
                         action=ActionType.MFC_CMD,
@@ -951,15 +951,15 @@ class ProcessController:
             if params.get(f"use_{shutter.lower()}", False):
                 steps.append(ProcessStep(
                     action=ActionType.PLC_CMD,
-                    params=(shutter, True),
+                    params=(shutter, True, 2),
                     message=f'Gun Shutter {shutter} 열기'
                 ))
 
-        # Power_select: N2(채널3) 릴레이 ON
+        # 주: SW_RF_SELECT는 채널 독립 코일이라 ch 인자 없이 보냄
         if bool(params.get("use_power_select", False)):
             steps.append(ProcessStep(
-                action=ActionType.PLC_CMD, params=("N2", True),
-                message="Power_select: N2 가스 밸브(Ch3) ON"
+                action=ActionType.PLC_CMD, params=("SW_RF_SELECT", True),
+                message="Power_select: Power Select ON (SW_RF_SELECT)"
             ))
 
         use_rf_pulse = bool(params.get("use_rf_pulse", False)) and float(params.get("rf_pulse_power", 0)) > 0.0
@@ -1012,7 +1012,7 @@ class ProcessController:
 
         if use_ms:
             steps.append(ProcessStep(
-                action=ActionType.PLC_CMD, params=('MS', True), message='Main Shutter 열기'
+                action=ActionType.PLC_CMD, params=('MS', True, 2), message='Main Shutter 열기'
             ))
 
         # --- 메인 공정 시간 ---
@@ -1069,22 +1069,22 @@ class ProcessController:
         for shutter in gun_shutters:
             if params.get(f"use_{shutter.lower()}", False) or force_all:
                 steps.append(ProcessStep(
-                    action=ActionType.PLC_CMD, params=(shutter, False), message=f'Gun Shutter {shutter} 닫기'
+                    action=ActionType.PLC_CMD, params=(shutter, False, 2), message=f'Gun Shutter {shutter} 닫기'
                 ))
 
         if bool(params.get("use_power_select", False)) or force_all:
             steps.append(ProcessStep(
-                action=ActionType.PLC_CMD, params=("N2", False),
-                message="Power_select 종료: N2 가스 밸브(Ch3) OFF"
+                action=ActionType.PLC_CMD, params=("SW_RF_SELECT", False),
+                message="Power_select 종료: Power Select OFF (SW_RF_SELECT)"
             ))
 
         for gas in info['gas_info']:
             steps.append(ProcessStep(
-                action=ActionType.PLC_CMD, params=(gas, False), message=f'PLC {gas} 밸브 닫기'
+                action=ActionType.PLC_CMD, params=(gas, False, 2), message=f'PLC {gas} 밸브 닫기'
             ))
 
         steps.append(ProcessStep(
-            action=ActionType.PLC_CMD, params=('MV', False), message='메인 밸브 닫기'
+            action=ActionType.PLC_CMD, params=('MV', False, 2), message='메인 밸브 닫기'
         ))
 
         self._emit_log("Process", "종료 절차가 생성되었습니다.")
@@ -1119,10 +1119,16 @@ class ProcessController:
                 parallel=both, no_wait=True
             ))
 
+        if bool(self.current_params.get("use_power_select", False)):
+            steps.append(ProcessStep(
+                action=ActionType.PLC_CMD, params=("SW_RF_SELECT", False),
+                message='[긴급] Power Select 즉시 OFF', no_wait=True
+            ))
+
         for gas in ["AR", "O2", "N2"]:
             if self.current_params.get(f"use_{gas.lower()}", False):
                 steps.append(ProcessStep(
-                    action=ActionType.PLC_CMD, params=(gas, False),
+                    action=ActionType.PLC_CMD, params=(gas, False, 2),
                     message=f'[긴급] {gas} 가스 즉시 차단', no_wait=True
                 ))
 
