@@ -153,7 +153,7 @@ class ProcessController:
     - main.py → 컨트롤러 : 장치 완료/실패 콜백(on_*)을 호출해 기대 토큰을 충족시킴
 
     명령 송신은 생성자에서 전달받은 콜백을 통해 실행:
-      send_faduino(cmd:str, arg:Any) -> None
+      send_plc(cmd:str, arg:Any) -> None
       send_mfc(cmd:str, args:dict) -> None
       send_dc_power(value:float) -> None
       stop_dc_power() -> None
@@ -713,14 +713,19 @@ class ProcessController:
             self._last_polling_targets = dict(targets)
             self._emit(PCEvent("polling", {"active": active}))
             self._emit(PCEvent("polling_targets", {"targets": targets}))
-# 수정해야됨
+
     def _compute_polling_targets(self, active: bool) -> Dict[str, bool]:
         if not active:
             return {'mfc': False, 'plc': False, 'faduino': False, 'rfpulse': False}
-        info = self._get_common_process_info(...)
+
+        # 현재 런 파라미터 기반으로 공통정보 생성
+        info = self._get_common_process_info(self.current_params or {})
+
         if info.get('use_rf_pulse', False):
+            # RF Pulse 사용 시: rfpulse만 폴링, faduino 폴링은 끔
             return {'mfc': True, 'plc': True, 'faduino': False, 'rfpulse': True}
-        # 주: DC 파워는 여전히 Faduino 경로이므로 필요 시 faduino도 True 가능
+
+        # DC만/혹은 DC+연속 RF 조합: faduino 폴링이 필요한 경우가 있으므로 True
         return {'mfc': True, 'plc': True, 'faduino': True, 'rfpulse': False}
 
     # =========================
@@ -1075,7 +1080,7 @@ class ProcessController:
 
         for gas in info['gas_info']:
             steps.append(ProcessStep(
-                action=ActionType.PLC_CMD, params=(gas, False), message=f'Faduino {gas} 밸브 닫기'
+                action=ActionType.PLC_CMD, params=(gas, False), message=f'PLC {gas} 밸브 닫기'
             ))
 
         steps.append(ProcessStep(

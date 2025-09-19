@@ -33,9 +33,7 @@ from device.rf_pulse import RFPulseAsync
 from controller.process_ch2 import ProcessController
 
 from lib.config_ch2 import (
-    CHAT_WEBHOOK_URL, ENABLE_CHAT_NOTIFY, BUTTON_TO_PIN,
-    IG_RECONNECT_BACKOFF_MAX_MS, FADUINO_RECONNECT_BACKOFF_MAX_MS,
-    MFC_RECONNECT_BACKOFF_MAX_MS, RFPULSE_RECONNECT_BACKOFF_MAX_MS,
+    CHAT_WEBHOOK_URL, ENABLE_CHAT_NOTIFY, BUTTON_TO_PIN, IG_POLLING_INTERVAL_MS,
 )
 
 RawParams = TypedDict('RawParams', {
@@ -157,6 +155,9 @@ class MainWindow(QWidget):
 
         # === 컨트롤러 (메인 스레드에서 생성) ===
         self.graph_controller: GraphController = GraphController(self.ui.ch2_rgaGraph_widget, self.ui.ch2_oesGraph_widget)
+        # QtCharts 축/마진/틱 세팅을 즉시 반영(처음 화면에서 틱 100 단위, plotArea 정렬 보장)
+        self.graph_controller.reset()
+
         self.data_logger: DataLogger = DataLogger()
 
         # ✅ PLC 로그 어댑터 (printf 스타일 → append_log)
@@ -271,8 +272,16 @@ class MainWindow(QWidget):
             # stop_process는 동기 함수이므로 그대로 호출
             self.rf_pulse.stop_process()
 
-        def cb_ig_wait(base_pressure: float):
-            self._spawn_detached(self.ig.wait_for_base_pressure(float(base_pressure)))
+        def cb_ig_wait(base_pressure: float) -> None:      # ← self 제거
+            async def _run():
+                # 동기 함수라 await 금지 (사이드이펙트로 펌프/워치독 띄움)
+                self._ensure_background_started()
+                ok = await self.ig.wait_for_base_pressure(  # 반환값을 변수에 담아주면 회색 경고도 사라짐
+                    float(base_pressure),
+                    interval_ms=IG_POLLING_INTERVAL_MS
+                )
+                self.append_log("IG", f"wait_for_base_pressure returned: {ok}")
+            asyncio.create_task(_run())
 
         def cb_ig_cancel():
             self._spawn_detached(self.ig.cancel_wait())
@@ -295,8 +304,9 @@ class MainWindow(QWidget):
                         targets = {"mfc": True, "faduino": (not use_rf_pulse), "rfpulse": use_rf_pulse}
                     self._apply_polling_targets(targets)
 
-                    asyncio.get_running_loop().call_soon(self.graph_controller.clear_oes_plot)
+                    QTimer.singleShot(0, self.graph_controller.clear_oes_plot)  # Qt GUI 스레드에서 안전 호출
                     await self.oes.run_measurement(duration_sec, integration_ms)
+
                 except Exception as e:
                     self.process_controller.on_oes_failed("OES", str(e))
                     if self.chat_notifier:
@@ -435,7 +445,8 @@ class MainWindow(QWidget):
                         self.data_logger.start_new_log_session(payload.get("params", {}))
                     except Exception:
                         pass
-                    self.graph_controller.reset()
+                    QTimer.singleShot(0, self.graph_controller.reset)
+
                     if self.chat_notifier:
                         try:
                             self.chat_notifier.notify_process_started(payload.get("params", {}))
@@ -678,8 +689,8 @@ class MainWindow(QWidget):
             if ev.kind == "status":
                 self.append_log("RGA", ev.message or "")
             elif ev.kind == "data":
-                # 그래프 업데이트
-                self._soon(self.graph_controller.update_rga_plot, ev.mass_axis, ev.pressures)
+                # QtCharts는 GUI 스레드에서 그려야 안전
+                QTimer.singleShot(0, lambda: self.graph_controller.update_rga_plot(ev.mass_axis, ev.pressures))
             elif ev.kind == "finished":
                 self.process_controller.on_rga_finished()
             elif ev.kind == "failed":
@@ -854,16 +865,6 @@ class MainWindow(QWidget):
         self._soon(self.ui.ch2_Power_edit.setPlainText,   f"{power:.3f}")
         self._soon(self.ui.ch2_Voltage_edit.setPlainText, f"{voltage:.3f}")
         self._soon(self.ui.ch2_Current_edit.setPlainText, f"{current:.3f}")
-
-    # def update_mfc_pressure_ui(self, pressure_value):
-    #     asyncio.get_running_loop().call_soon(self.ui.ch2_workingPressure_edit.setPlainText, pressure_value)
-
-    # def update_mfc_flow_ui(self, gas_name, flow_value):
-    #     t = f"{flow_value:.1f}"
-    #     loop = asyncio.get_running_loop()
-    #     if gas_name == "Ar":  loop.call_soon(self.ui.ch2_arFlow_edit.setPlainText, t)
-    #     elif gas_name == "O2": loop.call_soon(self.ui.ch2_o2Flow_edit.setPlainText, t)
-    #     elif gas_name == "N2": loop.call_soon(self.ui.ch2_n2Flow_edit.setPlainText, t)
 
     def _on_process_status_changed(self, running: bool) -> None:
         self.ui.ch2_Start_button.setEnabled(not running)
