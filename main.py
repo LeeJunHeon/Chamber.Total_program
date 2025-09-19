@@ -22,7 +22,7 @@ from controller.chat_notifier import ChatNotifier
 from device.faduino import AsyncFaduino
 from device.ig import AsyncIG
 from device.mfc import AsyncMFC
-from device.plc import AsyncPLC
+from device.plc import AsyncFaduinoPLC
 from device.oes import OESAsync
 from device.rga import RGAAsync
 from device.dc_power import DCPowerAsync
@@ -168,7 +168,7 @@ class MainWindow(QWidget):
             self.append_log("PLC", msg)
 
         # ✅ PLC 인스턴스
-        self.plc: AsyncPLC = AsyncPLC(logger=_plc_log)
+        self.plc: AsyncFaduinoPLC = AsyncFaduinoPLC(logger=_plc_log)
 
         # ✅ 프리플라이트 연동을 위한 연결상태 프로퍼티 주입(AsyncFaduinoPLC엔 기본 제공X)
         setattr(self.plc, "is_connected",
@@ -301,7 +301,7 @@ class MainWindow(QWidget):
             self._spawn_detached(run())
 
         self.process_controller = ProcessController(
-            send_faduino=cb_faduino,
+            send_plc=cb_faduino,
             send_mfc=cb_mfc,
             send_dc_power=cb_dc_power,
             stop_dc_power=cb_dc_stop,

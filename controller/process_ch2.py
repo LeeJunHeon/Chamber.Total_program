@@ -402,6 +402,12 @@ class ProcessController:
     def on_plc_failed(self, cmd: str, why: str) -> None:
         self._step_failed("PLC", f"{cmd}: {why}")
 
+    # ✅ Faduino→PLC 전환 호환: main.py가 여전히 faduino 콜백 이름을 부르므로 별칭 제공
+    def on_faduino_confirmed(self, name: str) -> None:
+        self.on_plc_confirmed(name)
+
+    def on_faduino_failed(self, name: str, why: str) -> None:
+        self.on_plc_failed(name, why)
 
     def on_ig_ok(self) -> None:
         self._match_token(ExpectToken("IG_OK"))
@@ -592,8 +598,10 @@ class ProcessController:
             tokens.append(ExpectToken("RGA_OK"))
         elif a == ActionType.PLC_CMD:
             name, on = step.params
-            self._send_plc(name, on)
-            tokens.append(ExpectToken("PLC", name))
+            nname = self._norm_plc_name(name)
+            self._send_plc(nname, on)
+            tokens.append(ExpectToken("PLC", nname))
+
         elif a == ActionType.MFC_CMD:
             cmd, args = step.params
             self._send_mfc(cmd, dict(args))
@@ -705,7 +713,7 @@ class ProcessController:
             self._last_polling_targets = dict(targets)
             self._emit(PCEvent("polling", {"active": active}))
             self._emit(PCEvent("polling_targets", {"targets": targets}))
-
+# 수정해야됨
     def _compute_polling_targets(self, active: bool) -> Dict[str, bool]:
         if not active:
             return {'mfc': False, 'plc': False, 'faduino': False, 'rfpulse': False}
@@ -853,9 +861,11 @@ class ProcessController:
             'use_dc': bool(params.get("use_dc_power", False)) and float(params.get("dc_power", 0)) > 0,
             'use_rf': bool(params.get("use_rf_power", False)) and float(params.get("rf_power", 0)) > 0,
             'use_rf_pulse': bool(params.get("use_rf_pulse", False)) and float(params.get("rf_pulse_power", 0)) > 0,
-            'gas_info': {"Ar": {"channel": 1}, "O2": {"channel": 2}, "N2": {"channel": 3}},
+            # ⬇️ 여기만 변경
+            'gas_info': {"AR": {"channel": 1}, "O2": {"channel": 2}, "N2": {"channel": 3}},
             'gun_shutters': ["G1", "G2", "G3"],
         }
+
 
     def _create_process_sequence(self, params: Dict[str, Any]) -> List[ProcessStep]:
         common_info = self._get_common_process_info(params)
@@ -1104,7 +1114,7 @@ class ProcessController:
                 parallel=both, no_wait=True
             ))
 
-        for gas in ["Ar", "O2", "N2"]:
+        for gas in ["AR", "O2", "N2"]:
             if self.current_params.get(f"use_{gas.lower()}", False):
                 steps.append(ProcessStep(
                     action=ActionType.PLC_CMD, params=(gas, False),
@@ -1275,5 +1285,19 @@ class ProcessController:
         return await self._wait_or_abort(asyncio.sleep(max(0.0, seconds)), allow_abort=allow_abort)
 
 
+    def _norm_plc_name(self, name: str) -> str:
+        nm = (name or "").strip().upper().replace(" ", "")
+        aliases = {
+            # 가스
+            "ARGON": "AR", "AR2": "AR", "AR_2": "AR",
+            # 메인밸브/셔터 별칭
+            "MAINVALVE": "MV", "MAIN_VALVE": "MV",
+            "MAINSHUTTER": "MS", "MAIN_SHUTTER": "MS",
+            # 그대로 허용
+            "AR": "AR", "O2": "O2", "N2": "N2", "MAIN": "MAIN",
+            "MV": "MV", "MS": "MS",
+            "G1": "G1", "G2": "G2", "G3": "G3",
+        }
+        return aliases.get(nm, nm)
 
 
