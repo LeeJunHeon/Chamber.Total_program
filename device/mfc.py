@@ -33,36 +33,13 @@ except Exception as e:
     raise RuntimeError("pyserial-asyncio가 필요합니다. `pip install pyserial-asyncio`") from e
 
 from lib.config_ch2 import (
-    MFC_PORT,
-    MFC_BAUD,
-    MFC_COMMANDS,
-    FLOW_ERROR_TOLERANCE,
-    FLOW_ERROR_MAX_COUNT,
-    MFC_SCALE_FACTORS,
-    MFC_POLLING_INTERVAL_MS,
-    MFC_STABILIZATION_INTERVAL_MS,
-    MFC_WATCHDOG_INTERVAL_MS,
-    MFC_RECONNECT_BACKOFF_START_MS,
-    MFC_RECONNECT_BACKOFF_MAX_MS,
-    MFC_TIMEOUT,
-    MFC_GAP_MS,
-    MFC_DELAY_MS,
-    MFC_DELAY_MS_VALVE,
-    DEBUG_PRINT,
-    MFC_PRESSURE_SCALE,
-    MFC_PRESSURE_DECIMALS,
-    MFC_SP1_VERIFY_TOL,
+    MFC_PORT, MFC_BAUD, MFC_COMMANDS, FLOW_ERROR_TOLERANCE, FLOW_ERROR_MAX_COUNT,
+    MFC_SCALE_FACTORS, MFC_POLLING_INTERVAL_MS, MFC_STABILIZATION_INTERVAL_MS,
+    MFC_WATCHDOG_INTERVAL_MS, MFC_RECONNECT_BACKOFF_START_MS, MFC_RECONNECT_BACKOFF_MAX_MS,
+    MFC_TIMEOUT, MFC_GAP_MS, MFC_DELAY_MS, MFC_DELAY_MS_VALVE, DEBUG_PRINT, MFC_PRESSURE_SCALE,
+    MFC_PRESSURE_DECIMALS, MFC_SP1_VERIFY_TOL, MFC_POST_OPEN_QUIET_MS, MFC_ALLOW_NO_REPLY_DRAIN_MS,
+    MFC_FIRST_CMD_EXTRA_TIMEOUT_MS
 )
-
-# Qt가 해주던 여유·드레인 구간을 asyncio에서도 보장
-try: from lib.config_ch2 import MFC_POST_OPEN_QUIET_MS
-except Exception: MFC_POST_OPEN_QUIET_MS = 600   # 포트 오픈 직후 quiet(잔여 라인 토해내는 시간)
-
-try: from lib.config_ch2 import MFC_ALLOW_NO_REPLY_DRAIN_MS
-except Exception: MFC_ALLOW_NO_REPLY_DRAIN_MS = 80  # no-reply 후 늦은 에코 흡수
-
-try: from lib.config_ch2 import MFC_FIRST_CMD_EXTRA_TIMEOUT_MS
-except Exception: MFC_FIRST_CMD_EXTRA_TIMEOUT_MS = 500  # 오픈 직후 첫 응답 여유
 
 # =============== 이벤트 모델 ===============
 EventKind = Literal["status", "flow", "pressure", "command_confirmed", "command_failed"]

@@ -165,6 +165,11 @@ OES_AVG_COUNT = 3 # OES 측정 시 평균을 낼 횟수
 FLOW_ERROR_TOLERANCE = 0.05  # 5% 오차 허용
 FLOW_ERROR_MAX_COUNT = 3     # 3회 연속 불일치 시 경고
 
+# Qt가 해주던 여유·드레인 구간을 asyncio에서도 보장
+MFC_POST_OPEN_QUIET_MS = 600   # 포트 오픈 직후 quiet(잔여 라인 토해내는 시간)
+MFC_ALLOW_NO_REPLY_DRAIN_MS = 80  # no-reply 후 늦은 에코 흡수
+MFC_FIRST_CMD_EXTRA_TIMEOUT_MS = 500  # 오픈 직후 첫 응답 여유
+
 # === MFC 타이밍/간격 상수 ===
 # 주기/타이머
 MFC_POLLING_INTERVAL_MS       = 2000    # polling 주기
