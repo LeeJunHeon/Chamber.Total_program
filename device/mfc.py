@@ -64,6 +64,7 @@ class Command:
     tag: str
     retries_left: int
     allow_no_reply: bool
+    expect_prefixes: tuple[str, ...] = ()
 
 # =============== Protocol (라인 프레이밍) ===============
 class _MFCProtocol(asyncio.Protocol):
@@ -651,7 +652,11 @@ class AsyncMFC:
 
             # wait reply (echo skip)
             try:
-                line = await self._read_one_line_skip_echo(sent_txt, cmd.timeout_ms / 1000.0)
+                line = await self._read_one_line_skip_echo(
+                    sent_txt, 
+                    cmd.timeout_ms / 1000.0,
+                    expect_prefixes=cmd.expect_prefixes
+                )
             except asyncio.TimeoutError:
                 self._dbg("MFC", f"[TIMEOUT] {cmd.tag} {sent_txt}")
                 self._inflight = None
@@ -679,11 +684,17 @@ class AsyncMFC:
 
             recv_txt = (line or "").strip()
             self._dbg("MFC < 응답", f"{cmd.tag} {sent_txt} ← {recv_txt}")
-            self._safe_callback(cmd.callback, recv_txt)
+            self._safe_callback(cmd.callback, recv_txt)  # ← 이제 recv_txt는 접두사 보장
             self._inflight = None
             await asyncio.sleep(cmd.gap_ms / 1000.0)
 
-    async def _read_one_line_skip_echo(self, sent_no_cr: str, timeout_s: float) -> str:
+    async def _read_one_line_skip_echo(
+        self,
+        sent_no_cr: str,
+        timeout_s: float,
+        *,
+        expect_prefixes: tuple[str, ...] = ()
+    ) -> str:
         deadline = time.monotonic() + timeout_s
         while True:
             remain = max(0.0, deadline - time.monotonic())
@@ -692,15 +703,20 @@ class AsyncMFC:
             line = await asyncio.wait_for(self._line_q.get(), timeout=remain)
             if not line:
                 continue
-            # ① 방금 보낸 명령의 에코
+            # ① 현재 명령 에코
             if line == sent_no_cr:
-                # 추적 로그 (optional)
                 self._dbg("MFC", f"[ECHO] 현재 명령 에코 스킵: {line}")
                 continue
-            # ② 과거 no-reply 에코 (드물게 큐에 남아있을 수 있음)
+            # ② 과거 no-reply 에코
             if self._skip_echos and line == self._skip_echos[0]:
                 self._skip_echos.popleft()
                 await self._emit_status(f"[ECHO] 과거 no-reply 에코 스킵(큐): {line}")
+                continue
+            # ③ 접두사 필터링(있다면)
+            s = (line or "").strip()
+            if expect_prefixes and not any(s.startswith(p) for p in expect_prefixes):
+                # 접두사 불일치 → 다음 라인을 더 읽어본다(타임아웃 내에서)
+                self._dbg("MFC", f"[SKIP] 접두사 불일치: got={s[:12]!r}, need={expect_prefixes}")
                 continue
             return line
 
@@ -735,7 +751,8 @@ class AsyncMFC:
 
                 # R5 → pressure 이벤트
                 line = await self._send_and_wait_line(self._mk_cmd("READ_PRESSURE"),
-                                                      tag="[POLL PRESS]", timeout_ms=MFC_TIMEOUT)
+                                                      tag="[POLL PRESS]", timeout_ms=MFC_TIMEOUT,
+                                                      expect_prefixes=("P", "S"))
                 if line:
                     self._emit_pressure_from_line_sync(line.strip())
 
@@ -824,7 +841,8 @@ class AsyncMFC:
             now = ""
             for _ in range(2):
                 line = await self._send_and_wait_line(self._mk_cmd("READ_MFC_ON_OFF_STATUS"),
-                                                    tag="[VERIFY R69]", timeout_ms=MFC_TIMEOUT)
+                                                    tag="[VERIFY R69]", timeout_ms=MFC_TIMEOUT,
+                                                    expect_prefixes=("L0","L"))
                 now = self._parse_r69_bits(line or "")
                 if now:
                     break
@@ -1010,15 +1028,21 @@ class AsyncMFC:
     # ---------- 내부: 공통 송수신 ----------
     def _enqueue(self, cmd_str: str, on_reply: Optional[Callable[[Optional[str]], None]],
                 *, timeout_ms: int = MFC_TIMEOUT, gap_ms: int = MFC_GAP_MS,
-                tag: str = "", retries_left: int = 5, allow_no_reply: bool = False):
+                tag: str = "", retries_left: int = 5, allow_no_reply: bool = False,
+                expect_prefixes: tuple[str, ...] = ()):
         if not cmd_str.endswith("\r"):
             cmd_str += "\r"
-        self._cmd_q.append(Command(cmd_str, on_reply, timeout_ms, gap_ms, tag, retries_left, allow_no_reply))
+        self._cmd_q.append(Command(
+            cmd_str, on_reply, timeout_ms, gap_ms, tag, retries_left, allow_no_reply,
+            expect_prefixes=expect_prefixes
+        ))
 
         # ★ no-reply 명령의 '에코 라인'은 나중에 도착해도 스킵하도록 등록
         if allow_no_reply:
             no_cr = cmd_str.rstrip("\r")
             self._skip_echos.append(no_cr)
+            if len(self._skip_echos) > 64:
+                self._skip_echos.popleft()
             # 추적 로그를 UI/챗으로도 올림
             self._dbg("MFC", f"[ECHO] no-reply 등록: {no_cr}")
 
@@ -1039,14 +1063,15 @@ class AsyncMFC:
                     fut.set_result(None)
                 return
             s = (line or "").strip()
-            # Qt처럼 접두사로 유효성 검사
-            if expect_prefixes and not any(s.startswith(p) for p in expect_prefixes):
-                return  # 유효하지 않은 라인은 무시(타임아웃 루프 계속)
             if not fut.done():
-                fut.set_result(s)
+                fut.set_result(s)  # ★ 필터링 제거 (워커가 보장)
 
-        self._enqueue(cmd_str, _cb, timeout_ms=timeout_ms, gap_ms=MFC_GAP_MS,
-                    tag=tag, retries_left=max(0, int(retries)), allow_no_reply=False)
+        self._enqueue(
+            cmd_str, _cb, 
+            timeout_ms=timeout_ms, gap_ms=MFC_GAP_MS,
+            tag=tag, retries_left=max(0, int(retries)), allow_no_reply=False,
+            expect_prefixes=expect_prefixes # ★ 워커에게 전달
+        )
 
         # 오픈 직후 첫 응답은 여유 부여
         extra = 0.0
