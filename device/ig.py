@@ -432,12 +432,7 @@ class AsyncIG:
             if ser is not None:
                 try: ser.reset_input_buffer()
                 except Exception: pass
-                try: ser.reset_output_buffer()
-                except Exception: pass
-                try: ser.dtr = True
-                except Exception: pass
-                try: ser.rts = False
-                except Exception: pass
+                # reset_output_buffer()는 선택 사항. 필요 없으면 지워도 됨.
         except Exception:
             pass
 
@@ -789,17 +784,14 @@ class AsyncIG:
             def _blocking_off_once():
                 import serial, time as _t
                 with serial.Serial(IG_PORT, IG_BAUD, timeout=0.2, write_timeout=0.5) as ser:
-                    try: ser.reset_input_buffer()
-                    except Exception: pass
-                    try: ser.reset_output_buffer()
-                    except Exception: pass
-                    try: ser.dtr = True
-                    except Exception: pass
-                    try: ser.rts = False
-                    except Exception: pass
+                    # DTR/RTS, 출력 버퍼 리셋은 손대지 않음(예전 동작과 동일화)
+                    # 입력만 필요시 비워도 무방:
+                    # try: ser.reset_input_buffer()
+                    # except Exception: pass
                     ser.write(b"SIG 0\r")
                     ser.flush()
                     _t.sleep(0.12)
+
             try:
                 await asyncio.to_thread(_blocking_off_once)
                 self._dbg("IG", "OFF delivered via blocking path (one-shot open/write/close)")

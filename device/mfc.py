@@ -516,7 +516,10 @@ class AsyncMFC:
             try:
                 loop = asyncio.get_running_loop()
                 transport, protocol = await serial_asyncio.create_serial_connection(
-                    loop, lambda: _MFCProtocol(self), MFC_PORT, baudrate=MFC_BAUD
+                    loop, lambda: _MFCProtocol(self), 
+                    MFC_PORT, 
+                    baudrate=MFC_BAUD,
+                    bytesize=8, parity="N", stopbits=1
                 )
                 self._transport = transport
                 self._protocol = protocol  # type: ignore
@@ -534,14 +537,14 @@ class AsyncMFC:
     def _on_connection_made(self, transport: asyncio.Transport):
         self._transport = transport
         ser = getattr(transport, "serial", None)
-        if ser:
-            try:
-                ser.reset_input_buffer()
-                ser.reset_output_buffer()
-                ser.dtr = True
-                ser.rts = False
-            except Exception:
-                pass
+        # if ser:
+        #     try:
+        #         ser.reset_input_buffer()
+        #         ser.reset_output_buffer()
+        #         ser.dtr = True
+        #         ser.rts = False
+        #     except Exception:
+        #         pass
 
         self._last_connect_mono = time.monotonic()
         self._just_reopened = True
@@ -549,10 +552,11 @@ class AsyncMFC:
         self._skip_echos.clear()
 
         async def _post_open_quiet():
-            # Qt 오픈 직후 clear(AllDirections)+soft-drain을 대체
+            # 조용히 기다리기만: 초기 배너/ACK가 자연히 흘러들어오게 둔다
             await asyncio.sleep(MFC_POST_OPEN_QUIET_MS / 1000.0)
-            await self._drain_os_and_queues(int(MFC_POST_OPEN_QUIET_MS * 0.6))
+            # 강한 드레인은 하지 않음(첫 명령 응답 유실 방지)
         asyncio.create_task(_post_open_quiet())
+
 
     def _on_connection_lost(self, exc: Optional[Exception]):
         self._connected = False
@@ -610,18 +614,17 @@ class AsyncMFC:
             cmd = self._cmd_q.popleft()
             self._inflight = cmd
             sent_txt = cmd.cmd_str.strip()
-            self._dbg("MFC", f"[SEND] {sent_txt} (tag={cmd.tag})")
+            await self._emit_status(f"[SEND] {sent_txt} {('('+cmd.tag+')' if cmd.tag else '')}".strip())
 
-            # 연결 직후라면 quiet 구간을 보장한 뒤 한 번 더 강하게 드레인
+            # 연결 직후에는 '한 번만' 조용히 기다리고(quiet), 강한 드레인은 금지
             if self._just_reopened and self._last_connect_mono > 0.0:
                 remain = (self._last_connect_mono + (MFC_POST_OPEN_QUIET_MS / 1000.0)) - time.monotonic()
                 if remain > 0:
                     await asyncio.sleep(remain)
-                await self._drain_os_and_queues(120)
+                # 여기서는 드레인하지 않음: 초기 배너/ACK를 날려서 첫 응답 유실 가능
                 self._just_reopened = False
-            else:
-                # 평상시에도 Qt처럼 전송 직전 OS 드레인
-                await self._drain_os_and_queues(60)
+            # 평상시에도 전송 직전 강제 드레인은 하지 않음
+            # (잔여 라인은 읽기 루틴의 에코/접두사 처리로 흡수)
 
             # write
             try:
@@ -635,18 +638,29 @@ class AsyncMFC:
                     self._cmd_q.appendleft(cmd)
                 else:
                     self._safe_callback(cmd.callback, None)
-                if self._transport:
-                    try: self._transport.close()
-                    except Exception: pass
-                self._connected = False
-                continue
+                # 1회성 타임아웃은 포트 유지 + 가벼운 큐 흡수 후 재시도(재연결 금지)
+                self._consec_timeouts = getattr(self, "_consec_timeouts", 0) + 1
+                await self._absorb_late_lines(80)
+
+                if self._consec_timeouts >= 2:
+                    # 연속 2회 이상일 때만 강제 재연결
+                    if self._transport:
+                        try: self._transport.close()
+                        except Exception: pass
+                    self._connected = False
+                    self._consec_timeouts = 0
+                else:
+                    # 포트 유지: 다음 루프로 자연 재시도
+                    await asyncio.sleep(max(0.15, cmd.gap_ms / 1000.0))
+                    # 재큐잉은 위에서 이미 함
+                    continue
 
             # no-reply
             if cmd.allow_no_reply:
                 self._inflight = None
                 await asyncio.sleep(cmd.gap_ms / 1000.0)
-                # 늦게 도착하는 에코/ACK가 다음 명령 응답 칸에 끼지 않게, OS 포함 드레인
-                await self._drain_os_and_queues(MFC_ALLOW_NO_REPLY_DRAIN_MS)
+                # OS 버퍼 purge 대신 라인 큐만 '가볍게' 흡수 → 레이스 최소화
+                await self._absorb_late_lines(min(MFC_ALLOW_NO_REPLY_DRAIN_MS, 50))
                 self._safe_callback(cmd.callback, None)
                 continue
 
@@ -658,7 +672,7 @@ class AsyncMFC:
                     expect_prefixes=cmd.expect_prefixes
                 )
             except asyncio.TimeoutError:
-                self._dbg("MFC", f"[TIMEOUT] {cmd.tag} {sent_txt}")
+                await self._emit_status(f"[TIMEOUT] {cmd.tag} {sent_txt}")
                 self._inflight = None
 
                 # 오픈 직후 2초 이내 or 첫 타임아웃은 포트 유지 재시도(quiet+드레인 효과를 살린다)
@@ -681,10 +695,9 @@ class AsyncMFC:
                 self._connected = False
                 continue
 
-
             recv_txt = (line or "").strip()
-            self._dbg("MFC < 응답", f"{cmd.tag} {sent_txt} ← {recv_txt}")
-            self._safe_callback(cmd.callback, recv_txt)  # ← 이제 recv_txt는 접두사 보장
+            await self._emit_status(f"[RECV] {cmd.tag} ← {recv_txt}")
+            self._safe_callback(cmd.callback, recv_txt)
             self._inflight = None
             await asyncio.sleep(cmd.gap_ms / 1000.0)
 
@@ -730,6 +743,10 @@ class AsyncMFC:
                     continue
                 # ★ 비-폴링 명령이 대기/진행 중이면 폴링 양보
                 if self._has_pending_non_poll_cmds():
+                    await asyncio.sleep(0.02)
+                    continue
+                # ★ 폴링 읽기가 이미 대기/진행 중이면 이번 틱 스킵
+                if self._has_pending_poll_reads():
                     await asyncio.sleep(0.02)
                     continue
                 # 중첩 금지
@@ -1153,12 +1170,21 @@ class AsyncMFC:
     # --- 유틸 ---
     def _is_poll_read_cmd(self, cmd_str: str, tag: str = "") -> bool:
         return (tag or "").startswith("[POLL ")
-    
+
     def _has_pending_non_poll_cmds(self) -> bool:
         if self._inflight and not self._is_poll_read_cmd(self._inflight.cmd_str, self._inflight.tag):
             return True
         for c in self._cmd_q:
             if not self._is_poll_read_cmd(c.cmd_str, c.tag):
+                return True
+        return False
+    
+    def _has_pending_poll_reads(self) -> bool:
+        """인플라이트/큐에 폴링 읽기(R60/R5)가 있으면 True."""
+        if self._inflight and self._is_poll_read_cmd(self._inflight.cmd_str, self._inflight.tag):
+            return True
+        for c in self._cmd_q:
+            if self._is_poll_read_cmd(c.cmd_str, c.tag):
                 return True
         return False
 

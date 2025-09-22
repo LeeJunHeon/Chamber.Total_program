@@ -394,11 +394,11 @@ class AsyncFaduino:
             if ser is not None:
                 # 버퍼 클리어 + 라인 상태 설정
                 ser.reset_input_buffer()
-                ser.reset_output_buffer()
-                # Qt 버전과 동일한 라인 제어
-                ser.dtr = True
-                ser.rts = False
-                self._dbg("Faduino", "DTR=1, RTS=0, buffers reset")
+                # ser.reset_output_buffer()
+                # # Qt 버전과 동일한 라인 제어
+                # ser.dtr = True
+                # ser.rts = False
+                # self._dbg("Faduino", "DTR=1, RTS=0, buffers reset")
         except Exception as e:
             self._dbg("Faduino", f"connection setup skipped: {e}")
 
