@@ -191,7 +191,7 @@ class AsyncIG:
             self._watchdog_task = loop.create_task(self._watchdog_loop(), name="IGWatchdog")
         if not self._cmd_worker_task:
             self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="IGCmdWorker")
-        #await self._emit_status("IG 워치독/워커 시작")
+        await self._emit_status("IG 워치독/워커 시작")
 
     async def cleanup(self):
         await self._emit_status("IG 종료 절차 시작")

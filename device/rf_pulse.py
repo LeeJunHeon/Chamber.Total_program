@@ -289,7 +289,7 @@ class RFPulseAsync:
             self._watchdog_task = loop.create_task(self._watchdog_loop(), name="RFPWatchdog")
         if not self._cmd_worker_task:
             self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="RFPCmdWorker")
-        #await self._emit_status("RFPulse 워치독/워커 시작")
+        await self._emit_status("RFPulse 워치독/워커 시작")
 
     async def cleanup(self):
         """안전 종료: 폴링 off → 큐 purge → safe off → 연결 종료."""

@@ -702,18 +702,30 @@ class MainWindow(QWidget):
                     pass
 
             elif ev.kind == "finished":
-                # ✅ 완료 토큰은 data 처리에서 이미 보냄 (레이스 방지)
+                # 기존 로그 유지
                 self.append_log(tag, ev.message or "scan finished")
+                # 🔧 안전망: data 없이 finished만 온 경우에도 다음 단계로 진행
+                if ch == 2 and not self._rga_done_signaled:
+                    self._rga_done_signaled = True
+                    self.process_controller.on_rga_finished()
 
             elif ev.kind == "failed":
-                # ✅ CH2 스캔 실패만 공정 실패로 전파
+                # ✅ CH2 스캔 실패 → 로그 남기고 '완료' 토큰으로 다음 단계 진행 (소프트 실패)
                 why = ev.message or "RGA failed"
                 if ch == 2:
-                    self.process_controller.on_rga_failed(tag, why)
+                    self.append_log(tag, f"측정 실패: {why} → 다음 단계로 건너뜀")
                     if self.chat_notifier:
-                        self.chat_notifier.notify_error_with_src(tag, why)
+                        # 원하면 경고성 알림만 남기고 '에러'로 치진 않도록 메시지 톤만 조정
+                        try:
+                            self.chat_notifier.notify_text(f"[{tag}] 측정 실패: {why} → 다음 단계로 건너뜀")
+                        except Exception:
+                            pass
+                    # 중복 시그널 방지
+                    if not self._rga_done_signaled:
+                        self._rga_done_signaled = True
+                        self.process_controller.on_rga_finished()
                 else:
-                    self.append_log(tag, f"CH1 이벤트 무시: {why}")
+                    self.append_log(tag, f"CH1 이벤트 무시(실패): {why}")
 
     async def _pump_dc_events(self) -> None:
         async for ev in self.dc_power.events():
@@ -817,20 +829,25 @@ class MainWindow(QWidget):
     # RGA dummy
     # ------------------------------------------------------------------
     def cb_rga_scan(self):
-        # ✅ CH2만 스캔 (UI는 CH2 전용으로 테스트)
         async def _run():
             try:
                 self._ensure_background_started()
-                # 완료 신호 중복 방지 플래그 초기화
                 self._rga_done_signaled = False
-                # (선택) 시작 전에 그래프 한번 비우고 시작
                 self._soon(self.graph_controller.clear_rga_plot)
                 await self.rga_ch2.scan_histogram_to_csv(RGA_CSV_PATH["ch2"])
-                # 완료 토큰은 여기서 보내지 않음(그래프 그린 '직후'에 보냄)
+                # 완료 토큰은 data/finished 쪽에서 처리
             except Exception as e:
-                self.process_controller.on_rga_failed("RGA", str(e))
+                # 🔧 여기서도 '실패'를 '소프트 실패'로 처리: 로그 + 다음 단계 진행
+                msg = f"예외로 RGA 스캔 실패: {e!r} → 다음 단계로 건너뜀"
+                self.append_log("RGA", msg)
                 if self.chat_notifier:
-                    self.chat_notifier.notify_error_with_src("RGA", str(e))
+                    try:
+                        self.chat_notifier.notify_text(f"[RGA] {msg}")
+                    except Exception:
+                        pass
+                if not self._rga_done_signaled:
+                    self._rga_done_signaled = True
+                    self.process_controller.on_rga_finished()
         self._spawn_detached(_run())
 
     # ------------------------------------------------------------------
@@ -1027,7 +1044,9 @@ class MainWindow(QWidget):
     # 2) async 함수 안의 모달 호출을 유틸로 교체
     async def _start_after_preflight(self, params: NormParams) -> None:
         try:
+            self.append_log("DBG", "PF: entering start_after_preflight")
             self._ensure_background_started()
+            self.append_log("DBG", "PF: background started ensured")
 
             # 프리플라이트 동안 Start 비활성화(중복 클릭 방지)
             self._on_process_status_changed(True)
@@ -1035,7 +1054,10 @@ class MainWindow(QWidget):
             # 타임아웃은 짧게 고정: RF Pulse 사용 시 10초, 아니면 8초
             use_rf_pulse: bool = bool(params.get("use_rf_pulse", False))
             timeout = 10.0 if use_rf_pulse else 8.0
+
+            self.append_log("DBG", "PF: preflight_connect() about to await")
             ok, failed = await self._preflight_connect(params, timeout_s=timeout)
+            self.append_log("DBG", f"PF: preflight_connect() returned ok={ok} failed={failed}")
 
             if not ok:
                 fail_list = ", ".join(failed) if failed else "알 수 없음"
@@ -1075,7 +1097,7 @@ class MainWindow(QWidget):
             t0 = 0.0
         while True:
             if self._is_dev_connected(dev):
-                #self.append_log(name, "연결 성공")
+                self.append_log(name, "연결 성공")
                 return True
             try:
                 now = asyncio.get_running_loop().time()
