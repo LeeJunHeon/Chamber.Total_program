@@ -135,6 +135,9 @@ class MainWindow(QWidget):
         self.ui.setupUi(self)
         self._loop = loop or asyncio.get_event_loop()
 
+        # __init__ 어디 적절한 곳(예: RGA 어댑터 생성 직후)에 플래그 멤버 추가
+        self._rga_done_signaled: bool = False
+
         # --- 스택 및 페이지 매핑 (UI 객체명 고정)
         self._stack: QStackedWidget = self.ui.stackedWidget
         self._pages: dict[str, QWidget] = {
@@ -186,6 +189,12 @@ class MainWindow(QWidget):
                                         user=RGA_NET["ch2"]["user"],
                                         password=RGA_NET["ch2"]["password"],
                                         name="CH2")
+        
+        # ✅ 동시 스캔 동기화용 상태
+        self._rga_channels: list[int] = [ch for ch, ad in ((1, self.rga_ch1), (2, self.rga_ch2)) if ad]
+        self._rga_scan_pending: bool = False
+        self._rga_done_signaled: bool = False
+        self._rga_plotted: dict[int, bool] = {ch: False for ch in self._rga_channels}
         
         # DC는 family="DCV"
         async def _dc_send(power: float) -> None:
@@ -244,7 +253,6 @@ class MainWindow(QWidget):
             port=TSP_PORT,
             baud=TSP_BAUD,
             loop=self._loop,         # (선택) 컨트롤러가 asyncio 태스크 만들 때 사용
-            on_log=lambda m: self.append_log("TSP", m)  # 로그 콜백(문자열만 받는 간단 콜백)
         )
 
         self._advancing: bool = False
@@ -661,31 +669,40 @@ class MainWindow(QWidget):
                 if self.chat_notifier:
                     self.chat_notifier.notify_error_with_src("IG", why)
 
-    # ✅ 채널별 펌프 (CH1/CH2 공용)
     async def _pump_rga_events_ch(self, adapter: RGA100AsyncAdapter, ch: int) -> None:
         tag = f"RGA{ch}"
         async for ev in adapter.events():
             if ev.kind == "status":
                 self.append_log(tag, ev.message or "")
+
             elif ev.kind == "data":
-                # 그래프 갱신: CH1/CH2 전용 메서드가 있으면 사용, 없으면 기존 update_rga_plot로 폴백
-                def _update():
-                    if ch == 1 and hasattr(self.graph_controller, "set_rga_data_ch1"):
-                        self.graph_controller.set_rga_data_ch1(ev.mass_axis, ev.pressures)
-                    elif ch == 2 and hasattr(self.graph_controller, "set_rga_data_ch2"):
-                        self.graph_controller.set_rga_data_ch2(ev.mass_axis, ev.pressures)
-                    else:
-                        # 기존 단일 그래프 메서드 폴백(구버전 GraphController 호환)
-                        self.graph_controller.update_rga_plot(ev.mass_axis, ev.pressures)
-                QTimer.singleShot(0, _update)
+                # ✅ CH2만 그리기 + 그린 '직후' 완료 토큰(1회)
+                if ch == 2:
+                    def _draw_then_finish(x=ev.mass_axis, y=ev.pressures):
+                        try:
+                            self.graph_controller.update_rga_plot(x, y)
+                        finally:
+                            if not self._rga_done_signaled:
+                                self._rga_done_signaled = True
+                                self.process_controller.on_rga_finished()
+                    QTimer.singleShot(0, _draw_then_finish)
+                else:
+                    # CH1 데이터는 무시(현재 CH1 미구현)
+                    pass
 
             elif ev.kind == "finished":
-                self.process_controller.on_rga_finished()
+                # ✅ 완료 토큰은 data 처리에서 이미 보냄 (레이스 방지)
+                self.append_log(tag, ev.message or "scan finished")
+
             elif ev.kind == "failed":
+                # ✅ CH2 스캔 실패만 공정 실패로 전파
                 why = ev.message or "RGA failed"
-                self.process_controller.on_rga_failed(tag, why)
-                if self.chat_notifier:
-                    self.chat_notifier.notify_error_with_src(tag, why)
+                if ch == 2:
+                    self.process_controller.on_rga_failed(tag, why)
+                    if self.chat_notifier:
+                        self.chat_notifier.notify_error_with_src(tag, why)
+                else:
+                    self.append_log(tag, f"CH1 이벤트 무시: {why}")
 
     async def _pump_dc_events(self) -> None:
         async for ev in self.dc_power.events():
@@ -789,12 +806,20 @@ class MainWindow(QWidget):
     # RGA dummy
     # ------------------------------------------------------------------
     def cb_rga_scan(self):
-        # ✅ 두 대를 동시에 스캔 + 각자 NAS CSV에 append
+        # ✅ CH2만 스캔 (UI는 CH2 전용으로 테스트)
         async def _run():
-            await asyncio.gather(
-                self.rga_ch1.scan_histogram_to_csv(RGA_CSV_PATH["ch1"]),
-                self.rga_ch2.scan_histogram_to_csv(RGA_CSV_PATH["ch2"]),
-            )
+            try:
+                self._ensure_background_started()
+                # 완료 신호 중복 방지 플래그 초기화
+                self._rga_done_signaled = False
+                # (선택) 시작 전에 그래프 한번 비우고 시작
+                QTimer.singleShot(0, self.graph_controller.clear_rga_plot)
+                await self.rga_ch2.scan_histogram_to_csv(RGA_CSV_PATH["ch2"])
+                # 완료 토큰은 여기서 보내지 않음(그래프 그린 '직후'에 보냄)
+            except Exception as e:
+                self.process_controller.on_rga_failed("RGA", str(e))
+                if self.chat_notifier:
+                    self.chat_notifier.notify_error_with_src("RGA", str(e))
         self._spawn_detached(_run())
 
     # ------------------------------------------------------------------

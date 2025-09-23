@@ -199,3 +199,7 @@ class TSPBurstRunner:
                 await self.tsp.ensure_off()
             except Exception:
                 pass
+            try:
+                await self.ig.ensure_off()
+            except Exception:
+                pass
