@@ -472,41 +472,30 @@ class RFPulseAsync:
                 backoff = min(backoff * 2, RFPULSE_RECONNECT_BACKOFF_MAX_MS)
 
     def _on_connection_made(self, transport):
-        """
-        포트 오픈 직후 DTR/RTS를 올려 물리 레벨을 안정화하고
-        남아있는 입력/출력 버퍼를 정리한다.
-        (이전 PyQt 버전에서 하던 것과 동일한 효과)
-        """
         try:
             ser = getattr(transport, "serial", None)  # pyserial Serial
             if ser:
-                pass
-                # # DTR/RTS High
-                # try:
-                #     ser.setDTR(True)
+                # 입력/출력 버퍼 비우기 (초기 프레임 유실/혼합 방지)
+                try:
+                    ser.reset_input_buffer()
+                except Exception:
+                    pass
+                try:
+                    ser.reset_output_buffer()
+                except Exception:
+                    pass
+                # # DTR/RTS High (장비 필요 시만 주석 해제)
+                # try: ser.setDTR(True)
                 # except Exception:
-                #     try:
-                #         ser.dtr = True
-                #     except Exception:
-                #         pass
-                # try:
-                #     ser.setRTS(True)
+                #     try: ser.dtr = True
+                #     except Exception: pass
+                # try: ser.setRTS(True)
                 # except Exception:
-                #     try:
-                #         ser.rts = True
-                #     except Exception:
-                #         pass
-
-                # # 잔여 프레임 정리(입/출력 버퍼)
-                # try:
-                #     ser.reset_input_buffer()
-                #     ser.reset_output_buffer()
-                # except Exception:
-                #     pass
+                #     try: ser.rts = True
+                #     except Exception: pass
         except Exception as e:
             import asyncio
             asyncio.create_task(self._emit_status(f"DTR/RTS 설정 실패: {e!r}"))
-
 
     def _on_connection_lost(self, exc: Optional[Exception]):
         self._connected = False

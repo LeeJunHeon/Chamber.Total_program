@@ -24,7 +24,7 @@ from device.ig import AsyncIG
 from device.mfc import AsyncMFC
 from device.plc import AsyncFaduinoPLC
 from device.oes import OESAsync
-from device.rga import RGAAsync
+from device.rga import RGA100AsyncAdapter, RGAEvent
 from device.dc_power import DCPowerAsync
 from device.rf_power import RFPowerAsync
 from device.rf_pulse import RFPulseAsync
@@ -34,6 +34,7 @@ from controller.process_ch2 import ProcessController
 
 from lib.config_ch2 import (
     CHAT_WEBHOOK_URL, ENABLE_CHAT_NOTIFY, BUTTON_TO_PIN, IG_POLLING_INTERVAL_MS,
+    RGA_NET, RGA_CSV_PATH,
 )
 
 RawParams = TypedDict('RawParams', {
@@ -177,7 +178,15 @@ class MainWindow(QWidget):
         self.ig: AsyncIG = AsyncIG()
         self.rf_pulse: RFPulseAsync = RFPulseAsync()
         self.oes: OESAsync = OESAsync()
-        self.rga: RGAAsync = RGAAsync()
+        # ✅ LAN RGA 두 대
+        self.rga_ch1 = RGA100AsyncAdapter(RGA_NET["ch1"]["ip"],
+                                        user=RGA_NET["ch1"]["user"],
+                                        password=RGA_NET["ch1"]["password"],
+                                        name="CH1")
+        self.rga_ch2 = RGA100AsyncAdapter(RGA_NET["ch2"]["ip"],
+                                        user=RGA_NET["ch2"]["user"],
+                                        password=RGA_NET["ch2"]["password"],
+                                        name="CH2")
         self.dc_power: DCPowerAsync = DCPowerAsync(
             send_dc_power=self.faduino.set_dc_power,
             send_dc_power_unverified=self.faduino.set_dc_power_unverified,
@@ -276,9 +285,6 @@ class MainWindow(QWidget):
         def cb_ig_cancel():
             self._spawn_detached(self.ig.cancel_wait())
 
-        def cb_rga_scan():
-            self._spawn_detached(self._do_rga_scan())
-
         def cb_oes_run(duration_sec: float, integration_ms: int):
             async def run():
                 try:
@@ -314,7 +320,7 @@ class MainWindow(QWidget):
             stop_rfpulse=cb_rfpulse_stop,
             ig_wait=cb_ig_wait,
             cancel_ig=cb_ig_cancel,
-            rga_scan=cb_rga_scan,
+            rga_scan=self.cb_rga_scan,   # ✔️ 바운드 메서드로 넘기기
             oes_run=cb_oes_run,
         )
 
@@ -667,20 +673,31 @@ class MainWindow(QWidget):
                 if self.chat_notifier:
                     self.chat_notifier.notify_error_with_src("IG", why)
 
-    async def _pump_rga_events(self) -> None:
-        async for ev in self.rga.events():
+    # ✅ 채널별 펌프 (CH1/CH2 공용)
+    async def _pump_rga_events_ch(self, adapter: RGA100AsyncAdapter, ch: int) -> None:
+        tag = f"RGA{ch}"
+        async for ev in adapter.events():
             if ev.kind == "status":
-                self.append_log("RGA", ev.message or "")
+                self.append_log(tag, ev.message or "")
             elif ev.kind == "data":
-                # QtCharts는 GUI 스레드에서 그려야 안전
-                QTimer.singleShot(0, lambda: self.graph_controller.update_rga_plot(ev.mass_axis, ev.pressures))
+                # 그래프 갱신: CH1/CH2 전용 메서드가 있으면 사용, 없으면 기존 update_rga_plot로 폴백
+                def _update():
+                    if ch == 1 and hasattr(self.graph_controller, "set_rga_data_ch1"):
+                        self.graph_controller.set_rga_data_ch1(ev.mass_axis, ev.pressures)
+                    elif ch == 2 and hasattr(self.graph_controller, "set_rga_data_ch2"):
+                        self.graph_controller.set_rga_data_ch2(ev.mass_axis, ev.pressures)
+                    else:
+                        # 기존 단일 그래프 메서드 폴백(구버전 GraphController 호환)
+                        self.graph_controller.update_rga_plot(ev.mass_axis, ev.pressures)
+                QTimer.singleShot(0, _update)
+
             elif ev.kind == "finished":
                 self.process_controller.on_rga_finished()
             elif ev.kind == "failed":
                 why = ev.message or "RGA failed"
-                self.process_controller.on_rga_failed("RGA", why)
+                self.process_controller.on_rga_failed(tag, why)
                 if self.chat_notifier:
-                    self.chat_notifier.notify_error_with_src("RGA", why)
+                    self.chat_notifier.notify_error_with_src(tag, why)
 
     async def _pump_dc_events(self) -> None:
         async for ev in self.dc_power.events():
@@ -787,12 +804,17 @@ class MainWindow(QWidget):
                 self.append_log("OES", f"이벤트 처리 예외: {e!r}")
                 continue
 
-
     # ------------------------------------------------------------------
     # RGA dummy
     # ------------------------------------------------------------------
-    async def _do_rga_scan(self) -> None:
-        await self.rga.scan_once() 
+    def cb_rga_scan(self):
+        # ✅ 두 대를 동시에 스캔 + 각자 NAS CSV에 append
+        async def _run():
+            await asyncio.gather(
+                self.rga_ch1.scan_histogram_to_csv(RGA_CSV_PATH["ch1"]),
+                self.rga_ch2.scan_histogram_to_csv(RGA_CSV_PATH["ch2"]),
+            )
+        self._spawn_detached(_run())
 
     # ------------------------------------------------------------------
     # 백그라운 태스크 시작 함수
@@ -822,7 +844,9 @@ class MainWindow(QWidget):
         self._ensure_task_alive("Pump.Faduino",   self._pump_faduino_events)
         self._ensure_task_alive("Pump.MFC",       self._pump_mfc_events)
         self._ensure_task_alive("Pump.IG",        self._pump_ig_events)
-        self._ensure_task_alive("Pump.RGA",       self._pump_rga_events)
+        # ✅ RGA 두 대 펌프 기동
+        self._ensure_task_alive("Pump.RGA1",      lambda: self._pump_rga_events_ch(self.rga_ch1, 1))
+        self._ensure_task_alive("Pump.RGA2",      lambda: self._pump_rga_events_ch(self.rga_ch2, 2))
         self._ensure_task_alive("Pump.DC",        self._pump_dc_events)
         self._ensure_task_alive("Pump.RF",        self._pump_rf_events)
         self._ensure_task_alive("Pump.RFPulse",   self._pump_rfpulse_events)
@@ -1216,7 +1240,8 @@ class MainWindow(QWidget):
 
         # 1) 장치 워치독/워커 정리(재연결 억제)
         tasks = []
-        for dev in (self.ig, self.mfc, self.faduino, self.rf_pulse, self.dc_power, self.rf_power, self.oes, self.rga):
+        for dev in (self.ig, self.mfc, self.faduino, self.rf_pulse, self.dc_power, self.rf_power, self.oes,
+                    getattr(self, "rga_ch1", None), getattr(self, "rga_ch2", None)):
             if dev and hasattr(dev, "cleanup"):
                 try:
                     tasks.append(dev.cleanup())
@@ -1475,7 +1500,8 @@ class MainWindow(QWidget):
 
         # 2) 장치: 재연결 시도 금지 + 포트만 닫는 빠른 정리
         tasks = []
-        for dev in (self.ig, self.mfc, self.faduino, self.rf_pulse, self.dc_power, self.rf_power, self.oes, self.rga):
+        for dev in (self.ig, self.mfc, self.faduino, self.rf_pulse, self.dc_power, self.rf_power, self.oes,
+                    getattr(self, "rga_ch1", None), getattr(self, "rga_ch2", None)):
             if not dev:
                 continue
             try:
@@ -1485,8 +1511,6 @@ class MainWindow(QWidget):
                     tasks.append(dev.cleanup())
             except Exception:
                 pass
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
 
         # ✅ PLC는 cleanup이 아니라 close()
         try:
@@ -1494,6 +1518,9 @@ class MainWindow(QWidget):
                 tasks.append(self.plc.close())
         except Exception:
             pass
+
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
         await asyncio.sleep(0.3)
 
