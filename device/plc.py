@@ -224,8 +224,6 @@ class PLCConfig:
 
     # WRITE 인덱스(D00004=WRITE_0)를 기본으로 사용
     dc_write_index: int = 0            # 0→D00004, 1→D00005 ...
-    # SET 코일 키(위에 추가한 맵 키와 동일하게)
-    dc_set_coil_key: str = "DC_PWR_SET_SW"
 
     # READ 스케일: D00000, D00001이 ‘원시카운트’라면 스케일 적용
     dc_v_scale: float = 1.0            # raw→V 변환 계수(원시=1.0)
@@ -639,14 +637,8 @@ class AsyncFaduinoPLC:
         code = int(round(((v - vmin) / span) * full_scale + offset))
         return max(0, min(full_scale, code))
 
-    async def power_enable(
-        self,
-        on: bool = True,
-        *,
-        family: str = "DCV",
-        set_idx: int | None = None,
-        set_key: str | None = None,
-    ) -> None:
+    async def power_enable(self, on: bool = True, *, family: str = "DCV",
+                        set_idx: Optional[int] = None, set_key: Optional[str] = None) -> None:
         """
         SET 코일 래치 ON/OFF.
         - 기본: family='DCV', set_idx=cfg.dc_write_index → 'DCV_SET_{idx}'
@@ -654,22 +646,15 @@ class AsyncFaduinoPLC:
         """
         idx = int(self.cfg.dc_write_index) if set_idx is None else int(set_idx)
         key = set_key or f"{family}_SET_{idx}"
+        if key not in PLC_COIL_MAP:
+            raise KeyError(f"PLC_COIL_MAP에 '{key}' 없음 (family={family}, idx={idx})")
         self.log("[PLC] POWER SET (%s)[%d] <- %s", family, idx, on)
         await self.write_switch(key, bool(on), momentary=False)
 
-    async def power_write(
-        self,
-        power_w: float,
-        *,
-        family: str = "DCV",
-        write_idx: int | None = None,
-        write_key: str | None = None,
-        # 스케일 (기본은 DC 프로파일 사용)
-        vmin: float | None = None,
-        vmax: float | None = None,
-        full_scale: int | None = None,
-        offset: int | None = None,
-    ) -> int:
+    async def power_write(self, power_w: float, *, family: str = "DCV",
+                        write_idx: Optional[int] = None, write_key: Optional[str] = None,
+                        vmin: Optional[float] = None, vmax: Optional[float] = None,
+                        full_scale: Optional[int] = None, offset: Optional[int] = None) -> int:
         """
         원하는 파워[W] → DAC 코드 → WRITE 레지스터 기록.
         - 기본: family='DCV', write_idx=cfg.dc_write_index → 'DCV_WRITE_{idx}'(=D00004+idx)
@@ -685,22 +670,16 @@ class AsyncFaduinoPLC:
         if write_key is None:
             idx = int(self.cfg.dc_write_index) if write_idx is None else int(write_idx)
             write_key = f"{family}_WRITE_{idx}"
+        if write_key not in PLC_REG_MAP:
+            raise KeyError(f"PLC_REG_MAP에 '{write_key}' 없음 (family={family})")
         await self.write_reg_name(write_key, code)
         self.log("[PLC] POWER WRITE (%s) %s <- W=%.3f (DAC=%d)", family, write_key, power_w, code)
         return code
 
-    async def power_apply(
-        self,
-        power_w: float,
-        *,
-        family: str = "DCV",
-        channel: int | None = None,       # set_idx/write_idx 공통 지정
-        ensure_set: bool = True,
-        vmin: float | None = None,
-        vmax: float | None = None,
-        full_scale: int | None = None,
-        offset: int | None = None,
-    ) -> int:
+    async def power_apply(self, power_w: float, *, family: str = "DCV",
+                        channel: Optional[int] = None, ensure_set: bool = True,
+                        vmin: Optional[float] = None, vmax: Optional[float] = None,
+                        full_scale: Optional[int] = None, offset: Optional[int] = None) -> int:
         """
         (추천) 한 번에: SET(선택) → WRITE. channel=None이면 cfg.dc_write_index.
         """
@@ -710,17 +689,11 @@ class AsyncFaduinoPLC:
         return await self.power_write(power_w, family=family, write_idx=idx,
                                       vmin=vmin, vmax=vmax, full_scale=full_scale, offset=offset)
 
-    async def power_read(
-        self,
-        *,
-        family: str = "DCV",
-        v_idx: int | None = None,
-        i_idx: int | None = None,
-        v_key: str | None = None,
-        i_key: str | None = None,
-        v_scale: float | None = None,
-        i_scale: float | None = None,
-    ) -> tuple[float, float, float]:
+    async def power_read(self, *, family: str = "DCV",
+                        v_idx: Optional[int] = None, i_idx: Optional[int] = None,
+                        v_key: Optional[str] = None, i_key: Optional[str] = None,
+                        v_scale: Optional[float] = None,
+                        i_scale: Optional[float] = None) -> tuple[float, float, float]:
         """
         V/I 읽고 스케일 적용 → (P[W], V[V], I[A]).
         - 기본: family='DCV', v_idx=0 → 'DCV_READ_0'(D00000), i_idx=1 → 'DCV_READ_1'(D00001)
@@ -732,6 +705,10 @@ class AsyncFaduinoPLC:
         if i_key is None:
             ii = 1 if i_idx is None else int(i_idx)
             i_key = f"{family}_READ_{ii}"
+        if v_key not in PLC_REG_MAP:
+            raise KeyError(f"PLC_REG_MAP에 '{v_key}' 없음 (family={family})")
+        if i_key not in PLC_REG_MAP:
+            raise KeyError(f"PLC_REG_MAP에 '{i_key}' 없음 (family={family})")
 
         v_raw = await self.read_reg_name(v_key)
         i_raw = await self.read_reg_name(i_key)

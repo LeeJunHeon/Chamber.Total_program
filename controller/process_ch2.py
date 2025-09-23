@@ -29,7 +29,7 @@ class PCEvent:
       - 'finished'           : {'ok': bool, 'detail': dict}
       - 'aborted'            : {}
       - 'polling'            : {'active': bool}
-      - 'polling_targets'    : {'targets': {'mfc':bool,'plc':bool,'faduino':bool,'rfpulse':bool}}
+      - 'polling_targets'    : {'targets': {'mfc':bool,'plc':bool,'rfpulse':bool}}
         # 주: 하위호환을 위해 'faduino' 키도 계속 내보냄(메인에서 아직 사용 중)
     """
     kind: str
@@ -716,17 +716,12 @@ class ProcessController:
 
     def _compute_polling_targets(self, active: bool) -> Dict[str, bool]:
         if not active:
-            return {'mfc': False, 'plc': False, 'faduino': False, 'rfpulse': False}
+            return {'mfc': False, 'rfpulse': False}
 
-        # 현재 런 파라미터 기반으로 공통정보 생성
         info = self._get_common_process_info(self.current_params or {})
-
         if info.get('use_rf_pulse', False):
-            # RF Pulse 사용 시: rfpulse만 폴링, faduino 폴링은 끔(하위호환 키는 유지)
-            return {'mfc': True, 'plc': True, 'faduino': False, 'rfpulse': True}
-
-        # DC만/혹은 DC+연속 RF 조합: faduino 폴링이 필요한 경우가 있으므로 True
-        return {'mfc': True, 'plc': True, 'faduino': True, 'rfpulse': False}
+            return {'mfc': True, 'rfpulse': True}
+        return {'mfc': True, 'rfpulse': False}
 
     # =========================
     # 종료/실패 처리
@@ -1133,7 +1128,7 @@ class ProcessController:
                 ))
 
         steps.append(ProcessStep(
-            action=ActionType.PLC_CMD, params=('MV', False),
+            action=ActionType.PLC_CMD, params=('MV', False, 2),
             message='[긴급] 메인 밸브 즉시 닫기', no_wait=True
         ))
 
