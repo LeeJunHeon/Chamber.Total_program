@@ -289,7 +289,7 @@ class RFPulseAsync:
             self._watchdog_task = loop.create_task(self._watchdog_loop(), name="RFPWatchdog")
         if not self._cmd_worker_task:
             self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="RFPCmdWorker")
-        await self._emit_status("RFPulse 워치독/워커 시작")
+        #await self._emit_status("RFPulse 워치독/워커 시작")
 
     async def cleanup(self):
         """안전 종료: 폴링 off → 큐 purge → safe off → 연결 종료."""
@@ -476,28 +476,29 @@ class RFPulseAsync:
         try:
             ser = getattr(transport, "serial", None)  # pyserial Serial
             if ser:
-                # DTR/RTS High
-                try:
-                    ser.setDTR(True)
-                except Exception:
-                    try:
-                        ser.dtr = True
-                    except Exception:
-                        pass
-                try:
-                    ser.setRTS(True)
-                except Exception:
-                    try:
-                        ser.rts = True
-                    except Exception:
-                        pass
+                pass
+                # # DTR/RTS High
+                # try:
+                #     ser.setDTR(True)
+                # except Exception:
+                #     try:
+                #         ser.dtr = True
+                #     except Exception:
+                #         pass
+                # try:
+                #     ser.setRTS(True)
+                # except Exception:
+                #     try:
+                #         ser.rts = True
+                #     except Exception:
+                #         pass
 
-                # 잔여 프레임 정리(입/출력 버퍼)
-                try:
-                    ser.reset_input_buffer()
-                    ser.reset_output_buffer()
-                except Exception:
-                    pass
+                # # 잔여 프레임 정리(입/출력 버퍼)
+                # try:
+                #     ser.reset_input_buffer()
+                #     ser.reset_output_buffer()
+                # except Exception:
+                #     pass
         except Exception as e:
             import asyncio
             asyncio.create_task(self._emit_status(f"DTR/RTS 설정 실패: {e!r}"))

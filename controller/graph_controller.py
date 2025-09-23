@@ -135,16 +135,31 @@ class GraphController:
         self._rga_stem_series.clear()
         self.rga_scatter.clear()
 
-        if not x_data or not y_torr:
+        # numpy/리스트 모두 안전하게 1D로 정규화
+        try:
+            import numpy as _np
+            x_arr = _np.asarray(x_data).ravel()
+            y_arr = _np.asarray(y_torr).ravel()
+        except Exception:
+            x_arr = list(x_data or [])
+            y_arr = list(y_torr or [])
+
+        if x_arr is None or y_arr is None:
             return
+        n = min(len(x_arr), len(y_arr))
+        if n < 1:
+            return
+        x_arr = x_arr[:n]
+        y_arr = y_arr[:n]
 
         pts: List[Tuple[float, float]] = []
-        for x, y in zip(x_data, y_torr):
+        x_min, x_max = self.RGA_X_RANGE
+        for x, y in zip(x_arr, y_arr):
             try:
                 xf = float(x); yf = float(y)
             except Exception:
                 continue
-            if xf < self.RGA_X_RANGE[0] or xf > self.RGA_X_RANGE[1]:
+            if xf < x_min or xf > x_max:
                 continue
             if yf <= 0.0:
                 continue
@@ -172,13 +187,29 @@ class GraphController:
 
     def update_oes_plot(self, x_data: Sequence[float], y_data: Sequence[float]) -> None:
         """OES: 선 그래프 (x는 100~1200 범위로 클리핑, x축 눈금 100 단위 고정)"""
-        self.oes_series.clear()
-        if not x_data or not y_data:
-            return
+        # numpy/리스트 모두 안전하게 1D로 정규화
+        try:
+            import numpy as _np
+            x_arr = _np.asarray(x_data).ravel()
+            y_arr = _np.asarray(y_data).ravel()
+        except Exception:
+            x_arr = list(x_data or [])
+            y_arr = list(y_data or [])
 
+        # 비어있거나 None이면 스킵, 길이 불일치시 맞춰 절단
+        if x_arr is None or y_arr is None:
+            return
+        n = min(len(x_arr), len(y_arr))
+        if n < 2:
+            return
+        x_arr = x_arr[:n]
+        y_arr = y_arr[:n]
+
+        self.oes_series.clear()
         xmin, xmax = self.OES_X_RANGE
+
         pairs: List[Tuple[float, float]] = []
-        for x, y in zip(x_data, y_data):
+        for x, y in zip(x_arr, y_arr):
             try:
                 xf = float(x); yf = float(y)
             except Exception:
@@ -189,14 +220,13 @@ class GraphController:
 
         if len(pairs) < 2:
             return
-        pairs.sort(key=lambda p: p[0])
 
+        pairs.sort(key=lambda p: p[0])
         for x, y in pairs:
             self.oes_series.append(QPointF(x, y))
 
-        # x축: 항상 100 간격 고정
+        # x축: 100 간격 고정 / y축: 기본 범위 유지
         self._setup_oes_x_axis_base(self.oes_axis_x)
-        # y축: 기본 범위 유지
         self.oes_axis_y.setRange(*self.OES_Y_RANGE)
 
     def clear_rga_plot(self) -> None:

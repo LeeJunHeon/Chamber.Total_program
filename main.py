@@ -213,7 +213,7 @@ class MainWindow(QWidget):
                 try:
                     if nname == "MV":
                         # ✅ 올바른 매핑: 메인 밸브 코일 (채널별)
-                        await self.plc.write_switch(f"M_V_{int(ch)}_SW", onb)
+                        await self.plc.write_switch(f"MAIN_{int(ch)}_GAS_SW", onb)
 
                     elif nname in ("AR", "O2", "N2", "MAIN"):
                         # ✅ 가스는 plc.gas(ch, gas)
@@ -423,13 +423,6 @@ class MainWindow(QWidget):
                                 self._prestart_buf.clear()
                         except Exception:
                             pass
-
-                        # 그 다음 헤더 라인
-                        self.append_log("Logger", f"새 로그 파일 시작: {self._log_file_path}")
-                    else:
-                        # 이미 세션 파일이 있으면 안내만
-                        self.append_log("Logger", f"세션 파일 유지: {self._log_file_path.name}")
-
                     # DataLogger/그래프/알림 등 나머지 로직은 그대로
                     try:
                         self.data_logger.start_new_log_session(payload.get("params", {}))
@@ -1043,7 +1036,7 @@ class MainWindow(QWidget):
             t0 = 0.0
         while True:
             if self._is_dev_connected(dev):
-                self.append_log(name, "연결 성공")
+                #self.append_log(name, "연결 성공")
                 return True
             try:
                 now = asyncio.get_running_loop().time()
@@ -1363,7 +1356,7 @@ class MainWindow(QWidget):
         # 1) 입력 위젯 기본값 적용
         self._set_default_ui_values()
 
-        # 2) 체크박스 일괄 OFF (오타 수정: ch3_G3 → ch2_G3)
+        # 2) 체크박스 일괄 OFF 
         checkbox_names = (
             "ch2_G1_checkbox", "ch2_G2_checkbox", "ch2_G3_checkbox",
             "ch2_Ar_checkbox", "ch2_O2_checkbox", "ch2_N2_checkbox",
@@ -1377,14 +1370,11 @@ class MainWindow(QWidget):
 
         # 3) 상태 라벨/표시값 초기화
         self.ui.ch2_processState_edit.setPlainText("대기 중")
-        self.ui.ch2_Power_edit.setPlainText("0.000")
-        self.ui.ch2_Voltage_edit.setPlainText("0.000")
-        self.ui.ch2_Current_edit.setPlainText("0.000")
-        self.ui.ch2_forP_edit.setPlainText("0.0")
-        self.ui.ch2_refP_edit.setPlainText("0.0")
-        self.ui.ch2_rfPulsePower_edit.setPlainText("0")
-        self.ui.ch2_rfPulseFreq_edit.setPlainText("")
-        self.ui.ch2_rfPulseDutyCycle_edit.setPlainText("")
+        self.ui.ch2_Power_edit.setPlainText("")
+        self.ui.ch2_Voltage_edit.setPlainText("")
+        self.ui.ch2_Current_edit.setPlainText("")
+        self.ui.ch2_forP_edit.setPlainText("")
+        self.ui.ch2_refP_edit.setPlainText("")
 
         # 4) 버튼 상태: 공정 미실행 상태로(Start=활성, Stop=비활성)
         self._on_process_status_changed(False)

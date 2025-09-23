@@ -191,7 +191,7 @@ class AsyncIG:
             self._watchdog_task = loop.create_task(self._watchdog_loop(), name="IGWatchdog")
         if not self._cmd_worker_task:
             self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="IGCmdWorker")
-        await self._emit_status("IG 워치독/워커 시작")
+        #await self._emit_status("IG 워치독/워커 시작")
 
     async def cleanup(self):
         await self._emit_status("IG 종료 절차 시작")
@@ -308,11 +308,21 @@ class AsyncIG:
         await self._emit_status(f"IG ON OK → 첫 RDI를 {self._first_read_delay_ms}ms 후 수행")
         await asyncio.sleep(self._first_read_delay_ms / 1000.0)
 
-        # 첫 RDI 1회
+        # ⬇️ 보냄/대기/타임아웃을 상태 로그로 노출
+        await self._emit_status(f"[FIRST READ] RDI 송신 및 응답 대기(최대 {IG_TIMEOUT_MS}ms)")
         line = await self._send_and_wait_line("RDI", tag="[FIRST READ AFTER ON]", timeout_ms=IG_TIMEOUT_MS)
+
+
+        if line is None:
+            await self._emit_status("[FIRST READ] RDI 타임아웃 → 포트 재동기화(재연결 트리거)")
+            if self._transport:
+                try: self._transport.close()
+                except Exception: pass
+            self._connected = False  # 워치독이 재연결
+            # 계속 진행(아래 handle은 None이면 조용히 리턴)
         if not self._waiting_active:
             return False
-        # 라인 파싱/처리 (도달/실패/IG OFF는 다음 루프에서 동일 처리)
+
         await self._handle_rdi_line(line)
 
         # 폴링 시작
@@ -741,16 +751,17 @@ class AsyncIG:
                 # 워커 타임아웃 + 약간의 마진(네고 가능)
                 return await asyncio.wait_for(fut, timeout=(timeout_ms / 1000.0) + 0.5)
             except asyncio.TimeoutError:
-                # 마지막 시도가 아니면 연결을 닫아 워치독이 재연결하게 하고 재시도
+                # ⬇️ 대기 중임을 보여주기 위해 상태 로그 추가
+                await self._emit_status(f"{tag} '{cmd}' 응답 타임아웃({timeout_ms}ms)")
                 if attempt < attempts - 1:
                     if self._transport:
                         try: self._transport.close()
                         except Exception: pass
                     self._connected = False
-                    await asyncio.sleep(0)  # 이벤트 루프 양보
+                    await asyncio.sleep(0)
                     continue
-                # 모두 실패
                 return None
+
         
     async def _send_off_best_effort(self, wait_gap_ms: int = 300) -> bool:
         """
@@ -769,7 +780,7 @@ class AsyncIG:
                     # 플랫폼에 따라 .serial이 없을 수 있으니 transport로라도 전송
                     self._transport.write(b"SIG 0\r")
                 await asyncio.sleep(max(0, wait_gap_ms) / 1000.0)
-                await self._emit_status("IG OFF direct-write 전송 완료")
+                #await self._emit_status("IG OFF direct-write 전송 완료")
                 return True
             except Exception as e:
                 await self._emit_status(f"IG OFF direct-write 실패: {e!r} → fallback enqueue")

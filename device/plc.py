@@ -255,7 +255,7 @@ class AsyncFaduinoPLC:
     async def connect(self) -> None:
         self._closed = False
         await asyncio.to_thread(self._connect_sync)
-        self.log("[PLC] TCP 연결 성공: %s:%s (unit=%s)", self.cfg.ip, self.cfg.port, self.cfg.unit)
+        self.log("TCP 연결 성공: %s:%s (unit=%s)", self.cfg.ip, self.cfg.port, self.cfg.unit)
         if self._hb_task is None or self._hb_task.done():
             self._hb_task = asyncio.create_task(self._heartbeat_loop(), name="PLCHeartbeat")
 
@@ -269,7 +269,7 @@ class AsyncFaduinoPLC:
                 pass
             self._hb_task = None
         await asyncio.to_thread(self._close_sync)
-        self.log("[PLC] TCP 연결 종료")
+        self.log("TCP 연결 종료")
 
     def is_connected(self) -> bool:
         try:

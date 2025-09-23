@@ -1087,7 +1087,7 @@ class ProcessController:
             action=ActionType.PLC_CMD, params=('MV', False, 2), message='메인 밸브 닫기'
         ))
 
-        self._emit_log("Process", "종료 절차가 생성되었습니다.")
+        #self._emit_log("Process", "종료 절차가 생성되었습니다.")
         return steps
 
     def _create_emergency_shutdown_sequence(self) -> List[ProcessStep]:

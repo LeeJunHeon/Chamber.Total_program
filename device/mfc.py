@@ -204,7 +204,7 @@ class AsyncMFC:
             self._watchdog_task = loop.create_task(self._watchdog_loop(), name="MFCWatchdog")
         if not self._cmd_worker_task:
             self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="MFCCmdWorker")
-        await self._emit_status("MFC 워치독/워커 시작")
+        #await self._emit_status("MFC 워치독/워커 시작")
 
     async def cleanup(self):
         """컨트롤러 완전 종료."""
