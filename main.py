@@ -1,6 +1,6 @@
 # main.py
 # -*- coding: utf-8 -*-
-import re, csv, sys, traceback, asyncio
+import re, csv, sys, traceback, asyncio, inspect, threading
 from typing import Optional, TypedDict, Mapping, Any, Coroutine, Callable, Literal, Sequence, Deque, cast
 from datetime import datetime
 from pathlib import Path
@@ -259,6 +259,9 @@ class MainWindow(QWidget):
         self._advancing: bool = False
         self._bg_started: bool = False
         self._bg_tasks: list[asyncio.Task[Any]] = []
+
+        # 스타터 스레드 레지스트리
+        self._starter_threads: dict[str, threading.Thread] = {}
 
         # === Google Chat 알림(옵션) ===
         self.chat_notifier: ChatNotifier | None = ChatNotifier(CHAT_WEBHOOK_URL) if ENABLE_CHAT_NOTIFY else None
@@ -963,16 +966,15 @@ class MainWindow(QWidget):
         self._spawn_detached(coro_factory(), store=True, name=name)
 
     def _ensure_background_started(self) -> None:
-        # 언제 불려도 안전하게 "필수 태스크가 살아있음"을 보장
-        self._ensure_task_alive("MFC.start",      self.mfc.start)
-        self._ensure_task_alive("IG.start",       self.ig.start)
-        self._ensure_task_alive("RFPulse.start",  self.rf_pulse.start)
-        # ✅ PLC 연결
-        self._ensure_task_alive("PLC.connect",     self.plc.connect)
+        # === 장비 스타터: 스레드에서 안전하게 실행 ===
+        self._ensure_starter_threadsafe("MFC.start",      self.mfc.start)
+        self._ensure_starter_threadsafe("IG.start",       self.ig.start)
+        self._ensure_starter_threadsafe("RFPulse.start",  self.rf_pulse.start)
+        self._ensure_starter_threadsafe("PLC.connect",    self.plc.connect)
 
+        # === 이벤트 펌프는 기존 태스크 방식 유지 ===
         self._ensure_task_alive("Pump.MFC",       self._pump_mfc_events)
         self._ensure_task_alive("Pump.IG",        self._pump_ig_events)
-        # ✅ RGA 두 대 펌프 기동
         self._ensure_task_alive("Pump.RGA1",      lambda: self._pump_rga_events_ch(self.rga_ch1, 1))
         self._ensure_task_alive("Pump.RGA2",      lambda: self._pump_rga_events_ch(self.rga_ch2, 2))
         self._ensure_task_alive("Pump.DC",        self._pump_dc_events)
@@ -981,19 +983,16 @@ class MainWindow(QWidget):
         self._ensure_task_alive("Pump.OES",       self._pump_oes_events)
         self._ensure_task_alive("Pump.PC",        self._pump_pc_events)
 
-        # =============== debug ==============
-        # 🔧 펌프 idle 워치독(필요한 채널만 선택)
+        # (디버그) 펌프 idle 워치독 유지
         self._ensure_task_alive("WD.Pump.RGA2", lambda: self._pump_idle_watchdog("RGA2"))
         self._ensure_task_alive("WD.Pump.MFC",  lambda: self._pump_idle_watchdog("MFC"))
         self._ensure_task_alive("WD.Pump.IG",   lambda: self._pump_idle_watchdog("IG"))
-        # 필요 시 추가:
         self._ensure_task_alive("WD.Pump.OES",  lambda: self._pump_idle_watchdog("OES"))
         self._ensure_task_alive("WD.Pump.RF",   lambda: self._pump_idle_watchdog("RF"))
         self._ensure_task_alive("WD.Pump.DC",   lambda: self._pump_idle_watchdog("DC"))
         self._ensure_task_alive("WD.Pump.RFPulse", lambda: self._pump_idle_watchdog("RFPulse"))
-        # =============== debug ==============
 
-        self._bg_started = True  # 플래그는 호환을 위해 유지
+        self._bg_started = True
 
     # ------------------------------------------------------------------
     # 표시/입력 관련
@@ -2095,6 +2094,49 @@ class MainWindow(QWidget):
             pass  # 주기적 로그 지속
         except Exception as e:
             self.append_log("MAIN", f"프리플라이트 진행 로그 예외: {e!r}")
+
+    # =============== 스타터 안전 래퍼 유틸 2개 (응답없음 방지) ======================
+    def _start_coro_in_thread(self, name: str, coro_factory: Callable[[], Coroutine[Any, Any, Any]]) -> None:
+        """
+        코루틴 스타터(내부가 블로킹이어도 가능)를 메인 루프 밖 전용 스레드에서 실행.
+        UI/asyncio 루프 프리징을 원천 차단.
+        """
+        # 이미 살아있는지 중복 방지
+        th = self._starter_threads.get(name)
+        if th and th.is_alive():
+            return
+
+        def runner():
+            try:
+                # 해당 스레드에서 독립 이벤트루프 생성/종료
+                asyncio.run(coro_factory())
+            except Exception as e:
+                # 스타터 내부 예외도 로그로만 처리(루프 영향 없음)
+                try:
+                    self.append_log(name, f"starter thread error: {e!r}")
+                except Exception:
+                    pass
+
+        th = threading.Thread(target=runner, name=f"{name}.starter", daemon=True)
+        th.start()
+        self._starter_threads[name] = th
+
+
+    def _ensure_starter_threadsafe(self, name: str, starter: Callable[[], Coroutine[Any, Any, Any]] | Callable[[], Any]) -> None:
+        """
+        스타터를 안전하게 기동:
+        - async 코루틴 함수: 전용 스레드에서 asyncio.run(...)으로 실행
+        - 동기 함수: asyncio.to_thread(...) 태스크로 실행
+        """
+        try:
+            if inspect.iscoroutinefunction(starter):
+                self._start_coro_in_thread(name, starter)
+            else:
+                # 동기 스타터면 워커스레드로 오프로딩
+                self._ensure_task_alive(name, lambda: asyncio.to_thread(starter))
+        except Exception as e:
+            self.append_log(name, f"starter wrap fail: {e!r}")
+    # =============== 스타터 안전 래퍼 유틸 2개 (응답없음 방지) ======================
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
