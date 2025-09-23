@@ -1,20 +1,149 @@
-# | 기능                                | DATA(ASCII) | 완성 프레임 (바이트)                             | HEX 표기                             |
-# | --------------------------------- | ----------- | ---------------------------------------- | ---------------------------------- |
-# | 시작                                | `G1`        | `b'\x81' + b'02' + b'G1' + b'\x75'`      | `81 30 32 47 31 75`                |
-# | 정지                                | `G0`        | `b'\x81' + b'02' + b'G0' + b'\x74'`      | `81 30 32 47 30 74`                |
-# | 상태 읽기                             | `S?`        | `b'\x81' + b'02' + b'S?' + b'\x6F'`      | `81 30 32 53 3F 6F`                |
-# | 에러코드 읽기                           | `E?`        | `b'\x81' + b'02' + b'E?' + b'\x79'`      | `81 30 32 45 3F 79`                |
-# | 서브리메이션 시간=15.0min (0.1단위→`00150`) | `T00150`    | `b'\x81' + b'06' + b'T00150' + b'\x67'`  | `81 30 36 54 30 30 31 35 30 67`    |
-# | 시간 읽기                             | `T?`        | `b'\x81' + b'02' + b'T?' + b'\x68'`      | `81 30 32 54 3F 68`                |
-# | 보드레이트=9600(예: 코드 `00004`)         | `B00004`    | `b'\x81' + b'06' + b'B00004' + b'\x71'`  | `81 30 36 42 30 30 30 30 34 71`    |
-# | 압력 읽기(아날로그 입력 계열)                 | `L?`        | `b'\x81' + b'02' + b'L?' + b'\x70'`      | `81 30 32 4C 3F 70`                |
-# | 임계 압력= `1.0e-6`                   | `H01e-06`   | `b'\x81' + b'07' + b'H01e-06' + b'\x01'` | `81 30 37 48 30 31 65 2D 30 36 01` |
-# | 모드=자동(예: `00001`)                 | `M00001`    | `b'\x81' + b'06' + b'M00001' + b'\x7B'`  | `81 30 36 4D 30 30 30 30 31 7B`    |
-# | 필라멘트 선택=2                         | `F00002`    | `b'\x81' + b'06' + b'F00002' + b'\x73'`  | `81 30 36 46 30 30 30 30 32 73`    |
-# | 서브리메이션 전류=30.0A(0.1A단위→`00300`)   | `N00300`    | `b'\x81' + b'06' + b'N00300' + b'\x7A'`  | `81 30 36 4E 30 30 33 30 30 7A`    |
-# | 서브리메이션 기간=60min                   | `P00600`    | `b'\x81' + b'06' + b'P00600' + b'\x61'`  | `81 30 36 50 30 30 36 30 30 61`    |
+# -*- coding: utf-8 -*-
+"""
+tsp_controller.py — TSP 컨트롤러 드라이버 (RFC2217 + Letter 프로토콜)
 
-# TSP 명령어
-# command = "G1"  #시작                       b'\x8102G1u'
-# command = "G0"  #종료                       b'\x8102G0t'
-# ser.write(command)
+- RFC2217 (원격 RS-232) URL 예: rfc2217://192.168.1.50:4001
+- 프레임: <ADR><LDAT><DATA><CRC>
+  * ADR = 0x80 + addr(1..32)
+  * LDAT = DATA 길이를 나타내는 ASCII 2자리 '00'..'99'
+  * DATA 예: 'G1','G0','S?','E?','T00150' ...
+  * CRC  = (ADR+LDAT+DATA) 바이트 XOR 후 MSB=0 ( &0x7F )
+- 쓰기 명령 응답: ACK(0x06) 1바이트
+- 읽기 명령 응답: <adr(msb=0)><ldat><data><crc>
+"""
+from __future__ import annotations
+import time, asyncio
+from dataclasses import dataclass
+from typing import Optional
+import serial
+
+# ─────────────────────────────────────────────────────────────
+# 공통 유틸
+# ─────────────────────────────────────────────────────────────
+
+def _crc_letter(body: bytes) -> int:
+    x = 0
+    for b in body:
+        x ^= b
+    return x & 0x7F
+
+def build_letter_frame(addr: int, data_ascii: str) -> bytes:
+    if not (1 <= addr <= 32):
+        raise ValueError("addr must be 1..32")
+    adr = bytes([0x80 + addr])
+    ldat = f"{len(data_ascii):02d}".encode("ascii")
+    data = data_ascii.encode("ascii")
+    body = adr + ldat + data
+    crc = bytes([_crc_letter(body)])
+    return body + crc
+
+# ─────────────────────────────────────────────────────────────
+# 동기 클라이언트
+# ─────────────────────────────────────────────────────────────
+
+@dataclass
+class TSPLetterClientRFC2217:
+    host: str
+    port: int
+    baudrate: int = 9600
+    addr: int = 1
+    timeout: float = 1.0
+    write_timeout: float = 1.0
+    rtscts: bool = False
+    dsrdtr: bool = False
+    dtr: Optional[bool] = None
+    rts: Optional[bool] = None
+
+    def __post_init__(self):
+        self._ser: Optional[serial.Serial] = None
+
+    def open(self):
+        url = f"rfc2217://{self.host}:{self.port}"
+        self._ser = serial.serial_for_url(
+            url,
+            baudrate=self.baudrate,
+            timeout=self.timeout,
+            write_timeout=self.write_timeout,
+            bytesize=serial.EIGHTBITS,
+            parity=serial.PARITY_NONE,
+            stopbits=serial.STOPBITS_ONE,
+            rtscts=self.rtscts,
+            dsrdtr=self.dsrdtr,
+        )
+        if self.dtr is not None:
+            self._ser.dtr = self.dtr
+        if self.rts is not None:
+            self._ser.rts = self.rts
+
+    def close(self):
+        if self._ser:
+            try: self._ser.close()
+            finally: self._ser = None
+
+    def _write(self, frame: bytes):
+        assert self._ser is not None, "serial not open"
+        self._ser.reset_input_buffer()
+        self._ser.write(frame)
+        self._ser.flush()
+
+    def _read_exact(self, n: int) -> bytes:
+        assert self._ser is not None, "serial not open"
+        buf = bytearray()
+        deadline = time.monotonic() + (self.timeout or 1.0)
+        while len(buf) < n:
+            chunk = self._ser.read(n - len(buf))
+            if chunk:
+                buf += chunk
+            elif time.monotonic() > deadline:
+                break
+        return bytes(buf)
+
+    def _txrx_write(self, data_ascii: str) -> bool:
+        frame = build_letter_frame(self.addr, data_ascii)
+        self._write(frame)
+        b = self._read_exact(1)
+        return len(b) == 1 and b[0] == 0x06  # ACK
+
+    def _txrx_read(self, data_ascii: str) -> Optional[str]:
+        frame = build_letter_frame(self.addr, data_ascii)
+        self._write(frame)
+        b0 = self._read_exact(1)
+        if len(b0) == 0: return None
+        if b0[0] == 0x06:
+            b0 = self._read_exact(1)
+            if len(b0) == 0: return None
+        adr = b0[0]
+        ldat = self._read_exact(2)
+        if len(ldat) != 2: return None
+        try:
+            n = int(ldat.decode("ascii"))
+        except Exception:
+            return None
+        rest = self._read_exact(n + 1)
+        if len(rest) != n + 1: return None
+        data, crc = rest[:-1], rest[-1]
+        expect = _crc_letter(bytes([adr]) + ldat + data)
+        if crc != expect: return None
+        try:
+            return data.decode("ascii")
+        except Exception:
+            return None
+
+    # High-level
+    def start(self) -> bool:  # G1
+        return self._txrx_write("G1")
+
+    def stop(self) -> bool:   # G0
+        return self._txrx_write("G0")
+
+# ─────────────────────────────────────────────────────────────
+# asyncio 어댑터
+# ─────────────────────────────────────────────────────────────
+
+class AsyncTSP:
+    def __init__(self, client: TSPLetterClientRFC2217):
+        self.c = client
+    async def start(self) -> bool:
+        return await asyncio.to_thread(self.c.start)
+    async def stop(self) -> bool:
+        return await asyncio.to_thread(self.c.stop)

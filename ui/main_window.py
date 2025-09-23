@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 ################################################################################
-## Form generated from reading UI file 'CH1&2RpRbgl.ui'
+## Form generated from reading UI file 'CH1&2YFMTfB.ui'
 ##
 ## Created by: Qt User Interface Compiler version 6.9.1
 ##
@@ -278,13 +278,13 @@ class Ui_Form(object):
         self.TSP_targetPressure_label.setObjectName(u"TSP_targetPressure_label")
         self.TSP_targetPressure_label.setGeometry(QRect(380, 110, 121, 21))
         self.TSP_targetPressure_label.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
-        self.ch1_logMessage_edit_2 = QPlainTextEdit(self.page_3)
-        self.ch1_logMessage_edit_2.setObjectName(u"ch1_logMessage_edit_2")
-        self.ch1_logMessage_edit_2.setGeometry(QRect(10, 810, 1061, 141))
-        self.ch1_logMessage_label_2 = QLabel(self.page_3)
-        self.ch1_logMessage_label_2.setObjectName(u"ch1_logMessage_label_2")
-        self.ch1_logMessage_label_2.setGeometry(QRect(10, 790, 101, 21))
-        self.ch1_logMessage_label_2.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
+        self.pc_logMessage_edit = QPlainTextEdit(self.page_3)
+        self.pc_logMessage_edit.setObjectName(u"pc_logMessage_edit")
+        self.pc_logMessage_edit.setGeometry(QRect(10, 810, 1061, 141))
+        self.pc_logMessage_label = QLabel(self.page_3)
+        self.pc_logMessage_label.setObjectName(u"pc_logMessage_label")
+        self.pc_logMessage_label.setGeometry(QRect(10, 790, 101, 21))
+        self.pc_logMessage_label.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
         self.stackedWidget.addWidget(self.page_3)
         self.page = QWidget()
         self.page.setObjectName(u"page")
@@ -700,8 +700,8 @@ class Ui_Form(object):
         QWidget.setTabOrder(self.ch2PC_Temp_edit, self.ch2PC_Hum_edit)
         QWidget.setTabOrder(self.ch2PC_Hum_edit, self.ch2PC_Start_button)
         QWidget.setTabOrder(self.ch2PC_Start_button, self.ch2PC_Stop_button)
-        QWidget.setTabOrder(self.ch2PC_Stop_button, self.ch1_logMessage_edit_2)
-        QWidget.setTabOrder(self.ch1_logMessage_edit_2, self.ch1_btnGoCh2)
+        QWidget.setTabOrder(self.ch2PC_Stop_button, self.pc_logMessage_edit)
+        QWidget.setTabOrder(self.pc_logMessage_edit, self.ch1_btnGoCh2)
         QWidget.setTabOrder(self.ch1_btnGoCh2, self.ch1_btnGoPC)
         QWidget.setTabOrder(self.ch1_btnGoPC, self.ch1_basePressure_edit)
         QWidget.setTabOrder(self.ch1_basePressure_edit, self.ch1_intergrationTime_edit)
@@ -771,7 +771,7 @@ class Ui_Form(object):
 
         self.retranslateUi(Form)
 
-        self.stackedWidget.setCurrentIndex(2)
+        self.stackedWidget.setCurrentIndex(0)
 
 
         QMetaObject.connectSlotsByName(Form)
@@ -823,7 +823,7 @@ class Ui_Form(object):
         self.TSP_setCycle_label.setText(QCoreApplication.translate("Form", u"#", None))
         self.TSP_Stop_button.setText(QCoreApplication.translate("Form", u"STOP", None))
         self.TSP_targetPressure_label.setText(QCoreApplication.translate("Form", u"Target Pressure", None))
-        self.ch1_logMessage_label_2.setText(QCoreApplication.translate("Form", u"Log Message", None))
+        self.pc_logMessage_label.setText(QCoreApplication.translate("Form", u"Log Message", None))
         self.ch1_processList_button.setText(QCoreApplication.translate("Form", u"Select File", None))
         self.ch1_shutterDelay_label.setText(QCoreApplication.translate("Form", u"Shutter Delay [min]", None))
         self.ch1_Current_label.setText(QCoreApplication.translate("Form", u"Current", None))

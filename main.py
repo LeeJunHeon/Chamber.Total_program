@@ -124,7 +124,7 @@ NormParams = TypedDict('NormParams', {
 
 # 자주 쓰는 맵/타깃 타입 별칭
 ParamsMap = Mapping[str, Any]
-TargetsMap = Mapping[Literal["mfc", "plc", "rfpulse"], bool]
+TargetsMap = Mapping[Literal["mfc", "rfpulse", "dc", "rf"], bool]
 
 
 class MainWindow(QWidget):
@@ -185,15 +185,42 @@ class MainWindow(QWidget):
                                         user=RGA_NET["ch2"]["user"],
                                         password=RGA_NET["ch2"]["password"],
                                         name="CH2")
+        
+        # DC는 family="DCV"
+        async def _dc_send(power: float) -> None:
+            await self.plc.power_apply(power, family="DCV", ensure_set=True)
+
+        async def _dc_send_unverified(power: float) -> None:
+            await self.plc.power_write(power, family="DCV")
+
+        async def _dc_request_read():
+            try:
+                P, V, I = await self.plc.power_read(family="DCV")
+                self.handle_dc_power_display(P, V, I)
+                return (P, V, I)
+            except Exception as e:
+                self.append_log("DCpower", f"read failed: {e!r}")
+
         self.dc_power: DCPowerAsync = DCPowerAsync(
-            send_dc_power=self.faduino.set_dc_power,
-            send_dc_power_unverified=self.faduino.set_dc_power_unverified,
-            request_status_read=self.faduino.force_dc_read,
+            send_dc_power=_dc_send,
+            send_dc_power_unverified=_dc_send_unverified,
+            request_status_read=_dc_request_read,
         )
+
+        # RF 연속파는 family="RFP" (PLC 맵만 준비되면 동작)
+        async def _rf_send(power: float) -> None:
+            await self.plc.power_apply(power, family="RFP", ensure_set=True)
+
+        async def _rf_send_unverified(power: float) -> None:
+            await self.plc.power_write(power, family="RFP")
+
+        async def _rf_request_read():
+            return await self.plc.power_read(family="RFP")  # (P,V,I) 튜플이어도 새 rf가 처리함
+
         self.rf_power: RFPowerAsync = RFPowerAsync(
-            send_rf_power=self.faduino.set_rf_power,
-            send_rf_power_unverified=self.faduino.set_rf_power_unverified,
-            request_status_read=self.faduino.force_rf_read,
+            send_rf_power=_rf_send,
+            send_rf_power_unverified=_rf_send_unverified,
+            request_status_read=_rf_request_read,
         )
 
         self._advancing: bool = False
@@ -520,31 +547,28 @@ class MainWindow(QWidget):
                     self._apply_polling_targets(targets)
                 elif kind == "polling":
                     active = bool(payload.get("active", False))
+                    self._ensure_background_started()
 
-                    # 백그라운드(워커/워치독) 기동 보장
-                    try:
-                        self._ensure_background_started()
-                    except Exception:
-                        pass
-
-                    # 최근 polling_targets가 있으면 그대로 적용,
-                    # 없으면 현재 파라미터로 기본 타깃맵을 만들어 적용
                     targets = getattr(self, "_last_polling_targets", None)
                     if not targets:
                         params = getattr(self.process_controller, "current_params", {}) or {}
                         use_rf_pulse = bool(params.get("use_rf_pulse", False))
+                        use_dc       = bool(params.get("use_dc_power", False))
+                        use_rf       = bool(params.get("use_rf_power", False))
                         targets = {
-                            "mfc":     active,
-                            "rfpulse": (active and use_rf_pulse),
+                            "mfc":     True,
+                            "rfpulse": use_rf_pulse,
+                            "dc":      use_dc and not use_rf_pulse,  # Pulse만 쓰면 DC 폴링 OFF
+                            "rf":      use_rf and not use_rf_pulse,  # Pulse만 쓰면 RF 폴링 OFF
                         }
                     else:
-                        # targets는 “어디를 폴링할지”만 담고, on/off는 polling의 active로 강제
                         targets = {
                             "mfc":     (active and bool(targets.get("mfc", False))),
                             "rfpulse": (active and bool(targets.get("rfpulse", False))),
+                            "dc":      (active and bool(targets.get("dc", False))),
+                            "rf":      (active and bool(targets.get("rf", False))),
                         }
 
-                    # 실제 장치 토글
                     self._apply_polling_targets(targets)
                 else:
                     # 미지정 이벤트도 안전하게 무시/로그
@@ -644,11 +668,6 @@ class MainWindow(QWidget):
             k = ev.kind
             if k == "status":
                 self.append_log("DCpower", ev.message or "")
-            elif k == "state_changed":
-                try:
-                    self.faduino.on_dc_state_changed(bool(ev.running))
-                except Exception:
-                    pass
             elif k == "target_reached":
                 self.process_controller.on_dc_target_reached()
             elif k == "power_off_finished":
@@ -659,11 +678,9 @@ class MainWindow(QWidget):
             k = ev.kind
             if k == "status":
                 self.append_log("RFpower", ev.message or "")
-            elif k == "state_changed":
-                try:
-                    self.faduino.on_rf_state_changed(bool(ev.running))
-                except Exception:
-                    pass
+            elif k == "display":
+                # ← forward/reflected 즉시 UI 반영
+                self.handle_rf_power_display(ev.forward, ev.reflected)
             elif k == "target_reached":
                 self.process_controller.on_rf_target_reached()
             elif k == "target_failed":
@@ -1146,6 +1163,16 @@ class MainWindow(QWidget):
                 self.rf_pulse.set_process_status(False)
             except Exception:
                 pass
+            try:
+                if hasattr(self.dc_power, "set_process_status"):
+                    self.dc_power.set_process_status(False)
+            except Exception:
+                pass
+            try:
+                if hasattr(self.rf_power, "set_process_status"):
+                    self.rf_power.set_process_status(False)
+            except Exception:
+                pass
             return
 
         # ===== 기존 전체 정리 경로 =====
@@ -1258,14 +1285,12 @@ class MainWindow(QWidget):
     # 폴링/상태
     # ------------------------------------------------------------------
     def _apply_polling_targets(self, targets: TargetsMap) -> None:
-        # 백그라운드(워커/워치독) 기동 보장
-        try:
-            self._ensure_background_started()
-        except Exception:
-            pass
+        self._ensure_background_started()
 
         mfc_on = bool(targets.get('mfc', False))
         rfp_on = bool(targets.get('rfpulse', False))
+        dc_on  = bool(targets.get('dc', False))
+        rf_on  = bool(targets.get('rf', False))
 
         try:
             self.mfc.set_process_status(mfc_on)
@@ -1277,6 +1302,17 @@ class MainWindow(QWidget):
         except Exception as e:
             self.append_log("RFPulse", f"폴링 토글 실패: {e}")
 
+        try:
+            if hasattr(self.dc_power, "set_process_status"):
+                self.dc_power.set_process_status(dc_on)
+        except Exception as e:
+            self.append_log("DCpower", f"폴링 토글 실패: {e}")
+
+        try:
+            if hasattr(self.rf_power, "set_process_status"):
+                self.rf_power.set_process_status(rf_on)
+        except Exception as e:
+            self.append_log("RFpower", f"폴링 토글 실패: {e}")
 
     def _apply_process_state_message(self, message: str) -> None:
         # 같은 텍스트면 스킵(불필요한 repaint 방지)
@@ -1696,7 +1732,7 @@ class MainWindow(QWidget):
         self.append_log("Process", f"'{name}' 단계 감지: {amount}{unit_txt} 대기 시작")
 
         # 폴링 OFF로 전환(잔여 측정/명령 혼입 방지)
-        self._apply_polling_targets({"mfc": False, "rfpulse": False})
+        self._apply_polling_targets({"mfc": False, "rfpulse": False, "dc": False, "rf": False})
         self._last_polling_targets = None
 
         # 상태 문구는 단일 경로로만
