@@ -715,13 +715,29 @@ class ProcessController:
             self._emit(PCEvent("polling_targets", {"targets": targets}))
 
     def _compute_polling_targets(self, active: bool) -> Dict[str, bool]:
+        """
+        main.py가 기대하는 폴링 타깃 키를 반환:
+        - mfc:     MFC 폴링 (활성 시 항상 True)
+        - rfpulse: RF 펄스 사용 시 True
+        - dc:      DC 파워 사용 시 True (단, RF 펄스 사용 중이면 False)
+        - rf:      RF 연속파 사용 시 True (단, RF 펄스 사용 중이면 False)
+
+        active=False면 전부 False.
+        """
         if not active:
-            return {'mfc': False, 'rfpulse': False}
+            return {"mfc": False, "rfpulse": False, "dc": False, "rf": False}
 
         info = self._get_common_process_info(self.current_params or {})
-        if info.get('use_rf_pulse', False):
-            return {'mfc': True, 'rfpulse': True}
-        return {'mfc': True, 'rfpulse': False}
+        use_rfpulse = bool(info.get("use_rf_pulse", False))
+        use_dc      = bool(info.get("use_dc", False))
+        use_rf      = bool(info.get("use_rf", False))
+
+        return {
+            "mfc":     True,
+            "rfpulse": use_rfpulse,
+            "dc":      use_dc and not use_rfpulse,
+            "rf":      use_rf and not use_rfpulse,
+        }
 
     # =========================
     # 종료/실패 처리
@@ -891,6 +907,13 @@ class ProcessController:
             value=base_pressure,
             message=f'베이스 압력({base_pressure:.1e}) 도달 대기'
         ))
+
+        # ✅ IG OK 후 RGA 스캔(그래프 그리기 완료까지 대기)
+        steps.append(ProcessStep(
+            action=ActionType.RGA_SCAN,
+            message='RGA 스캔 수행 및 그래프 완료 대기'
+        ))
+
         # 모든 채널 Flow OFF
         for gas, info in gas_info.items():
             steps.append(ProcessStep(
@@ -968,10 +991,13 @@ class ProcessController:
 
         want_parallel = use_dc and (use_rf or use_rf_pulse)
 
+        # ✅ 램프업부터 폴링 ON
         if use_dc:
             steps.append(ProcessStep(
                 action=ActionType.DC_POWER_SET, value=dc_power,
-                message=f'DC Power {dc_power}W 설정', parallel=want_parallel
+                message=f'DC Power {dc_power}W 설정',
+                parallel=want_parallel,
+                polling=True,                      # ✅ 램프업부터 폴링 ON
             ))
 
         if use_rf_pulse:
@@ -981,28 +1007,36 @@ class ProcessController:
                 action=ActionType.RF_PULSE_START, value=rf_pulse_power,
                 params=(rf_pulse_freq, rf_pulse_duty),
                 message=f'RF Pulse 설정 및 ON (P={rf_pulse_power}W, f={f_txt}, duty={d_txt})',
-                parallel=want_parallel
+                parallel=want_parallel,
+                polling=True,                      # ✅ 램프업부터 폴링 ON
             ))
         elif use_rf:
             steps.append(ProcessStep(
                 action=ActionType.RF_POWER_SET, value=rf_power,
-                message=f'RF Power {rf_power}W 설정', parallel=want_parallel
+                message=f'RF Power {rf_power}W 설정',
+                parallel=want_parallel,
+                polling=True,                      # ✅ 램프업부터 폴링 ON
             ))
 
         if use_rf_pulse:
             steps.append(ProcessStep(
-                action=ActionType.DELAY, duration=20_000, message='Power Delay 20초'
+                action=ActionType.DELAY, duration=20_000,
+                message='Power Delay 20초',
+                polling=True,                      # ✅ 램프 펄스 안정화 중 폴링 유지
             ))
 
         steps.append(ProcessStep(
-            action=ActionType.MFC_CMD, params=('SP1_ON', {}), message='압력 제어(SP1) 시작'
+            action=ActionType.MFC_CMD, params=('SP1_ON', {}),
+            message='압력 제어(SP1) 시작',
+            polling=True,                          # ✅ SP1 온 직후에도 유지 보정이 필요
         ))
 
         if shutter_delay_sec > 0:
             steps.append(ProcessStep(
                 action=ActionType.DELAY,
                 duration=int(round(shutter_delay_sec * 1000.0)),
-                message=f'Shutter Delay {shutter_delay_min}분'
+                message=f'Shutter Delay {shutter_delay_min}분',
+                polling=True,                      # ✅ 셔터 지연 동안도 폴링 유지
             ))
 
         if use_ms:

@@ -24,7 +24,7 @@ from device.ig import AsyncIG
 from device.mfc import AsyncMFC
 from device.plc import AsyncFaduinoPLC
 from device.oes import OESAsync
-from device.rga import RGA100AsyncAdapter, RGAEvent
+from device.rga import RGA100AsyncAdapter
 from device.dc_power import DCPowerAsync
 from device.rf_power import RFPowerAsync
 from device.rf_pulse import RFPulseAsync
@@ -209,15 +209,15 @@ class MainWindow(QWidget):
         )
 
         async def _rf_send(power: float) -> None:
-            # RF는 DCV 네임스페이스의 채널 2번을 사용 → DCV_SET_2, DCV_WRITE_2 로 갑니다.
-            await self.plc.power_apply(power, family="DCV", ensure_set=True, channel=2)
+            # RF는 DCV 네임스페이스의 채널 1번을 사용 → DCV_SET_1, DCV_WRITE_1 로 갑니다.
+            await self.plc.power_apply(power, family="DCV", ensure_set=True, channel=1)
 
         async def _rf_send_unverified(power: float) -> None:
-            # 쓰기 레지스터도 DCV_WRITE_2
-            await self.plc.power_write(power, family="DCV", write_idx=2)
+            # 쓰기 레지스터도 DCV_WRITE_1
+            await self.plc.power_write(power, family="DCV", write_idx=1)
 
         async def _rf_request_read():
-            # RF는 V/I가 아니라 전/반사 파워: DCV_READ_2(Forward), DCV_READ_3(Reflected)
+            # 이 부분은 이미 표와 일치(READ_2=for.p, READ_3=ref.p)
             try:
                 fwd_raw = await self.plc.read_reg_name("DCV_READ_2")
                 ref_raw = await self.plc.read_reg_name("DCV_READ_3")
@@ -236,6 +236,15 @@ class MainWindow(QWidget):
             send_rf_power=_rf_send,
             send_rf_power_unverified=_rf_send_unverified,
             request_status_read=_rf_request_read,
+        )
+
+        # TSP는 별도 컨트롤러에 위임 (버튼 훅/연결/명령 포함)
+        self.tsp_ctrl = TSPPageController(
+            ui=self.ui,              # UI 전체를 넘겨서 컨트롤러가 Start/Stop 버튼에 자체로 연결
+            port=TSP_PORT,
+            baud=TSP_BAUD,
+            loop=self._loop,         # (선택) 컨트롤러가 asyncio 태스크 만들 때 사용
+            on_log=lambda m: self.append_log("TSP", m)  # 로그 콜백(문자열만 받는 간단 콜백)
         )
 
         self._advancing: bool = False
@@ -809,7 +818,7 @@ class MainWindow(QWidget):
         self._ensure_task_alive("MFC.start",      self.mfc.start)
         self._ensure_task_alive("IG.start",       self.ig.start)
         self._ensure_task_alive("RFPulse.start",  self.rf_pulse.start)
-            # ✅ PLC 연결
+        # ✅ PLC 연결
         self._ensure_task_alive("PLC.connect",     self.plc.connect)
 
         self._ensure_task_alive("Pump.MFC",       self._pump_mfc_events)
@@ -1232,6 +1241,14 @@ class MainWindow(QWidget):
 
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+
+        try:
+            if getattr(self, "tsp_ctrl", None) and hasattr(self.tsp_ctrl, "aclose"):
+                await self.tsp_ctrl.aclose()
+                self.append_log("TSP", "포트 닫힘")
+        except Exception:
+            pass
+        
         # 2) 다음 Start에서만 다시 올리도록 플래그 리셋
         self._bg_started = False
 
@@ -1499,6 +1516,13 @@ class MainWindow(QWidget):
 
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
+
+        try:
+            if getattr(self, "tsp_ctrl", None) and hasattr(self.tsp_ctrl, "aclose"):
+                await self.tsp_ctrl.aclose()
+        except Exception:
+            pass
+
 
         await asyncio.sleep(0.3)
 
@@ -1850,24 +1874,12 @@ class MainWindow(QWidget):
         except Exception as e:
             self.append_log("MAIN", f"프리플라이트 진행 로그 예외: {e!r}")
 
-
 if __name__ == "__main__":
     app = QApplication(sys.argv)
     loop = QEventLoop(app)          # Qt + asyncio 루프 통합
     asyncio.set_event_loop(loop)
-
     w = MainWindow(loop)
     w.show()
-    
-    # ===== TSP 컨트롤러 연결 =====
-    tsp_ctrl = TSPPageController(
-        ui=w.ui,
-        ig_obj=w.ig,
-        port=TSP_PORT,
-        baud=TSP_BAUD,
-    )
-    if hasattr(tsp_ctrl, "aclose"):
-        app.aboutToQuit.connect(lambda: asyncio.create_task(tsp_ctrl.aclose()))
 
     with loop:
         loop.run_forever()
