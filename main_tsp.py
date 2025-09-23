@@ -77,7 +77,6 @@ class TSPPageController:
 
     # ---------------- 로그/표시 ----------------
     def _log(self, msg: str) -> None:
-        """항상 PC 페이지 로그 모니터(pc_logMessage_edit)에 출력"""
         def _do():
             try:
                 w = self.ui.pc_logMessage_edit
@@ -87,12 +86,14 @@ class TSPPageController:
                     sb.setValue(sb.maximum())
             except Exception:
                 pass
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = self.loop if hasattr(self, "loop") else asyncio.get_event_loop()
-        loop.call_soon(_do)
 
+        # 항상 생성자에서 받은 루프를 사용 + 스레드세이프 예약
+        loop = self._loop
+        try:
+            loop.call_soon_threadsafe(_do)
+        except Exception:
+            # 루프가 아직 준비 안됐다면(초기화 시점), 최소한 블로킹 없이 예약
+            QTimer.singleShot(0, _do)
 
     def append_log(self, src: str, msg: str) -> None:
         self._log(f"[{src}] {msg}")

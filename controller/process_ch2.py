@@ -184,7 +184,7 @@ class ProcessController:
         rga_scan: Callable[[], None],
         oes_run: Callable[[float, int], None],
     ) -> None:
-        self.event_q: asyncio.Queue[PCEvent] = asyncio.Queue()
+        self.event_q: asyncio.Queue[PCEvent] = asyncio.Queue(maxsize=2000)
         self._send_plc = send_plc                   # 🔁 보관 멤버도 교체
         self._send_mfc = send_mfc
         self._send_dc_power = send_dc_power

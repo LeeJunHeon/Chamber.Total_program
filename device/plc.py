@@ -343,16 +343,21 @@ class AsyncFaduinoPLC:
         s = str(e).lower()
         return ("10054" in s) or ("reset by peer" in s) or ("connectionreseterror" in s)
 
-    def _throttle_and_heartbeat_sync(self):
+    async def _throttle_and_heartbeat(self):
         now = time.monotonic()
         delta = now - self._last_io_ts
         if delta < self.cfg.inter_cmd_gap_s:
-            time.sleep(self.cfg.inter_cmd_gap_s - delta)
+            await asyncio.sleep(self.cfg.inter_cmd_gap_s - delta)  # ✅ 비동기 슬립
+
+        # 하트비트도 별도 스레드에서 돌린다 (동기 클라이언트이므로)
         if delta > self.cfg.heartbeat_s and self._client is not None:
             try:
-                self._client.read_coils(address=0, count=1, **self._uid_kwargs())
+                await asyncio.to_thread(
+                    self._client.read_coils, 0, 1, **self._uid_kwargs()
+                )  # ✅ thread offload
             except Exception:
                 pass
+
         self._last_io_ts = time.monotonic()
 
     def _connect_sync(self) -> None:
