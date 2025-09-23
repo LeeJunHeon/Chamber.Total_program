@@ -135,9 +135,6 @@ class MainWindow(QWidget):
         self.ui.setupUi(self)
         self._loop = loop or asyncio.get_event_loop()
 
-        # __init__ 어디 적절한 곳(예: RGA 어댑터 생성 직후)에 플래그 멤버 추가
-        self._rga_done_signaled: bool = False
-
         # --- 스택 및 페이지 매핑 (UI 객체명 고정)
         self._stack: QStackedWidget = self.ui.stackedWidget
         self._pages: dict[str, QWidget] = {
@@ -334,7 +331,7 @@ class MainWindow(QWidget):
                     interval_ms=IG_POLLING_INTERVAL_MS
                 )
                 self.append_log("IG", f"wait_for_base_pressure returned: {ok}")
-            asyncio.create_task(_run())
+            self._spawn_detached(_run())
 
         def cb_ig_cancel():
             self._spawn_detached(self.ig.cancel_wait())
@@ -354,7 +351,7 @@ class MainWindow(QWidget):
                         targets = {"mfc": True, "rfpulse": use_rf_pulse}
                     self._apply_polling_targets(targets)
 
-                    QTimer.singleShot(0, self.graph_controller.clear_oes_plot)  # Qt GUI 스레드에서 안전 호출
+                    self._soon(self.graph_controller.clear_oes_plot)  # Qt GUI 스레드에서 안전 호출
                     await self.oes.run_measurement(duration_sec, integration_ms)
 
                 except Exception as e:
@@ -384,12 +381,17 @@ class MainWindow(QWidget):
         # 로그 배치 flush
         self.ui.ch2_logMessage_edit.setMaximumBlockCount(2000)
 
-        # 고정 로그 폴더 (UNC)
-        self._log_dir: Path = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs")
+        # 기본은 NAS 경로, 실패 시 로컬 폴백
+        nas_path = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs")
+        local_fallback = Path.cwd() / "_Logs_local"
         try:
-            self._log_dir.mkdir(parents=True, exist_ok=True)  # 폴더 없으면 생성 시도
+            nas_path.mkdir(parents=True, exist_ok=True)
+            self._log_dir = nas_path
         except Exception:
-            pass
+            local_fallback.mkdir(parents=True, exist_ok=True)
+            self._log_dir = local_fallback
+            self._soon(self.ui.ch2_logMessage_edit.appendPlainText, f"[Logger] NAS 폴더 접근 실패 → 로컬로 폴백: {self._log_dir}")
+
 
         # Start 전에는 파일 미정
         self._log_file_path: Path | None = None
@@ -413,6 +415,15 @@ class MainWindow(QWidget):
 
         # ✅ 콘솔로 안 찍고 로그로만 받게 훅 설치
         self._install_exception_hooks()
+
+        # __init__ 끝부분, self._install_exception_hooks() 다음쯤
+        from PySide6.QtCore import qInstallMessageHandler, QtMsgType
+        def _qt_msg_handler(mode, context, message):
+            tag = {QtMsgType.QtDebugMsg: "QtDebug", QtMsgType.QtInfoMsg: "QtInfo",
+                QtMsgType.QtWarningMsg: "QtWarn", QtMsgType.QtCriticalMsg: "QtCrit",
+                QtMsgType.QtFatalMsg: "QtFatal"}.get(mode, "Qt")
+            self.append_log(tag, message)
+        qInstallMessageHandler(_qt_msg_handler)
 
     # ------------------------------------------------------------------
     # UI 버튼 연결만 유지 (컨트롤러 ↔ UI는 이벤트 큐로 처리)
@@ -474,21 +485,21 @@ class MainWindow(QWidget):
                     if not getattr(self, "_log_file_path", None):
                         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                         self._log_file_path = self._log_dir / f"{ts}.txt"
+                        if self._prestart_buf:
+                            buf_copy = list(self._prestart_buf)
+                            self._prestart_buf.clear()
+                            try:
+                                loop = asyncio.get_running_loop()
+                            except RuntimeError:
+                                loop = self._loop
+                            self._spawn_detached(self._dump_prestart_buf_async(self._log_file_path, buf_copy))
 
-                        # ✅ 먼저 버퍼를 덤프
-                        try:
-                            if self._prestart_buf:
-                                with open(self._log_file_path, "a", encoding="utf-8") as f:
-                                    f.writelines(self._prestart_buf)
-                                self._prestart_buf.clear()
-                        except Exception:
-                            pass
                     # DataLogger/그래프/알림 등 나머지 로직은 그대로
                     try:
                         self.data_logger.start_new_log_session(payload.get("params", {}))
                     except Exception:
                         pass
-                    QTimer.singleShot(0, self.graph_controller.reset)
+                    self._soon(self.graph_controller.reset)
 
                     if self.chat_notifier:
                         try:
@@ -685,7 +696,7 @@ class MainWindow(QWidget):
                             if not self._rga_done_signaled:
                                 self._rga_done_signaled = True
                                 self.process_controller.on_rga_finished()
-                    QTimer.singleShot(0, _draw_then_finish)
+                    self._soon(_draw_then_finish)
                 else:
                     # CH1 데이터는 무시(현재 CH1 미구현)
                     pass
@@ -813,7 +824,7 @@ class MainWindow(QWidget):
                 # 완료 신호 중복 방지 플래그 초기화
                 self._rga_done_signaled = False
                 # (선택) 시작 전에 그래프 한번 비우고 시작
-                QTimer.singleShot(0, self.graph_controller.clear_rga_plot)
+                self._soon(self.graph_controller.clear_rga_plot)
                 await self.rga_ch2.scan_histogram_to_csv(RGA_CSV_PATH["ch2"])
                 # 완료 토큰은 여기서 보내지 않음(그래프 그린 '직후'에 보냄)
             except Exception as e:
@@ -1286,13 +1297,10 @@ class MainWindow(QWidget):
         line_ui = f"[{now_ui}] [{source}] {msg}"
         line_file = f"[{now_file}] [{source}] {msg}\n"
 
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = self._loop
-        loop.call_soon(self._append_log_to_ui, line_ui)
+        # 1) UI는 항상 즉시, 비블로킹으로
+        self._soon(self._append_log_to_ui, line_ui)
 
-        # 세션 파일이 없으면 파일에 쓰지 않고 메모리 버퍼에만 저장
+        # 2) 파일 경로가 아직 없으면 버퍼에만 쌓고 끝
         if not getattr(self, "_log_file_path", None):
             try:
                 self._prestart_buf.append(line_file)
@@ -1300,19 +1308,18 @@ class MainWindow(QWidget):
                 pass
             return
 
-        # 세션 파일이 있으면 바로 파일에 기록
+        # 3) 파일 쓰기는 절대 동기로 하지 말 것 → 전용 스레드로 오프로딩
+        self._spawn_detached(self._write_log_line_async(self._log_file_path, line_file))
+
+    async def _write_log_line_async(self, path: Path, text: str) -> None:
+        await asyncio.to_thread(self._write_log_line_sync, path, text)
+
+    def _write_log_line_sync(self, path: Path, text: str) -> None:
         try:
-            with open(self._log_file_path, "a", encoding="utf-8") as f:
-                f.write(line_file)
+            with open(path, "a", encoding="utf-8") as f:
+                f.write(text)
         except Exception as e:
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = self._loop
-            loop.call_soon(
-                self.ui.ch2_logMessage_edit.appendPlainText,
-                f"[Logger] 파일 기록 실패: {e}"
-            )
+            self._soon(self.ui.ch2_logMessage_edit.appendPlainText, f"[Logger] 파일 기록 실패: {e}")
 
     def _append_log_to_ui(self, line: str) -> None:
         self.ui.ch2_logMessage_edit.moveCursor(QTextCursor.MoveOperation.End)
@@ -1323,20 +1330,29 @@ class MainWindow(QWidget):
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._log_file_path = self._log_dir / f"{ts}.txt"
 
-        # ✅ Start 이전에 쌓아둔 버퍼를 먼저 파일에 한 번에 기록(시간 순서 유지)
-        try:
-            if self._prestart_buf:
-                with open(self._log_file_path, "a", encoding="utf-8") as f:
-                    f.writelines(self._prestart_buf)
-                self._prestart_buf.clear()
-        except Exception:
-            # 버퍼 덤프에 실패해도 공정은 계속
-            pass
+        # Start 이전 버퍼는 전용 스레드에서 한 번에 기록
+        if self._prestart_buf:
+            buf_copy = list(self._prestart_buf)
+            self._prestart_buf.clear()
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = self._loop
+            self._spawn_detached(self._dump_prestart_buf_async(self._log_file_path, buf_copy))
 
-        # 이후 안내/헤더 라인 기록
         self.append_log("Logger", f"새 로그 파일 시작: {self._log_file_path}")
         note = str(params.get("process_note", "") or params.get("Process_name", "") or "Run")
         self.append_log("MAIN", f"=== '{note}' 공정 준비 (장비 연결부터 기록) ===")
+
+    async def _dump_prestart_buf_async(self, path: Path, lines: list[str]) -> None:
+        def _write_many():
+            with open(path, "a", encoding="utf-8") as f:
+                f.writelines(lines)
+        try:
+            await asyncio.to_thread(_write_many)
+        except Exception:
+            self._soon(self.ui.ch2_logMessage_edit.appendPlainText, "[Logger] 버퍼 덤프 실패")
+
 
     # ------------------------------------------------------------------
     # 폴링/상태
@@ -1808,31 +1824,41 @@ class MainWindow(QWidget):
         
     def _post_update_oes_plot(self, x: Sequence[float], y: Sequence[float]) -> None:
         # Qt 이벤트 루프에서 안전하게 실행(렌더 스레드 보장)
-        QTimer.singleShot(0, lambda: self.graph_controller.update_oes_plot(x, y))
+        self._soon(lambda: self.graph_controller.update_oes_plot(x, y))
 
     # === 유틸 ===
     # 현재 태스크의 자식이 아닌 '루트 태스크'로 분리 생성
-    def _spawn_detached(self, coro: Coroutine[Any, Any, Any], *, store: bool = False, name: str | None = None) -> None:
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = self._loop
+    def _spawn_detached(self, coro, *, store: bool=False, name: str|None=None) -> None:
+        loop = self._loop
         def _create():
             t = loop.create_task(coro, name=name)
             if store:
                 self._bg_tasks.append(t)
-        loop.call_soon(_create)
+
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+
+        if running is loop:
+            loop.call_soon(_create)
+        else:
+            loop.call_soon_threadsafe(_create)
 
     # 나중에 생성될 태스크 핸들을 self.<attr>에 기록(지연 생성)
     def _set_task_later(self, attr_name: str, coro: Coroutine[Any, Any, Any], *, name: str | None = None) -> None:
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = self._loop
+        loop = self._loop
         def _create_and_set():
             t = loop.create_task(coro, name=name)
             setattr(self, attr_name, t)
-        loop.call_soon(_create_and_set)
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is loop:
+            loop.call_soon(_create_and_set)
+        else:
+            loop.call_soon_threadsafe(_create_and_set)
 
     # 콘솔 traceback 가로채서 append_log로만 남기기
     def _install_exception_hooks(self) -> None:
@@ -1868,7 +1894,22 @@ class MainWindow(QWidget):
             return self._loop
 
     def _soon(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
-        self._loop_from_anywhere().call_soon(fn, *args, **kwargs)
+        """
+        어떤 스레드에서 호출해도 Qt 메인 루프로 안전하게 넘긴다.
+        - 현재 실행 중 루프가 self._loop와 같으면 call_soon
+        - 아니면 call_soon_threadsafe
+        """
+        loop = self._loop
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+
+        if running is loop:
+            loop.call_soon(fn, *args, **kwargs)
+        else:
+            loop.call_soon_threadsafe(fn, *args, **kwargs)
+
 
     # === 연결 상태 판단: 공개 API 우선 ===
     def _is_dev_connected(self, dev: object) -> bool:

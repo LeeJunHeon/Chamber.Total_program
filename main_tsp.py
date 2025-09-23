@@ -87,8 +87,12 @@ class TSPPageController:
                     sb.setValue(sb.maximum())
             except Exception:
                 pass
-        # Qt GUI 스레드에 안전하게 포스트
-        QTimer.singleShot(0, _do)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = self.loop if hasattr(self, "loop") else asyncio.get_event_loop()
+        loop.call_soon(_do)
+
 
     def append_log(self, src: str, msg: str) -> None:
         self._log(f"[{src}] {msg}")

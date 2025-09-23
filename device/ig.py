@@ -936,3 +936,48 @@ class AsyncIG:
         if drained and self.debug_print:
             print(f"[IG] absorbed {drained} stale lines")
 
+    # === IGControllerLike 호환용 얇은 쉼(옵션) ===
+    async def ensure_on(self) -> None:
+        """
+        IGControllerLike.ensure_on 구현:
+        - 워치독/워커가 안 떠 있으면 start()
+        - 'SIG 1'을 보내 'OK' 응답을 확인
+        """
+        # 워치독/워커 보장
+        try:
+            start_coro = getattr(self, "start", None)
+            if callable(start_coro):
+                task = start_coro()
+                if asyncio.iscoroutine(task):
+                    await task
+        except Exception:
+            pass
+
+        ok = await self._send_and_expect_ok("SIG 1", tag="[ensure_on]", retries=5)
+        if not ok:
+            raise RuntimeError("SIG 1 failed (ensure_on)")
+
+    async def ensure_off(self) -> None:
+        """
+        IGControllerLike.ensure_off 구현:
+        - 응답을 기다리지 않고 best-effort로 SIG 0 보장
+        """
+        await self._send_off_best_effort(wait_gap_ms=300)
+
+    async def read_pressure(self) -> float:
+        """
+        IGControllerLike.read_pressure 구현:
+        - 'RDI' 1회 → 라인 파싱 → Torr(float) 반환
+        """
+        line = await self._send_and_wait_line("RDI", tag="[read_pressure]", timeout_ms=IG_TIMEOUT_MS)
+        if not line:
+            raise RuntimeError("RDI timeout")
+
+        s = line.strip().lower().replace("x10e", "e")
+        try:
+            return float(s)
+        except Exception:
+            raise RuntimeError(f"parse error: {line!r}")
+
+
+
