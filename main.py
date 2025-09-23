@@ -32,7 +32,7 @@ from device.rf_pulse import RFPulseAsync
 from controller.process_ch2 import ProcessController
 
 from lib.config_ch2 import (
-    CHAT_WEBHOOK_URL, ENABLE_CHAT_NOTIFY, BUTTON_TO_PIN, IG_POLLING_INTERVAL_MS,
+    CHAT_WEBHOOK_URL, ENABLE_CHAT_NOTIFY, IG_POLLING_INTERVAL_MS,
     RGA_NET, RGA_CSV_PATH,
 )
 
@@ -1696,7 +1696,7 @@ class MainWindow(QWidget):
         self.append_log("Process", f"'{name}' 단계 감지: {amount}{unit_txt} 대기 시작")
 
         # 폴링 OFF로 전환(잔여 측정/명령 혼입 방지)
-        self._apply_polling_targets({"mfc": False, "faduino": False, "rfpulse": False})
+        self._apply_polling_targets({"mfc": False, "rfpulse": False})
         self._last_polling_targets = None
 
         # 상태 문구는 단일 경로로만

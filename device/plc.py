@@ -152,6 +152,12 @@ PLC_COIL_MAP: Dict[str, int] = {
     "L_GAUGE_A_INTERLOCK": 2736,  # M01700
     "GAUGE_2_A_INTERLOCK": 2896,  # M01800
     "GAUGE_2_B_INTERLOCK": 3056,  # M01900
+    
+    # ─────────── Power SET (M00050~M00053) ───────────
+    "DCV_SET_0": 80,  # M00050 (0x50)
+    "DCV_SET_1": 81,  # M00051 (0x51)
+    "DCV_SET_2": 82,  # M00052 (0x52)
+    "DCV_SET_3": 83,  # M00053 (0x53)
 }
 
 # === D (Holding Registers) — FC3/FC6 ===
@@ -619,54 +625,121 @@ class AsyncFaduinoPLC:
     async def vent_off(self, chamber: int = 1, *, momentary: bool = False):
         await self.vent(chamber, on=False, momentary=momentary)
 
+    # ──────────────────────────────────────────────────────────
+    # Power 공통 (DC/RF 등): family + index 기반
+    # ──────────────────────────────────────────────────────────
+
     def _clamp(self, v: float, lo: float, hi: float) -> float:
         return lo if v < lo else hi if v > hi else v
 
-    def _watt_to_dac(self, power_w: float) -> int:
-        cfg = self.cfg
-        p = self._clamp(float(power_w), cfg.dc_power_min_w, cfg.dc_power_max_w)
-        span = max(1e-9, (cfg.dc_power_max_w - cfg.dc_power_min_w))
-        code = int(round(((p - cfg.dc_power_min_w) / span) * cfg.dc_dac_full_scale + cfg.dc_dac_offset))
-        # 하드 한계로 클램프
-        return max(0, min(cfg.dc_dac_full_scale, code))
+    def _linear_to_dac(self, value: float, *, vmin: float, vmax: float,
+                       full_scale: int, offset: int = 0) -> int:
+        v = self._clamp(float(value), vmin, vmax)
+        span = max(1e-9, (vmax - vmin))
+        code = int(round(((v - vmin) / span) * full_scale + offset))
+        return max(0, min(full_scale, code))
 
-    async def dc_power_enable(self, on: bool = True) -> None:
+    async def power_enable(
+        self,
+        on: bool = True,
+        *,
+        family: str = "DCV",
+        set_idx: int | None = None,
+        set_key: str | None = None,
+    ) -> None:
         """
-        M00050(SET) 코일을 래치 ON/OFF. (순간 펄스 아님)
+        SET 코일 래치 ON/OFF.
+        - 기본: family='DCV', set_idx=cfg.dc_write_index → 'DCV_SET_{idx}'
+        - RF 등은 set_key='RFP_SET_0' 처럼 직접 키를 지정해도 됨.
         """
-        key = self.cfg.dc_set_coil_key
-        self.log("[PLC] DC SET <- %s (key=%s)", on, key)
+        idx = int(self.cfg.dc_write_index) if set_idx is None else int(set_idx)
+        key = set_key or f"{family}_SET_{idx}"
+        self.log("[PLC] POWER SET (%s)[%d] <- %s", family, idx, on)
         await self.write_switch(key, bool(on), momentary=False)
 
-    async def dc_power_write(self, power_w: float) -> int:
+    async def power_write(
+        self,
+        power_w: float,
+        *,
+        family: str = "DCV",
+        write_idx: int | None = None,
+        write_key: str | None = None,
+        # 스케일 (기본은 DC 프로파일 사용)
+        vmin: float | None = None,
+        vmax: float | None = None,
+        full_scale: int | None = None,
+        offset: int | None = None,
+    ) -> int:
         """
-        원하는 파워[W]를 DAC 코드로 변환해 D00004(=DCV_WRITE_0)에 기록.
-        반환: 실제 기록된 DAC 코드(int)
+        원하는 파워[W] → DAC 코드 → WRITE 레지스터 기록.
+        - 기본: family='DCV', write_idx=cfg.dc_write_index → 'DCV_WRITE_{idx}'(=D00004+idx)
+        - RF 등은 write_key='RFP_WRITE_0' 식으로 직접 키 지정 가능.
         """
-        code = self._watt_to_dac(power_w)
-        idx = int(self.cfg.dc_write_index)     # 보통 0 → D00004
-        await self.write_dcv(idx, code)
-        self.log("[PLC] DC WRITE (W=%.3f → DAC=%d) @ D0000%d", power_w, code, 4 + idx)
+        vmin  = self.cfg.dc_power_min_w if vmin  is None else float(vmin)
+        vmax  = self.cfg.dc_power_max_w if vmax  is None else float(vmax)
+        fs    = self.cfg.dc_dac_full_scale if full_scale is None else int(full_scale)
+        off   = self.cfg.dc_dac_offset if offset is None else int(offset)
+
+        code = self._linear_to_dac(power_w, vmin=vmin, vmax=vmax, full_scale=fs, offset=off)
+
+        if write_key is None:
+            idx = int(self.cfg.dc_write_index) if write_idx is None else int(write_idx)
+            write_key = f"{family}_WRITE_{idx}"
+        await self.write_reg_name(write_key, code)
+        self.log("[PLC] POWER WRITE (%s) %s <- W=%.3f (DAC=%d)", family, write_key, power_w, code)
         return code
 
-    async def dc_power_apply(self, power_w: float, *, ensure_set: bool = True) -> int:
+    async def power_apply(
+        self,
+        power_w: float,
+        *,
+        family: str = "DCV",
+        channel: int | None = None,       # set_idx/write_idx 공통 지정
+        ensure_set: bool = True,
+        vmin: float | None = None,
+        vmax: float | None = None,
+        full_scale: int | None = None,
+        offset: int | None = None,
+    ) -> int:
         """
-        (추천) 한 번에: SET을 ON(선택) → 파워 쓰기.
+        (추천) 한 번에: SET(선택) → WRITE. channel=None이면 cfg.dc_write_index.
         """
+        idx = int(self.cfg.dc_write_index) if channel is None else int(channel)
         if ensure_set:
-            await self.dc_power_enable(True)   # M00050 래치 ON
-        return await self.dc_power_write(power_w)
+            await self.power_enable(True, family=family, set_idx=idx)
+        return await self.power_write(power_w, family=family, write_idx=idx,
+                                      vmin=vmin, vmax=vmax, full_scale=full_scale, offset=offset)
 
-    async def dc_power_read(self) -> tuple[float, float, float]:
+    async def power_read(
+        self,
+        *,
+        family: str = "DCV",
+        v_idx: int | None = None,
+        i_idx: int | None = None,
+        v_key: str | None = None,
+        i_key: str | None = None,
+        v_scale: float | None = None,
+        i_scale: float | None = None,
+    ) -> tuple[float, float, float]:
         """
-        D00000(V), D00001(I) 읽고 스케일 적용 → (P[W], V[V], I[A]) 반환
+        V/I 읽고 스케일 적용 → (P[W], V[V], I[A]).
+        - 기본: family='DCV', v_idx=0 → 'DCV_READ_0'(D00000), i_idx=1 → 'DCV_READ_1'(D00001)
+        - RF 등은 v_key/i_key로 직접 레지스터 키 지정 가능.
         """
-        v_raw = await self.read_dcv(0)    # D00000
-        i_raw = await self.read_dcv(1)    # D00001
-        V = float(v_raw) * self.cfg.dc_v_scale
-        I = float(i_raw) * self.cfg.dc_i_scale
+        if v_key is None:
+            vi = 0 if v_idx is None else int(v_idx)
+            v_key = f"{family}_READ_{vi}"
+        if i_key is None:
+            ii = 1 if i_idx is None else int(i_idx)
+            i_key = f"{family}_READ_{ii}"
+
+        v_raw = await self.read_reg_name(v_key)
+        i_raw = await self.read_reg_name(i_key)
+
+        V = float(v_raw) * (self.cfg.dc_v_scale if v_scale is None else float(v_scale))
+        I = float(i_raw) * (self.cfg.dc_i_scale if i_scale is None else float(i_scale))
         P = V * I
-        self.log("[PLC] DC READ -> V=%.3f, I=%.3f, P=%.3f", V, I, P)
+        self.log("[PLC] POWER READ (%s) V=%.3f, I=%.3f, P=%.3f (keys=%s/%s)", family, V, I, P, v_key, i_key)
         return P, V, I
 
     # ---------- DI용 논리명 셋(set) ----------
