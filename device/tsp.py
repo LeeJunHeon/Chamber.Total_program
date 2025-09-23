@@ -1,149 +1,117 @@
-# -*- coding: utf-8 -*-
-"""
-tsp_controller.py — TSP 컨트롤러 드라이버 (RFC2217 + Letter 프로토콜)
+# tsp.py
+# RFC2217로 TSP에 접속하고 Letter 프레임(0x8A~)으로 명령 전송
+# 예: G1/G0/S?/E? ... (체크섬 = header ^ len_ascii ^ payload 의 XOR 전체 & 0x7F)
 
-- RFC2217 (원격 RS-232) URL 예: rfc2217://192.168.1.50:4001
-- 프레임: <ADR><LDAT><DATA><CRC>
-  * ADR = 0x80 + addr(1..32)
-  * LDAT = DATA 길이를 나타내는 ASCII 2자리 '00'..'99'
-  * DATA 예: 'G1','G0','S?','E?','T00150' ...
-  * CRC  = (ADR+LDAT+DATA) 바이트 XOR 후 MSB=0 ( &0x7F )
-- 쓰기 명령 응답: ACK(0x06) 1바이트
-- 읽기 명령 응답: <adr(msb=0)><ldat><data><crc>
-"""
 from __future__ import annotations
-import time, asyncio
 from dataclasses import dataclass
 from typing import Optional
-import serial
+import time
+import asyncio
 
-# ─────────────────────────────────────────────────────────────
-# 공통 유틸
-# ─────────────────────────────────────────────────────────────
+try:
+    import serial
+    from serial import serial_for_url
+except ImportError as e:
+    raise RuntimeError("pyserial 미설치. `pip install pyserial` 필요") from e
 
-def _crc_letter(body: bytes) -> int:
+
+def _xor7(*chunks: bytes) -> int:
     x = 0
-    for b in body:
-        x ^= b
+    for c in chunks:
+        for b in c:
+            x ^= b
     return x & 0x7F
 
-def build_letter_frame(addr: int, data_ascii: str) -> bytes:
-    if not (1 <= addr <= 32):
-        raise ValueError("addr must be 1..32")
-    adr = bytes([0x80 + addr])
-    ldat = f"{len(data_ascii):02d}".encode("ascii")
-    data = data_ascii.encode("ascii")
-    body = adr + ldat + data
-    crc = bytes([_crc_letter(body)])
-    return body + crc
-
-# ─────────────────────────────────────────────────────────────
-# 동기 클라이언트
-# ─────────────────────────────────────────────────────────────
 
 @dataclass
 class TSPLetterClientRFC2217:
     host: str
     port: int
     baudrate: int = 9600
-    addr: int = 1
+    addr: int = 0x01  # 0x80 | addr => 0x81 = 주소 1
     timeout: float = 1.0
-    write_timeout: float = 1.0
-    rtscts: bool = False
-    dsrdtr: bool = False
-    dtr: Optional[bool] = None
-    rts: Optional[bool] = None
 
-    def __post_init__(self):
-        self._ser: Optional[serial.Serial] = None
+    _ser: Optional[serial.SerialBase] = None
 
-    def open(self):
+    def open(self) -> None:
+        if self._ser and self._ser.is_open:
+            return
         url = f"rfc2217://{self.host}:{self.port}"
-        self._ser = serial.serial_for_url(
-            url,
-            baudrate=self.baudrate,
-            timeout=self.timeout,
-            write_timeout=self.write_timeout,
-            bytesize=serial.EIGHTBITS,
-            parity=serial.PARITY_NONE,
-            stopbits=serial.STOPBITS_ONE,
-            rtscts=self.rtscts,
-            dsrdtr=self.dsrdtr,
-        )
-        if self.dtr is not None:
-            self._ser.dtr = self.dtr
-        if self.rts is not None:
-            self._ser.rts = self.rts
+        self._ser = serial_for_url(url, baudrate=self.baudrate, timeout=self.timeout)
+        # 장비가 \r/\n을 요구하지 않는 Letter 프레임이므로 추가 설정 불필요.
 
-    def close(self):
+    def close(self) -> None:
         if self._ser:
-            try: self._ser.close()
-            finally: self._ser = None
+            try:
+                self._ser.close()
+            finally:
+                self._ser = None
 
-    def _write(self, frame: bytes):
-        assert self._ser is not None, "serial not open"
-        self._ser.reset_input_buffer()
+    @property
+    def is_open(self) -> bool:
+        return bool(self._ser and self._ser.is_open)
+
+    def _build_frame(self, cmd_ascii: str) -> bytes:
+        # 프레임: [0x80|addr] + ASCII_LEN(2) + ASCII_CMD + CHECKSUM(1)
+        # checksum = XOR(all previous bytes) & 0x7F  => 예시 G1 -> 0x75('u')와 일치
+        if not cmd_ascii or not all(32 <= ord(ch) <= 126 for ch in cmd_ascii):
+            raise ValueError(f"ASCII 명령 형식 오류: {cmd_ascii!r}")
+        header = bytes([0x80 | (self.addr & 0x0F)])
+        payload = cmd_ascii.encode("ascii")
+        len_ascii = f"{len(payload):02d}".encode("ascii")
+        cs = _xor7(header, len_ascii, payload)
+        frame = header + len_ascii + payload + bytes([cs])
+        return frame
+
+    def send_ascii(self, cmd_ascii: str) -> bytes:
+        """동기 전송. 필요 시 반환 프레임 기록용으로 사용."""
+        if not self.is_open:
+            raise RuntimeError("포트가 열려있지 않습니다. open() 호출 필요")
+        frame = self._build_frame(cmd_ascii)
+        assert self._ser is not None
         self._ser.write(frame)
         self._ser.flush()
+        # 장비 응답을 안 줄 수 있으므로 여기선 읽지 않음. 필요 시 self._ser.read() 사용.
+        time.sleep(0.01)
+        return frame
 
-    def _read_exact(self, n: int) -> bytes:
-        assert self._ser is not None, "serial not open"
-        buf = bytearray()
-        deadline = time.monotonic() + (self.timeout or 1.0)
-        while len(buf) < n:
-            chunk = self._ser.read(n - len(buf))
-            if chunk:
-                buf += chunk
-            elif time.monotonic() > deadline:
-                break
-        return bytes(buf)
+    # 편의 함수
+    def cmd_start(self) -> None:
+        self.send_ascii("G1")
 
-    def _txrx_write(self, data_ascii: str) -> bool:
-        frame = build_letter_frame(self.addr, data_ascii)
-        self._write(frame)
-        b = self._read_exact(1)
-        return len(b) == 1 and b[0] == 0x06  # ACK
+    def cmd_stop(self) -> None:
+        self.send_ascii("G0")
 
-    def _txrx_read(self, data_ascii: str) -> Optional[str]:
-        frame = build_letter_frame(self.addr, data_ascii)
-        self._write(frame)
-        b0 = self._read_exact(1)
-        if len(b0) == 0: return None
-        if b0[0] == 0x06:
-            b0 = self._read_exact(1)
-            if len(b0) == 0: return None
-        adr = b0[0]
-        ldat = self._read_exact(2)
-        if len(ldat) != 2: return None
-        try:
-            n = int(ldat.decode("ascii"))
-        except Exception:
-            return None
-        rest = self._read_exact(n + 1)
-        if len(rest) != n + 1: return None
-        data, crc = rest[:-1], rest[-1]
-        expect = _crc_letter(bytes([adr]) + ldat + data)
-        if crc != expect: return None
-        try:
-            return data.decode("ascii")
-        except Exception:
-            return None
+    def cmd_status(self) -> None:
+        self.send_ascii("S?")
 
-    # High-level
-    def start(self) -> bool:  # G1
-        return self._txrx_write("G1")
+    def cmd_error(self) -> None:
+        self.send_ascii("E?")
 
-    def stop(self) -> bool:   # G0
-        return self._txrx_write("G0")
-
-# ─────────────────────────────────────────────────────────────
-# asyncio 어댑터
-# ─────────────────────────────────────────────────────────────
 
 class AsyncTSP:
+    """동기 드라이버를 asyncio에서 편하게 쓰기 위한 래퍼"""
     def __init__(self, client: TSPLetterClientRFC2217):
-        self.c = client
-    async def start(self) -> bool:
-        return await asyncio.to_thread(self.c.start)
-    async def stop(self) -> bool:
-        return await asyncio.to_thread(self.c.stop)
+        self.client = client
+
+    async def ensure_open(self) -> None:
+        if not self.client.is_open:
+            await asyncio.to_thread(self.client.open)
+
+    async def start(self) -> None:
+        await self.ensure_open()
+        await asyncio.to_thread(self.client.cmd_start)
+
+    async def stop(self) -> None:
+        if not self.client.is_open:
+            return
+        await asyncio.to_thread(self.client.cmd_stop)
+
+    async def ensure_off(self) -> None:
+        try:
+            await self.stop()
+        except Exception:
+            pass
+
+    async def aclose(self) -> None:
+        await asyncio.to_thread(self.client.close)

@@ -35,17 +35,17 @@ RGA_XLSX_SHEET = "Histogram"
 
 
 # === 시리얼 포트 설정 ===
-IG_PORT = "rfc2217://192.168.1.20:4002"
+TSP_PORT = "rfc2217://192.168.1.50:4004"
+TSP_BAUD = 9600
+
+IG_PORT = "rfc2217://192.168.1.50:4002"
 IG_BAUD = 9600
 
 MFC_PORT = "rfc2217://192.168.1.50:4006"
 MFC_BAUD = 9600
 
-FADUINO_PORT = "COM10"
-FADUINO_BAUD = 9600
-
 # RFPulse 기본값
-RFPULSE_PORT = "rfc2217://192.168.1.20:4005"
+RFPULSE_PORT = "rfc2217://192.168.1.50:4005"
 RFPULSE_BAUD = 9600
 RFPULSE_ADDR = 1
 RFPULSE_DEFAULT_DELAY_MS = 180
@@ -95,30 +95,6 @@ IG_RECONNECT_BACKOFF_MAX_MS = 20_000   # 재연결 백오프 최대(ms)
 # ✅ IG 재점등(ON 재시도) 제어
 IG_REIGNITE_MAX_ATTEMPTS = 3                    # 총 재점등 시도 횟수 상한
 IG_REIGNITE_BACKOFF_MS = [2000, 5000, 10000]    # 각 시도 사이 대기(ms): 2s, 5s, 10s
-
-# === Faduino ===
-FADUINO_POLLING_INTERVAL_MS = 1000
-FADUINO_WATCHDOG_INTERVAL_MS = 1000
-FADUINO_TIMEOUT_MS = 800
-FADUINO_GAP_MS = 1000
-FADUINO_RECONNECT_BACKOFF_START_MS = 1000
-FADUINO_RECONNECT_BACKOFF_MAX_MS = 20_000
-CLEAN_TIMEOUT = 100
-
-BUTTON_TO_PIN = {
-    "MV": 0,
-    "Ar": 1,
-    "O2": 2,
-    "N2": 3,
-    "MS": 4,
-    "G1": 5,
-    "G2": 6,
-    "G3": 7,
-}
-# === Analog IO 공통 상수 ===
-ADC_FULL_SCALE = 26666     # 14.7bit ≈ 0~26666 카운트
-ADC_INPUT_VOLT = 10.0      # ADC 입력 범위 0~10 V
-DAC_FULL_SCALE = 4095      # 12bit DAC 0~4095
 
 # ======================================================================
 # RF Power 보정 및 제어 설정

@@ -99,6 +99,8 @@ class RFPowerAsync:
         self._last_sent_w: Optional[float] = None
         self._rampdown_w: float = 0.0
 
+        self._maintain_count = 0  # 유지 보정 시 연속 오차 카운터
+
         # 태스크/큐
         self._poll_task: Optional[asyncio.Task] = None
         self._rampdown_task: Optional[asyncio.Task] = None
@@ -279,6 +281,7 @@ class RFPowerAsync:
                     self.state = "MAINTAINING"
                     # 목표값으로 한 번 더 고정(안전)
                     await self._send_rf_power(float(self.target_power))
+                    self.current_power_step = float(self.target_power)
                     self._ev_nowait(RFPowerEvent(kind="target_reached"))
                     return
 
@@ -314,7 +317,8 @@ class RFPowerAsync:
                 self._maintain_count = 0
 
                 step = float(RF_MAINTAIN_STEP) if error > 0 else -float(RF_MAINTAIN_STEP)
-                new_power = max(0.0, min(float(RF_MAX_POWER), float(self.target_power) + step))
+                base = last_sent if last_sent is not None else self.current_power_step
+                new_power = max(0.0, min(float(RF_MAX_POWER), float(base) + step))  # ← ✅ 추천
 
                 if (last_sent is None) or (abs(new_power - last_sent) >= watt_deadband):
                     await self._send_rf_power(float(new_power))

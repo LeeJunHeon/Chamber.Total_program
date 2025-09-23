@@ -14,6 +14,7 @@ from qasync import QEventLoop
 
 # === imports ===
 from ui.main_window import Ui_Form
+from main_tsp import TSPPageController
 from controller.graph_controller import GraphController
 from controller.data_logger import DataLogger
 from controller.chat_notifier import ChatNotifier
@@ -33,7 +34,7 @@ from controller.process_ch2 import ProcessController
 
 from lib.config_ch2 import (
     CHAT_WEBHOOK_URL, ENABLE_CHAT_NOTIFY, IG_POLLING_INTERVAL_MS,
-    RGA_NET, RGA_CSV_PATH,
+    RGA_NET, RGA_CSV_PATH, TSP_PORT, TSP_BAUD
 )
 
 RawParams = TypedDict('RawParams', {
@@ -207,15 +208,29 @@ class MainWindow(QWidget):
             request_status_read=_dc_request_read,
         )
 
-        # RF 연속파는 family="RFP" (PLC 맵만 준비되면 동작)
         async def _rf_send(power: float) -> None:
-            await self.plc.power_apply(power, family="RFP", ensure_set=True)
+            # RF는 DCV 네임스페이스의 채널 2번을 사용 → DCV_SET_2, DCV_WRITE_2 로 갑니다.
+            await self.plc.power_apply(power, family="DCV", ensure_set=True, channel=2)
 
         async def _rf_send_unverified(power: float) -> None:
-            await self.plc.power_write(power, family="RFP")
+            # 쓰기 레지스터도 DCV_WRITE_2
+            await self.plc.power_write(power, family="DCV", write_idx=2)
 
         async def _rf_request_read():
-            return await self.plc.power_read(family="RFP")  # (P,V,I) 튜플이어도 새 rf가 처리함
+            # RF는 V/I가 아니라 전/반사 파워: DCV_READ_2(Forward), DCV_READ_3(Reflected)
+            try:
+                fwd_raw = await self.plc.read_reg_name("DCV_READ_2")
+                ref_raw = await self.plc.read_reg_name("DCV_READ_3")
+
+                # 필요하면 스케일 적용(지금은 1.0 가정)
+                fwd = float(fwd_raw)  # * getattr(self.plc.cfg, "rf_fwd_scale", 1.0)
+                ref = float(ref_raw)  # * getattr(self.plc.cfg, "rf_ref_scale", 1.0)
+
+                # RFPowerAsync._ingest_status_result 가 dict의 forward/reflected를 정확히 파싱함
+                return {"forward": fwd, "reflected": ref}
+            except Exception as e:
+                self.append_log("RFpower", f"read failed: {e!r}")
+                return None
 
         self.rf_power: RFPowerAsync = RFPowerAsync(
             send_rf_power=_rf_send,
@@ -1840,7 +1855,19 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     loop = QEventLoop(app)          # Qt + asyncio 루프 통합
     asyncio.set_event_loop(loop)
+
     w = MainWindow(loop)
     w.show()
+    
+    # ===== TSP 컨트롤러 연결 =====
+    tsp_ctrl = TSPPageController(
+        ui=w.ui,
+        ig_obj=w.ig,
+        port=TSP_PORT,
+        baud=TSP_BAUD,
+    )
+    if hasattr(tsp_ctrl, "aclose"):
+        app.aboutToQuit.connect(lambda: asyncio.create_task(tsp_ctrl.aclose()))
+
     with loop:
         loop.run_forever()
