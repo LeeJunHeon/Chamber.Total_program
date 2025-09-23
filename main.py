@@ -19,7 +19,6 @@ from controller.data_logger import DataLogger
 from controller.chat_notifier import ChatNotifier
 
 # ✅ 실제 장비 모듈(비동기)
-from device.faduino import AsyncFaduino
 from device.ig import AsyncIG
 from device.mfc import AsyncMFC
 from device.plc import AsyncFaduinoPLC
@@ -125,7 +124,7 @@ NormParams = TypedDict('NormParams', {
 
 # 자주 쓰는 맵/타깃 타입 별칭
 ParamsMap = Mapping[str, Any]
-TargetsMap = Mapping[Literal["mfc", "plc", "faduino", "rfpulse"], bool]
+TargetsMap = Mapping[Literal["mfc", "plc", "rfpulse"], bool]
 
 
 class MainWindow(QWidget):
@@ -173,7 +172,6 @@ class MainWindow(QWidget):
         self.plc: AsyncFaduinoPLC = AsyncFaduinoPLC(logger=_plc_log)
 
         # === 비동기 장치 ===
-        self.faduino: AsyncFaduino = AsyncFaduino()
         self.mfc: AsyncMFC = AsyncMFC()
         self.ig: AsyncIG = AsyncIG()
         self.rf_pulse: RFPulseAsync = RFPulseAsync()
@@ -201,9 +199,6 @@ class MainWindow(QWidget):
         self._advancing: bool = False
         self._bg_started: bool = False
         self._bg_tasks: list[asyncio.Task[Any]] = []
-
-        # === Fadunio 버튼 맵핑 ===
-        self._pin_to_name: dict[int, str] = {pin: name for name, pin in BUTTON_TO_PIN.items()}
 
         # === Google Chat 알림(옵션) ===
         self.chat_notifier: ChatNotifier | None = ChatNotifier(CHAT_WEBHOOK_URL) if ENABLE_CHAT_NOTIFY else None
@@ -297,7 +292,7 @@ class MainWindow(QWidget):
                     if not targets:
                         params = getattr(self.process_controller, "current_params", {}) or {}
                         use_rf_pulse = bool(params.get("use_rf_pulse", False))
-                        targets = {"mfc": True, "faduino": (not use_rf_pulse), "rfpulse": use_rf_pulse}
+                        targets = {"mfc": True, "rfpulse": use_rf_pulse}
                     self._apply_polling_targets(targets)
 
                     QTimer.singleShot(0, self.graph_controller.clear_oes_plot)  # Qt GUI 스레드에서 안전 호출
@@ -471,10 +466,6 @@ class MainWindow(QWidget):
                         self.mfc.on_process_finished(ok)
                     except Exception:
                         pass
-                    try:
-                        self.faduino.on_process_finished(ok)
-                    except Exception:
-                        pass
 
                     # ✅ Stop 경로(사용자 중단 포함)에서는 UI를 즉시 초기화
                     if getattr(self, "_pc_stopping", False):
@@ -544,14 +535,12 @@ class MainWindow(QWidget):
                         use_rf_pulse = bool(params.get("use_rf_pulse", False))
                         targets = {
                             "mfc":     active,
-                            "faduino": (active and not use_rf_pulse),
                             "rfpulse": (active and use_rf_pulse),
                         }
                     else:
                         # targets는 “어디를 폴링할지”만 담고, on/off는 polling의 active로 강제
                         targets = {
                             "mfc":     (active and bool(targets.get("mfc", False))),
-                            "faduino": (active and bool(targets.get("faduino", False))),
                             "rfpulse": (active and bool(targets.get("rfpulse", False))),
                         }
 
@@ -570,55 +559,6 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
     # 비동기 이벤트 펌프 (장치 → ProcessController)
     # ------------------------------------------------------------------
-    async def _pump_faduino_events(self) -> None:
-        async for ev in self.faduino.events():
-            k = ev.kind
-            if k == "status":
-                self.append_log("Faduino", ev.message or "")
-            elif k == "command_confirmed":
-                name = ev.cmd or ""
-                try:
-                    # "R,<pin>,<state>" → "MV"/"Ar"/"O2"/"N2"/"MS"/"G1"/"G2"/"G3"
-                    if name.startswith("R,"):
-                        _, pin_str, _ = name.split(",", 2)
-                        pin = int(pin_str)
-                        name = self._pin_to_name.get(pin, name)
-                except Exception:
-                    pass
-                self.process_controller.on_faduino_confirmed(name)
-
-            elif k == "command_failed":
-                why = ev.reason or "unknown"
-                name = ev.cmd or ""
-                try:
-                    if name == "R" or name.startswith("R,"):
-                        # 실패 시 cmd가 "R"만 올 수도 있어 핀 파싱이 안될 수 있음
-                        if "," in name:
-                            _, pin_str, _ = name.split(",", 2)
-                            pin = int(pin_str)
-                            name = self._pin_to_name.get(pin, name)
-                except Exception:
-                    pass
-                self.process_controller.on_faduino_failed(name, why)
-
-            elif k == "dc_power":
-                p, v, c = ev.dc_p or 0.0, ev.dc_v or 0.0, ev.dc_c or 0.0
-                try:
-                    self.data_logger.log_dc_power(p, v, c)
-                except Exception:
-                    pass
-                self.handle_dc_power_display(p, v, c)
-                self.dc_power.update_measurements(p, v, c)
-
-            elif k == "rf_power":
-                f, r = ev.rf_forward or 0.0, ev.rf_reflected or 0.0
-                try:
-                    self.data_logger.log_rf_power(f, r)
-                except Exception:
-                    pass
-                self.handle_rf_power_display(f, r)
-                self.rf_power.update_measurements(f, r)
-
     async def _pump_mfc_events(self) -> None:
         async for ev in self.mfc.events():
             k = ev.kind
@@ -834,14 +774,12 @@ class MainWindow(QWidget):
 
     def _ensure_background_started(self) -> None:
         # 언제 불려도 안전하게 "필수 태스크가 살아있음"을 보장
-        self._ensure_task_alive("Faduino.start", self.faduino.start)
         self._ensure_task_alive("MFC.start",      self.mfc.start)
         self._ensure_task_alive("IG.start",       self.ig.start)
         self._ensure_task_alive("RFPulse.start",  self.rf_pulse.start)
             # ✅ PLC 연결
         self._ensure_task_alive("PLC.connect",     self.plc.connect)
 
-        self._ensure_task_alive("Pump.Faduino",   self._pump_faduino_events)
         self._ensure_task_alive("Pump.MFC",       self._pump_mfc_events)
         self._ensure_task_alive("Pump.IG",        self._pump_ig_events)
         # ✅ RGA 두 대 펌프 기동
@@ -1074,11 +1012,10 @@ class MainWindow(QWidget):
     async def _preflight_connect(self, params: ParamsMap, timeout_s: float = 8.0) -> tuple[bool, list[str]]:
         """
         필수 장비 연결 대기.
-        - 기본 필수: Faduino, MFC, IG
+        - 기본 필수: MFC, IG, PLC
         - 선택 필수: RF Pulse 사용 시 RFPulse 포함
         """
         need: list[tuple[str, object]] = [
-            ("Faduino", self.faduino),
             ("PLC", self.plc),          # ✅ 릴레이 제어용(가스/셔터/밸브)
             ("MFC", self.mfc),
             ("IG", self.ig),
@@ -1206,10 +1143,6 @@ class MainWindow(QWidget):
             except Exception:
                 pass
             try:
-                self.faduino.set_process_status(False)
-            except Exception:
-                pass
-            try:
                 self.rf_pulse.set_process_status(False)
             except Exception:
                 pass
@@ -1240,7 +1173,7 @@ class MainWindow(QWidget):
 
         # 1) 장치 워치독/워커 정리(재연결 억제)
         tasks = []
-        for dev in (self.ig, self.mfc, self.faduino, self.rf_pulse, self.dc_power, self.rf_power, self.oes,
+        for dev in (self.ig, self.mfc, self.rf_pulse, self.dc_power, self.rf_power, self.oes,
                     getattr(self, "rga_ch1", None), getattr(self, "rga_ch2", None)):
             if dev and hasattr(dev, "cleanup"):
                 try:
@@ -1332,18 +1265,12 @@ class MainWindow(QWidget):
             pass
 
         mfc_on = bool(targets.get('mfc', False))
-        fadu_on = bool(targets.get('faduino', False))
         rfp_on = bool(targets.get('rfpulse', False))
 
         try:
             self.mfc.set_process_status(mfc_on)
         except Exception as e:
             self.append_log("MFC", f"폴링 토글 실패: {e}")
-
-        try:
-            self.faduino.set_process_status(fadu_on)
-        except Exception as e:
-            self.append_log("Faduino", f"폴링 토글 실패: {e}")
 
         try:
             self.rf_pulse.set_process_status(rfp_on)
@@ -1500,7 +1427,7 @@ class MainWindow(QWidget):
 
         # 2) 장치: 재연결 시도 금지 + 포트만 닫는 빠른 정리
         tasks = []
-        for dev in (self.ig, self.mfc, self.faduino, self.rf_pulse, self.dc_power, self.rf_power, self.oes,
+        for dev in (self.ig, self.mfc, self.rf_pulse, self.dc_power, self.rf_power, self.oes,
                     getattr(self, "rga_ch1", None), getattr(self, "rga_ch2", None)):
             if not dev:
                 continue

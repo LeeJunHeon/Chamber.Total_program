@@ -209,6 +209,22 @@ class PLCConfig:
     heartbeat_s: float = 15.0
     pulse_ms: int = 180  # momentary 기본 펄스폭(ms)
 
+    # ── DC Power 설정 ───────────────────────────────────────────
+    # 원하는 파워[W] → DAC 코드 변환용. 직선 스케일(0~FULL)
+    dc_power_min_w: float = 0.0
+    dc_power_max_w: float = 500.0      # 장비 정격에 맞춰 수정
+    dc_dac_full_scale: int = 4095      # 12bit DAC라면 4095
+    dc_dac_offset: int = 0             # 필요 시 오프셋
+
+    # WRITE 인덱스(D00004=WRITE_0)를 기본으로 사용
+    dc_write_index: int = 0            # 0→D00004, 1→D00005 ...
+    # SET 코일 키(위에 추가한 맵 키와 동일하게)
+    dc_set_coil_key: str = "DC_PWR_SET_SW"
+
+    # READ 스케일: D00000, D00001이 ‘원시카운트’라면 스케일 적용
+    dc_v_scale: float = 1.0            # raw→V 변환 계수(원시=1.0)
+    dc_i_scale: float = 1.0            # raw→A 변환 계수(원시=1.0)
+
 # ======================================================
 # 단일 클래스: AsyncFaduinoPLC (저수준+고수준)
 # ======================================================
@@ -603,13 +619,55 @@ class AsyncFaduinoPLC:
     async def vent_off(self, chamber: int = 1, *, momentary: bool = False):
         await self.vent(chamber, on=False, momentary=momentary)
 
-    async def read_dcv(self, idx: int = 0) -> int:
-        name = f"DCV_READ_{idx}"
-        return await self.read_reg_name(name)
+    def _clamp(self, v: float, lo: float, hi: float) -> float:
+        return lo if v < lo else hi if v > hi else v
 
-    async def write_dcv(self, idx: int, value: int) -> None:
-        name = f"DCV_WRITE_{idx}"
-        await self.write_reg_name(name, value)
+    def _watt_to_dac(self, power_w: float) -> int:
+        cfg = self.cfg
+        p = self._clamp(float(power_w), cfg.dc_power_min_w, cfg.dc_power_max_w)
+        span = max(1e-9, (cfg.dc_power_max_w - cfg.dc_power_min_w))
+        code = int(round(((p - cfg.dc_power_min_w) / span) * cfg.dc_dac_full_scale + cfg.dc_dac_offset))
+        # 하드 한계로 클램프
+        return max(0, min(cfg.dc_dac_full_scale, code))
+
+    async def dc_power_enable(self, on: bool = True) -> None:
+        """
+        M00050(SET) 코일을 래치 ON/OFF. (순간 펄스 아님)
+        """
+        key = self.cfg.dc_set_coil_key
+        self.log("[PLC] DC SET <- %s (key=%s)", on, key)
+        await self.write_switch(key, bool(on), momentary=False)
+
+    async def dc_power_write(self, power_w: float) -> int:
+        """
+        원하는 파워[W]를 DAC 코드로 변환해 D00004(=DCV_WRITE_0)에 기록.
+        반환: 실제 기록된 DAC 코드(int)
+        """
+        code = self._watt_to_dac(power_w)
+        idx = int(self.cfg.dc_write_index)     # 보통 0 → D00004
+        await self.write_dcv(idx, code)
+        self.log("[PLC] DC WRITE (W=%.3f → DAC=%d) @ D0000%d", power_w, code, 4 + idx)
+        return code
+
+    async def dc_power_apply(self, power_w: float, *, ensure_set: bool = True) -> int:
+        """
+        (추천) 한 번에: SET을 ON(선택) → 파워 쓰기.
+        """
+        if ensure_set:
+            await self.dc_power_enable(True)   # M00050 래치 ON
+        return await self.dc_power_write(power_w)
+
+    async def dc_power_read(self) -> tuple[float, float, float]:
+        """
+        D00000(V), D00001(I) 읽고 스케일 적용 → (P[W], V[V], I[A]) 반환
+        """
+        v_raw = await self.read_dcv(0)    # D00000
+        i_raw = await self.read_dcv(1)    # D00001
+        V = float(v_raw) * self.cfg.dc_v_scale
+        I = float(i_raw) * self.cfg.dc_i_scale
+        P = V * I
+        self.log("[PLC] DC READ -> V=%.3f, I=%.3f, P=%.3f", V, I, P)
+        return P, V, I
 
     # ---------- DI용 논리명 셋(set) ----------
     async def set(self, name: str, on: bool, *, ch: int = 1, momentary: bool = False) -> None:
