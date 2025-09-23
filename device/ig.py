@@ -441,16 +441,25 @@ class AsyncIG:
                 backoff = min(backoff * 2, IG_RECONNECT_BACKOFF_MAX_MS)
 
     def _on_connection_made(self, transport: asyncio.Transport):
-        # 연결 직후 버퍼 정리 및 라인 제어(가능한 경우)
         try:
-            ser = getattr(transport, "serial", None)  # pyserial Serial 인스턴스
+            ser = getattr(transport, "serial", None)
             if ser is not None:
-                try: ser.reset_input_buffer()
-                except Exception: pass
-                # reset_output_buffer()는 선택 사항. 필요 없으면 지워도 됨.
+                try:
+                    ser.reset_input_buffer()
+                except Exception:
+                    pass
+                try:
+                    ser.reset_output_buffer()
+                except Exception:
+                    pass
+                # DTR/RTS가 필요한 장비면 여기서만 켜기 (기본은 비활성 권장)
+                # try:
+                #     ser.dtr = True   # High
+                #     ser.rts = False  # Low
+                # except Exception:
+                #     pass
         except Exception:
             pass
-
         # 라인 큐 비우기
         try:
             while True:
@@ -799,14 +808,30 @@ class AsyncIG:
         async def _do_blocking_off():
             def _blocking_off_once():
                 import serial, time as _t
-                with serial.Serial(IG_PORT, IG_BAUD, timeout=0.2, write_timeout=0.5) as ser:
-                    # DTR/RTS, 출력 버퍼 리셋은 손대지 않음(예전 동작과 동일화)
-                    # 입력만 필요시 비워도 무방:
-                    # try: ser.reset_input_buffer()
-                    # except Exception: pass
+                ser = None
+                try:
+                    ser = serial.serial_for_url(
+                        IG_PORT,                       # COMx / /dev/tty* / rfc2217:// 모두 지원
+                        baudrate=IG_BAUD,
+                        bytesize=8, parity='N', stopbits=1,
+                        timeout=0.2, write_timeout=0.5,
+                        xonxoff=False, rtscts=False, dsrdtr=False
+                    )
+                    # 필요 시:
+                    # try:
+                    #     ser.reset_input_buffer()
+                    #     ser.reset_output_buffer()
+                    # except Exception:
+                    #     pass
                     ser.write(b"SIG 0\r")
                     ser.flush()
                     _t.sleep(0.12)
+                finally:
+                    try:
+                        if ser:
+                            ser.close()
+                    except Exception:
+                        pass
 
             try:
                 await asyncio.to_thread(_blocking_off_once)

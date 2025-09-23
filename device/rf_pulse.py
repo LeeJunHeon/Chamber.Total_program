@@ -454,8 +454,12 @@ class RFPulseAsync:
             try:
                 loop = asyncio.get_running_loop()
                 transport, protocol = await serial_asyncio.create_serial_connection(
-                    loop, lambda: _RFPProtocol(self), RFPULSE_PORT, baudrate=RFPULSE_BAUD,
-                    parity='O', stopbits=1, bytesize=8, xonxoff=False, rtscts=False
+                    loop,
+                    lambda: _RFPProtocol(self),
+                    RFPULSE_PORT,                      # ← rfc2217://IP:PORT
+                    baudrate=RFPULSE_BAUD,
+                    bytesize=8, parity='O', stopbits=1,
+                    xonxoff=False, rtscts=False, dsrdtr=False   # 흐름제어/모뎀제어 OFF
                 )
                 self._transport = transport
                 self._protocol = protocol  # type: ignore

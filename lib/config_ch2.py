@@ -20,6 +20,20 @@ DEBUG_PRINT = False
 SHUTDOWN_STEP_TIMEOUT_MS = 2500   # 각 종료 스텝의 '확인 대기' 최대 시간
 SHUTDOWN_STEP_GAP_MS     = 500    # 종료 스텝 간 최소 간격(물리 반영 시간)
 
+# ===== RGA (LAN) =====
+RGA_NET = {
+    "ch1": {"ip": "192.168.1.20", "user": "admin", "password": "admin"},
+    "ch2": {"ip": "192.168.1.21", "user": "admin", "password": "admin"},
+}
+
+# NAS 엑셀 경로(히스토그램 저장)
+RGA_XLSX_PATH = {
+    "ch1": r"\\VanaM_NAS\VanaM_Sputter\RGA\Ch.1\RGA_spectrums.csv",
+    "ch2": r"\\VanaM_NAS\VanaM_Sputter\RGA\Ch.2\RGA_spectrums.csv",
+}
+RGA_XLSX_SHEET = "Histogram"
+
+
 # === 시리얼 포트 설정 ===
 IG_PORT = "rfc2217://192.168.1.20:4002"
 IG_BAUD = 9600

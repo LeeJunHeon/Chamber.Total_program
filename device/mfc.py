@@ -519,7 +519,8 @@ class AsyncMFC:
                     loop, lambda: _MFCProtocol(self), 
                     MFC_PORT, 
                     baudrate=MFC_BAUD,
-                    bytesize=8, parity="N", stopbits=1
+                    bytesize=8, parity="N", stopbits=1,
+                    xonxoff=False, rtscts=False, dsrdtr=False
                 )
                 self._transport = transport
                 self._protocol = protocol  # type: ignore
@@ -529,6 +530,9 @@ class AsyncMFC:
                 self._connected = True
                 self._ever_connected = True
                 backoff = MFC_RECONNECT_BACKOFF_START_MS
+
+                self._last_connect_mono = time.monotonic()
+                self._just_reopened = True
                 await self._emit_status(f"{MFC_PORT} 연결 성공 (asyncio)")
             except Exception as e:
                 await self._emit_status(f"{MFC_PORT} 연결 실패: {e}")
@@ -537,14 +541,18 @@ class AsyncMFC:
     def _on_connection_made(self, transport: asyncio.Transport):
         self._transport = transport
         ser = getattr(transport, "serial", None)
-        # if ser:
-        #     try:
-        #         ser.reset_input_buffer()
-        #         ser.reset_output_buffer()
-        #         ser.dtr = True
-        #         ser.rts = False
-        #     except Exception:
-        #         pass
+        if ser:
+            try:
+                ser.reset_input_buffer()
+                ser.reset_output_buffer()
+            except Exception:
+                pass
+            # 필요 시만 사용(기본은 주석 유지 권장)
+            # try:
+            #     ser.dtr = True   # 대부분 High
+            #     ser.rts = False  # 대부분 Low
+            # except Exception:
+            #     pass
 
         self._skip_echos.clear()
 
