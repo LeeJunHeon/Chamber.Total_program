@@ -546,17 +546,7 @@ class AsyncMFC:
         #     except Exception:
         #         pass
 
-        self._last_connect_mono = time.monotonic()
-        self._just_reopened = True
-
         self._skip_echos.clear()
-
-        async def _post_open_quiet():
-            # 조용히 기다리기만: 초기 배너/ACK가 자연히 흘러들어오게 둔다
-            await asyncio.sleep(MFC_POST_OPEN_QUIET_MS / 1000.0)
-            # 강한 드레인은 하지 않음(첫 명령 응답 유실 방지)
-        asyncio.create_task(_post_open_quiet())
-
 
     def _on_connection_lost(self, exc: Optional[Exception]):
         self._connected = False

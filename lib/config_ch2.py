@@ -1,4 +1,4 @@
-# lib/config.py
+# lib/config_ch2.py
 import os
 from pathlib import Path
 
@@ -21,18 +21,17 @@ SHUTDOWN_STEP_TIMEOUT_MS = 2500   # 각 종료 스텝의 '확인 대기' 최대 
 SHUTDOWN_STEP_GAP_MS     = 500    # 종료 스텝 간 최소 간격(물리 반영 시간)
 
 # === 시리얼 포트 설정 ===
-IG_PORT = "COM4"
+IG_PORT = "rfc2217://192.168.1.20:4002"
 IG_BAUD = 9600
 
-#MFC_PORT = "COM12"
-MFC_PORT = "COM11"
+MFC_PORT = "rfc2217://192.168.1.50:4006"
 MFC_BAUD = 9600
 
 FADUINO_PORT = "COM10"
 FADUINO_BAUD = 9600
 
 # RFPulse 기본값
-RFPULSE_PORT = "COM6"        # 또는 "/dev/ttyUSB0"
+RFPULSE_PORT = "rfc2217://192.168.1.20:4005"
 RFPULSE_BAUD = 9600
 RFPULSE_ADDR = 1
 RFPULSE_DEFAULT_DELAY_MS = 180
@@ -72,7 +71,7 @@ RGA_CSV_PATH = Path(RGA_CSV_PATH)
 # === IG ===
 IG_WAIT_TIMEOUT = 600              # 목표 압력 대기 총 한도(초). 예: 10분
 
-IG_TIMEOUT_MS = 1500               # 명령 응답 타임아웃(ms). 예: 1.5초
+IG_TIMEOUT_MS = 3000               # 명령 응답 타임아웃(ms). 예: 1.5초
 IG_GAP_MS = 1000                   # 명령 간 인터커맨드 gap(ms). RDI 반복 간격 등
 IG_POLLING_INTERVAL_MS = 10_000    # 주기 폴링 간격(ms). 요구사항 기본 10초
 IG_WATCHDOG_INTERVAL_MS = 2_000    # 연결 상태 감시 주기(ms)
@@ -166,9 +165,9 @@ FLOW_ERROR_TOLERANCE = 0.05  # 5% 오차 허용
 FLOW_ERROR_MAX_COUNT = 3     # 3회 연속 불일치 시 경고
 
 # Qt가 해주던 여유·드레인 구간을 asyncio에서도 보장
-MFC_POST_OPEN_QUIET_MS = 600   # 포트 오픈 직후 quiet(잔여 라인 토해내는 시간)
+MFC_POST_OPEN_QUIET_MS = 800   # 포트 오픈 직후 quiet(잔여 라인 토해내는 시간)
 MFC_ALLOW_NO_REPLY_DRAIN_MS = 80  # no-reply 후 늦은 에코 흡수
-MFC_FIRST_CMD_EXTRA_TIMEOUT_MS = 500  # 오픈 직후 첫 응답 여유
+MFC_FIRST_CMD_EXTRA_TIMEOUT_MS = 2000  # 오픈 직후 첫 응답 여유
 
 # === MFC 타이밍/간격 상수 ===
 # 주기/타이머

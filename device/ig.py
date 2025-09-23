@@ -421,7 +421,12 @@ class AsyncIG:
             try:
                 loop = asyncio.get_running_loop()
                 transport, protocol = await serial_asyncio.create_serial_connection(
-                    loop, lambda: _IGProtocol(self), IG_PORT, baudrate=IG_BAUD
+                    loop,
+                    lambda: _IGProtocol(self),
+                    IG_PORT,                 # ← rfc2217://... URL
+                    baudrate=IG_BAUD,
+                    bytesize=8, parity='N', stopbits=1,
+                    xonxoff=False, rtscts=False, dsrdtr=False
                 )
                 # 성공
                 self._transport = transport
@@ -893,7 +898,7 @@ class AsyncIG:
                 break
             await asyncio.sleep(0.01)
 
-    async def _absorb_late_lines(self, budget_ms: int = 40):
+    async def _absorb_late_lines(self, budget_ms: int = 120):
         """짧게 라인 큐를 비워 이전 명령의 늦은 응답/에코가 다음 명령에 섞이는 것을 방지."""
         deadline = time.monotonic() + max(0, budget_ms) / 1000.0
         drained = 0
