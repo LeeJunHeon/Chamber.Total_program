@@ -495,10 +495,10 @@ class AsyncFaduinoPLC:
                            *, momentary: bool = False, pulse_ms: Optional[int] = None) -> None:
         addr = self._addr(name_or_addr)
         if momentary:
-            self.log("[PLC] pulse %s (addr=%d, %sms)", name_or_addr, addr, str(pulse_ms or self.cfg.pulse_ms))
+            self.log("pulse %s (addr=%d, %sms)", name_or_addr, addr, str(pulse_ms or self.cfg.pulse_ms))
             await self.pulse(addr, ms=pulse_ms)
         else:
-            self.log("[PLC] set %s <- %s (addr=%d)", name_or_addr, on, addr)
+            self.log("set %s <- %s (addr=%d)", name_or_addr, on, addr)
             await self.write_coil(addr, bool(on))
 
     async def press_switch(self, name_or_addr: Any, pulse_ms: Optional[int] = None) -> None:
@@ -507,60 +507,60 @@ class AsyncFaduinoPLC:
     async def read_bit(self, name_or_addr: Any) -> bool:
         addr = self._addr(name_or_addr)
         v = await self.read_coil(addr)
-        self.log("[PLC] read %s (addr=%d) -> %s", name_or_addr, addr, v)
+        self.log("read %s (addr=%d) -> %s", name_or_addr, addr, v)
         return v
 
     async def write_reg_name(self, name_or_addr: Any, value: int) -> None:
         addr = self._addr(name_or_addr)
         await self.write_reg(addr, int(value))
-        self.log("[PLC] write reg %s (addr=%d) <- %d", name_or_addr, addr, value)
+        self.log("write reg %s (addr=%d) <- %d", name_or_addr, addr, value)
 
     async def read_reg_name(self, name_or_addr: Any) -> int:
         addr = self._addr(name_or_addr)
         v = await self.read_reg(addr)
-        self.log("[PLC] read reg %s (addr=%d) -> %d", name_or_addr, addr, v)
+        self.log("read reg %s (addr=%d) -> %d", name_or_addr, addr, v)
         return v
 
     # ---------- Faduino 스타일 고수준 ----------
     async def door(self, chamber: int, *, open: bool, momentary: bool = False) -> None:
         name = f"DOOR_{chamber}_{'OPEN' if open else 'CLOSE'}_SW"
         await self.write_switch(name, True, momentary=momentary)
-        self.log("[Faduino→PLC] Door%d %s", chamber, "OPEN" if open else "CLOSE")
+        self.log("Door%d %s", chamber, "OPEN" if open else "CLOSE")
 
     async def gate_valve(self, chamber: int, *, open: bool, momentary: bool = False) -> None:
         name = f"G_V_{chamber}_{'OPEN' if open else 'CLOSE'}_SW"
         await self.write_switch(name, True, momentary=momentary)
-        self.log("[Faduino→PLC] GV%d %s", chamber, "OPEN" if open else "CLOSE")
+        self.log("GV%d %s", chamber, "OPEN" if open else "CLOSE")
 
     async def main_shutter(self, chamber: int, *, open: bool, momentary: bool = False) -> None:
         name = f"MAIN_SHUTTER_{chamber}_SW"
         await self.write_switch(name, bool(open), momentary=momentary)
-        self.log("[Faduino→PLC] MainShutter%d %s", chamber, "OPEN(ON)" if open else "CLOSE(OFF)")
+        self.log("MainShutter%d %s", chamber, "OPEN(ON)" if open else "CLOSE(OFF)")
 
     async def vent(self, chamber: int, *, on: bool, momentary: bool = False) -> None:
         name = f"VENT_{chamber}_SW"
         await self.write_switch(name, bool(on), momentary=momentary)
-        self.log("[Faduino→PLC] Vent%d %s", chamber, "ON" if on else "OFF")
+        self.log("Vent%d %s", chamber, "ON" if on else "OFF")
 
     async def turbo(self, chamber: int, *, on: bool, momentary: bool = False) -> None:
         name = f"TURBO_{chamber}_SW"
         await self.write_switch(name, bool(on), momentary=momentary)
-        self.log("[Faduino→PLC] Turbo%d %s", chamber, "ON" if on else "OFF")
+        self.log("Turbo%d %s", chamber, "ON" if on else "OFF")
 
     async def lift_pin(self, *, up: bool, momentary: bool = False) -> None:
         await self.write_switch("L_PIN_UP_SW" if up else "L_PIN_DOWN_SW", True, momentary=momentary)
-        self.log("[Faduino→PLC] LiftPin %s", "UP" if up else "DOWN")
+        self.log("LiftPin %s", "UP" if up else "DOWN")
 
     async def lift_pin_lamp(self, *, up: bool) -> bool:
         return await self.read_bit("L_PIN_UP_LAMP" if up else "L_PIN_DOWN_LAMP")
 
     async def lr_valve(self, *, on: bool, momentary: bool = False) -> None:
         await self.write_switch("L_R_V_SW", bool(on), momentary=momentary)
-        self.log("[Faduino→PLC] L_R_V %s", "ON" if on else "OFF")
+        self.log("L_R_V %s", "ON" if on else "OFF")
 
     async def rf_select(self, *, rf_mode: bool, momentary: bool = False) -> None:
         await self.write_switch("SW_RF_SELECT", bool(rf_mode), momentary=momentary)
-        self.log("[Faduino→PLC] RF_SELECT <- %s", rf_mode)
+        self.log("RF_SELECT <- %s", rf_mode)
 
     async def gas(self, chamber: int, gas: str, *, on: bool, momentary: bool = False) -> None:
         g = (gas or "").strip().upper()
@@ -574,7 +574,7 @@ class AsyncFaduinoPLC:
         else:
             key = f"{g}_{chamber}_GAS_SW"
         await self.write_switch(key, bool(on), momentary=momentary)
-        self.log("[Faduino→PLC] Gas %s@Ch%d %s", g, chamber, "ON" if on else "OFF")
+        self.log("Gas %s@Ch%d %s", g, chamber, "ON" if on else "OFF")
 
     async def buzzer_stop(self, *, momentary: bool = False) -> None:
         await self.write_switch("BUZZER_STOP_SW", True, momentary=momentary)
@@ -648,7 +648,7 @@ class AsyncFaduinoPLC:
         key = set_key or f"{family}_SET_{idx}"
         if key not in PLC_COIL_MAP:
             raise KeyError(f"PLC_COIL_MAP에 '{key}' 없음 (family={family}, idx={idx})")
-        self.log("[PLC] POWER SET (%s)[%d] <- %s", family, idx, on)
+        self.log("POWER SET (%s)[%d] <- %s", family, idx, on)
         await self.write_switch(key, bool(on), momentary=False)
 
     async def power_write(self, power_w: float, *, family: str = "DCV",
@@ -673,7 +673,7 @@ class AsyncFaduinoPLC:
         if write_key not in PLC_REG_MAP:
             raise KeyError(f"PLC_REG_MAP에 '{write_key}' 없음 (family={family})")
         await self.write_reg_name(write_key, code)
-        self.log("[PLC] POWER WRITE (%s) %s <- W=%.3f (DAC=%d)", family, write_key, power_w, code)
+        self.log("POWER WRITE (%s) %s <- W=%.3f (DAC=%d)", family, write_key, power_w, code)
         return code
 
     async def power_apply(self, power_w: float, *, family: str = "DCV",
@@ -716,7 +716,7 @@ class AsyncFaduinoPLC:
         V = float(v_raw) * (self.cfg.dc_v_scale if v_scale is None else float(v_scale))
         I = float(i_raw) * (self.cfg.dc_i_scale if i_scale is None else float(i_scale))
         P = V * I
-        self.log("[PLC] POWER READ (%s) V=%.3f, I=%.3f, P=%.3f (keys=%s/%s)", family, V, I, P, v_key, i_key)
+        self.log("POWER READ (%s) V=%.3f, I=%.3f, P=%.3f (keys=%s/%s)", family, V, I, P, v_key, i_key)
         return P, V, I
 
     # ---------- DI용 논리명 셋(set) ----------

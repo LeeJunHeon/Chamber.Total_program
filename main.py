@@ -411,6 +411,11 @@ class MainWindow(QWidget):
         # ✅ Start 전 로그를 임시로 쌓아둘 버퍼(최근 1000줄)
         self._prestart_buf: Deque[str] = deque(maxlen=1000)
 
+        # --- single-writer logger state ---
+        self._log_fp = None  # type: ignore[var-annotated]
+        self._log_q: asyncio.Queue[str] = asyncio.Queue(maxsize=4096)
+        self._log_writer_task: asyncio.Task | None = None
+
         # 선택적으로 쓰는 내부 상태 캐시들 초기화
         self._last_polling_targets: TargetsMap | None = None
         self._last_state_text: str | None = None
@@ -560,19 +565,10 @@ class MainWindow(QWidget):
                 elif kind == "status":
                     self._on_process_status_changed(bool(payload.get("running", False)))
                 elif kind == "started":
-                    # 세션 파일이 없을 때만 생성. 이미 있으면 그대로 사용.
+                    # 세션 파일이 없으면 여기서 준비(싱글 라이터 시작 포함)
                     if not getattr(self, "_log_file_path", None):
-                        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        self._log_file_path = self._log_dir / f"{ts}.txt"
-                        if self._prestart_buf:
-                            buf_copy = list(self._prestart_buf)
-                            self._prestart_buf.clear()
-                            try:
-                                loop = asyncio.get_running_loop()
-                            except RuntimeError:
-                                loop = self._loop
-                            self._spawn_detached(self._dump_prestart_buf_async(self._log_file_path, buf_copy))
-
+                        self._prepare_log_file(payload.get("params", {}))
+                        
                     # DataLogger/그래프/알림 등 나머지 로직은 그대로
                     try:
                         self.data_logger.start_new_log_session(payload.get("params", {}))
@@ -1453,12 +1449,18 @@ class MainWindow(QWidget):
             self.append_log("DBG", "STOP WD: gather returned")
 
         try:
-            if getattr(self, "tsp_ctrl", None) and hasattr(self.tsp_ctrl, "aclose"):
+            if getattr(self, "tsp_ctrl", None) and hasattr(self, "aclose"):
                 await self.tsp_ctrl.aclose()
                 self.append_log("TSP", "포트 닫힘")
         except Exception:
             pass
-        
+
+        # 로그 라이터 정리
+        try:
+            await self._shutdown_log_writer()
+        except Exception:
+            pass
+
         # 2) 다음 Start에서만 다시 올리도록 플래그 리셋
         self._bg_started = False
 
@@ -1482,18 +1484,8 @@ class MainWindow(QWidget):
                 pass
             return
 
-        # 3) 파일 쓰기는 절대 동기로 하지 말 것 → 전용 스레드로 오프로딩
-        self._spawn_detached(self._write_log_line_async(self._log_file_path, line_file))
-
-    async def _write_log_line_async(self, path: Path, text: str) -> None:
-        await asyncio.to_thread(self._write_log_line_sync, path, text)
-
-    def _write_log_line_sync(self, path: Path, text: str) -> None:
-        try:
-            with open(path, "a", encoding="utf-8") as f:
-                f.write(text)
-        except Exception as e:
-            self._soon(self.ui.ch2_logMessage_edit.appendPlainText, f"[Logger] 파일 기록 실패: {e}")
+        # 싱글 라이터 큐에 넣기(스레드 세이프: _soon으로 루프 스레드에서 put_nowait)
+        self._soon(self._log_enqueue_nowait, line_file)
 
     def _append_log_to_ui(self, line: str) -> None:
         self.ui.ch2_logMessage_edit.moveCursor(QTextCursor.MoveOperation.End)
@@ -1504,29 +1496,24 @@ class MainWindow(QWidget):
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._log_file_path = self._log_dir / f"{ts}.txt"
 
-        # Start 이전 버퍼는 전용 스레드에서 한 번에 기록
-        if self._prestart_buf:
-            buf_copy = list(self._prestart_buf)
-            self._prestart_buf.clear()
-            try:
-                loop = asyncio.get_running_loop()
-            except RuntimeError:
-                loop = self._loop
-            self._spawn_detached(self._dump_prestart_buf_async(self._log_file_path, buf_copy))
+        # 1) 파일을 1회만 열어 핸들을 유지
+        if self._log_fp is None:
+            self._log_fp = open(self._log_file_path, "a", encoding="utf-8", newline="")
 
+        # 2) 싱글 라이터 태스크 시작
+        if not self._log_writer_task or self._log_writer_task.done():
+            self._log_writer_task = asyncio.create_task(self._log_writer_loop(), name="LogWriter")
+
+        # 3) Start 이전 버퍼를 큐로 밀어넣음(라인 단위 직렬 기록)
+        if self._prestart_buf:
+            for line in list(self._prestart_buf):
+                self._soon(self._log_enqueue_nowait, line)
+            self._prestart_buf.clear()
+
+        # 4) 안내 라인들은 append_log로(이미 싱글 라이터가 켜졌으므로 안전)
         self.append_log("Logger", f"새 로그 파일 시작: {self._log_file_path}")
         note = str(params.get("process_note", "") or params.get("Process_name", "") or "Run")
         self.append_log("MAIN", f"=== '{note}' 공정 준비 (장비 연결부터 기록) ===")
-
-    async def _dump_prestart_buf_async(self, path: Path, lines: list[str]) -> None:
-        def _write_many():
-            with open(path, "a", encoding="utf-8") as f:
-                f.writelines(lines)
-        try:
-            await asyncio.to_thread(_write_many)
-        except Exception:
-            self._soon(self.ui.ch2_logMessage_edit.appendPlainText, "[Logger] 버퍼 덤프 실패")
-
 
     # ------------------------------------------------------------------
     # 폴링/상태
@@ -1625,6 +1612,10 @@ class MainWindow(QWidget):
         self.process_queue = []
         self.current_process_index = -1
         self._reset_ui_after_process()
+        try:
+            self._spawn_detached(self._shutdown_log_writer())
+        except Exception:
+            pass
         # 다음 실행부터는 새 파일로 시작
         self._log_file_path = None
         # ✅ Start 전 로그 버퍼도 초기화(세션 간 혼입 방지)
@@ -1751,6 +1742,12 @@ class MainWindow(QWidget):
 
 
         await asyncio.sleep(0.3)
+
+        # 로그 라이터 정리
+        try:
+            await self._shutdown_log_writer()
+        except Exception:
+            pass
 
         # 3) 앱 종료
         QCoreApplication.quit()
@@ -2178,94 +2175,68 @@ class MainWindow(QWidget):
         except Exception as e:
             self.append_log(name, f"starter wrap fail: {e!r}")
 
-    # =============== 스타터 안전 래퍼 유틸 2개 (응답없음 방지) ======================
+    def _log_enqueue_nowait(self, line: str) -> None:
+        """이 함수는 이벤트 루프 스레드에서만 호출된다(_soon으로 보장)."""
+        try:
+            self._log_q.put_nowait(line)
+        except asyncio.QueueFull:
+            try:
+                _ = self._log_q.get_nowait()
+            except Exception:
+                pass
+            with contextlib.suppress(Exception):
+                self._log_q.put_nowait(line)
 
-    # ===== Task 누수 추적기 ===================================================
-    # def _install_task_tracker(self) -> None:
-    #     """
-    #     self._loop.create_task만 후킹해서 모든 Task를 추적한다.
-    #     - weakref로 self를 잡아 실제 누수 방지
-    #     - Python 3.10/3.11 호환 (context 인자 존재 시에만 전달)
-    #     """
-    #     if getattr(asyncio, "_gpt_task_tracker_installed", False):
-    #         return
-    #     asyncio._gpt_task_tracker_installed = True
+    async def _log_writer_loop(self):
+        """로그 단일 라이터: 큐→파일 순차 기록."""
+        try:
+            while True:
+                line = await self._log_q.get()
+                if self._log_fp is None:
+                    # 우연히 닫혔으면 재오픈
+                    if self._log_file_path:
+                        try:
+                            self._log_fp = open(self._log_file_path, "a", encoding="utf-8", newline="")
+                        except Exception:
+                            await asyncio.sleep(0.2)
+                            # 재시도 기회 제공
+                            self._soon(self._log_enqueue_nowait, line)
+                            continue
+                    else:
+                        continue
+                try:
+                    self._log_fp.write(line)
+                    self._log_fp.flush()
+                except Exception:
+                    # NAS 일시 장애 등
+                    await asyncio.sleep(0.2)
+                    # 실패한 라인을 다시 큐에(필요시 드롭 정책으로 바꿔도 됨)
+                    self._soon(self._log_enqueue_nowait, line)
+        except asyncio.CancelledError:
+            pass
+        finally:
+            if self._log_fp:
+                try:
+                    self._log_fp.flush()
+                    self._log_fp.close()
+                except Exception:
+                    pass
+                self._log_fp = None
 
-    #     import weakref, inspect, weakref as _weakref
-    #     wself = weakref.ref(self)
-
-    #     # 레지스트리: 약한 키로 Task를 보관 (GC 허용)
-    #     try:
-    #         from weakref import WeakKeyDictionary
-    #     except Exception:
-    #         WeakKeyDictionary = dict  # fallback
-    #     self._task_registry = WeakKeyDictionary()  # task -> info
-    #     self._task_counter  = {}                   # (name,file,line) -> count
-    #     self._task_highwater = 0
-    #     self._task_last_seen = 0
-
-    #     def _coro_origin(coro):
-    #         try:
-    #             code = coro.cr_code
-    #             return (code.co_name, code.co_filename, code.co_firstlineno)
-    #         except Exception:
-    #             return (repr(coro), "<unknown>", 0)
-
-    #     # 원본을 인스턴스 속성에 저장해 두면 uninstall도 가능
-    #     if not hasattr(self._loop, "_orig_create_task"):
-    #         self._loop._orig_create_task = self._loop.create_task  # type: ignore[attr-defined]
-
-    #     def _call_orig_compat(orig, coro, *, name=None, context=None):
-    #         # 3.11+: (coro, *, name=None, context=None)
-    #         # 3.10-: (coro, *, name=None) 혹은 (coro)
-    #         try:
-    #             return orig(coro, name=name, context=context)
-    #         except TypeError:
-    #             try:
-    #                 return orig(coro, name=name)
-    #             except TypeError:
-    #                 return orig(coro)
-
-    #     def _track(task, coro_key):
-    #         inst = wself()
-    #         if not inst:
-    #             return task  # MainWindow가 이미 해제된 경우 조용히 패스
-    #         info = {
-    #             "created": time.perf_counter(),
-    #             "where":   coro_key,
-    #             "name":    (task.get_name() if hasattr(task, "get_name") else None),
-    #         }
-    #         inst._task_registry[task] = info
-    #         inst._task_counter[coro_key] = inst._task_counter.get(coro_key, 0) + 1
-
-    #         def _on_done(t: asyncio.Task):
-    #             try:
-    #                 inst2 = wself()
-    #                 if inst2:
-    #                     inst2._task_registry.pop(t, None)
-    #             except Exception:
-    #                 pass
-    #         try:
-    #             task.add_done_callback(_on_done)
-    #         except Exception:
-    #             pass
-    #         return task
-
-    #     # loop.create_task 후킹 (asyncio.create_task는 건드리지 않는다!)
-    #     orig_loop_create_task = self._loop._orig_create_task  # bound method
-
-    #     def _loop_create_task_wrapper(coro, *, name=None, context=None):
-    #         coro_key = _coro_origin(coro)
-    #         t = _call_orig_compat(orig_loop_create_task, coro, name=name, context=context)
-    #         return _track(t, coro_key)
-
-    #     try:
-    #         self._loop.create_task = _loop_create_task_wrapper  # type: ignore[assignment]
-    #     except Exception:
-    #         pass
-
-    #     self.append_log("TaskLeak", "task tracker installed (loop.create_task hooked)")
-    # ===================================================================
+    async def _shutdown_log_writer(self):
+        """종료 시 라이터 태스크/파일 정리."""
+        if self._log_writer_task:
+            self._log_writer_task.cancel()
+            with contextlib.suppress(Exception):
+                await self._log_writer_task
+            self._log_writer_task = None
+        if self._log_fp:
+            try:
+                self._log_fp.flush()
+                self._log_fp.close()
+            except Exception:
+                pass
+            self._log_fp = None
 
 
 if __name__ == "__main__":
