@@ -426,6 +426,12 @@ class MainWindow(QWidget):
         self._install_exception_hooks()
 
         # =============== debug ==============
+        # 🔍 Task 추적기 설치(전역 create_task 후킹) + 누수 워치독 시작
+        self._install_task_tracker()
+        self._ensure_task_alive("WD.TaskLeak", self._task_leak_watchdog)
+        # =============== debug ==============
+
+        # =============== debug ==============
         # __init__ 끝부분, self._install_exception_hooks() 다음쯤
         from PySide6.QtCore import qInstallMessageHandler, QtMsgType
         def _qt_msg_handler(mode, context, message):
@@ -2159,6 +2165,140 @@ class MainWindow(QWidget):
         except Exception as e:
             self.append_log(name, f"starter wrap fail: {e!r}")
     # =============== 스타터 안전 래퍼 유틸 2개 (응답없음 방지) ======================
+
+    # ===== Task 누수 추적기 ===================================================
+    def _install_task_tracker(self) -> None:
+        """
+        asyncio.create_task / loop.create_task를 한 번만 후킹해서
+        모든 Task의 생성지(코루틴 이름/파일/줄)와 생성시각을 기록한다.
+        """
+        if getattr(asyncio, "_gpt_task_tracker_installed", False):
+            return
+        asyncio._gpt_task_tracker_installed = True
+
+        import weakref, types
+
+        self._task_registry = weakref.WeakKeyDictionary()   # task -> info dict
+        self._task_counter  = {}   # (coro_name, file, line) -> count
+        self._task_highwater = 0
+        self._task_last_seen = 0
+
+        def _coro_origin(coro):
+            # 코루틴 객체에서 코드/파일/줄을 직접 가져오면 호출자 스택 비용이 거의 없음
+            try:
+                code = coro.cr_code
+                fname = code.co_filename
+                line  = code.co_firstlineno
+                name  = code.co_name
+                return (name, fname, line)
+            except Exception:
+                return (repr(coro), "<unknown>", 0)
+
+        # --- 원본 저장
+        asyncio._orig_create_task = getattr(asyncio, "create_task")
+        _orig_loop_create_task = self._loop.create_task
+
+        # --- 공통 래퍼
+        def _track(task, coro_name_file_line):
+            info = {
+                "created": time.perf_counter(),
+                "where":   coro_name_file_line,
+                "name":    task.get_name() if hasattr(task, "get_name") else None,
+            }
+            self._task_registry[task] = info
+            self._task_counter[coro_name_file_line] = self._task_counter.get(coro_name_file_line, 0) + 1
+
+            def _on_done(t: asyncio.Task):
+                # 종료와 함께 레지스트리에서 제거
+                try:
+                    self._task_registry.pop(t, None)
+                except Exception:
+                    pass
+            try:
+                task.add_done_callback(_on_done)
+            except Exception:
+                pass
+            return task
+
+        # --- asyncio.create_task 후킹
+        def _create_task_wrapper(coro, *, name=None, context=None):
+            coro_key = _coro_origin(coro)
+            t = asyncio._orig_create_task(coro, name=name, context=context)
+            return _track(t, coro_key)
+
+        asyncio.create_task = _create_task_wrapper  # type: ignore
+
+        # --- loop.create_task 후킹(qasync / 타 라이브러리 보호)
+        def _loop_create_task_wrapper(coro, name=None, context=None):
+            coro_key = _coro_origin(coro)
+            t = _orig_loop_create_task(coro, name=name, context=context)
+            return _track(t, coro_key)
+
+        try:
+            self._loop.create_task = _loop_create_task_wrapper  # type: ignore
+        except Exception:
+            pass
+
+        self.append_log("TaskLeak", "task tracker installed (create_task hooked)")
+
+    async def _task_leak_watchdog(self, period: float = 2.0, warn_when: int = 150):
+        """
+        2초마다 살아있는 Task 수와 Top 생성지 통계를 로그로 출력.
+        급증/누수로 보이면 샘플 스택도 함께 덤프.
+        """
+        import itertools
+        while True:
+            await asyncio.sleep(period)
+            live = [t for t in list(self._task_registry.keys()) if not t.done()]
+            n_live = len(live)
+            self._task_highwater = max(self._task_highwater, n_live)
+            new_since = n_live - self._task_last_seen
+            self._task_last_seen = n_live
+
+            if n_live >= warn_when or new_since > 30:
+                # Top 5 생성지
+                counts = {}
+                for info in self._task_registry.values():
+                    key = info["where"]
+                    counts[key] = counts.get(key, 0) + 1
+                top = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:5]
+                lines = [f"[TaskLeak] live={n_live}, new_since_last={new_since}, bg_tasks={len([t for t in getattr(self, '_bg_tasks', []) if t and not t.done()])}"]
+                for (name, file, line), cnt in top:
+                    short = file.split("/")[-1].split("\\")[-1]
+                    lines.append(f"  {cnt:4d}  {name} ({short}:{line})")
+                self.append_log("TaskLeak", "\n".join(lines))
+
+                # 대표 1개 샘플의 생성 위치와 '나이'도 찍어봄
+                try:
+                    top_key = top[0][0]
+                    sample = next(t for t, info in self._task_registry.items() if (not t.done()) and info["where"] == top_key)
+                    age = time.perf_counter() - self._task_registry[sample]["created"]
+                    name, file, line = top_key
+                    short = file.split("/")[-1].split("\\")[-1]
+                    self.append_log("TaskLeak", f"  sample from top: {name} @ {short}:{line}, age={age:.1f}s  name={sample.get_name() if hasattr(sample,'get_name') else ''}")
+                except Exception:
+                    pass
+
+    def _dump_task_stats(self) -> None:
+        """
+        수동으로 호출하면 즉시 현재 Task 통계를 한 번 로그로 남긴다.
+        (필요하면 임시 버튼/단축키에 연결해도 됨)
+        """
+        counts = {}
+        for info in getattr(self, "_task_registry", {}).values():
+            key = info["where"]
+            counts[key] = counts.get(key, 0) + 1
+        top = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:10]
+        if not top:
+            self.append_log("TaskLeak", "no live tasks")
+            return
+        lines = ["[TaskLeak] snapshot"]
+        for (name, file, line), cnt in top:
+            short = file.split("/")[-1].split("\\")[-1]
+            lines.append(f"  {cnt:4d}  {name} ({short}:{line})")
+        self.append_log("TaskLeak", "\n".join(lines))
+    # ===================================================================
+
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)

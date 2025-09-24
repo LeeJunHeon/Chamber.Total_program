@@ -1,42 +1,28 @@
 # -*- coding: utf-8 -*-
 """
-ig.py — asyncio 기반 IG(이온/진공 게이지) 컨트롤러
+ig.py — asyncio 기반 IG(이온/진공 게이지) 컨트롤러 (MOXA NPort TCP Server 직결)
 
-의존성: pyserial-asyncio
-    pip install pyserial-asyncio
+의존성: 표준 라이브러리만 사용 (pyserial 불필요)
 
-설계 요점(기존 PyQt 버전과 동등 기능):
-  - serial_asyncio + asyncio.Protocol
-  - 단일 명령 큐(타임아웃/재시도/인터커맨드 gap)로 송수신 직렬화
-  - 연결 워치독(지수 백오프) - 중간 단선/포트 오류 복구
-  - 시퀀스: "SIG 1(IG ON) → 첫 읽기 지연 → RDI 1회 → 이후 폴링"
-  - 폴링 중 'IG OFF' 응답 시 자동 재점등(백오프 2s/5s/10s)
-  - base pressure 도달/실패 시 SIG 0(IG OFF) 후 정리
-
-UI/Qt 의존성 없음. 상위는 `await`/`async for`로만 사용.
+설계 요점:
+  - asyncio Streams + TCP 라인 리더( CR/LF 프레이밍 )
+  - 단일 명령 큐(타임아웃/재시도/인터커맨드 gap)
+  - 워치독(지수 백오프) 자동 재연결
+  - 시퀀스: SIG 1 → 첫 RDI 지연 → 1회 읽기 → 폴링
+  - 'IG OFF' 응답 시 자동 재점등(백오프), Base 도달 시 SIG 0
 """
+
 
 from __future__ import annotations
 from dataclasses import dataclass
 from collections import deque
 from typing import Optional, Callable, Deque, AsyncGenerator, Literal
-import asyncio
-import time
-
-try:
-    import serial_asyncio
-except Exception as e:
-    raise RuntimeError(
-        "pyserial-asyncio가 필요합니다. `pip install pyserial-asyncio` 후 다시 시도하세요."
-    ) from e
+import asyncio, time, contextlib, socket
 
 from lib.config_ch2 import (
-    IG_PORT, IG_BAUD, IG_WAIT_TIMEOUT,
-    IG_TIMEOUT_MS, IG_GAP_MS,
-    IG_POLLING_INTERVAL_MS, IG_WATCHDOG_INTERVAL_MS,
-    IG_RECONNECT_BACKOFF_START_MS, IG_RECONNECT_BACKOFF_MAX_MS,
-    IG_REIGNITE_MAX_ATTEMPTS, IG_REIGNITE_BACKOFF_MS,
-    DEBUG_PRINT,
+    IG_TCP_HOST, IG_TCP_PORT, IG_TX_EOL, IG_SKIP_ECHO, IG_TIMEOUT_MS, IG_GAP_MS, IG_CONNECT_TIMEOUT_S,
+    IG_POLLING_INTERVAL_MS, IG_WATCHDOG_INTERVAL_MS, IG_RECONNECT_BACKOFF_START_MS, 
+    IG_RECONNECT_BACKOFF_MAX_MS, IG_REIGNITE_MAX_ATTEMPTS, IG_REIGNITE_BACKOFF_MS, DEBUG_PRINT, IG_WAIT_TIMEOUT
 )
 
 # =========================
@@ -64,69 +50,6 @@ class Command:
     allow_no_reply: bool
 
 # =========================
-#  라인 프레이밍 Protocol
-# =========================
-class _IGProtocol(asyncio.Protocol):
-    """CR/LF로 라인 프레이밍해서 IG에 전달."""
-    def __init__(self, owner: "AsyncIG"):
-        self.owner = owner
-        self.transport: Optional[asyncio.Transport] = None
-        self._rx = bytearray()
-        self._RX_MAX = 16 * 1024
-        self._LINE_MAX = 512
-
-    # --- asyncio.Protocol 콜백 ---
-    def connection_made(self, transport: asyncio.BaseTransport):
-        self.transport = transport  # type: ignore
-        self.owner._on_connection_made(self.transport)
-
-    def data_received(self, data: bytes):
-        if not data:
-            return
-        self._rx.extend(data)
-        # 과다 보호
-        if len(self._rx) > self._RX_MAX:
-            del self._rx[:-self._RX_MAX]
-            self.owner._dbg("IG", f"수신 버퍼 과다(RX>{self._RX_MAX}); 최근 {self._RX_MAX}B만 보존.")
-
-        # 라인 파싱: 한 콜백에서 가능한 모든 라인을 owner로 전달
-        while True:
-            i_cr = self._rx.find(b'\r')
-            i_lf = self._rx.find(b'\n')
-            if i_cr == -1 and i_lf == -1:
-                break
-            idx = i_cr if i_lf == -1 else (i_lf if i_cr == -1 else min(i_cr, i_lf))
-            line_bytes = self._rx[:idx]
-
-            # CRLF/LFCR 동시 처리
-            drop = idx + 1
-            if drop < len(self._rx):
-                ch = self._rx[idx]
-                nxt = self._rx[idx + 1]
-                if (ch == 13 and nxt == 10) or (ch == 10 and nxt == 13):
-                    drop += 1
-            del self._rx[:drop]
-
-            if len(line_bytes) > self._LINE_MAX:
-                self.owner._dbg("IG", f"Rx line too long (+{len(line_bytes)-self._LINE_MAX}B), truncating")
-                line_bytes = line_bytes[:self._LINE_MAX]
-
-            try:
-                line = line_bytes.decode("ascii", errors="ignore").strip()
-            except Exception:
-                line = ""
-
-            if line:
-                self.owner._on_line_from_serial(line)
-
-        # 선행 CR/LF 정리 (남은 경우만)
-        while self._rx[:1] in (b'\r', b'\n'):
-            del self._rx[0:1]
-
-    def connection_lost(self, exc: Optional[Exception]):
-        self.owner._on_connection_lost(exc)
-
-# =========================
 #  IG asyncio 컨트롤러
 # =========================
 class AsyncIG:
@@ -134,9 +57,14 @@ class AsyncIG:
         # 설정
         self.debug_print = DEBUG_PRINT
         # 연결/프로토콜
-        self._transport: Optional[asyncio.Transport] = None
-        self._protocol: Optional[_IGProtocol] = None
-        self._connected: bool = False
+        self._reader: Optional[asyncio.StreamReader] = None
+        self._writer: Optional[asyncio.StreamWriter] = None
+        self._reader_task: Optional[asyncio.Task] = None
+        self._tx_eol: bytes = IG_TX_EOL
+        self._tx_eol_str: str = IG_TX_EOL.decode("ascii", "ignore")  # ← 1회만 디코드
+        self._skip_echo: bool = bool(IG_SKIP_ECHO)
+
+        self._connected: bool = False         # ← 누락되어 있던 상태 플래그 추가
         self._ever_connected: bool = False
 
         # 명령 큐/인플라이트
@@ -154,9 +82,6 @@ class AsyncIG:
         self._watchdog_task: Optional[asyncio.Task] = None
         self._cmd_worker_task: Optional[asyncio.Task] = None
         self._polling_task: Optional[asyncio.Task] = None
-
-        # 재연결 백오프
-        self._reconnect_backoff_ms = IG_RECONNECT_BACKOFF_START_MS
 
         # 베이스 압력 대기
         self._target_pressure = 0.0
@@ -239,15 +164,8 @@ class AsyncIG:
         # 5) 큐/라인 비우기
         self._purge_pending("shutdown")
 
-        # 6) 포트 종료
-        if self._transport:
-            try:
-                self._transport.close()
-            except Exception:
-                pass
-        self._transport = None
-        self._protocol = None
-        self._connected = False
+        # 6) TCP 종료
+        self._on_tcp_disconnected()
 
         await self._emit_status("IG 연결 종료됨")
 
@@ -263,13 +181,9 @@ class AsyncIG:
         allow_no_reply: bool = False,
     ):
         """명령을 큐에 추가(단일 직렬 처리)."""
-        if not cmd_str.endswith("\r"):
-            cmd_str += "\r"
-        self._cmd_q.append(
-            Command(
-                cmd_str, on_reply, timeout_ms, gap_ms, tag, retries_left, allow_no_reply
-            )
-        )
+        if not cmd_str.endswith(self._tx_eol_str):
+            cmd_str += self._tx_eol_str
+        self._cmd_q.append(Command(cmd_str, on_reply, timeout_ms, gap_ms, tag, retries_left, allow_no_reply))
 
     async def wait_for_base_pressure(self, base_pressure: float, interval_ms: int = IG_POLLING_INTERVAL_MS) -> bool:
         """
@@ -314,11 +228,8 @@ class AsyncIG:
 
 
         if line is None:
-            await self._emit_status("[FIRST READ] RDI 타임아웃 → 포트 재동기화(재연결 트리거)")
-            if self._transport:
-                try: self._transport.close()
-                except Exception: pass
-            self._connected = False  # 워치독이 재연결
+            await self._emit_status("[FIRST READ] RDI 타임아웃 → 재연결 트리거")
+            self._on_tcp_disconnected()
             # 계속 진행(아래 handle은 None이면 조용히 리턴)
         if not self._waiting_active:
             return False
@@ -404,8 +315,7 @@ class AsyncIG:
     # 내부: 연결/워치독
     # ---------------------------
     async def _watchdog_loop(self):
-        """포트가 닫혀 있고 연결 의도가 있으면 지수 백오프로 재연결."""
-        backoff = self._reconnect_backoff_ms
+        backoff = IG_RECONNECT_BACKOFF_START_MS
         while self._want_connected:
             if self._connected:
                 await asyncio.sleep(IG_WATCHDOG_INTERVAL_MS / 1000.0)
@@ -415,75 +325,107 @@ class AsyncIG:
                 await self._emit_status(f"재연결 시도 예약... ({backoff} ms)")
                 await asyncio.sleep(backoff / 1000.0)
 
-            if not self._want_connected or self._connected:
-                continue
+            if not self._want_connected:
+                break
 
             try:
-                loop = asyncio.get_running_loop()
-                transport, protocol = await serial_asyncio.create_serial_connection(
-                    loop,
-                    lambda: _IGProtocol(self),
-                    IG_PORT,                 # ← rfc2217://... URL
-                    baudrate=IG_BAUD,
-                    bytesize=8, parity='N', stopbits=1,
-                    xonxoff=False, rtscts=False, dsrdtr=False
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(IG_TCP_HOST, IG_TCP_PORT),
+                    timeout=max(0.5, float(IG_CONNECT_TIMEOUT_S))  # ← 새 변수 사용(초)
                 )
-                # 성공
-                self._transport = transport
-                self._protocol = protocol  # type: ignore
+                self._reader, self._writer = reader, writer
                 self._connected = True
                 self._ever_connected = True
                 backoff = IG_RECONNECT_BACKOFF_START_MS
-                await self._emit_status(f"{IG_PORT} 연결 성공 (asyncio)")
-                # 포트 열리면 pending 명령 송신은 워커가 처리
+
+                # (선택) TCP Keepalive 활성화
+                try:
+                    sock = writer.get_extra_info("socket")
+                    if sock is not None:
+                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                except Exception:
+                    pass
+
+                # 라인 수신 루프 시작
+                if self._reader_task and not self._reader_task.done():
+                    self._reader_task.cancel()
+                    with contextlib.suppress(Exception):
+                        await self._reader_task
+                self._reader_task = asyncio.create_task(self._tcp_reader_loop(), name="IGTcpReader")
+
+                await self._emit_status(f"{IG_TCP_HOST}:{IG_TCP_PORT} 연결 성공 (TCP)")
             except Exception as e:
-                await self._emit_status(f"{IG_PORT} 연결 실패: {e}")
+                await self._emit_status(f"{IG_TCP_HOST}:{IG_TCP_PORT} 연결 실패: {e}")
                 backoff = min(backoff * 2, IG_RECONNECT_BACKOFF_MAX_MS)
 
-    def _on_connection_made(self, transport: asyncio.Transport):
+    async def _tcp_reader_loop(self):
+        assert self._reader is not None
+        buf = bytearray()
+        RX_MAX = 16 * 1024
+        LINE_MAX = 512
         try:
-            ser = getattr(transport, "serial", None)
-            if ser is not None:
-                try:
-                    ser.reset_input_buffer()
-                except Exception:
-                    pass
-                try:
-                    ser.reset_output_buffer()
-                except Exception:
-                    pass
-                # DTR/RTS가 필요한 장비면 여기서만 켜기 (기본은 비활성 권장)
-                # try:
-                #     ser.dtr = True   # High
-                #     ser.rts = False  # Low
-                # except Exception:
-                #     pass
-        except Exception:
-            pass
-        # 라인 큐 비우기
-        try:
-            while True:
-                self._line_q.get_nowait()
-        except Exception:
-            pass
+            while self._connected and self._reader:
+                chunk = await self._reader.read(128)
+                if not chunk:
+                    break
+                buf.extend(chunk)
+                if len(buf) > RX_MAX:
+                    del buf[:-RX_MAX]
+                    self._dbg("IG", f"수신 버퍼 과다(RX>{RX_MAX}); 최근 {RX_MAX}B만 보존.")
 
-    def _on_connection_lost(self, exc: Optional[Exception]):
+                # CR/LF 라인 파싱
+                while True:
+                    i_cr = buf.find(b"\r")
+                    i_lf = buf.find(b"\n")
+                    if i_cr == -1 and i_lf == -1:
+                        break
+                    idx = i_cr if i_lf == -1 else (i_lf if i_cr == -1 else min(i_cr, i_lf))
+                    line_bytes = buf[:idx]
+                    drop = idx + 1
+                    if drop < len(buf):
+                        ch = buf[idx]
+                        nxt = buf[idx + 1]
+                        if (ch == 13 and nxt == 10) or (ch == 10 and nxt == 13):
+                            drop += 1
+                    del buf[:drop]
+
+                    if len(line_bytes) > LINE_MAX:
+                        self._dbg("IG", f"Rx line too long (+{len(line_bytes)-LINE_MAX}B), truncating")
+                        line_bytes = line_bytes[:LINE_MAX]
+
+                    try:
+                        line = line_bytes.decode("ascii", "ignore").strip()
+                    except Exception:
+                        line = ""
+                    if line:
+                        self._on_line_from_tcp(line)
+
+                while buf[:1] in (b"\r", b"\n"):
+                    del buf[0:1]
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            self._dbg("IG", f"리더 루프 예외: {e!r}")
+        finally:
+            self._on_tcp_disconnected()
+
+    def _on_tcp_disconnected(self):
         self._connected = False
-        if self._transport:
-            try: self._transport.close()
-            except Exception: pass
-        self._transport = None
-        self._protocol = None
-
+        if self._reader_task:
+            self._reader_task.cancel()
+        self._reader_task = None
+        if self._writer:
+            with contextlib.suppress(Exception):
+                self._writer.close()
+        self._reader = None
+        self._writer = None
         # 라인 큐 비우기
-        try:
+        with contextlib.suppress(Exception):
             while True:
                 self._line_q.get_nowait()
-        except Exception:
-            pass
+        self._dbg("IG", "연결 끊김")
 
-        self._dbg("IG", f"연결 끊김: {exc}")
-        # 인플라이트 명령 재시도/취소 정책
+        # 인플라이트 재시도/취소
         if self._inflight is not None:
             cmd = self._inflight
             self._inflight = None
@@ -493,34 +435,28 @@ class AsyncIG:
             else:
                 self._safe_callback(cmd.callback, None)
 
-    def _on_line_from_serial(self, line: str):
-        # 워커가 소비
+    def _on_line_from_tcp(self, line: str):
         try:
             self._line_q.put_nowait(line)
         except asyncio.QueueFull:
-            self._dbg("IG", "라인 큐가 가득 찼습니다. 가장 오래된 라인을 폐기합니다.")
-            try:
+            self._dbg("IG", "라인 큐 포화 → 가장 오래된 라인 폐기")
+            with contextlib.suppress(Exception):
                 _ = self._line_q.get_nowait()
-            except Exception:
-                pass
-            try:
+            with contextlib.suppress(Exception):
                 self._line_q.put_nowait(line)
-            except Exception:
-                pass
 
     # ---------------------------
     # 내부: 명령 워커/송수신
     # ---------------------------
     async def _cmd_worker_loop(self):
-        """단일 직렬 명령 처리 루프."""
+        """단일 명령 처리 루프(TCP Streams)."""
         while True:
             # cancel 지원
             await asyncio.sleep(0)
             if not self._cmd_q:
                 await asyncio.sleep(0.01)
                 continue
-            if not self._connected or not self._transport:
-                # 연결될 때까지 대기
+            if not self._connected or not self._writer:
                 await asyncio.sleep(0.05)
                 continue
 
@@ -533,8 +469,9 @@ class AsyncIG:
                 # 직전 잔류 응답 드레인
                 await self._absorb_late_lines(30)
 
-                payload = cmd.cmd_str.encode("ascii")
-                self._transport.write(payload)
+                payload = cmd.cmd_str.encode("ascii", "ignore")
+                self._writer.write(payload)
+                await self._writer.drain()
             except Exception as e:
                 # 전송 실패 → 재연결 유도
                 self._dbg("IG", f"{cmd.tag} {sent_txt} 전송 오류: {e}")
@@ -544,11 +481,7 @@ class AsyncIG:
                     self._cmd_q.appendleft(cmd)
                 else:
                     self._safe_callback(cmd.callback, None)
-                # 연결 강제 종료 → 워치독 재연결
-                if self._transport:
-                    try: self._transport.close()
-                    except Exception: pass
-                self._connected = False
+                self._on_tcp_disconnected()
                 continue
 
             # 응답 필요 없으면 gap만 지키고 다음
@@ -570,10 +503,8 @@ class AsyncIG:
                     self._dbg("IG", f"{cmd.tag} {sent_txt} 재시도 남은횟수={cmd.retries_left}")
                     self._cmd_q.appendleft(cmd)
                     # 재연결 유도
-                    if self._transport:
-                        try: self._transport.close()
-                        except Exception: pass
-                    self._connected = False
+                    # 6) TCP 종료
+                    self._on_tcp_disconnected()
                 else:
                     self._safe_callback(cmd.callback, None)
                     await asyncio.sleep(cmd.gap_ms / 1000.0)
@@ -586,7 +517,7 @@ class AsyncIG:
             self._inflight = None
             await asyncio.sleep(cmd.gap_ms / 1000.0)
 
-    async def _read_one_line_skip_echo(self, sent_no_cr: str, timeout_s: float) -> str:
+    async def _read_one_line_skip_echo(self,sent_no_cr: str, timeout_s: float) -> str:
         """라인 큐에서 다음 라인을 읽되, 전송 에코와 빈 라인은 스킵."""
         deadline = time.monotonic() + timeout_s
         while True:
@@ -597,7 +528,7 @@ class AsyncIG:
             if not line:
                 continue
             # 공백/대소문자/양끝 제어문자 차이로 인한 오검출 방지
-            if line.strip().upper() == sent_no_cr.strip().upper():
+            if self._skip_echo and line.strip().upper() == sent_no_cr.strip().upper():
                 continue
             return line
 
@@ -735,11 +666,8 @@ class AsyncIG:
             line = await self._send_and_wait_line(cmd, tag=tag, timeout_ms=IG_TIMEOUT_MS, retries=0)
             if (line or "").strip().upper().startswith("OK"):
                 return True
-            # 'OK'가 아니면 포트 닫고 워치독이 재연결 시도
-            if self._transport:
-                try: self._transport.close()
-                except Exception: pass
-            self._connected = False
+            # 'OK'가 아니면 재연결 트리거
+            self._on_tcp_disconnected()
             # 다음 루프에서 워치독이 다시 연결하고 우리는 다시 시도
         return False
 
@@ -765,83 +693,41 @@ class AsyncIG:
                 # 워커 타임아웃 + 약간의 마진(네고 가능)
                 return await asyncio.wait_for(fut, timeout=(timeout_ms / 1000.0) + 0.5)
             except asyncio.TimeoutError:
-                # ⬇️ 대기 중임을 보여주기 위해 상태 로그 추가
                 await self._emit_status(f"{tag} '{cmd}' 응답 타임아웃({timeout_ms}ms)")
                 if attempt < attempts - 1:
-                    if self._transport:
-                        try: self._transport.close()
-                        except Exception: pass
-                    self._connected = False
+                    self._on_tcp_disconnected()
                     await asyncio.sleep(0)
                     continue
                 return None
 
-        
     async def _send_off_best_effort(self, wait_gap_ms: int = 300) -> bool:
-        """
-        IG OFF(SIG 0) 보장:
-        - 연결 O: 큐 우회, 직렬 포트에 직접 write(+flush) 후 짧게 대기
-        - 연결 X: 기존 blocking one-shot 유지
-        """
-        # 1) 연결 O : DIRECT write(+flush)
-        if self._connected and self._transport:
+        # 1) 온라인: 현재 writer 로 바로 송신
+        if self._connected and self._writer:
             try:
-                ser = getattr(self._transport, "serial", None)
-                if ser is not None:
-                    ser.write(b"SIG 0\r")
-                    ser.flush()
-                else:
-                    # 플랫폼에 따라 .serial이 없을 수 있으니 transport로라도 전송
-                    self._transport.write(b"SIG 0\r")
-                await asyncio.sleep(max(0, wait_gap_ms) / 1000.0)
-                #await self._emit_status("IG OFF direct-write 전송 완료")
-                return True
-            except Exception as e:
-                await self._emit_status(f"IG OFF direct-write 실패: {e!r} → fallback enqueue")
-                # 마지막 안전망: 그래도 큐로 한 번은 시도
-                self.enqueue("SIG 0", on_reply=None, timeout_ms=IG_TIMEOUT_MS, gap_ms=150,
-                            tag="[IG OFF] SIG 0 (fallback enqueue)", retries_left=0, allow_no_reply=True)
+                self._writer.write(b"SIG 0" + self._tx_eol)
+                await self._writer.drain()
                 await asyncio.sleep(max(0, wait_gap_ms) / 1000.0)
                 return True
-
-        # 2) 연결 X : 기존 blocking one-shot 그대로 유지 (아래 현행 코드 유지)
-        async def _do_blocking_off():
-            def _blocking_off_once():
-                import serial, time as _t
-                ser = None
-                try:
-                    ser = serial.serial_for_url(
-                        IG_PORT,                       # COMx / /dev/tty* / rfc2217:// 모두 지원
-                        baudrate=IG_BAUD,
-                        bytesize=8, parity='N', stopbits=1,
-                        timeout=0.2, write_timeout=0.5,
-                        xonxoff=False, rtscts=False, dsrdtr=False
-                    )
-                    # 필요 시:
-                    # try:
-                    #     ser.reset_input_buffer()
-                    #     ser.reset_output_buffer()
-                    # except Exception:
-                    #     pass
-                    ser.write(b"SIG 0\r")
-                    ser.flush()
-                    _t.sleep(0.12)
-                finally:
-                    try:
-                        if ser:
-                            ser.close()
-                    except Exception:
-                        pass
-
-            try:
-                await asyncio.to_thread(_blocking_off_once)
-                self._dbg("IG", "OFF delivered via blocking path (one-shot open/write/close)")
-                return True
             except Exception as e:
-                await self._emit_status(f"직접 OFF 전송 실패: {e}")
-                return False
+                await self._emit_status(f"IG OFF 전송 실패(online): {e!r}")
 
-        return await _do_blocking_off()
+        # 2) 오프라인: 임시 TCP one-shot
+        try:
+            _, writer = await asyncio.wait_for(
+                asyncio.open_connection(IG_TCP_HOST, IG_TCP_PORT),
+                timeout=max(0.5, float(IG_CONNECT_TIMEOUT_S))
+            )
+            writer.write(b"SIG 0" + self._tx_eol)
+            await writer.drain()
+            writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+            await asyncio.sleep(max(0, wait_gap_ms) / 1000.0)
+            self._dbg("IG", "OFF delivered via TCP one-shot")
+            return True
+        except Exception as e:
+            await self._emit_status(f"직접 OFF 전송 실패(TCP one-shot): {e!r}")
+            return False
 
     # ---------------------------
     # 내부: 큐/콜백/로깅/이벤트
@@ -944,14 +830,7 @@ class AsyncIG:
         - 'SIG 1'을 보내 'OK' 응답을 확인
         """
         # 워치독/워커 보장
-        try:
-            start_coro = getattr(self, "start", None)
-            if callable(start_coro):
-                task = start_coro()
-                if asyncio.iscoroutine(task):
-                    await task
-        except Exception:
-            pass
+        await self.start()
 
         ok = await self._send_and_expect_ok("SIG 1", tag="[ensure_on]", retries=5)
         if not ok:

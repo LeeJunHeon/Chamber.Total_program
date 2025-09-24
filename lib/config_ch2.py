@@ -35,17 +35,19 @@ RGA_XLSX_SHEET = "Histogram"
 
 
 # === 시리얼 포트 설정 ===
-TSP_PORT = "rfc2217://192.168.1.50:4004"
+TSP_PORT = "192.168.1.50:4004"
 TSP_BAUD = 9600
 
-IG_PORT = "rfc2217://192.168.1.50:4002"
-IG_BAUD = 9600
+IG_TCP_HOST = "192.168.1.50"   # NPort IP
+IG_TCP_PORT = 4002             # NPort Port(예: IG=4002)
+IG_TX_EOL   = b"\r"            # IG 명령 줄끝(EOL)
+IG_SKIP_ECHO = True            # 장비가 에코하면 True
 
-MFC_PORT = "rfc2217://192.168.1.50:4006"
+MFC_PORT = "192.168.1.50:4006"
 MFC_BAUD = 9600
 
 # RFPulse 기본값
-RFPULSE_PORT = "rfc2217://192.168.1.50:4005"
+RFPULSE_PORT = "192.168.1.50:4005"
 RFPULSE_BAUD = 9600
 RFPULSE_ADDR = 1
 RFPULSE_DEFAULT_DELAY_MS = 180
@@ -84,6 +86,9 @@ RGA_CSV_PATH = Path(RGA_CSV_PATH)
 
 # === IG ===
 IG_WAIT_TIMEOUT = 600              # 목표 압력 대기 총 한도(초). 예: 10분
+
+# IG (MOXA TCP Server 연결) 전용 소켓 연결 타임아웃(초)
+IG_CONNECT_TIMEOUT_S = 3.0
 
 IG_TIMEOUT_MS = 3000               # 명령 응답 타임아웃(ms). 예: 1.5초
 IG_GAP_MS = 1000                   # 명령 간 인터커맨드 gap(ms). RDI 반복 간격 등
