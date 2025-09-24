@@ -85,6 +85,7 @@ IG_TCP_PORT = 4002                 # NPort Port(예: IG=4002)
 IG_TX_EOL   = b"\r"                # IG 명령 줄끝(EOL)
 IG_SKIP_ECHO = True                # 장비가 에코하면 True
 IG_WAIT_TIMEOUT = 600              # 목표 압력 대기 총 한도(초). 예: 10분
+
 IG_CONNECT_TIMEOUT_S = 3.0         # IG (MOXA TCP Server 연결) 전용 소켓 연결 타임아웃(초)
 IG_TIMEOUT_MS = 3000               # 명령 응답 타임아웃(ms). 예: 1.5초
 IG_GAP_MS = 1000                   # 명령 간 인터커맨드 gap(ms). RDI 반복 간격 등
@@ -183,7 +184,7 @@ MFC_RECONNECT_BACKOFF_MAX_MS   = 20_000  # 지수 백오프 최대 상한
 
 # === 전역 통일 상수 ===
 MFC_TIMEOUT   = 1000         # 모든 명령 timeout
-MFC_GAP_MS    = 1000         # 모든 인터커맨드 간격(gap)
+MFC_GAP_MS    = 4000         # 모든 인터커맨드 간격(gap)
 MFC_DELAY_MS  = 1000         # 모든 검증/재시도 지연
 MFC_DELAY_MS_VALVE = 5000    # 밸브 이동/재전송 대기(5초)
 

@@ -347,17 +347,12 @@ class AsyncFaduinoPLC:
         now = time.monotonic()
         delta = now - self._last_io_ts
         if delta < self.cfg.inter_cmd_gap_s:
-            await asyncio.sleep(self.cfg.inter_cmd_gap_s - delta)  # ✅ 비동기 슬립
-
-        # 하트비트도 별도 스레드에서 돌린다 (동기 클라이언트이므로)
+            await asyncio.sleep(self.cfg.inter_cmd_gap_s - delta)
         if delta > self.cfg.heartbeat_s and self._client is not None:
             try:
-                await asyncio.to_thread(
-                    self._client.read_coils, 0, 1, **self._uid_kwargs()
-                )  # ✅ thread offload
+                await asyncio.to_thread(self._client.read_coils, address=0, count=1, **self._uid_kwargs())
             except Exception:
                 pass
-
         self._last_io_ts = time.monotonic()
 
     def _connect_sync(self) -> None:
@@ -404,15 +399,15 @@ class AsyncFaduinoPLC:
     async def read_coil(self, addr: int) -> bool:
         async with self._lock:
             await asyncio.to_thread(self._connect_sync)
-            self._throttle_and_heartbeat_sync()
+            await self._throttle_and_heartbeat()
             try:
-                resp = await asyncio.to_thread(self._client.read_coils, addr, 1, **self._uid_kwargs())
+                resp = await asyncio.to_thread(self._client.read_coils, addr, count=1, **self._uid_kwargs())
             except Exception as e:
                 if self._is_reset_err(e):
                     await asyncio.to_thread(self._close_sync)
                     await asyncio.to_thread(self._connect_sync)
-                    self._throttle_and_heartbeat_sync()
-                    resp = await asyncio.to_thread(self._client.read_coils, addr, 1, **self._uid_kwargs())
+                    await self._throttle_and_heartbeat()
+                    resp = await asyncio.to_thread(self._client.read_coils, addr, count=1, **self._uid_kwargs())
                 else:
                     raise
             self._ensure_ok(resp)
@@ -421,14 +416,14 @@ class AsyncFaduinoPLC:
     async def write_coil(self, addr: int, state: bool) -> None:
         async with self._lock:
             await asyncio.to_thread(self._connect_sync)
-            self._throttle_and_heartbeat_sync()
+            await self._throttle_and_heartbeat()
             try:
                 resp = await asyncio.to_thread(self._client.write_coil, addr, bool(state), **self._uid_kwargs())
             except Exception as e:
                 if self._is_reset_err(e):
                     await asyncio.to_thread(self._close_sync)
                     await asyncio.to_thread(self._connect_sync)
-                    self._throttle_and_heartbeat_sync()
+                    await self._throttle_and_heartbeat()
                     resp = await asyncio.to_thread(self._client.write_coil, addr, bool(state), **self._uid_kwargs())
                 else:
                     raise
@@ -437,15 +432,15 @@ class AsyncFaduinoPLC:
     async def read_reg(self, addr: int) -> int:
         async with self._lock:
             await asyncio.to_thread(self._connect_sync)
-            self._throttle_and_heartbeat_sync()
+            await self._throttle_and_heartbeat()
             try:
-                resp = await asyncio.to_thread(self._client.read_holding_registers, addr, 1, **self._uid_kwargs())
+                resp = await asyncio.to_thread(self._client.read_holding_registers, addr, count=1, **self._uid_kwargs())
             except Exception as e:
                 if self._is_reset_err(e):
                     await asyncio.to_thread(self._close_sync)
                     await asyncio.to_thread(self._connect_sync)
-                    self._throttle_and_heartbeat_sync()
-                    resp = await asyncio.to_thread(self._client.read_holding_registers, addr, 1, **self._uid_kwargs())
+                    await self._throttle_and_heartbeat()
+                    resp = await asyncio.to_thread(self._client.read_holding_registers, addr, count=1, **self._uid_kwargs())
                 else:
                     raise
             self._ensure_ok(resp)
@@ -454,14 +449,14 @@ class AsyncFaduinoPLC:
     async def write_reg(self, addr: int, value: int) -> None:
         async with self._lock:
             await asyncio.to_thread(self._connect_sync)
-            self._throttle_and_heartbeat_sync()
+            await self._throttle_and_heartbeat()
             try:
                 resp = await asyncio.to_thread(self._client.write_register, addr, int(value), **self._uid_kwargs())
             except Exception as e:
                 if self._is_reset_err(e):
                     await asyncio.to_thread(self._close_sync)
                     await asyncio.to_thread(self._connect_sync)
-                    self._throttle_and_heartbeat_sync()
+                    await self._throttle_and_heartbeat()
                     resp = await asyncio.to_thread(self._client.write_register, addr, int(value), **self._uid_kwargs())
                 else:
                     raise

@@ -785,12 +785,16 @@ class MainWindow(QWidget):
                 if ch == 2:
                     def _draw_then_finish(x=ev.mass_axis, y=ev.pressures):
                         try:
-                            self.graph_controller.update_rga_plot(x, y)
+                            # ndarray도 list로 안전 변환
+                            x_list = x.tolist() if hasattr(x, "tolist") else x
+                            y_list = y.tolist() if hasattr(y, "tolist") else y
+                            self.graph_controller.update_rga_plot(x_list, y_list)
                         finally:
                             if not self._rga_done_signaled:
                                 self._rga_done_signaled = True
                                 self.process_controller.on_rga_finished()
                     self._soon(_draw_then_finish)
+
                 else:
                     # CH1 데이터는 무시(현재 CH1 미구현)
                     pass
@@ -953,7 +957,7 @@ class MainWindow(QWidget):
                 self._rga_done_signaled = False
                 self._soon(self.graph_controller.clear_rga_plot)
                 self.append_log("DBG", "RGA: scan_histogram_to_csv() call")
-                await self.rga_ch2.scan_histogram_to_csv(RGA_CSV_PATH["ch2"])
+                await self.rga_ch2.scan_histogram_to_csv(RGA_CSV_PATH)
                 self.append_log("DBG", "RGA: scan_histogram_to_csv() returned")
                 # 완료 토큰은 data/finished 쪽에서 처리
             except Exception as e:
@@ -1005,13 +1009,13 @@ class MainWindow(QWidget):
         self._ensure_task_alive("Pump.PC",        self._pump_pc_events)
 
         # (디버그) 펌프 idle 워치독 유지
-        self._ensure_task_alive("WD.Pump.RGA2", lambda: self._pump_idle_watchdog("RGA2"))
-        self._ensure_task_alive("WD.Pump.MFC",  lambda: self._pump_idle_watchdog("MFC"))
-        self._ensure_task_alive("WD.Pump.IG",   lambda: self._pump_idle_watchdog("IG"))
-        self._ensure_task_alive("WD.Pump.OES",  lambda: self._pump_idle_watchdog("OES"))
-        self._ensure_task_alive("WD.Pump.RF",   lambda: self._pump_idle_watchdog("RF"))
-        self._ensure_task_alive("WD.Pump.DC",   lambda: self._pump_idle_watchdog("DC"))
-        self._ensure_task_alive("WD.Pump.RFPulse", lambda: self._pump_idle_watchdog("RFPulse"))
+        # self._ensure_task_alive("WD.Pump.RGA2", lambda: self._pump_idle_watchdog("RGA2"))
+        # self._ensure_task_alive("WD.Pump.MFC",  lambda: self._pump_idle_watchdog("MFC"))
+        # self._ensure_task_alive("WD.Pump.IG",   lambda: self._pump_idle_watchdog("IG"))
+        # self._ensure_task_alive("WD.Pump.OES",  lambda: self._pump_idle_watchdog("OES"))
+        # self._ensure_task_alive("WD.Pump.RF",   lambda: self._pump_idle_watchdog("RF"))
+        # self._ensure_task_alive("WD.Pump.DC",   lambda: self._pump_idle_watchdog("DC"))
+        # self._ensure_task_alive("WD.Pump.RFPulse", lambda: self._pump_idle_watchdog("RFPulse"))
 
         self._bg_started = True
 
@@ -2160,20 +2164,17 @@ class MainWindow(QWidget):
         self._starter_threads[name] = th
 
 
-    def _ensure_starter_threadsafe(self, name: str, starter: Callable[[], Coroutine[Any, Any, Any]] | Callable[[], Any]) -> None:
-        """
-        스타터를 안전하게 기동:
-        - async 코루틴 함수: 전용 스레드에서 asyncio.run(...)으로 실행
-        - 동기 함수: asyncio.to_thread(...) 태스크로 실행
-        """
+    def _ensure_starter_threadsafe(self, name: str, starter: Callable[..., Any]) -> None:
         try:
             if inspect.iscoroutinefunction(starter):
-                self._start_coro_in_thread(name, starter)
+                # ✅ 같은 이벤트 루프(QEventLoop)에서 태스크로 실행
+                self._ensure_task_alive(name, starter)
             else:
-                # 동기 스타터면 워커스레드로 오프로딩
+                # ✅ 동기 함수만 워커 스레드로
                 self._ensure_task_alive(name, lambda: asyncio.to_thread(starter))
         except Exception as e:
             self.append_log(name, f"starter wrap fail: {e!r}")
+
     # =============== 스타터 안전 래퍼 유틸 2개 (응답없음 방지) ======================
 
     # ===== Task 누수 추적기 ===================================================
