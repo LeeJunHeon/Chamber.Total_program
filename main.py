@@ -427,48 +427,63 @@ class MainWindow(QWidget):
 
         # =============== debug ==============
         # 🔍 Task 추적기 설치(전역 create_task 후킹) + 누수 워치독 시작
-        self._install_task_tracker()
-        self._ensure_task_alive("WD.TaskLeak", self._task_leak_watchdog)
+        #self._install_task_tracker()
         # =============== debug ==============
 
         # =============== debug ==============
         # __init__ 끝부분, self._install_exception_hooks() 다음쯤
-        from PySide6.QtCore import qInstallMessageHandler, QtMsgType
-        def _qt_msg_handler(mode, context, message):
-            tag = {QtMsgType.QtDebugMsg: "QtDebug", QtMsgType.QtInfoMsg: "QtInfo",
-                QtMsgType.QtWarningMsg: "QtWarn", QtMsgType.QtCriticalMsg: "QtCrit",
-                QtMsgType.QtFatalMsg: "QtFatal"}.get(mode, "Qt")
-            self.append_log(tag, message)
-        qInstallMessageHandler(_qt_msg_handler)
+    #     from PySide6.QtCore import qInstallMessageHandler, QtMsgType
+    #     def _qt_msg_handler(mode, context, message):
+    #         tag = {QtMsgType.QtDebugMsg: "QtDebug", QtMsgType.QtInfoMsg: "QtInfo",
+    #             QtMsgType.QtWarningMsg: "QtWarn", QtMsgType.QtCriticalMsg: "QtCrit",
+    #             QtMsgType.QtFatalMsg: "QtFatal"}.get(mode, "Qt")
+    #         self.append_log(tag, message)
+    #     qInstallMessageHandler(_qt_msg_handler)
 
-        # 🔧 (A) UI 하트비트: 메인 스레드 지연 감시
-        self._last_ui_tick = time.perf_counter()
-        self._ui_heartbeat = QTimer(self)
-        self._ui_heartbeat.setInterval(1000)  # 1s
-        self._ui_heartbeat.timeout.connect(self._on_ui_heartbeat)
-        self._ui_heartbeat.start()
+    #     # 🔧 (A) UI 하트비트: 메인 스레드 지연 감시
+    #     self._last_ui_tick = time.perf_counter()
+    #     self._ui_heartbeat = QTimer(self)
+    #     self._ui_heartbeat.setInterval(1000)  # 1s
+    #     self._ui_heartbeat.timeout.connect(self._on_ui_heartbeat)
+    #     self._ui_heartbeat.start()
 
-        # 🔧 (B) asyncio 이벤트루프 지연 감시
-        self._spawn_detached(self._loop_health_watchdog(), store=True, name="WD.eventloop")
+    #     # 🔧 (B) asyncio 이벤트루프 지연 감시
+    #     self._spawn_detached(self._loop_health_watchdog(), store=True, name="WD.eventloop")
         
-    def _on_ui_heartbeat(self):
-        now = time.perf_counter()
-        dt_ms = (now - getattr(self, "_last_ui_tick", now)) * 1000.0
-        self._last_ui_tick = now
-        if dt_ms > 1500:  # 1.5초 이상 늦으면 UI가 막혔을 가능성
-            self.append_log("WD.UI", f"UI 타이머 지연 {dt_ms:.0f} ms (메인 스레드 정지 가능성)")
+    # def _on_ui_heartbeat(self):
+    #     now = time.perf_counter()
+    #     dt_ms = (now - getattr(self, "_last_ui_tick", now)) * 1000.0
+    #     self._last_ui_tick = now
+    #     if dt_ms > 1500:  # 1.5초 이상 늦으면 UI가 막혔을 가능성
+    #         self.append_log("WD.UI", f"UI 타이머 지연 {dt_ms:.0f} ms (메인 스레드 정지 가능성)")
 
-    async def _loop_health_watchdog(self, interval: float = 1.0, warn_slack_ms: float = 800.0):
-        last = time.perf_counter()
-        while True:
-            await asyncio.sleep(interval)
-            now = time.perf_counter()
-            dt_ms = (now - last) * 1000.0
-            last = now
-            expected = interval * 1000.0
-            if dt_ms > expected + warn_slack_ms:
-                live = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done()]
-                self.append_log("WD.Asyncio", f"이벤트루프 지연 {dt_ms:.0f} ms (bg_tasks={len(live)})")
+    # async def _loop_health_watchdog(self, interval: float = 1.0, warn_slack_ms: float = 800.0):
+    #     last = time.perf_counter()
+    #     while True:
+    #         await asyncio.sleep(interval)
+    #         now = time.perf_counter()
+    #         dt_ms = (now - last) * 1000.0
+    #         last = now
+    #         expected = interval * 1000.0
+    #         if dt_ms > expected + warn_slack_ms:
+    #             live = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done()]
+    #             self.append_log("WD.Asyncio", f"이벤트루프 지연 {dt_ms:.0f} ms (bg_tasks={len(live)})")
+
+    # def _mark_pump_event(self, tag: str):
+    #     if not hasattr(self, "_last_pump_evt"):
+    #         self._last_pump_evt = {}
+    #     self._last_pump_evt[tag] = time.perf_counter()
+
+    # async def _pump_idle_watchdog(self, tag: str, threshold_s: float = 5.0):
+    #     self._mark_pump_event(tag)
+    #     while True:
+    #         await asyncio.sleep(1.0)
+    #         last = self._last_pump_evt.get(tag, 0.0)
+    #         if time.perf_counter() - last > threshold_s:
+    #             self.append_log("WD.Pump", f"{tag} no events for >{threshold_s:.0f}s")
+    #             # 경고 후 리셋(로그 스팸 방지)
+    #             self._last_pump_evt[tag] = time.perf_counter()
+    # =============== debug ==============
 
     def _mark_pump_event(self, tag: str):
         if not hasattr(self, "_last_pump_evt"):
@@ -476,15 +491,15 @@ class MainWindow(QWidget):
         self._last_pump_evt[tag] = time.perf_counter()
 
     async def _pump_idle_watchdog(self, tag: str, threshold_s: float = 5.0):
+        # 마지막 이벤트 시각을 찍어두고 주기적으로 확인
         self._mark_pump_event(tag)
         while True:
             await asyncio.sleep(1.0)
             last = self._last_pump_evt.get(tag, 0.0)
             if time.perf_counter() - last > threshold_s:
                 self.append_log("WD.Pump", f"{tag} no events for >{threshold_s:.0f}s")
-                # 경고 후 리셋(로그 스팸 방지)
+                # 경고 한 번 찍은 뒤 기준 시각 갱신(로그 스팸 방지)
                 self._last_pump_evt[tag] = time.perf_counter()
-    # =============== debug ==============
 
     # ------------------------------------------------------------------
     # UI 버튼 연결만 유지 (컨트롤러 ↔ UI는 이벤트 큐로 처리)
@@ -689,12 +704,12 @@ class MainWindow(QWidget):
     # ------------------------------------------------------------------
     async def _pump_mfc_events(self) -> None:
         # =============== debug ==============
-        self.append_log("DBG", "Pump.MFC started")
+        #self.append_log("DBG", "Pump.MFC started")
         # =============== debug ==============
         async for ev in self.mfc.events():
             k = ev.kind
             # =============== debug ==============
-            self._mark_pump_event("MFC")
+            #self._mark_pump_event("MFC")
             # =============== debug ==============
             if k == "status":
                 self.append_log("MFC", ev.message or "")
@@ -726,11 +741,11 @@ class MainWindow(QWidget):
 
     async def _pump_ig_events(self) -> None:
         # =============== debug ==============
-        self.append_log("DBG", "Pump.IG started")
+        #self.append_log("DBG", "Pump.IG started")
         # =============== debug ==============
         async for ev in self.ig.events():
             # =============== debug ==============
-            self._mark_pump_event("IG")
+            #self._mark_pump_event("IG")
             # =============== debug ==============
             k = ev.kind
             if k == "status":
@@ -755,12 +770,12 @@ class MainWindow(QWidget):
 
     async def _pump_rga_events_ch(self, adapter: RGA100AsyncAdapter, ch: int) -> None:
         # =============== debug ==============
-        self.append_log("DBG", f"Pump.RGA{ch} started")
+        #self.append_log("DBG", f"Pump.RGA{ch} started")
         # =============== debug ==============
         tag = f"RGA{ch}"
         async for ev in adapter.events():
             # =============== debug ==============
-            self._mark_pump_event(tag)
+            #self._mark_pump_event(tag)
             # =============== debug ==============
             if ev.kind == "status":
                 self.append_log(tag, ev.message or "")
@@ -808,11 +823,11 @@ class MainWindow(QWidget):
 
     async def _pump_dc_events(self) -> None:
         # =============== debug ==============
-        self.append_log("DBG", "Pump.DC started")
+        #self.append_log("DBG", "Pump.DC started")
         # =============== debug ==============
         async for ev in self.dc_power.events():
             # =============== debug ==============
-            self._mark_pump_event("DC")
+            #self._mark_pump_event("DC")
             # =============== debug ==============
             k = ev.kind
             if k == "status":
@@ -824,11 +839,11 @@ class MainWindow(QWidget):
 
     async def _pump_rf_events(self) -> None:
         # =============== debug ==============
-        self.append_log("DBG", "Pump.RF started")
+        #self.append_log("DBG", "Pump.RF started")
         # =============== debug ==============
         async for ev in self.rf_power.events():
             # =============== debug ==============
-            self._mark_pump_event("RF")
+            #self._mark_pump_event("RF")
             # =============== debug ==============
             k = ev.kind
             if k == "status":
@@ -848,11 +863,11 @@ class MainWindow(QWidget):
 
     async def _pump_rfpulse_events(self) -> None:
         # =============== debug ==============
-        self.append_log("DBG", "Pump.RFPulse started")
+        #self.append_log("DBG", "Pump.RFPulse started")
         # =============== debug ==============
         async for ev in self.rf_pulse.events():
             # =============== debug ==============
-            self._mark_pump_event("RFPulse")
+            #self._mark_pump_event("RFPulse")
             # =============== debug ==============
             k = ev.kind
             if k == "status":
@@ -884,11 +899,11 @@ class MainWindow(QWidget):
 
     async def _pump_oes_events(self) -> None:
         # =============== debug ==============
-        self.append_log("DBG", "Pump.OES started")
+        #self.append_log("DBG", "Pump.OES started")
         # =============== debug ==============
         async for ev in self.oes.events():
             # =============== debug ==============
-            self._mark_pump_event("OES")
+            #self._mark_pump_event("OES")
             # =============== debug ==============
             try:
                 k = getattr(ev, "kind", None)
@@ -975,7 +990,7 @@ class MainWindow(QWidget):
         # === 장비 스타터: 스레드에서 안전하게 실행 ===
         self._ensure_starter_threadsafe("MFC.start",      self.mfc.start)
         self._ensure_starter_threadsafe("IG.start",       self.ig.start)
-        self._ensure_starter_threadsafe("RFPulse.start",  self.rf_pulse.start)
+        #self._ensure_starter_threadsafe("RFPulse.start",  self.rf_pulse.start)
         self._ensure_starter_threadsafe("PLC.connect",    self.plc.connect)
 
         # === 이벤트 펌프는 기존 태스크 방식 유지 ===
@@ -1035,7 +1050,7 @@ class MainWindow(QWidget):
 
         self.append_log("File", f"선택된 파일: {file_path}")
         try:
-            with open(file_path, mode='r', encoding='utf-8-sig') as csvfile:
+            with open(file_path, mode='r', encoding='utf-8-sig', newline='') as csvfile:
                 reader = csv.DictReader(csvfile)
                 self.process_queue = []
                 self.current_process_index = -1
@@ -1169,9 +1184,9 @@ class MainWindow(QWidget):
             timeout = 10.0 if use_rf_pulse else 8.0
 
             # =============== debug ==============
-            self.append_log("DBG", "PF: preflight_connect() about to await")
+            #self.append_log("DBG", "PF: preflight_connect() about to await")
             ok, failed = await self._preflight_connect(params, timeout_s=timeout)
-            self.append_log("DBG", f"PF: preflight_connect() returned ok={ok} failed={failed}")
+            #self.append_log("DBG", f"PF: preflight_connect() returned ok={ok} failed={failed}")
             # =============== debug ==============
 
             if not ok:
@@ -1212,7 +1227,7 @@ class MainWindow(QWidget):
             t0 = 0.0
 
         # =============== debug ==============
-        self.append_log("DBG", f"WAIT:{name} start (timeout={timeout_s}s)")
+        #self.append_log("DBG", f"WAIT:{name} start (timeout={timeout_s}s)")
         # =============== debug ==============
 
         while True:
@@ -1234,16 +1249,11 @@ class MainWindow(QWidget):
         - 기본 필수: MFC, IG, PLC
         - 선택 필수: RF Pulse 사용 시 RFPulse 포함
         """
-        need: list[tuple[str, object]] = [
-            ("PLC", self.plc),          # ✅ 릴레이 제어용(가스/셔터/밸브)
-            ("MFC", self.mfc),
-            ("IG", self.ig),
-        ]
-        try:
-            use_rf_pulse = bool(params.get("use_rf_pulse", False) or params.get("use_rf_pulse_power", False))
-        except Exception:
-            use_rf_pulse = False
+        need: list[tuple[str, object]] = [("PLC", self.plc), ("MFC", self.mfc), ("IG", self.ig)]
+        use_rf_pulse = bool(params.get("use_rf_pulse", False) or params.get("use_rf_pulse_power", False))
         if use_rf_pulse:
+            # ⬇️ 여기서만 스타트
+            self._ensure_starter_threadsafe("RFPulse.start", self.rf_pulse.start)
             need.append(("RFPulse", self.rf_pulse))
 
         # 진행 로그 태스크 시작
@@ -2004,18 +2014,18 @@ class MainWindow(QWidget):
                 self._bg_tasks.append(t)
 
             # =========== debug ==========
-            tn = t.get_name() if hasattr(t, "get_name") else (name or "task")
-            def _on_done(fut: asyncio.Task):
-                try:
-                    exc = fut.exception()
-                except Exception:
-                    exc = None
-                if exc:
-                    self.append_log("Task", f"{tn} finished with ERROR: {exc!r}")
-                else:
-                    self.append_log("Task", f"{tn} finished OK")
-            t.add_done_callback(_on_done)
-            self.append_log("Task", f"spawned: {tn}")
+            # tn = t.get_name() if hasattr(t, "get_name") else (name or "task")
+            # def _on_done(fut: asyncio.Task):
+            #     try:
+            #         exc = fut.exception()
+            #     except Exception:
+            #         exc = None
+            #     if exc:
+            #         self.append_log("Task", f"{tn} finished with ERROR: {exc!r}")
+            #     else:
+            #         self.append_log("Task", f"{tn} finished OK")
+            # t.add_done_callback(_on_done)
+            # self.append_log("Task", f"spawned: {tn}")
             # =========== debug ==========
 
         try:
@@ -2167,136 +2177,90 @@ class MainWindow(QWidget):
     # =============== 스타터 안전 래퍼 유틸 2개 (응답없음 방지) ======================
 
     # ===== Task 누수 추적기 ===================================================
-    def _install_task_tracker(self) -> None:
-        """
-        asyncio.create_task / loop.create_task를 한 번만 후킹해서
-        모든 Task의 생성지(코루틴 이름/파일/줄)와 생성시각을 기록한다.
-        """
-        if getattr(asyncio, "_gpt_task_tracker_installed", False):
-            return
-        asyncio._gpt_task_tracker_installed = True
+    # def _install_task_tracker(self) -> None:
+    #     """
+    #     self._loop.create_task만 후킹해서 모든 Task를 추적한다.
+    #     - weakref로 self를 잡아 실제 누수 방지
+    #     - Python 3.10/3.11 호환 (context 인자 존재 시에만 전달)
+    #     """
+    #     if getattr(asyncio, "_gpt_task_tracker_installed", False):
+    #         return
+    #     asyncio._gpt_task_tracker_installed = True
 
-        import weakref, types
+    #     import weakref, inspect, weakref as _weakref
+    #     wself = weakref.ref(self)
 
-        self._task_registry = weakref.WeakKeyDictionary()   # task -> info dict
-        self._task_counter  = {}   # (coro_name, file, line) -> count
-        self._task_highwater = 0
-        self._task_last_seen = 0
+    #     # 레지스트리: 약한 키로 Task를 보관 (GC 허용)
+    #     try:
+    #         from weakref import WeakKeyDictionary
+    #     except Exception:
+    #         WeakKeyDictionary = dict  # fallback
+    #     self._task_registry = WeakKeyDictionary()  # task -> info
+    #     self._task_counter  = {}                   # (name,file,line) -> count
+    #     self._task_highwater = 0
+    #     self._task_last_seen = 0
 
-        def _coro_origin(coro):
-            # 코루틴 객체에서 코드/파일/줄을 직접 가져오면 호출자 스택 비용이 거의 없음
-            try:
-                code = coro.cr_code
-                fname = code.co_filename
-                line  = code.co_firstlineno
-                name  = code.co_name
-                return (name, fname, line)
-            except Exception:
-                return (repr(coro), "<unknown>", 0)
+    #     def _coro_origin(coro):
+    #         try:
+    #             code = coro.cr_code
+    #             return (code.co_name, code.co_filename, code.co_firstlineno)
+    #         except Exception:
+    #             return (repr(coro), "<unknown>", 0)
 
-        # --- 원본 저장
-        asyncio._orig_create_task = getattr(asyncio, "create_task")
-        _orig_loop_create_task = self._loop.create_task
+    #     # 원본을 인스턴스 속성에 저장해 두면 uninstall도 가능
+    #     if not hasattr(self._loop, "_orig_create_task"):
+    #         self._loop._orig_create_task = self._loop.create_task  # type: ignore[attr-defined]
 
-        # --- 공통 래퍼
-        def _track(task, coro_name_file_line):
-            info = {
-                "created": time.perf_counter(),
-                "where":   coro_name_file_line,
-                "name":    task.get_name() if hasattr(task, "get_name") else None,
-            }
-            self._task_registry[task] = info
-            self._task_counter[coro_name_file_line] = self._task_counter.get(coro_name_file_line, 0) + 1
+    #     def _call_orig_compat(orig, coro, *, name=None, context=None):
+    #         # 3.11+: (coro, *, name=None, context=None)
+    #         # 3.10-: (coro, *, name=None) 혹은 (coro)
+    #         try:
+    #             return orig(coro, name=name, context=context)
+    #         except TypeError:
+    #             try:
+    #                 return orig(coro, name=name)
+    #             except TypeError:
+    #                 return orig(coro)
 
-            def _on_done(t: asyncio.Task):
-                # 종료와 함께 레지스트리에서 제거
-                try:
-                    self._task_registry.pop(t, None)
-                except Exception:
-                    pass
-            try:
-                task.add_done_callback(_on_done)
-            except Exception:
-                pass
-            return task
+    #     def _track(task, coro_key):
+    #         inst = wself()
+    #         if not inst:
+    #             return task  # MainWindow가 이미 해제된 경우 조용히 패스
+    #         info = {
+    #             "created": time.perf_counter(),
+    #             "where":   coro_key,
+    #             "name":    (task.get_name() if hasattr(task, "get_name") else None),
+    #         }
+    #         inst._task_registry[task] = info
+    #         inst._task_counter[coro_key] = inst._task_counter.get(coro_key, 0) + 1
 
-        # --- asyncio.create_task 후킹
-        def _create_task_wrapper(coro, *, name=None, context=None):
-            coro_key = _coro_origin(coro)
-            t = asyncio._orig_create_task(coro, name=name, context=context)
-            return _track(t, coro_key)
+    #         def _on_done(t: asyncio.Task):
+    #             try:
+    #                 inst2 = wself()
+    #                 if inst2:
+    #                     inst2._task_registry.pop(t, None)
+    #             except Exception:
+    #                 pass
+    #         try:
+    #             task.add_done_callback(_on_done)
+    #         except Exception:
+    #             pass
+    #         return task
 
-        asyncio.create_task = _create_task_wrapper  # type: ignore
+    #     # loop.create_task 후킹 (asyncio.create_task는 건드리지 않는다!)
+    #     orig_loop_create_task = self._loop._orig_create_task  # bound method
 
-        # --- loop.create_task 후킹(qasync / 타 라이브러리 보호)
-        def _loop_create_task_wrapper(coro, name=None, context=None):
-            coro_key = _coro_origin(coro)
-            t = _orig_loop_create_task(coro, name=name, context=context)
-            return _track(t, coro_key)
+    #     def _loop_create_task_wrapper(coro, *, name=None, context=None):
+    #         coro_key = _coro_origin(coro)
+    #         t = _call_orig_compat(orig_loop_create_task, coro, name=name, context=context)
+    #         return _track(t, coro_key)
 
-        try:
-            self._loop.create_task = _loop_create_task_wrapper  # type: ignore
-        except Exception:
-            pass
+    #     try:
+    #         self._loop.create_task = _loop_create_task_wrapper  # type: ignore[assignment]
+    #     except Exception:
+    #         pass
 
-        self.append_log("TaskLeak", "task tracker installed (create_task hooked)")
-
-    async def _task_leak_watchdog(self, period: float = 2.0, warn_when: int = 150):
-        """
-        2초마다 살아있는 Task 수와 Top 생성지 통계를 로그로 출력.
-        급증/누수로 보이면 샘플 스택도 함께 덤프.
-        """
-        import itertools
-        while True:
-            await asyncio.sleep(period)
-            live = [t for t in list(self._task_registry.keys()) if not t.done()]
-            n_live = len(live)
-            self._task_highwater = max(self._task_highwater, n_live)
-            new_since = n_live - self._task_last_seen
-            self._task_last_seen = n_live
-
-            if n_live >= warn_when or new_since > 30:
-                # Top 5 생성지
-                counts = {}
-                for info in self._task_registry.values():
-                    key = info["where"]
-                    counts[key] = counts.get(key, 0) + 1
-                top = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:5]
-                lines = [f"[TaskLeak] live={n_live}, new_since_last={new_since}, bg_tasks={len([t for t in getattr(self, '_bg_tasks', []) if t and not t.done()])}"]
-                for (name, file, line), cnt in top:
-                    short = file.split("/")[-1].split("\\")[-1]
-                    lines.append(f"  {cnt:4d}  {name} ({short}:{line})")
-                self.append_log("TaskLeak", "\n".join(lines))
-
-                # 대표 1개 샘플의 생성 위치와 '나이'도 찍어봄
-                try:
-                    top_key = top[0][0]
-                    sample = next(t for t, info in self._task_registry.items() if (not t.done()) and info["where"] == top_key)
-                    age = time.perf_counter() - self._task_registry[sample]["created"]
-                    name, file, line = top_key
-                    short = file.split("/")[-1].split("\\")[-1]
-                    self.append_log("TaskLeak", f"  sample from top: {name} @ {short}:{line}, age={age:.1f}s  name={sample.get_name() if hasattr(sample,'get_name') else ''}")
-                except Exception:
-                    pass
-
-    def _dump_task_stats(self) -> None:
-        """
-        수동으로 호출하면 즉시 현재 Task 통계를 한 번 로그로 남긴다.
-        (필요하면 임시 버튼/단축키에 연결해도 됨)
-        """
-        counts = {}
-        for info in getattr(self, "_task_registry", {}).values():
-            key = info["where"]
-            counts[key] = counts.get(key, 0) + 1
-        top = sorted(counts.items(), key=lambda kv: kv[1], reverse=True)[:10]
-        if not top:
-            self.append_log("TaskLeak", "no live tasks")
-            return
-        lines = ["[TaskLeak] snapshot"]
-        for (name, file, line), cnt in top:
-            short = file.split("/")[-1].split("\\")[-1]
-            lines.append(f"  {cnt:4d}  {name} ({short}:{line})")
-        self.append_log("TaskLeak", "\n".join(lines))
+    #     self.append_log("TaskLeak", "task tracker installed (loop.create_task hooked)")
     # ===================================================================
 
 

@@ -1,12 +1,11 @@
 # -*- coding: utf-8 -*-
 """
-mfc.py — asyncio 기반 MFC 컨트롤러
+mfc.py — asyncio 기반 MFC 컨트롤러 (MOXA NPort TCP Server 직결)
 
-의존성: pyserial-asyncio
-    pip install pyserial-asyncio
+의존성: 표준 라이브러리만 사용 (pyserial-asyncio 불필요)
 
 기능 요약(구 MFC.py와 동등):
-  - serial_asyncio + asyncio.Protocol 로 라인 프레이밍(CR/LF) 시리얼 통신
+  - asyncio TCP streams + 자체 라인 프레이밍(CR/LF) 통신
   - 단일 명령 큐(타임아웃/재시도/인터커맨드 gap) → 송수신 충돌 제거
   - 연결 워치독(지수 백오프) → 중간 단선도 자동 복구
   - 폴링: 주기마다 R60(전체 유량) → R5(압력) 한 사이클, 중첩 금지
@@ -23,21 +22,16 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections import deque
 from typing import Optional, Deque, Callable, AsyncGenerator, Literal
-import asyncio
-import re
-import time
+import asyncio, re, time, contextlib, socket
 
-try:
-    import serial_asyncio
-except Exception as e:
-    raise RuntimeError("pyserial-asyncio가 필요합니다. `pip install pyserial-asyncio`") from e
 
 from lib.config_ch2 import (
-    MFC_PORT, MFC_BAUD, MFC_COMMANDS, FLOW_ERROR_TOLERANCE, FLOW_ERROR_MAX_COUNT,
-    MFC_SCALE_FACTORS, MFC_POLLING_INTERVAL_MS, MFC_STABILIZATION_INTERVAL_MS,
-    MFC_WATCHDOG_INTERVAL_MS, MFC_RECONNECT_BACKOFF_START_MS, MFC_RECONNECT_BACKOFF_MAX_MS,
-    MFC_TIMEOUT, MFC_GAP_MS, MFC_DELAY_MS, MFC_DELAY_MS_VALVE, DEBUG_PRINT, MFC_PRESSURE_SCALE,
-    MFC_PRESSURE_DECIMALS, MFC_SP1_VERIFY_TOL, MFC_POST_OPEN_QUIET_MS, MFC_ALLOW_NO_REPLY_DRAIN_MS,
+    MFC_TCP_HOST, MFC_TCP_PORT, MFC_TX_EOL, MFC_SKIP_ECHO, MFC_CONNECT_TIMEOUT_S,
+    MFC_COMMANDS, FLOW_ERROR_TOLERANCE, FLOW_ERROR_MAX_COUNT, MFC_SCALE_FACTORS, 
+    MFC_POLLING_INTERVAL_MS, MFC_STABILIZATION_INTERVAL_MS, MFC_WATCHDOG_INTERVAL_MS, 
+    MFC_RECONNECT_BACKOFF_START_MS, MFC_RECONNECT_BACKOFF_MAX_MS, MFC_TIMEOUT, MFC_GAP_MS, 
+    MFC_DELAY_MS, MFC_DELAY_MS_VALVE, DEBUG_PRINT, MFC_PRESSURE_SCALE, MFC_PRESSURE_DECIMALS,
+    MFC_SP1_VERIFY_TOL, MFC_POST_OPEN_QUIET_MS, MFC_ALLOW_NO_REPLY_DRAIN_MS,
     MFC_FIRST_CMD_EXTRA_TIMEOUT_MS
 )
 
@@ -66,80 +60,19 @@ class Command:
     allow_no_reply: bool
     expect_prefixes: tuple[str, ...] = ()
 
-# =============== Protocol (라인 프레이밍) ===============
-class _MFCProtocol(asyncio.Protocol):
-    def __init__(self, owner: "AsyncMFC"):
-        self.owner = owner
-        self.transport: Optional[asyncio.Transport] = None
-        self._rx = bytearray()
-        self._RX_MAX = 16 * 1024
-        self._LINE_MAX = 512
-
-    def connection_made(self, transport: asyncio.BaseTransport):
-        self.transport = transport  # type: ignore
-        self.owner._on_connection_made(self.transport)
-
-    def data_received(self, data: bytes):
-        if not data:
-            return
-        self._rx.extend(data)
-        if len(self._rx) > self._RX_MAX:
-            del self._rx[:-self._RX_MAX]
-            self.owner._dbg("MFC", f"수신 버퍼 과다(RX>{self._RX_MAX}); 최근 {self._RX_MAX}B만 보존.")
-
-        processed = 0  # ✅ 이번 이벤트에서 처리한 라인 수를 바깥에 둔다
-        while True:
-            i_cr = self._rx.find(b'\r')
-            i_lf = self._rx.find(b'\n')
-            if i_cr == -1 and i_lf == -1:
-                break
-
-            idx = i_cr if i_lf == -1 else (i_lf if i_cr == -1 else min(i_cr, i_lf))
-            line_bytes = self._rx[:idx]
-
-            # CR/LF 혹은 LF/CR 쌍 같이 제거
-            drop = idx + 1
-            if drop < len(self._rx):
-                ch = self._rx[idx]
-                nxt = self._rx[idx + 1]
-                if (ch == 13 and nxt == 10) or (ch == 10 and nxt == 13):
-                    drop += 1
-            del self._rx[:drop]
-
-            if len(line_bytes) > self._LINE_MAX:
-                self.owner._dbg("MFC", f"Rx line too long (+{len(line_bytes)-self._LINE_MAX}B), truncating")
-                line_bytes = line_bytes[:self._LINE_MAX]
-
-            try:
-                line = line_bytes.decode("ascii", errors="ignore").strip()
-            except Exception:
-                line = ""
-
-            if not line:
-                continue
-
-            # ✅ 라인 하나를 바로 전달
-            self.owner._on_line_from_serial(line)
-            processed += 1
-            if processed >= 32:  # ✅ 과도 루프 안전장치
-                self.owner._dbg("MFC", "한 번에 32라인 초과 수신 → 루프 종료")
-                break
-
-        # 선행 CR/LF 정리
-        while self._rx[:1] in (b'\r', b'\n'):
-            del self._rx[0:1]
-
-    def connection_lost(self, exc: Optional[Exception]):
-        self.owner._on_connection_lost(exc)
-
 # =============== Async 컨트롤러 ===============
 class AsyncMFC:
     def __init__(self):
         self.debug_print = DEBUG_PRINT
 
-        # 연결 상태
-        self._transport: Optional[asyncio.Transport] = None
-        self._protocol: Optional[_MFCProtocol] = None
+        # ✅ TCP Streams
+        self._reader: Optional[asyncio.StreamReader] = None
+        self._writer: Optional[asyncio.StreamWriter] = None
+        self._reader_task: Optional[asyncio.Task] = None
+        self._tx_eol: bytes = MFC_TX_EOL
+        self._tx_eol_str: str = MFC_TX_EOL.decode("ascii", "ignore")
+        self._skip_echo_flag: bool = bool(MFC_SKIP_ECHO)
+
         self._connected: bool = False
         self._ever_connected: bool = False
 
@@ -147,7 +80,7 @@ class AsyncMFC:
         self._cmd_q: Deque[Command] = deque()
         self._inflight: Optional[Command] = None
 
-        # 수신 라인 큐 (Protocol → 워커)
+        # 수신 라인 큐 (TCP 리더 → 워커)
         self._line_q: asyncio.Queue[str] = asyncio.Queue(maxsize=1024)
 
         # 이벤트 큐 (상위 UI/브리지 소비)
@@ -207,7 +140,6 @@ class AsyncMFC:
         #await self._emit_status("MFC 워치독/워커 시작")
 
     async def cleanup(self):
-        """컨트롤러 완전 종료."""
         await self._emit_status("MFC 종료 절차 시작")
         self._want_connected = False
 
@@ -222,14 +154,18 @@ class AsyncMFC:
         # 큐/인플라이트 정리
         self._purge_pending("shutdown")
 
-        # 연결 종료
-        if self._transport:
-            try:
-                self._transport.close()
-            except Exception:
-                pass
-        self._transport = None
-        self._protocol = None
+        # TCP 종료
+        if self._reader_task:
+            self._reader_task.cancel()
+            with contextlib.suppress(Exception):
+                await self._reader_task
+            self._reader_task = None
+        if self._writer:
+            with contextlib.suppress(Exception):
+                self._writer.close()
+
+        self._reader = None
+        self._writer = None
         self._connected = False
 
         await self._emit_status("MFC 연결 종료됨")
@@ -500,7 +436,7 @@ class AsyncMFC:
 
     # ---------- 내부: 워치독/연결 ----------
     async def _watchdog_loop(self):
-        backoff = self._reconnect_backoff_ms
+        backoff = MFC_RECONNECT_BACKOFF_START_MS
         while self._want_connected:
             if self._connected:
                 await asyncio.sleep(MFC_WATCHDOG_INTERVAL_MS / 1000.0)
@@ -510,64 +446,60 @@ class AsyncMFC:
                 await self._emit_status(f"재연결 시도 예약... ({backoff} ms)")
                 await asyncio.sleep(backoff / 1000.0)
 
-            if not self._want_connected or self._connected:
-                continue
+            if not self._want_connected:
+                break
 
             try:
-                loop = asyncio.get_running_loop()
-                transport, protocol = await serial_asyncio.create_serial_connection(
-                    loop, lambda: _MFCProtocol(self), 
-                    MFC_PORT, 
-                    baudrate=MFC_BAUD,
-                    bytesize=8, parity="N", stopbits=1,
-                    xonxoff=False, rtscts=False, dsrdtr=False
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(MFC_TCP_HOST, MFC_TCP_PORT),
+                    timeout=max(0.5, float(MFC_CONNECT_TIMEOUT_S))
                 )
-                self._transport = transport
-                self._protocol = protocol  # type: ignore
-
-                await asyncio.sleep(0.25)
-
+                self._reader, self._writer = reader, writer
                 self._connected = True
                 self._ever_connected = True
                 backoff = MFC_RECONNECT_BACKOFF_START_MS
 
+                # (선택) TCP keepalive
+                try:
+                    sock = writer.get_extra_info("socket")
+                    if sock is not None:
+                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                except Exception:
+                    pass
+
+                # 리더 태스크 시작
+                if self._reader_task and not self._reader_task.done():
+                    self._reader_task.cancel()
+                    with contextlib.suppress(Exception):
+                        await self._reader_task
+                self._reader_task = asyncio.create_task(self._tcp_reader_loop(), name="MFC-TcpReader")
+
                 self._last_connect_mono = time.monotonic()
                 self._just_reopened = True
-                await self._emit_status(f"{MFC_PORT} 연결 성공 (asyncio)")
+                await self._emit_status(f"{MFC_TCP_HOST}:{MFC_TCP_PORT} 연결 성공 (TCP)")
             except Exception as e:
-                await self._emit_status(f"{MFC_PORT} 연결 실패: {e}")
+                await self._emit_status(f"{MFC_TCP_HOST}:{MFC_TCP_PORT} 연결 실패: {e}")
                 backoff = min(backoff * 2, MFC_RECONNECT_BACKOFF_MAX_MS)
 
-    def _on_connection_made(self, transport: asyncio.Transport):
-        self._transport = transport
-        ser = getattr(transport, "serial", None)
-        if ser:
-            try:
-                ser.reset_input_buffer()
-                ser.reset_output_buffer()
-            except Exception:
-                pass
-            # 필요 시만 사용(기본은 주석 유지 권장)
-            # try:
-            #     ser.dtr = True   # 대부분 High
-            #     ser.rts = False  # 대부분 Low
-            # except Exception:
-            #     pass
-
-        self._skip_echos.clear()
-
-    def _on_connection_lost(self, exc: Optional[Exception]):
+    def _on_tcp_disconnected(self):
         self._connected = False
-        if self._transport:
-            try:
-                self._transport.close()
-            except Exception:
-                pass
-        self._transport = None
-        self._protocol = None
-        self._dbg("MFC", f"연결 끊김: {exc}")
+        if self._reader_task:
+            self._reader_task.cancel()
+        self._reader_task = None
+        if self._writer:
+            with contextlib.suppress(Exception):
+                self._writer.close()
+        self._reader = None
+        self._writer = None
 
-        # 진행 중 명령 복구/취소
+        # 라인 큐 비움
+        with contextlib.suppress(Exception):
+            while True:
+                self._line_q.get_nowait()
+
+        self._dbg("MFC", "연결 끊김")
+
+        # inflight 복구/취소
         if self._inflight is not None:
             cmd = self._inflight
             self._inflight = None
@@ -577,27 +509,6 @@ class AsyncMFC:
             else:
                 self._safe_callback(cmd.callback, None)
 
-    def _on_line_from_serial(self, line: str):
-        # ★ 1) 과거 no-reply 에코면 여기서 즉시 버림 (큐로 가지 않게)
-        if self._skip_echos and line == self._skip_echos[0]:
-            self._skip_echos.popleft()
-            self._dbg("MFC", f"[ECHO] 과거 no-reply 에코 스킵: {line}")
-            return
-
-        # 2) 일반 라인은 큐로 전달
-        try:
-            self._line_q.put_nowait(line)
-        except asyncio.QueueFull:
-            self._dbg("MFC", "라인 큐가 가득 찼습니다. 가장 오래된 라인을 폐기합니다.")
-            try:
-                self._line_q.get_nowait()
-            except Exception:
-                pass
-            try:
-                self._line_q.put_nowait(line)
-            except Exception:
-                pass
-
     # ---------- 내부: 명령 워커 ----------
     async def _cmd_worker_loop(self):
         while True:
@@ -605,7 +516,7 @@ class AsyncMFC:
             if not self._cmd_q:
                 await asyncio.sleep(0.01)
                 continue
-            if not self._connected or not self._transport:
+            if not self._connected or not self._writer:
                 await asyncio.sleep(0.05)
                 continue
 
@@ -626,8 +537,9 @@ class AsyncMFC:
 
             # write
             try:
-                payload = cmd.cmd_str.encode("ascii")
-                self._transport.write(payload)
+                payload = cmd.cmd_str.encode("ascii", "ignore")
+                self._writer.write(payload)
+                await self._writer.drain()
             except Exception as e:
                 self._dbg("MFC", f"{cmd.tag} {sent_txt} 전송 오류: {e}")
                 self._inflight = None
@@ -636,22 +548,8 @@ class AsyncMFC:
                     self._cmd_q.appendleft(cmd)
                 else:
                     self._safe_callback(cmd.callback, None)
-                # 1회성 타임아웃은 포트 유지 + 가벼운 큐 흡수 후 재시도(재연결 금지)
-                self._consec_timeouts = getattr(self, "_consec_timeouts", 0) + 1
-                await self._absorb_late_lines(80)
-
-                if self._consec_timeouts >= 2:
-                    # 연속 2회 이상일 때만 강제 재연결
-                    if self._transport:
-                        try: self._transport.close()
-                        except Exception: pass
-                    self._connected = False
-                    self._consec_timeouts = 0
-                else:
-                    # 포트 유지: 다음 루프로 자연 재시도
-                    await asyncio.sleep(max(0.15, cmd.gap_ms / 1000.0))
-                    # 재큐잉은 위에서 이미 함
-                    continue
+                self._on_tcp_disconnected()
+                continue
 
             # no-reply
             if cmd.allow_no_reply:
@@ -673,26 +571,22 @@ class AsyncMFC:
                 await self._emit_status(f"[TIMEOUT] {cmd.tag} {sent_txt}")
                 self._inflight = None
 
-                # 오픈 직후 2초 이내 or 첫 타임아웃은 포트 유지 재시도(quiet+드레인 효과를 살린다)
                 if cmd.retries_left > 0 and (time.monotonic() - self._last_connect_mono) < 2.0:
                     cmd.retries_left -= 1
                     self._cmd_q.appendleft(cmd)
-                    await self._drain_os_and_queues(100)
+                    await self._absorb_late_lines(100)   # ✅ 라인큐만 가볍게 비움
                     await asyncio.sleep(max(0.15, cmd.gap_ms / 1000.0))
                     continue
 
-                # 그 외는 기존처럼 재연결
                 if cmd.retries_left > 0:
                     cmd.retries_left -= 1
                     self._cmd_q.appendleft(cmd)
                 else:
                     self._safe_callback(cmd.callback, None)
-                if self._transport:
-                    try: self._transport.close()
-                    except Exception: pass
-                self._connected = False
-                continue
 
+                self._on_tcp_disconnected()  # ✅ 표준화된 TCP 연결정리
+                continue
+            # ✅ 여기부터가 "성공" 경로 (누락분)
             recv_txt = (line or "").strip()
             await self._emit_status(f"[RECV] {cmd.tag} ← {recv_txt}")
             self._safe_callback(cmd.callback, recv_txt)
@@ -715,7 +609,7 @@ class AsyncMFC:
             if not line:
                 continue
             # ① 현재 명령 에코
-            if line == sent_no_cr:
+            if self._skip_echo_flag and line.strip() == sent_no_cr.strip():
                 self._dbg("MFC", f"[ECHO] 현재 명령 에코 스킵: {line}")
                 continue
             # ② 과거 no-reply 에코
@@ -730,6 +624,69 @@ class AsyncMFC:
                 self._dbg("MFC", f"[SKIP] 접두사 불일치: got={s[:12]!r}, need={expect_prefixes}")
                 continue
             return line
+        
+    async def _tcp_reader_loop(self):
+        assert self._reader is not None
+        buf = bytearray()
+        RX_MAX, LINE_MAX = 16*1024, 512
+        try:
+            while self._connected and self._reader:
+                chunk = await self._reader.read(128)
+                if not chunk:
+                    break
+                buf.extend(chunk)
+                if len(buf) > RX_MAX:
+                    del buf[:-RX_MAX]
+
+                # CR/LF split
+                while True:
+                    i_cr, i_lf = buf.find(b"\r"), buf.find(b"\n")
+                    if i_cr == -1 and i_lf == -1:
+                        break
+                    idx = i_cr if i_lf == -1 else (i_lf if i_cr == -1 else min(i_cr, i_lf))
+                    line_bytes = buf[:idx]
+
+                    drop = idx + 1
+                    if drop < len(buf):
+                        ch, nxt = buf[idx], buf[idx + 1]
+                        if (ch == 13 and nxt == 10) or (ch == 10 and nxt == 13):
+                            drop += 1
+                    del buf[:drop]
+
+                    if len(line_bytes) > LINE_MAX:
+                        line_bytes = line_bytes[:LINE_MAX]
+
+                    try:
+                        line = line_bytes.decode("ascii", "ignore").strip()
+                    except Exception:
+                        line = ""
+
+                    if line:
+                        self._on_line_from_tcp(line)
+
+                while buf[:1] in (b"\r", b"\n"):
+                    del buf[0:1]
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            self._dbg("MFC", f"리더 루프 예외: {e!r}")
+        finally:
+            self._on_tcp_disconnected()
+
+    def _on_line_from_tcp(self, line: str):
+        # 과거 no-reply 에코 1회 스킵
+        if self._skip_echos and line == self._skip_echos[0]:
+            self._skip_echos.popleft()
+            self._dbg("MFC", f"[ECHO] 과거 no-reply 에코 스킵: {line}")
+            return
+        try:
+            self._line_q.put_nowait(line)
+        except asyncio.QueueFull:
+            self._dbg("MFC", "라인 큐 포화 → 가장 오래된 라인 폐기")
+            with contextlib.suppress(Exception):
+                _ = self._line_q.get_nowait()
+            with contextlib.suppress(Exception):
+                self._line_q.put_nowait(line)
 
     # ---------- 내부: 폴링 ----------
     async def _poll_loop(self):
@@ -1045,8 +1002,8 @@ class AsyncMFC:
                 *, timeout_ms: int = MFC_TIMEOUT, gap_ms: int = MFC_GAP_MS,
                 tag: str = "", retries_left: int = 5, allow_no_reply: bool = False,
                 expect_prefixes: tuple[str, ...] = ()):
-        if not cmd_str.endswith("\r"):
-            cmd_str += "\r"
+        if not cmd_str.endswith(self._tx_eol_str):
+            cmd_str += self._tx_eol_str
         self._cmd_q.append(Command(
             cmd_str, on_reply, timeout_ms, gap_ms, tag, retries_left, allow_no_reply,
             expect_prefixes=expect_prefixes
@@ -1054,12 +1011,12 @@ class AsyncMFC:
 
         # ★ no-reply 명령의 '에코 라인'은 나중에 도착해도 스킵하도록 등록
         if allow_no_reply:
-            no_cr = cmd_str.rstrip("\r")
-            self._skip_echos.append(no_cr)
+            no_eol = cmd_str[:-len(self._tx_eol_str)] if cmd_str.endswith(self._tx_eol_str) else cmd_str
+            self._skip_echos.append(no_eol)
             if len(self._skip_echos) > 64:
                 self._skip_echos.popleft()
             # 추적 로그를 UI/챗으로도 올림
-            self._dbg("MFC", f"[ECHO] no-reply 등록: {no_cr}")
+            self._dbg("MFC", f"[ECHO] no-reply 등록: {no_eol}")
 
     async def _send_and_wait_line(
         self,
@@ -1228,52 +1185,4 @@ class AsyncMFC:
             except Exception:
                 pass
             self._watchdog_task = None
-
-    async def _drain_os_and_queues(self, budget_ms: int = 80):
-        """
-        Qt의 readAll/clear(AllDirections)+내부버퍼 clear를 asyncio로 모사.
-        - OS 입력버퍼 리셋(reset_input_buffer)
-        - Protocol 내부 raw buffer(_rx)와 라인 큐도 정리
-        - 짧게 회전하며 남은 라인이 있으면 조금 더 비움
-        """
-        if not self._transport:
-            return
-
-        # 1) reader 잠깐 멈추고 OS 입력버퍼 리셋(가장 확실)
-        try:
-            self._transport.pause_reading()
-        except Exception:
-            pass
-        try:
-            ser = getattr(self._transport, "serial", None)
-            if ser:
-                try:
-                    ser.reset_input_buffer()
-                except Exception:
-                    pass
-        finally:
-            try:
-                self._transport.resume_reading()
-            except Exception:
-                pass
-
-        # 2) Protocol 내부 바이트 버퍼도 청소
-        try:
-            if self._protocol and hasattr(self._protocol, "_rx"):
-                self._protocol._rx.clear()
-        except Exception:
-            pass
-
-        # 3) 라인 큐 비우기
-        deadline = time.monotonic() + (budget_ms / 1000.0)
-        while time.monotonic() < deadline:
-            drained = False
-            try:
-                self._line_q.get_nowait()
-                drained = True
-            except Exception:
-                pass
-            await asyncio.sleep(0 if drained else 0.005)
-
-
 

@@ -38,13 +38,7 @@ RGA_XLSX_SHEET = "Histogram"
 TSP_PORT = "192.168.1.50:4004"
 TSP_BAUD = 9600
 
-IG_TCP_HOST = "192.168.1.50"   # NPort IP
-IG_TCP_PORT = 4002             # NPort Port(예: IG=4002)
-IG_TX_EOL   = b"\r"            # IG 명령 줄끝(EOL)
-IG_SKIP_ECHO = True            # 장비가 에코하면 True
 
-MFC_PORT = "192.168.1.50:4006"
-MFC_BAUD = 9600
 
 # RFPulse 기본값
 RFPULSE_PORT = "192.168.1.50:4005"
@@ -72,7 +66,9 @@ RFPULSE_WATCHDOG_INTERVAL_MS        = 1000
 RFPULSE_RECONNECT_BACKOFF_START_MS  = 1000
 RFPULSE_RECONNECT_BACKOFF_MAX_MS    = 20_000
 
-# === RGA ===
+# ======================================================================
+# RGA
+# ======================================================================
 # RGA_PORT = "COM17" RGA를 직접 연결하지 않고 외부 프로그램을 사용
 # RGA_BAUD = 9600
 RGA_PROGRAM_PATH = r"\\VanaM_NAS\VanaM_Sputter\Programs\RGA_Ch2.exe"
@@ -80,16 +76,16 @@ RGA_CSV_PATH = r"\\VanaM_NAS\VanaM_Sputter\RGA\Ch.2\RGA_spectrums.csv"
 RGA_PROGRAM_PATH = Path(RGA_PROGRAM_PATH)
 RGA_CSV_PATH = Path(RGA_CSV_PATH)
 
-# DLL을 통해 연결
-# OES_PORT = "COM5"
-# OES_BAUD = 9600
 
-# === IG ===
+# ======================================================================
+# IG
+# ======================================================================
+IG_TCP_HOST = "192.168.1.50"       # NPort IP
+IG_TCP_PORT = 4002                 # NPort Port(예: IG=4002)
+IG_TX_EOL   = b"\r"                # IG 명령 줄끝(EOL)
+IG_SKIP_ECHO = True                # 장비가 에코하면 True
 IG_WAIT_TIMEOUT = 600              # 목표 압력 대기 총 한도(초). 예: 10분
-
-# IG (MOXA TCP Server 연결) 전용 소켓 연결 타임아웃(초)
-IG_CONNECT_TIMEOUT_S = 3.0
-
+IG_CONNECT_TIMEOUT_S = 3.0         # IG (MOXA TCP Server 연결) 전용 소켓 연결 타임아웃(초)
 IG_TIMEOUT_MS = 3000               # 명령 응답 타임아웃(ms). 예: 1.5초
 IG_GAP_MS = 1000                   # 명령 간 인터커맨드 gap(ms). RDI 반복 간격 등
 IG_POLLING_INTERVAL_MS = 10_000    # 주기 폴링 간격(ms). 요구사항 기본 10초
@@ -100,6 +96,7 @@ IG_RECONNECT_BACKOFF_MAX_MS = 20_000   # 재연결 백오프 최대(ms)
 # ✅ IG 재점등(ON 재시도) 제어
 IG_REIGNITE_MAX_ATTEMPTS = 3                    # 총 재점등 시도 횟수 상한
 IG_REIGNITE_BACKOFF_MS = [2000, 5000, 10000]    # 각 시도 사이 대기(ms): 2s, 5s, 10s
+
 
 # ======================================================================
 # RF Power 보정 및 제어 설정
@@ -151,11 +148,21 @@ DC_PARAM_ADC_TO_AMP = 0.000150567 # 전류 기울기 (param)
 DC_OFFSET_ADC_TO_AMP = -0.003118  # 전류 y절편 (offset)
 
 
-# === OES ===
+# ======================================================================
+# OES
+# ======================================================================
 OES_AVG_COUNT = 3 # OES 측정 시 평균을 낼 횟수
 
 
-# === MFC ===
+# ======================================================================
+# MFC
+# ======================================================================
+MFC_TCP_HOST = "192.168.1.50"     # NPort IP (IG와 동일 IP)
+MFC_TCP_PORT = 4006               # NPort Port (채널에 맞춰 4006)
+MFC_TX_EOL   = b"\r"              # 줄끝
+MFC_SKIP_ECHO = True              # 장비 에코가 있으면 True
+MFC_CONNECT_TIMEOUT_S = 3.0       # TCP connect 타임아웃(초)
+
 FLOW_ERROR_TOLERANCE = 0.05  # 5% 오차 허용
 FLOW_ERROR_MAX_COUNT = 3     # 3회 연속 불일치 시 경고
 
@@ -182,9 +189,9 @@ MFC_DELAY_MS_VALVE = 5000    # 밸브 이동/재전송 대기(5초)
 
 # [신규] 채널별 유량 스케일 팩터 정의
 MFC_SCALE_FACTORS = {
-    1: 1.0,     # Channel 1 (Ar): 1:1 스케일
-    2: 10.0,     # Channel 2 (O2): 10배 스케일
-    3: 10.0,     # Channel 3 (N2): 10배 스케일
+    1: 1.0,   # Channel 1 (Ar): 1:1 스케일
+    2: 10.0,  # Channel 2 (O2): 10배 스케일
+    3: 10.0,  # Channel 3 (N2): 10배 스케일
 }
 
 # UI ↔ HW 스케일 (SP1/압력 공용)
@@ -225,4 +232,3 @@ MFC_COMMANDS = {
     'SP1_ON': "D1",     # Set-point 1을 실행합니다. 
     'SP1_SET': lambda value: f"S1 {value}", # Set-point 1의 목표 압력 값을 설정합니다. 
 }
-
