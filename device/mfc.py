@@ -528,6 +528,10 @@ class AsyncMFC:
             # 평상시에도 전송 직전 강제 드레인은 하지 않음
             # (잔여 라인은 읽기 루틴의 에코/접두사 처리로 흡수)
 
+            # _cmd_worker_loop에서 write 직전, just_reopened가 아니면 짧게 비웁니다.
+            if not self._just_reopened:
+                await self._absorb_late_lines(80)
+
             # write
             try:
                 payload = cmd.cmd_str.encode("ascii", "ignore")
@@ -549,7 +553,7 @@ class AsyncMFC:
                 self._inflight = None
                 await asyncio.sleep(cmd.gap_ms / 1000.0)
                 # OS 버퍼 purge 대신 라인 큐만 '가볍게' 흡수 → 레이스 최소화
-                await self._absorb_late_lines(150)
+                await self._absorb_late_lines(int(MFC_ALLOW_NO_REPLY_DRAIN_MS))
                 self._safe_callback(cmd.callback, None)
                 continue
 
@@ -564,21 +568,18 @@ class AsyncMFC:
                 await self._emit_status(f"[TIMEOUT] {cmd.tag} {sent_txt}")
                 self._inflight = None
 
-                if cmd.retries_left > 0 and (time.monotonic() - self._last_connect_mono) < 2.0:
-                    cmd.retries_left -= 1
-                    self._cmd_q.appendleft(cmd)
-                    await self._absorb_late_lines(100)   # ✅ 라인큐만 가볍게 비움
-                    await asyncio.sleep(max(0.15, cmd.gap_ms / 1000.0))
-                    continue
 
-                if cmd.retries_left > 0:
-                    cmd.retries_left -= 1
-                    self._cmd_q.appendleft(cmd)
-                else:
-                    self._safe_callback(cmd.callback, None)
+                # ❌ 여기에서 retries_left로 재큐잉/재시도 하지 말 것
+                # ❌ 마지막 실패에서 _on_tcp_disconnected()로 연결 끊지도 말 것
 
-                self._on_tcp_disconnected()  # ✅ 표준화된 TCP 연결정리
+                # ✅ 고수준으로 "이번 시도는 실패" 알림만 보내고 끝
+                self._safe_callback(cmd.callback, None)
+
+                # 약간의 소프트 드레인으로 늦은 에코 흡수
+                await self._absorb_late_lines(100)
+                await asyncio.sleep(max(0.05, cmd.gap_ms / 1000.0))
                 continue
+
             # ✅ 여기부터가 "성공" 경로 (누락분)
             recv_txt = (line or "").strip()
             await self._emit_status(f"[RECV] {cmd.tag} ← {recv_txt}")
@@ -606,7 +607,8 @@ class AsyncMFC:
                 self._dbg("MFC", f"[ECHO] 현재 명령 에코 스킵: {line}")
                 continue
             # ② 과거 no-reply 에코
-            if self._skip_echos and line == self._skip_echos[0]:
+            #    ✅ 검증/읽기(expect_prefixes 지정된 경우)에는 스킵하지 않는다!
+            if (not expect_prefixes) and self._skip_echos and line == self._skip_echos[0]:
                 self._skip_echos.popleft()
                 await self._emit_status(f"[ECHO] 과거 no-reply 에코 스킵(큐): {line}")
                 continue
@@ -667,11 +669,8 @@ class AsyncMFC:
             self._on_tcp_disconnected()
 
     def _on_line_from_tcp(self, line: str):
-        # 과거 no-reply 에코 1회 스킵
-        if self._skip_echos and line == self._skip_echos[0]:
-            self._skip_echos.popleft()
-            self._dbg("MFC", f"[ECHO] 과거 no-reply 에코 스킵: {line}")
-            return
+        # ⚠️ 리더 단계에서는 에코를 버리지 않는다.
+        #    (검증/읽기 문맥은 워커에서 판단해 스킵)
         try:
             self._line_q.put_nowait(line)
         except asyncio.QueueFull:
@@ -800,15 +799,18 @@ class AsyncMFC:
             # 장비 반영 시간 대기 (최소 200ms 보장)
             await asyncio.sleep(max(MFC_DELAY_MS, 200) / 1000.0)
 
-            # ★ 직전 L0 에코/배너가 섞이지 않도록 라인 큐만 짧게 드레인
-            await self._absorb_late_lines(120)
+            # 설정값으로 드레인 시간 통일 (기본 80ms, 필요시 설정에서 조정)
+            await self._absorb_late_lines(int(MFC_ALLOW_NO_REPLY_DRAIN_MS))
 
             # 검증 (의미없는 빈 라인 방지용으로 최대 2회 읽기)
             now = ""
             for _ in range(2):
-                line = await self._send_and_wait_line(self._mk_cmd("READ_MFC_ON_OFF_STATUS"),
-                                                    tag="[VERIFY R69]", timeout_ms=MFC_TIMEOUT,
-                                                    expect_prefixes=("L0","L"))
+                verify_to = max(int(MFC_TIMEOUT), 2000)  # 최소 2초 권장
+                line = await self._send_and_wait_line(
+                    self._mk_cmd("READ_MFC_ON_OFF_STATUS"),
+                    tag="[VERIFY R69]", timeout_ms=verify_to,
+                    expect_prefixes=("L0","L")
+                )
                 now = self._parse_r69_bits(line or "")
                 if now:
                     break
@@ -900,9 +902,10 @@ class AsyncMFC:
         return self._parse_r60_values(line or "")
 
     async def _read_r69_bits(self) -> Optional[str]:
+        verify_to = max(int(MFC_TIMEOUT), 2000)
         line = await self._send_and_wait_line(
             self._mk_cmd("READ_MFC_ON_OFF_STATUS"),
-            tag="[READ R69]", timeout_ms=MFC_TIMEOUT,
+            tag="[READ R69]", timeout_ms=verify_to,
             retries=3, expect_prefixes=("L0", "L")
         )
         return self._parse_r69_bits(line or "")
@@ -932,14 +935,36 @@ class AsyncMFC:
 
     def _parse_r69_bits(self, resp: str) -> str:
         s = (resp or "").strip()
-        if s.startswith("L0"):
-            payload = s[2:]
-        elif s.startswith("L"):
-            payload = s[1:]
+
+        # 1) 대소문자/공백/구분자 정규화
+        s_up = s.upper().replace(" ", "").replace("\t", "")
+
+        # 2) 접두어(L0/L) 처리 (대소문자 무시)
+        if s_up.startswith("L0"):
+            payload = s_up[2:]
+        elif s_up.startswith("L"):
+            payload = s_up[1:]
         else:
-            payload = s
-        bits = "".join(ch for ch in payload if ch in "01")
-        return bits[:4]
+            payload = s_up
+
+        # 3) 문자 모양이 헷갈리는 것들을 숫자로 치환
+        #    O,o → 0 / I,l,| → 1
+        trans = str.maketrans({
+            "O": "0", "0": "0",
+            "I": "1", "L": "1", "|": "1",
+        })
+        payload = payload.translate(trans)
+
+        # 4) 숫자만 추출 (혹시 콤마/콜론 등 섞여 있어도 안전)
+        bits = "".join(ch for ch in payload if ch in "01")[:4]
+        if not bits:
+            try:
+                hex_dump = " ".join(f"{ord(c):02X}" for c in s[:16])
+            except Exception:
+                hex_dump = "n/a"
+            self._dbg("MFC", f"R69 파싱 실패: raw={repr(s)} hex={hex_dump}")
+        return bits
+
 
     def _parse_valve_ok(self, origin_cmd: str, line: str) -> bool:
         s = (line or "").strip()
@@ -1046,6 +1071,8 @@ class AsyncMFC:
         try:
             return await asyncio.wait_for(fut, timeout=(timeout_ms / 1000.0) + 2.0 + extra)
         except asyncio.TimeoutError:
+            if not fut.done():
+                fut.cancel()
             return None
 
 

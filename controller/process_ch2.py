@@ -904,7 +904,7 @@ class ProcessController:
         # ✅ IG OK 후 RGA 스캔(그래프 그리기 완료까지 대기)
         steps.append(ProcessStep(
             action=ActionType.RGA_SCAN,
-            message='RGA 스캔 수행 및 그래프 완료 대기'
+            message='RGA 스캔 및 그래프 출력 대기'
         ))
 
         # 모든 채널 Flow OFF
