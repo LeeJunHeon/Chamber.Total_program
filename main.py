@@ -1386,6 +1386,17 @@ class MainWindow(QWidget):
         finally:
             self._bg_tasks = []
 
+        # (선택) 스타터 스레드 조인 시도 후 레지스트리 정리
+        try:
+            joiners = []
+            for th in getattr(self, "_starter_threads", {}).values():
+                if th and th.is_alive():
+                    joiners.append(asyncio.to_thread(th.join, 0.5))  # 최대 0.5s씩
+            if joiners:
+                await asyncio.gather(*joiners, return_exceptions=True)
+        finally:
+            self._starter_threads.clear()
+
         # ▶ IG는 OFF 보장을 먼저 '대기'해서 끝내 둠(중복 OFF는 무해)
         try:
             if self.ig and hasattr(self.ig, "cancel_wait"):
@@ -1673,6 +1684,17 @@ class MainWindow(QWidget):
             await asyncio.gather(*live, return_exceptions=True)
         self._bg_tasks = []
         self._bg_started = False
+
+        # (선택) 스타터 스레드 조인 시도 후 레지스트리 정리
+        try:
+            joiners = []
+            for th in getattr(self, "_starter_threads", {}).values():
+                if th and th.is_alive():
+                    joiners.append(asyncio.to_thread(th.join, 0.5))  # 최대 0.5s씩
+            if joiners:
+                await asyncio.gather(*joiners, return_exceptions=True)
+        finally:
+            self._starter_threads.clear()
 
         # 2) 장치: 재연결 시도 금지 + 포트만 닫는 빠른 정리
         tasks = []
