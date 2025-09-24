@@ -1449,7 +1449,7 @@ class MainWindow(QWidget):
             self.append_log("DBG", "STOP WD: gather returned")
 
         try:
-            if getattr(self, "tsp_ctrl", None) and hasattr(self, "aclose"):
+            if getattr(self, "tsp_ctrl", None) and hasattr(self.tsp_ctrl, "aclose"):
                 await self.tsp_ctrl.aclose()
                 self.append_log("TSP", "포트 닫힘")
         except Exception:

@@ -118,6 +118,19 @@ class DCPowerAsync:
         self.state = "RAMPING_UP"
         await self._emit_status(f"프로세스 시작. 목표: {self.target_power:.1f} W")
 
+        # 초기 스텝 전송(SET 포함). 예: 5W
+        try:
+            await self._send_dc_power(self.current_power_step)  # ensure_set=True 경로로 가게 됨(아래 설명)
+            self._last_sent_power = float(self.current_power_step)
+            await self._emit_status(f"초기 전송 {self.current_power_step:.1f} W (SET 포함)")
+        except Exception as e:
+            await self._emit_status(f"초기 전송 실패: {e!r}")
+
+        # ✅ (추가) 첫 보정 1회 즉시 기동 (첫 측정이 늦어져도 램프업 진행 트리거)
+        if self._adjust_task and not self._adjust_task.done():
+            self._adjust_task.cancel()
+        self._adjust_task = asyncio.create_task(self._adjust_once(), name="DC_Adjust")
+
         # 폴링 태스크 (선택)
         if self._request_status_read is not None:
             self._control_task = asyncio.create_task(self._control_loop(), name="DC_Poll")

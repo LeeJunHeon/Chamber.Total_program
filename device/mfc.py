@@ -203,10 +203,10 @@ class AsyncMFC:
             await self._emit_failed("FLOW_ON", "R69 읽기 실패")
             return
 
-        bits = list(now.ljust(5, '0'))
+        bits = list(now.ljust(4, '0'))
         if 1 <= channel <= len(bits):
             bits[channel-1] = '1'
-        target = ''.join(bits[:5])
+        target = ''.join(bits[:4])
 
         # 안정화 상태 초기화(이 채널 대상으로 재시작)
         await self._cancel_task("_stab_task")
@@ -253,10 +253,10 @@ class AsyncMFC:
         if not now:
             await self._emit_failed("FLOW_OFF", "R69 읽기 실패")
             return
-        bits = list(now.ljust(5, '0'))
+        bits = list(now.ljust(4, '0'))
         if 1 <= channel <= len(bits):
             bits[channel-1] = '0'
-        target = ''.join(bits[:5])
+        target = ''.join(bits[:4])
 
         ok = await self._set_onoff_mask_and_verify(target)
         if ok:
@@ -948,7 +948,7 @@ class AsyncMFC:
         else:
             payload = s
         bits = "".join(ch for ch in payload if ch in "01")
-        return bits[:5]
+        return bits[:4]
 
     def _parse_valve_ok(self, origin_cmd: str, line: str) -> bool:
         s = (line or "").strip()
