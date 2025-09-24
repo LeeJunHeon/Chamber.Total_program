@@ -199,14 +199,17 @@ class MainWindow(QWidget):
         
         # DC는 family="DCV"
         async def _dc_send(power: float) -> None:
-            await self.plc.power_apply(power, family="DCV", ensure_set=True)
+            # ✔ SET(M00050) → WRITE(D00004) 순서로 자동 수행
+            await self.plc.power_apply(power, family="DCV", channel=0, ensure_set=True)
 
         async def _dc_send_unverified(power: float) -> None:
-            await self.plc.power_write(power, family="DCV")
+            # ✔ D00004(WRITE_0)에 바로 기록
+            await self.plc.power_write(power, family="DCV", write_idx=0)
 
         async def _dc_request_read():
             try:
-                P, V, I = await self.plc.power_read(family="DCV")
+                # ✔ D00000=Volt, D00001=Curr → P=V*I
+                P, V, I = await self.plc.power_read(family="DCV", v_idx=0, i_idx=0)
                 self.handle_dc_power_display(P, V, I)
                 return (P, V, I)
             except Exception as e:

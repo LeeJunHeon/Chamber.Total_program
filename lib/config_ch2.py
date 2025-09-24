@@ -35,8 +35,7 @@ RGA_XLSX_SHEET = "Histogram"
 
 
 # === 시리얼 포트 설정 ===
-TSP_PORT = "192.168.1.50:4004"
-TSP_BAUD = 9600
+
 
 
 
@@ -76,6 +75,21 @@ RGA_CSV_PATH = r"\\VanaM_NAS\VanaM_Sputter\RGA\Ch.2\RGA_spectrums.csv"
 RGA_PROGRAM_PATH = Path(RGA_PROGRAM_PATH)
 RGA_CSV_PATH = Path(RGA_CSV_PATH)
 
+# ======================================================================
+# TSP
+# ======================================================================
+TSP_TCP_HOST = "192.168.1.50"
+TSP_TCP_PORT = 4004
+
+# TSP 프레임 주소(헤더: 0x80 | (addr & 0x0F))
+TSP_ADDR = 0x01
+
+# 연결/쓰기 타임아웃(초)
+TSP_CONNECT_TIMEOUT_S = 1.0
+TSP_WRITE_TIMEOUT_S   = 1.0
+
+# 전송 후 짧은 대기(ms) — 장비가 응답을 주지 않는 모델이므로 최소 대기만
+TSP_POST_SEND_DELAY_MS = 10
 
 # ======================================================================
 # IG

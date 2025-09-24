@@ -203,10 +203,10 @@ class AsyncMFC:
             await self._emit_failed("FLOW_ON", "R69 읽기 실패")
             return
 
-        bits = list(now.ljust(4, '0'))
+        bits = list(now.ljust(5, '0'))
         if 1 <= channel <= len(bits):
             bits[channel-1] = '1'
-        target = ''.join(bits[:4])
+        target = ''.join(bits[:5])
 
         # 안정화 상태 초기화(이 채널 대상으로 재시작)
         await self._cancel_task("_stab_task")
@@ -253,10 +253,10 @@ class AsyncMFC:
         if not now:
             await self._emit_failed("FLOW_OFF", "R69 읽기 실패")
             return
-        bits = list(now.ljust(4, '0'))
+        bits = list(now.ljust(5, '0'))
         if 1 <= channel <= len(bits):
             bits[channel-1] = '0'
-        target = ''.join(bits[:4])
+        target = ''.join(bits[:5])
 
         ok = await self._set_onoff_mask_and_verify(target)
         if ok:
@@ -556,7 +556,7 @@ class AsyncMFC:
                 self._inflight = None
                 await asyncio.sleep(cmd.gap_ms / 1000.0)
                 # OS 버퍼 purge 대신 라인 큐만 '가볍게' 흡수 → 레이스 최소화
-                await self._absorb_late_lines(min(MFC_ALLOW_NO_REPLY_DRAIN_MS, 50))
+                await self._absorb_late_lines(150)
                 self._safe_callback(cmd.callback, None)
                 continue
 
@@ -809,6 +809,9 @@ class AsyncMFC:
             # 장비 반영 시간 대기 (최소 200ms 보장)
             await asyncio.sleep(max(MFC_DELAY_MS, 200) / 1000.0)
 
+            # ★ 직전 L0 에코/배너가 섞이지 않도록 라인 큐만 짧게 드레인
+            await self._absorb_late_lines(120)
+
             # 검증 (의미없는 빈 라인 방지용으로 최대 2회 읽기)
             now = ""
             for _ in range(2):
@@ -945,7 +948,7 @@ class AsyncMFC:
         else:
             payload = s
         bits = "".join(ch for ch in payload if ch in "01")
-        return bits[:4]
+        return bits[:5]
 
     def _parse_valve_ok(self, origin_cmd: str, line: str) -> bool:
         s = (line or "").strip()

@@ -1,18 +1,20 @@
-# device/tsp.py
-# RFC2217/로컬 직렬 모두 지원: port에 "COM5" 또는 "rfc2217://ip:port"를 그대로 넣는다.
+# -*- coding: utf-8 -*-
+"""
+tsp.py — asyncio 기반 TSP 컨트롤러 (TCP Server 직결)
+- pyserial 불필요, RFC2217 미지원(순수 TCP)
+- 프레임: [0x80|addr] + ASCII_LEN(2) + ASCII_CMD + CHECKSUM(1)
+- 장비가 응답을 보내지 않아도 되는(write-only) 시나리오 가정
+"""
 
 from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional
-import time
-import asyncio
+import asyncio, socket
 
-try:
-    import serial
-    from serial import serial_for_url
-except ImportError as e:
-    raise RuntimeError("pyserial 미설치. `pip install pyserial` 필요") from e
-
+from lib.config_ch2 import (
+    TSP_TCP_HOST, TSP_TCP_PORT,
+    TSP_ADDR, TSP_CONNECT_TIMEOUT_S, TSP_WRITE_TIMEOUT_S, TSP_POST_SEND_DELAY_MS
+)
 
 def _xor7(*chunks: bytes) -> int:
     x = 0
@@ -23,35 +25,48 @@ def _xor7(*chunks: bytes) -> int:
 
 
 @dataclass
-class TSPLetterClient:
-    port: str                     # "COM5" 또는 "rfc2217://192.168.1.50:4004"
-    baudrate: Optional[int] = 9600
-    addr: int = 0x01              # 0x80 | addr => 0x81 = 주소 1
-    timeout: Optional[float] = 1.0
+class TSPLetterTCPClient:
+    host: str = TSP_TCP_HOST
+    port: int = TSP_TCP_PORT
+    addr: int = TSP_ADDR
+    connect_timeout_s: float = float(TSP_CONNECT_TIMEOUT_S)
+    write_timeout_s: float = float(TSP_WRITE_TIMEOUT_S)
+    post_send_delay_ms: int = int(TSP_POST_SEND_DELAY_MS)
 
-    _ser: Optional[serial.SerialBase] = None
+    _reader: Optional[asyncio.StreamReader] = None
+    _writer: Optional[asyncio.StreamWriter] = None
 
-    def open(self) -> None:
-        if self._ser and getattr(self._ser, "is_open", False):
+    async def open(self) -> None:
+        if self.is_open:
             return
-        # URL/COM 문자열을 그대로 사용. 여기서 ':9600' 등은 붙이지 않는다.
-        baud = int(self.baudrate or 9600)
-        to = float(self.timeout or 1.0)
-        self._ser = serial_for_url(self.port, baudrate=baud, timeout=to)
+        self._reader, self._writer = await asyncio.wait_for(
+            asyncio.open_connection(self.host, self.port),
+            timeout=max(0.1, self.connect_timeout_s)
+        )
+        # TCP keepalive(가능하면)
+        try:
+            sock = self._writer.get_extra_info("socket")
+            if isinstance(sock, socket.socket):
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+        except Exception:
+            pass
 
-    def close(self) -> None:
-        if self._ser:
+    async def close(self) -> None:
+        if self._writer is not None:
             try:
-                self._ser.close()
+                self._writer.close()
+                await asyncio.wait_for(self._writer.wait_closed(), timeout=max(0.1, self.write_timeout_s))
+            except Exception:
+                pass
             finally:
-                self._ser = None
+                self._reader = None
+                self._writer = None
 
     @property
     def is_open(self) -> bool:
-        return bool(self._ser and getattr(self._ser, "is_open", False))
+        return bool(self._writer) and not self._writer.is_closing()  # type: ignore[union-attr]
 
     def _build_frame(self, cmd_ascii: str) -> bytes:
-        # 프레임: [0x80|addr] + ASCII_LEN(2) + ASCII_CMD + CHECKSUM(1)
         if not cmd_ascii or not all(32 <= ord(ch) <= 126 for ch in cmd_ascii):
             raise ValueError(f"ASCII 명령 형식 오류: {cmd_ascii!r}")
         header = bytes([0x80 | (self.addr & 0x0F)])
@@ -60,27 +75,35 @@ class TSPLetterClient:
         cs = _xor7(header, len_ascii, payload)
         return header + len_ascii + payload + bytes([cs])
 
-    def send_ascii(self, cmd_ascii: str) -> bytes:
+    async def send_ascii(self, cmd_ascii: str) -> bytes:
         if not self.is_open:
-            raise RuntimeError("포트가 열려있지 않습니다. open() 호출 필요")
+            raise RuntimeError("TSP TCP가 열려있지 않습니다. open() 필요")
         frame = self._build_frame(cmd_ascii)
-        assert self._ser is not None
-        self._ser.write(frame)
-        self._ser.flush()
-        time.sleep(0.01)  # 장비가 응답을 안 줄 수 있으므로 대기만
+        assert self._writer is not None
+        self._writer.write(frame)
+        # drain에 타임아웃 적용
+        await asyncio.wait_for(self._writer.drain(), timeout=max(0.1, self.write_timeout_s))
+        # 장비가 응답을 안 주는 모델 → 아주 짧게만 대기(스펙 호환)
+        await asyncio.sleep(max(0, self.post_send_delay_ms) / 1000.0)
         return frame
 
-    # 편의 명령
-    def cmd_start(self) -> None:  self.send_ascii("G1")
-    def cmd_stop(self)  -> None:  self.send_ascii("G0")
-    def cmd_status(self)-> None:  self.send_ascii("S?")
-    def cmd_error(self) -> None:  self.send_ascii("E?")
+    # 편의 명령 (모두 비동기)
+    async def cmd_start(self)  -> None:  await self.send_ascii("G1")
+    async def cmd_stop(self)   -> None:  await self.send_ascii("G0")
+    async def cmd_status(self) -> None:  await self.send_ascii("S?")
+    async def cmd_error(self)  -> None:  await self.send_ascii("E?")
 
 
 class AsyncTSP:
-    """동기 드라이버를 asyncio에서 편하게 쓰기 위한 래퍼"""
-    def __init__(self, client: TSPLetterClient):
-        self.client = client
+    """
+    기존 사용처와 시그니처 유지:
+      - await tsp.ensure_open()
+      - await tsp.start() / await tsp.stop()
+      - await tsp.ensure_off()
+      - await tsp.aclose()
+    """
+    def __init__(self, client: Optional[TSPLetterTCPClient] = None):
+        self.client = client or TSPLetterTCPClient()
 
     @property
     def is_connected(self) -> bool:
@@ -88,22 +111,23 @@ class AsyncTSP:
 
     async def ensure_open(self) -> None:
         if not self.client.is_open:
-            await asyncio.to_thread(self.client.open)
+            await self.client.open()
 
     async def start(self) -> None:
         await self.ensure_open()
-        await asyncio.to_thread(self.client.cmd_start)
+        await self.client.cmd_start()
 
     async def stop(self) -> None:
         if not self.client.is_open:
             return
-        await asyncio.to_thread(self.client.cmd_stop)
+        await self.client.cmd_stop()
 
     async def ensure_off(self) -> None:
+        # 응답 필요 없음: best-effort
         try:
             await self.stop()
         except Exception:
             pass
 
     async def aclose(self) -> None:
-        await asyncio.to_thread(self.client.close)
+        await self.client.close()
