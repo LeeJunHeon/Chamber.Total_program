@@ -8,13 +8,9 @@ from collections import deque
 import contextlib
 
 from PySide6.QtWidgets import QApplication, QWidget, QMessageBox, QFileDialog, QPlainTextEdit, QStackedWidget
-from PySide6.QtCore import QCoreApplication, QTimer
+from PySide6.QtCore import QCoreApplication
 from PySide6.QtGui import QTextCursor, QCloseEvent
 from qasync import QEventLoop
-
-# =============== debug ==============
-import time
-# =============== debug ==============
 
 # === imports ===
 from ui.main_window import Ui_Form
@@ -362,9 +358,7 @@ class MainWindow(QWidget):
                     self._apply_polling_targets(targets)
 
                     self._soon(self.graph_controller.clear_oes_plot)  # Qt GUI 스레드에서 안전 호출
-                    self.append_log("DBG", "OES: run_measurement() call")
                     await self.oes.run_measurement(duration_sec, integration_ms)
-                    self.append_log("DBG", "OES: run_measurement() returned")
 
                 except Exception as e:
                     self.process_controller.on_oes_failed("OES", str(e))
@@ -432,82 +426,6 @@ class MainWindow(QWidget):
 
         # ✅ 콘솔로 안 찍고 로그로만 받게 훅 설치
         self._install_exception_hooks()
-
-        # =============== debug ==============
-        # 🔍 Task 추적기 설치(전역 create_task 후킹) + 누수 워치독 시작
-        #self._install_task_tracker()
-        # =============== debug ==============
-
-        # =============== debug ==============
-        # __init__ 끝부분, self._install_exception_hooks() 다음쯤
-    #     from PySide6.QtCore import qInstallMessageHandler, QtMsgType
-    #     def _qt_msg_handler(mode, context, message):
-    #         tag = {QtMsgType.QtDebugMsg: "QtDebug", QtMsgType.QtInfoMsg: "QtInfo",
-    #             QtMsgType.QtWarningMsg: "QtWarn", QtMsgType.QtCriticalMsg: "QtCrit",
-    #             QtMsgType.QtFatalMsg: "QtFatal"}.get(mode, "Qt")
-    #         self.append_log(tag, message)
-    #     qInstallMessageHandler(_qt_msg_handler)
-
-    #     # 🔧 (A) UI 하트비트: 메인 스레드 지연 감시
-    #     self._last_ui_tick = time.perf_counter()
-    #     self._ui_heartbeat = QTimer(self)
-    #     self._ui_heartbeat.setInterval(1000)  # 1s
-    #     self._ui_heartbeat.timeout.connect(self._on_ui_heartbeat)
-    #     self._ui_heartbeat.start()
-
-    #     # 🔧 (B) asyncio 이벤트루프 지연 감시
-    #     self._spawn_detached(self._loop_health_watchdog(), store=True, name="WD.eventloop")
-        
-    # def _on_ui_heartbeat(self):
-    #     now = time.perf_counter()
-    #     dt_ms = (now - getattr(self, "_last_ui_tick", now)) * 1000.0
-    #     self._last_ui_tick = now
-    #     if dt_ms > 1500:  # 1.5초 이상 늦으면 UI가 막혔을 가능성
-    #         self.append_log("WD.UI", f"UI 타이머 지연 {dt_ms:.0f} ms (메인 스레드 정지 가능성)")
-
-    # async def _loop_health_watchdog(self, interval: float = 1.0, warn_slack_ms: float = 800.0):
-    #     last = time.perf_counter()
-    #     while True:
-    #         await asyncio.sleep(interval)
-    #         now = time.perf_counter()
-    #         dt_ms = (now - last) * 1000.0
-    #         last = now
-    #         expected = interval * 1000.0
-    #         if dt_ms > expected + warn_slack_ms:
-    #             live = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done()]
-    #             self.append_log("WD.Asyncio", f"이벤트루프 지연 {dt_ms:.0f} ms (bg_tasks={len(live)})")
-
-    # def _mark_pump_event(self, tag: str):
-    #     if not hasattr(self, "_last_pump_evt"):
-    #         self._last_pump_evt = {}
-    #     self._last_pump_evt[tag] = time.perf_counter()
-
-    # async def _pump_idle_watchdog(self, tag: str, threshold_s: float = 5.0):
-    #     self._mark_pump_event(tag)
-    #     while True:
-    #         await asyncio.sleep(1.0)
-    #         last = self._last_pump_evt.get(tag, 0.0)
-    #         if time.perf_counter() - last > threshold_s:
-    #             self.append_log("WD.Pump", f"{tag} no events for >{threshold_s:.0f}s")
-    #             # 경고 후 리셋(로그 스팸 방지)
-    #             self._last_pump_evt[tag] = time.perf_counter()
-    # =============== debug ==============
-
-    def _mark_pump_event(self, tag: str):
-        if not hasattr(self, "_last_pump_evt"):
-            self._last_pump_evt = {}
-        self._last_pump_evt[tag] = time.perf_counter()
-
-    async def _pump_idle_watchdog(self, tag: str, threshold_s: float = 5.0):
-        # 마지막 이벤트 시각을 찍어두고 주기적으로 확인
-        self._mark_pump_event(tag)
-        while True:
-            await asyncio.sleep(1.0)
-            last = self._last_pump_evt.get(tag, 0.0)
-            if time.perf_counter() - last > threshold_s:
-                self.append_log("WD.Pump", f"{tag} no events for >{threshold_s:.0f}s")
-                # 경고 한 번 찍은 뒤 기준 시각 갱신(로그 스팸 방지)
-                self._last_pump_evt[tag] = time.perf_counter()
 
     # ------------------------------------------------------------------
     # UI 버튼 연결만 유지 (컨트롤러 ↔ UI는 이벤트 큐로 처리)
@@ -702,14 +620,8 @@ class MainWindow(QWidget):
     # 비동기 이벤트 펌프 (장치 → ProcessController)
     # ------------------------------------------------------------------
     async def _pump_mfc_events(self) -> None:
-        # =============== debug ==============
-        #self.append_log("DBG", "Pump.MFC started")
-        # =============== debug ==============
         async for ev in self.mfc.events():
             k = ev.kind
-            # =============== debug ==============
-            #self._mark_pump_event("MFC")
-            # =============== debug ==============
             if k == "status":
                 self.append_log("MFC", ev.message or "")
             elif k == "command_confirmed":
@@ -739,13 +651,7 @@ class MainWindow(QWidget):
                     self.append_log("MFC", f"[poll] ChamberP: {txt}")
 
     async def _pump_ig_events(self) -> None:
-        # =============== debug ==============
-        #self.append_log("DBG", "Pump.IG started")
-        # =============== debug ==============
         async for ev in self.ig.events():
-            # =============== debug ==============
-            #self._mark_pump_event("IG")
-            # =============== debug ==============
             k = ev.kind
             if k == "status":
                 self.append_log("IG", ev.message or "")
@@ -768,14 +674,8 @@ class MainWindow(QWidget):
                     self.chat_notifier.notify_error_with_src("IG", why)
 
     async def _pump_rga_events_ch(self, adapter: RGA100AsyncAdapter, ch: int) -> None:
-        # =============== debug ==============
-        #self.append_log("DBG", f"Pump.RGA{ch} started")
-        # =============== debug ==============
         tag = f"RGA{ch}"
         async for ev in adapter.events():
-            # =============== debug ==============
-            #self._mark_pump_event(tag)
-            # =============== debug ==============
             if ev.kind == "status":
                 self.append_log(tag, ev.message or "")
 
@@ -825,13 +725,7 @@ class MainWindow(QWidget):
                     self.append_log(tag, f"CH1 이벤트 무시(실패): {why}")
 
     async def _pump_dc_events(self) -> None:
-        # =============== debug ==============
-        #self.append_log("DBG", "Pump.DC started")
-        # =============== debug ==============
         async for ev in self.dc_power.events():
-            # =============== debug ==============
-            #self._mark_pump_event("DC")
-            # =============== debug ==============
             k = ev.kind
             if k == "status":
                 self.append_log("DCpower", ev.message or "")
@@ -841,13 +735,7 @@ class MainWindow(QWidget):
                 self.process_controller.on_device_step_ok()
 
     async def _pump_rf_events(self) -> None:
-        # =============== debug ==============
-        #self.append_log("DBG", "Pump.RF started")
-        # =============== debug ==============
         async for ev in self.rf_power.events():
-            # =============== debug ==============
-            #self._mark_pump_event("RF")
-            # =============== debug ==============
             k = ev.kind
             if k == "status":
                 self.append_log("RFpower", ev.message or "")
@@ -865,13 +753,7 @@ class MainWindow(QWidget):
                 self.process_controller.on_device_step_ok()
 
     async def _pump_rfpulse_events(self) -> None:
-        # =============== debug ==============
-        #self.append_log("DBG", "Pump.RFPulse started")
-        # =============== debug ==============
         async for ev in self.rf_pulse.events():
-            # =============== debug ==============
-            #self._mark_pump_event("RFPulse")
-            # =============== debug ==============
             k = ev.kind
             if k == "status":
                 self.append_log("RFPulse", ev.message or "")
@@ -901,13 +783,7 @@ class MainWindow(QWidget):
                     self.append_log("RFPulse", f"STATUS on={int(st.rf_output_on)} req={int(st.rf_on_requested)} ...")
 
     async def _pump_oes_events(self) -> None:
-        # =============== debug ==============
-        #self.append_log("DBG", "Pump.OES started")
-        # =============== debug ==============
         async for ev in self.oes.events():
-            # =============== debug ==============
-            #self._mark_pump_event("OES")
-            # =============== debug ==============
             try:
                 k = getattr(ev, "kind", None)
                 if k == "status":
@@ -955,9 +831,7 @@ class MainWindow(QWidget):
                 self._ensure_background_started()
                 self._rga_done_signaled = False
                 self._soon(self.graph_controller.clear_rga_plot)
-                self.append_log("DBG", "RGA: scan_histogram_to_csv() call")
                 await self.rga_ch2.scan_histogram_to_csv(RGA_CSV_PATH)
-                self.append_log("DBG", "RGA: scan_histogram_to_csv() returned")
                 # 완료 토큰은 data/finished 쪽에서 처리
             except Exception as e:
                 # 🔧 여기서도 '실패'를 '소프트 실패'로 처리: 로그 + 다음 단계 진행
@@ -1175,9 +1049,7 @@ class MainWindow(QWidget):
     # 2) async 함수 안의 모달 호출을 유틸로 교체
     async def _start_after_preflight(self, params: NormParams) -> None:
         try:
-            self.append_log("DBG", "PF: entering start_after_preflight")
             self._ensure_background_started()
-            self.append_log("DBG", "PF: background started ensured")
 
             # 프리플라이트 동안 Start 비활성화(중복 클릭 방지)
             self._on_process_status_changed(True)
@@ -1186,11 +1058,7 @@ class MainWindow(QWidget):
             use_rf_pulse: bool = bool(params.get("use_rf_pulse", False))
             timeout = 10.0 if use_rf_pulse else 8.0
 
-            # =============== debug ==============
-            #self.append_log("DBG", "PF: preflight_connect() about to await")
             ok, failed = await self._preflight_connect(params, timeout_s=timeout)
-            #self.append_log("DBG", f"PF: preflight_connect() returned ok={ok} failed={failed}")
-            # =============== debug ==============
 
             if not ok:
                 fail_list = ", ".join(failed) if failed else "알 수 없음"
@@ -1228,10 +1096,6 @@ class MainWindow(QWidget):
             t0 = asyncio.get_running_loop().time()
         except RuntimeError:
             t0 = 0.0
-
-        # =============== debug ==============
-        #self.append_log("DBG", f"WAIT:{name} start (timeout={timeout_s}s)")
-        # =============== debug ==============
 
         while True:
             if self._is_dev_connected(dev):
@@ -1368,8 +1232,6 @@ class MainWindow(QWidget):
         light=True : 폴링만 즉시 중지(연결은 유지, 포트 닫지 않음)
         light=False: 전체 정리(이벤트 펌프/워커/워치독 취소 + cleanup)
         """
-        self.append_log("DBG", f"STOP WD: light={light} entering")
-
         if light:
             # 폴링만 중지 (연결/워커 유지)
             try:
@@ -1444,9 +1306,7 @@ class MainWindow(QWidget):
             pass
 
         if tasks:
-            self.append_log("DBG", f"STOP WD: gather {len(tasks)} tasks")
             await asyncio.gather(*tasks, return_exceptions=True)
-            self.append_log("DBG", "STOP WD: gather returned")
 
         try:
             if getattr(self, "tsp_ctrl", None) and hasattr(self.tsp_ctrl, "aclose"):
