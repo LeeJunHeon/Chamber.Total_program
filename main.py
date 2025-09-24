@@ -34,7 +34,7 @@ from controller.process_ch2 import ProcessController
 
 from lib.config_ch2 import (
     CHAT_WEBHOOK_URL, ENABLE_CHAT_NOTIFY, IG_POLLING_INTERVAL_MS,
-    RGA_NET, RGA_CSV_PATH, TSP_PORT, TSP_BAUD
+    RGA_NET, RGA_CSV_PATH, TSP_TCP_HOST, TSP_TCP_PORT, TSP_ADDR
 )
 
 RawParams = TypedDict('RawParams', {
@@ -206,7 +206,7 @@ class MainWindow(QWidget):
             try:
                 # ✔ D00000=Volt, D00001=Curr → P=V*I
                 P, V, I = await self.plc.power_read(family="DCV", v_idx=0, i_idx=0)
-                self.handle_dc_power_display(P, V, I)
+                #self.handle_dc_power_display(P, V, I)
                 return (P, V, I)
             except Exception as e:
                 self.append_log("DCpower", f"read failed: {e!r}")
@@ -250,8 +250,9 @@ class MainWindow(QWidget):
         # TSP는 별도 컨트롤러에 위임 (버튼 훅/연결/명령 포함)
         self.tsp_ctrl = TSPPageController(
             ui=self.ui,              # UI 전체를 넘겨서 컨트롤러가 Start/Stop 버튼에 자체로 연결
-            port=TSP_PORT,
-            baud=TSP_BAUD,
+            host=TSP_TCP_HOST,
+            tcp_port=TSP_TCP_PORT,
+            addr=TSP_ADDR,
             loop=self._loop,         # (선택) 컨트롤러가 asyncio 태스크 만들 때 사용
         )
 
@@ -729,6 +730,8 @@ class MainWindow(QWidget):
             k = ev.kind
             if k == "status":
                 self.append_log("DCpower", ev.message or "")
+            elif k == "display":  # ← 추가
+                self.handle_dc_power_display(ev.power, ev.voltage, ev.current)
             elif k == "target_reached":
                 self.process_controller.on_dc_target_reached()
             elif k == "power_off_finished":
@@ -880,15 +883,6 @@ class MainWindow(QWidget):
         self._ensure_task_alive("Pump.RFPulse",   self._pump_rfpulse_events)
         self._ensure_task_alive("Pump.OES",       self._pump_oes_events)
         self._ensure_task_alive("Pump.PC",        self._pump_pc_events)
-
-        # (디버그) 펌프 idle 워치독 유지
-        # self._ensure_task_alive("WD.Pump.RGA2", lambda: self._pump_idle_watchdog("RGA2"))
-        # self._ensure_task_alive("WD.Pump.MFC",  lambda: self._pump_idle_watchdog("MFC"))
-        # self._ensure_task_alive("WD.Pump.IG",   lambda: self._pump_idle_watchdog("IG"))
-        # self._ensure_task_alive("WD.Pump.OES",  lambda: self._pump_idle_watchdog("OES"))
-        # self._ensure_task_alive("WD.Pump.RF",   lambda: self._pump_idle_watchdog("RF"))
-        # self._ensure_task_alive("WD.Pump.DC",   lambda: self._pump_idle_watchdog("DC"))
-        # self._ensure_task_alive("WD.Pump.RFPulse", lambda: self._pump_idle_watchdog("RFPulse"))
 
         self._bg_started = True
 
@@ -1876,22 +1870,6 @@ class MainWindow(QWidget):
             t = loop.create_task(coro, name=name)
             if store:
                 self._bg_tasks.append(t)
-
-            # =========== debug ==========
-            # tn = t.get_name() if hasattr(t, "get_name") else (name or "task")
-            # def _on_done(fut: asyncio.Task):
-            #     try:
-            #         exc = fut.exception()
-            #     except Exception:
-            #         exc = None
-            #     if exc:
-            #         self.append_log("Task", f"{tn} finished with ERROR: {exc!r}")
-            #     else:
-            #         self.append_log("Task", f"{tn} finished OK")
-            # t.add_done_callback(_on_done)
-            # self.append_log("Task", f"spawned: {tn}")
-            # =========== debug ==========
-
         try:
             running = asyncio.get_running_loop()
         except RuntimeError:

@@ -6,15 +6,15 @@ from typing import Optional
 from PySide6.QtWidgets import QMessageBox
 from PySide6.QtCore import QTimer
 
-from lib.config_ch2 import TSP_PORT, TSP_BAUD  # URL/baud는 config에서
-from device.tsp import TSPLetterClient, AsyncTSP
+from lib.config_ch2 import TSP_TCP_HOST, TSP_TCP_PORT, TSP_ADDR
+from device.tsp import TSPLetterTCPClient, AsyncTSP
 from controller.tsp_controller import TSPBurstRunner, TSPProcessConfig, IGControllerLike
 
 
 class TSPPageController:
     """
     - main.py는 UI만 생성해 넘겨주고, TSP 연결/공정은 여기서 전담.
-    - Start를 눌렀을 때만 RFC2217(URL)로 연결하고, 공정 종료 후 닫는다.
+    - Start를 눌렀을 때만 TCP(host:port)로 연결하고, 공정 종료 후 닫는다.
     - IG는 외부에서 주입할 수도 있고(권장), 없으면 내부에서 생성해 사용한다.
     """
     def __init__(
@@ -23,16 +23,18 @@ class TSPPageController:
         *,
         loop: Optional[asyncio.AbstractEventLoop] = None,
         ig: Optional[IGControllerLike] = None,
-        port: Optional[str] = None,      # e.g. "rfc2217://192.168.0.50:4001"
-        baud: Optional[int] = None,      # 보통 9600
+        host: Optional[str] = None,      # e.g. "192.168.0.50"
+        tcp_port: Optional[int] = None,  # e.g. 4001
+        addr: Optional[int] = None,      # 0~15
     ):
         self.ui = ui
         self._loop = loop or asyncio.get_event_loop()
 
-        self.port = port or TSP_PORT
-        self.baud = baud or TSP_BAUD
+        self.host = host or TSP_TCP_HOST
+        self.tcp_port = int(tcp_port or TSP_TCP_PORT)
+        self.addr = int(addr or TSP_ADDR)
 
-        self.client: Optional[TSPLetterClient] = None
+        self.client: Optional[TSPLetterTCPClient] = None
         self.tsp: Optional[AsyncTSP] = None
 
         # IG: 외부 주입 시 재사용(권장). 없으면 내부 생성.
@@ -169,19 +171,21 @@ class TSPPageController:
                     pass
 
     async def _ensure_tsp_open(self) -> None:
-        """Start 버튼을 눌렀을 때에만 RFC2217 URL로 연결."""
+        """Start 버튼을 눌렀을 때에만 TCP로 연결."""
         if self.tsp is not None and getattr(self.tsp, "is_connected", False):
             return
         async with self._connect_lock:
             if self.tsp is not None and getattr(self.tsp, "is_connected", False):
                 return
 
-            # RFC2217 URL 사용: e.g. "rfc2217://192.168.0.50:4001"
-            self.client = TSPLetterClient(port=self.port, baudrate=self.baud)
+            # 순수 TCP 사용
+            self.client = TSPLetterTCPClient(
+                host=self.host, port=self.tcp_port, addr=self.addr
+            )
             self.tsp = AsyncTSP(self.client)
             try:
                 await self.tsp.ensure_open()
-                self.append_log("TSP", f"연결됨: {self.port} @ {self.baud}")
+                self.append_log("TSP", f"연결됨: {self.host}:{self.tcp_port} (addr={self.addr})")
             except Exception as e:
                 self.append_log("TSP", f"연결 실패: {e!r}")
                 self.client = None
@@ -197,6 +201,12 @@ class TSPPageController:
             # Start 클릭 시점에만 연결/IG 시작
             await self._ensure_tsp_open()
             await self._ensure_ig_started()
+
+            # 시작 전 OFF 한번(무해한 best-effort)
+            try:
+                await self.tsp.ensure_off()
+            except Exception:
+                pass
 
             cfg = TSPProcessConfig(
                 target_pressure_torr=self._read_target_pressure(),
@@ -251,6 +261,11 @@ class TSPPageController:
             # “Start 때만 연결” 원칙 → 실행 종료 후 포트 닫음
             try:
                 if self.tsp is not None:
+                    # 종료 전에 OFF 한번(무해한 best-effort)
+                    try:
+                        await self.tsp.ensure_off()
+                    except Exception:
+                        pass
                     await self.tsp.aclose()
                     self.append_log("TSP", "포트 닫힘")
             except Exception:

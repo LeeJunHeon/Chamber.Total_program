@@ -90,7 +90,8 @@ class TSPBurstRunner:
     async def _poll_ig_until(self, *, seconds: float, target: float,
                              cancel_event: Optional[asyncio.Event]) -> bool:
         """seconds 동안 폴링. 도달 시 True."""
-        t_end = asyncio.get_event_loop().time() + seconds
+        loop = asyncio.get_running_loop()
+        t_end = loop.time() + seconds
         while True:
             if cancel_event and cancel_event.is_set():
                 return False
@@ -102,7 +103,7 @@ class TSPBurstRunner:
                     return True
             except Exception as e:
                 self._log("IG", f"압력 읽기 오류: {e!r}")
-            now = asyncio.get_event_loop().time()
+            now = loop.time()
             if now >= t_end:
                 return False
             await asyncio.sleep(min(1.0, seconds, 0.5))  # 빠르게 깨어 IG 주기는 run()에서 제어
