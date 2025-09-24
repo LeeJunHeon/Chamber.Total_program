@@ -93,9 +93,6 @@ class AsyncMFC:
         self._poll_task: Optional[asyncio.Task] = None
         self._stab_task: Optional[asyncio.Task] = None
 
-        # 재연결 백오프
-        self._reconnect_backoff_ms = MFC_RECONNECT_BACKOFF_START_MS
-
         # 런타임/스케일/모니터링
         self.gas_map = {1: "Ar", 2: "O2", 3: "N2"}
         self.last_setpoints = {1: 0.0, 2: 0.0, 3: 0.0}      # 장비 단위(HW)
@@ -111,7 +108,6 @@ class AsyncMFC:
         self._stab_ch: Optional[int] = None
         self._stab_target_hw: float = 0.0
         self._stab_attempts: int = 0
-        self._stab_pending_cmd: Optional[str] = None  # FLOW_ON 확정 시점 관리
 
         # Qt의 clear+soft-drain 타이밍을 모사하기 위한 플래그
         self._last_connect_mono: float = 0.0
@@ -163,6 +159,7 @@ class AsyncMFC:
         if self._writer:
             with contextlib.suppress(Exception):
                 self._writer.close()
+                await self._writer.wait_closed()
 
         self._reader = None
         self._writer = None
@@ -212,7 +209,6 @@ class AsyncMFC:
         await self._cancel_task("_stab_task")
         self._stab_ch = None
         self._stab_target_hw = 0.0
-        self._stab_pending_cmd = None
 
         # L0 적용/검증
         ok = await self._set_onoff_mask_and_verify(target)
@@ -227,7 +223,6 @@ class AsyncMFC:
                 self._stab_ch = channel
                 self._stab_target_hw = tgt
                 self._stab_attempts = 0
-                self._stab_pending_cmd = "FLOW_ON"
                 self._stab_task = asyncio.create_task(self._stabilization_loop())
                 await self._emit_status(f"FLOW_ON: ch{channel} 안정화 시작 (목표 HW {tgt:.2f})")
                 return
@@ -242,7 +237,6 @@ class AsyncMFC:
             await self._cancel_task("_stab_task")
             self._stab_ch = None
             self._stab_target_hw = 0.0
-            self._stab_pending_cmd = None
             await self._emit_status(f"FLOW_OFF 요청: ch{channel} 안정화 취소")
 
         # 목표 0으로 초기화 (경고 오경보 방지)
@@ -427,7 +421,6 @@ class AsyncMFC:
             self._stab_task = None
         self._stab_ch = None
         self._stab_target_hw = 0.0
-        self._stab_pending_cmd = None
         # 큐 정리 및 카운터 리셋
         self._purge_pending(f"process finished ({'ok' if success else 'fail'})")
         self.last_setpoints = {1: 0.0, 2: 0.0, 3: 0.0}
@@ -762,14 +755,12 @@ class AsyncMFC:
                     await self._emit_confirmed("FLOW_ON")
                     self._stab_ch = None
                     self._stab_target_hw = 0.0
-                    self._stab_pending_cmd = None
                     return
 
                 if self._stab_attempts >= 30:
                     await self._emit_failed("FLOW_ON", "유량 안정화 시간 초과")
                     self._stab_ch = None
                     self._stab_target_hw = 0.0
-                    self._stab_pending_cmd = None
                     return
 
                 await asyncio.sleep(MFC_STABILIZATION_INTERVAL_MS / 1000.0)
@@ -1176,16 +1167,3 @@ class AsyncMFC:
             except Exception:
                 pass
             await asyncio.sleep(0 if drained else 0.005)  # ★ 비었으면 아주 살짝 더 대기
-
-    # 각 장치 클래스 내부
-    async def pause_watchdog(self):
-        self._want_connected = False
-        t = getattr(self, "_watchdog_task", None)
-        if t:
-            try:
-                t.cancel()
-                await t
-            except Exception:
-                pass
-            self._watchdog_task = None
-

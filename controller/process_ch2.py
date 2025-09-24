@@ -402,13 +402,6 @@ class ProcessController:
     def on_plc_failed(self, cmd: str, why: str) -> None:
         self._step_failed("PLC", f"{cmd}: {why}")
 
-    # ✅ Faduino→PLC 전환 호환: main.py가 여전히 faduino 콜백 이름을 부르므로 별칭 제공
-    def on_faduino_confirmed(self, name: str) -> None:
-        self.on_plc_confirmed(name)
-
-    def on_faduino_failed(self, name: str, why: str) -> None:
-        self.on_plc_failed(name, why)
-
     def on_ig_ok(self) -> None:
         self._match_token(ExpectToken("IG_OK"))
 

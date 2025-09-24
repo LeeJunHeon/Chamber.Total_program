@@ -1,24 +1,14 @@
 # -*- coding: utf-8 -*-
 # plc.py
 """
-plc.py — Modbus-TCP PLC 컨트롤러 (Faduino 호환) - 단일 클래스 통합판
+plc.py — Modbus-TCP PLC 컨트롤러 — 단일 클래스 통합판
 
 개요
 ----
-- 코일을 0/1로 쓰면 그 상태가 유지(래치)되는 방식 기본.
+- 코일 래치/타이머 동작을 고려한 안전 IO
 - 동기 pymodbus 클라이언트를 asyncio에서 안전하게 사용(직렬화, 스레드 위임, 간격 보장, 하트비트, 자동 재연결).
 - pymodbus 2.x / 3.x 호환: 'unit' / 'slave' 자동 판별.
-- 고수준(Faduino 스타일) API + 저수준 IO를 **AsyncFaduinoPLC 하나**로 제공.
-
-사용 포인트
------------
-- Faduino 스타일: door/gate/main_shutter/vent/turbo/lift_pin/gas 등 그대로 사용.
-- process_ch2와의 DI를 위해: set(name,on,ch=1) 제공. (예: 'MV','MS','AR','O2','N2','MAIN','G1','G2','G3')
-- 버튼처럼 순간(펄스)이 필요하면 momentary=True 혹은 press_switch() 사용.
-
-주의
-----
-- PLC 내부 로직이 코일을 자동 OFF할 수 있음(원샷/타이머). 이 모듈은 '요청한 값'을 씀.
+- 고수준 API(door/gate/main_shutter/vent/turbo/lift_pin/gas) + 저수준 IO를 **AsyncPLC 하나**로 제공.
 """
 
 from __future__ import annotations
@@ -230,12 +220,12 @@ class PLCConfig:
     dc_i_scale: float = 1.0            # raw→A 변환 계수(원시=1.0)
 
 # ======================================================
-# 단일 클래스: AsyncFaduinoPLC (저수준+고수준)
+# 단일 클래스: AsyncPLC (저수준+고수준)
 # ======================================================
 
-class AsyncFaduinoPLC:
+class AsyncPLC:
     """
-    Modbus 저수준 + Faduino 스타일 고수준을 하나로 제공.
+    Modbus 저수준 + 고수준 제어를 하나로 제공.
     - 저수준: connect/close, read/write coil/reg, 직렬화, 하트비트, 재연결
     - 고수준: door/gate/main_shutter/vent/turbo/lift_pin/gas, snapshot 등
     - DI용: set(name,on,ch=1)로 'MV/MS/AR/O2/N2/MAIN/G1/G2/G3' 논리명 처리
@@ -756,5 +746,5 @@ class AsyncFaduinoPLC:
 
 __all__ = [
     "PLC_COIL_MAP", "PLC_REG_MAP", "PLC_TIMER_MAP",
-    "PLCConfig", "AsyncFaduinoPLC",
+    "PLCConfig", "AsyncPLC",
 ]

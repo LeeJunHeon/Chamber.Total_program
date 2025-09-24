@@ -22,7 +22,7 @@ from controller.chat_notifier import ChatNotifier
 # ✅ 실제 장비 모듈(비동기)
 from device.ig import AsyncIG
 from device.mfc import AsyncMFC
-from device.plc import AsyncFaduinoPLC
+from device.plc import AsyncPLC
 from device.oes import OESAsync
 from device.rga import RGA100AsyncAdapter
 from device.dc_power import DCPowerAsync
@@ -170,7 +170,7 @@ class MainWindow(QWidget):
             self.append_log("PLC", msg)
 
         # ✅ PLC 인스턴스
-        self.plc: AsyncFaduinoPLC = AsyncFaduinoPLC(logger=_plc_log)
+        self.plc: AsyncPLC = AsyncPLC(logger=_plc_log)
 
         # === 비동기 장치 ===
         self.mfc: AsyncMFC = AsyncMFC()
