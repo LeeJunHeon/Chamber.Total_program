@@ -20,6 +20,7 @@ from controller.chamber_runtime import ChamberRuntime  # 다음 단계에서 파
 
 # 챔버별 설정
 from lib import config_ch1, config_ch2
+from lib import config_common as cfgc
 
 
 class MainWindow(QWidget):
@@ -38,9 +39,9 @@ class MainWindow(QWidget):
         }
 
         # === 공용(공유) 리소스만 이곳에서 생성 ===
-        # Chat Notifier
+        # Chat Notifier (공통 config로 이동)
         self.chat_notifier: ChatNotifier | None = (
-            ChatNotifier(config_ch2.CHAT_WEBHOOK_URL) if getattr(config_ch2, "ENABLE_CHAT_NOTIFY", False) else None
+            ChatNotifier(cfgc.CHAT_WEBHOOK_URL) if getattr(cfgc, "ENABLE_CHAT_NOTIFY", False) else None
         )
         if self.chat_notifier:
             self.chat_notifier.start()
@@ -80,12 +81,12 @@ class MainWindow(QWidget):
             log_dir=self._log_root,
         )
 
-        # === TSP 페이지 컨트롤러(공유 페이지) ===
+        # === TSP 페이지 컨트롤러 ===  (공통 config로 이동)
         self.tsp_ctrl = TSPPageController(
             ui=self.ui,
-            host=config_ch2.TSP_TCP_HOST,
-            tcp_port=config_ch2.TSP_TCP_PORT,
-            addr=config_ch2.TSP_ADDR,
+            host=cfgc.TSP_TCP_HOST,
+            tcp_port=cfgc.TSP_TCP_PORT,
+            addr=cfgc.TSP_ADDR,
             loop=self._loop,
         )
 

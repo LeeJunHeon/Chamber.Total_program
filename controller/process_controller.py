@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from enum import Enum
 from time import monotonic_ns
 from typing import Optional, List, Tuple, Dict, Any, Callable
-from lib.config_ch2 import SHUTDOWN_STEP_TIMEOUT_MS, SHUTDOWN_STEP_GAP_MS
+from lib.config_common import SHUTDOWN_STEP_TIMEOUT_MS, SHUTDOWN_STEP_GAP_MS
 
 
 # =========================

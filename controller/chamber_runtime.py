@@ -90,19 +90,57 @@ TargetsMap = Mapping[Literal["mfc", "rfpulse", "dc", "rf"], bool]
 class _CfgAdapter:
     """config_ch1 / config_ch2 모듈을 추상화해서 접근(필수 키만)."""
     mod: Any
+    ch: int  # ← 채널 번호 저장(기본 파일명 등에 사용)
+
+    def _get(self, name: str, default=None):
+        """채널별 모듈 값 우선, 없으면 config_common으로 폴백."""
+        v = getattr(self.mod, name, None)
+        if v is not None:
+            return v
+        try:
+            from lib import config_common as _cc
+            return getattr(_cc, name, default)
+        except Exception:
+            return default
 
     @property
     def IG_POLLING_INTERVAL_MS(self) -> int:
-        return int(getattr(self.mod, "IG_POLLING_INTERVAL_MS", 500))
-
-    @property
-    def RGA_NET(self) -> Mapping[str, Mapping[str, str]]:
-        return getattr(self.mod, "RGA_NET", {})
+        return int(self._get("IG_POLLING_INTERVAL_MS", 500))
 
     @property
     def RGA_CSV_PATH(self) -> Path:
-        p = getattr(self.mod, "RGA_CSV_PATH", None)
-        return Path(p) if p else Path.cwd() / "_RGA.csv"
+        p = self._get("RGA_CSV_PATH", None)
+        if p:
+            return Path(p)
+        # 설정이 없으면 채널별 기본 파일로 분리
+        return Path.cwd() / f"RGA_CH{self.ch}.csv"
+
+    @property
+    def RGA_NET(self) -> Mapping[str, Any]:
+        # 기존 코드 호환(필요시 여전히 접근 가능)
+        return self._get("RGA_NET", {}) or {}
+
+    def rga_creds(self) -> tuple[str, str, str]:
+        """
+        RGA 연결 정보 반환.
+        - 단일 dict: {"ip","user","password"}
+        - 채널별 dict: {"ch1":{...},"ch2":{...}}
+        """
+        rnet = self._get("RGA_NET", {}) or {}
+        if isinstance(rnet, dict) and "ip" in rnet:
+            # 단일 dict 형태
+            return (
+                rnet.get("ip", ""),
+                rnet.get("user", "admin"),
+                rnet.get("password", "admin"),
+            )
+        # 채널별 dict 형태
+        block = rnet.get(f"ch{self.ch}", {}) if isinstance(rnet, dict) else {}
+        return (
+            block.get("ip", ""),
+            block.get("user", "admin"),
+            block.get("password", "admin"),
+        )
 
 class ChamberRuntime:
     """
@@ -135,7 +173,7 @@ class ChamberRuntime:
         self._loop = loop
         self.plc = plc
         self.chat = chat
-        self.cfg = _CfgAdapter(cfg)
+        self.cfg = _CfgAdapter(cfg, self.ch)
         self._bg_tasks: list[asyncio.Task[Any]] = []
         self._starter_threads: dict[str, asyncio.Task] = {}
         self._bg_started = False
@@ -166,7 +204,8 @@ class ChamberRuntime:
         self.graph.reset()
 
         # 로거
-        self.data_logger = DataLogger()
+        # 변경 (경로를 명시하고 싶으면 csv_dir 인자 사용; 안 주면 기본 NAS 경로 사용)
+        self.data_logger = DataLogger(ch=self.ch, csv_dir=Path(r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database"))
 
         # 로그 파일 경로 관리(세션 단위) + 사전 버퍼
         self._log_root = Path(log_dir)
@@ -182,17 +221,12 @@ class ChamberRuntime:
         self.ig = AsyncIG()
         self.oes = OESAsync()
 
-        # RGA: config의 ch1/ch2 블록 사용
+        # RGA: config에서 연결 정보 꺼내 생성(단일/채널별 모두 지원)
         self.rga = None  # type: ignore
         try:
-            key = f"ch{self.ch}"
-            rnet = self.cfg.RGA_NET.get(key, {})
-            if rnet:
-                self.rga = RGA100AsyncAdapter(
-                    rnet.get("ip", ""),
-                    user=rnet.get("user", ""),
-                    password=rnet.get("password", ""),
-                    name=f"CH{self.ch}")
+            ip, user, pwd = self.cfg.rga_creds()
+            if ip:
+                self.rga = RGA100AsyncAdapter(ip, user=user, password=pwd, name=f"CH{self.ch}")
         except Exception:
             self.rga = None  # 안전
 
