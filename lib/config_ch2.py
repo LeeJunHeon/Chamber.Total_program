@@ -35,6 +35,10 @@ RGA_XLSX_SHEET = "Histogram"
 
 
 # === 시리얼 포트 설정 ===
+
+
+
+
 # RFPulse 기본값
 RFPULSE_PORT = "192.168.1.50:4005"
 RFPULSE_BAUD = 9600
@@ -198,6 +202,13 @@ MFC_GAP_MS    = 4000         # 모든 인터커맨드 간격(gap)
 MFC_DELAY_MS  = 1000         # 모든 검증/재시도 지연
 MFC_DELAY_MS_VALVE = 5000    # 밸브 이동/재전송 대기(5초)
 
+# [신규] 채널별 유량 스케일 팩터 정의
+MFC_SCALE_FACTORS = {
+    1: 1.0,   # Channel 1 (Ar): 1:1 스케일
+    2: 10.0,  # Channel 2 (O2): 10배 스케일
+    3: 10.0,  # Channel 3 (N2): 10배 스케일
+}
+
 # UI ↔ HW 스케일 (SP1/압력 공용)
 # - 장비값(HW) → UI:  ui = hw / MFC_PRESSURE_SCALE
 # - UI → 장비(HW):   hw = ui * MFC_PRESSURE_SCALE
@@ -205,37 +216,34 @@ MFC_PRESSURE_SCALE = 0.1        # 예) UI 2.00 ↔ HW 0.20
 MFC_PRESSURE_DECIMALS = 3       # UI 표시에 사용할 소수 자리
 MFC_SP1_VERIFY_TOL = 0.1        # SP1_SET 검증 허용 오차(장비 단위)
 
-# === 압력 게이지 Full-Scale (UI 환산용) ===
-SENSOR_FS_TORR = 1000.0  # 예: 1000 Torr (실 장비 값으로 변경)
-
 # 명령어는 ASCII 문자로 전송해야 되며, \r으로 끝나야 함.
 MFC_COMMANDS = {
-    # --- Write ---
+    # --- MFC 쓰기(Write) 명령어 ---
+    # 일괄 ON/OFF: L0 뒤에 비트마스크(예: '1010')
     'SET_ONOFF_MASK': lambda bits: f"L0{bits}",
+
+    # (선택) 단일 채널 ON/OFF는 유지해도 되지만 내부 로직에선 쓰지 않음(폴백용)
     'FLOW_ON':  lambda channel: f"L{int(channel)} 1",
     'FLOW_OFF': lambda channel: f"L{int(channel)} 0",
-    'MFC_ZEROING':    lambda channel: f"L{4+int(channel)} 1",
-    'FLOW_SET':       lambda channel, value: f"Q{int(channel)} {value}",   # value=%FS
 
-    # --- Read ---
-    'READ_FLOW_ALL': "R60",
-    'READ_FLOW':     lambda channel: f"R6{int(channel)}",
+    'MFC_ZEROING': lambda channel: f"L{4+channel} 1",         # 지정된 채널의 MFC를 Zeroing합니다 (Ch1=L5, Ch2=L6 ...). 
+    'FLOW_SET': lambda channel, value: f"Q{channel} {value}", # 지정된 채널의 Flow 값을 설정합니다 (% of Full Scale). 
+
+    # === 읽기 ===
+    'READ_FLOW_ALL': "R60",                    # 모든 채널 유량
+    'READ_FLOW':     lambda channel: f"R6{int(channel)}",  # 폴백/디버깅용
     'READ_MFC_ON_OFF_STATUS': "R69",
     'READ_PRESSURE': "R5",
     'READ_SP1_VALUE': "R1",
     'READ_VALVE_POSITION': "R6",
-    'READ_SYSTEM_STATUS': "R37",
-    'READ_FLOW_SET': lambda channel: f"R6{4+int(channel)}", # R65..R68 -> Q5..Q8
+    'READ_SYSTEM_STATUS': "R7",
+    'READ_FLOW_SET': lambda channel: f"R6{4+int(channel)}", # 지정된 채널의 Flow 설정 값을 읽습니다 (Ch1=R65, Ch2=R66 ...). 
 
-    # 채널별 FS/단위 (R70~R77)
-    'READ_MFC_FS':   lambda ch: f"R7{int(ch)-1}",   # ch=1→R70, ch=2→R71, ch=3→R72, ch=4→R73
-    'READ_MFC_UNIT': lambda ch: f"R7{3+int(ch)}",   # ch=1→R74, ch=2→R75, ch=3→R76, ch=4→R77
-
-    # --- Common ---
-    'VALVE_OPEN': "O",
-    'VALVE_CLOSE': "C",
-    'PS_ZEROING': "Z1",
-    'SP4_ON': "D4",
-    'SP1_ON': "D1",
-    'SP1_SET': lambda value: f"S1 {value}",
+    # --- 공통 명령어 (채널 지정 불필요) ---
+    'VALVE_OPEN': "O",  # Throttle Valve를 엽니다. 
+    'VALVE_CLOSE': "C", # Throttle Valve를 닫습니다. 
+    'PS_ZEROING': "Z1", # 압력 센서(게이지)를 Zeroing합니다. 
+    'SP4_ON': "D4",     # Set-point 4를 실행합니다. 
+    'SP1_ON': "D1",     # Set-point 1을 실행합니다. 
+    'SP1_SET': lambda value: f"S1 {value}", # Set-point 1의 목표 압력 값을 설정합니다. 
 }
