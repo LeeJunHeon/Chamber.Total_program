@@ -183,6 +183,12 @@ class ProcessController:
         cancel_ig: Callable[[], None],
         rga_scan: Callable[[], None],
         oes_run: Callable[[float, int], None],
+                # ⬇️ 추가
+        ch: int = 2,
+        supports_dc: bool = True,
+        supports_rf_cont: bool = False,
+        supports_rfpulse: bool = True,
+
     ) -> None:
         self.event_q: asyncio.Queue[PCEvent] = asyncio.Queue(maxsize=2000)
         self._send_plc = send_plc                   # 🔁 보관 멤버도 교체
@@ -197,6 +203,12 @@ class ProcessController:
         self._cancel_ig = cancel_ig
         self._rga_scan = rga_scan
         self._oes_run = oes_run
+
+        # ⬇️ 추가: 챔버/지원능력
+        self._ch = int(ch)
+        self._supports_dc = bool(supports_dc)
+        self._supports_rf_cont = bool(supports_rf_cont)
+        self._supports_rfpulse = bool(supports_rfpulse)
 
         # 런타임 상태
         self.is_running: bool = False
@@ -865,20 +877,34 @@ class ProcessController:
     # =========================
 
     def _get_common_process_info(self, params: Dict[str, Any]) -> Dict[str, Any]:
+        # 요청값
+        req_dc  = bool(params.get("use_dc_power", False)) and float(params.get("dc_power", 0)) > 0
+        req_rf  = bool(params.get("use_rf_power", False)) and float(params.get("rf_power", 0)) > 0
+        req_rfp = bool(params.get("use_rf_pulse", False)) and float(params.get("rf_pulse_power", 0)) > 0
+        # 지원능력과 AND
+        use_dc = req_dc  and self._supports_dc
+        use_rf = req_rf  and self._supports_rf_cont
+        use_rfp = req_rfp and self._supports_rfpulse
+        # CH1은 건셔터 없음
+        gun_list = [] if self._ch == 1 else ["G1", "G2", "G3"]
+
         return {
             'use_ms': bool(params.get("use_ms", False)),
-            'use_dc': bool(params.get("use_dc_power", False)) and float(params.get("dc_power", 0)) > 0,
-            'use_rf': bool(params.get("use_rf_power", False)) and float(params.get("rf_power", 0)) > 0,
-            'use_rf_pulse': bool(params.get("use_rf_pulse", False)) and float(params.get("rf_pulse_power", 0)) > 0,
-            # ⬇️ 여기만 변경
+            'use_dc': use_dc,
+            'use_rf': use_rf,
+            'use_rf_pulse': use_rfp,
             'gas_info': {"AR": {"channel": 1}, "O2": {"channel": 2}, "N2": {"channel": 3}},
-            'gun_shutters': ["G1", "G2", "G3"],
+            'gun_shutters': gun_list,
+            # (선택) 디버깅 로그용
+            'req_dc': req_dc, 'req_rf': req_rf, 'req_rfp': req_rfp,
         }
-
 
     def _create_process_sequence(self, params: Dict[str, Any]) -> List[ProcessStep]:
         common_info = self._get_common_process_info(params)
-        use_dc, use_rf, use_ms = common_info['use_dc'], common_info['use_rf'], common_info['use_ms']
+        use_dc       = common_info['use_dc']
+        use_rf       = common_info['use_rf']
+        use_rf_pulse = common_info['use_rf_pulse']   # ← 지원능력 반영된 값 사용
+        use_ms       = common_info['use_ms']
         gas_info, gun_shutters = common_info['gas_info'], common_info['gun_shutters']
 
         base_pressure = float(params.get("base_pressure", 1e-5))
@@ -927,14 +953,14 @@ class ProcessController:
 
         # --- 가스 주입 ---
         steps.append(ProcessStep(
-            action=ActionType.PLC_CMD, params=('MV', True, 2), message='메인 밸브 열기'
+            action=ActionType.PLC_CMD, params=('MV', True, self._ch), message='메인 밸브 열기'
         ))
         for gas, info in gas_info.items():
             if params.get(f"use_{gas.lower()}", False):
                 flow_value = float(params.get(f"{gas.lower()}_flow", 0))
                 steps.extend([
                     ProcessStep(
-                        action=ActionType.PLC_CMD, params=(gas, True, 2), message=f'{gas} 밸브 열기'
+                        action=ActionType.PLC_CMD, params=(gas, True, self._ch), message=f'{gas} 밸브 열기'
                     ),
                     ProcessStep(
                         action=ActionType.MFC_CMD,
@@ -957,39 +983,50 @@ class ProcessController:
         ])
 
         # --- 파워/셔터 ---
-        # Gun Shutter 열기
-        for shutter in gun_shutters:
-            if params.get(f"use_{shutter.lower()}", False):
-                steps.append(ProcessStep(
-                    action=ActionType.PLC_CMD,
-                    params=(shutter, True, 2),
-                    message=f'Gun Shutter {shutter} 열기'
-                ))
+        # Gun Shutter 열기 (CH2 전용: gun_shutters가 비어있지 않을 때만)
+        if gun_shutters:
+            for shutter in gun_shutters:
+                if params.get(f"use_{shutter.lower()}", False):
+                    steps.append(ProcessStep(
+                        action=ActionType.PLC_CMD,
+                        params=(shutter, True, self._ch),
+                        message=f'Gun Shutter {shutter} 열기'
+                    ))
 
         # 주: SW_RF_SELECT는 채널 독립 코일이라 ch 인자 없이 보냄
-        if bool(params.get("use_power_select", False)):
+        if bool(params.get("use_power_select", False)) and self._ch == 2:
             steps.append(ProcessStep(
                 action=ActionType.PLC_CMD, params=("SW_RF_SELECT", True),
                 message="Power_select: Power Select ON (SW_RF_SELECT)"
             ))
 
-        use_rf_pulse = bool(params.get("use_rf_pulse", False)) and float(params.get("rf_pulse_power", 0)) > 0.0
+        # 여기서는 '사용 여부'는 위의 use_rf_pulse(= common_info 기반)를 그대로 쓰고,
+        # 파워/주파수/듀티만 파라미터에서 읽습니다.
         rf_pulse_power = float(params.get("rf_pulse_power", 0))
-        rf_pulse_freq = params.get("rf_pulse_freq", None)
+        rf_pulse_freq  = params.get("rf_pulse_freq", None)
         if rf_pulse_freq is not None:
             rf_pulse_freq = int(rf_pulse_freq)
-        rf_pulse_duty = params.get("rf_pulse_duty", None)
+        rf_pulse_duty  = params.get("rf_pulse_duty", None)
         if rf_pulse_duty is not None:
             rf_pulse_duty = int(rf_pulse_duty)
 
         want_parallel = use_dc and (use_rf or use_rf_pulse)
+
+        # (선택) 요청했지만 미지원인 경우 안내 로그
+        ci = common_info
+        if ci.get('req_dc') and not use_dc:
+            self._emit_log("Process", "주의: 이 챔버는 DC 연속 파워 미지원 → DC 단계 스킵")
+        if ci.get('req_rf') and not use_rf:
+            self._emit_log("Process", "주의: 이 챔버는 RF 연속 파워 미지원 → RF 단계 스킵")
+        if ci.get('req_rfp') and not use_rf_pulse:
+            self._emit_log("Process", "주의: 이 챔버는 RF Pulse 미지원 → Pulse 단계 스킵")
 
         if use_dc:
             steps.append(ProcessStep(
                 action=ActionType.DC_POWER_SET, value=dc_power,
                 message=f'DC Power {dc_power}W 설정',
                 parallel=want_parallel,
-                polling=False,                     
+                polling=False,
             ))
 
         if use_rf_pulse:
@@ -1033,7 +1070,7 @@ class ProcessController:
 
         if use_ms:
             steps.append(ProcessStep(
-                action=ActionType.PLC_CMD, params=('MS', True, 2), message='Main Shutter 열기'
+                action=ActionType.PLC_CMD, params=('MS', True, self._ch), message='Main Shutter 열기'
             ))
 
         # --- 메인 공정 시간 ---
@@ -1066,7 +1103,7 @@ class ProcessController:
         gun_shutters = info['gun_shutters']
 
         steps.append(ProcessStep(
-            action=ActionType.PLC_CMD, params=('MS', False, 2), message='Main Shutter 닫기 (항상)'
+            action=ActionType.PLC_CMD, params=('MS', False, self._ch), message='Main Shutter 닫기 (항상)'
         ))
 
         if use_dc:
@@ -1087,13 +1124,14 @@ class ProcessController:
             action=ActionType.MFC_CMD, params=('VALVE_OPEN', {}), message='전체 MFC Valve Open'
         ))
 
-        for shutter in gun_shutters:
-            if params.get(f"use_{shutter.lower()}", False) or force_all:
-                steps.append(ProcessStep(
-                    action=ActionType.PLC_CMD, params=(shutter, False, 2), message=f'Gun Shutter {shutter} 닫기'
-                ))
+        if gun_shutters:
+            for shutter in gun_shutters:
+                if params.get(f"use_{shutter.lower()}", False) or force_all:
+                    steps.append(ProcessStep(
+                        action=ActionType.PLC_CMD, params=(shutter, False, self._ch), message=f'Gun Shutter {shutter} 닫기'
+                    ))
 
-        if bool(params.get("use_power_select", False)) or force_all:
+        if (bool(params.get("use_power_select", False)) or force_all) and self._ch == 2:
             steps.append(ProcessStep(
                 action=ActionType.PLC_CMD, params=("SW_RF_SELECT", False),
                 message="Power_select 종료: Power Select OFF (SW_RF_SELECT)"
@@ -1101,11 +1139,11 @@ class ProcessController:
 
         for gas in info['gas_info']:
             steps.append(ProcessStep(
-                action=ActionType.PLC_CMD, params=(gas, False, 2), message=f'PLC {gas} 밸브 닫기'
+                action=ActionType.PLC_CMD, params=(gas, False, self._ch), message=f'PLC {gas} 밸브 닫기'
             ))
 
         steps.append(ProcessStep(
-            action=ActionType.PLC_CMD, params=('MV', False, 2), message='메인 밸브 닫기'
+            action=ActionType.PLC_CMD, params=('MV', False, self._ch), message='메인 밸브 닫기'
         ))
 
         self._emit_log("Process", "종료 절차가 생성되었습니다.")
@@ -1119,7 +1157,7 @@ class ProcessController:
         steps: List[ProcessStep] = []
 
         steps.append(ProcessStep(
-            action=ActionType.PLC_CMD, params=('MS', False, 2),
+            action=ActionType.PLC_CMD, params=('MS', False, self._ch),
             message='[긴급] Main Shutter 즉시 닫기', no_wait=True
         ))
 
@@ -1140,21 +1178,21 @@ class ProcessController:
                 parallel=both, no_wait=True
             ))
 
-        if bool(self.current_params.get("use_power_select", False)):
+        if bool(self.current_params.get("use_power_select", False)) and self._ch == 2:
             steps.append(ProcessStep(
                 action=ActionType.PLC_CMD, params=("SW_RF_SELECT", False),
                 message='[긴급] Power Select 즉시 OFF', no_wait=True
             ))
 
-        for gas in ["AR", "O2", "N2"]:
+        for gas in ("AR", "O2", "N2"):
             if self.current_params.get(f"use_{gas.lower()}", False):
                 steps.append(ProcessStep(
-                    action=ActionType.PLC_CMD, params=(gas, False, 2),
+                    action=ActionType.PLC_CMD, params=(gas, False, self._ch),
                     message=f'[긴급] {gas} 가스 즉시 차단', no_wait=True
                 ))
 
         steps.append(ProcessStep(
-            action=ActionType.PLC_CMD, params=('MV', False, 2),
+            action=ActionType.PLC_CMD, params=('MV', False, self._ch),
             message='[긴급] 메인 밸브 즉시 닫기', no_wait=True
         ))
 

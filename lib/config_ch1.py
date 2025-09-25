@@ -39,11 +39,7 @@ RGA_XLSX_SHEET = "Histogram"
 
 
 
-# DCPULSE 기본값
-DCPULSE_PORT = "192.168.1.50:4007"
-DCPULSE_BAUD = 9600
-DCPULSE_ADDR = 1
-DCPULSE_DEFAULT_DELAY_MS = 180
+
 
 # ===== 타이밍/타임아웃 상수 =====
 ACK_TIMEOUT_MS         = 2000   # 쓰기(설정) 명령 후 ACK/프레임 대기 시간
