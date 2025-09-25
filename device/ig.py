@@ -22,7 +22,7 @@ import asyncio, time, contextlib, socket
 from lib.config_ch2 import (
     IG_TCP_HOST, IG_TCP_PORT, IG_TX_EOL, IG_SKIP_ECHO, IG_TIMEOUT_MS, IG_GAP_MS, IG_CONNECT_TIMEOUT_S,
     IG_POLLING_INTERVAL_MS, IG_WATCHDOG_INTERVAL_MS, IG_RECONNECT_BACKOFF_START_MS, 
-    IG_RECONNECT_BACKOFF_MAX_MS, IG_REIGNITE_MAX_ATTEMPTS, IG_REIGNITE_BACKOFF_MS, DEBUG_PRINT, IG_WAIT_TIMEOUT
+    IG_RECONNECT_BACKOFF_MAX_MS, IG_REIGNITE_MAX_ATTEMPTS, IG_REIGNITE_BACKOFF_MS, IG_WAIT_TIMEOUT
 )
 
 # =========================
@@ -54,8 +54,6 @@ class Command:
 # =========================
 class AsyncIG:
     def __init__(self):
-        # 설정
-        self.debug_print = DEBUG_PRINT
         # 연결/프로토콜
         self._reader: Optional[asyncio.StreamReader] = None
         self._writer: Optional[asyncio.StreamWriter] = None
@@ -93,8 +91,11 @@ class AsyncIG:
         # ✅ 재점등(자동 ON 재시도) 제어 플래그/카운터
         self._suspend_reignite: bool = False     # 종료/취소 중 재점등 금지
         self._total_reignite_attempts: int = 0   # 누적 재점등 횟수
-        # 선택: 마지막 성공 여부 초기화(이미 사용 중이면 안전을 위해 추가)
         self._last_wait_success: bool = False
+
+        # ✅ 최근 읽은 압력과 폴링 인터벌(로그용)
+        self._last_pressure: Optional[float] = None
+        self._poll_interval_ms: int = IG_POLLING_INTERVAL_MS
 
     # ---------------------------
     # 공용 API
@@ -165,7 +166,7 @@ class AsyncIG:
         self._purge_pending("shutdown")
 
         # 6) TCP 종료
-        self._on_tcp_disconnected()
+        await self._on_tcp_disconnected()
 
         await self._emit_status("IG 연결 종료됨")
 
@@ -229,15 +230,19 @@ class AsyncIG:
 
         if line is None:
             await self._emit_status("[FIRST READ] RDI 타임아웃 → 재연결 트리거")
-            self._on_tcp_disconnected()
+            await self._on_tcp_disconnected()
             # 계속 진행(아래 handle은 None이면 조용히 리턴)
         if not self._waiting_active:
             return False
 
         await self._handle_rdi_line(line)
 
+        # 폴링 시작 전, 인터벌 저장
+        self._poll_interval_ms = int(interval_ms)
+
         # 폴링 시작
         if self._waiting_active:
+            await self._log_wait_again(self._poll_interval_ms)
             self._polling_task = asyncio.create_task(self._poll_rdi_loop(interval_ms))
 
         try:
@@ -371,7 +376,7 @@ class AsyncIG:
                 buf.extend(chunk)
                 if len(buf) > RX_MAX:
                     del buf[:-RX_MAX]
-                    self._dbg("IG", f"수신 버퍼 과다(RX>{RX_MAX}); 최근 {RX_MAX}B만 보존.")
+                    await self._emit_status(f"수신 버퍼 과다(RX>{RX_MAX}); 최근 {RX_MAX}B만 보존")
 
                 # CR/LF 라인 파싱
                 while True:
@@ -390,7 +395,6 @@ class AsyncIG:
                     del buf[:drop]
 
                     if len(line_bytes) > LINE_MAX:
-                        self._dbg("IG", f"Rx line too long (+{len(line_bytes)-LINE_MAX}B), truncating")
                         line_bytes = line_bytes[:LINE_MAX]
 
                     try:
@@ -405,11 +409,11 @@ class AsyncIG:
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            self._dbg("IG", f"리더 루프 예외: {e!r}")
+            await self._emit_status(f"리더 루프 예외: {e!r}")
         finally:
-            self._on_tcp_disconnected()
+            await self._on_tcp_disconnected()
 
-    def _on_tcp_disconnected(self):
+    async def _on_tcp_disconnected(self):
         self._connected = False
         if self._reader_task:
             self._reader_task.cancel()
@@ -417,13 +421,17 @@ class AsyncIG:
         if self._writer:
             with contextlib.suppress(Exception):
                 self._writer.close()
+                await self._writer.wait_closed()
         self._reader = None
         self._writer = None
         # 라인 큐 비우기
-        with contextlib.suppress(Exception):
+        try:
             while True:
                 self._line_q.get_nowait()
-        self._dbg("IG", "연결 끊김")
+        except Exception:
+            pass
+
+        await self._emit_status("IG TCP 연결 끊김")
 
         # 인플라이트 재시도/취소
         if self._inflight is not None:
@@ -439,7 +447,7 @@ class AsyncIG:
         try:
             self._line_q.put_nowait(line)
         except asyncio.QueueFull:
-            self._dbg("IG", "라인 큐 포화 → 가장 오래된 라인 폐기")
+            self._log_status_nowait("라인 큐 포화 → 가장 오래된 라인 폐기")
             with contextlib.suppress(Exception):
                 _ = self._line_q.get_nowait()
             with contextlib.suppress(Exception):
@@ -463,25 +471,22 @@ class AsyncIG:
             cmd = self._cmd_q.popleft()
             self._inflight = cmd
             sent_txt = cmd.cmd_str.strip()
-            self._dbg("IG", f"[SEND] {sent_txt} (tag={cmd.tag})")
+            await self._emit_status(f"[SEND] {sent_txt} (tag={cmd.tag})")
 
             try:
-                # 직전 잔류 응답 드레인
                 await self._absorb_late_lines(30)
-
                 payload = cmd.cmd_str.encode("ascii", "ignore")
                 self._writer.write(payload)
                 await self._writer.drain()
             except Exception as e:
-                # 전송 실패 → 재연결 유도
-                self._dbg("IG", f"{cmd.tag} {sent_txt} 전송 오류: {e}")
                 self._inflight = None
+                await self._emit_status(f"[SEND-ERROR] {cmd.tag} {sent_txt} 전송 오류: {e!r}")
                 if cmd.retries_left > 0:
                     cmd.retries_left -= 1
                     self._cmd_q.appendleft(cmd)
                 else:
                     self._safe_callback(cmd.callback, None)
-                self._on_tcp_disconnected()
+                await self._on_tcp_disconnected()
                 continue
 
             # 응답 필요 없으면 gap만 지키고 다음
@@ -495,24 +500,21 @@ class AsyncIG:
             try:
                 line = await self._read_one_line_skip_echo(sent_txt, cmd.timeout_ms / 1000.0)
             except asyncio.TimeoutError:
-                # 타임아웃
-                self._dbg("IG", f"[TIMEOUT] {cmd.tag} {sent_txt}")
                 self._inflight = None
                 if cmd.retries_left > 0:
                     cmd.retries_left -= 1
-                    self._dbg("IG", f"{cmd.tag} {sent_txt} 재시도 남은횟수={cmd.retries_left}")
+                    await self._emit_status(f"[TIMEOUT] {cmd.tag} {sent_txt} / 재시도 남은횟수={cmd.retries_left}")
                     self._cmd_q.appendleft(cmd)
-                    # 재연결 유도
-                    # 6) TCP 종료
-                    self._on_tcp_disconnected()
+                    await self._on_tcp_disconnected()
                 else:
+                    await self._emit_status(f"[TIMEOUT] {cmd.tag} {sent_txt} / 재시도 소진")
                     self._safe_callback(cmd.callback, None)
                     await asyncio.sleep(cmd.gap_ms / 1000.0)
                 continue
 
             # 정상 수신
             recv_txt = (line or "").strip()
-            self._dbg("IG < 응답", f"{cmd.tag} {sent_txt} ← {recv_txt}")
+            await self._emit_status(f"[RECV] {cmd.tag} {sent_txt} ← {recv_txt}")
             self._safe_callback(cmd.callback, recv_txt)
             self._inflight = None
             await asyncio.sleep(cmd.gap_ms / 1000.0)
@@ -558,6 +560,9 @@ class AsyncIG:
                 await self._handle_rdi_line(line)
                 if not self._waiting_active:
                     break  # 도달 또는 실패 처리로 종료된 경우
+
+                # 미도달 안내 로그 추가
+                await self._log_wait_again(interval_ms)
 
                 # 3) 전체 대기 시간 초과 → 실패로 종료
                 if (time.monotonic() - self._wait_start_s) > wait_limit_s:
@@ -667,7 +672,7 @@ class AsyncIG:
             if (line or "").strip().upper().startswith("OK"):
                 return True
             # 'OK'가 아니면 재연결 트리거
-            self._on_tcp_disconnected()
+            await self._on_tcp_disconnected()
             # 다음 루프에서 워치독이 다시 연결하고 우리는 다시 시도
         return False
 
@@ -695,7 +700,7 @@ class AsyncIG:
             except asyncio.TimeoutError:
                 await self._emit_status(f"{tag} '{cmd}' 응답 타임아웃({timeout_ms}ms)")
                 if attempt < attempts - 1:
-                    self._on_tcp_disconnected()
+                    await self._on_tcp_disconnected()
                     await asyncio.sleep(0)
                     continue
                 return None
@@ -723,7 +728,6 @@ class AsyncIG:
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
             await asyncio.sleep(max(0, wait_gap_ms) / 1000.0)
-            self._dbg("IG", "OFF delivered via TCP one-shot")
             return True
         except Exception as e:
             await self._emit_status(f"직접 OFF 전송 실패(TCP one-shot): {e!r}")
@@ -753,7 +757,8 @@ class AsyncIG:
         except Exception:
             pass
 
-        self._dbg("IG", f"대기 중 명령 {purged}개 폐기 ({reason})")
+        # 동기 구간: 즉시 status 푸시
+        self._log_status_nowait(f"대기 중 명령 {purged}개 폐기 ({reason})")
         return purged
 
     def _safe_callback(self, cb: Optional[Callable[[Optional[str]], None]], arg: Optional[str]):
@@ -761,8 +766,8 @@ class AsyncIG:
             return
         try:
             cb(arg)
-        except Exception as e:
-            self._dbg("IG", f"콜백 오류: {e}")
+        except Exception:
+            pass
 
     def _q_put_event_nowait(self, ev: IGEvent):
         """이벤트 큐가 가득 차면 가장 오래된 항목을 버리고 새 이벤트를 넣는다."""
@@ -778,14 +783,15 @@ class AsyncIG:
             except Exception:
                 pass
 
+    def _log_status_nowait(self, msg: str) -> None:
+        """await 불가한 동기 구간에서 status 이벤트 즉시 푸시"""
+        self._q_put_event_nowait(IGEvent(kind="status", message=msg))
+
     async def _emit_status(self, msg: str):
-        if self.debug_print:
-            print(f"[IG][status] {msg}")
         self._q_put_event_nowait(IGEvent(kind="status", message=msg))
 
     async def _emit_pressure(self, p: float):
-        if self.debug_print:
-            print(f"[IG][pressure] {p:.3e}")
+        self._last_pressure = p
         self._q_put_event_nowait(IGEvent(kind="pressure", pressure=p))
 
     async def _emit_base_reached(self):
@@ -793,10 +799,6 @@ class AsyncIG:
 
     async def _emit_failed(self, why: str):
         self._q_put_event_nowait(IGEvent(kind="base_failed", message=why))
-
-    def _dbg(self, src: str, msg: str):
-        if self.debug_print:
-            print(f"[{src}] {msg}")
 
     # ---------------------------
     # 내부: 유틸
@@ -810,7 +812,6 @@ class AsyncIG:
             await asyncio.sleep(0.01)
 
     async def _absorb_late_lines(self, budget_ms: int = 120):
-        """짧게 라인 큐를 비워 이전 명령의 늦은 응답/에코가 다음 명령에 섞이는 것을 방지."""
         deadline = time.monotonic() + max(0, budget_ms) / 1000.0
         drained = 0
         while time.monotonic() < deadline:
@@ -819,8 +820,18 @@ class AsyncIG:
                 drained += 1
             except asyncio.QueueEmpty:
                 await asyncio.sleep(0.005)
-        if drained and self.debug_print:
-            print(f"[IG] absorbed {drained} stale lines")
+        if drained:
+            await self._emit_status(f"이전 늦은 응답 {drained}개 흡수(다음 명령 오염 방지)")
+
+    async def _log_wait_again(self, interval_ms: int):
+        sec = max(0, int(interval_ms)) // 1000
+        if self._last_pressure is not None:
+            await self._emit_status(
+                f"목표 미도달: 현재 {self._last_pressure:.3e} Torr > 목표 {self._target_pressure:.3e} Torr → {sec}초 후 재시도"
+            )
+        else:
+            await self._emit_status(f"목표 미도달 → {sec}초 후 재시도")
+
 
     # === IGControllerLike 호환용 얇은 쉼(옵션) ===
     async def ensure_on(self) -> None:

@@ -264,13 +264,15 @@ class AsyncPLC:
     # ---------- 연결/수명주기 ----------
     async def connect(self) -> None:
         self._closed = False
-        await asyncio.to_thread(self._connect_sync)
+        async with self._lock: # 🔒 I/O 및 하트비트와 직렬화
+            await asyncio.to_thread(self._connect_sync)
         self.log("TCP 연결 성공: %s:%s (unit=%s)", self.cfg.ip, self.cfg.port, self.cfg.unit)
         if self._hb_task is None or self._hb_task.done():
             self._hb_task = asyncio.create_task(self._heartbeat_loop(), name="PLCHeartbeat")
 
     async def close(self) -> None:
         self._closed = True
+        # 하트비트 먼저 중지
         if self._hb_task:
             self._hb_task.cancel()
             try:
@@ -278,7 +280,9 @@ class AsyncPLC:
             except Exception:
                 pass
             self._hb_task = None
-        await asyncio.to_thread(self._close_sync)
+        # 🔒 모든 I/O와 동기화하여 안전 종료
+        async with self._lock:
+            await asyncio.to_thread(self._close_sync)
         self.log("TCP 연결 종료")
 
     def is_connected(self) -> bool:
@@ -376,10 +380,11 @@ class AsyncPLC:
                 try:
                     await self.read_coil(0)
                 except Exception:
-                    # 1회 재연결 시도
+                    # 🔒 재연결도 I/O와 직렬화
                     try:
-                        await asyncio.to_thread(self._close_sync)
-                        await asyncio.to_thread(self._connect_sync)
+                        async with self._lock:
+                            await asyncio.to_thread(self._close_sync)
+                            await asyncio.to_thread(self._connect_sync)
                     except Exception:
                         pass
         except asyncio.CancelledError:

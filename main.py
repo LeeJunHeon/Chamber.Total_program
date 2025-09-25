@@ -205,7 +205,7 @@ class MainWindow(QWidget):
         async def _dc_request_read():
             try:
                 # ✔ D00000=Volt, D00001=Curr → P=V*I
-                P, V, I = await self.plc.power_read(family="DCV", v_idx=0, i_idx=0)
+                P, V, I = await self.plc.power_read(family="DCV", v_idx=0, i_idx=1)
                 #self.handle_dc_power_display(P, V, I)
                 return (P, V, I)
             except Exception as e:
