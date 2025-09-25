@@ -209,7 +209,7 @@ class PLCConfig:
     # 원하는 파워[W] → DAC 코드 변환용. 직선 스케일(0~FULL)
     dc_power_min_w: float = 0.0
     dc_power_max_w: float = 500.0      # 장비 정격에 맞춰 수정
-    dc_dac_full_scale: int = 4095      # 12bit DAC라면 4095
+    dc_dac_full_scale: int = 4000      # DAC 스케일 4000
     dc_dac_offset: int = 0             # 필요 시 오프셋
 
     # WRITE 인덱스(D00004=WRITE_0)를 기본으로 사용
