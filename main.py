@@ -351,12 +351,6 @@ class MainWindow(QWidget):
                         ok = await self.oes.initialize_device()
                         if not ok:
                             raise RuntimeError("OES 초기화 실패")
-                    targets = getattr(self, "_last_polling_targets", None)
-                    if not targets:
-                        params = getattr(self.process_controller, "current_params", {}) or {}
-                        use_rf_pulse = bool(params.get("use_rf_pulse", False))
-                        targets = {"mfc": True, "rfpulse": use_rf_pulse}
-                    self._apply_polling_targets(targets)
 
                     self._soon(self.graph_controller.clear_oes_plot)  # Qt GUI 스레드에서 안전 호출
                     await self.oes.run_measurement(duration_sec, integration_ms)
@@ -592,11 +586,12 @@ class MainWindow(QWidget):
                         use_rf_pulse = bool(params.get("use_rf_pulse", False))
                         use_dc       = bool(params.get("use_dc_power", False))
                         use_rf       = bool(params.get("use_rf_power", False))
+                        # ✅ active=False면 전부 False가 되도록 게이팅
                         targets = {
-                            "mfc":     True,
-                            "rfpulse": use_rf_pulse,
-                            "dc":      use_dc and not use_rf_pulse,  # Pulse만 쓰면 DC 폴링 OFF
-                            "rf":      use_rf and not use_rf_pulse,  # Pulse만 쓰면 RF 폴링 OFF
+                            "mfc":     active,
+                            "rfpulse": active and use_rf_pulse,
+                            "dc":      active and use_dc and not use_rf_pulse,
+                            "rf":      active and use_rf and not use_rf_pulse,
                         }
                     else:
                         targets = {
@@ -1093,7 +1088,6 @@ class MainWindow(QWidget):
 
         while True:
             if self._is_dev_connected(dev):
-                self.append_log(name, "연결 성공")
                 return True
             try:
                 now = asyncio.get_running_loop().time()

@@ -183,15 +183,20 @@ class AsyncMFC:
 
     # ---- 고수준 제어 API (기존 handle_command 세분화) ----
     async def set_flow(self, channel: int, ui_sccm: float):
+        # ✅ FLOW_SET 전에 채널 스케일(FS/UNIT) 선조회(캐시 확보)
+        fs, unit = await self._ensure_mfc_meta(channel)   # unit: 1=SCCM, 2=SLM
+        fs_sccm = self._fs_in_sccm(fs, unit)              # SLM이면 ×1000 해서 sccm FS로 환산
+        await self._emit_status(f"Ch{channel} FS 준비: FS={fs_sccm:.3f} sccm (원 단위:{'SLM' if unit==2 else 'SCCM'})")
+
         # UI(sccm) → %FS
         pct = await self._sccm_to_pct(channel, float(ui_sccm))
         await self._emit_status(f"Ch{channel} 유량: {ui_sccm:.2f} sccm → {pct:.2f}%FS")
 
-        # SET (no-reply) : Q{ch} {pct}
+        # SET (no-reply)
         set_cmd = self._mk_cmd("FLOW_SET", channel=channel, value=round(pct, 2))
         self._enqueue(set_cmd, None, allow_no_reply=True, tag=f"[SET ch{channel}]")
 
-        # 검증(R65~R68 → Q5..Q8)
+        # 검증
         ok = await self._verify_flow_set(channel, pct)
         if ok:
             self.last_setpoints[channel] = pct  # %FS 보관
@@ -427,7 +432,7 @@ class AsyncMFC:
             self._poll_cycle_active = False
             self._process_starting = False  # ← 안전하게 리셋
             purged = self._purge_poll_reads_only(cancel_inflight=True, reason="polling off")
-            self._ev_nowait(MFCEvent(kind="status", message="주기적 읽기(Polling) 중지"))
+            #self._ev_nowait(MFCEvent(kind="status", message="주기적 읽기(Polling) 중지"))
             if purged:
                 self._ev_nowait(MFCEvent(kind="status", message=f"[QUIESCE] 폴링 읽기 {purged}건 제거 (polling off)"))
 
@@ -782,7 +787,7 @@ class AsyncMFC:
                 ui_act = await self._pct_to_sccm(ch, -1 if actual is None else actual)
 
                 await self._emit_status(
-                    f"유량 확인... (목표: {target:.2f}%FS/{ui_tgt:.2f}sccm, "
+                    f"Flow 확인... (목표: {target:.2f}%FS/{ui_tgt:.2f}sccm, "
                     f"현재: {(-1 if actual is None else actual):.2f}%FS/{ui_act:.2f}sccm)"
                 )
 
@@ -944,11 +949,12 @@ class AsyncMFC:
         return self._parse_r60_values(line or "")
 
     async def _read_r69_bits(self) -> Optional[str]:
-        verify_to = max(int(MFC_TIMEOUT), 2000)
+        # PLC/IG와 동시 동작/폴링 중 레이턴시를 감안해 최소 3000ms 보장
+        verify_to = max(int(MFC_TIMEOUT), 3000)
         line = await self._send_and_wait_line(
             self._mk_cmd("READ_MFC_ON_OFF_STATUS"),
             tag="[READ R69]", timeout_ms=verify_to,
-            retries=3, expect_prefixes=("L0", "L")
+            retries=5, expect_prefixes=("L0", "L")
         )
         return self._parse_r69_bits(line or "")
 
@@ -1082,43 +1088,49 @@ class AsyncMFC:
             self._dbg("MFC", f"[ECHO] no-reply 등록: {no_eol}")
 
     async def _send_and_wait_line(
-        self,
-        cmd_str: str,
-        *,
-        tag: str,
-        timeout_ms: int,
-        retries: int = 1,
-        expect_prefixes: tuple[str, ...] = (),  # ← 추가
+        self, cmd_str: str, *, tag: str, timeout_ms: int, retries: int = 1,
+        expect_prefixes: tuple[str, ...] = (),
     ) -> Optional[str]:
-        fut: asyncio.Future[Optional[str]] = asyncio.get_running_loop().create_future()
+        """읽기 타임아웃/무응답에 대해서도 'retries' 횟수만큼 재시도."""
+        attempts = max(1, int(retries))
+        for attempt in range(1, attempts + 1):
+            fut: asyncio.Future[Optional[str]] = asyncio.get_running_loop().create_future()
 
-        def _cb(line: Optional[str]):
-            if line is None:
+            def _cb(line: Optional[str]):
+                if line is None:
+                    if not fut.done():
+                        fut.set_result(None)
+                    return
+                s = (line or "").strip()
                 if not fut.done():
-                    fut.set_result(None)
-                return
-            s = (line or "").strip()
-            if not fut.done():
-                fut.set_result(s)  # ★ 필터링 제거 (워커가 보장)
+                    fut.set_result(s)
 
-        self._enqueue(
-            cmd_str, _cb, 
-            timeout_ms=timeout_ms, gap_ms=MFC_GAP_MS,
-            tag=tag, retries_left=max(0, int(retries)), allow_no_reply=False,
-            expect_prefixes=expect_prefixes # ★ 워커에게 전달
-        )
+            self._enqueue(
+                cmd_str, _cb,
+                timeout_ms=timeout_ms, gap_ms=MFC_GAP_MS,
+                tag=tag if attempt == 1 else f"{tag} (retry {attempt}/{attempts})",
+                retries_left=0,                     # 전송 오류 재시도는 워커에 맡기지 않음(읽기 재시도는 여기서)
+                allow_no_reply=False,
+                expect_prefixes=expect_prefixes
+            )
 
-        # 오픈 직후 첫 응답은 여유 부여
-        extra = 0.0
-        if self._last_connect_mono > 0.0 and (time.monotonic() - self._last_connect_mono) < 2.0:
-            extra = MFC_FIRST_CMD_EXTRA_TIMEOUT_MS / 1000.0
-        try:
-            return await asyncio.wait_for(fut, timeout=(timeout_ms / 1000.0) + 2.0 + extra)
-        except asyncio.TimeoutError:
-            if not fut.done():
-                fut.cancel()
-            return None
+            extra = 0.0
+            if self._last_connect_mono > 0.0 and (time.monotonic() - self._last_connect_mono) < 2.0:
+                extra = MFC_FIRST_CMD_EXTRA_TIMEOUT_MS / 1000.0
 
+            try:
+                res = await asyncio.wait_for(fut, timeout=(timeout_ms / 1000.0) + 2.0 + extra)
+                if res:
+                    return res
+            except asyncio.TimeoutError:
+                # pass → 다음 루프로 재시도
+                pass
+
+            # 짧은 소프트 드레인 & 간격 (늦게 도착한 에코/라인 흡수)
+            await self._absorb_late_lines(80)
+            await asyncio.sleep(max(0.05, MFC_GAP_MS / 1000.0))
+
+        return None
 
     def _mk_cmd(self, key: str, *args, **kwargs) -> str:
         """MFC_COMMANDS 값이 함수/문자열 모두 허용."""
@@ -1263,27 +1275,56 @@ class AsyncMFC:
     
     async def _ensure_all_off_on_start(self) -> bool:
         """
-        공정 시작용: R69를 읽어 이미 모두 OFF(0000)이면 L0 생략,
-        아니면 0000으로 맞춘다. 성공 여부 반환.
+        공정 시작용: R69 선조회 없이 L0 0000 한 번 전송 → R69 한 번만 읽어 확인.
+        (재시도/루프 없음)
         """
         # (선택) 시작 시 모니터/목표 리셋
         self.last_setpoints = {1: 0.0, 2: 0.0, 3: 0.0}
         self.flow_error_counters = {1: 0, 2: 0, 3: 0}
 
-        now = await self._read_r69_bits()
-        if not now:
-            await self._emit_status("ensure_all_off_on_start: R69 읽기 실패")
-            return False
+        # 1) L0 0000 전송(no-reply)
+        self._enqueue(self._mk_cmd("SET_ONOFF_MASK", "0000"), None,
+                    allow_no_reply=True, tag="[L0 0000]")
 
-        bits = (now or "").ljust(4, '0')[:4]
-        if bits == "0000":
-            await self._emit_status("ensure_all_off_on_start: 이미 모든 채널 OFF → L0 생략")
-            return True
+        # 2) 장비 반영 대기(기존 딜레이 재사용; 최소 200ms 보장)
+        await asyncio.sleep(max(MFC_DELAY_MS, 200) / 1000.0)
 
-        ok = await self._set_onoff_mask_and_verify("0000")
-        await self._emit_status(
-            "ensure_all_off_on_start: 모든 채널 OFF " + ("완료" if ok else "실패")
+        # ✅ (중요) 과거 L0 에코가 남아있을 수 있으므로 짧게 드레인
+        await self._absorb_late_lines(80)
+
+        # 3) R69 한 번만 읽어서 확인(최소 2초 타임아웃 권장)
+        verify_to = max(int(MFC_TIMEOUT), 2000)
+        line = await self._send_and_wait_line(
+            self._mk_cmd("READ_MFC_ON_OFF_STATUS"),
+            tag="[VERIFY R69 1shot]", timeout_ms=verify_to,
+            expect_prefixes=("L0", "L"),  # L0/L 접두 허용
         )
+        now = self._parse_r69_bits(line or "")
+
+        ok = (now == "0000")
+        await self._emit_status(
+            "ensure_all_off_on_start: L0→R69 1회 확인 "
+            + ("성공(0000)" if ok else f"불일치(now={now or '∅'})")
+        )
+        return ok
+    
+    async def _all_off_oneshot(self) -> bool:
+        """L0 0000 한 번 전송하고 R69 한 번만 읽어 '0000'인지 확인."""
+        self._enqueue(self._mk_cmd("SET_ONOFF_MASK", "0000"), None,
+                    allow_no_reply=True, tag="[L0 0000]")
+
+        await asyncio.sleep(max(MFC_DELAY_MS, 200) / 1000.0)
+        await self._absorb_late_lines(80)  # ✅ 과거 L0 에코 제거
+
+        verify_to = max(int(MFC_TIMEOUT), 2000)
+        line = await self._send_and_wait_line(
+            self._mk_cmd("READ_MFC_ON_OFF_STATUS"),
+            tag="[VERIFY R69 1shot]", timeout_ms=verify_to,
+            expect_prefixes=("L0", "L"),
+        )
+        now = self._parse_r69_bits(line or "")
+        ok = (now == "0000")
+        await self._emit_status("ALL_OFF(1shot): " + ("OK" if ok else f"NG(now={now or '∅'})"))
         return ok
 
     def _fs_in_sccm(self, fs_value: float, unit_code: int) -> float:
