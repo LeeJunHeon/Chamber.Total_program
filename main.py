@@ -156,9 +156,14 @@ class MainWindow(QWidget):
 
 
 if __name__ == "__main__":
+    # ▶ Windows + Python 3.13 재진입 예외 회피 (Overlapped → Selector)
+    if sys.platform.startswith("win"):
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
     app = QApplication(sys.argv)
     loop = QEventLoop(app)
     asyncio.set_event_loop(loop)
+    
     w = MainWindow(loop)
     w.show()
     with loop:

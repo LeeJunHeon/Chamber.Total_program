@@ -48,7 +48,6 @@ class RGA100AsyncAdapter:
     """
     SRS 공식 드라이버(RGA100) 동기 API를 asyncio 친화적으로 감싼 래퍼.
     - LAN 접속: RGA100('tcpip', ip, user, password)
-    - 스니펫과 "완전히 동일"한 절차로 스캔 수행(파라미터 건드리지 않음)
     - scan_histogram_once()          : 이벤트만 발생(그래프 갱신용)
     - scan_histogram_to_csv(path)    : 스캔 + CSV 저장(스니펫 포맷) + 이벤트
     """
@@ -62,16 +61,39 @@ class RGA100AsyncAdapter:
         self.csv_encoding = csv_encoding
         self._ev_q: asyncio.Queue[RGAEvent] = asyncio.Queue(maxsize=256)
 
+        # 추가: 동시 스캔 방지 & 연결상태 플래그
+        self._scan_lock: asyncio.Lock = asyncio.Lock()
+        self._connected: bool = False
+
+    # ── 라이프사이클(ChamberRuntime 워치독과 호환) ─────────────────────
+    async def start(self) -> None:
+        """워치독/프리플라이트 호환을 위한 준비 표식."""
+        self._connected = True
+        await self._status(f"[{self.name}] RGA adapter ready")
+
+    async def cleanup(self) -> None:
+        """상태 초기화(열린 연결은 동기 호출마다 닫으므로 별도 자원 없음)."""
+        self._connected = False
+        await self._status(f"[{self.name}] RGA adapter cleanup")
+
+    # ChamberRuntime._is_dev_connected가 호출할 수 있도록 메서드 제공
+    def is_connected(self) -> bool:
+        return self._connected
+
     # ── 이벤트 소비 ────────────────────────────────────────────────
     async def events(self):
         while True:
             yield await self._ev_q.get()
 
     # ── 공개 API: 스니펫과 동일 동작(저장 X) ─────────────────────────
-    async def scan_histogram_once(self) -> None:
+    async def scan_histogram_once(self, *, timeout_s: float = 30.0) -> None:
         await self._status(f"[{self.name}] histogram scan 시작")
         try:
-            mass_axis, hist_raw, part_press = await asyncio.to_thread(self._blocking_histogram_once)
+            async with self._scan_lock:
+                mass_axis, hist_raw, part_press = await asyncio.wait_for(
+                    asyncio.to_thread(self._blocking_histogram_once),
+                    timeout=max(0.1, float(timeout_s)),
+                )
             ts = _now_str()
             self._ev_nowait(RGAEvent(
                 kind="data",
@@ -82,11 +104,13 @@ class RGA100AsyncAdapter:
             ))
             await self._status(f"[{self.name}] histogram scan 완료 ({len(mass_axis)} bins)")
             await self._finished()
+        except asyncio.TimeoutError:
+            await self._failed("SCAN_HIST", "timeout")
         except Exception as e:
             await self._failed("SCAN_HIST", str(e))
 
     # ── 공개 API: 스니펫과 동일 동작 + CSV 저장 ───────────────────────
-    async def scan_histogram_to_csv(self, csv_path: str | Path, *, suffix: str = "e-12") -> None:
+    async def scan_histogram_to_csv(self, csv_path: str | Path, *, suffix: str = "e-12", timeout_s: float = 30.0) -> None:
         """
         CSV 저장 규칙(스니펫과 동일):
           row = [timestamp] + [f"{value}e-12" for value in histogram_spectrum]
@@ -94,7 +118,11 @@ class RGA100AsyncAdapter:
         """
         await self._status(f"[{self.name}] histogram scan + CSV 저장 시작")
         try:
-            mass_axis, hist_raw, part_press = await asyncio.to_thread(self._blocking_histogram_once)
+            async with self._scan_lock:
+                mass_axis, hist_raw, part_press = await asyncio.wait_for(
+                    asyncio.to_thread(self._blocking_histogram_once),
+                    timeout=max(0.1, float(timeout_s)),
+                )
             ts = _now_str()
 
             # 1) CSV 저장 (동일 포맷)
@@ -113,6 +141,8 @@ class RGA100AsyncAdapter:
             ))
             await self._status(f"[{self.name}] CSV 저장 완료: {path} ({len(hist_raw)} points)")
             await self._finished()
+        except asyncio.TimeoutError:
+            await self._failed("SCAN_HIST_SAVE", "timeout")
         except Exception as e:
             await self._failed("SCAN_HIST_SAVE", str(e))
 

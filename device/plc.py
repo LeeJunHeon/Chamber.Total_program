@@ -248,6 +248,7 @@ class AsyncPLC:
         self._last_io_ts = 0.0
         self._hb_task: Optional[asyncio.Task] = None
         self._closed = False
+        self._hb_paused: bool = False   # ← 추가
         self.log = logger or (lambda *a, **k: None)
 
         # 혼합 대/소문자/논리명 별칭
@@ -788,6 +789,71 @@ class AsyncPLC:
             except RuntimeError:
                 pass
     # =============== 유틸 ===============
+
+    # =============== chamber_runtime.py 호환용 함수 ===============
+    # chamber_runtime: start()/connect 호환
+    async def start(self) -> None:
+        """connect() 별칭 — 장치 생명주기 통일."""
+        await self.connect()
+
+    # chamber_runtime: cleanup()/cleanup_quick 호환
+    async def cleanup(self) -> None:
+        """close() 별칭 — 정상 종료."""
+        await self.close()
+
+    async def cleanup_quick(self) -> None:
+        """빠른 종료(현재는 close와 동일)."""
+        await self.close()
+
+    # IG와 대칭되는 워치독 일시중지/재개
+    async def pause_watchdog(self) -> None:
+        """하트비트/자동 재연결 워치독 중지 (연결은 유지)."""
+        self._hb_paused = True
+        t = self._hb_task
+        if t and not t.done():
+            t.cancel()
+            try:
+                await t
+            except Exception:
+                pass
+        self._hb_task = None
+
+    async def resume_watchdog(self) -> None:
+        """pause_watchdog 이후 워치독 재개."""
+        self._hb_paused = False
+        if (not self._closed) and self.is_connected() and (self._hb_task is None or self._hb_task.done()):
+            self._hb_task = asyncio.create_task(self._heartbeat_loop(), name="PLCHeartbeat")
+
+    # chamber_runtime: 공정 on/off 신호에 맞춰 폴링/워치독 제어(옵션)
+    def set_process_status(self, should_poll: bool) -> None:
+        """
+        공정 상태 알림 훅.
+        False면 워치독(하트비트/자동재연결) 잠시 멈춰 로그 소음/경합 줄임.
+        True면 다시 재개.
+        """
+        loop = asyncio.get_running_loop()
+        if not should_poll:
+            loop.create_task(self.pause_watchdog())
+        else:
+            loop.create_task(self.resume_watchdog())
+
+    # IG의 set_endpoint와 대칭 — ip/port 런타임 변경
+    async def set_endpoint(self, ip: str, port: int, *, reconnect: bool = True) -> None:
+        """
+        런타임에서 PLC 엔드포인트 변경. reconnect=True면 즉시 재연결.
+        """
+        self.cfg.ip = str(ip)
+        self.cfg.port = int(port)
+        if reconnect:
+            # 하트비트 일시 정지 후 재연결
+            await self.pause_watchdog()
+            try:
+                await self.close()
+            except Exception:
+                pass
+            await self.connect()
+            await self.resume_watchdog()
+    # =============== chamber_runtime.py 호환용 함수 ===============
 
 __all__ = [
     "PLC_COIL_MAP", "PLC_REG_MAP", "PLC_TIMER_MAP",

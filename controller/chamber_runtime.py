@@ -9,7 +9,7 @@ from pathlib import Path
 from datetime import datetime
 from collections import deque
 
-from PySide6.QtWidgets import QMessageBox, QFileDialog, QPlainTextEdit
+from PySide6.QtWidgets import QMessageBox, QFileDialog, QPlainTextEdit, QDialog
 from PySide6.QtGui import QTextCursor
 
 # 장비
@@ -327,7 +327,7 @@ class ChamberRuntime:
     def _bind_process_controller(self) -> None:
         # === 콜백 정의(PLC/MFC/파워/OES/RGA/IG) ===
 
-        def cb_plc(cmd: str, on: Any, ch: int) -> None:
+        def cb_plc(cmd: str, on: Any, ch: int | None = None) -> None:
             async def run():
                 raw = str(cmd)
                 nname = raw.upper()
@@ -437,9 +437,12 @@ class ChamberRuntime:
             self._spawn_detached(run())
 
         def cb_rf_pulse_start(power: float, freq: int | None, duty: int | None) -> None:
-            if not self.rf_pulse:
-                self.append_log("RFPulse", "RF-Pulse 미지원 챔버입니다."); return
-            self._spawn_detached(self.rf_pulse.start_pulse_process(float(power), freq, duty))
+            async def run():
+                if not self.rf_pulse:
+                    self.append_log("RFPulse", "RF-Pulse 미지원 챔버입니다."); return
+                self._ensure_background_started()
+                await self.rf_pulse.start_pulse_process(float(power), freq, duty)
+            self._spawn_detached(run())
 
         def cb_rf_pulse_stop():
             if self.rf_pulse:
@@ -539,26 +542,6 @@ class ChamberRuntime:
         self._ensure_task_alive("Pump.PC", self._pump_pc_events)
 
     # ------------------------------------------------------------------
-    # 버튼 바인딩(자기 챔버 UI만)
-    def _connect_my_buttons(self) -> None:
-        btn = self._u("Start_button")
-        if btn:
-            btn.clicked.connect(self._handle_start_clicked)
-        btn = self._u("Stop_button")
-        if btn:
-            btn.clicked.connect(self._handle_stop_clicked)
-        btn = self._u("processList_button")
-        if btn:
-            btn.clicked.connect(self._handle_process_list_clicked)
-
-        # 로그 창 라인수 제한(개별)
-        if self._w_log:
-            self._w_log.setMaximumBlockCount(2000)
-
-        # 기본 UI값
-        self._set_default_ui_values()
-
-    # ------------------------------------------------------------------
     # 이벤트 펌프들
     async def _pump_pc_events(self) -> None:
         q = self.process_controller.event_q
@@ -593,11 +576,7 @@ class ChamberRuntime:
                     ok = bool(payload.get("ok", False))
                     detail = payload.get("detail", {}) or {}
                     ok_for_log = bool(detail.get("ok_for_log", ok))
-                    try:
-                        self.data_logger.finalize_and_write_log(ok_for_log)
-                    except TypeError:
-                        with contextlib.suppress(Exception):
-                            self.data_logger.finalize_and_write_log()
+                    self.data_logger.finalize_and_write_log(ok_for_log)
                     await asyncio.sleep(0.20)
                     if self.chat:
                         with contextlib.suppress(Exception):
@@ -762,6 +741,14 @@ class ChamberRuntime:
             if k == "status":
                 self.append_log(f"DC{self.ch}", ev.message or "")
             elif k == "display":
+                # ✅ 추가: CSV용 샘플 수집
+                with contextlib.suppress(Exception):
+                    self.data_logger.log_dc_power(
+                        float(ev.power  or 0.0),
+                        float(ev.voltage or 0.0),
+                        float(ev.current or 0.0),
+                    )
+                # 기존 UI 갱신
                 self._display_dc(ev.power, ev.voltage, ev.current)
             elif k == "target_reached":
                 self.process_controller.on_dc_target_reached()
@@ -776,6 +763,13 @@ class ChamberRuntime:
             if k == "status":
                 self.append_log(f"RF{self.ch}", ev.message or "")
             elif k == "display":
+                # ✅ 추가: CSV용 샘플 수집
+                with contextlib.suppress(Exception):
+                    self.data_logger.log_rf_power(
+                        float(ev.forward   or 0.0),
+                        float(ev.reflected or 0.0),
+                    )
+                # 기존 UI 갱신
                 self._display_rf(ev.forward, ev.reflected)
             elif k == "target_reached":
                 self.process_controller.on_rf_target_reached()
@@ -952,18 +946,15 @@ class ChamberRuntime:
     def _display_rf(self, for_p: Optional[float], ref_p: Optional[float]) -> None:
         if for_p is None or ref_p is None:
             self.append_log("MAIN", "for.p/ref.p 비어있음"); return
-        w_for = self._u("forP_edit")
-        w_ref = self._u("refP_edit")
-        if w_for: w_for.setPlainText(f"{for_p:.2f}")
-        if w_ref: w_ref.setPlainText(f"{ref_p:.2f}")
+        self._set("forP_edit", f"{for_p:.2f}")
+        self._set("refP_edit", f"{ref_p:.2f}")
 
     def _display_dc(self, power: Optional[float], voltage: Optional[float], current: Optional[float]) -> None:
         if power is None or voltage is None or current is None:
             self.append_log("MAIN", "P/V/I 비어있음"); return
-        wP = self._u("Power_edit"); wV = self._u("Voltage_edit"); wI = self._u("Current_edit")
-        if wP: wP.setPlainText(f"{power:.3f}")
-        if wV: wV.setPlainText(f"{voltage:.3f}")
-        if wI: wI.setPlainText(f"{current:.3f}")
+        self._set("Power_edit",   f"{power:.3f}")
+        self._set("Voltage_edit", f"{voltage:.3f}")
+        self._set("Current_edit", f"{current:.3f}")
 
     def _on_process_status_changed(self, running: bool) -> None:
         b_start = self._u("Start_button"); b_stop = self._u("Stop_button")
@@ -979,12 +970,33 @@ class ChamberRuntime:
 
     # ------------------------------------------------------------------
     # 파일 로딩 / UI 반영
-    def _handle_process_list_clicked(self, _checked: bool = False) -> None:
-        file_path, _ = QFileDialog.getOpenFileName(
-            None, f"CH{self.ch} 프로세스 리스트 파일 선택", "", "CSV Files (*.csv);;All Files (*)"
+    def _connect_my_buttons(self) -> None:
+        btn = self._u("Start_button")
+        if btn: btn.clicked.connect(self._handle_start_clicked)
+
+        btn = self._u("Stop_button")
+        if btn: btn.clicked.connect(self._handle_stop_clicked)
+
+        btn = self._u("processList_button")
+        if btn:
+            # 비모달 파일 열기(async)로 실행
+            btn.clicked.connect(lambda: self._spawn_detached(self._handle_process_list_clicked_async()))
+
+        # ↓ 이 두 줄 꼭 유지 (현재 아래쪽 정의엔 빠져있었음)
+        if self._w_log:
+            self._w_log.setMaximumBlockCount(2000)
+        self._set_default_ui_values()
+
+    async def _handle_process_list_clicked_async(self) -> None:
+        file_path = await self._aopen_file(
+            caption=f"CH{self.ch} 프로세스 리스트 파일 선택",
+            start_dir="",
+            name_filter="CSV Files (*.csv);;All Files (*)"
         )
         if not file_path:
-            self.append_log("File", "파일 선택 취소"); return
+            self.append_log("File", "파일 선택 취소")
+            return
+
         self.append_log("File", f"선택된 파일: {file_path}")
         try:
             with open(file_path, mode='r', encoding='utf-8-sig', newline='') as csvfile:
@@ -992,10 +1004,12 @@ class ChamberRuntime:
                 self.process_queue: list[RawParams] = []
                 self.current_process_index: int = -1
                 for row in reader:
-                    row['Process_name'] = row.get('#', f'공정 {len(self.process_queue) + 1}')
+                    name = (row.get('Process_name') or row.get('#') or f"공정 {len(self.process_queue)+1}").strip()
+                    row['Process_name'] = name
                     self.process_queue.append(cast(RawParams, row))
                 if not self.process_queue:
-                    self.append_log("File", "파일에 공정이 없습니다."); return
+                    self.append_log("File", "파일에 공정이 없습니다.")
+                    return
                 self.append_log("File", f"총 {len(self.process_queue)}개 공정 읽음.")
                 self._update_ui_from_params(self.process_queue[0])
         except Exception as e:
@@ -1056,14 +1070,34 @@ class ChamberRuntime:
 
     def _set(self, leaf: str, v: Any) -> None:
         w = self._u(leaf)
-        if w is None: return
-        # QPlainTextEdit vs QCheckBox 감지
-        if isinstance(w, QPlainTextEdit):
-            w.setPlainText(str(v))
-        else:
-            # QCheckBox 등에 대해 setChecked가 있으면 사용
-            with contextlib.suppress(Exception):
+        if w is None:
+            return
+        try:
+            # 1) 체크박스/토글류 먼저 (QCheckBox, QRadioButton 등)
+            if hasattr(w, "setChecked"):
                 w.setChecked(bool(v))
+                return
+
+            # 2) 숫자 위젯 (QSpinBox/QDoubleSpinBox)
+            if hasattr(w, "setValue"):
+                try:
+                    w.setValue(v if isinstance(v, (int, float)) else float(str(v)))
+                except Exception:
+                    # 숫자로 못 바꾸면 텍스트로 시도
+                    pass
+                else:
+                    return
+
+            # 3) 텍스트 위젯
+            s = str(v)
+            if hasattr(w, "setPlainText"):   # QPlainTextEdit/QTextEdit
+                w.setPlainText(s)
+                return
+            if hasattr(w, "setText"):        # QLineEdit 등
+                w.setText(s)
+                return
+        except Exception as e:
+            self.append_log("UI", f"_set('{leaf}') 실패: {e!r}")
 
     # ------------------------------------------------------------------
     # 자동 시퀀스
@@ -1105,9 +1139,6 @@ class ChamberRuntime:
         if self.process_controller.is_running:
             self.append_log("MAIN", "이미 다른 공정 실행 중"); return
         self._spawn_detached(self._start_after_preflight(params))
-
-    def _post_critical(self, title: str, text: str) -> None:
-        QMessageBox.critical(None, title, text)
 
     async def _start_after_preflight(self, params: NormParams) -> None:
         try:
@@ -1193,7 +1224,8 @@ class ChamberRuntime:
     # Start/Stop (개별 챔버)
     def _handle_start_clicked(self, _checked: bool = False):
         if self.process_controller.is_running:
-            QMessageBox.warning(None, "실행 오류", "다른 공정이 실행 중입니다."); return
+            self._post_warning("실행 오류", "다른 공정이 실행 중입니다."); 
+            return
 
         # CSV 자동 시퀀스
         if getattr(self, "process_queue", None):
@@ -1352,7 +1384,7 @@ class ChamberRuntime:
             use_o2 = bool(getattr(self._u("O2_checkbox"), "isChecked", lambda: False)())
             use_n2 = bool(getattr(self._u("N2_checkbox"), "isChecked", lambda: False)())
             if not (use_ar or use_o2 or use_n2):
-                QMessageBox.warning(None, "선택 오류", "가스를 하나 이상 선택해야 합니다."); return None
+                self._post_warning("선택 오류", "가스를 하나 이상 선택해야 합니다."); return None
 
             def _read_flow(name: str) -> float:
                 txt = self._get_text(name) or "0"
@@ -1368,34 +1400,40 @@ class ChamberRuntime:
                 o2_flow = _read_flow("o2Flow_edit") if use_o2 else 0.0
                 n2_flow = _read_flow("n2Flow_edit") if use_n2 else 0.0
             except Exception:
-                QMessageBox.warning(None, "입력값 확인", "가스 유량 입력을 확인하세요."); return None
+                self._post_warning("입력값 확인", "가스 유량 입력을 확인하세요.")
+                return None
 
             # 파워(DC-Pulse만 강제)
             use_dc_pulse = bool(getattr(self._u("dcPulsePower_checkbox"), "isChecked", lambda: False)())
             if not use_dc_pulse:
-                QMessageBox.warning(None, "선택 오류", "CH1은 DC-Pulse를 반드시 선택해야 합니다."); return None
+                self._post_warning("선택 오류", "CH1은 DC-Pulse를 반드시 선택해야 합니다.")
+                return None
 
             try:
                 dc_pulse_power = float(self._get_text("dcPulsePower_edit") or "0")
                 if dc_pulse_power <= 0: raise ValueError()
             except ValueError:
-                QMessageBox.warning(None, "입력값 확인", "DC-Pulse Target Power(W)를 확인하세요."); return None
+                self._post_warning("입력값 확인", "DC-Pulse Target Power(W)를 확인하세요.")
+                return None
 
-            dc_pulse_freq = None; dc_pulse_duty = None
+            dc_pulse_freq = None
+            dc_pulse_duty = None
             txtf = self._get_text("dcPulseFreq_edit")
             if txtf:
                 try:
                     dc_pulse_freq = int(float(txtf))
                     if dc_pulse_freq < 1 or dc_pulse_freq > 100000: raise ValueError()
                 except ValueError:
-                    QMessageBox.warning(None, "입력값 확인", "DC-Pulse Freq(Hz)는 1..100000 범위"); return None
+                    self._post_warning("입력값 확인", "DC-Pulse Freq(Hz)는 1..100000 범위")
+                    return None
             txtd = self._get_text("dcPulseDutyCycle_edit")
             if txtd:
                 try:
                     dc_pulse_duty = int(float(txtd))
                     if dc_pulse_duty < 1 or dc_pulse_duty > 99: raise ValueError()
                 except ValueError:
-                    QMessageBox.warning(None, "입력값 확인", "DC-Pulse Duty(%)는 1..99 범위"); return None
+                    self._post_warning("입력값 확인", "DC-Pulse Duty(%)는 1..99 범위")
+                    return None
 
             # 타겟명(있어도 셔터 없음 → 이름 강제 X)
             g1n = self._get_text("g1Target_name")
@@ -1423,20 +1461,27 @@ class ChamberRuntime:
         use_g3 = bool(getattr(self._u("G3_checkbox"), "isChecked", lambda: False)())
         checked = int(use_g1) + int(use_g2) + int(use_g3)
         if checked == 0 or checked == 3:
-            QMessageBox.warning(None, "선택 오류", "G1~G3 중 1개 또는 2개만 선택"); return None
+            self._post_warning("선택 오류", "G1~G3 중 1개 또는 2개만 선택")
+            return None
 
         g1_name = self._get_text("g1Target_name")
         g2_name = self._get_text("g2Target_name")
         g3_name = self._get_text("g3Target_name")
-        if use_g1 and not g1_name: QMessageBox.warning(None, "입력값 확인", "G1 타겟 이름이 비어있습니다."); return None
-        if use_g2 and not g2_name: QMessageBox.warning(None, "입력값 확인", "G2 타겟 이름이 비어있습니다."); return None
-        if use_g3 and not g3_name: QMessageBox.warning(None, "입력값 확인", "G3 타겟 이름이 비어있습니다."); return None
-
+        if use_g1 and not g1_name:
+            self._post_warning("입력값 확인", "G1 타겟 이름이 비어있습니다.")
+            return None
+        if use_g2 and not g2_name:
+            self._post_warning("입력값 확인", "G2 타겟 이름이 비어있습니다.")
+            return None
+        if use_g3 and not g3_name:
+            self._post_warning("입력값 확인", "G3 타겟 이름이 비어있습니다.")
+            return None
+        
         use_ar = bool(getattr(self._u("Ar_checkbox"), "isChecked", lambda: False)())
         use_o2 = bool(getattr(self._u("O2_checkbox"), "isChecked", lambda: False)())
         use_n2 = bool(getattr(self._u("N2_checkbox"), "isChecked", lambda: False)())
         if not (use_ar or use_o2 or use_n2):
-            QMessageBox.warning(None, "선택 오류", "가스를 하나 이상 선택"); return None
+            self._post_warning("선택 오류", "가스를 하나 이상 선택"); return None
 
         def _flow(name: str) -> float:
             txt = self._get_text(name); 
@@ -1450,12 +1495,12 @@ class ChamberRuntime:
             o2_flow = _flow("o2Flow_edit") if use_o2 else 0.0
             n2_flow = _flow("n2Flow_edit") if use_n2 else 0.0
         except Exception:
-            QMessageBox.warning(None, "입력값 확인", "가스 유량을 확인하세요."); return None
+            self._post_warning("입력값 확인", "가스 유량을 확인하세요."); return None
 
         use_rf_pulse = bool(getattr(self._u("rfPulsePower_checkbox"), "isChecked", lambda: False)())
         use_dc = bool(getattr(self._u("dcPower_checkbox"), "isChecked", lambda: False)())
         if not (use_rf_pulse or use_dc):
-            QMessageBox.warning(None, "선택 오류", "RF Pulse 또는 DC 중 하나 이상 선택"); return None
+            self._post_warning("선택 오류", "RF Pulse 또는 DC 중 하나 이상 선택"); return None
 
         rf_pulse_power = 0.0; rf_pulse_freq = None; rf_pulse_duty = None
         if use_rf_pulse:
@@ -1463,28 +1508,28 @@ class ChamberRuntime:
                 rf_pulse_power = float(self._get_text("rfPulsePower_edit") or "0")
                 if rf_pulse_power <= 0: raise ValueError()
             except ValueError:
-                QMessageBox.warning(None, "입력값 확인", "RF Pulse Target Power(W)를 확인하세요."); return None
+                self._post_warning("입력값 확인", "RF Pulse Target Power(W)를 확인하세요."); return None
             txtf = self._get_text("rfPulseFreq_edit")
             if txtf:
                 try:
                     rf_pulse_freq = int(float(txtf))
                     if rf_pulse_freq < 1 or rf_pulse_freq > 100000: raise ValueError()
                 except ValueError:
-                    QMessageBox.warning(None, "입력값 확인", "RF Pulse Freq(Hz) 1..100000"); return None
+                    self._post_warning("입력값 확인", "RF Pulse Freq(Hz) 1..100000"); return None
             txtd = self._get_text("rfPulseDutyCycle_edit")
             if txtd:
                 try:
                     rf_pulse_duty = int(float(txtd))
                     if rf_pulse_duty < 1 or rf_pulse_duty > 99: raise ValueError()
                 except ValueError:
-                    QMessageBox.warning(None, "입력값 확인", "RF Pulse Duty(%) 1..99"); return None
+                    self._post_warning("입력값 확인", "RF Pulse Duty(%) 1..99"); return None
 
         if use_dc:
             try:
                 dc_power = float(self._get_text("dcPower_edit") or "0")
                 if dc_power <= 0: raise ValueError()
             except ValueError:
-                QMessageBox.warning(None, "입력값 확인", "DC 파워(W)를 확인하세요."); return None
+                self._post_warning("입력값 확인", "DC 파워(W)를 확인하세요."); return None
         else:
             dc_power = 0.0
 
@@ -1934,4 +1979,41 @@ class ChamberRuntime:
         """prefix+name 위젯을 가져온다. 없으면 None."""
         name = self._alias_leaf(name)   # ← 이 한 줄 추가
         return getattr(self.ui, f"{self.prefix}{name}", None)
+    
+    # ── 비모달 다이얼로그 유틸 ─────────────────────────────────────────────
+    async def _aopen_file(self, caption="CSV 선택", start_dir="", 
+                          name_filter="CSV Files (*.csv);;All Files (*.*)") -> str:
+        dlg = QFileDialog(self._u("") or None, caption, start_dir, name_filter)
+        dlg.setFileMode(QFileDialog.ExistingFile)
+
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[str] = loop.create_future()
+
+        def _done(result: int):
+            try:
+                if result == QDialog.Accepted and dlg.selectedFiles():
+                    fut.set_result(dlg.selectedFiles()[0])
+                else:
+                    fut.set_result("")  # 취소
+            finally:
+                dlg.deleteLater()
+
+        dlg.finished.connect(_done)
+        dlg.open()
+        return await fut
+
+    def _post_warning(self, title: str, text: str) -> None:
+        box = QMessageBox(self._u("") or None)
+        box.setWindowTitle(title); box.setText(text)
+        box.setIcon(QMessageBox.Warning)
+        box.setStandardButtons(QMessageBox.Ok)
+        box.open()  # ← exec() 금지 (비모달)
+
+    def _post_critical(self, title: str, text: str) -> None:
+        box = QMessageBox(self._u("") or None)
+        box.setWindowTitle(title); box.setText(text)
+        box.setIcon(QMessageBox.Critical)
+        box.setStandardButtons(QMessageBox.Ok)
+        box.open()  # ← exec() 금지 (비모달)
+
 

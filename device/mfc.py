@@ -102,6 +102,7 @@ class AsyncMFC:
         self._cmd_worker_task: Optional[asyncio.Task] = None
         self._poll_task: Optional[asyncio.Task] = None
         self._stab_task: Optional[asyncio.Task] = None
+        self._wd_paused: bool = False    # ← 추가 (워치독 일시정지 상태)
 
         # 재연결 백오프
         self._reconnect_backoff_ms = MFC_RECONNECT_BACKOFF_START_MS
@@ -132,6 +133,10 @@ class AsyncMFC:
         self._mask_shadow: str = "0000"
 # =============== debug, R69 하지 않는 ==================
 
+    def is_connected(self) -> bool:
+        """프리플라이트/상태 체크용: 현재 TCP 연결 여부를 반환."""
+        return bool(self._connected)
+
     # ---------- 공용 API ----------
     async def start(self):
         """워치독/커맨드 워커 시작(연결은 워치독이 관리). 재호출/죽은 태스크 회복 안전."""
@@ -153,6 +158,10 @@ class AsyncMFC:
         if not self._cmd_worker_task:
             self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="MFCCmdWorker")
         #await self._emit_status("MFC 워치독/워커 시작")
+
+    async def connect(self):
+        """start()와 동일 의미의 별칭 — 호출측 일관성 확보."""
+        await self.start()
 
     async def cleanup(self):
         await self._emit_status("MFC 종료 절차 시작")
@@ -184,6 +193,10 @@ class AsyncMFC:
         self._connected = False
 
         await self._emit_status("MFC 연결 종료됨")
+
+    async def cleanup_quick(self):
+        """빠른 종료 경로가 필요할 때 호출 — 현 단계에서는 cleanup에 위임."""
+        await self.cleanup()
 
     async def events(self) -> AsyncGenerator[MFCEvent, None]:
         """상위에서 소비하는 이벤트 스트림."""
@@ -553,10 +566,24 @@ class AsyncMFC:
         self.flow_error_counters = {1: 0, 2: 0, 3: 0}
         self._poll_cycle_active = False
 
-    def set_endpoint(self, host: str, port: int) -> None:
-        """런타임에서 채널별 MFC TCP 엔드포인트를 지정할 때 사용."""
+    def set_endpoint(self, host: str, port: int, *, reconnect: bool = True) -> None:
+        """런타임 엔드포인트 변경. reconnect=True면 즉시 재연결 루틴 트리거."""
         self._override_host = str(host)
         self._override_port = int(port)
+        if reconnect:
+            # 워치독만 잠깐 멈추고, 현재 연결은 정리
+            asyncio.create_task(self._bounce_connection())
+
+    async def _bounce_connection(self) -> None:
+        # 워치독 일시정지
+        await self.pause_watchdog()
+        # TCP 정리(조용히)
+        try:
+            self._on_tcp_disconnected()
+        except Exception:
+            pass
+        # 재개
+        await self.resume_watchdog()
 
     def _resolve_endpoint(self) -> tuple[str, int]:
         """최종 접속할 host/port 결정: override > config 기본값."""
@@ -1329,3 +1356,22 @@ class AsyncMFC:
             bits[channel - 1] = '1' if on else '0'
         return ''.join(bits)
 # =============== debug, R69 하지 않는 ==================
+
+    async def pause_watchdog(self) -> None:
+        """자동 재연결 워치독만 잠시 멈춤(현재 연결은 유지)."""
+        self._wd_paused = True
+        self._want_connected = False
+        t = self._watchdog_task
+        if t and not t.done():
+            t.cancel()
+            try:
+                await t
+            except Exception:
+                pass
+        self._watchdog_task = None
+
+    async def resume_watchdog(self) -> None:
+        """pause_watchdog 이후 워치독/워커 재개."""
+        self._wd_paused = False
+        # start()는 워치독/워커가 죽어있으면 살려주고, 살아있으면 아무것도 안 함
+        await self.start()

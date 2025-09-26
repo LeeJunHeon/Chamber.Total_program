@@ -101,6 +101,17 @@ class AsyncIG:
         self._last_pressure: Optional[float] = None
         self._poll_interval_ms: int = IG_POLLING_INTERVAL_MS
 
+        # 워치독 일시정지 플래그
+        self._wd_paused: bool = False
+
+        # 백그라운드(상시) 압력 폴링 (wait_for_base와 별개)
+        self._bg_poll_task: Optional[asyncio.Task] = None
+        self._bg_poll_interval_ms: int = IG_POLLING_INTERVAL_MS
+
+    def is_connected(self) -> bool:
+        """프리플라이트/상태 체크용: 현재 TCP 연결 여부."""
+        return bool(self._connected)
+    
     # ---------------------------
     # 공용 API
     # ---------------------------
@@ -122,6 +133,10 @@ class AsyncIG:
         if not self._cmd_worker_task:
             self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="IGCmdWorker")
         #await self._emit_status("IG 워치독/워커 시작")
+
+    async def connect(self):
+        """start()와 동일 의미의 별칭 — 호출측 일관성 확보."""
+        await self.start()
 
     async def cleanup(self):
         # OFF 보내기 전에 재점등 금지/대기 해제만
@@ -146,6 +161,11 @@ class AsyncIG:
             except Exception:
                 pass
             self._polling_task = None
+
+        # 백그라운드 폴링 중지
+        if self._bg_poll_task:
+            self._bg_poll_task.cancel()
+            self._bg_poll_task = None
 
         # 3) 커맨드 워커 중지
         if self._cmd_worker_task:
@@ -172,6 +192,10 @@ class AsyncIG:
         await self._on_tcp_disconnected()
 
         await self._emit_status("IG 연결 종료됨")
+
+    async def cleanup_quick(self):
+        """빠른 종료가 필요할 때 호출 — 현재 단계에서는 cleanup에 위임."""
+        await self.cleanup()
 
     def enqueue(
         self,
@@ -887,6 +911,135 @@ class AsyncIG:
             return float(s)
         except Exception:
             raise RuntimeError(f"parse error: {line!r}")
+        
+    # =============== chamber_runtime.py 호환용 어댑터 ===============
+    # 1) 워치독 컨트롤 (일시정지/재개)
+    async def pause_watchdog(self) -> None:
+        """자동 재연결 워치독만 잠시 멈춤(현재 연결은 유지 가능)."""
+        self._wd_paused = True
+        self._want_connected = False
+        t = self._watchdog_task
+        if t and not t.done():
+            t.cancel()
+            try:
+                await t
+            except Exception:
+                pass
+        self._watchdog_task = None
+
+    async def resume_watchdog(self) -> None:
+        """pause_watchdog 이후 워치독 재개."""
+        self._wd_paused = False
+        await self.start()  # start()는 이미 안전하게 재가동 보장
+
+    # 2) 공정 상태 훅: 상시 압력 폴링 on/off
+    def set_process_status(self, should_poll: bool) -> None:
+        """
+        공정 중이면 주기적으로 RDI를 읽어 pressure 이벤트를 방출하고,
+        공정이 아니면 폴링을 중단한다. (wait_for_base()와는 별개 루프)
+        """
+        if should_poll:
+            if self._bg_poll_task is None or self._bg_poll_task.done():
+                loop = asyncio.get_running_loop()
+                self._bg_poll_task = loop.create_task(self._bg_poll_loop(), name="IGBgPoll")
+        else:
+            t = self._bg_poll_task
+            if t:
+                t.cancel()
+            self._bg_poll_task = None
+
+    async def _bg_poll_loop(self):
+        try:
+            while True:
+                # base 대기 중이면 이 루프는 한템포 쉬어 상호 간섭 방지
+                if getattr(self, "_waiting_active", False):
+                    await asyncio.sleep(0.2)
+                    continue
+
+                # 연결 안 되었으면 인터벌만큼 대기
+                if not self._connected:
+                    await asyncio.sleep(self._bg_poll_interval_ms / 1000.0)
+                    continue
+
+                # 1회 RDI → pressure 이벤트
+                line = await self._send_and_wait_line("RDI", tag="[BG-POLL RDI]", timeout_ms=IG_TIMEOUT_MS, retries=0)
+                if line:
+                    s = line.strip().lower().replace("x10e", "e")
+                    try:
+                        p = float(s)
+                        await self._emit_pressure(p)
+                    except Exception:
+                        # 파싱 실패는 조용히 스킵
+                        pass
+
+                await asyncio.sleep(self._bg_poll_interval_ms / 1000.0)
+        except asyncio.CancelledError:
+            pass
+
+    # 3) 엔드포인트 변경 + 즉시 재연결 옵션
+    def set_endpoint(self, host: str, port: int, *, reconnect: bool = True) -> None:
+        """런타임 엔드포인트 변경. reconnect=True면 곧바로 재연결 시도."""
+        self._override_host = str(host)
+        self._override_port = int(port)
+        if reconnect:
+            asyncio.create_task(self._bounce_connection())
+
+    async def _bounce_connection(self) -> None:
+        await self.pause_watchdog()
+        # 현재 TCP 세션을 정리하고
+        try:
+            await self._on_tcp_disconnected()
+        except Exception:
+            pass
+        # 워치독을 다시 올려 새 엔드포인트로 접속
+        await self.resume_watchdog()
+
+    # 4) 커맨드 라우터(PLC/MFC와 동일 패턴)
+    async def command(self, cmd: str, **kwargs) -> None:
+        """
+        IG용 문자열 명령 라우터.
+        - ENSURE_ON / ENSURE_OFF
+        - READ_PRESSURE
+        - WAIT_FOR_BASE(target: float, interval_ms?: int)
+        - CANCEL_WAIT
+        - SET_ENDPOINT(host: str, port: int, reconnect?: bool)
+        """
+        key = (cmd or "").strip().upper()
+
+        try:
+            if key == "ENSURE_ON":
+                await self.ensure_on()
+
+            elif key == "ENSURE_OFF":
+                await self.ensure_off()
+
+            elif key == "READ_PRESSURE":
+                p = await self.read_pressure()
+                await self._emit_pressure(p)
+
+            elif key == "WAIT_FOR_BASE":
+                target = float(kwargs.get("target"))
+                interval_ms = int(kwargs.get("interval_ms", self._bg_poll_interval_ms))
+                await self.wait_for_base_pressure(target, interval_ms=interval_ms)
+
+            elif key == "CANCEL_WAIT":
+                await self.cancel_wait()
+
+            elif key == "SET_ENDPOINT":
+                host = kwargs["host"]
+                port = int(kwargs["port"])
+                reconnect = bool(kwargs.get("reconnect", True))
+                self.set_endpoint(host, port, reconnect=reconnect)
+
+            else:
+                await self._emit_status(f"[command] 지원하지 않는 IG 명령: {cmd!r}")
+        except Exception as e:
+            await self._emit_status(f"[command] 예외: {e!r}")
+
+    # (선택) 별칭
+    apply_command = command
+    # =============== chamber_runtime.py 호환용 어댑터 ===============
+
 
 
 

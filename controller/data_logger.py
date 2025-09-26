@@ -28,7 +28,15 @@ class DataLogger(QObject):
 
         # 공통 저장 경로 (인자 없으면 기존 NAS 기본값)
         log_directory = Path(csv_dir) if csv_dir else Path(r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database")
-        log_directory.mkdir(parents=True, exist_ok=True)
+        try:
+            log_directory.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            # 폴백
+            log_directory = Path.cwd() / f"_CSV_local_CH{int(ch)}"
+            log_directory.mkdir(parents=True, exist_ok=True)
+            print(f"[DataLogger] NAS 접근 실패 → 로컬 폴백: {log_directory}")
+
+        self.log_file = log_directory / f"Ch{int(ch)}_log.csv"
 
         # 채널별 파일명만 다르게
         self.log_file = log_directory / f"Ch{int(ch)}_log.csv"
@@ -60,6 +68,7 @@ class DataLogger(QObject):
             "RF: For.P", "RF: Ref. P",
             "DC: V", "DC: I", "DC: P",
             "RF Pulse: P", "RF Pulse: Freq", "RF Pulse: Duty Cycle",
+            "DC Pulse: P", "DC Pulse: Freq", "DC Pulse: Duty Cycle",
             "RF Pulse: For.P", "RF Pulse: Ref.P",
         ]
 
@@ -132,9 +141,16 @@ class DataLogger(QObject):
             self.mfc_flow_readings[gas].clear()
         self.mfc_pressure_readings.clear()
 
-    @Slot(float)
-    def log_ig_pressure(self, pressure: float) -> None:
-        self.ig_pressure_readings.append(float(pressure))
+    @Slot(object)
+    def log_ig_pressure(self, pressure: object) -> None:
+        try:
+            if isinstance(pressure, (int, float)):
+                self.ig_pressure_readings.append(float(pressure)); return
+            m = re.search(r"([-+]?\d+(?:\.\d+)?)", str(pressure))
+            if m:
+                self.ig_pressure_readings.append(float(m.group(1)))
+        except Exception:
+            pass
 
     @Slot(float, float, float)
     def log_dc_power(self, power: float, voltage: float, current: float) -> None:
@@ -154,8 +170,9 @@ class DataLogger(QObject):
 
     @Slot(str, float)
     def log_mfc_flow(self, gas_name: str, flow_value: float) -> None:
-        if gas_name in self.mfc_flow_readings:
-            self.mfc_flow_readings[gas_name].append(float(flow_value))
+        key = {"AR": "Ar", "O2": "O2", "N2": "N2"}.get(gas_name.strip().upper())
+        if key:
+            self.mfc_flow_readings[key].append(float(flow_value))
 
     @Slot(object)
     def log_mfc_pressure(self, pressure: object) -> None:
@@ -178,8 +195,8 @@ class DataLogger(QObject):
     # ──────────────────────────────────────────────────────────────
     # 종료/기록
     # ──────────────────────────────────────────────────────────────
-    @Slot(bool)
-    def finalize_and_write_log(self, was_successful: bool) -> None:
+    @Slot(object)
+    def finalize_and_write_log(self, was_successful: Optional[bool] = True) -> None:
         """공정 종료 시 평균 계산 후 CSV 1행을 백그라운드에서 기록."""
         if not was_successful:
             return
@@ -188,12 +205,9 @@ class DataLogger(QObject):
         def _avg(seq: List[float]) -> float:
             return (sum(seq) / len(seq)) if seq else 0.0
 
-        # IG는 첫 값(없으면 params 기본값)
-        base_pressure = (
-            self.ig_pressure_readings[0]
-            if self.ig_pressure_readings
-            else float(self.process_params.get("base_pressure", 0.0))
-        )
+        # IG는 최소값
+        base_pressure = min(self.ig_pressure_readings) if self.ig_pressure_readings \
+                else float(self.process_params.get("base_pressure", 0.0))
 
         # 사용 플래그
         use_rf = bool(self.process_params.get("use_rf_power", False))
