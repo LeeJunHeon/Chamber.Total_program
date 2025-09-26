@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-import sys, asyncio
+import sys, asyncio, re
 from typing import Optional, Literal
 from pathlib import Path
 
@@ -46,10 +46,24 @@ class MainWindow(QWidget):
         if self.chat_notifier:
             self.chat_notifier.start()
 
-        # PLC (공유) : 로그는 양쪽 런타임에 방송
+        # PLC (공유) : 메시지 내 CH 힌트를 읽어 해당 챔버로만 라우팅
         def _plc_log(fmt, *args):
             msg = (fmt % args) if args else str(fmt)
-            self._broadcast_log("PLC", msg)
+
+            # [CH1], [CH 2], "CH=1", "CH:2" 등 패턴 감지
+            m = re.search(r'\[CH\s*(\d)\]|\bCH(?:=|:)?\s*(\d)\b', msg, re.IGNORECASE)
+            ch = int(next((g for g in (m.groups() if m else ()) if g), 0)) if m else 0
+
+            if ch == 1 and getattr(self, "ch1", None):
+                self.ch1.append_log("PLC", msg)
+            elif ch == 2 and getattr(self, "ch2", None):
+                self.ch2.append_log("PLC", msg)
+            else:
+                # 채널 힌트가 없는 "전역" 메시지 정책:
+                #  (a) 둘 다 뿌리기
+                if getattr(self, "ch1", None): self.ch1.append_log("PLC(Global)", msg)
+                if getattr(self, "ch2", None): self.ch2.append_log("PLC(Global)", msg)
+                #  (b) 아예 무시하려면 위 두 줄을 지우면 됨.
 
         self.plc: AsyncPLC = AsyncPLC(logger=_plc_log)
 

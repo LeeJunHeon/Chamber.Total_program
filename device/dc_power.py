@@ -161,7 +161,7 @@ class DCPowerAsync:
 
         # 램프다운 시작
         await self._emit_status("DC 파워 ramp-down 시작")
-        self._rampdown_w = self._last_sent_power if self._last_sent_power is not None else float(self.current_power_step)
+        # 스텝다운 루프 대신 '즉시 0 한 번'만 전송
         self._rampdown_task = asyncio.create_task(self._rampdown_loop(), name="DC_RampDown")
 
     # ======= 외부(브리지/UI)에서 전달하는 측정값 =======
@@ -218,19 +218,19 @@ class DCPowerAsync:
             pass
 
     async def _rampdown_loop(self):
+        """스텝다운 없이 '0 한 번'만 기록하고 종료."""
         try:
-            step_w = float(DC_RAMP_STEP)
-            while True:
-                if self._rampdown_w <= 0.0:
-                    await self._set_dc_unverified(0.0)
-                    self._ev_nowait(DCPowerEvent(kind="display", power=0.0, voltage=0.0, current=0.0))
-                    await self._emit_status("DC 파워 ramp-down 완료")
-                    self._ev_nowait(DCPowerEvent(kind="power_off_finished"))
-                    return
-                self._rampdown_w = max(0.0, self._rampdown_w - step_w)
-                self._last_sent_power = self._rampdown_w
-                await self._set_dc_unverified(self._rampdown_w)
-                await asyncio.sleep(self._rampdown_interval_ms / 1000.0)
+            # 이미 0을 보냈었다면(캐시) 실제 I/O 스킵
+            if (self._last_sent_power or 0.0) != 0.0:
+                await self._set_dc_unverified(0.0)
+
+            self.current_power_step = 0.0
+            self._last_sent_power = 0.0
+
+            # 표시/이벤트 정리
+            self._ev_nowait(DCPowerEvent(kind="display", power=0.0, voltage=0.0, current=0.0))
+            await self._emit_status("DC 파워 ramp-down 완료 (snap-to-zero)")
+            self._ev_nowait(DCPowerEvent(kind="power_off_finished"))
         except asyncio.CancelledError:
             pass
         except Exception as e:

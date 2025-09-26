@@ -47,13 +47,20 @@ RawParams = TypedDict('RawParams', {
     'N2_flow': float | str,
     'use_dc_power': Literal['T','F'] | bool,
     'use_rf_power': Literal['T','F'] | bool,
-    'use_rf_pulse': Literal['T','F'] | bool,
-    'use_rf_pulse_power': Literal['T','F'] | bool,
     'dc_power': float | str,
     'rf_power': float | str,
+
+    # 🔥 펄스 완전 분리(레거시 키 전부 제거)
+    'use_dc_pulse': Literal['T','F'] | bool,
+    'dc_pulse_power': float | str,
+    'dc_pulse_freq': int | str | None,
+    'dc_pulse_duty_cycle': int | str | None,
+
+    'use_rf_pulse': Literal['T','F'] | bool,
     'rf_pulse_power': float | str,
     'rf_pulse_freq': int | str | None,
     'rf_pulse_duty_cycle': int | str | None,
+
     'gun1': Literal['T','F'] | bool,
     'gun2': Literal['T','F'] | bool,
     'gun3': Literal['T','F'] | bool,
@@ -74,8 +81,13 @@ NormParams = TypedDict('NormParams', {
     'ar_flow': float, 'o2_flow': float, 'n2_flow': float,
     'use_dc_power': bool, 'dc_power': float,
     'use_rf_power': bool, 'rf_power': float,
+
+    'use_dc_pulse': bool, 'dc_pulse_power': float,
+    'dc_pulse_freq': int | None, 'dc_pulse_duty': int | None,
+
     'use_rf_pulse': bool, 'rf_pulse_power': float,
     'rf_pulse_freq': int | None, 'rf_pulse_duty': int | None,
+
     'use_g1': bool, 'use_g2': bool, 'use_g3': bool, 'use_ms': bool,
     'process_note': str,
     'G1_target_name': str, 'G2_target_name': str, 'G3_target_name': str,
@@ -83,7 +95,8 @@ NormParams = TypedDict('NormParams', {
     'use_power_select': bool,
 }, total=False)
 
-TargetsMap = Mapping[Literal["mfc", "rfpulse", "dc", "rf"], bool]
+# 폴링 타깃도 명확히 분리
+TargetsMap = Mapping[Literal["mfc", "dc", "rf", "dc_pulse", "rf_pulse"], bool]
 
 # -----------------------------------------------------------------------------
 
@@ -163,8 +176,8 @@ class ChamberRuntime:
     - PLC는 외부에서 공유 주입
     - CH1은 건셔터 없음: PLC 콜백에서 MS/G1~G3는 무시(즉시 confirmed)
     - 파워 구성:
-        * CH1: DC-Pulse만 (RFPulseAsync를 '펄스 파워' 드라이버로 사용)
-        * CH2: DC(연속) + RF-Pulse (필요시 RF 연속도 옵션)
+        * CH1: DC-Pulse
+        * CH2: DC(연속) + RF-Pulse (필요 시 RF 연속도 옵션)
     """
 
     def __init__(
@@ -178,9 +191,10 @@ class ChamberRuntime:
         cfg: Any,
         log_dir: Path,
         *,
-        supports_dc: Optional[bool] = None,
-        supports_rfpulse: Optional[bool] = None,
-        supports_rf_cont: Optional[bool] = None,
+        supports_dc_cont: Optional[bool] = None,   # DC 연속
+        supports_rf_cont: Optional[bool] = None,   # RF 연속
+        supports_dc_pulse: Optional[bool] = None,  # DC-Pulse
+        supports_rf_pulse: Optional[bool] = None,  # RF-Pulse
     ) -> None:
         self.ui = ui
         self.ch = int(chamber_no)
@@ -198,17 +212,16 @@ class ChamberRuntime:
         self._last_state_text: str | None = None
         self._delay_task: Optional[asyncio.Task] = None
 
-        # 기능 지원 여부(고정: CH1=DC-Pulse만, CH2=RF-Pulse(+필요시 DC/RF연속))
-        if supports_dc is None:
-            supports_dc = (self.ch == 2)
-        if supports_rfpulse is None:
-            supports_rfpulse = (self.ch == 2)  # ⬅️ CH2에서만 RF-Pulse
-        if supports_rf_cont is None:
-            supports_rf_cont = False
+        # 기본 전략: CH1=DC-Pulse 전용, CH2=RF-Pulse(+DC 연속)
+        if supports_dc_cont  is None: supports_dc_cont  = (self.ch == 2)
+        if supports_rf_cont  is None: supports_rf_cont  = False
+        if supports_dc_pulse is None: supports_dc_pulse = (self.ch == 1)
+        if supports_rf_pulse is None: supports_rf_pulse = (self.ch == 2)
 
-        self.supports_dc = bool(supports_dc)
-        self.supports_rfpulse = bool(supports_rfpulse)
-        self.supports_rf_cont = bool(supports_rf_cont)
+        self.supports_dc_cont  = bool(supports_dc_cont)
+        self.supports_rf_cont  = bool(supports_rf_cont)
+        self.supports_dc_pulse = bool(supports_dc_pulse)
+        self.supports_rf_pulse = bool(supports_rf_pulse)
 
         # UI 포인터
         self._w_log: QPlainTextEdit | None = self._u("logMessage_edit")
@@ -250,13 +263,13 @@ class ChamberRuntime:
         except Exception:
             self.rga = None  # 안전
 
-        # 펄스 파워: CH1=DC-Pulse, CH2=RF-Pulse
-        self.dc_pulse = AsyncDCPulse() if self.ch == 1 else None
-        self.rf_pulse = RFPulseAsync() if (self.ch == 2 and self.supports_rfpulse) else None
+        # 펄스 파워(완전 분리)
+        self.dc_pulse = AsyncDCPulse() if self.supports_dc_pulse else None
+        self.rf_pulse = RFPulseAsync() if self.supports_rf_pulse else None
 
-        # DC 연속 / RF 연속 (필요 시)
+        # 연속 파워
         self.dc_power = None
-        if self.supports_dc:
+        if self.supports_dc_cont:
             async def _dc_send(power: float):
                 # 기본 매핑: DCV 채널0(필요 시 config로 주입 가능)
                 await self.plc.power_apply(power, family="DCV", channel=0, ensure_set=True)
@@ -397,46 +410,40 @@ class ChamberRuntime:
             if self.rf_power:
                 self._spawn_detached(self.rf_power.cleanup())
 
-        def cb_rfpulse_start(power: float, freq: int | None, duty: int | None) -> None:
+        def cb_dc_pulse_start(power: float, freq: int | None, duty: int | None) -> None:
             async def run():
-                # CH1 → DC-Pulse 구동
-                if self.ch == 1 and self.dc_pulse:
-                    try:
-                        self._ensure_background_started()
-                        await self.dc_pulse.start()
-                        # Host master/Power모드/참조설정/출력ON까지 한 번에
-                        await self.dc_pulse.prepare_and_start(power_w=float(power))
-                        # RFPulse와 인터페이스를 맞추기 위해 '도달' 신호 전달
-                        self.process_controller.on_rf_target_reached()
-                    except Exception as e:
-                        why = f"DC-Pulse start failed: {e!r}"
-                        self.append_log("Pulse", why)
-                        self.process_controller.on_rf_pulse_failed(why)
-                        if self.chat:
-                            with contextlib.suppress(Exception):
-                                self.chat.notify_error_with_src("Pulse", why)
-                    return
-
-                # CH2 → RF-Pulse 구동
-                if self.ch == 2 and self.rf_pulse:
-                    self._spawn_detached(self.rf_pulse.start_pulse_process(float(power), freq, duty))
-                else:
-                    self.append_log("Pulse", "이 챔버는 Pulse 파워를 지원하지 않습니다.")
-
+                if not self.dc_pulse:
+                    self.append_log("DCPulse", "DC-Pulse 미지원 챔버입니다."); return
+                try:
+                    self._ensure_background_started()
+                    await self.dc_pulse.start()
+                    await self.dc_pulse.prepare_and_start(power_w=float(power), freq=freq, duty=duty)
+                    # ✅ 타겟 도달/출력 OFF는 이벤트 펌프(_pump_dcpulse_events)에서만 콜백 처리
+                except Exception as e:
+                    why = f"DC-Pulse start failed: {e!r}"
+                    self.append_log("DCPulse", why)
+                    self.process_controller.on_dc_pulse_failed(why)
             self._spawn_detached(run())
 
-        def cb_rfpulse_stop():
+        def cb_dc_pulse_stop():
             async def run():
-                if self.ch == 1 and self.dc_pulse:
+                if self.dc_pulse:
                     try:
                         await self.dc_pulse.output_off()
-                        self.process_controller.on_rf_pulse_off_finished()
-                    except Exception as e:
-                        self.append_log("Pulse", f"DC-Pulse stop failed: {e!r}")
-                    return
-                if self.ch == 2 and self.rf_pulse:
-                    self.rf_pulse.stop_process()
+                    except Exception:
+                        # 실패 시에는 이벤트가 안 올 수도 있으니 바로 실패 알림
+                        self.process_controller.on_dc_pulse_failed("output_off failed")
+                    # ✅ 정상경로는 이벤트 펌프에서 OUTPUT_OFF 확인 후 on_dc_pulse_off_finished 호출
             self._spawn_detached(run())
+
+        def cb_rf_pulse_start(power: float, freq: int | None, duty: int | None) -> None:
+            if not self.rf_pulse:
+                self.append_log("RFPulse", "RF-Pulse 미지원 챔버입니다."); return
+            self._spawn_detached(self.rf_pulse.start_pulse_process(float(power), freq, duty))
+
+        def cb_rf_pulse_stop():
+            if self.rf_pulse:
+                self.rf_pulse.stop_process()
 
         def cb_ig_wait(base_pressure: float) -> None:
             async def _run():
@@ -507,25 +514,25 @@ class ChamberRuntime:
 
         # 컨트롤러 생성
         self.process_controller = ProcessController(
-            # 기존 콜백 그대로
             send_plc=cb_plc,
             send_mfc=cb_mfc,
-            send_dc_power=cb_dc_power,
-            stop_dc_power=cb_dc_stop,
-            send_rf_power=cb_rf_power,
-            stop_rf_power=cb_rf_stop,
-            start_rfpulse=cb_rfpulse_start,
-            stop_rfpulse=cb_rfpulse_stop,
-            ig_wait=cb_ig_wait,
-            cancel_ig=cb_ig_cancel,
-            rga_scan=cb_rga_scan,
-            oes_run=cb_oes_run,
 
-            # ⬇️ 새로 추가(중요)
+            # 연속 파워
+            send_dc_power=cb_dc_power, stop_dc_power=cb_dc_stop,
+            send_rf_power=cb_rf_power, stop_rf_power=cb_rf_stop,
+
+            # 펄스 파워(완전 분리)
+            start_dc_pulse=cb_dc_pulse_start, stop_dc_pulse=cb_dc_pulse_stop,
+            start_rf_pulse=cb_rf_pulse_start, stop_rf_pulse=cb_rf_pulse_stop,
+
+            ig_wait=cb_ig_wait, cancel_ig=cb_ig_cancel,
+            rga_scan=cb_rga_scan, oes_run=cb_oes_run,
+
             ch=self.ch,
-            supports_dc=self.supports_dc,
+            supports_dc_cont=self.supports_dc_cont,
             supports_rf_cont=self.supports_rf_cont,
-            supports_rfpulse=self.supports_rfpulse,
+            supports_dc_pulse=self.supports_dc_pulse,
+            supports_rf_pulse=self.supports_rf_pulse,
         )
 
         # 이벤트 펌프 루프(컨트롤러 → UI/로거/다음공정)
@@ -610,7 +617,6 @@ class ChamberRuntime:
                             self._spawn_detached(self._stop_device_watchdogs(light=False), name="FullCleanup")
                         self._pending_device_cleanup = False
                         self._pc_stopping = False
-                        break
 
                     self._pc_stopping = False
                     self._start_next_process_from_queue(ok)
@@ -628,7 +634,6 @@ class ChamberRuntime:
                             self._spawn_detached(self._stop_device_watchdogs(light=False), name="FullCleanup")
                         self._pending_device_cleanup = False
                         self._pc_stopping = False
-                        break
 
                 elif kind == "polling_targets":
                     targets = dict(payload.get("targets") or {})
@@ -641,21 +646,27 @@ class ChamberRuntime:
                     targets = getattr(self, "_last_polling_targets", None)
                     if not targets:
                         params = getattr(self.process_controller, "current_params", {}) or {}
+                        # 계산(펄스 독립, 펄스 사용 시 연속은 안전상 꺼둠)
+                        use_dc_pulse = bool(params.get("use_dc_pulse", False))
                         use_rf_pulse = bool(params.get("use_rf_pulse", False))
-                        use_dc       = bool(params.get("use_dc_power", False))
-                        use_rf       = bool(params.get("use_rf_power", False))
+                        use_dc_cont  = bool(params.get("use_dc_power", False))
+                        use_rf_cont  = bool(params.get("use_rf_power", False))
+                        any_pulse    = use_dc_pulse or use_rf_pulse
+
                         targets = {
-                            "mfc":     active,
-                            "rfpulse": active and use_rf_pulse and self.supports_rfpulse,
-                            "dc":      active and use_dc and self.supports_dc and not use_rf_pulse,
-                            "rf":      active and use_rf and self.supports_rf_cont and not use_rf_pulse,
+                            "mfc":      active,
+                            "dc_pulse": active and use_dc_pulse and self.supports_dc_pulse,
+                            "rf_pulse": active and use_rf_pulse and self.supports_rf_pulse,
+                            "dc":       active and use_dc_cont and self.supports_dc_cont and not any_pulse,
+                            "rf":       active and use_rf_cont and self.supports_rf_cont and not any_pulse,
                         }
                     else:
                         targets = {
-                            "mfc":     (active and bool(targets.get("mfc", False))),
-                            "rfpulse": (active and bool(targets.get("rfpulse", False)) and self.supports_rfpulse),
-                            "dc":      (active and bool(targets.get("dc", False)) and self.supports_dc),
-                            "rf":      (active and bool(targets.get("rf", False)) and self.supports_rf_cont),
+                            "mfc":      (active and bool(targets.get("mfc", False))),
+                            "dc_pulse": (active and bool(targets.get("dc_pulse", False)) and self.supports_dc_pulse),
+                            "rf_pulse": (active and bool(targets.get("rf_pulse", False)) and self.supports_rf_pulse),
+                            "dc":       (active and bool(targets.get("dc", False)) and self.supports_dc_cont),
+                            "rf":       (active and bool(targets.get("rf", False)) and self.supports_rf_cont),
                         }
                     self._apply_polling_targets(targets)
 
@@ -782,20 +793,20 @@ class ChamberRuntime:
         async for ev in self.rf_pulse.events():
             k = ev.kind
             if k == "status":
-                self.append_log(f"Pulse{self.ch}", ev.message or "")
+                self.append_log(f"RFPulse{self.ch}", ev.message or "")
             elif k == "power":
                 with contextlib.suppress(Exception):
                     fwd = float(ev.forward or 0.0)
                     ref = float(ev.reflected or 0.0)
                     self.data_logger.log_rfpulse_power(fwd, ref)
             elif k == "target_reached":
-                self.process_controller.on_rf_target_reached()
+                self.process_controller.on_rf_pulse_target_reached()
             elif k == "command_failed":
                 why = ev.reason or "unknown"
                 self.process_controller.on_rf_pulse_failed(why)
                 if self.chat:
                     with contextlib.suppress(Exception):
-                        self.chat.notify_error_with_src("Pulse", why)
+                        self.chat.notify_error_with_src("RFPulse", why)
             elif k == "power_off_finished":
                 self.process_controller.on_rf_pulse_off_finished()
 
@@ -805,23 +816,21 @@ class ChamberRuntime:
         async for ev in self.dc_pulse.events():
             k = ev.kind
             if k == "status":
-                self.append_log(f"Pulse{self.ch}", ev.message or "")
+                self.append_log(f"DCPulse{self.ch}", ev.message or "")
             elif k == "telemetry":
                 # 필요시 로그/데이터로 변환
                 pass
             elif k == "command_confirmed":
-                # OUTPUT_ON/OUTPUT_OFF의 라벨에 맞춰 후속 콜백을 줄 수도 있음
-                if (ev.cmd or "").upper() == "OUTPUT_ON":
-                    self.process_controller.on_rf_target_reached()
-                elif (ev.cmd or "").upper() == "OUTPUT_OFF":
-                    self.process_controller.on_rf_pulse_off_finished()
+                cmd = (ev.cmd or "").upper()
+                if cmd == "OUTPUT_ON":
+                    self.process_controller.on_dc_pulse_target_reached()
+                elif cmd == "OUTPUT_OFF":
+                    self.process_controller.on_dc_pulse_off_finished()
             elif k == "command_failed":
                 why = ev.reason or "unknown"
-                self.append_log(f"Pulse{self.ch}", f"CMD FAIL: {ev.cmd or ''} ({why})")
-                self.process_controller.on_rf_pulse_failed(why)
-                if self.chat:
-                    with contextlib.suppress(Exception):
-                        self.chat.notify_error_with_src("Pulse", why)
+                self.append_log(f"DCPulse{self.ch}", f"CMD FAIL: {ev.cmd or ''} ({why})")
+                self.process_controller.on_dc_pulse_failed(why)
+
 
     async def _pump_oes_events(self) -> None:
         async for ev in self.oes.events():
@@ -883,11 +892,11 @@ class ChamberRuntime:
                 self._ensure_task_alive(f"Pump.DC.{self.ch}", self._pump_dc_events)
             if self.rf_power:
                 self._ensure_task_alive(f"Pump.RF.{self.ch}", self._pump_rf_events)
-            # CH1 = DC-Pulse 이벤트 펌프, CH2 = RF-Pulse 이벤트 펌프
-            if self.dc_pulse and self.ch == 1:
+            # 지원 여부만으로 기동
+            if self.dc_pulse:
                 self._ensure_task_alive(f"Pump.DCPulse.{self.ch}", self._pump_dcpulse_events)
-            if self.rf_pulse and self.ch == 2:
-                self._ensure_task_alive(f"Pump.Pulse.{self.ch}", self._pump_rfpulse_events)
+            if self.rf_pulse:
+                self._ensure_task_alive(f"Pump.RFPulse.{self.ch}", self._pump_rfpulse_events)
             self._ensure_task_alive(f"Pump.OES.{self.ch}", self._pump_oes_events)
 
             self._bg_started = True
@@ -929,8 +938,11 @@ class ChamberRuntime:
         await _maybe_start_or_connect(self.plc, "PLC")   # ← connect()
         await _maybe_start_or_connect(self.mfc, "MFC")   # ← start()
         await _maybe_start_or_connect(self.ig,  "IG")    # ← start()
-        if self.dc_pulse and self.ch == 1:
-            await _maybe_start_or_connect(self.dc_pulse, "DCPulse")  # ⬅️ 추가
+        if self.dc_pulse:
+            await _maybe_start_or_connect(self.dc_pulse, "DCPulse")
+        if self.rf_pulse:
+            await _maybe_start_or_connect(self.rf_pulse, "RFPulse")
+
 
     # ------------------------------------------------------------------
     # 표시/입력/상태
@@ -997,12 +1009,22 @@ class ChamberRuntime:
         # 공통 필드 매핑(존재할 때만)
         _set = self._set
         _set("dcPower_edit", params.get('dc_power', '0'))
-        _set("rfPulsePower_checkbox", params.get('use_rf_pulse_power', 'F') == 'T')
-        _set("rfPulsePower_edit", params.get('rf_pulse_power', '0'))
-        freq_raw = str(params.get('rf_pulse_freq', '')).strip()
-        duty_raw = str(params.get('rf_pulse_duty_cycle', '')).strip()
-        _set("rfPulseFreq_edit", '' if freq_raw in ('', '0') else freq_raw)
-        _set("rfPulseDutyCycle_edit", '' if duty_raw in ('', '0') else duty_raw)
+
+        # DC-Pulse
+        _set("dcPulsePower_checkbox", params.get('use_dc_pulse', 'F') == 'T')
+        _set("dcPulsePower_edit",     params.get('dc_pulse_power', '0'))
+        dcf = str(params.get('dc_pulse_freq', '')).strip()
+        dcd = str(params.get('dc_pulse_duty_cycle', '')).strip()
+        _set("dcPulseFreq_edit",       '' if dcf in ('', '0') else dcf)
+        _set("dcPulseDutyCycle_edit",  '' if dcd in ('', '0') else dcd)
+
+        # RF-Pulse
+        _set("rfPulsePower_checkbox", params.get('use_rf_pulse', 'F') == 'T')
+        _set("rfPulsePower_edit",     params.get('rf_pulse_power', '0'))
+        rff = str(params.get('rf_pulse_freq', '')).strip()
+        rfd = str(params.get('rf_pulse_duty_cycle', '')).strip()
+        _set("rfPulseFreq_edit",       '' if rff in ('', '0') else rff)
+        _set("rfPulseDutyCycle_edit",  '' if rfd in ('', '0') else rfd)
 
         _set("processTime_edit", params.get('process_time', '0'))
         _set("integrationTime_edit", params.get('integration_time', '60'))
@@ -1089,8 +1111,9 @@ class ChamberRuntime:
             self._ensure_background_started()
             self._on_process_status_changed(True)
 
-            use_rf_pulse: bool = bool(params.get("use_rf_pulse", False))
-            timeout = 10.0 if use_rf_pulse else 8.0
+            use_dc_pulse = bool(params.get("use_dc_pulse", False))
+            use_rf_pulse = bool(params.get("use_rf_pulse", False))
+            timeout = 10.0 if (use_dc_pulse or use_rf_pulse) else 8.0
             ok, failed = await self._preflight_connect(params, timeout_s=timeout)
 
             if not ok:
@@ -1135,15 +1158,15 @@ class ChamberRuntime:
             await asyncio.sleep(0.2)
 
     async def _preflight_connect(self, params: Mapping[str, Any], timeout_s: float = 8.0) -> tuple[bool, list[str]]:
-        # ❗ PLC 제외: 실제 밸브/셔터 등 명령 보낼 때 실패 처리하면 충분
         need: list[tuple[str, object]] = [("MFC", self.mfc), ("IG", self.ig)]
 
-        use_rf_pulse = bool(params.get("use_rf_pulse", False) or params.get("use_rf_pulse_power", False))
-        if use_rf_pulse:
-            if self.ch == 1 and self.dc_pulse:
-                need.append(("Pulse", self.dc_pulse))
-            elif self.ch == 2 and self.rf_pulse:
-                need.append(("Pulse", self.rf_pulse))
+        use_dc_pulse = bool(params.get("use_dc_pulse", False))
+        use_rf_pulse = bool(params.get("use_rf_pulse", False))
+
+        if use_dc_pulse and self.dc_pulse:
+            need.append(("DC-Pulse", self.dc_pulse))
+        if use_rf_pulse and self.rf_pulse:
+            need.append(("RF-Pulse", self.rf_pulse))
 
         # 진행상황 로그 태스크
         stop_evt = asyncio.Event()
@@ -1230,9 +1253,9 @@ class ChamberRuntime:
     async def _stop_device_watchdogs(self, *, light: bool = False) -> None:
         if light:
             with contextlib.suppress(Exception): self.mfc.set_process_status(False)
-            if self.dc_pulse and self.ch == 1:
+            if self.dc_pulse:
                 with contextlib.suppress(Exception): self.dc_pulse.set_process_status(False)
-            if self.rf_pulse and self.ch == 2:
+            if self.rf_pulse:
                 with contextlib.suppress(Exception): self.rf_pulse.set_process_status(False)
             if self.dc_power and hasattr(self.dc_power, "set_process_status"):
                 with contextlib.suppress(Exception): self.dc_power.set_process_status(False)
@@ -1272,6 +1295,7 @@ class ChamberRuntime:
             pass
 
         self._bg_started = False
+        self._devices_started = False  # ✅ 다음 시작 때 장치 start() 다시 보장
 
     # 메인에서 창 닫을 때 호출
     def shutdown_fast(self) -> None:
@@ -1289,7 +1313,9 @@ class ChamberRuntime:
             live = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done() and t is not current]
             for t in live: loop.call_soon(t.cancel)
             if live: await asyncio.gather(*live, return_exceptions=True)
-            self._bg_tasks = []; self._bg_started = False
+            self._bg_tasks = []
+            self._bg_started = False
+            self._devices_started = False
 
             tasks = []
             for dev in (self.ig, self.mfc, self.dc_pulse, self.rf_pulse, self.dc_power, self.rf_power, self.oes, self.rga):
@@ -1342,33 +1368,31 @@ class ChamberRuntime:
                 QMessageBox.warning(None, "입력값 확인", "가스 유량 입력을 확인하세요."); return None
 
             # 파워(DC-Pulse만 강제)
-            use_rf_pulse = bool(getattr(self._u("rfPulsePower_checkbox"), "isChecked", lambda: False)())
-            if not use_rf_pulse:
-                QMessageBox.warning(None, "선택 오류", "CH1은 Pulse 파워를 반드시 선택해야 합니다."); return None
+            use_dc_pulse = bool(getattr(self._u("dcPulsePower_checkbox"), "isChecked", lambda: False)())
+            if not use_dc_pulse:
+                QMessageBox.warning(None, "선택 오류", "CH1은 DC-Pulse를 반드시 선택해야 합니다."); return None
 
             try:
-                rf_pulse_power = float(self._get_text("rfPulsePower_edit") or "0")
-                if rf_pulse_power <= 0: raise ValueError()
+                dc_pulse_power = float(self._get_text("dcPulsePower_edit") or "0")
+                if dc_pulse_power <= 0: raise ValueError()
             except ValueError:
-                QMessageBox.warning(None, "입력값 확인", "Pulse Target Power(W)를 확인하세요."); return None
+                QMessageBox.warning(None, "입력값 확인", "DC-Pulse Target Power(W)를 확인하세요."); return None
 
-            rf_pulse_freq = None; rf_pulse_duty = None
-            txtf = self._get_text("rfPulseFreq_edit")
+            dc_pulse_freq = None; dc_pulse_duty = None
+            txtf = self._get_text("dcPulseFreq_edit")
             if txtf:
                 try:
-                    rf_pulse_freq = int(float(txtf))
-                    if rf_pulse_freq < 1 or rf_pulse_freq > 100000:
-                        raise ValueError()
+                    dc_pulse_freq = int(float(txtf))
+                    if dc_pulse_freq < 1 or dc_pulse_freq > 100000: raise ValueError()
                 except ValueError:
-                    QMessageBox.warning(None, "입력값 확인", "Pulse Freq(Hz)는 1..100000 범위"); return None
-            txtd = self._get_text("rfPulseDutyCycle_edit")
+                    QMessageBox.warning(None, "입력값 확인", "DC-Pulse Freq(Hz)는 1..100000 범위"); return None
+            txtd = self._get_text("dcPulseDutyCycle_edit")
             if txtd:
                 try:
-                    rf_pulse_duty = int(float(txtd))
-                    if rf_pulse_duty < 1 or rf_pulse_duty > 99:
-                        raise ValueError()
+                    dc_pulse_duty = int(float(txtd))
+                    if dc_pulse_duty < 1 or dc_pulse_duty > 99: raise ValueError()
                 except ValueError:
-                    QMessageBox.warning(None, "입력값 확인", "Pulse Duty(%)는 1..99 범위"); return None
+                    QMessageBox.warning(None, "입력값 확인", "DC-Pulse Duty(%)는 1..99 범위"); return None
 
             # 타겟명(있어도 셔터 없음 → 이름 강제 X)
             g1n = self._get_text("g1Target_name")
@@ -1381,9 +1405,10 @@ class ChamberRuntime:
                 "use_ar": use_ar, "use_o2": use_o2, "use_n2": use_n2,
                 "ar_flow": ar_flow, "o2_flow": o2_flow, "n2_flow": n2_flow,
                 "use_rf_power": False,
-                "use_rf_pulse": True, "use_dc_power": False,
-                "rf_power": 0.0, "rf_pulse_power": rf_pulse_power, "dc_power": 0.0,
-                "rf_pulse_freq": rf_pulse_freq, "rf_pulse_duty": rf_pulse_duty,
+                "use_dc_power": False,
+                "use_dc_pulse": True,  "dc_pulse_power": dc_pulse_power,
+                "dc_pulse_freq": dc_pulse_freq, "dc_pulse_duty": dc_pulse_duty,
+                "use_rf_pulse": False, "rf_pulse_power": 0.0,
                 "G1_target_name": g1n, "G2_target_name": g2n, "G3_target_name": g3n,
                 "use_power_select": bool(getattr(self._u("powerSelect_checkbox"), "isChecked", lambda: False)()),
             }
@@ -1497,10 +1522,17 @@ class ChamberRuntime:
             "integration_time":  iget("integration_time", "60"),
             "dc_power":          fget("dc_power", "0"),
             "rf_power":          fget("rf_power", "0"),
-            "use_rf_pulse":      tf(raw.get("use_rf_pulse_power", raw.get("use_rf_pulse", "F"))),
+
+            "use_dc_pulse":      tf(raw.get("use_dc_pulse", "F")),
+            "dc_pulse_power":    fget("dc_pulse_power", "0"),
+            "dc_pulse_freq":     iget_opt("dc_pulse_freq"),
+            "dc_pulse_duty":     iget_opt("dc_pulse_duty_cycle"),
+
+            "use_rf_pulse":      tf(raw.get("use_rf_pulse", "F")),
             "rf_pulse_power":    fget("rf_pulse_power", "0"),
             "rf_pulse_freq":     iget_opt("rf_pulse_freq"),
             "rf_pulse_duty":     iget_opt("rf_pulse_duty_cycle"),
+
             "use_rf_power":      tf(raw.get("use_rf_power", "F")),
             "use_dc_power":      tf(raw.get("use_dc_power", "F")),
             "use_ar":            tf(raw.get("Ar", "F")),
@@ -1551,7 +1583,7 @@ class ChamberRuntime:
         self.append_log("Process", f"'{name}' 단계 감지: {amount}{unit_txt} 대기 시작")
 
         # 폴링 OFF
-        self._apply_polling_targets({"mfc": False, "rfpulse": False, "dc": False, "rf": False})
+        self._apply_polling_targets({"mfc": False, "dc_pulse": False, "rf_pulse": False, "dc": False, "rf": False})
         self._last_polling_targets = None
 
         if self._w_state:
@@ -1577,19 +1609,36 @@ class ChamberRuntime:
     # 폴링/상태
     def _apply_polling_targets(self, targets: TargetsMap) -> None:
         self._ensure_background_started()
+
         mfc_on = bool(targets.get('mfc', False))
-        rfp_on = bool(targets.get('rfpulse', False))  # 'rfpulse' 키를 '펄스 공통'으로 재사용
-        dc_on  = bool(targets.get('dc', False))
-        rf_on  = bool(targets.get('rf', False))
-        with contextlib.suppress(Exception): self.mfc.set_process_status(mfc_on)
-        if self.dc_pulse and self.ch == 1:
-            with contextlib.suppress(Exception): self.dc_pulse.set_process_status(rfp_on)
-        if self.rf_pulse and self.ch == 2:
-            with contextlib.suppress(Exception): self.rf_pulse.set_process_status(rfp_on)
+        dcpl_on = bool(targets.get('dc_pulse', False))
+        rfpl_on = bool(targets.get('rf_pulse', False))
+        dc_on   = bool(targets.get('dc', False))
+        rf_on   = bool(targets.get('rf', False))
+
+        # MFC
+        with contextlib.suppress(Exception):
+            self.mfc.set_process_status(mfc_on)
+
+        # DC-Pulse
+        if self.dc_pulse:
+            with contextlib.suppress(Exception):
+                self.dc_pulse.set_process_status(dcpl_on)
+
+        # RF-Pulse
+        if self.rf_pulse:
+            with contextlib.suppress(Exception):
+                self.rf_pulse.set_process_status(rfpl_on)
+
+        # DC continuous
         if self.dc_power and hasattr(self.dc_power, "set_process_status"):
-            with contextlib.suppress(Exception): self.dc_power.set_process_status(dc_on)
+            with contextlib.suppress(Exception):
+                self.dc_power.set_process_status(dc_on)
+
+        # RF continuous
         if self.rf_power and hasattr(self.rf_power, "set_process_status"):
-            with contextlib.suppress(Exception): self.rf_power.set_process_status(rf_on)
+            with contextlib.suppress(Exception):
+                self.rf_power.set_process_status(rf_on)
 
     # ------------------------------------------------------------------
     # 로그
@@ -1598,12 +1647,15 @@ class ChamberRuntime:
         now_file = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         line_ui = f"[{now_ui}] [CH{self.ch}:{source}] {msg}"
         line_file = f"[{now_file}] [CH{self.ch}:{source}] {msg}\n"
-        self._append_log_to_ui(line_ui)
+
+        # ✅ UI 업데이트를 메인 이벤트루프에 스케줄
+        self._soon(self._append_log_to_ui, line_ui)
+
+        # ✅ 파일/큐 작업도 이벤트루프에서만 수행
         if not getattr(self, "_log_file_path", None):
-            try: self._prestart_buf.append(line_file)
-            except Exception: pass
+            self._soon(self._prestart_buf.append, line_file)
             return
-        self._log_enqueue_nowait(line_file)  # ✅ 즉시 큐 투입
+        self._soon(self._log_enqueue_nowait, line_file)
 
     def _append_log_to_ui(self, line: str) -> None:
         if not self._w_log: return
@@ -1655,7 +1707,7 @@ class ChamberRuntime:
         if self._log_fp is None:
             self._log_fp = open(self._log_file_path, "a", encoding="utf-8", newline="")
         if not self._log_writer_task or self._log_writer_task.done():
-            self._log_writer_task = asyncio.create_task(self._log_writer_loop(), name=f"LogWriter.CH{self.ch}")
+            self._set_task_later("_log_writer_task", self._log_writer_loop(), name=f"LogWriter.CH{self.ch}")
 
         # 이하 동일
         if self._prestart_buf:
@@ -1737,6 +1789,13 @@ class ChamberRuntime:
         _set("o2Flow_edit", "0")
         _set("n2Flow_edit", "0")
         _set("dcPower_edit", "100")
+        # DC-Pulse
+        _set("dcPulsePower_checkbox", False)
+        _set("dcPulsePower_edit", "100")
+        _set("dcPulseFreq_edit", "")
+        _set("dcPulseDutyCycle_edit", "")
+
+        # RF-Pulse
         _set("rfPulsePower_checkbox", False)
         _set("rfPulsePower_edit", "100")
         _set("rfPulseFreq_edit", "")
@@ -1746,7 +1805,7 @@ class ChamberRuntime:
         self._set_default_ui_values()
         for name in (
             "G1_checkbox","G2_checkbox","G3_checkbox","Ar_checkbox","O2_checkbox","N2_checkbox",
-            "mainShutter_checkbox","rfPulsePower_checkbox","dcPower_checkbox","powerSelect_checkbox",
+            "mainShutter_checkbox","dcPulsePower_checkbox","rfPulsePower_checkbox","dcPower_checkbox","powerSelect_checkbox",
         ):
             w = self._u(name)
             if w is not None:
