@@ -12,18 +12,26 @@ from PySide6.QtCore import QObject, Slot
 
 class DataLogger(QObject):
     """
-    각 장치로부터 데이터를 받아 메모리에 수집하고,
-    공정 종료 시 평균값을 계산해 CSV에 1행 기록한다.
-    - PySide6 기반
+    CH별로 공정 요약 데이터를 CSV에 1행 기록.
+    - 두 채널 모두 같은 디렉토리(csv_dir)에 저장, 파일명만 Ch{ch}_log.csv로 구분
+    - 파일이 없으면 자동 생성 + 헤더 기록
     - 최종 파일 쓰기는 asyncio.to_thread로 오프로딩(프리징 완화)
     """
-    def __init__(self, parent: Optional[QObject] = None):
+    def __init__(
+        self,
+        parent: Optional[QObject] = None,
+        *,
+        ch: int,
+        csv_dir: Optional[Path] = None,
+    ):
         super().__init__(parent)
 
-        # 로그 파일 경로
-        log_directory = Path(r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database")
+        # 공통 저장 경로 (인자 없으면 기존 NAS 기본값)
+        log_directory = Path(csv_dir) if csv_dir else Path(r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database")
         log_directory.mkdir(parents=True, exist_ok=True)
-        self.log_file = log_directory / "Ch2_log.csv"
+
+        # 채널별 파일명만 다르게
+        self.log_file = log_directory / f"Ch{int(ch)}_log.csv"
 
         # 수집 버퍼
         self.process_params: Dict = {}
@@ -55,16 +63,16 @@ class DataLogger(QObject):
             "RF Pulse: For.P", "RF Pulse: Ref.P",
         ]
 
-        # 기존 파일이 있으면 헤더 업그레이드 시도
+        # 기존 파일이 있으면 헤더 업그레이드(있던 행 보존, 새 컬럼은 공란)
         self._ensure_header()
 
     # ──────────────────────────────────────────────────────────────
     # 초기 헤더 정리
     # ──────────────────────────────────────────────────────────────
     def _ensure_header(self) -> None:
-        """기존 Ch2_log.csv가 구헤더면 새 헤더로 업그레이드(기존 행 보존, 새 컬럼 공란)."""
+        """기존 CSV가 구헤더면 새 헤더로 업그레이드(기존 행 보존, 새 컬럼 공란)."""
         if not self.log_file.exists():
-            return  # 파일 없으면 다음 기록 때 새 헤더로 생성
+            return  # 없으면 첫 기록 때 새로 헤더 씀
 
         try:
             with open(self.log_file, "r", encoding="utf-8-sig", newline="") as rf:
@@ -234,7 +242,7 @@ class DataLogger(QObject):
         try:
             asyncio.get_running_loop().create_task(self._write_row_async(log_data))
         except RuntimeError:
-            # 이벤트 루프가 없으면 동기 기록 (테스트/비정상 종료 경로)
+            # 이벤트 루프가 없으면 동기 기록
             self._write_row_sync(log_data)
 
     async def _write_row_async(self, log_data: Dict[str, str]) -> None:
@@ -247,7 +255,7 @@ class DataLogger(QObject):
             with open(self.log_file, "a", newline="", encoding="utf-8-sig") as f:
                 writer = csv.DictWriter(f, fieldnames=self.header)
                 if not file_exists:
-                    writer.writeheader()
+                    writer.writeheader()  # 파일 없으면 생성 + 헤더 기록
                 writer.writerow(log_data)
         except Exception as e:
             print(f"데이터 로그 파일 작성 실패: {e}")

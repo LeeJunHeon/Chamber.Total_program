@@ -62,8 +62,13 @@ class Command:
 
 # =============== Async 컨트롤러 ===============
 class AsyncMFC:
-    def __init__(self, *, enable_verify: bool = True, enable_stabilization: Optional[bool] = None):
+    def __init__(self, *, enable_verify: bool = True, enable_stabilization: Optional[bool] = None,
+                 host: Optional[str] = None, port: Optional[int] = None):
         self.debug_print = DEBUG_PRINT
+
+        # ← 런타임에서 채널별로 덮어쓸 TCP 엔드포인트(없으면 config 기본값 사용)
+        self._override_host: Optional[str] = host
+        self._override_port: Optional[int] = port
 
         # ▼ 추가: 검증/안정화 플래그
         self._verify_enabled: bool = bool(enable_verify)
@@ -121,6 +126,11 @@ class AsyncMFC:
         # Qt의 clear+soft-drain 타이밍을 모사하기 위한 플래그
         self._last_connect_mono: float = 0.0
         self._just_reopened: bool = False
+
+# =============== debug, R69 하지 않는 ==================
+        # 현재 ON/OFF 상태를 R69 없이 자체 추적하기 위한 섀도우 마스크(좌→우: ch1..ch5)
+        self._mask_shadow: str = "00000"
+# =============== debug, R69 하지 않는 ==================
 
     # ---------- 공용 API ----------
     async def start(self):
@@ -207,43 +217,26 @@ class AsyncMFC:
             await self._emit_failed("FLOW_SET", f"Ch{channel} FLOW_SET 확인 실패")
 
     async def flow_on(self, channel: int):
-        """R69 → L0 적용, (옵션) 검증, (옵션) 안정화 → 확정."""
-        now = await self._read_r69_bits()
-        if not now:
-            await self._emit_failed("FLOW_ON", "R69 읽기 실패")
-            return
-
-        bits = list(now.ljust(5, '0'))
-        if 1 <= channel <= len(bits):
-            bits[channel-1] = '1'
-        target = ''.join(bits[:5])
-
+        """R69를 읽지 않고 내부 섀도우 마스크만 갱신하여 L0 적용."""
         # 안정화 상태 초기화
         await self._cancel_task("_stab_task")
         self._stab_ch = None
         self._stab_target_hw = 0.0
         self._stab_pending_cmd = None
 
-        if not self._verify_enabled:
-            # 검증 없이 마스크만 적용 후 확정
-            self._enqueue(self._mk_cmd("SET_ONOFF_MASK", target), None,
-                        allow_no_reply=True, tag=f"[L0 {target}]")
-            await asyncio.sleep(max(MFC_DELAY_MS, 200) / 1000.0)
-            await self._emit_confirmed("FLOW_ON")
-            return
+        # 섀도우 마스크에서 해당 채널만 1로 켜기
+        target = self._mask_set(channel, True)
 
-        ok = await self._set_onoff_mask_and_verify(target)
-        if not ok:
-            await self._emit_failed("FLOW_ON", "L0 적용 불일치(now!=want)")
-            return
+        # L0 전송(no-reply) → 섀도우 갱신
+        self._enqueue(self._mk_cmd("SET_ONOFF_MASK", target), None,
+                      allow_no_reply=True, tag=f"[L0 {target}]")
+        self._mask_shadow = target
 
-        # 안정화 스킵 모드면 바로 확정
-        if not self._stab_enabled:
-            await self._emit_confirmed("FLOW_ON")
-            return
+        # 장비 반영 대기(예전 코드와 동일한 최소 대기 보장)
+        await asyncio.sleep(max(MFC_DELAY_MS, 200) / 1000.0)
 
-        # 안정화 필요 시 시작
-        if 1 <= channel <= len(target) and target[channel-1] == '1':
+        # (옵션) 안정화 루프 유지 — R69 없이도 R60 기반 안정화는 가능
+        if self._stab_enabled:
             tgt = float(self.last_setpoints.get(channel, 0.0))
             if tgt > 0:
                 self._stab_ch = channel
@@ -257,7 +250,8 @@ class AsyncMFC:
         await self._emit_confirmed("FLOW_ON")
 
     async def flow_off(self, channel: int):
-        """R69 → L0 적용, (옵션) 검증 → 확정."""
+        """R69를 읽지 않고 내부 섀도우 마스크만 갱신하여 L0 적용."""
+        # 해당 채널 안정화 중이면 중단
         if self._stab_ch == channel:
             await self._cancel_task("_stab_task")
             self._stab_ch = None
@@ -265,31 +259,108 @@ class AsyncMFC:
             self._stab_pending_cmd = None
             await self._emit_status(f"FLOW_OFF 요청: ch{channel} 안정화 취소")
 
+        # 목표 유량/모니터링 카운터 리셋
         self.last_setpoints[channel] = 0.0
         self.flow_error_counters[channel] = 0
 
-        now = await self._read_r69_bits()
-        if not now:
-            await self._emit_failed("FLOW_OFF", "R69 읽기 실패")
-            return
+        # 섀도우 마스크에서 해당 채널만 0으로 끄기
+        target = self._mask_set(channel, False)
 
-        bits = list(now.ljust(5, '0'))
-        if 1 <= channel <= len(bits):
-            bits[channel-1] = '0'
-        target = ''.join(bits[:5])
+        # L0 전송(no-reply) → 섀도우 갱신
+        self._enqueue(self._mk_cmd("SET_ONOFF_MASK", target), None,
+                      allow_no_reply=True, tag=f"[L0 {target}]")
+        self._mask_shadow = target
 
-        if not self._verify_enabled:
-            self._enqueue(self._mk_cmd("SET_ONOFF_MASK", target), None,
-                        allow_no_reply=True, tag=f"[L0 {target}]")
-            await asyncio.sleep(max(MFC_DELAY_MS, 200) / 1000.0)
-            await self._emit_confirmed("FLOW_OFF")
-            return
+        # 장비 반영 대기 후 확정
+        await asyncio.sleep(max(MFC_DELAY_MS, 200) / 1000.0)
+        await self._emit_confirmed("FLOW_OFF")
 
-        ok = await self._set_onoff_mask_and_verify(target)
-        if ok:
-            await self._emit_confirmed("FLOW_OFF")
-        else:
-            await self._emit_failed("FLOW_OFF", "L0 적용 불일치")
+
+
+    # async def flow_on(self, channel: int):
+    #     """R69 → L0 적용, (옵션) 검증, (옵션) 안정화 → 확정."""
+    #     now = await self._read_r69_bits()
+    #     if not now:
+    #         await self._emit_failed("FLOW_ON", "R69 읽기 실패")
+    #         return
+
+    #     bits = list(now.ljust(5, '0'))
+    #     if 1 <= channel <= len(bits):
+    #         bits[channel-1] = '1'
+    #     target = ''.join(bits[:5])
+
+    #     # 안정화 상태 초기화
+    #     await self._cancel_task("_stab_task")
+    #     self._stab_ch = None
+    #     self._stab_target_hw = 0.0
+    #     self._stab_pending_cmd = None
+
+    #     if not self._verify_enabled:
+    #         # 검증 없이 마스크만 적용 후 확정
+    #         self._enqueue(self._mk_cmd("SET_ONOFF_MASK", target), None,
+    #                     allow_no_reply=True, tag=f"[L0 {target}]")
+    #         await asyncio.sleep(max(MFC_DELAY_MS, 200) / 1000.0)
+    #         await self._emit_confirmed("FLOW_ON")
+    #         return
+
+    #     ok = await self._set_onoff_mask_and_verify(target)
+    #     if not ok:
+    #         await self._emit_failed("FLOW_ON", "L0 적용 불일치(now!=want)")
+    #         return
+
+    #     # 안정화 스킵 모드면 바로 확정
+    #     if not self._stab_enabled:
+    #         await self._emit_confirmed("FLOW_ON")
+    #         return
+
+    #     # 안정화 필요 시 시작
+    #     if 1 <= channel <= len(target) and target[channel-1] == '1':
+    #         tgt = float(self.last_setpoints.get(channel, 0.0))
+    #         if tgt > 0:
+    #             self._stab_ch = channel
+    #             self._stab_target_hw = tgt
+    #             self._stab_attempts = 0
+    #             self._stab_pending_cmd = "FLOW_ON"
+    #             self._stab_task = asyncio.create_task(self._stabilization_loop())
+    #             await self._emit_status(f"FLOW_ON: ch{channel} 안정화 시작 (목표 HW {tgt:.2f})")
+    #             return
+
+    #     await self._emit_confirmed("FLOW_ON")
+
+    # async def flow_off(self, channel: int):
+    #     """R69 → L0 적용, (옵션) 검증 → 확정."""
+    #     if self._stab_ch == channel:
+    #         await self._cancel_task("_stab_task")
+    #         self._stab_ch = None
+    #         self._stab_target_hw = 0.0
+    #         self._stab_pending_cmd = None
+    #         await self._emit_status(f"FLOW_OFF 요청: ch{channel} 안정화 취소")
+
+    #     self.last_setpoints[channel] = 0.0
+    #     self.flow_error_counters[channel] = 0
+
+    #     now = await self._read_r69_bits()
+    #     if not now:
+    #         await self._emit_failed("FLOW_OFF", "R69 읽기 실패")
+    #         return
+
+    #     bits = list(now.ljust(5, '0'))
+    #     if 1 <= channel <= len(bits):
+    #         bits[channel-1] = '0'
+    #     target = ''.join(bits[:5])
+
+    #     if not self._verify_enabled:
+    #         self._enqueue(self._mk_cmd("SET_ONOFF_MASK", target), None,
+    #                     allow_no_reply=True, tag=f"[L0 {target}]")
+    #         await asyncio.sleep(max(MFC_DELAY_MS, 200) / 1000.0)
+    #         await self._emit_confirmed("FLOW_OFF")
+    #         return
+
+    #     ok = await self._set_onoff_mask_and_verify(target)
+    #     if ok:
+    #         await self._emit_confirmed("FLOW_OFF")
+    #     else:
+    #         await self._emit_failed("FLOW_OFF", "L0 적용 불일치")
 
     async def valve_open(self):
         if not self._verify_enabled:
@@ -482,6 +553,17 @@ class AsyncMFC:
         self.flow_error_counters = {1: 0, 2: 0, 3: 0}
         self._poll_cycle_active = False
 
+    def set_endpoint(self, host: str, port: int) -> None:
+        """런타임에서 채널별 MFC TCP 엔드포인트를 지정할 때 사용."""
+        self._override_host = str(host)
+        self._override_port = int(port)
+
+    def _resolve_endpoint(self) -> tuple[str, int]:
+        """최종 접속할 host/port 결정: override > config 기본값."""
+        host = self._override_host if self._override_host else MFC_TCP_HOST
+        port = self._override_port if self._override_port else MFC_TCP_PORT
+        return str(host), int(port)
+
     # ---------- 내부: 워치독/연결 ----------
     async def _watchdog_loop(self):
         backoff = MFC_RECONNECT_BACKOFF_START_MS
@@ -498,8 +580,9 @@ class AsyncMFC:
                 break
 
             try:
+                host, port = self._resolve_endpoint()
                 reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(MFC_TCP_HOST, MFC_TCP_PORT),
+                    asyncio.open_connection(host, port),
                     timeout=max(0.5, float(MFC_CONNECT_TIMEOUT_S))
                 )
                 self._reader, self._writer = reader, writer
@@ -524,9 +607,10 @@ class AsyncMFC:
 
                 self._last_connect_mono = time.monotonic()
                 self._just_reopened = True
-                await self._emit_status(f"{MFC_TCP_HOST}:{MFC_TCP_PORT} 연결 성공 (TCP)")
+                await self._emit_status(f"{host}:{port} 연결 성공 (TCP)")
             except Exception as e:
-                await self._emit_status(f"{MFC_TCP_HOST}:{MFC_TCP_PORT} 연결 실패: {e}")
+                host, port = self._resolve_endpoint()
+                await self._emit_status(f"{host}:{port} 연결 실패: {e}")
                 backoff = min(backoff * 2, MFC_RECONNECT_BACKOFF_MAX_MS)
 
     def _on_tcp_disconnected(self):
@@ -1236,3 +1320,12 @@ class AsyncMFC:
             except Exception:
                 pass
             self._watchdog_task = None
+
+# =============== debug, R69 하지 않는 ==================
+    def _mask_set(self, channel: int, on: bool) -> str:
+        """섀도우 마스크를 바탕으로 특정 채널 비트만 갱신한 목표 마스크 문자열 반환."""
+        bits = list((self._mask_shadow or "00000").ljust(5, '0')[:5])
+        if 1 <= channel <= 5:
+            bits[channel - 1] = '1' if on else '0'
+        return ''.join(bits)
+# =============== debug, R69 하지 않는 ==================

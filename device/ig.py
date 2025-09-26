@@ -53,7 +53,11 @@ class Command:
 #  IG asyncio 컨트롤러
 # =========================
 class AsyncIG:
-    def __init__(self):
+    def __init__(self, host: Optional[str] = None, port: Optional[int] = None):
+        # 채널별 오버라이드(없으면 config 기본 사용)
+        self._override_host: Optional[str] = host
+        self._override_port: Optional[int] = port
+
         # 연결/프로토콜
         self._reader: Optional[asyncio.StreamReader] = None
         self._writer: Optional[asyncio.StreamWriter] = None
@@ -316,6 +320,18 @@ class AsyncIG:
             ev = await self._event_q.get()
             yield ev
 
+    def set_endpoint(self, host: str, port: int) -> None:
+        """런타임에서 채널별 IG TCP 엔드포인트 지정."""
+        self._override_host = str(host)
+        self._override_port = int(port)
+
+    def _resolve_endpoint(self) -> tuple[str, int]:
+        """최종 접속 host/port 결정: override > config 기본값."""
+        host = self._override_host if self._override_host else IG_TCP_HOST
+        port = self._override_port if self._override_port else IG_TCP_PORT
+        return str(host), int(port)
+
+
     # ---------------------------
     # 내부: 연결/워치독
     # ---------------------------
@@ -334,9 +350,10 @@ class AsyncIG:
                 break
 
             try:
+                host, port = self._resolve_endpoint()
                 reader, writer = await asyncio.wait_for(
-                    asyncio.open_connection(IG_TCP_HOST, IG_TCP_PORT),
-                    timeout=max(0.5, float(IG_CONNECT_TIMEOUT_S))  # ← 새 변수 사용(초)
+                    asyncio.open_connection(host, port),
+                    timeout=max(0.5, float(IG_CONNECT_TIMEOUT_S))
                 )
                 self._reader, self._writer = reader, writer
                 self._connected = True
@@ -358,9 +375,10 @@ class AsyncIG:
                         await self._reader_task
                 self._reader_task = asyncio.create_task(self._tcp_reader_loop(), name="IGTcpReader")
 
-                await self._emit_status(f"{IG_TCP_HOST}:{IG_TCP_PORT} 연결 성공 (TCP)")
+                await self._emit_status(f"{host}:{port} 연결 성공 (TCP)")
             except Exception as e:
-                await self._emit_status(f"{IG_TCP_HOST}:{IG_TCP_PORT} 연결 실패: {e}")
+                host, port = self._resolve_endpoint()
+                await self._emit_status(f"{host}:{port} 연결 실패: {e}")
                 backoff = min(backoff * 2, IG_RECONNECT_BACKOFF_MAX_MS)
 
     async def _tcp_reader_loop(self):
@@ -718,8 +736,10 @@ class AsyncIG:
 
         # 2) 오프라인: 임시 TCP one-shot
         try:
+            # 2) 오프라인: 임시 TCP one-shot
+            host, port = self._resolve_endpoint()
             _, writer = await asyncio.wait_for(
-                asyncio.open_connection(IG_TCP_HOST, IG_TCP_PORT),
+                asyncio.open_connection(host, port),
                 timeout=max(0.5, float(IG_CONNECT_TIMEOUT_S))
             )
             writer.write(b"SIG 0" + self._tx_eol)
@@ -730,7 +750,7 @@ class AsyncIG:
             await asyncio.sleep(max(0, wait_gap_ms) / 1000.0)
             return True
         except Exception as e:
-            await self._emit_status(f"직접 OFF 전송 실패(TCP one-shot): {e!r}")
+            await self._emit_status(f"직접 OFF 전송 실패({host}:{port} one-shot): {e!r}")
             return False
 
     # ---------------------------

@@ -141,6 +141,20 @@ class _CfgAdapter:
             block.get("user", "admin"),
             block.get("password", "admin"),
         )
+    
+    @property
+    def IG_TCP(self) -> tuple[str, int]:
+        return (
+            str(self._get("IG_TCP_HOST", "192.168.1.50")),
+            int(self._get("IG_TCP_PORT", 4002 if self.ch == 1 else 4003)),
+        )
+
+    @property
+    def MFC_TCP(self) -> tuple[str, int]:
+        return (
+            str(self._get("MFC_TCP_HOST", "192.168.1.50")),
+            int(self._get("MFC_TCP_PORT", 4006 if self.ch == 1 else 4007)),
+        )
 
 class ChamberRuntime:
     """
@@ -217,9 +231,14 @@ class ChamberRuntime:
         self._log_writer_task: asyncio.Task | None = None
 
         # 장치 인스턴스(각 챔버 독립)
-        self.mfc = AsyncMFC(enable_verify=False)
-        self.ig = AsyncIG()
+        mfc_host, mfc_port = self.cfg.MFC_TCP
+        ig_host,  ig_port  = self.cfg.IG_TCP
+
+        self.mfc = AsyncMFC(host=mfc_host, port=mfc_port, enable_verify=False)
+        self.ig  = AsyncIG(host=ig_host,  port=ig_port)
+
         self.oes = OESAsync()
+
 
         # RGA: config에서 연결 정보 꺼내 생성(단일/채널별 모두 지원)
         self.rga = None  # type: ignore
@@ -290,12 +309,6 @@ class ChamberRuntime:
 
         # 콘솔 예외 후킹(해당 런타임 이름을 표시)
         self._install_exception_hooks()
-
-    # ------------------------------------------------------------------
-    # UI 도우미
-    def _u(self, name: str) -> Any | None:
-        """prefix+name 위젯을 가져온다. 없으면 None."""
-        return getattr(self.ui, f"{self.prefix}{name}", None)
 
     # ------------------------------------------------------------------
     # 공정 컨트롤러 바인딩
@@ -772,19 +785,66 @@ class ChamberRuntime:
         self._spawn_detached(coro_factory(), store=True, name=name)
 
     def _ensure_background_started(self) -> None:
-        # 스타터(연결/워치독)
-        self._ensure_task_alive(f"Pump.MFC.{self.ch}", self._pump_mfc_events)
-        self._ensure_task_alive(f"Pump.IG.{self.ch}", self._pump_ig_events)
-        if self.rga:
-            self._ensure_task_alive(f"Pump.RGA.{self.ch}", self._pump_rga_events)
-        if self.dc_power:
-            self._ensure_task_alive(f"Pump.DC.{self.ch}", self._pump_dc_events)
-        if self.rf_power:
-            self._ensure_task_alive(f"Pump.RF.{self.ch}", self._pump_rf_events)
-        if self.rf_pulse:
-            self._ensure_task_alive(f"Pump.Pulse.{self.ch}", self._pump_rfpulse_events)
-        self._ensure_task_alive(f"Pump.OES.{self.ch}", self._pump_oes_events)
-        self._bg_started = True
+        # 🔒 재진입 가드(옵션이지만 추천)
+        if getattr(self, "_ensuring_bg", False):
+            return
+        self._ensuring_bg = True
+        try:
+            # ✅ 여기가 핵심: 장치 기동 보장
+            self._ensure_devices_started()   # ← 이것만 호출해야 합니다. (자기 자신 호출 금지!)
+
+            # 스타터/펌프 태스크 보장
+            self._ensure_task_alive(f"Pump.MFC.{self.ch}", self._pump_mfc_events)
+            self._ensure_task_alive(f"Pump.IG.{self.ch}", self._pump_ig_events)
+            if self.rga:
+                self._ensure_task_alive(f"Pump.RGA.{self.ch}", self._pump_rga_events)
+            if self.dc_power:
+                self._ensure_task_alive(f"Pump.DC.{self.ch}", self._pump_dc_events)
+            if self.rf_power:
+                self._ensure_task_alive(f"Pump.RF.{self.ch}", self._pump_rf_events)
+            if self.rf_pulse:
+                self._ensure_task_alive(f"Pump.Pulse.{self.ch}", self._pump_rfpulse_events)
+            self._ensure_task_alive(f"Pump.OES.{self.ch}", self._pump_oes_events)
+
+            self._bg_started = True
+        finally:
+            self._ensuring_bg = False
+
+    # ──────────────────────────────────────────────────────────────
+    # 디바이스 start/connect 보장(중복 호출 안전)
+    # ──────────────────────────────────────────────────────────────
+    def _ensure_devices_started(self) -> None:
+        """MFC/IG는 start(), PLC는 connect()로 워치독/하트비트까지 기동."""
+        if getattr(self, "_devices_started", False):
+            return
+        self._devices_started = True
+        self._spawn_detached(self._start_devices_task(), name=f"DevStart.CH{self.ch}")
+
+    async def _start_devices_task(self) -> None:
+        async def _maybe_start_or_connect(obj, label: str):
+            if not obj:
+                return
+            try:
+                # 1순위: start(), 2순위: connect()
+                meth = getattr(obj, "start", None) or getattr(obj, "connect", None)
+                if not callable(meth):
+                    self.append_log(label, "start/connect 메서드 없음 → skip")
+                    return
+                res = meth()
+                if inspect.isawaitable(res):
+                    await res
+                self.append_log(label, f"{meth.__name__} 호출 완료")
+            except Exception as e:
+                try:
+                    name = meth.__name__  # type: ignore[attr-defined]
+                except Exception:
+                    name = "start/connect"
+                self.append_log(label, f"{name} 실패: {e!r}")
+
+        # 순서 무관하지만, 가독성을 위해 PLC도 함께 보장
+        await _maybe_start_or_connect(self.plc, "PLC")   # ← connect()
+        await _maybe_start_or_connect(self.mfc, "MFC")   # ← start()
+        await _maybe_start_or_connect(self.ig,  "IG")    # ← start()
 
     # ------------------------------------------------------------------
     # 표시/입력/상태
@@ -953,6 +1013,12 @@ class ChamberRuntime:
                 self._post_critical("장비 연결 실패",
                     f"다음 장비 연결을 확인하지 못했습니다:\n - {fail_list}\n\n"
                     "케이블/전원/포트 설정 확인 후 재시도")
+                
+                # 🔽 킥했던 워치독을 원복
+                with contextlib.suppress(Exception): self.mfc.set_process_status(False)
+                with contextlib.suppress(Exception):
+                    if hasattr(self.ig, "set_process_status"): self.ig.set_process_status(False)
+
                 self._on_process_status_changed(False)
                 self._start_next_process_from_queue(False)
                 return
@@ -983,14 +1049,20 @@ class ChamberRuntime:
             await asyncio.sleep(0.2)
 
     async def _preflight_connect(self, params: Mapping[str, Any], timeout_s: float = 8.0) -> tuple[bool, list[str]]:
-        need: list[tuple[str, object]] = [("PLC", self.plc), ("MFC", self.mfc), ("IG", self.ig)]
+        # ❗ PLC 제외: 실제 밸브/셔터 등 명령 보낼 때 실패 처리하면 충분
+        need: list[tuple[str, object]] = [("MFC", self.mfc), ("IG", self.ig)]
+
         use_rf_pulse = bool(params.get("use_rf_pulse", False) or params.get("use_rf_pulse_power", False))
         if use_rf_pulse and self.rf_pulse:
-            # 펄스 파워는 start() 내부에서 포트 연결/워치독 준비할 수 있으므로 미리 켜둘 필요가 있으면 여기에서
+            # (선택) Pulse도 연결 상태 확인하고 싶다면 포함
             need.append(("Pulse", self.rf_pulse))
+
+        # 진행상황 로그 태스크
         stop_evt = asyncio.Event()
         prog_task = asyncio.create_task(self._preflight_progress_log(need, stop_evt))
+
         try:
+            # 각 장치가 연결될 때까지 대기
             results = await asyncio.gather(
                 *[self._wait_device_connected(dev, name, timeout_s) for name, dev in need],
                 return_exceptions=False
@@ -999,6 +1071,7 @@ class ChamberRuntime:
             stop_evt.set()
             with contextlib.suppress(Exception):
                 await prog_task
+
         failed = [name for (name, _), ok in zip(need, results) if not ok]
         return (len(failed) == 0, failed)
 
@@ -1438,7 +1511,7 @@ class ChamberRuntime:
             try: self._prestart_buf.append(line_file)
             except Exception: pass
             return
-        self._soon(self._log_enqueue_nowait, line_file)
+        self._log_enqueue_nowait(line_file)  # ✅ 즉시 큐 투입
 
     def _append_log_to_ui(self, line: str) -> None:
         if not self._w_log: return
@@ -1457,16 +1530,45 @@ class ChamberRuntime:
                 self._w_log.appendPlainText(f"[Logger] NAS 폴더 접근 실패 → 로컬 폴백: {local_fallback}")
             return local_fallback
 
+    # def _prepare_log_file(self, params: Mapping[str, Any]) -> None:
+    #     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+    #     self._log_file_path = self._log_dir / f"CH{self.ch}_{ts}.txt"
+    #     if self._log_fp is None:
+    #         self._log_fp = open(self._log_file_path, "a", encoding="utf-8", newline="")
+    #     if not self._log_writer_task or self._log_writer_task.done():
+    #         self._log_writer_task = asyncio.create_task(self._log_writer_loop(), name=f"LogWriter.CH{self.ch}")
+    #     if self._prestart_buf:
+    #         for line in list(self._prestart_buf):
+    #             self._log_enqueue_nowait(line)  # ✅ 즉시 큐 투입
+    #         self._prestart_buf.clear()
+    #     self.append_log("Logger", f"새 로그 파일 시작: {self._log_file_path.name}")
+    #     note = str(params.get("process_note", "") or params.get("Process_name", "") or f"Run CH{self.ch}")
+    #     self.append_log("MAIN", f"=== '{note}' 공정 준비 (장비 연결부터 기록) ===")
+
+    
     def _prepare_log_file(self, params: Mapping[str, Any]) -> None:
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self._log_file_path = self._log_dir / f"CH{self.ch}_{ts}.txt"
+        # 1) 지역시간을 명시적으로 확정
+        now_local = datetime.now().astimezone()
+        ts = now_local.strftime("%Y%m%d_%H%M%S")
+
+        # 2) (충돌 방지) 같은 초에 두 번 시작하면 뒤에 _1, _2 붙이기
+        base = self._log_dir / f"CH{self.ch}_{ts}"
+        path = base.with_suffix(".txt")
+        i = 1
+        while path.exists():
+            path = (self._log_dir / f"CH{self.ch}_{ts}_{i}").with_suffix(".txt")
+            i += 1
+
+        self._log_file_path = path
         if self._log_fp is None:
             self._log_fp = open(self._log_file_path, "a", encoding="utf-8", newline="")
         if not self._log_writer_task or self._log_writer_task.done():
             self._log_writer_task = asyncio.create_task(self._log_writer_loop(), name=f"LogWriter.CH{self.ch}")
+
+        # 이하 동일
         if self._prestart_buf:
             for line in list(self._prestart_buf):
-                self._soon(self._log_enqueue_nowait, line)
+                self._log_enqueue_nowait(line)
             self._prestart_buf.clear()
         self.append_log("Logger", f"새 로그 파일 시작: {self._log_file_path.name}")
         note = str(params.get("process_note", "") or params.get("Process_name", "") or f"Run CH{self.ch}")
