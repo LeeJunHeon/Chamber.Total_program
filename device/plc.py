@@ -18,6 +18,7 @@ import inspect
 import time
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Iterable
+from contextlib import asynccontextmanager
 
 from pymodbus.pdu import ExceptionResponse
 from pymodbus.client import ModbusTcpClient
@@ -205,6 +206,10 @@ class PLCConfig:
     heartbeat_s: float = 15.0
     pulse_ms: int = 180  # momentary 기본 펄스폭(ms)
 
+    # ⬇️ 추가: 성능/경합 모니터링 임계치(ms)
+    lock_warn_ms: float = 1000.0   # 락 획득 대기시간 경고 임계
+    io_warn_ms: float   = 1500.0   # 락 내부 I/O 소요시간 경고 임계
+
     # ── DC Power 설정 ───────────────────────────────────────────
     # 원하는 파워[W] → DAC 코드 변환용. 직선 스케일(0~FULL)
     dc_power_min_w: float = 0.0
@@ -264,7 +269,7 @@ class AsyncPLC:
     # ---------- 연결/수명주기 ----------
     async def connect(self) -> None:
         self._closed = False
-        async with self._lock: # 🔒 I/O 및 하트비트와 직렬화
+        async with self._io_lock("connect"):  # 🔒 I/O 및 하트비트와 직렬화
             await asyncio.to_thread(self._connect_sync)
         self.log("TCP 연결 성공: %s:%s (unit=%s)", self.cfg.ip, self.cfg.port, self.cfg.unit)
         if self._hb_task is None or self._hb_task.done():
@@ -281,7 +286,7 @@ class AsyncPLC:
                 pass
             self._hb_task = None
         # 🔒 모든 I/O와 동기화하여 안전 종료
-        async with self._lock:
+        async with self._io_lock("close"):
             await asyncio.to_thread(self._close_sync)
         self.log("TCP 연결 종료")
 
@@ -382,7 +387,7 @@ class AsyncPLC:
                 except Exception:
                     # 🔒 재연결도 I/O와 직렬화
                     try:
-                        async with self._lock:
+                        async with self._io_lock("reconnect"):
                             await asyncio.to_thread(self._close_sync)
                             await asyncio.to_thread(self._connect_sync)
                     except Exception:
@@ -392,7 +397,7 @@ class AsyncPLC:
 
     # ---------- 저수준 IO(직렬화) ----------
     async def read_coil(self, addr: int) -> bool:
-        async with self._lock:
+        async with self._io_lock("read_coil", addr=addr):
             await asyncio.to_thread(self._connect_sync)
             await self._throttle_and_heartbeat()
             try:
@@ -409,7 +414,7 @@ class AsyncPLC:
             return bool(resp.bits[0])
 
     async def write_coil(self, addr: int, state: bool) -> None:
-        async with self._lock:
+        async with self._io_lock("write_coil", addr=addr):
             await asyncio.to_thread(self._connect_sync)
             await self._throttle_and_heartbeat()
             try:
@@ -425,7 +430,7 @@ class AsyncPLC:
             self._ensure_ok(resp)
 
     async def read_reg(self, addr: int) -> int:
-        async with self._lock:
+        async with self._io_lock("read_reg", addr=addr):
             await asyncio.to_thread(self._connect_sync)
             await self._throttle_and_heartbeat()
             try:
@@ -442,7 +447,7 @@ class AsyncPLC:
             return int(resp.registers[0])
 
     async def write_reg(self, addr: int, value: int) -> None:
-        async with self._lock:
+        async with self._io_lock("write_reg", addr=addr):
             await asyncio.to_thread(self._connect_sync)
             await self._throttle_and_heartbeat()
             try:
@@ -748,6 +753,41 @@ class AsyncPLC:
             await self.write_switch(name, bool(on), momentary=momentary)
         except KeyError:
             raise KeyError(f"지원하지 않는 PLC 논리명/키: {name}")
+        
+    # =============== 유틸 ===============
+    @asynccontextmanager
+    async def _io_lock(self, op: str, *, addr: Optional[int] = None):
+        """
+        락 획득 대기(wait)와 락 내부 실행(in-lock) 시간을 분리 계측하고,
+        임계치 초과 시 self.log로 WARN을 남긴다.
+        """
+        loop = asyncio.get_running_loop()
+        t_wait_start = loop.time()
+        await self._lock.acquire()
+        waited_ms = (loop.time() - t_wait_start) * 1000.0
+
+        try:
+            if waited_ms >= self.cfg.lock_warn_ms:
+                if addr is None:
+                    self.log("WARN lock-wait %.0f ms (op=%s)", waited_ms, op)
+                else:
+                    self.log("WARN lock-wait %.0f ms (op=%s, addr=%s)", waited_ms, op, addr)
+
+            t_in_start = loop.time()
+            yield  # 🔒 임계구역 시작
+
+            io_ms = (loop.time() - t_in_start) * 1000.0
+            if io_ms >= self.cfg.io_warn_ms:
+                if addr is None:
+                    self.log("WARN in-lock IO %.0f ms (op=%s)", io_ms, op)
+                else:
+                    self.log("WARN in-lock IO %.0f ms (op=%s, addr=%s)", io_ms, op, addr)
+        finally:
+            try:
+                self._lock.release()
+            except RuntimeError:
+                pass
+    # =============== 유틸 ===============
 
 __all__ = [
     "PLC_COIL_MAP", "PLC_REG_MAP", "PLC_TIMER_MAP",

@@ -20,6 +20,7 @@ from device.rga import RGA100AsyncAdapter
 from device.dc_power import DCPowerAsync
 from device.rf_power import RFPowerAsync
 from device.rf_pulse import RFPulseAsync
+from device.dc_pulse import AsyncDCPulse
 
 # 그래프/로거/알림
 from controller.graph_controller import GraphController
@@ -197,13 +198,13 @@ class ChamberRuntime:
         self._last_state_text: str | None = None
         self._delay_task: Optional[asyncio.Task] = None
 
-        # 기능 지원 여부(디폴트: CH1=rfpulse만, CH2=dc+rfpulse)
+        # 기능 지원 여부(고정: CH1=DC-Pulse만, CH2=RF-Pulse(+필요시 DC/RF연속))
         if supports_dc is None:
             supports_dc = (self.ch == 2)
         if supports_rfpulse is None:
-            supports_rfpulse = True
+            supports_rfpulse = (self.ch == 2)  # ⬅️ CH2에서만 RF-Pulse
         if supports_rf_cont is None:
-            supports_rf_cont = False  # 필요 시 True로
+            supports_rf_cont = False
 
         self.supports_dc = bool(supports_dc)
         self.supports_rfpulse = bool(supports_rfpulse)
@@ -249,8 +250,9 @@ class ChamberRuntime:
         except Exception:
             self.rga = None  # 안전
 
-        # 펄스 파워(DC-Pulse 또는 RF-Pulse): 장치 드라이버는 동일
-        self.rf_pulse = RFPulseAsync() if self.supports_rfpulse else None
+        # 펄스 파워: CH1=DC-Pulse, CH2=RF-Pulse
+        self.dc_pulse = AsyncDCPulse() if self.ch == 1 else None
+        self.rf_pulse = RFPulseAsync() if (self.ch == 2 and self.supports_rfpulse) else None
 
         # DC 연속 / RF 연속 (필요 시)
         self.dc_power = None
@@ -306,9 +308,6 @@ class ChamberRuntime:
 
         # === 백그라운드 워치독/이벤트펌프 준비는 최초 Start 때 올림 ===
         self._on_process_status_changed(False)
-
-        # 콘솔 예외 후킹(해당 런타임 이름을 표시)
-        self._install_exception_hooks()
 
     # ------------------------------------------------------------------
     # 공정 컨트롤러 바인딩
@@ -399,14 +398,45 @@ class ChamberRuntime:
                 self._spawn_detached(self.rf_power.cleanup())
 
         def cb_rfpulse_start(power: float, freq: int | None, duty: int | None) -> None:
-            if not self.rf_pulse:
-                self.append_log("Pulse", "이 챔버는 Pulse 파워를 지원하지 않습니다.")
-                return
-            self._spawn_detached(self.rf_pulse.start_pulse_process(float(power), freq, duty))
+            async def run():
+                # CH1 → DC-Pulse 구동
+                if self.ch == 1 and self.dc_pulse:
+                    try:
+                        self._ensure_background_started()
+                        await self.dc_pulse.start()
+                        # Host master/Power모드/참조설정/출력ON까지 한 번에
+                        await self.dc_pulse.prepare_and_start(power_w=float(power))
+                        # RFPulse와 인터페이스를 맞추기 위해 '도달' 신호 전달
+                        self.process_controller.on_rf_target_reached()
+                    except Exception as e:
+                        why = f"DC-Pulse start failed: {e!r}"
+                        self.append_log("Pulse", why)
+                        self.process_controller.on_rf_pulse_failed(why)
+                        if self.chat:
+                            with contextlib.suppress(Exception):
+                                self.chat.notify_error_with_src("Pulse", why)
+                    return
+
+                # CH2 → RF-Pulse 구동
+                if self.ch == 2 and self.rf_pulse:
+                    self._spawn_detached(self.rf_pulse.start_pulse_process(float(power), freq, duty))
+                else:
+                    self.append_log("Pulse", "이 챔버는 Pulse 파워를 지원하지 않습니다.")
+
+            self._spawn_detached(run())
 
         def cb_rfpulse_stop():
-            if self.rf_pulse:
-                self.rf_pulse.stop_process()
+            async def run():
+                if self.ch == 1 and self.dc_pulse:
+                    try:
+                        await self.dc_pulse.output_off()
+                        self.process_controller.on_rf_pulse_off_finished()
+                    except Exception as e:
+                        self.append_log("Pulse", f"DC-Pulse stop failed: {e!r}")
+                    return
+                if self.ch == 2 and self.rf_pulse:
+                    self.rf_pulse.stop_process()
+            self._spawn_detached(run())
 
         def cb_ig_wait(base_pressure: float) -> None:
             async def _run():
@@ -769,6 +799,30 @@ class ChamberRuntime:
             elif k == "power_off_finished":
                 self.process_controller.on_rf_pulse_off_finished()
 
+    async def _pump_dcpulse_events(self) -> None:
+        if not self.dc_pulse:
+            return
+        async for ev in self.dc_pulse.events():
+            k = ev.kind
+            if k == "status":
+                self.append_log(f"Pulse{self.ch}", ev.message or "")
+            elif k == "telemetry":
+                # 필요시 로그/데이터로 변환
+                pass
+            elif k == "command_confirmed":
+                # OUTPUT_ON/OUTPUT_OFF의 라벨에 맞춰 후속 콜백을 줄 수도 있음
+                if (ev.cmd or "").upper() == "OUTPUT_ON":
+                    self.process_controller.on_rf_target_reached()
+                elif (ev.cmd or "").upper() == "OUTPUT_OFF":
+                    self.process_controller.on_rf_pulse_off_finished()
+            elif k == "command_failed":
+                why = ev.reason or "unknown"
+                self.append_log(f"Pulse{self.ch}", f"CMD FAIL: {ev.cmd or ''} ({why})")
+                self.process_controller.on_rf_pulse_failed(why)
+                if self.chat:
+                    with contextlib.suppress(Exception):
+                        self.chat.notify_error_with_src("Pulse", why)
+
     async def _pump_oes_events(self) -> None:
         async for ev in self.oes.events():
             try:
@@ -829,7 +883,10 @@ class ChamberRuntime:
                 self._ensure_task_alive(f"Pump.DC.{self.ch}", self._pump_dc_events)
             if self.rf_power:
                 self._ensure_task_alive(f"Pump.RF.{self.ch}", self._pump_rf_events)
-            if self.rf_pulse:
+            # CH1 = DC-Pulse 이벤트 펌프, CH2 = RF-Pulse 이벤트 펌프
+            if self.dc_pulse and self.ch == 1:
+                self._ensure_task_alive(f"Pump.DCPulse.{self.ch}", self._pump_dcpulse_events)
+            if self.rf_pulse and self.ch == 2:
                 self._ensure_task_alive(f"Pump.Pulse.{self.ch}", self._pump_rfpulse_events)
             self._ensure_task_alive(f"Pump.OES.{self.ch}", self._pump_oes_events)
 
@@ -872,6 +929,8 @@ class ChamberRuntime:
         await _maybe_start_or_connect(self.plc, "PLC")   # ← connect()
         await _maybe_start_or_connect(self.mfc, "MFC")   # ← start()
         await _maybe_start_or_connect(self.ig,  "IG")    # ← start()
+        if self.dc_pulse and self.ch == 1:
+            await _maybe_start_or_connect(self.dc_pulse, "DCPulse")  # ⬅️ 추가
 
     # ------------------------------------------------------------------
     # 표시/입력/상태
@@ -1080,9 +1139,11 @@ class ChamberRuntime:
         need: list[tuple[str, object]] = [("MFC", self.mfc), ("IG", self.ig)]
 
         use_rf_pulse = bool(params.get("use_rf_pulse", False) or params.get("use_rf_pulse_power", False))
-        if use_rf_pulse and self.rf_pulse:
-            # (선택) Pulse도 연결 상태 확인하고 싶다면 포함
-            need.append(("Pulse", self.rf_pulse))
+        if use_rf_pulse:
+            if self.ch == 1 and self.dc_pulse:
+                need.append(("Pulse", self.dc_pulse))
+            elif self.ch == 2 and self.rf_pulse:
+                need.append(("Pulse", self.rf_pulse))
 
         # 진행상황 로그 태스크
         stop_evt = asyncio.Event()
@@ -1169,7 +1230,9 @@ class ChamberRuntime:
     async def _stop_device_watchdogs(self, *, light: bool = False) -> None:
         if light:
             with contextlib.suppress(Exception): self.mfc.set_process_status(False)
-            if self.rf_pulse:
+            if self.dc_pulse and self.ch == 1:
+                with contextlib.suppress(Exception): self.dc_pulse.set_process_status(False)
+            if self.rf_pulse and self.ch == 2:
                 with contextlib.suppress(Exception): self.rf_pulse.set_process_status(False)
             if self.dc_power and hasattr(self.dc_power, "set_process_status"):
                 with contextlib.suppress(Exception): self.dc_power.set_process_status(False)
@@ -1194,7 +1257,7 @@ class ChamberRuntime:
             pass
 
         tasks = []
-        for dev in (self.ig, self.mfc, self.rf_pulse, self.dc_power, self.rf_power, self.oes, self.rga):
+        for dev in (self.ig, self.mfc, self.dc_pulse, self.rf_pulse, self.dc_power, self.rf_power, self.oes, self.rga):
             if dev and hasattr(dev, "cleanup"):
                 try: tasks.append(dev.cleanup())
                 except Exception: pass
@@ -1229,7 +1292,7 @@ class ChamberRuntime:
             self._bg_tasks = []; self._bg_started = False
 
             tasks = []
-            for dev in (self.ig, self.mfc, self.rf_pulse, self.dc_power, self.rf_power, self.oes, self.rga):
+            for dev in (self.ig, self.mfc, self.dc_pulse, self.rf_pulse, self.dc_power, self.rf_power, self.oes, self.rga):
                 if not dev: continue
                 try:
                     if hasattr(dev, "cleanup_quick"):
@@ -1515,11 +1578,13 @@ class ChamberRuntime:
     def _apply_polling_targets(self, targets: TargetsMap) -> None:
         self._ensure_background_started()
         mfc_on = bool(targets.get('mfc', False))
-        rfp_on = bool(targets.get('rfpulse', False))
+        rfp_on = bool(targets.get('rfpulse', False))  # 'rfpulse' 키를 '펄스 공통'으로 재사용
         dc_on  = bool(targets.get('dc', False))
         rf_on  = bool(targets.get('rf', False))
         with contextlib.suppress(Exception): self.mfc.set_process_status(mfc_on)
-        if self.rf_pulse:
+        if self.dc_pulse and self.ch == 1:
+            with contextlib.suppress(Exception): self.dc_pulse.set_process_status(rfp_on)
+        if self.rf_pulse and self.ch == 2:
             with contextlib.suppress(Exception): self.rf_pulse.set_process_status(rfp_on)
         if self.dc_power and hasattr(self.dc_power, "set_process_status"):
             with contextlib.suppress(Exception): self.dc_power.set_process_status(dc_on)
@@ -1702,11 +1767,34 @@ class ChamberRuntime:
         loop = self._loop
         def _create():
             t = loop.create_task(coro, name=name)
-            if store: self._bg_tasks.append(t)
-        try: running = asyncio.get_running_loop()
-        except RuntimeError: running = None
-        if running is loop: loop.call_soon(_create)
-        else: loop.call_soon_threadsafe(_create)
+
+            # ✅ 태스크 예외를 "자기 챔버" 로그로 캡처
+            def _done(task: asyncio.Task):
+                if task.cancelled():
+                    return
+                try:
+                    exc = task.exception()
+                except Exception as e:
+                    self.append_log(f"Task{self.ch}", f"exception() failed: {e!r}")
+                    return
+                if exc:
+                    import traceback
+                    tb = ''.join(traceback.format_exception(type(exc), exc, exc.__traceback__)).rstrip()
+                    self.append_log(f"Task{self.ch}", f"[{name or 'task'}] crashed:\n{tb}")
+
+            t.add_done_callback(_done)
+
+            if store:
+                self._bg_tasks.append(t)
+
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is loop:
+            loop.call_soon(_create)
+        else:
+            loop.call_soon_threadsafe(_create)
 
     def _set_task_later(self, attr_name: str, coro: Coroutine[Any, Any, Any], *, name: str | None = None) -> None:
         loop = self._loop
@@ -1718,31 +1806,26 @@ class ChamberRuntime:
         if running is loop: loop.call_soon(_create_and_set)
         else: loop.call_soon_threadsafe(_create_and_set)
 
-    def _install_exception_hooks(self) -> None:
-        try: target_loop = asyncio.get_running_loop()
-        except RuntimeError: target_loop = self._loop
-        def loop_exception_handler(loop_, context):
-            exc = context.get("exception"); msg = context.get("message", "")
-            if exc:
-                try:
-                    txt = ''.join(traceback.format_exception(type(exc), exc, exc.__traceback__)).rstrip()
-                except Exception:
-                    txt = f"{exc!r}"
-                self.append_log(f"Asyncio{self.ch}", txt)
-            elif msg:
-                self.append_log(f"Asyncio{self.ch}", msg)
-        target_loop.set_exception_handler(loop_exception_handler)
-
     def _loop_from_anywhere(self) -> asyncio.AbstractEventLoop:
         try: return asyncio.get_running_loop()
         except RuntimeError: return self._loop
 
     def _soon(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
+        def _safe():
+            try:
+                fn(*args, **kwargs)
+            except Exception as e:
+                tb = ''.join(traceback.format_exception(type(e), e, e.__traceback__)).rstrip()
+                self.append_log(f"CB{self.ch}", f"callback failed:\n{tb}")
         loop = self._loop
-        try: running = asyncio.get_running_loop()
-        except RuntimeError: running = None
-        if running is loop: loop.call_soon(fn, *args, **kwargs)
-        else: loop.call_soon_threadsafe(fn, *args, **kwargs)
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is loop:
+            loop.call_soon(_safe)
+        else:
+            loop.call_soon_threadsafe(_safe)
 
     def _is_dev_connected(self, dev: object) -> bool:
         try:

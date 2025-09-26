@@ -229,7 +229,7 @@ class AsyncMFC:
 
         # L0 전송(no-reply) → 섀도우 갱신
         self._enqueue(self._mk_cmd("SET_ONOFF_MASK", target), None,
-                      allow_no_reply=True, tag=f"[L0 {target}]")
+                      allow_no_reply=True, tag=f"[L0 {target}]", gap_ms=4000) # flow 검증을 안하니 여유있게
         self._mask_shadow = target
 
         # 장비 반영 대기(예전 코드와 동일한 최소 대기 보장)

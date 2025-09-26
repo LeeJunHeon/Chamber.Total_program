@@ -20,10 +20,9 @@ from dataclasses import dataclass
 from typing import Optional, Callable, Deque, AsyncGenerator, Literal
 from collections import deque
 import asyncio, time, contextlib, socket
+from lib.config_ch1 import DCPULSE_TCP_IP, DCPULSE_TCP_HOST
 
 # ========= 기본 설정(필요 시 config_* 모듈에서 override 가능) =========
-DCP_TCP_HOST = "192.168.1.50"      # 예: MOXA NPort IP
-DCP_TCP_PORT = 4010                # 예: RS-232 Port
 DCP_CONNECT_TIMEOUT_S = 1.5
 
 # 프로토콜(Type4: STX/ETX/CHK) 및 RS-485 옵션
@@ -587,8 +586,8 @@ class AsyncDCPulse:
 
     # ====== 내부 유틸 ======
     def _resolve_endpoint(self) -> tuple[str, int]:
-        host = self._override_host if self._override_host else DCP_TCP_HOST
-        port = self._override_port if self._override_port else DCP_TCP_PORT
+        host = self._override_host if self._override_host else DCPULSE_TCP_IP
+        port = self._override_port if self._override_port else DCPULSE_TCP_HOST
         return str(host), int(port)
 
     def _enqueue(self, cmd: Command):
