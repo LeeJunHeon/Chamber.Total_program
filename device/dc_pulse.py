@@ -206,6 +206,17 @@ class AsyncDCPulse:
         self._override_host = str(host)
         self._override_port = int(port)
 
+    async def set_endpoint_reconnect(self, host: str, port: int) -> None:
+        """엔드포인트 변경 + 즉시 재연결."""
+        self._override_host = str(host)
+        self._override_port = int(port)
+        await self.pause_watchdog()
+        try:
+            self._on_tcp_disconnected()
+        except Exception:
+            pass
+        await self.start()
+
     def set_process_status(self, should_poll: bool):
         if should_poll:
             if self._poll_task is None or self._poll_task.done():
@@ -649,3 +660,33 @@ class AsyncDCPulse:
     def _dbg(self, src: str, msg: str):
         if self.debug_print:
             print(f"[{src}] {msg}")
+
+    # =========== chamber_runtime.py에 맞춘 함수들 ===========
+    def is_connected(self) -> bool:
+        """프리플라이트/상태 체크용: 현재 TCP 연결 여부."""
+        return bool(self._connected)
+    
+    async def cleanup_quick(self):
+        """빠른 종료 경로(현재는 cleanup과 동일)."""
+        await self.cleanup()
+
+    async def pause_watchdog(self) -> None:
+        """워치독(자동 재연결) 일시 중지 — 기존 연결은 유지."""
+        self._want_connected = False
+        t = self._watchdog_task
+        if t:
+            t.cancel()
+            try:
+                await t
+            except Exception:
+                pass
+            self._watchdog_task = None
+
+    async def resume_watchdog(self) -> None:
+        """pause_watchdog 이후 워치독 재개."""
+        if self._watchdog_task and not self._watchdog_task.done():
+            return
+        self._want_connected = True
+        loop = asyncio.get_running_loop()
+        self._watchdog_task = loop.create_task(self._watchdog_loop(), name="DCPWatchdog")
+    # =========== chamber_runtime.py에 맞춘 함수들 ===========

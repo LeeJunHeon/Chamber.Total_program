@@ -11,6 +11,7 @@ from collections import deque
 
 from PySide6.QtWidgets import QMessageBox, QFileDialog, QPlainTextEdit, QDialog
 from PySide6.QtGui import QTextCursor
+from PySide6.QtCore import Qt  # ← 추가: 모달리티/속성 지정용
 
 # 장비
 from device.ig import AsyncIG
@@ -99,6 +100,7 @@ NormParams = TypedDict('NormParams', {
 TargetsMap = Mapping[Literal["mfc", "dc", "rf", "dc_pulse", "rf_pulse"], bool]
 
 # -----------------------------------------------------------------------------
+
 
 @dataclass
 class _CfgAdapter:
@@ -212,6 +214,9 @@ class ChamberRuntime:
         self._last_state_text: str | None = None
         self._delay_task: Optional[asyncio.Task] = None
 
+        # QMessageBox 참조 저장소(비모달 유지용)
+        self._msg_boxes: list[QMessageBox] = []  # ← 추가
+
         # 기본 전략: CH1=DC-Pulse 전용, CH2=RF-Pulse(+DC 연속)
         if supports_dc_cont  is None: supports_dc_cont  = (self.ch == 2)
         if supports_rf_cont  is None: supports_rf_cont  = False
@@ -232,7 +237,6 @@ class ChamberRuntime:
         self.graph.reset()
 
         # 로거
-        # 변경 (경로를 명시하고 싶으면 csv_dir 인자 사용; 안 주면 기본 NAS 경로 사용)
         self.data_logger = DataLogger(ch=self.ch, csv_dir=Path(r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database"))
 
         # 로그 파일 경로 관리(세션 단위) + 사전 버퍼
@@ -253,7 +257,6 @@ class ChamberRuntime:
 
         self.oes = OESAsync()
 
-
         # RGA: config에서 연결 정보 꺼내 생성(단일/채널별 모두 지원)
         self.rga = None  # type: ignore
         try:
@@ -271,7 +274,6 @@ class ChamberRuntime:
         self.dc_power = None
         if self.supports_dc_cont:
             async def _dc_send(power: float):
-                # 기본 매핑: DCV 채널0(필요 시 config로 주입 가능)
                 await self.plc.power_apply(power, family="DCV", channel=0, ensure_set=True)
 
             async def _dc_send_unverified(power: float):
@@ -418,7 +420,6 @@ class ChamberRuntime:
                     self._ensure_background_started()
                     await self.dc_pulse.start()
                     await self.dc_pulse.prepare_and_start(power_w=float(power), freq=freq, duty=duty)
-                    # ✅ 타겟 도달/출력 OFF는 이벤트 펌프(_pump_dcpulse_events)에서만 콜백 처리
                 except Exception as e:
                     why = f"DC-Pulse start failed: {e!r}"
                     self.append_log("DCPulse", why)
@@ -431,9 +432,7 @@ class ChamberRuntime:
                     try:
                         await self.dc_pulse.output_off()
                     except Exception:
-                        # 실패 시에는 이벤트가 안 올 수도 있으니 바로 실패 알림
                         self.process_controller.on_dc_pulse_failed("output_off failed")
-                    # ✅ 정상경로는 이벤트 펌프에서 OUTPUT_OFF 확인 후 on_dc_pulse_off_finished 호출
             self._spawn_detached(run())
 
         def cb_rf_pulse_start(power: float, freq: int | None, duty: int | None) -> None:
@@ -741,14 +740,12 @@ class ChamberRuntime:
             if k == "status":
                 self.append_log(f"DC{self.ch}", ev.message or "")
             elif k == "display":
-                # ✅ 추가: CSV용 샘플 수집
                 with contextlib.suppress(Exception):
                     self.data_logger.log_dc_power(
                         float(ev.power  or 0.0),
                         float(ev.voltage or 0.0),
                         float(ev.current or 0.0),
                     )
-                # 기존 UI 갱신
                 self._display_dc(ev.power, ev.voltage, ev.current)
             elif k == "target_reached":
                 self.process_controller.on_dc_target_reached()
@@ -763,13 +760,11 @@ class ChamberRuntime:
             if k == "status":
                 self.append_log(f"RF{self.ch}", ev.message or "")
             elif k == "display":
-                # ✅ 추가: CSV용 샘플 수집
                 with contextlib.suppress(Exception):
                     self.data_logger.log_rf_power(
                         float(ev.forward   or 0.0),
                         float(ev.reflected or 0.0),
                     )
-                # 기존 UI 갱신
                 self._display_rf(ev.forward, ev.reflected)
             elif k == "target_reached":
                 self.process_controller.on_rf_target_reached()
@@ -813,7 +808,6 @@ class ChamberRuntime:
             if k == "status":
                 self.append_log(f"DCPulse{self.ch}", ev.message or "")
             elif k == "telemetry":
-                # 필요시 로그/데이터로 변환
                 pass
             elif k == "command_confirmed":
                 cmd = (ev.cmd or "").upper()
@@ -825,7 +819,6 @@ class ChamberRuntime:
                 why = ev.reason or "unknown"
                 self.append_log(f"DCPulse{self.ch}", f"CMD FAIL: {ev.cmd or ''} ({why})")
                 self.process_controller.on_dc_pulse_failed(why)
-
 
     async def _pump_oes_events(self) -> None:
         async for ev in self.oes.events():
@@ -870,17 +863,12 @@ class ChamberRuntime:
         self._spawn_detached(coro_factory(), store=True, name=name)
 
     def _ensure_background_started(self) -> None:
-        # 🔒 재진입 가드(옵션이지만 추천)
         if getattr(self, "_ensuring_bg", False):
             return
         self._ensuring_bg = True
         try:
-            # ✅ 여기가 핵심: 장치 기동 보장
-            self._ensure_devices_started()   # ← 이것만 호출해야 합니다. (자기 자신 호출 금지!)
-            
-            # ✅ PC 이벤트 펌프도 항상 살아있게 보장
+            self._ensure_devices_started()
             self._ensure_task_alive("Pump.PC", self._pump_pc_events)
-            # 스타터/펌프 태스크 보장
             self._ensure_task_alive(f"Pump.MFC.{self.ch}", self._pump_mfc_events)
             self._ensure_task_alive(f"Pump.IG.{self.ch}", self._pump_ig_events)
             if self.rga:
@@ -889,7 +877,6 @@ class ChamberRuntime:
                 self._ensure_task_alive(f"Pump.DC.{self.ch}", self._pump_dc_events)
             if self.rf_power:
                 self._ensure_task_alive(f"Pump.RF.{self.ch}", self._pump_rf_events)
-            # 지원 여부만으로 기동
             if self.dc_pulse:
                 self._ensure_task_alive(f"Pump.DCPulse.{self.ch}", self._pump_dcpulse_events)
             if self.rf_pulse:
@@ -915,7 +902,6 @@ class ChamberRuntime:
             if not obj:
                 return
             try:
-                # 1순위: start(), 2순위: connect()
                 meth = getattr(obj, "start", None) or getattr(obj, "connect", None)
                 if not callable(meth):
                     self.append_log(label, "start/connect 메서드 없음 → skip")
@@ -931,15 +917,13 @@ class ChamberRuntime:
                     name = "start/connect"
                 self.append_log(label, f"{name} 실패: {e!r}")
 
-        # 순서 무관하지만, 가독성을 위해 PLC도 함께 보장
-        await _maybe_start_or_connect(self.plc, "PLC")   # ← connect()
-        await _maybe_start_or_connect(self.mfc, "MFC")   # ← start()
-        await _maybe_start_or_connect(self.ig,  "IG")    # ← start()
+        await _maybe_start_or_connect(self.plc, "PLC")
+        await _maybe_start_or_connect(self.mfc, "MFC")
+        await _maybe_start_or_connect(self.ig,  "IG")
         if self.dc_pulse:
             await _maybe_start_or_connect(self.dc_pulse, "DCPulse")
         if self.rf_pulse:
             await _maybe_start_or_connect(self.rf_pulse, "RFPulse")
-
 
     # ------------------------------------------------------------------
     # 표시/입력/상태
@@ -979,10 +963,8 @@ class ChamberRuntime:
 
         btn = self._u("processList_button")
         if btn:
-            # 비모달 파일 열기(async)로 실행
             btn.clicked.connect(lambda: self._spawn_detached(self._handle_process_list_clicked_async()))
 
-        # ↓ 이 두 줄 꼭 유지 (현재 아래쪽 정의엔 빠져있었음)
         if self._w_log:
             self._w_log.setMaximumBlockCount(2000)
         self._set_default_ui_values()
@@ -1023,7 +1005,6 @@ class ChamberRuntime:
             else:
                 self.append_log("UI", f"[CH{self.ch}] 단일 공정 UI 업데이트: '{params.get('process_note','')}'")
 
-        # 공통 필드 매핑(존재할 때만)
         _set = self._set
         _set("dcPower_edit", params.get('dc_power', '0'))
 
@@ -1052,7 +1033,6 @@ class ChamberRuntime:
         _set("basePressure_edit", params.get('base_pressure', '0'))
         _set("shutterDelay_edit", params.get('shutter_delay', '0'))
 
-        # 체크박스(존재 시)
         _set("G1_checkbox", params.get('gun1', 'F') == 'T')
         _set("G2_checkbox", params.get('gun2', 'F') == 'T')
         _set("G3_checkbox", params.get('gun3', 'F') == 'T')
@@ -1063,7 +1043,6 @@ class ChamberRuntime:
         _set("dcPower_checkbox", params.get('use_dc_power', 'F') == 'T')
         _set("powerSelect_checkbox", params.get('power_select', 'F') == 'T')
 
-        # 타겟명(존재 시)
         _set("g1Target_name", str(params.get('G1 Target', '')).strip())
         _set("g2Target_name", str(params.get('G2 Target', '')).strip())
         _set("g3Target_name", str(params.get('G3 Target', '')).strip())
@@ -1073,27 +1052,23 @@ class ChamberRuntime:
         if w is None:
             return
         try:
-            # 1) 체크박스/토글류 먼저 (QCheckBox, QRadioButton 등)
             if hasattr(w, "setChecked"):
                 w.setChecked(bool(v))
                 return
 
-            # 2) 숫자 위젯 (QSpinBox/QDoubleSpinBox)
             if hasattr(w, "setValue"):
                 try:
                     w.setValue(v if isinstance(v, (int, float)) else float(str(v)))
                 except Exception:
-                    # 숫자로 못 바꾸면 텍스트로 시도
                     pass
                 else:
                     return
 
-            # 3) 텍스트 위젯
             s = str(v)
-            if hasattr(w, "setPlainText"):   # QPlainTextEdit/QTextEdit
+            if hasattr(w, "setPlainText"):
                 w.setPlainText(s)
                 return
-            if hasattr(w, "setText"):        # QLineEdit 등
+            if hasattr(w, "setText"):
                 w.setText(s)
                 return
         except Exception as e:
@@ -1157,7 +1132,6 @@ class ChamberRuntime:
                     f"다음 장비 연결을 확인하지 못했습니다:\n - {fail_list}\n\n"
                     "케이블/전원/포트 설정 확인 후 재시도")
                 
-                # 🔽 킥했던 워치독을 원복
                 with contextlib.suppress(Exception): self.mfc.set_process_status(False)
                 with contextlib.suppress(Exception):
                     if hasattr(self.ig, "set_process_status"): self.ig.set_process_status(False)
@@ -1202,12 +1176,10 @@ class ChamberRuntime:
         if use_rf_pulse and self.rf_pulse:
             need.append(("RF-Pulse", self.rf_pulse))
 
-        # 진행상황 로그 태스크
         stop_evt = asyncio.Event()
         prog_task = asyncio.create_task(self._preflight_progress_log(need, stop_evt))
 
         try:
-            # 각 장치가 연결될 때까지 대기
             results = await asyncio.gather(
                 *[self._wait_device_connected(dev, name, timeout_s) for name, dev in need],
                 return_exceptions=False
@@ -1227,7 +1199,6 @@ class ChamberRuntime:
             self._post_warning("실행 오류", "다른 공정이 실행 중입니다."); 
             return
 
-        # CSV 자동 시퀀스
         if getattr(self, "process_queue", None):
             if not getattr(self, "_log_file_path", None):
                 first = self.process_queue[0] if self.process_queue else {}
@@ -1238,7 +1209,6 @@ class ChamberRuntime:
             self._start_next_process_from_queue(True)
             return
 
-        # 단일 실행(해당 챔버 UI에서 읽어 옴; CH1은 건셔터/건선택 검사 스킵)
         vals = self._validate_single_run_inputs()
         if vals is None:
             return
@@ -1322,8 +1292,6 @@ class ChamberRuntime:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-        # PLC는 공유: 여기서 close()하지 않음(메인에서 관리)
-
         try:
             await self._shutdown_log_writer()
         except Exception:
@@ -1332,7 +1300,6 @@ class ChamberRuntime:
         self._bg_started = False
         self._devices_started = False  # ✅ 다음 시작 때 장치 start() 다시 보장
 
-    # 메인에서 창 닫을 때 호출
     def shutdown_fast(self) -> None:
         async def run():
             self._cancel_delay_task()
@@ -1377,9 +1344,7 @@ class ChamberRuntime:
         return w.toPlainText().strip() if w else ""
 
     def _validate_single_run_inputs(self) -> dict[str, Any] | None:
-        # CH1: 건셔터/건선택 스킵
         if self.ch == 1:
-            # 가스 검증
             use_ar = bool(getattr(self._u("Ar_checkbox"), "isChecked", lambda: False)())
             use_o2 = bool(getattr(self._u("O2_checkbox"), "isChecked", lambda: False)())
             use_n2 = bool(getattr(self._u("N2_checkbox"), "isChecked", lambda: False)())
@@ -1403,7 +1368,6 @@ class ChamberRuntime:
                 self._post_warning("입력값 확인", "가스 유량 입력을 확인하세요.")
                 return None
 
-            # 파워(DC-Pulse만 강제)
             use_dc_pulse = bool(getattr(self._u("dcPulsePower_checkbox"), "isChecked", lambda: False)())
             if not use_dc_pulse:
                 self._post_warning("선택 오류", "CH1은 DC-Pulse를 반드시 선택해야 합니다.")
@@ -1435,7 +1399,6 @@ class ChamberRuntime:
                     self._post_warning("입력값 확인", "DC-Pulse Duty(%)는 1..99 범위")
                     return None
 
-            # 타겟명(있어도 셔터 없음 → 이름 강제 X)
             g1n = self._get_text("g1Target_name")
             g2n = self._get_text("g2Target_name")
             g3n = self._get_text("g3Target_name")
@@ -1454,8 +1417,6 @@ class ChamberRuntime:
                 "use_power_select": bool(getattr(self._u("powerSelect_checkbox"), "isChecked", lambda: False)()),
             }
 
-        # CH2: 기존 검증 로직과 동일(요약)
-        # (중복을 줄이기 위해 핵심만 유지, 상세 검증은 기존 main.py 로직과 동일하게 적용)
         use_g1 = bool(getattr(self._u("G1_checkbox"), "isChecked", lambda: False)())
         use_g2 = bool(getattr(self._u("G2_checkbox"), "isChecked", lambda: False)())
         use_g3 = bool(getattr(self._u("G3_checkbox"), "isChecked", lambda: False)())
@@ -1630,7 +1591,6 @@ class ChamberRuntime:
         unit_txt = {"s":"초","m":"분","h":"시간","d":"일"}[unit]
         self.append_log("Process", f"'{name}' 단계 감지: {amount}{unit_txt} 대기 시작")
 
-        # 폴링 OFF
         self._apply_polling_targets({"mfc": False, "dc_pulse": False, "rf_pulse": False, "dc": False, "rf": False})
         self._last_polling_targets = None
 
@@ -1664,26 +1624,21 @@ class ChamberRuntime:
         dc_on   = bool(targets.get('dc', False))
         rf_on   = bool(targets.get('rf', False))
 
-        # MFC
         with contextlib.suppress(Exception):
             self.mfc.set_process_status(mfc_on)
 
-        # DC-Pulse
         if self.dc_pulse:
             with contextlib.suppress(Exception):
                 self.dc_pulse.set_process_status(dcpl_on)
 
-        # RF-Pulse
         if self.rf_pulse:
             with contextlib.suppress(Exception):
                 self.rf_pulse.set_process_status(rfpl_on)
 
-        # DC continuous
         if self.dc_power and hasattr(self.dc_power, "set_process_status"):
             with contextlib.suppress(Exception):
                 self.dc_power.set_process_status(dc_on)
 
-        # RF continuous
         if self.rf_power and hasattr(self.rf_power, "set_process_status"):
             with contextlib.suppress(Exception):
                 self.rf_power.set_process_status(rf_on)
@@ -1696,10 +1651,8 @@ class ChamberRuntime:
         line_ui = f"[{now_ui}] [CH{self.ch}:{source}] {msg}"
         line_file = f"[{now_file}] [CH{self.ch}:{source}] {msg}\n"
 
-        # ✅ UI 업데이트를 메인 이벤트루프에 스케줄
         self._soon(self._append_log_to_ui, line_ui)
 
-        # ✅ 파일/큐 작업도 이벤트루프에서만 수행
         if not getattr(self, "_log_file_path", None):
             self._soon(self._prestart_buf.append, line_file)
             return
@@ -1722,28 +1675,10 @@ class ChamberRuntime:
                 self._w_log.appendPlainText(f"[Logger] NAS 폴더 접근 실패 → 로컬 폴백: {local_fallback}")
             return local_fallback
 
-    # def _prepare_log_file(self, params: Mapping[str, Any]) -> None:
-    #     ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-    #     self._log_file_path = self._log_dir / f"CH{self.ch}_{ts}.txt"
-    #     if self._log_fp is None:
-    #         self._log_fp = open(self._log_file_path, "a", encoding="utf-8", newline="")
-    #     if not self._log_writer_task or self._log_writer_task.done():
-    #         self._log_writer_task = asyncio.create_task(self._log_writer_loop(), name=f"LogWriter.CH{self.ch}")
-    #     if self._prestart_buf:
-    #         for line in list(self._prestart_buf):
-    #             self._log_enqueue_nowait(line)  # ✅ 즉시 큐 투입
-    #         self._prestart_buf.clear()
-    #     self.append_log("Logger", f"새 로그 파일 시작: {self._log_file_path.name}")
-    #     note = str(params.get("process_note", "") or params.get("Process_name", "") or f"Run CH{self.ch}")
-    #     self.append_log("MAIN", f"=== '{note}' 공정 준비 (장비 연결부터 기록) ===")
-
-    
     def _prepare_log_file(self, params: Mapping[str, Any]) -> None:
-        # 1) 지역시간을 명시적으로 확정
         now_local = datetime.now().astimezone()
         ts = now_local.strftime("%Y%m%d_%H%M%S")
 
-        # 2) (충돌 방지) 같은 초에 두 번 시작하면 뒤에 _1, _2 붙이기
         base = self._log_dir / f"CH{self.ch}_{ts}"
         path = base.with_suffix(".txt")
         i = 1
@@ -1757,7 +1692,6 @@ class ChamberRuntime:
         if not self._log_writer_task or self._log_writer_task.done():
             self._set_task_later("_log_writer_task", self._log_writer_loop(), name=f"LogWriter.CH{self.ch}")
 
-        # 이하 동일
         if self._prestart_buf:
             for line in list(self._prestart_buf):
                 self._log_enqueue_nowait(line)
@@ -1842,7 +1776,6 @@ class ChamberRuntime:
         _set("dcPulsePower_edit", "100")
         _set("dcPulseFreq_edit", "")
         _set("dcPulseDutyCycle_edit", "")
-
         # RF-Pulse
         _set("rfPulsePower_checkbox", False)
         _set("rfPulsePower_edit", "100")
@@ -1874,8 +1807,6 @@ class ChamberRuntime:
         loop = self._loop
         def _create():
             t = loop.create_task(coro, name=name)
-
-            # ✅ 태스크 예외를 "자기 챔버" 로그로 캡처
             def _done(task: asyncio.Task):
                 if task.cancelled():
                     return
@@ -1890,7 +1821,6 @@ class ChamberRuntime:
                     self.append_log(f"Task{self.ch}", f"[{name or 'task'}] crashed:\n{tb}")
 
             t.add_done_callback(_done)
-
             if store:
                 self._bg_tasks.append(t)
 
@@ -1956,20 +1886,17 @@ class ChamberRuntime:
         except Exception as e:
             self.append_log("MAIN", f"프리플라이트 진행 로그 예외: {e!r}")
 
-    # ChamberRuntime 내부 아무 메서드 위/아래 적당한 곳에 추가
+    # --- UI 위젯 접근/부모/다이얼로그 관리 -----------------------------------
     def _alias_leaf(self, leaf: str) -> str:
         """CH1의 UI 위젯 이름과 공통 이름을 매핑."""
         if self.ch != 1:
             return leaf
         return {
-            # 오타 보정
             "integrationTime_edit": "intergrationTime_edit",
-            # CH1은 rfPulse → dcPulse 네이밍
             "rfPulsePower_checkbox":    "dcPulsePower_checkbox",
             "rfPulsePower_edit":        "dcPulsePower_edit",
             "rfPulseFreq_edit":         "dcPulseFreq_edit",
             "rfPulseDutyCycle_edit":    "dcPulseDutyCycle_edit",
-            # CH1에는 g1/g2/g3 필드가 없고 단일 이름만 있음
             "g1Target_name": "gunTarget_name",
             "g2Target_name": "gunTarget_name",
             "g3Target_name": "gunTarget_name",
@@ -1977,13 +1904,23 @@ class ChamberRuntime:
 
     def _u(self, name: str) -> Any | None:
         """prefix+name 위젯을 가져온다. 없으면 None."""
-        name = self._alias_leaf(name)   # ← 이 한 줄 추가
+        name = self._alias_leaf(name)
         return getattr(self.ui, f"{self.prefix}{name}", None)
-    
-    # ── 비모달 다이얼로그 유틸 ─────────────────────────────────────────────
+
+    def _parent_widget(self) -> Any | None:
+        """메시지/파일 다이얼로그의 합리적 부모 위젯을 찾는다."""
+        for leaf in ("Start_button", "Stop_button", "processState_edit", "logMessage_edit"):
+            w = self._u(leaf)
+            if w is not None:
+                try:
+                    return w.window()
+                except Exception:
+                    return w
+        return None
+
     async def _aopen_file(self, caption="CSV 선택", start_dir="", 
                           name_filter="CSV Files (*.csv);;All Files (*.*)") -> str:
-        dlg = QFileDialog(self._u("") or None, caption, start_dir, name_filter)
+        dlg = QFileDialog(self._parent_widget() or None, caption, start_dir, name_filter)
         dlg.setFileMode(QFileDialog.ExistingFile)
 
         loop = asyncio.get_running_loop()
@@ -2002,18 +1939,45 @@ class ChamberRuntime:
         dlg.open()
         return await fut
 
+    def _ensure_msgbox_store(self):
+        if not hasattr(self, "_msg_boxes"):
+            self._msg_boxes = []
+
     def _post_warning(self, title: str, text: str) -> None:
-        box = QMessageBox(self._u("") or None)
-        box.setWindowTitle(title); box.setText(text)
+        self._ensure_msgbox_store()
+        box = QMessageBox(self._parent_widget() or None)
+        box.setWindowTitle(title)
+        box.setText(text)
         box.setIcon(QMessageBox.Warning)
         box.setStandardButtons(QMessageBox.Ok)
-        box.open()  # ← exec() 금지 (비모달)
+        box.setWindowModality(Qt.WindowModality.WindowModal)  # 부모 창 기준 모달
+        box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+
+        # 참조 유지 & 종료 시 정리
+        self._msg_boxes.append(box)
+        def _cleanup(_res: int):
+            with contextlib.suppress(ValueError):
+                self._msg_boxes.remove(box)
+            box.deleteLater()
+        box.finished.connect(_cleanup)
+
+        box.open()  # 비모달(이벤트 루프 방해 없음)
 
     def _post_critical(self, title: str, text: str) -> None:
-        box = QMessageBox(self._u("") or None)
-        box.setWindowTitle(title); box.setText(text)
+        self._ensure_msgbox_store()
+        box = QMessageBox(self._parent_widget() or None)
+        box.setWindowTitle(title)
+        box.setText(text)
         box.setIcon(QMessageBox.Critical)
         box.setStandardButtons(QMessageBox.Ok)
-        box.open()  # ← exec() 금지 (비모달)
+        box.setWindowModality(Qt.WindowModality.WindowModal)
+        box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
 
+        self._msg_boxes.append(box)
+        def _cleanup(_res: int):
+            with contextlib.suppress(ValueError):
+                self._msg_boxes.remove(box)
+            box.deleteLater()
+        box.finished.connect(_cleanup)
 
+        box.open()
