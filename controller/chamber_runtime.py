@@ -320,6 +320,15 @@ class ChamberRuntime:
                 raw = str(cmd)
                 nname = raw.upper()
                 onb = bool(on)
+
+                # ⬇️ 추가: 요청 로그 + 총 소요시간 계측 시작
+                t0 = 0.0
+                try:
+                    t0 = asyncio.get_running_loop().time()
+                except RuntimeError:
+                    pass
+                self.append_log("PLC", f"[CH{self.ch}] 요청: {nname} -> {onb} (raw='{raw}', ch={self.ch})")
+
                 try:
                     # CH1: 셔터 관련은 무시(항상 오픈이므로)
                     if self.ch == 1 and nname in ("G1", "G2", "G3"):
@@ -340,7 +349,25 @@ class ChamberRuntime:
                         await self.plc.write_switch(raw, onb)
 
                     self.process_controller.on_plc_confirmed(nname)
+
+                    # ⬇️ 추가: 완료 로그(+ 소요시간)
+                    dt_ms = 0.0
+                    try:
+                        if t0:
+                            dt_ms = (asyncio.get_running_loop().time() - t0) * 1000.0
+                    except RuntimeError:
+                        pass
+                    self.append_log("PLC", f"[CH{self.ch}] 완료: {nname} -> {onb} ({dt_ms:.0f} ms)")
+
                 except Exception as e:
+                    # ⬇️ 추가: 실패 로그(+ 소요시간)
+                    dt_ms = 0.0
+                    try:
+                        if t0:
+                            dt_ms = (asyncio.get_running_loop().time() - t0) * 1000.0
+                    except RuntimeError:
+                        pass
+
                     self.process_controller.on_plc_failed(nname, str(e))
                     if self.chat:
                         with contextlib.suppress(Exception):

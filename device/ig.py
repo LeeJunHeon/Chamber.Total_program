@@ -124,7 +124,6 @@ class AsyncIG:
         #await self._emit_status("IG 워치독/워커 시작")
 
     async def cleanup(self):
-        await self._emit_status("IG 종료 절차 시작")
         # OFF 보내기 전에 재점등 금지/대기 해제만
         self._waiting_active = False
         self._suspend_reignite = True

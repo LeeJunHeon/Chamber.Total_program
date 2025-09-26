@@ -128,8 +128,8 @@ class AsyncMFC:
         self._just_reopened: bool = False
 
 # =============== debug, R69 하지 않는 ==================
-        # 현재 ON/OFF 상태를 R69 없이 자체 추적하기 위한 섀도우 마스크(좌→우: ch1..ch5)
-        self._mask_shadow: str = "00000"
+        # 현재 ON/OFF 상태를 R69 없이 자체 추적하기 위한 섀도우 마스크(좌→우: ch1..ch4)
+        self._mask_shadow: str = "0000"
 # =============== debug, R69 하지 않는 ==================
 
     # ---------- 공용 API ----------
@@ -433,7 +433,7 @@ class AsyncMFC:
         line = await self._send_and_wait_line(
             self._mk_cmd("READ_PRESSURE"),
             tag="[READ_PRESSURE]", timeout_ms=MFC_TIMEOUT,
-            expect_prefixes=("P", "S")  # 장비에 따라 'P...', 'S1+..' 등
+            expect_prefixes=("P",)  
         )
         if not (line and line.strip()):
             await self._emit_failed("READ_PRESSURE", "응답 없음")
@@ -856,7 +856,7 @@ class AsyncMFC:
                 # R5 → pressure 이벤트
                 line = await self._send_and_wait_line(self._mk_cmd("READ_PRESSURE"),
                                                       tag="[POLL PRESS]", timeout_ms=MFC_TIMEOUT,
-                                                      expect_prefixes=("P", "S"))
+                                                      expect_prefixes=("P",))
                 if line:
                     self._emit_pressure_from_line_sync(line.strip())
 
@@ -1080,7 +1080,7 @@ class AsyncMFC:
         else:
             payload = s
         bits = "".join(ch for ch in payload if ch in "01")
-        return bits[:5]
+        return bits[:4]
 
     def _parse_valve_ok(self, origin_cmd: str, line: str) -> bool:
         s = (line or "").strip()
@@ -1324,8 +1324,8 @@ class AsyncMFC:
 # =============== debug, R69 하지 않는 ==================
     def _mask_set(self, channel: int, on: bool) -> str:
         """섀도우 마스크를 바탕으로 특정 채널 비트만 갱신한 목표 마스크 문자열 반환."""
-        bits = list((self._mask_shadow or "00000").ljust(5, '0')[:5])
-        if 1 <= channel <= 5:
+        bits = list((self._mask_shadow or "0000").ljust(4, '0')[:4])
+        if 1 <= channel <= 4:
             bits[channel - 1] = '1' if on else '0'
         return ''.join(bits)
 # =============== debug, R69 하지 않는 ==================
