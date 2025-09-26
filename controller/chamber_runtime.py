@@ -617,6 +617,7 @@ class ChamberRuntime:
                             self._spawn_detached(self._stop_device_watchdogs(light=False), name="FullCleanup")
                         self._pending_device_cleanup = False
                         self._pc_stopping = False
+                        continue
 
                     self._pc_stopping = False
                     self._start_next_process_from_queue(ok)
@@ -882,7 +883,9 @@ class ChamberRuntime:
         try:
             # ✅ 여기가 핵심: 장치 기동 보장
             self._ensure_devices_started()   # ← 이것만 호출해야 합니다. (자기 자신 호출 금지!)
-
+            
+            # ✅ PC 이벤트 펌프도 항상 살아있게 보장
+            self._ensure_task_alive("Pump.PC", self._pump_pc_events)
             # 스타터/펌프 태스크 보장
             self._ensure_task_alive(f"Pump.MFC.{self.ch}", self._pump_mfc_events)
             self._ensure_task_alive(f"Pump.IG.{self.ch}", self._pump_ig_events)
