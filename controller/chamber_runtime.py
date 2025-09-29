@@ -198,6 +198,7 @@ class ChamberRuntime:
         supports_rf_cont: Optional[bool] = None,   # RF 연속
         supports_dc_pulse: Optional[bool] = None,  # DC-Pulse
         supports_rf_pulse: Optional[bool] = None,  # RF-Pulse
+        owns_plc: Optional[bool] = None,   # ← 추가: PLC 로그 소유자
     ) -> None:
         self.ui = ui
         self.ch = int(chamber_no)
@@ -216,6 +217,7 @@ class ChamberRuntime:
         self._delay_task: Optional[asyncio.Task] = None
         self._auto_connect_enabled = True  # ← 실패시 False로 내려 자동 재연결 차단
         self._run_select: dict[str, bool] | None = None  # ← 이번 런에서 펄스 선택 상태
+        self._owns_plc = bool(owns_plc if owns_plc is not None else (int(chamber_no) == 1))  # 기본 CH1
 
         # QMessageBox 참조 저장소(비모달 유지용)
         self._msg_boxes: list[QMessageBox] = []  # ← 추가
@@ -942,30 +944,36 @@ class ChamberRuntime:
         self._spawn_detached(self._start_devices_task(), name=f"DevStart.CH{self.ch}")
 
     async def _start_devices_task(self) -> None:
-        async def _maybe_start_or_connect(obj, label: str):
+        async def _maybe_start_or_connect(obj, label: str, *, log: bool = True):
             if not obj:
                 return
             try:
                 meth = getattr(obj, "start", None) or getattr(obj, "connect", None)
                 if not callable(meth):
-                    self.append_log(label, "start/connect 메서드 없음 → skip")
+                    if log:
+                        self.append_log(label, "start/connect 메서드 없음 → skip")
                     return
                 res = meth()
                 if inspect.isawaitable(res):
                     await res
-                self.append_log(label, f"{meth.__name__} 호출 완료")
+                if log:
+                    self.append_log(label, f"{meth.__name__} 호출 완료")
             except Exception as e:
                 try:
                     name = meth.__name__  # type: ignore[attr-defined]
                 except Exception:
                     name = "start/connect"
-                self.append_log(label, f"{name} 실패: {e!r}")
+                if log:
+                    self.append_log(label, f"{name} 실패: {e!r}")
 
         sel = getattr(self, "_run_select", None) or {}
 
-        await _maybe_start_or_connect(self.plc, "PLC")
-        await _maybe_start_or_connect(self.mfc, "MFC")  # 항상 필수
-        await _maybe_start_or_connect(self.ig,  "IG")   # 항상 필수
+        # PLC는 공유 → 소유자만 로그 출력 (비소유자는 연결 시도하되 로그 무음)
+        await _maybe_start_or_connect(self.plc, "PLC", log=self._owns_plc)
+
+        # 나머지는 기존대로 각 챔버에서 로그 출력
+        await _maybe_start_or_connect(self.mfc, "MFC")
+        await _maybe_start_or_connect(self.ig,  "IG")
 
         # 펄스 장비는 '이번 런에서 선택된 경우에만' 연결 시도
         if self.dc_pulse and sel.get("dc_pulse", False):

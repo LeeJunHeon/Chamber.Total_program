@@ -90,6 +90,7 @@ class DCPowerAsync:
         self._rampdown_task: Optional[asyncio.Task] = None
         self._adjust_task: Optional[asyncio.Task] = None
         self._event_q: asyncio.Queue[DCPowerEvent] = asyncio.Queue(maxsize=256)
+        self._sent_target_reached = False
 
     # ======= 퍼블릭 이벤트 스트림 =======
     async def events(self) -> AsyncGenerator[DCPowerEvent, None]:
@@ -108,6 +109,7 @@ class DCPowerAsync:
         self._is_running = True
         await self._emit_state_changed(True)
         self.state = "MAINTAINING"  # ← 바로 유지 모드
+        self._sent_target_reached = False
         await self._emit_status(f"프로세스 시작. 목표: {self.target_power:.1f} W (직접 설정)")
 
         # 파워 ON 시 폴링 ON
@@ -250,7 +252,9 @@ class DCPowerAsync:
 
             # 허용 오차 내 → 보정 스킵
             if abs(error) <= float(DC_TOLERANCE_POWER):
-                self._ev_nowait(DCPowerEvent(kind="target_reached"))
+                if not self._sent_target_reached:
+                    self._ev_nowait(DCPowerEvent(kind="target_reached"))
+                    self._sent_target_reached = True
                 return
 
             # 마지막 전송값 기준으로 한 스텝 보정 (측정이 낮으면 +, 높으면 -)

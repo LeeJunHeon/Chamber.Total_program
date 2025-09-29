@@ -213,7 +213,7 @@ class PLCConfig:
     # ── DC Power 설정 ───────────────────────────────────────────
     # 원하는 파워[W] → DAC 코드 변환용. 직선 스케일(0~FULL)
     dc_power_min_w: float = 0.0
-    dc_power_max_w: float = 500.0      # 장비 정격에 맞춰 수정
+    dc_power_max_w: float = 1000.0      # 장비 정격에 맞춰 수정
     dc_dac_full_scale: int = 4000      # DAC 스케일 4000
     dc_dac_offset: int = 0             # 필요 시 오프셋
 
@@ -222,8 +222,8 @@ class PLCConfig:
 
     # READ 스케일: D00000, D00001이 ‘원시카운트’라면 스케일 적용
     # 예) 0..4000 카운트 = 0..400 V, 0..10 A 라면:
-    dc_v_scale: float = 0.1            # 400 / 4000 = 0.1 V/count
-    dc_i_scale: float = 0.0025         # 10  / 4000 = 0.0025 A/count
+    dc_v_scale: float = 0.1             # ← 0.05 ➜ 0.1
+    dc_i_scale: float = 0.005           # ← 0.000625 ➜ 0.005
 
 # ======================================================
 # 단일 클래스: AsyncPLC (저수준+고수준)

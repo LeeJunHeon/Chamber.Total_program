@@ -245,6 +245,7 @@ class AsyncDCPulse:
         # 마스터 모드: 기본 host (기존 동작 유지), 필요 시 'remote' 등으로 지정
         master: Literal["host", "remote", "local", "origin", "always"] = "host",
     ):
+        '''
         # 1) 항상 Host 권한으로 고정
         await self.set_master_host_all()
 
@@ -277,8 +278,8 @@ class AsyncDCPulse:
 
         # duty만 숫자인 경우(주파수 미지정)는 off_time_us 계산 불가 → 유지
         # 필요하면 별도 API(set_off_time_us)로 직접 지정하세요.
-
-        # 4) 출력 레퍼런스(Power) 설정
+        '''
+        # 4) 출력 Setpoint(Power) 설정
         await self.set_reference_power(power_w)
 
         # 5) 출력 ON
