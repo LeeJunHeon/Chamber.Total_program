@@ -349,9 +349,10 @@ class ChamberRuntime:
                 self.append_log("PLC", f"[CH{self.ch}] 요청: {nname} -> {onb} (raw='{raw}', ch={self.ch})")
 
                 try:
-                    # CH1: 셔터 관련은 무시(항상 오픈이므로)
-                    if self.ch == 1 and nname in ("G1", "G2", "G3"):
-                        self.append_log("PLC", f"[CH1] '{nname}' 명령은 무시(건 셔터 없음).")
+                    # CH1: 셔터 + N2 가스 무시
+                    if self.ch == 1 and nname in ("G1", "G2", "G3", "N2"):
+                        reason = "건 셔터 없음" if nname in ("G1", "G2", "G3") else "N2 라인 없음"
+                        self.append_log("PLC", f"[CH1] '{nname}' 명령은 무시({reason}).")
                         self.process_controller.on_plc_confirmed(nname)
                         return
 
@@ -395,6 +396,14 @@ class ChamberRuntime:
             self._spawn_detached(run())
 
         def cb_mfc(cmd: str, args: Mapping[str, Any]) -> None:
+            # 🔒 CH1에선 N2 가스를 완전히 무시
+            gas = str(args.get("gas", "")).upper() if isinstance(args, Mapping) else ""
+            if self.ch == 1 and gas == "N2":
+                self.append_log("MFC", "[CH1] N2 요청 무시 (라인 없음)")
+                # 프로세스 진행이 끊기지 않도록 '확인' 신호만 넘겨줌
+                self.process_controller.on_mfc_confirmed(cmd)
+                return
+            
             self._spawn_detached(self.mfc.handle_command(cmd, args))
 
         def cb_dc_power(value: float):
@@ -1585,7 +1594,7 @@ class ChamberRuntime:
         g2t = str(raw.get("G2 Target", "")).strip()
         g3t = str(raw.get("G3 Target", "")).strip()
 
-        return {
+        res: NormParams = {
             "base_pressure":     fget("base_pressure", "1e-5"),
             "working_pressure":  fget("working_pressure", "0"),
             "process_time":      fget("process_time", "0"),
@@ -1621,6 +1630,15 @@ class ChamberRuntime:
             "G1 Target":         g1t, "G2 Target": g2t, "G3 Target": g3t,
             "use_power_select":  tf(raw.get("power_select", "F")),
         }
+
+        # 🔒 CH1은 N2 라인이 없으므로 강제 무시
+        if self.ch == 1:
+            if res.get("use_n2") or (res.get("n2_flow", 0.0) or 0.0) > 0.0:
+                self.append_log("Params", "CH1은 N2 미지원 → N2 설정을 무시합니다.")
+            res["use_n2"] = False
+            res["n2_flow"] = 0.0
+
+        return res
 
     # --- delay 단계 ---
     def _cancel_delay_task(self):

@@ -4,7 +4,7 @@
 rf_pulse.py — asyncio 기반 CESAR AE RS-232 Pulse 컨트롤러
 
 핵심(구 PyQt6 버전과 동등):
-  - serial_asyncio + asyncio.Protocol 기반 완전 비동기 시리얼 I/O
+  - asyncio.open_connection + 전용 TCP reader loop 기반 비동기 I/O
   - 단일 명령 큐(타임아웃/재시도/인터커맨드 gap)로 송수신 직렬화
   - 워치독(지수 백오프) 자동 재연결
   - ACK(0x06) / NAK(0x15) / AE Bus 프레임 파서
@@ -180,14 +180,10 @@ class RFPulseAsync:
         self._reconnect_backoff_ms = RFPULSE_RECONNECT_BACKOFF_START_MS
         self._just_reopened: bool = False
 
-        # 재연결 백오프
-        self._reconnect_backoff_ms = RFPULSE_RECONNECT_BACKOFF_START_MS
-
         # 런타임 상태
         self.addr = int(RFPULSE_ADDR) if RFPULSE_ADDR is not None else 0
         self._closing: bool = False
         self._stop_requested: bool = False
-        self._need_reopen: bool = False
 
         # 폴링/전력 캐시
         self._poll_busy: bool = False
@@ -510,7 +506,7 @@ class RFPulseAsync:
             except Exception as e:
                 ok = False
                 fail_reason = f"error:{e}"
-                self._need_reopen = True
+                self._on_tcp_disconnected()   # ← 실제로 끊어서 워치독이 다시 붙도록
 
             # 결과 처리
             if ok:
