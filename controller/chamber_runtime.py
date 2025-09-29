@@ -9,7 +9,7 @@ from pathlib import Path
 from datetime import datetime
 from collections import deque
 
-from PySide6.QtWidgets import QMessageBox, QFileDialog, QPlainTextEdit, QDialog
+from PySide6.QtWidgets import QMessageBox, QFileDialog, QPlainTextEdit, QDialog, QApplication
 from PySide6.QtGui import QTextCursor
 from PySide6.QtCore import Qt  # ← 추가: 모달리티/속성 지정용
 
@@ -239,7 +239,10 @@ class ChamberRuntime:
 
         # 그래프 컨트롤러
         self.graph = GraphController(self._u("rgaGraph_widget"), self._u("oesGraph_widget"))
-        self.graph.reset()
+        try:
+            self.graph.reset()
+        except Exception:
+            self.append_log("Graph", "reset skipped (headless)")
 
         # 로거
         self.data_logger = DataLogger(ch=self.ch, csv_dir=Path(r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database"))
@@ -518,7 +521,7 @@ class ChamberRuntime:
             async def _run():
                 try:
                     self._ensure_background_started()
-                    self._soon(self.graph.clear_rga_plot)
+                    self._soon(self._graph_clear_rga_plot_safe)
                     if self.rga:
                         await self.rga.scan_histogram_to_csv(self.cfg.RGA_CSV_PATH)
                     else:
@@ -583,7 +586,7 @@ class ChamberRuntime:
                         self.data_logger.start_new_log_session(payload.get("params", {}))
                     except Exception:
                         pass
-                    self._soon(self.graph.reset)
+                    self._soon(self._graph_reset_safe)
                     if self.chat:
                         with contextlib.suppress(Exception):
                             self.chat.notify_process_started(payload.get("params", {}))
@@ -733,9 +736,7 @@ class ChamberRuntime:
             elif ev.kind == "data":
                 def _draw_then_finish(x=ev.mass_axis, y=ev.pressures):
                     try:
-                        x_list = x.tolist() if hasattr(x, "tolist") else x
-                        y_list = y.tolist() if hasattr(y, "tolist") else y
-                        self.graph.update_rga_plot(x_list, y_list)
+                        self._graph_update_rga_safe(x, y)
                     finally:
                         self.process_controller.on_rga_finished()
                 self._soon(_draw_then_finish)
@@ -996,6 +997,10 @@ class ChamberRuntime:
     # ------------------------------------------------------------------
     # 파일 로딩 / UI 반영
     def _connect_my_buttons(self) -> None:
+        if not self._has_ui():
+            self._set_default_ui_values()  # 필요 없으면 생략 가능
+            return
+
         btn = self._u("Start_button")
         if btn: btn.clicked.connect(self._handle_start_clicked)
 
@@ -1262,6 +1267,10 @@ class ChamberRuntime:
     def _handle_start_clicked(self, _checked: bool = False):
         if self.process_controller.is_running:
             self._post_warning("실행 오류", "다른 공정이 실행 중입니다."); 
+            return
+        
+        if not self._has_ui() and not getattr(self, "process_queue", None):
+            self.append_log("MAIN", "headless: 수동 시작 비활성화 (CSV 자동 실행만 지원)")
             return
         
         # 재시도: 사용자가 Start를 누른 시점부터 자동 연결 허용
@@ -1680,6 +1689,26 @@ class ChamberRuntime:
         self._cancel_delay_task()
         self._set_task_later("_delay_task", self._delay_sleep_then_continue(name, duration_s), name=f"Delay:{name}")
         return True
+    
+    def _graph_reset_safe(self) -> None:
+        try:
+            self.graph.reset()
+        except Exception:
+            self.append_log("Graph", "reset skipped (headless)")
+
+    def _graph_clear_rga_plot_safe(self) -> None:
+        try:
+            self.graph.clear_rga_plot()
+        except Exception:
+            self.append_log("Graph", "clear_rga_plot skipped (headless)")
+
+    def _graph_update_rga_safe(self, x, y) -> None:
+        try:
+            x_list = x.tolist() if hasattr(x, "tolist") else x
+            y_list = y.tolist() if hasattr(y, "tolist") else y
+            self.graph.update_rga_plot(x_list, y_list)
+        except Exception as e:
+            self.append_log("Graph", f"update_rga_plot skipped: {e!r}")
 
     def _safe_clear_oes_plot(self) -> None:
         try: self.graph.clear_oes_plot()
@@ -1990,6 +2019,8 @@ class ChamberRuntime:
     def _u(self, name: str) -> Any | None:
         """prefix+name 위젯을 가져온다. 없으면 None."""
         name = self._alias_leaf(name)
+        if not getattr(self, "ui", None):
+            return None
         return getattr(self.ui, f"{self.prefix}{name}", None)
 
     def _parent_widget(self) -> Any | None:
@@ -2005,6 +2036,9 @@ class ChamberRuntime:
 
     async def _aopen_file(self, caption="CSV 선택", start_dir="", 
                           name_filter="CSV Files (*.csv);;All Files (*.*)") -> str:
+        if not self._has_ui():
+            self.append_log("File", "headless: 파일 선택 UI 생략"); return ""
+
         dlg = QFileDialog(self._parent_widget() or None, caption, start_dir, name_filter)
         dlg.setFileMode(QFileDialog.ExistingFile)
 
@@ -2029,6 +2063,9 @@ class ChamberRuntime:
             self._msg_boxes = []
 
     def _post_warning(self, title: str, text: str) -> None:
+        if not self._has_ui():
+            self.append_log("WARN", f"{title}: {text}"); return
+
         self._ensure_msgbox_store()
         box = QMessageBox(self._parent_widget() or None)
         box.setWindowTitle(title)
@@ -2049,6 +2086,9 @@ class ChamberRuntime:
         box.open()  # 비모달(이벤트 루프 방해 없음)
 
     def _post_critical(self, title: str, text: str) -> None:
+        if not self._has_ui():
+            self.append_log("ERROR", f"{title}: {text}"); return
+
         self._ensure_msgbox_store()
         box = QMessageBox(self._parent_widget() or None)
         box.setWindowTitle(title)
@@ -2066,3 +2106,10 @@ class ChamberRuntime:
         box.finished.connect(_cleanup)
 
         box.open()
+
+    def _has_ui(self) -> bool:
+        try:
+            return QApplication.instance() is not None and self._parent_widget() is not None
+        except Exception:
+            return False
+
