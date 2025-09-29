@@ -1,11 +1,11 @@
-# device/oes.py  (또는 너의 파일명)
+# device/oes.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import asyncio, ctypes, csv
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import AsyncGenerator, Literal, Optional
+from typing import AsyncGenerator, Literal, Optional, List, Union
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -17,8 +17,8 @@ EventKind = Literal["status", "data", "finished"]
 class OESEvent:
     kind: EventKind
     message: Optional[str] = None
-    x: Optional[np.ndarray] = None
-    y: Optional[np.ndarray] = None
+    x: Optional[List[float]] = None   # ← 변경
+    y: Optional[List[float]] = None   # ← 변경
     success: Optional[bool] = None
 
 class OESAsync:
@@ -30,9 +30,20 @@ class OESAsync:
         sample_interval_s: float = 1.0,
         avg_count: int = OES_AVG_COUNT,
         debug_print: bool = DEBUG_PRINT,
+        # === 추가: 챔버/USB 인덱스 매핑 ===
+        chamber: int = 2,                 # 1→USB 0, 2→USB 1
+        usb_index: Optional[int] = None,  # 지정 시 이 값을 우선 사용
     ):
         self._dll_path = dll_path
-        self._save_dir = Path(save_directory); self._save_dir.mkdir(parents=True, exist_ok=True)
+
+        # 저장 경로를 CH{chamber}로 정규화
+        p = Path(save_directory)
+        if p.name.upper() in {"CH1", "CH2"}:
+            p = p.parent / f"CH{int(chamber)}"
+        else:
+            p = p / f"CH{int(chamber)}"
+        self._save_dir = p; self._save_dir.mkdir(parents=True, exist_ok=True)
+
         self._sample_interval_s = float(sample_interval_s)
         self._avg_count = int(max(1, avg_count))
         self._debug = debug_print
@@ -49,14 +60,18 @@ class OESAsync:
         self._deadline_task: Optional[asyncio.Task] = None
 
         # 데이터 저장
-        self.measured_rows: list[list[float]] = []
+        self.measured_rows: list[list[Union[str, float]]] = []
         self._start_time_str: str = ""
 
         # 이벤트 큐
         self._ev_q: asyncio.Queue[OESEvent] = asyncio.Queue(maxsize=256)
 
-        # ⭐ 전용 워커 스레드(모든 DLL 호출은 여기서만)
+        # 전용 워커 스레드(모든 DLL 호출은 여기서만)
         self._exec = ThreadPoolExecutor(max_workers=1, thread_name_prefix="OESWorker")
+
+        # === 추가: 챔버→USB 인덱스 매핑 확정
+        self._chamber = int(chamber)
+        self._usb_index = int(usb_index) if usb_index is not None else (0 if self._chamber == 1 else 1)
 
     # -------- 공용 헬퍼 --------
     async def _call(self, func, *args, **kwargs):
@@ -131,33 +146,37 @@ class OESAsync:
         self.sp_dll = ctypes.CDLL(self._dll_path)
         self._setup_dll_functions()
 
-        result, sChannel = self._test_all_channels()
-        if result < 0:
-            self._safe_close_channel_blocking()
-            return False, f"장비 검색 실패, 코드: {result}"
-        self.sChannel = int(sChannel)
+        # 장치 검색은 참고용(에러 무시 가능) — 채널 선택은 우리가 강제
+        try:
+            _res, _order = self._test_all_channels()
+        except Exception:
+            _res, _order = (0, 0)
+
+        # === 핵심: 챔버→USB 인덱스 강제 매핑
+        self.sChannel = int(self._usb_index)
 
         r = self.sp_dll.spSetupGivenChannel(self.sChannel)
         if r < 0:
             self._safe_close_channel_blocking()
-            return False, f"채널 설정 실패: {r}"
+            return False, f"채널 설정 실패: USB{self.sChannel} (코드 {r})"
 
         r_model, model = self._get_model(self.sChannel)
         if r_model < 0:
             self._safe_close_channel_blocking()
-            return False, f"모델 조회 실패: {r_model}"
+            return False, f"모델 조회 실패(USB{self.sChannel}): {r_model}"
 
         r = self.sp_dll.spInitGivenChannel(self.sChannel, model)
         if r < 0:
             self._safe_close_channel_blocking()
-            return False, f"채널 초기화 실패: {r}"
+            return False, f"채널 초기화 실패(USB{self.sChannel}): {r}"
 
         res_wl, wl = self._get_wavelength_table(self.sChannel)
         if res_wl < 0 or wl is None or len(wl) < 1034:
             self._safe_close_channel_blocking()
-            return False, "파장 테이블 로드 실패"
+            return False, f"파장 테이블 로드 실패(USB{self.sChannel})"
+
         self.wl_table = wl
-        return True, "초기화 성공"
+        return True, f"초기화 성공: Chamber {self._chamber} → USB{self.sChannel}"
 
     def _apply_device_settings_blocking(self, integration_time_ms: int):
         self.sp_dll.spSetBaseLineCorrection(self.sChannel)    # type: ignore
@@ -235,7 +254,7 @@ class OESAsync:
         self._stopping = False
         self.measured_rows = []
         self._start_time_str = datetime.now().strftime("%Y%m%d_%H%M%S")
-        await self._status(f"{duration_sec/60:.1f}분 동안 측정을 시작합니다.")
+        await self._status(f"{duration_sec/60:.1f}분 동안 측정을 시작합니다. (Ch{self._chamber} / USB{self.sChannel})")
 
         try:
             await self._call(self._apply_device_settings_blocking, integration_time_ms)
@@ -275,9 +294,15 @@ class OESAsync:
                     return
 
                 if x is not None and y is not None:
+                    # 안전하게 1D float 리스트로 변환
+                    x_list = np.asarray(x, dtype=float).ravel().tolist()
+                    y_list = np.asarray(y, dtype=float).ravel().tolist()
+
                     current_time = datetime.now().strftime("%H:%M:%S")
-                    self.measured_rows.append([current_time] + y.tolist())
-                    self._ev_nowait(OESEvent(kind="data", x=x, y=y))
+                    self.measured_rows.append([current_time] + y_list)
+
+                    # ← 여기서 리스트로 넣어주면 소비 측에서 bool 평가해도 문제 없음
+                    self._ev_nowait(OESEvent(kind="data", x=x_list, y=y_list))
 
                 await asyncio.sleep(self._sample_interval_s)
         except asyncio.CancelledError:

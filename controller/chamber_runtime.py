@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import csv, asyncio, contextlib, inspect, re, traceback
 from dataclasses import dataclass
-from typing import Any, Callable, Coroutine, Deque, Literal, Mapping, Optional, Sequence, TypedDict, cast
+from typing import Any, Callable, Coroutine, Deque, Literal, Mapping, Optional, Sequence, TypedDict, cast, Union
 from pathlib import Path
 from datetime import datetime
 from collections import deque
@@ -213,6 +213,8 @@ class ChamberRuntime:
         self._last_polling_targets: TargetsMap | None = None
         self._last_state_text: str | None = None
         self._delay_task: Optional[asyncio.Task] = None
+        self._auto_connect_enabled = True  # ← 실패시 False로 내려 자동 재연결 차단
+        self._run_select: dict[str, bool] | None = None  # ← 이번 런에서 펄스 선택 상태
 
         # QMessageBox 참조 저장소(비모달 유지용)
         self._msg_boxes: list[QMessageBox] = []  # ← 추가
@@ -221,7 +223,10 @@ class ChamberRuntime:
         if supports_dc_cont  is None: supports_dc_cont  = (self.ch == 2)
         if supports_rf_cont  is None: supports_rf_cont  = False
         if supports_dc_pulse is None: supports_dc_pulse = (self.ch == 1)
-        if supports_rf_pulse is None: supports_rf_pulse = (self.ch == 2)
+        # ========================== DEBUG ==========================
+        #if supports_rf_pulse is None: supports_rf_pulse = (self.ch == 2)
+        if supports_rf_pulse is None: supports_rf_pulse = False
+        # ========================== DEBUG ==========================
 
         self.supports_dc_cont  = bool(supports_dc_cont)
         self.supports_rf_cont  = bool(supports_rf_cont)
@@ -255,7 +260,7 @@ class ChamberRuntime:
         self.mfc = AsyncMFC(host=mfc_host, port=mfc_port, enable_verify=False)
         self.ig  = AsyncIG(host=ig_host,  port=ig_port)
 
-        self.oes = OESAsync()
+        self.oes = OESAsync(chamber=self.ch)
 
         # RGA: config에서 연결 정보 꺼내 생성(단일/채널별 모두 지원)
         self.rga = None  # type: ignore
@@ -412,7 +417,11 @@ class ChamberRuntime:
             if self.rf_power:
                 self._spawn_detached(self.rf_power.cleanup())
 
-        def cb_dc_pulse_start(power: float, freq: int | None, duty: int | None) -> None:
+        def cb_dc_pulse_start(
+            power: float,
+            freq: Union[int, float, str, None],
+            duty: Union[int, float, str, None],
+        ) -> None:
             async def run():
                 if not self.dc_pulse:
                     self.append_log("DCPulse", "DC-Pulse 미지원 챔버입니다."); return
@@ -827,12 +836,20 @@ class ChamberRuntime:
                 if k == "status":
                     self.append_log(f"OES{self.ch}", ev.message or ""); continue
                 if k in ("data", "spectrum", "frame"):
-                    x = getattr(ev, "x", None) or getattr(ev, "wavelengths", getattr(ev, "lambda_axis", None))
-                    y = getattr(ev, "y", None) or getattr(ev, "intensities", getattr(ev, "counts", None))
+                    x = getattr(ev, "x", None)
+                    if x is None: x = getattr(ev, "wavelengths", None)
+                    if x is None: x = getattr(ev, "lambda_axis", None)
+
+                    y = getattr(ev, "y", None)
+                    if y is None: y = getattr(ev, "intensities", None)
+                    if y is None: y = getattr(ev, "counts", None)
+
                     if x is not None and y is not None:
-                        self._post_update_oes_plot(x, y)
+                        x_list = x.tolist() if hasattr(x, "tolist") else list(x)
+                        y_list = y.tolist() if hasattr(y, "tolist") else list(y)
+                        self._post_update_oes_plot(x_list, y_list)
                     else:
-                        self.append_log(f"OES{self.ch}", f"경고: 데이터 필드 없음: {ev!r}")
+                        self.append_log(f"OES{self.ch}", f"경고: 데이터 필드 없음: kind={k}")
                     continue
                 if k == "finished":
                     if bool(getattr(ev, "success", False)):
@@ -863,24 +880,35 @@ class ChamberRuntime:
         self._spawn_detached(coro_factory(), store=True, name=name)
 
     def _ensure_background_started(self) -> None:
+        # 🔒 실패 등으로 자동 연결 차단 중이면 아무 것도 올리지 않음
+        if not getattr(self, "_auto_connect_enabled", True):
+            return
         if getattr(self, "_ensuring_bg", False):
             return
         self._ensuring_bg = True
         try:
             self._ensure_devices_started()
+            sel = getattr(self, "_run_select", None) or {}
+
             self._ensure_task_alive("Pump.PC", self._pump_pc_events)
-            self._ensure_task_alive(f"Pump.MFC.{self.ch}", self._pump_mfc_events)
-            self._ensure_task_alive(f"Pump.IG.{self.ch}", self._pump_ig_events)
+            self._ensure_task_alive(f"Pump.MFC.{self.ch}", self._pump_mfc_events)  # 항상
+            self._ensure_task_alive(f"Pump.IG.{self.ch}",  self._pump_ig_events)   # 항상
+
             if self.rga:
                 self._ensure_task_alive(f"Pump.RGA.{self.ch}", self._pump_rga_events)
+
+            # 연속 DC/RF는 PLC 경유 제어라 기존 그대로(변경 없음)
             if self.dc_power:
                 self._ensure_task_alive(f"Pump.DC.{self.ch}", self._pump_dc_events)
             if self.rf_power:
                 self._ensure_task_alive(f"Pump.RF.{self.ch}", self._pump_rf_events)
-            if self.dc_pulse:
+
+            # 펄스 펌프는 선택된 경우에만
+            if self.dc_pulse and sel.get("dc_pulse", False):
                 self._ensure_task_alive(f"Pump.DCPulse.{self.ch}", self._pump_dcpulse_events)
-            if self.rf_pulse:
+            if self.rf_pulse and sel.get("rf_pulse", False):
                 self._ensure_task_alive(f"Pump.RFPulse.{self.ch}", self._pump_rfpulse_events)
+
             self._ensure_task_alive(f"Pump.OES.{self.ch}", self._pump_oes_events)
 
             self._bg_started = True
@@ -917,12 +945,16 @@ class ChamberRuntime:
                     name = "start/connect"
                 self.append_log(label, f"{name} 실패: {e!r}")
 
+        sel = getattr(self, "_run_select", None) or {}
+
         await _maybe_start_or_connect(self.plc, "PLC")
-        await _maybe_start_or_connect(self.mfc, "MFC")
-        await _maybe_start_or_connect(self.ig,  "IG")
-        if self.dc_pulse:
+        await _maybe_start_or_connect(self.mfc, "MFC")  # 항상 필수
+        await _maybe_start_or_connect(self.ig,  "IG")   # 항상 필수
+
+        # 펄스 장비는 '이번 런에서 선택된 경우에만' 연결 시도
+        if self.dc_pulse and sel.get("dc_pulse", False):
             await _maybe_start_or_connect(self.dc_pulse, "DCPulse")
-        if self.rf_pulse:
+        if self.rf_pulse and sel.get("rf_pulse", False):
             await _maybe_start_or_connect(self.rf_pulse, "RFPulse")
 
     # ------------------------------------------------------------------
@@ -1117,24 +1149,48 @@ class ChamberRuntime:
 
     async def _start_after_preflight(self, params: NormParams) -> None:
         try:
+            # 시작 시도 직전에만 허용
+            self._auto_connect_enabled = True
+            
+            # ✅ 이번 런에서 실제로 사용할 펄스만 표시(IG/MFC는 항상 연결이므로 제외)
+            use_dc_pulse = bool(params.get("use_dc_pulse", False)) and self.supports_dc_pulse
+            use_rf_pulse = bool(params.get("use_rf_pulse", False)) and self.supports_rf_pulse
+            self._run_select = {
+                "dc_pulse": use_dc_pulse,
+                "rf_pulse": use_rf_pulse,
+            }
+
             self._ensure_background_started()
             self._on_process_status_changed(True)
 
-            use_dc_pulse = bool(params.get("use_dc_pulse", False))
-            use_rf_pulse = bool(params.get("use_rf_pulse", False))
             timeout = 10.0 if (use_dc_pulse or use_rf_pulse) else 8.0
             ok, failed = await self._preflight_connect(params, timeout_s=timeout)
 
             if not ok:
                 fail_list = ", ".join(failed) if failed else "알 수 없음"
                 self.append_log("MAIN", f"필수 장비 연결 실패: {fail_list} → 시작 중단")
-                self._post_critical("장비 연결 실패",
-                    f"다음 장비 연결을 확인하지 못했습니다:\n - {fail_list}\n\n"
-                    "케이블/전원/포트 설정 확인 후 재시도")
-                
+                self._post_critical(
+                    "장비 연결 실패",
+                    "다음 장비 연결을 확인하지 못했습니다:\n"
+                    f" - {fail_list}\n\n케이블/전원/포트 설정 확인 후 재시도"
+                )
+
+                # ✅ 자동 재연결 자체 차단 (이후 _ensure_background_started 가 장치 start 못 올리도록)
+                self._auto_connect_enabled = False
+
+                # ✅ 이미 올라가 있던 워치독/연결 태스크 완전 정지
+                try:
+                    await self._stop_device_watchdogs(light=False)
+                except Exception:
+                    pass
+
+                # (선택) 폴링 상태도 명시적으로 내려줌 — 없어도 무방
                 with contextlib.suppress(Exception): self.mfc.set_process_status(False)
                 with contextlib.suppress(Exception):
                     if hasattr(self.ig, "set_process_status"): self.ig.set_process_status(False)
+                with contextlib.suppress(Exception):
+                    if self.dc_pulse and hasattr(self.dc_pulse, "set_process_status"):
+                        self.dc_pulse.set_process_status(False)
 
                 self._on_process_status_changed(False)
                 self._start_next_process_from_queue(False)
@@ -1198,6 +1254,9 @@ class ChamberRuntime:
         if self.process_controller.is_running:
             self._post_warning("실행 오류", "다른 공정이 실행 중입니다."); 
             return
+        
+        # 재시도: 사용자가 Start를 누른 시점부터 자동 연결 허용
+        self._auto_connect_enabled = True
 
         if getattr(self, "process_queue", None):
             if not getattr(self, "_log_file_path", None):
@@ -1246,7 +1305,9 @@ class ChamberRuntime:
         self._cancel_delay_task()
         if getattr(self, "_pc_stopping", False):
             self.append_log("MAIN", "정지 요청 무시: 이미 종료 절차 진행 중"); return
-
+        
+        # Stop 이후엔 자동 재연결 차단(사용자가 Start로 다시 올릴 때까지)
+        self._auto_connect_enabled = False
         try: self._ensure_background_started()
         except Exception: pass
 
@@ -1299,6 +1360,7 @@ class ChamberRuntime:
 
         self._bg_started = False
         self._devices_started = False  # ✅ 다음 시작 때 장치 start() 다시 보장
+        self._run_select = None
 
     def shutdown_fast(self) -> None:
         async def run():
@@ -1608,7 +1670,10 @@ class ChamberRuntime:
 
     def _post_update_oes_plot(self, x: Sequence[float], y: Sequence[float]) -> None:
         def _safe_draw():
-            try: self.graph.update_oes_plot(x, y)
+            try:
+                xx = x.tolist() if hasattr(x, "tolist") else list(x)
+                yy = y.tolist() if hasattr(y, "tolist") else list(y)
+                self.graph.update_oes_plot(xx, yy)
             except Exception as e:
                 self.append_log("OES", f"그래프 업데이트 실패(무시): {e!r}")
         self._soon(_safe_draw)
@@ -1616,13 +1681,15 @@ class ChamberRuntime:
     # ------------------------------------------------------------------
     # 폴링/상태
     def _apply_polling_targets(self, targets: TargetsMap) -> None:
-        self._ensure_background_started()
-
         mfc_on = bool(targets.get('mfc', False))
         dcpl_on = bool(targets.get('dc_pulse', False))
         rfpl_on = bool(targets.get('rf_pulse', False))
         dc_on   = bool(targets.get('dc', False))
         rf_on   = bool(targets.get('rf', False))
+
+        # ✅ 어떤 폴링이라도 실제로 켜야 할 때 + 자동연결 허용 상태일 때만 장치/워치독을 올림
+        if (mfc_on or dcpl_on or rfpl_on or dc_on or rf_on) and self._auto_connect_enabled:
+            self._ensure_background_started()
 
         with contextlib.suppress(Exception):
             self.mfc.set_process_status(mfc_on)

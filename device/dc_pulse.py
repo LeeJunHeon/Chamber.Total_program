@@ -17,7 +17,7 @@ dc_pulse.py — EnerPulse 5/10 Pulser RS-232 제어 (MOXA NPort 등 TCP-Serial �
 
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Optional, Callable, Deque, AsyncGenerator, Literal
+from typing import Optional, Callable, Deque, AsyncGenerator, Literal, Union
 from collections import deque
 import asyncio, time, contextlib, socket
 from lib.config_ch1 import DCPULSE_TCP_HOST, DCPULSE_TCP_PORT
@@ -32,7 +32,7 @@ DCP_DEVICE_ID = 0x01           # RS-485일 때 장치 ID(0~250)
 
 # 타이밍/리트라이
 DCP_TIMEOUT_MS = 800               # 개별 명령 타임아웃
-DCP_GAP_MS = 50                    # 명령 간 최소 간격
+DCP_GAP_MS = 1000                  # 명령 간 최소 간격
 DCP_WATCHDOG_INTERVAL_MS = 1000
 DCP_RECONNECT_BACKOFF_START_MS = 1000
 DCP_RECONNECT_BACKOFF_MAX_MS = 10000
@@ -45,7 +45,7 @@ SCALE_CURR_A = 10.0                # e.g., 12.5A  → 125 (0.1A step 가정)
 SCALE_RAMP_MS = 1.0                # 500~2000 ms  → 값 그대로
 SCALE_ARC_US  = 1.0                # 0~5 us, 40~200 us → 값 그대로
 
-DEBUG_PRINT = True
+DEBUG_PRINT = False
 
 # ========= 이벤트 모델 =========
 EventKind = Literal["status", "telemetry", "command_confirmed", "command_failed"]
@@ -78,6 +78,10 @@ class IProtocol:
 def _csum_low8(items: bytes) -> int:
     """체크섬 = (STX부터 ETX까지의 모든 바이트 합)의 하위 8비트(carry 제외)."""
     return sum(items) & 0xFF
+
+
+def _is_keep(x) -> bool:
+    return isinstance(x, str) and x.strip().lower() == "keep"
 
 class BinaryProtocol(IProtocol):
     """
@@ -120,7 +124,7 @@ class BinaryProtocol(IProtocol):
         # 워커가 완전한 payload(RS-232: CMD+DATA.. / RS-485: IP+CMD+DATA..)를 전달.
         # 필요 시 여기서 파싱/검증 추가 가능.
         return payload if payload else None
-
+    
 # ========= EnerPulse 컨트롤러 =========
 class AsyncDCPulse:
     """
@@ -229,16 +233,55 @@ class AsyncDCPulse:
             self._ev_nowait(DCPEvent(kind="status", message="주기적 읽기(Polling) 중지"))
 
     # ====== 상위 시퀀스 편의 API ======
-    async def prepare_and_start(self, power_w: float):
-        """
-        1) Host Master 3종을 Host(0x0003)로 설정: 0x7B, 0x7C, 0x7D
-        2) 제어 모드 Power: 0x81 (데이터=3)
-        3) 출력 레벨(참조) Power: 0x83 (단위/스케일에 따라 raw 계산)
-        4) 출력 ON: 0x80 (데이터=1)
-        """
+    async def prepare_and_start(
+        self,
+        power_w: float,
+        *,
+        # 'keep' 또는 None이면 변경하지 않음
+        freq: Optional[Union[float, int, str]] = None,
+        duty: Optional[Union[float, int, str]] = None,
+        # 펄스 동기 모드: 'int' 또는 'ext' (None이면 유지)
+        sync: Optional[Literal["int", "ext"]] = None,
+        # 마스터 모드: 기본 host (기존 동작 유지), 필요 시 'remote' 등으로 지정
+        master: Literal["host", "remote", "local", "origin", "always"] = "host",
+    ):
+        # 1) 항상 Host 권한으로 고정
         await self.set_master_host_all()
+
+        # 2) 제어 모드 = Power
         await self.set_regulation_power()
+
+        # 3) 펄스 파라미터(옵션): sync / freq / duty
+        #    EnerPulse 통신 명령: 0x65(Pulse Sync), 0x66(Pulse Freq[kHz 20~150]),
+        #                        0x67(Off Time: DC=9, 1.0~10.0us -> 10~100)
+        if sync is not None:
+            await self.set_pulse_sync(sync)  # 0x65
+
+        # freq/duty 모두 숫자면 off_time_us를 계산해서 0x67로 전송
+        if not _is_keep(freq) and freq is not None:
+            f_khz = float(freq)
+            await self.set_pulse_freq_khz(f_khz)  # 0x66
+
+            if not _is_keep(duty) and duty is not None:
+                d_pct = float(duty)
+                # 주기[us] = 1,000 / f[kHz]
+                period_us = 1000.0 / max(1e-6, f_khz)
+                # off_time_us = period * (1 - duty)
+                off_time_us = max(0.0, period_us * (1.0 - d_pct / 100.0))
+                # 장비 스펙: DC=9, 1.0~10.0us → 10~100 (x10 스케일)
+                if d_pct >= 100.0 or off_time_us < 1.0:
+                    await self.set_off_time_dc()         # 0x67, DC=9
+                else:
+                    await self.set_off_time_us(off_time_us)  # 0x67
+            # duty가 keep/None이면 주파수만 적용(Off Time 유지)
+
+        # duty만 숫자인 경우(주파수 미지정)는 off_time_us 계산 불가 → 유지
+        # 필요하면 별도 API(set_off_time_us)로 직접 지정하세요.
+
+        # 4) 출력 레퍼런스(Power) 설정
         await self.set_reference_power(power_w)
+
+        # 5) 출력 ON
         await self.output_on()
 
     # ====== 고수준 제어 ======
@@ -281,6 +324,26 @@ class AsyncDCPulse:
     async def output_off(self):
         await self._write_cmd_data(0x80, 0x0002, 2, label="OUTPUT_OFF")
 
+    async def set_pulse_sync(self, mode: Literal["int","ext"]):
+        # 0x65: Int=0, Ext=1
+        val = 0 if mode == "int" else 1
+        await self._write_cmd_data(0x65, val, 2, label=f"PULSE_SYNC({mode.upper()})")
+
+    async def set_pulse_freq_khz(self, freq_khz: float):
+        # 0x66: 20~150 (kHz)
+        val = int(round(freq_khz))
+        val = min(150, max(20, val))
+        await self._write_cmd_data(0x66, val, 2, label=f"PULSE_FREQ({val}kHz)")
+
+    async def set_off_time_us(self, off_time_us: float):
+        # 0x67: DC=9, 1.0~10.0us → 10~100 (x10 스케일)
+        x10 = int(round(off_time_us * 10.0))
+        x10 = min(100, max(10, x10))
+        await self._write_cmd_data(0x67, x10, 2, label=f"OFF_TIME({off_time_us:.1f}us)")
+
+    async def set_off_time_dc(self):
+        await self._write_cmd_data(0x67, 9, 2, label="OFF_TIME(DC)")
+
     # ====== 선택: 기타 설정(원 코드 호환) ======
     async def set_arc_params(self, *, detection_us: float, pause_us: float,
                              arc_voltage_v: float|int, arc_current_a: float|int, soft_level: int):
@@ -321,8 +384,13 @@ class AsyncDCPulse:
 
     # ====== 내부: 명령 헬퍼 ======
     def _ok_from_resp(self, resp: Optional[bytes]) -> bool:
-        """응답 성공 판정(장비 캡처 후 보정 권장). 현재는 수신만 되면 성공 처리."""
-        return bool(resp)
+        if not resp:
+            return False
+        # RS-232 write echo: 0x06=ACK(성공), 0x04=ERR(실패)
+        if len(resp) == 1:
+            return resp[0] == 0x06
+        # 그 외(읽기 응답 등 프레임 payload)는 일단 수신만 되면 성공 처리
+        return True
 
     async def _write_cmd_data(self, cmd: int, value: int, width: int, *, label: str):
         fut = asyncio.get_running_loop().create_future()
@@ -528,37 +596,74 @@ class AsyncDCPulse:
 
                 # === 프레임 파서: STX(0x02) .. ETX(0x03) + CHK(1B) ===
                 while True:
-                    # 1) STX 찾기
+                    # 0) 먼저 선두의 에코(ACK/ERR)를 처리 (RS-232: 1바이트)
+                    emitted = False
+                    while buf and buf[0] in (0x06, 0x04):
+                        b = buf[0]
+                        try:
+                            self._frame_q.put_nowait(bytes([b]))
+                        except asyncio.QueueFull:
+                            with contextlib.suppress(Exception):
+                                _ = self._frame_q.get_nowait()
+                            self._frame_q.put_nowait(bytes([b]))
+                        del buf[0]
+                        emitted = True
+
+                    if emitted:
+                        # 에코를 하나 이상 내보냈으면 다시 루프 돌며 추가 에코/프레임을 검사
+                        continue
+
+                    # 1) STX(0x02) 위치 찾기
                     try:
                         i_stx = buf.index(0x02)
                     except ValueError:
-                        buf.clear()
+                        # STX가 아예 없으면, 버퍼 안에 섞여 들어온 에코 바이트(0x06/0x04)를 걷어내서 전달
+                        i = 0; found_echo = False
+                        while i < len(buf):
+                            if buf[i] in (0x06, 0x04):
+                                try:
+                                    self._frame_q.put_nowait(bytes([buf[i]]))
+                                except asyncio.QueueFull:
+                                    with contextlib.suppress(Exception):
+                                        _ = self._frame_q.get_nowait()
+                                    self._frame_q.put_nowait(bytes([buf[i]]))
+                                del buf[i]
+                                found_echo = True
+                                continue
+                            i += 1
+                        if not found_echo:
+                            buf.clear()
                         break
-                    if i_stx > 0:
-                        del buf[:i_stx]  # STX 앞 제거
 
-                    # 2) ETX 위치 찾기 (STX 뒤에서)
+                    # STX 앞쪽 프리픽스에도 혹시 에코가 섞였으면 살려서 올리고 나머지는 버린다
+                    if i_stx > 0:
+                        prefix = bytes(buf[:i_stx])
+                        # prefix 안의 0x06/0x04만 추려서 방출
+                        for b in prefix:
+                            if b in (0x06, 0x04):
+                                try:
+                                    self._frame_q.put_nowait(bytes([b]))
+                                except asyncio.QueueFull:
+                                    with contextlib.suppress(Exception):
+                                        _ = self._frame_q.get_nowait()
+                                    self._frame_q.put_nowait(bytes([b]))
+                        del buf[:i_stx]
+
+                    # 2) 여기부터는 기존 STX..ETX+CHK 프레이밍 파서 그대로
                     try:
                         i_etx = buf.index(0x03, 1)
                     except ValueError:
-                        # ETX 아직 안 들어옴 → 다음 read
                         break
 
-                    # 3) ETX 다음에 CHK 1바이트가 더 필요
                     if len(buf) < i_etx + 2:
-                        break  # 더 받아와야 함
+                        break
 
-                    # 4) 프레임 슬라이스: core = STX..ETX, chk = 다음 1바이트
-                    core = bytes(buf[:i_etx + 1])
-                    chk = buf[i_etx + 1]
+                    core = bytes(buf[:i_etx + 1])   # STX..ETX
+                    chk  = buf[i_etx + 1]
 
-                    # 5) 검증
                     if (_csum_low8(core) & 0xFF) == (chk & 0xFF):
-                        # payload = [IP?] + CMD + DATA (STX/ETX 제외)
-                        if DCP_USE_RS485:
-                            payload = core[2:-1]  # IP부터 ETX 앞까지
-                        else:
-                            payload = core[1:-1]  # CMD부터 ETX 앞까지
+                        # RS-232: payload = CMD + DATA.. (STX/ETX 제외)
+                        payload = core[1:-1]
                         try:
                             self._frame_q.put_nowait(payload)
                         except asyncio.QueueFull:
@@ -570,8 +675,8 @@ class AsyncDCPulse:
                     else:
                         self._dbg("DCP", f"CHK FAIL: core={core.hex()} chk={chk:02X}")
 
-                    # 6) 사용한 바이트 폐기
                     del buf[:i_etx + 2]
+
         except asyncio.CancelledError:
             pass
         except Exception as e:
