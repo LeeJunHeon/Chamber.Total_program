@@ -3,9 +3,6 @@
 """
 rf_pulse.py — asyncio 기반 CESAR AE RS-232 Pulse 컨트롤러
 
-의존성:
-    pip install pyserial-asyncio
-
 핵심(구 PyQt6 버전과 동등):
   - serial_asyncio + asyncio.Protocol 기반 완전 비동기 시리얼 I/O
   - 단일 명령 큐(타임아웃/재시도/인터커맨드 gap)로 송수신 직렬화
@@ -22,17 +19,10 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Deque, Callable, AsyncGenerator, Literal, Tuple
 from collections import deque
-import asyncio
-import time
-import re
-
-try:
-    import serial_asyncio
-except Exception as e:
-    raise RuntimeError("pyserial-asyncio가 필요합니다. `pip install pyserial-asyncio`") from e
+import asyncio, time, re, socket, contextlib
 
 from lib.config_ch2 import (
-    RFPULSE_PORT, RFPULSE_BAUD, RFPULSE_ADDR, DEBUG_PRINT, ACK_TIMEOUT_MS,
+    RFPULSE_TCP_HOST, RFPULSE_TCP_PORT, RFPULSE_ADDR, DEBUG_PRINT, ACK_TIMEOUT_MS,
     QUERY_TIMEOUT_MS, RECV_FRAME_TIMEOUT_MS, CMD_GAP_MS, POST_WRITE_DELAY_MS,
     ACK_FOLLOWUP_GRACE_MS, POLL_INTERVAL_MS, POLL_QUERY_TIMEOUT_MS, POLL_START_DELAY_AFTER_RF_ON_MS,
     RFPULSE_WATCHDOG_INTERVAL_MS, RFPULSE_RECONNECT_BACKOFF_START_MS, RFPULSE_RECONNECT_BACKOFF_MAX_MS
@@ -159,100 +149,36 @@ class RFPulseEvent:
 # ===== Protocol (바이트 토큰 스트리머) =====
 Token = Tuple[Literal["ACK", "NAK", "FRAME"], Optional[bytes]]
 
-class _RFPProtocol(asyncio.Protocol):
-    def __init__(self, owner: "RFPulseAsync"):
-        self.owner = owner
-        self.transport: Optional[asyncio.Transport] = None
-        self._rx = bytearray()
-
-    def connection_made(self, transport: asyncio.BaseTransport):
-        self.transport = transport  # type: ignore
-        self.owner._on_connection_made(self.transport)
-
-    def data_received(self, data: bytes):
-        if not data:
-            return
-        self._rx.extend(data)
-
-        # 토큰화 루프
-        while True:
-            if not self._rx:
-                break
-
-            b0 = self._rx[0]
-
-            # ACK/NAK 단일 토큰
-            if b0 == 0x06:
-                del self._rx[:1]
-                self.owner._on_token(("ACK", None))
-                continue
-            if b0 == 0x15:
-                del self._rx[:1]
-                self.owner._on_token(("NAK", None))
-                continue
-
-            # 프레임: header + cmd + [optlen] + data + cs
-            if len(self._rx) < 2:
-                break
-            hdr = self._rx[0]
-            cmd_b = self._rx[1]
-            length_bits = hdr & 0x07
-
-            if length_bits == 7:
-                if len(self._rx) < 3:
-                    break
-                data_len = self._rx[2]
-                total = 1 + 1 + 1 + data_len + 1
-                if len(self._rx) < total:
-                    break
-                pkt = bytes(self._rx[:total])
-                del self._rx[:total]
-            else:
-                data_len = length_bits
-                total = 1 + 1 + data_len + 1
-                if len(self._rx) < total:
-                    break
-                pkt = bytes(self._rx[:total])
-                del self._rx[:total]
-
-            # 체크섬
-            cs = 0
-            for x in pkt[:-1]:
-                cs ^= x
-            if (cs ^ pkt[-1]) != 0:
-                # 불일치 → 버리고 계속
-                continue
-
-            self.owner._on_token(("FRAME", pkt))
-
-    def connection_lost(self, exc: Optional[Exception]):
-        self.owner._on_connection_lost(exc)
-
 # ===== 메인 컨트롤러 =====
 class RFPulseAsync:
     def __init__(self, *, debug_print: bool = DEBUG_PRINT):
         self.debug_print = debug_print
 
-        # 연결/프로토콜
-        self._transport: Optional[asyncio.Transport] = None
-        self._protocol: Optional[_RFPProtocol] = None
+        # TCP Streams
+        self._reader: Optional[asyncio.StreamReader] = None
+        self._writer: Optional[asyncio.StreamWriter] = None
+        self._reader_task: Optional[asyncio.Task] = None
         self._connected: bool = False
-        self._ever_connected: bool = False 
+        self._ever_connected: bool = False
 
-        # 명령 큐/상태
+        # 명령 큐/인플라이트
         self._cmd_q: Deque[RfCommand] = deque()
         self._inflight: Optional[RfCommand] = None
-        self._last_send_mono: float = 0.0           # 인터커맨드 최소 간격
+        self._last_send_mono: float = 0.0  # 인터커맨드 간격 계산용
 
         # 토큰/이벤트 큐
         self._tok_q: asyncio.Queue[Token] = asyncio.Queue(maxsize=2048)
         self._event_q: asyncio.Queue[RFPulseEvent] = asyncio.Queue(maxsize=512)
 
-        # 태스크
-        self._want_connected: bool = False
+        # Tasks
         self._watchdog_task: Optional[asyncio.Task] = None
         self._cmd_worker_task: Optional[asyncio.Task] = None
         self._poll_task: Optional[asyncio.Task] = None
+        self._want_connected: bool = False
+
+        # 재연결 상태
+        self._reconnect_backoff_ms = RFPULSE_RECONNECT_BACKOFF_START_MS
+        self._just_reopened: bool = False
 
         # 재연결 백오프
         self._reconnect_backoff_ms = RFPULSE_RECONNECT_BACKOFF_START_MS
@@ -271,28 +197,18 @@ class RFPulseAsync:
 
     # ---------- 공용 API ----------
     async def start(self):
-        """워치독 + 명령 워커 시작(재호출/죽은 태스크 회복 안전)."""
-        # 1) 죽은 태스크 정리
         if self._watchdog_task and self._watchdog_task.done():
             self._watchdog_task = None
         if self._cmd_worker_task and self._cmd_worker_task.done():
             self._cmd_worker_task = None
-
-        # 2) 이미 둘 다 살아 있으면 종료
         if self._watchdog_task and self._cmd_worker_task:
             return
-
-        # 3) 재가동
         self._want_connected = True
         loop = asyncio.get_running_loop()
-        if not self._watchdog_task:
-            self._watchdog_task = loop.create_task(self._watchdog_loop(), name="RFPWatchdog")
-        if not self._cmd_worker_task:
-            self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="RFPCmdWorker")
-        #await self._emit_status("RFPulse 워치독/워커 시작")
+        self._watchdog_task = loop.create_task(self._watchdog_loop(), name="RFPWatchdog")
+        self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="RFPCmdWorker")
 
     async def cleanup(self):
-        """안전 종료: 폴링 off → 큐 purge → safe off → 연결 종료."""
         self._closing = True
         self._want_connected = False
         self.set_process_status(False)      # safe off 큐잉
@@ -303,13 +219,18 @@ class RFPulseAsync:
         await self._cancel_task("_watchdog_task")
 
         self._purge_pending("shutdown")
-        if self._transport:
-            try:
-                self._transport.close()
-            except Exception:
-                pass
-        self._transport = None
-        self._protocol = None
+
+        # TCP 종료
+        if self._reader_task:
+            self._reader_task.cancel()
+            with contextlib.suppress(Exception):
+                await self._reader_task
+            self._reader_task = None
+        if self._writer:
+            with contextlib.suppress(Exception):
+                self._writer.close()
+        self._reader = None
+        self._writer = None
         self._connected = False
         await self._emit_status("RFPulse 연결 종료됨")
 
@@ -422,14 +343,39 @@ class RFPulseAsync:
                                                 reflected=self._last_reflected_w))
 
     # ---------- 내부: 연결/워치독 ----------
+    def _resolve_endpoint(self) -> tuple[str, int]:
+        host = getattr(self, "_override_host", None) or RFPULSE_TCP_HOST
+        port = getattr(self, "_override_port", None) or RFPULSE_TCP_PORT
+        return str(host), int(port)
+
+    def _on_tcp_disconnected(self):
+        self._connected = False
+        if self._reader_task:
+            self._reader_task.cancel()
+        self._reader_task = None
+        if self._writer:
+            with contextlib.suppress(Exception):
+                self._writer.close()
+        self._reader = None
+        self._writer = None
+        # 토큰 큐는 그대로(명령 워커가 타임아웃 처리)
+        # 인플라이트 복구/취소
+        if self._inflight is not None:
+            cmd = self._inflight
+            self._inflight = None
+            if cmd.retries_left > 0:
+                cmd.retries_left -= 1
+                self._cmd_q.appendleft(cmd)
+            else:
+                self._safe_callback(cmd.callback, None)
+
     async def _watchdog_loop(self):
-        backoff = self._reconnect_backoff_ms
+        backoff = RFPULSE_RECONNECT_BACKOFF_START_MS
         while True:
             if not self._want_connected:
-                await asyncio.sleep(0.05)
-                continue
+                await asyncio.sleep(0.05); continue
 
-            if self._connected and not self._need_reopen:
+            if self._connected:
                 await asyncio.sleep(RFPULSE_WATCHDOG_INTERVAL_MS / 1000.0)
                 continue
 
@@ -440,84 +386,38 @@ class RFPulseAsync:
             if not self._want_connected:
                 continue
 
-            # 기존 연결 강제 종료가 필요한 경우
-            if self._need_reopen and self._transport:
-                try:
-                    self._transport.close()
-                except Exception:
-                    pass
-                self._transport = None
-                self._protocol = None
-                self._connected = False
-                self._need_reopen = False
-
+            # 연결 시도
             try:
-                loop = asyncio.get_running_loop()
-                transport, protocol = await serial_asyncio.create_serial_connection(
-                    loop,
-                    lambda: _RFPProtocol(self),
-                    RFPULSE_PORT,                      # ← rfc2217://IP:PORT
-                    baudrate=RFPULSE_BAUD,
-                    bytesize=8, parity='O', stopbits=1,
-                    xonxoff=False, rtscts=False, dsrdtr=False   # 흐름제어/모뎀제어 OFF
+                host, port = self._resolve_endpoint()
+                reader, writer = await asyncio.wait_for(
+                    asyncio.open_connection(host, port),
+                    timeout=1.5
                 )
-                self._transport = transport
-                self._protocol = protocol  # type: ignore
+                self._reader, self._writer = reader, writer
                 self._connected = True
                 self._ever_connected = True
                 backoff = RFPULSE_RECONNECT_BACKOFF_START_MS
-                await self._emit_status(f"{RFPULSE_PORT} 연결 성공 (asyncio)")
+
+                # TCP keepalive (가능하면)
+                try:
+                    sock = writer.get_extra_info("socket")
+                    if sock is not None:
+                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                except Exception:
+                    pass
+
+                # 리더 태스크 기동
+                if self._reader_task and not self._reader_task.done():
+                    self._reader_task.cancel()
+                    with contextlib.suppress(Exception):
+                        await self._reader_task
+                self._reader_task = asyncio.create_task(self._tcp_reader_loop(), name="RFP-TcpReader")
+                self._just_reopened = True
+                await self._emit_status(f"{host}:{port} 연결 성공 (TCP)")
             except Exception as e:
-                await self._emit_status(f"{RFPULSE_PORT} 연결 실패: {e}")
+                host, port = self._resolve_endpoint()
+                await self._emit_status(f"{host}:{port} 연결 실패: {e}")
                 backoff = min(backoff * 2, RFPULSE_RECONNECT_BACKOFF_MAX_MS)
-
-    def _on_connection_made(self, transport):
-        try:
-            ser = getattr(transport, "serial", None)  # pyserial Serial
-            if ser:
-                # 입력/출력 버퍼 비우기 (초기 프레임 유실/혼합 방지)
-                try:
-                    ser.reset_input_buffer()
-                except Exception:
-                    pass
-                try:
-                    ser.reset_output_buffer()
-                except Exception:
-                    pass
-                # # DTR/RTS High (장비 필요 시만 주석 해제)
-                # try: ser.setDTR(True)
-                # except Exception:
-                #     try: ser.dtr = True
-                #     except Exception: pass
-                # try: ser.setRTS(True)
-                # except Exception:
-                #     try: ser.rts = True
-                #     except Exception: pass
-        except Exception as e:
-            import asyncio
-            asyncio.create_task(self._emit_status(f"DTR/RTS 설정 실패: {e!r}"))
-
-    def _on_connection_lost(self, exc: Optional[Exception]):
-        self._connected = False
-        if self._transport:
-            try:
-                self._transport.close()
-            except Exception:
-                pass
-        self._transport = None
-        self._protocol = None
-        self._need_reopen = True
-        self._dbg("RFP", f"연결 끊김: {exc}")
-
-        # 인플라이트 복구/취소
-        if self._inflight is not None:
-            cmd = self._inflight
-            self._inflight = None
-            if cmd.retries_left > 0:
-                cmd.retries_left -= 1
-                self._cmd_q.appendleft(cmd)
-            else:
-                self._safe_callback(cmd.callback, None)
 
     def _on_token(self, tok: Token):
         # 큐가 꽉 차면 가장 오래된 토큰을 버리고 새 토큰을 삽입
@@ -541,7 +441,7 @@ class RFPulseAsync:
             if not self._cmd_q:
                 await asyncio.sleep(0.01)
                 continue
-            if not (self._connected and self._transport):
+            if not (self._connected and self._writer):
                 await asyncio.sleep(0.05)
                 continue
 
@@ -564,16 +464,15 @@ class RFPulseAsync:
                         break
 
             # 전송
-            try:
-                if self._closing or not (self._connected and self._transport):
-                    self._inflight = None
-                    await asyncio.sleep(0)   # cancel-friendly
-                    continue
-                pkt = _build_packet(self.addr, cmd.cmd, cmd.data)
-                self._transport.write(pkt)
+            if self._closing or not (self._connected and self._writer):
+                self._inflight = None
+                await asyncio.sleep(0)
+                continue
 
-                if hasattr(self._transport, "drain"):
-                    await self._transport.drain()  # 있는 경우만 대기
+            pkt = _build_packet(self.addr, cmd.cmd, cmd.data)
+            try:
+                self._writer.write(pkt)
+                await self._writer.drain()
                 self._last_send_mono = time.monotonic()
                 self._dbg("RFP TX", f"{cmd.tag or ('exec' if cmd.kind=='exec' else 'query')} "
                                     f"{self._cmd_label(cmd.cmd)} len={len(cmd.data)}")
@@ -585,7 +484,7 @@ class RFPulseAsync:
                     self._cmd_q.appendleft(cmd)
                 else:
                     self._safe_callback(cmd.callback, None)
-                self._need_reopen = True
+                self._on_tcp_disconnected()
                 continue
 
             # no-reply
@@ -634,6 +533,74 @@ class RFPulseAsync:
                     self._safe_callback(cmd.callback, None)
                     self._inflight = None
                     await asyncio.sleep(cmd.gap_ms / 1000.0)
+
+    async def _tcp_reader_loop(self):
+        assert self._reader is not None
+        buf = bytearray()
+        RX_MAX = 64 * 1024
+        try:
+            while self._connected and self._reader:
+                chunk = await self._reader.read(256)
+                if not chunk:
+                    break
+                buf.extend(chunk)
+                if len(buf) > RX_MAX:
+                    del buf[:-RX_MAX]
+
+                # === AE Bus 토큰화: ACK(0x06)/NAK(0x15)/FRAME ===
+                while True:
+                    if not buf:
+                        break
+
+                    # 1) ACK/NAK 단일 토큰
+                    if buf[0] == 0x06:
+                        del buf[:1]
+                        self._on_token(("ACK", None))
+                        continue
+                    if buf[0] == 0x15:
+                        del buf[:1]
+                        self._on_token(("NAK", None))
+                        continue
+
+                    # 2) 프레임 헤더 점검
+                    if len(buf) < 2:
+                        break
+                    hdr = buf[0]
+                    length_bits = hdr & 0x07
+
+                    if length_bits == 7:
+                        if len(buf) < 3:
+                            break
+                        data_len = buf[2]
+                        total = 1 + 1 + 1 + data_len + 1
+                        if len(buf) < total:
+                            break
+                        pkt = bytes(buf[:total])
+                        del buf[:total]
+                    else:
+                        data_len = length_bits
+                        total = 1 + 1 + data_len + 1
+                        if len(buf) < total:
+                            break
+                        pkt = bytes(buf[:total])
+                        del buf[:total]
+
+                    # 3) XOR 체크섬 검증
+                    cs = 0
+                    for x in pkt[:-1]:
+                        cs ^= x
+                    if (cs ^ pkt[-1]) != 0:
+                        # 체크섬 불일치 → 폐기
+                        continue
+
+                    # 4) 프레임 토큰 방출
+                    self._on_token(("FRAME", pkt))
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            self._dbg("RFP", f"리더 루프 예외: {e!r}")
+        finally:
+            self._on_tcp_disconnected()
 
     # ---------- 내부: exec/query 대기 ----------
     async def _await_exec_csr(self, cmd: RfCommand) -> Tuple[bool, Optional[bytes]]:
@@ -724,33 +691,27 @@ class RFPulseAsync:
         try:
             while True:
                 if self._poll_busy or not self._connected:
-                    await asyncio.sleep(0.01)
+                    await asyncio.sleep(0.05)
                     continue
                 self._poll_busy = True
-
-                # WAKE/STATUS
-                st = await self._read_status()
-                if st:
-                    await self._emit_status(f"STATUS {self._status_summary_str(st)}")
-
-                # FWD
-                f = await self._query_and_data(CMD_REPORT_FORWARD, b"", tag="[POLL FWD]",
-                                               timeout_ms=POLL_QUERY_TIMEOUT_MS)
-                # REF
-                r = await self._query_and_data(CMD_REPORT_REFLECTED, b"", tag="[POLL REF]",
-                                               timeout_ms=POLL_QUERY_TIMEOUT_MS)
-
-                if f is not None:
-                    self._last_forward_w = float(_u16le(f, 0) if len(f) >= 2 else 0.0)
-                if r is not None:
-                    self._last_reflected_w = float(_u16le(r, 0) if len(r) >= 2 else 0.0)
-
-                if (self._last_forward_w is not None) and (self._last_reflected_w is not None):
-                    await self._event_q.put(RFPulseEvent(
-                        kind="power", forward=self._last_forward_w, reflected=self._last_reflected_w
-                    ))
-
-                self._poll_busy = False
+                try:
+                    st = await self._read_status()
+                    if st:
+                        await self._emit_status(f"STATUS {self._status_summary_str(st)}")
+                    f = await self._query_and_data(CMD_REPORT_FORWARD, b"", tag="[POLL FWD]",
+                                                timeout_ms=POLL_QUERY_TIMEOUT_MS)
+                    r = await self._query_and_data(CMD_REPORT_REFLECTED, b"", tag="[POLL REF]",
+                                                timeout_ms=POLL_QUERY_TIMEOUT_MS)
+                    if f is not None:
+                        self._last_forward_w = float(_u16le(f, 0) if len(f) >= 2 else 0.0)
+                    if r is not None:
+                        self._last_reflected_w = float(_u16le(r, 0) if len(r) >= 2 else 0.0)
+                    if (self._last_forward_w is not None) and (self._last_reflected_w is not None):
+                        await self._event_q.put(RFPulseEvent(kind="power",
+                                                            forward=self._last_forward_w,
+                                                            reflected=self._last_reflected_w))
+                finally:
+                    self._poll_busy = False
                 await asyncio.sleep(POLL_INTERVAL_MS / 1000.0)
         except asyncio.CancelledError:
             self._poll_busy = False
@@ -930,3 +891,40 @@ class RFPulseAsync:
             # 비동기 로그는 태스크로
             asyncio.create_task(self._emit_status(f"대기 중 명령 {purged}개 폐기 ({reason})"))
         return purged
+    
+    # =========== chamber_runtime.py에 맞춘 함수들 ===========
+    def set_endpoint(self, host: str, port: int) -> None:
+        self._override_host = str(host)
+        self._override_port = int(port)
+
+    async def set_endpoint_reconnect(self, host: str, port: int) -> None:
+        self._override_host = str(host)
+        self._override_port = int(port)
+        await self.pause_watchdog()
+        try:
+            self._on_tcp_disconnected()
+        except Exception:
+            pass
+        await self.start()
+
+    def is_connected(self) -> bool:
+        return bool(self._connected)
+
+    async def pause_watchdog(self) -> None:
+        self._want_connected = False
+        t = self._watchdog_task
+        if t:
+            t.cancel()
+            try:
+                await t
+            except Exception:
+                pass
+            self._watchdog_task = None
+
+    async def resume_watchdog(self) -> None:
+        if self._watchdog_task and not self._watchdog_task.done():
+            return
+        self._want_connected = True
+        loop = asyncio.get_running_loop()
+        self._watchdog_task = loop.create_task(self._watchdog_loop(), name="RFPWatchdog")
+    # =========== chamber_runtime.py에 맞춘 함수들 ===========
