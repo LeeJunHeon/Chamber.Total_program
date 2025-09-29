@@ -20,7 +20,6 @@ import asyncio
 from lib.config_ch2 import (
     DC_MAX_POWER,
     DC_TOLERANCE_POWER,
-    DC_RAMP_STEP,
     DC_MAINTAIN_STEP,
     DC_INTERVAL_MS,
     DEBUG_PRINT,
@@ -53,16 +52,12 @@ class DCPowerAsync:
         send_dc_power_unverified: Callable[[float], Awaitable[None]],
         request_status_read: Optional[Callable[[], Awaitable[object]]] = None,
         toggle_enable: Optional[Callable[[bool], Awaitable[None]]] = None,  # ← 추가
-        rampdown_interval_ms: int = 50,
-        initial_step_w: float = 5.0,
         watt_deadband: float = 0.5,
     ):
         """
         send_dc_power:              검증 응답을 기대하는 W 단위 설정 (예: PLC.power_apply(..., family="DCV"))
         send_dc_power_unverified:   no-reply W 단위 설정 (예: PLC.power_write(..., family="DCV"))
         request_status_read:        (선택) 주기적 상태 읽기 트리거. (반환값이 있으면 (P,V,I)로 간주하여 섭취)
-        rampdown_interval_ms:       램프다운 스텝 주기
-        initial_step_w:             램프업 시작 스텝(W)
         watt_deadband:              연속 전송 억제 데드밴드(W)
         """
         self._send_dc_power = send_dc_power
@@ -73,8 +68,6 @@ class DCPowerAsync:
         self.debug_print = DEBUG_PRINT
 
         # 파라미터
-        self._rampdown_interval_ms = int(rampdown_interval_ms)
-        self._initial_step_w = float(initial_step_w)
         self._watt_deadband = float(watt_deadband)
 
         # 상태
@@ -84,7 +77,6 @@ class DCPowerAsync:
 
         # 측정/목표
         self.target_power = 0.0
-        self.current_power_step = 0.0
         self.power_w = 0.0
         self.voltage_v = 0.0
         self.current_a = 0.0
@@ -107,31 +99,29 @@ class DCPowerAsync:
 
     # ======= 공용 API =======
     async def start_process(self, target_power: float):
-        """목표 파워 설정 + 램프업 시작(W 기준)."""
         if self._is_running:
             await self._emit_status("경고: DC 파워가 이미 동작 중입니다.")
             return
 
         self.target_power = float(max(0.0, min(DC_MAX_POWER, target_power)))
-        self.current_power_step = float(self._initial_step_w)
 
         self._is_running = True
         await self._emit_state_changed(True)
-        self.state = "RAMPING_UP"
-        await self._emit_status(f"프로세스 시작. 목표: {self.target_power:.1f} W")
+        self.state = "MAINTAINING"  # ← 바로 유지 모드
+        await self._emit_status(f"프로세스 시작. 목표: {self.target_power:.1f} W (직접 설정)")
 
-        # ⬤ 파워가 켜지는 순간 → 폴링 ON
+        # 파워 ON 시 폴링 ON
         self.set_process_status(True)
 
-        # 초기 스텝 전송(SET 포함). 예: 5W
+        # ✅ 시작하자마자 목표 W로 전송 (SET 포함 경로)
         try:
-            await self._send_dc_power(self.current_power_step)  # ensure_set=True 경로로 가게 됨(아래 설명)
-            self._last_sent_power = float(self.current_power_step)
-            await self._emit_status(f"초기 전송 {self.current_power_step:.1f} W (SET 포함)")
+            await self._send_dc_power(self.target_power)
+            self._last_sent_power = float(self.target_power)
+            await self._emit_status(f"목표 {self.target_power:.1f} W 즉시 전송")
         except Exception as e:
             await self._emit_status(f"초기 전송 실패: {e!r}")
 
-        # ✅ (추가) 첫 보정 1회 즉시 기동 (첫 측정이 늦어져도 램프업 진행 트리거)
+        # 첫 보정 1회 태스크 기동
         if self._adjust_task and not self._adjust_task.done():
             self._adjust_task.cancel()
         self._adjust_task = asyncio.create_task(self._adjust_once(), name="DC_Adjust")
@@ -232,7 +222,6 @@ class DCPowerAsync:
             if (self._last_sent_power or 0.0) != 0.0:
                 await self._set_dc_unverified(0.0)
 
-            self.current_power_step = 0.0
             self._last_sent_power = 0.0
 
             # 폴링도 OFF
@@ -249,7 +238,6 @@ class DCPowerAsync:
             await self._emit_status(f"램프다운 오류: {e}")
 
     async def _adjust_once(self):
-        """목표 파워까지 램프업하고, 도달 후에는 유지 보정(W 기준)."""
         try:
             if not self._is_running:
                 return
@@ -257,64 +245,29 @@ class DCPowerAsync:
             last_sent: Optional[float] = getattr(self, "_last_sent_power", None)
             deadband = float(self._watt_deadband)
 
-            if self.state == "RAMPING_UP":
-                diff = float(self.target_power) - float(self.power_w)
+            # ▼ 유지 보정만 수행
+            error = float(self.target_power) - float(self.power_w)
 
-                # 허용 오차 내 → 유지 상태로 전환
-                if abs(diff) <= float(DC_TOLERANCE_POWER):
-                    await self._emit_status(f"{self.target_power:.1f}W 도달. 파워 유지 시작")
-                    self.state = "MAINTAINING"
-                    # 목표값으로 한 번 더 고정 전송(안전)
-                    try:
-                        await self._send_dc_power(float(self.target_power))
-                        self._last_sent_power = float(self.target_power)
-                    except Exception as e:
-                        await self._emit_status(f"DC 설정 전송 실패: {e}")
-                    self._ev_nowait(DCPowerEvent(kind="target_reached"))
-                    return
+            # 허용 오차 내 → 보정 스킵
+            if abs(error) <= float(DC_TOLERANCE_POWER):
+                self._ev_nowait(DCPowerEvent(kind="target_reached"))
+                return
 
-                # 스텝 계산 (상승/과슈트 복귀)
-                if diff > 0:
-                    new_power = min(self.current_power_step + float(DC_RAMP_STEP), float(self.target_power))
-                else:
-                    new_power = max(0.0, self.current_power_step - float(DC_MAINTAIN_STEP))
-                    await self._emit_status("목표 파워 초과. 출력 하강 시도...")
+            # 마지막 전송값 기준으로 한 스텝 보정 (측정이 낮으면 +, 높으면 -)
+            base = float(last_sent if last_sent is not None else self.target_power)
+            step = float(DC_MAINTAIN_STEP) if error > 0 else -float(DC_MAINTAIN_STEP)
+            new_power = max(0.0, min(float(DC_MAX_POWER), base + step))
 
-                # 범위 클램프
-                new_power = max(0.0, min(float(DC_MAX_POWER), float(new_power)))
-
-                # 데드밴드 적용 후 전송
-                if (last_sent is None) or (abs(new_power - last_sent) >= deadband):
-                    try:
-                        await self._send_dc_power(float(new_power))
-                        self._last_sent_power = float(new_power)
-                    except Exception as e:
-                        await self._emit_status(f"DC 설정 전송 실패: {e}")
-
-                self.current_power_step = float(new_power)
+            # 데드밴드 적용 후 전송
+            if (last_sent is None) or (abs(new_power - last_sent) >= deadband):
+                try:
+                    await self._send_dc_power(float(new_power))
+                    self._last_sent_power = float(new_power)
+                except Exception as e:
+                    await self._emit_status(f"DC 설정 전송 실패: {e}")
                 await self._emit_status(
-                    f"Ramp-Up... 목표스텝:{self.current_power_step:.1f}W, 현재:{self.power_w:.1f}W"
+                    f"오차 보정: meas={self.power_w:.1f}W, target={self.target_power:.1f}W → set {new_power:.1f}W"
                 )
-
-            elif self.state == "MAINTAINING":
-                error = float(self.target_power) - float(self.power_w)
-
-                # 허용 오차 내 → 보정 스킵
-                if abs(error) <= float(DC_TOLERANCE_POWER):
-                    return
-
-                step = float(DC_MAINTAIN_STEP) if error > 0 else -float(DC_MAINTAIN_STEP)
-                new_power = max(0.0, min(float(DC_MAX_POWER), float(self.target_power) + step))
-
-                if (last_sent is None) or (abs(new_power - last_sent) >= deadband):
-                    try:
-                        await self._send_dc_power(float(new_power))
-                        self._last_sent_power = float(new_power)
-                    except Exception as e:
-                        await self._emit_status(f"DC 설정 전송 실패: {e}")
-                    await self._emit_status(
-                        f"유지 보정: meas={self.power_w:.1f}W, target={self.target_power:.1f}W → set {new_power:.1f}W"
-                    )
 
         except asyncio.CancelledError:
             pass
