@@ -280,9 +280,11 @@ class ChamberRuntime:
         self.dc_power = None
         if self.supports_dc_cont:
             async def _dc_send(power: float):
+                # verified: SET 자동 보장
                 await self.plc.power_apply(power, family="DCV", channel=0, ensure_set=True)
 
             async def _dc_send_unverified(power: float):
+                # no-reply: WRITE만
                 await self.plc.power_write(power, family="DCV", write_idx=0)
 
             async def _dc_read():
@@ -292,10 +294,15 @@ class ChamberRuntime:
                 except Exception as e:
                     self.append_log("DCpower", f"read failed: {e!r}")
 
+            # ⬇️ 추가: SET 코일 ON/OFF 콜백
+            async def _dc_toggle_enable(on: bool):
+                await self.plc.power_enable(on, family="DCV", set_idx=0)
+
             self.dc_power = DCPowerAsync(
                 send_dc_power=_dc_send,
                 send_dc_power_unverified=_dc_send_unverified,
                 request_status_read=_dc_read,
+                toggle_enable=_dc_toggle_enable,   # ← 추가
             )
 
         self.rf_power = None

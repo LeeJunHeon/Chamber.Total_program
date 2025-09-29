@@ -52,6 +52,7 @@ class DCPowerAsync:
         send_dc_power: Callable[[float], Awaitable[None]],
         send_dc_power_unverified: Callable[[float], Awaitable[None]],
         request_status_read: Optional[Callable[[], Awaitable[object]]] = None,
+        toggle_enable: Optional[Callable[[bool], Awaitable[None]]] = None,  # ← 추가
         rampdown_interval_ms: int = 50,
         initial_step_w: float = 5.0,
         watt_deadband: float = 0.5,
@@ -67,6 +68,7 @@ class DCPowerAsync:
         self._send_dc_power = send_dc_power
         self._send_dc_power_unverified = send_dc_power_unverified
         self._request_status_read = request_status_read
+        self._toggle_enable = toggle_enable
 
         self.debug_print = DEBUG_PRINT
 
@@ -117,6 +119,9 @@ class DCPowerAsync:
         await self._emit_state_changed(True)
         self.state = "RAMPING_UP"
         await self._emit_status(f"프로세스 시작. 목표: {self.target_power:.1f} W")
+
+        # ⬤ 파워가 켜지는 순간 → 폴링 ON
+        self.set_process_status(True)
 
         # 초기 스텝 전송(SET 포함). 예: 5W
         try:
@@ -206,7 +211,10 @@ class DCPowerAsync:
     async def _control_loop(self):
         """(선택) 주기적으로 상태 읽기 요청을 보내는 루프 + 결과 섭취."""
         try:
-            while self._is_running and self._polling_enabled:
+            while self._is_running:
+                if not self._polling_enabled:
+                    await asyncio.sleep(0.2)  # OFF 동안 대기만
+                    continue
                 try:
                     res = await self._request_status_read() if self._request_status_read else None
                     if res is not None:
@@ -227,10 +235,14 @@ class DCPowerAsync:
             self.current_power_step = 0.0
             self._last_sent_power = 0.0
 
+            # 폴링도 OFF
+            self.set_process_status(False)
+
             # 표시/이벤트 정리
             self._ev_nowait(DCPowerEvent(kind="display", power=0.0, voltage=0.0, current=0.0))
             await self._emit_status("DC 파워 ramp-down 완료 (snap-to-zero)")
             self._ev_nowait(DCPowerEvent(kind="power_off_finished"))
+
         except asyncio.CancelledError:
             pass
         except Exception as e:

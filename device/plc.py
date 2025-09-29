@@ -221,8 +221,9 @@ class PLCConfig:
     dc_write_index: int = 0            # 0→D00004, 1→D00005 ...
 
     # READ 스케일: D00000, D00001이 ‘원시카운트’라면 스케일 적용
-    dc_v_scale: float = 1.0            # raw→V 변환 계수(원시=1.0)
-    dc_i_scale: float = 1.0            # raw→A 변환 계수(원시=1.0)
+    # 예) 0..4000 카운트 = 0..400 V, 0..10 A 라면:
+    dc_v_scale: float = 0.1            # 400 / 4000 = 0.1 V/count
+    dc_i_scale: float = 0.0025         # 10  / 4000 = 0.0025 A/count
 
 # ======================================================
 # 단일 클래스: AsyncPLC (저수준+고수준)
