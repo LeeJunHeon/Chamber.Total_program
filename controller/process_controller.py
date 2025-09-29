@@ -1,4 +1,4 @@
-# process_ch2.py
+# process_controller.py
 #  - Qt 의존성 제거 (UI만 Qt, 로직은 asyncio)
 #  - main.py와는 asyncio.Queue 기반 이벤트로 통신
 #  - 장비 명령은 콜백 함수로 주입 (DI)
@@ -266,6 +266,9 @@ class ProcessController:
         self._last_polling_active: Optional[bool] = None
         self._last_polling_targets: Optional[dict] = None
 
+        # === 토큰 소유권 맵: (kind, spec) -> step_idx ===
+        self._token_owner: Dict[Tuple[str, Any], int] = {}
+
     # ===== 공정 시작/중단 API =====
 
     def start_process(self, params: Dict[str, Any]) -> None:
@@ -274,6 +277,7 @@ class ProcessController:
             return
 
         try:
+            self._token_owner.clear()
             self.current_params = params or {}
             self.process_sequence = self._create_process_sequence(self.current_params)
             ok, errors = self.validate_process_sequence()
@@ -410,7 +414,8 @@ class ProcessController:
 
         self._abort_evt.clear()  # ✅ 리셋 시 abort 상태 초기화
 
-
+        # 토큰 소유권 맵 초기화
+        self._token_owner.clear()
         self._emit(PCEvent("status", {"running": False}))
         self._emit_state("대기 중")
         self._emit_log("Process", "프로세스 컨트롤러가 리셋되었습니다.")
@@ -527,9 +532,22 @@ class ProcessController:
 
                     # 병렬 실행: 토큰 합쳐서 하나의 ExpectGroup으로 대기
                     tokens: List[ExpectToken] = []
-                    for s in parallel_steps:
-                        tokens.extend(self._send_and_collect_tokens(s))
+                    owners: Dict[Tuple[str, Any], int] = {}
+
+                    # 더 안전하게: 블록 시작 인덱스를 별도 계산
+                    block_start = t - len(parallel_steps)  # t는 위에서 병렬 수집에 쓰던 인덱스
+
+                    for j, s in enumerate(parallel_steps):
+                        tks = self._send_and_collect_tokens(s)
+                        tokens.extend(tks)
+                        for tk in tks:
+                            owners[self._tokey(tk)] = block_start + j  # 각 스텝의 실제 인덱스에 귀속
+
+                    if tokens:
+                        self._register_token_owners(owners)
+
                     fut = self._set_expect(tokens)
+
                     if fut is not None:
                         try:
                             if self._shutdown_in_progress:
@@ -572,6 +590,12 @@ class ProcessController:
             return
 
         tokens = self._send_and_collect_tokens(step)
+
+        # ⬇️ 추가: 이 스텝이 만든 토큰은 현재 스텝 인덱스에 귀속
+        if tokens:
+            owners = { self._tokey(tk): self._current_step_idx for tk in tokens }
+            self._register_token_owners(owners)
+
         if step.no_wait or not tokens:
             return
 
@@ -839,30 +863,31 @@ class ProcessController:
             return
 
         full = f"[{source} - {reason}]"
-        cur = self.current_step
+
+        # ⬇️ 추가: 실패를 원 스텝에 귀속
+        owner_idx = self._owner_step_for_source(source)
+        if owner_idx is not None and 0 <= owner_idx < len(self.process_sequence):
+            owner_step = self.process_sequence[owner_idx]
+            owner_no   = owner_idx + 1
+            owner_act  = owner_step.action.name
+        else:
+            cur = self.current_step
+            owner_idx = self._current_step_idx
+            owner_no  = self._current_step_idx + 1
+            owner_act = cur.action.name if cur else "UNKNOWN"
 
         if self._aborting or self._shutdown_in_progress:
-            # 종료 중 실패는 기록 후 계속
-            step_no = self._current_step_idx + 1
-            act = cur.action.name if cur else "UNKNOWN"
             self._shutdown_error = True
-            self._shutdown_failures.append(f"Step {step_no} {act}: {full}")
-            self._emit_log("Process", f"경고: 종료 중 단계 실패 → 계속 진행 ({act}, 사유: {full})")
-            # 종료 흐름에서의 진행은 러너가 계속 처리
-            # (특별히 토큰 대기 중이었다면 취소)
+            self._shutdown_failures.append(f"Step {owner_no} {owner_act}: {full}")
+            self._emit_log("Process", f"경고: 종료 중 단계 실패 → 계속 진행 ({owner_act}, 사유: {full})")
             if self._expect_group:
                 self._expect_group.cancel("failure-during-shutdown")
                 self._expect_group = None
             return
-        
-        # ✅ 추가: 평시 실패 → 이번 런은 '실패'로 확정
-        self._process_failed = True
-        # (선택) 실패 요약도 미리 남겨두면 finished에서 보여줌
-        step_no = self._current_step_idx + 1
-        act = cur.action.name if cur else "UNKNOWN"
-        self._shutdown_failures.append(f"Step {step_no} {act}: {full}")
 
-        # 평시 실패 → 안전 종료로 전환
+        # 평시 실패 → 이번 런 실패로 확정 + 원 스텝에 귀속
+        self._process_failed = True
+        self._shutdown_failures.append(f"Step {owner_no} {owner_act}: {full}")
         self._emit_log("Process", f"오류 발생: {full}. 종료 절차를 시작합니다.")
         self._start_normal_shutdown()
 
@@ -901,6 +926,8 @@ class ProcessController:
             for item in detail["errors"]:
                 self._emit_log("Process", f" - {item}")
 
+        # 다음 런 대비 토큰 소유권 맵 초기화
+        self._token_owner.clear()
         self._emit(PCEvent("status", {"running": False}))
         self._emit_state("공정 완료" if ok else "공정 중단됨")
         self._emit(PCEvent("finished", {"ok": ok, "detail": detail}))
@@ -1343,6 +1370,43 @@ class ProcessController:
 
     def get_estimated_duration(self) -> int:
         return sum((s.duration or 0) for s in self.process_sequence if s.action == ActionType.DELAY)
+    
+    # =========================
+    # 토큰 소유권 유틸
+    # =========================
+    def _tokey(self, t: ExpectToken) -> Tuple[str, Any]:
+        return (t.kind, t.spec)
+
+    def _register_token_owners(self, owners: Dict[Tuple[str, Any], int]) -> None:
+        # 마지막 등록이 우선(파이썬 dict는 삽입 순서를 보존하므로, 뒤에서부터 찾으면 최신 소유자가 잡힘)
+        self._token_owner.update(owners)
+
+    def _device_token_kinds(self, source: str) -> Tuple[str, ...]:
+        # on_* 실패 콜백에서 넘기는 source 문자열과, 그 스텝이 생성하는 토큰 kind를 매핑
+        m = {
+            "DCPulse":   ("DC_PULSE_TARGET", "DCPULSE_OFF"),
+            "RFPulse":   ("RF_TARGET", "RFPULSE_OFF"),
+            "RF Power":  ("RF_TARGET", "GENERIC_OK"),
+            "DC Power":  ("DC_TARGET", "GENERIC_OK"),
+            "MFC":       ("MFC",),
+            "PLC":       ("PLC",),
+            "IG":        ("IG_OK",),
+            "RGA":       ("RGA_OK",),
+            # 필요 시 OES 등 추가 가능
+        }
+        # 장치명이 조금 다르게 들어와도 대소문자/공백 차이 방어(선택)
+        key = source.strip()
+        return m.get(key, ())
+
+    def _owner_step_for_source(self, source: str) -> Optional[int]:
+        kinds = self._device_token_kinds(source)
+        if not kinds:
+            return None
+        # 최신 등록부터 역순 탐색
+        for (k, _spec), idx in reversed(list(self._token_owner.items())):
+            if k in kinds:
+                return idx
+        return None
 
     # =========================
     # 유틸: 이벤트 방출

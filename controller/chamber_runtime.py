@@ -30,6 +30,7 @@ from controller.chat_notifier import ChatNotifier
 
 # 공정 컨트롤러(기존 CH2) + CH1은 별도 모듈이 있으면 사용, 없으면 CH2를 공용으로
 from controller.process_controller import ProcessController
+from controller.plasma_cleaning_controller import PlasmaCleaningController
 
 # ---- 타입 (main.py의 정의를 최소 필요만 가져와 복제) -------------------------
 RawParams = TypedDict('RawParams', {
@@ -223,10 +224,7 @@ class ChamberRuntime:
         if supports_dc_cont  is None: supports_dc_cont  = (self.ch == 2)
         if supports_rf_cont  is None: supports_rf_cont  = False
         if supports_dc_pulse is None: supports_dc_pulse = (self.ch == 1)
-        # ========================== DEBUG ==========================
-        #if supports_rf_pulse is None: supports_rf_pulse = (self.ch == 2)
-        if supports_rf_pulse is None: supports_rf_pulse = False
-        # ========================== DEBUG ==========================
+        if supports_rf_pulse is None: supports_rf_pulse = (self.ch == 2)
 
         self.supports_dc_cont  = bool(supports_dc_cont)
         self.supports_rf_cont  = bool(supports_rf_cont)
@@ -808,6 +806,7 @@ class ChamberRuntime:
                     fwd = float(ev.forward or 0.0)
                     ref = float(ev.reflected or 0.0)
                     self.data_logger.log_rfpulse_power(fwd, ref)
+                    self._display_rf(fwd, ref)   # ← 추가: 화면 갱신
             elif k == "target_reached":
                 self.process_controller.on_rf_pulse_target_reached()
             elif k == "command_failed":

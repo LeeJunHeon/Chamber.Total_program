@@ -453,12 +453,18 @@ class AsyncDCPulse:
         try:
             resp = await asyncio.wait_for(fut, timeout=(DCP_TIMEOUT_MS/1000.0) + 2.0 + extra)
             if resp is not None:
-                await self._emit_status(f"[RECV] {label} ← {resp.hex(' ')}")
+                # ▶ 1바이트 에코면 ACK/ERR 라벨링, 그 외는 그대로 hex 덤프
+                if len(resp) == 1 and resp[0] in (0x06, 0x04):
+                    name = "ACK" if resp[0] == 0x06 else "ERR"
+                    await self._emit_status(f"[RECV] {label} ← {name}({resp.hex(' ')})")
+                else:
+                    await self._emit_status(f"[RECV] {label} ← {resp.hex(' ')}")
             return resp
         except asyncio.TimeoutError:
             await self._emit_status(f"[TIMEOUT] {label}")
             self._on_tcp_disconnected()
             return None
+
 
     # ====== 내부: 연결/워치독/워커/리더 ======
     async def _watchdog_loop(self):
@@ -538,7 +544,8 @@ class AsyncDCPulse:
 
             cmd = self._cmd_q.popleft()
             self._inflight = cmd
-            await self._emit_status(f"[SEND] {cmd.label}")
+            # ▶ 송신 바이트(hex)까지 함께 기록
+            await self._emit_status(f"[SEND] {cmd.label} → {cmd.payload.hex(' ')}")
 
             # 연결 직후 quiet 기간
             if self._just_reopened and self._last_connect_mono > 0.0:
