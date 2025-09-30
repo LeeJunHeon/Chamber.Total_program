@@ -52,6 +52,7 @@ class RFPowerAsync:
         send_rf_power: Callable[[float], Awaitable[None]],
         send_rf_power_unverified: Callable[[float], Awaitable[None]],
         request_status_read: Optional[Callable[[], Awaitable[object]]] = None,
+        toggle_enable: Optional[Callable[[bool], Awaitable[None]]] = None,  # ← 추가 (DCV_SET_1 토글용)
         poll_interval_ms: int = 1000,
         rampdown_interval_ms: int = 50,
         initial_step_w: float = 6.0,
@@ -69,6 +70,8 @@ class RFPowerAsync:
         self._send_rf_power_cb = send_rf_power
         self._send_rf_power_unverified_cb = send_rf_power_unverified
         self._request_status_read = request_status_read
+        self._toggle_enable = toggle_enable           # ← 추가
+        self._enabled = False                         # ← 추가 (SET 래치 상태 캐시)
 
         self.debug_print = DEBUG_PRINT
 
@@ -123,6 +126,18 @@ class RFPowerAsync:
 
         self.target_power = float(max(0.0, min(RF_MAX_POWER, target_power)))
         self.current_power_step = float(self._initial_step_w)
+
+        # ▼ RF 사용 전 SET 래치 ON (DCV_SET_1 = True)
+        if self._toggle_enable:
+            try:
+                await self._toggle_enable(True)
+                self._enabled = True
+                await self._emit_status("RF SET ON")
+            except Exception as e:
+                await self._emit_status(f"RF SET ON 실패: {e!r}")
+                return  # 실패 시 시작 중단 권장
+        else:
+            await self._emit_status("RF SET ON 생략(toggle_enable 미주입)")
 
         self._is_running = True
         await self._emit_state_changed(True)
@@ -246,6 +261,15 @@ class RFPowerAsync:
                 if self._rampdown_w <= 0.0:
                     await self._set_rf_unverified(0.0)
                     self._ev_nowait(RFPowerEvent(kind="display", forward=0.0, reflected=0.0))
+
+                    # ▼ RF 사용 종료 시 SET OFF (DCV_SET_1 = False)
+                    if self._toggle_enable and self._enabled:
+                        try:
+                            await self._toggle_enable(False)
+                            await self._emit_status("RF SET OFF")
+                        finally:
+                            self._enabled = False
+
                     await self._emit_status("RF 파워 ramp-down 완료")
                     self._is_ramping_down = False
                     self._ev_nowait(RFPowerEvent(kind="power_off_finished"))

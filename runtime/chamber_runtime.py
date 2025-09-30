@@ -965,7 +965,7 @@ class ChamberRuntime:
         if getattr(self, "_devices_started", False):
             return
         self._devices_started = True
-        self._spawn_detached(self._start_devices_task(), name=f"DevStart.CH{self.ch}")
+        self._spawn_detached(self._start_devices_task(), store=True, name=f"DevStart.CH{self.ch}")
 
     async def _start_devices_task(self) -> None:
         async def _maybe_start_or_connect(obj, label: str, *, log: bool = True):
@@ -1212,7 +1212,7 @@ class ChamberRuntime:
     def _safe_start_process(self, params: NormParams) -> None:
         if self.process_controller.is_running:
             self.append_log("MAIN", "이미 다른 공정 실행 중"); return
-        self._spawn_detached(self._start_after_preflight(params))
+        self._spawn_detached(self._start_after_preflight(params), store=True, name=f"StartAfterPreflight.CH{self.ch}")
 
     async def _start_after_preflight(self, params: NormParams) -> None:
         try:
@@ -1379,13 +1379,29 @@ class ChamberRuntime:
         
         # Stop 이후엔 자동 재연결 차단(사용자가 Start로 다시 올릴 때까지)
         self._auto_connect_enabled = False
-        try: self._ensure_background_started()
-        except Exception: pass
+        self._run_select = None
 
+        # 라이트 정리: 출력/폴링 OFF
         self._spawn_detached(self._stop_device_watchdogs(light=True))
+
         self._pc_stopping = True
         self._pending_device_cleanup = True
         self.process_controller.request_stop()
+
+        # ✅ 백업 타이머: 30초 내 미종료 시 헤비 강제
+        async def _fallback():
+            try:
+                await asyncio.sleep(30)
+                if self._pc_stopping and self._pending_device_cleanup:
+                    self.append_log("MAIN", "STOP fallback → heavy cleanup")
+                    await self._stop_device_watchdogs(light=False)
+                    self._pending_device_cleanup = False
+                    self._pc_stopping = False
+                    self._clear_queue_and_reset_ui()
+            except asyncio.CancelledError:
+                pass
+
+        self._spawn_detached(_fallback(), store=True, name=f"StopFallback.CH{self.ch}")
 
     async def _stop_device_watchdogs(self, *, light: bool = False) -> None:
         if light:
@@ -1399,6 +1415,17 @@ class ChamberRuntime:
             if self.rf_power and hasattr(self.rf_power, "set_process_status"):
                 with contextlib.suppress(Exception): self.rf_power.set_process_status(False)
             return
+        
+        # ✅ heavy 시작 직후도 한 번 더 OFF (안전빵)
+        with contextlib.suppress(Exception): self.mfc.set_process_status(False)
+        if self.dc_pulse:
+            with contextlib.suppress(Exception): self.dc_pulse.set_process_status(False)
+        if self.rf_pulse:
+            with contextlib.suppress(Exception): self.rf_pulse.set_process_status(False)
+        if self.dc_power and hasattr(self.dc_power, "set_process_status"):
+            with contextlib.suppress(Exception): self.dc_power.set_process_status(False)
+        if self.rf_power and hasattr(self.rf_power, "set_process_status"):
+            with contextlib.suppress(Exception): self.rf_power.set_process_status(False)
 
         loop = self._loop_from_anywhere()
         try:

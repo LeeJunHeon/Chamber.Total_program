@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import asyncio, contextlib, inspect, traceback
+import asyncio, contextlib, inspect, traceback, time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -33,10 +33,12 @@ class _CfgAdapter:
 class PlasmaCleaningRuntime:
     """
     Plasma Cleaning 전용 런타임.
-    - 가스밸브(PLC) 제어 없음: 밸브는 항상 Open으로 가정, **MFC#1** 로 on/set/off(유량 0=off)
-    - 사용 가스 라인은 **#3** (N₂ 자리) — 유량 명령 시 gas_idx=3
-    - 압력 제어(SP) 모듈은 쓰지 않고 IG를 읽어 target까지 '대기'
-    - RF 파워는 펄스 없이 '연속'만, PLC의 DAC로 적용/읽기/끄기
+
+    - 가스밸브(PLC) 제어 없음: 밸브는 항상 Open으로 가정
+    - MFC 컨트롤러 **#1** 사용, 가스 라인 **#3** 고정 (on/set/off는 유량으로 처리: 0 = off)
+    - **Working Pressure**: MFC의 **SP4 set/on/off**로 목표 압력 유지
+    - **Target Pressure**: **IG**를 읽어서 목표 도달(±tol, settle 유지)까지 **대기**
+    - RF 파워는 펄스 없이 '연속'만, **PLC DAC**로 적용/읽기/끄기
     """
 
     def __init__(
@@ -47,7 +49,7 @@ class PlasmaCleaningRuntime:
         cfg: Any,
         log_dir: Path,
         *,
-        plc: AsyncPLC | None = None,   # ★ 공유 PLC (필수)
+        plc: AsyncPLC | None = None,   # PLC는 RF DAC 용
         chat: Optional[Any] = None,
     ) -> None:
         self.ui = ui
@@ -55,7 +57,7 @@ class PlasmaCleaningRuntime:
         self._loop = loop
         self.chat = chat
         self.cfg = _CfgAdapter(cfg)
-        self.plc = plc                          # ★ PLC 보관
+        self.plc = plc
         self._bg_tasks: list[asyncio.Task[Any]] = []
         self._bg_started = False
         self._devices_started = False
@@ -65,13 +67,16 @@ class PlasmaCleaningRuntime:
         self._w_log: QPlainTextEdit | None = self._u("logMessage_edit")
         self._w_state: QPlainTextEdit | None = self._u("processState_edit")
 
-        # 그래프(필요 없으면 내부에서 알아서 스킵)
+        # 그래프(PC 페이지에 없으면 내부에서 무시)
         self.graph = GraphController(self._u("rgaGraph_widget"), self._u("oesGraph_widget"))
         with contextlib.suppress(Exception):
             self.graph.reset()
 
         # 데이터 로거
-        self.data_logger = DataLogger(ch=0, csv_dir=Path(r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database"))
+        self.data_logger = DataLogger(
+            ch=0,
+            csv_dir=Path(r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database"),
+        )
 
         # 로그 파일 상태
         self._log_root = Path(log_dir)
@@ -79,9 +84,14 @@ class PlasmaCleaningRuntime:
         self._log_file_path: Path | None = None
         self._log_fp = None
 
-        # 장치: CH1 MFC (MFC1 사용)
+        # 장치: CH1 MFC (컨트롤러 #1)
         host, port = self.cfg.MFC_TCP_CH1()
         self.mfc = AsyncMFC(host=host, port=port, enable_verify=False, enable_stabilization=True)
+
+        # 최근 IG(mTorr) 캐시
+        self._last_ig_mTorr: float | None = None
+        # IG 대기용 타깃 저장 (컨트롤러가 넘겨주는 target과 별도로 유지)
+        self._ig_wait_target: float | None = None
 
         # 컨트롤러 바인딩
         self._bind_plasma_controller()
@@ -91,46 +101,21 @@ class PlasmaCleaningRuntime:
         self._set_default_ui_values()
 
     # ─────────────────────────────────────────────────────────────
-    # PLC 헬퍼 (SP1, RF) — 실제 드라이버에 따라 메서드명이 다를 수 있어 다중 시도
+    # RF(PLC) & SP4(MFC) & IG 헬퍼
     # ─────────────────────────────────────────────────────────────
-    async def _plc_sp1_setpoint(self, mTorr: float) -> None:
-        if not self.plc:
-            raise RuntimeError("PLC 없음(SP1 set 실패)")
-        # 1) 전용 메서드가 있으면 사용
-        if hasattr(self.plc, "sp1_setpoint"):
-            await self.plc.sp1_setpoint(float(mTorr)); return
-        if hasattr(self.plc, "set_sp1"):
-            await self.plc.set_sp1(float(mTorr)); return
-        # 2) 레지스터 이름으로 쓰는 방식(프로젝트 규약에 맞게 바꿔도 됨)
-        if hasattr(self.plc, "write_reg_name"):
-            await self.plc.write_reg_name("SP1_SETPOINT", float(mTorr)); return
-        raise RuntimeError("SP1 set를 지원하는 PLC API를 찾지 못함")
-
-    async def _plc_sp1_on(self, on: bool) -> None:
-        if not self.plc:
-            raise RuntimeError("PLC 없음(SP1 on/off 실패)")
-        if hasattr(self.plc, "sp1_on"):
-            await self.plc.sp1_on(bool(on)); return
-        if hasattr(self.plc, "sp1_enable"):
-            await self.plc.sp1_enable(bool(on)); return
-        if hasattr(self.plc, "write_switch"):
-            await self.plc.write_switch("SP1_SW", bool(on)); return
-        raise RuntimeError("SP1 on/off를 지원하는 PLC API를 찾지 못함")
-
     async def _plc_rf_apply(self, power_w: float) -> None:
         if not self.plc:
             raise RuntimeError("PLC 없음(RF 적용 실패)")
-        # CH2에서 쓰던 규약: family="DCV", channel=1 → RF 채널
+        # 규약: family="DCV", channel=1 → RF 채널
         await self.plc.power_apply(float(power_w), family="DCV", ensure_set=True, channel=1)
 
     async def _plc_rf_off(self) -> None:
         if not self.plc:
             return
-        # RF 채널 write_idx=1에 0W 쓰는 규약(프로젝트 기준 유지)
         await self.plc.power_write(0.0, family="DCV", write_idx=1)
 
     async def _plc_rf_read(self) -> tuple[float, float]:
-        """forward/reflected 읽기 (가능할 때만). 실패 시 (0,0)"""
+        """forward/reflected 읽기 (가능 시), 실패 시 (0,0)"""
         if not self.plc or not hasattr(self.plc, "read_reg_name"):
             return (0.0, 0.0)
         try:
@@ -140,38 +125,115 @@ class PlasmaCleaningRuntime:
         except Exception:
             return (0.0, 0.0)
 
+    async def _mfc_sp4_setpoint(self, mTorr: float) -> None:
+        """MFC의 SP4 setpoint 설정 (드라이버가 다르면 다중 시도)"""
+        # 1) 전용 메서드가 있으면 사용
+        if hasattr(self.mfc, "sp_set"):
+            # 일반적으로 sp_set(sp_idx, value_mTorr, ch=?)
+            try:
+                res = self.mfc.sp_set(4, float(mTorr), ch=1)
+            except TypeError:
+                res = self.mfc.sp_set(4, float(mTorr))
+            if inspect.isawaitable(res):
+                await res
+            return
+        # 2) 커맨드 라우터 경유
+        args = {"sp_idx": 4, "value": float(mTorr), "mfc_idx": 1, "ch": 1}
+        await self.mfc.handle_command("sp_set", args)
+
+    async def _mfc_sp4_on(self, on: bool) -> None:
+        """MFC의 SP4 on/off"""
+        if hasattr(self.mfc, "sp_on"):
+            try:
+                res = self.mfc.sp_on(4, bool(on), ch=1)
+            except TypeError:
+                res = self.mfc.sp_on(4, bool(on))
+            if inspect.isawaitable(res):
+                await res
+            return
+        args = {"sp_idx": 4, "on": bool(on), "mfc_idx": 1, "ch": 1}
+        await self.mfc.handle_command("sp_on", args)
+
+    async def _read_ig_mTorr(self) -> float | None:
+        """
+        IG(mTorr) 읽기:
+        - mfc.read_ig() / mfc.read_pressure() / 최근 이벤트 캐시 순으로 시도
+        """
+        # 1) 전용 메서드
+        for meth_name in ("read_ig", "read_pressure", "get_ig", "get_pressure"):
+            meth = getattr(self.mfc, meth_name, None)
+            if callable(meth):
+                try:
+                    v = meth()
+                    v = await v if inspect.isawaitable(v) else v
+                    return float(v)
+                except Exception:
+                    pass
+        # 2) 이벤트 캐시
+        return self._last_ig_mTorr
+
+    async def _wait_ig_stable(self, _target_arg: float, tol: float, timeout_s: float, settle_s: float) -> bool:
+        """
+        컨트롤러에서 넘기는 target은 'SP setpoint'이므로, 여기서는
+        런타임이 저장해둔 **IG 타깃(self._ig_wait_target)** 으로 판정한다.
+        """
+        target = float(self._ig_wait_target) if self._ig_wait_target is not None else float(_target_arg)
+        tol = abs(float(tol))
+        deadline = time.monotonic() + float(timeout_s)
+        settle_until: float | None = None
+
+        self.append_log("IG", f"대기 시작: {target:.3f}±{tol:.3f} mTorr, timeout={timeout_s:.0f}s, settle={settle_s:.0f}s")
+        while time.monotonic() < deadline:
+            val = await self._read_ig_mTorr()
+            if val is not None:
+                # UI/로그 업데이트(너무 자주 찍지 않도록 간단히)
+                self._set("basePressure_edit", f"{val:.4f}")
+                if abs(val - target) <= tol:
+                    if settle_until is None:
+                        settle_until = time.monotonic() + float(settle_s)
+                    if time.monotonic() >= settle_until:
+                        self.append_log("IG", f"목표 도달: {val:.3f} mTorr")
+                        return True
+                else:
+                    settle_until = None
+            await asyncio.sleep(0.2)
+        self.append_log("IG", "타임아웃(목표 미달)")
+        return False
+
     # ─────────────────────────────────────────────────────────────
-    # 컨트롤러 바인딩 (MFC1 + SP1 + RF 연속)
+    # 컨트롤러 바인딩 (MFC1+Gas#3, SP4, RF 연속)
     # ─────────────────────────────────────────────────────────────
     def _bind_plasma_controller(self) -> None:
-        # MFC: on/set/off 모두 "유량"으로 처리(유량>0 = on, 0 = off)
+        # MFC: on/set/off 모두 "유량"으로 처리. mfc_idx=1, gas_idx=3 강제
         def cb_mfc(cmd: str, args: Mapping[str, Any]) -> None:
-            self._spawn_detached(self.mfc.handle_command(cmd, args))
+            a = dict(args or {})
+            a["mfc_idx"] = 1
+            a["gas_idx"] = 3
+            self._spawn_detached(self.mfc.handle_command(cmd, a))
 
-        # SP1 set (동기 콜백 → 내부에서 비동기로 실행)
+        # SP4 set (컨트롤러의 sp1_set 콜백 자리에 매핑)
         def cb_sp1_set(mTorr: float) -> None:
             async def run():
                 try:
-                    await self._plc_sp1_setpoint(float(mTorr))
+                    await self._mfc_sp4_setpoint(float(mTorr))
                 except Exception as e:
-                    self.append_log("SP1", f"set 실패: {e!r}")
+                    self.append_log("SP4", f"set 실패: {e!r}")
             self._spawn_detached(run())
 
-        # SP1 on/off
+        # SP4 on/off (컨트롤러의 sp1_on 콜백 자리에 매핑)
         def cb_sp1_on(on: bool) -> None:
             async def run():
                 try:
-                    await self._plc_sp1_on(bool(on))
+                    await self._mfc_sp4_on(bool(on))
                 except Exception as e:
-                    self.append_log("SP1", f"on/off 실패: {e!r}")
+                    self.append_log("SP4", f"on/off 실패: {e!r}")
             self._spawn_detached(run())
 
-        # RF 파워 적용
+        # RF 파워 적용 (PLC DAC)
         def cb_rf_power(value: float) -> None:
             async def run():
                 try:
                     await self._plc_rf_apply(float(value))
-                    # 상태 표시(가능 시)
                     fwd, ref = await self._plc_rf_read()
                     if fwd or ref:
                         with contextlib.suppress(Exception):
@@ -189,15 +251,16 @@ class PlasmaCleaningRuntime:
                     await self._plc_rf_off()
             self._spawn_detached(run())
 
-        # IG/RGA/OES 없음
+        # 바인딩
         self.plasma = PlasmaCleaningController(
-            ch=1,                       # PC는 CH1 리소스 사용
+            ch=1,  # PC는 CH1 리소스 사용
             send_mfc=cb_mfc,
-            sp1_set=cb_sp1_set,
-            sp1_on=cb_sp1_on,
+            sp1_set=cb_sp1_set,   # ← SP4 set
+            sp1_on=cb_sp1_on,     # ← SP4 on/off
             send_rf_power=cb_rf_power,
             stop_rf_power=cb_rf_off,
-            # wait_pressure_stable / await_rf_target는 없으면 컨트롤러가 안전 폴백
+            wait_pressure_stable=self._wait_ig_stable,  # ← IG 기반 대기
+            await_rf_target=None,
         )
 
         # 이벤트 펌프
@@ -269,8 +332,7 @@ class PlasmaCleaningRuntime:
             except Exception as e:
                 self.append_log(label, f"start/connect 실패: {e!r}")
 
-        # PLC(공유) + CH1 MFC
-        await _maybe_start_or_connect(self.plc, "PLC")
+        await _maybe_start_or_connect(self.plc, "PLC")       # RF용
         await _maybe_start_or_connect(self.mfc, "MFC-CH1")
 
     async def _pump_mfc_events(self) -> None:
@@ -285,10 +347,17 @@ class PlasmaCleaningRuntime:
             elif k == "flow":
                 with contextlib.suppress(Exception):
                     self.data_logger.log_mfc_flow(ev.gas or "", float(ev.value or 0.0))
-            elif k == "pressure":
-                with contextlib.suppress(Exception):
-                    txt = ev.text or (f"{ev.value:.3g}" if ev.value is not None else "")
-                    self.data_logger.log_mfc_pressure(txt)
+            elif k == "pressure":  # IG 또는 챔버 압력 이벤트라고 가정
+                try:
+                    if ev.value is not None:
+                        self._last_ig_mTorr = float(ev.value)
+                        self._set("basePressure_edit", f"{self._last_ig_mTorr:.4f}")
+                        with contextlib.suppress(Exception):
+                            self.data_logger.log_mfc_pressure(f"{self._last_ig_mTorr:.4f}")
+                    elif ev.text:
+                        self.data_logger.log_mfc_pressure(ev.text)
+                except Exception:
+                    pass
 
     # ─────────────────────────────────────────────────────────────
     # UI 바인딩
@@ -307,7 +376,6 @@ class PlasmaCleaningRuntime:
             return
 
         # --- 입력 읽기 ---
-        # MFC1만 사용: on/set/off는 유량으로 처리
         def _f(leaf: str, default: float) -> float:
             t = (self._get_text(leaf) or "").strip()
             try:
@@ -315,42 +383,43 @@ class PlasmaCleaningRuntime:
             except Exception:
                 return float(default)
 
-        # 가스: Ar/O2 중 하나 선택 → 해당 flow를 초기 유량으로 사용
-        use_ar = bool(getattr(self._u("Ar_checkbox"), "isChecked", lambda: False)())
-        use_o2 = bool(getattr(self._u("O2_checkbox"), "isChecked", lambda: False)())
-        if not (use_ar or use_o2):
-            self._post_warning("선택 오류", "Ar 또는 O2를 하나 이상 선택하세요.")
-            return
+        # Gas Flow (sccm) → MFC1 + gas_idx=3로 on/set/off
+        gas_flow = _f("gasFlow_edit", 0.0)
 
-        ar_flow = _f("arFlow_edit", 0.0) if use_ar else 0.0
-        o2_flow = _f("o2Flow_edit", 0.0) if use_o2 else 0.0
-        init_flow = ar_flow if use_ar else o2_flow   # MFC1 초기 유량
-
-        rf_w      = _f("rfPower_edit", 100.0) or _f("dcPower_edit", 100.0)
+        # RF Power (W) → PLC DAC
+        rf_w = _f("rfPower_edit", 100.0)
         if rf_w <= 0:
             self._post_warning("입력값 확인", "RF Power(W)를 확인하세요.")
             return
 
-        targetP   = _f("workingPressure_edit", 2.0)     # mTorr
-        tolP      = _f("pressureTolerance_edit", 0.2)   # mTorr (없으면 기본)
-        timeout_s = _f("pressureTimeout_edit", 90.0)    # sec
-        settle_s  = _f("pressureSettle_edit", 5.0)      # sec
+        # Working Pressure → SP4 setpoint
+        workingP = _f("workingPressure_edit", 2.0)  # mTorr
 
-        # UI가 초 단위일 가능성 높아 변환: processTime_edit(초) → 분
-        t_proc_s  = _f("processTime_edit", 60.0)
-        hold_min  = max(0.0, t_proc_s / 60.0)
+        # Target Pressure → IG 대기용
+        ig_target = _f("targetPressure_edit", workingP)  # mTorr
+        self._ig_wait_target = ig_target
+
+        # 대기 파라미터(기본값)
+        tolP      = 0.2   # mTorr
+        timeout_s = 90.0  # sec
+        settle_s  = 5.0   # sec
+
+        # Process Time [min]
+        hold_min = max(0.0, _f("ProcessTime_edit", 1.0))
 
         params = {
             "process_note": "PlasmaCleaning",
-            "pc_gas_mfc_idx": 1,                    # ★ MFC1 고정
-            "pc_gas_flow_sccm": init_flow,         # on/set flow
-            "pc_target_pressure_mTorr": targetP,
+            # 주의: 컨트롤러는 pc_gas_mfc_idx를 gas_idx로 사용하므로 '3(가스라인)'을 넣는다.
+            "pc_gas_mfc_idx": 3,                   # ← gas_idx=3 (N2 라인)
+            "pc_gas_flow_sccm": gas_flow,          # on/set flow
+            # 컨트롤러는 sp1_set(target)을 먼저 호출하므로 여기에 'Working P'를 전달
+            "pc_target_pressure_mTorr": workingP,  # ← SP4 setpoint로 사용됨
             "pc_pressure_tolerance": tolP,
             "pc_pressure_timeout_s": timeout_s,
             "pc_pressure_settle_s":  settle_s,
             "pc_rf_power_w": rf_w,
-            "pc_rf_reach_timeout_s": 0.0,          # 목표 도달 확인 생략(필요 시 UI 추가)
-            "pc_process_time_min":   hold_min,     # 분
+            "pc_rf_reach_timeout_s": 0.0,
+            "pc_process_time_min":   hold_min,
         }
 
         # 로그 파일 준비
@@ -362,11 +431,11 @@ class PlasmaCleaningRuntime:
         self._ensure_background_started()
         self._on_process_status_changed(True)
 
-        # maybe_start: 이미 켜져 있어도 안전(멱등)
+        # 멱등 start
         self._spawn_detached(self.mfc.start())
 
         try:
-            self.plasma.start(params)  # ★ 컨트롤러의 공식 시작 API
+            self.plasma.start(params)
         except Exception as e:
             self._post_critical("시작 실패", f"플라즈마 클리닝 시작 실패: {e!r}")
             self._on_process_status_changed(False)
@@ -384,7 +453,7 @@ class PlasmaCleaningRuntime:
                 self.plasma.request_stop()
         except Exception:
             pass
-        # RF 끄기: PLC 0 W
+        # RF 끄기
         with contextlib.suppress(Exception):
             await self._plc_rf_off()
         # 장치 정리
@@ -439,15 +508,24 @@ class PlasmaCleaningRuntime:
 
     # ---- 작은 유틸들 ----
     def _u(self, name: str) -> Any | None:
-        name = self._alias_leaf(name)
-        return getattr(self.ui, f"{self.prefix}{name}", None) if getattr(self, "ui", None) else None
-
-    def _alias_leaf(self, leaf: str) -> str:
-        # 필요 시 PC 페이지 위젯명 매핑
-        mapping = {
-            # "rfPower_edit": "dcPower_edit",
-        }
-        return mapping.get(leaf, leaf)
+        """
+        PC 페이지는 대소문자/접두사 혼재(PC_*, pc_*). 다음 순서로 탐색:
+        - f"{self.prefix}{name}"  (예: 'pc_' + 'Start_button' -> pc_Start_button)
+        - "PC_" + name            (예: PC_Start_button, PC_rfPower_edit)
+        - "pc_" + name            (예: pc_logMessage_edit)
+        - name 그대로
+        """
+        if not getattr(self, "ui", None):
+            return None
+        candidates = []
+        if self.prefix:
+            candidates.append(f"{self.prefix}{name}")
+        candidates.extend((f"PC_{name}", f"pc_{name}", name))
+        for cand in candidates:
+            w = getattr(self.ui, cand, None)
+            if w is not None:
+                return w
+        return None
 
     def _set(self, leaf: str, v: Any) -> None:
         w = self._u(leaf)
