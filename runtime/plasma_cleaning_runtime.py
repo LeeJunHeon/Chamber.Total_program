@@ -18,6 +18,7 @@ from device.plc import AsyncPLC
 from controller.plasma_cleaning_controller import PlasmaCleaningController
 from controller.graph_controller import GraphController
 from controller.data_logger import DataLogger
+from device.rf_power import RFPowerAsync, RFPowerEvent   # ← 추가
 
 
 # --- 최소 설정 어댑터: CH1 MFC TCP만 필요 ---
@@ -93,6 +94,18 @@ class PlasmaCleaningRuntime:
         # IG 대기용 타깃 저장 (컨트롤러가 넘겨주는 target과 별도로 유지)
         self._ig_wait_target: float | None = None
 
+        # RFPowerAsync 인스턴스 (DCV 키를 사용하는 콜백 주입)
+        self.rf = RFPowerAsync(
+            send_rf_power=self._rf_send_verified,
+            send_rf_power_unverified=self._rf_send_unverified,
+            request_status_read=self._rf_read_status,
+            toggle_enable=self._rf_toggle_enable,   # ← DCV_SET_1 토글
+            poll_interval_ms=1000,
+            rampdown_interval_ms=50,
+        )
+        # RF 이벤트 펌프 등록
+        self._ensure_task_alive("Pump.RF", self._pump_rf_events)
+
         # 컨트롤러 바인딩
         self._bind_plasma_controller()
 
@@ -101,30 +114,8 @@ class PlasmaCleaningRuntime:
         self._set_default_ui_values()
 
     # ─────────────────────────────────────────────────────────────
-    # RF(PLC) & SP4(MFC) & IG 헬퍼
+    # SP4(MFC) & IG 헬퍼
     # ─────────────────────────────────────────────────────────────
-    async def _plc_rf_apply(self, power_w: float) -> None:
-        if not self.plc:
-            raise RuntimeError("PLC 없음(RF 적용 실패)")
-        # 규약: family="DCV", channel=1 → RF 채널
-        await self.plc.power_apply(float(power_w), family="DCV", ensure_set=True, channel=1)
-
-    async def _plc_rf_off(self) -> None:
-        if not self.plc:
-            return
-        await self.plc.power_write(0.0, family="DCV", write_idx=1)
-
-    async def _plc_rf_read(self) -> tuple[float, float]:
-        """forward/reflected 읽기 (가능 시), 실패 시 (0,0)"""
-        if not self.plc or not hasattr(self.plc, "read_reg_name"):
-            return (0.0, 0.0)
-        try:
-            fwd_raw = await self.plc.read_reg_name("DCV_READ_2")
-            ref_raw = await self.plc.read_reg_name("DCV_READ_3")
-            return (float(fwd_raw), float(ref_raw))
-        except Exception:
-            return (0.0, 0.0)
-
     async def _mfc_sp4_setpoint(self, mTorr: float) -> None:
         """MFC의 SP4 setpoint 설정 (드라이버가 다르면 다중 시도)"""
         # 1) 전용 메서드가 있으면 사용
@@ -199,6 +190,35 @@ class PlasmaCleaningRuntime:
             await asyncio.sleep(0.2)
         self.append_log("IG", "타임아웃(목표 미달)")
         return False
+    
+    # ─────────────────────────────────────────────────────────────
+    # RF(PLC) 브릿지: DCV 키로 RF 제어 (SET_1 / WRITE_1 / READ_2,3)
+    # ─────────────────────────────────────────────────────────────
+    async def _rf_toggle_enable(self, on: bool) -> None:
+        if not self.plc:
+            raise RuntimeError("PLC 없음(RF SET 토글 불가)")
+        # DCV_SET_1 ← RF 사용전 True, 종료시 False
+        await self.plc.power_enable(on, family="DCV", set_idx=1)
+
+    async def _rf_send_verified(self, w: float) -> None:
+        if not self.plc:
+            raise RuntimeError("PLC 없음(RF 전송 불가)")
+        # DCV_WRITE_1 ← 0~1000W → 0~4000 DAC(DC와 같은 스케일)
+        await self.plc.power_write(float(w), family="DCV", write_idx=1)
+
+    async def _rf_send_unverified(self, w: float) -> None:
+        # 램프다운 등 no-reply 경로도 WRITE_1로 동일 적용
+        await self._rf_send_verified(w)
+
+    async def _rf_read_status(self) -> object:
+        if not self.plc:
+            return None
+        try:
+            fwd = await self.plc.read_reg_name("DCV_READ_2")  # RF forward W
+            ref = await self.plc.read_reg_name("DCV_READ_3")  # RF reflected W
+            return {"forward": float(fwd), "reflected": float(ref)}
+        except Exception:
+            return None
 
     # ─────────────────────────────────────────────────────────────
     # 컨트롤러 바인딩 (MFC1+Gas#3, SP4, RF 연속)
@@ -229,26 +249,26 @@ class PlasmaCleaningRuntime:
                     self.append_log("SP4", f"on/off 실패: {e!r}")
             self._spawn_detached(run())
 
-        # RF 파워 적용 (PLC DAC)
+        # RF 파워 적용 → RFPowerAsync 사용
         def cb_rf_power(value: float) -> None:
             async def run():
                 try:
-                    await self._plc_rf_apply(float(value))
-                    fwd, ref = await self._plc_rf_read()
-                    if fwd or ref:
-                        with contextlib.suppress(Exception):
-                            self.data_logger.log_rf_power(fwd, ref)
-                        self._set("forP_edit", f"{fwd:.2f}")
-                        self._set("refP_edit", f"{ref:.2f}")
+                    # 처음 호출이면 start, 이미 러닝이면 목표만 갱신 후 보정 트리거
+                    if not getattr(self.rf, "_is_running", False):
+                        await self.rf.start_process(float(value))
+                    else:
+                        self.rf.target_power = float(value)
+                        # 현재 측정값으로 즉시 보정 1회 유도
+                        self.rf.update_measurements(self.rf.forward_w, self.rf.reflected_w)
                 except Exception as e:
                     self.append_log("RF", f"파워 적용 실패: {e!r}")
             self._spawn_detached(run())
 
-        # RF off
+        # RF off → RFPowerAsync 정리(램프다운+SET OFF)
         def cb_rf_off() -> None:
             async def run():
                 with contextlib.suppress(Exception):
-                    await self._plc_rf_off()
+                    await self.rf.cleanup()
             self._spawn_detached(run())
 
         # 바인딩
@@ -292,6 +312,31 @@ class PlasmaCleaningRuntime:
                     self._on_process_status_changed(False)
             except Exception as e:
                 self.append_log("PC", f"event pump error: {e!r}")
+
+    async def _pump_rf_events(self) -> None:
+        async for ev in self.rf.events():
+            try:
+                if ev.kind == "status":
+                    self.append_log("RF", ev.message or "")
+                elif ev.kind == "display":
+                    # forward/reflected 표시 + 로깅
+                    if ev.forward is not None:
+                        self._set("forP_edit", f"{float(ev.forward):.2f}")
+                    if ev.reflected is not None:
+                        self._set("refP_edit", f"{float(ev.reflected):.2f}")
+                    with contextlib.suppress(Exception):
+                        if ev.forward is not None or ev.reflected is not None:
+                            self.data_logger.log_rf_power(float(ev.forward or 0.0), float(ev.reflected or 0.0))
+                elif ev.kind == "target_reached":
+                    self.append_log("RF", "목표 파워 도달")
+                elif ev.kind == "target_failed":
+                    self.append_log("RF", f"목표 실패: {ev.message or ''}")
+                    # 필요 시 전체 중단
+                    self.request_stop_all(user_initiated=False)
+                elif ev.kind == "power_off_finished":
+                    self.append_log("RF", "출력 OFF 완료")
+            except Exception:
+                pass
 
     # ─────────────────────────────────────────────────────────────
     # 장치 시작/펌프
@@ -453,9 +498,9 @@ class PlasmaCleaningRuntime:
                 self.plasma.request_stop()
         except Exception:
             pass
-        # RF 끄기
+        # RF 끄기 (램프다운 + SET OFF)
         with contextlib.suppress(Exception):
-            await self._plc_rf_off()
+            await self.rf.cleanup()
         # 장치 정리
         with contextlib.suppress(Exception):
             await self.mfc.cleanup()
@@ -637,7 +682,7 @@ class PlasmaCleaningRuntime:
             except Exception:
                 pass
             with contextlib.suppress(Exception):
-                await self._plc_rf_off()
+                await self.rf.cleanup()
             with contextlib.suppress(Exception):
                 await self.mfc.cleanup()
             with contextlib.suppress(Exception):

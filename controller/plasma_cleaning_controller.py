@@ -12,18 +12,23 @@ from typing import Any, Callable, Coroutine, Mapping, Optional, TypedDict, Union
 
 class PCParams(TypedDict, total=False):
     # MFC/가스
-    pc_gas_mfc_idx: int            # 기본: 3번 (CH1의 Plasma Cleaning 전용 라인)
-    pc_gas_flow_sccm: float        # (선택) 초기 유량/상한 (SP1 제어와 병행할 때 사용)
-    # 압력 제어(SP1)
-    pc_target_pressure_mTorr: float  # 목표 압력(mTorr) → SP1 set 대상
-    pc_pressure_tolerance: float     # 안정화 판정 허용오차(±mTorr)
-    pc_pressure_timeout_s: float     # 목표 도달 타임아웃(초)
-    pc_pressure_settle_s: float      # 목표 도달 후 추가 안정화 대기(초)
+    pc_gas_mfc_idx: int            # 사용 가스 라인 index (기본: 3, N2 라인)
+    pc_gas_flow_sccm: float        # (선택) 초기 유량/상한 (유량>0 = on, 0 = off)
+
+    # 압력 제어(Working Pressure = MFC SP4)
+    pc_target_pressure_mTorr: float  # SP4 set 대상(Working Pressure, mTorr)
+    # IG 안정화 판정 파라미터
+    pc_pressure_tolerance: float     # IG 안정화 허용오차(±mTorr)
+    pc_pressure_timeout_s: float     # IG 목표 도달 타임아웃(초)
+    pc_pressure_settle_s: float      # IG 목표 도달 후 추가 안정화 대기(초)
+
     # RF
     pc_rf_power_w: float             # RF 연속 파워(W)
     pc_rf_reach_timeout_s: float     # RF 목표 도달 확인 타임아웃(초, 옵션)
+
     # 유지시간
     pc_process_time_min: float       # 유지 시간(분)
+
     # 기타
     process_note: str
 
@@ -42,23 +47,24 @@ class PCEvent:
 
 class PlasmaCleaningController:
     """
-    Plasma Cleaning 전용 상태머신(IG 미사용).
+    Plasma Cleaning 전용 상태머신(IG 읽기 사용).
+
     시퀀스:
-      1) (선택) MFC #idx에 초기 유량 설정
-      2) SP1 Set(목표 압력) → SP1 On
-      3) 압력 목표 도달 + (선택) 안정화 대기
+      1) (선택) MFC 가스라인(#idx)에 초기 유량 설정
+      2) SP4 Set(Working Pressure) → SP4 On  [MFC]
+      3) IG 기준 목표 압력 도달 + (선택) 안정화 대기
       4) RF 연속 파워 설정, 목표 도달(옵션) 확인
       5) 유지 타이머 진행
-      6) 안전 종료(RF OFF → SP1 OFF → MFC 유량 0)
+      6) 안전 종료(RF OFF → SP4 OFF → MFC 유량 0)
 
     콜백(런타임에서 주입):
       - send_mfc(cmd, args): MFC 제어(예: "set_flow", {"gas_idx":3, "flow":20.0, "ch":1})
-      - sp1_set(mTorr): SP1 setpoint 를 설정
-      - sp1_on(on: bool): SP1 제어 On/Off
-      - send_rf_power(power_w): RF 연속 파워 목표 설정 시작
+      - sp1_set(mTorr): SP4 setpoint 를 설정(런타임에서 SP4로 매핑됨)
+      - sp1_on(on: bool): SP4 제어 On/Off(런타임에서 SP4로 매핑됨)
+      - send_rf_power(power_w): RF 연속 파워 목표 설정 시작(PLC DAC)
       - stop_rf_power(): RF 전원/목표 해제
       - wait_pressure_stable(target_mTorr, tol_mTorr, timeout_s, settle_s) -> bool :
-            목표±tol에 들어오고 settle_s 동안 유지되면 True
+            IG가 target±tol에 들어오고 settle_s 동안 유지되면 True
       - await_rf_target(power_w, timeout_s) -> bool :
             RF 목표 도달 여부 대기(선택)
     """
@@ -85,8 +91,8 @@ class PlasmaCleaningController:
 
         # 콜백
         self._send_mfc = send_mfc
-        self._sp1_set = sp1_set
-        self._sp1_on = sp1_on
+        self._sp1_set = sp1_set      # 런타임에서 SP4 set으로 매핑
+        self._sp1_on = sp1_on        # 런타임에서 SP4 on/off로 매핑
         self._send_rf = send_rf_power
         self._stop_rf = stop_rf_power
         self._wait_pressure_stable = wait_pressure_stable
@@ -141,13 +147,11 @@ class PlasmaCleaningController:
     def _set_polling(self, *, mfc: bool, rf: bool) -> None:
         self._emit("polling_targets", {"targets": {"mfc": mfc, "rf": rf}})
 
-    # --- (추가) MFC ACK 핸들러: 런타임에서 호출됨 ---
+    # --- (유지) MFC ACK 핸들러: 런타임에서 호출됨 ---
     def on_mfc_confirmed(self, cmd: str) -> None:
-        # 상태머신이 이 ACK에 의존하진 않지만, 로그를 남겨두면 디버깅에 유용
         self._emit_log("MFC", f"'{cmd}' confirmed")
 
     def on_mfc_failed(self, cmd: str, reason: str) -> None:
-        # 실패 로그만 남기고 공정 자체는 계속(필요하면 여기서 중단 로직을 넣어도 됨)
         self._emit_log("MFC", f"'{cmd}' failed: {reason}")
 
     # ── 실행 로직 ────────────────────────────────────────────────
@@ -173,22 +177,22 @@ class PlasmaCleaningController:
                 })
                 self._emit_log("MFC", f"MFC#{p['pc_gas_mfc_idx']} -> {p['pc_gas_flow_sccm']:.3f} sccm")
 
-            # 2) SP1 설정/On
+            # 2) SP4 설정/On  (런타임에서 SP4로 매핑된 콜백 호출)
             tgt = float(p["pc_target_pressure_mTorr"])
-            self._emit_state(f"[PC] SP1 Set {tgt:g} mTorr")
+            self._emit_state(f"[PC] SP4 Set {tgt:g} mTorr")
             self._sp1_set(tgt)
             await asyncio.sleep(0.05)  # 전송 후 소폭 지연
-            self._emit_state("[PC] SP1 On")
+            self._emit_state("[PC] SP4 On")
             self._sp1_on(True)
 
-            # 3) 압력 안정화 대기
+            # 3) IG 기반 압력 안정화 대기
             tol = float(p["pc_pressure_tolerance"])
             tmo = float(p["pc_pressure_timeout_s"])
             settle = float(p["pc_pressure_settle_s"])
-            self._emit_state(f"[PC] 압력대기: {tgt:g}±{tol:g} mTorr, timeout {tmo:.0f}s, settle {settle:.0f}s")
+            self._emit_state(f"[PC] IG 대기: {tgt:g}±{tol:g} mTorr, timeout {tmo:.0f}s, settle {settle:.0f}s")
             pres_ok = await self._wait_pressure_or_fallback(tgt, tol, tmo, settle)
             if not pres_ok:
-                self._emit_log("PC", "압력 안정화 타임아웃")
+                self._emit_log("PC", "IG 안정화 타임아웃")
                 detail.update(stage="pressure_stable_timeout", target_mTorr=tgt, tol_mTorr=tol)
                 self._emit_finished(False, detail)
                 return
@@ -233,11 +237,11 @@ class PlasmaCleaningController:
         finally:
             # 6) 안전 종료
             try:
-                self._emit_state("[PC] 종료: RF OFF → SP1 OFF → MFC=0 sccm")
+                self._emit_state("[PC] 종료: RF OFF → SP4 OFF → MFC=0 sccm")
                 try: self._stop_rf()
                 except Exception: self._emit_log("RF", "stop 실패(무시)")
-                try: self._sp1_on(False)
-                except Exception: self._emit_log("PC", "SP1 Off 실패(무시)")
+                try: self._sp1_on(False)  # ← 런타임에서 SP4 off로 매핑
+                except Exception: self._emit_log("PC", "SP4 Off 실패(무시)")
                 try:
                     self._send_mfc("set_flow", {"gas_idx": int(p["pc_gas_mfc_idx"]), "flow": 0.0, "ch": self.ch})
                 except Exception:
@@ -265,7 +269,7 @@ class PlasmaCleaningController:
                 )
             except asyncio.TimeoutError:
                 return False
-        # 폴백: 실제 압력 감시 콜백이 없으면 짧게 대기만(실사용에선 콜백 구현 권장)
+        # 폴백: 실제 IG 감시 콜백이 없으면 짧게 대기만(실사용에선 콜백 구현 권장)
         await asyncio.sleep(min(3.0, timeout_s))
         return True
 
@@ -303,7 +307,9 @@ class PlasmaCleaningController:
         p: PCParams = {
             "pc_gas_mfc_idx":        i(raw.get("pc_gas_mfc_idx", 3), 3),
             "pc_gas_flow_sccm":      f(raw.get("pc_gas_flow_sccm", 0.0), 0.0),
+            # SP4(Working Pressure) set 대상
             "pc_target_pressure_mTorr": f(raw.get("pc_target_pressure_mTorr", 2.0), 2.0),
+            # IG 안정화 판정 파라미터
             "pc_pressure_tolerance": f(raw.get("pc_pressure_tolerance", 0.2), 0.2),
             "pc_pressure_timeout_s": f(raw.get("pc_pressure_timeout_s", 90.0), 90.0),
             "pc_pressure_settle_s":  f(raw.get("pc_pressure_settle_s", 5.0), 5.0),
