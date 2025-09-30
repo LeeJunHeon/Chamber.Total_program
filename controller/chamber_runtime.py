@@ -282,8 +282,8 @@ class ChamberRuntime:
         self.dc_power = None
         if self.supports_dc_cont:
             async def _dc_send(power: float):
-                # verified: SET 자동 보장
-                await self.plc.power_apply(power, family="DCV", channel=0, ensure_set=True)
+                # 연속 제어 루프에서는 SET을 건드리지 않는다 → WRITE만 수행
+                await self.plc.power_write(power, family="DCV", write_idx=0)
 
             async def _dc_send_unverified(power: float):
                 # no-reply: WRITE만
@@ -835,13 +835,34 @@ class ChamberRuntime:
             if k == "status":
                 self.append_log(f"DCPulse{self.ch}", ev.message or "")
             elif k == "telemetry":
-                pass
+                # 장비 내부 폴링 결과(P/V/I)를 화면/로거에 반영
+                P = getattr(ev, "power",   None)
+                V = getattr(ev, "voltage", None)
+                I = getattr(ev, "current", None)
+
+                # 혹시 dict 형태로 올 수도 있으니 보강
+                if (P is None or V is None or I is None) and hasattr(ev, "eng"):
+                    eng = getattr(ev, "eng") or {}
+                    P = P if P is not None else float(eng.get("P_W", 0.0))
+                    V = V if V is not None else float(eng.get("V_V", 0.0))
+                    I = I if I is not None else float(eng.get("I_A", 0.0))
+
+                try:
+                    self.data_logger.log_dc_power(float(P or 0.0), float(V or 0.0), float(I or 0.0))
+                except Exception:
+                    pass
+                self._display_dc(P, V, I)
+                self.append_log(f"DCPulse{self.ch}", f"[telemetry] P={float(P or 0):.1f} W, V={float(V or 0):.2f} V, I={float(I or 0):.3f} A")
+
             elif k == "command_confirmed":
                 cmd = (ev.cmd or "").upper()
                 if cmd == "OUTPUT_ON":
+                    # 폴링은 장비 내부에서 자동 시작됨
                     self.process_controller.on_dc_pulse_target_reached()
                 elif cmd == "OUTPUT_OFF":
+                    # 폴링은 장비 내부에서 자동 중지됨
                     self.process_controller.on_dc_pulse_off_finished()
+
             elif k == "command_failed":
                 why = ev.reason or "unknown"
                 self.append_log(f"DCPulse{self.ch}", f"CMD FAIL: {ev.cmd or ''} ({why})")

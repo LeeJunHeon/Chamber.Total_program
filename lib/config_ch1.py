@@ -6,6 +6,9 @@ from .config_common import *
 CH_ID = 1
 CH_NAME = "ch1"
 
+# RGA CSV 저장 경로 (CH1)
+RGA_CSV_PATH = r"\\VanaM_NAS\VanaM_Sputter\RGA\Ch.1\RGA_spectrums.csv"
+
 # === 채널별 포트/프로그램/경로 오버라이드 ===
 # IG / MFC
 IG_TCP_PORT  = 4001

@@ -23,6 +23,14 @@ import asyncio, time, contextlib, socket
 from lib.config_ch1 import DCPULSE_TCP_HOST, DCPULSE_TCP_PORT
 
 # ========= 기본 설정(필요 시 config_* 모듈에서 override 가능) =========
+# 폴링 주기(초)
+DCP_POLL_INTERVAL_S = 3.0
+
+# ── 측정값 읽기 코드(장비별 상이할 수 있음: 필요 시 여기만 바꿔줘) ──
+READ_MEAS_POWER  = 0x91
+READ_MEAS_VOLT   = 0x92
+READ_MEAS_CURR   = 0x93
+
 DCP_CONNECT_TIMEOUT_S = 1.5
 
 # 프로토콜(Type4: STX/ETX/CHK) 및 RS-485 옵션
@@ -57,6 +65,11 @@ class DCPEvent:
     cmd: Optional[str] = None
     reason: Optional[str] = None
     data: Optional[dict] = None
+    # ↓↓↓ 추가: chamber_runtime 호환용 편의 필드
+    power: Optional[float] = None
+    voltage: Optional[float] = None
+    current: Optional[float] = None
+    eng: Optional[dict] = None
 
 # ========= 명령 레코드 =========
 @dataclass
@@ -168,6 +181,9 @@ class AsyncDCPulse:
         self._just_reopened: bool = False
         self.debug_print = DEBUG_PRINT
 
+        self._out_on: bool = False                 # 출력 ON/OFF 내부 기억
+        self._poll_period_s: float = DCP_POLL_INTERVAL_S
+
     # ====== 공용 API ======
     async def start(self):
         if self._watchdog_task and self._watchdog_task.done():
@@ -224,7 +240,7 @@ class AsyncDCPulse:
     def set_process_status(self, should_poll: bool):
         if should_poll:
             if self._poll_task is None or self._poll_task.done():
-                self._ev_nowait(DCPEvent(kind="status", message="주기적 읽기(Polling) 시작"))
+                self._ev_nowait(DCPEvent(kind="status", message=f"주기적 읽기(Polling) 시작({self._poll_period_s:.1f}s)"))
                 self._poll_task = asyncio.create_task(self._poll_loop())
         else:
             if self._poll_task:
@@ -310,12 +326,14 @@ class AsyncDCPulse:
         elif mode.upper() == "I":
             raw = int(round(value * SCALE_CURR_A))
         else:  # "P"
-            raw = int(round(value * SCALE_POWER_W))
+            raw = int(round(float(value) / 100.0))     # 100 W/step
+            raw = max(0, min(100, raw))
         await self._write_cmd_data(0x83, raw, 2, label=f"REF_{mode.upper()}({value})")
 
     async def set_reference_power(self, value_w: float):
-        """출력 레벨(전력) 설정."""
-        raw = int(round(float(value_w) * SCALE_POWER_W)) & 0xFFFF
+        """출력 레벨(전력) 설정 — 100 W/step → 0~100."""
+        raw = int(round(float(value_w) / 100.0))      # 100 W → 1 step
+        raw = max(0, min(100, raw))                   # 범위 보호
         await self._write_cmd_data(0x83, raw, 2, label=f"REF_POWER({value_w:.0f}W)")
 
     async def output_on(self):
@@ -359,7 +377,9 @@ class AsyncDCPulse:
         await self._write_cmd_data(0x0B, int(pause_ms), 2, label="SHDN_PAUSE_MS")
 
     async def set_limits(self, *, p_w: float, i_a: float, v_v: float):
-        await self._write_cmd_data(0x0C, int(round(p_w * SCALE_POWER_W)), 2, label="LIM_P_W")
+        p_raw = int(round(float(p_w) / 100.0))         # 100 W/step
+        p_raw = max(0, min(100, p_raw))
+        await self._write_cmd_data(0x0C, p_raw, 2, label="LIM_P_W")
         await self._write_cmd_data(0x0D, int(round(i_a * SCALE_CURR_A)), 2, label="LIM_I_A")
         await self._write_cmd_data(0x0E, int(round(v_v * SCALE_VOLT_V)), 2, label="LIM_V_V")
 
@@ -368,20 +388,52 @@ class AsyncDCPulse:
         await self._write_cmd_data(0x10, int(round(ignition_v * SCALE_VOLT_V)), 2, label="IGN_V")
 
     # ====== 읽기(모니터링/상태) - 필요 시 확장 ======
-    async def read_regulation(self) -> Optional[int]:
-        resp = await self._read_simple(0x13, "READ_REG")  # 예시 코드 (실제 읽기 코드는 장비 스펙에 맞춰 보정)
-        return resp
+    # 1) 원시 바이트를 그대로 돌려주는 읽기 헬퍼
+    async def _read_raw(self, code: int, label: str) -> Optional[bytes]:
+        fut = asyncio.get_running_loop().create_future()
+        def _cb(resp: Optional[bytes]):
+            if not fut.done():
+                fut.set_result(resp)
+        payload = self._proto.pack_read(code)
+        self._enqueue(Command(payload, label, DCP_TIMEOUT_MS, DCP_GAP_MS, 2, _cb))
+        return await self._await_reply_bytes(label, fut)
 
-    async def read_reference(self) -> Optional[int]:
-        resp = await self._read_simple(0x14, "READ_REF")  # 예시 코드
-        return resp
-
-    async def read_limits(self) -> dict:
+    # 2) 현재 출력값 P/I/V 읽기 (0x9A → P,I,V 각 2바이트)
+    async def read_output_piv(self) -> Optional[dict]:
+        resp = await self._read_raw(0x9A, "READ_PIV")  # Power/Current/Voltage
+        if not resp or len(resp) < 1 + 6:  # payload: [CMD][P_hi][P_lo][I_hi][I_lo][V_hi][V_lo]
+            await self._emit_failed("READ_PIV", f"응답 길이 오류: {resp!r}")
+            return None
+        data = resp[1:]  # 첫 1바이트는 CMD(0x9A)
+        P_raw = (data[0] << 8) | data[1]
+        I_raw = (data[2] << 8) | data[3]
+        V_raw = (data[4] << 8) | data[5]
+        # 스케일 복원(설정쪽과 반대 연산). SCALE_* 가 0이면 ZeroDivision 방지
+        P_W = (P_raw / max(1e-9, SCALE_POWER_W))  # 예: SCALE_POWER_W=0.01이면 raw*100W
+        I_A = (I_raw / max(1e-9, SCALE_CURR_A))
+        V_V = (V_raw / max(1e-9, SCALE_VOLT_V))
         return {
-            "P": await self._read_simple(0x1C, "READ_LIM_P"),
-            "I": await self._read_simple(0x1D, "READ_LIM_I"),
-            "V": await self._read_simple(0x1E, "READ_LIM_V"),
+            "raw": {"P": P_raw, "I": I_raw, "V": V_raw},
+            "eng": {"P_W": P_W, "I_A": I_A, "V_V": V_V},
         }
+
+    # 3) 현재 Control Mode 읽기 (0x9C)
+    async def read_control_mode(self) -> Optional[str]:
+        resp = await self._read_raw(0x9C, "READ_CTRL_MODE")
+        if not resp or len(resp) < 1 + 2:
+            await self._emit_failed("READ_CTRL_MODE", f"응답 길이 오류: {resp!r}")
+            return None
+        val = ((resp[-2] << 8) | resp[-1]) & 0xFF
+        mapping = {1: "HOST", 2: "REMOTE", 4: "LOCAL"}
+        return mapping.get(val, f"UNKNOWN({val})")
+
+    # 4) Fault Code 읽기 (0x9E)
+    async def read_fault_code(self) -> Optional[int]:
+        resp = await self._read_raw(0x9E, "READ_FAULT")
+        if not resp or len(resp) < 1 + 2:
+            await self._emit_failed("READ_FAULT", f"응답 길이 오류: {resp!r}")
+            return None
+        return (resp[-2] << 8) | resp[-1]
 
     # ====== 내부: 명령 헬퍼 ======
     def _ok_from_resp(self, resp: Optional[bytes]) -> bool:
@@ -403,6 +455,11 @@ class AsyncDCPulse:
         self._enqueue(Command(payload, label, DCP_TIMEOUT_MS, DCP_GAP_MS, 3, _cb))
         resp = await self._await_reply_bytes(label, fut)
         if self._ok_from_resp(resp):
+            # ✅ OUTPUT_ON/OFF 반영
+            if label == "OUTPUT_ON":
+                self._out_on = True
+            elif label == "OUTPUT_OFF":
+                self._out_on = False
             await self._emit_confirmed(label)
         else:
             await self._emit_failed(label, "응답 없음/실패")
@@ -699,12 +756,31 @@ class AsyncDCPulse:
     async def _poll_loop(self):
         try:
             while True:
-                if not self._connected:
-                    await asyncio.sleep(1.0)
-                    continue
-                # 예: 주기 상태 요청(필요 시 실제 읽기 코드로 교체)
-                # await self._read_simple(0x91, "POLL_OPERATION")
-                await asyncio.sleep(1.0)
+                t0 = time.monotonic()
+                try:
+                    if self._connected and self._out_on:
+                        res = await self.read_output_piv()
+                        if res and "eng" in res:
+                            eng = res["eng"]
+                            ev = DCPEvent(
+                                kind="telemetry",
+                                data=eng,
+                                # chamber_runtime가 바로 읽어가는 필드 채워줌
+                                power=float(eng.get("P_W", 0.0)),
+                                voltage=float(eng.get("V_V", 0.0)),
+                                current=float(eng.get("I_A", 0.0)),
+                                eng=eng,
+                            )
+                            self._ev_nowait(ev)
+                        else:
+                            self._ev_nowait(DCPEvent(kind="status", message="[poll] 응답 없음/파싱 실패"))
+                    # 출력이 OFF이거나 아직 연결 중이면 조용히 대기
+                except Exception as e:
+                    self._ev_nowait(DCPEvent(kind="status", message=f"[poll] 예외: {e!r}"))
+
+                # 주기 보정
+                dt = time.monotonic() - t0
+                await asyncio.sleep(max(0.05, self._poll_period_s - dt))
         except asyncio.CancelledError:
             pass
 

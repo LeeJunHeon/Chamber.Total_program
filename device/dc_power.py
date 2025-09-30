@@ -92,6 +92,8 @@ class DCPowerAsync:
         self._event_q: asyncio.Queue[DCPowerEvent] = asyncio.Queue(maxsize=256)
         self._sent_target_reached = False
 
+        self._enabled = False  # SET 래치
+
     # ======= 퍼블릭 이벤트 스트림 =======
     async def events(self) -> AsyncGenerator[DCPowerEvent, None]:
         while True:
@@ -105,6 +107,14 @@ class DCPowerAsync:
             return
 
         self.target_power = float(max(0.0, min(DC_MAX_POWER, target_power)))
+
+        try:
+            await self._toggle_enable(True)
+            await self._emit_status("DCV SET ON")
+        except Exception as e:
+            await self._emit_status(f"DCV SET ON 실패: {e!r}")
+            return  # 실패 시 시작 중단을 원하면 유지
+        self._enabled = True
 
         self._is_running = True
         await self._emit_state_changed(True)
@@ -228,6 +238,13 @@ class DCPowerAsync:
 
             # 폴링도 OFF
             self.set_process_status(False)
+
+            if self._toggle_enable and self._enabled:
+                try:
+                    await self._toggle_enable(False)  # ← SET OFF (종료 시)
+                    await self._emit_status("DCV SET OFF")
+                finally:
+                    self._enabled = False
 
             # 표시/이벤트 정리
             self._ev_nowait(DCPowerEvent(kind="display", power=0.0, voltage=0.0, current=0.0))
