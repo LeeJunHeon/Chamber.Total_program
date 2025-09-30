@@ -315,13 +315,6 @@ class AsyncDCPulse:
                         (0x7D, "MASTER_MODE")):
             await self._write_cmd_data(cmd, 0x0003, 2, label=name)
         await asyncio.sleep(0.2)  # 전환 유예
-        # 🔎 상태 한번 읽어 로깅 (실패해도 무시)
-        try:
-            val = await self.read_operation_info()
-            if val is not None:
-                await self._emit_status(f"[INFO] OP_INFO(0x91)=0x{val:04X}")
-        except Exception as e:
-            await self._emit_status(f"[INFO] OP_INFO read skip: {e!r}")
 
     async def set_regulation(self, mode: Literal["V","I","P"]):
         """0x81: 제어 모드 설정 (1=V, 2=I, 3=P)."""
@@ -432,18 +425,6 @@ class AsyncDCPulse:
             "eng": {"P_W": P_W, "I_A": I_A, "V_V": V_V},
         }
     
-    # 2.5) 운영 정보/마스터 상태 읽기 (0x91)
-    async def read_operation_info(self) -> Optional[int]:
-        """
-        0x91: 운영/마스터 상태 비트를 2바이트로 반환.
-        반환값은 16비트 정수(상위바이트<<8 | 하위바이트).
-        """
-        resp = await self._read_raw(0x91, "READ_OP_INFO")
-        if not resp or len(resp) < 1 + 2:
-            await self._emit_failed("READ_OP_INFO", f"응답 길이 오류: {resp!r}")
-            return None
-        return (resp[-2] << 8) | resp[-1]
-
     # 3) 현재 Control Mode 읽기 (0x9C)
     async def read_control_mode(self) -> Optional[str]:
         resp = await self._read_raw(0x9C, "READ_CTRL_MODE")
