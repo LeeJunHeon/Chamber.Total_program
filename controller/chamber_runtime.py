@@ -364,6 +364,42 @@ class ChamberRuntime:
 
     # ------------------------------------------------------------------
     # 공정 컨트롤러 바인딩
+
+    def _bind_plasma_cleaning_controller(self) -> None:
+        """
+        플라즈마 클리닝 전용 바인딩:
+        - IG/PLC 일절 사용 안 함
+        - 가스는 CH1 MFC(self.mfc_ch1)만 사용
+        - 전원은 RF 연속 파워(self.rf_power)만 사용 (RF Pulse X)
+        """
+        # 1) CH1 MFC로만 명령 보냄
+        def _cb_pc_mfc(cmd: str, args: Mapping[str, Any]) -> None:
+            # MFC-CH1은 __init__에서 이미 생성됨
+            self._spawn_detached(self.mfc_ch1.handle_command(cmd, args))
+
+        # 2) RF 연속 파워 on/off (PLC 경유 연속 파워 래퍼 사용)
+        async def _rf_start(power: float):
+            self._ensure_background_started()
+            if not self.rf_power:
+                raise RuntimeError("RF 연속 파워 장치가 없습니다. (supports_rf_cont=True 필요)")
+            await self.rf_power.start_process(float(power))
+
+        async def _rf_stop():
+            if self.rf_power:
+                await self.rf_power.cleanup()
+
+        # 3) 컨트롤러 생성(IG/PLC 콜백 없음)
+        self.plasma = PlasmaCleaningController(
+            send_mfc=_cb_pc_mfc,
+            start_rf=_rf_start,
+            stop_rf=_rf_stop,
+            ch=self.ch,
+        )
+
+        # 4) 이벤트 펌프 기동(중복 안전)
+        self._ensure_task_alive("Pump.PClean", self._pump_plasma_events)
+        self._ensure_task_alive("Pump.MFC.CH1", self._pump_mfc_ch1_events)
+
     def _bind_process_controller(self) -> None:
         # === 콜백 정의(PLC/MFC/파워/OES/RGA/IG) ===
 
@@ -929,6 +965,83 @@ class ChamberRuntime:
                 self.append_log(f"OES{self.ch}", f"이벤트 처리 예외: {e!r}")
                 continue
 
+    async def _pump_plasma_events(self) -> None:
+        q = self.plasma.event_q
+        while True:
+            ev = await q.get()
+            kind = ev.kind
+            payload = ev.payload or {}
+            try:
+                if kind == "log":
+                    self.append_log("PClean", payload.get("msg",""))
+
+                elif kind == "state":
+                    self._apply_process_state_message(payload.get("text",""))
+
+                elif kind == "status":
+                    self._on_process_status_changed(bool(payload.get("running", False)))
+
+                elif kind == "started":
+                    # 로그/그래프/알림 준비
+                    if not getattr(self, "_log_file_path", None):
+                        self._prepare_log_file(payload.get("params", {}))
+                    try:
+                        self.data_logger.start_new_log_session(payload.get("params", {}))
+                    except Exception:
+                        pass
+
+                    # 폴링: RF 연속만 On (자기 MFC는 Off)
+                    self._apply_polling_targets({
+                        "mfc": False, "dc_pulse": False, "rf_pulse": False, "dc": False, "rf": True
+                    })
+                    # CH1 MFC 폴링은 별도로 켠다(자기 self.mfc와는 별개)
+                    with contextlib.suppress(Exception):
+                        self.mfc_ch1.set_process_status(True)
+
+                elif kind == "finished":
+                    ok = bool(payload.get("ok", False))
+                    self.data_logger.finalize_and_write_log(ok)
+                    with contextlib.suppress(Exception):
+                        self.mfc_ch1.set_process_status(False)
+                    self._on_process_status_changed(False)
+                    self._last_polling_targets = None
+
+                else:
+                    self.append_log("PClean", f"unknown event: {kind} {payload}")
+            finally:
+                await asyncio.sleep(0)
+
+    async def _pump_mfc_ch1_events(self) -> None:
+        async for ev in self.mfc_ch1.events():
+            k = ev.kind
+            if k == "status":
+                self.append_log("MFC-CH1", ev.message or "")
+
+            elif k == "command_confirmed":
+                # 플라즈마 컨트롤러에 'MFC 명령 확인' 통지
+                if hasattr(self, "plasma"):
+                    self.plasma.on_mfc_confirmed(ev.cmd or "")
+
+            elif k == "command_failed":
+                why = ev.reason or "unknown"
+                if hasattr(self, "plasma"):
+                    self.plasma.on_mfc_failed(ev.cmd or "", why)
+                self.append_log("MFC-CH1", f"{ev.cmd or ''} fail: {why}")
+
+            elif k == "flow":
+                gas = ev.gas or ""
+                flow = float(ev.value or 0.0)
+                with contextlib.suppress(Exception):
+                    self.data_logger.log_mfc_flow(gas, flow)
+                self.append_log("MFC-CH1", f"[poll] {gas}: {flow:.2f} sccm")
+
+            elif k == "pressure":
+                # 로깅만(클리닝 로직 게이트로 쓰지 않음)
+                txt = ev.text or (f"{ev.value:.3g}" if ev.value is not None else "")
+                with contextlib.suppress(Exception):
+                    self.data_logger.log_mfc_pressure(txt)
+                self.append_log("MFC-CH1", f"[poll] ChamberP: {txt}")
+
     # ------------------------------------------------------------------
     # 백그라운드 시작/보장
     def _ensure_task_alive(self, name: str, coro_factory: Callable[[], Coroutine[Any, Any, Any]]) -> None:
@@ -992,6 +1105,11 @@ class ChamberRuntime:
             if not obj:
                 return
             try:
+                if self._is_dev_connected(obj):        # ★ 이미 연결됨
+                    if log:
+                        self.append_log(label, "already connected → skip")
+                    return
+                
                 meth = getattr(obj, "start", None) or getattr(obj, "connect", None)
                 if not callable(meth):
                     if log:
@@ -2179,4 +2297,14 @@ class ChamberRuntime:
             return QApplication.instance() is not None and self._parent_widget() is not None
         except Exception:
             return False
+        
+    # ============================= PLC 로그 소유 관리 =============================
+    def set_plc_log_owner(self, owns: bool) -> None:
+        """이 런타임이 PLC 로그의 현재 소유자인지 토글"""
+        prev = getattr(self, "_owns_plc", False)
+        self._owns_plc = bool(owns)
+        # 필요하면 디버깅용 로그(선택)
+        if prev != self._owns_plc:
+            self.append_log("MAIN", f"PLC log owner -> {self._owns_plc}")
+    # ============================= PLC 로그 소유 관리 =============================
 
