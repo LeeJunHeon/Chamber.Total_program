@@ -338,7 +338,7 @@ class AsyncDCPulse:
         await self._write_cmd_data(0x83, raw, 2, label=f"REF_{mode.upper()}({value})")
 
     async def set_reference_power(self, value_w: float):
-        """출력 레벨(전력) 설정 — 100 W/step → 0~100."""
+        """출력 레벨(전력) 설정 — 10 W/step → 0~500."""
         # 10 W/step → 0..500 (5 kW)
         raw = int(round(float(value_w) / POWER_SET_STEP_W))
         raw = max(0, min(MAX_POWER_W // POWER_SET_STEP_W, raw))
