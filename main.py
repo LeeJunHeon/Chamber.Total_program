@@ -105,6 +105,8 @@ class MainWindow(QWidget):
     def _set_plc_owner(self, ch: Optional[int]) -> None:
         """ChamberRuntime에서 공정 시작/종료 때 호출해 소유자 갱신"""
         self._plc_owner = ch if ch in (1, 2) else None
+        if hasattr(self, "ch1"): self.ch1.set_plc_log_owner(self._plc_owner == 1)
+        if hasattr(self, "ch2"): self.ch2.set_plc_log_owner(self._plc_owner == 2)
 
     def _route_log_to(self, ch: int, src: str, msg: str) -> None:
         """지정 챔버로만 로그 싱글캐스트"""

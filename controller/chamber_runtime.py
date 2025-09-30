@@ -340,6 +340,19 @@ class ChamberRuntime:
                 request_status_read=_rf_request_read,
             )
 
+        # ── (추가) 플라즈마 클리닝에서 항상 사용할 "CH1 MFC 핸들" ──
+        pc_host, pc_port = self.cfg.MFC_TCP_CH1
+        if self.ch == 1 and (mfc_host, mfc_port) == (pc_host, pc_port):
+            # CH1 런타임이면 기존 self.mfc를 그대로 공유
+            self.mfc_ch1 = self.mfc
+        else:
+            # CH2 런타임에서도 CH1 MFC(같은 물리장비)에 접속할 소프트 핸들
+            self.mfc_ch1 = AsyncMFC(host=pc_host, port=pc_port, enable_verify=False, enable_stabilization=True)
+
+        # ── (추가) 플라즈마 클리닝 컨트롤러 연결 ──
+        self._bind_plasma_cleaning_controller()
+
+
         # === ProcessController 바인딩 ===
         self._bind_process_controller()
 
@@ -1005,6 +1018,7 @@ class ChamberRuntime:
         # 나머지는 기존대로 각 챔버에서 로그 출력
         await _maybe_start_or_connect(self.mfc, "MFC")
         await _maybe_start_or_connect(self.ig,  "IG")
+        await _maybe_start_or_connect(self.mfc_ch1, "MFC-CH1") #플라즈마 클리닝용
 
         # 펄스 장비는 '이번 런에서 선택된 경우에만' 연결 시도
         if self.dc_pulse and sel.get("dc_pulse", False):
