@@ -22,6 +22,11 @@ from controller.chamber_runtime import ChamberRuntime  # 다음 단계에서 파
 from lib import config_ch1, config_ch2
 from lib import config_common as cfgc
 
+# ───────────────────────────────────────────────────────────
+# 로그 메시지 내 CH 힌트 정규식: [CH1], [CH 2], CH=1, CH:2, ch 1 등
+CH_HINT_RE = re.compile(r"\[CH\s*(\d)\]|\bCH(?:=|:)?\s*(\d)\b", re.IGNORECASE)
+# ───────────────────────────────────────────────────────────
+
 
 class MainWindow(QWidget):
     def __init__(self, loop: Optional[asyncio.AbstractEventLoop] = None):
@@ -46,26 +51,11 @@ class MainWindow(QWidget):
         if self.chat_notifier:
             self.chat_notifier.start()
 
-        # PLC (공유) : 메시지 내 CH 힌트를 읽어 해당 챔버로만 라우팅
-        def _plc_log(fmt, *args):
-            msg = (fmt % args) if args else str(fmt)
+        # ── 현재 PLC 로그의 소유 챔버 (1/2). 없으면 None → 방송 모드
+        self._plc_owner: Optional[int] = None
 
-            # [CH1], [CH 2], "CH=1", "CH:2" 등 패턴 감지
-            m = re.search(r'\[CH\s*(\d)\]|\bCH(?:=|:)?\s*(\d)\b', msg, re.IGNORECASE)
-            ch = int(next((g for g in (m.groups() if m else ()) if g), 0)) if m else 0
-
-            if ch == 1 and getattr(self, "ch1", None):
-                self.ch1.append_log("PLC", msg)
-            elif ch == 2 and getattr(self, "ch2", None):
-                self.ch2.append_log("PLC", msg)
-            else:
-                # 채널 힌트가 없는 "전역" 메시지 정책:
-                #  (a) 둘 다 뿌리기
-                if getattr(self, "ch1", None): self.ch1.append_log("PLC(Global)", msg)
-                if getattr(self, "ch2", None): self.ch2.append_log("PLC(Global)", msg)
-                #  (b) 아예 무시하려면 위 두 줄을 지우면 됨.
-
-        self.plc: AsyncPLC = AsyncPLC(logger=_plc_log)
+        # PLC (공유) : CH 힌트 > 소유자 > 방송 순으로 라우팅
+        self.plc: AsyncPLC = AsyncPLC(logger=self._plc_log)
 
         # 로그 루트 (NAS 실패 시 런타임 내부에서 폴백 처리)
         self._log_root = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs")
@@ -81,6 +71,7 @@ class MainWindow(QWidget):
             chat=self.chat_notifier,       # 공유(옵션)
             cfg=config_ch1,                # CH1 설정
             log_dir=self._log_root,        # 루트만 넘기면 런타임이 ch1/ch2 파일명 분리
+            on_plc_owner=self._set_plc_owner,   # ★ 공정 시작/종료 때 소유자 갱신
         )
 
         # CH2: DC + RF-Pulse, IG/MFC/OES/RGA(2), PLC 공유
@@ -93,6 +84,7 @@ class MainWindow(QWidget):
             chat=self.chat_notifier,
             cfg=config_ch2,
             log_dir=self._log_root,
+            on_plc_owner=self._set_plc_owner,   # ★ 공정 시작/종료 때 소유자 갱신
         )
 
         # === TSP 페이지 컨트롤러 ===  (공통 config로 이동)
@@ -107,7 +99,45 @@ class MainWindow(QWidget):
         # --- 페이지 네비 버튼만 여기서 연결 (Start/Stop은 각 런타임이 자기 버튼에 바인딩)
         self._connect_page_buttons()
 
-    # 공용 PLC 로그를 두 런타임 로그창에 뿌림
+    # ───────────────────────────────────────────────────────────
+    # ▼ 여기부터는 클래스 "메서드"로 유지해야 합니다
+    # ───────────────────────────────────────────────────────────
+    def _set_plc_owner(self, ch: Optional[int]) -> None:
+        """ChamberRuntime에서 공정 시작/종료 때 호출해 소유자 갱신"""
+        self._plc_owner = ch if ch in (1, 2) else None
+
+    def _route_log_to(self, ch: int, src: str, msg: str) -> None:
+        """지정 챔버로만 로그 싱글캐스트"""
+        if ch == 1 and getattr(self, "ch1", None):
+            self.ch1.append_log(src, msg)
+        elif ch == 2 and getattr(self, "ch2", None):
+            self.ch2.append_log(src, msg)
+
+    def _plc_log(self, fmt, *args):
+        """PLC 드라이버에서 호출하는 로거 콜백"""
+        msg = (fmt % args) if args else str(fmt)
+
+        # 1) 메시지 자체에 CH 힌트가 있으면 최우선 라우팅
+        m = CH_HINT_RE.search(msg)
+        if m:
+            hinted = next((g for g in m.groups() if g), None)
+            hinted_ch = int(hinted) if hinted else 0
+            if hinted_ch in (1, 2):
+                self._route_log_to(hinted_ch, "PLC", msg)
+                return
+
+        # 2) 힌트가 없으면, 현재 PLC 소유자에게만 보냄
+        if self._plc_owner in (1, 2):
+            self._route_log_to(self._plc_owner, "PLC", msg)
+            return
+
+        # 3) 소유자도 없으면 '전역'으로 방송
+        if getattr(self, "ch1", None):
+            self.ch1.append_log("PLC(Global)", msg)
+        if getattr(self, "ch2", None):
+            self.ch2.append_log("PLC(Global)", msg)
+
+    # 공용 PLC 로그를 두 런타임 로그창에 뿌림 (기존 유지; 다른 용도일 때 사용)
     def _broadcast_log(self, source: str, msg: str) -> None:
         try:
             if hasattr(self, "ch1") and self.ch1:
@@ -163,7 +193,7 @@ if __name__ == "__main__":
     app = QApplication(sys.argv)
     loop = QEventLoop(app)
     asyncio.set_event_loop(loop)
-    
+
     w = MainWindow(loop)
     w.show()
     with loop:

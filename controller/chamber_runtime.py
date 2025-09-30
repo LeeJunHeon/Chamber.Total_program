@@ -172,6 +172,13 @@ class _CfgAdapter:
             str(self._get("MFC_TCP_HOST", "192.168.1.50")),
             int(self._get("MFC_TCP_PORT", 4006 if self.ch == 1 else 4007)),
         )
+    
+    @property
+    def MFC_TCP_CH1(self) -> tuple[str, int]:
+        """플라즈마 클리닝 시 항상 사용할 CH1의 MFC TCP (물리장비는 CH1 MFC 하나)."""
+        host = str(self._get("MFC_TCP_HOST", "192.168.1.50"))
+        port = int(self._get("MFC_TCP_PORT", 4006))  # CH1 기본 포트
+        return (host, port)
 
 class ChamberRuntime:
     """
@@ -199,6 +206,7 @@ class ChamberRuntime:
         supports_dc_pulse: Optional[bool] = None,  # DC-Pulse
         supports_rf_pulse: Optional[bool] = None,  # RF-Pulse
         owns_plc: Optional[bool] = None,   # ← 추가: PLC 로그 소유자
+        on_plc_owner: Optional[Callable[[Optional[int]], None]] = None,   # ★ 추가
     ) -> None:
         self.ui = ui
         self.ch = int(chamber_no)
@@ -218,6 +226,7 @@ class ChamberRuntime:
         self._auto_connect_enabled = True  # ← 실패시 False로 내려 자동 재연결 차단
         self._run_select: dict[str, bool] | None = None  # ← 이번 런에서 펄스 선택 상태
         self._owns_plc = bool(owns_plc if owns_plc is not None else (int(chamber_no) == 1))  # 기본 CH1
+        self._notify_plc_owner = on_plc_owner                                   # ★ 추가
 
         # QMessageBox 참조 저장소(비모달 유지용)
         self._msg_boxes: list[QMessageBox] = []  # ← 추가
@@ -260,7 +269,8 @@ class ChamberRuntime:
         mfc_host, mfc_port = self.cfg.MFC_TCP
         ig_host,  ig_port  = self.cfg.IG_TCP
 
-        self.mfc = AsyncMFC(host=mfc_host, port=mfc_port, enable_verify=False)
+        # FLOW_ON 시 실제 유량 일치 확인(안정화 루프)만 켬
+        self.mfc = AsyncMFC(host=mfc_host, port=mfc_port, enable_verify=False, enable_stabilization=True)
         self.ig  = AsyncIG(host=ig_host,  port=ig_port)
 
         self.oes = OESAsync(chamber=self.ch)
@@ -1021,6 +1031,14 @@ class ChamberRuntime:
         b_start = self._u("Start_button"); b_stop = self._u("Stop_button")
         if b_start: b_start.setEnabled(not running)
         if b_stop:  b_stop.setEnabled(True)
+
+        # ★ 추가: 공정 시작/종료에 따라 PLC 로그 소유권 갱신
+        cb = getattr(self, "_notify_plc_owner", None)
+        if callable(cb):
+            try:
+                cb(self.ch if running else None)
+            except Exception:
+                pass
 
     def _apply_process_state_message(self, message: str) -> None:
         if getattr(self, "_last_state_text", None) == message:
