@@ -141,6 +141,15 @@ class PlasmaCleaningController:
     def _set_polling(self, *, mfc: bool, rf: bool) -> None:
         self._emit("polling_targets", {"targets": {"mfc": mfc, "rf": rf}})
 
+    # --- (추가) MFC ACK 핸들러: 런타임에서 호출됨 ---
+    def on_mfc_confirmed(self, cmd: str) -> None:
+        # 상태머신이 이 ACK에 의존하진 않지만, 로그를 남겨두면 디버깅에 유용
+        self._emit_log("MFC", f"'{cmd}' confirmed")
+
+    def on_mfc_failed(self, cmd: str, reason: str) -> None:
+        # 실패 로그만 남기고 공정 자체는 계속(필요하면 여기서 중단 로직을 넣어도 됨)
+        self._emit_log("MFC", f"'{cmd}' failed: {reason}")
+
     # ── 실행 로직 ────────────────────────────────────────────────
     async def _run(self, p: PCParams) -> None:
         self._running = True

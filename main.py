@@ -15,8 +15,9 @@ from controller.chat_notifier import ChatNotifier
 # 공유 장비(PLC만 공용)
 from device.plc import AsyncPLC
 
-# ▶ 새로 추가될 런타임 래퍼 (각 챔버 독립 실행단위)
-from runtime.chamber_runtime import ChamberRuntime  # 다음 단계에서 파일 제공
+# ▶ 런타임 래퍼
+from runtime.chamber_runtime import ChamberRuntime
+from runtime.plasma_cleaning_runtime import PlasmaCleaningRuntime   # ★ 추가
 
 # 챔버별 설정
 from lib import config_ch1, config_ch2
@@ -59,6 +60,18 @@ class MainWindow(QWidget):
 
         # 로그 루트 (NAS 실패 시 런타임 내부에서 폴백 처리)
         self._log_root = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs")
+
+        # === Plasma Cleaning 런타임 (PC 전용) 생성 ★ 추가 ===
+        # - RF는 PLC 경유(연속만), 가스밸브/IG 없음, CH1 MFC TCP 사용
+        self.pc = PlasmaCleaningRuntime(
+            ui=self.ui,
+            prefix="pc_",            # PC 페이지 접두사
+            loop=self._loop,
+            cfg=config_ch1,          # CH1의 MFC TCP를 사용
+            log_dir=self._log_root,
+            plc=self.plc,            # ★ PLC 전달 (RF 파워 제어용)
+            chat=self.chat_notifier,
+        )
 
         # === 챔버 런타임 2개 생성 (각각 자기 장치/그래프/로거/버튼 바인딩 포함) ===
         # CH1: DC-Pulse, IG/MFC/OES/RGA(1), PLC 공유
@@ -133,13 +146,15 @@ class MainWindow(QWidget):
             self._route_log_to(self._plc_owner, "PLC", msg)
             return
 
-        # 3) 소유자도 없으면 '전역'으로 방송
+        # 3) 소유자도 없으면 '전역'으로 방송 (★ PC에도 뿌려줌)
         if getattr(self, "ch1", None):
             self.ch1.append_log("PLC(Global)", msg)
         if getattr(self, "ch2", None):
             self.ch2.append_log("PLC(Global)", msg)
+        if getattr(self, "pc", None):                          # ★ 추가
+            self.pc.append_log("PLC(Global)", msg)
 
-    # 공용 PLC 로그를 두 런타임 로그창에 뿌림 (기존 유지; 다른 용도일 때 사용)
+    # 공용 로그 방송 (필요시 사용)
     def _broadcast_log(self, source: str, msg: str) -> None:
         try:
             if hasattr(self, "ch1") and self.ch1:
@@ -149,6 +164,11 @@ class MainWindow(QWidget):
         try:
             if hasattr(self, "ch2") and self.ch2:
                 self.ch2.append_log(source, msg)
+        except Exception:
+            pass
+        try:                                                   # ★ 추가(옵션)
+            if hasattr(self, "pc") and self.pc:
+                self.pc.append_log(source, msg)
         except Exception:
             pass
 
@@ -168,6 +188,11 @@ class MainWindow(QWidget):
 
     # --- 앱 종료: 각 런타임의 빠른 정리 API 호출 + Chat 종료
     def closeEvent(self, event: QCloseEvent) -> None:
+        try:
+            if self.pc:                                       # ★ 추가
+                self.pc.shutdown_fast()
+        except Exception:
+            pass
         try:
             if self.ch1:
                 self.ch1.shutdown_fast()
