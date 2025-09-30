@@ -16,7 +16,7 @@ from controller.chat_notifier import ChatNotifier
 from device.plc import AsyncPLC
 
 # ▶ 새로 추가될 런타임 래퍼 (각 챔버 독립 실행단위)
-from controller.chamber_runtime import ChamberRuntime  # 다음 단계에서 파일 제공
+from runtime.chamber_runtime import ChamberRuntime  # 다음 단계에서 파일 제공
 
 # 챔버별 설정
 from lib import config_ch1, config_ch2

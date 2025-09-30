@@ -1334,6 +1334,8 @@ class ChamberRuntime:
             else:
                 self.append_log("MAIN", "모든 공정 완료")
                 self._clear_queue_and_reset_ui()
+                # ★ 추가: 정상 종료 + 더 이상 다음 공정이 없으면 장치 연결 해제(PLC 제외)
+                self._spawn_detached(self._stop_device_watchdogs(light=False), name="FullCleanup.EndRun")
         finally:
             self._advancing = False
 
