@@ -54,11 +54,11 @@ SCALE_ARC_US  = 1.0                # 0~5 us, 40~200 us → 값 그대로
 
 # EnerPulse-5: Power setpoint = 10 W/step (0.01 kW/step)
 MAX_POWER_W = 1000
-POWER_SET_STEP_W = 10          # 10 W per step
-POWER_MEAS_STEP_W = 10         # 측정값도 10 W 단위면 동일 적용
+POWER_SET_STEP_W = 100          # 10 W per step
+POWER_MEAS_STEP_W = 100         # 측정값도 10 W 단위면 동일 적용
 
 # 읽기 스케일: P_W = raw / SCALE_POWER_W  이므로 10 W/step이면 0.1로 둔다.
-SCALE_POWER_W = 0.1            # raw / 0.1 = raw*10 W
+SCALE_POWER_W = 0.01            # raw / 0.1 = raw*10 W
 
 DEBUG_PRINT = False
 
@@ -452,7 +452,29 @@ class AsyncDCPulse:
             return resp[0] == 0x06
         # 그 외(읽기 응답 등 프레임 payload)는 일단 수신만 되면 성공 처리
         return True
+    
+    # ===================== 기존 로직 =====================
+    # async def _write_cmd_data(self, cmd: int, value: int, width: int, *, label: str):
+    #     fut = asyncio.get_running_loop().create_future()
+    #     def _cb(resp: Optional[bytes]):
+    #         if not fut.done():
+    #             fut.set_result(resp)
 
+    #     payload = self._proto.pack_write(cmd, value, width=width)
+    #     self._enqueue(Command(payload, label, DCP_TIMEOUT_MS, DCP_GAP_MS, 3, _cb))
+    #     resp = await self._await_reply_bytes(label, fut)
+    #     if self._ok_from_resp(resp):
+    #         # ✅ OUTPUT_ON/OFF 반영
+    #         if label == "OUTPUT_ON":
+    #             self._out_on = True
+    #         elif label == "OUTPUT_OFF":
+    #             self._out_on = False
+    #         await self._emit_confirmed(label)
+    #     else:
+    #         await self._emit_failed(label, "응답 없음/실패")
+    # ===================== 기존 로직 =====================
+    
+    # ===================== 실패시 검증하는 로직 =====================
     async def _write_cmd_data(self, cmd: int, value: int, width: int, *, label: str):
         fut = asyncio.get_running_loop().create_future()
         def _cb(resp: Optional[bytes]):
@@ -462,15 +484,50 @@ class AsyncDCPulse:
         payload = self._proto.pack_write(cmd, value, width=width)
         self._enqueue(Command(payload, label, DCP_TIMEOUT_MS, DCP_GAP_MS, 3, _cb))
         resp = await self._await_reply_bytes(label, fut)
-        if self._ok_from_resp(resp):
-            # ✅ OUTPUT_ON/OFF 반영
-            if label == "OUTPUT_ON":
-                self._out_on = True
-            elif label == "OUTPUT_OFF":
-                self._out_on = False
+        ok = self._ok_from_resp(resp)
+
+        # OUTPUT_ON/OFF 후속 검증
+        if label in ("OUTPUT_ON", "OUTPUT_OFF"):
+            intended_on = (label == "OUTPUT_ON")
+            if ok:
+                self._out_on = intended_on
+                await self._emit_confirmed(label)
+                return
+            # 응답이 ERR/타임아웃이면 상태로 검증
+            ver = await self._verify_output_state()
+            if ver is not None:
+                self._out_on = ver
+                if ver == intended_on:
+                    await self._emit_confirmed(label + "_VERIFIED")  # 상태 일치 → 성공으로 간주
+                    return
+            await self._emit_failed(label, "응답 없음/실패 (상태 불일치/확인 불가)")
+            return
+
+        # 그 외 명령은 기존 로직 유지
+        if ok:
             await self._emit_confirmed(label)
         else:
             await self._emit_failed(label, "응답 없음/실패")
+
+    async def read_status_flags(self) -> Optional[int]:
+        # 0x90: Status mode 비트필드 2바이트 반환 (payload: [CMD][hi][lo])
+        resp = await self._read_raw(0x90, "READ_STATUS")
+        if not resp or len(resp) < 1 + 2:
+            await self._emit_failed("READ_STATUS", f"응답 길이 오류: {resp!r}")
+            return None
+        return (resp[-2] << 8) | resp[-1]
+
+    @staticmethod
+    def _hv_on_from_status(flags: int) -> bool:
+        # 매뉴얼 표기: f0 nibble = SetPoint | Ramp | START | HV On (LSB)
+        return bool(flags & 0x0001)
+
+    async def _verify_output_state(self) -> Optional[bool]:
+        flags = await self.read_status_flags()
+        if flags is None:
+            return None
+        return self._hv_on_from_status(flags)
+    # ===================== 실패시 검증하는 로직 =====================
 
     async def _write_simple(self, code: int, *, label: str):
         """데이터 없는 쓰기 명령(필요 시 사용)."""
