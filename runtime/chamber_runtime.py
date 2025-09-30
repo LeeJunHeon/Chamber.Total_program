@@ -616,10 +616,32 @@ class ChamberRuntime:
                     except Exception:
                         pass
 
+                    # 자동 재연결을 선차단 → 도중 재부팅 방지
+                    self._auto_connect_enabled = False
+
+                    # 0) 재연결 선차단 + 폴링 완전 OFF
+                    self._auto_connect_enabled = False
+                    self._run_select = None
+                    self._last_polling_targets = None
+                    # 남아 있을 수 있는 폴링 스위치를 즉시 모두 내림(장치 내부 워치독 종료 유도)
+                    self._apply_polling_targets({"mfc": False, "dc_pulse": False, "rf_pulse": False, "dc": False, "rf": False})
+
+                    # 1) 이제 실제로 장치/워치독을 내려서 RS-232/TCP 점유 해제
+                    self.append_log("MAIN", "공정 종료 → 모든 장치 연결 해제 및 워치독 중지")
+                    try:
+                        await self._stop_device_watchdogs(light=False)
+                    except Exception as e:
+                        self.append_log("MAIN", f"종료 정리 중 예외(무시): {e!r}")
+
+                    # 2) 다음 공정 새 로그 파일을 위해 세션 리셋
+                    self._log_file_path = None
+
                     if getattr(self, "_pc_stopping", False):
                         with contextlib.suppress(Exception):
                             self._clear_queue_and_reset_ui()
                         self._last_polling_targets = None
+                        self._pc_stopping = False
+                        continue
 
                     if getattr(self, "_pending_device_cleanup", False):
                         with contextlib.suppress(Exception):
@@ -652,7 +674,9 @@ class ChamberRuntime:
 
                 elif kind == "polling":
                     active = bool(payload.get("active", False))
-                    self._ensure_background_started()
+                    # active=True 이고 자동연결 허용 상태에서만 장치/워치독을 올림
+                    if active and self._auto_connect_enabled:
+                        self._ensure_background_started()
                     targets = getattr(self, "_last_polling_targets", None)
                     if not targets:
                         params = getattr(self.process_controller, "current_params", {}) or {}
@@ -1200,8 +1224,9 @@ class ChamberRuntime:
             else:
                 self.append_log("MAIN", "모든 공정 완료")
                 self._clear_queue_and_reset_ui()
+                # (주의) 장치 연결 해제는 finished 분기에서 이미 수행함
                 # ★ 추가: 정상 종료 + 더 이상 다음 공정이 없으면 장치 연결 해제(PLC 제외)
-                self._spawn_detached(self._stop_device_watchdogs(light=False), name="FullCleanup.EndRun")
+                #self._spawn_detached(self._stop_device_watchdogs(light=False), name="FullCleanup.EndRun")
         finally:
             self._advancing = False
 
@@ -1416,7 +1441,7 @@ class ChamberRuntime:
                 with contextlib.suppress(Exception): self.rf_power.set_process_status(False)
             return
         
-        # ✅ heavy 시작 직후도 한 번 더 OFF (안전빵)
+        # ✅ heavy 시작 직후도 한 번 더 OFF
         with contextlib.suppress(Exception): self.mfc.set_process_status(False)
         if self.dc_pulse:
             with contextlib.suppress(Exception): self.dc_pulse.set_process_status(False)

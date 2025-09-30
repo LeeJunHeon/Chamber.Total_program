@@ -1,10 +1,10 @@
 # device/dc_pulse.py
 # -*- coding: utf-8 -*-
 """
-dc_pulse.py — EnerPulse 5/10 Pulser RS-232 제어 (MOXA NPort 등 TCP-Serial 게이트웨이 경유)
+dc_pulse.py — EnerPulse 5 Pulser RS-232 제어 (MOXA NPort 등 TCP-Serial 게이트웨이 경유)
 - asyncio Streams + 단일 명령 큐 + 워치독
-- 프로토콜 Type4(STX/ETX/CHK) 바이너리 프레이밍
-- Host Master 설정 → 제어모드 Power → UI값 참조 설정 → 출력 ON 시퀀스 제공
+- 프로토콜 Type4(STX/ETX/CHK) 바이너리 프레이밍 (RS-232 전용)
+- 장비에서 Host/Mode/펄스 파라미터는 수동 설정, 코드는 Power setpoint(0x83)와 Output On/Off(0x80)만 제어
 
 사용 예:
     dcp = AsyncDCPulse(host="192.168.1.50", port=4010)
@@ -27,11 +27,6 @@ from lib.config_ch1 import DCPULSE_TCP_HOST, DCPULSE_TCP_PORT
 DCP_POLL_INTERVAL_S = 3.0
 DCP_CONNECT_TIMEOUT_S = 1.5
 
-# 프로토콜(Type4: STX/ETX/CHK) 및 RS-485 옵션
-DCP_PROTOCOL_TYPE = 4          # EnerPulse 매뉴얼의 Type 4
-DCP_USE_RS485 = False          # RS-485이면 True, RS-232이면 False
-DCP_DEVICE_ID = 0x01           # RS-485일 때 장치 ID(0~250)
-
 # 타이밍/리트라이
 DCP_TIMEOUT_MS = 1500               # 개별 명령 타임아웃
 DCP_GAP_MS = 1000                  # 명령 간 최소 간격
@@ -48,11 +43,11 @@ SCALE_ARC_US  = 1.0                # 0~5 us, 40~200 us → 값 그대로
 
 # EnerPulse-5: Power setpoint = 10 W/step (0.01 kW/step)
 MAX_POWER_W = 1000
-POWER_SET_STEP_W = 100          # 10 W per step
-POWER_MEAS_STEP_W = 100         # 측정값도 10 W 단위면 동일 적용
+POWER_SET_STEP_W = 10          # 10 W per step
+POWER_MEAS_STEP_W = 10         # 측정값도 10 W 단위면 동일 적용
 
 # 읽기 스케일: P_W = raw / SCALE_POWER_W  이므로 10 W/step이면 0.1로 둔다.
-SCALE_POWER_W = 0.01            # raw / 0.1 = raw*10 W
+SCALE_POWER_W = 0.1            # raw / 0.1 = raw*10 W
 
 DEBUG_PRINT = False
 
@@ -104,16 +99,14 @@ class BinaryProtocol(IProtocol):
       - RS-485: STX + IP + CMD + DATA + ETX + CHK
       - DATA 폭(width): 0/1/2 바이트
     """
-    def __init__(self, use_rs485: bool = DCP_USE_RS485, dev_id: int = DCP_DEVICE_ID):
-        self.use_rs485 = bool(use_rs485)
-        self.dev_id = int(dev_id) & 0xFF
+    def __init__(self):
+        pass # RS-232 only
 
     def _frame(self, cmd: int, data: bytes) -> bytes:
         stx = b"\x02"
         etx = b"\x03"
-        core = (stx + (bytes([self.dev_id]) if self.use_rs485 else b"")
-                + bytes([cmd & 0xFF]) + data + etx)
-        chk = bytes([_csum_low8(core)])
+        core = stx + bytes([cmd & 0xFF]) + data + etx  # RS-232: STX + CMD + DATA + ETX
+        chk  = bytes([_csum_low8(core)])
         return core + chk
 
     def pack_write(self, code: int, value: Optional[int] = None, *, width: int = 0) -> bytes:
@@ -488,13 +481,16 @@ class AsyncDCPulse:
                 self._out_on = intended_on
                 await self._emit_confirmed(label)
                 return
-            # 응답이 ERR/타임아웃이면 상태로 검증
+
+            # 응답 없음/ERR → 하드웨어 반영 대기 후 상태 검증
+            await asyncio.sleep(0.08)  # 80 ms 정도 유예
             ver = await self._verify_output_state()
             if ver is not None:
                 self._out_on = ver
                 if ver == intended_on:
-                    await self._emit_confirmed(label + "_VERIFIED")  # 상태 일치 → 성공으로 간주
+                    await self._emit_confirmed(label + "_VERIFIED")
                     return
+
             await self._emit_failed(label, "응답 없음/실패 (상태 불일치/확인 불가)")
             return
 
