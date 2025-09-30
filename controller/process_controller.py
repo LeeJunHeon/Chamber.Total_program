@@ -1038,12 +1038,12 @@ class ProcessController:
                     ProcessStep(
                         action=ActionType.MFC_CMD,
                         params=('FLOW_SET', {'channel': info["channel"], 'value': flow_value}),
-                        message=f'Ch{info["channel"]}({gas}) 유량 {flow_value}sccm 설정'
+                        message=f'Ch{info["channel"]}({gas}) GAS {flow_value}sccm 설정'
                     ),
                     ProcessStep(
                         action=ActionType.MFC_CMD,
                         params=('FLOW_ON', {'channel': info["channel"]}),
-                        message=f'Ch{info["channel"]}({gas}) 유량 공급 시작'
+                        message=f'Ch{info["channel"]}({gas}) GAS 공급 시작'
                     )
                 ])
 

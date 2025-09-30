@@ -25,12 +25,6 @@ from lib.config_ch1 import DCPULSE_TCP_HOST, DCPULSE_TCP_PORT
 # ========= 기본 설정(필요 시 config_* 모듈에서 override 가능) =========
 # 폴링 주기(초)
 DCP_POLL_INTERVAL_S = 3.0
-
-# ── 측정값 읽기 코드(장비별 상이할 수 있음: 필요 시 여기만 바꿔줘)
-READ_MEAS_POWER  = 0x91
-READ_MEAS_VOLT   = 0x92
-READ_MEAS_CURR   = 0x93
-
 DCP_CONNECT_TIMEOUT_S = 1.5
 
 # 프로토콜(Type4: STX/ETX/CHK) 및 RS-485 옵션
@@ -268,7 +262,7 @@ class AsyncDCPulse:
         # 마스터 모드: 기본 host (기존 동작 유지), 필요 시 'remote' 등으로 지정
         master: Literal["host", "remote", "local", "origin", "always"] = "host",
     ):
-        
+        '''
         # 1) 항상 Host 권한으로 고정
         await self.set_master_host_all()
 
@@ -301,7 +295,8 @@ class AsyncDCPulse:
 
         # duty만 숫자인 경우(주파수 미지정)는 off_time_us 계산 불가 → 유지
         # 필요하면 별도 API(set_off_time_us)로 직접 지정하세요.
-        
+        '''
+
         # 4) 출력 Setpoint(Power) 설정
         await self.set_reference_power(power_w)
 

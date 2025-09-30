@@ -8,7 +8,7 @@ mfc.py — asyncio 기반 MFC 컨트롤러 (MOXA NPort TCP Server 직결)
   - asyncio TCP streams + 자체 라인 프레이밍(CR/LF) 통신
   - 단일 명령 큐(타임아웃/재시도/인터커맨드 gap) → 송수신 충돌 제거
   - 연결 워치독(지수 백오프) → 중간 단선도 자동 복구
-  - 폴링: 주기마다 R60(전체 유량) → R5(압력) 한 사이클, 중첩 금지
+  - 폴링: 주기마다 R60(전체 GAS) → R5(압력) 한 사이클, 중첩 금지
   - FLOW_SET 후 READ_FLOW_SET 검증, FLOW_ON 시 안정화 루프(목표 도달 확인)
   - 밸브 OPEN/CLOSE 검증, SP1_SET/ON, SP4_ON 검증
   - 압력 스케일: UI↔HW 변환 유지, tolerance/모니터링 규칙 유지
@@ -209,7 +209,7 @@ class AsyncMFC:
         """FLOW_SET + (옵션) READ_FLOW_SET 검증."""
         sf = float(MFC_SCALE_FACTORS.get(channel, 1.0))
         scaled = float(ui_value) * sf
-        await self._emit_status(f"Ch{channel} 유량 스케일: {ui_value:.2f}sccm → 장비 {scaled:.2f}")
+        await self._emit_status(f"Ch{channel} GAS 스케일: {ui_value:.2f}sccm → 장비 {scaled:.2f}")
 
         # SET (no-reply)
         set_cmd = self._mk_cmd("FLOW_SET", channel=channel, value=scaled)
@@ -272,7 +272,7 @@ class AsyncMFC:
             self._stab_pending_cmd = None
             await self._emit_status(f"FLOW_OFF 요청: ch{channel} 안정화 취소")
 
-        # 목표 유량/모니터링 카운터 리셋
+        # 목표 GAS/모니터링 카운터 리셋
         self.last_setpoints[channel] = 0.0
         self.flow_error_counters[channel] = 0
 
@@ -912,7 +912,7 @@ class AsyncMFC:
 
                 self._stab_attempts += 1
                 await self._emit_status(
-                    f"유량 확인... (목표: {target:.2f}/{target/sf:.2f}sccm, "
+                    f"GAS 확인... (목표: {target:.2f}/{target/sf:.2f}sccm, "
                     f"현재: {(-1 if actual is None else actual):.2f}/"
                     f"{(-1 if actual is None else actual/sf):.2f}sccm)"
                 )
@@ -925,7 +925,7 @@ class AsyncMFC:
                     return
 
                 if self._stab_attempts >= 30:
-                    await self._emit_failed("FLOW_ON", "유량 안정화 시간 초과")
+                    await self._emit_failed("FLOW_ON", "GAS 안정화 시간 초과")
                     self._stab_ch = None
                     self._stab_target_hw = 0.0
                     self._stab_pending_cmd = None
@@ -1154,7 +1154,7 @@ class AsyncMFC:
             self.flow_error_counters[channel] += 1
             if self.flow_error_counters[channel] >= int(FLOW_ERROR_MAX_COUNT):
                 self._ev_nowait(MFCEvent(kind="status",
-                                         message=f"Ch{channel} 유량 불안정! (목표: {target_flow:.2f}, 현재: {actual_flow_hw:.2f})"))
+                                         message=f"Ch{channel} GAS 불안정! (목표: {target_flow:.2f}, 현재: {actual_flow_hw:.2f})"))
                 self.flow_error_counters[channel] = 0
         else:
             self.flow_error_counters[channel] = 0

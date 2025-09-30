@@ -520,7 +520,7 @@ class AsyncPLC:
     async def read_reg_name(self, name_or_addr: Any) -> int:
         addr = self._addr(name_or_addr)
         v = await self.read_reg(addr)
-        self.log("read reg %s (addr=%d) -> %d", name_or_addr, addr, v)
+        #self.log("read reg %s (addr=%d) -> %d", name_or_addr, addr, v)
         return v
 
     # ---------- Faduino 스타일 고수준 ----------
@@ -718,7 +718,7 @@ class AsyncPLC:
         V = float(v_raw) * (self.cfg.dc_v_scale if v_scale is None else float(v_scale))
         I = float(i_raw) * (self.cfg.dc_i_scale if i_scale is None else float(i_scale))
         P = V * I
-        self.log("POWER READ (%s) V=%.3f, I=%.3f, P=%.3f (keys=%s/%s)", family, V, I, P, v_key, i_key)
+        #self.log("POWER READ (%s) V=%.3f, I=%.3f, P=%.3f (keys=%s/%s)", family, V, I, P, v_key, i_key)
         return P, V, I
     
     # RF Enable (SET 래치) — DCV_SET_1 사용
