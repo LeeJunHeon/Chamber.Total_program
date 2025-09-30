@@ -47,11 +47,18 @@ DCP_RECONNECT_BACKOFF_MAX_MS = 10000
 DCP_FIRST_CMD_EXTRA_TIMEOUT_MS = 500
 
 # 스케일(장비 셋업에 맞게 조정)
-SCALE_POWER_W = 1.0                # e.g., 5000W → 5000 (필요 시 보정)
 SCALE_VOLT_V = 1.0                 # e.g., 800V   → 800
 SCALE_CURR_A = 10.0                # e.g., 12.5A  → 125 (0.1A step 가정)
 SCALE_RAMP_MS = 1.0                # 500~2000 ms  → 값 그대로
 SCALE_ARC_US  = 1.0                # 0~5 us, 40~200 us → 값 그대로
+
+# EnerPulse-5: Power setpoint = 10 W/step (0.01 kW/step)
+MAX_POWER_W = 5000
+POWER_SET_STEP_W = 10          # 10 W per step
+POWER_MEAS_STEP_W = 10         # 측정값도 10 W 단위면 동일 적용
+
+# 읽기 스케일: P_W = raw / SCALE_POWER_W  이므로 10 W/step이면 0.1로 둔다.
+SCALE_POWER_W = 0.1            # raw / 0.1 = raw*10 W
 
 DEBUG_PRINT = False
 
@@ -326,14 +333,15 @@ class AsyncDCPulse:
         elif mode.upper() == "I":
             raw = int(round(value * SCALE_CURR_A))
         else:  # "P"
-            raw = int(round(float(value) / 100.0))     # 100 W/step
-            raw = max(0, min(100, raw))
+            raw = int(round(float(value) / POWER_SET_STEP_W))
+            raw = max(0, min(MAX_POWER_W // POWER_SET_STEP_W, raw))
         await self._write_cmd_data(0x83, raw, 2, label=f"REF_{mode.upper()}({value})")
 
     async def set_reference_power(self, value_w: float):
         """출력 레벨(전력) 설정 — 100 W/step → 0~100."""
-        raw = int(round(float(value_w) / 100.0))      # 100 W → 1 step
-        raw = max(0, min(100, raw))                   # 범위 보호
+        # 10 W/step → 0..500 (5 kW)
+        raw = int(round(float(value_w) / POWER_SET_STEP_W))
+        raw = max(0, min(MAX_POWER_W // POWER_SET_STEP_W, raw))
         await self._write_cmd_data(0x83, raw, 2, label=f"REF_POWER({value_w:.0f}W)")
 
     async def output_on(self):
@@ -377,8 +385,8 @@ class AsyncDCPulse:
         await self._write_cmd_data(0x0B, int(pause_ms), 2, label="SHDN_PAUSE_MS")
 
     async def set_limits(self, *, p_w: float, i_a: float, v_v: float):
-        p_raw = int(round(float(p_w) / 100.0))         # 100 W/step
-        p_raw = max(0, min(100, p_raw))
+        p_raw = int(round(float(p_w) / POWER_SET_STEP_W))               # 10 W/step
+        p_raw = max(0, min(MAX_POWER_W // POWER_SET_STEP_W, p_raw))     # 0..500
         await self._write_cmd_data(0x0C, p_raw, 2, label="LIM_P_W")
         await self._write_cmd_data(0x0D, int(round(i_a * SCALE_CURR_A)), 2, label="LIM_I_A")
         await self._write_cmd_data(0x0E, int(round(v_v * SCALE_VOLT_V)), 2, label="LIM_V_V")
