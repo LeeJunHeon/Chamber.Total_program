@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 ################################################################################
-## Form generated from reading UI file 'CH1&2DHFEAn.ui'
+## Form generated from reading UI file 'CH1&2NBheOP.ui'
 ##
 ## Created by: Qt User Interface Compiler version 6.9.1
 ##
@@ -684,7 +684,7 @@ class Ui_Form(object):
         self.PC_forP_label.setText(QCoreApplication.translate("Form", u"For. P", None))
         self.preSputter_Start_button.setText(QCoreApplication.translate("Form", u"START", None))
         self.PC_refP_label.setText(QCoreApplication.translate("Form", u"Ref. P", None))
-        self.PC_ProcessTime_label.setText(QCoreApplication.translate("Form", u"Process Timer [min]", None))
+        self.PC_ProcessTime_label.setText(QCoreApplication.translate("Form", u"Process Time [min]", None))
         self.PC_Hum_label.setText(QCoreApplication.translate("Form", u"Hum", None))
         self.pc_preSputter_label.setText(QCoreApplication.translate("Form", u"Pre-Sputter", None))
         self.preSputter_LeftTime_label.setText(QCoreApplication.translate("Form", u"Waiting...", None))
