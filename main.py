@@ -63,15 +63,15 @@ class MainWindow(QWidget):
 
         # === Plasma Cleaning 런타임 (PC 전용) 생성 ★ 추가 ===
         # - RF는 PLC 경유(연속만), 가스밸브/IG 없음, CH1 MFC TCP 사용
-        self.pc = PlasmaCleaningRuntime(
-            ui=self.ui,
-            prefix="pc_",            # PC 페이지 접두사
-            loop=self._loop,
-            cfg=config_ch1,          # CH1의 MFC TCP를 사용
-            log_dir=self._log_root,
-            plc=self.plc,            # ★ PLC 전달 (RF 파워 제어용)
-            chat=self.chat_notifier,
-        )
+        # self.pc = PlasmaCleaningRuntime(
+        #     ui=self.ui,
+        #     prefix="pc_",            # PC 페이지 접두사
+        #     loop=self._loop,
+        #     cfg=config_ch1,          # CH1의 MFC TCP를 사용
+        #     log_dir=self._log_root,
+        #     plc=self.plc,            # ★ PLC 전달 (RF 파워 제어용)
+        #     chat=self.chat_notifier,
+        # )
 
         # === 챔버 런타임 2개 생성 (각각 자기 장치/그래프/로거/버튼 바인딩 포함) ===
         # CH1: DC-Pulse, IG/MFC/OES/RGA(1), PLC 공유

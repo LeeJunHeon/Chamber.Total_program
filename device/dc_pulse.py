@@ -26,7 +26,7 @@ from lib.config_ch1 import DCPULSE_TCP_HOST, DCPULSE_TCP_PORT
 # 폴링 주기(초)
 DCP_POLL_INTERVAL_S = 3.0
 
-# ── 측정값 읽기 코드(장비별 상이할 수 있음: 필요 시 여기만 바꿔줘) ──
+# ── 측정값 읽기 코드(장비별 상이할 수 있음: 필요 시 여기만 바꿔줘)
 READ_MEAS_POWER  = 0x91
 READ_MEAS_VOLT   = 0x92
 READ_MEAS_CURR   = 0x93
@@ -39,12 +39,12 @@ DCP_USE_RS485 = False          # RS-485이면 True, RS-232이면 False
 DCP_DEVICE_ID = 0x01           # RS-485일 때 장치 ID(0~250)
 
 # 타이밍/리트라이
-DCP_TIMEOUT_MS = 800               # 개별 명령 타임아웃
+DCP_TIMEOUT_MS = 1500               # 개별 명령 타임아웃
 DCP_GAP_MS = 1000                  # 명령 간 최소 간격
 DCP_WATCHDOG_INTERVAL_MS = 1000
 DCP_RECONNECT_BACKOFF_START_MS = 1000
 DCP_RECONNECT_BACKOFF_MAX_MS = 10000
-DCP_FIRST_CMD_EXTRA_TIMEOUT_MS = 500
+DCP_FIRST_CMD_EXTRA_TIMEOUT_MS = 1000
 
 # 스케일(장비 셋업에 맞게 조정)
 SCALE_VOLT_V = 1.0                 # e.g., 800V   → 800
@@ -53,7 +53,7 @@ SCALE_RAMP_MS = 1.0                # 500~2000 ms  → 값 그대로
 SCALE_ARC_US  = 1.0                # 0~5 us, 40~200 us → 값 그대로
 
 # EnerPulse-5: Power setpoint = 10 W/step (0.01 kW/step)
-MAX_POWER_W = 5000
+MAX_POWER_W = 1000
 POWER_SET_STEP_W = 10          # 10 W per step
 POWER_MEAS_STEP_W = 10         # 측정값도 10 W 단위면 동일 적용
 
@@ -268,7 +268,7 @@ class AsyncDCPulse:
         # 마스터 모드: 기본 host (기존 동작 유지), 필요 시 'remote' 등으로 지정
         master: Literal["host", "remote", "local", "origin", "always"] = "host",
     ):
-        '''
+        
         # 1) 항상 Host 권한으로 고정
         await self.set_master_host_all()
 
@@ -301,7 +301,7 @@ class AsyncDCPulse:
 
         # duty만 숫자인 경우(주파수 미지정)는 off_time_us 계산 불가 → 유지
         # 필요하면 별도 API(set_off_time_us)로 직접 지정하세요.
-        '''
+        
         # 4) 출력 Setpoint(Power) 설정
         await self.set_reference_power(power_w)
 
@@ -310,11 +310,18 @@ class AsyncDCPulse:
 
     # ====== 고수준 제어 ======
     async def set_master_host_all(self):
-        """ONOFF/REFER/MODE master를 Host(0x0003)로 강제."""
         for cmd, name in ((0x7B, "MASTER_ONOFF"),
-                          (0x7C, "MASTER_REFER"),
-                          (0x7D, "MASTER_MODE")):
+                        (0x7C, "MASTER_REFER"),
+                        (0x7D, "MASTER_MODE")):
             await self._write_cmd_data(cmd, 0x0003, 2, label=name)
+        await asyncio.sleep(0.2)  # 전환 유예
+        # 🔎 상태 한번 읽어 로깅 (실패해도 무시)
+        try:
+            val = await self.read_operation_info()
+            if val is not None:
+                await self._emit_status(f"[INFO] OP_INFO(0x91)=0x{val:04X}")
+        except Exception as e:
+            await self._emit_status(f"[INFO] OP_INFO read skip: {e!r}")
 
     async def set_regulation(self, mode: Literal["V","I","P"]):
         """0x81: 제어 모드 설정 (1=V, 2=I, 3=P)."""
@@ -424,6 +431,18 @@ class AsyncDCPulse:
             "raw": {"P": P_raw, "I": I_raw, "V": V_raw},
             "eng": {"P_W": P_W, "I_A": I_A, "V_V": V_V},
         }
+    
+    # 2.5) 운영 정보/마스터 상태 읽기 (0x91)
+    async def read_operation_info(self) -> Optional[int]:
+        """
+        0x91: 운영/마스터 상태 비트를 2바이트로 반환.
+        반환값은 16비트 정수(상위바이트<<8 | 하위바이트).
+        """
+        resp = await self._read_raw(0x91, "READ_OP_INFO")
+        if not resp or len(resp) < 1 + 2:
+            await self._emit_failed("READ_OP_INFO", f"응답 길이 오류: {resp!r}")
+            return None
+        return (resp[-2] << 8) | resp[-1]
 
     # 3) 현재 Control Mode 읽기 (0x9C)
     async def read_control_mode(self) -> Optional[str]:
@@ -528,7 +547,7 @@ class AsyncDCPulse:
             return resp
         except asyncio.TimeoutError:
             await self._emit_status(f"[TIMEOUT] {label}")
-            self._on_tcp_disconnected()
+            #self._on_tcp_disconnected()
             return None
 
 
@@ -637,17 +656,23 @@ class AsyncDCPulse:
 
             # 응답 대기(프레임)
             try:
-                frame = await self._read_one_frame(cmd.timeout_ms / 1000.0)
+                frame = await self._read_one_frame((cmd.timeout_ms/1000.0) + 2.0)
             except asyncio.TimeoutError:
                 await self._emit_status(f"[TIMEOUT] {cmd.label}")
                 self._inflight = None
+                # 🔸 재시도 전, 짧은 백오프(명령 간격 준수)
+                try:
+                    await asyncio.sleep(max(0.05, cmd.gap_ms / 1000.0))
+                except Exception:
+                    pass
                 if cmd.retries_left > 0:
                     cmd.retries_left -= 1
                     self._cmd_q.appendleft(cmd)
                 else:
                     self._safe_callback(cmd.callback, None)
-                self._on_tcp_disconnected()
+                # ❌ 소켓은 끊지 않음(실제 I/O 오류가 아니면 유지)
                 continue
+
 
             self._inflight = None
             decoded = self._proto.filter_and_decode(frame)
