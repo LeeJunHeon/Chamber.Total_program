@@ -33,10 +33,10 @@ class _CfgAdapter:
 class PlasmaCleaningRuntime:
     """
     Plasma Cleaning 전용 런타임.
-    - 가스밸브(PLC) 제어 없음: 밸브는 항상 Open으로 가정, MFC#3으로 on/set/off(유량 0=off)
-    - SP4 set, on/off는 PLC로 제어 (컨트롤러의 sp1_* 콜백은 내부에서 SP4로 매핑)
+    - 가스밸브(PLC) 제어 없음: 밸브는 항상 Open으로 가정, **MFC#1** 로 on/set/off(유량 0=off)
+    - 사용 가스 라인은 **#3** (N₂ 자리) — 유량 명령 시 gas_idx=3
+    - 압력 제어(SP) 모듈은 쓰지 않고 IG를 읽어 target까지 '대기'
     - RF 파워는 펄스 없이 '연속'만, PLC의 DAC로 적용/읽기/끄기
-    - IG 압력을 주기적으로 읽어 target까지 '대기'
     """
 
     def __init__(

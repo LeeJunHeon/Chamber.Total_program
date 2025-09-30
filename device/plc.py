@@ -720,6 +720,27 @@ class AsyncPLC:
         P = V * I
         self.log("POWER READ (%s) V=%.3f, I=%.3f, P=%.3f (keys=%s/%s)", family, V, I, P, v_key, i_key)
         return P, V, I
+    
+    # RF Enable (SET 래치) — DCV_SET_1 사용
+    async def rf_enable(self, on: bool = True) -> None:
+        await self.power_enable(on, family="DCV", set_idx=1)  # → DCV_SET_1
+
+    # RF 목표 W 쓰기 — DCV_WRITE_1 사용 (DC 스케일 재사용: 0~1000W → 0~4000DAC)
+    async def rf_write_w(self, power_w: float) -> int:
+        return await self.power_write(power_w, family="DCV", write_idx=1)  # → DCV_WRITE_1
+
+    # RF 목표 W 적용(필요 시 SET 보장)
+    async def rf_apply(self, power_w: float, *, ensure_set: bool = True) -> int:
+        if ensure_set:
+            await self.rf_enable(True)   # DCV_SET_1 = True
+        return await self.rf_write_w(power_w)  # DCV_WRITE_1
+
+    # RF 피드백(Forward/Reflected) 읽기 — DCV_READ_2/3 사용
+    async def rf_read_fwd_ref(self) -> tuple[float, float]:
+        f_raw = await self.read_reg_name("DCV_READ_2")  # Forward W
+        r_raw = await self.read_reg_name("DCV_READ_3")  # Reflected W
+        # 레지스터 단위가 이미 W라면 그대로 반환, 스케일이 필요하면 곱해줘도 됨
+        return float(f_raw), float(r_raw)
 
     # ---------- DI용 논리명 셋(set) ----------
     async def set(self, name: str, on: bool, *, ch: int = 1, momentary: bool = False) -> None:
