@@ -1047,12 +1047,19 @@ class ProcessController:
                     )
                 ])
 
-        # --- 압력 제어 시작 ---
+        # --- 압력 제어 시작 (CH1은 SP3, 그 외는 SP4) ---
+        sp_on_cmd   = 'SP3_ON' if self._ch == 1 else 'SP4_ON'
+        sp_on_label = 'SP3'    if self._ch == 1 else 'SP4'
         steps.extend([
-            ProcessStep(action=ActionType.MFC_CMD, params=('SP4_ON', {}), message='압력 제어(SP4) 시작'),
-            ProcessStep(action=ActionType.MFC_CMD, params=('SP1_SET', {'value': working_pressure}),
+            ProcessStep(action=ActionType.MFC_CMD,
+                        params=(sp_on_cmd, {}),
+                        message=f'압력 제어({sp_on_label}) 시작'),
+            ProcessStep(action=ActionType.MFC_CMD,
+                        params=('SP1_SET', {'value': working_pressure}),
                         message=f'목표 압력(SP1) {working_pressure:.2f} 설정'),
-            ProcessStep(action=ActionType.DELAY, duration=60000, message='압력 안정화 대기 (60초)'),
+            ProcessStep(action=ActionType.DELAY,
+                        duration=60000,
+                        message='압력 안정화 대기 (60초)'),
         ])
 
         # --- 파워/셔터 ---

@@ -17,13 +17,93 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections import deque
 from typing import Optional, Callable, Deque, AsyncGenerator, Literal
-import asyncio, time, contextlib, socket
+import asyncio, time, contextlib, socket, os, sys
+import ctypes
+from pathlib import Path
 
 from lib.config_ch2 import (
     IG_TCP_HOST, IG_TCP_PORT, IG_TX_EOL, IG_SKIP_ECHO, IG_TIMEOUT_MS, IG_GAP_MS, IG_CONNECT_TIMEOUT_S,
     IG_POLLING_INTERVAL_MS, IG_WATCHDOG_INTERVAL_MS, IG_RECONNECT_BACKOFF_START_MS, 
     IG_RECONNECT_BACKOFF_MAX_MS, IG_REIGNITE_MAX_ATTEMPTS, IG_REIGNITE_BACKOFF_MS, IG_WAIT_TIMEOUT
 )
+
+# =========================
+#  MOXA IPSerial.dll 래퍼
+# =========================
+def _guess_nport_index_from_tcp_port(tcp_port: int, override: int | None = None) -> int:
+    """
+    일반적인 매핑: TCP 4001 → 포트 #1, 4002 → #2 ...
+    - override가 주어지면 그대로 사용
+    - 4001~4096 범위면 (tcp_port - 4000)으로 추정
+    - 이외엔 1을 반환(보수적 기본값; 필요 시 구성으로 명시하세요)
+    """
+    if isinstance(override, int) and override > 0:
+        return int(override)
+    try:
+        p = int(tcp_port)
+    except Exception:
+        return 1
+    if 4001 <= p <= 4096:
+        return p - 4000
+    return 1
+
+class _MoxaIPSerial:
+    """
+    IPSerial.dll (MOXA IP-Serial Library) 얇은 래퍼.
+    여기서는 nsio_init / nsio_end / nsio_resetport만 사용.
+    """
+    def __init__(self, dll_path: str | None = None):
+        if os.name != "nt":
+            raise OSError("IPSerial.dll은 Windows 전용입니다.")
+        WinDLL = getattr(ctypes, "WinDLL", None)
+        if WinDLL is None:
+            raise OSError("ctypes.WinDLL을 사용할 수 없습니다(비-Windows 또는 런타임 문제).")
+
+        # 경로 후보: 명시 인자 > 환경변수 > 실행폴더/dll/IPSerial.dll > 이 파일 기준의 상위-프로젝트 dll/IPSerial.dll
+        candidates: list[Path] = []
+        if dll_path:
+            candidates.append(Path(dll_path))
+        env = os.environ.get("IPSERIAL_DLL_PATH")
+        if env:
+            candidates.append(Path(env))
+
+        exe_dir = Path(sys.argv[0]).resolve().parent
+        candidates += [
+            exe_dir / "dll" / "IPSerial.dll",              # 프로그램 폴더\dll\IPSerial.dll (요청 사항)
+            Path.cwd() / "dll" / "IPSerial.dll",           # 현재 작업 폴더 기준
+            Path(__file__).resolve().parents[1] / "dll" / "IPSerial.dll",  # device\ig.py 기준 상위\ dll
+        ]
+
+        last_err = None
+        self._dll = None
+        for p in candidates:
+            try:
+                if p.is_file():
+                    self._dll = WinDLL(str(p))
+                    break
+            except Exception as e:
+                last_err = e
+        if not self._dll:
+            raise FileNotFoundError(f"IPSerial.dll을 찾을 수 없습니다. tried={[str(x) for x in candidates]}, last_err={last_err!r}")
+
+        # 필요한 심볼 시그니처 정의
+        self._dll.nsio_init.restype = ctypes.c_int
+        self._dll.nsio_end.restype = ctypes.c_int
+        self._dll.nsio_resetport.argtypes = [ctypes.c_char_p, ctypes.c_int]
+        self._dll.nsio_resetport.restype = ctypes.c_int
+
+    def reset_port(self, ip: str, port_index_1based: int) -> int:
+        """
+        NPort 제어 포트(기본 966)를 통해 해당 시리얼 포트의 TCP 세션을 강제 종료/리셋.
+        반환: 0(성공) 또는 장치/버전에 따라 음수/에러코드.
+        """
+        if not ip or port_index_1based <= 0:
+            raise ValueError("invalid ip/port index")
+        self._dll.nsio_init()
+        try:
+            return int(self._dll.nsio_resetport(ip.encode("ascii"), int(port_index_1based)))
+        finally:
+            self._dll.nsio_end()
 
 # =========================
 # 이벤트 모델
@@ -194,6 +274,12 @@ class AsyncIG:
 
         # 6) TCP 종료
         await self._on_tcp_disconnected()
+
+        # 6.5) (핵심) NPort 포트 강제 해제 — IPSerial.dll 사용
+        try:
+            await self._force_release_nport_port()  # ← 추가
+        except Exception as e:
+            await self._emit_status(f"IPSerial reset skip/fail: {e!r}")
 
         await self._emit_status("IG 연결 종료됨")
 
@@ -930,6 +1016,43 @@ class AsyncIG:
         except Exception:
             raise RuntimeError(f"parse error: {line!r}")
         
+    # ====================== Nport 시리얼 해제 함수 ======================
+    async def _force_release_nport_port(
+        self,
+        *,
+        dll_path: str | None = None,
+        override_port_index: int | None = None
+    ):
+        """
+        Windows 전용. IPSerial.dll(nsio_resetport)로 NPort 시리얼 포트의 TCP 세션을 강제 해제.
+        포트 인덱스(1-base) 결정:
+          - override_port_index 가 주어지면 그 값을 사용
+          - 아니면 TCP 4001→1 규칙으로 추정(현장 규칙과 일치)
+        DLL 경로:
+          - 인자로 들어온 dll_path > exe_dir\\dll\\IPSerial.dll 우선 사용
+        """
+        if os.name != "nt":
+            raise RuntimeError("non-Windows OS")
+
+        host, tcp_port = self._resolve_endpoint()
+        # 4001→1, 4002→2 ... 규칙(질문자 환경과 일치)
+        port_index = _guess_nport_index_from_tcp_port(tcp_port, override_port_index)
+
+        def _work():
+            exe_dir = Path(sys.argv[0]).resolve().parent
+            default_dll = exe_dir / "dll" / "IPSerial.dll"
+            final_dll = str(dll_path or default_dll)
+            ipser = _MoxaIPSerial(final_dll)
+            rc = ipser.reset_port(host, port_index)
+            return rc, final_dll
+
+        loop = asyncio.get_running_loop()
+        rc, used_dll = await loop.run_in_executor(None, _work)
+        await self._emit_status(
+            f"NPort port reset via IPSerial: host={host}, index={port_index}, rc={rc}, dll='{used_dll}'"
+        )
+    # ====================== Nport 시리얼 해제 함수 ======================
+
     # =============== chamber_runtime.py 호환용 어댑터 ===============
     # 1) 워치독 컨트롤 (일시정지/재개)
     async def pause_watchdog(self) -> None:
