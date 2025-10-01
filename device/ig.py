@@ -165,6 +165,10 @@ class AsyncIG:
         # 백그라운드 폴링 중지
         if self._bg_poll_task:
             self._bg_poll_task.cancel()
+            try:
+                await self._bg_poll_task
+            except Exception:
+                pass
             self._bg_poll_task = None
 
         # 3) 커맨드 워커 중지
@@ -343,11 +347,6 @@ class AsyncIG:
             ev = await self._event_q.get()
             yield ev
 
-    def set_endpoint(self, host: str, port: int) -> None:
-        """런타임에서 채널별 IG TCP 엔드포인트 지정."""
-        self._override_host = str(host)
-        self._override_port = int(port)
-
     def _resolve_endpoint(self) -> tuple[str, int]:
         """최종 접속 host/port 결정: override > config 기본값."""
         host = self._override_host if self._override_host else IG_TCP_HOST
@@ -456,15 +455,34 @@ class AsyncIG:
 
     async def _on_tcp_disconnected(self):
         self._connected = False
-        if self._reader_task:
-            self._reader_task.cancel()
-        self._reader_task = None
-        if self._writer:
+
+        current = asyncio.current_task()
+        t = self._reader_task
+        if t and not t.done() and t is not current:   # 자기 자신 cancel 방지
+            t.cancel()
             with contextlib.suppress(Exception):
+                await t
+        self._reader_task = None
+
+        if self._writer:
+            try:
                 self._writer.close()
-                await self._writer.wait_closed()
+                # 정상 종료 대기 (짧은 제한)
+                try:
+                    await asyncio.wait_for(self._writer.wait_closed(), timeout=1.5)
+                except asyncio.TimeoutError:
+                    # 하드 클로즈 (RST)
+                    transport = getattr(self._writer, "transport", None)
+                    if transport:
+                        transport.abort()
+            except Exception:
+                transport = getattr(self._writer, "transport", None)
+                if transport:
+                    transport.abort()
+
         self._reader = None
         self._writer = None
+
         # 라인 큐 비우기
         try:
             while True:
@@ -474,7 +492,7 @@ class AsyncIG:
 
         await self._emit_status("IG TCP 연결 끊김")
 
-        # 인플라이트 재시도/취소
+        # 인플라이트 재시도/콜백
         if self._inflight is not None:
             cmd = self._inflight
             self._inflight = None

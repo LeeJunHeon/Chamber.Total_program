@@ -178,19 +178,36 @@ class AsyncMFC:
         # 큐/인플라이트 정리
         self._purge_pending("shutdown")
 
-        # TCP 종료
+        # TCP 종료 (결정적 종료: wait_closed 대기 + 라인큐/에코큐 비움)
         if self._reader_task:
             self._reader_task.cancel()
             with contextlib.suppress(Exception):
                 await self._reader_task
             self._reader_task = None
+
         if self._writer:
-            with contextlib.suppress(Exception):
+            try:
                 self._writer.close()
+                # IG와 동일 패턴: 종료 확정 대기
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(self._writer.wait_closed(), timeout=1.5)
+            except Exception:
+                pass
 
         self._reader = None
         self._writer = None
         self._connected = False
+
+        # 잔류 라인 제거 (표준 종료 경로와 동등한 청소)
+        with contextlib.suppress(Exception):
+            while True:
+                self._line_q.get_nowait()
+
+        # 과거 no-reply 에코 대기열도 초기화
+        try:
+            self._skip_echos.clear()
+        except Exception:
+            pass
 
         await self._emit_status("MFC 연결 종료됨")
 
@@ -642,23 +659,36 @@ class AsyncMFC:
 
     def _on_tcp_disconnected(self):
         self._connected = False
-        if self._reader_task:
-            self._reader_task.cancel()
+
+        # 자기 자신 cancel 방지
+        current = asyncio.current_task()
+        t = self._reader_task
+        if t and not t.done() and t is not current:
+            t.cancel()
         self._reader_task = None
+
+        # writer 종료 + 하드 클로즈 보강
         if self._writer:
             with contextlib.suppress(Exception):
                 self._writer.close()
+            # FIN hang 대비: transport.abort()로 RST
+            transport = getattr(self._writer, "transport", None)
+            if transport:
+                with contextlib.suppress(Exception):
+                    transport.abort()
+
         self._reader = None
         self._writer = None
 
-        # 라인 큐 비움
+        # 라인 큐 비우기
         with contextlib.suppress(Exception):
             while True:
                 self._line_q.get_nowait()
 
-        self._dbg("MFC", "연결 끊김")
+        # 상태 이벤트(로그/UI용)
+        self._ev_nowait(MFCEvent(kind="status", message="MFC TCP 연결 끊김"))
 
-        # inflight 복구/취소
+        # inflight 재시도/콜백 처리(기존 로직 유지)
         if self._inflight is not None:
             cmd = self._inflight
             self._inflight = None
@@ -1335,18 +1365,6 @@ class AsyncMFC:
             except Exception:
                 pass
             await asyncio.sleep(0 if drained else 0.005)  # ★ 비었으면 아주 살짝 더 대기
-
-    # 각 장치 클래스 내부
-    async def pause_watchdog(self):
-        self._want_connected = False
-        t = getattr(self, "_watchdog_task", None)
-        if t:
-            try:
-                t.cancel()
-                await t
-            except Exception:
-                pass
-            self._watchdog_task = None
 
 # =============== debug, R69 하지 않는 ==================
     def _mask_set(self, channel: int, on: bool) -> str:

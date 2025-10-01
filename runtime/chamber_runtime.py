@@ -219,6 +219,7 @@ class ChamberRuntime:
         self._run_select: dict[str, bool] | None = None  # ← 이번 런에서 펄스 선택 상태
         self._owns_plc = bool(owns_plc if owns_plc is not None else (int(chamber_no) == 1))  # 기본 CH1
         self._notify_plc_owner = on_plc_owner                                   # ★ 추가
+        self._force_reconnect_on_next_start = True  # 공정 시작시 항상 재연결
 
         # QMessageBox 참조 저장소(비모달 유지용)
         self._msg_boxes: list[QMessageBox] = []  # ← 추가
@@ -992,47 +993,58 @@ class ChamberRuntime:
         self._spawn_detached(self._start_devices_task(), store=True, name=f"DevStart.CH{self.ch}")
 
     async def _start_devices_task(self) -> None:
-        async def _maybe_start_or_connect(obj, label: str, *, log: bool = True):
+        force = bool(getattr(self, "_force_reconnect_on_next_start", False))
+
+        async def _maybe_start_or_connect(obj, label: str, *, log: bool = True, force: bool = False):
             if not obj:
                 return
             try:
-                if self._is_dev_connected(obj):        # ★ 이미 연결됨
-                    if log:
-                        self.append_log(label, "already connected → skip")
-                    return
-                
+                if self._is_dev_connected(obj):
+                    if force:
+                        if log:
+                            self.append_log(label, "connected (fresh-run → force reconnect)")
+                        c = getattr(obj, "cleanup", None)
+                        if callable(c):
+                            r = c()
+                            if inspect.isawaitable(r):
+                                await r
+                        with contextlib.suppress(Exception):
+                            setattr(obj, "_connected", False)
+                        await asyncio.sleep(0)
+                    else:
+                        if log:
+                            self.append_log(label, "already connected → skip")
+                        return
+
                 meth = getattr(obj, "start", None) or getattr(obj, "connect", None)
                 if not callable(meth):
-                    if log:
-                        self.append_log(label, "start/connect 메서드 없음 → skip")
+                    if log: self.append_log(label, "start/connect 메서드 없음 → skip")
                     return
-                res = meth()
-                if inspect.isawaitable(res):
-                    await res
+                r = meth()
+                if inspect.isawaitable(r):
+                    await r
                 if log:
                     self.append_log(label, f"{meth.__name__} 호출 완료")
             except Exception as e:
-                try:
-                    name = meth.__name__  # type: ignore[attr-defined]
-                except Exception:
-                    name = "start/connect"
                 if log:
-                    self.append_log(label, f"{name} 실패: {e!r}")
+                    self.append_log(label, f"start/connect 실패: {e!r}")
 
         sel = getattr(self, "_run_select", None) or {}
 
-        # PLC는 공유 → 소유자만 로그 출력 (비소유자는 연결 시도하되 로그 무음)
-        await _maybe_start_or_connect(self.plc, "PLC", log=self._owns_plc)
+        # ✅ PLC: 공유 장치 → 절대 강제 재연결하지 않음
+        await _maybe_start_or_connect(self.plc, "PLC", log=self._owns_plc, force=False)
 
         # 나머지는 기존대로 각 챔버에서 로그 출력
-        await _maybe_start_or_connect(self.mfc, "MFC")
-        await _maybe_start_or_connect(self.ig,  "IG")
+        await _maybe_start_or_connect(self.mfc, "MFC", force=force)
+        await _maybe_start_or_connect(self.ig,  "IG",  force=force)
 
         # 펄스 장비는 '이번 런에서 선택된 경우에만' 연결 시도
         if self.dc_pulse and sel.get("dc_pulse", False):
-            await _maybe_start_or_connect(self.dc_pulse, "DCPulse")
+            await _maybe_start_or_connect(self.dc_pulse, "DCPulse", force=force)
         if self.rf_pulse and sel.get("rf_pulse", False):
-            await _maybe_start_or_connect(self.rf_pulse, "RFPulse")
+            await _maybe_start_or_connect(self.rf_pulse, "RFPulse", force=force)
+
+        self._force_reconnect_on_next_start = False
 
     # ------------------------------------------------------------------
     # 표시/입력/상태
@@ -1243,6 +1255,7 @@ class ChamberRuntime:
         try:
             # 시작 시도 직전에만 허용
             self._auto_connect_enabled = True
+            self._force_reconnect_on_next_start = True   # ★ 추가
             
             # ✅ 이번 런에서 실제로 사용할 펄스만 표시(IG/MFC는 항상 연결이므로 제외)
             use_dc_pulse = bool(params.get("use_dc_pulse", False)) and self.supports_dc_pulse
