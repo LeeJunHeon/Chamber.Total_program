@@ -27,6 +27,55 @@ from lib.config_ch2 import (
     IG_RECONNECT_BACKOFF_MAX_MS, IG_REIGNITE_MAX_ATTEMPTS, IG_REIGNITE_BACKOFF_MS, IG_WAIT_TIMEOUT
 )
 
+import ctypes.wintypes as wintypes
+
+_IPSERIAL_MUTEX_NAME = r"Global\MOXA_IPSerial_Reset_Lock_v1"
+_IPSERIAL_DLL_SINGLETON = None
+_IPSERIAL_DLL_LAST_ERR  = None
+
+class _WinGlobalMutex:
+    WAIT_OBJECT_0   = 0x00000000
+    WAIT_ABANDONED  = 0x00000080
+
+    def __init__(self, name: str, timeout_ms: int = 15000):
+        self._name = name
+        self._timeout = int(timeout_ms)
+        self._h = None
+        self.acquired = False
+
+    def __enter__(self):
+        if os.name != "nt":
+            self.acquired = True
+            return self
+        k32 = ctypes.windll.kernel32
+        k32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+        k32.CreateMutexW.restype  = wintypes.HANDLE
+        k32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+        k32.WaitForSingleObject.restype  = wintypes.DWORD
+        self._h = k32.CreateMutexW(None, False, self._name)
+        if not self._h:
+            return self
+        res = k32.WaitForSingleObject(self._h, self._timeout)
+        self.acquired = (res in (self.WAIT_OBJECT_0, self.WAIT_ABANDONED))
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        if os.name != "nt":
+            return
+        if not self._h:
+            return
+        try:
+            k32 = ctypes.windll.kernel32
+            with contextlib.suppress(Exception):
+                if self.acquired:
+                    k32.ReleaseMutex(self._h)
+        finally:
+            with contextlib.suppress(Exception):
+                ctypes.windll.kernel32.CloseHandle(self._h)
+            self._h = None
+            self.acquired = False
+
+
 # =========================
 #  MOXA IPSerial.dll 래퍼
 # =========================
@@ -48,18 +97,18 @@ def _guess_nport_index_from_tcp_port(tcp_port: int, override: int | None = None)
     return 1
 
 class _MoxaIPSerial:
-    """
-    IPSerial.dll (MOXA IP-Serial Library) 얇은 래퍼.
-    여기서는 nsio_init / nsio_end / nsio_resetport만 사용.
-    """
     def __init__(self, dll_path: str | None = None):
         if os.name != "nt":
             raise OSError("IPSerial.dll은 Windows 전용입니다.")
         WinDLL = getattr(ctypes, "WinDLL", None)
         if WinDLL is None:
-            raise OSError("ctypes.WinDLL을 사용할 수 없습니다(비-Windows 또는 런타임 문제).")
+            raise OSError("ctypes.WinDLL을 사용할 수 없습니다.")
 
-        # 경로 후보: 명시 인자 > 환경변수 > 실행폴더/dll/IPSerial.dll > 이 파일 기준의 상위-프로젝트 dll/IPSerial.dll
+        global _IPSERIAL_DLL_SINGLETON, _IPSERIAL_DLL_LAST_ERR
+        if _IPSERIAL_DLL_SINGLETON is not None:
+            self._dll = _IPSERIAL_DLL_SINGLETON
+            return
+
         candidates: list[Path] = []
         if dll_path:
             candidates.append(Path(dll_path))
@@ -69,28 +118,33 @@ class _MoxaIPSerial:
 
         exe_dir = Path(sys.argv[0]).resolve().parent
         candidates += [
-            exe_dir / "dll" / "IPSerial.dll",              # 프로그램 폴더\dll\IPSerial.dll (요청 사항)
-            Path.cwd() / "dll" / "IPSerial.dll",           # 현재 작업 폴더 기준
-            Path(__file__).resolve().parents[1] / "dll" / "IPSerial.dll",  # device\ig.py 기준 상위\ dll
+            exe_dir / "dll" / "IPSerial.dll",
+            Path.cwd() / "dll" / "IPSerial.dll",
+            Path(__file__).resolve().parents[1] / "dll" / "IPSerial.dll",
         ]
 
         last_err = None
-        self._dll = None
+        dll_obj = None
         for p in candidates:
             try:
                 if p.is_file():
-                    self._dll = WinDLL(str(p))
+                    dll_obj = WinDLL(str(p))
                     break
             except Exception as e:
                 last_err = e
-        if not self._dll:
-            raise FileNotFoundError(f"IPSerial.dll을 찾을 수 없습니다. tried={[str(x) for x in candidates]}, last_err={last_err!r}")
+        if not dll_obj:
+            _IPSERIAL_DLL_LAST_ERR = last_err
+            raise FileNotFoundError(
+                f"IPSerial.dll을 찾을 수 없습니다. tried={[str(x) for x in candidates]}, last_err={last_err!r}"
+            )
 
-        # 필요한 심볼 시그니처 정의
-        self._dll.nsio_init.restype = ctypes.c_int
-        self._dll.nsio_end.restype = ctypes.c_int
-        self._dll.nsio_resetport.argtypes = [ctypes.c_char_p, ctypes.c_int]
-        self._dll.nsio_resetport.restype = ctypes.c_int
+        dll_obj.nsio_init.restype = ctypes.c_int
+        dll_obj.nsio_end.restype = ctypes.c_int
+        dll_obj.nsio_resetport.argtypes = [ctypes.c_char_p, ctypes.c_int]
+        dll_obj.nsio_resetport.restype = ctypes.c_int
+
+        _IPSERIAL_DLL_SINGLETON = dll_obj
+        self._dll = dll_obj
 
     def reset_port(self, ip: str, port_index_1based: int) -> int:
         """
@@ -1017,39 +1071,52 @@ class AsyncIG:
             raise RuntimeError(f"parse error: {line!r}")
         
     # ====================== Nport 시리얼 해제 함수 ======================
+    _last_reset_mono: float = 0.0  # 클래스 차원 쿨다운 기록
+
     async def _force_release_nport_port(
         self,
         *,
         dll_path: str | None = None,
-        override_port_index: int | None = None
+        override_port_index: int | None = None,
+        lock_timeout_ms: int = 15000,
+        cooldown_sec: float = 2.0,
     ):
-        """
-        Windows 전용. IPSerial.dll(nsio_resetport)로 NPort 시리얼 포트의 TCP 세션을 강제 해제.
-        포트 인덱스(1-base) 결정:
-          - override_port_index 가 주어지면 그 값을 사용
-          - 아니면 TCP 4001→1 규칙으로 추정(현장 규칙과 일치)
-        DLL 경로:
-          - 인자로 들어온 dll_path > exe_dir\\dll\\IPSerial.dll 우선 사용
-        """
         if os.name != "nt":
-            raise RuntimeError("non-Windows OS")
+            return  # 비-Windows는 조용히 skip
+
+        # 운영 중 긴급 차단 스위치
+        if os.environ.get("IG_DISABLE_IPSERIAL_RESET", "").strip().lower() in ("1","true","yes","y"):
+            await self._emit_status("[IPSerial] reset disabled by env(IG_DISABLE_IPSERIAL_RESET)")
+            return
+
+        # 과도한 리셋 방지
+        now = time.monotonic()
+        if (now - getattr(self, "_last_reset_mono", 0.0)) < float(cooldown_sec):
+            await self._emit_status(f"[IPSerial] skip: cooldown {cooldown_sec:.1f}s")
+            return
 
         host, tcp_port = self._resolve_endpoint()
-        # 4001→1, 4002→2 ... 규칙(질문자 환경과 일치)
         port_index = _guess_nport_index_from_tcp_port(tcp_port, override_port_index)
 
-        def _work():
-            exe_dir = Path(sys.argv[0]).resolve().parent
-            default_dll = exe_dir / "dll" / "IPSerial.dll"
-            final_dll = str(dll_path or default_dll)
-            ipser = _MoxaIPSerial(final_dll)
-            rc = ipser.reset_port(host, port_index)
-            return rc, final_dll
+        with _WinGlobalMutex(_IPSERIAL_MUTEX_NAME, timeout_ms=int(lock_timeout_ms)) as mx:
+            if not mx.acquired:
+                await self._emit_status("[IPSerial] skip: failed to acquire global lock (timeout)")
+                return
 
-        loop = asyncio.get_running_loop()
-        rc, used_dll = await loop.run_in_executor(None, _work)
+            def _work():
+                exe_dir = Path(sys.argv[0]).resolve().parent
+                default_dll = exe_dir / "dll" / "IPSerial.dll"
+                final_dll = str(dll_path or default_dll)
+                ipser = _MoxaIPSerial(final_dll)  # 싱글톤 재사용
+                rc = ipser.reset_port(host, port_index)
+                return rc, final_dll
+
+            loop = asyncio.get_running_loop()
+            rc, used_dll = await loop.run_in_executor(None, _work)
+
+        self._last_reset_mono = time.monotonic()
         await self._emit_status(
-            f"NPort port reset via IPSerial: host={host}, index={port_index}, rc={rc}, dll='{used_dll}'"
+            f"[IPSerial] reset: host={host}, index={port_index}, rc={rc}, dll='{used_dll}'"
         )
     # ====================== Nport 시리얼 해제 함수 ======================
 

@@ -25,6 +25,11 @@ from lib.config_ch1 import DCPULSE_TCP_HOST, DCPULSE_TCP_PORT
 import os, sys, ctypes
 from pathlib import Path
 
+# === OUTPUT_ON 직후 간단 활성 확인 ===
+ACTIVATION_CHECK_DELAY_S = 1.0      # OUTPUT_ON 후 첫 측정까지 대기 (초)
+ACTIVATION_ZERO_W_THRESHOLD = 0.5   # 0.5 W 이하이면 '0W'로 간주
+
+
 # =========================
 #  MOXA IPSerial.dll 래퍼
 # =========================
@@ -592,25 +597,73 @@ class AsyncDCPulse:
         resp = await self._await_reply_bytes(label, fut)
         ok = self._ok_from_resp(resp)
 
-        # OUTPUT_ON/OFF 후속 검증
         if label in ("OUTPUT_ON", "OUTPUT_OFF"):
             intended_on = (label == "OUTPUT_ON")
+
             if ok:
                 self._out_on = intended_on
                 await self._emit_confirmed(label)
+
+                if intended_on:
+                    # ★ OUTPUT_ON 성공: 즉시 폴링 시작
+                    self.set_process_status(True)
+
+                    # ★ 간단 활성 확인: 잠깐 기다렸다가 P 읽어서 0W면 실패/중단
+                    try:
+                        await asyncio.sleep(ACTIVATION_CHECK_DELAY_S)
+                        res = await self.read_output_piv()
+                        p = float(res["eng"]["P_W"]) if res and "eng" in res else 0.0
+                    except Exception:
+                        p = 0.0
+
+                    if p <= ACTIVATION_ZERO_W_THRESHOLD:
+                        await self._emit_failed(
+                            "OUTPUT_ON_ZERO_POWER",
+                            f"Power {p:.1f}W right after OUTPUT_ON"
+                        )
+                        # 안전을 위해 장비 OFF 시도
+                        with contextlib.suppress(Exception):
+                            await self.output_off()
+                        # prepare_and_start() 등 상위에 '실패'로 전달
+                        return False
+                else:
+                    # ★ OUTPUT_OFF 성공: 폴링 중지
+                    self.set_process_status(False)
+
                 return True
 
             # 응답 없음/ERR → 하드웨어 반영 대기 후 상태 검증
-            await asyncio.sleep(0.08)  # 80 ms 유예
+            await asyncio.sleep(0.08)
             ver = await self._verify_output_state()
             if ver is not None:
                 self._out_on = ver
                 if ver == intended_on:
                     await self._emit_confirmed(label + "_VERIFIED")
+
+                    if intended_on:
+                        self.set_process_status(True)
+                        try:
+                            await asyncio.sleep(ACTIVATION_CHECK_DELAY_S)
+                            res = await self.read_output_piv()
+                            p = float(res["eng"]["P_W"]) if res and "eng" in res else 0.0
+                        except Exception:
+                            p = 0.0
+                        if p <= ACTIVATION_ZERO_W_THRESHOLD:
+                            await self._emit_failed(
+                                "OUTPUT_ON_ZERO_POWER",
+                                f"Power {p:.1f}W right after OUTPUT_ON"
+                            )
+                            with contextlib.suppress(Exception):
+                                await self.output_off()
+                            return False
+                    else:
+                        self.set_process_status(False)
+
                     return True
 
             await self._emit_failed(label, "응답 없음/실패 (상태 불일치/확인 불가)")
             return False
+
 
         # 그 외 명령은 단순 성공/실패 반환
         if ok:

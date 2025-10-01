@@ -1551,17 +1551,18 @@ class ChamberRuntime:
 
     async def _stop_device_watchdogs(self, *, light: bool = False) -> None:
         """
-        light=True  : 폴링 스위치 내리고, 각 장치에 '즉시 출력 OFF/대기 취소'만 빠르게 전송 (연결은 유지될 수 있음)
-        light=False : OFF/취소 시도 후 cleanup까지 수행하고 이벤트 펌프/로그 태스크 완전 종료
+        light=True  : 폴링만 끄고 출력/대기 취소(연결 유지)
+        light=False : 비-직렬 장치만 병렬 정리 후, IG → MFC 순차 cleanup (각 장치 내부에서 IPSerial reset 수행).
+                    추가적인 중복 reset 호출은 하지 않는다.
         """
         if light:
-            self._set_all_process_status(False); return
-        
-        # 1) 폴링/출력 OFF (기존처럼)
-        # heavy
+            self._set_all_process_status(False)
+            return
+
+        # 1) 폴링/출력 OFF
         self._set_all_process_status(False)
 
-        # 2) (순서 변경 포인트) 장치 cleanup을 먼저 수행 → 로그가 펌프를 통해 찍힘
+        # 2) IG 대기 취소(있으면)
         try:
             if self.ig and hasattr(self.ig, "cancel_wait"):
                 with contextlib.suppress(asyncio.TimeoutError):
@@ -1569,8 +1570,10 @@ class ChamberRuntime:
         except Exception:
             pass
 
+        # 3) 비-직렬 장치들만 먼저 '병렬'로 정리
+        parallel_targets = (self.dc_pulse, self.rf_pulse, self.dc_power, self.rf_power, self.oes, self.rga)
         tasks = []
-        for dev in (self.ig, self.mfc, self.dc_pulse, self.rf_pulse, self.dc_power, self.rf_power, self.oes, self.rga):
+        for dev in parallel_targets:
             if dev and hasattr(dev, "cleanup"):
                 try:
                     tasks.append(dev.cleanup())
@@ -1579,28 +1582,44 @@ class ChamberRuntime:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-        # ★ NEW: RS-232 서버 포트 강제 리셋(로컬 소켓 닫힌 뒤, 원격 세션까지 끊기)
-        with contextlib.suppress(Exception):
-            self._force_close_rs232_servers()
+        # 4) RS-232(NPort) 관련 가능성 있는 장치들은 '순차'로 정리
+        #    (각 장치 cleanup 내부에서 IPSerial reset이 수행되므로 동시 호출 금지)
+        if self.ig and hasattr(self.ig, "cleanup"):
+            try:
+                await self.ig.cleanup()
+            except Exception:
+                pass
+            await asyncio.sleep(0.05)
 
-        # 3) 이제 이벤트 펌프를 내려도 됨
+        if self.mfc and hasattr(self.mfc, "cleanup"):
+            try:
+                await self.mfc.cleanup()
+            except Exception:
+                pass
+            await asyncio.sleep(0.05)
+
+        # ⚠️ 중복 reset 금지: 추가로 _force_close_rs232_servers()를 호출하지 않는다.
+
+        # 5) 이벤트 펌프 종료
         loop = self._loop_from_anywhere()
         try:
             current = asyncio.current_task()
             live = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done() and t is not current]
-            for t in live: loop.call_soon(t.cancel)
-            if live: await asyncio.gather(*live, return_exceptions=True)
+            for t in live:
+                loop.call_soon(t.cancel)
+            if live:
+                await asyncio.gather(*live, return_exceptions=True)
         finally:
             self._bg_tasks = []
 
-        # 4) 로그 라이터 종료
+        # 6) 로그 라이터 종료
         try:
             await self._shutdown_log_writer()
         except Exception:
             pass
 
         self._bg_started = False
-        self._devices_started = False  # ✅ 다음 시작 때 장치 start() 다시 보장
+        self._devices_started = False
         self._run_select = None
 
     def shutdown_fast(self) -> None:
@@ -1613,34 +1632,58 @@ class ChamberRuntime:
             except Exception:
                 pass
 
+            # 이벤트 펌프 종료
             loop = asyncio.get_running_loop()
             current = asyncio.current_task()
             live = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done() and t is not current]
-            for t in live: loop.call_soon(t.cancel)
-            if live: await asyncio.gather(*live, return_exceptions=True)
+            for t in live:
+                loop.call_soon(t.cancel)
+            if live:
+                await asyncio.gather(*live, return_exceptions=True)
             self._bg_tasks = []
             self._bg_started = False
             self._devices_started = False
 
+            # 비-직렬 장치 병렬 정리
+            parallel_targets = (self.dc_pulse, self.rf_pulse, self.dc_power, self.rf_power, self.oes, self.rga)
             tasks = []
-            for dev in (self.ig, self.mfc, self.dc_pulse, self.rf_pulse, self.dc_power, self.rf_power, self.oes, self.rga):
-                if not dev: continue
+            for dev in parallel_targets:
+                if not dev:
+                    continue
                 try:
-                    if hasattr(dev, "cleanup_quick"):
-                        tasks.append(dev.cleanup_quick())
-                    elif hasattr(dev, "cleanup"):
-                        tasks.append(dev.cleanup())
+                    meth = getattr(dev, "cleanup_quick", None) or getattr(dev, "cleanup", None)
+                    if callable(meth):
+                        tasks.append(meth())
                 except Exception:
                     pass
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
 
-            # ★ NEW
-            with contextlib.suppress(Exception):
-                self._force_close_rs232_servers()
+            # IG → MFC 순차 정리 (reset 동시 호출 방지)
+            if self.ig:
+                try:
+                    meth = getattr(self.ig, "cleanup_quick", None) or getattr(self.ig, "cleanup", None)
+                    if callable(meth):
+                        await meth()
+                except Exception:
+                    pass
+                await asyncio.sleep(0.03)
 
-            try: await self._shutdown_log_writer()
-            except Exception: pass
+            if self.mfc:
+                try:
+                    meth = getattr(self.mfc, "cleanup_quick", None) or getattr(self.mfc, "cleanup", None)
+                    if callable(meth):
+                        await meth()
+                except Exception:
+                    pass
+                await asyncio.sleep(0.03)
+
+            # ⚠️ 중복 reset 금지: _force_close_rs232_servers() 호출 제거
+
+            try:
+                await self._shutdown_log_writer()
+            except Exception:
+                pass
 
         self._spawn_detached(run())
 
