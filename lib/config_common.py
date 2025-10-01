@@ -149,9 +149,9 @@ MFC_SP1_VERIFY_TOL   = 0.1
 # 장비 ASCII 명령 템플릿(장비 레이어에서 사용)
 MFC_COMMANDS = {
     'SET_ONOFF_MASK': lambda bits: f"L0{bits}",
-    'FLOW_ON':  lambda channel: f"L{int(channel)} 1",
-    'FLOW_OFF': lambda channel: f"L{int(channel)} 0",
-    'MFC_ZEROING': lambda channel: f"L{4+int(channel)} 1",
+    'FLOW_ON':  lambda channel: f"L{int(channel)}1",
+    'FLOW_OFF': lambda channel: f"L{int(channel)}0",
+    'MFC_ZEROING': lambda channel: f"L{4+int(channel)}1",
     'FLOW_SET': lambda channel, value: f"Q{int(channel)} {value}",
     'READ_FLOW_ALL': "R60",
     'READ_FLOW':     lambda channel: f"R6{int(channel)}",
@@ -165,6 +165,7 @@ MFC_COMMANDS = {
     'VALVE_CLOSE': "C",
     'PS_ZEROING': "Z1",
     'SP4_ON': "D4",
+    'SP3_ON': "D3",
     'SP1_ON': "D1",
     'SP1_SET': lambda value: f"S1 {value}",
 }

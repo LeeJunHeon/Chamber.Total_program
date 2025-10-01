@@ -22,6 +22,86 @@ from collections import deque
 import asyncio, time, contextlib, socket
 from lib.config_ch1 import DCPULSE_TCP_HOST, DCPULSE_TCP_PORT
 
+import os, sys, ctypes
+from pathlib import Path
+
+# =========================
+#  MOXA IPSerial.dll 래퍼
+# =========================
+def _guess_nport_index_from_tcp_port(tcp_port: int, override: int | None = None) -> int:
+    """
+    일반 매핑: TCP 4001 → 포트 #1, 4002 → #2 ...
+    - override가 주어지면 그대로 사용
+    - 4001~4096 범위면 (tcp_port - 4000)
+    - 그 외엔 1(보수적 기본)
+    """
+    if isinstance(override, int) and override > 0:
+        return int(override)
+    try:
+        p = int(tcp_port)
+    except Exception:
+        return 1
+    if 4001 <= p <= 4096:
+        return p - 4000
+    return 1
+
+class _MoxaIPSerial:
+    """
+    IPSerial.dll (MOXA IP-Serial Library) 얇은 래퍼.
+    여기서는 nsio_init / nsio_end / nsio_resetport만 사용.
+    """
+    def __init__(self, dll_path: str | None = None):
+        if os.name != "nt":
+            raise OSError("IPSerial.dll은 Windows 전용입니다.")
+        WinDLL = getattr(ctypes, "WinDLL", None)
+        if WinDLL is None:
+            raise OSError("ctypes.WinDLL 사용 불가(비-Windows 또는 런타임 문제).")
+
+        # 경로 후보: 인자 > 환경변수 > 실행폴더/dll/IPSerial.dll > 이 파일 기준 상위의 dll/IPSerial.dll
+        candidates: list[Path] = []
+        if dll_path:
+            candidates.append(Path(dll_path))
+        env = os.environ.get("IPSERIAL_DLL_PATH")
+        if env:
+            candidates.append(Path(env))
+
+        exe_dir = Path(sys.argv[0]).resolve().parent
+        candidates += [
+            exe_dir / "dll" / "IPSerial.dll",
+            Path.cwd() / "dll" / "IPSerial.dll",
+            Path(__file__).resolve().parents[1] / "dll" / "IPSerial.dll",
+        ]
+
+        last_err = None
+        self._dll = None
+        for p in candidates:
+            try:
+                if p.is_file():
+                    self._dll = WinDLL(str(p))
+                    break
+            except Exception as e:
+                last_err = e
+        if not self._dll:
+            raise FileNotFoundError(
+                f"IPSerial.dll을 찾을 수 없습니다. tried={[str(x) for x in candidates]}, last_err={last_err!r}"
+            )
+
+        # 심볼 시그니처
+        self._dll.nsio_init.restype = ctypes.c_int
+        self._dll.nsio_end.restype = ctypes.c_int
+        self._dll.nsio_resetport.argtypes = [ctypes.c_char_p, ctypes.c_int]
+        self._dll.nsio_resetport.restype = ctypes.c_int
+
+    def reset_port(self, ip: str, port_index_1based: int) -> int:
+        """NPort 제어 포트(기본 966)로 해당 시리얼 포트의 TCP 세션을 강제 리셋."""
+        if not ip or port_index_1based <= 0:
+            raise ValueError("invalid ip/port index")
+        self._dll.nsio_init()
+        try:
+            return int(self._dll.nsio_resetport(ip.encode("ascii"), int(port_index_1based)))
+        finally:
+            self._dll.nsio_end()
+
 # ========= 기본 설정(필요 시 config_* 모듈에서 override 가능) =========
 # 폴링 주기(초)
 DCP_POLL_INTERVAL_S = 3.0
@@ -84,10 +164,22 @@ class IProtocol:
     def pack_read(self, code: int) -> bytes: ...
     def filter_and_decode(self, payload: bytes) -> Optional[bytes]: ...
 
-def _csum_low8(items: bytes) -> int:
-    """체크섬 = (STX부터 ETX까지의 모든 바이트 합)의 하위 8비트(carry 제외)."""
-    return sum(items) & 0xFF
-
+def _chk_nibble_sum(items: bytes) -> int:
+    """
+    매뉴얼 방식: 상/하 니블 합산, 하니블 캐리는 상니블에 전달
+    """
+    hi_sum = 0
+    lo_sum = 0
+    
+    for b in items:
+        hi_sum += (b >> 4) & 0x0F
+        lo_sum += b & 0x0F
+    
+    # 하니블 캐리를 상니블에 전달
+    hi_sum += (lo_sum >> 4)
+    
+    # 최종 mod 16
+    return ((hi_sum & 0x0F) << 4) | (lo_sum & 0x0F)
 
 def _is_keep(x) -> bool:
     return isinstance(x, str) and x.strip().lower() == "keep"
@@ -103,10 +195,9 @@ class BinaryProtocol(IProtocol):
         pass # RS-232 only
 
     def _frame(self, cmd: int, data: bytes) -> bytes:
-        stx = b"\x02"
-        etx = b"\x03"
-        core = stx + bytes([cmd & 0xFF]) + data + etx  # RS-232: STX + CMD + DATA + ETX
-        chk  = bytes([_csum_low8(core)])
+        stx = b"\x02"; etx = b"\x03"
+        core = stx + bytes([cmd & 0xFF]) + data + etx
+        chk  = bytes([_chk_nibble_sum(core)])
         return core + chk
 
     def pack_write(self, code: int, value: Optional[int] = None, *, width: int = 0) -> bytes:
@@ -209,6 +300,13 @@ class AsyncDCPulse:
         self._reader = None
         self._writer = None
         self._connected = False
+
+        # ★ IG/MFC와 동일: NPort 포트 강제 해제
+        try:
+            await self._force_release_nport_port()
+        except Exception as e:
+            await self._emit_status(f"IPSerial reset skip/fail: {e!r}")
+
         await self._emit_status("DCP 연결 종료됨")
 
     async def events(self) -> AsyncGenerator[DCPEvent, None]:
@@ -291,10 +389,16 @@ class AsyncDCPulse:
         '''
 
         # 4) 출력 Setpoint(Power) 설정
-        await self.set_reference_power(power_w)
+        ok = await self.set_reference_power(power_w)
+        if not ok:
+            # REF 실패 시 안전을 위해 OFF까지 보장 (이미 OFF여도 무해)
+            await self.output_off()
+            await self._emit_status("REF_POWER 실패 → OUTPUT_ON 생략")
+            return False
 
-        # 5) 출력 ON
-        await self.output_on()
+        # 5) 출력 ON (성공시에만)
+        ok2 = await self.output_on()
+        return bool(ok2)
 
     # ====== 고수준 제어 ======
     async def set_master_host_all(self):
@@ -325,16 +429,16 @@ class AsyncDCPulse:
             raw = max(0, min(MAX_POWER_W // POWER_SET_STEP_W, raw))
         await self._write_cmd_data(0x83, raw, 2, label=f"REF_{mode.upper()}({value})")
 
-    async def set_reference_power(self, value_w: float):
+    async def set_reference_power(self, value_w: float) -> bool:
         """출력 레벨(전력) 설정 — 10 W/step → 0~500."""
         # 10 W/step → 0..500 (5 kW)
         raw = int(round(float(value_w) / POWER_SET_STEP_W))
         raw = max(0, min(MAX_POWER_W // POWER_SET_STEP_W, raw))
-        await self._write_cmd_data(0x83, raw, 2, label=f"REF_POWER({value_w:.0f}W)")
+        return await self._write_cmd_data(0x83, raw, 2, label=f"REF_POWER({value_w:.0f}W)")
 
-    async def output_on(self):
+    async def output_on(self) -> bool:
         """0x80: 1=ON, 2=OFF."""
-        await self._write_cmd_data(0x80, 0x0001, 2, label="OUTPUT_ON")
+        return await self._write_cmd_data(0x80, 0x0001, 2, label="OUTPUT_ON")
 
     async def output_off(self):
         await self._write_cmd_data(0x80, 0x0002, 2, label="OUTPUT_OFF")
@@ -463,7 +567,7 @@ class AsyncDCPulse:
     # ===================== 기존 로직 =====================
     
     # ===================== 실패시 검증하는 로직 =====================
-    async def _write_cmd_data(self, cmd: int, value: int, width: int, *, label: str):
+    async def _write_cmd_data(self, cmd: int, value: int, width: int, *, label: str) -> bool:
         fut = asyncio.get_running_loop().create_future()
         def _cb(resp: Optional[bytes]):
             if not fut.done():
@@ -480,25 +584,27 @@ class AsyncDCPulse:
             if ok:
                 self._out_on = intended_on
                 await self._emit_confirmed(label)
-                return
+                return True
 
             # 응답 없음/ERR → 하드웨어 반영 대기 후 상태 검증
-            await asyncio.sleep(0.08)  # 80 ms 정도 유예
+            await asyncio.sleep(0.08)  # 80 ms 유예
             ver = await self._verify_output_state()
             if ver is not None:
                 self._out_on = ver
                 if ver == intended_on:
                     await self._emit_confirmed(label + "_VERIFIED")
-                    return
+                    return True
 
             await self._emit_failed(label, "응답 없음/실패 (상태 불일치/확인 불가)")
-            return
+            return False
 
-        # 그 외 명령은 기존 로직 유지
+        # 그 외 명령은 단순 성공/실패 반환
         if ok:
             await self._emit_confirmed(label)
+            return True
         else:
             await self._emit_failed(label, "응답 없음/실패")
+            return False
 
     async def read_status_flags(self) -> Optional[int]:
         # 0x90: Status mode 비트필드 2바이트 반환 (payload: [CMD][hi][lo])
@@ -788,7 +894,10 @@ class AsyncDCPulse:
                     core = bytes(buf[:i_etx + 1])   # STX..ETX
                     chk  = buf[i_etx + 1]
 
-                    if (_csum_low8(core) & 0xFF) == (chk & 0xFF):
+                    expect = _chk_nibble_sum(core) & 0xFF
+                    got    = chk & 0xFF
+
+                    if expect == got:
                         # RS-232: payload = CMD + DATA.. (STX/ETX 제외)
                         payload = core[1:-1]
                         try:
@@ -800,7 +909,13 @@ class AsyncDCPulse:
                             with contextlib.suppress(Exception):
                                 self._frame_q.put_nowait(payload)
                     else:
-                        self._dbg("DCP", f"CHK FAIL: core={core.hex()} chk={chk:02X}")
+                        # ✅ 디버그 여부와 상관없이 이벤트 로그로 남김
+                        self._ev_nowait(DCPEvent(
+                            kind="status",
+                            message=f"[CHKFAIL] core={core.hex(' ')} recv_chk={got:02X} expect={expect:02X}"
+                        ))
+                        # 추가 디버그 로그(선택): DEBUG_PRINT=True일 때 콘솔에도 출력
+                        self._dbg("DCP", f"CHK FAIL: core={core.hex()} recv={got:02X} expect={expect:02X}")
 
                     del buf[:i_etx + 2]
 
@@ -941,3 +1056,40 @@ class AsyncDCPulse:
         loop = asyncio.get_running_loop()
         self._watchdog_task = loop.create_task(self._watchdog_loop(), name="DCPWatchdog")
     # =========== chamber_runtime.py에 맞춘 함수들 ===========
+
+    # ====================== NPort 시리얼 해제 (Windows 전용) ======================
+    async def _force_release_nport_port(
+        self,
+        *,
+        dll_path: str | None = None,
+        override_port_index: int | None = None,
+    ):
+        """
+        IPSerial.dll(nsio_resetport)로 NPort 시리얼 포트의 TCP 세션을 강제 해제.
+        포트 인덱스(1-base):
+          - override_port_index가 있으면 그 값
+          - 없으면 TCP 4001→1 규칙으로 자동 추정
+        DLL 경로 우선순위:
+          - 인자 dll_path > exe_dir\\dll\\IPSerial.dll
+        """
+        if os.name != "nt":
+            raise RuntimeError("non-Windows OS")
+
+        host, tcp_port = self._resolve_endpoint()
+        port_index = _guess_nport_index_from_tcp_port(tcp_port, override_port_index)
+
+        def _work():
+            exe_dir = Path(sys.argv[0]).resolve().parent
+            default_dll = exe_dir / "dll" / "IPSerial.dll"
+            final_dll = str(dll_path or default_dll)
+            ipser = _MoxaIPSerial(final_dll)
+            rc = ipser.reset_port(host, port_index)
+            return rc, final_dll
+
+        loop = asyncio.get_running_loop()
+        rc, used_dll = await loop.run_in_executor(None, _work)
+        await self._emit_status(
+            f"NPort port reset via IPSerial: host={host}, index={port_index}, rc={rc}, dll='{used_dll}'"
+        )
+    # ====================== NPort 시리얼 해제 (Windows 전용) ======================
+

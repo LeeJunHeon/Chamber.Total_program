@@ -1419,12 +1419,14 @@ class ChamberRuntime:
         self._auto_connect_enabled = False
         self._run_select = None
 
-        # 라이트 정리: 출력/폴링 OFF
-        self._spawn_detached(self._stop_device_watchdogs(light=True))
-
+        # 1) 먼저 PC에게 정지 시퀀스를 요청(장치들에 OFF 명령이 나가게)
         self._pc_stopping = True
         self._pending_device_cleanup = True
         self.process_controller.request_stop()
+
+        # 2) 바로 폴링을 꺼도 되는 환경이면 여기서 light 정리,
+        #    아니라면 아주 짧게 양보해서 명령이 큐에 올라타게 한 뒤 끄는 것도 방법
+        self._spawn_detached(self._stop_device_watchdogs(light=True))
 
         # ✅ 백업 타이머: 30초 내 미종료 시 헤비 강제
         async def _fallback():
@@ -1441,39 +1443,26 @@ class ChamberRuntime:
 
         self._spawn_detached(_fallback(), store=True, name=f"StopFallback.CH{self.ch}")
 
+    def _set_all_process_status(self, on: bool) -> None:
+        with contextlib.suppress(Exception): self.mfc.set_process_status(on)
+        if self.dc_pulse:
+            with contextlib.suppress(Exception): self.dc_pulse.set_process_status(on)
+        if self.rf_pulse:
+            with contextlib.suppress(Exception): self.rf_pulse.set_process_status(on)
+        if self.dc_power and hasattr(self.dc_power, "set_process_status"):
+            with contextlib.suppress(Exception): self.dc_power.set_process_status(on)
+        if self.rf_power and hasattr(self.rf_power, "set_process_status"):
+            with contextlib.suppress(Exception): self.rf_power.set_process_status(on)
+
     async def _stop_device_watchdogs(self, *, light: bool = False) -> None:
         if light:
-            with contextlib.suppress(Exception): self.mfc.set_process_status(False)
-            if self.dc_pulse:
-                with contextlib.suppress(Exception): self.dc_pulse.set_process_status(False)
-            if self.rf_pulse:
-                with contextlib.suppress(Exception): self.rf_pulse.set_process_status(False)
-            if self.dc_power and hasattr(self.dc_power, "set_process_status"):
-                with contextlib.suppress(Exception): self.dc_power.set_process_status(False)
-            if self.rf_power and hasattr(self.rf_power, "set_process_status"):
-                with contextlib.suppress(Exception): self.rf_power.set_process_status(False)
-            return
+            self._set_all_process_status(False); return
         
-        # ✅ heavy 시작 직후도 한 번 더 OFF
-        with contextlib.suppress(Exception): self.mfc.set_process_status(False)
-        if self.dc_pulse:
-            with contextlib.suppress(Exception): self.dc_pulse.set_process_status(False)
-        if self.rf_pulse:
-            with contextlib.suppress(Exception): self.rf_pulse.set_process_status(False)
-        if self.dc_power and hasattr(self.dc_power, "set_process_status"):
-            with contextlib.suppress(Exception): self.dc_power.set_process_status(False)
-        if self.rf_power and hasattr(self.rf_power, "set_process_status"):
-            with contextlib.suppress(Exception): self.rf_power.set_process_status(False)
+        # 1) 폴링/출력 OFF (기존처럼)
+        # heavy
+        self._set_all_process_status(False)
 
-        loop = self._loop_from_anywhere()
-        try:
-            current = asyncio.current_task()
-            live = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done() and t is not current]
-            for t in live: loop.call_soon(t.cancel)
-            if live: await asyncio.gather(*live, return_exceptions=True)
-        finally:
-            self._bg_tasks = []
-
+        # 2) (순서 변경 포인트) 장치 cleanup을 먼저 수행 → 로그가 펌프를 통해 찍힘
         try:
             if self.ig and hasattr(self.ig, "cancel_wait"):
                 with contextlib.suppress(asyncio.TimeoutError):
@@ -1484,11 +1473,24 @@ class ChamberRuntime:
         tasks = []
         for dev in (self.ig, self.mfc, self.dc_pulse, self.rf_pulse, self.dc_power, self.rf_power, self.oes, self.rga):
             if dev and hasattr(dev, "cleanup"):
-                try: tasks.append(dev.cleanup())
-                except Exception: pass
+                try:
+                    tasks.append(dev.cleanup())
+                except Exception:
+                    pass
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
+        # 3) 이제 이벤트 펌프를 내려도 됨
+        loop = self._loop_from_anywhere()
+        try:
+            current = asyncio.current_task()
+            live = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done() and t is not current]
+            for t in live: loop.call_soon(t.cancel)
+            if live: await asyncio.gather(*live, return_exceptions=True)
+        finally:
+            self._bg_tasks = []
+
+        # 4) 로그 라이터 종료
         try:
             await self._shutdown_log_writer()
         except Exception:

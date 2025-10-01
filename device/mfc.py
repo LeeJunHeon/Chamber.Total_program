@@ -23,7 +23,8 @@ from dataclasses import dataclass
 from collections import deque
 from typing import Optional, Deque, Callable, AsyncGenerator, Literal
 import asyncio, re, time, contextlib, socket
-
+import os, sys, ctypes
+from pathlib import Path
 
 from lib.config_ch2 import (
     MFC_TCP_HOST, MFC_TCP_PORT, MFC_TX_EOL, MFC_SKIP_ECHO, MFC_CONNECT_TIMEOUT_S,
@@ -34,6 +35,87 @@ from lib.config_ch2 import (
     MFC_SP1_VERIFY_TOL, MFC_POST_OPEN_QUIET_MS, MFC_ALLOW_NO_REPLY_DRAIN_MS,
     MFC_FIRST_CMD_EXTRA_TIMEOUT_MS
 )
+
+# =========================
+#  MOXA IPSerial.dll 래퍼
+# =========================
+def _guess_nport_index_from_tcp_port(tcp_port: int, override: int | None = None) -> int:
+    """
+    일반적인 매핑: TCP 4001 → 포트 #1, 4002 → #2 ...
+    - override가 주어지면 그대로 사용
+    - 4001~4096 범위면 (tcp_port - 4000)으로 추정
+    - 이외엔 1을 반환(보수적 기본값; 필요 시 구성으로 명시)
+    """
+    if isinstance(override, int) and override > 0:
+        return int(override)
+    try:
+        p = int(tcp_port)
+    except Exception:
+        return 1
+    if 4001 <= p <= 4096:
+        return p - 4000
+    return 1
+
+
+class _MoxaIPSerial:
+    """
+    IPSerial.dll (MOXA IP-Serial Library) 얇은 래퍼.
+    여기서는 nsio_init / nsio_end / nsio_resetport만 사용.
+    """
+    def __init__(self, dll_path: str | None = None):
+        if os.name != "nt":
+            raise OSError("IPSerial.dll은 Windows 전용입니다.")
+        WinDLL = getattr(ctypes, "WinDLL", None)
+        if WinDLL is None:
+            raise OSError("ctypes.WinDLL을 사용할 수 없습니다(비-Windows 또는 런타임 문제).")
+
+        # 경로 후보: 명시 인자 > 환경변수 > 실행폴더/dll/IPSerial.dll > 이 파일 기준의 상위-프로젝트 dll/IPSerial.dll
+        candidates: list[Path] = []
+        if dll_path:
+            candidates.append(Path(dll_path))
+        env = os.environ.get("IPSERIAL_DLL_PATH")
+        if env:
+            candidates.append(Path(env))
+
+        exe_dir = Path(sys.argv[0]).resolve().parent
+        candidates += [
+            exe_dir / "dll" / "IPSerial.dll",
+            Path.cwd() / "dll" / "IPSerial.dll",
+            Path(__file__).resolve().parents[1] / "dll" / "IPSerial.dll",
+        ]
+
+        last_err = None
+        self._dll = None
+        for p in candidates:
+            try:
+                if p.is_file():
+                    self._dll = WinDLL(str(p))
+                    break
+            except Exception as e:
+                last_err = e
+        if not self._dll:
+            raise FileNotFoundError(
+                f"IPSerial.dll을 찾을 수 없습니다. tried={[str(x) for x in candidates]}, last_err={last_err!r}"
+            )
+
+        # 필요한 심볼 시그니처 정의
+        self._dll.nsio_init.restype = ctypes.c_int
+        self._dll.nsio_end.restype = ctypes.c_int
+        self._dll.nsio_resetport.argtypes = [ctypes.c_char_p, ctypes.c_int]
+        self._dll.nsio_resetport.restype = ctypes.c_int
+
+    def reset_port(self, ip: str, port_index_1based: int) -> int:
+        """
+        NPort 제어 포트(기본 966)를 통해 해당 시리얼 포트의 TCP 세션을 강제 종료/리셋.
+        반환: 0(성공) 또는 장치/버전에 따라 음수/에러코드.
+        """
+        if not ip or port_index_1based <= 0:
+            raise ValueError("invalid ip/port index")
+        self._dll.nsio_init()
+        try:
+            return int(self._dll.nsio_resetport(ip.encode("ascii"), int(port_index_1based)))
+        finally:
+            self._dll.nsio_end()
 
 # =============== 이벤트 모델 ===============
 EventKind = Literal["status", "flow", "pressure", "command_confirmed", "command_failed"]
@@ -208,6 +290,12 @@ class AsyncMFC:
             self._skip_echos.clear()
         except Exception:
             pass
+
+        # ★★★ IG와 동일: NPort 포트 강제 해제 추가 (Windows 전용)
+        try:
+            await self._force_release_nport_port()
+        except Exception as e:
+            await self._emit_status(f"IPSerial reset skip/fail: {e!r}")
 
         await self._emit_status("MFC 연결 종료됨")
 
@@ -434,6 +522,16 @@ class AsyncMFC:
         if ok: await self._emit_confirmed("SP1_ON")
         else:  await self._emit_failed("SP1_ON", "SP1 상태 확인 실패")
 
+    async def sp3_on(self):
+        if not self._verify_enabled:
+            self._enqueue(self._mk_cmd("SP3_ON"), None, allow_no_reply=True, tag="[SP3_ON]")
+            await asyncio.sleep(MFC_GAP_MS / 1000.0)
+            await self._emit_confirmed("SP3_ON")
+            return
+        ok = await self._verify_simple_flag("SP3_ON", expect_mask='3')
+        if ok: await self._emit_confirmed("SP3_ON")
+        else:  await self._emit_failed("SP3_ON", "SP3 상태 확인 실패")
+
     async def sp4_on(self):
         if not self._verify_enabled:
             self._enqueue(self._mk_cmd("SP4_ON"), None, allow_no_reply=True, tag="[SP4_ON]")
@@ -532,6 +630,9 @@ class AsyncMFC:
 
             elif key == "SP4_ON":
                 await self.sp4_on()
+
+            elif key == "SP3_ON":
+                await self.sp3_on()
 
             elif key == "SP1_ON":
                 await self.sp1_on()
@@ -1053,8 +1154,12 @@ class AsyncMFC:
         """READ_SP1_VALUE 로 HW값 비교(허용오차 MFC_SP1_VERIFY_TOL)."""
         tol = max(float(MFC_SP1_VERIFY_TOL), 1e-9)
         for attempt in range(1, 6):
-            line = await self._send_and_wait_line(self._mk_cmd("READ_SP1_VALUE"),
-                                                  tag="[VERIFY SP1_SET]", timeout_ms=MFC_TIMEOUT)
+            line = await self._send_and_wait_line(
+                self._mk_cmd("READ_SP1_VALUE"),
+                tag="[VERIFY SP1_SET]", 
+                timeout_ms=MFC_TIMEOUT,
+                expect_prefixes=("S1",)
+            )
             cur_hw = self._parse_pressure_value(line or "")
             if cur_hw is not None:
                 cur_hw = round(cur_hw, int(MFC_PRESSURE_DECIMALS))
@@ -1393,3 +1498,40 @@ class AsyncMFC:
         self._wd_paused = False
         # start()는 워치독/워커가 죽어있으면 살려주고, 살아있으면 아무것도 안 함
         await self.start()
+
+    # ====================== NPort 시리얼 해제 함수 (Windows 전용) ======================
+    async def _force_release_nport_port(
+        self,
+        *,
+        dll_path: str | None = None,
+        override_port_index: int | None = None,
+    ):
+        """
+        IPSerial.dll(nsio_resetport)로 NPort 시리얼 포트의 TCP 세션을 강제 해제.
+        포트 인덱스(1-base) 결정:
+          - override_port_index가 주어지면 그 값을 사용
+          - 아니면 TCP 4001→1 규칙으로 추정(현장 규칙과 일치)
+        DLL 경로:
+          - 인자로 들어온 dll_path > exe_dir\\dll\\IPSerial.dll 우선 사용
+        """
+        if os.name != "nt":
+            raise RuntimeError("non-Windows OS")
+
+        host, tcp_port = self._resolve_endpoint()
+        port_index = _guess_nport_index_from_tcp_port(tcp_port, override_port_index)
+
+        def _work():
+            exe_dir = Path(sys.argv[0]).resolve().parent
+            default_dll = exe_dir / "dll" / "IPSerial.dll"
+            final_dll = str(dll_path or default_dll)
+            ipser = _MoxaIPSerial(final_dll)
+            rc = ipser.reset_port(host, port_index)
+            return rc, final_dll
+
+        loop = asyncio.get_running_loop()
+        rc, used_dll = await loop.run_in_executor(None, _work)
+        await self._emit_status(
+            f"NPort port reset via IPSerial: host={host}, index={port_index}, rc={rc}, dll='{used_dll}'"
+        )
+    # ====================== NPort 시리얼 해제 함수 (Windows 전용) ======================
+

@@ -40,6 +40,7 @@ class PlasmaCleaningRuntime:
     - **Working Pressure**: MFC의 **SP4 set/on/off**로 목표 압력 유지
     - **Target Pressure**: **IG**를 읽어서 목표 도달(±tol, settle 유지)까지 **대기**
     - RF 파워는 펄스 없이 '연속'만, **PLC DAC**로 적용/읽기/끄기
+    - Plasma Cleaning은 SP4 사용 및 MFC1 #3 GAS 사용
     """
 
     def __init__(
