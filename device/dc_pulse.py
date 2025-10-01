@@ -500,18 +500,32 @@ class AsyncDCPulse:
 
     # 2) 현재 출력값 P/I/V 읽기 (0x9A → P,I,V 각 2바이트)
     async def read_output_piv(self) -> Optional[dict]:
-        resp = await self._read_raw(0x9A, "READ_PIV")  # Power/Current/Voltage
-        if not resp or len(resp) < 1 + 6:  # payload: [CMD][P_hi][P_lo][I_hi][I_lo][V_hi][V_lo]
-            await self._emit_failed("READ_PIV", f"응답 길이 오류: {resp!r}")
+        resp = await self._read_raw(0x9A, "READ_PIV")
+        
+        # ERR 응답 처리 추가
+        if not resp:
+            await self._emit_status("READ_PIV", "응답 없음")
             return None
-        data = resp[1:]  # 첫 1바이트는 CMD(0x9A)
+        
+        if len(resp) == 1 and resp[0] == 0x04:
+            # ERR 응답은 실패가 아니라 "읽기 불가 상태"로 처리
+            await self._emit_status("READ_PIV: 장비가 읽기 불가 상태(ERR)")
+            return None
+        
+        if len(resp) < 1 + 6:
+            await self._emit_status("READ_PIV", f"응답 길이 오류: {resp!r}")
+            return None
+        
+        # 정상 데이터 파싱
+        data = resp[1:]
         P_raw = (data[0] << 8) | data[1]
         I_raw = (data[2] << 8) | data[3]
         V_raw = (data[4] << 8) | data[5]
-        # 스케일 복원(설정쪽과 반대 연산). SCALE_* 가 0이면 ZeroDivision 방지
-        P_W = (P_raw / max(1e-9, SCALE_POWER_W))  # 예: SCALE_POWER_W=0.01이면 raw*100W
+        
+        P_W = (P_raw / max(1e-9, SCALE_POWER_W))
         I_A = (I_raw / max(1e-9, SCALE_CURR_A))
         V_V = (V_raw / max(1e-9, SCALE_VOLT_V))
+        
         return {
             "raw": {"P": P_raw, "I": I_raw, "V": V_raw},
             "eng": {"P_W": P_W, "I_A": I_A, "V_V": V_V},
@@ -808,9 +822,20 @@ class AsyncDCPulse:
                 # ❌ 소켓은 끊지 않음(실제 I/O 오류가 아니면 유지)
                 continue
 
-
             self._inflight = None
             decoded = self._proto.filter_and_decode(frame)
+
+            # ★ READ_* 요청에 대해 1바이트 NAK(0x04) 수신 시 재시도
+            if decoded is not None and len(decoded) == 1 and decoded[0] == 0x04 and cmd.label.startswith("READ_"):
+                await self._emit_status(f"[NAK] {cmd.label} — retry({cmd.retries_left})")
+                await asyncio.sleep(max(0.05, cmd.gap_ms / 1000.0))  # 짧은 유예
+                if cmd.retries_left > 0:
+                    cmd.retries_left -= 1
+                    self._cmd_q.appendleft(cmd)   # 같은 명령 재시도
+                else:
+                    self._safe_callback(cmd.callback, None)  # 재시도 소진 → 상위에 실패(None) 통지
+                continue  # 다음 루프(콜백 호출/간격슬립은 건너뜀)
+
             self._safe_callback(cmd.callback, decoded)
             await asyncio.sleep(cmd.gap_ms / 1000.0)
 
@@ -942,20 +967,16 @@ class AsyncDCPulse:
                             ev = DCPEvent(
                                 kind="telemetry",
                                 data=eng,
-                                # chamber_runtime가 바로 읽어가는 필드 채워줌
                                 power=float(eng.get("P_W", 0.0)),
                                 voltage=float(eng.get("V_V", 0.0)),
                                 current=float(eng.get("I_A", 0.0)),
                                 eng=eng,
                             )
                             self._ev_nowait(ev)
-                        else:
-                            self._ev_nowait(DCPEvent(kind="status", message="[poll] 응답 없음/파싱 실패"))
-                    # 출력이 OFF이거나 아직 연결 중이면 조용히 대기
+                        # res가 None이면 read_output_piv()가 이미 status 로그를 남김
                 except Exception as e:
                     self._ev_nowait(DCPEvent(kind="status", message=f"[poll] 예외: {e!r}"))
 
-                # 주기 보정
                 dt = time.monotonic() - t0
                 await asyncio.sleep(max(0.05, self._poll_period_s - dt))
         except asyncio.CancelledError:
