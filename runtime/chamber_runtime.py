@@ -886,11 +886,10 @@ class ChamberRuntime:
 
             elif k == "command_confirmed":
                 cmd = (ev.cmd or "").upper()
-                if cmd == "OUTPUT_ON":
-                    # 폴링은 장비 내부에서 자동 시작됨
+                # 변경(VERIFIED 포함해 처리):
+                if cmd.startswith("OUTPUT_ON"):
                     self.process_controller.on_dc_pulse_target_reached()
-                elif cmd == "OUTPUT_OFF":
-                    # 폴링은 장비 내부에서 자동 중지됨
+                elif cmd.startswith("OUTPUT_OFF"):
                     self.process_controller.on_dc_pulse_off_finished()
 
             elif k == "command_failed":
