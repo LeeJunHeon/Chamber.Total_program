@@ -21,6 +21,7 @@ import asyncio, time, contextlib, socket, os, sys
 import ctypes
 from pathlib import Path
 
+from lib import config_common as cfgc
 from lib.config_ch2 import (
     IG_TCP_HOST, IG_TCP_PORT, IG_TX_EOL, IG_SKIP_ECHO, IG_TIMEOUT_MS, IG_GAP_MS, IG_CONNECT_TIMEOUT_S,
     IG_POLLING_INTERVAL_MS, IG_WATCHDOG_INTERVAL_MS, IG_RECONNECT_BACKOFF_START_MS, 
@@ -241,6 +242,10 @@ class AsyncIG:
         # 백그라운드(상시) 압력 폴링 (wait_for_base와 별개)
         self._bg_poll_task: Optional[asyncio.Task] = None
         self._bg_poll_interval_ms: int = IG_POLLING_INTERVAL_MS
+
+        # ★ Inactivity 전략 필드
+        self._inactivity_s: float = float(getattr(cfgc, "IG_INACTIVITY_REOPEN_S", 0.0))
+        self._last_io_mono: float = 0.0
 
     def is_connected(self) -> bool:
         """프리플라이트/상태 체크용: 현재 TCP 연결 여부."""
@@ -522,13 +527,19 @@ class AsyncIG:
                 self._ever_connected = True
                 backoff = IG_RECONNECT_BACKOFF_START_MS
 
-                # (선택) TCP Keepalive 활성화
+                # ★ Keepalive는 config에 따름(기본 False 권장)
                 try:
                     sock = writer.get_extra_info("socket")
                     if sock is not None:
-                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                        if bool(getattr(cfgc, "IG_TCP_KEEPALIVE", False)):
+                            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                        else:
+                            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 0)
                 except Exception:
                     pass
+
+                # ★ 연결 직후 IO 시각 초기화
+                self._last_io_mono = time.monotonic()
 
                 # 라인 수신 루프 시작
                 if self._reader_task and not self._reader_task.done():
@@ -553,6 +564,7 @@ class AsyncIG:
                 chunk = await self._reader.read(128)
                 if not chunk:
                     break
+                self._last_io_mono = time.monotonic()   # ★ 수신 시각
                 buf.extend(chunk)
                 if len(buf) > RX_MAX:
                     del buf[:-RX_MAX]
@@ -643,6 +655,7 @@ class AsyncIG:
                 self._safe_callback(cmd.callback, None)
 
     def _on_line_from_tcp(self, line: str):
+        self._last_io_mono = time.monotonic()  # ★ 라인 단위 갱신
         try:
             self._line_q.put_nowait(line)
         except asyncio.QueueFull:
@@ -673,8 +686,14 @@ class AsyncIG:
             await self._emit_status(f"[SEND] {sent_txt} (tag={cmd.tag})")
 
             try:
+                # ★ 전송 직전 프리플라이트
+                await self._reopen_if_inactive()
+
                 await self._absorb_late_lines(30)
                 payload = cmd.cmd_str.encode("ascii", "ignore")
+
+                # ★ 송신 직전에 IO 시각 갱신
+                self._last_io_mono = time.monotonic()
                 self._writer.write(payload)
                 await self._writer.drain()
             except Exception as e:
@@ -908,6 +927,7 @@ class AsyncIG:
         # 1) 온라인: 현재 writer 로 바로 송신
         if self._connected and self._writer:
             try:
+                self._last_io_mono = time.monotonic()  # ★
                 self._writer.write(b"SIG 0" + self._tx_eol)
                 await self._writer.drain()
                 await asyncio.sleep(max(0, wait_gap_ms) / 1000.0)
@@ -1247,6 +1267,21 @@ class AsyncIG:
     # (선택) 별칭
     apply_command = command
     # =============== chamber_runtime.py 호환용 어댑터 ===============
+
+    async def _reopen_if_inactive(self):
+        """보내기 직전에 유휴 시간 초과/세션 비정상 여부를 점검하고 필요 시 즉시 재연결."""
+        # 세션 자체가 없거나 닫혔으면 바로 재연결
+        if not self._writer or self._writer.is_closing() or not self._connected:
+            await self._on_tcp_disconnected()
+            return  # 워치독이 곧 다시 붙임
+
+        # 유휴 시간 검사 (0이면 기능 끔)
+        if self._inactivity_s > 0:
+            idle = time.monotonic() - (self._last_io_mono or 0.0)
+            if idle >= self._inactivity_s:
+                await self._emit_status(f"[IG] idle {idle:.1f}s ≥ {self._inactivity_s:.1f}s → 세션 재시작")
+                await self._on_tcp_disconnected()  # 워치독이 재연결
+
 
 
 

@@ -2,9 +2,19 @@
 import os
 from pathlib import Path
 
-# heavy clean
-PERSIST_DEVICE_SESSIONS = False
-FORCE_RESET_RS232_ON_STOP = True
+# ===== TCP 유휴재연결(초) =====
+IG_INACTIVITY_REOPEN_S  = 15.0   # 0 → 사용 안함
+MFC_INACTIVITY_REOPEN_S = 15.0
+TSP_INACTIVITY_REOPEN_S = 15.0
+DCP_INACTIVITY_REOPEN_S = 15.0   # dc_pulse가 TCP-Serial이면 동일 적용
+RFP_INACTIVITY_REOPEN_S = 15.0
+
+# ===== TCP Keepalive 사용 여부(대부분 False 권장: Inactivity와 충돌 방지) =====
+IG_TCP_KEEPALIVE  = False
+MFC_TCP_KEEPALIVE = False
+TSP_TCP_KEEPALIVE = False
+DCP_TCP_KEEPALIVE = False
+RFP_TCP_KEEPALIVE = False
 
 # === Google Chat 알림 ===
 def _get_local(name, default=None):

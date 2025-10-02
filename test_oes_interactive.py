@@ -2,230 +2,448 @@
 # -*- coding: utf-8 -*-
 
 """
-OES 단독 대화형(Interactive) 테스트 스크립트 — CH2 실패 폴백 강화판
- - 기본: CH1→USB0, CH2→USB1
- - 실패 시: USB 인덱스 스왑 자동 폴백(예: CH2→USB0)
- - 사용자 임의: USB 인덱스 수동 지정도 가능(빈 입력 시 자동)
+OES 단독 대화형(Interactive) 테스트 — device/oes.py 미사용 버전
+ - DLL 직접 호출(ctypes) / 시그니처 보정 / 초기화 폴백 포함
+ - CH1→USB0, CH2→USB1 기본 매핑(수동 USB 인덱스 지정 가능)
+ - Ctrl+C로 중단 가능, 종료 시 TEC Off + 채널 Close
 
 사용:
-  > python test_oes_interactive.py
-  (질문에 답변 입력)
+  > python oes_standalone_interactive.py
 """
 
-import asyncio
 import os
 import sys
+import time
+import csv
+import math
 from pathlib import Path
-from typing import Optional, Dict, Any, List
+from typing import Optional, Tuple
 
-# ── OESAsync 가져오기 (프로젝트 구조에 맞춰 우선 device/oes.py 시도)
-try:
-    from device.oes import OESAsync
-except ImportError:
-    # 같은 폴더에 oes.py 가 있을 때
-    from oes import OESAsync  # type: ignore
+import ctypes
+from ctypes import (
+    c_short, c_int16, c_uint16, c_int32, c_double,
+    POINTER, byref
+)
 
 
-def _ask(prompt: str, caster, default):
-    """터미널에서 입력을 받아 타입 변환. 빈 입력은 default."""
+# ─────────────────────────────────────────────────────────
+# 유틸
+# ─────────────────────────────────────────────────────────
+
+def ask(prompt: str, caster, default):
     s = input(f"{prompt} [{default}]: ").strip()
     if s == "":
         return default
     try:
         return caster(s)
     except Exception:
-        print("⚠️  입력이 올바르지 않습니다. 기본값을 사용합니다.")
+        print("⚠️  입력이 올바르지 않습니다. 기본값 사용.")
         return default
 
 
-async def _pump_events(oes: OESAsync) -> None:
-    """OES 이벤트 수신 루프: status/data/finished 출력."""
+def load_dll(dll_path: str) -> ctypes.CDLL:
+    """
+    x64 stdcall DLL이면 WinDLL이 자연스럽고, 일부 빌드/경로에선 CDLL도 동작함.
+    우선 WinDLL 시도 후 실패하면 CDLL로 폴백.
+    """
     try:
-        idx = 0
-        async for ev in oes.events():
-            k = getattr(ev, "kind", "")
-            if k == "status":
-                print(f"[STATUS] {ev.message}")
-            elif k == "data":
-                idx += 1
-                x = getattr(ev, "x", None)
-                y = getattr(ev, "y", None)
-                if x and y:
-                    # 과도한 로그 방지: 매 샘플마다 요약 1줄
-                    try:
-                        y0 = y[0]
-                        ymax = max(y)
-                        print(f"[DATA] points={len(x)}  y0={y0:.1f}  yMax={ymax:.1f}")
-                    except Exception:
-                        print(f"[DATA] points={len(x)}")
-            elif k == "finished":
-                ok = getattr(ev, "success", None)
-                print(f"[FINISHED] {'성공' if ok else '실패/중단'}")
-                return
-    except asyncio.CancelledError:
-        # 종료 시 정상 취소
-        pass
+        return ctypes.WinDLL(dll_path)  # stdcall 빌드 경로 기본
+    except Exception:
+        return ctypes.CDLL(dll_path)    # cdecl 빌드 또는 호환 폴백
 
 
-def _build_candidate_kwargs(
+# ─────────────────────────────────────────────────────────
+# DLL 래핑 (시그니처 보정 포함)
+# ─────────────────────────────────────────────────────────
+
+class OESDLL:
+    WL_LEN = 3680
+    USE_START = 10
+    USE_END = 1034  # 파장/데이터 슬라이스 범위 [10:1034)
+
+    def __init__(self, dll_path: str):
+        self.dll_path = dll_path
+        self.dll = load_dll(dll_path)
+        self._bind()
+
+    def _bind(self):
+        d = self.dll
+
+        # === 올바른 시그니처 ===
+        # short spTestAllChannels(short sOrderType);
+        d.spTestAllChannels.argtypes = [c_int16]
+        d.spTestAllChannels.restype  = c_int16
+
+        # short spSetupGivenChannel(short sChannel);
+        d.spSetupGivenChannel.argtypes = [c_int16]
+        d.spSetupGivenChannel.restype  = c_int16
+
+        # short spGetModel(short sChannel, short* model);
+        d.spGetModel.argtypes = [c_int16, POINTER(c_int16)]
+        d.spGetModel.restype  = c_int16
+
+        # (변종 존재) short spInitGivenChannel(...);
+        # → restype만 고정하고, 호출 시 두 형태를 모두 시도
+        d.spInitGivenChannel.restype  = c_int16  # argtypes 지정하지 않음(폴리콜)
+
+        # short spGetWLTable(double* dWLTable, short sChannel);
+        d.spGetWLTable.argtypes = [POINTER(c_double), c_int16]
+        d.spGetWLTable.restype  = c_int16
+
+        # short spSetBaseLineCorrection(short sChannel);
+        d.spSetBaseLineCorrection.argtypes = [c_int16]
+        d.spSetBaseLineCorrection.restype  = c_int16
+
+        # short spAutoDark(short sChannel);
+        d.spAutoDark.argtypes = [c_int16]
+        d.spAutoDark.restype  = c_int16
+
+        # short spSetTrgEx(short trig, short sChannel);
+        d.spSetTrgEx.argtypes = [c_int16, c_int16]
+        d.spSetTrgEx.restype  = c_int16
+
+        # short spSetTEC(int onoff, short sChannel);
+        d.spSetTEC.argtypes = [c_int32, c_int16]
+        d.spSetTEC.restype  = c_int16
+
+        # short spSetDblIntEx(double ms, short sChannel);
+        d.spSetDblIntEx.argtypes = [c_double, c_int16]
+        d.spSetDblIntEx.restype  = c_int16
+
+        # short spReadDataEx(int* pInt32, short sChannel);
+        d.spReadDataEx.argtypes = [POINTER(c_int32), c_int16]
+        d.spReadDataEx.restype  = c_int16
+
+        # short spCloseGivenChannel(unsigned short sChannel);
+        d.spCloseGivenChannel.argtypes = [c_uint16]
+        d.spCloseGivenChannel.restype  = c_int16
+
+    # ====== DLL 함수 래퍼 ======
+
+    def test_all_channels(self, order_type: int = 0) -> int:
+        """0 = USB 포트 순서, 1 = 채널ID 순서"""
+        return int(self.dll.spTestAllChannels(c_int16(int(order_type))))
+
+    def setup_channel(self, ch: int) -> int:
+        return int(self.dll.spSetupGivenChannel(c_int16(ch)))
+
+    def get_model(self, ch: int) -> Tuple[int, int]:
+        model = c_int16()
+        rc = int(self.dll.spGetModel(c_int16(ch), byref(model)))
+        return rc, int(model.value)
+
+    def init_channel(self, ch: int, model: Optional[int] = None) -> int:
+        """
+        1차: (채널, 모델)
+        2차: (CCD타입, 채널) — 기본 SONY(0)
+        """
+        rc = -1
+
+        # (1) (채널,모델) 시도
+        if model is not None and model >= 0:
+            try:
+                rc = int(self.dll.spInitGivenChannel(c_int16(ch), c_int32(model)))
+            except Exception:
+                rc = -1
+
+        # (2) 폴백: (CCD타입, 채널)
+        if rc < 0:
+            SP_CCD_SONY = 0
+            try:
+                rc2 = int(self.dll.spInitGivenChannel(c_int16(SP_CCD_SONY), c_int16(ch)))
+            except Exception:
+                rc2 = -9999
+            rc = rc2
+
+        return rc
+
+    def get_wl_table(self, ch: int):
+        arr = (c_double * self.WL_LEN)()
+        rc = int(self.dll.spGetWLTable(arr, c_int16(ch)))
+        return rc, [float(arr[i]) for i in range(self.WL_LEN)]
+
+    def set_baseline(self, ch: int) -> int:
+        return int(self.dll.spSetBaseLineCorrection(c_int16(ch)))
+
+    def auto_dark(self, ch: int) -> int:
+        return int(self.dll.spAutoDark(c_int16(ch)))
+
+    def set_trigger(self, trig: int, ch: int) -> int:
+        return int(self.dll.spSetTrgEx(c_int16(trig), c_int16(ch)))
+
+    def set_tec(self, onoff: int, ch: int) -> int:
+        return int(self.dll.spSetTEC(c_int32(onoff), c_int16(ch)))
+
+    def set_integration_ms(self, ms: float, ch: int) -> int:
+        return int(self.dll.spSetDblIntEx(c_double(float(ms)), c_int16(ch)))
+
+    def read_data(self, ch: int):
+        arr = (c_int32 * self.WL_LEN)()
+        rc = int(self.dll.spReadDataEx(arr, c_int16(ch)))
+        return rc, [int(arr[i]) for i in range(self.WL_LEN)]
+
+    def close_channel(self, ch: int) -> int:
+        return int(self.dll.spCloseGivenChannel(c_uint16(ch)))
+
+
+# ─────────────────────────────────────────────────────────
+# 측정 루틴 (동기)
+# ─────────────────────────────────────────────────────────
+
+def run_measurement(
+    dll_path: str,
     chamber: int,
-    dll_in: Optional[str],
-    save_dir_in: Optional[str],
+    duration_sec: float,
+    integ_ms: float,
     usb_index_manual: Optional[int],
-) -> List[Dict[str, Any]]:
+    save_root: Optional[str],
+    avg_count: int = 1,
+) -> int:
     """
-    초기화 시도 후보군 생성:
-      1) 사용자가 usb_index를 직접 지정한 경우 → 그것만 시도
-      2) 아니면 자동:
-         - 기본 매핑(ch->usb)
-         - 스왑 폴백(usb 뒤바뀐 경우 대비)
-         - (옵션) 최후의 수단: 반대쪽 또 스왑
+    반환 0=성공, 그 외=실패 코드
     """
-    base_kwargs: Dict[str, Any] = {"chamber": chamber}
-    if dll_in:
-        base_kwargs["dll_path"] = str(Path(dll_in))
-    if save_dir_in:
-        base_kwargs["save_directory"] = save_dir_in
+    print(f"\n[설정] DLL={dll_path}")
+    print(f"[설정] CH={chamber} (기본 매핑: CH1→USB0, CH2→USB1)")
+    if usb_index_manual is None:
+        usb_index = 0 if chamber == 1 else 1
+        print(f"[설정] USB index(auto) = {usb_index}")
+    else:
+        usb_index = int(usb_index_manual)
+        print(f"[설정] USB index(manual) = {usb_index}")
 
-    cands: List[Dict[str, Any]] = []
+    # 저장 경로 정규화
+    if save_root and save_root.strip():
+        base = Path(save_root.strip())
+    else:
+        base = Path.cwd()
+    save_dir = base / f"CH{chamber}"
+    save_dir.mkdir(parents=True, exist_ok=True)
 
-    if usb_index_manual is not None:
-        # 수동 지정이면 그것만 시도
-        k = dict(base_kwargs)
-        k["usb_index"] = int(usb_index_manual)
-        cands.append(k)
-        return cands
+    # DLL 로드
+    try:
+        oes = OESDLL(dll_path)
+    except Exception as e:
+        print(f"❌ DLL 로드 실패: {e!r}")
+        return 11
 
-    # 자동: 기본 매핑
-    default_usb = 0 if chamber == 1 else 1
-    k1 = dict(base_kwargs)
-    k1["usb_index"] = default_usb
-    cands.append(k1)
+    # 채널 스캔(USB 포트 순 고정)
+    try:
+        num = oes.test_all_channels(order_type=0)
+    except Exception as e:
+        print(f"⚠️ 채널 스캔 예외: {e!r}")
+        num = 0
 
-    # 자동: 스왑 폴백(윈도우가 USB 순서를 뒤바꿔 잡는 경우)
-    swap_usb = 1 - default_usb
-    k2 = dict(base_kwargs)
-    k2["usb_index"] = swap_usb
-    cands.append(k2)
+    if num <= 0:
+        print("⚠️ 연결된 장치를 찾지 못했습니다. 케이블/전원/드라이버 확인.")
+    else:
+        print(f"[INFO] 연결된 장치 수: {num}")
 
-    # (선택) 최후 수단: 혹시라도 장치 개수가 1대만 잡히는 특수 상황에서 0/1 둘 다 재시도
-    # 위 두 개로 이미 0/1을 커버하므로 보통은 불필요하지만, 명시적으로 한 번 더 추가
-    # k3 = dict(base_kwargs); k3["usb_index"] = 0; cands.append(k3)
-    # k4 = dict(base_kwargs); k4["usb_index"] = 1; cands.append(k4)
+    # 채널 범위 보정
+    if num > 0 and not (0 <= usb_index < num):
+        print(f"⚠️ 요청한 USB index {usb_index}가 범위를 벗어남 → 0으로 보정")
+        usb_index = 0
 
-    return cands
+    # 채널 오픈
+    rc = oes.setup_channel(usb_index)
+    if rc < 0:
+        print(f"❌ spSetupGivenChannel({usb_index}) 실패: rc={rc}")
+        return 21
 
+    # 모델 조회
+    rc_model, model = oes.get_model(usb_index)
+    if rc_model < 0:
+        print(f"❌ spGetModel({usb_index}) 실패: rc={rc_model}")
+        try:
+            oes.close_channel(usb_index)
+        except Exception:
+            pass
+        return 22
+    print(f"[INFO] 모델 코드: {model}")
 
-async def _try_one_config(kw: Dict[str, Any], duration: float, integ_ms: int) -> bool:
-    """한 가지 설정으로 OES 초기화→측정 시도. 성공 시 True 반환."""
-    # 개별 시도마다 새 인스턴스 생성(내부 워커/핸들 상태 분리)
-    oes = OESAsync(**kw)
+    # 초기화(시그니처 폴백 포함)
+    rc = oes.init_channel(usb_index, model=model)
+    if rc < 0:
+        print(f"❌ spInitGivenChannel 실패: rc={rc}")
+        try:
+            oes.close_channel(usb_index)
+        except Exception:
+            pass
+        return 23
 
-    desc = f"CH{kw.get('chamber')} / USB{kw.get('usb_index','auto')} / " \
-           f"DLL={kw.get('dll_path','default')} / SAVE={kw.get('save_directory','default')}"
-    print(f"\n[TRY] 초기화 시도: {desc}")
+    # 파장 테이블
+    rc_wl, wl = oes.get_wl_table(usb_index)
+    if rc_wl < 0 or not wl or len(wl) < OESDLL.USE_END:
+        print(f"❌ spGetWLTable 실패 또는 파장 길이 부족: rc={rc_wl}, len={len(wl) if wl else 0}")
+        try:
+            oes.set_tec(0, usb_index)
+            oes.close_channel(usb_index)
+        except Exception:
+            pass
+        return 24
+
+    wl_slice = wl[OESDLL.USE_START:OESDLL.USE_END]
+
+    # 장치 설정
+    def _chk(tag, code):
+        if code < 0:
+            raise RuntimeError(f"{tag} 실패(rc={code})")
 
     try:
-        ok = await oes.initialize_device()
-        if not ok:
-            print("❌ 초기화 실패. 다음 후보로 넘어갑니다.")
-            # 안전 종료
-            with contextlib.suppress(Exception):
-                await oes.cleanup()
-            return False
+        _chk("SetBaseline",   oes.set_baseline(usb_index))
+        _chk("AutoDark",      oes.auto_dark(usb_index))
+        _chk("SetTrigger",    oes.set_trigger(11, usb_index))
+        _chk("SetTEC(ON)",    oes.set_tec(1, usb_index))
+        _chk("SetIntegration",oes.set_integration_ms(integ_ms, usb_index))
+    except Exception as e:
+        print(f"❌ 장치 설정 실패: {e}")
+        try:
+            oes.set_tec(0, usb_index)
+            oes.close_channel(usb_index)
+        except Exception:
+            pass
+        return 25
 
-        print("▶ 측정을 시작합니다. (중단: Ctrl+C)")
-        pump_task = asyncio.create_task(_pump_events(oes), name="pump_oes_events")
-        run_task = asyncio.create_task(oes.run_measurement(duration, integ_ms), name="run_oes")
-        await asyncio.wait({pump_task, run_task}, return_when=asyncio.ALL_COMPLETED)
-        # 정상 종료
-        with contextlib.suppress(Exception):
-            await oes.cleanup()
-        return True
+    # 측정 루프
+    print(f"\n▶ 측정을 시작합니다: {duration_sec:.1f}s, integ={integ_ms:.0f}ms, avg={avg_count}")
+    t0 = time.monotonic()
+    rows = []
+    samples = 0
+    try:
+        while True:
+            if time.monotonic() - t0 >= duration_sec:
+                break
+
+            # 평균 N회 취득
+            acc = None
+            valid = 0
+            for _ in range(max(1, int(avg_count))):
+                rc_rd, data = oes.read_data(usb_index)
+                if rc_rd > 0 and data and len(data) >= OESDLL.USE_END:
+                    seg = data[OESDLL.USE_START:OESDLL.USE_END]
+                    if acc is None:
+                        acc = [float(v) for v in seg]
+                    else:
+                        for i in range(len(acc)):
+                            acc[i] += float(seg[i])
+                    valid += 1
+                else:
+                    # 읽기 실패 시 한 텀 쉼
+                    time.sleep(0.05)
+
+            if not valid:
+                print("⚠️  데이터 읽기 실패(모두 실패). 계속 시도합니다.")
+                time.sleep(0.2)
+                continue
+
+            # 평균화
+            for i in range(len(acc)):
+                acc[i] /= float(valid)
+
+            samples += 1
+            # 화면 요약
+            y0 = acc[0]
+            ymax = max(acc)
+            print(f"[DATA] sample={samples} points={len(acc)} y0={y0:.1f} yMax={ymax:.1f}")
+
+            # CSV 누적
+            now_str = time.strftime("%H:%M:%S")
+            rows.append([now_str] + acc)
+
+            # 샘플 간 간격(roughly integ_ms 기준; 필요 시 조정)
+            time.sleep(max(0.0, (float(integ_ms)/1000.0)*0.2))
 
     except KeyboardInterrupt:
-        print("\n⏹  사용자 중단 요청(Ctrl+C) 수신 — 종료를 진행합니다.")
-        with contextlib.suppress(Exception):
-            await oes.stop_measurement()
-        with contextlib.suppress(Exception):
-            await oes.cleanup()
-        return False
+        print("\n⏹  사용자 중단 요청 — 종료를 진행합니다.")
+    finally:
+        # 안전 종료
+        try:
+            oes.set_tec(0, usb_index)
+        except Exception:
+            pass
+        try:
+            oes.close_channel(usb_index)
+        except Exception:
+            pass
 
-    except Exception as e:
-        print(f"❌ 예외 발생: {e!r}. 다음 후보로 넘어갑니다.")
-        with contextlib.suppress(Exception):
-            await oes.cleanup()
-        return False
+    # CSV 저장
+    if rows:
+        ts = time.strftime("%Y%m%d_%H%M%S")
+        out = save_dir / f"OES_Data_{ts}.csv"
+        try:
+            with out.open("w", newline="", encoding="utf-8") as fp:
+                w = csv.writer(fp)
+                w.writerow(["Time"] + wl_slice)
+                w.writerows(rows)
+            print(f"✅ 저장 완료: {out}")
+        except Exception as e:
+            print(f"⚠️ CSV 저장 실패: {e!r}")
+
+    print("✅ 측정 종료")
+    return 0
 
 
-async def main() -> int:
+# ─────────────────────────────────────────────────────────
+# 엔트리포인트(대화형)
+# ─────────────────────────────────────────────────────────
+
+def main():
     if os.name == "nt":
-        # Windows 콘솔을 UTF-8로 (선택)
+        # Windows 콘솔 UTF-8 (선택)
         try:
             os.system("chcp 65001 >NUL")
         except Exception:
             pass
 
-    print("\n==== OES 대화형 테스트 (CH2 폴백 강화) ====\n")
-    print("엔터를 누르면 대괄호[]의 기본값이 적용됩니다.\n")
+    print("\n==== OES 단독 테스트 (device/oes.py 미사용) ====\n"
+          "엔터를 누르면 대괄호[]의 기본값이 적용됩니다.\n")
 
-    # ── 사용자 입력(기본값은 합리적 값으로 설정)
-    chamber = _ask("챔버 번호 (1 또는 2)", int, 1)
+    # 기본값
+    default_dll = r"\\VanaM_NAS\VanaM_Sputter\OES\SDKs\DLL\x64\stdcall\SPdbUSBm.dll"
+
+    chamber = ask("챔버 번호 (1 또는 2)", int, 1)
     if chamber not in (1, 2):
         print("⚠️  챔버 번호는 1 또는 2만 가능합니다. 1로 대체합니다.")
         chamber = 1
 
-    duration = _ask("측정 시간 (초)", float, 10.0)
-    integ_ms = _ask("적분 시간 (ms)", int, 1000)
+    duration = ask("측정 시간 (초)", float, 10.0)
+    integ_ms = ask("적분 시간 (ms)", float, 1000.0)
 
-    # DLL 경로/저장 경로는 빈 입력이면 OESAsync 기본값 사용
-    dll_in = input("DLL 경로 (비우면 OESAsync 기본값 사용): ").strip()
-    save_dir_in = input(r"저장 루트 폴더 (예: \\VanaM_NAS\VanaM_Sputter\OES, 비우면 OESAsync 기본): ").strip()
+    dll_in = input(f"DLL 경로 (비우면 기본 사용)\n  기본: {default_dll}\n> ").strip()
+    dll_path = dll_in or default_dll
 
-    # ── (선택) USB 인덱스 수동 지정
-    usb_manual_in = input("USB 인덱스 수동 지정 (0 또는 1, 비우면 자동): ").strip()
-    if usb_manual_in == "":
-        usb_index_manual = None
+    save_root = input(r"저장 루트 폴더 (예: \\VanaM_NAS\VanaM_Sputter\OES, 비우면 현재폴더)\n> ").strip() or None
+
+    usb_idx_in = input("USB 인덱스 수동 지정 (0 또는 1, 비우면 자동: CH1→0, CH2→1)\n> ").strip()
+    if usb_idx_in == "":
+        usb_manual = None
     else:
         try:
-            val = int(usb_manual_in)
+            val = int(usb_idx_in)
             if val not in (0, 1):
                 print("⚠️  USB 인덱스는 0 또는 1만 가능합니다. 자동으로 진행합니다.")
-                usb_index_manual = None
+                usb_manual = None
             else:
-                usb_index_manual = val
+                usb_manual = val
         except Exception:
             print("⚠️  USB 인덱스 해석 실패. 자동으로 진행합니다.")
-            usb_index_manual = None
+            usb_manual = None
 
-    # ── 초기화 후보군 구성
-    cands = _build_candidate_kwargs(
-        chamber=chamber,
-        dll_in=dll_in or None,
-        save_dir_in=save_dir_in or None,
-        usb_index_manual=usb_index_manual,
-    )
+    try:
+        code = run_measurement(
+            dll_path=dll_path,
+            chamber=chamber,
+            duration_sec=duration,
+            integ_ms=integ_ms,
+            usb_index_manual=usb_manual,
+            save_root=save_root,
+            avg_count=1,  # 필요하면 2~4로 올리세요
+        )
+    except Exception as e:
+        print(f"❌ 실행 중 예외: {e!r}")
+        code = 99
 
-    # ── 순차 시도
-    for i, kw in enumerate(cands, 1):
-        ok = await _try_one_config(kw, duration, integ_ms)
-        if ok:
-            print("✅ 완료되었습니다.")
-            return 0
-        else:
-            print(f"[INFO] 후보 {i}/{len(cands)} 시도 실패")
+    sys.exit(code)
 
-    print("❌ 모든 시도가 실패했습니다. 케이블/드라이버/전원/USB 포트 위치를 확인해 주세요.")
-    return 2
-
-
-# ── 안전한 import를 위해 contextlib 필요
-import contextlib
 
 if __name__ == "__main__":
-    try:
-        raise SystemExit(asyncio.run(main()))
-    except RuntimeError as e:
-        # Windows 파워셸에서 이벤트 루프 중복 생성 이슈 방어
-        print(f"[오류] 실행 실패: {e}")
-        sys.exit(1)
+    main()
