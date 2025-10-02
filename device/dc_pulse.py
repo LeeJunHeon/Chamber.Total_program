@@ -25,6 +25,8 @@ from lib.config_ch1 import DCPULSE_TCP_HOST, DCPULSE_TCP_PORT
 import os, sys, ctypes
 from pathlib import Path
 
+from lib import config_common as cfgc   # ★ 추가
+
 # === OUTPUT_ON 직후 간단 활성 확인 ===
 ACTIVATION_CHECK_DELAY_S = 5.0      # OUTPUT_ON 후 첫 측정까지 대기 (초)
 ACTIVATION_ZERO_W_THRESHOLD = 0.5   # 0.5 W 이하이면 '0W'로 간주
@@ -271,6 +273,10 @@ class AsyncDCPulse:
         self._just_reopened: bool = False
         self.debug_print = DEBUG_PRINT
 
+        # ★ Inactivity 전략 필드
+        self._inactivity_s: float = float(getattr(cfgc, "DCP_INACTIVITY_REOPEN_S", 0.0))
+        self._last_io_mono: float = 0.0
+
         self._out_on: bool = False                 # 출력 ON/OFF 내부 기억
         self._poll_period_s: float = DCP_POLL_INTERVAL_S
 
@@ -509,7 +515,7 @@ class AsyncDCPulse:
         
         # ERR 응답 처리 추가
         if not resp:
-            await self._emit_status("READ_PIV", "응답 없음")
+            await self._emit_status("READ_PIV: 응답 없음")
             return None
         
         if len(resp) == 1 and resp[0] == 0x04:
@@ -775,20 +781,27 @@ class AsyncDCPulse:
                 self._connected = True
                 self._ever_connected = True
                 backoff = DCP_RECONNECT_BACKOFF_START_MS
-                # TCP keepalive
+
+                # ★ Keepalive는 설정에 따름(기본 False 권장)
                 try:
                     sock = writer.get_extra_info("socket")
                     if sock is not None:
-                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                        if bool(getattr(cfgc, "DCP_TCP_KEEPALIVE", False)):
+                            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                        else:
+                            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 0)
                 except Exception:
                     pass
+
                 # reader task
                 if self._reader_task and not self._reader_task.done():
                     self._reader_task.cancel()
                     with contextlib.suppress(Exception):
                         await self._reader_task
                 self._reader_task = asyncio.create_task(self._tcp_reader_loop(), name="DCP-TcpReader")
+                # ★ 연결 직후 IO 타임스탬프 초기화
                 self._last_connect_mono = time.monotonic()
+                self._last_io_mono = self._last_connect_mono
                 self._just_reopened = True
                 await self._emit_status(f"{host}:{port} 연결 성공 (TCP)")
             except Exception as e:
@@ -833,6 +846,15 @@ class AsyncDCPulse:
             self._inflight = cmd
             # ▶ 송신 바이트(hex)까지 함께 기록
             await self._emit_status(f"[SEND] {cmd.label} → {cmd.payload.hex(' ')}")
+            
+            # ★ 전송 직전 유휴/세션 프리플라이트
+            await self._reopen_if_inactive()
+            if not self._connected or not self._writer:
+                # 아직 워치독이 다시 붙지 못했으면 되돌리고 잠깐 쉼
+                self._cmd_q.appendleft(cmd)
+                self._inflight = None
+                await asyncio.sleep(0.15)
+                continue
 
             # 연결 직후 quiet 기간
             if self._just_reopened and self._last_connect_mono > 0.0:
@@ -843,6 +865,7 @@ class AsyncDCPulse:
 
             # 전송
             try:
+                self._last_io_mono = time.monotonic()   # ★ 송신 직전 IO 시각
                 self._writer.write(cmd.payload)
                 await self._writer.drain()
             except Exception as e:
@@ -901,6 +924,7 @@ class AsyncDCPulse:
                 chunk = await self._reader.read(256)
                 if not chunk:
                     break
+                self._last_io_mono = time.monotonic()   # ★ 수신 시각 갱신
                 buf.extend(chunk)
                 if len(buf) > RX_MAX:
                     del buf[:-RX_MAX]
@@ -912,6 +936,7 @@ class AsyncDCPulse:
                     while buf and buf[0] in (0x06, 0x04):
                         b = buf[0]
                         try:
+                            self._last_io_mono = time.monotonic()     # ★
                             self._frame_q.put_nowait(bytes([b]))
                         except asyncio.QueueFull:
                             with contextlib.suppress(Exception):
@@ -979,6 +1004,7 @@ class AsyncDCPulse:
                         # RS-232: payload = CMD + DATA.. (STX/ETX 제외)
                         payload = core[1:-1]
                         try:
+                            self._last_io_mono = time.monotonic()     # ★
                             self._frame_q.put_nowait(payload)
                         except asyncio.QueueFull:
                             self._dbg("DCP", "프레임 큐 포화 → 가장 오래된 프레임 폐기")
@@ -1166,4 +1192,21 @@ class AsyncDCPulse:
     #         f"NPort port reset via IPSerial: host={host}, index={port_index}, rc={rc}, dll='{used_dll}'"
     #     )
     # ====================== NPort 시리얼 해제 (Windows 전용) ======================
+
+    async def _reopen_if_inactive(self):
+        """
+        보내기 직전에 유휴시간 초과/세션 이상을 점검하고 필요 시 즉시 세션을 내려
+        워치독이 재연결하도록 만든다.
+        """
+        # 세션 자체가 없거나 닫혔으면 즉시 정리
+        if not self._writer or self._writer.is_closing() or not self._connected:
+            self._on_tcp_disconnected()
+            return
+
+        # 유휴 초과면 세션 재시작
+        if self._inactivity_s > 0:
+            idle = time.monotonic() - (self._last_io_mono or 0.0)
+            if idle >= self._inactivity_s:
+                await self._emit_status(f"[DCP] idle {idle:.1f}s ≥ {self._inactivity_s:.1f}s → 세션 재시작")
+                self._on_tcp_disconnected()
 

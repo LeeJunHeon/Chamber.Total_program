@@ -26,6 +26,7 @@ import asyncio, re, time, contextlib, socket
 import os, sys, ctypes
 from pathlib import Path
 
+from lib import config_common as cfgc # ★ 추가
 from lib.config_ch2 import (
     MFC_TCP_HOST, MFC_TCP_PORT, MFC_TX_EOL, MFC_SKIP_ECHO, MFC_CONNECT_TIMEOUT_S,
     MFC_COMMANDS, FLOW_ERROR_TOLERANCE, FLOW_ERROR_MAX_COUNT, MFC_SCALE_FACTORS, 
@@ -273,6 +274,10 @@ class AsyncMFC:
         # Qt의 clear+soft-drain 타이밍을 모사하기 위한 플래그
         self._last_connect_mono: float = 0.0
         self._just_reopened: bool = False
+
+        # ★ Inactivity 전략 필드
+        self._inactivity_s: float = float(getattr(cfgc, "MFC_INACTIVITY_REOPEN_S", 0.0))
+        self._last_io_mono: float = 0.0
 
 # =============== debug, R69 하지 않는 ==================
         # 현재 ON/OFF 상태를 R69 없이 자체 추적하기 위한 섀도우 마스크(좌→우: ch1..ch4)
@@ -799,13 +804,21 @@ class AsyncMFC:
                 self._ever_connected = True
                 backoff = MFC_RECONNECT_BACKOFF_START_MS
 
-                # (선택) TCP keepalive
+                # ★ Keepalive는 config에 따름(기본 False 권장)
                 try:
                     sock = writer.get_extra_info("socket")
                     if sock is not None:
-                        sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                        if bool(getattr(cfgc, "MFC_TCP_KEEPALIVE", False)):
+                            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                        else:
+                            sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 0)
                 except Exception:
                     pass
+
+                # ★ 연결 직후 IO 시각 초기화
+                self._last_connect_mono = time.monotonic()
+                self._last_io_mono = self._last_connect_mono
+                self._just_reopened = True
 
                 # 리더 태스크 시작
                 if self._reader_task and not self._reader_task.done():
@@ -878,6 +891,15 @@ class AsyncMFC:
             self._inflight = cmd
             sent_txt = cmd.cmd_str.strip()
             await self._emit_status(f"[SEND] {sent_txt} {('('+cmd.tag+')' if cmd.tag else '')}".strip())
+            
+            # ★ 전송 직전 유휴/세션 프리플라이트
+            await self._reopen_if_inactive()
+            if not self._connected or not self._writer:
+                # 아직 워치독이 다시 붙지 못했으면 명령을 되돌리고 잠깐 쉼
+                self._cmd_q.appendleft(cmd)
+                self._inflight = None
+                await asyncio.sleep(0.15)
+                continue
 
             # 연결 직후에는 '한 번만' 조용히 기다리고(quiet), 강한 드레인은 금지
             if self._just_reopened and self._last_connect_mono > 0.0:
@@ -892,6 +914,7 @@ class AsyncMFC:
             # write
             try:
                 payload = cmd.cmd_str.encode("ascii", "ignore")
+                self._last_io_mono = time.monotonic()      # ★ 송신 직전 IO 시각 갱신
                 self._writer.write(payload)
                 await self._writer.drain()
             except Exception as e:
@@ -986,6 +1009,7 @@ class AsyncMFC:
         try:
             while self._connected and self._reader:
                 chunk = await self._reader.read(128)
+                self._last_io_mono = time.monotonic()   # ★ 수신 시각
                 if not chunk:
                     break
                 buf.extend(chunk)
@@ -1028,6 +1052,7 @@ class AsyncMFC:
             self._on_tcp_disconnected()
 
     def _on_line_from_tcp(self, line: str):
+        self._last_io_mono = time.monotonic()  # ★ 라인 단위 갱신
         # 과거 no-reply 에코 1회 스킵
         if self._skip_echos and line == self._skip_echos[0]:
             self._skip_echos.popleft()
@@ -1622,4 +1647,22 @@ class AsyncMFC:
     #     )
 
     # ====================== NPort 시리얼 해제 함수 (Windows 전용) ======================
+
+    async def _reopen_if_inactive(self):
+        """
+        보내기 직전에 유휴시간 초과/세션 이상을 점검하고 필요 시 즉시 세션을 내렸다가(논블로킹)
+        워치독이 다시 붙게 한다.
+        """
+        # writer가 없거나 닫힌 경우 → 즉시 disconnect
+        if not self._writer or self._writer.is_closing() or not self._connected:
+            self._on_tcp_disconnected()
+            return
+
+        # 유휴 시간 초과면 세션 재시작
+        if self._inactivity_s > 0:
+            idle = time.monotonic() - (self._last_io_mono or 0.0)
+            if idle >= self._inactivity_s:
+                await self._emit_status(f"[MFC] idle {idle:.1f}s ≥ {self._inactivity_s:.1f}s → 세션 재시작")
+                self._on_tcp_disconnected()
+
 
