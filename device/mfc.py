@@ -40,146 +40,146 @@ from lib.config_ch2 import (
 #  MOXA IPSerial.dll 래퍼
 #  + 전역 뮤텍스/싱글톤 캐시
 # =========================
-import ctypes.wintypes as wintypes  # ← Windows 핸들/DWORD용
-# 시스템 전역(세션 간도 공유) 네임드 뮤텍스 이름
-_IPSERIAL_MUTEX_NAME = r"Global\MOXA_IPSerial_Reset_Lock_v1"
+# import ctypes.wintypes as wintypes  # ← Windows 핸들/DWORD용
+# # 시스템 전역(세션 간도 공유) 네임드 뮤텍스 이름
+# _IPSERIAL_MUTEX_NAME = r"Global\MOXA_IPSerial_Reset_Lock_v1"
 
-# DLL 싱글톤 캐시(프로세스 내 1회 로드)
-_IPSERIAL_DLL_SINGLETON = None
-_IPSERIAL_DLL_LAST_ERR  = None
+# # DLL 싱글톤 캐시(프로세스 내 1회 로드)
+# _IPSERIAL_DLL_SINGLETON = None
+# _IPSERIAL_DLL_LAST_ERR  = None
 
-class _WinGlobalMutex:
-    """
-    Windows 네임드 전역 뮤텍스. 대기 타임아웃 시 acquired=False 로 리턴하고,
-    __exit__시 안전하게 핸들 정리.
-    """
-    WAIT_OBJECT_0   = 0x00000000
-    WAIT_ABANDONED  = 0x00000080
+# class _WinGlobalMutex:
+#     """
+#     Windows 네임드 전역 뮤텍스. 대기 타임아웃 시 acquired=False 로 리턴하고,
+#     __exit__시 안전하게 핸들 정리.
+#     """
+#     WAIT_OBJECT_0   = 0x00000000
+#     WAIT_ABANDONED  = 0x00000080
 
-    def __init__(self, name: str, timeout_ms: int = 15000):
-        self._name = name
-        self._timeout = int(timeout_ms)
-        self._h = None
-        self.acquired = False
+#     def __init__(self, name: str, timeout_ms: int = 15000):
+#         self._name = name
+#         self._timeout = int(timeout_ms)
+#         self._h = None
+#         self.acquired = False
 
-    def __enter__(self):
-        if os.name != "nt":
-            self.acquired = True
-            return self
-        k32 = ctypes.windll.kernel32
-        k32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
-        k32.CreateMutexW.restype  = wintypes.HANDLE
-        k32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-        k32.WaitForSingleObject.restype  = wintypes.DWORD
-        self._h = k32.CreateMutexW(None, False, self._name)
-        if not self._h:
-            # 뮤텍스 핸들 생성 실패 시, 동작은 계속하지만 동시 호출 위험은 감수
-            return self
-        res = k32.WaitForSingleObject(self._h, self._timeout)
-        # 다른 프로세스가 보유한 락을 놓고 죽은 경우 WAIT_ABANDONED(0x80) 도 성공으로 본다
-        self.acquired = (res in (self.WAIT_OBJECT_0, self.WAIT_ABANDONED))
-        return self
+#     def __enter__(self):
+#         if os.name != "nt":
+#             self.acquired = True
+#             return self
+#         k32 = ctypes.windll.kernel32
+#         k32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
+#         k32.CreateMutexW.restype  = wintypes.HANDLE
+#         k32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
+#         k32.WaitForSingleObject.restype  = wintypes.DWORD
+#         self._h = k32.CreateMutexW(None, False, self._name)
+#         if not self._h:
+#             # 뮤텍스 핸들 생성 실패 시, 동작은 계속하지만 동시 호출 위험은 감수
+#             return self
+#         res = k32.WaitForSingleObject(self._h, self._timeout)
+#         # 다른 프로세스가 보유한 락을 놓고 죽은 경우 WAIT_ABANDONED(0x80) 도 성공으로 본다
+#         self.acquired = (res in (self.WAIT_OBJECT_0, self.WAIT_ABANDONED))
+#         return self
 
-    def __exit__(self, exc_type, exc, tb):
-        if os.name != "nt":
-            return
-        if not self._h:
-            return
-        try:
-            k32 = ctypes.windll.kernel32
-            if self.acquired:
-                with contextlib.suppress(Exception):
-                    k32.ReleaseMutex(self._h)
-        finally:
-            with contextlib.suppress(Exception):
-                ctypes.windll.kernel32.CloseHandle(self._h)
-            self._h = None
-            self.acquired = False
+#     def __exit__(self, exc_type, exc, tb):
+#         if os.name != "nt":
+#             return
+#         if not self._h:
+#             return
+#         try:
+#             k32 = ctypes.windll.kernel32
+#             if self.acquired:
+#                 with contextlib.suppress(Exception):
+#                     k32.ReleaseMutex(self._h)
+#         finally:
+#             with contextlib.suppress(Exception):
+#                 ctypes.windll.kernel32.CloseHandle(self._h)
+#             self._h = None
+#             self.acquired = False
 
-# =========================
-#  MOXA IPSerial.dll 래퍼
-# =========================
-def _guess_nport_index_from_tcp_port(tcp_port: int, override: int | None = None) -> int:
-    """
-    일반적인 매핑: TCP 4001 → 포트 #1, 4002 → #2 ...
-    - override가 주어지면 그대로 사용
-    - 4001~4096 범위면 (tcp_port - 4000)으로 추정
-    - 이외엔 1을 반환(보수적 기본값; 필요 시 구성으로 명시)
-    """
-    if isinstance(override, int) and override > 0:
-        return int(override)
-    try:
-        p = int(tcp_port)
-    except Exception:
-        return 1
-    if 4001 <= p <= 4096:
-        return p - 4000
-    return 1
+# # =========================
+# #  MOXA IPSerial.dll 래퍼
+# # =========================
+# def _guess_nport_index_from_tcp_port(tcp_port: int, override: int | None = None) -> int:
+#     """
+#     일반적인 매핑: TCP 4001 → 포트 #1, 4002 → #2 ...
+#     - override가 주어지면 그대로 사용
+#     - 4001~4096 범위면 (tcp_port - 4000)으로 추정
+#     - 이외엔 1을 반환(보수적 기본값; 필요 시 구성으로 명시)
+#     """
+#     if isinstance(override, int) and override > 0:
+#         return int(override)
+#     try:
+#         p = int(tcp_port)
+#     except Exception:
+#         return 1
+#     if 4001 <= p <= 4096:
+#         return p - 4000
+#     return 1
 
 
-class _MoxaIPSerial:
-    """
-    IPSerial.dll (MOXA IP-Serial Library) 얇은 래퍼.
-    여기서는 nsio_init / nsio_end / nsio_resetport만 사용.
-    - DLL은 프로세스 내에서 1회만 로드(싱글톤)하여 레이스/충돌 여지 축소
-    """
-    def __init__(self, dll_path: str | None = None):
-        if os.name != "nt":
-            raise OSError("IPSerial.dll은 Windows 전용입니다.")
-        WinDLL = getattr(ctypes, "WinDLL", None)
-        if WinDLL is None:
-            raise OSError("ctypes.WinDLL을 사용할 수 없습니다(비-Windows 또는 런타임 문제).")
+# class _MoxaIPSerial:
+#     """
+#     IPSerial.dll (MOXA IP-Serial Library) 얇은 래퍼.
+#     여기서는 nsio_init / nsio_end / nsio_resetport만 사용.
+#     - DLL은 프로세스 내에서 1회만 로드(싱글톤)하여 레이스/충돌 여지 축소
+#     """
+#     def __init__(self, dll_path: str | None = None):
+#         if os.name != "nt":
+#             raise OSError("IPSerial.dll은 Windows 전용입니다.")
+#         WinDLL = getattr(ctypes, "WinDLL", None)
+#         if WinDLL is None:
+#             raise OSError("ctypes.WinDLL을 사용할 수 없습니다(비-Windows 또는 런타임 문제).")
 
-        global _IPSERIAL_DLL_SINGLETON, _IPSERIAL_DLL_LAST_ERR
-        if _IPSERIAL_DLL_SINGLETON is not None:
-            # 이미 로드되어 있으면 그 핸들을 재사용
-            self._dll = _IPSERIAL_DLL_SINGLETON
-        else:
-            candidates: list[Path] = []
-            if dll_path:
-                candidates.append(Path(dll_path))
-            env = os.environ.get("IPSERIAL_DLL_PATH")
-            if env:
-                candidates.append(Path(env))
+#         global _IPSERIAL_DLL_SINGLETON, _IPSERIAL_DLL_LAST_ERR
+#         if _IPSERIAL_DLL_SINGLETON is not None:
+#             # 이미 로드되어 있으면 그 핸들을 재사용
+#             self._dll = _IPSERIAL_DLL_SINGLETON
+#         else:
+#             candidates: list[Path] = []
+#             if dll_path:
+#                 candidates.append(Path(dll_path))
+#             env = os.environ.get("IPSERIAL_DLL_PATH")
+#             if env:
+#                 candidates.append(Path(env))
 
-            exe_dir = Path(sys.argv[0]).resolve().parent
-            candidates += [
-                exe_dir / "dll" / "IPSerial.dll",
-                Path.cwd() / "dll" / "IPSerial.dll",
-                Path(__file__).resolve().parents[1] / "dll" / "IPSerial.dll",
-            ]
+#             exe_dir = Path(sys.argv[0]).resolve().parent
+#             candidates += [
+#                 exe_dir / "dll" / "IPSerial.dll",
+#                 Path.cwd() / "dll" / "IPSerial.dll",
+#                 Path(__file__).resolve().parents[1] / "dll" / "IPSerial.dll",
+#             ]
 
-            last_err = None
-            dll_obj = None
-            for p in candidates:
-                try:
-                    if p.is_file():
-                        dll_obj = WinDLL(str(p))
-                        break
-                except Exception as e:
-                    last_err = e
-            if not dll_obj:
-                _IPSERIAL_DLL_LAST_ERR = last_err
-                raise FileNotFoundError(
-                    f"IPSerial.dll을 찾을 수 없습니다. tried={[str(x) for x in candidates]}, last_err={last_err!r}"
-                )
-            # 필요한 심볼 시그니처 정의
-            dll_obj.nsio_init.restype = ctypes.c_int
-            dll_obj.nsio_end.restype = ctypes.c_int
-            dll_obj.nsio_resetport.argtypes = [ctypes.c_char_p, ctypes.c_int]
-            dll_obj.nsio_resetport.restype = ctypes.c_int
+#             last_err = None
+#             dll_obj = None
+#             for p in candidates:
+#                 try:
+#                     if p.is_file():
+#                         dll_obj = WinDLL(str(p))
+#                         break
+#                 except Exception as e:
+#                     last_err = e
+#             if not dll_obj:
+#                 _IPSERIAL_DLL_LAST_ERR = last_err
+#                 raise FileNotFoundError(
+#                     f"IPSerial.dll을 찾을 수 없습니다. tried={[str(x) for x in candidates]}, last_err={last_err!r}"
+#                 )
+#             # 필요한 심볼 시그니처 정의
+#             dll_obj.nsio_init.restype = ctypes.c_int
+#             dll_obj.nsio_end.restype = ctypes.c_int
+#             dll_obj.nsio_resetport.argtypes = [ctypes.c_char_p, ctypes.c_int]
+#             dll_obj.nsio_resetport.restype = ctypes.c_int
 
-            _IPSERIAL_DLL_SINGLETON = dll_obj
-            self._dll = dll_obj
+#             _IPSERIAL_DLL_SINGLETON = dll_obj
+#             self._dll = dll_obj
 
-    def reset_port(self, ip: str, port_index_1based: int) -> int:
-        if not ip or port_index_1based <= 0:
-            raise ValueError("invalid ip/port index")
-        self._dll.nsio_init()
-        try:
-            return int(self._dll.nsio_resetport(ip.encode("ascii"), int(port_index_1based)))
-        finally:
-            self._dll.nsio_end()
+#     def reset_port(self, ip: str, port_index_1based: int) -> int:
+#         if not ip or port_index_1based <= 0:
+#             raise ValueError("invalid ip/port index")
+#         self._dll.nsio_init()
+#         try:
+#             return int(self._dll.nsio_resetport(ip.encode("ascii"), int(port_index_1based)))
+#         finally:
+#             self._dll.nsio_end()
 
 # =============== 이벤트 모델 ===============
 EventKind = Literal["status", "flow", "pressure", "command_confirmed", "command_failed"]
@@ -356,10 +356,10 @@ class AsyncMFC:
             pass
 
         # ★★★ IG와 동일: NPort 포트 강제 해제 추가 (Windows 전용)
-        try:
-            await self._force_release_nport_port()
-        except Exception as e:
-            await self._emit_status(f"IPSerial reset skip/fail: {e!r}")
+        # try:
+        #     await self._force_release_nport_port()
+        # except Exception as e:
+        #     await self._emit_status(f"IPSerial reset skip/fail: {e!r}")
 
         await self._emit_status("MFC 연결 종료됨")
 
@@ -1565,61 +1565,61 @@ class AsyncMFC:
 
     # ====================== NPort 시리얼 해제 함수 (Windows 전용) ======================
     # 클래스 차원의 최근 리셋 타임스탬프(너무 잦은 리셋 억제)
-    _last_reset_mono: float = 0.0
+    # _last_reset_mono: float = 0.0
 
-    async def _force_release_nport_port(
-        self,
-        *,
-        dll_path: str | None = None,
-        override_port_index: int | None = None,
-        lock_timeout_ms: int = 15000,
-        cooldown_sec: float = 2.0,
-    ):
-        """
-        IPSerial.dll(nsio_resetport)로 NPort 시리얼 포트의 TCP 세션을 강제 해제.
-        - 시스템 전역 네임드 뮤텍스(Global\...)로 '동시 호출'을 절대 허용하지 않음.
-        - 최근 몇 초 내 리셋 호출이 있었다면 쿨다운으로 skip.
-        - MFC_DISABLE_IPSERIAL_RESET=1 이면 즉시 skip.
-        """
-        if os.name != "nt":
-            return  # 비-Windows는 조용히 skip
+    # async def _force_release_nport_port(
+    #     self,
+    #     *,
+    #     dll_path: str | None = None,
+    #     override_port_index: int | None = None,
+    #     lock_timeout_ms: int = 15000,
+    #     cooldown_sec: float = 2.0,
+    # ):
+    #     """
+    #     IPSerial.dll(nsio_resetport)로 NPort 시리얼 포트의 TCP 세션을 강제 해제.
+    #     - 시스템 전역 네임드 뮤텍스(Global\...)로 '동시 호출'을 절대 허용하지 않음.
+    #     - 최근 몇 초 내 리셋 호출이 있었다면 쿨다운으로 skip.
+    #     - MFC_DISABLE_IPSERIAL_RESET=1 이면 즉시 skip.
+    #     """
+    #     if os.name != "nt":
+    #         return  # 비-Windows는 조용히 skip
 
-        # 긴급 차단 스위치(운영 중 신속 디버그용)
-        if os.environ.get("MFC_DISABLE_IPSERIAL_RESET", "").strip() in ("1","true","TRUE","yes","Y"):
-            await self._emit_status("[IPSerial] reset disabled by env(MFC_DISABLE_IPSERIAL_RESET)")
-            return
+    #     # 긴급 차단 스위치(운영 중 신속 디버그용)
+    #     if os.environ.get("MFC_DISABLE_IPSERIAL_RESET", "").strip() in ("1","true","TRUE","yes","Y"):
+    #         await self._emit_status("[IPSerial] reset disabled by env(MFC_DISABLE_IPSERIAL_RESET)")
+    #         return
 
-        # 너무 잦은 리셋 방지
-        now = time.monotonic()
-        if (now - getattr(self, "_last_reset_mono", 0.0)) < float(cooldown_sec):
-            await self._emit_status(f"[IPSerial] skip: cooldown {cooldown_sec:.1f}s")
-            return
+    #     # 너무 잦은 리셋 방지
+    #     now = time.monotonic()
+    #     if (now - getattr(self, "_last_reset_mono", 0.0)) < float(cooldown_sec):
+    #         await self._emit_status(f"[IPSerial] skip: cooldown {cooldown_sec:.1f}s")
+    #         return
 
-        host, tcp_port = self._resolve_endpoint()
-        port_index = _guess_nport_index_from_tcp_port(tcp_port, override_port_index)
+    #     host, tcp_port = self._resolve_endpoint()
+    #     port_index = _guess_nport_index_from_tcp_port(tcp_port, override_port_index)
 
-        # 전역 뮤텍스 구간 — IG 등 다른 장치와 '절대' 동시에 들어가지 않음
-        with _WinGlobalMutex(_IPSERIAL_MUTEX_NAME, timeout_ms=int(lock_timeout_ms)) as mx:
-            if not mx.acquired:
-                await self._emit_status("[IPSerial] skip: failed to acquire global lock (timeout)")
-                return
+    #     # 전역 뮤텍스 구간 — IG 등 다른 장치와 '절대' 동시에 들어가지 않음
+    #     with _WinGlobalMutex(_IPSERIAL_MUTEX_NAME, timeout_ms=int(lock_timeout_ms)) as mx:
+    #         if not mx.acquired:
+    #             await self._emit_status("[IPSerial] skip: failed to acquire global lock (timeout)")
+    #             return
 
-            def _work():
-                exe_dir = Path(sys.argv[0]).resolve().parent
-                default_dll = exe_dir / "dll" / "IPSerial.dll"
-                final_dll = str(dll_path or default_dll)
-                ipser = _MoxaIPSerial(final_dll)  # ← 싱글톤 DLL 재사용
-                rc = ipser.reset_port(host, port_index)
-                return rc, final_dll
+    #         def _work():
+    #             exe_dir = Path(sys.argv[0]).resolve().parent
+    #             default_dll = exe_dir / "dll" / "IPSerial.dll"
+    #             final_dll = str(dll_path or default_dll)
+    #             ipser = _MoxaIPSerial(final_dll)  # ← 싱글톤 DLL 재사용
+    #             rc = ipser.reset_port(host, port_index)
+    #             return rc, final_dll
 
-            loop = asyncio.get_running_loop()
-            rc, used_dll = await loop.run_in_executor(None, _work)
+    #         loop = asyncio.get_running_loop()
+    #         rc, used_dll = await loop.run_in_executor(None, _work)
 
-        # 뮤텍스 해제 후 기록(성공/실패 여부와 무관)
-        self._last_reset_mono = time.monotonic()
-        await self._emit_status(
-            f"[IPSerial] reset: host={host}, index={port_index}, rc={rc}, dll='{used_dll}'"
-        )
+    #     # 뮤텍스 해제 후 기록(성공/실패 여부와 무관)
+    #     self._last_reset_mono = time.monotonic()
+    #     await self._emit_status(
+    #         f"[IPSerial] reset: host={host}, index={port_index}, rc={rc}, dll='{used_dll}'"
+    #     )
 
     # ====================== NPort 시리얼 해제 함수 (Windows 전용) ======================
 

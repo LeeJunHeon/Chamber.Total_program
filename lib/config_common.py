@@ -2,6 +2,10 @@
 import os
 from pathlib import Path
 
+# heavy clean
+PERSIST_DEVICE_SESSIONS = False
+FORCE_RESET_RS232_ON_STOP = True
+
 # === Google Chat 알림 ===
 def _get_local(name, default=None):
     try:

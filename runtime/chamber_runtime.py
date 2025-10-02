@@ -2,9 +2,6 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import os, sys, ctypes, platform
-from pathlib import Path
-
 import csv, asyncio, contextlib, inspect, re, traceback
 from dataclasses import dataclass
 from typing import Any, Callable, Coroutine, Deque, Literal, Mapping, Optional, Sequence, TypedDict, cast, Union
@@ -175,81 +172,6 @@ class _CfgAdapter:
             int(self._get("MFC_TCP_PORT", 4006 if self.ch == 1 else 4007)),
         )
     
-    @property
-    def PERSIST_DEVICE_SESSIONS(self) -> bool:
-        # 기본 True: 공정 종료 시 light 정리(연결 유지)
-        return bool(self._get("PERSIST_DEVICE_SESSIONS", True))
-    
-    @property  # ★ NEW
-    def FORCE_RESET_RS232_ON_STOP(self) -> bool:
-        # 공정/정지 시 RS-232 서버 포트 강제 리셋 여부(기본 True)
-        return bool(self._get("FORCE_RESET_RS232_ON_STOP", True))
-
-    @property  # ★ NEW
-    def IPSERIAL_DLL_PATH(self) -> Path | None:
-        p = self._get("IPSERIAL_DLL_PATH", None)
-        return Path(p) if p else None
-    
-# ★ NEW: IPSerial.dll(nsio_*) 간단 래퍼
-class _NetSerialReset:
-    _dll = None
-
-    @classmethod
-    def _load(cls, dll_path: Path | None = None):
-        if cls._dll:
-            return cls._dll
-        if platform.system() != "Windows":
-            return None
-        try:
-            # 후보: 지정 경로 > 실행파일 경로 > CWD > 시스템 PATH
-            candidates: list[Path] = []
-            if dll_path: candidates.append(dll_path)
-            base = Path(getattr(sys, "_MEIPASS", Path.cwd()))
-            candidates += [base / "IPSerial.dll", Path.cwd() / "IPSerial.dll"]
-            libpath = next((str(p) for p in candidates if p and p.exists()), "IPSerial.dll")
-            dll = ctypes.WinDLL(libpath)
-
-            # 시그니처 (필요한 것만)
-            dll.nsio_init.restype = ctypes.c_int
-            dll.nsio_end.restype = None
-            dll.nsio_resetserver.argtypes = [ctypes.c_char_p]
-            dll.nsio_resetserver.restype = ctypes.c_int
-            dll.nsio_resetport.argtypes = [ctypes.c_char_p, ctypes.c_int]
-            dll.nsio_resetport.restype = ctypes.c_int
-            cls._dll = dll
-            return dll
-        except Exception:
-            return None
-
-    @classmethod
-    def reset_port(cls, ip: str, port: int, dll_path: Path | None = None) -> bool:
-        dll = cls._load(dll_path)
-        if not dll: return False
-        try:
-            try: dll.nsio_init()
-            except Exception: pass
-            ret = dll.nsio_resetport(ip.encode("ascii", "ignore"), int(port))
-            ok = (ret == 0) or (ret == 1)  # 라이브러리별로 0/1 성공
-            return bool(ok)
-        finally:
-            with contextlib.suppress(Exception):
-                dll.nsio_end()
-
-    @classmethod
-    def reset_server(cls, ip: str, dll_path: Path | None = None) -> bool:
-        dll = cls._load(dll_path)
-        if not dll: return False
-        try:
-            try: dll.nsio_init()
-            except Exception: pass
-            ret = dll.nsio_resetserver(ip.encode("ascii", "ignore"))
-            ok = (ret == 0) or (ret == 1)
-            return bool(ok)
-        finally:
-            with contextlib.suppress(Exception):
-                dll.nsio_end()
-
-    
 class ChamberRuntime:
     """
     한 챔버 실행 단위(장치/이벤트펌프/그래프/로그/버튼 바인딩).
@@ -297,13 +219,6 @@ class ChamberRuntime:
         self._run_select: dict[str, bool] | None = None  # ← 이번 런에서 펄스 선택 상태
         self._owns_plc = bool(owns_plc if owns_plc is not None else (int(chamber_no) == 1))  # 기본 CH1
         self._notify_plc_owner = on_plc_owner                                   # ★ 추가
-        self._force_reconnect_on_next_start = True  # 공정 시작시 항상 재연결
-        self._running_last: Optional[bool] = None  # ★ 추가: 직전 상태 캐시
-        self._persist_sessions = bool(self.cfg.PERSIST_DEVICE_SESSIONS)  # ← 추가
-
-        self._force_reset_rs232 = bool(self.cfg.FORCE_RESET_RS232_ON_STOP)   # ★ NEW
-        self._ipserial_dll_path = self.cfg.IPSERIAL_DLL_PATH                 # ★ NEW
-
 
         # QMessageBox 참조 저장소(비모달 유지용)
         self._msg_boxes: list[QMessageBox] = []  # ← 추가
@@ -350,7 +265,10 @@ class ChamberRuntime:
         self.mfc = AsyncMFC(host=mfc_host, port=mfc_port, enable_verify=False, enable_stabilization=True)
         self.ig  = AsyncIG(host=ig_host,  port=ig_port)
 
-        self.oes = OESAsync(chamber=self.ch)
+        # OES 인스턴스 생성 시 현재 챔버 번호에 따라 USB 채널을 명시적으로 매핑한다.
+        # CH1 → USB0, CH2 → USB1. OESAsync 내부 기본 동작도 동일하지만 명확성을 위해 전달한다.
+        _usb_index = 0 if self.ch == 1 else 1
+        self.oes = OESAsync(chamber=self.ch, usb_index=_usb_index)
 
         # RGA: config에서 연결 정보 꺼내 생성(단일/채널별 모두 지원)
         self.rga = None  # type: ignore
@@ -704,23 +622,21 @@ class ChamberRuntime:
                     # 자동 재연결을 선차단 → 도중 재부팅 방지
                     self._auto_connect_enabled = False
 
-                    # 0) 폴링/출력 스위치 모두 OFF
+                    # 0) 재연결 선차단 + 폴링 완전 OFF
+                    self._auto_connect_enabled = False
                     self._run_select = None
                     self._last_polling_targets = None
+                    # 남아 있을 수 있는 폴링 스위치를 즉시 모두 내림(장치 내부 워치독 종료 유도)
                     self._apply_polling_targets({"mfc": False, "dc_pulse": False, "rf_pulse": False, "dc": False, "rf": False})
 
-                    # 1) 세션 유지(light) 또는 완전 종료(heavy) 분기
+                    # 1) 이제 실제로 장치/워치독을 내려서 RS-232/TCP 점유 해제
+                    self.append_log("MAIN", "공정 종료 → 모든 장치 연결 해제 및 워치독 중지")
                     try:
-                        if getattr(self, "_persist_sessions", True):
-                            self.append_log("MAIN", "공정 종료 → 세션 유지(light cleanup, 다음 Start에서 1회 재연결)")
-                            await self._stop_device_watchdogs(light=True)   # ★ 연결은 살림
-                        else:
-                            self.append_log("MAIN", "공정 종료 → 모든 장치 연결 해제 및 워치독 중지(heavy)")
-                            await self._stop_device_watchdogs(light=False)  # ★ 기존 동작
+                        await self._stop_device_watchdogs(light=False)
                     except Exception as e:
                         self.append_log("MAIN", f"종료 정리 중 예외(무시): {e!r}")
 
-                    # 2) 다음 공정 새 로그 파일을 위해 파일 세션만 리셋
+                    # 2) 다음 공정 새 로그 파일을 위해 세션 리셋
                     self._log_file_path = None
 
                     if getattr(self, "_pc_stopping", False):
@@ -1079,58 +995,47 @@ class ChamberRuntime:
         self._spawn_detached(self._start_devices_task(), store=True, name=f"DevStart.CH{self.ch}")
 
     async def _start_devices_task(self) -> None:
-        force = bool(getattr(self, "_force_reconnect_on_next_start", False))
-
-        async def _maybe_start_or_connect(obj, label: str, *, log: bool = True, force: bool = False):
+        async def _maybe_start_or_connect(obj, label: str, *, log: bool = True):
             if not obj:
                 return
             try:
-                if self._is_dev_connected(obj):
-                    if force:
-                        if log:
-                            self.append_log(label, "connected (fresh-run → force reconnect)")
-                        c = getattr(obj, "cleanup", None)
-                        if callable(c):
-                            r = c()
-                            if inspect.isawaitable(r):
-                                await r
-                        with contextlib.suppress(Exception):
-                            setattr(obj, "_connected", False)
-                        await asyncio.sleep(0)
-                    else:
-                        if log:
-                            self.append_log(label, "already connected → skip")
-                        return
-
+                if self._is_dev_connected(obj):        # ★ 이미 연결됨
+                    if log:
+                        self.append_log(label, "already connected → skip")
+                    return
+                
                 meth = getattr(obj, "start", None) or getattr(obj, "connect", None)
                 if not callable(meth):
-                    if log: self.append_log(label, "start/connect 메서드 없음 → skip")
+                    if log:
+                        self.append_log(label, "start/connect 메서드 없음 → skip")
                     return
-                r = meth()
-                if inspect.isawaitable(r):
-                    await r
+                res = meth()
+                if inspect.isawaitable(res):
+                    await res
                 if log:
                     self.append_log(label, f"{meth.__name__} 호출 완료")
             except Exception as e:
+                try:
+                    name = meth.__name__  # type: ignore[attr-defined]
+                except Exception:
+                    name = "start/connect"
                 if log:
-                    self.append_log(label, f"start/connect 실패: {e!r}")
+                    self.append_log(label, f"{name} 실패: {e!r}")
 
         sel = getattr(self, "_run_select", None) or {}
 
-        # ✅ PLC: 공유 장치 → 절대 강제 재연결하지 않음
-        await _maybe_start_or_connect(self.plc, "PLC", log=self._owns_plc, force=False)
+        # PLC는 공유 → 소유자만 로그 출력 (비소유자는 연결 시도하되 로그 무음)
+        await _maybe_start_or_connect(self.plc, "PLC", log=self._owns_plc)
 
         # 나머지는 기존대로 각 챔버에서 로그 출력
-        await _maybe_start_or_connect(self.mfc, "MFC", force=force)
-        await _maybe_start_or_connect(self.ig,  "IG",  force=force)
+        await _maybe_start_or_connect(self.mfc, "MFC")
+        await _maybe_start_or_connect(self.ig,  "IG")
 
         # 펄스 장비는 '이번 런에서 선택된 경우에만' 연결 시도
         if self.dc_pulse and sel.get("dc_pulse", False):
-            await _maybe_start_or_connect(self.dc_pulse, "DCPulse", force=force)
+            await _maybe_start_or_connect(self.dc_pulse, "DCPulse")
         if self.rf_pulse and sel.get("rf_pulse", False):
-            await _maybe_start_or_connect(self.rf_pulse, "RFPulse", force=force)
-
-        self._force_reconnect_on_next_start = False
+            await _maybe_start_or_connect(self.rf_pulse, "RFPulse")
 
     # ------------------------------------------------------------------
     # 표시/입력/상태
@@ -1152,16 +1057,7 @@ class ChamberRuntime:
         if b_start: b_start.setEnabled(not running)
         if b_stop:  b_stop.setEnabled(True)
 
-        # ★ 초기 False 하트비트는 무시
-        if self._running_last is None and not running:
-            self._running_last = False
-            return
-
-        # ★ 엣지 트리거: 상태가 실제로 바뀐 경우에만 통지
-        if self._running_last is running:
-            return
-        self._running_last = running
-
+        # ★ 추가: 공정 시작/종료에 따라 PLC 로그 소유권 갱신
         cb = getattr(self, "_notify_plc_owner", None)
         if callable(cb):
             try:
@@ -1350,7 +1246,6 @@ class ChamberRuntime:
         try:
             # 시작 시도 직전에만 허용
             self._auto_connect_enabled = True
-            self._force_reconnect_on_next_start = True   # ★ 추가
             
             # ✅ 이번 런에서 실제로 사용할 펄스만 표시(IG/MFC는 항상 연결이므로 제외)
             use_dc_pulse = bool(params.get("use_dc_pulse", False)) and self.supports_dc_pulse
@@ -1514,19 +1409,17 @@ class ChamberRuntime:
         self._auto_connect_enabled = False
         self._run_select = None
 
-        # 1) 먼저 PC에게 정지 시퀀스를 요청(장치들에 OFF 명령이 나가게)
+        # 라이트 정리: 출력/폴링 OFF
+        self._spawn_detached(self._stop_device_watchdogs(light=True))
+
         self._pc_stopping = True
         self._pending_device_cleanup = True
         self.process_controller.request_stop()
 
-        # 2) 바로 폴링을 꺼도 되는 환경이면 여기서 light 정리,
-        #    아니라면 아주 짧게 양보해서 명령이 큐에 올라타게 한 뒤 끄는 것도 방법
-        self._spawn_detached(self._stop_device_watchdogs(light=True))
-
         # ✅ 백업 타이머: 30초 내 미종료 시 헤비 강제
         async def _fallback():
             try:
-                await asyncio.sleep(5)
+                await asyncio.sleep(30)
                 if self._pc_stopping and self._pending_device_cleanup:
                     self.append_log("MAIN", "STOP fallback → heavy cleanup")
                     await self._stop_device_watchdogs(light=False)
@@ -1538,31 +1431,39 @@ class ChamberRuntime:
 
         self._spawn_detached(_fallback(), store=True, name=f"StopFallback.CH{self.ch}")
 
-    def _set_all_process_status(self, on: bool) -> None:
-        with contextlib.suppress(Exception): self.mfc.set_process_status(on)
-        if self.dc_pulse:
-            with contextlib.suppress(Exception): self.dc_pulse.set_process_status(on)
-        if self.rf_pulse:
-            with contextlib.suppress(Exception): self.rf_pulse.set_process_status(on)
-        if self.dc_power and hasattr(self.dc_power, "set_process_status"):
-            with contextlib.suppress(Exception): self.dc_power.set_process_status(on)
-        if self.rf_power and hasattr(self.rf_power, "set_process_status"):
-            with contextlib.suppress(Exception): self.rf_power.set_process_status(on)
-
     async def _stop_device_watchdogs(self, *, light: bool = False) -> None:
-        """
-        light=True  : 폴링만 끄고 출력/대기 취소(연결 유지)
-        light=False : 비-직렬 장치만 병렬 정리 후, IG → MFC 순차 cleanup (각 장치 내부에서 IPSerial reset 수행).
-                    추가적인 중복 reset 호출은 하지 않는다.
-        """
         if light:
-            self._set_all_process_status(False)
+            with contextlib.suppress(Exception): self.mfc.set_process_status(False)
+            if self.dc_pulse:
+                with contextlib.suppress(Exception): self.dc_pulse.set_process_status(False)
+            if self.rf_pulse:
+                with contextlib.suppress(Exception): self.rf_pulse.set_process_status(False)
+            if self.dc_power and hasattr(self.dc_power, "set_process_status"):
+                with contextlib.suppress(Exception): self.dc_power.set_process_status(False)
+            if self.rf_power and hasattr(self.rf_power, "set_process_status"):
+                with contextlib.suppress(Exception): self.rf_power.set_process_status(False)
             return
+        
+        # ✅ heavy 시작 직후도 한 번 더 OFF
+        with contextlib.suppress(Exception): self.mfc.set_process_status(False)
+        if self.dc_pulse:
+            with contextlib.suppress(Exception): self.dc_pulse.set_process_status(False)
+        if self.rf_pulse:
+            with contextlib.suppress(Exception): self.rf_pulse.set_process_status(False)
+        if self.dc_power and hasattr(self.dc_power, "set_process_status"):
+            with contextlib.suppress(Exception): self.dc_power.set_process_status(False)
+        if self.rf_power and hasattr(self.rf_power, "set_process_status"):
+            with contextlib.suppress(Exception): self.rf_power.set_process_status(False)
 
-        # 1) 폴링/출력 OFF
-        self._set_all_process_status(False)
+        loop = self._loop_from_anywhere()
+        try:
+            current = asyncio.current_task()
+            live = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done() and t is not current]
+            for t in live: loop.call_soon(t.cancel)
+            if live: await asyncio.gather(*live, return_exceptions=True)
+        finally:
+            self._bg_tasks = []
 
-        # 2) IG 대기 취소(있으면)
         try:
             if self.ig and hasattr(self.ig, "cancel_wait"):
                 with contextlib.suppress(asyncio.TimeoutError):
@@ -1570,56 +1471,21 @@ class ChamberRuntime:
         except Exception:
             pass
 
-        # 3) 비-직렬 장치들만 먼저 '병렬'로 정리
-        parallel_targets = (self.dc_pulse, self.rf_pulse, self.dc_power, self.rf_power, self.oes, self.rga)
         tasks = []
-        for dev in parallel_targets:
+        for dev in (self.ig, self.mfc, self.dc_pulse, self.rf_pulse, self.dc_power, self.rf_power, self.oes, self.rga):
             if dev and hasattr(dev, "cleanup"):
-                try:
-                    tasks.append(dev.cleanup())
-                except Exception:
-                    pass
+                try: tasks.append(dev.cleanup())
+                except Exception: pass
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-        # 4) RS-232(NPort) 관련 가능성 있는 장치들은 '순차'로 정리
-        #    (각 장치 cleanup 내부에서 IPSerial reset이 수행되므로 동시 호출 금지)
-        if self.ig and hasattr(self.ig, "cleanup"):
-            try:
-                await self.ig.cleanup()
-            except Exception:
-                pass
-            await asyncio.sleep(0.05)
-
-        if self.mfc and hasattr(self.mfc, "cleanup"):
-            try:
-                await self.mfc.cleanup()
-            except Exception:
-                pass
-            await asyncio.sleep(0.05)
-
-        # ⚠️ 중복 reset 금지: 추가로 _force_close_rs232_servers()를 호출하지 않는다.
-
-        # 5) 이벤트 펌프 종료
-        loop = self._loop_from_anywhere()
-        try:
-            current = asyncio.current_task()
-            live = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done() and t is not current]
-            for t in live:
-                loop.call_soon(t.cancel)
-            if live:
-                await asyncio.gather(*live, return_exceptions=True)
-        finally:
-            self._bg_tasks = []
-
-        # 6) 로그 라이터 종료
         try:
             await self._shutdown_log_writer()
         except Exception:
             pass
 
         self._bg_started = False
-        self._devices_started = False
+        self._devices_started = False  # ✅ 다음 시작 때 장치 start() 다시 보장
         self._run_select = None
 
     def shutdown_fast(self) -> None:
@@ -1632,58 +1498,30 @@ class ChamberRuntime:
             except Exception:
                 pass
 
-            # 이벤트 펌프 종료
             loop = asyncio.get_running_loop()
             current = asyncio.current_task()
             live = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done() and t is not current]
-            for t in live:
-                loop.call_soon(t.cancel)
-            if live:
-                await asyncio.gather(*live, return_exceptions=True)
+            for t in live: loop.call_soon(t.cancel)
+            if live: await asyncio.gather(*live, return_exceptions=True)
             self._bg_tasks = []
             self._bg_started = False
             self._devices_started = False
 
-            # 비-직렬 장치 병렬 정리
-            parallel_targets = (self.dc_pulse, self.rf_pulse, self.dc_power, self.rf_power, self.oes, self.rga)
             tasks = []
-            for dev in parallel_targets:
-                if not dev:
-                    continue
+            for dev in (self.ig, self.mfc, self.dc_pulse, self.rf_pulse, self.dc_power, self.rf_power, self.oes, self.rga):
+                if not dev: continue
                 try:
-                    meth = getattr(dev, "cleanup_quick", None) or getattr(dev, "cleanup", None)
-                    if callable(meth):
-                        tasks.append(meth())
+                    if hasattr(dev, "cleanup_quick"):
+                        tasks.append(dev.cleanup_quick())
+                    elif hasattr(dev, "cleanup"):
+                        tasks.append(dev.cleanup())
                 except Exception:
                     pass
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
 
-            # IG → MFC 순차 정리 (reset 동시 호출 방지)
-            if self.ig:
-                try:
-                    meth = getattr(self.ig, "cleanup_quick", None) or getattr(self.ig, "cleanup", None)
-                    if callable(meth):
-                        await meth()
-                except Exception:
-                    pass
-                await asyncio.sleep(0.03)
-
-            if self.mfc:
-                try:
-                    meth = getattr(self.mfc, "cleanup_quick", None) or getattr(self.mfc, "cleanup", None)
-                    if callable(meth):
-                        await meth()
-                except Exception:
-                    pass
-                await asyncio.sleep(0.03)
-
-            # ⚠️ 중복 reset 금지: _force_close_rs232_servers() 호출 제거
-
-            try:
-                await self._shutdown_log_writer()
-            except Exception:
-                pass
+            try: await self._shutdown_log_writer()
+            except Exception: pass
 
         self._spawn_detached(run())
 
@@ -2385,31 +2223,10 @@ class ChamberRuntime:
         
     # ============================= PLC 로그 소유 관리 =============================
     def set_plc_log_owner(self, owns: bool) -> None:
-        # UI 표시만 바꾸고, 로그는 찍지 않음
+        """이 런타임이 PLC 로그의 현재 소유자인지 토글"""
+        prev = getattr(self, "_owns_plc", False)
         self._owns_plc = bool(owns)
+        # 필요하면 디버깅용 로그(선택)
+        if prev != self._owns_plc:
+            self.append_log("MAIN", f"PLC log owner -> {self._owns_plc}")
     # ============================= PLC 로그 소유 관리 =============================
-
-    # ★ NEW: 공정 종료/정지 시 RS-232 서버 포트를 확실히 끊어줌
-    def _force_close_rs232_servers(self) -> None:
-        if platform.system() != "Windows":
-            return
-        if not getattr(self, "_force_reset_rs232", True):
-            return
-        try:
-            m_ip, m_port = self.cfg.MFC_TCP
-            ig_ip, ig_port = self.cfg.IG_TCP
-        except Exception:
-            return
-
-        for ip, port, name in ((m_ip, m_port, "MFC"), (ig_ip, ig_port, "IG")):
-            try:
-                ok = _NetSerialReset.reset_port(ip, int(port), dll_path=self._ipserial_dll_path)
-                self.append_log("RS232", f"reset_port {name} {ip}:{port} → {'OK' if ok else 'FAIL/SKIP'}")
-                # 필요시 서버 전체 리셋도 시도
-                if not ok:
-                    ok2 = _NetSerialReset.reset_server(ip, dll_path=self._ipserial_dll_path)
-                    self.append_log("RS232", f"reset_server {name} {ip} → {'OK' if ok2 else 'FAIL/SKIP'}")
-            except Exception as e:
-                self.append_log("RS232", f"reset {name} {ip}:{port} 예외: {e!r}")
-
-

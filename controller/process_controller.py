@@ -1165,12 +1165,12 @@ class ProcessController:
 
         # --- 메인 공정 시간 ---
         if process_time_sec > 0:
-            steps.append(ProcessStep(
-                action=ActionType.OES_RUN,
-                params=(process_time_sec, integration_ms),
-                message=f'OES 측정 시작 ({process_time_min}분, {integration_ms}ms)',
-                no_wait=True  # 백그라운드로 돌리고 즉시 다음 DELAY로
-            ))
+            # steps.append(ProcessStep(
+            #     action=ActionType.OES_RUN,
+            #     params=(process_time_sec, integration_ms),
+            #     message=f'OES 측정 시작 ({process_time_min}분, {integration_ms}ms)',
+            #     no_wait=True  # 백그라운드로 돌리고 즉시 다음 DELAY로
+            # ))
             steps.append(ProcessStep(
                 action=ActionType.DELAY,
                 duration=int(round(process_time_sec * 1000.0)),
