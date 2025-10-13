@@ -29,21 +29,13 @@ SP_CCD_PDA     = 2   # SM303-Si (Hamamatsu S7031)
 SP_CCD_G9212   = 3   # SM303-InGaAs
 SP_CCD_S10420  = 4
 
-# 모델별 기본 픽셀 길이 (WL 실패 시 폴백)
-PIXELS = {
-    SP_CCD_PDA:     1056,
-    SP_CCD_G9212:    512,
-    SP_CCD_SONY:    2080,
-    SP_CCD_S10420:  2080,
-    SP_CCD_TOSHIBA: 3680,
-}
+# spTestAllChannels에 넘길 스캔 순서(USB 기준)
+ORDER_USB = 0
 
-# WL 실패 시 1회 읽기로 픽셀 길이를 유추할 때 쓸 후보
-CANDIDATE_PIXELS = [1056, 1024, 512, 2048, 4096, 3680, 2080]
-
-ORDER_USB = 0            # spTestAllChannels 인자
-ROI_START_DEFAULT = 10   # 이전 코드와 동일
-ROI_END_DEFAULT   = 1034 # 이전 코드와 동일
+# 고정 측정 파라미터 (이전 방식)
+FIXED_NPIX = 3680          # 고정 버퍼 길이
+ROI_START_DEFAULT = 10
+ROI_END_DEFAULT   = 1034
 
 # ─────────────────────────────────────────────────────
 class OESAsync:
@@ -207,12 +199,12 @@ class OESAsync:
                 pass
         return n, opened
 
-    def _read_pixels(self, ch: int, npix: int) -> tuple[int, Optional[np.ndarray]]:
-        buf = (ctypes.c_int32 * npix)()
-        r = int(self.sp_dll.spReadDataEx(buf, ctypes.c_int16(ch)))  # type: ignore
+    def _read_pixels(self, ch: int) -> tuple[int, Optional[np.ndarray]]:
+        buf = (ctypes.c_int32 * FIXED_NPIX)()
+        r = int(self.sp_dll.spReadDataEx(buf, ctypes.c_int16(ch)))
         if r < 0:
             return r, None
-        return r, np.asarray(buf[:npix], dtype=float)
+        return r, np.asarray(buf[:FIXED_NPIX], dtype=float)
 
     def _try_fetch_wl(self, ch: int, maxlen: int = 8192) -> Optional[np.ndarray]:
         if not self._get_wl:
@@ -241,24 +233,13 @@ class OESAsync:
         return None
 
     def _ensure_npixels(self, ch: int, model: int) -> int:
-        """WL 길이를 우선 사용, 없으면 모델 테이블/후보로 유추"""
-        # WL 우선 (이전 버전 방식)
-        wl = self._try_fetch_wl(ch)
-        if wl is not None and wl.size > 10:
-            self._wl = wl
-            return int(wl.size)
-
-        # WL 실패 → 모델 테이블 + 후보로 1회 읽어 검증
-        self._wl = None
-        npix = int(PIXELS.get(model, 2048))
-        rc, arr = self._read_pixels(ch, npix)
-        if rc >= 0 and arr is not None and arr.size > 10:
-            return int(arr.size)
-        for cand in CANDIDATE_PIXELS:
-            rc2, arr2 = self._read_pixels(ch, cand)
-            if rc2 >= 0 and arr2 is not None and arr2.size > 10:
-                return int(arr2.size)
-        return npix
+        """예전 방식: WL은 반드시 성공해야 하며, 픽셀 길이는 고정 3680."""
+        wl = self._try_fetch_wl(ch, maxlen=FIXED_NPIX)
+        if wl is None or wl.size < ROI_END_DEFAULT:
+            raise RuntimeError("파장 테이블이 유효하지 않습니다.")
+        # 고정 길이로 맞추되, WL 길이는 헤더/표시에 그대로 사용
+        self._wl = wl
+        return FIXED_NPIX
 
     def _apply_device_settings_blocking(self, ch: int, integration_time_ms: int):
         """이전 버전과 동일한 설정: Baseline/AutoDark/Trigger=11/TEC ON/Integration"""
@@ -301,12 +282,9 @@ class OESAsync:
         if model is None:
             return False, f"초기화 실패: USB{target_ch} — 모든 모델 시도 실패"
 
-        # ③ 픽셀 수 확정 + WL(nm) 확보(가능 시)
-        self._npix = self._ensure_npixels(target_ch, model)
-
-        # ④ ROI 클램프 (이전 코드와 동일 [10:1034]을 길이에 맞춤)
-        self._roi_end   = min(ROI_END_DEFAULT, self._npix if self._wl is None else int(min(self._npix, self._wl.size)))
-        self._roi_start = min(ROI_START_DEFAULT, max(0, self._roi_end - 1))
+        self._npix = self._ensure_npixels(target_ch, model)  # = FIXED_NPIX
+        self._roi_start = ROI_START_DEFAULT                  # 고정
+        self._roi_end   = ROI_END_DEFAULT                    # 고정
 
         # ⑤ 상태 반영
         self.sChannel = target_ch
@@ -391,36 +369,27 @@ class OESAsync:
             pass
 
     def _acquire_one_slice_avg(self):
-        if self.sp_dll is None or self.sChannel < 0 or self._npix <= 0:
-            raise RuntimeError("장치/픽셀 수가 유효하지 않습니다.")
+        if self.sp_dll is None or self.sChannel < 0:
+            raise RuntimeError("장치 상태가 유효하지 않습니다.")
+        if self._wl is None or self._wl.size < ROI_END_DEFAULT:
+            raise RuntimeError("파장 테이블이 유효하지 않습니다.")
 
         ch = int(self.sChannel)
-        npix = int(self._npix)
-
-        # 일부 DLL은 매번 채널 셀렉트 필요 → 안전하게 한 번 호출
-        try: self.sp_dll.spSetupGivenChannel(ctypes.c_int16(ch))  # type: ignore
-        except Exception: pass
-
-        intensity_sum = np.zeros(npix, dtype=float)
+        intensity_sum = np.zeros(FIXED_NPIX, dtype=float)
         valid = 0
         for _ in range(self._avg_count):
-            r, arr = self._read_pixels(ch, npix)
-            if r >= 0 and arr is not None and arr.size >= min(self._roi_end, npix):
+            r, arr = self._read_pixels(ch)
+            if r > 0 and arr is not None and arr.size >= ROI_END_DEFAULT:
                 intensity_sum += arr
                 valid += 1
-
         if valid == 0:
             return None, None
 
         avg = intensity_sum / float(valid)
-        start = self._roi_start
-        end   = min(self._roi_end, npix)
+        start, end = ROI_START_DEFAULT, ROI_END_DEFAULT
 
-        # x축: WL(nm) 우선, 실패 시 픽셀 인덱스
-        if self._wl is not None and self._wl.size >= end:
-            x = np.asarray(self._wl[start:end], dtype=float)
-        else:
-            x = np.arange(start, end, dtype=float)
+        # x는 반드시 WL
+        x = np.asarray(self._wl[start:end], dtype=float)
         y = np.asarray(avg[start:end], dtype=float)
         return x, y
 
@@ -457,12 +426,12 @@ class OESAsync:
     def _save_data_to_csv_wide_blocking(self):
         if not self.measured_rows:
             return
-        # CSV 헤더 x축: WL 성공 시 nm, 실패 시 픽셀 인덱스
-        start, end = self._roi_start, self._roi_end
-        if self._wl is not None and self._wl.size >= end:
-            header_x = self._wl[start:end].tolist()
-        else:
-            header_x = list(np.arange(start, end, dtype=float))
+        # - x축: WL(nm) '필수' 사용 (WL 로드 실패 시 초기화 실패 처리)
+        start, end = ROI_START_DEFAULT, ROI_END_DEFAULT
+        if self._wl is None or self._wl.size < end:
+            raise RuntimeError("WL 헤더 생성 실패")
+        header_x = self._wl[start:end].tolist()
+
         header = ["Time"] + header_x
         filename = f"OES_Data_{self._start_time_str}.csv"
         full_path = self._save_dir / filename
@@ -474,8 +443,16 @@ class OESAsync:
     def _safe_close_channel_blocking(self):
         try:
             if self.sp_dll and self.sChannel >= 0:
-                try: self.sp_dll.spCloseGivenChannel(ctypes.c_int16(self.sChannel))  # type: ignore
-                except Exception: pass
+                # 예전 코드와 동일하게 TEC OFF 시도
+                try:
+                    if hasattr(self, "_set_tec") and self._set_tec:
+                        self._set_tec(ctypes.c_int32(0), ctypes.c_int16(self.sChannel))
+                except Exception:
+                    pass
+                try:
+                    self.sp_dll.spCloseGivenChannel(ctypes.c_int16(self.sChannel))
+                except Exception:
+                    pass
         finally:
             self.sChannel = -1
 
