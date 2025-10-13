@@ -1,27 +1,27 @@
 # -*- coding: utf-8 -*-
 """
-tsp.py — asyncio 기반 TSP 컨트롤러 (TCP Server 직결, Window 프로토콜)
+tsp.py — asyncio 기반 TSP 컨트롤러 (TCP Server 직결, Window 프로토콜, RS-232 전용)
 - 프레임: <STX><ADDR><WIN(3 ASCII)><COM('0'=read/'1'=write)><DATA?><ETX><CRC(ASCII 2)>
-- RS-232: ADDR=0x80 / RS-485: ADDR=0x80+(노드 0~31)
+- RS-232 전용: ADDR는 항상 0x80
 - 기존 사용처와 상위 시그니처 유지(AsyncTSP.ensure_open/start/stop/ensure_off/aclose)
 - 기본 정책: 장비가 응답을 보내지 않아도(write-only) 예외 없이 통과
 """
 
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Optional, Literal
+from typing import Optional
 import asyncio, socket, contextlib
 
-# 프로젝트 설정(기존 그대로 사용)
+# 프로젝트 설정(기존 그대로 사용; RS-232만 사용하므로 TSP_ADDR은 더 이상 필요 없음)
 from lib.config_ch2 import (
     TSP_TCP_HOST, TSP_TCP_PORT,
-    TSP_ADDR,                      # 주의: 이제 RS-485 노드로 해석(0~31). RS-232면 -1 또는 0xFF 권장.
     TSP_CONNECT_TIMEOUT_S, TSP_WRITE_TIMEOUT_S, TSP_POST_SEND_DELAY_MS
 )
 
 # ──────────────────────────────────────────────────────────────
 STX = 0x02
 ETX = 0x03
+ADDR_RS232 = 0x80  # RS-232 전용 주소 바이트 (고정)
 
 def _xor_bytes(data: bytes) -> int:
     x = 0
@@ -29,28 +29,16 @@ def _xor_bytes(data: bytes) -> int:
         x ^= b
     return x & 0xFF  # Window CRC는 1바이트 전체
 
-def _addr_byte(addr_like: int) -> int:
+def _build_window_frame(win3: str, write: bool, data_ascii: Optional[str]) -> bytes:
     """
-    RS-232이면 0x80, RS-485이면 0x80 + (노드 0~31).
-    config의 TSP_ADDR을 '노드 번호'로 해석하고,
-    RS-232를 쓰는 경우에는 TSP_ADDR=-1(또는 255)로 설정하는 것을 권장.
+    RS-232 전용 프레임 빌더
+    - ADDR = 0x80 고정
+    - CRC = STX 제외 ~ ETX 포함 XOR → 1바이트 값을 대문자 16진 ASCII 2글자
     """
-    if addr_like is None:
-        return 0x80  # 안전 디폴트: RS-232
-    try:
-        n = int(addr_like)
-    except Exception:
-        n = -1
-    if n < 0 or n > 31:
-        return 0x80
-    return 0x80 + (n & 0x1F)
-
-def _build_window_frame(win3: str, write: bool, data_ascii: Optional[str], rs485_addr_like: int) -> bytes:
     if len(win3) != 3 or not win3.isdigit():
         raise ValueError(f"WIN은 3자리 숫자여야 합니다: {win3!r}")
-    addr = _addr_byte(rs485_addr_like)
     com  = 0x31 if write else 0x30  # '1' or '0'
-    body = bytes([addr]) + win3.encode('ascii') + bytes([com])
+    body = bytes([ADDR_RS232]) + win3.encode('ascii') + bytes([com])
     if write and data_ascii is None:
         raise ValueError("write에는 DATA가 필요합니다.")
     if data_ascii:
@@ -63,11 +51,10 @@ def _build_window_frame(win3: str, write: bool, data_ascii: Optional[str], rs485
 @dataclass
 class TSPLetterTCPClient:
     """
-    (이름은 호환을 위해 유지) — 실제 구현은 'Window' 프로토콜.
+    (이름은 호환을 위해 유지) — 실제 구현은 'Window' 프로토콜, RS-232 고정.
     """
     host: str = TSP_TCP_HOST
     port: int = TSP_TCP_PORT
-    addr: int = TSP_ADDR              # RS-485 노드(0~31) / RS-232면 -1 권장
     connect_timeout_s: float = float(TSP_CONNECT_TIMEOUT_S)
     write_timeout_s: float = float(TSP_WRITE_TIMEOUT_S)
     post_send_delay_ms: int = int(TSP_POST_SEND_DELAY_MS)
@@ -115,12 +102,12 @@ class TSPLetterTCPClient:
     # ── Window 유틸 ─────────────────────────────────────────
     async def write_logic(self, win3: str, on: bool) -> None:
         """Logic 타입 창구에 '0'/'1' 쓰기 (ACK 없어도 예외 없이 통과)."""
-        frame = _build_window_frame(win3, write=True, data_ascii=("1" if on else "0"), rs485_addr_like=self.addr)
+        frame = _build_window_frame(win3, write=True, data_ascii=("1" if on else "0"))
         await self._send_frame(frame)
 
     async def write_raw(self, win3: str, data_ascii: str) -> None:
         """임의 창구에 ASCII 데이터 쓰기."""
-        frame = _build_window_frame(win3, write=True, data_ascii=data_ascii, rs485_addr_like=self.addr)
+        frame = _build_window_frame(win3, write=True, data_ascii=data_ascii)
         await self._send_frame(frame)
 
     async def read_raw(self, win3: str, read_timeout_s: float = 0.8) -> Optional[str]:
@@ -131,7 +118,7 @@ class TSPLetterTCPClient:
         """
         if not self.is_open:
             raise RuntimeError("TSP TCP가 열려있지 않습니다. open() 필요")
-        frame = _build_window_frame(win3, write=False, data_ascii=None, rs485_addr_like=self.addr)
+        frame = _build_window_frame(win3, write=False, data_ascii=None)
         await self._send_frame(frame)
         if self._reader is None:
             return None
