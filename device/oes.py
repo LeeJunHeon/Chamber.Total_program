@@ -363,6 +363,12 @@ class OESAsync:
             await self._status("중단 요청 수신됨")
             await self._end_measurement(False, "사용자 중단")
         else:
+            # 실행 중이 아니더라도 버퍼에 남은 줄이 있으면 저장 시도
+            if self.measured_rows:
+                try:
+                    await self._call(self._save_data_to_csv_wide_blocking)
+                except Exception as e:
+                    await self._status(f"[OES_CSV] 저장 실패(후보): {e}")
             await self._safe_close_channel()
             await self._status("중단 요청 수신됨 (실행 중 아님)")
 
@@ -431,9 +437,12 @@ class OESAsync:
     async def _deadline_after(self, duration_sec: float):
         try:
             await asyncio.sleep(max(0.0, float(duration_sec)))
-            if self.is_running:
-                await self._end_measurement(True)
+            # 여기서 상태 로그 한번 남겨두면 추적 쉬움
+            await self._status("[OES] Deadline reached → closing")
+            # is_running 여부와 무관하게 종료 루틴 진입 (내부에서 idempotent 처리)
+            await self._end_measurement(True)
         except asyncio.CancelledError:
+            await self._status("[OES] Deadline cancelled")
             pass
 
     async def _end_measurement(self, was_successful: bool, reason: str = ""):

@@ -1,206 +1,185 @@
-# tsp_controller.py
+# controller/tsp_controller.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Optional, Callable, Protocol
-import asyncio
-import math
+from typing import Optional, Callable
+import asyncio, math, contextlib
+from datetime import datetime
 
+# 장비
+from device.tsp import AsyncTSP
+from device.ig import AsyncIG  # IG는 CH1 장비 사용
 
-class IGControllerLike(Protocol):
-    async def ensure_on(self) -> None: ...
-    async def ensure_off(self) -> None: ...
-    async def read_pressure(self) -> float: ...
-
-
+# ─────────────────────────────────────────────────────────────
 @dataclass
-class TSPProcessConfig:
-    target_pressure_torr: float
-    tsp_on_seconds: float = 75.0     # 1분 15초(요청: 1분 10~20초 범위)
-    off_wait_seconds: float = 150.0  # 2분 30초
-    max_cycles: int = 10
-    ig_poll_interval: float = 1.0
-
-    def __post_init__(self):
-        if not (self.target_pressure_torr > 0):
-            raise ValueError("target_pressure_torr > 0 이어야 함")
-        self.max_cycles = max(1, int(self.max_cycles))
-        self.tsp_on_seconds = max(1.0, float(self.tsp_on_seconds))
-        self.off_wait_seconds = max(1.0, float(self.off_wait_seconds))
-        self.ig_poll_interval = max(0.2, float(self.ig_poll_interval))
-
+class TSPRunConfig:
+    target_pressure: float          # 목표 압력(이하 도달 시 종료)
+    cycles: int                     # TSP ON/OFF 반복 횟수
+    dwell_sec: float = 150.0        # ON/OFF 사이 대기 (2분 30초 = 150초)
+    poll_sec: float = 5.0           # IG 압력 폴링 주기
+    verify_with_status: bool = True # TSP on/off 시 205 확인 여부 (tsp.py 옵션 연결)
 
 @dataclass
 class TSPRunResult:
-    ok: bool
-    cycles_used: int
-    last_pressure_torr: float
-    reason: str
+    success: bool
+    cycles_done: int
+    final_pressure: float
+    reason: Optional[str] = None
 
-
-class TSPBurstRunner:
+# ─────────────────────────────────────────────────────────────
+class TSPProcessController:
     """
-    사이클:
-      1) IG ON + 측정
-      2) TSP ON (tsp_on_seconds 동안), 폴링 도중 목표압력 도달하면 즉시 TSP/IG OFF 후 종료
-      3) TSP OFF, off_wait_seconds 대기하며 IG 폴링(도달 시 종료)
-      4) 최대 max_cycles 반복, 미도달이면 종료
-    Stop(취소) 시 모든 장비 OFF
+    공정 순서:
+      1) IG ensure_on → poll_sec 간격으로 압력 읽기 시작
+      2) TSP on → dwell_sec → TSP off → dwell_sec = 1사이클
+      3) cycles 만큼 반복. 단, 압력이 target 이하가 되면 즉시 종료
     """
-
-    def __init__(self,
-                 tsp, ig: IGControllerLike,
-                 *,
-                 log_cb: Optional[Callable[[str, str], None]] = None,
-                 state_cb: Optional[Callable[[str], None]] = None,
-                 pressure_cb: Optional[Callable[[float], None]] = None,
-                 cycle_cb: Optional[Callable[[int, int], None]] = None,
-                 ) -> None:
+    def __init__(
+        self,
+        tsp: AsyncTSP,
+        ig: AsyncIG,
+        *,
+        log_cb: Optional[Callable[[str], None]] = None,
+        pressure_cb: Optional[Callable[[float], None]] = None,
+        cycle_cb: Optional[Callable[[int, int], None]] = None,
+        state_cb: Optional[Callable[[str], None]] = None,
+        turn_off_ig_on_finish: bool = True,
+    ) -> None:
         self.tsp = tsp
         self.ig = ig
         self.log_cb = log_cb
-        self.state_cb = state_cb
         self.pressure_cb = pressure_cb
         self.cycle_cb = cycle_cb
+        self.state_cb = state_cb
+        self.turn_off_ig_on_finish = turn_off_ig_on_finish
+
         self._last_pressure: float = math.nan
 
-    # ======== 내부 헬퍼 ========
-    def _log(self, src: str, msg: str) -> None:
+    # ── 내부 로깅 헬퍼 ──────────────────────────────────────
+    def _log(self, msg: str) -> None:
         if self.log_cb:
-            try:
-                self.log_cb(src, msg)
-            except Exception:
-                pass
+            self.log_cb(msg)
 
-    def _state(self, s: str) -> None:
-        self._log("STATE", s)
+    def _emit_state(self, s: str) -> None:
         if self.state_cb:
-            try:
-                self.state_cb(s)
-            except Exception:
-                pass
+            self.state_cb(s)
 
-    def _tick_pressure(self, p: float) -> None:
-        self._last_pressure = p
+    def _emit_pressure(self, p: float) -> None:
         if self.pressure_cb:
-            try:
-                self.pressure_cb(p)
-            except Exception:
-                pass
+            self.pressure_cb(p)
 
-    async def _poll_ig_until(self, *, seconds: float, target: float,
-                             cancel_event: Optional[asyncio.Event]) -> bool:
-        """seconds 동안 폴링. 도달 시 True."""
-        loop = asyncio.get_running_loop()
-        t_end = loop.time() + seconds
-        while True:
-            if cancel_event and cancel_event.is_set():
-                return False
-            try:
-                p = await self.ig.read_pressure()
-                self._tick_pressure(p)
-                self._log("IG", f"현재 압력: {p:.3e} Torr (목표 {target:.3e})")
-                if p <= target:
-                    return True
-            except Exception as e:
-                self._log("IG", f"압력 읽기 오류: {e!r}")
-            now = loop.time()
-            if now >= t_end:
-                return False
-            await asyncio.sleep(min(1.0, seconds, 0.5))  # 빠르게 깨어 IG 주기는 run()에서 제어
+    def _emit_cycle(self, cur: int, total: int) -> None:
+        if self.cycle_cb:
+            self.cycle_cb(cur, total)
 
-    # ======== 메인 루프 ========
-    async def run(self, cfg: TSPProcessConfig, *, cancel_event: Optional[asyncio.Event] = None) -> TSPRunResult:
-        ok = False
-        reason = "max_cycles_exhausted"
-        cycles_used = 0
-        self._state("프로세스 시작")
+    # ── 공정 실행 ──────────────────────────────────────────
+    async def run(self, cfg: TSPRunConfig) -> TSPRunResult:
+        """
+        반환: TSPRunResult(success, cycles_done, final_pressure, reason)
+        """
+        stop_event = asyncio.Event()
+        cycles_done = 0
+        self._last_pressure = math.nan
+
+        # TSP 옵션 연결(원치 않으면 cfg에서 False로)
+        self.tsp.verify_with_status = cfg.verify_with_status
 
         try:
-            # 시작: IG 켜고 초기압력 기록
+            self._emit_state("prepare")
+            self._log(f"[TSP] 공정 시작: target={cfg.target_pressure}, "
+                      f"cycles={cfg.cycles}, dwell={cfg.dwell_sec}s, poll={cfg.poll_sec}s")
+
+            # 1) IG 켜기
+            self._emit_state("ig_on")
             await self.ig.ensure_on()
-            self._state("IG ON")
-            try:
-                p0 = await self.ig.read_pressure()
-                self._tick_pressure(p0)
-                self._log("IG", f"시작 압력: {p0:.3e} Torr")
-                if p0 <= cfg.target_pressure_torr:
-                    ok = True
-                    reason = "already_at_target"
-                    return TSPRunResult(ok, 0, p0, reason)
-            except Exception as e:
-                self._log("IG", f"초기 압력 읽기 오류: {e!r}")
+            self._log("[IG] ensure_on 완료")
 
-            # 사이클 반복
-            for cycle in range(1, cfg.max_cycles + 1):
-                if cancel_event and cancel_event.is_set():
-                    reason = "canceled"
-                    return TSPRunResult(False, cycles_used, self._last_pressure, reason)
-
-                cycles_used = cycle
-                if self.cycle_cb:
-                    try:
-                        self.cycle_cb(cycle, cfg.max_cycles)
-                    except Exception:
-                        pass
-                self._state(f"[{cycle}/{cfg.max_cycles}] TSP ON")
-
-                # 2) TSP ON + 동안 폴링
-                await self.tsp.start()
-                on_end = asyncio.get_event_loop().time() + cfg.tsp_on_seconds
-                while asyncio.get_event_loop().time() < on_end:
-                    if cancel_event and cancel_event.is_set():
-                        reason = "canceled"
-                        return TSPRunResult(False, cycles_used, self._last_pressure, reason)
+            # 2) 압력 폴링 태스크
+            async def pressure_task():
+                nonlocal stop_event
+                while not stop_event.is_set():
                     try:
                         p = await self.ig.read_pressure()
-                        self._tick_pressure(p)
-                        self._log("IG", f"현재 압력: {p:.3e} Torr")
-                        if p <= cfg.target_pressure_torr:
-                            self._state("목표 압력 도달 → TSP/IG OFF")
-                            ok = True
-                            reason = "target_reached_during_on"
-                            await self.tsp.ensure_off()
-                            await self.ig.ensure_off()
-                            return TSPRunResult(ok, cycles_used, p, reason)
+                        self._last_pressure = p
+                        self._emit_pressure(p)
+                        self._log(f"[IG] P={p:.3e}")
+                        if p <= cfg.target_pressure:
+                            self._log(f"[IG] 목표 압력 도달({p:.3e} ≤ {cfg.target_pressure:.3e}) → 종료 신호")
+                            stop_event.set()
+                            return
                     except Exception as e:
-                        self._log("IG", f"압력 읽기 오류: {e!r}")
-                    await asyncio.sleep(cfg.ig_poll_interval)
+                        self._log(f"[IG] 압력 읽기 오류: {e!r}")
+                    await asyncio.sleep(cfg.poll_sec)
 
-                # 3) TSP OFF + 대기 구간 폴링
-                await self.tsp.ensure_off()
-                self._state(f"[{cycle}/{cfg.max_cycles}] TSP OFF (대기 {cfg.off_wait_seconds:.0f}s)")
-                reached = await self._poll_ig_until(
-                    seconds=cfg.off_wait_seconds,
-                    target=cfg.target_pressure_torr,
-                    cancel_event=cancel_event
-                )
-                if reached:
-                    self._state("목표 압력 도달 → IG OFF")
-                    ok = True
-                    reason = "target_reached_during_off_wait"
-                    await self.ig.ensure_off()
-                    return TSPRunResult(ok, cycles_used, self._last_pressure, reason)
+            # 3) TSP 토글 태스크
+            async def toggle_task():
+                nonlocal cycles_done, stop_event
+                # 토글 반복 (ON → 대기 → OFF → 대기)
+                for i in range(1, cfg.cycles + 1):
+                    if stop_event.is_set():
+                        break
+                    self._emit_state("tsp_on")
+                    self._log(f"[TSP] ON (cycle {i}/{cfg.cycles})")
+                    await self.tsp.on()
+                    await self._sleep_or_stop(cfg.dwell_sec, stop_event)
+                    if stop_event.is_set():
+                        break
 
-            # 4) 미도달 종료
-            self._state("최대 사이클 도달(미도달) → 장비 OFF")
-            ok = False
-            reason = "not_reached_after_max_cycles"
-            await self.tsp.ensure_off()
-            await self.ig.ensure_off()
-            return TSPRunResult(ok, cycles_used, self._last_pressure, reason)
+                    self._emit_state("tsp_off")
+                    self._log(f"[TSP] OFF (cycle {i}/{cfg.cycles})")
+                    await self.tsp.off()
+                    await self._sleep_or_stop(cfg.dwell_sec, stop_event)
+
+                    cycles_done = i
+                    self._emit_cycle(cycles_done, cfg.cycles)
+
+            # 동시 실행
+            pr_task = asyncio.create_task(pressure_task(), name="tsp_pr")
+            tg_task = asyncio.create_task(toggle_task(),   name="tsp_tg")
+
+            # 누가 먼저 끝나든 정리
+            await asyncio.wait({pr_task, tg_task}, return_when=asyncio.FIRST_COMPLETED)
+            stop_event.set()
+            with contextlib.suppress(Exception):
+                await tg_task
+            with contextlib.suppress(Exception):
+                await pr_task
+
+            # 종료 사유/성공판단
+            if self._last_pressure == self._last_pressure and self._last_pressure <= cfg.target_pressure:
+                reason = "reached_target"
+                success = True
+            else:
+                # 토글 정상 완료(모든 사이클 소화)면 success로 볼지 선택.
+                # 여기서는 목표 미달이면 False로 표기(원하면 정책 변경 가능)
+                reason = "target_not_reached"
+                success = False
+
+            return TSPRunResult(success, cycles_done, self._last_pressure, reason)
+
+        except asyncio.CancelledError:
+            self._log("[TSP] run() 취소됨")
+            return TSPRunResult(False, cycles_done, self._last_pressure, "cancelled")
 
         except Exception as e:
-            self._log("ERR", f"예외 발생: {e!r}")
-            reason = f"exception:{e!r}"
-            return TSPRunResult(False, cycles_used, self._last_pressure, reason)
+            self._log(f"[TSP] 예외: {e!r}")
+            return TSPRunResult(False, cycles_done, self._last_pressure, f"exception:{e!r}")
 
         finally:
-            # 안전 정리 (혹시 남았으면)
-            try:
-                await self.tsp.ensure_off()
-            except Exception:
-                pass
-            try:
-                await self.ig.ensure_off()
-            except Exception:
-                pass
+            # 안전 종료: TSP OFF, IG OFF(옵션)
+            self._emit_state("cleanup")
+            with contextlib.suppress(Exception):
+                await self.tsp.off()
+            if self.turn_off_ig_on_finish:
+                with contextlib.suppress(Exception):
+                    await self.ig.ensure_off()
+            self._emit_state("finished")
+
+    # ── 보조: stop_event 감시 대기 ──────────────────────────
+    async def _sleep_or_stop(self, sec: float, stop_event: asyncio.Event):
+        end = asyncio.get_event_loop().time() + sec
+        while not stop_event.is_set():
+            remain = end - asyncio.get_event_loop().time()
+            if remain <= 0:
+                return
+            await asyncio.wait({asyncio.create_task(stop_event.wait())}, timeout=min(0.5, remain))

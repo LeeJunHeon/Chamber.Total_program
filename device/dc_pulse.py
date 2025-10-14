@@ -51,8 +51,8 @@ SCALE_ARC_US  = 1.0                # 0~5 us, 40~200 us → 값 그대로
 
 # EnerPulse-5: Power setpoint = 10 W/step (0.01 kW/step)
 MAX_POWER_W = 1000
-POWER_SET_STEP_W = 10         # 10 W per step
-POWER_MEAS_STEP_W = 10         # 측정값도 10 W 단위면 동일 적용
+POWER_SET_STEP_W = 10.0         # 10 W per step
+POWER_MEAS_STEP_W = 10.0         # 측정값도 10 W 단위면 동일 적용
 
 # 읽기 스케일: P_W = raw / SCALE_POWER_W  이므로 10 W/step이면 0.1로 둔다.
 SCALE_POWER_W = 0.1            # raw / 0.1 = raw*10 W

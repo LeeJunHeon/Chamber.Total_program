@@ -2226,6 +2226,6 @@ class ChamberRuntime:
         prev = getattr(self, "_owns_plc", False)
         self._owns_plc = bool(owns)
         # 필요하면 디버깅용 로그(선택)
-        if prev != self._owns_plc:
-            self.append_log("MAIN", f"PLC log owner -> {self._owns_plc}")
+        # if prev != self._owns_plc:
+        #     self.append_log("MAIN", f"PLC log owner -> {self._owns_plc}")
     # ============================= PLC 로그 소유 관리 =============================
