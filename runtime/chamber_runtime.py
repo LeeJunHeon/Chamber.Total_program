@@ -162,14 +162,21 @@ class _CfgAdapter:
     def IG_TCP(self) -> tuple[str, int]:
         return (
             str(self._get("IG_TCP_HOST", "192.168.1.50")),
-            int(self._get("IG_TCP_PORT", 4002 if self.ch == 1 else 4003)),
+            int(self._get("IG_TCP_PORT", 4001 if self.ch == 1 else 4002)),
         )
 
     @property
     def MFC_TCP(self) -> tuple[str, int]:
         return (
             str(self._get("MFC_TCP_HOST", "192.168.1.50")),
-            int(self._get("MFC_TCP_PORT", 4006 if self.ch == 1 else 4007)),
+            int(self._get("MFC_TCP_PORT", 4003 if self.ch == 1 else 4006)),
+        )
+    
+    @property
+    def DCPULSE_TCP(self) -> tuple[str, int]:
+        return (
+            str(self._get("DCPULSE_TCP_HOST", "192.168.1.50")),
+            int(self._get("DCPULSE_TCP_PORT", 4007)),
         )
     
 class ChamberRuntime:
@@ -281,7 +288,21 @@ class ChamberRuntime:
             self.rga = None  # 안전
 
         # 펄스 파워(완전 분리)
-        self.dc_pulse = AsyncDCPulse() if self.supports_dc_pulse else None
+        # - on_telemetry를 DataLogger로 직결(있으면 log_dcpulse_power, 없으면 log_dc_power 폴백)
+        # - 생성 시점에 host/port도 지정
+        if self.supports_dc_pulse:
+            _cb = getattr(self.data_logger, "log_dcpulse_power", None)
+            if not callable(_cb):
+                def _cb(p, v, i):
+                    try:
+                        self.data_logger.log_dc_power(float(p), float(v), float(i))
+                    except Exception:
+                        pass
+            host, port = self.cfg.DCPULSE_TCP
+            self.dc_pulse = AsyncDCPulse(host=host, port=port, on_telemetry=_cb)
+        else:
+            self.dc_pulse = None
+
         self.rf_pulse = RFPulseAsync() if self.supports_rf_pulse else None
 
         # 연속 파워
@@ -453,8 +474,11 @@ class ChamberRuntime:
                     self.append_log("DCPulse", "DC-Pulse 미지원 챔버입니다."); return
                 try:
                     self._ensure_background_started()
-                    await self.dc_pulse.start()
-                    await self.dc_pulse.prepare_and_start(power_w=float(power), freq=freq, duty=duty)
+                    # (선행 단계에서 이미 연결/워치독이 올라와 있으므로 start()는 생략해도 무방)
+                    ok = await self.dc_pulse.prepare_and_start(power_w=float(power), freq=freq, duty=duty)
+                    if not ok:
+                        self.process_controller.on_dc_pulse_failed("prepare_and_start failed")
+                        return
                 except Exception as e:
                     why = f"DC-Pulse start failed: {e!r}"
                     self.append_log("DCPulse", why)
@@ -609,6 +633,7 @@ class ChamberRuntime:
                         with contextlib.suppress(Exception):
                             p = dict(params)
                             p.setdefault("ch", self.ch)  # 라우팅 힌트
+                            p = self._format_card_payload_for_chat(p)  # 👈 카드용 정리
                             self.chat.notify_process_started(p)
 
                     # 로그/세션 준비
@@ -627,9 +652,9 @@ class ChamberRuntime:
                     t = params.get("process_time", 0) or 0
                     line = f"▶️ CH{self.ch} '{name}' 시작 (t={float(t):.1f}s)"
                     self.append_log("MAIN", line)
-                    if self.chat:
-                        with contextlib.suppress(Exception):
-                            self.chat.notify_text(line)
+                    # if self.chat:
+                    #     with contextlib.suppress(Exception):
+                    #         self.chat.notify_text(line)
 
                     # 폴링 타깃 초기화
                     self._last_polling_targets = None
@@ -703,34 +728,43 @@ class ChamberRuntime:
 
                 elif kind == "polling":
                     active = bool(payload.get("active", False))
+
                     # active=True 이고 자동연결 허용 상태에서만 장치/워치독을 올림
                     if active and self._auto_connect_enabled:
                         self._ensure_background_started()
-                    targets = getattr(self, "_last_polling_targets", None)
-                    if not targets:
-                        params = getattr(self.process_controller, "current_params", {}) or {}
-                        # 계산(펄스 독립, 펄스 사용 시 연속은 안전상 꺼둠)
-                        use_dc_pulse = bool(params.get("use_dc_pulse", False))
-                        use_rf_pulse = bool(params.get("use_rf_pulse", False))
-                        use_dc_cont  = bool(params.get("use_dc_power", False))
-                        use_rf_cont  = bool(params.get("use_rf_power", False))
-                        any_pulse    = use_dc_pulse or use_rf_pulse
 
+                    params = getattr(self.process_controller, "current_params", {}) or {}
+                    use_dc_pulse = bool(params.get("use_dc_pulse", False))
+                    use_rf_pulse = bool(params.get("use_rf_pulse", False))
+                    use_dc_cont  = bool(params.get("use_dc_power", False))
+                    use_rf_cont  = bool(params.get("use_rf_power", False))
+
+                    # 핵심 변경:
+                    # - 같은 "계열"만 상호배타
+                    #   · DC 연속 ⭕ + RF Pulse ⭕  → 허용
+                    #   · DC 연속 ❌ + DC Pulse ⭕  → 금지 (동시 X)
+                    #   · RF 연속 ❌ + RF Pulse ⭕  → 금지 (동시 X)
+                    base_targets = {
+                        "mfc":      active,
+                        "dc_pulse": active and self.supports_dc_pulse and use_dc_pulse and not use_dc_cont,
+                        "rf_pulse": active and self.supports_rf_pulse and use_rf_pulse and not use_rf_cont,
+                        "dc":       active and self.supports_dc_cont  and use_dc_cont  and not use_dc_pulse,
+                        "rf":       active and self.supports_rf_cont  and use_rf_cont  and not use_rf_pulse,
+                    }
+
+                    # 이전 'polling_targets'로 특정 장치만 허용했으면 그 범위 내에서만 켜기(AND)
+                    if self._last_polling_targets:
+                        lt = self._last_polling_targets
                         targets = {
-                            "mfc":      active,
-                            "dc_pulse": active and use_dc_pulse and self.supports_dc_pulse,
-                            "rf_pulse": active and use_rf_pulse and self.supports_rf_pulse,
-                            "dc":       active and use_dc_cont and self.supports_dc_cont and not any_pulse,
-                            "rf":       active and use_rf_cont and self.supports_rf_cont and not any_pulse,
+                            "mfc":      base_targets["mfc"]      and bool(lt.get("mfc", False)),
+                            "dc_pulse": base_targets["dc_pulse"] and bool(lt.get("dc_pulse", False)),
+                            "rf_pulse": base_targets["rf_pulse"] and bool(lt.get("rf_pulse", False)),
+                            "dc":       base_targets["dc"]       and bool(lt.get("dc", False)),
+                            "rf":       base_targets["rf"]       and bool(lt.get("rf", False)),
                         }
                     else:
-                        targets = {
-                            "mfc":      (active and bool(targets.get("mfc", False))),
-                            "dc_pulse": (active and bool(targets.get("dc_pulse", False)) and self.supports_dc_pulse),
-                            "rf_pulse": (active and bool(targets.get("rf_pulse", False)) and self.supports_rf_pulse),
-                            "dc":       (active and bool(targets.get("dc", False)) and self.supports_dc_cont),
-                            "rf":       (active and bool(targets.get("rf", False)) and self.supports_rf_cont),
-                        }
+                        targets = base_targets
+
                     self._apply_polling_targets(targets)
 
                 else:
@@ -903,10 +937,13 @@ class ChamberRuntime:
                     V = V if V is not None else float(eng.get("V_V", 0.0))
                     I = I if I is not None else float(eng.get("I_A", 0.0))
 
-                try:
-                    self.data_logger.log_dc_power(float(P or 0.0), float(V or 0.0), float(I or 0.0))
-                except Exception:
-                    pass
+                # on_telemetry가 이미 DataLogger에 기록했다면 중복 방지
+                if not callable(getattr(self.data_logger, "log_dcpulse_power", None)):
+                    try:
+                        self.data_logger.log_dc_power(float(P or 0.0), float(V or 0.0), float(I or 0.0))
+                    except Exception:
+                        pass
+
                 self._display_dc(P, V, I)
                 self.append_log(f"DCPulse{self.ch}", f"[telemetry] P={float(P or 0):.1f} W, V={float(V or 0):.2f} V, I={float(I or 0):.3f} A")
 
@@ -1086,7 +1123,7 @@ class ChamberRuntime:
     def _on_process_status_changed(self, running: bool) -> None:
         b_start = self._u("Start_button"); b_stop = self._u("Stop_button")
         if b_start: b_start.setEnabled(not running)
-        if b_stop:  b_stop.setEnabled(True)
+        if b_stop: b_stop.setEnabled(bool(running))
 
         # ★ 변경점: running 값이 실제로 바뀐 경우에만 소유권 콜백 호출
         prev = getattr(self, "_last_running_state", None)
@@ -1201,9 +1238,16 @@ class ChamberRuntime:
         _set("dcPower_checkbox", params.get('use_dc_power', 'F') == 'T')
         _set("powerSelect_checkbox", params.get('power_select', 'F') == 'T')
 
-        _set("g1Target_name", str(params.get('G1 Target', '')).strip())
-        _set("g2Target_name", str(params.get('G2 Target', '')).strip())
-        _set("g3Target_name", str(params.get('G3 Target', '')).strip())
+        # ---- CH1: 단일 타겟 위젯에 한 번만 세팅 ----
+        if self.ch == 1:
+            name = (str(params.get('G1 Target', '')).strip()
+                    or str(params.get('G2 Target', '')).strip()
+                    or str(params.get('G3 Target', '')).strip())
+            _set("g1Target_name", name)
+        else:
+            _set("g1Target_name", str(params.get('G1 Target', '')).strip())
+            _set("g2Target_name", str(params.get('G2 Target', '')).strip())
+            _set("g3Target_name", str(params.get('G3 Target', '')).strip())
 
     def _set(self, leaf: str, v: Any) -> None:
         w = self._u(leaf)
@@ -1288,6 +1332,11 @@ class ChamberRuntime:
                 "dc_pulse": use_dc_pulse,
                 "rf_pulse": use_rf_pulse,
             }
+
+            # ✅ 이번 런에서 DC-Pulse를 쓸 거면: 엔드포인트 지정 + 즉시 재연결
+            if use_dc_pulse and self.dc_pulse:
+                host, port = self.cfg.DCPULSE_TCP
+                await self.dc_pulse.set_endpoint_reconnect(host, port)
 
             self._ensure_background_started()
             self._on_process_status_changed(True)
@@ -2149,13 +2198,11 @@ class ChamberRuntime:
             return leaf
         return {
             "integrationTime_edit": "intergrationTime_edit",
-            "rfPulsePower_checkbox":    "dcPulsePower_checkbox",
-            "rfPulsePower_edit":        "dcPulsePower_edit",
-            "rfPulseFreq_edit":         "dcPulseFreq_edit",
-            "rfPulseDutyCycle_edit":    "dcPulseDutyCycle_edit",
-            "g1Target_name": "gunTarget_name",
-            "g2Target_name": "gunTarget_name",
-            "g3Target_name": "gunTarget_name",
+
+            # CH1은 타겟 단일 위젯 사용
+            "g1Target_name": "ch1_gunTarget_name",
+            "g2Target_name": "ch1_gunTarget_name",
+            "g3Target_name": "ch1_gunTarget_name",
         }.get(leaf, leaf)
 
     def _u(self, name: str) -> Any | None:
@@ -2254,6 +2301,46 @@ class ChamberRuntime:
             return QApplication.instance() is not None and self._parent_widget() is not None
         except Exception:
             return False
+        
+    def _format_card_payload_for_chat(self, p: dict) -> dict:
+        """
+        구글챗 카드에 보내기 전에 보기 좋게 정리:
+        - CH1: 단일 타겟 위젯(ch1_gunTarget_name) 반영, G2/G3 제거
+        - 파워: 사용하지 않는 종류는 키 자체를 제거(카드에 안 보이게)
+        """
+        q = dict(p)
+
+        # ── 1) CH1은 건 1개만 노출 ─────────────────────────────────────────────
+        if self.ch == 1:
+            # NormParams 쪽(G1_target_name/ G1 Target)과 UI 위젯(ch1_gunTarget_name) 모두 커버
+            name = (q.get("G1_target_name")
+                    or q.get("G1 Target")
+                    or q.get("ch1_gunTarget_name")  # ← 보강: 실제 UI 필드명
+                    or "").strip()
+            if name:
+                q["use_g1"] = True
+                q["G1_target_name"] = name
+            # G2/G3 관련 키 제거
+            for key in ("use_g2", "use_g3",
+                        "G2_target_name", "G3_target_name",
+                        "G2 Target", "G3 Target"):
+                q.pop(key, None)
+
+        # ── 2) 파워는 '사용 중'인 것만 노출 ─────────────────────────────────────
+        def _drop(keys: tuple[str, ...]):
+            for k in keys:
+                q.pop(k, None)
+
+        if not bool(q.get("use_dc_pulse", False)):
+            _drop(("dc_pulse_power", "dc_pulse_freq", "dc_pulse_duty", "dc_pulse_duty_cycle"))
+        if not bool(q.get("use_rf_pulse", False)):
+            _drop(("rf_pulse_power", "rf_pulse_freq", "rf_pulse_duty", "rf_pulse_duty_cycle"))
+        if not bool(q.get("use_dc_power", False)):
+            _drop(("dc_power",))
+        if not bool(q.get("use_rf_power", False)):
+            _drop(("rf_power",))
+
+        return q
         
     # ============================= PLC 로그 소유 관리 =============================
     def set_plc_log_owner(self, owns: bool) -> None:

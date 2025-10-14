@@ -168,7 +168,8 @@ class AsyncDCPulse:
         prepare_and_start(power_w) → 위 4단계 일괄 수행
     """
     def __init__(self, *, host: Optional[str] = None, port: Optional[int] = None,
-                 protocol: Optional[IProtocol] = None):
+                 protocol: Optional[IProtocol] = None,
+                 on_telemetry: Optional[Callable[[float, float, float], None]] = None):
         # Endpoint override
         self._override_host = host
         self._override_port = port
@@ -198,6 +199,9 @@ class AsyncDCPulse:
         self._just_reopened: bool = False
         self.debug_print = DEBUG_PRINT
 
+        # ↓↓↓ 추가: 측정값 알림용 콜백 (DataLogger.log_dcpulse_power 연결)
+        self._on_telemetry = on_telemetry
+
         # ★ Inactivity 전략 필드
         self._inactivity_s: float = float(getattr(cfgc, "DCP_INACTIVITY_REOPEN_S", 0.0))
         self._last_io_mono: float = 0.0
@@ -225,25 +229,37 @@ class AsyncDCPulse:
         await self._cancel_task("_cmd_worker_task")
         await self._cancel_task("_watchdog_task")
         self._purge_pending("shutdown")
+
         if self._reader_task:
             self._reader_task.cancel()
             with contextlib.suppress(Exception):
                 await self._reader_task
             self._reader_task = None
+
+        # ── TCP 세션 완전 종료: wait_closed()까지 대기, 실패 시 abort 보강
         if self._writer:
-            with contextlib.suppress(Exception):
+            try:
                 self._writer.close()
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(self._writer.wait_closed(), timeout=0.8)
+            except Exception:
+                transport = getattr(self._writer, "transport", None)
+                if transport:
+                    with contextlib.suppress(Exception):
+                        transport.abort()
+
+        # ── 프레임 큐/잔여물 비움(이전 런 찌꺼기 제거)
+        with contextlib.suppress(Exception):
+            while True:
+                self._frame_q.get_nowait()
+
+        # ── 상태 리셋(다음 런이 항상 깨끗하게 시작)
         self._reader = None
         self._writer = None
         self._connected = False
-
-        # ★ IG/MFC와 동일: NPort 포트 강제 해제
-        # try:
-        #     await self._force_release_nport_port()
-        # except Exception as e:
-        #     await self._emit_status(f"IPSerial reset skip/fail: {e!r}")
-
-        await self._emit_status("DCP 연결 종료됨")
+        self._just_reopened = False
+        self._out_on = False
+        self._last_io_mono = 0.0
 
     async def events(self) -> AsyncGenerator[DCPEvent, None]:
         while True:
@@ -276,6 +292,15 @@ class AsyncDCPulse:
                 self._poll_task = None
             self._ev_nowait(DCPEvent(kind="status", message="주기적 읽기(Polling) 중지"))
 
+    # 추가: 연결 완료 대기 헬퍼
+    async def _wait_until_connected(self, timeout: float = 3.0) -> bool:
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            if self._connected and self._writer and not self._writer.is_closing():
+                return True
+            await asyncio.sleep(0.05)
+        return False
+
     # ====== 상위 시퀀스 편의 API ======
     async def prepare_and_start(
         self,
@@ -301,6 +326,11 @@ class AsyncDCPulse:
         if sync is not None:
             await self.set_pulse_sync(sync)  # 0x65
         '''
+        # 명령 전송전 잠깐 대기
+        ok_conn = await self._wait_until_connected(timeout=3.0)
+        if not ok_conn:
+            await self._emit_failed("CONNECT", "연결 준비 실패")
+            return False
 
         # freq/duty 모두 숫자면 off_time_us를 계산해서 0x67로 전송
         if not _is_keep(freq) and freq is not None:
@@ -678,8 +708,8 @@ class AsyncDCPulse:
                     await self._emit_status(f"[RECV] {label} ← {resp.hex(' ')}")
             return resp
         except asyncio.TimeoutError:
-            await self._emit_status(f"[TIMEOUT] {label}")
-            #self._on_tcp_disconnected()
+            await self._emit_status(f"[TIMEOUT] {label} → 세션 재시작")
+            self._on_tcp_disconnected()
             return None
 
 
@@ -738,15 +768,28 @@ class AsyncDCPulse:
         if self._reader_task:
             self._reader_task.cancel()
         self._reader_task = None
+
         if self._writer:
             with contextlib.suppress(Exception):
                 self._writer.close()
+            # 동기 컨텍스트라 await 불가 → transport.abort()로 즉시 끊기
+            transport = getattr(self._writer, "transport", None)
+            if transport:
+                with contextlib.suppress(Exception):
+                    transport.abort()
+
         self._reader = None
         self._writer = None
+
         # 프레임 큐 비움
         with contextlib.suppress(Exception):
             while True:
                 self._frame_q.get_nowait()
+
+        # 세션/타이밍 플래그 리셋
+        self._just_reopened = False
+        self._last_io_mono = 0.0
+
         self._dbg("DCP", "연결 끊김")
         # inflight 복구/취소
         if self._inflight is not None:
@@ -819,7 +862,7 @@ class AsyncDCPulse:
                     self._cmd_q.appendleft(cmd)
                 else:
                     self._safe_callback(cmd.callback, None)
-                # ❌ 소켓은 끊지 않음(실제 I/O 오류가 아니면 유지)
+                self._on_tcp_disconnected()   # ← 죽은 세션 재사용 방지
                 continue
 
             self._inflight = None
@@ -967,15 +1010,27 @@ class AsyncDCPulse:
                         res = await self.read_output_piv()
                         if res and "eng" in res:
                             eng = res["eng"]
+                            p = float(eng.get("P_W", 0.0))
+                            v = float(eng.get("V_V", 0.0))
+                            i = float(eng.get("I_A", 0.0))
+
                             ev = DCPEvent(
                                 kind="telemetry",
                                 data=eng,
-                                power=float(eng.get("P_W", 0.0)),
-                                voltage=float(eng.get("V_V", 0.0)),
-                                current=float(eng.get("I_A", 0.0)),
+                                power=p,
+                                voltage=v,
+                                current=i,
                                 eng=eng,
                             )
                             self._ev_nowait(ev)
+
+                            # ★ 추가: DataLogger에 즉시 전달
+                            cb = getattr(self, "_on_telemetry", None)
+                            if cb:
+                                try:
+                                    cb(p, v, i)
+                                except Exception:
+                                    pass
                         # res가 None이면 read_output_piv()가 이미 status 로그를 남김
                 except Exception as e:
                     self._ev_nowait(DCPEvent(kind="status", message=f"[poll] 예외: {e!r}"))
@@ -986,6 +1041,9 @@ class AsyncDCPulse:
             pass
 
     # ====== 내부 유틸 ======
+    def set_telemetry_callback(self, cb: Optional[Callable[[float, float, float], None]]) -> None:
+        self._on_telemetry = cb
+
     def _resolve_endpoint(self) -> tuple[str, int]:
         host = self._override_host if self._override_host else DCPULSE_TCP_HOST
         port = self._override_port if self._override_port else DCPULSE_TCP_PORT

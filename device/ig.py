@@ -28,138 +28,6 @@ from lib.config_ch2 import (
     IG_RECONNECT_BACKOFF_MAX_MS, IG_REIGNITE_MAX_ATTEMPTS, IG_REIGNITE_BACKOFF_MS, IG_WAIT_TIMEOUT
 )
 
-# import ctypes.wintypes as wintypes
-
-# _IPSERIAL_MUTEX_NAME = r"Global\MOXA_IPSerial_Reset_Lock_v1"
-# _IPSERIAL_DLL_SINGLETON = None
-# _IPSERIAL_DLL_LAST_ERR  = None
-
-# class _WinGlobalMutex:
-#     WAIT_OBJECT_0   = 0x00000000
-#     WAIT_ABANDONED  = 0x00000080
-
-#     def __init__(self, name: str, timeout_ms: int = 15000):
-#         self._name = name
-#         self._timeout = int(timeout_ms)
-#         self._h = None
-#         self.acquired = False
-
-#     def __enter__(self):
-#         if os.name != "nt":
-#             self.acquired = True
-#             return self
-#         k32 = ctypes.windll.kernel32
-#         k32.CreateMutexW.argtypes = [wintypes.LPVOID, wintypes.BOOL, wintypes.LPCWSTR]
-#         k32.CreateMutexW.restype  = wintypes.HANDLE
-#         k32.WaitForSingleObject.argtypes = [wintypes.HANDLE, wintypes.DWORD]
-#         k32.WaitForSingleObject.restype  = wintypes.DWORD
-#         self._h = k32.CreateMutexW(None, False, self._name)
-#         if not self._h:
-#             return self
-#         res = k32.WaitForSingleObject(self._h, self._timeout)
-#         self.acquired = (res in (self.WAIT_OBJECT_0, self.WAIT_ABANDONED))
-#         return self
-
-#     def __exit__(self, exc_type, exc, tb):
-#         if os.name != "nt":
-#             return
-#         if not self._h:
-#             return
-#         try:
-#             k32 = ctypes.windll.kernel32
-#             with contextlib.suppress(Exception):
-#                 if self.acquired:
-#                     k32.ReleaseMutex(self._h)
-#         finally:
-#             with contextlib.suppress(Exception):
-#                 ctypes.windll.kernel32.CloseHandle(self._h)
-#             self._h = None
-#             self.acquired = False
-
-
-# # =========================
-# #  MOXA IPSerial.dll 래퍼
-# # =========================
-# def _guess_nport_index_from_tcp_port(tcp_port: int, override: int | None = None) -> int:
-#     """
-#     일반적인 매핑: TCP 4001 → 포트 #1, 4002 → #2 ...
-#     - override가 주어지면 그대로 사용
-#     - 4001~4096 범위면 (tcp_port - 4000)으로 추정
-#     - 이외엔 1을 반환(보수적 기본값; 필요 시 구성으로 명시하세요)
-#     """
-#     if isinstance(override, int) and override > 0:
-#         return int(override)
-#     try:
-#         p = int(tcp_port)
-#     except Exception:
-#         return 1
-#     if 4001 <= p <= 4096:
-#         return p - 4000
-#     return 1
-
-# class _MoxaIPSerial:
-#     def __init__(self, dll_path: str | None = None):
-#         if os.name != "nt":
-#             raise OSError("IPSerial.dll은 Windows 전용입니다.")
-#         WinDLL = getattr(ctypes, "WinDLL", None)
-#         if WinDLL is None:
-#             raise OSError("ctypes.WinDLL을 사용할 수 없습니다.")
-
-#         global _IPSERIAL_DLL_SINGLETON, _IPSERIAL_DLL_LAST_ERR
-#         if _IPSERIAL_DLL_SINGLETON is not None:
-#             self._dll = _IPSERIAL_DLL_SINGLETON
-#             return
-
-#         candidates: list[Path] = []
-#         if dll_path:
-#             candidates.append(Path(dll_path))
-#         env = os.environ.get("IPSERIAL_DLL_PATH")
-#         if env:
-#             candidates.append(Path(env))
-
-#         exe_dir = Path(sys.argv[0]).resolve().parent
-#         candidates += [
-#             exe_dir / "dll" / "IPSerial.dll",
-#             Path.cwd() / "dll" / "IPSerial.dll",
-#             Path(__file__).resolve().parents[1] / "dll" / "IPSerial.dll",
-#         ]
-
-#         last_err = None
-#         dll_obj = None
-#         for p in candidates:
-#             try:
-#                 if p.is_file():
-#                     dll_obj = WinDLL(str(p))
-#                     break
-#             except Exception as e:
-#                 last_err = e
-#         if not dll_obj:
-#             _IPSERIAL_DLL_LAST_ERR = last_err
-#             raise FileNotFoundError(
-#                 f"IPSerial.dll을 찾을 수 없습니다. tried={[str(x) for x in candidates]}, last_err={last_err!r}"
-#             )
-
-#         dll_obj.nsio_init.restype = ctypes.c_int
-#         dll_obj.nsio_end.restype = ctypes.c_int
-#         dll_obj.nsio_resetport.argtypes = [ctypes.c_char_p, ctypes.c_int]
-#         dll_obj.nsio_resetport.restype = ctypes.c_int
-
-#         _IPSERIAL_DLL_SINGLETON = dll_obj
-#         self._dll = dll_obj
-
-#     def reset_port(self, ip: str, port_index_1based: int) -> int:
-#         """
-#         NPort 제어 포트(기본 966)를 통해 해당 시리얼 포트의 TCP 세션을 강제 종료/리셋.
-#         반환: 0(성공) 또는 장치/버전에 따라 음수/에러코드.
-#         """
-#         if not ip or port_index_1based <= 0:
-#             raise ValueError("invalid ip/port index")
-#         self._dll.nsio_init()
-#         try:
-#             return int(self._dll.nsio_resetport(ip.encode("ascii"), int(port_index_1based)))
-#         finally:
-#             self._dll.nsio_end()
-
 # =========================
 # 이벤트 모델
 # =========================
@@ -203,6 +71,7 @@ class AsyncIG:
 
         self._connected: bool = False         # ← 누락되어 있던 상태 플래그 추가
         self._ever_connected: bool = False
+        self._cleaning: bool = False # ★ cleanup 중복 방지
 
         # 명령 큐/인플라이트
         self._cmd_q: Deque[Command] = deque()
@@ -278,69 +147,70 @@ class AsyncIG:
         await self.start()
 
     async def cleanup(self):
-        # OFF 보내기 전에 재점등 금지/대기 해제만
-        self._waiting_active = False
-        self._suspend_reignite = True
+        if self._cleaning:          # ★ 중복 호출 가드
+            return
+        self._cleaning = True
 
-        # 1) OFF direct-write 보장 + 짧은 드레인
         try:
-            _ = await self._send_off_best_effort(wait_gap_ms=400)
-            await self._drain_until_idle(timeout_ms=600)  # fallback enqueue 대비
-        except Exception:
-            pass
+            # OFF 보내기 전에 재점등 금지/대기 해제만
+            self._waiting_active = False
+            self._suspend_reignite = True
 
-        # 이제 재연결 시도는 중단
-        self._want_connected = False
-
-        # 2) 폴링 태스크 중지
-        if self._polling_task:
-            self._polling_task.cancel()
+            # 1) OFF direct-write 보장 + 짧은 드레인
             try:
-                await self._polling_task
+                _ = await self._send_off_best_effort(wait_gap_ms=400)
+                await self._drain_until_idle(timeout_ms=600)  # fallback enqueue 대비
             except Exception:
                 pass
-            self._polling_task = None
 
-        # 백그라운드 폴링 중지
-        if self._bg_poll_task:
-            self._bg_poll_task.cancel()
-            try:
-                await self._bg_poll_task
-            except Exception:
-                pass
-            self._bg_poll_task = None
+            # 이제 재연결 시도는 중단
+            self._want_connected = False
 
-        # 3) 커맨드 워커 중지
-        if self._cmd_worker_task:
-            self._cmd_worker_task.cancel()
-            try:
-                await self._cmd_worker_task
-            except Exception:
-                pass
-            self._cmd_worker_task = None
+            # 2) 폴링 태스크 중지
+            if self._polling_task:
+                self._polling_task.cancel()
+                try:
+                    await self._polling_task
+                except Exception:
+                    pass
+                self._polling_task = None
 
-        # 4) 워치독 중지
-        if self._watchdog_task:
-            self._watchdog_task.cancel()
-            try:
-                await self._watchdog_task
-            except Exception:
-                pass
-            self._watchdog_task = None
+            # 백그라운드 폴링 중지
+            if self._bg_poll_task:
+                self._bg_poll_task.cancel()
+                try:
+                    await self._bg_poll_task
+                except Exception:
+                    pass
+                self._bg_poll_task = None
 
-        # 5) 큐/라인 비우기
-        self._purge_pending("shutdown")
+            # 3) 커맨드 워커 중지
+            if self._cmd_worker_task:
+                self._cmd_worker_task.cancel()
+                try:
+                    await self._cmd_worker_task
+                except Exception:
+                    pass
+                self._cmd_worker_task = None
 
-        # 6) TCP 종료
-        await self._on_tcp_disconnected()
+            # 4) 워치독 중지
+            if self._watchdog_task:
+                self._watchdog_task.cancel()
+                try:
+                    await self._watchdog_task
+                except Exception:
+                    pass
+                self._watchdog_task = None
 
-        # 6.5) (핵심) NPort 포트 강제 해제 — IPSerial.dll 사용
-        # try:
-        #     await self._force_release_nport_port()  # ← 추가
-        # except Exception as e:
-        #     await self._emit_status(f"IPSerial reset skip/fail: {e!r}")
+            # 5) 큐/라인 비우기
+            self._purge_pending("shutdown")
 
-        await self._emit_status("IG 연결 종료됨")
+            # 6) TCP 종료
+            await self._on_tcp_disconnected()
+
+            await self._emit_status("IG 연결 종료됨")
+        finally:
+            self._cleaning = False  # ★ 가드 해제
 
     async def cleanup_quick(self):
         """빠른 종료가 필요할 때 호출 — 현재 단계에서는 cleanup에 위임."""
@@ -860,8 +730,10 @@ class AsyncIG:
             self._waiting_active = False
             self._last_wait_success = True
             self._suspend_reignite = True
-            # IG OFF 보장 후 종료
-            await self._send_off_best_effort(wait_gap_ms=200)
+
+            # 그냥 정리만 예약하면 cleanup 내에서 SIG 0 보장됨
+            asyncio.create_task(self.cleanup())
+            return
 
     async def _try_re_on_with_backoff(self) -> bool:
         """IG OFF → SIG 1 재점등; config의 IG_REIGNITE_BACKOFF_MS 적용."""

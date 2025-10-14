@@ -788,7 +788,7 @@ class ProcessController:
         """
         main.py가 기대하는 폴링 타깃 키를 반환:
         - mfc:     MFC 폴링 (활성 시 항상 True)
-        - rfpulse: RF 펄스 사용 시 True
+        - rf_pulse: RF 펄스 사용 시 True
         - dc:      DC 파워 사용 시 True (단, RF 펄스 사용 중이면 False)
         - rf:      RF 연속파 사용 시 True (단, RF 펄스 사용 중이면 False)
 

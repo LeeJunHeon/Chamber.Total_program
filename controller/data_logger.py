@@ -49,6 +49,11 @@ class DataLogger(QObject):
         self.dc_voltage_readings: List[float] = []
         self.dc_current_readings: List[float] = []
 
+        # DC Pulse 폴링값(평균용)
+        self.dc_pulse_power_readings: List[float] = []
+        self.dc_pulse_voltage_readings: List[float] = []
+        self.dc_pulse_current_readings: List[float] = []
+
         self.rf_for_p_readings: List[float] = []
         self.rf_ref_p_readings: List[float] = []
 
@@ -68,7 +73,7 @@ class DataLogger(QObject):
             "RF: For.P", "RF: Ref. P",
             "DC: V", "DC: I", "DC: P",
             "RF Pulse: P", "RF Pulse: Freq", "RF Pulse: Duty Cycle",
-            "DC Pulse: P", "DC Pulse: Freq", "DC Pulse: Duty Cycle",
+            "DC Pulse: P", "DC Pulse: V", "DC Pulse: I", "DC Pulse: Freq", "DC Pulse: Duty Cycle",
             "RF Pulse: For.P", "RF Pulse: Ref.P",
         ]
 
@@ -131,6 +136,10 @@ class DataLogger(QObject):
         self.dc_voltage_readings.clear()
         self.dc_current_readings.clear()
 
+        self.dc_pulse_power_readings.clear()
+        self.dc_pulse_voltage_readings.clear()
+        self.dc_pulse_current_readings.clear()
+
         self.rf_for_p_readings.clear()
         self.rf_ref_p_readings.clear()
 
@@ -157,6 +166,12 @@ class DataLogger(QObject):
         self.dc_power_readings.append(float(power))
         self.dc_voltage_readings.append(float(voltage))
         self.dc_current_readings.append(float(current))
+
+    @Slot(float, float, float)
+    def log_dcpulse_power(self, power: float, voltage: float, current: float) -> None:
+        self.dc_pulse_power_readings.append(float(power))
+        self.dc_pulse_voltage_readings.append(float(voltage))
+        self.dc_pulse_current_readings.append(float(current))
 
     @Slot(float, float)
     def log_rf_power(self, for_p: float, ref_p: float) -> None:
@@ -213,11 +228,17 @@ class DataLogger(QObject):
         use_rf = bool(self.process_params.get("use_rf_power", False))
         use_dc = bool(self.process_params.get("use_dc_power", False))
         use_rfp = bool(self.process_params.get("use_rf_pulse", False))
+        use_dcp = bool(self.process_params.get("use_dc_pulse", False))  # ← 추가
 
         # RF Pulse 설정
         rfp_p = self.process_params.get("rf_pulse_power", None)
         rfp_f = self.process_params.get("rf_pulse_freq", None)
         rfp_d = self.process_params.get("rf_pulse_duty", None)
+
+        # DC Pulse 설정(있다면 setpoint 기록용)
+        dcp_p = self.process_params.get("dc_pulse_power", None)         # ← 추가
+        dcp_f = self.process_params.get("dc_pulse_freq", None)          # ← 추가
+        dcp_d = self.process_params.get("dc_pulse_duty", None)          # ← 추가
 
         # 기록 데이터(문자열로 포맷)
         log_data: Dict[str, str] = {
@@ -246,6 +267,16 @@ class DataLogger(QObject):
             "RF Pulse: P":          (f"{float(rfp_p):.2f}" if (use_rfp and rfp_p not in (None, "")) else ""),
             "RF Pulse: Freq":       (str(int(rfp_f))        if (use_rfp and rfp_f not in (None, "")) else ""),
             "RF Pulse: Duty Cycle": (str(int(rfp_d))        if (use_rfp and rfp_d not in (None, "")) else ""),
+
+            # DC Pulse 측정 평균(없으면 setpoint로 보강)
+            "DC Pulse: P": (
+                f"{_avg(self.dc_pulse_power_readings):.2f}" if (use_dcp and self.dc_pulse_power_readings)
+                else (f"{float(dcp_p):.2f}" if (use_dcp and dcp_p not in (None, "")) else "")
+            ),
+            "DC Pulse: V": f"{_avg(self.dc_pulse_voltage_readings):.2f}" if (use_dcp and self.dc_pulse_voltage_readings) else "",
+            "DC Pulse: I": f"{_avg(self.dc_pulse_current_readings):.2f}" if (use_dcp and self.dc_pulse_current_readings) else "",
+            "DC Pulse: Freq":       (str(int(dcp_f))        if (use_dcp and dcp_f not in (None, "")) else ""),
+            "DC Pulse: Duty Cycle": (str(int(dcp_d))        if (use_dcp and dcp_d not in (None, "")) else ""),
 
             # RF Pulse 폴링 평균
             "RF Pulse: For.P": f"{_avg(self.rf_pulse_for_p_readings):.2f}" if (use_rfp and self.rf_pulse_for_p_readings) else "",

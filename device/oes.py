@@ -1,7 +1,7 @@
 # device/oes.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-import asyncio, ctypes, csv
+import asyncio, ctypes, csv, contextlib
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -366,7 +366,10 @@ class OESAsync:
             # 실행 중이 아니더라도 버퍼에 남은 줄이 있으면 저장 시도
             if self.measured_rows:
                 try:
-                    await self._call(self._save_data_to_csv_wide_blocking)
+                    res = await self._call(self._save_data_to_csv_wide_blocking)
+                    if res is not None:
+                        full_path, nrows = res
+                        await self._status(f"[OES_CSV] 저장 완료(후보 경로): {full_path} (rows={nrows})")
                 except Exception as e:
                     await self._status(f"[OES_CSV] 저장 실패(후보): {e}")
             await self._safe_close_channel()
@@ -437,40 +440,48 @@ class OESAsync:
     async def _deadline_after(self, duration_sec: float):
         try:
             await asyncio.sleep(max(0.0, float(duration_sec)))
-            # 여기서 상태 로그 한번 남겨두면 추적 쉬움
             await self._status("[OES] Deadline reached → closing")
-            # is_running 여부와 무관하게 종료 루틴 진입 (내부에서 idempotent 처리)
-            await self._end_measurement(True)
+            # 외부에서 이 태스크를 cancel해도 종료 루틴은 끝까지 수행되도록 보호
+            await asyncio.shield(self._end_measurement(True))
         except asyncio.CancelledError:
             await self._status("[OES] Deadline cancelled")
-            pass
+            return
 
     async def _end_measurement(self, was_successful: bool, reason: str = ""):
-        if self._stopping: return
-        self._stopping = True
-        await self._cancel_task("_deadline_task")
-        await self._cancel_task("_acq_task")
-
-        # 성공/중단과 무관하게, 한 줄이라도 있으면 저장
-        if self.measured_rows:
-            try:
-                await self._call(self._save_data_to_csv_wide_blocking)
-            except Exception as e:
-                await self._status(f"[OES_CSV] 저장 실패: {e}")
-
-        await self._safe_close_channel()
-        self.is_running = False
-
-        if was_successful:
-            await self._status("측정 완료 및 장비 연결 종료")
-        else:
-            await self._status(f"[경고] 측정 실패({reason}). 공정은 계속 진행됩니다.")
-        self._ev_nowait(OESEvent(kind="finished", success=was_successful))
-        self._stopping = False
-
-    def _save_data_to_csv_wide_blocking(self):
-        if not self.measured_rows:
+        if self._stopping:
             return
+        self._stopping = True
+        try:
+            # 데이터가 더 추가되지 않도록 먼저 수집 루프부터 끊는다
+            await self._cancel_task("_acq_task")
+            # (자기 자신일 수 있는) deadline 태스크는 나중에 안전하게 정리
+            await self._cancel_task("_deadline_task")
+
+            # 한 줄이라도 있으면 저장
+            if self.measured_rows:
+                try:
+                    res = await self._call(self._save_data_to_csv_wide_blocking)
+                    if res is not None:
+                        full_path, nrows = res
+                        await self._status(f"[OES_CSV] 저장 완료: {full_path} (rows={nrows})")
+                except Exception as e:
+                    await self._status(f"[OES_CSV] 저장 실패: {e}")
+
+            await self._safe_close_channel()
+            self.is_running = False
+
+            if was_successful:
+                await self._status("측정 완료 및 장비 연결 종료")
+            else:
+                await self._status(f"[경고] 측정 실패({reason}). 공정은 계속 진행됩니다.")
+            self._ev_nowait(OESEvent(kind="finished", success=was_successful))
+        finally:
+            # 어떤 예외가 나더라도 고착 방지
+            self._stopping = False
+
+    def _save_data_to_csv_wide_blocking(self) -> tuple[Path, int] | None:
+        if not self.measured_rows:
+            return None
         # CSV 헤더 x축: WL 성공 시 nm, 실패 시 픽셀 인덱스
         start, end = self._roi_start, self._roi_end
         if self._wl is not None and self._wl.size >= end:
@@ -485,7 +496,7 @@ class OESAsync:
             w.writerow(header)
             w.writerows(self.measured_rows)
 
-        self._ev_nowait(OESEvent(kind="status", message=f"[OES_CSV] 저장 완료: {full_path} (rows={len(self.measured_rows)})"))
+        return full_path, len(self.measured_rows)
 
     def _safe_close_channel_blocking(self):
         try:
@@ -513,11 +524,16 @@ class OESAsync:
 
     async def _cancel_task(self, name: str):
         t: Optional[asyncio.Task] = getattr(self, name)
-        if t:
-            t.cancel()
-            try: await t
-            except Exception: pass
-            setattr(self, name, None)
+        if not t:
+            return
+        # 자기 자신(현재 코루틴)이라면 취소/대기하지 않고 참조만 끊는다
+        cur = asyncio.current_task()
+        setattr(self, name, None)  # 참조 먼저 제거(중복 취소 방지)
+        if t is cur:
+            return
+        t.cancel()
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await t
 
     def shutdown_executor(self):
         try: self._exec.shutdown(wait=False, cancel_futures=True)
