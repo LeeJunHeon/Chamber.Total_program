@@ -8,8 +8,7 @@ import ssl
 import urllib.request
 from typing import Optional, List, Dict, Any, Set, Tuple
 
-# ── 채널별 웹훅은 여기서 읽음 ────────────────────────────────────────────────
-# lib/config_local.py 우선, 실패 시 루트의 config_local.py도 시도
+# ── 단일 웹훅: lib/config_local.py 의 CHAT_WEBHOOK_URL 사용 ───────────────
 try:
     from lib import config_local as _cfg  # lib/config_local.py
 except Exception:
@@ -18,24 +17,32 @@ except Exception:
 
 class ChatNotifier(QObject):
     """
-    Google Chat 웹훅 알림 (asyncio 버전)
-    - CH1/CH2를 구분해 서로 다른 Webhook URL로 라우팅
+    Google Chat 웹훅 알림 (asyncio)
+    - 단일 웹훅 URL만 사용
+    - 공정 시작 카드에 '사용 Guns/타겟, 파워, Shutter Delay, Process Time' 포함
     - 네트워크 I/O는 asyncio.to_thread로 오프로딩 → UI 프리징 방지
-    - Qt 신호와 자연스럽게 연결할 수 있도록 QObject/Slot 유지
+
+    ※ 키 매핑(업로드한 코드 기준):
+      - 건/타겟:
+        * NormParams: use_g1/use_g2/use_g3, G{n}_target_name, "G{n} Target"
+        * CH1 레거시 UI 폴백: gunTarget_name
+      - 파워:
+        * DC 연속: use_dc_power, dc_power
+        * DC-Pulse: use_dc_pulse, dc_pulse_power, dc_pulse_freq, dc_pulse_duty(또는 dc_pulse_duty_cycle)
+        * RF-Pulse: use_rf_pulse, rf_pulse_power, rf_pulse_freq, rf_pulse_duty(또는 rf_pulse_duty_cycle)
+        * (옵션) RF 연속: use_rf_power, rf_power  ← 값이 들어오면 표시
+      - 시간:
+        * shutter_delay, process_time (기존 표시와 동일하게 '분' 단위 요약)
     """
 
-    def __init__(self, webhook_url: Optional[str], parent=None):
+    def __init__(self, webhook_url: Optional[str] = None, parent=None):
         super().__init__(parent)
 
-        # 기본(폴백) 웹훅(옵션)
-        self.webhook_default = (webhook_url or "").strip()
-
-        # 채널별 웹훅 (lib/config_local.py 우선)
-        self.webhook_ch1 = ""
-        self.webhook_ch2 = ""
+        # 단일 웹훅 URL
+        cfg_url = ""
         if _cfg is not None:
-            self.webhook_ch1 = (getattr(_cfg, "CH1_CHAT_WEBHOOK_URL", "") or "").strip()
-            self.webhook_ch2 = (getattr(_cfg, "CH2_CHAT_WEBHOOK_URL", "") or "").strip()
+            cfg_url = (getattr(_cfg, "CHAT_WEBHOOK_URL", "") or "").strip()
+        self.webhook_default = (webhook_url or cfg_url).strip()
 
         # 지연 전송 & 버퍼 (payload, webhook_url) 튜플로 저장
         self._defer: bool = True
@@ -43,7 +50,6 @@ class ChatNotifier(QObject):
 
         # 실행 컨텍스트
         self._last_started_params: Optional[dict] = None
-        self._last_started_ch: Optional[int] = None  # 1/2/None
         self._errors: List[str] = []          # 누적 오류(집계용)
         self._error_seen: Set[str] = set()    # 종료 리포트 중복 방지
         self._finished_sent: bool = False
@@ -67,14 +73,12 @@ class ChatNotifier(QObject):
             loop = asyncio.get_running_loop()
             if self._pending:
                 async def _drain():
-                    # 너무 오래 붙잡지 않도록 타임아웃
                     await asyncio.wait(self._pending, timeout=2.0)
                 loop.create_task(_drain())
         except RuntimeError:
-            # 루프가 이미 내려간 상황이면 그냥 무시
             pass
 
-    # ---------- 유틸/라우팅 ----------
+    # ---------- 숫자/포맷 유틸 ----------
     def _num(self, v, default=None):
         try:
             if v is None:
@@ -88,36 +92,28 @@ class ChatNotifier(QObject):
             except Exception:
                 return default
 
-    def _which_chamber(self, params: Optional[dict]) -> Optional[int]:
-        """params에 들어있는 힌트로 챔버(1/2)를 판별."""
-        p = params or {}
-        for k in ("ch", "channel", "chamber", "ui_ch", "ui_channel"):
-            if k in p:
-                v = str(p[k]).strip().upper()
-                if v in ("1", "CH1"):
-                    return 1
-                if v in ("2", "CH2"):
-                    return 2
-        keys = [str(k).lower() for k in p.keys()]
-        if any(k.startswith("ch1_") for k in keys):
-            return 1
-        if any(k.startswith("ch2_") for k in keys):
-            return 2
-        return None
+    def _b(self, params: dict, key: str) -> bool:
+        v = params.get(key, False)
+        if isinstance(v, str):
+            v = v.strip().lower()
+            return v in ("1", "t", "true", "y", "yes", "on", "checked")
+        return bool(v)
 
-    def _resolve_webhook(self, params_for_routing: Optional[dict]) -> Optional[str]:
-        """메시지 보낼 웹훅 URL 결정."""
-        ch = self._which_chamber(params_for_routing)
-        if ch is None:
-            ch = self._last_started_ch
-        if ch == 1 and self.webhook_ch1:
-            return self.webhook_ch1
-        if ch == 2 and self.webhook_ch2:
-            return self.webhook_ch2
-        # 폴백: 기본→CH1→CH2 순
-        return self.webhook_default or self.webhook_ch1 or self.webhook_ch2 or None
+    def _fmt_min(self, v) -> str:
+        # 기존과 동일하게 '분' 단위로 요약(0 이하 → '—')
+        try:
+            f = float(v)
+        except Exception:
+            return "—"
+        if f <= 0:
+            return "—"
+        return f"{int(f)}분" if abs(f - int(f)) < 1e-6 else f"{f:.1f}분"
 
     # ---------- 내부 전송 ----------
+    def _resolve_webhook(self, _route_params_ignored: Optional[dict] = None) -> Optional[str]:
+        """단일 웹훅만 사용."""
+        return self.webhook_default or None
+
     async def _post_async(self, payload: dict, webhook_url: Optional[str]):
         if not webhook_url or not payload:
             return
@@ -131,16 +127,15 @@ class ChatNotifier(QObject):
                 with urllib.request.urlopen(req, timeout=3, context=self._ctx) as resp:
                     resp.read()
             except Exception:
-                # 실패는 조용히 무시(원하면 여기서 파일로그 등 추가)
+                # 실패는 조용히 무시(원하면 파일로그 등 추가)
                 pass
 
-        # 표준 라이브러리만 사용 → 블로킹 I/O는 스레드풀에 위임
         await asyncio.to_thread(_blocking_post)
 
     def _schedule_post(self, payload: dict, webhook_url: Optional[str]):
         """비동기 전송 태스크를 스케줄하고 참조를 보관(가비지 방지)."""
         if not webhook_url:
-            return  # 보낼 곳이 없으면 무시
+            return
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
@@ -234,7 +229,7 @@ class ChatNotifier(QObject):
         payload = {
             "cardsV2": [
                 {
-                    "cardId": "error-aggregate",   # ← 버퍼에서 식별/치환용
+                    "cardId": "error-aggregate",
                     "card": {
                         "header": {"title": "Sputter Controller", "subtitle": "Status Notification"},
                         "sections": [{"widgets": widgets}],
@@ -248,78 +243,76 @@ class ChatNotifier(QObject):
         else:
             self._schedule_post(payload, webhook)
 
-    # ---------- 포맷 헬퍼 ----------
-    def _b(self, params: dict, key: str) -> bool:
-        v = params.get(key, False)
-        if isinstance(v, str):
-            v = v.strip().lower()
-            return v in ("1", "t", "true", "y", "yes", "on", "checked")
-        return bool(v)
-
-    def _fmt_min(self, v) -> str:
-        try:
-            f = float(v)
-        except Exception:
-            return "—"
-        if f <= 0:
-            return "—"
-        return f"{int(f)}분" if abs(f - int(f)) < 1e-6 else f"{f:.1f}분"
-
-    # --- CH1/CH2 분기 전용 포맷터 ---
-    # CH1: 단일 건 + DC Pulse 중심
-    def _guns_and_targets_ch1(self, p: dict) -> str:
-        name = (p.get("ch1_gunTarget_name") or p.get("gunTarget_name") or
-                p.get("target_name") or p.get("gun_name") or "").strip()
-        return f"G1: {name}" if name else "—"
-
-    def _power_summary_ch1(self, p: dict) -> str:
-        pw = (p.get("ch1_dcPulsePower") or p.get("ch1_dcPulsePower_edit") or
-              p.get("dcPulsePower")      or p.get("dc_pulse_power"))
-        fq = (p.get("ch1_dcPulseFreq") or p.get("ch1_dcPulseFreq_edit") or
-              p.get("dcPulseFreq")      or p.get("dc_pulse_freq"))
-        dy = (p.get("ch1_dcPulseDutyCycle") or p.get("ch1_dcPulseDutyCycle_edit") or
-              p.get("dcPulseDuty")          or p.get("dc_pulse_duty"))
-        pwf = self._num(pw); fqf = self._num(fq); dyf = self._num(dy)
-        if pwf is not None or fqf is not None or dyf is not None:
-            pw_txt = f"{int(pwf)} W" if pwf is not None else "—"
-            fq_txt = f"{int(fqf)} Hz" if fqf is not None else "—"
-            dy_txt = f"{int(dyf)} %" if dyf is not None else "—"
-            return f"DC Pulse {pw_txt} @ {fq_txt}, {dy_txt}"
-        dc = p.get("ch1_Power") or p.get("ch1_Power_edit") or p.get("dc_power")
-        dcf = self._num(dc)
-        if dcf is not None:
-            return f"DC {int(dcf)} W"
-        return "—"
-
-    # CH2: 멀티 건 + DC / RF Pulse
-    def _guns_and_targets_ch2(self, p: dict) -> str:
-        out = []
-        for gun, ck, nk in (("G1","ch2_G1_checkbox","ch2_g1Target_name"),
-                            ("G2","ch2_G2_checkbox","ch2_g2Target_name"),
-                            ("G3","ch2_G3_checkbox","ch2_g3Target_name")):
-            if self._b(p, ck) or (p.get(nk) not in (None, "")):
-                name = (p.get(nk) or "").strip() or "-"
-                out.append(f"{gun}: {name}")
-        return ", ".join(out) if out else "—"
-
-    def _power_summary_ch2(self, p: dict) -> str:
+    # ---------- 내용 포맷 ----------
+    def _guns_and_targets(self, p: dict) -> str:
+        """
+        NormParams/RawParams 키를 모두 지원하여 건/타겟 요약을 만든다.
+        - NormParams: use_g{n}, G{n}_target_name, "G{n} Target"
+        - RawParams : "G{n} Target"
+        - CH1 레거시: gunTarget_name (있으면 G1로 표기)
+        """
         items = []
-        use_dc = self._b(p, "ch2_dcPower_checkbox")
-        dc = p.get("ch2_dcPower_edit")
-        dcf = self._num(dc)
-        if use_dc or dcf is not None:
-            items.append(f"DC {int(dcf)} W" if dcf is not None else "DC — W")
+        for i in (1, 2, 3):
+            used_flag = f"use_g{i}"
+            name_keys = (f"G{i}_target_name", f"G{i} Target")
+            name = (p.get(name_keys[0]) or p.get(name_keys[1]) or "").strip()
 
-        use_rfp = self._b(p, "ch2_rfPulsePower_checkbox")
-        rfpw = p.get("ch2_rfPulsePower_edit")
-        rffq = p.get("ch2_rfPulseFreq_edit")
-        rfdt = p.get("ch2_rfPulseDutyCycle_edit")
-        pwf = self._num(rfpw); fqf = self._num(rffq); dyf = self._num(rfdt)
-        if use_rfp or (pwf is not None or fqf is not None or dyf is not None):
-            pw_txt = f"{int(pwf)} W" if pwf is not None else "—"
-            fq_txt = f"{int(fqf)} Hz" if fqf is not None else "keep"
-            dy_txt = f"{int(dyf)} %" if dyf is not None else "keep"
-            items.append(f"RF Pulse {pw_txt} @ {fq_txt}, {dy_txt}")
+            # 선택키가 없거나 False여도 이름만 있으면 노출 (CH1은 셔터 없으므로 이름만 저장될 수 있음)
+            used = (used_flag in p and self._b(p, used_flag))
+            if used or name:
+                items.append(f"G{i}: {name or '-'}")
+
+        if not items:
+            # CH1 레거시 폴백
+            legacy = (p.get("gunTarget_name") or "").strip()
+            if legacy:
+                items.append(f"G1: {legacy}")
+
+        return ", ".join(items) if items else "—"
+
+    def _power_summary(self, p: dict) -> str:
+        """
+        파워 요약:
+          - DC-Pulse: use_dc_pulse, dc_pulse_power, dc_pulse_freq, dc_pulse_duty | dc_pulse_duty_cycle
+          - RF-Pulse: use_rf_pulse, rf_pulse_power, rf_pulse_freq, rf_pulse_duty | rf_pulse_duty_cycle
+          - DC(연속): use_dc_power, dc_power
+          - (옵션) RF(연속): use_rf_power, rf_power  → 값이 오면 표시
+        """
+        items = []
+
+        # DC Pulse
+        use_dcp = self._b(p, "use_dc_pulse")
+        dcpw = self._num(p.get("dc_pulse_power"))
+        dcfq = self._num(p.get("dc_pulse_freq"))
+        dcdt = self._num(p.get("dc_pulse_duty", p.get("dc_pulse_duty_cycle")))
+        if use_dcp or (dcpw is not None or dcfq is not None or dcdt is not None):
+            pw_txt = f"{int(dcpw)} W" if dcpw is not None else "—"
+            fq_txt = f"{int(dcfq)} Hz" if dcfq is not None else "keep"
+            dt_txt = f"{int(dcdt)} %" if dcdt is not None else "keep"
+            items.append(f"DC Pulse {pw_txt} @ {fq_txt}, {dt_txt}")
+
+        # RF Pulse
+        use_rfp = self._b(p, "use_rf_pulse")
+        rfpw = self._num(p.get("rf_pulse_power"))
+        rffq = self._num(p.get("rf_pulse_freq"))
+        rfdt = self._num(p.get("rf_pulse_duty", p.get("rf_pulse_duty_cycle")))
+        if use_rfp or (rfpw is not None or rffq is not None or rfdt is not None):
+            pw_txt = f"{int(rfpw)} W" if rfpw is not None else "—"
+            fq_txt = f"{int(rffq)} Hz" if rffq is not None else "keep"
+            dt_txt = f"{int(rfdt)} %" if rfdt is not None else "keep"
+            items.append(f"RF Pulse {pw_txt} @ {fq_txt}, {dt_txt}")
+
+        # DC(연속)
+        use_dc = self._b(p, "use_dc_power")
+        dcp = self._num(p.get("dc_power"))
+        if use_dc or dcp is not None:
+            items.append(f"DC {int(dcp)} W" if dcp is not None else "DC — W")
+
+        # RF(연속) — 장비가 지원하지 않아도 값이 주어지면 묵시적으로 표기(안 들어오면 생략)
+        use_rf = self._b(p, "use_rf_power")
+        rfp = self._num(p.get("rf_power"))
+        if use_rf or rfp is not None:
+            items.append(f"RF {int(rfp)} W" if rfp is not None else "RF — W")
 
         return " / ".join(items) if items else "—"
 
@@ -328,27 +321,15 @@ class ChatNotifier(QObject):
     def notify_process_started(self, params: dict):
         # 실행 컨텍스트 초기화
         self._last_started_params = dict(params) if params else None
-        self._last_started_ch = self._which_chamber(params)
         self._errors.clear()
         self._error_seen.clear()
         self._finished_sent = False
         self._buffer.clear()  # 이전 집계 카드 등 모두 제거
 
         name = (params or {}).get("process_note") or (params or {}).get("Process_name") or "Untitled"
-
-        # CH 분기 포맷
-        if self._last_started_ch == 1:
-            guns = self._guns_and_targets_ch1(params or {})
-            pwr  = self._power_summary_ch1(params or {})
-        elif self._last_started_ch == 2:
-            guns = self._guns_and_targets_ch2(params or {})
-            pwr  = self._power_summary_ch2(params or {})
-        else:
-            # 못찾으면 CH2 규격 먼저 시도, 없으면 CH1 폴백
-            guns = self._guns_and_targets_ch2(params or {}) or self._guns_and_targets_ch1(params or {})
-            pwr  = self._power_summary_ch2(params or {}) or self._power_summary_ch1(params or {})
-
-        sh_delay = self._fmt_min((params or {}).get("shutter_delay", 0))
+        guns = self._guns_and_targets(params or {})
+        pwr  = self._power_summary(params or {})
+        sh_delay  = self._fmt_min((params or {}).get("shutter_delay", 0))
         proc_time = self._fmt_min((params or {}).get("process_time", 0))
 
         self._post_card(
@@ -361,17 +342,12 @@ class ChatNotifier(QObject):
                 "Shutter Delay": sh_delay,
                 "Process Time": proc_time,
             },
-            urgent=True,                # 시작 알림은 즉시
-            route_params=params         # 라우팅: 이 공정의 챔버로 보냄
+            urgent=True,
+            route_params=params
         )
 
     @Slot(bool, dict)
     def notify_process_finished_detail(self, ok: bool, detail: dict):
-        # detail에 ch 힌트가 있으면 갱신
-        ch = self._which_chamber(detail)
-        if ch is not None:
-            self._last_started_ch = ch
-
         name = (detail or {}).get("process_name") or (self._last_started_params or {}).get("process_note") or "Untitled"
         stopped  = bool((detail or {}).get("stopped"))
         aborting = bool((detail or {}).get("aborting"))
@@ -403,7 +379,7 @@ class ChatNotifier(QObject):
 
         self._post_card("공정 종료", subtitle, status, fields, route_params=detail)
 
-        # 종료 카드와 함께 누적 오류 집계 카드 1장도 같이 나가도록 반영
+        # 종료 카드와 함께 누적 오류 집계 카드 1장도 같이 나가도록
         self._upsert_error_card()
         self.flush()
         self._finished_sent = True
@@ -412,7 +388,6 @@ class ChatNotifier(QObject):
 
     @Slot(bool)
     def notify_process_finished(self, ok: bool):
-        # 상세 카드가 이미 나갔다면 중복 방지
         if self._finished_sent:
             self._upsert_error_card()
             self.flush()
@@ -431,21 +406,17 @@ class ChatNotifier(QObject):
 
     @Slot(str)
     def notify_text(self, text: str):
-        # 최근 시작된 챔버 기준으로 라우팅
         self._post_text(text, route_params=self._last_started_params)
 
     @Slot(str)
     def notify_error(self, reason: str):
-        """개별 카드 생성 X → 내부 누적만, 집계 카드 1장으로 관리"""
         pretty = (reason or "unknown").strip()
         self._errors.append(pretty)
         self._error_seen.add(pretty)
-        # 버퍼에 집계 카드 1장을 업데이트(치환)만 해둔다
         self._upsert_error_card()
 
     @Slot(str, str)
     def notify_error_with_src(self, src: str, reason: str):
-        """개별 카드 생성 X → 내부 누적만, 집계 카드 1장으로 관리"""
         base = (reason or "unknown").strip()
         pretty = f"[{src}] {base}" if src else base
         self._errors.append(pretty)

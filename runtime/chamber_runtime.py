@@ -408,7 +408,7 @@ class ChamberRuntime:
                     self.process_controller.on_plc_failed(nname, str(e))
                     if self.chat:
                         with contextlib.suppress(Exception):
-                            self.chat.notify_error_with_src("PLC", f"{nname}: {e}", ch=self.ch)
+                            self.chat.notify_error_with_src("PLC", f"{nname}: {e}")
                     self.append_log("PLC", f"명령 실패: {raw} -> {onb}: {e!r}")
             self._spawn_detached(run())
 
@@ -510,7 +510,7 @@ class ChamberRuntime:
                         self.append_log("OES", f"초기화 실패: {e!r} → 종료 절차로 전환")
                         if self.chat:
                             with contextlib.suppress(Exception):
-                                self.chat.notify_text(f"[OES] 초기화 실패: {e!r}", ch=self.ch)
+                                self.chat.notify_text(f"[OES] 초기화 실패: {e!r}")
                         self.process_controller.on_oes_failed("OES", f"init: {e}")
                         return
 
@@ -523,7 +523,7 @@ class ChamberRuntime:
                         self.append_log("OES", f"측정 예외: {e!r} → 종료 절차로 전환")
                         if self.chat:
                             with contextlib.suppress(Exception):
-                                self.chat.notify_text(f"[OES] 측정 실패: {e!r}", ch=self.ch)
+                                self.chat.notify_text(f"[OES] 측정 실패: {e!r}")
                         self.process_controller.on_oes_failed("OES", f"measure: {e}")
                         return
 
@@ -534,7 +534,7 @@ class ChamberRuntime:
                     self.append_log("OES", f"예상치 못한 예외: {e!r} → 종료 절차로 전환")
                     if self.chat:
                         with contextlib.suppress(Exception):
-                            self.chat.notify_text(f"[OES] 예외: {e!r}", ch=self.ch)
+                            self.chat.notify_text(f"[OES] 예외: {e!r}")
                     self.process_controller.on_oes_failed("OES", f"unexpected: {e}")
 
             self._spawn_detached(run())
@@ -553,7 +553,7 @@ class ChamberRuntime:
                     self.append_log("RGA", msg)
                     if self.chat:
                         with contextlib.suppress(Exception):
-                            self.chat.notify_text(f"[RGA] {msg}", ch=self.ch)
+                            self.chat.notify_text(f"[RGA] {msg}")
                     self.process_controller.on_rga_finished()
             self._spawn_detached(_run())
 
@@ -602,16 +602,36 @@ class ChamberRuntime:
                     self._on_process_status_changed(bool(payload.get("running", False)))
 
                 elif kind == "started":
+                    params = payload.get("params", {}) or {}
+
+                    # ✅ 시작 카드 전송(건/타겟, 파워, Shutter Delay, Process Time 포함)
+                    if self.chat:
+                        with contextlib.suppress(Exception):
+                            p = dict(params)
+                            p.setdefault("ch", self.ch)  # 라우팅 힌트
+                            self.chat.notify_process_started(p)
+
+                    # 로그/세션 준비
                     if not getattr(self, "_log_file_path", None):
-                        self._prepare_log_file(payload.get("params", {}))
+                        self._prepare_log_file(params)
                     try:
-                        self.data_logger.start_new_log_session(payload.get("params", {}))
+                        self.data_logger.start_new_log_session(params)
                     except Exception:
                         pass
                     self._soon(self._graph_reset_safe)
+
+                    # ✅ 텍스트 알림은 기존 그대로 유지
+                    name = (params.get("process_note")
+                            or params.get("Process_name")
+                            or f"Run CH{self.ch}")
+                    t = params.get("process_time", 0) or 0
+                    line = f"▶️ CH{self.ch} '{name}' 시작 (t={float(t):.1f}s)"
+                    self.append_log("MAIN", line)
                     if self.chat:
                         with contextlib.suppress(Exception):
-                            self.chat.notify_process_finished_detail(ok, detail, ch=self.ch)
+                            self.chat.notify_text(line)
+
+                    # 폴링 타깃 초기화
                     self._last_polling_targets = None
 
                 elif kind == "finished":
@@ -627,9 +647,6 @@ class ChamberRuntime:
                         self.mfc.on_process_finished(ok)
                     except Exception:
                         pass
-
-                    # 자동 재연결을 선차단 → 도중 재부팅 방지
-                    self._auto_connect_enabled = False
 
                     # 0) 재연결 선차단 + 폴링 완전 OFF
                     self._auto_connect_enabled = False
@@ -669,7 +686,7 @@ class ChamberRuntime:
                 elif kind == "aborted":
                     if self.chat:
                         with contextlib.suppress(Exception):
-                            self.chat.notify_text(f"🛑 CH{self.ch} 공정 중단", ch=self.ch)
+                            self.chat.notify_text(f"🛑 CH{self.ch} 공정 중단")
                     with contextlib.suppress(Exception):
                         self._clear_queue_and_reset_ui()
 
@@ -736,7 +753,7 @@ class ChamberRuntime:
                 self.process_controller.on_mfc_failed(ev.cmd or "", why)
                 if self.chat:
                     with contextlib.suppress(Exception):
-                        self.chat.notify_error_with_src(f"MFC{self.ch}", f"{ev.cmd or ''}: {why}", ch=self.ch)
+                        self.chat.notify_error_with_src(f"MFC{self.ch}", f"{ev.cmd or ''}: {why}")
             elif k == "flow":
                 gas = ev.gas or ""
                 flow = float(ev.value or 0.0)
@@ -769,7 +786,7 @@ class ChamberRuntime:
                 self.process_controller.on_ig_failed("IG", why)
                 if self.chat:
                     with contextlib.suppress(Exception):
-                        self.chat.notify_error_with_src(f"IG{self.ch}", why, ch=self.ch)
+                        self.chat.notify_error_with_src(f"IG{self.ch}", why)
 
     async def _pump_rga_events(self) -> None:
         adapter = self.rga
@@ -794,7 +811,7 @@ class ChamberRuntime:
                 self.append_log(tag, f"측정 실패: {why} → 다음 단계")
                 if self.chat:
                     with contextlib.suppress(Exception):
-                        self.chat.notify_text(f"[{tag}] 측정 실패: {why} → 건너뜀", ch=self.ch)
+                        self.chat.notify_text(f"[{tag}] 측정 실패: {why} → 건너뜀")
                 self.process_controller.on_rga_finished()
 
     async def _pump_dc_events(self) -> None:
@@ -838,7 +855,7 @@ class ChamberRuntime:
                 self.process_controller.on_rf_target_failed(why)
                 if self.chat:
                     with contextlib.suppress(Exception):
-                        self.chat.notify_error_with_src("RF Power", why, ch=self.ch)
+                        self.chat.notify_error_with_src("RF Power", why)
             elif k == "power_off_finished":
                 self.process_controller.on_device_step_ok()
 
@@ -862,7 +879,7 @@ class ChamberRuntime:
                 self.process_controller.on_rf_pulse_failed(why)
                 if self.chat:
                     with contextlib.suppress(Exception):
-                        self.chat.notify_error_with_src("RFPulse", why, ch=self.ch)
+                        self.chat.notify_error_with_src("RFPulse", why)
             elif k == "power_off_finished":
                 self.process_controller.on_rf_pulse_off_finished()
 

@@ -16,13 +16,13 @@ from controller.chat_notifier import ChatNotifier
 from device.plc import AsyncPLC
 
 # ▶ 런타임 래퍼
-from runtime.chamber_runtime import ChamberRuntime
+from controller.chamber_runtime import ChamberRuntime           # ← 경로 정리
 from runtime.plasma_cleaning_runtime import PlasmaCleaningRuntime   # ★ 필요 시 사용
 
 # 챔버별 설정
 from lib import config_ch1, config_ch2
 from lib import config_common as cfgc
-from lib import config_local as cfgl  # ★ 추가: CH1/CH2 웹훅 URL 로드
+from lib import config_local as cfgl  # CHAT_WEBHOOK_URL 로드
 
 # ───────────────────────────────────────────────────────────
 CH_HINT_RE = re.compile(r"\[CH\s*(\d)\]|\bCH(?:=|:)?\s*(\d)\b", re.IGNORECASE)
@@ -33,6 +33,11 @@ class MainWindow(QWidget):
         super().__init__()
         self.ui = Ui_Form()
         self.ui.setupUi(self)
+
+        # ▼ TSP 기본값(UI에 채워 넣기)
+        self.ui.TSP_targetPressure_edit.setPlainText("2.5e-7")
+        self.ui.TSP_setCycle_edit.setPlainText("10")
+
         self._loop = loop or asyncio.get_event_loop()
 
         # --- 스택 및 페이지 매핑 (UI 객체명 고정)
@@ -44,13 +49,11 @@ class MainWindow(QWidget):
         }
 
         # === 공용(공유) 리소스만 이곳에서 생성 ===
-        # 챔버별 Chat Notifier 두 개 생성
-        url_ch1 = getattr(cfgl, "CH1_CHAT_WEBHOOK_URL", None)
-        url_ch2 = getattr(cfgl, "CH2_CHAT_WEBHOOK_URL", None)
-        self.chat_ch1: Optional[ChatNotifier] = ChatNotifier(url_ch1) if url_ch1 else None
-        self.chat_ch2: Optional[ChatNotifier] = ChatNotifier(url_ch2) if url_ch2 else None
-        if self.chat_ch1: self.chat_ch1.start()
-        if self.chat_ch2: self.chat_ch2.start()
+        # 단일 Chat Notifier (config_local.CHAT_WEBHOOK_URL 사용)
+        url = getattr(cfgl, "CHAT_WEBHOOK_URL", None)
+        self.chat: Optional[ChatNotifier] = ChatNotifier(url) if url else None
+        if self.chat:
+            self.chat.start()
 
         # ── 현재 PLC 로그의 소유 챔버 (1/2). 없으면 None → 방송 모드
         self._plc_owner: Optional[int] = None
@@ -69,7 +72,7 @@ class MainWindow(QWidget):
         #     cfg=config_ch1,
         #     log_dir=self._log_root,
         #     plc=self.plc,
-        #     chat=self.chat_ch1,  # PC 알림을 CH1 방으로 보낼 때
+        #     chat=self.chat,  # PC 알림도 같은 방으로
         # )
 
         # === 챔버 런타임 2개 생성 ===
@@ -79,7 +82,7 @@ class MainWindow(QWidget):
             prefix="ch1_",
             loop=self._loop,
             plc=self.plc,
-            chat=self.chat_ch1,   # ★ CH1 전용
+            chat=self.chat,     # ★ 단일 Notifier 공유
             cfg=config_ch1,
             log_dir=self._log_root,
             on_plc_owner=self._set_plc_owner,
@@ -91,7 +94,7 @@ class MainWindow(QWidget):
             prefix="ch2_",
             loop=self._loop,
             plc=self.plc,
-            chat=self.chat_ch2,   # ★ CH2 전용
+            chat=self.chat,     # ★ 단일 Notifier 공유
             cfg=config_ch2,
             log_dir=self._log_root,
             on_plc_owner=self._set_plc_owner,
@@ -187,13 +190,8 @@ class MainWindow(QWidget):
         except Exception:
             pass
         try:
-            if self.chat_ch1:
-                self.chat_ch1.shutdown()
-        except Exception:
-            pass
-        try:
-            if self.chat_ch2:
-                self.chat_ch2.shutdown()
+            if self.chat:
+                self.chat.shutdown()   # ★ 단일 Notifier만 종료
         except Exception:
             pass
         event.accept()

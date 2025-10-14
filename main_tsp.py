@@ -11,12 +11,12 @@ from device.tsp import AsyncTSP
 from controller.tsp_controller import TSPProcessController, TSPRunConfig
 
 # 설정(기본값)
-DEFAULT_HOST      = "192.168.1.50"
-DEFAULT_IG_PORT   = 4001     # CH1 IG
-DEFAULT_TSP_PORT  = 4004     # TSP
-DWELL_SEC         = 150.0    # 2분 30초
-POLL_SEC          = 5.0      # 5초
-VERIFY_WITH_STATUS = True    # TSP on/off 후 205 확인
+DEFAULT_HOST       = "192.168.1.50"
+DEFAULT_IG_PORT    = 4001     # CH1 IG
+DEFAULT_TSP_PORT   = 4004     # TSP
+DWELL_SEC          = 150.0    # 2분 30초
+POLL_SEC           = 5.0      # 5초
+VERIFY_WITH_STATUS = True     # TSP on/off 후 205 확인
 
 def _ts() -> str:
     return datetime.now().strftime("%H:%M:%S")
@@ -24,9 +24,10 @@ def _ts() -> str:
 class TSPPageController:
     """
     UI 페이지용 컨트롤러:
-      - 로그는 ui.pc_logMessage_edit에 출력(없으면 print)
-      - 입력: 목표 압력/반복 횟수만 읽어 실행
-      - Start/Stop 버튼이 있으면 자동 연결(이름 패턴 지원)
+      - 로그: ui.pc_logMessage_edit
+      - 입력: ui.TSP_targetPressure_edit, ui.TSP_setCycle_edit
+      - 버튼: ui.TSP_Start_button / ui.TSP_Stop_button
+      - 표시: ui.TSP_nowCycle_edit(현재 사이클), ui.TSP_basePressure_edit(현재 압력)
     """
     def __init__(
         self,
@@ -34,9 +35,9 @@ class TSPPageController:
         *,
         host: str = DEFAULT_HOST,
         tcp_port: int = DEFAULT_TSP_PORT,
-        addr: int = 0x01,           # ← main.py 호환용(무시)
+        addr: int = 0x01,  # main.py 호환용(미사용)
         loop: Optional[asyncio.AbstractEventLoop] = None,
-        ig: Optional[AsyncIG] = None,  # CH1 IG를 외부에서 주입 가능(없으면 내부 생성)
+        ig: Optional[AsyncIG] = None,  # 외부에서 IG 주입 가능
     ) -> None:
         self.ui = ui
         self.loop = loop or asyncio.get_event_loop()
@@ -50,7 +51,6 @@ class TSPPageController:
         self._task: Optional[asyncio.Task] = None
         self._busy = False
 
-        # 버튼 자동 연결(있을 때만)
         self._connect_buttons()
 
     # ── UI 헬퍼 ─────────────────────────────────────────────
@@ -64,68 +64,52 @@ class TSPPageController:
                 pass
         print(f"[{_ts()}] {msg}")
 
+    def _get_plain(self, name: str) -> Optional[str]:
+        w = getattr(self.ui, name, None)
+        if w is None:
+            return None
+        try:
+            return w.toPlainText().strip()
+        except Exception:
+            return None
+
+    def _set_plain(self, name: str, value: str) -> None:
+        w = getattr(self.ui, name, None)
+        if w is None:
+            return
+        try:
+            w.setPlainText(value)
+        except Exception:
+            pass
+
     def _read_target(self) -> float:
-        # 후보 위젯명: pc_target_edit, TSP_target_edit, pc_target, ...
-        for name in ("pc_target_edit", "TSP_target_edit", "pc_target", "tsp_target"):
-            w = getattr(self.ui, name, None)
-            if w is None: continue
-            try:
-                txt = w.text().strip()
-                return float(txt)
-            except Exception:
-                pass
-        # 스핀박스류 후보
-        for name in ("pc_target_spin", "TSP_target_spin"):
-            w = getattr(self.ui, name, None)
-            if w is None: continue
-            try:
-                return float(w.value())
-            except Exception:
-                pass
-        raise ValueError("목표 압력 입력 위젯을 찾을 수 없거나 숫자 변환 실패")
+        txt = self._get_plain("TSP_targetPressure_edit")
+        if not txt:
+            raise ValueError("TSP_targetPressure_edit 가 비어있습니다.")
+        return float(txt)
 
     def _read_cycles(self) -> int:
-        # 후보 위젯명: pc_cycle_edit, TSP_setCycle_edit, pc_cycles, ...
-        for name in ("pc_cycle_edit", "TSP_setCycle_edit", "pc_cycles", "tsp_cycles"):
-            w = getattr(self.ui, name, None)
-            if w is None: continue
-            try:
-                txt = w.text().strip()
-                v = int(txt)
-                if v >= 1: return v
-            except Exception:
-                pass
-        # 스핀박스류 후보
-        for name in ("pc_cycle_spin", "TSP_cycle_spin"):
-            w = getattr(self.ui, name, None)
-            if w is None: continue
-            try:
-                v = int(w.value())
-                if v >= 1: return v
-            except Exception:
-                pass
-        raise ValueError("반복 횟수 입력 위젯을 찾을 수 없거나 정수 변환 실패(>=1)")
+        txt = self._get_plain("TSP_setCycle_edit")
+        if not txt:
+            raise ValueError("TSP_setCycle_edit 가 비어있습니다.")
+        v = int(txt)
+        if v < 1:
+            raise ValueError("반복 횟수는 1 이상이어야 합니다.")
+        return v
 
     def _connect_buttons(self) -> None:
-        # 가능한 이름들을 순회하며 첫 매칭만 연결
-        start_names = ("pc_btnStart", "TSP_btnStart", "tsp_btnStart")
-        stop_names  = ("pc_btnStop",  "TSP_btnStop",  "tsp_btnStop")
-        for n in start_names:
-            b = getattr(self.ui, n, None)
-            if b is not None:
-                try:
-                    b.clicked.connect(self.on_start_clicked)  # type: ignore[attr-defined]
-                    break
-                except Exception:
-                    pass
-        for n in stop_names:
-            b = getattr(self.ui, n, None)
-            if b is not None:
-                try:
-                    b.clicked.connect(self.on_stop_clicked)   # type: ignore[attr-defined]
-                    break
-                except Exception:
-                    pass
+        start_btn = getattr(self.ui, "TSP_Start_button", None)
+        if start_btn is not None:
+            try:
+                start_btn.clicked.connect(self.on_start_clicked)  # type: ignore[attr-defined]
+            except Exception:
+                pass
+        stop_btn = getattr(self.ui, "TSP_Stop_button", None)
+        if stop_btn is not None:
+            try:
+                stop_btn.clicked.connect(self.on_stop_clicked)    # type: ignore[attr-defined]
+            except Exception:
+                pass
 
     # ── Start/Stop 핸들러 ──────────────────────────────────
     def on_start_clicked(self) -> None:
@@ -138,6 +122,11 @@ class TSPPageController:
         except Exception as e:
             self._log(f"[ERROR] 입력 파싱 실패: {e}")
             return
+
+        # 시작 시 표시 초기화
+        self._set_plain("TSP_nowCycle_edit", "0")
+        self._set_plain("TSP_basePressure_edit", "")
+
         self._busy = True
         self._task = asyncio.create_task(self._run(target, cycles))
 
@@ -156,8 +145,12 @@ class TSPPageController:
 
             # 콜백
             def state_cb(s: str): self._log(f"[STATE] {s}")
-            def pressure_cb(p: float): self._log(f"[IG] P={p:.3e}")
-            def cycle_cb(cur: int, total: int): self._log(f"[TSP] cycle {cur}/{total} 완료")
+            def pressure_cb(p: float):
+                self._log(f"[IG] P={p:.3e}")
+                self._set_plain("TSP_basePressure_edit", f"{p:.3e}")
+            def cycle_cb(cur: int, total: int):
+                self._log(f"[TSP] cycle {cur}/{total} 완료")
+                self._set_plain("TSP_nowCycle_edit", str(cur))
 
             ctrl = TSPProcessController(
                 tsp=self.tsp, ig=self.ig,
@@ -182,6 +175,7 @@ class TSPPageController:
             self._log(f" success       : {result.success}")
             if result.final_pressure == result.final_pressure:
                 self._log(f" final_pressure: {result.final_pressure:.3e}")
+                self._set_plain("TSP_basePressure_edit", f"{result.final_pressure:.3e}")
             else:
                 self._log(" final_pressure: NaN")
             self._log(f" cycles_done   : {result.cycles_done}")
@@ -192,7 +186,7 @@ class TSPPageController:
         except Exception as e:
             self._log(f"[ERROR] 실행 실패: {e!r}")
         finally:
-            # 안전 정리: TSP OFF + 연결 닫기, IG OFF(내부 정책에 따라)
+            # 안전 정리: TSP OFF + 연결 닫기, IG OFF(내부 생성한 경우만)
             with contextlib.suppress(Exception):
                 if self.tsp:
                     await self.tsp.off()
