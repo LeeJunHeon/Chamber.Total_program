@@ -218,7 +218,8 @@ class ChamberRuntime:
         self._auto_connect_enabled = True  # ← 실패시 False로 내려 자동 재연결 차단
         self._run_select: dict[str, bool] | None = None  # ← 이번 런에서 펄스 선택 상태
         self._owns_plc = bool(owns_plc if owns_plc is not None else (int(chamber_no) == 1))  # 기본 CH1
-        self._notify_plc_owner = on_plc_owner                                   # ★ 추가
+        self._notify_plc_owner = on_plc_owner 
+        self._last_running_state: Optional[bool] = None                                  # ★ 추가
 
         # QMessageBox 참조 저장소(비모달 유지용)
         self._msg_boxes: list[QMessageBox] = []  # ← 추가
@@ -1056,13 +1057,16 @@ class ChamberRuntime:
         if b_start: b_start.setEnabled(not running)
         if b_stop:  b_stop.setEnabled(True)
 
-        # ★ 추가: 공정 시작/종료에 따라 PLC 로그 소유권 갱신
-        cb = getattr(self, "_notify_plc_owner", None)
-        if callable(cb):
-            try:
-                cb(self.ch if running else None)
-            except Exception:
-                pass
+        # ★ 변경점: running 값이 실제로 바뀐 경우에만 소유권 콜백 호출
+        prev = getattr(self, "_last_running_state", None)
+        if prev is None or prev != running:
+            cb = getattr(self, "_notify_plc_owner", None)
+            if callable(cb):
+                try:
+                    cb(self.ch if running else None)
+                except Exception:
+                    pass
+        self._last_running_state = running
 
     def _apply_process_state_message(self, message: str) -> None:
         if getattr(self, "_last_state_text", None) == message:

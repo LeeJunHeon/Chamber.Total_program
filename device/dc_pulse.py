@@ -43,19 +43,23 @@ DCP_RECONNECT_BACKOFF_START_MS = 1000
 DCP_RECONNECT_BACKOFF_MAX_MS = 10000
 DCP_FIRST_CMD_EXTRA_TIMEOUT_MS = 1000
 
-# 스케일(장비 셋업에 맞게 조정)
-SCALE_VOLT_V = 1.0                 # e.g., 800V   → 800
-SCALE_CURR_A = 10.0                # e.g., 12.5A  → 125 (0.1A step 가정)
-SCALE_RAMP_MS = 1.0                # 500~2000 ms  → 값 그대로
-SCALE_ARC_US  = 1.0                # 0~5 us, 40~200 us → 값 그대로
+# ===== 통일된 스케일 상수 =====
+# (측정 raw -> 공학단위) 한 LSB가 얼마인지
+V_MEAS_V_PER_LSB = 1.0      # 1 count = 1 V
+I_MEAS_A_PER_LSB = 0.1      # 1 count = 0.1 A  (기존 SCALE_CURR_A=10.0과 대응)
+P_MEAS_W_PER_LSB = 10.0     # 1 count = 10 W   (기존 SCALE_POWER_W=0.1과 대응)
 
-# EnerPulse-5: Power setpoint = 10 W/step (0.01 kW/step)
-MAX_POWER_W = 1000
-POWER_SET_STEP_W = 10.0         # 10 W per step
-POWER_MEAS_STEP_W = 10.0         # 측정값도 10 W 단위면 동일 적용
+RAMP_MS_PER_LSB  = 1.0      # 1 count = 1 ms
+ARC_US_PER_LSB   = 1.0      # 1 count = 1 us
 
-# 읽기 스케일: P_W = raw / SCALE_POWER_W  이므로 10 W/step이면 0.1로 둔다.
-SCALE_POWER_W = 0.1            # raw / 0.1 = raw*10 W
+# (설정 공학단위 -> raw) 한 스텝 크기
+V_SET_STEP_V = 1.0          # 1 step = 1 V
+I_SET_STEP_A = 0.1          # 1 step = 0.1 A
+P_SET_STEP_W = 10.0         # 1 step = 10 W  (기존 POWER_SET_STEP_W)
+
+# 장비 정격(예: 1 kW면 1000)
+MAX_POWER_W = 1000          # → 10 W/step 기준 0..100 step
+
 
 DEBUG_PRINT = False
 
@@ -355,19 +359,19 @@ class AsyncDCPulse:
     async def set_reference(self, mode: Literal["V","I","P"], value: float):
         """0x83: 출력 레벨(참조) 설정 — 모드별 스케일 적용."""
         if mode.upper() == "V":
-            raw = int(round(value * SCALE_VOLT_V))
+            raw = int(round(value / V_SET_STEP_V))
         elif mode.upper() == "I":
-            raw = int(round(value * SCALE_CURR_A))
+            raw = int(round(value / I_SET_STEP_A))
         else:  # "P"
-            raw = int(round(float(value) / POWER_SET_STEP_W))
-            raw = max(0, min(MAX_POWER_W // POWER_SET_STEP_W, raw))
+            raw = int(round(float(value) / P_SET_STEP_W))
+            raw = max(0, min(int(MAX_POWER_W // P_SET_STEP_W), raw))
         await self._write_cmd_data(0x83, raw, 2, label=f"REF_{mode.upper()}({value})")
 
     async def set_reference_power(self, value_w: float) -> bool:
         """출력 레벨(전력) 설정 — 10 W/step → 0~500."""
         # 10 W/step → 0..500 (5 kW)
-        raw = int(round(float(value_w) / POWER_SET_STEP_W))
-        raw = max(0, min(MAX_POWER_W // POWER_SET_STEP_W, raw))
+        raw = int(round(float(value_w) / P_SET_STEP_W))
+        raw = max(0, min(int(MAX_POWER_W // P_SET_STEP_W), raw))
         return await self._write_cmd_data(0x83, raw, 2, label=f"REF_POWER({value_w:.0f}W)")
 
     async def output_on(self) -> bool:
@@ -400,10 +404,10 @@ class AsyncDCPulse:
     # ====== 선택: 기타 설정(원 코드 호환) ======
     async def set_arc_params(self, *, detection_us: float, pause_us: float,
                              arc_voltage_v: float|int, arc_current_a: float|int, soft_level: int):
-        await self._write_cmd_data(0x05, int(round(detection_us * SCALE_ARC_US)), 2, label="ARC_DET_US")
-        await self._write_cmd_data(0x06, int(round(pause_us * SCALE_ARC_US)), 2, label="ARC_PAUSE_US")
-        await self._write_cmd_data(0x07, int(round(float(arc_voltage_v) * SCALE_VOLT_V)), 2, label="ARC_VOLT_V")
-        await self._write_cmd_data(0x08, int(round(float(arc_current_a) * SCALE_CURR_A)), 2, label="ARC_CURR_A")
+        await self._write_cmd_data(0x05, int(round(detection_us / ARC_US_PER_LSB)), 2, label="ARC_DET_US")
+        await self._write_cmd_data(0x06, int(round(pause_us     / ARC_US_PER_LSB)), 2, label="ARC_PAUSE_US")
+        await self._write_cmd_data(0x07, int(round(float(arc_voltage_v) / V_SET_STEP_V)), 2, label="ARC_VOLT_V")
+        await self._write_cmd_data(0x08, int(round(float(arc_current_a) / I_SET_STEP_A)), 2, label="ARC_CURR_A")
         await self._write_cmd_data(0x09, int(soft_level), 2, label="SOFT_ARC_LV")
 
     async def set_shutdown(self, *, delay_ms: int, pause_ms: int):
@@ -411,15 +415,18 @@ class AsyncDCPulse:
         await self._write_cmd_data(0x0B, int(pause_ms), 2, label="SHDN_PAUSE_MS")
 
     async def set_limits(self, *, p_w: float, i_a: float, v_v: float):
-        p_raw = int(round(float(p_w) / POWER_SET_STEP_W))               # 10 W/step
-        p_raw = max(0, min(MAX_POWER_W // POWER_SET_STEP_W, p_raw))     # 0..500
+        p_raw = int(round(float(p_w) / P_SET_STEP_W))
+        p_raw = max(0, min(int(MAX_POWER_W // P_SET_STEP_W), p_raw))
+        i_raw = int(round(i_a / I_SET_STEP_A))
+        v_raw = int(round(v_v / V_SET_STEP_V))
+
         await self._write_cmd_data(0x0C, p_raw, 2, label="LIM_P_W")
-        await self._write_cmd_data(0x0D, int(round(i_a * SCALE_CURR_A)), 2, label="LIM_I_A")
-        await self._write_cmd_data(0x0E, int(round(v_v * SCALE_VOLT_V)), 2, label="LIM_V_V")
+        await self._write_cmd_data(0x0D, i_raw, 2, label="LIM_I_A")
+        await self._write_cmd_data(0x0E, v_raw, 2, label="LIM_V_V")
 
     async def set_ramp_and_ignition(self, *, ramp_ms: int, ignition_v: float):
-        await self._write_cmd_data(0x0F, int(round(ramp_ms * SCALE_RAMP_MS)), 2, label="RAMP_MS")
-        await self._write_cmd_data(0x10, int(round(ignition_v * SCALE_VOLT_V)), 2, label="IGN_V")
+        await self._write_cmd_data(0x0F, int(round(ramp_ms   / RAMP_MS_PER_LSB)), 2, label="RAMP_MS")
+        await self._write_cmd_data(0x10, int(round(ignition_v / V_SET_STEP_V)),   2, label="IGN_V")
 
     # ====== 읽기(모니터링/상태) - 필요 시 확장 ======
     # 1) 원시 바이트를 그대로 돌려주는 읽기 헬퍼
@@ -454,9 +461,9 @@ class AsyncDCPulse:
         I_raw = (data[2] << 8) | data[3]
         V_raw = (data[4] << 8) | data[5]
 
-        P_W = (P_raw / max(1e-9, SCALE_POWER_W))
-        I_A = (I_raw / max(1e-9, SCALE_CURR_A))
-        V_V = (V_raw / max(1e-9, SCALE_VOLT_V))
+        P_W = P_raw * P_MEAS_W_PER_LSB
+        I_A = I_raw * I_MEAS_A_PER_LSB
+        V_V = V_raw * V_MEAS_V_PER_LSB
         return {"raw": {"P": P_raw, "I": I_raw, "V": V_raw},
                 "eng": {"P_W": P_W, "I_A": I_A, "V_V": V_V}}
     
