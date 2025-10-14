@@ -1102,11 +1102,14 @@ class ProcessController:
         dc_pulse_power = float(params.get("dc_pulse_power", 0))
         dc_pulse_freq  = params.get("dc_pulse_freq", None)
         dc_pulse_duty  = params.get("dc_pulse_duty", None)
-        if dc_pulse_freq is not None: dc_pulse_freq = int(dc_pulse_freq)
-        if dc_pulse_duty is not None: dc_pulse_duty = int(dc_pulse_duty)
+        if dc_pulse_freq is not None: 
+            dc_pulse_freq = int(dc_pulse_freq)          # UI: Hz
+            dc_pulse_freq = dc_pulse_freq / 1000.0      # → kHz로 변환
+        if dc_pulse_duty is not None: 
+            dc_pulse_duty = int(dc_pulse_duty)
 
         if use_dc_pulse:
-            f_txt = f"{dc_pulse_freq}Hz" if dc_pulse_freq is not None else "keep"
+            f_txt = f"{dc_pulse_freq}kHz" if dc_pulse_freq is not None else "keep"
             d_txt = f"{dc_pulse_duty}%" if dc_pulse_duty is not None else "keep"
             steps.append(ProcessStep(
                 action=ActionType.DC_PULSE_START, value=dc_pulse_power,

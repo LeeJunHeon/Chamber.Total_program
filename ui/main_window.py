@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 ################################################################################
-## Form generated from reading UI file 'CH1&2NBheOP.ui'
+## Form generated from reading UI file 'CH1&2SFJROB.ui'
 ##
 ## Created by: Qt User Interface Compiler version 6.9.1
 ##
@@ -230,7 +230,7 @@ class Ui_Form(object):
         self.ch1_dcPulseDutyCycle_edit.setGeometry(QRect(10, 530, 201, 31))
         self.ch1_dcPulseDutyCycle_label = QLabel(self.page)
         self.ch1_dcPulseDutyCycle_label.setObjectName(u"ch1_dcPulseDutyCycle_label")
-        self.ch1_dcPulseDutyCycle_label.setGeometry(QRect(10, 510, 151, 21))
+        self.ch1_dcPulseDutyCycle_label.setGeometry(QRect(10, 510, 171, 21))
         self.ch1_dcPulseDutyCycle_label.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
         self.ch1_Sputtering_label = QLabel(self.page)
         self.ch1_Sputtering_label.setObjectName(u"ch1_Sputtering_label")
@@ -290,7 +290,7 @@ class Ui_Form(object):
         self.ch1_Ar_checkbox.setGeometry(QRect(10, 310, 41, 24))
         self.ch1_dcPulseFreq_label = QLabel(self.page)
         self.ch1_dcPulseFreq_label.setObjectName(u"ch1_dcPulseFreq_label")
-        self.ch1_dcPulseFreq_label.setGeometry(QRect(10, 460, 101, 21))
+        self.ch1_dcPulseFreq_label.setGeometry(QRect(10, 460, 141, 21))
         self.ch1_dcPulseFreq_label.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
         self.ch1_shutterDelay_edit = QPlainTextEdit(self.page)
         self.ch1_shutterDelay_edit.setObjectName(u"ch1_shutterDelay_edit")
@@ -670,7 +670,7 @@ class Ui_Form(object):
 
         self.retranslateUi(Form)
 
-        self.stackedWidget.setCurrentIndex(0)
+        self.stackedWidget.setCurrentIndex(1)
 
 
         QMetaObject.connectSlotsByName(Form)
@@ -713,7 +713,7 @@ class Ui_Form(object):
         self.ch1_shutterDelay_label.setText(QCoreApplication.translate("Form", u"Shutter Delay [min]", None))
         self.ch1_Current_label.setText(QCoreApplication.translate("Form", u"Current", None))
         self.ch1_Power_label.setText(QCoreApplication.translate("Form", u"Power", None))
-        self.ch1_dcPulseDutyCycle_label.setText(QCoreApplication.translate("Form", u"DC Pulse Duty Cycle", None))
+        self.ch1_dcPulseDutyCycle_label.setText(QCoreApplication.translate("Form", u"DC Pulse Duty Cycle [%]", None))
         self.ch1_Sputtering_label.setText(QCoreApplication.translate("Form", u"CH.1 Sputtering", None))
         self.ch1_Voltage_label.setText(QCoreApplication.translate("Form", u"Voltage", None))
         self.ch1_dcPulsePower_checkbox.setText(QCoreApplication.translate("Form", u"DC Pulse Power [W]", None))
@@ -723,7 +723,7 @@ class Ui_Form(object):
         self.ch1_mainShutter_checkbox.setText(QCoreApplication.translate("Form", u"M.S. Open", None))
         self.ch1_powerSelect_checkbox.setText(QCoreApplication.translate("Form", u"P.W. Select", None))
         self.ch1_Ar_checkbox.setText(QCoreApplication.translate("Form", u"Ar", None))
-        self.ch1_dcPulseFreq_label.setText(QCoreApplication.translate("Form", u"DC Pulse Freq", None))
+        self.ch1_dcPulseFreq_label.setText(QCoreApplication.translate("Form", u"DC Pulse Freq [kHz]", None))
         self.ch1_workingPressure_label.setText(QCoreApplication.translate("Form", u"Working Pressure [mTorr]", None))
         self.ch1_forP_label.setText(QCoreApplication.translate("Form", u"For .P", None))
         self.ch1_processList_label.setText(QCoreApplication.translate("Form", u"Process List", None))

@@ -1,81 +1,209 @@
 # main_tsp.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-import asyncio, argparse, sys
+import asyncio, contextlib
+from typing import Optional
 from datetime import datetime
 
-# 장비
+# 장비/컨트롤러
 from device.ig import AsyncIG
 from device.tsp import AsyncTSP
 from controller.tsp_controller import TSPProcessController, TSPRunConfig
 
-# CH1 기본(필요시 인자에서 변경)
-DEFAULT_HOST = "192.168.1.50"
-DEFAULT_IG_PORT  = 4001   # CH1 IG (MOXA 1번 포트)
-DEFAULT_TSP_PORT = 4004   # TSP (네가 1:1 테스트했던 포트)
+# 설정(기본값)
+DEFAULT_HOST      = "192.168.1.50"
+DEFAULT_IG_PORT   = 4001     # CH1 IG
+DEFAULT_TSP_PORT  = 4004     # TSP
+DWELL_SEC         = 150.0    # 2분 30초
+POLL_SEC          = 5.0      # 5초
+VERIFY_WITH_STATUS = True    # TSP on/off 후 205 확인
 
-def _ts():
+def _ts() -> str:
     return datetime.now().strftime("%H:%M:%S")
 
-def make_logger(prefix: str):
-    def _log(msg: str):
-        print(f"[{_ts()}] {prefix} {msg}")
-    return _log
+class TSPPageController:
+    """
+    UI 페이지용 컨트롤러:
+      - 로그는 ui.pc_logMessage_edit에 출력(없으면 print)
+      - 입력: 목표 압력/반복 횟수만 읽어 실행
+      - Start/Stop 버튼이 있으면 자동 연결(이름 패턴 지원)
+    """
+    def __init__(
+        self,
+        ui,
+        *,
+        host: str = DEFAULT_HOST,
+        tcp_port: int = DEFAULT_TSP_PORT,
+        addr: int = 0x01,           # ← main.py 호환용(무시)
+        loop: Optional[asyncio.AbstractEventLoop] = None,
+        ig: Optional[AsyncIG] = None,  # CH1 IG를 외부에서 주입 가능(없으면 내부 생성)
+    ) -> None:
+        self.ui = ui
+        self.loop = loop or asyncio.get_event_loop()
+        self.host = host
+        self.tsp_port = int(tcp_port)
+        self.ig_port = DEFAULT_IG_PORT
 
-async def amain(args):
-    # 장비 인스턴스
-    ig  = AsyncIG(host=args.host, port=args.ig_port)
-    tsp = AsyncTSP(host=args.host, port=args.tsp_port)
+        self._ig_ext = ig is not None
+        self.ig: Optional[AsyncIG] = ig
+        self.tsp: Optional[AsyncTSP] = None
+        self._task: Optional[asyncio.Task] = None
+        self._busy = False
 
-    # 콜백(콘솔 프린트)
-    def log_cb(msg: str): print(f"[{_ts()}] {msg}")
-    def state_cb(s: str): print(f"[{_ts()}] [STATE] {s}")
-    def pressure_cb(p: float): print(f"[{_ts()}] [IG] P={p:.3e}")
-    def cycle_cb(cur: int, total: int): print(f"[{_ts()}] [TSP] cycle {cur}/{total} 완료")
+        # 버튼 자동 연결(있을 때만)
+        self._connect_buttons()
 
-    ctrl = TSPProcessController(
-        tsp=tsp, ig=ig,
-        log_cb=log_cb, state_cb=state_cb,
-        pressure_cb=pressure_cb, cycle_cb=cycle_cb,
-        turn_off_ig_on_finish=True,
-    )
+    # ── UI 헬퍼 ─────────────────────────────────────────────
+    def _log(self, msg: str) -> None:
+        edit = getattr(self.ui, "pc_logMessage_edit", None)
+        if edit is not None:
+            try:
+                edit.appendPlainText(f"[{_ts()}] {msg}")
+                return
+            except Exception:
+                pass
+        print(f"[{_ts()}] {msg}")
 
-    cfg = TSPRunConfig(
-        target_pressure=args.target,
-        cycles=args.cycles,
-        dwell_sec=args.dwell_sec,
-        poll_sec=args.poll_sec,
-        verify_with_status=True,  # TSP on/off 시 205 상태 확인(원치 않으면 False)
-    )
+    def _read_target(self) -> float:
+        # 후보 위젯명: pc_target_edit, TSP_target_edit, pc_target, ...
+        for name in ("pc_target_edit", "TSP_target_edit", "pc_target", "tsp_target"):
+            w = getattr(self.ui, name, None)
+            if w is None: continue
+            try:
+                txt = w.text().strip()
+                return float(txt)
+            except Exception:
+                pass
+        # 스핀박스류 후보
+        for name in ("pc_target_spin", "TSP_target_spin"):
+            w = getattr(self.ui, name, None)
+            if w is None: continue
+            try:
+                return float(w.value())
+            except Exception:
+                pass
+        raise ValueError("목표 압력 입력 위젯을 찾을 수 없거나 숫자 변환 실패")
 
-    print(f"=== TSP 공정 시작 === host={args.host} ig={args.ig_port} tsp={args.tsp_port} "
-          f"target={args.target} cycles={args.cycles} dwell={args.dwell_sec}s poll={args.poll_sec}s")
+    def _read_cycles(self) -> int:
+        # 후보 위젯명: pc_cycle_edit, TSP_setCycle_edit, pc_cycles, ...
+        for name in ("pc_cycle_edit", "TSP_setCycle_edit", "pc_cycles", "tsp_cycles"):
+            w = getattr(self.ui, name, None)
+            if w is None: continue
+            try:
+                txt = w.text().strip()
+                v = int(txt)
+                if v >= 1: return v
+            except Exception:
+                pass
+        # 스핀박스류 후보
+        for name in ("pc_cycle_spin", "TSP_cycle_spin"):
+            w = getattr(self.ui, name, None)
+            if w is None: continue
+            try:
+                v = int(w.value())
+                if v >= 1: return v
+            except Exception:
+                pass
+        raise ValueError("반복 횟수 입력 위젯을 찾을 수 없거나 정수 변환 실패(>=1)")
 
-    result = await ctrl.run(cfg)
+    def _connect_buttons(self) -> None:
+        # 가능한 이름들을 순회하며 첫 매칭만 연결
+        start_names = ("pc_btnStart", "TSP_btnStart", "tsp_btnStart")
+        stop_names  = ("pc_btnStop",  "TSP_btnStop",  "tsp_btnStop")
+        for n in start_names:
+            b = getattr(self.ui, n, None)
+            if b is not None:
+                try:
+                    b.clicked.connect(self.on_start_clicked)  # type: ignore[attr-defined]
+                    break
+                except Exception:
+                    pass
+        for n in stop_names:
+            b = getattr(self.ui, n, None)
+            if b is not None:
+                try:
+                    b.clicked.connect(self.on_stop_clicked)   # type: ignore[attr-defined]
+                    break
+                except Exception:
+                    pass
 
-    print("\n=== 결과 ===")
-    print(f" success       : {result.success}")
-    print(f" cycles_done   : {result.cycles_done}")
-    print(f" final_pressure: {result.final_pressure:.3e}" if result.final_pressure==result.final_pressure else " final_pressure: NaN")
-    print(f" reason        : {result.reason}")
+    # ── Start/Stop 핸들러 ──────────────────────────────────
+    def on_start_clicked(self) -> None:
+        if self._busy:
+            self._log("이미 실행 중입니다.")
+            return
+        try:
+            target = self._read_target()
+            cycles = self._read_cycles()
+        except Exception as e:
+            self._log(f"[ERROR] 입력 파싱 실패: {e}")
+            return
+        self._busy = True
+        self._task = asyncio.create_task(self._run(target, cycles))
 
-def main(argv=None):
-    p = argparse.ArgumentParser(description="CH1 IG + TSP 공정 실행기")
-    p.add_argument("--host", default=DEFAULT_HOST)
-    p.add_argument("--ig-port", type=int, default=DEFAULT_IG_PORT)
-    p.add_argument("--tsp-port", type=int, default=DEFAULT_TSP_PORT)
-    p.add_argument("--target", type=float, required=True, help="목표 압력(이하 도달 시 종료)")
-    p.add_argument("--cycles", type=int, required=True, help="TSP ON/OFF 반복 횟수")
-    p.add_argument("--dwell-sec", type=float, default=150.0, help="ON/OFF 사이 대기(초)")
-    p.add_argument("--poll-sec", type=float, default=5.0, help="IG 압력 폴링 간격(초)")
-    args = p.parse_args(argv)
+    def on_stop_clicked(self) -> None:
+        if self._task and not self._task.done():
+            self._log("중단 요청")
+            self._task.cancel()
 
-    try:
-        asyncio.run(amain(args))
-    except KeyboardInterrupt:
-        print("\n[사용자 중단] KeyboardInterrupt")
-        return 2
-    return 0
+    # ── 내부 실행 루틴 ─────────────────────────────────────
+    async def _run(self, target: float, cycles: int) -> None:
+        try:
+            # 장비 인스턴스 준비
+            if self.ig is None:
+                self.ig = AsyncIG(host=self.host, port=self.ig_port)
+            self.tsp = AsyncTSP(host=self.host, port=self.tsp_port)
 
-if __name__ == "__main__":
-    sys.exit(main())
+            # 콜백
+            def state_cb(s: str): self._log(f"[STATE] {s}")
+            def pressure_cb(p: float): self._log(f"[IG] P={p:.3e}")
+            def cycle_cb(cur: int, total: int): self._log(f"[TSP] cycle {cur}/{total} 완료")
+
+            ctrl = TSPProcessController(
+                tsp=self.tsp, ig=self.ig,
+                log_cb=self._log, state_cb=state_cb,
+                pressure_cb=pressure_cb, cycle_cb=cycle_cb,
+                turn_off_ig_on_finish=True,  # 종료 시 IG OFF
+            )
+
+            cfg = TSPRunConfig(
+                target_pressure=target,
+                cycles=cycles,
+                dwell_sec=DWELL_SEC,
+                poll_sec=POLL_SEC,
+                verify_with_status=VERIFY_WITH_STATUS,
+            )
+
+            self._log(f"=== TSP 공정 시작 === host={self.host} ig={self.ig_port} tsp={self.tsp_port} "
+                      f"target={target} cycles={cycles} dwell={DWELL_SEC}s poll={POLL_SEC}s")
+            result = await ctrl.run(cfg)
+
+            self._log("=== 결과 ===")
+            self._log(f" success       : {result.success}")
+            if result.final_pressure == result.final_pressure:
+                self._log(f" final_pressure: {result.final_pressure:.3e}")
+            else:
+                self._log(" final_pressure: NaN")
+            self._log(f" cycles_done   : {result.cycles_done}")
+            self._log(f" reason        : {result.reason}")
+
+        except asyncio.CancelledError:
+            self._log("[사용자 중단]")
+        except Exception as e:
+            self._log(f"[ERROR] 실행 실패: {e!r}")
+        finally:
+            # 안전 정리: TSP OFF + 연결 닫기, IG OFF(내부 정책에 따라)
+            with contextlib.suppress(Exception):
+                if self.tsp:
+                    await self.tsp.off()
+            with contextlib.suppress(Exception):
+                if self.tsp:
+                    await self.tsp.aclose()
+            if not self._ig_ext:
+                with contextlib.suppress(Exception):
+                    if self.ig:
+                        await self.ig.ensure_off()
+                self.ig = None
+            self.tsp = None
+            self._busy = False
+            self._task = None

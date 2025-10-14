@@ -499,36 +499,44 @@ class ChamberRuntime:
             async def run():
                 try:
                     self._ensure_background_started()
+
+                    # 초기화
                     try:
                         if getattr(self.oes, "sChannel", -1) < 0:
                             ok = await self.oes.initialize_device()
                             if not ok:
                                 raise RuntimeError("OES 초기화 실패")
                     except Exception as e:
-                        self.append_log("OES", f"초기화 실패: {e!r} → 그래프 없이 다음 단계")
+                        self.append_log("OES", f"초기화 실패: {e!r} → 종료 절차로 전환")
                         if self.chat:
                             with contextlib.suppress(Exception):
-                                self.chat.notify_text(f"[OES] 초기화 실패: {e!r} → 건너뜀", ch=self.ch)
-                        self.process_controller.on_oes_ok()
+                                self.chat.notify_text(f"[OES] 초기화 실패: {e!r}", ch=self.ch)
+                        self.process_controller.on_oes_failed("OES", f"init: {e}")
                         return
 
                     self._soon(self._safe_clear_oes_plot)
 
+                    # 측정
                     try:
                         await self.oes.run_measurement(duration_sec, integration_ms)
                     except Exception as e:
-                        self.append_log("OES", f"측정 예외: {e!r} → 다음 단계")
+                        self.append_log("OES", f"측정 예외: {e!r} → 종료 절차로 전환")
                         if self.chat:
                             with contextlib.suppress(Exception):
-                                self.chat.notify_text(f"[OES] 측정 실패: {e!r} → 건너뜀", ch=self.ch)
-                        self.process_controller.on_oes_ok()
+                                self.chat.notify_text(f"[OES] 측정 실패: {e!r}", ch=self.ch)
+                        self.process_controller.on_oes_failed("OES", f"measure: {e}")
+                        return
+
+                    # ✅ 정상 완료 시에는 여기서 아무 것도 호출하지 않음
+                    # (success 처리는 OES 이벤트 pump의 'finished'에서 단일 경로로)
 
                 except Exception as e:
-                    self.append_log("OES", f"예상치 못한 예외: {e!r} → 다음 단계")
+                    self.append_log("OES", f"예상치 못한 예외: {e!r} → 종료 절차로 전환")
                     if self.chat:
                         with contextlib.suppress(Exception):
-                            self.chat.notify_text(f"[OES] 예외: {e!r} → 건너뜀", ch=self.ch)
-                    self.process_controller.on_oes_ok()
+                            self.chat.notify_text(f"[OES] 예외: {e!r}", ch=self.ch)
+                    self.process_controller.on_oes_failed("OES", f"unexpected: {e}")
+
             self._spawn_detached(run())
 
         def cb_rga_scan():
@@ -920,17 +928,23 @@ class ChamberRuntime:
                     else:
                         self.append_log(f"OES{self.ch}", f"경고: 데이터 필드 없음: kind={k}")
                     continue
-                if k == "finished":
-                    if bool(getattr(ev, "success", False)):
+                elif k == "finished":
+                    ok = bool(getattr(ev, "success", False))
+                    if ok:
+                        # 성공
+                        self.append_log(f"OES{self.ch}", ev.message or "측정 완료")
                         self.process_controller.on_oes_ok()
                     else:
+                        # 실패
                         why = getattr(ev, "message", "measure failed")
-                        self.append_log(f"OES{self.ch}", f"측정 실패: {why} → 다음 단계")
+                        self.append_log(f"OES{self.ch}", f"측정 실패: {why} → 종료 절차로 전환")
                         if self.chat:
                             with contextlib.suppress(Exception):
-                                self.chat.notify_text(f"[OES{self.ch}] 측정 실패: {why} → 건너뜀", ch=self.ch)
-                        self.process_controller.on_oes_ok()
+                                # 실패는 error 채널로 알림을 주는 게 구분이 더 명확합니다
+                                self.chat.notify_error_with_src(f"OES{self.ch}", f"측정 실패: {why}")
+                        self.process_controller.on_oes_failed("OES", why)
                     continue
+
                 self.append_log(f"OES{self.ch}", f"알 수 없는 이벤트: {ev!r}")
             except Exception as e:
                 self.append_log(f"OES{self.ch}", f"이벤트 처리 예외: {e!r}")
