@@ -214,17 +214,19 @@ class OESAsync:
             return r, None
         return r, np.asarray(buf[:npix], dtype=float)
 
-    def _try_fetch_wl(self, ch: int, maxlen: int = 8192) -> Optional[np.ndarray]:
+    # after  ← r >= 0 이면 성공으로 보고, 길이는 'length_hint'로 고정
+    def _try_fetch_wl(self, ch: int, length_hint: int) -> Optional[np.ndarray]:
         if not self._get_wl:
             return None
-        arr = (ctypes.c_double * maxlen)()
+        n = max(1, int(length_hint))
+        buf = (ctypes.c_double * n)()
         try:
-            r = int(self._get_wl(arr, ctypes.c_int16(ch)))  # type: ignore
+            r = int(self._get_wl(buf, ctypes.c_int16(ch)))  # type: ignore
         except Exception:
             return None
-        if r > 10:
-            return np.asarray(arr[:r], dtype=float)
-        return None
+        if r < 0:  # 음수면 실패
+            return None
+        return np.asarray(buf, dtype=float)
 
     def _pick_model_with_probe(self, ch: int) -> int | None:
         """PDA → G9212 → SONY → TOSHIBA → S10420 순서로 init 시도"""
@@ -241,23 +243,25 @@ class OESAsync:
         return None
 
     def _ensure_npixels(self, ch: int, model: int) -> int:
-        """WL 길이를 우선 사용, 없으면 모델 테이블/후보로 유추"""
-        # WL 우선 (이전 버전 방식)
-        wl = self._try_fetch_wl(ch)
-        if wl is not None and wl.size > 10:
-            self._wl = wl
-            return int(wl.size)
-
-        # WL 실패 → 모델 테이블 + 후보로 1회 읽어 검증
-        self._wl = None
-        npix = int(PIXELS.get(model, 2048))
-        rc, arr = self._read_pixels(ch, npix)
+        # 1) 실제 픽셀 길이부터 확정
+        guess = int(PIXELS.get(model, 2048))
+        rc, arr = self._read_pixels(ch, guess)
         if rc >= 0 and arr is not None and arr.size > 10:
-            return int(arr.size)
-        for cand in CANDIDATE_PIXELS:
-            rc2, arr2 = self._read_pixels(ch, cand)
-            if rc2 >= 0 and arr2 is not None and arr2.size > 10:
-                return int(arr2.size)
+            npix = int(arr.size)
+        else:
+            npix = guess
+            for cand in CANDIDATE_PIXELS:
+                rc2, arr2 = self._read_pixels(ch, cand)
+                if rc2 >= 0 and arr2 is not None and arr2.size > 10:
+                    npix = int(arr2.size)
+                    break
+
+        # 2) 그 길이에 맞춰 WL 재획득(성공 시 nm축 사용)
+        wl = self._try_fetch_wl(ch, npix)
+        if wl is not None and wl.size >= min(npix, ROI_END_DEFAULT):
+            self._wl = wl[:npix]
+        else:
+            self._wl = None
         return npix
 
     def _apply_device_settings_blocking(self, ch: int, integration_time_ms: int):
@@ -438,7 +442,8 @@ class OESAsync:
         await self._cancel_task("_deadline_task")
         await self._cancel_task("_acq_task")
 
-        if was_successful and self.measured_rows:
+        # 성공/중단과 무관하게, 한 줄이라도 있으면 저장
+        if self.measured_rows:
             try:
                 await self._call(self._save_data_to_csv_wide_blocking)
             except Exception as e:
@@ -470,6 +475,8 @@ class OESAsync:
             w = csv.writer(f)
             w.writerow(header)
             w.writerows(self.measured_rows)
+
+        self._ev_nowait(OESEvent(kind="status", message=f"[OES_CSV] 저장 완료: {full_path} (rows={len(self.measured_rows)})"))
 
     def _safe_close_channel_blocking(self):
         try:

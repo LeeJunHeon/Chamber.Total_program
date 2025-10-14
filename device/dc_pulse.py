@@ -130,7 +130,7 @@ SCALE_ARC_US  = 1.0                # 0~5 us, 40~200 us → 값 그대로
 
 # EnerPulse-5: Power setpoint = 10 W/step (0.01 kW/step)
 MAX_POWER_W = 1000
-POWER_SET_STEP_W = 10          # 10 W per step
+POWER_SET_STEP_W = 100         # 10 W per step
 POWER_MEAS_STEP_W = 10         # 측정값도 10 W 단위면 동일 적용
 
 # 읽기 스케일: P_W = raw / SCALE_POWER_W  이므로 10 W/step이면 0.1로 둔다.
@@ -368,8 +368,7 @@ class AsyncDCPulse:
         # 1) 항상 Host 권한으로 고정
         await self.set_master_host_all()
 
-        # 2) 제어 모드 = Power
-        await self.set_regulation_power()
+
 
         # 3) 펄스 파라미터(옵션): sync / freq / duty
         #    EnerPulse 통신 명령: 0x65(Pulse Sync), 0x66(Pulse Freq[kHz 20~150]),
@@ -398,6 +397,9 @@ class AsyncDCPulse:
         # duty만 숫자인 경우(주파수 미지정)는 off_time_us 계산 불가 → 유지
         # 필요하면 별도 API(set_off_time_us)로 직접 지정하세요.
         '''
+
+        # 2) 제어 모드 = Power
+        await self.set_regulation_power()
 
         # 4) 출력 Setpoint(Power) 설정
         ok = await self.set_reference_power(power_w)
@@ -512,53 +514,48 @@ class AsyncDCPulse:
     # 2) 현재 출력값 P/I/V 읽기 (0x9A → P,I,V 각 2바이트)
     async def read_output_piv(self) -> Optional[dict]:
         resp = await self._read_raw(0x9A, "READ_PIV")
-        
-        # ERR 응답 처리 추가
         if not resp:
             await self._emit_status("READ_PIV: 응답 없음")
             return None
-        
+
+        # NAK(읽기 불가) → None
         if len(resp) == 1 and resp[0] == 0x04:
-            # ERR 응답은 실패가 아니라 "읽기 불가 상태"로 처리
             await self._emit_status("READ_PIV: 장비가 읽기 불가 상태(ERR)")
             return None
-        
-        if len(resp) < 1 + 6:
-            await self._emit_status("READ_PIV", f"응답 길이 오류: {resp!r}")
+
+        # 어떤 형태든 '뒤에서 6바이트'를 P,I,V로 해석 (CMD 유무 무시)
+        if len(resp) < 6:
+            await self._emit_status("READ_PIV", f"응답 길이 부족: {resp!r}")
             return None
-        
-        # 정상 데이터 파싱
-        data = resp[1:]
+
+        data = resp[-6:]  # 항상 꼬리 6바이트 사용
         P_raw = (data[0] << 8) | data[1]
         I_raw = (data[2] << 8) | data[3]
         V_raw = (data[4] << 8) | data[5]
-        
+
         P_W = (P_raw / max(1e-9, SCALE_POWER_W))
         I_A = (I_raw / max(1e-9, SCALE_CURR_A))
         V_V = (V_raw / max(1e-9, SCALE_VOLT_V))
-        
-        return {
-            "raw": {"P": P_raw, "I": I_raw, "V": V_raw},
-            "eng": {"P_W": P_W, "I_A": I_A, "V_V": V_V},
-        }
+        return {"raw": {"P": P_raw, "I": I_raw, "V": V_raw},
+                "eng": {"P_W": P_W, "I_A": I_A, "V_V": V_V}}
     
     # 3) 현재 Control Mode 읽기 (0x9C)
     async def read_control_mode(self) -> Optional[str]:
         resp = await self._read_raw(0x9C, "READ_CTRL_MODE")
-        if not resp or len(resp) < 1 + 2:
-            await self._emit_failed("READ_CTRL_MODE", f"응답 길이 오류: {resp!r}")
+        if not resp or len(resp) < 2:
+            await self._emit_failed("READ_CTRL_MODE", f"응답 길이 부족: {resp!r}")
             return None
-        val = ((resp[-2] << 8) | resp[-1]) & 0xFF
+        val = ((resp[-2] << 8) | resp[-1]) & 0xFF  # 뒤 2바이트만
         mapping = {1: "HOST", 2: "REMOTE", 4: "LOCAL"}
         return mapping.get(val, f"UNKNOWN({val})")
 
     # 4) Fault Code 읽기 (0x9E)
     async def read_fault_code(self) -> Optional[int]:
         resp = await self._read_raw(0x9E, "READ_FAULT")
-        if not resp or len(resp) < 1 + 2:
-            await self._emit_failed("READ_FAULT", f"응답 길이 오류: {resp!r}")
+        if not resp or len(resp) < 2:
+            await self._emit_failed("READ_FAULT", f"응답 길이 부족: {resp!r}")
             return None
-        return (resp[-2] << 8) | resp[-1]
+        return (resp[-2] << 8) | resp[-1]  # 뒤 2바이트
 
     # ====== 내부: 명령 헬퍼 ======
     def _ok_from_resp(self, resp: Optional[bytes]) -> bool:
@@ -680,12 +677,11 @@ class AsyncDCPulse:
             return False
 
     async def read_status_flags(self) -> Optional[int]:
-        # 0x90: Status mode 비트필드 2바이트 반환 (payload: [CMD][hi][lo])
         resp = await self._read_raw(0x90, "READ_STATUS")
-        if not resp or len(resp) < 1 + 2:
-            await self._emit_failed("READ_STATUS", f"응답 길이 오류: {resp!r}")
+        if not resp or len(resp) < 2:
+            await self._emit_failed("READ_STATUS", f"응답 길이 부족: {resp!r}")
             return None
-        return (resp[-2] << 8) | resp[-1]
+        return (resp[-2] << 8) | resp[-1]  # 뒤 2바이트
 
     @staticmethod
     def _hv_on_from_status(flags: int) -> bool:
