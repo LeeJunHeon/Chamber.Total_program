@@ -16,17 +16,6 @@ TSP_TCP_KEEPALIVE = False
 DCP_TCP_KEEPALIVE = False
 RFP_TCP_KEEPALIVE = False
 
-# === Google Chat 알림 ===
-def _get_local(name, default=None):
-    try:
-        from . import config_local as _cl  # (선택) 로컬 오버라이드
-        return getattr(_cl, name, default)
-    except Exception:
-        return default
-
-CHAT_WEBHOOK_URL = os.environ.get("CHAT_WEBHOOK_URL") or _get_local("CHAT_WEBHOOK_URL") or None
-ENABLE_CHAT_NOTIFY = True
-
 # === 디버그 프린트 여부 ===
 DEBUG_PRINT = False
 

@@ -408,7 +408,7 @@ class ChamberRuntime:
                     self.process_controller.on_plc_failed(nname, str(e))
                     if self.chat:
                         with contextlib.suppress(Exception):
-                            self.chat.notify_error_with_src("PLC", f"{nname}: {e}")
+                            self.chat.notify_error_with_src("PLC", f"{nname}: {e}", ch=self.ch)
                     self.append_log("PLC", f"명령 실패: {raw} -> {onb}: {e!r}")
             self._spawn_detached(run())
 
@@ -508,7 +508,7 @@ class ChamberRuntime:
                         self.append_log("OES", f"초기화 실패: {e!r} → 그래프 없이 다음 단계")
                         if self.chat:
                             with contextlib.suppress(Exception):
-                                self.chat.notify_text(f"[OES] 초기화 실패: {e!r} → 건너뜀")
+                                self.chat.notify_text(f"[OES] 초기화 실패: {e!r} → 건너뜀", ch=self.ch)
                         self.process_controller.on_oes_ok()
                         return
 
@@ -520,14 +520,14 @@ class ChamberRuntime:
                         self.append_log("OES", f"측정 예외: {e!r} → 다음 단계")
                         if self.chat:
                             with contextlib.suppress(Exception):
-                                self.chat.notify_text(f"[OES] 측정 실패: {e!r} → 건너뜀")
+                                self.chat.notify_text(f"[OES] 측정 실패: {e!r} → 건너뜀", ch=self.ch)
                         self.process_controller.on_oes_ok()
 
                 except Exception as e:
                     self.append_log("OES", f"예상치 못한 예외: {e!r} → 다음 단계")
                     if self.chat:
                         with contextlib.suppress(Exception):
-                            self.chat.notify_text(f"[OES] 예외: {e!r} → 건너뜀")
+                            self.chat.notify_text(f"[OES] 예외: {e!r} → 건너뜀", ch=self.ch)
                     self.process_controller.on_oes_ok()
             self._spawn_detached(run())
 
@@ -545,7 +545,7 @@ class ChamberRuntime:
                     self.append_log("RGA", msg)
                     if self.chat:
                         with contextlib.suppress(Exception):
-                            self.chat.notify_text(f"[RGA] {msg}")
+                            self.chat.notify_text(f"[RGA] {msg}", ch=self.ch)
                     self.process_controller.on_rga_finished()
             self._spawn_detached(_run())
 
@@ -603,7 +603,7 @@ class ChamberRuntime:
                     self._soon(self._graph_reset_safe)
                     if self.chat:
                         with contextlib.suppress(Exception):
-                            self.chat.notify_process_started(payload.get("params", {}))
+                            self.chat.notify_process_finished_detail(ok, detail, ch=self.ch)
                     self._last_polling_targets = None
 
                 elif kind == "finished":
@@ -661,7 +661,7 @@ class ChamberRuntime:
                 elif kind == "aborted":
                     if self.chat:
                         with contextlib.suppress(Exception):
-                            self.chat.notify_text(f"🛑 CH{self.ch} 공정 중단")
+                            self.chat.notify_text(f"🛑 CH{self.ch} 공정 중단", ch=self.ch)
                     with contextlib.suppress(Exception):
                         self._clear_queue_and_reset_ui()
 
@@ -728,7 +728,7 @@ class ChamberRuntime:
                 self.process_controller.on_mfc_failed(ev.cmd or "", why)
                 if self.chat:
                     with contextlib.suppress(Exception):
-                        self.chat.notify_error_with_src(f"MFC{self.ch}", f"{ev.cmd or ''}: {why}")
+                        self.chat.notify_error_with_src(f"MFC{self.ch}", f"{ev.cmd or ''}: {why}", ch=self.ch)
             elif k == "flow":
                 gas = ev.gas or ""
                 flow = float(ev.value or 0.0)
@@ -761,7 +761,7 @@ class ChamberRuntime:
                 self.process_controller.on_ig_failed("IG", why)
                 if self.chat:
                     with contextlib.suppress(Exception):
-                        self.chat.notify_error_with_src(f"IG{self.ch}", why)
+                        self.chat.notify_error_with_src(f"IG{self.ch}", why, ch=self.ch)
 
     async def _pump_rga_events(self) -> None:
         adapter = self.rga
@@ -786,7 +786,7 @@ class ChamberRuntime:
                 self.append_log(tag, f"측정 실패: {why} → 다음 단계")
                 if self.chat:
                     with contextlib.suppress(Exception):
-                        self.chat.notify_text(f"[{tag}] 측정 실패: {why} → 건너뜀")
+                        self.chat.notify_text(f"[{tag}] 측정 실패: {why} → 건너뜀", ch=self.ch)
                 self.process_controller.on_rga_finished()
 
     async def _pump_dc_events(self) -> None:
@@ -830,7 +830,7 @@ class ChamberRuntime:
                 self.process_controller.on_rf_target_failed(why)
                 if self.chat:
                     with contextlib.suppress(Exception):
-                        self.chat.notify_error_with_src("RF Power", why)
+                        self.chat.notify_error_with_src("RF Power", why, ch=self.ch)
             elif k == "power_off_finished":
                 self.process_controller.on_device_step_ok()
 
@@ -854,7 +854,7 @@ class ChamberRuntime:
                 self.process_controller.on_rf_pulse_failed(why)
                 if self.chat:
                     with contextlib.suppress(Exception):
-                        self.chat.notify_error_with_src("RFPulse", why)
+                        self.chat.notify_error_with_src("RFPulse", why, ch=self.ch)
             elif k == "power_off_finished":
                 self.process_controller.on_rf_pulse_off_finished()
 
@@ -928,7 +928,7 @@ class ChamberRuntime:
                         self.append_log(f"OES{self.ch}", f"측정 실패: {why} → 다음 단계")
                         if self.chat:
                             with contextlib.suppress(Exception):
-                                self.chat.notify_text(f"[OES{self.ch}] 측정 실패: {why} → 건너뜀")
+                                self.chat.notify_text(f"[OES{self.ch}] 측정 실패: {why} → 건너뜀", ch=self.ch)
                         self.process_controller.on_oes_ok()
                     continue
                 self.append_log(f"OES{self.ch}", f"알 수 없는 이벤트: {ev!r}")

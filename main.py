@@ -45,12 +45,9 @@ class MainWindow(QWidget):
         }
 
         # === 공용(공유) 리소스만 이곳에서 생성 ===
-        # Chat Notifier (공통 config로 이동)
-        self.chat_notifier: ChatNotifier | None = (
-            ChatNotifier(cfgc.CHAT_WEBHOOK_URL) if getattr(cfgc, "ENABLE_CHAT_NOTIFY", False) else None
-        )
-        if self.chat_notifier:
-            self.chat_notifier.start()
+        # Chat Notifier: CH1/CH2 웹훅은 lib/config_local.py에서 자동 로드됨
+        self.chat_notifier: ChatNotifier = ChatNotifier(None)
+        self.chat_notifier.start()
 
         # ── 현재 PLC 로그의 소유 챔버 (1/2). 없으면 None → 방송 모드
         self._plc_owner: Optional[int] = None

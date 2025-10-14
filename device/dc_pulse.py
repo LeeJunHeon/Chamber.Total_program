@@ -300,6 +300,7 @@ class AsyncDCPulse:
         #                        0x67(Off Time: DC=9, 1.0~10.0us -> 10~100)
         if sync is not None:
             await self.set_pulse_sync(sync)  # 0x65
+        '''
 
         # freq/duty 모두 숫자면 off_time_us를 계산해서 0x67로 전송
         if not _is_keep(freq) and freq is not None:
@@ -321,8 +322,7 @@ class AsyncDCPulse:
 
         # duty만 숫자인 경우(주파수 미지정)는 off_time_us 계산 불가 → 유지
         # 필요하면 별도 API(set_off_time_us)로 직접 지정하세요.
-        '''
-
+        
         # 2) 제어 모드 = Power
         await self.set_regulation_power()
 

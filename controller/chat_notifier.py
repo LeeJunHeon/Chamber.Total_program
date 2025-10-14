@@ -1,4 +1,6 @@
 # controller/chat_notifier.py
+# -*- coding: utf-8 -*-
+
 from PySide6.QtCore import QObject, Slot
 import asyncio
 import json
@@ -7,35 +9,33 @@ import urllib.request
 from typing import Optional, List, Dict, Any, Set, Tuple
 
 # ── 채널별 웹훅은 여기서 읽음 ────────────────────────────────────────────────
+# lib/config_local.py 우선, 실패 시 루트의 config_local.py도 시도
 try:
-    import lib.config_local  # config_local.py에 CH1_CHAT_WEBHOOK_URL / CH2_CHAT_WEBHOOK_URL 정의
+    from lib import config_local as _cfg  # lib/config_local.py
 except Exception:
-    config_local = None
+    _cfg = None
 
 
 class ChatNotifier(QObject):
     """
     Google Chat 웹훅 알림 (asyncio 버전)
     - CH1/CH2를 구분해 서로 다른 Webhook URL로 라우팅
-    - QThread 제거. 모든 HTTP는 asyncio.to_thread로 오프로딩(메인/GUI 프리징 없음)
+    - 네트워크 I/O는 asyncio.to_thread로 오프로딩 → UI 프리징 방지
     - Qt 신호와 자연스럽게 연결할 수 있도록 QObject/Slot 유지
-    - main.py의 기존 인터페이스(start/shutdown/notify_*) 호환
     """
 
     def __init__(self, webhook_url: Optional[str], parent=None):
         super().__init__(parent)
 
-        # 기본(폴백) 웹훅
+        # 기본(폴백) 웹훅(옵션)
         self.webhook_default = (webhook_url or "").strip()
 
-        # 채널별 웹훅 (config_local 우선)
+        # 채널별 웹훅 (lib/config_local.py 우선)
         self.webhook_ch1 = ""
         self.webhook_ch2 = ""
-        if config_local is not None:
-            self.webhook_ch1 = getattr(config_local, "CH1_CHAT_WEBHOOK_URL", "") or ""
-            self.webhook_ch2 = getattr(config_local, "CH2_CHAT_WEBHOOK_URL", "") or ""
-        self.webhook_ch1 = self.webhook_ch1.strip()
-        self.webhook_ch2 = self.webhook_ch2.strip()
+        if _cfg is not None:
+            self.webhook_ch1 = (getattr(_cfg, "CH1_CHAT_WEBHOOK_URL", "") or "").strip()
+            self.webhook_ch2 = (getattr(_cfg, "CH2_CHAT_WEBHOOK_URL", "") or "").strip()
 
         # 지연 전송 & 버퍼 (payload, webhook_url) 튜플로 저장
         self._defer: bool = True
@@ -89,6 +89,7 @@ class ChatNotifier(QObject):
                 return default
 
     def _which_chamber(self, params: Optional[dict]) -> Optional[int]:
+        """params에 들어있는 힌트로 챔버(1/2)를 판별."""
         p = params or {}
         for k in ("ch", "channel", "chamber", "ui_ch", "ui_channel"):
             if k in p:
@@ -264,7 +265,8 @@ class ChatNotifier(QObject):
             return "—"
         return f"{int(f)}분" if abs(f - int(f)) < 1e-6 else f"{f:.1f}분"
 
-    # --- CH1/CH2 분기 전용 포맷터 (간결 버전) ---
+    # --- CH1/CH2 분기 전용 포맷터 ---
+    # CH1: 단일 건 + DC Pulse 중심
     def _guns_and_targets_ch1(self, p: dict) -> str:
         name = (p.get("ch1_gunTarget_name") or p.get("gunTarget_name") or
                 p.get("target_name") or p.get("gun_name") or "").strip()
@@ -289,6 +291,7 @@ class ChatNotifier(QObject):
             return f"DC {int(dcf)} W"
         return "—"
 
+    # CH2: 멀티 건 + DC / RF Pulse
     def _guns_and_targets_ch2(self, p: dict) -> str:
         out = []
         for gun, ck, nk in (("G1","ch2_G1_checkbox","ch2_g1Target_name"),
@@ -359,7 +362,7 @@ class ChatNotifier(QObject):
                 "Process Time": proc_time,
             },
             urgent=True,                # 시작 알림은 즉시
-            route_params=params         # 🔸 라우팅: 이 공정의 챔버로 보냄
+            route_params=params         # 라우팅: 이 공정의 챔버로 보냄
         )
 
     @Slot(bool, dict)
