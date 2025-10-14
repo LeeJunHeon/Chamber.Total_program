@@ -16,7 +16,7 @@ from controller.chat_notifier import ChatNotifier
 from device.plc import AsyncPLC
 
 # ▶ 런타임 래퍼
-from controller.chamber_runtime import ChamberRuntime           # ← 경로 정리
+from runtime.chamber_runtime import ChamberRuntime           # ← 경로 정리
 from runtime.plasma_cleaning_runtime import PlasmaCleaningRuntime   # ★ 필요 시 사용
 
 # 챔버별 설정
