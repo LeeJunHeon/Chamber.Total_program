@@ -203,6 +203,7 @@ class ChamberRuntime:
         cfg: Any,
         log_dir: Path,
         *,
+        mfc: Optional[AsyncMFC] = None,
         supports_dc_cont: Optional[bool] = None,   # DC 연속
         supports_rf_cont: Optional[bool] = None,   # RF 연속
         supports_dc_pulse: Optional[bool] = None,  # DC-Pulse
@@ -279,7 +280,10 @@ class ChamberRuntime:
         ig_host,  ig_port  = self.cfg.IG_TCP
 
         # FLOW_ON 시 실제 유량 일치 확인(안정화 루프)만 켬
-        self.mfc = AsyncMFC(host=mfc_host, port=mfc_port, enable_verify=False, enable_stabilization=True)
+        # 변경 (주입이 있으면 그대로 사용)
+        self.mfc = mfc or AsyncMFC(
+            host=mfc_host, port=mfc_port, enable_verify=False, enable_stabilization=True
+        )
         self.ig  = AsyncIG(host=ig_host,  port=ig_port)
 
         # OES 인스턴스 생성 시 현재 챔버 번호에 따라 USB 채널을 명시적으로 매핑한다.
@@ -377,6 +381,15 @@ class ChamberRuntime:
 
     # ------------------------------------------------------------------
     # 공정 컨트롤러 바인딩
+
+    # 클래스 내부 어딘가(예: _bind_process_controller 위/아래)
+    async def mfc_dispatch(self, cmd: str, args: Mapping[str, Any] | None = None, *, atomic: bool = False):
+        """같은 AsyncMFC 내부 큐로 안전하게 보냄. atomic=True면 짧은 시퀀스 원자 실행."""
+        if atomic:
+            async with self._mfc_seq_lock:
+                await self.mfc.handle_command(cmd, args or {})
+        else:
+            await self.mfc.handle_command(cmd, args or {})
 
     def _bind_process_controller(self) -> None:
         # === 콜백 정의(PLC/MFC/파워/OES/RGA/IG) ===

@@ -1,329 +1,268 @@
-# controller/plasma_cleaning_controller.py
 # -*- coding: utf-8 -*-
+"""
+plasma_cleaning_controller.py
+
+플라즈마 클리닝 컨트롤러 (asyncio)
+- 공정 순서: ① GV Open → ② IG On & Target Pressure 달성 대기 → ③ MFC ch3(N2) 유량 + SP4 Set/On → ④ RF On → 공정 유지
+- IG는 '장비(AsyncIG)'를 직접 사용. PLC로 IG 토글하지 않음.
+- Working Pressure는 SP4 Set → SP4 On으로 수행.
+- Target Pressure는 IG가 읽어온 압력이 '이하'가 될 때까지(최대 180s, 10s 간격) 대기.
+- MFC는 3번 가스(N2)만 사용.
+- 남은 시간은 progress 이벤트로 초 단위 제공(로그로는 쓰지 않음 — UI에서 표시 업데이트).
+"""
+
 from __future__ import annotations
-
-import asyncio
 from dataclasses import dataclass
-from typing import Any, Callable, Coroutine, Mapping, Optional, TypedDict, Union, Literal
+from typing import Optional, Callable, Awaitable, Any, AsyncGenerator
+import asyncio
+import contextlib
+import time
 
-# ──────────────────────────────────────────────────────────────
-# 파라미터/이벤트 타입
-# ──────────────────────────────────────────────────────────────
 
-class PCParams(TypedDict, total=False):
-    # MFC/가스
-    pc_gas_mfc_idx: int            # 사용 가스 라인 index (기본: 3, N2 라인)
-    pc_gas_flow_sccm: float        # (선택) 초기 유량/상한 (유량>0 = on, 0 = off)
+# ─────────────────────────────────────────────────────────────
+# 이벤트/파라미터 모델
+# ─────────────────────────────────────────────────────────────
+@dataclass
+class PCleanEvent:
+    kind: str                  # "status" | "log" | "progress" | "started" | "finished" | "failed"
+    message: Optional[str] = None
+    payload: Optional[dict] = None
 
-    # 압력 제어(Working Pressure = MFC SP4)
-    pc_target_pressure_mTorr: float  # SP4 set 대상(Working Pressure, mTorr)
-    # IG 안정화 판정 파라미터
-    pc_pressure_tolerance: float     # IG 안정화 허용오차(±mTorr)
-    pc_pressure_timeout_s: float     # IG 목표 도달 타임아웃(초)
-    pc_pressure_settle_s: float      # IG 목표 도달 후 추가 안정화 대기(초)
-
-    # RF
-    pc_rf_power_w: float             # RF 연속 파워(W)
-    pc_rf_reach_timeout_s: float     # RF 목표 도달 확인 타임아웃(초, 옵션)
-
-    # 유지시간
-    pc_process_time_min: float       # 유지 시간(분)
-
-    # 기타
-    process_note: str
 
 @dataclass
-class PCEvent:
-    kind: Literal[
-        "log", "state", "status", "started", "finished", "aborted",
-        "polling_targets", "polling"
-    ]
-    payload: Optional[Mapping[str, Any]] = None
+class PlasmaCleaningParams:
+    # 필수 입력
+    target_pressure: float       # IG 기준: 이하가 되면 다음 단계로
+    gas_flow_sccm: float         # N2@MFC ch3
+    working_pressure: float      # SP4 Set 값(장치가 내부 변환)
+    rf_power_w: float            # RF 목표 W (0보다 커야 함)
+    duration_sec: float          # 공정 유지 시간(초)
+
+    # 선택/정책
+    target_chamber: Optional[int] = None
+    stabilize_timeout: float = 40.0
+    post_purge_sec: float = 2.0
 
 
-# ──────────────────────────────────────────────────────────────
+# ─────────────────────────────────────────────────────────────
 # 컨트롤러
-# ──────────────────────────────────────────────────────────────
-
+# ─────────────────────────────────────────────────────────────
 class PlasmaCleaningController:
     """
-    Plasma Cleaning 전용 상태머신(IG 읽기 사용).
-
-    시퀀스:
-      1) (선택) MFC 가스라인(#idx)에 초기 유량 설정
-      2) SP4 Set(Working Pressure) → SP4 On  [MFC]
-      3) IG 기준 목표 압력 도달 + (선택) 안정화 대기
-      4) RF 연속 파워 설정, 목표 도달(옵션) 확인
-      5) 유지 타이머 진행
-      6) 안전 종료(RF OFF → SP4 OFF → MFC 유량 0)
-
-    콜백(런타임에서 주입):
-      - send_mfc(cmd, args): MFC 제어(예: "set_flow", {"gas_idx":3, "flow":20.0, "ch":1})
-      - sp1_set(mTorr): SP4 setpoint 를 설정(런타임에서 SP4로 매핑됨)
-      - sp1_on(on: bool): SP4 제어 On/Off(런타임에서 SP4로 매핑됨)
-      - send_rf_power(power_w): RF 연속 파워 목표 설정 시작(PLC DAC)
-      - stop_rf_power(): RF 전원/목표 해제
-      - wait_pressure_stable(target_mTorr, tol_mTorr, timeout_s, settle_s) -> bool :
-            IG가 target±tol에 들어오고 settle_s 동안 유지되면 True
-      - await_rf_target(power_w, timeout_s) -> bool :
-            RF 목표 도달 여부 대기(선택)
+    의존성(콜백/핸들 기반):
+      - mfc_handle(cmd: str, args: dict|None) -> awaitable[None]
+          * 필수 명령: "FLOW_SET","FLOW_ON","FLOW_OFF","SP4_SET","SP4_ON"
+      - ig: AsyncIG 인스턴스 (ensure_on(), ensure_off(), read_pressure() 등)
+      - plc_write_switch(key: str, on: bool) -> awaitable[None] (GV 토글용, 선택)
+      - rf_start(power_w: float) -> awaitable[None] (선택)
+      - rf_stop() -> awaitable[None] (선택)
     """
-
-    # ── 생성/설정 ────────────────────────────────────────────────
     def __init__(
         self,
         *,
-        ch: int,
-        send_mfc: Callable[[str, Mapping[str, Any]], None],
-        sp1_set: Callable[[float], None],
-        sp1_on: Callable[[bool], None],
-        send_rf_power: Callable[[float], None],
-        stop_rf_power: Callable[[], None],
-        wait_pressure_stable: Optional[
-            Callable[[float, float, float, float], Coroutine[Any, Any, bool]]
-        ] = None,
-        await_rf_target: Optional[
-            Callable[[float, float], Coroutine[Any, Any, bool]]
-        ] = None,
-    ) -> None:
-        self.ch = int(ch)
-        self.event_q: asyncio.Queue[PCEvent] = asyncio.Queue()
+        loop: asyncio.AbstractEventLoop,
+        mfc_handle: Callable[[str, Optional[dict]], Awaitable[None]],
+        ig: Any,
+        plc_write_switch: Optional[Callable[[str, bool], Awaitable[None]]] = None,
+        rf_start: Optional[Callable[[float], Awaitable[None]]] = None,
+        rf_stop: Optional[Callable[[], Awaitable[None]]] = None,
+        gv_switch_by_ch: Optional[dict[int, str]] = None,   # 예) {1: "GV1_OPEN_SW", 2: "GV2_OPEN_SW"}
+    ):
+        self.loop = loop
+        self.mfc_handle = mfc_handle
+        self.ig = ig
+        self.plc_write_switch = plc_write_switch
+        self._rf_start = rf_start
+        self._rf_stop = rf_stop
 
-        # 콜백
-        self._send_mfc = send_mfc
-        self._sp1_set = sp1_set      # 런타임에서 SP4 set으로 매핑
-        self._sp1_on = sp1_on        # 런타임에서 SP4 on/off로 매핑
-        self._send_rf = send_rf_power
-        self._stop_rf = stop_rf_power
-        self._wait_pressure_stable = wait_pressure_stable
-        self._await_rf_target = await_rf_target
+        self.gv_switch_by_ch = dict(gv_switch_by_ch or {})
 
-        # 런 상태
+        self._ev_q: asyncio.Queue[PCleanEvent] = asyncio.Queue(maxsize=1024)
         self._task: Optional[asyncio.Task] = None
         self._stop_evt = asyncio.Event()
         self._running = False
-        self.current_params: PCParams = {}
 
-    @property
-    def is_running(self) -> bool:
-        return self._running and self._task is not None and not self._task.done()
-
-    # ── 외부 API ────────────────────────────────────────────────
-    def start(self, params: PCParams) -> None:
-        if self.is_running:
-            self._emit_log("PC", "이미 공정 실행 중입니다."); return
-        self._stop_evt = asyncio.Event()
-        self.current_params = self._normalize(params)
-        self._task = asyncio.create_task(self._run(self.current_params), name=f"PCLEAN.CH{self.ch}")
+    # ─────────────────────────────
+    # 외부 API
+    # ─────────────────────────────
+    def start(self, params: PlasmaCleaningParams) -> None:
+        if self._running:
+            self._ev_nowait(PCleanEvent(kind="status", message="이미 진행 중입니다."))
+            return
+        self._stop_evt.clear()
+        self._running = True
+        self._task = self.loop.create_task(self._run(params), name="PClean.run")
 
     def request_stop(self) -> None:
+        if not self._running:
+            return
+        self._ev_nowait(PCleanEvent(kind="status", message="정지 요청 수신"))
         self._stop_evt.set()
 
-    # ── 이벤트 도우미 ───────────────────────────────────────────
-    def _emit(self, kind: PCEvent["kind"], payload: Optional[Mapping[str, Any]] = None) -> None:
+    async def events(self) -> AsyncGenerator[PCleanEvent, None]:
+        while True:
+            ev = await self._ev_q.get()
+            yield ev
+
+    # ─────────────────────────────
+    # 메인 루틴
+    # ─────────────────────────────
+    async def _run(self, p: PlasmaCleaningParams):
+        ch = int(p.target_chamber) if p.target_chamber else None
         try:
-            self.event_q.put_nowait(PCEvent(kind, payload))
-        except asyncio.QueueFull:
+            self._ev_nowait(PCleanEvent(kind="started", message="Load-Lock 플라즈마 클리닝 시작"))
+
+            # ① GV Open (옵션: 매핑이 있을 때만)
+            await self._try_gv_open(ch)
+
+            # ② IG On + Target Pressure 달성 대기
+            await self._ig_ensure_on()
+            ok = await self._wait_pressure_below_or_equal(target=p.target_pressure, timeout_s=180.0, interval_s=10.0)
+            if not ok:
+                raise RuntimeError(f"IG 압력이 {p.target_pressure:g} 이하로 떨어지지 않음(3분 제한 초과)")
+
+            # ③ MFC: SP4 Set → SP4 On → N2(ch3) Flow Set/On
+            await self._mfc_sp4_set(p.working_pressure)
+            await self._mfc_sp4_on()
+            await self._mfc_set_on(ch=3, sccm=p.gas_flow_sccm)
+
+            # ④ RF: 옵션(0보다 크면 On)
+            if self._rf_start and p.rf_power_w > 0:
+                await self._rf_start(float(p.rf_power_w))
+                self._ev_nowait(PCleanEvent(kind="status", message=f"RF 시작: {float(p.rf_power_w):.1f} W"))
+
+            # 유지 구간: 남은 시간(초) 이벤트로만 통지(로그 X)
+            deadline = time.monotonic() + float(p.duration_sec)
+            while not self._stop_evt.is_set():
+                left = max(0.0, deadline - time.monotonic())
+                self._ev_nowait(PCleanEvent(kind="progress", payload={"seconds_left": int(left)}))
+                if left <= 0:
+                    break
+                await asyncio.sleep(1.0)
+
+            # 정리
+            await self._safe_cleanup(stop_rf=True, stop_gas=True)
+            self._ev_nowait(PCleanEvent(kind="finished", message="플라즈마 클리닝 정상 종료"))
+        except asyncio.CancelledError:
+            await self._safe_cleanup(stop_rf=True, stop_gas=True)
+            self._ev_nowait(PCleanEvent(kind="failed", message="태스크 취소"))
+        except Exception as e:
+            await self._safe_cleanup(stop_rf=True, stop_gas=True)
+            self._ev_nowait(PCleanEvent(kind="failed", message=f"예외: {e!r}"))
+        finally:
+            self._running = False
+            self._task = None
+            self._ev_nowait(PCleanEvent(kind="status", message="공정 종료됨"))
+
+    # ─────────────────────────────
+    # 내부 헬퍼
+    # ─────────────────────────────
+    def _ev_nowait(self, ev: PCleanEvent) -> None:
+        try:
+            self._ev_q.put_nowait(ev)
+        except Exception:
             pass
 
-    def _emit_log(self, src: str, msg: str) -> None:
-        self._emit("log", {"src": f"{src}{self.ch}", "msg": msg})
+    async def _mfc_set_on(self, *, ch: int, sccm: float) -> None:
+        await self.mfc_handle("FLOW_SET", {"channel": int(ch), "value": float(sccm)})
+        await self.mfc_handle("FLOW_ON",  {"channel": int(ch)})
 
-    def _emit_state(self, text: str) -> None:
-        self._emit("state", {"text": text})
+    async def _mfc_off(self, *, ch: int) -> None:
+        with contextlib.suppress(Exception):
+            await self.mfc_handle("FLOW_OFF", {"channel": int(ch)})
 
-    def _emit_status(self, running: bool) -> None:
-        self._emit("status", {"running": running})
+    async def _mfc_sp4_set(self, working_pressure_ui: float) -> None:
+        """
+        Working Pressure를 SP4로 '설정' (장치가 내부 스케일/단위 변환 처리).
+        ※ mfc.py에 'SP4_SET' 핸들러가 있어야 합니다.
+           - (없다면) mfc.py에 handle_command('SP4_SET', {'value': <UI값>}) 분기와
+             실제 S4 전송 로직을 추가하세요.
+        """
+        await self.mfc_handle("SP4_SET", {"value": float(working_pressure_ui)})
 
-    def _emit_started(self, params: PCParams) -> None:
-        self._emit("started", {"params": dict(params)})
+    async def _mfc_sp4_on(self) -> None:
+        await self.mfc_handle("SP4_ON")
 
-    def _emit_finished(self, ok: bool, detail: Mapping[str, Any]) -> None:
-        self._emit("finished", {"ok": ok, "detail": dict(detail)})
+    async def _try_gv_open(self, ch: Optional[int]) -> None:
+        if ch is None or not self.plc_write_switch:
+            return
+        key = self._key_gv_open(ch)
+        if not key:
+            return
+        with contextlib.suppress(Exception):
+            await self.plc_write_switch(key, True)
+            self._ev_nowait(PCleanEvent(kind="status", message=f"GV{ch} 오픈 스위치 ON"))
+            await asyncio.sleep(1.0)
 
-    def _emit_aborted(self) -> None:
-        self._emit("aborted", {})
+    def _key_gv_open(self, ch: int) -> Optional[str]:
+        return self.gv_switch_by_ch.get(ch)
 
-    def _set_polling(self, *, mfc: bool, rf: bool) -> None:
-        self._emit("polling_targets", {"targets": {"mfc": mfc, "rf": rf}})
-
-    # --- (유지) MFC ACK 핸들러: 런타임에서 호출됨 ---
-    def on_mfc_confirmed(self, cmd: str) -> None:
-        self._emit_log("MFC", f"'{cmd}' confirmed")
-
-    def on_mfc_failed(self, cmd: str, reason: str) -> None:
-        self._emit_log("MFC", f"'{cmd}' failed: {reason}")
-
-    # ── 실행 로직 ────────────────────────────────────────────────
-    async def _run(self, p: PCParams) -> None:
-        self._running = True
-        ok = False
-        detail: dict[str, Any] = {}
-        self._emit_status(True)
-        self._emit_started(p)
-        self._set_polling(mfc=True, rf=True)
-
-        note = p.get("process_note", f"PlasmaCleaning CH{self.ch}")
+    # ── IG 제어/대기 ─────────────────────────────────────
+    async def _ig_ensure_on(self) -> None:
+        """IG 장비 전원을 켬(ensure_on 존재 시) 또는 start만 보장."""
         try:
-            self._emit_state(f"[PC] 시작: {note}")
-
-            # (선택) 1) MFC 초기 유량/가스라인
-            if p["pc_gas_flow_sccm"] > 0:
-                self._emit_state(f"[PC] MFC#{p['pc_gas_mfc_idx']} 초기 유량 {p['pc_gas_flow_sccm']:.3f} sccm")
-                self._send_mfc("set_flow", {
-                    "gas_idx": int(p["pc_gas_mfc_idx"]),
-                    "flow": float(p["pc_gas_flow_sccm"]),
-                    "ch": self.ch,
-                })
-                self._emit_log("MFC", f"MFC#{p['pc_gas_mfc_idx']} -> {p['pc_gas_flow_sccm']:.3f} sccm")
-
-            # 2) SP4 설정/On  (런타임에서 SP4로 매핑된 콜백 호출)
-            tgt = float(p["pc_target_pressure_mTorr"])
-            self._emit_state(f"[PC] SP4 Set {tgt:g} mTorr")
-            self._sp1_set(tgt)
-            await asyncio.sleep(0.05)  # 전송 후 소폭 지연
-            self._emit_state("[PC] SP4 On")
-            self._sp1_on(True)
-
-            # 3) IG 기반 압력 안정화 대기
-            tol = float(p["pc_pressure_tolerance"])
-            tmo = float(p["pc_pressure_timeout_s"])
-            settle = float(p["pc_pressure_settle_s"])
-            self._emit_state(f"[PC] IG 대기: {tgt:g}±{tol:g} mTorr, timeout {tmo:.0f}s, settle {settle:.0f}s")
-            pres_ok = await self._wait_pressure_or_fallback(tgt, tol, tmo, settle)
-            if not pres_ok:
-                self._emit_log("PC", "IG 안정화 타임아웃")
-                detail.update(stage="pressure_stable_timeout", target_mTorr=tgt, tol_mTorr=tol)
-                self._emit_finished(False, detail)
+            fn = getattr(self.ig, "ensure_on", None)
+            if callable(fn):
+                await fn()
                 return
+        except Exception:
+            pass
+        # fallback: 연결만 보장
+        try:
+            st = getattr(self.ig, "start", None)
+            if callable(st):
+                res = st()
+                if asyncio.iscoroutine(res):
+                    await res
+        except Exception:
+            pass
 
-            if self._stop_evt.is_set():
-                self._emit_log("PC", "사용자 중단 요청 감지")
-                self._emit_aborted()
-                return
+    async def _ig_ensure_off(self) -> None:
+        try:
+            fn = getattr(self.ig, "ensure_off", None)
+            if callable(fn):
+                await fn()
+        except Exception:
+            pass
 
-            # 4) RF 파워
-            pw = float(p["pc_rf_power_w"])
-            self._emit_state(f"[PC] RF 파워 설정 {pw:g} W")
-            self._send_rf(pw)
-            self._emit_log("RF", f"RF 목표 {pw:g} W 전송")
+    async def _ig_read_pressure(self) -> Optional[float]:
+        """IG 현재 압력 읽기(없으면 None)."""
+        try:
+            fn = getattr(self.ig, "read_pressure", None)
+            if callable(fn):
+                v = fn()
+                return await v if asyncio.iscoroutine(v) else float(v)
+        except Exception:
+            return None
+        # fallback: last_pressure 속성 시도
+        try:
+            v = getattr(self.ig, "last_pressure", None)
+            if v is None:
+                return None
+            return float(v)
+        except Exception:
+            return None
 
-            if p["pc_rf_reach_timeout_s"] > 0 and self._await_rf_target:
-                rf_ok = await self._wait_rf_or_fallback(pw, p["pc_rf_reach_timeout_s"])
-                if not rf_ok:
-                    self._emit_log("PC", "RF 목표 도달 확인 실패(무시하고 계속)")
-                    detail.update(rf_reach_timeout=True)
-
-            if self._stop_evt.is_set():
-                self._emit_log("PC", "사용자 중단 요청 감지")
-                self._emit_aborted()
-                return
-
-            # 5) 유지 타이머
-            hold_s = max(0.0, float(p["pc_process_time_min"]) * 60.0)
-            self._emit_state(f"[PC] 유지 {hold_s:.0f}초 진행")
-            detail.update(hold_seconds=hold_s)
-            ok = await self._hold_loop(hold_s)
-
-        except asyncio.CancelledError:
-            self._emit_log("PC", "태스크 취소")
-            self._emit_aborted()
-            return
-        except Exception as e:
-            self._emit_log("PC", f"예외: {e!r}")
-            detail.update(error=str(e))
-            self._emit_finished(False, detail)
-            return
-        finally:
-            # 6) 안전 종료
-            try:
-                self._emit_state("[PC] 종료: RF OFF → SP4 OFF → MFC=0 sccm")
-                try: self._stop_rf()
-                except Exception: self._emit_log("RF", "stop 실패(무시)")
-                try: self._sp1_on(False)  # ← 런타임에서 SP4 off로 매핑
-                except Exception: self._emit_log("PC", "SP4 Off 실패(무시)")
-                try:
-                    self._send_mfc("set_flow", {"gas_idx": int(p["pc_gas_mfc_idx"]), "flow": 0.0, "ch": self.ch})
-                except Exception:
-                    self._emit_log("MFC", "유량 0 명령 실패(무시)")
-            finally:
-                self._set_polling(mfc=False, rf=False)
-                self._emit_status(False)
-                self._running = False
-
-        # 종료 리포트
-        if ok:
-            self._emit_state("[PC] 완료")
-            self._emit_finished(True, detail)
-        else:
-            self._emit_state("[PC] 실패")
-            self._emit_finished(False, detail)
-
-    # ── 보조: 대기 루틴 ─────────────────────────────────────────
-    async def _wait_pressure_or_fallback(self, target: float, tol: float, timeout_s: float, settle_s: float) -> bool:
-        if self._wait_pressure_stable:
-            try:
-                return await asyncio.wait_for(
-                    self._wait_pressure_stable(target, tol, timeout_s, settle_s),
-                    timeout=timeout_s + settle_s + 2.0,
-                )
-            except asyncio.TimeoutError:
+    async def _wait_pressure_below_or_equal(self, *, target: float, timeout_s: float, interval_s: float) -> bool:
+        """IG 압력이 target 이하가 될 때까지 대기(최대 timeout_s, interval_s 간격)."""
+        deadline = time.monotonic() + float(timeout_s)
+        while not self._stop_evt.is_set():
+            cur = await self._ig_read_pressure()
+            if (cur is not None) and (cur <= float(target)):
+                self._ev_nowait(PCleanEvent(kind="status", message=f"IG OK: {cur:.3g} ≤ {target:g}"))
+                return True
+            if time.monotonic() >= deadline:
                 return False
-        # 폴백: 실제 IG 감시 콜백이 없으면 짧게 대기만(실사용에선 콜백 구현 권장)
-        await asyncio.sleep(min(3.0, timeout_s))
-        return True
+            await asyncio.sleep(float(interval_s))
+        return False
 
-    async def _wait_rf_or_fallback(self, target_w: float, timeout_s: float) -> bool:
-        if self._await_rf_target:
-            try:
-                return await asyncio.wait_for(self._await_rf_target(target_w, timeout_s), timeout=timeout_s + 1.0)
-            except asyncio.TimeoutError:
-                return False
-        await asyncio.sleep(min(2.0, timeout_s))
-        return True
-
-    async def _hold_loop(self, seconds: float) -> bool:
-        remain = float(seconds)
-        step = 0.5
-        while remain > 0:
-            if self._stop_evt.is_set():
-                self._emit_log("PC", "사용자 중단으로 유지 단계 종료")
-                self._emit_aborted()
-                return False
-            self._emit_state(f"[PC] 진행 중… 남은 {int(remain)} s")
-            await asyncio.sleep(step)
-            remain -= step
-        return True
-
-    # ── 정규화 ──────────────────────────────────────────────────
-    def _normalize(self, raw: Mapping[str, Any]) -> PCParams:
-        def f(v: Any, d: float) -> float:
-            try: return float(v)
-            except Exception: return float(d)
-        def i(v: Any, d: int) -> int:
-            try: return int(float(v))
-            except Exception: return int(d)
-
-        p: PCParams = {
-            "pc_gas_mfc_idx":        i(raw.get("pc_gas_mfc_idx", 3), 3),
-            "pc_gas_flow_sccm":      f(raw.get("pc_gas_flow_sccm", 0.0), 0.0),
-            # SP4(Working Pressure) set 대상
-            "pc_target_pressure_mTorr": f(raw.get("pc_target_pressure_mTorr", 2.0), 2.0),
-            # IG 안정화 판정 파라미터
-            "pc_pressure_tolerance": f(raw.get("pc_pressure_tolerance", 0.2), 0.2),
-            "pc_pressure_timeout_s": f(raw.get("pc_pressure_timeout_s", 90.0), 90.0),
-            "pc_pressure_settle_s":  f(raw.get("pc_pressure_settle_s", 5.0), 5.0),
-            "pc_rf_power_w":         f(raw.get("pc_rf_power_w", 100.0), 100.0),
-            "pc_rf_reach_timeout_s": f(raw.get("pc_rf_reach_timeout_s", 0.0), 0.0),  # 0이면 생략
-            "pc_process_time_min":   f(raw.get("pc_process_time_min", 1.0), 1.0),
-            "process_note":          str(raw.get("process_note", f"PlasmaCleaning CH{self.ch}")),
-        }
-
-        # 음수/비정상 방어
-        if p["pc_gas_flow_sccm"] < 0: p["pc_gas_flow_sccm"] = 0.0
-        if p["pc_pressure_tolerance"] < 0: p["pc_pressure_tolerance"] = 0.0
-        if p["pc_pressure_timeout_s"] < 0: p["pc_pressure_timeout_s"] = 0.0
-        if p["pc_pressure_settle_s"] < 0: p["pc_pressure_settle_s"] = 0.0
-        if p["pc_rf_power_w"] < 0: p["pc_rf_power_w"] = 0.0
-        if p["pc_process_time_min"] < 0: p["pc_process_time_min"] = 0.0
-        return p
+    async def _safe_cleanup(self, *, stop_rf: bool, stop_gas: bool) -> None:
+        # 가스 → RF → IG Off 순
+        if stop_gas:
+            await self._mfc_off(ch=3)
+            self._ev_nowait(PCleanEvent(kind="status", message="MFC ch3 OFF"))
+        if stop_rf and self._rf_stop:
+            with contextlib.suppress(Exception):
+                await self._rf_stop()
+                self._ev_nowait(PCleanEvent(kind="status", message="RF 정지"))
+        await self._ig_ensure_off()

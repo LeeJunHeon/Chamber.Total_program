@@ -167,10 +167,16 @@ MFC_COMMANDS = {
     'VALVE_OPEN': "O",
     'VALVE_CLOSE': "C",
     'PS_ZEROING': "Z1",
-    'SP4_ON': "D4",
-    'SP3_ON': "D3",
-    'SP1_ON': "D1",
+
+    # --- Set-Point 실행/설정 ---
+    'SP1_ON':  "D1",
+    'SP2_ON':  "D2",
+    'SP3_ON':  "D3",
+    'SP4_ON':  "D4",
     'SP1_SET': lambda value: f"S1 {value}",
+    'SP2_SET': lambda value: f"S2 {value}",
+    'SP3_SET': lambda value: f"S3 {value}",
+    'SP4_SET': lambda value: f"S4 {value}",
 }
 
 # ======================================================================

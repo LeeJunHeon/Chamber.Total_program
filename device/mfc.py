@@ -581,6 +581,29 @@ class AsyncMFC:
         if ok: await self._emit_confirmed("SP1_SET")
         else:  await self._emit_failed("SP1_SET", "SP1 설정 확인 실패")
 
+    async def sp4_set(self, ui_value: float):
+        """SP4_SET (UI→HW 변환) + (옵션) READ_SP4_VALUE 검증."""
+        hw_val = round(float(ui_value) * float(MFC_PRESSURE_SCALE), int(MFC_PRESSURE_DECIMALS))
+        await self._emit_status(
+            f"SP4 스케일: UI {ui_value:.2f} → 장비 {hw_val:.{int(MFC_PRESSURE_DECIMALS)}f}"
+        )
+
+        # 설정 전송 (no-reply)
+        self._enqueue(self._mk_cmd("SP4_SET", value=hw_val), None,
+                      allow_no_reply=True, tag="[SP4_SET]")
+
+        # 검증 비활성화면 즉시 확정
+        if not self._verify_enabled:
+            await asyncio.sleep(MFC_GAP_MS / 1000.0)
+            await self._emit_confirmed("SP4_SET")
+            return
+
+        # 검증 (READ_SP4_VALUE가 정의되어 있지 않으면 스킵하고 통과)
+        ok = await self._verify_sp_set(4, hw_val, ui_value)
+        if ok: await self._emit_confirmed("SP4_SET")
+        else:  await self._emit_failed("SP4_SET", "SP4 설정 확인 실패")
+
+
     async def sp1_on(self):
         if not self._verify_enabled:
             self._enqueue(self._mk_cmd("SP1_ON"), None, allow_no_reply=True, tag="[SP1_ON]")
@@ -641,7 +664,7 @@ class AsyncMFC:
         """
         main/process에서 넘어오는 문자열 명령을 고수준 메서드로 라우팅한다.
         - cmd: 'FLOW_SET', 'FLOW_ON', 'FLOW_OFF', 'VALVE_OPEN', 'VALVE_CLOSE',
-               'PS_ZEROING', 'MFC_ZEROING', 'SP4_ON', 'SP1_ON', 'SP1_SET',
+               'PS_ZEROING', 'MFC_ZEROING', 'SP4_ON', 'SP1_ON', 'SP1_SET', 'SP4_SET',
                'READ_FLOW_ALL', 'READ_PRESSURE'
         - args: 필요한 인자 (channel, value 등)
         """
@@ -709,6 +732,10 @@ class AsyncMFC:
             elif key == "SP1_SET":
                 val_ui = _req("value", float)
                 await self.sp1_set(val_ui)
+
+            elif key == "SP4_SET":
+                val_ui = _req("value", float)
+                await self.sp4_set(val_ui)
 
             elif key in ("READ_FLOW_ALL", "READ_FLOW"):  # 호환용
                 await self.read_flow_all()
@@ -1260,6 +1287,45 @@ class AsyncMFC:
                 return True
             await self._emit_status(f"[SP1_SET 검증 재시도] 응답={repr(line)} (시도 {attempt}/5)")
             await asyncio.sleep(MFC_DELAY_MS / 1000.0)
+        return False
+    
+    async def _verify_sp_set(self, sp_idx: int, hw_val: float, ui_val: float) -> bool:
+        """
+        READ_SP{sp_idx}_VALUE 로 HW값 비교(허용오차 = MFC_SP1_VERIFY_TOL 재사용).
+        - config에 READ_SP{sp_idx}_VALUE 키가 없으면 '검증 스킵'으로 간주하여 True 반환.
+        - 장비 응답 접두사는 'S{sp_idx}'로 기대.
+        """
+        tol = max(float(MFC_SP1_VERIFY_TOL), 1e-9)
+        key_read = f"READ_SP{sp_idx}_VALUE"
+
+        # 구성에 읽기 명령이 정의되지 않은 경우 검증 스킵
+        if key_read not in MFC_COMMANDS:
+            await self._emit_status(f"[VERIFY SP{sp_idx}_SET] 스킵: '{key_read}' 미정의 → 통과 처리")
+            return True
+
+        for attempt in range(1, 6):
+            line = await self._send_and_wait_line(
+                self._mk_cmd(key_read),
+                tag=f"[VERIFY SP{sp_idx}_SET]",
+                timeout_ms=MFC_TIMEOUT,
+                expect_prefixes=(f"S{sp_idx}",)
+            )
+            cur_hw = self._parse_pressure_value(line or "")
+            if cur_hw is not None:
+                cur_hw = round(cur_hw, int(MFC_PRESSURE_DECIMALS))
+
+            ok = (cur_hw is not None) and (abs(cur_hw - hw_val) <= tol)
+            if ok:
+                await self._emit_status(
+                    f"SP{sp_idx} 설정 완료: UI {ui_val:.2f} (장비 {hw_val:.{int(MFC_PRESSURE_DECIMALS)}f})"
+                )
+                return True
+
+            await self._emit_status(
+                f"[SP{sp_idx}_SET 검증 재시도] 응답={repr(line)} (시도 {attempt}/5)"
+            )
+            await asyncio.sleep(MFC_DELAY_MS / 1000.0)
+
         return False
 
     async def _verify_simple_flag(self, cmd_key: str, expect_mask: str) -> bool:

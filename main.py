@@ -12,8 +12,9 @@ from ui.main_window import Ui_Form
 from runtime.tsp_runtime import TSPPageController
 from controller.chat_notifier import ChatNotifier
 
-# 공유 장비(PLC만 공용)
+# 공유 장비(PLC, MFC1 공용)
 from device.plc import AsyncPLC
+from device.mfc import AsyncMFC
 
 # ▶ 런타임 래퍼
 from runtime.chamber_runtime import ChamberRuntime           # ← 경로 정리
@@ -64,16 +65,12 @@ class MainWindow(QWidget):
         # 로그 루트 (NAS 실패 시 런타임 내부에서 폴백 처리)
         self._log_root = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs")
 
-        # === Plasma Cleaning가 필요하면 사용
-        # self.pc = PlasmaCleaningRuntime(
-        #     ui=self.ui,
-        #     prefix="pc_",
-        #     loop=self._loop,
-        #     cfg=config_ch1,
-        #     log_dir=self._log_root,
-        #     plc=self.plc,
-        #     chat=self.chat,  # PC 알림도 같은 방으로
-        # )
+        mfc_ch1 = AsyncMFC(
+            host=getattr(config_ch1, "MFC_TCP_HOST", "192.168.1.50"),
+            port=getattr(config_ch1, "MFC_TCP_PORT", 4003),
+            enable_verify=False,
+            enable_stabilization=True,
+        )
 
         # === 챔버 런타임 2개 생성 ===
         self.ch1 = ChamberRuntime(
@@ -98,9 +95,20 @@ class MainWindow(QWidget):
             cfg=config_ch2,
             log_dir=self._log_root,
             on_plc_owner=self._set_plc_owner,
+            mfc=mfc_ch1,
         )
 
-        # === TSP 페이지 컨트롤러 ===
+        # === Plasma Cleaning 런타임 생성 ===
+        self.pc = PlasmaCleaningRuntime(
+            ui=self.ui,
+            prefix="",          # UI 위젯 접두사: PC_Start_button 등과 매칭
+            loop=self._loop,
+            plc=self.plc,          # 공유 PLC
+            mfc=self.ch1.mfc,      # ✅ CH1의 MFC 인스턴스 공유
+            chat=self.chat,
+        )
+
+        # === TSP 런타임 생성 ===
         self.tsp_ctrl = TSPPageController(
             ui=self.ui,
             host=cfgc.TSP_TCP_HOST,
