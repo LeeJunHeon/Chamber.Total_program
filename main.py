@@ -80,32 +80,32 @@ class MainWindow(QWidget):
         #   - MFC: 각 챔버 전용 포트
         #   - Gas Flow는 항상 MFC1의 ch=3 사용(Plasma Cleaning용 정책)
         # ─────────────────────────────────────────────────────
-        self.mfc1 = AsyncMFC(
-            host=getattr(config_ch1, "MFC_TCP_HOST", getattr(cfgc, "MFC_TCP_HOST", "192.168.1.50")),
-            port=getattr(config_ch1, "MFC_TCP_PORT", 4003),
-            enable_verify=False,
-            enable_stabilization=True,
-        )
-        self.mfc2 = AsyncMFC(
-            host=getattr(config_ch2, "MFC_TCP_HOST", getattr(cfgc, "MFC_TCP_HOST", "192.168.1.50")),
-            port=getattr(config_ch2, "MFC_TCP_PORT", 4006),
-            enable_verify=False,
-            enable_stabilization=True,
-        )
+        # self.mfc1 = AsyncMFC(
+        #     host=getattr(config_ch1, "MFC_TCP_HOST", getattr(cfgc, "MFC_TCP_HOST", "192.168.1.50")),
+        #     port=getattr(config_ch1, "MFC_TCP_PORT", 4003),
+        #     enable_verify=False,
+        #     enable_stabilization=True,
+        # )
+        # self.mfc2 = AsyncMFC(
+        #     host=getattr(config_ch2, "MFC_TCP_HOST", getattr(cfgc, "MFC_TCP_HOST", "192.168.1.50")),
+        #     port=getattr(config_ch2, "MFC_TCP_PORT", 4006),
+        #     enable_verify=False,
+        #     enable_stabilization=True,
+        # )
 
-        self.ig1 = AsyncIG(
-            host=getattr(config_ch1, "IG_TCP_HOST", getattr(cfgc, "IG_TCP_HOST", "192.168.1.50")),
-            port=getattr(config_ch1, "IG_TCP_PORT", 4001),
-        )
-        self.ig2 = AsyncIG(
-            host=getattr(config_ch2, "IG_TCP_HOST", getattr(cfgc, "IG_TCP_HOST", "192.168.1.50")),
-            port=getattr(config_ch2, "IG_TCP_PORT", 4002),
-        )
+        # self.ig1 = AsyncIG(
+        #     host=getattr(config_ch1, "IG_TCP_HOST", getattr(cfgc, "IG_TCP_HOST", "192.168.1.50")),
+        #     port=getattr(config_ch1, "IG_TCP_PORT", 4001),
+        # )
+        # self.ig2 = AsyncIG(
+        #     host=getattr(config_ch2, "IG_TCP_HOST", getattr(cfgc, "IG_TCP_HOST", "192.168.1.50")),
+        #     port=getattr(config_ch2, "IG_TCP_PORT", 4002),
+        # )
 
-        # Plasma Cleaning 선택 상태(초기 CH1), Gas Flow 정책(항상 MFC1 ch3)
-        self._pc_use_ch: int = 1
-        self._pc_gas_mfc = self.mfc1
-        self._pc_gas_channel = 3
+        # # Plasma Cleaning 선택 상태(초기 CH1), Gas Flow 정책(항상 MFC1 ch3)
+        # self._pc_use_ch: int = 1
+        # self._pc_gas_mfc = self.mfc1
+        # self._pc_gas_channel = 3
 
         # === 챔버 런타임 2개 생성 ===
         self.ch1 = ChamberRuntime(
@@ -135,14 +135,14 @@ class MainWindow(QWidget):
         # === Plasma Cleaning 런타임 생성 ===
         # mfc 인자는 하위 호환용으로 CH1의 MFC를 초기값으로 전달하되,
         # 곧바로 라디오 선택 상태를 반영하여 set_devices 또는 속성 주입으로 덮어씁니다.
-        self.pc = PlasmaCleaningRuntime(
-            ui=self.ui,
-            prefix="",          # UI 위젯 접두사: PC_Start_button 등과 매칭
-            loop=self._loop,
-            plc=self.plc,          # 공유 PLC
-            mfc=self.mfc1,         # 초기값: CH1 MFC
-            chat=None,
-        )
+        # self.pc = PlasmaCleaningRuntime(
+        #     ui=self.ui,
+        #     prefix="",          # UI 위젯 접두사: PC_Start_button 등과 매칭
+        #     loop=self._loop,
+        #     plc=self.plc,          # 공유 PLC
+        #     mfc=self.mfc1,         # 초기값: CH1 MFC
+        #     chat=None,
+        # )
 
         # === TSP 런타임 생성 ===
         self.tsp_ctrl = TSPPageController(
