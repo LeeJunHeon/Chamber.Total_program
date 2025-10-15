@@ -160,8 +160,8 @@ class TSPPageController:
             )
 
             cfg = TSPRunConfig(
-                target_pressure=self._get_target(),
-                cycles=self._get_cycles(),
+                target_pressure=target,
+                cycles=cycles,
                 on_sec=120.0,                 # 2분
                 off_sec=150.0,                # 2분 30초
                 poll_sec=10.0,                # IG 10초 간격 RDI
@@ -169,19 +169,24 @@ class TSPPageController:
                 verify_with_status=True,
             )
 
-            self._log(f"=== TSP 공정 시작 === host={self.host} ig={self.ig_port} tsp={self.tsp_port} "
-                      f"target={target} cycles={cycles} dwell={DWELL_SEC}s poll={POLL_SEC}s")
+            self._log(
+                "=== TSP 공정 시작 === "
+                f"host={self.host} ig={self.ig_port} tsp={self.tsp_port} "
+                f"target={target} cycles={cycles} "
+                f"on={cfg.on_sec}s off={cfg.off_sec}s poll={cfg.poll_sec}s first_wait={cfg.first_check_delay_sec}s"
+            )
             result = await ctrl.run(cfg)
 
-            self._log("=== 결과 ===")
-            self._log(f" success       : {result.success}")
+            # UI 표시는 유지
             if result.final_pressure == result.final_pressure:
-                self._log(f" final_pressure: {result.final_pressure:.3e}")
                 self._set_plain("TSP_basePressure_edit", f"{result.final_pressure:.3e}")
-            else:
-                self._log(" final_pressure: NaN")
-            self._log(f" cycles_done   : {result.cycles_done}")
-            self._log(f" reason        : {result.reason}")
+
+            # 로그는 한 줄 요약
+            self._log(
+                f"=== RESULT === ok={result.success} "
+                f"final_P={(f'{result.final_pressure:.3e}' if result.final_pressure == result.final_pressure else 'NaN')} "
+                f"cycles_done={result.cycles_done} reason={result.reason}"
+            )
 
         except asyncio.CancelledError:
             self._log("[사용자 중단]")

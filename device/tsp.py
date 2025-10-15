@@ -195,6 +195,7 @@ class AsyncTSP:
             if code == NACK: return ("NACK", None)
             return ("ERR", f"{code:02x}")
 
+        # AFTER (정상) ─ 메뉴얼: 응답은 <ADDR><WIN(3)><DATA...> 이므로 4바이트만 건너뜀
         # (B) 데이터 프레임: <ADDR><WIN(3)><DATA...>
         if len(body) >= 4:
             data_ascii = body[4:].decode('ascii', errors='ignore')
