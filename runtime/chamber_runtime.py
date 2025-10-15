@@ -28,6 +28,9 @@ from controller.graph_controller import GraphController
 from controller.data_logger import DataLogger
 from controller.chat_notifier import ChatNotifier
 
+# ⬇️ 추가: 전역 런타임 상태 레지스트리
+from controller.runtime_state import runtime_state
+
 # 공정 컨트롤러(기존 CH2) + CH1은 별도 모듈이 있으면 사용, 없으면 CH2를 공용으로
 from controller.process_controller import ProcessController
 
@@ -226,7 +229,13 @@ class ChamberRuntime:
         self._run_select: dict[str, bool] | None = None  # ← 이번 런에서 펄스 선택 상태
         self._owns_plc = bool(owns_plc if owns_plc is not None else (int(chamber_no) == 1))  # 기본 CH1
         self._notify_plc_owner = on_plc_owner 
-        self._last_running_state: Optional[bool] = None                                  # ★ 추가
+        self._last_running_state: Optional[bool] = None  
+        
+        # ⬇️ 추가: 프로그램 시작 시점에 CH 상태를 명시적으로 False로 등록
+        try:
+            runtime_state.set_running(self.ch, False)
+        except Exception:
+            pass                                # ★ 추가
 
         # QMessageBox 참조 저장소(비모달 유지용)
         self._msg_boxes: list[QMessageBox] = []  # ← 추가
@@ -1134,7 +1143,22 @@ class ChamberRuntime:
                     cb(self.ch if running else None)
                 except Exception:
                     pass
+
+        # ⬇️ 추가: 전역 상태 레지스트리에 반영 (외부 조회/구독 용도)
+        try:
+            runtime_state.set_running(self.ch, bool(running))
+        except Exception:
+            pass
+
         self._last_running_state = running
+
+    # === 외부 공개: 현재 챔버 공정 실행 여부 ===
+    @property
+    def is_running(self) -> bool:
+        try:
+            return bool(self.process_controller.is_running)
+        except Exception:
+            return False
 
     def _apply_process_state_message(self, message: str) -> None:
         if getattr(self, "_last_state_text", None) == message:

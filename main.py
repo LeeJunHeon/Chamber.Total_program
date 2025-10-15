@@ -9,7 +9,7 @@ from qasync import QEventLoop
 
 # UI / Controller
 from ui.main_window import Ui_Form
-from main_tsp import TSPPageController
+from runtime.tsp_runtime import TSPPageController
 from controller.chat_notifier import ChatNotifier
 
 # 공유 장비(PLC만 공용)
