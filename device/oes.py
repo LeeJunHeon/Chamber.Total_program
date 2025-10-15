@@ -49,8 +49,8 @@ ROI_END_DEFAULT   = 1034 # 이전 코드와 동일
 class OESAsync:
     """
     - CH→USB 매핑: 기본 CH1→USB0, CH2→USB1 (usb_index 지정 시 우선)
-    - 초기화: USB 스캔→open 확인→모델 자동판정(spInitGivenChannel(model,ch))→WL 테이블 읽기
-    - 측정: 이전 버전과 동일한 설정 적용(Baseline/AutoDark/Trigger=11/TEC ON/Integration ms)
+    - 초기화: USB 스캔→(대상 채널만) open 확인→모델 자동판정(spInitGivenChannel(model,ch))→WL 테이블 읽기
+    - 측정: 이전 설정(Baseline/AutoDark/Trigger=11/TEC ON/Integration ms)
     - x축: WL(nm) 사용. WL 실패 시 자동으로 픽셀 인덱스로 대체
     - ROI: [10:1034]을 장비 픽셀/테이블 길이에 맞춰 안전 클램프
     """
@@ -192,17 +192,17 @@ class OESAsync:
                 self._get_wl = None
 
     # ========== 워커 스레드용 블로킹 ==========
-    def _scan_and_open(self) -> tuple[int, list[int]]:
-        """USB 기준 스캔 후 open 가능한 ch 목록을 반환"""
+    def _scan_and_open(self, target_ch: int) -> tuple[int, list[int]]:
+        """USB 스캔 후 '대상 채널'만 open 시도 (동시 측정 호환)"""
         try:
             n = int(self.sp_dll.spTestAllChannels(ctypes.c_int16(ORDER_USB)))  # type: ignore
         except Exception:
             n = 0
         opened: list[int] = []
-        for ch in range(max(0, n)):
+        if 0 <= target_ch < n:
             try:
-                if int(self.sp_dll.spSetupGivenChannel(ctypes.c_int16(ch))) >= 0:  # type: ignore
-                    opened.append(ch)
+                if int(self.sp_dll.spSetupGivenChannel(ctypes.c_int16(target_ch))) >= 0:  # type: ignore
+                    opened.append(target_ch)
             except Exception:
                 pass
         return n, opened
@@ -289,11 +289,13 @@ class OESAsync:
         self.sp_dll = ctypes.WinDLL(self._dll_path)
         self._bind_functions()
 
-        # ① USB 스캔 & open 목록 확보
-        n, opened = self._scan_and_open()
+        # 대상 채널을 먼저 확정
         target_ch = int(self._usb_index) if self._usb_index is not None else (0 if self._chamber == 1 else 1)
         if target_ch < 0:
             target_ch = 0 if self._chamber == 1 else 1
+
+        # ① USB 스캔 & 대상 채널만 open 시도 (동시 측정 호환)
+        n, opened = self._scan_and_open(target_ch)
 
         if n <= 0 or target_ch >= n:
             return False, f"장치 스캔 실패 또는 대상 USB{target_ch} 미존재 (감지 {n}대, OPEN={opened})"
@@ -410,9 +412,8 @@ class OESAsync:
         ch = int(self.sChannel)
         npix = int(self._npix)
 
-        # 일부 DLL은 매번 채널 셀렉트 필요 → 안전하게 한 번 호출
-        try: self.sp_dll.spSetupGivenChannel(ctypes.c_int16(ch))  # type: ignore
-        except Exception: pass
+        # 동시 측정 호환: 측정 중에는 매번 채널 셀렉트 호출하지 않음
+        # (spReadDataEx가 ch 인자를 받으므로 충분)
 
         intensity_sum = np.zeros(npix, dtype=float)
         valid = 0
