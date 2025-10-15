@@ -160,11 +160,13 @@ class TSPPageController:
             )
 
             cfg = TSPRunConfig(
-                target_pressure=target,
-                cycles=cycles,
-                dwell_sec=DWELL_SEC,
-                poll_sec=POLL_SEC,
-                verify_with_status=VERIFY_WITH_STATUS,
+                target_pressure=self._get_target(),
+                cycles=self._get_cycles(),
+                on_sec=120.0,                 # 2분
+                off_sec=150.0,                # 2분 30초
+                poll_sec=10.0,                # IG 10초 간격 RDI
+                first_check_delay_sec=5.0,    # IG ON 후 5초 대기
+                verify_with_status=True,
             )
 
             self._log(f"=== TSP 공정 시작 === host={self.host} ig={self.ig_port} tsp={self.tsp_port} "
