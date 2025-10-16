@@ -45,7 +45,7 @@ DCP_FIRST_CMD_EXTRA_TIMEOUT_MS = 1000
 
 # ===== 통일된 스케일 상수 =====
 # (측정 raw -> 공학단위) 한 LSB가 얼마인지
-V_MEAS_V_PER_LSB = 1.5      # 1 count ≈ 1.5 V  (매뉴얼 표준)
+V_MEAS_V_PER_LSB = 1.468815 # 1 count ≈ 1.5 V  (매뉴얼 표준)
 I_MEAS_A_PER_LSB = 0.01     # 1 count = 0.01 A  (전류 10배 과다표시 교정)
 P_MEAS_W_PER_LSB = 10.0     # 1 count = 10 W
 
@@ -566,27 +566,13 @@ class AsyncDCPulse:
                 await self._emit_confirmed(label)
 
                 if intended_on:
-                    # ★ OUTPUT_ON 성공: 즉시 폴링 시작
-                    self.set_process_status(True)
-
-                    # ★ 간단 활성 확인: 잠깐 기다렸다가 P 읽어서 0W면 실패/중단
+                    # ★ (변경) 즉시 폴링 시작하지 않고 5초 대기 후 폴링 시작
                     try:
-                        await asyncio.sleep(ACTIVATION_CHECK_DELAY_S)
-                        res = await self.read_output_piv()
-                        p = float(res["eng"]["P_W"]) if res and "eng" in res else 0.0
+                        await asyncio.sleep(ACTIVATION_CHECK_DELAY_S)  # 정확히 5초 대기
                     except Exception:
-                        p = 0.0
-
-                    if p <= ACTIVATION_ZERO_W_THRESHOLD:
-                        await self._emit_failed(
-                            "OUTPUT_ON_ZERO_POWER",
-                            f"Power {p:.1f}W right after OUTPUT_ON"
-                        )
-                        # 안전을 위해 장비 OFF 시도
-                        with contextlib.suppress(Exception):
-                            await self.output_off()
-                        # prepare_and_start() 등 상위에 '실패'로 전달
-                        return False
+                        pass
+                    # 활성 확인은 이제 하지 않음(단순화). 폴링에서 항상 판정.
+                    self.set_process_status(True)
                 else:
                     # ★ OUTPUT_OFF 성공: 폴링 중지
                     self.set_process_status(False)
@@ -602,21 +588,12 @@ class AsyncDCPulse:
                     await self._emit_confirmed(label + "_VERIFIED")
 
                     if intended_on:
-                        self.set_process_status(True)
+                        # ★ (변경) 즉시 시작 X → 5초 대기 후 폴링 시작(활성 확인 삭제)
                         try:
                             await asyncio.sleep(ACTIVATION_CHECK_DELAY_S)
-                            res = await self.read_output_piv()
-                            p = float(res["eng"]["P_W"]) if res and "eng" in res else 0.0
                         except Exception:
-                            p = 0.0
-                        if p <= ACTIVATION_ZERO_W_THRESHOLD:
-                            await self._emit_failed(
-                                "OUTPUT_ON_ZERO_POWER",
-                                f"Power {p:.1f}W right after OUTPUT_ON"
-                            )
-                            with contextlib.suppress(Exception):
-                                await self.output_off()
-                            return False
+                            pass
+                        self.set_process_status(True)
                     else:
                         self.set_process_status(False)
 
@@ -1008,12 +985,21 @@ class AsyncDCPulse:
                 try:
                     if self._connected and self._out_on:
                         res = await self.read_output_piv()
+                        # 👉 응답없음(None)은 '0이 아님'으로 간주하므로 그대로 지나감(pass)
                         if res and "eng" in res:
                             eng = res["eng"]
                             p = float(eng.get("P_W", 0.0))
                             v = float(eng.get("V_V", 0.0))
                             i = float(eng.get("I_A", 0.0))
 
+                            # ★ 항상 비교: Power가 '정확히 0'이면 공정 중단
+                            if p == 0.0:
+                                await self._emit_status("[AUTO-STOP] Power=0W → OUTPUT_OFF & stop polling")
+                                with contextlib.suppress(Exception):
+                                    await self.output_off()   # 내부에서 set_process_status(False) 처리
+                                return                       # poll task 종료
+
+                            # 0이 아니면 계속 진행(기존 텔레메트리 전송 유지)
                             ev = DCPEvent(
                                 kind="telemetry",
                                 data=eng,
@@ -1024,14 +1010,12 @@ class AsyncDCPulse:
                             )
                             self._ev_nowait(ev)
 
-                            # ★ 추가: DataLogger에 즉시 전달
                             cb = getattr(self, "_on_telemetry", None)
                             if cb:
                                 try:
                                     cb(p, v, i)
                                 except Exception:
                                     pass
-                        # res가 None이면 read_output_piv()가 이미 status 로그를 남김
                 except Exception as e:
                     self._ev_nowait(DCPEvent(kind="status", message=f"[poll] 예외: {e!r}"))
 

@@ -1725,13 +1725,15 @@ class ChamberRuntime:
 
             dc_pulse_freq = None
             dc_pulse_duty = None
+            # kHz 입력
             txtf = self._get_text("dcPulseFreq_edit")
             if txtf:
                 try:
-                    dc_pulse_freq = int(float(txtf))
-                    if dc_pulse_freq < 1 or dc_pulse_freq > 100000: raise ValueError()
+                    dc_pulse_freq = int(float(txtf))  # kHz
+                    if dc_pulse_freq < 20 or dc_pulse_freq > 150:  # EnerPulse: 20~150 kHz
+                        raise ValueError()
                 except ValueError:
-                    self._post_warning("입력값 확인", "DC-Pulse Freq(Hz)는 1..100000 범위")
+                    self._post_warning("입력값 확인", "DC-Pulse Freq(kHz)는 20..150 범위입니다.")
                     return None
             txtd = self._get_text("dcPulseDutyCycle_edit")
             if txtd:
@@ -1813,13 +1815,16 @@ class ChamberRuntime:
                 if rf_pulse_power <= 0: raise ValueError()
             except ValueError:
                 self._post_warning("입력값 확인", "RF Pulse Target Power(W)를 확인하세요."); return None
+            # kHz 입력
             txtf = self._get_text("rfPulseFreq_edit")
             if txtf:
                 try:
-                    rf_pulse_freq = int(float(txtf))
-                    if rf_pulse_freq < 1 or rf_pulse_freq > 100000: raise ValueError()
+                    rf_pulse_freq = int(float(txtf))  # kHz
+                    if rf_pulse_freq < 1 or rf_pulse_freq > 100:
+                        raise ValueError()
                 except ValueError:
-                    self._post_warning("입력값 확인", "RF Pulse Freq(Hz) 1..100000"); return None
+                    self._post_warning("입력값 확인", "RF Pulse Freq(kHz)는 1..100 범위입니다.")
+                    return None
             txtd = self._get_text("rfPulseDutyCycle_edit")
             if txtd:
                 try:

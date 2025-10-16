@@ -14,10 +14,10 @@ class PCParams:
     gas_idx: int = 3                 # Gas #3 (N2) 사용
     gas_flow_sccm: float = 0.0       # 유량 (FLOW_ON 시 적용)
     # 압력
-    target_pressure_mTorr: float = 2.0   # IG 목표(이 값보다 낮아지면 통과)
-    tol_mTorr: float = 0.2               # IG 허용 편차
-    wait_timeout_s: float = 90.0         # IG 타임아웃
-    settle_s: float = 5.0                # 안정화 대기
+    target_pressure: float = 5.0e-6  # IG 목표(이 값보다 낮아지면 통과)
+    tol_mTorr: float = 0.2           # IG 허용 편차
+    wait_timeout_s: float = 90.0     # IG 타임아웃
+    settle_s: float = 5.0            # 안정화 대기
     # SP4 (Working Pressure)
     sp4_setpoint_mTorr: float = 2.0
     # RF
@@ -45,6 +45,8 @@ class PlasmaCleaningController:
         # IG
         ensure_ig_on: Callable[[], Awaitable[None]],
         read_ig_mTorr: Callable[[], Awaitable[float]],
+        # IG (Torr 기준 대기: target_torr, interval_ms)
+        ig_wait_for_base_torr: Optional[Callable[[float, int], Awaitable[bool]]] = None,  # ★ 추가/정형화
         # MFC (#1 고정, gas_idx 선택)
         mfc_gas_select: Callable[[int], Awaitable[None]],
         mfc_flow_set_on: Callable[[float], Awaitable[None]],
@@ -65,6 +67,7 @@ class PlasmaCleaningController:
         self._plc_gv_close = plc_gv_close
         self._plc_read_gv_open_lamp = plc_read_gv_open_lamp
 
+        self._ig_wait_for_base_torr = ig_wait_for_base_torr
         self._ensure_ig_on = ensure_ig_on
         self._read_ig_mTorr = read_ig_mTorr
 
@@ -94,7 +97,7 @@ class PlasmaCleaningController:
         p = PCParams(
             gas_idx               = int(params.get("pc_gas_mfc_idx", 3)),
             gas_flow_sccm         = float(params.get("pc_gas_flow_sccm", 0.0)),
-            target_pressure_mTorr = float(params.get("pc_target_pressure_mTorr", 2.0)),
+            target_pressure       = float(params.get("pc_target_pressure", 5.0e-6)),
             tol_mTorr             = float(params.get("pc_tol_mTorr", 0.2)),
             wait_timeout_s        = float(params.get("pc_wait_timeout_s", 90.0)),
             settle_s              = float(params.get("pc_settle_s", 5.0)),
@@ -140,10 +143,17 @@ class PlasmaCleaningController:
             if not lamp:
                 raise RuntimeError("GV OPEN_LAMP가 TRUE가 아님(오픈 실패?)")
 
-            # 2) IG ON & 목표(보다 낮음) 대기
+            # 2) IG ON & 목표(보다 낮음) 대기 — IG 내부 API 사용
             await self._ensure_ig_on()
-            self._log("IG", f"IG 목표 미만 대기: {p.target_pressure_mTorr:.3f} mTorr")
-            await self._wait_ig_below(p.target_pressure_mTorr, p.tol_mTorr, p.wait_timeout_s, p.settle_s)
+            if self._ig_wait_for_base_torr:
+                self._log("IG", f"IG.wait_for_base_pressure: {p.target_pressure:.3e} Torr 대기")
+                ok = await self._ig_wait_for_base_torr(p.target_pressure, interval_ms=1000)
+                if not ok:
+                    raise RuntimeError("Base pressure not reached (IG API)")
+            else:
+                # 콜백이 없으면 기존(mTorr 폴링) 경로로 폴백
+                self._log("IG", f"IG 목표 미만 대기: {p.target_pressure:.3f} Torr")
+                await self._wait_ig_below(p.target_pressure, p.tol_mTorr, p.wait_timeout_s, p.settle_s)
 
             # 3) MFC 가스 설정 (Gas #3 N2) + 4) SP4 세팅/ON
             await self._mfc_gas_select(p.gas_idx)            # ← Gas #3

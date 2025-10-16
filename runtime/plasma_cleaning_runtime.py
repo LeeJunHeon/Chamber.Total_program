@@ -163,6 +163,11 @@ class PlasmaCleaningRuntime:
                 raise RuntimeError("IG read callback is not bound")
             v = await self._ig_read_mTorr_cb()
             return float(v)
+        
+        async def _ig_wait_for_base_torr(target_torr: float, interval_ms: int = 1000) -> bool:
+            if not self.ig:
+                raise RuntimeError("IG not bound")
+            return await self.ig.wait_for_base_pressure(float(target_torr), interval_ms=interval_ms)
 
         # ---- MFC (GAS/SP4)
         async def _mfc_gas_select(gas_idx: int) -> None:
@@ -291,6 +296,7 @@ class PlasmaCleaningRuntime:
             rf_stop=_rf_stop,
             show_state=_show_state,
             show_countdown=_show_countdown,
+            ig_wait_for_base_torr=_ig_wait_for_base_torr,
         )
 
     def _make_rf_async(self) -> Optional[RFPowerAsync]:
@@ -432,7 +438,7 @@ class PlasmaCleaningRuntime:
                 return default
 
         gas_flow        = _read_plain_number("PC_gasFlow_edit",        0.0)
-        target_pressure = _read_plain_number("PC_targetPressure_edit", 2.0)
+        target_pressure = _read_plain_number("PC_targetPressure_edit", 5.0e-6)
         sp4_setpoint    = _read_plain_number("PC_workingPressure_edit", 2.0)
         rf_power        = _read_plain_number("PC_rfPower_edit",        100.0)
         process_time    = _read_plain_number("PC_ProcessTime_edit",    1.0)
@@ -440,7 +446,7 @@ class PlasmaCleaningRuntime:
         return PCParams(
             gas_idx               = 3,             # Gas #3 (N₂) 고정
             gas_flow_sccm         = gas_flow,
-            target_pressure_mTorr = target_pressure,
+            target_pressure       = target_pressure,
             tol_mTorr             = 0.2,
             wait_timeout_s        = 90.0,
             settle_s              = 5.0,
