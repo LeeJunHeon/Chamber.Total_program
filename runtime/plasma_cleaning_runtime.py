@@ -5,8 +5,6 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import inspect
-import time
-from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
@@ -17,26 +15,22 @@ from PySide6.QtWidgets import QMessageBox, QPlainTextEdit, QApplication
 # 장비/컨트롤러
 from device.mfc import AsyncMFC
 from device.plc import AsyncPLC
+from device.ig import AsyncIG  # IG 직접 주입 지원
 from controller.plasma_cleaning_controller import PlasmaCleaningController, PCParams
-from controller.graph_controller import GraphController
-from controller.data_logger import DataLogger
 from device.rf_power import RFPowerAsync, RFPowerEvent
 
 
-# ─────────────────────────────────────────────────────────────
-# 런타임 본체 (장치 주입형)
-# ─────────────────────────────────────────────────────────────
 class PlasmaCleaningRuntime:
     """
-    Plasma Cleaning 전용 런타임
+    Plasma Cleaning 전용 런타임 (그래프/데이터로거 미사용 버전)
 
-    - 이 클래스는 *장치 인스턴스를 생성하지 않습니다*. (main.py에서 만든 것을 주입)
-      * MFC 가스 유량 제어용:  mfc_gas
-      * MFC SP4(Working Pressure) 제어용: mfc_sp4
-      * IG 압력 읽기/켜기: set_ig_callbacks(ensure_on, read_mTorr)
-      * PLC는 RF 연속 출력(DCV ch=1)용으로만 사용
-    - start/stop 버튼 등 UI 이벤트 → PlasmaCleaningController로 연결
-    - RF는 RFPowerAsync를 사용하여 램핑/유지/램프다운 상태머신 운영
+    - 장치 인스턴스는 main.py에서 생성 후 주입
+      * MFC 가스 유량:  mfc_gas
+      * MFC SP4(Working Pressure): mfc_sp4
+      * IG: set_ig_callbacks(ensure_on, read_mTorr) 또는 ig 직접 주입
+      * PLC: RF 연속 출력(DCV ch=1)용
+    - start/stop 버튼 → PlasmaCleaningController로 연결
+    - RF는 RFPowerAsync 상태머신 사용
     """
 
     # =========================
@@ -51,46 +45,42 @@ class PlasmaCleaningRuntime:
         plc: Optional[AsyncPLC],
         mfc_gas: Optional[AsyncMFC],
         mfc_sp4: Optional[AsyncMFC],
-        log_dir: Path,
+        log_dir: Path,                     # 시그니처 유지(내부 미사용)
         chat: Optional[Any] = None,
+        ig: Optional[AsyncIG] = None,      # IG 객체 직접 주입 가능
     ) -> None:
         self.ui = ui
         self.prefix = str(prefix)
         self._loop = loop
         self.chat = chat
+        self._log_dir = log_dir            # (미사용) 호환용 보관만
 
         # 주입 장치
         self.plc: Optional[AsyncPLC] = plc
         self.mfc_gas: Optional[AsyncMFC] = mfc_gas
         self.mfc_sp4: Optional[AsyncMFC] = mfc_sp4
+        self.ig: Optional[AsyncIG] = ig
 
-        # IG 콜백 (main.py가 라디오 토글 때마다 갱신)
+        # IG 콜백 (라디오 토글 시 main에서 갱신 가능)
         self._ig_ensure_on_cb: Optional[Callable[[], Awaitable[None]]] = None
         self._ig_read_mTorr_cb: Optional[Callable[[], Awaitable[float]]] = None
 
         # 상태/태스크
         self._bg_tasks: list[asyncio.Task] = []
         self._running: bool = False
-        self._selected_ch: int = 1  # main에서 선택 라디오에 맞게 set_selected_ch로 갱신
+        self._selected_ch: int = 1  # 라디오에 맞춰 set_selected_ch로 갱신
 
         # 로그/상태 위젯
-        # PC 페이지는 소문자 'pc_' 접두사를 사용하므로 우선 prefix.lower()를 사용해 찾습니다.
-        self._w_log = (_safe_get(ui, f"{prefix.lower()}logMessage_edit")
-                    or _safe_get(ui, f"{prefix}logMessage_edit"))
-        self._w_state = (_safe_get(ui, f"{prefix.lower()}processState_edit")
-                        or _safe_get(ui, f"{prefix}processState_edit"))
-
-        # 그래프 컨트롤러(없으면 내부에서 알아서 무시)
-        self.graph = GraphController(
-            _safe_get(ui, f"{prefix}rgaGraph_widget"),
-            _safe_get(ui, f"{prefix}oesGraph_widget"),
+        self._w_log = (
+            _safe_get(ui, f"{self.prefix.lower()}logMessage_edit")
+            or _safe_get(ui, f"{self.prefix}logMessage_edit")
+            or _safe_get(ui, "pc_logMessage_edit")
         )
-        with contextlib.suppress(Exception):
-            self.graph.init_graphs()
-
-        # 데이터 로거
-        self._logger = DataLogger(root=log_dir)
-        self._session_dir: Optional[Path] = None
+        self._w_state = (
+            _safe_get(ui, f"{self.prefix.lower()}processState_edit")
+            or _safe_get(ui, f"{self.prefix}processState_edit")
+            or _safe_get(ui, "pc_processState_edit")
+        )
 
         # RF 파워(연속) 바인딩
         self.rf = self._make_rf_async()
@@ -100,6 +90,10 @@ class PlasmaCleaningRuntime:
 
         # UI 버튼 연결
         self._connect_ui_buttons()
+
+        # IG 객체가 넘어온 경우, 기본 콜백 자동 바인딩
+        if self.ig is not None:
+            self._bind_ig_device(self.ig)
 
         # RF 이벤트 펌프 시작
         self._ensure_task("PC.RFEvents", self._pump_rf_events)
@@ -114,7 +108,7 @@ class PlasmaCleaningRuntime:
 
     def set_mfcs(self, *, mfc_gas: Optional[AsyncMFC], mfc_sp4: Optional[AsyncMFC]) -> None:
         """
-        main.py에서 라디오 선택에 맞춰 가스/SP4용 MFC를 교체할 때 호출.
+        라디오 선택에 맞춰 가스/SP4용 MFC를 교체.
         (같은 인스턴스를 둘 다에 써도 무방)
         """
         self.mfc_gas = mfc_gas
@@ -126,7 +120,7 @@ class PlasmaCleaningRuntime:
         ensure_on: Callable[[], Awaitable[None]],
         read_mTorr: Callable[[], Awaitable[float]],
     ) -> None:
-        """main.py에서 IG 콜백 주입 (라디오 전환 시마다 업데이트)"""
+        """IG 콜백 주입 (라디오 전환 시마다 업데이트)"""
         self._ig_ensure_on_cb = ensure_on
         self._ig_read_mTorr_cb = read_mTorr
         self.append_log("PC", "IG callbacks bound")
@@ -141,11 +135,10 @@ class PlasmaCleaningRuntime:
 
         # ---- PLC: GV 인터락/오픈/램프
         async def _plc_check_gv_interlock() -> bool:
-            # 사이트마다 달라 안전하게 'GV OPEN 램프'만 확인
             if not self.plc:
                 return True
             lamp_key = f"G_V_{self._selected_ch}_OPEN_LAMP"
-            return await self.plc.read_bit(lamp_key)  # True면 OPEN 램프 점등
+            return await self.plc.read_bit(lamp_key)
 
         async def _plc_gv_open() -> None:
             if self.plc:
@@ -305,7 +298,7 @@ class PlasmaCleaningRuntime:
             return None
 
         async def _rf_send(power: float):
-            # SET(DCV_SET_1) 보장 + WRITE_1 (ch=1) → 기존 런타임과 동일 정책
+            # SET(DCV_SET_1) 보장 + WRITE_1 (ch=1)
             await self.plc.power_apply(float(power), family="DCV", ensure_set=True, channel=1)
 
         async def _rf_send_unverified(power: float):
@@ -313,7 +306,7 @@ class PlasmaCleaningRuntime:
 
         async def _rf_request_read():
             try:
-                # DCV_READ_2/3을 forward/reflected로 사용 (사이트 맞춤 스케일은 PLCConfig에서)
+                # DCV_READ_2/3을 forward/reflected로 사용
                 fwd = await self.plc.read_reg_name("DCV_READ_2")
                 ref = await self.plc.read_reg_name("DCV_READ_3")
                 return {"forward": float(fwd), "reflected": float(ref)}
@@ -322,7 +315,7 @@ class PlasmaCleaningRuntime:
                 return None
 
         async def _rf_toggle_enable(on: bool):
-            # RF SET 래치(DCV_SET_1) — 별도 제공됨
+            # RF SET 래치(DCV_SET_1)
             await self.plc.power_enable(bool(on), family="DCV", set_idx=1)
 
         return RFPowerAsync(
@@ -338,9 +331,25 @@ class PlasmaCleaningRuntime:
     # UI/이벤트
     # =========================
     def _connect_ui_buttons(self) -> None:
-        # 버튼 아이디는 프로젝트 UI에 맞게 prefix를 반영합니다.
-        w_start = _safe_get(self.ui, f"{self.prefix}Start_button")
-        w_stop = _safe_get(self.ui, f"{self.prefix}Stop_button")
+        """
+        버튼 objectName 변형(예: PC_Start_button / pcStart_button 등)을 모두 수용.
+        """
+        w_start = _find_first(self.ui, [
+            f"{self.prefix}Start_button",
+            f"{self.prefix}StartButton",
+            f"{self.prefix.lower()}Start_button",
+            f"{self.prefix.lower()}StartButton",
+            "PC_Start_button",
+            "pcStart_button",
+        ])
+        w_stop = _find_first(self.ui, [
+            f"{self.prefix}Stop_button",
+            f"{self.prefix}StopButton",
+            f"{self.prefix.lower()}Stop_button",
+            f"{self.prefix.lower()}StopButton",
+            "PC_Stop_button",
+            "pcStop_button",
+        ])
 
         if w_start:
             w_start.clicked.connect(lambda: asyncio.ensure_future(self._on_click_start()))
@@ -352,21 +361,20 @@ class PlasmaCleaningRuntime:
             self.append_log("PC", "이미 실행 중입니다.")
             return
 
-        # 파라미터 수집 (UI에서 못 읽으면 기본값)
+        # 파라미터 수집 (UI에서 못 읽으면 기본값; '1e-5' 과학표기 허용)
         p = self._read_params_from_ui()
 
-        # 세션 디렉터리
-        self._session_dir = self._logger.start_session("plasma_cleaning")
+        # (삭제됨) 세션 디렉터리 생성/로깅 — DataLogger 미사용
 
         # 컨트롤러 시퀀스 시작
         self._running = True
         try:
-            await self.pc._run(p)  # PlasmaCleaningController 가 공정 전체 수행
+            await self.pc._run(p)  # PlasmaCleaningController가 공정 전체 수행
         except Exception as e:
             self.append_log("PC", f"오류: {e!r}")
         finally:
             self._running = False
-            self._logger.end_session()
+            # (삭제됨) self._logger.end_session()
             await self._safe_rf_stop()
             self._set_state_text("IDLE")
 
@@ -400,8 +408,7 @@ class PlasmaCleaningRuntime:
     async def _mfc_dispatch(self, mfc: AsyncMFC, cmd: str, args: Optional[dict] = None) -> None:
         """
         드라이버가 메서드를 직접 제공하지 않을 때, 공용 커맨드 라우터로 보냅니다.
-        chamber_runtime과 동일한 큐 직렬화 정책을 따르는 것이 이상적이며,
-        이 프로젝트의 AsyncMFC는 내부에 단일 큐를 두는 구조입니다.
+        프로젝트의 AsyncMFC는 내부에 단일 큐를 두는 구조입니다.
         """
         fn = getattr(mfc, "handle_command", None)
         if not callable(fn):
@@ -422,15 +429,15 @@ class PlasmaCleaningRuntime:
                     return float(w.value())
                 else:
                     txt = str(w)
-                return float(txt) if txt else default
+                return float(txt) if txt else default  # 과학표기(1e-5) 허용
             except Exception:
                 return default
 
-        gas_flow        = _read_plain_number("PC_gasFlow_edit",      0.0)
+        gas_flow        = _read_plain_number("PC_gasFlow_edit",        0.0)
         target_pressure = _read_plain_number("PC_targetPressure_edit", 2.0)
         sp4_setpoint    = _read_plain_number("PC_workingPressure_edit", 2.0)
-        rf_power        = _read_plain_number("PC_rfPower_edit",      100.0)
-        process_time    = _read_plain_number("PC_ProcessTime_edit",  1.0)
+        rf_power        = _read_plain_number("PC_rfPower_edit",        100.0)
+        process_time    = _read_plain_number("PC_ProcessTime_edit",    1.0)
 
         return PCParams(
             gas_idx               = 3,             # Gas #3 (N₂) 고정
@@ -471,6 +478,22 @@ class PlasmaCleaningRuntime:
         t.set_name(name)
         self._bg_tasks.append(t)
 
+    # IG 객체로부터 기본 콜백 구성
+    def _bind_ig_device(self, ig: AsyncIG) -> None:
+        async def _ensure_on():
+            fn = getattr(ig, "ensure_on", None) or getattr(ig, "turn_on", None)
+            if callable(fn):
+                await fn()
+
+        async def _read_mTorr() -> float:
+            read_fn = getattr(ig, "read_pressure", None)
+            if not callable(read_fn):
+                raise RuntimeError("IG object does not provide read_pressure()")
+            torr = float(await read_fn())
+            return torr * 1000.0
+
+        self.set_ig_callbacks(_ensure_on, _read_mTorr)
+
 
 # ─────────────────────────────────────────────────────────────
 # 유틸
@@ -480,6 +503,12 @@ def _safe_get(ui: Any, name: str) -> Any:
         return getattr(ui, name)
     return None
 
+def _find_first(ui: Any, names: list[str]) -> Any:
+    for n in names:
+        w = _safe_get(ui, n)
+        if w is not None:
+            return w
+    return None
 
 def _mfc_name(m: Optional[AsyncMFC]) -> str:
     if not m:

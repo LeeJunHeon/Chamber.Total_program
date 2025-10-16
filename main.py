@@ -45,7 +45,7 @@ class MainWindow(QWidget):
         # ▼ Plasma Cleaning 기본값(UI에 채워 넣기)
         self.ui.PC_targetPressure_edit.setPlainText("5e-6")  # Target Pressure
         self.ui.PC_gasFlow_edit.setPlainText("30")           # Gas Flow (sccm)
-        self.ui.PC_workingPressure_edit.setPlainText("30")   # Working Pressure
+        self.ui.PC_workingPressure_edit.setPlainText("30")   # Working Pressure (mTorr)
         self.ui.PC_rfPower_edit.setPlainText("55")           # RF Power (W)
         self.ui.PC_ProcessTime_edit.setPlainText("0.25")     # Process Time (분)
 
@@ -59,7 +59,7 @@ class MainWindow(QWidget):
             "ch2": self.ui.page_2,  # CH2
         }
 
-        # === 공용(공유) 리소스만 이곳에서 생성 ===
+        # === 공용(공유) 리소스 생성 ===
         # 단일 Chat Notifier (config_local.CHAT_WEBHOOK_URL 사용)
         url = getattr(cfgl, "CHAT_WEBHOOK_URL", None)
         self.chat: Optional[ChatNotifier] = ChatNotifier(url) if url else None
@@ -68,7 +68,7 @@ class MainWindow(QWidget):
 
         # ── 현재 PLC 로그의 소유 챔버 (1/2). 없으면 None → 방송 모드
         self._plc_owner: Optional[int] = None
-        self.pc = None  # Plasma Cleaning 비활성화 표시
+        self.pc = None  # Plasma Cleaning 런타임 핸들
 
         # PLC (공유) : CH 힌트 > 소유자 > 방송 순으로 라우팅
         self.plc: AsyncPLC = AsyncPLC(logger=self._plc_log)
@@ -80,16 +80,7 @@ class MainWindow(QWidget):
         # CH1/CH2용 IG/MFC 모두 생성해 보관
         #   - IG: 각 챔버 전용 포트
         #   - MFC: 각 챔버 전용 포트
-        #   - Gas Flow는 항상 MFC1의 ch=3 사용(Plasma Cleaning용 정책)
-        #
-        # IG와 MFC는 PLC와 마찬가지로 공통 자원으로 관리해야 한다.  
-        # 이전 구현에서는 각 챔버 런타임 내부에서 IG/MFC 인스턴스를 생성했으나  
-        # Plasma Cleaning과 CH 공정이 동일한 장치를 사용하면서 상태를 공유할 수 있도록  
-        # 여기에서 챔버별로 한 번씩만 생성해 두고 런타임/컨트롤러에 주입한다.
-
-        # CH1용 MFC (Gas #1–4), CH2용 MFC
-        # 설정 모듈에 값이 없을 때는 config_common의 값을 사용하고,
-        # 최종적으로 기본값으로 192.168.1.50 IP와 포트를 사용한다.
+        #   - Plasma Cleaning에서 Gas Flow는 '항상 MFC1의 ch=3' 정책
         self.mfc1: AsyncMFC = AsyncMFC(
             host=getattr(config_ch1, "MFC_TCP_HOST", getattr(cfgc, "MFC_TCP_HOST", "192.168.1.50")),
             port=getattr(config_ch1, "MFC_TCP_PORT", 4003),
@@ -103,7 +94,6 @@ class MainWindow(QWidget):
             enable_stabilization=True,
         )
 
-        # CH1용 IG, CH2용 IG
         self.ig1: AsyncIG = AsyncIG(
             host=getattr(config_ch1, "IG_TCP_HOST", getattr(cfgc, "IG_TCP_HOST", "192.168.1.50")),
             port=getattr(config_ch1, "IG_TCP_PORT", 4001),
@@ -113,11 +103,8 @@ class MainWindow(QWidget):
             port=getattr(config_ch2, "IG_TCP_PORT", 4002),
         )
 
-        # Plasma Cleaning에서 선택된 챔버(MFC/IG) 추적용 변수  
-        # 기본적으로 CH1을 사용하며, Gas Flow는 정책상 항상 MFC1의 3번 가스 채널을 이용한다.
+        # Plasma Cleaning에서 선택된 챔버 추적(기본 CH1)
         self._pc_use_ch: int = 1
-        self._pc_gas_mfc = self.mfc1
-        self._pc_gas_channel: int = 3
 
         # === 챔버 런타임 2개 생성 ===
         self.ch1 = ChamberRuntime(
@@ -140,7 +127,7 @@ class MainWindow(QWidget):
             prefix="ch2_",
             loop=self._loop,
             plc=self.plc,
-            chat=self.chat,     # 단일 Notifier 공유 가능
+            chat=self.chat,
             cfg=config_ch2,
             log_dir=self._log_root,
             mfc=self.mfc2,
@@ -148,32 +135,21 @@ class MainWindow(QWidget):
             on_plc_owner=self._set_plc_owner,
         )
 
-        # === Plasma Cleaning 런타임과 컨트롤러 생성 ===
-        # Plasma Cleaning 공정은 IG/MFC/PLC의 인스턴스를 공유하므로 메인에서
-        # Runtime을 한 번만 생성한 뒤 각 챔버 선택 시 디바이스를 바꿔 끼웁니다.
+        # === Plasma Cleaning 런타임 생성 (공유 장치 주입) ===
         try:
-            # 초기에는 CH1의 IG/MFC를 바인딩한다. 이후 라디오 버튼
-            # 상태에 따라 set_devices()로 변경된다.
             self.pc = PlasmaCleaningRuntime(
                 ui=self.ui,
-                prefix="PC_",                 # UI objectName이 PC_Start_button 형식이면 반드시 "PC"
+                prefix="PC_",               # PC_* 네이밍 사용
                 loop=self._loop,
-                #cfg=config_ch1,              # CH1 TCP 정보로 fallback 생성 가능하게
                 log_dir=self._log_root,
-                plc=self.plc,                # 공유 PLC
-                # Plasma Cleaning은 Gas Flow를 항상 MFC1의 3번 채널로 사용하고,  
-                # 스퍼터링 압력 제어용 SP4 역시 현재 선택된 챔버의 MFC 인스턴스를 사용한다.  
-                # 초기에 CH1을 기본으로 사용하도록 주입한다.  
-                mfc_gas=self.mfc1,
-                mfc_sp4=self.mfc1,
-                ig=self.ig1,
+                plc=self.plc,              # 공유 PLC
+                mfc_gas=self.mfc1,         # Gas Flow는 정책상 항상 MFC1 사용
+                mfc_sp4=self.mfc1,         # 초기엔 CH1 기준
+                ig=self.ig1,               # IG도 초기엔 CH1 기준
                 chat=self.chat,
             )
-
         except Exception as e:
-            # 초기화 실패 시 None으로 설정하고 로그를 남긴다.
             self.pc = None
-            self.pc_ctrl = None
             try:
                 self._broadcast_log("PC", f"Failed to initialize PlasmaCleaningRuntime: {e!r}")
             except Exception:
@@ -191,7 +167,7 @@ class MainWindow(QWidget):
         # --- 페이지 네비 버튼 및 라디오 연결
         self._connect_page_buttons()
 
-        # IG 콜백 + SP4용 MFC 전환을 함께 반영하도록 수정
+        # IG 콜백 + SP4용 MFC 전환을 함께 반영
         self._apply_pc_ch_selection()
 
     # ───────────────────────────────────────────────────────────
@@ -254,7 +230,6 @@ class MainWindow(QWidget):
         try:
             if hasattr(self.ui, "PC_useChamber1_radio"):
                 self.ui.PC_useChamber1_radio.setChecked(True)
-            # 두 라디오 모두 토글 시 _apply_pc_ch_selection 호출
             for rb in (getattr(self.ui, "PC_useChamber1_radio", None),
                        getattr(self.ui, "PC_useChamber2_radio", None)):
                 if rb:
@@ -263,18 +238,14 @@ class MainWindow(QWidget):
             pass
 
     def _on_pc_radio_toggled(self, _checked: bool) -> None:
-        # 현재 라디오 상태 읽어서 내부 플래그 갱신
         ch = 1
         try:
             if hasattr(self.ui, "PC_useChamber2_radio") and self.ui.PC_useChamber2_radio.isChecked():
                 ch = 2
         except Exception:
             pass
-
         if ch != getattr(self, "_pc_use_ch", None):
             self._pc_use_ch = ch
-
-        # IG/MFC 바인딩 재적용
         self._apply_pc_ch_selection()
 
     def _apply_pc_ch_selection(self) -> None:
@@ -282,7 +253,7 @@ class MainWindow(QWidget):
         if not pc:
             return
 
-        # 라디오 상태 반영
+        # 라디오 상태 → 선택 챔버
         ch = 1
         try:
             if hasattr(self.ui, "PC_useChamber2_radio") and self.ui.PC_useChamber2_radio.isChecked():
@@ -291,61 +262,60 @@ class MainWindow(QWidget):
             pass
         self._pc_use_ch = ch
 
-        # 선택된 챔버의 IG 객체
+        # 선택된 챔버의 IG
         ig = self.ig1 if ch == 1 else self.ig2
 
-        # IG 콜백 주입 (런타임은 이 콜백만 사용)
+        # IG 콜백 주입
         async def _ensure_on():
             fn = getattr(ig, "ensure_on", None) or getattr(ig, "turn_on", None)
             if callable(fn):
                 await fn()
 
         async def _read_mTorr() -> float:
-            # 프로젝트의 AsyncIG에 맞는 읽기 API로 교체하세요.
-            # 아래는 흔한 네이밍을 우선 시도하고, 실패 시 예외를 일으켜 상위에서 처리.
+            # 프로젝트의 AsyncIG 구현에서 mTorr 직접 반환 함수가 있으면 사용
             for name in ("read_mTorr", "read_pressure_mTorr", "get_mTorr"):
                 fn = getattr(ig, name, None)
                 if callable(fn):
                     v = await fn()
                     return float(v)
-            raise RuntimeError("IG read API not found")
+            # 없으면 Torr 읽고 변환
+            read_fn = getattr(ig, "read_pressure", None)
+            if not callable(read_fn):
+                raise RuntimeError("IG read API not found")
+            torr = float(await read_fn())
+            return torr * 1000.0
 
         try:
             pc.set_ig_callbacks(_ensure_on, _read_mTorr)
         except Exception as e:
             self._broadcast_log("PC", f"IG 콜백 바인딩 실패: {e!r}")
 
-        # 선택된 챔버에 따라 MFC 주입: Gas Flow는 항상 self.mfc1, SP4는 현재 챔버 MFC
+        # 선택 챔버에 맞춰 MFC 주입: Gas Flow는 항상 mfc1, SP4는 해당 챔버 MFC
         try:
             mfc_sp4 = self.mfc1 if ch == 1 else self.mfc2
-            if hasattr(pc, 'set_mfcs'):
-                pc.set_mfcs(mfc_gas=self.mfc1, mfc_sp4=mfc_sp4)
-            elif hasattr(pc, 'set_mfc_sp4'):
-                pc.set_mfc_sp4(mfc_sp4)
+            pc.set_mfcs(mfc_gas=self.mfc1, mfc_sp4=mfc_sp4)
         except Exception as e:
             self._broadcast_log("PC", f"MFC 주입 실패: {e!r}")
 
-        # (선택) 현재 선택된 챔버 번호도 런타임에 전달
-        if hasattr(pc, 'set_selected_ch'):
-            pc.set_selected_ch(ch)
-
-        # 안내 로그 (한 번만 출력하도록 중복 제거)
+        # 선택 챔버 번호 런타임에 통지
         try:
-            msg = f"[Plasma Cleaning] Use CH{ch} IG, SP4 → MFC{ch}, GasFlow → MFC1 ch3"
-            if hasattr(self, "pc") and self.pc:
-                self.pc.append_log("PC", msg)  # PC 로그창에만 출력
-            else:
-                self._broadcast_log("PC", msg)
+            pc.set_selected_ch(ch)
         except Exception:
             pass
-    
+
+        # 안내 로그
+        try:
+            pc.append_log("PC", f"[Plasma Cleaning] Use CH{ch} IG, SP4 → MFC{ch}, GasFlow → MFC1 ch3")
+        except Exception:
+            pass
+
     def _switch_page(self, key: Literal["pc", "ch1", "ch2"]) -> None:
         page = self._pages.get(key)
         if page:
             self._stack.setCurrentWidget(page)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        # 요청: 해당 장비를 챔버에서 사용하고 있을 수 있으니 정리(클린업)는 추가하지 않음
+        # 공유 장치이므로 여기서는 빠른 종료만
         try:
             if self.pc:
                 self.pc.shutdown_fast()
@@ -363,7 +333,7 @@ class MainWindow(QWidget):
             pass
         try:
             if self.chat:
-                self.chat.shutdown()   # 단일 Notifier만 종료
+                self.chat.shutdown()
         except Exception:
             pass
         event.accept()
