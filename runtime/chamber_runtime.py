@@ -1348,6 +1348,15 @@ class ChamberRuntime:
                 if self._try_handle_delay_step(params):
                     return
                 norm = self._normalize_params_for_process(params)
+                
+                # 입력값 검증
+                errs = self._validate_norm_params(norm)
+                if errs:
+                    self.append_log("Validate", "CSV 공정 파라미터 오류:\n - " + "\n - ".join(errs))
+                    # 전체 자동 실행 중단
+                    self._clear_queue_and_reset_ui()
+                    return
+
                 if not getattr(self, "_log_file_path", None):
                     self._prepare_log_file(norm)
                 else:
@@ -1544,6 +1553,11 @@ class ChamberRuntime:
             "process_note": f"Single CH{self.ch}",
             **vals,
         }
+        errs = self._validate_norm_params(cast(NormParams, params))
+        if errs:
+            self._post_warning("입력값 확인", "\n".join(f"- {e}" for e in errs))
+            return  
+
         params["G1 Target"] = vals.get("G1_target_name", "")
         params["G2 Target"] = vals.get("G2_target_name", "")
         params["G3 Target"] = vals.get("G3_target_name", "")
@@ -2011,7 +2025,10 @@ class ChamberRuntime:
 
         if self.dc_pulse:
             with contextlib.suppress(Exception):
-                self.dc_pulse.set_process_status(dcpl_on)
+                if not dcpl_on:
+                    # OFF는 런타임이 즉시 내려도 됨(장치 폴링 정지)
+                    self.dc_pulse.set_process_status(False)
+                # ON(True)은 장치가 OUTPUT_ON 성공/검증 이후 5초 타이머로 자체 시작함
 
         if self.rf_pulse:
             with contextlib.suppress(Exception):
@@ -2434,3 +2451,57 @@ class ChamberRuntime:
         # if prev != self._owns_plc:
         #     self.append_log("MAIN", f"PLC log owner -> {self._owns_plc}")
     # ============================= PLC 로그 소유 관리 =============================
+
+    # ============================= 입력값 검증 헬퍼 =============================
+    def _validate_norm_params(self, p: NormParams) -> list[str]:
+        errs: list[str] = []
+
+        # 공통: 가스/유량
+        if not (p.get("use_ar") or p.get("use_o2") or p.get("use_n2")):
+            errs.append("가스를 하나 이상 선택해야 합니다.")
+        for k in ("ar_flow","o2_flow","n2_flow"):
+            v = float(p.get(k, 0) or 0)
+            if v < 0:
+                errs.append(f"{k}는 음수 불가")
+
+        if self.ch == 1:
+            # CH1 규칙
+            if not p.get("use_dc_pulse"):
+                errs.append("CH1은 DC-Pulse를 반드시 선택해야 합니다.")
+            if p.get("dc_pulse_power", 0) <= 0:
+                errs.append("DC-Pulse Target Power(W) > 0 필요")
+            f = p.get("dc_pulse_freq")
+            d = p.get("dc_pulse_duty")
+            if f is not None and not (20 <= f <= 150):
+                errs.append("DC-Pulse Freq(kHz)는 20..150")
+            if d is not None and not (1 <= d <= 99):
+                errs.append("DC-Pulse Duty(%)는 1..99")
+        else:
+            # CH2 규칙(기존 싱글런 로직과 동일)
+            checked = int(p.get("use_g1", False)) + int(p.get("use_g2", False)) + int(p.get("use_g3", False))
+            if checked == 0 or checked == 3:
+                errs.append("G1~G3 중 1개 또는 2개만 선택")
+            if p.get("use_g1") and not p.get("G1_target_name"):
+                errs.append("G1 타겟 이름이 비어있음")
+            if p.get("use_g2") and not p.get("G2_target_name"):
+                errs.append("G2 타겟 이름이 비어있음")
+            if p.get("use_g3") and not p.get("G3_target_name"):
+                errs.append("G3 타겟 이름이 비어있음")
+
+            if not (p.get("use_rf_pulse") or p.get("use_dc_power") or p.get("use_rf_power")):
+                errs.append("RF Pulse 또는 DC 중 하나 이상 선택 필요")
+
+            if p.get("use_rf_pulse"):
+                if p.get("rf_pulse_power", 0) <= 0:
+                    errs.append("RF Pulse Target Power(W) > 0 필요")
+                f = p.get("rf_pulse_freq")
+                d = p.get("rf_pulse_duty")
+                if f is not None and not (1 <= f <= 100):
+                    errs.append("RF Pulse Freq(kHz)는 1..100")
+                if d is not None and not (1 <= d <= 99):
+                    errs.append("RF Pulse Duty(%)는 1..99")
+            if p.get("use_dc_power") and p.get("dc_power", 0) <= 0:
+                errs.append("DC 파워(W) > 0 필요")
+
+        return errs
+    # ============================= 입력값 검증 헬퍼 =============================  

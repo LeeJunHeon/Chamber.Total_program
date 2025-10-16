@@ -752,7 +752,7 @@ class AsyncMFC:
     def set_process_status(self, should_poll: bool):
         if should_poll:
             if self._poll_task is None or self._poll_task.done():
-                self._ev_nowait(MFCEvent(kind="status", message="주기적 읽기(Polling) 시작"))
+                self._ev_nowait(MFCEvent(kind="status", message="Polling read 시작"))
                 self._poll_task = asyncio.create_task(self._poll_loop())
         else:
             if self._poll_task:
@@ -760,9 +760,9 @@ class AsyncMFC:
                 self._poll_task = None
             self._poll_cycle_active = False
             purged = self._purge_poll_reads_only(cancel_inflight=True, reason="polling off")
-            self._ev_nowait(MFCEvent(kind="status", message="주기적 읽기(Polling) 중지"))
+            self._ev_nowait(MFCEvent(kind="status", message="Polling read 중지"))
             if purged:
-                self._ev_nowait(MFCEvent(kind="status", message=f"[QUIESCE] 폴링 읽기 {purged}건 제거 (polling off)"))
+                self._ev_nowait(MFCEvent(kind="status", message=f"[QUIESCE] Polling read {purged}건 제거 (polling off)"))
 
     def on_process_finished(self, success: bool):
         """공정 종료 시 내부 상태 리셋."""
@@ -1601,7 +1601,7 @@ class AsyncMFC:
             self._safe_callback(self._inflight.callback, None)
             self._inflight = None
             purged += 1
-            self._dbg("MFC", f"[QUIESCE] 폴링 inflight 취소: {reason}")
+            self._dbg("MFC", f"[QUIESCE] Polling inflight 취소: {reason}")
         kept = deque()
         while self._cmd_q:
             c = self._cmd_q.popleft()
@@ -1611,7 +1611,7 @@ class AsyncMFC:
             kept.append(c)
         self._cmd_q = kept
         if purged:
-            self._ev_nowait(MFCEvent(kind="status", message=f"[QUIESCE] 폴링 읽기 {purged}건 제거: {reason}"))
+            self._ev_nowait(MFCEvent(kind="status", message=f"[QUIESCE] Polling read {purged}건 제거: {reason}"))
         return purged
 
     async def _absorb_late_lines(self, budget_ms: int = 60):

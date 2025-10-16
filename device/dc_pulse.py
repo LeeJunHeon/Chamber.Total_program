@@ -284,13 +284,13 @@ class AsyncDCPulse:
     def set_process_status(self, should_poll: bool):
         if should_poll:
             if self._poll_task is None or self._poll_task.done():
-                self._ev_nowait(DCPEvent(kind="status", message=f"주기적 읽기(Polling) 시작({self._poll_period_s:.1f}s)"))
+                self._ev_nowait(DCPEvent(kind="status", message=f"Polling read 시작({self._poll_period_s:.1f}s)"))
                 self._poll_task = asyncio.create_task(self._poll_loop())
         else:
             if self._poll_task:
                 self._poll_task.cancel()
                 self._poll_task = None
-            self._ev_nowait(DCPEvent(kind="status", message="주기적 읽기(Polling) 중지"))
+            self._ev_nowait(DCPEvent(kind="status", message="Polling read 중지"))
 
     # 추가: 연결 완료 대기 헬퍼
     async def _wait_until_connected(self, timeout: float = 3.0) -> bool:
