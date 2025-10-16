@@ -204,6 +204,7 @@ class ChamberRuntime:
         log_dir: Path,
         *,
         mfc: Optional[AsyncMFC] = None,
+        ig: Optional[AsyncIG] = None,
         supports_dc_cont: Optional[bool] = None,   # DC 연속
         supports_rf_cont: Optional[bool] = None,   # RF 연속
         supports_dc_pulse: Optional[bool] = None,  # DC-Pulse
@@ -279,12 +280,11 @@ class ChamberRuntime:
         mfc_host, mfc_port = self.cfg.MFC_TCP
         ig_host,  ig_port  = self.cfg.IG_TCP
 
-        # FLOW_ON 시 실제 유량 일치 확인(안정화 루프)만 켬
-        # 변경 (주입이 있으면 그대로 사용)
+        # MFC/IG를 외부에서 주입하면 그대로 사용하고, 없으면 기존 방식대로 생성
         self.mfc = mfc or AsyncMFC(
             host=mfc_host, port=mfc_port, enable_verify=False, enable_stabilization=True
         )
-        self.ig  = AsyncIG(host=ig_host,  port=ig_port)
+        self.ig  = ig or AsyncIG(host=ig_host, port=ig_port)
 
         # OES 인스턴스 생성 시 현재 챔버 번호에 따라 USB 채널을 명시적으로 매핑한다.
         # CH1 → USB0, CH2 → USB1. OESAsync 내부 기본 동작도 동일하지만 명확성을 위해 전달한다.
@@ -724,7 +724,6 @@ class ChamberRuntime:
                             self._spawn_detached(self._stop_device_watchdogs(light=False), name="FullCleanup")
                         self._pending_device_cleanup = False
                         self._pc_stopping = False
-                        continue
 
                     self._pc_stopping = False
                     self._start_next_process_from_queue(ok)
@@ -1361,6 +1360,10 @@ class ChamberRuntime:
         try:
             # 시작 시도 직전에만 허용
             self._auto_connect_enabled = True
+
+            # ⬇️ 추가: 이전 런의 잔여 종료 플래그를 명시적으로 클리어
+            self._pc_stopping = False
+            self._pending_device_cleanup = False
             
             # ✅ 이번 런에서 실제로 사용할 펄스만 표시(IG/MFC는 항상 연결이므로 제외)
             use_dc_pulse = bool(params.get("use_dc_pulse", False)) and self.supports_dc_pulse
