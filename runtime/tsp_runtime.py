@@ -162,9 +162,15 @@ class TSPPageController:
         self._task = asyncio.create_task(self._run(target, cycles))
 
     def on_stop_clicked(self) -> None:
+        # 1) 실행 중이면 즉시 중단
         if self._task and not self._task.done():
-            self._log("중단 요청")
+            self._log("[TSP] 중단 요청")
             self._task.cancel()
+
+        # 2) 실행 중이 아니더라도, 예약이 걸려 있으면 예약 취소
+        if self._schedule_task and not self._schedule_task.done():
+            self.cancel_schedule()  # 내부에서 "[TSP] 예약 실행 취소됨" 로그 출력
+
 
     # ── 내부 실행 루틴 ─────────────────────────────────────
     async def _run(self, target: float, cycles: int) -> None:
@@ -289,20 +295,21 @@ class TSPPageController:
         """예약: when 도달 → (바쁘면 대기) → on_start_clicked 트리거 → (옵션) 매일 반복."""
         try:
             while True:
-                # 카운트다운 (1초 tick)
-                while True:
-                    now = datetime.now()
-                    remain = (when - now).total_seconds()
-                    if remain <= 0:
-                        break
-                    # 남은 시간이 60초 단위이거나 10초 미만이면 안내 로그
-                    if int(remain) % 60 == 0 or remain < 10:
-                        self._log(f"[TSP] 예약 대기 중… {int(remain)}초 남음 (실행시각 {when.strftime('%H:%M:%S')})")
-                    await asyncio.sleep(min(1.0, max(0.1, remain)))
+                # ⬇ 필요한 만큼만 한 번 대기 (task.cancel()로 즉시 취소 가능)
+                now = datetime.now()
+                remain = (when - now).total_seconds()
+                if remain > 0:
+                    await asyncio.sleep(remain)
 
-                # 실행 직전: 이미 실행 중이면 비어질 때까지 5초 간격 대기
+                # 실행 직전: 다른 공정이 돌고 있으면 비어질 때까지 대기
+                # (로그는 60초에 한 번만 출력해 스팸 방지)
+                last_log_ts = 0.0
+                loop_time = asyncio.get_running_loop().time
                 while self._busy:
-                    self._log("[TSP] 현재 공정 중 → 예약 실행 대기…")
+                    t = loop_time()
+                    if t - last_log_ts >= 60.0:
+                        self._log("[TSP] 현재 공정 중… 예약 실행을 대기합니다.")
+                        last_log_ts = t
                     await asyncio.sleep(5.0)
 
                 # 실행 트리거
@@ -320,7 +327,9 @@ class TSPPageController:
                 when = when + timedelta(days=1)
                 self._log(f"[TSP] 다음 반복 예약: {when.strftime('%Y-%m-%d %H:%M:%S')}")
         except asyncio.CancelledError:
+            # 취소 시 조용히 종료
             pass
         finally:
             if not self._schedule_repeat_daily:
                 self._schedule_task = None
+
