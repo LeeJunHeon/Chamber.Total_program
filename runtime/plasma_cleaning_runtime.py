@@ -374,8 +374,6 @@ class PlasmaCleaningRuntime:
             self.append_log("PC", f"오류: {e!r}")
         finally:
             self._running = False
-            # (삭제됨) self._logger.end_session()
-            await self._safe_rf_stop()
             self._set_state_text("IDLE")
 
     async def _on_click_stop(self) -> None:

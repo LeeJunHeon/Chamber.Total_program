@@ -139,12 +139,12 @@ class ProcessStep:
             if self.value is None:
                 raise ValueError("DC_PULSE_START에는 value(타깃 파워)가 필요합니다.")
             if not self.params or len(self.params) != 2:
-                raise ValueError("DC_PULSE_START params는 (freqHz|None, duty%|None) 형태여야 합니다.")
+                raise ValueError("DC_PULSE_START params는 (freqkHz|None, duty%|None) 형태여야 합니다.")
         if self.action == ActionType.RF_PULSE_START:
             if self.value is None:
                 raise ValueError("RF_PULSE_START에는 value(타깃 파워)가 필요합니다.")
             if not self.params or len(self.params) != 2:
-                raise ValueError("RF_PULSE_START params는 (freqHz|None, duty%|None) 형태여야 합니다.")
+                raise ValueError("RF_PULSE_START params는 (freqkHz|None, duty%|None) 형태로 받고 내부에서 Hz로 변환합니다.")
 
 
 # =========================
@@ -1098,42 +1098,49 @@ class ProcessController:
                 parallel=want_parallel, polling=False,
             ))
 
-        # DC 펄스
+        # --- DC 펄스
         dc_pulse_power = float(params.get("dc_pulse_power", 0))
-        dc_pulse_freq  = params.get("dc_pulse_freq", None)
-        dc_pulse_duty  = params.get("dc_pulse_duty", None)
-        if dc_pulse_freq is not None: 
-            dc_pulse_freq = int(dc_pulse_freq)          # UI: Hz
-            dc_pulse_freq = dc_pulse_freq / 1000.0      # → kHz로 변환
-        if dc_pulse_duty is not None: 
-            dc_pulse_duty = int(dc_pulse_duty)
+        dc_pulse_freq  = params.get("dc_pulse_freq", None)   # UI: kHz
+        dc_pulse_duty  = params.get("dc_pulse_duty", None)   # UI: %
+
+        if dc_pulse_freq is not None:
+            dc_pulse_freq = int(dc_pulse_freq)               # 그대로 kHz 정수
+        if dc_pulse_duty is not None:
+            dc_pulse_duty = int(dc_pulse_duty)               # 그대로 %
 
         if use_dc_pulse:
             f_txt = f"{dc_pulse_freq}kHz" if dc_pulse_freq is not None else "keep"
             d_txt = f"{dc_pulse_duty}%" if dc_pulse_duty is not None else "keep"
             steps.append(ProcessStep(
                 action=ActionType.DC_PULSE_START, value=dc_pulse_power,
-                params=(dc_pulse_freq, dc_pulse_duty),
+                params=(dc_pulse_freq, dc_pulse_duty),  # kHz, %
                 message=f'DC Pulse 설정 및 ON (P={dc_pulse_power}W, f={f_txt}, duty={d_txt})',
                 parallel=False, polling=False,
             ))
 
-        # RF
+        # --- RF
         rf_pulse_power = float(params.get("rf_pulse_power", 0))
-        rf_pulse_freq  = params.get("rf_pulse_freq", None)
-        rf_pulse_duty  = params.get("rf_pulse_duty", None)
-        if rf_pulse_freq is not None: rf_pulse_freq = int(rf_pulse_freq)
-        if rf_pulse_duty is not None: rf_pulse_duty = int(rf_pulse_duty)
+        rf_pulse_freq_khz = params.get("rf_pulse_freq", None)    # UI: kHz
+        rf_pulse_duty     = params.get("rf_pulse_duty", None)    # UI: %
+
+        rf_pulse_freq_hz = None
+        if rf_pulse_freq_khz is not None:
+            # kHz(실수/정수 모두 허용) → Hz(int) 변환
+            rf_pulse_freq_hz = int(round(float(rf_pulse_freq_khz) * 1000.0))
+        if rf_pulse_duty is not None:
+            rf_pulse_duty = int(rf_pulse_duty)
 
         if use_rf_pulse:
-            f_txt = f"{rf_pulse_freq}Hz" if rf_pulse_freq is not None else "keep"
+            # 로그/메시지는 kHz로 보기 좋게 표시
+            f_txt = f"{float(rf_pulse_freq_khz):.3f}kHz" if rf_pulse_freq_khz is not None else "keep"
             d_txt = f"{rf_pulse_duty}%" if rf_pulse_duty is not None else "keep"
             steps.append(ProcessStep(
                 action=ActionType.RF_PULSE_START, value=rf_pulse_power,
-                params=(rf_pulse_freq, rf_pulse_duty),
+                params=(rf_pulse_freq_hz, rf_pulse_duty),  # 장치에는 Hz, %
                 message=f'RF Pulse 설정 및 ON (P={rf_pulse_power}W, f={f_txt}, duty={d_txt})',
                 parallel=want_parallel, polling=False,
             ))
+
         elif use_rf:
             steps.append(ProcessStep(
                 action=ActionType.RF_POWER_SET, value=rf_power,
