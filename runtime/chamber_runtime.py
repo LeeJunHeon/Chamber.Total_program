@@ -2124,6 +2124,12 @@ class ChamberRuntime:
             self._log_fp = None
 
     def _clear_queue_and_reset_ui(self) -> None:
+        # ★ 다음 Start 시 1분 쿨다운 기준 시각을 항상 기록
+        try:
+            self._last_finish_monotonic = self._loop.time()
+        except Exception:
+            self._last_finish_monotonic = None
+
         self.process_queue = []
         self.current_process_index = -1
         self._reset_ui_after_process()

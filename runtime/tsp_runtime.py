@@ -267,7 +267,13 @@ class TSPPageController:
         """지정 시각(로컬)에 TSP 공정을 자동 시작."""
         self.cancel_schedule(silent=True)
         self._schedule_repeat_daily = bool(repeat_daily)
-        self._schedule_task = asyncio.create_task(self._schedule_loop(when), name="TSPStartScheduler")
+
+        # ✅ running 여부와 무관하게 안전: 현재 set된 이벤트 루프를 얻어서 create_task
+        loop = asyncio.get_event_loop_policy().get_event_loop()
+        self._schedule_task = loop.create_task(
+            self._schedule_loop(when), name="TSPStartScheduler"
+        )
+
         self._log(f"[TSP] 예약 실행 등록: {when.strftime('%Y-%m-%d %H:%M:%S')} (매일={self._schedule_repeat_daily})")
 
     def cancel_schedule(self, silent: bool = False) -> None:

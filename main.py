@@ -156,9 +156,9 @@ class MainWindow(QWidget):
             # 상태에 따라 set_devices()로 변경된다.
             self.pc = PlasmaCleaningRuntime(
                 ui=self.ui,
-                prefix="PC",                 # UI objectName이 PC_Start_button 형식이면 반드시 "PC"
+                prefix="PC_",                 # UI objectName이 PC_Start_button 형식이면 반드시 "PC"
                 loop=self._loop,
-                cfg=config_ch1,              # CH1 TCP 정보로 fallback 생성 가능하게
+                #cfg=config_ch1,              # CH1 TCP 정보로 fallback 생성 가능하게
                 log_dir=self._log_root,
                 plc=self.plc,                # 공유 PLC
                 # Plasma Cleaning은 Gas Flow를 항상 MFC1의 3번 채널로 사용하고,  
@@ -191,7 +191,7 @@ class MainWindow(QWidget):
         # --- 페이지 네비 버튼 및 라디오 연결
         self._connect_page_buttons()
 
-        # --- Plasma Cleaning에 현재 라디오 선택 반영(초기 바인딩)
+        # IG 콜백 + SP4용 MFC 전환을 함께 반영하도록 수정
         self._apply_pc_ch_selection()
 
     # ───────────────────────────────────────────────────────────
@@ -315,9 +315,30 @@ class MainWindow(QWidget):
         except Exception as e:
             self._broadcast_log("PC", f"IG 콜백 바인딩 실패: {e!r}")
 
-        # 참고 로그 (Gas Flow 정책 알림)
-        self._broadcast_log("PC", f"[Plasma Cleaning] Use CH{ch} IG, GasFlow → MFC1 ch3 (정책 고정)")
+        # 선택된 챔버에 따라 MFC 주입: Gas Flow는 항상 self.mfc1, SP4는 현재 챔버 MFC
+        try:
+            mfc_sp4 = self.mfc1 if ch == 1 else self.mfc2
+            if hasattr(pc, 'set_mfcs'):
+                pc.set_mfcs(mfc_gas=self.mfc1, mfc_sp4=mfc_sp4)
+            elif hasattr(pc, 'set_mfc_sp4'):
+                pc.set_mfc_sp4(mfc_sp4)
+        except Exception as e:
+            self._broadcast_log("PC", f"MFC 주입 실패: {e!r}")
 
+        # (선택) 현재 선택된 챔버 번호도 런타임에 전달
+        if hasattr(pc, 'set_selected_ch'):
+            pc.set_selected_ch(ch)
+
+        # 안내 로그 (한 번만 출력하도록 중복 제거)
+        try:
+            msg = f"[Plasma Cleaning] Use CH{ch} IG, SP4 → MFC{ch}, GasFlow → MFC1 ch3"
+            if hasattr(self, "pc") and self.pc:
+                self.pc.append_log("PC", msg)  # PC 로그창에만 출력
+            else:
+                self._broadcast_log("PC", msg)
+        except Exception:
+            pass
+    
     def _switch_page(self, key: Literal["pc", "ch1", "ch2"]) -> None:
         page = self._pages.get(key)
         if page:
