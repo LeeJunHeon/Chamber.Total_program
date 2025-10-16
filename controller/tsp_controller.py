@@ -68,7 +68,6 @@ class TSPProcessController:
                 last_p = p
                 self._last_pressure = p
                 self._emit_pressure(p)
-                self._log(f"[IG] P={p:.3e}")
                 if p <= target:
                     return True, p
             except Exception as e:

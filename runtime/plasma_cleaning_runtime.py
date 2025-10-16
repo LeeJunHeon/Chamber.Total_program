@@ -1,327 +1,551 @@
-"""
-plasma_cleaning_runtime.py
-=================================
-
-This module defines a minimal asynchronous runtime for executing a plasma
-cleaning process.  The runtime is designed to mirror the structure of the
-existing ChamberRuntime: it accepts pre‑created device instances (PLC,
-MFC, IG) and exposes a simple API to start and stop the plasma cleaning
-sequence.  The process sequence roughly follows these steps:
-
-1. Wait for the vacuum chamber to reach a specified base pressure using
-   the IG (ion gauge).
-2. Enable the MFC channel used for sputter gun SP4 and set the gas flow
-   to a desired value.
-3. Wait until the chamber pressure rises to a target working pressure.
-4. Apply RF power via the shared PLC's DAC channel for a specified
-   duration.
-5. Ramp down RF power and close the gas flow.
-
-The runtime does not depend on Qt; it communicates status through
-asyncio logs and optionally a chat notifier.
-"""
-
+# runtime/plasma_cleaning_runtime.py
+# -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import asyncio
-from typing import Optional, Callable, Any
+import asyncio, contextlib, inspect, traceback, time, logging
+from dataclasses import dataclass
+from datetime import datetime
+from pathlib import Path
+from typing import Any, Callable, Coroutine, Mapping, Optional, Awaitable
 
+from PySide6.QtGui import QTextCursor
+from PySide6.QtWidgets import QMessageBox, QPlainTextEdit, QApplication
+from PySide6.QtCore import Qt
+
+# 장비/컨트롤러
 from device.mfc import AsyncMFC
-from device.ig import AsyncIG
-from device.rf_power import RFPowerAsync
-from device.plc import AsyncPLC  # type: ignore
-from controller.chat_notifier import ChatNotifier  # type: ignore
+from device.plc import AsyncPLC
+from controller.plasma_cleaning_controller import PlasmaCleaningController
+from controller.graph_controller import GraphController
+from controller.data_logger import DataLogger
+from device.rf_power import RFPowerAsync, RFPowerEvent
+
+
+# --- 최소 설정 어댑터: CH1 MFC TCP만 필요 ---
+@dataclass
+class _CfgAdapter:
+    mod: Any
+    def MFC_TCP_CH1(self) -> tuple[str, int]:
+        host = str(getattr(self.mod, "MFC_TCP_HOST", "192.168.1.50"))
+        port = int(getattr(self.mod, "MFC_TCP_PORT", 4006))  # CH1 기본 포트
+        return (host, port)
 
 
 class PlasmaCleaningRuntime:
-    """Asynchronous runtime for executing a plasma cleaning process.
+    """
+    Plasma Cleaning 전용 런타임.
 
-    Parameters
-    ----------
-    ui: Any
-        Reference to the main UI.  The runtime will read user inputs
-        (target pressure, gas flow, working pressure, RF power, process
-        time) from the appropriate widgets.  It also provides an
-        ``append_log`` method to write log messages to the UI.
-    prefix: str
-        Prefix for locating UI widgets (e.g. ``PC_Start_button``).  An
-        empty string means that widgets are named exactly as in the UI.
-    loop: asyncio.AbstractEventLoop
-        Event loop used for creating background tasks.
-    plc: AsyncPLC
-        Shared PLC instance used for controlling valves and RF power.
-    mfc: Optional[AsyncMFC]
-        Initial MFC instance.  This controls the SP4 channel on the
-        selected chamber; it can be replaced later via :meth:`set_devices`.
-    ig: Optional[AsyncIG]
-        Initial IG (ion gauge) instance for reading vacuum pressure.  It
-        can be replaced later via :meth:`set_devices`.
-    chat: Optional[ChatNotifier]
-        Optional chat notifier for reporting errors.
+    - MFC 컨트롤러 **#1** 사용, 가스 라인 **#3** 고정 (on/set/off는 유량으로 처리: 0 = off)
+    - **Working Pressure**: MFC의 **SP4 set/on/off**로 목표 압력 유지
+    - **Target Pressure**: **IG**를 읽어서 목표 도달(±tol, settle 유지)까지 **대기**
+    - RF 파워는 펄스 없이 '연속'만, **PLC DAC**로 적용/읽기/끄기
+    - Plasma Cleaning은 SP4 사용 및 MFC1 #3 GAS 사용
     """
 
+    # ─────────────────────────────────────────────────────────────
+    # 생성/초기화
+    # ─────────────────────────────────────────────────────────────
     def __init__(
         self,
-        *,
         ui: Any,
         prefix: str,
         loop: asyncio.AbstractEventLoop,
-        plc: AsyncPLC,
-        mfc: Optional[AsyncMFC] = None,
-        ig: Optional[AsyncIG] = None,
-        chat: Optional[ChatNotifier] = None,
+        cfg: Any,
+        log_dir: Path,
+        *,
+        plc: AsyncPLC | None = None,   # PLC는 RF DAC 및 GV
+        chat: Optional[Any] = None,
     ) -> None:
         self.ui = ui
-        self.prefix = prefix
-        self.loop = loop
-        self.plc = plc
-        self.mfc_sp4: Optional[AsyncMFC] = mfc
-        self.gas_mfc: Optional[AsyncMFC] = mfc
-        self.gas_channel: Optional[int] = None
-        self.ig: Optional[AsyncIG] = ig
+        self.prefix = str(prefix)
+        self._loop = loop
         self.chat = chat
-        # RF power controller uses PLC's DCV channel 1 (index 1) by default.
-        # The PLC wrapper exposes power_apply/power_write to control the
-        # forward power; we wrap these in callbacks for RFPowerAsync.
-        async def _rf_send(power: float) -> None:
-            # ensure the RF enable latch is set before applying power
-            try:
-                await self.plc.power_apply(power, family="DCV", ensure_set=True, channel=1)
-            except Exception as e:
-                self.append_log("RF", f"power_apply failed: {e!r}")
+        self.cfg = _CfgAdapter(cfg)
+        self.plc = plc
+        self._bg_tasks: list[asyncio.Task[Any]] = []
+        self._bg_started = False
+        self._devices_started = False
+        self._auto_connect_enabled = True
 
-        async def _rf_send_unverified(power: float) -> None:
-            try:
-                await self.plc.power_write(power, family="DCV", write_idx=1)
-            except Exception as e:
-                self.append_log("RF", f"power_write failed: {e!r}")
+        # 로그/상태 위젯
+        self._w_log: QPlainTextEdit | None = self._u("logMessage_edit")
+        self._w_state: QPlainTextEdit | None = self._u("processState_edit")
 
-        async def _rf_read_status() -> dict[str, float] | None:
-            try:
-                fwd = await self.plc.read_reg_name("DCV_READ_2")
-                ref = await self.plc.read_reg_name("DCV_READ_3")
-                return {"forward": float(fwd), "reflected": float(ref)}
-            except Exception as e:
-                self.append_log("RF", f"read RF status failed: {e!r}")
-                return None
+        # 그래프
+        self.graph = GraphController(self._u("rgaGraph_widget"), self._u("oesGraph_widget"))
+        with contextlib.suppress(Exception):
+            self.graph.reset()
 
-        self.rf_power = RFPowerAsync(
-            send_rf_power=_rf_send,
-            send_rf_power_unverified=_rf_send_unverified,
-            request_status_read=_rf_read_status,
+        # 데이터 로거
+        self.data_logger = DataLogger(
+            ch=0,
+            csv_dir=Path(r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database"),
         )
-        # Background task handle
-        self._task: Optional[asyncio.Task[Any]] = None
 
-    # ------------------------------------------------------------------
-    # Device binding
-    def set_devices(
+        # 로그 파일 상태
+        self._log_root = Path(log_dir)
+        self._log_dir = self._ensure_log_dir(self._log_root)
+        self._log_file_path: Path | None = None
+        self._log_fp = None
+
+        # 장치: CH1 MFC (컨트롤러 #1)
+        host, port = self.cfg.MFC_TCP_CH1()
+        self.mfc = AsyncMFC(host=host, port=port, enable_verify=False, enable_stabilization=True)
+
+        # PLC가 없다면 RF/밸브 기능 제한됨
+        self.rf = RFPowerAsync(
+            send_rf_power=self._rf_apply_via_plc,
+            send_rf_power_unverified=self._rf_write_via_plc,
+            request_status_read=self._rf_read_status_via_plc,
+            toggle_enable=self._rf_set_latch_via_plc,           # SET 래치
+            watt_deadband=5.0,
+        )
+
+        # 최근 IG 압력(mTorr) 캐시
+        self._last_ig_mTorr: float | None = None
+        # 외부(ChamberRuntime)에서 주입 가능한 IG 콜백
+        self._ensure_ig_on_cb: Optional[Callable[[], Awaitable[None]]] = None
+        self._read_ig_cb: Optional[Callable[[], Awaitable[float]]] = None
+
+        # UI 바인딩
+        self._connect_my_buttons()
+
+        # (중요) 외부 로그를 UI로 리다이렉트 — 터미널 출력 방지
+        self._install_logger_bridge()
+
+        # 컨트롤러 바인딩
+        self._bind_plasma_controller()
+
+        # MFC 이벤트 구독 → UI/로깅
+        self._ensure_task_alive("MFC_Events", self._mfc_event_loop)
+
+    # ─────────────────────────────────────────────────────────────
+    # 외부 주입: IG/PLC 연결 브리지
+    # ─────────────────────────────────────────────────────────────
+    def set_ig_callbacks(
         self,
-        *,
-        ig: Optional[AsyncIG] = None,
-        mfc_sp4: Optional[AsyncMFC] = None,
-        gas_mfc: Optional[AsyncMFC] = None,
-        gas_channel: Optional[int] = None,
+        ensure_on: Callable[[], Awaitable[None]] | None,
+        read_mTorr: Callable[[], Awaitable[float]] | None,
     ) -> None:
-        """Bind IG/MFC instances for the plasma cleaning process.
+        self._ensure_ig_on_cb = ensure_on
+        self._read_ig_cb = read_mTorr
 
-        Parameters are optional; only provided values will be updated.  If
-        ``gas_mfc`` or ``gas_channel`` are given, these control which MFC
-        channel supplies the gas during plasma cleaning (e.g. always MFC1
-        channel 3 in the current design).  The ``mfc_sp4`` controls the
-        SP4_SET/SP4_ON commands for the selected chamber.
-        """
-        if ig is not None:
-            self.ig = ig
-        if mfc_sp4 is not None:
-            self.mfc_sp4 = mfc_sp4
-        if gas_mfc is not None:
-            self.gas_mfc = gas_mfc
-        if gas_channel is not None:
-            self.gas_channel = int(gas_channel)
-
-    # ------------------------------------------------------------------
-    # Logging helper
-    def append_log(self, src: str, msg: str) -> None:
-        """Send a log message to the UI or chat notifier."""
+    # ─────────────────────────────────────────────────────────────
+    # UI 유틸
+    # ─────────────────────────────────────────────────────────────
+    def _u(self, leaf: str) -> Any | None:
         try:
-            # UI log: use the same interface as ChamberRuntime
-            log_fn = getattr(self.ui, "append_log", None)
-            if callable(log_fn):
-                log_fn(src, msg)
+            return getattr(self.ui, f"{self.prefix}_{leaf}")
         except Exception:
-            pass
-        # Chat notifier
-        if self.chat:
-            with asyncio.get_running_loop().call_exception_handler:
-                try:
-                    self.chat.notify_text(f"[{src}] {msg}")
-                except Exception:
-                    pass
+            return None
 
-    # ------------------------------------------------------------------
-    async def _wait_base_pressure(self, target_pressure: float) -> bool:
-        """Wait until the IG reports a pressure lower than ``target_pressure``."""
-        if not self.ig:
-            self.append_log("IG", "IG device not set; skipping base pressure wait")
-            return True
+    def _has_ui(self) -> bool:
         try:
-            await self.ig.start()
+            return QApplication.instance() is not None
         except Exception:
-            pass
-        try:
-            ok = await self.ig.wait_for_base_pressure(float(target_pressure))
-            return ok
-        except Exception as e:
-            self.append_log("IG", f"wait_for_base_pressure failed: {e!r}")
             return False
 
-    async def _set_gas_flow(self, flow: float) -> None:
-        """Set the SP4 flow on the selected chamber and open the valve."""
-        if not self.mfc_sp4:
-            self.append_log("MFC", "MFC (SP4) device not set; skipping gas flow")
-            return
+    def append_log(self, src: str, msg: str) -> None:
+        s = f"[{src}] {msg}"
         try:
-            await self.mfc_sp4.handle_command("SP4_SET", {"flow": float(flow)})
-            await self.mfc_sp4.handle_command("SP4_ON", {})
-        except Exception as e:
-            self.append_log("MFC", f"SP4_SET/ON failed: {e!r}")
-
-        if self.gas_mfc and self.gas_channel is not None:
-            try:
-                await self.gas_mfc.handle_command("FLOW_SET", {"ch": self.gas_channel, "flow": float(flow)})
-                await self.gas_mfc.handle_command("FLOW_ON", {"ch": self.gas_channel})
-            except Exception as e:
-                self.append_log("MFC", f"FLOW_SET/ON failed: {e!r}")
-
-    async def _close_gas_flow(self) -> None:
-        """Turn off SP4 and the gas flow channel."""
-        if self.mfc_sp4:
-            try:
-                await self.mfc_sp4.handle_command("SP4_OFF", {})
-            except Exception as e:
-                self.append_log("MFC", f"SP4_OFF failed: {e!r}")
-        if self.gas_mfc and self.gas_channel is not None:
-            try:
-                await self.gas_mfc.handle_command("FLOW_OFF", {"ch": self.gas_channel})
-            except Exception as e:
-                self.append_log("MFC", f"FLOW_OFF failed: {e!r}")
-
-    async def _wait_working_pressure(self, working_pressure: float) -> None:
-        """Wait until chamber pressure rises to at least ``working_pressure``."""
-        if not self.ig:
-            return
+            if self._w_log is not None:
+                self._w_log.appendPlainText(s)
+                self._w_log.moveCursor(QTextCursor.End)
+        except Exception:
+            pass
+        # 파일에도 기록
         try:
-            if hasattr(self.ig, "events"):
-                async for ev in self.ig.events():
-                    if getattr(ev, "kind", None) == "pressure":
-                        value = getattr(ev, "pressure", None)
-                        try:
-                            if value is not None and float(value) >= float(working_pressure):
-                                return
-                        except Exception:
-                            pass
-            else:
-                await asyncio.sleep(5.0)
+            if self._log_fp:
+                self._log_fp.write(f"{datetime.now():%H:%M:%S} {s}\n")
+                self._log_fp.flush()
         except Exception:
             pass
 
-    async def _apply_rf_power(self, power: float, duration_sec: float) -> None:
-        """Apply RF power for ``duration_sec`` seconds and then ramp down."""
-        try:
-            await self.rf_power.start_process(float(power))
-        except Exception as e:
-            self.append_log("RF", f"start_process failed: {e!r}")
+    def _set(self, leaf: str, v: Any) -> None:
+        w = self._u(leaf)
+        if not w:
             return
         try:
-            await asyncio.sleep(max(0.0, float(duration_sec)))
-        finally:
+            if hasattr(w, "setValue"):
+                try:
+                    w.setValue(v if isinstance(v, (int, float)) else float(str(v)))
+                except Exception:
+                    pass
+                else:
+                    return
+            s = str(v)
+            if hasattr(w, "setPlainText"):
+                w.setPlainText(s); return
+            if hasattr(w, "setText"):
+                w.setText(s); return
+        except Exception as e:
+            self.append_log("UI", f"_set('{leaf}') 실패: {e!r}")
+
+    def _show_state(self, st: str) -> None:
+        self._set("processState_edit", st)
+
+    # ─────────────────────────────────────────────────────────────
+    # 메시지박스(경고/치명)
+    # ─────────────────────────────────────────────────────────────
+    def _parent_widget(self) -> Any | None:
+        for leaf in ("Start_button", "Stop_button", "processState_edit", "logMessage_edit"):
+            w = self._u(leaf)
+            if w is not None:
+                try:
+                    return w.window()
+                except Exception:
+                    return w
+        return None
+
+    def _post_warning(self, title: str, text: str) -> None:
+        if not self._has_ui():
+            self.append_log("WARN", f"{title}: {text}"); return
+        box = QMessageBox(self._parent_widget() or None)
+        box.setWindowTitle(title); box.setText(text)
+        box.setIcon(QMessageBox.Warning)
+        box.setStandardButtons(QMessageBox.Ok)
+        box.setWindowModality(Qt.WindowModality.WindowModal)
+        box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        box.open()
+
+    def _post_critical(self, title: str, text: str) -> None:
+        if not self._has_ui():
+            self.append_log("ERROR", f"{title}: {text}"); return
+        box = QMessageBox(self._parent_widget() or None)
+        box.setWindowTitle(title); box.setText(text)
+        box.setIcon(QMessageBox.Critical)
+        box.setStandardButtons(QMessageBox.Ok)
+        box.setWindowModality(Qt.WindowModality.WindowModal)
+        box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+        box.open()
+
+    # ─────────────────────────────────────────────────────────────
+    # 태스크 유틸
+    # ─────────────────────────────────────────────────────────────
+    def _spawn_detached(self, coro, *, store: bool=False, name: str|None=None) -> None:
+        loop = self._loop
+        def _create():
+            t = loop.create_task(coro, name=name)
+            def _done(task: asyncio.Task):
+                if task.cancelled(): return
+                try: exc = task.exception()
+                except Exception: return
+                if exc:
+                    tb = ''.join(traceback.format_exception(type(exc), exc, exc.__traceback__)).rstrip()
+                    self.append_log("Task", f"[{name or 'task'}] crashed:\n{tb}")
+            t.add_done_callback(_done)
+            if store: self._bg_tasks.append(t)
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is loop: loop.call_soon(_create)
+        else: loop.call_soon_threadsafe(_create)
+
+    def _ensure_task_alive(self, name: str, coro_factory: Callable[[], Coroutine[Any, Any, Any]]) -> None:
+        self._bg_tasks = [t for t in self._bg_tasks if t and not t.done()]
+        for t in self._bg_tasks:
             try:
-                await self.rf_power.cleanup()
-            except Exception as e:
-                self.append_log("RF", f"cleanup failed: {e!r}")
-
-    async def _run_sequence(
-        self,
-        *,
-        target_pressure: float,
-        gas_flow: float,
-        working_pressure: float,
-        rf_power: float,
-        process_time_min: float,
-    ) -> None:
-        """Execute the plasma cleaning sequence with the given parameters."""
-        self.append_log("PC", f"Waiting for base pressure {target_pressure} Torr…")
-        ok = await self._wait_base_pressure(target_pressure)
-        if not ok:
-            self.append_log("PC", "Base pressure wait failed; aborting")
-            return
-        self.append_log("PC", "Base pressure reached")
-
-        self.append_log("PC", f"Setting gas flow to {gas_flow} sccm and opening valves")
-        await self._set_gas_flow(gas_flow)
-
-        self.append_log("PC", f"Waiting for working pressure {working_pressure} Torr…")
-        await self._wait_working_pressure(working_pressure)
-        self.append_log("PC", "Working pressure reached or timeout")
-
-        duration_sec = float(process_time_min) * 60.0
-        self.append_log("PC", f"Applying RF power {rf_power} W for {process_time_min} min")
-        await self._apply_rf_power(rf_power, duration_sec)
-        self.append_log("PC", "RF power process finished")
-
-        self.append_log("PC", "Closing gas valves")
-        await self._close_gas_flow()
-        self.append_log("PC", "Plasma cleaning sequence complete")
-
-    # ------------------------------------------------------------------
-    def _read_ui_params(self) -> dict[str, float] | None:
-        """Read user‑specified parameters from the UI."""
-        try:
-            t_p = float(self.ui.PC_targetPressure_edit.toPlainText())
-            g_f = float(self.ui.PC_gasFlow_edit.toPlainText())
-            w_p = float(self.ui.PC_workingPressure_edit.toPlainText())
-            rf = float(self.ui.PC_rfPower_edit.toPlainText())
-            p_t = float(self.ui.PC_ProcessTime_edit.toPlainText())
-        except Exception as e:
-            self.append_log("PC", f"Failed to parse UI parameters: {e!r}")
-            return None
-        return {
-            "target_pressure": t_p,
-            "gas_flow": g_f,
-            "working_pressure": w_p,
-            "rf_power": rf,
-            "process_time_min": p_t,
-        }
-
-    # ------------------------------------------------------------------
-    def start_process_from_ui(self) -> None:
-        """Read parameters from UI and begin the plasma cleaning process."""
-        params = self._read_ui_params()
-        if not params:
-            return
-        if self._task and not self._task.done():
-            self.append_log("PC", "Cancelling existing plasma cleaning task")
-            self._task.cancel()
-        self._task = self.loop.create_task(self._run_sequence(**params))
-
-    def stop(self) -> None:
-        """Stop the running plasma cleaning process."""
-        if self._task and not self._task.done():
-            self._task.cancel()
-            self.append_log("PC", "Plasma cleaning process cancelled by user")
-        self.loop.create_task(self.rf_power.cleanup())
-        self.loop.create_task(self._close_gas_flow())
+                if t.get_name() == name and not t.done(): return
+            except Exception:
+                pass
+        self._spawn_detached(coro_factory(), store=True, name=name)
 
     def shutdown_fast(self) -> None:
-        """Quickly shut down without awaiting device cleanup."""
-        if self._task and not self._task.done():
-            self._task.cancel()
+        async def run():
+            try:
+                if getattr(self.plasma, "is_running", False):
+                    self.plasma.request_stop()
+            except Exception:
+                pass
+            with contextlib.suppress(Exception):
+                await self.rf.cleanup()
+            with contextlib.suppress(Exception):
+                await self.mfc.cleanup()
+            with contextlib.suppress(Exception):
+                if self._log_fp: self._log_fp.flush(); self._log_fp.close()
+        self._spawn_detached(run())
+
+    # ─────────────────────────────────────────────────────────────
+    # 외부 로그 → UI(Log 창) 브릿지
+    # ─────────────────────────────────────────────────────────────
+    def _install_logger_bridge(self) -> None:
+        class _UIHandler(logging.Handler):
+            def __init__(self, sink: Callable[[str, str], None]):
+                super().__init__()
+                self._sink = sink
+            def emit(self, record: logging.LogRecord) -> None:
+                try:
+                    msg = self.format(record)
+                except Exception:
+                    msg = record.getMessage()
+                self._sink(record.name, msg)
+
+        h = _UIHandler(lambda src, m: self.append_log(src, m))
+        h.setLevel(logging.INFO)
+
+        # pymodbus/asyncio 계열 로그를 UI로만 보냄(터미널 출력 억제)
+        for name in ("pymodbus", "pymodbus.client", "asyncio"):
+            lg = logging.getLogger(name)
+            lg.setLevel(logging.INFO)
+            lg.handlers[:] = [h]
+            lg.propagate = False
+
+    # ─────────────────────────────────────────────────────────────
+    # RF (PLC DAC) 브릿지
+    # ─────────────────────────────────────────────────────────────
+    async def _rf_apply_via_plc(self, watt: float) -> None:
+        if not self.plc:
+            raise RuntimeError("PLC 미주입 — RF 설정 불가")
+        await self.plc.power_apply(watt, family="RFV")  # PLC의 DAC 적용(검증형)
+
+    async def _rf_write_via_plc(self, watt: float) -> None:
+        if not self.plc:
+            return
+        await self.plc.power_write(watt, family="RFV")  # 무응답형
+
+    async def _rf_read_status_via_plc(self) -> object:
+        # 필요시 PLC에서 FWD/REF 읽어와 dict로 반환
         try:
-            self.loop.create_task(self.rf_power.cleanup())
+            if not self.plc:
+                return {}
+            fw, rf = await self.plc.read_rf_forward_reflected()
+            return {"forward": fw, "reflected": rf}
         except Exception:
-            pass
+            return {}
+
+    async def _rf_set_latch_via_plc(self, enable: bool) -> None:
+        if not self.plc:
+            return
+        await self.plc.toggle_set_latch(enable, family="RFV")  # RF SET ON/OFF 래치
+
+    # ─────────────────────────────────────────────────────────────
+    # MFC 이벤트 루프
+    # ─────────────────────────────────────────────────────────────
+    async def _mfc_event_loop(self):
+        async for ev in self.mfc.events():
+            try:
+                k = getattr(ev, "kind", None)
+                if k == "status":
+                    self.append_log("MFC", ev.message or "")
+                elif k == "command_confirmed":
+                    self.plasma.on_mfc_confirmed(ev.cmd or "")
+                elif k == "command_failed":
+                    self.plasma.on_mfc_failed(ev.cmd or "", ev.reason or "unknown")
+                elif k == "flow":
+                    with contextlib.suppress(Exception):
+                        self.data_logger.log_mfc_flow(ev.gas or "", float(ev.value or 0.0))
+                elif k == "pressure":  # IG/챔버 압력 이벤트
+                    try:
+                        if ev.value is not None:
+                            self._last_ig_mTorr = float(ev.value)
+                            self._set("basePressure_edit", f"{self._last_ig_mTorr:.4f}")
+                            with contextlib.suppress(Exception):
+                                self.data_logger.log_mfc_pressure(f"{self._last_ig_mTorr:.4f}")
+                        elif ev.text:
+                            self.data_logger.log_mfc_pressure(ev.text)
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
+    # ─────────────────────────────────────────────────────────────
+    # UI 바인딩
+    # ─────────────────────────────────────────────────────────────
+    def _connect_my_buttons(self) -> None:
+        if not self._has_ui():
+            return
+        b = self._u("Start_button")
+        if b: b.clicked.connect(self._handle_start_clicked)
+        b = self._u("Stop_button")
+        if b: b.clicked.connect(self._handle_stop_clicked)
+
+    def _handle_start_clicked(self, _checked: bool = False):
+        if getattr(self.plasma, "is_running", False):
+            self._post_warning("실행 중", "이미 플라즈마 클리닝이 실행 중입니다.")
+            return
+
+        def _f(leaf: str, default: float) -> float:
+            t = (self._get_text(leaf) or "").strip()
+            try:
+                return float(t) if t else float(default)
+            except Exception:
+                return float(default)
+
+        gas_flow = _f("gasFlow_edit", 0.0)                 # Gas Flow (sccm)
+        rf_w     = _f("rfPower_edit", 100.0)               # RF Power (W)
+        if rf_w <= 0:
+            self._post_warning("입력값 확인", "RF Power(W)를 확인하세요.")
+            return
+
+        workingP = _f("workingPressure_edit", 2.0)         # SP4 setpoint (mTorr)
+        ig_target = _f("targetPressure_edit", workingP)    # IG 타겟 (mTorr)
+
+        tolP      = 0.2
+        timeout_s = 90.0
+        settle_s  = 5.0
+        hold_min  = max(0.0, _f("ProcessTime_edit", 1.0))
+
+        params = {
+            "process_note": "PlasmaCleaning",
+            "pc_gas_mfc_idx": 3,                   # Gas #3 (N2) 사용【turn19file10†L70-L71】
+            "pc_gas_flow_sccm": gas_flow,
+            "pc_target_pressure_mTorr": ig_target,
+            "pc_tol_mTorr": tolP,
+            "pc_wait_timeout_s": timeout_s,
+            "pc_settle_s": settle_s,
+            "pc_sp4_setpoint_mTorr": workingP,
+            "pc_rf_power_w": rf_w,
+            "pc_process_time_min": hold_min,
+        }
+
+        self._prepare_log_file(params)
+        self.plasma.start(params)
+
+    def _handle_stop_clicked(self, _checked: bool = False):
         try:
-            self.loop.create_task(self._close_gas_flow())
+            self.plasma.request_stop()
+        except Exception as e:
+            self.append_log("PC", f"정지 요청 실패: {e!r}")
+
+    # ─────────────────────────────────────────────────────────────
+    # 컨트롤러 바인딩(콜백 주입)
+    # ─────────────────────────────────────────────────────────────
+    def _bind_plasma_controller(self) -> None:
+        # ── PLC(GV) Key 결정자: 기본 CH1 사용 ─────────────────────
+        # 필요시 외부에서 setter로 CH2 키를 주입할 수 있게 람다 사용
+        def gv_key(name: str) -> str:
+            # CH1 기준: G_V_1_*
+            # CH2 사용 시 외부에서 이 함수 교체(set_..._callbacks 등으로) 권장
+            base = "1"
+            return f"G_V_{base}_{name}"
+
+        async def plc_check_gv_interlock() -> bool:
+            if not self.plc: return False
+            try:
+                return bool(await self.plc.read_bit(gv_key("인터락")))
+            except Exception as e:
+                self.append_log("PLC", f"인터락 읽기 실패: {e!r}")
+                return False
+
+        async def plc_gv_open() -> None:
+            if not self.plc: return
+            # 모멘터리 스위치로 취급
+            await self.plc.write_switch(gv_key("OPEN_SW"), True, momentary=True)
+
+        async def plc_gv_close() -> None:
+            if not self.plc: return
+            await self.plc.write_switch(gv_key("CLOSE_SW"), True, momentary=True)
+
+        async def plc_read_gv_open_lamp() -> bool:
+            if not self.plc: return False
+            try:
+                return bool(await self.plc.read_bit(gv_key("OPEN_LAMP")))
+            except Exception as e:
+                self.append_log("PLC", f"OPEN_LAMP 읽기 실패: {e!r}")
+                return False
+
+        # ── IG 브리지 ─────────────────────────────────────────────
+        async def ensure_ig_on() -> None:
+            if callable(self._ensure_ig_on_cb):
+                await self._ensure_ig_on_cb()
+            else:
+                # 외부 미주입 시 스킵(로그만)
+                self.append_log("IG", "ensure_ig_on 콜백 미주입 — 스킵")
+
+        async def read_ig_mTorr() -> float:
+            if callable(self._read_ig_cb):
+                return float(await self._read_ig_cb())
+            # 미주입 시, MFC 이벤트에서 캐시한 값 사용
+            if self._last_ig_mTorr is None:
+                raise RuntimeError("IG 읽기 콜백 없음")
+            return float(self._last_ig_mTorr)
+
+        # ── MFC 브리지 (#1 + Gas idx) ───────────────────────────
+        async def mfc_gas_select(gas_idx: int) -> None:
+            await self.mfc.handle_command("GAS_SELECT", {"mfc_idx": 1, "gas_idx": int(gas_idx)})
+
+        async def mfc_flow_set_on(flow_sccm: float) -> None:
+            await self.mfc.handle_command("FLOW_SET_ON", {"mfc_idx": 1, "gas_idx": 3, "flow": float(flow_sccm)})
+
+        async def mfc_flow_off() -> None:
+            await self.mfc.handle_command("FLOW_OFF", {"mfc_idx": 1})
+
+        async def mfc_sp4_set(setpoint_mTorr: float) -> None:
+            await self.mfc.handle_command("SP4_SET", {"mfc_idx": 1, "value": float(setpoint_mTorr)})
+
+        async def mfc_sp4_on() -> None:
+            await self.mfc.handle_command("SP4_ON", {"mfc_idx": 1})
+
+        async def mfc_sp4_off() -> None:
+            await self.mfc.handle_command("SP4_OFF", {"mfc_idx": 1})
+
+        # ── RF(PLC DAC) 브리지 ───────────────────────────────────
+        async def rf_start(watt: float) -> None:
+            await self.rf.start_process(float(watt))
+            self.rf.set_process_status(True)
+
+        async def rf_stop() -> None:
+            await self.rf.cleanup()
+
+        # ── UI 콜백 ───────────────────────────────────────────────
+        def show_state(st: str) -> None:
+            self._show_state(st)
+
+        def show_countdown(left_sec: int) -> None:
+            m = left_sec // 60
+            s = left_sec % 60
+            self._set("ProcessTime_edit", f"{m:02d}:{s:02d}")
+
+        # 컨트롤러 생성
+        self.plasma = PlasmaCleaningController(
+            log=self.append_log,
+            plc_check_gv_interlock=plc_check_gv_interlock,
+            plc_gv_open=plc_gv_open,
+            plc_gv_close=plc_gv_close,
+            plc_read_gv_open_lamp=plc_read_gv_open_lamp,
+            ensure_ig_on=ensure_ig_on,
+            read_ig_mTorr=read_ig_mTorr,
+            mfc_gas_select=mfc_gas_select,
+            mfc_flow_set_on=mfc_flow_set_on,
+            mfc_flow_off=mfc_flow_off,
+            mfc_sp4_set=mfc_sp4_set,
+            mfc_sp4_on=mfc_sp4_on,
+            mfc_sp4_off=mfc_sp4_off,
+            rf_start=rf_start,
+            rf_stop=rf_stop,
+            show_state=show_state,
+            show_countdown=show_countdown,
+        )
+
+    # ─────────────────────────────────────────────────────────────
+    # 시작/정지 UI 값 읽기 도우미
+    # ─────────────────────────────────────────────────────────────
+    def _get_text(self, leaf: str) -> str:
+        w = self._u(leaf)
+        try:
+            if not w: return ""
+            if hasattr(w, "text"): return str(w.text())
+            if hasattr(w, "toPlainText"): return str(w.toPlainText())
+            return ""
         except Exception:
-            pass
+            return ""
+
+    # ─────────────────────────────────────────────────────────────
+    # 파일 로깅
+    # ─────────────────────────────────────────────────────────────
+    def _ensure_log_dir(self, root: Path) -> Path:
+        d = root / f"plasma_cleaning"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def _prepare_log_file(self, params: Mapping[str, Any]) -> None:
+        try:
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            fn = f"{ts}_plasma_cleaning.csv"
+            self._log_file_path = self._log_dir / fn
+            self._log_fp = open(self._log_file_path, "a", encoding="utf-8", newline="")
+            self.append_log("Logger", f"로그 파일 오픈: {self._log_file_path.name}")
+        except Exception as e:
+            self.append_log("Logger", f"로그 파일 준비 실패: {e!r}")
+

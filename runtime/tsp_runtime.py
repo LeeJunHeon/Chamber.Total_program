@@ -53,6 +53,11 @@ class TSPPageController:
 
         self._connect_buttons()
 
+        self._defaults = {
+            "target": self._get_plain("TSP_targetPressure_edit") or "2.5e-07",
+            "cycles": self._get_plain("TSP_setCycle_edit") or "10",
+        }
+
     # ── UI 헬퍼 ─────────────────────────────────────────────
     def _log(self, msg: str) -> None:
         edit = getattr(self.ui, "pc_logMessage_edit", None)
@@ -110,6 +115,15 @@ class TSPPageController:
                 stop_btn.clicked.connect(self.on_stop_clicked)    # type: ignore[attr-defined]
             except Exception:
                 pass
+
+    def _reset_ui_defaults(self) -> None:
+        # 입력값: 프로그램 처음 켰을 때의 값을 복원
+        self._set_plain("TSP_targetPressure_edit", self._defaults["target"])
+        self._set_plain("TSP_setCycle_edit", self._defaults["cycles"])
+        # 표시값: 공정 전 상태로 정리
+        self._set_plain("TSP_nowCycle_edit", "0")
+        self._set_plain("TSP_basePressure_edit", "")
+
 
     # ── Start/Stop 핸들러 ──────────────────────────────────
     def on_start_clicked(self) -> None:
@@ -193,18 +207,30 @@ class TSPPageController:
         except Exception as e:
             self._log(f"[ERROR] 실행 실패: {e!r}")
         finally:
-            # 안전 정리: TSP OFF + 연결 닫기, IG OFF(내부 생성한 경우만)
             with contextlib.suppress(Exception):
                 if self.tsp:
                     await self.tsp.off()
             with contextlib.suppress(Exception):
                 if self.tsp:
                     await self.tsp.aclose()
+
             if not self._ig_ext:
+                # 1) IG를 확실히 OFF
                 with contextlib.suppress(Exception):
                     if self.ig:
                         await self.ig.ensure_off()
+                # 2) ★ IG 백그라운드 태스크/세션 완전 정리 (핵심 수정)
+                with contextlib.suppress(Exception):
+                    if self.ig:
+                        await self.ig.cleanup()
+
                 self.ig = None
+
             self.tsp = None
+
+            # 3) ★ UI를 초기 기본값으로 복원
+            with contextlib.suppress(Exception):
+                self._reset_ui_defaults()
+
             self._busy = False
             self._task = None
