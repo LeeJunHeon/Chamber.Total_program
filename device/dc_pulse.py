@@ -32,7 +32,7 @@ ACTIVATION_CHECK_DELAY_S = 5.0      # OUTPUT_ON 후 첫 측정까지 대기 (초
 ACTIVATION_ZERO_W_THRESHOLD = 0.5   # 0.5 W 이하이면 '0W'로 간주
 
 # 폴링 주기(초)
-DCP_POLL_INTERVAL_S = 3.0
+DCP_POLL_INTERVAL_S = 5.0
 DCP_CONNECT_TIMEOUT_S = 1.5
 
 # 타이밍/리트라이

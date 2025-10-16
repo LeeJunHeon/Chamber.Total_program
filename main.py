@@ -20,7 +20,7 @@ from device.ig import AsyncIG
 
 # ▶ 런타임 래퍼
 from runtime.chamber_runtime import ChamberRuntime
-from runtime.plasma_cleaning_runtime import PlasmaCleaningRuntime
+#from runtime.plasma_cleaning_runtime import PlasmaCleaningRuntime
 
 # 챔버별 설정
 from lib import config_ch1, config_ch2
@@ -67,6 +67,7 @@ class MainWindow(QWidget):
 
         # ── 현재 PLC 로그의 소유 챔버 (1/2). 없으면 None → 방송 모드
         self._plc_owner: Optional[int] = None
+        self.pc = None  # Plasma Cleaning 비활성화 표시
 
         # PLC (공유) : CH 힌트 > 소유자 > 방송 순으로 라우팅
         self.plc: AsyncPLC = AsyncPLC(logger=self._plc_log)
