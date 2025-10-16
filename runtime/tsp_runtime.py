@@ -3,7 +3,7 @@
 from __future__ import annotations
 import asyncio, contextlib
 from typing import Optional
-from datetime import datetime
+from datetime import datetime, timedelta
 
 # 장비/컨트롤러
 from device.ig import AsyncIG
@@ -17,6 +17,11 @@ DEFAULT_TSP_PORT   = 4004     # TSP
 DWELL_SEC          = 150.0    # 2분 30초
 POLL_SEC           = 5.0      # 5초
 VERIFY_WITH_STATUS = True     # TSP on/off 후 205 확인
+
+# ⬇ 매일 07:00 자동 예약 실행 설정
+ENABLE_TSP_DAILY_7AM = True   # 자동 예약을 끄려면 False
+DAILY_HH = 7
+DAILY_MM = 0
 
 def _ts() -> str:
     return datetime.now().strftime("%H:%M:%S")
@@ -51,12 +56,24 @@ class TSPPageController:
         self._task: Optional[asyncio.Task] = None
         self._busy = False
 
+        # ⬇ 예약 실행 상태
+        self._schedule_task: Optional[asyncio.Task] = None
+        self._schedule_repeat_daily: bool = False
+
         self._connect_buttons()
 
         self._defaults = {
             "target": self._get_plain("TSP_targetPressure_edit") or "2.5e-07",
             "cycles": self._get_plain("TSP_setCycle_edit") or "10",
         }
+        
+        # ⬇ 프로그램 기동 시 매일 07:00 예약 등록
+        try:
+            if ENABLE_TSP_DAILY_7AM:
+                when = self._next_time_at(DAILY_HH, DAILY_MM)
+                self.schedule_run_at(when, repeat_daily=True)
+        except Exception as _e:
+            self._log(f"[TSP] 예약 초기화 실패: {_e!r}")
 
     # ── UI 헬퍼 ─────────────────────────────────────────────
     def _log(self, msg: str) -> None:
@@ -234,3 +251,70 @@ class TSPPageController:
 
             self._busy = False
             self._task = None
+
+    # ─────────────────────────────────────────────────────
+    # 예약 실행 유틸리티
+    # ─────────────────────────────────────────────────────
+    def _next_time_at(self, hh: int, mm: int) -> datetime:
+        """오늘 hh:mm, 이미 지났으면 내일 같은 시각을 리턴."""
+        now = datetime.now()
+        cand = now.replace(hour=hh, minute=mm, second=0, microsecond=0)
+        if cand <= now:
+            cand = cand + timedelta(days=1)
+        return cand
+
+    def schedule_run_at(self, when: datetime, *, repeat_daily: bool = False) -> None:
+        """지정 시각(로컬)에 TSP 공정을 자동 시작."""
+        self.cancel_schedule(silent=True)
+        self._schedule_repeat_daily = bool(repeat_daily)
+        self._schedule_task = asyncio.create_task(self._schedule_loop(when), name="TSPStartScheduler")
+        self._log(f"[TSP] 예약 실행 등록: {when.strftime('%Y-%m-%d %H:%M:%S')} (매일={self._schedule_repeat_daily})")
+
+    def cancel_schedule(self, silent: bool = False) -> None:
+        """예약 실행 취소."""
+        if self._schedule_task and not self._schedule_task.done():
+            self._schedule_task.cancel()
+        self._schedule_task = None
+        self._schedule_repeat_daily = False
+        if not silent:
+            self._log("[TSP] 예약 실행 취소됨")
+
+    async def _schedule_loop(self, when: datetime) -> None:
+        """예약: when 도달 → (바쁘면 대기) → on_start_clicked 트리거 → (옵션) 매일 반복."""
+        try:
+            while True:
+                # 카운트다운 (1초 tick)
+                while True:
+                    now = datetime.now()
+                    remain = (when - now).total_seconds()
+                    if remain <= 0:
+                        break
+                    # 남은 시간이 60초 단위이거나 10초 미만이면 안내 로그
+                    if int(remain) % 60 == 0 or remain < 10:
+                        self._log(f"[TSP] 예약 대기 중… {int(remain)}초 남음 (실행시각 {when.strftime('%H:%M:%S')})")
+                    await asyncio.sleep(min(1.0, max(0.1, remain)))
+
+                # 실행 직전: 이미 실행 중이면 비어질 때까지 5초 간격 대기
+                while self._busy:
+                    self._log("[TSP] 현재 공정 중 → 예약 실행 대기…")
+                    await asyncio.sleep(5.0)
+
+                # 실행 트리거
+                try:
+                    self.on_start_clicked()
+                except Exception as e:
+                    self._log(f"[TSP] 예약 시작 실패: {e!r}")
+
+                # 반복 모드 아니면 종료
+                if not self._schedule_repeat_daily:
+                    self._log("[TSP] 1회 예약 실행 완료(반복 없음).")
+                    break
+
+                # 다음날 같은 시각으로 갱신
+                when = when + timedelta(days=1)
+                self._log(f"[TSP] 다음 반복 예약: {when.strftime('%Y-%m-%d %H:%M:%S')}")
+        except asyncio.CancelledError:
+            pass
+        finally:
+            if not self._schedule_repeat_daily:
+                self._schedule_task = None

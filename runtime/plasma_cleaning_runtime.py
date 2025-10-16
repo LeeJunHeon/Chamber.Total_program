@@ -53,7 +53,11 @@ class PlasmaCleaningRuntime:
         cfg: Any,
         log_dir: Path,
         *,
-        plc: AsyncPLC | None = None,   # PLC는 RF DAC 및 GV
+        plc: AsyncPLC | None = None,
+        # 🔽 추가: 외부 주입 받을 장치들
+        mfc_gas: AsyncMFC | None = None,     # Gas FLOW(항상 MFC1, ch=3 사용 정책)
+        mfc_sp4: AsyncMFC | None = None,     # SP4 제어용(챔버 선택에 따라 CH1/CH2의 MFC 인스턴스)
+        ig: Any | None = None,               # IG 인스턴스 (없으면 콜백만으로 동작)
         chat: Optional[Any] = None,
     ) -> None:
         self.ui = ui
@@ -69,7 +73,13 @@ class PlasmaCleaningRuntime:
 
         # 로그/상태 위젯
         self._w_log: QPlainTextEdit | None = self._u("logMessage_edit")
+        if self._w_log is None:
+            # UI objectName이 'pc_logMessage_edit' 인 경우(소문자 접두사) 폴백
+            self._w_log = getattr(self.ui, "pc_logMessage_edit", None)
         self._w_state: QPlainTextEdit | None = self._u("processState_edit")
+
+        
+
 
         # 그래프
         self.graph = GraphController(self._u("rgaGraph_widget"), self._u("oesGraph_widget"))

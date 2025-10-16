@@ -81,34 +81,43 @@ class MainWindow(QWidget):
         #   - IG: 각 챔버 전용 포트
         #   - MFC: 각 챔버 전용 포트
         #   - Gas Flow는 항상 MFC1의 ch=3 사용(Plasma Cleaning용 정책)
-        # ─────────────────────────────────────────────────────
-        # IG/MFC 인스턴스를 직접 생성하여 재사용합니다.
-        self.mfc1 = AsyncMFC(
+        #
+        # IG와 MFC는 PLC와 마찬가지로 공통 자원으로 관리해야 한다.  
+        # 이전 구현에서는 각 챔버 런타임 내부에서 IG/MFC 인스턴스를 생성했으나  
+        # Plasma Cleaning과 CH 공정이 동일한 장치를 사용하면서 상태를 공유할 수 있도록  
+        # 여기에서 챔버별로 한 번씩만 생성해 두고 런타임/컨트롤러에 주입한다.
+
+        # CH1용 MFC (Gas #1–4), CH2용 MFC
+        # 설정 모듈에 값이 없을 때는 config_common의 값을 사용하고,
+        # 최종적으로 기본값으로 192.168.1.50 IP와 포트를 사용한다.
+        self.mfc1: AsyncMFC = AsyncMFC(
             host=getattr(config_ch1, "MFC_TCP_HOST", getattr(cfgc, "MFC_TCP_HOST", "192.168.1.50")),
             port=getattr(config_ch1, "MFC_TCP_PORT", 4003),
             enable_verify=False,
             enable_stabilization=True,
         )
-        self.mfc2 = AsyncMFC(
+        self.mfc2: AsyncMFC = AsyncMFC(
             host=getattr(config_ch2, "MFC_TCP_HOST", getattr(cfgc, "MFC_TCP_HOST", "192.168.1.50")),
             port=getattr(config_ch2, "MFC_TCP_PORT", 4006),
             enable_verify=False,
             enable_stabilization=True,
         )
 
-        self.ig1 = AsyncIG(
+        # CH1용 IG, CH2용 IG
+        self.ig1: AsyncIG = AsyncIG(
             host=getattr(config_ch1, "IG_TCP_HOST", getattr(cfgc, "IG_TCP_HOST", "192.168.1.50")),
             port=getattr(config_ch1, "IG_TCP_PORT", 4001),
         )
-        self.ig2 = AsyncIG(
+        self.ig2: AsyncIG = AsyncIG(
             host=getattr(config_ch2, "IG_TCP_HOST", getattr(cfgc, "IG_TCP_HOST", "192.168.1.50")),
             port=getattr(config_ch2, "IG_TCP_PORT", 4002),
         )
 
-        # Plasma Cleaning 선택 상태(초기 CH1), Gas Flow 정책(항상 MFC1 ch3)
+        # Plasma Cleaning에서 선택된 챔버(MFC/IG) 추적용 변수  
+        # 기본적으로 CH1을 사용하며, Gas Flow는 정책상 항상 MFC1의 3번 가스 채널을 이용한다.
         self._pc_use_ch: int = 1
         self._pc_gas_mfc = self.mfc1
-        self._pc_gas_channel = 3
+        self._pc_gas_channel: int = 3
 
         # === 챔버 런타임 2개 생성 ===
         self.ch1 = ChamberRuntime(
@@ -147,19 +156,20 @@ class MainWindow(QWidget):
             # 상태에 따라 set_devices()로 변경된다.
             self.pc = PlasmaCleaningRuntime(
                 ui=self.ui,
-                prefix="",
+                prefix="PC",                 # UI objectName이 PC_Start_button 형식이면 반드시 "PC"
                 loop=self._loop,
-                plc=self.plc,
-                mfc=self.mfc1,
+                cfg=config_ch1,              # CH1 TCP 정보로 fallback 생성 가능하게
+                log_dir=self._log_root,
+                plc=self.plc,                # 공유 PLC
+                # Plasma Cleaning은 Gas Flow를 항상 MFC1의 3번 채널로 사용하고,  
+                # 스퍼터링 압력 제어용 SP4 역시 현재 선택된 챔버의 MFC 인스턴스를 사용한다.  
+                # 초기에 CH1을 기본으로 사용하도록 주입한다.  
+                mfc_gas=self.mfc1,
+                mfc_sp4=self.mfc1,
                 ig=self.ig1,
                 chat=self.chat,
             )
-            # 컨트롤러는 UI의 Start/Stop 버튼을 runtime의 메서드와 연결한다.
-            self.pc_ctrl = PlasmaCleaningController(
-                ui=self.ui,
-                runtime=self.pc,
-                chat=self.chat,
-            )
+
         except Exception as e:
             # 초기화 실패 시 None으로 설정하고 로그를 남긴다.
             self.pc = None
@@ -268,39 +278,45 @@ class MainWindow(QWidget):
         self._apply_pc_ch_selection()
 
     def _apply_pc_ch_selection(self) -> None:
-        """라디오 버튼 상태를 Plasma Cleaning 런타임에 반영.
-        - IG: 선택된 챔버(1→ig1, 2→ig2)
-        - MFC(SP4 전용): 선택된 챔버(1→mfc1, 2→mfc2)
-        - Gas Flow: 항상 MFC1 채널 3
-        """
-        if not getattr(self, "pc", None):
+        pc = getattr(self, "pc", None)
+        if not pc:
             return
 
-        # 안전하게 기본값 보정
-        ch = int(getattr(self, "_pc_use_ch", 1))
-        ig  = self.ig1 if ch == 1 else self.ig2
-        mfc_sp4 = self.mfc1 if ch == 1 else self.mfc2
-        gas_mfc = self._pc_gas_mfc       # 항상 MFC1
-        gas_ch  = self._pc_gas_channel   # 항상 3
-
-        # 런타임 메서드가 있으면 사용, 없으면 속성 주입
+        # 라디오 상태 반영
+        ch = 1
         try:
-            if hasattr(self.pc, "set_devices"):  # set_devices(ig=..., mfc_sp4=..., gas_mfc=..., gas_channel=...)
-                self.pc.set_devices(ig=ig, mfc_sp4=mfc_sp4, gas_mfc=gas_mfc, gas_channel=gas_ch)
-            else:
-                self.pc.ig = ig
-                self.pc.mfc_sp4 = mfc_sp4        # 선택된 챔버의 MFC (SP4_SET/SP4_ON 전용)
-                self.pc.gas_mfc = gas_mfc        # 항상 MFC1
-                self.pc.gas_channel = gas_ch     # 항상 3
-        except Exception as e:
-            self._broadcast_log("PC", f"device bind failed: {e!r}")
+            if hasattr(self.ui, "PC_useChamber2_radio") and self.ui.PC_useChamber2_radio.isChecked():
+                ch = 2
+        except Exception:
+            pass
+        self._pc_use_ch = ch
 
-        # 로그 안내
-        sel = f"CH{ch}"
-        self._broadcast_log(
-            "PC",
-            f"[Plasma Cleaning] Use {sel} IG/MFC(SP4 전용), GasFlow → MFC1 ch{gas_ch}"
-        )
+        # 선택된 챔버의 IG 객체
+        ig = self.ig1 if ch == 1 else self.ig2
+
+        # IG 콜백 주입 (런타임은 이 콜백만 사용)
+        async def _ensure_on():
+            fn = getattr(ig, "ensure_on", None) or getattr(ig, "turn_on", None)
+            if callable(fn):
+                await fn()
+
+        async def _read_mTorr() -> float:
+            # 프로젝트의 AsyncIG에 맞는 읽기 API로 교체하세요.
+            # 아래는 흔한 네이밍을 우선 시도하고, 실패 시 예외를 일으켜 상위에서 처리.
+            for name in ("read_mTorr", "read_pressure_mTorr", "get_mTorr"):
+                fn = getattr(ig, name, None)
+                if callable(fn):
+                    v = await fn()
+                    return float(v)
+            raise RuntimeError("IG read API not found")
+
+        try:
+            pc.set_ig_callbacks(_ensure_on, _read_mTorr)
+        except Exception as e:
+            self._broadcast_log("PC", f"IG 콜백 바인딩 실패: {e!r}")
+
+        # 참고 로그 (Gas Flow 정책 알림)
+        self._broadcast_log("PC", f"[Plasma Cleaning] Use CH{ch} IG, GasFlow → MFC1 ch3 (정책 고정)")
 
     def _switch_page(self, key: Literal["pc", "ch1", "ch2"]) -> None:
         page = self._pages.get(key)
