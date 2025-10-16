@@ -20,7 +20,8 @@ from device.ig import AsyncIG
 
 # ▶ 런타임 래퍼
 from runtime.chamber_runtime import ChamberRuntime
-#from runtime.plasma_cleaning_runtime import PlasmaCleaningRuntime
+from runtime.plasma_cleaning_runtime import PlasmaCleaningRuntime  # type: ignore
+from controller.plasma_cleaning_controller import PlasmaCleaningController  # type: ignore
 
 # 챔버별 설정
 from lib import config_ch1, config_ch2
@@ -81,32 +82,33 @@ class MainWindow(QWidget):
         #   - MFC: 각 챔버 전용 포트
         #   - Gas Flow는 항상 MFC1의 ch=3 사용(Plasma Cleaning용 정책)
         # ─────────────────────────────────────────────────────
-        # self.mfc1 = AsyncMFC(
-        #     host=getattr(config_ch1, "MFC_TCP_HOST", getattr(cfgc, "MFC_TCP_HOST", "192.168.1.50")),
-        #     port=getattr(config_ch1, "MFC_TCP_PORT", 4003),
-        #     enable_verify=False,
-        #     enable_stabilization=True,
-        # )
-        # self.mfc2 = AsyncMFC(
-        #     host=getattr(config_ch2, "MFC_TCP_HOST", getattr(cfgc, "MFC_TCP_HOST", "192.168.1.50")),
-        #     port=getattr(config_ch2, "MFC_TCP_PORT", 4006),
-        #     enable_verify=False,
-        #     enable_stabilization=True,
-        # )
+        # IG/MFC 인스턴스를 직접 생성하여 재사용합니다.
+        self.mfc1 = AsyncMFC(
+            host=getattr(config_ch1, "MFC_TCP_HOST", getattr(cfgc, "MFC_TCP_HOST", "192.168.1.50")),
+            port=getattr(config_ch1, "MFC_TCP_PORT", 4003),
+            enable_verify=False,
+            enable_stabilization=True,
+        )
+        self.mfc2 = AsyncMFC(
+            host=getattr(config_ch2, "MFC_TCP_HOST", getattr(cfgc, "MFC_TCP_HOST", "192.168.1.50")),
+            port=getattr(config_ch2, "MFC_TCP_PORT", 4006),
+            enable_verify=False,
+            enable_stabilization=True,
+        )
 
-        # self.ig1 = AsyncIG(
-        #     host=getattr(config_ch1, "IG_TCP_HOST", getattr(cfgc, "IG_TCP_HOST", "192.168.1.50")),
-        #     port=getattr(config_ch1, "IG_TCP_PORT", 4001),
-        # )
-        # self.ig2 = AsyncIG(
-        #     host=getattr(config_ch2, "IG_TCP_HOST", getattr(cfgc, "IG_TCP_HOST", "192.168.1.50")),
-        #     port=getattr(config_ch2, "IG_TCP_PORT", 4002),
-        # )
+        self.ig1 = AsyncIG(
+            host=getattr(config_ch1, "IG_TCP_HOST", getattr(cfgc, "IG_TCP_HOST", "192.168.1.50")),
+            port=getattr(config_ch1, "IG_TCP_PORT", 4001),
+        )
+        self.ig2 = AsyncIG(
+            host=getattr(config_ch2, "IG_TCP_HOST", getattr(cfgc, "IG_TCP_HOST", "192.168.1.50")),
+            port=getattr(config_ch2, "IG_TCP_PORT", 4002),
+        )
 
-        # # Plasma Cleaning 선택 상태(초기 CH1), Gas Flow 정책(항상 MFC1 ch3)
-        # self._pc_use_ch: int = 1
-        # self._pc_gas_mfc = self.mfc1
-        # self._pc_gas_channel = 3
+        # Plasma Cleaning 선택 상태(초기 CH1), Gas Flow 정책(항상 MFC1 ch3)
+        self._pc_use_ch: int = 1
+        self._pc_gas_mfc = self.mfc1
+        self._pc_gas_channel = 3
 
         # === 챔버 런타임 2개 생성 ===
         self.ch1 = ChamberRuntime(
@@ -118,6 +120,8 @@ class MainWindow(QWidget):
             chat=self.chat,     # 단일 Notifier 공유 가능
             cfg=config_ch1,
             log_dir=self._log_root,
+            mfc=self.mfc1,
+            ig=self.ig1,
             on_plc_owner=self._set_plc_owner,
         )
 
@@ -130,20 +134,40 @@ class MainWindow(QWidget):
             chat=self.chat,     # 단일 Notifier 공유 가능
             cfg=config_ch2,
             log_dir=self._log_root,
+            mfc=self.mfc2,
+            ig=self.ig2,
             on_plc_owner=self._set_plc_owner,
         )
 
-        # === Plasma Cleaning 런타임 생성 ===
-        # mfc 인자는 하위 호환용으로 CH1의 MFC를 초기값으로 전달하되,
-        # 곧바로 라디오 선택 상태를 반영하여 set_devices 또는 속성 주입으로 덮어씁니다.
-        # self.pc = PlasmaCleaningRuntime(
-        #     ui=self.ui,
-        #     prefix="",          # UI 위젯 접두사: PC_Start_button 등과 매칭
-        #     loop=self._loop,
-        #     plc=self.plc,          # 공유 PLC
-        #     mfc=self.mfc1,         # 초기값: CH1 MFC
-        #     chat=None,
-        # )
+        # === Plasma Cleaning 런타임과 컨트롤러 생성 ===
+        # Plasma Cleaning 공정은 IG/MFC/PLC의 인스턴스를 공유하므로 메인에서
+        # Runtime을 한 번만 생성한 뒤 각 챔버 선택 시 디바이스를 바꿔 끼웁니다.
+        try:
+            # 초기에는 CH1의 IG/MFC를 바인딩한다. 이후 라디오 버튼
+            # 상태에 따라 set_devices()로 변경된다.
+            self.pc = PlasmaCleaningRuntime(
+                ui=self.ui,
+                prefix="",
+                loop=self._loop,
+                plc=self.plc,
+                mfc=self.mfc1,
+                ig=self.ig1,
+                chat=self.chat,
+            )
+            # 컨트롤러는 UI의 Start/Stop 버튼을 runtime의 메서드와 연결한다.
+            self.pc_ctrl = PlasmaCleaningController(
+                ui=self.ui,
+                runtime=self.pc,
+                chat=self.chat,
+            )
+        except Exception as e:
+            # 초기화 실패 시 None으로 설정하고 로그를 남긴다.
+            self.pc = None
+            self.pc_ctrl = None
+            try:
+                self._broadcast_log("PC", f"Failed to initialize PlasmaCleaningRuntime: {e!r}")
+            except Exception:
+                pass
 
         # === TSP 런타임 생성 ===
         self.tsp_ctrl = TSPPageController(

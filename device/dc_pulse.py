@@ -45,9 +45,9 @@ DCP_FIRST_CMD_EXTRA_TIMEOUT_MS = 1000
 
 # ===== 통일된 스케일 상수 =====
 # (측정 raw -> 공학단위) 한 LSB가 얼마인지
-V_MEAS_V_PER_LSB = 1.0      # 1 count = 1 V
-I_MEAS_A_PER_LSB = 0.1      # 1 count = 0.1 A  (기존 SCALE_CURR_A=10.0과 대응)
-P_MEAS_W_PER_LSB = 10.0     # 1 count = 10 W   (기존 SCALE_POWER_W=0.1과 대응)
+V_MEAS_V_PER_LSB = 1.5      # 1 count ≈ 1.5 V  (매뉴얼 표준)
+I_MEAS_A_PER_LSB = 0.01     # 1 count = 0.01 A  (전류 10배 과다표시 교정)
+P_MEAS_W_PER_LSB = 10.0     # 1 count = 10 W
 
 RAMP_MS_PER_LSB  = 1.0      # 1 count = 1 ms
 ARC_US_PER_LSB   = 1.0      # 1 count = 1 us
