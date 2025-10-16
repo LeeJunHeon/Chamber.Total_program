@@ -803,14 +803,15 @@ class ProcessController:
         use_dc       = bool(info.get("use_dc", False))
         use_rf       = bool(info.get("use_rf", False))
 
-        any_pulse = use_dc_pulse or use_rf_pulse
+        # RF 펄스를 쓴다고 DC 연속 폴링까지 막을 필요는 없음
         return {
-            "mfc":      True,
+            "mfc": True,
             "dc_pulse": use_dc_pulse,
             "rf_pulse": use_rf_pulse,
-            "dc":       use_dc and not any_pulse,
-            "rf":       use_rf and not any_pulse,
+            "dc": use_dc and not use_dc_pulse,   # DC 펄스를 쓸 때만 DC 연속 폴링 off
+            "rf": use_rf and not use_rf_pulse,   # RF 펄스를 쓸 때만 RF 연속 폴링 off
         }
+
 
     # =========================
     # 종료/실패 처리
