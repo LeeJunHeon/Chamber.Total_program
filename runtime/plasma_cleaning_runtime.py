@@ -137,8 +137,8 @@ class PlasmaCleaningRuntime:
         async def _plc_check_gv_interlock() -> bool:
             if not self.plc:
                 return True
-            lamp_key = f"G_V_{self._selected_ch}_OPEN_LAMP"
-            return await self.plc.read_bit(lamp_key)
+            key = f"G_V_{self._selected_ch}_인터락"  # CH1→G_V_1_인터락, CH2→G_V_2_인터락
+            return await self.plc.read_bit(key)
 
         async def _plc_gv_open() -> None:
             if self.plc:
