@@ -232,6 +232,9 @@ class ChamberRuntime:
         self._owns_plc = bool(owns_plc if owns_plc is not None else (int(chamber_no) == 1))  # 기본 CH1
         self._notify_plc_owner = on_plc_owner 
         self._last_running_state: Optional[bool] = None  
+
+        # ★ 추가: 직전 공정 종료 시각(모노토닉, 쿨다운 용)
+        self._last_finish_monotonic: float | None = None
         
         # ⬇️ 추가: 프로그램 시작 시점에 CH 상태를 명시적으로 False로 등록
         try:
@@ -695,6 +698,12 @@ class ChamberRuntime:
                     except Exception:
                         pass
 
+                    # ★ 추가: 종료 시각 기록(쿨다운 기준)
+                    try:
+                        self._last_finish_monotonic = self._loop.time()
+                    except Exception:
+                        self._last_finish_monotonic = None
+
                     # 0) 재연결 선차단 + 폴링 완전 OFF
                     self._auto_connect_enabled = False
                     self._run_select = None
@@ -735,6 +744,12 @@ class ChamberRuntime:
                             self.chat.notify_text(f"🛑 CH{self.ch} 공정 중단")
                     with contextlib.suppress(Exception):
                         self._clear_queue_and_reset_ui()
+
+                    # ★ 추가: 종료 시각 기록(쿨다운 기준)
+                    try:
+                        self._last_finish_monotonic = self._loop.time()
+                    except Exception:
+                        self._last_finish_monotonic = None
 
                     if getattr(self, "_pending_device_cleanup", False):
                         with contextlib.suppress(Exception):
@@ -1469,6 +1484,23 @@ class ChamberRuntime:
     # ------------------------------------------------------------------
     # Start/Stop (개별 챔버)
     def _handle_start_clicked(self, _checked: bool = False):
+        # ★ 추가: 60초 쿨다운 검사(첫 공정은 None → 통과)
+        try:
+            now = self._loop.time()
+        except Exception:
+            try:
+                now = asyncio.get_running_loop().time()
+            except Exception:
+                now = None
+
+        if self._last_finish_monotonic is not None and now is not None:
+            elapsed = now - self._last_finish_monotonic
+            need = 60.0  # ← 쿨다운(초). 필요시 config로 빼도 됨.
+            if elapsed < need:
+                remain = int(need - elapsed + 0.999)
+                self._post_warning("대기 필요", f"이전 공정 종료 후 1분 대기 필요합니다.\n{remain}초 후에 시작하십시오.")
+                return
+
         if self.process_controller.is_running:
             self._post_warning("실행 오류", "다른 공정이 실행 중입니다."); 
             return
