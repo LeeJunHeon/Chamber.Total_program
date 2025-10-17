@@ -237,15 +237,23 @@ class MainWindow(QWidget):
         except Exception:
             pass
 
-    def _on_pc_radio_toggled(self, _checked: bool) -> None:
-        ch = 1
+    def _on_pc_radio_toggled(self, checked: bool) -> None:
+        # 라디오가 꺼지는 이벤트(False)는 무시해서 중복 호출 방지
+        if not checked:
+            return
+
+        # 현재 라디오 상태 읽기
         try:
-            if hasattr(self.ui, "PC_useChamber2_radio") and self.ui.PC_useChamber2_radio.isChecked():
-                ch = 2
+            ch2_on = hasattr(self.ui, "PC_useChamber2_radio") and self.ui.PC_useChamber2_radio.isChecked()
         except Exception:
-            pass
-        if ch != getattr(self, "_pc_use_ch", None):
-            self._pc_use_ch = ch
+            ch2_on = False
+        ch = 2 if ch2_on else 1
+
+        # 선택이 이전과 동일하면 아무 것도 하지 않음
+        if ch == getattr(self, "_pc_use_ch", None):
+            return
+
+        self._pc_use_ch = ch
         self._apply_pc_ch_selection()
 
     def _apply_pc_ch_selection(self) -> None:

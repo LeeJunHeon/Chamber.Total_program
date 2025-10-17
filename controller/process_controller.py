@@ -481,10 +481,14 @@ class ProcessController:
 
     def on_oes_ok(self) -> None:
         # OES는 no_wait로 돌도록 구성(로그만)
-        self._emit_log("OES", "OES 측정 종료(정상). 메인 공정은 계속 진행됩니다.")
+        self._emit_log("OES", "OES 측정 종료(정상).")
 
     def on_oes_failed(self, src: str, why: str) -> None:
-        self._step_failed(src or "OES", why)
+        # OES는 공정 비차단: 로그만 남기고 계속 진행
+        self._emit_log(src or "OES", f"오류 무시하고 계속: {why}")
+        # 혹시 현재 대기가 'GENERIC_OK' 하나만 기다리는 상황이면 통과시켜 준다(있어도/없어도 무해)
+        if self._expect_group:
+            self._expect_group.match_generic_ok()
 
     # =========================
     # 내부: 러너/스텝 실행
