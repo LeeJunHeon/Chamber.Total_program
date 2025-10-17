@@ -111,8 +111,8 @@ class TSPPageController:
         else:
             self._log_enqueue_nowait(line_file)
 
-        # 콘솔도 유지
-        print(line_ui)
+        # 콘솔 출력 제거 (UI+파일만 기록)
+        # print(line_ui)
 
     def _get_plain(self, name: str) -> Optional[str]:
         w = getattr(self.ui, name, None)
