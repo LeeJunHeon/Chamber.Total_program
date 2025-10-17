@@ -13,6 +13,18 @@ from lib.config_ch2 import OES_AVG_COUNT, DEBUG_PRINT
 
 EventKind = Literal["status", "data", "finished"]
 
+# ── 모든 OES 인스턴스가 '공유'하는 전역 자원 ─────────────────────
+# ① 전역 실행자: DLL 호출은 모두 여기서만 실행(물리적 동시진입 방지)
+_OES_EXECUTOR = ThreadPoolExecutor(max_workers=1, thread_name_prefix="OESWorkerGlobal")
+
+# ② 전역 락: DLL 진입을 항상 '한 번에 하나'로 직렬화
+_OES_DLL_LOCK: Optional[asyncio.Lock] = None
+def _get_dll_lock() -> asyncio.Lock:
+    global _OES_DLL_LOCK
+    if _OES_DLL_LOCK is None:
+        _OES_DLL_LOCK = asyncio.Lock()  # 이벤트 루프 생성 이후 첫 접근 시 초기화
+    return _OES_DLL_LOCK
+
 @dataclass
 class OESEvent:
     kind: EventKind
@@ -100,8 +112,8 @@ class OESAsync:
         # 이벤트 큐
         self._ev_q: asyncio.Queue[OESEvent] = asyncio.Queue(maxsize=256)
 
-        # DLL 호출 전용 워커(단일 스레드)
-        self._exec = ThreadPoolExecutor(max_workers=1, thread_name_prefix="OESWorker")
+        # (제거) 전역 실행자를 쓰므로 인스턴스별 실행자 불필요
+        # self._exec = ThreadPoolExecutor(max_workers=1, thread_name_prefix="OESWorker")
 
         # CH→USB 매핑 확정
         self._chamber = int(chamber)
@@ -113,8 +125,31 @@ class OESAsync:
 
     # ========== 공용 헬퍼 ==========
     async def _call(self, func, *args, **kwargs):
+        """
+        DLL 진입의 단일 관문:
+        - 전역 락으로 '동시에 1개'만 DLL에 들어가게 함
+        - 전역 실행자에서 블로킹 콜 실행 (UI/이벤트루프는 비동기로 유지)
+        - DEBUG 모드에서 REQ/ENTER/EXIT 로그로 직렬화 여부 확인
+        """
         loop = asyncio.get_running_loop()
-        return await loop.run_in_executor(self._exec, lambda: func(*args, **kwargs))
+        lock = _get_dll_lock()
+        fname = getattr(func, "__name__", str(func))
+        ch = getattr(self, "sChannel", -1)
+
+        if self._debug:
+            print(f"[OES][DLL-REQ][CH{self._chamber}/USB{ch}] {fname}")
+
+        async with lock:
+            if self._debug:
+                print(f"[OES][DLL-ENTER][CH{self._chamber}/USB{ch}] {fname}")
+            try:
+                return await loop.run_in_executor(
+                    _OES_EXECUTOR,
+                    lambda: func(*args, **kwargs)
+                )
+            finally:
+                if self._debug:
+                    print(f"[OES][DLL-EXIT][CH{self._chamber}/USB{ch}] {fname}")
 
     def _bind_functions(self):
         assert self.sp_dll is not None
@@ -536,5 +571,7 @@ class OESAsync:
             await t
 
     def shutdown_executor(self):
-        try: self._exec.shutdown(wait=False, cancel_futures=True)
-        except Exception: pass
+        # 전역 실행자는 다른 인스턴스(채널)도 함께 쓰므로 종료하지 않음
+        # try: self._exec.shutdown(wait=False, cancel_futures=True)
+        # except Exception: pass
+        return
