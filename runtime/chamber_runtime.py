@@ -2178,15 +2178,15 @@ class ChamberRuntime:
         _set("basePressure_edit", "9e-6")
         _set("integrationTime_edit", "60")
         _set("workingPressure_edit", "2")
-        _set("processTime_edit", "1")
-        _set("shutterDelay_edit", "1")
+        _set("processTime_edit", "25")
+        _set("shutterDelay_edit", "5")
         _set("arFlow_edit", "20")
         _set("o2Flow_edit", "0")
         _set("n2Flow_edit", "0")
         _set("dcPower_edit", "100")
         # DC-Pulse
         _set("dcPulsePower_checkbox", False)
-        _set("dcPulsePower_edit", "100")
+        _set("dcPulsePower_edit", "300")
         _set("dcPulseFreq_edit", "")
         _set("dcPulseDutyCycle_edit", "")
         # RF-Pulse

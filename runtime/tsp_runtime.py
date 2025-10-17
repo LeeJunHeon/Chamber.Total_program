@@ -1,8 +1,11 @@
 # main_tsp.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
+
+from pathlib import Path
 import asyncio, contextlib
-from typing import Optional
+from collections import deque
+from typing import Optional, Deque, Any, Mapping
 from datetime import datetime, timedelta
 
 # 장비/컨트롤러
@@ -45,6 +48,7 @@ class TSPPageController:
         loop: Optional[asyncio.AbstractEventLoop] = None,
         ig: Optional[AsyncIG] = None,  # 외부에서 IG 주입 가능
         chat: Optional[ChatNotifier] = None,
+        log_dir: Path | str | None = None,
     ) -> None:
         self.ui = ui
         self.loop = loop or asyncio.get_event_loop()
@@ -53,6 +57,15 @@ class TSPPageController:
         self.ig_port = DEFAULT_IG_PORT
 
         self.chat = chat
+
+        # ▼ NAS 로그 설정
+        self._log_root = Path(log_dir) if log_dir else Path.cwd()
+        self._log_dir = self._ensure_log_dir(self._log_root / "TSP")
+        self._log_file_path: Path | None = None
+        self._prestart_buf: Deque[str] = deque(maxlen=1000)
+        self._log_q: asyncio.Queue[str] = asyncio.Queue(maxsize=4096)
+        self._log_fp = None
+        self._log_writer_task: asyncio.Task | None = None
 
         self._ig_ext = ig is not None
         self.ig: Optional[AsyncIG] = ig
@@ -81,14 +94,25 @@ class TSPPageController:
 
     # ── UI 헬퍼 ─────────────────────────────────────────────
     def _log(self, msg: str) -> None:
+        now_ui = datetime.now().strftime("%H:%M:%S")
+        now_file = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        line_ui = f"[{now_ui}] [TSP] {msg}"
+        line_file = f"[{now_file}] [TSP] {msg}\n"
+
+        # UI
         edit = getattr(self.ui, "pc_logMessage_edit", None)
         if edit is not None:
-            try:
-                edit.appendPlainText(f"[{_ts()}] {msg}")
-                return
-            except Exception:
-                pass
-        print(f"[{_ts()}] {msg}")
+            with contextlib.suppress(Exception):
+                edit.appendPlainText(line_ui)
+
+        # 파일: 파일 준비 전이면 프리버퍼에, 준비 후엔 큐로
+        if not self._log_file_path:
+            self._prestart_buf.append(line_file)
+        else:
+            self._log_enqueue_nowait(line_file)
+
+        # 콘솔도 유지
+        print(line_ui)
 
     def _get_plain(self, name: str) -> Optional[str]:
         w = getattr(self.ui, name, None)
@@ -210,6 +234,19 @@ class TSPPageController:
                 verify_with_status=True,
             )
 
+            # ★ 로그 파일 준비
+            now_local = datetime.now().astimezone()
+            ts = now_local.strftime("%Y%m%d_%H%M%S")
+            self._log_file_path = (self._log_dir / f"TSP_{ts}").with_suffix(".txt")
+            if not self._log_writer_task or self._log_writer_task.done():
+                self._log_writer_task = asyncio.create_task(self._log_writer_loop(), name="LogWriter.TSP")
+
+            # ★ 프리버퍼 → 파일 큐로 플러시
+            if self._prestart_buf:
+                for line in list(self._prestart_buf):
+                    self._log_enqueue_nowait(line)
+                self._prestart_buf.clear()
+
             self._log(
                 "=== TSP 공정 시작 === "
                 f"host={self.host} ig={self.ig_port} tsp={self.tsp_port} "
@@ -278,6 +315,12 @@ class TSPPageController:
             with contextlib.suppress(Exception):
                 if self.tsp:
                     await self.tsp.aclose()
+            # 라이터 종료
+            with contextlib.suppress(Exception):
+                if self._log_writer_task:
+                    self._log_writer_task.cancel()
+                    await self._log_writer_task
+                self._log_writer_task = None
 
             if not self._ig_ext:
                 # 1) IG를 확실히 OFF
@@ -299,6 +342,49 @@ class TSPPageController:
 
             self._busy = False
             self._task = None
+
+    # ─────────────────────────────────────────────────────
+    # NAS 로그 유틸리티
+    # ─────────────────────────────────────────────────────
+    def _ensure_log_dir(self, root: Path) -> Path:
+        nas = Path(root)
+        local = Path.cwd() / "_Logs_local_TSP"
+        try:
+            nas.mkdir(parents=True, exist_ok=True)
+            return nas
+        except Exception:
+            local.mkdir(parents=True, exist_ok=True)
+            self._log("[Logger] NAS 폴더 접근 실패 → 로컬 폴백 사용")
+            return local
+
+    def _log_enqueue_nowait(self, line: str) -> None:
+        try:
+            self._log_q.put_nowait(line)
+        except asyncio.QueueFull:
+            with contextlib.suppress(Exception):
+                _ = self._log_q.get_nowait()
+                self._log_q.put_nowait(line)
+
+    async def _log_writer_loop(self):
+        try:
+            while True:
+                line = await self._log_q.get()
+                if self._log_fp is None and self._log_file_path:
+                    with contextlib.suppress(Exception):
+                        self._log_fp = open(self._log_file_path, "a", encoding="utf-8", newline="")
+                if not self._log_fp:
+                    await asyncio.sleep(0.1)
+                    self._log_enqueue_nowait(line)
+                    continue
+                with contextlib.suppress(Exception):
+                    self._log_fp.write(line); self._log_fp.flush()
+        except asyncio.CancelledError:
+            pass
+        finally:
+            if self._log_fp:
+                with contextlib.suppress(Exception):
+                    self._log_fp.flush(); self._log_fp.close()
+                self._log_fp = None        
 
     # ─────────────────────────────────────────────────────
     # 예약 실행 유틸리티

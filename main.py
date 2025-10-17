@@ -163,6 +163,7 @@ class MainWindow(QWidget):
             addr=cfgc.TSP_ADDR,
             loop=self._loop,
             chat=self.chat, # ← CH1/CH2와 동일하게 Notifier 주입
+            log_dir=self._log_root, # ★ NAS 로그 루트 전달 (CH/PC와 동일)
         )
 
         # --- 페이지 네비 버튼 및 라디오 연결
