@@ -9,6 +9,7 @@ from datetime import datetime, timedelta
 from device.ig import AsyncIG
 from device.tsp import AsyncTSP
 from controller.tsp_controller import TSPProcessController, TSPRunConfig
+from controller.chat_notifier import ChatNotifier
 
 # 설정(기본값)
 DEFAULT_HOST       = "192.168.1.50"
@@ -43,12 +44,15 @@ class TSPPageController:
         addr: int = 0x01,  # main.py 호환용(미사용)
         loop: Optional[asyncio.AbstractEventLoop] = None,
         ig: Optional[AsyncIG] = None,  # 외부에서 IG 주입 가능
+        chat: Optional[ChatNotifier] = None,
     ) -> None:
         self.ui = ui
         self.loop = loop or asyncio.get_event_loop()
         self.host = host
         self.tsp_port = int(tcp_port)
         self.ig_port = DEFAULT_IG_PORT
+
+        self.chat = chat
 
         self._ig_ext = ig is not None
         self.ig: Optional[AsyncIG] = ig
@@ -212,6 +216,16 @@ class TSPPageController:
                 f"target={target} cycles={cycles} "
                 f"on={cfg.on_sec}s off={cfg.off_sec}s poll={cfg.poll_sec}s first_wait={cfg.first_check_delay_sec}s"
             )
+
+            # ← 추가: Google Chat 시작 카드
+            if self.chat:
+                params = {
+                    "process_note": f"TSP run: target={target:.3e}, cycles={cycles}",
+                    "tsp_target": target,
+                    "tsp_cycles": cycles,
+                }
+                self.chat.notify_process_started(params)
+
             result = await ctrl.run(cfg)
 
             # UI 표시는 유지
@@ -225,10 +239,38 @@ class TSPPageController:
                 f"cycles_done={result.cycles_done} reason={result.reason}"
             )
 
+            # ← 추가: Google Chat 종료 카드(상세)
+            if self.chat:
+                detail = {
+                    "process_name": "TSP",
+                    "ok_for_log": bool(result.success),
+                    "reason": result.reason,
+                    "final_pressure": result.final_pressure,
+                    "cycles_done": result.cycles_done,
+                }
+                if not result.success and result.reason:
+                    detail.setdefault("errors", []).append(str(result.reason))
+                self.chat.notify_process_finished_detail(bool(result.success), detail)
+
         except asyncio.CancelledError:
             self._log("[사용자 중단]")
+
+            # ← 추가: 사용자 Stop 종료 카드
+            if self.chat:
+                self.chat.notify_process_finished_detail(False, {
+                    "process_name": "TSP",
+                    "stopped": True,
+                })
         except Exception as e:
             self._log(f"[ERROR] 실행 실패: {e!r}")
+
+            # ← 추가: 오류 종료 카드
+            if self.chat:
+                self.chat.notify_process_finished_detail(False, {
+                    "process_name": "TSP",
+                    "errors": [str(e)],
+                })
+
         finally:
             with contextlib.suppress(Exception):
                 if self.tsp:

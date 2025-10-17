@@ -162,6 +162,7 @@ class MainWindow(QWidget):
             tcp_port=cfgc.TSP_TCP_PORT,
             addr=cfgc.TSP_ADDR,
             loop=self._loop,
+            chat=self.chat, # ← CH1/CH2와 동일하게 Notifier 주입
         )
 
         # --- 페이지 네비 버튼 및 라디오 연결

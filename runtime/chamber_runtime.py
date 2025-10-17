@@ -765,9 +765,15 @@ class ChamberRuntime:
                 elif kind == "polling":
                     active = bool(payload.get("active", False))
 
-                    # active=True 이고 자동연결 허용 상태에서만 장치/워치독을 올림
-                    if active and self._auto_connect_enabled:
+                    # ✅ 공정이 실제 실행 중일 때만 자동 기동
+                    if active and self._auto_connect_enabled and self.process_controller.is_running:
                         self._ensure_background_started()
+
+                    # (선택 안전망) active=False면 폴링 타깃을 모두 내리도록 명시
+                    if not active:
+                        self._apply_polling_targets({
+                            "mfc": False, "dc_pulse": False, "rf_pulse": False, "dc": False, "rf": False
+                        })
 
                     params = getattr(self.process_controller, "current_params", {}) or {}
                     use_dc_pulse = bool(params.get("use_dc_pulse", False))
@@ -2016,8 +2022,10 @@ class ChamberRuntime:
         dc_on   = bool(targets.get('dc', False))
         rf_on   = bool(targets.get('rf', False))
 
-        # ✅ 어떤 폴링이라도 실제로 켜야 할 때 + 자동연결 허용 상태일 때만 장치/워치독을 올림
-        if (mfc_on or dcpl_on or rfpl_on or dc_on or rf_on) and self._auto_connect_enabled:
+        # ✅ 어떤 폴링이라도 실제로 켜야 할 때 + 자동연결 허용 + 공정 실행 중일 때만 자동 기동
+        if (mfc_on or dcpl_on or rfpl_on or dc_on or rf_on) \
+                and self._auto_connect_enabled \
+                and self.process_controller.is_running:
             self._ensure_background_started()
 
         with contextlib.suppress(Exception):
