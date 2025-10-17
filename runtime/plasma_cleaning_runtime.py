@@ -98,6 +98,43 @@ class PlasmaCleaningRuntime:
         # RF 이벤트 펌프 시작
         self._ensure_task("PC.RFEvents", self._pump_rf_events)
 
+    # =========================
+    # MFC/IG 이벤트 펌프
+    # =========================
+    async def _pump_mfc_events(self, mfc, label: str) -> None:
+        if not mfc:
+            return
+        async for ev in mfc.events():
+            k = getattr(ev, "kind", None)
+            if k == "status":
+                self.append_log(label, ev.message or "")
+            elif k == "command_confirmed":
+                self.append_log(label, f"OK: {ev.cmd or ''}")
+            elif k == "command_failed":
+                self.append_log(label, f"FAIL: {ev.cmd or ''} ({ev.reason or 'unknown'})")
+            elif k == "flow":
+                gas  = getattr(ev, "gas", "") or ""
+                flow = float(getattr(ev, "value", 0.0) or 0.0)
+                self.append_log(label, f"[poll] {gas}: {flow:.2f} sccm")
+            elif k == "pressure":
+                txt = ev.text or (f"{ev.value:.3g}" if ev.value is not None else "")
+                self.append_log(label, f"[poll] ChamberP: {txt}")
+
+    async def _pump_ig_events(self, label: str) -> None:
+        if not self.ig:
+            return
+        async for ev in self.ig.events():
+            k = getattr(ev, "kind", None)
+            if k == "status":
+                self.append_log(label, ev.message or "")
+            elif k == "pressure":
+                p = getattr(ev, "pressure", None)
+                txt = f"{p:.3e} Torr" if isinstance(p, (int, float)) else (ev.message or "")
+                self.append_log(label, f"[poll] {txt}")
+            elif k == "base_reached":
+                self.append_log(label, "Base pressure reached")
+            elif k == "base_failed":
+                self.append_log(label, f"Base pressure failed: {ev.message or ''}")
 
     # =========================
     # 장비 연결
@@ -153,6 +190,24 @@ class PlasmaCleaningRuntime:
             if asyncio.get_running_loop().time() >= deadline:
                 raise RuntimeError(f"장비 연결 타임아웃: {', '.join(missing)}")
             await asyncio.sleep(0.5)
+
+        # 3) 이벤트 펌프 기동 (중복 방지)
+        if not getattr(self, "_event_tasks", None):
+            self._event_tasks = []
+
+            if self.rf:
+                self._event_tasks.append(asyncio.create_task(self._pump_rf_events(), name="PC.Pump.RF"))
+
+            if self.mfc_gas:
+                self._event_tasks.append(asyncio.create_task(self._pump_mfc_events(self.mfc_gas, "MFC(GAS)"), name="PC.Pump.MFC.GAS"))
+
+            if self.mfc_sp4:
+                sel = f"CH{self._selected_ch}"
+                self._event_tasks.append(asyncio.create_task(self._pump_mfc_events(self.mfc_sp4, f"MFC(SP4-{sel})"), name="PC.Pump.MFC.SP4"))
+
+            if self.ig:
+                sel = f"CH{self._selected_ch}"
+                self._event_tasks.append(asyncio.create_task(self._pump_ig_events(f"IG-{sel}"), name="PC.Pump.IG"))
 
     # =========================
     # 퍼블릭: 바인딩/설정 갱신
@@ -212,98 +267,105 @@ class PlasmaCleaningRuntime:
         # ---- IG
         async def _ensure_ig_on() -> None:
             if self._ig_ensure_on_cb:
+                self.append_log("IG", "ensure ON")
                 await self._ig_ensure_on_cb()
 
         async def _read_ig_mTorr() -> float:
             if not self._ig_read_mTorr_cb:
                 raise RuntimeError("IG read callback is not bound")
             v = await self._ig_read_mTorr_cb()
+            self.append_log("IG", f"read {float(v):.3e} Torr")
             return float(v)
-        
+
         async def _ig_wait_for_base_torr(target_torr: float, interval_ms: int = 1000) -> bool:
             if not self.ig:
                 raise RuntimeError("IG not bound")
             return await self.ig.wait_for_base_pressure(float(target_torr), interval_ms=interval_ms)
 
         # ---- MFC (GAS/SP4)
+        # 기존 _mfc_gas_select(gas_idx) 바디를 아래로 교체
         async def _mfc_gas_select(gas_idx: int) -> None:
-            mfc = self.mfc_gas
-            if not mfc:
-                raise RuntimeError("mfc_gas not bound")
-            # 1) 전용 메서드 우선
-            for name in ("gas_select", "select_gas", "set_gas"):
-                fn = getattr(mfc, name, None)
-                if callable(fn):
-                    res = fn(int(gas_idx))
-                    await res if inspect.isawaitable(res) else None
-                    return
-            # 2) 커맨드 디스패치
-            await self._mfc_dispatch(mfc, "gas_select", {"gas_idx": int(gas_idx)})
+            # GasFlow는 정책상 항상 MFC1의 ch=3이므로, 전달된 값도 ch로 저장만
+            self._gas_channel = int(gas_idx)
+            self.append_log("PC", f"GasFlow → MFC1 ch{self._gas_channel}")
 
+        # 기존 _mfc_flow_set_on(flow_sccm) 바디를 아래로 교체
         async def _mfc_flow_set_on(flow_sccm: float) -> None:
             mfc = self.mfc_gas
             if not mfc:
                 raise RuntimeError("mfc_gas not bound")
+            ch   = getattr(self, "_gas_channel", 3)
             flow = float(max(0.0, flow_sccm))
-            # 전용 API 우선: flow_set + flow_on
-            for name in ("flow_set_on",):
-                fn = getattr(mfc, name, None)
-                if callable(fn):
-                    res = fn(flow)
-                    await res if inspect.isawaitable(res) else None
-                    return
-            # 대체: flow_set → flow_on
-            fn_set = getattr(mfc, "flow_set", None)
-            fn_on = getattr(mfc, "flow_on", None)
-            if callable(fn_set):
-                res = fn_set(flow)
-                await res if inspect.isawaitable(res) else None
-            if callable(fn_on):
-                res = fn_on(True)
-                await res if inspect.isawaitable(res) else None
-                return
-            # 커맨드 디스패치
-            await self._mfc_dispatch(mfc, "flow_set", {"value": flow})
-            await self._mfc_dispatch(mfc, "flow_on", {"on": True})
 
+            if hasattr(mfc, "valve_open"):
+                self.append_log("MFC", "VALVE_OPEN")
+                await mfc.valve_open()
+
+            if hasattr(mfc, "set_flow"):
+                self.append_log("MFC", f"FLOW_SET ch={ch} -> {flow:.1f} sccm")
+                await mfc.set_flow(ch, flow)
+                if hasattr(mfc, "flow_on"):
+                    self.append_log("MFC", f"FLOW_ON ch={ch}")
+                    await mfc.flow_on(ch)
+            else:
+                self.append_log("MFC", f"FLOW_SET ch={ch} -> {flow:.1f} sccm (dispatch)")
+                await self._mfc_dispatch(mfc, "FLOW_SET", {"channel": ch, "value": flow})
+                self.append_log("MFC", f"FLOW_ON ch={ch} (dispatch)")
+                await self._mfc_dispatch(mfc, "FLOW_ON",  {"channel": ch})
+
+            # 간단 readback(드라이버 제공 시)
+            try:
+                rb = None
+                for name in ("read_flow", "get_flow", "read_channel_flow"):
+                    fn = getattr(mfc, name, None)
+                    if callable(fn):
+                        rb = fn(ch) if fn.__code__.co_argcount >= 2 else fn()
+                        rb = await rb if inspect.isawaitable(rb) else rb
+                        break
+                if rb is not None:
+                    self.append_log("MFC", f"FLOW_READ ch={ch} -> {float(rb):.1f} sccm")
+                else:
+                    self.append_log("MFC", "FLOW_READ 미지원 → 검증 생략")
+            except Exception as e:
+                self.append_log("MFC", f"FLOW_READ 실패: {e!r}")
+
+            await asyncio.sleep(1.0)  # 소폭 안정화
+
+        # 기존 _mfc_flow_off() 바디를 아래로 교체
         async def _mfc_flow_off() -> None:
             mfc = self.mfc_gas
             if not mfc:
                 return
-            for name in ("flow_on",):
-                fn = getattr(mfc, name, None)
-                if callable(fn):
-                    res = fn(False)
-                    await res if inspect.isawaitable(res) else None
-                    return
-            await self._mfc_dispatch(mfc, "flow_on", {"on": False})
+            ch = getattr(self, "_gas_channel", 3)
+            if hasattr(mfc, "flow_off"):
+                self.append_log("MFC", f"FLOW_OFF ch={ch}")
+                await mfc.flow_off(ch)
+            else:
+                self.append_log("MFC", f"FLOW_OFF ch={ch} (dispatch)")
+                await self._mfc_dispatch(mfc, "FLOW_OFF", {"channel": ch})
 
         async def _mfc_sp4_set(mTorr: float) -> None:
             mfc = self.mfc_sp4
             if not mfc:
                 raise RuntimeError("mfc_sp4 not bound")
-            # 전용 API(sp_set) 우선
+            self.append_log("MFC", f"SP4_SET -> {float(mTorr):.2f} mTorr")
             fn = getattr(mfc, "sp_set", None)
             if callable(fn):
-                try:
-                    res = fn(4, float(mTorr))
-                except TypeError:
-                    res = fn(4, float(mTorr))
-                await res if inspect.isawaitable(res) else None
-                return
-            # 커맨드 디스패치
-            await self._mfc_dispatch(mfc, "sp_set", {"sp_idx": 4, "value": float(mTorr)})
+                res = fn(4, float(mTorr)); await res if inspect.isawaitable(res) else None
+            else:
+                await self._mfc_dispatch(mfc, "sp_set", {"sp_idx": 4, "value": float(mTorr)})
+            await asyncio.sleep(1.0)
 
         async def _mfc_sp4_on() -> None:
             mfc = self.mfc_sp4
-            if not mfc:
-                raise RuntimeError("mfc_sp4 not bound")
+            if not mfc: raise RuntimeError("mfc_sp4 not bound")
+            self.append_log("MFC", "SP4_ON")
             fn = getattr(mfc, "sp_on", None)
             if callable(fn):
-                res = fn(4, True)
-                await res if inspect.isawaitable(res) else None
-                return
-            await self._mfc_dispatch(mfc, "sp_on", {"sp_idx": 4, "on": True})
+                res = fn(4, True); await res if inspect.isawaitable(res) else None
+            else:
+                await self._mfc_dispatch(mfc, "sp_on", {"sp_idx": 4, "on": True})
+            await asyncio.sleep(1.0)
 
         async def _mfc_sp4_off() -> None:
             mfc = self.mfc_sp4
@@ -360,17 +422,33 @@ class PlasmaCleaningRuntime:
             return None
 
         async def _rf_send(power: float):
-            # SET(DCV_SET_1) 보장 + WRITE_1 (ch=1)
-            await self.plc.power_apply(float(power), family="DCV", ensure_set=True, channel=1)
+            p = float(power)
+            self.append_log("PLC", f"DCV WRITE ch1 <- {p:.1f} W (SET+WRITE)")
+            await self.plc.power_apply(p, family="DCV", ensure_set=True, channel=1)
+            try:
+                fwd = await self.plc.read_reg_name("DCV_READ_2")
+                ref = await self.plc.read_reg_name("DCV_READ_3")
+                self.append_log("PLC", f"ADC READ FWD={float(fwd):.1f} W, REF={float(ref):.1f} W")
+            except Exception as e:
+                self.append_log("PLC", f"ADC READ 실패: {e!r}")
 
         async def _rf_send_unverified(power: float):
-            await self.plc.power_write(float(power), family="DCV", write_idx=1)
+            p = float(power)
+            self.append_log("PLC", f"DCV WRITE ch1(unverified) <- {p:.1f} W")
+            await self.plc.power_write(p, family="DCV", write_idx=1)
+            try:
+                fwd = await self.plc.read_reg_name("DCV_READ_2")
+                ref = await self.plc.read_reg_name("DCV_READ_3")
+                self.append_log("PLC", f"ADC READ FWD={float(fwd):.1f} W, REF={float(ref):.1f} W")
+            except Exception as e:
+                self.append_log("PLC", f"ADC READ 실패: {e!r}")
 
         async def _rf_request_read():
             try:
-                # DCV_READ_2/3을 forward/reflected로 사용
                 fwd = await self.plc.read_reg_name("DCV_READ_2")
                 ref = await self.plc.read_reg_name("DCV_READ_3")
+                # (선택) 원시 ADC를 로그로도 남기고 싶으면 한 줄 추가
+                # self.append_log("PLC", f"ADC READ FWD={float(fwd):.1f} W, REF={float(ref):.1f} W")
                 return {"forward": float(fwd), "reflected": float(ref)}
             except Exception as e:
                 self.append_log("RF", f"read failed: {e!r}")
