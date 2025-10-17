@@ -2197,6 +2197,12 @@ class ChamberRuntime:
 
     def _reset_ui_after_process(self):
         self._set_default_ui_values()
+
+        # ✅ 타겟명 초기화 (공통 leaf 사용 → CH1은 단일 위젯으로 alias 매핑됨)
+        for leaf in ("g1Target_name", "g2Target_name", "g3Target_name"):
+            # CH1에선 세 leaf가 모두 같은 'gunTarget_name'으로 alias 되지만, 같은 위젯을 여러 번 비워도 무해
+            self._set(leaf, "")
+
         for name in (
             "G1_checkbox","G2_checkbox","G3_checkbox","Ar_checkbox","O2_checkbox","N2_checkbox",
             "mainShutter_checkbox","dcPulsePower_checkbox","rfPulsePower_checkbox","dcPower_checkbox","powerSelect_checkbox",
@@ -2301,16 +2307,20 @@ class ChamberRuntime:
 
     # --- UI 위젯 접근/부모/다이얼로그 관리 -----------------------------------
     def _alias_leaf(self, leaf: str) -> str:
-        """CH1의 UI 위젯 이름과 공통 이름을 매핑."""
+        """CH1의 UI 위젯 이름과 공통 이름을 매핑.
+        주의: 실제 속성 접근은 getattr(self.ui, f"{self.prefix}{name}") 이므로,
+        여기서는 prefix(예: 'ch1_')를 절대 포함하지 않는다.
+        """
         if self.ch != 1:
             return leaf
         return {
             "integrationTime_edit": "intergrationTime_edit",
 
-            # CH1은 타겟 단일 위젯 사용
-            "g1Target_name": "ch1_gunTarget_name",
-            "g2Target_name": "ch1_gunTarget_name",
-            "g3Target_name": "ch1_gunTarget_name",
+            # CH1은 단일 타겟 위젯: ch1_gunTarget_name
+            # => prefix('ch1_') + 'gunTarget_name' == 'ch1_gunTarget_name'
+            "g1Target_name": "gunTarget_name",
+            "g2Target_name": "gunTarget_name",
+            "g3Target_name": "gunTarget_name",
         }.get(leaf, leaf)
 
     def _u(self, name: str) -> Any | None:

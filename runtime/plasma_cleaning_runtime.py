@@ -98,6 +98,62 @@ class PlasmaCleaningRuntime:
         # RF 이벤트 펌프 시작
         self._ensure_task("PC.RFEvents", self._pump_rf_events)
 
+
+    # =========================
+    # 장비 연결
+    # =========================
+    # 클래스 내부에 추가
+    def _is_dev_connected(self, dev) -> bool:
+        try:
+            fn = getattr(dev, "is_connected", None)
+            if callable(fn):
+                return bool(fn())
+            # 일부 디바이스는 내부 플래그만 있을 수 있음
+            return bool(getattr(dev, "_connected", False))
+        except Exception:
+            return False
+
+    async def _preflight_connect(self, timeout_s: float = 10.0) -> None:
+        """공정 시작 전 장비 연결 보장. 모두 연결되면 리턴, 아니면 예외."""
+        self.append_log("PC", "프리플라이트: 장비 연결 확인/시작")
+        need: list[tuple[str, object]] = []
+        if self.plc:      need.append(("PLC", self.plc))
+        if self.mfc_gas:  need.append(("MFC(GAS)", self.mfc_gas))
+        if self.mfc_sp4:  need.append(("MFC(SP4)", self.mfc_sp4))
+        if self.ig:       need.append(("IG", self.ig))
+
+        # 1) 미연결이면 start/connect(or PLC 핸드셰이크) 시도
+        for name, dev in need:
+            if self._is_dev_connected(dev):
+                self.append_log("PC", f"{name} 이미 연결됨")
+                continue
+            try:
+                if name == "PLC":
+                    # PLC는 첫 I/O에서 연결 → 무해한 coil 읽기로 핸드셰이크
+                    await dev.read_coil(0)
+                    self.append_log("PC", "PLC 핸드셰이크(read_coil 0)")
+                else:
+                    for m in ("start", "connect"):
+                        fn = getattr(dev, m, None)
+                        if callable(fn):
+                            res = fn()
+                            if inspect.isawaitable(res):
+                                await res
+                            self.append_log("PC", f"{name} {m} 호출")
+                            break
+            except Exception as e:
+                raise RuntimeError(f"{name} 연결 실패: {e!r}")
+
+        # 2) 타임아웃 내 모두 연결되었는지 대기
+        deadline = asyncio.get_running_loop().time() + float(timeout_s)
+        while True:
+            missing = [n for n, d in need if not self._is_dev_connected(d)]
+            if not missing:
+                break
+            if asyncio.get_running_loop().time() >= deadline:
+                raise RuntimeError(f"장비 연결 타임아웃: {', '.join(missing)}")
+            await asyncio.sleep(0.5)
+
     # =========================
     # 퍼블릭: 바인딩/설정 갱신
     # =========================
@@ -371,6 +427,13 @@ class PlasmaCleaningRuntime:
         p = self._read_params_from_ui()
 
         # (삭제됨) 세션 디렉터리 생성/로깅 — DataLogger 미사용
+
+        # ⬇️ 추가: 공정 전에 장비 연결 보장
+        try:
+            await self._preflight_connect(timeout_s=10.0)
+        except Exception as e:
+            self.append_log("PC", f"오류: {e!r}")
+            return
 
         # 컨트롤러 시퀀스 시작
         self._running = True
