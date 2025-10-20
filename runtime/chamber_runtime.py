@@ -1810,15 +1810,6 @@ class ChamberRuntime:
         g1_name = self._get_text("g1Target_name")
         g2_name = self._get_text("g2Target_name")
         g3_name = self._get_text("g3Target_name")
-        if use_g1 and not g1_name:
-            self._post_warning("입력값 확인", "G1 타겟 이름이 비어있습니다.")
-            return None
-        if use_g2 and not g2_name:
-            self._post_warning("입력값 확인", "G2 타겟 이름이 비어있습니다.")
-            return None
-        if use_g3 and not g3_name:
-            self._post_warning("입력값 확인", "G3 타겟 이름이 비어있습니다.")
-            return None
         
         use_ar = bool(getattr(self._u("Ar_checkbox"), "isChecked", lambda: False)())
         use_o2 = bool(getattr(self._u("O2_checkbox"), "isChecked", lambda: False)())
@@ -2200,7 +2191,7 @@ class ChamberRuntime:
         _set("arFlow_edit", "20")
         _set("o2Flow_edit", "0")
         _set("n2Flow_edit", "0")
-        _set("dcPower_edit", "100")
+        _set("dcPower_edit", "130")
         # DC-Pulse
         _set("dcPulsePower_checkbox", False)
         _set("dcPulsePower_edit", "300")
@@ -2211,6 +2202,20 @@ class ChamberRuntime:
         _set("rfPulsePower_edit", "100")
         _set("rfPulseFreq_edit", "")
         _set("rfPulseDutyCycle_edit", "")
+
+        # ← 추가: 챔버별 기본 체크
+        try:
+            if self.ch == 1:
+                _set("Ar_checkbox", True)
+                _set("dcPulsePower_checkbox", True)   # CH1: DC Pulse 사용
+                _set("dcPower_checkbox", False)
+            elif self.ch == 2:
+                _set("G2_checkbox", True)             # CH2: G2 사용
+                _set("Ar_checkbox", True)             # CH2: Ar 가스
+                _set("dcPower_checkbox", True)        # CH2: DC Power 사용
+                _set("dcPulsePower_checkbox", False)
+        except Exception:
+            pass
 
     def _reset_ui_after_process(self):
         self._set_default_ui_values()
@@ -2228,11 +2233,26 @@ class ChamberRuntime:
             if w is not None:
                 with contextlib.suppress(Exception):
                     w.setChecked(False)
+        
+        # ← 추가: 챔버별 기본 체크 복원
+        try:
+            if self.ch == 1:
+                self._u("Ar_checkbox") and self._u("Ar_checkbox").setChecked(True)
+                self._u("dcPulsePower_checkbox") and self._u("dcPulsePower_checkbox").setChecked(True)
+            elif self.ch == 2:
+                self._u("G2_checkbox") and self._u("G2_checkbox").setChecked(True)
+                self._u("Ar_checkbox") and self._u("Ar_checkbox").setChecked(True)
+                self._u("dcPower_checkbox") and self._u("dcPower_checkbox").setChecked(True)
+        except Exception:
+            pass
+
         _s = self._u("processState_edit")
         if _s: _s.setPlainText("대기 중")
+
         for leaf in ("Power_edit","Voltage_edit","Current_edit","forP_edit","refP_edit"):
             w = self._u(leaf)
             if w: w.setPlainText("")
+
         self._on_process_status_changed(False)
         with contextlib.suppress(Exception):
             self.graph.reset()
