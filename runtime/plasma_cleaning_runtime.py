@@ -26,7 +26,7 @@ class PlasmaCleaningRuntime:
 
     - 장치 인스턴스는 main.py에서 생성 후 주입
       * MFC 가스 유량:  mfc_gas
-      * MFC SP4(Working Pressure): mfc_sp4
+      * MFC SP4(Working Pressure): mfc_pressure
       * IG: set_ig_callbacks(ensure_on, read_mTorr) 또는 ig 직접 주입
       * PLC: RF 연속 출력(DCV ch=1)용
     - start/stop 버튼 → PlasmaCleaningController로 연결
@@ -44,7 +44,7 @@ class PlasmaCleaningRuntime:
         *,
         plc: Optional[AsyncPLC],
         mfc_gas: Optional[AsyncMFC],
-        mfc_sp4: Optional[AsyncMFC],
+        mfc_pressure: Optional[AsyncMFC],
         log_dir: Path,                     # 시그니처 유지(내부 미사용)
         chat: Optional[Any] = None,
         ig: Optional[AsyncIG] = None,      # IG 객체 직접 주입 가능
@@ -58,7 +58,7 @@ class PlasmaCleaningRuntime:
         # 주입 장치
         self.plc: Optional[AsyncPLC] = plc
         self.mfc_gas: Optional[AsyncMFC] = mfc_gas
-        self.mfc_sp4: Optional[AsyncMFC] = mfc_sp4
+        self.mfc_pressure: Optional[AsyncMFC] = mfc_pressure
         self.ig: Optional[AsyncIG] = ig
 
         # IG 콜백 (라디오 토글 시 main에서 갱신 가능)
@@ -94,9 +94,6 @@ class PlasmaCleaningRuntime:
         # IG 객체가 넘어온 경우, 기본 콜백 자동 바인딩
         if self.ig is not None:
             self._bind_ig_device(self.ig)
-
-        # RF 이벤트 펌프 시작
-        self._ensure_task("PC.RFEvents", self._pump_rf_events)
 
     # =========================
     # MFC/IG 이벤트 펌프
@@ -156,7 +153,7 @@ class PlasmaCleaningRuntime:
         need: list[tuple[str, object]] = []
         if self.plc:      need.append(("PLC", self.plc))
         if self.mfc_gas:  need.append(("MFC(GAS)", self.mfc_gas))
-        if self.mfc_sp4:  need.append(("MFC(SP4)", self.mfc_sp4))
+        if self.mfc_pressure:  need.append(("MFC(SP4)", self.mfc_pressure))
         if self.ig:       need.append(("IG", self.ig))
 
         # 1) 미연결이면 start/connect(or PLC 핸드셰이크) 시도
@@ -192,22 +189,25 @@ class PlasmaCleaningRuntime:
             await asyncio.sleep(0.5)
 
         # 3) 이벤트 펌프 기동 (중복 방지)
-        if not getattr(self, "_event_tasks", None):
+        if not hasattr(self, "_event_tasks"):
             self._event_tasks = []
 
-            if self.rf:
-                self._event_tasks.append(asyncio.create_task(self._pump_rf_events(), name="PC.Pump.RF"))
+        def _has_task(name: str) -> bool:
+            return any(getattr(t, "get_name", lambda: "")() == name for t in self._event_tasks)
 
-            if self.mfc_gas:
-                self._event_tasks.append(asyncio.create_task(self._pump_mfc_events(self.mfc_gas, "MFC(GAS)"), name="PC.Pump.MFC.GAS"))
+        if self.rf and not _has_task("PC.Pump.RF"):
+            self._event_tasks.append(asyncio.create_task(self._pump_rf_events(), name="PC.Pump.RF"))
 
-            if self.mfc_sp4:
-                sel = f"CH{self._selected_ch}"
-                self._event_tasks.append(asyncio.create_task(self._pump_mfc_events(self.mfc_sp4, f"MFC(SP4-{sel})"), name="PC.Pump.MFC.SP4"))
+        if self.mfc_gas and not _has_task("PC.Pump.MFC.GAS"):
+            self._event_tasks.append(asyncio.create_task(self._pump_mfc_events(self.mfc_gas, "MFC(GAS)"), name="PC.Pump.MFC.GAS"))
 
-            if self.ig:
-                sel = f"CH{self._selected_ch}"
-                self._event_tasks.append(asyncio.create_task(self._pump_ig_events(f"IG-{sel}"), name="PC.Pump.IG"))
+        if self.mfc_pressure and not _has_task("PC.Pump.MFC.SP4"):
+            sel = f"CH{self._selected_ch}"
+            self._event_tasks.append(asyncio.create_task(self._pump_mfc_events(self.mfc_pressure, f"MFC(SP4-{sel})"), name="PC.Pump.MFC.SP4"))
+
+        if self.ig and not _has_task("PC.Pump.IG"):
+            sel = f"CH{self._selected_ch}"
+            self._event_tasks.append(asyncio.create_task(self._pump_ig_events(f"IG-{sel}"), name="PC.Pump.IG"))
 
     # =========================
     # 퍼블릭: 바인딩/설정 갱신
@@ -217,14 +217,14 @@ class PlasmaCleaningRuntime:
         self._selected_ch = 1 if int(ch) != 2 else 2
         self.append_log("PC", f"Selected Chamber → CH{self._selected_ch}")
 
-    def set_mfcs(self, *, mfc_gas: Optional[AsyncMFC], mfc_sp4: Optional[AsyncMFC]) -> None:
+    def set_mfcs(self, *, mfc_gas: Optional[AsyncMFC], mfc_pressure: Optional[AsyncMFC]) -> None:
         """
         라디오 선택에 맞춰 가스/SP4용 MFC를 교체.
         (같은 인스턴스를 둘 다에 써도 무방)
         """
         self.mfc_gas = mfc_gas
-        self.mfc_sp4 = mfc_sp4
-        self.append_log("PC", f"Bind MFC: GAS={_mfc_name(mfc_gas)}, SP4={_mfc_name(mfc_sp4)}")
+        self.mfc_pressure = mfc_pressure
+        self.append_log("PC", f"Bind MFC: GAS={_mfc_name(mfc_gas)}, SP4={_mfc_name(mfc_pressure)}")
 
     def set_ig_callbacks(
         self,
@@ -345,9 +345,9 @@ class PlasmaCleaningRuntime:
                 await self._mfc_dispatch(mfc, "FLOW_OFF", {"channel": ch})
 
         async def _mfc_sp4_set(mTorr: float) -> None:
-            mfc = self.mfc_sp4
+            mfc = self.mfc_pressure
             if not mfc:
-                raise RuntimeError("mfc_sp4 not bound")
+                raise RuntimeError("mfc_pressure not bound")
             self.append_log("MFC", f"SP4_SET -> {float(mTorr):.2f} mTorr")
             fn = getattr(mfc, "sp_set", None)
             if callable(fn):
@@ -357,8 +357,8 @@ class PlasmaCleaningRuntime:
             await asyncio.sleep(1.0)
 
         async def _mfc_sp4_on() -> None:
-            mfc = self.mfc_sp4
-            if not mfc: raise RuntimeError("mfc_sp4 not bound")
+            mfc = self.mfc_pressure
+            if not mfc: raise RuntimeError("mfc_pressure not bound")
             self.append_log("MFC", "SP4_ON")
             fn = getattr(mfc, "sp_on", None)
             if callable(fn):
@@ -368,7 +368,7 @@ class PlasmaCleaningRuntime:
             await asyncio.sleep(1.0)
 
         async def _mfc_sp4_off() -> None:
-            mfc = self.mfc_sp4
+            mfc = self.mfc_pressure
             if not mfc:
                 return
             fn = getattr(mfc, "sp_on", None)
@@ -524,8 +524,14 @@ class PlasmaCleaningRuntime:
             self._set_state_text("IDLE")
 
     async def _on_click_stop(self) -> None:
-        # 컨트롤러 안전 정지 (RF 정지/가스 off/SP4 off는 컨트롤러 내부에서도 호출)
+        # 1) 컨트롤러 루프 중단 요청
+        with contextlib.suppress(Exception):
+            if hasattr(self, "pc") and self.pc:
+                self.pc.request_stop()
+
+        # 2) RF 정리(즉시 감압 필요 시)
         await self._safe_rf_stop()
+
         self._running = False
         self._set_state_text("STOPPED")
         self.append_log("PC", "사용자에 의해 중지")
@@ -615,7 +621,9 @@ class PlasmaCleaningRuntime:
 
     def shutdown_fast(self) -> None:
         # 공유 장치이므로 close() 등은 호출하지 않습니다.
-        for t in self._bg_tasks:
+        for t in getattr(self, "_bg_tasks", []):
+            t.cancel()
+        for t in getattr(self, "_event_tasks", []):
             t.cancel()
 
     def _ensure_task(self, name: str, coro_fn: Callable[[], Awaitable[None]]) -> None:

@@ -144,7 +144,7 @@ class MainWindow(QWidget):
                 log_dir=self._log_root,
                 plc=self.plc,              # 공유 PLC
                 mfc_gas=self.mfc1,         # Gas Flow는 정책상 항상 MFC1 사용
-                mfc_sp4=self.mfc1,         # 초기엔 CH1 기준
+                mfc_pressure=self.mfc1,         # 초기엔 CH1 기준
                 ig=self.ig1,               # IG도 초기엔 CH1 기준
                 chat=self.chat,
             )
@@ -302,8 +302,8 @@ class MainWindow(QWidget):
 
         # 선택 챔버에 맞춰 MFC 주입: Gas Flow는 항상 mfc1, SP4는 해당 챔버 MFC
         try:
-            mfc_sp4 = self.mfc1 if ch == 1 else self.mfc2
-            pc.set_mfcs(mfc_gas=self.mfc1, mfc_sp4=mfc_sp4)
+            mfc_pressure = self.mfc1 if ch == 1 else self.mfc2
+            pc.set_mfcs(mfc_gas=self.mfc1, mfc_pressure=mfc_pressure)
         except Exception as e:
             self._broadcast_log("PC", f"MFC 주입 실패: {e!r}")
 

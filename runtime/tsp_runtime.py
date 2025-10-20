@@ -13,6 +13,7 @@ from device.ig import AsyncIG
 from device.tsp import AsyncTSP
 from controller.tsp_controller import TSPProcessController, TSPRunConfig
 from controller.chat_notifier import ChatNotifier
+from controller.runtime_state import runtime_state # CH 상태 조회용
 
 # 설정(기본값)
 DEFAULT_HOST       = "192.168.1.50"
@@ -175,6 +176,15 @@ class TSPPageController:
         if self._busy:
             self._log("이미 실행 중입니다.")
             return
+        
+        # ⬇ CH1이 공정 중이면 시작 자체를 차단
+        try:
+            if runtime_state.is_running(1):
+                self._log("[TSP] CH1이 공정 중이라서 TSP를 시작할 수 없습니다. CH1 종료 후 다시 시도하세요.")
+                return
+        except Exception:
+            pass
+
         try:
             target = self._read_target()
             cycles = self._read_cycles()
@@ -429,14 +439,16 @@ class TSPPageController:
                 if remain > 0:
                     await asyncio.sleep(remain)
 
-                # 실행 직전: 다른 공정이 돌고 있으면 비어질 때까지 대기
+                # 실행 직전: TSP 자체가 바쁘거나, CH1이 공정 중이면 대기
                 # (로그는 60초에 한 번만 출력해 스팸 방지)
                 last_log_ts = 0.0
                 loop_time = asyncio.get_running_loop().time
-                while self._busy:
+                while self._busy or runtime_state.is_running(1):
                     t = loop_time()
                     if t - last_log_ts >= 60.0:
-                        self._log("[TSP] 현재 공정 중… 예약 실행을 대기합니다.")
+                        msg = "[TSP] 현재 공정 중… 예약 실행을 대기합니다." if self._busy \
+                            else "[TSP] CH1 공정 중… 예약 실행을 대기합니다."
+                        self._log(msg)
                         last_log_ts = t
                     await asyncio.sleep(5.0)
 
