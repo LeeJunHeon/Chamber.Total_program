@@ -225,6 +225,11 @@ class PLCConfig:
     dc_v_scale: float = 0.5    # 2000 V / 4000 ct  = 0.5 V/ct
     dc_i_scale: float = 0.001  # 4 A / 4000 ct     = 0.001 A/ct
 
+    # RF 피드백(ADC→W) 보정 계수
+    rf_fwd_a: float = 0.1530   # forward:  W = a*ADC + b
+    rf_fwd_b: float = 2.9603
+    rf_ref_a: float = 0.1512   # reflected: W = a*ADC + b
+    rf_ref_b: float = 14.0607
 # ======================================================
 # 단일 클래스: AsyncPLC (저수준+고수준)
 # ======================================================
@@ -736,11 +741,20 @@ class AsyncPLC:
         return await self.rf_write_w(power_w)  # DCV_WRITE_1
 
     # RF 피드백(Forward/Reflected) 읽기 — DCV_READ_2/3 사용
-    async def rf_read_fwd_ref(self) -> tuple[float, float]:
-        f_raw = await self.read_reg_name("DCV_READ_2")  # Forward W
-        r_raw = await self.read_reg_name("DCV_READ_3")  # Reflected W
-        # 레지스터 단위가 이미 W라면 그대로 반환, 스케일이 필요하면 곱해줘도 됨
-        return float(f_raw), float(r_raw)
+    async def rf_read_fwd_ref(self) -> dict[str, float]:
+        f_raw = await self.read_reg_name("DCV_READ_2")
+        r_raw = await self.read_reg_name("DCV_READ_3")
+
+        f_w = self.cfg.rf_fwd_a * float(f_raw) + self.cfg.rf_fwd_b
+        r_w = self.cfg.rf_ref_a * float(r_raw) + self.cfg.rf_ref_b
+
+        # 음수 방지 & 보기 좋게 반올림(선택)
+        f_w = round(max(0.0, f_w), 1)
+        r_w = round(max(0.0, r_w), 1)
+
+        # rf_power 가 dict의 "forward"/"reflected" 키를 읽습니다.
+        return {"forward": f_w, "reflected": r_w}
+
 
     # ---------- DI용 논리명 셋(set) ----------
     async def set(self, name: str, on: bool, *, ch: int = 1, momentary: bool = False) -> None:

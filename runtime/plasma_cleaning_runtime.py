@@ -167,14 +167,13 @@ class PlasmaCleaningRuntime:
                     await dev.read_coil(0)
                     self.append_log("PC", "PLC 핸드셰이크(read_coil 0)")
                 else:
-                    for m in ("start", "connect"):
-                        fn = getattr(dev, m, None)
-                        if callable(fn):
-                            res = fn()
-                            if inspect.isawaitable(res):
-                                await res
-                            self.append_log("PC", f"{name} {m} 호출")
-                            break
+                    fn = getattr(dev, "connect", None)
+                    if not callable(fn):
+                        raise RuntimeError(f"{name}는 connect()를 제공해야 합니다 (start() 금지)")
+                    res = fn()
+                    if inspect.isawaitable(res):
+                        await res
+                    self.append_log("PC", f"{name} connect 호출")
             except Exception as e:
                 raise RuntimeError(f"{name} 연결 실패: {e!r}")
 
@@ -459,15 +458,6 @@ class PlasmaCleaningRuntime:
             self.append_log("PC", f"오류: {e!r}")
             return
 
-        # (삭제) 시작 시 폴링/이벤트 ON 알림 없음
-        # # 3) 프로세스 시작 알림(폴링/이벤트 등 ON)
-        # for dev in (self.mfc_gas, self.mfc_pressure, self.ig):
-        #     try:
-        #         if dev and hasattr(dev, "set_process_status"):
-        #             await dev.set_process_status(True)
-        #     except Exception as e:
-        #         self.append_log("PC", f"경고: set_process_status 실패: {e!r}")
-
         # 4) 컨트롤러 실행
         success = False
         self._running = True
@@ -480,17 +470,6 @@ class PlasmaCleaningRuntime:
             self._running = False
             self._set_state_text("IDLE")
 
-            # # (삭제) 종료 알림/폴링 OFF 없음
-            # # 5) 프로세스 종료 알림(폴링/이벤트 등 OFF + 결과 반영)
-            # for dev in (self.mfc_gas, self.mfc_pressure, self.ig):
-            #     try:
-            #         if dev and hasattr(dev, "set_process_status"):
-            #             await dev.set_process_status(False)
-            #         if dev and hasattr(dev, "on_process_finished"):
-            #             await dev.on_process_finished(success=success)
-            #     except Exception as e:
-            #         self.append_log("PC", f"경고: on_process_finished 실패: {e!r}")
-
     async def _on_click_stop(self) -> None:
         # 1) 컨트롤러 루프 중단 요청
         with contextlib.suppress(Exception):
@@ -499,6 +478,10 @@ class PlasmaCleaningRuntime:
 
         # 2) RF 정리(즉시 감압 필요 시)
         await self._safe_rf_stop()
+            
+        # ← 이벤트 펌프도 끄기 (옵션)
+        for t in getattr(self, "_event_tasks", []):
+            t.cancel()
 
         self._running = False
         self._set_state_text("STOPPED")

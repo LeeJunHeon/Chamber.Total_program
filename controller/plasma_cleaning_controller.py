@@ -125,6 +125,7 @@ class PlasmaCleaningController:
     # 내부 실행 시퀀스
     # ─────────────────────────────────────────────────────────────
     async def _run(self, p: PCParams) -> None:
+        self._stop_evt = asyncio.Event()  # ★ 매 실행마다 초기화
         self.is_running = True
         self._show_state("RUNNING")
         self._log("PC", "플라즈마 클리닝 시작")
@@ -147,16 +148,42 @@ class PlasmaCleaningController:
             await self._ensure_ig_on()
             if not self._ig_wait_for_base_torr:
                 raise RuntimeError("IG API(ig_wait_for_base_torr)가 바인딩되지 않았습니다.")
+
             self._log("IG", f"IG.wait_for_base_pressure: {p.target_pressure:.3e} Torr 대기")
-            ok = await self._ig_wait_for_base_torr(p.target_pressure, interval_ms=1000)  # Torr 단위
+
+            wait_task = asyncio.create_task(
+                self._ig_wait_for_base_torr(p.target_pressure, interval_ms=1000),
+                name="IGBaseWait",
+            )
+            stop_task = asyncio.create_task(self._stop_evt.wait(), name="PCStopWait")
+
+            done, pending = await asyncio.wait(
+                {wait_task, stop_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            # STOP이 먼저면 base-wait 취소
+            if stop_task in done and self._stop_evt.is_set():
+                for t in pending:
+                    t.cancel()
+                # 컨트롤러 루프를 정상적으로 끊어 종료 시퀀스로 이동
+                raise asyncio.CancelledError()
+
+            # base-wait 완료면 결과 확인
+            ok = await wait_task
             if not ok:
                 raise RuntimeError("Base pressure not reached (IG API)")
 
             # 3) MFC 가스 설정 (Gas #3 N2) + 4) SP4 세팅/ON
-            await self._mfc_gas_select(p.gas_idx)            # ← Gas #3
+            await self._mfc_gas_select(p.gas_idx)
             if p.gas_flow_sccm > 0.0:
-                await self._mfc_flow_set_on(p.gas_flow_sccm) # 내부밸브 오픈 + 유량 설정
+                self._log("MFC", f"FLOW_SET_ON ch={p.gas_idx} -> {p.gas_flow_sccm:.1f} sccm")
+                await self._mfc_flow_set_on(p.gas_flow_sccm)
+
+            self._log("MFC", f"SP4_SET -> {p.sp4_setpoint_mTorr:.2f} mTorr")
             await self._mfc_sp4_set(p.sp4_setpoint_mTorr)
+
+            self._log("MFC", "SP4_ON")
             await self._mfc_sp4_on()
 
             # 6) RF POWER(PLC DAC) 설정
