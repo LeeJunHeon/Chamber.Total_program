@@ -291,18 +291,42 @@ class TSPPageController:
                 f"cycles_done={result.cycles_done} reason={result.reason}"
             )
 
-            # ← 추가: Google Chat 종료 카드(상세)
+            # ← 수정: Google Chat 종료 카드(상세, 상태 분류)
             if self.chat:
+                # 1) 상태 분류
+                reason_str = (result.reason or "").lower() if isinstance(result.reason, str) else str(result.reason)
+                if result.success:
+                    status = "normal_completed"
+                    status_label = "정상 종료"
+                    ok_for_chat = True
+                elif "cycles_exhausted" in reason_str:
+                    # 목표 압력은 못 미달했지만 설정한 사이클을 모두 수행 → 오류가 아님
+                    status = "cycles_completed"
+                    status_label = "목표 사이클 완료"
+                    ok_for_chat = True
+                else:
+                    status = "error"
+                    status_label = "오류로 공정 종료"
+                    ok_for_chat = False
+
+                # 2) 상세 데이터 조립
                 detail = {
                     "process_name": "TSP",
-                    "ok_for_log": bool(result.success),
-                    "reason": result.reason,
+                    "status": status,                 # 내부용 상태 코드
+                    "status_label": status_label,     # 카드에 보여줄 문구
                     "final_pressure": result.final_pressure,
                     "cycles_done": result.cycles_done,
+                    "reason": result.reason,
                 }
-                if not result.success and result.reason:
-                    detail.setdefault("errors", []).append(str(result.reason))
-                self.chat.notify_process_finished_detail(bool(result.success), detail)
+                if not ok_for_chat:
+                    # 진짜 오류일 때만 errors 채움
+                    if result.reason:
+                        detail["errors"] = [str(result.reason)]
+                    else:
+                        detail["errors"] = ["unknown_error"]
+
+                # 3) 성공/중립(OK) 여부를 첫 번째 인자로 전달
+                self.chat.notify_process_finished_detail(ok_for_chat, detail)
 
         except asyncio.CancelledError:
             self._log("[사용자 중단]")

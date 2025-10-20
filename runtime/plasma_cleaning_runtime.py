@@ -459,13 +459,14 @@ class PlasmaCleaningRuntime:
             self.append_log("PC", f"오류: {e!r}")
             return
 
-        # 3) 프로세스 시작 알림(폴링/이벤트 등 ON)
-        for dev in (self.mfc_gas, self.mfc_pressure, self.ig):
-            try:
-                if dev and hasattr(dev, "set_process_status"):
-                    await dev.set_process_status(True)
-            except Exception as e:
-                self.append_log("PC", f"경고: set_process_status 실패: {e!r}")
+        # (삭제) 시작 시 폴링/이벤트 ON 알림 없음
+        # # 3) 프로세스 시작 알림(폴링/이벤트 등 ON)
+        # for dev in (self.mfc_gas, self.mfc_pressure, self.ig):
+        #     try:
+        #         if dev and hasattr(dev, "set_process_status"):
+        #             await dev.set_process_status(True)
+        #     except Exception as e:
+        #         self.append_log("PC", f"경고: set_process_status 실패: {e!r}")
 
         # 4) 컨트롤러 실행
         success = False
@@ -479,15 +480,16 @@ class PlasmaCleaningRuntime:
             self._running = False
             self._set_state_text("IDLE")
 
-            # 5) 프로세스 종료 알림(폴링/이벤트 등 OFF + 결과 반영)
-            for dev in (self.mfc_gas, self.mfc_pressure, self.ig):
-                try:
-                    if dev and hasattr(dev, "set_process_status"):
-                        await dev.set_process_status(False)
-                    if dev and hasattr(dev, "on_process_finished"):
-                        await dev.on_process_finished(success=success)
-                except Exception as e:
-                    self.append_log("PC", f"경고: on_process_finished 실패: {e!r}")
+            # # (삭제) 종료 알림/폴링 OFF 없음
+            # # 5) 프로세스 종료 알림(폴링/이벤트 등 OFF + 결과 반영)
+            # for dev in (self.mfc_gas, self.mfc_pressure, self.ig):
+            #     try:
+            #         if dev and hasattr(dev, "set_process_status"):
+            #             await dev.set_process_status(False)
+            #         if dev and hasattr(dev, "on_process_finished"):
+            #             await dev.on_process_finished(success=success)
+            #     except Exception as e:
+            #         self.append_log("PC", f"경고: on_process_finished 실패: {e!r}")
 
     async def _on_click_stop(self) -> None:
         # 1) 컨트롤러 루프 중단 요청
