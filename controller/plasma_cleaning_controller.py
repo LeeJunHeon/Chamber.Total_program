@@ -143,17 +143,14 @@ class PlasmaCleaningController:
             if not lamp:
                 raise RuntimeError("GV OPEN_LAMP가 TRUE가 아님(오픈 실패?)")
 
-            # 2) IG ON & 목표(보다 낮음) 대기 — IG 내부 API 사용
+            # 2) IG ON & 목표(보다 낮음) 대기 — IG API만 사용
             await self._ensure_ig_on()
-            if self._ig_wait_for_base_torr:
-                self._log("IG", f"IG.wait_for_base_pressure: {p.target_pressure:.3e} Torr 대기")
-                ok = await self._ig_wait_for_base_torr(p.target_pressure, interval_ms=1000)
-                if not ok:
-                    raise RuntimeError("Base pressure not reached (IG API)")
-            else:
-                # 콜백이 없으면 기존(mTorr 폴링) 경로로 폴백
-                self._log("IG", f"IG 목표 미만 대기: {p.target_pressure:.3f} Torr")
-                await self._wait_ig_below(p.target_pressure, p.tol_mTorr, p.wait_timeout_s, p.settle_s)
+            if not self._ig_wait_for_base_torr:
+                raise RuntimeError("IG API(ig_wait_for_base_torr)가 바인딩되지 않았습니다.")
+            self._log("IG", f"IG.wait_for_base_pressure: {p.target_pressure:.3e} Torr 대기")
+            ok = await self._ig_wait_for_base_torr(p.target_pressure, interval_ms=1000)  # Torr 단위
+            if not ok:
+                raise RuntimeError("Base pressure not reached (IG API)")
 
             # 3) MFC 가스 설정 (Gas #3 N2) + 4) SP4 세팅/ON
             await self._mfc_gas_select(p.gas_idx)            # ← Gas #3
@@ -214,33 +211,3 @@ class PlasmaCleaningController:
             self._show_state("IDLE")
             self._log("PC", "플라즈마 클리닝 종료")
 
-    # ─────────────────────────────────────────────────────────────
-    # 유틸
-    # ─────────────────────────────────────────────────────────────
-    async def _wait_ig_below(self, target_mTorr: float, tol: float, timeout_s: float, settle_s: float) -> None:
-        """IG가 target 미만으로 떨어지고, tol 내에서 settle_s 유지될 때까지 대기."""
-        deadline = asyncio.get_running_loop().time() + float(timeout_s)
-        stable_start: Optional[float] = None
-
-        while True:
-            if self._stop_evt.is_set():
-                raise asyncio.CancelledError()
-
-            now = asyncio.get_running_loop().time()
-            if now > deadline:
-                raise TimeoutError("IG 목표 도달 타임아웃")
-
-            try:
-                p = float(await self._read_ig_mTorr())
-            except Exception:
-                p = float("inf")
-
-            if p < target_mTorr + tol:
-                if stable_start is None:
-                    stable_start = now
-                if (now - stable_start) >= float(settle_s):
-                    return
-            else:
-                stable_start = None
-
-            await asyncio.sleep(0.5)

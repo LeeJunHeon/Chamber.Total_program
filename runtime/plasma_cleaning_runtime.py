@@ -297,10 +297,6 @@ class PlasmaCleaningRuntime:
             ch   = getattr(self, "_gas_channel", 3)
             flow = float(max(0.0, flow_sccm))
 
-            if hasattr(mfc, "valve_open"):
-                self.append_log("MFC", "VALVE_OPEN")
-                await mfc.valve_open()
-
             if hasattr(mfc, "set_flow"):
                 self.append_log("MFC", f"FLOW_SET ch={ch} -> {flow:.1f} sccm")
                 await mfc.set_flow(ch, flow)

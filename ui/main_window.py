@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 ################################################################################
-## Form generated from reading UI file 'CH1&2OLrZoY.ui'
+## Form generated from reading UI file 'CH1&2lSoHcj.ui'
 ##
 ## Created by: Qt User Interface Compiler version 6.9.1
 ##
@@ -218,6 +218,9 @@ class Ui_Form(object):
         self.PC_useChamber2_radio = QRadioButton(self.page_3)
         self.PC_useChamber2_radio.setObjectName(u"PC_useChamber2_radio")
         self.PC_useChamber2_radio.setGeometry(QRect(940, 80, 61, 24))
+        self.pushButton_3 = QPushButton(self.page_3)
+        self.pushButton_3.setObjectName(u"pushButton_3")
+        self.pushButton_3.setGeometry(QRect(130, 60, 111, 28))
         self.stackedWidget.addWidget(self.page_3)
         self.page = QWidget()
         self.page.setObjectName(u"page")
@@ -396,6 +399,9 @@ class Ui_Form(object):
         self.ch1_btnGoCh2 = QPushButton(self.page)
         self.ch1_btnGoCh2.setObjectName(u"ch1_btnGoCh2")
         self.ch1_btnGoCh2.setGeometry(QRect(10, 0, 91, 61))
+        self.pushButton = QPushButton(self.page)
+        self.pushButton.setObjectName(u"pushButton")
+        self.pushButton.setGeometry(QRect(960, 60, 111, 28))
         self.stackedWidget.addWidget(self.page)
         self.page_2 = QWidget()
         self.page_2.setObjectName(u"page_2")
@@ -599,6 +605,9 @@ class Ui_Form(object):
         self.ch2_dcPower_checkbox = QCheckBox(self.page_2)
         self.ch2_dcPower_checkbox.setObjectName(u"ch2_dcPower_checkbox")
         self.ch2_dcPower_checkbox.setGeometry(QRect(10, 580, 121, 24))
+        self.pushButton_2 = QPushButton(self.page_2)
+        self.pushButton_2.setObjectName(u"pushButton_2")
+        self.pushButton_2.setGeometry(QRect(960, 60, 111, 28))
         self.stackedWidget.addWidget(self.page_2)
         QWidget.setTabOrder(self.pc_btnGoCh1, self.pc_btnGoCh2)
         QWidget.setTabOrder(self.pc_btnGoCh2, self.TSP_setCycle_edit)
@@ -694,7 +703,7 @@ class Ui_Form(object):
 
         self.retranslateUi(Form)
 
-        self.stackedWidget.setCurrentIndex(0)
+        self.stackedWidget.setCurrentIndex(2)
 
 
         QMetaObject.connectSlotsByName(Form)
@@ -734,6 +743,7 @@ class Ui_Form(object):
         self.pc_logMessage_label.setText(QCoreApplication.translate("Form", u"Log Message", None))
         self.PC_useChamber1_radio.setText(QCoreApplication.translate("Form", u"CH1", None))
         self.PC_useChamber2_radio.setText(QCoreApplication.translate("Form", u"CH2", None))
+        self.pushButton_3.setText(QCoreApplication.translate("Form", u"\ucd08\uae30\uc0c1\ud0dc \uc800\uc7a5", None))
         self.ch1_processList_button.setText(QCoreApplication.translate("Form", u"Select File", None))
         self.ch1_shutterDelay_label.setText(QCoreApplication.translate("Form", u"Shutter Delay [min]", None))
         self.ch1_Current_label.setText(QCoreApplication.translate("Form", u"Current", None))
@@ -765,6 +775,7 @@ class Ui_Form(object):
         self.ch1_btnGoPC.setText(QCoreApplication.translate("Form", u"Plasma\n"
 "Cleaning", None))
         self.ch1_btnGoCh2.setText(QCoreApplication.translate("Form", u"CH.2", None))
+        self.pushButton.setText(QCoreApplication.translate("Form", u"\ucd08\uae30\uc0c1\ud0dc \uc800\uc7a5", None))
         self.ch2_O2_checkbox.setText(QCoreApplication.translate("Form", u"O2", None))
         self.ch2_Voltage_label.setText(QCoreApplication.translate("Form", u"Voltage", None))
         self.ch2_Ar_checkbox.setText(QCoreApplication.translate("Form", u"Ar", None))
@@ -801,5 +812,6 @@ class Ui_Form(object):
 "Cleaning", None))
         self.ch2_btnGoCh1.setText(QCoreApplication.translate("Form", u"CH.1", None))
         self.ch2_dcPower_checkbox.setText(QCoreApplication.translate("Form", u"DC Power [W]", None))
+        self.pushButton_2.setText(QCoreApplication.translate("Form", u"\ucd08\uae30\uc0c1\ud0dc \uc800\uc7a5", None))
     # retranslateUi
 

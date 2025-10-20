@@ -213,6 +213,11 @@ class TSPPageController:
     # ── 내부 실행 루틴 ─────────────────────────────────────
     async def _run(self, target: float, cycles: int) -> None:
         try:
+            # 시작 직전 레이스 가드
+            if runtime_state.is_running(1):
+                self._log("[TSP] 시작 직전 CH1 공정이 감지되어 중단합니다.")
+                return
+
             # 장비 인스턴스 준비
             if self.ig is None:
                 self.ig = AsyncIG(host=self.host, port=self.ig_port)
