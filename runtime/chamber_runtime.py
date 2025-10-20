@@ -1575,6 +1575,23 @@ class ChamberRuntime:
     def _handle_stop_clicked(self, _checked: bool = False):
         self.request_stop_all(user_initiated=True)
 
+    def start_presputter_from_ui(self) -> bool:
+        """
+        Pre-Sputter 자동 실행 진입점.
+        'Start' 버튼을 누른 것과 동일한 경로로, 현재 UI 값(기본값/마지막값)으로 1회 실행한다.
+        """
+        if self.is_running:
+            self.append_log("MAIN", f"[CH{self.ch}] PreSputter: 이미 공정 중입니다.")
+            return False
+        try:
+            # 버튼 클릭과 동일 경로(쿨다운·검증·프리플라이트·로깅 모두 재사용)
+            self._handle_start_clicked(False)
+            self.append_log("MAIN", f"[CH{self.ch}] PreSputter 자동 시작 (UI 현재값)")
+            return True
+        except Exception as e:
+            self.append_log("MAIN", f"[CH{self.ch}] PreSputter 시작 실패: {e!r}")
+            return False
+
     def request_stop_all(self, user_initiated: bool):
         self._cancel_delay_task()
         if getattr(self, "_pc_stopping", False):

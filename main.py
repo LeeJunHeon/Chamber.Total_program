@@ -11,6 +11,7 @@ from qasync import QEventLoop
 # UI / Controller
 from ui.main_window import Ui_Form
 from runtime.tsp_runtime import TSPPageController
+from runtime.pre_sputter_runtime import PreSputterRuntime
 from controller.chat_notifier import ChatNotifier
 
 # 공유 장비(PLC, IG, MFC)
@@ -134,6 +135,19 @@ class MainWindow(QWidget):
             ig=self.ig2,
             on_plc_owner=self._set_plc_owner,
         )
+
+        try:
+            # 매일 08:30에 CH1/CH2 동시 Pre-Sputter (TSP 07:30과 겹치지 않게)
+            self.pre_sputter = PreSputterRuntime(
+                ch1=self.ch1,
+                ch2=self.ch2,
+                chat=self.chat,   # 선택
+                hh=8, mm=30,
+                parallel=True     # 동시 실행 정책 유지
+            )
+            self.pre_sputter.start_daily()
+        except Exception as e:
+            self._broadcast_log("Auto", f"PreSputter 예약 초기화 실패: {e!r}")
 
         # === Plasma Cleaning 런타임 생성 (공유 장치 주입) ===
         try:

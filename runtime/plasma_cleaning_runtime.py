@@ -289,7 +289,6 @@ class PlasmaCleaningRuntime:
             self._gas_channel = int(gas_idx)
             self.append_log("PC", f"GasFlow → MFC1 ch{self._gas_channel}")
 
-        # 기존 _mfc_flow_set_on(flow_sccm) 바디를 아래로 교체
         async def _mfc_flow_set_on(flow_sccm: float) -> None:
             mfc = self.mfc_gas
             if not mfc:
@@ -297,82 +296,35 @@ class PlasmaCleaningRuntime:
             ch   = getattr(self, "_gas_channel", 3)
             flow = float(max(0.0, flow_sccm))
 
-            if hasattr(mfc, "set_flow"):
-                self.append_log("MFC", f"FLOW_SET ch={ch} -> {flow:.1f} sccm")
-                await mfc.set_flow(ch, flow)
-                if hasattr(mfc, "flow_on"):
-                    self.append_log("MFC", f"FLOW_ON ch={ch}")
-                    await mfc.flow_on(ch)
-            else:
-                self.append_log("MFC", f"FLOW_SET ch={ch} -> {flow:.1f} sccm (dispatch)")
-                await self._mfc_dispatch(mfc, "FLOW_SET", {"channel": ch, "value": flow})
-                self.append_log("MFC", f"FLOW_ON ch={ch} (dispatch)")
-                await self._mfc_dispatch(mfc, "FLOW_ON",  {"channel": ch})
+            # ✔ mfc.py 정식 API만 사용
+            await mfc.set_flow(ch, flow)
+            await mfc.flow_on(ch)
 
-            # 간단 readback(드라이버 제공 시)
-            try:
-                rb = None
-                for name in ("read_flow", "get_flow", "read_channel_flow"):
-                    fn = getattr(mfc, name, None)
-                    if callable(fn):
-                        rb = fn(ch) if fn.__code__.co_argcount >= 2 else fn()
-                        rb = await rb if inspect.isawaitable(rb) else rb
-                        break
-                if rb is not None:
-                    self.append_log("MFC", f"FLOW_READ ch={ch} -> {float(rb):.1f} sccm")
-                else:
-                    self.append_log("MFC", "FLOW_READ 미지원 → 검증 생략")
-            except Exception as e:
-                self.append_log("MFC", f"FLOW_READ 실패: {e!r}")
-
-            await asyncio.sleep(1.0)  # 소폭 안정화
-
-        # 기존 _mfc_flow_off() 바디를 아래로 교체
         async def _mfc_flow_off() -> None:
             mfc = self.mfc_gas
             if not mfc:
                 return
             ch = getattr(self, "_gas_channel", 3)
-            if hasattr(mfc, "flow_off"):
-                self.append_log("MFC", f"FLOW_OFF ch={ch}")
-                await mfc.flow_off(ch)
-            else:
-                self.append_log("MFC", f"FLOW_OFF ch={ch} (dispatch)")
-                await self._mfc_dispatch(mfc, "FLOW_OFF", {"channel": ch})
+            await mfc.flow_off(ch)  # ✔ 정식 API
 
         async def _mfc_sp4_set(mTorr: float) -> None:
             mfc = self.mfc_pressure
             if not mfc:
                 raise RuntimeError("mfc_pressure not bound")
-            self.append_log("MFC", f"SP4_SET -> {float(mTorr):.2f} mTorr")
-            fn = getattr(mfc, "sp_set", None)
-            if callable(fn):
-                res = fn(4, float(mTorr)); await res if inspect.isawaitable(res) else None
-            else:
-                await self._mfc_dispatch(mfc, "sp_set", {"sp_idx": 4, "value": float(mTorr)})
-            await asyncio.sleep(1.0)
+            await mfc.sp4_set(float(mTorr))      # ✔ 정식 API
 
         async def _mfc_sp4_on() -> None:
             mfc = self.mfc_pressure
-            if not mfc: raise RuntimeError("mfc_pressure not bound")
-            self.append_log("MFC", "SP4_ON")
-            fn = getattr(mfc, "sp_on", None)
-            if callable(fn):
-                res = fn(4, True); await res if inspect.isawaitable(res) else None
-            else:
-                await self._mfc_dispatch(mfc, "sp_on", {"sp_idx": 4, "on": True})
-            await asyncio.sleep(1.0)
+            if not mfc:
+                raise RuntimeError("mfc_pressure not bound")
+            #await mfc.valve_open()               # ✔ 밸브는 pressure MFC에서만
+            await mfc.sp4_on()                   # ✔ 정식 API
 
         async def _mfc_sp4_off() -> None:
             mfc = self.mfc_pressure
             if not mfc:
                 return
-            fn = getattr(mfc, "sp_on", None)
-            if callable(fn):
-                res = fn(4, False)
-                await res if inspect.isawaitable(res) else None
-                return
-            await self._mfc_dispatch(mfc, "sp_on", {"sp_idx": 4, "on": False})
+            await mfc.valve_open()              # ✔ 정식 API
 
         # ---- RF (PLC DCV ch=1 사용 — enable/write/read)
         async def _rf_start(power_w: float) -> None:
@@ -497,27 +449,45 @@ class PlasmaCleaningRuntime:
             self.append_log("PC", "이미 실행 중입니다.")
             return
 
-        # 파라미터 수집 (UI에서 못 읽으면 기본값; '1e-5' 과학표기 허용)
+        # 1) 파라미터 수집
         p = self._read_params_from_ui()
 
-        # (삭제됨) 세션 디렉터리 생성/로깅 — DataLogger 미사용
-
-        # ⬇️ 추가: 공정 전에 장비 연결 보장
+        # 2) 프리플라이트(연결/이벤트펌프) — 실패 시 바로 종료
         try:
             await self._preflight_connect(timeout_s=10.0)
         except Exception as e:
             self.append_log("PC", f"오류: {e!r}")
             return
 
-        # 컨트롤러 시퀀스 시작
+        # 3) 프로세스 시작 알림(폴링/이벤트 등 ON)
+        for dev in (self.mfc_gas, self.mfc_pressure, self.ig):
+            try:
+                if dev and hasattr(dev, "set_process_status"):
+                    await dev.set_process_status(True)
+            except Exception as e:
+                self.append_log("PC", f"경고: set_process_status 실패: {e!r}")
+
+        # 4) 컨트롤러 실행
+        success = False
         self._running = True
         try:
-            await self.pc._run(p)  # PlasmaCleaningController가 공정 전체 수행
+            await self.pc._run(p)   # 공정 전체 수행(Stop 누르면 내부에서 안전 종료)
+            success = True
         except Exception as e:
             self.append_log("PC", f"오류: {e!r}")
         finally:
             self._running = False
             self._set_state_text("IDLE")
+
+            # 5) 프로세스 종료 알림(폴링/이벤트 등 OFF + 결과 반영)
+            for dev in (self.mfc_gas, self.mfc_pressure, self.ig):
+                try:
+                    if dev and hasattr(dev, "set_process_status"):
+                        await dev.set_process_status(False)
+                    if dev and hasattr(dev, "on_process_finished"):
+                        await dev.on_process_finished(success=success)
+                except Exception as e:
+                    self.append_log("PC", f"경고: on_process_finished 실패: {e!r}")
 
     async def _on_click_stop(self) -> None:
         # 1) 컨트롤러 루프 중단 요청
@@ -552,16 +522,6 @@ class PlasmaCleaningRuntime:
     # =========================
     # 내부 헬퍼들
     # =========================
-    async def _mfc_dispatch(self, mfc: AsyncMFC, cmd: str, args: Optional[dict] = None) -> None:
-        """
-        드라이버가 메서드를 직접 제공하지 않을 때, 공용 커맨드 라우터로 보냅니다.
-        프로젝트의 AsyncMFC는 내부에 단일 큐를 두는 구조입니다.
-        """
-        fn = getattr(mfc, "handle_command", None)
-        if not callable(fn):
-            raise RuntimeError("AsyncMFC.handle_command 가 없습니다.")
-        await fn(cmd, args or {})
-
     def _read_params_from_ui(self) -> PCParams:
         def _read_plain_number(obj_name: str, default: float) -> float:
             w = _safe_get(self.ui, obj_name)

@@ -184,11 +184,9 @@ class PlasmaCleaningController:
                 self._log("RF", f"OFF 실패: {e!r}")
 
             try:
-                # 2) MFC GAS OFF
-                await self._mfc_sp4_off()
-                await self._mfc_flow_off()
-                # 3) (요청사항) MFC VALVE OPEN = 유량 0으로 FLOW_ON 유지(내부 밸브만 open)
-                await self._mfc_flow_set_on(0.0)
+                # 2) Pressure 제어 OFF + Gas OFF
+                await self._mfc_sp4_off()     # (밸브 CLOSE: pressure 측)
+                await self._mfc_flow_off()    # (gas 유량 OFF)
             except Exception as e:
                 self._log("MFC", f"종료 동작 실패: {e!r}")
 
