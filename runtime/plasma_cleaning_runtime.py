@@ -299,33 +299,31 @@ class PlasmaCleaningRuntime:
             return await self.ig.wait_for_base_pressure(float(target_torr), interval_ms=interval_ms)
 
         # ---- MFC (GAS/SP4)
-        # 기존 _mfc_gas_select(gas_idx) 바디를 아래로 교체
         async def _mfc_gas_select(gas_idx: int) -> None:
-            # GasFlow는 정책상 항상 MFC1의 ch=3이므로, 전달된 값도 ch로 저장만
+            # 선택 채널 기록 + MFC에도 선택 전달
             self._gas_channel = int(gas_idx)
             self.append_log("PC", f"GasFlow → MFC1 ch{self._gas_channel}")
+            if self.mfc_gas:
+                await self.mfc_gas.gas_select(self._gas_channel)
 
         async def _mfc_flow_set_on(flow_sccm: float) -> None:
             mfc = self.mfc_gas
             if not mfc:
                 raise RuntimeError("mfc_gas not bound")
-            ch   = getattr(self, "_gas_channel", 3)
             flow = float(max(0.0, flow_sccm))
 
-            # 1) Set & On
-            self.append_log("MFC", f"FLOW_SET ch={ch} -> {flow:.1f} sccm")
-            await mfc.set_flow(ch, flow)
-
-            self.append_log("MFC", f"FLOW_ON ch={ch}")
-            await mfc.flow_on(ch)           # ← 장치측에서 안정화까지 보장한다고 가정
-            self.append_log("MFC", "FLOW_ON OK (device awaited)")
+            # 선택 채널은 _mfc_gas_select()에서 이미 MFC에 전달됨
+            self.append_log("MFC", f"FLOW_SET_ON(sel) -> {flow:.1f} sccm")
+            await mfc.flow_set_on(flow)     # ✔ SET 검증 + 개별 ON + 안정화 확인까지 포함
+            self.append_log("MFC", "FLOW_SET_ON OK (verify+stabilize)")
 
         async def _mfc_flow_off() -> None:
             mfc = self.mfc_gas
             if not mfc:
                 return
-            ch = getattr(self, "_gas_channel", 3)
-            await mfc.flow_off(ch)  # ✔ 정식 API
+            self.append_log("MFC", "FLOW_OFF(sel)")
+            await mfc.flow_off_selected()   # ✔ 선택 채널만 OFF(개별 L{ch}0)
+            self.append_log("MFC", "FLOW_OFF OK")
 
         async def _mfc_sp4_set(mTorr: float) -> None:
             mfc = self.mfc_pressure

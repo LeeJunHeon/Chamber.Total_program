@@ -259,6 +259,9 @@ class AsyncMFC:
         self.last_setpoints = {1: 0.0, 2: 0.0, 3: 0.0}      # 장비 단위(HW)
         self.flow_error_counters = {1: 0, 2: 0, 3: 0}
 
+        # ⬇ PlasmaCleaning 전용: 선택된 가스 채널 기억
+        self._selected_ch: Optional[int] = None
+
         # 폴링 사이클 중첩 방지 플래그
         self._poll_cycle_active: bool = False
 
@@ -459,6 +462,58 @@ class AsyncMFC:
         self._mask_shadow = target
 
         # 장비 반영 대기 후 확정
+        await asyncio.sleep(max(MFC_DELAY_MS, 200) / 1000.0)
+        await self._emit_confirmed("FLOW_OFF")
+
+    # === PlasmaCleaning: 선택 가스 전용 API (L{ch}{1/0} 개별 명령 사용) ===
+    async def gas_select(self, gas_idx: int) -> None:
+        gi = int(gas_idx)
+        if gi not in self.gas_map:
+            raise ValueError(f"지원하지 않는 가스 채널: {gas_idx}")
+        self._selected_ch = gi
+        await self._emit_status(f"가스 선택: ch{gi} ({self.gas_map.get(gi, '-')})")
+
+    def _require_selected_ch(self) -> int:
+        gi = int(self._selected_ch or 0)
+        if gi not in self.gas_map:
+            raise RuntimeError("선택된 가스가 없습니다. gas_select()를 먼저 호출하세요.")
+        return gi
+
+    async def flow_set_on(self, ui_value: float) -> None:
+        """선택 채널에 FLOW_SET → FLOW_ON(개별 명령)"""
+        ch = self._require_selected_ch()
+        await self.set_flow(ch, float(ui_value))
+        # 개별 ON (마스크 L0 금지)
+        self._enqueue(self._mk_cmd("FLOW_ON", channel=ch), None,
+                    allow_no_reply=True, tag=f"[FLOW_ON ch{ch}]")
+        # (옵션) 기존 안정화 루프 재사용
+        if self._stab_enabled:
+            tgt = float(self.last_setpoints.get(ch, 0.0))
+            if tgt > 0:
+                await self._cancel_task("_stab_task")
+                self._stab_ch = ch
+                self._stab_target_hw = tgt
+                self._stab_attempts = 0
+                self._stab_pending_cmd = "FLOW_ON"
+                self._stab_task = asyncio.create_task(self._stabilization_loop())
+                await self._emit_status(f"FLOW_ON: ch{ch} 안정화 시작 (목표 HW {tgt:.2f})")
+                return
+        await asyncio.sleep(max(MFC_DELAY_MS, 200) / 1000.0)
+        await self._emit_confirmed("FLOW_ON")
+
+    async def flow_off_selected(self) -> None:
+        """선택 채널만 FLOW_OFF(개별 명령)"""
+        ch = self._require_selected_ch()
+        if self._stab_ch == ch:
+            await self._cancel_task("_stab_task")
+            self._stab_ch = None
+            self._stab_target_hw = 0.0
+            self._stab_pending_cmd = None
+            await self._emit_status(f"FLOW_OFF: ch{ch} 안정화 취소")
+        self.last_setpoints[ch] = 0.0
+        self.flow_error_counters[ch] = 0
+        self._enqueue(self._mk_cmd("FLOW_OFF", channel=ch), None,
+                    allow_no_reply=True, tag=f"[FLOW_OFF ch{ch}]")
         await asyncio.sleep(max(MFC_DELAY_MS, 200) / 1000.0)
         await self._emit_confirmed("FLOW_OFF")
 
