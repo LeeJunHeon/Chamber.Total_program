@@ -315,14 +315,13 @@ class PlasmaCleaningRuntime:
             mfc = self.mfc_gas
             if not mfc:
                 raise RuntimeError("mfc_gas not bound")
-            if self._pc_gas_idx is None:
-                raise RuntimeError("gas_select가 먼저 호출되지 않았습니다.")
-
+            # ← gas_idx는 직전에 _mfc_gas_select에서 self._pc_gas_idx로 저장됨
+            ch   = getattr(self, "_pc_gas_idx", 3)
             req  = float(max(0.0, flow_sccm))
-            ui   = req * float(_PC_FLOW_UI_SCALE.get(self._pc_gas_idx, 1.0))
+            ui   = req * float(_PC_FLOW_UI_SCALE.get(ch, 1.0))  # PC 전용 보정
 
-            self.append_log("MFC", f"FLOW_SET_ON(sel ch={self._pc_gas_idx}) -> {ui:.1f} sccm (req {req:.1f})")
-            await mfc.flow_set_on(ui)  # ✔ 선택 채널 기준 L{ch}1 + 안정화 확인
+            self.append_log("MFC", f"FLOW_SET_ON(sel ch={ch}) -> {ui:.1f} sccm (PC only, req {req:.1f})")
+            await mfc.flow_set_on(ui)  # 선택 채널 기준의 개별 ON/안정화
 
         async def _mfc_flow_off() -> None:
             mfc = self.mfc_gas
