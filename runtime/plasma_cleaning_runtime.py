@@ -19,6 +19,8 @@ from device.ig import AsyncIG  # IG 직접 주입 지원
 from controller.plasma_cleaning_controller import PlasmaCleaningController, PCParams
 from device.rf_power import RFPowerAsync, RFPowerEvent
 
+# 플라즈마 클리닝 ‘전용’ UI→장치 전달 보정(채널별)
+_PC_FLOW_UI_SCALE = {1: 1.0, 2: 0.1, 3: 0.1}  # ← PC에서만 적용
 
 class PlasmaCleaningRuntime:
     """
@@ -75,6 +77,7 @@ class PlasmaCleaningRuntime:
         self._bg_tasks: list[asyncio.Task] = []
         self._running: bool = False
         self._selected_ch: int = 1  # 라디오에 맞춰 set_selected_ch로 갱신
+        self._pc_gas_idx: Optional[int] = None  # ← PC에서 선택된 gas_idx 저장(스케일 계산용)
 
         # 로그/상태 위젯
         self._w_log = (
@@ -300,19 +303,26 @@ class PlasmaCleaningRuntime:
 
         # ---- MFC (GAS/SP4)
         async def _mfc_gas_select(gas_idx: int) -> None:
-            self.append_log("PC", f"GasFlow → MFC1 ch{int(gas_idx)}")
             if not self.mfc_gas:
                 raise RuntimeError("mfc_gas not bound")
-            await self.mfc_gas.gas_select(int(gas_idx))
+            gi = int(gas_idx)
+            self._pc_gas_idx = gi  # ← 런타임에 보관해서 이후 스케일에 사용
+            scale = _PC_FLOW_UI_SCALE.get(gi, 1.0)
+            self.append_log("PC", f"GasFlow → MFC1 ch{gi} (PC scale x{scale:g})")
+            await self.mfc_gas.gas_select(gi)  # MFC 내부 '선택 채널' 갱신
 
         async def _mfc_flow_set_on(flow_sccm: float) -> None:
             mfc = self.mfc_gas
             if not mfc:
                 raise RuntimeError("mfc_gas not bound")
-            flow = float(max(0.0, flow_sccm))
-            self.append_log("MFC", f"FLOW_SET_ON(sel) -> {flow:.1f} sccm")
-            await mfc.flow_set_on(flow)  # ✔ SET 검증 + 개별 ON + 안정화 확인
-            self.append_log("MFC", "FLOW_SET_ON OK")
+            if self._pc_gas_idx is None:
+                raise RuntimeError("gas_select가 먼저 호출되지 않았습니다.")
+
+            req  = float(max(0.0, flow_sccm))
+            ui   = req * float(_PC_FLOW_UI_SCALE.get(self._pc_gas_idx, 1.0))
+
+            self.append_log("MFC", f"FLOW_SET_ON(sel ch={self._pc_gas_idx}) -> {ui:.1f} sccm (req {req:.1f})")
+            await mfc.flow_set_on(ui)  # ✔ 선택 채널 기준 L{ch}1 + 안정화 확인
 
         async def _mfc_flow_off() -> None:
             mfc = self.mfc_gas

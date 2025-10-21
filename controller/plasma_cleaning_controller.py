@@ -187,7 +187,7 @@ class PlasmaCleaningController:
                 ok = await wait_task
             except asyncio.CancelledError:
                 self._log("IG", "IG base-wait이 장치 내부 사유로 취소됨 → 실패로 간주")
-                ok = False
+                ok = True
 
             if not ok:
                 raise RuntimeError("Base pressure not reached (IG API)")

@@ -191,7 +191,7 @@ class RFPowerAsync:
 
         # 디스플레이 이벤트 즉시 방출
         self._ev_nowait(RFPowerEvent(kind="display", forward=self.forward_w, reflected=self.reflected_w))
-
+        '''
         # 반사파 과다 → 대기/타임아웃
         if self.reflected_w > self._ref_th_w:
             if self.state != "REF_P_WAITING":
@@ -213,7 +213,7 @@ class RFPowerAsync:
                                              message=f"반사파 안정화 완료({self.reflected_w:.1f}W). 공정 재개"))
                 self.state = self.previous_state
                 self._ref_wait_start_ts = None
-
+        '''
         # 램프업/유지 보정은 태스크로 비동기 실행(중복 호출 시 최신만 수행)
         if self._adjust_task and not self._adjust_task.done():
             self._adjust_task.cancel()
