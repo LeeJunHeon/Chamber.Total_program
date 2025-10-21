@@ -85,7 +85,7 @@ class PreSputterRuntime:
             pass
 
     def start_daily(self) -> None:
-        self.stop()
+        self.stop(silent=False)
         self._repeat_daily = True   # ★ 매일 반복
         when = _next_time_at(self.hh, self.mm)
 
@@ -125,14 +125,16 @@ class PreSputterRuntime:
         self._ui_bound = True
         self._log("[PreSputter] UI 버튼 바인딩 완료(Start=예약 파라미터 갱신, Stop=예약 취소)")
 
-    def stop(self) -> None:
+    def stop(self, *, silent: bool = False) -> None:
         """예약 취소(진행 중 공정은 건드리지 않음)."""
-        if self._task and not self._task.done():
+        had_task = bool(self._task and not self._task.done())
+        if had_task:
             self._task.cancel()
         self._task = None
         self._repeat_daily = False
-        # (카운트다운 태스크 등을 쓰고 있다면 여기서 중지)
-        self._log("[PreSputter] 예약 취소됨")
+        # 실제로 취소한 경우에만, 그리고 silent가 아닐 때만 로그 출력
+        if (not silent) and had_task:
+            self._log("예약 취소됨")
 
     def _on_start_clicked(self) -> None:
         """UI의 예약시각, Base Pressure로 매일 예약 파라미터 갱신 후 즉시 재예약."""
@@ -146,13 +148,19 @@ class PreSputterRuntime:
             return
 
         bp_txt = self._read_base_pressure_from_ui()
-        if bp_txt is None:
-            self._log("[PreSputter] Base Pressure 입력이 비어있습니다.")
-            return
+
+        # ★ Base Pressure 처리 규칙
+        # - 값이 있으면: 그 값을 '고정값'으로 저장 → 실행 직전에 두 챔버 UI에 주입
+        # - 값이 없으면: 고정값을 지워(None)서 '주입'을 하지 않음 → 각 챔버 UI의 현재 값 사용
+        if bp_txt and bp_txt.strip():
+            self._base_pressure_text = bp_txt.strip()
+            self._log(f"[설정] Base Pressure 고정: {self._base_pressure_text}")
+        else:
+            self._base_pressure_text = None
+            self._log("[설정] Base Pressure 미입력 → 각 챔버 UI값 사용")
 
         # 1) 파라미터 갱신
         self.hh, self.mm = int(hh), int(mm)
-        self._base_pressure_text = bp_txt.strip()
 
         # 2) 매일 예약을 새 파라미터로 재시작
         self.start_daily()
@@ -189,7 +197,7 @@ class PreSputterRuntime:
         return txt or None
     
     def _apply_base_pressure_to_ch_ui(self) -> None:
-        """저장된 Base Pressure 텍스트를 CH1/CH2 BasePressure 편집창에 주입."""
+        # ★ _base_pressure_text가 없으면 아무 것도 주입하지 않음 → 각 챔버 UI의 값 그대로 사용
         if not self._ui or not self._base_pressure_text:
             return
         for name in ("ch1_basePressure_edit", "ch2_basePressure_edit"):
