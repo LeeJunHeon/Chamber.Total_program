@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import asyncio
+import asyncio, traceback
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
 
@@ -130,10 +130,19 @@ class PlasmaCleaningController:
         self._show_state("RUNNING")
         self._log("PC", "플라즈마 클리닝 시작")
 
+        # ★ LOG: 파라미터 스냅샷
+        self._log(
+            "STEP",
+            (f"PARAMS gas_idx={p.gas_idx}, flow={p.gas_flow_sccm:.1f} sccm, "
+            f"IG_target={p.target_pressure:.3e} Torr, SP4={p.sp4_setpoint_mTorr:.2f} mTorr, "
+            f"RF={p.rf_power_w:.1f} W, time={p.process_time_min:.1f} min")
+        )
+
         try:
             # 1) PLC - 게이트밸브 인터락 확인 → OPEN_SW → 5초 후 OPEN_LAMP TRUE?
             self._log("PLC", "GV 인터락 확인")
             ok = await self._plc_check_gv_interlock()
+            self._log("PLC", f"GV 인터락={ok}")  # ★ LOG
             if not ok:
                 raise RuntimeError("게이트밸브 인터락 FALSE")
 
@@ -141,11 +150,14 @@ class PlasmaCleaningController:
             await self._plc_gv_open()
             await asyncio.sleep(5.0)  # 램프 확인 지연
             lamp = await self._plc_read_gv_open_lamp()
+            self._log("PLC", f"GV OPEN_LAMP={lamp}")  # ★ LOG (result)
             if not lamp:
                 raise RuntimeError("GV OPEN_LAMP가 TRUE가 아님(오픈 실패?)")
 
             # 2) IG ON & 목표(보다 낮음) 대기 — IG API만 사용
+            self._log("STEP", "2: IG ensure_on 호출")  # ★ LOG (start)
             await self._ensure_ig_on()
+            self._log("STEP", "IG ensure_on OK")  # ★ LOG (ok)
             if not self._ig_wait_for_base_torr:
                 raise RuntimeError("IG API(ig_wait_for_base_torr)가 바인딩되지 않았습니다.")
 
@@ -164,6 +176,7 @@ class PlasmaCleaningController:
 
             # STOP이 먼저면 base-wait 취소
             if stop_task in done and self._stop_evt.is_set():
+                self._log("STEP", "STOP 이벤트가 IG base-wait보다 먼저 발생")  # ★ LOG
                 for t in pending:
                     t.cancel()
                 # 컨트롤러 루프를 정상적으로 끊어 종료 시퀀스로 이동
@@ -171,41 +184,77 @@ class PlasmaCleaningController:
 
             # base-wait 완료면 결과 확인
             ok = await wait_task
+            self._log("IG", f"IG base-wait 결과={ok}")  # ★ LOG
             if not ok:
                 raise RuntimeError("Base pressure not reached (IG API)")
 
             # 3) MFC 가스 설정 (Gas #3 N2) + 4) SP4 세팅/ON
-            await self._mfc_gas_select(p.gas_idx)
+            self._log("STEP", "3: Gas/Pressure 설정 시작")  # ★ LOG
+
+            try:
+                await self._mfc_gas_select(p.gas_idx)
+                self._log("MFC", f"GAS SELECT ch={p.gas_idx} OK")  # ★ LOG
+            except Exception as e:
+                self._log("MFC", f"GAS SELECT 실패: {e!r}")  # ★ LOG
+                raise
+
             if p.gas_flow_sccm > 0.0:
-                self._log("MFC", f"FLOW_SET_ON ch={p.gas_idx} -> {p.gas_flow_sccm:.1f} sccm")
-                await self._mfc_flow_set_on(p.gas_flow_sccm)
+                self._log("MFC", f"FLOW_SET_ON start ch={p.gas_idx} -> {p.gas_flow_sccm:.1f} sccm")  # ★ LOG
+                try:
+                    await self._mfc_flow_set_on(p.gas_flow_sccm)
+                    self._log("MFC", "FLOW_SET_ON OK")  # ★ LOG
+                except Exception as e:
+                    self._log("MFC", f"FLOW_SET_ON 실패: {e!r}")  # ★ LOG
+                    raise
+            else:
+                self._log("MFC", "FLOW_SET_ON 스킵(flow=0.0)")  # ★ LOG
 
             self._log("MFC", f"SP4_SET -> {p.sp4_setpoint_mTorr:.2f} mTorr")
-            await self._mfc_sp4_set(p.sp4_setpoint_mTorr)
+            try:
+                await self._mfc_sp4_set(p.sp4_setpoint_mTorr)
+                self._log("MFC", "SP4_SET OK")  # ★ LOG
+            except Exception as e:
+                self._log("MFC", f"SP4_SET 실패: {e!r}")  # ★ LOG
+                raise
 
             self._log("MFC", "SP4_ON")
-            await self._mfc_sp4_on()
+            try:
+                await self._mfc_sp4_on()
+                self._log("MFC", "SP4_ON OK")  # ★ LOG
+            except Exception as e:
+                self._log("MFC", f"SP4_ON 실패: {e!r}")  # ★ LOG
+                raise
 
             # 6) RF POWER(PLC DAC) 설정
             self._log("RF", f"RF Power 적용: {p.rf_power_w:.1f} W")
-            await self._rf_start(p.rf_power_w)
+            try:
+                await self._rf_start(p.rf_power_w)
+                self._log("RF", "RF START OK")  # ★ LOG
+            except Exception as e:
+                self._log("RF", f"RF START 실패: {e!r}")  # ★ LOG
+                raise
 
             # 7) PROCESS TIME 카운트다운
             total_sec = int(max(0, p.process_time_min * 60.0))
             for left in range(total_sec, -1, -1):
                 if self._stop_evt.is_set():
+                    self._log("STEP", f"STOP 이벤트 감지 → 남은 {left}s 시점에서 종료 진입")  # ★ LOG
                     break
                 self._show_countdown(left)
                 await asyncio.sleep(1.0)
 
         except asyncio.CancelledError:
-            pass
+            self._log("PC", "CancelledError: 외부 STOP 또는 경쟁 종료로 중단")  # ★ LOG
         except Exception as e:
-            self._log("PC", f"오류: {e!r}")
+            # ★ LOG: 예외 스택 트레이스까지 남김
+            self._log("PC", f"오류: {e!r}\n{traceback.format_exc()}")
         finally:
+            self._log("STEP", "종료 시퀀스 진입")  # ★ LOG
+
             # 종료 시퀀스
             try:
                 # 1) RF POWER OFF
+                self._log("STEP", "종료: RF STOP 실행")  # ★ LOG
                 await self._rf_stop()
             except Exception as e:
                 self._log("RF", f"OFF 실패: {e!r}")
@@ -221,6 +270,7 @@ class PlasmaCleaningController:
                 # 4) GV 인터락 TRUE면 CLOSE_SW → 5초 후 OPEN_LAMP FALSE?
                 self._log("PLC", "GV 인터락 재확인 후 CLOSE_SW")
                 ok = await self._plc_check_gv_interlock()
+                self._log("PLC", f"종료시 인터락={ok}")  # ★ LOG
                 if ok:
                     await self._plc_gv_close()
                     await asyncio.sleep(5.0)

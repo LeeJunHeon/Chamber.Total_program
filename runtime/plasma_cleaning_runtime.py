@@ -53,7 +53,13 @@ class PlasmaCleaningRuntime:
         self.prefix = str(prefix)
         self._loop = loop
         self.chat = chat
-        self._log_dir = log_dir            # (미사용) 호환용 보관만
+        self._log_dir = log_dir            # 기본 로그 루트
+        self._pc_log_dir = (log_dir / "plasma_cleaning")
+        self._pc_log_dir.mkdir(parents=True, exist_ok=True)
+
+        self._log_fp = None                # 현재 런 세션 로그 파일 핸들
+        self._log_session_id = None        # 파일명에 들어갈 세션 ID (timestamp)
+
 
         # 주입 장치
         self.plc: Optional[AsyncPLC] = plc
@@ -451,6 +457,10 @@ class PlasmaCleaningRuntime:
         # 1) 파라미터 수집
         p = self._read_params_from_ui()
 
+        # 1.5) 파일 로그 오픈
+        self._open_run_log(p)
+        self.append_log("PC", "파일 로그 시작")  # 파일에도 남음
+
         # 2) 프리플라이트(연결/이벤트펌프) — 실패 시 바로 종료
         try:
             await self._preflight_connect(timeout_s=10.0)
@@ -469,6 +479,8 @@ class PlasmaCleaningRuntime:
         finally:
             self._running = False
             self._set_state_text("IDLE")
+            self.append_log("PC", "파일 로그 종료")
+            self._close_run_log()        # ★ 반드시 닫기
 
     async def _on_click_stop(self) -> None:
         # 1) 컨트롤러 루프 중단 요청
@@ -486,6 +498,10 @@ class PlasmaCleaningRuntime:
         self._running = False
         self._set_state_text("STOPPED")
         self.append_log("PC", "사용자에 의해 중지")
+
+        # ★ 선택: 즉시 파일 닫기(컨트롤러가 이미 끝나지 않아도 파일은 닫혀서 flush됨)
+        with contextlib.suppress(Exception):
+            self._close_run_log()
 
     async def _safe_rf_stop(self) -> None:
         with contextlib.suppress(Exception):
@@ -553,12 +569,21 @@ class PlasmaCleaningRuntime:
 
     def append_log(self, src: str, msg: str) -> None:
         line = f"[{datetime.now().strftime('%H:%M:%S')}] {src}: {msg}"
+        # UI
         if self._w_log:
             try:
                 self._w_log.appendPlainText(line)
                 self._w_log.moveCursor(QTextCursor.End)
             except Exception:
                 pass
+        # 파일
+        try:
+            if getattr(self, "_log_fp", None):
+                self._log_fp.write(line + "\n")
+                self._log_fp.flush()
+        except Exception:
+            # 파일 오류가 난다고 공정을 멈출 필요는 없음 — 조용히 무시
+            pass
 
     def shutdown_fast(self) -> None:
         # 공유 장치이므로 close() 등은 호출하지 않습니다.
@@ -588,6 +613,37 @@ class PlasmaCleaningRuntime:
 
         self.set_ig_callbacks(_ensure_on, _read_mTorr)
 
+    def _open_run_log(self, p: PCParams) -> None:
+        # 세션 ID = 시작 시각
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        self._log_session_id = ts
+        fname = f"PC_{ts}_CH{self._selected_ch}.log"
+        path = self._pc_log_dir / fname
+        self._log_fp = open(path, "a", encoding="utf-8", buffering=1)  # line-buffered
+
+        # 헤더 기록
+        self._log_fp.write("# ==== Plasma Cleaning Run ====\n")
+        self._log_fp.write(f"# started_at = {datetime.now().isoformat()}\n")
+        self._log_fp.write(f"# chamber = CH{self._selected_ch}\n")
+        self._log_fp.write(f"# mfc_gas = {_mfc_name(self.mfc_gas)}\n")
+        self._log_fp.write(f"# mfc_pressure = {_mfc_name(self.mfc_pressure)}\n")
+        self._log_fp.write(f"# params: gas_idx={p.gas_idx}, flow={p.gas_flow_sccm:.1f} sccm, "
+                        f"IG_target={p.target_pressure:.3e} Torr, "
+                        f"SP4={p.sp4_setpoint_mTorr:.2f} mTorr, RF={p.rf_power_w:.1f} W, "
+                        f"time={p.process_time_min:.1f} min\n")
+        self._log_fp.write("# ============================\n")
+        self._log_fp.flush()
+
+    def _close_run_log(self) -> None:
+        fp = getattr(self, "_log_fp", None)
+        self._log_fp = None
+        if fp:
+            try:
+                fp.write("# ==== END ====\n")
+                fp.flush()
+                fp.close()
+            except Exception:
+                pass
 
 # ─────────────────────────────────────────────────────────────
 # 유틸
@@ -610,3 +666,5 @@ def _mfc_name(m: Optional[AsyncMFC]) -> str:
     host = getattr(m, "host", None) or getattr(m, "_override_host", None) or "?"
     port = getattr(m, "port", None) or getattr(m, "_override_port", None) or "?"
     return f"{host}:{port}"
+
+
