@@ -203,12 +203,23 @@ class PlasmaCleaningRuntime:
         if self.rf and not _has_task("PC.Pump.RF"):
             self._event_tasks.append(asyncio.create_task(self._pump_rf_events(), name="PC.Pump.RF"))
 
-        if self.mfc_gas and not _has_task("PC.Pump.MFC.GAS"):
-            self._event_tasks.append(asyncio.create_task(self._pump_mfc_events(self.mfc_gas, "MFC(GAS)"), name="PC.Pump.MFC.GAS"))
-
-        if self.mfc_pressure and not _has_task("PC.Pump.MFC.SP4"):
-            sel = f"CH{self._selected_ch}"
-            self._event_tasks.append(asyncio.create_task(self._pump_mfc_events(self.mfc_pressure, f"MFC(SP4-{sel})"), name="PC.Pump.MFC.SP4"))
+        # 같은 MFC 인스턴스를 가리키면 펌프는 '하나만' 띄운다
+        if self.mfc_gas is self.mfc_pressure:
+            if self.mfc_gas and not _has_task("PC.Pump.MFC.COMBINED"):
+                sel = f"CH{self._selected_ch}"
+                self._event_tasks.append(asyncio.create_task(
+                    self._pump_mfc_events(self.mfc_gas, f"MFC(SP4/GAS-{sel})"),
+                    name="PC.Pump.MFC.COMBINED"))
+        else:
+            if self.mfc_gas and not _has_task("PC.Pump.MFC.GAS"):
+                self._event_tasks.append(asyncio.create_task(
+                    self._pump_mfc_events(self.mfc_gas, "MFC(GAS)"),
+                    name="PC.Pump.MFC.GAS"))
+            if self.mfc_pressure and not _has_task("PC.Pump.MFC.SP4"):
+                sel = f"CH{self._selected_ch}"
+                self._event_tasks.append(asyncio.create_task(
+                    self._pump_mfc_events(self.mfc_pressure, f"MFC(SP4-{sel})"),
+                    name="PC.Pump.MFC.SP4"))
 
         if self.ig and not _has_task("PC.Pump.IG"):
             sel = f"CH{self._selected_ch}"
