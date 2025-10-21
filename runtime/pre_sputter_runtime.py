@@ -64,6 +64,8 @@ class PreSputterRuntime:
         self._repeat_daily: bool = True
 
         self._ui = ui # ★ UI 참조 (없으면 None)
+        self._ui_bound: bool = False            # ★ 추가: 중복 바인딩 방지
+        self._base_pressure_text: Optional[str] = None  # ★ 추가: Start시 저장해 둘 Base Pressure
 
     # ─────────────────────────────────────────────────────
     # Public API
@@ -82,9 +84,9 @@ class PreSputterRuntime:
         except Exception:
             pass
 
-
     def start_daily(self) -> None:
         self.stop()
+        self._repeat_daily = True   # ★ 매일 반복
         when = _next_time_at(self.hh, self.mm)
 
         # ★ UI 초기 표기
@@ -100,14 +102,103 @@ class PreSputterRuntime:
         self._task = loop.create_task(self._loop(when), name="PreSputterRuntime")
         self._log(f"[PreSputter] 예약 등록: {when.strftime('%Y-%m-%d %H:%M:%S')} (매일 반복)")
 
+    def bind_ui(self, ui) -> None:
+        """Pre-Sputter Start/Stop 버튼을 런타임에 연결(1회)."""
+        if not ui or self._ui_bound:
+            return
+        self._ui = ui
+
+        # Start → UI의 시간/베이스프레셔로 매일 예약 파라미터 갱신
+        try:
+            if hasattr(ui, "preSputter_Start_button"):
+                ui.preSputter_Start_button.clicked.connect(self._on_start_clicked)
+        except Exception:
+            pass
+
+        # Stop → 예약만 취소
+        try:
+            if hasattr(ui, "preSputter_Stop_button"):
+                ui.preSputter_Stop_button.clicked.connect(self.stop)
+        except Exception:
+            pass
+
+        self._ui_bound = True
+        self._log("[PreSputter] UI 버튼 바인딩 완료(Start=예약 파라미터 갱신, Stop=예약 취소)")
 
     def stop(self) -> None:
-        """
-        예약 중지.
-        """
+        """예약 취소(진행 중 공정은 건드리지 않음)."""
         if self._task and not self._task.done():
             self._task.cancel()
         self._task = None
+        self._repeat_daily = False
+        # (카운트다운 태스크 등을 쓰고 있다면 여기서 중지)
+        self._log("[PreSputter] 예약 취소됨")
+
+    def _on_start_clicked(self) -> None:
+        """UI의 예약시각, Base Pressure로 매일 예약 파라미터 갱신 후 즉시 재예약."""
+        hh, mm = self._read_time_from_ui()
+        if hh is None:
+            self._log("[PreSputter] 잘못된 시간 형식입니다. 예) 08:30")
+            lab = getattr(self._ui, "preSputter_LeftTime_label", None)
+            if lab:
+                try: lab.setText("Invalid time (HH:MM)")
+                except Exception: pass
+            return
+
+        bp_txt = self._read_base_pressure_from_ui()
+        if bp_txt is None:
+            self._log("[PreSputter] Base Pressure 입력이 비어있습니다.")
+            return
+
+        # 1) 파라미터 갱신
+        self.hh, self.mm = int(hh), int(mm)
+        self._base_pressure_text = bp_txt.strip()
+
+        # 2) 매일 예약을 새 파라미터로 재시작
+        self.start_daily()
+
+    def _read_time_from_ui(self):
+        """preSputter_SetTime_edit에서 HH:MM 또는 '8시30분' 류를 파싱."""
+        ui = self._ui
+        if not ui: return (None, None)
+        edit = getattr(ui, "preSputter_SetTime_edit", None)
+        if not edit: return (None, None)
+        try:
+            raw = edit.toPlainText().strip()
+        except Exception:
+            return (None, None)
+
+        import re
+        m = re.match(r"^\s*(\d{1,2})\s*(?::|시)\s*(\d{1,2})", raw)
+        if not m: return (None, None)
+        hh, mm = int(m.group(1)), int(m.group(2))
+        if not (0 <= hh <= 23 and 0 <= mm <= 59):
+            return (None, None)
+        return (hh, mm)
+
+    def _read_base_pressure_from_ui(self) -> Optional[str]:
+        """preSputter_basePressure_edit에서 텍스트를 그대로 가져온다(과학표기 허용)."""
+        ui = self._ui
+        if not ui: return None
+        w = getattr(ui, "preSputter_basePressure_edit", None)
+        if not w: return None
+        try:
+            txt = w.toPlainText().strip()
+        except Exception:
+            return None
+        return txt or None
+    
+    def _apply_base_pressure_to_ch_ui(self) -> None:
+        """저장된 Base Pressure 텍스트를 CH1/CH2 BasePressure 편집창에 주입."""
+        if not self._ui or not self._base_pressure_text:
+            return
+        for name in ("ch1_basePressure_edit", "ch2_basePressure_edit"):
+            w = getattr(self._ui, name, None)
+            if w:
+                try:
+                    w.setPlainText(self._base_pressure_text)
+                except Exception:
+                    pass
 
     async def start_once_now(self, *, parallel: Optional[bool] = None) -> None:
         """
@@ -167,6 +258,8 @@ class PreSputterRuntime:
 
     async def _run_parallel(self) -> None:
         # 같은 챔버의 중복 실행만 막고(CH간은 허용), 둘 다 트리거
+        self._apply_base_pressure_to_ch_ui()  # ★ 추가: 실행 직전 주입
+
         started = []
         if self.ch1 and not self.ch1.is_running:
             ok = self.ch1.start_presputter_from_ui()
@@ -198,6 +291,7 @@ class PreSputterRuntime:
             return
         if ch.is_running:
             self._log(f"[PreSputter] {label} 이미 실행 중 → 건너뜀"); return
+        self._apply_base_pressure_to_ch_ui()  # ★ 추가: 실행 직전 주입
         ok = ch.start_presputter_from_ui()
         if not ok:
             self._log(f"[PreSputter] {label} 시작 실패"); return

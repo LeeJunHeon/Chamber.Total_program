@@ -141,12 +141,15 @@ class MainWindow(QWidget):
             self.pre_sputter = PreSputterRuntime(
                 ch1=self.ch1,
                 ch2=self.ch2,
-                chat=self.chat,   # 선택
+                chat=None,  # ★ 프리스퍼터는 챗 안 보냄
                 hh=8, mm=30,
                 parallel=True,     # 동시 실행 정책 유지
                 ui=self.ui,
             )
             self.pre_sputter.start_daily()
+
+            # ★ 추가: UI 버튼(Start/Stop)을 런타임과 1회 바인딩
+            self.pre_sputter.bind_ui(self.ui)
         except Exception as e:
             self._broadcast_log("Auto", f"PreSputter 예약 초기화 실패: {e!r}")
 

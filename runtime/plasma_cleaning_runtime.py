@@ -239,7 +239,7 @@ class PlasmaCleaningRuntime:
         """IG 콜백 주입 (라디오 전환 시마다 업데이트)"""
         self._ig_ensure_on_cb = ensure_on
         self._ig_read_mTorr_cb = read_mTorr
-        self.append_log("PC", "IG callbacks bound")
+        #self.append_log("PC", "IG callbacks bound")
 
     # =========================
     # 내부: 컨트롤러/콜백 바인딩
