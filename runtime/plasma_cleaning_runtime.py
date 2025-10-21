@@ -312,9 +312,13 @@ class PlasmaCleaningRuntime:
             ch   = getattr(self, "_gas_channel", 3)
             flow = float(max(0.0, flow_sccm))
 
-            # ✔ mfc.py 정식 API만 사용
+            # 1) Set & On
+            self.append_log("MFC", f"FLOW_SET ch={ch} -> {flow:.1f} sccm")
             await mfc.set_flow(ch, flow)
-            await mfc.flow_on(ch)
+
+            self.append_log("MFC", f"FLOW_ON ch={ch}")
+            await mfc.flow_on(ch)           # ← 장치측에서 안정화까지 보장한다고 가정
+            self.append_log("MFC", "FLOW_ON OK (device awaited)")
 
         async def _mfc_flow_off() -> None:
             mfc = self.mfc_gas

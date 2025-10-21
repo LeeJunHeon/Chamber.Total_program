@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import asyncio, traceback
+import asyncio, traceback, contextlib
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
 
@@ -164,7 +164,7 @@ class PlasmaCleaningController:
             self._log("IG", f"IG.wait_for_base_pressure: {p.target_pressure:.3e} Torr 대기")
 
             wait_task = asyncio.create_task(
-                self._ig_wait_for_base_torr(p.target_pressure, interval_ms=1000),
+                self._ig_wait_for_base_torr(p.target_pressure, interval_ms=10_000),
                 name="IGBaseWait",
             )
             stop_task = asyncio.create_task(self._stop_evt.wait(), name="PCStopWait")
@@ -174,17 +174,21 @@ class PlasmaCleaningController:
                 return_when=asyncio.FIRST_COMPLETED,
             )
 
-            # STOP이 먼저면 base-wait 취소
             if stop_task in done and self._stop_evt.is_set():
-                self._log("STEP", "STOP 이벤트가 IG base-wait보다 먼저 발생")  # ★ LOG
                 for t in pending:
                     t.cancel()
-                # 컨트롤러 루프를 정상적으로 끊어 종료 시퀀스로 이동
+                # IG 대기를 사용자 STOP으로만 끊도록
+                with contextlib.suppress(asyncio.CancelledError):
+                    await wait_task
                 raise asyncio.CancelledError()
 
-            # base-wait 완료면 결과 확인
-            ok = await wait_task
-            self._log("IG", f"IG base-wait 결과={ok}")  # ★ LOG
+            # IG 태스크가 자체적으로 cancel을 내면 '장치 사유 실패'로 처리
+            try:
+                ok = await wait_task
+            except asyncio.CancelledError:
+                self._log("IG", "IG base-wait이 장치 내부 사유로 취소됨 → 실패로 간주")
+                ok = False
+
             if not ok:
                 raise RuntimeError("Base pressure not reached (IG API)")
 
@@ -225,6 +229,15 @@ class PlasmaCleaningController:
                 self._log("MFC", f"SP4_ON 실패: {e!r}")  # ★ LOG
                 raise
 
+            self._log("MFC", "[SOAK] SP4_ON → 60s 대기 시작")
+            for left in range(60, 0, -1):
+                if self._stop_evt.is_set():
+                    self._log("STEP", "STOP during SP4 soak → abort before RF")
+                    raise asyncio.CancelledError()   # ← 아예 종료 시퀀스로 진입
+                self._show_state(f"WorkingP soak {left:02d}s")
+                await asyncio.sleep(1.0)
+            self._log("MFC", "[SOAK] 60s 완료")
+
             # 6) RF POWER(PLC DAC) 설정
             self._log("RF", f"RF Power 적용: {p.rf_power_w:.1f} W")
             try:
@@ -261,7 +274,7 @@ class PlasmaCleaningController:
 
             try:
                 # 2) Pressure 제어 OFF + Gas OFF
-                await self._mfc_sp4_off()     # (밸브 CLOSE: pressure 측)
+                await self._mfc_sp4_off()     # (밸브 OPEN: pressure MFC에서 진공 방출/안전 정리)
                 await self._mfc_flow_off()    # (gas 유량 OFF)
             except Exception as e:
                 self._log("MFC", f"종료 동작 실패: {e!r}")
