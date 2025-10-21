@@ -300,22 +300,19 @@ class PlasmaCleaningRuntime:
 
         # ---- MFC (GAS/SP4)
         async def _mfc_gas_select(gas_idx: int) -> None:
-            # 선택 채널 기록 + MFC에도 선택 전달
-            self._gas_channel = int(gas_idx)
-            self.append_log("PC", f"GasFlow → MFC1 ch{self._gas_channel}")
-            if self.mfc_gas:
-                await self.mfc_gas.gas_select(self._gas_channel)
+            self.append_log("PC", f"GasFlow → MFC1 ch{int(gas_idx)}")
+            if not self.mfc_gas:
+                raise RuntimeError("mfc_gas not bound")
+            await self.mfc_gas.gas_select(int(gas_idx))
 
         async def _mfc_flow_set_on(flow_sccm: float) -> None:
             mfc = self.mfc_gas
             if not mfc:
                 raise RuntimeError("mfc_gas not bound")
             flow = float(max(0.0, flow_sccm))
-
-            # 선택 채널은 _mfc_gas_select()에서 이미 MFC에 전달됨
             self.append_log("MFC", f"FLOW_SET_ON(sel) -> {flow:.1f} sccm")
-            await mfc.flow_set_on(flow)     # ✔ SET 검증 + 개별 ON + 안정화 확인까지 포함
-            self.append_log("MFC", "FLOW_SET_ON OK (verify+stabilize)")
+            await mfc.flow_set_on(flow)  # ✔ SET 검증 + 개별 ON + 안정화 확인
+            self.append_log("MFC", "FLOW_SET_ON OK")
 
         async def _mfc_flow_off() -> None:
             mfc = self.mfc_gas
