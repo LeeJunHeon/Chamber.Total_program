@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import datetime, timedelta
-from typing import Optional
+from typing import Optional, Callable
 
 from controller.runtime_state import runtime_state  # CH1/CH2 실행 상태 조회용
 # ch1, ch2는 runtime.chamber_runtime.ChamberRuntime 인스턴스여야 합니다.
@@ -306,20 +306,24 @@ class PreSputterRuntime:
         self._log(f"[PreSputter] {label} 완료")
 
     def _log(self, msg: str) -> None:
-        """
-        두 챔버 로그로 브로드캐스트 + 선택적 ChatNotifier 전송.
-        """
-        try:
-            if self.ch1: self.ch1.append_log("Auto", msg)
-        except Exception:
-            pass
-        try:
-            if self.ch2: self.ch2.append_log("Auto", msg)
-        except Exception:
-            pass
-        if self.chat:
+        line = f"[{datetime.now():%H:%M:%S}] [PreSputter] {msg}"
+
+        # 1) 싱크가 있으면 → PC 로그창으로만 출력
+        sink = self._log_sink
+        if sink:
             try:
-                # ChatNotifier에 일반 텍스트 보내는 메서드명은 프로젝트에 맞게 수정
-                self.chat.notify_text(msg)
+                sink(line)
             except Exception:
                 pass
+        # 싱크가 없을 땐 조용히 무시(요청: 챔버 로그엔 보내지 않음)
+
+        # 2) (선택) 채팅 알림 유지
+        if self.chat:
+            try:
+                self.chat.notify_text(f"[PreSputter] {msg}")
+            except Exception:
+                pass
+
+    def set_pc_logger(self, sink: Callable[[str], None]) -> None:
+        """한 줄 문자열을 받아 출력하는 콜백(예: pc_logMessage_edit.appendPlainText)을 주입."""
+        self._log_sink = sink

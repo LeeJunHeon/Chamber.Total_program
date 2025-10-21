@@ -146,6 +146,9 @@ class MainWindow(QWidget):
                 parallel=True,     # 동시 실행 정책 유지
                 ui=self.ui,
             )
+            # ★ Plasma Cleaning처럼: 로그를 main에서 주입 → PC 로그창으로만 출력
+            self.pre_sputter.set_pc_logger(self.ui.pc_logMessage_edit.appendPlainText)
+
             self.pre_sputter.start_daily()
 
             # ★ 추가: UI 버튼(Start/Stop)을 런타임과 1회 바인딩

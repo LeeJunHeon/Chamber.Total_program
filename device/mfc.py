@@ -462,8 +462,6 @@ class AsyncMFC:
         await asyncio.sleep(max(MFC_DELAY_MS, 200) / 1000.0)
         await self._emit_confirmed("FLOW_OFF")
 
-
-
     # async def flow_on(self, channel: int):
     #     """R69 → L0 적용, (옵션) 검증, (옵션) 안정화 → 확정."""
     #     now = await self._read_r69_bits()
