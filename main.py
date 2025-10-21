@@ -143,7 +143,8 @@ class MainWindow(QWidget):
                 ch2=self.ch2,
                 chat=self.chat,   # 선택
                 hh=8, mm=30,
-                parallel=True     # 동시 실행 정책 유지
+                parallel=True,     # 동시 실행 정책 유지
+                ui=self.ui,
             )
             self.pre_sputter.start_daily()
         except Exception as e:

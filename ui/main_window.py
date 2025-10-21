@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 ################################################################################
-## Form generated from reading UI file 'CH1&2lSoHcj.ui'
+## Form generated from reading UI file 'CH1&2hIBSAe.ui'
 ##
 ## Created by: Qt User Interface Compiler version 6.9.1
 ##
@@ -144,6 +144,7 @@ class Ui_Form(object):
         self.preSputter_remainigTime_edit = QPlainTextEdit(self.page_3)
         self.preSputter_remainigTime_edit.setObjectName(u"preSputter_remainigTime_edit")
         self.preSputter_remainigTime_edit.setGeometry(QRect(560, 150, 201, 31))
+        self.preSputter_remainigTime_edit.setReadOnly(True)
         self.preSputter_remainigTime_label = QLabel(self.page_3)
         self.preSputter_remainigTime_label.setObjectName(u"preSputter_remainigTime_label")
         self.preSputter_remainigTime_label.setGeometry(QRect(560, 130, 121, 21))
@@ -703,7 +704,7 @@ class Ui_Form(object):
 
         self.retranslateUi(Form)
 
-        self.stackedWidget.setCurrentIndex(2)
+        self.stackedWidget.setCurrentIndex(0)
 
 
         QMetaObject.connectSlotsByName(Form)
@@ -724,7 +725,7 @@ class Ui_Form(object):
         self.preSputter_SetTime_label.setText(QCoreApplication.translate("Form", u"HH:MM", None))
         self.PC_Temp_label.setText(QCoreApplication.translate("Form", u"Temp", None))
         self.PC_workingPressure_label.setText(QCoreApplication.translate("Form", u"Working Pressure [mTorr]", None))
-        self.PC_targetPressure_label.setText(QCoreApplication.translate("Form", u"Target Pressure [Torr]", None))
+        self.PC_targetPressure_label.setText(QCoreApplication.translate("Form", u"Base Pressure [Torr]", None))
         self.PC_biasV_label.setText(QCoreApplication.translate("Form", u"Bias V", None))
         self.preSputter_basePressure_label.setText(QCoreApplication.translate("Form", u"Base Pressure [Torr]", None))
         self.PC_Stop_button.setText(QCoreApplication.translate("Form", u"STOP", None))
@@ -739,7 +740,7 @@ class Ui_Form(object):
         self.pc_TSP_label.setText(QCoreApplication.translate("Form", u"TSP", None))
         self.TSP_setCycle_label.setText(QCoreApplication.translate("Form", u"#", None))
         self.TSP_Stop_button.setText(QCoreApplication.translate("Form", u"STOP", None))
-        self.TSP_targetPressure_label.setText(QCoreApplication.translate("Form", u"Target Pressure [Torr]", None))
+        self.TSP_targetPressure_label.setText(QCoreApplication.translate("Form", u"Base Pressure [Torr]", None))
         self.pc_logMessage_label.setText(QCoreApplication.translate("Form", u"Log Message", None))
         self.PC_useChamber1_radio.setText(QCoreApplication.translate("Form", u"CH1", None))
         self.PC_useChamber2_radio.setText(QCoreApplication.translate("Form", u"CH2", None))

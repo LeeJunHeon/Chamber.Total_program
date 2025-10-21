@@ -49,6 +49,7 @@ class PreSputterRuntime:
         mm: int = 0,
         parallel: bool = True,
         wait_log_interval_s: float = 60.0,
+        ui=None,
     ) -> None:
         self.ch1 = ch1
         self.ch2 = ch2
@@ -62,18 +63,43 @@ class PreSputterRuntime:
         self._task: Optional[asyncio.Task] = None
         self._repeat_daily: bool = True
 
+        self._ui = ui # ★ UI 참조 (없으면 None)
+
     # ─────────────────────────────────────────────────────
     # Public API
     # ─────────────────────────────────────────────────────
+    def _fmt_hms(self, seconds: float) -> str:
+        if seconds < 0: seconds = 0
+        s = int(seconds)
+        h, m, sec = s // 3600, (s % 3600) // 60, s % 60
+        return f"{h:02d}:{m:02d}:{sec:02d}"
+
+    def _set_text(self, w, s: str) -> None:
+        if not w: return
+        try:
+            if hasattr(w, "setPlainText"): w.setPlainText(s)
+            elif hasattr(w, "setText"): w.setText(s)
+        except Exception:
+            pass
+
+
     def start_daily(self) -> None:
-        """
-        매일 self.hh:self.mm에 자동 실행 시작.
-        """
         self.stop()
         when = _next_time_at(self.hh, self.mm)
+
+        # ★ UI 초기 표기
+        if self._ui:
+            self._set_text(self._ui.preSputter_SetTime_edit, when.strftime("%H:%M"))
+            self._set_text(
+                self._ui.preSputter_LeftTime_edit,
+                self._fmt_hms((when - datetime.now()).total_seconds()),
+            )
+            self._set_text(self._ui.preSputter_remainigTime_edit, "—")
+
         loop = asyncio.get_event_loop_policy().get_event_loop()
         self._task = loop.create_task(self._loop(when), name="PreSputterRuntime")
         self._log(f"[PreSputter] 예약 등록: {when.strftime('%Y-%m-%d %H:%M:%S')} (매일 반복)")
+
 
     def stop(self) -> None:
         """
@@ -97,9 +123,16 @@ class PreSputterRuntime:
         try:
             while True:
                 # 1) 지정 시각까지 대기
-                remain = (when - datetime.now()).total_seconds()
-                if remain > 0:
-                    await asyncio.sleep(remain)
+                # 교체:
+                while True:
+                    remain_s = (when - datetime.now()).total_seconds()
+                    if remain_s <= 0:
+                        break
+                    if self._ui:
+                        self._set_text(self._ui.preSputter_LeftTime_edit, self._fmt_hms(remain_s))
+                    await asyncio.sleep(1.0)
+                if self._ui:
+                    self._set_text(self._ui.preSputter_LeftTime_edit, "00:00:00")
 
                 # 2) 다른 공정이 돌고 있으면 빌 때까지 대기(스팸 방지: 1분에 한번 로그)
                 last_log = 0.0
@@ -143,8 +176,14 @@ class PreSputterRuntime:
             started.append(("CH2", ok))
 
         # 종료까지 감시(둘 다 False가 될 때까지)
+        # _run_parallel()의 감시 루프 대체
         while (self.ch1 and self.ch1.is_running) or (self.ch2 and self.ch2.is_running):
-            await asyncio.sleep(5.0)
+            if self._ui:
+                self._set_text(self._ui.preSputter_remainigTime_edit, "—")
+            await asyncio.sleep(1.0)
+        if self._ui:
+            self._set_text(self._ui.preSputter_remainigTime_edit, "00:00:00")
+
 
         pretty = ", ".join([f"{label}:{'OK' if ok else 'FAIL'}" for label, ok in started]) or "None"
         self._log(f"[PreSputter] 병렬 실행 완료 ({pretty})")
@@ -162,8 +201,14 @@ class PreSputterRuntime:
         ok = ch.start_presputter_from_ui()
         if not ok:
             self._log(f"[PreSputter] {label} 시작 실패"); return
+        # _run_one()의 감시 루프 대체
         while ch.is_running:
-            await asyncio.sleep(5.0)
+            if self._ui:
+                self._set_text(self._ui.preSputter_remainigTime_edit, "—")
+            await asyncio.sleep(1.0)
+        if self._ui:
+            self._set_text(self._ui.preSputter_remainigTime_edit, "00:00:00")
+
         self._log(f"[PreSputter] {label} 완료")
 
     def _log(self, msg: str) -> None:
