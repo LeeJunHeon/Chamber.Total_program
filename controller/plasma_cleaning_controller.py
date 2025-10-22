@@ -154,19 +154,17 @@ class PlasmaCleaningController:
             if not lamp:
                 raise RuntimeError("GV OPEN_LAMP가 TRUE가 아님(오픈 실패?)")
 
-            # 2) IG ON & 목표(보다 낮음) 대기 — IG API만 사용
-            self._log("STEP", "2: IG ensure_on 호출")  # ★ LOG (start)
-            await self._ensure_ig_on()
-            self._log("STEP", "IG ensure_on OK")  # ★ LOG (ok)
+            # 2) IG 목표(보다 낮음) 대기 — IG 내부 API만 사용(SIG 1 포함)
             if not self._ig_wait_for_base_torr:
                 raise RuntimeError("IG API(ig_wait_for_base_torr)가 바인딩되지 않았습니다.")
 
-            self._log("IG", f"IG.wait_for_base_pressure: {p.target_pressure:.3e} Torr 대기")
+            self._log("IG", f"IG.wait_for_base_pressure: {p.target_pressure:.3e} Torr 대기 (RDI=10s 간격, 외부 폴링 없음)")
 
             wait_task = asyncio.create_task(
                 self._ig_wait_for_base_torr(p.target_pressure, interval_ms=10_000),
                 name="IGBaseWait",
             )
+
             stop_task = asyncio.create_task(self._stop_evt.wait(), name="PCStopWait")
 
             done, pending = await asyncio.wait(
