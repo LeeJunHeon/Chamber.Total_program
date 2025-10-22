@@ -127,7 +127,7 @@ class PlasmaCleaningController:
     async def _run(self, p: PCParams) -> None:
         self._stop_evt = asyncio.Event()  # ★ 매 실행마다 초기화
         self.is_running = True
-        self._show_state("RUNNING")
+        self._show_state("Preparing…")           # ★ 시작 즉시 상태창에 표시
         self._log("PC", "플라즈마 클리닝 시작")
 
         # ★ LOG: 파라미터 스냅샷
@@ -159,6 +159,7 @@ class PlasmaCleaningController:
                 raise RuntimeError("IG API(ig_wait_for_base_torr)가 바인딩되지 않았습니다.")
 
             self._log("IG", f"IG.wait_for_base_pressure: {p.target_pressure:.3e} Torr 대기 (RDI=10s 간격, 외부 폴링 없음)")
+            self._show_state("IG base wait…")       # ★ 상태창: IG 대기 시작
 
             wait_task = asyncio.create_task(
                 self._ig_wait_for_base_torr(p.target_pressure, interval_ms=10_000),
@@ -189,11 +190,13 @@ class PlasmaCleaningController:
 
             if not ok:
                 raise RuntimeError("Base pressure not reached (IG API)")
+            self._show_state("Base pressure OK")    # ★ 상태창: IG 통과
 
             # 3) MFC 가스 설정 (Gas #3 N2) + 4) SP4 세팅/ON
             self._log("STEP", "3: Gas/Pressure 설정 시작")  # ★ LOG
 
             try:
+                self._show_state(f"Gas select ch{p.gas_idx}")   # ★ 추가
                 await self._mfc_gas_select(p.gas_idx)
                 self._log("MFC", f"GAS SELECT ch={p.gas_idx} OK")  # ★ LOG
             except Exception as e:
@@ -205,6 +208,7 @@ class PlasmaCleaningController:
                 try:
                     await self._mfc_flow_set_on(p.gas_flow_sccm)
                     self._log("MFC", "FLOW_SET_ON OK")  # ★ LOG
+                    self._show_state(f"Gas Flow {p.gas_flow_sccm:.1f} sccm")   # ★ 추가
                 except Exception as e:
                     self._log("MFC", f"FLOW_SET_ON 실패: {e!r}")  # ★ LOG
                     raise
@@ -215,6 +219,7 @@ class PlasmaCleaningController:
             try:
                 await self._mfc_sp4_set(p.sp4_setpoint_mTorr)
                 self._log("MFC", "SP4_SET OK")  # ★ LOG
+                self._show_state(f"SP4 Set {p.sp4_setpoint_mTorr:.2f} mTorr")   # ★ 추가
             except Exception as e:
                 self._log("MFC", f"SP4_SET 실패: {e!r}")  # ★ LOG
                 raise
@@ -228,16 +233,18 @@ class PlasmaCleaningController:
                 raise
 
             self._log("MFC", "[SOAK] SP4_ON → 60s 대기 시작")
+            self._show_state("SP4 Soak")  # ★ 제목은 1회 고정
             for left in range(60, 0, -1):
                 if self._stop_evt.is_set():
                     self._log("STEP", "STOP during SP4 soak → abort before RF")
-                    raise asyncio.CancelledError()   # ← 아예 종료 시퀀스로 진입
-                self._show_state(f"WorkingP soak {left:02d}s")
+                    raise asyncio.CancelledError()
+                self._show_countdown(left)  # ★ 숫자만 갱신
                 await asyncio.sleep(1.0)
             self._log("MFC", "[SOAK] 60s 완료")
 
             # 6) RF POWER(PLC DAC) 설정
             self._log("RF", f"RF Power 적용: {p.rf_power_w:.1f} W")
+            self._show_state(f"RF Start {p.rf_power_w:.1f} W")   # ★ 추가
             try:
                 await self._rf_start(p.rf_power_w)
                 self._log("RF", "RF START OK")  # ★ LOG
@@ -246,6 +253,7 @@ class PlasmaCleaningController:
                 raise
 
             # 7) PROCESS TIME 카운트다운
+            self._show_state(f"PROCESS {p.process_time_min:.1f} min")   # ★ 추가
             total_sec = int(max(0, p.process_time_min * 60.0))
             for left in range(total_sec, -1, -1):
                 if self._stop_evt.is_set():

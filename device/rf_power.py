@@ -111,6 +111,8 @@ class RFPowerAsync:
         self._adjust_task: Optional[asyncio.Task] = None
         self._event_q: asyncio.Queue[RFPowerEvent] = asyncio.Queue(maxsize=512)
 
+        self._power_off_evt = asyncio.Event()   # ★ 추가: 완료 대기용 내부 Event
+
         self._polling_enabled = True
 
     # ======= 이벤트 스트림 =======
@@ -177,6 +179,7 @@ class RFPowerAsync:
         await self._cancel_task("_adjust_task")
 
         # 램프다운 시작
+        self._power_off_evt.clear()  # ★ 추가: 이번 종료 사이클의 완료 신호 초기화
         await self._emit_status("RF 파워 ramp-down 시작")
         self._is_ramping_down = True
         self._rampdown_w = self._last_sent_w if self._last_sent_w is not None else float(self.current_power_step)
@@ -270,10 +273,13 @@ class RFPowerAsync:
                             await self._emit_status("RF SET OFF")
                         finally:
                             self._enabled = False
+                            if not self._is_ramping_down:
+                                self._power_off_evt.set()
 
                     await self._emit_status("RF 파워 ramp-down 완료")
                     self._is_ramping_down = False
                     self._ev_nowait(RFPowerEvent(kind="power_off_finished"))
+                    self._power_off_evt.set()   # ★ 추가: 완료 신호 설정
                     return
                 self._rampdown_w = max(0.0, self._rampdown_w - step_w)
                 self._last_sent_w = self._rampdown_w
@@ -393,6 +399,13 @@ class RFPowerAsync:
             await self._emit_status(f"RF 설정 전송 실패(unverified): {e}")
 
     # ======= 이벤트/유틸 =======
+    async def wait_power_off(self, timeout_s: float = 8.0) -> bool:
+        try:
+            await asyncio.wait_for(self._power_off_evt.wait(), timeout=timeout_s)
+            return True
+        except asyncio.TimeoutError:
+            return False
+
     async def _emit_status(self, msg: str):
         if self.debug_print:
             print(f"[RFpower][status] {msg}")

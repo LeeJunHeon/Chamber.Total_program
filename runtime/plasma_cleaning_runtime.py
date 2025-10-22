@@ -79,6 +79,7 @@ class PlasmaCleaningRuntime:
         self._pc_gas_idx: Optional[int] = None  # ← PC에서 선택된 gas_idx 저장(스케일 계산용)
 
         self._rf_target_evt = asyncio.Event()   # ★ 목표 도달 이벤트 대기용
+        self._state_header: str = ""            # ★ 현재 단계 제목 보관
 
         # 로그/상태 위젯
         self._w_log = (
@@ -372,9 +373,9 @@ class PlasmaCleaningRuntime:
             if not self.rf:
                 return
             try:
-                self._log("STEP", "종료: RF STOP 실행")
+                self.append_log("STEP", "종료: RF STOP 실행")   # ← 수정
                 await asyncio.wait_for(self.rf.cleanup(), timeout=8.0)
-                self._log("STEP", "종료: RF STOP 완료")   # ← 이 줄이 보이면 블로킹 아님
+                self.append_log("STEP", "종료: RF STOP 완료")   # ← 수정
             except asyncio.TimeoutError:
                 self.append_log("RF", "cleanup timeout → 강제 종료 진행")
                 # failsafe: 0 W로 쓰고 SET도 내려 안전종료 보장
@@ -389,10 +390,17 @@ class PlasmaCleaningRuntime:
 
         # ---- UI
         def _show_state(text: str) -> None:
-            self._set_state_text(text)
+            # 단계 제목을 고정해 두고 상태창에 반영
+            self._state_header = text or ""
+            self._set_state_text(self._state_header)
 
         def _show_countdown(sec: int) -> None:
-            self._set_state_text(f"Remaining {int(sec)} s")
+            # 남은 초가 들어오면 "제목 · 05s" 형태로 표시
+            tail = f"{int(sec):02d}s"
+            if self._state_header:
+                self._set_state_text(f"{self._state_header} · {tail}")
+            else:
+                self._set_state_text(tail)
 
         # 컨트롤러 생성
         return PlasmaCleaningController(
@@ -545,9 +553,31 @@ class PlasmaCleaningRuntime:
             self._close_run_log()
 
     async def _safe_rf_stop(self) -> None:
-        with contextlib.suppress(Exception):
-            if self.rf:
-                await self.rf.cleanup()
+        if not self.rf:
+            return
+        # 1) ramp-down 시작
+        try:
+            await asyncio.wait_for(self.rf.cleanup(), timeout=8.0)
+        except asyncio.TimeoutError:
+            self.append_log("RF", "cleanup timeout → 계속 진행")
+
+        # 2) ramp-down 완료 신호 대기
+        ok = False
+        try:
+            ok = await self.rf.wait_power_off(timeout_s=8.0)
+        except Exception as e:
+            self.append_log("RF", f"wait_power_off error: {e!r}")
+
+        # 3) 실패 시 강제 종료(failsafe)
+        if not ok and self.plc:
+            self.append_log("RF", "ramp-down 완료 신호 timeout → 강제 0W/SET OFF")
+            with contextlib.suppress(Exception):
+                await self.plc.power_write(0.0, family="DCV", write_idx=1)
+            with contextlib.suppress(Exception):
+                await self.plc.power_enable(False, family="DCV", set_idx=1)
+
+        # 4) RF 완전 종료 → 나머지 중단 공정 실행
+        await self._shutdown_rest_devices()        # ← 이제 정의 추가(아래)
 
     async def _pump_rf_events(self) -> None:
         """RFPowerAsync 이벤트를 UI/로그로 중계"""
@@ -555,7 +585,8 @@ class PlasmaCleaningRuntime:
             return
         async for ev in self.rf.events():
             if ev.kind == "display":
-                self._set_state_text(f"RF FWD={ev.forward:.1f}, REF={ev.reflected:.1f} (W)")
+                # 상태창은 카운트다운 유지! → 로그로만 남긴다
+                self.append_log("RF", f"FWD={ev.forward:.1f}, REF={ev.reflected:.1f} (W)")
             elif ev.kind == "status":
                 self.append_log("RF", ev.message or "")
             elif ev.kind == "target_reached":   # ★ 추가
@@ -565,6 +596,46 @@ class PlasmaCleaningRuntime:
     # =========================
     # 내부 헬퍼들
     # =========================
+    async def _shutdown_rest_devices(self) -> None:
+        """
+        RF가 완전히 내려간 뒤 실행할 공용 ‘종료 시퀀스’.
+        - 선택 가스만 OFF
+        - SP4 측 MFC 밸브 open(네 코드 주석 기준)
+        - 게이트밸브 닫기 시도(있으면)
+        - 이벤트 펌프 정리(선택)
+        실패해도 공정 정지를 막지 않도록 예외는 삼킨다.
+        """
+        # 1) GAS off (선택 채널만)
+        with contextlib.suppress(Exception):
+            if self.mfc_gas:
+                self.append_log("STEP", "종료: MFC GAS OFF(sel)")
+                await self.mfc_gas.flow_off_selected()
+                self.append_log("STEP", "종료: MFC GAS OFF OK")
+
+        # 2) SP4 밸브 open(네 런타임 주석 기준 종료 시엔 open)
+        with contextlib.suppress(Exception):
+            if self.mfc_pressure:
+                self.append_log("STEP", "종료: MFC(SP4) VALVE OPEN")
+                await self.mfc_pressure.valve_open()
+                self.append_log("STEP", "종료: MFC(SP4) VALVE OPEN OK")
+
+        # 3) 게이트밸브 닫기(있으면)
+        with contextlib.suppress(Exception):
+            if self.plc:
+                self.append_log("STEP", f"종료: GateValve CH{self._selected_ch} CLOSE")
+                await self.plc.gate_valve(self._selected_ch, open=False, momentary=True)
+                # (선택) 표시램프가 꺼질 때까지 짧게 대기
+                with contextlib.suppress(Exception):
+                    for _ in range(10):  # 최대 ~2초
+                        lamp = await self.plc.read_bit(f"G_V_{self._selected_ch}_OPEN_LAMP")
+                        if not lamp:
+                            break
+                        await asyncio.sleep(0.2)
+
+        # 4) (선택) 이벤트 펌프 태스크 정리
+        for t in getattr(self, "_event_tasks", []):
+            t.cancel()
+
     def _read_params_from_ui(self) -> PCParams:
         def _read_plain_number(obj_name: str, default: float) -> float:
             w = _safe_get(self.ui, obj_name)

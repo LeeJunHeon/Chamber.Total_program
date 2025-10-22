@@ -785,8 +785,10 @@ class ProcessController:
         if state_changed or targets_changed:
             self._last_polling_active = active
             self._last_polling_targets = dict(targets)
-            self._emit(PCEvent("polling", {"active": active}))
+            # ▼ 타깃을 먼저 내려보내 최신 타깃을 런타임이 저장/적용하게 함
             self._emit(PCEvent("polling_targets", {"targets": targets}))
+            # ▼ 그 다음 active 신호를 보냄 → AND 계산 시 최신 타깃을 사용
+            self._emit(PCEvent("polling", {"active": active}))
 
     def _compute_polling_targets(self, active: bool) -> Dict[str, bool]:
         """
