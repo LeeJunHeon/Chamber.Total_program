@@ -331,9 +331,13 @@ class AsyncIG:
 
             return getattr(self, "_last_wait_success", False)
         finally:
-            # cleanup 중 CancelledError 전파로 상위 대기가 실패로 보이지 않도록 보호
-            with contextlib.suppress(asyncio.CancelledError, Exception):
+            # cleanup이 상위 취소에 휩쓸리지 않도록 완전 보호
+            try:
                 await asyncio.shield(self.cleanup())
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
 
     async def cancel_wait(self):
         self._waiting_active = False

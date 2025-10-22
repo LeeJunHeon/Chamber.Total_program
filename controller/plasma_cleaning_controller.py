@@ -174,14 +174,19 @@ class PlasmaCleaningController:
             )
 
             if stop_task in done and self._stop_evt.is_set():
+                # STOP 우선: IG 대기 태스크를 정리하고 중단
                 for t in pending:
                     t.cancel()
-                # IG 대기를 사용자 STOP으로만 끊도록
                 with contextlib.suppress(asyncio.CancelledError):
                     await wait_task
                 raise asyncio.CancelledError()
+            else:
+                # IG 대기가 먼저 끝난 경우: 남은 stop_task 정리
+                for t in pending:
+                    t.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await stop_task
 
-            # IG 태스크가 자체적으로 cancel을 내면 '장치 사유 실패'로 처리
             try:
                 ok = await wait_task
             except asyncio.CancelledError:

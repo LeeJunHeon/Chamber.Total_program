@@ -298,7 +298,7 @@ class PlasmaCleaningRuntime:
             self.append_log("IG", f"read {float(v):.3e} Torr")
             return float(v)
 
-        async def _ig_wait_for_base_torr(target_torr: float, interval_ms: int = 1000) -> bool:
+        async def _ig_wait_for_base_torr(target_torr: float, interval_ms: int = 10_000) -> bool:
             if not self.ig:
                 raise RuntimeError("IG not bound")
             return await self.ig.wait_for_base_pressure(float(target_torr), interval_ms=interval_ms)
