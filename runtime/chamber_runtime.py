@@ -2536,12 +2536,14 @@ class ChamberRuntime:
             checked = int(p.get("use_g1", False)) + int(p.get("use_g2", False)) + int(p.get("use_g3", False))
             if checked == 0 or checked == 3:
                 errs.append("G1~G3 중 1개 또는 2개만 선택")
-            if p.get("use_g1") and not p.get("G1_target_name"):
-                errs.append("G1 타겟 이름이 비어있음")
-            if p.get("use_g2") and not p.get("G2_target_name"):
-                errs.append("G2 타겟 이름이 비어있음")
-            if p.get("use_g3") and not p.get("G3_target_name"):
-                errs.append("G3 타겟 이름이 비어있음")
+
+            # 타겟 이름이 비어있어도 허용
+            # if p.get("use_g1") and not p.get("G1_target_name"):
+            #     errs.append("G1 타겟 이름이 비어있음")
+            # if p.get("use_g2") and not p.get("G2_target_name"):
+            #     errs.append("G2 타겟 이름이 비어있음")
+            # if p.get("use_g3") and not p.get("G3_target_name"):
+            #     errs.append("G3 타겟 이름이 비어있음")
 
             if not (p.get("use_rf_pulse") or p.get("use_dc_power") or p.get("use_rf_power")):
                 errs.append("RF Pulse 또는 DC 중 하나 이상 선택 필요")
