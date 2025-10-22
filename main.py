@@ -394,11 +394,6 @@ class MainWindow(QWidget):
         rt = self.pre_ch1 if ch == 1 else self.pre_ch2
         if rt:
             rt.schedule_from_ui()  # ← 해당 챔버만 예약 갱신/시작
-            try:
-                lbl = getattr(self.ui, "preSputter_LeftTime_label", None)
-                if lbl: lbl.setText(f"예약 대상 CH{ch}")
-            except Exception:
-                pass
 
     def _on_presputter_stop_clicked(self) -> None:
         ch = self._selected_presputter_ch()

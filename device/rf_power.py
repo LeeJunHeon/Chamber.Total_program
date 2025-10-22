@@ -82,8 +82,9 @@ class RFPowerAsync:
         self._ref_th_w = float(reflected_threshold_w)
         self._ref_wait_to_s = float(reflected_wait_timeout_s)
         self._maintain_need_consecutive = int(maintain_need_consecutive)
-        # 데드밴드(W) — 인자값이 양수면 그 값을, 아니면 기본 0.5W
-        self._deadband_w = float(dac_deadband_counts) if float(dac_deadband_counts) > 0 else 0.5
+        
+        # (after) 0도 허용. 음수면 0으로 클램프.
+        self._deadband_w = max(0.0, float(dac_deadband_counts))
 
         # 상태
         self.state = "IDLE"  # "IDLE", "RAMPING_UP", "MAINTAINING", "REF_P_WAITING"
@@ -191,7 +192,7 @@ class RFPowerAsync:
 
         # 디스플레이 이벤트 즉시 방출
         self._ev_nowait(RFPowerEvent(kind="display", forward=self.forward_w, reflected=self.reflected_w))
-        '''
+        
         # 반사파 과다 → 대기/타임아웃
         if self.reflected_w > self._ref_th_w:
             if self.state != "REF_P_WAITING":
@@ -213,7 +214,7 @@ class RFPowerAsync:
                                              message=f"반사파 안정화 완료({self.reflected_w:.1f}W). 공정 재개"))
                 self.state = self.previous_state
                 self._ref_wait_start_ts = None
-        '''
+        
         # 램프업/유지 보정은 태스크로 비동기 실행(중복 호출 시 최신만 수행)
         if self._adjust_task and not self._adjust_task.done():
             self._adjust_task.cancel()
@@ -298,12 +299,12 @@ class RFPowerAsync:
 
             if self.state == "RAMPING_UP":
                 diff = float(self.target_power) - float(self.forward_w)
+                send_needed = False
 
                 # 허용 오차 내 → 유지 상태로 전환
                 if abs(diff) <= float(RF_TOLERANCE_POWER):
                     await self._emit_status(f"{self.target_power:.1f}W 도달. 파워 유지 시작")
                     self.state = "MAINTAINING"
-                    # 목표값으로 한 번 더 고정(안전)
                     await self._send_rf_power(float(self.target_power))
                     self.current_power_step = float(self.target_power)
                     self._ev_nowait(RFPowerEvent(kind="target_reached"))
@@ -311,20 +312,32 @@ class RFPowerAsync:
 
                 # 스텝 계산 (상승/오버슈트 복귀)
                 if diff > 0:
-                    new_power = min(self.current_power_step + float(RF_RAMP_STEP), float(self.target_power))
+                    # ★ 타깃에 이미 붙었는데도 측정이 낮으면 → 타깃 초과 상향 보정 허용
+                    if self.current_power_step >= float(self.target_power) - 1e-6:
+                        base = last_sent if last_sent is not None else self.current_power_step
+                        new_power = min(float(RF_MAX_POWER), float(base) + float(RF_MAINTAIN_STEP))
+                    else:
+                        new_power = min(self.current_power_step + float(RF_RAMP_STEP), float(self.target_power))
                 else:
                     new_power = max(0.0, self.current_power_step - float(RF_MAINTAIN_STEP))
                     await self._emit_status("목표 파워 초과. 출력 하강 시도...")
 
-                # 범위/데드밴드 체크
+                # 범위/데드밴드 체크 + 실제 전송 여부 판단
                 new_power = max(0.0, min(float(RF_MAX_POWER), float(new_power)))
-                if (last_sent is None) or (abs(new_power - last_sent) >= watt_deadband):
+
+                # 데드밴드 0도 허용되므로, 차이가 '정말 0'이면 전송 생략되게 보정
+                thr = max(watt_deadband, 1e-6)
+                if (last_sent is None) or (abs(new_power - last_sent) >= thr):
                     await self._send_rf_power(float(new_power))
+                    send_needed = True
 
                 self.current_power_step = float(new_power)
-                await self._emit_status(
-                    f"Ramp-Up... 목표스텝:{self.current_power_step:.1f}W, 현재:{self.forward_w:.1f}W"
-                )
+
+                # ★ 전송이 있었을 때만 램프업 로그 출력(중복/허수 로그 억제)
+                if send_needed:
+                    await self._emit_status(
+                        f"Ramp-Up... 목표스텝:{self.current_power_step:.1f}W, 현재:{self.forward_w:.1f}W"
+                    )
 
             elif self.state == "MAINTAINING":
                 error = float(self.target_power) - float(self.forward_w)

@@ -241,15 +241,20 @@ class PreSputterRuntime:
                 if self._ui:
                     self._set_text(self._ui.preSputter_LeftTime_edit, "00:00:00")
 
-                # 2) 다른 공정이 돌고 있으면 빌 때까지 대기(스팸 방지: 1분에 한번 로그)
-                last_log = 0.0
-                loop_time = asyncio.get_running_loop().time
-                while runtime_state.any_running():
-                    t = loop_time()
-                    if t - last_log >= self.wait_log_interval_s:
-                        self._log("[PreSputter] 다른 공정 진행 중… 예약 실행 대기")
-                        last_log = t
-                    await asyncio.sleep(5.0)
+                # 2) 내 챔버가 바쁘면 이번 예약은 PASS (대기하지 않음)
+                def _my_ch_busy() -> bool:
+                    return ((self.ch1 and self.ch1.is_running) or
+                            (self.ch2 and self.ch2.is_running))
+
+                if _my_ch_busy():
+                    self._log("[PreSputter] 해당 챔버가 이미 공정 중 → 이번 예약 PASS")
+                    if not self._repeat_daily:
+                        self._log("[PreSputter] 1회 예약 실행 완료(반복 없음).")
+                        break
+                    # 다음날 재예약
+                    when = when + timedelta(days=1)
+                    self._log(f"[PreSputter] 다음 반복 예약: {when.strftime('%Y-%m-%d %H:%M:%S')}")
+                    continue
 
                 # 3) 실행(병렬 or 순차)
                 await self._run(parallel=self.parallel)
