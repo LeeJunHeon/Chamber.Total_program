@@ -21,15 +21,10 @@ from typing import Optional, Callable, Deque, AsyncGenerator, Literal, Union
 from collections import deque
 import asyncio, time, contextlib, socket
 from lib.config_ch1 import DCPULSE_TCP_HOST, DCPULSE_TCP_PORT
-
-import os, sys, ctypes
-from pathlib import Path
-
 from lib import config_common as cfgc   # ★ 추가
 
 # === OUTPUT_ON 직후 간단 활성 확인 ===
 ACTIVATION_CHECK_DELAY_S = 5.0      # OUTPUT_ON 후 첫 측정까지 대기 (초)
-ACTIVATION_ZERO_W_THRESHOLD = 0.5   # 0.5 W 이하이면 '0W'로 간주
 
 # 폴링 주기(초)
 DCP_POLL_INTERVAL_S = 5.0
@@ -535,27 +530,6 @@ class AsyncDCPulse:
         # 그 외(읽기 응답 등 프레임 payload)는 일단 수신만 되면 성공 처리
         return True
     
-    # ===================== 기존 로직 =====================
-    # async def _write_cmd_data(self, cmd: int, value: int, width: int, *, label: str):
-    #     fut = asyncio.get_running_loop().create_future()
-    #     def _cb(resp: Optional[bytes]):
-    #         if not fut.done():
-    #             fut.set_result(resp)
-
-    #     payload = self._proto.pack_write(cmd, value, width=width)
-    #     self._enqueue(Command(payload, label, DCP_TIMEOUT_MS, DCP_GAP_MS, 3, _cb))
-    #     resp = await self._await_reply_bytes(label, fut)
-    #     if self._ok_from_resp(resp):
-    #         # ✅ OUTPUT_ON/OFF 반영
-    #         if label == "OUTPUT_ON":
-    #             self._out_on = True
-    #         elif label == "OUTPUT_OFF":
-    #             self._out_on = False
-    #         await self._emit_confirmed(label)
-    #     else:
-    #         await self._emit_failed(label, "응답 없음/실패")
-    # ===================== 기존 로직 =====================
-    
     # ===================== 실패시 검증하는 로직 =====================
     async def _write_cmd_data(self, cmd: int, value: int, width: int, *, label: str) -> bool:
         fut = asyncio.get_running_loop().create_future()
@@ -683,30 +657,6 @@ class AsyncDCPulse:
             await self._emit_confirmed(label)
         else:
             await self._emit_failed(label, "응답 없음/실패")
-
-    async def _read_simple(self, code: int, label: str) -> Optional[int]:
-        """간단 읽기(정수 하나 파싱) — 실제 항목은 장비 문서에 맞춰 디코딩 보완 필요."""
-        fut = asyncio.get_running_loop().create_future()
-        def _cb(resp: Optional[bytes]):
-            if not fut.done():
-                fut.set_result(resp)
-
-        payload = self._proto.pack_read(code)
-        self._enqueue(Command(payload, label, DCP_TIMEOUT_MS, DCP_GAP_MS, 2, _cb))
-        resp = await self._await_reply_bytes(label, fut)
-        if resp is None:
-            await self._emit_failed(label, "응답 없음/실패")
-            return None
-        # TODO: 실제 프레임 포맷에 맞춰 값 추출(여기선 자리표시자)
-        try:
-            # RS-232 payload: [CMD][DATA..] → 마지막 2바이트를 정수로 가정 (예시)
-            if len(resp) >= 3:
-                val = (resp[-2] << 8) | resp[-1]
-                return int(val)
-        except Exception:
-            pass
-        await self._emit_failed(label, f"파싱 실패: {resp!r}")
-        return None
 
     async def _await_reply_bytes(self, label: str, fut: "asyncio.Future[Optional[bytes]]") -> Optional[bytes]:
         # 오픈 직후 여유
@@ -1161,42 +1111,6 @@ class AsyncDCPulse:
         loop = asyncio.get_running_loop()
         self._watchdog_task = loop.create_task(self._watchdog_loop(), name="DCPWatchdog")
     # =========== chamber_runtime.py에 맞춘 함수들 ===========
-
-    # ====================== NPort 시리얼 해제 (Windows 전용) ======================
-    # async def _force_release_nport_port(
-    #     self,
-    #     *,
-    #     dll_path: str | None = None,
-    #     override_port_index: int | None = None,
-    # ):
-    #     """
-    #     IPSerial.dll(nsio_resetport)로 NPort 시리얼 포트의 TCP 세션을 강제 해제.
-    #     포트 인덱스(1-base):
-    #       - override_port_index가 있으면 그 값
-    #       - 없으면 TCP 4001→1 규칙으로 자동 추정
-    #     DLL 경로 우선순위:
-    #       - 인자 dll_path > exe_dir\\dll\\IPSerial.dll
-    #     """
-    #     if os.name != "nt":
-    #         raise RuntimeError("non-Windows OS")
-
-    #     host, tcp_port = self._resolve_endpoint()
-    #     port_index = _guess_nport_index_from_tcp_port(tcp_port, override_port_index)
-
-    #     def _work():
-    #         exe_dir = Path(sys.argv[0]).resolve().parent
-    #         default_dll = exe_dir / "dll" / "IPSerial.dll"
-    #         final_dll = str(dll_path or default_dll)
-    #         ipser = _MoxaIPSerial(final_dll)
-    #         rc = ipser.reset_port(host, port_index)
-    #         return rc, final_dll
-
-    #     loop = asyncio.get_running_loop()
-    #     rc, used_dll = await loop.run_in_executor(None, _work)
-    #     await self._emit_status(
-    #         f"NPort port reset via IPSerial: host={host}, index={port_index}, rc={rc}, dll='{used_dll}'"
-    #     )
-    # ====================== NPort 시리얼 해제 (Windows 전용) ======================
 
     async def _reopen_if_inactive(self):
         """

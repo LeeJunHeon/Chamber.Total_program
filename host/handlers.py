@@ -27,31 +27,19 @@ class HostHandlers:
     # --------- 상태 조회 ---------
     async def get_sputter_status(self, _: Json) -> Json:
         try:
-            # 전체 동작 여부
-            running = False
-            if hasattr(self.ctx.runtime_state, "any_running"):
-                try:
-                    running = bool(self.ctx.runtime_state.any_running())
-                except Exception:
-                    pass
-            else:
-                running = bool(getattr(self.ctx.ch1, "is_running", False) or getattr(self.ctx.ch2, "is_running", False))
-
-            # 플라즈마 클리닝 여부
+            running = bool(getattr(self.ctx.runtime_state, "any_running")())
             cleaning = bool(getattr(self.ctx.pc, "is_running", getattr(self.ctx.pc, "_running", False)))
-
-            # 상태 우선순위: cleaning > running > idle
             state = "cleaning" if cleaning else ("running" if running else "idle")
 
-            # 진공 여부(예: GV 램프 기준) — 장비 철학에 맞게 교체 가능
+            # 진공 여부: GV OPEN 램프(1/2) 중 하나라도 켜져 있으면 True
             vacuum = False
             try:
-                if hasattr(self.ctx.plc, "read_gv_open_lamp"):
-                    vacuum = await self.ctx.plc.read_gv_open_lamp()
+                gv1 = await self.ctx.plc.read_bit("G_V_1_OPEN_LAMP")
+                gv2 = await self.ctx.plc.read_bit("G_V_2_OPEN_LAMP")
+                vacuum = bool(gv1 or gv2)
             except Exception:
                 pass
-
-            return self._ok(state=state, vacuum=bool(vacuum))
+            return self._ok(state=state, vacuum=vacuum)
         except Exception as e:
             return self._fail(e)
 
@@ -107,7 +95,7 @@ class HostHandlers:
     async def four_pin_up(self, _: Json) -> Json:
         try:
             async with self.ctx.lock_plc:
-                await self.ctx.plc.lift_pin_up()
+                await self.ctx.plc.lift_pin(up=True)   # ← 실제 API명
             return self._ok("4PIN_UP")
         except Exception as e:
             return self._fail(e)
@@ -115,7 +103,7 @@ class HostHandlers:
     async def four_pin_down(self, _: Json) -> Json:
         try:
             async with self.ctx.lock_plc:
-                await self.ctx.plc.lift_pin_down()
+                await self.ctx.plc.lift_pin(up=False)
             return self._ok("4PIN_DOWN")
         except Exception as e:
             return self._fail(e)
@@ -126,7 +114,8 @@ class HostHandlers:
         lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
         try:
             async with lock:
-                await self.ctx.plc.gate_open(ch=ch)
+                # plc.py 실제 API: gate_valve(chamber=, open=)
+                await self.ctx.plc.gate_valve(chamber=ch, open=True)
             return self._ok(f"CH{ch}_GATE_OPEN")
         except Exception as e:
             return self._fail(e)
@@ -136,27 +125,14 @@ class HostHandlers:
         lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
         try:
             async with lock:
-                await self.ctx.plc.gate_close(ch=ch)
+                await self.ctx.plc.gate_valve(chamber=ch, open=False)
             return self._ok(f"CH{ch}_GATE_CLOSE")
         except Exception as e:
             return self._fail(e)
 
+    # CHUCK은 장비 API가 없으므로 일단 미지원 처리 (필요하면 lift_pin으로 매핑)
     async def chuck_up(self, data: Json) -> Json:
-        ch = int(data.get("ch", 1))
-        lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
-        try:
-            async with lock:
-                await self.ctx.plc.chuck_up(ch=ch)
-            return self._ok(f"CH{ch}_CHUCK_UP")
-        except Exception as e:
-            return self._fail(e)
+        return self._fail("CHx_CHUCK_UP is not supported by PLC API")
 
     async def chuck_down(self, data: Json) -> Json:
-        ch = int(data.get("ch", 1))
-        lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
-        try:
-            async with lock:
-                await self.ctx.plc.chuck_down(ch=ch)
-            return self._ok(f"CH{ch}_CHUCK_DOWN")
-        except Exception as e:
-            return self._fail(e)
+        return self._fail("CHx_CHUCK_DOWN is not supported by PLC API")

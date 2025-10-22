@@ -220,6 +220,7 @@ class ChamberRuntime:
         self.chat = chat
         self.cfg = _CfgAdapter(cfg, self.ch)
         self._bg_tasks: list[asyncio.Task[Any]] = []
+        self._mfc_seq_lock = asyncio.Lock()
         self._starter_threads: dict[str, asyncio.Task] = {}
         self._bg_started = False
         self._pc_stopping = False
@@ -360,9 +361,9 @@ class ChamberRuntime:
 
             async def _rf_request_read():
                 try:
-                    fwd_raw = await self.plc.read_reg_name("DCV_READ_2")
-                    ref_raw = await self.plc.read_reg_name("DCV_READ_3")
-                    return {"forward": float(fwd_raw), "reflected": float(ref_raw)}
+                    # ✅ 스케일 보정된 W 단위 튜플 반환
+                    fwd_w, ref_w = await self.plc.rf_read_fwd_ref()
+                    return (float(fwd_w), float(ref_w))
                 except Exception as e:
                     self.append_log("RFpower", f"read failed: {e!r}")
                     return None
@@ -1470,7 +1471,7 @@ class ChamberRuntime:
             await asyncio.sleep(0.2)
 
     async def _preflight_connect(self, params: Mapping[str, Any], timeout_s: float = 8.0) -> tuple[bool, list[str]]:
-        need: list[tuple[str, object]] = [("MFC", self.mfc), ("IG", self.ig)]
+        need: list[tuple[str, object]] = [("PLC", self.plc), ("MFC", self.mfc), ("IG", self.ig)]
 
         use_dc_pulse = bool(params.get("use_dc_pulse", False))
         use_rf_pulse = bool(params.get("use_rf_pulse", False))
@@ -2041,10 +2042,8 @@ class ChamberRuntime:
 
         if self.dc_pulse:
             with contextlib.suppress(Exception):
-                if not dcpl_on:
-                    # OFF는 런타임이 즉시 내려도 됨(장치 폴링 정지)
-                    self.dc_pulse.set_process_status(False)
-                # ON(True)은 장치가 OUTPUT_ON 성공/검증 이후 5초 타이머로 자체 시작함
+                # ✅ True/False 모두 직접 전달(다른 장치들과 일관)
+                self.dc_pulse.set_process_status(dcpl_on)
 
         if self.rf_pulse:
             with contextlib.suppress(Exception):

@@ -113,7 +113,7 @@ class PlasmaCleaningRuntime:
             self._bind_ig_device(self.ig)
 
     # =========================
-    # MFC/IG 이벤트 펌프
+    # MFC/IG/RFpower 이벤트 펌프
     # =========================
     async def _pump_mfc_events(self, mfc, label: str) -> None:
         if not mfc:
@@ -149,6 +149,32 @@ class PlasmaCleaningRuntime:
                 self.append_log(label, "Base pressure reached")
             elif k == "base_failed":
                 self.append_log(label, f"Base pressure failed: {ev.message or ''}")
+
+    async def _pump_rf_events(self) -> None:
+        """RFPowerAsync 이벤트를 UI/로그로 중계"""
+        if not self.rf:
+            return
+        async for ev in self.rf.events():
+            if ev.kind == "display":
+                # 1) 전용 칸(FWD/REF) 갱신
+                for_w = getattr(self.ui, "PC_forP_edit", None)
+                ref_w = getattr(self.ui, "PC_refP_edit", None)
+                with contextlib.suppress(Exception):
+                    if for_w and hasattr(for_w, "setPlainText"):
+                        for_w.setPlainText(f"{float(ev.forward):.1f}")
+                    if ref_w and hasattr(ref_w, "setPlainText"):
+                        ref_w.setPlainText(f"{float(ev.reflected):.1f}")
+
+                # 2) 상태창은 카운트다운 유지 → 덮어쓰지 않고 로그만 남김
+                self.append_log("RF", f"FWD={ev.forward:.1f}, REF={ev.reflected:.1f} (W)")
+                continue
+            elif ev.kind == "status":
+                self.append_log("RF", ev.message or "")
+            elif ev.kind == "target_reached":   # ★ 추가
+                self.append_log("RF", "목표 파워 도달")
+                self._rf_target_evt.set()
+            elif ev.kind == "power_off_finished":   # ★ 추가
+                self.append_log("RF", "Power OFF finished")
 
     # =========================
     # 장비 연결
@@ -526,6 +552,17 @@ class PlasmaCleaningRuntime:
         except Exception as e:
             self.append_log("PC", f"오류: {e!r}")
             return
+    
+        # ★★★ 추가: 시작 알림(최소 수정)
+        with contextlib.suppress(Exception):
+            if self.chat:
+                self.chat.notify_process_started({
+                    "process_note": "Plasma Cleaning",           # 카드 제목
+                    "process_time": float(p.process_time_min),    # ★ minutes, 키는 process_time!
+                    # 파워 요약(카드의 "파워" 필드에 보임)
+                    "use_rf_power": True,
+                    "rf_power": float(p.rf_power_w),
+                })
 
         # 4) 컨트롤러 실행
         success = False
@@ -542,6 +579,14 @@ class PlasmaCleaningRuntime:
             self._set_state_text("IDLE")
             self.append_log("PC", "파일 로그 종료")
             self._close_run_log()        # ★ 반드시 닫기
+
+            # ★★★ 추가: 종료 알림(최소 수정)
+            with contextlib.suppress(Exception):
+                if self.chat:
+                    self.chat.notify_process_finished_detail(
+                        success,                                  # ok: bool
+                        {"process_name": "Plasma Cleaning"}       # detail: dict (필요시 확장)
+                    )
 
     async def _on_click_stop(self) -> None:
         # 1) 컨트롤러 루프 중단 요청
@@ -597,32 +642,6 @@ class PlasmaCleaningRuntime:
 
         # 4) RF 완전 종료 → 나머지 중단 공정 실행
         await self._shutdown_rest_devices()        # ← 이제 정의 추가(아래)
-
-    async def _pump_rf_events(self) -> None:
-        """RFPowerAsync 이벤트를 UI/로그로 중계"""
-        if not self.rf:
-            return
-        async for ev in self.rf.events():
-            if ev.kind == "display":
-                # 1) 전용 칸(FWD/REF) 갱신
-                for_w = getattr(self.ui, "PC_forP_edit", None)
-                ref_w = getattr(self.ui, "PC_refP_edit", None)
-                with contextlib.suppress(Exception):
-                    if for_w and hasattr(for_w, "setPlainText"):
-                        for_w.setPlainText(f"{float(ev.forward):.1f}")
-                    if ref_w and hasattr(ref_w, "setPlainText"):
-                        ref_w.setPlainText(f"{float(ev.reflected):.1f}")
-
-                # 2) 상태창은 카운트다운 유지 → 덮어쓰지 않고 로그만 남김
-                self.append_log("RF", f"FWD={ev.forward:.1f}, REF={ev.reflected:.1f} (W)")
-                continue
-            elif ev.kind == "status":
-                self.append_log("RF", ev.message or "")
-            elif ev.kind == "target_reached":   # ★ 추가
-                self.append_log("RF", "목표 파워 도달")
-                self._rf_target_evt.set()
-            elif ev.kind == "power_off_finished":   # ★ 추가
-                self.append_log("RF", "Power OFF finished")
 
     # =========================
     # 내부 헬퍼들
@@ -727,6 +746,15 @@ class PlasmaCleaningRuntime:
                 self._log_fp.flush()
         except Exception:
             # 파일 오류가 난다고 공정을 멈출 필요는 없음 — 조용히 무시
+            pass
+        
+        # 한국어 + 영어 혼용 키워드 보강
+        try:
+            if self.chat:
+                text = (msg or "")
+                if any(k in text for k in ("경고", "오류", "실패", "에러", "인터락", "interlock", "FAIL", "ERROR")):
+                    self.chat.notify_error_with_src(src, text)
+        except Exception:
             pass
 
     def shutdown_fast(self) -> None:

@@ -234,6 +234,10 @@ class PLCConfig:
     rf_ref_a: float = 0.1565388751   # W = 0.1565388751*ADC + 12.2067054791
     rf_ref_b: float = 12.2067054791
 
+    # 🔧 현장 제로 보정치(패널 idle 보정). 필요 시 현장에서 수치만 바꾸세요.
+    rf_forward_zero_w: float = 4.0   # forp idle offset
+    rf_reflected_zero_w: float = 14.0  # refp idle offset
+
 # ======================================================
 # 단일 클래스: AsyncPLC (저수준+고수준)
 # ======================================================
@@ -584,6 +588,11 @@ class AsyncPLC:
             key = f"MAIN_{chamber}_GAS_SW"
         else:
             key = f"{g}_{chamber}_GAS_SW"
+
+        # ✅ 코일 존재 여부를 미리 확인하여 설명적 에러로
+        if key not in PLC_COIL_MAP:
+            raise ValueError(f"가스 '{g}'는 CH{chamber}에 존재하지 않습니다 (키: {key})")
+
         await self.write_switch(key, bool(on), momentary=momentary)
         self.log("Gas %s@Ch%d %s", g, chamber, "ON" if on else "OFF")
 
@@ -755,8 +764,8 @@ class AsyncPLC:
         r_w = self.cfg.rf_ref_a * float(r_raw) + self.cfg.rf_ref_b
 
         # 3) 제로잉 미보정 오프셋을 W 단위에서 단순 차감
-        f_w -= 4.0     # forp idle offset
-        r_w -= 14.0    # refp idle offset
+        f_w -= float(self.cfg.rf_forward_zero_w)     # forp idle offset
+        r_w -= float(self.cfg.rf_reflected_zero_w)    # refp idle offset
 
         # 음수 방지 & 보기 좋게 반올림(선택)
         f_w = round(max(0.0, f_w), 1)

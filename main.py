@@ -22,7 +22,6 @@ from device.ig import AsyncIG
 # ▶ 런타임 래퍼
 from runtime.chamber_runtime import ChamberRuntime
 from runtime.plasma_cleaning_runtime import PlasmaCleaningRuntime  # type: ignore
-from controller.plasma_cleaning_controller import PlasmaCleaningController  # type: ignore
 
 # 챔버별 설정
 from lib import config_ch1, config_ch2
@@ -272,16 +271,6 @@ class MainWindow(QWidget):
                 self.ui.PC_useChamber1_radio.setChecked(True)
             for rb in (getattr(self.ui, "PC_useChamber1_radio", None),
                        getattr(self.ui, "PC_useChamber2_radio", None)):
-                if rb:
-                    rb.toggled.connect(self._on_pc_radio_toggled)
-        except Exception:
-            pass
-
-        try:
-            if hasattr(self.ui, "PC_useChamber1_radio"):
-                self.ui.PC_useChamber1_radio.setChecked(True)
-            for rb in (getattr(self.ui, "PC_useChamber1_radio", None),
-                    getattr(self.ui, "PC_useChamber2_radio", None)):
                 if rb:
                     rb.toggled.connect(self._on_pc_radio_toggled)
         except Exception:

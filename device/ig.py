@@ -17,9 +17,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from collections import deque
 from typing import Optional, Callable, Deque, AsyncGenerator, Literal
-import asyncio, time, contextlib, socket, os, sys
-import ctypes
-from pathlib import Path
+import asyncio, time, contextlib, socket
 
 from lib import config_common as cfgc
 from lib.config_ch2 import (
@@ -288,7 +286,7 @@ class AsyncIG:
 
         # 폴링 시작
         if self._waiting_active:
-            await self._log_wait_again(self._poll_interval_ms)
+            #await self._log_wait_again(self._poll_interval_ms) 중복 로그 삭제
             self._polling_task = asyncio.create_task(self._poll_rdi_loop(interval_ms))
 
         try:
