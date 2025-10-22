@@ -62,7 +62,6 @@ class PlasmaCleaningRuntime:
         self._log_fp = None                # 현재 런 세션 로그 파일 핸들
         self._log_session_id = None        # 파일명에 들어갈 세션 ID (timestamp)
 
-
         # 주입 장치
         self.plc: Optional[AsyncPLC] = plc
         self.mfc_gas: Optional[AsyncMFC] = mfc_gas
@@ -78,6 +77,8 @@ class PlasmaCleaningRuntime:
         self._running: bool = False
         self._selected_ch: int = 1  # 라디오에 맞춰 set_selected_ch로 갱신
         self._pc_gas_idx: Optional[int] = None  # ← PC에서 선택된 gas_idx 저장(스케일 계산용)
+
+        self._rf_target_evt = asyncio.Event()   # ★ 목표 도달 이벤트 대기용
 
         # 로그/상태 위젯
         self._w_log = (
@@ -356,9 +357,35 @@ class PlasmaCleaningRuntime:
                 return
             await self.rf.start_process(float(power_w))
 
-        async def _rf_stop() -> None:
-            if self.rf:
-                await self.rf.cleanup()
+            # ★ 목표 도달 이벤트 기다림 (타임아웃은 취향껏: 60s 예시)
+            self._rf_target_evt.clear()
+            try:
+                await asyncio.wait_for(self._rf_target_evt.wait(), timeout=180.0)
+                self.append_log("RF", "목표 파워 안정 → 프로세스 타이머 시작 가능")
+            except asyncio.TimeoutError:
+                # 도달 실패 시, 여기서 예외를 올려 공정을 안전 종료
+                self.append_log("RF", "목표 파워 미도달(60s timeout) → 중단")
+                raise
+
+        # 8초 타임아웃 + 강제 정리
+        async def _rf_stop(self) -> None:
+            if not self.rf:
+                return
+            try:
+                self._log("STEP", "종료: RF STOP 실행")
+                await asyncio.wait_for(self.rf.cleanup(), timeout=8.0)
+                self._log("STEP", "종료: RF STOP 완료")   # ← 이 줄이 보이면 블로킹 아님
+            except asyncio.TimeoutError:
+                self.append_log("RF", "cleanup timeout → 강제 종료 진행")
+                # failsafe: 0 W로 쓰고 SET도 내려 안전종료 보장
+                with contextlib.suppress(Exception):
+                    if self.plc:
+                        await self.plc.power_write(0.0, family="DCV", write_idx=1)
+                with contextlib.suppress(Exception):
+                    if self.plc:
+                        await self.plc.power_enable(False, family="DCV", set_idx=1)
+            except Exception as e:
+                self.append_log("RF", f"cleanup error: {e!r}")
 
         # ---- UI
         def _show_state(text: str) -> None:
@@ -393,35 +420,30 @@ class PlasmaCleaningRuntime:
         if not self.plc:
             return None
 
-        async def _rf_send(power: float):
-            p = float(power)
-            self.append_log("PLC", f"DCV WRITE ch1 <- {p:.1f} W (SET+WRITE)")
-            await self.plc.power_apply(p, family="DCV", ensure_set=True, channel=1)
+        async def _rf_send(power_w: float) -> None:
+            # SET 보장 + 목표 W 쓰기 (DCV_SET_1, DCV_WRITE_1)
+            await self.plc.rf_apply(float(power_w), ensure_set=True)
             try:
-                fwd = await self.plc.read_reg_name("DCV_READ_2")
-                ref = await self.plc.read_reg_name("DCV_READ_3")
-                self.append_log("PLC", f"ADC READ FWD={float(fwd):.1f} W, REF={float(ref):.1f} W")
+                meas = await self.plc.rf_read_fwd_ref()  # ← 보정 적용
+                self.append_log("PLC", f"RF READ FWD={meas['forward']:.1f} W, REF={meas['reflected']:.1f} W")
+                # 디버그용 원시 ADC가 필요하면 아래 3줄을 임시로 풀어 쓰세요.
+                # f_raw = await self.plc.read_reg_name("DCV_READ_2")
+                # r_raw = await self.plc.read_reg_name("DCV_READ_3")
+                # self.append_log("PLC", f"(ADC FWD={f_raw}, REF={r_raw})")
             except Exception as e:
-                self.append_log("PLC", f"ADC READ 실패: {e!r}")
+                self.append_log("PLC", f"RF READ 실패: {e!r}")
 
-        async def _rf_send_unverified(power: float):
-            p = float(power)
-            self.append_log("PLC", f"DCV WRITE ch1(unverified) <- {p:.1f} W")
-            await self.plc.power_write(p, family="DCV", write_idx=1)
+        async def _rf_send_unverified(power_w: float) -> None:
+            await self.plc.power_write(power_w, family="DCV", write_idx=1)  # no-reply 경로
             try:
-                fwd = await self.plc.read_reg_name("DCV_READ_2")
-                ref = await self.plc.read_reg_name("DCV_READ_3")
-                self.append_log("PLC", f"ADC READ FWD={float(fwd):.1f} W, REF={float(ref):.1f} W")
-            except Exception as e:
-                self.append_log("PLC", f"ADC READ 실패: {e!r}")
+                meas = await self.plc.rf_read_fwd_ref()
+                self.append_log("PLC", f"RF READ(FB) FWD={meas['forward']:.1f} W, REF={meas['reflected']:.1f} W")
+            except Exception:
+                pass
 
         async def _rf_request_read():
             try:
-                fwd = await self.plc.read_reg_name("DCV_READ_2")
-                ref = await self.plc.read_reg_name("DCV_READ_3")
-                # (선택) 원시 ADC를 로그로도 남기고 싶으면 한 줄 추가
-                # self.append_log("PLC", f"ADC READ FWD={float(fwd):.1f} W, REF={float(ref):.1f} W")
-                return {"forward": float(fwd), "reflected": float(ref)}
+                return await self.plc.rf_read_fwd_ref()  # ← 핵심 수정
             except Exception as e:
                 self.append_log("RF", f"read failed: {e!r}")
                 return None
@@ -536,8 +558,9 @@ class PlasmaCleaningRuntime:
                 self._set_state_text(f"RF FWD={ev.forward:.1f}, REF={ev.reflected:.1f} (W)")
             elif ev.kind == "status":
                 self.append_log("RF", ev.message or "")
-            elif ev.kind == "target_reached":
+            elif ev.kind == "target_reached":   # ★ 추가
                 self.append_log("RF", "목표 파워 도달")
+                self._rf_target_evt.set()
 
     # =========================
     # 내부 헬퍼들

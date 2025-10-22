@@ -225,11 +225,15 @@ class PLCConfig:
     dc_v_scale: float = 0.5    # 2000 V / 4000 ct  = 0.5 V/ct
     dc_i_scale: float = 0.001  # 4 A / 4000 ct     = 0.001 A/ct
 
-    # RF 피드백(ADC→W) 보정 계수
-    rf_fwd_a: float = 0.1530   # forward:  W = a*ADC + b
-    rf_fwd_b: float = 2.9603
-    rf_ref_a: float = 0.1512   # reflected: W = a*ADC + b
-    rf_ref_b: float = 14.0607
+    # RF 피드백(ADC→W) 보정 계수 — 2025-10-21 엑셀(0~100W) 재캘리브레이션
+    # Forward: OLS 전체 샘플
+    rf_fwd_a: float = 0.1503488383   # W = 0.1503488383*ADC + 3.0664228165
+    rf_fwd_b: float = 3.0664228165
+
+    # Reflected: 80W 행(ADC=64, 패널=12) 이상치 제외 강건 회귀
+    rf_ref_a: float = 0.1565388751   # W = 0.1565388751*ADC + 12.2067054791
+    rf_ref_b: float = 12.2067054791
+
 # ======================================================
 # 단일 클래스: AsyncPLC (저수준+고수준)
 # ======================================================
