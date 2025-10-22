@@ -137,22 +137,33 @@ class MainWindow(QWidget):
         )
 
         try:
-            # 매일 08:30에 CH1/CH2 동시 Pre-Sputter (TSP 07:30과 겹치지 않게)
-            self.pre_sputter = PreSputterRuntime(
-                ch1=self.ch1,
-                ch2=self.ch2,
-                chat=None,  # ★ 프리스퍼터는 챗 안 보냄
-                hh=8, mm=30,
-                parallel=True,     # 동시 실행 정책 유지
-                ui=self.ui,
+            # ── Pre-Sputter: 챔버 전용 런타임 2개로 분리 ───────────────────────────
+            self.pre_ch1 = PreSputterRuntime(
+                ch1=self.ch1, ch2=None, chat=None, hh=8, mm=30, parallel=False, ui=self.ui
             )
-            # ★ Plasma Cleaning처럼: 로그를 main에서 주입 → PC 로그창으로만 출력
-            self.pre_sputter.set_pc_logger(self.ui.pc_logMessage_edit.appendPlainText)
+            self.pre_ch1.set_pc_logger(self.ui.pc_logMessage_edit.appendPlainText)
+            self.pre_ch1.start_daily()   # ← 프로그램 시작 시 CH1 자동 예약
 
-            self.pre_sputter.start_daily()
+            self.pre_ch2 = PreSputterRuntime(
+                ch1=None, ch2=self.ch2, chat=None, hh=8, mm=30, parallel=False, ui=self.ui
+            )
+            self.pre_ch2.set_pc_logger(self.ui.pc_logMessage_edit.appendPlainText)
+            self.pre_ch2.start_daily()   # ← 프로그램 시작 시 CH2 자동 예약
+            # ─────────────────────────────────────────────────────────────
 
-            # ★ 추가: UI 버튼(Start/Stop)을 런타임과 1회 바인딩
-            self.pre_sputter.bind_ui(self.ui)
+            # ★ 라디오 기본값: CH1 선택
+            try:
+                if hasattr(self.ui, "preSputter_useChamber1_radio"):
+                    self.ui.preSputter_useChamber1_radio.setChecked(True)
+            except Exception:
+                pass
+
+            # ★ UI 버튼을 메인에서 직접 분기 연결(선택된 챔버만 제어)
+            try:
+                self.ui.preSputter_Start_button.clicked.connect(self._on_presputter_start_clicked)
+                self.ui.preSputter_Stop_button.clicked.connect(self._on_presputter_stop_clicked)
+            except Exception:
+                pass
         except Exception as e:
             self._broadcast_log("Auto", f"PreSputter 예약 초기화 실패: {e!r}")
 
@@ -370,6 +381,30 @@ class MainWindow(QWidget):
         event.accept()
         super().closeEvent(event)
 
+    def _selected_presputter_ch(self) -> int:
+        """Pre-Sputter 라디오 상태로 선택 챔버 반환(기본 1)."""
+        try:
+            rb2 = getattr(self.ui, "preSputter_useChamber2_radio", None)
+            return 2 if (rb2 and rb2.isChecked()) else 1
+        except Exception:
+            return 1
+
+    def _on_presputter_start_clicked(self) -> None:
+        ch = self._selected_presputter_ch()
+        rt = self.pre_ch1 if ch == 1 else self.pre_ch2
+        if rt:
+            rt.schedule_from_ui()  # ← 해당 챔버만 예약 갱신/시작
+            try:
+                lbl = getattr(self.ui, "preSputter_LeftTime_label", None)
+                if lbl: lbl.setText(f"예약 대상 CH{ch}")
+            except Exception:
+                pass
+
+    def _on_presputter_stop_clicked(self) -> None:
+        ch = self._selected_presputter_ch()
+        rt = self.pre_ch1 if ch == 1 else self.pre_ch2
+        if rt:
+            rt.stop(silent=False)  # ← 해당 챔버만 예약 취소
 
 if __name__ == "__main__":
     if sys.platform.startswith("win"):

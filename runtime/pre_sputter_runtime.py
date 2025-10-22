@@ -67,6 +67,14 @@ class PreSputterRuntime:
         self._ui_bound: bool = False            # ★ 추가: 중복 바인딩 방지
         self._base_pressure_text: Optional[str] = None  # ★ 추가: Start시 저장해 둘 Base Pressure
 
+        # 어떤 챔버용 런타임인지 로그에 표기하려고 라벨 보유
+        if ch1 and not ch2:
+            self._label = "CH1"
+        elif ch2 and not ch1:
+            self._label = "CH2"
+        else:
+            self._label = "CH1+CH2"
+
     # ─────────────────────────────────────────────────────
     # Public API
     # ─────────────────────────────────────────────────────
@@ -313,24 +321,38 @@ class PreSputterRuntime:
 
         self._log(f"[PreSputter] {label} 완료")
 
-    def _log(self, msg: str) -> None:
-        line = f"[{datetime.now():%H:%M:%S}] [PreSputter] {msg}"
+    # ★ 공개 API: 메인에서 바로 호출할 수 있도록 이름 변경
+    def schedule_from_ui(self) -> None:
+        """UI의 예약시각/베이스프레셔를 읽어 매일 예약을 갱신."""
+        hh, mm = self._read_time_from_ui()
+        if hh is None:
+            self._log("[설정] 잘못된 시간 형식(HH:MM)")
+            lab = getattr(self._ui, "preSputter_LeftTime_label", None)
+            if lab:
+                try: lab.setText("Invalid time (HH:MM)")
+                except Exception: pass
+            return
 
-        # 1) 싱크가 있으면 → PC 로그창으로만 출력
+        bp_txt = self._read_base_pressure_from_ui()
+        if bp_txt and bp_txt.strip():
+            self._base_pressure_text = bp_txt.strip()
+            self._log(f"[설정] Base Pressure 고정: {self._base_pressure_text}")
+        else:
+            self._base_pressure_text = None
+            self._log("[설정] Base Pressure 미입력 → 각 챔버 UI값 사용")
+
+        self.hh, self.mm = int(hh), int(mm)
+        self.start_daily()
+
+    def _log(self, msg: str) -> None:
+        line = f"[{datetime.now():%H:%M:%S}] [PreSputter] {self._label} {msg}"
         sink = self._log_sink
         if sink:
-            try:
-                sink(line)
-            except Exception:
-                pass
-        # 싱크가 없을 땐 조용히 무시(요청: 챔버 로그엔 보내지 않음)
-
-        # 2) (선택) 채팅 알림 유지
+            try: sink(line)
+            except Exception: pass
         if self.chat:
-            try:
-                self.chat.notify_text(f"[PreSputter] {msg}")
-            except Exception:
-                pass
+            try: self.chat.notify_text(f"[PreSputter] {self._label} {msg}")
+            except Exception: pass
 
     def set_pc_logger(self, sink: Callable[[str], None]) -> None:
         """한 줄 문자열을 받아 출력하는 콜백(예: pc_logMessage_edit.appendPlainText)을 주입."""
