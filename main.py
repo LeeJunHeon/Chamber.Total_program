@@ -260,12 +260,28 @@ class MainWindow(QWidget):
         self.ui.ch2_btnGoPC.clicked.connect(lambda: self._switch_page("pc"))
         self.ui.ch2_btnGoCh1.clicked.connect(lambda: self._switch_page("ch1"))
 
+        # 라디오 그룹 ‘그룹 단위 배타’ 보강 (엣지케이스 방지)
+        for gname in ("buttonGroup", "buttonGroup_2"):
+            grp = getattr(self.ui, gname, None)
+            if grp:
+                grp.setExclusive(True)  # ← 한번만 못 박아 둠
+
         # Plasma Cleaning 챔버 선택 라디오: 기본 CH1 체크 + 핸들러 연결
         try:
             if hasattr(self.ui, "PC_useChamber1_radio"):
                 self.ui.PC_useChamber1_radio.setChecked(True)
             for rb in (getattr(self.ui, "PC_useChamber1_radio", None),
                        getattr(self.ui, "PC_useChamber2_radio", None)):
+                if rb:
+                    rb.toggled.connect(self._on_pc_radio_toggled)
+        except Exception:
+            pass
+
+        try:
+            if hasattr(self.ui, "PC_useChamber1_radio"):
+                self.ui.PC_useChamber1_radio.setChecked(True)
+            for rb in (getattr(self.ui, "PC_useChamber1_radio", None),
+                    getattr(self.ui, "PC_useChamber2_radio", None)):
                 if rb:
                     rb.toggled.connect(self._on_pc_radio_toggled)
         except Exception:

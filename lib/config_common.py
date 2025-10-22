@@ -83,7 +83,7 @@ IG_REIGNITE_BACKOFF_MS = [2000, 5000, 10000]
 # RF Power 보정 및 제어 설정(공통)
 # ======================================================================
 RF_MAX_POWER = 600
-RF_RAMP_STEP = 1.0
+RF_RAMP_STEP = 3.0
 RF_MAINTAIN_STEP = 0.1
 RF_TOLERANCE_POWER = 1
 # 보정계수

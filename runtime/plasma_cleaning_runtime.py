@@ -81,6 +81,12 @@ class PlasmaCleaningRuntime:
         self._rf_target_evt = asyncio.Event()   # ★ 목표 도달 이벤트 대기용
         self._state_header: str = ""            # ★ 현재 단계 제목 보관
 
+        # ▶ 공정(Process) 타이머 활성화 여부 (SP4/IG 대기는 False)
+        self._process_timer_active: bool = False
+
+        # ▶ 종료/정지 후 UI 복원용 시작 시 분 값 저장소
+        self._last_process_time_min: Optional[float] = None
+
         # 로그/상태 위젯
         self._w_log = (
             _safe_get(ui, f"{self.prefix.lower()}logMessage_edit")
@@ -363,30 +369,21 @@ class PlasmaCleaningRuntime:
             try:
                 await asyncio.wait_for(self._rf_target_evt.wait(), timeout=180.0)
                 self.append_log("RF", "목표 파워 안정 → 프로세스 타이머 시작 가능")
+                # ▶ 이제부터만 ProcessTime_edit에 카운트다운을 표시
+                self._process_timer_active = True
             except asyncio.TimeoutError:
-                # 도달 실패 시, 여기서 예외를 올려 공정을 안전 종료
-                self.append_log("RF", "목표 파워 미도달(60s timeout) → 중단")
+                self.append_log("RF", "목표 파워 미도달(180s timeout) → 중단")
+                self._process_timer_active = False
+                raise
+            except Exception:
+                self._process_timer_active = False
                 raise
 
-        # 8초 타임아웃 + 강제 정리
+        # (통일) 모든 종료 경로는 안전 정지 루틴 사용 → 램프다운 완료까지 대기
         async def _rf_stop() -> None:
-            if not self.rf:
-                return
-            try:
-                self.append_log("STEP", "종료: RF STOP 실행")   # ← 수정
-                await asyncio.wait_for(self.rf.cleanup(), timeout=8.0)
-                self.append_log("STEP", "종료: RF STOP 완료")   # ← 수정
-            except asyncio.TimeoutError:
-                self.append_log("RF", "cleanup timeout → 강제 종료 진행")
-                # failsafe: 0 W로 쓰고 SET도 내려 안전종료 보장
-                with contextlib.suppress(Exception):
-                    if self.plc:
-                        await self.plc.power_write(0.0, family="DCV", write_idx=1)
-                with contextlib.suppress(Exception):
-                    if self.plc:
-                        await self.plc.power_enable(False, family="DCV", set_idx=1)
-            except Exception as e:
-                self.append_log("RF", f"cleanup error: {e!r}")
+            # ▶ 공정 카운트다운 표시 비활성화 (정상/비정상 종료 모두 커버)
+            self._process_timer_active = False
+            await self._safe_rf_stop()
 
         # ---- UI
         def _show_state(text: str) -> None:
@@ -409,11 +406,12 @@ class PlasmaCleaningRuntime:
             else:
                 self._set_state_text(tail)
 
-            # 2) Process Time 칸에도 동일한 카운트다운 숫자 표시
-            w = getattr(self.ui, "PC_ProcessTime_edit", None)
-            if w and hasattr(w, "setPlainText"):
-                with contextlib.suppress(Exception):
-                    w.setPlainText(tail)
+            # 2) Process Time 칸 표기는 '공정 카운트다운'일 때만
+            if getattr(self, "_process_timer_active", False):
+                w = getattr(self.ui, "PC_ProcessTime_edit", None)
+                if w and hasattr(w, "setPlainText"):
+                    with contextlib.suppress(Exception):
+                        w.setPlainText(tail)
 
         # 컨트롤러 생성
         return PlasmaCleaningController(
@@ -447,10 +445,6 @@ class PlasmaCleaningRuntime:
             try:
                 meas = await self.plc.rf_read_fwd_ref()  # ← 보정 적용
                 self.append_log("PLC", f"RF READ FWD={meas['forward']:.1f} W, REF={meas['reflected']:.1f} W")
-                # 디버그용 원시 ADC가 필요하면 아래 3줄을 임시로 풀어 쓰세요.
-                # f_raw = await self.plc.read_reg_name("DCV_READ_2")
-                # r_raw = await self.plc.read_reg_name("DCV_READ_3")
-                # self.append_log("PLC", f"(ADC FWD={f_raw}, REF={r_raw})")
             except Exception as e:
                 self.append_log("PLC", f"RF READ 실패: {e!r}")
 
@@ -519,6 +513,9 @@ class PlasmaCleaningRuntime:
         # 1) 파라미터 수집
         p = self._read_params_from_ui()
 
+        # ▶ 종료/정지 후 복원에 사용할 시작 시 분 값 저장
+        self._last_process_time_min = float(p.process_time_min)
+
         # 1.5) 파일 로그 오픈
         self._open_run_log(p)
         self.append_log("PC", "파일 로그 시작")  # 파일에도 남음
@@ -540,6 +537,8 @@ class PlasmaCleaningRuntime:
             self.append_log("PC", f"오류: {e!r}")
         finally:
             self._running = False
+            # ▶ 공통 UI 초기화(시작 시 분 값으로 복원)
+            self._reset_ui_state(restore_time_min=self._last_process_time_min)
             self._set_state_text("IDLE")
             self.append_log("PC", "파일 로그 종료")
             self._close_run_log()        # ★ 반드시 닫기
@@ -558,6 +557,7 @@ class PlasmaCleaningRuntime:
             t.cancel()
 
         self._running = False
+        self._process_timer_active = False     # ▶ 공정 타이머 모드 해제
         self._set_state_text("STOPPED")
         self.append_log("PC", "사용자에 의해 중지")
 
@@ -565,19 +565,25 @@ class PlasmaCleaningRuntime:
         with contextlib.suppress(Exception):
             self._close_run_log()
 
+        # ▶ STOP 후에도 챔버 공정처럼 UI를 초깃값으로 복구
+        self._reset_ui_state(restore_time_min=self._last_process_time_min)
+
     async def _safe_rf_stop(self) -> None:
+        # ▶ 방어: 어떤 경로로 불려도 카운트다운 표시는 종료
+        self._process_timer_active = False
+
         if not self.rf:
             return
         # 1) ramp-down 시작
         try:
-            await asyncio.wait_for(self.rf.cleanup(), timeout=8.0)
+            await asyncio.wait_for(self.rf.cleanup(), timeout=5.0)
         except asyncio.TimeoutError:
             self.append_log("RF", "cleanup timeout → 계속 진행")
 
         # 2) ramp-down 완료 신호 대기
         ok = False
         try:
-            ok = await self.rf.wait_power_off(timeout_s=8.0)
+            ok = await self.rf.wait_power_off(timeout_s=15.0)
         except Exception as e:
             self.append_log("RF", f"wait_power_off error: {e!r}")
 
@@ -615,6 +621,8 @@ class PlasmaCleaningRuntime:
             elif ev.kind == "target_reached":   # ★ 추가
                 self.append_log("RF", "목표 파워 도달")
                 self._rf_target_evt.set()
+            elif ev.kind == "power_off_finished":   # ★ 추가
+                self.append_log("RF", "Power OFF finished")
 
     # =========================
     # 내부 헬퍼들
@@ -780,6 +788,57 @@ class PlasmaCleaningRuntime:
                 fp.close()
             except Exception:
                 pass
+
+    def _reset_ui_state(self, *, restore_time_min: Optional[float] = None) -> None:
+        """종료 또는 STOP 후 UI를 초기 상태로 되돌림(챔버 공정과 동일한 체감).
+        - 상태표시: IDLE
+        - ProcessTime_edit: 시작 시 분 값으로 복원(있으면), 없으면 건드리지 않음
+        - FWD/REF 표시칸: 공백
+        - Start/Stop 버튼: Start=enabled, Stop=disabled
+        - 내부 플래그: 카운트다운 비활성, 상태 헤더 제거, 목표 도달 이벤트 클리어
+        """
+        # 내부 플래그/이벤트 정리
+        self._process_timer_active = False
+        self._state_header = ""
+        with contextlib.suppress(Exception):
+            self._rf_target_evt.clear()
+
+        # 상태 텍스트
+        self._set_state_text("IDLE")
+
+        # ProcessTime 복원
+        if restore_time_min is not None:
+            with contextlib.suppress(Exception):
+                w = getattr(self.ui, "PC_ProcessTime_edit", None)
+                if w and hasattr(w, "setPlainText"):
+                    w.setPlainText(f"{float(restore_time_min):.1f}")
+
+        # FWD/REF 표시칸 초기화
+        with contextlib.suppress(Exception):
+            for_w = getattr(self.ui, "PC_forP_edit", None)
+            ref_w = getattr(self.ui, "PC_refP_edit", None)
+            if for_w and hasattr(for_w, "setPlainText"):
+                for_w.setPlainText("")
+            if ref_w and hasattr(ref_w, "setPlainText"):
+                ref_w.setPlainText("")
+
+        # 버튼 상태 복원 (Start 가능, Stop 불가)
+        with contextlib.suppress(Exception):
+            w_start = _find_first(self.ui, [
+                f"{self.prefix}Start_button", f"{self.prefix}StartButton",
+                f"{self.prefix.lower()}Start_button", f"{self.prefix.lower()}StartButton",
+                "PC_Start_button", "pcStart_button",
+            ])
+            if w_start and hasattr(w_start, "setEnabled"):
+                w_start.setEnabled(True)
+
+            w_stop = _find_first(self.ui, [
+                f"{self.prefix}Stop_button", f"{self.prefix}StopButton",
+                f"{self.prefix.lower()}Stop_button", f"{self.prefix.lower()}StopButton",
+                "PC_Stop_button", "pcStop_button",
+            ])
+            if w_stop and hasattr(w_stop, "setEnabled"):
+                w_stop.setEnabled(False)
 
 # ─────────────────────────────────────────────────────────────
 # 유틸

@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 ################################################################################
-## Form generated from reading UI file 'CH1&2AzAXoG.ui'
+## Form generated from reading UI file 'CH1&2gYbUoa.ui'
 ##
 ## Created by: Qt User Interface Compiler version 6.9.1
 ##
@@ -15,9 +15,9 @@ from PySide6.QtGui import (QBrush, QColor, QConicalGradient, QCursor,
     QFont, QFontDatabase, QGradient, QIcon,
     QImage, QKeySequence, QLinearGradient, QPainter,
     QPalette, QPixmap, QRadialGradient, QTransform)
-from PySide6.QtWidgets import (QApplication, QCheckBox, QLabel, QPlainTextEdit,
-    QPushButton, QRadioButton, QSizePolicy, QStackedWidget,
-    QWidget)
+from PySide6.QtWidgets import (QApplication, QButtonGroup, QCheckBox, QLabel,
+    QPlainTextEdit, QPushButton, QRadioButton, QSizePolicy,
+    QStackedWidget, QWidget)
 
 class Ui_Form(object):
     def setupUi(self, Form):
@@ -214,21 +214,33 @@ class Ui_Form(object):
         self.pc_logMessage_label.setGeometry(QRect(10, 560, 101, 21))
         self.pc_logMessage_label.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
         self.PC_useChamber1_radio = QRadioButton(self.page_3)
+        self.buttonGroup_2 = QButtonGroup(Form)
+        self.buttonGroup_2.setObjectName(u"buttonGroup_2")
+        self.buttonGroup_2.addButton(self.PC_useChamber1_radio)
         self.PC_useChamber1_radio.setObjectName(u"PC_useChamber1_radio")
         self.PC_useChamber1_radio.setGeometry(QRect(840, 120, 61, 24))
+        self.PC_useChamber1_radio.setAutoExclusive(False)
         self.PC_useChamber2_radio = QRadioButton(self.page_3)
+        self.buttonGroup_2.addButton(self.PC_useChamber2_radio)
         self.PC_useChamber2_radio.setObjectName(u"PC_useChamber2_radio")
         self.PC_useChamber2_radio.setGeometry(QRect(940, 120, 61, 24))
+        self.PC_useChamber2_radio.setAutoExclusive(False)
         self.pc_processState_edit = QPlainTextEdit(self.page_3)
         self.pc_processState_edit.setObjectName(u"pc_processState_edit")
         self.pc_processState_edit.setGeometry(QRect(30, 0, 1021, 61))
         self.pc_processState_edit.setFont(font)
         self.preSputter_useChamber1_radio = QRadioButton(self.page_3)
+        self.buttonGroup = QButtonGroup(Form)
+        self.buttonGroup.setObjectName(u"buttonGroup")
+        self.buttonGroup.addButton(self.preSputter_useChamber1_radio)
         self.preSputter_useChamber1_radio.setObjectName(u"preSputter_useChamber1_radio")
         self.preSputter_useChamber1_radio.setGeometry(QRect(580, 120, 61, 24))
+        self.preSputter_useChamber1_radio.setAutoExclusive(False)
         self.preSputter_useChamber2_radio = QRadioButton(self.page_3)
+        self.buttonGroup.addButton(self.preSputter_useChamber2_radio)
         self.preSputter_useChamber2_radio.setObjectName(u"preSputter_useChamber2_radio")
         self.preSputter_useChamber2_radio.setGeometry(QRect(680, 120, 61, 24))
+        self.preSputter_useChamber2_radio.setAutoExclusive(False)
         self.stackedWidget.addWidget(self.page_3)
         self.page = QWidget()
         self.page.setObjectName(u"page")
