@@ -369,7 +369,7 @@ class PlasmaCleaningRuntime:
                 raise
 
         # 8초 타임아웃 + 강제 정리
-        async def _rf_stop(self) -> None:
+        async def _rf_stop() -> None:
             if not self.rf:
                 return
             try:
@@ -395,12 +395,25 @@ class PlasmaCleaningRuntime:
             self._set_state_text(self._state_header)
 
         def _show_countdown(sec: int) -> None:
-            # 남은 초가 들어오면 "제목 · 05s" 형태로 표시
-            tail = f"{int(sec):02d}s"
+            # mm:ss 형식(1분 미만이면 ss만)으로 tail 구성
+            try:
+                sec = int(sec)
+            except Exception:
+                sec = 0
+            mm, ss = divmod(max(sec, 0), 60)
+            tail = f"{mm:02d}:{ss:02d}" if mm else f"{ss:02d}s"
+
+            # 1) 상단 상태창: "제목 · mm:ss"
             if self._state_header:
                 self._set_state_text(f"{self._state_header} · {tail}")
             else:
                 self._set_state_text(tail)
+
+            # 2) Process Time 칸에도 동일한 카운트다운 숫자 표시
+            w = getattr(self.ui, "PC_ProcessTime_edit", None)
+            if w and hasattr(w, "setPlainText"):
+                with contextlib.suppress(Exception):
+                    w.setPlainText(tail)
 
         # 컨트롤러 생성
         return PlasmaCleaningController(
@@ -585,8 +598,18 @@ class PlasmaCleaningRuntime:
             return
         async for ev in self.rf.events():
             if ev.kind == "display":
-                # 상태창은 카운트다운 유지! → 로그로만 남긴다
+                # 1) 전용 칸(FWD/REF) 갱신
+                for_w = getattr(self.ui, "PC_forP_edit", None)
+                ref_w = getattr(self.ui, "PC_refP_edit", None)
+                with contextlib.suppress(Exception):
+                    if for_w and hasattr(for_w, "setPlainText"):
+                        for_w.setPlainText(f"{float(ev.forward):.1f}")
+                    if ref_w and hasattr(ref_w, "setPlainText"):
+                        ref_w.setPlainText(f"{float(ev.reflected):.1f}")
+
+                # 2) 상태창은 카운트다운 유지 → 덮어쓰지 않고 로그만 남김
                 self.append_log("RF", f"FWD={ev.forward:.1f}, REF={ev.reflected:.1f} (W)")
+                continue
             elif ev.kind == "status":
                 self.append_log("RF", ev.message or "")
             elif ev.kind == "target_reached":   # ★ 추가

@@ -497,23 +497,33 @@ class AsyncDCPulse:
         return {"raw": {"P": P_raw, "I": I_raw, "V": V_raw},
                 "eng": {"P_W": P_W, "I_A": I_A, "V_V": V_V}}
     
-    # 3) 현재 Control Mode 읽기 (0x9C)
+    # 3) 현재 Control Mode 읽기 (0x9C) READ_CTRL_MODE: CHK 제거 후 최하위 바이트 사용
     async def read_control_mode(self) -> Optional[str]:
         resp = await self._read_raw(0x9C, "READ_CTRL_MODE")
         if not resp or len(resp) < 2:
             await self._emit_failed("READ_CTRL_MODE", f"응답 길이 부족: {resp!r}")
             return None
-        val = ((resp[-2] << 8) | resp[-1]) & 0xFF  # 뒤 2바이트만
+        cmd, data, chk = self._unpack_rs232_payload(resp)
+        if cmd != 0x9C or not data:
+            await self._emit_failed("READ_CTRL_MODE", f"형식 오류: raw={resp.hex(' ')}")
+            return None
+        val = data[-1] & 0xFF  # 데이터의 LSB만 사용(CHK 제외)
         mapping = {1: "HOST", 2: "REMOTE", 4: "LOCAL"}
         return mapping.get(val, f"UNKNOWN({val})")
 
-    # 4) Fault Code 읽기 (0x9E)
+    # 4) Fault Code 읽기 (0x9E) READ_FAULT: CHK 제외 후 1B/2B 모두 허용
     async def read_fault_code(self) -> Optional[int]:
         resp = await self._read_raw(0x9E, "READ_FAULT")
         if not resp or len(resp) < 2:
             await self._emit_failed("READ_FAULT", f"응답 길이 부족: {resp!r}")
             return None
-        return (resp[-2] << 8) | resp[-1]  # 뒤 2바이트
+        cmd, data, chk = self._unpack_rs232_payload(resp)
+        if cmd != 0x9E or not data:
+            await self._emit_failed("READ_FAULT", f"형식 오류: raw={resp.hex(' ')}")
+            return None
+        if len(data) >= 2:
+            return (data[-2] << 8) | data[-1]
+        return data[-1]
 
     # ====== 내부: 명령 헬퍼 ======
     def _ok_from_resp(self, resp: Optional[bytes]) -> bool:
@@ -610,13 +620,42 @@ class AsyncDCPulse:
         else:
             await self._emit_failed(label, "응답 없음/실패")
             return False
+        
+    # ❶ [ADD] RS-232 payload 분해 헬퍼: [CMD][DATA...][(ETX?)][CHK] → (cmd, data, chk)
+    def _unpack_rs232_payload(self, resp: bytes):
+        if not resp or len(resp) < 2:
+            return None, b"", None
+        cmd = resp[0]
+        chk = resp[-1]
+        data = resp[1:-1]  # 끝 1바이트는 체크섬 제외
+        # 워커가 ETX(0x03)를 남기는 경우 제거
+        if data and data[-1] == 0x03:
+            data = data[:-1]
+        return cmd, data, chk
 
+    # ❷ [ADD] 1B/2B 데이터 모두 수용하는 플래그 추출
+    def _flags16_from_data(self, data: bytes) -> int | None:
+        if not data:
+            return None
+        if len(data) >= 2:
+            return ((data[-2] << 8) | data[-1]) & 0xFFFF
+        return data[-1] & 0xFF
+
+    # ❸ [REPLACE] READ_STATUS 파싱: CHK 제외 + 1B/2B 모두 처리
     async def read_status_flags(self) -> Optional[int]:
         resp = await self._read_raw(0x90, "READ_STATUS")
         if not resp or len(resp) < 2:
             await self._emit_failed("READ_STATUS", f"응답 길이 부족: {resp!r}")
             return None
-        return (resp[-2] << 8) | resp[-1]  # 뒤 2바이트
+        cmd, data, chk = self._unpack_rs232_payload(resp)
+        if cmd != 0x90:
+            await self._emit_failed("READ_STATUS", f"예상과 다른 CMD: 0x{cmd:02X}, raw={resp.hex(' ')}")
+            return None
+        flags = self._flags16_from_data(data)
+        if flags is None:
+            await self._emit_failed("READ_STATUS", f"데이터 없음: raw={resp.hex(' ')}")
+            return None
+        return flags
 
     @staticmethod
     def _hv_on_from_status(flags: int) -> bool:

@@ -249,7 +249,16 @@ class RFPowerAsync:
         try:
             while self._is_running and self._polling_enabled:
                 try:
-                    res = await self._request_status_read() if self._request_status_read else None
+                    res = None
+                    if self._request_status_read:
+                        try:
+                            # 폴링 주기(예: 1s)의 0.8배 + 최소 0.2s
+                            to = max(0.2, (self._poll_interval_ms / 1000.0) * 0.8)
+                            res = await asyncio.wait_for(self._request_status_read(), timeout=to)
+                        except asyncio.TimeoutError:
+                            await self._emit_status("상태 읽기 요청 timeout")
+                        except Exception as e:
+                            await self._emit_status(f"상태 읽기 요청 실패: {e}")
                     if res is not None:
                         self._ingest_status_result(res)
                 except Exception as e:
@@ -289,6 +298,10 @@ class RFPowerAsync:
             pass
         except Exception as e:
             await self._emit_status(f"램프다운 오류: {e}")
+        finally:
+            # 혹시 위에서 return을 못타고 나온 예외 경로도 완료 신호 보증
+            if not self._is_ramping_down:
+                self._power_off_evt.set()
 
     async def _adjust_once(self):
         """
@@ -425,7 +438,9 @@ class RFPowerAsync:
         if t:
             t.cancel()
             try:
-                await t
+                await asyncio.wait_for(t, timeout=1.0)
+            except asyncio.TimeoutError:
+                pass
             except Exception:
                 pass
             setattr(self, name, None)
