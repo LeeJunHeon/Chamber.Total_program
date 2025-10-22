@@ -746,11 +746,17 @@ class AsyncPLC:
 
     # RF 피드백(Forward/Reflected) 읽기 — DCV_READ_2/3 사용
     async def rf_read_fwd_ref(self) -> dict[str, float]:
+        # 1) 원시값(레지스터) 읽기
         f_raw = await self.read_reg_name("DCV_READ_2")
         r_raw = await self.read_reg_name("DCV_READ_3")
 
+        # 2) 스케일링 (a·raw + b) → W
         f_w = self.cfg.rf_fwd_a * float(f_raw) + self.cfg.rf_fwd_b
         r_w = self.cfg.rf_ref_a * float(r_raw) + self.cfg.rf_ref_b
+
+        # 3) 제로잉 미보정 오프셋을 W 단위에서 단순 차감
+        f_w -= 4.0     # forp idle offset
+        r_w -= 14.0    # refp idle offset
 
         # 음수 방지 & 보기 좋게 반올림(선택)
         f_w = round(max(0.0, f_w), 1)
