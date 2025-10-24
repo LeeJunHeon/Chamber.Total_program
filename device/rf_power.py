@@ -59,6 +59,7 @@ class RFPowerAsync:
         reflected_threshold_w: float = 10.0,
         reflected_wait_timeout_s: float = 60.0,
         maintain_need_consecutive: int = 2,
+        direct_mode: bool = False,   # ★ 추가: 즉시 설정/즉시 OFF 모드
     ):
         """
         send_rf_power:              검증 응답을 기대하는 전송 (예: AsyncFaduino.set_rf_power)
@@ -110,6 +111,9 @@ class RFPowerAsync:
         self._power_off_evt = asyncio.Event()   # ★ 추가: 완료 대기용 내부 Event
 
         self._polling_enabled = True
+
+        #ramp up 없이 direct
+        self._direct_mode = bool(direct_mode)  # ★ 추가
 
     # ======= 이벤트 스트림 =======
     async def events(self) -> AsyncGenerator[RFPowerEvent, None]:

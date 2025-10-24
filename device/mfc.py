@@ -270,12 +270,23 @@ class AsyncMFC:
         self._stab_target_hw = 0.0
         self._stab_pending_cmd = None
 
+        '''
+        비트 마스크 사용 -> 단일 채널로(Plasma Cleaning 때문)
         # 섀도우 마스크에서 해당 채널만 1로 켜기
         target = self._mask_set(channel, True)
 
         # L0 전송(no-reply) → 섀도우 갱신
         self._enqueue(self._mk_cmd("SET_ONOFF_MASK", target), None,
                       allow_no_reply=True, tag=f"[L0 {target}]", gap_ms=4000) # flow 검증을 안하니 여유있게
+        self._mask_shadow = target
+        '''
+
+        # 섀도우 마스크 갱신(내부 상태 유지용)
+        target = self._mask_set(channel, True)
+
+        # ▶ 개별 채널 ON (L{ch}1) — 마스크(L0) 금지
+        self._enqueue(self._mk_cmd("FLOW_ON", channel=channel), None,
+                    allow_no_reply=True, tag=f"[FLOW_ON ch{channel}]")
         self._mask_shadow = target
 
         # 장비 반영 대기(예전 코드와 동일한 최소 대기 보장)
@@ -309,12 +320,23 @@ class AsyncMFC:
         self.last_setpoints[channel] = 0.0
         self.flow_error_counters[channel] = 0
 
+        '''
+        비트 마스크 사용 -> 단일 채널로(Plasma Cleaning 때문)
         # 섀도우 마스크에서 해당 채널만 0으로 끄기
         target = self._mask_set(channel, False)
 
         # L0 전송(no-reply) → 섀도우 갱신
         self._enqueue(self._mk_cmd("SET_ONOFF_MASK", target), None,
                       allow_no_reply=True, tag=f"[L0 {target}]")
+        self._mask_shadow = target
+        '''
+
+        # 섀도우 마스크 갱신(내부 상태 유지용)
+        target = self._mask_set(channel, False)
+
+        # ▶ 개별 채널 OFF (L{ch}0) — 마스크(L0) 금지
+        self._enqueue(self._mk_cmd("FLOW_OFF", channel=channel), None,
+                    allow_no_reply=True, tag=f"[FLOW_OFF ch{channel}]")
         self._mask_shadow = target
 
         # 장비 반영 대기 후 확정

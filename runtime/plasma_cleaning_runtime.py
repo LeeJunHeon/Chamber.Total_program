@@ -19,9 +19,6 @@ from device.ig import AsyncIG  # IG 직접 주입 지원
 from controller.plasma_cleaning_controller import PlasmaCleaningController, PCParams
 from device.rf_power import RFPowerAsync, RFPowerEvent
 
-# 플라즈마 클리닝 ‘전용’ UI→장치 전달 보정(채널별)
-_PC_FLOW_UI_SCALE = {1: 1.0, 2: 0.1, 3: 0.1}  # ← PC에서만 적용
-
 class PlasmaCleaningRuntime:
     """
     Plasma Cleaning 전용 런타임 (그래프/데이터로거 미사용 버전)
@@ -365,8 +362,7 @@ class PlasmaCleaningRuntime:
                 raise RuntimeError("mfc_gas not bound")
             gi = int(gas_idx)
             self._pc_gas_idx = gi  # ← 런타임에 보관해서 이후 스케일에 사용
-            scale = _PC_FLOW_UI_SCALE.get(gi, 1.0)
-            self.append_log("PC", f"GasFlow → MFC1 ch{gi} (PC scale x{scale:g})")
+            self.append_log("PC", f"GasFlow → MFC1 ch{gi}")
             await self.mfc_gas.gas_select(gi)  # MFC 내부 '선택 채널' 갱신
 
         async def _mfc_flow_set_on(flow_sccm: float) -> None:
@@ -375,10 +371,9 @@ class PlasmaCleaningRuntime:
                 raise RuntimeError("mfc_gas not bound")
             # ← gas_idx는 직전에 _mfc_gas_select에서 self._pc_gas_idx로 저장됨
             ch   = getattr(self, "_pc_gas_idx", 3)
-            req  = float(max(0.0, flow_sccm))
-            ui   = req * float(_PC_FLOW_UI_SCALE.get(ch, 1.0))  # PC 전용 보정
+            ui   = float(max(0.0, flow_sccm))   # 이중 스케일 제거
 
-            self.append_log("MFC", f"FLOW_SET_ON(sel ch={ch}) -> {ui:.1f} sccm (PC only, req {req:.1f})")
+            self.append_log("MFC", f"FLOW_SET_ON(sel ch={ch}) -> {ui:.1f} sccm")
             await mfc.flow_set_on(ui)  # 선택 채널 기준의 개별 ON/안정화
 
         async def _mfc_flow_off() -> None:
@@ -699,18 +694,8 @@ class PlasmaCleaningRuntime:
                 await self.mfc_pressure.valve_open()
                 self.append_log("STEP", "종료: MFC(SP4) VALVE OPEN OK")
 
-        # 3) 게이트밸브 닫기(있으면)
-        with contextlib.suppress(Exception):
-            if self.plc:
-                self.append_log("STEP", f"종료: GateValve CH{self._selected_ch} CLOSE")
-                await self.plc.gate_valve(self._selected_ch, open=False, momentary=True)
-                # (선택) 표시램프가 꺼질 때까지 짧게 대기
-                with contextlib.suppress(Exception):
-                    for _ in range(10):  # 최대 ~2초
-                        lamp = await self.plc.read_bit(f"G_V_{self._selected_ch}_OPEN_LAMP")
-                        if not lamp:
-                            break
-                        await asyncio.sleep(0.2)
+        # 3) 게이트밸브 OPEN 유지(정책) — 닫기 생략
+        self.append_log("STEP", f"종료: GateValve CH{self._selected_ch} 유지(OPEN)")
 
         # 4) (선택) 이벤트 펌프 태스크 정리
         for t in getattr(self, "_event_tasks", []):

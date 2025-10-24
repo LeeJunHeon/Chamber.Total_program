@@ -273,15 +273,15 @@ class PlasmaCleaningController:
                 self._log("MFC", f"SP4_ON 실패: {e!r}")  # ★ LOG
                 raise
 
-            self._log("MFC", "[SOAK] SP4_ON → 60s 대기 시작")
-            self._show_state("SP4 Soak")  # ★ 제목은 1회 고정
-            for left in range(60, 0, -1):
+            self._log("MFC", "SP4_ON → 120s 대기 시작")
+            self._show_state("SP4 Waiting")  # ★ 제목은 1회 고정
+            for left in range(120, 0, -1):
                 if self._stop_evt.is_set():
-                    self._log("STEP", "STOP during SP4 soak → abort before RF")
+                    self._log("STEP", "STOP during SP4 waiting → abort before RF")
                     raise asyncio.CancelledError()
                 self._show_countdown(left)  # ★ 숫자만 갱신
                 await asyncio.sleep(1.0)
-            self._log("MFC", "[SOAK] 60s 완료")
+            self._log("MFC", "SP4_ON 대기 120s 완료")
 
             # 6) RF POWER(PLC DAC) 설정
             self._log("RF", f"RF Power 적용: {p.rf_power_w:.1f} W")
@@ -338,28 +338,8 @@ class PlasmaCleaningController:
             except Exception as e:
                 self._log("MFC", f"종료 동작 실패: {e!r}")
 
-            try:
-                # 4) GV 인터락 TRUE면 CLOSE_SW → 5초 후 OPEN_LAMP FALSE?
-                self._log("PLC", "GV 인터락 재확인 후 CLOSE_SW")
-                ok = await self._plc_check_gv_interlock()
-                self._log("PLC", f"종료시 인터락={ok}")
-                if ok:
-                    await self._plc_gv_close()
-                    await asyncio.sleep(5.0)
-                    lamp = await self._plc_read_gv_open_lamp()
-                    if lamp:
-                        self._log("PLC", "CLOSE 후에도 OPEN_LAMP=TRUE → GV CLOSE 실패 처리")
-                        if self.last_result == "success":
-                            self.last_result = "fail"
-                            self.last_reason = "GV CLOSE 실패(OPEN_LAMP TRUE)"
-                else:
-                    self._log("PLC", "인터락 FALSE → CLOSE_SW 스킵")
-                    if self.last_result == "success":
-                        self.last_result = "fail"
-                        self.last_reason = "GV 인터락 FALSE(닫힘 확인 불가)"
-
-            except Exception as e:
-                self._log("PLC", f"GV 종료 실패: {e!r}")
+            # 3) Gate Valve OPEN 유지(정책 반영) — 닫기 생략
+            self._log("PLC", "GV는 공정 종료 후 OPEN 유지(닫기 생략)")
 
             self.is_running = False
             self._show_state("IDLE")
@@ -377,7 +357,7 @@ class PlasmaCleaningController:
                     # ★ 추가: fail이어도 STOP이면 뱃지 부여
                     if (self.last_result == "stop") or ("사용자 STOP" in (self.last_reason or "")):
                         payload["stopped"] = True
-                        
+
                 self.chat.notify_process_finished_detail(ok, payload)
                 self._final_notified = True
 
