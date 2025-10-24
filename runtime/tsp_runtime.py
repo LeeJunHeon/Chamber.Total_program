@@ -180,6 +180,15 @@ class TSPPageController:
     def on_start_clicked(self) -> None:
         if self._busy:
             self._log("이미 실행 중입니다."); return
+
+        # ★ CH1 공정 중이면 시작 자체 차단(태스크 생성 이전)
+        try:
+            if runtime_state.is_running(1):
+                self._log("[TSP] CH1이 공정 중이라서 시작할 수 없습니다. 종료 후 다시 시도하세요.")
+                return
+        except Exception:
+            pass
+
         try:
             target = self._read_target()
             cycles = self._read_cycles()
@@ -277,6 +286,13 @@ class TSPPageController:
                 self.chat.notify_process_started(params)
 
             result = await ctrl.run(cfg)
+
+            # 사이클 전체 상한: (on+off)×cycles + 여유 5분
+            total_timeout = cycles * (cfg.on_sec + cfg.off_sec) + 300.0
+            try:
+                result = await asyncio.wait_for(ctrl.run(cfg), timeout=total_timeout)
+            except asyncio.TimeoutError:
+                raise RuntimeError(f"TSP run timed out after {total_timeout:.0f}s")
 
             # UI 표시는 유지
             if result.final_pressure == result.final_pressure:
