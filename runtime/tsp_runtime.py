@@ -455,7 +455,11 @@ class TSPPageController:
         self._schedule_repeat_daily = bool(repeat_daily)
 
         # ✅ running 여부와 무관하게 안전: 현재 set된 이벤트 루프를 얻어서 create_task
-        loop = asyncio.get_event_loop_policy().get_event_loop()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.get_event_loop_policy().get_event_loop()
+
         self._schedule_task = loop.create_task(
             self._schedule_loop(when), name="TSPStartScheduler"
         )

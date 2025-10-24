@@ -60,6 +60,7 @@ class PlasmaCleaningController:
         # UI
         show_state: Callable[[str], None],
         show_countdown: Callable[[int], None],
+        chat_notifier: Optional[Any] = None,   # ★ 추가
     ) -> None:
         self._log = log
         self._plc_check_gv_interlock = plc_check_gv_interlock
@@ -90,6 +91,9 @@ class PlasmaCleaningController:
 
         self.last_result: str = "success"
         self.last_reason: str = ""
+
+        self.chat = chat_notifier              # ★ 보관
+        self._final_notified = False           # ★ 중복발송 가드(권장)
 
     # ─────────────────────────────────────────────────────────────
     # 외부(UI/런타임)에서 쓰는 API
@@ -123,14 +127,14 @@ class PlasmaCleaningController:
 
     def on_mfc_failed(self, cmd: str, reason: str) -> None:
         self._log("MFC", f"명령 실패: {cmd} ({reason})")
-        # ▶ Gas 안정화/압력 제어 관련 실패는 즉시 중단
         c = (cmd or "").upper()
         if any(key in c for key in ("FLOW", "SP4", "PRESSURE")):
+            # ▼ 결과/사유 남기기
+            self.last_result = "fail"
+            self.last_reason = f"MFC fail: {cmd} ({reason})"
             self._log("PC", "Gas/Pressure 안정화 실패 → 공정 중단 요청")
-            try:
+            with contextlib.suppress(Exception):
                 self._show_state("Gas stabilize failed → STOP")
-            except Exception:
-                pass
             self._stop_evt.set()
 
     # ─────────────────────────────────────────────────────────────
@@ -152,6 +156,15 @@ class PlasmaCleaningController:
             f"IG_target={p.target_pressure:.3e} Torr, SP4={p.sp4_setpoint_mTorr:.2f} mTorr, "
             f"RF={p.rf_power_w:.1f} W, time={p.process_time_min:.1f} min")
         )
+
+        # 시작 카드 (컨트롤러가 직접)
+        if self.chat:
+            self.chat.notify_process_started({
+                "process_note":  "Plasma Cleaning",
+                "process_time":  float(p.process_time_min),
+                "use_rf_power":  True,
+                "rf_power":      float(p.rf_power_w),
+            })
 
         try:
             # 1) PLC - 게이트밸브 인터락 확인 → OPEN_SW → 5초 후 OPEN_LAMP TRUE?
@@ -296,6 +309,11 @@ class PlasmaCleaningController:
         except asyncio.CancelledError:
             self.last_result = "stop"
             self.last_reason = "사용자 STOP"
+            # STOP 이벤트로 중단이면 실패로 기록
+            if self._stop_evt.is_set():
+                self.last_result = "fail"
+                if not getattr(self, "last_reason", ""):
+                    self.last_reason = "Stopped by MFC/pressure failure"
             self._log("PC", "CancelledError: 외부 STOP 또는 경쟁 종료로 중단")
         except Exception as e:
             # ★ LOG: 예외 스택 트레이스까지 남김
@@ -346,4 +364,20 @@ class PlasmaCleaningController:
             self.is_running = False
             self._show_state("IDLE")
             self._log("PC", "플라즈마 클리닝 종료")
+
+            # 최종 카드 (컨트롤러가 직접, 단 1회)
+            if self.chat and not self._final_notified:
+                ok = (self.last_result == "success")
+                payload = {"process_name": "Plasma Cleaning"}
+                if not ok:
+                    payload["reason"] = (
+                        self.last_reason or
+                        ("사용자 STOP" if self.last_result == "stop" else "원인 미상")
+                    )
+                    # ★ 추가: fail이어도 STOP이면 뱃지 부여
+                    if (self.last_result == "stop") or ("사용자 STOP" in (self.last_reason or "")):
+                        payload["stopped"] = True
+                        
+                self.chat.notify_process_finished_detail(ok, payload)
+                self._final_notified = True
 
