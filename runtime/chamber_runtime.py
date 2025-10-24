@@ -656,13 +656,17 @@ class ChamberRuntime:
                 elif kind == "started":
                     params = payload.get("params", {}) or {}
 
-                    # ✅ 시작 카드 전송(건/타겟, 파워, Shutter Delay, Process Time 포함)
+                    # ✅ 시작 카드 전송(성공 시 로그 X, 실패만 로그)
                     if self.chat:
-                        with contextlib.suppress(Exception):
-                            p = dict(params)
-                            p.setdefault("ch", self.ch)  # 라우팅 힌트
-                            p = self._format_card_payload_for_chat(p)  # 👈 카드용 정리
-                            self.chat.notify_process_started(p)
+                        p = dict(params)
+                        p.setdefault("ch", self.ch)  # 라우팅 힌트
+                        p = self._format_card_payload_for_chat(p)  # 카드용 정리
+                        try:
+                            ret = self.chat.notify_process_started(p)
+                            if inspect.iscoroutine(ret):
+                                await ret
+                        except Exception as e:
+                            self.append_log("CHAT", f"구글챗 시작 카드 전송 실패: {e!r}")
 
                     # 로그/세션 준비
                     if not getattr(self, "_log_file_path", None):
@@ -693,9 +697,16 @@ class ChamberRuntime:
                     ok_for_log = bool(detail.get("ok_for_log", ok))
                     self.data_logger.finalize_and_write_log(ok_for_log)
                     await asyncio.sleep(0.20)
+
+                    # ✅ 종료 카드 전송(성공 시 로그 X, 실패만 로그)
                     if self.chat:
-                        with contextlib.suppress(Exception):
-                            self.chat.notify_process_finished_detail(ok, detail)
+                        try:
+                            ret = self.chat.notify_process_finished_detail(ok, detail)
+                            if inspect.iscoroutine(ret):
+                                await ret
+                        except Exception as e:
+                            self.append_log("CHAT", f"구글챗 종료 카드 전송 실패: {e!r}")
+
                     try:
                         self.mfc.on_process_finished(ok)
                     except Exception:
@@ -743,8 +754,12 @@ class ChamberRuntime:
 
                 elif kind == "aborted":
                     if self.chat:
-                        with contextlib.suppress(Exception):
-                            self.chat.notify_text(f"🛑 CH{self.ch} 공정 중단")
+                        try:
+                            ret = self.chat.notify_text(f"🛑 CH{self.ch} 공정 중단")
+                            if inspect.iscoroutine(ret):
+                                await ret
+                        except Exception as e:
+                            self.append_log("CHAT", f"구글챗 중단 알림 전송 실패: {e!r}")
                     with contextlib.suppress(Exception):
                         self._clear_queue_and_reset_ui()
 
