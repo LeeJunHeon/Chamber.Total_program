@@ -224,15 +224,28 @@ class MainWindow(QWidget):
             if hinted_ch in (1, 2):
                 self._route_log_to(hinted_ch, "PLC", msg)
                 return
+            
         if self._plc_owner in (1, 2):
             self._route_log_to(self._plc_owner, "PLC", msg)
             return
+        
+        # ▼ Plasma Cleaning 실행 중이면 PC 로그에만 보냄(방송하지 않음)
+        try:
+            pc = getattr(self, "pc", None)
+            if pc and (
+                (hasattr(pc, "is_running") and pc.is_running()) or
+                bool(getattr(pc, "_running", False))
+            ):
+                pc.append_log("PLC(Global)", msg)
+                return
+        except Exception:
+            pass
+        
+        # ▼ 기본: 방송 모드(CH1/CH2)
         if getattr(self, "ch1", None):
             self.ch1.append_log("PLC(Global)", msg)
         if getattr(self, "ch2", None):
             self.ch2.append_log("PLC(Global)", msg)
-        if getattr(self, "pc", None):
-            self.pc.append_log("PLC(Global)", msg)
 
     def _broadcast_log(self, source: str, msg: str) -> None:
         try:

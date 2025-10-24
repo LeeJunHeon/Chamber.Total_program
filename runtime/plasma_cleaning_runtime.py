@@ -112,6 +112,10 @@ class PlasmaCleaningRuntime:
         if self.ig is not None:
             self._bind_ig_device(self.ig)
 
+        @property
+        def is_running(self) -> bool:
+            return bool(getattr(self, "_running", False))
+
     # =========================
     # MFC/IG/RFpower 이벤트 펌프
     # =========================
@@ -549,42 +553,47 @@ class PlasmaCleaningRuntime:
             w_stop.clicked.connect(lambda: asyncio.ensure_future(self._on_click_stop()))
 
     async def _on_click_start(self) -> None:
-        if self._running:
-            self.append_log("PC", "이미 실행 중입니다.")
-            return
-
         # 1) 파라미터 수집
         p = self._read_params_from_ui()
-
-        # ▶ 종료/정지 후 복원에 사용할 시작 시 분 값 저장
         self._last_process_time_min = float(p.process_time_min)
+
+        # 1.2) 실행 상태로 버튼 전환 + 상태 텍스트 (중복 클릭 방지)
+        self._running = True
+        self._set_running_ui_state()
+        self._set_state_text("Preparing…")  # 선택
 
         # 1.5) 파일 로그 오픈
         self._open_run_log(p)
-        self.append_log("PC", "파일 로그 시작")  # 파일에도 남음
+        self.append_log("PC", "파일 로그 시작")
 
-        # 2) 프리플라이트(연결/이벤트펌프) — 실패 시 바로 종료
+        # 2) 프리플라이트 — 실패 시 UI/파일 복구 후 종료
         try:
             await self._preflight_connect(timeout_s=10.0)
         except Exception as e:
             self.append_log("PC", f"오류: {e!r}")
+            self._running = False
+            try:
+                self._close_run_log()
+            except Exception:
+                pass
+            # 시작 시 분 값으로 복원
+            self._reset_ui_state(restore_time_min=self._last_process_time_min)
             return
 
         # 4) 컨트롤러 실행
         success = False
-        self._running = True
         try:
-            await self.pc._run(p)   # 공정 전체 수행(Stop 누르면 내부에서 안전 종료)
+            await self.pc._run(p)   # Stop을 누르면 내부에서 안전 종료
             success = True
         except Exception as e:
             self.append_log("PC", f"오류: {e!r}")
         finally:
             self._running = False
-            # ▶ 공통 UI 초기화(시작 시 분 값으로 복원)
+            # ▶ 공정 종료 후 초기 UI 복귀
             self._reset_ui_state(restore_time_min=self._last_process_time_min)
             self._set_state_text("IDLE")
             self.append_log("PC", "파일 로그 종료")
-            self._close_run_log()        # ★ 반드시 닫기
+            self._close_run_log()
 
     async def _on_click_stop(self) -> None:
         # 1) 컨트롤러 루프 중단 요청
@@ -644,6 +653,25 @@ class PlasmaCleaningRuntime:
     # =========================
     # 내부 헬퍼들
     # =========================
+    def _set_running_ui_state(self) -> None:
+        """공정 실행 중 UI 상태 (Start 비활성, Stop 활성)"""
+        with contextlib.suppress(Exception):
+            w_start = _find_first(self.ui, [
+                f"{self.prefix}Start_button", f"{self.prefix}StartButton",
+                f"{self.prefix.lower()}Start_button", f"{self.prefix.lower()}StartButton",
+                "PC_Start_button", "pcStart_button",
+            ])
+            if w_start and hasattr(w_start, "setEnabled"):
+                w_start.setEnabled(False)
+
+            w_stop = _find_first(self.ui, [
+                f"{self.prefix}Stop_button", f"{self.prefix}StopButton",
+                f"{self.prefix.lower()}Stop_button", f"{self.prefix.lower()}StopButton",
+                "PC_Stop_button", "pcStop_button",
+            ])
+            if w_stop and hasattr(w_stop, "setEnabled"):
+                w_stop.setEnabled(True)
+
     async def _shutdown_rest_devices(self) -> None:
         """
         RF가 완전히 내려간 뒤 실행할 공용 ‘종료 시퀀스’.

@@ -284,11 +284,17 @@ class ChamberRuntime:
         mfc_host, mfc_port = self.cfg.MFC_TCP
         ig_host,  ig_port  = self.cfg.IG_TCP
 
+        # 설정에서 채널별 스케일 정보를 불러와 주입
+        try:
+            scale_map = getattr(self.cfg, "MFC_SCALE_FACTORS", {1: 1.0, 2: 1.0, 3: 1.0})
+        except Exception:
+            scale_map = {1: 1.0, 2: 1.0, 3: 1.0}
+
         # MFC/IG를 외부에서 주입하면 그대로 사용하고, 없으면 기존 방식대로 생성
         self.mfc = mfc or AsyncMFC(
             host=mfc_host, port=mfc_port, enable_verify=False, enable_stabilization=True,
             # ★ 챔버별 스케일을 드라이버에 주입
-            scale_factors=getattr(self.cfg, "MFC_SCALE_FACTORS", {})
+            scale_factors=scale_map,  # ✅ CH별 MFC 스케일 전달
         )
         self.ig  = ig or AsyncIG(host=ig_host, port=ig_port)
 
