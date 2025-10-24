@@ -141,7 +141,7 @@ class PlasmaCleaningRuntime:
                         self.pc.on_mfc_failed(getattr(ev, "cmd", "") or "", getattr(ev, "reason", "") or "unknown")
                 except Exception:
                     pass
-                
+
             elif k == "flow":
                 gas  = getattr(ev, "gas", "") or ""
                 flow = float(getattr(ev, "value", 0.0) or 0.0)
@@ -773,7 +773,7 @@ class PlasmaCleaningRuntime:
         try:
             if self.chat:
                 text = (msg or "")
-                if any(k in text for k in ("오류", "실패", "에러", "FAIL", "ERROR")):
+                if any(k in text for k in ("오류", "에러", "FAIL", "ERROR")):
                     self.chat.notify_error_with_src(src, text)
         except Exception:
             pass

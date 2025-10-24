@@ -403,7 +403,7 @@ class AsyncDCPulse:
         """0x80: 1=ON, 2=OFF."""
         return await self._write_cmd_data(0x80, 0x0001, 2, label="OUTPUT_ON")
 
-    async def output_off(self):
+    async def output_off(self) -> bool:
         await self._write_cmd_data(0x80, 0x0002, 2, label="OUTPUT_OFF")
 
     async def set_pulse_sync(self, mode: Literal["int","ext"]):
@@ -521,7 +521,11 @@ class AsyncDCPulse:
         return data[-1]
 
     # ====== 내부: 명령 헬퍼 ======
-    def _ok_from_resp(self, resp: Optional[bytes]) -> bool:
+    def _ok_from_resp(self, resp: Optional[bytes], *, label: str = "") -> bool:
+        if label in ("OUTPUT_ON", "OUTPUT_OFF"):
+            # 출력 on/off 는 반드시 1바이트 ACK(0x06)만 성공으로 인정
+            return bool(resp) and len(resp) == 1 and resp[0] == 0x06
+    
         if not resp:
             return False
         # RS-232 write echo: 0x06=ACK(성공), 0x04=ERR(실패)
@@ -540,39 +544,21 @@ class AsyncDCPulse:
         payload = self._proto.pack_write(cmd, value, width=width)
         self._enqueue(Command(payload, label, DCP_TIMEOUT_MS, DCP_GAP_MS, 3, _cb))
         resp = await self._await_reply_bytes(label, fut)
-        ok = self._ok_from_resp(resp)
+        ok = self._ok_from_resp(resp, label=label)  # ← label 전달
 
         if label in ("OUTPUT_ON", "OUTPUT_OFF"):
             intended_on = (label == "OUTPUT_ON")
 
-            if ok:
-                self._out_on = intended_on
-                await self._emit_confirmed(label)
-
-                if intended_on:
-                    # ★ (변경) 즉시 폴링 시작하지 않고 5초 대기 후 폴링 시작
-                    try:
-                        await asyncio.sleep(ACTIVATION_CHECK_DELAY_S)  # 정확히 5초 대기
-                    except Exception:
-                        pass
-                    # 활성 확인은 이제 하지 않음(단순화). 폴링에서 항상 판정.
-                    self.set_process_status(True)
-                else:
-                    # ★ OUTPUT_OFF 성공: 폴링 중지
-                    self.set_process_status(False)
-
-                return True
-
-            # 응답 없음/ERR → 하드웨어 반영 대기 후 상태 검증
-            await asyncio.sleep(0.08)
-            ver = await self._verify_output_state()
-            if ver is not None:
-                self._out_on = ver
-                if ver == intended_on:
+            # ① ACK가 아니어도(=ok False) 바로 실패로 끝내지 말고 상태를 '항상' 확인
+            #    (ACK가 와도 장비가 아직 반영 중일 수 있으므로)
+            #    짧은 backoff를 두고 몇 번 확인
+            ver = None  # ← 안전장치
+            for _ in range(5):  # 총 ~0.5초 정도 확인
+                ver = await self._verify_output_state()   # READ_STATUS(0x90) → HV On LSB
+                if ver is not None and ver == intended_on:
+                    self._out_on = ver
                     await self._emit_confirmed(label + "_VERIFIED")
-
                     if intended_on:
-                        # ★ (변경) 즉시 시작 X → 5초 대기 후 폴링 시작(활성 확인 삭제)
                         try:
                             await asyncio.sleep(ACTIVATION_CHECK_DELAY_S)
                         except Exception:
@@ -580,14 +566,14 @@ class AsyncDCPulse:
                         self.set_process_status(True)
                     else:
                         self.set_process_status(False)
-
                     return True
+                await asyncio.sleep(0.1)
 
-            await self._emit_failed(label, "응답 없음/실패 (상태 불일치/확인 불가)")
+            # 여기 오면 상태가 끝내 바뀌지 않음 → 실패 처리(+선택: 재시도/강제 off)
+            await self._emit_failed(label, f"상태 불일치: intended={intended_on} actual={ver}")
             return False
 
-
-        # 그 외 명령은 단순 성공/실패 반환
+        # (기타 명령은 종전과 동일)
         if ok:
             await self._emit_confirmed(label)
             return True
