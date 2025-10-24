@@ -252,6 +252,10 @@ class MainWindow(QWidget):
             pass
 
     def _connect_page_buttons(self) -> None:
+        if getattr(self, "_page_buttons_bound", False):
+            return
+        self._page_buttons_bound = True
+
         self.ui.pc_btnGoCh1.clicked.connect(lambda: self._switch_page("ch1"))
         self.ui.pc_btnGoCh2.clicked.connect(lambda: self._switch_page("ch2"))
         self.ui.ch1_btnGoPC.clicked.connect(lambda: self._switch_page("pc"))

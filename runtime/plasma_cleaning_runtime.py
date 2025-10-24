@@ -752,7 +752,7 @@ class PlasmaCleaningRuntime:
         try:
             if self.chat:
                 text = (msg or "")
-                if any(k in text for k in ("경고", "오류", "실패", "에러", "인터락", "interlock", "FAIL", "ERROR")):
+                if any(k in text for k in ("경고", "오류", "실패", "에러", "FAIL", "ERROR")):
                     self.chat.notify_error_with_src(src, text)
         except Exception:
             pass
