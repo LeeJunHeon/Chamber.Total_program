@@ -88,6 +88,9 @@ class PlasmaCleaningController:
         self._task: Optional[asyncio.Task] = None
         self._stop_evt = asyncio.Event()
 
+        self.last_result: str = "success"
+        self.last_reason: str = ""
+
     # ─────────────────────────────────────────────────────────────
     # 외부(UI/런타임)에서 쓰는 API
     # ─────────────────────────────────────────────────────────────
@@ -120,11 +123,23 @@ class PlasmaCleaningController:
 
     def on_mfc_failed(self, cmd: str, reason: str) -> None:
         self._log("MFC", f"명령 실패: {cmd} ({reason})")
+        # ▶ Gas 안정화/압력 제어 관련 실패는 즉시 중단
+        c = (cmd or "").upper()
+        if any(key in c for key in ("FLOW", "SP4", "PRESSURE")):
+            self._log("PC", "Gas/Pressure 안정화 실패 → 공정 중단 요청")
+            try:
+                self._show_state("Gas stabilize failed → STOP")
+            except Exception:
+                pass
+            self._stop_evt.set()
 
     # ─────────────────────────────────────────────────────────────
     # 내부 실행 시퀀스
     # ─────────────────────────────────────────────────────────────
     async def _run(self, p: PCParams) -> None:
+        self.last_result = "success"
+        self.last_reason = ""
+
         self._stop_evt = asyncio.Event()  # ★ 매 실행마다 초기화
         self.is_running = True
         self._show_state("Preparing…")           # ★ 시작 즉시 상태창에 표시
@@ -204,6 +219,8 @@ class PlasmaCleaningController:
                 self._show_state(f"Gas select ch{p.gas_idx}")   # ★ 추가
                 await self._mfc_gas_select(p.gas_idx)
                 self._log("MFC", f"GAS SELECT ch={p.gas_idx} OK")  # ★ LOG
+                if self._stop_evt.is_set():
+                    raise asyncio.CancelledError()
             except Exception as e:
                 self._log("MFC", f"GAS SELECT 실패: {e!r}")  # ★ LOG
                 raise
@@ -214,6 +231,8 @@ class PlasmaCleaningController:
                     await self._mfc_flow_set_on(p.gas_flow_sccm)
                     self._log("MFC", "FLOW_SET_ON OK")  # ★ LOG
                     self._show_state(f"Gas Flow {p.gas_flow_sccm:.1f} sccm")   # ★ 추가
+                    if self._stop_evt.is_set():
+                        raise asyncio.CancelledError()
                 except Exception as e:
                     self._log("MFC", f"FLOW_SET_ON 실패: {e!r}")  # ★ LOG
                     raise
@@ -225,6 +244,8 @@ class PlasmaCleaningController:
                 await self._mfc_sp4_set(p.sp4_setpoint_mTorr)
                 self._log("MFC", "SP4_SET OK")  # ★ LOG
                 self._show_state(f"SP4 Set {p.sp4_setpoint_mTorr:.2f} mTorr")   # ★ 추가
+                if self._stop_evt.is_set():
+                    raise asyncio.CancelledError()
             except Exception as e:
                 self._log("MFC", f"SP4_SET 실패: {e!r}")  # ★ LOG
                 raise
@@ -233,6 +254,8 @@ class PlasmaCleaningController:
             try:
                 await self._mfc_sp4_on()
                 self._log("MFC", "SP4_ON OK")  # ★ LOG
+                if self._stop_evt.is_set():
+                    raise asyncio.CancelledError()
             except Exception as e:
                 self._log("MFC", f"SP4_ON 실패: {e!r}")  # ★ LOG
                 raise
@@ -262,15 +285,22 @@ class PlasmaCleaningController:
             total_sec = int(max(0, p.process_time_min * 60.0))
             for left in range(total_sec, -1, -1):
                 if self._stop_evt.is_set():
-                    self._log("STEP", f"STOP 이벤트 감지 → 남은 {left}s 시점에서 종료 진입")  # ★ LOG
-                    break
+                    self._log("STEP", f"STOP 이벤트 감지 → 남은 {left}s 시점에서 종료 진입")
+                    self.last_result = "stop"
+                    self.last_reason = "사용자 STOP"
+                    raise asyncio.CancelledError()  # finally로 넘어가도록 명시 중단
                 self._show_countdown(left)
                 await asyncio.sleep(1.0)
 
+
         except asyncio.CancelledError:
-            self._log("PC", "CancelledError: 외부 STOP 또는 경쟁 종료로 중단")  # ★ LOG
+            self.last_result = "stop"
+            self.last_reason = "사용자 STOP"
+            self._log("PC", "CancelledError: 외부 STOP 또는 경쟁 종료로 중단")
         except Exception as e:
             # ★ LOG: 예외 스택 트레이스까지 남김
+            self.last_result = "fail"
+            self.last_reason = f"{type(e).__name__}: {e!s}"
             self._log("PC", f"오류: {e!r}\n{traceback.format_exc()}")
         finally:
             self._log("STEP", "종료 시퀀스 진입")  # ★ LOG
@@ -294,15 +324,22 @@ class PlasmaCleaningController:
                 # 4) GV 인터락 TRUE면 CLOSE_SW → 5초 후 OPEN_LAMP FALSE?
                 self._log("PLC", "GV 인터락 재확인 후 CLOSE_SW")
                 ok = await self._plc_check_gv_interlock()
-                self._log("PLC", f"종료시 인터락={ok}")  # ★ LOG
+                self._log("PLC", f"종료시 인터락={ok}")
                 if ok:
                     await self._plc_gv_close()
                     await asyncio.sleep(5.0)
                     lamp = await self._plc_read_gv_open_lamp()
                     if lamp:
-                        self._log("PLC", "경고: CLOSE 후에도 OPEN_LAMP가 TRUE")
+                        self._log("PLC", "CLOSE 후에도 OPEN_LAMP=TRUE → GV CLOSE 실패 처리")
+                        if self.last_result == "success":
+                            self.last_result = "fail"
+                            self.last_reason = "GV CLOSE 실패(OPEN_LAMP TRUE)"
                 else:
-                    self._log("PLC", "경고: 인터락 FALSE 상태 — CLOSE_SW 스킵")
+                    self._log("PLC", "인터락 FALSE → CLOSE_SW 스킵")
+                    if self.last_result == "success":
+                        self.last_result = "fail"
+                        self.last_reason = "GV 인터락 FALSE(닫힘 확인 불가)"
+
             except Exception as e:
                 self._log("PLC", f"GV 종료 실패: {e!r}")
 

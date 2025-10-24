@@ -124,8 +124,24 @@ class PlasmaCleaningRuntime:
                 self.append_log(label, ev.message or "")
             elif k == "command_confirmed":
                 self.append_log(label, f"OK: {ev.cmd or ''}")
+
+                # ▶ 컨트롤러에도 통지
+                try:
+                    if getattr(self, "pc", None):
+                        self.pc.on_mfc_confirmed(getattr(ev, "cmd", "") or "")
+                except Exception:
+                    pass
+
             elif k == "command_failed":
                 self.append_log(label, f"FAIL: {ev.cmd or ''} ({ev.reason or 'unknown'})")
+
+                # ▶ 컨트롤러에도 실패 통지 → 컨트롤러가 STOP 플래그 세팅
+                try:
+                    if getattr(self, "pc", None):
+                        self.pc.on_mfc_failed(getattr(ev, "cmd", "") or "", getattr(ev, "reason", "") or "unknown")
+                except Exception:
+                    pass
+                
             elif k == "flow":
                 gas  = getattr(ev, "gas", "") or ""
                 flow = float(getattr(ev, "value", 0.0) or 0.0)
@@ -580,13 +596,18 @@ class PlasmaCleaningRuntime:
             self.append_log("PC", "파일 로그 종료")
             self._close_run_log()        # ★ 반드시 닫기
 
-            # ★★★ 추가: 종료 알림(최소 수정)
-            with contextlib.suppress(Exception):
-                if self.chat:
-                    self.chat.notify_process_finished_detail(
-                        success,                                  # ok: bool
-                        {"process_name": "Plasma Cleaning"}       # detail: dict (필요시 확장)
-                    )
+            # chat 한번만 전송
+            if self.chat:
+                result = getattr(self.pc, "last_result", "success")   # "success" | "fail" | "stop"
+                reason = getattr(self.pc, "last_reason", "")
+                ok = (result == "success")
+                payload = {"process_name": "Plasma Cleaning"}
+                if not ok:
+                    payload["reason"] = reason or ("사용자 STOP" if result == "stop" else "원인 미상")
+                    if result == "stop":
+                        payload["stopped"] = True
+                self.chat.notify_process_finished_detail(ok, payload)
+
 
     async def _on_click_stop(self) -> None:
         # 1) 컨트롤러 루프 중단 요청
@@ -752,7 +773,7 @@ class PlasmaCleaningRuntime:
         try:
             if self.chat:
                 text = (msg or "")
-                if any(k in text for k in ("경고", "오류", "실패", "에러", "FAIL", "ERROR")):
+                if any(k in text for k in ("오류", "실패", "에러", "FAIL", "ERROR")):
                     self.chat.notify_error_with_src(src, text)
         except Exception:
             pass
