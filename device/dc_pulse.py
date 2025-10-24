@@ -23,6 +23,16 @@ import asyncio, time, contextlib, socket
 from lib.config_ch1 import DCPULSE_TCP_HOST, DCPULSE_TCP_PORT
 from lib import config_common as cfgc   # ★ 추가
 
+# ===== 파워 확인 파라미터 =====
+P_SET_TOL_PCT = getattr(cfgc, "DCP_P_SET_TOL_PCT", 0.10)  # ±10 %
+P_SET_TOL_W   = getattr(cfgc, "DCP_P_SET_TOL_W",   15.0)  # ±15 W
+
+# OFF 이후 P=0 강제 여부(기본 False: 로그만 확인, True: 0W 아니면 실패 처리)
+STRICT_OFF_CONFIRM_BY_PIV     = getattr(cfgc, "DCP_STRICT_OFF_CONFIRM_BY_PIV", True)
+OFF_CONFIRM_TIMEOUT_S         = getattr(cfgc, "DCP_OFF_CONFIRM_TIMEOUT_S", 3.0)
+OFF_CONFIRM_POLL_INTERVAL_S   = getattr(cfgc, "DCP_OFF_CONFIRM_POLL_INTERVAL_S", 0.2)
+
+
 # === OUTPUT_ON 직후 간단 활성 확인 ===
 ACTIVATION_CHECK_DELAY_S = 5.0      # OUTPUT_ON 후 첫 측정까지 대기 (초)
 
@@ -203,6 +213,7 @@ class AsyncDCPulse:
 
         self._out_on: bool = False                 # 출력 ON/OFF 내부 기억
         self._poll_period_s: float = DCP_POLL_INTERVAL_S
+        self._last_ref_power_w: Optional[float] = None  # ← 세트포인트 저장
 
     # ====== 공용 API ======
     async def start(self):
@@ -397,6 +408,7 @@ class AsyncDCPulse:
         # 10 W/step → 0..500 (5 kW)
         raw = int(round(float(value_w) / P_SET_STEP_W))
         raw = max(0, min(int(MAX_POWER_W // P_SET_STEP_W), raw))
+        self._last_ref_power_w = float(value_w)  # ← 세트포인트 기억
         return await self._write_cmd_data(0x83, raw, 2, label=f"REF_POWER({value_w:.0f}W)")
 
     async def output_on(self) -> bool:
@@ -404,7 +416,7 @@ class AsyncDCPulse:
         return await self._write_cmd_data(0x80, 0x0001, 2, label="OUTPUT_ON")
 
     async def output_off(self) -> bool:
-        await self._write_cmd_data(0x80, 0x0002, 2, label="OUTPUT_OFF")
+        return await self._write_cmd_data(0x80, 0x0002, 2, label="OUTPUT_OFF")
 
     async def set_pulse_sync(self, mode: Literal["int","ext"]):
         # 0x65: Int=0, Ext=1
@@ -478,7 +490,7 @@ class AsyncDCPulse:
 
         # 어떤 형태든 '뒤에서 6바이트'를 P,I,V로 해석 (CMD 유무 무시)
         if len(resp) < 6:
-            await self._emit_status("READ_PIV", f"응답 길이 부족: {resp!r}")
+            await self._emit_status(f"READ_PIV: 응답 길이 부족: {resp!r}")
             return None
 
         data = resp[-6:]  # 항상 꼬리 6바이트 사용
@@ -549,29 +561,54 @@ class AsyncDCPulse:
         if label in ("OUTPUT_ON", "OUTPUT_OFF"):
             intended_on = (label == "OUTPUT_ON")
 
-            # ① ACK가 아니어도(=ok False) 바로 실패로 끝내지 말고 상태를 '항상' 확인
-            #    (ACK가 와도 장비가 아직 반영 중일 수 있으므로)
-            #    짧은 backoff를 두고 몇 번 확인
-            ver = None  # ← 안전장치
-            for _ in range(5):  # 총 ~0.5초 정도 확인
-                ver = await self._verify_output_state()   # READ_STATUS(0x90) → HV On LSB
-                if ver is not None and ver == intended_on:
-                    self._out_on = ver
-                    await self._emit_confirmed(label + "_VERIFIED")
-                    if intended_on:
-                        try:
-                            await asyncio.sleep(ACTIVATION_CHECK_DELAY_S)
-                        except Exception:
-                            pass
-                        self.set_process_status(True)
-                    else:
-                        self.set_process_status(False)
-                    return True
-                await asyncio.sleep(0.1)
+            # ACK/ERR 자체 판정
+            if not ok:
+                await self._emit_failed(label, "응답 없음/실패")
+                return False
 
-            # 여기 오면 상태가 끝내 바뀌지 않음 → 실패 처리(+선택: 재시도/강제 off)
-            await self._emit_failed(label, f"상태 불일치: intended={intended_on} actual={ver}")
-            return False
+            if intended_on:
+                # ✅ 요구사항 1: ON 이후 별도 검증 없이 즉시 폴링 시작
+                self._out_on = True
+                self.set_process_status(True)
+                await self._emit_confirmed(label)  # _VERIFIED 붙이지 않고 단순 확정
+                return True
+            else:
+                # ✅ 요구사항 2: OFF 이후 현재 출력 파워(PIV) 0W 확인 로직 추가
+                # (기존 READ_STATUS 기반 확인을 제거하지 않고, 로그용으로 1회 읽어둠)
+                with contextlib.suppress(Exception):
+                    ver = await self._verify_output_state()
+                    await self._emit_status(f"READ_STATUS after OFF: HV_ON={bool(ver)}")
+
+                # 폴링은 반드시 중단
+                self._out_on = False
+                self.set_process_status(False)
+
+                # PIV 기반 0W 확인 (기본은 '로그 확인'만, 엄격 모드면 실패 처리)
+                ok_zero = False
+                last_p = None
+                deadline = time.monotonic() + OFF_CONFIRM_TIMEOUT_S
+                while time.monotonic() < deadline:
+                    piv = await self.read_output_piv()
+                    if piv and "eng" in piv:
+                        last_p = float(piv["eng"].get("P_W", 0.0))
+                        if last_p == 0.0:
+                            ok_zero = True
+                            break
+                    await asyncio.sleep(OFF_CONFIRM_POLL_INTERVAL_S)
+
+                if ok_zero:
+                    await self._emit_status("OUTPUT_OFF 확인: 현재 P=0.0 W")
+                    await self._emit_confirmed(label)
+                    return True
+
+                # 0W가 아니라면…
+                if STRICT_OFF_CONFIRM_BY_PIV:
+                    await self._emit_failed(label, f"OFF 이후 P가 0W가 아님(last_P={last_p})")
+                    return False
+                else:
+                    await self._emit_status(f"OUTPUT_OFF 이후 P=0W 아님(last_P={last_p}) — (로그 확인만)")
+                    await self._emit_confirmed(label)
+                    return True
 
         # (기타 명령은 종전과 동일)
         if ok:
@@ -973,6 +1010,15 @@ class AsyncDCPulse:
                                 with contextlib.suppress(Exception):
                                     await self.output_off()   # 내부에서 set_process_status(False) 처리
                                 return                       # poll task 종료
+                            
+                            # ② 세트포인트 근접 확인 (허용오차: max(절대 W, 퍼센트))
+                            ref = float(self._last_ref_power_w or 0.0)
+                            if ref > 0.0:
+                                tol = max(P_SET_TOL_W, abs(ref) * P_SET_TOL_PCT)
+                                if abs(p - ref) > tol:
+                                    await self._emit_status(
+                                        f"[WARN] 현재 P={p:.1f} W, Set={ref:.1f} W, Tol=±{tol:.1f} W — 세트포인트 이탈"
+                                    )
 
                             # 0이 아니면 계속 진행(기존 텔레메트리 전송 유지)
                             ev = DCPEvent(

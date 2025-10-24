@@ -81,17 +81,23 @@ class MainWindow(QWidget):
         #   - IG: 각 챔버 전용 포트
         #   - MFC: 각 챔버 전용 포트
         #   - Plasma Cleaning에서 Gas Flow는 '항상 MFC1의 ch=3' 정책
+        # 채널별 스케일을 명시 주입 (CH1/CH2 각각 자신의 설정 사용)
+        scale1 = getattr(config_ch1, "MFC_SCALE_FACTORS", getattr(cfgc, "MFC_SCALE_FACTORS", {1: 1.0, 2: 1.0, 3: 10.0}))
+        scale2 = getattr(config_ch2, "MFC_SCALE_FACTORS", getattr(cfgc, "MFC_SCALE_FACTORS", {1: 1.0, 2: 10.0, 3: 2.0}))
+
         self.mfc1: AsyncMFC = AsyncMFC(
             host=getattr(config_ch1, "MFC_TCP_HOST", getattr(cfgc, "MFC_TCP_HOST", "192.168.1.50")),
             port=getattr(config_ch1, "MFC_TCP_PORT", 4003),
             enable_verify=False,
             enable_stabilization=True,
+            scale_factors=scale1,
         )
         self.mfc2: AsyncMFC = AsyncMFC(
             host=getattr(config_ch2, "MFC_TCP_HOST", getattr(cfgc, "MFC_TCP_HOST", "192.168.1.50")),
             port=getattr(config_ch2, "MFC_TCP_PORT", 4006),
             enable_verify=False,
             enable_stabilization=True,
+            scale_factors=scale2,
         )
 
         self.ig1: AsyncIG = AsyncIG(
@@ -294,9 +300,36 @@ class MainWindow(QWidget):
             pass
 
     def _on_pc_radio_toggled(self, checked: bool) -> None:
-        # 라디오가 꺼지는 이벤트(False)는 무시해서 중복 호출 방지
         if not checked:
             return
+
+        # 실행 중 전환 금지 (property/메서드/내부플래그 모두 안전 처리)
+        pc = getattr(self, "pc", None)
+        if pc:
+            running = False
+            ir = getattr(pc, "is_running", None)
+            if callable(ir):
+                running = bool(ir())
+            elif isinstance(ir, bool):
+                running = ir
+            else:
+                running = bool(getattr(pc, "_running", False))
+
+            if running:
+                try:
+                    pc.append_log("PC", "플라즈마 클리닝 실행 중에는 챔버 전환이 불가합니다.")
+                except Exception:
+                    pass
+                # 라디오를 이전 선택으로 되돌림
+                try:
+                    prev = getattr(self, "_pc_use_ch", 1)
+                    if prev == 1 and hasattr(self.ui, "PC_useChamber1_radio"):
+                        self.ui.PC_useChamber1_radio.setChecked(True)
+                    elif hasattr(self.ui, "PC_useChamber2_radio"):
+                        self.ui.PC_useChamber2_radio.setChecked(True)
+                except Exception:
+                    pass
+                return
 
         # 현재 라디오 상태 읽기
         try:
@@ -305,10 +338,11 @@ class MainWindow(QWidget):
             ch2_on = False
         ch = 2 if ch2_on else 1
 
-        # 선택이 이전과 동일하면 아무 것도 하지 않음
+        # 동일 선택이면 무시
         if ch == getattr(self, "_pc_use_ch", None):
             return
 
+        # 상태 저장 후 선택 반영
         self._pc_use_ch = ch
         self._apply_pc_ch_selection()
 
@@ -328,6 +362,12 @@ class MainWindow(QWidget):
 
         # 선택된 챔버의 IG
         ig = self.ig1 if ch == 1 else self.ig2
+
+        # ★ IG 디바이스 자체도 교체 (wait_for_base_pressure가 self.ig를 사용)
+        try:
+            pc.set_ig_device(ig)
+        except Exception as e:
+            self._broadcast_log("PC", f"IG 디바이스 주입 실패: {e!r}")
 
         # IG 콜백 주입
         async def _ensure_on():

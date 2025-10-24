@@ -112,9 +112,9 @@ class PlasmaCleaningRuntime:
         if self.ig is not None:
             self._bind_ig_device(self.ig)
 
-        @property
-        def is_running(self) -> bool:
-            return bool(getattr(self, "_running", False))
+    @property
+    def is_running(self) -> bool:
+        return bool(getattr(self, "_running", False))
 
     # =========================
     # MFC/IG/RFpower 이벤트 펌프
@@ -298,6 +298,10 @@ class PlasmaCleaningRuntime:
         self.mfc_gas = mfc_gas
         self.mfc_pressure = mfc_pressure
         self.append_log("PC", f"Bind MFC: GAS={_mfc_name(mfc_gas)}, SP4={_mfc_name(mfc_pressure)}")
+
+    def set_ig_device(self, ig: Optional[AsyncIG]) -> None:
+        """IG.wait_for_base_pressure에서 사용할 실제 IG 인스턴스 교체"""
+        self.ig = ig
 
     def set_ig_callbacks(
         self,
@@ -711,6 +715,43 @@ class PlasmaCleaningRuntime:
         # 4) (선택) 이벤트 펌프 태스크 정리
         for t in getattr(self, "_event_tasks", []):
             t.cancel()
+
+        # 5) (신규) 선택 장치만 연결 해제 — PLC 제외
+        await self._disconnect_selected_devices()
+
+    async def _disconnect_selected_devices(self) -> None:
+        """
+        Plasma Cleaning 종료 시 선택 장치만 연결 해제:
+        - CH1:  MFC1(gas/pressure 동일 가능) + IG1
+        - CH2:  MFC2(pressure) + IG2    (MFC1(gas)와 PLC는 유지)
+        """
+        try:
+            # 1) 먼저 MFC
+            if int(getattr(self, "_selected_ch", 0)) == 1:
+                # gas/pressure가 동일 인스턴스일 수 있어 중복 제거
+                mfc_set = {m for m in (self.mfc_gas, self.mfc_pressure) if m}
+                for m in mfc_set:
+                    self.append_log("MFC", "CH1 종료: MFC 연결 해제")
+                    # 방어적 타임아웃
+                    with contextlib.suppress(Exception):
+                        await asyncio.wait_for(m.cleanup(), timeout=3.0)
+            else:
+                # CH2: pressure=MFC2만 해제, gas=MFC1은 유지
+                if self.mfc_pressure:
+                    self.append_log("MFC", "CH2 종료: Pressure MFC 연결 해제")
+                    with contextlib.suppress(Exception):
+                        await asyncio.wait_for(self.mfc_pressure.cleanup(), timeout=3.0)
+
+            # 2) IG (각 CH에 해당하는 IG 인스턴스가 self.ig로 바인딩되어 있음)
+            if self.ig:
+                self.append_log("IG", f"CH{self._selected_ch} 종료: IG 연결 해제")
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(self.ig.cleanup(), timeout=3.0)
+
+            # PLC는 공유자원 → 절대 끊지 않음
+        except Exception as e:
+            self.append_log("PC", f"장치 연결 해제 중 예외: {e!r}")
+
 
     def _read_params_from_ui(self) -> PCParams:
         def _read_plain_number(obj_name: str, default: float) -> float:
