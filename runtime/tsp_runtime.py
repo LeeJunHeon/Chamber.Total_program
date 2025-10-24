@@ -285,8 +285,6 @@ class TSPPageController:
                 }
                 self.chat.notify_process_started(params)
 
-            result = await ctrl.run(cfg)
-
             # 사이클 전체 상한: (on+off)×cycles + 여유 5분
             total_timeout = cycles * (cfg.on_sec + cfg.off_sec) + 300.0
             try:
@@ -362,6 +360,7 @@ class TSPPageController:
                 })
 
         finally:
+            # ★ 최우선 상태 복구 (아래 정리 중 예외가 나도 고착 방지)
             self._busy = False
             self._task = None
 
