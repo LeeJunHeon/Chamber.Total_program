@@ -286,7 +286,9 @@ class ChamberRuntime:
 
         # MFC/IG를 외부에서 주입하면 그대로 사용하고, 없으면 기존 방식대로 생성
         self.mfc = mfc or AsyncMFC(
-            host=mfc_host, port=mfc_port, enable_verify=False, enable_stabilization=True
+            host=mfc_host, port=mfc_port, enable_verify=False, enable_stabilization=True,
+            # ★ 챔버별 스케일을 드라이버에 주입
+            scale_factors=getattr(self.cfg, "MFC_SCALE_FACTORS", {})
         )
         self.ig  = ig or AsyncIG(host=ig_host, port=ig_port)
 

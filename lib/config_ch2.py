@@ -16,13 +16,13 @@ MFC_TCP_PORT = 4006
 RFPULSE_TCP_HOST = "192.168.1.50"
 RFPULSE_TCP_PORT = 4005
 
+# ★ CH2 전용 스케일: 3번 가스(N2)는 UI(sccm) → 장비(%FS) ×2.0
+MFC_SCALE_FACTORS = {**MFC_SCALE_FACTORS, 3: 2.0}
+
 # RGA LAN 접근 정보(필요 시 조정)
 RGA_NET.update({
     "ch2": {"ip": "192.168.1.21", "user": "admin", "password": "admin"},
 })
-
-# ★ CH2 전용 스케일 보정: 3번 가스(N2)는 장비 단위가 %FS(50 sccm FS) → UI(sccm)×2.0
-MFC_SCALE_FACTORS = {**MFC_SCALE_FACTORS, 3: 2.0}
 
 # (선택) 컨트롤러 지원 플래그(장비 스펙에 맞춰 설정)
 #  - CH2: RF Pulse 지원, RF 연속파는 미지원(예시)

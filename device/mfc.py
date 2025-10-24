@@ -25,7 +25,7 @@ from typing import Optional, Deque, Callable, AsyncGenerator, Literal
 import asyncio, re, time, contextlib, socket
 
 from lib import config_common as cfgc # ★ 추가
-from lib.config_common import (
+from lib.config_ch2 import (
     MFC_TCP_HOST, MFC_TCP_PORT, MFC_TX_EOL, MFC_SKIP_ECHO, MFC_CONNECT_TIMEOUT_S,
     MFC_COMMANDS, FLOW_ERROR_TOLERANCE, FLOW_ERROR_MAX_COUNT, MFC_SCALE_FACTORS, 
     MFC_POLLING_INTERVAL_MS, MFC_STABILIZATION_INTERVAL_MS, MFC_WATCHDOG_INTERVAL_MS, 
@@ -63,12 +63,15 @@ class Command:
 # =============== Async 컨트롤러 ===============
 class AsyncMFC:
     def __init__(self, *, enable_verify: bool = True, enable_stabilization: Optional[bool] = None,
-                 host: Optional[str] = None, port: Optional[int] = None):
+                 host: Optional[str] = None, port: Optional[int] = None, scale_factors: Optional[dict[int, float]] = None):
         self.debug_print = DEBUG_PRINT
 
         # ← 런타임에서 채널별로 덮어쓸 TCP 엔드포인트(없으면 config 기본값 사용)
         self._override_host: Optional[str] = host
         self._override_port: Optional[int] = port
+
+        # ★ 인스턴스별 스케일 맵(없으면 기존 전역값 사용)
+        self.scale_factors: dict[int, float] = dict(scale_factors or MFC_SCALE_FACTORS)
 
         # ▼ 추가: 검증/안정화 플래그
         self._verify_enabled: bool = bool(enable_verify)
@@ -237,7 +240,7 @@ class AsyncMFC:
     # ---- 고수준 제어 API (기존 handle_command 세분화) ----
     async def set_flow(self, channel: int, ui_value: float):
         """FLOW_SET + (옵션) READ_FLOW_SET 검증."""
-        sf = float(MFC_SCALE_FACTORS.get(channel, 1.0))
+        sf = float(self.scale_factors.get(channel, 1.0))
         scaled = float(ui_value) * sf
         await self._emit_status(f"Ch{channel} GAS 스케일: {ui_value:.2f}sccm → 장비 {scaled:.2f}")
 
@@ -550,7 +553,7 @@ class AsyncMFC:
             idx = ch - 1
             if idx < len(vals):
                 v_hw = float(vals[idx])
-                sf = float(MFC_SCALE_FACTORS.get(ch, 1.0))
+                sf = float(self.scale_factors.get(ch, 1.0))
                 await self._emit_flow(name, v_hw / sf)
                 self._monitor_flow(ch, v_hw)
 
@@ -1027,7 +1030,7 @@ class AsyncMFC:
                         idx = ch - 1
                         if idx < len(vals):
                             v_hw = float(vals[idx])
-                            sf = float(MFC_SCALE_FACTORS.get(ch, 1.0))
+                            sf = float(self.scale_factors.get(ch, 1.0))
                             await self._emit_flow(name, v_hw / sf)
                             self._monitor_flow(ch, v_hw)
 
@@ -1058,7 +1061,7 @@ class AsyncMFC:
                 if vals and (ch - 1) < len(vals):
                     actual = float(vals[ch - 1])
 
-                sf = float(MFC_SCALE_FACTORS.get(ch, 1.0))
+                sf = float(self.scale_factors.get(ch, 1.0))
                 tol = target * float(FLOW_ERROR_TOLERANCE)
 
                 self._stab_attempts += 1

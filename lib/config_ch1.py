@@ -16,6 +16,9 @@ MFC_TCP_PORT = 4003
 DCPULSE_TCP_HOST = "192.168.1.50"
 DCPULSE_TCP_PORT = 4007
 
+# ★ CH1 전용 스케일: 2번 가스(O2)만 1.0로 덮어쓰기
+MFC_SCALE_FACTORS = {**MFC_SCALE_FACTORS, 2: 1.0}
+
 # RGA LAN 접근 정보(두 채널 모두 공통에 있지만, 필요 시 오버라이드 예시)
 RGA_NET.update({
     "ch1": {"ip": "192.168.1.20", "user": "admin", "password": "admin"},
