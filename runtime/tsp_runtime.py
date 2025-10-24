@@ -172,19 +172,14 @@ class TSPPageController:
 
 
     # ── Start/Stop 핸들러 ──────────────────────────────────
+    def _on_run_done(self, fut: asyncio.Task) -> None:
+        # 어떤 종료 경로든 여기로 들어오므로 ‘잔상’ 제거
+        self._busy = False
+        self._task = None
+
     def on_start_clicked(self) -> None:
         if self._busy:
-            self._log("이미 실행 중입니다.")
-            return
-        
-        # ⬇ CH1이 공정 중이면 시작 자체를 차단
-        try:
-            if runtime_state.is_running(1):
-                self._log("[TSP] CH1이 공정 중이라서 TSP를 시작할 수 없습니다. CH1 종료 후 다시 시도하세요.")
-                return
-        except Exception:
-            pass
-
+            self._log("이미 실행 중입니다."); return
         try:
             target = self._read_target()
             cycles = self._read_cycles()
@@ -192,12 +187,15 @@ class TSPPageController:
             self._log(f"[ERROR] 입력 파싱 실패: {e}")
             return
 
-        # 시작 시 표시 초기화
+        # 표시 초기화
         self._set_plain("TSP_nowCycle_edit", "0")
         self._set_plain("TSP_basePressure_edit", "")
 
+        # ★ 태스크 생성 성공 후 busy 전이 + done 콜백으로 확정 해제
+        t = asyncio.create_task(self._run(target, cycles))
+        t.add_done_callback(lambda fut: self._on_run_done(fut))
+        self._task = t
         self._busy = True
-        self._task = asyncio.create_task(self._run(target, cycles))
 
     def on_stop_clicked(self) -> None:
         # 1) 실행 중이면 즉시 중단
@@ -348,6 +346,9 @@ class TSPPageController:
                 })
 
         finally:
+            self._busy = False
+            self._task = None
+
             with contextlib.suppress(Exception):
                 if self.tsp:
                     await self.tsp.off()
@@ -378,9 +379,6 @@ class TSPPageController:
             # 3) ★ UI를 초기 기본값으로 복원
             with contextlib.suppress(Exception):
                 self._reset_ui_defaults()
-
-            self._busy = False
-            self._task = None
 
     # ─────────────────────────────────────────────────────
     # NAS 로그 유틸리티
@@ -473,6 +471,13 @@ class TSPPageController:
                 last_log_ts = 0.0
                 loop_time = asyncio.get_running_loop().time
                 while self._busy or runtime_state.is_running(1):
+                    # ★ 잔상(auto-heal): busy인데 task가 없거나 이미 끝났으면 정리
+                    if self._busy and (self._task is None or self._task.done()):
+                        self._log("[TSP] 이전 실행 잔상 감지 → 상태 초기화")
+                        self._busy = False
+                        continue  # 즉시 루프 재평가
+
+                    # (기존 로깅/대기)
                     t = loop_time()
                     if t - last_log_ts >= 60.0:
                         msg = "[TSP] 현재 공정 중… 예약 실행을 대기합니다." if self._busy \
