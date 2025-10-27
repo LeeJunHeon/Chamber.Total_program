@@ -574,10 +574,10 @@ class AsyncMFC:
         for ch, name in self.gas_map.items():
             idx = ch - 1
             if idx < len(vals):
-                v_hw = float(vals[idx])
+                v_ui = float(vals[idx])                   # ★ R60은 sccm(UI)로 들어옴
                 sf = float(self.scale_factors.get(ch, 1.0))
-                await self._emit_flow(name, v_hw / sf)
-                self._monitor_flow(ch, v_hw)
+                await self._emit_flow(name, v_ui)        # 이벤트는 UI 그대로
+                self._monitor_flow(ch, v_ui * sf)        # ★ 비교는 HW 단위로
 
     async def read_pressure(self):
         """R5(예: READ_PRESSURE) 읽고 UI 문자열/숫자로 이벤트."""
@@ -1051,10 +1051,10 @@ class AsyncMFC:
                     for ch, name in self.gas_map.items():
                         idx = ch - 1
                         if idx < len(vals):
-                            v_hw = float(vals[idx])
+                            v_ui = float(vals[idx])               # ★ UI(sccm)
                             sf = float(self.scale_factors.get(ch, 1.0))
-                            await self._emit_flow(name, v_hw / sf)
-                            self._monitor_flow(ch, v_hw)
+                            await self._emit_flow(name, v_ui)     # UI 그대로
+                            self._monitor_flow(ch, v_ui * sf)     # ★ HW로 변환해 비교
 
                 # R5 → pressure 이벤트
                 line = await self._send_and_wait_line(self._mk_cmd("READ_PRESSURE"),
@@ -1079,21 +1079,20 @@ class AsyncMFC:
                     return
 
                 vals = await self._read_r60_values(tag=f"[STAB R60 ch{ch}]")
-                actual = None
+                actual_ui = None
                 if vals and (ch - 1) < len(vals):
-                    actual = float(vals[ch - 1])
+                    actual_ui = float(vals[ch - 1])              # ★ UI(sccm)
 
                 sf = float(self.scale_factors.get(ch, 1.0))
+                actual_hw = None if actual_ui is None else (actual_ui * sf)  # ★ 비교용(HW)
                 tol = target * float(FLOW_ERROR_TOLERANCE)
 
                 self._stab_attempts += 1
                 await self._emit_status(
-                    f"GAS 확인... (목표: {target:.2f}/{target/sf:.2f}sccm, "
-                    f"현재: {(-1 if actual is None else actual):.2f}/"
-                    f"{(-1 if actual is None else actual/sf):.2f}sccm)"
+                    f"GAS 확인... (목표: {target/sf:.2f}sccm, 현재: {(-1 if actual_ui is None else actual_ui):.2f}sccm)"
                 )
 
-                if (actual is not None) and (abs(actual - target) <= tol):
+                if (actual_hw is not None) and (abs(actual_hw - target) <= tol):
                     await self._emit_confirmed("FLOW_ON")
                     self._stab_ch = None
                     self._stab_target_hw = 0.0
