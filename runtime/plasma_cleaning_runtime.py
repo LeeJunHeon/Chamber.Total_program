@@ -854,7 +854,7 @@ class PlasmaCleaningRuntime:
         self._log_fp.write(f"# params: gas_idx={p.gas_idx}, flow={p.gas_flow_sccm:.1f} sccm, "
                         f"IG_target={p.target_pressure:.3e} Torr, "
                         f"SP4={p.sp4_setpoint_mTorr:.2f} mTorr, RF={p.rf_power_w:.1f} W, "
-                        f"time={p.process_time_min:.1f} min\n")
+                        f"time={p.process_time_min:.2f} min\n")
         self._log_fp.write("# ============================\n")
         self._log_fp.flush()
 
@@ -891,7 +891,7 @@ class PlasmaCleaningRuntime:
             with contextlib.suppress(Exception):
                 w = getattr(self.ui, "PC_ProcessTime_edit", None)
                 if w and hasattr(w, "setPlainText"):
-                    w.setPlainText(f"{float(restore_time_min):.1f}")
+                    w.setPlainText(f"{float(restore_time_min):.2f}")
 
         # FWD/REF 표시칸 초기화
         with contextlib.suppress(Exception):
