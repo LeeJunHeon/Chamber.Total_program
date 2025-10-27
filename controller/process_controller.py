@@ -226,6 +226,9 @@ class ProcessController:
         self._supports_dc_pulse = bool(supports_dc_pulse)
         self._supports_rf_pulse = bool(supports_rf_pulse)
 
+        # ✅ 항상 존재하는 가스 채널 맵(소스 오브 트루스)
+        self._gas_info = {"AR": {"channel": 1}, "O2": {"channel": 2}, "N2": {"channel": 3}}
+
         # 런타임 상태
         self.is_running: bool = False
         self.current_params: Dict[str, Any] = {}
@@ -985,7 +988,10 @@ class ProcessController:
         use_dc_pulse  = common_info['use_dc_pulse']
         use_rf_pulse  = common_info['use_rf_pulse']
         use_ms       = common_info['use_ms']
-        gas_info, gun_shutters = common_info['gas_info'], common_info['gun_shutters']
+
+        # ✅ 키 누락 대비: 항상 존재하는 맵으로 폴백
+        gas_info      = common_info.get('gas_info') or self._gas_info
+        gun_shutters  = common_info.get('gun_shutters', [])
 
         base_pressure = float(params.get("base_pressure", 1e-5))
         working_pressure = float(params.get("working_pressure", 0))
@@ -1013,18 +1019,26 @@ class ProcessController:
             message='RGA 스캔 및 그래프 출력 대기'
         ))
 
+        use_any = any(params.get(k, False) for k in ("use_ar", "use_o2", "use_n2"))
+
         # 모든 채널 Flow OFF
         for gas, info in gas_info.items():
+            if use_any and not params.get(f"use_{gas.lower()}", False):
+                continue
             steps.append(ProcessStep(
                 action=ActionType.MFC_CMD,
                 params=('FLOW_OFF', {'channel': info["channel"]}),
                 message=f'Ch{info["channel"]}({gas}) Flow Off'
             ))
+
         steps.extend([
             ProcessStep(action=ActionType.MFC_CMD, params=('VALVE_OPEN', {}), message='MFC Valve Open'),
             ProcessStep(action=ActionType.MFC_CMD, params=('PS_ZEROING', {}), message='압력 센서 Zeroing'),
         ])
+
         for gas, info in gas_info.items():
+            if use_any and not params.get(f"use_{gas.lower()}", False):
+                continue
             steps.append(ProcessStep(
                 action=ActionType.MFC_CMD,
                 params=('MFC_ZEROING', {'channel': info["channel"]}),
@@ -1207,8 +1221,10 @@ class ProcessController:
         use_rf = force_all or info['use_rf']
         use_dc_pulse  = force_all or info['use_dc_pulse']   # ← 추가
         use_rf_pulse = force_all or info['use_rf_pulse']
-        gas_info = info['gas_info']
-        gun_shutters = info['gun_shutters']
+
+        # ✅ 키 누락 대비
+        gas_info     = info.get('gas_info') or self._gas_info
+        gun_shutters = info.get('gun_shutters', [])
 
         steps.append(ProcessStep(
             action=ActionType.PLC_CMD, params=('MS', False, self._ch), message='Main Shutter 닫기 (항상)'
@@ -1218,12 +1234,17 @@ class ProcessController:
         if use_rf:        steps.append(ProcessStep(action=ActionType.RF_POWER_STOP, message='RF Power Off'))
         if use_dc_pulse:  steps.append(ProcessStep(action=ActionType.DC_PULSE_STOP, message='DC Pulse Off'))
         if use_rf_pulse:  steps.append(ProcessStep(action=ActionType.RF_PULSE_STOP, message='RF Pulse Off'))
+    
+        use_any = any(params.get(k, False) for k in ("use_ar", "use_o2", "use_n2"))
 
-        for gas, info_ch in gas_info.items():
+        # MFC Flow OFF(선택된 가스만; 선택 없으면 전체)
+        for gas, info in gas_info.items():
+            if use_any and not params.get(f"use_{gas.lower()}", False):
+                continue
             steps.append(ProcessStep(
                 action=ActionType.MFC_CMD,
-                params=('FLOW_OFF', {'channel': info_ch["channel"]}),
-                message=f'Ch{info_ch["channel"]}({gas}) Flow Off'
+                params=('FLOW_OFF', {'channel': info["channel"]}),
+                message=f'Ch{info["channel"]}({gas}) Flow Off'
             ))
 
         steps.append(ProcessStep(
@@ -1243,7 +1264,7 @@ class ProcessController:
                 message="Power_select 종료: Power Select OFF (SW_RF_SELECT)"
             ))
 
-        for gas in info['gas_info']:
+        for gas in gas_info.keys():  # ← 이미 위에서 gas_info = info.get('gas_info') or self._gas_info 해둠
             steps.append(ProcessStep(
                 action=ActionType.PLC_CMD, params=(gas, False, self._ch), message=f'PLC {gas} 밸브 닫기'
             ))
@@ -1294,6 +1315,16 @@ class ProcessController:
                 action=ActionType.PLC_CMD, params=("SW_RF_SELECT", False),
                 message='[긴급] Power Select 즉시 OFF', no_wait=True
             ))
+
+        # ✅ (추가) 선택된 가스만 MFC FLOW_OFF (no_wait)
+        for gas, gi in info['gas_info'].items():
+            if self.current_params.get(f"use_{gas.lower()}", False):
+                steps.append(ProcessStep(
+                    action=ActionType.MFC_CMD,
+                    params=('FLOW_OFF', {'channel': gi["channel"]}),
+                    message=f'[긴급] Ch{gi["channel"]}({gas}) FLOW OFF',
+                    no_wait=True
+                ))
 
         for gas in ("AR", "O2", "N2"):
             if self.current_params.get(f"use_{gas.lower()}", False):

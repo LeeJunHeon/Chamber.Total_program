@@ -520,6 +520,7 @@ class PlasmaCleaningRuntime:
             toggle_enable=_rf_toggle_enable,
             poll_interval_ms=1000,
             rampdown_interval_ms=50,
+            direct_mode=True, # ★ Plasma Cleaning에서는 DC처럼 즉시 ON/OFF
         )
 
     # =========================

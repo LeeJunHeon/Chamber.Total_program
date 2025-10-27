@@ -349,15 +349,27 @@ class PlasmaCleaningController:
             if self.chat and not self._final_notified:
                 ok = (self.last_result == "success")
                 payload = {"process_name": "Plasma Cleaning"}
+
                 if not ok:
-                    payload["reason"] = (
+                    reason_txt = (
                         self.last_reason or
                         ("사용자 STOP" if self.last_result == "stop" else "원인 미상")
                     )
-                    # ★ 추가: fail이어도 STOP이면 뱃지 부여
-                    if (self.last_result == "stop") or ("사용자 STOP" in (self.last_reason or "")):
+
+                    # ✅ 핵심: Chat 카드에서 원인 노출되도록 errors 추가(리스트)
+                    payload["reason"] = reason_txt
+                    payload["errors"] = [reason_txt]
+
+                    # ✅ 얕은 라벨링(선택): G_V 인터락 텍스트가 보이면 라벨/코드 부여
+                    if ("인터락" in reason_txt) or ("GV" in reason_txt.upper()):
+                        payload["status_label"] = "GV 인터락 실패"
+                        payload["reason"] = "gv_interlock_false"
+
+                    # STOP 뱃지 유지
+                    if (self.last_result == "stop") or ("사용자 STOP" in reason_txt):
                         payload["stopped"] = True
 
                 self.chat.notify_process_finished_detail(ok, payload)
                 self._final_notified = True
+
 

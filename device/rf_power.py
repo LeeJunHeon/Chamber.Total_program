@@ -142,6 +142,38 @@ class RFPowerAsync:
         else:
             await self._emit_status("RF SET ON 생략(toggle_enable 미주입)")
 
+        # ========= ★ direct_mode 분기 추가 (여기서 반환) =========
+        if getattr(self, "_direct_mode", False):
+            self._is_running = True
+            await self._emit_state_changed(True)
+            self.state = "MAINTAINING"
+            await self._emit_status(f"Direct set: {self.target_power:.1f} W")
+
+            # 폴링 활성화/재시작 (표시/로그 유지를 위해)
+            self._polling_enabled = True
+            if self._request_status_read is not None:
+                if self._poll_task and not self._poll_task.done():
+                    self._poll_task.cancel()
+                    try:
+                        await asyncio.wait_for(self._poll_task, timeout=1.0)
+                    except Exception:
+                        pass
+                    self._poll_task = None
+                self._poll_task = asyncio.create_task(self._poll_loop(), name="RF_Poll")
+            else:
+                await self._emit_status("상태읽기 콜백 없음 → 측정 없이 진행")
+
+            # 목표 W를 즉시 전송하고, 바로 목표 도달로 간주
+            try:
+                await self._send_rf_power(float(self.target_power))
+                self.current_power_step = float(self.target_power)
+                self._last_sent_w = float(self.target_power)   # ★ 추가: 마지막 전송값 캐시(권장)
+                self._ev_nowait(RFPowerEvent(kind="target_reached"))
+            except Exception as e:
+                await self._emit_status(f"Direct set 실패: {e!r}")
+            return
+        # ========= 기존 램프업 경로(그대로 유지) =========
+
         self._is_running = True
         await self._emit_state_changed(True)
         self.state = "RAMPING_UP"
@@ -192,6 +224,26 @@ class RFPowerAsync:
         await self._emit_status("정지 신호 수신됨.")
         self._is_running = False
         await self._emit_state_changed(False)
+
+        # ========= ★ direct_mode 분기: 즉시 OFF =========
+        if getattr(self, "_direct_mode", False):
+            try:
+                await self._set_rf_unverified(0.0)  # 0W 즉시
+                self._ev_nowait(RFPowerEvent(kind="display", forward=0.0, reflected=0.0))
+            finally:
+                if self._toggle_enable and self._enabled:
+                    try:
+                        await self._toggle_enable(False)
+                        await self._emit_status("RF SET OFF")
+                    finally:
+                        self._enabled = False
+
+            self.state = "IDLE"
+            # 상위에서 wait_power_off()로 기다리므로 완료 신호 즉시 방출
+            self._ev_nowait(RFPowerEvent(kind="power_off_finished"))
+            self._power_off_evt.set()
+            return
+        # ========= 기존 램프다운 경로(그대로 유지) =========
 
         self.state = "IDLE"
 
