@@ -547,7 +547,25 @@ class AsyncDCPulse:
         return True
     
     # ===================== 실패시 검증하는 로직 =====================
+    # ✅ 추가: 수신 프레임 큐 비우기
+    def _purge_rx_frames(self, max_n: int = 32) -> None:
+        if not hasattr(self, "_frame_q"):  # 방어
+            return
+        for _ in range(max_n):
+            try:
+                self._frame_q.get_nowait()
+            except Exception:
+                break
+
     async def _write_cmd_data(self, cmd: int, value: int, width: int, *, label: str) -> bool:
+        # ▶ 크리티컬 명령 전, 폴링 잠시 중지 + 수신버퍼 비우기
+        if label in ("OUTPUT_ON", "OUTPUT_OFF"):
+            try:
+                self.set_process_status(False)   # 폴링 중지
+            except Exception:
+                pass
+            self._purge_rx_frames()             # 수신 프레임 잔여분 제거
+
         fut = asyncio.get_running_loop().create_future()
         def _cb(resp: Optional[bytes]):
             if not fut.done():
@@ -556,70 +574,53 @@ class AsyncDCPulse:
         payload = self._proto.pack_write(cmd, value, width=width)
         self._enqueue(Command(payload, label, DCP_TIMEOUT_MS, DCP_GAP_MS, 3, _cb))
         resp = await self._await_reply_bytes(label, fut)
-        ok = self._ok_from_resp(resp, label=label)  # ← label 전달
 
+        # ✅ OUTPUT_ON/OFF는 반드시 0x06(ACK)만 성공으로 간주
         if label in ("OUTPUT_ON", "OUTPUT_OFF"):
             intended_on = (label == "OUTPUT_ON")
+            ack_ok = bool(resp and len(resp) == 1 and resp[0] == 0x06)
 
-            # ① ACK이 아니거나 응답 형식이 애매할 때 → 짧게 대기 후 '상태 재확인'
-            if not ok:
-                await asyncio.sleep(0.08)
-                ver = await self._verify_output_state()   # READ_STATUS → HV On 비트 판정
-                if ver is not None and ver == intended_on:
-                    await self._emit_status(f"{label} 확인(재검증 성공)")
-                    ok = True
-                else:
-                    await self._emit_failed(label, "응답 없음/실패")
-                    return False
-
-            # ② 여기부터는 '성공' 경로 동일
-            if intended_on:
-                self._out_on = True
-                self.set_process_status(True)
+            if ack_ok:
+                self._out_on = intended_on
                 await self._emit_confirmed(label)
-                return True
-            else:
-                with contextlib.suppress(Exception):
-                    ver = await self._verify_output_state()
-                    await self._emit_status(f"READ_STATUS after OFF: HV_ON={bool(ver)}")
-
-                self._out_on = False
-                self.set_process_status(False)
-
-                # PIV 기반 0W 확인 (기본은 '로그 확인'만, 엄격 모드면 실패 처리)
-                ok_zero = False
-                last_p = None
-                deadline = time.monotonic() + OFF_CONFIRM_TIMEOUT_S
-                while time.monotonic() < deadline:
-                    piv = await self.read_output_piv()
-                    if piv and "eng" in piv:
-                        last_p = float(piv["eng"].get("P_W", 0.0))
-                        if last_p == 0.0:
-                            ok_zero = True
-                            break
-                    await asyncio.sleep(OFF_CONFIRM_POLL_INTERVAL_S)
-
-                if ok_zero:
-                    await self._emit_status("OUTPUT_OFF 확인: 현재 P=0.0 W")
-                    await self._emit_confirmed(label)
-                    return True
-
-                # 0W가 아니라면…
-                if STRICT_OFF_CONFIRM_BY_PIV:
-                    await self._emit_failed(label, f"OFF 이후 P가 0W가 아님(last_P={last_p})")
-                    return False
+                if intended_on:
+                    # 활성화 유예(기존과 동일)
+                    try:
+                        await asyncio.sleep(ACTIVATION_CHECK_DELAY_S)
+                    except Exception:
+                        pass
+                    self.set_process_status(True)  # 폴링 재개
                 else:
-                    await self._emit_status(f"OUTPUT_OFF 이후 P=0W 아님(last_P={last_p}) — (로그 확인만)")
-                    await self._emit_confirmed(label)
+                    self.set_process_status(False) # OFF면 폴링 유지 중지
+                return True
+
+            # ❗ ACK 미수신: 짧게 대기 후 상태로 재검증
+            await asyncio.sleep(0.08)
+            ver = await self._verify_output_state()
+            if ver is not None:
+                self._out_on = ver
+                if ver == intended_on:
+                    await self._emit_confirmed(label + "_VERIFIED")
+                    if intended_on:
+                        try:
+                            await asyncio.sleep(ACTIVATION_CHECK_DELAY_S)
+                        except Exception:
+                            pass
+                        self.set_process_status(True)
+                    else:
+                        self.set_process_status(False)
                     return True
 
-        # (기타 명령은 종전과 동일)
+            await self._emit_failed(label, "응답 없음/실패 (상태 불일치/확인 불가)")
+            return False
+
+        # (그 외 명령은 기존 로직 유지)
+        ok = self._ok_from_resp(resp)
         if ok:
             await self._emit_confirmed(label)
             return True
-        else:
-            await self._emit_failed(label, "응답 없음/실패")
-            return False
+        await self._emit_failed(label, "응답 없음/실패")
+        return False
         
     # ❶ [ADD] RS-232 payload 분해 헬퍼: [CMD][DATA...][(ETX?)][CHK] → (cmd, data, chk)
     def _unpack_rs232_payload(self, resp: bytes):
@@ -643,19 +644,26 @@ class AsyncDCPulse:
 
     # ❸ [REPLACE] READ_STATUS 파싱: CHK 제외 + 1B/2B 모두 처리
     async def read_status_flags(self) -> Optional[int]:
-        resp = await self._read_raw(0x90, "READ_STATUS")
-        if not resp or len(resp) < 2:
-            await self._emit_failed("READ_STATUS", f"응답 길이 부족: {resp!r}")
-            return None
-        cmd, data, chk = self._unpack_rs232_payload(resp)
-        if cmd != 0x90:
-            await self._emit_failed("READ_STATUS", f"예상과 다른 CMD: 0x{cmd:02X}, raw={resp.hex(' ')}")
-            return None
-        flags = self._flags16_from_data(data)
-        if flags is None:
-            await self._emit_failed("READ_STATUS", f"데이터 없음: raw={resp.hex(' ')}")
-            return None
-        return flags
+        # 0x90 응답이 나올 때까지 짧게 3~4회 재시도 (중간 0x9A 등은 무시)
+        for attempt in range(3):
+            resp = await self._read_raw(0x90, "READ_STATUS")
+            if not resp or len(resp) < 2:
+                await self._emit_failed("READ_STATUS", f"응답 길이 부족: {resp!r}")
+                return None
+            cmd, data, chk = self._unpack_rs232_payload(resp)
+            if cmd == 0x90:
+                flags = self._flags16_from_data(data)
+                if flags is None:
+                    await self._emit_failed("READ_STATUS", f"데이터 없음: raw={resp.hex(' ')}")
+                    return None
+                return flags
+
+            # ❗ 0x90이 아닌 프레임(예: 0x9A)은 스팬으로 들어온 읽기 결과이므로 무시하고 재시도
+            await self._emit_status(f"READ_STATUS: 다른 프레임(0x{cmd:02X}) 수신 → 무시하고 재시도")
+            await asyncio.sleep(0.03)
+
+        await self._emit_failed("READ_STATUS", "연속 이질 프레임으로 STATUS 확인 실패")
+        return None
 
     @staticmethod
     def _hv_on_from_status(flags: int) -> bool:

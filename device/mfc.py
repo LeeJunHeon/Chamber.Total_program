@@ -240,9 +240,8 @@ class AsyncMFC:
     # ---- 고수준 제어 API (기존 handle_command 세분화) ----
     async def set_flow(self, channel: int, ui_value: float):
         """FLOW_SET + (옵션) READ_FLOW_SET 검증."""
-        sf = float(self.scale_factors.get(channel, 1.0))
-        scaled = float(ui_value) * sf
-        await self._emit_status(f"Ch{channel} GAS 스케일: {ui_value:.2f}sccm → 장비 {scaled:.2f}")
+        scaled = self._ui_to_hw(channel, float(ui_value))  # %FS
+        await self._emit_status(f"Ch{channel} GAS 스케일: {ui_value:.2f}sccm → 장비 {scaled:.2f}%FS")
 
         # SET (no-reply)
         set_cmd = self._mk_cmd("FLOW_SET", channel=channel, value=scaled)
@@ -574,10 +573,10 @@ class AsyncMFC:
         for ch, name in self.gas_map.items():
             idx = ch - 1
             if idx < len(vals):
-                v_ui = float(vals[idx])                   # ★ R60은 sccm(UI)로 들어옴
-                sf = float(self.scale_factors.get(ch, 1.0))
-                await self._emit_flow(name, v_ui)        # 이벤트는 UI 그대로
-                self._monitor_flow(ch, v_ui * sf)        # ★ 비교는 HW 단위로
+                v_hw = float(vals[idx])                   # R60은 %FS(HW)로 옴
+                v_ui = self._hw_to_ui(ch, v_hw)          # sccm로 변환해 UI에 표시
+                await self._emit_flow(name, v_ui)        # UI(sccm) 이벤트
+                self._monitor_flow(ch, v_hw)             # 비교는 HW(%FS)
 
     async def read_pressure(self):
         """R5(예: READ_PRESSURE) 읽고 UI 문자열/숫자로 이벤트."""
@@ -1051,10 +1050,10 @@ class AsyncMFC:
                     for ch, name in self.gas_map.items():
                         idx = ch - 1
                         if idx < len(vals):
-                            v_ui = float(vals[idx])               # ★ UI(sccm)
-                            sf = float(self.scale_factors.get(ch, 1.0))
-                            await self._emit_flow(name, v_ui)     # UI 그대로
-                            self._monitor_flow(ch, v_ui * sf)     # ★ HW로 변환해 비교
+                            v_hw = float(vals[idx])               # %FS
+                            v_ui = self._hw_to_ui(ch, v_hw)      # sccm
+                            await self._emit_flow(name, v_ui)
+                            self._monitor_flow(ch, v_hw)         # %FS
 
                 # R5 → pressure 이벤트
                 line = await self._send_and_wait_line(self._mk_cmd("READ_PRESSURE"),
@@ -1079,19 +1078,14 @@ class AsyncMFC:
                     return
 
                 vals = await self._read_r60_values(tag=f"[STAB R60 ch{ch}]")
-                actual_ui = None
+                actual_hw = None
                 if vals and (ch - 1) < len(vals):
-                    actual_ui = float(vals[ch - 1])              # ★ UI(sccm)
-
-                sf = float(self.scale_factors.get(ch, 1.0))
-                actual_hw = None if actual_ui is None else (actual_ui * sf)  # ★ 비교용(HW)
+                    actual_hw = float(vals[ch - 1])              # %FS(HW)
+                actual_ui = None if actual_hw is None else self._hw_to_ui(ch, actual_hw)  # sccm
                 tol = target * float(FLOW_ERROR_TOLERANCE)
-
-                self._stab_attempts += 1
                 await self._emit_status(
-                    f"GAS 확인... (목표: {target/sf:.2f}sccm, 현재: {(-1 if actual_ui is None else actual_ui):.2f}sccm)"
+                f"GAS 확인... (목표: {self._hw_to_ui(ch, target):.2f}sccm, 현재: {(-1 if actual_ui is None else actual_ui):.2f}sccm)"
                 )
-
                 if (actual_hw is not None) and (abs(actual_hw - target) <= tol):
                     await self._emit_confirmed("FLOW_ON")
                     self._stab_ch = None
@@ -1503,6 +1497,15 @@ class AsyncMFC:
             print(f"[{src}] {msg}")
 
     # --- 유틸 ---
+    def _ui_to_hw(self, ch: int, ui: float) -> float:
+        sf = float(self.scale_factors.get(ch, 1.0))
+        return float(ui) * sf  # sccm -> %FS
+
+    def _hw_to_ui(self, ch: int, hw: float) -> float:
+        sf = float(self.scale_factors.get(ch, 1.0))
+        # sf==0 보호
+        return float(hw) / (sf if sf != 0 else 1.0)  # %FS -> sccm
+
     def _is_poll_read_cmd(self, cmd_str: str, tag: str = "") -> bool:
         return (tag or "").startswith("[POLL ")
 
