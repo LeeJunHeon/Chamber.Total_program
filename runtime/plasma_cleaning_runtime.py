@@ -59,6 +59,10 @@ class PlasmaCleaningRuntime:
         self._log_fp = None                # 현재 런 세션 로그 파일 핸들
         self._log_session_id = None        # 파일명에 들어갈 세션 ID (timestamp)
 
+        # 🔒 종료 챗 exactly-once 보장용 플래그
+        self._final_notified: bool = False
+        self._stop_requested: bool = False
+
         # 주입 장치
         self.plc: Optional[AsyncPLC] = plc
         self.mfc_gas: Optional[AsyncMFC] = mfc_gas
@@ -521,6 +525,8 @@ class PlasmaCleaningRuntime:
             poll_interval_ms=1000,
             rampdown_interval_ms=50,
             direct_mode=True, # ★ Plasma Cleaning에서는 DC처럼 즉시 ON/OFF
+            write_inv_a=1.74,      # ← 보정 스케일 적용
+            write_inv_b=0.0,      # ← 오프셋(기본 0)
         )
 
     # =========================
@@ -571,6 +577,8 @@ class PlasmaCleaningRuntime:
             await self._preflight_connect(timeout_s=10.0)
         except Exception as e:
             self.append_log("PC", f"오류: {e!r}")
+            # ✅ 프리플라이트 실패에도 '종료' 챗 1회 보장
+            self._notify_finish_once(ok=False, reason=str(e), stopped=False)
             self._running = False
             try:
                 self._close_run_log()
@@ -588,6 +596,13 @@ class PlasmaCleaningRuntime:
         except Exception as e:
             self.append_log("PC", f"오류: {e!r}")
         finally:
+            # ✅ 어떤 경로든(성공/실패/예외/STOP) 종료 챗 1회 보장
+            self._notify_finish_once(
+                ok=bool(success),
+                reason=None if success else "runtime/controller error",
+                stopped=self._stop_requested
+            )
+
             self._running = False
             # ▶ 공정 종료 후 초기 UI 복귀
             self._reset_ui_state(restore_time_min=self._last_process_time_min)
@@ -596,6 +611,9 @@ class PlasmaCleaningRuntime:
             self._close_run_log()
 
     async def _on_click_stop(self) -> None:
+        # ✅ 사용자 STOP 표식(종료 챗에 반영)
+        self._stop_requested = True
+
         # 1) 컨트롤러 루프 중단 요청
         with contextlib.suppress(Exception):
             if hasattr(self, "pc") and self.pc:
@@ -919,6 +937,32 @@ class PlasmaCleaningRuntime:
             ])
             if w_stop and hasattr(w_stop, "setEnabled"):
                 w_stop.setEnabled(False)
+
+    def _notify_finish_once(self, *, ok: bool, reason: str | None = None, stopped: bool = False) -> None:
+        """플라즈마 클리닝 최종 결과를 구글챗으로 1회만 전송."""
+        if self._final_notified:
+            return
+        self._final_notified = True
+
+        if not self.chat:
+            return
+
+        payload = {
+            "process_name": "Plasma Cleaning",
+            "prefix": self.prefix,
+            "ch": self._selected_ch,
+            "stopped": bool(stopped),
+        }
+        if reason:
+            payload["reason"] = str(reason)
+            payload["errors"] = [str(reason)]
+
+        # 카드 전송 실패(네트워크/포맷 등)가 앱 흐름을 깨지 않도록 보호
+        with contextlib.suppress(Exception):
+            self.chat.notify_process_finished_detail(bool(ok), payload)
+            if hasattr(self.chat, "flush"):
+                self.chat.flush()
+
 
 # ─────────────────────────────────────────────────────────────
 # 유틸
