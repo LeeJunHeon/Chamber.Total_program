@@ -784,6 +784,14 @@ class PlasmaCleaningRuntime:
             pass
 
     def append_log(self, src: str, msg: str) -> None:
+        # 🔇 Plasma Cleaning 화면에서 MFC/IG의 [poll] 라인 숨김(표시만 억제)
+        try:
+            if isinstance(msg, str) and msg.lstrip().startswith("[poll]"):
+                if isinstance(src, str) and (src.startswith("MFC") or src.startswith("IG")):
+                    return
+        except Exception:
+            pass
+
         line = f"[{datetime.now().strftime('%H:%M:%S')}] {src}: {msg}"
         # UI
         if self._w_log:

@@ -285,12 +285,30 @@ class PlasmaCleaningController:
 
             # 6) RF POWER(PLC DAC) 설정
             self._log("RF", f"RF Power 적용: {p.rf_power_w:.1f} W")
-            self._show_state(f"RF Start {p.rf_power_w:.1f} W")   # ★ 추가
+            self._show_state(f"RF Start {p.rf_power_w:.1f} W")
+
+            # ▶ STOP과 경합: STOP이 먼저면 RF 목표대기(180s)를 즉시 취소
+            rf_task = asyncio.create_task(self._rf_start(p.rf_power_w), name="PC.RFStart")
+            stop_task = asyncio.create_task(self._stop_evt.wait(),       name="PC.StopWait")
+            done, pending = await asyncio.wait({rf_task, stop_task}, return_when=asyncio.FIRST_COMPLETED)
+
+            # STOP이 먼저 왔으면 RF 시작 대기를 취소하고 종료 루틴으로
+            if stop_task in done and rf_task in pending:
+                self._log("STEP", "STOP during RF START → cancel rf_start & shutdown")
+                rf_task.cancel()
+                with contextlib.suppress(Exception):
+                    await rf_task
+                raise asyncio.CancelledError
+
+            # RF 쪽이 끝났다면 결과를 확인
+            with contextlib.suppress(Exception):
+                stop_task.cancel()
             try:
-                await self._rf_start(p.rf_power_w)
-                self._log("RF", "RF START OK")  # ★ LOG
+                # 예외가 있으면 여기서 터져서 finally로 이동
+                await rf_task
+                self._log("RF", "RF START OK")
             except Exception as e:
-                self._log("RF", f"RF START 실패: {e!r}")  # ★ LOG
+                self._log("RF", f"RF START 실패: {e!r}")
                 raise
 
             # 7) PROCESS TIME 카운트다운
@@ -305,16 +323,14 @@ class PlasmaCleaningController:
                 self._show_countdown(left)
                 await asyncio.sleep(1.0)
 
-
         except asyncio.CancelledError:
-            self.last_result = "stop"
-            self.last_reason = "사용자 STOP"
-            # STOP 이벤트로 중단이면 실패로 기록
-            if self._stop_evt.is_set():
-                self.last_result = "fail"
+            # on_mfc_failed()에서 이미 fail/사유가 설정됐다면 그대로 유지
+            if self.last_result != "fail":
+                self.last_result = "stop"
                 if not getattr(self, "last_reason", ""):
-                    self.last_reason = "Stopped by MFC/pressure failure"
+                    self.last_reason = "사용자 STOP"
             self._log("PC", "CancelledError: 외부 STOP 또는 경쟁 종료로 중단")
+
         except Exception as e:
             # ★ LOG: 예외 스택 트레이스까지 남김
             self.last_result = "fail"

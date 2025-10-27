@@ -60,6 +60,9 @@ class RFPowerAsync:
         reflected_wait_timeout_s: float = 60.0,
         maintain_need_consecutive: int = 2,
         direct_mode: bool = False,   # ★ 추가: 즉시 설정/즉시 OFF 모드
+        # 목표 fwd W → 장비 입력 W 로 바꿔주는 역변환(기본값=무보정)
+        write_inv_a: float = 1.0,
+        write_inv_b: float = 0.0,
     ):
         """
         send_rf_power:              검증 응답을 기대하는 전송 (예: AsyncFaduino.set_rf_power)
@@ -114,6 +117,10 @@ class RFPowerAsync:
 
         #ramp up 없이 direct
         self._direct_mode = bool(direct_mode)  # ★ 추가
+                
+        # ▶ 쓰기(전송)용 역변환 계수 저장
+        self._w_inv_a = float(write_inv_a)
+        self._w_inv_b = float(write_inv_b)
 
     # ======= 이벤트 스트림 =======
     async def events(self) -> AsyncGenerator[RFPowerEvent, None]:
@@ -146,7 +153,8 @@ class RFPowerAsync:
         if getattr(self, "_direct_mode", False):
             self._is_running = True
             await self._emit_state_changed(True)
-            self.state = "MAINTAINING"
+            # ▶ 유지가 아니라 램프업으로 시작해야 도달 이벤트가 발생합니다.
+            self.state = "RAMPING_UP"
             await self._emit_status(f"Direct set: {self.target_power:.1f} W")
 
             # 폴링 활성화/재시작 (표시/로그 유지를 위해)
@@ -163,12 +171,12 @@ class RFPowerAsync:
             else:
                 await self._emit_status("상태읽기 콜백 없음 → 측정 없이 진행")
 
-            # 목표 W를 즉시 전송하고, 바로 목표 도달로 간주
+            # 목표 W를 즉시 1회 전송만 하고, '도달 판단'은 폴링/보정 루프에 맡김
             try:
                 await self._send_rf_power(float(self.target_power))
                 self.current_power_step = float(self.target_power)
                 self._last_sent_w = float(self.target_power)   # ★ 추가: 마지막 전송값 캐시(권장)
-                self._ev_nowait(RFPowerEvent(kind="target_reached"))
+                await self._emit_status(f"Direct set {self.target_power:.1f}W 전송 — 도달 판정 대기")
             except Exception as e:
                 await self._emit_status(f"Direct set 실패: {e!r}")
             return
@@ -468,9 +476,13 @@ class RFPowerAsync:
         power_w = max(0.0, min(RF_MAX_POWER, float(power_w)))
         if self._last_sent_w is not None and abs(power_w - self._last_sent_w) < 1e-6:
             return
+        
+        # ▶ 전송 직전 보정(역변환) 적용
+        scaled = self._xform_write(power_w)
+
         try:
-            await self._send_rf_power_cb(power_w)
-            self._last_sent_w = power_w
+            await self._send_rf_power_cb(scaled)  # ← 보정된 값으로 전송
+            self._last_sent_w = power_w          # 내부 좌표계는 계속 ‘fwd W’
         except Exception as e:
             await self._emit_status(f"RF 설정 전송 실패(verified): {e}")
 
@@ -479,12 +491,22 @@ class RFPowerAsync:
         no-reply 전송 경로(램프다운 등). 실패는 status로만 보고.
         """
         power_w = max(0.0, min(RF_MAX_POWER, float(power_w)))
+        scaled = self._xform_write(power_w)
         try:
-            await self._send_rf_power_unverified_cb(power_w)
+            await self._send_rf_power_unverified_cb(scaled)  # ← 보정된 값으로 전송
         except Exception as e:
             await self._emit_status(f"RF 설정 전송 실패(unverified): {e}")
 
     # ======= 이벤트/유틸 =======
+    def _xform_write(self, desired_forward_w: float) -> float:
+        """
+        제어 목표(PLC가 읽어줄 fwd W) → 장비에 쓸 입력값(PLC에 기록할 W)
+        선형 역변환: input = a*target + b
+        """
+        v = self._w_inv_a * float(desired_forward_w) + self._w_inv_b
+        # RF_MAX_POWER 범위에 맞춰 클램프
+        return max(0.0, min(float(RF_MAX_POWER), v))
+    
     async def wait_power_off(self, timeout_s: float = 8.0) -> bool:
         try:
             await asyncio.wait_for(self._power_off_evt.wait(), timeout=timeout_s)

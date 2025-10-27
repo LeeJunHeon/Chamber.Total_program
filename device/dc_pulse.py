@@ -561,25 +561,28 @@ class AsyncDCPulse:
         if label in ("OUTPUT_ON", "OUTPUT_OFF"):
             intended_on = (label == "OUTPUT_ON")
 
-            # ACK/ERR 자체 판정
+            # ① ACK이 아니거나 응답 형식이 애매할 때 → 짧게 대기 후 '상태 재확인'
             if not ok:
-                await self._emit_failed(label, "응답 없음/실패")
-                return False
+                await asyncio.sleep(0.08)
+                ver = await self._verify_output_state()   # READ_STATUS → HV On 비트 판정
+                if ver is not None and ver == intended_on:
+                    await self._emit_status(f"{label} 확인(재검증 성공)")
+                    ok = True
+                else:
+                    await self._emit_failed(label, "응답 없음/실패")
+                    return False
 
+            # ② 여기부터는 '성공' 경로 동일
             if intended_on:
-                # ✅ 요구사항 1: ON 이후 별도 검증 없이 즉시 폴링 시작
                 self._out_on = True
                 self.set_process_status(True)
-                await self._emit_confirmed(label)  # _VERIFIED 붙이지 않고 단순 확정
+                await self._emit_confirmed(label)
                 return True
             else:
-                # ✅ 요구사항 2: OFF 이후 현재 출력 파워(PIV) 0W 확인 로직 추가
-                # (기존 READ_STATUS 기반 확인을 제거하지 않고, 로그용으로 1회 읽어둠)
                 with contextlib.suppress(Exception):
                     ver = await self._verify_output_state()
                     await self._emit_status(f"READ_STATUS after OFF: HV_ON={bool(ver)}")
 
-                # 폴링은 반드시 중단
                 self._out_on = False
                 self.set_process_status(False)
 

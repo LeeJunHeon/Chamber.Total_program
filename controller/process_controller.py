@@ -1280,7 +1280,8 @@ class ProcessController:
         if not self.current_params:
             return []
 
-        info = self._get_common_process_info(self.current_params)
+        # ✅ 공통 정보는 항상 방어적으로 가져오기
+        ci = self._get_common_process_info(self.current_params or {}) or {}
         steps: List[ProcessStep] = []
 
         steps.append(ProcessStep(
@@ -1288,23 +1289,34 @@ class ProcessController:
             message='[긴급] Main Shutter 즉시 닫기', no_wait=True
         ))
 
-        both = (info['use_dc'] or info['use_dc_pulse']) and (info['use_rf'] or info['use_rf_pulse'])
-        if info['use_dc']:
+        # ✅ 키 누락 대비: .get() + 기본값
+        use_dc       = bool(ci.get('use_dc', False))
+        use_rf       = bool(ci.get('use_rf', False))
+        use_dc_pulse = bool(ci.get('use_dc_pulse', False))
+        use_rf_pulse = bool(ci.get('use_rf_pulse', False))
+
+        # ✅ gas_info가 비어도 안전하게 폴백
+        default_gas_info = {"AR": {"channel": 1}, "O2": {"channel": 2}, "N2": {"channel": 3}}
+        gas_info = ci.get('gas_info') or default_gas_info
+
+        both = (use_dc or use_dc_pulse) and (use_rf or use_rf_pulse)
+
+        if use_dc:
             steps.append(ProcessStep(
                 action=ActionType.DC_POWER_STOP, message='[긴급] DC Power 즉시 차단',
                 parallel=both, no_wait=True
             ))
-        if info['use_rf']:
+        if use_rf:
             steps.append(ProcessStep(
                 action=ActionType.RF_POWER_STOP, message='[긴급] RF Power 즉시 차단',
                 parallel=both, no_wait=True
             ))
-        if info['use_rf_pulse']:
+        if use_rf_pulse:
             steps.append(ProcessStep(
                 action=ActionType.RF_PULSE_STOP, message='[긴급] RF Pulse 즉시 차단',
                 parallel=both, no_wait=True
             ))
-        if info['use_dc_pulse']:
+        if use_dc_pulse:
             steps.append(ProcessStep(
                 action=ActionType.DC_PULSE_STOP, message='[긴급] DC Pulse 즉시 차단',
                 parallel=both, no_wait=True
@@ -1316,16 +1328,17 @@ class ProcessController:
                 message='[긴급] Power Select 즉시 OFF', no_wait=True
             ))
 
-        # ✅ (추가) 선택된 가스만 MFC FLOW_OFF (no_wait)
-        for gas, gi in info['gas_info'].items():
+        # ✅ 선택된 가스만 MFC FLOW_OFF (no_wait) — 키 에러 방지 + 변수명 충돌 방지
+        for gas, ginfo in gas_info.items():
             if self.current_params.get(f"use_{gas.lower()}", False):
                 steps.append(ProcessStep(
                     action=ActionType.MFC_CMD,
-                    params=('FLOW_OFF', {'channel': gi["channel"]}),
-                    message=f'[긴급] Ch{gi["channel"]}({gas}) FLOW OFF',
+                    params=('FLOW_OFF', {'channel': ginfo["channel"]}),
+                    message=f'[긴급] Ch{ginfo["channel"]}({gas}) FLOW OFF',
                     no_wait=True
                 ))
 
+        # ✅ PLC 가스 차단도 선택된 가스만
         for gas in ("AR", "O2", "N2"):
             if self.current_params.get(f"use_{gas.lower()}", False):
                 steps.append(ProcessStep(
