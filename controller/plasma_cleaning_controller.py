@@ -60,7 +60,6 @@ class PlasmaCleaningController:
         # UI
         show_state: Callable[[str], None],
         show_countdown: Callable[[int], None],
-        chat_notifier: Optional[Any] = None,   # ★ 추가
     ) -> None:
         self._log = log
         self._plc_check_gv_interlock = plc_check_gv_interlock
@@ -92,7 +91,6 @@ class PlasmaCleaningController:
         self.last_result: str = "success"
         self.last_reason: str = ""
 
-        self.chat = chat_notifier              # ★ 보관
         self._final_notified = False           # ★ 중복발송 가드(권장)
 
     # ─────────────────────────────────────────────────────────────
@@ -156,15 +154,6 @@ class PlasmaCleaningController:
             f"IG_target={p.target_pressure:.3e} Torr, SP4={p.sp4_setpoint_mTorr:.2f} mTorr, "
             f"RF={p.rf_power_w:.1f} W, time={p.process_time_min:.1f} min")
         )
-
-        # 시작 카드 (컨트롤러가 직접)
-        if self.chat:
-            self.chat.notify_process_started({
-                "process_note":  "Plasma Cleaning",
-                "process_time":  float(p.process_time_min),
-                "use_rf_power":  True,
-                "rf_power":      float(p.rf_power_w),
-            })
 
         try:
             # 1) PLC - 게이트밸브 인터락 확인 → OPEN_SW → 5초 후 OPEN_LAMP TRUE?
@@ -360,32 +349,3 @@ class PlasmaCleaningController:
             self.is_running = False
             self._show_state("IDLE")
             self._log("PC", "플라즈마 클리닝 종료")
-
-            # 최종 카드 (컨트롤러가 직접, 단 1회)
-            if self.chat and not self._final_notified:
-                ok = (self.last_result == "success")
-                payload = {"process_name": "Plasma Cleaning"}
-
-                if not ok:
-                    reason_txt = (
-                        self.last_reason or
-                        ("사용자 STOP" if self.last_result == "stop" else "원인 미상")
-                    )
-
-                    # ✅ 핵심: Chat 카드에서 원인 노출되도록 errors 추가(리스트)
-                    payload["reason"] = reason_txt
-                    payload["errors"] = [reason_txt]
-
-                    # ✅ 얕은 라벨링(선택): G_V 인터락 텍스트가 보이면 라벨/코드 부여
-                    if ("인터락" in reason_txt) or ("GV" in reason_txt.upper()):
-                        payload["status_label"] = "GV 인터락 실패"
-                        payload["reason"] = "gv_interlock_false"
-
-                    # STOP 뱃지 유지
-                    if (self.last_result == "stop") or ("사용자 STOP" in reason_txt):
-                        payload["stopped"] = True
-
-                self.chat.notify_process_finished_detail(ok, payload)
-                self._final_notified = True
-
-

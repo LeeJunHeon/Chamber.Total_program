@@ -482,7 +482,6 @@ class PlasmaCleaningRuntime:
             show_state=_show_state,
             show_countdown=_show_countdown,
             ig_wait_for_base_torr=_ig_wait_for_base_torr,
-            chat_notifier=self.chat,
         )
 
     def _make_rf_async(self) -> Optional[RFPowerAsync]:
@@ -587,6 +586,20 @@ class PlasmaCleaningRuntime:
             # 시작 시 분 값으로 복원
             self._reset_ui_state(restore_time_min=self._last_process_time_min)
             return
+        
+        # (선택) 시작 카드 전송 — 런타임 기준으로 일원화
+        with contextlib.suppress(Exception):
+            if self.chat:
+                self.chat.notify_process_started({
+                    "process_note":  "Plasma Cleaning",
+                    "process_time":  float(p.process_time_min),
+                    "use_rf_power":  True,
+                    "rf_power":      float(p.rf_power_w),
+                    "prefix":        self.prefix,
+                    "ch":            self._selected_ch,
+                })
+                if hasattr(self.chat, "flush"):
+                    self.chat.flush()
 
         # 4) 컨트롤러 실행
         success = False
@@ -597,9 +610,23 @@ class PlasmaCleaningRuntime:
             self.append_log("PC", f"오류: {e!r}")
         finally:
             # ✅ 어떤 경로든(성공/실패/예외/STOP) 종료 챗 1회 보장
+            # 컨트롤러가 남긴 사유가 있으면 우선 사용
+            reason = None
+            if not success:
+                try:
+                    r = getattr(self, "pc", None)
+                    if r:
+                        lr = getattr(r, "last_reason", "") or ""
+                        if lr:
+                            reason = str(lr)
+                except Exception:
+                    pass
+                if not reason:
+                    reason = "runtime/controller error"
+
             self._notify_finish_once(
                 ok=bool(success),
-                reason=None if success else "runtime/controller error",
+                reason=reason,
                 stopped=self._stop_requested
             )
 
