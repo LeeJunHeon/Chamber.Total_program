@@ -574,12 +574,12 @@ class PlasmaCleaningRuntime:
             return
 
         # 2) 교차 실행 차단
-        if runtime_state.is_running(ch):
+        if runtime_state.is_running("chamber", ch):
             self._post_warning("실행 오류", f"CH{ch}는 이미 다른 공정이 실행 중입니다.")
             return
 
         # 3) 실행/시작 마킹
-        runtime_state.set_running(ch, True)
+        runtime_state.set_running("chamber", True, ch)
         runtime_state.mark_started("pc", ch)
         runtime_state.mark_started("chamber", ch)
 
@@ -654,6 +654,12 @@ class PlasmaCleaningRuntime:
             # 이벤트 펌프도 정리(있으면)
             for t in getattr(self, "_event_tasks", []):
                 t.cancel()
+
+            # ★★★ 모든 경로에서 전역/리소스 정리 보장 ★★★
+            with contextlib.suppress(Exception):
+                runtime_state.set_running(ch, False)      # 실행중 해제 (중복 호출 안전)
+            with contextlib.suppress(Exception):
+                runtime_state.mark_finished("chamber", ch)  # CH 종료 시각 기록(중복 안전)
 
             # UI/상태/로그 정리
             self._running = False

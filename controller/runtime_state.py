@@ -162,7 +162,7 @@ class RuntimeState:
         ch = 1 if int(selected_ch) != 2 else 2
 
         # 1) PC 자신의 쿨다운
-        remain_pc = self.remaining_cooldown("pc", ch, cooldown_s)
+        remain_pc = self.remaining_cooldown("pc", [1, 2], ch, cooldown_s)
 
         # 2) Chamber 쿨다운 (선택 CH에 따라 범위 다름)
         check_chs = [1] if ch == 1 else [1, 2]
