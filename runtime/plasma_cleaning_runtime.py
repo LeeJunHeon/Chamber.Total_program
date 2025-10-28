@@ -11,6 +11,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import QMessageBox, QPlainTextEdit, QApplication
+from PySide6.QtCore import Qt   # ⬅ 챔버와 동일한 모달리티/속성 적용용
 
 # 장비/컨트롤러
 from device.mfc import AsyncMFC
@@ -601,6 +602,7 @@ class PlasmaCleaningRuntime:
         runtime_state.set_running("chamber", True, ch)
         runtime_state.mark_started("pc", ch)
         runtime_state.mark_started("chamber", ch)
+        runtime_state.set_running("pc", True, ch)   # 권장
 
         # 4) UI/로그 준비
         p = self._read_params_from_ui()
@@ -1051,6 +1053,7 @@ class PlasmaCleaningRuntime:
 
             # ② 동시실행 차단 해제: 'chamber' 러닝 플래그 false
             runtime_state.set_running("chamber", False, ch)
+            runtime_state.set_running("pc", False, ch)  # 권장
         except Exception:
             pass
 
@@ -1076,17 +1079,23 @@ class PlasmaCleaningRuntime:
     def _post_warning(self, title: str, text: str) -> None:
         try:
             box = QMessageBox(self.ui)
-            box.setIcon(QMessageBox.Warning)
             box.setWindowTitle(title)
             box.setText(text)
+            box.setIcon(QMessageBox.Warning)
             box.setStandardButtons(QMessageBox.Ok)
-            box.open()  # 비모달
+            box.setWindowModality(Qt.WindowModality.WindowModal)             # ⬅ 챔버와 동일
+            box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)      # ⬅ 챔버와 동일
+
+            # 참조 유지 & 종료 시 정리
             self._msg_boxes.append(box)
-            box.finished.connect(
-                lambda _=None, b=box: self._msg_boxes.remove(b) if b in self._msg_boxes else None
-            )
+            def _cleanup(_res: int):
+                with contextlib.suppress(ValueError):
+                    self._msg_boxes.remove(box)
+                box.deleteLater()
+            box.finished.connect(_cleanup)
+
+            box.open()  # 비모달(메인 루프 방해 X)
         except Exception:
-            # UI가 없거나 headless면 로그만 남김
             self.append_log("PC", f"[경고] {title}: {text}")
 
 # ─────────────────────────────────────────────────────────────

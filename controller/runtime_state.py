@@ -147,32 +147,24 @@ class RuntimeState:
 
     def pc_block_reason(self, ch: int, cooldown_s: float = 60.0) -> tuple[bool, float, str]:
         """
-        Plasma Cleaning 시작 가능 여부/대기시간/사유를 반환.
-        - 실행 중 우선 차단: 어떤 챔버 공정(ch1/ch2) 혹은 다른 PC가 돌고 있으면 PC 시작 금지
+        Plasma Cleaning 시작 가능 여부/대기시간/사유(텍스트).
+        요구사항: 동일 채널만 금지(교차 채널 허용).
+        - 실행중 차단: 여기서는 하지 않음(런타임에서 동일 채널만 별도로 체크)
         - 쿨다운:
             · PC 글로벌(1,2)           : 60초
-            · CH (선택적)              : ch=1 -> CH1만, ch=2 -> CH1/CH2 모두 60초
-            · TSP (ch=1일 때만 적용)   : 60초
+            · CH '동일 채널'(ch)        : 60초
+            · (선택) TSP→CH1 영향       : ch==1일 때만 60초
         """
-        # 1) 현재 실행 중 충돌 확인(챔버 우선)
-        if self.is_running("chamber", 1) or self.is_running("chamber", 2):
-            return (False, 0.0, "다른 챔버 공정이 실행 중(챔버 공정 우선)")
-        if self.is_running("pc", 1) or self.is_running("pc", 2):
-            return (False, 0.0, "다른 Plasma Cleaning이 실행 중")
-        if ch == 1 and self.is_running("tsp", 0):
-            return (False, 0.0, "TSP가 실행 중")
-
-        # 2) 쿨다운 계산
+        # 실행중 여부는 여기서 판단하지 않는다(런타임에서 동일채널만 차단)
         rem_pc  = self.remaining_cooldown("pc", [1, 2], cooldown_s)
-        rem_ch  = self.remaining_cooldown("chamber", [1] if int(ch) == 1 else [1, 2], cooldown_s)
+        rem_ch  = self.remaining_cooldown("chamber", ch, cooldown_s)
         rem_tsp = self.remaining_cooldown("tsp", 0, cooldown_s) if int(ch) == 1 else 0.0
 
         remain = max(rem_pc, rem_ch, rem_tsp, 0.0)
         if remain > 0:
-            # 이유 문자열 상세화
             reasons = []
             if rem_pc  > 0: reasons.append(f"PC {rem_pc:.0f}s")
-            if rem_ch  > 0: reasons.append(f"CH {rem_ch:.0f}s")
+            if rem_ch  > 0: reasons.append(f"CH{ch} {rem_ch:.0f}s")
             if rem_tsp > 0: reasons.append(f"TSP {rem_tsp:.0f}s")
             return (False, remain, "쿨다운 대기: " + ", ".join(reasons))
 
