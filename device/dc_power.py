@@ -43,6 +43,10 @@ class DCPowerEvent:
     current: Optional[float] = None
     running: Optional[bool] = None
 
+# ========= 이벤트 모델 =========
+# ... (EventKind / DCPowerEvent 정의 아래 아무 곳)
+DC_LOW_W_THRESH = 1.0   # W 이하이면 '사실상 0W'로 간주
+DC_LOW_STREAK_N = 3     # 연속 3회(폴링 3번) 기준
 
 class DCPowerAsync:
     def __init__(
@@ -94,6 +98,8 @@ class DCPowerAsync:
 
         self._enabled = False  # SET 래치
 
+        self._low_power_streak = 0
+
     # ======= 퍼블릭 이벤트 스트림 =======
     async def events(self) -> AsyncGenerator[DCPowerEvent, None]:
         while True:
@@ -107,6 +113,7 @@ class DCPowerAsync:
             return
 
         self.target_power = float(max(0.0, min(DC_MAX_POWER, target_power)))
+        self._low_power_streak = 0   # ★ 연속 카운터 리셋
 
         try:
             await self._toggle_enable(True)
@@ -221,6 +228,31 @@ class DCPowerAsync:
                     res = await self._request_status_read() if self._request_status_read else None
                     if res is not None:
                         self._ingest_status_result(res)
+                        
+                        # === 연속 저전력 감시(최소 수정) ===
+                        try:
+                            p = float(self.power_w or 0.0)
+                            if p <= DC_LOW_W_THRESH:
+                                self._low_power_streak += 1
+                                # (선택) 진행 상황 로그
+                                await self._emit_status(
+                                    f"저전력 감시: {self._low_power_streak}/{DC_LOW_STREAK_N} "
+                                    f"(meas={p:.1f}W ≤ {DC_LOW_W_THRESH:.1f}W)"
+                                )
+                                if self._low_power_streak >= DC_LOW_STREAK_N:
+                                    await self._emit_status(
+                                        f"DC 파워가 {DC_LOW_STREAK_N}회 연속 ≤ {DC_LOW_W_THRESH:.1f}W → 공정 중단"
+                                    )
+                                    # 주의: 자기 자신(_control_task)을 cancel하는 cleanup을 'await'하면 교착되므로,
+                                    #       별도 태스크로 날리고 이 루프는 즉시 탈출한다.
+                                    asyncio.create_task(self.cleanup())
+                                    break
+                            else:
+                                if self._low_power_streak:
+                                    self._low_power_streak = 0
+                        except Exception:
+                            pass
+
                 except Exception as e:
                     await self._emit_status(f"상태 읽기 요청 실패: {e}")
                 await asyncio.sleep(DC_INTERVAL_MS / 1000.0)
