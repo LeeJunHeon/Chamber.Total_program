@@ -566,108 +566,103 @@ class PlasmaCleaningRuntime:
     async def _on_click_start(self) -> None:
         ch = int(getattr(self, "_selected_ch", 1))
 
-        # 1) 쿨다운 교차 검사 (PC global + 챔버 최근 종료)
-        ok, remain, reason = runtime_state.pc_block_reason(ch, cooldown_s=60.0)
-        if not ok:
+        # 1) 쿨다운 교차 검사 (PC 전역 + 해당 챔버)
+        ok_cool, remain, reason = runtime_state.pc_block_reason(ch, cooldown_s=60.0)
+        if not ok_cool:
             self._post_warning("대기 필요", f"{reason}")
             self.append_log("PC", f"쿨다운 대기 중: 남은 {int(remain)}초")
             return
 
-        # 2) 교차 실행 차단: 해당 챔버가 이미 다른 공정으로 실행 중이면 시작 금지
+        # 2) 교차 실행 차단
         if runtime_state.is_running(ch):
             self._post_warning("실행 오류", f"CH{ch}는 이미 다른 공정이 실행 중입니다.")
             return
 
-        # 3) 전역 실행/시작 마킹 (PC + CH)
+        # 3) 실행/시작 마킹
         runtime_state.set_running(ch, True)
         runtime_state.mark_started("pc", ch)
         runtime_state.mark_started("chamber", ch)
-        
-        # 1) 파라미터 수집
+
+        # 4) UI/로그 준비
         p = self._read_params_from_ui()
         self._last_process_time_min = float(p.process_time_min)
-
-        # 1.2) 실행 상태로 버튼 전환 + 상태 텍스트 (중복 클릭 방지)
         self._running = True
         self._set_running_ui_state()
-        self._set_state_text("Preparing…")  # 선택
-
-        # 1.5) 파일 로그 오픈
+        self._set_state_text("Preparing…")
         self._open_run_log(p)
         self.append_log("PC", "파일 로그 시작")
-
-        # 🔒 종료/정지 가드 플래그 초기화 (다음 런에서 누락 방지)
         self._stop_requested = False
         self._final_notified = False
 
-        # 2) 프리플라이트 — 실패 시 UI/파일 복구 후 종료
-        try:
-            await self._preflight_connect(timeout_s=10.0)
-        except Exception as e:
-            self.append_log("PC", f"오류: {e!r}")
-            # ✅ 프리플라이트 실패에도 '종료' 챗 1회 보장
-            self._notify_finish_once(ok=False, reason=str(e), stopped=False)
-            self._running = False
-            try:
-                self._close_run_log()
-            except Exception:
-                pass
-            # 시작 시 분 값으로 복원
-            self._reset_ui_state(restore_time_min=self._last_process_time_min)
-            return
-        
-        # (선택) 시작 카드 전송 — 런타임 기준으로 일원화
-        with contextlib.suppress(Exception):
-            if self.chat:
-                self.chat.notify_process_started({
-                    "process_note":  "Plasma Cleaning",
-                    "process_time":  float(p.process_time_min),
-                    "use_rf_power":  True,
-                    "rf_power":      float(p.rf_power_w),
-                    "prefix":        self.prefix,
-                    "ch":            self._selected_ch,
-                })
-                if hasattr(self.chat, "flush"):
-                    self.chat.flush()
+        # ★ 최종 결과 (finally에서 사용할 컨테이너)
+        ok_final: bool = False
+        stopped_final: bool = False
+        final_reason: Optional[str] = None
 
-            # 4) 컨트롤러 실행
+        try:
+            # 5) 프리플라이트 (실패 시도 finally에서 공통 정리)
+            await self._preflight_connect(timeout_s=10.0)
+
+            # 6) 시작 카드 전송 — 여기만 suppress
+            with contextlib.suppress(Exception):
+                if self.chat:
+                    self.chat.notify_process_started({
+                        "process_note":  "Plasma Cleaning",
+                        "process_time":  float(p.process_time_min),
+                        "use_rf_power":  True,
+                        "rf_power":      float(p.rf_power_w),
+                        "prefix":        self.prefix,
+                        "ch":            self._selected_ch,
+                    })
+                    if hasattr(self.chat, "flush"):
+                        self.chat.flush()
+
+            # 7) 컨트롤러 실행
             exc_reason = None
             try:
                 await self.pc._run(p)
             except asyncio.CancelledError:
-                # 컨트롤러 쪽에서 이미 stop/fail로 상태를 남겼을 수 있으나,
-                # 예외가 발생한 사실은 기록해둔다 (최종 reason 우선순위에만 사용).
                 exc_reason = "사용자 STOP"
             except Exception as e:
                 exc_reason = f"{type(e).__name__}: {e!s}"
 
-            # ✅ 최종 판정은 '컨트롤러의 상태'를 기준으로 일괄 해석
             lr = str(getattr(self.pc, "last_result", "") or "").strip().lower()   # "success" | "fail" | "stop"
             ls = str(getattr(self.pc, "last_reason", "") or "").strip()
+            stopped_final = (lr == "stop")
 
-            stopped = (lr == "stop")
             if exc_reason:
-                # 실행 중 예외가 있었다면 무조건 실패로 보고, 예외 메시지를 이유로 사용
-                ok = False
+                ok_final = False
                 final_reason = exc_reason
             else:
-                # 예외가 없다면 컨트롤러의 최종 상태로 판정
-                ok = (lr == "success")
-                # 실패/중단이면 컨트롤러가 남긴 이유를 우선, 비어있으면 보수적으로 기본값
-                final_reason = (ls if (not ok or stopped) else None) or (None if ok else "runtime/controller error")
+                ok_final = (lr == "success")
+                final_reason = (ls if (not ok_final or stopped_final) else None) or (None if ok_final else "runtime/controller error")
 
-            # 디버깅 편의를 위해 lr/ls까지 남김
-            self.append_log("PC", f"Final notify ok={ok}, stopped={stopped}, lr={lr!r}, reason={final_reason!r}")
+            self.append_log("PC", f"Final notify ok={ok_final}, stopped={stopped_final}, lr={lr!r}, reason={final_reason!r}")
 
-            # 'stopped'는 반드시 컨트롤러 상태 기반으로 전송
-            self._notify_finish_once(ok=ok, reason=final_reason, stopped=stopped)
+        except Exception as e:
+            # 프리플라이트/초기 오류 등
+            ok_final = False
+            stopped_final = False
+            final_reason = f"{type(e).__name__}: {e!s}"
+            self.append_log("PC", f"오류: {e!r}")
 
+        finally:
+            # ★ 모든 경로에서 단 한 번만 수행되는 공통 정리
+            #    (_notify_finish_once 안에 pc/chamber 종료 및 set_running(False) 포함 — 위 1)에서 수정함)
+            self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final)
+
+            # 이벤트 펌프도 정리(있으면)
+            for t in getattr(self, "_event_tasks", []):
+                t.cancel()
+
+            # UI/상태/로그 정리
             self._running = False
-            # ▶ 공정 종료 후 초기 UI 복귀
+            self._process_timer_active = False
             self._reset_ui_state(restore_time_min=self._last_process_time_min)
             self._set_state_text("IDLE")
             self.append_log("PC", "파일 로그 종료")
-            self._close_run_log()
+            with contextlib.suppress(Exception):
+                self._close_run_log()
 
     async def _on_click_stop(self) -> None:
         # ✅ 사용자 STOP 표식(종료 챗에 반영)
@@ -1002,10 +997,12 @@ class PlasmaCleaningRuntime:
             return
         self._final_notified = True
 
-        # ★ PC 종료 기록(전역)
+        # ★ 전역 종료/해제: PC 전역 쿨다운 + 해당 챔버 쿨다운 + 실행중 플래그 해제
         try:
             ch = int(getattr(self, "_selected_ch", 1))
-            runtime_state.mark_finished("pc", ch)
+            runtime_state.mark_finished("pc", ch)        # 동일/다음 Plasma Cleaning 1분 대기
+            runtime_state.mark_finished("chamber", ch)   # 사용한 챔버도 1분 대기
+            runtime_state.set_running(ch, False)         # 교차실행 차단 플래그 해제
         except Exception:
             pass
 
@@ -1022,7 +1019,7 @@ class PlasmaCleaningRuntime:
             payload["reason"] = str(reason)
             payload["errors"] = [str(reason)]
 
-        # 카드 전송 실패(네트워크/포맷 등)가 앱 흐름을 깨지 않도록 보호
+        # 카드 전송 실패가 공정을 깨지 않도록 보호
         with contextlib.suppress(Exception):
             self.chat.notify_process_finished_detail(bool(ok), payload)
             if hasattr(self.chat, "flush"):
