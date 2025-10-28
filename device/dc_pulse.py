@@ -540,13 +540,8 @@ class AsyncDCPulse:
             # 출력 on/off 는 반드시 1바이트 ACK(0x06)만 성공으로 인정
             return bool(resp) and len(resp) == 1 and resp[0] == 0x06
     
-        if not resp:
-            return False
-        # RS-232 write echo: 0x06=ACK(성공), 0x04=ERR(실패)
-        if len(resp) == 1:
-            return resp[0] == 0x06
-        # 그 외(읽기 응답 등 프레임 payload)는 일단 수신만 되면 성공 처리
-        return True
+        # ✅ 모든 쓰기 명령의 정상 응답은 ACK(0x06) 1바이트뿐
+        return bool(resp) and len(resp) == 1 and resp[0] == 0x06
     
     # ===================== 실패시 검증하는 로직 =====================
     # ✅ 추가: 수신 프레임 큐 비우기

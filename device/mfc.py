@@ -1362,6 +1362,21 @@ class AsyncMFC:
         self._ev_nowait(MFCEvent(kind="pressure", value=ui_val, text=text))
 
     def _monitor_flow(self, channel: int, actual_flow_hw: float):
+        # ★ setpoint(입력값)과 실제값을 sccm 기준으로 변환
+        target_ui = self._hw_to_ui(channel, float(self.last_setpoints.get(channel, 0.0)))
+        actual_ui = self._hw_to_ui(channel, float(actual_flow_hw))
+
+        # ★ 예외: 세트포인트가 1.0 sccm이면 중단 조건에서 제외
+        #     (그 외에는 실제 유량이 1.0 sccm 이하일 때 공정 중단 이벤트 발생)
+        if target_ui != 1.0 and actual_ui <= 1.0:
+            self._ev_nowait(MFCEvent(
+                kind="command_failed",
+                cmd="FLOW_MONITOR",
+                reason=(f"Ch{channel} 유량 {actual_ui:.2f}sccm (≤ 1.0) — 공정 중단")
+            ))
+            return
+
+        # === 이하 기존 로직 유지 (상태 경고용 모니터) ===
         target_flow = float(self.last_setpoints.get(channel, 0.0))
         if target_flow < 0.1:
             self.flow_error_counters[channel] = 0
