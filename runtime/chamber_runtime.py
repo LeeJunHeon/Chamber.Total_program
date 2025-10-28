@@ -228,6 +228,7 @@ class ChamberRuntime:
         self._last_polling_targets: TargetsMap | None = None
         self._last_state_text: str | None = None
         self._delay_task: Optional[asyncio.Task] = None
+        self._dc_failed_flag: bool = False     # ★ 추가
         self._auto_connect_enabled = True  # ← 실패시 False로 내려 자동 재연결 차단
         self._run_select: dict[str, bool] | None = None  # ← 이번 런에서 펄스 선택 상태
         self._owns_plc = bool(owns_plc if owns_plc is not None else (int(chamber_no) == 1))  # 기본 CH1
@@ -928,8 +929,14 @@ class ChamberRuntime:
                 self.append_log(f"DC{self.ch}", f"측정: {float(ev.power or 0.0):.1f} W, {float(ev.voltage or 0.0):.1f} V, {float(ev.current or 0.0):.2f} A")
             elif k == "target_reached":
                 self.process_controller.on_dc_target_reached()
+            elif k == "target_failed":                      # ★ 추가: 실패 통지 받으면
+                self._dc_failed_flag = True                 #    실패 플래그 세우고
+                self.process_controller._step_failed("DC Power", ev.message or "low-power")  
             elif k == "power_off_finished":
-                self.process_controller.on_device_step_ok()
+                if not self._dc_failed_flag:                # ★ 추가: 실패 시에는 OK 토큰(다음 스텝 진행) 차단
+                    self.process_controller.on_device_step_ok()
+                else:
+                    self._dc_failed_flag = False            #    1회성 플래그 해제
 
     async def _pump_rf_events(self) -> None:
         if not self.rf_power:

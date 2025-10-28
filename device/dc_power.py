@@ -31,6 +31,7 @@ EventKind = Literal[
     "display",          # power/voltage/current 표시
     "state_changed",
     "target_reached",
+    "target_failed",    # ★ 추가
     "power_off_finished",
 ]
 
@@ -243,8 +244,12 @@ class DCPowerAsync:
                                     await self._emit_status(
                                         f"DC 파워가 {DC_LOW_STREAK_N}회 연속 ≤ {DC_LOW_W_THRESH:.1f}W → 공정 중단"
                                     )
-                                    # 주의: 자기 자신(_control_task)을 cancel하는 cleanup을 'await'하면 교착되므로,
-                                    #       별도 태스크로 날리고 이 루프는 즉시 탈출한다.
+                                    # ★ 추가: 컨트롤러가 '실패'로 전환하도록 명시적 실패 이벤트 발행
+                                    self._ev_nowait(DCPowerEvent(
+                                        kind="target_failed",
+                                        message=(f"저전력 연속 {self._low_power_streak}/{DC_LOW_STREAK_N} "
+                                                f"(meas={float(self.power_w or 0.0):.1f}W ≤ {DC_LOW_W_THRESH:.1f}W)")
+                                    ))
                                     asyncio.create_task(self.cleanup())
                                     break
                             else:
