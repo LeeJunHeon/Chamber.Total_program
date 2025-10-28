@@ -234,9 +234,6 @@ class ChamberRuntime:
         self._owns_plc = bool(owns_plc if owns_plc is not None else (int(chamber_no) == 1))  # 기본 CH1
         self._notify_plc_owner = on_plc_owner 
         self._last_running_state: Optional[bool] = None  
-
-        # ★ 추가: 직전 공정 종료 시각(모노토닉, 쿨다운 용)
-        self._last_finish_monotonic: float | None = None
         
         # ⬇️ 추가: 프로그램 시작 시점에 CH 상태를 명시적으로 False로 등록
         try:
@@ -663,6 +660,12 @@ class ChamberRuntime:
                 elif kind == "started":
                     params = payload.get("params", {}) or {}
 
+                    # ✅ 전역: CH 공정 '시작' 시각 마킹
+                    try:
+                        runtime_state.mark_started("chamber", self.ch)
+                    except Exception:
+                        pass
+
                     # ✅ 시작 카드 전송(성공 시 로그 X, 실패만 로그)
                     if self.chat:
                         p = dict(params)
@@ -719,11 +722,11 @@ class ChamberRuntime:
                     except Exception:
                         pass
 
-                    # ★ 추가: 종료 시각 기록(쿨다운 기준)
+                    # ✅ 전역: CH 공정 '종료' 시각 마킹
                     try:
-                        self._last_finish_monotonic = self._loop.time()
+                        runtime_state.mark_finished("chamber", self.ch)
                     except Exception:
-                        self._last_finish_monotonic = None
+                        pass
 
                     # 0) 재연결 선차단 + 폴링 완전 OFF
                     self._auto_connect_enabled = False
@@ -770,11 +773,11 @@ class ChamberRuntime:
                     with contextlib.suppress(Exception):
                         self._clear_queue_and_reset_ui()
 
-                    # ★ 추가: 종료 시각 기록(쿨다운 기준)
+                    # ✅ 전역: CH 공정 '종료' 시각 마킹 (중단도 종료로 취급)
                     try:
-                        self._last_finish_monotonic = self._loop.time()
+                        runtime_state.mark_finished("chamber", self.ch)
                     except Exception:
-                        self._last_finish_monotonic = None
+                        pass
 
                     if getattr(self, "_pending_device_cleanup", False):
                         with contextlib.suppress(Exception):
@@ -1527,22 +1530,12 @@ class ChamberRuntime:
     # ------------------------------------------------------------------
     # Start/Stop (개별 챔버)
     def _handle_start_clicked(self, _checked: bool = False):
-        # ★ 추가: 60초 쿨다운 검사(첫 공정은 None → 통과)
-        try:
-            now = self._loop.time()
-        except Exception:
-            try:
-                now = asyncio.get_running_loop().time()
-            except Exception:
-                now = None
-
-        if self._last_finish_monotonic is not None and now is not None:
-            elapsed = now - self._last_finish_monotonic
-            need = 60.0  # ← 쿨다운(초). 필요시 config로 빼도 됨.
-            if elapsed < need:
-                remain = int(need - elapsed + 0.999)
-                self._post_warning("대기 필요", f"이전 공정 종료 후 1분 대기 필요합니다.\n{remain}초 후에 시작하십시오.")
-                return
+        # ✅ 전역 runtime_state 기준 60초 쿨다운
+        remain = runtime_state.remaining_cooldown("chamber", self.ch, cooldown_s=60.0)
+        if remain > 0.0:
+            secs = int(remain + 0.999)
+            self._post_warning("대기 필요", f"이전 공정 종료 후 1분 대기 필요합니다.\n{secs}초 후에 시작하십시오.")
+            return
 
         if self.process_controller.is_running:
             self._post_warning("실행 오류", "다른 공정이 실행 중입니다."); 
@@ -1643,6 +1636,13 @@ class ChamberRuntime:
                 if self._pc_stopping and self._pending_device_cleanup:
                     self.append_log("MAIN", "STOP fallback → heavy cleanup")
                     await self._stop_device_watchdogs(light=False)
+
+                    # ✅ 전역 종료 시각 마킹(이벤트가 오지 않은 강제 경로 보완)
+                    try:
+                        runtime_state.mark_finished("chamber", self.ch)
+                    except Exception:
+                        pass
+
                     self._pending_device_cleanup = False
                     self._pc_stopping = False
                     self._clear_queue_and_reset_ui()
@@ -2188,12 +2188,7 @@ class ChamberRuntime:
             self._log_fp = None
 
     def _clear_queue_and_reset_ui(self) -> None:
-        # ★ 다음 Start 시 1분 쿨다운 기준 시각을 항상 기록
-        try:
-            self._last_finish_monotonic = self._loop.time()
-        except Exception:
-            self._last_finish_monotonic = None
-
+        # 전역 runtime_state로 종료 시각을 기록하므로 로컬 타임스탬프는 불필요
         self.process_queue = []
         self.current_process_index = -1
         self._reset_ui_after_process()
@@ -2202,8 +2197,10 @@ class ChamberRuntime:
         except Exception:
             pass
         self._log_file_path = None
-        try: self._prestart_buf.clear()
-        except Exception: pass
+        try: 
+            self._prestart_buf.clear()
+        except Exception: 
+            pass
 
     # ------------------------------------------------------------------
     # 기본 UI값/리셋

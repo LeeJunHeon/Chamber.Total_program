@@ -18,6 +18,7 @@ from device.plc import AsyncPLC
 from device.ig import AsyncIG  # IG 직접 주입 지원
 from controller.plasma_cleaning_controller import PlasmaCleaningController, PCParams
 from device.rf_power import RFPowerAsync, RFPowerEvent
+from controller.runtime_state import runtime_state  # ★ 추가: 전역 쿨다운/이력
 
 class PlasmaCleaningRuntime:
     """
@@ -62,6 +63,12 @@ class PlasmaCleaningRuntime:
         # 🔒 종료 챗 exactly-once 보장용 플래그
         self._final_notified: bool = False
         self._stop_requested: bool = False
+
+        # ★ 추가: 직전 공정 종료 시각(모노토닉) — 쿨다운 검사 기준
+        self._last_finish_monotonic: Optional[float] = None
+
+        # ★ 추가: 비모달 경고창 보관(가비지 컬렉션 방지)
+        self._msg_boxes: list[QMessageBox] = []
 
         # 주입 장치
         self.plc: Optional[AsyncPLC] = plc
@@ -560,6 +567,17 @@ class PlasmaCleaningRuntime:
             w_stop.clicked.connect(lambda: asyncio.ensure_future(self._on_click_stop()))
 
     async def _on_click_start(self) -> None:
+        # ★ 전역 RuntimeState 기반 60초 쿨다운 + 교차검사(요청사항)
+        ch = int(getattr(self, "_selected_ch", 1))
+        ok, remain, reason = runtime_state.pc_block_reason(ch, cooldown_s=60.0)
+        if not ok:
+            self._post_warning("대기 필요", f"{reason}")
+            self.append_log("PC", f"쿨다운 대기 중: 남은 {int(remain)}초")
+            return
+
+        # 시작 마킹(PC)
+        runtime_state.mark_started("pc", ch)
+        
         # 1) 파라미터 수집
         p = self._read_params_from_ui()
         self._last_process_time_min = float(p.process_time_min)
@@ -632,6 +650,13 @@ class PlasmaCleaningRuntime:
                 stopped=self._stop_requested
             )
 
+            # ★ 추가: 쿨다운 기준 시각(모노토닉) 기록
+            try:
+                self._last_finish_monotonic = self._loop.time()
+            except Exception:
+                with contextlib.suppress(Exception):
+                    self._last_finish_monotonic = asyncio.get_running_loop().time()
+
             self._running = False
             # ▶ 공정 종료 후 초기 UI 복귀
             self._reset_ui_state(restore_time_min=self._last_process_time_min)
@@ -666,6 +691,13 @@ class PlasmaCleaningRuntime:
 
         # ▶ STOP 후에도 챔버 공정처럼 UI를 초깃값으로 복구
         self._reset_ui_state(restore_time_min=self._last_process_time_min)
+
+        # ★ 추가: 사용자가 STOP한 즉시 쿨다운 카운트 시작
+        try:
+            self._last_finish_monotonic = self._loop.time()
+        except Exception:
+            with contextlib.suppress(Exception):
+                self._last_finish_monotonic = asyncio.get_running_loop().time()
 
     async def _safe_rf_stop(self) -> None:
         # ▶ 방어: 어떤 경로로 불려도 카운트다운 표시는 종료
@@ -968,10 +1000,16 @@ class PlasmaCleaningRuntime:
                 w_stop.setEnabled(False)
 
     def _notify_finish_once(self, *, ok: bool, reason: str | None = None, stopped: bool = False) -> None:
-        """플라즈마 클리닝 최종 결과를 구글챗으로 1회만 전송."""
         if self._final_notified:
             return
         self._final_notified = True
+
+        # ★ PC 종료 기록(전역)
+        try:
+            ch = int(getattr(self, "_selected_ch", 1))
+            runtime_state.mark_finished("pc", ch)
+        except Exception:
+            pass
 
         if not self.chat:
             return
@@ -991,6 +1029,22 @@ class PlasmaCleaningRuntime:
             self.chat.notify_process_finished_detail(bool(ok), payload)
             if hasattr(self.chat, "flush"):
                 self.chat.flush()
+
+    def _post_warning(self, title: str, text: str) -> None:
+        try:
+            box = QMessageBox(self.ui)
+            box.setIcon(QMessageBox.Warning)
+            box.setWindowTitle(title)
+            box.setText(text)
+            box.setStandardButtons(QMessageBox.Ok)
+            box.open()  # 비모달
+            self._msg_boxes.append(box)
+            box.finished.connect(
+                lambda _=None, b=box: self._msg_boxes.remove(b) if b in self._msg_boxes else None
+            )
+        except Exception:
+            # UI가 없거나 headless면 로그만 남김
+            self.append_log("PC", f"[경고] {title}: {text}")
 
 # ─────────────────────────────────────────────────────────────
 # 유틸
