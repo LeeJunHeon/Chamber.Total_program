@@ -1,6 +1,9 @@
 # main.py
 # -*- coding: utf-8 -*-
-import sys, asyncio, re
+
+# 추가: host 설치 유틸
+from host.setup import install_host
+import sys, asyncio, re, atexit
 from typing import Optional, Literal
 from pathlib import Path
 

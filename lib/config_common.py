@@ -2,6 +2,10 @@
 import os
 from pathlib import Path
 
+# === 외부 제어 호스트 서버 설정 ===
+HOST_BIND = "0.0.0.0"   # 로컬만 쓰면 "127.0.0.1"
+HOST_PORT = 50070       # 방화벽 인바운드 허용 필요
+
 # ===== TCP 유휴재연결(초) =====
 IG_INACTIVITY_REOPEN_S  = 0   # 0 → 사용 안함
 MFC_INACTIVITY_REOPEN_S = 0

@@ -303,6 +303,7 @@ class PlasmaCleaningController:
             # 7) PROCESS TIME 카운트다운
             self._show_state(f"PROCESS {p.process_time_min:.1f} min")   # ★ 추가
             total_sec = int(max(0, p.process_time_min * 60.0))
+
             for left in range(total_sec, -1, -1):
                 if self._stop_evt.is_set():
                     self._log("STEP", f"STOP 이벤트 감지 → 남은 {left}s 시점에서 종료 진입")
@@ -311,6 +312,10 @@ class PlasmaCleaningController:
                     raise asyncio.CancelledError()  # finally로 넘어가도록 명시 중단
                 self._show_countdown(left)
                 await asyncio.sleep(1.0)
+        
+            # ✅ 정상 루트 종단 시 '성공'을 최종 확정 (혹시 중간에 값이 덮였어도 회복)
+            self.last_result = "success"
+            self.last_reason = ""
 
         except asyncio.CancelledError:
             # on_mfc_failed()에서 이미 fail/사유가 설정됐다면 그대로 유지

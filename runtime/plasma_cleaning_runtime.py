@@ -64,9 +64,6 @@ class PlasmaCleaningRuntime:
         self._final_notified: bool = False
         self._stop_requested: bool = False
 
-        # ★ 추가: 직전 공정 종료 시각(모노토닉) — 쿨다운 검사 기준
-        self._last_finish_monotonic: Optional[float] = None
-
         # ★ 추가: 비모달 경고창 보관(가비지 컬렉션 방지)
         self._msg_boxes: list[QMessageBox] = []
 
@@ -625,37 +622,37 @@ class PlasmaCleaningRuntime:
                 if hasattr(self.chat, "flush"):
                     self.chat.flush()
 
-        # 4) 컨트롤러 실행
-        success = False
-        try:
-            await self.pc._run(p)   # 컨트롤러가 내부적으로 결과를 집계
-            # ✅ 최종 성공 여부는 last_result로 판정
-            success = (getattr(self.pc, "last_result", "") == "success")
-        except Exception as e:
-            self.append_log("PC", f"오류: {e!r}")
-            success = False
-        finally:
-            # 실패 사유는 항상 컨트롤러가 집계한 last_reason을 우선 사용
-            reason = None
-            if not success:
-                reason = (getattr(self.pc, "last_reason", "") or "runtime/controller error")
-
-            # 디버깅용(원하면 주석 처리 가능)
-            self.append_log("PC", f"Final notify ok={success}, stopped={self._stop_requested}, "
-                                f"reason={reason!r}")
-
-            self._notify_finish_once(
-                ok=bool(success),
-                reason=reason,
-                stopped=self._stop_requested
-            )
-
-            # ★ 추가: 쿨다운 기준 시각(모노토닉) 기록
+            # 4) 컨트롤러 실행
+            exc_reason = None
             try:
-                self._last_finish_monotonic = self._loop.time()
-            except Exception:
-                with contextlib.suppress(Exception):
-                    self._last_finish_monotonic = asyncio.get_running_loop().time()
+                await self.pc._run(p)
+            except asyncio.CancelledError:
+                # 컨트롤러 쪽에서 이미 stop/fail로 상태를 남겼을 수 있으나,
+                # 예외가 발생한 사실은 기록해둔다 (최종 reason 우선순위에만 사용).
+                exc_reason = "사용자 STOP"
+            except Exception as e:
+                exc_reason = f"{type(e).__name__}: {e!s}"
+
+            # ✅ 최종 판정은 '컨트롤러의 상태'를 기준으로 일괄 해석
+            lr = str(getattr(self.pc, "last_result", "") or "").strip().lower()   # "success" | "fail" | "stop"
+            ls = str(getattr(self.pc, "last_reason", "") or "").strip()
+
+            stopped = (lr == "stop")
+            if exc_reason:
+                # 실행 중 예외가 있었다면 무조건 실패로 보고, 예외 메시지를 이유로 사용
+                ok = False
+                final_reason = exc_reason
+            else:
+                # 예외가 없다면 컨트롤러의 최종 상태로 판정
+                ok = (lr == "success")
+                # 실패/중단이면 컨트롤러가 남긴 이유를 우선, 비어있으면 보수적으로 기본값
+                final_reason = (ls if (not ok or stopped) else None) or (None if ok else "runtime/controller error")
+
+            # 디버깅 편의를 위해 lr/ls까지 남김
+            self.append_log("PC", f"Final notify ok={ok}, stopped={stopped}, lr={lr!r}, reason={final_reason!r}")
+
+            # 'stopped'는 반드시 컨트롤러 상태 기반으로 전송
+            self._notify_finish_once(ok=ok, reason=final_reason, stopped=stopped)
 
             self._running = False
             # ▶ 공정 종료 후 초기 UI 복귀
@@ -691,13 +688,6 @@ class PlasmaCleaningRuntime:
 
         # ▶ STOP 후에도 챔버 공정처럼 UI를 초깃값으로 복구
         self._reset_ui_state(restore_time_min=self._last_process_time_min)
-
-        # ★ 추가: 사용자가 STOP한 즉시 쿨다운 카운트 시작
-        try:
-            self._last_finish_monotonic = self._loop.time()
-        except Exception:
-            with contextlib.suppress(Exception):
-                self._last_finish_monotonic = asyncio.get_running_loop().time()
 
     async def _safe_rf_stop(self) -> None:
         # ▶ 방어: 어떤 경로로 불려도 카운트다운 표시는 종료

@@ -1,0 +1,149 @@
+===== 스퍼터 자동 공정 레시피 작성 가이드 (CSV) =====
+
+본 가이드는 업로드된 코드(chamber_runtime.py / process_controller.py / mfc.py / config_*.py)를 기준으로,
+CSV 각 컬럼의 의미/단위/허용값/채널별 제약(CH1/CH2)을 정리한 문서입니다.
+파일 인코딩은 UTF-8(BOM 권장)을 사용하세요.
+
+----------------------------------------------------------------
+[공통 입력 규칙]
+----------------------------------------------------------------
+• 불리언(T/F) 입력: T, TRUE, 1, Y, YES → True 로 처리. 그 외는 False.
+• 숫자 입력: 정수/실수/지수표기(예: 9.0e-7) 모두 허용. 빈칸이면 기본값으로 대체.
+• 컬럼은 순서 변경 가능(헤더명이 정확하면 됨). 추가로 모르는 컬럼이 있어도 무시됨.
+• 최소 1개 이상의 가스를 선택해야 합니다(use_ar/use_o2/use_n2 중 하나 이상 T). 유량은 음수 불가.
+• Process_name 이 'delay 10' 처럼 "delay N[smhd]" 패턴이면 순수 지연 단계로 인식됩니다.
+  - 단위: s(초), m(분; 기본), h(시간), d(일). 예) delay 30s, delay 2h, delay 1d
+
+----------------------------------------------------------------
+[컬럼별 상세 설명]
+----------------------------------------------------------------
+1) # (순번)
+   - 선택사항. 비워도 무방(내부에서 공정 n번째로 표시할 때 사용).
+
+2) Process_name (공정 이름/비고)
+   - 자유 텍스트. UI/로그 표시에 사용.
+   - 특수: 'delay N[smhd]' 형태면 지연 단계로만 처리(장치 동작 없이 대기).
+
+3) base_pressure (베이스 압력, 단위: Torr)
+   - 예: 9.0e-7
+   - IG 대기 단계에서 해당 값 이하로 떨어질 때까지 대기합니다.
+
+4) working_pressure (작업 압력, 단위: mTorr)
+   - SP1 세트 값으로 사용됩니다. 내부적으로 하드웨어 단위 변환(MFC_PRESSURE_SCALE=0.1, 소수 3자리)을 거쳐 전송.
+   - 예: 30.0 → 장비 스케일 3.000(예시 로그: “SP1 스케일: UI 30.00 → 장비 3.000”).
+
+5) process_time (공정 시간, 단위: 분)
+   - 소수 허용(예: 0.5 → 30초). 0 이하이면 공정 본체 시간이 사실상 0이므로 주의.
+
+6) shutter_delay (셔터 지연, 단위: 분)
+   - 메인 셔터 열기 전 대기 시간. 0 이면 즉시 다음 단계로 진행.
+
+7) integration_time (OES 적분 시간, 단위: ms, 정수)
+   - OES 측정 시작 시 함께 전달됩니다. 기본값 60.
+
+8) Ar (T/F), O2 (T/F), N2 (T/F) — 가스 선택
+   - 최소 1개 이상 True 여야 함.
+   - CH1: N2 라인이 없으므로, 값이 들어와도 CH1에서는 강제로 무시됩니다(자동 0/False).
+
+9) Ar_flow, O2_flow, N2_flow (각 가스 유량, 단위: sccm)
+   - 0 이상 실수. 선택된 가스에 대해서만 적용/검증.
+   - 내부적으로 채널별 스케일을 곱해 장비 %FS로 변환 후 전송/검증합니다.
+     • 가스↔채널: AR→Ch1, O2→Ch2, N2→Ch3
+     • 스케일 팩터(MFC_SCALE_FACTORS):
+       - 기본(config_common.py): {1:1.0, 2:10.0, 3:1.0}
+       - CH1(config_ch1.py): {1:1.0, 2:1.0, 3:1.0} 로 오버라이드
+     - 실제 장비 반응/검증은 MFC 안정화 루프에서 수행합니다.
+
+10) use_dc_power (T/F), dc_power (W)
+    - DC 연속 파워 요청. 값>0 필요.
+    - 지원 여부는 채널 구성에 따름(기본: CH2만 허용, CH1은 미허용).
+    - CH1에서는 혼선을 피하기 위해 F 권장.
+
+11) use_rf_power (T/F), rf_power (W)
+    - RF 연속 파워 요청. 기본 구성에선 미사용(지원 False).
+    - 향후 확장 용도. 현재는 F로 두는 것을 권장.
+
+12) use_dc_pulse (T/F), dc_pulse_power (W), dc_pulse_freq (kHz), dc_pulse_duty_cycle (%)
+    - DC 펄스 파워 요청. CH1은 반드시 T 이어야 함(검증에서 필수).
+    - 제약(검증 로직 기준):
+      • dc_pulse_power > 0
+      • dc_pulse_freq: 20..150 (kHz)  (*빈칸이면 장비 기존 설정 유지)
+      • dc_pulse_duty_cycle: 1..99 (%) (*빈칸이면 장비 기존 설정 유지)
+    - 병렬 실행: DC 연속과 RF(연속/펄스)의 병렬만 허용. DC-Pulse 단계 자체는 단독으로 시작됩니다.
+
+13) use_rf_pulse (T/F), rf_pulse_power (W), rf_pulse_freq (kHz), rf_pulse_duty_cycle (%)
+    - RF 펄스 파워 요청(기본: CH2 지원).
+    - 제약(검증 로직 기준):
+      • rf_pulse_power > 0
+      • rf_pulse_freq: 1..100 (kHz)   (*빈칸이면 기존 설정 유지, 전송 시 Hz로 변환하여 보냄)
+      • rf_pulse_duty_cycle: 1..99 (%)
+
+14) gun1, gun2, gun3 (T/F) — 건 셔터 사용
+    - CH2 전용. 선택된 건만 PLC로 셔터 오픈을 보냅니다.
+    - 검증 규칙(CH2): 1개 또는 2개만 True 허용(0개/3개는 오류).
+
+15) main_shutter (T/F) — 메인 셔터
+    - True면 셔터 지연 후 메인 셔터를 엽니다.
+
+16) G1 Target, G2 Target, G3 Target (문자열)
+    - 선택사항. 로그/표시용 메타정보(타깃명). 비워도 동작에는 영향 없음.
+
+17) power_select (T/F)
+    - CH2 전용. 시작 시 SW_RF_SELECT ON, 종료/중단 시 OFF를 보냅니다.
+
+----------------------------------------------------------------
+[채널별(챔버별) 동작 요약]
+----------------------------------------------------------------
+• CH1
+  - 파워: DC-Pulse 전용(필수). DC 연속/ RF 계열은 무시(지원 False).
+  - 가스: AR/O2만 실동작(N2는 강제 무시).
+  - 압력 제어: SP3_ON → SP1_SET/ON 순서로 동작.
+
+• CH2
+  - 파워: DC 연속 허용, RF-Pulse 허용(기본). RF 연속은 기본 비활성.
+  - 건 셔터: gun1/gun2/gun3 중 1~2개 선택 필수.
+  - 압력 제어: SP4_ON → SP1_SET/ON 순서로 동작.
+  - (선택) power_select=T 이면 RF 셀렉트 코일 ON/OFF 제어.
+
+----------------------------------------------------------------
+[값 해석/전송 세부(참고)]
+----------------------------------------------------------------
+• 압력 전송 스케일: UI(mTorr) × 0.1 → HW 값(소수 3자리). 예: 30.0 mTorr → 3.000
+• RF 펄스 주파수: CSV(kHz) → 전송 시 Hz(int)로 변환.
+• 펄스 파라미터 빈칸(None): 장비의 현재 설정값 유지(keep)로 처리.
+• MFC 유량: UI(sccm) × 채널별 스케일 → 장비 %FS 전송. 설정 후 READ/안정화 루프에서 확인.
+
+----------------------------------------------------------------
+[입력 예시 (CH1)]
+----------------------------------------------------------------
+#,Process_name,base_pressure,working_pressure,process_time,shutter_delay,integration_time,Ar,O2,N2,Ar_flow,O2_flow,N2_flow,use_dc_power,dc_power,use_rf_power,rf_power,use_dc_pulse,dc_pulse_power,dc_pulse_freq,dc_pulse_duty_cycle,use_rf_pulse,rf_pulse_power,rf_pulse_freq,rf_pulse_duty_cycle,gun1,gun2,gun3,main_shutter,G1 Target,G2 Target,G3 Target,power_select
+1,Run-CH1,9.0e-7,30,0.5,0,60,T,T,F,20,10,0,F,0,F,0,T,300,20,60,F,0,,,F,F,F,T,Ti,---,---,F
+
+----------------------------------------------------------------
+[입력 예시 (CH2)]
+----------------------------------------------------------------
+#,Process_name,base_pressure,working_pressure,process_time,shutter_delay,integration_time,Ar,O2,N2,Ar_flow,O2_flow,N2_flow,use_dc_power,dc_power,use_rf_power,rf_power,use_dc_pulse,dc_pulse_power,dc_pulse_freq,dc_pulse_duty_cycle,use_rf_pulse,rf_pulse_power,rf_pulse_freq,rf_pulse_duty_cycle,gun1,gun2,gun3,main_shutter,G1 Target,G2 Target,G3 Target,power_select
+1,Run-CH2,9.0e-7,30,2.0,0.2,60,T,F,F,20,0,0,T,200,F,0,F,0,, ,T,400,50,50,T,F,F,T,Cu,---,---,T
+
+----------------------------------------------------------------
+[자주 묻는 질문]
+----------------------------------------------------------------
+Q1) CSV에 주석을 달 수 있나요?
+  - 순수 CSV는 주석을 보존하지 않습니다. 엑셀 셀 메모/주석도 CSV로 저장하면 사라집니다.
+  - 방법 1: 별도 .txt 가이드 파일 사용(본 문서처럼).
+  - 방법 2: CSV에 'Notes' 같은 비고 컬럼을 추가(파서가 모르는 컬럼은 무시되므로 안전).
+
+Q2) dc_pulse_freq=10 처럼 범위를 벗어나면?
+  - 검증 단계에서 오류로 잡혀 공정 큐가 중단됩니다. CH1은 20~150 kHz, Duty 1~99%를 맞춰 주세요.
+
+Q3) CH1에서 N2가 T면 어떻게 되나요?
+  - 런타임에서 강제로 False/0 처리하며 “CH1은 N2 미지원 → N2 설정을 무시합니다.” 라고 로그에 안내합니다.
+
+Q4) 건 셔터 선택 규칙(챔버2)?
+  - 1개 또는 2개만 선택하세요(0개/3개는 오류).
+
+Q5) 빈칸 기본값은?
+  - base_pressure: 1e-5, working_pressure: 0, process_time: 0, shutter_delay: 0, integration_time: 60(ms), 파워류: 0, 플래그류: F
+  - 단, 0/False 값은 실제 동작에서 단계가 생략될 수 있으니 의도한 값인지 확인하세요.
+
+===== 끝 =====
