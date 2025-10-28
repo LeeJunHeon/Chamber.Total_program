@@ -181,10 +181,19 @@ class TSPPageController:
         if self._busy:
             self._log("이미 실행 중입니다."); return
 
-        # ★ CH1 공정 중이면 시작 자체 차단(태스크 생성 이전)
+        # 1) 교차 실행 차단: CH1이 현재 다른 공정으로 점유 중이면 금지
         try:
             if runtime_state.is_running(1):
                 self._log("[TSP] CH1이 공정 중이라서 시작할 수 없습니다. 종료 후 다시 시도하세요.")
+                return
+        except Exception:
+            pass
+
+        # 2) 60초 쿨다운 검사: 최근 CH1 리소스 사용(챔버/PC/TSP)이 끝난 지 60초 이내면 대기
+        try:
+            remain = runtime_state.remaining_cooldown("chamber", 1, cooldown_s=60.0)
+            if remain > 0.0:
+                self._log(f"[TSP] 최근 CH1/PC/TSP 종료 이력이 있어 {int(remain+0.999)}초 대기 필요")
                 return
         except Exception:
             pass
@@ -224,6 +233,10 @@ class TSPPageController:
             if runtime_state.is_running(1):
                 self._log("[TSP] 시작 직전 CH1 공정이 감지되어 중단합니다.")
                 return
+            
+            # ★ 전역 시작/실행 마킹(점유 시작)
+            runtime_state.set_running(1, True)
+            runtime_state.mark_started("chamber", 1)
 
             # 장비 인스턴스 준비
             if self.ig is None:
@@ -360,6 +373,10 @@ class TSPPageController:
                 })
 
         finally:
+            # ★ 전역 종료/해제 마킹(점유 종료)
+            runtime_state.mark_finished("chamber", 1)
+            runtime_state.set_running(1, False)
+
             # ★ 최우선 상태 복구 (아래 정리 중 예외가 나도 고착 방지)
             self._busy = False
             self._task = None

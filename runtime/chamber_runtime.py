@@ -1537,13 +1537,14 @@ class ChamberRuntime:
             self._post_warning("대기 필요", f"이전 공정 종료 후 1분 대기 필요합니다.\n{secs}초 후에 시작하십시오.")
             return
 
+        # ✅ 교차 실행 차단: 해당 챔버가 이미 다른 런타임(CH/PC/TSP)에서 점유 중이면 시작 금지
+        if runtime_state.is_running(self.ch):
+            self._post_warning("실행 오류", f"CH{self.ch}는 이미 다른 공정이 실행 중입니다.")
+            return
+
         if self.process_controller.is_running:
-            self._post_warning("실행 오류", "다른 공정이 실행 중입니다."); 
-            return
-        
-        if not self._has_ui() and not getattr(self, "process_queue", None):
-            self.append_log("MAIN", "headless: 수동 시작 비활성화 (CSV 자동 실행만 지원)")
-            return
+            self._post_warning("실행 오류", "다른 공정이 실행 중입니다.")
+            return  
         
         # 재시도: 사용자가 Start를 누른 시점부터 자동 연결 허용
         self._auto_connect_enabled = True

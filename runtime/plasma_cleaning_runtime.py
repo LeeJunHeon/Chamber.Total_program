@@ -564,16 +564,24 @@ class PlasmaCleaningRuntime:
             w_stop.clicked.connect(lambda: asyncio.ensure_future(self._on_click_stop()))
 
     async def _on_click_start(self) -> None:
-        # ★ 전역 RuntimeState 기반 60초 쿨다운 + 교차검사(요청사항)
         ch = int(getattr(self, "_selected_ch", 1))
+
+        # 1) 쿨다운 교차 검사 (PC global + 챔버 최근 종료)
         ok, remain, reason = runtime_state.pc_block_reason(ch, cooldown_s=60.0)
         if not ok:
             self._post_warning("대기 필요", f"{reason}")
             self.append_log("PC", f"쿨다운 대기 중: 남은 {int(remain)}초")
             return
 
-        # 시작 마킹(PC)
+        # 2) 교차 실행 차단: 해당 챔버가 이미 다른 공정으로 실행 중이면 시작 금지
+        if runtime_state.is_running(ch):
+            self._post_warning("실행 오류", f"CH{ch}는 이미 다른 공정이 실행 중입니다.")
+            return
+
+        # 3) 전역 실행/시작 마킹 (PC + CH)
+        runtime_state.set_running(ch, True)
         runtime_state.mark_started("pc", ch)
+        runtime_state.mark_started("chamber", ch)
         
         # 1) 파라미터 수집
         p = self._read_params_from_ui()
