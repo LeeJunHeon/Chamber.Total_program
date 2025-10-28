@@ -179,27 +179,34 @@ class PlasmaCleaningRuntime:
         """RFPowerAsync 이벤트를 UI/로그로 중계"""
         if not self.rf:
             return
-        async for ev in self.rf.events():
-            if ev.kind == "display":
-                # 1) 전용 칸(FWD/REF) 갱신
-                for_w = getattr(self.ui, "PC_forP_edit", None)
-                ref_w = getattr(self.ui, "PC_refP_edit", None)
-                with contextlib.suppress(Exception):
-                    if for_w and hasattr(for_w, "setPlainText"):
-                        for_w.setPlainText(f"{float(ev.forward):.1f}")
-                    if ref_w and hasattr(ref_w, "setPlainText"):
-                        ref_w.setPlainText(f"{float(ev.reflected):.1f}")
+        try:
+            async for ev in self.rf.events():
+                if ev.kind == "display":
+                    # 1) 전용 칸(FWD/REF) 갱신
+                    for_w = getattr(self.ui, "PC_forP_edit", None)
+                    ref_w = getattr(self.ui, "PC_refP_edit", None)
+                    with contextlib.suppress(Exception):
+                        if for_w and hasattr(for_w, "setPlainText"):
+                            for_w.setPlainText(f"{float(ev.forward):.1f}")
+                        if ref_w and hasattr(ref_w, "setPlainText"):
+                            ref_w.setPlainText(f"{float(ev.reflected):.1f}")
 
-                # 2) 상태창은 카운트다운 유지 → 덮어쓰지 않고 로그만 남김
-                self.append_log("RF", f"FWD={ev.forward:.1f}, REF={ev.reflected:.1f} (W)")
-                continue
-            elif ev.kind == "status":
-                self.append_log("RF", ev.message or "")
-            elif ev.kind == "target_reached":   # ★ 추가
-                self.append_log("RF", "목표 파워 도달")
-                self._rf_target_evt.set()
-            elif ev.kind == "power_off_finished":   # ★ 추가
-                self.append_log("RF", "Power OFF finished")
+                    # 2) 상태창은 카운트다운 유지 → 덮어쓰지 않고 로그만 남김
+                    self.append_log("RF", f"FWD={ev.forward:.1f}, REF={ev.reflected:.1f} (W)")
+                    continue
+                elif ev.kind == "status":
+                    self.append_log("RF", ev.message or "")
+                elif ev.kind == "target_reached":   # ★ 추가
+                    self.append_log("RF", "목표 파워 도달")
+                    self._rf_target_evt.set()
+                elif ev.kind == "power_off_finished":   # ★ 추가
+                    self.append_log("RF", "Power OFF finished")
+        except asyncio.CancelledError:
+            # 정상 취소 경로
+            pass
+        except Exception as e:
+            # ★ 펌프가 죽더라도 로그 남기고 종료
+            self.append_log("RF", f"이벤트 펌프 오류: {e!r}")
 
     # =========================
     # 장비 연결
@@ -259,8 +266,19 @@ class PlasmaCleaningRuntime:
         if not hasattr(self, "_event_tasks"):
             self._event_tasks = []
 
+        # ★ 취소/종료된 태스크는 리스트에서 제거 (좀비 방지)
+        _alive = []
+        for t in self._event_tasks:
+            try:
+                if t and (not t.cancelled()) and (not t.done()):
+                    _alive.append(t)
+            except Exception:
+                pass
+        self._event_tasks = _alive
+
         def _has_task(name: str) -> bool:
-            return any(getattr(t, "get_name", lambda: "")() == name for t in self._event_tasks)
+            # ★ 살아있는 태스크만 대상으로 이름 비교
+            return any((getattr(t, "get_name", lambda: "")() == name) for t in self._event_tasks)
 
         if self.rf and not _has_task("PC.Pump.RF"):
             self._event_tasks.append(asyncio.create_task(self._pump_rf_events(), name="PC.Pump.RF"))
@@ -651,9 +669,17 @@ class PlasmaCleaningRuntime:
             #    (_notify_finish_once 안에 pc/chamber 종료 및 set_running(False) 포함 — 위 1)에서 수정함)
             self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final)
 
-            # 이벤트 펌프도 정리(있으면)
-            for t in getattr(self, "_event_tasks", []):
-                t.cancel()
+            # 이벤트 펌프 정리(있으면) — ★ 취소 + 완료대기 + 리스트 비우기
+            tasks = list(getattr(self, "_event_tasks", []))
+            for t in tasks:
+                try:
+                    t.cancel()
+                except Exception:
+                    pass
+            for t in tasks:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(t, timeout=1.0)
+            self._event_tasks = []  # ★ 다음 런에서 항상 새로 띄울 수 있도록 비움
 
             # ★★★ 모든 경로에서 전역/리소스 정리 보장 ★★★
             with contextlib.suppress(Exception):
@@ -1006,9 +1032,13 @@ class PlasmaCleaningRuntime:
         # ★ 전역 종료/해제: PC 전역 쿨다운 + 해당 챔버 쿨다운 + 실행중 플래그 해제
         try:
             ch = int(getattr(self, "_selected_ch", 1))
-            runtime_state.mark_finished("pc", ch)        # 동일/다음 Plasma Cleaning 1분 대기
-            runtime_state.mark_finished("chamber", ch)   # 사용한 챔버도 1분 대기
-            runtime_state.set_running(ch, False)         # 교차실행 차단 플래그 해제
+
+            # ① 쿨다운 종료 시각: PC + CH 둘 다 기록
+            runtime_state.mark_finished("pc", ch)
+            runtime_state.mark_finished("chamber", ch)
+
+            # ② 동시실행 차단 해제: 'chamber' 러닝 플래그 false
+            runtime_state.set_running("chamber", False, ch)
         except Exception:
             pass
 
