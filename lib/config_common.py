@@ -142,7 +142,7 @@ MFC_DELAY_MS  = 1000
 MFC_DELAY_MS_VALVE = 5000
 
 # 채널별 유량 스케일(필요시 조정)
-MFC_SCALE_FACTORS = {1: 1.0, 2: 10.0, 3: 20.0}
+MFC_SCALE_FACTORS = {1: 1.0, 2: 10.0, 3: 1.0}
 
 # 압력 값 스케일 및 표기
 MFC_PRESSURE_SCALE   = 0.1
