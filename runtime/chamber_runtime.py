@@ -925,20 +925,7 @@ class ChamberRuntime:
                         float(ev.current or 0.0),
                     )
                 self._display_dc(ev.power, ev.voltage, ev.current)
-
-                # ✅ 추가: 5초 간격으로만 주기 로그 출력
-                try:
-                    now = asyncio.get_running_loop().time()
-                except Exception:
-                    now = None
-                last = getattr(self, "_last_dc_log_ts", 0.0)
-                if now is None or (now - last) >= 5.0:
-                    P = float(ev.power   or 0.0)
-                    V = float(ev.voltage or 0.0)
-                    I = float(ev.current or 0.0)
-                    self.append_log(f"DC{self.ch}", f"측정: {P:.1f} W, {V:.1f} V, {I:.2f} A")
-                    self._last_dc_log_ts = now if now is not None else 0.0
-
+                self.append_log(f"DC{self.ch}", f"측정: {float(ev.power or 0.0):.1f} W, {float(ev.voltage or 0.0):.1f} V, {float(ev.current or 0.0):.2f} A")
             elif k == "target_reached":
                 self.process_controller.on_dc_target_reached()
             elif k == "power_off_finished":

@@ -848,13 +848,41 @@ class AsyncDCPulse:
                 self._on_tcp_disconnected()
                 continue
 
-            # 응답 대기(프레임)
+            # === 응답 대기: '자신의 응답'만 인정 ===
+            deadline = time.monotonic() + (cmd.timeout_ms/1000.0) + 2.0
+            exp_cmd = cmd.payload[1] if len(cmd.payload) >= 2 else None  # 우리가 방금 보낸 CMD
+            is_read  = cmd.label.startswith("READ_")
+
             try:
-                frame = await self._read_one_frame((cmd.timeout_ms/1000.0) + 2.0)
+                frame: Optional[bytes] = None
+                while True:
+                    remain = deadline - time.monotonic()
+                    if remain <= 0:
+                        raise asyncio.TimeoutError()
+
+                    f = await self._read_one_frame(remain)
+
+                    if not is_read:
+                        # 쓰기(예: OUTPUT_ON/OFF): 1바이트 ACK/ERR만 응답으로 인정
+                        if len(f) == 1 and f[0] in (0x06, 0x04):
+                            frame = f
+                            break
+                        # 그 외(예: 0x9A 텔레메트리, 과거 읽기 잔여 등)는 무시
+                        continue
+                    else:
+                        # 읽기: 요청 CMD와 동일한 프레임 또는 NAK(0x04)만 인정
+                        if len(f) == 1 and f[0] == 0x04:   # NAK → 기존 재시도 로직으로
+                            frame = f
+                            break
+                        if exp_cmd is not None and len(f) >= 1 and f[0] == exp_cmd:
+                            frame = f
+                            break
+                        # 0x9A 텔레메트리 등은 무시하고 계속 대기
+                        continue
+
             except asyncio.TimeoutError:
                 await self._emit_status(f"[TIMEOUT] {cmd.label}")
                 self._inflight = None
-                # 🔸 재시도 전, 짧은 백오프(명령 간격 준수)
                 try:
                     await asyncio.sleep(max(0.05, cmd.gap_ms / 1000.0))
                 except Exception:
@@ -864,22 +892,22 @@ class AsyncDCPulse:
                     self._cmd_q.appendleft(cmd)
                 else:
                     self._safe_callback(cmd.callback, None)
-                self._on_tcp_disconnected()   # ← 죽은 세션 재사용 방지
+                self._on_tcp_disconnected()
                 continue
 
             self._inflight = None
             decoded = self._proto.filter_and_decode(frame)
 
-            # ★ READ_* 요청에 대해 1바이트 NAK(0x04) 수신 시 재시도
+            # ★ READ_* NAK 재시도 로직은 그대로 유지
             if decoded is not None and len(decoded) == 1 and decoded[0] == 0x04 and cmd.label.startswith("READ_"):
                 await self._emit_status(f"[NAK] {cmd.label} — retry({cmd.retries_left})")
-                await asyncio.sleep(max(0.05, cmd.gap_ms / 1000.0))  # 짧은 유예
+                await asyncio.sleep(max(0.05, cmd.gap_ms / 1000.0))
                 if cmd.retries_left > 0:
                     cmd.retries_left -= 1
-                    self._cmd_q.appendleft(cmd)   # 같은 명령 재시도
+                    self._cmd_q.appendleft(cmd)
                 else:
-                    self._safe_callback(cmd.callback, None)  # 재시도 소진 → 상위에 실패(None) 통지
-                continue  # 다음 루프(콜백 호출/간격슬립은 건너뜀)
+                    self._safe_callback(cmd.callback, None)
+                continue
 
             self._safe_callback(cmd.callback, decoded)
             await asyncio.sleep(cmd.gap_ms / 1000.0)
