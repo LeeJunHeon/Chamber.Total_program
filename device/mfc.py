@@ -27,7 +27,7 @@ import asyncio, re, time, contextlib, socket
 from lib import config_common as cfgc # ★ 추가
 from lib.config_ch1 import MFC_TCP_PORT
 from lib.config_common import (
-    MFC_TCP_HOST, MFC_TCP_PORT, MFC_TX_EOL, MFC_SKIP_ECHO, MFC_CONNECT_TIMEOUT_S,
+    MFC_TCP_HOST, MFC_TX_EOL, MFC_SKIP_ECHO, MFC_CONNECT_TIMEOUT_S,
     MFC_COMMANDS, FLOW_ERROR_TOLERANCE, FLOW_ERROR_MAX_COUNT, MFC_SCALE_FACTORS, 
     MFC_POLLING_INTERVAL_MS, MFC_STABILIZATION_INTERVAL_MS, MFC_WATCHDOG_INTERVAL_MS, 
     MFC_RECONNECT_BACKOFF_START_MS, MFC_RECONNECT_BACKOFF_MAX_MS, MFC_TIMEOUT, MFC_GAP_MS, 
@@ -118,6 +118,9 @@ class AsyncMFC:
 
         # ⬇ PlasmaCleaning 전용: 선택된 가스 채널 기억
         self._selected_ch: Optional[int] = None
+
+        # ⬇ 채널별 ON 상태(마스크 미사용 시 모니터 필터 기준)
+        self._flow_on_flags = {1: False, 2: False, 3: False}
 
         # 폴링 사이클 중첩 방지 플래그
         self._poll_cycle_active: bool = False
@@ -289,6 +292,9 @@ class AsyncMFC:
                     allow_no_reply=True, tag=f"[FLOW_ON ch{channel}]")
         self._mask_shadow = target
 
+        # ✅ 플래그
+        self._flow_on_flags[channel] = True
+
         # 장비 반영 대기(예전 코드와 동일한 최소 대기 보장)
         await asyncio.sleep(max(MFC_DELAY_MS, 200) / 1000.0)
 
@@ -319,6 +325,7 @@ class AsyncMFC:
         # 목표 GAS/모니터링 카운터 리셋
         self.last_setpoints[channel] = 0.0
         self.flow_error_counters[channel] = 0
+        self._flow_on_flags[channel] = False
 
         '''
         비트 마스크 사용 -> 단일 채널로(Plasma Cleaning 때문)
@@ -364,6 +371,10 @@ class AsyncMFC:
         # 개별 ON (마스크 L0 금지)
         self._enqueue(self._mk_cmd("FLOW_ON", channel=ch), None,
                     allow_no_reply=True, tag=f"[FLOW_ON ch{ch}]")
+        
+        # ✅ 실제 모니터 기준: 이 채널을 ON으로 표시
+        self._flow_on_flags[ch] = True
+
         # (옵션) 기존 안정화 루프 재사용
         if self._stab_enabled:
             tgt = float(self.last_setpoints.get(ch, 0.0))
@@ -390,6 +401,10 @@ class AsyncMFC:
             await self._emit_status(f"FLOW_OFF: ch{ch} 안정화 취소")
         self.last_setpoints[ch] = 0.0
         self.flow_error_counters[ch] = 0
+
+        # ✅ OFF 플래그
+        self._flow_on_flags[ch] = False
+
         self._enqueue(self._mk_cmd("FLOW_OFF", channel=ch), None,
                     allow_no_reply=True, tag=f"[FLOW_OFF ch{ch}]")
         await asyncio.sleep(max(MFC_DELAY_MS, 200) / 1000.0)
@@ -709,6 +724,8 @@ class AsyncMFC:
         self._purge_pending(f"process finished ({'ok' if success else 'fail'})")
         self.last_setpoints = {1: 0.0, 2: 0.0, 3: 0.0}
         self.flow_error_counters = {1: 0, 2: 0, 3: 0}
+        # ✅ 플래그도 초기화
+        self._flow_on_flags = {1: False, 2: False, 3: False}
         self._poll_cycle_active = False
 
     def set_endpoint(self, host: str, port: int, *, reconnect: bool = True) -> None:
@@ -1362,30 +1379,34 @@ class AsyncMFC:
         self._ev_nowait(MFCEvent(kind="pressure", value=ui_val, text=text))
 
     def _monitor_flow(self, channel: int, actual_flow_hw: float):
-        # ★ setpoint(입력값)과 실제값을 sccm 기준으로 변환
-        target_ui = self._hw_to_ui(channel, float(self.last_setpoints.get(channel, 0.0)))
-        actual_ui = self._hw_to_ui(channel, float(actual_flow_hw))
+        """
+        - Plasma Cleaning(선택 채널 모드): self._selected_ch 만 감시
+        - 일반 공정: 실제 ON 된 채널(self._flow_on_flags)만 감시
+        - setpoint(장비 단위)가 사실상 0이면 무시
+        """
+        sel = int(self._selected_ch or 0)
+        if sel in self.gas_map:
+            if channel != sel:
+                self.flow_error_counters[channel] = 0
+                return
+        else:
+            if not self._flow_on_flags.get(channel, False):
+                self.flow_error_counters[channel] = 0
+                return
 
-        # ★ 예외: 세트포인트가 1.0 sccm이면 중단 조건에서 제외
-        #     (그 외에는 실제 유량이 1.0 sccm 이하일 때 공정 중단 이벤트 발생)
-        if target_ui != 1.0 and actual_ui <= 1.0:
-            self._ev_nowait(MFCEvent(
-                kind="command_failed",
-                cmd="FLOW_MONITOR",
-                reason=(f"Ch{channel} 유량 {actual_ui:.2f}sccm (≤ 1.0) — 공정 중단")
-            ))
-            return
-
-        # === 이하 기존 로직 유지 (상태 경고용 모니터) ===
         target_flow = float(self.last_setpoints.get(channel, 0.0))
         if target_flow < 0.1:
             self.flow_error_counters[channel] = 0
             return
+
+        # 기존 오차 판정 로직 유지
         if abs(actual_flow_hw - target_flow) > (target_flow * float(FLOW_ERROR_TOLERANCE)):
             self.flow_error_counters[channel] += 1
             if self.flow_error_counters[channel] >= int(FLOW_ERROR_MAX_COUNT):
-                self._ev_nowait(MFCEvent(kind="status",
-                                         message=f"Ch{channel} GAS 불안정! (목표: {target_flow:.2f}, 현재: {actual_flow_hw:.2f})"))
+                self._ev_nowait(MFCEvent(
+                    kind="status",
+                    message=f"Ch{channel} GAS 불안정! (목표: {target_flow:.2f}, 현재: {actual_flow_hw:.2f})"
+                ))
                 self.flow_error_counters[channel] = 0
         else:
             self.flow_error_counters[channel] = 0
