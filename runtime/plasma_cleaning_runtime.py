@@ -441,21 +441,23 @@ class PlasmaCleaningRuntime:
             self._set_state_text(self._state_header)
 
         def _show_countdown(sec: int) -> None:
-            # mm:ss 형식(1분 미만이면 ss만)으로 tail 구성
+            # mm:ss 형식 + (분 단위 2자리 소수) 함께 표시
             try:
                 sec = int(sec)
             except Exception:
                 sec = 0
             mm, ss = divmod(max(sec, 0), 60)
             tail = f"{mm:02d}:{ss:02d}" if mm else f"{ss:02d}s"
+            mins = max(sec, 0) / 60.0
+            tail_with_min = f"{tail} ({mins:.2f} min)"
 
-            # 1) 상단 상태창: "제목 · mm:ss"
+            # 1) 상단 상태창: "제목 · mm:ss (X.XX min)"
             if self._state_header:
-                self._set_state_text(f"{self._state_header} · {tail}")
+                self._set_state_text(f"{self._state_header} · {tail_with_min}")
             else:
-                self._set_state_text(tail)
+                self._set_state_text(tail_with_min)
 
-            # 2) Process Time 칸 표기는 '공정 카운트다운'일 때만
+            # 2) Process Time 칸 표기는 '공정 카운트다운'일 때만 (기존과 동일하게 mm:ss 유지)
             if getattr(self, "_process_timer_active", False):
                 w = getattr(self.ui, "PC_ProcessTime_edit", None)
                 if w and hasattr(w, "setPlainText"):
@@ -608,25 +610,21 @@ class PlasmaCleaningRuntime:
         # 4) 컨트롤러 실행
         success = False
         try:
-            await self.pc._run(p)   # Stop을 누르면 내부에서 안전 종료
-            success = True
+            await self.pc._run(p)   # 컨트롤러가 내부적으로 결과를 집계
+            # ✅ 최종 성공 여부는 last_result로 판정
+            success = (getattr(self.pc, "last_result", "") == "success")
         except Exception as e:
             self.append_log("PC", f"오류: {e!r}")
+            success = False
         finally:
-            # ✅ 어떤 경로든(성공/실패/예외/STOP) 종료 챗 1회 보장
-            # 컨트롤러가 남긴 사유가 있으면 우선 사용
+            # 실패 사유는 항상 컨트롤러가 집계한 last_reason을 우선 사용
             reason = None
             if not success:
-                try:
-                    r = getattr(self, "pc", None)
-                    if r:
-                        lr = getattr(r, "last_reason", "") or ""
-                        if lr:
-                            reason = str(lr)
-                except Exception:
-                    pass
-                if not reason:
-                    reason = "runtime/controller error"
+                reason = (getattr(self.pc, "last_reason", "") or "runtime/controller error")
+
+            # 디버깅용(원하면 주석 처리 가능)
+            self.append_log("PC", f"Final notify ok={success}, stopped={self._stop_requested}, "
+                                f"reason={reason!r}")
 
             self._notify_finish_once(
                 ok=bool(success),
