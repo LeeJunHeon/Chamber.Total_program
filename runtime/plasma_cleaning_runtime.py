@@ -433,10 +433,11 @@ class PlasmaCleaningRuntime:
         async def _rf_start(power_w: float) -> None:
             if not self.rf:
                 return
-            await self.rf.start_process(float(power_w))
-
             # ★ 목표 도달 이벤트 기다림 (타임아웃은 취향껏: 60s 예시)
             self._rf_target_evt.clear()
+
+            await self.rf.start_process(float(power_w))
+
             try:
                 await asyncio.wait_for(self._rf_target_evt.wait(), timeout=180.0)
                 self.append_log("RF", "목표 파워 안정 → 프로세스 타이머 시작 가능")
@@ -683,7 +684,7 @@ class PlasmaCleaningRuntime:
 
             # ★★★ 모든 경로에서 전역/리소스 정리 보장 ★★★
             with contextlib.suppress(Exception):
-                runtime_state.set_running(ch, False)      # 실행중 해제 (중복 호출 안전)
+                runtime_state.set_running("chamber", False, ch)      # 실행중 해제 (중복 호출 안전)
             with contextlib.suppress(Exception):
                 runtime_state.mark_finished("chamber", ch)  # CH 종료 시각 기록(중복 안전)
 
@@ -709,8 +710,14 @@ class PlasmaCleaningRuntime:
         await self._safe_rf_stop()
             
         # ← 이벤트 펌프도 끄기 (옵션)
-        for t in getattr(self, "_event_tasks", []):
-            t.cancel()
+        tasks = list(getattr(self, "_event_tasks", []))
+        for t in tasks:
+            with contextlib.suppress(Exception):
+                t.cancel()
+        for t in tasks:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(t, timeout=1.0)
+        self._event_tasks = []
 
         self._running = False
         self._process_timer_active = False     # ▶ 공정 타이머 모드 해제
@@ -817,16 +824,27 @@ class PlasmaCleaningRuntime:
         """
         try:
             # 1) 먼저 MFC
+            other_ch = 2 if int(getattr(self, "_selected_ch", 1)) == 1 else 1
+            # 다른 공정(CH/PC)이 돌아가는 중이면 MFC 해제 금지
+            other_busy = False
+            with contextlib.suppress(Exception):
+                other_busy = (
+                    runtime_state.is_running("chamber", other_ch) or
+                    runtime_state.is_running("pc", other_ch)
+                )
+
+            if other_busy:
+                self.append_log("MFC", f"CH{other_ch}에서 장치 사용 중 → MFC disconnect 생략")
+                return
+
+            # ← 여기부터는 ‘안전할 때만’ 끊음
             if int(getattr(self, "_selected_ch", 0)) == 1:
-                # gas/pressure가 동일 인스턴스일 수 있어 중복 제거
                 mfc_set = {m for m in (self.mfc_gas, self.mfc_pressure) if m}
                 for m in mfc_set:
                     self.append_log("MFC", "CH1 종료: MFC 연결 해제")
-                    # 방어적 타임아웃
                     with contextlib.suppress(Exception):
                         await asyncio.wait_for(m.cleanup(), timeout=3.0)
             else:
-                # CH2: pressure=MFC2만 해제, gas=MFC1은 유지
                 if self.mfc_pressure:
                     self.append_log("MFC", "CH2 종료: Pressure MFC 연결 해제")
                     with contextlib.suppress(Exception):

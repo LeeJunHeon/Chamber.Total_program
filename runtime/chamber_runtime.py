@@ -1398,7 +1398,14 @@ class ChamberRuntime:
                     self._prepare_log_file(norm)
                 else:
                     self.append_log("Logger", f"같은 세션 파일 계속 사용: {self._log_file_path.name}")
-                self._spawn_detached(self._start_process_later(params, 0.25))
+                # (NEW) 최근 'chamber' 종료 시각 기준 쿨다운을 반영해서 다음 스텝 대기
+                try:
+                    remain = float(runtime_state.remaining_cooldown("chamber", self.ch, 60.0))
+                except Exception:
+                    remain = 0.0
+
+                delay_s = max(60, remain)   # 최소 60초는 유지
+                self._spawn_detached(self._start_process_later(params, delay_s))
             else:
                 self.append_log("MAIN", "모든 공정 완료")
                 self._clear_queue_and_reset_ui()
