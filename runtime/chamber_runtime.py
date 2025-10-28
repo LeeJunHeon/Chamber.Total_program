@@ -1479,6 +1479,14 @@ class ChamberRuntime:
                         self.dc_pulse.set_process_status(False)
 
                 self._on_process_status_changed(False)
+
+                # ✅ 전역 점유/쿨다운을 ‘실패 종료’로 명확히 정리
+                try:
+                    runtime_state.mark_finished("chamber", self.ch)
+                    runtime_state.set_running(self.ch, False)
+                except Exception:
+                    pass
+
                 self._start_next_process_from_queue(False)
                 return
 
@@ -1545,7 +1553,7 @@ class ChamberRuntime:
             return
 
         # ✅ 교차 실행 차단: 해당 챔버가 이미 다른 런타임(CH/PC/TSP)에서 점유 중이면 시작 금지
-        if runtime_state.is_running(self.ch):
+        if runtime_state.is_running("chamber", self.ch):
             self._post_warning("실행 오류", f"CH{self.ch}는 이미 다른 공정이 실행 중입니다.")
             return
 

@@ -125,63 +125,89 @@ class RuntimeState:
 
     def remaining_cooldown(self, kind: str, channels: int | Iterable[int], cooldown_s: float) -> float:
         """
-        kind(예: "pc" 또는 "chamber")에 대해 채널들의 남은 쿨다운(s) 중 최대값을 반환.
-        channels: 단일 int 또는 int iterable
+        channels: int(단일) 또는 Iterable[int] (여러 채널)
+        반환: 지정된 채널들 중 '가장 긴' 남은 쿨다운(초). 기록 없으면 0.0
         """
         k = _norm_kind(kind)
+        ch_list = [channels] if isinstance(channels, int) else list(channels)
         now = _now_monotonic()
-        if isinstance(channels, int):
-            channels = [channels]
-        remain_max = 0.0
+        remains: list[float] = []
         with self._lock:
-            for ch in channels:
-                last = self._last_finish_mono.get(k, {}).get(int(ch))
-                if last is None:
+            for ch in ch_list:
+                chn = _norm_channel(k, ch)
+                last_fin = self._last_finish_mono.get(k, {}).get(chn)
+                if last_fin is None:
                     continue
-                elapsed = now - last
-                remain = max(0.0, float(cooldown_s) - elapsed)
-                if remain > remain_max:
-                    remain_max = remain
-        return remain_max
+                rem = float(cooldown_s) - (now - last_fin)
+                if rem > 0:
+                    remains.append(rem)
+        return max(remains) if remains else 0.0
 
-    # ---------- 요청사항: PC 시작 전 고급 차단 로직 ----------
+    # ---------- PC 시작 전 차단 로직 ----------
 
-    def pc_block_reason(
-        self,
-        selected_ch: int,
-        cooldown_s: float = 60.0,
-    ) -> Tuple[bool, float, str]:
+    def pc_block_reason(self, ch: int, cooldown_s: float = 60.0) -> tuple[bool, float, str]:
         """
-        Plasma Cleaning 시작 전 차단 사유/남은 시간 계산:
-        - (1) PC 자체: selected_ch의 최근 PC 종료 쿨다운
-        - (2) Chamber 교차 검사:
-            CH1 선택 → CH1 Chamber
-            CH2 선택 → CH1, CH2 Chamber
-        반환: (ok, remain, reason)
+        Plasma Cleaning 시작 가능 여부/대기시간/사유를 반환.
+        - 실행 중 우선 차단: 어떤 챔버 공정(ch1/ch2) 혹은 다른 PC가 돌고 있으면 PC 시작 금지
+        - 쿨다운:
+            · PC 글로벌(1,2)           : 60초
+            · CH (선택적)              : ch=1 -> CH1만, ch=2 -> CH1/CH2 모두 60초
+            · TSP (ch=1일 때만 적용)   : 60초
         """
-        ch = 1 if int(selected_ch) != 2 else 2
+        # 1) 현재 실행 중 충돌 확인(챔버 우선)
+        if self.is_running("chamber", 1) or self.is_running("chamber", 2):
+            return (False, 0.0, "다른 챔버 공정이 실행 중(챔버 공정 우선)")
+        if self.is_running("pc", 1) or self.is_running("pc", 2):
+            return (False, 0.0, "다른 Plasma Cleaning이 실행 중")
+        if ch == 1 and self.is_running("tsp", 0):
+            return (False, 0.0, "TSP가 실행 중")
 
-        # 1) PC 자신의 쿨다운
-        remain_pc = self.remaining_cooldown("pc", [1, 2], ch, cooldown_s)
+        # 2) 쿨다운 계산
+        rem_pc  = self.remaining_cooldown("pc", [1, 2], cooldown_s)
+        rem_ch  = self.remaining_cooldown("chamber", [1] if int(ch) == 1 else [1, 2], cooldown_s)
+        rem_tsp = self.remaining_cooldown("tsp", 0, cooldown_s) if int(ch) == 1 else 0.0
 
-        # 2) Chamber 쿨다운 (선택 CH에 따라 범위 다름)
-        check_chs = [1] if ch == 1 else [1, 2]
-        remain_chm = self.remaining_cooldown("chamber", check_chs, cooldown_s)
+        remain = max(rem_pc, rem_ch, rem_tsp, 0.0)
+        if remain > 0:
+            # 이유 문자열 상세화
+            reasons = []
+            if rem_pc  > 0: reasons.append(f"PC {rem_pc:.0f}s")
+            if rem_ch  > 0: reasons.append(f"CH {rem_ch:.0f}s")
+            if rem_tsp > 0: reasons.append(f"TSP {rem_tsp:.0f}s")
+            return (False, remain, "쿨다운 대기: " + ", ".join(reasons))
 
-        remain = max(remain_pc, remain_chm)
-        if remain <= 0.0:
-            return True, 0.0, ""
+        return (True, 0.0, "")
+    
+    # ---------- Chamber 시작 전 차단 로직 ----------
+    def chamber_block_reason(self, ch: int, cooldown_s: float = 60.0) -> tuple[bool, float, str]:
+        """
+        챔버 공정 시작 가능 여부/대기시간/사유를 반환.
+        - 실행 중 차단: 같은 챔버 공정, PC 글로벌, (ch=1일 때) TSP
+        - 쿨다운:
+            · CH 자기 자신(ch)        : 60초
+            · PC 글로벌(1,2)           : 60초 (PC 끝나고 1분 후 챔버 가능)
+            · TSP (ch=1만)             : 60초 (TSP 끝나고 1분 후 CH1 가능)
+        """
+        if self.is_running("chamber", ch):
+            return (False, 0.0, f"CH{ch} 공정이 이미 실행 중")
+        if self.is_running("pc", 1) or self.is_running("pc", 2):
+            return (False, 0.0, "Plasma Cleaning 실행 중")
+        if int(ch) == 1 and self.is_running("tsp", 0):
+            return (False, 0.0, "TSP 실행 중")
 
-        # 사유 문자열 구성
-        secs = int(remain + 0.999)
-        if remain_pc >= remain_chm:
-            reason = f"이전 Plasma Cleaning 종료 후 {secs}초 추가 대기 필요"
-        else:
-            if ch == 1:
-                reason = f"최근 CH1 공정 종료 후 {secs}초 추가 대기 필요"
-            else:
-                reason = f"최근 CH1/CH2 공정 종료 후 {secs}초 추가 대기 필요"
-        return False, float(secs), reason
+        rem_ch  = self.remaining_cooldown("chamber", ch, cooldown_s)
+        rem_pc  = self.remaining_cooldown("pc", [1, 2], cooldown_s)
+        rem_tsp = self.remaining_cooldown("tsp", 0, cooldown_s) if int(ch) == 1 else 0.0
+
+        remain = max(rem_ch, rem_pc, rem_tsp, 0.0)
+        if remain > 0:
+            reasons = []
+            if rem_ch  > 0: reasons.append(f"CH{ch} {rem_ch:.0f}s")
+            if rem_pc  > 0: reasons.append(f"PC {rem_pc:.0f}s")
+            if rem_tsp > 0: reasons.append(f"TSP {rem_tsp:.0f}s")
+            return (False, remain, "쿨다운 대기: " + ", ".join(reasons))
+
+        return (True, 0.0, "")
 
     # ---------- 덤프/디버그 ----------
 
