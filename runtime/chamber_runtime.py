@@ -851,9 +851,7 @@ class ChamberRuntime:
             elif k == "command_failed":
                 why = ev.reason or "unknown"
                 self.process_controller.on_mfc_failed(ev.cmd or "", why)
-                if self.chat:
-                    with contextlib.suppress(Exception):
-                        self.chat.notify_error_with_src(f"MFC{self.ch}", f"{ev.cmd or ''}: {why}")
+                # 중복 방지: 런타임에서 MFC 장비오류 카드는 전송하지 않음
             elif k == "flow":
                 gas = ev.gas or ""
                 flow = float(ev.value or 0.0)
@@ -884,9 +882,7 @@ class ChamberRuntime:
             elif k == "base_failed":
                 why = ev.message or "unknown"
                 self.process_controller.on_ig_failed("IG", why)
-                if self.chat:
-                    with contextlib.suppress(Exception):
-                        self.chat.notify_error_with_src(f"IG{self.ch}", why)
+                # 중복 방지: 런타임에서 IG 오류 카드는 전송하지 않음
 
     async def _pump_rga_events(self) -> None:
         adapter = self.rga

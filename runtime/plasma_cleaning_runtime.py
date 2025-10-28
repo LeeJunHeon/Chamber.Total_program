@@ -571,6 +571,10 @@ class PlasmaCleaningRuntime:
         self._open_run_log(p)
         self.append_log("PC", "파일 로그 시작")
 
+        # 🔒 종료/정지 가드 플래그 초기화 (다음 런에서 누락 방지)
+        self._stop_requested = False
+        self._final_notified = False
+
         # 2) 프리플라이트 — 실패 시 UI/파일 복구 후 종료
         try:
             await self._preflight_connect(timeout_s=10.0)
@@ -989,7 +993,6 @@ class PlasmaCleaningRuntime:
             self.chat.notify_process_finished_detail(bool(ok), payload)
             if hasattr(self.chat, "flush"):
                 self.chat.flush()
-
 
 # ─────────────────────────────────────────────────────────────
 # 유틸

@@ -25,6 +25,7 @@ from typing import Optional, Deque, Callable, AsyncGenerator, Literal
 import asyncio, re, time, contextlib, socket
 
 from lib import config_common as cfgc # ★ 추가
+from lib.config_ch1 import MFC_TCP_PORT
 from lib.config_common import (
     MFC_TCP_HOST, MFC_TCP_PORT, MFC_TX_EOL, MFC_SKIP_ECHO, MFC_CONNECT_TIMEOUT_S,
     MFC_COMMANDS, FLOW_ERROR_TOLERANCE, FLOW_ERROR_MAX_COUNT, MFC_SCALE_FACTORS, 
