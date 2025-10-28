@@ -97,7 +97,7 @@ RF_WATT_PER_VOLT = 63.49
 # DC Power 보정 및 제어 설정(공통)
 # ======================================================================
 DC_MAX_POWER = 1000
-DC_INTERVAL_MS = 3000
+DC_INTERVAL_MS = 5000
 DC_RAMP_STEP = 5
 DC_MAINTAIN_STEP = 1
 DC_TOLERANCE_POWER = 1

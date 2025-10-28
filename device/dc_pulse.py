@@ -413,9 +413,11 @@ class AsyncDCPulse:
 
     async def output_on(self) -> bool:
         """0x80: 1=ON, 2=OFF."""
+        self._drain_rx_frames()  # ← 잔여 0x9A 등 제거
         return await self._write_cmd_data(0x80, 0x0001, 2, label="OUTPUT_ON")
 
     async def output_off(self) -> bool:
+        self._drain_rx_frames()  # ← 잔여 0x9A 등 제거
         return await self._write_cmd_data(0x80, 0x0002, 2, label="OUTPUT_OFF")
 
     async def set_pulse_sync(self, mode: Literal["int","ext"]):
@@ -1057,6 +1059,17 @@ class AsyncDCPulse:
             pass
 
     # ====== 내부 유틸 ======
+    def _drain_rx_frames(self, max_n: int = 128) -> int:
+        """응답 직전, RX 프레임 큐 잔여물을 비워 상관관계 혼선 방지."""
+        n = 0
+        try:
+            while n < max_n:
+                self._frame_q.get_nowait()
+                n += 1
+        except asyncio.QueueEmpty:
+            pass
+        return n
+
     def set_telemetry_callback(self, cb: Optional[Callable[[float, float, float], None]]) -> None:
         self._on_telemetry = cb
 
