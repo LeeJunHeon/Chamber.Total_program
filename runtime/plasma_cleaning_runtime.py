@@ -388,7 +388,7 @@ class PlasmaCleaningRuntime:
                 raise RuntimeError("mfc_gas not bound")
             gi = int(gas_idx)
             self._pc_gas_idx = gi  # ← 런타임에 보관해서 이후 스케일에 사용
-            self.append_log("PC", f"GasFlow → MFC1 ch{gi}")
+            self.append_log("PC", f"GasFlow → {_mfc_name(self.mfc_gas)} ch{gi}")
             await self.mfc_gas.gas_select(gi)  # MFC 내부 '선택 채널' 갱신
 
         async def _mfc_flow_set_on(flow_sccm: float) -> None:
@@ -682,11 +682,7 @@ class PlasmaCleaningRuntime:
                     await asyncio.wait_for(t, timeout=1.0)
             self._event_tasks = []  # ★ 다음 런에서 항상 새로 띄울 수 있도록 비움
 
-            # ★★★ 모든 경로에서 전역/리소스 정리 보장 ★★★
-            with contextlib.suppress(Exception):
-                runtime_state.set_running("chamber", False, ch)      # 실행중 해제 (중복 호출 안전)
-            with contextlib.suppress(Exception):
-                runtime_state.mark_finished("chamber", ch)  # CH 종료 시각 기록(중복 안전)
+            # 전역 상태 정리는 _notify_finish_once()가 전담 → 여기선 제거
 
             # UI/상태/로그 정리
             self._running = False
@@ -809,9 +805,7 @@ class PlasmaCleaningRuntime:
         # 3) 게이트밸브 OPEN 유지(정책) — 닫기 생략
         self.append_log("STEP", f"종료: GateValve CH{self._selected_ch} 유지(OPEN)")
 
-        # 4) (선택) 이벤트 펌프 태스크 정리
-        for t in getattr(self, "_event_tasks", []):
-            t.cancel()
+        # 이벤트 펌프 정리는 finally/STOP에서 일괄 처리하므로 여기서는 생략
 
         # 5) (신규) 선택 장치만 연결 해제 — PLC 제외
         await self._disconnect_selected_devices()
