@@ -49,6 +49,7 @@ class PlasmaCleaningRuntime:
         log_dir: Path,                     # 시그니처 유지(내부 미사용)
         chat: Optional[Any] = None,
         ig: Optional[AsyncIG] = None,      # IG 객체 직접 주입 가능
+        disconnect_on_finish: bool = False,
     ) -> None:
         self.ui = ui
         self.prefix = str(prefix)
@@ -113,6 +114,8 @@ class PlasmaCleaningRuntime:
 
         # UI 버튼 연결
         self._connect_ui_buttons()
+
+        self._disconnect_on_finish = bool(disconnect_on_finish)
 
         # IG 객체가 넘어온 경우, 기본 콜백 자동 바인딩
         if self.ig is not None:
@@ -688,25 +691,18 @@ class PlasmaCleaningRuntime:
             self.append_log("PC", f"오류: {e!r}")
 
         finally:
-            # ★ 모든 경로에서 단 한 번만 수행되는 공통 정리
-            #    (_notify_finish_once 안에 pc/chamber 종료 및 set_running(False) 포함 — 위 1)에서 수정함)
+            # 0) 장치 안전정지(예외 삼키기)
+            with contextlib.suppress(Exception):
+                await self._safe_rf_stop()          # RF ramp-down + GAS/SP4 정리
+
+            # 1) PC가 만든 모든 태스크를 완전히 종료(취소+대기)
+            with contextlib.suppress(Exception):
+                await self._shutdown_all_tasks()    # ← B 패치에서 추가(아래)
+
+            # 2) 전역 상태 해제 + 종료 챗(정확히 1회)
             self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final)
 
-            # 이벤트 펌프 정리(있으면) — ★ 취소 + 완료대기 + 리스트 비우기
-            tasks = list(getattr(self, "_event_tasks", []))
-            for t in tasks:
-                try:
-                    t.cancel()
-                except Exception:
-                    pass
-            for t in tasks:
-                with contextlib.suppress(Exception):
-                    await asyncio.wait_for(t, timeout=1.0)
-            self._event_tasks = []  # ★ 다음 런에서 항상 새로 띄울 수 있도록 비움
-
-            # 전역 상태 정리는 _notify_finish_once()가 전담 → 여기선 제거
-
-            # UI/상태/로그 정리
+            # 3) UI/상태/로그 정리(마지막)
             self._running = False
             self._process_timer_active = False
             self._reset_ui_state(restore_time_min=self._last_process_time_min)
@@ -716,46 +712,33 @@ class PlasmaCleaningRuntime:
                 self._close_run_log()
 
     async def _on_click_stop(self) -> None:
-        # ✅ 디바운스: 이미 최종 처리했으면 무시
         if getattr(self, "_final_notified", False):
             return
-    
-        # ✅ 사용자 STOP 표식(종료 챗에 반영)
         self._stop_requested = True
 
-        # 1) 컨트롤러 루프 중단 요청
+        # 1) 컨트롤러에 중단 요청
         with contextlib.suppress(Exception):
-            if hasattr(self, "pc") and self.pc:
+            if getattr(self, "pc", None):
                 self.pc.request_stop()
 
-        # 2) RF 정리(즉시 감압 필요 시)
-        await self._safe_rf_stop()
-            
-        # ← 이벤트 펌프도 끄기 (옵션)
-        tasks = list(getattr(self, "_event_tasks", []))
-        for t in tasks:
-            with contextlib.suppress(Exception):
-                t.cancel()
-        for t in tasks:
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(t, timeout=1.0)
-        self._event_tasks = []
+        # 2) 장치 안전정지
+        with contextlib.suppress(Exception):
+            await self._safe_rf_stop()
 
+        # 3) PC 태스크 전부 종료(취소+대기)
+        with contextlib.suppress(Exception):
+            await self._shutdown_all_tasks()
+
+        # 4) 전역 상태 해제 + 종료 챗
+        self._notify_finish_once(ok=False, reason="사용자 STOP", stopped=True)
+
+        # 5) 마지막으로 UI 초기화
         self._running = False
-        self._process_timer_active = False     # ▶ 공정 타이머 모드 해제
-        self._set_state_text("STOPPED")
-        self.append_log("PC", "사용자에 의해 중지")
-
-        # ★ 선택: 즉시 파일 닫기(컨트롤러가 이미 끝나지 않아도 파일은 닫혀서 flush됨)
+        self._process_timer_active = False
+        self._reset_ui_state(restore_time_min=self._last_process_time_min)
+        self._set_state_text("IDLE")
         with contextlib.suppress(Exception):
             self._close_run_log()
-
-        # ▶ STOP 후에도 챔버 공정처럼 UI를 초깃값으로 복구
-        self._reset_ui_state(restore_time_min=self._last_process_time_min)
-
-        # ★ 전역 상태/챗 알림: 즉시 1회만 정리
-        # (컨트롤러 루프가 나중에 finally에서 다시 호출해도 _final_notified가 중복 방지)
-        self._notify_finish_once(ok=False, reason="사용자 STOP", stopped=True)
 
     async def _safe_rf_stop(self) -> None:
         # ▶ 방어: 어떤 경로로 불려도 카운트다운 표시는 종료
@@ -835,10 +818,9 @@ class PlasmaCleaningRuntime:
         # 3) 게이트밸브 OPEN 유지(정책) — 닫기 생략
         self.append_log("STEP", f"종료: GateValve CH{self._selected_ch} 유지(OPEN)")
 
-        # 이벤트 펌프 정리는 finally/STOP에서 일괄 처리하므로 여기서는 생략
-
-        # 5) (신규) 선택 장치만 연결 해제 — PLC 제외
-        await self._disconnect_selected_devices()
+        # ★ 기본: 연결 유지(끊지 않음)
+        if getattr(self, "_disconnect_on_finish", False):
+            await self._disconnect_selected_devices()   # 정말 필요할 때만
 
     async def _disconnect_selected_devices(self) -> None:
         """
@@ -955,12 +937,25 @@ class PlasmaCleaningRuntime:
             # 파일 오류가 난다고 공정을 멈출 필요는 없음 — 조용히 무시
             pass
 
-    def shutdown_fast(self) -> None:
-        # 공유 장치이므로 close() 등은 호출하지 않습니다.
-        for t in getattr(self, "_bg_tasks", []):
-            t.cancel()
-        for t in getattr(self, "_event_tasks", []):
-            t.cancel()
+    async def _cancel_and_wait(self, tasks: list[asyncio.Task]) -> None:
+        for t in list(tasks):
+            try:
+                if t and not t.done():
+                    t.cancel()
+            except Exception:
+                pass
+        if tasks:
+            with contextlib.suppress(Exception):
+                await asyncio.gather(*tasks, return_exceptions=True)
+
+    async def _shutdown_all_tasks(self) -> None:
+        """PC 런타임이 만든 태스크만 전부 종료(취소+완료 대기)."""
+        bg = list(getattr(self, "_bg_tasks", []))
+        ev = list(getattr(self, "_event_tasks", []))
+        await self._cancel_and_wait(bg)
+        await self._cancel_and_wait(ev)
+        self._bg_tasks.clear()
+        self._event_tasks.clear()
 
     def _ensure_task(self, name: str, coro_fn: Callable[[], Awaitable[None]]) -> None:
         t = asyncio.ensure_future(coro_fn(), loop=self._loop)
