@@ -647,9 +647,15 @@ class PlasmaCleaningRuntime:
             try:
                 await self.pc._run(p)
             except asyncio.CancelledError:
-                exc_reason = "사용자 STOP"
+                # ✅ 진짜 사용자 STOP일 때만 STOP으로 본다
+                if self._stop_requested:
+                    exc_reason = "사용자 STOP"
+                else:
+                    # 컨트롤러가 정상 종료에 내부 cancel을 사용한 케이스 → 실패로 보지 않음
+                    exc_reason = None
             except Exception as e:
                 exc_reason = f"{type(e).__name__}: {e!s}"
+
 
             lr = str(getattr(self.pc, "last_result", "") or "").strip().lower()   # "success" | "fail" | "stop"
             ls = str(getattr(self.pc, "last_reason", "") or "").strip()
@@ -663,6 +669,12 @@ class PlasmaCleaningRuntime:
             else:
                 ok_final = (lr == "success")
                 final_reason = (None if ok_final else (ls or "runtime/controller error"))
+
+            # ✅ 최종 보정: 컨트롤러가 success라고 했으면 사용자 STOP/실패로 뒤집히지 않게 보정
+            if (lr == "success") and (not self._stop_requested):
+                ok_final = True
+                stopped_final = False
+                final_reason = None
 
             self.append_log("PC", f"Final notify ok={ok_final}, stopped={stopped_final}, lr={lr!r}, reason={final_reason!r}")
 
@@ -702,6 +714,10 @@ class PlasmaCleaningRuntime:
                 self._close_run_log()
 
     async def _on_click_stop(self) -> None:
+        # ✅ 디바운스: 이미 최종 처리했으면 무시
+        if getattr(self, "_final_notified", False):
+            return
+    
         # ✅ 사용자 STOP 표식(종료 챗에 반영)
         self._stop_requested = True
 
@@ -1053,19 +1069,22 @@ class PlasmaCleaningRuntime:
             return
         self._final_notified = True
 
-        # ★ 전역 종료/해제: 시작 때 pc/chamber 둘 다 올렸으니, 끝날 때도 둘 다 내린다.
+        # 1) 전역 종료/해제: 항상 수행
         try:
             ch = int(getattr(self, "_selected_ch", 1))
-
-            # ① 최근 종료 시각 기록
             runtime_state.mark_finished("pc", ch)
             runtime_state.mark_finished("chamber", ch)
-
-            # ② 실행중 플래그 해제
             runtime_state.set_running("pc", False, ch)
             runtime_state.set_running("chamber", False, ch)
         except Exception:
             pass
+
+        # 2) 카드/로그 정합성 보정
+        ok = bool(ok)
+        stopped = bool(stopped)
+        # 성공이면 reason은 싹 비운다(모순 방지)
+        if ok:
+            reason = None
 
         if not self.chat:
             return
@@ -1074,15 +1093,14 @@ class PlasmaCleaningRuntime:
             "process_name": "Plasma Cleaning",
             "prefix": self.prefix,
             "ch": self._selected_ch,
-            "stopped": bool(stopped),
+            "stopped": stopped,
         }
         if reason:
             payload["reason"] = str(reason)
             payload["errors"] = [str(reason)]
 
-        # 카드 전송 실패가 공정을 깨지 않도록 보호
         with contextlib.suppress(Exception):
-            self.chat.notify_process_finished_detail(bool(ok), payload)
+            self.chat.notify_process_finished_detail(ok, payload)
             if hasattr(self.chat, "flush"):
                 self.chat.flush()
 
