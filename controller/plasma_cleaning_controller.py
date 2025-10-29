@@ -121,10 +121,12 @@ class PlasmaCleaningController:
 
     # (MFC 이벤트용; 런타임에서 UI 반영에 사용)
     def on_mfc_confirmed(self, cmd: str) -> None:
-        self._log("MFC", f"명령 확인: {cmd}")
+        # ✅ 런타임의 _pump_mfc_events()가 이미 'OK: <cmd>'를 출력
+        # (중복 로그 억제: 여기서는 로그를 찍지 않음)
+        pass
 
     def on_mfc_failed(self, cmd: str, reason: str) -> None:
-        self._log("MFC", f"명령 실패: {cmd} ({reason})")
+        # ✅ 런타임에서 'FAIL: <cmd> (...)'를 출력하므로 로그 생략
         c = (cmd or "").upper()
         if any(key in c for key in ("FLOW", "SP4", "PRESSURE")):
             # ▼ 결과/사유 남기기
@@ -220,7 +222,6 @@ class PlasmaCleaningController:
             try:
                 self._show_state(f"Gas select ch{p.gas_idx}")   # ★ 추가
                 await self._mfc_gas_select(p.gas_idx)
-                self._log("MFC", f"GAS SELECT ch={p.gas_idx} OK")  # ★ LOG
                 if self._stop_evt.is_set():
                     raise asyncio.CancelledError()
             except Exception as e:
@@ -231,7 +232,6 @@ class PlasmaCleaningController:
                 self._log("MFC", f"FLOW_SET_ON start ch={p.gas_idx} -> {p.gas_flow_sccm:.1f} sccm")  # ★ LOG
                 try:
                     await self._mfc_flow_set_on(p.gas_flow_sccm)
-                    self._log("MFC", "FLOW_SET_ON OK")  # ★ LOG
                     self._show_state(f"Gas Flow {p.gas_flow_sccm:.1f} sccm")   # ★ 추가
                     if self._stop_evt.is_set():
                         raise asyncio.CancelledError()
@@ -244,7 +244,6 @@ class PlasmaCleaningController:
             self._log("MFC", f"SP4_SET -> {p.sp4_setpoint_mTorr:.2f} mTorr")
             try:
                 await self._mfc_sp4_set(p.sp4_setpoint_mTorr)
-                self._log("MFC", "SP4_SET OK")  # ★ LOG
                 self._show_state(f"SP4 Set {p.sp4_setpoint_mTorr:.2f} mTorr")   # ★ 추가
                 if self._stop_evt.is_set():
                     raise asyncio.CancelledError()
@@ -255,7 +254,6 @@ class PlasmaCleaningController:
             self._log("MFC", "SP4_ON")
             try:
                 await self._mfc_sp4_on()
-                self._log("MFC", "SP4_ON OK")  # ★ LOG
                 if self._stop_evt.is_set():
                     raise asyncio.CancelledError()
             except Exception as e:
@@ -333,24 +331,8 @@ class PlasmaCleaningController:
         finally:
             self._log("STEP", "종료 시퀀스 진입")  # ★ LOG
 
-            # 종료 시퀀스
-            try:
-                # 1) RF POWER OFF
-                self._log("STEP", "종료: RF STOP 실행")  # ★ LOG
-                await self._rf_stop()
-            except Exception as e:
-                self._log("RF", f"OFF 실패: {e!r}")
-
-            try:
-                # 2) Pressure 제어 OFF + Gas OFF
-                await self._mfc_sp4_off()     # (밸브 OPEN: pressure MFC에서 진공 방출/안전 정리)
-                await self._mfc_flow_off()    # (gas 유량 OFF)
-            except Exception as e:
-                self._log("MFC", f"종료 동작 실패: {e!r}")
-
-            # 3) Gate Valve OPEN 유지(정책 반영) — 닫기 생략
-            self._log("PLC", "GV는 공정 종료 후 OPEN 유지(닫기 생략)")
-
+            # ✅ 정리(OFF/밸브/가스/로그 등)는 런타임 finally에서 일원화 실행
+            #    여기서는 공정 상태만 마무리
             self.is_running = False
             self._show_state("IDLE")
             self._log("PC", "플라즈마 클리닝 종료")

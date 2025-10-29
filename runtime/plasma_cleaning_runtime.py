@@ -517,8 +517,9 @@ class PlasmaCleaningRuntime:
             return None
 
         async def _rf_send(power_w: float) -> None:
-            # SET 보장 + 목표 W 쓰기 (DCV_SET_1, DCV_WRITE_1)
-            await self.plc.rf_apply(float(power_w), ensure_set=True)
+            # ✅ SET 래치는 RFPowerAsync → _rf_toggle_enable(True)에서 1회만 수행
+            #    여기서는 WRITE만 (중복 SET 제거)
+            await self.plc.rf_apply(float(power_w), ensure_set=False)
             try:
                 meas = await self.plc.rf_read_fwd_ref()  # ← 보정 적용
                 self.append_log("PLC", f"RF READ FWD={meas['forward']:.1f} W, REF={meas['reflected']:.1f} W")
@@ -541,7 +542,7 @@ class PlasmaCleaningRuntime:
                 return None
 
         async def _rf_toggle_enable(on: bool):
-            # RF SET 래치(DCV_SET_1)
+            # RF SET 래치(DCV_SET_1)는 여기가 유일한 경로
             await self.plc.power_enable(bool(on), family="DCV", set_idx=1)
 
         return RFPowerAsync(
@@ -593,6 +594,11 @@ class PlasmaCleaningRuntime:
             w_proc.clicked.connect(lambda: asyncio.ensure_future(self._handle_process_list_clicked_async()))
 
     async def _on_click_start(self) -> None:
+        # start 버튼 중복 클릭 방지
+        if getattr(self, "_running", False):
+            self._post_warning("실행 중", "이미 Plasma Cleaning이 실행 중입니다.")
+            return
+
         ch = int(getattr(self, "_selected_ch", 1))
 
         # 1) 쿨다운 교차 검사 (PC 전역 + 해당 챔버)
@@ -605,6 +611,12 @@ class PlasmaCleaningRuntime:
             return
 
         # 2) 교차 실행 차단
+        # 2-1) 같은 CH의 PC가 이미 실행 중이면 금지
+        if runtime_state.is_running("pc", ch):
+            self._post_warning("실행 오류", f"CH{ch} Plasma Cleaning이 이미 실행 중입니다.")
+            return
+
+        # 2-2) 같은 CH의 Chamber 공정도 실행 중이면 금지
         if runtime_state.is_running("chamber", ch):
             self._post_warning("실행 오류", f"CH{ch}는 이미 다른 공정이 실행 중입니다.")
             return
@@ -706,7 +718,11 @@ class PlasmaCleaningRuntime:
 
             # 1) PC가 만든 모든 태스크를 완전히 종료(취소+대기)
             with contextlib.suppress(Exception):
-                await self._shutdown_all_tasks()    # ← B 패치에서 추가(아래)
+                await self._shutdown_all_tasks()
+
+            # 1.5) ★ 선택 장치 해제 보장 (IG/MFC) — 다른 CH 사용 중이면 내부에서 자동 skip
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(self._disconnect_selected_devices(), timeout=5.0)
 
             # 2) 전역 상태 해제 + 종료 챗(정확히 1회)
             self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final)
@@ -737,6 +753,10 @@ class PlasmaCleaningRuntime:
         # 3) PC 태스크 전부 종료(취소+대기)
         with contextlib.suppress(Exception):
             await self._shutdown_all_tasks()
+
+        # 3.5) ★ 선택 장치 해제 보장 (IG/MFC)
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(self._disconnect_selected_devices(), timeout=5.0)
 
         # 4) 전역 상태 해제 + 종료 챗
         self._notify_finish_once(ok=False, reason="사용자 STOP", stopped=True)
@@ -1078,8 +1098,12 @@ class PlasmaCleaningRuntime:
         # 1) 전역 종료/해제: 항상 수행
         try:
             ch = int(getattr(self, "_selected_ch", 1))
+
+            # ① 종료 시각 기록(쿨다운 근거)
             runtime_state.mark_finished("pc", ch)
             runtime_state.mark_finished("chamber", ch)
+
+            # ② 실행중 플래그 해제 (mark_finished가 False로 두긴 하지만 방어적 중복 OK)
             runtime_state.set_running("pc", False, ch)
             runtime_state.set_running("chamber", False, ch)
         except Exception:

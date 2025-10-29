@@ -475,7 +475,9 @@ class AsyncIG:
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            await self._emit_status(f"리더 루프 예외: {e!r}")
+            # ★ 정상 종료(cleanup) 중이거나 재연결 비활성화면 조용히
+            if getattr(self, "_want_connected", False) and not getattr(self, "_cleaning", False):
+                await self._emit_status(f"리더 루프 예외: {e!r}")
         finally:
             await self._on_tcp_disconnected()
 
@@ -516,7 +518,8 @@ class AsyncIG:
         except Exception:
             pass
 
-        await self._emit_status("IG TCP 연결 끊김")
+        if getattr(self, "_want_connected", False) and not getattr(self, "_cleaning", False):
+            await self._emit_status("IG TCP 연결 끊김")
 
         # 인플라이트 재시도/콜백
         if self._inflight is not None:
