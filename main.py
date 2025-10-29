@@ -3,6 +3,8 @@
 
 # 추가: host 설치 유틸
 from host.setup import install_host
+from controller.runtime_state import runtime_state
+
 import sys, asyncio, re, atexit
 from typing import Optional, Literal
 from pathlib import Path
