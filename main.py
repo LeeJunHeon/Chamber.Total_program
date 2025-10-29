@@ -217,6 +217,11 @@ class MainWindow(QWidget):
         # IG 콜백 + SP4용 MFC 전환을 함께 반영
         self._apply_pc_ch_selection()
 
+        # ★ 외부 제어 서버 기동
+        self._host_handle = None
+        self._netlog = lambda tag, text: self._broadcast_log(tag, str(text))
+        self._loop.create_task(self._boot_host())
+
     # ───────────────────────────────────────────────────────────
     def _set_plc_owner(self, ch: Optional[int]) -> None:
         self._plc_owner = ch if ch in (1, 2) else None
@@ -436,7 +441,17 @@ class MainWindow(QWidget):
             self._stack.setCurrentWidget(page)
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        # 공유 장치이므로 여기서는 빠른 종료만
+        # 1) 외부 제어 서버 먼저 종료 요청
+        try:
+            hh = getattr(self, "_host_handle", None)
+            if hh:
+                self._loop.create_task(hh.aclose())
+                self._host_handle = None
+                self._broadcast_log("NET", "Host stopped")
+        except Exception:
+            pass
+
+        # 2) 공유 장치/런타임 정리
         try:
             if self.pc:
                 self.pc.shutdown_fast()
@@ -492,6 +507,23 @@ class MainWindow(QWidget):
                 w.setFocusPolicy(Qt.StrongFocus)  # (안전) Tab 포커스 허용
             except Exception:
                 pass
+
+    async def _boot_host(self) -> None:
+        """외부 제어 서버(Host) 기동."""
+        try:
+            self._host_handle = await install_host(
+                host=cfgc.HOST_SERVER_HOST,          # config_common에 이미 존재한다고 하셨음
+                port=int(cfgc.HOST_SERVER_PORT),
+                log=self._netlog,                    # (tag, text) 시그니처
+                plc=self.plc,                        # ← 현재 MainWindow가 보유한 핸들 그대로
+                ch1=self.ch1,
+                ch2=self.ch2,
+                pc=self.pc,                          # PlasmaCleaningRuntime (없으면 None 상태로 넘어가도 핸들러가 에러 응답)
+                runtime_state=runtime_state,         # 전역 런타임 상태 싱글톤
+            )
+            self._broadcast_log("NET", f"Host started on {cfgc.HOST_SERVER_HOST}:{cfgc.HOST_SERVER_PORT}")
+        except Exception as e:
+            self._broadcast_log("NET", f"Host start failed: {e!r}")
 
 if __name__ == "__main__":
     if sys.platform.startswith("win"):

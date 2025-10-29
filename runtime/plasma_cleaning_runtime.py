@@ -2,12 +2,10 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import asyncio
-import contextlib
-import inspect
+import asyncio, contextlib, inspect, csv
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable, Optional
+from typing import Any, Awaitable, Callable, Optional, Mapping
 
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import QMessageBox, QPlainTextEdit, QApplication, QWidget
@@ -581,11 +579,18 @@ class PlasmaCleaningRuntime:
             "PC_Stop_button",
             "pcStop_button",
         ])
+        # ⬇ CSV 파일 선택 버튼(새로 만든 버튼; 없으면 None → 무시)
+        w_proc = _find_first(self.ui, [
+            "PC_processList_button", "pcProcessList_button",  # 당신이 만든 이름 우선
+            "processList_button", "PC_LoadCSV_button", "pcLoadCSV_button",
+        ])
 
         if w_start:
             w_start.clicked.connect(lambda: asyncio.ensure_future(self._on_click_start()))
         if w_stop:
             w_stop.clicked.connect(lambda: asyncio.ensure_future(self._on_click_stop()))
+        if w_proc:
+            w_proc.clicked.connect(lambda: asyncio.ensure_future(self._handle_process_list_clicked_async()))
 
     async def _on_click_start(self) -> None:
         ch = int(getattr(self, "_selected_ch", 1))
@@ -1194,6 +1199,106 @@ class PlasmaCleaningRuntime:
         except Exception:
             pass
         return None
+    
+    # ===== CSV 단발 로더: 첫 데이터 행만 읽어 UI에 반영 =====
+    def _set_plaintext(self, name: str, value: Any) -> None:
+        """QPlainTextEdit/QLineEdit/QSpinBox 등에 값 세팅 (있으면만)."""
+        w = _safe_get(self.ui, name)
+        if not w:
+            return
+        try:
+            if hasattr(w, "setPlainText"):
+                w.setPlainText(str(value))
+            elif hasattr(w, "setText"):
+                w.setText(str(value))
+            elif hasattr(w, "setValue"):
+                # 숫자 위젯
+                w.setValue(float(value))
+        except Exception:
+            pass
+
+    def _apply_recipe_row_to_ui(self, row: Mapping[str, Any]) -> None:
+        """
+        CSV의 1개 행(딕셔너리)을 받아 PC UI 위젯에 값만 채운다.
+        - 공정 실행은 하지 않음 (요청사항: 단발 세팅만)
+        """
+        # 1) 채널 선택(옵션)
+        use_ch = str(row.get("use_ch", "")).strip()
+        if use_ch:
+            try:
+                self.set_selected_ch(int(float(use_ch)))
+            except Exception:
+                pass
+
+        # 2) 숫자 파싱 헬퍼
+        def _f(key: str, default: float = 0.0) -> str:
+            s = str(row.get(key, "")).strip()
+            if s == "":
+                return str(default)
+            # 과학표기(5.00E-06 등) 포함 → 그대로 텍스트로 유지
+            return s
+
+        # 3) UI에 값 세팅
+        self._set_plaintext("PC_targetPressure_edit",   _f("base_pressure"))     # Torr
+        self._set_plaintext("PC_gasFlow_edit",          _f("gas_flow"))          # sccm
+        self._set_plaintext("PC_workingPressure_edit",  _f("working_pressure"))  # mTorr
+        self._set_plaintext("PC_rfPower_edit",          _f("rf_power"))          # W
+        self._set_plaintext("PC_ProcessTime_edit",      _f("process_time"))      # min
+
+    def _read_first_row_from_csv(self, file_path: str) -> Optional[dict]:
+        """CSV의 첫 데이터 행(헤더 제외)을 dict로 반환. 없으면 None."""
+        try:
+            with open(file_path, "r", encoding="utf-8-sig", newline="") as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    # 첫 non-empty 행만 반환
+                    if any((v or "").strip() for v in row.values()):
+                        return { (k or "").strip(): (v or "").strip() for k, v in row.items() }
+        except Exception as e:
+            self.append_log("File", f"CSV 읽기 실패: {e!r}")
+        return None
+
+    async def _handle_process_list_clicked_async(self) -> None:
+        """PC_processList_button → 파일 선택 → 첫 행으로 UI 세팅(단발)."""
+        file_path = await self._aopen_file(
+            caption="Plasma Cleaning 레시피(CSV) 선택",
+            name_filter="CSV Files (*.csv);;All Files (*)"
+        )
+        if not file_path:
+            self.append_log("File", "파일 선택 취소")
+            return
+
+        row = self._read_first_row_from_csv(file_path)
+        if not row:
+            self._post_warning("CSV 오류", "데이터 행이 없습니다.")
+            return
+
+        self._apply_recipe_row_to_ui(row)
+        self.append_log("File", f"CSV 로드 완료: {file_path}\n→ UI에 값 세팅")
+
+    async def _aopen_file(self, caption="파일 선택", start_dir="", name_filter="All Files (*)") -> str:
+        """Qt 비동기 파일 열기 다이얼로그 (QFileDialog). 취소 시 빈 문자열."""
+        if not self._has_ui():
+            return ""
+        from PySide6.QtWidgets import QFileDialog, QDialog
+        dlg = QFileDialog(self._parent_widget() or None, caption, start_dir, name_filter)
+        dlg.setFileMode(QFileDialog.ExistingFile)
+
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[str] = loop.create_future()
+
+        def _done(result: int):
+            try:
+                if result == QDialog.Accepted and dlg.selectedFiles():
+                    fut.set_result(dlg.selectedFiles()[0])
+                else:
+                    fut.set_result("")
+            finally:
+                dlg.deleteLater()
+
+        dlg.finished.connect(_done)
+        dlg.open()
+        return await fut
 
 # ─────────────────────────────────────────────────────────────
 # 유틸
