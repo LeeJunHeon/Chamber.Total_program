@@ -64,6 +64,9 @@ class DataLogger(QObject):
         self.mfc_flow_readings: Dict[str, List[float]] = {"Ar": [], "O2": [], "N2": []}
         self.mfc_pressure_readings: List[float] = []
 
+        # ✅ 세션 시작 시각 저장용(내부에서 캡처)
+        self._session_started_at: Optional[datetime] = None
+
         # 최종 헤더
         self.header: List[str] = [
             "Timestamp", "Process Note", "Base Pressure",
@@ -130,6 +133,10 @@ class DataLogger(QObject):
     def start_new_log_session(self, params: dict) -> None:
         """새로운 공정 시작 시 데이터 저장소 초기화."""
         self.process_params = params.copy()
+
+        # ✅ 공정 시작 시각을 내부에서 고정 캡처
+        self._session_started_at = datetime.now()
+
         self.ig_pressure_readings.clear()
 
         self.dc_power_readings.clear()
@@ -215,6 +222,9 @@ class DataLogger(QObject):
         """공정 종료 시 평균 계산 후 CSV 1행을 백그라운드에서 기록."""
         if not was_successful:
             return
+        
+        # ✅ 시작시각(없으면 안전하게 now)로 고정
+        ts0 = self._session_started_at or datetime.now()
 
         # 평균치 헬퍼
         def _avg(seq: List[float]) -> float:
@@ -242,7 +252,7 @@ class DataLogger(QObject):
 
         # 기록 데이터(문자열로 포맷)
         log_data: Dict[str, str] = {
-            "Timestamp": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+            "Timestamp": ts0.strftime("%Y-%m-%d %H:%M:%S"),
             "Process Note": str(self.process_params.get("process_note", "")),
             "Base Pressure": f"{base_pressure:.2e}",
             "G1 Target": str(self.process_params.get("G1 Target", "")),
