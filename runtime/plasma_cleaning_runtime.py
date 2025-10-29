@@ -653,14 +653,16 @@ class PlasmaCleaningRuntime:
 
             lr = str(getattr(self.pc, "last_result", "") or "").strip().lower()   # "success" | "fail" | "stop"
             ls = str(getattr(self.pc, "last_reason", "") or "").strip()
-            stopped_final = (lr == "stop")
+
+            # 사용자가 STOP을 눌렀거나 컨트롤러가 'stop'을 준 경우를 모두 STOP으로 간주
+            stopped_final = bool(self._stop_requested or lr == "stop")
 
             if exc_reason:
                 ok_final = False
-                final_reason = exc_reason
+                final_reason = exc_reason or ls or "runtime/controller error"
             else:
                 ok_final = (lr == "success")
-                final_reason = (ls if (not ok_final or stopped_final) else None) or (None if ok_final else "runtime/controller error")
+                final_reason = (None if ok_final else (ls or "runtime/controller error"))
 
             self.append_log("PC", f"Final notify ok={ok_final}, stopped={stopped_final}, lr={lr!r}, reason={final_reason!r}")
 
@@ -732,6 +734,10 @@ class PlasmaCleaningRuntime:
 
         # ▶ STOP 후에도 챔버 공정처럼 UI를 초깃값으로 복구
         self._reset_ui_state(restore_time_min=self._last_process_time_min)
+
+        # ★ 전역 상태/챗 알림: 즉시 1회만 정리
+        # (컨트롤러 루프가 나중에 finally에서 다시 호출해도 _final_notified가 중복 방지)
+        self._notify_finish_once(ok=False, reason="사용자 STOP", stopped=True)
 
     async def _safe_rf_stop(self) -> None:
         # ▶ 방어: 어떤 경로로 불려도 카운트다운 표시는 종료
@@ -1047,12 +1053,14 @@ class PlasmaCleaningRuntime:
             return
         self._final_notified = True
 
-        # ★ 전역 종료/해제: PC만 기록/해제 (CH는 건드리지 않음)
+        # ★ 전역 종료/해제: 시작 때 pc/chamber 둘 다 올렸으니, 끝날 때도 둘 다 내린다.
         try:
             ch = int(getattr(self, "_selected_ch", 1))
+
             # ① 최근 종료 시각 기록
             runtime_state.mark_finished("pc", ch)
             runtime_state.mark_finished("chamber", ch)
+
             # ② 실행중 플래그 해제
             runtime_state.set_running("pc", False, ch)
             runtime_state.set_running("chamber", False, ch)
