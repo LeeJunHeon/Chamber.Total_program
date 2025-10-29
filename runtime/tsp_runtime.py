@@ -15,6 +15,11 @@ from controller.tsp_controller import TSPProcessController, TSPRunConfig
 from controller.chat_notifier import ChatNotifier
 from controller.runtime_state import runtime_state # CH 상태 조회용
 
+# ▼ 메시지 박스용 (챔버와 동일한 속성 사용)
+from PySide6.QtWidgets import QMessageBox, QApplication
+from PySide6.QtCore import Qt
+import contextlib  # (_post_warning 정리 콜백에서 사용)
+
 # 설정(기본값)
 DEFAULT_HOST       = "192.168.1.50"
 DEFAULT_IG_PORT    = 4001     # CH1 IG
@@ -170,6 +175,52 @@ class TSPPageController:
         self._set_plain("TSP_nowCycle_edit", "0")
         self._set_plain("TSP_basePressure_edit", "")
 
+    def _has_ui(self) -> bool:
+        try:
+            return QApplication.instance() is not None and self._parent_widget() is not None
+        except Exception:
+            return False
+
+    def _parent_widget(self):
+        """메시지 박스 부모로 쓸 윈도우 추적 (버튼/에디트 → window())."""
+        for name in ("TSP_Start_button", "TSP_Stop_button", "TSP_nowCycle_edit", "pc_logMessage_edit"):
+            w = getattr(self.ui, name, None)
+            if w is not None:
+                try:
+                    return w.window()
+                except Exception:
+                    return w
+        return None
+
+    def _ensure_msgbox_store(self) -> None:
+        if not hasattr(self, "_msg_boxes"):
+            self._msg_boxes = []  # type: ignore[attr-defined]
+
+    def _post_warning(self, title: str, text: str) -> None:
+        """챔버와 동일: 비차단 WindowModal 경고창 + 참조유지/정리."""
+        if not self._has_ui():
+            # 팝업 불가 시엔 조용히 무시(요청: 로그도 남기지 않음)
+            return
+
+        self._ensure_msgbox_store()
+        box = QMessageBox(self._parent_widget() or None)
+        box.setWindowTitle(title)
+        box.setText(text)
+        box.setIcon(QMessageBox.Warning)
+        box.setStandardButtons(QMessageBox.Ok)
+        box.setWindowModality(Qt.WindowModality.WindowModal)
+        box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+
+        # 참조 유지 & 종료 시 정리
+        self._msg_boxes.append(box)  # type: ignore[attr-defined]
+        def _cleanup(_res: int):
+            with contextlib.suppress(ValueError, AttributeError):
+                self._msg_boxes.remove(box)  # type: ignore[attr-defined]
+            with contextlib.suppress(Exception):
+                box.deleteLater()
+        box.finished.connect(_cleanup)
+
+        box.open()  # 비모달(이벤트 루프 방해 없음)
 
     # ── Start/Stop 핸들러 ──────────────────────────────────
     def _on_run_done(self, fut: asyncio.Task) -> None:
@@ -183,10 +234,13 @@ class TSPPageController:
 
         # 1) 교차 실행 차단: CH1 리소스(Chamber/PC) 또는 TSP 자체가 실행 중이면 금지
         try:
-            if (runtime_state.is_running("chamber", 1)
-                or runtime_state.is_running("pc", 1)
-                or runtime_state.is_running("tsp")):  # tsp는 글로벌(kind="tsp", ch=0)
-                self._log("[TSP] CH1 리소스 사용 중(Chamber/PC/TSP)이라 시작할 수 없습니다.")
+            # 1) 교차 실행 차단 → ✔ 챔버 공정과 동일한 메시지, ✔ 로그 제거
+            if (runtime_state.is_running("chamber", 1) or runtime_state.is_running("pc", 1)):
+                self._post_warning("실행 오류", "CH1는 이미 다른 공정이 실행 중입니다.")
+                return
+            if runtime_state.is_running("tsp"):
+                # 챔버 런타임은 process_controller 바쁨시 "다른 공정이 실행 중입니다."를 씁니다.
+                self._post_warning("실행 오류", "다른 공정이 실행 중입니다.")
                 return
         except Exception:
             pass
@@ -199,7 +253,8 @@ class TSPPageController:
                 runtime_state.remaining_cooldown("tsp", 0, cooldown_s=60.0),  # tsp는 ch=0
             )
             if remain > 0.0:
-                self._log(f"[TSP] 최근 리소스 사용 이력으로 {int(remain+0.999)}초 대기 필요")
+                secs = int(remain + 0.999)
+                self._post_warning("대기 필요", f"이전 공정 종료 후 1분 대기 필요합니다.\n{secs}초 후에 시작하십시오.")
                 return
         except Exception:
             pass
@@ -236,10 +291,11 @@ class TSPPageController:
     async def _run(self, target: float, cycles: int) -> None:
         try:
             # 시작 직전 레이스 가드(Chamber/PC/TSP 전체 확인)
-            if (runtime_state.is_running("chamber", 1)
-                or runtime_state.is_running("pc", 1)
-                or runtime_state.is_running("tsp")):
-                self._log("[TSP] 시작 직전 CH1 리소스(Chamber/PC/TSP) 사용 감지 → 중단")
+            if (runtime_state.is_running("chamber", 1) or runtime_state.is_running("pc", 1)):
+                self._post_warning("실행 오류", "CH1는 이미 다른 공정이 실행 중입니다.")
+                return
+            if runtime_state.is_running("tsp"):
+                self._post_warning("실행 오류", "다른 공정이 실행 중입니다.")
                 return
 
             # ★ 전역 시작/실행 마킹(점유 시작) — TSP는 글로벌 kind("tsp"), ch=0
