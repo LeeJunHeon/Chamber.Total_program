@@ -7,7 +7,9 @@ import sys, asyncio, re, atexit
 from typing import Optional, Literal
 from pathlib import Path
 
-from PySide6.QtWidgets import QApplication, QWidget, QStackedWidget
+from PySide6.QtWidgets import QApplication, QWidget, QStackedWidget, QPlainTextEdit, QTextEdit
+from PySide6.QtCore import Qt
+from itertools import chain  # ← 추가
 from PySide6.QtGui import QCloseEvent
 from qasync import QEventLoop
 
@@ -40,6 +42,9 @@ class MainWindow(QWidget):
         super().__init__()
         self.ui = Ui_Form()
         self.ui.setupUi(self)
+        
+        # ▼ 추가: 텍스트 에디트에서 Tab을 '다음 칸 이동'으로 동작시키기
+        self._enable_tab_moves_focus()
 
         # ▼ TSP 기본값(UI에 채워 넣기)
         self.ui.TSP_targetPressure_edit.setPlainText("2.5e-7")
@@ -474,6 +479,19 @@ class MainWindow(QWidget):
         rt = self.pre_ch1 if ch == 1 else self.pre_ch2
         if rt:
             rt.stop(silent=False)  # ← 해당 챔버만 예약 취소
+
+    def _enable_tab_moves_focus(self) -> None:
+        # ✔ 각각 찾아서 합치기
+        edits = chain(
+            self.findChildren(QPlainTextEdit),
+            self.findChildren(QTextEdit),
+        )
+        for w in edits:
+            try:
+                w.setTabChangesFocus(True)   # Tab/Shift+Tab → 다음/이전 위젯 포커스
+                w.setFocusPolicy(Qt.StrongFocus)  # (안전) Tab 포커스 허용
+            except Exception:
+                pass
 
 if __name__ == "__main__":
     if sys.platform.startswith("win"):
