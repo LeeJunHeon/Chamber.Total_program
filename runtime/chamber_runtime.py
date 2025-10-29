@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import csv, asyncio, contextlib, inspect, re, traceback
+import csv, asyncio, contextlib, inspect, re, traceback, os
 from dataclasses import dataclass
 from typing import Any, Callable, Coroutine, Deque, Literal, Mapping, Optional, Sequence, TypedDict, cast, Union
 from pathlib import Path
@@ -2290,6 +2290,52 @@ class ChamberRuntime:
         self._on_process_status_changed(False)
         with contextlib.suppress(Exception):
             self.graph.reset()
+
+    # ======= 서버 통신을 통한 실행 api =======
+    async def start_with_recipe_string(self, recipe: str) -> None:
+        """
+        외부 제어(Host) 진입점.
+        - recipe == "" 또는 None: 현재 UI 값으로 단발 실행(버튼 클릭과 동일)
+        - recipe 가 .csv 경로: 파일을 읽어 process_queue를 구성하고 자동공정 시작
+        """
+        s = (recipe or "").strip()
+        if not s:
+            # 현재 UI 값으로 단일 공정 실행 (Start 버튼 경로 재사용)
+            self._handle_start_clicked(False)
+            return
+
+        # CSV 경로 케이스
+        if s.lower().endswith(".csv"):
+            if not os.path.exists(s):
+                raise RuntimeError(f"CSV 파일을 찾을 수 없습니다: {s}")
+
+            try:
+                # ▼ _handle_process_list_clicked_async() 내부 로직을 그대로 재사용
+                with open(s, mode='r', encoding='utf-8-sig', newline='') as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    self.process_queue: list[RawParams] = []
+                    self.current_process_index: int = -1
+                    for row in reader:
+                        name = (row.get('Process_name') or row.get('#') or f"공정 {len(self.process_queue)+1}").strip()
+                        row['Process_name'] = name
+                        self.process_queue.append(cast(RawParams, row))
+
+                if not self.process_queue:
+                    raise RuntimeError("CSV에 공정 데이터가 없습니다.")
+
+                # 첫 행을 UI에 적용(기존 함수 재사용)
+                self._update_ui_from_params(self.process_queue[0])
+                self.append_log("File", f"CSV 로드 완료: {s} (총 {len(self.process_queue)}개)")
+
+                # 버튼 클릭과 동일 경로로 시작
+                self._handle_start_clicked(False)
+                return
+            except Exception as e:
+                # Host 응답에 그대로 전달되므로 예외 메시지를 명확하게
+                raise RuntimeError(f"CSV 로드 실패: {e!s}")
+
+        # 지원 포맷은 CSV 뿐
+        raise RuntimeError("지원하지 않는 레시피 형식입니다. CSV 경로만 허용됩니다.")
 
     # ------------------------------------------------------------------
     # 유틸

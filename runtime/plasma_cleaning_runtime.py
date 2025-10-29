@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import asyncio, contextlib, inspect, csv
+import asyncio, contextlib, inspect, csv, os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional, Mapping
@@ -1323,6 +1323,37 @@ class PlasmaCleaningRuntime:
         dlg.finished.connect(_done)
         dlg.open()
         return await fut
+    
+    # ======= 서버 통신을 통한 실행 api =======
+    async def start_with_recipe_string(self, recipe: str) -> None:
+        """
+        외부 제어(Host) 진입점.
+        - recipe == "" 또는 None: 현재 UI 값으로 단발 실행(버튼 클릭과 동일)
+        - recipe 가 .csv 경로: 첫 데이터 행으로 UI 갱신 후 기존 Start 경로 실행
+        """
+        s = (recipe or "").strip()
+        if not s:
+            # 현재 UI 값으로 버튼 클릭과 동일하게 실행
+            await self._on_click_start()
+            return
+
+        if s.lower().endswith(".csv"):
+            if not os.path.exists(s):
+                raise RuntimeError(f"CSV 파일을 찾을 수 없습니다: {s}")
+
+            row = self._read_first_row_from_csv(s)
+            if not row:
+                raise RuntimeError("CSV에 데이터 행이 없습니다.")
+
+            # CSV → UI 세팅 (use_ch 있으면 set_selected_ch까지 내부 적용)
+            self._apply_recipe_row_to_ui(row)
+            self.append_log("File", f"CSV 로드 완료: {s} → UI에 값 세팅")
+
+            # 기존 Start 경로로 실행 (쿨다운/프리플라이트/로깅/종료 처리 모두 기존대로)
+            await self._on_click_start()
+            return
+
+        raise RuntimeError("지원하지 않는 레시피 형식입니다. CSV 경로만 허용됩니다.")
 
 # ─────────────────────────────────────────────────────────────
 # 유틸
