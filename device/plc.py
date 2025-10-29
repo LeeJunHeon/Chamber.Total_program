@@ -94,6 +94,7 @@ PLC_COIL_MAP: Dict[str, int] = {
     "L_PIN_DOWN_SW":     211,  # M00133
     "L_VENT_SW":         212,  # M00134
     "SW_RF_SELECT":      214,  # M00136
+    "SW_POWER_SELECT":   215,  # M00137  ←★ 신규 추가
     "SHUTTER_2_SW":      216,  # M00138
     "SHUTTER_3_SW":      217,  # M00139
     "Z_M_P_1_SW":        218,  # M0013A
@@ -576,6 +577,10 @@ class AsyncPLC:
     async def rf_select(self, *, rf_mode: bool, momentary: bool = False) -> None:
         await self.write_switch("SW_RF_SELECT", bool(rf_mode), momentary=momentary)
         self.log("RF_SELECT <- %s", rf_mode)
+
+    async def power_select(self, *, on: bool, momentary: bool = False) -> None:
+        await self.write_switch("SW_POWER_SELECT", bool(on), momentary=momentary)
+        self.log("POWER_SELECT(SW) <- %s", on)
 
     async def gas(self, chamber: int, gas: str, *, on: bool, momentary: bool = False) -> None:
         g = (gas or "").strip().upper()

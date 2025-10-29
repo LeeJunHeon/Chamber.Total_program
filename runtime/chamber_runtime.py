@@ -265,7 +265,8 @@ class ChamberRuntime:
 
         # 로그 파일 경로 관리(세션 단위) + 사전 버퍼
         self._log_root = Path(log_dir)
-        self._log_dir = self._ensure_log_dir(self._log_root)
+        # ✅ CH 로그를 루트 바로 아래 CH1/CH2에 저장
+        self._log_dir = self._ensure_log_dir(self._log_root / f"CH{self.ch}")
         self._log_file_path: Path | None = None
         self._prestart_buf: Deque[str] = deque(maxlen=1000)
         self._log_fp = None
