@@ -83,6 +83,15 @@ class MainWindow(QWidget):
         # PLC (공유) : CH 힌트 > 소유자 > 방송 순으로 라우팅
         self.plc: AsyncPLC = AsyncPLC(logger=self._plc_log)
 
+        # ← 옵션: 부팅 직후 PLC 자동 연결
+        async def _boot_plc():
+            try:
+                await self.plc.connect()
+                self._broadcast_log("PLC", "부팅 시 자동 연결 성공")
+            except Exception as e:
+                self._broadcast_log("PLC", f"부팅 시 자동 연결 실패: {e}")
+        self._loop.create_task(_boot_plc())
+
         # 로그 루트 (NAS 실패 시 런타임 내부에서 폴백 처리)
         self._log_root = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs")
 
