@@ -181,19 +181,25 @@ class TSPPageController:
         if self._busy:
             self._log("이미 실행 중입니다."); return
 
-        # 1) 교차 실행 차단: CH1이 현재 다른 공정으로 점유 중이면 금지
+        # 1) 교차 실행 차단: CH1 리소스(Chamber/PC) 또는 TSP 자체가 실행 중이면 금지
         try:
-            if runtime_state.is_running(1):
-                self._log("[TSP] CH1이 공정 중이라서 시작할 수 없습니다. 종료 후 다시 시도하세요.")
+            if (runtime_state.is_running("chamber", 1)
+                or runtime_state.is_running("pc", 1)
+                or runtime_state.is_running("tsp")):  # tsp는 글로벌(kind="tsp", ch=0)
+                self._log("[TSP] CH1 리소스 사용 중(Chamber/PC/TSP)이라 시작할 수 없습니다.")
                 return
         except Exception:
             pass
 
-        # 2) 60초 쿨다운 검사: 최근 CH1 리소스 사용(챔버/PC/TSP)이 끝난 지 60초 이내면 대기
+        # 2) 60초 쿨다운: CH1(Chamber/PC)와 글로벌 TSP의 최근 종료 시각을 모두 고려 → 최대값 사용
         try:
-            remain = runtime_state.remaining_cooldown("chamber", 1, cooldown_s=60.0)
+            remain = max(
+                runtime_state.remaining_cooldown("chamber", 1, cooldown_s=60.0),
+                runtime_state.remaining_cooldown("pc", 1, cooldown_s=60.0),
+                runtime_state.remaining_cooldown("tsp", 0, cooldown_s=60.0),  # tsp는 ch=0
+            )
             if remain > 0.0:
-                self._log(f"[TSP] 최근 CH1/PC/TSP 종료 이력이 있어 {int(remain+0.999)}초 대기 필요")
+                self._log(f"[TSP] 최근 리소스 사용 이력으로 {int(remain+0.999)}초 대기 필요")
                 return
         except Exception:
             pass
@@ -229,14 +235,15 @@ class TSPPageController:
     # ── 내부 실행 루틴 ─────────────────────────────────────
     async def _run(self, target: float, cycles: int) -> None:
         try:
-            # 시작 직전 레이스 가드
-            if runtime_state.is_running("chamber", 1):
-                self._log("[TSP] 시작 직전 CH1 공정이 감지되어 중단합니다.")
+            # 시작 직전 레이스 가드(Chamber/PC/TSP 전체 확인)
+            if (runtime_state.is_running("chamber", 1)
+                or runtime_state.is_running("pc", 1)
+                or runtime_state.is_running("tsp")):
+                self._log("[TSP] 시작 직전 CH1 리소스(Chamber/PC/TSP) 사용 감지 → 중단")
                 return
-            
-            # ★ 전역 시작/실행 마킹(점유 시작)
-            runtime_state.set_running(1, True)
-            runtime_state.mark_started("chamber", 1)
+
+            # ★ 전역 시작/실행 마킹(점유 시작) — TSP는 글로벌 kind("tsp"), ch=0
+            runtime_state.mark_started("tsp")
 
             # 장비 인스턴스 준비
             if self.ig is None:
@@ -373,9 +380,8 @@ class TSPPageController:
                 })
 
         finally:
-            # ★ 전역 종료/해제 마킹(점유 종료)
-            runtime_state.mark_finished("chamber", 1)
-            runtime_state.set_running(1, False)
+            # ★ 전역 종료/해제 마킹(점유 종료) — TSP 글로벌 종료 기록
+            runtime_state.mark_finished("tsp")
 
             # ★ 최우선 상태 복구 (아래 정리 중 예외가 나도 고착 방지)
             self._busy = False
@@ -505,9 +511,12 @@ class TSPPageController:
                 # ✅ 정책 변경: 예약 시각에 도달했을 때,
                 #    - TSP가 바쁘거나(self._busy) CH1에 다른 공정이 '실행 중'이면 → 오늘 예약은 취소
                 #    - 반복 예약이면 다음날 같은 시각으로 자동 이월
-                if self._busy or runtime_state.is_running(1):
-                    who = "TSP" if self._busy else "CH1"
-                    self._log(f"[TSP] 예약 시각 도달했지만 {who} 공정 실행 중 → 오늘 예약 취소")
+                if (self._busy
+                    or runtime_state.is_running("chamber", 1)
+                    or runtime_state.is_running("pc", 1)
+                    or runtime_state.is_running("tsp")):
+                    who = ("TSP" if self._busy else "리소스(Chamber/PC/TSP)")
+                    self._log(f"[TSP] 예약 시각 도달했지만 {who} 사용 중 → 오늘 예약 취소")
 
                     if not self._schedule_repeat_daily:
                         self._log("[TSP] 1회 예약이므로 더 이상 재시도하지 않습니다.")

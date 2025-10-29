@@ -166,7 +166,7 @@ class RuntimeState:
             if rem_pc  > 0: reasons.append(f"PC {rem_pc:.0f}s")
             if rem_ch  > 0: reasons.append(f"CH{ch} {rem_ch:.0f}s")
             if rem_tsp > 0: reasons.append(f"TSP {rem_tsp:.0f}s")
-            return (False, remain, "쿨다운 대기: " + ", ".join(reasons))
+            return (False, remain, "이전 공정 종료 후 1분 대기 필요: " + ", ".join(reasons))
 
         return (True, 0.0, "")
     

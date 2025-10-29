@@ -234,12 +234,6 @@ class ChamberRuntime:
         self._owns_plc = bool(owns_plc if owns_plc is not None else (int(chamber_no) == 1))  # 기본 CH1
         self._notify_plc_owner = on_plc_owner 
         self._last_running_state: Optional[bool] = None  
-        
-        # ⬇️ 추가: 프로그램 시작 시점에 CH 상태를 명시적으로 False로 등록
-        try:
-            runtime_state.set_running(self.ch, False)
-        except Exception:
-            pass                                # ★ 추가
 
         # QMessageBox 참조 저장소(비모달 유지용)
         self._msg_boxes: list[QMessageBox] = []  # ← 추가
@@ -1208,9 +1202,10 @@ class ChamberRuntime:
                 except Exception:
                     pass
 
-        # ⬇️ 추가: 전역 상태 레지스트리에 반영 (외부 조회/구독 용도)
+        # True로 "전환"될 때만 점유 표시
         try:
-            runtime_state.set_running("chamber", bool(running), self.ch)
+            if running and prev is not True:
+                runtime_state.set_running("chamber", True, self.ch)
         except Exception:
             pass
 
@@ -1483,7 +1478,6 @@ class ChamberRuntime:
                 # ✅ 전역 점유/쿨다운을 ‘실패 종료’로 명확히 정리
                 try:
                     runtime_state.mark_finished("chamber", self.ch)
-                    runtime_state.set_running(self.ch, False)
                 except Exception:
                     pass
 

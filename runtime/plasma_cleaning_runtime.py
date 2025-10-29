@@ -597,14 +597,21 @@ class PlasmaCleaningRuntime:
         if runtime_state.is_running("chamber", ch):
             self._post_warning("실행 오류", f"CH{ch}는 이미 다른 공정이 실행 중입니다.")
             return
+        
+        # 3) 프리플라이트 (성공하면 계속)
+        try:
+            # 1) 사전 연결 점검
+            await self._preflight_connect(timeout_s=10.0)
+        except Exception as e:
+            # PLC, MFC, IG 등 연결 실패 시 사용자 알림만 표시하고 중단
+            self._post_warning("연결 실패", f"장치 연결에 실패했습니다.\n\n{e}")
+            return
 
-        # 3) 실행/시작 마킹
-        runtime_state.set_running("chamber", True, ch)
+        # 4) 실행/시작 마킹 (중복 없이 mark_started만)
         runtime_state.mark_started("pc", ch)
         runtime_state.mark_started("chamber", ch)
-        runtime_state.set_running("pc", True, ch)   # 권장
 
-        # 4) UI/로그 준비
+        # 5) UI/로그 준비
         p = self._read_params_from_ui()
         self._last_process_time_min = float(p.process_time_min)
         self._running = True
@@ -621,9 +628,6 @@ class PlasmaCleaningRuntime:
         final_reason: Optional[str] = None
 
         try:
-            # 5) 프리플라이트 (실패 시도 finally에서 공통 정리)
-            await self._preflight_connect(timeout_s=10.0)
-
             # 6) 시작 카드 전송 — 여기만 suppress
             with contextlib.suppress(Exception):
                 if self.chat:
@@ -1043,17 +1047,15 @@ class PlasmaCleaningRuntime:
             return
         self._final_notified = True
 
-        # ★ 전역 종료/해제: PC 전역 쿨다운 + 해당 챔버 쿨다운 + 실행중 플래그 해제
+        # ★ 전역 종료/해제: PC만 기록/해제 (CH는 건드리지 않음)
         try:
             ch = int(getattr(self, "_selected_ch", 1))
 
-            # ① 쿨다운 종료 시각: PC + CH 둘 다 기록
+            # ① 쿨다운 종료 시각: PC만 기록
             runtime_state.mark_finished("pc", ch)
-            runtime_state.mark_finished("chamber", ch)
 
-            # ② 동시실행 차단 해제: 'chamber' 러닝 플래그 false
-            runtime_state.set_running("chamber", False, ch)
-            runtime_state.set_running("pc", False, ch)  # 권장
+            # ② 실행중 플래그 해제: PC만 해제
+            runtime_state.set_running("pc", False, ch)
         except Exception:
             pass
 
