@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 ################################################################################
-## Form generated from reading UI file 'CH1&2vbHaiN.ui'
+## Form generated from reading UI file 'CH1&2lRqGsV.ui'
 ##
 ## Created by: Qt User Interface Compiler version 6.9.1
 ##
@@ -34,11 +34,11 @@ class Ui_Form(object):
         self.PC_rfPower_edit.setGeometry(QRect(820, 320, 201, 31))
         self.PC_Hum_edit = QPlainTextEdit(self.page_3)
         self.PC_Hum_edit.setObjectName(u"PC_Hum_edit")
-        self.PC_Hum_edit.setGeometry(QRect(930, 470, 91, 31))
+        self.PC_Hum_edit.setGeometry(QRect(890, 470, 61, 31))
         self.PC_Hum_edit.setReadOnly(True)
         self.PC_Temp_edit = QPlainTextEdit(self.page_3)
         self.PC_Temp_edit.setObjectName(u"PC_Temp_edit")
-        self.PC_Temp_edit.setGeometry(QRect(820, 470, 91, 31))
+        self.PC_Temp_edit.setGeometry(QRect(820, 470, 61, 31))
         self.PC_Temp_edit.setReadOnly(True)
         self.PC_rfPower_label = QLabel(self.page_3)
         self.PC_rfPower_label.setObjectName(u"PC_rfPower_label")
@@ -90,7 +90,7 @@ class Ui_Form(object):
         self.PC_ProcessTime_label.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
         self.PC_Hum_label = QLabel(self.page_3)
         self.PC_Hum_label.setObjectName(u"PC_Hum_label")
-        self.PC_Hum_label.setGeometry(QRect(930, 450, 81, 21))
+        self.PC_Hum_label.setGeometry(QRect(890, 450, 61, 21))
         self.PC_Hum_label.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
         self.pc_preSputter_label = QLabel(self.page_3)
         self.pc_preSputter_label.setObjectName(u"pc_preSputter_label")
@@ -112,7 +112,7 @@ class Ui_Form(object):
         self.preSputter_SetTime_label.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
         self.PC_Temp_label = QLabel(self.page_3)
         self.PC_Temp_label.setObjectName(u"PC_Temp_label")
-        self.PC_Temp_label.setGeometry(QRect(820, 450, 91, 21))
+        self.PC_Temp_label.setGeometry(QRect(820, 450, 61, 21))
         self.PC_Temp_label.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
         self.preSputter_SetTime_edit = QPlainTextEdit(self.page_3)
         self.preSputter_SetTime_edit.setObjectName(u"preSputter_SetTime_edit")
@@ -242,6 +242,9 @@ class Ui_Form(object):
         self.preSputter_useChamber2_radio.setObjectName(u"preSputter_useChamber2_radio")
         self.preSputter_useChamber2_radio.setGeometry(QRect(680, 120, 61, 24))
         self.preSputter_useChamber2_radio.setAutoExclusive(False)
+        self.PC_processList_button = QPushButton(self.page_3)
+        self.PC_processList_button.setObjectName(u"PC_processList_button")
+        self.PC_processList_button.setGeometry(QRect(960, 450, 61, 51))
         self.stackedWidget.addWidget(self.page_3)
         self.page = QWidget()
         self.page.setObjectName(u"page")
@@ -723,7 +726,7 @@ class Ui_Form(object):
 
         self.retranslateUi(Form)
 
-        self.stackedWidget.setCurrentIndex(2)
+        self.stackedWidget.setCurrentIndex(0)
 
 
         QMetaObject.connectSlotsByName(Form)
@@ -766,6 +769,8 @@ class Ui_Form(object):
         self.pc_processState_edit.setPlainText("")
         self.preSputter_useChamber1_radio.setText(QCoreApplication.translate("Form", u"CH1", None))
         self.preSputter_useChamber2_radio.setText(QCoreApplication.translate("Form", u"CH2", None))
+        self.PC_processList_button.setText(QCoreApplication.translate("Form", u"File\n"
+"Path", None))
         self.ch1_processList_button.setText(QCoreApplication.translate("Form", u"Select File", None))
         self.ch1_shutterDelay_label.setText(QCoreApplication.translate("Form", u"Shutter Delay [min]", None))
         self.ch1_Current_label.setText(QCoreApplication.translate("Form", u"Current", None))
