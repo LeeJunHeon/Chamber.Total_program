@@ -1050,12 +1050,12 @@ class PlasmaCleaningRuntime:
         # ★ 전역 종료/해제: PC만 기록/해제 (CH는 건드리지 않음)
         try:
             ch = int(getattr(self, "_selected_ch", 1))
-
-            # ① 쿨다운 종료 시각: PC만 기록
+            # ① 최근 종료 시각 기록
             runtime_state.mark_finished("pc", ch)
-
-            # ② 실행중 플래그 해제: PC만 해제
+            runtime_state.mark_finished("chamber", ch)
+            # ② 실행중 플래그 해제
             runtime_state.set_running("pc", False, ch)
+            runtime_state.set_running("chamber", False, ch)
         except Exception:
             pass
 
