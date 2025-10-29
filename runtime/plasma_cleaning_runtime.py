@@ -587,10 +587,12 @@ class PlasmaCleaningRuntime:
         ch = int(getattr(self, "_selected_ch", 1))
 
         # 1) 쿨다운 교차 검사 (PC 전역 + 해당 챔버)
-        ok_cool, remain, reason = runtime_state.pc_block_reason(ch, cooldown_s=60.0)
+        ok_cool, remain, _ = runtime_state.pc_block_reason(ch, cooldown_s=60.0)
         if not ok_cool:
-            self._post_warning("대기 필요", f"{reason}")
-            self.append_log("PC", f"쿨다운 대기 중: 남은 {int(remain)}초")
+            secs = int(float(remain) + 0.999)
+            # ✔ 챔버 공정과 동일한 문구/형식
+            self._post_warning("대기 필요", f"이전 공정 종료 후 1분 대기 필요합니다.\n{secs}초 후에 시작하십시오.")
+            # ✔ 로그 출력 제거(요청사항)
             return
 
         # 2) 교차 실행 차단
