@@ -1210,7 +1210,7 @@ class ChamberRuntime:
 
         # ⬇️ 추가: 전역 상태 레지스트리에 반영 (외부 조회/구독 용도)
         try:
-            runtime_state.set_running(self.ch, bool(running))
+            runtime_state.set_running("chamber", bool(running), self.ch)
         except Exception:
             pass
 

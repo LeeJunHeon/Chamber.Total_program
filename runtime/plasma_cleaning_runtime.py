@@ -10,7 +10,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional
 
 from PySide6.QtGui import QTextCursor
-from PySide6.QtWidgets import QMessageBox, QPlainTextEdit, QApplication
+from PySide6.QtWidgets import QMessageBox, QPlainTextEdit, QApplication, QWidget
 from PySide6.QtCore import Qt   # ⬅ 챔버와 동일한 모달리티/속성 적용용
 
 # 장비/컨트롤러
@@ -1078,15 +1078,24 @@ class PlasmaCleaningRuntime:
 
     def _post_warning(self, title: str, text: str) -> None:
         try:
-            box = QMessageBox(self.ui)
+            # UI/부모 준비 확인
+            if not self._has_ui():
+                raise RuntimeError("UI/parent not ready")
+
+            self._ensure_msgbox_store()
+            parent = self._parent_widget()
+            if not isinstance(parent, QWidget):
+                raise RuntimeError("parent widget not found")
+
+            box = QMessageBox(parent)
             box.setWindowTitle(title)
             box.setText(text)
             box.setIcon(QMessageBox.Warning)
             box.setStandardButtons(QMessageBox.Ok)
-            box.setWindowModality(Qt.WindowModality.WindowModal)             # ⬅ 챔버와 동일
-            box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)      # ⬅ 챔버와 동일
+            box.setWindowModality(Qt.WindowModality.WindowModal)        # 챔버와 동일
+            box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True) # 챔버와 동일
 
-            # 참조 유지 & 종료 시 정리
+            # 참조 유지 & 닫힐 때 정리
             self._msg_boxes.append(box)
             def _cleanup(_res: int):
                 with contextlib.suppress(ValueError):
@@ -1094,9 +1103,68 @@ class PlasmaCleaningRuntime:
                 box.deleteLater()
             box.finished.connect(_cleanup)
 
-            box.open()  # 비모달(메인 루프 방해 X)
+            box.open()  # 비모달로 열어도 WindowModal이라 UX 동일
+        except Exception as e:
+            # 실패 시에도 기존처럼 로그는 남김 (원인 추적용으로 예외메시지 덧붙임)
+            self.append_log("PC", f"[경고] {title}: {text} ({e!s})")
+
+    # ===== 알림창 유틸: 챔버와 동일한 방식 =====
+    def _has_ui(self) -> bool:
+        """QApplication과 부모 위젯이 준비되었는지 확인"""
+        try:
+            app = QApplication.instance()
+            if not app:
+                return False
+            w = self._parent_widget()
+            return isinstance(w, QWidget)
         except Exception:
-            self.append_log("PC", f"[경고] {title}: {text}")
+            return False
+
+    def _ensure_msgbox_store(self) -> None:
+        """메시지박스 참조를 보관해서 GC로 사라지지 않게 유지"""
+        if not hasattr(self, "_msg_boxes"):
+            self._msg_boxes = []
+
+    def _parent_widget(self) -> Optional[QWidget]:
+        """
+        알림창의 부모로 쓸 QWidget을 안전하게 찾아준다.
+        - ui가 QWidget이면 그대로 사용
+        - 아니면 PC 페이지의 대표 위젯(window())을 부모로 사용
+        - 마지막으로 activeWindow()로 폴백
+        """
+        try:
+            if isinstance(self.ui, QWidget):
+                return self.ui
+
+            # PC 페이지에서 확실히 존재하는 후보들(main_window.py 기준)
+            candidates = [
+                "pc_logMessage_edit", "pc_processState_edit",
+                "PC_Start_button", "pcStart_button",
+                "PC_Stop_button",  "pcStop_button",
+            ]
+            for name in candidates:
+                w = _safe_get(self.ui, name)
+                if isinstance(w, QWidget):
+                    # 탭/스택 위젯 내부라도 window()를 부모로 쓰면 잘 뜬다
+                    try:
+                        win = w.window()
+                        if isinstance(win, QWidget):
+                            return win
+                    except Exception:
+                        return w
+
+            # 최후의 수단
+            aw = QApplication.activeWindow()
+            if isinstance(aw, QWidget):
+                return aw
+            app = QApplication.instance()
+            if app:
+                aw = app.activeWindow()
+                if isinstance(aw, QWidget):
+                    return aw
+        except Exception:
+            pass
+        return None
 
 # ─────────────────────────────────────────────────────────────
 # 유틸
