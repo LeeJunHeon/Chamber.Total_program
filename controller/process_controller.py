@@ -1152,6 +1152,13 @@ class ProcessController:
             rf_pulse_duty = int(rf_pulse_duty)
 
         if use_rf_pulse:
+            # ✅ UI 옵션 없이: RF Pulse를 쓰면 자동으로 POWER_SELECT ON
+            steps.append(ProcessStep(
+                action=ActionType.PLC_CMD,
+                params=("SW_POWER_SELECT", True),
+                message="Power Select ON (SW_POWER_SELECT)"
+            ))
+
             # 로그/메시지는 kHz로 보기 좋게 표시
             f_txt = f"{float(rf_pulse_freq_khz):.3f}kHz" if rf_pulse_freq_khz is not None else "keep"
             d_txt = f"{rf_pulse_duty}%" if rf_pulse_duty is not None else "keep"
@@ -1230,10 +1237,36 @@ class ProcessController:
             action=ActionType.PLC_CMD, params=('MS', False, self._ch), message='Main Shutter 닫기 (항상)'
         ))
 
-        if use_dc:        steps.append(ProcessStep(action=ActionType.DC_POWER_STOP, message='DC Power Off'))
-        if use_rf:        steps.append(ProcessStep(action=ActionType.RF_POWER_STOP, message='RF Power Off'))
-        if use_dc_pulse:  steps.append(ProcessStep(action=ActionType.DC_PULSE_STOP, message='DC Pulse Off'))
-        if use_rf_pulse:  steps.append(ProcessStep(action=ActionType.RF_PULSE_STOP, message='RF Pulse Off'))
+        if use_dc:        
+            steps.append(ProcessStep(
+                action=ActionType.DC_POWER_STOP, 
+                message='DC Power Off'
+            ))
+
+        if use_rf:        
+            steps.append(ProcessStep(
+                action=ActionType.RF_POWER_STOP, 
+                message='RF Power Off'
+            ))
+
+        if use_dc_pulse:  
+            steps.append(ProcessStep(
+                action=ActionType.DC_PULSE_STOP, 
+                message='DC Pulse Off'
+            ))
+
+        if use_rf_pulse:  
+            steps.append(ProcessStep(
+                action=ActionType.RF_PULSE_STOP, 
+                message='RF Pulse Off'
+            ))
+
+            # ✅ 경로 원복: POWER_SELECT OFF
+            steps.append(ProcessStep(
+                action=ActionType.PLC_CMD,
+                params=("SW_POWER_SELECT", False),
+                message="Power Select OFF (SW_POWER_SELECT)"
+            ))
     
         use_any = any(params.get(k, False) for k in ("use_ar", "use_o2", "use_n2"))
 
@@ -1306,16 +1339,27 @@ class ProcessController:
                 action=ActionType.DC_POWER_STOP, message='[긴급] DC Power 즉시 차단',
                 parallel=both, no_wait=True
             ))
+
         if use_rf:
             steps.append(ProcessStep(
                 action=ActionType.RF_POWER_STOP, message='[긴급] RF Power 즉시 차단',
                 parallel=both, no_wait=True
             ))
+
         if use_rf_pulse:
             steps.append(ProcessStep(
                 action=ActionType.RF_PULSE_STOP, message='[긴급] RF Pulse 즉시 차단',
                 parallel=both, no_wait=True
             ))
+            
+            # ✅ 경로 원복: POWER_SELECT 즉시 OFF
+            steps.append(ProcessStep(
+                action=ActionType.PLC_CMD,
+                params=("SW_POWER_SELECT", False),
+                message='[긴급] Power Select 즉시 OFF',
+                no_wait=True
+            ))
+
         if use_dc_pulse:
             steps.append(ProcessStep(
                 action=ActionType.DC_PULSE_STOP, message='[긴급] DC Pulse 즉시 차단',
