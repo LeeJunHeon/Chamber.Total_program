@@ -478,11 +478,12 @@ class PlasmaCleaningRuntime:
             mins = max(sec, 0) / 60.0
             tail_with_min = f"{tail} ({mins:.2f} min)"
 
-            # 1) 상단 상태창: "제목 · mm:ss (X.XX min)"
-            if self._state_header:
-                self._set_state_text(f"{self._state_header} · {tail_with_min}")
-            else:
-                self._set_state_text(tail_with_min)
+            # 1) 상단 상태창은 '공정 카운트다운'이 켜져 있을 때만 덮는다
+            if getattr(self, "_process_timer_active", False):
+                if self._state_header:
+                    self._set_state_text(f"{self._state_header} · {tail_with_min}")
+                else:
+                    self._set_state_text(tail_with_min)
 
             # 2) Process Time 칸 표기는 '공정 카운트다운'일 때만 (기존과 동일하게 mm:ss 유지)
             if getattr(self, "_process_timer_active", False):
@@ -612,9 +613,12 @@ class PlasmaCleaningRuntime:
             self._post_warning("연결 실패", f"장치 연결에 실패했습니다.\n\n{e}")
             return
 
-        # 4) 실행/시작 마킹 (중복 없이 mark_started만)
+        # 4) 실행/시작 마킹 + 동시실행 가드(대칭성 보장)
         runtime_state.mark_started("pc", ch)
+        runtime_state.set_running("pc", True, ch)
+
         runtime_state.mark_started("chamber", ch)
+        runtime_state.set_running("chamber", True, ch)
 
         # 5) UI/로그 준비
         p = self._read_params_from_ui()
