@@ -441,12 +441,12 @@ class PlasmaCleaningRuntime:
             await self.rf.start_process(float(power_w))
 
             try:
-                await asyncio.wait_for(self._rf_target_evt.wait(), timeout=180.0)
+                await asyncio.wait_for(self._rf_target_evt.wait(), timeout=60.0)
                 self.append_log("RF", "목표 파워 안정 → 프로세스 타이머 시작 가능")
                 # ▶ 이제부터만 ProcessTime_edit에 카운트다운을 표시
                 self._process_timer_active = True
             except asyncio.TimeoutError:
-                self.append_log("RF", "목표 파워 미도달(180s timeout) → 중단")
+                self.append_log("RF", "목표 파워 미도달(60s timeout) → 중단")
                 self._process_timer_active = False
                 raise
             except Exception:
