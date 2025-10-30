@@ -474,6 +474,15 @@ class RFPulseAsync:
 
             pkt = _build_packet(self.addr, cmd.cmd, cmd.data)
             try:
+                # =================== Raw data log (debug) ==================
+                # ★ 보낼 때 1줄 (RAW)
+                asyncio.create_task(self._emit_status(
+                    f"[RFP][RAW][TX] addr={self.addr} cmd={self._cmd_label(cmd.cmd)} "
+                    f"data={' '.join(f'{x:02X}' for x in (cmd.data or b''))} "
+                    f"raw={' '.join(f'{x:02X}' for x in pkt)} tag={cmd.tag or ''}"
+                ))
+                # =================== Raw data log (debug) ==================
+
                 self._writer.write(pkt)
                 await self._writer.drain()
                 self._last_send_mono = time.monotonic()
@@ -558,10 +567,14 @@ class RFPulseAsync:
                     # 1) ACK/NAK 단일 토큰
                     if buf[0] == 0x06:
                         del buf[:1]
+                        # ★ 받을 때 1줄 (ACK) - debug
+                        asyncio.create_task(self._emit_status("[RFP][RAW][RX] ACK(0x06)"))
                         self._on_token(("ACK", None))
                         continue
                     if buf[0] == 0x15:
                         del buf[:1]
+                        # ★ 받을 때 1줄 (NAK) - debug
+                        asyncio.create_task(self._emit_status("[RFP][RAW][RX] NAK(0x15)"))
                         self._on_token(("NAK", None))
                         continue
 
@@ -593,8 +606,24 @@ class RFPulseAsync:
                     for x in pkt[:-1]:
                         cs ^= x
                     if (cs ^ pkt[-1]) != 0:
+                        # 체크섬 불일치 log - debug
+                        asyncio.create_task(self._emit_status(
+                            f"[RFP][RAW][RX] FRAME(cs_bad) raw={' '.join(f'{x:02X}' for x in pkt)}"
+                        ))
+
                         # 체크섬 불일치 → 폐기
                         continue
+
+                    # 4) 프레임 토큰 방출 직전: ★ 받을 때 1줄 (FRAME RAW) - debug
+                    hdr = pkt[0]
+                    rx_addr = (hdr >> 3) & 0x1F
+                    rx_cmd  = pkt[1]
+                    length_bits = hdr & 0x07
+                    data_len = pkt[2] if length_bits == 7 else length_bits
+                    asyncio.create_task(self._emit_status(
+                        f"[RFP][RAW][RX] FRAME addr={rx_addr} cmd={self._cmd_label(rx_cmd)} "
+                        f"len={data_len} raw={' '.join(f'{x:02X}' for x in pkt)}"
+                    ))
 
                     # 4) 프레임 토큰 방출
                     self._on_token(("FRAME", pkt))
