@@ -109,6 +109,10 @@ class OESAsync:
         self.measured_rows: list[list[Union[str, float]]] = []
         self._start_time_str: str = ""
 
+        # 저장 상태(중복 저장 방지)
+        self._saved_once: bool = False
+        self._last_save_path: Optional[Path] = None
+
         # 이벤트 큐
         self._ev_q: asyncio.Queue[OESEvent] = asyncio.Queue(maxsize=256)
 
@@ -365,9 +369,18 @@ class OESAsync:
             return False
 
     async def run_measurement(self, duration_sec: float, integration_time_ms: int):
+        # ✅ 새 측정 시작 전, 항상 잔여 버퍼/열린 채널 정리 + 필요하면 CSV 저장
+        with contextlib.suppress(Exception):
+            await self.cleanup()
+
         if self.is_running:
             await self._status("[경고] 측정 시작 불가: 이미 실행 중. 공정은 계속 진행됩니다.")
             return
+        
+        # 새 런 시작: 저장 상태/버퍼 초기화
+        self._saved_once = False
+        self._last_save_path = None
+        self.measured_rows = []
 
         if self.sChannel < 0:
             ok = await self.initialize_device()
@@ -396,19 +409,27 @@ class OESAsync:
     async def cleanup(self):
         if self.is_running:
             await self._status("중단 요청 수신됨")
+            # _end_measurement 안에서 저장/종료/플래그 정리를 모두 수행
             await self._end_measurement(False, "사용자 중단")
-        else:
-            # 실행 중이 아니더라도 버퍼에 남은 줄이 있으면 저장 시도
-            if self.measured_rows:
-                try:
-                    res = await self._call(self._save_data_to_csv_wide_blocking)
-                    if res is not None:
-                        full_path, nrows = res
-                        await self._status(f"[OES_CSV] 저장 완료(후보 경로): {full_path} (rows={nrows})")
-                except Exception as e:
-                    await self._status(f"[OES_CSV] 저장 실패(후보): {e}")
-            await self._safe_close_channel()
-            await self._status("중단 요청 수신됨 (실행 중 아님)")
+            return
+
+        # 실행 중이 아니고, 버퍼가 남아있고, 아직 저장한 적이 없다면 저장
+        if self.measured_rows and not self._saved_once:
+            try:
+                res = await self._call(self._save_data_to_csv_wide_blocking)
+                if res is not None:
+                    full_path, nrows = res
+                    self._last_save_path = full_path
+                    self._saved_once = True
+                    await self._status(f"[OES_CSV] 저장 완료(정리 중): {full_path} (rows={nrows})")
+            except Exception as e:
+                await self._status(f"[OES_CSV] 저장 실패(정리 중): {e}")
+
+            # 저장 이후 버퍼는 비워서 재저장 방지
+            self.measured_rows = []
+
+        await self._safe_close_channel()
+        await self._status("OES 리소스 정리 완료")
 
     async def events(self) -> AsyncGenerator[OESEvent, None]:
         while True:
@@ -498,9 +519,14 @@ class OESAsync:
                     res = await self._call(self._save_data_to_csv_wide_blocking)
                     if res is not None:
                         full_path, nrows = res
+                        self._last_save_path = full_path
+                        self._saved_once = True
                         await self._status(f"[OES_CSV] 저장 완료: {full_path} (rows={nrows})")
                 except Exception as e:
                     await self._status(f"[OES_CSV] 저장 실패: {e}")
+
+            # 저장 후 버퍼 비워서 이후 cleanup에서 재저장되지 않도록 함
+            self.measured_rows = []
 
             await self._safe_close_channel()
             self.is_running = False

@@ -673,6 +673,10 @@ class ChamberRuntime:
                         except Exception as e:
                             self.append_log("CHAT", f"구글챗 시작 카드 전송 실패: {e!r}")
 
+                    # ✅ 시작시각을 런타임에서 확정해 params에 심어서 전달
+                    params = dict(params)
+                    params["started_at"] = datetime.now().isoformat(timespec="seconds")
+
                     # 로그/세션 준비
                     if not getattr(self, "_log_file_path", None):
                         self._prepare_log_file(params)

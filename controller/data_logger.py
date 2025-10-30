@@ -36,8 +36,6 @@ class DataLogger(QObject):
             log_directory.mkdir(parents=True, exist_ok=True)
             print(f"[DataLogger] NAS 접근 실패 → 로컬 폴백: {log_directory}")
 
-        self.log_file = log_directory / f"Ch{int(ch)}_log.csv"
-
         # 채널별 파일명만 다르게
         self.log_file = log_directory / f"Ch{int(ch)}_log.csv"
 
@@ -134,8 +132,19 @@ class DataLogger(QObject):
         """새로운 공정 시작 시 데이터 저장소 초기화."""
         self.process_params = params.copy()
 
-        # ✅ 공정 시작 시각을 내부에서 고정 캡처
-        self._session_started_at = datetime.now()
+        # ✅ 런타임에서 넘겨준 시작시각이 있으면 우선 사용, 없으면 now()
+        sa = self.process_params.get("started_at")
+        if isinstance(sa, datetime):
+            self._session_started_at = sa
+        elif isinstance(sa, str):
+            try:
+                self._session_started_at = datetime.fromisoformat(sa)
+            except Exception:
+                self._session_started_at = datetime.now()
+        elif isinstance(sa, (int, float)):
+            self._session_started_at = datetime.fromtimestamp(float(sa))
+        else:
+            self._session_started_at = datetime.now()
 
         self.ig_pressure_readings.clear()
 
@@ -222,9 +231,6 @@ class DataLogger(QObject):
         """공정 종료 시 평균 계산 후 CSV 1행을 백그라운드에서 기록."""
         if not was_successful:
             return
-        
-        # ✅ 시작시각(없으면 안전하게 now)로 고정
-        ts0 = self._session_started_at or datetime.now()
 
         # 평균치 헬퍼
         def _avg(seq: List[float]) -> float:
@@ -249,6 +255,9 @@ class DataLogger(QObject):
         dcp_p = self.process_params.get("dc_pulse_power", None)         # ← 추가
         dcp_f = self.process_params.get("dc_pulse_freq", None)          # ← 추가
         dcp_d = self.process_params.get("dc_pulse_duty", None)          # ← 추가
+
+        # ✅ 세션 시작시각을 우선 사용 (없으면 안전하게 now)
+        ts0 = self._session_started_at or datetime.now()
 
         # 기록 데이터(문자열로 포맷)
         log_data: Dict[str, str] = {
@@ -312,5 +321,8 @@ class DataLogger(QObject):
                 if not file_exists:
                     writer.writeheader()  # 파일 없으면 생성 + 헤더 기록
                 writer.writerow(log_data)
+
+            # ✅ 다음 런 대비: 세션 시작시각 클리어
+            self._session_started_at = None
         except Exception as e:
             print(f"데이터 로그 파일 작성 실패: {e}")
