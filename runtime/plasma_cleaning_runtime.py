@@ -861,18 +861,21 @@ class PlasmaCleaningRuntime:
         - CH2:  MFC2(pressure) + IG2    (MFC1(gas)와 PLC는 유지)
         """
         try:
-            # 1) 먼저 MFC
-            other_ch = 2 if int(getattr(self, "_selected_ch", 1)) == 1 else 1
-            # 다른 공정(CH/PC)이 돌아가는 중이면 MFC 해제 금지
-            other_busy = False
+            use_ch = int(getattr(self, "_selected_ch", 1))
+            # 장치-기반으로 '진짜 공유되는 경우'만 생략한다.
+            # - CH1: mfc1을 끊으므로, CH2의 PC(= mfc1 gas 공유)만 위험
+            # - CH2: mfc2만 끊으므로, 다른 쪽이 무엇을 하든 안전 → 생략 가드 불필요
+            skip_disconnect = False
             with contextlib.suppress(Exception):
-                other_busy = (
-                    runtime_state.is_running("chamber", other_ch) or
-                    runtime_state.is_running("pc", other_ch)
-                )
+                if use_ch == 1:
+                    # CH2 PC가 실행 중이면 mfc1 gas를 공유하므로 끊지 않는다
+                    skip_disconnect = bool(runtime_state.is_running("pc", 2))
+                else:
+                    # CH2 → mfc2만 정리하므로 언제나 끊어도 안전
+                    skip_disconnect = False
 
-            if other_busy:
-                self.append_log("MFC", f"CH{other_ch}에서 장치 사용 중 → MFC disconnect 생략")
+            if skip_disconnect:
+                self.append_log("MFC", "CH2 PC 실행 중 → mfc1 공유 → MFC disconnect 생략")
                 return
 
             # ← 여기부터는 ‘안전할 때만’ 끊음
