@@ -712,73 +712,39 @@ class PlasmaCleaningRuntime:
             self.append_log("PC", f"오류: {e!r}")
 
         finally:
-            # 0) 장치 안전정지(예외 삼키기)
-            with contextlib.suppress(Exception):
-                await self._safe_rf_stop()          # RF ramp-down + GAS/SP4 정리
-
-            # 1) PC가 만든 모든 태스크를 완전히 종료(취소+대기)
-            with contextlib.suppress(Exception):
-                await self._shutdown_all_tasks()
-
-            # 1.5) ★ 선택 장치 해제 보장 (IG/MFC) — 다른 CH 사용 중이면 내부에서 자동 skip
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(self._disconnect_selected_devices(), timeout=5.0)
-
-            # 2) 전역 상태 해제 + 종료 챗(정확히 1회)
-            # _notify_finish_once()에서 예외가 발생하면 UI 초기화가 실행되지 않아
-            # Start 버튼이 비활성화된 채로 남는 문제가 있었음.
+            # ✅ (A) 먼저 전역 상태/카드 + UI 복원 → START 버튼을 즉시 살린다
             try:
                 self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final)
             except Exception as e:
-                # 예외는 로그에만 남기고 무시하여 이후 정리 로직이 항상 실행되도록 함
                 self.append_log("PC", f"notify_finish_once error: {e!r}")
 
-            # 3) UI/상태/로그 정리(마지막)
             self._running = False
             self._process_timer_active = False
             self._reset_ui_state(restore_time_min=self._last_process_time_min)
             self._set_state_text("대기 중")
-            self.append_log("PC", "파일 로그 종료")
-            with contextlib.suppress(Exception):
-                self._close_run_log()
+
+            # ✅ (B) 느릴 수 있는 장치/태스크 정리는 백그라운드에서 처리
+            self._ensure_task("PC.FinalCleanup", self._final_cleanup)
 
     async def _on_click_stop(self) -> None:
-        if getattr(self, "_final_notified", False):
-            return
         self._stop_requested = True
-
-        # 1) 컨트롤러에 중단 요청
         with contextlib.suppress(Exception):
             if getattr(self, "pc", None):
                 self.pc.request_stop()
 
-        # 2) 장치 안전정지
-        with contextlib.suppress(Exception):
-            await self._safe_rf_stop()
-
-        # 3) PC 태스크 전부 종료(취소+대기)
-        with contextlib.suppress(Exception):
-            await self._shutdown_all_tasks()
-
-        # 3.5) ★ 선택 장치 해제 보장 (IG/MFC)
-        with contextlib.suppress(Exception):
-            await asyncio.wait_for(self._disconnect_selected_devices(), timeout=5.0)
-
-        # 4) 전역 상태 해제 + 종료 챗
-        # chat/notifier 호출 중 예외가 발생하더라도 UI 초기화는 보장해야 함
+        # ✅ 즉시 전역 상태/카드 + UI 복원
         try:
             self._notify_finish_once(ok=False, reason="사용자 STOP", stopped=True)
         except Exception as e:
-            # 예외는 로그에만 남기고 무시
             self.append_log("PC", f"notify_finish_once error: {e!r}")
 
-        # 5) 마지막으로 UI 초기화
         self._running = False
         self._process_timer_active = False
         self._reset_ui_state(restore_time_min=self._last_process_time_min)
         self._set_state_text("대기 중")
-        with contextlib.suppress(Exception):
-            self._close_run_log()
+
+        # ✅ 정리는 백그라운드에서
+        self._ensure_task("PC.FinalCleanup", self._final_cleanup)
 
     async def _safe_rf_stop(self) -> None:
         # ▶ 방어: 어떤 경로로 불려도 카운트다운 표시는 종료
@@ -813,6 +779,25 @@ class PlasmaCleaningRuntime:
     # =========================
     # 내부 헬퍼들
     # =========================
+    async def _final_cleanup(self) -> None:
+        # 0) RF/가스/SP4 안전 정지
+        with contextlib.suppress(Exception):
+            await self._safe_rf_stop()  # 내부에서 가스/SP4 정리까지 수행
+
+        # 1) 내부 태스크 취소/대기 (유한 대기)
+        try:
+            await asyncio.wait_for(self._shutdown_all_tasks(), timeout=3.0)
+        except asyncio.TimeoutError:
+            self.append_log("PC", "태스크 종료 지연(timeout) → 계속 진행")
+
+        # 2) 선택 장치 해제 (다른 CH 사용 중이면 내부 로직이 자동 skip)
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(self._disconnect_selected_devices(), timeout=5.0)
+
+        # 3) 로그 파일 닫기
+        with contextlib.suppress(Exception):
+            self._close_run_log()
+
     def _set_running_ui_state(self) -> None:
         """공정 실행 중 UI 상태 (Start 비활성, Stop 활성)"""
         with contextlib.suppress(Exception):
@@ -985,8 +970,18 @@ class PlasmaCleaningRuntime:
             except Exception:
                 pass
         if tasks:
-            with contextlib.suppress(Exception):
-                await asyncio.gather(*tasks, return_exceptions=True)
+            try:
+                await asyncio.wait_for(
+                    asyncio.gather(*tasks, return_exceptions=True),
+                    timeout=3.0
+                )
+            except asyncio.TimeoutError:
+                for t in tasks:
+                    try:
+                        name = getattr(t, "get_name", lambda: "")()
+                        self.append_log("PC", f"태스크 종료 지연: {name or t!r}")
+                    except Exception:
+                        pass
 
     async def _shutdown_all_tasks(self) -> None:
         """PC 런타임이 만든 태스크만 전부 종료(취소+완료 대기)."""
