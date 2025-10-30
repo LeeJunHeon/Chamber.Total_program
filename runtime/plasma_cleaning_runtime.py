@@ -725,13 +725,19 @@ class PlasmaCleaningRuntime:
                 await asyncio.wait_for(self._disconnect_selected_devices(), timeout=5.0)
 
             # 2) 전역 상태 해제 + 종료 챗(정확히 1회)
-            self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final)
+            # _notify_finish_once()에서 예외가 발생하면 UI 초기화가 실행되지 않아
+            # Start 버튼이 비활성화된 채로 남는 문제가 있었음.
+            try:
+                self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final)
+            except Exception as e:
+                # 예외는 로그에만 남기고 무시하여 이후 정리 로직이 항상 실행되도록 함
+                self.append_log("PC", f"notify_finish_once error: {e!r}")
 
             # 3) UI/상태/로그 정리(마지막)
             self._running = False
             self._process_timer_active = False
             self._reset_ui_state(restore_time_min=self._last_process_time_min)
-            self._set_state_text("IDLE")
+            self._set_state_text("대기 중")
             self.append_log("PC", "파일 로그 종료")
             with contextlib.suppress(Exception):
                 self._close_run_log()
@@ -759,13 +765,18 @@ class PlasmaCleaningRuntime:
             await asyncio.wait_for(self._disconnect_selected_devices(), timeout=5.0)
 
         # 4) 전역 상태 해제 + 종료 챗
-        self._notify_finish_once(ok=False, reason="사용자 STOP", stopped=True)
+        # chat/notifier 호출 중 예외가 발생하더라도 UI 초기화는 보장해야 함
+        try:
+            self._notify_finish_once(ok=False, reason="사용자 STOP", stopped=True)
+        except Exception as e:
+            # 예외는 로그에만 남기고 무시
+            self.append_log("PC", f"notify_finish_once error: {e!r}")
 
         # 5) 마지막으로 UI 초기화
         self._running = False
         self._process_timer_active = False
         self._reset_ui_state(restore_time_min=self._last_process_time_min)
-        self._set_state_text("IDLE")
+        self._set_state_text("대기 중")
         with contextlib.suppress(Exception):
             self._close_run_log()
 
@@ -1053,8 +1064,8 @@ class PlasmaCleaningRuntime:
         with contextlib.suppress(Exception):
             self._rf_target_evt.clear()
 
-        # 상태 텍스트
-        self._set_state_text("IDLE")
+        # 상태 텍스트: Chamber와 동일하게 '대기 중'으로 표시
+        self._set_state_text("대기 중")
 
         # ProcessTime 복원
         if restore_time_min is not None:
@@ -1080,7 +1091,7 @@ class PlasmaCleaningRuntime:
                 "PC_Start_button", "pcStart_button",
             ])
             if w_start and hasattr(w_start, "setEnabled"):
-                w_start.setEnabled(True)
+                w_start.setEnabled(True)   # Start 버튼 활성화
 
             w_stop = _find_first(self.ui, [
                 f"{self.prefix}Stop_button", f"{self.prefix}StopButton",
@@ -1088,7 +1099,7 @@ class PlasmaCleaningRuntime:
                 "PC_Stop_button", "pcStop_button",
             ])
             if w_stop and hasattr(w_stop, "setEnabled"):
-                w_stop.setEnabled(False)
+                w_stop.setEnabled(False)  # Stop 버튼 비활성화
 
     def _notify_finish_once(self, *, ok: bool, reason: str | None = None, stopped: bool = False) -> None:
         if self._final_notified:

@@ -334,5 +334,5 @@ class PlasmaCleaningController:
             # ✅ 정리(OFF/밸브/가스/로그 등)는 런타임 finally에서 일원화 실행
             #    여기서는 공정 상태만 마무리
             self.is_running = False
-            self._show_state("IDLE")
+            self._show_state("대기 중")
             self._log("PC", "플라즈마 클리닝 종료")
