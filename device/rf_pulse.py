@@ -313,15 +313,15 @@ class RFPulseAsync:
         self._poll_busy = False
         self._purge_pending("polling off")
 
-        # 안전 초기화 시퀀스 (응답 미보장 허용)
-        self._enqueue_exec(CMD_SET_ACTIVE_CTRL, b"\x02", tag="[SAFE HOST]", allow_no_reply=True, allow_when_closing=True)
-        self._enqueue_exec(CMD_SET_PULSING, bytes([0]), tag="[SAFE PULSING 0]", allow_no_reply=True, allow_when_closing=True)
+        # # 안전 초기화 시퀀스 (응답 미보장 허용)
+        # self._enqueue_exec(CMD_SET_ACTIVE_CTRL, b"\x02", tag="[SAFE HOST]", allow_no_reply=True, allow_when_closing=True)
+        # self._enqueue_exec(CMD_SET_PULSING, bytes([0]), tag="[SAFE PULSING 0]", allow_no_reply=True, allow_when_closing=True)
 
-        async def _notify_off():
-            await self._event_q.put(RFPulseEvent(kind="power_off_finished"))
-        # RF OFF (no-reply 허용)
-        self._enqueue_exec(CMD_RF_OFF, b"", tag="[SAFE RF OFF]", allow_no_reply=True, allow_when_closing=True,
-                           callback=lambda _b: asyncio.create_task(_notify_off()))
+        # async def _notify_off():
+        #     await self._event_q.put(RFPulseEvent(kind="power_off_finished"))
+        # # RF OFF (no-reply 허용)
+        # self._enqueue_exec(CMD_RF_OFF, b"", tag="[SAFE RF OFF]", allow_no_reply=True, allow_when_closing=True,
+        #                    callback=lambda _b: asyncio.create_task(_notify_off()))
 
     def stop_process(self):
         """외부 stop: 폴링 off → safe off → power_off_finished 이벤트."""

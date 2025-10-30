@@ -712,19 +712,25 @@ class PlasmaCleaningRuntime:
             self.append_log("PC", f"오류: {e!r}")
 
         finally:
-            # ✅ (A) 먼저 전역 상태/카드 + UI 복원 → START 버튼을 즉시 살린다
+            # 1) 종료 알림 (예외는 로그만 남기고 진행)
             try:
                 self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final)
             except Exception as e:
                 self.append_log("PC", f"notify_finish_once error: {e!r}")
 
+            # 2) 모든 정리 작업을 ‘끝까지’ 기다린다
+            #   - RF 램프다운/종료
+            #   - 내부 태스크 취소+대기
+            #   - 선택 장치 disconnect
+            #   - 로그 파일 close
+            await self._final_cleanup()
+
+            # 3) 정리 완료 후에 UI 복원(버튼/표시)
             self._running = False
             self._process_timer_active = False
             self._reset_ui_state(restore_time_min=self._last_process_time_min)
             self._set_state_text("대기 중")
 
-            # ✅ (B) 느릴 수 있는 장치/태스크 정리는 백그라운드에서 처리
-            self._ensure_task("PC.FinalCleanup", self._final_cleanup)
 
     async def _on_click_stop(self) -> None:
         self._stop_requested = True
@@ -732,19 +738,20 @@ class PlasmaCleaningRuntime:
             if getattr(self, "pc", None):
                 self.pc.request_stop()
 
-        # ✅ 즉시 전역 상태/카드 + UI 복원
+        # 1) STOP 알림
         try:
             self._notify_finish_once(ok=False, reason="사용자 STOP", stopped=True)
         except Exception as e:
             self.append_log("PC", f"notify_finish_once error: {e!r}")
 
+        # 2) 모든 정리 작업을 끝까지 기다림
+        await self._final_cleanup()
+
+        # 3) 정리 완료 후 UI 복원
         self._running = False
         self._process_timer_active = False
         self._reset_ui_state(restore_time_min=self._last_process_time_min)
         self._set_state_text("대기 중")
-
-        # ✅ 정리는 백그라운드에서
-        self._ensure_task("PC.FinalCleanup", self._final_cleanup)
 
     async def _safe_rf_stop(self) -> None:
         # ▶ 방어: 어떤 경로로 불려도 카운트다운 표시는 종료
@@ -963,25 +970,21 @@ class PlasmaCleaningRuntime:
             pass
 
     async def _cancel_and_wait(self, tasks: list[asyncio.Task]) -> None:
+        curr = asyncio.current_task()
+        safe_tasks: list[asyncio.Task] = []
         for t in list(tasks):
             try:
+                if t is curr:    # ★ 자기 자신은 제외 (재귀 취소 방지)
+                    continue
                 if t and not t.done():
                     t.cancel()
+                safe_tasks.append(t)
             except Exception:
                 pass
-        if tasks:
-            try:
-                await asyncio.wait_for(
-                    asyncio.gather(*tasks, return_exceptions=True),
-                    timeout=3.0
-                )
-            except asyncio.TimeoutError:
-                for t in tasks:
-                    try:
-                        name = getattr(t, "get_name", lambda: "")()
-                        self.append_log("PC", f"태스크 종료 지연: {name or t!r}")
-                    except Exception:
-                        pass
+        if safe_tasks:
+            # ★ wait_for 제거: 타임아웃 취소의 2중 전파로 인한 재귀 가능성 차단
+            with contextlib.suppress(Exception):
+                await asyncio.gather(*safe_tasks, return_exceptions=True)
 
     async def _shutdown_all_tasks(self) -> None:
         """PC 런타임이 만든 태스크만 전부 종료(취소+완료 대기)."""
