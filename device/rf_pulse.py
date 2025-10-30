@@ -654,7 +654,7 @@ class RFPulseAsync:
 
         csr_bytes: Optional[bytes] = None
 
-        # ACK phase: ACK/NAK 또는 즉시 온 프레임 처리
+        # 1) ACK phase: ACK/NAK 또는 '바로 온' 프레임 처리 (ACK은 무시, 성공판정엔 사용 안 함)
         while time.monotonic() < ack_deadline:
             remain = ack_deadline - time.monotonic()
             tok = await self._get_token(remain)
@@ -663,33 +663,20 @@ class RFPulseAsync:
             kind, payload = tok
             if kind == "NAK":
                 return False, None
-            if kind == "FRAME" and payload:
-                if self._frame_match(payload, cmd.cmd):
-                    csr_bytes = self._extract_data(payload)
-                    break
-
-        # CSR 프레임 대기 (전체 타임아웃까지)
-        while time.monotonic() < ack_deadline:
-            remain = ack_deadline - time.monotonic()
-            tok = await self._get_token(remain)
-            if tok is None:
+            if kind == "FRAME" and payload and self._frame_match(payload, cmd.cmd):
+                csr_bytes = self._extract_data(payload)
                 break
-            kind, payload = tok
-            if kind == "NAK":
-                return False, None
-            if kind == "FRAME" and payload:
-                if self._frame_match(payload, cmd.cmd):
-                    csr_bytes = self._extract_data(payload)
-                    break
-            # NOTE: ACK는 참고용 신호였으나, 이제 성공 판정엔 사용 안 함
+            # NOTE: ACK는 참고용 신호일 뿐, 여기선 성공 판정에 쓰지 않음
 
-        # CSR 프레임 대기 (전체 타임아웃까지)
+        # 2) CSR 프레임 대기 (전체 타임아웃까지)
         while (csr_bytes is None) and (time.monotonic() < end_deadline):
             remain = end_deadline - time.monotonic()
             tok = await self._get_token(remain)
             if tok is None:
                 break
             kind, payload = tok
+            if kind == "NAK":
+                return False, None
             if kind == "FRAME" and payload and self._frame_match(payload, cmd.cmd):
                 csr_bytes = self._extract_data(payload)
                 break
