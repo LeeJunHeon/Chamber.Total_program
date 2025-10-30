@@ -181,7 +181,7 @@ class RFPulseAsync:
         self._just_reopened: bool = False
 
         # 런타임 상태
-        self.addr = int(RFPULSE_ADDR) if RFPULSE_ADDR is not None else 0
+        self.addr = int(RFPULSE_ADDR) if RFPULSE_ADDR is not None else 1
         self._closing: bool = False
         self._stop_requested: bool = False
 

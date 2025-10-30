@@ -132,8 +132,10 @@ class DataLogger(QObject):
         """새로운 공정 시작 시 데이터 저장소 초기화."""
         self.process_params = params.copy()
 
+        # ✅ 우선순위: t0_wall → started_at → now()  (모두 tz 없이 취급)
+        sa = self.process_params.get("t0_wall") or self.process_params.get("started_at")
+
         # ✅ 런타임에서 넘겨준 시작시각이 있으면 우선 사용, 없으면 now()
-        sa = self.process_params.get("started_at")
         if isinstance(sa, datetime):
             self._session_started_at = sa
         elif isinstance(sa, str):

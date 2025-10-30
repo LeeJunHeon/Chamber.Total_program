@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import csv, asyncio, contextlib, inspect, re, traceback, os
+import csv, asyncio, contextlib, inspect, re, traceback, os, time
 from dataclasses import dataclass
 from typing import Any, Callable, Coroutine, Deque, Literal, Mapping, Optional, Sequence, TypedDict, cast, Union
 from pathlib import Path
@@ -673,9 +673,12 @@ class ChamberRuntime:
                         except Exception as e:
                             self.append_log("CHAT", f"구글챗 시작 카드 전송 실패: {e!r}")
 
-                    # ✅ 시작시각을 런타임에서 확정해 params에 심어서 전달
+                    # ✅ 시작시각 확정: 버튼-누른-시각 우선, 없으면 지금 시각 (둘 다 tz 없음)
+                    from datetime import datetime
                     params = dict(params)
-                    params["started_at"] = datetime.now().isoformat(timespec="seconds")
+                    t0 = params.get("t0_pressed_wall") or datetime.now().isoformat(timespec="seconds")
+                    params["t0_wall"]   = t0
+                    params["started_at"] = t0  # 하위호환 키 동일값
 
                     # 로그/세션 준비
                     if not getattr(self, "_log_file_path", None):
@@ -1594,6 +1597,10 @@ class ChamberRuntime:
             "process_time": process_time,
             "process_note": f"Single CH{self.ch}",
             **vals,
+
+            # ✅ Start 버튼 "누른" 시각 (tz 없이, 초 단위)
+            "t0_pressed_wall": datetime.now().isoformat(timespec="seconds"),
+            "t0_pressed_ns":   time.monotonic_ns(),
         }
         errs = self._validate_norm_params(cast(NormParams, params))
         if errs:
@@ -2132,7 +2139,7 @@ class ChamberRuntime:
             return local_fallback
 
     def _prepare_log_file(self, params: Mapping[str, Any]) -> None:
-        now_local = datetime.now().astimezone()
+        now_local = datetime.now()
         ts = now_local.strftime("%Y%m%d_%H%M%S")
 
         base = self._log_dir / f"CH{self.ch}_{ts}"
