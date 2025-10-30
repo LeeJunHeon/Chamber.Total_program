@@ -654,11 +654,7 @@ class RFPulseAsync:
 
         csr_bytes: Optional[bytes] = None
 
-        # --- 추가: ACK-only 허용 대상 ---
-        ACK_ONLY_OK_CMDS = {CMD_SET_ACTIVE_CTRL, CMD_SET_PULSING}  # 필요 시 확대 가능
-
         # ACK phase: ACK/NAK 또는 즉시 온 프레임 처리
-        ack_seen = False  # ★ 추가
         while time.monotonic() < ack_deadline:
             remain = ack_deadline - time.monotonic()
             tok = await self._get_token(remain)
@@ -667,13 +663,25 @@ class RFPulseAsync:
             kind, payload = tok
             if kind == "NAK":
                 return False, None
-            if kind == "ACK":            # ★ 추가
-                ack_seen = True
-                continue
             if kind == "FRAME" and payload:
                 if self._frame_match(payload, cmd.cmd):
                     csr_bytes = self._extract_data(payload)
                     break
+
+        # CSR 프레임 대기 (전체 타임아웃까지)
+        while time.monotonic() < ack_deadline:
+            remain = ack_deadline - time.monotonic()
+            tok = await self._get_token(remain)
+            if tok is None:
+                break
+            kind, payload = tok
+            if kind == "NAK":
+                return False, None
+            if kind == "FRAME" and payload:
+                if self._frame_match(payload, cmd.cmd):
+                    csr_bytes = self._extract_data(payload)
+                    break
+            # NOTE: ACK는 참고용 신호였으나, 이제 성공 판정엔 사용 안 함
 
         # CSR 프레임 대기 (전체 타임아웃까지)
         while (csr_bytes is None) and (time.monotonic() < end_deadline):
@@ -686,19 +694,17 @@ class RFPulseAsync:
                 csr_bytes = self._extract_data(payload)
                 break
 
-        # --- 핵심 변경: ACK-only 허용 ---
-        if (not csr_bytes or len(csr_bytes) < 1):
-            # 만약 ACK은 확인했고, 이 명령이 ACK만 와도 되는 케이스라면 성공 처리
-            if ack_seen and (cmd.cmd in ACK_ONLY_OK_CMDS):
-                return True, b""  # CSR 없음
+        # ★ CSR 필수: 프레임 없으면 무조건 실패
+        if (not csr_bytes) or (len(csr_bytes) < 1):
             return False, None
 
         csr = csr_bytes[0]
         if csr != 0:
-            await self._emit_status(f"CSR {csr} ({CSR_CODES.get(csr, 'Unknown')}) for {self._cmd_label(cmd.cmd)}")
+            await self._emit_status(
+                f"CSR {csr} ({CSR_CODES.get(csr, 'Unknown')}) for {self._cmd_label(cmd.cmd)}"
+            )
             return False, None
 
-        # RF ON은 기존대로 CSR 성공 시점에 알림
         if cmd.cmd == CMD_RF_ON:
             await self._event_q.put(RFPulseEvent(kind="target_reached", message="OK"))
         return True, csr_bytes
