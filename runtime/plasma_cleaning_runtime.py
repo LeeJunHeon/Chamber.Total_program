@@ -104,6 +104,21 @@ class PlasmaCleaningRuntime:
             or _safe_get(ui, "pc_processState_edit")
         )
 
+        # ✅ Start/Stop 버튼 캐싱(한번만 찾고 계속 사용)
+        self._w_start = _find_first(self.ui, [
+            f"{self.prefix}Start_button", f"{self.prefix}StartButton",
+            f"{self.prefix.lower()}Start_button", f"{self.prefix.lower()}StartButton",
+            "PC_Start_button", "pcStart_button",
+        ])
+        self._w_stop = _find_first(self.ui, [
+            f"{self.prefix}Stop_button", f"{self.prefix}StopButton",
+            f"{self.prefix.lower()}Stop_button", f"{self.prefix.lower()}StopButton",
+            "PC_Stop_button", "pcStop_button",
+        ])
+
+        # ✅ 버튼 토글 ‘세대(Generation)’ 카운터 — 마지막 지시만 유효
+        self._ui_toggle_gen = 0
+
         # RF 파워(연속) 바인딩
         self.rf = self._make_rf_async()
 
@@ -561,36 +576,32 @@ class PlasmaCleaningRuntime:
     # =========================
     def _connect_ui_buttons(self) -> None:
         """
-        버튼 objectName 변형(예: PC_Start_button / pcStart_button 등)을 모두 수용.
+        버튼 연결을 한 번만(중복 방지) + __init__에서 캐싱된 버튼을 그대로 사용.
         """
-        w_start = _find_first(self.ui, [
-            f"{self.prefix}Start_button",
-            f"{self.prefix}StartButton",
-            f"{self.prefix.lower()}Start_button",
-            f"{self.prefix.lower()}StartButton",
-            "PC_Start_button",
-            "pcStart_button",
-        ])
-        w_stop = _find_first(self.ui, [
-            f"{self.prefix}Stop_button",
-            f"{self.prefix}StopButton",
-            f"{self.prefix.lower()}Stop_button",
-            f"{self.prefix.lower()}StopButton",
-            "PC_Stop_button",
-            "pcStop_button",
-        ])
-        # ⬇ CSV 파일 선택 버튼(새로 만든 버튼; 없으면 None → 무시)
+        # 0) 이미 연결되었으면 재연결하지 않음(중복 실행 방지)
+        if getattr(self, "_buttons_connected", False):
+            return
+
+        # 1) __init__에서 캐싱한 버튼 사용
+        w_start = getattr(self, "_w_start", None)
+        w_stop  = getattr(self, "_w_stop",  None)
+
+        # 2) CSV/레시피 버튼은 필요 시 한 번만 찾음
         w_proc = _find_first(self.ui, [
-            "PC_processList_button", "pcProcessList_button",  # 당신이 만든 이름 우선
+            "PC_processList_button", "pcProcessList_button",
             "processList_button", "PC_LoadCSV_button", "pcLoadCSV_button",
         ])
 
+        # 3) 비동기 핸들러 연결 (최신 권장 create_task 사용)
         if w_start:
-            w_start.clicked.connect(lambda: asyncio.ensure_future(self._on_click_start()))
+            w_start.clicked.connect(lambda: asyncio.create_task(self._on_click_start()))
         if w_stop:
-            w_stop.clicked.connect(lambda: asyncio.ensure_future(self._on_click_stop()))
+            w_stop.clicked.connect(lambda: asyncio.create_task(self._on_click_stop()))
         if w_proc:
-            w_proc.clicked.connect(lambda: asyncio.ensure_future(self._handle_process_list_clicked_async()))
+            w_proc.clicked.connect(lambda: asyncio.create_task(self._handle_process_list_clicked_async()))
+
+        # 4) 중복 연결 방지 플래그
+        self._buttons_connected = True
 
     async def _on_click_start(self) -> None:
         # start 버튼 중복 클릭 방지
@@ -808,24 +819,41 @@ class PlasmaCleaningRuntime:
         with contextlib.suppress(Exception):
             self._close_run_log()
 
+    def _apply_button_state(self, *, start_enabled: bool, stop_enabled: bool) -> None:
+        """
+        Start/Stop 버튼 상태를 중앙 경로로만 변경한다.
+        - 즉시 반영 + 다음 틱 보정
+        - 세대(gen) 카운터로 '마지막 지시'만 적용되게 보장
+        """
+        self.append_log("UI", f"[buttons] start={start_enabled}, stop={stop_enabled}")
+
+        self._ui_toggle_gen += 1
+        gen = self._ui_toggle_gen
+
+        # 1) 즉시 반영
+        with contextlib.suppress(Exception):
+            if self._w_start and hasattr(self._w_start, "setEnabled"):
+                self._w_start.setEnabled(bool(start_enabled))
+            if self._w_stop and hasattr(self._w_stop, "setEnabled"):
+                self._w_stop.setEnabled(bool(stop_enabled))
+
+        # 2) 다음 틱 보정(레이스 방지) — 최신 gen만 실행
+        def _force():
+            if gen != getattr(self, "_ui_toggle_gen", 0):
+                return  # 뒤늦게 도착한 구세대 요청은 무시
+            with contextlib.suppress(Exception):
+                if self._w_start and hasattr(self._w_start, "setEnabled"):
+                    self._w_start.setEnabled(bool(start_enabled))
+                if self._w_stop and hasattr(self._w_stop, "setEnabled"):
+                    self._w_stop.setEnabled(bool(stop_enabled))
+        try:
+            QTimer.singleShot(0, _force)
+        except Exception:
+            pass
+
     def _set_running_ui_state(self) -> None:
         """공정 실행 중 UI 상태 (Start 비활성, Stop 활성)"""
-        with contextlib.suppress(Exception):
-            w_start = _find_first(self.ui, [
-                f"{self.prefix}Start_button", f"{self.prefix}StartButton",
-                f"{self.prefix.lower()}Start_button", f"{self.prefix.lower()}StartButton",
-                "PC_Start_button", "pcStart_button",
-            ])
-            if w_start and hasattr(w_start, "setEnabled"):
-                w_start.setEnabled(False)
-
-            w_stop = _find_first(self.ui, [
-                f"{self.prefix}Stop_button", f"{self.prefix}StopButton",
-                f"{self.prefix.lower()}Stop_button", f"{self.prefix.lower()}StopButton",
-                "PC_Stop_button", "pcStop_button",
-            ])
-            if w_stop and hasattr(w_stop, "setEnabled"):
-                w_stop.setEnabled(True)
+        self._apply_button_state(start_enabled=False, stop_enabled=True)
 
     async def _shutdown_rest_devices(self) -> None:
         """
@@ -1087,47 +1115,8 @@ class PlasmaCleaningRuntime:
             if ref_w and hasattr(ref_w, "setPlainText"):
                 ref_w.setPlainText("")
 
-        # 버튼 상태 복원 (Start 가능, Stop 불가)
-        with contextlib.suppress(Exception):
-            w_start = _find_first(self.ui, [
-                f"{self.prefix}Start_button", f"{self.prefix}StartButton",
-                f"{self.prefix.lower()}Start_button", f"{self.prefix.lower()}StartButton",
-                "PC_Start_button", "pcStart_button",
-            ])
-            if w_start and hasattr(w_start, "setEnabled"):
-                w_start.setEnabled(True)   # Start 버튼 활성화
-
-            w_stop = _find_first(self.ui, [
-                f"{self.prefix}Stop_button", f"{self.prefix}StopButton",
-                f"{self.prefix.lower()}Stop_button", f"{self.prefix.lower()}StopButton",
-                "PC_Stop_button", "pcStop_button",
-            ])
-            if w_stop and hasattr(w_stop, "setEnabled"):
-                w_stop.setEnabled(False)  # Stop 버튼 비활성화
-
-        # 🔧 레이스 방지: 이벤트 루프 '다음 틱'에 다시 한 번 강제
-        try:
-            def _force_enable():
-                ws = _find_first(self.ui, [
-                    f"{self.prefix}Start_button", f"{self.prefix}StartButton",
-                    f"{self.prefix.lower()}Start_button", f"{self.prefix.lower()}StartButton",
-                    "PC_Start_button", "pcStart_button",
-                ])
-                wt = _find_first(self.ui, [
-                    f"{self.prefix}Stop_button", f"{self.prefix}StopButton",
-                    f"{self.prefix.lower()}Stop_button", f"{self.prefix.lower()}StopButton",
-                    "PC_Stop_button", "pcStop_button",
-                ])
-                if ws and hasattr(ws, "setEnabled"): ws.setEnabled(True)
-                if wt and hasattr(wt, "setEnabled"): wt.setEnabled(False)
-            QTimer.singleShot(0, _force_enable)
-        except Exception:
-            pass
-
-        # (선택) 즉시 반영
-        with contextlib.suppress(Exception):
-            from PySide6.QtWidgets import QApplication
-            QApplication.processEvents()
+        # 버튼은 중앙 헬퍼로만 토글
+        self._apply_button_state(start_enabled=True, stop_enabled=False)
 
     def _notify_finish_once(self, *, ok: bool, reason: str | None = None, stopped: bool = False) -> None:
         if self._final_notified:
