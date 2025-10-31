@@ -722,18 +722,18 @@ class PlasmaCleaningRuntime:
             self.append_log("PC", f"오류: {e!r}")
 
         finally:
-            # 1) 종료 알림 (예외는 로그만 남기고 진행)
-            try:
-                self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final)
-            except Exception as e:
-                self.append_log("PC", f"notify_finish_once error: {e!r}")
-
-            # 2) 모든 정리 작업을 ‘끝까지’ 기다린다
+            # 1) 모든 정리 작업을 ‘끝까지’ 기다린다
             #   - RF 램프다운/종료
             #   - 내부 태스크 취소+대기
             #   - 선택 장치 disconnect
             #   - 로그 파일 close
             await self._final_cleanup()
+
+            # 2) 종료 알림 (예외는 로그만 남기고 진행)
+            try:
+                self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final)
+            except Exception as e:
+                self.append_log("PC", f"notify_finish_once error: {e!r}")
 
             # 3) 정리 완료 후에 UI 복원(버튼/표시)
             self._running = False
@@ -741,9 +741,8 @@ class PlasmaCleaningRuntime:
             self._reset_ui_state(restore_time_min=self._last_process_time_min)
             self._set_state_text("대기 중")
 
-
     async def _on_click_stop(self) -> None:
-        # 🔒 재진입 가드: 이미 종료 통지했다면 아무 것도 하지 않음
+        # 이미 종료 통지됐다면 무시
         if getattr(self, "_final_notified", False):
             return
 
@@ -752,20 +751,10 @@ class PlasmaCleaningRuntime:
             if getattr(self, "pc", None):
                 self.pc.request_stop()
 
-        # 1) STOP 알림
-        try:
-            self._notify_finish_once(ok=False, reason="사용자 STOP", stopped=True)
-        except Exception as e:
-            self.append_log("PC", f"notify_finish_once error: {e!r}")
-
-        # 2) 모든 정리 작업을 끝까지 기다림
-        await self._final_cleanup()
-
-        # 3) 정리 완료 후 UI 복원
-        self._running = False
-        self._process_timer_active = False
-        self._reset_ui_state(restore_time_min=self._last_process_time_min)
-        self._set_state_text("대기 중")
+        # STOP 즉시 효과: 상태표시만 업데이트 (정리/알림은 START 경로 finally에서 단일 수행)
+        self._set_state_text("정지 중…")
+        self._apply_button_state(start_enabled=False, stop_enabled=False)
+        # 여기서는 return으로 끝냅니다. (cleanup/notify 호출 없음)
 
     async def _safe_rf_stop(self) -> None:
         # ▶ 방어: 어떤 경로로 불려도 카운트다운 표시는 종료
@@ -801,21 +790,33 @@ class PlasmaCleaningRuntime:
     # 내부 헬퍼들
     # =========================
     async def _final_cleanup(self) -> None:
-        # 0) RF/가스/SP4 안전 정지
-        with contextlib.suppress(Exception):
-            await self._safe_rf_stop()  # 내부에서 가스/SP4 정리까지 수행
+        # (A) 재진입 가드
+        if getattr(self, "_cleanup_started", False):
+            return
+        self._cleanup_started = True
 
-        # 1) 내부 태스크 취소/대기 (유한 대기)
+        # (B) MFC 폴링/자동재연결 명시 중단(드라이버가 지원할 때)
+        with contextlib.suppress(Exception):
+            if self.mfc_gas and hasattr(self.mfc_gas, "set_process_status"):
+                self.mfc_gas.set_process_status(False)
+            if self.mfc_pressure and hasattr(self.mfc_pressure, "set_process_status"):
+                self.mfc_pressure.set_process_status(False)
+
+        # (C) RF/가스/SP4 안전 정지
+        with contextlib.suppress(Exception):
+            await self._safe_rf_stop()
+
+        # (D) 내부 태스크 취소/대기
         try:
             await asyncio.wait_for(self._shutdown_all_tasks(), timeout=3.0)
         except asyncio.TimeoutError:
             self.append_log("PC", "태스크 종료 지연(timeout) → 계속 진행")
 
-        # 2) 선택 장치 해제 (다른 CH 사용 중이면 내부 로직이 자동 skip)
+        # (E) 선택 장치 해제
         with contextlib.suppress(Exception):
             await asyncio.wait_for(self._disconnect_selected_devices(), timeout=5.0)
 
-        # 3) 로그 파일 닫기
+        # (F) 로그 파일 닫기
         with contextlib.suppress(Exception):
             self._close_run_log()
 
@@ -908,21 +909,21 @@ class PlasmaCleaningRuntime:
             if skip_disconnect:
                 self.append_log("MFC", "CH2 PC 실행 중 → mfc1 공유 → MFC disconnect 생략")
                 return
+            else:            
+                # ← 여기부터는 ‘안전할 때만’ 끊음
+                if int(getattr(self, "_selected_ch", 0)) == 1:
+                    mfc_set = {m for m in (self.mfc_gas, self.mfc_pressure) if m}
+                    for m in mfc_set:
+                        self.append_log("MFC", "CH1 종료: MFC 연결 해제")
+                        with contextlib.suppress(Exception):
+                            await asyncio.wait_for(m.cleanup(), timeout=3.0)
+                else:
+                    if self.mfc_pressure:
+                        self.append_log("MFC", "CH2 종료: Pressure MFC 연결 해제")
+                        with contextlib.suppress(Exception):
+                            await asyncio.wait_for(self.mfc_pressure.cleanup(), timeout=3.0)
 
-            # ← 여기부터는 ‘안전할 때만’ 끊음
-            if int(getattr(self, "_selected_ch", 0)) == 1:
-                mfc_set = {m for m in (self.mfc_gas, self.mfc_pressure) if m}
-                for m in mfc_set:
-                    self.append_log("MFC", "CH1 종료: MFC 연결 해제")
-                    with contextlib.suppress(Exception):
-                        await asyncio.wait_for(m.cleanup(), timeout=3.0)
-            else:
-                if self.mfc_pressure:
-                    self.append_log("MFC", "CH2 종료: Pressure MFC 연결 해제")
-                    with contextlib.suppress(Exception):
-                        await asyncio.wait_for(self.mfc_pressure.cleanup(), timeout=3.0)
-
-            # 2) IG (각 CH에 해당하는 IG 인스턴스가 self.ig로 바인딩되어 있음)
+            # 2) IG — 항상 정리
             if self.ig:
                 self.append_log("IG", f"CH{self._selected_ch} 종료: IG 연결 해제")
                 with contextlib.suppress(Exception):
