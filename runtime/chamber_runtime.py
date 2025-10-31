@@ -654,11 +654,10 @@ class ChamberRuntime:
                         pass
 
                     # ✅ 시작 카드 전송(성공 시 로그 X, 실패만 로그)
+                    # AFTER: 시작 카드 전송 후 즉시 flush
                     if self.chat:
                         p = dict(params)
                         p.setdefault("ch", self.ch)
-
-                        # ➊ 카드 헤더용: "CHx Sputter"를 prefix로 고정 전달
                         p["prefix"] = f"CH{self.ch} Sputter"
 
                         # ➋ 리스트 공정이면 공정명에 " (i/n)"을 덧붙이고 인덱스도 함께 넘김
@@ -675,12 +674,14 @@ class ChamberRuntime:
                         except Exception:
                             pass
 
-                        p = self._format_card_payload_for_chat(p)  # (기존 정리 로직 유지)
-
+                        p = self._format_card_payload_for_chat(p)
                         try:
                             ret = self.chat.notify_process_started(p)
                             if inspect.iscoroutine(ret):
                                 await ret
+                            # ★ 추가: 버퍼링 드롭 방지(즉시 밀어내기)
+                            if hasattr(self.chat, "flush"):
+                                self.chat.flush()
                         except Exception as e:
                             self.append_log("CHAT", f"구글챗 시작 카드 전송 실패: {e!r}")
 
@@ -740,11 +741,22 @@ class ChamberRuntime:
                     except Exception:
                         pass
 
+                    # ✅ 종료 카드 전송(성공 시 로그 X, 실패만 로그)
                     if self.chat:
+                        # 라우팅/표시용 힌트 보강: CH2 누락으로 전송이 드롭/오경로 되는 문제 방지
+                        payload = dict(detail)
+                        payload.setdefault("ch", self.ch)           # ← 필수(라우팅)
+                        payload.setdefault("prefix", self.prefix)   # ← 표시/구분용
+                        # 시작 카드와 키를 맞춰 카드 템플릿이 동일하게 먹히도록 보정
+                        if "process_note" not in payload and "process_name" in payload:
+                            payload["process_note"] = payload["process_name"]
                         try:
-                            ret = self.chat.notify_process_finished_detail(ok, detail)
+                            ret = self.chat.notify_process_finished_detail(ok, payload)
                             if inspect.iscoroutine(ret):
                                 await ret
+                            # Plasma cleaning과 동일하게 즉시 밀어내기(버퍼링 드롭 방지)
+                            if hasattr(self.chat, "flush"):
+                                self.chat.flush()
                         except Exception as e:
                             self.append_log("CHAT", f"구글챗 종료 카드 전송 실패: {e!r}")
 
