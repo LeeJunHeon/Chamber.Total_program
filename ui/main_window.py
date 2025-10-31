@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 ################################################################################
-## Form generated from reading UI file 'CH1&2lRqGsV.ui'
+## Form generated from reading UI file 'CH1&2wVbFJH.ui'
 ##
 ## Created by: Qt User Interface Compiler version 6.9.1
 ##
@@ -245,6 +245,15 @@ class Ui_Form(object):
         self.PC_processList_button = QPushButton(self.page_3)
         self.PC_processList_button.setObjectName(u"PC_processList_button")
         self.PC_processList_button.setGeometry(QRect(960, 450, 61, 51))
+        self.Power_Select_button = QPushButton(self.page_3)
+        self.Power_Select_button.setObjectName(u"Power_Select_button")
+        self.Power_Select_button.setGeometry(QRect(30, 350, 101, 101))
+        self.Power_Select_button.setCheckable(True)
+        self.Power_Select_button.setChecked(False)  # 기본 OFF
+        # 눌림 상태에 따라 라벨 변경
+        self.Power_Select_button.toggled.connect(
+            lambda c: self.Power_Select_button.setText("Power\nSelect: ON" if c else "Power\nSelect: OFF")
+        )
         self.stackedWidget.addWidget(self.page_3)
         self.page = QWidget()
         self.page.setObjectName(u"page")
@@ -622,10 +631,16 @@ class Ui_Form(object):
         self.ch2_btnGoCh1.setGeometry(QRect(10, 0, 91, 61))
         self.ch2_dcPower_edit = QPlainTextEdit(self.page_2)
         self.ch2_dcPower_edit.setObjectName(u"ch2_dcPower_edit")
-        self.ch2_dcPower_edit.setGeometry(QRect(10, 600, 201, 31))
+        self.ch2_dcPower_edit.setGeometry(QRect(10, 600, 101, 31))
         self.ch2_dcPower_checkbox = QCheckBox(self.page_2)
         self.ch2_dcPower_checkbox.setObjectName(u"ch2_dcPower_checkbox")
-        self.ch2_dcPower_checkbox.setGeometry(QRect(10, 580, 121, 24))
+        self.ch2_dcPower_checkbox.setGeometry(QRect(10, 580, 101, 24))
+        self.ch2_dcPower_edit_2 = QPlainTextEdit(self.page_2)
+        self.ch2_dcPower_edit_2.setObjectName(u"ch2_dcPower_edit_2")
+        self.ch2_dcPower_edit_2.setGeometry(QRect(110, 600, 101, 31))
+        self.ch2_dcPower_checkbox_2 = QCheckBox(self.page_2)
+        self.ch2_dcPower_checkbox_2.setObjectName(u"ch2_dcPower_checkbox_2")
+        self.ch2_dcPower_checkbox_2.setGeometry(QRect(110, 580, 101, 24))
         self.stackedWidget.addWidget(self.page_2)
         QWidget.setTabOrder(self.pc_processState_edit, self.pc_btnGoCh1)
         QWidget.setTabOrder(self.pc_btnGoCh1, self.pc_btnGoCh2)
@@ -769,8 +784,8 @@ class Ui_Form(object):
         self.pc_processState_edit.setPlainText("")
         self.preSputter_useChamber1_radio.setText(QCoreApplication.translate("Form", u"CH1", None))
         self.preSputter_useChamber2_radio.setText(QCoreApplication.translate("Form", u"CH2", None))
-        self.PC_processList_button.setText(QCoreApplication.translate("Form", u"File\n"
-"Path", None))
+        self.PC_processList_button.setText(QCoreApplication.translate("Form", u"File\n" "Path", None))
+        self.Power_Select_button.setText(QCoreApplication.translate("Form", u"Power\n" "Select: OFF", None))
         self.ch1_processList_button.setText(QCoreApplication.translate("Form", u"Select File", None))
         self.ch1_shutterDelay_label.setText(QCoreApplication.translate("Form", u"Shutter Delay [min]", None))
         self.ch1_Current_label.setText(QCoreApplication.translate("Form", u"Current", None))
@@ -837,6 +852,7 @@ class Ui_Form(object):
         self.ch2_btnGoPC.setText(QCoreApplication.translate("Form", u"Plasma\n"
 "Cleaning", None))
         self.ch2_btnGoCh1.setText(QCoreApplication.translate("Form", u"CH.1", None))
-        self.ch2_dcPower_checkbox.setText(QCoreApplication.translate("Form", u"DC Power [W]", None))
+        self.ch2_dcPower_checkbox.setText(QCoreApplication.translate("Form", u"DC Power", None))
+        self.ch2_dcPower_checkbox_2.setText(QCoreApplication.translate("Form", u"RF Power", None))
     # retranslateUi
 
