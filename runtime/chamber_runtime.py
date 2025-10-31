@@ -454,9 +454,7 @@ class ChamberRuntime:
                         pass
 
                     self.process_controller.on_plc_failed(nname, str(e))
-                    if self.chat:
-                        with contextlib.suppress(Exception):
-                            self.chat.notify_error_with_src("PLC", f"{nname}: {e}")
+
                     self.append_log("PLC", f"명령 실패: {raw} -> {onb}: {e!r}")
             self._spawn_detached(run())
 
@@ -559,9 +557,6 @@ class ChamberRuntime:
                                 raise RuntimeError("OES 초기화 실패")
                     except Exception as e:
                         self.append_log("OES", f"초기화 실패: {e!r} → 종료 절차로 전환")
-                        if self.chat:
-                            with contextlib.suppress(Exception):
-                                self.chat.notify_text(f"[OES] 초기화 실패: {e!r}")
                         self.process_controller.on_oes_failed("OES", f"init: {e}")
                         return
 
@@ -602,9 +597,6 @@ class ChamberRuntime:
                 except Exception as e:
                     msg = f"예외로 RGA 스캔 실패: {e!r} → 다음 단계"
                     self.append_log("RGA", msg)
-                    if self.chat:
-                        with contextlib.suppress(Exception):
-                            self.chat.notify_text(f"[RGA] {msg}")
                     self.process_controller.on_rga_finished()
             self._spawn_detached(_run())
 
@@ -664,8 +656,27 @@ class ChamberRuntime:
                     # ✅ 시작 카드 전송(성공 시 로그 X, 실패만 로그)
                     if self.chat:
                         p = dict(params)
-                        p.setdefault("ch", self.ch)  # 라우팅 힌트
-                        p = self._format_card_payload_for_chat(p)  # 카드용 정리
+                        p.setdefault("ch", self.ch)
+
+                        # ➊ 카드 헤더용: "CHx Sputter"를 prefix로 고정 전달
+                        p["prefix"] = f"CH{self.ch} Sputter"
+
+                        # ➋ 리스트 공정이면 공정명에 " (i/n)"을 덧붙이고 인덱스도 함께 넘김
+                        try:
+                            total = len(getattr(self, "process_queue", []) or [])
+                            cur   = int(getattr(self, "current_process_index", -1)) + 1
+                            if total > 0 and cur > 0:
+                                name_key = "Process_name" if "Process_name" in p else ("process_name" if "process_name" in p else None)
+                                if name_key:
+                                    base = (str(p.get(name_key, "")) or f"Run CH{self.ch}").strip()
+                                    p[name_key] = f"{base} ({cur}/{total})"
+                                p["process_index"] = cur
+                                p["process_total"] = total
+                        except Exception:
+                            pass
+
+                        p = self._format_card_payload_for_chat(p)  # (기존 정리 로직 유지)
+
                         try:
                             ret = self.chat.notify_process_started(p)
                             if inspect.iscoroutine(ret):
@@ -696,9 +707,6 @@ class ChamberRuntime:
                     t = params.get("process_time", 0) or 0
                     line = f"▶️ CH{self.ch} '{name}' 시작 (t={float(t):.1f}s)"
                     self.append_log("MAIN", line)
-                    # if self.chat:
-                    #     with contextlib.suppress(Exception):
-                    #         self.chat.notify_text(line)
 
                     # 폴링 타깃 초기화
                     self._last_polling_targets = None
@@ -711,6 +719,27 @@ class ChamberRuntime:
                     await asyncio.sleep(0.20)
 
                     # ✅ 종료 카드 전송(성공 시 로그 X, 실패만 로그)
+                    ok = bool(payload.get("ok", False))
+                    detail = dict(payload.get("detail", {}) or {})
+
+                    # ➊ 카드 헤더용 prefix: "CHx Sputter"
+                    detail.setdefault("ch", self.ch)
+                    detail.setdefault("prefix", f"CH{self.ch} Sputter")
+
+                    # ➋ 리스트 공정 표기 (i/n) 동일하게 적용
+                    try:
+                        total = len(getattr(self, "process_queue", []) or [])
+                        cur   = int(getattr(self, "current_process_index", -1)) + 1
+                        if total > 0 and cur > 0:
+                            name_key = "Process_name" if "Process_name" in detail else ("process_name" if "process_name" in detail else None)
+                            if name_key:
+                                base = (str(detail.get(name_key, "")) or f"Run CH{self.ch}").strip()
+                                detail[name_key] = f"{base} ({cur}/{total})"
+                            detail["process_index"] = cur
+                            detail["process_total"] = total
+                    except Exception:
+                        pass
+
                     if self.chat:
                         try:
                             ret = self.chat.notify_process_finished_detail(ok, detail)
@@ -962,9 +991,6 @@ class ChamberRuntime:
             elif k == "target_failed":
                 why = ev.message or "unknown"
                 self.process_controller.on_rf_target_failed(why)
-                if self.chat:
-                    with contextlib.suppress(Exception):
-                        self.chat.notify_error_with_src("RF Power", why)
             elif k == "power_off_finished":
                 self.process_controller.on_device_step_ok()
 
@@ -986,9 +1012,6 @@ class ChamberRuntime:
             elif k == "command_failed":
                 why = ev.reason or "unknown"
                 self.process_controller.on_rf_pulse_failed(why)
-                if self.chat:
-                    with contextlib.suppress(Exception):
-                        self.chat.notify_error_with_src("RFPulse", why)
             elif k == "power_off_finished":
                 self.process_controller.on_rf_pulse_off_finished()
 
@@ -1067,10 +1090,6 @@ class ChamberRuntime:
                         # 실패
                         why = getattr(ev, "message", "measure failed")
                         self.append_log(f"OES{self.ch}", f"측정 실패: {why} → 종료 절차로 전환")
-                        if self.chat:
-                            with contextlib.suppress(Exception):
-                                # 실패는 error 채널로 알림을 주는 게 구분이 더 명확합니다
-                                self.chat.notify_error_with_src(f"OES{self.ch}", f"측정 실패: {why}")
                         self.process_controller.on_oes_failed("OES", why)
                     continue
 
@@ -2555,6 +2574,9 @@ class ChamberRuntime:
         - 파워: 사용하지 않는 종류는 키 자체를 제거(카드에 안 보이게)
         """
         q = dict(p)
+
+        # 기본 헤더 타이틀이 없으면 CHx Sputter로 보정
+        q.setdefault("prefix", f"CH{self.ch} Sputter")
 
         # ── 1) CH1은 건 1개만 노출 ─────────────────────────────────────────────
         if self.ch == 1:

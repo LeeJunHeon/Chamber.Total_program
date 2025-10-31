@@ -662,7 +662,7 @@ class PlasmaCleaningRuntime:
                         "process_time":  float(p.process_time_min),
                         "use_rf_power":  True,
                         "rf_power":      float(p.rf_power_w),
-                        "prefix":        self.prefix,
+                        "prefix":        f"CH{self._selected_ch} Plasma Cleaning",  # ← 헤더용
                         "ch":            self._selected_ch,
                     })
                     if hasattr(self.chat, "flush"):
@@ -1133,7 +1133,7 @@ class PlasmaCleaningRuntime:
 
         payload = {
             "process_name": "Plasma Cleaning",
-            "prefix": self.prefix,
+            "prefix": f"CH{self._selected_ch} Plasma Cleaning",  # ← 헤더용
             "ch": self._selected_ch,
             "stopped": stopped,
         }
