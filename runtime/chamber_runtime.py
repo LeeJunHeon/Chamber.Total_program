@@ -713,120 +713,139 @@ class ChamberRuntime:
                     self._last_polling_targets = None
 
                 elif kind == "finished":
-                    ok = bool(payload.get("ok", False))
-                    detail = payload.get("detail", {}) or {}
-                    ok_for_log = bool(detail.get("ok_for_log", ok))
-                    self.data_logger.finalize_and_write_log(ok_for_log)
-                    await asyncio.sleep(0.20)
-
-                    # ✅ 종료 카드 전송(성공 시 로그 X, 실패만 로그)
-                    ok = bool(payload.get("ok", False))
-                    detail = dict(payload.get("detail", {}) or {})
-
-                    # ➊ 카드 헤더용 prefix: "CHx Sputter"
-                    detail.setdefault("ch", self.ch)
-                    detail.setdefault("prefix", f"CH{self.ch} Sputter")
-
-                    # ➋ 리스트 공정 표기 (i/n) 동일하게 적용
                     try:
-                        total = len(getattr(self, "process_queue", []) or [])
-                        cur   = int(getattr(self, "current_process_index", -1)) + 1
-                        if total > 0 and cur > 0:
-                            name_key = "Process_name" if "Process_name" in detail else ("process_name" if "process_name" in detail else None)
-                            if name_key:
-                                base = (str(detail.get(name_key, "")) or f"Run CH{self.ch}").strip()
-                                detail[name_key] = f"{base} ({cur}/{total})"
-                            detail["process_index"] = cur
-                            detail["process_total"] = total
-                    except Exception:
-                        pass
+                        ok = bool(payload.get("ok", False))
+                        detail = payload.get("detail", {}) or {}
+                        ok_for_log = bool(detail.get("ok_for_log", ok))
+                        self.data_logger.finalize_and_write_log(ok_for_log)
+                        await asyncio.sleep(0.20)
 
-                    # ✅ 종료 카드 전송(성공 시 로그 X, 실패만 로그)
-                    if self.chat:
-                        # 라우팅/표시용 힌트 보강: CH2 누락으로 전송이 드롭/오경로 되는 문제 방지
-                        payload = dict(detail)
-                        payload.setdefault("ch", self.ch)           # ← 필수(라우팅)
-                        payload.setdefault("prefix", self.prefix)   # ← 표시/구분용
-                        # 시작 카드와 키를 맞춰 카드 템플릿이 동일하게 먹히도록 보정
-                        if "process_note" not in payload and "process_name" in payload:
-                            payload["process_note"] = payload["process_name"]
+                        # ✅ 종료 카드 전송(성공 시 로그 X, 실패만 로그)
+                        ok = bool(payload.get("ok", False))
+                        detail = dict(payload.get("detail", {}) or {})
+
+                        # ➊ 카드 헤더용 prefix: "CHx Sputter"
+                        detail.setdefault("ch", self.ch)
+                        detail.setdefault("prefix", f"CH{self.ch} Sputter")
+
+                        # ➋ 리스트 공정 표기 (i/n) 동일하게 적용
                         try:
-                            ret = self.chat.notify_process_finished_detail(ok, payload)
-                            if inspect.iscoroutine(ret):
-                                await ret
-                            # Plasma cleaning과 동일하게 즉시 밀어내기(버퍼링 드롭 방지)
-                            if hasattr(self.chat, "flush"):
-                                self.chat.flush()
+                            total = len(getattr(self, "process_queue", []) or [])
+                            cur   = int(getattr(self, "current_process_index", -1)) + 1
+                            if total > 0 and cur > 0:
+                                name_key = "Process_name" if "Process_name" in detail else ("process_name" if "process_name" in detail else None)
+                                if name_key:
+                                    base = (str(detail.get(name_key, "")) or f"Run CH{self.ch}").strip()
+                                    detail[name_key] = f"{base} ({cur}/{total})"
+                                detail["process_index"] = cur
+                                detail["process_total"] = total
+                        except Exception:
+                            pass
+
+                        # ✅ 종료 카드 전송(성공 시 로그 X, 실패만 로그)
+                        if self.chat:
+                            # 라우팅/표시용 힌트 보강: CH2 누락으로 전송이 드롭/오경로 되는 문제 방지
+                            payload = dict(detail)
+                            payload.setdefault("ch", self.ch)           # ← 필수(라우팅)
+                            payload.setdefault("prefix", self.prefix)   # ← 표시/구분용
+                            # 시작 카드와 키를 맞춰 카드 템플릿이 동일하게 먹히도록 보정
+                            if "process_note" not in payload and "process_name" in payload:
+                                payload["process_note"] = payload["process_name"]
+                            try:
+                                ret = self.chat.notify_process_finished_detail(ok, payload)
+                                if inspect.iscoroutine(ret):
+                                    await ret
+                                # Plasma cleaning과 동일하게 즉시 밀어내기(버퍼링 드롭 방지)
+                                if hasattr(self.chat, "flush"):
+                                    self.chat.flush()
+                            except Exception as e:
+                                self.append_log("CHAT", f"구글챗 종료 카드 전송 실패: {e!r}")
+
+                        try:
+                            self.mfc.on_process_finished(ok)
+                        except Exception:
+                            pass
+
+                        # ✅ 전역: CH 공정 '종료' 시각 마킹
+                        try:
+                            runtime_state.mark_finished("chamber", self.ch)
+                        except Exception:
+                            pass
+
+                        # 0) 재연결 선차단 + 폴링 완전 OFF
+                        self._auto_connect_enabled = False
+                        self._run_select = None
+                        self._last_polling_targets = None
+                        # 남아 있을 수 있는 폴링 스위치를 즉시 모두 내림(장치 내부 워치독 종료 유도)
+                        self._apply_polling_targets({"mfc": False, "dc_pulse": False, "rf_pulse": False, "dc": False, "rf": False})
+
+                        # 1) 이제 실제로 장치/워치독을 내려서 RS-232/TCP 점유 해제
+                        self.append_log("MAIN", "공정 종료 → 모든 장치 연결 해제 및 워치독 중지")
+                        try:
+                            await self._stop_device_watchdogs(light=False)
                         except Exception as e:
-                            self.append_log("CHAT", f"구글챗 종료 카드 전송 실패: {e!r}")
+                            self.append_log("MAIN", f"종료 정리 중 예외(무시): {e!r}")
 
-                    try:
-                        self.mfc.on_process_finished(ok)
-                    except Exception:
-                        pass
+                        # 2) 다음 공정 새 로그 파일을 위해 세션 리셋
+                        self._log_file_path = None
 
-                    # ✅ 전역: CH 공정 '종료' 시각 마킹
-                    try:
-                        runtime_state.mark_finished("chamber", self.ch)
-                    except Exception:
-                        pass
+                        if getattr(self, "_pc_stopping", False):
+                            with contextlib.suppress(Exception):
+                                self._clear_queue_and_reset_ui()
+                            self._last_polling_targets = None
+                            self._pc_stopping = False
+                            continue
 
-                    # 0) 재연결 선차단 + 폴링 완전 OFF
-                    self._auto_connect_enabled = False
-                    self._run_select = None
-                    self._last_polling_targets = None
-                    # 남아 있을 수 있는 폴링 스위치를 즉시 모두 내림(장치 내부 워치독 종료 유도)
-                    self._apply_polling_targets({"mfc": False, "dc_pulse": False, "rf_pulse": False, "dc": False, "rf": False})
+                        if getattr(self, "_pending_device_cleanup", False):
+                            with contextlib.suppress(Exception):
+                                self._spawn_detached(self._stop_device_watchdogs(light=False), name="FullCleanup")
+                            self._pending_device_cleanup = False
+                            self._pc_stopping = False
 
-                    # 1) 이제 실제로 장치/워치독을 내려서 RS-232/TCP 점유 해제
-                    self.append_log("MAIN", "공정 종료 → 모든 장치 연결 해제 및 워치독 중지")
-                    try:
-                        await self._stop_device_watchdogs(light=False)
+                        self._pc_stopping = False
+                        self._start_next_process_from_queue(ok)
+                        self._last_polling_targets = None
                     except Exception as e:
-                        self.append_log("MAIN", f"종료 정리 중 예외(무시): {e!r}")
-
-                    # 2) 다음 공정 새 로그 파일을 위해 세션 리셋
-                    self._log_file_path = None
-
-                    if getattr(self, "_pc_stopping", False):
+                        self.append_log("MAIN", f"예외 발생 (finished 처리): {e}")
+                        # 예외 시 안전하게 UI를 '대기 중'으로 복귀
                         with contextlib.suppress(Exception):
                             self._clear_queue_and_reset_ui()
-                        self._last_polling_targets = None
-                        self._pc_stopping = False
-                        continue
-
-                    if getattr(self, "_pending_device_cleanup", False):
-                        with contextlib.suppress(Exception):
-                            self._spawn_detached(self._stop_device_watchdogs(light=False), name="FullCleanup")
-                        self._pending_device_cleanup = False
-                        self._pc_stopping = False
-
-                    self._pc_stopping = False
-                    self._start_next_process_from_queue(ok)
-                    self._last_polling_targets = None
 
                 elif kind == "aborted":
-                    if self.chat:
-                        try:
-                            ret = self.chat.notify_text(f"🛑 CH{self.ch} 공정 중단")
-                            if inspect.iscoroutine(ret):
-                                await ret
-                        except Exception as e:
-                            self.append_log("CHAT", f"구글챗 중단 알림 전송 실패: {e!r}")
-                    with contextlib.suppress(Exception):
-                        self._clear_queue_and_reset_ui()
-
-                    # ✅ 전역: CH 공정 '종료' 시각 마킹 (중단도 종료로 취급)
                     try:
-                        runtime_state.mark_finished("chamber", self.ch)
-                    except Exception:
-                        pass
-
-                    if getattr(self, "_pending_device_cleanup", False):
+                        if self.chat:
+                            try:
+                                ret = self.chat.notify_text(f"🛑 CH{self.ch} 공정 중단")
+                                if inspect.iscoroutine(ret):
+                                    await ret
+                            except Exception as e:
+                                self.append_log("CHAT", f"구글챗 중단 알림 전송 실패: {e!r}")
                         with contextlib.suppress(Exception):
-                            self._spawn_detached(self._stop_device_watchdogs(light=False), name="FullCleanup")
-                        self._pending_device_cleanup = False
-                        self._pc_stopping = False
+                            self._clear_queue_and_reset_ui()
+
+                        # ✅ 전역: CH 공정 '종료' 시각 마킹 (중단도 종료로 취급)
+                        try:
+                            runtime_state.mark_finished("chamber", self.ch)
+                        except Exception:
+                            pass
+                        
+                        # MFC 내부 상태 완전 초기화 (실패 종료)
+                        try:
+                            if self.mfc and hasattr(self.mfc, "on_process_finished"):
+                                self.mfc.on_process_finished(False)
+                        except Exception:
+                            pass
+
+                        if getattr(self, "_pending_device_cleanup", False):
+                            with contextlib.suppress(Exception):
+                                self._spawn_detached(self._stop_device_watchdogs(light=False), name="FullCleanup")
+                            self._pending_device_cleanup = False
+                            self._pc_stopping = False
+                    except Exception as e:
+                        self.append_log("MAIN", f"예외 발생 (aborted 처리): {e}")
+                        # 예외 시 안전하게 UI를 '대기 중'으로 복귀
+                        with contextlib.suppress(Exception):
+                            self._clear_queue_and_reset_ui()
 
                 elif kind == "polling_targets":
                     targets = dict(payload.get("targets") or {})
@@ -1824,7 +1843,13 @@ class ChamberRuntime:
             return
         
         # ✅ heavy 시작 직후도 한 번 더 OFF
-        with contextlib.suppress(Exception): self.mfc.set_process_status(False)
+        with contextlib.suppress(Exception):
+            if self.mfc and hasattr(self.mfc, "on_process_finished"):
+                # 호출 시 폴링과 내부 플래그를 초기화
+                self.mfc.on_process_finished(False)
+            elif self.mfc and hasattr(self.mfc, "set_process_status"):
+                self.mfc.set_process_status(False)
+
         if self.dc_pulse:
             with contextlib.suppress(Exception): self.dc_pulse.set_process_status(False)
         if self.rf_pulse:
