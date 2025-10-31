@@ -353,6 +353,12 @@ class AsyncDCPulse:
                 period_us = 1000.0 / max(1e-6, f_khz)
                 # off_time_us = period * (1 - duty)
                 off_time_us = max(0.0, period_us * (1.0 - d_pct / 100.0))
+
+                if off_time_us > 10.0:
+                    await self._emit_status(
+                        f"요청 듀티 {d_pct:.1f}% @ {f_khz:.0f}kHz 불가 → Off가 {off_time_us:.1f}us로 10.0us 상한 초과 → 장비가 10.0us로 클램프"
+                    )
+
                 # 장비 스펙: DC=9, 1.0~10.0us → 10~100 (x10 스케일)
                 if d_pct >= 100.0 or off_time_us < 1.0:
                     await self.set_off_time_dc()         # 0x67, DC=9
@@ -441,7 +447,8 @@ class AsyncDCPulse:
         # 0x67: DC=9, 1.0~10.0us → 10~100 (x10 스케일)
         x10 = int(round(off_time_us * 10.0))
         x10 = min(100, max(10, x10))
-        await self._write_cmd_data(0x67, x10, 2, label=f"OFF_TIME({off_time_us:.1f}us)")
+        applied_us = x10 / 10.0
+        await self._write_cmd_data(0x67, x10, 2, label=f"OFF_TIME({applied_us:.1f}us)")
 
     async def set_off_time_dc(self):
         await self._write_cmd_data(0x67, 9, 2, label="OFF_TIME(DC)")

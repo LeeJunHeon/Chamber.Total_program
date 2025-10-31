@@ -731,7 +731,7 @@ class PlasmaCleaningRuntime:
 
             # 2) 종료 알림 (예외는 로그만 남기고 진행)
             try:
-                self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final)
+                await self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final)
             except Exception as e:
                 self.append_log("PC", f"notify_finish_once error: {e!r}")
 
@@ -1139,49 +1139,44 @@ class PlasmaCleaningRuntime:
         # 버튼은 중앙 헬퍼로만 토글
         self._apply_button_state(start_enabled=True, stop_enabled=False)
 
-    def _notify_finish_once(self, *, ok: bool, reason: str | None = None, stopped: bool = False) -> None:
+    async def _notify_finish_once(self, *, ok: bool, reason: str | None = None, stopped: bool = False) -> None:
         if self._final_notified:
             return
         self._final_notified = True
 
-        # 1) 전역 종료/해제: 항상 수행
+        # 1) 전역 종료/해제(항상 시도) — 실패 시 로그 남김
         try:
             ch = int(getattr(self, "_selected_ch", 1))
-
-            # ① 종료 시각 기록(쿨다운 근거)
             runtime_state.mark_finished("pc", ch)
             runtime_state.mark_finished("chamber", ch)
-
-            # ② 실행중 플래그 해제 (mark_finished가 False로 두긴 하지만 방어적 중복 OK)
             runtime_state.set_running("pc", False, ch)
             runtime_state.set_running("chamber", False, ch)
-        except Exception:
-            pass
+        except Exception as e:
+            self.append_log("STATE", f"runtime_state finalize mark failed: {e!r}")
 
-        # 2) 카드/로그 정합성 보정
-        ok = bool(ok)
-        stopped = bool(stopped)
-        # 성공이면 reason은 싹 비운다(모순 방지)
-        if ok:
-            reason = None
-
+        # 2) 종료 챗
         if not self.chat:
             return
 
         payload = {
             "process_name": "Plasma Cleaning",
-            "prefix": f"CH{self._selected_ch} Plasma Cleaning",  # ← 헤더용
+            "prefix": f"CH{self._selected_ch} Plasma Cleaning",
             "ch": self._selected_ch,
-            "stopped": stopped,
+            "stopped": bool(stopped),
         }
         if reason:
             payload["reason"] = str(reason)
             payload["errors"] = [str(reason)]
 
-        with contextlib.suppress(Exception):
-            self.chat.notify_process_finished_detail(ok, payload)
+        try:
+            ret = self.chat.notify_process_finished_detail(ok, payload)
+            if inspect.iscoroutine(ret):
+                await ret
             if hasattr(self.chat, "flush"):
                 self.chat.flush()
+        except Exception as e:
+            # ✅ ChamberRuntime와 동일하게 “왜 챗이 안 갔는지”를 남김
+            self.append_log("CHAT", f"구글챗 종료 카드 전송 실패: {e!r}")
 
     def _post_warning(self, title: str, text: str) -> None:
         try:
