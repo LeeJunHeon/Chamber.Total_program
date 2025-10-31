@@ -100,6 +100,9 @@ class AsyncMFC:
         # 이벤트 큐 (상위 UI/브리지 소비)
         self._event_q: asyncio.Queue[MFCEvent] = asyncio.Queue(maxsize=1024)
 
+        # ★ 멀티-리스너 브로드캐스트용 큐 세트
+        self._listeners: set[asyncio.Queue] = set()
+
         # 태스크들
         self._want_connected: bool = False
         self._watchdog_task: Optional[asyncio.Task] = None
@@ -236,11 +239,17 @@ class AsyncMFC:
         await self.cleanup()
 
     async def events(self) -> AsyncGenerator[MFCEvent, None]:
-        """상위에서 소비하는 이벤트 스트림."""
-        while True:
-            ev = await self._event_q.get()
-            yield ev
-
+        """각 호출자에게 독립 큐를 할당해 브로드캐스트."""
+        q: asyncio.Queue = asyncio.Queue(maxsize=1024)
+        self._listeners.add(q)
+        try:
+            while True:
+                ev = await q.get()
+                yield ev
+        finally:
+            with contextlib.suppress(Exception):
+                self._listeners.discard(q)
+                
     # ---- 고수준 제어 API (기존 handle_command 세분화) ----
     async def set_flow(self, channel: int, ui_value: float):
         """FLOW_SET + (옵션) READ_FLOW_SET 검증."""
@@ -1492,6 +1501,40 @@ class AsyncMFC:
         return purged
 
     # ---------- 내부: 이벤트/로그 ----------
+    async def _fanout(self, ev: MFCEvent):
+        """내부 이벤트를 모든 리스너 큐로 복사(브로드캐스트).
+        - 레거시 _event_q에도 그대로 넣어 호환 유지
+        - 리스너 큐는 put_nowait로 비차단 복사(가득 찬 큐는 드롭)
+        """
+        await self._event_q.put(ev)  # 레거시
+
+        dead = []
+        for q in list(self._listeners):
+            try:
+                q.put_nowait(ev)
+            except Exception:
+                dead.append(q)
+        for q in dead:
+            with contextlib.suppress(Exception):
+                self._listeners.discard(q)
+
+    def _ev_nowait(self, ev: MFCEvent):
+        # 레거시 큐
+        try:
+            self._event_q.put_nowait(ev)
+        except Exception:
+            pass
+        # 브로드캐스트
+        dead = []
+        for q in list(self._listeners):
+            try:
+                q.put_nowait(ev)
+            except Exception:
+                dead.append(q)
+        for q in dead:
+            with contextlib.suppress(Exception):
+                self._listeners.discard(q)
+
     async def _emit_status(self, msg: str):
         if self.debug_print:
             print(f"[MFC][status] {msg}")
