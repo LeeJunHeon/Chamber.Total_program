@@ -9,7 +9,7 @@ from typing import Any, Awaitable, Callable, Optional, Mapping
 
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import QMessageBox, QPlainTextEdit, QApplication, QWidget
-from PySide6.QtCore import Qt   # ⬅ 챔버와 동일한 모달리티/속성 적용용
+from PySide6.QtCore import Qt, QTimer   # ⬅ 챔버와 동일한 모달리티/속성 적용용
 
 # 장비/컨트롤러
 from device.mfc import AsyncMFC
@@ -476,14 +476,13 @@ class PlasmaCleaningRuntime:
             mins = max(sec, 0) / 60.0
             tail_with_min = f"{tail} ({mins:.2f} min)"
 
-            # 1) 상단 상태창은 '공정 카운트다운'이 켜져 있을 때만 덮는다
-            if getattr(self, "_process_timer_active", False):
-                if self._state_header:
-                    self._set_state_text(f"{self._state_header} · {tail_with_min}")
-                else:
-                    self._set_state_text(tail_with_min)
+            # 1) 상단 상태창은 언제나 덮어서 표시 (SP4 대기/공정 카운트다운 모두 노출)
+            if self._state_header:
+                self._set_state_text(f"{self._state_header} · {tail_with_min}")
+            else:
+                self._set_state_text(tail_with_min)
 
-            # 2) Process Time 칸 표기는 '공정 카운트다운'일 때만 (기존과 동일하게 mm:ss 유지)
+            # 2) Process Time 칸 표기는 '공정 카운트다운'일 때만 mm:ss 유지 (기존 동작 유지)
             if getattr(self, "_process_timer_active", False):
                 w = getattr(self.ui, "PC_ProcessTime_edit", None)
                 if w and hasattr(w, "setPlainText"):
@@ -733,6 +732,10 @@ class PlasmaCleaningRuntime:
 
 
     async def _on_click_stop(self) -> None:
+        # 🔒 재진입 가드: 이미 종료 통지했다면 아무 것도 하지 않음
+        if getattr(self, "_final_notified", False):
+            return
+
         self._stop_requested = True
         with contextlib.suppress(Exception):
             if getattr(self, "pc", None):
@@ -1101,6 +1104,30 @@ class PlasmaCleaningRuntime:
             ])
             if w_stop and hasattr(w_stop, "setEnabled"):
                 w_stop.setEnabled(False)  # Stop 버튼 비활성화
+
+        # 🔧 레이스 방지: 이벤트 루프 '다음 틱'에 다시 한 번 강제
+        try:
+            def _force_enable():
+                ws = _find_first(self.ui, [
+                    f"{self.prefix}Start_button", f"{self.prefix}StartButton",
+                    f"{self.prefix.lower()}Start_button", f"{self.prefix.lower()}StartButton",
+                    "PC_Start_button", "pcStart_button",
+                ])
+                wt = _find_first(self.ui, [
+                    f"{self.prefix}Stop_button", f"{self.prefix}StopButton",
+                    f"{self.prefix.lower()}Stop_button", f"{self.prefix.lower()}StopButton",
+                    "PC_Stop_button", "pcStop_button",
+                ])
+                if ws and hasattr(ws, "setEnabled"): ws.setEnabled(True)
+                if wt and hasattr(wt, "setEnabled"): wt.setEnabled(False)
+            QTimer.singleShot(0, _force_enable)
+        except Exception:
+            pass
+
+        # (선택) 즉시 반영
+        with contextlib.suppress(Exception):
+            from PySide6.QtWidgets import QApplication
+            QApplication.processEvents()
 
     def _notify_finish_once(self, *, ok: bool, reason: str | None = None, stopped: bool = False) -> None:
         if self._final_notified:
