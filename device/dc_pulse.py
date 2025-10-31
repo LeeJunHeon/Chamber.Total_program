@@ -1048,10 +1048,12 @@ class AsyncDCPulse:
 
                             # ★ 항상 비교: Power가 '정확히 0'이면 공정 중단
                             if p == 0.0:
+                                # 이벤트만 올리고 종료(콜백 사용 안 함)
+                                self._ev_nowait(DCPEvent(kind="command_failed", cmd="AUTO_STOP", reason="target_failed"))
                                 await self._emit_status("[AUTO-STOP] Power=0W → OUTPUT_OFF & stop polling")
                                 with contextlib.suppress(Exception):
-                                    await self.output_off()   # 내부에서 set_process_status(False) 처리
-                                return                       # poll task 종료
+                                    await self.output_off()
+                                return
                             
                             # ② 세트포인트 근접 확인 (허용오차: max(절대 W, 퍼센트))
                             ref = float(self._last_ref_power_w or 0.0)
@@ -1066,10 +1068,12 @@ class AsyncDCPulse:
                                     )
                                     # 연속 5회 이탈 시 자동 정지
                                     if self._spdev_n >= DCP_P_SET_DEVIATE_MAX_N:
+                                        # 이벤트만 올리고 종료(콜백 사용 안 함)
+                                        self._ev_nowait(DCPEvent(kind="command_failed", cmd="AUTO_STOP", reason="target_failed"))
                                         await self._emit_status("[AUTO-STOP] 세트포인트 이탈이 연속 발생 → OUTPUT_OFF & stop polling")
                                         with contextlib.suppress(Exception):
-                                            await self.output_off()     # 내부에서 set_process_status(False) 처리
-                                        return                           # 폴링 태스크 종료
+                                            await self.output_off()
+                                        return
                                 else:
                                     # 정상범위이면 카운터 리셋
                                     if self._spdev_n:
