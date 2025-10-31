@@ -1019,44 +1019,67 @@ class ChamberRuntime:
         if not self.dc_pulse:
             return
         async for ev in self.dc_pulse.events():
-            k = ev.kind
-            if k == "status":
-                self.append_log(f"DCPulse{self.ch}", ev.message or "")
-            elif k == "telemetry":
-                # 장비 내부 폴링 결과(P/V/I)를 화면/로거에 반영
-                P = getattr(ev, "power",   None)
-                V = getattr(ev, "voltage", None)
-                I = getattr(ev, "current", None)
+            try:
+                k = ev.kind
+                if k == "status":
+                    self.append_log(f"DCPulse{self.ch}", ev.message or "")
+                
+                elif k == "telemetry":
+                    # 장비 내부 폴링 결과(P/V/I)를 화면/로거에 반영
+                    P = getattr(ev, "power",   None)
+                    V = getattr(ev, "voltage", None)
+                    I = getattr(ev, "current", None)
 
-                # 혹시 dict 형태로 올 수도 있으니 보강
-                if (P is None or V is None or I is None) and hasattr(ev, "eng"):
-                    eng = getattr(ev, "eng") or {}
-                    P = P if P is not None else float(eng.get("P_W", 0.0))
-                    V = V if V is not None else float(eng.get("V_V", 0.0))
-                    I = I if I is not None else float(eng.get("I_A", 0.0))
+                    # 혹시 dict 형태로 올 수도 있으니 보강
+                    if (P is None or V is None or I is None) and hasattr(ev, "eng"):
+                        eng = getattr(ev, "eng") or {}
+                        P = P if P is not None else float(eng.get("P_W", 0.0))
+                        V = V if V is not None else float(eng.get("V_V", 0.0))
+                        I = I if I is not None else float(eng.get("I_A", 0.0))
 
-                # on_telemetry가 이미 DataLogger에 기록했다면 중복 방지
-                if not callable(getattr(self.data_logger, "log_dcpulse_power", None)):
-                    try:
-                        self.data_logger.log_dc_power(float(P or 0.0), float(V or 0.0), float(I or 0.0))
-                    except Exception:
-                        pass
+                    # on_telemetry가 이미 DataLogger에 기록했다면 중복 방지
+                    if not callable(getattr(self.data_logger, "log_dcpulse_power", None)):
+                        try:
+                            self.data_logger.log_dc_power(float(P or 0.0), float(V or 0.0), float(I or 0.0))
+                        except Exception:
+                            pass
 
-                self._display_dc(P, V, I)
-                self.append_log(f"DCPulse{self.ch}", f"[telemetry] P={float(P or 0):.1f} W, V={float(V or 0):.2f} V, I={float(I or 0):.3f} A")
+                    self._display_dc(P, V, I)
+                    self.append_log(
+                        f"DCPulse{self.ch}",
+                        f"[telemetry] P={float(P or 0):.1f} W, V={float(V or 0):.2f} V, I={float(I or 0):.3f} A"
+                    )
 
-            elif k == "command_confirmed":
-                cmd = (ev.cmd or "").upper()
-                # 변경(VERIFIED 포함해 처리):
-                if cmd.startswith("OUTPUT_ON"):
-                    self.process_controller.on_dc_pulse_target_reached()
-                elif cmd.startswith("OUTPUT_OFF"):
-                    self.process_controller.on_dc_pulse_off_finished()
+                elif k == "command_confirmed":
+                    cmd = (ev.cmd or "").upper()
+                    # VERIFIED 포함 처리
+                    if cmd.startswith("OUTPUT_ON"):
+                        self.process_controller.on_dc_pulse_target_reached()
+                    elif cmd.startswith("OUTPUT_OFF"):
+                        self.process_controller.on_dc_pulse_off_finished()
 
-            elif k == "command_failed":
-                why = ev.reason or "unknown"
-                self.append_log(f"DCPulse{self.ch}", f"CMD FAIL: {ev.cmd or ''} ({why})")
-                self.process_controller.on_dc_pulse_failed(why)
+                elif k == "command_failed":
+                    why_raw = ev.reason or "unknown"
+                    why = str(why_raw).lower()
+                    cmd = (ev.cmd or "").upper()
+
+                    self.append_log(f"DCPulse{self.ch}", f"CMD FAIL: {cmd} ({why_raw})")
+
+                    # ★ 세트포인트 5회 연속 이탈 또는 P=0W로 인해 드라이버가 AUTO_STOP을 올리면
+                    #    → 공정 실패 처리 + 명확한 챗 알림
+                    if cmd == "AUTO_STOP" or "target_failed" in why:
+                        if self.chat:
+                            with contextlib.suppress(Exception):
+                                self.chat.notify_error_with_src(
+                                    "DCPulse",
+                                    "세트포인트 이탈(연속) 또는 P=0W 감지 → 전체 공정 중단"
+                                )
+
+                    self.process_controller.on_dc_pulse_failed(why_raw)
+
+            except Exception as e:
+                # 펌프 루프 자체가 죽지 않도록 방어
+                self.append_log(f"DCPulse{self.ch}", f"[pump] 예외 발생: {e!r}")
 
     async def _pump_oes_events(self) -> None:
         async for ev in self.oes.events():
