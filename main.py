@@ -44,6 +44,11 @@ class MainWindow(QWidget):
         super().__init__()
         self.ui = Ui_Form()
         self.ui.setupUi(self)
+
+        # Power_Select 버튼 토글 → PLC 코일 쓰기 (비동기)
+        self.ui.Power_Select_button.toggled.connect(
+            lambda on: self._loop.create_task(self.plc.power_select(on=on))
+        )
         
         # ▼ 추가: 텍스트 에디트에서 Tab을 '다음 칸 이동'으로 동작시키기
         self._enable_tab_moves_focus()

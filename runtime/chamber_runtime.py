@@ -786,6 +786,9 @@ class ChamberRuntime:
                         except Exception as e:
                             self.append_log("MAIN", f"종료 정리 중 예외(무시): {e!r}")
 
+                        # ★ 추가: 혹시 남아 있을 수 있는 카운트다운/지연 태스크 누수 방지
+                        self._cancel_delay_task()
+
                         # 2) 다음 공정 새 로그 파일을 위해 세션 리셋
                         self._log_file_path = None
 
@@ -828,6 +831,9 @@ class ChamberRuntime:
                             runtime_state.mark_finished("chamber", self.ch)
                         except Exception:
                             pass
+
+                        # ★ 추가: 혹시 남아 있을 수 있는 카운트다운/지연 태스크 누수 방지
+                        self._cancel_delay_task()
                         
                         # MFC 내부 상태 완전 초기화 (실패 종료)
                         try:
@@ -1709,6 +1715,11 @@ class ChamberRuntime:
             secs = int(remain + 0.999)
             self._post_warning("대기 필요", f"이전 공정 종료 후 1분 대기 필요합니다.\n{secs}초 후에 시작하십시오.")
             return
+        
+        # ★ 추가: 장치 정리가 백그라운드에서 진행 중이면 대기 안내
+        if getattr(self, "_pending_device_cleanup", False):
+            self._post_warning("정리 중", "이전 공정 정리 중입니다. 잠시 후 다시 시작하세요.")
+            return
 
         # ✅ 교차 실행 차단: 해당 챔버가 이미 다른 런타임(CH/PC/TSP)에서 점유 중이면 시작 금지
         if runtime_state.is_running("chamber", self.ch):
@@ -2425,6 +2436,9 @@ class ChamberRuntime:
 
     def _clear_queue_and_reset_ui(self) -> None:
         # 전역 runtime_state로 종료 시각을 기록하므로 로컬 타임스탬프는 불필요
+        # ★ 추가: 남아 있을 수 있는 카운트다운 태스크 정리
+        self._cancel_delay_task()
+
         self.process_queue = []
         self.current_process_index = -1
         self._reset_ui_after_process()
