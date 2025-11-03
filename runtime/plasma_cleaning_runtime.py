@@ -604,6 +604,8 @@ class PlasmaCleaningRuntime:
         self._buttons_connected = True
 
     async def _on_click_start(self) -> None:
+        self._cleanup_started = False  # ★ 추가: 새 런마다 정리 가드 초기화
+
         # start 버튼 중복 클릭 방지
         if getattr(self, "_running", False):
             self._post_warning("실행 중", "이미 Plasma Cleaning이 실행 중입니다.")
@@ -643,7 +645,6 @@ class PlasmaCleaningRuntime:
         # 4) 실행/시작 마킹 + 동시실행 가드(대칭성 보장)
         runtime_state.mark_started("pc", ch)
         runtime_state.set_running("pc", True, ch)
-
         runtime_state.mark_started("chamber", ch)
         runtime_state.set_running("chamber", True, ch)
 
@@ -722,39 +723,54 @@ class PlasmaCleaningRuntime:
             self.append_log("PC", f"오류: {e!r}")
 
         finally:
-            # 1) 모든 정리 작업을 ‘끝까지’ 기다린다
-            #   - RF 램프다운/종료
-            #   - 내부 태스크 취소+대기
-            #   - 선택 장치 disconnect
-            #   - 로그 파일 close
-            await self._final_cleanup()
-
-            # 2) 종료 알림 (예외는 로그만 남기고 진행)
+            # [A] 🔁 순서 변경: 종료 통지 먼저 (runtime_state 즉시 해제 + 종료 챗 선송)
+            self.append_log("MAIN", "[FINALLY] notify_finish_once 진입")
             try:
-                await self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final)
+                await self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final)  # ← 순서 ↑
             except Exception as e:
                 self.append_log("PC", f"notify_finish_once error: {e!r}")
 
-            # 3) 정리 완료 후에 UI 복원(버튼/표시)
+            # [B] 그 다음 장치/태스크 정리 (오래 걸려도 상관없음)
+            self.append_log("MAIN", "[FINALLY] final_cleanup 진입")
+            await self._final_cleanup()
+
+            # [C] 마지막으로 UI 복구
             self._running = False
             self._process_timer_active = False
             self._reset_ui_state(restore_time_min=self._last_process_time_min)
             self._set_state_text("대기 중")
+            self.append_log("MAIN", "[FINALLY] idle UI 복구 완료")
 
     async def _on_click_stop(self) -> None:
-        # 이미 종료 통지됐다면 무시
-        if getattr(self, "_final_notified", False):
+        # 0) 실행/중복 가드
+        if not getattr(self, "_running", False):
+            self.append_log("UI", "[STOP] 실행 중이 아님 → 무시")
             return
 
-        self._stop_requested = True
-        with contextlib.suppress(Exception):
-            if getattr(self, "pc", None):
-                self.pc.request_stop()
+        if getattr(self, "_final_notified", False):
+            self.append_log("UI", "[STOP] 이미 종료 통지됨 → 무시")
+            return
 
-        # STOP 즉시 효과: 상태표시만 업데이트 (정리/알림은 START 경로 finally에서 단일 수행)
+        if getattr(self, "_stop_requested", False):
+            self.append_log("UI", "[STOP] 이미 정지 요청됨 → 무시")
+            return
+
+        # 1) 정지 요청 플래그
+        self._stop_requested = True
+        self.append_log("MAIN", "[STOP] 사용자 정지 요청 수신")
+
+        # 2) 즉시 UI 반영(중복 클릭 방지)
         self._set_state_text("정지 중…")
         self._apply_button_state(start_enabled=False, stop_enabled=False)
-        # 여기서는 return으로 끝냅니다. (cleanup/notify 호출 없음)
+
+        # 3) 컨트롤러에 소프트 스톱 신호
+        with contextlib.suppress(Exception):
+            if getattr(self, "pc", None) and hasattr(self.pc, "request_stop"):
+                self.pc.request_stop()
+                self.append_log("CTRL", "[STOP] pc.request_stop() 전달")
+
+        # 4) 여기서는 끝. (정리/종료 통지는 _on_click_start()의 finally에서 '단일' 수행)
+        return
 
     async def _safe_rf_stop(self) -> None:
         # ▶ 방어: 어떤 경로로 불려도 카운트다운 표시는 종료
@@ -819,9 +835,10 @@ class PlasmaCleaningRuntime:
         except asyncio.TimeoutError:
             self.append_log("PC", "태스크 종료 지연(timeout) → 계속 진행")
 
-        # (E) 선택 장치 해제
-        with contextlib.suppress(Exception):
-            await asyncio.wait_for(self._disconnect_selected_devices(), timeout=5.0)
+        # (E) 선택 장치 해제 — 정책에 맞춰 '필요할 때만'
+        if getattr(self, "_disconnect_on_finish", False):
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(self._disconnect_selected_devices(), timeout=5.0)
 
         # (F) 로그 파일 닫기
         with contextlib.suppress(Exception):
@@ -901,10 +918,6 @@ class PlasmaCleaningRuntime:
 
         # 3) 게이트밸브 OPEN 유지(정책) — 닫기 생략
         self.append_log("STEP", f"종료: GateValve CH{self._selected_ch} 유지(OPEN)")
-
-        # ★ 기본: 연결 유지(끊지 않음)
-        if getattr(self, "_disconnect_on_finish", False):
-            await self._disconnect_selected_devices()   # 정말 필요할 때만
 
     async def _disconnect_selected_devices(self) -> None:
         """
@@ -1140,11 +1153,12 @@ class PlasmaCleaningRuntime:
         self._apply_button_state(start_enabled=True, stop_enabled=False)
 
     async def _notify_finish_once(self, *, ok: bool, reason: str | None = None, stopped: bool = False) -> None:
+        # 0) 재진입 차단
         if self._final_notified:
             return
         self._final_notified = True
 
-        # 1) 전역 종료/해제(항상 시도) — 실패 시 로그 남김
+        # 1) 전역 종료/해제 — 챗이 실패해도 반드시 풀림
         try:
             ch = int(getattr(self, "_selected_ch", 1))
             runtime_state.mark_finished("pc", ch)
@@ -1154,29 +1168,38 @@ class PlasmaCleaningRuntime:
         except Exception as e:
             self.append_log("STATE", f"runtime_state finalize mark failed: {e!r}")
 
-        # 2) 종료 챗
-        if not self.chat:
+        # 2) 챗이 없으면 여기서 종료 (상태 해제는 이미 완료)
+        if not getattr(self, "chat", None):
+            self.append_log("CHAT", "chat=None → 종료 카드 생략")
             return
 
+        # 3) 페이로드 구성(상태/시간/단계 정보 보강: 있으면 넣고, 없으면 생략)
+        status = "stopped" if stopped else ("success" if ok else "failed")
         payload = {
             "process_name": "Plasma Cleaning",
-            "prefix": f"CH{self._selected_ch} Plasma Cleaning",
-            "ch": self._selected_ch,
+            "prefix": f"CH{getattr(self, '_selected_ch', '?')} Plasma Cleaning",
+            "ch": int(getattr(self, "_selected_ch", 0) or 0),
+            "status": status,
             "stopped": bool(stopped),
         }
         if reason:
             payload["reason"] = str(reason)
             payload["errors"] = [str(reason)]
 
+        # 4) 종료 카드 전송 — 코루틴/동기 모두 지원 + 타임아웃으로 행거 방지
         try:
             ret = self.chat.notify_process_finished_detail(ok, payload)
             if inspect.iscoroutine(ret):
-                await ret
+                await asyncio.wait_for(ret, timeout=3.0)   # ← 행거 방지
+            # flush도 동기/비동기 모두 대응
             if hasattr(self.chat, "flush"):
-                self.chat.flush()
+                f = self.chat.flush()
+                if inspect.iscoroutine(f):
+                    await asyncio.wait_for(f, timeout=2.0)
+        except asyncio.TimeoutError:
+            self.append_log("CHAT", "finish notify timeout (3s)")
         except Exception as e:
-            # ✅ ChamberRuntime와 동일하게 “왜 챗이 안 갔는지”를 남김
-            self.append_log("CHAT", f"구글챗 종료 카드 전송 실패: {e!r}")
+            self.append_log("CHAT", f"finish notify failed: {e!r}")
 
     def _post_warning(self, title: str, text: str) -> None:
         try:

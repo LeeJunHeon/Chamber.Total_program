@@ -9,6 +9,7 @@
 from __future__ import annotations
 from typing import Dict, Any
 from .context import HostContext
+import asyncio, time
 
 Json = Dict[str, Any]
 
@@ -84,11 +85,47 @@ class HostHandlers:
         except Exception as e:
             return self._fail(e)
 
-    async def vacuum_off(self, _: Json) -> Json:
+    async def vacuum_off(self, data: Json) -> Json:
+        """
+        VACUUM OFF 시퀀스:
+        1) L_VENT_인터락 True 확인
+        2) L_VENT_SW = True (벤트 시작)
+        3) L_ATM == True 까지 대기 (기본 240s)
+        """
+        timeout_s = float(data.get("timeout_s", 240.0))  # 기본 4분
+
+        # 엑셀 맵 기준 L_ATM = M00063 → 주소 99
+        # plc 맵에 등록하지 않고 직접 주소로 읽는다.
+        L_ATM_ADDR = int(data.get("atm_addr", 99))
+
         try:
             async with self.ctx.lock_plc:
-                await self.ctx.plc.gv_close()
-            return self._ok("VACUUM_OFF")
+                # 1) 인터락 확인
+                interlock_ok = await self.ctx.plc.read_bit("L_VENT_인터락")
+                if not interlock_ok:
+                    return self._fail("L_VENT_인터락=FALSE → 벤트 불가")
+
+                # 2) L_VENT_SW ON
+                await self.ctx.plc.write_switch("L_VENT_SW", True)
+
+                # 3) L_ATM True까지 대기
+                deadline = time.monotonic() + timeout_s
+
+                # 우선 이름으로 읽어보고(맵에 있을 수도 있으므로),
+                # 없으면 주소(99)로 폴백
+                async def _read_L_ATM() -> bool:
+                    try:
+                        return await self.ctx.plc.read_bit("L_ATM")
+                    except KeyError:
+                        return await self.ctx.plc.read_bit(L_ATM_ADDR)
+
+                while time.monotonic() < deadline:
+                    if await _read_L_ATM():
+                        return self._ok("VACUUM_OFF 완료 (L_ATM=TRUE)")
+                    await asyncio.sleep(0.5)  # 0.5s 폴링
+
+                return self._fail(f"VACUUM_OFF 타임아웃: {timeout_s:.0f}s 내 L_ATM TRUE 미도달")
+
         except Exception as e:
             return self._fail(e)
 

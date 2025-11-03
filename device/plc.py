@@ -61,6 +61,25 @@ PLC_COIL_MAP: Dict[str, int] = {
     "N2_2_GAS_인터락": 77,       # M0004D
     "MAIN_2_GAS_인터락": 78,     # M0004E
 
+    # Power SET (M00050~M00053)
+    "DCV_SET_0": 80,            # M00050
+    "DCV_SET_1": 81,            # M00051
+    "DCV_SET_2": 82,            # M00052
+    "DCV_SET_3": 83,            # M00053
+
+    "S_G1_STEP1": 96,           # M00060
+    "S_G1_STEP2": 97,           # M00061
+    "L_VAC_READY_SW": 98,       # M00062
+    "L_ATM": 99,                # M00063
+    "L_VAC_NOT_READY": 100,     # M00064
+
+    "Z1_UP": 112,               # M00070	
+    "Z1_MID": 113,              # M00071	
+    "Z1_DOWN": 114,             # M00072	
+    "Z2_UP": 115,               # M00073	
+    "Z2_MID": 116,              # M00074
+    "Z2_DOWN":117,              # M00075
+
     # Z/MID 영역 — 워드/비트 재매핑 적용
     "Z_M_P_1_STOP_SW": 176,    # M00100
     "Z_M_P_1_MID_SW":  192,    # M00110
@@ -94,7 +113,7 @@ PLC_COIL_MAP: Dict[str, int] = {
     "L_PIN_DOWN_SW":     211,  # M00133
     "L_VENT_SW":         212,  # M00134
     "SW_RF_SELECT":      214,  # M00136
-    "SW_POWER_SELECT":   215,  # M00137  ←★ 신규 추가
+    "SW_POWER_SELECT":   215,  # M00137 
     "SHUTTER_2_SW":      216,  # M00138
     "SHUTTER_3_SW":      217,  # M00139
     "Z_M_P_1_SW":        218,  # M0013A
@@ -144,12 +163,6 @@ PLC_COIL_MAP: Dict[str, int] = {
     "L_GAUGE_A_INTERLOCK": 2736,  # M01700
     "GAUGE_2_A_INTERLOCK": 2896,  # M01800
     "GAUGE_2_B_INTERLOCK": 3056,  # M01900
-    
-    # ─────────── Power SET (M00050~M00053) ───────────
-    "DCV_SET_0": 80,  # M00050 (0x50)
-    "DCV_SET_1": 81,  # M00051 (0x51)
-    "DCV_SET_2": 82,  # M00052 (0x52)
-    "DCV_SET_3": 83,  # M00053 (0x53)
 }
 
 # === D (Holding Registers) — FC3/FC6 ===
