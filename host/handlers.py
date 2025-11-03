@@ -77,11 +77,49 @@ class HostHandlers:
             return self._fail(e)
 
     # --------- PLC 공용 계통 ---------
-    async def vacuum_on(self, _: Json) -> Json:
+    async def vacuum_on(self, data: Json) -> Json:
+        """
+        VACUUM ON 시퀀스:
+        1) L_R_P_SW = True  (러핑펌프 ON)
+        2) L_R_V_인터락 == True 확인
+        3) L_R_V_SW = True  (러핑밸브 ON)
+        4) L_VAC_READY_SW == True 까지 대기 (기본 600s)
+        """
+        timeout_s = float(data.get("timeout_s", 600.0))  # 기본 10분
+        # 엑셀 맵: L_VAC_READY_SW = M00062 → 0x62 = 98
+        L_VAC_READY_ADDR = int(data.get("vac_ready_addr", 98))
+
         try:
             async with self.ctx.lock_plc:
-                await self.ctx.plc.gv_open()
-            return self._ok("VACUUM_ON")
+                # 1) 러핑펌프 ON
+                await self.ctx.plc.write_switch("L_R_P_SW", True)
+
+                # 2) 러핑밸브 인터락 확인
+                interlock_ok = await self.ctx.plc.read_bit("L_R_V_인터락")
+                if not interlock_ok:
+                    return self._fail("L_R_V_인터락=FALSE → 러핑밸브 개방 불가")
+
+                # 3) 러핑밸브 ON
+                await self.ctx.plc.write_switch("L_R_V_SW", True)
+
+                # 4) VAC_READY=True 대기 (10분)
+                deadline = time.monotonic() + timeout_s
+
+                async def _read_vac_ready() -> bool:
+                    # 맵에 'L_VAC_READY_SW' 키가 생기면 이름으로 우선 읽고,
+                    # 없으면 주소(98)로 폴백
+                    try:
+                        return await self.ctx.plc.read_bit("L_VAC_READY_SW")
+                    except KeyError:
+                        return await self.ctx.plc.read_bit(L_VAC_READY_ADDR)
+
+                while time.monotonic() < deadline:
+                    if await _read_vac_ready():
+                        return self._ok("VACUUM_ON 완료 — L_VAC_READY_SW=TRUE")
+                    await asyncio.sleep(0.5)  # 폴링 간격
+
+                return self._fail(f"VACUUM_ON 타임아웃: {int(timeout_s)}s 내 L_VAC_READY_SW TRUE 미도달")
+
         except Exception as e:
             return self._fail(e)
 

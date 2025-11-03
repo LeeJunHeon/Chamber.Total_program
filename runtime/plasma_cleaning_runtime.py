@@ -811,38 +811,46 @@ class PlasmaCleaningRuntime:
             return
         self._cleanup_started = True
 
-        # (B) MFC 폴링/자동재연결 명시 중단
-        # 공정 종료 시 내부 상태를 완전히 초기화해야 함
-        with contextlib.suppress(Exception):
-            if self.mfc_gas:
-                if hasattr(self.mfc_gas, "on_process_finished"):
-                    self.mfc_gas.on_process_finished(False)
-                elif hasattr(self.mfc_gas, "set_process_status"):
-                    self.mfc_gas.set_process_status(False)
-            if self.mfc_pressure:
-                if hasattr(self.mfc_pressure, "on_process_finished"):
-                    self.mfc_pressure.on_process_finished(False)
-                elif hasattr(self.mfc_pressure, "set_process_status"):
-                    self.mfc_pressure.set_process_status(False)
+        # ★ (A2) 시작/끝 로그(선택) — 추적성 강화
+        self.append_log("MAIN", "[CLEANUP] begin")
 
-        # (C) RF/가스/SP4 안전 정지
-        with contextlib.suppress(Exception):
-            await self._safe_rf_stop()
-
-        # (D) 내부 태스크 취소/대기
         try:
-            await asyncio.wait_for(self._shutdown_all_tasks(), timeout=3.0)
-        except asyncio.TimeoutError:
-            self.append_log("PC", "태스크 종료 지연(timeout) → 계속 진행")
-
-        # (E) 선택 장치 해제 — 정책에 맞춰 '필요할 때만'
-        if getattr(self, "_disconnect_on_finish", False):
+            # (B) MFC 폴링/자동재연결 명시 중단
             with contextlib.suppress(Exception):
-                await asyncio.wait_for(self._disconnect_selected_devices(), timeout=5.0)
+                if self.mfc_gas:
+                    if hasattr(self.mfc_gas, "on_process_finished"):
+                        self.mfc_gas.on_process_finished(False)
+                    elif hasattr(self.mfc_gas, "set_process_status"):
+                        self.mfc_gas.set_process_status(False)
+                if self.mfc_pressure:
+                    if hasattr(self.mfc_pressure, "on_process_finished"):
+                        self.mfc_pressure.on_process_finished(False)
+                    elif hasattr(self.mfc_pressure, "set_process_status"):
+                        self.mfc_pressure.set_process_status(False)
 
-        # (F) 로그 파일 닫기
-        with contextlib.suppress(Exception):
-            self._close_run_log()
+            # (C) RF/가스/SP4 안전 정지
+            with contextlib.suppress(Exception):
+                await self._safe_rf_stop()
+
+            # (D) 내부 태스크 취소/대기 (유한 시간)
+            try:
+                await asyncio.wait_for(self._shutdown_all_tasks(), timeout=3.0)
+            except asyncio.TimeoutError:
+                self.append_log("PC", "태스크 종료 지연(timeout) → 계속 진행")
+
+            # (E) 선택 장치 해제 — 정책에 맞춰 '필요할 때만'
+            if getattr(self, "_disconnect_on_finish", False):
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(self._disconnect_selected_devices(), timeout=5.0)
+
+            # (F) 로그 파일 닫기
+            with contextlib.suppress(Exception):
+                self._close_run_log()
+
+        finally:
+            # ★★★ 가장 중요: 플래그 복구(예외 발생해도 다음 런에서 cleanup 동작)
+            self._cleanup_started = False
+            self.append_log("MAIN", "[CLEANUP] end")  # (선택)
 
     def _apply_button_state(self, *, start_enabled: bool, stop_enabled: bool) -> None:
         """
