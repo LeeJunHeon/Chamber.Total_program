@@ -137,6 +137,9 @@ class RFPowerAsync:
         self.target_power = float(max(0.0, min(RF_MAX_POWER, target_power)))
         self.current_power_step = float(self._initial_step_w)
 
+        # ★ 새 런 시작 시 '첫 WRITE 보장'을 위해 중복 억제 캐시 초기화
+        self._last_sent_w = None
+
         # ▼ RF 사용 전 SET 래치 ON (DCV_SET_1 = True)
         if self._toggle_enable:
             try:
@@ -235,8 +238,11 @@ class RFPowerAsync:
 
         # ========= ★ direct_mode 분기: 즉시 OFF =========
         if getattr(self, "_direct_mode", False):
+            # ★ power-off 대기 이벤트 초기화(일관성)
+            self._power_off_evt.clear()
             try:
                 await self._set_rf_unverified(0.0)  # 0W 즉시
+                self._last_sent_w = 0.0             # ★ 캐시도 0으로 맞춤(다음 런의 첫 WRITE 보장)
                 self._ev_nowait(RFPowerEvent(kind="display", forward=0.0, reflected=0.0))
             finally:
                 if self._toggle_enable and self._enabled:
