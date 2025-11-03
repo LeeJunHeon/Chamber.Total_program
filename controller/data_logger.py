@@ -25,6 +25,7 @@ class DataLogger(QObject):
         csv_dir: Optional[Path] = None,
     ):
         super().__init__(parent)
+        self._ch = int(ch)  # ← 추가: 폴백 경로명/파일명에 사용
 
         # 공통 저장 경로 (인자 없으면 기존 NAS 기본값)
         log_directory = Path(csv_dir) if csv_dir else Path(r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database")
@@ -315,16 +316,31 @@ class DataLogger(QObject):
         await asyncio.to_thread(self._write_row_sync, log_data)
 
     def _write_row_sync(self, log_data: Dict[str, str]) -> None:
-        """실제 파일 쓰기(동기). to_thread로 호출됨."""
         try:
+            # 부모 디렉터리 보장
+            self.log_file.parent.mkdir(parents=True, exist_ok=True)
             file_exists = self.log_file.exists()
             with open(self.log_file, "a", newline="", encoding="utf-8-sig") as f:
                 writer = csv.DictWriter(f, fieldnames=self.header)
                 if not file_exists:
-                    writer.writeheader()  # 파일 없으면 생성 + 헤더 기록
+                    writer.writeheader()
                 writer.writerow(log_data)
-
-            # ✅ 다음 런 대비: 세션 시작시각 클리어
             self._session_started_at = None
         except Exception as e:
-            print(f"데이터 로그 파일 작성 실패: {e}")
+            # NAS 실패 → 로컬 폴더로 재시도
+            print(f"데이터 로그 파일 작성 실패(NAS): {e}")
+            try:
+                local_dir = Path.cwd() / f"_CSV_local_CH{self._ch}"
+                local_dir.mkdir(parents=True, exist_ok=True)
+                local_file = local_dir / f"Ch{self._ch}_log.csv"
+                file_exists = local_file.exists()
+                with open(local_file, "a", newline="", encoding="utf-8-sig") as f:
+                    writer = csv.DictWriter(f, fieldnames=self.header)
+                    if not file_exists:
+                        writer.writeheader()
+                    writer.writerow(log_data)
+                # 이후 런부터는 로컬 파일을 기본으로 사용
+                self.log_file = local_file
+                print(f"[DataLogger] NAS 실패 → 로컬 폴백으로 기록: {local_file}")
+            except Exception as e2:
+                print(f"[DataLogger] 로컬 폴백마저 실패: {e2}")

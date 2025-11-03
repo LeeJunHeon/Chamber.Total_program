@@ -2403,25 +2403,51 @@ class ChamberRuntime:
                 if self._log_fp is None:
                     if self._log_file_path:
                         try:
+                            # 부모 디렉터리 보장
+                            self._log_file_path.parent.mkdir(parents=True, exist_ok=True)
                             self._log_fp = open(self._log_file_path, "a", encoding="utf-8", newline="")
-                        except Exception:
-                            await asyncio.sleep(0.2)
-                            self._soon(self._log_enqueue_nowait, line)
-                            continue
+                        except Exception as e:
+                            # NAS 열기 실패 → 로컬 폴백으로 즉시 전환
+                            try:
+                                local_dir = Path.cwd() / f"_Logs_local_CH{self.ch}"
+                                local_dir.mkdir(parents=True, exist_ok=True)
+                                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                                self._log_file_path = (local_dir / f"CH{self.ch}_{ts}_recovered.txt")
+                                self._log_fp = open(self._log_file_path, "a", encoding="utf-8", newline="")
+                                self.append_log("Logger", f"NAS 로그 열기 실패({e!r}) → 로컬 폴백: {self._log_file_path}")
+                            except Exception:
+                                await asyncio.sleep(0.2)
+                                self._soon(self._log_enqueue_nowait, line)
+                                continue
                     else:
                         continue
                 try:
                     self._log_fp.write(line); self._log_fp.flush()
-                except Exception:
-                    await asyncio.sleep(0.2)
-                    self._soon(self._log_enqueue_nowait, line)
+                except Exception as e:
+                    # 쓰기 도중 핸들이 깨진 경우 → 즉시 로컬로 전환 시도
+                    with contextlib.suppress(Exception):
+                        self._log_fp.close()
+                    self._log_fp = None
+                    try:
+                        local_dir = Path.cwd() / f"_Logs_local_CH{self.ch}"
+                        local_dir.mkdir(parents=True, exist_ok=True)
+                        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        self._log_file_path = (local_dir / f"CH{self.ch}_{ts}_recovered.txt")
+                        self._log_fp = open(self._log_file_path, "a", encoding="utf-8", newline="")
+                        self.append_log("Logger", f"NAS 쓰기 실패({e!r}) → 로컬 폴백 전환: {self._log_file_path}")
+                    except Exception:
+                        await asyncio.sleep(0.2)
+                        self._soon(self._log_enqueue_nowait, line)
         except asyncio.CancelledError:
             pass
         finally:
-            if self._log_fp:
+            # TextIOWrapper 소멸자에서 noisy 에러가 나지 않도록
+            fp, self._log_fp = self._log_fp, None
+            if fp:
                 with contextlib.suppress(Exception):
-                    self._log_fp.flush(); self._log_fp.close()
-                self._log_fp = None
+                    fp.flush()
+                with contextlib.suppress(Exception):
+                    fp.close()
 
     async def _shutdown_log_writer(self):
         if self._log_writer_task:
