@@ -56,11 +56,33 @@ class HostServer:
 
                 # 2) 바디(JSON)
                 body = await self._read_exact(reader, body_len)
-                obj: Json = json.loads(body.decode("utf-8"))
+
+                # (A) JSON 파싱 실패도 표준 실패 응답
+                try:
+                    obj: Json = json.loads(body.decode("utf-8"))
+                except Exception as e:
+                    # 요청 ID 추출 불가 시 빈 문자열로 회신
+                    packet = pack_message("PARSE_ERROR_RESULT", {
+                        "request_id": "",
+                        "data": {"result": "fail", "message": f"Invalid JSON: {e}"}
+                    })
+                    writer.write(packet)
+                    await writer.drain()
+                    continue  # 다음 요청 대기
 
                 req_id = str(obj.get("request_id", ""))
                 cmd = str(obj.get("command", ""))
                 data = obj.get("data", {}) or {}
+
+                # (B) command 미지정/공백도 표준 실패 응답
+                if not cmd:
+                    packet = pack_message("UNKNOWN_RESULT", {
+                        "request_id": req_id,
+                        "data": {"result": "fail", "message": "Missing 'command' in request"}
+                    })
+                    writer.write(packet)
+                    await writer.drain()
+                    continue
 
                 # 3) 라우팅/실행
                 try:

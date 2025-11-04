@@ -237,23 +237,78 @@ class HostHandlers:
 
     # --------- CHx 설비 제어 (게이트/척) ---------
     async def gate_open(self, data: Json) -> Json:
+        """
+        CHx_GATE_OPEN 시퀀스:
+        1) G_V_{ch}_인터락 == True 확인
+        2) G_V_{ch}_OPEN_SW = True
+        3) 5초 후 G_V_{ch}_OPEN_LAMP == True 확인
+        """
         ch = int(data.get("ch", 1))
+        wait_s = float(data.get("wait_s", 5.0))  # 기본 5초
+
+        if ch == 1:
+            interlock, sw, lamp = "G_V_1_인터락", "G_V_1_OPEN_SW", "G_V_1_OPEN_LAMP"
+        elif ch == 2:
+            interlock, sw, lamp = "G_V_2_인터락", "G_V_2_OPEN_SW", "G_V_2_OPEN_LAMP"
+        else:
+            return self._fail(f"지원하지 않는 CH: {ch}")
+
         lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
         try:
             async with lock:
-                # plc.py 실제 API: gate_valve(chamber=, open=)
-                await self.ctx.plc.gate_valve(chamber=ch, open=True)
-            return self._ok(f"CH{ch}_GATE_OPEN")
+                # 1) 인터락 확인
+                il = await self.ctx.plc.read_bit(interlock)
+                if not il:
+                    return self._fail(f"{interlock}=FALSE → CH{ch}_GATE_OPEN 불가")
+
+                # 2) 스위치 TRUE
+                await self.ctx.plc.write_switch(sw, True)
+
+                # 3) 대기 후 램프 확인
+                await asyncio.sleep(wait_s)
+                ok = await self.ctx.plc.read_bit(lamp)
+                if ok:
+                    return self._ok(f"CH{ch}_GATE_OPEN 완료 — {lamp}=TRUE (대기 {int(wait_s)}s)")
+                return self._fail(f"CH{ch}_GATE_OPEN 실패 — {lamp}=FALSE (대기 {int(wait_s)}s)")
+
         except Exception as e:
             return self._fail(e)
 
     async def gate_close(self, data: Json) -> Json:
+        """
+        CHx_GATE_CLOSE 시퀀스:
+        1) G_V_{ch}_인터락 == True 확인
+        2) G_V_{ch}_CLOSE_SW = True
+        3) 5초 후 G_V_{ch}_CLOSE_LAMP == True 확인
+        """
         ch = int(data.get("ch", 1))
+        wait_s = float(data.get("wait_s", 5.0))  # 기본 5초
+
+        if ch == 1:
+            interlock, sw, lamp = "G_V_1_인터락", "G_V_1_CLOSE_SW", "G_V_1_CLOSE_LAMP"
+        elif ch == 2:
+            interlock, sw, lamp = "G_V_2_인터락", "G_V_2_CLOSE_SW", "G_V_2_CLOSE_LAMP"
+        else:
+            return self._fail(f"지원하지 않는 CH: {ch}")
+
         lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
         try:
             async with lock:
-                await self.ctx.plc.gate_valve(chamber=ch, open=False)
-            return self._ok(f"CH{ch}_GATE_CLOSE")
+                # 1) 인터락 확인
+                il = await self.ctx.plc.read_bit(interlock)
+                if not il:
+                    return self._fail(f"{interlock}=FALSE → CH{ch}_GATE_CLOSE 불가")
+
+                # 2) 스위치 TRUE
+                await self.ctx.plc.write_switch(sw, True)
+
+                # 3) 대기 후 램프 확인
+                await asyncio.sleep(wait_s)
+                ok = await self.ctx.plc.read_bit(lamp)
+                if ok:
+                    return self._ok(f"CH{ch}_GATE_CLOSE 완료 — {lamp}=TRUE (대기 {int(wait_s)}s)")
+                return self._fail(f"CH{ch}_GATE_CLOSE 실패 — {lamp}=FALSE (대기 {int(wait_s)}s)")
+
         except Exception as e:
             return self._fail(e)
 
@@ -275,7 +330,8 @@ class HostHandlers:
             return self._fail(f"지원하지 않는 CH: {ch}")
 
         try:
-            async with self.ctx.lock_plc:
+            lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
+            async with lock:
                 # 1) 스위치 TRUE
                 await self.ctx.plc.write_switch(sw_name, True)
 
@@ -308,7 +364,8 @@ class HostHandlers:
             return self._fail(f"지원하지 않는 CH: {ch}")
 
         try:
-            async with self.ctx.lock_plc:
+            lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
+            async with lock:
                 # 1) 스위치 TRUE
                 await self.ctx.plc.write_switch(sw_name, True)
 
