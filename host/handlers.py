@@ -129,15 +129,12 @@ class HostHandlers:
         1) L_VENT_인터락 True 확인
         2) L_VENT_SW = True (벤트 시작)
         3) L_ATM == True 까지 대기 (기본 240s)
+        4) L_VENT_SW = False
         """
         timeout_s = float(data.get("timeout_s", 240.0))  # 기본 4분
 
-        # 엑셀 맵 기준 L_ATM = M00063 → 주소 99
-        # plc 맵에 등록하지 않고 직접 주소로 읽는다.
-        L_ATM_ADDR = int(data.get("atm_addr", 99))
-
-        try:
-            async with self.ctx.lock_plc:
+        async with self.ctx.lock_plc:
+            try:
                 # 1) 인터락 확인
                 interlock_ok = await self.ctx.plc.read_bit("L_VENT_인터락")
                 if not interlock_ok:
@@ -149,23 +146,23 @@ class HostHandlers:
                 # 3) L_ATM True까지 대기
                 deadline = time.monotonic() + timeout_s
 
-                # 우선 이름으로 읽어보고(맵에 있을 수도 있으므로),
-                # 없으면 주소(99)로 폴백
-                async def _read_L_ATM() -> bool:
-                    try:
-                        return await self.ctx.plc.read_bit("L_ATM")
-                    except KeyError:
-                        return await self.ctx.plc.read_bit(L_ATM_ADDR)
-
                 while time.monotonic() < deadline:
-                    if await _read_L_ATM():
+                    if await self.ctx.plc.read_bit("L_ATM"):
                         return self._ok("VACUUM_OFF 완료 (L_ATM=TRUE)")
                     await asyncio.sleep(0.5)  # 0.5s 폴링
 
                 return self._fail(f"VACUUM_OFF 타임아웃: {timeout_s:.0f}s 내 L_ATM TRUE 미도달")
 
-        except Exception as e:
-            return self._fail(e)
+            except Exception as e:
+                # 예외 사유는 message에 그대로 담겨서 클라이언트로 전달됨
+                return self._fail(e)
+            
+            finally:
+                # 어떤 경로로든 반드시 OFF 시도(래치형/순간형 모두 무해)
+                try:
+                    await self.ctx.plc.write_switch("L_VENT_SW", False)
+                except Exception:
+                    pass
 
     async def four_pin_up(self, _: Json) -> Json:
         try:
