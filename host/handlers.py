@@ -84,13 +84,12 @@ class HostHandlers:
         2) L_R_V_인터락 == True 확인
         3) L_R_V_SW = True  (러핑밸브 ON)
         4) L_VAC_READY_SW == True 까지 대기 (기본 600s)
+        ※ 어떤 경로로든 종료 시 L_R_P_SW, L_R_V_SW를 False로 원복
         """
         timeout_s = float(data.get("timeout_s", 600.0))  # 기본 10분
-        # 엑셀 맵: L_VAC_READY_SW = M00062 → 0x62 = 98
-        L_VAC_READY_ADDR = int(data.get("vac_ready_addr", 98))
 
-        try:
-            async with self.ctx.lock_plc:
+        async with self.ctx.lock_plc:
+            try:
                 # 1) 러핑펌프 ON
                 await self.ctx.plc.write_switch("L_R_P_SW", True)
 
@@ -102,26 +101,40 @@ class HostHandlers:
                 # 3) 러핑밸브 ON
                 await self.ctx.plc.write_switch("L_R_V_SW", True)
 
-                # 4) VAC_READY=True 대기 (10분)
+                # 4) VAC_READY=True 대기
                 deadline = time.monotonic() + timeout_s
-
-                async def _read_vac_ready() -> bool:
-                    # 맵에 'L_VAC_READY_SW' 키가 생기면 이름으로 우선 읽고,
-                    # 없으면 주소(98)로 폴백
-                    try:
-                        return await self.ctx.plc.read_bit("L_VAC_READY_SW")
-                    except KeyError:
-                        return await self.ctx.plc.read_bit(L_VAC_READY_ADDR)
-
                 while time.monotonic() < deadline:
-                    if await _read_vac_ready():
+                    if await self.ctx.plc.read_bit("L_VAC_READY_SW"):
                         return self._ok("VACUUM_ON 완료 — L_VAC_READY_SW=TRUE")
-                    await asyncio.sleep(0.5)  # 폴링 간격
+                    await asyncio.sleep(0.5)
 
-                return self._fail(f"VACUUM_ON 타임아웃: {int(timeout_s)}s 내 L_VAC_READY_SW TRUE 미도달")
+                # (타임아웃) 준비 신호 미도달 → L_VAC_NOT_READY 읽어서 메시지에 포함 + door 확인 문구
+                not_ready = False
+                try:
+                    not_ready = await self.ctx.plc.read_bit("L_VAC_NOT_READY")
+                except Exception:
+                    # 읽기 실패는 메시지 구성에만 영향, 흐름엔 영향 없음
+                    pass
 
-        except Exception as e:
-            return self._fail(e)
+                return self._fail(
+                    f"VACUUM_ON 타임아웃: {int(timeout_s)}s 내 L_VAC_READY_SW TRUE 미도달 "
+                    f"(L_VAC_NOT_READY={not_ready}) — door 확인"
+                )
+
+            except Exception as e:
+                # 예외 사유는 message로 그대로 클라이언트 전달
+                return self._fail(e)
+
+            finally:
+                # 어떤 경로로든 항상 OFF 시도 (래치/순간형 모두 무해)
+                try:
+                    await self.ctx.plc.write_switch("L_R_V_SW", False)
+                except Exception:
+                    pass
+                try:
+                    await self.ctx.plc.write_switch("L_R_P_SW", False)
+                except Exception:
+                    pass
 
     async def vacuum_off(self, data: Json) -> Json:
         """
@@ -151,7 +164,7 @@ class HostHandlers:
                         return self._ok("VACUUM_OFF 완료 (L_ATM=TRUE)")
                     await asyncio.sleep(0.5)  # 0.5s 폴링
 
-                return self._fail(f"VACUUM_OFF 타임아웃: {timeout_s:.0f}s 내 L_ATM TRUE 미도달")
+                return self._fail(f"VACUUM_OFF 타임아웃: {timeout_s:.0f}s 내 L_ATM TRUE 미도달 (N2 gas 부족)")
 
             except Exception as e:
                 # 예외 사유는 message에 그대로 담겨서 클라이언트로 전달됨
