@@ -76,7 +76,7 @@ class DataLogger(QObject):
             "DC: V", "DC: I", "DC: P",
             "RF Pulse: P", "RF Pulse: Freq", "RF Pulse: Duty Cycle",
             "DC Pulse: P", "DC Pulse: V", "DC Pulse: I", "DC Pulse: Freq", "DC Pulse: Duty Cycle",
-            "RF Pulse: For.P", "RF Pulse: Ref.P",
+            "RF Pulse: For.P", "RF Pulse: Ref.P", "Chuck Position",
         ]
 
         # 기존 파일이 있으면 헤더 업그레이드(있던 행 보존, 새 컬럼은 공란)
@@ -303,6 +303,9 @@ class DataLogger(QObject):
             # RF Pulse 폴링 평균
             "RF Pulse: For.P": f"{_avg(self.rf_pulse_for_p_readings):.2f}" if (use_rfp and self.rf_pulse_for_p_readings) else "",
             "RF Pulse: Ref.P": f"{_avg(self.rf_pulse_ref_p_readings):.2f}"  if (use_rfp and self.rf_pulse_ref_p_readings) else "",
+
+            # ★ 맨 뒤 컬럼에 기록 (레시피에 없으면 빈 문자열)
+            "Chuck Position": str(self.process_params.get("chuck_position") or ""),
         }
 
         # 비동기 백그라운드 파일쓰기로 프리징 최소화
