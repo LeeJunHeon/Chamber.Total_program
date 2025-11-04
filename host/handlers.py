@@ -177,19 +177,61 @@ class HostHandlers:
                 except Exception:
                     pass
 
-    async def four_pin_up(self, _: Json) -> Json:
+    async def four_pin_up(self, data: Json) -> Json:
+        """
+        4PIN_UP 시퀀스:
+        1) L_PIN_인터락 == True 확인
+        2) L_PIN_UP_SW = True
+        3) 10초 후 L_PIN_UP_LAMP == True 확인
+        """
+        wait_s = float(data.get("wait_s", 10.0))  # 기본 10초
+
         try:
             async with self.ctx.lock_plc:
-                await self.ctx.plc.lift_pin(up=True)   # ← 실제 API명
-            return self._ok("4PIN_UP")
+                # 1) 인터락 확인
+                interlock_ok = await self.ctx.plc.read_bit("L_PIN_인터락")
+                if not interlock_ok:
+                    return self._fail("L_PIN_인터락=FALSE → 4PIN_UP 불가")
+
+                # 2) SW = True
+                await self.ctx.plc.write_switch("L_PIN_UP_SW", True)
+
+                # 3) 10초 대기 후 램프 확인
+                await asyncio.sleep(wait_s)
+                lamp_ok = await self.ctx.plc.read_bit("L_PIN_UP_LAMP")
+                if lamp_ok:
+                    return self._ok(f"4PIN_UP 완료 — L_PIN_UP_LAMP=TRUE (대기 {int(wait_s)}s)")
+                return self._fail(f"4PIN_UP 실패 — {int(wait_s)}s 후 L_PIN_UP_LAMP=FALSE")
+
         except Exception as e:
             return self._fail(e)
 
-    async def four_pin_down(self, _: Json) -> Json:
+    async def four_pin_down(self, data: Json) -> Json:
+        """
+        4PIN_DOWN 시퀀스:
+        1) L_PIN_인터락 == True 확인
+        2) L_PIN_DOWN_SW = True
+        3) 10초 후 L_PIN_DOWN_LAMP == True 확인
+        """
+        wait_s = float(data.get("wait_s", 10.0))  # 기본 10초
+
         try:
             async with self.ctx.lock_plc:
-                await self.ctx.plc.lift_pin(up=False)
-            return self._ok("4PIN_DOWN")
+                # 1) 인터락 확인
+                interlock_ok = await self.ctx.plc.read_bit("L_PIN_인터락")
+                if not interlock_ok:
+                    return self._fail("L_PIN_인터락=FALSE → 4PIN_DOWN 불가")
+
+                # 2) SW = True
+                await self.ctx.plc.write_switch("L_PIN_DOWN_SW", True)
+
+                # 3) 10초 대기 후 램프 확인
+                await asyncio.sleep(wait_s)
+                lamp_ok = await self.ctx.plc.read_bit("L_PIN_DOWN_LAMP")
+                if lamp_ok:
+                    return self._ok(f"4PIN_DOWN 완료 — L_PIN_DOWN_LAMP=TRUE (대기 {int(wait_s)}s)")
+                return self._fail(f"4PIN_DOWN 실패 — {int(wait_s)}s 후 L_PIN_DOWN_LAMP=FALSE")
+
         except Exception as e:
             return self._fail(e)
 
@@ -215,9 +257,67 @@ class HostHandlers:
         except Exception as e:
             return self._fail(e)
 
-    # CHUCK은 장비 API가 없으므로 일단 미지원 처리 (필요하면 lift_pin으로 매핑)
     async def chuck_up(self, data: Json) -> Json:
-        return self._fail("CHx_CHUCK_UP is not supported by PLC API")
+        """
+        CHx_CHUCK_UP 시퀀스 (CH1/CH2 공통):
+        - CH1: Z_M_P_1_MID_SW = True → 40초 후 Z1_MID == True 확인
+        - CH2: Z_M_P_2_MID_SW = True → 40초 후 Z2_MID == True 확인
+        """
+        ch = int(data.get("ch", 1))
+        wait_s = float(data.get("wait_s", 40.0))  # 기본 40초
+
+        # CH별 스위치/램프 매핑
+        if ch == 1:
+            sw_name, lamp_name = "Z_M_P_1_MID_SW", "Z1_MID"
+        elif ch == 2:
+            sw_name, lamp_name = "Z_M_P_2_MID_SW", "Z2_MID"
+        else:
+            return self._fail(f"지원하지 않는 CH: {ch}")
+
+        try:
+            async with self.ctx.lock_plc:
+                # 1) 스위치 TRUE
+                await self.ctx.plc.write_switch(sw_name, True)
+
+                # 2) 대기 후 램프 확인
+                await asyncio.sleep(wait_s)
+                lamp_ok = await self.ctx.plc.read_bit(lamp_name)
+                if lamp_ok:
+                    return self._ok(f"CH{ch}_CHUCK_UP 완료 — {lamp_name}=TRUE (대기 {int(wait_s)}s)")
+                return self._fail(f"CH{ch}_CHUCK_UP 실패 — {lamp_name}=FALSE (대기 {int(wait_s)}s)")
+
+        except Exception as e:
+            return self._fail(e)
+
 
     async def chuck_down(self, data: Json) -> Json:
-        return self._fail("CHx_CHUCK_DOWN is not supported by PLC API")
+        """
+        CHx_CHUCK_DOWN 시퀀스 (CH1/CH2 공통):
+        - CH1: Z_M_P_1_CCW_SW = True → 40초 후 Z1_DOWN == True 확인
+        - CH2: Z_M_P_2_CCW_SW = True → 40초 후 Z2_DOWN == True 확인
+        """
+        ch = int(data.get("ch", 1))
+        wait_s = float(data.get("wait_s", 40.0))  # 기본 40초
+
+        # CH별 스위치/램프 매핑
+        if ch == 1:
+            sw_name, lamp_name = "Z_M_P_1_CCW_SW", "Z1_DOWN"
+        elif ch == 2:
+            sw_name, lamp_name = "Z_M_P_2_CCW_SW", "Z2_DOWN"
+        else:
+            return self._fail(f"지원하지 않는 CH: {ch}")
+
+        try:
+            async with self.ctx.lock_plc:
+                # 1) 스위치 TRUE
+                await self.ctx.plc.write_switch(sw_name, True)
+
+                # 2) 대기 후 램프 확인
+                await asyncio.sleep(wait_s)
+                lamp_ok = await self.ctx.plc.read_bit(lamp_name)
+                if lamp_ok:
+                    return self._ok(f"CH{ch}_CHUCK_DOWN 완료 — {lamp_name}=TRUE (대기 {int(wait_s)}s)")
+                return self._fail(f"CH{ch}_CHUCK_DOWN 실패 — {lamp_name}=FALSE (대기 {int(wait_s)}s)")
+
+        except Exception as e:
+            return self._fail(e)
