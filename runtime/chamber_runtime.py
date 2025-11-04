@@ -1653,6 +1653,17 @@ class ChamberRuntime:
 
                 self._start_next_process_from_queue(False)
                 return
+            
+            # ★ 추가: 공정 시작 직전 Chuck 위치 선행 설정
+            ok_chuck = await self._set_chuck_position_if_needed(params)
+            if not ok_chuck:
+                note = params.get("process_note", "알 수 없는")
+                self.append_log("MAIN", f"Chuck 위치 설정 실패 → '{note}' 시작 중단")
+                self._post_critical("Chuck 이동 실패", f"'{note}' 시작 중단 (chuck_position='{params.get('chuck_position')}')")
+                # 자동/단일 모두 동일 경로로 중단 처리(기존 시작 실패 처리와 동일하게)
+                self._start_next_process_from_queue(False)
+                self._on_process_status_changed(False)
+                return
 
             self._last_polling_targets = None
             self.append_log("MAIN", "장비 연결 확인 완료 → 공정 시작")
@@ -1705,6 +1716,62 @@ class ChamberRuntime:
 
         failed = [name for (name, _), ok in zip(need, results) if not ok]
         return (len(failed) == 0, failed)
+    
+    async def _set_chuck_position_if_needed(self, params: Mapping[str, Any]) -> bool:
+        """
+        레시피에 chuck_position 값이 있으면(공란 제외) 공정 시작 전에 1회만 Chuck 위치를 조정.
+        - up   : Z_M_P_{CH}_CW_SW  펄스 → 60초 대기 → Z{CH}_UP   읽어 True 확인
+        - mid  : Z_M_P_{CH}_MID_SW 펄스 → 60초 대기 → Z{CH}_MID  읽어 True 확인
+        - down : Z_M_P_{CH}_CCW_SW 펄스 → 60초 대기 → Z{CH}_DOWN 읽어 True 확인
+        실패 시 False 반환(공정 시작 중단).
+        """
+        pos = str(params.get("chuck_position") or "").strip().lower()
+        if not pos:
+            # 공란이면 스킵
+            return True
+
+        ch = 1 if int(getattr(self, "ch", 1)) != 2 else 2
+        # 스위치/확인 비트 명칭 매핑
+        if pos == "up":
+            sw_name  = f"Z_M_P_{ch}_CW_SW"
+            lamp_bit = f"Z{ch}_UP"
+        elif pos == "mid":
+            sw_name  = f"Z_M_P_{ch}_MID_SW"
+            lamp_bit = f"Z{ch}_MID"
+        elif pos == "down":
+            sw_name  = f"Z_M_P_{ch}_CCW_SW"
+            lamp_bit = f"Z{ch}_DOWN"
+        else:
+            self.append_log("PLC", f"[CH{self.ch}] 알 수 없는 chuck_position='{pos}' → 스킵")
+            return True
+
+        try:
+            if not self.plc:
+                self.append_log("PLC", f"[CH{self.ch}] PLC 미연결 상태 → Chuck 제어 불가")
+                return False
+
+            self.append_log("PLC", f"[CH{self.ch}] Chuck '{pos}' 설정: {sw_name} 펄스 전송")
+            # 순간 스위치(펄스) 사용 — 내부에서 momentary로 처리
+            if hasattr(self.plc, "press_switch"):
+                await self.plc.press_switch(sw_name)
+            else:
+                # 구버전 호환(모멘터리 지원 안 되면 강제로 True→pulse_ms→False)
+                await self.plc.write_switch(sw_name, True, momentary=True)
+
+            # 규격: 60초 고정 대기 후 램프 확인(요청사항 준수)
+            await asyncio.sleep(60.0)
+
+            ok = await self.plc.read_bit(lamp_bit)
+            if ok:
+                self.append_log("PLC", f"[CH{self.ch}] Chuck '{pos}' 확인 성공 ({lamp_bit}=True)")
+                return True
+            else:
+                self.append_log("PLC", f"[CH{self.ch}] Chuck '{pos}' 확인 실패: {lamp_bit}=False")
+                return False
+
+        except Exception as e:
+            self.append_log("PLC", f"[CH{self.ch}] Chuck 위치 설정/확인 중 예외: {e!r}")
+            return False
 
     # ------------------------------------------------------------------
     # Start/Stop (개별 챔버)
@@ -2122,6 +2189,11 @@ class ChamberRuntime:
         g2t = str(raw.get("G2 Target", "")).strip()
         g3t = str(raw.get("G3 Target", "")).strip()
 
+        # ▼ 추가: chuck_position(up/mid/down, 공란이면 스킵)
+        _pos = str(raw.get("chuck_position", "")).strip().lower()
+        if _pos not in ("up", "mid", "down"):
+            _pos = ""
+
         res: NormParams = {
             "base_pressure":     fget("base_pressure", "1e-5"),
             "working_pressure":  fget("working_pressure", "0"),
@@ -2157,6 +2229,9 @@ class ChamberRuntime:
             "G1_target_name":    g1t, "G2_target_name": g2t, "G3_target_name": g3t,
             "G1 Target":         g1t, "G2 Target": g2t, "G3 Target": g3t,
             "use_power_select":  tf(raw.get("power_select", "F")),
+
+            # ★ 추가
+            "chuck_position":    _pos,
         }
 
         # 🔒 CH1은 N2 라인이 없으므로 강제 무시
