@@ -354,7 +354,8 @@ class ChamberRuntime:
 
         self.rf_power = None
         if self.supports_rf_cont and self.plc:
-            # CH2 = rf_ch=2 고정
+            # (CH2 전용) RF 연속 제어 — RF channel 2 사용
+            # - SET: DCV_SET_2, WRITE: DCV ch2, READ: DCV_READ_4/5 (FWD/REF)
             async def _rf_send(power: float):
                 # SET 래치는 RFPowerAsync의 toggle_enable(True)에서 한 번만 걸어도 됨
                 # 여기서는 중복 SET 방지하려면 ensure_set=False로 호출
@@ -575,7 +576,14 @@ class ChamberRuntime:
                     self._soon(self._safe_clear_oes_plot)
 
                     # 측정
+                    # 이번 런에서만 finished 이벤트를 받도록 플래그 ON
+                    self._oes_active = True
                     try:
+                        # 가능하면 잔여 이벤트 드레인 (드라이버가 지원하면)
+                        if hasattr(self.oes, "drain_events"):
+                            with contextlib.suppress(Exception):
+                                await self.oes.drain_events()
+
                         await self.oes.run_measurement(duration_sec, integration_ms)
                     except Exception as e:
                         self.append_log("OES", f"측정 예외: {e!r} → 종료 절차로 전환")
@@ -584,6 +592,9 @@ class ChamberRuntime:
                                 self.chat.notify_text(f"[OES] 측정 실패: {e!r}")
                         self.process_controller.on_oes_failed("OES", f"measure: {e}")
                         return
+                    finally:
+                        # finished 수신 여부와 관계없이 플래그 OFF
+                        self._oes_active = False
 
                     # ✅ 정상 완료 시에는 여기서 아무 것도 호출하지 않음
                     # (success 처리는 OES 이벤트 pump의 'finished'에서 단일 경로로)
@@ -704,9 +715,13 @@ class ChamberRuntime:
                     params["t0_wall"]   = t0
                     params["started_at"] = t0  # 하위호환 키 동일값
 
-                    # 로그/세션 준비
-                    if not getattr(self, "_log_file_path", None):
-                        self._prepare_log_file(params)
+                    # 런 시작 시각/세션 정보 저장
+                    self._run_started_wall = datetime.now()
+                    self._oes_active = False  # OES는 별도 cb에서 True로 바꿈
+
+                    # Plasma Cleaning 스타일 헤더 포함한 오픈
+                    self._open_run_log(params)  # ← 새로 추가한 함수
+
                     try:
                         self.data_logger.start_new_log_session(params)
                     except Exception:
@@ -802,7 +817,9 @@ class ChamberRuntime:
                         self._cancel_delay_task()
 
                         # 2) 다음 공정 새 로그 파일을 위해 세션 리셋
-                        self._log_file_path = None
+                        # (중요) 여기서는 파일을 건드리지 않음.
+                        # - 다음 공정이 있으면, 다음 공정 진입 직전에 닫고(None) 돌리고
+                        # - 마지막 공정이면, '모든 공정 완료'까지 기록한 뒤 닫는다.
 
                         if getattr(self, "_pc_stopping", False):
                             with contextlib.suppress(Exception):
@@ -1153,15 +1170,20 @@ class ChamberRuntime:
                         self.append_log(f"OES{self.ch}", f"경고: 데이터 필드 없음: kind={k}")
                     continue
                 elif k == "finished":
+                    if not getattr(self, "_oes_active", False):
+                        # 이전 런의 잔여 finished가 튀는 케이스 무시
+                        self.append_log(f"OES{self.ch}", "이전 런 잔여 'finished' 이벤트 무시")
+                        continue
+
                     ok = bool(getattr(ev, "success", False))
                     if ok:
-                        # 성공
                         self.append_log(f"OES{self.ch}", ev.message or "측정 완료")
+                        self._oes_active = False
                         self.process_controller.on_oes_ok()
                     else:
-                        # 실패
                         why = getattr(ev, "message", "measure failed")
                         self.append_log(f"OES{self.ch}", f"측정 실패: {why} → 종료 절차로 전환")
+                        self._oes_active = False
                         self.process_controller.on_oes_failed("OES", why)
                     continue
 
@@ -1822,7 +1844,10 @@ class ChamberRuntime:
             if not getattr(self, "_log_file_path", None):
                 first = self.process_queue[0] if self.process_queue else {}
                 note = f"AutoRun CH{self.ch}: {first.get('Process_name', 'Run')}"
-                self._prepare_log_file({"process_note": note})
+                params = {"process_note": note, "started_at": datetime.now().isoformat(timespec="seconds")}
+                self._prepare_log_file(params)
+                self._open_run_log(params)  # ★
+
             self.append_log("MAIN", f"[CH{self.ch}] 파일 기반 자동 공정 시작")
             self.current_process_index = -1
             self._start_next_process_from_queue(True)
@@ -1864,6 +1889,7 @@ class ChamberRuntime:
         params["G3 Target"] = vals.get("G3_target_name", "")
 
         self._prepare_log_file(params)
+        self._open_run_log(params)  # ★ 헤더를 가장 먼저
         self.append_log("MAIN", "입력 검증 통과 → 장비 연결 확인 시작")
         self._safe_start_process(cast(NormParams, params))
 
@@ -1979,10 +2005,18 @@ class ChamberRuntime:
         if tasks:
             await asyncio.gather(*tasks, return_exceptions=True)
 
-        try:
+        # 1) footer 먼저 (파일이 열려 있으면 "# ==== END ====" 남김)
+        with contextlib.suppress(Exception):
+            self._close_run_log()
+
+        # 2) writer 완전 종료 + 큐 리셋
+        with contextlib.suppress(Exception):
             await self._shutdown_log_writer()
-        except Exception:
-            pass
+
+        # 3) 파일 경로/버퍼 초기화 (다음 런은 새 파일명으로 시작)
+        self._log_file_path = None
+        with contextlib.suppress(Exception):
+            self._prestart_buf.clear()
 
         self._bg_started = False
         self._devices_started = False  # ✅ 다음 시작 때 장치 start() 다시 보장
@@ -2020,8 +2054,18 @@ class ChamberRuntime:
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
 
-            try: await self._shutdown_log_writer()
-            except Exception: pass
+            # 1) footer 먼저 (파일이 열려 있으면 "# ==== END ====" 남김)
+            with contextlib.suppress(Exception):
+                self._close_run_log()
+
+            # 2) writer 완전 종료 + 큐 리셋
+            with contextlib.suppress(Exception):
+                await self._shutdown_log_writer()
+
+            # 3) 파일 경로/버퍼 초기화 (다음 런은 새 파일명으로 시작)
+            self._log_file_path = None
+            with contextlib.suppress(Exception):
+                self._prestart_buf.clear()
 
         self._spawn_detached(run())
 
@@ -2492,13 +2536,48 @@ class ChamberRuntime:
         if not self._log_writer_task or self._log_writer_task.done():
             self._set_task_later("_log_writer_task", self._log_writer_loop(), name=f"LogWriter.CH{self.ch}")
 
+        # (삭제) prestart_buf는 _open_run_log에서 헤더 뒤로 밀어 넣는다.
+
+        self.append_log("Logger", f"새 로그 파일 시작: {self._log_file_path.name}")
+        note = str(params.get("process_note", "") or params.get("Process_name", "") or f"Run CH{self.ch}")
+        self.append_log("MAIN", f"=== '{note}' 공정 준비 (장비 연결부터 기록) ===")
+
+    def _open_run_log(self, params: Mapping[str, Any]) -> None:
+        # 기존 파일명 로직 재사용 (중복 방지 포함)
+        if not getattr(self, "_log_file_path", None):
+            self._prepare_log_file(params)
+
+        # 헤더 기록 (PC와 유사)
+        fp = getattr(self, "_log_fp", None)
+        if fp:
+            try:
+                name = (params.get("process_note")
+                        or params.get("Process_name")
+                        or f"Run CH{self.ch}")
+                fp.write("# ==== Sputter Run ====\n")
+                fp.write(f"# started_at = {datetime.now().isoformat()}\n")
+                fp.write(f"# chamber = CH{self.ch}\n")
+                fp.write(f"# process_name = {name}\n")
+                # 필요 시 파라미터 몇 개만 안전하게 기록
+                if "process_time" in params:
+                    fp.write(f"# time_min = {float(params.get('process_time', 0) or 0):.2f}\n")
+                fp.write("# ============================\n")
+                fp.flush()
+            except Exception:
+                pass
+
         if self._prestart_buf:
             for line in list(self._prestart_buf):
                 self._log_enqueue_nowait(line)
             self._prestart_buf.clear()
-        self.append_log("Logger", f"새 로그 파일 시작: {self._log_file_path.name}")
-        note = str(params.get("process_note", "") or params.get("Process_name", "") or f"Run CH{self.ch}")
-        self.append_log("MAIN", f"=== '{note}' 공정 준비 (장비 연결부터 기록) ===")
+
+    def _close_run_log(self) -> None:
+        """현재 열려 있는 로그 파일에 footer만 동기적으로 남긴다."""
+        fp = getattr(self, "_log_fp", None)
+        if fp:
+            with contextlib.suppress(Exception):
+                fp.write("# ==== END ====\n")
+                fp.flush()
 
     def _log_enqueue_nowait(self, line: str) -> None:
         try:
@@ -2567,10 +2646,14 @@ class ChamberRuntime:
             with contextlib.suppress(Exception):
                 await self._log_writer_task
             self._log_writer_task = None
+
         if self._log_fp:
-            with contextlib.suppress(Exception):
-                self._log_fp.flush(); self._log_fp.close()
-            self._log_fp = None
+            with contextlib.suppress(Exception): self._log_fp.flush()
+            with contextlib.suppress(Exception): self._log_fp.close()
+        self._log_fp = None
+
+        # ★ 다음 런으로 누수되는 줄 차단
+        self._log_q = asyncio.Queue(maxsize=4096)
 
     def _clear_queue_and_reset_ui(self) -> None:
         # 전역 runtime_state로 종료 시각을 기록하므로 로컬 타임스탬프는 불필요
@@ -2580,11 +2663,17 @@ class ChamberRuntime:
         self.process_queue = []
         self.current_process_index = -1
         self._reset_ui_after_process()
-        try:
+
+        with contextlib.suppress(Exception):
+            self._close_run_log()
+
+        with contextlib.suppress(Exception):
             self._spawn_detached(self._shutdown_log_writer())
-        except Exception:
-            pass
+
         self._log_file_path = None
+        with contextlib.suppress(Exception):
+            self._prestart_buf.clear()
+
         try: 
             self._prestart_buf.clear()
         except Exception: 
