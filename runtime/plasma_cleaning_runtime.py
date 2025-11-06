@@ -533,24 +533,26 @@ class PlasmaCleaningRuntime:
         async def _rf_send(power_w: float) -> None:
             # ✅ SET 래치는 RFPowerAsync → _rf_toggle_enable(True)에서 1회만 수행
             #    여기서는 WRITE만 (중복 SET 제거)
-            await self.plc.rf_apply(float(power_w), ensure_set=False)
+            await self.plc.rf_apply(float(power_w), ensure_set=False, rf_ch=1)
             try:
-                meas = await self.plc.rf_read_fwd_ref()  # ← 보정 적용
+                meas = await self.plc.rf_read_fwd_ref(rf_ch=1)  # ← 보정 적용
                 self.append_log("PLC", f"RF READ FWD={meas['forward']:.1f} W, REF={meas['reflected']:.1f} W")
             except Exception as e:
                 self.append_log("PLC", f"RF READ 실패: {e!r}")
 
+        # _rf_send_unverified — WRITE는 ch1로 고정, READ도 ch1 명시
         async def _rf_send_unverified(power_w: float) -> None:
             await self.plc.power_write(power_w, family="DCV", write_idx=1)  # no-reply 경로
             try:
-                meas = await self.plc.rf_read_fwd_ref()
+                meas = await self.plc.rf_read_fwd_ref(rf_ch=1)
                 self.append_log("PLC", f"RF READ(FB) FWD={meas['forward']:.1f} W, REF={meas['reflected']:.1f} W")
             except Exception:
                 pass
 
+        # _rf_request_read — 주기 읽기도 ch1 명시
         async def _rf_request_read():
             try:
-                return await self.plc.rf_read_fwd_ref()  # ← 핵심 수정
+                return await self.plc.rf_read_fwd_ref(rf_ch=1)  # ← 핵심 수정
             except Exception as e:
                 self.append_log("RF", f"read failed: {e!r}")
                 return None

@@ -238,9 +238,9 @@ class ChamberRuntime:
         # QMessageBox 참조 저장소(비모달 유지용)
         self._msg_boxes: list[QMessageBox] = []  # ← 추가
 
-        # 기본 전략: CH1=DC-Pulse 전용, CH2=RF-Pulse(+DC 연속)
+        # 기본 전략: CH1=DC-Pulse 전용, CH2=RF-Pulse(+DC 연속 +RF 연속)
         if supports_dc_cont  is None: supports_dc_cont  = (self.ch == 2)
-        if supports_rf_cont  is None: supports_rf_cont  = False
+        if supports_rf_cont  is None: supports_rf_cont  = (self.ch == 2)  # CH2에서 RF 연속 허용
         if supports_dc_pulse is None: supports_dc_pulse = (self.ch == 1)
         if supports_rf_pulse is None: supports_rf_pulse = (self.ch == 2)
 

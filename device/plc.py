@@ -761,41 +761,47 @@ class AsyncPLC:
         #self.log("POWER READ (%s) V=%.3f, I=%.3f, P=%.3f (keys=%s/%s)", family, V, I, P, v_key, i_key)
         return P, V, I
     
-    # RF Enable (SET 래치) — DCV_SET_1 사용
-    async def rf_enable(self, on: bool = True) -> None:
-        await self.power_enable(on, family="DCV", set_idx=1)  # → DCV_SET_1
+    # RF Enable (SET 래치) — rf_ch=1→DCV_SET_1, rf_ch=2→DCV_SET_2
+    async def rf_enable(self, on: bool = True, *, rf_ch: int = 1) -> None:
+        ch = 1 if int(rf_ch) != 2 else 2
+        await self.power_enable(on, family="DCV", set_idx=ch)  # → DCV_SET_{1|2}
 
-    # RF 목표 W 쓰기 — DCV_WRITE_1 사용 (DC 스케일 재사용: 0~1000W → 0~4000DAC)
-    async def rf_write_w(self, power_w: float) -> int:
-        return await self.power_write(power_w, family="DCV", write_idx=1)  # → DCV_WRITE_1
+    # RF 목표 W 쓰기 — rf_ch=1→DCV_WRITE_1, rf_ch=2→DCV_WRITE_2
+    async def rf_write_w(self, power_w: float, *, rf_ch: int = 1) -> int:
+        ch = 1 if int(rf_ch) != 2 else 2
+        return await self.power_write(power_w, family="DCV", write_idx=ch)  # → DCV_WRITE_{1|2}
 
-    # RF 목표 W 적용(필요 시 SET 보장)
-    async def rf_apply(self, power_w: float, *, ensure_set: bool = True) -> int:
+    # RF 목표 W 적용(필요 시 SET 보장) — rf_ch별로 SET/WRITE 분기
+    async def rf_apply(self, power_w: float, *, ensure_set: bool = True, rf_ch: int = 1) -> int:
+        ch = 1 if int(rf_ch) != 2 else 2
         if ensure_set:
-            await self.rf_enable(True)   # DCV_SET_1 = True
-        return await self.rf_write_w(power_w)  # DCV_WRITE_1
+            await self.rf_enable(True, rf_ch=ch)   # DCV_SET_{1|2} = True
+        return await self.rf_write_w(power_w, rf_ch=ch)  # DCV_WRITE_{1|2}
 
-    # RF 피드백(Forward/Reflected) 읽기 — DCV_READ_2/3 사용
-    async def rf_read_fwd_ref(self) -> dict[str, float]:
+    # RF 피드백(Forward/Reflected) 읽기
+    #  - rf_ch=1: DCV_READ_2(forward), DCV_READ_3(reflected)
+    #  - rf_ch=2: DCV_READ_4(forward), DCV_READ_5(reflected)
+    async def rf_read_fwd_ref(self, *, rf_ch: int = 1) -> dict[str, float]:
+        ch = 1 if int(rf_ch) != 2 else 2
+        f_key, r_key = (("DCV_READ_2", "DCV_READ_3") if ch == 1 else ("DCV_READ_4", "DCV_READ_5"))
+
         # 1) 원시값(레지스터) 읽기
-        f_raw = await self.read_reg_name("DCV_READ_2")
-        r_raw = await self.read_reg_name("DCV_READ_3")
+        f_raw = await self.read_reg_name(f_key)
+        r_raw = await self.read_reg_name(r_key)
 
         # 2) 스케일링 (a·raw + b) → W
         f_w = self.cfg.rf_fwd_a * float(f_raw) + self.cfg.rf_fwd_b
         r_w = self.cfg.rf_ref_a * float(r_raw) + self.cfg.rf_ref_b
 
-        # 3) 제로잉 미보정 오프셋을 W 단위에서 단순 차감
-        f_w -= float(self.cfg.rf_forward_zero_w)     # forp idle offset
-        r_w -= float(self.cfg.rf_reflected_zero_w)    # refp idle offset
+        # 3) 제로 오프셋 보정
+        f_w -= float(self.cfg.rf_forward_zero_w)
+        r_w -= float(self.cfg.rf_reflected_zero_w)
 
-        # 음수 방지 & 보기 좋게 반올림(선택)
+        # 4) 음수 방지 & 보기 좋게 반올림
         f_w = round(max(0.0, f_w), 1)
         r_w = round(max(0.0, r_w), 1)
 
-        # rf_power 가 dict의 "forward"/"reflected" 키를 읽습니다.
         return {"forward": f_w, "reflected": r_w}
-
 
     # ---------- DI용 논리명 셋(set) ----------
     async def set(self, name: str, on: bool, *, ch: int = 1, momentary: bool = False) -> None:
