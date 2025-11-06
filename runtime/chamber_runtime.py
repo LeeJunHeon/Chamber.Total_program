@@ -2569,18 +2569,16 @@ class ChamberRuntime:
     # 기본 UI값/리셋
     def _set_default_ui_values(self) -> None:
         _set = self._set
-        _set("basePressure_edit", "9e-6")
+        
         _set("integrationTime_edit", "60")
         _set("workingPressure_edit", "2")
-        _set("processTime_edit", "25")
-        _set("shutterDelay_edit", "5")
         _set("arFlow_edit", "20")
         _set("o2Flow_edit", "0")
         _set("n2Flow_edit", "0")
         _set("dcPower_edit", "130")
         # DC-Pulse
         _set("dcPulsePower_checkbox", False)
-        _set("dcPulsePower_edit", "300")
+        _set("dcPulsePower_edit", "200")
         _set("dcPulseFreq_edit", "")
         _set("dcPulseDutyCycle_edit", "")
         # RF-Pulse
@@ -2592,14 +2590,20 @@ class ChamberRuntime:
         # ← 추가: 챔버별 기본 체크
         try:
             if self.ch == 1:
+                _set("basePressure_edit", "1e-6")
                 _set("Ar_checkbox", True)
                 _set("dcPulsePower_checkbox", True)   # CH1: DC Pulse 사용
                 _set("dcPower_checkbox", False)
+                _set("shutterDelay_edit", "0")
+                _set("processTime_edit", "30")
             elif self.ch == 2:
+                _set("basePressure_edit", "9e-6")
                 _set("G2_checkbox", True)             # CH2: G2 사용
                 _set("Ar_checkbox", True)             # CH2: Ar 가스
                 _set("dcPower_checkbox", True)        # CH2: DC Power 사용
                 _set("dcPulsePower_checkbox", False)
+                _set("shutterDelay_edit", "5")
+                _set("processTime_edit", "25")
         except Exception:
             pass
 
