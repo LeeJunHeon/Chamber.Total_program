@@ -1531,10 +1531,13 @@ class ChamberRuntime:
                     self._clear_queue_and_reset_ui()
                     return
 
-                if not getattr(self, "_log_file_path", None):
-                    self._prepare_log_file(norm)
-                else:
-                    self.append_log("Logger", f"같은 세션 파일 계속 사용: {self._log_file_path.name}")
+                # 새 스텝마다 이전 파일을 정리하고, 항상 새로운 파일로 시작
+                try:
+                    self._spawn_detached(self._shutdown_log_writer())
+                except Exception:
+                    pass
+                self._log_file_path = None
+                self._prepare_log_file(norm)
 
                 # (NEW) 최근 'chamber' 종료 시각 기준 쿨다운을 반영해서 다음 스텝 대기
                 try:
@@ -2183,9 +2186,13 @@ class ChamberRuntime:
             self._post_warning("입력값 확인", "가스 유량을 확인하세요."); return None
 
         use_rf_pulse = bool(getattr(self._u("rfPulsePower_checkbox"), "isChecked", lambda: False)())
-        use_dc = bool(getattr(self._u("dcPower_checkbox"), "isChecked", lambda: False)())
-        if not (use_rf_pulse or use_dc):
-            self._post_warning("선택 오류", "RF Pulse 또는 DC 중 하나 이상 선택"); return None
+        use_dc       = bool(getattr(self._u("dcPower_checkbox"), "isChecked", lambda: False)())
+        use_rf_power = bool(getattr(self._u("rfPower_checkbox"), "isChecked", lambda: False)())
+
+        # 최소 한 가지 파워는 선택되어야 함 (RF Pulse, RF Power, DC)
+        if not (use_rf_pulse or use_rf_power or use_dc):
+            self._post_warning("선택 오류", "RF Pulse, RF Power, DC 중 하나 이상 선택"); 
+            return None
 
         rf_pulse_power = 0.0; rf_pulse_freq = None; rf_pulse_duty = None
         if use_rf_pulse:
@@ -2236,6 +2243,12 @@ class ChamberRuntime:
             self._post_warning("선택 오류", "RF Pulse, RF Power, DC 중 하나 이상 선택")
             return None
 
+        # RF Power는 DC와 함께만 사용(단독 금지)
+        if use_rf_power and not use_dc:
+            self._post_warning("선택 오류", "RF Power는 DC와 함께만 사용할 수 있습니다.")
+            return None
+
+        # RF Pulse와 RF Power 동시 금지
         if use_rf_pulse and use_rf_power:
             self._post_warning("선택 오류", "RF Pulse와 RF Power는 동시에 선택할 수 없습니다.")
             return None
@@ -3123,6 +3136,11 @@ class ChamberRuntime:
             if not (p.get("use_rf_pulse") or p.get("use_dc_power") or p.get("use_rf_power")):
                 errs.append("RF Pulse, RF Power, DC Power 중 하나 이상 선택 필요")
 
+            # RF Power는 DC와 함께만 허용
+            if p.get("use_rf_power") and not p.get("use_dc_power"):
+                errs.append("RF Power는 DC와 함께만 선택 가능합니다.")
+
+            # RF Pulse와 RF Power 동시 금지
             if p.get("use_rf_pulse") and p.get("use_rf_power"):
                 errs.append("RF Pulse와 RF Power는 동시에 선택할 수 없습니다.")
 
