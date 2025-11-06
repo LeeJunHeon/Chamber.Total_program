@@ -781,9 +781,12 @@ class AsyncPLC:
     # RF 피드백(Forward/Reflected) 읽기
     #  - rf_ch=1: DCV_READ_2(forward), DCV_READ_3(reflected)
     #  - rf_ch=2: DCV_READ_4(forward), DCV_READ_5(reflected)
-    async def rf_read_fwd_ref(self, *, rf_ch: int = 1) -> dict[str, float]:
-        ch = 1 if int(rf_ch) != 2 else 2
-        f_key, r_key = (("DCV_READ_2", "DCV_READ_3") if ch == 1 else ("DCV_READ_4", "DCV_READ_5"))
+    async def rf_read_fwd_ref(self, *, rf_ch: int = 1, zeroing: bool | None = None) -> dict[str, float]:
+        # ch=1 → D00002/3(=DCV_READ_2/3), ch=2 → D00008/9(=DCV_READ_4/5)
+        if int(rf_ch) == 1:
+            f_key, r_key = "DCV_READ_2", "DCV_READ_3"
+        else:
+            f_key, r_key = "DCV_READ_4", "DCV_READ_5"
 
         # 1) 원시값(레지스터) 읽기
         f_raw = await self.read_reg_name(f_key)
@@ -794,8 +797,11 @@ class AsyncPLC:
         r_w = self.cfg.rf_ref_a * float(r_raw) + self.cfg.rf_ref_b
 
         # 3) 제로 오프셋 보정
-        f_w -= float(self.cfg.rf_forward_zero_w)
-        r_w -= float(self.cfg.rf_reflected_zero_w)
+        # 제로잉 적용 정책: 기본(CH1=적용, CH2=미적용)
+        use_zero = (int(rf_ch) == 1) if (zeroing is None) else bool(zeroing)
+        if use_zero:
+            f_w -= float(self.cfg.rf_forward_zero_w)
+            r_w -= float(self.cfg.rf_reflected_zero_w)
 
         # 4) 음수 방지 & 보기 좋게 반올림
         f_w = round(max(0.0, f_w), 1)

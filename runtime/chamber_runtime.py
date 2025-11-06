@@ -353,26 +353,38 @@ class ChamberRuntime:
             )
 
         self.rf_power = None
-        if self.supports_rf_cont:
+        if self.supports_rf_cont and self.plc:
+            # CH2 = rf_ch=2 고정
             async def _rf_send(power: float):
-                await self.plc.power_apply(power, family="DCV", ensure_set=True, channel=1)
+                # SET 래치는 RFPowerAsync의 toggle_enable(True)에서 한 번만 걸어도 됨
+                # 여기서는 중복 SET 방지하려면 ensure_set=False로 호출
+                await self.plc.rf_apply(float(power), ensure_set=False, rf_ch=2)
 
             async def _rf_send_unverified(power: float):
-                await self.plc.power_write(power, family="DCV", write_idx=1)
+                await self.plc.rf_write_w(float(power), rf_ch=2)
 
             async def _rf_request_read():
                 try:
-                    # ✅ 스케일 보정된 W 단위 튜플 반환
-                    fwd_w, ref_w = await self.plc.rf_read_fwd_ref()
-                    return (float(fwd_w), float(ref_w))
+                    # ★ CH2는 제로잉 미적용
+                    return await self.plc.rf_read_fwd_ref(rf_ch=2, zeroing=False)
                 except Exception as e:
-                    self.append_log("RFpower", f"read failed: {e!r}")
+                    self.append_log("RF", f"read failed: {e!r}")
                     return None
+
+            async def _rf_toggle_enable(on: bool):
+                await self.plc.rf_enable(bool(on), rf_ch=2)
 
             self.rf_power = RFPowerAsync(
                 send_rf_power=_rf_send,
                 send_rf_power_unverified=_rf_send_unverified,
                 request_status_read=_rf_request_read,
+                toggle_enable=_rf_toggle_enable,
+                poll_interval_ms=1000,
+                rampdown_interval_ms=50,
+                direct_mode=True,
+                # 필요 시 CH2 전용 역변환 계수로 조정. 없으면 Plasma Cleaning과 동일값 사용 가능.
+                write_inv_a=1.74,
+                write_inv_b=0.0,
             )
 
         # === ProcessController 바인딩 ===
