@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 
 ################################################################################
-## Form generated from reading UI file 'CH1&2wVbFJH.ui'
+## Form generated from reading UI file 'CH1&2RuGhto.ui'
 ##
 ## Created by: Qt User Interface Compiler version 6.9.1
 ##
@@ -635,12 +635,12 @@ class Ui_Form(object):
         self.ch2_dcPower_checkbox = QCheckBox(self.page_2)
         self.ch2_dcPower_checkbox.setObjectName(u"ch2_dcPower_checkbox")
         self.ch2_dcPower_checkbox.setGeometry(QRect(10, 580, 101, 24))
-        self.ch2_dcPower_edit_2 = QPlainTextEdit(self.page_2)
-        self.ch2_dcPower_edit_2.setObjectName(u"ch2_dcPower_edit_2")
-        self.ch2_dcPower_edit_2.setGeometry(QRect(110, 600, 101, 31))
-        self.ch2_dcPower_checkbox_2 = QCheckBox(self.page_2)
-        self.ch2_dcPower_checkbox_2.setObjectName(u"ch2_dcPower_checkbox_2")
-        self.ch2_dcPower_checkbox_2.setGeometry(QRect(110, 580, 101, 24))
+        self.ch2_rfPower_edit = QPlainTextEdit(self.page_2)
+        self.ch2_rfPower_edit.setObjectName(u"ch2_rfPower_edit")
+        self.ch2_rfPower_edit.setGeometry(QRect(110, 600, 101, 31))
+        self.ch2_rfPower_checkbox = QCheckBox(self.page_2)
+        self.ch2_rfPower_checkbox.setObjectName(u"ch2_rfPower_checkbox")
+        self.ch2_rfPower_checkbox.setGeometry(QRect(110, 580, 101, 24))
         self.stackedWidget.addWidget(self.page_2)
         QWidget.setTabOrder(self.pc_processState_edit, self.pc_btnGoCh1)
         QWidget.setTabOrder(self.pc_btnGoCh1, self.pc_btnGoCh2)
@@ -853,6 +853,6 @@ class Ui_Form(object):
 "Cleaning", None))
         self.ch2_btnGoCh1.setText(QCoreApplication.translate("Form", u"CH.1", None))
         self.ch2_dcPower_checkbox.setText(QCoreApplication.translate("Form", u"DC Power", None))
-        self.ch2_dcPower_checkbox_2.setText(QCoreApplication.translate("Form", u"RF Power", None))
+        self.ch2_rfPower_checkbox.setText(QCoreApplication.translate("Form", u"RF Power", None))
     # retranslateUi
 
