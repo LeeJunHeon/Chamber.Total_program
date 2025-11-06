@@ -1398,8 +1398,7 @@ class ChamberRuntime:
                 self.append_log("UI", f"[CH{self.ch}] 단일 공정 UI 업데이트: '{params.get('process_note','')}'")
 
         _set = self._set
-        _set("dcPower_edit", params.get('dc_power', '0'))
-
+        
         # DC-Pulse
         _set("dcPulsePower_checkbox", params.get('use_dc_pulse', 'F') == 'T')
         _set("dcPulsePower_edit",     params.get('dc_pulse_power', '0'))
@@ -1408,6 +1407,10 @@ class ChamberRuntime:
         _set("dcPulseFreq_edit",       '' if dcf in ('', '0') else dcf)
         _set("dcPulseDutyCycle_edit",  '' if dcd in ('', '0') else dcd)
 
+        # DC-Power
+        _set("dcPower_checkbox", params.get('use_dc_power', 'F') == 'T')
+        _set("dcPower_edit", params.get('dc_power', '0'))
+
         # RF-Pulse
         _set("rfPulsePower_checkbox", params.get('use_rf_pulse', 'F') == 'T')
         _set("rfPulsePower_edit",     params.get('rf_pulse_power', '0'))
@@ -1415,6 +1418,10 @@ class ChamberRuntime:
         rfd = str(params.get('rf_pulse_duty_cycle', '')).strip()
         _set("rfPulseFreq_edit",       '' if rff in ('', '0') else rff)
         _set("rfPulseDutyCycle_edit",  '' if rfd in ('', '0') else rfd)
+
+        # RF-Power
+        _set("rfPower_checkbox", params.get('use_rf_power', 'F') == 'T')
+        _set("rfPower_edit",     params.get('rf_power', '0'))
 
         _set("processTime_edit", params.get('process_time', '0'))
         _set("integrationTime_edit", params.get('integration_time', '60'))
@@ -1432,7 +1439,6 @@ class ChamberRuntime:
         _set("O2_checkbox", params.get('O2', 'F') == 'T')
         _set("N2_checkbox", params.get('N2', 'F') == 'T')
         _set("mainShutter_checkbox", params.get('main_shutter', 'F') == 'T')
-        _set("dcPower_checkbox", params.get('use_dc_power', 'F') == 'T')
         _set("powerSelect_checkbox", params.get('power_select', 'F') == 'T')
 
         # ---- CH1: 단일 타겟 위젯에 한 번만 세팅 ----
@@ -2172,14 +2178,33 @@ class ChamberRuntime:
         else:
             dc_power = 0.0
 
+        use_rf_power = bool(getattr(self._u("rfPower_checkbox"), "isChecked", lambda: False)())
+        rf_power_val = 0.0
+        if use_rf_power:
+            try:
+                rf_power_val = float(self._get_text("rfPower_edit") or "0")
+                if rf_power_val <= 0: raise ValueError()
+            except ValueError:
+                self._post_warning("입력값 확인", "RF Power(W)를 확인하세요.")
+                return None
+
+        # 허용/금지 조합 체크
+        if not (use_rf_pulse or use_dc or use_rf_power):
+            self._post_warning("선택 오류", "RF Pulse, RF Power, DC 중 하나 이상 선택")
+            return None
+
+        if use_rf_pulse and use_rf_power:
+            self._post_warning("선택 오류", "RF Pulse와 RF Power는 동시에 선택할 수 없습니다.")
+            return None
+
         return {
             "use_ms": bool(getattr(self._u("mainShutter_checkbox"), "isChecked", lambda: False)()),
             "use_g1": use_g1, "use_g2": use_g2, "use_g3": use_g3,
             "use_ar": use_ar, "use_o2": use_o2, "use_n2": use_n2,
             "ar_flow": ar_flow, "o2_flow": o2_flow, "n2_flow": n2_flow,
-            "use_rf_power": False,
+            "use_rf_power": use_rf_power,"rf_power": rf_power_val, 
             "use_rf_pulse": use_rf_pulse, "use_dc_power": use_dc,
-            "rf_power": 0.0, "rf_pulse_power": rf_pulse_power, "dc_power": dc_power,
+            "rf_pulse_power": rf_pulse_power, "dc_power": dc_power,
             "rf_pulse_freq": rf_pulse_freq, "rf_pulse_duty": rf_pulse_duty,
             "G1_target_name": g1_name, "G2_target_name": g2_name, "G3_target_name": g3_name,
             "use_power_select": bool(getattr(self._u("powerSelect_checkbox"), "isChecked", lambda: False)()),
@@ -2576,16 +2601,22 @@ class ChamberRuntime:
         _set("o2Flow_edit", "0")
         _set("n2Flow_edit", "0")
         _set("dcPower_edit", "130")
+
         # DC-Pulse
         _set("dcPulsePower_checkbox", False)
         _set("dcPulsePower_edit", "200")
         _set("dcPulseFreq_edit", "")
         _set("dcPulseDutyCycle_edit", "")
+
         # RF-Pulse
         _set("rfPulsePower_checkbox", False)
         _set("rfPulsePower_edit", "100")
         _set("rfPulseFreq_edit", "")
         _set("rfPulseDutyCycle_edit", "")
+
+        # RF-Power
+        _set("rfPower_checkbox", False)
+        _set("rfPower_edit", "0")
 
         # ← 추가: 챔버별 기본 체크
         try:
@@ -2985,7 +3016,10 @@ class ChamberRuntime:
             #     errs.append("G3 타겟 이름이 비어있음")
 
             if not (p.get("use_rf_pulse") or p.get("use_dc_power") or p.get("use_rf_power")):
-                errs.append("RF Pulse 또는 DC 중 하나 이상 선택 필요")
+                errs.append("RF Pulse, RF Power, DC Power 중 하나 이상 선택 필요")
+
+            if p.get("use_rf_pulse") and p.get("use_rf_power"):
+                errs.append("RF Pulse와 RF Power는 동시에 선택할 수 없습니다.")
 
             if p.get("use_rf_pulse"):
                 if p.get("rf_pulse_power", 0) <= 0:
