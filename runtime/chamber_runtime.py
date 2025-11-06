@@ -2541,41 +2541,59 @@ class ChamberRuntime:
         self.append_log("MAIN", f"=== '{note}' 공정 준비 (장비 연결부터 기록) ===")
 
     def _open_run_log(self, params: Mapping[str, Any]) -> None:
-        # 기존 파일명 로직 재사용 (중복 방지 포함)
-        if not getattr(self, "_log_file_path", None):
-            self._prepare_log_file(params)
+        # 1) 고유 파일경로 계산 (아직 self._log_file_path 노출 X)
+        now_local = datetime.now()
+        ts = now_local.strftime("%Y%m%d_%H%M%S")
 
-        # 헤더 기록 (PC와 유사)
-        fp = getattr(self, "_log_fp", None)
-        if fp:
+        base = (self._log_dir / f"CH{self.ch}_{ts}").with_suffix(".txt")
+        path = base
+        i = 1
+        while path.exists():
+            path = (self._log_dir / f"CH{self.ch}_{ts}_{i}").with_suffix(".txt")
+            i += 1
+
+        # 2) 우선 파일을 열어서 헤더를 '먼저' 기록 (line-buffering 권장)
+        fp = open(path, "a", encoding="utf-8", newline="", buffering=1)
+        try:
+            name = (params.get("process_note")
+                    or params.get("Process_name")
+                    or f"Run CH{self.ch}")
+            fp.write("# ==== Sputter Run ====\n")
+            fp.write(f"# started_at = {datetime.now().isoformat()}\n")
+            fp.write(f"# chamber = CH{self.ch}\n")
+            fp.write(f"# process_name = {name}\n")
+            if "process_time" in params:
+                fp.write(f"# time_min = {float(params.get('process_time', 0) or 0):.2f}\n")
+            fp.write("# ============================\n")
+            fp.flush()
+        finally:
+            # 3) 이제야 경로/핸들을 '노출' → 이 시점부터 writer가 파일에 씀
+            self._log_file_path = path
+            self._log_fp = fp
+            if not self._log_writer_task or self._log_writer_task.done():
+                self._set_task_later("_log_writer_task", self._log_writer_loop(), name=f"LogWriter.CH{self.ch}")
+
+            # 4) 헤더 뒤에 pre-start 로그를 순서대로 밀어넣음
             try:
-                name = (params.get("process_note")
-                        or params.get("Process_name")
-                        or f"Run CH{self.ch}")
-                fp.write("# ==== Sputter Run ====\n")
-                fp.write(f"# started_at = {datetime.now().isoformat()}\n")
-                fp.write(f"# chamber = CH{self.ch}\n")
-                fp.write(f"# process_name = {name}\n")
-                # 필요 시 파라미터 몇 개만 안전하게 기록
-                if "process_time" in params:
-                    fp.write(f"# time_min = {float(params.get('process_time', 0) or 0):.2f}\n")
-                fp.write("# ============================\n")
-                fp.flush()
-            except Exception:
-                pass
+                while self._prestart_buf:
+                    self._log_enqueue_nowait(self._prestart_buf.popleft())
+            finally:
+                with contextlib.suppress(Exception):
+                    self._prestart_buf.clear()
 
-        if self._prestart_buf:
-            for line in list(self._prestart_buf):
-                self._log_enqueue_nowait(line)
-            self._prestart_buf.clear()
+        self.append_log("Logger", f"새 로그 파일 시작: {path.name}")
 
     def _close_run_log(self) -> None:
-        """현재 열려 있는 로그 파일에 footer만 동기적으로 남긴다."""
+        """현재 열려 있는 로그 파일을 명확히 종료(END 기록 + 핸들 닫기 + 경로 차단)."""
         fp = getattr(self, "_log_fp", None)
+        # 이후 append_log가 파일을 다시 열지 못하도록 경로/핸들을 먼저 끊는다
+        self._log_fp = None
+        self._log_file_path = None
         if fp:
             with contextlib.suppress(Exception):
                 fp.write("# ==== END ====\n")
                 fp.flush()
+                fp.close()
 
     def _log_enqueue_nowait(self, line: str) -> None:
         try:
