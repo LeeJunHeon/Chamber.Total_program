@@ -1557,7 +1557,6 @@ class ChamberRuntime:
                 )
 
             else:
-                self.append_log("MAIN", "모든 공정 완료")
                 self._clear_queue_and_reset_ui()
                 # (주의) 장치 연결 해제는 finished 분기에서 이미 수행함
                 # ★ 추가: 정상 종료 + 더 이상 다음 공정이 없으면 장치 연결 해제(PLC 제외)
@@ -2538,7 +2537,6 @@ class ChamberRuntime:
 
         # (삭제) prestart_buf는 _open_run_log에서 헤더 뒤로 밀어 넣는다.
 
-        self.append_log("Logger", f"새 로그 파일 시작: {self._log_file_path.name}")
         note = str(params.get("process_note", "") or params.get("Process_name", "") or f"Run CH{self.ch}")
         self.append_log("MAIN", f"=== '{note}' 공정 준비 (장비 연결부터 기록) ===")
 

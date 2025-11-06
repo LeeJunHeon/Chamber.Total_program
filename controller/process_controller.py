@@ -1170,6 +1170,13 @@ class ProcessController:
             ))
 
         elif use_rf:
+            # RF 연속 사용 전에 POWER_SELECT = False
+            steps.append(ProcessStep(
+                action=ActionType.PLC_CMD,
+                params=("SW_POWER_SELECT", False),
+                message="Power Select OFF (SW_POWER_SELECT)",
+            ))
+
             steps.append(ProcessStep(
                 action=ActionType.RF_POWER_SET, value=rf_power,
                 message=f'RF Power {rf_power}W 설정',
@@ -1267,7 +1274,7 @@ class ProcessController:
                 params=("SW_POWER_SELECT", False),
                 message="Power Select OFF (SW_POWER_SELECT)"
             ))
-    
+
         use_any = any(params.get(k, False) for k in ("use_ar", "use_o2", "use_n2"))
 
         # MFC Flow OFF(선택된 가스만; 선택 없으면 전체)
