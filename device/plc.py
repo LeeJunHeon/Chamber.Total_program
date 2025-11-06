@@ -243,14 +243,17 @@ class PLCConfig:
     dc_v_scale: float = 0.5    # 2000 V / 4000 ct  = 0.5 V/ct
     dc_i_scale: float = 0.001  # 4 A / 4000 ct     = 0.001 A/ct
 
-    # RF 피드백(ADC→W) 보정 계수 — 2025-10-21 엑셀(0~100W) 재캘리브레이션
-    # Forward: OLS 전체 샘플
-    rf_fwd_a: float = 0.1503488383   # W = 0.1503488383*ADC + 3.0664228165
+    # RF 피드백(ADC→W) 보정 계수 — 기본(=CH1용)
+    rf_fwd_a: float = 0.1503488383
     rf_fwd_b: float = 3.0664228165
-
-    # Reflected: 80W 행(ADC=64, 패널=12) 이상치 제외 강건 회귀
-    rf_ref_a: float = 0.1565388751   # W = 0.1565388751*ADC + 12.2067054791
+    rf_ref_a: float = 0.1565388751
     rf_ref_b: float = 12.2067054791
+
+    # ✅ CH2 전용 보정 계수 (rfpower 스케일.xlsx 기반)
+    rf2_fwd_a: float = 0.15059   # Forward slope
+    rf2_fwd_b: float = -0.598    # Forward intercept
+    rf2_ref_a: float = 0.12940   # Reflected slope
+    rf2_ref_b: float = -0.267    # Reflected intercept
 
     # 🔧 현장 제로 보정치(패널 idle 보정). 필요 시 현장에서 수치만 바꾸세요.
     rf_forward_zero_w: float = 4.0   # forp idle offset
@@ -792,9 +795,15 @@ class AsyncPLC:
         f_raw = await self.read_reg_name(f_key)
         r_raw = await self.read_reg_name(r_key)
 
-        # 2) 스케일링 (a·raw + b) → W
-        f_w = self.cfg.rf_fwd_a * float(f_raw) + self.cfg.rf_fwd_b
-        r_w = self.cfg.rf_ref_a * float(r_raw) + self.cfg.rf_ref_b
+        # 2) 스케일링 (a·raw + b) → W (CH1/CH2 분리)
+        if int(rf_ch) == 2:
+            # ✅ CH2 전용 보정값
+            f_w = self.cfg.rf2_fwd_a * float(f_raw) + self.cfg.rf2_fwd_b
+            r_w = self.cfg.rf2_ref_a * float(r_raw) + self.cfg.rf2_ref_b
+        else:
+            # 기본(CH1)
+            f_w = self.cfg.rf_fwd_a * float(f_raw) + self.cfg.rf_fwd_b
+            r_w = self.cfg.rf_ref_a * float(r_raw) + self.cfg.rf_ref_b
 
         # 3) 제로 오프셋 보정
         # 제로잉 적용 정책: 기본(CH1=적용, CH2=미적용)

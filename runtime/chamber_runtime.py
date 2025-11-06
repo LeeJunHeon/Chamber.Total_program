@@ -384,8 +384,8 @@ class ChamberRuntime:
                 rampdown_interval_ms=50,
                 direct_mode=True,
                 # 필요 시 CH2 전용 역변환 계수로 조정. 없으면 Plasma Cleaning과 동일값 사용 가능.
-                write_inv_a=1.74,
-                write_inv_b=0.0,
+                write_inv_a=1.6546,   # ← 엑셀 기반 역보정
+                write_inv_b=2.6323,   # ← (입력W = 1.6546*목표W + 2.6323)
             )
 
         # === ProcessController 바인딩 ===
@@ -1537,7 +1537,6 @@ class ChamberRuntime:
                 except Exception:
                     pass
                 self._log_file_path = None
-                self._prepare_log_file(norm)
 
                 # (NEW) 최근 'chamber' 종료 시각 기준 쿨다운을 반영해서 다음 스텝 대기
                 try:
@@ -1843,13 +1842,7 @@ class ChamberRuntime:
         self._auto_connect_enabled = True
 
         if getattr(self, "process_queue", None):
-            if not getattr(self, "_log_file_path", None):
-                first = self.process_queue[0] if self.process_queue else {}
-                note = f"AutoRun CH{self.ch}: {first.get('Process_name', 'Run')}"
-                params = {"process_note": note, "started_at": datetime.now().isoformat(timespec="seconds")}
-                self._prepare_log_file(params)
-                self._open_run_log(params)  # ★
-
+            # 파일은 'started' 이벤트에서 _open_run_log()로 한 번만 생성
             self.append_log("MAIN", f"[CH{self.ch}] 파일 기반 자동 공정 시작")
             self.current_process_index = -1
             self._start_next_process_from_queue(True)
@@ -1890,7 +1883,6 @@ class ChamberRuntime:
         params["G2 Target"] = vals.get("G2_target_name", "")
         params["G3 Target"] = vals.get("G3_target_name", "")
 
-        self._prepare_log_file(params)
         self._open_run_log(params)  # ★ 헤더를 가장 먼저
         self.append_log("MAIN", "입력 검증 통과 → 장비 연결 확인 시작")
         self._safe_start_process(cast(NormParams, params))
@@ -2586,13 +2578,9 @@ class ChamberRuntime:
             if not self._log_writer_task or self._log_writer_task.done():
                 self._set_task_later("_log_writer_task", self._log_writer_loop(), name=f"LogWriter.CH{self.ch}")
 
-            # 4) 헤더 뒤에 pre-start 로그를 순서대로 밀어넣음
-            try:
-                while self._prestart_buf:
-                    self._log_enqueue_nowait(self._prestart_buf.popleft())
-            finally:
-                with contextlib.suppress(Exception):
-                    self._prestart_buf.clear()
+            # 4) 이전 pre-start 로그는 섞지 않고 버린다(깨끗한 파일 시작)
+            with contextlib.suppress(Exception):
+                self._prestart_buf.clear()
 
         self.append_log("Logger", f"새 로그 파일 시작: {path.name}")
 
@@ -2619,7 +2607,12 @@ class ChamberRuntime:
     async def _log_writer_loop(self):
         try:
             while True:
-                line = await self._log_q.get()
+                try:
+                    line = self._log_q.get_nowait()
+                except asyncio.QueueEmpty:
+                    await asyncio.sleep(0.05)
+                    continue
+
                 if self._log_fp is None:
                     if self._log_file_path:
                         try:
