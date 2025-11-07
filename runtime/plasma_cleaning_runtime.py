@@ -493,9 +493,16 @@ class PlasmaCleaningRuntime:
 
                 # 컨트롤러 쪽에 스택트레이스 남기지 않도록 '정상적인 중단'으로만 신호
                 raise asyncio.CancelledError()
-            except Exception:
+            except Exception as e:
+                reason = f"RF Power 도달 실패: {type(e).__name__}: {e!s}"
+                self.append_log("RF", reason)
+                if getattr(self, "pc", None):
+                    self.pc.last_result = "fail"
+                    self.pc.last_reason = reason
                 self._process_timer_active = False
-                raise
+                with contextlib.suppress(Exception):
+                    await self._safe_rf_stop()
+                raise asyncio.CancelledError()
 
         # (통일) 모든 종료 경로는 안전 정지 루틴 사용 → 램프다운 완료까지 대기
         async def _rf_stop() -> None:
