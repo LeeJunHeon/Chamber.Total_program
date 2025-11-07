@@ -637,12 +637,10 @@ class AsyncDCPulse:
         if not resp or len(resp) < 2:
             return None, b"", None
         cmd = resp[0]
-        chk = resp[-1]
-        data = resp[1:-1]  # 끝 1바이트는 체크섬 제외
-        # 워커가 ETX(0x03)를 남기는 경우 제거
-        if data and data[-1] == 0x03:
+        data = resp[1:]          # ✅ 마지막 바이트를 CHK로 오인하지 않음
+        if data and data[-1] == 0x03:  # 혹시 ETX가 섞여 들어온 드문 경우만 방어적으로 제거
             data = data[:-1]
-        return cmd, data, chk
+        return cmd, data, None   # ✅ CHK는 원래 큐에 안 들어오므로 None
 
     # ❷ [ADD] 1B/2B 데이터 모두 수용하는 플래그 추출
     def _flags16_from_data(self, data: bytes) -> int | None:
