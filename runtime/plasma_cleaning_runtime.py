@@ -216,6 +216,9 @@ class PlasmaCleaningRuntime:
                 elif ev.kind == "target_reached":   # ★ 추가
                     self.append_log("RF", "목표 파워 도달")
                     self._rf_target_evt.set()
+                elif ev.kind == "target_failed":                     # ★ 추가(3줄)
+                    self.append_log("RF", f"목표 파워 실패: {ev.message or '장비 확인'}")
+                    self._rf_target_evt.set()
                 elif ev.kind == "power_off_finished":   # ★ 추가
                     self.append_log("RF", "Power OFF finished")
         except asyncio.CancelledError:
@@ -461,9 +464,35 @@ class PlasmaCleaningRuntime:
                 # ▶ 이제부터만 ProcessTime_edit에 카운트다운을 표시
                 self._process_timer_active = True
             except asyncio.TimeoutError:
-                self.append_log("RF", "목표 파워 미도달(60s timeout) → 중단")
+                # 마지막 FWD 값을 한 번 읽어서 원인 문구를 더 구체화(장비 OFF/SET 미설정 vs 단순 timeout)
+                last_fwd = None
+                try:
+                    meas = await self.plc.rf_read_fwd_ref(rf_ch=1) if self.plc else None
+                    if meas is not None:
+                        last_fwd = float(meas.get("forward", 0.0))
+                except Exception:
+                    pass
+
+                if last_fwd is not None and last_fwd <= 0.5:
+                    reason = "RF Power 도달 실패: 장비 OFF/SET 미설정(0W 지속/응답 없음)"
+                elif last_fwd is not None:
+                    reason = f"RF Power 도달 실패: timeout 60s (마지막 FWD={last_fwd:.1f}W)"
+                else:
+                    reason = "RF Power 도달 실패: timeout 60s"
+
+                # 로그 + 컨트롤러에 '의도된 실패' 사유 전달
+                self.append_log("RF", reason)
+                if getattr(self, "pc", None):
+                    self.pc.last_result = "fail"
+                    self.pc.last_reason = reason
+
+                # 안전 정지까지 수행(램프다운 시도)
                 self._process_timer_active = False
-                raise
+                with contextlib.suppress(Exception):
+                    await self._safe_rf_stop()
+
+                # 컨트롤러 쪽에 스택트레이스 남기지 않도록 '정상적인 중단'으로만 신호
+                raise asyncio.CancelledError()
             except Exception:
                 self._process_timer_active = False
                 raise
