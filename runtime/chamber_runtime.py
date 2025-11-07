@@ -2239,11 +2239,6 @@ class ChamberRuntime:
             self._post_warning("선택 오류", "RF Pulse, RF Power, DC 중 하나 이상 선택")
             return None
 
-        # RF Power는 DC와 함께만 사용(단독 금지)
-        if use_rf_power and not use_dc:
-            self._post_warning("선택 오류", "RF Power는 DC와 함께만 사용할 수 있습니다.")
-            return None
-
         # RF Pulse와 RF Power 동시 금지
         if use_rf_pulse and use_rf_power:
             self._post_warning("선택 오류", "RF Pulse와 RF Power는 동시에 선택할 수 없습니다.")
@@ -3134,11 +3129,7 @@ class ChamberRuntime:
 
             if not (p.get("use_rf_pulse") or p.get("use_dc_power") or p.get("use_rf_power")):
                 errs.append("RF Pulse, RF Power, DC Power 중 하나 이상 선택 필요")
-
-            # RF Power는 DC와 함께만 허용
-            if p.get("use_rf_power") and not p.get("use_dc_power"):
-                errs.append("RF Power는 DC와 함께만 선택 가능합니다.")
-
+                
             # RF Pulse와 RF Power 동시 금지
             if p.get("use_rf_pulse") and p.get("use_rf_power"):
                 errs.append("RF Pulse와 RF Power는 동시에 선택할 수 없습니다.")

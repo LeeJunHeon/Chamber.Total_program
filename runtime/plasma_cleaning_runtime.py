@@ -762,14 +762,12 @@ class PlasmaCleaningRuntime:
 
         finally:
             # [A] 🔁 순서 변경: 종료 통지 먼저 (runtime_state 즉시 해제 + 종료 챗 선송)
-            self.append_log("MAIN", "[FINALLY] notify_finish_once 진입")
             try:
                 await self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final)  # ← 순서 ↑
             except Exception as e:
                 self.append_log("PC", f"notify_finish_once error: {e!r}")
 
             # [B] 그 다음 장치/태스크 정리 (오래 걸려도 상관없음)
-            self.append_log("MAIN", "[FINALLY] final_cleanup 진입")
             await self._final_cleanup()
 
             # [C] 마지막으로 UI 복구
