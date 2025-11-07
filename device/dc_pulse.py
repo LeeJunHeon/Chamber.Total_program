@@ -1053,14 +1053,8 @@ class AsyncDCPulse:
                             v = float(eng.get("V_V", 0.0))
                             i = float(eng.get("I_A", 0.0))
 
-                            # ★ 항상 비교: Power가 '정확히 0'이면 공정 중단
-                            if p == 0.0:
-                                # 이벤트만 올리고 종료(콜백 사용 안 함)
-                                self._ev_nowait(DCPEvent(kind="command_failed", cmd="AUTO_STOP", reason="target_failed"))
-                                await self._emit_status("[AUTO-STOP] Power=0W → OUTPUT_OFF & stop polling")
-                                with contextlib.suppress(Exception):
-                                    await self.output_off()
-                                return
+                            # ★ Power=0W도 '세트포인트 이탈'로 통합 처리 (별도의 즉시 정지 없음)
+                            #    → 아래 세트포인트 비교 로직에서 연속 N회 이탈 시에만 AUTO-STOP
                             
                             # ② 세트포인트 근접 확인 (허용오차: max(절대 W, 퍼센트))
                             ref = float(self._last_ref_power_w or 0.0)
