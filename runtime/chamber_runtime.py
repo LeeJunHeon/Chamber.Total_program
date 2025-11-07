@@ -719,8 +719,11 @@ class ChamberRuntime:
                     self._run_started_wall = datetime.now()
                     self._oes_active = False  # OES는 별도 cb에서 True로 바꿈
 
-                    # Plasma Cleaning 스타일 헤더 포함한 오픈
-                    self._open_run_log(params)  # ← 새로 추가한 함수
+                    # Plasma Cleaning 스타일 헤더 포함한 오픈 (중복 방지)
+                    if not getattr(self, "_log_file_path", None):
+                        self._open_run_log(params)
+                    else:
+                        self.append_log("Logger", f"이미 열린 로그 파일 사용: {self._log_file_path.name}")
 
                     try:
                         self.data_logger.start_new_log_session(params)
@@ -1883,7 +1886,7 @@ class ChamberRuntime:
         params["G2 Target"] = vals.get("G2_target_name", "")
         params["G3 Target"] = vals.get("G3_target_name", "")
 
-        self._open_run_log(params)  # ★ 헤더를 가장 먼저
+        # ❌ 여기서는 파일을 열지 않습니다. (started 이벤트에서 1회 오픈)
         self.append_log("MAIN", "입력 검증 통과 → 장비 연결 확인 시작")
         self._safe_start_process(cast(NormParams, params))
 
@@ -2578,8 +2581,10 @@ class ChamberRuntime:
             if not self._log_writer_task or self._log_writer_task.done():
                 self._set_task_later("_log_writer_task", self._log_writer_loop(), name=f"LogWriter.CH{self.ch}")
 
-            # 4) 이전 pre-start 로그는 섞지 않고 버린다(깨끗한 파일 시작)
+            # 4) pre-start 버퍼를 파일에 옮긴 뒤 비운다(초반 상황도 기록 보존)
             with contextlib.suppress(Exception):
+                for line in list(self._prestart_buf):
+                    self._log_enqueue_nowait(line)
                 self._prestart_buf.clear()
 
         self.append_log("Logger", f"새 로그 파일 시작: {path.name}")
