@@ -65,7 +65,6 @@ class PreSputterRuntime:
 
         self._ui = ui # ★ UI 참조 (없으면 None)
         self._ui_bound: bool = False            # ★ 추가: 중복 바인딩 방지
-        self._base_pressure_text: Optional[str] = None  # ★ 추가: Start시 저장해 둘 Base Pressure
 
         # 어떤 챔버용 런타임인지 로그에 표기하려고 라벨 보유
         if ch1 and not ch2:
@@ -116,7 +115,7 @@ class PreSputterRuntime:
             return
         self._ui = ui
 
-        # Start → UI의 시간/베이스프레셔로 매일 예약 파라미터 갱신
+        # Start → UI의 ‘시간’으로만 매일 예약 파라미터 갱신 (Base Pressure 무시)
         try:
             if hasattr(ui, "preSputter_Start_button"):
                 ui.preSputter_Start_button.clicked.connect(self._on_start_clicked)
@@ -298,14 +297,6 @@ class PreSputterRuntime:
                 try: lab.setText("Invalid time (HH:MM)")
                 except Exception: pass
             return
-
-        bp_txt = self._read_base_pressure_from_ui()
-        if bp_txt and bp_txt.strip():
-            self._base_pressure_text = bp_txt.strip()
-            self._log(f"[설정] Base Pressure 고정: {self._base_pressure_text}")
-        else:
-            self._base_pressure_text = None
-            self._log("[설정] Base Pressure 미입력 → 각 챔버 UI값 사용")
 
         self.hh, self.mm = int(hh), int(mm)
         self.start_daily()

@@ -55,7 +55,7 @@ class RFPowerAsync:
         toggle_enable: Optional[Callable[[bool], Awaitable[None]]] = None,  # ← 추가 (DCV_SET_1 토글용)
         poll_interval_ms: int = 1000,
         rampdown_interval_ms: int = 50,
-        initial_step_w: float = 6.0,
+        initial_step_w: float = 1.0,
         reflected_threshold_w: float = 10.0,
         reflected_wait_timeout_s: float = 60.0,
         maintain_need_consecutive: int = 2,
@@ -80,7 +80,8 @@ class RFPowerAsync:
 
         # 파라미터
         self._poll_interval_ms = int(poll_interval_ms)
-        self._rampdown_interval_ms = int(rampdown_interval_ms)
+        # ✅ 램프다운 슬립을 폴링 주기와 동일하게 강제 → up/down 1 W/s 일치
+        self._rampdown_interval_ms = int(self._poll_interval_ms)
         self._initial_step_w = float(initial_step_w)
         self._ref_th_w = float(reflected_threshold_w)
         self._ref_wait_to_s = float(reflected_wait_timeout_s)
