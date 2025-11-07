@@ -590,47 +590,68 @@ class AsyncDCPulse:
             intended_on = (label == "OUTPUT_ON")
             ack_ok = bool(resp and len(resp) == 1 and resp[0] == 0x06)
 
-            if ack_ok:
-                self._out_on = intended_on
-                await self._emit_confirmed(label)
-                if intended_on:
-                    # 활성화 유예(기존과 동일)
+            # === OUTPUT_ON: 기존 동작 그대로 유지 ===
+            if intended_on:
+                if ack_ok:
+                    self._out_on = True
+                    await self._emit_confirmed(label)
                     try:
                         await asyncio.sleep(ACTIVATION_CHECK_DELAY_S)
                     except Exception:
                         pass
-                    self.set_process_status(True)  # 폴링 재개
-                else:
-                    self.set_process_status(False) # OFF면 폴링 유지 중지
+                    self.set_process_status(True)
+                    return True
+                # ACK 미수신 시에도 ON 쪽은 추가 확인 없이 기존 로직 유지
+                await asyncio.sleep(0.08)
+                ver = await self._verify_output_state()
+                if ver is True:
+                    self._out_on = True
+                    await self._emit_confirmed(label + "_VERIFIED")
+                    try:
+                        await asyncio.sleep(ACTIVATION_CHECK_DELAY_S)
+                    except Exception:
+                        pass
+                    self.set_process_status(True)
+                    return True
+                await self._emit_failed(label, "응답 없음/실패 (상태 불일치/확인 불가)")
+                return False
+
+            # === OUTPUT_OFF: P==0W 우선, STATUS(HV Off) 보조, 실패 시 1회 재시도 ===
+            # ACK 여부와 무관하게 빠른 교차확인
+            ok_off, p, hv_on = await self._confirm_off_quick()
+            if ok_off:
+                self._out_on = False
+                await self._emit_confirmed(label if ack_ok else (label + "_VERIFIED"))
+                self.set_process_status(False)  # OFF면 폴링 멈춤
                 return True
 
-            # ❗ ACK 미수신: 짧게 대기 후 상태로 재검증
-            await asyncio.sleep(0.08)
-            ver = await self._verify_output_state()
-            if ver is not None:
-                self._out_on = ver
-                if ver == intended_on:
-                    await self._emit_confirmed(label + "_VERIFIED")
-                    if intended_on:
-                        try:
-                            await asyncio.sleep(ACTIVATION_CHECK_DELAY_S)
-                        except Exception:
-                            pass
-                        self.set_process_status(True)
-                    else:
-                        self.set_process_status(False)
-                    return True
+            # 둘 다 불만족(P>0W AND HV On=True) → OFF 재전송 1회
+            await self._emit_status(
+                f"OFF 미확인(P={p if p is not None else 'NA'} W, HV={'ON' if hv_on else 'OFF/NA'}) → OUTPUT_OFF 재시도"
+            )
+            fut2 = asyncio.get_running_loop().create_future()
+            self._enqueue(Command(
+                self._proto.pack_write(0x80, 0x0002, width=2),
+                "OUTPUT_OFF(retry)", DCP_TIMEOUT_MS, DCP_GAP_MS, 1,
+                lambda r: fut2.set_result(r if not fut2.done() else None)
+            ))
+            _ = await self._await_reply_bytes("OUTPUT_OFF(retry)", fut2)
 
-            await self._emit_failed(label, "응답 없음/실패 (상태 불일치/확인 불가)")
+            # 재전송 후 다시 확인
+            ok_off2, p2, hv_on2 = await self._confirm_off_quick()
+            if ok_off2:
+                self._out_on = False
+                await self._emit_confirmed(label if ack_ok else (label + "_VERIFIED"))
+                self.set_process_status(False)
+                return True
+
+            await self._emit_failed(
+                label,
+                f"장비 상태 불일치(OFF 미확인) — P={p2 if p2 is not None else 'NA'} W, HV={'ON' if hv_on2 else 'OFF/NA'}"
+            )
+            # OFF가 보장되지 않았다면 폴링을 계속 멈추는 것이 안전
+            self.set_process_status(False)
             return False
-
-        # (그 외 명령은 기존 로직 유지)
-        ok = self._ok_from_resp(resp)
-        if ok:
-            await self._emit_confirmed(label)
-            return True
-        await self._emit_failed(label, "응답 없음/실패")
-        return False
         
     # ❶ [ADD] RS-232 payload 분해 헬퍼: [CMD][DATA...][(ETX?)][CHK] → (cmd, data, chk)
     def _unpack_rs232_payload(self, resp: bytes):
@@ -683,6 +704,34 @@ class AsyncDCPulse:
         if flags is None:
             return None
         return self._hv_on_from_status(flags)
+    
+    async def _confirm_off_quick(self) -> tuple[bool, Optional[float], Optional[bool]]:
+        """
+        OUTPUT_OFF 후 빠른 교차 확인:
+        - 주판정: READ_PIV → P==0W이면 OK
+        - 보조판정: READ_STATUS → HV On=False 이면 OK
+        둘 다 불만족(P>0W 그리고 HV On=True)이면 False 반환.
+        반환: (ok, P_W or None, hv_on or None)
+        """
+        # 1) 실제 전력(P) 확인
+        piv = await self.read_output_piv()
+        p = None
+        if piv and "eng" in piv:
+            try:
+                p = float(piv["eng"].get("P_W", 0.0))
+            except Exception:
+                p = None
+
+        # 2) 상태(HV On) 확인
+        flags = await self.read_status_flags()
+        hv_on = None
+        if flags is not None:
+            hv_on = self._hv_on_from_status(flags)
+
+        # 판정: P==0W이면 OK, 아니면 보조로 HV Off면 OK
+        ok = (p is not None and p == 0.0) or (hv_on is False)
+        return ok, p, hv_on
+
     # ===================== 실패시 검증하는 로직 =====================
 
     async def _write_simple(self, code: int, *, label: str):
