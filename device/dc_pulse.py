@@ -653,6 +653,14 @@ class AsyncDCPulse:
             self.set_process_status(False)
             return False
         
+        # ▶ 일반 쓰기 명령(REF_POWER, REG_POWER 등)은 여기서 ACK 기반으로 반환을 보장
+        ok = self._ok_from_resp(resp, label=label)
+        if ok:
+            await self._emit_confirmed(label)     # 선택: 성공 이벤트 남김
+            return True
+        await self._emit_failed(label, "응답 없음/실패")
+        return False
+        
     # ❶ [ADD] RS-232 payload 분해 헬퍼: [CMD][DATA...][(ETX?)][CHK] → (cmd, data, chk)
     def _unpack_rs232_payload(self, resp: bytes):
         if not resp or len(resp) < 2:
