@@ -609,12 +609,24 @@ class ProcessController:
         fut = self._set_expect(tokens)
         if fut is not None:
             try:
+                # 전원 OFF 계열 스텝은 중지(Shutdown) 시에도 반드시 완료 이벤트를 기다린다.
+                hard_wait_actions = {
+                    ActionType.RF_POWER_STOP,
+                    ActionType.DC_POWER_STOP,
+                    ActionType.RF_PULSE_STOP,
+                    ActionType.DC_PULSE_STOP,
+                }
+
                 if self._shutdown_in_progress:
-                    # ✅ 종료 시퀀스: abort 무시 + 타임아웃 대기
-                    try:
-                        await asyncio.wait_for(fut, timeout=max(0.001, SHUTDOWN_STEP_TIMEOUT_MS) / 1000.0)
-                    except asyncio.TimeoutError:
-                        self._emit_log("Process", "종료 스텝 확인 시간 초과 → 다음 스텝 진행")
+                    if step.action in hard_wait_actions:
+                        # ⚠️ 램프다운/전원 OFF 완료 이벤트를 무조건 기다림 (타임아웃 없음)
+                        await fut
+                    else:
+                        # 종료 시퀀스 중이지만 전원 OFF가 아닌 스텝은 기존처럼 타임아웃 적용
+                        try:
+                            await asyncio.wait_for(fut, timeout=max(0.001, SHUTDOWN_STEP_TIMEOUT_MS) / 1000.0)
+                        except asyncio.TimeoutError:
+                            self._emit_log("Process", "종료 스텝 확인 시간 초과 → 다음 스텝 진행")
                 else:
                     # 평시: abort와 경쟁(비상 상황이면 abort 무시하지 않고 즉시 전환)
                     aborted = await self._wait_or_abort(fut, allow_abort=not self._in_emergency)

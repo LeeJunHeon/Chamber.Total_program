@@ -56,7 +56,7 @@ class RFPowerAsync:
         poll_interval_ms: int = 1000,
         rampdown_interval_ms: int = 50,
         initial_step_w: float = 1.0,
-        reflected_threshold_w: float = 10.0,
+        reflected_threshold_w: float = 20.0,
         reflected_wait_timeout_s: float = 60.0,
         maintain_need_consecutive: int = 2,
         direct_mode: bool = False,   # ★ 추가: 즉시 설정/즉시 OFF 모드
