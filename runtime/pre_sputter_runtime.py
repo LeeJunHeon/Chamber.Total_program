@@ -155,18 +155,6 @@ class PreSputterRuntime:
                 except Exception: pass
             return
 
-        bp_txt = self._read_base_pressure_from_ui()
-
-        # ★ Base Pressure 처리 규칙
-        # - 값이 있으면: 그 값을 '고정값'으로 저장 → 실행 직전에 두 챔버 UI에 주입
-        # - 값이 없으면: 고정값을 지워(None)서 '주입'을 하지 않음 → 각 챔버 UI의 현재 값 사용
-        if bp_txt and bp_txt.strip():
-            self._base_pressure_text = bp_txt.strip()
-            self._log(f"[설정] Base Pressure 고정: {self._base_pressure_text}")
-        else:
-            self._base_pressure_text = None
-            self._log("[설정] Base Pressure 미입력 → 각 챔버 UI값 사용")
-
         # 1) 파라미터 갱신
         self.hh, self.mm = int(hh), int(mm)
 
@@ -191,30 +179,6 @@ class PreSputterRuntime:
         if not (0 <= hh <= 23 and 0 <= mm <= 59):
             return (None, None)
         return (hh, mm)
-
-    def _read_base_pressure_from_ui(self) -> Optional[str]:
-        """preSputter_basePressure_edit에서 텍스트를 그대로 가져온다(과학표기 허용)."""
-        ui = self._ui
-        if not ui: return None
-        w = getattr(ui, "preSputter_basePressure_edit", None)
-        if not w: return None
-        try:
-            txt = w.toPlainText().strip()
-        except Exception:
-            return None
-        return txt or None
-    
-    def _apply_base_pressure_to_ch_ui(self) -> None:
-        # ★ _base_pressure_text가 없으면 아무 것도 주입하지 않음 → 각 챔버 UI의 값 그대로 사용
-        if not self._ui or not self._base_pressure_text:
-            return
-        for name in ("ch1_basePressure_edit", "ch2_basePressure_edit"):
-            w = getattr(self._ui, name, None)
-            if w:
-                try:
-                    w.setPlainText(self._base_pressure_text)
-                except Exception:
-                    pass
 
     async def start_once_now(self, *, parallel: Optional[bool] = None) -> None:
         """
@@ -279,8 +243,6 @@ class PreSputterRuntime:
 
     async def _run_parallel(self) -> None:
         # 같은 챔버의 중복 실행만 막고(CH간은 허용), 둘 다 트리거
-        self._apply_base_pressure_to_ch_ui()  # ★ 추가: 실행 직전 주입
-
         started = []
         if self.ch1 and not self.ch1.is_running:
             ok = self.ch1.start_presputter_from_ui()
@@ -312,7 +274,6 @@ class PreSputterRuntime:
             return
         if ch.is_running:
             self._log(f"[PreSputter] {label} 이미 실행 중 → 건너뜀"); return
-        self._apply_base_pressure_to_ch_ui()  # ★ 추가: 실행 직전 주입
         ok = ch.start_presputter_from_ui()
         if not ok:
             self._log(f"[PreSputter] {label} 시작 실패"); return
