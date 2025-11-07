@@ -382,7 +382,7 @@ class ChamberRuntime:
                 toggle_enable=_rf_toggle_enable,
                 poll_interval_ms=1000,
                 rampdown_interval_ms=50,
-                direct_mode=True,
+                direct_mode=False,
                 # 필요 시 CH2 전용 역변환 계수로 조정. 없으면 Plasma Cleaning과 동일값 사용 가능.
                 write_inv_a=1.6546,   # ← 엑셀 기반 역보정
                 write_inv_b=2.6323,   # ← (입력W = 1.6546*목표W + 2.6323)
