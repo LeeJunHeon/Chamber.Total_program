@@ -1049,12 +1049,13 @@ class ChamberRuntime:
             if k == "status":
                 self.append_log(f"RF{self.ch}", ev.message or "")
             elif k == "display":
+                fwd = float(ev.forward or 0.0)
+                ref = float(ev.reflected or 0.0)
+                # 데이터 로거 저장 + UI 갱신 + 텍스트 로그
                 with contextlib.suppress(Exception):
-                    self.data_logger.log_rf_power(
-                        float(ev.forward   or 0.0),
-                        float(ev.reflected or 0.0),
-                    )
-                self._display_rf(ev.forward, ev.reflected)
+                    self.data_logger.log_rf_power(fwd, ref)
+                self._display_rf(fwd, ref)
+                self.append_log(f"RF{self.ch}", f"[poll] fwd={fwd:.1f}W, ref={ref:.1f}W")
             elif k == "target_reached":
                 self.process_controller.on_rf_target_reached()
             elif k == "target_failed":

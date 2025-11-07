@@ -359,6 +359,9 @@ class RFPowerAsync:
             step_w = float(RF_RAMP_STEP)
             while self._is_ramping_down:
                 if self._rampdown_w <= 0.0:
+                    # ★ 0W 전송 직전, 실제 전송값(보정 우회값)을 로그로 남김
+                    scaled0 = self._xform_write(0.0)
+                    await self._emit_status(f"Ramp-Down final: target=0.0W → write={scaled0:.3f}W")
                     await self._set_rf_unverified(0.0)
                     self._ev_nowait(RFPowerEvent(kind="display", forward=0.0, reflected=0.0))
 
@@ -377,6 +380,11 @@ class RFPowerAsync:
                     return
                 self._rampdown_w = max(0.0, self._rampdown_w - step_w)
                 self._last_sent_w = self._rampdown_w
+                # ★ 단계별 전송값도 상태 로그 남김
+                scaled = self._xform_write(self._rampdown_w)
+                await self._emit_status(
+                    f"Ramp-Down step: target={self._rampdown_w:.1f}W → write={scaled:.3f}W"
+                )
                 await self._set_rf_unverified(self._rampdown_w)
                 await asyncio.sleep(self._rampdown_interval_ms / 1000.0)
         except asyncio.CancelledError:
@@ -505,12 +513,10 @@ class RFPowerAsync:
 
     # ======= 이벤트/유틸 =======
     def _xform_write(self, desired_forward_w: float) -> float:
-        """
-        제어 목표(PLC가 읽어줄 fwd W) → 장비에 쓸 입력값(PLC에 기록할 W)
-        선형 역변환: input = a*target + b
-        """
+        # ★ 0W는 보정 우회(절편 b 제거)해서 '진짜 0'을 쓰도록
+        if desired_forward_w <= 0.01:
+            return 0.0
         v = self._w_inv_a * float(desired_forward_w) + self._w_inv_b
-        # RF_MAX_POWER 범위에 맞춰 클램프
         return max(0.0, min(float(RF_MAX_POWER), v))
     
     async def wait_power_off(self, timeout_s: float = 8.0) -> bool:
