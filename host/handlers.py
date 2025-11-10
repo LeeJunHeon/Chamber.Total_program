@@ -80,6 +80,7 @@ class HostHandlers:
     async def vacuum_on(self, data: Json) -> Json:
         """
         VACUUM ON 시퀀스:
+        0) L_VENT_SW = False 선행 정지
         1) L_R_P_SW = True  (러핑펌프 ON)
         2) L_R_V_인터락 == True 확인
         3) L_R_V_SW = True  (러핑밸브 ON)
@@ -90,6 +91,10 @@ class HostHandlers:
 
         async with self.ctx.lock_plc:
             try:
+                # 0) L_VENT_SW OFF
+                await self.ctx.plc.write_switch("L_VENT_SW", False)
+                await asyncio.sleep(0.5)  # 권장: 짧은 안정화
+
                 # 1) 러핑펌프 ON
                 await self.ctx.plc.write_switch("L_R_P_SW", True)
 
@@ -139,6 +144,7 @@ class HostHandlers:
     async def vacuum_off(self, data: Json) -> Json:
         """
         VACUUM OFF 시퀀스:
+        0) L_R_V_SW=False → L_R_P_SW=False 선행 정지
         1) L_VENT_인터락 True 확인
         2) L_VENT_SW = True (벤트 시작)
         3) L_ATM == True 까지 대기 (기본 240s)
@@ -148,6 +154,11 @@ class HostHandlers:
 
         async with self.ctx.lock_plc:
             try:
+                # 0) L_R_V_SW=False → L_R_P_SW=False 선행 정지
+                await self.ctx.plc.write_switch("L_R_V_SW", False)
+                await asyncio.sleep(0.5)  # 짧은 안정화
+                await self.ctx.plc.write_switch("L_R_P_SW", False)
+
                 # 1) 인터락 확인
                 interlock_ok = await self.ctx.plc.read_bit("L_VENT_인터락")
                 if not interlock_ok:
