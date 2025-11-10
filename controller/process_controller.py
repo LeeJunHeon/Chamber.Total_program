@@ -1212,7 +1212,7 @@ class ProcessController:
                 action=ActionType.DELAY,
                 duration=int(round(shutter_delay_sec * 1000.0)),
                 message=f'Shutter Delay {shutter_delay_min}분',
-                polling=True,                  
+                polling=False,                  
             ))
 
         if use_ms:
