@@ -924,6 +924,19 @@ class PlasmaCleaningRuntime:
         """공정 실행 중 UI 상태 (Start 비활성, Stop 활성)"""
         self._apply_button_state(start_enabled=False, stop_enabled=True)
 
+    def _skip_mfc_finalize_due_to_ch1(self) -> bool:
+        """
+        CH2에서 Plasma Cleaning을 하는 동안 CH1 'chamber' 공정이 돌고 있다면,
+        MFC 폴링/상태 리셋은 CH1의 소유권을 침범하므로 생략한다.
+        """
+        try:
+            # PC가 CH2 선택 + CH1 chamber 실행 중일 때만 스킵
+            return int(getattr(self, "_selected_ch", 1)) == 2 and \
+                   bool(runtime_state.is_running("chamber", 1))
+        except Exception:
+            return False
+
+
     async def _shutdown_rest_devices(self) -> None:
         """
         RF가 완전히 내려간 뒤 실행할 공용 ‘종료 시퀀스’.
@@ -949,16 +962,20 @@ class PlasmaCleaningRuntime:
 
         # 3) 폴링 완전 종료 및 내부 상태 리셋 (gas/pressure MFC)
         with contextlib.suppress(Exception):
-            if self.mfc_gas:
-                if hasattr(self.mfc_gas, "on_process_finished"):
-                    self.mfc_gas.on_process_finished(False)
-                elif hasattr(self.mfc_gas, "set_process_status"):
-                    self.mfc_gas.set_process_status(False)
-            if self.mfc_pressure:
-                if hasattr(self.mfc_pressure, "on_process_finished"):
-                    self.mfc_pressure.on_process_finished(False)
-                elif hasattr(self.mfc_pressure, "set_process_status"):
-                    self.mfc_pressure.set_process_status(False)
+            skip_finalize = self._skip_mfc_finalize_due_to_ch1()
+            if skip_finalize:
+                self.append_log("MFC", "CH1 공정 중 → MFC 폴링/상태 리셋 생략")
+            else:
+                if self.mfc_gas:
+                    if hasattr(self.mfc_gas, "on_process_finished"):
+                        self.mfc_gas.on_process_finished(False)
+                    elif hasattr(self.mfc_gas, "set_process_status"):
+                        self.mfc_gas.set_process_status(False)
+                if self.mfc_pressure:
+                    if hasattr(self.mfc_pressure, "on_process_finished"):
+                        self.mfc_pressure.on_process_finished(False)
+                    elif hasattr(self.mfc_pressure, "set_process_status"):
+                        self.mfc_pressure.set_process_status(False)
 
         # 3) 게이트밸브 OPEN 유지(정책) — 닫기 생략
         self.append_log("STEP", f"종료: GateValve CH{self._selected_ch} 유지(OPEN)")
