@@ -37,7 +37,7 @@ class HostHandlers:
             # L_ATM=False(비대기압)-> vacuum=True
             atm = await self.ctx.plc.read_bit("L_ATM")
             vacuum = (not bool(atm))
-            
+
             return self._ok(state=state, vacuum=vacuum)
         except Exception as e:
             return self._fail(e)
@@ -203,8 +203,8 @@ class HostHandlers:
                 if not interlock_ok:
                     return self._fail("L_PIN_인터락=FALSE → 4PIN_UP 불가")
 
-                # 2) SW = True
-                await self.ctx.plc.write_switch("L_PIN_UP_SW", True)
+                # 2) SW = True (순간 펄스 방식)
+                await self.ctx.plc.press_switch("L_PIN_UP_SW")
 
                 # 3) 10초 대기 후 램프 확인
                 await asyncio.sleep(wait_s)
@@ -232,8 +232,8 @@ class HostHandlers:
                 if not interlock_ok:
                     return self._fail("L_PIN_인터락=FALSE → 4PIN_DOWN 불가")
 
-                # 2) SW = True
-                await self.ctx.plc.write_switch("L_PIN_DOWN_SW", True)
+                # 2) SW = True (순간 펄스 방식)
+                await self.ctx.plc.press_switch("L_PIN_DOWN_SW")
 
                 # 3) 10초 대기 후 램프 확인
                 await asyncio.sleep(wait_s)
@@ -271,8 +271,8 @@ class HostHandlers:
                 if not il:
                     return self._fail(f"{interlock}=FALSE → CH{ch}_GATE_OPEN 불가")
 
-                # 2) 스위치 TRUE
-                await self.ctx.plc.write_switch(sw, True)
+                # 2) 스위치 TRUE (순간 펄스 방식)
+                await self.ctx.plc.press_switch(sw)
 
                 # 3) 대기 후 램프 확인
                 await asyncio.sleep(wait_s)
@@ -309,8 +309,8 @@ class HostHandlers:
                 if not il:
                     return self._fail(f"{interlock}=FALSE → CH{ch}_GATE_CLOSE 불가")
 
-                # 2) 스위치 TRUE
-                await self.ctx.plc.write_switch(sw, True)
+                # 2) 스위치 TRUE (순간 펄스 방식)
+                await self.ctx.plc.press_switch(sw)
 
                 # 3) 대기 후 램프 확인
                 await asyncio.sleep(wait_s)
@@ -343,8 +343,8 @@ class HostHandlers:
         try:
             lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
             async with lock:
-                # 1) 스위치 TRUE
-                await self.ctx.plc.write_switch(sw_name, True)
+                # 1) 스위치 TRUE (순간 펄스 방식)
+                await self.ctx.plc.press_switch(sw_name)
 
                 # 2) 대기 후 램프 확인
                 await asyncio.sleep(wait_s)
@@ -377,8 +377,8 @@ class HostHandlers:
         try:
             lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
             async with lock:
-                # 1) 스위치 TRUE
-                await self.ctx.plc.write_switch(sw_name, True)
+                # 1) 스위치 TRUE (순간 펄스 방식)
+                await self.ctx.plc.press_switch(sw_name)
 
                 # 2) 대기 후 램프 확인
                 await asyncio.sleep(wait_s)
