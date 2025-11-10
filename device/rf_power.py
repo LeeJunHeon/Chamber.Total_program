@@ -161,7 +161,17 @@ class RFPowerAsync:
             self.state = "RAMPING_UP"
             await self._emit_status(f"Direct set: {self.target_power:.1f} W")
 
-            # 폴링 활성화/재시작 (표시/로그 유지를 위해)
+            # 1) 목표 W 1회 전송 + 기준 동기화(먼저!)
+            try:
+                await self._send_rf_power(float(self.target_power))
+                self.current_power_step = float(self.target_power)
+                self._last_sent_w = float(self.target_power)
+                await self._emit_status(f"Direct set {self.target_power:.1f}W 전송 — 도달 판정 대기")
+            except Exception as e:
+                await self._emit_status(f"Direct set 실패: {e!r}")
+                return  # 전송 실패 시 여기서 종료
+
+            # 2) 그 다음 폴링 활성화/재시작
             self._polling_enabled = True
             if self._request_status_read is not None:
                 if self._poll_task and not self._poll_task.done():
@@ -175,15 +185,8 @@ class RFPowerAsync:
             else:
                 await self._emit_status("상태읽기 콜백 없음 → 측정 없이 진행")
 
-            # 목표 W를 즉시 1회 전송만 하고, '도달 판단'은 폴링/보정 루프에 맡김
-            try:
-                await self._send_rf_power(float(self.target_power))
-                self.current_power_step = float(self.target_power)
-                self._last_sent_w = float(self.target_power)   # ★ 추가: 마지막 전송값 캐시(권장)
-                await self._emit_status(f"Direct set {self.target_power:.1f}W 전송 — 도달 판정 대기")
-            except Exception as e:
-                await self._emit_status(f"Direct set 실패: {e!r}")
             return
+
         # ========= 기존 램프업 경로(그대로 유지) =========
 
         self._is_running = True
