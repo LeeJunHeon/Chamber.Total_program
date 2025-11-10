@@ -853,16 +853,26 @@ class PlasmaCleaningRuntime:
         try:
             # (B) MFC 폴링/자동재연결 명시 중단
             with contextlib.suppress(Exception):
-                if self.mfc_gas:
-                    if hasattr(self.mfc_gas, "on_process_finished"):
-                        self.mfc_gas.on_process_finished(False)
-                    elif hasattr(self.mfc_gas, "set_process_status"):
-                        self.mfc_gas.set_process_status(False)
-                if self.mfc_pressure:
-                    if hasattr(self.mfc_pressure, "on_process_finished"):
-                        self.mfc_pressure.on_process_finished(False)
-                    elif hasattr(self.mfc_pressure, "set_process_status"):
-                        self.mfc_pressure.set_process_status(False)
+                skip_finalize = False
+                try:
+                    # CH2에서 PC 중이고 + CH1 Chamber가 실행 중이면 True
+                    skip_finalize = self._skip_mfc_finalize_due_to_ch1()
+                except Exception:
+                    pass
+
+                if skip_finalize:
+                    self.append_log("MFC", "CH1 공정 중 → MFC 폴링/상태 리셋 생략")
+                else:
+                    if self.mfc_gas:
+                        if hasattr(self.mfc_gas, "on_process_finished"):
+                            self.mfc_gas.on_process_finished(False)
+                        elif hasattr(self.mfc_gas, "set_process_status"):
+                            self.mfc_gas.set_process_status(False)
+                    if self.mfc_pressure:
+                        if hasattr(self.mfc_pressure, "on_process_finished"):
+                            self.mfc_pressure.on_process_finished(False)
+                        elif hasattr(self.mfc_pressure, "set_process_status"):
+                            self.mfc_pressure.set_process_status(False)
 
             # (C) RF/가스/SP4 안전 정지
             with contextlib.suppress(Exception):
