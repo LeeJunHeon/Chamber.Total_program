@@ -1625,66 +1625,6 @@ class AsyncMFC:
         # start()는 워치독/워커가 죽어있으면 살려주고, 살아있으면 아무것도 안 함
         await self.start()
 
-    # ====================== NPort 시리얼 해제 함수 (Windows 전용) ======================
-    # 클래스 차원의 최근 리셋 타임스탬프(너무 잦은 리셋 억제)
-    # _last_reset_mono: float = 0.0
-
-    # async def _force_release_nport_port(
-    #     self,
-    #     *,
-    #     dll_path: str | None = None,
-    #     override_port_index: int | None = None,
-    #     lock_timeout_ms: int = 15000,
-    #     cooldown_sec: float = 2.0,
-    # ):
-    #     """
-    #     IPSerial.dll(nsio_resetport)로 NPort 시리얼 포트의 TCP 세션을 강제 해제.
-    #     - 시스템 전역 네임드 뮤텍스(Global\...)로 '동시 호출'을 절대 허용하지 않음.
-    #     - 최근 몇 초 내 리셋 호출이 있었다면 쿨다운으로 skip.
-    #     - MFC_DISABLE_IPSERIAL_RESET=1 이면 즉시 skip.
-    #     """
-    #     if os.name != "nt":
-    #         return  # 비-Windows는 조용히 skip
-
-    #     # 긴급 차단 스위치(운영 중 신속 디버그용)
-    #     if os.environ.get("MFC_DISABLE_IPSERIAL_RESET", "").strip() in ("1","true","TRUE","yes","Y"):
-    #         await self._emit_status("[IPSerial] reset disabled by env(MFC_DISABLE_IPSERIAL_RESET)")
-    #         return
-
-    #     # 너무 잦은 리셋 방지
-    #     now = time.monotonic()
-    #     if (now - getattr(self, "_last_reset_mono", 0.0)) < float(cooldown_sec):
-    #         await self._emit_status(f"[IPSerial] skip: cooldown {cooldown_sec:.1f}s")
-    #         return
-
-    #     host, tcp_port = self._resolve_endpoint()
-    #     port_index = _guess_nport_index_from_tcp_port(tcp_port, override_port_index)
-
-    #     # 전역 뮤텍스 구간 — IG 등 다른 장치와 '절대' 동시에 들어가지 않음
-    #     with _WinGlobalMutex(_IPSERIAL_MUTEX_NAME, timeout_ms=int(lock_timeout_ms)) as mx:
-    #         if not mx.acquired:
-    #             await self._emit_status("[IPSerial] skip: failed to acquire global lock (timeout)")
-    #             return
-
-    #         def _work():
-    #             exe_dir = Path(sys.argv[0]).resolve().parent
-    #             default_dll = exe_dir / "dll" / "IPSerial.dll"
-    #             final_dll = str(dll_path or default_dll)
-    #             ipser = _MoxaIPSerial(final_dll)  # ← 싱글톤 DLL 재사용
-    #             rc = ipser.reset_port(host, port_index)
-    #             return rc, final_dll
-
-    #         loop = asyncio.get_running_loop()
-    #         rc, used_dll = await loop.run_in_executor(None, _work)
-
-    #     # 뮤텍스 해제 후 기록(성공/실패 여부와 무관)
-    #     self._last_reset_mono = time.monotonic()
-    #     await self._emit_status(
-    #         f"[IPSerial] reset: host={host}, index={port_index}, rc={rc}, dll='{used_dll}'"
-    #     )
-
-    # ====================== NPort 시리얼 해제 함수 (Windows 전용) ======================
-
     async def _reopen_if_inactive(self):
         """
         보내기 직전에 유휴시간 초과/세션 이상을 점검하고 필요 시 즉시 세션을 내렸다가(논블로킹)
