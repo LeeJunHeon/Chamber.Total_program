@@ -1,5 +1,4 @@
 # lib/config_ch1.py
-from pathlib import Path
 from .config_common import *
 
 # 채널 식별

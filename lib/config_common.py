@@ -1,6 +1,4 @@
 # lib/config_common.py
-import os
-from pathlib import Path
 
 # === 외부 제어 호스트 서버 설정 ===
 HOST_SERVER_HOST = "0.0.0.0"   # 로컬만 쓰면 "127.0.0.1"
