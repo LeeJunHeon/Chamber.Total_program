@@ -2683,7 +2683,6 @@ class ChamberRuntime:
         # ★ 추가: 남아 있을 수 있는 카운트다운 태스크 정리
         self._cancel_delay_task()
 
-        self.process_queue = []
         self.current_process_index = -1
         self._reset_ui_after_process()
 
@@ -3129,7 +3128,7 @@ class ChamberRuntime:
 
             if not (p.get("use_rf_pulse") or p.get("use_dc_power") or p.get("use_rf_power")):
                 errs.append("RF Pulse, RF Power, DC Power 중 하나 이상 선택 필요")
-                
+
             # RF Pulse와 RF Power 동시 금지
             if p.get("use_rf_pulse") and p.get("use_rf_power"):
                 errs.append("RF Pulse와 RF Power는 동시에 선택할 수 없습니다.")
