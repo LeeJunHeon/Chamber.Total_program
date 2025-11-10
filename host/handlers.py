@@ -18,33 +18,31 @@ class HostHandlers:
     def __init__(self, ctx: HostContext) -> None:
         self.ctx = ctx
 
-    # --------- 공통 응답 헬퍼 ---------
+    # ================== 공통 응답 헬퍼 ==================
     def _ok(self, msg: str = "OK", **extra) -> Json:
         return {"result": "success", "message": msg, **extra}
 
     def _fail(self, e: Exception | str) -> Json:
         return {"result": "fail", "message": str(e)}
 
-    # --------- 상태 조회 ---------
+    # ================== CH1,2 상태 조회 ==================
     async def get_sputter_status(self, _: Json) -> Json:
         try:
             running = bool(getattr(self.ctx.runtime_state, "any_running")())
             cleaning = bool(getattr(self.ctx.pc, "is_running", getattr(self.ctx.pc, "_running", False)))
             state = "cleaning" if cleaning else ("running" if running else "idle")
 
-            # 진공 여부: GV OPEN 램프(1/2) 중 하나라도 켜져 있으면 True
-            vacuum = False
-            try:
-                gv1 = await self.ctx.plc.read_bit("G_V_1_OPEN_LAMP")
-                gv2 = await self.ctx.plc.read_bit("G_V_2_OPEN_LAMP")
-                vacuum = bool(gv1 or gv2)
-            except Exception:
-                pass
+            # 진공 여부: L_ATM만 사용
+            # L_ATM=True(대기압)  -> vacuum=False
+            # L_ATM=False(비대기압)-> vacuum=True
+            atm = await self.ctx.plc.read_bit("L_ATM")
+            vacuum = (not bool(atm))
+            
             return self._ok(state=state, vacuum=vacuum)
         except Exception as e:
             return self._fail(e)
 
-    # --------- 공정 시작 ---------
+    # ================== CH1,2/plasma cleaning 공정 제어 ==================
     async def start_sputter(self, data: Json) -> Json:
         recipe = str(data.get("recipe", ""))
         try:
@@ -76,7 +74,7 @@ class HostHandlers:
         except Exception as e:
             return self._fail(e)
 
-    # --------- PLC 공용 계통 ---------
+    # ================== LoadLock vacuum 제어 ==================
     async def vacuum_on(self, data: Json) -> Json:
         """
         VACUUM ON 시퀀스:
@@ -188,6 +186,7 @@ class HostHandlers:
                 except Exception:
                     pass
 
+    # ================== LoadLock 4pin 제어 ==================
     async def four_pin_up(self, data: Json) -> Json:
         """
         4PIN_UP 시퀀스:
@@ -246,7 +245,7 @@ class HostHandlers:
         except Exception as e:
             return self._fail(e)
 
-    # --------- CHx 설비 제어 (게이트/척) ---------
+    # ================== CH1,2 gate 제어 ==================
     async def gate_open(self, data: Json) -> Json:
         """
         CHx_GATE_OPEN 시퀀스:
@@ -323,6 +322,7 @@ class HostHandlers:
         except Exception as e:
             return self._fail(e)
 
+    # ================== CH1,2 chuck 제어 ==================
     async def chuck_up(self, data: Json) -> Json:
         """
         CHx_CHUCK_UP 시퀀스 (CH1/CH2 공통):
