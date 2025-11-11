@@ -92,17 +92,20 @@ class HostHandlers:
                 # 0) L_VENT_SW OFF
                 await self.ctx.plc.write_switch("L_VENT_SW", False)
                 await asyncio.sleep(0.5)  # 권장: 짧은 안정화
+                
+                # 0-1) 러핑펌프 OFF 타이머(쿨타임) 확인 → 사유 분리
+                if await self.ctx.plc.read_bit("L_R_P_OFF_TIMER"):
+                    return self._fail("러핑펌프 OFF 타이머 진행 중 → 잠시 후 재시도")
 
                 # 1) 러핑펌프 ON
                 await self.ctx.plc.press_switch("L_R_P_SW")
 
-                # 2) 러핑밸브 인터락 확인
-                interlock_ok = await self.ctx.plc.read_bit("L_R_V_인터락")
-                if not interlock_ok:
+                # 2) 러핑밸브 인터락 확인 → 사유 분리
+                if not await self.ctx.plc.read_bit("L_R_V_인터락"):
                     return self._fail("L_R_V_인터락=FALSE → 러핑밸브 개방 불가")
 
                 # 3) 러핑밸브 ON
-                await self.ctx.plc.write_switch("L_R_V_SW", True)
+                await self.ctx.plc.press_switch("L_R_V_SW")
 
                 # 4) VAC_READY=True 대기
                 deadline = time.monotonic() + timeout_s
@@ -127,17 +130,6 @@ class HostHandlers:
             except Exception as e:
                 # 예외 사유는 message로 그대로 클라이언트 전달
                 return self._fail(e)
-
-            finally:
-                # 어떤 경로로든 항상 OFF 시도 (래치/순간형 모두 무해)
-                try:
-                    await self.ctx.plc.write_switch("L_R_V_SW", False)
-                except Exception:
-                    pass
-                try:
-                    await self.ctx.plc.write_switch("L_R_P_SW", False)
-                except Exception:
-                    pass
 
     async def vacuum_off(self, data: Json) -> Json:
         """
