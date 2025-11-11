@@ -94,7 +94,7 @@ class HostHandlers:
                 await asyncio.sleep(0.5)  # 권장: 짧은 안정화
 
                 # 1) 러핑펌프 ON
-                await self.ctx.plc.write_switch("L_R_P_SW", True)
+                await self.ctx.plc.press_switch("L_R_P_SW")
 
                 # 2) 러핑밸브 인터락 확인
                 interlock_ok = await self.ctx.plc.read_bit("L_R_V_인터락")
