@@ -227,7 +227,9 @@ class ChamberRuntime:
         self._pending_device_cleanup = False
         self._last_polling_targets: TargetsMap | None = None
         self._last_state_text: str | None = None
-        self._delay_task: Optional[asyncio.Task] = None
+        # 지연(다음 공정 예약)과 카운트다운을 분리
+        self._delay_main_task: Optional[asyncio.Task] = None
+        self._delay_countdown_task: Optional[asyncio.Task] = None
         self._dc_failed_flag: bool = False     # ★ 추가
         self._auto_connect_enabled = True  # ← 실패시 False로 내려 자동 재연결 차단
         self._run_select: dict[str, bool] | None = None  # ← 이번 런에서 펄스 선택 상태
@@ -1557,7 +1559,7 @@ class ChamberRuntime:
                 # 이미 있을 수 있는 지연 태스크를 끊고, 이번 예약을 취소 가능하게 심는다
                 self._cancel_delay_task()
                 self._set_task_later(
-                    "_delay_task",
+                    "_delay_main_task",
                     self._start_process_later(params, delay_s, reason=reason),
                     name=f"NextProcDelay.CH{self.ch}"
                 )
@@ -1571,62 +1573,61 @@ class ChamberRuntime:
             self._advancing = False
 
     async def _start_process_later(self, params: RawParams, delay_s: float = 0.1, *, reason: str = "") -> None:
-        # 딜레이가 사실상 없으면 즉시 시작
         if delay_s <= 0.5:
             self._safe_start_process(self._normalize_params_for_process(params))
             return
 
-        # 안내 로그 + ETA
+        # ETA 로그
+        rtxt = f" ({reason})" if reason else ""
         try:
             eta = datetime.now() + timedelta(seconds=delay_s)
-            rtxt = f" ({reason})" if reason else ""
             self.append_log("MAIN", f"다음 공정 예약: {delay_s:.0f}s 후 {eta.strftime('%H:%M:%S')}{rtxt}")
         except Exception:
             pass
 
-        # 카운트다운 태스크 (UI 주기적 갱신, Stop 시 취소)
+        # 카운트다운 태스크만 관리(메인 태스크는 절대 자기 자신을 취소하지 않음)
         async def _countdown_loop():
             try:
                 remain = int(delay_s)
-                # 최초 1회 보장
                 self._set_state_text(f"다음 공정 대기중{rtxt} · 남은 시간 {self._fmt_hms(remain)}")
                 while remain > 0:
                     await asyncio.sleep(1)
                     remain -= 1
-                    # 부하 완화: 1분 초과 구간은 5초마다, 1분 이하는 1초마다 갱신
                     if remain <= 60 or (remain % 5 == 0):
                         self._set_state_text(f"다음 공정 대기중{rtxt} · 남은 시간 {self._fmt_hms(remain)}")
             except asyncio.CancelledError:
-                # Stop/리셋 등으로 취소된 경우
                 raise
 
-        # self._delay_task 에 카운트다운을 심어 Stop 버튼으로 취소 가능하게
         loop = asyncio.get_running_loop()
-        try:
-            # 기존 지연 태스크가 있다면 끊기
-            if self._delay_task and not self._delay_task.done():
-                self._delay_task.cancel()
-            self._delay_task = loop.create_task(_countdown_loop(), name=f"CH{self.ch}-NextProcCountdown")
+        # 기존 카운트다운이 있으면 취소
+        if self._delay_countdown_task and not self._delay_countdown_task.done():
+            self._delay_countdown_task.cancel()
+        # 새 카운트다운 등록
+        self._delay_countdown_task = loop.create_task(
+            _countdown_loop(), name=f"CH{self.ch}-NextProcCountdown"
+        )
 
-            # 실제 예약 대기 (이 sleep은 self._delay_task 취소와는 별개이므로 Cancel 전달을 위해 Shield 없이 둔다)
+        try:
+            # 메인 태스크는 단순 대기만 수행(자기-취소 금지)
             await asyncio.sleep(delay_s)
         except asyncio.CancelledError:
-            # 외부 Stop 등으로 취소되면 상태만 정리하고 종료
             self._set_state_text("다음 공정 대기 취소됨")
+            # 카운트다운도 함께 정리
+            if self._delay_countdown_task and not self._delay_countdown_task.done():
+                self._delay_countdown_task.cancel()
+            self._delay_countdown_task = None
             raise
         finally:
-            # 시작/취소 직전 카운트다운 태스크 정리
-            if self._delay_task:
+            # 정상 시작/취소 직전 카운트다운 정리
+            if self._delay_countdown_task:
                 try:
-                    self._delay_task.cancel()
+                    self._delay_countdown_task.cancel()
                 except Exception:
                     pass
-                self._delay_task = None
+                self._delay_countdown_task = None
 
-        # 시작 직전 표시
+        # 이제 진짜 시작
         self._set_state_text("다음 공정 시작 준비 중…")
-
-        # 공정 시작
         self._safe_start_process(self._normalize_params_for_process(params))
 
     def _safe_start_process(self, params: NormParams) -> None:
@@ -2329,12 +2330,15 @@ class ChamberRuntime:
 
     # --- delay 단계 ---
     def _cancel_delay_task(self):
-        t = getattr(self, "_delay_task", None)
-        if t and not t.done(): t.cancel()
-        self._delay_task = None
+        # 메인/카운트다운 모두 취소
+        for name in ("_delay_main_task", "_delay_countdown_task"):
+            t = getattr(self, name, None)
+            if t and not t.done():
+                t.cancel()
+            setattr(self, name, None)
 
     def _on_delay_step_done(self, step_name: str):
-        self._delay_task = None
+        self._delay_countdown_task = None
         self._last_state_text = None
         self.append_log("Process", f"'{step_name}' 지연 완료 → 다음 공정")
         self._start_next_process_from_queue(True)
@@ -2414,10 +2418,11 @@ class ChamberRuntime:
         # 기존 지연 태스크 취소 후, 카운트다운 코루틴 등록
         self._cancel_delay_task()
         self._set_task_later(
-            "_delay_task",
+            "_delay_countdown_task",
             self._delay_countdown_then_continue(name, duration_s, amount, unit_txt),
             name=f"Delay:{name}"
         )
+
         return True
     
     def _graph_reset_safe(self) -> None:
