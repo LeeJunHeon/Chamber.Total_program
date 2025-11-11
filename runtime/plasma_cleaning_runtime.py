@@ -1272,6 +1272,30 @@ class PlasmaCleaningRuntime:
         except Exception as e:
             self.append_log("CHAT", f"finish notify failed: {e!r}")
 
+        # 👇 추가: 실패 이유만 텍스트로 별도 전송(카드 잘림 방지)
+        if (not ok):
+            _reason = (str(payload.get("reason") or "")).strip()
+            if not _reason:
+                errs = payload.get("errors", [])
+                if isinstance(errs, (list, tuple)) and errs:
+                    _reason = str(errs[0])
+                elif isinstance(errs, str):
+                    _reason = errs
+            if _reason:
+                try:
+                    r = getattr(self.chat, "notify_text", None)
+                    if callable(r):
+                        out = r(f"❌ Plasma Cleaning 실패 이유: {_reason}")
+                        if inspect.iscoroutine(out):
+                            await asyncio.wait_for(out, timeout=2.0)
+                    elif hasattr(self.chat, "notify_error_with_src"):
+                        # notify_text가 없다면 예비 경로
+                        out = self.chat.notify_error_with_src("PC", f"실패 이유: {_reason}")
+                        if inspect.iscoroutine(out):
+                            await asyncio.wait_for(out, timeout=2.0)
+                except Exception as e:
+                    self.append_log("CHAT", f"reason text notify failed: {e!r}")
+
     def _post_warning(self, title: str, text: str) -> None:
         try:
             # UI/부모 준비 확인

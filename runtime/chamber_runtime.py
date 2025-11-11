@@ -793,6 +793,23 @@ class ChamberRuntime:
                             except Exception as e:
                                 self.append_log("CHAT", f"구글챗 종료 카드 전송 실패: {e!r}")
 
+                            # 👇 추가: 카드가 잘려 보일 때를 대비해 '실패 이유'만 텍스트로 별도 전송
+                            if not ok:
+                                reason = (str(detail.get("reason") or "")).strip()
+                                if not reason:
+                                    errs = detail.get("errors", [])
+                                    if isinstance(errs, (list, tuple)) and errs:
+                                        reason = str(errs[0])
+                                    elif isinstance(errs, str):
+                                        reason = errs
+                                if reason:
+                                    try:
+                                        r = self.chat.notify_text(f"❌ CH{self.ch} 공정 실패 이유: {reason}")
+                                        if inspect.iscoroutine(r):
+                                            await r
+                                    except Exception as _e:
+                                        self.append_log("CHAT", f"실패 이유 텍스트 알림 실패: {_e!r}")
+
                         try:
                             self.mfc.on_process_finished(ok)
                         except Exception:
