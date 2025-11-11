@@ -326,16 +326,18 @@ class HostHandlers:
     async def chuck_up(self, data: Json) -> Json:
         """
         CHx_CHUCK_UP 시퀀스 (CH1/CH2 공통):
-        - CH1: Z_M_P_1_MID_SW = True → 40초 후 Z1_MID == True 확인
-        - CH2: Z_M_P_2_MID_SW = True → 40초 후 Z2_MID == True 확인
+        - CH1: Z_M_P_1_SW → Z_M_P_1_MID_SW (둘 다 press) → wait → Z1_MID 확인
+        - CH2: Z_M_P_2_SW → Z_M_P_2_MID_SW (둘 다 press) → wait → Z2_MID 확인
         """
         ch = int(data.get("ch", 1))
         wait_s = float(data.get("wait_s", 40.0))  # 기본 40초
 
-        # CH별 스위치/램프 매핑
+        # CH별 스위치/램프 매핑 (+ power_sw 추가)
         if ch == 1:
+            power_sw = "Z_M_P_1_SW"
             sw_name, lamp_name = "Z_M_P_1_MID_SW", "Z1_MID"
         elif ch == 2:
+            power_sw = "Z_M_P_2_SW"
             sw_name, lamp_name = "Z_M_P_2_MID_SW", "Z2_MID"
         else:
             return self._fail(f"지원하지 않는 CH: {ch}")
@@ -343,8 +345,12 @@ class HostHandlers:
         try:
             lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
             async with lock:
-                # 1) 스위치 TRUE (순간 펄스 방식)
-                await self.ctx.plc.write_switch(sw_name, True)
+                # 0) Z-MOTION 전원 SW를 먼저 press (출력 라인 활성화)
+                await self.ctx.plc.press_switch(power_sw)
+                await asyncio.sleep(0.2)  # 짧은 안정화
+
+                # 1) MID로 이동 — 모멘터리 펄스
+                await self.ctx.plc.press_switch(sw_name)
 
                 # 2) 대기 후 램프 확인
                 await asyncio.sleep(wait_s)
@@ -360,16 +366,18 @@ class HostHandlers:
     async def chuck_down(self, data: Json) -> Json:
         """
         CHx_CHUCK_DOWN 시퀀스 (CH1/CH2 공통):
-        - CH1: Z_M_P_1_CCW_SW = True → 40초 후 Z1_DOWN == True 확인
-        - CH2: Z_M_P_2_CCW_SW = True → 40초 후 Z2_DOWN == True 확인
+        - CH1: Z_M_P_1_SW → Z_M_P_1_CCW_SW (둘 다 press) → wait → Z1_DOWN 확인
+        - CH2: Z_M_P_2_SW → Z_M_P_2_CCW_SW (둘 다 press) → wait → Z2_DOWN 확인
         """
         ch = int(data.get("ch", 1))
         wait_s = float(data.get("wait_s", 40.0))  # 기본 40초
 
-        # CH별 스위치/램프 매핑
+        # CH별 스위치/램프 매핑 (+ power_sw 추가)
         if ch == 1:
+            power_sw = "Z_M_P_1_SW"
             sw_name, lamp_name = "Z_M_P_1_CCW_SW", "Z1_DOWN"
         elif ch == 2:
+            power_sw = "Z_M_P_2_SW"
             sw_name, lamp_name = "Z_M_P_2_CCW_SW", "Z2_DOWN"
         else:
             return self._fail(f"지원하지 않는 CH: {ch}")
@@ -377,15 +385,20 @@ class HostHandlers:
         try:
             lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
             async with lock:
-                # 1) 스위치 TRUE (순간 펄스 방식)
-                await self.ctx.plc.write_switch(sw_name, True)
+                # 0) Z-MOTION 전원 SW 선행
+                await self.ctx.plc.press_switch(power_sw)
+                await asyncio.sleep(0.2)
 
-                # 2) 대기 후 램프 확인
+                # 1) DOWN — CCW_SW는 펄스
+                await self.ctx.plc.press_switch(sw_name)
+
+                # 2) 대기 후 램프 확인 (구조 유지)
                 await asyncio.sleep(wait_s)
                 lamp_ok = await self.ctx.plc.read_bit(lamp_name)
                 if lamp_ok:
                     return self._ok(f"CH{ch}_CHUCK_DOWN 완료 — {lamp_name}=TRUE (대기 {int(wait_s)}s)")
                 return self._fail(f"CH{ch}_CHUCK_DOWN 실패 — {lamp_name}=FALSE (대기 {int(wait_s)}s)")
-
+            
         except Exception as e:
             return self._fail(e)
+
