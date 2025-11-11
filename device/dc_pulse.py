@@ -616,8 +616,26 @@ class AsyncDCPulse:
                 await self._emit_failed(label, "응답 없음/실패 (상태 불일치/확인 불가)")
                 return False
 
-            # === OUTPUT_OFF: P==0W 우선, STATUS(HV Off) 보조, 실패 시 1회 재시도 ===
-            # ACK 여부와 무관하게 빠른 교차확인
+            # === OUTPUT_OFF: 최소판정 먼저 → (1) ACK 성공, (2) STATUS로 HV=Off 성공 ===
+            # (1) ACK만 왔어도 성공 처리
+            if ack_ok:
+                self._out_on = False
+                await self._emit_confirmed(label)       # "OUTPUT_OFF"
+                self.set_process_status(False)
+                return True
+
+            # (2) ACK이 없어도 READ_STATUS로 HV가 Off(=0)이면 성공 처리
+            try:
+                flags = await self.read_status_flags()
+                if flags is not None and (not self._hv_on_from_status(flags)):
+                    self._out_on = False
+                    await self._emit_confirmed(label + "_VERIFIED")  # 상태로 확인됨
+                    self.set_process_status(False)
+                    return True
+            except Exception:
+                pass
+
+            # === (이하 기존 로직 유지) P==0W 우선, STATUS(HV Off) 보조, 실패 시 1회 재시도 ===
             ok_off, p, hv_on = await self._confirm_off_quick()
             if ok_off:
                 self._out_on = False

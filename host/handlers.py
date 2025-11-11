@@ -325,80 +325,144 @@ class HostHandlers:
     # ================== CH1,2 chuck 제어 ==================
     async def chuck_up(self, data: Json) -> Json:
         """
-        CHx_CHUCK_UP 시퀀스 (CH1/CH2 공통):
-        - CH1: Z_M_P_1_SW → Z_M_P_1_MID_SW (둘 다 press) → wait → Z1_MID 확인
-        - CH2: Z_M_P_2_SW → Z_M_P_2_MID_SW (둘 다 press) → wait → Z2_MID 확인
+        (현재 정의 유지) CHx_CHUCK_UP = MID로 이동
+        - CH1: Z_M_P_1_SW → Z_M_P_1_MID_SW → Z1_MID 램프/SGN 폴링
+        - CH2: Z_M_P_2_SW → Z_M_P_2_MID_SW → Z2_MID 램프/SGN 폴링
         """
         ch = int(data.get("ch", 1))
-        wait_s = float(data.get("wait_s", 40.0))  # 기본 40초
+        timeout_s = float(data.get("wait_s", 40.0))
 
-        # CH별 스위치/램프 매핑 (+ power_sw 추가)
         if ch == 1:
-            power_sw = "Z_M_P_1_SW"
-            sw_name, lamp_name = "Z_M_P_1_MID_SW", "Z1_MID"
+            return await self._move_chuck(
+                1, "Z_M_P_1_SW", "Z_M_P_1_MID_SW", "Z1_MID", "mid", timeout_s
+            )
         elif ch == 2:
-            power_sw = "Z_M_P_2_SW"
-            sw_name, lamp_name = "Z_M_P_2_MID_SW", "Z2_MID"
+            return await self._move_chuck(
+                2, "Z_M_P_2_SW", "Z_M_P_2_MID_SW", "Z2_MID", "mid", timeout_s
+            )
         else:
             return self._fail(f"지원하지 않는 CH: {ch}")
-
-        try:
-            lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
-            async with lock:
-                # 0) Z-MOTION 전원 SW를 먼저 press (출력 라인 활성화)
-                await self.ctx.plc.press_switch(power_sw)
-                await asyncio.sleep(0.2)  # 짧은 안정화
-
-                # 1) MID로 이동 — 모멘터리 펄스
-                await self.ctx.plc.press_switch(sw_name)
-
-                # 2) 대기 후 램프 확인
-                await asyncio.sleep(wait_s)
-                lamp_ok = await self.ctx.plc.read_bit(lamp_name)
-                if lamp_ok:
-                    return self._ok(f"CH{ch}_CHUCK_UP 완료 — {lamp_name}=TRUE (대기 {int(wait_s)}s)")
-                return self._fail(f"CH{ch}_CHUCK_UP 실패 — {lamp_name}=FALSE (대기 {int(wait_s)}s)")
-
-        except Exception as e:
-            return self._fail(e)
-
 
     async def chuck_down(self, data: Json) -> Json:
         """
-        CHx_CHUCK_DOWN 시퀀스 (CH1/CH2 공통):
-        - CH1: Z_M_P_1_SW → Z_M_P_1_CCW_SW (둘 다 press) → wait → Z1_DOWN 확인
-        - CH2: Z_M_P_2_SW → Z_M_P_2_CCW_SW (둘 다 press) → wait → Z2_DOWN 확인
+        CHx_CHUCK_DOWN = 최하단 이동
+        - CH1: Z_M_P_1_SW → Z_M_P_1_CCW_SW → Z1_DOWN 램프/SGN 폴링
+        - CH2: Z_M_P_2_SW → Z_M_P_2_CCW_SW → Z2_DOWN 램프/SGN 폴링
         """
         ch = int(data.get("ch", 1))
-        wait_s = float(data.get("wait_s", 40.0))  # 기본 40초
+        timeout_s = float(data.get("wait_s", 40.0))
 
-        # CH별 스위치/램프 매핑 (+ power_sw 추가)
         if ch == 1:
-            power_sw = "Z_M_P_1_SW"
-            sw_name, lamp_name = "Z_M_P_1_CCW_SW", "Z1_DOWN"
+            return await self._move_chuck(
+                1, "Z_M_P_1_SW", "Z_M_P_1_CCW_SW", "Z1_DOWN", "down", timeout_s
+            )
         elif ch == 2:
-            power_sw = "Z_M_P_2_SW"
-            sw_name, lamp_name = "Z_M_P_2_CCW_SW", "Z2_DOWN"
+            return await self._move_chuck(
+                2, "Z_M_P_2_SW", "Z_M_P_2_CCW_SW", "Z2_DOWN", "down", timeout_s
+            )
         else:
             return self._fail(f"지원하지 않는 CH: {ch}")
 
-        try:
-            lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
-            async with lock:
-                # 0) Z-MOTION 전원 SW 선행
-                await self.ctx.plc.press_switch(power_sw)
-                await asyncio.sleep(0.2)
+    async def _read_chuck_position(self, ch: int) -> dict:
+        """
+        SGN(실제 위치) + 램프(완료 판정)를 함께 읽어 종합 위치를 반환.
+        return: {
+        "position": "up"|"mid"|"down"|"unknown",
+        "sgn": {"up":bool, "mid":bool, "down":bool},
+        "lamp":{"up":bool, "mid":bool, "down":bool}
+        }
+        """
+        if ch == 1:
+            s_up, s_mid, s_dn = "Z_M_P_1_UP_SGN", "Z_M_P_1_MID_SGN", "Z_M_P_1_DN_SGN"
+            l_up, l_mid, l_dn = "Z1_UP", "Z1_MID", "Z1_DOWN"
+        elif ch == 2:
+            s_up, s_mid, s_dn = "Z_M_P_2_UP_SGN", "Z_M_P_2_MID_SGN", "Z_M_P_2_DN_SGN"
+            l_up, l_mid, l_dn = "Z2_UP", "Z2_MID", "Z2_DOWN"
+        else:
+            raise ValueError(f"지원하지 않는 CH: {ch}")
 
-                # 1) DOWN — CCW_SW는 펄스
-                await self.ctx.plc.press_switch(sw_name)
+        # SGN(센서) 읽기
+        s_up_b  = bool(await self.ctx.plc.read_bit(s_up))
+        s_mid_b = bool(await self.ctx.plc.read_bit(s_mid))
+        s_dn_b  = bool(await self.ctx.plc.read_bit(s_dn))
 
-                # 2) 대기 후 램프 확인 (구조 유지)
-                await asyncio.sleep(wait_s)
-                lamp_ok = await self.ctx.plc.read_bit(lamp_name)
-                if lamp_ok:
-                    return self._ok(f"CH{ch}_CHUCK_DOWN 완료 — {lamp_name}=TRUE (대기 {int(wait_s)}s)")
-                return self._fail(f"CH{ch}_CHUCK_DOWN 실패 — {lamp_name}=FALSE (대기 {int(wait_s)}s)")
-            
-        except Exception as e:
-            return self._fail(e)
+        # 램프(완료 상태) 읽기
+        l_up_b  = bool(await self.ctx.plc.read_bit(l_up))
+        l_mid_b = bool(await self.ctx.plc.read_bit(l_mid))
+        l_dn_b  = bool(await self.ctx.plc.read_bit(l_dn))
 
+        # 우선순위: SGN이 원-핫이면 그걸 위치로, 아니면 램프 원-핫을 보조로 사용
+        pos = "unknown"
+        s_sum = int(s_up_b) + int(s_mid_b) + int(s_dn_b)
+        l_sum = int(l_up_b) + int(l_mid_b) + int(l_dn_b)
+
+        if s_sum == 1:
+            pos = "up" if s_up_b else ("mid" if s_mid_b else "down")
+        elif l_sum == 1:
+            pos = "up" if l_up_b else ("mid" if l_mid_b else "down")
+
+        return {
+            "position": pos,
+            "sgn": {"up": s_up_b, "mid": s_mid_b, "down": s_dn_b},
+            "lamp": {"up": l_up_b, "mid": l_mid_b, "down": l_dn_b},
+        }
+
+
+    async def _move_chuck(self, ch: int, power_sw: str, move_sw: str,
+                        target_lamp: str, target_name: str,
+                        timeout_s: float = 40.0) -> Json:
+        """
+        공통 Chuck 이동: 이미 목표면 즉시 OK, 아니면 power→move 펄스 후 램프/SGN 폴링.
+        """
+        lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
+        async with lock:
+            # 0) 이미 목표면 즉시 OK
+            try:
+                cur = await self._read_chuck_position(ch)
+                if cur["position"] == target_name:
+                    return self._ok(f"CH{ch} Chuck OK — 이미 {target_name.upper()} 위치",
+                                    current=cur)
+            except Exception:
+                # 위치 읽기 실패는 이동 시도는 계속
+                pass
+
+            # 1) 전원 스위치 펄스
+            await self.ctx.plc.press_switch(power_sw)
+            await asyncio.sleep(0.2)
+
+            # 2) 이동 스위치 펄스
+            await self.ctx.plc.press_switch(move_sw)
+
+            # 3) 폴링 (초반엔 SGN으로 빠른 변화를 보고, 최종은 램프로 확정)
+            deadline = time.monotonic() + float(timeout_s)
+            first_seen_sgn = False
+
+            while time.monotonic() < deadline:
+                try:
+                    # 램프(완료) 먼저 확인
+                    if await self.ctx.plc.read_bit(target_lamp):
+                        cur = await self._read_chuck_position(ch)
+                        return self._ok(f"CH{ch} Chuck 완료 — {target_name.upper()}(램프 TRUE)",
+                                        current=cur)
+
+                    # SGN(즉시 위치) 보조 체크: 초반에라도 목표 SGN이 잡히면 “도달 중” 로그 가능
+                    cur = await self._read_chuck_position(ch)
+                    if cur["position"] == target_name and not first_seen_sgn:
+                        # 최초 감지 로그를 남기고 계속 램프를 기다림(타이머 고려)
+                        first_seen_sgn = True
+                except Exception:
+                    pass
+
+                await asyncio.sleep(0.4)  # 폴링 주기
+
+            # 4) 타임아웃 — 상태 스냅샷 포함
+            try:
+                cur = await self._read_chuck_position(ch)
+            except Exception:
+                cur = None
+
+            return self._fail({
+                "msg": f"CH{ch} Chuck 타임아웃 — {target_name.upper()} 미도달",
+                "target_lamp": target_lamp,
+                "snapshot": cur,
+            })
