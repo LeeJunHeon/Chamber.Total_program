@@ -91,7 +91,7 @@ class HostHandlers:
             try:
                 # 0) L_VENT_SW OFF
                 await self.ctx.plc.write_switch("L_VENT_SW", False)
-                await asyncio.sleep(0.5)  # 권장: 짧은 안정화
+                await asyncio.sleep(0.3)  # 권장: 짧은 안정화
                 
                 # 0-1) 러핑펌프 OFF 타이머(쿨타임) 확인 → 사유 분리
                 if await self.ctx.plc.read_bit("L_R_P_OFF_TIMER"):
@@ -99,6 +99,7 @@ class HostHandlers:
 
                 # 1) 러핑펌프 ON
                 await self.ctx.plc.press_switch("L_R_P_SW")
+                await asyncio.sleep(0.3)  # 인터락 전파 여유 
 
                 # 2) 러핑밸브 인터락 확인 → 사유 분리
                 if not await self.ctx.plc.read_bit("L_R_V_인터락"):
