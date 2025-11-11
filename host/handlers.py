@@ -98,7 +98,7 @@ class HostHandlers:
                     return self._fail("러핑펌프 OFF 타이머 진행 중 → 잠시 후 재시도")
 
                 # 1) 러핑펌프 ON
-                await self.ctx.plc.press_switch("L_R_P_SW")
+                await self.ctx.plc.write_switch("L_R_P_SW", True)
                 await asyncio.sleep(0.3)  # 인터락 전파 여유 
 
                 # 2) 러핑밸브 인터락 확인 → 사유 분리
@@ -106,7 +106,7 @@ class HostHandlers:
                     return self._fail("L_R_V_인터락=FALSE → 러핑밸브 개방 불가")
 
                 # 3) 러핑밸브 ON
-                await self.ctx.plc.press_switch("L_R_V_SW")
+                await self.ctx.plc.write_switch("L_R_V_SW", True)
 
                 # 4) VAC_READY=True 대기
                 deadline = time.monotonic() + timeout_s
