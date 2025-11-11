@@ -323,7 +323,7 @@ class HostHandlers:
         - CH2: Z_M_P_2_SW → Z_M_P_2_MID_SW → Z2_MID 램프/SGN 폴링
         """
         ch = int(data.get("ch", 1))
-        timeout_s = float(data.get("wait_s", 40.0))
+        timeout_s = float(data.get("wait_s", 50.0))
 
         if ch == 1:
             return await self._move_chuck(
@@ -343,7 +343,7 @@ class HostHandlers:
         - CH2: Z_M_P_2_SW → Z_M_P_2_CCW_SW → Z2_DOWN 램프/SGN 폴링
         """
         ch = int(data.get("ch", 1))
-        timeout_s = float(data.get("wait_s", 40.0))
+        timeout_s = float(data.get("wait_s", 50.0))
 
         if ch == 1:
             return await self._move_chuck(
