@@ -1550,13 +1550,25 @@ class ChamberRuntime:
                 except Exception:
                     remain = 0.0
 
-                delay_s = max(60.0, remain)  # 최소 60초 유지(기존 정책 유지)
-                reason  = "쿨다운 대기"
+                # 🚫 첫 번째 스텝(인덱스 0)은 강제 60초 대기 없이 즉시 시작
+                first_step = (self.current_process_index == 0)
+                delay_s = (remain if first_step else max(60.0, remain))
 
-                # 상태창에 즉시 1회 표시
+                # 지연이 없으면 바로 시작 예약
+                if delay_s <= 0.0:
+                    self._set_state_text("다음 공정 즉시 시작")
+                    self._cancel_delay_task()
+                    self._set_task_later(
+                        "_delay_main_task",
+                        self._start_process_later(params, 0.0, reason="즉시 시작"),
+                        name=f"NextProcDelay.CH{self.ch}"
+                    )
+                    return
+
+                # 지연 필요 시: 첫 스텝이면 '최근 종료로 인한 대기', 이후 스텝은 '쿨다운 대기'
+                reason = ("최근 종료로 인한 대기" if first_step else "쿨다운 대기")
                 self._set_state_text(f"다음 공정 대기중 ({reason}) · 남은 시간 {self._fmt_hms(delay_s)}")
 
-                # 이미 있을 수 있는 지연 태스크를 끊고, 이번 예약을 취소 가능하게 심는다
                 self._cancel_delay_task()
                 self._set_task_later(
                     "_delay_main_task",
@@ -1832,6 +1844,12 @@ class ChamberRuntime:
         # ★ 추가: 장치 정리가 백그라운드에서 진행 중이면 대기 안내
         if getattr(self, "_pending_device_cleanup", False):
             self._post_warning("정리 중", "이전 공정 정리 중입니다. 잠시 후 다시 시작하세요.")
+            return
+        
+        # ★ 추가(권장): 이미 다음 공정이 예약되어 있으면 Start 재클릭은 무시하고 안내
+        t = getattr(self, "_delay_main_task", None)
+        if t is not None and not t.done():
+            self._post_warning("대기 중", "다음 공정이 예약되어 있습니다. 카운트다운 종료 후 자동 시작합니다.")
             return
 
         # ✅ 교차 실행 차단: 해당 챔버가 이미 다른 런타임(CH/PC/TSP)에서 점유 중이면 시작 금지
