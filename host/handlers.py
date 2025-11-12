@@ -483,42 +483,43 @@ class HostHandlers:
         - 타임아웃/예외 시에도 반드시 OFF
         """
         lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
-        async with lock:
-            async with self._plc_logs_to_file_only(f"CHUCK_{target_name.upper()}_CH{ch}"):
-                # 이미 목표(확정 램프 TRUE)면 즉시 OK
-                try:
-                    cur = await self._read_chuck_position(ch)
-                    if cur["position"] == target_name:
-                        return self._ok(f"CH{ch} Chuck OK — 이미 {target_name.upper()} 위치", current=cur)
-                except Exception:
-                    pass
+        async with self.ctx.lock_plc:
+            async with lock:
+                async with self._plc_logs_to_file_only(f"CHUCK_{target_name.upper()}_CH{ch}"):
+                    # 이미 목표(확정 램프 TRUE)면 즉시 OK
+                    try:
+                        cur = await self._read_chuck_position(ch)
+                        if cur["position"] == target_name:
+                            return self._ok(f"CH{ch} Chuck OK — 이미 {target_name.upper()} 위치", current=cur)
+                    except Exception:
+                        pass
 
-                try:
-                    # 래치 ON 유지
-                    await self.ctx.plc.write_switch(power_sw, True)
-                    await asyncio.sleep(0.2)  # 전파 여유
-                    await self.ctx.plc.write_switch(move_sw, True)
+                    try:
+                        # 래치 ON 유지
+                        await self.ctx.plc.write_switch(power_sw, True)
+                        await asyncio.sleep(0.2)  # 전파 여유
+                        await self.ctx.plc.write_switch(move_sw, True)
 
-                    deadline = time.monotonic() + float(timeout_s)
-                    while time.monotonic() < deadline:
-                        if await self.ctx.plc.read_bit(target_lamp):
-                            # 성공: 즉시 OFF 후 상태 반환
-                            await self.ctx.plc.write_switch(move_sw, False)
-                            await self.ctx.plc.write_switch(power_sw, False)
-                            cur = await self._read_chuck_position(ch)
-                            return self._ok(f"CH{ch} Chuck {target_name.upper()} 도달", current=cur)
-                        await asyncio.sleep(0.3)
+                        deadline = time.monotonic() + float(timeout_s)
+                        while time.monotonic() < deadline:
+                            if await self.ctx.plc.read_bit(target_lamp):
+                                # 성공: 즉시 OFF 후 상태 반환
+                                await self.ctx.plc.write_switch(move_sw, False)
+                                await self.ctx.plc.write_switch(power_sw, False)
+                                cur = await self._read_chuck_position(ch)
+                                return self._ok(f"CH{ch} Chuck {target_name.upper()} 도달", current=cur)
+                            await asyncio.sleep(0.3)
 
-                    # 타임아웃: OFF 후 실패
-                    await self.ctx.plc.write_switch(move_sw, False)
-                    await self.ctx.plc.write_switch(power_sw, False)
-                    cur = await self._read_chuck_position(ch)
-                    return self._fail(
-                        f"CH{ch} Chuck {target_name.upper()} 타임아웃({int(timeout_s)}s) — {target_lamp}=FALSE, snapshot={cur}"
-                    )
-                except Exception as e:
-                    # 예외: OFF 보장
-                    with contextlib.suppress(Exception):
+                        # 타임아웃: OFF 후 실패
                         await self.ctx.plc.write_switch(move_sw, False)
                         await self.ctx.plc.write_switch(power_sw, False)
-                    return self._fail(e)
+                        cur = await self._read_chuck_position(ch)
+                        return self._fail(
+                            f"CH{ch} Chuck {target_name.upper()} 타임아웃({int(timeout_s)}s) — {target_lamp}=FALSE, snapshot={cur}"
+                        )
+                    except Exception as e:
+                        # 예외: OFF 보장
+                        with contextlib.suppress(Exception):
+                            await self.ctx.plc.write_switch(move_sw, False)
+                            await self.ctx.plc.write_switch(power_sw, False)
+                        return self._fail(e)

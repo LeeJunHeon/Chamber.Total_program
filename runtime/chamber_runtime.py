@@ -1327,9 +1327,9 @@ class ChamberRuntime:
     def _display_dc(self, power: Optional[float], voltage: Optional[float], current: Optional[float]) -> None:
         if power is None or voltage is None or current is None:
             self.append_log("MAIN", "P/V/I 비어있음"); return
-        self._set("Power_edit",   f"{power:.3f}")
-        self._set("Voltage_edit", f"{voltage:.3f}")
-        self._set("Current_edit", f"{current:.3f}")
+        self._set("Power_edit",   f"{power:.1f}")
+        self._set("Voltage_edit", f"{voltage:.1f}")
+        self._set("Current_edit", f"{current:.1f}")
 
     def _on_process_status_changed(self, running: bool) -> None:
         b_start = self._u("Start_button"); b_stop = self._u("Stop_button")
