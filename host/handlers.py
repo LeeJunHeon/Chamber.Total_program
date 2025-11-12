@@ -9,7 +9,7 @@
 from __future__ import annotations
 from typing import Dict, Any
 from .context import HostContext
-import asyncio, time
+import asyncio, time, contextlib
 
 Json = Dict[str, Any]
 
@@ -323,7 +323,7 @@ class HostHandlers:
         - CH2: Z_M_P_2_SW → Z_M_P_2_MID_SW → Z2_MID 램프/SGN 폴링
         """
         ch = int(data.get("ch", 1))
-        timeout_s = float(data.get("wait_s", 50.0))
+        timeout_s = float(data.get("wait_s", 60.0))
 
         if ch == 1:
             return await self._move_chuck(
@@ -343,7 +343,7 @@ class HostHandlers:
         - CH2: Z_M_P_2_SW → Z_M_P_2_CCW_SW → Z2_DOWN 램프/SGN 폴링
         """
         ch = int(data.get("ch", 1))
-        timeout_s = float(data.get("wait_s", 50.0))
+        timeout_s = float(data.get("wait_s", 60.0))
 
         if ch == 1:
             return await self._move_chuck(
@@ -358,104 +358,71 @@ class HostHandlers:
 
     async def _read_chuck_position(self, ch: int) -> dict:
         """
-        SGN(실제 위치) + 램프(완료 판정)를 함께 읽어 종합 위치를 반환.
-        return: {
-        "position": "up"|"mid"|"down"|"unknown",
-        "sgn": {"up":bool, "mid":bool, "down":bool},
-        "lamp":{"up":bool, "mid":bool, "down":bool}
-        }
+        SGN(P-주소)는 읽지 않고 램프(M-주소)만으로 위치 판정 (단순/안정).
+        'position'은 램프가 정확히 하나만 TRUE일 때만 확정, 아니면 'unknown'.
         """
         if ch == 1:
-            s_up, s_mid, s_dn = "Z_M_P_1_UP_SGN", "Z_M_P_1_MID_SGN", "Z_M_P_1_DN_SGN"
             l_up, l_mid, l_dn = "Z1_UP", "Z1_MID", "Z1_DOWN"
         elif ch == 2:
-            s_up, s_mid, s_dn = "Z_M_P_2_UP_SGN", "Z_M_P_2_MID_SGN", "Z_M_P_2_DN_SGN"
             l_up, l_mid, l_dn = "Z2_UP", "Z2_MID", "Z2_DOWN"
         else:
             raise ValueError(f"지원하지 않는 CH: {ch}")
 
-        # SGN(센서) 읽기
-        s_up_b  = bool(await self.ctx.plc.read_bit(s_up))
-        s_mid_b = bool(await self.ctx.plc.read_bit(s_mid))
-        s_dn_b  = bool(await self.ctx.plc.read_bit(s_dn))
+        up  = bool(await self.ctx.plc.read_bit(l_up))
+        mid = bool(await self.ctx.plc.read_bit(l_mid))
+        dn  = bool(await self.ctx.plc.read_bit(l_dn))
 
-        # 램프(완료 상태) 읽기
-        l_up_b  = bool(await self.ctx.plc.read_bit(l_up))
-        l_mid_b = bool(await self.ctx.plc.read_bit(l_mid))
-        l_dn_b  = bool(await self.ctx.plc.read_bit(l_dn))
-
-        # 우선순위: SGN이 원-핫이면 그걸 위치로, 아니면 램프 원-핫을 보조로 사용
         pos = "unknown"
-        s_sum = int(s_up_b) + int(s_mid_b) + int(s_dn_b)
-        l_sum = int(l_up_b) + int(l_mid_b) + int(l_dn_b)
+        if int(up) + int(mid) + int(dn) == 1:
+            pos = "up" if up else ("mid" if mid else "down")
 
-        if s_sum == 1:
-            pos = "up" if s_up_b else ("mid" if s_mid_b else "down")
-        elif l_sum == 1:
-            pos = "up" if l_up_b else ("mid" if l_mid_b else "down")
-
-        return {
-            "position": pos,
-            "sgn": {"up": s_up_b, "mid": s_mid_b, "down": s_dn_b},
-            "lamp": {"up": l_up_b, "mid": l_mid_b, "down": l_dn_b},
-        }
-
+        return {"position": pos, "lamp": {"up": up, "mid": mid, "down": dn}}
 
     async def _move_chuck(self, ch: int, power_sw: str, move_sw: str,
                         target_lamp: str, target_name: str,
-                        timeout_s: float = 40.0) -> Json:
+                        timeout_s: float = 60.0) -> Json:
         """
-        공통 Chuck 이동: 이미 목표면 즉시 OK, 아니면 power→move 펄스 후 램프/SGN 폴링.
+        래치 유지 + 램프만 폴링(단순화):
+        - Z-POWER ON 유지 → 방향 ON 유지 → target_lamp TRUE 시 둘 다 OFF
+        - 타임아웃/예외 시에도 반드시 OFF
         """
         lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
         async with lock:
-            # 0) 이미 목표면 즉시 OK
+            # 이미 목표(확정 램프 TRUE)면 즉시 OK
             try:
                 cur = await self._read_chuck_position(ch)
                 if cur["position"] == target_name:
-                    return self._ok(f"CH{ch} Chuck OK — 이미 {target_name.upper()} 위치",
-                                    current=cur)
+                    return self._ok(f"CH{ch} Chuck OK — 이미 {target_name.upper()} 위치", current=cur)
             except Exception:
-                # 위치 읽기 실패는 이동 시도는 계속
                 pass
 
-            # 1) 전원 스위치 펄스
-            await self.ctx.plc.press_switch(power_sw)
-            await asyncio.sleep(0.2)
-
-            # 2) 이동 스위치 펄스
-            await self.ctx.plc.press_switch(move_sw)
-
-            # 3) 폴링 (초반엔 SGN으로 빠른 변화를 보고, 최종은 램프로 확정)
-            deadline = time.monotonic() + float(timeout_s)
-            first_seen_sgn = False
-
-            while time.monotonic() < deadline:
-                try:
-                    # 램프(완료) 먼저 확인
-                    if await self.ctx.plc.read_bit(target_lamp):
-                        cur = await self._read_chuck_position(ch)
-                        return self._ok(f"CH{ch} Chuck 완료 — {target_name.upper()}(램프 TRUE)",
-                                        current=cur)
-
-                    # SGN(즉시 위치) 보조 체크: 초반에라도 목표 SGN이 잡히면 “도달 중” 로그 가능
-                    cur = await self._read_chuck_position(ch)
-                    if cur["position"] == target_name and not first_seen_sgn:
-                        # 최초 감지 로그를 남기고 계속 램프를 기다림(타이머 고려)
-                        first_seen_sgn = True
-                except Exception:
-                    pass
-
-                await asyncio.sleep(0.4)  # 폴링 주기
-
-            # 4) 타임아웃 — 상태 스냅샷 포함
             try:
-                cur = await self._read_chuck_position(ch)
-            except Exception:
-                cur = None
+                # 래치 ON 유지
+                await self.ctx.plc.write_switch(power_sw, True)
+                await asyncio.sleep(0.2)  # 전파 여유
+                await self.ctx.plc.write_switch(move_sw, True)
 
-            return self._fail({
-                "msg": f"CH{ch} Chuck 타임아웃 — {target_name.upper()} 미도달",
-                "target_lamp": target_lamp,
-                "snapshot": cur,
-            })
+                deadline = time.monotonic() + float(timeout_s)
+                while time.monotonic() < deadline:
+                    if await self.ctx.plc.read_bit(target_lamp):
+                        # 성공: 즉시 OFF 후 상태 반환
+                        await self.ctx.plc.write_switch(move_sw, False)
+                        await self.ctx.plc.write_switch(power_sw, False)
+                        cur = await self._read_chuck_position(ch)
+                        return self._ok(f"CH{ch} Chuck {target_name.upper()} 도달", current=cur)
+                    await asyncio.sleep(0.3)
+
+                # 타임아웃: OFF 후 실패
+                await self.ctx.plc.write_switch(move_sw, False)
+                await self.ctx.plc.write_switch(power_sw, False)
+                cur = await self._read_chuck_position(ch)
+                return self._fail(
+                    f"CH{ch} Chuck {target_name.upper()} 타임아웃({int(timeout_s)}s) — {target_lamp}=FALSE, snapshot={cur}"
+                )
+            except Exception as e:
+                # 예외: OFF 보장
+                with contextlib.suppress(Exception):
+                    await self.ctx.plc.write_switch(move_sw, False)
+                    await self.ctx.plc.write_switch(power_sw, False)
+                return self._fail(e)
+
