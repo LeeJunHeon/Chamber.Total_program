@@ -92,6 +92,9 @@ class PlasmaCleaningRuntime:
         # ▶ 종료/정지 후 UI 복원용 시작 시 분 값 저장소
         self._last_process_time_min: Optional[float] = None
 
+        # 호스트에게 프리플라이트 결과를 전달하기 위한 Future 추가
+        self._host_start_future: Optional[asyncio.Future] = None
+
         # 로그/상태 위젯
         self._w_log = (
             _safe_get(ui, f"{self.prefix.lower()}logMessage_edit")
