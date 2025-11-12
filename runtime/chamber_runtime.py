@@ -1916,7 +1916,9 @@ class ChamberRuntime:
             shutter_delay = float(self._get_text("shutterDelay_edit") or 0.0)
             process_time = float(self._get_text("processTime_edit") or 0.0)
         except ValueError:
-            self.append_log("UI", "오류: 값 입력란을 확인해주세요."); return
+            self.append_log("UI", "오류: 값 입력란을 확인해주세요.")
+            self._host_report_start(False, "invalid number input")  # ★ 추가
+            return
 
         params: dict[str, Any] = {
             "base_pressure": base_pressure,
