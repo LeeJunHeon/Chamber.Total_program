@@ -13,7 +13,6 @@ import asyncio, time, contextlib
 from pathlib import Path                      # ← 추가: 경로
 from datetime import datetime                 # ← 추가: 파일명 타임스탬프
 from contextlib import asynccontextmanager    # ← 추가: 비동기 컨텍스트
-import contextlib                             # ← 추가: suppress 사용 (파일 쓰기 실패 무시용)
 
 Json = Dict[str, Any]
 
@@ -85,24 +84,35 @@ class HostHandlers:
             pass
 
     @asynccontextmanager
-    async def _plc_logs_to_file_only(self, tag: str):
+    async def _plc_command(self, tag: str):
         """
-        이 블록 동안 발생하는 PLC 로그는:
-          - 화면/챔버 로그로 보내지 않고
-          - NAS(실패 시 로컬)에만 기록
-          - '요청당 고유 파일'로 저장 (명령명이 파일명에 포함)
+        요청(명령) 1건의 로그 파일 이름만 준비한다.
+        파일명: plc_host_YYYYmmdd_HHMMSS_<TAG>.txt
         """
-        plc = self.ctx.plc
-        prev = getattr(plc, "log", None)
-        # 파일명: plc_host_YYYYmmdd_HHMMSS_<TAG>.txt
         safe_tag = "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in tag)
         self._plc_cmd_file = self._plc_log_dir / f"plc_host_{datetime.now():%Y%m%d_%H%M%S}_{safe_tag}.txt"
-        plc.log = self._plc_file_logger
         try:
             yield
         finally:
-            plc.log = prev
             self._plc_cmd_file = None
+
+    @asynccontextmanager
+    async def _plc_call(self):
+        """
+        '한 번의 PLC I/O 구간'만 아주 짧게 보호:
+        - lock_plc 획득
+        - plc.log 를 파일 로거로 임시 교체
+        - I/O 수행
+        - 원복
+        """
+        plc = self.ctx.plc
+        prev = getattr(plc, "log", None)
+        async with self.ctx.lock_plc:
+            plc.log = self._plc_file_logger
+            try:
+                yield
+            finally:
+                plc.log = prev
 
     # ================== 공통 응답 헬퍼 ==================
     def _ok(self, msg: str = "OK", **extra) -> Json:
@@ -121,8 +131,8 @@ class HostHandlers:
             # 진공 여부: L_ATM만 사용
             # L_ATM=True(대기압)  -> vacuum=False
             # L_ATM=False(비대기압)-> vacuum=True
-            async with self.ctx.lock_plc:
-                async with self._plc_logs_to_file_only("GET_SPUTTER_STATUS"):
+            async with self._plc_command("GET_SPUTTER_STATUS"):
+                async with self._plc_call():
                     atm = await self.ctx.plc.read_bit("L_ATM")
             vacuum = (not bool(atm))
 
@@ -175,99 +185,107 @@ class HostHandlers:
         """
         timeout_s = float(data.get("timeout_s", 600.0))  # 기본 10분
 
-        async with self.ctx.lock_plc:
-            async with self._plc_logs_to_file_only("VACUUM_ON"):
-                try:
-                    # 0) L_VENT_SW OFF
+        async with self._plc_command("VACUUM_ON"):
+            try:
+                # 0) 벤트 OFF
+                async with self._plc_call():
                     await self.ctx.plc.write_switch("L_VENT_SW", False)
-                    await asyncio.sleep(0.3)  # 권장: 짧은 안정화
-                    
-                    # 0-1) 러핑펌프 OFF 타이머(쿨타임) 확인 → 사유 분리
+                await asyncio.sleep(0.3)
+
+                # 0-1) 러핑펌프 OFF 타이머 체크
+                async with self._plc_call():
                     if await self.ctx.plc.read_bit("L_R_P_OFF_TIMER"):
                         return self._fail("러핑펌프 OFF 타이머 진행 중 → 잠시 후 재시도")
 
-                    # 1) 러핑펌프 ON
+                # 1) 러핑펌프 ON
+                async with self._plc_call():
                     await self.ctx.plc.write_switch("L_R_P_SW", True)
-                    await asyncio.sleep(0.3)  # 인터락 전파 여유 
+                await asyncio.sleep(0.3)
 
-                    # 2) 러핑밸브 인터락 확인 → 사유 분리
+                # 2) 러핑밸브 인터락
+                async with self._plc_call():
                     if not await self.ctx.plc.read_bit("L_R_V_인터락"):
                         return self._fail("L_R_V_인터락=FALSE → 러핑밸브 개방 불가")
 
-                    # 3) 러핑밸브 ON
+                # 3) 러핑밸브 ON
+                async with self._plc_call():
                     await self.ctx.plc.write_switch("L_R_V_SW", True)
 
-                    # 4) VAC_READY=True 대기
-                    deadline = time.monotonic() + timeout_s
-                    while time.monotonic() < deadline:
+                # 4) VAC_READY 폴링 (대기 동안 락 없음, '읽을 때만' 짧게)
+                deadline = time.monotonic() + float(timeout_s)
+                while time.monotonic() < deadline:
+                    async with self._plc_call():
                         if await self.ctx.plc.read_bit("L_VAC_READY_SW"):
                             return self._ok("VACUUM_ON 완료 — L_VAC_READY_SW=TRUE")
-                        await asyncio.sleep(0.5)
+                    await asyncio.sleep(0.5)
 
-                    # (타임아웃) 준비 신호 미도달 → L_VAC_NOT_READY 읽어서 메시지에 포함 + door 확인 문구
-                    not_ready = False
-                    try:
+                # (타임아웃 사유 보강: 읽을 때만 락)
+                not_ready = False
+                try:
+                    async with self._plc_call():
                         not_ready = await self.ctx.plc.read_bit("L_VAC_NOT_READY")
-                    except Exception:
-                        # 읽기 실패는 메시지 구성에만 영향, 흐름엔 영향 없음
-                        pass
+                except Exception:
+                    pass
 
-                    return self._fail(
-                        f"VACUUM_ON 타임아웃: {int(timeout_s)}s 내 L_VAC_READY_SW TRUE 미도달 "
-                        f"(L_VAC_NOT_READY={not_ready}) — door 확인"
-                    )
-
-                except Exception as e:
-                    # 예외 사유는 message로 그대로 클라이언트 전달
-                    return self._fail(e)
+                return self._fail(
+                    f"VACUUM_ON 타임아웃: {int(timeout_s)}s 내 L_VAC_READY_SW TRUE 미도달 "
+                    f"(L_VAC_NOT_READY={not_ready}) — door 확인"
+                )
+            except Exception as e:
+                # 예외 사유는 message로 그대로 클라이언트 전달
+                return self._fail(e)
 
     async def vacuum_off(self, data: Json) -> Json:
         """
         VACUUM OFF 시퀀스:
+        - 긴 대기/폴링 동안에는 PLC 락을 잡지 않도록, I/O 구간만 _plc_call()으로 감싼다.
+        - 예외/타임아웃이 나도 VENT_SW를 가능한 한 False로 되돌리도록 finally 보장.
         0) L_R_V_SW=False → L_R_P_SW=False 선행 정지
         1) L_VENT_인터락 True 확인
         2) L_VENT_SW = True (벤트 시작)
         3) L_ATM == True 까지 대기 (기본 240s)
         4) L_VENT_SW = False
         """
-        timeout_s = float(data.get("timeout_s", 240.0))  # 기본 4분
+        timeout_s = float(data.get("timeout_s", 240.0))
 
-        async with self.ctx.lock_plc:
-            async with self._plc_logs_to_file_only("VACUUM_OFF"):
-                try:
-                    # 0) L_R_V_SW=False → L_R_P_SW=False 선행 정지
+        async with self._plc_command("VACUUM_OFF"):  # 요청별 로그 파일명 고정
+            try:
+                # 0) 러핑밸브/펌프 OFF (I/O 순간만 락)
+                async with self._plc_call():
                     await self.ctx.plc.write_switch("L_R_V_SW", False)
-                    await asyncio.sleep(0.5)  # 짧은 안정화
+                await asyncio.sleep(0.5)  # 짧은 안정화
+                async with self._plc_call():
                     await self.ctx.plc.write_switch("L_R_P_SW", False)
 
-                    # 1) 인터락 확인
-                    interlock_ok = await self.ctx.plc.read_bit("L_VENT_인터락")
-                    if not interlock_ok:
+                # 1) 벤트 인터락 확인 (읽기 순간만 락)
+                async with self._plc_call():
+                    if not await self.ctx.plc.read_bit("L_VENT_인터락"):
                         return self._fail("L_VENT_인터락=FALSE → 벤트 불가")
 
-                    # 2) L_VENT_SW ON
+                # 2) 벤트 ON (쓰기 순간만 락)
+                async with self._plc_call():
                     await self.ctx.plc.write_switch("L_VENT_SW", True)
 
-                    # 3) L_ATM True까지 대기
-                    deadline = time.monotonic() + timeout_s
-
-                    while time.monotonic() < deadline:
+                # 3) L_ATM TRUE 대기 (폴링 루프는 락 없이, 읽을 때만 짧게)
+                deadline = time.monotonic() + timeout_s
+                while time.monotonic() < deadline:
+                    async with self._plc_call():
                         if await self.ctx.plc.read_bit("L_ATM"):
                             return self._ok("VACUUM_OFF 완료 (L_ATM=TRUE)")
-                        await asyncio.sleep(0.5)  # 0.5s 폴링
+                    await asyncio.sleep(0.5)
 
-                    return self._fail(f"VACUUM_OFF 타임아웃: {timeout_s:.0f}s 내 L_ATM TRUE 미도달 (N2 gas 부족)")
+                # 4) 타임아웃
+                return self._fail(f"VACUUM_OFF 타임아웃: {int(timeout_s)}s 내 L_ATM TRUE 미도달 (N2 gas 부족)")
 
-                except Exception as e:
-                    # 예외 사유는 message에 그대로 담겨서 클라이언트로 전달됨
-                    return self._fail(e)
-                
-                finally:
-                    # 어떤 경로로든 반드시 OFF 시도(래치형/순간형 모두 무해)
-                    try:
+            except Exception as e:
+                # 예외는 message로 그대로 전달
+                return self._fail(e)
+
+            finally:
+                # (가능하면) 벤트 OFF 시도 — 실패해도 본 플로우엔 영향 없음
+                with contextlib.suppress(Exception):
+                    async with self._plc_call():
                         await self.ctx.plc.write_switch("L_VENT_SW", False)
-                    except Exception:
-                        pass
 
     # ================== LoadLock 4pin 제어 ==================
     async def four_pin_up(self, data: Json) -> Json:
@@ -280,22 +298,18 @@ class HostHandlers:
         wait_s = float(data.get("wait_s", 10.0))  # 기본 10초
 
         try:
-            async with self.ctx.lock_plc:
-                async with self._plc_logs_to_file_only("4PIN_UP"):
-                    # 1) 인터락 확인
-                    interlock_ok = await self.ctx.plc.read_bit("L_PIN_인터락")
-                    if not interlock_ok:
+            async with self._plc_command("4PIN_UP"):
+                async with self._plc_call():
+                    if not await self.ctx.plc.read_bit("L_PIN_인터락"):
                         return self._fail("L_PIN_인터락=FALSE → 4PIN_UP 불가")
-
-                    # 2) SW = True (순간 펄스 방식)
+                async with self._plc_call():
                     await self.ctx.plc.press_switch("L_PIN_UP_SW")
-
-                    # 3) 10초 대기 후 램프 확인
-                    await asyncio.sleep(wait_s)
+                await asyncio.sleep(wait_s)
+                async with self._plc_call():
                     lamp_ok = await self.ctx.plc.read_bit("L_PIN_UP_LAMP")
-                    if lamp_ok:
-                        return self._ok(f"4PIN_UP 완료 — L_PIN_UP_LAMP=TRUE (대기 {int(wait_s)}s)")
-                    return self._fail(f"4PIN_UP 실패 — {int(wait_s)}s 후 L_PIN_UP_LAMP=FALSE")
+                if lamp_ok:
+                    return self._ok(f"4PIN_UP 완료 — L_PIN_UP_LAMP=TRUE (대기 {int(wait_s)}s)")
+                return self._fail(f"4PIN_UP 실패 — {int(wait_s)}s 후 L_PIN_UP_LAMP=FALSE")
 
         except Exception as e:
             return self._fail(e)
@@ -307,25 +321,25 @@ class HostHandlers:
         2) L_PIN_DOWN_SW = True
         3) 10초 후 L_PIN_DOWN_LAMP == True 확인
         """
-        wait_s = float(data.get("wait_s", 10.0))  # 기본 10초
-
+        wait_s = float(data.get("wait_s", 10.0))
         try:
-            async with self.ctx.lock_plc:
-                async with self._plc_logs_to_file_only("4PIN_DOWN"):
-                    # 1) 인터락 확인
-                    interlock_ok = await self.ctx.plc.read_bit("L_PIN_인터락")
-                    if not interlock_ok:
+            async with self._plc_command("4PIN_DOWN"):
+                # 1) 인터락 확인
+                async with self._plc_call():
+                    if not await self.ctx.plc.read_bit("L_PIN_인터락"):
                         return self._fail("L_PIN_인터락=FALSE → 4PIN_DOWN 불가")
 
-                    # 2) SW = True (순간 펄스 방식)
+                # 2) 펄스
+                async with self._plc_call():
                     await self.ctx.plc.press_switch("L_PIN_DOWN_SW")
 
-                    # 3) 10초 대기 후 램프 확인
-                    await asyncio.sleep(wait_s)
+                # 3) 대기(락 없음) → 램프 확인(읽을 때만 락)
+                await asyncio.sleep(wait_s)
+                async with self._plc_call():
                     lamp_ok = await self.ctx.plc.read_bit("L_PIN_DOWN_LAMP")
-                    if lamp_ok:
-                        return self._ok(f"4PIN_DOWN 완료 — L_PIN_DOWN_LAMP=TRUE (대기 {int(wait_s)}s)")
-                    return self._fail(f"4PIN_DOWN 실패 — {int(wait_s)}s 후 L_PIN_DOWN_LAMP=FALSE")
+
+                return self._ok(f"4PIN_DOWN 완료 — L_PIN_DOWN_LAMP=TRUE (대기 {int(wait_s)}s)") if lamp_ok \
+                    else self._fail(f"4PIN_DOWN 실패 — {int(wait_s)}s 후 L_PIN_DOWN_LAMP=FALSE")
 
         except Exception as e:
             return self._fail(e)
@@ -349,27 +363,30 @@ class HostHandlers:
             return self._fail(f"지원하지 않는 CH: {ch}")
 
         lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
-        async with self.ctx.lock_plc:                      # ← 추가(1)
-            async with lock:                               # 기존 CH 락 유지
-                async with self._plc_logs_to_file_only(f"GATE_OPEN_CH{ch}"):
-                    try:
-                        # 1) 인터락 확인
+        async with lock:  # CH 절차 충돌 방지는 유지
+            async with self._plc_command(f"GATE_OPEN_CH{ch}"):
+                try:
+                    # 1) 인터락 확인 — 읽는 순간만 락
+                    async with self._plc_call():
                         il = await self.ctx.plc.read_bit(interlock)
-                        if not il:
-                            return self._fail(f"{interlock}=FALSE → CH{ch}_GATE_OPEN 불가")
+                    if not il:
+                        return self._fail(f"{interlock}=FALSE → CH{ch}_GATE_OPEN 불가")
 
-                        # 2) 스위치 TRUE (순간 펄스 방식)
+                    # 2) 펄스 — 쓰는 순간만 락
+                    async with self._plc_call():
                         await self.ctx.plc.press_switch(sw)
 
-                        # 3) 대기 후 램프 확인
-                        await asyncio.sleep(wait_s)
-                        ok = await self.ctx.plc.read_bit(lamp)
-                        if ok:
-                            return self._ok(f"CH{ch}_GATE_OPEN 완료 — {lamp}=TRUE (대기 {int(wait_s)}s)")
-                        return self._fail(f"CH{ch}_GATE_OPEN 실패 — {lamp}=FALSE (대기 {int(wait_s)}s)")
+                    # 3) 대기(락 없음)
+                    await asyncio.sleep(wait_s)
 
-                    except Exception as e:
-                        return self._fail(e)
+                    # 4) 램프 확인 — 읽는 순간만 락
+                    async with self._plc_call():
+                        ok = await self.ctx.plc.read_bit(lamp)
+                    return self._ok(f"CH{ch}_GATE_OPEN 완료 — {lamp}=TRUE (대기 {int(wait_s)}s)") if ok \
+                        else self._fail(f"CH{ch}_GATE_OPEN 실패 — {lamp}=FALSE (대기 {int(wait_s)}s)")
+                except Exception as e:
+                    return self._fail(e)
+
 
     async def gate_close(self, data: Json) -> Json:
         """
@@ -389,27 +406,29 @@ class HostHandlers:
             return self._fail(f"지원하지 않는 CH: {ch}")
 
         lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
-        async with self.ctx.lock_plc:                      # ← 추가(1)
-            async with lock:                               # 기존 CH 락 유지
-                async with self._plc_logs_to_file_only(f"GATE_CLOSE_CH{ch}"):
-                    try:
-                        # 1) 인터락 확인
+        async with lock:  # CH 절차 충돌 방지는 유지
+            async with self._plc_command(f"GATE_CLOSE_CH{ch}"):
+                try:
+                    # 1) 인터락 확인 — 읽는 순간만 락
+                    async with self._plc_call():
                         il = await self.ctx.plc.read_bit(interlock)
-                        if not il:
-                            return self._fail(f"{interlock}=FALSE → CH{ch}_GATE_CLOSE 불가")
+                    if not il:
+                        return self._fail(f"{interlock}=FALSE → CH{ch}_GATE_CLOSE 불가")
 
-                        # 2) 스위치 TRUE (순간 펄스 방식)
+                    # 2) 스위치 펄스 — 쓰는 순간만 락
+                    async with self._plc_call():
                         await self.ctx.plc.press_switch(sw)
 
-                        # 3) 대기 후 램프 확인
-                        await asyncio.sleep(wait_s)
-                        ok = await self.ctx.plc.read_bit(lamp)
-                        if ok:
-                            return self._ok(f"CH{ch}_GATE_CLOSE 완료 — {lamp}=TRUE (대기 {int(wait_s)}s)")
-                        return self._fail(f"CH{ch}_GATE_CLOSE 실패 — {lamp}=FALSE (대기 {int(wait_s)}s)")
+                    # 3) 대기(락 없음)
+                    await asyncio.sleep(wait_s)
 
-                    except Exception as e:
-                        return self._fail(e)
+                    # 4) 램프 확인 — 읽는 순간만 락
+                    async with self._plc_call():
+                        ok = await self.ctx.plc.read_bit(lamp)
+                    return self._ok(f"CH{ch}_GATE_CLOSE 완료 — {lamp}=TRUE (대기 {int(wait_s)}s)") if ok \
+                        else self._fail(f"CH{ch}_GATE_CLOSE 실패 — {lamp}=FALSE (대기 {int(wait_s)}s)")
+                except Exception as e:
+                    return self._fail(e)
 
     # ================== CH1,2 chuck 제어 ==================
     async def chuck_up(self, data: Json) -> Json:
@@ -464,9 +483,12 @@ class HostHandlers:
         else:
             raise ValueError(f"지원하지 않는 CH: {ch}")
 
-        up  = bool(await self.ctx.plc.read_bit(l_up))
-        mid = bool(await self.ctx.plc.read_bit(l_mid))
-        dn  = bool(await self.ctx.plc.read_bit(l_dn))
+        async with self._plc_call():
+            up  = bool(await self.ctx.plc.read_bit(l_up))
+        async with self._plc_call():
+            mid = bool(await self.ctx.plc.read_bit(l_mid))
+        async with self._plc_call():
+            dn  = bool(await self.ctx.plc.read_bit(l_dn))
 
         pos = "unknown"
         if int(up) + int(mid) + int(dn) == 1:
@@ -483,43 +505,57 @@ class HostHandlers:
         - 타임아웃/예외 시에도 반드시 OFF
         """
         lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
-        async with self.ctx.lock_plc:
-            async with lock:
-                async with self._plc_logs_to_file_only(f"CHUCK_{target_name.upper()}_CH{ch}"):
-                    # 이미 목표(확정 램프 TRUE)면 즉시 OK
-                    try:
-                        cur = await self._read_chuck_position(ch)
-                        if cur["position"] == target_name:
-                            return self._ok(f"CH{ch} Chuck OK — 이미 {target_name.upper()} 위치", current=cur)
-                    except Exception:
-                        pass
+        async with lock:
+            async with self._plc_command(f"CHUCK_{target_name.upper()}_CH{ch}"):
+                # (A) 현재 위치 확인 — 내부 read는 _plc_call()로 보호됨
+                try:
+                    cur = await self._read_chuck_position(ch)
+                    if cur["position"] == target_name:
+                        return self._ok(f"CH{ch} Chuck OK — 이미 {target_name.upper()} 위치", current=cur)
+                except Exception:
+                    # 위치 조회 실패는 치명적이지 않으므로 계속 진행
+                    pass
 
-                    try:
-                        # 래치 ON 유지
+                try:
+                    # (B) POWER ON → MOVE ON (각각 I/O 순간만 락)
+                    async with self._plc_call():
                         await self.ctx.plc.write_switch(power_sw, True)
-                        await asyncio.sleep(0.2)  # 전파 여유
+                    await asyncio.sleep(0.2)
+
+                    async with self._plc_call():
                         await self.ctx.plc.write_switch(move_sw, True)
 
-                        deadline = time.monotonic() + float(timeout_s)
-                        while time.monotonic() < deadline:
+                    # (C) 타겟 램프 폴링: 읽을 때만 잠깐 락
+                    deadline = time.monotonic() + float(timeout_s)
+                    while time.monotonic() < deadline:
+                        async with self._plc_call():
                             if await self.ctx.plc.read_bit(target_lamp):
-                                # 성공: 즉시 OFF 후 상태 반환
+                                # 성공: OFF 묶음도 한 블록에서 원자적으로 처리
                                 await self.ctx.plc.write_switch(move_sw, False)
                                 await self.ctx.plc.write_switch(power_sw, False)
+
+                        # 성공 시 상태 스냅샷 리턴
+                        async with self._plc_call():
+                            if await self.ctx.plc.read_bit(target_lamp):
                                 cur = await self._read_chuck_position(ch)
                                 return self._ok(f"CH{ch} Chuck {target_name.upper()} 도달", current=cur)
-                            await asyncio.sleep(0.3)
 
-                        # 타임아웃: OFF 후 실패
+                        await asyncio.sleep(0.3)
+
+                    # (D) 타임아웃 → OFF 후 실패 반환
+                    async with self._plc_call():
                         await self.ctx.plc.write_switch(move_sw, False)
                         await self.ctx.plc.write_switch(power_sw, False)
-                        cur = await self._read_chuck_position(ch)
-                        return self._fail(
-                            f"CH{ch} Chuck {target_name.upper()} 타임아웃({int(timeout_s)}s) — {target_lamp}=FALSE, snapshot={cur}"
-                        )
-                    except Exception as e:
-                        # 예외: OFF 보장
-                        with contextlib.suppress(Exception):
+                    cur = await self._read_chuck_position(ch)
+                    return self._fail(
+                        f"CH{ch} Chuck {target_name.upper()} 타임아웃({int(timeout_s)}s) — "
+                        f"{target_lamp}=FALSE, snapshot={cur}"
+                    )
+
+                except Exception as e:
+                    # (E) 예외 시에도 OFF 보장(묶음으로)
+                    with contextlib.suppress(Exception):
+                        async with self._plc_call():
                             await self.ctx.plc.write_switch(move_sw, False)
                             await self.ctx.plc.write_switch(power_sw, False)
-                        return self._fail(e)
+                    return self._fail(e)
