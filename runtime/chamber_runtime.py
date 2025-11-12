@@ -1866,26 +1866,31 @@ class ChamberRuntime:
         remain = runtime_state.remaining_cooldown("chamber", self.ch, cooldown_s=60.0)
         if remain > 0.0:
             secs = int(remain + 0.999)
+            self._host_report_start(False, f"cooldown {remain:.0f}s remaining")
             self._post_warning("대기 필요", f"이전 공정 종료 후 1분 대기 필요합니다.\n{secs}초 후에 시작하십시오.")
             return
         
         # ★ 추가: 장치 정리가 백그라운드에서 진행 중이면 대기 안내
         if getattr(self, "_pending_device_cleanup", False):
+            self._host_report_start(False, "previous run cleanup in progress")
             self._post_warning("정리 중", "이전 공정 정리 중입니다. 잠시 후 다시 시작하세요.")
             return
         
         # ★ 추가(권장): 이미 다음 공정이 예약되어 있으면 Start 재클릭은 무시하고 안내
         t = getattr(self, "_delay_main_task", None)
         if t is not None and not t.done():
+            self._host_report_start(False, "main task delayed")
             self._post_warning("대기 중", "다음 공정이 예약되어 있습니다. 카운트다운 종료 후 자동 시작합니다.")
             return
 
         # ✅ 교차 실행 차단: 해당 챔버가 이미 다른 런타임(CH/PC/TSP)에서 점유 중이면 시작 금지
         if runtime_state.is_running("chamber", self.ch):
+            self._host_report_start(False, "this chamber already running")
             self._post_warning("실행 오류", f"CH{self.ch}는 이미 다른 공정이 실행 중입니다.")
             return
 
         if self.process_controller.is_running:
+            self._host_report_start(False, "process controller busy")
             self._post_warning("실행 오류", "다른 공정이 실행 중입니다.")
             return  
         
@@ -1901,6 +1906,7 @@ class ChamberRuntime:
 
         vals = self._validate_single_run_inputs()
         if vals is None:
+            self._host_report_start(False, "invalid inputs")
             return
 
         try:
@@ -1927,6 +1933,7 @@ class ChamberRuntime:
         }
         errs = self._validate_norm_params(cast(NormParams, params))
         if errs:
+            self._host_report_start(False, "; ".join(errs))
             self._post_warning("입력값 확인", "\n".join(f"- {e}" for e in errs))
             return  
 
