@@ -141,45 +141,29 @@ class HostHandlers:
             return self._fail(e)
 
     # ================== CH1,2/plasma cleaning 공정 제어 ==================
-    async def start_sputter(self, data: Json) -> Json:
-        recipe = str(data.get("recipe", "")).strip()
-        ch = int(data.get("ch", 1))  # 기본 CH1
+    async def start_sputter(self, ch: int, recipe: str):
+        chamber = self.ctx.get_chamber_runtime(ch)
+        if not chamber:
+            return await self._fail(f"Chamber CH{ch} runtime not ready")
+
         try:
-            if not recipe:
-                return self._fail("Empty recipe")
-
-            # ✅ 전역 차단(any_running) 대신 '해당 챔버' 기준의 점유/충돌만 차단
-            rs = getattr(self.ctx, "runtime_state", None)
-            is_run = (getattr(rs, "is_running", lambda *_: False))
-            if rs and (is_run("chamber", ch) or is_run("pc", ch)):
-                return self._fail(f"CH{ch} is busy (running or cleaning)")
-
-            target = self.ctx.ch1 if ch == 1 else self.ctx.ch2
-            if not hasattr(target, "start_with_recipe_string"):
-                return self._fail("Runtime missing 'start_with_recipe_string' API")
-
-            # ✅ 런타임 내부에서: 시작 직전에 프리플라이트(장비 연결/Chuck 위치 선행 등) 실패 시 예외 발생 → 여기서 즉시 실패 응답
-            await target.start_with_recipe_string(recipe)
-
-            # 여기까지오면 '시작 수락' 단계 통과(프리플라이트가 바로 실패하면 except로 떨어짐)
-            return self._ok("Sputter start accepted", ch=ch)
-
+            # 챔버 런타임은 이미 host handshake가 구현되어 있어 프리플라이트 통과/실패가 명확히 옴
+            await chamber.start_with_recipe_string(recipe)
+            return await self._ok("SPUTTER START OK")
         except Exception as e:
-            # 런타임의 시작 직전 검증/차단 사유를 그대로 클라이언트에 전달
-            return self._fail(str(e), ch=ch)
+            return await self._fail(str(e))
 
-    async def start_plasma_cleaning(self, data: Json) -> Json:
-        recipe = str(data.get("recipe", ""))
+    async def start_plasma_cleaning(self, ch: int, recipe: str):
+        pc = self.ctx.pc
+        if not pc:
+            return await self._fail("Plasma Cleaning runtime not ready")
+
         try:
-            # ✅ 전역 any_running 가드 제거 — 교차(다른 CH) 공정과 병행 허용
-            if not hasattr(self.ctx.pc, "start_with_recipe_string"):
-                return self._fail("PlasmaCleaning runtime missing 'start_with_recipe_string' API")
-
-            # ✅ 프리플라이트 실패 시 내부에서 예외가 올라옴 → 바로 실패 응답
-            await self.ctx.pc.start_with_recipe_string(recipe)
-            return self._ok("Plasma Cleaning started")
+            # 런타임 내부에서 프리플라이트/교차실행/쿨다운 확인 및 FAIL 사유 반환(아래 PC 런타임 수정과 세트)
+            await pc.start_with_recipe_string(recipe)
+            return await self._ok("PLASMA CLEANING START OK")  # 프리플라이트 통과 시점에만 OK
         except Exception as e:
-            return self._fail(e)
+            return await self._fail(str(e))
 
     # ================== LoadLock vacuum 제어 ==================
     async def vacuum_on(self, data: Json) -> Json:
