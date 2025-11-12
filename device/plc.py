@@ -81,8 +81,8 @@ PLC_COIL_MAP: Dict[str, int] = {
     "Z2_DOWN":117,              # M00075
 
     # Z/MID 영역 — 워드/비트 재매핑 적용
-    "Z_M_P_1_STOP_SW": 176,    # M00100
-    "Z_M_P_1_MID_SW":  192,    # M00110
+    "Z_M_P_1_STOP_SW": 160,    # M00100
+    "Z_M_P_1_MID_SW":  176,    # M00110
     "Z_M_P_1_MID_CW":  177,    # M00111
     "Z_M_P_1_MID_CCW": 178,    # M00112
     "Z_M_P_2_MID_SW":  179,    # M00113
@@ -91,7 +91,7 @@ PLC_COIL_MAP: Dict[str, int] = {
 
     # ===== SW(명령) 영역 =====
     # M0012y
-    "R_P_1_SW":          208,  # M00120
+    "R_P_1_SW":          192,  # M00120
     "R_V_1_SW":          193,  # M00121
     "F_V_1_SW":          194,  # M00122
     "M_V_1_SW":          195,  # M00123
@@ -107,7 +107,7 @@ PLC_COIL_MAP: Dict[str, int] = {
     "MAIN_1_GAS_SW":     205,  # M0012D
 
     # M0013y
-    "L_R_P_SW":          224,  # M00130
+    "L_R_P_SW":          208,  # M00130
     "L_R_V_SW":          209,  # M00131
     "L_PIN_UP_SW":       210,  # M00132
     "L_PIN_DOWN_SW":     211,  # M00133
@@ -124,7 +124,7 @@ PLC_COIL_MAP: Dict[str, int] = {
     "Z_M_P_2_CCW_SW":    223,  # M0013F
 
     # M0014y
-    "R_P_2_SW":          240,  # M00140
+    "R_P_2_SW":          224,  # M00140
     "R_V_2_SW":          225,  # M00141
     "F_V_2_SW":          226,  # M00142
     "M_V_2_SW":          227,  # M00143
