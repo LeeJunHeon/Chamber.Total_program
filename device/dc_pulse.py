@@ -717,25 +717,50 @@ class AsyncDCPulse:
 
     # ❸ [REPLACE] READ_STATUS 파싱: CHK 제외 + 1B/2B 모두 처리
     async def read_status_flags(self) -> Optional[int]:
-        # 0x90 응답이 나올 때까지 짧게 3~4회 재시도 (중간 0x9A 등은 무시)
+        """
+        상태 플래그(0x90)를 읽어오는 보조 헬퍼.
+
+        ⚠ 중요:
+        - 이 함수는 OUTPUT_ON/OFF 성공 여부를 '보조로' 확인하는 용도이기 때문에,
+          여기서 직접 command_failed 이벤트를 쏘지 않는다.
+        - 읽기에 실패하면 로그만 남기고 None 을 리턴하고,
+          최종 성공/실패 판정은 호출 측(_verify_output_state, _confirm_off_quick)에서 한다.
+        """
+        # 0x90 응답이 나올 때까지 짧게 3회 재시도 (중간 0x9A 등은 무시)
         for attempt in range(3):
             resp = await self._read_raw(0x90, "READ_STATUS")
+
+            # 응답이 없거나 너무 짧으면 소프트 에러로만 기록하고 재시도
             if not resp or len(resp) < 2:
-                await self._emit_failed("READ_STATUS", f"응답 길이 부족: {resp!r}")
-                return None
+                # 예: NAK 후 세션 재시작 등으로 인해 payload 가 비었을 수 있음
+                await self._emit_status(
+                    f"READ_STATUS: 응답 없음/길이 부족({resp!r}) → 재시도({2 - attempt})"
+                )
+                await asyncio.sleep(0.03)
+                continue
+
             cmd, data, chk = self._unpack_rs232_payload(resp)
             if cmd == 0x90:
                 flags = self._flags16_from_data(data)
                 if flags is None:
-                    await self._emit_failed("READ_STATUS", f"데이터 없음: raw={resp.hex(' ')}")
+                    # 데이터가 비정상이면 역시 소프트 로그만 남기고 실패로 보고 종료
+                    await self._emit_status(
+                        f"READ_STATUS: 데이터 없음: raw={resp.hex(' ')}"
+                    )
                     return None
                 return flags
 
             # ❗ 0x90이 아닌 프레임(예: 0x9A)은 스팬으로 들어온 읽기 결과이므로 무시하고 재시도
-            await self._emit_status(f"READ_STATUS: 다른 프레임(0x{cmd:02X}) 수신 → 무시하고 재시도")
+            await self._emit_status(
+                f"READ_STATUS: 다른 프레임(0x{cmd:02X}) 수신 → 무시하고 재시도"
+            )
             await asyncio.sleep(0.03)
 
-        await self._emit_failed("READ_STATUS", "연속 이질 프레임으로 STATUS 확인 실패")
+        # 여기까지 왔다는 것은 여러 번 시도했지만 플래그를 못 읽었다는 뜻.
+        # 하지만 이것만으로 공정을 '실패'로 보지는 않고, 호출 측에서 판단하게 둔다.
+        await self._emit_status(
+            "READ_STATUS: 연속 실패로 STATUS 플래그 확인 불가 (non-fatal)"
+        )
         return None
 
     @staticmethod
