@@ -219,9 +219,6 @@ class AsyncDCPulse:
         self._last_ref_power_w: Optional[float] = None  # ← 세트포인트 저장
         self._spdev_n: int = 0                     # ← 연속 세트포인트 이탈 카운터
 
-        # [추가] 한 번 command_failed 난 이후에는 새 쓰기 명령을 막기 위한 플래그
-        self._fatal_error: bool = False
-
     # ====== 공용 API ======
     async def start(self):
         if self._watchdog_task and self._watchdog_task.done():
@@ -331,16 +328,17 @@ class AsyncDCPulse:
         # 1) 항상 Host 권한으로 고정
         await self.set_master_host_all()
 
-
-
         # 3) 펄스 파라미터(옵션): sync / freq / duty
         #    EnerPulse 통신 명령: 0x65(Pulse Sync), 0x66(Pulse Freq[kHz 20~150]),
         #                        0x67(Off Time: DC=9, 1.0~10.0us -> 10~100)
         if sync is not None:
             await self.set_pulse_sync(sync)  # 0x65
         '''
-        # [추가] 새 공정마다 fatal 상태 초기화
-        self._fatal_error = False
+        """
+        OUTPUT_ON 이전 단계에서 하나라도 실패하면
+        그 즉시 False 를 리턴하고 나머지 단계는 수행하지 않는다.
+        (실패 이벤트는 각 명령에서 command_failed 로 이미 올라감)
+        """
 
         # 명령 전송전 잠깐 대기
         ok_conn = await self._wait_until_connected(timeout=3.0)
@@ -398,13 +396,13 @@ class AsyncDCPulse:
             await self._write_cmd_data(cmd, 0x0003, 2, label=name)
         await asyncio.sleep(0.2)  # 전환 유예
 
-    async def set_regulation(self, mode: Literal["V","I","P"]):
+    async def set_regulation(self, mode: Literal["V","I","P"]) -> bool:
         """0x81: 제어 모드 설정 (1=V, 2=I, 3=P)."""
         code_map = {"V":1, "I":2, "P":3}
         val = code_map[mode.upper()]
         await self._write_cmd_data(0x81, val, 2, label=f"REG_{mode.upper()}")
 
-    async def set_regulation_power(self):
+    async def set_regulation_power(self) -> bool:
         """제어 모드 = Power."""
         await self._write_cmd_data(0x81, 3, 2, label="REG_POWER")
 
@@ -438,25 +436,25 @@ class AsyncDCPulse:
         self._drain_rx_frames()  # ← 잔여 0x9A 등 제거
         return await self._write_cmd_data(0x80, 0x0002, 2, label="OUTPUT_OFF")
 
-    async def set_pulse_sync(self, mode: Literal["int","ext"]):
+    async def set_pulse_sync(self, mode: Literal["int","ext"]) -> bool:
         # 0x65: Int=0, Ext=1
         val = 0 if mode == "int" else 1
         await self._write_cmd_data(0x65, val, 2, label=f"PULSE_SYNC({mode.upper()})")
 
-    async def set_pulse_freq_khz(self, freq_khz: float):
+    async def set_pulse_freq_khz(self, freq_khz: float) -> bool:
         # 0x66: 20~150 (kHz)
         val = int(round(freq_khz))
         val = min(150, max(20, val))
         await self._write_cmd_data(0x66, val, 2, label=f"PULSE_FREQ({val}kHz)")
 
-    async def set_off_time_us(self, off_time_us: float):
+    async def set_off_time_us(self, off_time_us: float) -> bool:
         # 0x67: DC=9, 1.0~10.0us → 10~100 (x10 스케일)
         x10 = int(round(off_time_us * 10.0))
         x10 = min(100, max(10, x10))
         applied_us = x10 / 10.0
         await self._write_cmd_data(0x67, x10, 2, label=f"OFF_TIME({applied_us:.1f}us)")
 
-    async def set_off_time_dc(self):
+    async def set_off_time_dc(self) -> bool:
         await self._write_cmd_data(0x67, 9, 2, label="OFF_TIME(DC)")
 
     # ====== 선택: 기타 설정(원 코드 호환) ======
@@ -575,14 +573,6 @@ class AsyncDCPulse:
 
     async def _write_cmd_data(self, cmd: int, value: int, width: int, *, label: str) -> bool:
         # ▶ 크리티컬 명령 전, 폴링 잠시 중지 + 수신버퍼 비우기
-
-        # [추가] fatal 상태에서는 새 명령 자체를 보내지 않음
-        if self._fatal_error:
-            self._log.warning(
-                "%s - 이전 명령 실패(fatal_error=True)로 %s 전송 스킵", self._name, label
-            )
-            return False
-
         if label in ("OUTPUT_ON", "OUTPUT_OFF"):
             try:
                 self.set_process_status(False)   # 폴링 중지
@@ -691,7 +681,6 @@ class AsyncDCPulse:
             await self._emit_confirmed(label)     # 선택: 성공 이벤트 남김
             return True
         await self._emit_failed(label, "응답 없음/실패")
-        self._fatal_error = True
         return False
         
     # ❶ [ADD] RS-232 payload 분해 헬퍼: [CMD][DATA...][(ETX?)][CHK] → (cmd, data, chk)
