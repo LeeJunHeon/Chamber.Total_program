@@ -810,6 +810,9 @@ class ChamberRuntime:
                                         r = self.chat.notify_text(f"❌ CH{self.ch} 공정 실패 이유: {reason}")
                                         if inspect.iscoroutine(r):
                                             await r
+                                        # ★ 추가: 실패 텍스트도 카드 직후에 바로 나가도록 즉시 flush
+                                        if hasattr(self.chat, "flush"):
+                                            self.chat.flush()
                                     except Exception as _e:
                                         self.append_log("CHAT", f"실패 이유 텍스트 알림 실패: {_e!r}")
 
