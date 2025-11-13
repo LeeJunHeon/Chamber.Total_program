@@ -644,12 +644,31 @@ class PlasmaCleaningRuntime:
         # 4) 중복 연결 방지 플래그
         self._buttons_connected = True
 
+    # Host 프리플라이트 결과 전달용 헬퍼
+    def _host_report_start(self, ok: bool, reason: str = "") -> None:
+        """
+        Host에서 start를 걸었을 때 프리플라이트 결과(ok / fail 이유)를
+        start_with_recipe_string 쪽 Future로 전달하기 위한 헬퍼.
+
+        - UI에서 버튼을 눌렀을 때는 _host_start_future가 None이라 그냥 무시된다.
+        - Host에서 start_with_recipe_string을 호출한 경우에만 실제로 의미가 있다.
+        """
+        fut = getattr(self, "_host_start_future", None)
+        try:
+            if fut is not None and not fut.done():
+                fut.set_result((bool(ok), str(reason)))
+        except Exception:
+            # 여기서 예외 터져도 공정은 그대로 진행되게 조용히 무시
+            pass
+
     async def _on_click_start(self) -> None:
         self._cleanup_started = False  # ★ 추가: 새 런마다 정리 가드 초기화
 
         # start 버튼 중복 클릭 방지
         if getattr(self, "_running", False):
-            self._post_warning("실행 중", "이미 Plasma Cleaning이 실행 중입니다.")
+            msg = "이미 Plasma Cleaning이 실행 중입니다."
+            self._post_warning("실행 중", msg)
+            self._host_report_start(False, msg) # ★ Host에도 실패 사유 전달
             return
 
         ch = int(getattr(self, "_selected_ch", 1))
@@ -658,20 +677,26 @@ class PlasmaCleaningRuntime:
         ok_cool, remain, _ = runtime_state.pc_block_reason(ch, cooldown_s=60.0)
         if not ok_cool:
             secs = int(float(remain) + 0.999)
+            msg = f"이전 공정 종료 후 1분 대기 필요합니다. 약 {secs}초 후에 다시 시도하십시오."
             # ✔ 챔버 공정과 동일한 문구/형식
-            self._post_warning("대기 필요", f"이전 공정 종료 후 1분 대기 필요합니다.\n{secs}초 후에 시작하십시오.")
-            # ✔ 로그 출력 제거(요청사항)
+            self._post_warning("대기 필요",
+                               f"이전 공정 종료 후 1분 대기 필요합니다.\n{secs}초 후에 시작하십시오.")
+            self._host_report_start(False, msg)   # ★ Host 실패
             return
 
         # 2) 교차 실행 차단
         # 2-1) 같은 CH의 PC가 이미 실행 중이면 금지
         if runtime_state.is_running("pc", ch):
-            self._post_warning("실행 오류", f"CH{ch} Plasma Cleaning이 이미 실행 중입니다.")
+            msg = f"CH{ch} Plasma Cleaning이 이미 실행 중입니다."
+            self._post_warning("실행 오류", msg)
+            self._host_report_start(False, msg)   # ★ Host 실패
             return
 
         # 2-2) 같은 CH의 Chamber 공정도 실행 중이면 금지
         if runtime_state.is_running("chamber", ch):
-            self._post_warning("실행 오류", f"CH{ch}는 이미 다른 공정이 실행 중입니다.")
+            msg = f"CH{ch}는 이미 다른 공정이 실행 중입니다."
+            self._post_warning("실행 오류", msg)
+            self._host_report_start(False, msg)   # ★ Host 실패
             return
         
         # 3) 프리플라이트 (성공하면 계속)
@@ -679,9 +704,14 @@ class PlasmaCleaningRuntime:
             # 1) 사전 연결 점검
             await self._preflight_connect(timeout_s=10.0)
         except Exception as e:
-            # PLC, MFC, IG 등 연결 실패 시 사용자 알림만 표시하고 중단
+            # PLC, MFC, IG 등 연결 실패 시 사용자 알림 + Host 실패
+            msg = f"장치 연결에 실패했습니다: {e}"
             self._post_warning("연결 실패", f"장치 연결에 실패했습니다.\n\n{e}")
+            self._host_report_start(False, msg)    # ★ Host 실패
             return
+        
+        # ★ 여기까지 왔으면 Host 프리플라이트 성공
+        self._host_report_start(True, "preflight OK")
 
         # 4) 실행/시작 마킹 + 동시실행 가드(대칭성 보장)
         runtime_state.mark_started("pc", ch)
@@ -1493,32 +1523,61 @@ class PlasmaCleaningRuntime:
     async def start_with_recipe_string(self, recipe: str) -> None:
         """
         외부 제어(Host) 진입점.
-        - recipe == "" 또는 None: 현재 UI 값으로 단발 실행(버튼 클릭과 동일)
-        - recipe 가 .csv 경로: 첫 데이터 행으로 UI 갱신 후 기존 Start 경로 실행
+
+        - recipe == "" 또는 None:
+            현재 UI 값으로 단발 실행(버튼 클릭과 동일)하되,
+            프리플라이트(쿨다운/교차실행/장비 연결)가 통과했는지만 Host에 반환한다.
+        - recipe 가 .csv 경로:
+            첫 데이터 행으로 UI 갱신 후 기존 Start 경로 실행(위와 동일하게 프리플라이트 결과만 반환).
+
+        공정 본체(PCController._run)는 _on_click_start()에서 비동기로 끝까지 실행되고,
+        이 함수는 프리플라이트 성공/실패에 따른 OK/FAIL만 짧게 응답한다.
         """
-        s = (recipe or "").strip()
-        if not s:
-            # 현재 UI 값으로 버튼 클릭과 동일하게 실행
-            await self._on_click_start()
-            return
+        loop = asyncio.get_running_loop()
 
-        if s.lower().endswith(".csv"):
-            if not os.path.exists(s):
-                raise RuntimeError(f"CSV 파일을 찾을 수 없습니다: {s}")
+        # 이미 다른 Host start가 대기 중이면 차단(동시 중복 호출 방지)
+        old_fut = getattr(self, "_host_start_future", None)
+        if old_fut is not None and not old_fut.done():
+            raise RuntimeError("다른 Plasma Cleaning start 요청이 이미 처리 중입니다.")
 
-            row = self._read_first_row_from_csv(s)
-            if not row:
-                raise RuntimeError("CSV에 데이터 행이 없습니다.")
+        # 새 프리플라이트 Future 준비
+        self._host_start_future = loop.create_future()
 
-            # CSV → UI 세팅 (use_ch 있으면 set_selected_ch까지 내부 적용)
-            self._apply_recipe_row_to_ui(row)
-            self.append_log("File", f"CSV 로드 완료: {s} → UI에 값 세팅")
+        try:
+            s = (recipe or "").strip()
+            if not s:
+                # 현재 UI 값으로 버튼 클릭과 동일하게 실행 (비동기)
+                asyncio.create_task(self._on_click_start())
+            elif s.lower().endswith(".csv"):
+                if not os.path.exists(s):
+                    raise RuntimeError(f"CSV 파일을 찾을 수 없습니다: {s}")
 
-            # 기존 Start 경로로 실행 (쿨다운/프리플라이트/로깅/종료 처리 모두 기존대로)
-            await self._on_click_start()
-            return
+                row = self._read_first_row_from_csv(s)
+                if not row:
+                    raise RuntimeError("CSV에 데이터 행이 없습니다.")
 
-        raise RuntimeError("지원하지 않는 레시피 형식입니다. CSV 경로만 허용됩니다.")
+                # CSV → UI 세팅 (use_ch 있으면 set_selected_ch까지 내부 적용)
+                self._apply_recipe_row_to_ui(row)
+                self.append_log("File", f"CSV 로드 완료: {s} → UI에 값 세팅")
+
+                # 기존 Start 경로로 실행 (쿨다운/프리플라이트/로깅/종료 처리 모두 기존대로, 비동기)
+                asyncio.create_task(self._on_click_start())
+            else:
+                raise RuntimeError("지원하지 않는 레시피 형식입니다. CSV 경로만 허용됩니다.")
+
+            # 🔎 여기서 프리플라이트 결과 신호만 대기 (예: 최대 10초)
+            try:
+                ok, reason = await asyncio.wait_for(self._host_start_future, timeout=10.0)
+            except asyncio.TimeoutError:
+                raise RuntimeError("preflight timeout (쿨다운/가드 등으로 프리플라이트에 도달하지 못했습니다)")
+
+            if not ok:
+                # 실패 사유를 그대로 Host에 전달
+                raise RuntimeError(reason or "Plasma Cleaning start failed")
+            # ok=True면 그대로 리턴 → handlers.start_plasma_cleaning에서 OK 응답
+        finally:
+            # 어떤 경우에도 Future는 정리해서 다음 런에 영향이 없게
+            self._host_start_future = None
 
 # ─────────────────────────────────────────────────────────────
 # 유틸
