@@ -710,6 +710,26 @@ class PlasmaCleaningRuntime:
             self._host_report_start(False, msg)    # ★ Host 실패
             return
         
+        # 3-1) ★ 게이트 밸브 인터락 프리체크 (G_V_{ch}_인터락)
+        try:
+            gv_ok = True
+            if self.plc:
+                key = f"G_V_{ch}_인터락"      # 예: CH1 → G_V_1_인터락
+                self.append_log("PLC", "GV 인터락 확인(프리플라이트)")
+                gv_ok = bool(await self.plc.read_bit(key))
+        except Exception as e:
+            msg = f"게이트밸브 인터락 상태 확인 실패: {e}"
+            self._post_warning("GV 인터락 오류", msg)
+            self._host_report_start(False, msg)
+            return
+
+        if not gv_ok:
+            msg = f"게이트밸브 인터락 FALSE (G_V_{ch}_인터락=FALSE) → LoadLock의 압력을 확인하십시오."
+            self.append_log("PLC", msg)
+            self._post_warning("게이트밸브 인터락", msg)
+            self._host_report_start(False, msg)
+            return
+        
         # ★ 여기까지 왔으면 Host 프리플라이트 성공
         self._host_report_start(True, "preflight OK")
 
