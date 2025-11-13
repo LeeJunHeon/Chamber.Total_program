@@ -219,6 +219,9 @@ class AsyncDCPulse:
         self._last_ref_power_w: Optional[float] = None  # ← 세트포인트 저장
         self._spdev_n: int = 0                     # ← 연속 세트포인트 이탈 카운터
 
+        # [추가] 한 번 command_failed 난 이후에는 새 쓰기 명령을 막기 위한 플래그
+        self._fatal_error: bool = False
+
     # ====== 공용 API ======
     async def start(self):
         if self._watchdog_task and self._watchdog_task.done():
@@ -336,6 +339,9 @@ class AsyncDCPulse:
         if sync is not None:
             await self.set_pulse_sync(sync)  # 0x65
         '''
+        # [추가] 새 공정마다 fatal 상태 초기화
+        self._fatal_error = False
+
         # 명령 전송전 잠깐 대기
         ok_conn = await self._wait_until_connected(timeout=3.0)
         if not ok_conn:
@@ -569,6 +575,14 @@ class AsyncDCPulse:
 
     async def _write_cmd_data(self, cmd: int, value: int, width: int, *, label: str) -> bool:
         # ▶ 크리티컬 명령 전, 폴링 잠시 중지 + 수신버퍼 비우기
+
+        # [추가] fatal 상태에서는 새 명령 자체를 보내지 않음
+        if self._fatal_error:
+            self._log.warning(
+                "%s - 이전 명령 실패(fatal_error=True)로 %s 전송 스킵", self._name, label
+            )
+            return False
+
         if label in ("OUTPUT_ON", "OUTPUT_OFF"):
             try:
                 self.set_process_status(False)   # 폴링 중지
@@ -677,6 +691,7 @@ class AsyncDCPulse:
             await self._emit_confirmed(label)     # 선택: 성공 이벤트 남김
             return True
         await self._emit_failed(label, "응답 없음/실패")
+        self._fatal_error = True
         return False
         
     # ❶ [ADD] RS-232 payload 분해 헬퍼: [CMD][DATA...][(ETX?)][CHK] → (cmd, data, chk)
