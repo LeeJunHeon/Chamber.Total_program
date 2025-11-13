@@ -340,16 +340,20 @@ class AsyncDCPulse:
         (실패 이벤트는 각 명령에서 command_failed 로 이미 올라감)
         """
 
-        # 명령 전송전 잠깐 대기
+        # 0) 연결 준비
         ok_conn = await self._wait_until_connected(timeout=3.0)
         if not ok_conn:
             await self._emit_failed("CONNECT", "연결 준비 실패")
             return False
 
-        # freq/duty 모두 숫자면 off_time_us를 계산해서 0x67로 전송
+        # 2) (옵션) freq/duty 모두 숫자면 off_time_us를 계산해서 0x67로 전송
         if not _is_keep(freq) and freq is not None:
             f_khz = float(freq)
-            await self.set_pulse_freq_khz(f_khz)  # 0x66
+            ok_f = await self.set_pulse_freq_khz(f_khz)  # 0x66
+
+            if not ok_f:
+                await self._emit_status("PULSE_FREQ 설정 실패 → OUTPUT_ON 시퀀스 중단")
+                return False
 
             if not _is_keep(duty) and duty is not None:
                 d_pct = float(duty)
@@ -360,27 +364,37 @@ class AsyncDCPulse:
 
                 if off_time_us > 10.0:
                     await self._emit_status(
-                        f"요청 듀티 {d_pct:.1f}% @ {f_khz:.0f}kHz 불가 → Off가 {off_time_us:.1f}us로 10.0us 상한 초과 → 장비가 10.0us로 클램프"
+                        f"요청 듀티 {d_pct:.1f}% @ {f_khz:.0f}kHz 불가 → "
+                        f"Off가 {off_time_us:.1f}us로 10.0us 상한 초과 → 장비가 10.0us로 클램프"
                     )
 
                 # 장비 스펙: DC=9, 1.0~10.0us → 10~100 (x10 스케일)
                 if d_pct >= 100.0 or off_time_us < 1.0:
-                    await self.set_off_time_dc()         # 0x67, DC=9
+                    ok_dc = await self.set_off_time_dc()         # 0x67, DC=9
+                    if not ok_dc:
+                        await self._emit_status("OFF_TIME(DC) 설정 실패 → OUTPUT_ON 시퀀스 중단")
+                        return False
                 else:
-                    await self.set_off_time_us(off_time_us)  # 0x67
+                    ok_off = await self.set_off_time_us(off_time_us)  # 0x67
+                    if not ok_off:
+                        await self._emit_status("OFF_TIME 설정 실패 → OUTPUT_ON 시퀀스 중단")
+                        return False
             # duty가 keep/None이면 주파수만 적용(Off Time 유지)
 
         # duty만 숫자인 경우(주파수 미지정)는 off_time_us 계산 불가 → 유지
         # 필요하면 별도 API(set_off_time_us)로 직접 지정하세요.
         
-        # 2) 제어 모드 = Power
-        await self.set_regulation_power()
+        # 3) 제어 모드 = Power
+        ok_reg = await self.set_regulation_power()
+        if not ok_reg:
+            await self._emit_status("REG_POWER 실패 → OUTPUT_ON 시퀀스 중단")
+            return False
 
         # 4) 출력 Setpoint(Power) 설정
         ok = await self.set_reference_power(power_w)
         if not ok:
-            # REF 실패 시 안전을 위해 OFF까지 보장 (이미 OFF여도 무해)
-            await self.output_off()
+            # 여기서는 output_off() 를 직접 호출하지 않고,
+            # 실패 이벤트 + False 리턴만으로 상위 종료 시퀀스에 맡긴다.
             await self._emit_status("REF_POWER 실패 → OUTPUT_ON 생략")
             return False
 
