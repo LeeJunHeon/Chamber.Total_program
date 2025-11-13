@@ -414,11 +414,11 @@ class AsyncDCPulse:
         """0x81: 제어 모드 설정 (1=V, 2=I, 3=P)."""
         code_map = {"V":1, "I":2, "P":3}
         val = code_map[mode.upper()]
-        await self._write_cmd_data(0x81, val, 2, label=f"REG_{mode.upper()}")
+        return await self._write_cmd_data(0x81, val, 2, label=f"REG_{mode.upper()}")
 
     async def set_regulation_power(self) -> bool:
         """제어 모드 = Power."""
-        await self._write_cmd_data(0x81, 3, 2, label="REG_POWER")
+        return await self._write_cmd_data(0x81, 3, 2, label="REG_POWER")
 
     async def set_reference(self, mode: Literal["V","I","P"], value: float):
         """0x83: 출력 레벨(참조) 설정 — 모드별 스케일 적용."""
@@ -453,23 +453,23 @@ class AsyncDCPulse:
     async def set_pulse_sync(self, mode: Literal["int","ext"]) -> bool:
         # 0x65: Int=0, Ext=1
         val = 0 if mode == "int" else 1
-        await self._write_cmd_data(0x65, val, 2, label=f"PULSE_SYNC({mode.upper()})")
+        return await self._write_cmd_data(0x65, val, 2, label=f"PULSE_SYNC({mode.upper()})")
 
     async def set_pulse_freq_khz(self, freq_khz: float) -> bool:
         # 0x66: 20~150 (kHz)
         val = int(round(freq_khz))
         val = min(150, max(20, val))
-        await self._write_cmd_data(0x66, val, 2, label=f"PULSE_FREQ({val}kHz)")
+        return await self._write_cmd_data(0x66, val, 2, label=f"PULSE_FREQ({val}kHz)")
 
     async def set_off_time_us(self, off_time_us: float) -> bool:
         # 0x67: DC=9, 1.0~10.0us → 10~100 (x10 스케일)
         x10 = int(round(off_time_us * 10.0))
         x10 = min(100, max(10, x10))
         applied_us = x10 / 10.0
-        await self._write_cmd_data(0x67, x10, 2, label=f"OFF_TIME({applied_us:.1f}us)")
+        return await self._write_cmd_data(0x67, x10, 2, label=f"OFF_TIME({applied_us:.1f}us)")
 
     async def set_off_time_dc(self) -> bool:
-        await self._write_cmd_data(0x67, 9, 2, label="OFF_TIME(DC)")
+        return await self._write_cmd_data(0x67, 9, 2, label="OFF_TIME(DC)")
 
     # ====== 선택: 기타 설정(원 코드 호환) ======
     async def set_arc_params(self, *, detection_us: float, pause_us: float,
