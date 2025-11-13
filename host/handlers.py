@@ -141,29 +141,73 @@ class HostHandlers:
             return self._fail(e)
 
     # ================== CH1,2/plasma cleaning 공정 제어 ==================
-    async def start_sputter(self, ch: int, recipe: str):
-        chamber = self.ctx.get_chamber_runtime(ch)
+    async def start_sputter(self, data: Json) -> Json:
+        """
+        START_SPUTTER 핸들러
+        - data: {"ch": 1 or 2, "recipe": "csv 경로 또는 레시피 문자열"}
+        - ChamberRuntime.start_with_recipe_string(...)을 호출해서
+        프리플라이트/인터락/쿨다운 결과만 응답으로 돌려준다.
+        """
+        # 1) 파라미터 파싱
+        ch = int(data.get("ch") or 0)
+        recipe = str(data.get("recipe") or "").strip()
+
+        if ch not in (1, 2):
+            return self._fail("ch는 1 또는 2만 허용합니다.")
+
+        if not recipe:
+            return self._fail("recipe가 비어 있습니다. (CSV 경로 또는 레시피 문자열 필요)")
+
+        # 2) 해당 챔버 런타임 가져오기
+        #   - ctx.ch1 / ctx.ch2를 쓰고 있다면 그걸 사용
+        #   - 예전 get_chamber_runtime(ch)를 계속 쓰고 싶으면 그걸 호출해도 됨
+        chamber = getattr(self.ctx, "ch1", None) if ch == 1 else getattr(self.ctx, "ch2", None)
+        # 만약 self.ctx.get_chamber_runtime(ch)를 이미 구현해놨다면 이렇게 바꿔도 됨:
+        # chamber = self.ctx.get_chamber_runtime(ch)
+
         if not chamber:
-            return await self._fail(f"Chamber CH{ch} runtime not ready")
+            return self._fail(f"Chamber CH{ch} runtime not ready")
 
         try:
-            # 챔버 런타임은 이미 host handshake가 구현되어 있어 프리플라이트 통과/실패가 명확히 옴
+            # 챔버 런타임은 이미 host handshake가 구현되어 있어
+            # 프리플라이트 통과/실패가 명확히 옴
             await chamber.start_with_recipe_string(recipe)
-            return await self._ok("SPUTTER START OK")
-        except Exception as e:
-            return await self._fail(str(e))
 
-    async def start_plasma_cleaning(self, ch: int, recipe: str):
-        pc = self.ctx.pc
+            # 여기까지 왔다는 것은:
+            #  - 프리플라이트 OK
+            #  - 교차실행/쿨다운 체크 OK
+            #  - 실제 공정은 런타임 내부에서 비동기로 계속 진행 중
+            return self._ok("SPUTTER START OK", ch=ch)
+        except Exception as e:
+            # start_with_recipe_string 안에서 _host_report_start(False, reason) 이 오면
+            # RuntimeError(reason)이 올라오므로 그대로 문자열만 넘겨줌
+            return self._fail(str(e))
+
+    async def start_plasma_cleaning(self, data: Json) -> Json:
+        """
+        START_PLASMA_CLEANING 핸들러
+        - data: {"recipe": "csv 경로 또는 레시피 문자열", ...}
+        - PlasmaCleaningRuntime.start_with_recipe_string(...)을 호출해서
+        프리플라이트/쿨다운/교차실행 체크 결과만 돌려준다.
+        """
+        recipe = str(data.get("recipe") or "").strip()
+
+        if not recipe:
+            return self._fail("recipe가 비어 있습니다. (CSV 경로 또는 레시피 문자열 필요)")
+
+        pc = getattr(self.ctx, "pc", None)
         if not pc:
-            return await self._fail("Plasma Cleaning runtime not ready")
+            return self._fail("Plasma Cleaning runtime not ready")
 
         try:
-            # 런타임 내부에서 프리플라이트/교차실행/쿨다운 확인 및 FAIL 사유 반환(아래 PC 런타임 수정과 세트)
+            # 런타임 내부에서:
+            #  - runtime_state.check_can_start("pc", 선택된 CH) 호출
+            #  - IG/MFC/PLC 상태 프리플라이트
+            #  - 문제 있으면 _host_report_start(False, reason) → 여기서 예외로 전달
             await pc.start_with_recipe_string(recipe)
-            return await self._ok("PLASMA CLEANING START OK")  # 프리플라이트 통과 시점에만 OK
+            return self._ok("PLASMA CLEANING START OK")
         except Exception as e:
-            return await self._fail(str(e))
+            return self._fail(str(e))
 
     # ================== LoadLock vacuum 제어 ==================
     async def vacuum_on(self, data: Json) -> Json:
@@ -427,19 +471,19 @@ class HostHandlers:
     async def chuck_up(self, data: Json) -> Json:
         """
         (현재 정의 유지) CHx_CHUCK_UP = MID로 이동
-        - CH1: Z_M_P_1_SW → Z_M_P_1_MID_SW → Z1_MID 램프/SGN 폴링
-        - CH2: Z_M_P_2_SW → Z_M_P_2_MID_SW → Z2_MID 램프/SGN 폴링
+        - CH1: Z_M_P_1_SW → Z_M_P_1_MID_SW → Z1_MID_LOCATION 폴링
+        - CH2: Z_M_P_2_SW → Z_M_P_2_MID_SW → Z2_MID_LOCATION 폴링
         """
         ch = int(data.get("ch", 1))
         timeout_s = float(data.get("wait_s", 60.0))
 
         if ch == 1:
             return await self._move_chuck(
-                1, "Z_M_P_1_SW", "Z_M_P_1_MID_SW", "Z1_MID", "mid", timeout_s
+                1, "Z_M_P_1_SW", "Z_M_P_1_MID_SW", "Z1_MID_LOCATION", "mid", timeout_s
             )
         elif ch == 2:
             return await self._move_chuck(
-                2, "Z_M_P_2_SW", "Z_M_P_2_MID_SW", "Z2_MID", "mid", timeout_s
+                2, "Z_M_P_2_SW", "Z_M_P_2_MID_SW", "Z2_MID_LOCATION", "mid", timeout_s
             )
         else:
             return self._fail(f"지원하지 않는 CH: {ch}")
@@ -447,19 +491,19 @@ class HostHandlers:
     async def chuck_down(self, data: Json) -> Json:
         """
         CHx_CHUCK_DOWN = 최하단 이동
-        - CH1: Z_M_P_1_SW → Z_M_P_1_CCW_SW → Z1_DOWN 램프/SGN 폴링
-        - CH2: Z_M_P_2_SW → Z_M_P_2_CCW_SW → Z2_DOWN 램프/SGN 폴링
+        - CH1: Z_M_P_1_SW → Z_M_P_1_CCW_SW → Z1_DOWN_LOCATION 폴링
+        - CH2: Z_M_P_2_SW → Z_M_P_2_CCW_SW → Z2_DOWN_LOCATION 폴링
         """
         ch = int(data.get("ch", 1))
         timeout_s = float(data.get("wait_s", 60.0))
 
         if ch == 1:
             return await self._move_chuck(
-                1, "Z_M_P_1_SW", "Z_M_P_1_CCW_SW", "Z1_DOWN", "down", timeout_s
+                1, "Z_M_P_1_SW", "Z_M_P_1_CCW_SW", "Z1_DOWN_LOCATION", "down", timeout_s
             )
         elif ch == 2:
             return await self._move_chuck(
-                2, "Z_M_P_2_SW", "Z_M_P_2_CCW_SW", "Z2_DOWN", "down", timeout_s
+                2, "Z_M_P_2_SW", "Z_M_P_2_CCW_SW", "Z2_DOWN_LOCATION", "down", timeout_s
             )
         else:
             return self._fail(f"지원하지 않는 CH: {ch}")
@@ -470,9 +514,9 @@ class HostHandlers:
         'position'은 램프가 정확히 하나만 TRUE일 때만 확정, 아니면 'unknown'.
         """
         if ch == 1:
-            l_up, l_mid, l_dn = "Z1_UP", "Z1_MID", "Z1_DOWN"
+            l_up, l_mid, l_dn = "Z1_UP_LOCATION", "Z1_MID_LOCATION", "Z1_DOWN_LOCATION"
         elif ch == 2:
-            l_up, l_mid, l_dn = "Z2_UP", "Z2_MID", "Z2_DOWN"
+            l_up, l_mid, l_dn = "Z2_UP_LOCATION", "Z2_MID_LOCATION", "Z2_DOWN_LOCATION"
         else:
             raise ValueError(f"지원하지 않는 CH: {ch}")
 

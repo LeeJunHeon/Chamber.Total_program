@@ -80,6 +80,14 @@ PLC_COIL_MAP: Dict[str, int] = {
     "Z2_MID": 116,              # M00074
     "Z2_DOWN":117,              # M00075
 
+    # Z-MOTION 현재 위치
+    "Z1_UP_LOCATION":   128,    # M00080          
+    "Z1_MID_LOCATION":  129,    # M00081  
+    "Z1_DOWN_LOCATION": 130,    # M00082  
+    "Z2_UP_LOCATION":   131,    # M00083  
+    "Z2_MID_LOCATION":  132,    # M00084
+    "Z2_DOWN_LOCATION": 133,    # M00085  
+
     # Z/MID 영역 — 워드/비트 재매핑 적용
     "Z_M_P_1_STOP_SW": 160,    # M00100
     "Z_M_P_1_MID_SW":  176,    # M00110
