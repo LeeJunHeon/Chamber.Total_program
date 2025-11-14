@@ -121,6 +121,47 @@ class HostHandlers:
     def _fail(self, e: Exception | str) -> Json:
         return {"result": "fail", "message": str(e)}
 
+    # ================== 공정 중 여부 체크 헬퍼 ==================
+    def _fail_if_ch_busy(self, ch: int, action: str) -> Json | None:
+        """
+        runtime_state를 이용해서 해당 CH에서 공정이 실행 중이면
+        명령을 차단하고, 실패 응답(Json)을 돌려준다.
+
+        - '공정'으로 보는 것:
+          · chamber(ch)  : 스퍼터 공정
+          · pc(ch)       : Plasma Cleaning 공정
+          · tsp(0, ch=1) : CH1과 연동된 TSP 공정
+        - runtime_state가 없거나 예외가 나면 차단하지 않고 그대로 진행
+        """
+        rs = getattr(self.ctx, "runtime_state", None)
+        if rs is None:
+            return None
+
+        try:
+            reasons = []
+
+            # CHx 스퍼터 공정
+            if getattr(rs, "is_running", None) and rs.is_running("chamber", ch):
+                reasons.append(f"CH{ch} 스퍼터 공정 실행 중")
+
+            # CHx Plasma Cleaning 공정
+            if getattr(rs, "is_running", None) and rs.is_running("pc", ch):
+                reasons.append(f"CH{ch} Plasma Cleaning 실행 중")
+
+            # TSP는 CH1과만 연관된 글로벌 공정으로 취급
+            if int(ch) == 1 and getattr(rs, "is_running", None) and rs.is_running("tsp", 0):
+                reasons.append("TSP 공정 실행 중")
+
+            if reasons:
+                # 예: "CH2_GATE_OPEN 불가 — CH2 스퍼터 공정 실행 중"
+                return self._fail(f"{action} 불가 — " + " / ".join(reasons))
+
+        except Exception:
+            # runtime_state 문제로 장비 조작까지 막히지 않도록, 에러 시에는 통과
+            return None
+
+        return None
+
     # ================== CH1,2 상태 조회 ==================
     async def get_sputter_status(self, _: Json) -> Json:
         try:
@@ -385,12 +426,18 @@ class HostHandlers:
     async def gate_open(self, data: Json) -> Json:
         """
         CHx_GATE_OPEN 시퀀스:
-        1) G_V_{ch}_인터락 == True 확인
-        2) G_V_{ch}_OPEN_SW = True
-        3) 5초 후 G_V_{ch}_OPEN_LAMP == True 확인
+        1) (추가) runtime_state로 공정 실행 여부 확인
+        2) G_V_{ch}_인터락 == True 확인
+        3) G_V_{ch}_OPEN_SW = True
+        4) 5초 후 G_V_{ch}_OPEN_LAMP == True 확인
         """
         ch = int(data.get("ch", 1))
         wait_s = float(data.get("wait_s", 5.0))  # 기본 5초
+
+        # 🔹 공정 실행 중이면 게이트 조작 금지
+        busy = self._fail_if_ch_busy(ch, f"CH{ch}_GATE_OPEN")
+        if busy is not None:
+            return busy
 
         if ch == 1:
             interlock, sw, lamp = "G_V_1_인터락", "G_V_1_OPEN_SW", "G_V_1_OPEN_LAMP"
@@ -476,6 +523,11 @@ class HostHandlers:
         """
         ch = int(data.get("ch", 1))
         timeout_s = float(data.get("wait_s", 60.0))
+
+        # 🔹 공정 실행 중이면 Chuck 조작 금지
+        busy = self._fail_if_ch_busy(ch, f"CH{ch}_CHUCK_UP")
+        if busy is not None:
+            return busy
 
         if ch == 1:
             return await self._move_chuck(
