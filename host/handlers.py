@@ -565,17 +565,23 @@ class HostHandlers:
                     # (C) 타겟 램프 폴링: 읽을 때만 잠깐 락
                     deadline = time.monotonic() + float(timeout_s)
                     while time.monotonic() < deadline:
+                        lamp_on = False
+
+                        # 1) 램프 상태 확인 + 스위치 OFF는 한 번의 _plc_call 안에서 처리
                         async with self._plc_call():
-                            if await self.ctx.plc.read_bit(target_lamp):
+                            lamp_on = bool(await self.ctx.plc.read_bit(target_lamp))
+                            if lamp_on:
                                 # 성공: OFF 묶음도 한 블록에서 원자적으로 처리
                                 await self.ctx.plc.write_switch(move_sw, False)
                                 await self.ctx.plc.write_switch(power_sw, False)
 
-                        # 성공 시 상태 스냅샷 리턴
-                        async with self._plc_call():
-                            if await self.ctx.plc.read_bit(target_lamp):
-                                cur = await self._read_chuck_position(ch)
-                                return self._ok(f"CH{ch} Chuck {target_name.upper()} 도달", current=cur)
+                        # 2) 램프가 ON이면, 락 밖에서 위치 스냅샷을 읽는다
+                        if lamp_on:
+                            cur = await self._read_chuck_position(ch)
+                            return self._ok(
+                                f"CH{ch} Chuck {target_name.upper()} 도달",
+                                current=cur,
+                            )
 
                         await asyncio.sleep(0.3)
 
