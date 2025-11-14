@@ -97,6 +97,7 @@ NormParams = TypedDict('NormParams', {
     'G1_target_name': str, 'G2_target_name': str, 'G3_target_name': str,
     'G1 Target': str, 'G2 Target': str, 'G3 Target': str,
     'use_power_select': bool,
+    'chuck_position': str, # ★ CSV의 up/mid/down (또는 "")
 }, total=False)
 
 # 폴링 타깃도 명확히 분리
