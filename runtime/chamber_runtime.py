@@ -1809,10 +1809,12 @@ class ChamberRuntime:
     async def _set_chuck_position_if_needed(self, params: Mapping[str, Any]) -> bool:
         """
         레시피에 chuck_position 값이 있으면(공란 제외) 공정 시작 전에 1회만 Chuck 위치를 조정.
-        - up   : Z_M_P_{CH}_CW_SW  펄스 → 60초 대기 → Z{CH}_UP   읽어 True 확인
-        - mid  : Z_M_P_{CH}_MID_SW 펄스 → 60초 대기 → Z{CH}_MID  읽어 True 확인
-        - down : Z_M_P_{CH}_CCW_SW 펄스 → 60초 대기 → Z{CH}_DOWN 읽어 True 확인
-        실패 시 False 반환(공정 시작 중단).
+
+        handlers.py 의 chuck_up/chuck_down 과 동일한 구조:
+        - Z_M_P_{CH}_SW (Z-POWER) ON 유지
+        - 방향 스위치(Z_M_P_{CH}_CW/MID/CCW_SW) ON 유지
+        - Z{CH}_*_LOCATION 램프를 폴링해서 목표 위치 도달 여부 확인
+        - 타임아웃/예외 시에도 스위치는 반드시 OFF
         """
         pos = str(params.get("chuck_position") or "").strip().lower()
         if not pos:
@@ -1820,46 +1822,99 @@ class ChamberRuntime:
             return True
 
         ch = 1 if int(getattr(self, "ch", 1)) != 2 else 2
-        # 스위치/확인 비트 명칭 매핑
-        if pos == "up":
-            sw_name  = f"Z_M_P_{ch}_CW_SW"
-            lamp_bit = f"Z{ch}_UP"
-        elif pos == "mid":
-            sw_name  = f"Z_M_P_{ch}_MID_SW"
-            lamp_bit = f"Z{ch}_MID"
-        elif pos == "down":
-            sw_name  = f"Z_M_P_{ch}_CCW_SW"
-            lamp_bit = f"Z{ch}_DOWN"
-        else:
+
+        # 허용 값 체크
+        if pos not in ("up", "mid", "down"):
             self.append_log("PLC", f"[CH{self.ch}] 알 수 없는 chuck_position='{pos}' → 스킵")
             return True
 
+        # POWER / 방향 스위치 / 위치 램프 매핑 (handlers.py와 동일한 구조)
+        power_sw = f"Z_M_P_{ch}_SW"
+        if pos == "up":
+            move_sw = f"Z_M_P_{ch}_CW_SW"
+            lamp_bit = f"Z{ch}_UP_LOCATION"
+        elif pos == "mid":
+            move_sw = f"Z_M_P_{ch}_MID_SW"
+            lamp_bit = f"Z{ch}_MID_LOCATION"
+        else:  # "down"
+            move_sw = f"Z_M_P_{ch}_CCW_SW"
+            lamp_bit = f"Z{ch}_DOWN_LOCATION"
+
+        if not self.plc:
+            self.append_log("PLC", f"[CH{self.ch}] PLC 미연결 상태 → Chuck 제어 불가")
+            return False
+
+        timeout_s = 60.0
+
         try:
-            if not self.plc:
-                self.append_log("PLC", f"[CH{self.ch}] PLC 미연결 상태 → Chuck 제어 불가")
-                return False
+            # (A) 이미 목표 위치인지 먼저 한 번 확인
+            try:
+                already = bool(await self.plc.read_bit(lamp_bit))
+            except Exception:
+                already = False
 
-            self.append_log("PLC", f"[CH{self.ch}] Chuck '{pos}' 설정: {sw_name} 펄스 전송")
-            # 순간 스위치(펄스) 사용 — 내부에서 momentary로 처리
-            if hasattr(self.plc, "press_switch"):
-                await self.plc.press_switch(sw_name)
-            else:
-                # 구버전 호환(모멘터리 지원 안 되면 강제로 True→pulse_ms→False)
-                await self.plc.write_switch(sw_name, True, momentary=True)
-
-            # 규격: 60초 고정 대기 후 램프 확인(요청사항 준수)
-            await asyncio.sleep(60.0)
-
-            ok = await self.plc.read_bit(lamp_bit)
-            if ok:
-                self.append_log("PLC", f"[CH{self.ch}] Chuck '{pos}' 확인 성공 ({lamp_bit}=True)")
+            if already:
+                self.append_log(
+                    "PLC",
+                    f"[CH{self.ch}] Chuck '{pos}' 이미 목표 위치 ({lamp_bit}=True) → 이동 생략",
+                )
                 return True
-            else:
-                self.append_log("PLC", f"[CH{self.ch}] Chuck '{pos}' 확인 실패: {lamp_bit}=False")
-                return False
+
+            # (B) POWER ON → MOVE ON
+            self.append_log(
+                "PLC",
+                f"[CH{self.ch}] Chuck '{pos}' 이동 시작: {power_sw} → {move_sw} → {lamp_bit} 폴링",
+            )
+
+            await self.plc.write_switch(power_sw, True)
+            await asyncio.sleep(0.2)
+            await self.plc.write_switch(move_sw, True)
+
+            # (C) 램프 폴링 (최대 timeout_s)
+            deadline = time.monotonic() + timeout_s
+            while time.monotonic() < deadline:
+                try:
+                    ok = bool(await self.plc.read_bit(lamp_bit))
+                except Exception:
+                    ok = False
+
+                if ok:
+                    # 성공: 스위치 OFF
+                    with contextlib.suppress(Exception):
+                        await self.plc.write_switch(move_sw, False)
+                        await self.plc.write_switch(power_sw, False)
+                    self.append_log(
+                        "PLC",
+                        f"[CH{self.ch}] Chuck '{pos}' 이동 성공 ({lamp_bit}=True)",
+                    )
+                    return True
+
+                await asyncio.sleep(0.3)
+
+            # (D) 타임아웃: 스위치 OFF 후 실패 반환
+            with contextlib.suppress(Exception):
+                await self.plc.write_switch(move_sw, False)
+                await self.plc.write_switch(power_sw, False)
+
+            self.append_log(
+                "PLC",
+                f"[CH{self.ch}] Chuck '{pos}' 타임아웃({int(timeout_s)}s) — {lamp_bit}=False",
+            )
+            return False
 
         except Exception as e:
-            self.append_log("PLC", f"[CH{self.ch}] Chuck 위치 설정/확인 중 예외: {e!r}")
+            # (E) 예외 시에도 스위치 OFF 보장
+            with contextlib.suppress(Exception):
+                try:
+                    await self.plc.write_switch(move_sw, False)
+                    await self.plc.write_switch(power_sw, False)
+                except Exception:
+                    pass
+
+            self.append_log(
+                "PLC",
+                f"[CH{self.ch}] Chuck '{pos}' 이동 중 예외: {e!r}",
+            )
             return False
 
     # ------------------------------------------------------------------
