@@ -146,10 +146,6 @@ class DCPowerAsync:
             self._adjust_task.cancel()
         self._adjust_task = asyncio.create_task(self._adjust_once(), name="DC_Adjust")
 
-        # 폴링 태스크 (선택)
-        if self._request_status_read is not None:
-            self._control_task = asyncio.create_task(self._control_loop(), name="DC_Poll")
-
     def set_process_status(self, active: bool) -> None:
         """외부에서 폴링 on/off(연결은 유지)."""
         self._polling_enabled = bool(active)
