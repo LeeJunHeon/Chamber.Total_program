@@ -161,12 +161,63 @@ class HostHandlers:
             return None
 
         return None
+    
+    # ================== 내부 유틸 ==================
+    def _has_chamber_delay(self) -> bool:
+        """
+        CH1/CH2 중 하나라도 다음 공정이 _delay_main_task 로 예약되어 있으면 True.
+
+        - chamber_runtime._start_next_process_from_queue() 에서
+          self._set_task_later("_delay_main_task", ...) 로 설정되는 Task 를 본다.
+        - Task 가 존재하고 아직 done() 이 아니라면, 리스트 자동 실행이 진행 중이며
+          스텝 사이 대기 상태라고 판단한다.
+        """
+        for attr in ("ch1", "ch2"):
+            rt = getattr(self.ctx, attr, None)
+            if not rt:
+                continue
+
+            try:
+                t = getattr(rt, "_delay_main_task", None)
+            except Exception:
+                t = None
+
+            if t is not None:
+                try:
+                    if not t.done():
+                        return True
+                except Exception:
+                    # done() 호출에서 예외가 나더라도 상태 판단에는 영향 없도록 무시
+                    pass
+
+        return False
 
     # ================== CH1,2 상태 조회 ==================
     async def get_sputter_status(self, _: Json) -> Json:
         try:
+            # 1) 기본: runtime_state.any_running() 기준
             running = bool(getattr(self.ctx.runtime_state, "any_running")())
-            cleaning = bool(getattr(self.ctx.pc, "is_running", getattr(self.ctx.pc, "_running", False)))
+
+            # 2) ★ 추가: 리스트 자동 실행 중, 다음 공정이 지연 예약된 경우에도
+            #           외부에서는 계속 'running' 으로 보이도록 보정
+            #
+            #    chamber_runtime._start_next_process_from_queue() 에서
+            #    self._set_task_later("_delay_main_task", ...) 로 Task 를 만들어 두는데,
+            #    이 Task 가 살아 있는 동안은 스텝 사이 60초 대기 중인 상태이므로
+            #    실제로는 "전체 공정 리스트가 진행 중" 이라고 보는 것이 맞다.
+            try:
+                if self._has_chamber_delay():
+                    running = True
+            except Exception:
+                # 지연 상태 확인 중 예외가 나더라도 상태 판단이 완전히 깨지지 않도록 무시
+                pass
+
+            # 3) Plasma Cleaning 상태 (기존 로직 유지)
+            cleaning = bool(
+                getattr(self.ctx.pc, "is_running", getattr(self.ctx.pc, "_running", False))
+            )
+
+            # 4) 최종 state 결정
             state = "cleaning" if cleaning else ("running" if running else "idle")
 
             # 진공 여부: L_ATM만 사용
