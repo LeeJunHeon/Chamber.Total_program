@@ -100,6 +100,11 @@ class AsyncMFC:
         # 이벤트 큐 (상위 UI/브리지 소비)
         self._event_q: asyncio.Queue[MFCEvent] = asyncio.Queue(maxsize=1024)
 
+        # ★ 여러 런타임(Chamber / Plasma Cleaning)이 동시에 구독할 수 있도록
+        #   브로드캐스트용 서브 큐와 태스크를 추가
+        self._event_subscribers: list[asyncio.Queue[MFCEvent]] = []
+        self._event_broadcast_task: Optional[asyncio.Task] = None
+
         # 태스크들
         self._want_connected: bool = False
         self._watchdog_task: Optional[asyncio.Task] = None
@@ -185,9 +190,11 @@ class AsyncMFC:
         await self._cancel_task("_poll_task")
         await self._cancel_task("_stab_task")
 
-        # 명령 워커/워치독 중지
+        # 명령 워커/워치독/이벤트 브로드캐스트 중지
         await self._cancel_task("_cmd_worker_task")
         await self._cancel_task("_watchdog_task")
+        await self._cancel_task("_event_broadcast_task")
+        self._event_subscribers.clear()
 
         # 큐/인플라이트 정리
         self._purge_pending("shutdown")
@@ -235,11 +242,49 @@ class AsyncMFC:
         """빠른 종료 경로가 필요할 때 호출 — 현 단계에서는 cleanup에 위임."""
         await self.cleanup()
 
+    def _ensure_event_broadcast_task(self) -> None:
+        """중앙 이벤트 큐(_event_q) → 구독자 큐로 복사하는 태스크 보장."""
+        if self._event_broadcast_task and not self._event_broadcast_task.done():
+            return
+        loop = asyncio.get_running_loop()
+        self._event_broadcast_task = loop.create_task(
+            self._event_broadcast_loop(), name="MFCEventBroadcast"
+        )
+
+    async def _event_broadcast_loop(self) -> None:
+        """_event_q에서 꺼낸 이벤트를 모든 구독자 큐에 브로드캐스트."""
+        try:
+            while True:
+                ev = await self._event_q.get()
+                # 구독자 리스트 스냅샷을 떠서 순회 중 변경에 안전하게 처리
+                for q in list(self._event_subscribers):
+                    try:
+                        q.put_nowait(ev)
+                    except Exception:
+                        # 개별 구독자 큐가 가득 찼거나 이미 정리된 경우는 조용히 스킵
+                        pass
+        except asyncio.CancelledError:
+            # cleanup() 등으로 태스크가 취소될 때 조용히 종료
+            return
+
     async def events(self) -> AsyncGenerator[MFCEvent, None]:
-        """상위에서 소비하는 이벤트 스트림."""
-        while True:
-            ev = await self._event_q.get()
-            yield ev
+        """
+        상위에서 소비하는 이벤트 스트림.
+        여러 소비자가 동시에 호출해도 '모두' 같은 이벤트를 받도록 브로드캐스트한다.
+        """
+        # 브로드캐스트 루프 기동 보장
+        self._ensure_event_broadcast_task()
+
+        q: asyncio.Queue[MFCEvent] = asyncio.Queue(maxsize=1024)
+        self._event_subscribers.append(q)
+        try:
+            while True:
+                ev = await q.get()
+                yield ev
+        finally:
+            # 구독 해제 (cleanup/태스크 취소 시)
+            with contextlib.suppress(ValueError):
+                self._event_subscribers.remove(q)
 
     # ---- 고수준 제어 API (기존 handle_command 세분화) ----
     async def set_flow(self, channel: int, ui_value: float):
