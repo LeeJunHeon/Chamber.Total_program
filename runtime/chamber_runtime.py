@@ -1873,11 +1873,31 @@ class ChamberRuntime:
             self._post_warning("대기 필요", f"이전 공정 종료 후 1분 대기 필요합니다.\n{secs}초 후에 시작하십시오.")
             return
         
-        # ★ 추가: 장치 정리가 백그라운드에서 진행 중이면 대기 안내
+        # ★ 장치 정리가 백그라운드에서 진행 중이면 대기 안내
         if getattr(self, "_pending_device_cleanup", False):
-            self._host_report_start(False, "previous run cleanup in progress")
-            self._post_warning("정리 중", "이전 공정 정리 중입니다. 잠시 후 다시 시작하세요.")
-            return
+            # 👉 runtime_state / process_controller 기준으로
+            #    실제 공정이 아직 도는지 한 번 확인
+            try:
+                still_running = (
+                    self.process_controller.is_running
+                    or runtime_state.is_running("chamber", self.ch)
+                )
+            except Exception:
+                # 조회 중 예외가 나면 보수적으로 "아직 정리 중"으로 본다
+                still_running = True
+
+            if still_running:
+                # 실제로 아직 뭔가 도는 중이면 예전과 동일하게 막기
+                self._host_report_start(False, "previous run cleanup in progress")
+                self._post_warning("정리 중", "이전 공정 정리 중입니다. 잠시 후 다시 시작하세요.")
+                return
+            else:
+                # 👇 여기 핵심: 아무 것도 안 도는데 플래그만 남았으면 자동 해제
+                self.append_log(
+                    "MAIN",
+                    f"[CH{self.ch}] pending_device_cleanup 플래그만 남아 있어 자동 해제합니다."
+                )
+                self._pending_device_cleanup = False
         
         # ★ 추가(권장): 이미 다음 공정이 예약되어 있으면 Start 재클릭은 무시하고 안내
         t = getattr(self, "_delay_main_task", None)
