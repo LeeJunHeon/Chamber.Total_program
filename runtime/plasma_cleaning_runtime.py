@@ -1348,6 +1348,12 @@ class PlasmaCleaningRuntime:
                             await asyncio.wait_for(out, timeout=2.0)
                 except Exception as e:
                     self.append_log("CHAT", f"reason text notify failed: {e!r}")
+                else:
+                    # ★ 추가: 실패 텍스트도 카드 직후에 바로 나가도록 즉시 flush
+                    if hasattr(self.chat, "flush"):
+                        f2 = self.chat.flush()
+                        if inspect.iscoroutine(f2):
+                            await asyncio.wait_for(f2, timeout=2.0)
 
     def _post_warning(self, title: str, text: str) -> None:
         try:
