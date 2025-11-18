@@ -2822,9 +2822,22 @@ class ChamberRuntime:
         # ★ 추가: 남아 있을 수 있는 카운트다운 태스크 정리
         self._cancel_delay_task()
 
+        # 1) 리스트 공정 인덱스/큐 초기화
         self.current_process_index = -1
+        
+        # ★ 핵심: 리스트 공정 큐까지 비워서 다음 Start는 단일 공정(UI 기반)으로만 동작하게
+        try:
+            if hasattr(self, "process_queue"):
+                # 남아 있는 CSV 공정 리스트 제거
+                self.process_queue.clear()
+        except Exception:
+            # 혹시 구조가 꼬여 있어도 다음 런에 영향 없도록 빈 리스트로 강제 재설정
+            self.process_queue = []
+    
+        # 2) UI 리셋
         self._reset_ui_after_process()
 
+        # 3) 로그 파일 / 로그 writer 정리
         with contextlib.suppress(Exception):
             self._close_run_log()
 
@@ -2832,13 +2845,10 @@ class ChamberRuntime:
             self._spawn_detached(self._shutdown_log_writer())
 
         self._log_file_path = None
+
+        # 4) 프리스타트 버퍼 정리 (한 번만 호출해도 충분)
         with contextlib.suppress(Exception):
             self._prestart_buf.clear()
-
-        try: 
-            self._prestart_buf.clear()
-        except Exception: 
-            pass
 
     # ------------------------------------------------------------------
     # 기본 UI값/리셋
