@@ -69,6 +69,7 @@ class DataLogger(QObject):
         # 최종 헤더
         self.header: List[str] = [
             "Timestamp", "Process Note", "Base Pressure",
+            "Main Shutter", "Shutter Delay", "Integration Time", "Power Select",
             "G1 Target", "G2 Target", "G3 Target",
             "Ar flow", "O2 flow", "N2 flow",
             "Working Pressure", "Process Time",
@@ -262,11 +263,24 @@ class DataLogger(QObject):
         # ✅ 세션 시작시각을 우선 사용 (없으면 안전하게 now)
         ts0 = self._session_started_at or datetime.now()
 
+        # ★ 여기서부터: 메인 셔터 / 셔터 딜레이 / Integration / 파워 셀렉트 값 꺼내기
+        use_ms = bool(self.process_params.get("use_ms", False))
+        use_ps = bool(self.process_params.get("use_power_select", False))
+
+        sd = self.process_params.get("shutter_delay", None)
+        it = self.process_params.get("integration_time", None)
+
         # 기록 데이터(문자열로 포맷)
         log_data: Dict[str, str] = {
             "Timestamp": ts0.strftime("%Y-%m-%d %H:%M:%S"),
             "Process Note": str(self.process_params.get("process_note", "")),
             "Base Pressure": f"{base_pressure:.2e}",
+
+            "Main Shutter": "T" if use_ms else "F",
+            "Shutter Delay": f"{float(sd):.1f}" if sd not in (None, "") else "",
+            "Integration Time": str(int(it)) if it not in (None, "") else "",
+            "Power Select": "T" if use_ps else "F",
+
             "G1 Target": str(self.process_params.get("G1 Target", "")),
             "G2 Target": str(self.process_params.get("G2 Target", "")),
             "G3 Target": str(self.process_params.get("G3 Target", "")),
