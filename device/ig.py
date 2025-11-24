@@ -697,13 +697,24 @@ class AsyncIG:
             if not self._waiting_active or self._suspend_reignite:
                 return
 
-            # ✅ 재점등 총 횟수 상한 (config에서 관리)
+            # ✅ 재점등 총 횟수 상한 (예: 3회) 초과 → 즉시 공정 실패 처리
             if self._total_reignite_attempts >= int(IG_REIGNITE_MAX_ATTEMPTS):
                 await self._emit_status(
-                    f"IG OFF 응답 반복 → 자동 재점등 중단(상한 {IG_REIGNITE_MAX_ATTEMPTS}회 초과). 폴링만 유지"
+                    f"IG OFF 응답 반복 → 자동 재점등 중단(상한 {IG_REIGNITE_MAX_ATTEMPTS}회 도달). 공정 실패로 종료"
                 )
+                # 더 이상 이 wait 루프는 의미 없으므로 종료 플래그 설정
+                self._waiting_active = False
+                self._suspend_reignite = True
+                self._last_wait_success = False
+
+                # chamber_runtime → process_controller 로 전달되는 base_failed 이벤트
+                await self._emit_failed("ReigniteLimit")
+
+                # 정리도 백그라운드로 수행 (SIG 0 등)
+                asyncio.create_task(self.cleanup())
                 return
 
+            # 상한에 아직 도달하지 않았다면 재점등 시도
             self._total_reignite_attempts += 1
             await self._emit_status(
                 f"IG OFF 응답 감지 → 자동 재점등 시도({self._total_reignite_attempts}/{IG_REIGNITE_MAX_ATTEMPTS})"
