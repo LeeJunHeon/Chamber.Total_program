@@ -237,13 +237,6 @@ class RFPulseAsync:
         self._reader = None
         self._writer = None
         self._connected = False
-
-        # ★ NPort 포트 강제 해제 (Windows에서만)
-        # try:
-        #     await self._force_release_nport_port()
-        # except Exception as e:
-        #     await self._emit_status(f"IPSerial reset skip/fail: {e!r}")
-
         await self._emit_status("RFPulse 연결 종료됨")
 
     async def events(self) -> AsyncGenerator[RFPulseEvent, None]:
