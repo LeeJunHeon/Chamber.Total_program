@@ -1159,7 +1159,7 @@ class AsyncMFC:
                 # 목표 미도달이면 시도 횟수 증가
                 self._stab_attempts += 1
 
-                if self._stab_attempts >= 60:
+                if self._stab_attempts >= 180: # 가스 안정화 최대 3분 대기
                     await self._emit_failed("FLOW_ON", "GAS 안정화 시간 초과")
                     self._stab_ch = None
                     self._stab_target_hw = 0.0
