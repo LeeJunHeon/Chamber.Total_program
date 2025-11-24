@@ -613,7 +613,7 @@ class ProcessController:
                 hard_wait_actions = {
                     ActionType.RF_POWER_STOP,
                     ActionType.DC_POWER_STOP,
-                    ActionType.RF_PULSE_STOP,
+                    #ActionType.RF_PULSE_STOP,
                     ActionType.DC_PULSE_STOP,
                 }
 

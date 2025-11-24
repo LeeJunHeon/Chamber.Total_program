@@ -193,12 +193,21 @@ class RFPulseAsync:
 
     # ---------- 공용 API ----------
     async def start(self):
+        # 1) 죽어버린 태스크는 정리
         if self._watchdog_task and self._watchdog_task.done():
             self._watchdog_task = None
         if self._cmd_worker_task and self._cmd_worker_task.done():
             self._cmd_worker_task = None
+
+        # 2) 태스크가 아직 살아 있으면 새로 만들 필요 없이
+        #    단순히 다시 연결을 시도하도록 플래그만 올려준다.
         if self._watchdog_task and self._cmd_worker_task:
+            self._closing = False
+            self._want_connected = True
             return
+
+        # 3) 처음 시작하거나, 둘 중 하나라도 없으면 새로 태스크 생성
+        self._closing = False
         self._want_connected = True
         loop = asyncio.get_running_loop()
         self._watchdog_task = loop.create_task(self._watchdog_loop(), name="RFPWatchdog")
