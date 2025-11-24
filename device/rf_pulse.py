@@ -11,7 +11,6 @@ rf_pulse.py — asyncio 기반 CESAR AE RS-232 Pulse 컨트롤러
   - exec(쓰기/CSR 확인) / query(읽기/데이터 프레임) 분리 처리
   - 폴링: REPORT_STATUS → FWD → REF 순서, 중첩 금지
   - RF Pulse 시퀀스: HOST→MODE(FWD)→SETP→(FREQ/DUTY)→PULSING=1→RF ON
-  - 안전정지: HOST(유지)→PULSING=0→RF OFF (no-reply 허용)
   - 기존 상수/타임아웃/백오프/파싱/검증 로직 유지
 """
 
@@ -216,7 +215,7 @@ class RFPulseAsync:
     async def cleanup(self):
         self._closing = True
         self._want_connected = False
-        self.set_process_status(False)      # safe off 큐잉
+        self.set_process_status(False) # 폴링만 중지하고, SAFE 시퀀스는 수행하지 않음
         await asyncio.sleep(0.2)
 
         await self._cancel_task("_poll_task")
@@ -319,45 +318,35 @@ class RFPulseAsync:
         self._purge_pending("polling off")
 
     def stop_process(self):
-        """외부 stop: 폴링 off → SAFE 시퀀스 → power_off_finished 이벤트."""
+        """외부 stop: 폴링 off → RF OFF → power_off_finished 이벤트."""
         # 공정 중단 플래그
         self._stop_requested = True
 
         # 먼저 폴링만 정지
         self.set_process_status(False)
 
-        # 종료/정지/클로징이거나, 직전 상태에서 RF가 켜져 있었으면 SAFE 전송
-        need_safe = (
-            self._closing or self._stop_requested or
-            (self._last_status and (self._last_status.rf_output_on or self._last_status.rf_on_requested))
+        # 직전 상태에서 RF가 켜져 있었으면 RF OFF만 전송
+        need_off = (
+            self._last_status and (self._last_status.rf_output_on or self._last_status.rf_on_requested)
         )
-        if not need_safe:
-            # 별도로 꺼줄 게 없으면 여기서 종료
+        if not need_off:
+            # 꺼줄 RF가 없으면 아무 것도 하지 않음
             return
-
-        # SAFE 시퀀스: HOST 고정 → PULSING 0 → RF OFF(+power_off_finished 이벤트)
-        self._enqueue_exec(
-            CMD_SET_ACTIVE_CTRL, b"\x02",
-            tag="[SAFE HOST]", allow_no_reply=True, allow_when_closing=True
-        )
-        self._enqueue_exec(
-            CMD_SET_PULSING, bytes([0]),
-            tag="[SAFE PULSING 0]", allow_no_reply=True, allow_when_closing=True
-        )
 
         async def _notify_off():
             # ProcessController에서 RFPULSE_OFF 토큰으로 처리
             await self._event_q.put(RFPulseEvent(kind="power_off_finished"))
 
+        # SAFE 시퀀스 대신 RF OFF 한 번만 전송
         self._enqueue_exec(
             CMD_RF_OFF, b"",
-            tag="[SAFE RF OFF]",
+            tag="[RF OFF]",
             allow_no_reply=True,
             allow_when_closing=True,
             callback=lambda _b: asyncio.create_task(_notify_off())
         )
 
-        # 이후에는 더 이상 자동 재연결을 유지할 필요 없으면 꺼준다(선택 사항)
+        # 이후에는 재연결을 유지할 필요 없으면 꺼주는 동작은 그대로 유지(선택 사항)
         self._want_connected = False
 
     async def poll_once(self):
