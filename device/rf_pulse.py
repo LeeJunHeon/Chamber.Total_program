@@ -318,36 +318,30 @@ class RFPulseAsync:
         self._purge_pending("polling off")
 
     def stop_process(self):
-        """외부 stop: 폴링 off → RF OFF → power_off_finished 이벤트."""
-        # 공정 중단 플래그
-        self._stop_requested = True
+            """외부 stop: 폴링 off → RF OFF → power_off_finished 이벤트."""
+            # 공정 중단 플래그만 세팅
+            self._stop_requested = True
 
-        # 먼저 폴링만 정지
-        self.set_process_status(False)
+            # 폴링만 먼저 정지 (SAFE는 수행하지 않음)
+            self.set_process_status(False)
 
-        # 직전 상태에서 RF가 켜져 있었으면 RF OFF만 전송
-        need_off = (
-            self._last_status and (self._last_status.rf_output_on or self._last_status.rf_on_requested)
-        )
-        if not need_off:
-            # 꺼줄 RF가 없으면 아무 것도 하지 않음
-            return
+            async def _notify_off():
+                # ProcessController에서 RFPULSE_OFF 토큰으로 처리
+                await self._event_q.put(RFPulseEvent(kind="power_off_finished"))
 
-        async def _notify_off():
-            # ProcessController에서 RFPULSE_OFF 토큰으로 처리
-            await self._event_q.put(RFPulseEvent(kind="power_off_finished"))
+            # 조건 없이 RF OFF 한 번 전송
+            self._enqueue_exec(
+                CMD_RF_OFF,
+                b"",
+                tag="[RF OFF]",
+                allow_no_reply=True,        # 응답 없어도 콜백 호출
+                allow_when_closing=True,
+                callback=lambda _b: asyncio.create_task(_notify_off()),
+            )
 
-        # SAFE 시퀀스 대신 RF OFF 한 번만 전송
-        self._enqueue_exec(
-            CMD_RF_OFF, b"",
-            tag="[RF OFF]",
-            allow_no_reply=True,
-            allow_when_closing=True,
-            callback=lambda _b: asyncio.create_task(_notify_off())
-        )
-
-        # 이후에는 재연결을 유지할 필요 없으면 꺼주는 동작은 그대로 유지(선택 사항)
-        self._want_connected = False
+            # 필요하다면 여기서 _want_connected 를 False로 둘 수도 있음
+            # (지금 구조를 유지하고 싶으면 아래 줄은 그냥 그대로 두면 됨)
+            self._want_connected = False
 
     async def poll_once(self):
         """원샷 WAKE→FWD→REF 읽기 및 이벤트 방출."""
