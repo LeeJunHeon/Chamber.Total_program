@@ -1085,17 +1085,43 @@ class ProcessController:
         sp_on_label = 'SP3'    if self._ch == 1 else 'SP4'
         
         # 1) 먼저 채널별 압력 제어 SP3 / SP4를 활성화
-        steps.extend([
-            ProcessStep(action=ActionType.MFC_CMD,
-                        params=(sp_on_cmd, {}),
-                        message=f'압력 제어({sp_on_label}) 시작'),
-            ProcessStep(action=ActionType.MFC_CMD,
-                        params=('SP1_SET', {'value': working_pressure}),
-                        message=f'목표 압력(SP1) {working_pressure:.2f} 설정'),
-            ProcessStep(action=ActionType.DELAY,
-                        duration=60000,
-                        message='압력 안정화 대기 (60초)'),
-        ])
+        steps.append(ProcessStep(
+            action=ActionType.MFC_CMD,
+            params=(sp_on_cmd, {}),
+            message=f'압력 제어({sp_on_label}) 시작',
+        ))
+
+        steps.append(ProcessStep(
+                action=ActionType.DELAY,
+                duration=60000,
+                message='압력 안정화 대기 (SP3/4, 60초)',
+            ))
+
+        # 2) working_pressure < 5 인 경우: SP2로 먼저 제어 후 SP1 세팅
+        if working_pressure < 5.0:
+            steps.append(ProcessStep(
+                action=ActionType.MFC_CMD,
+                params=('SP2_SET', {'value': working_pressure}),
+                message=f'목표 압력(SP2) {working_pressure:.2f} 설정',
+            ))
+            steps.append(ProcessStep(
+                action=ActionType.MFC_CMD,
+                params=('SP2_ON', {}),
+                message='압력 제어(SP2) 시작',
+            ))
+            steps.append(ProcessStep(
+                action=ActionType.DELAY,
+                duration=60000,
+                message='압력 안정화 대기 (SP2, 60초)',
+            ))
+            
+        # SP2로 안정화 후 SP1 세팅
+        # 3) working_pressure >= 5 인 경우: 기존처럼 SP1만 사용
+        steps.append(ProcessStep(
+            action=ActionType.MFC_CMD,
+            params=('SP1_SET', {'value': working_pressure}),
+            message=f'목표 압력(SP1) {working_pressure:.2f} 설정',
+        ))
 
         # --- 파워/셔터 ---
         # Gun Shutter 열기 (CH2 전용: gun_shutters가 비어있지 않을 때만)
