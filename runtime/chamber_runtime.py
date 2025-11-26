@@ -266,9 +266,6 @@ class ChamberRuntime:
         except Exception:
             self.append_log("Graph", "reset skipped (headless)")
 
-        # 로거
-        self.data_logger = DataLogger(ch=self.ch, csv_dir=Path(r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database"))
-
         # 로그 파일 경로 관리(세션 단위) + 사전 버퍼
         self._log_root = Path(log_dir)
         # ✅ CH 로그를 루트 바로 아래 CH1/CH2에 저장
@@ -278,6 +275,13 @@ class ChamberRuntime:
         self._log_fp = None
         self._log_q: asyncio.Queue[str] = asyncio.Queue(maxsize=4096)
         self._log_writer_task: asyncio.Task | None = None
+
+        # 데이터 로거 (Sputter Calib CSV) - CH 로그로 로그를 흘려보내도록 콜백 전달
+        self.data_logger = DataLogger(
+            ch=self.ch,
+            csv_dir=Path(r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database"),
+            log_func=lambda msg: self.append_log("CSV", msg),
+        )
 
         # 장치 인스턴스(각 챔버 독립)
         mfc_host, mfc_port = self.cfg.MFC_TCP
@@ -733,8 +737,12 @@ class ChamberRuntime:
 
                     try:
                         self.data_logger.start_new_log_session(params)
-                    except Exception:
-                        pass
+                        # 성공 시에도 명시적으로 남겨 두면 나중에 추적이 쉬움
+                        self.append_log("CSV", "Sputter Calib 로그 세션 시작")
+                    except Exception as e:
+                        # 시작 자체가 실패한 경우도 CH 로그에 남김
+                        self.append_log("CSV", f"Sputter Calib 로그 세션 시작 실패: {e!r}")
+
                     self._soon(self._graph_reset_safe)
 
                     # ✅ 텍스트 알림은 기존 그대로 유지
@@ -753,6 +761,10 @@ class ChamberRuntime:
                         ok = bool(payload.get("ok", False))
                         detail = payload.get("detail", {}) or {}
                         ok_for_log = bool(detail.get("ok_for_log", ok))
+
+                        # CSV 기록 시도 로그 남기기
+                        self.append_log("CSV", f"Sputter Calib CSV 기록 요청 (ok_for_log={ok_for_log})")
+
                         self.data_logger.finalize_and_write_log(ok_for_log)
                         await asyncio.sleep(0.20)
 

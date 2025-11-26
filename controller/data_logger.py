@@ -5,7 +5,7 @@ import re
 import asyncio
 from datetime import datetime
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Optional, Callable
 
 from PySide6.QtCore import QObject, Slot
 
@@ -23,19 +23,24 @@ class DataLogger(QObject):
         *,
         ch: int,
         csv_dir: Optional[Path] = None,
+        log_func: Optional[Callable[[str], None]] = None,  # ← 로그 콜백 추가
     ):
         super().__init__(parent)
         self._ch = int(ch)  # ← 추가: 폴백 경로명/파일명에 사용
+        self._log_func = log_func              # CH 로그로 넘길 콜백
 
         # 공통 저장 경로 (인자 없으면 기존 NAS 기본값)
         log_directory = Path(csv_dir) if csv_dir else Path(r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database")
         try:
             log_directory.mkdir(parents=True, exist_ok=True)
-        except Exception:
+        except Exception as e:
             # 폴백
             log_directory = Path.cwd() / f"_CSV_local_CH{int(ch)}"
             log_directory.mkdir(parents=True, exist_ok=True)
-            print(f"[DataLogger] NAS 접근 실패 → 로컬 폴백: {log_directory}")
+            if self._log_func:
+                self._log_func(
+                    f"Sputter Calib CSV 폴더 생성 실패(NAS) → 로컬 폴더로 폴백: {local_dir} (원인: {e!r})"
+                )
 
         # 채널별 파일명만 다르게
         self.log_file = log_directory / f"Ch{int(ch)}_log.csv"
@@ -343,9 +348,16 @@ class DataLogger(QObject):
                     writer.writeheader()
                 writer.writerow(log_data)
             self._session_started_at = None
+
+            # ✅ NAS에 정상 기록 완료 로그
+            if self._log_func:
+                self._log_func(f"Sputter Calib CSV 1행 기록 완료 → {self.log_file}")
+
         except Exception as e:
-            # NAS 실패 → 로컬 폴더로 재시도
-            print(f"데이터 로그 파일 작성 실패(NAS): {e}")
+            # NAS 쓰기 실패 → 로컬 폴더로 재시도
+            if self._log_func:
+                self._log_func(f"Sputter Calib CSV 기록 실패(NAS) → 로컬 폴백 시도: {e!r}")
+
             try:
                 local_dir = Path.cwd() / f"_CSV_local_CH{self._ch}"
                 local_dir.mkdir(parents=True, exist_ok=True)
@@ -356,8 +368,14 @@ class DataLogger(QObject):
                     if not file_exists:
                         writer.writeheader()
                     writer.writerow(log_data)
+                    
                 # 이후 런부터는 로컬 파일을 기본으로 사용
                 self.log_file = local_file
-                print(f"[DataLogger] NAS 실패 → 로컬 폴백으로 기록: {local_file}")
+
+                if self._log_func:
+                    self._log_func(f"Sputter Calib CSV 로컬 폴백 기록 완료 → {local_file}")
+
             except Exception as e2:
-                print(f"[DataLogger] 로컬 폴백마저 실패: {e2}")
+                # 로컬 폴백마저 실패한 경우도 CH 로그에 남김
+                if self._log_func:
+                    self._log_func(f"Sputter Calib CSV 로컬 폴백마저 실패: {e2!r}")
