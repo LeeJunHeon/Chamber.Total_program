@@ -1083,6 +1083,8 @@ class ProcessController:
         # --- 압력 제어 시작 (CH1은 SP3, 그 외는 SP4) ---
         sp_on_cmd   = 'SP3_ON' if self._ch == 1 else 'SP4_ON'
         sp_on_label = 'SP3'    if self._ch == 1 else 'SP4'
+        
+        # 1) 먼저 채널별 압력 제어 SP3 / SP4를 활성화
         steps.extend([
             ProcessStep(action=ActionType.MFC_CMD,
                         params=(sp_on_cmd, {}),

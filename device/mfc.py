@@ -572,6 +572,35 @@ class AsyncMFC:
         if ok: await self._emit_confirmed("SP1_SET")
         else:  await self._emit_failed("SP1_SET", "SP1 설정 확인 실패")
 
+    async def sp2_set(self, ui_value: float):
+        """SP2_SET (UI→HW 변환) + (옵션) READ_SP2_VALUE 검증."""
+        hw_val = round(float(ui_value) * float(MFC_PRESSURE_SCALE),
+                       int(MFC_PRESSURE_DECIMALS))
+        await self._emit_status(
+            f"SP2 스케일: UI {ui_value:.2f} → 장비 {hw_val:.{int(MFC_PRESSURE_DECIMALS)}f}"
+        )
+
+        # 설정 전송 (no-reply)
+        self._enqueue(
+            self._mk_cmd("SP2_SET", value=hw_val),
+            None,
+            allow_no_reply=True,
+            tag="[SP2_SET]",
+        )
+
+        # 검증 비활성화면 즉시 확정
+        if not self._verify_enabled:
+            await asyncio.sleep(MFC_GAP_MS / 1000.0)
+            await self._emit_confirmed("SP2_SET")
+            return
+
+        # READ_SP2_VALUE가 정의되어 있지 않으면 _verify_sp_set 내부에서 스킵/통과
+        ok = await self._verify_sp_set(2, hw_val, ui_value)
+        if ok:
+            await self._emit_confirmed("SP2_SET")
+        else:
+            await self._emit_failed("SP2_SET", "SP2 설정 확인 실패")
+
     async def sp4_set(self, ui_value: float):
         """SP4_SET (UI→HW 변환) + (옵션) READ_SP4_VALUE 검증."""
         hw_val = round(float(ui_value) * float(MFC_PRESSURE_SCALE), int(MFC_PRESSURE_DECIMALS))
@@ -604,6 +633,25 @@ class AsyncMFC:
         ok = await self._verify_simple_flag("SP1_ON", expect_mask='1')
         if ok: await self._emit_confirmed("SP1_ON")
         else:  await self._emit_failed("SP1_ON", "SP1 상태 확인 실패")
+
+    async def sp2_on(self):
+        """SP2_ON: SP2 Set-Point 활성화."""
+        if not self._verify_enabled:
+            self._enqueue(
+                self._mk_cmd("SP2_ON"),
+                None,
+                allow_no_reply=True,
+                tag="[SP2_ON]",
+            )
+            await asyncio.sleep(MFC_GAP_MS / 1000.0)
+            await self._emit_confirmed("SP2_ON")
+            return
+
+        ok = await self._verify_simple_flag("SP2_ON", expect_mask='2')
+        if ok:
+            await self._emit_confirmed("SP2_ON")
+        else:
+            await self._emit_failed("SP2_ON", "SP2 상태 확인 실패")
 
     async def sp3_on(self):
         if not self._verify_enabled:
@@ -711,18 +759,25 @@ class AsyncMFC:
                             gap_ms=MFC_GAP_MS)  # 필요시 MFC_DELAY_MS 로 조절 가능
                 await self._emit_status(f"Ch{ch} MFC Zeroing 명령 전송")
 
-            elif key == "SP4_ON":
-                await self.sp4_on()
+            elif key == "SP1_ON":
+                await self.sp1_on()
+
+            elif key == "SP2_ON":
+                await self.sp2_on()
 
             elif key == "SP3_ON":
                 await self.sp3_on()
 
-            elif key == "SP1_ON":
-                await self.sp1_on()
+            elif key == "SP4_ON":
+                await self.sp4_on()
 
             elif key == "SP1_SET":
                 val_ui = _req("value", float)
                 await self.sp1_set(val_ui)
+
+            elif key == "SP2_SET":
+                val_ui = _req("value", float)
+                await self.sp2_set(val_ui)
 
             elif key == "SP4_SET":
                 val_ui = _req("value", float)
