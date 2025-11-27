@@ -1960,12 +1960,23 @@ class ChamberRuntime:
                 self._post_warning("정리 중", "이전 공정 정리 중입니다. 잠시 후 다시 시작하세요.")
                 return
             else:
-                # 👇 여기 핵심: 아무 것도 안 도는데 플래그만 남았으면 자동 해제
+                # 👇 여기 핵심: 플래그만 남아 있는 경우에는
+                #    장치 워치독/폴링을 한 번 더 강제로 정리하고 플래그를 해제
                 self.append_log(
                     "MAIN",
-                    f"[CH{self.ch}] pending_device_cleanup 플래그만 남아 있어 자동 해제합니다."
+                    f"[CH{self.ch}] 이전 공정 잔여 장치 정리(자동 실행)"
                 )
+
+                # 비동기로 전체 장치 정리를 한 번 더 수행
+                with contextlib.suppress(Exception):
+                    self._spawn_detached(
+                        self._stop_device_watchdogs(light=False),
+                        name=f"FullCleanup.BeforeStart.CH{self.ch}",
+                    )
+
+                # 정리 요청까지 보냈으니 플래그/상태 초기화
                 self._pending_device_cleanup = False
+                self._pc_stopping = False
         
         # ★ 추가(권장): 이미 다음 공정이 예약되어 있으면 Start 재클릭은 무시하고 안내
         t = getattr(self, "_delay_main_task", None)
@@ -3298,10 +3309,31 @@ class ChamberRuntime:
         # 공통: 가스/유량
         if not (p.get("use_ar") or p.get("use_o2") or p.get("use_n2")):
             errs.append("가스를 하나 이상 선택해야 합니다.")
-        for k in ("ar_flow","o2_flow","n2_flow"):
-            v = float(p.get(k, 0) or 0)
+
+        # 🔧 None / "None" / 빈 문자열 등을 0으로 처리
+        for k in ("ar_flow", "o2_flow", "n2_flow"):
+            raw = p.get(k, 0)
+
+            # None, "", "None" → 0 으로 간주
+            if raw is None:
+                v = 0.0
+            else:
+                s = str(raw).strip()
+                if s == "" or s.upper() == "NONE":
+                    v = 0.0
+                else:
+                    try:
+                        v = float(s)
+                    except (TypeError, ValueError):
+                        # 이상한 값이면 0으로 처리하고, 에러 리스트에만 남김 (선택)
+                        v = 0.0
+                        errs.append(f"{k} 값이 숫자가 아니라 0으로 처리(raw={raw!r}).")
+
             if v < 0:
                 errs.append(f"{k}는 음수 불가")
+
+            # 이후에서 확실히 float 로 쓰도록 p에 다시 넣어줌
+            p[k] = v
 
         if self.ch == 1:
             # CH1 규칙
