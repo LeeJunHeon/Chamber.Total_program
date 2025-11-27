@@ -39,7 +39,7 @@ class DataLogger(QObject):
             log_directory.mkdir(parents=True, exist_ok=True)
             if self._log_func:
                 self._log_func(
-                    f"Sputter Calib CSV 폴더 생성 실패(NAS) → 로컬 폴더로 폴백: {local_dir} (원인: {e!r})"
+                    f"Sputter Calib CSV 폴더 생성 실패(NAS) → 로컬 폴더로 폴백: {log_directory} (원인: {e!r})"
                 )
 
         # 채널별 파일명만 다르게

@@ -2487,6 +2487,23 @@ class ChamberRuntime:
         self._delay_countdown_task = None
         self._last_state_text = None
         self.append_log("Process", f"'{step_name}' 지연 완료 → 다음 공정")
+
+        # ✉ delay 완료 챗 알림
+        if self.chat:
+            try:
+                total = len(getattr(self, "process_queue", []) or [])
+                cur   = int(getattr(self, "current_process_index", -1)) + 1
+                idx_txt = f" ({cur}/{total})" if total > 0 and cur > 0 else ""
+                msg = f"✅ CH{self.ch} delay 단계 완료{idx_txt}: '{step_name}'"
+
+                ret = self.chat.notify_text(msg)
+                if inspect.iscoroutine(ret):
+                    self._spawn_detached(ret, name=f"Chat.DelayDone.CH{self.ch}")
+                if hasattr(self.chat, "flush"):
+                    self.chat.flush()
+            except Exception as e:
+                self.append_log("CHAT", f"delay 완료 알림 실패: {e!r}")
+
         self._start_next_process_from_queue(True)
 
     async def _delay_sleep_then_continue(self, name: str, sec: float):
@@ -2548,6 +2565,22 @@ class ChamberRuntime:
         unit_txt = {"s":"초","m":"분","h":"시간","d":"일"}[unit]
 
         self.append_log("Process", f"'{name}' 단계 감지: {amount}{unit_txt} 대기 시작")
+
+        # ✉ delay 시작 챗 알림
+        if self.chat:
+            try:
+                total = len(getattr(self, "process_queue", []) or [])
+                cur   = int(getattr(self, "current_process_index", -1)) + 1
+                idx_txt = f" ({cur}/{total})" if total > 0 and cur > 0 else ""
+                msg = f"⏱️ CH{self.ch} delay 단계 시작{idx_txt}: {amount}{unit_txt} 대기"
+
+                ret = self.chat.notify_text(msg)
+                if inspect.iscoroutine(ret):
+                    self._spawn_detached(ret, name=f"Chat.DelayStart.CH{self.ch}")
+                if hasattr(self.chat, "flush"):
+                    self.chat.flush()
+            except Exception as e:
+                self.append_log("CHAT", f"delay 시작 알림 실패: {e!r}")
 
         # 폴링 모두 정지(원래 로직 유지)
         self._apply_polling_targets({"mfc": False, "dc_pulse": False, "rf_pulse": False, "dc": False, "rf": False})
