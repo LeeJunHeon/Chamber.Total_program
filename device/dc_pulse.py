@@ -24,7 +24,7 @@ from lib.config_ch1 import DCPULSE_TCP_HOST, DCPULSE_TCP_PORT
 from lib import config_common as cfgc   # ★ 추가
 
 # ===== 파워 확인 파라미터 =====
-P_SET_TOL_PCT = getattr(cfgc, "DCP_P_SET_TOL_PCT", 0.10)  # ±10 %
+P_SET_TOL_PCT = getattr(cfgc, "DCP_P_SET_TOL_PCT", 0.05)  # ±5 %
 P_SET_TOL_W   = getattr(cfgc, "DCP_P_SET_TOL_W",   15.0)  # ±15 W
 
 # 연속 세트포인트 이탈 허용 횟수(기본 5회). config_common.py에 DCP_P_SET_DEVIATE_MAX_N이 있으면 그 값을 사용.
@@ -1176,11 +1176,47 @@ class AsyncDCPulse:
                             v = float(eng.get("V_V", 0.0))
                             i = float(eng.get("I_A", 0.0))
 
-                            # ★ Power=0W도 '세트포인트 이탈'로 통합 처리 (별도의 즉시 정지 없음)
-                            #    → 아래 세트포인트 비교 로직에서 연속 N회 이탈 시에만 AUTO-STOP
-                            
-                            # ② 세트포인트 근접 확인 (허용오차: max(절대 W, 퍼센트))
+                            # ① 저전류 감시: I <= 0.05 A가 연속 3회면 AUTO_STOP
                             ref = float(self._last_ref_power_w or 0.0)
+
+                            if ref > 0.0:
+                                # 세트포인트가 잡혀 있을 때만 저전류 감시
+                                if i <= DCP_I_LOW_THRESH_A:
+                                    self._low_curr_n += 1
+                                    await self._emit_status(
+                                        f"[WARN] 저전류 감지: I={i:.3f} A "
+                                        f"({self._low_curr_n}/{DCP_I_LOW_COUNT_MAX_N})"
+                                    )
+                                    if self._low_curr_n >= DCP_I_LOW_COUNT_MAX_N:
+                                        reason = (
+                                            f"low_current: I <= {DCP_I_LOW_THRESH_A:.3f}A "
+                                            f"({self._low_curr_n}회 연속)"
+                                        )
+                                        self._ev_nowait(DCPEvent(
+                                            kind="command_failed",
+                                            cmd="AUTO_STOP",
+                                            reason=reason,
+                                            power=p,
+                                            voltage=v,
+                                            current=i,
+                                            eng=eng,
+                                        ))
+                                        await self._emit_status(
+                                            "[AUTO-STOP] 저전류가 연속 발생 → OUTPUT_OFF & stop polling"
+                                        )
+                                        with contextlib.suppress(Exception):
+                                            await self.output_off()
+                                        return
+                                else:
+                                    # 전류가 다시 정상으로 올라오면 저전류 카운터 리셋
+                                    if self._low_curr_n:
+                                        self._low_curr_n = 0
+                            else:
+                                # 세트포인트가 없으면 저전류 카운터도 리셋
+                                if self._low_curr_n:
+                                    self._low_curr_n = 0
+
+                            # ② 세트포인트 근접 확인 (허용오차: max(절대 W, 퍼센트))
                             if ref > 0.0:
                                 tol = max(P_SET_TOL_W, abs(ref) * P_SET_TOL_PCT)
                                 if abs(p - ref) > tol:
@@ -1190,11 +1226,20 @@ class AsyncDCPulse:
                                         f"[WARN] 현재 P={p:.1f} W, Set={ref:.1f} W, Tol=±{tol:.1f} W — 세트포인트 이탈 "
                                         f"({self._spdev_n}/{DCP_P_SET_DEVIATE_MAX_N})"
                                     )
-                                    # 연속 5회 이탈 시 자동 정지
+                                    # 연속 N회 이탈 시 자동 정지
                                     if self._spdev_n >= DCP_P_SET_DEVIATE_MAX_N:
-                                        # 이벤트만 올리고 종료(콜백 사용 안 함)
-                                        self._ev_nowait(DCPEvent(kind="command_failed", cmd="AUTO_STOP", reason="target_failed"))
-                                        await self._emit_status("[AUTO-STOP] 세트포인트 이탈이 연속 발생 → OUTPUT_OFF & stop polling")
+                                        self._ev_nowait(DCPEvent(
+                                            kind="command_failed",
+                                            cmd="AUTO_STOP",
+                                            reason="target_failed",
+                                            power=p,
+                                            voltage=v,
+                                            current=i,
+                                            eng=eng,
+                                        ))
+                                        await self._emit_status(
+                                            "[AUTO-STOP] 세트포인트 이탈이 연속 발생 → OUTPUT_OFF & stop polling"
+                                        )
                                         with contextlib.suppress(Exception):
                                             await self.output_off()
                                         return
@@ -1207,7 +1252,7 @@ class AsyncDCPulse:
                                 if self._spdev_n:
                                     self._spdev_n = 0
 
-                            # 0이 아니면 계속 진행(기존 텔레메트리 전송 유지)
+                            # ③ 텔레메트리 이벤트 전송 (기존 그대로 유지)
                             ev = DCPEvent(
                                 kind="telemetry",
                                 data=eng,
@@ -1224,6 +1269,13 @@ class AsyncDCPulse:
                                     cb(p, v, i)
                                 except Exception:
                                     pass
+                    else:
+                        # 연결이 없거나 출력 OFF 상태면 카운터들 리셋
+                        if self._spdev_n:
+                            self._spdev_n = 0
+                        if self._low_curr_n:
+                            self._low_curr_n = 0
+
                 except Exception as e:
                     self._ev_nowait(DCPEvent(kind="status", message=f"[poll] 예외: {e!r}"))
 

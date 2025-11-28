@@ -326,24 +326,53 @@ class ChatNotifier(QObject):
         self._finished_sent = False
         self._buffer.clear()  # 이전 집계 카드 등 모두 제거
 
-        name = (params or {}).get("process_note") or (params or {}).get("Process_name") or "Untitled"
-        guns = self._guns_and_targets(params or {})
-        pwr  = self._power_summary(params or {})
-        sh_delay  = self._fmt_min((params or {}).get("shutter_delay", 0))
-        proc_time = self._fmt_min((params or {}).get("process_time", 0))
+        p = params or {}
+
+        # 공정 이름
+        name = p.get("process_note") or p.get("Process_name") or "Untitled"
+
+        # 챔버 정보 (ch 또는 prefix에서 추출)
+        ch_txt = ""
+        ch_val = p.get("ch")
+        if ch_val not in (None, ""):
+            try:
+                ch_txt = f"CH{int(ch_val)}"
+            except Exception:
+                ch_txt = str(ch_val).strip() or ""
+
+        if not ch_txt:
+            prefix = str(p.get("prefix", "")).strip()
+            if prefix:
+                head = prefix.split()[0]  # "CH1 Sputter" → "CH1"
+                if head.upper().startswith("CH"):
+                    ch_txt = head
+
+        # 서브타이틀: "CH1 · Plasma Cleaning" / "CH2 · 공정명" 이런 식으로 표시
+        subtitle = f"{ch_txt} · {name}" if ch_txt else name
+
+        guns = self._guns_and_targets(p)
+        pwr  = self._power_summary(p)
+        sh_delay  = self._fmt_min(p.get("shutter_delay", 0))
+        proc_time = self._fmt_min(p.get("process_time", 0))
+
+        # 필드에 Chamber도 추가
+        fields = {
+            "사용 Guns / 타겟": guns if guns else "—",
+            "파워": pwr if pwr else "—",
+            "Shutter Delay": sh_delay,
+            "Process Time": proc_time,
+        }
+        if ch_txt:
+            # 맨 위에 Chamber를 보이게 하고 싶으면 이렇게 앞에 넣어도 됨
+            fields = {"Chamber": ch_txt, **fields}
 
         self._post_card(
             title="공정 시작",
-            subtitle=name,
+            subtitle=subtitle,
             status="INFO",
-            fields={
-                "사용 Guns / 타겟": guns if guns else "—",
-                "파워": pwr if pwr else "—",
-                "Shutter Delay": sh_delay,
-                "Process Time": proc_time,
-            },
+            fields=fields,
             urgent=True,
-            route_params=params
+            route_params=params,
         )
 
     @Slot(bool, dict)
