@@ -1932,112 +1932,135 @@ class ChamberRuntime:
 
     # ------------------------------------------------------------------
     # Start/Stop (개별 챔버)
+    # ------------------------------------------------------------------
     def _handle_start_clicked(self, _checked: bool = False):
-        # ✅ 전역 runtime_state 기준 60초 쿨다운
-        remain = runtime_state.remaining_cooldown("chamber", self.ch, cooldown_s=60.0)
-        if remain > 0.0:
-            secs = int(remain + 0.999)
-            self._host_report_start(False, f"cooldown {remain:.0f}s remaining")
-            self._post_warning("대기 필요", f"이전 공정 종료 후 1분 대기 필요합니다.\n{secs}초 후에 시작하십시오.")
-            return
-        
-        # ★ 장치 정리가 백그라운드에서 진행 중이면 대기 안내
-        if getattr(self, "_pending_device_cleanup", False):
-            # 👉 runtime_state / process_controller 기준으로
-            #    실제 공정이 아직 도는지 한 번 확인
+        """
+        Start 버튼 / Host Start 요청 공통 진입점.
+        ★ 어떤 이유로든 예외가 나더라도 조용히 죽지 않고,
+        최소한 로그 + 알림창을 남기도록 전체를 보호한다.
+        """
+        try:
+            # ✅ 전역 runtime_state 기준 60초 쿨다운
+            remain = runtime_state.remaining_cooldown("chamber", self.ch, cooldown_s=60.0)
+            if remain > 0.0:
+                secs = int(remain + 0.999)
+                self._host_report_start(False, f"cooldown {remain:.0f}s remaining")
+                self._post_warning("대기 필요", f"이전 공정 종료 후 1분 대기 필요합니다.\n{secs}초 후에 시작하십시오.")
+                return
+            
+            # ★ 장치 정리가 백그라운드에서 진행 중이면 대기 안내
+            if getattr(self, "_pending_device_cleanup", False):
+                # 👉 runtime_state / process_controller 기준으로
+                #    실제 공정이 아직 도는지 한 번 확인
+                try:
+                    still_running = (
+                        self.process_controller.is_running
+                        or runtime_state.is_running("chamber", self.ch)
+                    )
+                except Exception:
+                    # 조회 중 예외가 나면 보수적으로 "아직 정리 중"으로 본다
+                    still_running = True
+
+                if still_running:
+                    # 실제로 아직 뭔가 도는 중이면 예전과 동일하게 막기
+                    self._host_report_start(False, "previous run cleanup in progress")
+                    self._post_warning("정리 중", "이전 공정 정리 중입니다. 잠시 후 다시 시작하세요.")
+                    return
+                else:
+                    # 👇 이전 공정은 이미 끝났는데 플래그만 남은 "유령 상태" → 플래그만 정리
+                    self.append_log(
+                        "MAIN",
+                        f"[CH{self.ch}] 이전 공정 종료 확인 → cleanup 플래그만 초기화"
+                    )
+                    self._pending_device_cleanup = False
+                    self._pc_stopping = False
+            
+            # ★ 추가(권장): 이미 다음 공정이 예약되어 있으면 Start 재클릭은 무시하고 안내
+            t = getattr(self, "_delay_main_task", None)
+            if t is not None and not t.done():
+                self._host_report_start(False, "main task delayed")
+                self._post_warning("대기 중", "다음 공정이 예약되어 있습니다. 카운트다운 종료 후 자동 시작합니다.")
+                return
+
+            # ✅ 교차 실행 차단: 해당 챔버가 이미 다른 런타임(CH/PC/TSP)에서 점유 중이면 시작 금지
+            if runtime_state.is_running("chamber", self.ch):
+                self._host_report_start(False, "this chamber already running")
+                self._post_warning("실행 오류", f"CH{self.ch}는 이미 다른 공정이 실행 중입니다.")
+                return
+
+            if self.process_controller.is_running:
+                self._host_report_start(False, "process controller busy")
+                self._post_warning("실행 오류", "다른 공정이 실행 중입니다.")
+                return  
+            
+            # 재시도: 사용자가 Start를 누른 시점부터 자동 연결 허용
+            self._auto_connect_enabled = True
+
+            if getattr(self, "process_queue", None):
+                # 파일은 'started' 이벤트에서 _open_run_log()로 한 번만 생성
+                self.append_log("MAIN", f"[CH{self.ch}] 파일 기반 자동 공정 시작")
+                self.current_process_index = -1
+                self._start_next_process_from_queue(True)
+                return
+
+            vals = self._validate_single_run_inputs()
+            if vals is None:
+                self._host_report_start(False, "invalid inputs")
+                return
+
             try:
-                still_running = (
-                    self.process_controller.is_running
-                    or runtime_state.is_running("chamber", self.ch)
+                base_pressure = float(self._get_text("basePressure_edit") or 1e-5)
+                integration_time = int(self._get_text("integrationTime_edit") or 60)
+                working_pressure = float(self._get_text("workingPressure_edit") or 0.0)
+                shutter_delay = float(self._get_text("shutterDelay_edit") or 0.0)
+                process_time = float(self._get_text("processTime_edit") or 0.0)
+            except ValueError:
+                self.append_log("UI", "오류: 값 입력란을 확인해주세요.")
+                self._host_report_start(False, "invalid number input")  # ★ 추가
+                return
+
+            params: dict[str, Any] = {
+                "base_pressure": base_pressure,
+                "integration_time": integration_time,
+                "working_pressure": working_pressure,
+                "shutter_delay": shutter_delay,
+                "process_time": process_time,
+                "process_note": f"Single CH{self.ch}",
+                **vals,
+
+                # ✅ Start 버튼 "누른" 시각 (tz 없이, 초 단위)
+                "t0_pressed_wall": datetime.now().isoformat(timespec="seconds"),
+                "t0_pressed_ns":   time.monotonic_ns(),
+            }
+            errs = self._validate_norm_params(cast(NormParams, params))
+            if errs:
+                self._host_report_start(False, "; ".join(errs))
+                self._post_warning("입력값 확인", "\n".join(f"- {e}" for e in errs))
+                return  
+
+            params["G1 Target"] = vals.get("G1_target_name", "")
+            params["G2 Target"] = vals.get("G2_target_name", "")
+            params["G3 Target"] = vals.get("G3_target_name", "")
+
+            # ❌ 여기서는 파일을 열지 않습니다. (started 이벤트에서 1회 오픈)
+            self.append_log("MAIN", "입력 검증 통과 → 장비 연결 확인 시작")
+            self._safe_start_process(cast(NormParams, params))
+        except Exception as e:
+            # 🔥 여기로 떨어지면 "조용히 죽는" 대신 반드시 로그 + 알림창
+            tb = "".join(traceback.format_exception(type(e), e, e.__traceback__)).rstrip()
+            self.append_log("MAIN", f"_handle_start_clicked 예외 발생:\n{tb}")
+            # Host쪽에서도 실패 통보 받도록
+            self._host_report_start(False, f"exception: {e!r}")
+            # UI가 있는 경우 치명적 오류 알림
+            try:
+                self._post_critical(
+                    "실행 오류",
+                    "공정 시작 준비 중 내부 오류가 발생했습니다.\n"
+                    "자세한 내용은 로그 파일을 확인해주세요.",
                 )
             except Exception:
-                # 조회 중 예외가 나면 보수적으로 "아직 정리 중"으로 본다
-                still_running = True
-
-            if still_running:
-                # 실제로 아직 뭔가 도는 중이면 예전과 동일하게 막기
-                self._host_report_start(False, "previous run cleanup in progress")
-                self._post_warning("정리 중", "이전 공정 정리 중입니다. 잠시 후 다시 시작하세요.")
-                return
-            else:
-                # 👇 이전 공정은 이미 끝났는데 플래그만 남은 "유령 상태" → 플래그만 정리
-                self.append_log(
-                    "MAIN",
-                    f"[CH{self.ch}] 이전 공정 종료 확인 → cleanup 플래그만 초기화"
-                )
-                self._pending_device_cleanup = False
-                self._pc_stopping = False
-        
-        # ★ 추가(권장): 이미 다음 공정이 예약되어 있으면 Start 재클릭은 무시하고 안내
-        t = getattr(self, "_delay_main_task", None)
-        if t is not None and not t.done():
-            self._host_report_start(False, "main task delayed")
-            self._post_warning("대기 중", "다음 공정이 예약되어 있습니다. 카운트다운 종료 후 자동 시작합니다.")
-            return
-
-        # ✅ 교차 실행 차단: 해당 챔버가 이미 다른 런타임(CH/PC/TSP)에서 점유 중이면 시작 금지
-        if runtime_state.is_running("chamber", self.ch):
-            self._host_report_start(False, "this chamber already running")
-            self._post_warning("실행 오류", f"CH{self.ch}는 이미 다른 공정이 실행 중입니다.")
-            return
-
-        if self.process_controller.is_running:
-            self._host_report_start(False, "process controller busy")
-            self._post_warning("실행 오류", "다른 공정이 실행 중입니다.")
-            return  
-        
-        # 재시도: 사용자가 Start를 누른 시점부터 자동 연결 허용
-        self._auto_connect_enabled = True
-
-        if getattr(self, "process_queue", None):
-            # 파일은 'started' 이벤트에서 _open_run_log()로 한 번만 생성
-            self.append_log("MAIN", f"[CH{self.ch}] 파일 기반 자동 공정 시작")
-            self.current_process_index = -1
-            self._start_next_process_from_queue(True)
-            return
-
-        vals = self._validate_single_run_inputs()
-        if vals is None:
-            self._host_report_start(False, "invalid inputs")
-            return
-
-        try:
-            base_pressure = float(self._get_text("basePressure_edit") or 1e-5)
-            integration_time = int(self._get_text("integrationTime_edit") or 60)
-            working_pressure = float(self._get_text("workingPressure_edit") or 0.0)
-            shutter_delay = float(self._get_text("shutterDelay_edit") or 0.0)
-            process_time = float(self._get_text("processTime_edit") or 0.0)
-        except ValueError:
-            self.append_log("UI", "오류: 값 입력란을 확인해주세요.")
-            self._host_report_start(False, "invalid number input")  # ★ 추가
-            return
-
-        params: dict[str, Any] = {
-            "base_pressure": base_pressure,
-            "integration_time": integration_time,
-            "working_pressure": working_pressure,
-            "shutter_delay": shutter_delay,
-            "process_time": process_time,
-            "process_note": f"Single CH{self.ch}",
-            **vals,
-
-            # ✅ Start 버튼 "누른" 시각 (tz 없이, 초 단위)
-            "t0_pressed_wall": datetime.now().isoformat(timespec="seconds"),
-            "t0_pressed_ns":   time.monotonic_ns(),
-        }
-        errs = self._validate_norm_params(cast(NormParams, params))
-        if errs:
-            self._host_report_start(False, "; ".join(errs))
-            self._post_warning("입력값 확인", "\n".join(f"- {e}" for e in errs))
-            return  
-
-        params["G1 Target"] = vals.get("G1_target_name", "")
-        params["G2 Target"] = vals.get("G2_target_name", "")
-        params["G3 Target"] = vals.get("G3_target_name", "")
-
-        # ❌ 여기서는 파일을 열지 않습니다. (started 이벤트에서 1회 오픈)
-        self.append_log("MAIN", "입력 검증 통과 → 장비 연결 확인 시작")
-        self._safe_start_process(cast(NormParams, params))
+                # 여기서 또 터져도 최소한 로그에는 남도록만 처리
+                pass
 
     def _handle_stop_clicked(self, _checked: bool = False):
         self.request_stop_all(user_initiated=True)
