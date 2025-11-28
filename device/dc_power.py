@@ -49,6 +49,10 @@ class DCPowerEvent:
 DC_LOW_W_THRESH = 1.0   # W 이하이면 '사실상 0W'로 간주
 DC_LOW_STREAK_N = 3     # 연속 3회(폴링 3번) 기준
 
+# DC 전류 저전류 감시 임계값/횟수
+DC_LOW_CURRENT_THRESH_A = 0.05  # A 이하를 "전류 거의 0"으로 간주
+DC_LOW_CURRENT_STREAK_N = 3     # 연속 3회(폴링 3번) 기준
+
 class DCPowerAsync:
     def __init__(
         self,
@@ -100,6 +104,7 @@ class DCPowerAsync:
         self._enabled = False  # SET 래치
 
         self._low_power_streak = 0
+        self._low_current_streak = 0  # 저전류 감시용 카운터
 
     # ======= 퍼블릭 이벤트 스트림 =======
     async def events(self) -> AsyncGenerator[DCPowerEvent, None]:
@@ -114,7 +119,8 @@ class DCPowerAsync:
             return
 
         self.target_power = float(max(0.0, min(DC_MAX_POWER, target_power)))
-        self._low_power_streak = 0   # ★ 연속 카운터 리셋
+        self._low_power_streak = 0    # ★ 저전력 카운터 리셋
+        self._low_current_streak = 0  # ★ 저전류 카운터 리셋
 
         try:
             await self._toggle_enable(True)
@@ -251,6 +257,44 @@ class DCPowerAsync:
                             else:
                                 if self._low_power_streak:
                                     self._low_power_streak = 0
+                        except Exception:
+                            pass
+
+                        # === 램프업(목표 도달) 이후 저전류 감시 ===
+                        try:
+                            if self._sent_target_reached:
+                                ia = float(self.current_a or 0.0)
+                                if ia <= DC_LOW_CURRENT_THRESH_A:
+                                    self._low_current_streak += 1
+                                    await self._emit_status(
+                                        f"저전류 감시(목표 도달 후): "
+                                        f"{self._low_current_streak}/{DC_LOW_CURRENT_STREAK_N} "
+                                        f"(meas={ia:.3f}A ≤ {DC_LOW_CURRENT_THRESH_A:.3f}A)"
+                                    )
+                                    if self._low_current_streak >= DC_LOW_CURRENT_STREAK_N:
+                                        await self._emit_status(
+                                            f"DC 전류가 목표 도달 후 "
+                                            f"{DC_LOW_CURRENT_STREAK_N}회 연속 ≤ "
+                                            f"{DC_LOW_CURRENT_THRESH_A:.3f}A → 공정 중단"
+                                        )
+                                        self._ev_nowait(DCPowerEvent(
+                                            kind="target_failed",
+                                            message=(
+                                                f"저전류 연속 {self._low_current_streak}/"
+                                                f"{DC_LOW_CURRENT_STREAK_N} "
+                                                f"(meas={ia:.3f}A ≤ {DC_LOW_CURRENT_THRESH_A:.3f}A)"
+                                            ),
+                                        ))
+                                        asyncio.create_task(self.cleanup())
+                                        break
+                                else:
+                                    # 임계값을 넘으면 카운터 리셋
+                                    if self._low_current_streak:
+                                        self._low_current_streak = 0
+                            else:
+                                # 아직 목표 도달 전에는 저전류 카운터만 초기화
+                                if self._low_current_streak:
+                                    self._low_current_streak = 0
                         except Exception:
                             pass
 
