@@ -193,42 +193,104 @@ class HostHandlers:
         return False
 
     # ================== CH1,2 상태 조회 ==================
-    async def get_sputter_status(self, _: Json) -> Json:
+    async def get_sputter_status(self, payload: Json) -> Json:
+        """
+        CH1/CH2/LoadLock 각각의 상태(idle/running/error) + 진공 여부를 한 번에 조회.
+        Chamber_1 / Chamber_2 / Loadlock_Chamber / vacuum 4개 키를 돌려준다.
+        """
         try:
-            # 1) 기본: runtime_state.any_running() 기준
-            running = bool(getattr(self.ctx.runtime_state, "any_running")())
+            rs = getattr(self.ctx, "runtime_state", None)
 
-            # 2) ★ 추가: 리스트 자동 실행 중, 다음 공정이 지연 예약된 경우에도
-            #           외부에서는 계속 'running' 으로 보이도록 보정
-            #
-            #    chamber_runtime._start_next_process_from_queue() 에서
-            #    self._set_task_later("_delay_main_task", ...) 로 Task 를 만들어 두는데,
-            #    이 Task 가 살아 있는 동안은 스텝 사이 60초 대기 중인 상태이므로
-            #    실제로는 "전체 공정 리스트가 진행 중" 이라고 보는 것이 맞다.
-            try:
-                if self._has_chamber_delay():
-                    running = True
-            except Exception:
-                # 지연 상태 확인 중 예외가 나더라도 상태 판단이 완전히 깨지지 않도록 무시
-                pass
+            def _ch_state(ch: int) -> str:
+                """
+                단일 CH 상태 계산:
+                - runtime_state.is_running("chamber", ch)가 True면 running
+                - 해당 CH의 리스트 공정 딜레이(_delay_main_task)가 살아 있어도 running
+                - 그 외는 idle
+                - 조회 중 예외가 나면 error
+                """
+                running_ch = False
 
-            # 3) Plasma Cleaning 상태 (기존 로직 유지)
-            cleaning = bool(
-                getattr(self.ctx.pc, "is_running", getattr(self.ctx.pc, "_running", False))
-            )
+                # 1) runtime_state 기반 실행 여부
+                try:
+                    if rs is not None and getattr(rs, "is_running", None):
+                        if rs.is_running("chamber", ch):
+                            running_ch = True
+                except Exception:
+                    # 상태 조회 자체에 문제가 있으면 error
+                    return "error"
 
-            # 4) 최종 state 결정
-            state = "cleaning" if cleaning else ("running" if running else "idle")
+                # 2) 리스트 자동 실행의 스텝 사이 대기도 running 으로 간주
+                attr = f"ch{ch}"
+                try:
+                    rt = getattr(self.ctx, attr, None)
+                    if rt is not None:
+                        t = getattr(rt, "_delay_main_task", None)
+                        if t is not None:
+                            try:
+                                if not t.done():
+                                    running_ch = True
+                            except Exception:
+                                return "error"
+                except Exception:
+                    return "error"
 
-            # 진공 여부: L_ATM만 사용
-            # L_ATM=True(대기압)  -> vacuum=False
-            # L_ATM=False(비대기압)-> vacuum=True
+                return "running" if running_ch else "idle"
+
+            def _loadlock_state() -> str:
+                """
+                Loadlock(Plasma Cleaning) 상태 계산:
+                - runtime_state.is_running("pc", ch)가 1 또는 2 중 하나라도 True면 running
+                - (fallback) plasma cleaning 런타임의 is_running / _running 플래그 사용
+                - 조회 중 예외가 나면 error
+                """
+                # 1) runtime_state 기준 (pc kind)
+                try:
+                    if rs is not None and getattr(rs, "is_running", None):
+                        for ch in (1, 2):
+                            try:
+                                if rs.is_running("pc", ch):
+                                    return "running"
+                            except Exception:
+                                # 다른 채널도 계속 확인
+                                continue
+                except Exception:
+                    return "error"
+
+                # 2) pc 런타임 플래그(fallback)
+                try:
+                    pc = getattr(self.ctx, "pc", None)
+                    if pc is not None:
+                        cleaning = bool(
+                            getattr(pc, "is_running", getattr(pc, "_running", False))
+                        )
+                        return "running" if cleaning else "idle"
+                except Exception:
+                    return "error"
+
+                return "idle"
+
+            # ── CH1 / CH2 / Loadlock 상태 계산 ─────────────────────────────
+            chamber_1 = _ch_state(1)
+            chamber_2 = _ch_state(2)
+            loadlock  = _loadlock_state()
+
+            # ── PLC에서 진공 상태(L_ATM=FALSE)를 읽어 vacuum 여부 확인 ─────
             async with self._plc_command("GET_SPUTTER_STATUS"):
                 async with self._plc_call():
                     atm = await self.ctx.plc.read_bit("L_ATM")
+
+            # L_ATM 이 False면 진공 유지(True)
             vacuum = (not bool(atm))
 
-            return self._ok(state=state, vacuum=vacuum)
+            # 통신 명세서 v3 포맷에 맞춰 응답
+            return self._ok(
+                Chamber_1=chamber_1,
+                Chamber_2=chamber_2,
+                Loadlock_Chamber=loadlock,
+                vacuum=vacuum,
+            )
+
         except Exception as e:
             return self._fail(e)
 
