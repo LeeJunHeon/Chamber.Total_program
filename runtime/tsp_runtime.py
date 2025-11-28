@@ -28,10 +28,10 @@ DWELL_SEC          = 150.0    # 2분 30초
 POLL_SEC           = 5.0      # 5초
 VERIFY_WITH_STATUS = True     # TSP on/off 후 205 확인
 
-# ⬇ 매일 08:00 자동 예약 실행 설정
+# ⬇ 매일 05:00 자동 예약 실행 설정
 ENABLE_TSP_DAILY_7AM = True   # 자동 예약을 끄려면 False
-DAILY_HH = 7
-DAILY_MM = 30
+DAILY_HH = 5
+DAILY_MM = 00
 
 def _ts() -> str:
     return datetime.now().strftime("%H:%M:%S")
