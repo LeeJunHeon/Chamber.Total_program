@@ -174,6 +174,9 @@ class RFPulseAsync:
         self._cmd_worker_task: Optional[asyncio.Task] = None
         self._poll_task: Optional[asyncio.Task] = None
         self._want_connected: bool = False
+        
+        # ★ 추가: start / resume_watchdog 동시 호출 방지용 락
+        self._start_lock = asyncio.Lock()
 
         # 재연결 상태
         self._reconnect_backoff_ms = RFPULSE_RECONNECT_BACKOFF_START_MS
@@ -192,25 +195,28 @@ class RFPulseAsync:
 
     # ---------- 공용 API ----------
     async def start(self):
-        # 1) 죽어버린 태스크는 정리
-        if self._watchdog_task and self._watchdog_task.done():
-            self._watchdog_task = None
-        if self._cmd_worker_task and self._cmd_worker_task.done():
-            self._cmd_worker_task = None
+        # ★ 여러 coroutine 에서 동시에 start()가 들어와도
+        #    한 번만 워치독/워커를 생성하도록 보호
+        async with self._start_lock:
+            # 1) 죽어버린 태스크는 정리
+            if self._watchdog_task and self._watchdog_task.done():
+                self._watchdog_task = None
+            if self._cmd_worker_task and self._cmd_worker_task.done():
+                self._cmd_worker_task = None
 
-        # 2) 태스크가 아직 살아 있으면 새로 만들 필요 없이
-        #    단순히 다시 연결을 시도하도록 플래그만 올려준다.
-        if self._watchdog_task and self._cmd_worker_task:
+            # 2) 태스크가 아직 살아 있으면 새로 만들 필요 없이
+            #    단순히 다시 연결을 시도하도록 플래그만 올려준다.
+            if self._watchdog_task and self._cmd_worker_task:
+                self._closing = False
+                self._want_connected = True
+                return
+
+            # 3) 처음 시작하거나, 둘 중 하나라도 없으면 새로 태스크 생성
             self._closing = False
             self._want_connected = True
-            return
-
-        # 3) 처음 시작하거나, 둘 중 하나라도 없으면 새로 태스크 생성
-        self._closing = False
-        self._want_connected = True
-        loop = asyncio.get_running_loop()
-        self._watchdog_task = loop.create_task(self._watchdog_loop(), name="RFPWatchdog")
-        self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="RFPCmdWorker")
+            loop = asyncio.get_running_loop()
+            self._watchdog_task = loop.create_task(self._watchdog_loop(), name="RFPWatchdog")
+            self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="RFP-CmdWorker")
 
     async def cleanup(self):
         self._closing = True
@@ -971,9 +977,11 @@ class RFPulseAsync:
             self._watchdog_task = None
 
     async def resume_watchdog(self) -> None:
-        if self._watchdog_task and not self._watchdog_task.done():
-            return
-        self._want_connected = True
-        loop = asyncio.get_running_loop()
-        self._watchdog_task = loop.create_task(self._watchdog_loop(), name="RFPWatchdog")
+        # ★ 워치독 재시작도 start_lock 안에서만 수행
+        async with self._start_lock:
+            if self._watchdog_task and not self._watchdog_task.done():
+                return
+            self._want_connected = True
+            loop = asyncio.get_running_loop()
+            self._watchdog_task = loop.create_task(self._watchdog_loop(), name="RFPWatchdog")
     # =========== chamber_runtime.py에 맞춘 함수들 ===========
