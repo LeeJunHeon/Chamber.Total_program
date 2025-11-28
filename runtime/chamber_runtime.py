@@ -1960,21 +1960,11 @@ class ChamberRuntime:
                 self._post_warning("정리 중", "이전 공정 정리 중입니다. 잠시 후 다시 시작하세요.")
                 return
             else:
-                # 👇 여기 핵심: 플래그만 남아 있는 경우에는
-                #    장치 워치독/폴링을 한 번 더 강제로 정리하고 플래그를 해제
+                # 👇 이전 공정은 이미 끝났는데 플래그만 남은 "유령 상태" → 플래그만 정리
                 self.append_log(
                     "MAIN",
-                    f"[CH{self.ch}] 이전 공정 잔여 장치 정리(자동 실행)"
+                    f"[CH{self.ch}] 이전 공정 종료 확인 → cleanup 플래그만 초기화"
                 )
-
-                # 비동기로 전체 장치 정리를 한 번 더 수행
-                with contextlib.suppress(Exception):
-                    self._spawn_detached(
-                        self._stop_device_watchdogs(light=False),
-                        name=f"FullCleanup.BeforeStart.CH{self.ch}",
-                    )
-
-                # 정리 요청까지 보냈으니 플래그/상태 초기화
                 self._pending_device_cleanup = False
                 self._pc_stopping = False
         
@@ -2905,6 +2895,10 @@ class ChamberRuntime:
         # 4) 프리스타트 버퍼 정리 (한 번만 호출해도 충분)
         with contextlib.suppress(Exception):
             self._prestart_buf.clear()
+
+        # 5) 종료 관련 내부 플래그도 함께 초기화
+        self._pending_device_cleanup = False
+        self._pc_stopping = False
 
     # ------------------------------------------------------------------
     # 기본 UI값/리셋
