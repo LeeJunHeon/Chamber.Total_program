@@ -30,6 +30,10 @@ P_SET_TOL_W   = getattr(cfgc, "DCP_P_SET_TOL_W",   15.0)  # ±15 W
 # 연속 세트포인트 이탈 허용 횟수(기본 5회). config_common.py에 DCP_P_SET_DEVIATE_MAX_N이 있으면 그 값을 사용.
 DCP_P_SET_DEVIATE_MAX_N = int(getattr(cfgc, "DCP_P_SET_DEVIATE_MAX_N", 5))
 
+# ----- 저전류 감시 파라미터 (dc power와 동일 컨셉) -----
+DCP_I_LOW_THRESH_A    = getattr(cfgc, "DCP_I_LOW_THRESH_A", 0.05)  # A 이하를 저전류로 판단
+DCP_I_LOW_COUNT_MAX_N = int(getattr(cfgc, "DCP_I_LOW_COUNT_MAX_N", 3))  # 연속 허용 횟수
+
 # OFF 이후 P=0 강제 여부(기본 False: 로그만 확인, True: 0W 아니면 실패 처리)
 STRICT_OFF_CONFIRM_BY_PIV     = getattr(cfgc, "DCP_STRICT_OFF_CONFIRM_BY_PIV", True)
 OFF_CONFIRM_TIMEOUT_S         = getattr(cfgc, "DCP_OFF_CONFIRM_TIMEOUT_S", 3.0)
@@ -218,6 +222,7 @@ class AsyncDCPulse:
         self._poll_period_s: float = DCP_POLL_INTERVAL_S
         self._last_ref_power_w: Optional[float] = None  # ← 세트포인트 저장
         self._spdev_n: int = 0                     # ← 연속 세트포인트 이탈 카운터
+        self._low_curr_n: int = 0                  # ← 연속 저전류(I<=0.05A) 카운터
 
     # ====== 공용 API ======
     async def start(self):
@@ -437,13 +442,15 @@ class AsyncDCPulse:
         raw = int(round(float(value_w) / P_SET_STEP_W))
         raw = max(0, min(int(MAX_POWER_W // P_SET_STEP_W), raw))
         self._last_ref_power_w = float(value_w)  # ← 세트포인트 기억
-        self._spdev_n = 0                        # ★ 새 ref 적용 시 연속 이탈 카운터 초기화
+        self._spdev_n = 0                        # ★ 세트포인트 이탈 카운터 초기화
+        self._low_curr_n = 0                     # ★ 저전류 카운터도 같이 초기화
         return await self._write_cmd_data(0x83, raw, 2, label=f"REF_POWER({value_w:.0f}W)")
 
     async def output_on(self) -> bool:
         """0x80: 1=ON, 2=OFF."""
         self._drain_rx_frames()  # ← 잔여 0x9A 등 제거
-        self._spdev_n = 0               # ★ 출력 재기동 시 카운터 초기화
+        self._spdev_n = 0               # ★ 세트포인트 이탈 카운터 초기화
+        self._low_curr_n = 0            # ★ 저전류 카운터도 초기화
         return await self._write_cmd_data(0x80, 0x0001, 2, label="OUTPUT_ON")
 
     async def output_off(self) -> bool:
