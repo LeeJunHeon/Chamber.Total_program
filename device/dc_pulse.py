@@ -27,8 +27,8 @@ from lib import config_common as cfgc   # ★ 추가
 P_SET_TOL_PCT = getattr(cfgc, "DCP_P_SET_TOL_PCT", 0.05)  # ±5 %
 P_SET_TOL_W   = getattr(cfgc, "DCP_P_SET_TOL_W",   15.0)  # ±15 W
 
-# 연속 세트포인트 이탈 허용 횟수(기본 5회). config_common.py에 DCP_P_SET_DEVIATE_MAX_N이 있으면 그 값을 사용.
-DCP_P_SET_DEVIATE_MAX_N = int(getattr(cfgc, "DCP_P_SET_DEVIATE_MAX_N", 5))
+# 연속 세트포인트 이탈 허용 횟수(기본 3회). config_common.py에 DCP_P_SET_DEVIATE_MAX_N이 있으면 그 값을 사용.
+DCP_P_SET_DEVIATE_MAX_N = int(getattr(cfgc, "DCP_P_SET_DEVIATE_MAX_N", 3))
 
 # ----- 저전류 감시 파라미터 (dc power와 동일 컨셉) -----
 DCP_I_LOW_THRESH_A    = getattr(cfgc, "DCP_I_LOW_THRESH_A", 0.05)  # A 이하를 저전류로 판단
