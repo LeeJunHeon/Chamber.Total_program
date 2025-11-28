@@ -26,6 +26,10 @@ from lib.config_ch2 import (
     DEBUG_PRINT,
 )
 
+# forward power 저출력 감시 파라미터
+RF_LOW_POWER_THRESH_W = 1.0   # 이 W 이하이면 '너무 낮다'로 판단
+RF_LOW_POWER_COUNT_MAX_N = 3  # 연속 허용 횟수
+
 # ========= 이벤트 모델 =========
 EventKind = Literal[
     "status",
@@ -106,6 +110,9 @@ class RFPowerAsync:
 
         self._maintain_count = 0  # 유지 보정 시 연속 오차 카운터
 
+        # 저출력(Forward power 너무 낮음) 연속 카운터
+        self._low_power_n: int = 0
+
         # 태스크/큐
         self._poll_task: Optional[asyncio.Task] = None
         self._rampdown_task: Optional[asyncio.Task] = None
@@ -140,6 +147,7 @@ class RFPowerAsync:
 
         # ★ 새 런 시작 시 '첫 WRITE 보장'을 위해 중복 억제 캐시 초기화
         self._last_sent_w = None
+        self._low_power_n = 0       # ★ 저출력 카운터 리셋
 
         # ▼ RF 사용 전 SET 래치 ON (DCV_SET_1 = True)
         if self._toggle_enable:
@@ -287,7 +295,7 @@ class RFPowerAsync:
         # 디스플레이 이벤트 즉시 방출
         self._ev_nowait(RFPowerEvent(kind="display", forward=self.forward_w, reflected=self.reflected_w))
         
-        # 반사파 과다 → 대기/타임아웃
+        # 1) 반사파 과다 → 대기/타임아웃
         if self.reflected_w > self._ref_th_w:
             if self.state != "REF_P_WAITING":
                 self.previous_state = self.state
@@ -308,8 +316,42 @@ class RFPowerAsync:
                                              message=f"반사파 안정화 완료({self.reflected_w:.1f}W). 공정 재개"))
                 self.state = self.previous_state
                 self._ref_wait_start_ts = None
+
+        # 2) 저출력(forward power 너무 낮음) 감시
+        #    - target_power > 0 인 런에서만 체크
+        if self.target_power > 0.0:
+            if self.forward_w <= RF_LOW_POWER_THRESH_W:
+                # 연속 저출력 카운트 증가
+                self._low_power_n += 1
+                self._ev_nowait(RFPowerEvent(
+                    kind="status",
+                    message=(
+                        f"저출력 감지: Forward={self.forward_w:.1f}W "
+                        f"({self._low_power_n}/{RF_LOW_POWER_COUNT_MAX_N})"
+                    ),
+                ))
+
+                if self._low_power_n >= RF_LOW_POWER_COUNT_MAX_N:
+                    # 3회(기본) 연속 저출력이면 실패 처리 + 정지
+                    self._ev_nowait(RFPowerEvent(
+                        kind="status",
+                        message="Forward power가 너무 낮아 RF 공정을 중단합니다."
+                    ))
+                    self._ev_nowait(RFPowerEvent(
+                        kind="target_failed",
+                        message=(
+                            f"Forward power <= {RF_LOW_POWER_THRESH_W:.1f}W "
+                            f"{self._low_power_n}회 연속"
+                        ),
+                    ))
+                    asyncio.create_task(self.cleanup())
+                    return
+            else:
+                # 정상 범위로 올라오면 카운터 리셋
+                if self._low_power_n:
+                    self._low_power_n = 0
         
-        # 램프업/유지 보정은 태스크로 비동기 실행(중복 호출 시 최신만 수행)
+        # 3) 램프업/유지 보정은 태스크로 비동기 실행(중복 호출 시 최신만 수행)
         if self._adjust_task and not self._adjust_task.done():
             self._adjust_task.cancel()
         self._adjust_task = asyncio.create_task(self._adjust_once(), name="RF_Adjust")
