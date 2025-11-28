@@ -168,13 +168,13 @@ class MainWindow(QWidget):
         try:
             # ── Pre-Sputter: 챔버 전용 런타임 2개로 분리 ───────────────────────────
             self.pre_ch1 = PreSputterRuntime(
-                ch1=self.ch1, ch2=None, chat=None, hh=8, mm=30, parallel=False, ui=self.ui
+                ch1=self.ch1, ch2=None, chat=None, hh=6, mm=0, parallel=False, ui=self.ui
             )
             self.pre_ch1.set_pc_logger(self.ui.pc_logMessage_edit.appendPlainText)
             self.pre_ch1.start_daily()   # ← 프로그램 시작 시 CH1 자동 예약
 
             self.pre_ch2 = PreSputterRuntime(
-                ch1=None, ch2=self.ch2, chat=None, hh=8, mm=30, parallel=False, ui=self.ui
+                ch1=None, ch2=self.ch2, chat=None, hh=6, mm=0, parallel=False, ui=self.ui
             )
             self.pre_ch2.set_pc_logger(self.ui.pc_logMessage_edit.appendPlainText)
             self.pre_ch2.start_daily()   # ← 프로그램 시작 시 CH2 자동 예약
