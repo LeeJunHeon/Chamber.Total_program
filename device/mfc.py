@@ -36,6 +36,27 @@ from lib.config_common import (
     MFC_FIRST_CMD_EXTRA_TIMEOUT_MS
 )
 
+# ==============================
+#   압력 도달 판정용 상수 (NEW)
+# ==============================
+# ※ 단위는 UI에서 사용하는 압력 단위 그대로 (예: mTorr)
+#    → UI에서 작업압 5.0 을 넣었다면 target_ui = 5.0 기준으로 계산
+
+# 절대 허용 오차 (예: ±0.2 mTorr)
+MFC_PRESSURE_TOL_ABS = 0.2
+
+# 상대 허용 오차 (예: 목표값의 ±5% 이내면 OK)
+MFC_PRESSURE_TOL_REL = 0.05
+
+# 목표 범위 안에 "연속 몇 번" 들어와야 도달로 볼 것인지
+MFC_PRESSURE_STABLE_COUNT = 3
+
+# 최대 대기 시간 (초). 이 시간 동안 못 들어오면 실패로 처리
+MFC_PRESSURE_TIMEOUT_SEC = 120.0
+
+# 압력을 얼마나 자주 확인할 것인지 (초)
+MFC_PRESSURE_CHECK_INTERVAL_SEC = 1.0
+
 # =============== 이벤트 모델 ===============
 EventKind = Literal["status", "flow", "pressure", "command_confirmed", "command_failed"]
 
@@ -623,6 +644,31 @@ class AsyncMFC:
         if ok: await self._emit_confirmed("SP4_SET")
         else:  await self._emit_failed("SP4_SET", "SP4 설정 확인 실패")
 
+    # ==============================
+    #   압력 도달 판정 유틸 (NEW)
+    # ==============================
+    @staticmethod
+    def pressure_within_tolerance(target_ui: float, actual_ui: float) -> bool:
+        """
+        MFC_PRESSURE_* 상수를 사용해서 압력 도달 여부를 판정하는 헬퍼.
+
+        - target_ui, actual_ui : UI에서 사용하는 압력 단위(mTorr 등) 기준
+        - 절대/상대 오차 둘 중 하나라도 통과하면 True
+        """
+        if target_ui <= 0:
+            return False
+
+        diff = abs(actual_ui - target_ui)
+
+        # 절대 오차 먼저 체크
+        if diff <= MFC_PRESSURE_TOL_ABS:
+            return True
+
+        # 상대 오차 체크
+        if diff <= abs(target_ui) * MFC_PRESSURE_TOL_REL:
+            return True
+
+        return False
 
     async def sp1_on(self):
         if not self._verify_enabled:
