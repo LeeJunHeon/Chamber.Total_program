@@ -27,6 +27,15 @@ from lib.config_ch2 import (
     RFPULSE_WATCHDOG_INTERVAL_MS, RFPULSE_RECONNECT_BACKOFF_START_MS, RFPULSE_RECONNECT_BACKOFF_MAX_MS
 )
 
+# ===== RF Pulse 파워 모니터링 상수 =====
+# FORP: setpoint 대비 허용 오차(%)
+FORP_TOLERANCE_PERCENT = 5.0          # 요구사항: 5% 이상 이탈
+FORP_CONSECUTIVE_LIMIT = 3            # 3회 연속이면 공정 중지
+
+# REFP: 허용 상한 (실제 운전 조건에 맞게 조정 가능)
+REFP_LIMIT_WATTS       = 20.0         # 예: 20W 이상이면 위험으로 판단
+REFP_CONSECUTIVE_LIMIT = 3            # 3회 연속이면 공정 중지
+
 # ===== AE Bus command numbers =====
 CMD_RF_OFF              = 1
 CMD_RF_ON               = 2
@@ -193,6 +202,14 @@ class RFPulseAsync:
         self._last_reflected_w: Optional[float] = None
         self._last_status: Optional[RfStatus] = None
 
+        # ★ 파워 모니터링용 상태
+        #   - _target_setpoint_w : 공정에서 요청한 FORP setpoint (W)
+        #   - _forp_out_of_range_count : setpoint에서 5% 이상 벗어난 횟수(연속)
+        #   - _refp_over_limit_count : REFP가 임계값 이상인 횟수(연속)
+        self._target_setpoint_w: float = 0.0
+        self._forp_out_of_range_count: int = 0
+        self._refp_over_limit_count: int = 0
+
     # ---------- 공용 API ----------
     async def start(self):
         # ★ 여러 coroutine 에서 동시에 start()가 들어와도
@@ -258,6 +275,12 @@ class RFPulseAsync:
         """
         self._stop_requested = False
         self.set_process_status(False)
+
+        # ★ 모니터링용 setpoint/카운터 초기화
+        #   - target_w: 이번 공정에서 목표로 하는 FORP (W)
+        self._target_setpoint_w = float(target_w or 0.0)
+        self._forp_out_of_range_count = 0
+        self._refp_over_limit_count = 0
 
         async def fail(why: str):
             await self._emit_failed("START_SEQUENCE", why)
@@ -761,6 +784,75 @@ class RFPulseAsync:
                         self._last_forward_w = float(_u16le(f, 0) if len(f) >= 2 else 0.0)
                     if r is not None:
                         self._last_reflected_w = float(_u16le(r, 0) if len(r) >= 2 else 0.0)
+
+                    # ★★★ FORP/REFP 모니터링 로직 추가 ★★★
+                    if (
+                        self._target_setpoint_w > 0.0
+                        and self._last_forward_w is not None
+                        and self._last_reflected_w is not None
+                        and not self._stop_requested      # 외부 stop 중에는 감시하지 않음
+                    ):
+                        # 최근 STATUS 기준으로 RF 출력이 실제 ON인지 확인
+                        status = st or self._last_status
+                        rf_on = bool(status.rf_output_on) if status is not None else True
+
+                        if rf_on:
+                            # 1) FORP: setpoint 대비 5% 이상 이탈 여부
+                            tol = self._target_setpoint_w * (FORP_TOLERANCE_PERCENT / 100.0)
+                            diff = abs(self._last_forward_w - self._target_setpoint_w)
+
+                            if diff >= tol:
+                                self._forp_out_of_range_count += 1
+                            else:
+                                self._forp_out_of_range_count = 0
+
+                            if self._forp_out_of_range_count >= FORP_CONSECUTIVE_LIMIT:
+                                # 상태 로그
+                                await self._emit_status(
+                                    (
+                                        "FORP setpoint 이탈: "
+                                        f"meas={self._last_forward_w:.1f}W, "
+                                        f"target={self._target_setpoint_w:.1f}W, "
+                                        f"허용오차=±{FORP_TOLERANCE_PERCENT:.1f}% "
+                                        f"({self._forp_out_of_range_count}회 연속)"
+                                    )
+                                )
+                                # 공정 실패 이벤트 → chamber_runtime / process_controller 에서 공정 중지 처리
+                                await self._emit_failed(
+                                    "FORP_MONITOR",
+                                    (
+                                        f"FORP가 setpoint에서 {FORP_TOLERANCE_PERCENT:.1f}% 이상 "
+                                        f"이탈({FORP_CONSECUTIVE_LIMIT}회 연속)"
+                                    ),
+                                )
+                                # 중복 트리거 방지
+                                self._forp_out_of_range_count = 0
+
+                            # 2) REFP: 임계값 이상 여부
+                            if self._last_reflected_w >= REFP_LIMIT_WATTS:
+                                self._refp_over_limit_count += 1
+                            else:
+                                self._refp_over_limit_count = 0
+
+                            if self._refp_over_limit_count >= REFP_CONSECUTIVE_LIMIT:
+                                await self._emit_status(
+                                    (
+                                        "REFP 과다 반사: "
+                                        f"meas={self._last_reflected_w:.1f}W, "
+                                        f"limit={REFP_LIMIT_WATTS:.1f}W "
+                                        f"({self._refp_over_limit_count}회 연속)"
+                                    )
+                                )
+                                await self._emit_failed(
+                                    "REFP_MONITOR",
+                                    (
+                                        f"REFP가 {REFP_LIMIT_WATTS:.1f}W 이상 "
+                                        f"({REFP_CONSECUTIVE_LIMIT}회 연속)"
+                                    ),
+                                )
+                                self._refp_over_limit_count = 0
+                    # ★★★ FORP/REFP 모니터링 로직 끝 ★★★
+
                     if (self._last_forward_w is not None) and (self._last_reflected_w is not None):
                         await self._event_q.put(RFPulseEvent(kind="power",
                                                             forward=self._last_forward_w,
