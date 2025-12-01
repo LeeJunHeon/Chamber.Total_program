@@ -42,20 +42,13 @@ from lib.config_common import (
 # ※ 단위는 UI에서 사용하는 압력 단위 그대로 (예: mTorr)
 #    → UI에서 작업압 5.0 을 넣었다면 target_ui = 5.0 기준으로 계산
 
-# 절대 허용 오차 (예: ±0.2 mTorr)
-MFC_PRESSURE_TOL_ABS = 0.2
+# --- 압력 허용 오차 관련 상수 (UI 단위 기준, 예: mTorr) ---
+MFC_PRESSURE_TOL_ABS = 0.02     # 절대 오차 허용, 예: ±0.02 mTorr
+MFC_PRESSURE_TOL_REL = 0.05     # 상대 오차 허용, 예: ±5 %
+MFC_PRESSURE_STABLE_COUNT = 3   # 연속 몇 번 허용 범위 안에 들어와야 '안정'
+MFC_PRESSURE_TIMEOUT_SEC = 60.0 # 최대 기다릴 시간(초)
+MFC_PRESSURE_CHECK_INTERVAL_SEC = 1.0  # 압력 체크 주기(초)
 
-# 상대 허용 오차 (예: 목표값의 ±5% 이내면 OK)
-MFC_PRESSURE_TOL_REL = 0.05
-
-# 목표 범위 안에 "연속 몇 번" 들어와야 도달로 볼 것인지
-MFC_PRESSURE_STABLE_COUNT = 3
-
-# 최대 대기 시간 (초). 이 시간 동안 못 들어오면 실패로 처리
-MFC_PRESSURE_TIMEOUT_SEC = 120.0
-
-# 압력을 얼마나 자주 확인할 것인지 (초)
-MFC_PRESSURE_CHECK_INTERVAL_SEC = 1.0
 
 # =============== 이벤트 모델 ===============
 EventKind = Literal["status", "flow", "pressure", "command_confirmed", "command_failed"]
@@ -733,25 +726,112 @@ class AsyncMFC:
                 await self._emit_flow(name, v_ui)        # UI(sccm) 이벤트
                 self._monitor_flow(ch, v_hw)             # 비교는 HW(%FS)
 
-    async def read_pressure(self):
-        """R5(예: READ_PRESSURE) 읽고 UI 문자열/숫자로 이벤트."""
+    async def read_pressure(self) -> Optional[float]:
+        """R5(예: READ_PRESSURE) 읽고 UI 문자열/숫자로 이벤트 + 현재 압력값 반환."""
         line = await self._send_and_wait_line(
             self._mk_cmd("READ_PRESSURE"),
             tag="[READ_PRESSURE]", timeout_ms=MFC_TIMEOUT,
-            expect_prefixes=("P",)  
+            expect_prefixes=("P",),
         )
         if not (line and line.strip()):
             await self._emit_failed("READ_PRESSURE", "응답 없음")
-            return
-        self._emit_pressure_from_line_sync(line.strip())
+            return None
+
+        return self._emit_pressure_from_line_sync(line.strip())
+
+    async def wait_for_pressure_reached(
+        self,
+        target_pressure: float,
+        *,
+        timeout_sec: float | None = None,
+        check_interval_sec: float | None = None,
+    ) -> tuple[bool, float]:
+        """
+        target_pressure(예: mTorr)에 실제 압력이 허용 오차 범위 안으로
+        MFC_PRESSURE_STABLE_COUNT회 연속 들어올 때까지 대기한다.
+
+        :return: (성공 여부, 마지막으로 읽은 압력 값)
+        """
+        if timeout_sec is None:
+            timeout_sec = MFC_PRESSURE_TIMEOUT_SEC
+        if check_interval_sec is None:
+            check_interval_sec = MFC_PRESSURE_CHECK_INTERVAL_SEC
+
+        if target_pressure <= 0:
+            # 0 이하면 '압력 맞추기' 의미가 없으니 바로 실패 처리
+            await self._emit_status(
+                f"[PRESSURE] target <= 0 이라서 압력 대기를 건너뜁니다. target={target_pressure}"
+            )
+            return False, 0.0
+
+        stable_count = 0
+        elapsed = 0.0
+        last_value = 0.0
+
+        await self._emit_status(
+            f"[PRESSURE] 목표압 {target_pressure:.3g} "
+            f"(tol_abs={MFC_PRESSURE_TOL_ABS}, tol_rel={MFC_PRESSURE_TOL_REL*100:.1f}%) "
+            f"도달까지 대기 시작"
+        )
+
+        while elapsed < timeout_sec:
+            # 현재 압력 한 번 읽기
+            try:
+                current = await self.read_pressure()
+            except Exception as e:
+                await self._emit_status(f"[PRESSURE] 읽기 실패: {e!r}")
+                stable_count = 0
+                current = None
+
+            if current is None:
+                # 값이 없으면 이번 샘플은 무시하고 다음 루프로
+                await asyncio.sleep(check_interval_sec)
+                elapsed += check_interval_sec
+                continue
+
+            last_value = current
+
+            # 허용 오차 안인지 체크
+            if self.pressure_within_tolerance(target_pressure, current):
+                stable_count += 1
+                await self._emit_status(
+                    f"[PRESSURE] OK ({stable_count}/{MFC_PRESSURE_STABLE_COUNT}) "
+                    f"target={target_pressure:.3g}, current={current:.3g}"
+                )
+                if stable_count >= MFC_PRESSURE_STABLE_COUNT:
+                    await self._emit_status(
+                        f"[PRESSURE] 목표압 도달 및 안정: "
+                        f"target={target_pressure:.3g}, current={current:.3g}"
+                    )
+                    return True, current
+            else:
+                # 범위 밖이면 카운트 리셋
+                stable_count = 0
+                await self._emit_status(
+                    f"[PRESSURE] 아직 목표 미달: "
+                    f"target={target_pressure:.3g}, current={current:.3g}"
+                )
+
+            await asyncio.sleep(check_interval_sec)
+            elapsed += check_interval_sec
+
+        # timeout
+        await self._emit_status(
+            f"[PRESSURE] 타임아웃({timeout_sec:.1f}s) - "
+            f"target={target_pressure:.3g}, last={last_value:.3g}"
+        )
+        return False, last_value
 
     async def handle_command(self, cmd: str, args: dict | None = None) -> None:
         """
         main/process에서 넘어오는 문자열 명령을 고수준 메서드로 라우팅한다.
         - cmd: 'FLOW_SET', 'FLOW_ON', 'FLOW_OFF', 'VALVE_OPEN', 'VALVE_CLOSE',
-               'PS_ZEROING', 'MFC_ZEROING', 'SP4_ON', 'SP1_ON', 'SP1_SET', 'SP4_SET',
-               'READ_FLOW_ALL', 'READ_PRESSURE'
-        - args: 필요한 인자 (channel, value 등)
+            'PS_ZEROING', 'MFC_ZEROING',
+            'SP1_ON', 'SP2_ON', 'SP3_ON', 'SP4_ON',
+            'SP1_SET', 'SP2_SET', 'SP4_SET',
+            'READ_FLOW_ALL', 'READ_PRESSURE',
+            'WAIT_PRESSURE'   # 🔹 새로 추가되는 명령
+        - args: 필요한 인자 (channel, value, target 등)
         """
         args = args or {}
         key = (cmd or "").strip().upper()
@@ -828,6 +908,24 @@ class AsyncMFC:
             elif key == "SP4_SET":
                 val_ui = _req("value", float)
                 await self.sp4_set(val_ui)
+
+            # 🔹 새로 추가: 압력 도달까지 대기하는 고수준 명령
+            elif key == "WAIT_PRESSURE":
+                target = _req("target", float)
+                timeout = float(args.get("timeout_sec", MFC_PRESSURE_TIMEOUT_SEC))
+                ok, last = await self.wait_for_pressure_reached(
+                    target_pressure=target,
+                    timeout_sec=timeout,
+                    check_interval_sec=MFC_PRESSURE_CHECK_INTERVAL_SEC,
+                )
+                if ok:
+                    # → ProcessController 쪽에서 ExpectToken("MFC", "WAIT_PRESSURE") 를 기다리게 할 것
+                    await self._emit_confirmed("WAIT_PRESSURE")
+                else:
+                    await self._emit_failed(
+                        "WAIT_PRESSURE",
+                        f"압력 안정화 실패: target={target:.3g}, last={last:.3g}",
+                    )
 
             elif key in ("READ_FLOW_ALL", "READ_FLOW"):  # 호환용
                 await self.read_flow_all()
@@ -1514,15 +1612,20 @@ class AsyncMFC:
         except Exception:
             return None
 
-    def _emit_pressure_from_line_sync(self, line: str):
+    def _emit_pressure_from_line_sync(self, line: str) -> Optional[float]:
         val_hw = self._parse_pressure_value(line)
         if val_hw is None:
-            return
+            return None
+
+        # HW → UI 변환
         ui_val = float(val_hw) / float(MFC_PRESSURE_SCALE)
         fmt = "{:." + str(int(MFC_PRESSURE_DECIMALS)) + "f}"
         text = fmt.format(ui_val)
+
         # 이벤트 두 형태를 하나로 통합해 전달
         self._ev_nowait(MFCEvent(kind="pressure", value=ui_val, text=text))
+
+        return ui_val
 
     def _monitor_flow(self, channel: int, actual_flow_hw: float):
         """
