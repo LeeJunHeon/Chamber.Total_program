@@ -276,7 +276,25 @@ class MainWindow(QWidget):
 
         # ★ 외부 제어 서버 기동
         self._host_handle = None
-        self._netlog = lambda tag, text: self._broadcast_log(tag, str(text))
+
+        # host → log(tag, text) 콜백
+        def _netlog(tag: str, text: str) -> None:
+            msg = str(text)
+            try:
+                # 1) PLC_HOST 태그는 Plasma Cleaning 로그창(PC)에만 표시
+                if tag == "PLC_HOST":
+                    pc = getattr(self, "pc", None)
+                    if pc:
+                        pc.append_log("HOST", msg)
+                    return
+
+                # 2) 그 외 태그(NET, ERROR 등)는 기존처럼 전체 방송
+                self._broadcast_log(tag, msg)
+            except Exception:
+                # 로그 라우팅 중 예외는 UI에 영향을 주지 않도록 무시
+                pass
+
+        self._netlog = _netlog
         self._loop.create_task(self._boot_host())
 
     # ───────────────────────────────────────────────────────────
