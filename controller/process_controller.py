@@ -1091,11 +1091,25 @@ class ProcessController:
             message=f'압력 제어({sp_on_label}) 시작',
         ))
 
+        # 2) MFC에 목표 압력 도달까지 대기 요청 (최대 180초)
+        #    - target: UI에서 설정한 working_pressure
+        #    - timeout_sec: 180초 (3분)
+        #    - source: "ps" → READ_PRESSURE 기준
         steps.append(ProcessStep(
-                action=ActionType.DELAY,
-                duration=60000,
-                message='압력 안정화 대기 (SP3/4, 60초)',
-            ))
+            action=ActionType.MFC_CMD,
+            params=("WAIT_PRESSURE", {
+                "target": working_pressure,
+                "timeout_sec": 180.0,
+                "source": "ps",
+            }),
+            message=f'압력 도달 대기 (target={working_pressure:.2f}, timeout=180s)',
+        ))
+
+        # steps.append(ProcessStep(
+        #     action=ActionType.DELAY,
+        #     duration=60000,
+        #     message='압력 안정화 대기 (SP3/4, 60초)',
+        # ))
         
         # --- 파워/셔터 ---
         # Gun Shutter 열기 (CH2 전용: gun_shutters가 비어있지 않을 때만)
@@ -1215,11 +1229,21 @@ class ProcessController:
                 params=('SP2_ON', {}),
                 message='압력 제어(SP2) 시작',
             ))
+            # SP2로 제어하면서 실제 압력이 working_pressure에 도달할 때까지 대기
             steps.append(ProcessStep(
-                action=ActionType.DELAY,
-                duration=60000,
-                message='압력 안정화 대기 (SP2, 60초)',
+                action=ActionType.MFC_CMD,
+                params=("WAIT_PRESSURE", {
+                    "target": working_pressure,
+                    "timeout_sec": 180.0,
+                    "source": "ps",
+                }),
+                message=f'압력 도달 대기 (SP2, target={working_pressure:.2f}, timeout=180s)',
             ))
+            # steps.append(ProcessStep(
+            #     action=ActionType.DELAY,
+            #     duration=60000,
+            #     message='압력 안정화 대기 (SP2, 60초)',
+            # ))
             
         # SP2로 안정화 후 SP1 세팅
         # 3) working_pressure >= 5 인 경우: 기존처럼 SP1만 사용
