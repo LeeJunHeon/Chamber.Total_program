@@ -8,6 +8,7 @@ from controller.runtime_state import runtime_state
 import sys, asyncio, re, atexit
 from typing import Optional, Literal
 from pathlib import Path
+from contextvars import ContextVar
 
 from PySide6.QtWidgets import QApplication, QWidget, QStackedWidget, QPlainTextEdit, QTextEdit
 from PySide6.QtCore import Qt
@@ -34,6 +35,40 @@ from runtime.plasma_cleaning_runtime import PlasmaCleaningRuntime  # type: ignor
 from lib import config_ch1, config_ch2
 from lib import config_common as cfgc
 from lib import config_local as cfgl  # CHAT_WEBHOOK_URL 로드
+
+# ───────────────────────────────────────────────────────────
+# PLC 로그 출처를 담는 컨텍스트 (CH1 / CH2 / PC 등)
+PLC_ORIGIN: ContextVar[Optional[str]] = ContextVar("PLC_ORIGIN", default=None)
+
+class _PLCProxy:
+    """
+    AsyncPLC에 대한 얇은 래퍼.
+    - 메서드 호출 시 ContextVar(PLC_ORIGIN)에 origin을 세팅한 뒤 실제 AsyncPLC 메서드를 호출.
+    - 호출이 끝나면 컨텍스트를 원래대로 돌려놓는다.
+    """
+
+    def __init__(self, plc: AsyncPLC, origin: str):
+        self._plc = plc
+        self._origin = origin
+
+    def __getattr__(self, name):
+        attr = getattr(self._plc, name)
+
+        # 속성/필드는 그대로 전달
+        if not callable(attr):
+            return attr
+
+        async def _wrapper(*args, **kwargs):
+            token = PLC_ORIGIN.set(self._origin)
+            try:
+                result = attr(*args, **kwargs)
+                if asyncio.iscoroutine(result):
+                    return await result
+                return result
+            finally:
+                PLC_ORIGIN.reset(token)
+
+        return _wrapper
 
 # ───────────────────────────────────────────────────────────
 CH_HINT_RE = re.compile(r"\[CH\s*(\d)\]|\bCH(?:=|:)?\s*(\d)\b", re.IGNORECASE)
@@ -85,10 +120,15 @@ class MainWindow(QWidget):
         self._plc_owner: Optional[int] = None
         self.pc = None  # Plasma Cleaning 런타임 핸들
 
-        # PLC (공유) : CH 힌트 > 소유자 > 방송 순으로 라우팅
+        # PLC (공유) : 실제 AsyncPLC 인스턴스는 하나만 생성
         self.plc: AsyncPLC = AsyncPLC(logger=self._plc_log)
 
-        # ← 옵션: 부팅 직후 PLC 자동 연결
+        # ★ 챔버/플라즈마별 PLC Proxy 생성 (로그 출처 구분용)
+        self._plc_ch1 = _PLCProxy(self.plc, "CH1")
+        self._plc_ch2 = _PLCProxy(self.plc, "CH2")
+        self._plc_pc  = _PLCProxy(self.plc, "PC")
+
+        # ← 옵션: 부팅 직후 PLC 자동 연결 (공용 PLC로 직접 연결)
         async def _boot_plc():
             try:
                 await self.plc.connect()
@@ -142,7 +182,7 @@ class MainWindow(QWidget):
             chamber_no=1,
             prefix="ch1_",
             loop=self._loop,
-            plc=self.plc,
+            plc=self._plc_ch1,   # ★ CH1 전용 Proxy
             chat=self.chat,     # 단일 Notifier 공유 가능
             cfg=config_ch1,
             log_dir=self._log_root,
@@ -156,7 +196,7 @@ class MainWindow(QWidget):
             chamber_no=2,
             prefix="ch2_",
             loop=self._loop,
-            plc=self.plc,
+            plc=self._plc_ch2,   # ★ CH2 전용 Proxy
             chat=self.chat,
             cfg=config_ch2,
             log_dir=self._log_root,
@@ -203,12 +243,13 @@ class MainWindow(QWidget):
                 prefix="PC_",               # PC_* 네이밍 사용
                 loop=self._loop,
                 log_dir=self._log_root,
-                plc=self.plc,              # 공유 PLC
+                plc=self._plc_pc,          # ★ PC 전용 Proxy
                 mfc_gas=self.mfc1,         # Gas Flow는 정책상 항상 MFC1 사용
                 mfc_pressure=self.mfc1,         # 초기엔 CH1 기준
                 ig=self.ig1,               # IG도 초기엔 CH1 기준
                 chat=self.chat,
             )
+
         except Exception as e:
             self.pc = None
             try:
@@ -252,6 +293,26 @@ class MainWindow(QWidget):
 
     def _plc_log(self, fmt, *args):
         msg = (fmt % args) if args else str(fmt)
+
+        # 0) ContextVar에 출처가 명시되어 있으면 그쪽으로만 라우팅
+        origin = None
+        try:
+            origin = PLC_ORIGIN.get()
+        except LookupError:
+            origin = None
+
+        if origin == "CH1" and getattr(self, "ch1", None):
+            self.ch1.append_log("PLC", msg)
+            return
+        if origin == "CH2" and getattr(self, "ch2", None):
+            self.ch2.append_log("PLC", msg)
+            return
+        if origin == "PC" and getattr(self, "pc", None):
+            # Plasma Cleaning 전용 로그
+            self.pc.append_log("PLC", msg)
+            return
+
+        # 1) 메시지 안에 [CH1], [CH2] 힌트가 있으면 → 해당 챔버로
         m = CH_HINT_RE.search(msg)
         if m:
             hinted = next((g for g in m.groups() if g), None)
@@ -260,11 +321,12 @@ class MainWindow(QWidget):
                 self._route_log_to(hinted_ch, "PLC", msg)
                 return
             
+        # 2) 힌트가 없고, 현재 PLC 소유 챔버(_plc_owner)가 있으면 그쪽으로
         if self._plc_owner in (1, 2):
             self._route_log_to(self._plc_owner, "PLC", msg)
             return
         
-        # ▼ Plasma Cleaning 실행 중이면 PC 로그에만 보냄(방송하지 않음)
+        # 3) (fallback) Plasma Cleaning 실행 중이면 PC 로그로만 보내기
         try:
             pc = getattr(self, "pc", None)
             if pc:
@@ -285,7 +347,7 @@ class MainWindow(QWidget):
         except Exception:
             pass
 
-        # ▼ 기본: 방송 모드(CH1/CH2)
+        # 4) 기본: 방송 모드(CH1/CH2)
         if getattr(self, "ch1", None):
             self.ch1.append_log("PLC(Global)", msg)
         if getattr(self, "ch2", None):
