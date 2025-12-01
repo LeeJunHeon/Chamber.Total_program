@@ -86,6 +86,12 @@ class PlasmaCleaningRuntime:
         self._rf_target_evt = asyncio.Event()   # ★ 목표 도달 이벤트 대기용
         self._state_header: str = ""            # ★ 현재 단계 제목 보관
 
+        # ✅ 추가: RF 상태 기록용
+        self._rf_last_event_kind: Optional[str] = None
+        self._rf_last_event_message: Optional[str] = None
+        self._rf_last_forward: Optional[float] = None
+        self._rf_last_reflected: Optional[float] = None
+
         # ▶ 공정(Process) 타이머 활성화 여부 (SP4/IG 대기는 False)
         self._process_timer_active: bool = False
 
@@ -147,53 +153,104 @@ class PlasmaCleaningRuntime:
     async def _pump_mfc_events(self, mfc, label: str) -> None:
         if not mfc:
             return
-        async for ev in mfc.events():
-            k = getattr(ev, "kind", None)
-            if k == "status":
-                self.append_log(label, ev.message or "")
-            elif k == "command_confirmed":
-                self.append_log(label, f"OK: {ev.cmd or ''}")
+        try:
+            async for ev in mfc.events():
+                k = getattr(ev, "kind", None)
+                if k == "status":
+                    self.append_log(label, ev.message or "")
 
-                # ▶ 컨트롤러에도 통지
-                try:
-                    if getattr(self, "pc", None):
-                        self.pc.on_mfc_confirmed(getattr(ev, "cmd", "") or "")
-                except Exception:
-                    pass
+                elif k == "command_confirmed":
+                    self.append_log(label, f"OK: {ev.cmd or ''}")
+                    # ▶ 컨트롤러에도 통지
+                    try:
+                        if getattr(self, "pc", None):
+                            self.pc.on_mfc_confirmed(getattr(ev, "cmd", "") or "")
+                    except Exception:
+                        pass
 
-            elif k == "command_failed":
-                self.append_log(label, f"FAIL: {ev.cmd or ''} ({ev.reason or 'unknown'})")
+                elif k == "command_failed":
+                    self.append_log(label, f"FAIL: {ev.cmd or ''} ({ev.reason or 'unknown'})")
+                    # ▶ 컨트롤러에도 실패 통지 → 컨트롤러가 STOP 플래그 세팅
+                    try:
+                        if getattr(self, "pc", None):
+                            self.pc.on_mfc_failed(
+                                getattr(ev, "cmd", "") or "",
+                                getattr(ev, "reason", "") or "unknown",
+                            )
+                    except Exception:
+                        pass
 
-                # ▶ 컨트롤러에도 실패 통지 → 컨트롤러가 STOP 플래그 세팅
-                try:
-                    if getattr(self, "pc", None):
-                        self.pc.on_mfc_failed(getattr(ev, "cmd", "") or "", getattr(ev, "reason", "") or "unknown")
-                except Exception:
-                    pass
+                elif k == "flow":
+                    gas  = getattr(ev, "gas", "") or ""
+                    flow = float(getattr(ev, "value", 0.0) or 0.0)
+                    self.append_log(label, f"[poll] {gas}: {flow:.2f} sccm")
 
-            elif k == "flow":
-                gas  = getattr(ev, "gas", "") or ""
-                flow = float(getattr(ev, "value", 0.0) or 0.0)
-                self.append_log(label, f"[poll] {gas}: {flow:.2f} sccm")
-            elif k == "pressure":
-                txt = ev.text or (f"{ev.value:.3g}" if ev.value is not None else "")
-                self.append_log(label, f"[poll] ChamberP: {txt}")
+                    # 🔴 추가: 가스 유량이 UI에서 입력한 값과 같아졌을 때 컨트롤러에 알림
+                    try:
+                        # label로 GAS MFC인지 판별 (MFC(GAS), MFC(SP4/GAS-CHx) 등)
+                        is_gas_mfc = "GAS" in str(label).upper()
+                        if not is_gas_mfc:
+                            # SP4 MFC 등의 flow는 여기서는 무시
+                            continue
+
+                        # UI에서 목표 유량 읽기
+                        target_flow = 0.0
+                        w = _safe_get(self.ui, "PC_gasFlow_edit")
+                        if w:
+                            if hasattr(w, "toPlainText"):
+                                txt = w.toPlainText().strip()
+                            elif hasattr(w, "text"):
+                                txt = w.text().strip()
+                            else:
+                                txt = str(w).strip()
+                            if txt:
+                                target_flow = float(txt)
+
+                        if target_flow <= 0.0:
+                            continue
+
+                        # 허용 오차 (±5% 또는 최소 0.5 sccm)
+                        tol = max(0.5, target_flow * 0.05)
+                        if abs(flow - target_flow) > tol:
+                            continue
+
+                        pc = getattr(self, "pc", None)
+                        if pc and getattr(pc, "is_running", False) and hasattr(pc, "mark_flow_ready"):
+                            pc.mark_flow_ready(flow, target_flow)
+                    except Exception:
+                        # SP4 자동 ON 신호 관련 예외는 공정을 멈추지 않음
+                        pass
+
+                elif k == "pressure":
+                    txt = ev.text or (f"{ev.value:.3g}" if ev.value is not None else "")
+                    self.append_log(label, f"[poll] ChamberP: {txt}")
+        except asyncio.CancelledError:
+            # 정상 취소
+            pass
+        except Exception as e:
+            self.append_log(label, f"MFC 이벤트 펌프 오류: {e!r}")
 
     async def _pump_ig_events(self, label: str) -> None:
         if not self.ig:
             return
-        async for ev in self.ig.events():
-            k = getattr(ev, "kind", None)
-            if k == "status":
-                self.append_log(label, ev.message or "")
-            elif k == "pressure":
-                p = getattr(ev, "pressure", None)
-                txt = f"{p:.3e} Torr" if isinstance(p, (int, float)) else (ev.message or "")
-                self.append_log(label, f"[poll] {txt}")
-            elif k == "base_reached":
-                self.append_log(label, "Base pressure reached")
-            elif k == "base_failed":
-                self.append_log(label, f"Base pressure failed: {ev.message or ''}")
+        try:
+            async for ev in self.ig.events():
+                k = getattr(ev, "kind", None)
+                if k == "status":
+                    self.append_log(label, ev.message or "")
+                elif k == "pressure":
+                    p = getattr(ev, "pressure", None)
+                    txt = f"{p:.3e} Torr" if isinstance(p, (int, float)) else (ev.message or "")
+                    self.append_log(label, f"[poll] {txt}")
+                elif k == "base_reached":
+                    self.append_log(label, "Base pressure reached")
+                elif k == "base_failed":
+                    self.append_log(label, f"Base pressure failed: {ev.message or ''}")
+        except asyncio.CancelledError:
+            # 정상 취소
+            pass
+        except Exception as e:
+            self.append_log(label, f"IG 이벤트 펌프 오류: {e!r}")
 
     async def _pump_rf_events(self) -> None:
         """RFPowerAsync 이벤트를 UI/로그로 중계"""
@@ -211,18 +268,36 @@ class PlasmaCleaningRuntime:
                         if ref_w and hasattr(ref_w, "setPlainText"):
                             ref_w.setPlainText(f"{float(ev.reflected):.1f}")
 
+                    # 🔹 내부 상태에 마지막 측정값 저장 (for.p / ref.p 분류용)
+                    try:
+                        self._rf_last_forward = float(ev.forward)
+                        self._rf_last_reflected = float(ev.reflected)
+                    except Exception:
+                        self._rf_last_forward = None
+                        self._rf_last_reflected = None
+
                     # 2) 상태창은 카운트다운 유지 → 덮어쓰지 않고 로그만 남김
                     self.append_log("RF", f"FWD={ev.forward:.1f}, REF={ev.reflected:.1f} (W)")
                     continue
+
                 elif ev.kind == "status":
                     self.append_log("RF", ev.message or "")
-                elif ev.kind == "target_reached":   # ★ 추가
+
+                elif ev.kind == "target_reached":
+                    # 🔹 목표 도달 이벤트 종류/메시지 기록
+                    self._rf_last_event_kind = "target_reached"
+                    self._rf_last_event_message = ev.message or ""
                     self.append_log("RF", "목표 파워 도달")
                     self._rf_target_evt.set()
-                elif ev.kind == "target_failed":                     # ★ 추가(3줄)
+
+                elif ev.kind == "target_failed":
+                    # 🔹 실패 이벤트 종류/메시지 기록
+                    self._rf_last_event_kind = "target_failed"
+                    self._rf_last_event_message = ev.message or ""
                     self.append_log("RF", f"목표 파워 실패: {ev.message or '장비 확인'}")
                     self._rf_target_evt.set()
-                elif ev.kind == "power_off_finished":   # ★ 추가
+
+                elif ev.kind == "power_off_finished":
                     self.append_log("RF", "Power OFF finished")
         except asyncio.CancelledError:
             # 정상 취소 경로
@@ -456,18 +531,76 @@ class PlasmaCleaningRuntime:
         async def _rf_start(power_w: float) -> None:
             if not self.rf:
                 return
-            # ★ 목표 도달 이벤트 기다림 (타임아웃은 취향껏: 60s 예시)
-            self._rf_target_evt.clear()
 
+            # ★ RF 이벤트/상태 초기화
+            self._rf_target_evt.clear()
+            self._rf_last_event_kind = None
+            self._rf_last_event_message = None
+            self._rf_last_forward = None
+            self._rf_last_reflected = None
+
+            # RF ramp 시작
             await self.rf.start_process(float(power_w))
 
             try:
+                # RFPowerAsync에서 target_reached / target_failed 이벤트가 올 때까지 대기
                 await asyncio.wait_for(self._rf_target_evt.wait(), timeout=60.0)
-                self.append_log("RF", "목표 파워 안정 → 프로세스 타이머 시작 가능")
-                # ▶ 이제부터만 ProcessTime_edit에 카운트다운을 표시
-                self._process_timer_active = True
+
+                kind = getattr(self, "_rf_last_event_kind", None)
+                fwd  = getattr(self, "_rf_last_forward", None)
+                ref  = getattr(self, "_rf_last_reflected", None)
+
+                # 1) 이벤트 종류가 없거나 target_reached면 정상 도달로 간주
+                if kind is None or kind == "target_reached":
+                    self.append_log("RF", "목표 파워 안정 → 프로세스 타이머 시작 가능")
+                    self._process_timer_active = True
+                    return
+
+                # 2) RF 상태머신이 target_failed를 보낸 경우 → for.p / ref.p에 따라 원인 분리
+                if kind == "target_failed":
+                    base_msg = self._rf_last_event_message or "장비 확인"
+                    reason = f"RF Power 도달 실패: {base_msg}"
+
+                    # (1) FOR.P가 setpoint보다 낮은 경우
+                    try:
+                        if fwd is not None and float(power_w) > 0.0:
+                            if fwd < float(power_w) * 0.90:  # 10% 이상 부족
+                                reason = (
+                                    f"RF Power 도달 실패: FOR.P가 설정값보다 낮습니다. "
+                                    f"(SET={float(power_w):.1f} W, FWD={fwd:.1f} W)"
+                                )
+                    except Exception:
+                        pass
+
+                    # (2) REF.P가 비정상적으로 높은 경우
+                    try:
+                        if ref is not None and float(power_w) > 0.0:
+                            ref_limit = max(50.0, float(power_w) * 0.10)  # 예: 10% 또는 50W 이상
+                            if ref > ref_limit:
+                                reason = (
+                                    f"RF Power 도달 실패: REF.P가 너무 높습니다. "
+                                    f"(REF={ref:.1f} W, 기준≈{ref_limit:.1f} W)"
+                                )
+                    except Exception:
+                        pass
+
+                    self.append_log("RF", reason)
+                    if getattr(self, "pc", None):
+                        self.pc.last_result = "fail"
+                        self.pc.last_reason = reason
+
+                    self._process_timer_active = False
+                    with contextlib.suppress(Exception):
+                        await self._safe_rf_stop()
+                    # 컨트롤러 쪽에는 '정상적인 실패 종료'로 알리기
+                    raise asyncio.CancelledError()
+
+                # 3) 알 수 없는 이벤트 종류
+                self.append_log("RF", f"RF 이벤트 상태 비정상: {kind!r}")
+                raise RuntimeError(f"RF 이벤트 상태 비정상: {kind!r}")
+
             except asyncio.TimeoutError:
-                # 마지막 FWD 값을 한 번 읽어서 원인 문구를 더 구체화(장비 OFF/SET 미설정 vs 단순 timeout)
+                # (기존 타임아웃 로직 유지)
                 last_fwd = None
                 try:
                     meas = await self.plc.rf_read_fwd_ref(rf_ch=1) if self.plc else None
@@ -483,19 +616,16 @@ class PlasmaCleaningRuntime:
                 else:
                     reason = "RF Power 도달 실패: timeout 60s"
 
-                # 로그 + 컨트롤러에 '의도된 실패' 사유 전달
                 self.append_log("RF", reason)
                 if getattr(self, "pc", None):
                     self.pc.last_result = "fail"
                     self.pc.last_reason = reason
 
-                # 안전 정지까지 수행(램프다운 시도)
                 self._process_timer_active = False
                 with contextlib.suppress(Exception):
                     await self._safe_rf_stop()
-
-                # 컨트롤러 쪽에 스택트레이스 남기지 않도록 '정상적인 중단'으로만 신호
                 raise asyncio.CancelledError()
+
             except Exception as e:
                 reason = f"RF Power 도달 실패: {type(e).__name__}: {e!s}"
                 self.append_log("RF", reason)
