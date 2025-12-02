@@ -1221,23 +1221,23 @@ class ProcessController:
         if working_pressure < 5.0:
             steps.append(ProcessStep(
                 action=ActionType.MFC_CMD,
-                params=('SP2_SET', {'value': working_pressure}),
-                message=f'목표 압력(SP2) {working_pressure:.2f} 설정',
+                params=('SP2_SET', {'value': 5}),
+                message=f'목표 압력(SP2) {5:.2f} 설정',
             ))
             steps.append(ProcessStep(
                 action=ActionType.MFC_CMD,
                 params=('SP2_ON', {}),
                 message='압력 제어(SP2) 시작',
             ))
-            # SP2로 제어하면서 실제 압력이 working_pressure에 도달할 때까지 대기
+            # SP2로 제어하면서 실제 압력이 5 도달할 때까지 대기
             steps.append(ProcessStep(
                 action=ActionType.MFC_CMD,
                 params=("WAIT_PRESSURE", {
-                    "target": working_pressure,
+                    "target": 5,
                     "timeout_sec": 180.0,
                     "source": "ps",
                 }),
-                message=f'압력 도달 대기 (SP2, target={working_pressure:.2f}, timeout=180s)',
+                message=f'압력 도달 대기 (SP2, target={5:.2f}, timeout=180s)',
             ))
             # steps.append(ProcessStep(
             #     action=ActionType.DELAY,
