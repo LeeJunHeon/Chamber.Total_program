@@ -1083,6 +1083,7 @@ class ProcessController:
         # --- 압력 제어 시작 (CH1은 SP3, 그 외는 SP4) ---
         sp_on_cmd   = 'SP3_ON' if self._ch == 1 else 'SP4_ON'
         sp_on_label = 'SP3'    if self._ch == 1 else 'SP4'
+        sp_index    = 3        if self._ch == 1 else 4   # 🔹 현재 채널에서 사용하는 SP 번호
         
         # 1) 먼저 채널별 압력 제어 SP3 / SP4를 활성화
         steps.append(ProcessStep(
@@ -1092,17 +1093,18 @@ class ProcessController:
         ))
 
         # 2) MFC에 목표 압력 도달까지 대기 요청 (최대 180초)
-        #    - target: UI에서 설정한 working_pressure
-        #    - timeout_sec: 180초 (3분)
-        #    - source: "ps" → READ_PRESSURE 기준
+        #    - target: UI working_pressure → 읽기 실패 시 fallback
+        #    - use_sp_target=True & sp_index=3/4 → 실제 SP3/4 setpoint 기준
         steps.append(ProcessStep(
             action=ActionType.MFC_CMD,
             params=("WAIT_PRESSURE", {
                 "target": working_pressure,
                 "timeout_sec": 180.0,
                 "source": "ps",
+                "use_sp_target": True,
+                "sp_index": sp_index,
             }),
-            message=f'압력 도달 대기 (target={working_pressure:.2f}, timeout=180s)',
+            message=f'압력 도달 대기 (SP{sp_index} setpoint 기준, timeout=180s)',
         ))
 
         # steps.append(ProcessStep(

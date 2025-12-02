@@ -637,6 +637,62 @@ class AsyncMFC:
         if ok: await self._emit_confirmed("SP4_SET")
         else:  await self._emit_failed("SP4_SET", "SP4 설정 확인 실패")
 
+            # 🔹 추가: 장비에 현재 설정된 SP1~4 setpoint를 UI 단위로 읽기
+    async def _read_sp_setpoint_ui(self, sp_idx: int) -> Optional[float]:
+        """
+        현재 SP{sp_idx}에 저장된 압력 setpoint를 읽어서
+        UI 단위(예: mTorr)로 반환한다.
+
+        - sp_idx: 1/2/3/4
+        - 실패 시 None 반환
+        """
+        try:
+            idx = int(sp_idx)
+        except Exception:
+            await self._emit_status(f"[READ_SP] 잘못된 sp_idx={sp_idx!r}")
+            return None
+
+        if idx not in (1, 2, 3, 4):
+            await self._emit_status(f"[READ_SP] 지원하지 않는 SP index: {idx}")
+            return None
+
+        key_read = f"READ_SP{idx}_VALUE"
+        if key_read not in MFC_COMMANDS:
+            await self._emit_status(
+                f"[READ_SP] '{key_read}' 명령이 MFC_COMMANDS에 정의되어 있지 않음"
+            )
+            return None
+
+        # 장비로부터 "S{idx}+0.50 ..." 형식의 응답을 받음
+        line = await self._send_and_wait_line(
+            self._mk_cmd(key_read),
+            tag=f"[READ_SP{idx}]",
+            timeout_ms=MFC_TIMEOUT,
+            expect_prefixes=(f"S{idx}",),
+        )
+        if not (line and line.strip()):
+            await self._emit_status(f"[READ_SP{idx}] 응답 없음")
+            return None
+
+        val_hw = self._parse_pressure_value(line.strip())
+        if val_hw is None:
+            await self._emit_status(f"[READ_SP{idx}] 파싱 실패: {line!r}")
+            return None
+
+        # HW 단위 → UI 압력 단위로 변환 (SP1_SET 때와 같은 스케일 사용)
+        try:
+            ui_val = float(val_hw) / float(MFC_PRESSURE_SCALE)
+        except Exception:
+            ui_val = float(val_hw)
+
+        ui_val = round(ui_val, int(MFC_PRESSURE_DECIMALS))
+
+        await self._emit_status(
+            f"[READ_SP{idx}] 현재 setpoint (UI) = "
+            f"{ui_val:.{int(MFC_PRESSURE_DECIMALS)}f}"
+        )
+        return ui_val
+
     # ==============================
     #   압력 도달 판정 유틸 (NEW)
     # ==============================
@@ -909,10 +965,40 @@ class AsyncMFC:
                 val_ui = _req("value", float)
                 await self.sp4_set(val_ui)
 
-            # 🔹 새로 추가: 압력 도달까지 대기하는 고수준 명령
+            # 🔹 수정: 압력 도달까지 대기 (옵션으로 SP setpoint 기준 사용 가능)
             elif key == "WAIT_PRESSURE":
+                # 기본 target (UI에서 넘어온 값; SP3/4에서 읽기 실패 시 fallback 용)
                 target = _req("target", float)
                 timeout = float(args.get("timeout_sec", MFC_PRESSURE_TIMEOUT_SEC))
+
+                # 새 옵션: 장비 SP setpoint를 먼저 읽어서 target으로 사용할지 여부
+                use_sp_target = bool(args.get("use_sp_target", False))
+                sp_index_raw = args.get("sp_index", None)
+
+                if use_sp_target and sp_index_raw is not None:
+                    try:
+                        sp_idx = int(sp_index_raw)
+                    except Exception:
+                        sp_idx = None
+
+                    if sp_idx in (1, 2, 3, 4):
+                        sp_target = await self._read_sp_setpoint_ui(sp_idx)
+                        if sp_target is not None and sp_target > 0:
+                            await self._emit_status(
+                                f"[WAIT_PRESSURE] SP{sp_idx} setpoint "
+                                f"{sp_target:.3g} 기준으로 압력 도달 대기"
+                            )
+                            target = sp_target
+                        else:
+                            await self._emit_status(
+                                f"[WAIT_PRESSURE] SP{sp_idx} setpoint 읽기 실패 → "
+                                f"UI target={target:.3g} 그대로 사용"
+                            )
+                    else:
+                        await self._emit_status(
+                            f"[WAIT_PRESSURE] 잘못된 sp_index={sp_index_raw!r} → UI target 사용"
+                        )
+
                 ok, last = await self.wait_for_pressure_reached(
                     target_pressure=target,
                     timeout_sec=timeout,
