@@ -92,7 +92,6 @@ class PlasmaCleaningController:
         self.last_reason: str = ""
 
         self._final_notified = False           # ★ 중복발송 가드(권장)
-        self._flow_ready_evt: asyncio.Event = asyncio.Event()  # ★ Gas flow 안정화 대기용
 
     # ─────────────────────────────────────────────────────────────
     # 외부(UI/런타임)에서 쓰는 API
@@ -138,19 +137,6 @@ class PlasmaCleaningController:
                 self._show_state("Gas stabilize failed → STOP")
             self._stop_evt.set()
 
-    def mark_flow_ready(self, flow: float, target: float) -> None:
-        """
-        런타임(MFC 이벤트 펌프)에서 호출:
-        - 가스 유량이 목표에 도달했다고 판단되면 한 번만 이벤트를 세트.
-        """
-        if self._flow_ready_evt.is_set():
-            return
-        try:
-            self._log("MFC", f"FLOW 안정화 감지: {flow:.2f} / target {target:.2f} sccm")
-        except Exception:
-            pass
-        self._flow_ready_evt.set()
-
     # ─────────────────────────────────────────────────────────────
     # 내부 실행 시퀀스
     # ─────────────────────────────────────────────────────────────
@@ -159,7 +145,6 @@ class PlasmaCleaningController:
         self.last_reason = ""
 
         self._stop_evt = asyncio.Event()  # ★ 매 실행마다 초기화
-        self._flow_ready_evt = asyncio.Event()   # ★ FLOW 안정화 이벤트도 매 런마다 초기화
         self.is_running = True
         self._show_state("Preparing…")           # ★ 시작 즉시 상태창에 표시
         self._log("PC", "플라즈마 클리닝 시작")
@@ -235,65 +220,35 @@ class PlasmaCleaningController:
             self._log("STEP", "3: Gas/Pressure 설정 시작")  # ★ LOG
 
             try:
-                self._show_state(f"Gas select ch{p.gas_idx}")
+                self._show_state(f"Gas select ch{p.gas_idx}")   # ★ 추가
                 await self._mfc_gas_select(p.gas_idx)
                 if self._stop_evt.is_set():
                     raise asyncio.CancelledError()
             except Exception as e:
-                self._log("MFC", f"GAS SELECT 실패: {e!r}")
+                self._log("MFC", f"GAS SELECT 실패: {e!r}")  # ★ LOG
                 raise
 
             if p.gas_flow_sccm > 0.0:
-                self._log("MFC", f"FLOW_SET_ON start ch={p.gas_idx} -> {p.gas_flow_sccm:.1f} sccm")
+                self._log("MFC", f"FLOW_SET_ON start ch={p.gas_idx} -> {p.gas_flow_sccm:.1f} sccm")  # ★ LOG
                 try:
                     await self._mfc_flow_set_on(p.gas_flow_sccm)
-                    self._show_state(f"Gas Flow {p.gas_flow_sccm:.1f} sccm")
+                    self._show_state(f"Gas Flow {p.gas_flow_sccm:.1f} sccm")   # ★ 추가
                     if self._stop_evt.is_set():
                         raise asyncio.CancelledError()
                 except Exception as e:
-                    self._log("MFC", f"FLOW_SET_ON 실패: {e!r}")
+                    self._log("MFC", f"FLOW_SET_ON 실패: {e!r}")  # ★ LOG
                     raise
-
-                # 🔴 추가: 실제 flow 값이 목표에 도달할 때까지 대기
-                self._log("MFC", "FLOW 안정화 대기 → SP4 ON은 Flow 도달 후 실행")
-                self._show_state("Gas Flow waiting")
-
-                flow_wait = asyncio.create_task(self._flow_ready_evt.wait(), name="PC.FlowReadyWait")
-                stop_wait = asyncio.create_task(self._stop_evt.wait(),        name="PC.StopWait.Flow")
-
-                done, pending = await asyncio.wait(
-                    {flow_wait, stop_wait},
-                    return_when=asyncio.FIRST_COMPLETED,
-                )
-
-                # STOP이 먼저 온 경우
-                if stop_wait in done and self._stop_evt.is_set():
-                    for t in pending:
-                        t.cancel()
-                    with contextlib.suppress(asyncio.CancelledError):
-                        await flow_wait
-                    self._log("STEP", "STOP during Flow waiting → abort before SP4")
-                    raise asyncio.CancelledError()
-
-                # Flow가 먼저 안정화된 경우
-                for t in pending:
-                    t.cancel()
-                with contextlib.suppress(asyncio.CancelledError):
-                    await stop_wait
-
-                self._log("MFC", "FLOW 안정화 완료 → SP4 단계로 이동")
             else:
-                self._log("MFC", "FLOW_SET_ON 스킵(flow=0.0)")
+                self._log("MFC", "FLOW_SET_ON 스킵(flow=0.0)")  # ★ LOG
 
-            # ▶ 여기서부터는 기존과 동일: SP4_SET → SP4_ON → 120s 대기
             self._log("MFC", f"SP4_SET -> {p.sp4_setpoint_mTorr:.2f} mTorr")
             try:
                 await self._mfc_sp4_set(p.sp4_setpoint_mTorr)
-                self._show_state(f"SP4 Set {p.sp4_setpoint_mTorr:.2f} mTorr")
+                self._show_state(f"SP4 Set {p.sp4_setpoint_mTorr:.2f} mTorr")   # ★ 추가
                 if self._stop_evt.is_set():
                     raise asyncio.CancelledError()
             except Exception as e:
-                self._log("MFC", f"SP4_SET 실패: {e!r}")
+                self._log("MFC", f"SP4_SET 실패: {e!r}")  # ★ LOG
                 raise
 
             self._log("MFC", "SP4_ON")
@@ -302,16 +257,16 @@ class PlasmaCleaningController:
                 if self._stop_evt.is_set():
                     raise asyncio.CancelledError()
             except Exception as e:
-                self._log("MFC", f"SP4_ON 실패: {e!r}")
+                self._log("MFC", f"SP4_ON 실패: {e!r}")  # ★ LOG
                 raise
 
             self._log("MFC", "SP4_ON → 120s 대기 시작")
-            self._show_state("SP4 Waiting")
+            self._show_state("SP4 Waiting")  # ★ 제목은 1회 고정
             for left in range(120, 0, -1):
                 if self._stop_evt.is_set():
                     self._log("STEP", "STOP during SP4 waiting → abort before RF")
                     raise asyncio.CancelledError()
-                self._show_countdown(left)
+                self._show_countdown(left)  # ★ 숫자만 갱신
                 await asyncio.sleep(1.0)
             self._log("MFC", "SP4_ON 대기 120s 완료")
 
@@ -369,10 +324,10 @@ class PlasmaCleaningController:
             self._log("PC", "CancelledError: 외부 STOP 또는 경쟁 종료로 중단")
 
         except Exception as e:
-            # ★ LOG: RuntimeError 등은 한 줄 요약만 남기고 스택트레이스는 숨김
+            # ★ LOG: 예외 스택 트레이스까지 남김
             self.last_result = "fail"
             self.last_reason = f"{type(e).__name__}: {e!s}"
-            self._log("PC", f"오류: {self.last_reason}")
+            self._log("PC", f"오류: {e!r}\n{traceback.format_exc()}")
         finally:
             self._log("STEP", "종료 시퀀스 진입")  # ★ LOG
 
