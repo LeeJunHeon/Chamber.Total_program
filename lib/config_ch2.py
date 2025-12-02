@@ -16,7 +16,7 @@ RFPULSE_TCP_HOST = "192.168.1.50"
 RFPULSE_TCP_PORT = 4005
 
 # ★ CH2 전용 스케일: 3번 가스(N2)는 UI(sccm) → 장비(%FS) ×2.0
-MFC_SCALE_FACTORS = {1: 1.0, 2: 100.0/15.0, 3: 2.0}
+MFC_SCALE_FACTORS = {1: 1.0, 2: 10.0, 3: 2.0}
 
 # RGA LAN 접근 정보(필요 시 조정)
 RGA_NET.update({
