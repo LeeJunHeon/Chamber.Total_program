@@ -58,6 +58,12 @@ class _PLCProxy:
         if not callable(attr):
             return attr
 
+        # ★ is_connected 는 동기 bool 리턴 메서드라서
+        #   프리플라이트(_is_dev_connected)에서 동기 방식으로 바로 호출해야 함.
+        #   따라서 Proxy에서 비동기 wrapper 로 감싸지 않고 그대로 돌려준다.
+        if name == "is_connected":
+            return attr
+
         async def _wrapper(*args, **kwargs):
             token = PLC_ORIGIN.set(self._origin)
             try:
