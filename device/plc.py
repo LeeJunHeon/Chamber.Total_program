@@ -248,8 +248,8 @@ class PLCConfig:
 
     # READ 스케일: 0..4000 카운트 → 0..2000 V, 0..4 A
     # (필요시 현장 값에 맞게 두 수치만 조정하세요:  dc_v_scale=V_FS/4000, dc_i_scale=I_FS/4000)
-    dc_v_scale: float = 0.5    # 2000 V / 4000 ct  = 0.5 V/ct
-    dc_i_scale: float = 0.001  # 4 A / 4000 ct     = 0.001 A/ct
+    dc_v_scale: float = 0.50316      # ≈ 2012.6 V / 4000 ct
+    dc_i_scale: float = 0.00097405   # ≈ 3.90 A / 4000 ct
 
     # RF 피드백(ADC→W) 보정 계수 — 기본(=CH1용)
     rf_fwd_a: float = 0.1503488383

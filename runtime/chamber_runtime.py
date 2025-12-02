@@ -1067,7 +1067,7 @@ class ChamberRuntime:
                         float(ev.current or 0.0),
                     )
                 self._display_dc(ev.power, ev.voltage, ev.current)
-                self.append_log(f"DC{self.ch}", f"측정: {float(ev.power or 0.0):.1f} W, {float(ev.voltage or 0.0):.1f} V, {float(ev.current or 0.0):.2f} A")
+                self.append_log(f"DC{self.ch}", f"측정: {float(ev.power or 0.0):.1f} W, {float(ev.voltage or 0.0):.1f} V, {float(ev.current or 0.0):.3f} A")
             elif k == "target_reached":
                 self.process_controller.on_dc_target_reached()
             elif k == "target_failed":                      # ★ 추가: 실패 통지 받으면
@@ -1348,7 +1348,7 @@ class ChamberRuntime:
             self.append_log("MAIN", "P/V/I 비어있음"); return
         self._set("Power_edit",   f"{power:.1f}")
         self._set("Voltage_edit", f"{voltage:.1f}")
-        self._set("Current_edit", f"{current:.1f}")
+        self._set("Current_edit", f"{current:.3f}")
 
     def _on_process_status_changed(self, running: bool) -> None:
         b_start = self._u("Start_button"); b_stop = self._u("Stop_button")
