@@ -499,10 +499,12 @@ class PlasmaCleaningRuntime:
                 f"[SP4 WAIT] target={target:.3f} mTorr, timeout={timeout:.1f}s",
             )
             try:
-                # mfc.wait_for_pressure_reached 의 리턴이
-                #  - bool 이거나
-                #  - (bool, last_pressure) 튜플이라고 가정하고 모두 대응
-                res = await mfc.wait_for_pressure_reached(target, timeout)
+                # AsyncMFC 유틸 사용 (스레드/로직 공용)
+                # timeout 인자는 keyword-only 이므로 timeout_sec= 으로 넘겨야 함
+                res = await mfc.wait_for_pressure_reached(
+                    target,
+                    timeout_sec=timeout,
+                )
             except Exception as e:
                 self.append_log("MFC", f"[SP4 WAIT] 예외: {e!r}")
                 return False
