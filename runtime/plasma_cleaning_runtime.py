@@ -214,16 +214,43 @@ class PlasmaCleaningRuntime:
                     # 2) 상태창은 카운트다운 유지 → 덮어쓰지 않고 로그만 남김
                     self.append_log("RF", f"FWD={ev.forward:.1f}, REF={ev.reflected:.1f} (W)")
                     continue
+
                 elif ev.kind == "status":
                     self.append_log("RF", ev.message or "")
-                elif ev.kind == "target_reached":   # ★ 추가
+
+                elif ev.kind == "target_reached":  
+                    # RF 목표 파워 도달 (FWD가 setpoint 근처)
                     self.append_log("RF", "목표 파워 도달")
                     self._rf_target_evt.set()
-                elif ev.kind == "target_failed":                     # ★ 추가(3줄)
-                    self.append_log("RF", f"목표 파워 실패: {ev.message or '장비 확인'}")
+
+                elif ev.kind == "target_failed":         
+                    # ★ 여기서부터: ref.p 과다 / forward power 너무 낮음 등으로
+                    # RFPowerAsync가 공정을 실패로 판정한 경우
+                    reason = ev.message or "RF 목표 파워 실패 (REF.P 과다 또는 저출력)"
+                    self.append_log("RF", f"목표 파워 실패: {reason}")    
+
+                    # ▶ PlasmaCleaningController 쪽에 '실패' 결과를 직접 기록
+                    pc = getattr(self, "pc", None)
+                    if pc is not None:
+                        try:
+                            pc.last_result = "fail"
+                            pc.last_reason = reason
+
+                            # 컨트롤러 내부 stop 이벤트(_stop_evt)를 올려서
+                            # process time 카운트다운에 들어가기 전에 정지되도록 함
+                            if hasattr(pc, "request_stop"):
+                                pc.request_stop()
+                                self.append_log("PC", "RF 실패 감지 → PC 컨트롤러에 STOP 요청")
+                        except Exception:
+                            # 여기서 오류가 나더라도 공정 자체는 계속 종료 흐름으로 갈 수 있게 함
+                            pass
+
+                    # RF 목표 도달/실패 대기 중인 _rf_start()도 깨워 주기
                     self._rf_target_evt.set()
-                elif ev.kind == "power_off_finished":   # ★ 추가
+
+                elif ev.kind == "power_off_finished":
                     self.append_log("RF", "Power OFF finished")
+
         except asyncio.CancelledError:
             # 정상 취소 경로
             pass
