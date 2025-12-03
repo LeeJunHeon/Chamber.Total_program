@@ -965,9 +965,9 @@ class AsyncMFC:
                 val_ui = _req("value", float)
                 await self.sp4_set(val_ui)
 
-            # 🔹 수정: 압력 도달까지 대기 (옵션으로 SP setpoint 기준 사용 가능)
+            # 🔹 압력 도달까지 대기 (옵션으로 SP setpoint 기준 사용 가능)
             elif key == "WAIT_PRESSURE":
-                # 기본 target (UI에서 넘어온 값; SP3/4에서 읽기 실패 시 fallback 용)
+                # 기본 target (UI에서 넘어온 값; SP3/4에서 읽기 실패 시 fallback 용이었음)
                 target = _req("target", float)
                 timeout = float(args.get("timeout_sec", MFC_PRESSURE_TIMEOUT_SEC))
 
@@ -982,18 +982,37 @@ class AsyncMFC:
                         sp_idx = None
 
                     if sp_idx in (1, 2, 3, 4):
-                        sp_target = await self._read_sp_setpoint_ui(sp_idx)
-                        if sp_target is not None and sp_target > 0:
+                        # 🔹 변경: SP setpoint 읽기를 최대 5회 재시도
+                        sp_target: Optional[float] = None
+                        for attempt in range(1, 6):
+                            sp_target = await self._read_sp_setpoint_ui(sp_idx)
+                            if sp_target is not None and sp_target > 0:
+                                break
+
+                            # 읽기 실패한 경우 재시도 안내 로그
                             await self._emit_status(
-                                f"[WAIT_PRESSURE] SP{sp_idx} setpoint "
-                                f"{sp_target:.3g} 기준으로 압력 도달 대기"
+                                f"[WAIT_PRESSURE] SP{sp_idx} setpoint 읽기 실패 "
+                                f"(재시도 {attempt}/5)"
                             )
-                            target = sp_target
-                        else:
-                            await self._emit_status(
-                                f"[WAIT_PRESSURE] SP{sp_idx} setpoint 읽기 실패 → "
-                                f"UI target={target:.3g} 그대로 사용"
+                            # 마지막 시도가 아니면 잠깐 대기 후 재시도
+                            if attempt < 5:
+                                await asyncio.sleep(0.5)
+
+                        # 5회 시도 후에도 유효한 setpoint를 못 읽으면 → 전체 공정 실패 처리
+                        if sp_target is None or sp_target <= 0:
+                            await self._emit_failed(
+                                "WAIT_PRESSURE",
+                                f"SP{sp_idx} setpoint를 5회 시도 후에도 읽지 못함 → 압력 대기 불가"
                             )
+                            # 여기서 바로 리턴해서 wait_for_pressure_reached() 진입 자체를 막음
+                            return
+
+                        # 정상적으로 읽은 경우: 이 값을 기준 target으로 사용
+                        await self._emit_status(
+                            f"[WAIT_PRESSURE] SP{sp_idx} setpoint "
+                            f"{sp_target:.3g} 기준으로 압력 도달 대기"
+                        )
+                        target = sp_target
                     else:
                         await self._emit_status(
                             f"[WAIT_PRESSURE] 잘못된 sp_index={sp_index_raw!r} → UI target 사용"
