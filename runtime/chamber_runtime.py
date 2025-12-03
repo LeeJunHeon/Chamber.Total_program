@@ -1002,8 +1002,16 @@ class ChamberRuntime:
                 self.append_log(f"MFC{self.ch}", f"[poll] {gas}: {flow:.2f} sccm")
             elif k == "pressure":
                 txt = ev.text or (f"{ev.value:.3g}" if ev.value is not None else "")
-                with contextlib.suppress(Exception):
-                    self.data_logger.log_mfc_pressure(txt)
+
+                # ✅ Working Pressure는 메인 공정(process time) 폴링 구간에서만 수집
+                #    - process_controller 에서 polling=True 인 DELAY(step) 동안만
+                #      _last_polling_targets["mfc"] 가 True 가 됨
+                targets = getattr(self, "_last_polling_targets", None) or {}
+                if targets.get("mfc"):
+                    with contextlib.suppress(Exception):
+                        self.data_logger.log_mfc_pressure(txt)
+
+                # UI / 로그에는 기존처럼 항상 표시
                 self.append_log(f"MFC{self.ch}", f"[poll] ChamberP: {txt}")
 
     async def _pump_ig_events(self) -> None:
