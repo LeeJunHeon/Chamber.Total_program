@@ -54,6 +54,8 @@ class PlasmaCleaningController:
         mfc_sp4_set: Callable[[float], Awaitable[None]],
         mfc_sp4_on: Callable[[], Awaitable[None]],
         mfc_sp4_off: Callable[[], Awaitable[None]],
+        # ★ 추가: SP4 압력 대기 콜백
+        mfc_wait_sp4_pressure: Callable[[float, float], Awaitable[bool]],
         # RF (PLC DAC 경유)
         rf_start: Callable[[float], Awaitable[None]],
         rf_stop: Callable[[], Awaitable[None]],
@@ -77,12 +79,16 @@ class PlasmaCleaningController:
         self._mfc_sp4_set = mfc_sp4_set
         self._mfc_sp4_on = mfc_sp4_on
         self._mfc_sp4_off = mfc_sp4_off
+        self._mfc_wait_sp4_pressure = mfc_wait_sp4_pressure 
 
         self._rf_start = rf_start
         self._rf_stop = rf_stop
 
         self._show_state = show_state
         self._show_countdown = show_countdown
+        
+        # ★ 추가: FLOW_ON 확정 대기용 이벤트
+        self._mfc_flow_on_evt: asyncio.Event = asyncio.Event()
 
         self.is_running: bool = False
         self._task: Optional[asyncio.Task] = None
@@ -113,29 +119,41 @@ class PlasmaCleaningController:
         self._stop_evt = asyncio.Event()
         self._task = asyncio.create_task(self._run(p), name="PC_Run")
 
-    def request_stop(self) -> None:
+    def request_stop(self, reason: str | None = None) -> None:
         if not self.is_running:
             return
-        self._log("PC", "정지 요청 수신")
+
+        # 실패가 아닌 경우에만 'stop' 이유를 기록
+        if reason:
+            if self.last_result != "fail":
+                self.last_result = "stop"
+                self.last_reason = reason
+
+        if reason:
+            self._log("PC", f"정지 요청 수신 ({reason})")
+        else:
+            self._log("PC", "정지 요청 수신")
+
         self._stop_evt.set()
 
-    # (MFC 이벤트용; 런타임에서 UI 반영에 사용)
     def on_mfc_confirmed(self, cmd: str) -> None:
-        # ✅ 런타임의 _pump_mfc_events()가 이미 'OK: <cmd>'를 출력
-        # (중복 로그 억제: 여기서는 로그를 찍지 않음)
-        pass
+        self._last_mfc_cmd_result = (cmd, True, "")
+        self._log("MFC", f"명령 완료: {cmd}")
+
+        # ★ FLOW_ON 이 확인되면 flow 안정화 완료로 간주
+        if cmd == "FLOW_ON":
+            self._mfc_flow_on_evt.set()
 
     def on_mfc_failed(self, cmd: str, reason: str) -> None:
-        # ✅ 런타임에서 'FAIL: <cmd> (...)'를 출력하므로 로그 생략
-        c = (cmd or "").upper()
-        if any(key in c for key in ("FLOW", "SP4", "PRESSURE")):
-            # ▼ 결과/사유 남기기
-            self.last_result = "fail"
-            self.last_reason = f"MFC fail: {cmd} ({reason})"
-            self._log("PC", "Gas/Pressure 안정화 실패 → 공정 중단 요청")
-            with contextlib.suppress(Exception):
-                self._show_state("Gas stabilize failed → STOP")
-            self._stop_evt.set()
+        self._last_mfc_cmd_result = (cmd, False, reason)
+        self._log("MFC", f"명령 실패: {cmd} - {reason}")
+
+        # ★ FLOW_ON 실패 시에도 대기중인 쪽을 깨워주기 위해 이벤트 세팅
+        if cmd == "FLOW_ON":
+            self._mfc_flow_on_evt.set()
+
+        # 실패 시 전체 STOP
+        self.request_stop(reason=f"MFC command failed: {cmd} - {reason}")
 
     # ─────────────────────────────────────────────────────────────
     # 내부 실행 시퀀스
@@ -229,26 +247,74 @@ class PlasmaCleaningController:
                 raise
 
             if p.gas_flow_sccm > 0.0:
-                self._log("MFC", f"FLOW_SET_ON start ch={p.gas_idx} -> {p.gas_flow_sccm:.1f} sccm")  # ★ LOG
+                self._log("MFC", f"FLOW_SET_ON start ch={p.gas_idx} -> {p.gas_flow_sccm:.1f} sccm")
                 try:
+                    # ★ FLOW_ON 이벤트 초기화
+                    self._mfc_flow_on_evt.clear()
+
+                    # FLOW_SET/ON 명령 전송 (MFC 내부 로직: flow 맞추기 시작)
                     await self._mfc_flow_set_on(p.gas_flow_sccm)
-                    self._show_state(f"Gas Flow {p.gas_flow_sccm:.1f} sccm")   # ★ 추가
                     if self._stop_evt.is_set():
                         raise asyncio.CancelledError()
+
+                    # 상태 표시: 안정화 대기 단계
+                    self._show_state(f"Gas Flow {p.gas_flow_sccm:.1f} sccm (stabilizing)")
+
+                    # ★ FLOW_ON 확정 vs STOP vs timeout 동시 감시
+                    flow_task = asyncio.create_task(
+                        self._mfc_flow_on_evt.wait(),
+                        name="PC.FlowOnWait",
+                    )
+                    stop_task = asyncio.create_task(
+                        self._stop_evt.wait(),
+                        name="PC.Stop.FlowOn",
+                    )
+
+                    done, pending = await asyncio.wait(
+                        {flow_task, stop_task},
+                        return_when=asyncio.FIRST_COMPLETED,
+                        timeout=p.wait_timeout_s,   # 예: 90초
+                    )
+
+                    # timeout: 둘 다 안 끝났으면
+                    if not done:
+                        for t in pending:
+                            t.cancel()
+                        msg = (
+                            f"Gas Flow가 {p.wait_timeout_s:.1f}s 내에 안정적으로 "
+                            f"setpoint에 도달하지 못했습니다."
+                        )
+                        self._log("MFC", msg)
+                        raise RuntimeError(msg)
+
+                    # STOP이 먼저 온 경우
+                    if stop_task in done and self._stop_evt.is_set():
+                        flow_task.cancel()
+                        with contextlib.suppress(asyncio.CancelledError):
+                            await flow_task
+                        raise asyncio.CancelledError()
+
+                    # 여기까지 왔으면 FLOW_ON 이벤트 정상 완료
+                    for t in pending:
+                        t.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await stop_task
+
+                    self._show_state(f"Gas Flow {p.gas_flow_sccm:.1f} sccm OK")
                 except Exception as e:
-                    self._log("MFC", f"FLOW_SET_ON 실패: {e!r}")  # ★ LOG
+                    self._log("MFC", f"FLOW_SET_ON 실패: {e!r}")
                     raise
             else:
-                self._log("MFC", "FLOW_SET_ON 스킵(flow=0.0)")  # ★ LOG
+                self._log("MFC", "FLOW_SET_ON 스킵(flow=0.0)")
 
             self._log("MFC", f"SP4_SET -> {p.sp4_setpoint_mTorr:.2f} mTorr")
             try:
                 await self._mfc_sp4_set(p.sp4_setpoint_mTorr)
-                self._show_state(f"SP4 Set {p.sp4_setpoint_mTorr:.2f} mTorr")   # ★ 추가
+                self._show_state(f"SP4 Set {p.sp4_setpoint_mTorr:.2f} mTorr")
                 if self._stop_evt.is_set():
                     raise asyncio.CancelledError()
             except Exception as e:
-                self._log("MFC", f"SP4_SET 실패: {e!r}")  # ★ LOG
+                self._log("MFC", f"SP4_SET 실패: {e!r}")
                 raise
 
             self._log("MFC", "SP4_ON")
@@ -257,18 +323,64 @@ class PlasmaCleaningController:
                 if self._stop_evt.is_set():
                     raise asyncio.CancelledError()
             except Exception as e:
-                self._log("MFC", f"SP4_ON 실패: {e!r}")  # ★ LOG
+                self._log("MFC", f"SP4_ON 실패: {e!r}")
                 raise
 
-            self._log("MFC", "SP4_ON → 120s 대기 시작")
-            self._show_state("SP4 Waiting")  # ★ 제목은 1회 고정
-            for left in range(120, 0, -1):
-                if self._stop_evt.is_set():
-                    self._log("STEP", "STOP during SP4 waiting → abort before RF")
-                    raise asyncio.CancelledError()
-                self._show_countdown(left)  # ★ 숫자만 갱신
-                await asyncio.sleep(1.0)
-            self._log("MFC", "SP4_ON 대기 120s 완료")
+            # ★★★ 여기부터: 120초 고정 대기 → 실제 압력 도달 여부로 변경
+            self._log(
+                "MFC",
+                f"SP4_ON → 압력 안정화 대기 시작 "
+                f"(target={p.sp4_setpoint_mTorr:.2f} mTorr, timeout={p.wait_timeout_s:.1f}s)",
+            )
+            self._show_state(
+                f"SP4 Pressure Wait {p.sp4_setpoint_mTorr:.2f} mTorr"
+            )
+
+            # MFC 압력 대기와 STOP 이벤트를 동시에 감시
+            sp4_task = asyncio.create_task(
+                self._mfc_wait_sp4_pressure(p.sp4_setpoint_mTorr, p.wait_timeout_s),
+                name="PC.SP4PressureWait",
+            )
+            stop_task = asyncio.create_task(
+                self._stop_evt.wait(),
+                name="PC.Stop.SP4Pressure",
+            )
+
+            done, pending = await asyncio.wait(
+                {sp4_task, stop_task},
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+
+            # STOP이 먼저 온 경우
+            if stop_task in done and self._stop_evt.is_set():
+                self._log("STEP", "STOP during SP4 pressure wait → abort before RF")
+                sp4_task.cancel()
+                with contextlib.suppress(asyncio.CancelledError):
+                    await sp4_task
+                raise asyncio.CancelledError()
+
+            # 여기까지 왔으면 SP4 압력 대기가 끝난 상태
+            for t in pending:
+                t.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await stop_task
+
+            try:
+                ok = await sp4_task
+            except asyncio.CancelledError:
+                self._log("MFC", "SP4 압력 대기 태스크 취소됨 → 실패 처리")
+                ok = False
+
+            if not ok:
+                msg = (
+                    f"SP4 압력이 목표에 도달하지 못했습니다 "
+                    f"(target={p.sp4_setpoint_mTorr:.2f} mTorr, "
+                    f"timeout={p.wait_timeout_s:.1f}s)"
+                )
+                self._log("MFC", msg)
+                raise RuntimeError(msg)
+
+            self._log("MFC", "SP4 작업압 안정화 완료")
 
             # 6) RF POWER(PLC DAC) 설정
             self._log("RF", f"RF Power 적용: {p.rf_power_w:.1f} W")

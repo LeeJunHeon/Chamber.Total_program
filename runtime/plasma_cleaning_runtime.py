@@ -479,6 +479,53 @@ class PlasmaCleaningRuntime:
                 return
             await mfc.valve_open()              # ✔ 정식 API
 
+        async def _mfc_wait_sp4_pressure(target_mTorr: float, timeout_s: float) -> bool:
+            """
+            Plasma Cleaning용 SP4 압력 안정화 대기.
+            - AsyncMFC.wait_for_pressure_reached() 에 위임해서
+              실제 압력이 target_mTorr 근처에 도달할 때까지 기다린다.
+            - timeout_s 안에 도달 못 하면 False 리턴.
+            """
+            mfc = self.mfc_pressure
+            if not mfc:
+                self.append_log("MFC", "[SP4 WAIT] mfc_pressure not bound")
+                return False
+
+            target = float(target_mTorr)
+            timeout = float(timeout_s)
+
+            self.append_log(
+                "MFC",
+                f"[SP4 WAIT] target={target:.3f} mTorr, timeout={timeout:.1f}s",
+            )
+            try:
+                # mfc.wait_for_pressure_reached 의 리턴이
+                #  - bool 이거나
+                #  - (bool, last_pressure) 튜플이라고 가정하고 모두 대응
+                res = await mfc.wait_for_pressure_reached(target, timeout)
+            except Exception as e:
+                self.append_log("MFC", f"[SP4 WAIT] 예외: {e!r}")
+                return False
+
+            ok: bool
+            last_p = None
+            if isinstance(res, tuple) and res:
+                ok = bool(res[0])
+                if len(res) > 1:
+                    with contextlib.suppress(Exception):
+                        last_p = float(res[1])
+            else:
+                ok = bool(res)
+
+            if last_p is not None:
+                self.append_log(
+                    "MFC",
+                    f"[SP4 WAIT] 결과 ok={ok}, last={last_p:.3f} mTorr",
+                )
+            else:
+                self.append_log("MFC", f"[SP4 WAIT] 결과 ok={ok}")
+            return ok
+
         # ---- RF (PLC DCV ch=1 사용 — enable/write/read)
         async def _rf_start(power_w: float) -> None:
             if not self.rf:
@@ -590,6 +637,7 @@ class PlasmaCleaningRuntime:
             show_state=_show_state,
             show_countdown=_show_countdown,
             ig_wait_for_base_torr=_ig_wait_for_base_torr,
+            mfc_wait_sp4_pressure=_mfc_wait_sp4_pressure,  # ★ 추가
         )
 
     def _make_rf_async(self) -> Optional[RFPowerAsync]:
