@@ -34,6 +34,11 @@ DCP_P_SET_DEVIATE_MAX_N = int(getattr(cfgc, "DCP_P_SET_DEVIATE_MAX_N", 3))
 DCP_I_LOW_THRESH_A    = getattr(cfgc, "DCP_I_LOW_THRESH_A", 0.05)  # A 이하를 저전류로 판단
 DCP_I_LOW_COUNT_MAX_N = int(getattr(cfgc, "DCP_I_LOW_COUNT_MAX_N", 3))  # 연속 허용 횟수
 
+# ----- 명령 재시도 횟수 (장비 ERR/타임아웃 공통) -----
+# retries_left 는 "재시도 가능 횟수" 이므로
+# 실제 전송 시도 수 = 1(처음) + DCP_CMD_MAX_RETRIES 입니다.
+DCP_CMD_MAX_RETRIES = int(getattr(cfgc, "DCP_CMD_MAX_RETRIES", 5))  # 최대 재시도 5회
+
 # OFF 이후 P=0 강제 여부(기본 False: 로그만 확인, True: 0W 아니면 실패 처리)
 STRICT_OFF_CONFIRM_BY_PIV     = getattr(cfgc, "DCP_STRICT_OFF_CONFIRM_BY_PIV", True)
 OFF_CONFIRM_TIMEOUT_S         = getattr(cfgc, "DCP_OFF_CONFIRM_TIMEOUT_S", 3.0)
@@ -607,7 +612,7 @@ class AsyncDCPulse:
                 fut.set_result(resp)
 
         payload = self._proto.pack_write(cmd, value, width=width)
-        self._enqueue(Command(payload, label, DCP_TIMEOUT_MS, DCP_GAP_MS, 3, _cb))
+        self._enqueue(Command(payload, label, DCP_TIMEOUT_MS, DCP_GAP_MS, DCP_CMD_MAX_RETRIES, _cb))
         resp = await self._await_reply_bytes(label, fut)
 
         # ✅ OUTPUT_ON/OFF는 반드시 0x06(ACK)만 성공으로 간주
@@ -818,7 +823,7 @@ class AsyncDCPulse:
                 fut.set_result(_resp)
 
         payload = self._proto.pack_write(code, None, width=0)
-        self._enqueue(Command(payload, label, DCP_TIMEOUT_MS, DCP_GAP_MS, 3, _cb))
+        self._enqueue(Command(payload, label, DCP_TIMEOUT_MS, DCP_GAP_MS, DCP_CMD_MAX_RETRIES, _cb))
         resp = await self._await_reply_bytes(label, fut)
         if self._ok_from_resp(resp):
             await self._emit_confirmed(label)
@@ -1029,17 +1034,26 @@ class AsyncDCPulse:
             self._inflight = None
             decoded = self._proto.filter_and_decode(frame)
 
-            # ★ READ_* NAK 재시도 로직은 그대로 유지
-            if decoded is not None and len(decoded) == 1 and decoded[0] == 0x04 and cmd.label.startswith("READ_"):
+            # ★ ERR(0x04) 응답은 READ/WRITE 모두 공통으로 최대 DCP_CMD_MAX_RETRIES 회까지 재시도
+            if decoded is not None and len(decoded) == 1 and decoded[0] == 0x04:
                 await self._emit_status(f"[NAK] {cmd.label} — retry({cmd.retries_left})")
                 await asyncio.sleep(max(0.05, cmd.gap_ms / 1000.0))
+
                 if cmd.retries_left > 0:
+                    # 재시도 가능 → 다시 큐 맨 앞에 넣고, 이번 응답은 무시
                     cmd.retries_left -= 1
                     self._cmd_q.appendleft(cmd)
                 else:
-                    self._safe_callback(cmd.callback, None)
+                    # 마지막 재시도까지 모두 실패한 경우에만 콜백 호출
+                    if is_read:
+                        # 읽기 명령은 None 을 돌려서 상위에서 실패로 처리
+                        self._safe_callback(cmd.callback, None)
+                    else:
+                        # 쓰기 명령은 장비가 보낸 ERR(0x04)를 최종 결과로 전달
+                        self._safe_callback(cmd.callback, decoded)
                 continue
 
+            # 여기까지 왔으면 정상 프레임(ACK 또는 읽기 데이터)이므로 그대로 콜백
             self._safe_callback(cmd.callback, decoded)
             await asyncio.sleep(cmd.gap_ms / 1000.0)
 
