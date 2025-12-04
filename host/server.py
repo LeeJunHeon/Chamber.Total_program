@@ -61,6 +61,24 @@ class HostServer:
                 try:
                     obj: Json = json.loads(body.decode("utf-8"))
                 except Exception as e:
+                    # === JSON 깨진 요청 로그 ===
+                    # body가 뭔지, 어떤 에러였는지 Plasma Cleaning 로그창 + NET 로그에 남김
+                    try:
+                        # Plasma Cleaning 로그창용
+                        self.log(
+                            "PLC_HOST",
+                            f"[REQ] peer={peer} INVALID_JSON body={body!r} error={e}"
+                        )
+                    except Exception as log_err:
+                        # 로그 자체가 또 실패하면 NET 태그로 한 번 더 남김
+                        try:
+                            self.log(
+                                "NET",
+                                f"[LOG_ERROR] failed to log INVALID_JSON (peer={peer}): {log_err}"
+                            )
+                        except Exception:
+                            pass
+
                     # 요청 ID 추출 불가 시 빈 문자열로 회신
                     packet = pack_message("PARSE_ERROR_RESULT", {
                         "request_id": "",
@@ -73,6 +91,24 @@ class HostServer:
                 req_id = str(obj.get("request_id", ""))
                 cmd = str(obj.get("command", ""))
                 data = obj.get("data", {}) or {}
+
+                # === 클라이언트 → 서버 요청 로그 ===
+                # Plasma Cleaning 로그창에 어떤 명령이 들어왔는지 남김
+                try:
+                    self.log(
+                        "PLC_HOST",  # 필요시 "NET" 으로 바꿔도 됨
+                        f"[REQ] peer={peer} id={req_id} cmd={cmd} data={data}"
+                    )
+                except Exception as e:
+                    # PLC_HOST 로그 자체가 실패했을 때, 어떤 에러였는지 NET 태그로 한 번 더 남김
+                    try:
+                        self.log(
+                            "NET",
+                            f"[LOG_ERROR] failed to log REQ (peer={peer}, cmd={cmd}, id={req_id}): {e}"
+                        )
+                    except Exception:
+                        # 여기까지도 실패하면 어쩔 수 없이 무시 (통신은 계속)
+                        pass
 
                 # (B) command 미지정/공백도 표준 실패 응답
                 if not cmd:
@@ -95,6 +131,22 @@ class HostServer:
                 packet = pack_message(res_cmd, {"request_id": req_id, "data": res_data})
                 writer.write(packet)
                 await writer.drain()
+
+                # === 서버 → 클라이언트 응답 로그 ===
+                # 내가 어떤 응답을 보냈는지 Plasma Cleaning 로그창에 남김
+                try:
+                    self.log(
+                        "PLC_HOST",  # 필요시 "NET" 으로 변경 가능
+                        f"[RES] peer={peer} id={req_id} cmd={res_cmd} data={res_data}"
+                    )
+                except Exception as e:
+                    try:
+                        self.log(
+                            "NET",
+                            f"[LOG_ERROR] failed to log RES (peer={peer}, cmd={res_cmd}, id={req_id}): {e}"
+                        )
+                    except Exception:
+                        pass
         except Exception as e:
             self.log("NET", f"Client error/disconnect {peer}: {e}")
         finally:
