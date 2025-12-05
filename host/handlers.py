@@ -568,7 +568,7 @@ class HostHandlers:
                 # 0) 러핑밸브/펌프 OFF (I/O 순간만 락)
                 async with self._plc_call():
                     await self.ctx.plc.write_switch("L_R_V_SW", False)
-                await asyncio.sleep(3.0)  # 짧은 안정화
+                await asyncio.sleep(3.0)  # 3초 텀
                 async with self._plc_call():
                     await self.ctx.plc.write_switch("L_R_P_SW", False)
 
@@ -585,22 +585,36 @@ class HostHandlers:
                 deadline = time.monotonic() + timeout_s
                 while time.monotonic() < deadline:
                     async with self._plc_call():
-                        if await self.ctx.plc.read_bit("L_ATM"):
-                            return self._ok("VACUUM_OFF 완료 (L_ATM=TRUE)")
+                        atm = await self.ctx.plc.read_bit("L_ATM")
+
+                    if atm:
+                        # 3-1) 진공 해제 완료 → 벤트 밸브 닫기
+                        async with self._plc_call():
+                            await self.ctx.plc.write_switch("L_VENT_SW", False)
+
+                        # 3-2) 벤트 OFF까지 처리된 후에 성공 응답
+                        return self._ok(
+                            "VACUUM_OFF 완료 (L_ATM=TRUE, L_VENT_SW=FALSE)"
+                        )
+
                     await asyncio.sleep(0.5)
 
-                # 4) 타임아웃
-                return self._fail(f"VACUUM_OFF 타임아웃: {int(timeout_s)}s 내 L_ATM TRUE 미도달 (N2 gas 부족)")
-
-            except Exception as e:
-                # 예외는 message로 그대로 전달
-                return self._fail(e)
-
-            finally:
-                # (가능하면) 벤트 OFF 시도 — 실패해도 본 플로우엔 영향 없음
+                # 4) 타임아웃 → 벤트 OFF 시도 후 실패 응답
                 with contextlib.suppress(Exception):
                     async with self._plc_call():
                         await self.ctx.plc.write_switch("L_VENT_SW", False)
+
+                return self._fail(
+                    f"VACUUM_OFF 타임아웃: {int(timeout_s)}s 내 L_ATM TRUE 미도달 (N2 gas 부족)"
+                )
+
+            except Exception as e:
+                # 예외 시에도 벤트 OFF 시도
+                with contextlib.suppress(Exception):
+                    async with self._plc_call():
+                        await self.ctx.plc.write_switch("L_VENT_SW", False)
+                # 예외는 message로 그대로 전달
+                return self._fail(e)
 
     # ================== LoadLock 4pin 제어 ==================
     async def four_pin_up(self, data: Json) -> Json:
