@@ -461,7 +461,7 @@ class HostHandlers:
         async with self._plc_command("START_PLASMA_CLEANING"):
             # 클라이언트에서 넘어온 payload 그대로 남김
             self._log_client_request(data)
-            
+
             try:
                 # 런타임 내부에서:
                 #  - runtime_state.check_can_start("pc", 선택된 CH) 호출
@@ -501,7 +501,7 @@ class HostHandlers:
                 # 1) 러핑펌프 ON
                 async with self._plc_call():
                     await self.ctx.plc.write_switch("L_R_P_SW", True)
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(3.0)
 
                 # 2) 러핑밸브 인터락
                 async with self._plc_call():
@@ -555,7 +555,7 @@ class HostHandlers:
                 # 0) 러핑밸브/펌프 OFF (I/O 순간만 락)
                 async with self._plc_call():
                     await self.ctx.plc.write_switch("L_R_V_SW", False)
-                await asyncio.sleep(0.5)  # 짧은 안정화
+                await asyncio.sleep(3.0)  # 짧은 안정화
                 async with self._plc_call():
                     await self.ctx.plc.write_switch("L_R_P_SW", False)
 
