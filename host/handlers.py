@@ -34,6 +34,7 @@ class HostHandlers:
             self._plc_log_dir = d              # 폴백 폴더(로컬)
 
         self._plc_cmd_file = None              # 요청중 파일 경로(컨텍스트 내에서만 셋)
+        self._current_cmd_tag: str | None = None  # 현재 처리 중인 명령 태그(VACUUM_OFF, 4PIN_DOWN 등)
 
     def _write_line_sync(self, file_path: Path, line: str) -> None:
         """동기 파일 쓰기(예외는 호출부에서 처리)."""
@@ -83,6 +84,40 @@ class HostHandlers:
             # 로깅 에러로 본체 흐름을 멈추지 않음
             pass
 
+    # ===== 클라이언트 REQ/RES 로그 헬퍼 =====
+    def _log_client_request(self, data: Json) -> None:
+        """
+        현재 PLC 명령에 대해 클라이언트에서 어떤 data를 보냈는지
+        plc_host_YYYYmmdd_HHMMSS_<TAG>.txt 에 한 줄 남긴다.
+        (_plc_cmd_file 이 없으면 아무 것도 하지 않음)
+        """
+        if not self._plc_cmd_file:
+            return
+        try:
+            tag = self._current_cmd_tag or ""
+            # _plc_file_logger 가 타임스탬프는 붙여주므로 여기서는 메시지만 넘긴다.
+            self._plc_file_logger("[CLIENT_REQ] %s data=%r", tag, data)
+        except Exception:
+            # 로깅 실패는 무시 (본 흐름에 영향 주지 않음)
+            pass
+
+    def _log_client_response(self, res: Json) -> None:
+        """
+        현재 PLC 명령에 대해 클라이언트로 어떤 응답(Json)을 보냈는지
+        같은 파일에 한 줄 남긴다.
+        """
+        if not self._plc_cmd_file:
+            return
+        try:
+            tag = self._current_cmd_tag or ""
+            self._plc_file_logger(
+                "[CLIENT_RES] %s result=%s message=%r data=%r",
+                tag, res.get("result"), res.get("message"), res,
+            )
+        except Exception:
+            # 로깅 실패는 무시
+            pass
+
     @asynccontextmanager
     async def _plc_command(self, tag: str):
         """
@@ -90,11 +125,15 @@ class HostHandlers:
         파일명: plc_host_YYYYmmdd_HHMMSS_<TAG>.txt
         """
         safe_tag = "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in tag)
+        # 현재 처리 중인 명령 태그를 기억해 두고, 해당 명령 전용 로그 파일 경로를 만든다.
+        self._current_cmd_tag = tag
         self._plc_cmd_file = self._plc_log_dir / f"plc_host_{datetime.now():%Y%m%d_%H%M%S}_{safe_tag}.txt"
         try:
             yield
         finally:
+            # 명령이 끝나면 컨텍스트를 정리해 준다.
             self._plc_cmd_file = None
+            self._current_cmd_tag = None
 
     @asynccontextmanager
     async def _plc_call(self):
@@ -116,10 +155,16 @@ class HostHandlers:
 
     # ================== 공통 응답 헬퍼 ==================
     def _ok(self, msg: str = "OK", **extra) -> Json:
-        return {"result": "success", "message": msg, **extra}
+        """성공 응답(Json)을 만들면서, 현재 PLC 명령 컨텍스트라면 응답도 로그 파일에 남긴다."""
+        res: Json = {"result": "success", "message": msg, **extra}
+        self._log_client_response(res)
+        return res
 
     def _fail(self, e: Exception | str) -> Json:
-        return {"result": "fail", "message": str(e)}
+        """실패 응답(Json)을 만들면서, 현재 PLC 명령 컨텍스트라면 응답도 로그 파일에 남긴다."""
+        res: Json = {"result": "fail", "message": str(e)}
+        self._log_client_response(res)
+        return res
 
     # ================== 공정 중 여부 체크 헬퍼 ==================
     def _fail_if_ch_busy(self, ch: int, action: str) -> Json | None:
@@ -377,6 +422,7 @@ class HostHandlers:
         timeout_s = float(data.get("timeout_s", 600.0))  # 기본 10분
 
         async with self._plc_command("VACUUM_ON"):
+            self._log_client_request(data)
             try:
                 # 0) 벤트 OFF
                 async with self._plc_call():
@@ -440,6 +486,7 @@ class HostHandlers:
         timeout_s = float(data.get("timeout_s", 240.0))
 
         async with self._plc_command("VACUUM_OFF"):  # 요청별 로그 파일명 고정
+            self._log_client_request(data)
             try:
                 # 0) 러핑밸브/펌프 OFF (I/O 순간만 락)
                 async with self._plc_call():
@@ -490,6 +537,7 @@ class HostHandlers:
 
         try:
             async with self._plc_command("4PIN_UP"):
+                self._log_client_request(data)
                 async with self._plc_call():
                     if not await self.ctx.plc.read_bit("L_PIN_인터락"):
                         return self._fail("L_PIN_인터락=FALSE → 4PIN_UP 불가")
@@ -515,6 +563,7 @@ class HostHandlers:
         wait_s = float(data.get("wait_s", 10.0))
         try:
             async with self._plc_command("4PIN_DOWN"):
+                self._log_client_request(data)
                 # 1) 인터락 확인
                 async with self._plc_call():
                     if not await self.ctx.plc.read_bit("L_PIN_인터락"):
@@ -562,6 +611,7 @@ class HostHandlers:
         lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
         async with lock:  # CH 절차 충돌 방지는 유지
             async with self._plc_command(f"GATE_OPEN_CH{ch}"):
+                self._log_client_request(data)
                 try:
                     # 1) 인터락 확인 — 읽는 순간만 락
                     async with self._plc_call():
@@ -605,6 +655,7 @@ class HostHandlers:
         lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
         async with lock:  # CH 절차 충돌 방지는 유지
             async with self._plc_command(f"GATE_CLOSE_CH{ch}"):
+                self._log_client_request(data)
                 try:
                     # 1) 인터락 확인 — 읽는 순간만 락
                     async with self._plc_call():
@@ -709,6 +760,8 @@ class HostHandlers:
         lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
         async with lock:
             async with self._plc_command(f"CHUCK_{target_name.upper()}_CH{ch}"):
+                # 클라이언트 요청에 대응되는 Chuck 이동 파라미터를 남김
+                self._log_client_request({"ch": ch, "target": target_name, "timeout_s": timeout_s})
                 # (A) 현재 위치 확인 — 내부 read는 _plc_call()로 보호됨
                 try:
                     cur = await self._read_chuck_position(ch)
