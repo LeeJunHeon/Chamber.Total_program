@@ -457,15 +457,18 @@ class HostHandlers:
         if not pc:
             return self._fail("Plasma Cleaning runtime not ready")
 
-        try:
-            # 런타임 내부에서:
-            #  - runtime_state.check_can_start("pc", 선택된 CH) 호출
-            #  - IG/MFC/PLC 상태 프리플라이트
-            #  - 문제 있으면 _host_report_start(False, reason) → 여기서 예외로 전달
-            await pc.start_with_recipe_string(recipe)
-            return self._ok("PLASMA CLEANING START OK")
-        except Exception as e:
-            return self._fail(str(e))
+        # 🔹 START_PLASMA_CLEANING 전용 로그 파일 생성
+        async with self._plc_command("START_PLASMA_CLEANING"):
+            # 클라이언트에서 넘어온 payload 그대로 남김
+            try:
+                # 런타임 내부에서:
+                #  - runtime_state.check_can_start("pc", 선택된 CH) 호출
+                #  - IG/MFC/PLC 상태 프리플라이트
+                #  - 문제 있으면 _host_report_start(False, reason) → 여기서 예외로 전달
+                await pc.start_with_recipe_string(recipe)
+                return self._ok("PLASMA CLEANING START OK")
+            except Exception as e:
+                return self._fail(str(e))
 
     # ================== LoadLock vacuum 제어 ==================
     async def vacuum_on(self, data: Json) -> Json:
