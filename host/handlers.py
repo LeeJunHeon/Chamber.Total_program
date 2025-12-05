@@ -512,12 +512,23 @@ class HostHandlers:
                 async with self._plc_call():
                     await self.ctx.plc.write_switch("L_R_V_SW", True)
 
-                # 4) VAC_READY 폴링 (대기 동안 락 없음, '읽을 때만' 짧게)
+                # 4) VAC_READY + 러핑펌프/밸브 OFF 상태까지 폴링
                 deadline = time.monotonic() + float(timeout_s)
                 while time.monotonic() < deadline:
                     async with self._plc_call():
-                        if await self.ctx.plc.read_bit("L_VAC_READY_SW"):
-                            return self._ok("VACUUM_ON 완료 — L_VAC_READY_SW=TRUE")
+                        vac_ready = await self.ctx.plc.read_bit("L_VAC_READY_SW")
+                        pump_sw  = await self.ctx.plc.read_bit("L_R_P_SW")
+                        valve_sw = await self.ctx.plc.read_bit("L_R_V_SW")
+
+                    # 조건:
+                    # 1) L_VAC_READY_SW == TRUE
+                    # 2) L_R_P_SW == FALSE  (러핑펌프 스위치 OFF)
+                    # 3) L_R_V_SW == FALSE  (러핑밸브 스위치 OFF)
+                    if vac_ready and (not pump_sw) and (not valve_sw):
+                        return self._ok(
+                            "VACUUM_ON 완료 — VAC_READY && L_R_P_SW/L_R_V_SW=FALSE 확인"
+                        )
+
                     await asyncio.sleep(0.5)
 
                 # (타임아웃 사유 보강: 읽을 때만 락)
@@ -529,9 +540,11 @@ class HostHandlers:
                     pass
 
                 return self._fail(
-                    f"VACUUM_ON 타임아웃: {int(timeout_s)}s 내 L_VAC_READY_SW TRUE 미도달 "
-                    f"(L_VAC_NOT_READY={not_ready}) — door 확인"
+                    f"VACUUM_ON 타임아웃: {int(timeout_s)}s 내 "
+                    f"L_VAC_READY_SW && 펌프/밸브 OFF 상태 미도달 "
+                    f"(L_VAC_NOT_READY={not_ready}) — door/밸브 상태 확인"
                 )
+
             except Exception as e:
                 # 예외 사유는 message로 그대로 클라이언트 전달
                 return self._fail(e)
