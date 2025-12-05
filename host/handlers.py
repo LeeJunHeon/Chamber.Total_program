@@ -322,6 +322,9 @@ class HostHandlers:
 
             # ── PLC에서 진공 상태(L_ATM=FALSE)를 읽어 vacuum 여부 확인 ─────
             async with self._plc_command("GET_SPUTTER_STATUS"):
+                # ⇐ 여기서 클라이언트가 보낸 payload를 같이 남겨줌
+                self._log_client_request(payload)
+                
                 async with self._plc_call():
                     atm = await self.ctx.plc.read_bit("L_ATM")
 
