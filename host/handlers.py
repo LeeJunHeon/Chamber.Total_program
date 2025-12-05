@@ -28,7 +28,17 @@ class HostHandlers:
             d = root / "PLC_Remote"
             d.mkdir(parents=True, exist_ok=True)
             self._plc_log_dir = d              # 주 저장 폴더(NAS)
-        except Exception:
+        except Exception as e:
+            # NAS 로그 폴더 생성 실패 사유를 로그창에 출력
+            try:
+                self.ctx.log(
+                    "PLC_REMOTE",
+                    f"[PLC_REMOTE_LOG_ERROR] NAS 로그 폴더 생성 실패: {e!r} → 로컬 Logs/PLC_Remote 사용",
+                )
+            except Exception:
+                # log() 자체가 실패해도 공정은 멈추지 않음
+                pass
+
             d = Path.cwd() / "Logs" / "PLC_Remote"
             d.mkdir(parents=True, exist_ok=True)
             self._plc_log_dir = d              # 폴백 폴더(로컬)
@@ -50,9 +60,17 @@ class HostHandlers:
         try:
             loop = asyncio.get_running_loop()
         except RuntimeError:
-            # 이벤트루프가 없으면 동기로 시도하되, 실패는 억제
-            with contextlib.suppress(Exception):
+            # 이벤트루프가 없으면 동기로 시도하되, 실패 사유는 로그로 남김
+            try:
                 self._write_line_sync(file_path, line)
+            except Exception as e:
+                try:
+                    self.ctx.log(
+                        "PLC_REMOTE",
+                        f"[PLC_REMOTE_LOG_ERROR] _append_line_nonblocking(sync, {file_path}): {e!r}",
+                    )
+                except Exception:
+                    pass
             return
 
         async def _worker():
@@ -60,12 +78,27 @@ class HostHandlers:
             try:
                 await asyncio.to_thread(self._write_line_sync, file_path, line)
                 return
-            except Exception:
-                pass
+            except Exception as e:
+                try:
+                    self.ctx.log(
+                        "PLC_REMOTE",
+                        f"[PLC_REMOTE_LOG_ERROR] _append_line_nonblocking(async, {file_path}): {e!r}",
+                    )
+                except Exception:
+                    pass
+
             # 2차: 로컬 폴백(파일명은 동일 basename)
             local = (Path.cwd() / "Logs" / "PLC_Remote" / file_path.name)
-            with contextlib.suppress(Exception):
+            try:
                 await asyncio.to_thread(self._write_line_sync, local, line)
+            except Exception as e:
+                try:
+                    self.ctx.log(
+                        "PLC_REMOTE",
+                        f"[PLC_REMOTE_LOG_ERROR] _append_line_nonblocking(async_fallback, {local}): {e!r}",
+                    )
+                except Exception:
+                    pass
 
         # 기다리지 않고 태스크만 걸어 둠 → 호출부가 절대 블로킹되지 않음
         loop.create_task(_worker())
@@ -80,9 +113,15 @@ class HostHandlers:
             ts  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             fn  = self._plc_cmd_file or (self._plc_log_dir / f"plc_host_{datetime.now():%Y%m%d}.txt")
             self._append_line_nonblocking(fn, f"{ts} {msg}")
-        except Exception:
-            # 로깅 에러로 본체 흐름을 멈추지 않음
-            pass
+        except Exception as e:
+            # 로깅 에러로 본체 흐름을 멈추지 않되, 사유는 로그창에 출력
+            try:
+                self.ctx.log(
+                    "PLC_REMOTE",
+                    f"[PLC_REMOTE_LOG_ERROR] _plc_file_logger 실패: {e!r}",
+                )
+            except Exception:
+                pass
 
     # ===== 클라이언트 REQ/RES 로그 헬퍼 =====
     def _log_client_request(self, data: Json) -> None:
@@ -97,9 +136,15 @@ class HostHandlers:
             tag = self._current_cmd_tag or ""
             # _plc_file_logger 가 타임스탬프는 붙여주므로 여기서는 메시지만 넘긴다.
             self._plc_file_logger("[CLIENT_REQ] %s data=%r", tag, data)
-        except Exception:
-            # 로깅 실패는 무시 (본 흐름에 영향 주지 않음)
-            pass
+        except Exception as e:
+            # 로깅 실패는 본 플로우에 영향 주지 않지만, 사유는 로그창에 출력
+            try:
+                self.ctx.log(
+                    "PLC_REMOTE",
+                    f"[PLC_REMOTE_LOG_ERROR] _log_client_request 실패: {e!r}",
+                )
+            except Exception:
+                pass
 
     def _log_client_response(self, res: Json) -> None:
         """
@@ -114,9 +159,15 @@ class HostHandlers:
                 "[CLIENT_RES] %s result=%s message=%r data=%r",
                 tag, res.get("result"), res.get("message"), res,
             )
-        except Exception:
-            # 로깅 실패는 무시
-            pass
+        except Exception as e:
+            # 로깅 실패는 본 플로우에 영향 주지 않지만, 사유는 로그창에 출력
+            try:
+                self.ctx.log(
+                    "PLC_REMOTE",
+                    f"[PLC_REMOTE_LOG_ERROR] _log_client_response 실패: {e!r}",
+                )
+            except Exception:
+                pass
 
     @asynccontextmanager
     async def _plc_command(self, tag: str):
@@ -324,7 +375,7 @@ class HostHandlers:
             async with self._plc_command("GET_SPUTTER_STATUS"):
                 # ⇐ 여기서 클라이언트가 보낸 payload를 같이 남겨줌
                 self._log_client_request(payload)
-                
+
                 async with self._plc_call():
                     atm = await self.ctx.plc.read_bit("L_ATM")
 
