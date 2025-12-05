@@ -25,11 +25,11 @@ class HostHandlers:
         # NAS 우선, 실패 시 로컬 폴백 디렉터리 준비
         try:
             root = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs")
-            d = root / "plc_remote"
+            d = root / "PLC_Remote"
             d.mkdir(parents=True, exist_ok=True)
             self._plc_log_dir = d              # 주 저장 폴더(NAS)
         except Exception:
-            d = Path.cwd() / "Logs" / "plc_remote"
+            d = Path.cwd() / "Logs" / "PLC_Remote"
             d.mkdir(parents=True, exist_ok=True)
             self._plc_log_dir = d              # 폴백 폴더(로컬)
 
@@ -62,7 +62,7 @@ class HostHandlers:
             except Exception:
                 pass
             # 2차: 로컬 폴백(파일명은 동일 basename)
-            local = (Path.cwd() / "Logs" / "plc_remote" / file_path.name)
+            local = (Path.cwd() / "Logs" / "PLC_Remote" / file_path.name)
             with contextlib.suppress(Exception):
                 await asyncio.to_thread(self._write_line_sync, local, line)
 
