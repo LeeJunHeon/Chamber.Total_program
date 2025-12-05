@@ -420,6 +420,11 @@ class HostHandlers:
 
         if not chamber:
             return self._fail(f"Chamber CH{ch} runtime not ready")
+        
+        # 🔹 여기부터 START_SPUTTER 전용 PLC_Remote 로그 파일 생성
+        async with self._plc_command(f"START_SPUTTER_CH{ch}"):
+            # 클라이언트에서 넘어온 전체 data 그대로 남김
+            self._log_client_request(data)
 
         try:
             # 챔버 런타임은 이미 host handshake가 구현되어 있어
