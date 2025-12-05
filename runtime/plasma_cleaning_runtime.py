@@ -54,7 +54,7 @@ class PlasmaCleaningRuntime:
         self._loop = loop
         self.chat = chat
         self._log_dir = log_dir            # 기본 로그 루트
-        self._pc_log_dir = (log_dir / "plasma_cleaning")
+        self._pc_log_dir = (log_dir / "Plasma_Cleaning")
         self._pc_log_dir.mkdir(parents=True, exist_ok=True)
 
         self._log_fp = None                # 현재 런 세션 로그 파일 핸들
