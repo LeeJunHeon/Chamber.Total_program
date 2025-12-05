@@ -148,7 +148,27 @@ class HostServer:
                     except Exception:
                         pass
         except Exception as e:
-            self.log("NET", f"Client error/disconnect {peer}: {e}")
+            # 네트워크 끊김(정상 종료)에 대해서는 깔끔한 메시지만 남기고,
+            # 그 외 에러만 자세히 찍어준다.
+            msg = str(e) if e else ""
+            normal_disconnect = False
+
+            # 우리 쪽에서 직접 raise 하는 ConnectionError("EOF while reading")
+            # + 일반적인 소켓 끊김 예외들
+            if isinstance(e, (ConnectionError,
+                               ConnectionResetError,
+                               BrokenPipeError,
+                               asyncio.IncompleteReadError)):
+                normal_disconnect = True
+            # Windows에서 자주 나오는 WinError 64 메시지(지정된 네트워크 이름을 더 이상 사용할 수 없습니다)
+            elif isinstance(e, OSError) and "지정된 네트워크 이름을 더 이상 사용할 수 없습니다" in msg:
+                normal_disconnect = True
+
+            if normal_disconnect:
+                self.log("NET", f"Client disconnected: {peer}")
+            else:
+                # 진짜 이상한 예외는 기존처럼 상세 메시지 유지
+                self.log("NET", f"Client error from {peer}: {e!r}")
         finally:
             with contextlib.suppress(Exception):
                 writer.close()
