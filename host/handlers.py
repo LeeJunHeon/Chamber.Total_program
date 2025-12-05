@@ -460,6 +460,8 @@ class HostHandlers:
         # 🔹 START_PLASMA_CLEANING 전용 로그 파일 생성
         async with self._plc_command("START_PLASMA_CLEANING"):
             # 클라이언트에서 넘어온 payload 그대로 남김
+            self._log_client_request(data)
+            
             try:
                 # 런타임 내부에서:
                 #  - runtime_state.check_can_start("pc", 선택된 CH) 호출
