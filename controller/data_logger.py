@@ -29,21 +29,23 @@ class DataLogger(QObject):
         self._ch = int(ch)  # ← 추가: 폴백 경로명/파일명에 사용
         self._log_func = log_func              # CH 로그로 넘길 콜백
 
-        # 공통 저장 경로 (인자 없으면 기존 NAS 기본값)
-        log_directory = Path(csv_dir) if csv_dir else Path(r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database")
+        # NAS / 로컬 디렉터리 경로를 항상 둘 다 들고 있게 변경
+        self._nas_dir = Path(csv_dir) if csv_dir else Path(
+            r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database"
+        )
+        self._local_dir = Path.cwd() / f"_CSV_local_CH{self._ch}"
+
+        # NAS 디렉터리 생성 시도 (실패해도 폴백하지 않고, 매번 기록 시마다 다시 시도)
         try:
-            log_directory.mkdir(parents=True, exist_ok=True)
+            self._nas_dir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
-            # 폴백
-            log_directory = Path.cwd() / f"_CSV_local_CH{int(ch)}"
-            log_directory.mkdir(parents=True, exist_ok=True)
             if self._log_func:
                 self._log_func(
-                    f"Sputter Calib CSV 폴더 생성 실패(NAS) → 로컬 폴더로 폴백: {log_directory} (원인: {e!r})"
+                    f"Sputter Calib CSV NAS 폴더 생성 실패(초기화) → 기록 시마다 NAS 재시도 예정: {e!r}"
                 )
 
-        # 채널별 파일명만 다르게
-        self.log_file = log_directory / f"Ch{int(ch)}_log.csv"
+        # 기본 log_file 은 항상 NAS 경로로 유지
+        self.log_file = self._nas_dir / f"Ch{self._ch}_log.csv"
 
         # 수집 버퍼
         self.process_params: Dict = {}
@@ -338,44 +340,53 @@ class DataLogger(QObject):
         await asyncio.to_thread(self._write_row_sync, log_data)
 
     def _write_row_sync(self, log_data: Dict[str, str]) -> None:
+        """
+        - 1차: 항상 NAS(self.log_file) 에 기록 시도
+        - 실패 시: 해당 행만 로컬(_CSV_local_CH{ch})로 폴백
+        - 다음 기록 때도 다시 NAS부터 시도
+        """
+        nas_file = self.log_file  # 항상 NAS 경로
+
+        # 1차: NAS 기록 시도
         try:
-            # 부모 디렉터리 보장
-            self.log_file.parent.mkdir(parents=True, exist_ok=True)
-            file_exists = self.log_file.exists()
-            with open(self.log_file, "a", newline="", encoding="utf-8-sig") as f:
+            nas_file.parent.mkdir(parents=True, exist_ok=True)
+            file_exists = nas_file.exists()
+            with open(nas_file, "a", newline="", encoding="utf-8-sig") as f:
                 writer = csv.DictWriter(f, fieldnames=self.header)
                 if not file_exists:
                     writer.writeheader()
                 writer.writerow(log_data)
+
             self._session_started_at = None
 
-            # ✅ NAS에 정상 기록 완료 로그
             if self._log_func:
-                self._log_func(f"Sputter Calib CSV 1행 기록 완료 → {self.log_file}")
+                self._log_func(f"Sputter Calib CSV 1행 기록 완료 (NAS) → {nas_file}")
+            return  # NAS에 성공했으면 여기서 종료
 
         except Exception as e:
-            # NAS 쓰기 실패 → 로컬 폴더로 재시도
+            # NAS 쓰기 실패 → 이번 행만 로컬로 폴백
             if self._log_func:
-                self._log_func(f"Sputter Calib CSV 기록 실패(NAS) → 로컬 폴백 시도: {e!r}")
+                self._log_func(f"Sputter Calib CSV NAS 기록 실패 → 로컬 폴백 시도: {e!r}")
 
-            try:
-                local_dir = Path.cwd() / f"_CSV_local_CH{self._ch}"
-                local_dir.mkdir(parents=True, exist_ok=True)
-                local_file = local_dir / f"Ch{self._ch}_log.csv"
-                file_exists = local_file.exists()
-                with open(local_file, "a", newline="", encoding="utf-8-sig") as f:
-                    writer = csv.DictWriter(f, fieldnames=self.header)
-                    if not file_exists:
-                        writer.writeheader()
-                    writer.writerow(log_data)
-                    
-                # 이후 런부터는 로컬 파일을 기본으로 사용
-                self.log_file = local_file
+        # 2차: 로컬 폴백 기록 (self.log_file 은 NAS로 유지)
+        try:
+            local_dir = getattr(self, "_local_dir", Path.cwd() / f"_CSV_local_CH{self._ch}")
+            self._local_dir = local_dir  # 혹시 없었으면 저장
+            local_dir.mkdir(parents=True, exist_ok=True)
 
-                if self._log_func:
-                    self._log_func(f"Sputter Calib CSV 로컬 폴백 기록 완료 → {local_file}")
+            local_file = local_dir / f"Ch{self._ch}_log.csv"
+            file_exists = local_file.exists()
+            with open(local_file, "a", newline="", encoding="utf-8-sig") as f:
+                writer = csv.DictWriter(f, fieldnames=self.header)
+                if not file_exists:
+                    writer.writeheader()
+                writer.writerow(log_data)
 
-            except Exception as e2:
-                # 로컬 폴백마저 실패한 경우도 CH 로그에 남김
-                if self._log_func:
-                    self._log_func(f"Sputter Calib CSV 로컬 폴백마저 실패: {e2!r}")
+            if self._log_func:
+                self._log_func(f"Sputter Calib CSV 로컬 폴백 기록 완료 → {local_file}")
+
+        except Exception as e2:
+            # 로컬 폴백마저 실패한 경우도 CH 로그에 남김
+            if self._log_func:
+                self._log_func(f"Sputter Calib CSV 로컬 폴백마저 실패: {e2!r}")
+
