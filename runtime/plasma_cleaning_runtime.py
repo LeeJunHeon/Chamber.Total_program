@@ -1547,8 +1547,29 @@ class PlasmaCleaningRuntime:
         # 1) 채널 선택(옵션)
         use_ch = str(row.get("use_ch", "")).strip()
         if use_ch:
+            # "1", "2", "1.0" 같은 값들을 float → int로 정규화
             try:
-                self.set_selected_ch(int(float(use_ch)))
+                ch_val = int(float(use_ch))
+            except Exception:
+                ch_val = 1  # 이상한 값이면 안전하게 CH1로
+
+            # (1) UI 라디오 버튼 상태를 먼저 바꿔서
+            #     main.py 쪽의 라디오 토글 슬롯(_apply_pc_ch_selection)을 타게 한다.
+            try:
+                # CH2 선택
+                if ch_val == 2 and hasattr(self.ui, "PC_useChamber2_radio"):
+                    # setChecked(True)를 쓰면 상태가 바뀔 때 toggled 시그널이 나감
+                    self.ui.PC_useChamber2_radio.setChecked(True)
+                # CH1 선택
+                elif ch_val == 1 and hasattr(self.ui, "PC_useChamber1_radio"):
+                    self.ui.PC_useChamber1_radio.setChecked(True)
+            except Exception:
+                # UI가 없거나, 테스트 코드에서만 돌릴 때를 대비해 조용히 무시
+                pass
+
+            # (2) 런타임 내부 선택 채널도 맞춰줌(로그/PLC 키용)
+            try:
+                self.set_selected_ch(ch_val)
             except Exception:
                 pass
 
