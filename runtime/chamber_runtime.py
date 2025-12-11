@@ -3364,8 +3364,8 @@ class ChamberRuntime:
             # CH1 규칙
             if not p.get("use_dc_pulse"):
                 errs.append("CH1은 DC-Pulse를 반드시 선택해야 합니다.")
-            if p.get("dc_pulse_power", 0) <= 0:
-                errs.append("DC-Pulse Target Power(W) > 0 필요")
+            if p.get("dc_pulse_power", 0) < 0:
+                errs.append("DC-Pulse Target Power(W)는 0 이상이어야 합니다.")
             f = p.get("dc_pulse_freq")
             d = p.get("dc_pulse_duty")
             if f is not None and not (20 <= f <= 150):
@@ -3394,16 +3394,16 @@ class ChamberRuntime:
                 errs.append("RF Pulse와 RF Power는 동시에 선택할 수 없습니다.")
 
             if p.get("use_rf_pulse"):
-                if p.get("rf_pulse_power", 0) <= 0:
-                    errs.append("RF Pulse Target Power(W) > 0 필요")
+                if p.get("rf_pulse_power", 0) < 0:
+                    errs.append("RF Pulse Target Power(W)는 0 이상이어야 합니다.")
                 f = p.get("rf_pulse_freq")
                 d = p.get("rf_pulse_duty")
                 if f is not None and not (1 <= f <= 100):
                     errs.append("RF Pulse Freq(kHz)는 1..100")
                 if d is not None and not (1 <= d <= 99):
                     errs.append("RF Pulse Duty(%)는 1..99")
-            if p.get("use_dc_power") and p.get("dc_power", 0) <= 0:
-                errs.append("DC 파워(W) > 0 필요")
+            if p.get("use_dc_power") and p.get("dc_power", 0) < 0:
+                errs.append("DC Target Power(W)는 0 이상이어야 합니다.")
 
         return errs
     # ============================= 입력값 검증 헬퍼 =============================  
