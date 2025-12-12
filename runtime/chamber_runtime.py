@@ -2094,7 +2094,7 @@ class ChamberRuntime:
         self._cancel_delay_task()
         if getattr(self, "_pc_stopping", False):
             self.append_log("MAIN", "정지 요청 무시: 이미 종료 절차 진행 중"); return
-        
+
         # Stop 이후엔 자동 재연결 차단(사용자가 Start로 다시 올릴 때까지)
         self._auto_connect_enabled = False
         self._run_select = None
@@ -2106,23 +2106,62 @@ class ChamberRuntime:
         self._pending_device_cleanup = True
         self.process_controller.request_stop()
 
-        # ✅ 백업 타이머: 30초 내 미종료 시 헤비 강제
+        # ✅ 백업 타이머(고정 10분):
+        #    너무 빨리 heavy cleanup이 들어가면 shutdown 시퀀스(RF ramp-down 포함)가 잘리면서
+        #    gas off / pressure off가 실행되지 않거나, controller가 "정리중"으로 남을 수 있음.
+        #    따라서 넉넉하게 10분(600s) 후에만 fallback을 실행한다.
+        #
+        #    (타이머를 완전히 없애면, shutdown이 hard-wait에 걸린 케이스에서 영구적으로 멈출 수 있어 비추)
+
+        # STOP 요청 generation (이전 fallback이 나중에 발동해도 무해하도록)
+        self._stop_fallback_gen = int(getattr(self, "_stop_fallback_gen", 0)) + 1
+        _gen = self._stop_fallback_gen
+
+        timeout_s = 600.0  # ✅ 고정 10분
+        self.append_log("MAIN", f"STOP fallback timer set: {timeout_s:.0f}s")
+
         async def _fallback():
             try:
-                await asyncio.sleep(30)
-                if self._pc_stopping and self._pending_device_cleanup:
-                    self.append_log("MAIN", "STOP fallback → heavy cleanup")
-                    await self._stop_device_watchdogs(light=False)
+                await asyncio.sleep(timeout_s)
 
-                    # ✅ 전역 종료 시각 마킹(이벤트가 오지 않은 강제 경로 보완)
-                    try:
-                        runtime_state.mark_finished("chamber", self.ch)
-                    except Exception:
-                        pass
+                # 최신 STOP 요청이 아니면 무시
+                if _gen != int(getattr(self, "_stop_fallback_gen", 0)):
+                    return
 
-                    self._pending_device_cleanup = False
-                    self._pc_stopping = False
-                    self._clear_queue_and_reset_ui()
+                # 이미 종료됐으면 아무것도 하지 않음
+                if not (self._pc_stopping and self._pending_device_cleanup):
+                    return
+
+                # 1) 먼저 emergency_stop으로 전환해서 '대기 없이' Gas/밸브 정리까지 진행되도록 시도
+                #    (shutdown RF Power Off hard-wait에서 멈춘 케이스를 깨우기 위함)
+                self.append_log("MAIN", f"STOP fallback({timeout_s:.0f}s) → emergency shutdown")
+                with contextlib.suppress(Exception):
+                    self.process_controller.emergency_stop()
+
+                # 2) 짧게 기다렸다가(종료절차 진행 여지) 그래도 살아있으면 최후의 heavy cleanup
+                grace_s = 25.0
+                t0 = time.monotonic()
+                while (time.monotonic() - t0) < grace_s:
+                    if not self.process_controller.is_running:
+                        return
+                    await asyncio.sleep(0.5)
+
+                # 3) 여전히 종료가 안되면: 컨트롤러 상태/러너를 강제 리셋 후 device heavy cleanup
+                self.append_log("MAIN", "STOP fallback → heavy cleanup + controller reset")
+
+                with contextlib.suppress(Exception):
+                    self.process_controller.reset_controller()
+
+                await self._stop_device_watchdogs(light=False)
+
+                # ✅ 전역 종료 시각 마킹(이벤트가 오지 않은 강제 경로 보완)
+                with contextlib.suppress(Exception):
+                    runtime_state.mark_finished("chamber", self.ch)
+
+                self._pending_device_cleanup = False
+                self._pc_stopping = False
+                self._clear_queue_and_reset_ui()
+
             except asyncio.CancelledError:
                 pass
 
