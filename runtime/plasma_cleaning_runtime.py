@@ -810,11 +810,14 @@ class PlasmaCleaningRuntime:
         # ★ 여기까지 왔으면 Host 프리플라이트 성공
         self._host_report_start(True, "preflight OK")
 
-        # 4) 실행/시작 마킹 + 동시실행 가드(대칭성 보장)
-        runtime_state.mark_started("pc", ch)
+        # 4) 실행/시작 마킹 — PC는 pc로만 관리 (chamber는 절대 건드리지 않음)
         runtime_state.set_running("pc", True, ch)
-        runtime_state.mark_started("chamber", ch)
-        runtime_state.set_running("chamber", True, ch)
+
+        # 4) 실행/시작 마킹 + 동시실행 가드(대칭성 보장)
+        # runtime_state.mark_started("pc", ch)
+        # runtime_state.set_running("pc", True, ch)
+        # runtime_state.mark_started("chamber", ch)
+        # runtime_state.set_running("chamber", True, ch)
 
         # 5) UI/로그 준비
         p = self._read_params_from_ui()
@@ -891,21 +894,41 @@ class PlasmaCleaningRuntime:
             self.append_log("PC", f"오류: {e!r}")
 
         finally:
-            # [A] 🔁 순서 변경: 종료 통지 먼저 (runtime_state 즉시 해제 + 종료 챗 선송)
+            # [A] 먼저 장치/태스크 정리 (시간 걸려도 running 유지)
             try:
-                await self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final)  # ← 순서 ↑
+                await self._final_cleanup()
+            except Exception as e:
+                self.append_log("PC", f"final_cleanup error: {e!r}")
+
+            # [B] 내부 플래그 먼저 종료 (get_status fallback이 있으면 여기부터 idle로 정리됨)
+            self._running = False
+            self._process_timer_active = False
+
+            # [C] 마지막에 종료 통지 + runtime_state 해제 (이제 pc도 idle로 일관)
+            try:
+                await self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final)
             except Exception as e:
                 self.append_log("PC", f"notify_finish_once error: {e!r}")
 
-            # [B] 그 다음 장치/태스크 정리 (오래 걸려도 상관없음)
-            await self._final_cleanup()
-
-            # [C] 마지막으로 UI 복구
-            self._running = False
-            self._process_timer_active = False
+            # [D] UI 복구
             self._reset_ui_state(restore_time_min=self._last_process_time_min)
             self._set_state_text("대기 중")
-            self.append_log("MAIN", "[FINALLY] idle UI 복구 완료")
+
+            # # [A] 🔁 순서 변경: 종료 통지 먼저 (runtime_state 즉시 해제 + 종료 챗 선송)
+            # try:
+            #     await self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final)  # ← 순서 ↑
+            # except Exception as e:
+            #     self.append_log("PC", f"notify_finish_once error: {e!r}")
+
+            # # [B] 그 다음 장치/태스크 정리 (오래 걸려도 상관없음)
+            # await self._final_cleanup()
+
+            # # [C] 마지막으로 UI 복구
+            # self._running = False
+            # self._process_timer_active = False
+            # self._reset_ui_state(restore_time_min=self._last_process_time_min)
+            # self._set_state_text("대기 중")
+            # self.append_log("MAIN", "[FINALLY] idle UI 복구 완료")
 
     async def _on_click_stop(self) -> None:
         # 0) 실행/중복 가드
@@ -1362,20 +1385,29 @@ class PlasmaCleaningRuntime:
         # 1) 전역 종료/해제 — 챗이 실패해도 반드시 풀림
         try:
             ch = int(getattr(self, "_selected_ch", 1))
-            
-            # ✅ 마지막 결과(성공/실패) 기록: 실패는 get_status에서 error로 노출되도록 유지
+
             if ok or stopped:
                 runtime_state.clear_error("pc", ch)
-                runtime_state.clear_error("chamber", ch)
             else:
                 _reason = (str(reason or "")).strip() or "plasma cleaning failed"
                 runtime_state.set_error("pc", ch, _reason)
-                runtime_state.set_error("chamber", ch, _reason)
 
             runtime_state.mark_finished("pc", ch)
-            runtime_state.mark_finished("chamber", ch)
             runtime_state.set_running("pc", False, ch)
-            runtime_state.set_running("chamber", False, ch)
+
+            # ✅ 마지막 결과(성공/실패) 기록: 실패는 get_status에서 error로 노출되도록 유지
+            # if ok or stopped:
+            #     runtime_state.clear_error("pc", ch)
+            #     runtime_state.clear_error("chamber", ch)
+            # else:
+            #     _reason = (str(reason or "")).strip() or "plasma cleaning failed"
+            #     runtime_state.set_error("pc", ch, _reason)
+            #     runtime_state.set_error("chamber", ch, _reason)
+
+            # runtime_state.mark_finished("pc", ch)
+            # runtime_state.mark_finished("chamber", ch)
+            # runtime_state.set_running("pc", False, ch)
+            # runtime_state.set_running("chamber", False, ch)
 
         except Exception as e:
             self.append_log("STATE", f"runtime_state finalize mark failed: {e!r}")
