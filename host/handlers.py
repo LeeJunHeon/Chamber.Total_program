@@ -375,7 +375,19 @@ class HostHandlers:
                 try:
                     pc = getattr(self.ctx, "pc", None)
                     if pc is not None:
-                        cleaning = bool(getattr(pc, "is_running", getattr(pc, "_running", False)))
+                        fn = getattr(pc, "is_running", None)
+
+                        if callable(fn):
+                            # 메서드면 호출해서 True/False를 받아야 함
+                            try:
+                                cleaning = bool(fn())
+                            except TypeError:
+                                # 혹시 시그니처가 달라 호출이 안 되면 _running으로 폴백
+                                cleaning = bool(getattr(pc, "_running", False))
+                        else:
+                            # 속성(bool)일 수도 있으니 그대로 사용
+                            cleaning = bool(fn) if isinstance(fn, bool) else bool(getattr(pc, "_running", False))
+
                         return "running" if cleaning else "idle"
                 except Exception:
                     return "error"

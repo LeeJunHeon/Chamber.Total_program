@@ -63,7 +63,7 @@ class RuntimeState:
         default_factory=lambda: {"chamber": {}, "pc": {}, "tsp": {}}
     )
     _last_error: Dict[str, Dict[int, str]] = field(
-    default_factory=lambda: {"chamber": {}, "pc": {}, "tsp": {}}
+        default_factory=lambda: {"chamber": {}, "pc": {}, "tsp": {}}
     )
     _last_error_mono: Dict[str, Dict[int, float]] = field(
         default_factory=lambda: {"chamber": {}, "pc": {}, "tsp": {}}
@@ -241,6 +241,7 @@ class RuntimeState:
                 "running": {k: dict(v) for k, v in self._running.items()},
                 "last_start_mono": {k: dict(v) for k, v in self._last_start_mono.items()},
                 "last_finish_mono": {k: dict(v) for k, v in self._last_finish_mono.items()},
+                "last_error": {k: dict(v) for k, v in self._last_error.items()},
             }
 
 

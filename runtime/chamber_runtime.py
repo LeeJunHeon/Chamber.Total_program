@@ -834,26 +834,6 @@ class ChamberRuntime:
                         except Exception:
                             pass
 
-                        # ✅ 전역: 마지막 결과(성공/실패) 기록 + 종료 시각 마킹
-                        try:
-                            if ok:
-                                runtime_state.clear_error("chamber", self.ch)
-                            else:
-                                _reason = (str(detail.get("reason") or "")).strip()
-                                if not _reason:
-                                    _errs = detail.get("errors", None)
-                                    if isinstance(_errs, (list, tuple)) and _errs:
-                                        _reason = str(_errs[0])
-                                    elif isinstance(_errs, str):
-                                        _reason = _errs
-                                if not _reason:
-                                    _reason = "process failed"
-                                runtime_state.set_error("chamber", self.ch, _reason)
-
-                            runtime_state.mark_finished("chamber", self.ch)
-                        except Exception:
-                            pass
-
                         # 0) 재연결 선차단 + 폴링 완전 OFF
                         self._auto_connect_enabled = False
                         self._run_select = None
@@ -897,6 +877,27 @@ class ChamberRuntime:
                         # 예외 시 안전하게 UI를 '대기 중'으로 복귀
                         with contextlib.suppress(Exception):
                             self._clear_queue_and_reset_ui()
+
+                    finally:
+                        # ✅ 전역: 마지막 결과(성공/실패) 기록 + 종료 시각 마킹
+                        try:
+                            if ok:
+                                runtime_state.clear_error("chamber", self.ch)
+                            else:
+                                _reason = (str(detail.get("reason") or "")).strip()
+                                if not _reason:
+                                    _errs = detail.get("errors", None)
+                                    if isinstance(_errs, (list, tuple)) and _errs:
+                                        _reason = str(_errs[0])
+                                    elif isinstance(_errs, str):
+                                        _reason = _errs
+                                if not _reason:
+                                    _reason = "process failed"
+                                runtime_state.set_error("chamber", self.ch, _reason)
+
+                            runtime_state.mark_finished("chamber", self.ch)
+                        except Exception:
+                            pass
 
                 elif kind == "aborted":
                     try:
