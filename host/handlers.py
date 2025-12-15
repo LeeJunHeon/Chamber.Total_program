@@ -345,19 +345,29 @@ class HostHandlers:
                 """
                 Loadlock(Plasma Cleaning) 상태 계산:
                 - runtime_state.is_running("pc", ch)가 1 또는 2 중 하나라도 True면 running
+                - (추가) 마지막 PC 실패 이력이 남아 있으면 error
                 - (fallback) plasma cleaning 런타임의 is_running / _running 플래그 사용
                 - 조회 중 예외가 나면 error
                 """
                 # 1) runtime_state 기준 (pc kind)
                 try:
                     if rs is not None and getattr(rs, "is_running", None):
+                        # 1-1) 하나라도 실행 중이면 running
                         for ch in (1, 2):
                             try:
                                 if rs.is_running("pc", ch):
                                     return "running"
                             except Exception:
-                                # 다른 채널도 계속 확인
                                 continue
+
+                        # 1-2) 실행 중인 PC가 없으면, 마지막 실패 이력(PC) 있으면 error
+                        if getattr(rs, "has_error", None):
+                            for ch in (1, 2):
+                                try:
+                                    if rs.has_error("pc", ch):
+                                        return "error"
+                                except Exception:
+                                    return "error"
                 except Exception:
                     return "error"
 
@@ -365,9 +375,7 @@ class HostHandlers:
                 try:
                     pc = getattr(self.ctx, "pc", None)
                     if pc is not None:
-                        cleaning = bool(
-                            getattr(pc, "is_running", getattr(pc, "_running", False))
-                        )
+                        cleaning = bool(getattr(pc, "is_running", getattr(pc, "_running", False)))
                         return "running" if cleaning else "idle"
                 except Exception:
                     return "error"

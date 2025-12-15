@@ -22,7 +22,6 @@ import threading
 
 
 # ---- 내부 유틸 --------------------------------------------------------------
-
 def _now_monotonic() -> float:
     return time.monotonic()
 
@@ -44,7 +43,6 @@ def _norm_channel(kind: str, ch: Optional[int]) -> int:
 
 
 # ---- 상태 컨테이너 ----------------------------------------------------------
-
 @dataclass
 class RuntimeState:
     """
@@ -72,7 +70,6 @@ class RuntimeState:
     )
 
     # ---------- 기본 마킹 API ----------
-
     def mark_started(self, kind: str, channel: Optional[int] = None) -> None:
         k = _norm_kind(kind)
         ch = _norm_channel(k, channel)
@@ -81,7 +78,7 @@ class RuntimeState:
             # 새 런이 시작되면 직전 에러는 해제(에러는 '종료 결과'로만 유지)
             self._last_error.setdefault(k, {}).pop(ch, None)
             self._last_error_mono.setdefault(k, {}).pop(ch, None)
-            
+
             self._running.setdefault(k, {})[ch] = True
             self._last_start_mono.setdefault(k, {})[ch] = now
 
@@ -101,7 +98,6 @@ class RuntimeState:
             self.mark_finished(kind, channel)
 
     # ---------- 조회/스냅샷 ----------
-
     def is_running(self, kind: str, channel: Optional[int] = None) -> bool:
         k = _norm_kind(kind)
         ch = _norm_channel(k, channel)
@@ -130,9 +126,36 @@ class RuntimeState:
         ch = _norm_channel(k, channel)
         with self._lock:
             return self._last_finish_mono.get(k, {}).get(ch)
+        
+    # ---------- 에러 래치 ----------
+    def set_error(self, kind: str, channel: Optional[int], message: str) -> None:
+        k = _norm_kind(kind)
+        ch = _norm_channel(k, channel)
+        now = _now_monotonic()
+        with self._lock:
+            self._last_error.setdefault(k, {})[ch] = str(message)
+            self._last_error_mono.setdefault(k, {})[ch] = now
+
+    def clear_error(self, kind: str, channel: Optional[int] = None) -> None:
+        k = _norm_kind(kind)
+        ch = _norm_channel(k, channel)
+        with self._lock:
+            self._last_error.get(k, {}).pop(ch, None)
+            self._last_error_mono.get(k, {}).pop(ch, None)
+
+    def has_error(self, kind: str, channel: Optional[int] = None) -> bool:
+        k = _norm_kind(kind)
+        ch = _norm_channel(k, channel)
+        with self._lock:
+            return ch in self._last_error.get(k, {})
+
+    def last_error(self, kind: str, channel: Optional[int] = None) -> Optional[str]:
+        k = _norm_kind(kind)
+        ch = _norm_channel(k, channel)
+        with self._lock:
+            return self._last_error.get(k, {}).get(ch)
 
     # ---------- 쿨다운 계산 ----------
-
     def remaining_cooldown(self, kind: str, channels: int | Iterable[int], cooldown_s: float) -> float:
         """
         channels: int(단일) 또는 Iterable[int] (여러 채널)
@@ -154,7 +177,6 @@ class RuntimeState:
         return max(remains) if remains else 0.0
 
     # ---------- PC 시작 전 차단 로직 ----------
-
     def pc_block_reason(self, ch: int, cooldown_s: float = 60.0) -> tuple[bool, float, str]:
         """
         Plasma Cleaning 시작 가능 여부/대기시간/사유(텍스트).
@@ -212,7 +234,6 @@ class RuntimeState:
         return (True, 0.0, "")
 
     # ---------- 덤프/디버그 ----------
-
     def snapshot(self) -> dict:
         """외부(Host 응답 등)로 내보내기 좋은 형태."""
         with self._lock:
