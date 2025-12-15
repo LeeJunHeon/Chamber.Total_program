@@ -834,8 +834,22 @@ class ChamberRuntime:
                         except Exception:
                             pass
 
-                        # ✅ 전역: CH 공정 '종료' 시각 마킹
+                        # ✅ 전역: 마지막 결과(성공/실패) 기록 + 종료 시각 마킹
                         try:
+                            if ok:
+                                runtime_state.clear_error("chamber", self.ch)
+                            else:
+                                _reason = (str(detail.get("reason") or "")).strip()
+                                if not _reason:
+                                    _errs = detail.get("errors", None)
+                                    if isinstance(_errs, (list, tuple)) and _errs:
+                                        _reason = str(_errs[0])
+                                    elif isinstance(_errs, str):
+                                        _reason = _errs
+                                if not _reason:
+                                    _reason = "process failed"
+                                runtime_state.set_error("chamber", self.ch, _reason)
+
                             runtime_state.mark_finished("chamber", self.ch)
                         except Exception:
                             pass
@@ -898,6 +912,7 @@ class ChamberRuntime:
 
                         # ✅ 전역: CH 공정 '종료' 시각 마킹 (중단도 종료로 취급)
                         try:
+                            runtime_state.set_error("chamber", self.ch, "aborted")
                             runtime_state.mark_finished("chamber", self.ch)
                         except Exception:
                             pass
@@ -1749,6 +1764,7 @@ class ChamberRuntime:
 
                 # ✅ 전역 점유/쿨다운을 ‘실패 종료’로 명확히 정리
                 try:
+                    runtime_state.set_error("chamber", self.ch, f"preflight connect failed: {fail_list}")
                     runtime_state.mark_finished("chamber", self.ch)
                 except Exception:
                     pass

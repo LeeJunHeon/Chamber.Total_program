@@ -64,6 +64,12 @@ class RuntimeState:
     _last_finish_mono: Dict[str, Dict[int, float]] = field(
         default_factory=lambda: {"chamber": {}, "pc": {}, "tsp": {}}
     )
+    _last_error: Dict[str, Dict[int, str]] = field(
+    default_factory=lambda: {"chamber": {}, "pc": {}, "tsp": {}}
+    )
+    _last_error_mono: Dict[str, Dict[int, float]] = field(
+        default_factory=lambda: {"chamber": {}, "pc": {}, "tsp": {}}
+    )
 
     # ---------- 기본 마킹 API ----------
 
@@ -72,6 +78,10 @@ class RuntimeState:
         ch = _norm_channel(k, channel)
         now = _now_monotonic()
         with self._lock:
+            # 새 런이 시작되면 직전 에러는 해제(에러는 '종료 결과'로만 유지)
+            self._last_error.setdefault(k, {}).pop(ch, None)
+            self._last_error_mono.setdefault(k, {}).pop(ch, None)
+            
             self._running.setdefault(k, {})[ch] = True
             self._last_start_mono.setdefault(k, {})[ch] = now
 

@@ -331,6 +331,14 @@ class HostHandlers:
                 except Exception:
                     return "error"
 
+                # 3) 마지막 공정 실패 이력이 남아 있으면 error
+                if not running_ch:
+                    try:
+                        if rs is not None and getattr(rs, "has_error", None) and rs.has_error("chamber", ch):
+                            return "error"
+                    except Exception:
+                        return "error"
+
                 return "running" if running_ch else "idle"
 
             def _loadlock_state() -> str:
