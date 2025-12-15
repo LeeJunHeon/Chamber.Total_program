@@ -13,6 +13,9 @@ from PySide6.QtWidgets import QMessageBox, QFileDialog, QPlainTextEdit, QDialog,
 from PySide6.QtGui import QTextCursor
 from PySide6.QtCore import Qt  # ← 추가: 모달리티/속성 지정용
 
+# 팝업 자동 닫기(5초) 유틸
+from util.timed_popup import attach_autoclose
+
 # 장비
 from device.ig import AsyncIG
 from device.mfc import AsyncMFC
@@ -1970,7 +1973,11 @@ class ChamberRuntime:
             if remain > 0.0:
                 secs = int(remain + 0.999)
                 self._host_report_start(False, f"cooldown {remain:.0f}s remaining")
-                self._post_warning("대기 필요", f"이전 공정 종료 후 1분 대기 필요합니다.\n{secs}초 후에 시작하십시오.")
+                self._post_warning(
+                    "대기 필요",
+                    f"이전 공정 종료 후 1분 대기 필요합니다.\n{secs}초 후에 시작하십시오.",
+                    auto_close_ms=5000
+                )
                 return
             
             # ★ 장치 정리가 백그라운드에서 진행 중이면 대기 안내
@@ -3279,7 +3286,7 @@ class ChamberRuntime:
         if not hasattr(self, "_msg_boxes"):
             self._msg_boxes = []
 
-    def _post_warning(self, title: str, text: str) -> None:
+    def _post_warning(self, title: str, text: str, auto_close_ms: int) -> None:
         if not self._has_ui():
             self.append_log("WARN", f"{title}: {text}"); return
 
@@ -3301,6 +3308,10 @@ class ChamberRuntime:
         box.finished.connect(_cleanup)
 
         box.open()  # 비모달(이벤트 루프 방해 없음)
+        
+        # ✅ 일정 시간 후 자동 닫기(요청: 5초)
+        if auto_close_ms is not None:
+            attach_autoclose(box, int(auto_close_ms))
 
     def _post_critical(self, title: str, text: str) -> None:
         if not self._has_ui():
