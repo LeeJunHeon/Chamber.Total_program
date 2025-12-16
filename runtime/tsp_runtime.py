@@ -18,6 +18,7 @@ from controller.runtime_state import runtime_state # CH 상태 조회용
 # ▼ 메시지 박스용 (챔버와 동일한 속성 사용)
 from PySide6.QtWidgets import QMessageBox, QApplication
 from PySide6.QtCore import Qt
+from util.timed_popup import attach_autoclose
 import contextlib  # (_post_warning 정리 콜백에서 사용)
 
 # 설정(기본값)
@@ -196,10 +197,9 @@ class TSPPageController:
         if not hasattr(self, "_msg_boxes"):
             self._msg_boxes = []  # type: ignore[attr-defined]
 
-    def _post_warning(self, title: str, text: str) -> None:
-        """챔버와 동일: 비차단 WindowModal 경고창 + 참조유지/정리."""
+    def _post_warning(self, title: str, text: str, auto_close_ms: int = 5000) -> None:
+        """비차단 WindowModal 경고창 + 5초 자동 닫힘(기본)"""
         if not self._has_ui():
-            # 팝업 불가 시엔 조용히 무시(요청: 로그도 남기지 않음)
             return
 
         self._ensure_msgbox_store()
@@ -211,7 +211,6 @@ class TSPPageController:
         box.setWindowModality(Qt.WindowModality.WindowModal)
         box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
 
-        # 참조 유지 & 종료 시 정리
         self._msg_boxes.append(box)  # type: ignore[attr-defined]
         def _cleanup(_res: int):
             with contextlib.suppress(ValueError, AttributeError):
@@ -220,7 +219,10 @@ class TSPPageController:
                 box.deleteLater()
         box.finished.connect(_cleanup)
 
-        box.open()  # 비모달(이벤트 루프 방해 없음)
+        # ✅ 기본 5초 자동 닫힘
+        attach_autoclose(box, ms=auto_close_ms)
+
+        box.open()
 
     # ── Start/Stop 핸들러 ──────────────────────────────────
     def _on_run_done(self, fut: asyncio.Task) -> None:
