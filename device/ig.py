@@ -169,6 +169,8 @@ class AsyncIG:
                 self._polling_task.cancel()
                 try:
                     await self._polling_task
+                except asyncio.CancelledError:
+                    pass
                 except Exception:
                     pass
                 self._polling_task = None
@@ -418,8 +420,13 @@ class AsyncIG:
                 # 라인 수신 루프 시작
                 if self._reader_task and not self._reader_task.done():
                     self._reader_task.cancel()
-                    with contextlib.suppress(Exception):
+                    try:
                         await self._reader_task
+                    except asyncio.CancelledError:
+                        pass
+                    except Exception:
+                        pass
+
                 self._reader_task = asyncio.create_task(self._tcp_reader_loop(), name="IGTcpReader")
 
                 await self._emit_status(f"{host}:{port} 연결 성공 (TCP)")
@@ -488,8 +495,13 @@ class AsyncIG:
         t = self._reader_task
         if t and not t.done() and t is not current:   # 자기 자신 cancel 방지
             t.cancel()
-            with contextlib.suppress(Exception):
+            try:
                 await t
+            except asyncio.CancelledError:
+                pass
+            except Exception:
+                pass
+
         self._reader_task = None
 
         if self._writer:
@@ -814,10 +826,33 @@ class AsyncIG:
                 return None
 
     async def _send_off_best_effort(self, wait_gap_ms: int = 300) -> bool:
-        # 1) 온라인: 현재 writer 로 바로 송신
+        # 0) 가능하면 "큐(워커)"로 보내서 [SEND] 로그 + 프리플라이트(_reopen_if_inactive) 경유
+        if (
+            self._connected and self._writer
+            and self._cmd_worker_task and not self._cmd_worker_task.done()
+        ):
+            try:
+                self.enqueue(
+                    "SIG 0",
+                    timeout_ms=IG_TIMEOUT_MS,
+                    gap_ms=max(int(wait_gap_ms), int(IG_GAP_MS)),
+                    tag="[IG OFF]",
+                    retries_left=0,          # 워커 재시도는 끔(OFF는 best-effort)
+                    allow_no_reply=True,     # 응답은 안 기다림(대신 아래 (4)에서 늦은 응답 흡수)
+                )
+                # 큐에서 빠져나가 실제 write/drain까지 끝날 시간을 약간 보장
+                await self._drain_until_idle(timeout_ms=max(600, int(wait_gap_ms) + 300))
+                await asyncio.sleep(max(0, int(wait_gap_ms)) / 1000.0)
+                return True
+            except Exception as e:
+                await self._emit_status(f"IG OFF 큐 전송 실패 → direct-write로 폴백: {e!r}")
+                # 아래 direct-write로 폴백
+
+        # 1) 온라인: 현재 writer 로 바로 송신 (폴백)
         if self._connected and self._writer:
             try:
-                self._last_io_mono = time.monotonic()  # ★
+                await self._emit_status("[SEND] SIG 0 (direct)")
+                self._last_io_mono = time.monotonic()
                 self._writer.write(b"SIG 0" + self._tx_eol)
                 await self._writer.drain()
                 await asyncio.sleep(max(0, wait_gap_ms) / 1000.0)

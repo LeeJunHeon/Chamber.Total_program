@@ -300,7 +300,7 @@ class HostHandlers:
             def _ch_state(ch: int) -> str:
                 """
                 단일 CH 상태 계산:
-                - runtime_state.is_running("chamber", ch)가 True면 running
+                - runtime_state.is_running("chamber", ch) 또는 is_running("pc", ch)가 True면 running
                 - 해당 CH의 리스트 공정 딜레이(_delay_main_task)가 살아 있어도 running
                 - 그 외는 idle
                 - 조회 중 예외가 나면 error
