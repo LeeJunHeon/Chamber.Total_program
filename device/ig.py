@@ -180,6 +180,8 @@ class AsyncIG:
                 self._bg_poll_task.cancel()
                 try:
                     await self._bg_poll_task
+                except asyncio.CancelledError:
+                    pass
                 except Exception:
                     pass
                 self._bg_poll_task = None
@@ -600,6 +602,12 @@ class AsyncIG:
             if cmd.allow_no_reply:
                 self._safe_callback(cmd.callback, None)
                 self._inflight = None
+
+                # ✅ SIG 0 같이 응답을 안 기다리는 명령의 "늦은 OK/에코"가
+                # 다음 명령 응답을 오염시키지 않도록 짧게 흡수
+                with contextlib.suppress(Exception):
+                    await self._absorb_late_lines(min(150, int(cmd.gap_ms)))
+
                 await asyncio.sleep(cmd.gap_ms / 1000.0)
                 continue
 
