@@ -310,7 +310,7 @@ class HostHandlers:
                 # 1) runtime_state 기반 실행 여부
                 try:
                     if rs is not None and getattr(rs, "is_running", None):
-                        if rs.is_running("chamber", ch):
+                        if rs.is_running("chamber", ch) or rs.is_running("pc", ch):
                             running_ch = True
                 except Exception:
                     # 상태 조회 자체에 문제가 있으면 error

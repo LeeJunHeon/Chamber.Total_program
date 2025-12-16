@@ -894,25 +894,21 @@ class PlasmaCleaningRuntime:
             self.append_log("PC", f"오류: {e!r}")
 
         finally:
-            # [A] 먼저 장치/태스크 정리 (시간 걸려도 running 유지)
-            try:
-                await self._final_cleanup()
-            except Exception as e:
-                self.append_log("PC", f"final_cleanup error: {e!r}")
+            # [A] 먼저 실제 정리 (장치/태스크)
+            await self._final_cleanup()
 
-            # [B] 내부 플래그 먼저 종료 (get_status fallback이 있으면 여기부터 idle로 정리됨)
+            # [B] UI 복구/플래그 정리
             self._running = False
             self._process_timer_active = False
+            self._reset_ui_state(restore_time_min=self._last_process_time_min)
+            self._set_state_text("대기 중")
+            self.append_log("MAIN", "[FINALLY] idle UI 복구 완료")
 
-            # [C] 마지막에 종료 통지 + runtime_state 해제 (이제 pc도 idle로 일관)
+            # [C] 마지막에 종료 통지 + runtime_state 해제
             try:
                 await self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final)
             except Exception as e:
                 self.append_log("PC", f"notify_finish_once error: {e!r}")
-
-            # [D] UI 복구
-            self._reset_ui_state(restore_time_min=self._last_process_time_min)
-            self._set_state_text("대기 중")
 
             # # [A] 🔁 순서 변경: 종료 통지 먼저 (runtime_state 즉시 해제 + 종료 챗 선송)
             # try:
