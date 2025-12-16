@@ -1973,11 +1973,7 @@ class ChamberRuntime:
             if remain > 0.0:
                 secs = int(remain + 0.999)
                 self._host_report_start(False, f"cooldown {remain:.0f}s remaining")
-                self._post_warning(
-                    "대기 필요",
-                    f"이전 공정 종료 후 1분 대기 필요합니다.\n{secs}초 후에 시작하십시오.",
-                    auto_close_ms=5000
-                )
+                self._post_warning("대기 필요", f"이전 공정 종료 후 1분 대기 필요합니다.\n{secs}초 후에 시작하십시오.")
                 return
             
             # ★ 장치 정리가 백그라운드에서 진행 중이면 대기 안내
@@ -2407,7 +2403,8 @@ class ChamberRuntime:
         use_o2 = bool(getattr(self._u("O2_checkbox"), "isChecked", lambda: False)())
         use_n2 = bool(getattr(self._u("N2_checkbox"), "isChecked", lambda: False)())
         if not (use_ar or use_o2 or use_n2):
-            self._post_warning("선택 오류", "가스를 하나 이상 선택"); return None
+            self._post_warning("선택 오류", "가스를 하나 이상 선택"); 
+            return None
 
         def _flow(name: str) -> float:
             txt = self._get_text(name); 
@@ -2421,7 +2418,8 @@ class ChamberRuntime:
             o2_flow = _flow("o2Flow_edit") if use_o2 else 0.0
             n2_flow = _flow("n2Flow_edit") if use_n2 else 0.0
         except Exception:
-            self._post_warning("입력값 확인", "가스 유량을 확인하세요."); return None
+            self._post_warning("입력값 확인", "가스 유량을 확인하세요."); 
+            return None
 
         use_rf_pulse = bool(getattr(self._u("rfPulsePower_checkbox"), "isChecked", lambda: False)())
         use_dc       = bool(getattr(self._u("dcPower_checkbox"), "isChecked", lambda: False)())
@@ -2438,7 +2436,8 @@ class ChamberRuntime:
                 rf_pulse_power = float(self._get_text("rfPulsePower_edit") or "0")
                 if rf_pulse_power <= 0: raise ValueError()
             except ValueError:
-                self._post_warning("입력값 확인", "RF Pulse Target Power(W)를 확인하세요."); return None
+                self._post_warning("입력값 확인", "RF Pulse Target Power(W)를 확인하세요."); 
+                return None
             # kHz 입력
             txtf = self._get_text("rfPulseFreq_edit")
             if txtf:
@@ -2455,14 +2454,16 @@ class ChamberRuntime:
                     rf_pulse_duty = int(float(txtd))
                     if rf_pulse_duty < 1 or rf_pulse_duty > 99: raise ValueError()
                 except ValueError:
-                    self._post_warning("입력값 확인", "RF Pulse Duty(%) 1..99"); return None
+                    self._post_warning("입력값 확인", "RF Pulse Duty(%) 1..99"); 
+                    return None
 
         if use_dc:
             try:
                 dc_power = float(self._get_text("dcPower_edit") or "0")
                 if dc_power <= 0: raise ValueError()
             except ValueError:
-                self._post_warning("입력값 확인", "DC 파워(W)를 확인하세요."); return None
+                self._post_warning("입력값 확인", "DC 파워(W)를 확인하세요."); 
+                return None
         else:
             dc_power = 0.0
 
@@ -3286,7 +3287,7 @@ class ChamberRuntime:
         if not hasattr(self, "_msg_boxes"):
             self._msg_boxes = []
 
-    def _post_warning(self, title: str, text: str, auto_close_ms: int) -> None:
+    def _post_warning(self, title: str, text: str, auto_close_ms: int = 5000) -> None:
         if not self._has_ui():
             self.append_log("WARN", f"{title}: {text}"); return
 
@@ -3296,10 +3297,9 @@ class ChamberRuntime:
         box.setText(text)
         box.setIcon(QMessageBox.Warning)
         box.setStandardButtons(QMessageBox.Ok)
-        box.setWindowModality(Qt.WindowModality.WindowModal)  # 부모 창 기준 모달
+        box.setWindowModality(Qt.WindowModality.WindowModal)
         box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
 
-        # 참조 유지 & 종료 시 정리
         self._msg_boxes.append(box)
         def _cleanup(_res: int):
             with contextlib.suppress(ValueError):
@@ -3307,11 +3307,10 @@ class ChamberRuntime:
             box.deleteLater()
         box.finished.connect(_cleanup)
 
-        box.open()  # 비모달(이벤트 루프 방해 없음)
-        
-        # ✅ 일정 시간 후 자동 닫기(요청: 5초)
-        if auto_close_ms is not None:
-            attach_autoclose(box, int(auto_close_ms))
+        # ✅ 기본 5초 자동 닫힘
+        attach_autoclose(box, ms=auto_close_ms)
+
+        box.open()
 
     def _post_critical(self, title: str, text: str) -> None:
         if not self._has_ui():

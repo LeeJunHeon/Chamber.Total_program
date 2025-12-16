@@ -11,6 +11,8 @@ from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import QMessageBox, QPlainTextEdit, QApplication, QWidget
 from PySide6.QtCore import Qt, QTimer   # ⬅ 챔버와 동일한 모달리티/속성 적용용
 
+from util.timed_popup import attach_autoclose
+
 # 장비/컨트롤러
 from device.mfc import AsyncMFC
 from device.plc import AsyncPLC
@@ -1471,9 +1473,8 @@ class PlasmaCleaningRuntime:
                         if inspect.iscoroutine(f2):
                             await asyncio.wait_for(f2, timeout=2.0)
 
-    def _post_warning(self, title: str, text: str) -> None:
+    def _post_warning(self, title: str, text: str, auto_close_ms: int = 5000) -> None:
         try:
-            # UI/부모 준비 확인
             if not self._has_ui():
                 raise RuntimeError("UI/parent not ready")
 
@@ -1487,10 +1488,9 @@ class PlasmaCleaningRuntime:
             box.setText(text)
             box.setIcon(QMessageBox.Warning)
             box.setStandardButtons(QMessageBox.Ok)
-            box.setWindowModality(Qt.WindowModality.WindowModal)        # 챔버와 동일
-            box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True) # 챔버와 동일
+            box.setWindowModality(Qt.WindowModality.WindowModal)
+            box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
 
-            # 참조 유지 & 닫힐 때 정리
             self._msg_boxes.append(box)
             def _cleanup(_res: int):
                 with contextlib.suppress(ValueError):
@@ -1498,9 +1498,11 @@ class PlasmaCleaningRuntime:
                 box.deleteLater()
             box.finished.connect(_cleanup)
 
-            box.open()  # 비모달로 열어도 WindowModal이라 UX 동일
+            # ✅ 기본 5초 자동 닫힘
+            attach_autoclose(box, ms=auto_close_ms)
+
+            box.open()
         except Exception as e:
-            # 실패 시에도 기존처럼 로그는 남김 (원인 추적용으로 예외메시지 덧붙임)
             self.append_log("PC", f"[경고] {title}: {text} ({e!s})")
 
     # ===== 알림창 유틸: 챔버와 동일한 방식 =====
