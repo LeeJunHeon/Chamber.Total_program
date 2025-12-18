@@ -3,6 +3,7 @@ import csv
 import os
 import re
 import asyncio
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Callable
@@ -34,6 +35,7 @@ class DataLogger(QObject):
             r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database"
         )
         self._local_dir = Path.cwd() / f"_CSV_local_CH{self._ch}"
+        self._csv_write_lock = threading.Lock()
 
         # NAS 디렉터리 생성 시도 (실패해도 폴백하지 않고, 매번 기록 시마다 다시 시도)
         try:
@@ -339,54 +341,83 @@ class DataLogger(QObject):
     async def _write_row_async(self, log_data: Dict[str, str]) -> None:
         await asyncio.to_thread(self._write_row_sync, log_data)
 
+    def _append_row_to_csv(self, path: Path, log_data: Dict[str, str]) -> None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        file_exists = path.exists()
+        with open(path, "a", newline="", encoding="utf-8-sig") as f:
+            writer = csv.DictWriter(f, fieldnames=self.header)
+            if not file_exists:
+                writer.writeheader()
+            writer.writerow(log_data)
+
+    def _flush_pending_to_nas(self, nas_file: Path, pending_file: Path) -> None:
+        if not pending_file.exists():
+            return
+
+        # pending이 비었으면 지움
+        try:
+            if pending_file.stat().st_size == 0:
+                pending_file.unlink(missing_ok=True)
+                return
+        except Exception:
+            return
+
+        # NAS가 잠겨있으면 여기서 예외 나고 -> 호출부에서 그냥 다음 기회로 미룸
+        with open(pending_file, "r", encoding="utf-8-sig", newline="") as rf:
+            reader = csv.DictReader(rf)
+
+            nas_file.parent.mkdir(parents=True, exist_ok=True)
+            nas_exists = nas_file.exists()
+            with open(nas_file, "a", newline="", encoding="utf-8-sig") as wf:
+                writer = csv.DictWriter(wf, fieldnames=self.header)
+                if not nas_exists:
+                    writer.writeheader()
+                for row in reader:
+                    writer.writerow({h: row.get(h, "") for h in self.header})
+
+        pending_file.unlink(missing_ok=True)
+
+        if self._log_func:
+            self._log_func(f"Sputter Calib CSV pending → NAS 병합 완료 → {nas_file}")
+
     def _write_row_sync(self, log_data: Dict[str, str]) -> None:
         """
-        - 1차: 항상 NAS(self.log_file) 에 기록 시도
-        - 실패 시: 해당 행만 로컬(_CSV_local_CH{ch})로 폴백
-        - 다음 기록 때도 다시 NAS부터 시도
+        - 매 기록 시도마다:
+        1) pending이 있으면 NAS로 먼저 병합
+        2) 이번 최신 행을 NAS에 기록 시도
+        3) NAS가 잠겨 있으면 이번 행을 pending에 적재(유실 방지)
         """
-        nas_file = self.log_file  # 항상 NAS 경로
+        with self._csv_write_lock:
+            nas_file = self.log_file
 
-        # 1차: NAS 기록 시도
-        try:
-            nas_file.parent.mkdir(parents=True, exist_ok=True)
-            file_exists = nas_file.exists()
-            with open(nas_file, "a", newline="", encoding="utf-8-sig") as f:
-                writer = csv.DictWriter(f, fieldnames=self.header)
-                if not file_exists:
-                    writer.writeheader()
-                writer.writerow(log_data)
+            self._local_dir.mkdir(parents=True, exist_ok=True)
+            pending_file = self._local_dir / f"Ch{self._ch}_pending.csv"
 
-            self._session_started_at = None
+            # 1) pending 먼저 NAS로 병합(가능하면)
+            try:
+                self._flush_pending_to_nas(nas_file, pending_file)
+            except Exception as e:
+                if self._log_func:
+                    self._log_func(f"Sputter Calib CSV pending 병합 실패(다음에 재시도): {e!r}")
 
-            if self._log_func:
-                self._log_func(f"Sputter Calib CSV 1행 기록 완료 (NAS) → {nas_file}")
-            return  # NAS에 성공했으면 여기서 종료
+            # 2) 이번 최신 행 NAS 기록
+            try:
+                self._append_row_to_csv(nas_file, log_data)
+                self._session_started_at = None
+                if self._log_func:
+                    self._log_func(f"Sputter Calib CSV 1행 기록 완료 (NAS) → {nas_file}")
+                return
+            except Exception as e:
+                if self._log_func:
+                    self._log_func(f"Sputter Calib CSV NAS 기록 실패 → pending 적재: {e!r}")
 
-        except Exception as e:
-            # NAS 쓰기 실패 → 이번 행만 로컬로 폴백
-            if self._log_func:
-                self._log_func(f"Sputter Calib CSV NAS 기록 실패 → 로컬 폴백 시도: {e!r}")
-
-        # 2차: 로컬 폴백 기록 (self.log_file 은 NAS로 유지)
-        try:
-            local_dir = getattr(self, "_local_dir", Path.cwd() / f"_CSV_local_CH{self._ch}")
-            self._local_dir = local_dir  # 혹시 없었으면 저장
-            local_dir.mkdir(parents=True, exist_ok=True)
-
-            local_file = local_dir / f"Ch{self._ch}_log.csv"
-            file_exists = local_file.exists()
-            with open(local_file, "a", newline="", encoding="utf-8-sig") as f:
-                writer = csv.DictWriter(f, fieldnames=self.header)
-                if not file_exists:
-                    writer.writeheader()
-                writer.writerow(log_data)
-
-            if self._log_func:
-                self._log_func(f"Sputter Calib CSV 로컬 폴백 기록 완료 → {local_file}")
-
-        except Exception as e2:
-            # 로컬 폴백마저 실패한 경우도 CH 로그에 남김
-            if self._log_func:
-                self._log_func(f"Sputter Calib CSV 로컬 폴백마저 실패: {e2!r}")
+            # 3) NAS 실패면 pending에 적재
+            try:
+                self._append_row_to_csv(pending_file, log_data)
+                self._session_started_at = None
+                if self._log_func:
+                    self._log_func(f"Sputter Calib CSV pending 적재 완료 → {pending_file}")
+            except Exception as e2:
+                if self._log_func:
+                    self._log_func(f"Sputter Calib CSV pending 적재마저 실패: {e2!r}")
 
