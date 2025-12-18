@@ -30,6 +30,7 @@ from device.ig import AsyncIG
 # ▶ 런타임 래퍼
 from runtime.chamber_runtime import ChamberRuntime
 from runtime.plasma_cleaning_runtime import PlasmaCleaningRuntime  # type: ignore
+from runtime.server_page import ServerPage  # ✅ NEW (server_page.py 위치에 맞게 경로 조정)
 
 # 챔버별 설정
 from lib import config_ch1, config_ch2
@@ -88,7 +89,7 @@ class MainWindow(QWidget):
 
         # Power_Select 버튼 토글 → PLC 코일 쓰기 (비동기)
         self.ui.Power_Select_button.toggled.connect(
-            lambda on: self._loop.create_task(self.plc.power_select(on=on))
+            lambda on: self._loop.create_task(self._on_power_select_toggled(on))
         )
         
         # ▼ 추가: 텍스트 에디트에서 Tab을 '다음 칸 이동'으로 동작시키기
@@ -114,6 +115,20 @@ class MainWindow(QWidget):
             "ch1": self.ui.page,    # CH1
             "ch2": self.ui.page_2,  # CH2
         }
+
+        # ✅ NEW: Server 페이지 생성/등록
+        self.server_page: Optional[QWidget] = None
+        try:
+            self.server_page = ServerPage(loop=self._loop, main=self)  # ServerPage 설계에 맞게 인자 조정
+            self._stack.addWidget(self.server_page)
+            self._pages["server"] = self.server_page
+        except Exception as e:
+            self.server_page = None
+            # 초기화 실패해도 프로그램이 죽지 않게만 처리
+            try:
+                self._broadcast_log("NET", f"ServerPage init skipped: {e!r}")
+            except Exception:
+                pass
 
         # === 공용(공유) 리소스 생성 ===
         # 단일 Chat Notifier (config_local.CHAT_WEBHOOK_URL 사용)
@@ -145,6 +160,24 @@ class MainWindow(QWidget):
 
         # 로그 루트 (NAS 실패 시 런타임 내부에서 폴백 처리)
         self._log_root = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs")
+
+        # ✅ NEW: Server 페이지 생성/등록 (stackedWidget에 addWidget 해야 페이지 전환이 됨)
+        self.server_page = None
+        try:
+            self.server_page = ServerPage(log_root=self._log_root)
+            self._stack.addWidget(self.server_page)
+            self._pages["server"] = self.server_page
+
+            # (있으면) 서버 정보 표시
+            if hasattr(self.server_page, "set_host_info"):
+                self.server_page.set_host_info(cfgc.HOST_SERVER_HOST, int(cfgc.HOST_SERVER_PORT))
+            if hasattr(self.server_page, "set_running"):
+                self.server_page.set_running(False)
+
+            self._broadcast_log("NET", "Server page added to stackedWidget")
+        except Exception as e:
+            self.server_page = None
+            self._broadcast_log("NET", f"ServerPage init failed: {e!r}")
 
         # ─────────────────────────────────────────────────────
         # CH1/CH2용 IG/MFC 모두 생성해 보관
@@ -289,9 +322,13 @@ class MainWindow(QWidget):
             try:
                 # 1) PLC_HOST 태그는 Plasma Cleaning 로그창(PC)에만 표시
                 if tag == "PLC_HOST":
-                    pc = getattr(self, "pc", None)
-                    if pc:
-                        pc.append_log("HOST", msg)
+                    sp = getattr(self, "server_page", None)
+                    if sp and hasattr(sp, "append_log"):
+                        sp.append_log("HOST", msg)   # ✅ 서버 페이지로 보냄
+                    else:
+                        pc = getattr(self, "pc", None)
+                        if pc:
+                            pc.append_log("HOST", msg)  # (fallback)
                     return
 
                 # 2) 그 외 태그(NET, ERROR 등)는 기존처럼 전체 방송
@@ -406,6 +443,11 @@ class MainWindow(QWidget):
         self.ui.ch2_btnGoPC.clicked.connect(lambda: self._switch_page("pc"))
         self.ui.ch2_btnGoCh1.clicked.connect(lambda: self._switch_page("ch1"))
 
+        # ✅ NEW: Plasma Cleaning 페이지의 "server" 버튼 → server 페이지로 전환
+        btn = getattr(self.ui, "Server_button", None)  # ← 버튼 objectName이 이거라면 그대로 OK
+        if btn:
+            btn.clicked.connect(lambda: self._switch_page("server"))
+
         # 라디오 그룹 ‘그룹 단위 배타’ 보강 (엣지케이스 방지)
         for gname in ("buttonGroup", "buttonGroup_2"):
             grp = getattr(self.ui, gname, None)
@@ -422,6 +464,21 @@ class MainWindow(QWidget):
                     rb.toggled.connect(self._on_pc_radio_toggled)
         except Exception:
             pass
+
+        # ✅ PC 페이지의 Server 버튼 → server 페이지로 전환
+        btn_server = getattr(self.ui, "Server_button", None)
+        if btn_server is not None:
+            btn_server.clicked.connect(lambda: self._switch_page("server"))
+            
+        # ✅ Server 페이지 우상단 네비 버튼 연결
+        sp = getattr(self, "server_page", None)
+        if sp is not None:
+            if hasattr(sp, "btnGoPC"):
+                sp.btnGoPC.clicked.connect(lambda: self._switch_page("pc"))
+            if hasattr(sp, "btnGoCh1"):
+                sp.btnGoCh1.clicked.connect(lambda: self._switch_page("ch1"))
+            if hasattr(sp, "btnGoCh2"):
+                sp.btnGoCh2.clicked.connect(lambda: self._switch_page("ch2"))
 
     def _on_pc_radio_toggled(self, checked: bool) -> None:
         if not checked:
@@ -537,10 +594,26 @@ class MainWindow(QWidget):
         except Exception:
             pass
 
-    def _switch_page(self, key: Literal["pc", "ch1", "ch2"]) -> None:
+    def _switch_page(self, key: Literal["pc", "ch1", "ch2", "server"]) -> None:
         page = self._pages.get(key)
         if page:
             self._stack.setCurrentWidget(page)
+
+    async def _on_power_select_toggled(self, on: bool) -> None:
+        try:
+            await self.plc.power_select(on=on)
+        except Exception as e:
+            self._broadcast_log("PLC", f"Power Select 실패(PLC 연결 확인): {e!r}")
+            # 버튼 상태 원복(무한 재호출 방지)
+            try:
+                btn = self.ui.Power_Select_button
+                btn.blockSignals(True)
+                btn.setChecked(not on)
+            finally:
+                try:
+                    btn.blockSignals(False)
+                except Exception:
+                    pass
 
     def closeEvent(self, event: QCloseEvent) -> None:
         # 1) 외부 제어 서버 먼저 종료 요청

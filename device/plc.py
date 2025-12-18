@@ -165,6 +165,10 @@ PLC_COIL_MAP: Dict[str, int] = {
     "G_V_2_OPEN_LAMP":   392,   # M00248
     "G_V_2_CLOSE_LAMP":  393,   # M00249
 
+    # Loading Sensor Lamp
+    "LOADING_1_SENSOR_LAMP": 480, # M00300
+    "LOADING_2_SENSOR_LAMP": 481, # M00301
+
     "BUZZER_STOP_SW":      1616,  # M01000
     "GAUGE_1_A_INTERLOCK": 2416,  # M01500
     "GAUGE_1_B_INTERLOCK": 2576,  # M01600
