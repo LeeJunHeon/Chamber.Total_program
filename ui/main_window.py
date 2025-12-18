@@ -247,6 +247,9 @@ class Ui_Form(object):
         self.Power_Select_button.toggled.connect(
             lambda c: self.Power_Select_button.setText("Power\nSelect: ON" if c else "Power\nSelect: OFF")
         )
+        self.Server_button = QPushButton(self.page_3)   # ✅ (추가) Server 버튼 1개
+        self.Server_button.setObjectName(u"Server_button")   # ← ID(오브젝트명) 동일
+        self.Server_button.setGeometry(QRect(140, 350, 101, 101))
         self.stackedWidget.addWidget(self.page_3)
         self.page = QWidget()
         self.page.setObjectName(u"page")
@@ -777,6 +780,7 @@ class Ui_Form(object):
         self.preSputter_useChamber2_radio.setText(QCoreApplication.translate("Form", u"CH2", None))
         self.PC_processList_button.setText(QCoreApplication.translate("Form", u"File\n" "Path", None))
         self.Power_Select_button.setText(QCoreApplication.translate("Form", u"Power\n" "Select: OFF", None))
+        self.Server_button.setText(QCoreApplication.translate("Form", u"Server", None)) # ✅ (추가) Server 버튼 텍스트
         self.ch1_processList_button.setText(QCoreApplication.translate("Form", u"Select File", None))
         self.ch1_shutterDelay_label.setText(QCoreApplication.translate("Form", u"Shutter Delay [min]", None))
         self.ch1_Current_label.setText(QCoreApplication.translate("Form", u"Current", None))
