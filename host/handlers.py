@@ -776,20 +776,21 @@ class HostHandlers:
             async with self._plc_command(f"GATE_CLOSE_CH{ch}"):
                 self._log_client_request(data)
                 try:
-                    # 1) 인터락 확인 — 읽는 순간만 락
-                    async with self._plc_call():
-                        il = await self.ctx.plc.read_bit(interlock)
-                    if not il:
-                        return self._fail(f"{interlock}=FALSE → CH{ch}_GATE_CLOSE 불가")
+                    # G_V_1,2_인터락은 GATE OPEN에만 영향을 줌
+                    # # 1) 인터락 확인 — 읽는 순간만 락
+                    # async with self._plc_call():
+                    #     il = await self.ctx.plc.read_bit(interlock)
+                    # if not il:
+                    #     return self._fail(f"{interlock}=FALSE → CH{ch}_GATE_CLOSE 불가")
 
-                    # 2) 스위치 펄스 — 쓰는 순간만 락
+                    # 1) 스위치 펄스 — 쓰는 순간만 락
                     async with self._plc_call():
                         await self.ctx.plc.press_switch(sw)
 
-                    # 3) 대기(락 없음)
+                    # 2) 대기(락 없음)
                     await asyncio.sleep(wait_s)
 
-                    # 4) 램프 확인 — 읽는 순간만 락
+                    # 3) 램프 확인 — 읽는 순간만 락
                     async with self._plc_call():
                         ok = await self.ctx.plc.read_bit(lamp)
                     return self._ok(f"CH{ch}_GATE_CLOSE 완료 — {lamp}=TRUE (대기 {int(wait_s)}s)") if ok \
