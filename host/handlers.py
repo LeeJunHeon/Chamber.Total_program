@@ -46,13 +46,6 @@ class HostHandlers:
         self._plc_cmd_file = None              # 요청중 파일 경로(컨텍스트 내에서만 셋)
         self._current_cmd_tag: str | None = None  # 현재 처리 중인 명령 태그(VACUUM_OFF, 4PIN_DOWN 등)
 
-        # ✅ 추가: Loading sensor 캐시(고빈도 조회 대비)
-        self._loading_sensor_cache = {
-            1: {"ts": 0.0, "value": False},
-            2: {"ts": 0.0, "value": False},
-        }
-        self._loading_sensor_cache_ttl_s: float = 0.05  # 50ms
-
     def _write_line_sync(self, file_path: Path, line: str) -> None:
         """동기 파일 쓰기(예외는 호출부에서 처리)."""
         file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -438,35 +431,27 @@ class HostHandlers:
         return await self._get_loading_sensor(which=2)
 
     async def _get_loading_sensor(self, *, which: int) -> Json:
-        """고빈도 조회용 공통 구현(캐시 포함)."""
+        """단순 구현: 캐시 없이 매번 PLC에서 읽고 응답"""
         try:
-            key = "LOADING_1_SENSOR_LAMP" if int(which) == 1 else "LOADING_2_SENSOR_LAMP"
+            which = int(which)
+            key = "LOADING_1_SENSOR_LAMP" if which == 1 else "LOADING_2_SENSOR_LAMP"
 
-            # 1) 캐시 TTL 이내면 PLC I/O 없이 반환
-            now = time.monotonic()
-            cache = getattr(self, "_loading_sensor_cache", {}).get(int(which))
-            ttl = float(getattr(self, "_loading_sensor_cache_ttl_s", 0.0) or 0.0)
-            if cache and ttl > 0.0 and (now - float(cache.get("ts", 0.0))) < ttl:
-                v = bool(cache.get("value", False))
-                return self._ok("OK(cached)", value=int(v))
-
-            # 2) PLC 읽기 (read_bit는 로그가 많아서, 주소로 read_coil만 수행)
             plc = self.ctx.plc
             try:
-                addr = plc._addr(key)  # type: ignore[attr-defined]
+                addr = int(plc._addr(key))  # type: ignore[attr-defined]
             except Exception as e:
                 return self._fail(f"PLC 주소맵에 {key}가 없습니다: {e}")
 
-            v = await plc.read_coil(int(addr))
-            v = bool(v)
+            # ✅ 다른 PLC I/O와 충돌/레이스 방지
+            async with self.ctx.lock_plc:
+                v = await plc.read_coil(addr)
 
-            # 3) 캐시 갱신
-            try:
-                self._loading_sensor_cache[int(which)] = {"ts": now, "value": v}
-            except Exception:
-                pass
+            v = int(bool(v))
 
-            return self._ok("OK", value=int(v))
+            # ✅ (원하면) 서버 페이지로 로그도 남김 - 너무 빠르면 UI가 버벅일 수 있음
+            # self.ctx.log("PLC_HOST", f"[GET_LOADING_{which}_SENSOR] {v}")
+
+            return self._ok("OK", value=v)
 
         except Exception as e:
             return self._fail(e)
