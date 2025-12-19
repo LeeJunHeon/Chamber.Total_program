@@ -92,7 +92,7 @@ class ServerPage(QWidget):
         self.btnHostStart = QPushButton("Start")
         self.btnHostStop = QPushButton("Stop")
         self.btnHostRestart = QPushButton("Restart")
-        
+
         # ✅ 버튼 동작 연결
         self.btnHostStart.clicked.connect(self.sigHostStart.emit)
         self.btnHostStop.clicked.connect(self.sigHostStop.emit)
@@ -115,12 +115,18 @@ class ServerPage(QWidget):
         grpClients = QGroupBox("Connected Clients")
         v_clients = QVBoxLayout(grpClients)
         self.lstClients = QListWidget()
-        self.lstClients.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.MinimumExpanding)
+
+        # ✅ 클라이언트 목록은 너무 커지지 않게 고정(원하는 높이로 조절)
+        self.lstClients.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+        self.lstClients.setFixedHeight(140)  # ← 여기 숫자만 취향대로(120~200 추천)
+
         self.lblClientsHint = QLabel("※ 'Client connected/disconnected' 로그를 기반으로 표시합니다.")
         self.lblClientsHint.setStyleSheet("color: gray;")
         v_clients.addWidget(self.lstClients)
         v_clients.addWidget(self.lblClientsHint)
-        root.addWidget(grpClients, 1)
+
+        # ✅ stretch를 0으로(또는 아예 생략) → Connected Clients는 최소/고정 크기 유지
+        root.addWidget(grpClients, 0)
 
         # 로그 + 필터
         grpLog = QGroupBox("Communication Log")
@@ -152,7 +158,8 @@ class ServerPage(QWidget):
         v_log.addWidget(self.logEdit, 3)
         v_log.addWidget(self.lblSaved)
 
-        root.addWidget(grpLog, 3)
+        # ✅ 로그가 남는 공간을 더 크게 가져가게 stretch 증가
+        root.addWidget(grpLog, 1)   # (위에서 grpClients를 0으로 바꿨으면 1만 줘도 충분)
 
     def _wire_ui(self) -> None:
         self.btnClear.clicked.connect(self.logEdit.clear)
