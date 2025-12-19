@@ -116,20 +116,6 @@ class MainWindow(QWidget):
             "ch2": self.ui.page_2,  # CH2
         }
 
-        # ✅ NEW: Server 페이지 생성/등록
-        self.server_page: Optional[QWidget] = None
-        try:
-            self.server_page = ServerPage(loop=self._loop, main=self)  # ServerPage 설계에 맞게 인자 조정
-            self._stack.addWidget(self.server_page)
-            self._pages["server"] = self.server_page
-        except Exception as e:
-            self.server_page = None
-            # 초기화 실패해도 프로그램이 죽지 않게만 처리
-            try:
-                self._broadcast_log("NET", f"ServerPage init skipped: {e!r}")
-            except Exception:
-                pass
-
         # === 공용(공유) 리소스 생성 ===
         # 단일 Chat Notifier (config_local.CHAT_WEBHOOK_URL 사용)
         url = getattr(cfgl, "CHAT_WEBHOOK_URL", None)
@@ -161,14 +147,13 @@ class MainWindow(QWidget):
         # 로그 루트 (NAS 실패 시 런타임 내부에서 폴백 처리)
         self._log_root = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs")
 
-        # ✅ NEW: Server 페이지 생성/등록 (stackedWidget에 addWidget 해야 페이지 전환이 됨)
-        self.server_page = None
+        # ✅ Server 페이지 생성/등록 (단 1회만)
+        self.server_page: Optional[QWidget] = None
         try:
             self.server_page = ServerPage(log_root=self._log_root)
             self._stack.addWidget(self.server_page)
             self._pages["server"] = self.server_page
 
-            # (있으면) 서버 정보 표시
             if hasattr(self.server_page, "set_host_info"):
                 self.server_page.set_host_info(cfgc.HOST_SERVER_HOST, int(cfgc.HOST_SERVER_PORT))
             if hasattr(self.server_page, "set_running"):
@@ -178,6 +163,11 @@ class MainWindow(QWidget):
         except Exception as e:
             self.server_page = None
             self._broadcast_log("NET", f"ServerPage init failed: {e!r}")
+
+        if hasattr(self.server_page, "sigHostStart"):
+            self.server_page.sigHostStart.connect(self.request_host_start)
+            self.server_page.sigHostStop.connect(self.request_host_stop)
+            self.server_page.sigHostRestart.connect(self.request_host_restart)
 
         # ─────────────────────────────────────────────────────
         # CH1/CH2용 IG/MFC 모두 생성해 보관
@@ -320,22 +310,25 @@ class MainWindow(QWidget):
         def _netlog(tag: str, text: str) -> None:
             msg = str(text)
             try:
-                # 1) PLC_HOST 태그는 Plasma Cleaning 로그창(PC)에만 표시
-                if tag == "PLC_HOST":
-                    sp = getattr(self, "server_page", None)
-                    if sp and hasattr(sp, "append_log"):
-                        sp.append_log("HOST", msg)   # ✅ 서버 페이지로 보냄
-                    else:
-                        pc = getattr(self, "pc", None)
-                        if pc:
-                            pc.append_log("HOST", msg)  # (fallback)
+                sp = getattr(self, "server_page", None)
+
+                # 1) ServerPage에 먼저 기록
+                if sp and hasattr(sp, "append_log"):
+                    sp.append_log(tag, msg)
+
+                # 2) ✅ 통신 관련 태그는 ServerPage에만 남기고, 다른 페이지로는 절대 방송하지 않음
+                if tag in ("PLC_HOST", "NET"):
                     return
 
-                # 2) 그 외 태그(NET, ERROR 등)는 기존처럼 전체 방송
+                # 3) 그 외 로그는 기존처럼 방송
                 self._broadcast_log(tag, msg)
-            except Exception:
-                # 로그 라우팅 중 예외는 UI에 영향을 주지 않도록 무시
-                pass
+
+            except Exception as e:
+                # (선택) 서버페이지 append_log 내부 오류 확인용: UI에는 안 찍고 콘솔만
+                try:
+                    print(f"[netlog] error: {e!r}", file=sys.stderr)
+                except Exception:
+                    pass
 
         self._netlog = _netlog
         self._loop.create_task(self._boot_host())
@@ -618,11 +611,7 @@ class MainWindow(QWidget):
     def closeEvent(self, event: QCloseEvent) -> None:
         # 1) 외부 제어 서버 먼저 종료 요청
         try:
-            hh = getattr(self, "_host_handle", None)
-            if hh:
-                self._loop.create_task(hh.aclose())
-                self._host_handle = None
-                self._broadcast_log("NET", "Host stopped")
+            self._loop.create_task(self._stop_host())
         except Exception:
             pass
 
@@ -684,21 +673,71 @@ class MainWindow(QWidget):
                 pass
 
     async def _boot_host(self) -> None:
-        """외부 제어 서버(Host) 기동."""
+        # 이미 떠있으면 중복 실행 방지
+        if getattr(self, "_host_handle", None):
+            self._netlog("NET", "Host already running")
+            try:
+                sp = getattr(self, "server_page", None)
+                if sp and hasattr(sp, "set_running"):
+                    sp.set_running(True)
+            except Exception:
+                pass
+            return
+
         try:
             self._host_handle = await install_host(
-                host=cfgc.HOST_SERVER_HOST,          # config_common에 이미 존재한다고 하셨음
+                host=cfgc.HOST_SERVER_HOST,
                 port=int(cfgc.HOST_SERVER_PORT),
-                log=self._netlog,                    # (tag, text) 시그니처
-                plc=self.plc,                        # ← 현재 MainWindow가 보유한 핸들 그대로
+                log=self._netlog,
+                plc=self.plc,
                 ch1=self.ch1,
                 ch2=self.ch2,
-                pc=self.pc,                          # PlasmaCleaningRuntime (없으면 None 상태로 넘어가도 핸들러가 에러 응답)
-                runtime_state=runtime_state,         # 전역 런타임 상태 싱글톤
+                pc=self.pc,
+                runtime_state=runtime_state,
             )
-            self._broadcast_log("NET", f"Host started on {cfgc.HOST_SERVER_HOST}:{cfgc.HOST_SERVER_PORT}")
+
+            # ✅ server 페이지 상태 RUNNING 갱신
+            sp = getattr(self, "server_page", None)
+            if sp and hasattr(sp, "set_running"):
+                sp.set_running(True)
+            if sp and hasattr(sp, "set_host_info"):
+                sp.set_host_info(cfgc.HOST_SERVER_HOST, int(cfgc.HOST_SERVER_PORT))
+
+            # ✅ NET 로그도 server 페이지로
+            self._netlog("NET", f"Host started on {cfgc.HOST_SERVER_HOST}:{cfgc.HOST_SERVER_PORT}")
+
         except Exception as e:
-            self._broadcast_log("NET", f"Host start failed: {e!r}")
+            sp = getattr(self, "server_page", None)
+            if sp and hasattr(sp, "set_running"):
+                sp.set_running(False)
+            self._netlog("NET", f"Host start failed: {e!r}")
+
+    async def _stop_host(self) -> None:
+        try:
+            hh = getattr(self, "_host_handle", None)
+            if not hh:
+                self._netlog("NET", "Host already stopped")
+            else:
+                await hh.aclose()
+                self._host_handle = None
+                self._netlog("NET", "Host stopped")
+        finally:
+            sp = getattr(self, "server_page", None)
+            if sp and hasattr(sp, "set_running"):
+                sp.set_running(False)
+
+    async def _restart_host(self) -> None:
+        await self._stop_host()
+        await self._boot_host()
+
+    def request_host_start(self) -> None:
+        self._loop.create_task(self._boot_host())
+
+    def request_host_stop(self) -> None:
+        self._loop.create_task(self._stop_host())
+
+    def request_host_restart(self) -> None:
+        self._loop.create_task(self._restart_host())
 
 if __name__ == "__main__":
     if sys.platform.startswith("win"):

@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QWidget,
@@ -33,6 +33,9 @@ class ServerPage(QWidget):
     - 연결 클라이언트 목록(로그 기반)
     - 통신 로그(REQ/RES, NET 등) + 필터(특히 GET_SPUTTER_STATUS 숨김)
     """
+    sigHostStart = Signal()
+    sigHostStop = Signal()
+    sigHostRestart = Signal()
 
     _PEER_RE = re.compile(r"Client (?:connected|disconnected|closed):\s*(\(.+?\))")
     _CMD_STATUS_RE = re.compile(r"cmd=GET_SPUTTER_STATUS(?:_RESULT)?\b", re.IGNORECASE)
@@ -89,6 +92,12 @@ class ServerPage(QWidget):
         self.btnHostStart = QPushButton("Start")
         self.btnHostStop = QPushButton("Stop")
         self.btnHostRestart = QPushButton("Restart")
+        
+        # ✅ 버튼 동작 연결
+        self.btnHostStart.clicked.connect(self.sigHostStart.emit)
+        self.btnHostStop.clicked.connect(self.sigHostStop.emit)
+        self.btnHostRestart.clicked.connect(self.sigHostRestart.emit)
+
         btn_row = QHBoxLayout()
         btn_row.addWidget(self.btnHostStart)
         btn_row.addWidget(self.btnHostStop)
@@ -158,18 +167,18 @@ class ServerPage(QWidget):
         self.lblRunning.setText("RUNNING" if running else "STOPPED")
 
     def append_log(self, tag: str, text: str) -> None:
+        msg = str(text)
+
+        # ✅ Pause여도 클라이언트 목록은 갱신(연결상태는 계속 반영)
+        if tag == "NET":
+            self._update_clients_from_net_log(msg)
+
         if self.chkPause.isChecked():
             return
-
-        msg = str(text)
 
         # GET_SPUTTER_STATUS 폴링 로그 숨김
         if self.chkHideStatus.isChecked() and self._CMD_STATUS_RE.search(msg):
             return
-
-        # NET 로그면 클라이언트 목록 갱신
-        if tag == "NET":
-            self._update_clients_from_net_log(msg)
 
         self._append_line(f"[{tag}] {msg}")
 
