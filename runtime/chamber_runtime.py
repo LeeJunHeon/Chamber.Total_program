@@ -1515,7 +1515,9 @@ class ChamberRuntime:
         _set("rfPower_edit",     params.get('rf_power', '0'))
 
         _set("processTime_edit", params.get('process_time', '0'))
-        _set("integrationTime_edit", params.get('integration_time', '60'))
+        # ✅ Integration Time 입력칸을 'Process Name' 입력으로 재활용
+        #    (CSV 자동 공정: Process_name 표시 / UI 수동 공정: 사용자가 입력)
+        _set("integrationTime_edit", params.get('Process_name', params.get('process_note', '')))
         _set("arFlow_edit", params.get('Ar_flow', '0'))
         _set("o2Flow_edit", params.get('O2_flow', '0'))
         _set("n2Flow_edit", params.get('N2_flow', '0'))
@@ -2038,10 +2040,15 @@ class ChamberRuntime:
 
             try:
                 base_pressure = float(self._get_text("basePressure_edit") or 1e-5)
-                integration_time = int(self._get_text("integrationTime_edit") or 60)
                 working_pressure = float(self._get_text("workingPressure_edit") or 0.0)
                 shutter_delay = float(self._get_text("shutterDelay_edit") or 0.0)
                 process_time = float(self._get_text("processTime_edit") or 0.0)
+
+                # ✅ (추가) UI 수동 공정에서 공정명(Process Name)을 입력받아 로그/카드에 반영
+                # - integrationTime_edit 칸을 Process Name 입력칸으로 재활용
+                # - 비어 있으면 기존과 동일하게 기본값 사용
+                process_name = (self._get_text("integrationTime_edit") or '').strip()
+                process_note = process_name if process_name else f"Single CH{self.ch}"
             except ValueError:
                 self.append_log("UI", "오류: 값 입력란을 확인해주세요.")
                 self._host_report_start(False, "invalid number input")  # ★ 추가
@@ -2049,11 +2056,12 @@ class ChamberRuntime:
 
             params: dict[str, Any] = {
                 "base_pressure": base_pressure,
-                "integration_time": integration_time,
+                "integration_time": 60,
                 "working_pressure": working_pressure,
                 "shutter_delay": shutter_delay,
                 "process_time": process_time,
                 "process_note": f"Single CH{self.ch}",
+                "Process_name": process_note,
                 **vals,
 
                 # ✅ Start 버튼 "누른" 시각 (tz 없이, 초 단위)
@@ -3000,7 +3008,7 @@ class ChamberRuntime:
     def _set_default_ui_values(self) -> None:
         _set = self._set
         
-        _set("integrationTime_edit", "60")
+        _set("integrationTime_edit", "")
         _set("workingPressure_edit", "2")
         _set("arFlow_edit", "20")
         _set("o2Flow_edit", "0")

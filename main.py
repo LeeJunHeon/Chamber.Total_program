@@ -87,6 +87,19 @@ class MainWindow(QWidget):
         self.ui = Ui_Form()
         self.ui.setupUi(self)
 
+        # ✅ Integration Time 입력칸을 'Process Name' 입력으로 재활용 (CH1/CH2)
+        #   - CSV 자동공정: Process_name 표시
+        #   - UI 수동공정: 사용자가 입력 → 로그/구글챗/CSV(Process Note)에 기록
+        try:
+            self.ui.ch1_integrationTime_label.setText("Process Name")
+            self.ui.ch2_integrationTime_label.setText("Process Name")
+            # CH1 위젯은 오브젝트명이 오타(intergration)라서 그대로 사용
+            tip = "공정명(로그/구글챗/CSV Process Note에 기록). Integration Time은 기본 60ms로 고정됩니다."
+            self.ui.ch1_intergrationTime_edit.setToolTip(tip)
+            self.ui.ch2_integrationTime_edit.setToolTip(tip)
+        except Exception:
+            pass
+
         # Power_Select 버튼 토글 → PLC 코일 쓰기 (비동기)
         self.ui.Power_Select_button.toggled.connect(
             lambda on: self._loop.create_task(self._on_power_select_toggled(on))
