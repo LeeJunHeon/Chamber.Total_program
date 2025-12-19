@@ -105,21 +105,21 @@ class HostHandlers:
 
     def _plc_file_logger(self, fmt, *args):
         """
-        AsyncPLC가 호출하는 printf 스타일 로거 시그니처.
-        현재 요청 컨텍스트에서 지정한 self._plc_cmd_file 에 비동기 append.
+        AsyncPLC가 호출하는 printf 스타일 로거.
+        ✅ 파일 저장은 하지 않음 (하루 1개 CSV는 server.py에서 처리)
+        ✅ UI 로그는 남김
         """
         try:
             msg = (fmt % args) if args else str(fmt)
             ts  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-            fn  = self._plc_cmd_file or (self._plc_log_dir / f"plc_host_{datetime.now():%Y%m%d}.txt")
-            self._append_line_nonblocking(fn, f"{ts} {msg}")
+
+            # ✅ UI에 로그 남기기
+            self.ctx.log("PLC_REMOTE", f"{ts} {msg}")
+
         except Exception as e:
-            # 로깅 에러로 본체 흐름을 멈추지 않되, 사유는 로그창에 출력
+            # 로깅 에러로 본체 흐름을 멈추지 않되, 사유는 UI에 출력
             try:
-                self.ctx.log(
-                    "PLC_REMOTE",
-                    f"[PLC_REMOTE_LOG_ERROR] _plc_file_logger 실패: {e!r}",
-                )
+                self.ctx.log("PLC_REMOTE", f"[PLC_REMOTE_LOG_ERROR] _plc_file_logger 실패: {e!r}")
             except Exception:
                 pass
 
@@ -172,19 +172,15 @@ class HostHandlers:
     @asynccontextmanager
     async def _plc_command(self, tag: str):
         """
-        요청(명령) 1건의 로그 파일 이름만 준비한다.
-        파일명: plc_host_YYYYmmdd_HHMMSS_<TAG>.txt
+        명령 컨텍스트: 파일을 만들지 않고, 현재 명령 TAG만 유지한다.
+        (명령 req/res CSV 로깅은 host/server.py에서 하루 1개 파일로 처리)
         """
-        safe_tag = "".join(c if c.isalnum() or c in ("_", "-") else "_" for c in tag)
-        # 현재 처리 중인 명령 태그를 기억해 두고, 해당 명령 전용 로그 파일 경로를 만든다.
         self._current_cmd_tag = tag
-        self._plc_cmd_file = self._plc_log_dir / f"plc_host_{datetime.now():%Y%m%d_%H%M%S}_{safe_tag}.txt"
         try:
             yield
         finally:
-            # 명령이 끝나면 컨텍스트를 정리해 준다.
-            self._plc_cmd_file = None
             self._current_cmd_tag = None
+            self._plc_cmd_file = None  # 안전하게 항상 None 유지
 
     @asynccontextmanager
     async def _plc_call(self):
@@ -424,14 +420,13 @@ class HostHandlers:
     # ================== Loading Sensor 조회 ==================
     async def get_loading_1_sensor(self, payload: Json) -> Json:
         # GET_LOADING_1_SENSOR: LOADING_1_SENSOR_LAMP (M00300)
-        return await self._get_loading_sensor(which=1)
+        return await self._get_loading_sensor(which=1, payload=payload)
 
     async def get_loading_2_sensor(self, payload: Json) -> Json:
         # GET_LOADING_2_SENSOR: LOADING_2_SENSOR_LAMP (M00301)
-        return await self._get_loading_sensor(which=2)
+        return await self._get_loading_sensor(which=2, payload=payload)
 
-    async def _get_loading_sensor(self, *, which: int) -> Json:
-        """단순 구현: 캐시 없이 매번 PLC에서 읽고 응답"""
+    async def _get_loading_sensor(self, *, which: int, payload: Json | None = None) -> Json:
         try:
             which = int(which)
             key = "LOADING_1_SENSOR_LAMP" if which == 1 else "LOADING_2_SENSOR_LAMP"
@@ -442,16 +437,21 @@ class HostHandlers:
             except Exception as e:
                 return self._fail(f"PLC 주소맵에 {key}가 없습니다: {e}")
 
-            # ✅ 다른 PLC I/O와 충돌/레이스 방지
-            async with self.ctx.lock_plc:
-                v = await plc.read_coil(addr)
+            async with self._plc_command(f"GET_LOADING_{which}_SENSOR"):
+                # ✅ 클라이언트 요청 payload도 기록
+                self._log_client_request(payload or {})
 
-            v = int(bool(v))
+                # ✅ PLC I/O는 기존처럼 충돌 방지
+                async with self._plc_call():   # (lock_plc 직접 잡는 대신 기존 패턴 통일)
+                    v = await plc.read_coil(addr)
 
-            # ✅ (원하면) 서버 페이지로 로그도 남김 - 너무 빠르면 UI가 버벅일 수 있음
-            # self.ctx.log("PLC_HOST", f"[GET_LOADING_{which}_SENSOR] {v}")
+                v = int(bool(v))
 
-            return self._ok("OK", value=v)
+                # (선택) 서버 UI 로그에 찍고 싶으면 주석 해제
+                # self.ctx.log("PLC_HOST", f"[GET_LOADING_{which}_SENSOR] value={v}")
+
+                # ✅ _ok()가 응답 로그를 파일에 남김
+                return self._ok("OK", value=v)
 
         except Exception as e:
             return self._fail(e)

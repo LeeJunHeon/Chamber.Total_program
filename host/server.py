@@ -6,7 +6,9 @@ TCP 서버(I/O 전용)
 - 비즈니스 로직/장비 제어는 호출하지 않는다 (router/handlers가 담당)
 """
 from __future__ import annotations
-import asyncio, json, contextlib, traceback
+import asyncio, json, contextlib, traceback, csv, time
+from datetime import datetime
+from pathlib import Path
 from typing import Optional, Callable, Dict, Any
 from .protocol import HEADER_SIZE, unpack_header, pack_message, PROTOCOL_VERSION
 from .router import Router
@@ -14,6 +16,72 @@ from .router import Router
 Json = Dict[str, Any]
 LogFn = Callable[[str, str], None]
 
+class DailyCommandCsvLogger:
+    """
+    하루에 파일 1개(remote_cmd_YYYYMMDD.csv)만 만들고,
+    그날 들어온 모든 요청/응답을 한 파일에 append.
+    NAS 실패 시 로컬 Logs/PLC_Remote 로 자동 폴백.
+    """
+    HEADER = [
+        "server_time",
+        "peer",
+        "request_id",
+        "req_command",
+        "req_data_json",
+        "res_command",
+        "res_result",
+        "res_message",
+        "res_data_json",
+        "duration_ms",
+    ]
+
+    def __init__(self) -> None:
+        self._lock: asyncio.Lock | None = None
+        self._dir = self._init_dir()
+
+    def _init_dir(self) -> Path:
+        # NAS 우선
+        try:
+            root = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs")
+            d = root / "PLC_Remote"
+            d.mkdir(parents=True, exist_ok=True)
+            return d
+        except Exception:
+            d = Path.cwd() / "Logs" / "PLC_Remote"
+            d.mkdir(parents=True, exist_ok=True)
+            return d
+
+    def _file_path(self, now: datetime | None = None) -> Path:
+        now = now or datetime.now()
+        return self._dir / f"remote_cmd_{now:%Y%m%d}.csv"
+
+    def _ensure_lock(self) -> asyncio.Lock:
+        if self._lock is None:
+            self._lock = asyncio.Lock()
+        return self._lock
+
+    def _write_row_sync(self, file_path: Path, row: dict) -> None:
+        file_path.parent.mkdir(parents=True, exist_ok=True)
+        new_file = (not file_path.exists()) or (file_path.stat().st_size == 0)
+
+        with open(file_path, "a", newline="", encoding="utf-8-sig") as f:
+            w = csv.DictWriter(f, fieldnames=self.HEADER)
+            if new_file:
+                w.writeheader()
+            w.writerow(row)
+
+    async def append(self, row: dict) -> None:
+        lock = self._ensure_lock()
+        fn = self._file_path()
+
+        async with lock:
+            try:
+                await asyncio.to_thread(self._write_row_sync, fn, row)
+            except Exception:
+                # NAS 실패 → 로컬 폴백
+                local = (Path.cwd() / "Logs" / "PLC_Remote" / fn.name)
+                local.parent.mkdir(parents=True, exist_ok=True)
+                await asyncio.to_thread(self._write_row_sync, local, row)
 
 class HostServer:
     def __init__(self, host: str, port: int, router: Router, log: LogFn) -> None:
@@ -22,6 +90,7 @@ class HostServer:
         self.router = router
         self.log = log
         self._server: Optional[asyncio.AbstractServer] = None
+        self._cmd_csv = DailyCommandCsvLogger()
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(self._handle, self.host, self.port)
@@ -120,17 +189,32 @@ class HostServer:
                     await writer.drain()
                     continue
 
-                # 3) 라우팅/실행
+                t0 = time.perf_counter()
                 try:
                     res_cmd, res_data = await self.router.dispatch(cmd, data)
                 except Exception as e:
                     self.log("NET", f"Handler error for {cmd}: {e}\n{traceback.format_exc()}")
                     res_cmd, res_data = f"{cmd}_RESULT", {"result": "fail", "message": str(e)}
+                dt_ms = int((time.perf_counter() - t0) * 1000)
 
-                # 4) 응답
                 packet = pack_message(res_cmd, {"request_id": req_id, "data": res_data})
                 writer.write(packet)
                 await writer.drain()
+
+                # ✅ 하루 1개 CSV에 누적 기록 (요청+응답 한 줄)
+                row = {
+                    "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                    "peer": str(peer),
+                    "request_id": req_id,
+                    "req_command": cmd,
+                    "req_data_json": json.dumps(data, ensure_ascii=False),
+                    "res_command": res_cmd,
+                    "res_result": str(res_data.get("result", "")),
+                    "res_message": str(res_data.get("message", "")),
+                    "res_data_json": json.dumps(res_data, ensure_ascii=False),
+                    "duration_ms": dt_ms,
+                }
+                asyncio.create_task(self._cmd_csv.append(row))
 
                 # === 서버 → 클라이언트 응답 로그 ===
                 # 내가 어떤 응답을 보냈는지 Plasma Cleaning 로그창에 남김
