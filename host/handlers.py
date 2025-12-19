@@ -446,7 +446,7 @@ class HostHandlers:
                 async with self._plc_call():   # (lock_plc 직접 잡는 대신 기존 패턴 통일)
                     v = await plc.read_coil(addr)
 
-                v = int(bool(v))
+                v = bool(v)
 
                 # (선택) 서버 UI 로그에 찍고 싶으면 주석 해제
                 # self.ctx.log("PLC_HOST", f"[GET_LOADING_{which}_SENSOR] value={v}")
