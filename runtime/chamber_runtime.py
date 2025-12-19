@@ -2814,11 +2814,27 @@ class ChamberRuntime:
         now_local = datetime.now()
         ts = now_local.strftime("%Y%m%d_%H%M%S")
 
-        base = self._log_dir / f"CH{self.ch}_{ts}"
+        # 1) 공정명 가져오기 (UI / CSV 공통)
+        raw_name = str(params.get("process_note") or params.get("Process_name") or "").strip()
+
+        # 2) 공정명 비어있으면 기본값 (UI 단일공정은 이미 Single CHx로 들어오는 편이지만, 안전장치)
+        if not raw_name:
+            raw_name = "Untitled"
+
+        # 3) 파일명에 못 쓰는 문자 제거 (Windows/SMB/NAS 호환)
+        safe_name = re.sub(r'[\\/:*?"<>|]+', "_", raw_name)   # 금지문자 치환
+        safe_name = re.sub(r"\s+", " ", safe_name).strip()    # 공백 정리
+        safe_name = safe_name.replace(" ", "_")               # 공백 → _
+        safe_name = safe_name.strip(" .")                     # 끝점/끝공백 방지
+        safe_name = safe_name[:60] if safe_name else "Untitled"  # 너무 길면 잘라내기
+
+        # 4) 최종 파일명: CH2_공정명_날짜_시간.txt
+        base = self._log_dir / f"CH{self.ch}_{safe_name}_{ts}"
         path = base.with_suffix(".txt")
+
         i = 1
         while path.exists():
-            path = (self._log_dir / f"CH{self.ch}_{ts}_{i}").with_suffix(".txt")
+            path = (self._log_dir / f"CH{self.ch}_{safe_name}_{ts}_{i}").with_suffix(".txt")
             i += 1
 
         self._log_file_path = path
@@ -2837,11 +2853,26 @@ class ChamberRuntime:
         now_local = datetime.now()
         ts = now_local.strftime("%Y%m%d_%H%M%S")
 
-        base = (self._log_dir / f"CH{self.ch}_{ts}").with_suffix(".txt")
+        # 1) 공정명 가져오기 (UI / CSV 공통)
+        raw_name = str(params.get("process_note") or params.get("Process_name") or "").strip()
+
+        # 2) 공정명 비어있으면 기본값
+        if not raw_name:
+            raw_name = "Untitled"
+
+        # 3) 파일명에 못 쓰는 문자 제거 (Windows/SMB/NAS 호환)
+        safe_name = re.sub(r'[\\/:*?"<>|]+', "_", raw_name)
+        safe_name = re.sub(r"\s+", " ", safe_name).strip()
+        safe_name = safe_name.replace(" ", "_")
+        safe_name = safe_name.strip(" .")
+        safe_name = safe_name[:60] if safe_name else "Untitled"
+
+        # 4) 최종 파일명: CH2_공정명_날짜_시간.txt
+        base = (self._log_dir / f"CH{self.ch}_{safe_name}_{ts}").with_suffix(".txt")
         path = base
         i = 1
         while path.exists():
-            path = (self._log_dir / f"CH{self.ch}_{ts}_{i}").with_suffix(".txt")
+            path = (self._log_dir / f"CH{self.ch}_{safe_name}_{ts}_{i}").with_suffix(".txt")
             i += 1
 
         # 2) 우선 파일을 열어서 헤더를 '먼저' 기록 (line-buffering 권장)
@@ -2874,16 +2905,9 @@ class ChamberRuntime:
         self.append_log("Logger", f"새 로그 파일 시작: {path.name}")
 
     def _close_run_log(self) -> None:
-        """현재 열려 있는 로그 파일을 명확히 종료(END 기록 + 핸들 닫기 + 경로 차단)."""
-        fp = getattr(self, "_log_fp", None)
-        # 이후 append_log가 파일을 다시 열지 못하도록 경로/핸들을 먼저 끊는다
-        self._log_fp = None
-        self._log_file_path = None
-        if fp:
-            with contextlib.suppress(Exception):
-                fp.write("# ==== END ====\n")
-                fp.flush()
-                fp.close()
+        """종료 마커만 큐에 넣고, 실제 flush/close는 _shutdown_log_writer()에서 처리."""
+        with contextlib.suppress(Exception):
+            self._log_enqueue_nowait("# ==== END ====\n")
 
     def _log_enqueue_nowait(self, line: str) -> None:
         try:
@@ -2952,18 +2976,38 @@ class ChamberRuntime:
                     fp.close()
 
     async def _shutdown_log_writer(self):
+        # 1) writer 중지
         if self._log_writer_task:
             self._log_writer_task.cancel()
             with contextlib.suppress(Exception):
                 await self._log_writer_task
             self._log_writer_task = None
 
-        if self._log_fp:
-            with contextlib.suppress(Exception): self._log_fp.flush()
-            with contextlib.suppress(Exception): self._log_fp.close()
-        self._log_fp = None
+        # 2) 파일 핸들이 없지만 경로가 있으면 다시 열어둠(드레인 위해)
+        if self._log_fp is None and self._log_file_path:
+            with contextlib.suppress(Exception):
+                self._log_file_path.parent.mkdir(parents=True, exist_ok=True)
+            with contextlib.suppress(Exception):
+                self._log_fp = open(self._log_file_path, "a", encoding="utf-8", newline="")
 
-        # ★ 다음 런으로 누수되는 줄 차단
+        # 3) 큐에 남은 로그를 최대한 파일로 드레인
+        if self._log_fp:
+            while True:
+                try:
+                    line = self._log_q.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                with contextlib.suppress(Exception):
+                    self._log_fp.write(line)
+
+            with contextlib.suppress(Exception):
+                self._log_fp.flush()
+            with contextlib.suppress(Exception):
+                self._log_fp.close()
+
+        # 4) 정리
+        self._log_fp = None
+        self._log_file_path = None
         self._log_q = asyncio.Queue(maxsize=4096)
 
     def _clear_queue_and_reset_ui(self) -> None:
