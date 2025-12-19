@@ -2060,8 +2060,8 @@ class ChamberRuntime:
                 "working_pressure": working_pressure,
                 "shutter_delay": shutter_delay,
                 "process_time": process_time,
-                "process_note": f"Single CH{self.ch}",
-                "Process_name": process_note,
+                "process_note": process_note,   # ✅ 공정명(사용자 입력)이 로그/구글챗/CSV에 반영됨
+                "Process_name": process_note,   # ✅ 호환 위해 같이 유지
                 **vals,
 
                 # ✅ Start 버튼 "누른" 시각 (tz 없이, 초 단위)
