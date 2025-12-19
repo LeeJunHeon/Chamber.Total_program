@@ -312,19 +312,21 @@ class MainWindow(QWidget):
             try:
                 sp = getattr(self, "server_page", None)
 
-                # 1) ServerPage에 먼저 기록
-                if sp and hasattr(sp, "append_log"):
-                    sp.append_log(tag, msg)
+                t = str(tag or "")
+                tu = t.upper()
 
-                # 2) ✅ 통신 관련 태그는 ServerPage에만 남기고, 다른 페이지로는 절대 방송하지 않음
-                if tag in ("PLC_HOST", "NET"):
+                # 1) ServerPage에 먼저 기록(표시는 대문자 통일 권장)
+                if sp and hasattr(sp, "append_log"):
+                    sp.append_log(tu or t, msg)
+
+                # 2) ✅ 통신/원격 PLC 로그는 ServerPage에만 남기고, 다른 페이지로는 방송 금지
+                if tu in ("PLC_HOST", "PLC_REMOTE", "NET"):
                     return
 
                 # 3) 그 외 로그는 기존처럼 방송
                 self._broadcast_log(tag, msg)
 
             except Exception as e:
-                # (선택) 서버페이지 append_log 내부 오류 확인용: UI에는 안 찍고 콘솔만
                 try:
                     print(f"[netlog] error: {e!r}", file=sys.stderr)
                 except Exception:
