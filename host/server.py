@@ -214,7 +214,10 @@ class HostServer:
                     "res_data_json": json.dumps(res_data, ensure_ascii=False),
                     "duration_ms": dt_ms,
                 }
-                asyncio.create_task(self._cmd_csv.append(row))
+                try:
+                    await self._cmd_csv.append(row)
+                except Exception as e:
+                    self.log("NET", f"[LOG_ERROR] failed to append daily CSV: {e!r}")
 
                 # === 서버 → 클라이언트 응답 로그 ===
                 # 내가 어떤 응답을 보냈는지 Plasma Cleaning 로그창에 남김

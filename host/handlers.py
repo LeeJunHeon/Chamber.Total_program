@@ -126,10 +126,11 @@ class HostHandlers:
     # ===== 클라이언트 REQ/RES 로그 헬퍼 =====
     def _log_client_request(self, data: Json) -> None:
         """
-        현재 PLC 명령에 대해 클라이언트에서 어떤 data를 보냈는지
-        plc_host_YYYYmmdd_HHMMSS_<TAG>.txt 에 한 줄 남긴다.
-        (_plc_cmd_file 이 없으면 아무 것도 하지 않음)
+        현재는 per-command 파일 로깅을 사용하지 않는다.
+        REQ/RES 저장은 host/server.py의 remote_cmd_YYYYMMDD.csv(하루 1개)에서 처리한다.
+        (_plc_cmd_file 은 항상 None이므로 여기서는 동작하지 않음)
         """
+
         if not self._plc_cmd_file:
             return
         try:
