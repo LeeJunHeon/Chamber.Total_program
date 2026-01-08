@@ -5,6 +5,7 @@
 
 from __future__ import annotations
 
+import re
 import asyncio
 from dataclasses import dataclass
 from enum import Enum
@@ -994,6 +995,30 @@ class ProcessController:
         }
 
     def _create_process_sequence(self, params: Dict[str, Any]) -> List[ProcessStep]:
+        # ------------------------------------------------------------
+        # TEST MODE : 실제 장비 제어 없이 시간만 흘려보내기
+        # ------------------------------------------------------------
+        if bool(params.get("test_mode", False)):
+            try:
+                dur_sec = float(params.get("test_duration_sec") or 0.0)
+            except Exception:
+                dur_sec = 0.0
+
+            # ✅ 추가: CSV의 time(60m/10s/1h30m)도 지원
+            if dur_sec <= 0:
+                time_str = str(params.get("time", "")).strip()
+                if time_str:
+                    dur_sec = self._parse_duration_seconds(time_str)
+
+            if dur_sec <= 0:
+                dur_sec = float(params.get("process_time") or 0.0) * 60.0
+
+            dur_sec = max(1.0, float(dur_sec))
+
+            self._emit_log("Process", f"[TEST MODE] 장비제어 스킵 / 시뮬레이션 {dur_sec:.1f}s 진행")
+            return [ProcessStep(action=ActionType.DELAY, duration=int(dur_sec*1000), message=f"TEST MODE ({int(dur_sec)}s)", polling=False)]
+        # ------------------------------------------------------------
+
         common_info = self._get_common_process_info(params)
         use_dc        = common_info['use_dc']
         use_rf        = common_info['use_rf']
@@ -1684,4 +1709,12 @@ class ProcessController:
         }
         return aliases.get(nm, nm)
 
-
+    def _parse_duration_seconds(self, s: str) -> float:
+        s = (s or "").strip().lower()
+        m = re.fullmatch(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?", s)
+        if not m:
+            return 0.0
+        h = int(m.group(1) or 0)
+        mi = int(m.group(2) or 0)
+        se = int(m.group(3) or 0)
+        return float(h*3600 + mi*60 + se)

@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import time
 import asyncio, traceback, contextlib
 from dataclasses import dataclass
 from typing import Any, Awaitable, Callable, Optional
@@ -24,6 +25,10 @@ class PCParams:
     rf_power_w: float = 100.0
     # 프로세스 시간
     process_time_min: float = 1.0        # 분 단위
+    
+    # --- TEST MODE 추가 ---
+    test_mode: bool = False
+    test_duration_sec: Optional[float] = None
 
 # ===== 컨트롤러 =====
 class PlasmaCleaningController:
@@ -115,6 +120,9 @@ class PlasmaCleaningController:
             sp4_setpoint_mTorr    = float(params.get("pc_sp4_setpoint_mTorr", 2.0)),
             rf_power_w            = float(params.get("pc_rf_power_w", 100.0)),
             process_time_min      = float(params.get("pc_process_time_min", 1.0)),
+            # --- 추가 ---
+            test_mode             = bool(params.get("test_mode", False)),
+            test_duration_sec     = float(params.get("test_duration_sec", 0.0)),
         )
         self._stop_evt = asyncio.Event()
         self._task = asyncio.create_task(self._run(p), name="PC_Run")
@@ -166,6 +174,37 @@ class PlasmaCleaningController:
         self.is_running = True
         self._show_state("Preparing…")           # ★ 시작 즉시 상태창에 표시
         self._log("PC", "플라즈마 클리닝 시작")
+
+        # ✅ TEST MODE: 장비제어 없이 시간만 카운트다운
+        if bool(getattr(p, "test_mode", False)):
+            dur_sec = float(getattr(p, "test_duration_sec", 0.0) or 0.0)
+            if dur_sec <= 0:
+                dur_sec = float(getattr(p, "process_time_min", 0.0) or 0.0) * 60.0
+            dur_sec = max(1.0, dur_sec)
+
+            self._show_state(f"[TEST MODE] {dur_sec/60.0:.1f} min")
+            t_end = time.time() + dur_sec
+
+            while True:
+                if self._stop_evt.is_set():
+                    self.last_result = "stop"
+                    self.last_reason = "사용자 STOP (TEST MODE)"
+                    self._show_state("STOPPED (TEST MODE)")
+                    self._show_countdown(0)
+                    return
+
+                left = int(t_end - time.time())
+                if left <= 0:
+                    break
+
+                self._show_countdown(left)
+                await asyncio.sleep(0.2)
+
+            self.last_result = "success"
+            self.last_reason = "TEST MODE done"
+            self._show_state("DONE (TEST MODE)")
+            self._show_countdown(0)
+            return
 
         # ★ LOG: 파라미터 스냅샷
         self._log(

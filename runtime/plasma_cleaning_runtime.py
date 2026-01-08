@@ -741,6 +741,30 @@ class PlasmaCleaningRuntime:
             pass
 
     async def _on_click_start(self) -> None:
+        # ------------------------------------------------------------
+        # TEST MODE 판정 (# == test)
+        # ------------------------------------------------------------
+        test_mode = False
+        test_dur_sec = 0.0
+        try:
+            import re
+            time_str = ""
+            test_mode = False
+            test_dur_sec = 0.0
+            marker = ""
+            time_str = ""
+
+            row = getattr(self, "_loaded_recipe_row", None) or {}
+            marker = str(row.get("#", "")).strip().lower()
+            time_str = str(row.get("time", "")).strip()
+
+            if marker == "test":
+                test_mode = True
+                test_dur_sec = self._parse_duration_seconds(time_str.lower())
+        except Exception:
+            pass
+        # ------------------------------------------------------------
+
         self._cleanup_started = False  # ★ 추가: 새 런마다 정리 가드 초기화
 
         # start 버튼 중복 클릭 방지
@@ -776,6 +800,16 @@ class PlasmaCleaningRuntime:
             msg = f"CH{ch}는 이미 다른 공정이 실행 중입니다."
             self._post_warning("실행 오류", msg)
             self._host_report_start(False, msg)   # ★ Host 실패
+            return
+        
+        if test_mode:
+            self.append_log("MAIN", f"[TEST MODE] {test_dur_sec:.1f}s 동안 시뮬레이션 실행")
+            self._host_report_start(True, "TEST MODE (skip preflight)")
+            self._on_process_status_changed(True)
+            await asyncio.sleep(test_dur_sec)
+            self._on_process_status_changed(False)
+            self.append_log("MAIN", "[TEST MODE] 완료")
+            self._reset_ui_state()
             return
         
         # 3) 프리플라이트 (성공하면 계속)
@@ -1657,6 +1691,7 @@ class PlasmaCleaningRuntime:
             self._post_warning("CSV 오류", "데이터 행이 없습니다.")
             return
 
+        self._loaded_recipe_row = dict(row)  # ✅ 추가
         self._apply_recipe_row_to_ui(row)
         self.append_log("File", f"CSV 로드 완료: {file_path}\n→ UI에 값 세팅")
 
@@ -1721,6 +1756,7 @@ class PlasmaCleaningRuntime:
                 if not row:
                     raise RuntimeError("CSV에 데이터 행이 없습니다.")
 
+                self._loaded_recipe_row = dict(row)  # ✅ 추가
                 # CSV → UI 세팅 (use_ch 있으면 set_selected_ch까지 내부 적용)
                 self._apply_recipe_row_to_ui(row)
                 self.append_log("File", f"CSV 로드 완료: {s} → UI에 값 세팅")
@@ -1747,6 +1783,23 @@ class PlasmaCleaningRuntime:
 # ─────────────────────────────────────────────────────────────
 # 유틸
 # ─────────────────────────────────────────────────────────────
+    def _parse_duration_seconds(self, s: str) -> float:
+        import re
+        if not s:
+            return 0.0
+        s = s.replace(" ", "").lower()
+        pattern = r"(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m)?(?:(\d+(?:\.\d+)?)s)?"
+        m = re.match(pattern, s)
+        if not m:
+            try:
+                return float(s) * 60.0
+            except Exception:
+                return 0.0
+        h = float(m.group(1) or 0)
+        m_ = float(m.group(2) or 0)
+        s_ = float(m.group(3) or 0)
+        return h * 3600 + m_ * 60 + s_
+
 def _safe_get(ui: Any, name: str) -> Any:
     with contextlib.suppress(Exception):
         return getattr(ui, name)

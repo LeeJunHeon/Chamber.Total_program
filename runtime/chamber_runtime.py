@@ -1592,6 +1592,30 @@ class ChamberRuntime:
                 self._update_ui_from_params(params)
                 if self._try_handle_delay_step(params):
                     return
+                
+                # ------------------------------------------------------------
+                # TEST MODE : CSV의 #열이 test 이면 장비제어 없이 실행
+                # ------------------------------------------------------------
+                marker = str(params.get("#") or "").strip().lower()
+                if marker == "test":
+                    time_str = str(params.get("time") or "").strip()
+                    test_duration_sec = self._parse_duration_seconds(time_str.lower())
+
+                    params["test_mode"] = True
+                    params["test_duration_sec"] = test_duration_sec
+
+                    # ✅ 구글챗/카드에서 분 단위 값을 쓰는 경우 대비
+                    if test_duration_sec > 0:
+                        params.setdefault("process_time", round(test_duration_sec / 60.0, 3))
+
+                    # ✅ 카드/로그에 표시될 이름 보강
+                    params.setdefault("process_note", params.get("Process_name") or "TEST")
+
+                    self.append_log("MAIN", f"[TEST MODE] {test_duration_sec:.1f}s 동안 시뮬레이션 실행")
+                    self._safe_start_process(params)
+                    return
+                # ------------------------------------------------------------
+
                 norm = self._normalize_params_for_process(params)
                 
                 # 입력값 검증
@@ -1736,6 +1760,42 @@ class ChamberRuntime:
 
             self._ensure_background_started()
             self._on_process_status_changed(True)
+
+            # ------------------------------------------------------------
+            # TEST MODE : preflight, 인터락, chuck 이동 전부 스킵
+            # ------------------------------------------------------------
+            if bool(params.get("test_mode", False)):
+                time_str = str(params.get("time", "")).strip()
+                dur_s = float(params.get("test_duration_sec", 0.0) or 0.0)
+
+                if dur_s <= 0 and time_str:
+                    dur_s = self._parse_duration_seconds(time_str.lower())
+                    params["test_duration_sec"] = dur_s
+
+                if dur_s <= 0:
+                    try:
+                        dur_s = float(params.get("process_time", 0.0)) * 60.0
+                    except Exception:
+                        dur_s = 0.0
+
+                dur_s = max(1.0, float(dur_s))
+
+                # ✅ 카드/로그용 분 단위
+                params.setdefault("process_time", round(dur_s / 60.0, 3))
+                params.setdefault("process_note", params.get("Process_name") or "TEST")
+
+                note = params.get("process_note") or "TEST"
+                self.append_log("MAIN", f"[TEST MODE] '{note}' 장비 제어 스킵 / {dur_s:.1f}s 시뮬레이션")
+                self._host_report_start(True, f"TEST MODE: {time_str or f'{dur_s:.0f}s'}")
+
+                # ✅ 상태 RUNNING
+                self._on_process_status_changed(True)
+
+                # ✅ 핵심: ProcessController가 TEST MODE(DELAY) 시퀀스로 실행
+                # → started/finished 이벤트가 정상 공정과 동일하게 발생
+                self.process_controller.start_process(params)
+                return
+            # ------------------------------------------------------------
 
             timeout = 10.0 if (use_dc_pulse or use_rf_pulse) else 8.0
             ok, failed = await self._preflight_connect(params, timeout_s=timeout)
@@ -3192,6 +3252,28 @@ class ChamberRuntime:
 
     # ------------------------------------------------------------------
     # 유틸
+    # ------------------------------------------------------------------
+    import re
+
+    def _parse_duration_seconds(self, s: str) -> float:
+        """
+        '10s', '1m', '1h30m', '2h' 형태 문자열을 초 단위로 변환.
+        """
+        if not s:
+            return 0.0
+        s = s.replace(" ", "").lower()
+        pattern = r"(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m)?(?:(\d+(?:\.\d+)?)s)?"
+        m = re.match(pattern, s)
+        if not m:
+            try:
+                return float(s) * 60.0  # 단위 없으면 분으로 처리
+            except Exception:
+                return 0.0
+        h = float(m.group(1) or 0)
+        m_ = float(m.group(2) or 0)
+        s_ = float(m.group(3) or 0)
+        return h * 3600 + m_ * 60 + s_
+
     def _spawn_detached(self, coro, *, store: bool=False, name: str|None=None) -> None:
         loop = self._loop
         def _create():
