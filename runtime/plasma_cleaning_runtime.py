@@ -66,6 +66,9 @@ class PlasmaCleaningRuntime:
         self._final_notified: bool = False
         self._stop_requested: bool = False
 
+        # ★ TEST 레시피 실행 중(장비 제어/cleanup 스킵용)
+        self._test_mode_active: bool = False
+
         # ★ 추가: 비모달 경고창 보관(가비지 컬렉션 방지)
         self._msg_boxes: list[QMessageBox] = []
 
@@ -756,11 +759,14 @@ class PlasmaCleaningRuntime:
 
             row = getattr(self, "_loaded_recipe_row", None) or {}
             marker = str(row.get("#", "")).strip().lower()
-            time_str = str(row.get("time", "")).strip()
+            time_str = str(row.get("time", "") or row.get("Time", "") or row.get("TIME", "")).strip()
 
             if marker == "test":
                 test_mode = True
                 test_dur_sec = self._parse_duration_seconds(time_str.lower())
+                if test_dur_sec <= 0:
+                    test_dur_sec = 60.0  # 기본 60초
+
         except Exception:
             pass
         # ------------------------------------------------------------
@@ -802,15 +808,115 @@ class PlasmaCleaningRuntime:
             self._host_report_start(False, msg)   # ★ Host 실패
             return
         
+        # =============================================================
+        # 테스트 모드
+        # =============================================================
         if test_mode:
-            self.append_log("MAIN", f"[TEST MODE] {test_dur_sec:.1f}s 동안 시뮬레이션 실행")
+            # TEST는 장비를 절대 건드리지 않는다.
+            # (이전 실행에서 남은 이벤트 펌프/태스크가 PLC를 건드릴 수 있으니 먼저 정리)
+            with contextlib.suppress(Exception):
+                await self._shutdown_all_tasks()
+
+            self.append_log("MAIN", f"[TEST MODE] {test_dur_sec:.1f}s 동안 시뮬레이션 실행 (장비 제어 없음)")
             self._host_report_start(True, "TEST MODE (skip preflight)")
-            self._on_process_status_changed(True)
-            await asyncio.sleep(test_dur_sec)
-            self._on_process_status_changed(False)
-            self.append_log("MAIN", "[TEST MODE] 완료")
-            self._reset_ui_state()
+
+            # UI의 ProcessTime(min) 칸도 TEST 시간으로 맞춰서 로그/챗에 반영
+            with contextlib.suppress(Exception):
+                self._set_plaintext("PC_ProcessTime_edit", f"{(test_dur_sec / 60.0):.2f}")
+
+            # 런 시작 준비(실공정과 동일하게)
+            ch = int(getattr(self, "_selected_ch", 1))
+
+            # running 마킹(PC만)
+            with contextlib.suppress(Exception):
+                runtime_state.set_running("pc", True, ch)
+
+            p = self._read_params_from_ui()
+            self._last_process_time_min = float(p.process_time_min)
+            self._running = True
+            self._test_mode_active = True
+            self._stop_requested = False
+            self._final_notified = False
+
+            self._set_running_ui_state()
+            self._set_state_text("TEST MODE · Preparing…")
+            self._open_run_log(p)
+            self.append_log("PC", "파일 로그 시작 (TEST MODE)")
+
+            ok_final: bool = True
+            stopped_final: bool = False
+            final_reason: Optional[str] = None
+
+            try:
+                # 시작 카드(선택) — TEST임을 명확히
+                with contextlib.suppress(Exception):
+                    if self.chat:
+                        self.chat.notify_process_started({
+                            "process_note":  "Plasma Cleaning (TEST)",
+                            "process_time":  float(p.process_time_min),
+                            "use_rf_power":  False,
+                            "rf_power":      0.0,
+                            "prefix":        f"CH{self._selected_ch} Plasma Cleaning (TEST)",
+                            "ch":            self._selected_ch,
+                        })
+                        if hasattr(self.chat, "flush"):
+                            self.chat.flush()
+
+                # STOP 가능 카운트다운(0.2s 폴링, 표시는 1s 단위로)
+                loop = asyncio.get_running_loop()
+                end_t = loop.time() + float(test_dur_sec)
+                last_sec = None
+
+                while True:
+                    if self._stop_requested:
+                        stopped_final = True
+                        final_reason = "사용자 STOP"
+                        break
+
+                    remain = int(max(0.0, end_t - loop.time()) + 0.999)  # ceil
+                    if last_sec != remain:
+                        last_sec = remain
+                        mm, ss = divmod(remain, 60)
+                        mins = remain / 60.0
+                        self._set_state_text(f"TEST MODE · {mm:02d}:{ss:02d} ({mins:.2f} min)")
+
+                        # ProcessTime_edit는 실행 중에는 mm:ss로 보여주기(실공정과 유사)
+                        w = getattr(self.ui, "PC_ProcessTime_edit", None)
+                        if w and hasattr(w, "setPlainText"):
+                            with contextlib.suppress(Exception):
+                                w.setPlainText(f"{mm:02d}:{ss:02d}")
+
+                    if remain <= 0:
+                        break
+
+                    await asyncio.sleep(0.2)
+
+            except Exception as e:
+                ok_final = False
+                stopped_final = False
+                final_reason = f"{type(e).__name__}: {e!s}"
+                self.append_log("PC", f"[TEST MODE] 오류: {e!r}")
+
+            finally:
+                # TEST 정리(장비 정리 스킵하도록 _final_cleanup가 가드함)
+                await self._final_cleanup()
+
+                # UI 복구
+                self._running = False
+                self._process_timer_active = False
+                self._test_mode_active = False
+                self._reset_ui_state(restore_time_min=self._last_process_time_min)
+                self._set_state_text("대기 중")
+                self.append_log("MAIN", "[TEST MODE] 종료 및 UI 복구 완료")
+
+                # 종료 통지 + runtime_state 해제(구글챗/상태 반영)
+                with contextlib.suppress(Exception):
+                    await self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final)
+
             return
+        # =============================================================
+        # 테스트 모드
+        # =============================================================
         
         # 3) 프리플라이트 (성공하면 계속)
         try:
@@ -1036,6 +1142,16 @@ class PlasmaCleaningRuntime:
         self.append_log("MAIN", "[CLEANUP] begin")
 
         try:
+            # ★ TEST MODE면 장비(RF/MFC/PLC) 정리 절대 하지 않음
+            if getattr(self, "_test_mode_active", False):
+                self.append_log("MAIN", "[CLEANUP] TEST MODE: 장비 정리(RF/MFC/PLC) 스킵, 태스크/로그만 정리")
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(self._shutdown_all_tasks(), timeout=3.0)
+                with contextlib.suppress(Exception):
+                    self._close_run_log()
+                return
+
+
             # (B) MFC 폴링/자동재연결 명시 중단
             with contextlib.suppress(Exception):
                 skip_finalize = False
@@ -1118,6 +1234,21 @@ class PlasmaCleaningRuntime:
     def _set_running_ui_state(self) -> None:
         """공정 실행 중 UI 상태 (Start 비활성, Stop 활성)"""
         self._apply_button_state(start_enabled=False, stop_enabled=True)
+        
+    # ★ 추가: running 상태 변경 공통 처리 (TEST/실공정 모두 재사용 가능)
+    def _on_process_status_changed(self, is_running: bool) -> None:
+        self._running = bool(is_running)
+        ch = int(getattr(self, "_selected_ch", 1) or 1)
+
+        # runtime_state 반영(PC만)
+        with contextlib.suppress(Exception):
+            runtime_state.set_running("pc", self._running, ch)
+
+        # 버튼/UI 반영
+        if self._running:
+            self._set_running_ui_state()
+        else:
+            self._apply_button_state(start_enabled=True, stop_enabled=False)
 
     def _skip_mfc_finalize_due_to_ch1(self) -> bool:
         """
