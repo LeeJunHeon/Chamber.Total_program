@@ -396,6 +396,16 @@ class HostHandlers:
             chamber_2 = _ch_state(2)
             loadlock  = _loadlock_state()
 
+            # ✅ 단순 인터락(표시용):
+            # CH1이 공정 중(running)인 동안에는 CH2/Loadlock이 idle로 보이면 로봇이 움직이므로,
+            # CH2/Loadlock이 idle이면 running으로 "보이게" 고정한다.
+            # CH1이 idle로 바뀌면 이 조건이 풀리면서 원래 상태(대개 idle)로 돌아간다.
+            if chamber_1 == "running":
+                if chamber_2 == "idle":
+                    chamber_2 = "running"
+                if loadlock == "idle":
+                    loadlock = "running"
+
             # ── PLC에서 진공 상태(L_ATM=FALSE)를 읽어 vacuum 여부 확인 ─────
             async with self._plc_command("GET_SPUTTER_STATUS"):
                 # ⇐ 여기서 클라이언트가 보낸 payload를 같이 남겨줌
