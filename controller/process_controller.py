@@ -350,6 +350,11 @@ class ProcessController:
         # ✅ 모든 대기 즉시 중단
         self._abort_evt.set()
 
+        # ✅ TEST MODE면 장비 종료 시퀀스(Shutdown)로 들어가지 않음!
+        if bool((self.current_params or {}).get("test_mode", False)):
+            self._emit_log("Process", "[TEST MODE] STOP: 장비 종료 절차 스킵 (딜레이만 취소)")
+            return
+
         # ✅ 즉시 종료 절차로 진입 (러너의 '다음 틱'을 기다리지 않음)
         self._start_normal_shutdown()
 
@@ -505,8 +510,13 @@ class ProcessController:
                 if (self._stop_requested and
                     not (self._aborting or self._shutdown_in_progress) and
                     not self._in_emergency):
-                    self._emit_log("Process", "정지 요청 감지 - 종료 절차를 시작합니다.")
-                    self._start_normal_shutdown()
+
+                    if bool((self.current_params or {}).get("test_mode", False)):
+                        # TEST MODE면 shutdown으로 전환하지 않고 그대로 끝까지 가서 finish(False) 됨
+                        self._emit_log("Process", "[TEST MODE] 정지 요청 감지 - 종료 절차 스킵")
+                    else:
+                        self._emit_log("Process", "정지 요청 감지 - 종료 절차를 시작합니다.")
+                        self._start_normal_shutdown()
 
                 self._current_step_idx += 1
                 if self._current_step_idx >= len(self.process_sequence):

@@ -760,9 +760,17 @@ class ChamberRuntime:
                     self._last_polling_targets = None
 
                 elif kind == "finished":
+                    ok = False
+                    detail = {}
                     try:
                         ok = bool(payload.get("ok", False))
                         detail = payload.get("detail", {}) or {}
+
+                        # ✅ test/stop 판별 (기존 로직 영향 없음)
+                        is_test = bool(detail.get("test_mode", False))
+                        is_stopped = bool(detail.get("stopped", False))
+                        is_test_cancel = is_test and is_stopped
+
                         ok_for_log = bool(detail.get("ok_for_log", ok))
 
                         # CSV 기록 시도 로그 남기기
@@ -813,7 +821,8 @@ class ChamberRuntime:
                                 self.append_log("CHAT", f"구글챗 종료 카드 전송 실패: {e!r}")
 
                             # 👇 추가: 카드가 잘려 보일 때를 대비해 '실패 이유'만 텍스트로 별도 전송
-                            if not ok:
+                            # ✅ 실패 이유 텍스트는 "진짜 실패"에만
+                            if (not ok) and (not detail.get("stopped", False)):
                                 reason = (str(detail.get("reason") or "")).strip()
                                 if not reason:
                                     errs = detail.get("errors", [])
@@ -845,11 +854,14 @@ class ChamberRuntime:
                         self._apply_polling_targets({"mfc": False, "dc_pulse": False, "rf_pulse": False, "dc": False, "rf": False})
 
                         # 1) 이제 실제로 장치/워치독을 내려서 RS-232/TCP 점유 해제
-                        self.append_log("MAIN", "공정 종료 → 모든 장치 연결 해제 및 워치독 중지")
-                        try:
-                            await self._stop_device_watchdogs(light=False)
-                        except Exception as e:
-                            self.append_log("MAIN", f"종료 정리 중 예외(무시): {e!r}")
+                        if not is_test_cancel:
+                            self.append_log("MAIN", "공정 종료 → 모든 장치 연결 해제 및 워치독 중지")
+                            try:
+                                await self._stop_device_watchdogs(light=False)
+                            except Exception as e:
+                                self.append_log("MAIN", f"종료 정리 중 예외(무시): {e!r}")
+                        else:
+                            self.append_log("MAIN", "[TEST] STOP 종료 → 장치 정리 생략")
 
                         # ★ 추가: 혹시 남아 있을 수 있는 카운트다운/지연 태스크 누수 방지
                         self._cancel_delay_task()
@@ -882,22 +894,23 @@ class ChamberRuntime:
                             self._clear_queue_and_reset_ui()
 
                     finally:
-                        # ✅ 전역: 마지막 결과(성공/실패) 기록 + 종료 시각 마킹
                         try:
-                            if ok:
-                                runtime_state.clear_error("chamber", self.ch)
+                            if is_test_cancel:
+                                runtime_state.clear_error("chamber", self.ch)   # ✅ 에러 남기지 않음
                             else:
-                                _reason = (str(detail.get("reason") or "")).strip()
-                                if not _reason:
-                                    _errs = detail.get("errors", None)
-                                    if isinstance(_errs, (list, tuple)) and _errs:
-                                        _reason = str(_errs[0])
-                                    elif isinstance(_errs, str):
-                                        _reason = _errs
-                                if not _reason:
-                                    _reason = "process failed"
-                                runtime_state.set_error("chamber", self.ch, _reason)
-
+                                if ok:
+                                    runtime_state.clear_error("chamber", self.ch)
+                                else:
+                                    _reason = (str(detail.get("reason") or "")).strip()
+                                    if not _reason:
+                                        _errs = detail.get("errors", None)
+                                        if isinstance(_errs, (list, tuple)) and _errs:
+                                            _reason = str(_errs[0])
+                                        elif isinstance(_errs, str):
+                                            _reason = _errs
+                                    if not _reason:
+                                        _reason = "process failed"
+                                    runtime_state.set_error("chamber", self.ch, _reason)
                             runtime_state.mark_finished("chamber", self.ch)
                         except Exception:
                             pass
@@ -1738,33 +1751,18 @@ class ChamberRuntime:
 
     async def _start_after_preflight(self, params: NormParams) -> None:
         try:
-            # 시작 시도 직전에만 허용
-            self._auto_connect_enabled = True
-
             # ⬇️ 추가: 이전 런의 잔여 종료 플래그를 명시적으로 클리어
             self._pc_stopping = False
             self._pending_device_cleanup = False
-            
-            # ✅ 이번 런에서 실제로 사용할 펄스만 표시(IG/MFC는 항상 연결이므로 제외)
-            use_dc_pulse = bool(params.get("use_dc_pulse", False)) and self.supports_dc_pulse
-            use_rf_pulse = bool(params.get("use_rf_pulse", False)) and self.supports_rf_pulse
-            self._run_select = {
-                "dc_pulse": use_dc_pulse,
-                "rf_pulse": use_rf_pulse,
-            }
-
-            # ✅ 이번 런에서 DC-Pulse를 쓸 거면: 엔드포인트 지정 + 즉시 재연결
-            if use_dc_pulse and self.dc_pulse:
-                host, port = self.cfg.DCPULSE_TCP
-                await self.dc_pulse.set_endpoint_reconnect(host, port)
-
-            self._ensure_background_started()
-            self._on_process_status_changed(True)
 
             # ------------------------------------------------------------
-            # TEST MODE : preflight, 인터락, chuck 이동 전부 스킵
+            # TEST MODE : preflight/인터락/chuck/장비연결 전부 스킵
             # ------------------------------------------------------------
             if bool(params.get("test_mode", False)):
+                # ✅ TEST MODE에서는 장비 자동연결/워치독을 절대 올리지 않음
+                self._auto_connect_enabled = False
+                self._run_select = None
+
                 time_str = str(params.get("time", "")).strip()
                 dur_s = float(params.get("test_duration_sec", 0.0) or 0.0)
 
@@ -1788,14 +1786,32 @@ class ChamberRuntime:
                 self.append_log("MAIN", f"[TEST MODE] '{note}' 장비 제어 스킵 / {dur_s:.1f}s 시뮬레이션")
                 self._host_report_start(True, f"TEST MODE: {time_str or f'{dur_s:.0f}s'}")
 
-                # ✅ 상태 RUNNING
+                # ✅ 상태 RUNNING (UI/상태/구글챗 흐름은 정상 공정과 동일)
                 self._on_process_status_changed(True)
 
                 # ✅ 핵심: ProcessController가 TEST MODE(DELAY) 시퀀스로 실행
-                # → started/finished 이벤트가 정상 공정과 동일하게 발생
                 self.process_controller.start_process(params)
                 return
             # ------------------------------------------------------------
+            
+            # ✅ REAL MODE부터 여기서 장비 연결/백그라운드 허용
+            self._auto_connect_enabled = True
+
+            # ✅ 이번 런에서 실제로 사용할 펄스만 표시(IG/MFC는 항상 연결이므로 제외)
+            use_dc_pulse = bool(params.get("use_dc_pulse", False)) and self.supports_dc_pulse
+            use_rf_pulse = bool(params.get("use_rf_pulse", False)) and self.supports_rf_pulse
+            self._run_select = {
+                "dc_pulse": use_dc_pulse,
+                "rf_pulse": use_rf_pulse,
+            }
+
+            # ✅ 이번 런에서 DC-Pulse를 쓸 거면: 엔드포인트 지정 + 즉시 재연결
+            if use_dc_pulse and self.dc_pulse:
+                host, port = self.cfg.DCPULSE_TCP
+                await self.dc_pulse.set_endpoint_reconnect(host, port)
+
+            self._ensure_background_started()
+            self._on_process_status_changed(True)
 
             timeout = 10.0 if (use_dc_pulse or use_rf_pulse) else 8.0
             ok, failed = await self._preflight_connect(params, timeout_s=timeout)
@@ -2181,52 +2197,55 @@ class ChamberRuntime:
     def request_stop_all(self, user_initiated: bool):
         self._cancel_delay_task()
         if getattr(self, "_pc_stopping", False):
-            self.append_log("MAIN", "정지 요청 무시: 이미 종료 절차 진행 중"); return
+            self.append_log("MAIN", "정지 요청 무시: 이미 종료 절차 진행 중")
+            return
+
+        # ✅ 현재 런이 TEST 모드인지 판정
+        is_test_mode = False
+        try:
+            is_test_mode = bool((getattr(self.process_controller, "current_params", {}) or {}).get("test_mode", False))
+        except Exception:
+            is_test_mode = False
 
         # Stop 이후엔 자동 재연결 차단(사용자가 Start로 다시 올릴 때까지)
         self._auto_connect_enabled = False
         self._run_select = None
 
-        # 라이트 정리: 출력/폴링 OFF
+        # 라이트 정리: 출력/폴링 OFF (통신/cleanup 없음)
         self._spawn_detached(self._stop_device_watchdogs(light=True))
 
         self._pc_stopping = True
+
+        # ✅ TEST 모드면 장비 정리/폴백 자체를 타면 안 됨
+        if is_test_mode:
+            self._pending_device_cleanup = False
+            self.append_log("MAIN", "[TEST MODE] STOP → 시뮬레이션(딜레이)만 취소, 장비 정리/폴백 스킵")
+            self.process_controller.request_stop()
+            return
+
+        # ✅ REAL MODE: 기존 동작 유지
         self._pending_device_cleanup = True
         self.process_controller.request_stop()
 
-        # ✅ 백업 타이머(고정 10분):
-        #    너무 빨리 heavy cleanup이 들어가면 shutdown 시퀀스(RF ramp-down 포함)가 잘리면서
-        #    gas off / pressure off가 실행되지 않거나, controller가 "정리중"으로 남을 수 있음.
-        #    따라서 넉넉하게 10분(600s) 후에만 fallback을 실행한다.
-        #
-        #    (타이머를 완전히 없애면, shutdown이 hard-wait에 걸린 케이스에서 영구적으로 멈출 수 있어 비추)
-
-        # STOP 요청 generation (이전 fallback이 나중에 발동해도 무해하도록)
+        # ✅ 백업 타이머(고정 10분) - (기존 코드 그대로)
         self._stop_fallback_gen = int(getattr(self, "_stop_fallback_gen", 0)) + 1
         _gen = self._stop_fallback_gen
 
-        timeout_s = 600.0  # ✅ 고정 10분
+        timeout_s = 600.0
         self.append_log("MAIN", f"STOP fallback timer set: {timeout_s:.0f}s")
 
         async def _fallback():
             try:
                 await asyncio.sleep(timeout_s)
-
-                # 최신 STOP 요청이 아니면 무시
                 if _gen != int(getattr(self, "_stop_fallback_gen", 0)):
                     return
-
-                # 이미 종료됐으면 아무것도 하지 않음
                 if not (self._pc_stopping and self._pending_device_cleanup):
                     return
 
-                # 1) 먼저 emergency_stop으로 전환해서 '대기 없이' Gas/밸브 정리까지 진행되도록 시도
-                #    (shutdown RF Power Off hard-wait에서 멈춘 케이스를 깨우기 위함)
                 self.append_log("MAIN", f"STOP fallback({timeout_s:.0f}s) → emergency shutdown")
                 with contextlib.suppress(Exception):
                     self.process_controller.emergency_stop()
 
-                # 2) 짧게 기다렸다가(종료절차 진행 여지) 그래도 살아있으면 최후의 heavy cleanup
                 grace_s = 25.0
                 t0 = time.monotonic()
                 while (time.monotonic() - t0) < grace_s:
@@ -2234,7 +2253,6 @@ class ChamberRuntime:
                         return
                     await asyncio.sleep(0.5)
 
-                # 3) 여전히 종료가 안되면: 컨트롤러 상태/러너를 강제 리셋 후 device heavy cleanup
                 self.append_log("MAIN", "STOP fallback → heavy cleanup + controller reset")
 
                 with contextlib.suppress(Exception):
@@ -2242,7 +2260,6 @@ class ChamberRuntime:
 
                 await self._stop_device_watchdogs(light=False)
 
-                # ✅ 전역 종료 시각 마킹(이벤트가 오지 않은 강제 경로 보완)
                 with contextlib.suppress(Exception):
                     runtime_state.mark_finished("chamber", self.ch)
 
