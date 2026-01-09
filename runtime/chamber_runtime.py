@@ -895,23 +895,24 @@ class ChamberRuntime:
 
                     finally:
                         try:
-                            if is_test_cancel:
-                                runtime_state.clear_error("chamber", self.ch)   # ✅ 에러 남기지 않음
+                            if ok:
+                                # ✅ 정상 종료만 idle
+                                runtime_state.clear_error("chamber", self.ch)
                             else:
-                                if ok:
-                                    runtime_state.clear_error("chamber", self.ch)
-                                else:
-                                    _reason = (str(detail.get("reason") or "")).strip()
-                                    if not _reason:
-                                        _errs = detail.get("errors", None)
-                                        if isinstance(_errs, (list, tuple)) and _errs:
-                                            _reason = str(_errs[0])
-                                        elif isinstance(_errs, str):
-                                            _reason = _errs
-                                    if not _reason:
-                                        _reason = "process failed"
-                                    runtime_state.set_error("chamber", self.ch, _reason)
+                                # ✅ 그 외는 전부 error
+                                _reason = (str(detail.get("reason") or "")).strip()
+                                if not _reason:
+                                    _errs = detail.get("errors", None)
+                                    if isinstance(_errs, (list, tuple)) and _errs:
+                                        _reason = str(_errs[0])
+                                    elif isinstance(_errs, str):
+                                        _reason = _errs
+                                if not _reason:
+                                    _reason = "사용자 STOP" if detail.get("stopped") else "process failed"
+                                runtime_state.set_error("chamber", self.ch, _reason)
+
                             runtime_state.mark_finished("chamber", self.ch)
+
                         except Exception:
                             pass
 
@@ -1746,8 +1747,25 @@ class ChamberRuntime:
 
     def _safe_start_process(self, params: NormParams) -> None:
         if self.process_controller.is_running:
-            self.append_log("MAIN", "이미 다른 공정 실행 중"); return
-        self._spawn_detached(self._start_after_preflight(params), store=True, name=f"StartAfterPreflight.CH{self.ch}")
+            msg = "이미 다른 공정 실행 중"
+            self.append_log("MAIN", msg)
+
+            # ✅ start 요청이 이미 들어온 상태일 수 있으므로(원격/버튼)
+            #    상태를 error 로 정리하고 running 해제
+            with contextlib.suppress(Exception):
+                runtime_state.set_error("chamber", self.ch, msg)
+                runtime_state.mark_finished("chamber", self.ch)
+
+            # ✅ Host(start_with_recipe_string) 대기중이면 timeout 나지 않도록 즉시 FAIL 응답
+            with contextlib.suppress(Exception):
+                self._host_report_start(False, msg)
+
+            self._on_process_status_changed(False)
+            return
+
+        self._spawn_detached(self._start_after_preflight(params),
+                            store=True,
+                            name=f"StartAfterPreflight.CH{self.ch}")
 
     async def _start_after_preflight(self, params: NormParams) -> None:
         try:
@@ -1863,6 +1881,12 @@ class ChamberRuntime:
                 # 자동/단일 모두 동일 경로로 중단 처리(기존 시작 실패 처리와 동일하게)
                 self._start_next_process_from_queue(False)
                 self._on_process_status_changed(False)
+
+                # ✅ Chuck 선행 설정 실패도 '비정상 종료' → error 상태로 정리
+                with contextlib.suppress(Exception):
+                    runtime_state.set_error("chamber", self.ch, "Chuck 이동 실패")
+                    runtime_state.mark_finished("chamber", self.ch)
+
                 return
 
             self._last_polling_targets = None
@@ -1874,6 +1898,12 @@ class ChamberRuntime:
             msg = f"오류: '{note}' 시작 실패. ({e})"
             self.append_log("MAIN", msg)
             self._post_critical("오류", msg)
+
+            # ✅ 예외로 비정상 종료 → error 표시(정상 종료만 idle)
+            with contextlib.suppress(Exception):
+                runtime_state.set_error("chamber", self.ch, msg)
+                runtime_state.mark_finished("chamber", self.ch)
+
             self._start_next_process_from_queue(False)
             self._on_process_status_changed(False)
 

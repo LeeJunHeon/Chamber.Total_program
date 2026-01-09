@@ -870,6 +870,7 @@ class PlasmaCleaningRuntime:
                 while True:
                     if self._stop_requested:
                         stopped_final = True
+                        ok_final = False  # ✅ 사용자 STOP은 비정상 종료 → error
                         final_reason = "사용자 STOP"
                         break
 
@@ -919,33 +920,55 @@ class PlasmaCleaningRuntime:
         # =============================================================
         
         # 3) 프리플라이트 (성공하면 계속)
+        # ✅ START 요청 수락 시점에 즉시 RUNNING 표시 (프리플라이트 전)
+        #    - 정상 종료(ok=True)만 idle
+        #    - 프리플라이트/오류/STOP 등 비정상은 error
+        self._running = True
+        self._stop_requested = False
+        self._final_notified = False
+        with contextlib.suppress(Exception):
+            runtime_state.set_running("pc", True, ch)
+        with contextlib.suppress(Exception):
+            self._set_running_ui_state()
+            self._set_state_text("프리플라이트 중…")
+
         try:
             # 1) 사전 연결 점검
             await self._preflight_connect(timeout_s=10.0)
         except Exception as e:
-            # PLC, MFC, IG 등 연결 실패 시 사용자 알림 + Host 실패
             msg = f"장치 연결에 실패했습니다: {e}"
             self._post_warning("연결 실패", f"장치 연결에 실패했습니다.\n\n{e}")
             self._host_report_start(False, msg)    # ★ Host 실패
+
+            # ✅ 프리플라이트 실패 → error (RUNNING 해제 + 쿨다운 마킹)
+            with contextlib.suppress(Exception):
+                runtime_state.set_error("pc", ch, msg)
+                runtime_state.mark_finished("pc", ch)
+
+            self._running = False
+            with contextlib.suppress(Exception):
+                self._reset_ui_state()
             return
-        
-        # ✅ (추가) 이전 실행에서 남아있는 IG base-wait 정리
-        with contextlib.suppress(Exception):
-            if self.ig and hasattr(self.ig, "cancel_wait"):
-                self.append_log("IG", "이전 Base-wait 잔존 정리: ig.cancel_wait()")
-                await asyncio.wait_for(self.ig.cancel_wait(), timeout=2.0)
-        
-        # 3-1) ★ 게이트 밸브 인터락 프리체크 (G_V_{ch}_인터락)
+
+        # 3-1) GV 인터락 체크
         try:
             gv_ok = True
             if self.plc:
-                key = f"G_V_{ch}_인터락"      # 예: CH1 → G_V_1_인터락
+                key = f"G_V_{ch}_인터락"
                 self.append_log("PLC", "GV 인터락 확인(프리플라이트)")
                 gv_ok = bool(await self.plc.read_bit(key))
         except Exception as e:
             msg = f"게이트밸브 인터락 상태 확인 실패: {e}"
             self._post_warning("GV 인터락 오류", msg)
             self._host_report_start(False, msg)
+
+            with contextlib.suppress(Exception):
+                runtime_state.set_error("pc", ch, msg)
+                runtime_state.mark_finished("pc", ch)
+
+            self._running = False
+            with contextlib.suppress(Exception):
+                self._reset_ui_state()
             return
 
         if not gv_ok:
@@ -953,19 +976,18 @@ class PlasmaCleaningRuntime:
             self.append_log("PLC", msg)
             self._post_warning("게이트밸브 인터락", msg)
             self._host_report_start(False, msg)
+
+            with contextlib.suppress(Exception):
+                runtime_state.set_error("pc", ch, msg)
+                runtime_state.mark_finished("pc", ch)
+
+            self._running = False
+            with contextlib.suppress(Exception):
+                self._reset_ui_state()
             return
-        
+
         # ★ 여기까지 왔으면 Host 프리플라이트 성공
         self._host_report_start(True, "preflight OK")
-
-        # 4) 실행/시작 마킹 — PC는 pc로만 관리 (chamber는 절대 건드리지 않음)
-        runtime_state.set_running("pc", True, ch)
-
-        # 4) 실행/시작 마킹 + 동시실행 가드(대칭성 보장)
-        # runtime_state.mark_started("pc", ch)
-        # runtime_state.set_running("pc", True, ch)
-        # runtime_state.mark_started("chamber", ch)
-        # runtime_state.set_running("chamber", True, ch)
 
         # 5) UI/로그 준비
         p = self._read_params_from_ui()
