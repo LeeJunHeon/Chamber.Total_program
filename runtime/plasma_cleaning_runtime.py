@@ -1581,28 +1581,14 @@ class PlasmaCleaningRuntime:
         try:
             ch = int(getattr(self, "_selected_ch", 1))
 
-            if ok or stopped:
+            if ok:
                 runtime_state.clear_error("pc", ch)
             else:
-                _reason = (str(reason or "")).strip() or "plasma cleaning failed"
+                _reason = "사용자 STOP" if stopped else (reason or "error")
                 runtime_state.set_error("pc", ch, _reason)
 
             runtime_state.mark_finished("pc", ch)
             runtime_state.set_running("pc", False, ch)
-
-            # ✅ 마지막 결과(성공/실패) 기록: 실패는 get_status에서 error로 노출되도록 유지
-            # if ok or stopped:
-            #     runtime_state.clear_error("pc", ch)
-            #     runtime_state.clear_error("chamber", ch)
-            # else:
-            #     _reason = (str(reason or "")).strip() or "plasma cleaning failed"
-            #     runtime_state.set_error("pc", ch, _reason)
-            #     runtime_state.set_error("chamber", ch, _reason)
-
-            # runtime_state.mark_finished("pc", ch)
-            # runtime_state.mark_finished("chamber", ch)
-            # runtime_state.set_running("pc", False, ch)
-            # runtime_state.set_running("chamber", False, ch)
 
         except Exception as e:
             self.append_log("STATE", f"runtime_state finalize mark failed: {e!r}")

@@ -251,12 +251,11 @@ class AsyncIG:
             await self._emit_status("이미 Base Pressure 대기 중입니다. 이전 대기를 정리하고 재시작합니다.")
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(self.cancel_wait(), timeout=2.0)
-            # (중요) cancel_wait는 현재 SIG0를 안 보냄 → 필요하면 cleanup까지 호출하는게 더 안전
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(self.cleanup(), timeout=3.0)
 
         # 워치독이 연결을 시도/유지
-        if not self._watchdog_task:
+        if (not self._watchdog_task) or self._watchdog_task.done():
             await self.start()
 
         self._target_pressure = float(base_pressure)

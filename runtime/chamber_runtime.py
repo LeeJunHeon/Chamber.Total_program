@@ -2184,16 +2184,26 @@ class ChamberRuntime:
             params["G2 Target"] = vals.get("G2_target_name", "")
             params["G3 Target"] = vals.get("G3_target_name", "")
 
+            # ✅ Start 수락 즉시 RUNNING 표시 (프리플라이트 전에 상태부터 올림)
+            with contextlib.suppress(Exception):
+                if not runtime_state.is_running("chamber", self.ch):
+                    runtime_state.set_running("chamber", True, self.ch)
+
             # ❌ 여기서는 파일을 열지 않습니다. (started 이벤트에서 1회 오픈)
             self.append_log("MAIN", "입력 검증 통과 → 장비 연결 확인 시작")
             self._safe_start_process(cast(NormParams, params))
         except Exception as e:
-            # 🔥 여기로 떨어지면 "조용히 죽는" 대신 반드시 로그 + 알림창
             tb = "".join(traceback.format_exception(type(e), e, e.__traceback__)).rstrip()
             self.append_log("MAIN", f"_handle_start_clicked 예외 발생:\n{tb}")
+
+            # ✅ 예외는 비정상 종료로 간주 → error latch + running 해제
+            with contextlib.suppress(Exception):
+                runtime_state.set_error("chamber", self.ch, f"exception: {e!r}")
+                runtime_state.mark_finished("chamber", self.ch)
+
             # Host쪽에서도 실패 통보 받도록
             self._host_report_start(False, f"exception: {e!r}")
-            # UI가 있는 경우 치명적 오류 알림
+
             try:
                 self._post_critical(
                     "실행 오류",
@@ -2201,8 +2211,8 @@ class ChamberRuntime:
                     "자세한 내용은 로그 파일을 확인해주세요.",
                 )
             except Exception:
-                # 여기서 또 터져도 최소한 로그에는 남도록만 처리
                 pass
+
 
     def _handle_stop_clicked(self, _checked: bool = False):
         self.request_stop_all(user_initiated=True)
