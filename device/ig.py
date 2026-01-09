@@ -92,6 +92,9 @@ class AsyncIG:
         self._waiting_active = False
         self._wait_start_s = 0.0
 
+        # ★ 최신 base-wait만 cleanup 하도록 토큰 사용
+        self._base_wait_token = None
+
         self._first_read_delay_ms = 5000  # IG ON OK 후 첫 RDI 전 지연(1회)
 
         # ✅ 재점등(자동 ON 재시도) 제어 플래그/카운터
@@ -240,9 +243,17 @@ class AsyncIG:
         시간 초과 시 SIG 0 후 False.
         (진행 중 이벤트는 events() 제너레이터로도 전달)
         """
+        # ★ 이번 호출 토큰(세대) 생성
+        my_token = object()
+        self._base_wait_token = my_token
+
         if self._waiting_active:
-            await self._emit_status("이미 Base Pressure 대기 중입니다.")
-            return False
+            await self._emit_status("이미 Base Pressure 대기 중입니다. 이전 대기를 정리하고 재시작합니다.")
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(self.cancel_wait(), timeout=2.0)
+            # (중요) cancel_wait는 현재 SIG0를 안 보냄 → 필요하면 cleanup까지 호출하는게 더 안전
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(self.cleanup(), timeout=3.0)
 
         # 워치독이 연결을 시도/유지
         if not self._watchdog_task:
@@ -333,13 +344,15 @@ class AsyncIG:
 
             return getattr(self, "_last_wait_success", False)
         finally:
-            # cleanup이 상위 취소에 휩쓸리지 않도록 완전 보호
-            try:
-                await asyncio.shield(self.cleanup())
-            except asyncio.CancelledError:
-                pass
-            except Exception:
-                pass
+            # ★ 가장 최신 호출만 cleanup 수행 (이전 호출이 새 호출을 끊는 레이스 방지)
+            if self._base_wait_token is my_token:
+                try:
+                    await asyncio.shield(self.cleanup())
+                except asyncio.CancelledError:
+                    pass
+                except Exception:
+                    pass
+
 
     async def cancel_wait(self):
         self._waiting_active = False

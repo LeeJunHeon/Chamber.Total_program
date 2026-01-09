@@ -929,6 +929,12 @@ class PlasmaCleaningRuntime:
             self._host_report_start(False, msg)    # ★ Host 실패
             return
         
+        # ✅ (추가) 이전 실행에서 남아있는 IG base-wait 정리
+        with contextlib.suppress(Exception):
+            if self.ig and hasattr(self.ig, "cancel_wait"):
+                self.append_log("IG", "이전 Base-wait 잔존 정리: ig.cancel_wait()")
+                await asyncio.wait_for(self.ig.cancel_wait(), timeout=2.0)
+        
         # 3-1) ★ 게이트 밸브 인터락 프리체크 (G_V_{ch}_인터락)
         try:
             gv_ok = True
@@ -1151,6 +1157,10 @@ class PlasmaCleaningRuntime:
                     self._close_run_log()
                 return
 
+            # ✅ (추가) base-wait 잔존 시 다음 run이 즉시 실패하므로 종료 시 항상 정리
+            with contextlib.suppress(Exception):
+                if self.ig and hasattr(self.ig, "cancel_wait"):
+                    await asyncio.wait_for(self.ig.cancel_wait(), timeout=2.0)
 
             # (B) MFC 폴링/자동재연결 명시 중단
             with contextlib.suppress(Exception):
