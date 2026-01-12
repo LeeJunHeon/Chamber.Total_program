@@ -547,6 +547,52 @@ class HostHandlers:
                 return self._fail(str(e))
 
     # ================== LoadLock vacuum 제어 ==================
+    async def _read_gate_state(self, ch: int) -> dict:
+        """
+        게이트 램프 기반 상태 판정.
+        - closed: CLOSE_LAMP=True & OPEN_LAMP=False
+        - open  : OPEN_LAMP=True  & CLOSE_LAMP=False
+        - moving_or_unknown: 둘 다 False
+        - invalid_both_true: 둘 다 True (배선/맵/PLC 로직 이상 가능)
+        """
+        if ch not in (1, 2):
+            raise ValueError(f"지원하지 않는 CH: {ch}")
+
+        open_key = f"G_V_{ch}_OPEN_LAMP"
+        close_key = f"G_V_{ch}_CLOSE_LAMP"
+
+        async with self._plc_call():
+            open_lamp = bool(await self.ctx.plc.read_bit(open_key))
+            close_lamp = bool(await self.ctx.plc.read_bit(close_key))
+
+        if close_lamp and (not open_lamp):
+            state = "closed"
+        elif open_lamp and (not close_lamp):
+            state = "open"
+        elif (not open_lamp) and (not close_lamp):
+            state = "moving_or_unknown"
+        else:
+            state = "invalid_both_true"
+
+        return {"ch": ch, "state": state, "open_lamp": open_lamp, "close_lamp": close_lamp}
+    
+    async def _require_gates_closed(self) -> tuple[bool, str]:
+        """
+        CH1, CH2 모두 gate가 '닫힘' 상태인지 확인.
+        - 하나라도 open / moving / unknown / invalid 이면 VACUUM_ON/OFF 진행 금지
+        """
+        not_closed = []
+        for ch in (1, 2):
+            st = await self._require_gates_closed(ch)
+            if st["state"] != "closed":              # ✅ dict에서 state 사용
+                not_closed.append((ch, st["state"]))
+
+        if not_closed:
+            detail = ", ".join([f"CH{ch}={st}" for ch, st in not_closed])
+            return False, f"Gate not closed → {detail} (VACUUM_ON/OFF 불가: 두 게이트 모두 CLOSED 필요)"
+
+        return True, "CH1/CH2 gate 모두 CLOSED"
+
     async def vacuum_on(self, data: Json) -> Json:
         """
         VACUUM ON 시퀀스:
@@ -555,13 +601,24 @@ class HostHandlers:
         2) L_R_V_인터락 == True 확인
         3) L_R_V_SW = True  (러핑밸브 ON)
         4) L_VAC_READY_SW == True 까지 대기 (기본 600s)
-        ※ 어떤 경로로든 종료 시 L_R_P_SW, L_R_V_SW를 False로 원복
+        
+        ✅ 추가:
+        - 시작 전에 gate가 close인지 확인하고, 확인되면 다음 단계로 진행
+        (필요 시 data: auto_close_gate=True 로 자동 닫기 후 진행 가능)
+        - 실패/예외/타임아웃 포함 어떤 경로든 L_R_P_SW/L_R_V_SW OFF 원복 보장
         """
         timeout_s = float(data.get("timeout_s", 600.0))  # 기본 10분
 
         async with self._plc_command("VACUUM_ON"):
             self._log_client_request(data)
+
+            success = False
             try:
+                # ✅ (A) gate close 확인 (닫혀있어야 다음 단계로 진행)
+                ok, msg = await self._require_gates_closed()
+                if not ok:
+                    return self._fail(msg)
+
                 # 0) 벤트 OFF
                 async with self._plc_call():
                     await self.ctx.plc.write_switch("L_VENT_SW", False)
@@ -599,9 +656,8 @@ class HostHandlers:
                     # 2) L_R_P_SW == FALSE  (러핑펌프 스위치 OFF)
                     # 3) L_R_V_SW == FALSE  (러핑밸브 스위치 OFF)
                     if vac_ready and (not pump_sw) and (not valve_sw):
-                        return self._ok(
-                            "VACUUM_ON 완료 — VAC_READY && L_R_P_SW/L_R_V_SW=FALSE 확인"
-                        )
+                        success = True
+                        return self._ok("VACUUM_ON 완료 — VAC_READY && L_R_P_SW/L_R_V_SW=FALSE 확인")
 
                     await asyncio.sleep(0.5)
 
@@ -622,6 +678,19 @@ class HostHandlers:
             except Exception as e:
                 # 예외 사유는 message로 그대로 클라이언트 전달
                 return self._fail(e)
+            
+            finally:
+                # ✅ 원복: 실패면 밸브 OFF → (락 밖에서) 3초 → 펌프 OFF
+                # - gate가 열려있거나 인터락 실패/타임아웃 등으로 중간 종료돼도
+                #   러핑펌프/밸브가 켜진 채로 남지 않게 함
+                if not success:
+                    with contextlib.suppress(Exception):
+                        async with self._plc_call():
+                            await self.ctx.plc.write_switch("L_R_V_SW", False)
+                    await asyncio.sleep(3.0)  # ✅ 락 밖
+                    with contextlib.suppress(Exception):
+                        async with self._plc_call():
+                            await self.ctx.plc.write_switch("L_R_P_SW", False)
 
     async def vacuum_off(self, data: Json) -> Json:
         """
@@ -638,7 +707,14 @@ class HostHandlers:
 
         async with self._plc_command("VACUUM_OFF"):  # 요청별 로그 파일명 고정
             self._log_client_request(data)
+
+            success = False
             try:
+                # ✅ (A) gate close 확인 (닫혀있어야 다음 단계로 진행)
+                ok, msg = await self._require_gates_closed()
+                if not ok:
+                    return self._fail(msg)
+    
                 # 0) 러핑밸브/펌프 OFF (I/O 순간만 락)
                 async with self._plc_call():
                     await self.ctx.plc.write_switch("L_R_V_SW", False)
@@ -665,7 +741,7 @@ class HostHandlers:
                         # 3-1) 진공 해제 완료 → 벤트 밸브 닫기
                         async with self._plc_call():
                             await self.ctx.plc.write_switch("L_VENT_SW", False)
-
+                        success = True
                         # 3-2) 벤트 OFF까지 처리된 후에 성공 응답
                         return self._ok(
                             "VACUUM_OFF 완료 (L_ATM=TRUE, L_VENT_SW=FALSE)"
@@ -683,12 +759,14 @@ class HostHandlers:
                 )
 
             except Exception as e:
-                # 예외 시에도 벤트 OFF 시도
-                with contextlib.suppress(Exception):
-                    async with self._plc_call():
-                        await self.ctx.plc.write_switch("L_VENT_SW", False)
-                # 예외는 message로 그대로 전달
                 return self._fail(e)
+            
+            finally:
+                # ✅ 실패/예외면 벤트 밸브가 열려있는 채로 남지 않게 강제 OFF
+                if not success:
+                    with contextlib.suppress(Exception):
+                        async with self._plc_call():
+                            await self.ctx.plc.write_switch("L_VENT_SW", False)
 
     # ================== LoadLock 4pin 제어 ==================
     async def four_pin_up(self, data: Json) -> Json:
