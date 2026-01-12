@@ -683,12 +683,6 @@ class ChamberRuntime:
                 elif kind == "started":
                     params = payload.get("params", {}) or {}
 
-                    # ✅ 전역: CH 공정 '시작' 시각 마킹
-                    try:
-                        runtime_state.mark_started("chamber", self.ch)
-                    except Exception:
-                        pass
-
                     # ✅ 시작 카드 전송(성공 시 로그 X, 실패만 로그)
                     # AFTER: 시작 카드 전송 후 즉시 flush
                     if self.chat:
@@ -1406,13 +1400,6 @@ class ChamberRuntime:
                 except Exception:
                     pass
 
-        # True로 "전환"될 때만 점유 표시
-        try:
-            if running and prev is not True:
-                runtime_state.set_running("chamber", True, self.ch)
-        except Exception:
-            pass
-
         self._last_running_state = running
 
     # === 외부 공개: 현재 챔버 공정 실행 여부 ===
@@ -1762,6 +1749,10 @@ class ChamberRuntime:
 
             self._on_process_status_changed(False)
             return
+        
+        # ✅ 공통 start 진입점에서 단 1회만 마킹(큐/자동시작 포함)
+        with contextlib.suppress(Exception):
+            runtime_state.mark_started("chamber", self.ch)
 
         self._spawn_detached(self._start_after_preflight(params),
                             store=True,
@@ -2184,10 +2175,9 @@ class ChamberRuntime:
             params["G2 Target"] = vals.get("G2_target_name", "")
             params["G3 Target"] = vals.get("G3_target_name", "")
 
-            # ✅ Start 수락 즉시 RUNNING 표시 (프리플라이트 전에 상태부터 올림)
+            # ✅ Start 수락 즉시 RUNNING + error clear (프리플라이트 전에 상태부터 올림)
             with contextlib.suppress(Exception):
-                if not runtime_state.is_running("chamber", self.ch):
-                    runtime_state.set_running("chamber", True, self.ch)
+                runtime_state.mark_started("chamber", self.ch)
 
             # ❌ 여기서는 파일을 열지 않습니다. (started 이벤트에서 1회 오픈)
             self.append_log("MAIN", "입력 검증 통과 → 장비 연결 확인 시작")

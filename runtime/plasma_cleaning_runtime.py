@@ -750,13 +750,6 @@ class PlasmaCleaningRuntime:
         test_mode = False
         test_dur_sec = 0.0
         try:
-            import re
-            time_str = ""
-            test_mode = False
-            test_dur_sec = 0.0
-            marker = ""
-            time_str = ""
-
             row = getattr(self, "_loaded_recipe_row", None) or {}
             marker = str(row.get("#", "")).strip().lower()
             time_str = str(row.get("time", "") or row.get("Time", "") or row.get("TIME", "")).strip()
@@ -765,8 +758,7 @@ class PlasmaCleaningRuntime:
                 test_mode = True
                 test_dur_sec = self._parse_duration_seconds(time_str.lower())
                 if test_dur_sec <= 0:
-                    test_dur_sec = 60.0  # 기본 60초
-
+                    test_dur_sec = 60.0
         except Exception:
             pass
         # ------------------------------------------------------------
@@ -807,6 +799,10 @@ class PlasmaCleaningRuntime:
             self._post_warning("실행 오류", msg)
             self._host_report_start(False, msg)   # ★ Host 실패
             return
+        
+        # ✅ start 수락 즉시 RUNNING + error clear
+        with contextlib.suppress(Exception):
+            runtime_state.mark_started("pc", ch)
         
         # =============================================================
         # 테스트 모드
@@ -1588,7 +1584,6 @@ class PlasmaCleaningRuntime:
                 runtime_state.set_error("pc", ch, _reason)
 
             runtime_state.mark_finished("pc", ch)
-            runtime_state.set_running("pc", False, ch)
 
         except Exception as e:
             self.append_log("STATE", f"runtime_state finalize mark failed: {e!r}")
