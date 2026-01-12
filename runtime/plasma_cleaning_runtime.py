@@ -933,7 +933,12 @@ class PlasmaCleaningRuntime:
             await self._preflight_connect(timeout_s=10.0)
         except Exception as e:
             msg = f"장치 연결에 실패했습니다: {e}"
-            self._post_warning("연결 실패", f"장치 연결에 실패했습니다.\n\n{e}")
+            self._post_critical(
+                "연결 실패",
+                f"장치 연결에 실패했습니다.\n\n{e}\n\n확인을 누르면 상태 표시가 Idle로 변경됩니다.",
+                clear_status_to_idle=True,
+                ch=ch,
+            )
             self._host_report_start(False, msg)    # ★ Host 실패
 
             # ✅ 프리플라이트 실패 → error (RUNNING 해제 + 쿨다운 마킹)
@@ -955,7 +960,12 @@ class PlasmaCleaningRuntime:
                 gv_ok = bool(await self.plc.read_bit(key))
         except Exception as e:
             msg = f"게이트밸브 인터락 상태 확인 실패: {e}"
-            self._post_warning("GV 인터락 오류", msg)
+            self._post_critical(
+                "GV 인터락 오류",
+                f"{msg}\n\n확인을 누르면 상태 표시가 Idle로 변경됩니다.",
+                clear_status_to_idle=True,
+                ch=ch,
+            )
             self._host_report_start(False, msg)
 
             with contextlib.suppress(Exception):
