@@ -889,11 +889,13 @@ class ChamberRuntime:
 
                     finally:
                         try:
-                            if ok:
-                                # ✅ 정상 종료만 idle
+                            stopped = bool(detail.get("stopped"))
+
+                            if ok or stopped:
+                                # ✅ 정상 종료(ok=True) 또는 사용자 STOP(stopped=True)은 idle로 표시
                                 runtime_state.clear_error("chamber", self.ch)
                             else:
-                                # ✅ 그 외는 전부 error
+                                # ✅ 실패만 error
                                 _reason = (str(detail.get("reason") or "")).strip()
                                 if not _reason:
                                     _errs = detail.get("errors", None)
@@ -902,8 +904,22 @@ class ChamberRuntime:
                                     elif isinstance(_errs, str):
                                         _reason = _errs
                                 if not _reason:
-                                    _reason = "사용자 STOP" if detail.get("stopped") else "process failed"
+                                    _reason = "process failed"
+
                                 runtime_state.set_error("chamber", self.ch, _reason)
+
+                                # ✅ 실패 알림창: 사용자가 OK를 누르면 status 표시가 idle로 돌아가도록
+                                try:
+                                    _pname = (str(detail.get("process_name") or "").strip() or
+                                            str(detail.get("Process_name") or "").strip() or
+                                            "(process)")
+                                    self._post_critical(
+                                        f"CH{self.ch} 공정 실패",
+                                        f"{_pname}\n\n사유: {_reason}\n\n확인을 누르면 상태 표시가 Idle로 변경됩니다.",
+                                        clear_status_to_idle=True,
+                                    )
+                                except Exception:
+                                    pass
 
                             runtime_state.mark_finished("chamber", self.ch)
 
@@ -924,7 +940,9 @@ class ChamberRuntime:
 
                         # ✅ 전역: CH 공정 '종료' 시각 마킹 (중단도 종료로 취급)
                         try:
-                            runtime_state.set_error("chamber", self.ch, "aborted")
+                            # finished에서 이미 error reason을 남겼을 수 있으니 덮어쓰지 않게 방어
+                            if not runtime_state.has_error("chamber", self.ch):
+                                runtime_state.set_error("chamber", self.ch, "aborted")
                             runtime_state.mark_finished("chamber", self.ch)
                         except Exception:
                             pass
@@ -3489,7 +3507,7 @@ class ChamberRuntime:
 
         box.open()
 
-    def _post_critical(self, title: str, text: str) -> None:
+    def _post_critical(self, title: str, text: str, *, clear_status_to_idle: bool = False) -> None:
         if not self._has_ui():
             self.append_log("ERROR", f"{title}: {text}"); return
 
@@ -3508,6 +3526,14 @@ class ChamberRuntime:
                 self._msg_boxes.remove(box)
             box.deleteLater()
         box.finished.connect(_cleanup)
+
+        if clear_status_to_idle:
+            def _ack_to_idle(_res: int):
+                # OK 클릭 시만 idle로 (X로 닫으면 0인 경우가 많음)
+                if int(_res) == int(QMessageBox.Ok):
+                    with contextlib.suppress(Exception):
+                        runtime_state.clear_error("chamber", self.ch)
+            box.finished.connect(_ack_to_idle)
 
         box.open()
 

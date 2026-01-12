@@ -1579,11 +1579,21 @@ class PlasmaCleaningRuntime:
         try:
             ch = int(getattr(self, "_selected_ch", 1))
 
-            if ok:
+            if ok or stopped:
                 runtime_state.clear_error("pc", ch)
             else:
-                _reason = "사용자 STOP" if stopped else (reason or "error")
+                _reason = (reason or "error")
                 runtime_state.set_error("pc", ch, _reason)
+
+                try:
+                    self._post_critical(
+                        f"CH{ch} Plasma Cleaning 실패",
+                        f"사유: {_reason}\n\n확인을 누르면 상태 표시가 Idle로 변경됩니다.",
+                        clear_status_to_idle=True,
+                        ch=ch,
+                    )
+                except Exception:
+                    pass
 
             runtime_state.mark_finished("pc", ch)
 
