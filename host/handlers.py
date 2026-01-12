@@ -882,44 +882,44 @@ class HostHandlers:
         else:
             return self._fail(f"지원하지 않는 CH: {ch}")
 
-        lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
-        async with lock:  # CH 절차 충돌 방지는 유지
-            async with self._plc_command(f"GATE_OPEN_CH{ch}"):
-                self._log_client_request(data)
-                try:
-                    # ✅ (추가-1) Loadlock이 vacuum on/off 전환 상태인지 체크
-                    ok_ll, msg_ll, snap = await self._require_loadlock_safe_for_gate_open()
-                    if not ok_ll:
-                        return self._fail(msg_ll)
+        async with self.ctx.lock_ch1:
+            async with self.ctx.lock_ch2:
+                async with self._plc_command(f"GATE_OPEN_CH{ch}"):
+                    self._log_client_request(data)
+                    try:
+                        # ✅ (추가-1) Loadlock이 vacuum on/off 전환 상태인지 체크
+                        ok_ll, msg_ll, snap = await self._require_loadlock_safe_for_gate_open()
+                        if not ok_ll:
+                            return self._fail(msg_ll)
 
-                    # ✅ (추가-2) 다른 챔버 gate가 열려있거나(또는 closed가 아니면) 금지
-                    other = 2 if ch == 1 else 1
-                    other_st = await self._read_gate_state(other)
-                    if other_st["state"] != "closed":
-                        return self._fail(
-                            f"다른 챔버 Gate가 CLOSED가 아님: CH{other}={other_st['state']} → CH{ch}_GATE_OPEN 불가"
-                        )
+                        # ✅ (추가-2) 다른 챔버 gate가 열려있거나(또는 closed가 아니면) 금지
+                        other = 2 if ch == 1 else 1
+                        other_st = await self._read_gate_state(other)
+                        if other_st["state"] != "closed":
+                            return self._fail(
+                                f"다른 챔버 Gate가 CLOSED가 아님: CH{other}={other_st['state']} → CH{ch}_GATE_OPEN 불가"
+                            )
 
-                    # 1) 인터락 확인 — 읽는 순간만 락
-                    async with self._plc_call():
-                        il = await self.ctx.plc.read_bit(interlock)
-                    if not il:
-                        return self._fail(f"{interlock}=FALSE → CH{ch}_GATE_OPEN 불가")
+                        # 1) 인터락 확인 — 읽는 순간만 락
+                        async with self._plc_call():
+                            il = await self.ctx.plc.read_bit(interlock)
+                        if not il:
+                            return self._fail(f"{interlock}=FALSE → CH{ch}_GATE_OPEN 불가")
 
-                    # 2) 펄스 — 쓰는 순간만 락
-                    async with self._plc_call():
-                        await self.ctx.plc.press_switch(sw)
+                        # 2) 펄스 — 쓰는 순간만 락
+                        async with self._plc_call():
+                            await self.ctx.plc.press_switch(sw)
 
-                    # 3) 대기(락 없음)
-                    await asyncio.sleep(wait_s)
+                        # 3) 대기(락 없음)
+                        await asyncio.sleep(wait_s)
 
-                    # 4) 램프 확인 — 읽는 순간만 락
-                    async with self._plc_call():
-                        ok = await self.ctx.plc.read_bit(lamp)
-                    return self._ok(f"CH{ch}_GATE_OPEN 완료 — {lamp}=TRUE (대기 {int(wait_s)}s)") if ok \
-                        else self._fail(f"CH{ch}_GATE_OPEN 실패 — {lamp}=FALSE (대기 {int(wait_s)}s)")
-                except Exception as e:
-                    return self._fail(e)
+                        # 4) 램프 확인 — 읽는 순간만 락
+                        async with self._plc_call():
+                            ok = await self.ctx.plc.read_bit(lamp)
+                        return self._ok(f"CH{ch}_GATE_OPEN 완료 — {lamp}=TRUE (대기 {int(wait_s)}s)") if ok \
+                            else self._fail(f"CH{ch}_GATE_OPEN 실패 — {lamp}=FALSE (대기 {int(wait_s)}s)")
+                    except Exception as e:
+                        return self._fail(e)
 
 
     async def gate_close(self, data: Json) -> Json:
@@ -1000,6 +1000,11 @@ class HostHandlers:
         """
         ch = int(data.get("ch", 1))
         timeout_s = float(data.get("wait_s", 60.0))
+
+        # 🔹 공정 실행 중이면 Chuck 조작 금지 (chuck_up과 동일하게)
+        busy = self._fail_if_ch_busy(ch, f"CH{ch}_CHUCK_DOWN")
+        if busy is not None:
+            return busy
 
         if ch == 1:
             return await self._move_chuck(
