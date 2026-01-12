@@ -81,7 +81,35 @@ class DailyCommandCsvLogger:
                 # NAS 실패 → 로컬 폴백
                 local = (Path.cwd() / "Logs" / "PLC_Remote" / fn.name)
                 local.parent.mkdir(parents=True, exist_ok=True)
+
+                # 1) 원래 row는 로컬에 저장
                 await asyncio.to_thread(self._write_row_sync, local, row)
+
+                # 2) "NAS에 누락됨" marker row를 로컬 CSV에 1줄 추가
+                try:
+                    def _cut(s: str, n: int = 500) -> str:
+                        return s if len(s) <= n else s[:n] + "...(truncated)"
+
+                    marker = {
+                        "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "peer": str(row.get("peer", "")),
+                        "request_id": str(row.get("request_id", "")),
+                        "req_command": "__NAS_MISSING__",
+                        "req_data_json": "",
+                        "res_command": "",
+                        "res_result": "WARN",
+                        "res_message": _cut(
+                            f"NAS write failed -> saved to local only. "
+                            f"(NAS may be missing this request) "
+                            f"cmd={row.get('req_command','')} id={row.get('request_id','')} "
+                            f"nas={fn} local={local} reason={e!r}"
+                        ),
+                        "res_data_json": "",
+                        "duration_ms": str(row.get("duration_ms", "")),
+                    }
+                    await asyncio.to_thread(self._write_row_sync, local, marker)
+                except Exception:
+                    pass
 
 class HostServer:
     def __init__(self, host: str, port: int, router: Router, log: LogFn) -> None:
@@ -116,6 +144,15 @@ class HostServer:
         peer = writer.get_extra_info("peername")
         self.log("NET", f"Client connected: {peer}")
         try:
+            def _safe_json(obj: Any) -> str:
+                try:
+                    return json.dumps(obj, ensure_ascii=False, default=str)
+                except Exception as je:
+                    return f"<<JSON_DUMP_ERROR {je!r}>> {repr(obj)[:300]}"
+
+            def _cut(s: str, n: int = 500) -> str:
+                return s if len(s) <= n else s[:n] + "...(truncated)"
+
             while True:
                 # 1) 헤더
                 header = await self._read_exact(reader, HEADER_SIZE)
@@ -181,6 +218,24 @@ class HostServer:
 
                 # (B) command 미지정/공백도 표준 실패 응답
                 if not cmd:
+                    # ✅ CSV에 1줄 남기기 (continue 전에)
+                    try:
+                        row = {
+                            "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "peer": str(peer),
+                            "request_id": req_id,
+                            "req_command": "__MISSING_COMMAND__",
+                            "req_data_json": _safe_json(obj),  # 요청 전문을 남겨두면 원인추적 쉬움
+                            "res_command": "UNKNOWN_RESULT",
+                            "res_result": "fail",
+                            "res_message": "Missing 'command' in request",
+                            "res_data_json": "",
+                            "duration_ms": 0,
+                        }
+                        await self._cmd_csv.append(row)
+                    except Exception:
+                        pass
+
                     packet = pack_message("UNKNOWN_RESULT", {
                         "request_id": req_id,
                         "data": {"result": "fail", "message": "Missing 'command' in request"}
@@ -197,23 +252,47 @@ class HostServer:
                     res_cmd, res_data = f"{cmd}_RESULT", {"result": "fail", "message": str(e)}
                 dt_ms = int((time.perf_counter() - t0) * 1000)
 
-                # ✅ 하루 1개 CSV에 누적 기록 (요청+응답 한 줄)
-                row = {
-                    "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                    "peer": str(peer),
-                    "request_id": req_id,
-                    "req_command": cmd,
-                    "req_data_json": json.dumps(data, ensure_ascii=False),
-                    "res_command": res_cmd,
-                    "res_result": str(res_data.get("result", "")),
-                    "res_message": str(res_data.get("message", "")),
-                    "res_data_json": json.dumps(res_data, ensure_ascii=False),
-                    "duration_ms": dt_ms,
-                }
                 try:
+                    # res_data가 dict가 아니면 .get에서 터지므로 방어
+                    if not isinstance(res_data, dict):
+                        res_data = {
+                            "result": "fail",
+                            "message": f"Handler returned non-dict: {type(res_data).__name__}",
+                            "raw": repr(res_data),
+                        }
+
+                    row = {
+                        "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "peer": str(peer),
+                        "request_id": req_id,
+                        "req_command": cmd,
+                        "req_data_json": _safe_json(data),
+                        "res_command": res_cmd,
+                        "res_result": str(res_data.get("result", "")),
+                        "res_message": str(res_data.get("message", "")),
+                        "res_data_json": _safe_json(res_data),
+                        "duration_ms": dt_ms,
+                    }
                     await self._cmd_csv.append(row)
-                except Exception as e:
-                    self.log("NET", f"[LOG_ERROR] failed to append daily CSV: {e!r}")
+
+                except Exception as log_e:
+                    # ✅ 로깅 자체가 실패했을 때도 CSV에 1줄 남김
+                    try:
+                        err_row = {
+                            "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "peer": str(peer),
+                            "request_id": req_id,
+                            "req_command": cmd or "__UNKNOWN__",
+                            "req_data_json": _safe_json(data),
+                            "res_command": "__LOGGING_EXCEPTION__",
+                            "res_result": "fail",
+                            "res_message": _cut(f"Failed to build/append csv row: {log_e!r}", 500),
+                            "res_data_json": _safe_json({"res_cmd": res_cmd, "res_data_repr": repr(res_data)}),
+                            "duration_ms": dt_ms if isinstance(dt_ms, int) else 0,
+                        }
+                        await self._cmd_csv.append(err_row)
+                    except Exception:
+                        pass
 
                 packet = pack_message(res_cmd, {"request_id": req_id, "data": res_data})
                 writer.write(packet)
