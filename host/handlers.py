@@ -583,7 +583,7 @@ class HostHandlers:
         """
         not_closed = []
         for ch in (1, 2):
-            st = await self._require_gates_closed(ch)
+            st = await self._read_gate_state(ch)
             if st["state"] != "closed":              # ✅ dict에서 state 사용
                 not_closed.append((ch, st["state"]))
 
