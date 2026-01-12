@@ -197,10 +197,6 @@ class HostServer:
                     res_cmd, res_data = f"{cmd}_RESULT", {"result": "fail", "message": str(e)}
                 dt_ms = int((time.perf_counter() - t0) * 1000)
 
-                packet = pack_message(res_cmd, {"request_id": req_id, "data": res_data})
-                writer.write(packet)
-                await writer.drain()
-
                 # ✅ 하루 1개 CSV에 누적 기록 (요청+응답 한 줄)
                 row = {
                     "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -219,8 +215,12 @@ class HostServer:
                 except Exception as e:
                     self.log("NET", f"[LOG_ERROR] failed to append daily CSV: {e!r}")
 
+                packet = pack_message(res_cmd, {"request_id": req_id, "data": res_data})
+                writer.write(packet)
+                await writer.drain()
+
                 # === 서버 → 클라이언트 응답 로그 ===
-                # 내가 어떤 응답을 보냈는지 Plasma Cleaning 로그창에 남김
+                # 내가 어떤 응답을 보냈는지 server 로그창에 남김
                 try:
                     self.log(
                         "PLC_HOST",  # 필요시 "NET" 으로 변경 가능
