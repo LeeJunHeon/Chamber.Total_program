@@ -77,7 +77,7 @@ class DailyCommandCsvLogger:
         async with lock:
             try:
                 await asyncio.to_thread(self._write_row_sync, fn, row)
-            except Exception:
+            except Exception as e:
                 # NAS 실패 → 로컬 폴백
                 local = (Path.cwd() / "Logs" / "PLC_Remote" / fn.name)
                 local.parent.mkdir(parents=True, exist_ok=True)
@@ -185,14 +185,32 @@ class HostServer:
                         except Exception:
                             pass
 
-                    # 요청 ID 추출 불가 시 빈 문자열로 회신
+                    # ✅ CSV에 1줄 남기기 (continue 전에)
+                    try:
+                        bad_txt = body.decode("utf-8", errors="replace")
+                        row = {
+                            "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                            "peer": str(peer),
+                            "request_id": "",
+                            "req_command": "__INVALID_JSON__",
+                            "req_data_json": _cut(bad_txt, 500),
+                            "res_command": "PARSE_ERROR_RESULT",
+                            "res_result": "fail",
+                            "res_message": _cut(f"Invalid JSON: {e!r}", 500),
+                            "res_data_json": "",
+                            "duration_ms": 0,
+                        }
+                        await self._cmd_csv.append(row)
+                    except Exception:
+                        pass
+
                     packet = pack_message("PARSE_ERROR_RESULT", {
                         "request_id": "",
                         "data": {"result": "fail", "message": f"Invalid JSON: {e}"}
                     })
                     writer.write(packet)
                     await writer.drain()
-                    continue  # 다음 요청 대기
+                    continue
 
                 req_id = str(obj.get("request_id", ""))
                 cmd = str(obj.get("command", ""))
