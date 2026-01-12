@@ -866,7 +866,7 @@ class PlasmaCleaningRuntime:
                 while True:
                     if self._stop_requested:
                         stopped_final = True
-                        ok_final = False  # ✅ 사용자 STOP은 비정상 종료 → error
+                        ok_final = False  # STOP은 success는 아니지만, stopped_final=True로 처리되어 error 상태는 아님(idle)
                         final_reason = "사용자 STOP"
                         break
 
@@ -970,7 +970,7 @@ class PlasmaCleaningRuntime:
         if not gv_ok:
             msg = f"게이트밸브 인터락 FALSE (G_V_{ch}_인터락=FALSE) → LoadLock의 압력을 확인하십시오."
             self.append_log("PLC", msg)
-            self._post_warning("게이트밸브 인터락", msg)
+            self._post_critical("게이트밸브 인터락", msg, clear_status_to_idle=True, ch=ch)
             self._host_report_start(False, msg)
 
             with contextlib.suppress(Exception):
@@ -1694,6 +1694,43 @@ class PlasmaCleaningRuntime:
             box.open()
         except Exception as e:
             self.append_log("PC", f"[경고] {title}: {text} ({e!s})")
+
+    def _post_critical(
+        self,
+        title: str,
+        text: str,
+        *,
+        clear_status_to_idle: bool = False,
+        ch: Optional[int] = None,
+    ) -> None:
+        """
+        공정 실패/인터락 등 '에러 상태'를 사용자에게 확실히 알리고,
+        사용자가 OK를 눌렀을 때만 runtime_state error를 해제해서 idle로 복귀시키는 팝업.
+        - auto-close 없음 (계속 떠있음)
+        - 비모달 + 참조 보관(_msg_boxes)으로 GC 방지
+        """
+        try:
+            box = QMessageBox(self.ui)
+            box.setIcon(QMessageBox.Critical)
+            box.setWindowTitle(title)
+            box.setText(str(text))
+            box.setStandardButtons(QMessageBox.Ok)
+            box.setModal(False)
+
+            # ✅ OK 눌렀을 때만 idle로 복귀
+            def _on_closed(result: int) -> None:
+                try:
+                    if clear_status_to_idle and result == int(QMessageBox.Ok):
+                        # ch 미지정이면 현재 선택 채널 사용
+                        _ch = int(ch) if ch is not None else int(getattr(self, "_selected_ch", 1))
+                        runtime_state.clear_error("pc", _ch)
+                except Exception:
+                    pass
+
+            self._msg_boxes.append(box)
+            box.open(_on_closed)   # show()가 아니라 open(callback)
+        except Exception:
+            pass
 
     # ===== 알림창 유틸: 챔버와 동일한 방식 =====
     def _has_ui(self) -> bool:
