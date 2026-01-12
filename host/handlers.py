@@ -498,19 +498,20 @@ class HostHandlers:
         # ✅ CH별 절차 충돌 방지 락 추가
         lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
         async with lock:
-            async with self._plc_command(f"START_SPUTTER_CH{ch}"):
-                self._log_client_request(data)
+            lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
+            async with lock:
+                async with self._plc_command(f"START_SPUTTER_CH{ch}"):
+                    self._log_client_request(data)
 
-                # ✅ sputter 시작 전: 해당 CH gate가 닫혀 있어야 함
-                st = await self._read_gate_state(ch)
-                if st["state"] != "closed":
-                    return self._fail(f"START_SPUTTER 불가 — CH{ch} gate가 CLOSED가 아님({st['state']})")
+                    st = await self._read_gate_state(ch)
+                    if st["state"] != "closed":
+                        return self._fail(f"START_SPUTTER 불가 — CH{ch} gate가 CLOSED가 아님({st['state']})")
 
-                try:
-                    await chamber.start_with_recipe_string(recipe)
-                    return self._ok("SPUTTER START OK", ch=ch)
-                except Exception as e:
-                    return self._fail(str(e))
+                    try:
+                        await chamber.start_with_recipe_string(recipe)
+                        return self._ok("SPUTTER START OK", ch=ch)
+                    except Exception as e:
+                        return self._fail(str(e))
 
     async def start_plasma_cleaning(self, data: Json) -> Json:
         """
