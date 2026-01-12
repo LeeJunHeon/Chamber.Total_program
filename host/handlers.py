@@ -500,6 +500,11 @@ class HostHandlers:
             # 클라이언트에서 넘어온 전체 data 그대로 남김
             self._log_client_request(data)
 
+            # ✅ (추가) sputter 시작 전: 해당 CH gate가 닫혀 있어야 함
+            st = await self._read_gate_state(ch)
+            if st["state"] != "closed":
+                return self._fail(f"START_SPUTTER 불가 — CH{ch} gate가 CLOSED가 아님({st['state']})")
+
             try:
                 # 챔버 런타임은 이미 host handshake가 구현되어 있어
                 # 프리플라이트 통과/실패가 명확히 옴
@@ -592,6 +597,32 @@ class HostHandlers:
             return False, f"Gate not closed → {detail} (VACUUM_ON/OFF 불가: 두 게이트 모두 CLOSED 필요)"
 
         return True, "CH1/CH2 gate 모두 CLOSED"
+    
+    async def _read_loadlock_state_for_gate_open(self) -> dict:
+        """
+        Gate Open 전에 확인할 Loadlock 상태 스냅샷.
+        """
+        async with self._plc_call():
+            return {
+                "L_VENT_SW": bool(await self.ctx.plc.read_bit("L_VENT_SW")),
+                "L_R_P_SW":  bool(await self.ctx.plc.read_bit("L_R_P_SW")),
+                "L_R_V_SW":  bool(await self.ctx.plc.read_bit("L_R_V_SW")),
+                "L_ATM":     bool(await self.ctx.plc.read_bit("L_ATM")),
+            }
+
+    async def _require_loadlock_safe_for_gate_open(self) -> tuple[bool, str, dict]:
+        """
+        Gate Open 전에 Loadlock이 vacuum on/off 전환 상태가 아닌지 확인.
+        조건(요구사항):
+        - L_VENT_SW, L_R_P_SW, L_R_V_SW, L_ATM 중 하나라도 TRUE면 금지
+        - L_VAC_READY_SW는 제외(검사하지 않음)
+        """
+        s = await self._read_loadlock_state_for_gate_open()
+        bad = [k for k, v in s.items() if v]
+        if bad:
+            detail = ", ".join([f"{k}=TRUE" for k in bad])
+            return False, f"Loadlock 상태상 GATE_OPEN 불가 ({detail})", s
+        return True, "Loadlock 상태 OK", s
 
     async def vacuum_on(self, data: Json) -> Json:
         """
@@ -856,6 +887,19 @@ class HostHandlers:
             async with self._plc_command(f"GATE_OPEN_CH{ch}"):
                 self._log_client_request(data)
                 try:
+                    # ✅ (추가-1) Loadlock이 vacuum on/off 전환 상태인지 체크
+                    ok_ll, msg_ll, snap = await self._require_loadlock_safe_for_gate_open()
+                    if not ok_ll:
+                        return self._fail(msg_ll)
+
+                    # ✅ (추가-2) 다른 챔버 gate가 열려있거나(또는 closed가 아니면) 금지
+                    other = 2 if ch == 1 else 1
+                    other_st = await self._read_gate_state(other)
+                    if other_st["state"] != "closed":
+                        return self._fail(
+                            f"다른 챔버 Gate가 CLOSED가 아님: CH{other}={other_st['state']} → CH{ch}_GATE_OPEN 불가"
+                        )
+
                     # 1) 인터락 확인 — 읽는 순간만 락
                     async with self._plc_call():
                         il = await self.ctx.plc.read_bit(interlock)
