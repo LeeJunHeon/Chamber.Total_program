@@ -495,30 +495,22 @@ class HostHandlers:
         if not chamber:
             return self._fail(f"Chamber CH{ch} runtime not ready")
         
-        # 🔹 여기부터 START_SPUTTER 전용 PLC_Remote 로그 파일 생성
-        async with self._plc_command(f"START_SPUTTER_CH{ch}"):
-            # 클라이언트에서 넘어온 전체 data 그대로 남김
-            self._log_client_request(data)
+        # ✅ CH별 절차 충돌 방지 락 추가
+        lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
+        async with lock:
+            async with self._plc_command(f"START_SPUTTER_CH{ch}"):
+                self._log_client_request(data)
 
-            # ✅ (추가) sputter 시작 전: 해당 CH gate가 닫혀 있어야 함
-            st = await self._read_gate_state(ch)
-            if st["state"] != "closed":
-                return self._fail(f"START_SPUTTER 불가 — CH{ch} gate가 CLOSED가 아님({st['state']})")
+                # ✅ sputter 시작 전: 해당 CH gate가 닫혀 있어야 함
+                st = await self._read_gate_state(ch)
+                if st["state"] != "closed":
+                    return self._fail(f"START_SPUTTER 불가 — CH{ch} gate가 CLOSED가 아님({st['state']})")
 
-            try:
-                # 챔버 런타임은 이미 host handshake가 구현되어 있어
-                # 프리플라이트 통과/실패가 명확히 옴
-                await chamber.start_with_recipe_string(recipe)
-
-                # 여기까지 왔다는 것은:
-                #  - 프리플라이트 OK
-                #  - 교차실행/쿨다운 체크 OK
-                #  - 실제 공정은 런타임 내부에서 비동기로 계속 진행 중
-                return self._ok("SPUTTER START OK", ch=ch)
-            except Exception as e:
-                # start_with_recipe_string 안에서 _host_report_start(False, reason) 이 오면
-                # RuntimeError(reason)이 올라오므로 그대로 문자열만 넘겨줌
-                return self._fail(str(e))
+                try:
+                    await chamber.start_with_recipe_string(recipe)
+                    return self._ok("SPUTTER START OK", ch=ch)
+                except Exception as e:
+                    return self._fail(str(e))
 
     async def start_plasma_cleaning(self, data: Json) -> Json:
         """
