@@ -2175,11 +2175,7 @@ class ChamberRuntime:
             params["G2 Target"] = vals.get("G2_target_name", "")
             params["G3 Target"] = vals.get("G3_target_name", "")
 
-            # ✅ Start 수락 즉시 RUNNING + error clear (프리플라이트 전에 상태부터 올림)
-            with contextlib.suppress(Exception):
-                runtime_state.mark_started("chamber", self.ch)
-
-            # ❌ 여기서는 파일을 열지 않습니다. (started 이벤트에서 1회 오픈)
+            # ❌ 여기서는 running 마킹하지 않음 (공통 진입점 _safe_start_process에서 1회만 수행)
             self.append_log("MAIN", "입력 검증 통과 → 장비 연결 확인 시작")
             self._safe_start_process(cast(NormParams, params))
         except Exception as e:

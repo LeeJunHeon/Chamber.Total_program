@@ -1268,9 +1268,11 @@ class PlasmaCleaningRuntime:
         self._running = bool(is_running)
         ch = int(getattr(self, "_selected_ch", 1) or 1)
 
-        # runtime_state 반영(PC만)
+        # runtime_state 반영(PC만) - ✅ 값이 바뀔 때만 set (불필요한 중복 제거)
         with contextlib.suppress(Exception):
-            runtime_state.set_running("pc", self._running, ch)
+            cur = bool(runtime_state.is_running("pc", ch))
+            if cur != self._running:
+                runtime_state.set_running("pc", self._running, ch)
 
         # 버튼/UI 반영
         if self._running:
