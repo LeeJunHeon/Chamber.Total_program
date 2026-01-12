@@ -21,7 +21,7 @@ class HostHandlers:
     def __init__(self, ctx: HostContext) -> None:
         self.ctx = ctx
 
-    # ================== 로그 저장 헬퍼 ==================
+        # ================== 로그 저장 헬퍼 ==================
         # NAS 우선, 실패 시 로컬 폴백 디렉터리 준비
         try:
             root = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs")
@@ -444,7 +444,8 @@ class HostHandlers:
 
             plc = self.ctx.plc
             try:
-                addr = int(plc._addr(key))  # type: ignore[attr-defined]
+                async with self._plc_call():
+                    v = await plc.read_bit(key)   # ✅ 표준 API로 통일
             except Exception as e:
                 return self._fail(f"PLC 주소맵에 {key}가 없습니다: {e}")
 
@@ -452,17 +453,7 @@ class HostHandlers:
                 # ✅ 클라이언트 요청 payload도 기록
                 self._log_client_request(payload or {})
 
-                # ✅ PLC I/O는 기존처럼 충돌 방지
-                async with self._plc_call():   # (lock_plc 직접 잡는 대신 기존 패턴 통일)
-                    v = await plc.read_coil(addr)
-
-                v = bool(v)
-
-                # (선택) 서버 UI 로그에 찍고 싶으면 주석 해제
-                # self.ctx.log("PLC_HOST", f"[GET_LOADING_{which}_SENSOR] value={v}")
-
-                # ✅ _ok()가 응답 로그를 파일에 남김
-                return self._ok("OK", value=v)
+            return self._ok("OK", value=bool(v))
 
         except Exception as e:
             return self._fail(e)
@@ -495,23 +486,26 @@ class HostHandlers:
         if not chamber:
             return self._fail(f"Chamber CH{ch} runtime not ready")
         
-        # ✅ CH별 절차 충돌 방지 락 추가
+        busy = self._fail_if_ch_busy(ch, f"START_SPUTTER_CH{ch}")
+        if busy is not None:
+            return busy
+
+        # ✅ CH별 절차 충돌 방지 락
         lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
         async with lock:
-            lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
-            async with lock:
-                async with self._plc_command(f"START_SPUTTER_CH{ch}"):
-                    self._log_client_request(data)
+            async with self._plc_command(f"START_SPUTTER_CH{ch}"):
+                self._log_client_request(data)
 
-                    st = await self._read_gate_state(ch)
-                    if st["state"] != "closed":
-                        return self._fail(f"START_SPUTTER 불가 — CH{ch} gate가 CLOSED가 아님({st['state']})")
+                st = await self._read_gate_state(ch)
+                if st["state"] != "closed":
+                    return self._fail(f"START_SPUTTER 불가 — CH{ch} gate가 CLOSED가 아님({st['state']})")
 
-                    try:
-                        await chamber.start_with_recipe_string(recipe)
-                        return self._ok("SPUTTER START OK", ch=ch)
-                    except Exception as e:
-                        return self._fail(str(e))
+                try:
+                    await chamber.start_with_recipe_string(recipe)
+                    return self._ok("SPUTTER START OK", ch=ch)
+                except Exception as e:
+                    return self._fail(str(e))
+
 
     async def start_plasma_cleaning(self, data: Json) -> Json:
         """
@@ -628,7 +622,7 @@ class HostHandlers:
         
         ✅ 추가:
         - 시작 전에 gate가 close인지 확인하고, 확인되면 다음 단계로 진행
-        (필요 시 data: auto_close_gate=True 로 자동 닫기 후 진행 가능)
+        (옵션 없음: gate가 CLOSED가 아니면 즉시 실패 반환)
         - 실패/예외/타임아웃 포함 어떤 경로든 L_R_P_SW/L_R_V_SW OFF 원복 보장
         """
         timeout_s = float(data.get("timeout_s", 600.0))  # 기본 10분
@@ -638,25 +632,26 @@ class HostHandlers:
 
             success = False
             try:
-                # ✅ (A) gate close 확인 (닫혀있어야 다음 단계로 진행)
-                ok, msg = await self._require_gates_closed()
-                if not ok:
-                    return self._fail(msg)
+                # ✅ gate_open 레이스 방지: loadlock 스위치 ON 전까지만 잠깐 락
+                async with self.ctx.lock_ch1:
+                    async with self.ctx.lock_ch2:
+                        ok, msg = await self._require_gates_closed()
+                        if not ok:
+                            return self._fail(msg)
 
-                # 0) 벤트 OFF
-                async with self._plc_call():
-                    await self.ctx.plc.write_switch("L_VENT_SW", False)
-                await asyncio.sleep(0.3)
+                        # 0) 벤트 OFF
+                        async with self._plc_call():
+                            await self.ctx.plc.write_switch("L_VENT_SW", False)
+                        await asyncio.sleep(0.3)
 
-                # 0-1) 러핑펌프 OFF 타이머 체크
-                async with self._plc_call():
-                    if await self.ctx.plc.read_bit("L_R_P_OFF_TIMER"):
-                        return self._fail("러핑펌프 OFF 타이머 진행 중 → 잠시 후 재시도")
+                        # 0-1) 러핑펌프 OFF 타이머 체크
+                        async with self._plc_call():
+                            if await self.ctx.plc.read_bit("L_R_P_OFF_TIMER"):
+                                return self._fail("러핑펌프 OFF 타이머 진행 중 → 잠시 후 재시도")
 
-                # 1) 러핑펌프 ON
-                async with self._plc_call():
-                    await self.ctx.plc.write_switch("L_R_P_SW", True)
-                await asyncio.sleep(3.0)
+                        # 1) 러핑펌프 ON  ← 여기까지 오면 gate_open이 이제 확실히 차단됨(L_R_P_SW TRUE)
+                        async with self._plc_call():
+                            await self.ctx.plc.write_switch("L_R_P_SW", True)
 
                 # 2) 러핑밸브 인터락
                 async with self._plc_call():
@@ -729,31 +724,33 @@ class HostHandlers:
         """
         timeout_s = float(data.get("timeout_s", 240.0))
 
-        async with self._plc_command("VACUUM_OFF"):  # 요청별 로그 파일명 고정
+        async with self._plc_command("VACUUM_OFF"):
             self._log_client_request(data)
 
             success = False
             try:
-                # ✅ (A) gate close 확인 (닫혀있어야 다음 단계로 진행)
-                ok, msg = await self._require_gates_closed()
-                if not ok:
-                    return self._fail(msg)
-    
-                # 0) 러핑밸브/펌프 OFF (I/O 순간만 락)
-                async with self._plc_call():
-                    await self.ctx.plc.write_switch("L_R_V_SW", False)
-                await asyncio.sleep(3.0)  # 3초 텀
-                async with self._plc_call():
-                    await self.ctx.plc.write_switch("L_R_P_SW", False)
+                # ✅ gate_open 레이스 방지: VENT_SW TRUE 쓰기 전까지만 잠깐 락
+                async with self.ctx.lock_ch1:
+                    async with self.ctx.lock_ch2:
+                        ok, msg = await self._require_gates_closed()
+                        if not ok:
+                            return self._fail(msg)
 
-                # 1) 벤트 인터락 확인 (읽기 순간만 락)
-                async with self._plc_call():
-                    if not await self.ctx.plc.read_bit("L_VENT_인터락"):
-                        return self._fail("L_VENT_인터락=FALSE → 벤트 불가")
+                        # 0) 러핑밸브/펌프 OFF
+                        async with self._plc_call():
+                            await self.ctx.plc.write_switch("L_R_V_SW", False)
+                        await asyncio.sleep(3.0)
+                        async with self._plc_call():
+                            await self.ctx.plc.write_switch("L_R_P_SW", False)
 
-                # 2) 벤트 ON (쓰기 순간만 락)
-                async with self._plc_call():
-                    await self.ctx.plc.write_switch("L_VENT_SW", True)
+                        # 1) 벤트 인터락 확인
+                        async with self._plc_call():
+                            if not await self.ctx.plc.read_bit("L_VENT_인터락"):
+                                return self._fail("L_VENT_인터락=FALSE → 벤트 불가")
+
+                        # 2) 벤트 ON  ← 여기까지 오면 gate_open이 이제 확실히 차단됨(L_VENT_SW TRUE)
+                        async with self._plc_call():
+                            await self.ctx.plc.write_switch("L_VENT_SW", True)
 
                 # 3) L_ATM TRUE 대기 (폴링 루프는 락 없이, 읽을 때만 짧게)
                 deadline = time.monotonic() + timeout_s
@@ -918,9 +915,9 @@ class HostHandlers:
     async def gate_close(self, data: Json) -> Json:
         """
         CHx_GATE_CLOSE 시퀀스:
-        1) G_V_{ch}_인터락 == True 확인
-        2) G_V_{ch}_CLOSE_SW = True
-        3) 5초 후 G_V_{ch}_CLOSE_LAMP == True 확인
+        1) G_V_{ch}_CLOSE_SW 펄스
+        2) wait_s 후 G_V_{ch}_CLOSE_LAMP 확인
+        (※ gate close는 interlock 체크를 하지 않도록 설계)
         """
         ch = int(data.get("ch", 1))
         wait_s = float(data.get("wait_s", 5.0))  # 기본 5초
@@ -1024,9 +1021,7 @@ class HostHandlers:
 
         async with self._plc_call():
             up  = bool(await self.ctx.plc.read_bit(l_up))
-        async with self._plc_call():
             mid = bool(await self.ctx.plc.read_bit(l_mid))
-        async with self._plc_call():
             dn  = bool(await self.ctx.plc.read_bit(l_dn))
 
         pos = "unknown"
