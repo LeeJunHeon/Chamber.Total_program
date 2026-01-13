@@ -66,6 +66,6 @@ async def install_host(*,
     r.register("CH2_CHUCK_DOWN", lambda d: h.chuck_down({**d, "ch": 2}))
 
     # 서버 기동
-    server = HostServer(host, port, r, log)
+    server = HostServer(host, port, r, log, chat=chat, popup=popup)
     await server.start()
     return HostHandle(server)

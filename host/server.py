@@ -11,6 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any
 from .protocol import HEADER_SIZE, unpack_header, pack_message, PROTOCOL_VERSION
+from util.error_reporter import notify_all, build_fail_payload
 from .router import Router
 
 Json = Dict[str, Any]
@@ -112,11 +113,13 @@ class DailyCommandCsvLogger:
                     pass
 
 class HostServer:
-    def __init__(self, host: str, port: int, router: Router, log: LogFn) -> None:
+    def __init__(self, host: str, port: int, router: Router, log: LogFn, chat=None, popup=None) -> None:
         self.host = host
         self.port = port
         self.router = router
         self.log = log
+        self.chat = chat
+        self.popup = popup
         self._server: Optional[asyncio.AbstractServer] = None
         self._cmd_csv = DailyCommandCsvLogger()
 
@@ -204,9 +207,18 @@ class HostServer:
                     except Exception:
                         pass
 
+                    fail = notify_all(
+                        log=self.log,
+                        chat=self.chat,
+                        popup=self.popup,
+                        src="HOST",
+                        code="E104",
+                        message=f"Invalid JSON: {e}",
+                    )
+
                     packet = pack_message("PARSE_ERROR_RESULT", {
                         "request_id": "",
-                        "data": {"result": "fail", "message": f"Invalid JSON: {e}"}
+                        "data": fail
                     })
                     writer.write(packet)
                     await writer.drain()
@@ -254,9 +266,18 @@ class HostServer:
                     except Exception:
                         pass
 
+                    fail = notify_all(
+                        log=self.log,
+                        chat=self.chat,
+                        popup=self.popup,
+                        src="HOST",
+                        code="E105",
+                        message="Missing 'command' in request",
+                    )
+
                     packet = pack_message("UNKNOWN_RESULT", {
                         "request_id": req_id,
-                        "data": {"result": "fail", "message": "Missing 'command' in request"}
+                        "data": fail
                     })
                     writer.write(packet)
                     await writer.drain()
@@ -266,18 +287,50 @@ class HostServer:
                 try:
                     res_cmd, res_data = await self.router.dispatch(cmd, data)
                 except Exception as e:
-                    self.log("NET", f"Handler error for {cmd}: {e}\n{traceback.format_exc()}")
-                    res_cmd, res_data = f"{cmd}_RESULT", {"result": "fail", "message": str(e)}
+                    tb = traceback.format_exc()
+                    self.log("NET", f"Handler error for {cmd}: {e}\n{tb}")
+
+                    # ✅ 여기서 에러코드 시스템을 강제로 태움 (E110)
+                    fail = notify_all(
+                        log=self.log,
+                        chat=self.chat,
+                        popup=self.popup,
+                        src="HOST",
+                        code="E110",
+                        message=f"{cmd} handler crash: {type(e).__name__}: {e}",
+                    )
+                    res_cmd, res_data = f"{cmd}_RESULT", fail
+
                 dt_ms = int((time.perf_counter() - t0) * 1000)
 
                 try:
-                    # res_data가 dict가 아니면 .get에서 터지므로 방어
+                    # res_data가 dict가 아니면 방어
                     if not isinstance(res_data, dict):
-                        res_data = {
-                            "result": "fail",
-                            "message": f"Handler returned non-dict: {type(res_data).__name__}",
-                            "raw": repr(res_data),
-                        }
+                        res_data = notify_all(
+                            log=self.log,
+                            chat=self.chat,
+                            popup=self.popup,
+                            src="HOST",
+                            code="E110",
+                            message=f"Handler returned non-dict: {type(res_data).__name__} raw={repr(res_data)}",
+                        )
+
+                    # ✅ fail인데 error_code 없으면 여기서 보강 (특히 Unknown command)
+                    if isinstance(res_data, dict) and res_data.get("result") == "fail" and "error_code" not in res_data:
+                        msg = str(res_data.get("message", "") or "")
+
+                        forced = None
+                        if msg.startswith("Unknown command"):
+                            forced = "E106"
+
+                        res_data = notify_all(
+                            log=self.log,
+                            chat=self.chat,
+                            popup=self.popup,
+                            src="HOST",
+                            code=forced,   # forced가 None이면 message 기반 자동추정
+                            message=msg,
+                        )
 
                     row = {
                         "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
