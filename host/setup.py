@@ -33,11 +33,14 @@ async def install_host(*,
     ch2: Any,
     pc: Any,
     runtime_state: Any,
+    chat=None,
+    popup=None
 ) -> HostHandle:
     # 컨텍스트/락
     ctx = HostContext(
         log=log, plc=plc, ch1=ch1, ch2=ch2, pc=pc, runtime_state=runtime_state,
-        lock_plc=asyncio.Lock(), lock_ch1=asyncio.Lock(), lock_ch2=asyncio.Lock()
+        lock_plc=asyncio.Lock(), lock_ch1=asyncio.Lock(), lock_ch2=asyncio.Lock(),
+        chat=chat, popup=popup,
     )
 
     # 핸들러/라우터

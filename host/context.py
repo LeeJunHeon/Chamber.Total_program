@@ -7,11 +7,11 @@
 """
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Any, Callable
+from typing import Any, Callable, Optional
 import asyncio
 
 LogFn = Callable[[str, str], None]
-
+PopupFn = Callable[[str, str], None]
 
 @dataclass
 class HostContext:
@@ -24,3 +24,6 @@ class HostContext:
     lock_plc: asyncio.Lock
     lock_ch1: asyncio.Lock
     lock_ch2: asyncio.Lock
+
+    chat: Optional[Any] = None
+    popup: Optional[PopupFn] = None

@@ -13,6 +13,7 @@ import asyncio, time, contextlib
 from pathlib import Path                      # ← 추가: 경로
 from datetime import datetime                 # ← 추가: 파일명 타임스탬프
 from contextlib import asynccontextmanager    # ← 추가: 비동기 컨텍스트
+from util.error_reporter import notify_all
 
 Json = Dict[str, Any]
 
@@ -208,9 +209,23 @@ class HostHandlers:
         self._log_client_response(res)
         return res
 
-    def _fail(self, e: Exception | str) -> Json:
-        """실패 응답(Json)을 만들면서, 현재 PLC 명령 컨텍스트라면 응답도 로그 파일에 남긴다."""
-        res: Json = {"result": "fail", "message": str(e)}
+    def _fail(
+        self,
+        e: Exception | str,
+        *,
+        code: str | None = None,
+        detail: Any | None = None,
+        src: str = "HOST",
+    ) -> Json:
+        base = detail if detail is not None else e
+        res: Json = notify_all(
+            log=self.ctx.log,
+            chat=getattr(self.ctx, "chat", None),
+            popup=getattr(self.ctx, "popup", None),
+            src=src,
+            code=code,
+            message=base,
+        )
         self._log_client_response(res)
         return res
 
