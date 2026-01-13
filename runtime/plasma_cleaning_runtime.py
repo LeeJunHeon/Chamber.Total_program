@@ -89,6 +89,15 @@ class PlasmaCleaningRuntime:
         self._pc_gas_idx: Optional[int] = None  # ← PC에서 선택된 gas_idx 저장(스케일 계산용)
 
         self._rf_target_evt = asyncio.Event()   # ★ 목표 도달 이벤트 대기용
+        
+        # ★ 추가: RF 목표 대기 결과(성공/실패)와 사유를 명확히 저장
+        self._rf_target_ok: Optional[bool] = None
+        self._rf_target_reason: str = ""
+
+        # ★ 추가(권장): RF 실패가 "stop"으로 오염되는 것 방지용 최종 보정 플래그
+        self._forced_fail: bool = False
+        self._forced_fail_reason: Optional[str] = None
+
         self._state_header: str = ""            # ★ 현재 단계 제목 보관
 
         # ▶ 공정(Process) 타이머 활성화 여부 (SP4/IG 대기는 False)
@@ -226,31 +235,41 @@ class PlasmaCleaningRuntime:
                 elif ev.kind == "target_reached":  
                     # RF 목표 파워 도달 (FWD가 setpoint 근처)
                     self.append_log("RF", "목표 파워 도달")
+                    
+                    # ★ 성공 결과 저장
+                    self._rf_target_ok = True
+                    self._rf_target_reason = ""
+
                     self._rf_target_evt.set()
 
-                elif ev.kind == "target_failed":         
-                    # ★ 여기서부터: ref.p 과다 / forward power 너무 낮음 등으로
-                    # RFPowerAsync가 공정을 실패로 판정한 경우
+                elif ev.kind == "target_failed":
+                    # RFPowerAsync가 공정을 실패로 판정한 경우(REF.P 60초 초과, 저출력 등)
                     reason = ev.message or "RF 목표 파워 실패 (REF.P 과다 또는 저출력)"
-                    self.append_log("RF", f"목표 파워 실패: {reason}")    
+                    self.append_log("RF", f"목표 파워 실패: {reason}")
 
-                    # ▶ PlasmaCleaningController 쪽에 '실패' 결과를 직접 기록
+                    # ★ 실패 결과 저장 (이게 _rf_start()의 판단 근거가 됨)
+                    self._rf_target_ok = False
+                    self._rf_target_reason = reason
+
+                    # ★ (선택/권장) 최종 결과 보정을 위한 런타임 플래그도 저장
+                    self._forced_fail = True
+                    self._forced_fail_reason = reason
+
+                    # 컨트롤러에도 실패 결과 기록(사유 보존)
                     pc = getattr(self, "pc", None)
                     if pc is not None:
-                        try:
+                        with contextlib.suppress(Exception):
                             pc.last_result = "fail"
                             pc.last_reason = reason
 
-                            # 컨트롤러 내부 stop 이벤트(_stop_evt)를 올려서
-                            # process time 카운트다운에 들어가기 전에 정지되도록 함
-                            if hasattr(pc, "request_stop"):
+                            # ⚠️ 여기서 무조건 request_stop()을 걸면 컨트롤러가 "stop"으로 분류할 수 있음.
+                            #    start 단계(목표 대기 중)에는 _rf_start()가 CancelledError로 끊어주므로 굳이 stop 이벤트를 올릴 필요가 없음.
+                            #    공정 타이머가 이미 활성화된(= 실제 공정 진행 중) 경우에만 정지 신호를 올린다.
+                            if getattr(self, "_process_timer_active", False) and hasattr(pc, "request_stop"):
                                 pc.request_stop()
-                                self.append_log("PC", "RF 실패 감지 → PC 컨트롤러에 STOP 요청")
-                        except Exception:
-                            # 여기서 오류가 나더라도 공정 자체는 계속 종료 흐름으로 갈 수 있게 함
-                            pass
+                                self.append_log("PC", "RF 실패 감지(공정 중) → PC 컨트롤러에 STOP 요청")
 
-                    # RF 목표 도달/실패 대기 중인 _rf_start()도 깨워 주기
+                    # 목표 대기 중인 _rf_start()를 깨움(성공/실패 구분은 _rf_target_ok로)
                     self._rf_target_evt.set()
 
                 elif ev.kind == "power_off_finished":
@@ -537,18 +556,52 @@ class PlasmaCleaningRuntime:
         async def _rf_start(power_w: float) -> None:
             if not self.rf:
                 return
-            # ★ 목표 도달 이벤트 기다림 (타임아웃은 취향껏: 60s 예시)
+
+            # ★ 새 시작마다 결과/사유 초기화
+            self._rf_target_ok = None
+            self._rf_target_reason = ""
             self._rf_target_evt.clear()
 
             await self.rf.start_process(float(power_w))
 
             try:
                 await asyncio.wait_for(self._rf_target_evt.wait(), timeout=60.0)
-                self.append_log("RF", "목표 파워 안정 → 프로세스 타이머 시작 가능")
-                # ▶ 이제부터만 ProcessTime_edit에 카운트다운을 표시
-                self._process_timer_active = True
+
+                # ★ 이벤트가 왔으면 성공/실패를 반드시 구분한다
+                if self._rf_target_ok is False:
+                    reason = self._rf_target_reason or "RF 목표 파워 실패"
+                    self.append_log("RF", f"RF START 실패 확정: {reason}")
+
+                    if getattr(self, "pc", None):
+                        self.pc.last_result = "fail"
+                        self.pc.last_reason = reason
+
+                    # 안전 정지(램프다운)
+                    self._process_timer_active = False
+                    with contextlib.suppress(Exception):
+                        await self._safe_rf_stop()
+
+                    # 컨트롤러 쪽에는 “정상 중단” 형태로만 전달(스택트레이스/불필요 오류 방지)
+                    raise asyncio.CancelledError()
+
+                if self._rf_target_ok is True:
+                    self.append_log("RF", "목표 파워 안정 → 프로세스 타이머 시작 가능")
+                    self._process_timer_active = True
+                    return
+
+                # ★ 이벤트는 왔는데 플래그가 None이면(이상 케이스) 실패로 정리
+                reason = "RF START 실패: target 이벤트 수신했지만 결과 플래그 없음"
+                self.append_log("RF", reason)
+                if getattr(self, "pc", None):
+                    self.pc.last_result = "fail"
+                    self.pc.last_reason = reason
+                self._process_timer_active = False
+                with contextlib.suppress(Exception):
+                    await self._safe_rf_stop()
+                raise asyncio.CancelledError()
+
             except asyncio.TimeoutError:
-                # 마지막 FWD 값을 한 번 읽어서 원인 문구를 더 구체화(장비 OFF/SET 미설정 vs 단순 timeout)
+                # timeout일 때만 “마지막 FWD 기반” 문구 생성(진짜 이벤트가 안 온 케이스)
                 last_fwd = None
                 try:
                     meas = await self.plc.rf_read_fwd_ref(rf_ch=1) if self.plc else None
@@ -564,19 +617,16 @@ class PlasmaCleaningRuntime:
                 else:
                     reason = "RF Power 도달 실패: timeout 60s"
 
-                # 로그 + 컨트롤러에 '의도된 실패' 사유 전달
                 self.append_log("RF", reason)
                 if getattr(self, "pc", None):
                     self.pc.last_result = "fail"
                     self.pc.last_reason = reason
 
-                # 안전 정지까지 수행(램프다운 시도)
                 self._process_timer_active = False
                 with contextlib.suppress(Exception):
                     await self._safe_rf_stop()
-
-                # 컨트롤러 쪽에 스택트레이스 남기지 않도록 '정상적인 중단'으로만 신호
                 raise asyncio.CancelledError()
+
             except Exception as e:
                 reason = f"RF Power 도달 실패: {type(e).__name__}: {e!s}"
                 self.append_log("RF", reason)
@@ -764,6 +814,10 @@ class PlasmaCleaningRuntime:
         # ------------------------------------------------------------
 
         self._cleanup_started = False  # ★ 추가: 새 런마다 정리 가드 초기화
+
+        # ★ 추가(권장): RF 실패 보정 플래그 초기화
+        self._forced_fail = False
+        self._forced_fail_reason = None
 
         # start 버튼 중복 클릭 방지
         if getattr(self, "_running", False):
@@ -1053,6 +1107,14 @@ class PlasmaCleaningRuntime:
             else:
                 ok_final = (lr == "success")
                 final_reason = (None if ok_final else (ls or "runtime/controller error"))
+
+            # ★ 추가: RF쪽에서 강제 실패가 확정된 경우(stop으로 오염돼도 failed로 고정)
+            if getattr(self, "_forced_fail", False):
+                ok_final = False
+                stopped_final = False
+                ff = getattr(self, "_forced_fail_reason", None)
+                if ff:
+                    final_reason = str(ff)
 
             # ✅ 최종 보정: 컨트롤러가 success라고 했으면 사용자 STOP/실패로 뒤집히지 않게 보정
             if (lr == "success") and (not self._stop_requested):
@@ -1556,6 +1618,14 @@ class PlasmaCleaningRuntime:
         self._state_header = ""
         with contextlib.suppress(Exception):
             self._rf_target_evt.clear()
+
+        # ★ 추가: RF 목표 결과/사유 리셋(다음 런에서 stale 값 방지)
+        self._rf_target_ok = None
+        self._rf_target_reason = ""
+
+        # ★ 추가(권장): 최종 보정 플래그도 리셋
+        self._forced_fail = False
+        self._forced_fail_reason = None
 
         # 상태 텍스트: Chamber와 동일하게 '대기 중'으로 표시
         self._set_state_text("대기 중")
