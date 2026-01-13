@@ -43,9 +43,6 @@ def build_fail_payload(*, code: Optional[str] = None, message: Any = "", detail:
         "result": "fail",
         "message": human,      # client에게 보여줄 텍스트
         "error_code": info.code,
-        "cause": info.cause,
-        "fix": info.fix,
-        "detail": det,
     }
 
 def notify_all(
