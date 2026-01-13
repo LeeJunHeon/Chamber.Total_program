@@ -37,6 +37,10 @@ from lib import config_ch1, config_ch2
 from lib import config_common as cfgc
 from lib import config_local as cfgl  # CHAT_WEBHOOK_URL 로드
 
+# 에러코드 팝업
+from PySide6.QtWidgets import QMessageBox
+from util.timed_popup import attach_autoclose
+
 # ───────────────────────────────────────────────────────────
 # PLC 로그 출처를 담는 컨텍스트 (CH1 / CH2 / PC 등)
 PLC_ORIGIN: ContextVar[Optional[str]] = ContextVar("PLC_ORIGIN", default=None)
@@ -709,6 +713,8 @@ class MainWindow(QWidget):
                 ch2=self.ch2,
                 pc=self.pc,
                 runtime_state=runtime_state,
+                chat=self.chat,
+                popup=self._host_popup,
             )
 
             # ✅ server 페이지 상태 RUNNING 갱신
@@ -740,6 +746,15 @@ class MainWindow(QWidget):
             sp = getattr(self, "server_page", None)
             if sp and hasattr(sp, "set_running"):
                 sp.set_running(False)
+    
+    def _host_popup(self, title: str, text: str) -> None:
+        box = QMessageBox(self)
+        box.setWindowTitle(title)
+        box.setText(text)
+        box.setIcon(QMessageBox.Critical)
+        box.setStandardButtons(QMessageBox.Ok)
+        box.open()
+        attach_autoclose(box, ms=0)  # 자동닫힘 원치 않으면 0
 
     async def _restart_host(self) -> None:
         await self._stop_host()
