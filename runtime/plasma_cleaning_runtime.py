@@ -1117,7 +1117,8 @@ class PlasmaCleaningRuntime:
                     final_reason = str(ff)
 
             # ✅ 최종 보정: 컨트롤러가 success라고 했으면 사용자 STOP/실패로 뒤집히지 않게 보정
-            if (lr == "success") and (not self._stop_requested):
+            #    단, RF 강제 실패가 찍힌 경우(_forced_fail)는 절대 success로 덮어쓰지 않음
+            if (lr == "success") and (not self._stop_requested) and (not getattr(self, "_forced_fail", False)):
                 ok_final = True
                 stopped_final = False
                 final_reason = None
