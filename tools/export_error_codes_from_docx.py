@@ -3,8 +3,13 @@ from docx import Document
 import re
 from pathlib import Path
 
-DOCX = Path("C:\Users\wnsgj\Desktop\Sputter\Sputter Error Code.docx")  # 메뉴얼 파일명
-OUT  = Path("util/error_codes_default.py")
+# ✅ DOCX 경로는 raw string 또는 / 로 작성
+DOCX = Path(r"C:\Users\wnsgj\Desktop\Sputter\Sputter Error Code.docx")
+
+# ✅ 이 스크립트 위치 기준으로 프로젝트 루트/출력 경로 고정
+ROOT = Path(__file__).resolve().parents[1]
+OUT = ROOT / "util" / "error_codes_default.py"
+OUT.parent.mkdir(parents=True, exist_ok=True)
 
 code_re = re.compile(r"^(E\d{3})\s*:\s*(.+)$")
 
@@ -27,5 +32,13 @@ for t in paras:
             else:
                 codes[cur]["fix"] += "\n" + t
 
-OUT.write_text("DEFAULT_CODES = " + repr(codes), encoding="utf-8")
+import pprint
+
+with OUT.open("w", encoding="utf-8") as f:
+    f.write("# Auto-generated from Sputter Error Code.docx\n")
+    f.write("DEFAULT_CODES = ")
+    pprint.pprint(codes, stream=f, width=120, sort_dicts=True)
+    f.write("\n")
+
 print("written:", OUT)
+
