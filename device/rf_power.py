@@ -7,7 +7,7 @@ rf_power.py — asyncio 기반 RF Power 컨트롤러
   - Qt 의존 제거(시그널/타이머 없음). asyncio 태스크로 폴링/램프다운/보정
   - start_process/cleanup는 await 기반 API
   - 측정 피드백(update_measurements; forward/reflected)을 외부(UI/브리지)가 전달
-  - 반사파(reflected) 과다 시 '대기 상태'로 전환하고, 최대 대기시간 초과 시 실패 처리
+  - Ref.p(reflected) 과다 시 '대기 상태'로 전환하고, 최대 대기시간 초과 시 실패 처리
   - 유지 구간에서 '연속 N회 오차'로 노이즈/시리얼 스팸 억제
   - 전송은 콜백(AsyncFaduino.set_rf_power / set_rf_power_unverified) 주입
 """
@@ -295,25 +295,25 @@ class RFPowerAsync:
         # 디스플레이 이벤트 즉시 방출
         self._ev_nowait(RFPowerEvent(kind="display", forward=self.forward_w, reflected=self.reflected_w))
         
-        # 1) 반사파 과다 → 대기/타임아웃
+        # 1) Ref.p 과다 → 대기/타임아웃
         if self.reflected_w > self._ref_th_w:
             if self.state != "REF_P_WAITING":
                 self.previous_state = self.state
                 self.state = "REF_P_WAITING"
                 self._ref_wait_start_ts = time.monotonic()
                 self._ev_nowait(RFPowerEvent(kind="status",
-                                             message=f"반사파({self.reflected_w:.1f}W) 안정화 대기 시작 (최대 {int(self._ref_wait_to_s)}초)"))
+                                             message=f"Ref.p({self.reflected_w:.1f}W) 안정화 대기 시작 (최대 {int(self._ref_wait_to_s)}초)"))
             else:
                 if (time.monotonic() - (self._ref_wait_start_ts or 0.0)) > self._ref_wait_to_s:
                     # 실패 처리
-                    self._ev_nowait(RFPowerEvent(kind="status", message="반사파 안정화 시간 초과. 즉시 중단합니다."))
-                    self._ev_nowait(RFPowerEvent(kind="target_failed", message="반사파 안정화 시간(60s) 초과"))
+                    self._ev_nowait(RFPowerEvent(kind="status", message="Ref.p 안정화 시간 초과. 즉시 중단합니다."))
+                    self._ev_nowait(RFPowerEvent(kind="target_failed", message="Ref.p 안정화 시간(60s) 초과"))
                     asyncio.create_task(self.cleanup())
             return
         else:
             if self.state == "REF_P_WAITING":
                 self._ev_nowait(RFPowerEvent(kind="status",
-                                             message=f"반사파 안정화 완료({self.reflected_w:.1f}W). 공정 재개"))
+                                             message=f"Ref.p 안정화 완료({self.reflected_w:.1f}W). 공정 재개"))
                 self.state = self.previous_state
                 self._ref_wait_start_ts = None
 
@@ -360,14 +360,14 @@ class RFPowerAsync:
     def _ingest_status_result(self, res: object) -> None:
         """
         PLC의 power_read가 (P, V, I) 튜플을 리턴할 수 있으므로,
-        튜플/리스트면 ref=0.0으로 고정해서 반사파 대기 오동작 방지.
+        튜플/리스트면 ref=0.0으로 고정해서 Ref.p 대기 오동작 방지.
         """
         try:
             fwd = ref = None
             if isinstance(res, (tuple, list)):
                 if len(res) >= 1:
                     fwd = float(res[0])   # P
-                ref = 0.0                 # V/I를 반사파로 간주하지 않음
+                ref = 0.0                 # V/I를 Ref.p로 간주하지 않음
             elif isinstance(res, dict):
                 fwd = res.get("forward") or res.get("fwd") or res.get("power") or res.get("P")
                 ref = res.get("reflected") or res.get("ref") or 0.0
