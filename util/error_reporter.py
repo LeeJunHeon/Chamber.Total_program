@@ -27,21 +27,29 @@ def build_error_info(*, code: Optional[str] = None, message: Any = "") -> ErrorI
     return _CATALOG.get("E110", default_message=msg or "Handler crash")
 
 def format_error_message(info: ErrorInfo, *, detail: str = "") -> str:
-    d = (detail or "").strip()
-    if not d or d == info.cause or info.cause in d:
-        return f"{info.code} | {info.cause}\n해결방법: {info.fix}".strip()
-    return f"{info.code} | {info.cause}\n상세: {d}\n해결방법: {info.fix}".strip()
+    # ✅ message에는 "원인 + 해결방법"만 보냄
+    # ✅ 줄바꿈(\n, \r) 자체를 만들지 않도록 1줄로 정리
+    cause = " ".join((info.cause or "").replace("\r", "\n").splitlines()).strip()
+    fix   = " ".join((info.fix   or "").replace("\r", "\n").splitlines()).strip()
+
+    if cause and fix:
+        return f"{cause} 해결방법: {fix}".strip()
+    if cause:
+        return cause
+    if fix:
+        return f"해결방법: {fix}".strip()
+    return ""
 
 def build_fail_payload(*, code: Optional[str] = None, message: Any = "", detail: Any = None) -> dict:
     msg = _to_text(message).strip()
     info = build_error_info(code=code, message=msg)
 
-    det = _to_text(detail if detail is not None else msg)
-    human = format_error_message(info, detail=det)
+    # ✅ message는 원인/해결방법만 (상세는 message에 넣지 않음)
+    human = format_error_message(info)
 
     return {
         "result": "fail",
-        "message": human,      # client에게 보여줄 텍스트
+        "message": human,      # ✅ 원인 + 해결방법만
         "error_code": info.code,
     }
 
