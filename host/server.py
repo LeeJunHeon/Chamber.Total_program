@@ -161,7 +161,23 @@ class HostServer:
                 header = await self._read_exact(reader, HEADER_SIZE)
                 version, flags, cmd_len, body_len, ts = unpack_header(header)
                 if version != PROTOCOL_VERSION:
-                    raise ValueError(f"Unsupported protocol version: {version}")
+                    fail = notify_all(
+                        log=self.log,
+                        chat=self.chat,
+                        popup=self.popup,
+                        src="HOST",
+                        code="E102",
+                        message=f"Unsupported protocol version: {version}",
+                    )
+
+                    # ✅ 클라이언트에 error_code만 보내고 싶다면 이렇게 축약
+                    packet = pack_message("VERSION_ERROR_RESULT", {
+                        "request_id": "",
+                        "data": {"error_code": fail.get("error_code", "E102")},
+                    })
+                    writer.write(packet)
+                    await writer.drain()
+                    break
 
                 # 2) 바디(JSON)
                 body = await self._read_exact(reader, body_len)
