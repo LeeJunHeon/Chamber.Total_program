@@ -336,8 +336,10 @@ class MainWindow(QWidget):
                 if sp and hasattr(sp, "append_log"):
                     sp.append_log(tu or t, msg)
 
-                # 2) ✅ 통신/원격 PLC 로그는 ServerPage에만 남기고, 다른 페이지로는 방송 금지
-                if tu in ("PLC_HOST", "PLC_REMOTE", "NET"):
+               # 2) ✅ 통신/원격 PLC/Host 관련 로그는 ServerPage에만 남기고, 다른 페이지로는 방송 금지
+                #    - notify_all(src="HOST") → tag가 "ERROR/HOST" 로 들어옴
+                #    - 혹시 다른 HOST 계열 태그가 생겨도 "/HOST" 로 끝나면 같이 차단
+                if tu in ("PLC_HOST", "PLC_REMOTE", "NET", "HOST") or tu.endswith("/HOST"):
                     return
 
                 # 3) 그 외 로그는 기존처럼 방송
