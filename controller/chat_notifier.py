@@ -451,3 +451,49 @@ class ChatNotifier(QObject):
         self._errors.append(pretty)
         self._error_seen.add(pretty)
         self._upsert_error_card()
+
+    # ------------------------------------------------------------------
+    # ✅ HOST/통신 계열 오류: '끝'이 없어서 집계하지 말고 발생 즉시 전송
+    #    - util/error_reporter.notify_all() 이 이 경로를 우선 호출함
+    #    - 기존 notify_error_with_src() 는 (공정 중) 누적 집계 카드 용도로 유지
+    # ------------------------------------------------------------------
+    @Slot(str, str, str)
+    def notify_error_event(self, src: str, error_code: str, message: str):
+        """통신/서버 계열 오류를 **발생 즉시** Google Chat에 전송한다.
+
+        주의:
+        - 여기서는 self._errors(집계용)에 넣지 않는다. (모아보내기 방지)
+        - message는 이미 1줄로 정리된 상태를 기대하지만,
+        여기서도 한 번 더 '\\n'/'\\r'을 제거해 안전하게 보정한다.
+        """
+
+        src = (src or "HOST").strip() or "HOST"
+        code = (error_code or "").strip().upper()
+
+        # message 정규화(줄바꿈 제거)
+        msg = (message or "").replace("\r", "\n")
+        msg = " ".join(msg.splitlines()).strip()
+
+        # 메시지에 코드가 이미 들어있는 경우(예: "E401 | ...") 중복 제거
+        if code and msg.upper().startswith(code):
+            tail = msg[len(code):].lstrip()
+            if tail.startswith("|"):
+                tail = tail[1:].lstrip()
+            elif tail.startswith(":"):
+                tail = tail[1:].lstrip()
+            msg = tail or msg
+
+        # cause / fix 분리(표시를 깔끔하게)
+        cause = msg
+        fix = ""
+        if "해결방법:" in msg:
+            a, b = msg.split("해결방법:", 1)
+            cause = a.strip()
+            fix = b.strip()
+
+        subtitle = f"[{src}] {code} | {cause}" if code else f"[{src}] {cause}"
+        fields = {"해결방법": fix} if fix else None
+
+        # urgent=True: 버퍼에 쌓지 말고 즉시 전송(루프가 없으면 flush 때 전송)
+        self._post_card("장비 오류", subtitle=subtitle, status="FAIL", fields=fields, urgent=True)
+

@@ -73,11 +73,20 @@ def notify_all(
             pass
 
     # 2) Google Chat
+    #    - HOST/통신 계열 오류는 '끝'이 없어서 집계하지 말고 발생 즉시 전송
+    #    - ChatNotifier에 notify_error_event(src, error_code, message) 경로를 우선 사용
     if chat is not None:
         try:
-            fn = getattr(chat, "notify_error_with_src", None)
+            err_code = str(payload.get("error_code", "") or "").strip()
+
+            fn = getattr(chat, "notify_error_event", None)
             if callable(fn):
-                fn(src, text)
+                fn(src, err_code, text)
+            else:
+                # 하위 호환(구버전 ChatNotifier)
+                fn2 = getattr(chat, "notify_error_with_src", None)
+                if callable(fn2):
+                    fn2(src, text)
         except Exception:
             pass
 

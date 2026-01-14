@@ -668,6 +668,9 @@ class HostHandlers:
                         async with self._plc_call():
                             await self.ctx.plc.write_switch("L_R_P_SW", True)
 
+                # ✅ 펌프 기동 안정화 텀 (3초)
+                await asyncio.sleep(3.0)
+
                 # 2) 러핑밸브 인터락
                 async with self._plc_call():
                     if not await self.ctx.plc.read_bit("L_R_V_인터락"):
