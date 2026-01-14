@@ -27,7 +27,9 @@ def pack_message(command: str, payload: Json) -> bytes:
         "command": command,
         "data": payload.get("data", {}),
     }
-    body = json.dumps(body_obj, ensure_ascii=False).encode("utf-8")
+    # handler가 JSON 직렬화 불가 객체를 넣어도 서버가 응답을 못 보내고 죽는 것을 방지
+    body = json.dumps(body_obj, ensure_ascii=False, default=str).encode("utf-8")
+
     version = PROTOCOL_VERSION
     flags = 0
     cmd_len = len(command.encode("utf-8"))
