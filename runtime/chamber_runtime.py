@@ -603,6 +603,8 @@ class ChamberRuntime:
                         if self.chat:
                             with contextlib.suppress(Exception):
                                 self.chat.notify_text(f"[OES] 측정 실패: {e!r}")
+                                if hasattr(self.chat, "flush"):
+                                    self.chat.flush()
                         self.process_controller.on_oes_failed("OES", f"measure: {e}")
                         return
                     finally:
@@ -1103,6 +1105,8 @@ class ChamberRuntime:
                 if self.chat:
                     with contextlib.suppress(Exception):
                         self.chat.notify_text(f"[{tag}] 측정 실패: {why} → 건너뜀")
+                        if hasattr(self.chat, "flush"):
+                            self.chat.flush()
                 self.process_controller.on_rga_finished()
 
     async def _pump_dc_events(self) -> None:

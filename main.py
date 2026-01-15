@@ -134,11 +134,25 @@ class MainWindow(QWidget):
         }
 
         # === 공용(공유) 리소스 생성 ===
-        # 단일 Chat Notifier (config_local.CHAT_WEBHOOK_URL 사용)
+        # ✅ Chat Notifier를 용도별로 분리 (CH1/CH2/PC/TSP/HOST)
         url = getattr(cfgl, "CHAT_WEBHOOK_URL", None)
-        self.chat: Optional[ChatNotifier] = ChatNotifier(url) if url else None
-        if self.chat:
-            self.chat.start()
+
+        def _new_chat(label: str) -> Optional[ChatNotifier]:
+            if not url:
+                return None
+            c = ChatNotifier(url)
+            try:
+                c.setObjectName(f"ChatNotifier_{label}")
+            except Exception:
+                pass
+            c.start()
+            return c
+
+        self.chat_host = _new_chat("HOST")
+        self.chat_ch1  = _new_chat("CH1")
+        self.chat_ch2  = _new_chat("CH2")
+        self.chat_pc   = _new_chat("PC")
+        self.chat_tsp  = _new_chat("TSP")
 
         # ── 현재 PLC 로그의 소유 챔버 (1/2). 없으면 None → 방송 모드
         self._plc_owner: Optional[int] = None
@@ -229,7 +243,7 @@ class MainWindow(QWidget):
             prefix="ch1_",
             loop=self._loop,
             plc=self._plc_ch1,   # ★ CH1 전용 Proxy
-            chat=self.chat,     # 단일 Notifier 공유 가능
+            chat=self.chat_ch1,  # CH1 전용 Notifier
             cfg=config_ch1,
             log_dir=self._log_root,
             mfc=self.mfc1,
@@ -243,7 +257,7 @@ class MainWindow(QWidget):
             prefix="ch2_",
             loop=self._loop,
             plc=self._plc_ch2,   # ★ CH2 전용 Proxy
-            chat=self.chat,
+            chat=self.chat_ch2,  # CH2 전용 Notifier
             cfg=config_ch2,
             log_dir=self._log_root,
             mfc=self.mfc2,
@@ -293,7 +307,7 @@ class MainWindow(QWidget):
                 mfc_gas=self.mfc1,         # Gas Flow는 정책상 항상 MFC1 사용
                 mfc_pressure=self.mfc1,         # 초기엔 CH1 기준
                 ig=self.ig1,               # IG도 초기엔 CH1 기준
-                chat=self.chat,
+                chat=self.chat_pc,         # PC 전용 Notifier
             )
 
         except Exception as e:
@@ -310,7 +324,7 @@ class MainWindow(QWidget):
             tcp_port=cfgc.TSP_TCP_PORT,
             addr=cfgc.TSP_ADDR,
             loop=self._loop,
-            chat=self.chat, # ← CH1/CH2와 동일하게 Notifier 주입
+            chat=self.chat_tsp,     # TSP 전용 Notifier 주입
             log_dir=self._log_root, # ★ NAS 로그 루트 전달 (CH/PC와 동일)
         )
 
@@ -652,11 +666,16 @@ class MainWindow(QWidget):
                 self.ch2.shutdown_fast()
         except Exception:
             pass
-        try:
-            if self.chat:
-                self.chat.shutdown()
-        except Exception:
-            pass
+        for c in (getattr(self, "chat_host", None),
+                getattr(self, "chat_ch1", None),
+                getattr(self, "chat_ch2", None),
+                getattr(self, "chat_pc", None),
+                getattr(self, "chat_tsp", None)):
+            try:
+                if c:
+                    c.shutdown()
+            except Exception:
+                pass
         event.accept()
         super().closeEvent(event)
 
@@ -715,7 +734,7 @@ class MainWindow(QWidget):
                 ch2=self.ch2,
                 pc=self.pc,
                 runtime_state=runtime_state,
-                chat=self.chat,
+                chat=self.chat_host,
                 popup=self._host_popup,
             )
 
