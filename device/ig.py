@@ -262,6 +262,9 @@ class AsyncIG:
         self._wait_start_s = time.monotonic()
         self._waiting_active = True
 
+        # ✅ 이전 런 값이 남아 “최종압력”이 틀어지는 것 방지
+        self._last_pressure = None
+
         # ✅ 재점등 상태 초기화
         self._suspend_reignite = False
         self._total_reignite_attempts = 0
@@ -694,7 +697,7 @@ class AsyncIG:
                 # 3) 전체 대기 시간 초과 → 실패로 종료
                 if (time.monotonic() - self._wait_start_s) > wait_limit_s:
                     await self._emit_status(f"시간 초과({wait_limit_s:.1f}s): 목표 압력 미도달")
-                    await self._emit_failed("Timeout")
+                    await self._emit_failed("목표 압력 도달 실패")
                     self._waiting_active = False
                     await self._send_off_best_effort(wait_gap_ms=200)
                     break
@@ -964,7 +967,16 @@ class AsyncIG:
         self._q_put_event_nowait(IGEvent(kind="base_reached"))
 
     async def _emit_failed(self, why: str):
-        self._q_put_event_nowait(IGEvent(kind="base_failed", message=why))
+        msg = why
+
+        # ✅ 목표 미도달 실패일 때만 "최종 압력"을 뒤에 붙임
+        if why == "목표 도달 실패" and self._last_pressure is not None:
+            msg = (
+                f"{why} (최종 {self._last_pressure:.3e} Torr, "
+                f"목표 {self._target_pressure:.3e} Torr)"
+            )
+
+        self._q_put_event_nowait(IGEvent(kind="base_failed", message=msg))
 
     # ---------------------------
     # 내부: 유틸
