@@ -40,6 +40,11 @@ class ServerPage(QWidget):
     _PEER_RE = re.compile(r"Client (?:connected|disconnected|closed):\s*(\(.+?\))")
     _CMD_STATUS_RE = re.compile(r"cmd=GET_SPUTTER_STATUS(?:_RESULT)?\b", re.IGNORECASE)
 
+    # "2026-01-15 15:12:38 ..." 형태면 ts/rest로 분리해서 ts를 앞으로 통일
+    _DT_PREFIX_RE = re.compile(
+        r"^(?P<ts>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(?P<rest>.*)$"
+    )
+
     def __init__(self, *, log_root: Optional[Path] = None) -> None:
         super().__init__()
         self._log_root = Path(log_root) if log_root else None
@@ -173,6 +178,19 @@ class ServerPage(QWidget):
     def set_running(self, running: bool) -> None:
         self.lblRunning.setText("RUNNING" if running else "STOPPED")
 
+    def _format_with_ts(self, tag: str, msg: str) -> str:
+        msg = str(msg)
+
+        m = self._DT_PREFIX_RE.match(msg)
+        if m:
+            ts = m.group("ts")
+            rest = m.group("rest")
+        else:
+            ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            rest = msg
+
+        return f"{ts} [{tag}] {rest}"
+
     def append_log(self, tag: str, text: str) -> None:
         msg = str(text)
 
@@ -187,7 +205,8 @@ class ServerPage(QWidget):
         if self.chkHideStatus.isChecked() and self._CMD_STATUS_RE.search(msg):
             return
 
-        self._append_line(f"[{tag}] {msg}")
+        # ✅ 여기서 타임스탬프를 붙여서 표시/저장 포맷을 통일
+        self._append_line(self._format_with_ts(tag, msg))
 
     # 내부 유틸
     def _append_line(self, line: str) -> None:
