@@ -49,6 +49,7 @@ async def install_host(*,
     r.register("GET_SPUTTER_STATUS", h.get_sputter_status)
     r.register("GET_LOADING_1_SENSOR", h.get_loading_1_sensor)
     r.register("GET_LOADING_2_SENSOR", h.get_loading_2_sensor)
+    r.register("GET_RECIPE", h.get_recipe)    # ✅ 레시피 목록 조회 (CH1/CH2/ALD 폴더 중 선택)
     r.register("START_SPUTTER", h.start_sputter)
     r.register("START_PLASMA_CLEANING", h.start_plasma_cleaning)
     r.register("VACUUM_ON", h.vacuum_on)

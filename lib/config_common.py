@@ -204,3 +204,14 @@ DCPULSE_DEFAULT_DELAY_MS = 180
 SUPPORTS_DC = True
 SUPPORTS_RF_CONT = False
 SUPPORTS_RFPULSE = True
+
+# ======================================================================
+# ROBOT GET_RECIPE (NAS 레시피 폴더 스캔)
+# ======================================================================
+ROBOT_RECIPE_ROOT_DIR = r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Recipe"
+
+# 허용 폴더(클라이언트가 이 중 하나만 요청 가능)
+ROBOT_RECIPE_FOLDERS = ("CH1", "CH2", "ALD")
+
+# NAS가 순간 느릴 때 무한 대기 방지
+RECIPE_SCAN_TIMEOUT_S = 8.0

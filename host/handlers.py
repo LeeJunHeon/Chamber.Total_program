@@ -9,11 +9,12 @@
 from __future__ import annotations
 from typing import Dict, Any
 from .context import HostContext
-import asyncio, time, contextlib
+import asyncio, time, contextlib, os
 from pathlib import Path                      # ← 추가: 경로
 from datetime import datetime                 # ← 추가: 파일명 타임스탬프
 from contextlib import asynccontextmanager    # ← 추가: 비동기 컨텍스트
 from util.error_reporter import notify_all
+from lib import config_common as cfg
 
 Json = Dict[str, Any]
 
@@ -440,6 +441,47 @@ class HostHandlers:
                     vacuum=vacuum,
                 )
 
+        except Exception as e:
+            return self._fail(e)
+        
+    # ================== 레시피 조회 ==========================
+    async def get_recipe(self, data: Json) -> Json:
+        """
+        GET_RECIPE
+        - data: {"folder": "CH1" | "CH2" | "ALD"}
+        - 루트(ROBOT_RECIPE_ROOT_DIR) 아래의 해당 폴더만 스캔 (재귀 없음)
+        - .csv 파일명 리스트 반환
+        """
+        try:
+            folder = str(data.get("folder") or "").strip().upper()
+            allowed = tuple(getattr(cfg, "ROBOT_RECIPE_FOLDERS", ("CH1", "CH2", "ALD")))
+            if folder not in allowed:
+                return self._fail(f"folder는 {allowed} 중 하나여야 합니다. (입력={folder!r})", code="E210")
+
+            base_dir = Path(getattr(cfg, "ROBOT_RECIPE_ROOT_DIR"))
+            target_dir = base_dir / folder
+            timeout_s = float(getattr(cfg, "RECIPE_SCAN_TIMEOUT_S", 8.0))
+
+            def _scan_sync() -> list[str]:
+                if not target_dir.exists():
+                    raise FileNotFoundError(f"Recipe folder not found: {target_dir}")
+                if not target_dir.is_dir():
+                    raise NotADirectoryError(f"Not a directory: {target_dir}")
+
+                files: list[str] = []
+                with os.scandir(target_dir) as it:
+                    for ent in it:
+                        if ent.is_file() and ent.name.lower().endswith(".csv"):
+                            files.append(ent.name)
+                files.sort(key=str.lower)
+                return files
+
+            files = await asyncio.wait_for(asyncio.to_thread(_scan_sync), timeout=timeout_s)
+
+            return self._ok("OK", base_dir=str(base_dir), folder=folder, files=files, count=len(files))
+
+        except asyncio.TimeoutError:
+            return self._fail(f"GET_RECIPE timeout ({getattr(cfg, 'RECIPE_SCAN_TIMEOUT_S', 8.0)}s)", code="E211")
         except Exception as e:
             return self._fail(e)
         
