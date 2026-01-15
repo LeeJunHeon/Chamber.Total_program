@@ -170,11 +170,15 @@ class HostServer:
                         message=f"Unsupported protocol version: {version}",
                     )
 
-                    # ✅ 클라이언트에 error_code만 보내고 싶다면 이렇게 축약
                     packet = pack_message("VERSION_ERROR_RESULT", {
                         "request_id": "",
-                        "data": {"error_code": fail.get("error_code", "E102")},
+                        "data": {
+                            "result": "fail",
+                            "message": fail.get("message", ""),
+                            "error_code": fail.get("error_code", "E102"),
+                        },
                     })
+
                     writer.write(packet)
                     await writer.drain()
                     break
@@ -335,18 +339,19 @@ class HostServer:
                     if isinstance(res_data, dict) and res_data.get("result") == "fail" and "error_code" not in res_data:
                         msg = str(res_data.get("message", "") or "")
 
-                        forced = None
-                        if msg.startswith("Unknown command"):
-                            forced = "E106"
+                        forced = "E106" if msg.startswith("Unknown command") else None
 
-                        res_data = notify_all(
+                        notified = notify_all(
                             log=self.log,
                             chat=self.chat,
                             popup=self.popup,
                             src="HOST",
-                            code=forced,   # forced가 None이면 message 기반 자동추정
+                            code=forced,   # None이면 message 기반 자동추정
                             message=msg,
                         )
+
+                        # ✅ 기존 res_data는 그대로 두고, error_code만 추가
+                        res_data["error_code"] = notified.get("error_code", forced or "E110")
 
                     row = {
                         "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
