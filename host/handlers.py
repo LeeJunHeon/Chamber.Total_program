@@ -486,10 +486,10 @@ class HostHandlers:
         recipe = str(data.get("recipe") or "").strip()
 
         if ch not in (1, 2):
-            return self._fail("ch는 1 또는 2만 허용합니다.")
+            return self._fail("ch는 1 또는 2만 허용합니다.", code="E201")
 
         if not recipe:
-            return self._fail("recipe가 비어 있습니다. (CSV 경로 또는 레시피 문자열 필요)")
+            return self._fail("recipe가 비어 있습니다. (CSV 경로 또는 레시피 문자열 필요)", code="E202")
 
         # 2) 해당 챔버 런타임 가져오기
         #   - ctx.ch1 / ctx.ch2를 쓰고 있다면 그걸 사용
@@ -499,7 +499,7 @@ class HostHandlers:
         # chamber = self.ctx.get_chamber_runtime(ch)
 
         if not chamber:
-            return self._fail(f"Chamber CH{ch} runtime not ready")
+            return self._fail(f"Chamber CH{ch} runtime not ready", code="E203")
         
         busy = self._fail_if_ch_busy(ch, f"START_SPUTTER_CH{ch}")
         if busy is not None:
@@ -513,7 +513,7 @@ class HostHandlers:
 
                 st = await self._read_gate_state(ch)
                 if st["state"] != "closed":
-                    return self._fail(f"START_SPUTTER 불가 — CH{ch} gate가 CLOSED가 아님({st['state']})")
+                    return self._fail(f"START_SPUTTER 불가 — CH{ch} gate가 CLOSED가 아님({st['state']})", code="E301")
 
                 try:
                     await chamber.start_with_recipe_string(recipe)
