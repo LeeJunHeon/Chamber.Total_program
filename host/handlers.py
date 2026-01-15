@@ -262,7 +262,7 @@ class HostHandlers:
 
             if reasons:
                 # 예: "CH2_GATE_OPEN 불가 — CH2 스퍼터 공정 실행 중"
-                return self._fail(f"{action} 불가 — " + " / ".join(reasons))
+                return self._fail(f"{action} 불가 — " + " / ".join(reasons), code="E205")
 
         except Exception:
             # runtime_state 문제로 장비 조작까지 막히지 않도록, 에러 시에는 통과
@@ -462,7 +462,7 @@ class HostHandlers:
                 async with self._plc_call():
                     v = await plc.read_bit(key)   # ✅ 표준 API로 통일
             except Exception as e:
-                return self._fail(f"PLC 주소맵에 {key}가 없습니다: {e}")
+                return self._fail(f"PLC 주소맵에 {key}가 없습니다: {e}", code="E411")
 
             async with self._plc_command(f"GET_LOADING_{which}_SENSOR"):
                 # ✅ 클라이언트 요청 payload도 기록
@@ -652,7 +652,7 @@ class HostHandlers:
                     async with self.ctx.lock_ch2:
                         ok, msg = await self._require_gates_closed()
                         if not ok:
-                            return self._fail(msg)
+                            return self._fail(msg, code="E307")
 
                         # 0) 벤트 OFF
                         async with self._plc_call():
@@ -662,7 +662,7 @@ class HostHandlers:
                         # 0-1) 러핑펌프 OFF 타이머 체크
                         async with self._plc_call():
                             if await self.ctx.plc.read_bit("L_R_P_OFF_TIMER"):
-                                return self._fail("러핑펌프 OFF 타이머 진행 중 → 잠시 후 재시도")
+                                return self._fail("러핑펌프 OFF 타이머 진행 중 → 잠시 후 재시도", code="E309")
 
                         # 1) 러핑펌프 ON  ← 여기까지 오면 gate_open이 이제 확실히 차단됨(L_R_P_SW TRUE)
                         async with self._plc_call():
@@ -709,7 +709,8 @@ class HostHandlers:
                 return self._fail(
                     f"VACUUM_ON 타임아웃: {int(timeout_s)}s 내 "
                     f"L_VAC_READY_SW && 펌프/밸브 OFF 상태 미도달 "
-                    f"(L_VAC_NOT_READY={not_ready}) — door/밸브 상태 확인"
+                    f"(L_VAC_NOT_READY={not_ready}) — door/밸브 상태 확인",
+                    code="E312",
                 )
 
             except Exception as e:
@@ -752,7 +753,7 @@ class HostHandlers:
                     async with self.ctx.lock_ch2:
                         ok, msg = await self._require_gates_closed()
                         if not ok:
-                            return self._fail(msg)
+                            return self._fail(msg, code="E308")
 
                         # 0) 러핑밸브/펌프 OFF
                         async with self._plc_call():
@@ -794,7 +795,8 @@ class HostHandlers:
                         await self.ctx.plc.write_switch("L_VENT_SW", False)
 
                 return self._fail(
-                    f"VACUUM_OFF 타임아웃: {int(timeout_s)}s 내 L_ATM TRUE 미도달 (N2 gas 부족)"
+                    f"VACUUM_OFF 타임아웃: {int(timeout_s)}s 내 L_ATM TRUE 미도달 (N2 gas 부족)",
+                    code="E313",
                 )
 
             except Exception as e:
@@ -822,7 +824,7 @@ class HostHandlers:
                 self._log_client_request(data)
                 async with self._plc_call():
                     if not await self.ctx.plc.read_bit("L_PIN_인터락"):
-                        return self._fail("L_PIN_인터락=FALSE → 4PIN_UP 불가")
+                        return self._fail("L_PIN_인터락=FALSE → 4PIN_UP 불가", code="E314")
                 async with self._plc_call():
                     await self.ctx.plc.press_switch("L_PIN_UP_SW")
                 await asyncio.sleep(wait_s)
@@ -830,7 +832,7 @@ class HostHandlers:
                     lamp_ok = await self.ctx.plc.read_bit("L_PIN_UP_LAMP")
                 if lamp_ok:
                     return self._ok(f"4PIN_UP 완료 — L_PIN_UP_LAMP=TRUE (대기 {int(wait_s)}s)")
-                return self._fail(f"4PIN_UP 실패 — {int(wait_s)}s 후 L_PIN_UP_LAMP=FALSE")
+                return self._fail(f"4PIN_UP 실패 — {int(wait_s)}s 후 L_PIN_UP_LAMP=FALSE", code="E316")
 
         except Exception as e:
             return self._fail(e)
@@ -849,7 +851,7 @@ class HostHandlers:
                 # 1) 인터락 확인
                 async with self._plc_call():
                     if not await self.ctx.plc.read_bit("L_PIN_인터락"):
-                        return self._fail("L_PIN_인터락=FALSE → 4PIN_DOWN 불가")
+                        return self._fail("L_PIN_인터락=FALSE → 4PIN_DOWN 불가", code="E314")
 
                 # 2) 펄스
                 async with self._plc_call():
@@ -861,7 +863,7 @@ class HostHandlers:
                     lamp_ok = await self.ctx.plc.read_bit("L_PIN_DOWN_LAMP")
 
                 return self._ok(f"4PIN_DOWN 완료 — L_PIN_DOWN_LAMP=TRUE (대기 {int(wait_s)}s)") if lamp_ok \
-                    else self._fail(f"4PIN_DOWN 실패 — {int(wait_s)}s 후 L_PIN_DOWN_LAMP=FALSE")
+                    else self._fail(f"4PIN_DOWN 실패 — {int(wait_s)}s 후 L_PIN_DOWN_LAMP=FALSE", code="E316")
 
         except Exception as e:
             return self._fail(e)
