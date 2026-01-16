@@ -942,21 +942,22 @@ class HostHandlers:
                         # ✅ (추가-1) Loadlock이 vacuum on/off 전환 상태인지 체크
                         ok_ll, msg_ll, snap = await self._require_loadlock_safe_for_gate_open()
                         if not ok_ll:
-                            return self._fail(msg_ll)
+                            return self._fail(msg_ll, code="E321") # ✅ Loadlock 상태로 Gate Open 차단
 
                         # ✅ (추가-2) 다른 챔버 gate가 열려있거나(또는 closed가 아니면) 금지
                         other = 2 if ch == 1 else 1
                         other_st = await self._read_gate_state(other)
                         if other_st["state"] != "closed":
                             return self._fail(
-                                f"다른 챔버 Gate가 CLOSED가 아님: CH{other}={other_st['state']} → CH{ch}_GATE_OPEN 불가"
+                                f"다른 챔버 Gate가 CLOSED가 아님: CH{other}={other_st['state']} → CH{ch}_GATE_OPEN 불가",
+                                code="E303",
                             )
 
                         # 1) 인터락 확인 — 읽는 순간만 락
                         async with self._plc_call():
                             il = await self.ctx.plc.read_bit(interlock)
                         if not il:
-                            return self._fail(f"{interlock}=FALSE → CH{ch}_GATE_OPEN 불가")
+                            return self._fail(f"{interlock}=FALSE → CH{ch}_GATE_OPEN 불가", code="E302")
 
                         # 2) 펄스 — 쓰는 순간만 락
                         async with self._plc_call():
@@ -969,7 +970,7 @@ class HostHandlers:
                         async with self._plc_call():
                             ok = await self.ctx.plc.read_bit(lamp)
                         return self._ok(f"CH{ch}_GATE_OPEN 완료 — {lamp}=TRUE (대기 {int(wait_s)}s)") if ok \
-                            else self._fail(f"CH{ch}_GATE_OPEN 실패 — {lamp}=FALSE (대기 {int(wait_s)}s)")
+                            else self._fail(f"CH{ch}_GATE_OPEN 실패 — {lamp}=FALSE (대기 {int(wait_s)}s)", code="E304")
                     except Exception as e:
                         return self._fail(e)
 
