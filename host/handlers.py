@@ -456,7 +456,7 @@ class HostHandlers:
             folder = str(data.get("folder") or "").strip().upper()
             allowed = tuple(getattr(cfg, "ROBOT_RECIPE_FOLDERS", ("CH1", "CH2", "ALD")))
             if folder not in allowed:
-                return self._fail(f"folder는 {allowed} 중 하나여야 합니다. (입력={folder!r})", code="E210")
+                return self._fail(f"folder는 {allowed} 중 하나여야 합니다. (입력={folder!r})", code="E226")
 
             base_dir = Path(getattr(cfg, "ROBOT_RECIPE_ROOT_DIR"))
             target_dir = base_dir / folder
@@ -481,7 +481,7 @@ class HostHandlers:
             return self._ok("OK", base_dir=str(base_dir), folder=folder, files=files, count=len(files))
 
         except asyncio.TimeoutError:
-            return self._fail(f"GET_RECIPE timeout ({getattr(cfg, 'RECIPE_SCAN_TIMEOUT_S', 8.0)}s)", code="E211")
+            return self._fail(f"GET_RECIPE timeout ({getattr(cfg, 'RECIPE_SCAN_TIMEOUT_S', 8.0)}s)", code="E227")
         except Exception as e:
             return self._fail(e)
         
@@ -716,7 +716,7 @@ class HostHandlers:
                 # 2) 러핑밸브 인터락
                 async with self._plc_call():
                     if not await self.ctx.plc.read_bit("L_R_V_인터락"):
-                        return self._fail("L_R_V_인터락=FALSE → 러핑밸브 개방 불가")
+                        return self._fail("L_R_V_인터락=FALSE → 러핑밸브 개방 불가", code="E310")
 
                 # 3) 러핑밸브 ON
                 async with self._plc_call():
@@ -893,7 +893,7 @@ class HostHandlers:
                 # 1) 인터락 확인
                 async with self._plc_call():
                     if not await self.ctx.plc.read_bit("L_PIN_인터락"):
-                        return self._fail("L_PIN_인터락=FALSE → 4PIN_DOWN 불가", code="E314")
+                        return self._fail("L_PIN_인터락=FALSE → 4PIN_DOWN 불가", code="E315")
 
                 # 2) 펄스
                 async with self._plc_call():
@@ -905,7 +905,7 @@ class HostHandlers:
                     lamp_ok = await self.ctx.plc.read_bit("L_PIN_DOWN_LAMP")
 
                 return self._ok(f"4PIN_DOWN 완료 — L_PIN_DOWN_LAMP=TRUE (대기 {int(wait_s)}s)") if lamp_ok \
-                    else self._fail(f"4PIN_DOWN 실패 — {int(wait_s)}s 후 L_PIN_DOWN_LAMP=FALSE", code="E316")
+                    else self._fail(f"4PIN_DOWN 실패 — {int(wait_s)}s 후 L_PIN_DOWN_LAMP=FALSE", code="E317")
 
         except Exception as e:
             return self._fail(e)
