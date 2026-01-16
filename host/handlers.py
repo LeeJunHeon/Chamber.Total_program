@@ -856,25 +856,38 @@ class HostHandlers:
         """
         4PIN_UP 시퀀스:
         1) L_PIN_인터락 == True 확인
-        2) L_PIN_UP_SW = True
-        3) 10초 후 L_PIN_UP_LAMP == True 확인
+        2) L_PIN_UP_SW 펄스
+        3) wait_s 동안 L_PIN_UP_LAMP 를 1초 간격으로 폴링 → TRUE 되면 즉시 성공
         """
-        wait_s = float(data.get("wait_s", 10.0))  # 기본 10초
+        wait_s = float(data.get("wait_s", 20.0))  # 전체 타임아웃
+        poll_s = float(data.get("poll_s", 1.0))   # ✅ 1초에 1번
 
         try:
             async with self._plc_command("4PIN_UP"):
                 self._log_client_request(data)
+
+                # 1) 인터락 확인
                 async with self._plc_call():
                     if not await self.ctx.plc.read_bit("L_PIN_인터락"):
                         return self._fail("L_PIN_인터락=FALSE → 4PIN_UP 불가", code="E314")
+                    
+                # 2) 펄스
                 async with self._plc_call():
                     await self.ctx.plc.press_switch("L_PIN_UP_SW")
-                await asyncio.sleep(wait_s)
-                async with self._plc_call():
-                    lamp_ok = await self.ctx.plc.read_bit("L_PIN_UP_LAMP")
+
+                # 3) ✅ 램프 폴링(1초마다)
+                lamp_ok = await self._poll_bit_until_true(
+                    "L_PIN_UP_LAMP",
+                    timeout_s=wait_s,
+                    interval_s=poll_s,
+                )
+
                 if lamp_ok:
-                    return self._ok(f"4PIN_UP 완료 — L_PIN_UP_LAMP=TRUE (대기 {int(wait_s)}s)")
-                return self._fail(f"4PIN_UP 실패 — {int(wait_s)}s 후 L_PIN_UP_LAMP=FALSE", code="E316")
+                    return self._ok(f"4PIN_UP 완료 — L_PIN_UP_LAMP=TRUE (timeout {int(wait_s)}s, poll {poll_s:.1f}s)")
+                return self._fail(
+                    f"4PIN_UP 실패 — {int(wait_s)}s 내 L_PIN_UP_LAMP=TRUE 미도달 (poll {poll_s:.1f}s)",
+                    code="E316",
+                )
 
         except Exception as e:
             return self._fail(e)
@@ -883,13 +896,16 @@ class HostHandlers:
         """
         4PIN_DOWN 시퀀스:
         1) L_PIN_인터락 == True 확인
-        2) L_PIN_DOWN_SW = True
-        3) 10초 후 L_PIN_DOWN_LAMP == True 확인
+        2) L_PIN_DOWN_SW 펄스
+        3) wait_s 동안 L_PIN_DOWN_LAMP 를 1초 간격으로 폴링 → TRUE 되면 즉시 성공
         """
-        wait_s = float(data.get("wait_s", 10.0))
+        wait_s = float(data.get("wait_s", 20.0))
+        poll_s = float(data.get("poll_s", 1.0))    # ✅ 1초에 1번
+
         try:
             async with self._plc_command("4PIN_DOWN"):
                 self._log_client_request(data)
+
                 # 1) 인터락 확인
                 async with self._plc_call():
                     if not await self.ctx.plc.read_bit("L_PIN_인터락"):
@@ -899,16 +915,45 @@ class HostHandlers:
                 async with self._plc_call():
                     await self.ctx.plc.press_switch("L_PIN_DOWN_SW")
 
-                # 3) 대기(락 없음) → 램프 확인(읽을 때만 락)
-                await asyncio.sleep(wait_s)
-                async with self._plc_call():
-                    lamp_ok = await self.ctx.plc.read_bit("L_PIN_DOWN_LAMP")
+                # 3) ✅ 램프 폴링(1초마다)
+                lamp_ok = await self._poll_bit_until_true(
+                    "L_PIN_DOWN_LAMP",
+                    timeout_s=wait_s,
+                    interval_s=poll_s,
+                )   
 
-                return self._ok(f"4PIN_DOWN 완료 — L_PIN_DOWN_LAMP=TRUE (대기 {int(wait_s)}s)") if lamp_ok \
-                    else self._fail(f"4PIN_DOWN 실패 — {int(wait_s)}s 후 L_PIN_DOWN_LAMP=FALSE", code="E317")
+                return self._ok(f"4PIN_DOWN 완료 — L_PIN_DOWN_LAMP=TRUE (timeout {int(wait_s)}s, poll {poll_s:.1f}s)") if lamp_ok \
+                    else self._fail(
+                        f"4PIN_DOWN 실패 — {int(wait_s)}s 내 L_PIN_DOWN_LAMP=TRUE 미도달 (poll {poll_s:.1f}s)",
+                        code="E317",
+                    )
 
         except Exception as e:
             return self._fail(e)
+        
+    async def _poll_bit_until_true(self, bit_name: str, *, timeout_s: float, interval_s: float = 1.0) -> bool:
+        """
+        timeout_s 동안 interval_s 간격으로 bit_name을 폴링.
+        - TRUE 되는 순간 즉시 True 반환
+        - 끝까지 TRUE가 안 되면 False 반환
+        - PLC 락은 '읽는 순간'에만 _plc_call()로 짧게 잡는다 (chuck과 동일한 철학)
+        """
+        deadline = time.monotonic() + float(timeout_s)
+
+        while True:
+            # 읽는 순간만 락
+            async with self._plc_call():
+                v = bool(await self.ctx.plc.read_bit(bit_name))
+
+            if v:
+                return True
+
+            now = time.monotonic()
+            if now >= deadline:
+                return False
+
+            # 남은 시간이 interval보다 짧으면 그만큼만 sleep (마지막 근접 샘플링 보장)
+            await asyncio.sleep(min(float(interval_s), deadline - now))
 
     # ================== CH1,2 gate 제어 ==================
     async def gate_open(self, data: Json) -> Json:
@@ -1145,7 +1190,7 @@ class HostHandlers:
                                 current=cur,
                             )
 
-                        await asyncio.sleep(0.3)
+                        await asyncio.sleep(1)
 
                     # (D) 타임아웃 → OFF 후 실패 반환
                     async with self._plc_call():
