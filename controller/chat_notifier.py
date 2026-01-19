@@ -406,6 +406,18 @@ class ChatNotifier(QObject):
                 else:
                     fields = {"공정 이름": name, "원인": "알 수 없음"}
 
+        # ✅ (추가) chuck position / warnings 표시 (성공/실패 공통)
+        pos = (detail or {}).get("chuck_position")
+        if pos:
+            fields.setdefault("Chuck Position", str(pos))
+
+        warns: List[str] = list((detail or {}).get("warnings") or [])
+        if warns:
+            preview = " • " + "\n • ".join(warns[:3])
+            if len(warns) > 3:
+                preview += f"\n(+{len(warns)-3}건 더)"
+            fields.setdefault("주의", preview)
+
         self._post_card("공정 종료", subtitle, status, fields, route_params=detail)
 
         # 종료 카드와 함께 누적 오류 집계 카드 1장도 같이 나가도록

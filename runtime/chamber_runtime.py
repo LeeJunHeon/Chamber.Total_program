@@ -806,7 +806,17 @@ class ChamberRuntime:
                             # 시작 카드와 키를 맞춰 카드 템플릿이 동일하게 먹히도록 보정
                             if "process_note" not in payload and "process_name" in payload:
                                 payload["process_note"] = payload["process_name"]
+
                             try:
+                                # ✅ chuck 경고/목표 위치를 종료 카드로 전달
+                                pos = str(getattr(self, "_run_chuck_position", "") or "").strip()
+                                if pos:
+                                    payload.setdefault("chuck_position", pos)
+
+                                warns = list(getattr(self, "_run_warnings", []) or [])
+                                if warns:
+                                    payload.setdefault("warnings", warns)
+
                                 ret = self.chat.notify_process_finished_detail(ok, payload)
                                 if inspect.iscoroutine(ret):
                                     await ret
@@ -1886,21 +1896,16 @@ class ChamberRuntime:
                 return
             
             # ★ 추가: 공정 시작 직전 Chuck 위치 선행 설정
+            self._run_chuck_position = str(params.get("chuck_position") or "").strip().lower()
+            self._run_warnings = []
+
             ok_chuck = await self._set_chuck_position_if_needed(params)
             if not ok_chuck:
-                note = params.get("process_note", "알 수 없는")
-                self.append_log("MAIN", f"Chuck 위치 설정 실패 → '{note}' 시작 중단")
-                self._post_critical("Chuck 이동 실패", f"'{note}' 시작 중단 (chuck_position='{params.get('chuck_position')}')")
-                # 자동/단일 모두 동일 경로로 중단 처리(기존 시작 실패 처리와 동일하게)
-                self._start_next_process_from_queue(False)
-                self._on_process_status_changed(False)
-
-                # ✅ Chuck 선행 설정 실패도 '비정상 종료' → error 상태로 정리
-                with contextlib.suppress(Exception):
-                    runtime_state.set_error("chamber", self.ch, "Chuck 이동 실패")
-                    runtime_state.mark_finished("chamber", self.ch)
-
-                return
+                pos = self._run_chuck_position
+                warn = f"Chuck 위치 이동 실패 (target='{pos}')" if pos else "Chuck 위치 이동 실패"
+                self.append_log("MAIN", f"⚠️ {warn} → 공정은 계속 진행")
+                self._run_warnings.append(warn)
+                # ✅ 여기서 실패처리/return/큐 fail 처리/critical/error 기록 전부 하지 않음
 
             self._last_polling_targets = None
             self.append_log("MAIN", "장비 연결 확인 완료 → 공정 시작")
