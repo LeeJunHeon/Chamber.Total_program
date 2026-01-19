@@ -665,7 +665,7 @@ class HostHandlers:
         bad = [k for k, v in s.items() if v]
         if bad:
             detail = ", ".join([f"{k}=TRUE" for k in bad])
-            return False, f"Loadlock 상태상 GATE_OPEN 불가 ({detail})", s
+            return False, f"Loadlock 상태로 인해 GATE_OPEN 불가 ({detail})", s
         return True, "Loadlock 상태 OK", s
 
     async def vacuum_on(self, data: Json) -> Json:
@@ -979,11 +979,12 @@ class HostHandlers:
         else:
             return self._fail(f"지원하지 않는 CH: {ch}")
 
-        async with self.ctx.lock_ch1:
-            async with self.ctx.lock_ch2:
-                async with self._plc_command(f"GATE_OPEN_CH{ch}"):
-                    self._log_client_request(data)
-                    try:
+        try:
+            async with self.ctx.lock_ch1:
+                async with self.ctx.lock_ch2:
+                    async with self._plc_command(f"GATE_OPEN_CH{ch}"):
+                        self._log_client_request(data)
+                        
                         # ✅ (추가-1) Loadlock이 vacuum on/off 전환 상태인지 체크
                         ok_ll, msg_ll, snap = await self._require_loadlock_safe_for_gate_open()
                         if not ok_ll:
@@ -1016,8 +1017,8 @@ class HostHandlers:
                             ok = await self.ctx.plc.read_bit(lamp)
                         return self._ok(f"CH{ch}_GATE_OPEN 완료 — {lamp}=TRUE (대기 {int(wait_s)}s)") if ok \
                             else self._fail(f"CH{ch}_GATE_OPEN 실패 — {lamp}=FALSE (대기 {int(wait_s)}s)", code="E304")
-                    except Exception as e:
-                        return self._fail(e)
+        except Exception as e:
+            return self._fail(e, code="E110")
 
 
     async def gate_close(self, data: Json) -> Json:

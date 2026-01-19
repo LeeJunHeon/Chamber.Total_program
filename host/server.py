@@ -335,23 +335,9 @@ class HostServer:
                             message=f"Handler returned non-dict: {type(res_data).__name__} raw={repr(res_data)}",
                         )
 
-                    # ✅ fail인데 error_code 없으면 여기서 보강 (특히 Unknown command)
+                    # ✅ fail인데 error_code 없으면: server는 '결정'하지 않고 기본값만 넣는다
                     if isinstance(res_data, dict) and res_data.get("result") == "fail" and "error_code" not in res_data:
-                        msg = str(res_data.get("message", "") or "")
-
-                        forced = "E106" if msg.startswith("Unknown command") else None
-
-                        notified = notify_all(
-                            log=self.log,
-                            chat=self.chat,
-                            popup=self.popup,
-                            src="HOST",
-                            code=forced,   # None이면 message 기반 자동추정
-                            message=msg,
-                        )
-
-                        # ✅ 기존 res_data는 그대로 두고, error_code만 추가
-                        res_data["error_code"] = notified.get("error_code", forced or "E110")
+                        res_data["error_code"] = "E110"
 
                     row = {
                         "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
