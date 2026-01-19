@@ -559,8 +559,9 @@ class HostHandlers:
                     await chamber.start_with_recipe_string(recipe)
                     return self._ok("SPUTTER START OK", ch=ch)
                 except Exception as e:
-                    return self._fail(str(e))
-
+                    code = getattr(e, "code", None) or getattr(e, "error_code", None)
+                    msg = getattr(e, "message", None) or str(e)
+                    return self._fail(msg, code=code)
 
     async def start_plasma_cleaning(self, data: Json) -> Json:
         """
@@ -591,7 +592,9 @@ class HostHandlers:
                 await pc.start_with_recipe_string(recipe)
                 return self._ok("PLASMA CLEANING START OK")
             except Exception as e:
-                return self._fail(str(e))
+                code = getattr(e, "code", None) or getattr(e, "error_code", None)
+                msg = getattr(e, "message", None) or str(e)
+                return self._fail(msg, code=code)
 
     # ================== LoadLock vacuum 제어 ==================
     async def _read_gate_state(self, ch: int) -> dict:
@@ -630,9 +633,18 @@ class HostHandlers:
         """
         not_closed = []
         for ch in (1, 2):
-            st = await self._read_gate_state(ch)
-            if st["state"] != "closed":              # ✅ dict에서 state 사용
-                not_closed.append((ch, st["state"]))
+            try:
+                st = await self._read_gate_state(ch)
+            except KeyError as e:
+                return self._fail(f"PLC 주소맵에 gate lamp 키가 없습니다: {e}", code="E411")
+            except Exception as e:
+                return self._fail(f"Gate 상태 조회 실패: {type(e).__name__}: {e}", code="E412")
+
+            if st["state"] != "closed":
+                return self._fail(
+                    f"START_SPUTTER 불가 — CH{ch} gate가 CLOSED가 아님({st['state']})",
+                    code="E301",
+                )
 
         if not_closed:
             detail = ", ".join([f"CH{ch}={st}" for ch, st in not_closed])
