@@ -1832,15 +1832,35 @@ class AsyncMFC:
 
     def _purge_pending(self, reason: str = "") -> int:
         purged = 0
+
+        # 1) ✅ inflight + cmd_q 비우기    
         if self._inflight is not None:
             cmd = self._inflight
             self._inflight = None
             purged += 1
             self._safe_callback(cmd.callback, None)
+
         while self._cmd_q:
             c = self._cmd_q.popleft()
             purged += 1
             self._safe_callback(c.callback, None)
+
+        # 2) ✅ 라인 큐 비우기 (이전 응답/에코가 다음 명령과 섞이는 문제 방지)
+        try:
+            while True:
+                self._line_q.get_nowait()
+        except Exception:
+            pass
+
+        # 3) ✅ no-reply 에코 드레인 대기열 비우기
+        try:
+            self._skip_echos.clear()
+        except Exception:
+            pass
+
+        # 4) ✅ 폴링 중첩 플래그도 리셋(다음 공정 시작 안정성)
+        self._poll_cycle_active = False
+
         if reason:
             self._ev_nowait(MFCEvent(kind="status", message=f"대기 중 명령 {purged}개 폐기 ({reason})"))
         return purged
