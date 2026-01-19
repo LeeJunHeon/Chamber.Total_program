@@ -310,13 +310,13 @@ class HostServer:
                     tb = traceback.format_exc()
                     self.log("NET", f"Handler error for {cmd}: {e}\n{tb}")
 
-                    # ✅ 여기서 에러코드 시스템을 강제로 태움 (E110)
+                    # ✅ E110 강제 제거: message 기반 추정/폴백(또는 handlers에서 이미 E412/E401로 잡게)
                     fail = notify_all(
                         log=self.log,
                         chat=self.chat,
                         popup=self.popup,
                         src="HOST",
-                        code="E110",
+                        code=None,  # ← 강제하지 않음
                         message=f"{cmd} handler crash: {type(e).__name__}: {e}",
                     )
                     res_cmd, res_data = f"{cmd}_RESULT", fail

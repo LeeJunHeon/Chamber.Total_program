@@ -1018,8 +1018,12 @@ class HostHandlers:
                         return self._ok(f"CH{ch}_GATE_OPEN 완료 — {lamp}=TRUE (대기 {int(wait_s)}s)") if ok \
                             else self._fail(f"CH{ch}_GATE_OPEN 실패 — {lamp}=FALSE (대기 {int(wait_s)}s)", code="E304")
         except Exception as e:
-            return self._fail(e, code="E110")
-
+            # gate_open에서 예외는 대부분 PLC I/O/상태조회 계열 → E412로 정규화
+            return self._fail(
+                f"CH{ch}_GATE_OPEN 처리 중 예외",
+                code="E412",
+                detail=f"{type(e).__name__}: {e}",
+            )
 
     async def gate_close(self, data: Json) -> Json:
         """

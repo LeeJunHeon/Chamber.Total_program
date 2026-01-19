@@ -54,7 +54,7 @@ DEFAULT_CODES = {'E101': {'cause': 'EOF while reading (클라이언트가 요청
  'E318': {'cause': 'Chuck 위치 이동 타임아웃(MID/DOWN 등 램프 미도달)', 'fix': '모터/리미트/센서/PLC 입력 확인, 기구물 간섭 점검'},
  'E319': {'cause': 'Gate OPEN 상태에서 Vacuum 관련 출력이 켜짐(안전 위반 감지)', 'fix': 'PLC 로직상 상호배제가 없을 수 있음 → 소프트웨어에서 gate open이면 L_R_P/L_R_V 동작 차단, 현장 배선/래더도 함께 점검'},
  'E320': {'cause': 'Gate 상태 읽기 실패(지원하지 않는 CH)', 'fix': 'CH 값 1/2만 사용, 코드에서 지원하지 않는 CH는 즉시 차단 유지'},
- 'E321': {'cause': 'Loadlock 상태상 Gate Open 불가(벤트/러핑/ATM 전환 중)', 'fix': 'VACUUM_ON/OFF 전환이 끝난 뒤(러핑펌프/러핑밸브 OFF, 안정화) Gate Open 재시도'},
+ 'E321': {'cause': 'Loadlock 상태로 인해 Gate Open 불가(벤트/러핑/ATM 전환 중)', 'fix': 'VACUUM_ON/OFF 전환이 끝난 뒤(러핑펌프/러핑밸브 OFF, 안정화) Gate Open 재시도'},
  'E401': {'cause': 'Modbus TCP 연결 실패', 'fix': 'PLC IP/PORT/네트워크 확인, PLC 전원/통신 상태 확인, timeout 조정'},
  'E402': {'cause': 'Modbus 응답 없음(None)', 'fix': 'PLC 통신 불안정/timeout 과소 가능, polling 과밀 여부 확인(큐 밀림)'},
  'E403': {'cause': 'Modbus Exception 발생', 'fix': 'function code/주소 범위 확인, PLC가 해당 coil/register를 제공하는지 확인'},
