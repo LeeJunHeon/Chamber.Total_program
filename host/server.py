@@ -11,7 +11,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any
 from .protocol import HEADER_SIZE, unpack_header, pack_message, PROTOCOL_VERSION
-from util.error_reporter import notify_all, build_fail_payload
+from util.error_reporter import notify_all
 from .router import Router
 
 Json = Dict[str, Any]
@@ -246,7 +246,8 @@ class HostServer:
 
                 req_id = str(obj.get("request_id", ""))
                 cmd = str(obj.get("command", ""))
-                data = obj.get("data", {}) or {}
+                raw_data = obj.get("data", {})
+                data = raw_data if isinstance(raw_data, dict) else {}
 
                 # === 클라이언트 → 서버 요청 로그 ===
                 # Plasma Cleaning 로그창에 어떤 명령이 들어왔는지 남김

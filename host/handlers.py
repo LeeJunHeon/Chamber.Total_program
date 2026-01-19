@@ -215,17 +215,15 @@ class HostHandlers:
         e: Exception | str,
         *,
         code: str | None = None,
-        detail: Any | None = None,
         src: str = "HOST",
     ) -> Json:
-        base = detail if detail is not None else e
         res: Json = notify_all(
             log=self.ctx.log,
             chat=getattr(self.ctx, "chat", None),
             popup=getattr(self.ctx, "popup", None),
             src=src,
             code=code,
-            message=base,
+            message=e,
         )
         self._log_client_response(res)
         return res
@@ -654,7 +652,7 @@ class HostHandlers:
                 "L_ATM":     bool(await self.ctx.plc.read_bit("L_ATM")),
             }
 
-    async def _require_loadlock_safe_for_gate_open(self) -> tuple[bool, str, dict]:
+    async def _require_loadlock_safe_for_gate_open(self) -> tuple[bool, str]:
         """
         Gate Open 전에 Loadlock이 vacuum on/off 전환 상태가 아닌지 확인.
         조건(요구사항):
@@ -665,8 +663,8 @@ class HostHandlers:
         bad = [k for k, v in s.items() if v]
         if bad:
             detail = ", ".join([f"{k}=TRUE" for k in bad])
-            return False, f"Loadlock 상태로 인해 GATE_OPEN 불가 ({detail})", s
-        return True, "Loadlock 상태 OK", s
+            return False, f"Loadlock 상태로 인해 GATE_OPEN 불가 ({detail})"
+        return True, "Loadlock 상태 OK"
 
     async def vacuum_on(self, data: Json) -> Json:
         """
@@ -986,7 +984,7 @@ class HostHandlers:
                         self._log_client_request(data)
                         
                         # ✅ (추가-1) Loadlock이 vacuum on/off 전환 상태인지 체크
-                        ok_ll, msg_ll, snap = await self._require_loadlock_safe_for_gate_open()
+                        ok_ll, msg_ll = await self._require_loadlock_safe_for_gate_open()
                         if not ok_ll:
                             return self._fail(msg_ll, code="E321") # ✅ Loadlock 상태로 Gate Open 차단
 
@@ -1020,9 +1018,8 @@ class HostHandlers:
         except Exception as e:
             # gate_open에서 예외는 대부분 PLC I/O/상태조회 계열 → E412로 정규화
             return self._fail(
-                f"CH{ch}_GATE_OPEN 처리 중 예외",
+                f"CH{ch}_GATE_OPEN 처리 중 예외: {type(e).__name__}: {e}",
                 code="E412",
-                detail=f"{type(e).__name__}: {e}",
             )
 
     async def gate_close(self, data: Json) -> Json:
