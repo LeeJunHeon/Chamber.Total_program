@@ -338,6 +338,7 @@ class HostServer:
 
                     # ✅ fail인데 error_code 없으면: server는 '결정'하지 않고 기본값만 넣는다
                     if isinstance(res_data, dict) and res_data.get("result") == "fail" and "error_code" not in res_data:
+                        self.log("NET", f"[WARN] fail without error_code: cmd={cmd} id={req_id} res={res_data!r}")
                         res_data["error_code"] = "E110"
 
                     row = {
