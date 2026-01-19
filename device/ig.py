@@ -360,9 +360,15 @@ class AsyncIG:
         self._waiting_active = False
         self._suspend_reignite = True
         self._total_reignite_attempts = 0
+
         if self._polling_task:
             self._polling_task.cancel()
             self._polling_task = None
+
+        # ✅ 추가: BG 폴링도 같이 중지 (공정 종료 후 RDI가 계속 나가는 것 방지)
+        if self._bg_poll_task:
+            self._bg_poll_task.cancel()
+            self._bg_poll_task = None
 
         # 대기/인플라이트 명령은 정리
         self._purge_pending("user cancel / stop")
@@ -1132,6 +1138,11 @@ class AsyncIG:
             if t:
                 t.cancel()
             self._bg_poll_task = None
+
+            # ✅ 추가: 공정 종료 시 잔여 명령/응답라인 정리(다음 공정 오염 방지)
+            self._waiting_active = False
+            self._suspend_reignite = True
+            self._purge_pending("process finished")
 
     async def _bg_poll_loop(self):
         try:
