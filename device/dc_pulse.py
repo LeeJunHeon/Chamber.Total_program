@@ -310,6 +310,7 @@ class AsyncDCPulse:
             if self._poll_task:
                 self._poll_task.cancel()
                 self._poll_task = None
+            self._purge_pending("polling off")  # ✅ 추가: 공정 종료/STOP 라이트 정리에서도 잔여 제거
             self._ev_nowait(DCPEvent(kind="status", message="Polling read 중지"))
 
     # 추가: 연결 완료 대기 헬퍼
