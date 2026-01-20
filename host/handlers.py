@@ -836,9 +836,7 @@ class HostHandlers:
                             await self.ctx.plc.write_switch("L_VENT_SW", False)
                         success = True
                         # 3-2) 벤트 OFF까지 처리된 후에 성공 응답
-                        return self._ok(
-                            "VACUUM_OFF 완료 (L_ATM=TRUE, L_VENT_SW=FALSE)"
-                        )
+                        return self._ok("VACUUM_OFF 완료 (L_ATM=TRUE, L_VENT_SW=FALSE)")
 
                     await asyncio.sleep(0.5)
 
@@ -1195,11 +1193,14 @@ class HostHandlers:
                 # (A) 현재 위치 확인 — 내부 read는 _plc_call()로 보호됨
                 try:
                     cur = await self._read_chuck_position(ch)
-                    if cur["position"] == target_name:
-                        return self._ok(f"CH{ch} Chuck OK — 이미 {target_name.upper()} 위치", current=cur)
                 except Exception:
-                    # 위치 조회 실패는 치명적이지 않으므로 계속 진행
-                    pass
+                    return self._fail(
+                        f"CH{ch} Chuck 위치 조회 실패: {type(e).__name__}: {e}",
+                        code="E412",
+                    )
+                # chuck이 이미 목표 위치면 즉시 성공 응답
+                if cur["position"] == target_name:
+                        return self._ok(f"CH{ch} Chuck OK — 이미 {target_name.upper()} 위치", current=cur)
 
                 try:
                     # (B) POWER ON → MOVE ON (각각 I/O 순간만 락)
