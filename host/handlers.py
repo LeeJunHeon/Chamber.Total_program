@@ -631,26 +631,18 @@ class HostHandlers:
         CH1, CH2 모두 gate가 '닫힘' 상태인지 확인.
         - 하나라도 open / moving / unknown / invalid 이면 VACUUM_ON/OFF 진행 금지
         """
-        not_closed = []
         for ch in (1, 2):
             try:
                 st = await self._read_gate_state(ch)
             except KeyError as e:
-                return self._fail(f"PLC 주소맵에 gate lamp 키가 없습니다: {e}", code="E411")
+                return False, f"PLC 주소맵에 gate lamp 키가 없습니다: {e}", "E411"
             except Exception as e:
-                return self._fail(f"Gate 상태 조회 실패: {type(e).__name__}: {e}", code="E412")
+                return False, f"Gate 상태 조회 실패: {type(e).__name__}: {e}", "E412"
 
-            if st["state"] != "closed":
-                return self._fail(
-                    f"START_SPUTTER 불가 — CH{ch} gate가 CLOSED가 아님({st['state']})",
-                    code="E301",
-                )
+            if st.get("state") != "closed":
+                return False, f"VACUUM_ON/OFF 불가 — CH{ch} gate가 CLOSED가 아님({st.get('state')})", "E301"
 
-        if not_closed:
-            detail = ", ".join([f"CH{ch}={st}" for ch, st in not_closed])
-            return False, f"Gate not closed → {detail} (VACUUM_ON/OFF 불가: 두 게이트 모두 CLOSED 필요)"
-
-        return True, "CH1/CH2 gate 모두 CLOSED"
+        return True, "CH1/CH2 gate 모두 CLOSED", None
     
     async def _read_loadlock_state_for_gate_open(self) -> dict:
         """
@@ -702,9 +694,9 @@ class HostHandlers:
                 # ✅ gate_open 레이스 방지: loadlock 스위치 ON 전까지만 잠깐 락
                 async with self.ctx.lock_ch1:
                     async with self.ctx.lock_ch2:
-                        ok, msg = await self._require_gates_closed()
+                        ok, msg, code = await self._require_gates_closed()
                         if not ok:
-                            return self._fail(msg, code="E307")
+                            return self._fail(msg, code=code)
 
                         # 0) 벤트 OFF
                         async with self._plc_call():
@@ -803,9 +795,9 @@ class HostHandlers:
                 # ✅ gate_open 레이스 방지: VENT_SW TRUE 쓰기 전까지만 잠깐 락
                 async with self.ctx.lock_ch1:
                     async with self.ctx.lock_ch2:
-                        ok, msg = await self._require_gates_closed()
+                        ok, msg, code = await self._require_gates_closed()
                         if not ok:
-                            return self._fail(msg, code="E308")
+                            return self._fail(msg, code=code)
 
                         # 0) 러핑밸브/펌프 OFF
                         async with self._plc_call():
@@ -871,6 +863,7 @@ class HostHandlers:
         """
         wait_s = float(data.get("wait_s", 20.0))  # 전체 타임아웃
         poll_s = float(data.get("poll_s", 1.0))   # ✅ 1초에 1번
+        settle_s = float(data.get("settle_s", 5.0))  # ✅ 펄스 후 대기(기본 5초)
 
         try:
             async with self._plc_command("4PIN_UP"):
@@ -884,6 +877,9 @@ class HostHandlers:
                 # 2) 펄스
                 async with self._plc_call():
                     await self.ctx.plc.press_switch("L_PIN_UP_SW")
+
+                # ✅ 펄스 후 바로 읽지 말고 5초 대기
+                await asyncio.sleep(settle_s)
 
                 # 3) ✅ 램프 폴링(1초마다)
                 lamp_ok = await self._poll_bit_until_true(
@@ -911,6 +907,7 @@ class HostHandlers:
         """
         wait_s = float(data.get("wait_s", 20.0))
         poll_s = float(data.get("poll_s", 1.0))    # ✅ 1초에 1번
+        settle_s = float(data.get("settle_s", 5.0))  # ✅ 기본 5초
 
         try:
             async with self._plc_command("4PIN_DOWN"):
@@ -924,6 +921,9 @@ class HostHandlers:
                 # 2) 펄스
                 async with self._plc_call():
                     await self.ctx.plc.press_switch("L_PIN_DOWN_SW")
+
+                # ✅ 펄스 후 바로 읽지 말고 5초(기본) 대기
+                await asyncio.sleep(settle_s)
 
                 # 3) ✅ 램프 폴링(1초마다)
                 lamp_ok = await self._poll_bit_until_true(
