@@ -626,7 +626,7 @@ class HostHandlers:
 
         return {"ch": ch, "state": state, "open_lamp": open_lamp, "close_lamp": close_lamp}
     
-    async def _require_gates_closed(self) -> tuple[bool, str]:
+    async def _require_gates_closed(self) -> tuple[bool, str, str | None]:
         """
         CH1, CH2 모두 gate가 '닫힘' 상태인지 확인.
         - 하나라도 open / moving / unknown / invalid 이면 VACUUM_ON/OFF 진행 금지
