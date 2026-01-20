@@ -798,11 +798,20 @@ class HostHandlers:
                         ok, msg, code = await self._require_gates_closed()
                         if not ok:
                             return self._fail(msg, code=code)
+                        
+                        # ✅ (추가) 0) 이미 대기압이면(L_ATM=TRUE) 즉시 성공 응답 (인터락은 이미 확인함)
+                        async with self._plc_call():
+                            atm_now = bool(await self.ctx.plc.read_bit("L_ATM"))
+                        if atm_now:
+                            success = True
+                            return self._ok("VACUUM_OFF: 이미 대기압 상태 (L_ATM=TRUE)")
 
                         # 0) 러핑밸브/펌프 OFF
                         async with self._plc_call():
                             await self.ctx.plc.write_switch("L_R_V_SW", False)
+
                         await asyncio.sleep(3.0)
+
                         async with self._plc_call():
                             await self.ctx.plc.write_switch("L_R_P_SW", False)
 
@@ -994,6 +1003,16 @@ class HostHandlers:
                 async with self.ctx.lock_ch2:
                     async with self._plc_command(f"GATE_OPEN_CH{ch}"):
                         self._log_client_request(data)
+
+                        # ✅ (추가) 0) gate lamp 먼저 확인: 이미 OPEN이면 즉시 OK (불필요 동작 방지)
+                        cur_st = await self._read_gate_state(ch)
+                        if cur_st["state"] == "open":
+                            return self._ok(f"CH{ch}_GATE_OPEN: 이미 OPEN 상태", current=cur_st)
+                        if cur_st["state"] == "invalid_both_true":
+                            return self._fail(
+                                f"CH{ch} gate lamp 이상(OPEN/CLOSE 모두 TRUE): {cur_st}",
+                                code="E306",
+                            )
                         
                         # ✅ (추가-1) Loadlock이 vacuum on/off 전환 상태인지 체크
                         ok_ll, msg_ll = await self._require_loadlock_safe_for_gate_open()
@@ -1044,6 +1063,11 @@ class HostHandlers:
         ch = int(data.get("ch", 1))
         wait_s = float(data.get("wait_s", 5.0))  # 기본 5초
 
+        # ✅ (추가) 공정 실행 중이면 게이트 조작 금지 (gate_open과 동일 철학)
+        busy = self._fail_if_ch_busy(ch, f"CH{ch}_GATE_CLOSE")
+        if busy is not None:
+            return busy
+
         if ch == 1:
             interlock, sw, lamp = "G_V_1_인터락", "G_V_1_CLOSE_SW", "G_V_1_CLOSE_LAMP"
         elif ch == 2:
@@ -1056,12 +1080,15 @@ class HostHandlers:
             async with self._plc_command(f"GATE_CLOSE_CH{ch}"):
                 self._log_client_request(data)
                 try:
-                    # G_V_1,2_인터락은 GATE OPEN에만 영향을 줌
-                    # # 1) 인터락 확인 — 읽는 순간만 락
-                    # async with self._plc_call():
-                    #     il = await self.ctx.plc.read_bit(interlock)
-                    # if not il:
-                    #     return self._fail(f"{interlock}=FALSE → CH{ch}_GATE_CLOSE 불가")
+                    # ✅ (추가) 0) gate lamp 먼저 확인: 이미 CLOSED면 즉시 OK
+                    cur_st = await self._read_gate_state(ch)
+                    if cur_st["state"] == "closed":
+                        return self._ok(f"CH{ch}_GATE_CLOSE: 이미 CLOSED 상태", current=cur_st)
+                    if cur_st["state"] == "invalid_both_true":
+                        return self._fail(
+                            f"CH{ch} gate lamp 이상(OPEN/CLOSE 모두 TRUE): {cur_st}",
+                            code="E306",
+                        )
 
                     # 1) 스위치 펄스 — 쓰는 순간만 락
                     async with self._plc_call():
