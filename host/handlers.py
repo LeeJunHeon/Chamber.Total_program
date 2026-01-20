@@ -803,6 +803,14 @@ class HostHandlers:
                         async with self._plc_call():
                             atm_now = bool(await self.ctx.plc.read_bit("L_ATM"))
                         if atm_now:
+                            # ✅ 이미 대기압이어도 'VACUUM_OFF 종료 상태'를 맞춰주고 응답
+                            async with self._plc_call():
+                                await self.ctx.plc.write_switch("L_VENT_SW", False)
+                                await self.ctx.plc.write_switch("L_R_V_SW", False)
+                            await asyncio.sleep(3.0)
+                            async with self._plc_call():
+                                await self.ctx.plc.write_switch("L_R_P_SW", False)
+
                             success = True
                             return self._ok("VACUUM_OFF: 이미 대기압 상태 (L_ATM=TRUE)")
 
@@ -1193,14 +1201,14 @@ class HostHandlers:
                 # (A) 현재 위치 확인 — 내부 read는 _plc_call()로 보호됨
                 try:
                     cur = await self._read_chuck_position(ch)
-                except Exception:
+                except Exception as e:
                     return self._fail(
                         f"CH{ch} Chuck 위치 조회 실패: {type(e).__name__}: {e}",
                         code="E412",
                     )
                 # chuck이 이미 목표 위치면 즉시 성공 응답
                 if cur["position"] == target_name:
-                        return self._ok(f"CH{ch} Chuck OK — 이미 {target_name.upper()} 위치", current=cur)
+                    return self._ok(f"CH{ch} Chuck OK — 이미 {target_name.upper()} 위치", current=cur)
 
                 try:
                     # (B) POWER ON → MOVE ON (각각 I/O 순간만 락)
