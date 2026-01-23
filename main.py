@@ -835,17 +835,13 @@ class MainWindow(QWidget):
     def request_host_restart(self) -> None:
         self._loop.create_task(self._restart_host())
 
-if __name__ == "__main__":
-    if sys.platform.startswith("win"):
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
+def main() -> int:
     _logger = setup_app_logging(app_name="CH1&2_program")
     install_global_exception_hooks(_logger)
     install_warnings_logging(_logger)
 
     app = QApplication(sys.argv)
 
-    # ✅ Qt 내부 warning/error도 잡기 (QApplication 만든 다음 설치 권장)
     install_qt_message_logging(_logger)
 
     loop = QEventLoop(app)
@@ -855,5 +851,18 @@ if __name__ == "__main__":
 
     w = MainWindow(loop)
     w.show()
+
     with loop:
         loop.run_forever()
+
+    return 0
+
+
+if __name__ == "__main__":
+    if sys.platform.startswith("win"):
+        from multiprocessing import freeze_support
+        freeze_support()
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+    raise SystemExit(main())
+
