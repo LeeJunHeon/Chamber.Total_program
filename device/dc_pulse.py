@@ -60,6 +60,9 @@ DCP_RECONNECT_BACKOFF_START_MS = 1000
 DCP_RECONNECT_BACKOFF_MAX_MS = 10000
 DCP_FIRST_CMD_EXTRA_TIMEOUT_MS = 1000
 
+# ✅ 명령 실패 시 fault 조회/클리어 후 1회 재전송 (LOCAL/REMOTE/ORIGIN 건드리지 않음)
+DCP_ENABLE_FAULT_RECOVER = getattr(cfgc, "DCP_ENABLE_FAULT_RECOVER", True)
+
 # ===== 통일된 스케일 상수 =====
 # (측정 raw -> 공학단위) 한 LSB가 얼마인지
 V_MEAS_V_PER_LSB = 1.468815 # 1 count ≈ 1.5 V  (매뉴얼 표준)
@@ -356,6 +359,23 @@ class AsyncDCPulse:
         if not ok_conn:
             await self._emit_failed("CONNECT", "연결 준비 실패")
             return False
+        
+        # ✅ [ADD] 공정 시작 전: 폴링 OFF + 버퍼 정리 + Ctrl/Fault 사전 점검
+        self.set_process_status(False)
+        self._drain_rx_frames()
+
+        ctrl = await self.read_control_mode()
+        if ctrl == "LOCAL":
+            await self._emit_failed("PRECHECK", "Control mode=LOCAL (패널에서 HOST/REMOTE 전환 필요)")
+            return False
+
+        fault = await self.read_fault_code()
+        if fault and fault != 0:
+            await self._emit_status(f"[PRECHECK] fault=0x{fault:04X} → FAULT_RESET(0x6F) 시도")
+            ok_reset = await self.fault_reset()
+            if not ok_reset:
+                await self._emit_failed("PRECHECK", "FAULT_RESET 실패(인터락/점화/케이블/진공 상태 확인 필요)")
+                return False
 
         # 2) (옵션) freq/duty 모두 숫자면 off_time_us를 계산해서 0x67로 전송
         if not _is_keep(freq) and freq is not None:
@@ -519,8 +539,14 @@ class AsyncDCPulse:
             if not fut.done():
                 fut.set_result(resp)
         payload = self._proto.pack_read(code)
-        self._enqueue(Command(payload, label, DCP_TIMEOUT_MS, DCP_GAP_MS, 2, _cb))
-        return await self._await_reply_bytes(label, fut)
+        retries = 2
+        self._enqueue(Command(payload, label, DCP_TIMEOUT_MS, DCP_GAP_MS, retries, _cb))
+        return await self._await_reply_bytes(
+            label, fut,
+            timeout_ms=DCP_TIMEOUT_MS,
+            retries=retries,
+            gap_ms=DCP_GAP_MS
+        )
 
     # 2) 현재 출력값 P/I/V 읽기 (0x9A → P,I,V 각 2바이트)
     async def read_output_piv(self) -> Optional[dict]:
@@ -577,6 +603,90 @@ class AsyncDCPulse:
         if len(data) >= 2:
             return (data[-2] << 8) | data[-1]
         return data[-1]
+    
+    # [ADD] Fault State Reset (0x6F) : data=0x0001(clear)
+    async def fault_reset(self) -> bool:
+        """
+        매뉴얼(Protocol): 0x6F Fault State Reset
+        - Data: 2 bytes
+        - clear = 1 (0x0001)
+        """
+        label = "FAULT_RESET"
+
+        # 연결 상태 보장(끊긴 직후면 잠깐 대기)
+        if not await self._wait_until_connected(timeout=1.5):
+            await self._emit_failed(label, "연결 안됨")
+            return False
+
+        # 잔여 echo 제거
+        self._purge_rx_frames()
+
+        fut = asyncio.get_running_loop().create_future()
+
+        def _cb(resp: Optional[bytes]):
+            if not fut.done():
+                fut.set_result(resp)
+
+        payload = self._proto.pack_write(0x6F, 0x0001, width=2)
+        # reset은 과도한 반복이 위험할 수 있어 1회만 전송(필요 시 상위에서 재시도)
+        self._enqueue(Command(payload, label, DCP_TIMEOUT_MS, DCP_GAP_MS, 1, _cb))
+        resp = await self._await_reply_bytes(label, fut)
+
+        if not self._ok_from_resp(resp, label=label):
+            await self._emit_failed(label, f"ACK 미수신: {resp!r}")
+            return False
+
+        await self._emit_confirmed(label)
+
+        # reset 후 fault가 남아있는지 재확인 (best-effort)
+        f = await self.read_fault_code()
+        if f is None:
+            await self._emit_status("FAULT_RESET: fault 재확인 실패(통신)")
+            return True
+
+        if f != 0:
+            await self._emit_failed(label, f"fault 남음: 0x{f:04X}")
+            return False
+
+        return True
+
+
+    # [ADD] 명령 실패 시 fault 확인/클리어 후 재전송 여부 결정
+    async def _recover_and_prepare_retry(self, label: str, resp: Optional[bytes]) -> bool:
+        """
+        write 명령 실패(NAK/timeout) 시:
+        1) READ_FAULT_CODE(0x9E)
+        2) fault != 0이면 FAULT_RESET(0x6F, data=0x0001)
+        3) 동일 명령을 1회 재전송할지 여부 반환
+        """
+        # timeout/disconnect였으면 우선 재연결을 기다림
+        if resp is None:
+            ok_conn = await self._wait_until_connected(timeout=3.0)
+            if not ok_conn:
+                await self._emit_status(f"[{label}] 실패 후 재연결 안됨 → 복구 중단")
+                return False
+
+        # 다음 재전송이 잔여 echo(0x06/0x04)에 오염되지 않게 비움
+        self._purge_rx_frames()
+
+        fault = await self.read_fault_code()
+        if fault is None:
+            await self._emit_status(f"[{label}] 실패 후 fault 조회 실패 → 단순 재전송 1회 시도")
+            return True
+
+        if fault == 0:
+            await self._emit_status(f"[{label}] 실패 후 fault=0 → 단순 재전송 1회 시도")
+            return True
+
+        await self._emit_status(f"[{label}] 실패 후 fault=0x{fault:04X} → FAULT_RESET 후 재전송")
+        ok_reset = await self.fault_reset()
+        if not ok_reset:
+            await self._emit_status(f"[{label}] FAULT_RESET 실패 → 재전송 중단")
+            return False
+
+        # 장비 내부 정리 시간(너무 짧으면 바로 NAK가 재발할 수 있음)
+        await asyncio.sleep(0.08)
+        return True
 
     # ====== 내부: 명령 헬퍼 ======
     def _ok_from_resp(self, resp: Optional[bytes], *, label: str = "") -> bool:
@@ -613,8 +723,14 @@ class AsyncDCPulse:
                 fut.set_result(resp)
 
         payload = self._proto.pack_write(cmd, value, width=width)
-        self._enqueue(Command(payload, label, DCP_TIMEOUT_MS, DCP_GAP_MS, DCP_CMD_MAX_RETRIES, _cb))
-        resp = await self._await_reply_bytes(label, fut)
+        retries = DCP_CMD_MAX_RETRIES
+        self._enqueue(Command(payload, label, DCP_TIMEOUT_MS, DCP_GAP_MS, retries, _cb))
+        resp = await self._await_reply_bytes(
+            label, fut,
+            timeout_ms=DCP_TIMEOUT_MS,
+            retries=retries,
+            gap_ms=DCP_GAP_MS
+        )
 
         # ✅ OUTPUT_ON/OFF는 반드시 0x06(ACK)만 성공으로 간주
         if label in ("OUTPUT_ON", "OUTPUT_OFF"):
@@ -644,6 +760,53 @@ class AsyncDCPulse:
                         pass
                     self.set_process_status(True)
                     return True
+                # ✅ (추가) OUTPUT_ON 실패 시: fault 체크/클리어 후 1회 재전송
+                if DCP_ENABLE_FAULT_RECOVER:
+                    try:
+                        do_retry = await self._recover_and_prepare_retry(label, resp)
+                    except Exception:
+                        do_retry = False
+
+                    if do_retry:
+                        fut_r = asyncio.get_running_loop().create_future()
+                        def _cb_r(r: Optional[bytes]):
+                            if not fut_r.done():
+                                fut_r.set_result(r)
+
+                        self._enqueue(Command(
+                            payload, "OUTPUT_ON(recover)",
+                            DCP_TIMEOUT_MS, DCP_GAP_MS, 1, _cb_r
+                        ))
+                        resp2 = await self._await_reply_bytes(
+                            "OUTPUT_ON(recover)", fut_r,
+                            timeout_ms=DCP_TIMEOUT_MS,
+                            retries=1,
+                            gap_ms=DCP_GAP_MS
+                        )
+
+                        ack_ok2 = bool(resp2 and len(resp2) == 1 and resp2[0] == 0x06)
+                        if ack_ok2:
+                            self._out_on = True
+                            await self._emit_confirmed("OUTPUT_ON_RECOVERED")
+                            try:
+                                await asyncio.sleep(ACTIVATION_CHECK_DELAY_S)
+                            except Exception:
+                                pass
+                            self.set_process_status(True)
+                            return True
+
+                        await asyncio.sleep(0.08)
+                        ver2 = await self._verify_output_state()
+                        if ver2 is True:
+                            self._out_on = True
+                            await self._emit_confirmed("OUTPUT_ON_RECOVERED_VERIFIED")
+                            try:
+                                await asyncio.sleep(ACTIVATION_CHECK_DELAY_S)
+                            except Exception:
+                                pass
+                            self.set_process_status(True)
+                            return True
+
                 await self._emit_failed(label, "응답 없음/실패 (상태 불일치/확인 불가)")
                 return False
 
@@ -675,6 +838,11 @@ class AsyncDCPulse:
                 return True
 
             # 둘 다 불만족(P>0W AND HV On=True) → OFF 재전송 1회
+            # ✅ (추가) OUTPUT_OFF 실패 상태면: fault 체크/클리어 후 재전송
+            if DCP_ENABLE_FAULT_RECOVER:
+                with contextlib.suppress(Exception):
+                    await self._recover_and_prepare_retry(label, resp)
+
             await self._emit_status(
                 f"OFF 미확인(P={p if p is not None else 'NA'} W, HV={'ON' if hv_on else 'OFF/NA'}) → OUTPUT_OFF 재시도"
             )
@@ -684,7 +852,13 @@ class AsyncDCPulse:
                 "OUTPUT_OFF(retry)", DCP_TIMEOUT_MS, DCP_GAP_MS, 1,
                 lambda r: fut2.set_result(r if not fut2.done() else None)
             ))
-            _ = await self._await_reply_bytes("OUTPUT_OFF(retry)", fut2)
+
+            _ = await self._await_reply_bytes(
+                "OUTPUT_OFF(retry)", fut2,
+                timeout_ms=DCP_TIMEOUT_MS,
+                retries=1,
+                gap_ms=DCP_GAP_MS
+            )
 
             # 재전송 후 다시 확인
             ok_off2, p2, hv_on2 = await self._confirm_off_quick()
@@ -705,8 +879,38 @@ class AsyncDCPulse:
         # ▶ 일반 쓰기 명령(REF_POWER, REG_POWER 등)은 여기서 ACK 기반으로 반환을 보장
         ok = self._ok_from_resp(resp, label=label)
         if ok:
-            await self._emit_confirmed(label)     # 선택: 성공 이벤트 남김
+            await self._emit_confirmed(label)
             return True
+
+        # ✅ (추가) 일반 쓰기 실패 시: fault 체크/클리어 후 1회 재전송
+        if DCP_ENABLE_FAULT_RECOVER:
+            try:
+                do_retry = await self._recover_and_prepare_retry(label, resp)
+            except Exception:
+                do_retry = False
+
+            if do_retry:
+                fut_r = asyncio.get_running_loop().create_future()
+                def _cb_r(r: Optional[bytes]):
+                    if not fut_r.done():
+                        fut_r.set_result(r)
+
+                self._enqueue(Command(
+                    payload, f"{label}(recover)",
+                    DCP_TIMEOUT_MS, DCP_GAP_MS, 1, _cb_r
+                ))
+                resp2 = await self._await_reply_bytes(
+                    f"{label}(recover)", fut_r,
+                    timeout_ms=DCP_TIMEOUT_MS,
+                    retries=1,
+                    gap_ms=DCP_GAP_MS
+                )
+
+                ok2 = self._ok_from_resp(resp2, label=label)
+                if ok2:
+                    await self._emit_confirmed(label + "_RECOVERED")
+                    return True
+
         await self._emit_failed(label, "응답 없음/실패")
         return False
         
@@ -824,33 +1028,58 @@ class AsyncDCPulse:
                 fut.set_result(_resp)
 
         payload = self._proto.pack_write(code, None, width=0)
-        self._enqueue(Command(payload, label, DCP_TIMEOUT_MS, DCP_GAP_MS, DCP_CMD_MAX_RETRIES, _cb))
-        resp = await self._await_reply_bytes(label, fut)
+        retries = DCP_CMD_MAX_RETRIES
+        self._enqueue(Command(payload, label, DCP_TIMEOUT_MS, DCP_GAP_MS, retries, _cb))
+        resp = await self._await_reply_bytes(
+            label, fut,
+            timeout_ms=DCP_TIMEOUT_MS,
+            retries=retries,
+            gap_ms=DCP_GAP_MS
+        )
+
         if self._ok_from_resp(resp):
             await self._emit_confirmed(label)
         else:
             await self._emit_failed(label, "응답 없음/실패")
 
-    async def _await_reply_bytes(self, label: str, fut: "asyncio.Future[Optional[bytes]]") -> Optional[bytes]:
+    async def _await_reply_bytes(
+        self,
+        label: str,
+        fut: "asyncio.Future[Optional[bytes]]",
+        *,
+        timeout_ms: int,
+        retries: int,
+        gap_ms: int,
+        extra_timeout_s: float = 0.0,
+    ) -> Optional[bytes]:
         # 오픈 직후 여유
         extra = 0.0
         if self._last_connect_mono > 0.0 and (time.monotonic() - self._last_connect_mono) < 2.0:
             extra = DCP_FIRST_CMD_EXTRA_TIMEOUT_MS / 1000.0
+
+        # 워커 쪽 per-attempt 대기 시간(현재 워커도 동일 계산 사용)
+        per_attempt_s = (timeout_ms / 1000.0) + 2.0
+
+        # ✅ retries_left 만큼 실제로 재시도하는 구조이므로 호출자도 그 총합을 기다려야 함
+        # 시도 횟수 = 1 + retries
+        total_s = (retries + 1) * (per_attempt_s + (gap_ms / 1000.0)) + extra + extra_timeout_s
+
         try:
-            resp = await asyncio.wait_for(fut, timeout=(DCP_TIMEOUT_MS/1000.0) + 2.0 + extra)
+            resp = await asyncio.wait_for(fut, timeout=total_s)
+
             if resp is not None:
-                # ▶ 1바이트 에코면 ACK/ERR 라벨링, 그 외는 그대로 hex 덤프
                 if len(resp) == 1 and resp[0] in (0x06, 0x04):
                     name = "ACK" if resp[0] == 0x06 else "ERR"
                     await self._emit_status(f"[RECV] {label} ← {name}({resp.hex(' ')})")
                 else:
                     await self._emit_status(f"[RECV] {label} ← {resp.hex(' ')}")
+
             return resp
+
         except asyncio.TimeoutError:
-            await self._emit_status(f"[TIMEOUT] {label} → 세션 재시작")
+            await self._emit_status(f"[TIMEOUT] {label} (total≈{total_s:.1f}s) → 세션 재시작")
             self._on_tcp_disconnected()
             return None
-
 
     # ====== 내부: 연결/워치독/워커/리더 ======
     async def _watchdog_loop(self):
@@ -1207,6 +1436,14 @@ class AsyncDCPulse:
                                             f"low_current: I <= {DCP_I_LOW_THRESH_A:.3f}A "
                                             f"({self._low_curr_n}회 연속)"
                                         )
+
+                                        # ✅ (추가) AUTO-STOP 시점 fault code 동봉 (원인 추적용)
+                                        fault = None
+                                        with contextlib.suppress(Exception):
+                                            fault = await self.read_fault_code()
+                                        if fault is not None and fault != 0:
+                                            reason += f", fault=0x{fault:04X}"
+
                                         self._ev_nowait(DCPEvent(
                                             kind="command_failed",
                                             cmd="AUTO_STOP",
