@@ -34,16 +34,20 @@ DCP_P_SET_DEVIATE_MAX_N = int(getattr(cfgc, "DCP_P_SET_DEVIATE_MAX_N", 3))
 DCP_I_LOW_THRESH_A    = getattr(cfgc, "DCP_I_LOW_THRESH_A", 0.05)  # A 이하를 저전류로 판단
 DCP_I_LOW_COUNT_MAX_N = int(getattr(cfgc, "DCP_I_LOW_COUNT_MAX_N", 3))  # 연속 허용 횟수
 
-# ----- 명령 재시도 횟수 (장비 ERR/타임아웃 공통) -----
-# retries_left 는 "재시도 가능 횟수" 이므로
-# 실제 전송 시도 수 = 1(처음) + DCP_CMD_MAX_RETRIES 입니다.
-DCP_CMD_MAX_RETRIES = int(getattr(cfgc, "DCP_CMD_MAX_RETRIES", 5))  # 최대 재시도 5회
+# ----- (기존) 워커 레벨 재시도 횟수 -----
+DCP_CMD_MAX_RETRIES = int(getattr(cfgc, "DCP_CMD_MAX_RETRIES", 5))  # (read 등) 워커 재시도용
+
+# ✅ (신규) "상위 루프" 총 시도 횟수: 1회 전송 → 실패 즉시 fault 처리 → 재전송
+# 실제 전송 시도 수 = DCP_RECOVER_MAX_ATTEMPTS
+DCP_RECOVER_MAX_ATTEMPTS = int(getattr(cfgc, "DCP_RECOVER_MAX_ATTEMPTS", 5))
+
+# ✅ write 명령은 워커 blind retry를 쓰지 않고, _write_cmd_data()에서 루프 제어
+DCP_WRITE_WORKER_RETRIES = 0
 
 # OFF 이후 P=0 강제 여부(기본 False: 로그만 확인, True: 0W 아니면 실패 처리)
 STRICT_OFF_CONFIRM_BY_PIV     = getattr(cfgc, "DCP_STRICT_OFF_CONFIRM_BY_PIV", True)
 OFF_CONFIRM_TIMEOUT_S         = getattr(cfgc, "DCP_OFF_CONFIRM_TIMEOUT_S", 3.0)
 OFF_CONFIRM_POLL_INTERVAL_S   = getattr(cfgc, "DCP_OFF_CONFIRM_POLL_INTERVAL_S", 0.2)
-
 
 # === OUTPUT_ON 직후 간단 활성 확인 ===
 ACTIVATION_CHECK_DELAY_S = 5.0      # OUTPUT_ON 후 첫 측정까지 대기 (초)
@@ -628,9 +632,16 @@ class AsyncDCPulse:
                 fut.set_result(resp)
 
         payload = self._proto.pack_write(0x6F, 0x0001, width=2)
-        # reset은 과도한 반복이 위험할 수 있어 1회만 전송(필요 시 상위에서 재시도)
-        self._enqueue(Command(payload, label, DCP_TIMEOUT_MS, DCP_GAP_MS, 1, _cb))
-        resp = await self._await_reply_bytes(label, fut)
+
+        # ✅ write는 워커 blind retry 없이 1회만(재시도는 상위 루프가 제어)
+        self._enqueue(Command(payload, label, DCP_TIMEOUT_MS, DCP_GAP_MS, DCP_WRITE_WORKER_RETRIES, _cb))
+
+        resp = await self._await_reply_bytes(
+            label, fut,
+            timeout_ms=DCP_TIMEOUT_MS,
+            retries=DCP_WRITE_WORKER_RETRIES,
+            gap_ms=DCP_GAP_MS
+        )
 
         if not self._ok_from_resp(resp, label=label):
             await self._emit_failed(label, f"ACK 미수신: {resp!r}")
@@ -685,7 +696,7 @@ class AsyncDCPulse:
             return False
 
         # 장비 내부 정리 시간(너무 짧으면 바로 NAK가 재발할 수 있음)
-        await asyncio.sleep(0.08)
+        await asyncio.sleep(1.0) # 1초
         return True
 
     # ====== 내부: 명령 헬퍼 ======
@@ -709,209 +720,149 @@ class AsyncDCPulse:
                 break
 
     async def _write_cmd_data(self, cmd: int, value: int, width: int, *, label: str) -> bool:
-        # ▶ 크리티컬 명령 전, 폴링 잠시 중지 + 수신버퍼 비우기
-        if label in ("OUTPUT_ON", "OUTPUT_OFF"):
+        """
+        ✅ 신규 정책:
+        - write는 워커 blind retry(NAK 반복) 대신,
+        1회 전송 → 실패 즉시 fault read/reset 판단 → 재전송
+        이 사이클을 총 DCP_RECOVER_MAX_ATTEMPTS 회 반복.
+        """
+        base_label = label
+
+        # ▶ 크리티컬 명령 전, 폴링 잠시 중지 + 수신버퍼 비우기(기존 유지)
+        if base_label in ("OUTPUT_ON", "OUTPUT_OFF"):
             try:
-                self.set_process_status(False)   # 폴링 중지
+                self.set_process_status(False)
             except Exception:
                 pass
-            self._purge_rx_frames()             # 수신 프레임 잔여분 제거
-
-        fut = asyncio.get_running_loop().create_future()
-        def _cb(resp: Optional[bytes]):
-            if not fut.done():
-                fut.set_result(resp)
+            self._purge_rx_frames()
 
         payload = self._proto.pack_write(cmd, value, width=width)
-        retries = DCP_CMD_MAX_RETRIES
-        self._enqueue(Command(payload, label, DCP_TIMEOUT_MS, DCP_GAP_MS, retries, _cb))
-        resp = await self._await_reply_bytes(
-            label, fut,
-            timeout_ms=DCP_TIMEOUT_MS,
-            retries=retries,
-            gap_ms=DCP_GAP_MS
-        )
 
-        # ✅ OUTPUT_ON/OFF는 반드시 0x06(ACK)만 성공으로 간주
-        if label in ("OUTPUT_ON", "OUTPUT_OFF"):
-            intended_on = (label == "OUTPUT_ON")
-            ack_ok = bool(resp and len(resp) == 1 and resp[0] == 0x06)
+        last_resp: Optional[bytes] = None
 
-            # === OUTPUT_ON: 기존 동작 그대로 유지 ===
-            if intended_on:
-                if ack_ok:
-                    self._out_on = True
-                    await self._emit_confirmed(label)
-                    try:
-                        await asyncio.sleep(ACTIVATION_CHECK_DELAY_S)
-                    except Exception:
-                        pass
-                    self.set_process_status(True)
-                    return True
-                # ACK 미수신 시에도 ON 쪽은 추가 확인 없이 기존 로직 유지
-                await asyncio.sleep(0.08)
-                ver = await self._verify_output_state()
-                if ver is True:
-                    self._out_on = True
-                    await self._emit_confirmed(label + "_VERIFIED")
-                    try:
-                        await asyncio.sleep(ACTIVATION_CHECK_DELAY_S)
-                    except Exception:
-                        pass
-                    self.set_process_status(True)
-                    return True
-                # ✅ (추가) OUTPUT_ON 실패 시: fault 체크/클리어 후 1회 재전송
-                if DCP_ENABLE_FAULT_RECOVER:
-                    try:
-                        do_retry = await self._recover_and_prepare_retry(label, resp)
-                    except Exception:
-                        do_retry = False
+        for attempt in range(1, DCP_RECOVER_MAX_ATTEMPTS + 1):
+            attempt_label = f"{base_label}[{attempt}/{DCP_RECOVER_MAX_ATTEMPTS}]"
 
-                    if do_retry:
-                        fut_r = asyncio.get_running_loop().create_future()
-                        def _cb_r(r: Optional[bytes]):
-                            if not fut_r.done():
-                                fut_r.set_result(r)
+            # 시도 전 RX 잔여 제거(혼선 방지)
+            self._purge_rx_frames()
 
-                        self._enqueue(Command(
-                            payload, "OUTPUT_ON(recover)",
-                            DCP_TIMEOUT_MS, DCP_GAP_MS, 1, _cb_r
-                        ))
-                        resp2 = await self._await_reply_bytes(
-                            "OUTPUT_ON(recover)", fut_r,
-                            timeout_ms=DCP_TIMEOUT_MS,
-                            retries=1,
-                            gap_ms=DCP_GAP_MS
-                        )
+            fut = asyncio.get_running_loop().create_future()
+            def _cb(resp: Optional[bytes]):
+                if not fut.done():
+                    fut.set_result(resp)
 
-                        ack_ok2 = bool(resp2 and len(resp2) == 1 and resp2[0] == 0x06)
-                        if ack_ok2:
-                            self._out_on = True
-                            await self._emit_confirmed("OUTPUT_ON_RECOVERED")
-                            try:
-                                await asyncio.sleep(ACTIVATION_CHECK_DELAY_S)
-                            except Exception:
-                                pass
-                            self.set_process_status(True)
-                            return True
-
-                        await asyncio.sleep(0.08)
-                        ver2 = await self._verify_output_state()
-                        if ver2 is True:
-                            self._out_on = True
-                            await self._emit_confirmed("OUTPUT_ON_RECOVERED_VERIFIED")
-                            try:
-                                await asyncio.sleep(ACTIVATION_CHECK_DELAY_S)
-                            except Exception:
-                                pass
-                            self.set_process_status(True)
-                            return True
-
-                await self._emit_failed(label, "응답 없음/실패 (상태 불일치/확인 불가)")
-                return False
-
-            # === OUTPUT_OFF: 최소판정 먼저 → (1) ACK 성공, (2) STATUS로 HV=Off 성공 ===
-            # (1) ACK만 왔어도 성공 처리
-            if ack_ok:
-                self._out_on = False
-                await self._emit_confirmed(label)       # "OUTPUT_OFF"
-                self.set_process_status(False)
-                return True
-
-            # (2) ACK이 없어도 READ_STATUS로 HV가 Off(=0)이면 성공 처리
-            try:
-                flags = await self.read_status_flags()
-                if flags is not None and (not self._hv_on_from_status(flags)):
-                    self._out_on = False
-                    await self._emit_confirmed(label + "_VERIFIED")  # 상태로 확인됨
-                    self.set_process_status(False)
-                    return True
-            except Exception:
-                pass
-
-            # === (이하 기존 로직 유지) P==0W 우선, STATUS(HV Off) 보조, 실패 시 1회 재시도 ===
-            ok_off, p, hv_on = await self._confirm_off_quick()
-            if ok_off:
-                self._out_on = False
-                await self._emit_confirmed(label if ack_ok else (label + "_VERIFIED"))
-                self.set_process_status(False)  # OFF면 폴링 멈춤
-                return True
-
-            # 둘 다 불만족(P>0W AND HV On=True) → OFF 재전송 1회
-            # ✅ (추가) OUTPUT_OFF 실패 상태면: fault 체크/클리어 후 재전송
-            if DCP_ENABLE_FAULT_RECOVER:
-                with contextlib.suppress(Exception):
-                    await self._recover_and_prepare_retry(label, resp)
-
-            await self._emit_status(
-                f"OFF 미확인(P={p if p is not None else 'NA'} W, HV={'ON' if hv_on else 'OFF/NA'}) → OUTPUT_OFF 재시도"
-            )
-            fut2 = asyncio.get_running_loop().create_future()
+            # ✅ write는 워커 재시도 0 (1회 전송)
             self._enqueue(Command(
-                self._proto.pack_write(0x80, 0x0002, width=2),
-                "OUTPUT_OFF(retry)", DCP_TIMEOUT_MS, DCP_GAP_MS, 1,
-                lambda r: fut2.set_result(r if not fut2.done() else None)
+                payload, attempt_label,
+                DCP_TIMEOUT_MS, DCP_GAP_MS,
+                DCP_WRITE_WORKER_RETRIES,
+                _cb
             ))
 
-            _ = await self._await_reply_bytes(
-                "OUTPUT_OFF(retry)", fut2,
+            resp = await self._await_reply_bytes(
+                attempt_label, fut,
                 timeout_ms=DCP_TIMEOUT_MS,
-                retries=1,
+                retries=DCP_WRITE_WORKER_RETRIES,
                 gap_ms=DCP_GAP_MS
             )
+            last_resp = resp
 
-            # 재전송 후 다시 확인
-            ok_off2, p2, hv_on2 = await self._confirm_off_quick()
-            if ok_off2:
-                self._out_on = False
-                await self._emit_confirmed(label if ack_ok else (label + "_VERIFIED"))
-                self.set_process_status(False)
+            # ---- OUTPUT_ON/OFF 특수 처리(기존 판정 로직 최대한 유지) ----
+            if base_label in ("OUTPUT_ON", "OUTPUT_OFF"):
+                intended_on = (base_label == "OUTPUT_ON")
+                ack_ok = bool(resp and len(resp) == 1 and resp[0] == 0x06)
+
+                # ===== OUTPUT_ON =====
+                if intended_on:
+                    if ack_ok:
+                        self._out_on = True
+                        await self._emit_confirmed(base_label)
+                        with contextlib.suppress(Exception):
+                            await asyncio.sleep(ACTIVATION_CHECK_DELAY_S)
+                        self.set_process_status(True)
+                        return True
+
+                    # ACK 미수신이어도 상태로 ON 확인되면 성공(기존 유지)
+                    await asyncio.sleep(0.08)
+                    ver = await self._verify_output_state()
+                    if ver is True:
+                        self._out_on = True
+                        await self._emit_confirmed(base_label + "_VERIFIED")
+                        with contextlib.suppress(Exception):
+                            await asyncio.sleep(ACTIVATION_CHECK_DELAY_S)
+                        self.set_process_status(True)
+                        return True
+
+                    # 실패 → 즉시 fault 처리 후 다음 attempt로
+                    if DCP_ENABLE_FAULT_RECOVER:
+                        ok_retry = await self._recover_and_prepare_retry(base_label, resp)
+                        if not ok_retry:
+                            await self._emit_failed(base_label, "FAULT_RESET 실패/복구 불가")
+                            self.set_process_status(False)
+                            return False
+
+                    continue  # 다음 attempt 재전송
+
+                # ===== OUTPUT_OFF =====
+                else:
+                    # (1) ACK 성공이면 성공
+                    if ack_ok:
+                        self._out_on = False
+                        await self._emit_confirmed(base_label)
+                        self.set_process_status(False)
+                        return True
+
+                    # (2) ACK 없어도 STATUS로 HV Off면 성공
+                    try:
+                        flags = await self.read_status_flags()
+                        if flags is not None and (not self._hv_on_from_status(flags)):
+                            self._out_on = False
+                            await self._emit_confirmed(base_label + "_VERIFIED")
+                            self.set_process_status(False)
+                            return True
+                    except Exception:
+                        pass
+
+                    # (3) P==0 또는 HV Off면 성공(기존 quick confirm)
+                    ok_off, p, hv_on = await self._confirm_off_quick()
+                    if ok_off:
+                        self._out_on = False
+                        await self._emit_confirmed(base_label + "_VERIFIED")
+                        self.set_process_status(False)
+                        return True
+
+                    # 실패 → 즉시 fault 처리 후 다음 attempt로
+                    if DCP_ENABLE_FAULT_RECOVER:
+                        ok_retry = await self._recover_and_prepare_retry(base_label, resp)
+                        if not ok_retry:
+                            await self._emit_failed(base_label, "FAULT_RESET 실패/복구 불가")
+                            self.set_process_status(False)
+                            return False
+
+                    continue  # 다음 attempt 재전송
+
+            # ---- 일반 write(REF_POWER, REG_POWER 등) ----
+            ok = self._ok_from_resp(resp, label=base_label)
+            if ok:
+                await self._emit_confirmed(base_label)
                 return True
 
-            await self._emit_failed(
-                label,
-                f"장비 상태 불일치(OFF 미확인) — P={p2 if p2 is not None else 'NA'} W, HV={'ON' if hv_on2 else 'OFF/NA'}"
-            )
-            # OFF가 보장되지 않았다면 폴링을 계속 멈추는 것이 안전
+            # 실패 → 즉시 fault 처리 후 다음 attempt로
+            if DCP_ENABLE_FAULT_RECOVER:
+                ok_retry = await self._recover_and_prepare_retry(base_label, resp)
+                if not ok_retry:
+                    await self._emit_failed(base_label, "FAULT_RESET 실패/복구 불가")
+                    return False
+
+            # fault=0 또는 fault 읽기 실패면 reset 없이 다음 attempt로 재전송
+            continue
+
+        # 여기까지 왔으면 총 시도 횟수 소진
+        await self._emit_failed(base_label, f"응답 없음/실패 — 총 {DCP_RECOVER_MAX_ATTEMPTS}회 시도, last={last_resp!r}")
+        if base_label == "OUTPUT_ON":
             self.set_process_status(False)
-            return False
-        
-        # ▶ 일반 쓰기 명령(REF_POWER, REG_POWER 등)은 여기서 ACK 기반으로 반환을 보장
-        ok = self._ok_from_resp(resp, label=label)
-        if ok:
-            await self._emit_confirmed(label)
-            return True
-
-        # ✅ (추가) 일반 쓰기 실패 시: fault 체크/클리어 후 1회 재전송
-        if DCP_ENABLE_FAULT_RECOVER:
-            try:
-                do_retry = await self._recover_and_prepare_retry(label, resp)
-            except Exception:
-                do_retry = False
-
-            if do_retry:
-                fut_r = asyncio.get_running_loop().create_future()
-                def _cb_r(r: Optional[bytes]):
-                    if not fut_r.done():
-                        fut_r.set_result(r)
-
-                self._enqueue(Command(
-                    payload, f"{label}(recover)",
-                    DCP_TIMEOUT_MS, DCP_GAP_MS, 1, _cb_r
-                ))
-                resp2 = await self._await_reply_bytes(
-                    f"{label}(recover)", fut_r,
-                    timeout_ms=DCP_TIMEOUT_MS,
-                    retries=1,
-                    gap_ms=DCP_GAP_MS
-                )
-
-                ok2 = self._ok_from_resp(resp2, label=label)
-                if ok2:
-                    await self._emit_confirmed(label + "_RECOVERED")
-                    return True
-
-        await self._emit_failed(label, "응답 없음/실패")
+        if base_label == "OUTPUT_OFF":
+            self.set_process_status(False)
         return False
         
     # ❶ [ADD] RS-232 payload 분해 헬퍼: [CMD][DATA...][(ETX?)][CHK] → (cmd, data, chk)
