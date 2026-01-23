@@ -276,9 +276,11 @@ class AsyncDCPulse:
                         transport.abort()
 
         # ── 프레임 큐/잔여물 비움(이전 런 찌꺼기 제거)
-        with contextlib.suppress(Exception):
-            while True:
+        while True:
+            try:
                 self._frame_q.get_nowait()
+            except asyncio.QueueEmpty:
+                break
 
         # ── 상태 리셋(다음 런이 항상 깨끗하게 시작)
         self._reader = None
@@ -1100,10 +1102,12 @@ class AsyncDCPulse:
         self._reader = None
         self._writer = None
 
-        # 프레임 큐 비움
-        with contextlib.suppress(Exception):
-            while True:
+        # 프레임 큐 비움 (정상 종료)
+        while True:
+            try:
                 self._frame_q.get_nowait()
+            except asyncio.QueueEmpty:
+                break
 
         # 세션/타이밍 플래그 리셋
         self._just_reopened = False
