@@ -107,11 +107,11 @@ class _DailyFileHandler(logging.Handler):
 
 
 def setup_app_logging(
-    app_name: str = "CH1&2_program",
+    app_name: str = "CH_1_2_program",
     root: Path = DEFAULT_ERROR_ROOT,
-    file_level: int = logging.INFO,
+    file_level: int = logging.WARNING,
     console_level: int = logging.INFO,
-    enable_console: bool = True,
+    enable_console: bool = False,
 ) -> logging.Logger:
     """
     시스템성 로그 전용 로거 초기화 (하루 1개 파일)
@@ -179,7 +179,7 @@ def setup_app_logging(
     return logger
 
 
-def get_app_logger(default_name: str = "CH1&2_program") -> logging.Logger:
+def get_app_logger(default_name: str = "CH_1_2_program") -> logging.Logger:
     name = _DEFAULT_LOGGER_NAME or default_name
     return logging.getLogger(name)
 

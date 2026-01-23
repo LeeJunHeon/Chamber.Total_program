@@ -836,7 +836,11 @@ class MainWindow(QWidget):
         self._loop.create_task(self._restart_host())
 
 def main() -> int:
-    _logger = setup_app_logging(app_name="CH1&2_program")
+    _logger = setup_app_logging(
+        app_name="CH_1_2_program",
+        file_level=logging.WARNING,   # 파일은 warning 이상만
+        enable_console=False          # 콘솔은 꺼버림 (GUI exe라서)
+    )
     install_global_exception_hooks(_logger)
     install_warnings_logging(_logger)
 
