@@ -46,6 +46,8 @@ from util.app_logging import (
     setup_app_logging,
     install_global_exception_hooks,
     install_asyncio_exception_logging,
+    install_warnings_logging,
+    install_qt_message_logging,
     get_app_logger,
 )
 
@@ -494,7 +496,11 @@ class MainWindow(QWidget):
             ):
                 level = logging.WARNING
 
+            # ✅ 시스템 로그는 "중복 최소화"가 목적이므로 WARNING+만 저장
+            if level < logging.WARNING:
+                return
             self._logger.log(level, "[%s] %s", source, msg)
+
         except Exception:
             pass
 
@@ -835,8 +841,13 @@ if __name__ == "__main__":
 
     _logger = setup_app_logging(app_name="CH1&2_program")
     install_global_exception_hooks(_logger)
+    install_warnings_logging(_logger)
 
     app = QApplication(sys.argv)
+
+    # ✅ Qt 내부 warning/error도 잡기 (QApplication 만든 다음 설치 권장)
+    install_qt_message_logging(_logger)
+
     loop = QEventLoop(app)
     asyncio.set_event_loop(loop)
 
