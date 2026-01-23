@@ -5,7 +5,7 @@
 from host.setup import install_host
 from controller.runtime_state import runtime_state
 
-import sys, asyncio, re, atexit
+import sys, asyncio, re, atexit, logging
 from typing import Optional, Literal
 from pathlib import Path
 from contextvars import ContextVar
@@ -40,6 +40,14 @@ from lib import config_local as cfgl  # CHAT_WEBHOOK_URL 로드
 # 에러코드 팝업
 from PySide6.QtWidgets import QMessageBox
 from util.timed_popup import attach_autoclose
+
+# 시스템 로그 저장
+from util.app_logging import (
+    setup_app_logging,
+    install_global_exception_hooks,
+    install_asyncio_exception_logging,
+    get_app_logger,
+)
 
 # ───────────────────────────────────────────────────────────
 # PLC 로그 출처를 담는 컨텍스트 (CH1 / CH2 / PC 등)
@@ -124,6 +132,7 @@ class MainWindow(QWidget):
         self.ui.PC_ProcessTime_edit.setPlainText("0.25")     # Process Time (분)
 
         self._loop = loop or asyncio.get_event_loop()
+        self._logger = get_app_logger()
 
         # --- 스택 및 페이지 매핑 (UI 객체명 고정)
         self._stack: QStackedWidget = self.ui.stackedWidget
@@ -346,6 +355,8 @@ class MainWindow(QWidget):
                 t = str(tag or "")
                 tu = t.upper()
 
+                self._log_global(tu or t, msg)
+
                 # 1) ServerPage에 먼저 기록(표시는 대문자 통일 권장)
                 if sp and hasattr(sp, "append_log"):
                     sp.append_log(tu or t, msg)
@@ -382,6 +393,12 @@ class MainWindow(QWidget):
 
     def _plc_log(self, fmt, *args):
         msg = (fmt % args) if args else str(fmt)
+
+        src = "PLC"
+        m = msg.lstrip()
+        if m.startswith("[") and "]" in m:
+            src = m[1:m.index("]")].strip() or "PLC"
+        self._log_global(src, msg)
 
         # 0) ContextVar에 출처가 명시되어 있으면 그쪽으로만 라우팅
         origin = None
@@ -444,6 +461,7 @@ class MainWindow(QWidget):
 
     def _broadcast_log(self, source: str, msg: str) -> None:
         try:
+            self._log_global(source, msg)
             if hasattr(self, "ch1") and self.ch1:
                 self.ch1.append_log(source, msg)
         except Exception:
@@ -456,6 +474,27 @@ class MainWindow(QWidget):
         try:
             if hasattr(self, "pc") and self.pc:
                 self.pc.append_log(source, msg)
+        except Exception:
+            pass
+
+    def _log_global(self, source: str, msg: str) -> None:
+        try:
+            src = (source or "")
+            src_u = src.upper()
+            level = logging.INFO
+
+            if (
+                src_u.startswith("ERROR") or src_u.startswith("ERR") or
+                "ERROR" in src_u or msg.strip().startswith("❌")
+            ):
+                level = logging.ERROR
+            elif (
+                src_u.startswith("WARN") or "WARN" in src_u or
+                msg.strip().startswith("⚠")
+            ):
+                level = logging.WARNING
+
+            self._logger.log(level, "[%s] %s", source, msg)
         except Exception:
             pass
 
@@ -794,9 +833,14 @@ if __name__ == "__main__":
     if sys.platform.startswith("win"):
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 
+    _logger = setup_app_logging(app_name="CH1&2_program")
+    install_global_exception_hooks(_logger)
+
     app = QApplication(sys.argv)
     loop = QEventLoop(app)
     asyncio.set_event_loop(loop)
+
+    install_asyncio_exception_logging(loop, _logger)
 
     w = MainWindow(loop)
     w.show()
