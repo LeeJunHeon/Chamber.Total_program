@@ -2,10 +2,12 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 import asyncio, ctypes, csv, contextlib
+import os, sys  # ✅ 추가
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import AsyncGenerator, Literal, Optional, List, Union
+from util.app_logging import get_app_logger  # ✅ 추가 (시스템 로그에 남기기)
 from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
@@ -24,6 +26,55 @@ def _get_dll_lock() -> asyncio.Lock:
     if _OES_DLL_LOCK is None:
         _OES_DLL_LOCK = asyncio.Lock()  # 이벤트 루프 생성 이후 첫 접근 시 초기화
     return _OES_DLL_LOCK
+
+def _resolve_oes_dll_path(dll_path: Optional[str]) -> str:
+    """
+    실행 환경에 따라 DLL 경로 자동 탐색:
+    1) 인자로 받은 dll_path (존재하면 최우선)
+    2) 환경변수 OES_DLL_PATH
+    3) (exe) exe 파일 옆: <exe_dir>/SPdbUSBm.dll
+    4) (pyinstaller onefile) _MEIPASS/dll/SPdbUSBm.dll 또는 _MEIPASS/SPdbUSBm.dll
+    5) (소스 실행) 프로젝트 루트/dll/SPdbUSBm.dll  (device/.. 기준)
+    6) (마지막 보험) 기존 NAS 경로
+    """
+    fname = "SPdbUSBm.dll"
+
+    candidates: list[Path] = []
+
+    # 1) explicit
+    if dll_path:
+        candidates.append(Path(dll_path))
+
+    # 2) env override
+    env = os.getenv("OES_DLL_PATH")
+    if env:
+        candidates.append(Path(env))
+
+    # 3) exe directory
+    if getattr(sys, "frozen", False):
+        candidates.append(Path(sys.executable).resolve().parent / fname)
+
+        meipass = getattr(sys, "_MEIPASS", None)
+        if meipass:
+            candidates.append(Path(meipass) / "dll" / fname)
+            candidates.append(Path(meipass) / fname)
+
+    # 4) source project root (device/oes.py -> project_root/device/oes.py)
+    project_root = Path(__file__).resolve().parents[1]
+    candidates.append(project_root / "dll" / fname)
+
+    # 5) legacy NAS fallback
+    candidates.append(Path(r"\\VanaM_NAS\VanaM_Sputter\OES\SDKs\DLL\x64\stdcall\SPdbUSBm.dll"))
+
+    for c in candidates:
+        try:
+            if c.is_file():
+                return str(c)
+        except Exception:
+            pass
+
+    # 못 찾으면: 그래도 마지막 후보를 반환(초기화에서 에러 메시지로 드러나게)
+    return str(candidates[-1])
 
 @dataclass
 class OESEvent:
@@ -70,7 +121,7 @@ class OESAsync:
     def __init__(
         self,
         *,
-        dll_path: str = r"\\VanaM_NAS\VanaM_Sputter\OES\SDKs\DLL\x64\stdcall\SPdbUSBm.dll",
+        dll_path: Optional[str] = None,   # ✅ 기본값 None (자동 탐색)
         save_directory: str = r"\\VanaM_NAS\VanaM_Sputter\OES\CH2",
         sample_interval_s: float = 1.0,
         avg_count: int = OES_AVG_COUNT,
@@ -78,7 +129,13 @@ class OESAsync:
         chamber: int = 2,                 # 1→USB 0, 2→USB 1
         usb_index: Optional[int] = None,  # 지정 시 우선
     ):
-        self._dll_path = dll_path
+        self._dll_path = _resolve_oes_dll_path(dll_path)
+
+        # ✅ 실제로 사용한 DLL 경로를 "시스템 로그"에 남김 (WARNING 이상 저장이면 파일에 남음)
+        try:
+            get_app_logger().warning("OES DLL resolved path: %s", self._dll_path)
+        except Exception:
+            pass
 
         # 저장 경로 CH{n} 정규화 (기존 로직 유지)
         p = Path(save_directory)

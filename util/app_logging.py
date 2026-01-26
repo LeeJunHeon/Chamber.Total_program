@@ -1,11 +1,12 @@
 # util/app_logging.py
 # -*- coding: utf-8 -*-
-"""
+r"""
 시스템성 로그 전용(프로그램 종료/크래시/미처리 예외/Warning/Qt 메시지 등) 로깅 유틸
 - 기존 공정/PLC/서버 로그는 그대로 두고,
 - '현재 저장이 안되고 있는 부분'만 \\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\ERROR 에
   하루 1개 파일로 저장한다.
 """
+
 
 from __future__ import annotations
 
