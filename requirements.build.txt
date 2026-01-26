@@ -2,7 +2,14 @@
 qasync==0.28.0
 numpy==2.2.6
 pymodbus==3.11.2
+
+# RGA (핵심)
 srsinst==0.0.2
+srsinst.rga==0.3.8
+
+# (선택) tools/export_error_codes_from_docx.py 쓸 때만 필요
 python-docx==1.2.0
+
+# build
 pyinstaller==6.14.2
 pyinstaller-hooks-contrib==2025.5

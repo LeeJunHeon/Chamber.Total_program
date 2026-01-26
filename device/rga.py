@@ -18,8 +18,19 @@ import numpy as np
 
 try:
     from srsinst.rga import RGA100
+except ModuleNotFoundError as e:
+    if e.name == "matplotlib":
+        raise RuntimeError(
+            "RGA 드라이버 import 실패: matplotlib 누락\n"
+            "해결: pip install matplotlib (그리고 PyInstaller 빌드시 --collect-all matplotlib 권장)"
+        ) from e
+    raise RuntimeError(
+        f"RGA 드라이버 import 실패: 누락 모듈={e.name}\n"
+        "해결: pip install srsinst.rga"
+    ) from e
 except Exception as e:
-    raise RuntimeError("srsinst 패키지를 설치하세요: pip install srsinst") from e
+    raise RuntimeError(f"RGA 드라이버 import 실패: {type(e).__name__}: {e}") from e
+
 
 # ──────────────────────────────────────────────────────────────────────
 # 이벤트 모델
