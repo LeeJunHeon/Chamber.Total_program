@@ -7,9 +7,9 @@ r"""
   하루 1개 파일로 저장한다.
 """
 
-
 from __future__ import annotations
 
+import os
 import atexit
 import asyncio
 import faulthandler
@@ -25,6 +25,57 @@ from typing import Optional
 
 DEFAULT_ERROR_ROOT = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\ERROR")
 _DEFAULT_LOGGER_NAME: Optional[str] = None
+
+_FAULT_LOCK = threading.Lock()
+_FAULT_ENABLED = False
+
+
+class _FaultTimestampWriter:
+    """
+    faulthandler 출력은 logging formatter를 안 타므로,
+    'Windows fatal exception:' 같은 덤프 시작 지점에 타임스탬프 헤더를 삽입한다.
+    """
+    def __init__(self, fp):
+        self._fp = fp
+        self._lock = threading.Lock()
+
+    def write(self, s: str):
+        with self._lock:
+            # 덤프 시작을 감지하면 타임스탬프 헤더를 먼저 기록
+            if ("Windows fatal exception:" in s) or ("Fatal Python error:" in s):
+                ts = datetime.now().strftime("%Y-%m-%d %H:%M:%S.%f")[:-3]
+                self._fp.write(f"\n{ts} [FAULTHANDLER] ===== BEGIN DUMP =====\n")
+            self._fp.write(s)
+            self._fp.flush()
+        return len(s)
+
+    def flush(self):
+        with self._lock:
+            self._fp.flush()
+
+    def close(self):
+        with self._lock:
+            self._fp.close()
+
+    # faulthandler가 다른 속성을 찾을 수도 있어서 원본 fp로 위임
+    def __getattr__(self, name):
+        return getattr(self._fp, name)
+
+
+def _enable_faulthandler_once(logger: logging.Logger, file_path: Path) -> None:
+    global _FAULT_ENABLED
+    with _FAULT_LOCK:
+        if _FAULT_ENABLED:
+            return
+
+        raw_fp = open(file_path, "a", encoding="utf-8", buffering=1)
+        wrapped_fp = _FaultTimestampWriter(raw_fp)
+        faulthandler.enable(file=wrapped_fp, all_threads=True)
+
+        # logger 객체에 붙여 GC 방지 + 종료 시 닫기
+        setattr(logger, "_vanam_fault_fp", wrapped_fp)
+
+        _FAULT_ENABLED = True
 
 
 @dataclass(frozen=True)
@@ -63,6 +114,7 @@ class _DailyFileHandler(logging.Handler):
         self._encoding = encoding
         self._cur_date: date = date.today()
         self._stream = None
+        self._write_lock = threading.Lock()   # ✅ 추가
         self._paths = _build_paths(app_name, root)
         self._open_for_today()
 
@@ -82,18 +134,19 @@ class _DailyFileHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            today = date.today()
-            if today != self._cur_date:
-                self._cur_date = today
-                try:
-                    if self._stream:
-                        self._stream.close()
-                except Exception:
-                    pass
-                self._open_for_today()
+            with self._write_lock:            # ✅ 추가
+                today = date.today()
+                if today != self._cur_date:
+                    self._cur_date = today
+                    try:
+                        if self._stream:
+                            self._stream.close()
+                    except Exception:
+                        pass
+                    self._open_for_today()
 
-            msg = self.format(record)
-            self._stream.write(msg + "\n")
+                msg = self.format(record)
+                self._stream.write(msg + "\n")
         except Exception:
             # 로깅 중 예외는 절대 앱을 죽이면 안 됨
             pass
@@ -110,7 +163,7 @@ class _DailyFileHandler(logging.Handler):
 def setup_app_logging(
     app_name: str = "CH_1_2_program",
     root: Path = DEFAULT_ERROR_ROOT,
-    file_level: int = logging.WARNING,
+    file_level: int = logging.INFO,     # ✅ 파일에도 INFO 저장
     console_level: int = logging.INFO,
     enable_console: bool = False,
 ) -> logging.Logger:
@@ -132,7 +185,8 @@ def setup_app_logging(
     logger.propagate = False
 
     fmt = logging.Formatter(
-        fmt="%(asctime)s.%(msecs)03d [%(levelname)s] [%(name)s] %(message)s",
+        fmt="%(asctime)s.%(msecs)03d [%(levelname)s] [%(name)s] "
+            "[pid=%(process)d tid=%(thread)d] %(message)s",
         datefmt="%Y-%m-%d %H:%M:%S",
     )
 
@@ -148,15 +202,13 @@ def setup_app_logging(
         console.setFormatter(fmt)
         logger.addHandler(console)
 
-    # 3) faulthandler: 같은 파일에 덧붙이기(네이티브 크래시/덤프 대비)
+    # 3) faulthandler: 같은 파일에 덧붙이기(faulthandler 덤프는 “별도 파일”로 분리)
     try:
-        # file_handler가 쓰는 "현재 파일"을 그대로 사용
-        fh_path = file_handler.current_path
-        _fault_fp = open(fh_path, "a", encoding="utf-8", buffering=1)
-        faulthandler.enable(file=_fault_fp, all_threads=True)
-        # logger 객체에 붙여 GC 방지 + 종료 시 닫기
-        setattr(logger, "_vanam_fault_fp", _fault_fp)
-        logger.info("faulthandler enabled -> %s", fh_path)
+        d = datetime.now().strftime("%Y%m%d")
+        fault_path = Path(file_handler.current_path.parent) / f"{app_name}_{d}_pid{os.getpid()}.fault.log"
+
+        _enable_faulthandler_once(logger, fault_path)
+        logger.info("faulthandler enabled -> %s (timestamp header)", fault_path)
     except Exception:
         logger.exception("faulthandler enable failed")
 

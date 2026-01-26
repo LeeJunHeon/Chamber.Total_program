@@ -838,7 +838,7 @@ class MainWindow(QWidget):
 def main() -> int:
     _logger = setup_app_logging(
         app_name="CH_1_2_program",
-        file_level=logging.WARNING,   # 파일은 warning 이상만
+        file_level=logging.INFO,      # ✅ INFO까지 파일에 저장
         enable_console=False          # 콘솔은 꺼버림 (GUI exe라서)
     )
     install_global_exception_hooks(_logger)
