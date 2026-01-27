@@ -228,12 +228,16 @@ class RFPulseAsync:
                 self._want_connected = True
                 return
 
-            # 3) 처음 시작하거나, 둘 중 하나라도 없으면 새로 태스크 생성
+            # 3) ✅ 필요한 것만 생성 (덮어쓰기 금지 → orphan task 방지)
             self._closing = False
             self._want_connected = True
             loop = asyncio.get_running_loop()
-            self._watchdog_task = loop.create_task(self._watchdog_loop(), name="RFPWatchdog")
-            self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="RFP-CmdWorker")
+
+            if not self._watchdog_task:
+                self._watchdog_task = loop.create_task(self._watchdog_loop(), name="RFPWatchdog")
+
+            if not self._cmd_worker_task:
+                self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="RFP-CmdWorker")
 
     async def cleanup(self):
         self._closing = True
@@ -462,7 +466,7 @@ class RFPulseAsync:
                 await self._emit_status(f"{host}:{port} 연결 성공 (TCP)")
             except Exception as e:
                 host, port = self._resolve_endpoint()
-                await self._emit_status(f"{host}:{port} 연결 실패: {e}")
+                await self._emit_status(f"{host}:{port} 연결 실패: {type(e).__name__}: {e!r}")
                 backoff = min(backoff * 2, RFPULSE_RECONNECT_BACKOFF_MAX_MS)
 
     def _on_token(self, tok: Token):
@@ -1069,11 +1073,6 @@ class RFPulseAsync:
             self._watchdog_task = None
 
     async def resume_watchdog(self) -> None:
-        # ★ 워치독 재시작도 start_lock 안에서만 수행
-        async with self._start_lock:
-            if self._watchdog_task and not self._watchdog_task.done():
-                return
-            self._want_connected = True
-            loop = asyncio.get_running_loop()
-            self._watchdog_task = loop.create_task(self._watchdog_loop(), name="RFPWatchdog")
+        self._want_connected = True
+        await self.start()   # ✅ start()가 알아서 watchdog/worker 상태를 정리/보장
     # =========== chamber_runtime.py에 맞춘 함수들 ===========
