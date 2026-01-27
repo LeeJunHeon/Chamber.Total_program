@@ -8,7 +8,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QWidget,
@@ -51,6 +51,17 @@ class ServerPage(QWidget):
 
         self._clients: set[str] = set()
         self._max_lines = 5000
+
+        # ✅ ServerPage 로그를 하루 1파일(.log)로 자동 저장
+        # - ServerPage로 들어오는 로그는 "전부" 저장(Pause/HideStatus 여부 무관)
+        # - NAS(log_root) 실패 시 로컬 ./Logs/ServerPage 로 폴백
+        self._daily_buf: list[str] = []
+        self._daily_ext = ".log"   # 요구사항: .log 고정
+
+        self._daily_flush_timer = QTimer(self)
+        self._daily_flush_timer.setInterval(1000)  # 1초마다 파일로 flush
+        self._daily_flush_timer.timeout.connect(self._flush_daily_log)
+        self._daily_flush_timer.start()
 
         self._build_ui()
         self._wire_ui()
@@ -194,19 +205,26 @@ class ServerPage(QWidget):
     def append_log(self, tag: str, text: str) -> None:
         msg = str(text)
 
-        # ✅ Pause여도 클라이언트 목록은 갱신(연결상태는 계속 반영)
+        # ✅ 1) "전부 저장" (Pause/HideStatus 무관)
+        line = self._format_with_ts(tag, msg)
+        try:
+            self._queue_daily_line(line)
+        except Exception:
+            pass
+
+        # ✅ 2) Pause여도 클라이언트 목록은 계속 갱신(연결상태 반영)
         if tag == "NET":
             self._update_clients_from_net_log(msg)
 
+        # ✅ 3) 아래부터는 "화면 표시"만 제어
         if self.chkPause.isChecked():
             return
 
-        # GET_SPUTTER_STATUS 폴링 로그 숨김
+        # 화면에서만 숨김(파일에는 이미 저장됨)
         if self.chkHideStatus.isChecked() and self._CMD_STATUS_RE.search(msg):
             return
 
-        # ✅ 여기서 타임스탬프를 붙여서 표시/저장 포맷을 통일
-        self._append_line(self._format_with_ts(tag, msg))
+        self._append_line(line)
 
     # 내부 유틸
     def _append_line(self, line: str) -> None:
@@ -243,6 +261,55 @@ class ServerPage(QWidget):
         self.lstClients.clear()
         for p in sorted(self._clients):
             self.lstClients.addItem(p)
+            
+    def _daily_log_dir(self) -> Path:
+        """
+        NAS 우선: <log_root>/ServerPage
+        실패 시 로컬: ./Logs/ServerPage
+        """
+        # 1) NAS(log_root) 우선
+        if self._log_root:
+            try:
+                d = self._log_root / "ServerPage"
+                d.mkdir(parents=True, exist_ok=True)
+                return d
+            except Exception:
+                pass
+
+        # 2) 로컬 폴백
+        d = Path.cwd() / "Logs" / "ServerPage"
+        d.mkdir(parents=True, exist_ok=True)
+        return d
+
+    def _daily_log_path(self) -> Path:
+        # 하루 1파일
+        return self._daily_log_dir() / f"server_page_{datetime.now():%Y%m%d}{self._daily_ext}"
+
+    def _queue_daily_line(self, line: str) -> None:
+        self._daily_buf.append(line)
+
+        # 메모리 보호: 너무 많이 쌓이면 즉시 flush
+        if len(self._daily_buf) >= 2000:
+            self._flush_daily_log()
+
+    def _flush_daily_log(self) -> None:
+        if not self._daily_buf:
+            return
+
+        lines = self._daily_buf
+        self._daily_buf = []
+
+        try:
+            fp = self._daily_log_path()
+            fp.parent.mkdir(parents=True, exist_ok=True)
+            with open(fp, "a", encoding="utf-8") as f:
+                f.write("\n".join(lines) + "\n")
+        except Exception as e:
+            # 자동 저장 실패는 UI/통신을 방해하면 안 됨 → 표시만 하고 무시
+            try:
+                self.lblSaved.setText(f"Auto-save failed: {e!r}")
+            except Exception:
+                pass
 
     def _save_log_to_file(self) -> None:
         try:
@@ -255,3 +322,14 @@ class ServerPage(QWidget):
             self.lblSaved.setText(f"Saved: {fp}")
         except Exception as e:
             self.lblSaved.setText(f"Save failed: {e!r}")
+
+    def closeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+        try:
+            self._flush_daily_log()
+        except Exception:
+            pass
+        try:
+            super().closeEvent(event)
+        except Exception:
+            pass
+
