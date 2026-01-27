@@ -22,6 +22,28 @@ from typing import Optional, Tuple
 
 import numpy as np
 
+
+# === Worker 내장 기본값(배포/독립 실행 안정성을 위해 config import 안 함) ===
+DEFAULTS = {
+    1: {
+        "ip": "192.168.1.20",  # ✅ CH1 RGA IP로 변경
+        "user": "admin",
+        "password": "admin",
+        "csv": r"\\VanaM_NAS\VanaM_Sputter\RGA\Ch.1\RGA_spectrums.csv",  # ✅ 실제 경로로 변경
+    },
+    2: {
+        "ip": "192.168.1.21",  # ✅ CH2 RGA IP로 변경
+        "user": "admin",
+        "password": "admin",
+        "csv": r"\\VanaM_NAS\VanaM_Sputter\RGA\Ch.2\RGA_spectrums.csv",  # ✅ 실제 경로로 변경
+    },
+}
+
+DEFAULT_SUFFIX = "e-12"
+DEFAULT_LOCK_TTL = 120.0
+DEFAULT_TIMEOUT = 30.0
+
+
 # ---- srsinst import (너의 device/rga.py 방식을 그대로 따라감) ----
 try:
     from srsinst.rga import RGA100
@@ -148,38 +170,46 @@ def rga_measure_once(ip: str, user: str, password: str) -> Tuple[np.ndarray, np.
 
 def main() -> int:
     ap = argparse.ArgumentParser()
-    ap.add_argument("--ch", type=int, default=0)
-    ap.add_argument("--ip", required=True)
-    ap.add_argument("--user", default="admin")
-    ap.add_argument("--password", default="admin")
-    ap.add_argument("--csv", required=True)
-    ap.add_argument("--timeout", type=float, default=30.0)
-    ap.add_argument("--suffix", default="e-12")  # device/rga.py 기본값 유지
-    ap.add_argument("--lock-ttl", type=float, default=120.0)
+    ap.add_argument("--ch", type=int, required=True, choices=[1, 2])
+    ap.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT)
     args = ap.parse_args()
 
-    lock = acquire_ip_lock(args.ip, ttl_s=args.lock_ttl)
+    defaults = DEFAULTS.get(args.ch)
+    if not defaults:
+        print(json.dumps({"ok": False, "stage": "args", "error": f"invalid ch={args.ch}"}, ensure_ascii=False), flush=True)
+        return 2
+
+    # ✅ argparse에 ip/user/password/csv를 안 둘 거면, args.*에 넣지 말고 로컬 변수로 꺼내서 쓰자
+    ip = defaults["ip"]
+    user = defaults["user"]
+    password = defaults["password"]
+    csv_path = Path(defaults["csv"])
+
+    suffix = DEFAULT_SUFFIX
+    lock_ttl = DEFAULT_LOCK_TTL
+
+    lock = acquire_ip_lock(ip, ttl_s=lock_ttl)
+
     if not lock.acquired:
         print(json.dumps({
             "ok": False,
             "stage": "lock",
-            "error": f"RGA({args.ip}) is busy (another worker running)"
+            "error": f"RGA({ip}) is busy (another worker running)"
         }, ensure_ascii=False), flush=True)
         return 20
 
     t0 = time.time()
     try:
         # --- timeout은 “간단한 소프트 타임아웃”으로 처리(네이티브 블럭 시 kill은 메인에서) ---
-        mass_axis, hist_raw, pressures = rga_measure_once(args.ip, args.user, args.password)
+        mass_axis, hist_raw, pressures = rga_measure_once(ip, user, password)
 
         ts = now_str()
-        csv_path = Path(args.csv)
 
         # 헤더 보장(이미 있으면 변화 없음)
         ensure_csv_header(csv_path, n=len(hist_raw))
 
         # CSV append (구조 유지)
-        append_row(csv_path, ts, hist_raw, suffix=args.suffix)
+        append_row(csv_path, ts, hist_raw, suffix=suffix)
 
         dt_ms = int((time.time() - t0) * 1000)
 
@@ -187,7 +217,7 @@ def main() -> int:
         payload = {
             "ok": True,
             "ch": args.ch,
-            "ip": args.ip,
+            "ip": ip,
             "timestamp": ts,
             "duration_ms": dt_ms,
             "csv_path": str(csv_path),
@@ -204,7 +234,7 @@ def main() -> int:
         payload = {
             "ok": False,
             "stage": "measure",
-            "ip": args.ip,
+            "ip": ip,
             "ch": args.ch,
             "duration_ms": dt_ms,
             "error": f"{type(e).__name__}: {e}",
