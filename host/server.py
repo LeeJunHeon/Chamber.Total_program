@@ -44,11 +44,11 @@ class DailyCommandCsvLogger:
         # NAS 우선
         try:
             root = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs")
-            d = root / "PLC_Remote"
+            d = root / "CH1&2_Server"
             d.mkdir(parents=True, exist_ok=True)
             return d
         except Exception:
-            d = Path.cwd() / "Logs" / "PLC_Remote"
+            d = Path.cwd() / "Logs" / "CH1&2_Server"
             d.mkdir(parents=True, exist_ok=True)
             return d
 
@@ -80,7 +80,7 @@ class DailyCommandCsvLogger:
                 await asyncio.to_thread(self._write_row_sync, fn, row)
             except Exception as e:
                 # NAS 실패 → 로컬 폴백
-                local = (Path.cwd() / "Logs" / "PLC_Remote" / fn.name)
+                local = (Path.cwd() / "Logs" / "CH1&2_Server"  / fn.name)
                 local.parent.mkdir(parents=True, exist_ok=True)
 
                 # 1) 원래 row는 로컬에 저장

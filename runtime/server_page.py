@@ -264,20 +264,20 @@ class ServerPage(QWidget):
             
     def _daily_log_dir(self) -> Path:
         """
-        NAS 우선: <log_root>/ServerPage
-        실패 시 로컬: ./Logs/ServerPage
+        NAS 우선: <log_root>/CH1&2_Server
+        실패 시 로컬: ./Logs/CH1&2_Server
         """
         # 1) NAS(log_root) 우선
         if self._log_root:
             try:
-                d = self._log_root / "ServerPage"
+                d = self._log_root / "CH1&2_Server"
                 d.mkdir(parents=True, exist_ok=True)
                 return d
             except Exception:
                 pass
 
         # 2) 로컬 폴백
-        d = Path.cwd() / "Logs" / "ServerPage"
+        d = Path.cwd() / "Logs" / "CH1&2_Server"
         d.mkdir(parents=True, exist_ok=True)
         return d
 
