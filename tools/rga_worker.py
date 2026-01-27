@@ -15,10 +15,9 @@ import os
 import sys
 import time
 import traceback
-from dataclasses import dataclass
-from datetime import datetime
+from typing import Tuple
 from pathlib import Path
-from typing import Optional, Tuple
+from datetime import datetime
 
 import numpy as np
 
@@ -40,7 +39,6 @@ DEFAULTS = {
 }
 
 DEFAULT_SUFFIX = "e-12"
-DEFAULT_LOCK_TTL = 120.0
 DEFAULT_TIMEOUT = 30.0
 
 
@@ -68,52 +66,6 @@ except Exception as e:
 def now_str() -> str:
     # 너의 device/rga.py와 동일 포맷
     return datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-
-def _sanitize_filename(s: str) -> str:
-    return "".join(c if c.isalnum() or c in ("-", "_", ".") else "_" for c in s)
-
-
-@dataclass
-class LockHandle:
-    path: Path
-    acquired: bool = False
-
-
-def acquire_ip_lock(ip: str, ttl_s: float = 120.0) -> LockHandle:
-    """
-    같은 IP RGA를 동시에 두 프로세스가 잡는 걸 방지(드라이버/장비가 싫어하는 케이스 많음)
-    - TEMP에 lock 파일을 원자적으로 생성(O_EXCL)
-    - ttl 지나면 stale로 보고 제거 시도
-    """
-    temp = Path(os.getenv("TEMP") or os.getcwd())
-    lock_path = temp / f"vanam_rga_{_sanitize_filename(ip)}.lock"
-
-    # stale 처리
-    if lock_path.exists():
-        try:
-            age = time.time() - lock_path.stat().st_mtime
-            if age > ttl_s:
-                lock_path.unlink(missing_ok=True)
-        except Exception:
-            pass
-
-    try:
-        fd = os.open(str(lock_path), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
-        with os.fdopen(fd, "w", encoding="utf-8") as f:
-            f.write(f"pid={os.getpid()} ts={now_str()} ip={ip}\n")
-        return LockHandle(lock_path, acquired=True)
-    except FileExistsError:
-        return LockHandle(lock_path, acquired=False)
-
-
-def release_ip_lock(h: LockHandle) -> None:
-    if not h.acquired:
-        return
-    try:
-        h.path.unlink(missing_ok=True)
-    except Exception:
-        pass
 
 
 def ensure_csv_header(path: Path, n: int, encoding: str = "utf-8-sig") -> None:
@@ -149,8 +101,13 @@ def rga_measure_once(ip: str, user: str, password: str) -> Tuple[np.ndarray, np.
     rga = RGA100("tcpip", ip, user, password)
     try:
         rga.filament.turn_on()
-        histogram = np.asarray(rga.scan.get_histogram_scan(), dtype=float)
-        rga.filament.turn_off()
+        try:
+            histogram = np.asarray(rga.scan.get_histogram_scan(), dtype=float)
+        finally:
+            try:
+                rga.filament.turn_off()
+            except Exception:
+                pass
 
         pressures = np.asarray(
             rga.scan.get_partial_pressure_corrected_spectrum(histogram),
@@ -186,17 +143,6 @@ def main() -> int:
     csv_path = Path(defaults["csv"])
 
     suffix = DEFAULT_SUFFIX
-    lock_ttl = DEFAULT_LOCK_TTL
-
-    lock = acquire_ip_lock(ip, ttl_s=lock_ttl)
-
-    if not lock.acquired:
-        print(json.dumps({
-            "ok": False,
-            "stage": "lock",
-            "error": f"RGA({ip}) is busy (another worker running)"
-        }, ensure_ascii=False), flush=True)
-        return 20
 
     t0 = time.time()
     try:
@@ -242,9 +188,6 @@ def main() -> int:
         }
         print(json.dumps(payload, ensure_ascii=False), flush=True)
         return 30
-
-    finally:
-        release_ip_lock(lock)
 
 
 if __name__ == "__main__":
