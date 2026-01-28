@@ -20,7 +20,7 @@ from util.timed_popup import attach_autoclose
 from device.ig import AsyncIG
 from device.mfc import AsyncMFC
 from device.oes import OESAsync
-from device.rga import RGA100AsyncAdapter
+from device.rga import RGAWorkerClient
 from device.dc_power import DCPowerAsync
 from device.rf_power import RFPowerAsync
 from device.rf_pulse import RFPulseAsync
@@ -309,14 +309,13 @@ class ChamberRuntime:
         _usb_index = 0 if self.ch == 1 else 1
         self.oes = OESAsync(chamber=self.ch, usb_index=_usb_index)
 
-        # RGA: config에서 연결 정보 꺼내 생성(단일/채널별 모두 지원)
-        self.rga = None  # type: ignore
+        # --- RGA (worker client) ---
+        self.rga = None
         try:
-            ip, user, pwd = self.cfg.rga_creds()
-            if ip:
-                self.rga = RGA100AsyncAdapter(ip, user=user, password=pwd, name=f"CH{self.ch}")
+            # 이제 creds/ip/csv는 worker가 들고 있음. 런타임은 ch만 알면 됨.
+            self.rga = RGAWorkerClient(ch=self.ch, logger=self.logger)
         except Exception:
-            self.rga = None  # 안전
+            self.rga = None
 
         # 펄스 파워(완전 분리)
         # - on_telemetry를 DataLogger로 직결(있으면 log_dcpulse_power, 없으면 log_dc_power 폴백)
@@ -629,7 +628,8 @@ class ChamberRuntime:
                     self._ensure_background_started()
                     self._soon(self._graph_clear_rga_plot_safe)
                     if self.rga:
-                        await self.rga.scan_histogram_to_csv(self.cfg.RGA_CSV_PATH)
+                        # csv 경로는 worker가 CH_CONFIG로 결정하므로 전달 불필요
+                        await self.rga.scan_histogram_to_csv(timeout_s=30.0)  # 필요하면 여기만 바꿔도 됨
                     else:
                         raise RuntimeError("RGA 어댑터 없음")
                 except Exception as e:
