@@ -782,17 +782,19 @@ class AsyncMFC:
                 await self._emit_flow(name, v_ui)        # UI(sccm) 이벤트
                 self._monitor_flow(ch, v_hw)             # 비교는 HW(%FS)
 
-    async def read_pressure(self) -> Optional[float]:
+    async def read_pressure(self, *, emit_fail: bool = True, tag: str = "[READ_PRESSURE]") -> Optional[float]:
         """R5(예: READ_PRESSURE) 읽고 UI 문자열/숫자로 이벤트 + 현재 압력값 반환."""
         line = await self._send_and_wait_line(
             self._mk_cmd("READ_PRESSURE"),
-            tag="[READ_PRESSURE]", timeout_ms=MFC_TIMEOUT,
+            tag=tag, timeout_ms=MFC_TIMEOUT,
             expect_prefixes=("P",),
         )
         if not (line and line.strip()):
-            await self._emit_failed("READ_PRESSURE", "응답 없음")
+            if emit_fail:
+                await self._emit_failed("READ_PRESSURE", "응답 없음")
+            else:
+                await self._emit_status("[READ_PRESSURE] 응답 없음 (non-fatal, will retry)")
             return None
-
         return self._emit_pressure_from_line_sync(line.strip())
 
     async def wait_for_pressure_reached(
@@ -823,6 +825,7 @@ class AsyncMFC:
         stable_count = 0
         elapsed = 0.0
         last_value = 0.0
+        fail_streak = 0  # ✅ 루프 밖에서 누적해야 의미가 있음
 
         await self._emit_status(
             f"[PRESSURE] 목표압 {target_pressure:.3g} "
@@ -831,23 +834,27 @@ class AsyncMFC:
         )
 
         while elapsed < timeout_sec:
-            # 현재 압력 한 번 읽기
-            try:
-                current = await self.read_pressure()
-            except Exception as e:
-                await self._emit_status(f"[PRESSURE] 읽기 실패: {e!r}")
-                stable_count = 0
-                current = None
+            current = await self.read_pressure(emit_fail=False)
 
             if current is None:
-                # 값이 없으면 이번 샘플은 무시하고 다음 루프로
+                fail_streak += 1
+                stable_count = 0
+
+                # ✅ “진짜 응답 없음”이면 여기서 최종 실패(공정 중단)로 보는 기준
+                if fail_streak >= 3:   # 환경에 맞게 1~5 조정
+                    await self._emit_status(
+                        f"[PRESSURE] READ_PRESSURE 연속 {fail_streak}회 실패 → 통신불가로 중단"
+                    )
+                    return False, last_value
+
                 await asyncio.sleep(check_interval_sec)
                 elapsed += check_interval_sec
                 continue
 
+            # ✅ 유효값을 받으면 실패 누적 리셋
+            fail_streak = 0
             last_value = current
 
-            # 허용 오차 안인지 체크
             if self.pressure_within_tolerance(target_pressure, current):
                 stable_count += 1
                 await self._emit_status(
@@ -861,17 +868,14 @@ class AsyncMFC:
                     )
                     return True, current
             else:
-                # 범위 밖이면 카운트 리셋
                 stable_count = 0
                 await self._emit_status(
-                    f"[PRESSURE] 아직 목표 미달: "
-                    f"target={target_pressure:.3g}, current={current:.3g}"
+                    f"[PRESSURE] 아직 목표 미달: target={target_pressure:.3g}, current={current:.3g}"
                 )
 
             await asyncio.sleep(check_interval_sec)
             elapsed += check_interval_sec
 
-        # timeout
         await self._emit_status(
             f"[PRESSURE] 타임아웃({timeout_sec:.1f}s) - "
             f"target={target_pressure:.3g}, last={last_value:.3g}"
