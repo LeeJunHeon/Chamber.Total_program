@@ -412,13 +412,13 @@ class HostHandlers:
 
             # ✅ 단순 인터락(표시용):
             # CH1이 공정 중(running)인 동안에는 CH2/Loadlock이 idle로 보이면 로봇이 움직이므로,
-            # CH2/Loadlock이 running이 아니면 running으로 "보이게" 고정한다.
+            # CH2/Loadlock이 running이 아니면 running으로 "보이게" 고정한다.l
             # CH1이 idle로 바뀌면 이 조건이 풀리면서 원래 상태(대개 idle)로 돌아간다.
-            if chamber_1 == "running":
-                if chamber_2 != "running":
-                    chamber_2 = "running"
-                if loadlock != "running":
-                    loadlock = "running"
+            # if chamber_1 == "running":
+            #     if chamber_2 != "running":
+            #         chamber_2 = "running"
+            #     if loadlock != "running":
+            #         loadlock = "running"
 
             # ── PLC에서 진공 상태(L_ATM=FALSE)를 읽어 vacuum 여부 확인 ─────
             async with self._plc_command("GET_SPUTTER_STATUS"):
