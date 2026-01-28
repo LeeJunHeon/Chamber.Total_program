@@ -1119,7 +1119,7 @@ class HostHandlers:
         - CH2: Z_M_P_2_SW → Z_M_P_2_MID_SW → Z2_MID_LOCATION 폴링
         """
         ch = int(data.get("ch", 1))
-        timeout_s = float(data.get("wait_s", 60.0))
+        timeout_s = float(data.get("wait_s", 90.0))
 
         # 🔹 공정 실행 중이면 Chuck 조작 금지
         busy = self._fail_if_ch_busy(ch, f"CH{ch}_CHUCK_UP")
@@ -1144,7 +1144,7 @@ class HostHandlers:
         - CH2: Z_M_P_2_SW → Z_M_P_2_CCW_SW → Z2_DOWN_LOCATION 폴링
         """
         ch = int(data.get("ch", 1))
-        timeout_s = float(data.get("wait_s", 60.0))
+        timeout_s = float(data.get("wait_s", 90.0))
 
         # 🔹 공정 실행 중이면 Chuck 조작 금지 (chuck_up과 동일하게)
         busy = self._fail_if_ch_busy(ch, f"CH{ch}_CHUCK_DOWN")
@@ -1209,6 +1209,15 @@ class HostHandlers:
                 # chuck이 이미 목표 위치면 즉시 성공 응답
                 if cur["position"] == target_name:
                     return self._ok(f"CH{ch} Chuck OK — 이미 {target_name.upper()} 위치", current=cur)
+                
+                # ✅ 핵심: 위치 불명(UP/MID/DOWN 모두 OFF 또는 2개 이상 ON) 상태에서 MID 자동은 실패 확률 높음
+                #    → 오래 기다리지 말고 즉시 원인 명확하게 실패 처리
+                if target_name == "mid" and cur["position"] == "unknown":
+                    return self._fail(
+                        f"CH{ch} Chuck 위치 불명(UP/MID/DOWN 모두 OFF 또는 중복 ON) → MID 이동 불가. "
+                        f"먼저 CH{ch}_CHUCK_DOWN 등으로 위치를 확정한 뒤 재시도. snapshot={cur}",
+                        code="E318",
+                    )
 
                 try:
                     # (B) POWER ON → MOVE ON (각각 I/O 순간만 락)
@@ -1249,7 +1258,8 @@ class HostHandlers:
                     cur = await self._read_chuck_position(ch)
                     return self._fail(
                         f"CH{ch} Chuck {target_name.upper()} 타임아웃({int(timeout_s)}s) — "
-                        f"{target_lamp}=FALSE, snapshot={cur}"
+                        f"{target_lamp}=FALSE, snapshot={cur}",
+                        code="E318",
                     )
 
                 except Exception as e:
@@ -1258,4 +1268,7 @@ class HostHandlers:
                         async with self._plc_call():
                             await self.ctx.plc.write_switch(move_sw, False)
                             await self.ctx.plc.write_switch(power_sw, False)
-                    return self._fail(e)
+                    return self._fail(
+                        f"CH{ch} Chuck {target_name.upper()} 처리 중 예외: {type(e).__name__}: {e}",
+                        code="E412",
+                    )
