@@ -1099,16 +1099,17 @@ class ChamberRuntime:
         async for ev in adapter.events():
             if ev.kind == "status":
                 self.append_log(tag, ev.message or "")
+
             elif ev.kind == "data":
-                def _draw_then_finish(x=ev.mass_axis, y=ev.pressures):
-                    try:
-                        self._graph_update_rga_safe(x, y)
-                    finally:
-                        self.process_controller.on_rga_finished()
-                self._soon(_draw_then_finish)
+                # ✅ data에서는 그래프만 갱신하고 finish는 하지 않음(중복 방지)
+                def _draw(x=ev.mass_axis, y=ev.pressures):
+                    self._graph_update_rga_safe(x, y)
+                self._soon(_draw)
+
             elif ev.kind == "finished":
                 self.append_log(tag, ev.message or "scan finished")
                 self.process_controller.on_rga_finished()
+                
             elif ev.kind == "failed":
                 why = ev.message or "RGA failed"
                 self.append_log(tag, f"측정 실패: {why} → 다음 단계")

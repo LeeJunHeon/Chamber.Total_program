@@ -27,6 +27,24 @@ class RGAEvent:
     kind: str
     payload: Optional[Dict[str, Any]] = None
 
+    # payload에 있는 키들을 ev.xxx 형태로 접근 가능하게
+    def __getattr__(self, name: str):
+        if self.payload and name in self.payload:
+            return self.payload[name]
+        raise AttributeError(name)
+
+    @property
+    def message(self) -> Optional[str]:
+        if not self.payload:
+            return None
+        return self.payload.get("message") or self.payload.get("error")
+
+    @property
+    def success(self) -> bool:
+        if not self.payload:
+            return False
+        return bool(self.payload.get("success", False))
+
 
 class RGAWorkerClient:
     def __init__(
@@ -130,24 +148,47 @@ class RGAWorkerClient:
             except asyncio.TimeoutError:
                 with contextlib.suppress(Exception):
                     proc.kill()
-                await self._q.put(RGAEvent("failed", {"error": f"timeout {timeout_s}s (worker killed)"}))
+                await self._q.put(RGAEvent("failed", {
+                    "success": False,
+                    "message": f"timeout {timeout_s}s (worker killed)",
+                    "error": f"timeout {timeout_s}s (worker killed)",
+                }))
                 return
 
-            out = (out_b or b"").decode("utf-8", errors="replace")
-            err = (err_b or b"").decode("utf-8", errors="replace")
-
-            payload = self._parse_json_from_stdout(out)
+            payload = self._parse_json_from_stdout(out_b)
             if not payload:
-                await self._q.put(RGAEvent("failed", {"error": "worker stdout JSON not found", "stdout": out[-2000:], "stderr": err[-2000:]}))
+                await self._q.put(RGAEvent("failed", {
+                    "success": False,
+                    "message": "worker stdout JSON not found",
+                    "error": "worker stdout JSON not found",
+                    "stdout": out_b[-2000:],
+                    "stderr": err_b[-2000:],
+                }))
                 return
 
             if payload.get("ok"):
                 mass_axis = np.asarray(payload.get("mass_axis", []), dtype=float)
                 pressures = np.asarray(payload.get("pressures", []), dtype=float)
-                await self._q.put(RGAEvent("data", {"mass_axis": mass_axis, "pressures": pressures, "meta": payload}))
-                await self._q.put(RGAEvent("finished", {"meta": payload}))  # 정보성
+
+                await self._q.put(RGAEvent("data", {
+                    "mass_axis": mass_axis,
+                    "pressures": pressures,
+                    "meta": payload,
+                }))
+                await self._q.put(RGAEvent("finished", {
+                    "success": True,
+                    "message": "scan finished",
+                    "meta": payload,
+                }))
             else:
-                await self._q.put(RGAEvent("failed", {"meta": payload, "stdout": out[-2000:], "stderr": err[-2000:]}))
+                msg = payload.get("error") or payload.get("message") or "worker returned ok=false"
+                await self._q.put(RGAEvent("failed", {
+                    "success": False,
+                    "message": msg,
+                    "meta": payload,
+                    "stdout": out_b[-2000:],
+                    "stderr": err_b[-2000:],
+                }))
 
         except Exception as e:
             await self._q.put(RGAEvent("failed", {"error": f"{type(e).__name__}: {e}", "traceback": traceback.format_exc(limit=50)}))
