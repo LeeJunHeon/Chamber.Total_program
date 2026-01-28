@@ -4,6 +4,7 @@
 RGA Worker (standalone exe)
 - 목적: RGA 측정(srsinst) + CSV append + JSON(1줄) stdout 응답
 - 메인 프로그램이 subprocess로 실행해서 stdout JSON을 읽는다.
+- 메인→워커 파라미터: --ch, --timeout 만 사용
 """
 
 from __future__ import annotations
