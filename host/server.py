@@ -36,7 +36,8 @@ class DailyCommandCsvLogger:
         "duration_ms",
     ]
 
-    def __init__(self) -> None:
+    def __init__(self, prefix: str = "remote_cmd") -> None:
+        self._prefix = prefix
         self._lock: asyncio.Lock | None = None
         self._dir = self._init_dir()
 
@@ -54,7 +55,7 @@ class DailyCommandCsvLogger:
 
     def _file_path(self, now: datetime | None = None) -> Path:
         now = now or datetime.now()
-        return self._dir / f"remote_cmd_{now:%Y%m%d}.csv"
+        return self._dir / f"{self._prefix}_{now:%Y%m%d}.csv"
 
     def _ensure_lock(self) -> asyncio.Lock:
         if self._lock is None:

@@ -15,8 +15,7 @@ from qasync import QEventLoop
 from lib import config_common as cfgc
 
 # ✅ 서버 프로그램 전용 ServerPage (네가 새로 추가한 파일)
-# 예: robot_server/runtime/server_page.py
-from robot_server.runtime.server_page import ServerPage
+from apps.robot_server.runtime.server_page import ServerPage
 
 # ✅ 기존 Host 서버/프로토콜 재사용
 from host.server import HostServer
