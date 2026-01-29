@@ -1101,7 +1101,7 @@ class ChamberRuntime:
                 self.append_log(tag, ev.message or "")
 
             elif ev.kind == "data":
-                self._graph_update_rga_plot_safe(ev.mass_axis, ev.pressures)
+                self._graph_update_rga_safe(ev.mass_axis, ev.pressures)
                 # finish는 finished 이벤트에서만 처리(중복 방지)
 
             elif ev.kind == "finished":
