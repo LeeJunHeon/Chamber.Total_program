@@ -108,11 +108,15 @@ def rga_measure_once(ip: str, user: str, password: str):
         pressures = [float(x) for x in pressures]
         return mass_axis, pressures
     finally:
+        # ✅ 예외가 어디서 나든 filament는 끈다
+        try:
+            rga.filament.turn_off()
+        except Exception:
+            pass
         try:
             rga.disconnect()
         except Exception:
             pass
-
 
 def main() -> int:
     ap = argparse.ArgumentParser()

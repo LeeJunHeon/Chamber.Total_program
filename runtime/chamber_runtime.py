@@ -1113,7 +1113,10 @@ class ChamberRuntime:
                 elif ev.kind == "finished":
                     if not finished_called:
                         finished_called = True
-                        self.process_controller.on_rga_finished()
+                        try:
+                            self.process_controller.on_rga_finished()
+                        except Exception as e:
+                            self.append_log(tag, f"on_rga_finished() error: {e!r}")
 
                 elif ev.kind == "failed":
                     why = ev.message or "RGA failed"
