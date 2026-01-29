@@ -197,7 +197,7 @@ class MainWindow(QWidget):
             self._pages["server"] = self.server_page
 
             if hasattr(self.server_page, "set_host_info"):
-                self.server_page.set_host_info(cfgc.HOST_SERVER_HOST, int(cfgc.HOST_SERVER_PORT))
+                self.server_page.set_host_info(cfgc.PROCESS_HOST_HOST, int(cfgc.PROCESS_HOST_PORT))
             if hasattr(self.server_page, "set_running"):
                 self.server_page.set_running(False)
 
@@ -400,7 +400,20 @@ class MainWindow(QWidget):
         m = msg.lstrip()
         if m.startswith("[") and "]" in m:
             src = m[1:m.index("]")].strip() or "PLC"
-        self._log_global(src, msg)
+
+        # ✅ PLC 로그를 메인 ServerPage에도 기록(서버프로그램과의 통신/PLC 모니터링용)
+        try:
+            sp = getattr(self, "server_page", None)
+            if sp and hasattr(sp, "append_log"):
+                origin = None
+                try:
+                    origin = PLC_ORIGIN.get()
+                except LookupError:
+                    origin = None
+                o = origin or "GLOBAL"
+                sp.append_log(f"PLC/{o}", msg[-800:])  # 너무 길면 UI 느려져서 컷
+        except Exception:
+            pass
 
         # 0) ContextVar에 출처가 명시되어 있으면 그쪽으로만 라우팅
         origin = None
@@ -515,11 +528,6 @@ class MainWindow(QWidget):
         self.ui.ch1_btnGoCh2.clicked.connect(lambda: self._switch_page("ch2"))
         self.ui.ch2_btnGoPC.clicked.connect(lambda: self._switch_page("pc"))
         self.ui.ch2_btnGoCh1.clicked.connect(lambda: self._switch_page("ch1"))
-
-        # ✅ NEW: Plasma Cleaning 페이지의 "server" 버튼 → server 페이지로 전환
-        btn = getattr(self.ui, "Server_button", None)  # ← 버튼 objectName이 이거라면 그대로 OK
-        if btn:
-            btn.clicked.connect(lambda: self._switch_page("server"))
 
         # 라디오 그룹 ‘그룹 단위 배타’ 보강 (엣지케이스 방지)
         for gname in ("buttonGroup", "buttonGroup_2"):
@@ -788,10 +796,10 @@ class MainWindow(QWidget):
             if sp and hasattr(sp, "set_running"):
                 sp.set_running(True)
             if sp and hasattr(sp, "set_host_info"):
-                sp.set_host_info(cfgc.HOST_SERVER_HOST, int(cfgc.PROCESS_HOST_PORT))
+                sp.set_host_info(cfgc.PROCESS_HOST_HOST, int(cfgc.PROCESS_HOST_PORT))
 
             # ✅ NET 로그도 server 페이지로
-            self._netlog("NET", f"Host started on {cfgc.PROCESS_HOST_HOST}:{cfgc.PROCESS_HOST_PORT}")
+            self._netlog("NET", f"BridgeHost started on {cfgc.PROCESS_HOST_HOST}:{cfgc.PROCESS_HOST_PORT}")
 
         except Exception as e:
             sp = getattr(self, "server_page", None)
