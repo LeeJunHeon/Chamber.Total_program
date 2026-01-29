@@ -12,7 +12,13 @@ from typing import Any, Dict, Optional
 from PySide6.QtWidgets import QApplication
 from qasync import QEventLoop
 
-from lib import config_common as cfgc
+# ✅ (핵심) 프로젝트 루트(CH_1_2_program)를 sys.path에 추가
+ROOT = Path(__file__).resolve().parents[2]  # .../CH_1_2_program
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+# 이제부터 프로젝트 모듈 import가 안정적임
+import lib.config_common as cfgc
 
 # ✅ 서버 프로그램 전용 ServerPage (네가 새로 추가한 파일)
 from apps.robot_server.runtime.server_page import ServerPage

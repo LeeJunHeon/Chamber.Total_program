@@ -80,16 +80,6 @@ class ServerPage(QWidget):
         self.lblTitle.setFont(f)
         header_row.addWidget(self.lblTitle, 1)
 
-        self.btnGoPC = QPushButton("Plasma\nCleaning")
-        self.btnGoCh1 = QPushButton("CH.1")
-        self.btnGoCh2 = QPushButton("CH.2")
-        for b in (self.btnGoPC, self.btnGoCh1, self.btnGoCh2):
-            b.setFixedWidth(110)
-            b.setFixedHeight(48)
-        header_row.addWidget(self.btnGoPC)
-        header_row.addWidget(self.btnGoCh1)
-        header_row.addWidget(self.btnGoCh2)
-
         root.addLayout(header_row)
 
         # Host 서버 상태/제어
