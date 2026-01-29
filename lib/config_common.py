@@ -4,6 +4,12 @@
 HOST_SERVER_HOST = "0.0.0.0"   # 로컬만 쓰면 "127.0.0.1"
 HOST_SERVER_PORT = 50070       # 방화벽 인바운드 허용 필요
 
+# === 내부 브릿지(메인 공정 프로그램 ↔ 로봇 서버 프록시) 설정 ===
+# - 메인 공정 프로그램이 로봇 서버에게 제공하는 "로컬 전용" Host(IPC) 포트
+# - 반드시 127.0.0.1 로 고정(외부 접근 차단)
+PROCESS_HOST_HOST = "127.0.0.1"
+PROCESS_HOST_PORT = 50071
+
 # ===== TCP 유휴재연결(초) =====
 IG_INACTIVITY_REOPEN_S  = 0   # 0 → 사용 안함
 MFC_INACTIVITY_REOPEN_S = 0

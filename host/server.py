@@ -249,6 +249,10 @@ class HostServer:
                 raw_data = obj.get("data", {})
                 data = raw_data if isinstance(raw_data, dict) else {}
 
+                # ✅ handler에서 request_id를 참조할 수 있도록(프록시/로깅용)
+                if isinstance(data, dict) and "_request_id" not in data:
+                    data["_request_id"] = req_id
+
                 # === 클라이언트 → 서버 요청 로그 ===
                 # Plasma Cleaning 로그창에 어떤 명령이 들어왔는지 남김
                 try:
