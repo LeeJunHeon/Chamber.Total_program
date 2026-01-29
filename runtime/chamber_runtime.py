@@ -309,12 +309,12 @@ class ChamberRuntime:
         _usb_index = 0 if self.ch == 1 else 1
         self.oes = OESAsync(chamber=self.ch, usb_index=_usb_index)
 
-        # --- RGA (worker client) ---
+        # RGA: worker client (메인에서 srsinst import 안함)
         self.rga = None
         try:
-            # 이제 creds/ip/csv는 worker가 들고 있음. 런타임은 ch만 알면 됨.
-            self.rga = RGAWorkerClient(ch=self.ch, logger=self.logger)
+            self.rga = RGAWorkerClient(ch=self.ch, logger=self.logger, default_timeout_s=30.0)
         except Exception:
+            self.logger.exception("RGAWorkerClient init failed")
             self.rga = None
 
         # 펄스 파워(완전 분리)
@@ -1101,15 +1101,12 @@ class ChamberRuntime:
                 self.append_log(tag, ev.message or "")
 
             elif ev.kind == "data":
-                # ✅ data에서는 그래프만 갱신하고 finish는 하지 않음(중복 방지)
-                def _draw(x=ev.mass_axis, y=ev.pressures):
-                    self._graph_update_rga_safe(x, y)
-                self._soon(_draw)
+                self._graph_update_rga_plot_safe(ev.mass_axis, ev.pressures)
+                # finish는 finished 이벤트에서만 처리(중복 방지)
 
             elif ev.kind == "finished":
-                self.append_log(tag, ev.message or "scan finished")
                 self.process_controller.on_rga_finished()
-                
+
             elif ev.kind == "failed":
                 why = ev.message or "RGA failed"
                 self.append_log(tag, f"측정 실패: {why} → 다음 단계")
