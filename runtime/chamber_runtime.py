@@ -312,9 +312,11 @@ class ChamberRuntime:
         # RGA: worker client (메인에서 srsinst import 안함)
         self.rga = None
         try:
-            self.rga = RGAWorkerClient(ch=self.ch, logger=self.logger, default_timeout_s=30.0)
-        except Exception:
-            self.logger.exception("RGAWorkerClient init failed")
+            # logger는 선택사항인데 ChamberRuntime에는 self.logger가 없으니 전달하지 않는다.
+            self.rga = RGAWorkerClient(ch=self.ch, logger=None, default_timeout_s=30.0)
+        except Exception as e:
+            # 기존 로그 시스템(append_log)로만 남긴다.
+            self.append_log(f"RGA{self.ch}", f"RGAWorkerClient init failed: {e!r} (RGA disabled)")
             self.rga = None
 
         # 펄스 파워(완전 분리)
@@ -1095,26 +1097,58 @@ class ChamberRuntime:
         adapter = self.rga
         if not adapter:
             return
+
         tag = f"RGA{self.ch}"
-        async for ev in adapter.events():
-            if ev.kind == "status":
-                self.append_log(tag, ev.message or "")
+        finished_called = False  # ✅ 중복 방지(혹시 failed/finished 둘 다 들어오거나 예외 발생 시)
 
-            elif ev.kind == "data":
-                self._graph_update_rga_safe(ev.mass_axis, ev.pressures)
-                # finish는 finished 이벤트에서만 처리(중복 방지)
+        try:
+            async for ev in adapter.events():
+                if ev.kind == "status":
+                    self.append_log(tag, ev.message or "")
 
-            elif ev.kind == "finished":
-                self.process_controller.on_rga_finished()
+                elif ev.kind == "data":
+                    self._graph_update_rga_safe(ev.mass_axis, ev.pressures)
+                    # finish는 finished 이벤트에서만 처리(중복 방지)
 
-            elif ev.kind == "failed":
-                why = ev.message or "RGA failed"
-                self.append_log(tag, f"측정 실패: {why} → 다음 단계")
-                if self.chat:
+                elif ev.kind == "finished":
+                    if not finished_called:
+                        finished_called = True
+                        self.process_controller.on_rga_finished()
+
+                elif ev.kind == "failed":
+                    why = ev.message or "RGA failed"
+                    self.append_log(tag, f"측정 실패: {why} → 다음 단계")
+
+                    # ✅ 워커가 준 stdout/stderr 있으면 같이 남겨서 원인 추적 가능하게
                     with contextlib.suppress(Exception):
-                        self.chat.notify_text(f"[{tag}] 측정 실패: {why} → 건너뜀")
-                        if hasattr(self.chat, "flush"):
-                            self.chat.flush()
+                        payload = getattr(ev, "payload", None) or {}
+                        stderr = (payload.get("stderr") or "").strip()
+                        stdout = (payload.get("stdout") or "").strip()
+                        if stderr:
+                            self.append_log(tag, f"stderr: {stderr[-800:]}")
+                        if stdout:
+                            self.append_log(tag, f"stdout: {stdout[-800:]}")
+
+                    if self.chat:
+                        with contextlib.suppress(Exception):
+                            self.chat.notify_text(f"[{tag}] 측정 실패: {why} → 건너뜀")
+                            if hasattr(self.chat, "flush"):
+                                self.chat.flush()
+
+                    if not finished_called:
+                        finished_called = True
+                        self.process_controller.on_rga_finished()
+
+        except Exception as e:
+            # ✅ adapter.events() 자체가 예외로 끊겨도 공정은 계속 진행되게
+            self.append_log(tag, f"RGA event pump crashed: {e!r} → 다음 단계")
+            if self.chat:
+                with contextlib.suppress(Exception):
+                    self.chat.notify_text(f"[{tag}] 이벤트 루프 예외: {e!r} → 건너뜀")
+                    if hasattr(self.chat, "flush"):
+                        self.chat.flush()
+
+            if not finished_called:
                 self.process_controller.on_rga_finished()
 
     async def _pump_dc_events(self) -> None:
