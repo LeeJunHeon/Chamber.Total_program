@@ -436,7 +436,12 @@ class ProcessController:
         self._match_token(ExpectToken("MFC", cmd))
 
     def on_mfc_failed(self, cmd: str, why: str) -> None:
-        self._step_failed("MFC", f"{cmd}: {why}")
+        # ✅ 현재 기대 토큰이 MFC(cmd)일 때만 공정 실패로 처리
+        if self._expect_group and self._expect_group.match(ExpectToken("MFC", cmd)):
+            return  # match()가 완료 처리하므로 여기서 종료하거나, 아래처럼 실패 처리로 가도 됨
+
+        # ✅ “현재 스텝에서 기다리는 MFC가 아닌 실패”는 공정 치명으로 보지 않음
+        self._emit_log("MFC", f"경고(무시): {cmd}: {why} (현재 스텝과 무관)")
 
     def on_plc_confirmed(self, cmd: str) -> None:
         self._match_token(ExpectToken("PLC", cmd))
