@@ -10,6 +10,10 @@ HOST_SERVER_PORT = 50070       # 방화벽 인바운드 허용 필요
 PROCESS_HOST_HOST = "127.0.0.1"
 PROCESS_HOST_PORT = 50071
 
+# (추천) 로봇 서버(프록시) → 공정 프로그램(업스트림) 요청 타임아웃
+PROCESS_HOST_CONNECT_TIMEOUT_S = 2.0
+PROCESS_HOST_REQUEST_TIMEOUT_S = 10.0
+
 # ===== TCP 유휴재연결(초) =====
 IG_INACTIVITY_REOPEN_S  = 0   # 0 → 사용 안함
 MFC_INACTIVITY_REOPEN_S = 0
