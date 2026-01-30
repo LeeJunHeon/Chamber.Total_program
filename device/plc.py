@@ -423,11 +423,7 @@ class AsyncPLC:
         delta = now - self._last_io_ts
         if delta < self.cfg.inter_cmd_gap_s:
             await asyncio.sleep(self.cfg.inter_cmd_gap_s - delta)
-        if delta > self.cfg.heartbeat_s and self._client is not None:
-            try:
-                await asyncio.to_thread(self._client.read_coils, address=0, count=1, **self._uid_kwargs())
-            except Exception:
-                pass
+        # ✅ 여기서는 heartbeat I/O 하지 않음 (중복 제거)
         self._last_io_ts = time.monotonic()
 
     def _connect_sync(self) -> None:
@@ -606,20 +602,27 @@ class AsyncPLC:
 
     async def write_reg(self, addr: int, value: int) -> None:
         op = "write_reg"
-        async with self._io_lock("write_reg", addr=addr):
-            await asyncio.to_thread(self._connect_sync)
-            await self._throttle_and_heartbeat()
+        async with self._io_lock(op, addr=addr):
             try:
-                resp = await asyncio.to_thread(self._client.write_register, addr, int(value), **self._uid_kwargs())
-            except Exception as e:
-                if self._is_reset_err(e):
-                    await asyncio.to_thread(self._close_sync)
-                    await asyncio.to_thread(self._connect_sync)
-                    await self._throttle_and_heartbeat()
+                await asyncio.to_thread(self._connect_sync)
+                await self._throttle_and_heartbeat()
+
+                try:
                     resp = await asyncio.to_thread(self._client.write_register, addr, int(value), **self._uid_kwargs())
-                else:
-                    raise
-            self._ensure_ok(resp, op=op, addr=addr)
+                except Exception as e:
+                    pe = self._to_plc_error(op, addr, e)
+                    if pe.code in ("E401", "E402") or self._is_reset_err(e):
+                        await asyncio.to_thread(self._close_sync)
+                        await asyncio.to_thread(self._connect_sync)
+                        await self._throttle_and_heartbeat()
+                        resp = await asyncio.to_thread(self._client.write_register, addr, int(value), **self._uid_kwargs())
+                    else:
+                        raise pe from e
+
+                self._ensure_ok(resp, op=op, addr=addr)
+
+            except Exception as e:
+                raise self._to_plc_error(op, addr, e) from e
 
     async def read_coils(self, addrs: Iterable[int]) -> Dict[int, bool]:
         out: Dict[int, bool] = {}
@@ -996,14 +999,16 @@ class AsyncPLC:
                     self.log("WARN lock-wait %.0f ms (op=%s, addr=%s)", waited_ms, op, addr)
 
             t_in_start = loop.time()
-            yield  # 🔒 임계구역 시작
+            try:
+                yield
+            finally:
+                io_ms = (loop.time() - t_in_start) * 1000.0
+                if io_ms >= self.cfg.io_warn_ms:
+                    if addr is None:
+                        self.log("WARN in-lock IO %.0f ms (op=%s)", io_ms, op)
+                    else:
+                        self.log("WARN in-lock IO %.0f ms (op=%s, addr=%s)", io_ms, op, addr)
 
-            io_ms = (loop.time() - t_in_start) * 1000.0
-            if io_ms >= self.cfg.io_warn_ms:
-                if addr is None:
-                    self.log("WARN in-lock IO %.0f ms (op=%s)", io_ms, op)
-                else:
-                    self.log("WARN in-lock IO %.0f ms (op=%s, addr=%s)", io_ms, op, addr)
         finally:
             try:
                 self._lock.release()
