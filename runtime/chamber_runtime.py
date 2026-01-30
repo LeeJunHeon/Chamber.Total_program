@@ -135,9 +135,21 @@ class _CfgAdapter:
     @property
     def RGA_CSV_PATH(self) -> Path:
         p = self._get("RGA_CSV_PATH", None)
+
+        # ✅ dict 형태면 채널 키로 선택
+        if isinstance(p, dict):
+            p = p.get(f"ch{self.ch}") or p.get(str(self.ch)) or p.get(self.ch)
+
+        # ✅ 혹시 RGA_CSV_PATH가 없고, 레거시로 RGA_XLSX_PATH만 있는 경우도 처리
+        if not p:
+            legacy = self._get("RGA_XLSX_PATH", None)
+            if isinstance(legacy, dict):
+                p = legacy.get(f"ch{self.ch}")
+            elif isinstance(legacy, str):
+                p = legacy
+
         if p:
             return Path(p)
-        # 설정이 없으면 채널별 기본 파일로 분리
         return Path.cwd() / f"RGA_CH{self.ch}.csv"
 
     @property
@@ -339,7 +351,8 @@ class ChamberRuntime:
         self.rga = None
         try:
             # logger는 선택사항인데 ChamberRuntime에는 self.logger가 없으니 전달하지 않는다.
-            self.rga = RGAWorkerClient(ch=self.ch, logger=None, default_timeout_s=30.0)
+            timeout_s = float(getattr(self.cfg, "RGA_WORKER_TIMEOUT_S", 60.0))
+            self.rga = RGAWorkerClient(ch=self.ch, logger=None, default_timeout_s=timeout_s)
         except Exception as e:
             # 기존 로그 시스템(append_log)로만 남긴다.
             self.append_log(f"RGA{self.ch}", f"RGAWorkerClient init failed: {e!r} (RGA disabled)")
@@ -661,18 +674,29 @@ class ChamberRuntime:
 
         def cb_rga_scan():
             async def _run():
+                timeout_s = float(getattr(self.cfg, "RGA_WORKER_TIMEOUT_S", 60.0))
+                self._soon(self._graph_clear_rga_plot_safe)
+
                 try:
-                    self._ensure_background_started()
-                    self._soon(self._graph_clear_rga_plot_safe)
+                    # ✅ auto_connect 차단 상태여도 Pump.RGA는 올려야 finished/data를 소비함
                     if self.rga:
-                        # csv 경로는 worker가 CH_CONFIG로 결정하므로 전달 불필요
-                        await self.rga.scan_histogram_to_csv(timeout_s=30.0)  # 필요하면 여기만 바꿔도 됨
+                        self._ensure_task_alive(f"Pump.RGA.{self.ch}", self._pump_rga_events)
+
+                    if self.rga:
+                        await self.rga.scan_histogram_to_csv(timeout_s=timeout_s)
                     else:
                         raise RuntimeError("RGA 어댑터 없음")
+
                 except Exception as e:
-                    msg = f"예외로 RGA 스캔 실패: {e!r} → 다음 단계"
-                    self.append_log("RGA", msg)
-                    self.process_controller.on_rga_finished()
+                    self.append_log("RGA", f"예외로 RGA 스캔 실패: {e!r} → 다음 단계")
+
+                finally:
+                    # ✅ 핵심: 펌프/이벤트 누락이 있어도 공정이 여기서 영원히 멈추지 않게 한다
+                    try:
+                        self.process_controller.on_rga_finished()
+                    except Exception:
+                        pass
+
             self._spawn_detached(_run())
 
         # 컨트롤러 생성

@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 from time import monotonic_ns
 from typing import Optional, List, Tuple, Dict, Any, Callable
-from lib.config_common import SHUTDOWN_STEP_TIMEOUT_MS, SHUTDOWN_STEP_GAP_MS
+from lib.config_common import SHUTDOWN_STEP_TIMEOUT_MS, SHUTDOWN_STEP_GAP_MS, RGA_STEP_TIMEOUT_MS
 
 
 # =========================
@@ -643,13 +643,28 @@ class ProcessController:
                         except asyncio.TimeoutError:
                             self._emit_log("Process", "종료 스텝 확인 시간 초과 → 다음 스텝 진행")
                 else:
-                    # 평시: abort와 경쟁(비상 상황이면 abort 무시하지 않고 즉시 전환)
-                    aborted = await self._wait_or_abort(fut, allow_abort=not self._in_emergency)
+                    # 평시: abort와 경쟁
+                    if step.action == ActionType.RGA_SCAN:
+                        try:
+                            aborted = await asyncio.wait_for(
+                                self._wait_or_abort(fut, allow_abort=not self._in_emergency),
+                                timeout=max(0.001, RGA_STEP_TIMEOUT_MS) / 1000.0,
+                            )
+                        except asyncio.TimeoutError:
+                            self._emit_log("Process", "RGA 스캔 대기 시간 초과 → 그래프 스킵, 다음 단계 진행")
+                            if self._expect_group:
+                                self._expect_group.cancel("rga-timeout")
+                                self._expect_group = None
+                            return
+                    else:
+                        aborted = await self._wait_or_abort(fut, allow_abort=not self._in_emergency)
+
                     if aborted:
                         if self._expect_group:
                             self._expect_group.cancel("abort")
                             self._expect_group = None
                         return
+
             except asyncio.CancelledError:
                 return
 

@@ -56,12 +56,23 @@ POLL_START_DELAY_AFTER_RF_ON_MS = 800
 # ======================================================================
 # RGA (외부 프로그램 실행 + CSV 저장)
 # ======================================================================
+# ✅ RGA worker 실행/응답 타임아웃(초) - 요청대로 1분
+RGA_WORKER_TIMEOUT_S = 60.0
+
+# ✅ ProcessController가 RGA_OK 토큰을 기다리는 최대 시간(ms)
+#    worker timeout(60s) + 이벤트/그래프 처리 여유 5s
+RGA_STEP_TIMEOUT_MS = int(RGA_WORKER_TIMEOUT_S * 1000) + 5_000
+
 # 채널별 CSV 기본 저장 경로(필요 시 main에서 ch를 선택해 사용)
 RGA_XLSX_PATH = {
     "ch1": r"\\VanaM_NAS\VanaM_Sputter\RGA\Ch.1\RGA_spectrums.csv",
     "ch2": r"\\VanaM_NAS\VanaM_Sputter\RGA\Ch.2\RGA_spectrums.csv",
 }
 RGA_XLSX_SHEET = "Histogram"
+
+# ✅ chamber_runtime.py가 찾는 키는 RGA_CSV_PATH라서 호환 키 추가
+#    (dict 형태 허용: ch1/ch2에서 꺼내 쓰게 chamber_runtime에서 처리)
+RGA_CSV_PATH = RGA_XLSX_PATH
 
 # (선택) RGA 장비 LAN 접근 정보(외부 앱이 아닌 직접 접근 시 사용)
 RGA_NET = {
