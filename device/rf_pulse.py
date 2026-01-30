@@ -51,7 +51,16 @@ CMD_REPORT_REFLECTED    = 166
 CMD_REPORT_DELIVERED    = 167
 
 # Pulsing
-CMD_SET_PULSING         = 27     # 0=off, 1=int, 2=ext, 3=ext_inv, 4=int_by_ext
+CMD_SET_PULSING = 27  # TX 값이 0x40~0x44 계열인 모델 존재(매뉴얼 기준)
+
+PULSING_TX = {
+    0: 0x40,  # OFF
+    1: 0x41,  # Internal pulsing
+    2: 0x42,  # External pulsing
+    3: 0x43,  # External inverted
+    4: 0x44,  # Internal enabled by external input
+}
+
 CMD_SET_PULSE_FREQ      = 93     # 3 bytes (Hz, LSB first)
 CMD_SET_PULSE_DUTY      = 96     # 2 bytes (percent, LSB first)
 
@@ -61,12 +70,17 @@ CMD_REPORT_PULSE_FREQ   = 193
 CMD_REPORT_PULSE_DUTY   = 196
 
 CSR_CODES = {
-    0: "OK",
-    1: "Command Not Recognized",
-    2: "Not in Host Mode",
-    3: "Not Implemented",
-    4: "Bad Data Value",
-    5: "Busy",
+    0:  "Command accepted",
+    1:  "Wrong control mode (not HOST)",
+    2:  "RF output is ON (cannot change this setting now)",
+    4:  "Data out of range / bad value",
+    5:  "User Port RF signal OFF / interlock (model dependent)",
+    7:  "Active faults exist",
+    9:  "Data byte count incorrect",
+    19: "Recipe mode active",
+    50: "Frequency out of range",
+    51: "Duty out of range",
+    99: "Command not implemented",
 }
 
 MODE_SET  = {"fwd": 6, "load": 7, "ext": 8}
@@ -295,6 +309,13 @@ class RFPulseAsync:
         ok, _ = await self._exec_and_csr(CMD_SET_ACTIVE_CTRL, b"\x02", tag="[START HOST]")
         if not ok: return await fail("HOST 실패")
 
+        # (추가) RF OFF로 출력 상태 정리 (이전 공정 비정상 종료 대비)
+        ok, _ = await self._exec_and_csr(CMD_RF_OFF, b"", tag="[START PRE RF OFF]", timeout_ms=max(ACK_TIMEOUT_MS, 2500))
+        if not ok:
+            return await fail("RF OFF(사전) 실패")
+
+        await asyncio.sleep(0.2)  # 릴레이/출력 안정화 여유
+
         # MODE FWD
         ok, _ = await self._exec_and_csr(CMD_SET_CTRL_MODE, bytes([MODE_SET["fwd"]]), tag="[START MODE FWD]")
         if not ok: return await fail("MODE=FWD 실패")
@@ -320,8 +341,13 @@ class RFPulseAsync:
             if not ok: return await fail("PULSE DUTY 실패")
 
         # PULSING=1
-        ok, _ = await self._exec_and_csr(CMD_SET_PULSING, bytes([1]), tag="[START PULSING 1]")
-        if not ok: return await fail("PULSING=1 실패")
+        pulse_mode = 1  # 기존 의미 그대로: internal
+        ok, _ = await self._exec_and_csr(
+            CMD_SET_PULSING,
+            bytes([PULSING_TX[pulse_mode]]),
+            tag=f"[START PULSING {pulse_mode}]"
+        )
+        if not ok: return await fail("PULSING 설정 실패")
 
         # RF ON
         ok, _ = await self._exec_and_csr(CMD_RF_ON, b"", tag="[START RF ON]", timeout_ms=max(ACK_TIMEOUT_MS, 2500))
@@ -571,6 +597,60 @@ class RFPulseAsync:
                 fail_reason = f"error:{e}"
                 self._on_tcp_disconnected()   # ← 실제로 끊어서 워치독이 다시 붙도록
 
+            # ================== ★ CSR 기반 자동 복구 (여기에 추가) ==================
+            if (not ok) and (cmd.kind == "exec") and (fail_reason is None) and result and (len(result) >= 1):
+                csr = result[0]
+                fail_reason = f"csr={csr}"
+
+                # CSR=1: HOST가 아니어서 거부 → HOST 재설정 후 재시도
+                if csr == 1 and (cmd.cmd != CMD_SET_ACTIVE_CTRL) and (cmd.retries_left > 0) and (not self._closing):
+                    cmd.retries_left -= 1
+
+                    # 1) 원래 명령을 다시 시도하도록 큐에 복귀 (원래 명령은 HOST 다음에 실행돼야 함)
+                    self._cmd_q.appendleft(cmd)
+
+                    # 2) HOST 재설정 명령을 큐 맨앞에 prepend
+                    self._cmd_q.appendleft(RfCommand(
+                        kind="exec",
+                        cmd=CMD_SET_ACTIVE_CTRL,
+                        data=b"\x02",
+                        timeout_ms=ACK_TIMEOUT_MS,
+                        callback=None,
+                        tag="[AUTO HOST]",
+                        gap_ms=max(200, CMD_GAP_MS),   # 내부 상태 전환 여유
+                        retries_left=1,
+                        allow_no_reply=False,
+                        allow_when_closing=False,
+                    ))
+
+                    self._inflight = None
+                    await asyncio.sleep(0)  # yield
+                    continue
+
+                # CSR=2: (코드 정의 기준) RF 출력 ON 상태라 설정 변경 거부 → RF OFF 후 재시도
+                if csr == 2 and (cmd.cmd != CMD_RF_OFF) and (cmd.retries_left > 0) and (not self._closing):
+                    cmd.retries_left -= 1
+
+                    self._cmd_q.appendleft(cmd)
+
+                    self._cmd_q.appendleft(RfCommand(
+                        kind="exec",
+                        cmd=CMD_RF_OFF,
+                        data=b"",
+                        timeout_ms=ACK_TIMEOUT_MS,
+                        callback=None,
+                        tag="[AUTO RF_OFF]",
+                        gap_ms=max(200, CMD_GAP_MS),
+                        retries_left=1,
+                        allow_no_reply=False,
+                        allow_when_closing=False,
+                    ))
+
+                    self._inflight = None
+                    await asyncio.sleep(0)
+                    continue
+            # ================== ★ CSR 기반 자동 복구 끝 ==================
+
             # 결과 처리
             if ok:
                 self._dbg("RFP OK", f"{cmd.tag} {self._cmd_label(cmd.cmd)}")
@@ -726,7 +806,7 @@ class RFPulseAsync:
             await self._emit_status(
                 f"CSR {csr} ({CSR_CODES.get(csr, 'Unknown')}) for {self._cmd_label(cmd.cmd)}"
             )
-            return False, None
+            return False, csr_bytes   # ★ CSR 바이트를 유지해서 상위에서 대응 가능하게
 
         if cmd.cmd == CMD_RF_ON:
             await self._event_q.put(RFPulseEvent(kind="target_reached", message="OK"))
