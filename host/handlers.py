@@ -355,12 +355,44 @@ class HostHandlers:
                         return "error"
 
                 return "running" if running_ch else "idle"
+            
+            def _ch1_is_waiting_ig() -> bool:
+                """
+                CH1 공정이 IG 대기(IG 단계)인지 판정.
+                - CH1 process_controller가 running이고
+                - current_step.action.value == "IG_CMD" 인 동안 True
+                - start 직후 current_step이 아직 None인 짧은 구간도 True 처리(원하면 False로 변경 가능)
+                """
+                try:
+                    rt = getattr(self.ctx, "ch1", None)
+                    if rt is None:
+                        return False
+
+                    pc = getattr(rt, "process_controller", None)
+                    if pc is None or not bool(getattr(pc, "is_running", False)):
+                        return False
+
+                    step = getattr(pc, "current_step", None)
+                    if step is None:
+                        # START 직후 스텝 진입 전 구간도 'IG 대기'로 간주하여 running 유지
+                        return True
+
+                    act = getattr(step, "action", None)
+                    actv = getattr(act, "value", None)
+                    if actv is None:
+                        actv = str(act) if act is not None else ""
+
+                    return str(actv) == "IG_CMD"
+                except Exception:
+                    return False
 
             def _loadlock_state() -> str:
                 """
                 Loadlock(Plasma Cleaning) 상태 계산:
                 - runtime_state.is_running("pc", ch)가 1 또는 2 중 하나라도 True면 running
-                - (추가) 마지막 PC 실패 이력이 남아 있으면 error
+                - 마지막 PC 실패 이력이 남아 있으면 error
+                - ✅ (추가) CH1 공정이 IG 단계(IG_CMD)인 동안에는 Loadlock을 running으로 "보이게" 유지
+                (IG 끝나고 RGA 시작하면 자동으로 idle로 돌아감)
                 - (fallback) plasma cleaning 런타임의 is_running / _running 플래그 사용
                 - 조회 중 예외가 나면 error
                 """
@@ -385,6 +417,11 @@ class HostHandlers:
                                     return "error"
                 except Exception:
                     return "error"
+
+                # ✅ 1.5) CH1이 IG 대기 단계면 Loadlock을 running으로 "보이게" 강제
+                # (Plasma Cleaning이 끝났고 Gate가 닫힌 뒤 CH1 공정이 시작해도 IG 동안 계속 running 유지)
+                if _ch1_is_waiting_ig():
+                    return "running"
 
                 # 2) pc 런타임 플래그(fallback)
                 try:
