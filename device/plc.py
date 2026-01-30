@@ -223,6 +223,19 @@ PLC_TIMER_MAP: Dict[str, int] = {
 }
 
 # ======================================================
+# 에러코드
+# ======================================================
+
+class PLCError(RuntimeError):
+    def __init__(self, code: str, message: str, *, op: str | None = None, addr: int | None = None, cause: Exception | None = None):
+        super().__init__(message)
+        self.code = code
+        self.op = op
+        self.addr = addr
+        self.cause = cause
+
+
+# ======================================================
 # 설정
 # ======================================================
 
@@ -235,6 +248,10 @@ class PLCConfig:
     inter_cmd_gap_s: float = 0.15
     heartbeat_s: float = 15.0
     pulse_ms: int = 180  # momentary 기본 펄스폭(ms)
+
+    # ✅ connect 재시도 (총 시도 횟수 = 1 + connect_retry)
+    connect_retry: int = 2
+    connect_retry_delay_s: float = 0.5
 
     # ⬇️ 추가: 성능/경합 모니터링 임계치(ms)
     lock_warn_ms: float = 1000.0   # 락 획득 대기시간 경고 임계
@@ -317,11 +334,15 @@ class AsyncPLC:
     # ---------- 연결/수명주기 ----------
     async def connect(self) -> None:
         self._closed = False
-        async with self._io_lock("connect"):  # 🔒 I/O 및 하트비트와 직렬화
-            await asyncio.to_thread(self._connect_sync)
-        self.log("TCP 연결 성공: %s:%s (unit=%s)", self.cfg.ip, self.cfg.port, self.cfg.unit)
+
+        # ✅ 연결 성공 여부와 무관하게 하트비트 태스크는 살아있게(백그라운드 재연결용)
         if self._hb_task is None or self._hb_task.done():
             self._hb_task = asyncio.create_task(self._heartbeat_loop(), name="PLCHeartbeat")
+
+        async with self._io_lock("connect"):
+            await asyncio.to_thread(self._connect_sync)
+
+        self.log("TCP 연결 성공: %s:%s (unit=%s)", self.cfg.ip, self.cfg.port, self.cfg.unit)
 
     async def close(self) -> None:
         self._closed = True
@@ -377,18 +398,25 @@ class AsyncPLC:
             return {self._uid_kw: self.cfg.unit}
         return {}
 
-    def _ensure_ok(self, resp):
+    def _ensure_ok(self, resp, *, op: str, addr: int | None = None):
         if resp is None:
-            raise ModbusException("응답 없음(None)")
+            raise PLCError("E402", "PLC 응답 없음(None)", op=op, addr=addr)
         if isinstance(resp, ExceptionResponse):
-            raise ModbusException(f"Modbus Exception: {resp}")
+            raise PLCError("E403", f"PLC Modbus ExceptionResponse: {resp}", op=op, addr=addr)
         if hasattr(resp, "isError") and resp.isError():
-            raise ModbusException(str(resp))
+            raise PLCError("E403", f"PLC Modbus isError(): {resp}", op=op, addr=addr)
         return resp
 
     def _is_reset_err(self, e: Exception) -> bool:
         s = str(e).lower()
-        return ("10054" in s) or ("reset by peer" in s) or ("connectionreseterror" in s)
+        return (
+            ("10054" in s)
+            or ("reset by peer" in s)
+            or ("connectionreseterror" in s)
+            or ("broken pipe" in s)
+            or ("connection aborted" in s)
+            or ("not connected" in s)
+        )
 
     async def _throttle_and_heartbeat(self):
         now = time.monotonic()
@@ -405,17 +433,57 @@ class AsyncPLC:
     def _connect_sync(self) -> None:
         if self._client is None:
             self._client = ModbusTcpClient(self.cfg.ip, port=self.cfg.port, timeout=self.cfg.timeout_s)
+
         if not self._is_connected():
-            if not self._client.connect():
-                raise RuntimeError("Modbus TCP 연결 실패")
-            # OS keepalive
+            ok = False
+            last_exc: Optional[Exception] = None
+
+            for _ in range(int(getattr(self.cfg, "connect_retry", 0)) + 1):
+                try:
+                    ok = bool(self._client.connect())
+                except Exception as e:
+                    last_exc = e
+                    ok = False
+
+                if ok:
+                    break
+
+                # 실패 → close + client 재생성
+                try:
+                    self._client.close()
+                except Exception:
+                    pass
+                self._client = None
+                self._uid_kw = None
+
+                self._client = ModbusTcpClient(self.cfg.ip, port=self.cfg.port, timeout=self.cfg.timeout_s)
+                time.sleep(max(0.0, float(getattr(self.cfg, "connect_retry_delay_s", 0.0))))
+
+            if not ok:
+                # 최종 실패 → 상태 정리 후 E401
+                try:
+                    if self._client is not None:
+                        self._client.close()
+                except Exception:
+                    pass
+                self._client = None
+                self._uid_kw = None
+
+                if last_exc is not None:
+                    raise PLCError("E401", f"Modbus TCP 연결 실패 ({self.cfg.ip}:{self.cfg.port}) - {last_exc!r}", op="connect")
+                raise PLCError("E401", f"Modbus TCP 연결 실패 ({self.cfg.ip}:{self.cfg.port})", op="connect")
+
+            # 성공 시 keepalive
             try:
                 import socket
-                self._client.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                if getattr(self._client, "socket", None):
+                    self._client.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
             except Exception:
                 pass
+
             self._last_io_ts = time.monotonic()
-        if self._uid_kw is None:
+
+        if self._uid_kw is None and self._client is not None:
             self._uid_kw = self._detect_uid_kw(self._client.read_coils)
 
     def _close_sync(self):
@@ -444,57 +512,100 @@ class AsyncPLC:
             return
 
     # ---------- 저수준 IO(직렬화) ----------
+    def _to_plc_error(self, op: str, addr: int | None, e: Exception) -> PLCError:
+        if isinstance(e, PLCError):
+            return e
+        s = str(e).lower()
+
+        # 연결/끊김 계열
+        if self._is_reset_err(e) or ("connection" in s and "reset" in s) or ("refused" in s) or ("no route" in s):
+            return PLCError("E401", f"PLC 연결 오류: {type(e).__name__}: {e}", op=op, addr=addr, cause=e)
+
+        # timeout/응답없음 계열
+        if ("timeout" in s) or ("timed out" in s) or ("no answer" in s) or ("응답" in s and "없" in s):
+            return PLCError("E402", f"PLC timeout/응답없음: {type(e).__name__}: {e}", op=op, addr=addr, cause=e)
+
+        # Modbus 계열
+        if isinstance(e, ModbusException) or ("modbus" in s):
+            return PLCError("E403", f"PLC Modbus 오류: {type(e).__name__}: {e}", op=op, addr=addr, cause=e)
+
+        return PLCError("E403", f"PLC 통신 오류: {type(e).__name__}: {e}", op=op, addr=addr, cause=e)
+
     async def read_coil(self, addr: int) -> bool:
-        async with self._io_lock("read_coil", addr=addr):
-            await asyncio.to_thread(self._connect_sync)
-            await self._throttle_and_heartbeat()
+        op = "read_coil"
+        async with self._io_lock(op, addr=addr):
             try:
-                resp = await asyncio.to_thread(self._client.read_coils, addr, count=1, **self._uid_kwargs())
-            except Exception as e:
-                if self._is_reset_err(e):
-                    await asyncio.to_thread(self._close_sync)
-                    await asyncio.to_thread(self._connect_sync)
-                    await self._throttle_and_heartbeat()
+                await asyncio.to_thread(self._connect_sync)
+                await self._throttle_and_heartbeat()
+                try:
                     resp = await asyncio.to_thread(self._client.read_coils, addr, count=1, **self._uid_kwargs())
-                else:
-                    raise
-            self._ensure_ok(resp)
-            return bool(resp.bits[0])
+                except Exception as e:
+                    pe = self._to_plc_error(op, addr, e)
+                    if pe.code in ("E401", "E402") or self._is_reset_err(e):
+                        await asyncio.to_thread(self._close_sync)
+                        await asyncio.to_thread(self._connect_sync)
+                        await self._throttle_and_heartbeat()
+                        resp = await asyncio.to_thread(self._client.read_coils, addr, count=1, **self._uid_kwargs())
+                    else:
+                        raise pe from e
+
+                self._ensure_ok(resp, op=op, addr=addr)
+                return bool(resp.bits[0])
+
+            except Exception as e:
+                raise self._to_plc_error(op, addr, e) from e
 
     async def write_coil(self, addr: int, state: bool) -> None:
-        async with self._io_lock("write_coil", addr=addr):
-            await asyncio.to_thread(self._connect_sync)
-            await self._throttle_and_heartbeat()
+        op = "write_coil"
+        async with self._io_lock(op, addr=addr):
             try:
-                resp = await asyncio.to_thread(self._client.write_coil, addr, bool(state), **self._uid_kwargs())
-            except Exception as e:
-                if self._is_reset_err(e):
-                    await asyncio.to_thread(self._close_sync)
-                    await asyncio.to_thread(self._connect_sync)
-                    await self._throttle_and_heartbeat()
+                await asyncio.to_thread(self._connect_sync)
+                await self._throttle_and_heartbeat()
+
+                try:
                     resp = await asyncio.to_thread(self._client.write_coil, addr, bool(state), **self._uid_kwargs())
-                else:
-                    raise
-            self._ensure_ok(resp)
+                except Exception as e:
+                    pe = self._to_plc_error(op, addr, e)
+                    # ✅ reset 뿐 아니라 timeout/연결계열(E401/E402)도 1회 재연결 후 재시도
+                    if pe.code in ("E401", "E402") or self._is_reset_err(e):
+                        await asyncio.to_thread(self._close_sync)
+                        await asyncio.to_thread(self._connect_sync)
+                        await self._throttle_and_heartbeat()
+                        resp = await asyncio.to_thread(self._client.write_coil, addr, bool(state), **self._uid_kwargs())
+                    else:
+                        raise pe from e
+
+                self._ensure_ok(resp, op=op, addr=addr)
+
+            except Exception as e:
+                raise self._to_plc_error(op, addr, e) from e
 
     async def read_reg(self, addr: int) -> int:
-        async with self._io_lock("read_reg", addr=addr):
-            await asyncio.to_thread(self._connect_sync)
-            await self._throttle_and_heartbeat()
+        op = "read_reg"
+        async with self._io_lock(op, addr=addr):
             try:
-                resp = await asyncio.to_thread(self._client.read_holding_registers, addr, count=1, **self._uid_kwargs())
-            except Exception as e:
-                if self._is_reset_err(e):
-                    await asyncio.to_thread(self._close_sync)
-                    await asyncio.to_thread(self._connect_sync)
-                    await self._throttle_and_heartbeat()
+                await asyncio.to_thread(self._connect_sync)
+                await self._throttle_and_heartbeat()
+                try:
                     resp = await asyncio.to_thread(self._client.read_holding_registers, addr, count=1, **self._uid_kwargs())
-                else:
-                    raise
-            self._ensure_ok(resp)
-            return int(resp.registers[0])
+                except Exception as e:
+                    pe = self._to_plc_error(op, addr, e)
+                    if pe.code in ("E401", "E402") or self._is_reset_err(e):
+                        await asyncio.to_thread(self._close_sync)
+                        await asyncio.to_thread(self._connect_sync)
+                        await self._throttle_and_heartbeat()
+                        resp = await asyncio.to_thread(self._client.read_holding_registers, addr, count=1, **self._uid_kwargs())
+                    else:
+                        raise pe from e
+
+                self._ensure_ok(resp, op=op, addr=addr)
+                return int(resp.registers[0])
+
+            except Exception as e:
+                raise self._to_plc_error(op, addr, e) from e
 
     async def write_reg(self, addr: int, value: int) -> None:
+        op = "write_reg"
         async with self._io_lock("write_reg", addr=addr):
             await asyncio.to_thread(self._connect_sync)
             await self._throttle_and_heartbeat()
@@ -508,7 +619,7 @@ class AsyncPLC:
                     resp = await asyncio.to_thread(self._client.write_register, addr, int(value), **self._uid_kwargs())
                 else:
                     raise
-            self._ensure_ok(resp)
+            self._ensure_ok(resp, op=op, addr=addr)
 
     async def read_coils(self, addrs: Iterable[int]) -> Dict[int, bool]:
         out: Dict[int, bool] = {}
@@ -931,7 +1042,7 @@ class AsyncPLC:
     async def resume_watchdog(self) -> None:
         """pause_watchdog 이후 워치독 재개."""
         self._hb_paused = False
-        if (not self._closed) and self.is_connected() and (self._hb_task is None or self._hb_task.done()):
+        if (not self._closed) and (self._hb_task is None or self._hb_task.done()):
             self._hb_task = asyncio.create_task(self._heartbeat_loop(), name="PLCHeartbeat")
 
     # chamber_runtime: 공정 on/off 신호에 맞춰 폴링/워치독 제어(옵션)
@@ -941,7 +1052,11 @@ class AsyncPLC:
         False면 워치독(하트비트/자동재연결) 잠시 멈춰 로그 소음/경합 줄임.
         True면 다시 재개.
         """
-        loop = asyncio.get_running_loop()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        
         if not should_poll:
             loop.create_task(self.pause_watchdog())
         else:
@@ -967,5 +1082,5 @@ class AsyncPLC:
 
 __all__ = [
     "PLC_COIL_MAP", "PLC_REG_MAP", "PLC_TIMER_MAP",
-    "PLCConfig", "AsyncPLC",
+    "PLCConfig", "AsyncPLC", "PLCError",
 ]

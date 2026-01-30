@@ -213,13 +213,14 @@ class HostHandlers:
         self._log_client_response(res)
         return res
 
-    def _fail(
-        self,
-        e: Exception | str,
-        *,
-        code: str | None = None,
-        src: str = "HOST",
-    ) -> Json:
+    def _fail(self, e, *, code: str | None = None, src: str = "HOST") -> Json:
+        # ✅ code 미지정이면 예외 객체에서 자동 추출
+        if code is None and isinstance(e, Exception):
+            code = getattr(e, "code", None) or getattr(e, "error_code", None)
+            # KeyError는 주소맵/키 누락으로 취급
+            if code is None and isinstance(e, KeyError):
+                code = "E411"
+
         res: Json = notify_all(
             log=self.ctx.log,
             chat=getattr(self.ctx, "chat", None),
@@ -443,7 +444,7 @@ class HostHandlers:
                 )
 
         except Exception as e:
-            return self._fail(e)
+            return self._fail(f"GET_SPUTTER_STATUS 실패: {type(e).__name__}: {e}", code=getattr(e, "code", None))
         
     # ================== 레시피 조회 ==========================
     async def get_recipe(self, data: Json) -> Json:
@@ -501,11 +502,15 @@ class HostHandlers:
             key = "LOADING_1_SENSOR_LAMP" if which == 1 else "LOADING_2_SENSOR_LAMP"
 
             plc = self.ctx.plc
+
             try:
                 async with self._plc_call():
-                    v = await plc.read_bit(key)   # ✅ 표준 API로 통일
-            except Exception as e:
+                    v = await plc.read_bit(key)
+            except KeyError as e:
                 return self._fail(f"PLC 주소맵에 {key}가 없습니다: {e}", code="E411")
+            except Exception as e:
+                # ✅ PLC 통신 실패(E401/E402/E403)를 그대로 반영
+                return self._fail(f"{key} 읽기 실패: {type(e).__name__}: {e}", code=getattr(e, "code", None) or "E412")
 
             async with self._plc_command(f"GET_LOADING_{which}_SENSOR"):
                 # ✅ 클라이언트 요청 payload도 기록
@@ -554,7 +559,14 @@ class HostHandlers:
             async with self._plc_command(f"START_SPUTTER_CH{ch}"):
                 self._log_client_request(data)
 
-                st = await self._read_gate_state(ch)
+                try:
+                    st = await self._read_gate_state(ch)
+                except KeyError as e:
+                    return self._fail(f"PLC 주소맵에 gate lamp 키가 없습니다: {e}", code="E411")
+                except Exception as e:
+                    # ✅ PLCError면 e.code(E401/E402/E403)가 자동으로 들어가게 됨(_fail 개선 덕분)
+                    return self._fail(f"Gate 상태 조회 실패: {type(e).__name__}: {e}", code=getattr(e, "code", None) or "E412")
+
                 if st["state"] != "closed":
                     return self._fail(f"START_SPUTTER 불가 — CH{ch} gate가 CLOSED가 아님({st['state']})", code="E301")
 
@@ -640,7 +652,7 @@ class HostHandlers:
             except KeyError as e:
                 return False, f"PLC 주소맵에 gate lamp 키가 없습니다: {e}", "E411"
             except Exception as e:
-                return False, f"Gate 상태 조회 실패: {type(e).__name__}: {e}", "E412"
+                return False, f"Gate 상태 조회 실패: {type(e).__name__}: {e}", (getattr(e, "code", None) or "E412")
 
             if st.get("state") != "closed":
                 return False, f"VACUUM_ON/OFF 불가 — CH{ch} gate가 CLOSED가 아님({st.get('state')})", "E301"
@@ -1059,7 +1071,7 @@ class HostHandlers:
             # gate_open에서 예외는 대부분 PLC I/O/상태조회 계열 → E412로 정규화
             return self._fail(
                 f"CH{ch}_GATE_OPEN 처리 중 예외: {type(e).__name__}: {e}",
-                code="E412",
+                code=getattr(e, "code", None) or "E412",
             )
 
     async def gate_close(self, data: Json) -> Json:
