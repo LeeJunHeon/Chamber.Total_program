@@ -330,19 +330,36 @@ class HostServer:
                 t0 = time.perf_counter()
                 try:
                     res_cmd, res_data = await self.router.dispatch(cmd, data)
+
                 except Exception as e:
                     tb = traceback.format_exc()
                     self.log("NET", f"Handler error for {cmd}: {e}\n{tb}")
 
-                    # ✅ E110 강제 제거: message 기반 추정/폴백(또는 handlers에서 이미 E412/E401로 잡게)
-                    fail = notify_all(
-                        log=self.log,
-                        chat=self.chat,
-                        popup=self.popup,
-                        src="HOST",
-                        code=None,  # ← 강제하지 않음
-                        message=f"{cmd} handler crash: {type(e).__name__}: {e}",
-                    )
+                    # ✅ 예외에 code가 있으면 그걸 최우선으로 사용
+                    code = getattr(e, "code", None) or getattr(e, "error_code", None)
+                    msg = str(e)
+
+                    if code:
+                        # PLCError/AppError 등이 올라온 케이스: 코드 유지
+                        fail = notify_all(
+                            log=self.log,
+                            chat=self.chat,
+                            popup=self.popup,
+                            src="HOST",
+                            code=code,
+                            message=msg,   # "handler crash:" 같은 접두 넣지 말기(추정 방해)
+                        )
+                    else:
+                        # 진짜 핸들러 크래시: E110
+                        fail = notify_all(
+                            log=self.log,
+                            chat=self.chat,
+                            popup=self.popup,
+                            src="HOST",
+                            code="E110",
+                            message=f"{cmd} handler crash: {type(e).__name__}: {msg}",
+                        )
+
                     res_cmd, res_data = f"{cmd}_RESULT", fail
 
                 dt_ms = int((time.perf_counter() - t0) * 1000)

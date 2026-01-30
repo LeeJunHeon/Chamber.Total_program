@@ -494,16 +494,33 @@ class AsyncPLC:
         try:
             while not self._closed:
                 await asyncio.sleep(max(1.0, self.cfg.heartbeat_s * 0.75))
+                if self._closed:
+                    break
+
+                # ✅ 1) PLC가 이미 바쁘면(락 점유 중) 워치독은 이번 tick 스킵
+                #    -> lock-wait를 만들지 않게
+                if self._lock.locked():
+                    continue
+
                 try:
-                    await self.read_coil(0)
+                    # ✅ 2) 워치독은 "가벼운 ping"만. (여기서는 재연결까지 하지 않음)
+                    #    가능하면 read_coil(0) 대신 low-level read_coils 1개가 더 안전.
+                    async with self._io_lock("heartbeat", addr=0):
+                        await asyncio.to_thread(self._connect_sync)
+                        if self._client is None:
+                            continue
+                        await asyncio.to_thread(self._client.read_coils, 0, count=1, **self._uid_kwargs())
+
                 except Exception:
-                    # 🔒 재연결도 I/O와 직렬화
+                    # ✅ 3) 실패 시 재연결을 락 안에서 길게 하지 말고,
+                    #    소켓 꼬임 방지를 위해 close만 조용히 시도(선택)
                     try:
-                        async with self._io_lock("reconnect"):
-                            await asyncio.to_thread(self._close_sync)
-                            await asyncio.to_thread(self._connect_sync)
+                        if not self._lock.locked():
+                            async with self._io_lock("hb_close"):
+                                await asyncio.to_thread(self._close_sync)
                     except Exception:
                         pass
+
         except asyncio.CancelledError:
             return
 

@@ -192,18 +192,35 @@ class HostHandlers:
     async def _plc_call(self):
         """
         '한 번의 PLC I/O 구간'만 아주 짧게 보호:
-        - lock_plc 획득
+        - lock_plc 획득 (handlers 차원에서 PLC 호출 직렬화)
         - plc.log 를 파일 로거로 임시 교체
+        - ✅ PLC watchdog(heartbeat) 잠시 pause (락 경합/불필요 reconnect 방지)
         - I/O 수행
         - 원복
         """
         plc = self.ctx.plc
         prev = getattr(plc, "log", None)
+
         async with self.ctx.lock_plc:
             plc.log = self._plc_file_logger
+
+            # ✅ watchdog가 있으면 잠시 멈춤 (pause/resume 메서드 이름은 plc.py에 맞춰 조정)
+            paused = False
             try:
+                if hasattr(plc, "pause_watchdog") and hasattr(plc, "resume_watchdog"):
+                    await plc.pause_watchdog()
+                    paused = True
+
                 yield
+
             finally:
+                # ✅ 반드시 resume (예외 발생해도)
+                if paused:
+                    try:
+                        await plc.resume_watchdog()
+                    except Exception:
+                        pass
+
                 plc.log = prev
 
     # ================== 공통 응답 헬퍼 ==================
