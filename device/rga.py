@@ -78,11 +78,23 @@ class RGAWorkerClient:
             raise FileNotFoundError(f"rga_worker.exe not found. checked: {checked}")
 
         # 2) 비-frozen이면 python으로 스크립트 실행
+        root = Path(__file__).resolve().parent.parent
+
         if self.worker_path is not None:
-            script = self.worker_path
+            script = Path(self.worker_path)
         else:
-            # device/ 아래에서 두 단계 위가 프로젝트 루트라고 가정
-            script = Path(__file__).resolve().parent.parent / "tools" / "rga_worker.py"
+            candidates = [
+                root / "tools" / "rga_worker.py",                 # 혹시 로컬에 존재하면 사용
+                root / "apps" / "rga_service" / "rga_api.py",     # ✅ 현재 프로젝트/스펙 기준
+            ]
+            script = None
+            for c in candidates:
+                if c.exists():
+                    script = c
+                    break
+            if script is None:
+                checked = " | ".join(str(p) for p in candidates)
+                raise FileNotFoundError(f"rga worker script not found. checked: {checked}")
 
         return (sys.executable, str(script))
 
