@@ -66,10 +66,14 @@ class RGAWorkerClient:
             candidates = [
                 exe_dir / "rga_worker.exe",
                 exe_dir / "tools" / "rga_worker.exe",
+                Path.cwd() / "tools" / "rga_worker.exe",  # ✅ 바로가기/작업폴더 꼬임 대비
             ]
             for c in candidates:
                 if c.exists():
                     return (str(c),)
+                
+            checked = " | ".join(str(p) for p in candidates)
+            raise FileNotFoundError(f"rga_worker.exe not found. checked: {checked}")
 
         # 2) 비-frozen이면 python으로 스크립트 실행
         if self.worker_path is not None:
@@ -100,17 +104,31 @@ class RGAWorkerClient:
         if timeout_s is None:
             timeout_s = self.default_timeout_s
 
-        cmd_base = self._resolve_worker_cmd()
-        cmd = [*cmd_base, "--ch", str(self.ch), "--timeout", str(timeout_s)]
+        try:
+            cmd_base = self._resolve_worker_cmd()
+        except Exception as e:
+            await self._q.put(RGAEvent("failed", {"message": f"RGA worker resolve failed: {e!r}"}))
+            await self._q.put(RGAEvent("finished", {"message": "RGA scan finished (resolve fail)"}))
+            return
 
+        cmd = [*cmd_base, "--ch", str(self.ch), "--timeout", str(timeout_s)]
         await self._q.put(RGAEvent("status", {"message": f"RGA worker start: {' '.join(cmd)}"}))
 
-        proc = await asyncio.create_subprocess_exec(
-            *cmd,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-            stdin=asyncio.subprocess.DEVNULL,
-        )
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                stdin=asyncio.subprocess.DEVNULL,
+            )
+        except FileNotFoundError as e:
+            await self._q.put(RGAEvent("failed", {"message": f"RGA worker exec failed: {e!r}"}))
+            await self._q.put(RGAEvent("finished", {"message": "RGA scan finished (exec fail)"}))
+            return
+        except Exception as e:
+            await self._q.put(RGAEvent("failed", {"message": f"RGA worker exec unexpected error: {e!r}"}))
+            await self._q.put(RGAEvent("finished", {"message": "RGA scan finished (exec error)"}))
+            return
 
         try:
             out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
@@ -150,9 +168,11 @@ class RGAWorkerClient:
         await self._q.put(RGAEvent("finished", {"message": "RGA scan finished"}))
 
     async def events(self) -> AsyncIterator[RGAEvent]:
-        while self._connected:
+        # ✅ cleanup 때문에 영구 종료되면 다음 공정에서 RGA finished 신호가 안 올라와서 무한대기함
+        while True:
             ev = await self._q.get()
             yield ev
 
     async def cleanup(self) -> None:
-        self._connected = False
+        # ✅ 여기서 스트림을 닫지 않는다(외부 pump task cancel로 종료)
+        return
