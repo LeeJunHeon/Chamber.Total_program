@@ -223,6 +223,10 @@ class RobotServerApp:
         if self.server is not None:
             self.page.append_log("NET", "Robot host already running")
             return
+        
+        # ✅ 업스트림 2개를 미리 붙여서 “항상 연결 유지” 상태로 시작
+        await self.up_status._ensure_connected()
+        await self.up_cmd._ensure_connected()
 
         router = build_proxy_router(self.up_status, self.up_cmd)
 
