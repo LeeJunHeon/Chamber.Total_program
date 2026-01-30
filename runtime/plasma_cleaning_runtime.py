@@ -1514,10 +1514,38 @@ class PlasmaCleaningRuntime:
         # UI
         if self._w_log:
             try:
-                self._w_log.appendPlainText(line)
-                self._w_log.moveCursor(QTextCursor.End)
+                w = self._w_log
+                sb = w.verticalScrollBar()
+
+                # ✅ 사용자가 이미 최하단을 보고 있을 때만 '바닥에 붙이는' 오토 스크롤 유지
+                stick_to_bottom = True
+                try:
+                    stick_to_bottom = (sb.value() >= (sb.maximum() - 2))
+                except Exception:
+                    stick_to_bottom = True
+
+                w.appendPlainText(line)
+
+                if stick_to_bottom:
+                    # 워드랩/레이아웃 계산 이후(다음 이벤트 루프 틱)에 scrollbar maximum이 갱신되므로
+                    # 즉시 이동하면 '최하단 바로 위'에서 멈출 수 있음 → singleShot(0)로 보정
+                    if not getattr(self, "_log_autoscroll_pending", False):
+                        self._log_autoscroll_pending = True
+
+                        def _scroll_bottom():
+                            self._log_autoscroll_pending = False
+                            ww = getattr(self, "_w_log", None)
+                            if not ww:
+                                return
+                            sbb = ww.verticalScrollBar()
+                            sbb.setValue(sbb.maximum())
+                            ww.ensureCursorVisible()
+
+                        QTimer.singleShot(0, _scroll_bottom)
+
             except Exception:
                 pass
+
         # 파일
         try:
             if getattr(self, "_log_fp", None):
