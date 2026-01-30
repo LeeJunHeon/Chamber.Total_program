@@ -366,7 +366,7 @@ class RFPulseAsync:
         """
         if should_poll:
             if self._poll_task is None or self._poll_task.done():
-                self._poll_task = asyncio.create_task(self._poll_loop())
+                self._poll_task = self._spawn(self._poll_loop())
             return
 
         # 폴링 중지 & 큐 정리
@@ -395,7 +395,7 @@ class RFPulseAsync:
                 tag="[RF OFF]",
                 allow_no_reply=True,        # 응답 없어도 콜백 호출
                 allow_when_closing=True,
-                callback=lambda _b: asyncio.create_task(_notify_off()),
+                callback=lambda _b: self._spawn(_notify_off()),
             )
 
             # 필요하다면 여기서 _want_connected 를 False로 둘 수도 있음
@@ -1028,11 +1028,28 @@ class RFPulseAsync:
         else:
             dlen = length_bits
         return bytes(payload[idx:idx+dlen])
+    
+    # ---------- 태스크 안전 스폰 ----------
+    def _spawn(self, coro):
+        """
+        running loop가 있을 때만 task로 스케줄.
+        종료/루프없음 상황이면 coro.close()로 'never awaited' 경고를 막는다.
+        """
+        try:
+            loop = asyncio.get_running_loop()
+            return loop.create_task(coro)
+        except RuntimeError:
+            # running loop 없음(대부분 종료 타이밍) → 경고 방지
+            try:
+                coro.close()
+            except Exception:
+                pass
+            return None
 
     # ---------- 파싱/검증/로그 ----------
     def _parse_status_0xA2(self, data: Optional[bytes]) -> Optional[RfStatus]:
         if not data or len(data) < 4:
-            asyncio.create_task(self._emit_status("STATUS payload too short"))
+            self._spawn(self._emit_status("STATUS payload too short"))
             return None
         b1, b2, b3, b4 = data[0], data[1], data[2], data[3]
         return RfStatus(
@@ -1056,7 +1073,7 @@ class RFPulseAsync:
     def _validate_status(self, st: RfStatus) -> None:
         # 필요 시 강한 게이팅 가능. 여기선 경고만 로깅.
         if st.interlock_open:
-            asyncio.create_task(self._emit_status("STATUS: Interlock OPEN detected"))
+            self._spawn(self._emit_status("STATUS: Interlock OPEN detected"))
         if st.overtemp:
             asyncio.create_task(self._emit_status("STATUS: Over-Temperature detected"))
         if st.extended_fault:
@@ -1121,7 +1138,7 @@ class RFPulseAsync:
 
         if reason:
             # 비동기 로그는 태스크로
-            asyncio.create_task(self._emit_status(f"대기 중 명령 {purged}개 폐기 ({reason})"))
+            self._spawn(self._emit_status(f"대기 중 명령 {purged}개 폐기 ({reason})"))
         return purged
     
     # =========== chamber_runtime.py에 맞춘 함수들 ===========
