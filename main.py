@@ -11,7 +11,7 @@ from pathlib import Path
 from contextvars import ContextVar
 
 from PySide6.QtWidgets import QApplication, QWidget, QStackedWidget, QPlainTextEdit, QTextEdit
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, QTimer
 from itertools import chain  # ← 추가
 from PySide6.QtGui import QCloseEvent
 from qasync import QEventLoop
@@ -247,6 +247,8 @@ class MainWindow(QWidget):
         # Plasma Cleaning에서 선택된 챔버 추적(기본 CH1)
         self._pc_use_ch: int = 1
 
+        self._pc_log_autoscroll_pending = False
+
         # === 챔버 런타임 2개 생성 ===
         self.ch1 = ChamberRuntime(
             ui=self.ui,
@@ -281,13 +283,13 @@ class MainWindow(QWidget):
             self.pre_ch1 = PreSputterRuntime(
                 ch1=self.ch1, ch2=None, chat=None, hh=6, mm=0, parallel=False, ui=self.ui
             )
-            self.pre_ch1.set_pc_logger(self.ui.pc_logMessage_edit.appendPlainText)
+            self.pre_ch1.set_pc_logger(self._append_pc_log_autoscroll)
             self.pre_ch1.start_daily()   # ← 프로그램 시작 시 CH1 자동 예약
 
             self.pre_ch2 = PreSputterRuntime(
                 ch1=None, ch2=self.ch2, chat=None, hh=6, mm=0, parallel=False, ui=self.ui
             )
-            self.pre_ch2.set_pc_logger(self.ui.pc_logMessage_edit.appendPlainText)
+            self.pre_ch2.set_pc_logger(self._append_pc_log_autoscroll)
             self.pre_ch2.start_daily()   # ← 프로그램 시작 시 CH2 자동 예약
             # ─────────────────────────────────────────────────────────────
 
@@ -842,6 +844,37 @@ class MainWindow(QWidget):
 
     def request_host_restart(self) -> None:
         self._loop.create_task(self._restart_host())
+
+    def _append_pc_log_autoscroll(self, msg: str) -> None:
+        w = getattr(self.ui, "pc_logMessage_edit", None)
+        if not w:
+            return
+
+        line = str(msg)
+        sb = w.verticalScrollBar()
+
+        # 사용자가 최하단을 보고 있을 때만 바닥 고정
+        stick_to_bottom = True
+        try:
+            stick_to_bottom = (sb.value() >= (sb.maximum() - 2))
+        except Exception:
+            pass
+
+        w.appendPlainText(line)
+
+        if stick_to_bottom:
+            if getattr(self, "_pc_log_autoscroll_pending", False):
+                return
+            self._pc_log_autoscroll_pending = True
+
+            def _scroll_bottom():
+                self._pc_log_autoscroll_pending = False
+                sbb = w.verticalScrollBar()
+                sbb.setValue(sbb.maximum())
+                w.ensureCursorVisible()
+
+            # 레이아웃 계산 이후에 최하단 재보정
+            QTimer.singleShot(0, _scroll_bottom)
 
 def main() -> int:
     _logger = setup_app_logging(
