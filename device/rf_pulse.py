@@ -966,7 +966,9 @@ class RFPulseAsync:
             res = await asyncio.wait_for(fut, timeout=(timeout_ms or ACK_TIMEOUT_MS)/1000.0 + 2.0)
         except asyncio.TimeoutError:
             return False, None
-        return (res is not None), res
+        if not res or len(res) < 1:
+            return False, None
+        return (res[0] == 0), res
 
     async def _query_and_data(self, cmd: int, data: bytes, *, tag: str = "", timeout_ms: int = QUERY_TIMEOUT_MS) -> Optional[bytes]:
         fut: asyncio.Future[Optional[bytes]] = asyncio.get_running_loop().create_future()
