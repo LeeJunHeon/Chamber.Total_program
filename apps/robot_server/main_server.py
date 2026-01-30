@@ -232,6 +232,8 @@ class RobotServerApp:
             int(cfgc.HOST_SERVER_PORT),
             router,
             self.page.append_log,
+            csv_prefix="robot_server_cmd",
+            csv_subdir="RobotServer",
         )
         await self.server.start()
 
@@ -256,7 +258,7 @@ class RobotServerApp:
             await srv.stop()
 
         self.page.set_running(False)
-        
+
         # ✅ upstream 지속 연결도 닫기(정지 시 유령 연결 방지)
         with contextlib.suppress(Exception):
             await self.up_status.aclose()

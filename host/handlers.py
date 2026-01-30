@@ -129,7 +129,10 @@ class HostHandlers:
     def _log_client_request(self, data: Json) -> None:
         """
         현재는 per-command 파일 로깅을 사용하지 않는다.
-        REQ/RES 저장은 host/server.py의 remote_cmd_YYYYMMDD.csv(하루 1개)에서 처리한다.
+        REQ/RES 저장은 host/server.py의 CSV에서 처리한다.
+        - ProcessApp  : process_host_cmd_YYYYMMDD.csv
+        - RobotServer : robot_server_cmd_YYYYMMDD.csv
+
         (_plc_cmd_file 은 항상 None이므로 여기서는 동작하지 않음)
         """
 

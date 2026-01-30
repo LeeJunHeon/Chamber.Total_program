@@ -241,18 +241,20 @@ class ServerPage(QWidget):
 
     def _daily_log_dir(self) -> Path:
         """
-        NAS 우선: <log_root>/CH1&2_Server
-        실패 시 로컬: ./Logs/CH1&2_Server
+        NAS 우선: <log_root>/CH1&2_Server/RobotServer
+        실패 시 로컬: ./Logs/CH1&2_Server/RobotServer
         """
+        sub = "RobotServer"
+
         if self._log_root:
             try:
-                d = self._log_root / "CH1&2_Server"
+                d = self._log_root / "CH1&2_Server" / sub
                 d.mkdir(parents=True, exist_ok=True)
                 return d
             except Exception:
                 pass
 
-        d = Path.cwd() / "Logs" / "CH1&2_Server"
+        d = Path.cwd() / "Logs" / "CH1&2_Server" / sub
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -285,7 +287,7 @@ class ServerPage(QWidget):
 
     def _save_log_to_file(self) -> None:
         try:
-            base = (self._log_root / "Server") if self._log_root else (Path.cwd() / "ServerLogs")
+            base = (self._log_root / "CH1&2_Server" / "RobotServer") if self._log_root else (Path.cwd() / "Logs" / "CH1&2_Server" / "RobotServer")
             base.mkdir(parents=True, exist_ok=True)
 
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")

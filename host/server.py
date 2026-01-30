@@ -19,9 +19,8 @@ LogFn = Callable[[str, str], None]
 
 class DailyCommandCsvLogger:
     """
-    하루에 파일 1개(remote_cmd_YYYYMMDD.csv)만 만들고,
-    그날 들어온 모든 요청/응답을 한 파일에 append.
-    NAS 실패 시 로컬 Logs/PLC_Remote 로 자동 폴백.
+    하루에 파일 1개(prefix_YYYYMMDD.csv)만 만들고 append.
+    NAS 실패 시 로컬 Logs/CH1&2_Server/<subdir> 로 폴백.
     """
     HEADER = [
         "server_time",
@@ -36,8 +35,9 @@ class DailyCommandCsvLogger:
         "duration_ms",
     ]
 
-    def __init__(self, prefix: str = "remote_cmd") -> None:
+    def __init__(self, prefix: str = "remote_cmd", *, subdir: str = "") -> None:
         self._prefix = prefix
+        self._subdir = str(subdir or "").strip()
         self._lock: asyncio.Lock | None = None
         self._dir = self._init_dir()
 
@@ -46,10 +46,14 @@ class DailyCommandCsvLogger:
         try:
             root = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs")
             d = root / "CH1&2_Server"
+            if self._subdir:
+                d = d / self._subdir
             d.mkdir(parents=True, exist_ok=True)
             return d
         except Exception:
             d = Path.cwd() / "Logs" / "CH1&2_Server"
+            if self._subdir:
+                d = d / self._subdir
             d.mkdir(parents=True, exist_ok=True)
             return d
 
@@ -80,14 +84,17 @@ class DailyCommandCsvLogger:
             try:
                 await asyncio.to_thread(self._write_row_sync, fn, row)
             except Exception as e:
-                # NAS 실패 → 로컬 폴백
-                local = (Path.cwd() / "Logs" / "CH1&2_Server"  / fn.name)
-                local.parent.mkdir(parents=True, exist_ok=True)
+                # NAS 실패 → 로컬 폴백(동일 subdir 구조 유지)
+                local_dir = Path.cwd() / "Logs" / "CH1&2_Server"
+                if self._subdir:
+                    local_dir = local_dir / self._subdir
+                local_dir.mkdir(parents=True, exist_ok=True)
+                local = local_dir / fn.name
 
                 # 1) 원래 row는 로컬에 저장
                 await asyncio.to_thread(self._write_row_sync, local, row)
 
-                # 2) "NAS에 누락됨" marker row를 로컬 CSV에 1줄 추가
+                # 2) marker row 추가(기존 로직 유지)
                 try:
                     def _cut(s: str, n: int = 500) -> str:
                         return s if len(s) <= n else s[:n] + "...(truncated)"
@@ -102,7 +109,6 @@ class DailyCommandCsvLogger:
                         "res_result": "WARN",
                         "res_message": _cut(
                             f"NAS write failed -> saved to local only. "
-                            f"(NAS may be missing this request) "
                             f"cmd={row.get('req_command','')} id={row.get('request_id','')} "
                             f"nas={fn} local={local} reason={e!r}"
                         ),
@@ -114,7 +120,18 @@ class DailyCommandCsvLogger:
                     pass
 
 class HostServer:
-    def __init__(self, host: str, port: int, router: Router, log: LogFn, chat=None, popup=None) -> None:
+    def __init__(
+        self,
+        host: str,
+        port: int,
+        router: Router,
+        log: LogFn,
+        chat=None,
+        popup=None,
+        *,
+        csv_prefix: str = "remote_cmd",
+        csv_subdir: str = "",
+    ) -> None:
         self.host = host
         self.port = port
         self.router = router
@@ -122,7 +139,8 @@ class HostServer:
         self.chat = chat
         self.popup = popup
         self._server: Optional[asyncio.AbstractServer] = None
-        self._cmd_csv = DailyCommandCsvLogger()
+
+        self._cmd_csv = DailyCommandCsvLogger(prefix=csv_prefix, subdir=csv_subdir)
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(self._handle, self.host, self.port)

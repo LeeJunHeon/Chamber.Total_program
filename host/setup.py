@@ -66,7 +66,13 @@ async def install_host(*,
     r.register("CH1_CHUCK_DOWN", lambda d: h.chuck_down({**d, "ch": 1}))
     r.register("CH2_CHUCK_DOWN", lambda d: h.chuck_down({**d, "ch": 2}))
 
-    # 서버 기동
-    server = HostServer(host, port, r, log, chat=chat, popup=popup)
+    # 서버 시작
+    server = HostServer(
+        host, port, r, log,
+        chat=chat, popup=popup,
+        csv_prefix="process_host_cmd",
+        csv_subdir="ProcessApp",
+    )
+
     await server.start()
     return HostHandle(server)
