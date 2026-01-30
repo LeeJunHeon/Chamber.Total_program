@@ -615,7 +615,7 @@ class RFPulseAsync:
                         cmd=CMD_SET_ACTIVE_CTRL,
                         data=b"\x02",
                         timeout_ms=ACK_TIMEOUT_MS,
-                        callback=None,
+                        callback=(lambda _b: None),
                         tag="[AUTO HOST]",
                         gap_ms=max(200, CMD_GAP_MS),   # 내부 상태 전환 여유
                         retries_left=1,
@@ -627,18 +627,19 @@ class RFPulseAsync:
                     await asyncio.sleep(0)  # yield
                     continue
 
-                # CSR=2: (코드 정의 기준) RF 출력 ON 상태라 설정 변경 거부 → RF OFF 후 재시도
-                if csr == 2 and (cmd.cmd != CMD_RF_OFF) and (cmd.retries_left > 0) and (not self._closing):
+                is_start = (cmd.tag or "").startswith("[START")
+
+                # CSR=2: RF output ON → START 시퀀스에서만 RF_OFF 후 재시도
+                if csr == 2 and is_start and (cmd.cmd != CMD_RF_OFF) and (cmd.retries_left > 0) and (not self._closing):
                     cmd.retries_left -= 1
 
                     self._cmd_q.appendleft(cmd)
-
                     self._cmd_q.appendleft(RfCommand(
                         kind="exec",
                         cmd=CMD_RF_OFF,
                         data=b"",
                         timeout_ms=ACK_TIMEOUT_MS,
-                        callback=None,
+                        callback=(lambda _b: None),   # ← 아래 2)에서 설명
                         tag="[AUTO RF_OFF]",
                         gap_ms=max(200, CMD_GAP_MS),
                         retries_left=1,
