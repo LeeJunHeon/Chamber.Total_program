@@ -9,9 +9,10 @@ RGA Worker Client (main process)
 
 from __future__ import annotations
 
-import asyncio
-import json
 import sys
+import json
+import asyncio
+import contextlib  # 파일 상단에 추가
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, Optional, Tuple
@@ -132,11 +133,16 @@ class RGAWorkerClient:
 
         try:
             out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+
         except asyncio.TimeoutError:
-            try:
+            # 1) 강제 종료 시도
+            with contextlib.suppress(Exception):
                 proc.kill()
-            except Exception:
-                pass
+
+            # 2) OS가 프로세스를 회수하도록 짧게 기다림(윈도우에서 특히 중요)
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(proc.wait(), timeout=2.0)
+
             await self._q.put(RGAEvent("failed", {"message": f"RGA worker timeout ({timeout_s}s)"}))
             await self._q.put(RGAEvent("finished", {"message": "RGA scan finished (timeout)"}))
             return

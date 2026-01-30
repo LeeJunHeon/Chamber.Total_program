@@ -382,7 +382,9 @@ class HostHandlers:
                     if actv is None:
                         actv = str(act) if act is not None else ""
 
-                    return str(actv) == "IG_CMD"
+                    s = str(actv).upper()
+
+                    return ("RGA" not in s)
                 except Exception:
                     return False
 
