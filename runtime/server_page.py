@@ -40,6 +40,10 @@ class ServerPage(QWidget):
     _PEER_RE = re.compile(r"Client (?:connected|disconnected|closed):\s*(\(.+?\))")
     _CMD_STATUS_RE = re.compile(r"cmd=GET_SPUTTER_STATUS(?:_RESULT)?\b", re.IGNORECASE)
 
+    # ✅ handlers._plc_file_logger()가 붙이는 컨텍스트 태그
+    # 예: "[GET_SPUTTER_STATUS] read L_ATM ..."
+    _STATUS_CTX_RE = re.compile(r"\[GET_SPUTTER_STATUS\]", re.IGNORECASE)
+
     # "2026-01-15 15:12:38 ..." 형태면 ts/rest로 분리해서 ts를 앞으로 통일
     _DT_PREFIX_RE = re.compile(
         r"^(?P<ts>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(?P<rest>.*)$"
@@ -221,8 +225,15 @@ class ServerPage(QWidget):
             return
 
         # 화면에서만 숨김(파일에는 이미 저장됨)
-        if self.chkHideStatus.isChecked() and self._CMD_STATUS_RE.search(msg):
-            return
+        if self.chkHideStatus.isChecked():
+            # 1) REQ/RES 라인(예: cmd=GET_SPUTTER_STATUS)은 기존처럼 숨김
+            if self._CMD_STATUS_RE.search(msg):
+                return
+
+            # 2) GET_SPUTTER_STATUS 처리 중 발생한 PLC_REMOTE(read L_ATM 등)도 숨김
+            #    (handlers.py에서 "[GET_SPUTTER_STATUS]" 태그를 붙여준다는 전제)
+            if tag == "PLC_REMOTE" and self._STATUS_CTX_RE.search(msg):
+                return
 
         self._append_line(line)
 

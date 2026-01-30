@@ -116,7 +116,13 @@ class HostHandlers:
             ts  = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
             # ✅ UI에 로그 남기기
-            self.ctx.log("PLC_REMOTE", f"{ts} {msg}")
+            # - 현재 처리 중인 명령 태그가 있으면 같이 붙인다.
+            # - 예: "2026-01-30 12:00:00 [GET_SPUTTER_STATUS] read L_ATM (addr=99) -> True"
+            tag = (self._current_cmd_tag or "").strip()
+            if tag:
+                self.ctx.log("PLC_REMOTE", f"{ts} [{tag}] {msg}")
+            else:
+                self.ctx.log("PLC_REMOTE", f"{ts} {msg}")
 
         except Exception as e:
             # 로깅 에러로 본체 흐름을 멈추지 않되, 사유는 UI에 출력
