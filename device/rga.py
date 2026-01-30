@@ -12,6 +12,7 @@ from __future__ import annotations
 import sys
 import json
 import asyncio
+import subprocess
 import contextlib  # 파일 상단에 추가
 from dataclasses import dataclass
 from pathlib import Path
@@ -115,12 +116,17 @@ class RGAWorkerClient:
         cmd = [*cmd_base, "--ch", str(self.ch), "--timeout", str(timeout_s)]
         await self._q.put(RGAEvent("status", {"message": f"RGA worker start: {' '.join(cmd)}"}))
 
+        creationflags = 0
+        if sys.platform.startswith("win"):
+            creationflags = subprocess.CREATE_NO_WINDOW
+
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 stdin=asyncio.subprocess.DEVNULL,
+                creationflags=creationflags,
             )
         except FileNotFoundError as e:
             await self._q.put(RGAEvent("failed", {"message": f"RGA worker exec failed: {e!r}"}))
