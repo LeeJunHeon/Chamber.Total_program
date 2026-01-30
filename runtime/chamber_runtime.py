@@ -3041,6 +3041,16 @@ class ChamberRuntime:
         if not self._ui_log_buf:
             return
 
+        w = self._w_log
+        sb = w.verticalScrollBar()
+
+        # ✅ 사용자가 이미 최하단을 보고 있을 때만 '바닥에 붙이는' 오토 스크롤 유지
+        stick_to_bottom = True
+        try:
+            stick_to_bottom = (sb.value() >= (sb.maximum() - 2))
+        except Exception:
+            stick_to_bottom = True
+
         # 한 번에 몰아서 출력 (UI 작업 최소화)
         lines = []
         max_lines = 200  # 100~300 사이 추천
@@ -3048,8 +3058,36 @@ class ChamberRuntime:
             lines.append(self._ui_log_buf.popleft())
 
         text = "\n".join(lines) + "\n"
-        self._w_log.moveCursor(QTextCursor.MoveOperation.End)
-        self._w_log.insertPlainText(text)
+
+        # 사용자가 위를 보고 있으면(=최하단 아님) 스크롤 위치를 보존
+        old_sb_val = None
+        if not stick_to_bottom:
+            with contextlib.suppress(Exception):
+                old_sb_val = sb.value()
+
+        w.moveCursor(QTextCursor.MoveOperation.End)
+        w.insertPlainText(text)
+
+        if old_sb_val is not None:
+            with contextlib.suppress(Exception):
+                sb.setValue(old_sb_val)
+            return
+
+        # ✅ 최하단 stick: 레이아웃 계산 이후(다음 이벤트 루프 틱)에 scrollbar maximum이 갱신되므로
+        # 즉시 이동하면 '최하단 바로 위'에서 멈출 수 있음 → singleShot(0)로 보정
+        if not getattr(self, "_log_autoscroll_pending", False):
+            self._log_autoscroll_pending = True
+
+            def _scroll_bottom():
+                self._log_autoscroll_pending = False
+                ww = getattr(self, "_w_log", None)
+                if not ww:
+                    return
+                sbb = ww.verticalScrollBar()
+                sbb.setValue(sbb.maximum())
+                ww.ensureCursorVisible()
+
+            QTimer.singleShot(0, _scroll_bottom)
 
     def _ensure_log_dir(self, root: Path) -> Path:
         nas_path = Path(root)
