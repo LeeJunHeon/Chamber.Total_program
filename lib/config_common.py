@@ -12,7 +12,12 @@ PROCESS_HOST_PORT = 50071
 
 # (추천) 로봇 서버(프록시) → 공정 프로그램(업스트림) 요청 타임아웃
 PROCESS_HOST_CONNECT_TIMEOUT_S = 2.0
-PROCESS_HOST_REQUEST_TIMEOUT_S = 10.0
+
+# ✅ 상태 전용(짧게): GET_SPUTTER_STATUS 같은 폴링
+PROCESS_HOST_STATUS_REQUEST_TIMEOUT_S = 5.0
+
+# ✅ 명령 전용(길게): CHUCK_UP 같이 오래 걸리는 동작
+PROCESS_HOST_CMD_REQUEST_TIMEOUT_S = 180.0
 
 # ===== TCP 유휴재연결(초) =====
 IG_INACTIVITY_REOPEN_S  = 0   # 0 → 사용 안함
