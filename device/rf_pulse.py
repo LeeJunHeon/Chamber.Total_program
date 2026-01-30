@@ -51,14 +51,15 @@ CMD_REPORT_REFLECTED    = 166
 CMD_REPORT_DELIVERED    = 167
 
 # Pulsing
-CMD_SET_PULSING = 27  # TX 값이 0x40~0x44 계열인 모델 존재(매뉴얼 기준)
+CMD_SET_PULSING = 27  # AE Bus: set pulsing configuration (data byte: 0~5)
 
 PULSING_TX = {
-    0: 0x40,  # OFF
-    1: 0x41,  # Internal pulsing
-    2: 0x42,  # External pulsing
-    3: 0x43,  # External inverted
-    4: 0x44,  # Internal enabled by external input
+    0: 0x00,  # Pulsing off
+    1: 0x01,  # Internal pulsing
+    2: 0x02,  # External pulsing
+    3: 0x03,  # External pulsing inverted
+    4: 0x04,  # Gated internal pulsing
+    5: 0x05,  # Gated internal pulsing inverted
 }
 
 CMD_SET_PULSE_FREQ      = 93     # 3 bytes (Hz, LSB first)
