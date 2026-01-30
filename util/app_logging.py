@@ -209,6 +209,16 @@ def setup_app_logging(
 
         _enable_faulthandler_once(logger, fault_path)
         logger.info("faulthandler enabled -> %s (timestamp header)", fault_path)
+
+        # ⬇️ (옵션) 응답없음/멈춤 진단용: 일정 시간마다 스택 덤프
+        # 환경변수 VANAM_HANG_DUMP_S=120 같은 식으로 켜기(초 단위)
+        try:
+            hang_s = float(os.environ.get("VANAM_HANG_DUMP_S", "0") or "0")
+            if hang_s > 0:
+                faulthandler.dump_traceback_later(hang_s, repeat=True)
+                logger.info("hang dump enabled: dump_traceback_later(%ss, repeat=True)", hang_s)
+        except Exception:
+            logger.exception("hang dump enable failed")
     except Exception:
         logger.exception("faulthandler enable failed")
 
@@ -216,6 +226,10 @@ def setup_app_logging(
     def _on_exit():
         try:
             logger.info("process exiting (atexit)")
+            try:
+                faulthandler.cancel_dump_traceback_later()
+            except Exception:
+                pass
         except Exception:
             pass
         try:

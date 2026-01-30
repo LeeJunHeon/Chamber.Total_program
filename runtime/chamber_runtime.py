@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import csv, asyncio, contextlib, inspect, re, traceback, os, time
+import threading
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Callable, Coroutine, Deque, Literal, Mapping, Optional, Sequence, TypedDict, cast, Union
 from pathlib import Path
@@ -11,7 +13,7 @@ from collections import deque
 
 from PySide6.QtWidgets import QMessageBox, QFileDialog, QPlainTextEdit, QDialog, QApplication
 from PySide6.QtGui import QTextCursor
-from PySide6.QtCore import Qt  # ← 추가: 모달리티/속성 지정용
+from PySide6.QtCore import Qt, QTimer  # ← 추가: 모달리티/속성 지정용
 
 # 팝업 자동 닫기(5초) 유틸
 from util.timed_popup import attach_autoclose
@@ -278,6 +280,30 @@ class ChamberRuntime:
         self._log_fp = None
         self._log_q: asyncio.Queue[str] = asyncio.Queue(maxsize=4096)
         self._log_writer_task: asyncio.Task | None = None
+
+        # ✅ 로그 파일 I/O는 이벤트루프 밖(전용 1-thread)에서만 수행
+        self._log_io_exec = ThreadPoolExecutor(
+            max_workers=1,
+            thread_name_prefix=f"LogIO.CH{self.ch}"
+        )
+
+        # ✅ UI 로그 무한 누적 방지(프리징 완화)
+        self._ui_log_buf = deque(maxlen=5000)   # UI에 쌓을 임시 버퍼(메모리 보호)
+        self._ui_log_timer = None
+
+        if self._w_log:
+            # 1) UI 문서 줄 수 제한(이미 있다면 유지/조정)
+            self._w_log.setMaximumBlockCount(2000)   # 또는 5000
+
+            # 2) Undo/Redo 끄면 QPlainTextEdit 비용이 줄어듦
+            with contextlib.suppress(Exception):
+                self._w_log.setUndoRedoEnabled(False)
+
+            # 3) 배치로 찍기 위한 타이머
+            self._ui_log_timer = QTimer(self._w_log)
+            self._ui_log_timer.setInterval(100)      # 100ms마다 한번만 UI 업데이트
+            self._ui_log_timer.timeout.connect(self._flush_ui_log_to_ui)
+            self._ui_log_timer.start()
 
         # 데이터 로거 (Sputter Calib CSV) - CH 로그로 로그를 흘려보내도록 콜백 전달
         self.data_logger = DataLogger(
@@ -555,8 +581,17 @@ class ChamberRuntime:
             self._spawn_detached(run())
 
         def cb_rf_pulse_stop():
-            if self.rf_pulse:
-                self.rf_pulse.stop_process()
+            async def run():
+                if not self.rf_pulse:
+                    return
+                try:
+                    # stop_process가 동기/blocking이어도 UI 안 멈추게
+                    res = await asyncio.to_thread(self.rf_pulse.stop_process)
+                    if inspect.isawaitable(res):
+                        await res
+                except Exception as e:
+                    self.append_log("RFPulse", f"stop_process failed: {e!r}")
+            self._spawn_detached(run())
 
         def cb_ig_wait(base_pressure: float) -> None:
             async def _run():
@@ -1057,7 +1092,7 @@ class ChamberRuntime:
                 gas = ev.gas or ""
                 flow = float(ev.value or 0.0)
                 with contextlib.suppress(Exception):
-                    self.data_logger.log_mfc_flow(gas, flow)
+                    self._dl_fire_and_forget(self.data_logger.log_mfc_flow, gas, flow)
                 self.append_log(f"MFC{self.ch}", f"[poll] {gas}: {flow:.2f} sccm")
             elif k == "pressure":
                 txt = ev.text or (f"{ev.value:.3g}" if ev.value is not None else "")
@@ -1081,7 +1116,7 @@ class ChamberRuntime:
             elif k == "pressure":
                 try:
                     if ev.pressure is not None:
-                        self.data_logger.log_ig_pressure(float(ev.pressure))
+                        self._dl_fire_and_forget(self.data_logger.log_ig_pressure, float(ev.pressure))
                     elif ev.message:
                         self.data_logger.log_ig_pressure(ev.message)
                 except Exception:
@@ -1193,7 +1228,7 @@ class ChamberRuntime:
                 ref = float(ev.reflected or 0.0)
                 # 데이터 로거 저장 + UI 갱신 + 텍스트 로그
                 with contextlib.suppress(Exception):
-                    self.data_logger.log_rf_power(fwd, ref)
+                    self._dl_fire_and_forget(self.data_logger.log_rf_power, fwd, ref)
                 self._display_rf(fwd, ref)
                 self.append_log(f"RF{self.ch}", f"[poll] fwd={fwd:.1f}W, ref={ref:.1f}W")
             elif k == "target_reached":
@@ -1215,7 +1250,7 @@ class ChamberRuntime:
                 with contextlib.suppress(Exception):
                     fwd = float(ev.forward or 0.0)
                     ref = float(ev.reflected or 0.0)
-                    self.data_logger.log_rfpulse_power(fwd, ref)
+                    self._dl_fire_and_forget(self.data_logger.log_rfpulse_power, fwd, ref)
                     self._display_rf(fwd, ref)   # ← 추가: 화면 갱신
             elif k == "target_reached":
                 self.process_controller.on_rf_pulse_target_reached()
@@ -1409,11 +1444,34 @@ class ChamberRuntime:
                     if log:
                         self.append_log(label, "start/connect 메서드 없음 → skip")
                     return
-                res = meth()
+                
+                # ⬇️ start/connect가 동기(blocking)여도 이벤트루프를 막지 않게: to_thread + timeout
+                timeout_s = float(getattr(self.cfg.mod, "DEVICE_START_TIMEOUT_S", 20.0))
+
+                try:
+                    # meth() 호출 자체를 백그라운드 스레드에서 수행
+                    res = await asyncio.wait_for(asyncio.to_thread(meth), timeout=timeout_s)
+                except asyncio.TimeoutError:
+                    if log:
+                        self.append_log(label, f"{getattr(meth, '__name__', 'start/connect')} timeout({timeout_s}s) → skip")
+                    return
+                except Exception as e:
+                    if log:
+                        self.append_log(label, f"{getattr(meth, '__name__', 'start/connect')} 호출 실패: {e!r}")
+                    return
+
+                # meth가 coroutine을 “반환”하는 타입이면 여기서 await
                 if inspect.isawaitable(res):
-                    await res
+                    try:
+                        await asyncio.wait_for(res, timeout=timeout_s)
+                    except asyncio.TimeoutError:
+                        if log:
+                            self.append_log(label, f"{getattr(meth, '__name__', 'start/connect')} await timeout({timeout_s}s) → skip")
+                        return
+
                 if log:
-                    self.append_log(label, f"{meth.__name__} 호출 완료")
+                    self.append_log(label, f"{getattr(meth, '__name__', 'start/connect')} 호출 완료")
+
             except Exception as e:
                 try:
                     name = meth.__name__  # type: ignore[attr-defined]
@@ -2951,17 +3009,47 @@ class ChamberRuntime:
         line_ui = f"[{now_ui}] [CH{self.ch}:{source}] {msg}"
         line_file = f"[{now_file}] [CH{self.ch}:{source}] {msg}\n"
 
-        self._soon(self._append_log_to_ui, line_ui)
+        self._soon(self._enqueue_ui_log, line_ui)
 
         if not getattr(self, "_log_file_path", None):
             self._soon(self._prestart_buf.append, line_file)
             return
         self._soon(self._log_enqueue_nowait, line_file)
 
-    def _append_log_to_ui(self, line: str) -> None:
-        if not self._w_log: return
+    def _dl_fire_and_forget(self, fn, *args, **kwargs) -> None:
+        """
+        DataLogger처럼 NAS/파일 I/O 가능성이 있는 동기 함수를
+        이벤트루프(=UI)에서 직접 돌리지 않기 위한 안전 래퍼.
+        """
+        async def _run():
+            try:
+                # ✅ blocking I/O는 thread로
+                await asyncio.to_thread(fn, *args, **kwargs)
+            except Exception:
+                # DataLogger 실패는 공정을 죽이면 안 되므로 조용히 무시(필요 시 rate-limit 로그만)
+                pass
+
+        self._spawn_detached(_run(), name=f"DL.{getattr(fn, '__name__', 'call')}.CH{self.ch}")
+
+    def _enqueue_ui_log(self, line: str) -> None:
+        # UI 스레드에서 호출되도록 _soon을 통해 들어온다고 가정
+        self._ui_log_buf.append(line)
+
+    def _flush_ui_log_to_ui(self) -> None:
+        if not self._w_log:
+            return
+        if not self._ui_log_buf:
+            return
+
+        # 한 번에 몰아서 출력 (UI 작업 최소화)
+        lines = []
+        max_lines = 200  # 100~300 사이 추천
+        while self._ui_log_buf and len(lines) < max_lines:
+            lines.append(self._ui_log_buf.popleft())
+
+        text = "\n".join(lines) + "\n"
         self._w_log.moveCursor(QTextCursor.MoveOperation.End)
-        self._w_log.insertPlainText(line + "\n")
+        self._w_log.insertPlainText(text)
 
     def _ensure_log_dir(self, root: Path) -> Path:
         nas_path = Path(root)
@@ -3082,63 +3170,61 @@ class ChamberRuntime:
                 _ = self._log_q.get_nowait()
                 self._log_q.put_nowait(line)
 
+    def _log_write_sync(self, path: Path, text: str) -> None:
+        """⚠️ 반드시 to_thread로만 호출. (UI/이벤트루프에서 직접 호출 금지)"""
+        path.parent.mkdir(parents=True, exist_ok=True)
+        with open(path, "a", encoding="utf-8", newline="") as fp:
+            fp.write(text)
+            fp.flush()
+
     async def _log_writer_loop(self):
         try:
             while True:
-                try:
-                    line = self._log_q.get_nowait()
-                except asyncio.QueueEmpty:
-                    await asyncio.sleep(0.05)
+                # ✅ 폴링(get_nowait+sleep) 대신 “대기”로 CPU 절약 + 안정성↑
+                line = await self._log_q.get()
+
+                # ✅ 한 번에 배치로 모아서 write 횟수/flush 횟수 줄이기
+                batch = [line]
+                for _ in range(300):  # 배치 크기(원하면 조절)
+                    try:
+                        batch.append(self._log_q.get_nowait())
+                    except asyncio.QueueEmpty:
+                        break
+
+                text = "".join(batch)
+
+                # ✅ 파일 경로가 없으면 버림(또는 prestart_buf로 보내도 됨)
+                if not self._log_file_path:
                     continue
 
-                if self._log_fp is None:
-                    if self._log_file_path:
-                        try:
-                            # 부모 디렉터리 보장
-                            self._log_file_path.parent.mkdir(parents=True, exist_ok=True)
-                            self._log_fp = open(self._log_file_path, "a", encoding="utf-8", newline="")
-                        except Exception as e:
-                            # NAS 열기 실패 → 로컬 폴백으로 즉시 전환
-                            try:
-                                local_dir = Path.cwd() / f"_Logs_local_CH{self.ch}"
-                                local_dir.mkdir(parents=True, exist_ok=True)
-                                ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                                self._log_file_path = (local_dir / f"CH{self.ch}_{ts}_recovered.txt")
-                                self._log_fp = open(self._log_file_path, "a", encoding="utf-8", newline="")
-                                self.append_log("Logger", f"NAS 로그 열기 실패({e!r}) → 로컬 폴백: {self._log_file_path}")
-                            except Exception:
-                                await asyncio.sleep(0.2)
-                                self._soon(self._log_enqueue_nowait, line)
-                                continue
-                    else:
-                        continue
+                # ✅ open/write/flush는 무조건 스레드로
                 try:
-                    self._log_fp.write(line); self._log_fp.flush()
+                    await asyncio.wait_for(
+                        asyncio.to_thread(self._log_write_sync, self._log_file_path, text),
+                        timeout=5.0,  # NAS stall 대비: 너무 길게 잡지 말기
+                    )
                 except Exception as e:
-                    # 쓰기 도중 핸들이 깨진 경우 → 즉시 로컬로 전환 시도
-                    with contextlib.suppress(Exception):
-                        self._log_fp.close()
-                    self._log_fp = None
+                    # NAS 쓰기/열기 실패 → 로컬로 전환 후 다시 시도
                     try:
                         local_dir = Path.cwd() / f"_Logs_local_CH{self.ch}"
                         local_dir.mkdir(parents=True, exist_ok=True)
                         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                         self._log_file_path = (local_dir / f"CH{self.ch}_{ts}_recovered.txt")
-                        self._log_fp = open(self._log_file_path, "a", encoding="utf-8", newline="")
-                        self.append_log("Logger", f"NAS 쓰기 실패({e!r}) → 로컬 폴백 전환: {self._log_file_path}")
+
+                        await asyncio.wait_for(
+                            asyncio.to_thread(self._log_write_sync, self._log_file_path, text),
+                            timeout=5.0,
+                        )
+                        self.append_log("Logger", f"NAS 로그 쓰기 실패({e!r}) → 로컬 폴백: {self._log_file_path}")
                     except Exception:
+                        # ✅ 최악: 로컬도 실패하면, 유실을 최소화하려고 재큐잉(단, 무한루프 주의)
+                        # 필요하면 여기서 batch를 파일 대신 메모리 버퍼로 보관하는 쪽이 더 안전
                         await asyncio.sleep(0.2)
-                        self._soon(self._log_enqueue_nowait, line)
+                        for s in batch[:50]:  # 너무 많이 재큐잉하면 또 폭주할 수 있으니 제한
+                            self._soon(self._log_enqueue_nowait, s)
+
         except asyncio.CancelledError:
             pass
-        finally:
-            # TextIOWrapper 소멸자에서 noisy 에러가 나지 않도록
-            fp, self._log_fp = self._log_fp, None
-            if fp:
-                with contextlib.suppress(Exception):
-                    fp.flush()
-                with contextlib.suppress(Exception):
-                    fp.close()
 
     async def _shutdown_log_writer(self):
         # 1) writer 중지
