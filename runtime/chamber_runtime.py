@@ -3079,9 +3079,38 @@ class ChamberRuntime:
         lines = []
         max_lines = 200  # 100~300 사이 추천
         while self._ui_log_buf and len(lines) < max_lines:
-            lines.append(self._ui_log_buf.popleft())
+            s = self._ui_log_buf.popleft()
+            if s is None:
+                continue
 
-        text = "\n".join(lines) + "\n"
+            # ✅ 안전하게 문자열화 + 줄바꿈 정규화
+            try:
+                s = str(s)
+            except Exception:
+                continue
+
+            # ✅ 혹시 들어있을 수 있는 끝 개행 제거 (중복 개행 방지)
+            s = s.rstrip("\r\n")
+
+            # ✅ 빈 줄은 버림 (맨 아래 공백줄의 주된 원인)
+            if not s:
+                continue
+
+            lines.append(s)
+
+        # 유효 라인이 하나도 없으면 끝
+        if not lines:
+            return
+
+        # ✅ 이전 출력 마지막에 개행을 붙이지 않기 때문에,
+        # 다음 배치가 올 때는 앞에 '\n' 한 번만 붙여서 줄이 자연스럽게 이어지게 한다.
+        prefix = ""
+        try:
+            prefix = "" if w.document().isEmpty() else "\n"
+        except Exception:
+            prefix = "\n"
+
+        text = prefix + "\n".join(lines)
 
         # 사용자가 위를 보고 있으면(=최하단 아님) 스크롤 위치를 보존
         old_sb_val = None
@@ -3097,8 +3126,7 @@ class ChamberRuntime:
                 sb.setValue(old_sb_val)
             return
 
-        # ✅ 최하단 stick: 레이아웃 계산 이후(다음 이벤트 루프 틱)에 scrollbar maximum이 갱신되므로
-        # 즉시 이동하면 '최하단 바로 위'에서 멈출 수 있음 → singleShot(0)로 보정
+        # ✅ 최하단 stick 보정은 기존 로직 유지
         if not getattr(self, "_log_autoscroll_pending", False):
             self._log_autoscroll_pending = True
 
