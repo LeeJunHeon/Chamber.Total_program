@@ -27,4 +27,4 @@ RGA_NET.update({
 #  - CH1: RF 연속파 없음, RF Pulse 없음 (예시) / DC만 사용한다면 아래처럼
 SUPPORTS_DC = True
 SUPPORTS_RF_CONT = False
-SUPPORTS_RFPULSE = False
+SUPPORTS_RFPULSE = True
