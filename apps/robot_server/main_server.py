@@ -12,10 +12,12 @@ from typing import Any, Dict, Optional
 from PySide6.QtWidgets import QApplication
 from qasync import QEventLoop
 
-# ✅ (핵심) 프로젝트 루트(CH_1_2_program)를 sys.path에 추가
-ROOT = Path(__file__).resolve().parents[2]  # .../CH_1_2_program
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+# ✅ 개발(py 실행)일 때만 sys.path 보정
+# ✅ PyInstaller(EXE, frozen)에서는 번들 내부 모듈만 사용해야 "코드 섞임"이 안 생김
+if not getattr(sys, "frozen", False):
+    ROOT = Path(__file__).resolve().parents[2]
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
 
 # 이제부터 프로젝트 모듈 import가 안정적임
 import lib.config_common as cfgc
@@ -87,7 +89,7 @@ class UpstreamClient:
 
     async def request(self, command: str, data: Json, request_id: Optional[str] = None) -> Json:
         rid = request_id or str(uuid.uuid4())
-        pkt = pack_message(command, {"request_id": rid, "data": data or {}})
+        pkt = pack_message(command, data or {}, request_id=rid)
 
         async with self._lock:
             # ✅ 1회 실패 시 연결 닫고 재연결 후 1회 재시도
