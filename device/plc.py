@@ -497,8 +497,11 @@ class AsyncPLC:
                 if self._closed:
                     break
 
+                # ✅ 0) pause 상태면 워치독 tick 스킵 (cancel 없이 멈춤)
+                if self._hb_paused:
+                    continue
+
                 # ✅ 1) PLC가 이미 바쁘면(락 점유 중) 워치독은 이번 tick 스킵
-                #    -> lock-wait를 만들지 않게
                 if self._lock.locked():
                     continue
 
@@ -1048,24 +1051,24 @@ class AsyncPLC:
         """빠른 종료(현재는 close와 동일)."""
         await self.close()
 
-    # IG와 대칭되는 워치독 일시중지/재개
     async def pause_watchdog(self) -> None:
-        """하트비트/자동 재연결 워치독 중지 (연결은 유지)."""
+        """
+        하트비트 워치독 '일시정지'.
+        ✅ Task를 cancel하지 않는다 (CancelledError 전파/레이스 방지).
+        - _heartbeat_loop가 _hb_paused를 보고 I/O를 스킵한다.
+        """
         self._hb_paused = True
-        t = self._hb_task
-        if t and not t.done():
-            t.cancel()
-            try:
-                await t
-            except Exception:
-                pass
-        self._hb_task = None
+        # cancel/await 금지: 여기서 CancelledError가 섞이면 상위(handlers/server)가 못 잡고 연결이 깨질 수 있음.
 
     async def resume_watchdog(self) -> None:
-        """pause_watchdog 이후 워치독 재개."""
+        """워치독 재개 (pause flag 해제)."""
         self._hb_paused = False
-        if (not self._closed) and (self._hb_task is None or self._hb_task.done()):
-            self._hb_task = asyncio.create_task(self._heartbeat_loop(), name="PLCHeartbeat")
+        if self._closed:
+            return
+        # pause에서는 task를 죽이지 않으므로 보통은 살아있다.
+        # 혹시 초기 상태/예외로 task가 없다면만 생성
+        if self._hb_task is None or self._hb_task.done():
+            self._hb_task = asyncio.create_task(self._heartbeat_loop())
 
     # chamber_runtime: 공정 on/off 신호에 맞춰 폴링/워치독 제어(옵션)
     def set_process_status(self, should_poll: bool) -> None:
