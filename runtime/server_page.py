@@ -9,7 +9,6 @@ from pathlib import Path
 from typing import Optional
 
 from PySide6.QtCore import Qt, Signal, QTimer
-from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import (
     QWidget,
     QVBoxLayout,
@@ -171,6 +170,16 @@ class ServerPage(QWidget):
 
         self.logEdit = QPlainTextEdit()
         self.logEdit.setReadOnly(True)
+
+        # ✅ (핵심) 화면에 남는 로그 줄 수 제한: 오래된 줄 자동 삭제
+        self.logEdit.setMaximumBlockCount(self._max_lines)
+
+        # ✅ (권장) Undo/Redo 히스토리 비활성화 → 장시간 로그에서 메모리/부하 감소
+        try:
+            self.logEdit.setUndoRedoEnabled(False)
+        except Exception:
+            pass
+
         self.lblSaved = QLabel("")
         self.lblSaved.setStyleSheet("color: gray;")
 
@@ -241,20 +250,16 @@ class ServerPage(QWidget):
     def _append_line(self, line: str) -> None:
         self.logEdit.appendPlainText(line)
 
-        # 너무 커지면 최근 일부만 유지(렉 방지)
-        try:
-            doc = self.logEdit.document()
-            if doc.blockCount() > self._max_lines:
-                lines = self.logEdit.toPlainText().splitlines()[-4000:]
-                self.logEdit.setPlainText("\n".join(lines))
-        except Exception:
-            pass
+        # ✅ trimming 코드는 제거한다.
+        # - 줄 제한은 setMaximumBlockCount(self._max_lines)로 자동 처리됨
+        # - toPlainText()/setPlainText()는 로그 폭주 시 UI 프리징 원인이 될 수 있음
 
+        # ✅ 오토스크롤: cursor 이동 대신 스크롤바를 “진짜 바닥”으로 내린다.
+        #    (이 방식이 예전처럼 하단이 애매하게 비거나 덜 내려가는 현상이 가장 적음)
         if self.chkAutoScroll.isChecked():
             try:
-                c = self.logEdit.textCursor()
-                c.movePosition(QTextCursor.End)
-                self.logEdit.setTextCursor(c)
+                sb = self.logEdit.verticalScrollBar()
+                sb.setValue(sb.maximum())
             except Exception:
                 pass
 
