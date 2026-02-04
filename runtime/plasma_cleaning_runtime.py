@@ -6,6 +6,7 @@ import asyncio, contextlib, inspect, csv, os
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional, Mapping
+from collections import deque
 
 from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import QMessageBox, QPlainTextEdit, QApplication, QWidget
@@ -109,12 +110,30 @@ class PlasmaCleaningRuntime:
         # 호스트에게 프리플라이트 결과를 전달하기 위한 Future 추가
         self._host_start_future: Optional[asyncio.Future] = None
 
+        self._runlog_buf = deque()
+
+        parent = self._parent_widget() or QApplication.instance()  # QWidget 우선
+        self._runlog_timer = QTimer(parent)
+        self._runlog_timer.setInterval(1000)
+        self._runlog_timer.timeout.connect(self._flush_run_log)
+        self._runlog_timer.start()
+
         # 로그/상태 위젯
         self._w_log = (
             _safe_get(ui, f"{self.prefix.lower()}logMessage_edit")
             or _safe_get(ui, f"{self.prefix}logMessage_edit")
             or _safe_get(ui, "pc_logMessage_edit")
         )
+
+        # ✅ server_page와 동일한 방식: UI 로그 무한 누적 방지
+        self._pc_ui_log_max_lines = 5000  # 2000~10000 사이 추천
+        try:
+            if isinstance(self._w_log, QPlainTextEdit):
+                self._w_log.setMaximumBlockCount(self._pc_ui_log_max_lines)
+                self._w_log.setUndoRedoEnabled(False)
+        except Exception:
+            pass
+
         self._w_state = (
             _safe_get(ui, f"{self.prefix.lower()}processState_edit")
             or _safe_get(ui, f"{self.prefix}processState_edit")
@@ -1524,7 +1543,12 @@ class PlasmaCleaningRuntime:
                 except Exception:
                     stick_to_bottom = True
 
-                w.appendPlainText(line)
+                if hasattr(w, "appendPlainText"):
+                    w.appendPlainText(line)
+                elif hasattr(w, "append"):
+                    w.append(line)          # QTextEdit 폴백
+                else:
+                    return
 
                 if stick_to_bottom:
                     # 워드랩/레이아웃 계산 이후(다음 이벤트 루프 틱)에 scrollbar maximum이 갱신되므로
@@ -1539,7 +1563,6 @@ class PlasmaCleaningRuntime:
                                 return
                             sbb = ww.verticalScrollBar()
                             sbb.setValue(sbb.maximum())
-                            ww.ensureCursorVisible()
 
                         QTimer.singleShot(0, _scroll_bottom)
 
@@ -1548,11 +1571,39 @@ class PlasmaCleaningRuntime:
 
         # 파일
         try:
-            if getattr(self, "_log_fp", None):
-                self._log_fp.write(line + "\n")
-                self._log_fp.flush()
+            self._queue_run_log_line(line)
         except Exception:
             # 파일 오류가 난다고 공정을 멈출 필요는 없음 — 조용히 무시
+            pass
+
+    def _queue_run_log_line(self, line: str) -> None:
+        # ✅ 파일이 열려있을 때만 버퍼링/저장 (안 열려 있으면 쌓지 않음)
+        if not getattr(self, "_log_fp", None):
+            return
+
+        self._runlog_buf.append(line)
+
+        # 폭주 보호
+        if len(self._runlog_buf) >= 2000:
+            self._flush_run_log()
+
+    def _flush_run_log(self) -> None:
+        """버퍼에 쌓인 파일 로그를 한 번에 파일로 flush."""
+        fp = getattr(self, "_log_fp", None)
+        if not fp:
+            return
+        if not self._runlog_buf:
+            return
+
+        lines = []
+        while self._runlog_buf and len(lines) < 2000:
+            lines.append(self._runlog_buf.popleft())
+
+        try:
+            fp.write("\n".join(lines) + "\n")
+            fp.flush()
+        except Exception:
+            # 파일 오류는 공정을 죽이지 않게
             pass
 
     async def _cancel_and_wait(self, tasks: list[asyncio.Task]) -> None:
@@ -1669,15 +1720,25 @@ class PlasmaCleaningRuntime:
         self._log_fp.flush()
 
     def _close_run_log(self) -> None:
-        fp = getattr(self, "_log_fp", None)
+        # ✅ 마지막 남은 버퍼를 먼저 flush
+        try:
+            self._flush_run_log()
+        except Exception:
+            pass
+
+        # ✅ 타이머 중지
+        try:
+            if getattr(self, "_runlog_timer", None):
+                self._runlog_timer.stop()
+        except Exception:
+            pass
+
+        try:
+            if self._log_fp:
+                self._log_fp.close()
+        except Exception:
+            pass
         self._log_fp = None
-        if fp:
-            try:
-                fp.write("# ==== END ====\n")
-                fp.flush()
-                fp.close()
-            except Exception:
-                pass
 
     def _reset_ui_state(self, *, restore_time_min: Optional[float] = None) -> None:
         """종료 또는 STOP 후 UI를 초기 상태로 되돌림(챔버 공정과 동일한 체감).
