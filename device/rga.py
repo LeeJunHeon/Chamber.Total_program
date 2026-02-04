@@ -47,7 +47,7 @@ class RGAWorkerClient:
         ch: int,
         worker_path: Optional[Path] = None,
         logger=None,
-        default_timeout_s: float = 30.0,
+        default_timeout_s: float = 60.0,
     ):
         self.ch = int(ch)
         self.worker_path = worker_path
@@ -137,82 +137,161 @@ class RGAWorkerClient:
         """
         worker 실행 → JSON 받기 → 이벤트 푸시
         (csv 저장은 worker가 책임)
+
+        ✅ 변경: 총 3회 재시도
+        - 1~2번째 실패: status만 남기고 재시도 (failed/finished 안 보냄)
+        - 3번째 실패: failed + finished를 보내서 런타임이 다음 단계로 진행하게 함
         """
         if timeout_s is None:
             timeout_s = self.default_timeout_s
 
-        try:
-            cmd_base = self._resolve_worker_cmd()
-        except Exception as e:
-            await self._q.put(RGAEvent("failed", {"message": f"RGA worker resolve failed: {e!r}"}))
-            await self._q.put(RGAEvent("finished", {"message": "RGA scan finished (resolve fail)"}))
-            return
-
-        cmd = [*cmd_base, "--ch", str(self.ch), "--timeout", str(timeout_s)]
-        await self._q.put(RGAEvent("status", {"message": f"RGA worker start: {' '.join(cmd)}"}))
+        max_attempts = 3
+        retry_delay_s = 1.0  # 실패 후 재시도 전에 잠깐 쉬기(너무 공격적으로 재시도하면 PC/프로세스가 더 꼬일 수 있음)
 
         creationflags = 0
         if sys.platform.startswith("win"):
             creationflags = subprocess.CREATE_NO_WINDOW
 
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                stdin=asyncio.subprocess.DEVNULL,
-                creationflags=creationflags,
-            )
-        except FileNotFoundError as e:
-            await self._q.put(RGAEvent("failed", {"message": f"RGA worker exec failed: {e!r}"}))
-            await self._q.put(RGAEvent("finished", {"message": "RGA scan finished (exec fail)"}))
-            return
-        except Exception as e:
-            await self._q.put(RGAEvent("failed", {"message": f"RGA worker exec unexpected error: {e!r}"}))
-            await self._q.put(RGAEvent("finished", {"message": "RGA scan finished (exec error)"}))
-            return
+        def _tail(s: str, n: int = 4000) -> str:
+            return (s or "")[-n:]
 
-        try:
-            out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+        last_fail: Dict[str, Any] = {"message": "unknown"}
 
-        except asyncio.TimeoutError:
-            # 1) 강제 종료 시도
-            with contextlib.suppress(Exception):
-                proc.kill()
+        for attempt in range(1, max_attempts + 1):
+            fail: Optional[Dict[str, Any]] = None
 
-            # 2) OS가 프로세스를 회수하도록 짧게 기다림(윈도우에서 특히 중요)
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(proc.wait(), timeout=2.0)
+            # 1) worker 커맨드 해석
+            try:
+                cmd_base = self._resolve_worker_cmd()
+            except Exception as e:
+                fail = {
+                    "message": f"RGA worker resolve failed: {e!r}",
+                    "attempt": attempt,
+                    "attempts": max_attempts,
+                }
 
-            await self._q.put(RGAEvent("failed", {"message": f"RGA worker timeout ({timeout_s}s)"}))
-            await self._q.put(RGAEvent("finished", {"message": "RGA scan finished (timeout)"}))
-            return
+            if fail is None:
+                cmd = [*cmd_base, "--ch", str(self.ch), "--timeout", str(timeout_s)]
+                await self._q.put(
+                    RGAEvent("status", {"message": f"RGA worker attempt {attempt}/{max_attempts} start: {' '.join(cmd)}"})
+                )
 
-        out = (out_b or b"").decode("utf-8", errors="replace")
-        err = (err_b or b"").decode("utf-8", errors="replace")
+                proc = None
+                out = ""
+                err = ""
+                returncode = None
 
-        payload = self._parse_json_from_stdout(out)
+                # 2) 프로세스 실행
+                try:
+                    proc = await asyncio.create_subprocess_exec(
+                        *cmd,
+                        stdout=asyncio.subprocess.PIPE,
+                        stderr=asyncio.subprocess.PIPE,
+                        stdin=asyncio.subprocess.DEVNULL,
+                        creationflags=creationflags,
+                    )
+                except FileNotFoundError as e:
+                    fail = {
+                        "message": f"RGA worker exec failed: {e!r}",
+                        "attempt": attempt,
+                        "attempts": max_attempts,
+                        "cmd": cmd,
+                    }
+                except Exception as e:
+                    fail = {
+                        "message": f"RGA worker exec unexpected error: {e!r}",
+                        "attempt": attempt,
+                        "attempts": max_attempts,
+                        "cmd": cmd,
+                    }
 
-        if not payload or not isinstance(payload, dict):
-            msg = "RGA worker stdout JSON parse failed"
+                # 3) stdout/stderr 수집(+timeout)
+                if fail is None:
+                    try:
+                        out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
+                        returncode = proc.returncode
+                        out = (out_b or b"").decode("utf-8", errors="replace")
+                        err = (err_b or b"").decode("utf-8", errors="replace")
+                    except asyncio.TimeoutError:
+                        with contextlib.suppress(Exception):
+                            proc.kill()
+                        with contextlib.suppress(Exception):
+                            await asyncio.wait_for(proc.wait(), timeout=2.0)
+
+                        fail = {
+                            "message": f"RGA worker timeout ({timeout_s}s)",
+                            "attempt": attempt,
+                            "attempts": max_attempts,
+                            "cmd": cmd,
+                        }
+                    except Exception as e:
+                        fail = {
+                            "message": f"RGA worker communicate error: {e!r}",
+                            "attempt": attempt,
+                            "attempts": max_attempts,
+                            "cmd": cmd,
+                        }
+
+                # 4) JSON 파싱 / ok 판정
+                if fail is None:
+                    payload = self._parse_json_from_stdout(out)
+
+                    if not payload or not isinstance(payload, dict):
+                        msg = "RGA worker stdout JSON parse failed"
+                        fail = {
+                            "message": msg,
+                            "attempt": attempt,
+                            "attempts": max_attempts,
+                            "cmd": cmd,
+                            "returncode": returncode,
+                            "stdout": _tail(out),
+                            "stderr": _tail(err),
+                        }
+                    elif not payload.get("ok", False):
+                        msg = payload.get("error") or payload.get("message") or "RGA worker failed"
+                        fail = {
+                            "message": str(msg),
+                            "attempt": attempt,
+                            "attempts": max_attempts,
+                            "cmd": cmd,
+                            "returncode": returncode,
+                            "meta": payload,
+                            "stdout": _tail(out),
+                            "stderr": _tail(err),
+                        }
+                    else:
+                        # ✅ 성공
+                        mass_axis = payload.get("mass_axis") or []
+                        pressures = payload.get("pressures") or []
+
+                        await self._q.put(RGAEvent("data", {"mass_axis": mass_axis, "pressures": pressures, "meta": payload}))
+                        await self._q.put(RGAEvent("finished", {"message": f"RGA scan finished (attempt {attempt}/{max_attempts})"}))
+                        return
+
+            # ===== 실패 처리 =====
+            last_fail = fail or {"message": "unknown", "attempt": attempt, "attempts": max_attempts}
+
+            # ✅ 실패 원인은 로그(파일)에도 남김
             if self.logger:
-                self.logger.error("%s | stderr=%s | stdout=%s", msg, err.strip(), out.strip())
-            await self._q.put(RGAEvent("failed", {"message": msg, "stdout": out, "stderr": err}))
-            await self._q.put(RGAEvent("finished", {"message": "RGA scan finished (parse fail)"}))
+                try:
+                    self.logger.error("[RGA] attempt %s/%s failed: %s | detail=%s",
+                                    attempt, max_attempts, last_fail.get("message"), {k: last_fail.get(k) for k in ("cmd", "returncode")})
+                except Exception:
+                    pass
+
+            if attempt < max_attempts:
+                # 1~2번째 실패: status만 남기고 재시도 (중요: failed/finished 내보내면 공정이 다음 단계로 넘어가버림)
+                await self._q.put(
+                    RGAEvent("status", {"message": f"[RGA] attempt {attempt}/{max_attempts} 실패 → 재시도({retry_delay_s}s): {last_fail.get('message')}"})
+                )
+                if retry_delay_s > 0:
+                    await asyncio.sleep(retry_delay_s)
+                continue
+
+            # ✅ 3번째(최종) 실패: 여기서만 failed + finished → 런타임이 다음 단계로 진행
+            await self._q.put(RGAEvent("failed", last_fail))
+            await self._q.put(RGAEvent("finished", {"message": f"RGA scan finished (failed after {max_attempts})"}))
             return
-
-        if not payload.get("ok", False):
-            msg = payload.get("error") or payload.get("message") or "RGA worker failed"
-            await self._q.put(RGAEvent("failed", {"message": msg, "meta": payload}))
-            await self._q.put(RGAEvent("finished", {"message": "RGA scan finished (failed)"}))
-            return
-
-        # 성공: 그래프용 데이터
-        mass_axis = payload.get("mass_axis") or []
-        pressures = payload.get("pressures") or []
-
-        await self._q.put(RGAEvent("data", {"mass_axis": mass_axis, "pressures": pressures, "meta": payload}))
-        await self._q.put(RGAEvent("finished", {"message": "RGA scan finished"}))
 
     async def events(self) -> AsyncIterator[RGAEvent]:
         # ✅ cleanup 때문에 영구 종료되면 다음 공정에서 RGA finished 신호가 안 올라와서 무한대기함
