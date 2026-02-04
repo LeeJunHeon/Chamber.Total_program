@@ -197,7 +197,7 @@ class MainWindow(QWidget):
             self._pages["server"] = self.server_page
 
             if hasattr(self.server_page, "set_host_info"):
-                self.server_page.set_host_info(cfgc.PROCESS_HOST_HOST, int(cfgc.PROCESS_HOST_PORT))
+                self.server_page.set_host_info(cfgc.HOST_SERVER_HOST, int(cfgc.HOST_SERVER_PORT))
             if hasattr(self.server_page, "set_running"):
                 self.server_page.set_running(False)
 
@@ -781,8 +781,8 @@ class MainWindow(QWidget):
 
         try:
             self._host_handle = await install_host(
-                host=cfgc.PROCESS_HOST_HOST,
-                port=int(cfgc.PROCESS_HOST_PORT),
+                host=cfgc.HOST_SERVER_HOST,
+                port=int(cfgc.HOST_SERVER_PORT),
                 log=self._netlog,
                 plc=self.plc,
                 ch1=self.ch1,
@@ -798,10 +798,10 @@ class MainWindow(QWidget):
             if sp and hasattr(sp, "set_running"):
                 sp.set_running(True)
             if sp and hasattr(sp, "set_host_info"):
-                sp.set_host_info(cfgc.PROCESS_HOST_HOST, int(cfgc.PROCESS_HOST_PORT))
+                sp.set_host_info(cfgc.HOST_SERVER_HOST, int(cfgc.HOST_SERVER_PORT))
 
             # ✅ NET 로그도 server 페이지로
-            self._netlog("NET", f"BridgeHost started on {cfgc.PROCESS_HOST_HOST}:{cfgc.PROCESS_HOST_PORT}")
+            self._netlog("NET", f"Host started on {cfgc.HOST_SERVER_HOST}:{cfgc.HOST_SERVER_PORT}")
 
         except Exception as e:
             sp = getattr(self, "server_page", None)
