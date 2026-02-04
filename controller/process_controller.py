@@ -68,7 +68,11 @@ class ExpectGroup:
                     self._fut.set_result(True)
                 return True
         return False
-
+    
+    # ✅ 추가: 토큰을 '소비'하지 않고, 현재 그룹이 이 토큰을 기다리는지 검사만
+    def needs(self, incoming: ExpectToken) -> bool:
+        return any(t.matches(incoming) for t in self._tokens)
+    
     def match_generic_ok(self) -> bool:
         if (
             len(self._tokens) == 1
@@ -436,11 +440,14 @@ class ProcessController:
         self._match_token(ExpectToken("MFC", cmd))
 
     def on_mfc_failed(self, cmd: str, why: str) -> None:
-        # ✅ 현재 기대 토큰이 MFC(cmd)일 때만 공정 실패로 처리
-        if self._expect_group and self._expect_group.match(ExpectToken("MFC", cmd)):
-            return  # match()가 완료 처리하므로 여기서 종료하거나, 아래처럼 실패 처리로 가도 됨
+        incoming = ExpectToken("MFC", cmd)
 
-        # ✅ “현재 스텝에서 기다리는 MFC가 아닌 실패”는 공정 치명으로 보지 않음
+        # ✅ 현재 스텝이 기다리던 MFC라면: 공정 실패 처리
+        if self._expect_group and self._expect_group.needs(incoming):
+            self._step_failed("MFC", f"{cmd}: {why}")
+            return
+
+        # ✅ 현재 스텝과 무관한 실패는 경고만
         self._emit_log("MFC", f"경고(무시): {cmd}: {why} (현재 스텝과 무관)")
 
     def on_plc_confirmed(self, cmd: str) -> None:
@@ -628,20 +635,25 @@ class ProcessController:
                 hard_wait_actions = {
                     ActionType.RF_POWER_STOP,
                     ActionType.DC_POWER_STOP,
-                    #ActionType.RF_PULSE_STOP,
+                    ActionType.RF_PULSE_STOP,
                     ActionType.DC_PULSE_STOP,
                 }
 
                 if self._shutdown_in_progress:
+                    POWER_OFF_TIMEOUT_MS = max(240_000, SHUTDOWN_STEP_TIMEOUT_MS)  # ✅ 전원 OFF는 더 길게
+
                     if step.action in hard_wait_actions:
-                        # ⚠️ 램프다운/전원 OFF 완료 이벤트를 무조건 기다림 (타임아웃 없음)
-                        await fut
+                        try:
+                            await asyncio.wait_for(fut, timeout=POWER_OFF_TIMEOUT_MS / 1000.0)
+                        except asyncio.TimeoutError:
+                            # ✅ shutdown 중 실패는 “기록하고 계속”이 네 설계와 일치
+                            self._step_failed("Shutdown", f"{step.action.name} timeout ({POWER_OFF_TIMEOUT_MS/1000:.0f}s)")
                     else:
-                        # 종료 시퀀스 중이지만 전원 OFF가 아닌 스텝은 기존처럼 타임아웃 적용
                         try:
                             await asyncio.wait_for(fut, timeout=max(0.001, SHUTDOWN_STEP_TIMEOUT_MS) / 1000.0)
                         except asyncio.TimeoutError:
                             self._emit_log("Process", "종료 스텝 확인 시간 초과 → 다음 스텝 진행")
+
                 else:
                     # 평시: abort와 경쟁
                     if step.action == ActionType.RGA_SCAN:
@@ -1237,11 +1249,11 @@ class ProcessController:
 
         if use_rf_pulse:
             # ✅ UI 옵션 없이: RF Pulse를 쓰면 자동으로 POWER_SELECT ON
-            steps.append(ProcessStep(
-                action=ActionType.PLC_CMD,
-                params=("SW_POWER_SELECT", True),
-                message="Power Select ON (SW_POWER_SELECT)"
-            ))
+            # steps.append(ProcessStep(
+            #     action=ActionType.PLC_CMD,
+            #     params=("SW_POWER_SELECT", True),
+            #     message="Power Select ON (SW_POWER_SELECT)"
+            # ))
 
             # 로그/메시지는 kHz로 보기 좋게 표시
             f_txt = f"{float(rf_pulse_freq_khz):.3f}kHz" if rf_pulse_freq_khz is not None else "keep"
@@ -1654,9 +1666,27 @@ class ProcessController:
     def _emit(self, ev: PCEvent) -> None:
         try:
             self.event_q.put_nowait(ev)
+            return
         except asyncio.QueueFull:
-            # 이 케이스는 거의 없겠지만, 유실 방지를 위해 블록
-            asyncio.create_task(self.event_q.put(ev))
+            # ✅ 로그는 과부하 시 드랍 (파일 로그가 있으니 UI는 버려도 됨)
+            if ev.kind == "log":
+                return
+
+            # ✅ 상태/중요 이벤트는 넣어야 하므로, 오래된 이벤트를 몇 개 버리고 공간 확보
+            for _ in range(50):
+                try:
+                    _ = self.event_q.get_nowait()  # 가장 오래된 것 버림
+                except asyncio.QueueEmpty:
+                    break
+
+                try:
+                    self.event_q.put_nowait(ev)
+                    return
+                except asyncio.QueueFull:
+                    continue
+
+            # 끝까지 못 넣으면 마지막으로 그냥 드랍
+            return
 
     def _emit_log(self, src: str, msg: str) -> None:
         self._emit(PCEvent("log", {"src": src, "msg": msg}))
@@ -1706,17 +1736,23 @@ class ProcessController:
             await awaitable
             return False
 
-        a = asyncio.create_task(awaitable) if not isinstance(awaitable, (asyncio.Task, asyncio.Future)) else awaitable
+        # ✅ 항상 Task로 통일 (Future/Coroutine/Task 모두 안전하게 처리)
+        a = asyncio.ensure_future(awaitable)
         b = asyncio.create_task(self._abort_evt.wait())
+
         done, pending = await asyncio.wait({a, b}, return_when=asyncio.FIRST_COMPLETED)
+
         for p in pending:
             p.cancel()
+
         if b in done:
+            # abort가 먼저 왔으면 a도 취소
             try:
                 a.cancel()
             except Exception:
                 pass
             return True
+
         return False
 
     async def _sleep_or_abort(self, seconds: float, *, allow_abort: bool = True) -> bool:
