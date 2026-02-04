@@ -1237,11 +1237,11 @@ class ProcessController:
 
         if use_rf_pulse:
             # ✅ UI 옵션 없이: RF Pulse를 쓰면 자동으로 POWER_SELECT ON
-            steps.append(ProcessStep(
-                action=ActionType.PLC_CMD,
-                params=("SW_POWER_SELECT", True),
-                message="Power Select ON (SW_POWER_SELECT)"
-            ))
+            # steps.append(ProcessStep(
+            #     action=ActionType.PLC_CMD,
+            #     params=("SW_POWER_SELECT", True),
+            #     message="Power Select ON (SW_POWER_SELECT)"
+            # ))
 
             # 로그/메시지는 kHz로 보기 좋게 표시
             f_txt = f"{float(rf_pulse_freq_khz):.3f}kHz" if rf_pulse_freq_khz is not None else "keep"

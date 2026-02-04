@@ -261,16 +261,47 @@ class ChamberRuntime:
         # QMessageBox 참조 저장소(비모달 유지용)
         self._msg_boxes: list[QMessageBox] = []  # ← 추가
 
-        # 기본 전략: CH1=DC-Pulse 전용, CH2=RF-Pulse(+DC 연속 +RF 연속)
-        if supports_dc_cont  is None: supports_dc_cont  = (self.ch == 2)
-        if supports_rf_cont  is None: supports_rf_cont  = (self.ch == 2)  # CH2에서 RF 연속 허용
-        if supports_dc_pulse is None: supports_dc_pulse = (self.ch == 1)
-        if supports_rf_pulse is None: supports_rf_pulse = (self.ch == 2)
+        # ✅ 기본 전략: config의 SUPPORTS_*를 최우선으로, 없으면 기존 CH 기본값으로 폴백
+        def _cfg_bool(*names: str):
+            for n in names:
+                v = self.cfg._get(n, None)
+                if v is not None:
+                    return bool(v)
+            return None
+
+        if supports_dc_cont is None:
+            v = _cfg_bool("SUPPORTS_DC_CONT", "SUPPORTS_DC")  # 레거시 키도 허용
+            supports_dc_cont = v if v is not None else (self.ch == 2)
+
+        if supports_rf_cont is None:
+            v = _cfg_bool("SUPPORTS_RF_CONT")
+            
+            if self.ch == 2:
+                supports_rf_cont = True   # 🔥 CH2 RF 연속 파워 강제 허용
+            else:
+                supports_rf_cont = v if v is not None else False
+
+        if supports_dc_pulse is None:
+            v = _cfg_bool("SUPPORTS_DC_PULSE", "SUPPORTS_DCPULSE")
+            supports_dc_pulse = v if v is not None else (self.ch == 1)
+
+        if supports_rf_pulse is None:
+            v = _cfg_bool("SUPPORTS_RFPULSE", "SUPPORTS_RF_PULSE")
+            supports_rf_pulse = v if v is not None else (self.ch == 2)
 
         self.supports_dc_cont  = bool(supports_dc_cont)
         self.supports_rf_cont  = bool(supports_rf_cont)
         self.supports_dc_pulse = bool(supports_dc_pulse)
         self.supports_rf_pulse = bool(supports_rf_pulse)
+
+        # ✅ [임시] RF-Pulse 장비를 CH1로 이관
+        # - CH2: RF-Pulse는 선택/실행 모두 금지
+        # - CH1: DC-Pulse는 선택(위젯 이름은 남아있더라도) "실행" 금지
+        if self.ch == 1:
+            self.supports_dc_pulse = False
+            self.supports_rf_pulse = True
+        elif self.ch == 2:
+            self.supports_rf_pulse = False
 
         # UI 포인터
         self._w_log: QPlainTextEdit | None = self._u("logMessage_edit")
@@ -1639,26 +1670,79 @@ class ChamberRuntime:
                 self.append_log("UI", f"[CH{self.ch}] 단일 공정 UI 업데이트: '{params.get('process_note','')}'")
 
         _set = self._set
+
+        # --- Pulse UI ---
+        if self.ch == 1:
+            # ✅ CH1: dcPulse 위젯(라벨 RF) = RF-Pulse UI 로 사용
+            def _is_true(v) -> bool:
+                return str(v).strip().upper() in ("T", "TRUE", "1", "Y", "YES")
+
+            def _pos_num(v) -> bool:
+                try:
+                    return float(str(v).strip() or "0") > 0.0
+                except Exception:
+                    return False
+
+            # ✅ 값은 rf 우선, 없으면 dc 값 사용(이전 CSV/객체명 호환)
+            power = params.get("rf_pulse_power", params.get("dc_pulse_power", "0"))
+            freq  = str(params.get("rf_pulse_freq", params.get("dc_pulse_freq", ""))).strip()
+            duty  = str(params.get("rf_pulse_duty_cycle", params.get("dc_pulse_duty_cycle", ""))).strip()
+
+            # ✅ 체크박스는 "체크값 OR (power/freq/duty 입력 존재)" 로 켠다
+            use_rf = (
+                _is_true(params.get("use_rf_pulse", "F"))
+                or _is_true(params.get("use_dc_pulse", "F"))
+                or _pos_num(power)
+                or (freq not in ("", "0"))
+                or (duty not in ("", "0"))
+            )
+
+            _set("rfPulsePower_checkbox", use_rf)
+            _set("rfPulsePower_edit", power)
+            _set("rfPulseFreq_edit",      "" if freq in ("", "0") else freq)
+            _set("rfPulseDutyCycle_edit", "" if duty in ("", "0") else duty)
+
+            # ✅ (선택) CH1에서는 DC-Pulse UI는 의미 없으니, 혹시 남아있다면 강제로 OFF 표시
+            # _set("dcPulsePower_checkbox", False)
+            # _set("dcPulsePower_edit", "0")
+            # _set("dcPulseFreq_edit", "")
+            # _set("dcPulseDutyCycle_edit", "")
+
+        else:
+            # CH2: DC-Pulse(있다면) / RF-Pulse(표시는 되더라도 실행은 validate에서 차단)
+            _set("dcPulsePower_checkbox", params.get('use_dc_pulse', 'F') == 'T')
+            _set("dcPulsePower_edit",     params.get('dc_pulse_power', '0'))
+            dcf = str(params.get('dc_pulse_freq', '')).strip()
+            dcd = str(params.get('dc_pulse_duty_cycle', '')).strip()
+            _set("dcPulseFreq_edit",      '' if dcf in ('', '0') else dcf)
+            _set("dcPulseDutyCycle_edit", '' if dcd in ('', '0') else dcd)
+
+            _set("rfPulsePower_checkbox", params.get('use_rf_pulse', 'F') == 'T')
+            _set("rfPulsePower_edit",     params.get('rf_pulse_power', '0'))
+            rff = str(params.get('rf_pulse_freq', '')).strip()
+            rfd = str(params.get('rf_pulse_duty_cycle', '')).strip()
+            _set("rfPulseFreq_edit",      '' if rff in ('', '0') else rff)
+            _set("rfPulseDutyCycle_edit", '' if rfd in ('', '0') else rfd)
         
         # DC-Pulse
-        _set("dcPulsePower_checkbox", params.get('use_dc_pulse', 'F') == 'T')
-        _set("dcPulsePower_edit",     params.get('dc_pulse_power', '0'))
-        dcf = str(params.get('dc_pulse_freq', '')).strip()
-        dcd = str(params.get('dc_pulse_duty_cycle', '')).strip()
-        _set("dcPulseFreq_edit",       '' if dcf in ('', '0') else dcf)
-        _set("dcPulseDutyCycle_edit",  '' if dcd in ('', '0') else dcd)
+        # _set("dcPulsePower_checkbox", params.get('use_dc_pulse', 'F') == 'T')
+        # _set("dcPulsePower_edit",     params.get('dc_pulse_power', '0'))
+        # dcf = str(params.get('dc_pulse_freq', '')).strip()
+        # dcd = str(params.get('dc_pulse_duty_cycle', '')).strip()
+        # _set("dcPulseFreq_edit",       '' if dcf in ('', '0') else dcf)
+        # _set("dcPulseDutyCycle_edit",  '' if dcd in ('', '0') else dcd)
 
         # DC-Power
         _set("dcPower_checkbox", params.get('use_dc_power', 'F') == 'T')
         _set("dcPower_edit", params.get('dc_power', '0'))
 
         # RF-Pulse
-        _set("rfPulsePower_checkbox", params.get('use_rf_pulse', 'F') == 'T')
-        _set("rfPulsePower_edit",     params.get('rf_pulse_power', '0'))
-        rff = str(params.get('rf_pulse_freq', '')).strip()
-        rfd = str(params.get('rf_pulse_duty_cycle', '')).strip()
-        _set("rfPulseFreq_edit",       '' if rff in ('', '0') else rff)
-        _set("rfPulseDutyCycle_edit",  '' if rfd in ('', '0') else rfd)
+        # _set("rfPulsePower_checkbox", params.get('use_rf_pulse', 'F') == 'T')
+        # _set("rfPulsePower_edit",     params.get('rf_pulse_power', '0'))
+        # rff = str(params.get('rf_pulse_freq', '')).strip()
+        # rfd = str(params.get('rf_pulse_duty_cycle', '')).strip()
+        # _set("rfPulseFreq_edit",       '' if rff in ('', '0') else rff)
+        # _set("rfPulseDutyCycle_edit",  '' if rfd in ('', '0') else rfd)
 
         # RF-Power
         _set("rfPower_checkbox", params.get('use_rf_power', 'F') == 'T')
@@ -1956,8 +2040,30 @@ class ChamberRuntime:
             self._auto_connect_enabled = True
 
             # ✅ 이번 런에서 실제로 사용할 펄스만 표시(IG/MFC는 항상 연결이므로 제외)
-            use_dc_pulse = bool(params.get("use_dc_pulse", False)) and self.supports_dc_pulse
-            use_rf_pulse = bool(params.get("use_rf_pulse", False)) and self.supports_rf_pulse
+            def _pos(v) -> bool:
+                try:
+                    return float(v) > 0.0
+                except Exception:
+                    return False
+
+            # ✅ "요청" 판정(체크박스 + 값)
+            rf_requested = (
+                bool(params.get("use_rf_pulse", False))
+                or _pos(params.get("rf_pulse_power", 0.0))
+                or (params.get("rf_pulse_freq") is not None)
+                or (params.get("rf_pulse_duty") is not None)
+            )
+
+            dc_requested = (
+                bool(params.get("use_dc_pulse", False))
+                or _pos(params.get("dc_pulse_power", 0.0))
+                or (params.get("dc_pulse_freq") is not None)
+                or (params.get("dc_pulse_duty") is not None)
+            )
+
+            use_dc_pulse = bool(dc_requested) and self.supports_dc_pulse
+            use_rf_pulse = bool(rf_requested) and self.supports_rf_pulse
+
             self._run_select = {
                 "dc_pulse": use_dc_pulse,
                 "rf_pulse": use_rf_pulse,
@@ -2572,16 +2678,15 @@ class ChamberRuntime:
             use_o2 = bool(getattr(self._u("O2_checkbox"), "isChecked", lambda: False)())
             use_n2 = bool(getattr(self._u("N2_checkbox"), "isChecked", lambda: False)())
             if not (use_ar or use_o2 or use_n2):
-                self._post_warning("선택 오류", "가스를 하나 이상 선택해야 합니다."); return None
+                self._post_warning("선택 오류", "가스를 하나 이상 선택해야 합니다.")
+                return None
 
             def _read_flow(name: str) -> float:
                 txt = self._get_text(name) or "0"
-                try:
-                    v = float(txt)
-                    if v < 0: raise ValueError()
-                    return v
-                except ValueError:
-                    raise
+                v = float(txt)
+                if v < 0:
+                    raise ValueError()
+                return v
 
             try:
                 ar_flow = _read_flow("arFlow_edit") if use_ar else 0.0
@@ -2591,38 +2696,88 @@ class ChamberRuntime:
                 self._post_warning("입력값 확인", "가스 유량 입력을 확인하세요.")
                 return None
 
-            use_dc_pulse = bool(getattr(self._u("dcPulsePower_checkbox"), "isChecked", lambda: False)())
-            if not use_dc_pulse:
-                self._post_warning("선택 오류", "CH1은 DC-Pulse를 반드시 선택해야 합니다.")
+            # ✅ CH1에서 RF-Pulse 임시 사용: 지원 여부(supports) 반영
+            use_rf_pulse = self.supports_rf_pulse and bool(getattr(self._u("rfPulsePower_checkbox"), "isChecked", lambda: False)())
+            use_dc_pulse = self.supports_dc_pulse and bool(getattr(self._u("dcPulsePower_checkbox"), "isChecked", lambda: False)())
+
+            # 둘 다 선택 금지
+            if use_rf_pulse and use_dc_pulse:
+                self._post_warning("선택 오류", "RF-Pulse와 DC-Pulse는 동시에 선택할 수 없습니다.")
                 return None
 
-            try:
-                dc_pulse_power = float(self._get_text("dcPulsePower_edit") or "0")
-                if dc_pulse_power <= 0: raise ValueError()
-            except ValueError:
-                self._post_warning("입력값 확인", "DC-Pulse Target Power(W)를 확인하세요.")
+            # 최소 1개 선택
+            if not (use_rf_pulse or use_dc_pulse):
+                if self.supports_rf_pulse:
+                    self._post_warning("선택 오류", "CH1은 RF-Pulse(또는 DC-Pulse) 중 하나를 선택해야 합니다.")
+                elif self.supports_dc_pulse:
+                    self._post_warning("선택 오류", "CH1은 DC-Pulse를 선택해야 합니다.")
+                else:
+                    self._post_warning("선택 오류", "CH1에서 사용 가능한 파워 장치가 없습니다.")
                 return None
 
-            dc_pulse_freq = None
-            dc_pulse_duty = None
-            # kHz 입력
-            txtf = self._get_text("dcPulseFreq_edit")
-            if txtf:
+            # 기본값
+            dc_pulse_power = 0.0; dc_pulse_freq = None; dc_pulse_duty = None
+            rf_pulse_power = 0.0; rf_pulse_freq = None; rf_pulse_duty = None
+
+            if use_dc_pulse:
+                # ---- 기존 DC-Pulse 검증 유지 ----
                 try:
-                    dc_pulse_freq = int(float(txtf))  # kHz
-                    if dc_pulse_freq < 20 or dc_pulse_freq > 150:  # EnerPulse: 20~150 kHz
+                    dc_pulse_power = float(self._get_text("dcPulsePower_edit") or "0")
+                    if dc_pulse_power <= 0:
                         raise ValueError()
                 except ValueError:
-                    self._post_warning("입력값 확인", "DC-Pulse Freq(kHz)는 20..150 범위입니다.")
+                    self._post_warning("입력값 확인", "DC-Pulse Target Power(W)를 확인하세요.")
                     return None
-            txtd = self._get_text("dcPulseDutyCycle_edit")
-            if txtd:
+
+                txtf = self._get_text("dcPulseFreq_edit")
+                if txtf:
+                    try:
+                        dc_pulse_freq = int(float(txtf))  # kHz
+                        if dc_pulse_freq < 20 or dc_pulse_freq > 150:
+                            raise ValueError()
+                    except ValueError:
+                        self._post_warning("입력값 확인", "DC-Pulse Freq(kHz)는 20..150 범위입니다.")
+                        return None
+
+                txtd = self._get_text("dcPulseDutyCycle_edit")
+                if txtd:
+                    try:
+                        dc_pulse_duty = int(float(txtd))
+                        if dc_pulse_duty < 1 or dc_pulse_duty > 99:
+                            raise ValueError()
+                    except ValueError:
+                        self._post_warning("입력값 확인", "DC-Pulse Duty(%)는 1..99 범위")
+                        return None
+
+            if use_rf_pulse:
+                # ---- CH2에서 쓰는 RF-Pulse 검증 로직을 CH1에도 동일 적용 ----
                 try:
-                    dc_pulse_duty = int(float(txtd))
-                    if dc_pulse_duty < 1 or dc_pulse_duty > 99: raise ValueError()
+                    rf_pulse_power = float(self._get_text("rfPulsePower_edit") or "0")
+                    if rf_pulse_power <= 0:
+                        raise ValueError()
                 except ValueError:
-                    self._post_warning("입력값 확인", "DC-Pulse Duty(%)는 1..99 범위")
+                    self._post_warning("입력값 확인", "RF Pulse Target Power(W)를 확인하세요.")
                     return None
+
+                txtf = self._get_text("rfPulseFreq_edit")
+                if txtf:
+                    try:
+                        rf_pulse_freq = int(float(txtf))  # kHz
+                        if rf_pulse_freq < 1 or rf_pulse_freq > 100:
+                            raise ValueError()
+                    except ValueError:
+                        self._post_warning("입력값 확인", "RF Pulse Freq(kHz)는 1..100 범위입니다.")
+                        return None
+
+                txtd = self._get_text("rfPulseDutyCycle_edit")
+                if txtd:
+                    try:
+                        rf_pulse_duty = int(float(txtd))
+                        if rf_pulse_duty < 1 or rf_pulse_duty > 99:
+                            raise ValueError()
+                    except ValueError:
+                        self._post_warning("입력값 확인", "RF Pulse Duty(%) 1..99")
+                        return None
 
             g1n = self._get_text("g1Target_name")
             g2n = self._get_text("g2Target_name")
@@ -2633,127 +2788,163 @@ class ChamberRuntime:
                 "use_g1": False, "use_g2": False, "use_g3": False,
                 "use_ar": use_ar, "use_o2": use_o2, "use_n2": use_n2,
                 "ar_flow": ar_flow, "o2_flow": o2_flow, "n2_flow": n2_flow,
-                "use_rf_power": False,
-                "use_dc_power": False,
-                "use_dc_pulse": True,  "dc_pulse_power": dc_pulse_power,
-                "dc_pulse_freq": dc_pulse_freq, "dc_pulse_duty": dc_pulse_duty,
-                "use_rf_pulse": False, "rf_pulse_power": 0.0,
+
+                # CH1 단일공정에서는 연속파는 일단 미사용(필요하면 확장)
+                "use_rf_power": False, "use_dc_power": False,
+
+                "use_dc_pulse": use_dc_pulse,
+                "dc_pulse_power": dc_pulse_power,
+                "dc_pulse_freq": dc_pulse_freq,
+                "dc_pulse_duty": dc_pulse_duty,
+
+                "use_rf_pulse": use_rf_pulse,
+                "rf_pulse_power": rf_pulse_power,
+                "rf_pulse_freq": rf_pulse_freq,
+                "rf_pulse_duty": rf_pulse_duty,
+
                 "G1_target_name": g1n, "G2_target_name": g2n, "G3_target_name": g3n,
                 "use_power_select": bool(getattr(self._u("powerSelect_checkbox"), "isChecked", lambda: False)()),
             }
 
-        use_g1 = bool(getattr(self._u("G1_checkbox"), "isChecked", lambda: False)())
-        use_g2 = bool(getattr(self._u("G2_checkbox"), "isChecked", lambda: False)())
-        use_g3 = bool(getattr(self._u("G3_checkbox"), "isChecked", lambda: False)())
-        checked = int(use_g1) + int(use_g2) + int(use_g3)
-        if checked == 0 or checked == 3:
-            self._post_warning("선택 오류", "G1~G3 중 1개 또는 2개만 선택")
-            return None
+        elif self.ch == 2:
+            # -----------------------------
+            # ✅ CH2 단일 실행(UI) 검증/파라미터 생성
+            # -----------------------------
+            use_ar = bool(getattr(self._u("Ar_checkbox"), "isChecked", lambda: False)())
+            use_o2 = bool(getattr(self._u("O2_checkbox"), "isChecked", lambda: False)())
+            use_n2 = bool(getattr(self._u("N2_checkbox"), "isChecked", lambda: False)())
 
-        g1_name = self._get_text("g1Target_name")
-        g2_name = self._get_text("g2Target_name")
-        g3_name = self._get_text("g3Target_name")
-        
-        use_ar = bool(getattr(self._u("Ar_checkbox"), "isChecked", lambda: False)())
-        use_o2 = bool(getattr(self._u("O2_checkbox"), "isChecked", lambda: False)())
-        use_n2 = bool(getattr(self._u("N2_checkbox"), "isChecked", lambda: False)())
-        if not (use_ar or use_o2 or use_n2):
-            self._post_warning("선택 오류", "가스를 하나 이상 선택"); 
-            return None
-
-        def _flow(name: str) -> float:
-            txt = self._get_text(name); 
-            if not txt: return 0.0
-            v = float(txt); 
-            if v < 0: raise ValueError()
-            return v
-
-        try:
-            ar_flow = _flow("arFlow_edit") if use_ar else 0.0
-            o2_flow = _flow("o2Flow_edit") if use_o2 else 0.0
-            n2_flow = _flow("n2Flow_edit") if use_n2 else 0.0
-        except Exception:
-            self._post_warning("입력값 확인", "가스 유량을 확인하세요."); 
-            return None
-
-        use_rf_pulse = bool(getattr(self._u("rfPulsePower_checkbox"), "isChecked", lambda: False)())
-        use_dc       = bool(getattr(self._u("dcPower_checkbox"), "isChecked", lambda: False)())
-        use_rf_power = bool(getattr(self._u("rfPower_checkbox"), "isChecked", lambda: False)())
-
-        # 최소 한 가지 파워는 선택되어야 함 (RF Pulse, RF Power, DC)
-        if not (use_rf_pulse or use_rf_power or use_dc):
-            self._post_warning("선택 오류", "RF Pulse, RF Power, DC 중 하나 이상 선택"); 
-            return None
-
-        rf_pulse_power = 0.0; rf_pulse_freq = None; rf_pulse_duty = None
-        if use_rf_pulse:
-            try:
-                rf_pulse_power = float(self._get_text("rfPulsePower_edit") or "0")
-                if rf_pulse_power <= 0: raise ValueError()
-            except ValueError:
-                self._post_warning("입력값 확인", "RF Pulse Target Power(W)를 확인하세요."); 
+            if not (use_ar or use_o2 or use_n2):
+                self._post_warning("선택 오류", "가스를 하나 이상 선택해야 합니다.")
                 return None
-            # kHz 입력
-            txtf = self._get_text("rfPulseFreq_edit")
-            if txtf:
-                try:
-                    rf_pulse_freq = int(float(txtf))  # kHz
-                    if rf_pulse_freq < 1 or rf_pulse_freq > 100:
-                        raise ValueError()
-                except ValueError:
-                    self._post_warning("입력값 확인", "RF Pulse Freq(kHz)는 1..100 범위입니다.")
-                    return None
-            txtd = self._get_text("rfPulseDutyCycle_edit")
-            if txtd:
-                try:
-                    rf_pulse_duty = int(float(txtd))
-                    if rf_pulse_duty < 1 or rf_pulse_duty > 99: raise ValueError()
-                except ValueError:
-                    self._post_warning("입력값 확인", "RF Pulse Duty(%) 1..99"); 
-                    return None
 
-        if use_dc:
+            def _read_flow(name: str) -> float:
+                txt = self._get_text(name) or "0"
+                v = float(txt)
+                if v < 0:
+                    raise ValueError()
+                return v
+
             try:
-                dc_power = float(self._get_text("dcPower_edit") or "0")
-                if dc_power <= 0: raise ValueError()
-            except ValueError:
-                self._post_warning("입력값 확인", "DC 파워(W)를 확인하세요."); 
+                ar_flow = _read_flow("arFlow_edit") if use_ar else 0.0
+                o2_flow = _read_flow("o2Flow_edit") if use_o2 else 0.0
+                n2_flow = _read_flow("n2Flow_edit") if use_n2 else 0.0
+            except Exception:
+                self._post_warning("입력값 확인", "가스 유량 입력을 확인하세요.")
                 return None
-        else:
+
+            # ✅ CH2: 연속 파워(DC/RF)
+            use_dc_power = bool(getattr(self._u("dcPower_checkbox"), "isChecked", lambda: False)())
+            use_rf_power = bool(getattr(self._u("rfPower_checkbox"), "isChecked", lambda: False)())
+
             dc_power = 0.0
+            rf_power = 0.0
 
-        use_rf_power = bool(getattr(self._u("rfPower_checkbox"), "isChecked", lambda: False)())
-        rf_power_val = 0.0
-        if use_rf_power:
-            try:
-                rf_power_val = float(self._get_text("rfPower_edit") or "0")
-                if rf_power_val <= 0: raise ValueError()
-            except ValueError:
-                self._post_warning("입력값 확인", "RF Power(W)를 확인하세요.")
+            if use_dc_power:
+                try:
+                    dc_power = float(self._get_text("dcPower_edit") or "0")
+                    if dc_power <= 0:
+                        raise ValueError()
+                except Exception:
+                    self._post_warning("입력값 확인", "DC Power(W)를 확인하세요.")
+                    return None
+
+            if use_rf_power:
+                try:
+                    rf_power = float(self._get_text("rfPower_edit") or "0")
+                    if rf_power <= 0:
+                        raise ValueError()
+                except Exception:
+                    self._post_warning("입력값 확인", "RF Power(W)를 확인하세요.")
+                    return None
+
+            # ✅ CH2: DC-Pulse(있다면)만 허용
+            use_dc_pulse = self.supports_dc_pulse and bool(getattr(self._u("dcPulsePower_checkbox"), "isChecked", lambda: False)())
+
+            dc_pulse_power = 0.0
+            dc_pulse_freq = None
+            dc_pulse_duty = None
+
+            if use_dc_pulse:
+                try:
+                    dc_pulse_power = float(self._get_text("dcPulsePower_edit") or "0")
+                    if dc_pulse_power <= 0:
+                        raise ValueError()
+                except Exception:
+                    self._post_warning("입력값 확인", "DC-Pulse Target Power(W)를 확인하세요.")
+                    return None
+
+                txtf = self._get_text("dcPulseFreq_edit")
+                if txtf:
+                    try:
+                        dc_pulse_freq = int(float(txtf))  # kHz
+                        if dc_pulse_freq < 20 or dc_pulse_freq > 150:
+                            raise ValueError()
+                    except Exception:
+                        self._post_warning("입력값 확인", "DC-Pulse Freq(kHz)는 20..150 범위입니다.")
+                        return None
+
+                txtd = self._get_text("dcPulseDutyCycle_edit")
+                if txtd:
+                    try:
+                        dc_pulse_duty = int(float(txtd))
+                        if dc_pulse_duty < 1 or dc_pulse_duty > 99:
+                            raise ValueError()
+                    except Exception:
+                        self._post_warning("입력값 확인", "DC-Pulse Duty(%)는 1..99 범위")
+                        return None
+
+            # ✅ CH2: RF-Pulse는 장비 이동으로 미지원 → 체크돼도 Start 막지 말고 OFF 처리
+            rf_pulse_checked = bool(getattr(self._u("rfPulsePower_checkbox"), "isChecked", lambda: False)())
+            if rf_pulse_checked:
+                self.append_log("UI", "CH2: RF-Pulse 장비가 CH1로 이동 → RF-Pulse 선택은 무시하고 진행합니다.")
+                # UI도 즉시 내려주고 싶으면(선택):
+                with contextlib.suppress(Exception):
+                    w = self._u("rfPulsePower_checkbox")
+                    if w: w.setChecked(False)
+
+            # ✅ 최소 1개 파워 동작이 선택됐는지 체크(정책)
+            # - 여기 정책은 네가 원하는 대로 바꿀 수 있음
+            if not (use_dc_power or use_rf_power or use_dc_pulse):
+                self._post_warning("선택 오류", "DC Power / RF Power / DC-Pulse 중 하나 이상 선택해야 합니다.")
                 return None
 
-        # 허용/금지 조합 체크
-        if not (use_rf_pulse or use_dc or use_rf_power):
-            self._post_warning("선택 오류", "RF Pulse, RF Power, DC 중 하나 이상 선택")
-            return None
+            g1n = self._get_text("g1Target_name")
+            g2n = self._get_text("g2Target_name")
+            g3n = self._get_text("g3Target_name")
 
-        # RF Pulse와 RF Power 동시 금지
-        if use_rf_pulse and use_rf_power:
-            self._post_warning("선택 오류", "RF Pulse와 RF Power는 동시에 선택할 수 없습니다.")
-            return None
+            return {
+                "use_ms": bool(getattr(self._u("mainShutter_checkbox"), "isChecked", lambda: False)()),
+                "use_g1": bool(getattr(self._u("G1_checkbox"), "isChecked", lambda: False)()),
+                "use_g2": bool(getattr(self._u("G2_checkbox"), "isChecked", lambda: False)()),
+                "use_g3": bool(getattr(self._u("G3_checkbox"), "isChecked", lambda: False)()),
+                "use_ar": use_ar, "use_o2": use_o2, "use_n2": use_n2,
+                "ar_flow": ar_flow, "o2_flow": o2_flow, "n2_flow": n2_flow,
 
-        return {
-            "use_ms": bool(getattr(self._u("mainShutter_checkbox"), "isChecked", lambda: False)()),
-            "use_g1": use_g1, "use_g2": use_g2, "use_g3": use_g3,
-            "use_ar": use_ar, "use_o2": use_o2, "use_n2": use_n2,
-            "ar_flow": ar_flow, "o2_flow": o2_flow, "n2_flow": n2_flow,
-            "use_rf_power": use_rf_power,"rf_power": rf_power_val, 
-            "use_rf_pulse": use_rf_pulse, "use_dc_power": use_dc,
-            "rf_pulse_power": rf_pulse_power, "dc_power": dc_power,
-            "rf_pulse_freq": rf_pulse_freq, "rf_pulse_duty": rf_pulse_duty,
-            "G1_target_name": g1_name, "G2_target_name": g2_name, "G3_target_name": g3_name,
-            "use_power_select": bool(getattr(self._u("powerSelect_checkbox"), "isChecked", lambda: False)()),
-        }
+                "use_dc_power": use_dc_power,
+                "dc_power": dc_power,
+                "use_rf_power": use_rf_power,
+                "rf_power": rf_power,
+
+                "use_dc_pulse": use_dc_pulse,
+                "dc_pulse_power": dc_pulse_power,
+                "dc_pulse_freq": dc_pulse_freq,
+                "dc_pulse_duty": dc_pulse_duty,
+
+                # CH2는 RF-Pulse 미사용
+                "use_rf_pulse": False,
+                "rf_pulse_power": 0.0,
+                "rf_pulse_freq": None,
+                "rf_pulse_duty": None,
+
+                # ✅ P.W select는 Start를 막지 않음: 값만 전달
+                "use_power_select": bool(getattr(self._u("powerSelect_checkbox"), "isChecked", lambda: False)()),
+
+                "G1_target_name": g1n, "G2_target_name": g2n, "G3_target_name": g3n,
+            }
+
+        # (방어) 혹시 모르는 값
+        return None
 
     def _normalize_params_for_process(self, raw: RawParams) -> NormParams:
         def tf(v): return str(v).strip().upper() in ("T","TRUE","1","Y","YES")
@@ -2776,6 +2967,51 @@ class ChamberRuntime:
         if _pos not in ("up", "mid", "down"):
             _pos = ""
 
+        def _opt_int_from_keys(*keys):
+            for k in keys:
+                s = str(raw.get(k, "")).strip()
+                if s != "":
+                    try:
+                        return int(float(s))
+                    except Exception:
+                        return None
+            return None
+
+        def _float_from_keys(default: str, *keys):
+            for k in keys:
+                s = str(raw.get(k, "")).strip()
+                if s != "":
+                    try:
+                        return float(s)
+                    except Exception:
+                        break
+            return float(default)
+
+        if self.ch == 1:
+            # ✅ CH1: UI 객체명은 dc_pulse_* 이지만 라벨만 RF → dc 키를 RF로 해석
+            use_rf_pulse = tf(raw.get("use_dc_pulse", raw.get("use_rf_pulse", "F")))
+            rf_pulse_power = _float_from_keys("0", "rf_pulse_power", "dc_pulse_power")
+            rf_pulse_freq  = _opt_int_from_keys("rf_pulse_freq", "dc_pulse_freq")
+            rf_pulse_duty  = _opt_int_from_keys("rf_pulse_duty_cycle", "dc_pulse_duty_cycle")
+
+            # ✅ DC-Pulse는 CH1에서 물리적으로 사용 금지
+            use_dc_pulse = False
+            dc_pulse_power = 0.0
+            dc_pulse_freq = None
+            dc_pulse_duty = None
+
+        else:
+            # ✅ CH2: 기존 키 그대로 사용
+            use_dc_pulse = tf(raw.get("use_dc_pulse", "F"))
+            dc_pulse_power = fget("dc_pulse_power", "0")
+            dc_pulse_freq  = iget_opt("dc_pulse_freq")
+            dc_pulse_duty  = iget_opt("dc_pulse_duty_cycle")
+
+            use_rf_pulse = tf(raw.get("use_rf_pulse", "F"))
+            rf_pulse_power = fget("rf_pulse_power", "0")
+            rf_pulse_freq  = iget_opt("rf_pulse_freq")
+            rf_pulse_duty  = iget_opt("rf_pulse_duty_cycle")
+
         res: NormParams = {
             "base_pressure":     fget("base_pressure", "1e-5"),
             "working_pressure":  fget("working_pressure", "0"),
@@ -2785,15 +3021,15 @@ class ChamberRuntime:
             "dc_power":          fget("dc_power", "0"),
             "rf_power":          fget("rf_power", "0"),
 
-            "use_dc_pulse":      tf(raw.get("use_dc_pulse", "F")),
-            "dc_pulse_power":    fget("dc_pulse_power", "0"),
-            "dc_pulse_freq":     iget_opt("dc_pulse_freq"),
-            "dc_pulse_duty":     iget_opt("dc_pulse_duty_cycle"),
+            "use_dc_pulse":      use_dc_pulse,
+            "dc_pulse_power":    dc_pulse_power,
+            "dc_pulse_freq":     dc_pulse_freq,
+            "dc_pulse_duty":     dc_pulse_duty,
 
-            "use_rf_pulse":      tf(raw.get("use_rf_pulse", "F")),
-            "rf_pulse_power":    fget("rf_pulse_power", "0"),
-            "rf_pulse_freq":     iget_opt("rf_pulse_freq"),
-            "rf_pulse_duty":     iget_opt("rf_pulse_duty_cycle"),
+            "use_rf_pulse":      use_rf_pulse,
+            "rf_pulse_power":    rf_pulse_power,
+            "rf_pulse_freq":     rf_pulse_freq,
+            "rf_pulse_duty":     rf_pulse_duty,
 
             "use_rf_power":      tf(raw.get("use_rf_power", "F")),
             "use_dc_power":      tf(raw.get("use_dc_power", "F")),
@@ -2815,6 +3051,67 @@ class ChamberRuntime:
             # ★ 추가
             "chuck_position":    _pos,
         }
+
+        # ------------------------------------------------------------
+        # ✅ Pulse 파라미터 정규화 (CH2→CH1로 RF-Pulse 이동 반영)
+        #  - 체크박스(use_*) 뿐 아니라 값(power/freq/duty)로도 "요청"을 판단
+        #  - CH1: RF-Pulse만 허용 (DC 값이 들어오면 RF로 자동 이관)
+        #  - CH2: RF-Pulse 강제 OFF + 값 초기화
+        # ------------------------------------------------------------
+        def _pos(v) -> bool:
+            try:
+                return float(v) > 0.0
+            except Exception:
+                return False
+
+        rf_requested = (
+            bool(res.get("use_rf_pulse"))
+            or _pos(res.get("rf_pulse_power", 0.0))
+            or (res.get("rf_pulse_freq") is not None)
+            or (res.get("rf_pulse_duty") is not None)
+        )
+
+        dc_requested = (
+            bool(res.get("use_dc_pulse"))
+            or _pos(res.get("dc_pulse_power", 0.0))
+            or (res.get("dc_pulse_freq") is not None)
+            or (res.get("dc_pulse_duty") is not None)
+        )
+
+        if self.ch == 1:
+            # ✅ CH1: DC-Pulse는 물리적으로 사용하지 않음(장비 이동 전제)
+            #    사용자가 실수로 DC 컬럼에 넣은 값을 RF로 자동 이관(단, RF 요청이 없을 때만)
+            if (not rf_requested) and dc_requested:
+                self.append_log("Params", "CH1: DC-Pulse 컬럼 입력을 RF-Pulse로 자동 변환합니다.")
+                res["use_rf_pulse"] = True
+                res["rf_pulse_power"] = float(res.get("dc_pulse_power", 0.0) or 0.0)
+                res["rf_pulse_freq"] = res.get("dc_pulse_freq")
+                res["rf_pulse_duty"] = res.get("dc_pulse_duty")
+                rf_requested = True
+
+            # ✅ CH1: DC-Pulse는 항상 OFF (값도 초기화)
+            res["use_dc_pulse"] = False
+            res["dc_pulse_power"] = 0.0
+            res["dc_pulse_freq"] = None
+            res["dc_pulse_duty"] = None
+
+            # ✅ (선택) Pulse와 연속전력 동시 요청 방지: Pulse가 켜지면 연속 전력은 끔
+            #   - 한 스텝에서 rf_power/dc_power까지 같이 켜면 해석이 애매해지고 오동작 여지가 큼
+            if rf_requested:
+                res["use_rf_pulse"] = True
+                res["use_rf_power"] = False
+                res["rf_power"] = 0.0
+                res["use_dc_power"] = False
+                res["dc_power"] = 0.0
+
+        elif self.ch == 2:
+            # ✅ CH2: RF-Pulse 장비가 CH1로 이동 → CH2에서는 무조건 사용 금지
+            if rf_requested:
+                self.append_log("Params", "CH2: RF-Pulse 사용 금지(장비 CH1로 이동) → RF-Pulse 설정을 무시하고 OFF 처리합니다.")
+            res["use_rf_pulse"] = False
+            res["rf_pulse_power"] = 0.0
+            res["rf_pulse_freq"] = None
+            res["rf_pulse_duty"] = None
 
         # 🔒 CH1은 N2 라인이 없으므로 강제 무시
         if self.ch == 1:
@@ -3436,6 +3733,30 @@ class ChamberRuntime:
         except Exception:
             pass
 
+        self._apply_ui_lockouts()
+
+    def _apply_ui_lockouts(self) -> None:
+        """챔버별로 선택/입력을 막아야 하는 UI를 비활성화한다."""
+        if not getattr(self, "ui", None):
+            return
+
+        def _raw(leaf: str):
+            return getattr(self.ui, f"{self.prefix}{leaf}", None)
+
+        def _disable(leaf: str):
+            w = _raw(leaf)
+            if w is None:
+                return
+            try:
+                w.setEnabled(False)
+            except Exception:
+                pass
+
+        # ✅ CH2: RF-Pulse UI 완전 차단
+        if self.ch == 2:
+            for leaf in ("rfPulsePower_checkbox", "rfPulsePower_edit", "rfPulseFreq_edit", "rfPulseDutyCycle_edit"):
+                _disable(leaf)
+
     def _reset_ui_after_process(self):
         self._set_default_ui_values()
 
@@ -3650,10 +3971,16 @@ class ChamberRuntime:
             "integrationTime_edit": "intergrationTime_edit",
 
             # CH1은 단일 타겟 위젯: ch1_gunTarget_name
-            # => prefix('ch1_') + 'gunTarget_name' == 'ch1_gunTarget_name'
             "g1Target_name": "gunTarget_name",
             "g2Target_name": "gunTarget_name",
             "g3Target_name": "gunTarget_name",
+
+            # ✅ CH1: 실제 위젯 이름은 dcPulse*인데 라벨만 RF로 바꾼 상태
+            #    런타임은 rfPulse* (공통 leaf)로 접근하므로 CH1에서는 rfPulse* -> dcPulse*로 alias
+            "rfPulsePower_checkbox": "dcPulsePower_checkbox",
+            "rfPulsePower_edit": "dcPulsePower_edit",
+            "rfPulseFreq_edit": "dcPulseFreq_edit",
+            "rfPulseDutyCycle_edit": "dcPulseDutyCycle_edit",
         }.get(leaf, leaf)
 
     def _u(self, name: str) -> Any | None:
@@ -3850,47 +4177,40 @@ class ChamberRuntime:
             p[k] = v
 
         if self.ch == 1:
-            # CH1 규칙
-            if not p.get("use_dc_pulse"):
-                errs.append("CH1은 DC-Pulse를 반드시 선택해야 합니다.")
-            if p.get("dc_pulse_power", 0) < 0:
-                errs.append("DC-Pulse Target Power(W)는 0 이상이어야 합니다.")
-            f = p.get("dc_pulse_freq")
-            d = p.get("dc_pulse_duty")
-            if f is not None and not (20 <= f <= 150):
-                errs.append("DC-Pulse Freq(kHz)는 20..150")
-            if d is not None and not (1 <= d <= 99):
-                errs.append("DC-Pulse Duty(%)는 1..99")
-        else:
-            # CH2 규칙(기존 싱글런 로직과 동일)
-            checked = int(p.get("use_g1", False)) + int(p.get("use_g2", False)) + int(p.get("use_g3", False))
-            if checked == 0 or checked == 3:
-                errs.append("G1~G3 중 1개 또는 2개만 선택")
+            # ✅ CH1: RF-Pulse만 사용(DC-Pulse 실행 금지)
+            if p.get("use_dc_pulse"):
+                errs.append("CH1에서는 DC-Pulse를 실행할 수 없습니다. (RF-Pulse로 이관됨)")
 
-            # 타겟 이름이 비어있어도 허용
-            # if p.get("use_g1") and not p.get("G1_target_name"):
-            #     errs.append("G1 타겟 이름이 비어있음")
-            # if p.get("use_g2") and not p.get("G2_target_name"):
-            #     errs.append("G2 타겟 이름이 비어있음")
-            # if p.get("use_g3") and not p.get("G3_target_name"):
-            #     errs.append("G3 타겟 이름이 비어있음")
-
-            if not (p.get("use_rf_pulse") or p.get("use_dc_power") or p.get("use_rf_power")):
-                errs.append("RF Pulse, RF Power, DC Power 중 하나 이상 선택 필요")
-
-            # RF Pulse와 RF Power 동시 금지
-            if p.get("use_rf_pulse") and p.get("use_rf_power"):
-                errs.append("RF Pulse와 RF Power는 동시에 선택할 수 없습니다.")
+            if not p.get("use_rf_pulse"):
+                errs.append("CH1은 RF-Pulse를 반드시 선택해야 합니다.")
 
             if p.get("use_rf_pulse"):
-                if p.get("rf_pulse_power", 0) < 0:
-                    errs.append("RF Pulse Target Power(W)는 0 이상이어야 합니다.")
+                if p.get("rf_pulse_power", 0) <= 0:
+                    errs.append("RF Pulse Target Power(W)는 0보다 커야 합니다.")
                 f = p.get("rf_pulse_freq")
                 d = p.get("rf_pulse_duty")
                 if f is not None and not (1 <= f <= 100):
                     errs.append("RF Pulse Freq(kHz)는 1..100")
                 if d is not None and not (1 <= d <= 99):
                     errs.append("RF Pulse Duty(%)는 1..99")
+
+        else:
+            # ✅ CH2: RF-Pulse 금지
+            checked = int(p.get("use_g1", False)) + int(p.get("use_g2", False)) + int(p.get("use_g3", False))
+            if checked == 0 or checked == 3:
+                errs.append("G1~G3 중 1개 또는 2개만 선택")
+
+            if p.get("use_rf_pulse"):
+                errs.append("CH2에서는 RF-Pulse를 사용할 수 없습니다. (장비가 CH1로 이동)")
+
+            # CH2는 RF-Pulse 없이도 돌아가야 하므로: DC Power 또는 RF Power 중 하나는 필요
+            if not (p.get("use_dc_power") or p.get("use_rf_power")):
+                errs.append("CH2는 DC Power 또는 RF Power 중 하나 이상 선택 필요 (RF-Pulse 사용 불가)")
+
+            # (기존 규칙 유지 가능)
+            if p.get("use_rf_pulse") and p.get("use_rf_power"):
+                errs.append("RF Pulse와 RF Power는 동시에 선택할 수 없습니다.")
+
             if p.get("use_dc_power") and p.get("dc_power", 0) < 0:
                 errs.append("DC Target Power(W)는 0 이상이어야 합니다.")
 

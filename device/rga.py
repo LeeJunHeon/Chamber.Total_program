@@ -59,10 +59,29 @@ class RGAWorkerClient:
 
     def _resolve_worker_cmd(self) -> Tuple[str, ...]:
         """
-        - 개발 실행: [python, tools/rga_worker.py]
-        - 배포 실행: [rga_worker.exe] (main exe와 같은 폴더 또는 tools 폴더)
+        실행 우선순위
+        1) worker_path가 지정되어 있으면:
+        - *.exe  : 해당 exe를 직접 실행
+        - *.py   : python으로 실행
+        2) worker_path 미지정이면:
+        - frozen(배포) 환경: exe_dir/tools 후보(exe 번들) 우선
+        - 개발 실행: 바탕화면/OneDrive 바탕화면의 rga_worker.exe가 있으면 그걸 우선 실행
+        - 마지막으로 python 스크립트 실행(프로젝트 내부 tools/rga_worker.py 또는 apps/rga_service/rga_api.py)
         """
-        # 1) Frozen(=exe) 환경이면 exe를 먼저 찾는다
+
+        # 0) 사용자가 명시적으로 지정한 경로가 있으면 최우선
+        if self.worker_path is not None:
+            p = Path(self.worker_path).expanduser()
+            if p.suffix.lower() == ".exe":
+                if not p.exists():
+                    raise FileNotFoundError(f"rga_worker.exe not found: {p}")
+                return (str(p),)
+            # .py 등 스크립트로 간주
+            if not p.exists():
+                raise FileNotFoundError(f"rga worker script not found: {p}")
+            return (sys.executable, str(p))
+
+        # 1) Frozen(=main exe) 환경이면 '번들된 exe' 후보를 먼저 찾는다
         if getattr(sys, "frozen", False):
             exe_dir = Path(sys.executable).resolve().parent
             candidates = [
@@ -73,28 +92,32 @@ class RGAWorkerClient:
             for c in candidates:
                 if c.exists():
                     return (str(c),)
-                
-            checked = " | ".join(str(p) for p in candidates)
-            raise FileNotFoundError(f"rga_worker.exe not found. checked: {checked}")
+            # 번들 exe가 없으면 아래(바탕화면 exe → 스크립트)로 폴백
 
-        # 2) 비-frozen이면 python으로 스크립트 실행
+        # 2) 개발/배포 공통: 바탕화면 rga_worker.exe(고정 위치) 후보
+        home = Path.home()
+        desktop_candidates = [
+            home / "Desktop" / "rga_worker.exe",
+            home / "OneDrive" / "Desktop" / "rga_worker.exe",  # OneDrive 동기화 바탕화면
+        ]
+        for c in desktop_candidates:
+            if c.exists():
+                return (str(c),)
+
+        # 3) 마지막 폴백: python으로 스크립트 실행(기존 로직 유지)
         root = Path(__file__).resolve().parent.parent
-
-        if self.worker_path is not None:
-            script = Path(self.worker_path)
-        else:
-            candidates = [
-                root / "tools" / "rga_worker.py",                 # 혹시 로컬에 존재하면 사용
-                root / "apps" / "rga_service" / "rga_api.py",     # ✅ 현재 프로젝트/스펙 기준
-            ]
-            script = None
-            for c in candidates:
-                if c.exists():
-                    script = c
-                    break
-            if script is None:
-                checked = " | ".join(str(p) for p in candidates)
-                raise FileNotFoundError(f"rga worker script not found. checked: {checked}")
+        candidates = [
+            root / "tools" / "rga_worker.py",
+            root / "apps" / "rga_service" / "rga_api.py",
+        ]
+        script = None
+        for c in candidates:
+            if c.exists():
+                script = c
+                break
+        if script is None:
+            checked = " | ".join(str(p) for p in candidates)
+            raise FileNotFoundError(f"rga worker script not found. checked: {checked}")
 
         return (sys.executable, str(script))
 

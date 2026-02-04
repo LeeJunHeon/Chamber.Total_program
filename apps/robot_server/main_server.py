@@ -3,211 +3,239 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-import json
 import sys
-import uuid
+import socket
 from pathlib import Path
-from typing import Any, Dict, Optional
+from typing import Optional, Tuple
 
 from PySide6.QtWidgets import QApplication
 from qasync import QEventLoop
 
-# ✅ (핵심) 프로젝트 루트(CH_1_2_program)를 sys.path에 추가
-ROOT = Path(__file__).resolve().parents[2]  # .../CH_1_2_program
-if str(ROOT) not in sys.path:
-    sys.path.insert(0, str(ROOT))
+# ✅ 개발(py 실행)일 때만 sys.path 보정
+if not getattr(sys, "frozen", False):
+    ROOT = Path(__file__).resolve().parents[2]
+    if str(ROOT) not in sys.path:
+        sys.path.insert(0, str(ROOT))
 
-# 이제부터 프로젝트 모듈 import가 안정적임
 import lib.config_common as cfgc
-
-# ✅ 서버 프로그램 전용 ServerPage (네가 새로 추가한 파일)
 from apps.robot_server.runtime.server_page import ServerPage
 
-# ✅ 기존 Host 서버/프로토콜 재사용
-from host.server import HostServer
-from host.router import Router
-from host.protocol import HEADER_SIZE, pack_message, unpack_header
 
-
-Json = Dict[str, Any]
-
-
-class UpstreamClient:
-    """RobotServer -> ProcessApp(브릿지)로 요청을 전달하는 클라이언트(✅ 지속 연결)."""
-
-    def __init__(
-        self,
-        host: str,
-        port: int,
-        *,
-        connect_timeout_s: float = 2.0,
-        request_timeout_s: float = 10.0,
-        log=None,
-    ) -> None:
-        self.host = host
-        self.port = int(port)
-        self.connect_timeout_s = float(connect_timeout_s)
-        self.request_timeout_s = float(request_timeout_s)
-        self.log = log
-
-        self._reader: Optional[asyncio.StreamReader] = None
-        self._writer: Optional[asyncio.StreamWriter] = None
-
-        # ✅ 한 연결에서 동시에 여러 request가 섞이면 프로토콜이 깨질 수 있으니 직렬화
-        self._lock = asyncio.Lock()
-
-    async def aclose(self) -> None:
-        if self._writer is not None:
-            with contextlib.suppress(Exception):
-                self._writer.close()
-            with contextlib.suppress(Exception):
-                await self._writer.wait_closed()
-        self._reader = None
-        self._writer = None
-
-    async def _ensure_connected(self) -> None:
-        if self._writer is not None and not self._writer.is_closing():
-            return
-
-        self._reader, self._writer = await asyncio.wait_for(
-            asyncio.open_connection(self.host, self.port),
-            timeout=self.connect_timeout_s,
-        )
-        if self.log:
-            self.log("HOST_PROXY", f"Upstream connected: {self.host}:{self.port}")
-
-    async def _read_exact(self, reader: asyncio.StreamReader, n: int) -> bytes:
-        buf = b""
-        while len(buf) < n:
-            chunk = await reader.read(n - len(buf))
-            if not chunk:
-                raise ConnectionError("EOF while reading from upstream")
-            buf += chunk
-        return buf
-
-    async def request(self, command: str, data: Json, request_id: Optional[str] = None) -> Json:
-        rid = request_id or str(uuid.uuid4())
-        pkt = pack_message(command, {"request_id": rid, "data": data or {}})
-
-        async with self._lock:
-            # ✅ 1회 실패 시 연결 닫고 재연결 후 1회 재시도
-            for attempt in range(2):
-                try:
-                    await self._ensure_connected()
-
-                    assert self._writer is not None
-                    assert self._reader is not None
-
-                    # send
-                    self._writer.write(pkt)
-                    await asyncio.wait_for(self._writer.drain(), timeout=min(5.0, self.request_timeout_s))
-
-                    # recv header + body
-                    header = await asyncio.wait_for(
-                        self._read_exact(self._reader, HEADER_SIZE),
-                        timeout=self.request_timeout_s,
-                    )
-                    parts = unpack_header(header)
-                    body_len = parts[3]
-
-                    body = await asyncio.wait_for(
-                        self._read_exact(self._reader, body_len),
-                        timeout=self.request_timeout_s,
-                    )
-
-                    obj = json.loads(body.decode("utf-8", errors="replace"))
-                    res_data = obj.get("data", {})
-                    if not isinstance(res_data, dict):
-                        return {"result": "fail", "message": f"Bad upstream response data: {type(res_data).__name__}"}
-                    return res_data
-
-                except Exception as e:
-                    if self.log:
-                        self.log("HOST_PROXY", f"Upstream error cmd={command} rid={rid} attempt={attempt+1}: {e!r}")
-
-                    # ✅ timeout/끊김/파싱오류 등 어떤 예외든 연결 상태가 불명확해질 수 있으니 닫고 재연결
-                    await self.aclose()
-
-            return {"result": "fail", "message": f"ProcessApp offline/timeout cmd={command} rid={rid}"}
-
-
-def build_proxy_router(up_status: UpstreamClient, up_cmd: UpstreamClient) -> Router:
-    r = Router()
-
-    PROXY_COMMANDS = [
-        "GET_SPUTTER_STATUS",
-        "GET_LOADING_1_SENSOR",
-        "GET_LOADING_2_SENSOR",
-        "GET_RECIPE",
-        "START_SPUTTER",
-        "START_PLASMA_CLEANING",
-        "VACUUM_ON",
-        "VACUUM_OFF",
-        "4PIN_UP",
-        "4PIN_DOWN",
-        "CH1_GATE_OPEN",
-        "CH2_GATE_OPEN",
-        "CH1_GATE_CLOSE",
-        "CH2_GATE_CLOSE",
-        "CH1_CHUCK_UP",
-        "CH2_CHUCK_UP",
-        "CH1_CHUCK_DOWN",
-        "CH2_CHUCK_DOWN",
+def _pick_upstream_endpoint() -> Tuple[str, int]:
+    """
+    업스트림(ProcessApp host) 엔드포인트 추정.
+    기존 코드의 후보 키들을 그대로 유지.
+    """
+    host_candidates = [
+        "PROCESS_SERVER_HOST",
+        "PROCESS_HOST",
+        "PROCESS_HOST_HOST",
+        "MAIN_SERVER_HOST",
+        "PLC_HOST_HOST",
+        "UPSTREAM_HOST",
+    ]
+    port_candidates = [
+        "PROCESS_SERVER_PORT",
+        "PROCESS_PORT",
+        "PROCESS_HOST_PORT",
+        "MAIN_SERVER_PORT",
+        "PLC_HOST_PORT",
+        "UPSTREAM_PORT",
     ]
 
-    async def _proxy(cmd: str, data: Json) -> Json:
-        # ✅ data 원본을 pop으로 변형하지 않게 복사
-        payload = dict(data) if isinstance(data, dict) else {}
-        rid = payload.pop("_request_id", None) or None
+    host = None
+    for k in host_candidates:
+        if hasattr(cfgc, k):
+            v = getattr(cfgc, k)
+            if v:
+                host = str(v)
+                break
 
-        # ✅ 너 요구대로: GET_SPUTTER_STATUS만 status 채널로
-        up = up_status if cmd == "GET_SPUTTER_STATUS" else up_cmd
-        return await up.request(cmd, payload, request_id=rid)
+    port = None
+    for k in port_candidates:
+        if hasattr(cfgc, k):
+            v = getattr(cfgc, k)
+            if v:
+                try:
+                    port = int(v)
+                    break
+                except Exception:
+                    pass
 
-    for cmd in PROXY_COMMANDS:
-        r.register(cmd, (lambda d, c=cmd: _proxy(c, d)))
+    # 기본값: 로컬의 ProcessApp host 포트(예: 50071)
+    return host or "127.0.0.1", port or 50071
 
-    return r
+
+def _set_tcp_keepalive(sock_obj: object) -> None:
+    """
+    끊긴 TCP를 OS 레벨에서 빨리 감지하도록 keepalive 활성화.
+    (Windows에서 상세 튜닝은 생략해도 기본 keepalive는 도움됨)
+    """
+    try:
+        if isinstance(sock_obj, socket.socket):
+            sock_obj.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    except Exception:
+        pass
+
+
+class RawTcpProxy:
+    """
+    "중계만" 하는 RAW TCP Proxy.
+    - 메시지 파싱/JSON/Job/폴링/취소 같은 정책 없음
+    - client <-> upstream 사이 바이트를 그대로 전달
+    """
+
+    def __init__(self, listen_host: str, listen_port: int, upstream_host: str, upstream_port: int, log) -> None:
+        self.listen_host = str(listen_host)
+        self.listen_port = int(listen_port)
+        self.upstream_host = str(upstream_host)
+        self.upstream_port = int(upstream_port)
+        self.log = log
+
+        self._server: Optional[asyncio.base_events.Server] = None
+        self._conn_tasks: set[asyncio.Task] = set()
+        self._closing = False
+
+    async def start(self) -> None:
+        if self._server is not None:
+            return
+
+        self._closing = False
+        self._server = await asyncio.start_server(self._handle_client, self.listen_host, self.listen_port)
+        sock = self._server.sockets[0] if self._server.sockets else None
+        addr = sock.getsockname() if sock else (self.listen_host, self.listen_port)
+        self.log("NET", f"RobotHost started on {addr} (RAW proxy -> {self.upstream_host}:{self.upstream_port})")
+
+    async def stop(self) -> None:
+        self._closing = True
+
+        if self._server is not None:
+            self._server.close()
+            with contextlib.suppress(Exception):
+                await self._server.wait_closed()
+            self._server = None
+
+        # 현재 연결들 정리
+        tasks = list(self._conn_tasks)
+        self._conn_tasks.clear()
+        for t in tasks:
+            t.cancel()
+        for t in tasks:
+            with contextlib.suppress(Exception):
+                await t
+
+        self.log("NET", "RobotHost stopped (RAW proxy)")
+
+    async def _pipe(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter, tag: str) -> None:
+        """
+        reader -> writer로 바이트 스트림 복사
+        """
+        try:
+            while True:
+                data = await reader.read(64 * 1024)
+                if not data:
+                    break
+                writer.write(data)
+                await writer.drain()
+        except asyncio.CancelledError:
+            # stop() 시 정상 취소
+            raise
+        except Exception as e:
+            self.log("NET", f"[PIPE_ERR] {tag} {e!r}")
+        finally:
+            with contextlib.suppress(Exception):
+                writer.close()
+            with contextlib.suppress(Exception):
+                await writer.wait_closed()
+
+    async def _handle_client(self, client_reader: asyncio.StreamReader, client_writer: asyncio.StreamWriter) -> None:
+        peer = client_writer.get_extra_info("peername")
+        cid = id(client_writer) & 0xFFFF  # 간단한 connection id
+        self.log("NET", f"[CONN_OPEN] cid={cid} peer={peer}")
+
+        upstream_writer: Optional[asyncio.StreamWriter] = None
+        task: Optional[asyncio.Task] = None
+
+        try:
+            # upstream 연결
+            upstream_reader, upstream_writer = await asyncio.open_connection(self.upstream_host, self.upstream_port)
+
+            # keepalive
+            _set_tcp_keepalive(client_writer.get_extra_info("socket"))
+            _set_tcp_keepalive(upstream_writer.get_extra_info("socket"))
+
+            # 양방향 파이프
+            t1 = asyncio.create_task(self._pipe(client_reader, upstream_writer, f"cid={cid} C->U"))
+            t2 = asyncio.create_task(self._pipe(upstream_reader, client_writer, f"cid={cid} U->C"))
+
+            # 서버 stop() 때 같이 죽이기 위해 task set에 묶음
+            task = asyncio.current_task()
+            if task:
+                self._conn_tasks.add(task)
+
+            done, pending = await asyncio.wait({t1, t2}, return_when=asyncio.FIRST_COMPLETED)
+
+            # 하나라도 끝나면 반대쪽도 정리
+            for p in pending:
+                p.cancel()
+            for p in pending:
+                with contextlib.suppress(Exception):
+                    await p
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            if not self._closing:
+                self.log("NET", f"[CONN_ERR] cid={cid} peer={peer} err={e!r}")
+        finally:
+            if task and task in self._conn_tasks:
+                self._conn_tasks.discard(task)
+
+            # 안전 close
+            with contextlib.suppress(Exception):
+                client_writer.close()
+            with contextlib.suppress(Exception):
+                await client_writer.wait_closed()
+
+            if upstream_writer is not None:
+                with contextlib.suppress(Exception):
+                    upstream_writer.close()
+                with contextlib.suppress(Exception):
+                    await upstream_writer.wait_closed()
+
+            self.log("NET", f"[CONN_CLOSE] cid={cid} peer={peer}")
 
 
 class RobotServerApp:
+    """
+    기존 UI(ServerPage)의 Start/Stop/Restart 버튼은 그대로 유지하되,
+    서버 로직만 'RAW TCP Proxy'로 교체한 버전.
+    """
+
     def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
         self.loop = loop
 
-        # 로그 루트는 메인과 동일하게 맞추고 싶으면 여기 Path를 지정(선택)
         log_root = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs")
-
         self.page = ServerPage(log_root=log_root)
         self.page.set_host_info(cfgc.HOST_SERVER_HOST, int(cfgc.HOST_SERVER_PORT))
         self.page.set_running(False)
         self.page.show()
 
-        # ✅ 상태 전용 연결
-        self.up_status = UpstreamClient(
-            cfgc.PROCESS_HOST_HOST,
-            int(cfgc.PROCESS_HOST_PORT),
-            connect_timeout_s=getattr(cfgc, "PROCESS_HOST_CONNECT_TIMEOUT_S", 2.0),
-            request_timeout_s=getattr(cfgc, "PROCESS_HOST_STATUS_REQUEST_TIMEOUT_S", 5.0),
-            log=self.page.append_log,
+        up_host, up_port = _pick_upstream_endpoint()
+        self.page.append_log("HOST_PROXY", f"Upstream endpoint = {up_host}:{up_port}")
+
+        self.proxy = RawTcpProxy(
+            cfgc.HOST_SERVER_HOST,
+            int(cfgc.HOST_SERVER_PORT),
+            up_host,
+            up_port,
+            self.page.append_log,
         )
 
-        # ✅ 명령 전용 연결(오래 걸리는 동작 대비)
-        self.up_cmd = UpstreamClient(
-            cfgc.PROCESS_HOST_HOST,
-            int(cfgc.PROCESS_HOST_PORT),
-            connect_timeout_s=getattr(cfgc, "PROCESS_HOST_CONNECT_TIMEOUT_S", 2.0),
-            request_timeout_s=getattr(cfgc, "PROCESS_HOST_CMD_REQUEST_TIMEOUT_S", 180.0),
-            log=self.page.append_log,
-        )
-
-        self.server: Optional[HostServer] = None
-
-        # 버튼 연결
         self.page.sigHostStart.connect(self.request_start)
         self.page.sigHostStop.connect(self.request_stop)
         self.page.sigHostRestart.connect(self.request_restart)
 
-        # 자동 시작(원하면 주석 처리)
         self.loop.create_task(self._start())
 
     def request_start(self) -> None:
@@ -220,57 +248,13 @@ class RobotServerApp:
         self.loop.create_task(self._restart())
 
     async def _start(self) -> None:
-        if self.server is not None:
-            self.page.append_log("NET", "Robot host already running")
-            return
-        
-        # ✅ 업스트림 2개를 미리 붙여서 “항상 연결 유지” 상태로 시작
-        await self.up_status._ensure_connected()
-        await self.up_cmd._ensure_connected()
-
-        router = build_proxy_router(self.up_status, self.up_cmd)
-
-        # HostServer 생성/시작(외부 로봇이 붙는 포트)
-        self.server = HostServer(
-            cfgc.HOST_SERVER_HOST,
-            int(cfgc.HOST_SERVER_PORT),
-            router,
-            self.page.append_log,
-            csv_prefix="robot_server_cmd",
-            csv_subdir="RobotServer",
-        )
-        await self.server.start()
-
+        # 이미 떠 있으면 무시
+        await self.proxy.start()
         self.page.set_running(True)
-        self.page.append_log(
-            "NET",
-            f"RobotHost started on {cfgc.HOST_SERVER_HOST}:{cfgc.HOST_SERVER_PORT} "
-            f"-> upstream {cfgc.PROCESS_HOST_HOST}:{cfgc.PROCESS_HOST_PORT}",
-        )
 
     async def _stop(self) -> None:
-        if self.server is None:
-            return
-
-        srv = self.server
-        self.server = None
-
-        # HostServer 종료 메서드 이름이 다를 수 있어 안전 처리
-        if hasattr(srv, "aclose"):
-            await srv.aclose()
-        elif hasattr(srv, "stop"):
-            await srv.stop()
-
+        await self.proxy.stop()
         self.page.set_running(False)
-
-        # ✅ upstream 지속 연결도 닫기(정지 시 유령 연결 방지)
-        with contextlib.suppress(Exception):
-            await self.up_status.aclose()
-        with contextlib.suppress(Exception):
-            await self.up_cmd.aclose()
-
-        self.page.append_log("NET", "RobotHost stopped")
-
 
     async def _restart(self) -> None:
         await self._stop()
@@ -280,6 +264,7 @@ class RobotServerApp:
 def run() -> int:
     if sys.platform.startswith("win"):
         from multiprocessing import freeze_support
+
         freeze_support()
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
 

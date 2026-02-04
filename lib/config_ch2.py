@@ -26,7 +26,7 @@ RGA_NET.update({
 # (선택) 컨트롤러 지원 플래그(장비 스펙에 맞춰 설정)
 #  - CH2: RF Pulse 지원, RF 연속파는 미지원(예시)
 SUPPORTS_DC = True
-SUPPORTS_RF_CONT = False
+SUPPORTS_RF_CONT = True
 SUPPORTS_RFPULSE = False
 
 RFPULSE_WATCHDOG_INTERVAL_MS        = 3000

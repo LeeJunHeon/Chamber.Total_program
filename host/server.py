@@ -19,8 +19,9 @@ LogFn = Callable[[str, str], None]
 
 class DailyCommandCsvLogger:
     """
-    하루에 파일 1개(prefix_YYYYMMDD.csv)만 만들고 append.
-    NAS 실패 시 로컬 Logs/CH1&2_Server/<subdir> 로 폴백.
+    하루에 파일 1개(remote_cmd_YYYYMMDD.csv)만 만들고,
+    그날 들어온 모든 요청/응답을 한 파일에 append.
+    NAS 실패 시 로컬 Logs/PLC_Remote 로 자동 폴백.
     """
     HEADER = [
         "server_time",
@@ -35,9 +36,7 @@ class DailyCommandCsvLogger:
         "duration_ms",
     ]
 
-    def __init__(self, prefix: str = "remote_cmd", *, subdir: str = "") -> None:
-        self._prefix = prefix
-        self._subdir = str(subdir or "").strip()
+    def __init__(self) -> None:
         self._lock: asyncio.Lock | None = None
         self._dir = self._init_dir()
 
@@ -46,20 +45,16 @@ class DailyCommandCsvLogger:
         try:
             root = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs")
             d = root / "CH1&2_Server"
-            if self._subdir:
-                d = d / self._subdir
             d.mkdir(parents=True, exist_ok=True)
             return d
         except Exception:
             d = Path.cwd() / "Logs" / "CH1&2_Server"
-            if self._subdir:
-                d = d / self._subdir
             d.mkdir(parents=True, exist_ok=True)
             return d
 
     def _file_path(self, now: datetime | None = None) -> Path:
         now = now or datetime.now()
-        return self._dir / f"{self._prefix}_{now:%Y%m%d}.csv"
+        return self._dir / f"remote_cmd_{now:%Y%m%d}.csv"
 
     def _ensure_lock(self) -> asyncio.Lock:
         if self._lock is None:
@@ -84,17 +79,14 @@ class DailyCommandCsvLogger:
             try:
                 await asyncio.to_thread(self._write_row_sync, fn, row)
             except Exception as e:
-                # NAS 실패 → 로컬 폴백(동일 subdir 구조 유지)
-                local_dir = Path.cwd() / "Logs" / "CH1&2_Server"
-                if self._subdir:
-                    local_dir = local_dir / self._subdir
-                local_dir.mkdir(parents=True, exist_ok=True)
-                local = local_dir / fn.name
+                # NAS 실패 → 로컬 폴백
+                local = (Path.cwd() / "Logs" / "CH1&2_Server"  / fn.name)
+                local.parent.mkdir(parents=True, exist_ok=True)
 
                 # 1) 원래 row는 로컬에 저장
                 await asyncio.to_thread(self._write_row_sync, local, row)
 
-                # 2) marker row 추가(기존 로직 유지)
+                # 2) "NAS에 누락됨" marker row를 로컬 CSV에 1줄 추가
                 try:
                     def _cut(s: str, n: int = 500) -> str:
                         return s if len(s) <= n else s[:n] + "...(truncated)"
@@ -109,6 +101,7 @@ class DailyCommandCsvLogger:
                         "res_result": "WARN",
                         "res_message": _cut(
                             f"NAS write failed -> saved to local only. "
+                            f"(NAS may be missing this request) "
                             f"cmd={row.get('req_command','')} id={row.get('request_id','')} "
                             f"nas={fn} local={local} reason={e!r}"
                         ),
@@ -120,18 +113,7 @@ class DailyCommandCsvLogger:
                     pass
 
 class HostServer:
-    def __init__(
-        self,
-        host: str,
-        port: int,
-        router: Router,
-        log: LogFn,
-        chat=None,
-        popup=None,
-        *,
-        csv_prefix: str = "remote_cmd",
-        csv_subdir: str = "",
-    ) -> None:
+    def __init__(self, host: str, port: int, router: Router, log: LogFn, chat=None, popup=None) -> None:
         self.host = host
         self.port = port
         self.router = router
@@ -139,8 +121,7 @@ class HostServer:
         self.chat = chat
         self.popup = popup
         self._server: Optional[asyncio.AbstractServer] = None
-
-        self._cmd_csv = DailyCommandCsvLogger(prefix=csv_prefix, subdir=csv_subdir)
+        self._cmd_csv = DailyCommandCsvLogger()
 
     async def start(self) -> None:
         self._server = await asyncio.start_server(self._handle, self.host, self.port)
@@ -268,10 +249,6 @@ class HostServer:
                 raw_data = obj.get("data", {})
                 data = raw_data if isinstance(raw_data, dict) else {}
 
-                # ✅ handler에서 request_id를 참조할 수 있도록(프록시/로깅용)
-                if isinstance(data, dict) and "_request_id" not in data:
-                    data["_request_id"] = req_id
-
                 # === 클라이언트 → 서버 요청 로그 ===
                 # Plasma Cleaning 로그창에 어떤 명령이 들어왔는지 남김
                 try:
@@ -330,36 +307,19 @@ class HostServer:
                 t0 = time.perf_counter()
                 try:
                     res_cmd, res_data = await self.router.dispatch(cmd, data)
-
                 except Exception as e:
                     tb = traceback.format_exc()
                     self.log("NET", f"Handler error for {cmd}: {e}\n{tb}")
 
-                    # ✅ 예외에 code가 있으면 그걸 최우선으로 사용
-                    code = getattr(e, "code", None) or getattr(e, "error_code", None)
-                    msg = str(e)
-
-                    if code:
-                        # PLCError/AppError 등이 올라온 케이스: 코드 유지
-                        fail = notify_all(
-                            log=self.log,
-                            chat=self.chat,
-                            popup=self.popup,
-                            src="HOST",
-                            code=code,
-                            message=msg,   # "handler crash:" 같은 접두 넣지 말기(추정 방해)
-                        )
-                    else:
-                        # 진짜 핸들러 크래시: E110
-                        fail = notify_all(
-                            log=self.log,
-                            chat=self.chat,
-                            popup=self.popup,
-                            src="HOST",
-                            code="E110",
-                            message=f"{cmd} handler crash: {type(e).__name__}: {msg}",
-                        )
-
+                    # ✅ E110 강제 제거: message 기반 추정/폴백(또는 handlers에서 이미 E412/E401로 잡게)
+                    fail = notify_all(
+                        log=self.log,
+                        chat=self.chat,
+                        popup=self.popup,
+                        src="HOST",
+                        code=None,  # ← 강제하지 않음
+                        message=f"{cmd} handler crash: {type(e).__name__}: {e}",
+                    )
                     res_cmd, res_data = f"{cmd}_RESULT", fail
 
                 dt_ms = int((time.perf_counter() - t0) * 1000)

@@ -101,6 +101,14 @@ class MainWindow(QWidget):
         self.ui = Ui_Form()
         self.ui.setupUi(self)
 
+        # # ✅ CH2 공정 페이지 P.W Select 체크박스 항상 비활성화
+        # self.ui.ch2_powerSelect_checkbox.setEnabled(False)
+
+        # # ✅ RF Select(=Power_Select_button) 항상 비활성화
+        # if hasattr(self.ui, "Power_Select_button"):
+        #     self.ui.Power_Select_button.setEnabled(False)
+        #     self.ui.Power_Select_button.setToolTip("비활성화(고정)")
+
         # ✅ Integration Time 입력칸을 'Process Name' 입력으로 재활용 (CH1/CH2)
         #   - CSV 자동공정: Process_name 표시
         #   - UI 수동공정: 사용자가 입력 → 로그/구글챗/CSV(Process Note)에 기록
@@ -197,7 +205,7 @@ class MainWindow(QWidget):
             self._pages["server"] = self.server_page
 
             if hasattr(self.server_page, "set_host_info"):
-                self.server_page.set_host_info(cfgc.PROCESS_HOST_HOST, int(cfgc.PROCESS_HOST_PORT))
+                self.server_page.set_host_info(cfgc.HOST_SERVER_HOST, int(cfgc.HOST_SERVER_PORT))
             if hasattr(self.server_page, "set_running"):
                 self.server_page.set_running(False)
 
@@ -272,6 +280,7 @@ class MainWindow(QWidget):
             plc=self._plc_ch2,   # ★ CH2 전용 Proxy
             chat=self.chat_ch2,  # CH2 전용 Notifier
             cfg=config_ch2,
+            supports_rf_cont=True,   # ✅ CH2 RF 연속파워 강제 사용
             log_dir=self._log_root,
             mfc=self.mfc2,
             ig=self.ig2,
@@ -403,19 +412,7 @@ class MainWindow(QWidget):
         if m.startswith("[") and "]" in m:
             src = m[1:m.index("]")].strip() or "PLC"
 
-        # ✅ PLC 로그를 메인 ServerPage에도 기록(서버프로그램과의 통신/PLC 모니터링용)
-        try:
-            sp = getattr(self, "server_page", None)
-            if sp and hasattr(sp, "append_log"):
-                origin = None
-                try:
-                    origin = PLC_ORIGIN.get()
-                except LookupError:
-                    origin = None
-                o = origin or "GLOBAL"
-                sp.append_log(f"PLC/{o}", msg[-800:])  # 너무 길면 UI 느려져서 컷
-        except Exception:
-            pass
+        self._log_global(src, msg)
 
         # 0) ContextVar에 출처가 명시되어 있으면 그쪽으로만 라우팅
         origin = None
@@ -781,8 +778,8 @@ class MainWindow(QWidget):
 
         try:
             self._host_handle = await install_host(
-                host=cfgc.PROCESS_HOST_HOST,
-                port=int(cfgc.PROCESS_HOST_PORT),
+                host=cfgc.HOST_SERVER_HOST,
+                port=int(cfgc.HOST_SERVER_PORT),
                 log=self._netlog,
                 plc=self.plc,
                 ch1=self.ch1,
@@ -798,10 +795,10 @@ class MainWindow(QWidget):
             if sp and hasattr(sp, "set_running"):
                 sp.set_running(True)
             if sp and hasattr(sp, "set_host_info"):
-                sp.set_host_info(cfgc.PROCESS_HOST_HOST, int(cfgc.PROCESS_HOST_PORT))
+                sp.set_host_info(cfgc.HOST_SERVER_HOST, int(cfgc.HOST_SERVER_PORT))
 
             # ✅ NET 로그도 server 페이지로
-            self._netlog("NET", f"BridgeHost started on {cfgc.PROCESS_HOST_HOST}:{cfgc.PROCESS_HOST_PORT}")
+            self._netlog("NET", f"Host started on {cfgc.HOST_SERVER_HOST}:{cfgc.HOST_SERVER_PORT}")
 
         except Exception as e:
             sp = getattr(self, "server_page", None)
