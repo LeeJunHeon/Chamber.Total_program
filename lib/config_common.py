@@ -4,20 +4,20 @@
 HOST_SERVER_HOST = "0.0.0.0"   # 로컬만 쓰면 "127.0.0.1"
 HOST_SERVER_PORT = 50070       # 방화벽 인바운드 허용 필요
 
-# === 내부 브릿지(메인 공정 프로그램 ↔ 로봇 서버 프록시) 설정 ===
-# - 메인 공정 프로그램이 로봇 서버에게 제공하는 "로컬 전용" Host(IPC) 포트
-# - 반드시 127.0.0.1 로 고정(외부 접근 차단)
-PROCESS_HOST_HOST = "127.0.0.1"
-PROCESS_HOST_PORT = 50071
+# # === 내부 브릿지(메인 공정 프로그램 ↔ 로봇 서버 프록시) 설정 ===
+# # - 메인 공정 프로그램이 로봇 서버에게 제공하는 "로컬 전용" Host(IPC) 포트
+# # - 반드시 127.0.0.1 로 고정(외부 접근 차단)
+# PROCESS_HOST_HOST = "127.0.0.1"
+# PROCESS_HOST_PORT = 50071
 
-# (추천) 로봇 서버(프록시) → 공정 프로그램(업스트림) 요청 타임아웃
-PROCESS_HOST_CONNECT_TIMEOUT_S = 2.0
+# # (추천) 로봇 서버(프록시) → 공정 프로그램(업스트림) 요청 타임아웃
+# PROCESS_HOST_CONNECT_TIMEOUT_S = 2.0
 
-# ✅ 상태 전용(짧게): GET_SPUTTER_STATUS 같은 폴링
-PROCESS_HOST_STATUS_REQUEST_TIMEOUT_S = 5.0
+# # ✅ 상태 전용(짧게): GET_SPUTTER_STATUS 같은 폴링
+# PROCESS_HOST_STATUS_REQUEST_TIMEOUT_S = 5.0
 
-# ✅ 명령 전용(길게): CHUCK_UP 같이 오래 걸리는 동작
-PROCESS_HOST_CMD_REQUEST_TIMEOUT_S = 180.0
+# # ✅ 명령 전용(길게): CHUCK_UP 같이 오래 걸리는 동작
+# PROCESS_HOST_CMD_REQUEST_TIMEOUT_S = 180.0
 
 # ===== TCP 유휴재연결(초) =====
 IG_INACTIVITY_REOPEN_S  = 0   # 0 → 사용 안함
