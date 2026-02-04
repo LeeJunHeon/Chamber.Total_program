@@ -64,10 +64,6 @@ async def install_host(*,
     r.register("CH2_CHUCK_UP",   lambda d: h.chuck_up({**d, "ch": 2}))
     r.register("CH1_CHUCK_DOWN", lambda d: h.chuck_down({**d, "ch": 1}))
     r.register("CH2_CHUCK_DOWN", lambda d: h.chuck_down({**d, "ch": 2}))
-    r.register("CH1_MS_OPEN",  lambda d: h.ms_open({**d, "ch": 1}))
-    r.register("CH1_MS_CLOSE", lambda d: h.ms_close({**d, "ch": 1}))
-    r.register("CH2_MS_OPEN",  lambda d: h.ms_open({**d, "ch": 2}))
-    r.register("CH2_MS_CLOSE", lambda d: h.ms_close({**d, "ch": 2}))
 
     # 서버 기동
     server = HostServer(host, port, r, log, chat=chat, popup=popup)
