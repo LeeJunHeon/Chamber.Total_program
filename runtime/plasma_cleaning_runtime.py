@@ -111,8 +111,10 @@ class PlasmaCleaningRuntime:
         self._host_start_future: Optional[asyncio.Future] = None
 
         self._runlog_buf = deque()
-        self._runlog_timer = QTimer(self)
-        self._runlog_timer.setInterval(1000)  # 1초마다 flush (server_page와 동일)
+
+        parent = self._parent_widget() or QApplication.instance()  # QWidget 우선
+        self._runlog_timer = QTimer(parent)
+        self._runlog_timer.setInterval(1000)
         self._runlog_timer.timeout.connect(self._flush_run_log)
         self._runlog_timer.start()
 
@@ -1561,7 +1563,6 @@ class PlasmaCleaningRuntime:
                                 return
                             sbb = ww.verticalScrollBar()
                             sbb.setValue(sbb.maximum())
-                            ww.ensureCursorVisible()
 
                         QTimer.singleShot(0, _scroll_bottom)
 
@@ -1576,10 +1577,13 @@ class PlasmaCleaningRuntime:
             pass
 
     def _queue_run_log_line(self, line: str) -> None:
-        """파일 로그 라인을 버퍼에 쌓는다(화면 표시와 무관)."""
+        # ✅ 파일이 열려있을 때만 버퍼링/저장 (안 열려 있으면 쌓지 않음)
+        if not getattr(self, "_log_fp", None):
+            return
+
         self._runlog_buf.append(line)
 
-        # ✅ 폭주 보호: 버퍼가 너무 커지면 즉시 flush
+        # 폭주 보호
         if len(self._runlog_buf) >= 2000:
             self._flush_run_log()
 
