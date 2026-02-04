@@ -1541,7 +1541,12 @@ class PlasmaCleaningRuntime:
                 except Exception:
                     stick_to_bottom = True
 
-                w.appendPlainText(line)
+                if hasattr(w, "appendPlainText"):
+                    w.appendPlainText(line)
+                elif hasattr(w, "append"):
+                    w.append(line)          # QTextEdit 폴백
+                else:
+                    return
 
                 if stick_to_bottom:
                     # 워드랩/레이아웃 계산 이후(다음 이벤트 루프 틱)에 scrollbar maximum이 갱신되므로
