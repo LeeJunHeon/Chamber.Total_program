@@ -377,27 +377,58 @@ class ChatNotifier(QObject):
 
     @Slot(bool, dict)
     def notify_process_finished_detail(self, ok: bool, detail: dict):
-        name = (detail or {}).get("process_name") or (self._last_started_params or {}).get("process_note") or "Untitled"
-        stopped  = bool((detail or {}).get("stopped"))
-        aborting = bool((detail or {}).get("aborting"))
-        errs: List[str] = list((detail or {}).get("errors") or [])
+        # ✅ detail 우선 + 시작 파라미터 fallback
+        merged = {}
+        merged.update(self._last_started_params or {})
+        merged.update(detail or {})
+
+        # 공정 이름
+        name = (merged.get("process_name")
+                or merged.get("process_note")
+                or merged.get("Process_name")
+                or "Untitled")
+
+        stopped  = bool(merged.get("stopped"))
+        aborting = bool(merged.get("aborting"))
+
+        errs: List[str] = list(merged.get("errors") or [])
         if not errs and self._errors:
             errs = list(self._errors)
 
+        # ✅ 챔버 정보 추출 (ch 또는 prefix에서)
+        ch_txt = ""
+        ch_val = merged.get("ch")
+        if ch_val in (None, ""):
+            ch_val = merged.get("chamber")
+
+        if ch_val not in (None, ""):
+            try:
+                ch_txt = f"CH{int(ch_val)}"
+            except Exception:
+                ch_txt = str(ch_val).strip() or ""
+
+        if not ch_txt:
+            prefix = str(merged.get("prefix", "")).strip()
+            if prefix:
+                head = prefix.split()[0]  # "CH1 Sputter" → "CH1"
+                if head.upper().startswith("CH"):
+                    ch_txt = head
+
+        # ✅ 종료 사유/상태 구성
         if ok:
-            subtitle = "정상 종료"
+            subtitle_base = "정상 종료"
             status = "SUCCESS"
             fields = {"공정 이름": name}
         else:
             status = "FAIL"
             if stopped:
-                subtitle = "사용자 Stop으로 종료"
+                subtitle_base = "사용자 Stop으로 종료"
                 fields = {"공정 이름": name}
             elif aborting:
-                subtitle = "긴급 중단으로 종료"
+                subtitle_base = "긴급 중단으로 종료"
                 fields = {"공정 이름": name}
             else:
-                subtitle = "오류로 종료"
+                subtitle_base = "오류로 종료"
                 if errs:
                     preview = " • " + "\n • ".join(errs[:3])
                     if len(errs) > 3:
@@ -406,21 +437,28 @@ class ChatNotifier(QObject):
                 else:
                     fields = {"공정 이름": name, "원인": "알 수 없음"}
 
-        # ✅ (추가) chuck position / warnings 표시 (성공/실패 공통)
-        pos = (detail or {}).get("chuck_position")
+        # ✅ chuck position / warnings (기존 유지)
+        pos = merged.get("chuck_position")
         if pos:
             fields.setdefault("Chuck Position", str(pos))
 
-        warns: List[str] = list((detail or {}).get("warnings") or [])
+        warns: List[str] = list(merged.get("warnings") or [])
         if warns:
             preview = " • " + "\n • ".join(warns[:3])
             if len(warns) > 3:
                 preview += f"\n(+{len(warns)-3}건 더)"
             fields.setdefault("주의", preview)
 
-        self._post_card("공정 종료", subtitle, status, fields, route_params=detail)
+        # ✅ (핵심) 챔버를 subtitle/fields에 반영
+        if ch_txt:
+            fields = {"Chamber": ch_txt, **fields}
+            subtitle = f"{ch_txt} · {name} — {subtitle_base}"
+        else:
+            subtitle = subtitle_base
 
-        # 종료 카드와 함께 누적 오류 집계 카드 1장도 같이 나가도록
+        self._post_card("공정 종료", subtitle, status, fields, route_params=merged)
+
+        # 종료 카드와 함께 누적 오류 집계 카드 1장도 같이 나가도록 (기존 유지)
         self._upsert_error_card()
         self.flush()
         self._finished_sent = True
@@ -433,12 +471,46 @@ class ChatNotifier(QObject):
             self._upsert_error_card()
             self.flush()
             return
+
+        merged = dict(self._last_started_params or {})
+        name = (merged.get("process_note")
+                or merged.get("process_name")
+                or merged.get("Process_name")
+                or "Untitled")
+
+        # 챔버 추출
+        ch_txt = ""
+        ch_val = merged.get("ch")
+        if ch_val in (None, ""):
+            ch_val = merged.get("chamber")
+        if ch_val not in (None, ""):
+            try:
+                ch_txt = f"CH{int(ch_val)}"
+            except Exception:
+                ch_txt = str(ch_val).strip() or ""
+        if not ch_txt:
+            prefix = str(merged.get("prefix", "")).strip()
+            if prefix:
+                head = prefix.split()[0]
+                if head.upper().startswith("CH"):
+                    ch_txt = head
+
+        subtitle_base = "성공" if ok else "실패"
+        fields = {"공정 이름": name}
+        if ch_txt:
+            fields = {"Chamber": ch_txt, **fields}
+            subtitle = f"{ch_txt} · {name} — {subtitle_base}"
+        else:
+            subtitle = subtitle_base
+
         self._post_card(
-            "공정 종료", "성공" if ok else "실패",
+            "공정 종료",
+            subtitle,
             "SUCCESS" if ok else "FAIL",
-            fields={"공정 이름": (self._last_started_params or {}).get("process_note", "Untitled")},
-            route_params=self._last_started_params
+            fields=fields,
+            route_params=merged
         )
+
         self._upsert_error_card()
         self.flush()
         self._finished_sent = True
