@@ -1090,7 +1090,17 @@ class HostHandlers:
                         # ✅ (추가) 0) gate lamp 먼저 확인: 이미 OPEN이면 즉시 OK (불필요 동작 방지)
                         cur_st = await self._read_gate_state(ch)
                         if cur_st["state"] == "open":
+                            # ✅ CH2: gate가 이미 OPEN이어도 main shutter는 OPEN으로 맞춰준다.
+                            if ch == 2:
+                                async with self._plc_call():
+                                    if not await self.ctx.plc.read_bit("MAIN_SHUTTER_2_인터락"):
+                                        return self._fail("MAIN_SHUTTER_2_인터락=FALSE → MAIN_SHUTTER_OPEN 불가", code="E330")
+                                    await self.ctx.plc.main_shutter(2, open=True)
+
+                                return self._ok(f"CH2_GATE_OPEN: 이미 OPEN + MAIN_SHUTTER_OPEN", current=cur_st)
+
                             return self._ok(f"CH{ch}_GATE_OPEN: 이미 OPEN 상태", current=cur_st)
+
                         if cur_st["state"] == "invalid_both_true":
                             return self._fail(
                                 f"CH{ch} gate lamp 이상(OPEN/CLOSE 모두 TRUE): {cur_st}",
@@ -1127,8 +1137,22 @@ class HostHandlers:
                         # 4) 램프 확인 — 읽는 순간만 락
                         async with self._plc_call():
                             ok = await self.ctx.plc.read_bit(lamp)
-                        return self._ok(f"CH{ch}_GATE_OPEN 완료 — {lamp}=TRUE (대기 {int(wait_s)}s)") if ok \
-                            else self._fail(f"CH{ch}_GATE_OPEN 실패 — {lamp}=FALSE (대기 {int(wait_s)}s)", code="E304")
+
+                        # ✅ gate open 실패면 여기서 끝 → MAIN_SHUTTER_OPEN 절대 안 함
+                        if not ok:
+                            return self._fail(f"CH{ch}_GATE_OPEN 실패 — {lamp}=FALSE (대기 {int(wait_s)}s)", code="E304")
+
+                        # ✅ CH2: gate open 성공했을 때만 마지막에 main shutter open
+                        if ch == 2:
+                            async with self._plc_call():
+                                if not await self.ctx.plc.read_bit("MAIN_SHUTTER_2_인터락"):
+                                    return self._fail("MAIN_SHUTTER_2_인터락=FALSE → MAIN_SHUTTER_OPEN 불가", code="E330")
+                                await self.ctx.plc.main_shutter(2, open=True)
+
+                            return self._ok(f"CH2_GATE_OPEN 완료 — {lamp}=TRUE + MAIN_SHUTTER_OPEN (대기 {int(wait_s)}s)")
+
+                        return self._ok(f"CH{ch}_GATE_OPEN 완료 — {lamp}=TRUE (대기 {int(wait_s)}s)")
+
         except Exception as e:
             # gate_open에서 예외는 대부분 PLC I/O/상태조회 계열 → E412로 정규화
             return self._fail(
@@ -1166,7 +1190,14 @@ class HostHandlers:
                     # ✅ (추가) 0) gate lamp 먼저 확인: 이미 CLOSED면 즉시 OK
                     cur_st = await self._read_gate_state(ch)
                     if cur_st["state"] == "closed":
+                        # ✅ CH2: gate가 이미 CLOSED여도 main shutter는 CLOSE로 맞춰준다.
+                        if ch == 2:
+                            async with self._plc_call():
+                                await self.ctx.plc.main_shutter(2, open=False)
+                            return self._ok("CH2_GATE_CLOSE: 이미 CLOSED + MAIN_SHUTTER_CLOSE", current=cur_st)
+
                         return self._ok(f"CH{ch}_GATE_CLOSE: 이미 CLOSED 상태", current=cur_st)
+
                     if cur_st["state"] == "invalid_both_true":
                         return self._fail(
                             f"CH{ch} gate lamp 이상(OPEN/CLOSE 모두 TRUE): {cur_st}",
@@ -1183,8 +1214,33 @@ class HostHandlers:
                     # 3) 램프 확인 — 읽는 순간만 락
                     async with self._plc_call():
                         ok = await self.ctx.plc.read_bit(lamp)
-                    return self._ok(f"CH{ch}_GATE_CLOSE 완료 — {lamp}=TRUE (대기 {int(wait_s)}s)") if ok \
-                        else self._fail(f"CH{ch}_GATE_CLOSE 실패 — {lamp}=FALSE (대기 {int(wait_s)}s)")
+
+                    # ✅ CH2: gate close 요청이면 마지막에 main shutter close는 best-effort로 시도(안전)
+                    ms_err = None
+                    if ch == 2:
+                        try:
+                            async with self._plc_call():
+                                await self.ctx.plc.main_shutter(2, open=False)
+                        except Exception as e:
+                            ms_err = e
+
+                    if ok:
+                        if ch == 2 and ms_err is not None:
+                            return self._fail(f"CH2_GATE_CLOSE는 성공했지만 MAIN_SHUTTER_CLOSE 실패: {type(ms_err).__name__}: {ms_err}", code="E331")
+                        if ch == 2:
+                            return self._ok(f"CH2_GATE_CLOSE 완료 — {lamp}=TRUE + MAIN_SHUTTER_CLOSE (대기 {int(wait_s)}s)")
+                        return self._ok(f"CH{ch}_GATE_CLOSE 완료 — {lamp}=TRUE (대기 {int(wait_s)}s)")
+
+                    # gate close 실패
+                    if ch == 2 and ms_err is None:
+                        return self._fail(f"CH2_GATE_CLOSE 실패 — {lamp}=FALSE (대기 {int(wait_s)}s) + MAIN_SHUTTER_CLOSE 시도 완료")
+                    if ch == 2 and ms_err is not None:
+                        return self._fail(
+                            f"CH2_GATE_CLOSE 실패 — {lamp}=FALSE (대기 {int(wait_s)}s) + MAIN_SHUTTER_CLOSE도 실패: {type(ms_err).__name__}: {ms_err}",
+                            code="E331",
+                        )
+                    return self._fail(f"CH{ch}_GATE_CLOSE 실패 — {lamp}=FALSE (대기 {int(wait_s)}s)")
+
                 except Exception as e:
                     return self._fail(e)
 
