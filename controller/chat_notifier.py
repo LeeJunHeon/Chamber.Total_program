@@ -328,12 +328,18 @@ class ChatNotifier(QObject):
 
         p = params or {}
 
-        # 공정 이름
-        name = p.get("process_note") or p.get("Process_name") or "Untitled"
+        # 공정 이름 (종료와 동일하게 폴백 확장)
+        name = (p.get("process_note")
+                or p.get("process_name")
+                or p.get("Process_name")
+                or "Untitled")
 
-        # 챔버 정보 (ch 또는 prefix에서 추출)
+        # 챔버 정보 (ch -> chamber -> prefix)
         ch_txt = ""
         ch_val = p.get("ch")
+        if ch_val in (None, ""):
+            ch_val = p.get("chamber")
+
         if ch_val not in (None, ""):
             try:
                 ch_txt = f"CH{int(ch_val)}"
@@ -343,7 +349,7 @@ class ChatNotifier(QObject):
         if not ch_txt:
             prefix = str(p.get("prefix", "")).strip()
             if prefix:
-                head = prefix.split()[0]  # "CH1 Sputter" → "CH1"
+                head = prefix.split()[0] # "CH1 Sputter" → "CH1"
                 if head.upper().startswith("CH"):
                     ch_txt = head
 
@@ -449,12 +455,14 @@ class ChatNotifier(QObject):
                 preview += f"\n(+{len(warns)-3}건 더)"
             fields.setdefault("주의", preview)
 
-        # ✅ (핵심) 챔버를 subtitle/fields에 반영
+        # ✅ 결과 텍스트를 fields로 이동 (subtitle은 공정명만)
+        fields = {"결과": subtitle_base, **fields}
+
         if ch_txt:
+            subtitle = f"{ch_txt} · {name}"
             fields = {"Chamber": ch_txt, **fields}
-            subtitle = f"{ch_txt} · {name} — {subtitle_base}"
         else:
-            subtitle = subtitle_base
+            subtitle = name  # 챔버가 없으면 공정명만
 
         self._post_card("공정 종료", subtitle, status, fields, route_params=merged)
 
@@ -495,13 +503,14 @@ class ChatNotifier(QObject):
                 if head.upper().startswith("CH"):
                     ch_txt = head
 
-        subtitle_base = "성공" if ok else "실패"
-        fields = {"공정 이름": name}
+        subtitle_base = "정상 종료" if ok else "오류로 종료"  # 용어도 detail쪽과 맞추기
+        fields = {"결과": subtitle_base}
+
         if ch_txt:
+            subtitle = f"{ch_txt} · {name}"
             fields = {"Chamber": ch_txt, **fields}
-            subtitle = f"{ch_txt} · {name} — {subtitle_base}"
         else:
-            subtitle = subtitle_base
+            subtitle = name
 
         self._post_card(
             "공정 종료",
