@@ -898,9 +898,16 @@ def main() -> int:
 
     w = MainWindow(loop)
     w.show()
-
-    with loop:
-        loop.run_forever()
+    
+    try:
+        with loop:
+            loop.run_forever()
+    finally:
+        # ✅ closeEvent를 안 타고 빠져나와도 Qt handler 원복
+        try:
+            uninstall_qt_message_logging(_logger)
+        except Exception:
+            pass
 
     return 0
 
