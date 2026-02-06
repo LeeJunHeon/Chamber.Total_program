@@ -69,11 +69,10 @@ def _enable_faulthandler_once(logger: logging.Logger, file_path: Path) -> None:
             return
 
         raw_fp = open(file_path, "a", encoding="utf-8", buffering=1)
-        wrapped_fp = _FaultTimestampWriter(raw_fp)
-        faulthandler.enable(file=wrapped_fp, all_threads=True)
+        faulthandler.enable(file=raw_fp, all_threads=True)
 
         # logger 객체에 붙여 GC 방지 + 종료 시 닫기
-        setattr(logger, "_vanam_fault_fp", wrapped_fp)
+        setattr(logger, "_vanam_fault_fp", raw_fp)
 
         _FAULT_ENABLED = True
 
@@ -205,7 +204,8 @@ def setup_app_logging(
     # 3) faulthandler: 같은 파일에 덧붙이기(faulthandler 덤프는 “별도 파일”로 분리)
     try:
         d = datetime.now().strftime("%Y%m%d")
-        fault_path = Path(file_handler.current_path.parent) / f"{app_name}_{d}_pid{os.getpid()}.fault.log"
+        t = datetime.now().strftime("%H%M%S")
+        fault_path = Path(file_handler.current_path.parent) / f"{app_name}_{d}_{t}_pid{os.getpid()}.fault.log"
 
         _enable_faulthandler_once(logger, fault_path)
         logger.info("faulthandler enabled -> %s (timestamp header)", fault_path)
@@ -232,6 +232,14 @@ def setup_app_logging(
                 pass
         except Exception:
             pass
+
+        # ✅ 중요: 먼저 disable
+        try:
+            faulthandler.disable()
+        except Exception:
+            pass
+
+        # ✅ 그 다음 파일 close
         try:
             fp = getattr(logger, "_vanam_fault_fp", None)
             if fp:

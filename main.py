@@ -5,6 +5,10 @@
 from host.setup import install_host
 from controller.runtime_state import runtime_state
 
+# ✅ 가장 먼저(다른 내부 모듈 import 전에)
+if sys.platform.startswith("win"):
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
 import sys, asyncio, re, atexit, logging
 from typing import Optional, Literal
 from pathlib import Path
@@ -898,7 +902,7 @@ def main() -> int:
 
     w = MainWindow(loop)
     w.show()
-    
+
     try:
         with loop:
             loop.run_forever()
@@ -916,7 +920,6 @@ if __name__ == "__main__":
     if sys.platform.startswith("win"):
         from multiprocessing import freeze_support
         freeze_support()
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
+        
     raise SystemExit(main())
 
