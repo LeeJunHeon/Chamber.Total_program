@@ -224,7 +224,7 @@ class OESAsync:
         self,
         *,
         dll_path: Optional[str] = None,
-        save_directory: str = r"C:\Users\vanam\Desktop\oes\CH2",
+        save_directory: str = r"C:\Users\vanam\Desktop\OES",
         sample_interval_s: float = 1.0,
         avg_count: int = OES_AVG_COUNT,
         debug_print: bool = DEBUG_PRINT,
@@ -471,7 +471,7 @@ class OESAsync:
 # ====== 워커 측정 로직(append+flush CSV) ======
 
 def _default_out_dir(ch: int) -> Path:
-    base = Path(r"C:\Users\vanam\Desktop\oes")
+    base = Path(r"C:\Users\vanam\Desktop\OES")
     return base / f"CH{int(ch)}"
 
 

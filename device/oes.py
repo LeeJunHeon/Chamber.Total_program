@@ -18,6 +18,7 @@ import asyncio
 import contextlib
 import json
 import os
+import csv
 import subprocess
 import sys
 import time
@@ -30,7 +31,7 @@ from typing import AsyncGenerator, Literal, Optional, List
 import numpy as np
 
 # ====== 고정 경로(사용자 요구) ======
-_LOCAL_BASE = Path(r"C:\Users\vanam\Desktop\oes")
+_LOCAL_BASE = Path(r"C:\Users\vanam\Desktop\OES")
 _NAS_BASE_CH1 = Path(r"\\VanaM_NAS\VanaM_Sputter\OES\CH1")
 _NAS_BASE_CH2 = Path(r"\\VanaM_NAS\VanaM_Sputter\OES\CH2")
 # ====================================
@@ -108,12 +109,26 @@ def _resolve_worker_command() -> List[str]:
     return ["oes_worker.exe"]
 
 
-async def _drain_stream(stream: asyncio.StreamReader) -> None:
+async def _drain_stream(
+    stream: asyncio.StreamReader,
+    sink: Optional[List[str]] = None,
+    *,
+    max_lines: int = 80,
+) -> None:
     try:
         while True:
             line = await stream.readline()
             if not line:
                 return
+            if sink is not None:
+                s = line.decode("utf-8", errors="ignore").rstrip()
+                if s:
+                    sink.append(s)
+                    # ✅ 마지막 max_lines만 유지
+                    if len(sink) > max_lines:
+                        del sink[: len(sink) - max_lines]
+    except asyncio.CancelledError:
+        return
     except Exception:
         return
 
@@ -153,10 +168,14 @@ class OESAsync:
         self._tail_task: Optional[asyncio.Task] = None
         self._stdout_task: Optional[asyncio.Task] = None
         self._stderr_task: Optional[asyncio.Task] = None
+        self._stderr_tail: List[str] = []  # ✅ stderr 마지막 N줄 보관
 
         self._out_csv_local: Optional[Path] = None
         self._x_axis: Optional[np.ndarray] = None
         self._rows_seen: int = 0
+
+        # ✅ 워커가 stdout으로 준 최종 결과(JSON)를 저장
+        self._worker_finished: Optional[dict] = None
 
     def _emit(self, ev: OESEvent) -> None:
         try:
@@ -226,6 +245,9 @@ class OESAsync:
         self._out_csv_local = out_csv
         self._x_axis = None
         self._rows_seen = 0
+        
+        # ✅ 이번 측정의 워커 결과 초기화
+        self._worker_finished = None
 
         cmd = [
             *self._worker_cmd,
@@ -253,7 +275,8 @@ class OESAsync:
             )
             assert self._proc.stdout and self._proc.stderr
 
-            self._stderr_task = asyncio.create_task(_drain_stream(self._proc.stderr))
+            self._stderr_tail.clear()
+            self._stderr_task = asyncio.create_task(_drain_stream(self._proc.stderr, self._stderr_tail))
             self._stdout_task = asyncio.create_task(self._watch_worker_stdout(self._proc.stdout))
             self._tail_task = asyncio.create_task(self._tail_csv(out_csv))
 
@@ -277,18 +300,52 @@ class OESAsync:
             await self._stop_tail()
 
             elapsed = time.time() - t0
-            ok = (rc == 0 and out_csv.exists() and out_csv.stat().st_size > 0)
+
+            # ✅ 1) 워커 finished JSON이 있으면 그 결과를 최우선 사용
+            worker_ok = None
+            worker_rows = None
+            worker_elapsed = None
+            worker_err = None
+
+            if isinstance(self._worker_finished, dict):
+                if self._worker_finished.get("kind") in ("finished", "fatal"):
+                    worker_ok = bool(self._worker_finished.get("ok", False))
+                    worker_rows = self._worker_finished.get("rows", None)
+                    worker_elapsed = self._worker_finished.get("elapsed_s", None)
+                    worker_err = self._worker_finished.get("error", None)
+
+            # ✅ 2) fallback: 워커 결과를 못 받았을 때만 기존 판정 사용
+            if worker_ok is None:
+                ok = (rc == 0 and out_csv.exists() and out_csv.stat().st_size > 0)
+            else:
+                ok = worker_ok
+
+            final_rows = int(worker_rows) if isinstance(worker_rows, (int, float)) else int(self._rows_seen)
+            final_elapsed = float(worker_elapsed) if isinstance(worker_elapsed, (int, float)) else float(elapsed)
 
             moved_path = None
             if ok:
                 moved_path = await self._move_to_nas(out_csv)
 
             if ok and moved_path:
-                self._emit(OESEvent(kind="finished", success=True, message="OES 측정 완료", out_csv=str(moved_path), rows=self._rows_seen, elapsed_s=elapsed))
+                self._emit(OESEvent(kind="finished", success=True, message="OES 측정 완료", out_csv=str(moved_path), rows=final_rows, elapsed_s=final_elapsed))
             elif ok and not moved_path:
-                self._emit(OESEvent(kind="finished", success=True, message="OES 측정 완료(로컬 저장, NAS 이동 실패)", out_csv=str(out_csv), rows=self._rows_seen, elapsed_s=elapsed))
+                self._emit(OESEvent(kind="finished", success=True, message="OES 측정 완료(로컬 저장, NAS 이동 실패)", out_csv=str(out_csv), rows=final_rows, elapsed_s=final_elapsed))
             else:
-                self._emit(OESEvent(kind="finished", success=False, message=f"OES 측정 실패(rc={rc})", out_csv=str(out_csv), rows=self._rows_seen, elapsed_s=elapsed, error=f"worker rc={rc}"))
+                extra = ""
+                if self._stderr_tail:
+                    extra = "\n[stderr tail]\n" + "\n".join(self._stderr_tail[-40:])  # ✅ 너무 길면 40줄만
+
+                base_err = str(worker_err) if worker_err else f"worker rc={rc}"
+                self._emit(OESEvent(
+                    kind="finished",
+                    success=False,
+                    message=f"OES 측정 실패(rc={rc})",
+                    out_csv=str(out_csv),
+                    rows=final_rows,
+                    elapsed_s=final_elapsed,
+                    error=base_err + extra,
+                ))
 
         except Exception as e:
             elapsed = time.time() - t0
@@ -296,6 +353,8 @@ class OESAsync:
             await self._status(f"[OES] 예외: {type(e).__name__}: {e}\n{traceback.format_exc()}")
 
         finally:
+            # ✅ 예외/타임아웃/강제종료 어떤 경우에도 tail은 반드시 정리
+            await self._stop_tail()
             await self._cleanup_proc_tasks()
             self.is_running = False
 
@@ -333,12 +392,16 @@ class OESAsync:
                     if out_csv:
                         await self._status(f"[OES] worker started: {out_csv}")
                 elif k in ("finished", "fatal"):
+                    # ✅ 최종 결과 저장(성공/실패, rows, elapsed_s, error/trace 등)
+                    self._worker_finished = obj
+
                     ok = bool(obj.get("ok", False))
                     if ok:
                         await self._status("[OES] worker finished OK")
                     else:
                         err = obj.get("error", "")
                         await self._status(f"[OES] worker finished FAIL: {err}")
+
         except Exception:
             return
 
@@ -358,26 +421,49 @@ class OESAsync:
                     if not line:
                         await asyncio.sleep(0.1)
                         continue
-                    header = [c.strip() for c in line.strip().split(",")]
+                    try:
+                        row = next(csv.reader([line]))
+                    except Exception:
+                        continue  # ✅ 헤더 줄이 깨졌으면 다음 줄 시도
+                    header = [c.strip() for c in row]
                     break
 
                 if not header or len(header) < 2:
                     return
 
                 xs = []
+                parse_err = 0
                 for c in header[1:]:
                     try:
                         xs.append(float(c))
                     except Exception:
-                        pass
-                self._x_axis = np.asarray(xs, dtype=float) if xs else np.arange(max(0, len(header) - 1), dtype=float)
+                        parse_err += 1
+
+                # ✅ 하나라도 실패하면 "부분 x축"을 쓰지 말고 안전하게 인덱스로 통일(길이 보장)
+                if parse_err > 0:
+                    self._x_axis = np.arange(max(0, len(header) - 1), dtype=float)
+                else:
+                    self._x_axis = np.asarray(xs, dtype=float) if xs else np.arange(max(0, len(header) - 1), dtype=float)
+
+                last_data_t = time.time()
 
                 while True:
                     line = f.readline()
                     if not line:
+                        # ✅ 워커가 끝났고(프로세스 종료), 3초 동안 새 데이터가 없으면 tail 종료
+                        if self._proc and (self._proc.returncode is not None):
+                            if (time.time() - last_data_t) > 3.0:
+                                return
                         await asyncio.sleep(0.1)
                         continue
-                    parts = [c.strip() for c in line.strip().split(",")]
+
+                    last_data_t = time.time()
+                    try:
+                        row = next(csv.reader([line]))
+                    except Exception:
+                        continue  # ✅ 해당 줄만 스킵하고 계속 tail
+                    parts = [c.strip() for c in row]
+
                     if len(parts) < 2:
                         continue
 
