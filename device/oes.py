@@ -61,27 +61,36 @@ def _resolve_worker_command() -> List[str]:
     워커 실행 커맨드(리스트)를 반환한다.
     우선순위:
     1) 환경변수 OES_WORKER_EXE
-    2) 배포(onefolder) 기준 실행 폴더 내 apps/oes_service/oes_api.exe
-    3) 소스 트리 기준 <project>/apps/oes_service/oes_api.exe
-    4) 개발용 fallback: python apps/oes_service/oes_api.py
+    2) 고정 배치 경로: C:\\Users\\vanam\\Desktop\\OES\\oes_worker.exe
+    3) 배포(onefolder) 기준 실행 폴더 내 apps/oes_service/oes_worker.exe
+    4) 소스 트리 기준 <project>/apps/oes_service/oes_worker.exe
+    5) 개발용 fallback: python apps/oes_service/oes_api.py
     """
+    # 1) 환경변수 (최우선)
     env = os.environ.get("OES_WORKER_EXE", "").strip()
     if env:
         p = Path(env)
         if p.is_file():
             return [str(p)]
 
+    # 2) ✅ 너가 지정한 고정 경로
+    fixed = Path(r"C:\Users\vanam\Desktop\OES\oes_worker.exe")
+    if fixed.is_file():
+        return [str(fixed)]
+
+    # 3) 배포(onefolder) 기준 후보
     exe_dir = Path(sys.argv[0]).resolve().parent
     cands = [
-        exe_dir / "apps" / "oes_service" / "oes_api.exe",
-        exe_dir / "_internal" / "apps" / "oes_service" / "oes_api.exe",
+        exe_dir / "apps" / "oes_service" / "oes_worker.exe",
+        exe_dir / "_internal" / "apps" / "oes_service" / "oes_worker.exe",
     ]
 
+    # 4) 소스 트리 기준 후보 + 개발용 python fallback
     try:
         root = Path(__file__).resolve().parents[1]
         cands += [
-            root / "apps" / "oes_service" / "oes_api.exe",
-            root / "_internal" / "apps" / "oes_service" / "oes_api.exe",
+            root / "apps" / "oes_service" / "oes_worker.exe",
+            root / "_internal" / "apps" / "oes_service" / "oes_worker.exe",
         ]
         script = root / "apps" / "oes_service" / "oes_api.py"
     except Exception:
@@ -91,10 +100,12 @@ def _resolve_worker_command() -> List[str]:
         if p.is_file():
             return [str(p)]
 
+    # 5) 개발용 fallback (exe 없을 때만)
     if script and script.is_file():
         return [sys.executable, str(script)]
 
-    return ["oes_api.exe"]
+    # 최후: PATH에서 찾도록 시도
+    return ["oes_worker.exe"]
 
 
 async def _drain_stream(stream: asyncio.StreamReader) -> None:
