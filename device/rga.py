@@ -81,7 +81,17 @@ class RGAWorkerClient:
                 raise FileNotFoundError(f"rga worker script not found: {p}")
             return (sys.executable, str(p))
 
-        # 1) Frozen(=main exe) 환경이면 '번들된 exe' 후보를 먼저 찾는다
+        # 1) 개발/배포 공통: 바탕화면\RGA\rga_worker.exe 최우선 후보
+        home = Path.home()
+        desktop_rga_candidates = [
+            home / "Desktop" / "RGA" / "rga_worker.exe",
+            home / "OneDrive" / "Desktop" / "RGA" / "rga_worker.exe",  # OneDrive 동기화 바탕화면
+        ]
+        for c in desktop_rga_candidates:
+            if c.exists():
+                return (str(c),)
+
+        # 2) Frozen(=main exe) 환경이면 '번들된 exe' 후보를 다음으로 찾는다
         if getattr(sys, "frozen", False):
             exe_dir = Path(sys.executable).resolve().parent
             candidates = [
@@ -94,32 +104,14 @@ class RGAWorkerClient:
                     return (str(c),)
             # 번들 exe가 없으면 아래(바탕화면 exe → 스크립트)로 폴백
 
-        # 2) 개발/배포 공통: 바탕화면 rga_worker.exe(고정 위치) 후보
-        home = Path.home()
+        # 3) 다음 후보: 바탕화면 바로 아래 rga_worker.exe
         desktop_candidates = [
             home / "Desktop" / "rga_worker.exe",
-            home / "OneDrive" / "Desktop" / "rga_worker.exe",  # OneDrive 동기화 바탕화면
+            home / "OneDrive" / "Desktop" / "rga_worker.exe",
         ]
         for c in desktop_candidates:
             if c.exists():
                 return (str(c),)
-
-        # 3) 마지막 폴백: python으로 스크립트 실행(기존 로직 유지)
-        root = Path(__file__).resolve().parent.parent
-        candidates = [
-            root / "tools" / "rga_worker.py",
-            root / "apps" / "rga_service" / "rga_api.py",
-        ]
-        script = None
-        for c in candidates:
-            if c.exists():
-                script = c
-                break
-        if script is None:
-            checked = " | ".join(str(p) for p in candidates)
-            raise FileNotFoundError(f"rga worker script not found. checked: {checked}")
-
-        return (sys.executable, str(script))
 
     @staticmethod
     def _parse_json_from_stdout(stdout_text: str) -> Optional[Dict[str, Any]]:
