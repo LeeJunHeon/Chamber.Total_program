@@ -48,6 +48,7 @@ from util.app_logging import (
     install_asyncio_exception_logging,
     install_warnings_logging,
     install_qt_message_logging,
+    uninstall_qt_message_logging,   # ✅ 추가
     get_app_logger,
 )
 
@@ -100,6 +101,14 @@ class MainWindow(QWidget):
         super().__init__()
         self.ui = Ui_Form()
         self.ui.setupUi(self)
+
+        # # ✅ CH2 공정 페이지 P.W Select 체크박스 항상 비활성화
+        # self.ui.ch2_powerSelect_checkbox.setEnabled(False)
+
+        # # ✅ RF Select(=Power_Select_button) 항상 비활성화
+        # if hasattr(self.ui, "Power_Select_button"):
+        #     self.ui.Power_Select_button.setEnabled(False)
+        #     self.ui.Power_Select_button.setToolTip("비활성화(고정)")
 
         # ✅ Integration Time 입력칸을 'Process Name' 입력으로 재활용 (CH1/CH2)
         #   - CSV 자동공정: Process_name 표시
@@ -272,6 +281,7 @@ class MainWindow(QWidget):
             plc=self._plc_ch2,   # ★ CH2 전용 Proxy
             chat=self.chat_ch2,  # CH2 전용 Notifier
             cfg=config_ch2,
+            supports_rf_cont=True,   # ✅ CH2 RF 연속파워 강제 사용
             log_dir=self._log_root,
             mfc=self.mfc2,
             ig=self.ig2,
@@ -403,19 +413,7 @@ class MainWindow(QWidget):
         if m.startswith("[") and "]" in m:
             src = m[1:m.index("]")].strip() or "PLC"
 
-        # ✅ PLC 로그를 메인 ServerPage에도 기록(서버프로그램과의 통신/PLC 모니터링용)
-        try:
-            sp = getattr(self, "server_page", None)
-            if sp and hasattr(sp, "append_log"):
-                origin = None
-                try:
-                    origin = PLC_ORIGIN.get()
-                except LookupError:
-                    origin = None
-                o = origin or "GLOBAL"
-                sp.append_log(f"PLC/{o}", msg[-800:])  # 너무 길면 UI 느려져서 컷
-        except Exception:
-            pass
+        self._log_global(src, msg)
 
         # 0) ContextVar에 출처가 명시되어 있으면 그쪽으로만 라우팅
         origin = None
@@ -731,6 +729,10 @@ class MainWindow(QWidget):
                     c.shutdown()
             except Exception:
                 pass
+        try:
+            uninstall_qt_message_logging(get_app_logger())
+        except Exception:
+            pass
         event.accept()
         super().closeEvent(event)
 
@@ -896,9 +898,16 @@ def main() -> int:
 
     w = MainWindow(loop)
     w.show()
-
-    with loop:
-        loop.run_forever()
+    
+    try:
+        with loop:
+            loop.run_forever()
+    finally:
+        # ✅ closeEvent를 안 타고 빠져나와도 Qt handler 원복
+        try:
+            uninstall_qt_message_logging(_logger)
+        except Exception:
+            pass
 
     return 0
 
