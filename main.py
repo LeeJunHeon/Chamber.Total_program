@@ -48,6 +48,7 @@ from util.app_logging import (
     install_asyncio_exception_logging,
     install_warnings_logging,
     install_qt_message_logging,
+    uninstall_qt_message_logging,   # ✅ 추가
     get_app_logger,
 )
 
@@ -728,6 +729,10 @@ class MainWindow(QWidget):
                     c.shutdown()
             except Exception:
                 pass
+        try:
+            uninstall_qt_message_logging(get_app_logger())
+        except Exception:
+            pass
         event.accept()
         super().closeEvent(event)
 

@@ -360,8 +360,15 @@ def install_warnings_logging(logger: logging.Logger) -> None:
         logger.exception("warnings hook failed")
 
 
+# ====== (추가) 모듈 전역에 보관 ======
+_QT_MSG_HANDLER = None
+_QT_PREV_MSG_HANDLER = None
+
+
 def install_qt_message_logging(logger: logging.Logger) -> None:
     """PySide6(Qt) 내부 warning/error/fatal 메시지 로깅"""
+    global _QT_MSG_HANDLER, _QT_PREV_MSG_HANDLER
+
     try:
         from PySide6.QtCore import QtMsgType, qInstallMessageHandler
     except Exception:
@@ -377,6 +384,7 @@ def install_qt_message_logging(logger: logging.Logger) -> None:
     }
 
     def _handler(msg_type, ctx, msg):
+        # ✅ 최대한 가볍게, 절대 예외 밖으로 던지지 않기
         try:
             lv = level_map.get(msg_type, logging.INFO)
             where = ""
@@ -390,7 +398,27 @@ def install_qt_message_logging(logger: logging.Logger) -> None:
             pass
 
     try:
-        qInstallMessageHandler(_handler)
+        # ✅ GC/종료 타이밍 크래시 방지: 전역에 강하게 보관
+        _QT_MSG_HANDLER = _handler
+        _QT_PREV_MSG_HANDLER = qInstallMessageHandler(_QT_MSG_HANDLER)
         logger.info("Qt message handler installed")
     except Exception:
         logger.exception("Qt message handler install failed")
+
+
+def uninstall_qt_message_logging(logger: Optional[logging.Logger] = None) -> None:
+    """종료 직전에 Qt message handler를 원복/해제"""
+    global _QT_MSG_HANDLER, _QT_PREV_MSG_HANDLER
+    try:
+        from PySide6.QtCore import qInstallMessageHandler
+        # 이전 핸들러가 있으면 복원, 없으면 해제(None)
+        qInstallMessageHandler(_QT_PREV_MSG_HANDLER if _QT_PREV_MSG_HANDLER is not None else None)
+        if logger:
+            logger.info("Qt message handler uninstalled/restored")
+    except Exception:
+        if logger:
+            logger.exception("Qt message handler uninstall failed")
+    finally:
+        _QT_MSG_HANDLER = None
+        _QT_PREV_MSG_HANDLER = None
+
