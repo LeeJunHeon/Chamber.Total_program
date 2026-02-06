@@ -60,12 +60,13 @@ class RGAWorkerClient:
     def _resolve_worker_cmd(self) -> Tuple[str, ...]:
         """
         실행 우선순위
-        1) worker_path가 지정되어 있으면:
+        0) worker_path가 지정되어 있으면:
         - *.exe  : 해당 exe를 직접 실행
         - *.py   : python으로 실행
-        2) worker_path 미지정이면:
-        - frozen(배포) 환경: exe_dir/tools 후보(exe 번들) 우선
-        - 개발 실행: 바탕화면/OneDrive 바탕화면의 rga_worker.exe가 있으면 그걸 우선 실행
+        1) worker_path 미지정이면:
+        - (최우선) 바탕화면\RGA\rga_worker.exe (Desktop/OneDrive Desktop 포함)
+        - frozen(배포) 환경: exe_dir/tools 후보(exe 번들)
+        - 다음 후보: 바탕화면/OneDrive 바탕화면의 rga_worker.exe
         - 마지막으로 python 스크립트 실행(프로젝트 내부 tools/rga_worker.py 또는 apps/rga_service/rga_api.py)
         """
 
@@ -81,17 +82,21 @@ class RGAWorkerClient:
                 raise FileNotFoundError(f"rga worker script not found: {p}")
             return (sys.executable, str(p))
 
-        # 1) 개발/배포 공통: 바탕화면\RGA\rga_worker.exe 최우선 후보
+        # 1) 최우선: 바탕화면\RGA\rga_worker.exe
         home = Path.home()
         desktop_rga_candidates = [
+            # 요청한 고정 경로도 1순위 후보로 포함(있으면 여기서 바로 잡힘)
+            Path(r"C:\Users\vanam\Desktop\RGA\rga_worker.exe"),
+            # 일반적인 사용자 홈 기준 Desktop
             home / "Desktop" / "RGA" / "rga_worker.exe",
-            home / "OneDrive" / "Desktop" / "RGA" / "rga_worker.exe",  # OneDrive 동기화 바탕화면
+            # OneDrive 동기화 바탕화면
+            home / "OneDrive" / "Desktop" / "RGA" / "rga_worker.exe",
         ]
         for c in desktop_rga_candidates:
             if c.exists():
                 return (str(c),)
 
-        # 2) Frozen(=main exe) 환경이면 '번들된 exe' 후보를 다음으로 찾는다
+        # 2) Frozen(=main exe) 환경이면 '번들된 exe' 후보
         if getattr(sys, "frozen", False):
             exe_dir = Path(sys.executable).resolve().parent
             candidates = [
@@ -107,11 +112,28 @@ class RGAWorkerClient:
         # 3) 다음 후보: 바탕화면 바로 아래 rga_worker.exe
         desktop_candidates = [
             home / "Desktop" / "rga_worker.exe",
-            home / "OneDrive" / "Desktop" / "rga_worker.exe",
+            home / "OneDrive" / "Desktop" / "rga_worker.exe",  # OneDrive 동기화 바탕화면
         ]
         for c in desktop_candidates:
             if c.exists():
                 return (str(c),)
+
+        # 4) 마지막 폴백: python으로 스크립트 실행(기존 로직 유지)
+        root = Path(__file__).resolve().parent.parent
+        candidates = [
+            root / "tools" / "rga_worker.py",
+            root / "apps" / "rga_service" / "rga_api.py",
+        ]
+        script = None
+        for c in candidates:
+            if c.exists():
+                script = c
+                break
+        if script is None:
+            checked = " | ".join(str(p) for p in candidates)
+            raise FileNotFoundError(f"rga worker script not found. checked: {checked}")
+
+        return (sys.executable, str(script))
 
     @staticmethod
     def _parse_json_from_stdout(stdout_text: str) -> Optional[Dict[str, Any]]:
