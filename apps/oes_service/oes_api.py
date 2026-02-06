@@ -35,18 +35,19 @@ from concurrent.futures import ThreadPoolExecutor
 
 import numpy as np
 
-# ===== sys.path 보정 (개발 실행: python apps/oes_service/oes_api.py) =====
-try:
-    _ROOT = Path(__file__).resolve().parents[2]  # CH_1_2_program/
-    if str(_ROOT) not in sys.path:
-        sys.path.insert(0, str(_ROOT))
-except Exception:
-    pass
-
 
 # ✅ 워커는 메인/프로젝트 설정에 의존하지 않도록 고정값 사용
 OES_AVG_COUNT = 3
 DEBUG_PRINT = False
+
+
+def _add_dll_search_dir(dll_path: str) -> None:
+    if os.name != "nt":
+        return
+    try:
+        os.add_dll_directory(str(Path(dll_path).resolve().parent))
+    except Exception:
+        pass
 
 
 def _print_json(obj) -> None:
@@ -184,15 +185,20 @@ def _get_dll_lock() -> asyncio.Lock:
 
 def _resolve_oes_dll_path(dll_path: Optional[str]) -> str:
     """
-    기존 방식 유지:
-    - dll_path 지정 시 그대로 사용
-    - 미지정(None) 시: 실행 폴더/_internal 등에서 후보 탐색
+    worker 단독 실행 기준:
+    1) --dll_path가 있으면 그 경로(존재할 때만)
+    2) oes_worker.exe가 있는 폴더(= sys.executable 폴더)에서 SPdbUSBm.dll 탐색
+    3) (개발용) oes_api.py가 있는 폴더에서도 탐색
+    4) 최후: "SPdbUSBm.dll" (PATH/현재폴더 의존)
     """
+    # 1) 사용자 지정 경로
     if dll_path:
-        return str(Path(dll_path))
+        p = Path(dll_path).expanduser().resolve()
+        if p.is_file():
+            return str(p)
 
-    exe_dir = Path(sys.argv[0]).resolve().parent
-    here_dir = Path(__file__).resolve().parent
+    exe_dir = _worker_base_dir()                 # frozen이면 exe 폴더
+    here_dir = Path(__file__).resolve().parent   # 개발 실행이면 스크립트 폴더
 
     candidates = [
         exe_dir / "SPdbUSBm.dll",
@@ -201,18 +207,8 @@ def _resolve_oes_dll_path(dll_path: Optional[str]) -> str:
         here_dir / "_internal" / "SPdbUSBm.dll",
     ]
 
-    for base in [here_dir, _ROOT if "_ROOT" in globals() else None]:
-        if not base:
-            continue
-        base = Path(base)
-        candidates += [
-            base / "SPdbUSBm.dll",
-            base / "device" / "SPdbUSBm.dll",
-            base / "_internal" / "SPdbUSBm.dll",
-        ]
-
     for p in candidates:
-        if p and p.is_file():
+        if p.is_file():
             return str(p)
 
     return "SPdbUSBm.dll"
@@ -330,24 +326,29 @@ class OESAsync:
                 self._get_wl.restype  = ctypes.c_int16
 
     def _scan_and_open(self) -> Tuple[int, str]:
-        self.sp_dll = ctypes.WinDLL(self._dll_path)
-        self._bind_functions()
+        try:
+            _add_dll_search_dir(self._dll_path)
+            self.sp_dll = ctypes.WinDLL(self._dll_path)
+            self._bind_functions()
 
-        r = self.sp_dll.spTestAllChannels(ctypes.c_int16(0))  # type: ignore
-        if r < 0:
-            return -1, "spTestAllChannels failed"
+            n = int(self.sp_dll.spTestAllChannels(ctypes.c_int16(0)))  # type: ignore
+            if n <= 0:
+                return -1, f"spTestAllChannels failed (n={n})"
 
-        cand = [self._usb_index] + [i for i in range(0, 8) if i != self._usb_index]
-        for ch in cand:
-            try:
-                rr = self.sp_dll.spSetupGivenChannel(ctypes.c_int16(ch))  # type: ignore
-                if rr >= 0:
-                    self.sChannel = int(ch)
-                    return 0, f"open ok: USB{ch}"
-            except Exception:
-                continue
+            ch = int(self._usb_index)
+            if ch < 0 or ch >= n:
+                return -2, f"target USB{ch} out of range (detected={n})"
 
-        return -2, "no channel opened"
+            rr = int(self.sp_dll.spSetupGivenChannel(ctypes.c_int16(ch)))  # type: ignore
+            if rr < 0:
+                return -3, f"target USB{ch} open failed (rr={rr})"
+
+            self.sChannel = ch
+            return 0, f"open ok: USB{ch}"
+
+        except Exception as e:
+            # Python 레벨 예외는 여기서 잡아서 initialize_device()가 False로 떨어지게 만들 수 있음
+            return -9, f"scan/open exception: {type(e).__name__}: {e}"
 
     def _read_pixels(self, ch: int, npix: int) -> Tuple[int, Optional[np.ndarray]]:
         assert self.sp_dll is not None
