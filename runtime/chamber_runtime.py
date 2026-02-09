@@ -377,6 +377,7 @@ class ChamberRuntime:
         # CH1 → USB0, CH2 → USB1. OESAsync 내부 기본 동작도 동일하지만 명확성을 위해 전달한다.
         _usb_index = 0 if self.ch == 1 else 1
         self.oes = OESAsync(chamber=self.ch, usb_index=_usb_index)
+        self._oes_initialized = False  # ✅ 워커 init(장치 스캔) 1회만 수행하도록 캐시
 
         # RGA: worker client (메인에서 srsinst import 안함)
         self.rga = None
@@ -652,54 +653,51 @@ class ChamberRuntime:
 
         def cb_oes_run(duration_sec: float, integration_ms: int):
             async def run():
+                # ✅ OES는 외부 워커(oes_worker.exe)로 측정한다.
+                #    - 메인 프로세스에서 DLL 로드/장비 연결을 하지 않음
+                #    - 결과(.csv)는 워커가 저장하고, stdout(JSON lines)로 스펙트럼을 스트리밍
                 try:
+                    # ✅ 공정이 멈추지 않도록 OES 이벤트 펌프는 항상 살아 있어야 함
+                    # (auto_connect 차단 상태에서도 OES step은 돌 수 있으므로 별도로 보장)
+                    self._ensure_task_alive(f"Pump.OES.{self.ch}", self._pump_oes_events)
+
+                    # (기존 동작 유지) 나머지 백그라운드 장치/펌프도 필요 시 기동
                     self._ensure_background_started()
 
-                    # 초기화
-                    try:
-                        if getattr(self.oes, "sChannel", -1) < 0:
-                            ok = await self.oes.initialize_device()
-                            if not ok:
-                                raise RuntimeError("OES 초기화 실패")
-                    except Exception as e:
-                        self.append_log("OES", f"초기화 실패: {e!r} → 종료 절차로 전환")
-                        self.process_controller.on_oes_failed("OES", f"init: {e}")
-                        return
+                    # ✅ 이전 런 잔여 이벤트(특히 finished)를 제거
+                    if hasattr(self.oes, "drain_events"):
+                        with contextlib.suppress(Exception):
+                            await self.oes.drain_events()
+
+                    # ✅ 워커 init(장치 스캔)은 1회만 수행 (실패 시 캐시 무효화)
+                    if not getattr(self, "_oes_initialized", False):
+                        ok = await self.oes.initialize_device()
+                        if not ok:
+                            raise RuntimeError("OES 초기화 실패")
+                        self._oes_initialized = True
 
                     self._soon(self._safe_clear_oes_plot)
 
-                    # 측정
-                    # 이번 런에서만 finished 이벤트를 받도록 플래그 ON
+                    # 이번 런에서만 finished 이벤트를 처리하도록 플래그 ON
                     self._oes_active = True
-                    try:
-                        # 가능하면 잔여 이벤트 드레인 (드라이버가 지원하면)
-                        if hasattr(self.oes, "drain_events"):
-                            with contextlib.suppress(Exception):
-                                await self.oes.drain_events()
 
-                        await self.oes.run_measurement(duration_sec, integration_ms)
-                    except Exception as e:
-                        self.append_log("OES", f"측정 예외: {e!r} → 종료 절차로 전환")
-                        if self.chat:
-                            with contextlib.suppress(Exception):
-                                self.chat.notify_text(f"[OES] 측정 실패: {e!r}")
-                                if hasattr(self.chat, "flush"):
-                                    self.chat.flush()
-                        self.process_controller.on_oes_failed("OES", f"measure: {e}")
-                        return
-                    finally:
-                        # finished 수신 여부와 관계없이 플래그 OFF
-                        self._oes_active = False
+                    # 측정 시작(완료/실패는 _pump_oes_events의 'finished'에서 단일 경로로 처리)
+                    await self.oes.run_measurement(duration_sec, integration_ms)
 
-                    # ✅ 정상 완료 시에는 여기서 아무 것도 호출하지 않음
-                    # (success 처리는 OES 이벤트 pump의 'finished'에서 단일 경로로)
+                    # ⚠️ 여기서 _oes_active를 끄지 않는다.
+                    # finished 이벤트가 큐에 들어온 뒤 pump가 처리할 때 끄는 게 레이스가 없다.
 
                 except Exception as e:
-                    self.append_log("OES", f"예상치 못한 예외: {e!r} → 종료 절차로 전환")
+                    # 예외/초기화 실패는 즉시 실패 처리
+                    self._oes_active = False
+                    self._oes_initialized = False  # 다음 런에서 재초기화 시도
+                    self.append_log("OES", f"OES 실패: {e!r} → 종료 절차로 전환")
                     if self.chat:
                         with contextlib.suppress(Exception):
-                            self.chat.notify_text(f"[OES] 예외: {e!r}")
-                    self.process_controller.on_oes_failed("OES", f"unexpected: {e}")
+                            self.chat.notify_text(f"[OES] 실패: {e!r}")
+                            if hasattr(self.chat, "flush"):
+                                self.chat.flush()
+                    self.process_controller.on_oes_failed("OES", str(e))
 
             self._spawn_detached(run())
 
@@ -1403,22 +1401,42 @@ class ChamberRuntime:
                     else:
                         self.append_log(f"OES{self.ch}", f"경고: 데이터 필드 없음: kind={k}")
                     continue
+                
                 elif k == "finished":
+                    # ✅ cb_oes_run()에서 _oes_active=True로 올린 '이번 런'만 처리
                     if not getattr(self, "_oes_active", False):
-                        # 이전 런의 잔여 finished가 튀는 케이스 무시
                         self.append_log(f"OES{self.ch}", "이전 런 잔여 'finished' 이벤트 무시")
                         continue
 
                     ok = bool(getattr(ev, "success", False))
+                    out_csv = getattr(ev, "out_csv", None) or getattr(ev, "csv_path", None)
+                    msg = getattr(ev, "message", None) or ("측정 완료" if ok else "measure failed")
+
                     if ok:
-                        self.append_log(f"OES{self.ch}", ev.message or "측정 완료")
+                        if out_csv:
+                            self.append_log(f"OES{self.ch}", f"{msg} (csv={out_csv})")
+                        else:
+                            self.append_log(f"OES{self.ch}", msg)
                         self._oes_active = False
                         self.process_controller.on_oes_ok()
                     else:
-                        why = getattr(ev, "message", "measure failed")
-                        self.append_log(f"OES{self.ch}", f"측정 실패: {why} → 종료 절차로 전환")
+                        # 실패면 stderr tail도 남겨서 원인 추적이 가능하게
+                        err_tail = getattr(ev, "error", None)
+                        if out_csv:
+                            self.append_log(f"OES{self.ch}", f"측정 실패: {msg} (csv={out_csv}) → 종료 절차로 전환")
+                        else:
+                            self.append_log(f"OES{self.ch}", f"측정 실패: {msg} → 종료 절차로 전환")
+
+                        if err_tail:
+                            _t = str(err_tail)
+                            if len(_t) > 2000:
+                                _t = _t[:2000] + "..."
+                            self.append_log(f"OES{self.ch}", f"워커 stderr tail:\n{_t}")
+
                         self._oes_active = False
-                        self.process_controller.on_oes_failed("OES", why)
+                        # 실패 시 다음 런에서 init을 다시 시도하도록 캐시 무효화
+                        self._oes_initialized = False
+                        self.process_controller.on_oes_failed("OES", msg)
                     continue
 
                 self.append_log(f"OES{self.ch}", f"알 수 없는 이벤트: {ev!r}")
