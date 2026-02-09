@@ -1,18 +1,29 @@
 # main.py
 # -*- coding: utf-8 -*-
+from __future__ import annotations
 
-# 추가: host 설치 유틸
-from host.setup import install_host
-from controller.runtime_state import runtime_state
-
-# ✅ 가장 먼저(다른 내부 모듈 import 전에)
-if sys.platform.startswith("win"):
-    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-
-import sys, asyncio, re, atexit, logging
+import sys
+import asyncio
+import re
+import atexit
+import logging
 from typing import Optional, Literal
 from pathlib import Path
 from contextvars import ContextVar
+
+# (선택) 개발 실행 시 import 깨짐 방지
+_BASE_DIR = Path(__file__).resolve().parent
+if str(_BASE_DIR) not in sys.path:
+    sys.path.insert(0, str(_BASE_DIR))
+
+# ✅ Windows 이벤트루프 정책은 Qt/qasync/import 전에 먼저 고정
+if sys.platform.startswith("win"):
+    asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+
+# 추가: host 설치 유틸
+# ✅ 내부 모듈 import는 그 다음
+from host.setup import install_host
+from controller.runtime_state import runtime_state
 
 from PySide6.QtWidgets import QApplication, QWidget, QStackedWidget, QPlainTextEdit, QTextEdit
 from PySide6.QtCore import Qt, QTimer
@@ -895,6 +906,11 @@ def main() -> int:
 
     install_qt_message_logging(_logger)
 
+    try:
+        app.aboutToQuit.connect(lambda: uninstall_qt_message_logging(_logger))
+    except Exception:
+        pass
+
     loop = QEventLoop(app)
     asyncio.set_event_loop(loop)
 
@@ -920,6 +936,6 @@ if __name__ == "__main__":
     if sys.platform.startswith("win"):
         from multiprocessing import freeze_support
         freeze_support()
-        
+
     raise SystemExit(main())
 

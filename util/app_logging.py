@@ -146,6 +146,10 @@ class _DailyFileHandler(logging.Handler):
 
                 msg = self.format(record)
                 self._stream.write(msg + "\n")
+                try:
+                    self._stream.flush()
+                except Exception:
+                    pass
         except Exception:
             # 로깅 중 예외는 절대 앱을 죽이면 안 됨
             pass
@@ -208,7 +212,7 @@ def setup_app_logging(
         fault_path = Path(file_handler.current_path.parent) / f"{app_name}_{d}_{t}_pid{os.getpid()}.fault.log"
 
         _enable_faulthandler_once(logger, fault_path)
-        logger.info("faulthandler enabled -> %s (timestamp header)", fault_path)
+        logger.info("faulthandler enabled -> %s", fault_path)
 
         # ⬇️ (옵션) 응답없음/멈춤 진단용: 일정 시간마다 스택 덤프
         # 환경변수 VANAM_HANG_DUMP_S=120 같은 식으로 켜기(초 단위)
