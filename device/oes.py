@@ -191,6 +191,17 @@ class OESAsync:
             ev = await self._ev_q.get()
             yield ev
 
+    async def drain_events(self) -> int:
+        """이전 런에서 남아있는 이벤트(특히 finished)를 비우기 위한 드레인."""
+        n = 0
+        try:
+            while True:
+                self._ev_q.get_nowait()
+                n += 1
+        except asyncio.QueueEmpty:
+            pass
+        return n
+
     async def initialize_device(self) -> bool:
         cmd = [
             *self._worker_cmd,
