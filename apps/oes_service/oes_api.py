@@ -36,6 +36,98 @@ from concurrent.futures import ThreadPoolExecutor
 import numpy as np
 
 
+# NAS 저장 경로 (고정)
+_NAS_OES_ROOT = Path(r"\\VanaM_NAS\VanaM_Sputter\OES")
+_NAS_CH_DIR = {
+    1: _NAS_OES_ROOT / "CH1",
+    2: _NAS_OES_ROOT / "CH2",
+}
+
+def _nas_dir_for_ch(ch: int) -> Path:
+    try:
+        return _NAS_CH_DIR[int(ch)]
+    except Exception:
+        raise ValueError(f"Invalid chamber: {ch} (expected 1 or 2)")
+
+async def _copy_csv_to_nas(local_csv: Path, ch: int, *, timeout_s: float = 120.0):
+    """
+    로컬 CSV -> NAS(CH별 고정 폴더)로 복사(검증 포함)
+    return: (nas_ok:bool, nas_csv:Path|None, nas_error:str|None, local_deleted:bool)
+    """
+    try:
+        dest_dir = _nas_dir_for_ch(int(ch))
+    except Exception as e:
+        return False, None, f"nas_dir error: {e}", False
+
+    try:
+        dest_dir.mkdir(parents=True, exist_ok=True)
+    except Exception as e:
+        return False, None, f"nas mkdir failed: {e}", False
+
+    dest_csv = dest_dir / local_csv.name
+
+    # Windows: robocopy가 네트워크에서 가장 안정적
+    if os.name == "nt":
+        CREATE_NO_WINDOW = 0x08000000
+        cmd = [
+            "robocopy",
+            str(local_csv.parent),
+            str(dest_dir),
+            local_csv.name,
+            "/R:2", "/W:1",
+            "/NFL", "/NDL", "/NJH", "/NJS", "/NP",
+        ]
+        try:
+            p = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                creationflags=CREATE_NO_WINDOW,
+            )
+            try:
+                out_b, err_b = await asyncio.wait_for(p.communicate(), timeout=timeout_s)
+            except asyncio.TimeoutError:
+                with contextlib.suppress(Exception):
+                    p.kill()
+                return False, None, "robocopy timeout", False
+
+            rc = p.returncode if p.returncode is not None else 999
+            # robocopy: 0~7 = 성공 범주, 8 이상 = 실패
+            if rc >= 8:
+                out = (out_b or b"").decode(errors="ignore")[-2000:]
+                err = (err_b or b"").decode(errors="ignore")[-2000:]
+                return False, None, f"robocopy failed rc={rc} out={out} err={err}", False
+        except Exception as e:
+            return False, None, f"robocopy exception: {e}", False
+
+    else:
+        # 비-Windows: shutil.copy2 사용(필요시)
+        try:
+            import shutil
+            shutil.copy2(local_csv, dest_csv)
+        except Exception as e:
+            return False, None, f"copy2 failed: {e}", False
+
+    # 검증: 파일 존재 + 크기 동일
+    try:
+        if not dest_csv.exists():
+            return False, None, f"nas file not found: {dest_csv}", False
+        if dest_csv.stat().st_size != local_csv.stat().st_size:
+            return False, None, "size mismatch after copy", False
+    except Exception as e:
+        return False, None, f"verify failed: {e}", False
+
+    # 로컬 삭제 시도(※ oes.py tail이 열고 있으면 Windows에서 실패할 수 있음)
+    local_deleted = False
+    try:
+        local_csv.unlink()
+        local_deleted = True
+    except Exception:
+        local_deleted = False
+
+    return True, dest_csv, None, local_deleted
+
+
 # ✅ 워커는 메인/프로젝트 설정에 의존하지 않도록 고정값 사용
 OES_AVG_COUNT = 3
 DEBUG_PRINT = False
@@ -631,15 +723,31 @@ async def cmd_measure(
 
         elapsed = time.time() - t0
 
+        # ✅ NAS 복사 전에 마지막 기록을 확정 (파일 측면)
+        with contextlib.suppress(Exception):
+            if f:
+                f.flush()
+                os.fsync(f.fileno())   # ← 핵심(가능하면)
+                f.close()
+                f = None
+
+        # ✅ 그 다음 장비/DLL 정리 (장비 측면)
         with contextlib.suppress(Exception):
             await oes.cleanup()
+
+        # ✅ out_csv가 Path로 이미 확정되어 있으니 그걸 사용
+        nas_ok, nas_csv, nas_error, local_deleted = await _copy_csv_to_nas(out_csv, int(ch))
 
         _print_json({
             "kind": "finished",
             "ok": True,
             "ch": int(ch),
             "usb": int(usb),
-            "out_csv": str(out_csv),
+            "out_csv": str(out_csv),                       # 로컬(실시간 tail용)
+            "nas_ok": bool(nas_ok),
+            "nas_csv": str(nas_csv) if nas_csv else None,  # NAS 최종 경로
+            "nas_error": nas_error,
+            "local_deleted": bool(local_deleted),
             "rows": int(rows),
             "elapsed_s": float(elapsed),
         })

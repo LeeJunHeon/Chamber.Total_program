@@ -655,7 +655,9 @@ class ChamberRuntime:
             async def run():
                 # ✅ OES는 외부 워커(oes_worker.exe)로 측정한다.
                 #    - 메인 프로세스에서 DLL 로드/장비 연결을 하지 않음
-                #    - 결과(.csv)는 워커가 저장하고, stdout(JSON lines)로 스펙트럼을 스트리밍
+                #    - 워커가 로컬 CSV를 append+flush로 기록
+                #    - 메인(OESAsync)이 CSV를 tail 해서 실시간 스펙트럼 이벤트를 발행
+                #    - 종료 시 워커가 NAS 복사 후 finished(JSON)로 결과 통지
                 try:
                     # ✅ 공정이 멈추지 않도록 OES 이벤트 펌프는 항상 살아 있어야 함
                     # (auto_connect 차단 상태에서도 OES step은 돌 수 있으므로 별도로 보장)
@@ -1401,7 +1403,7 @@ class ChamberRuntime:
                     else:
                         self.append_log(f"OES{self.ch}", f"경고: 데이터 필드 없음: kind={k}")
                     continue
-                
+
                 elif k == "finished":
                     # ✅ cb_oes_run()에서 _oes_active=True로 올린 '이번 런'만 처리
                     if not getattr(self, "_oes_active", False):
