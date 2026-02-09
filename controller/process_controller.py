@@ -691,12 +691,15 @@ class ProcessController:
         if a == ActionType.DC_POWER_SET:
             self._send_dc_power(float(step.value))
             tokens.append(ExpectToken("DC_TARGET"))
+
         elif a == ActionType.DC_POWER_STOP:
             self._stop_dc_power()
             tokens.append(ExpectToken("GENERIC_OK"))  # 하위 호환
+
         elif a == ActionType.RF_POWER_SET:
             self._send_rf_power(float(step.value))
             tokens.append(ExpectToken("RF_TARGET"))
+
         elif a == ActionType.RF_POWER_STOP:
             self._stop_rf_power()
             tokens.append(ExpectToken("GENERIC_OK"))  # 하위 호환
@@ -707,6 +710,7 @@ class ProcessController:
             duty = step.params[1] if step.params else None
             self._start_dc_pulse(power, freq, duty)
             tokens.append(ExpectToken("DC_PULSE_TARGET"))
+
         elif a == ActionType.DC_PULSE_STOP:
             self._stop_dc_pulse()
             tokens.append(ExpectToken("DCPULSE_OFF"))
@@ -717,6 +721,7 @@ class ProcessController:
             duty = step.params[1] if step.params else None
             self._start_rf_pulse(power, freq, duty)
             tokens.append(ExpectToken("RF_TARGET"))
+
         elif a == ActionType.RF_PULSE_STOP:
             self._stop_rf_pulse()
             tokens.append(ExpectToken("RFPULSE_OFF"))
@@ -724,23 +729,28 @@ class ProcessController:
         elif a == ActionType.IG_CMD:
             self._ig_wait(float(step.value))
             tokens.append(ExpectToken("IG_OK"))
+
         elif a == ActionType.RGA_SCAN:
             self._rga_scan()
             tokens.append(ExpectToken("RGA_OK"))
+
         elif a == ActionType.PLC_CMD:
             name, on, *rest = step.params
-            ch = int(rest[0]) if rest else 1
+            ch = int(rest[0]) if rest else self._ch
             nname = self._norm_plc_name(name)
             self._send_plc(nname, on, ch)
             tokens.append(ExpectToken("PLC", nname))
+
         elif a == ActionType.MFC_CMD:
             cmd, args = step.params
             self._send_mfc(cmd, dict(args))
             tokens.append(ExpectToken("MFC", cmd))
+
         elif a == ActionType.OES_RUN:
             dur_sec, integ_ms = step.params
             self._oes_run(float(dur_sec), int(integ_ms))
             # OES는 no_wait로 운용(별도 토큰 없음)
+
         else:
             raise ValueError(f"알 수 없는 Action: {a}")
 
@@ -1079,7 +1089,10 @@ class ProcessController:
         process_time_sec = process_time_min * 60.0
         dc_power = float(params.get("dc_power", 0))
         rf_power = float(params.get("rf_power", 0))
-        integration_ms = int(params.get("integration_time", 60))
+        try:
+            integration_ms = int(float(params.get("integration_time", 60)))
+        except Exception:
+            integration_ms = 60
 
         steps: List[ProcessStep] = []
 
