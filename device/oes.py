@@ -32,8 +32,6 @@ import numpy as np
 
 # ====== 고정 경로(사용자 요구) ======
 _LOCAL_BASE = Path(r"C:\Users\vanam\Desktop\OES")
-_NAS_BASE_CH1 = Path(r"\\VanaM_NAS\VanaM_Sputter\OES\CH1")
-_NAS_BASE_CH2 = Path(r"\\VanaM_NAS\VanaM_Sputter\OES\CH2")
 # ====================================
 
 EventKind = Literal["status", "data", "finished"]
@@ -158,7 +156,6 @@ class OESAsync:
         self._local_dir = _LOCAL_BASE / f"CH{self._ch}"
         self._local_dir.mkdir(parents=True, exist_ok=True)
 
-        self._nas_dir = _NAS_BASE_CH1 if self._ch == 1 else _NAS_BASE_CH2
         self._worker_cmd = _resolve_worker_command()
 
         self._ev_q: asyncio.Queue[OESEvent] = asyncio.Queue(maxsize=2048)
@@ -168,11 +165,14 @@ class OESAsync:
         self._tail_task: Optional[asyncio.Task] = None
         self._stdout_task: Optional[asyncio.Task] = None
         self._stderr_task: Optional[asyncio.Task] = None
-        self._stderr_tail: List[str] = []  # ✅ stderr 마지막 N줄 보관
 
         self._out_csv_local: Optional[Path] = None
         self._x_axis: Optional[np.ndarray] = None
         self._rows_seen: int = 0
+
+        # stderr 마지막 N줄(라인 단위)만 보관
+        self._stderr_tail: List[str] = []
+        self._stderr_tail_max_lines: int = 50  # 원하는 값
 
         # ✅ 워커가 stdout으로 준 최종 결과(JSON)를 저장
         self._worker_finished: Optional[dict] = None
@@ -191,15 +191,16 @@ class OESAsync:
             ev = await self._ev_q.get()
             yield ev
 
-    async def drain_events(self) -> int:
-        """이전 런에서 남아있는 이벤트(특히 finished)를 비우기 위한 드레인."""
+    async def drain_events(self, max_items: int = 10000) -> int:
+        """이전 run의 이벤트 찌꺼기를 비워 다음 run 오동작을 방지."""
         n = 0
-        try:
-            while True:
+        while n < max_items:
+            try:
                 self._ev_q.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+            else:
                 n += 1
-        except asyncio.QueueEmpty:
-            pass
         return n
 
     async def initialize_device(self) -> bool:
@@ -237,7 +238,7 @@ class OESAsync:
                 await proc.wait()
             finally:
                 stderr_task.cancel()
-                with contextlib.suppress(Exception):
+                with contextlib.suppress(asyncio.CancelledError, Exception):
                     await stderr_task
 
             await self._status(f"[OES] init {'OK' if ok else 'FAIL'} (CH{self._ch}/USB{self._usb})")
@@ -287,7 +288,9 @@ class OESAsync:
             assert self._proc.stdout and self._proc.stderr
 
             self._stderr_tail.clear()
-            self._stderr_task = asyncio.create_task(_drain_stream(self._proc.stderr, self._stderr_tail))
+            self._stderr_task = asyncio.create_task(
+                _drain_stream(self._proc.stderr, self._stderr_tail, max_lines=self._stderr_tail_max_lines)
+            )
             self._stdout_task = asyncio.create_task(self._watch_worker_stdout(self._proc.stdout))
             self._tail_task = asyncio.create_task(self._tail_csv(out_csv))
 
@@ -334,29 +337,57 @@ class OESAsync:
             final_rows = int(worker_rows) if isinstance(worker_rows, (int, float)) else int(self._rows_seen)
             final_elapsed = float(worker_elapsed) if isinstance(worker_elapsed, (int, float)) else float(elapsed)
 
-            moved_path = None
-            if ok:
-                moved_path = await self._move_to_nas(out_csv)
+            nas_ok = False
+            nas_csv = None
+            nas_error = None
+            local_deleted = False
 
-            if ok and moved_path:
-                self._emit(OESEvent(kind="finished", success=True, message="OES 측정 완료", out_csv=str(moved_path), rows=final_rows, elapsed_s=final_elapsed))
-            elif ok and not moved_path:
-                self._emit(OESEvent(kind="finished", success=True, message="OES 측정 완료(로컬 저장, NAS 이동 실패)", out_csv=str(out_csv), rows=final_rows, elapsed_s=final_elapsed))
-            else:
-                extra = ""
+            if isinstance(self._worker_finished, dict):
+                nas_ok = bool(self._worker_finished.get("nas_ok", False))
+                nas_csv = self._worker_finished.get("nas_csv")
+                nas_error = self._worker_finished.get("nas_error")
+                local_deleted = bool(self._worker_finished.get("local_deleted", False))
+
+            final_path = out_csv
+            msg = "OES 측정 완료"
+
+            if ok and nas_ok and nas_csv:
+                final_path = Path(nas_csv)
+                msg = "OES 측정 완료(NAS 저장)"
+            elif ok and (not nas_ok):
+                # 워커가 NAS 복사를 시도했는데 실패한 경우(또는 워커가 구버전이라 필드 없음)
+                if nas_error:
+                    msg = f"OES 측정 완료(로컬 저장, NAS 실패: {nas_error})"
+                else:
+                    msg = "OES 측정 완료(로컬 저장, NAS 미확인)"
+
+            # 워커가 로컬 삭제를 못했으면(메인이 열고 있었을 가능성) tail 종료 후 여기서 삭제 시도
+            if ok and nas_ok and out_csv.exists() and (not local_deleted):
+                with contextlib.suppress(Exception):
+                    out_csv.unlink()
+                    local_deleted = True
+
+            # 실패 시 에러 메시지 구성(워커 error + stderr tail)
+            err_msg = None
+            if not ok:
+                parts = []
+                if worker_err:
+                    parts.append(str(worker_err))
                 if self._stderr_tail:
-                    extra = "\n[stderr tail]\n" + "\n".join(self._stderr_tail[-40:])  # ✅ 너무 길면 40줄만
+                    parts.append("stderr_tail:\n" + "\n".join(self._stderr_tail[-50:]))
+                if not parts:
+                    parts.append(f"worker rc={rc}")
+                err_msg = "\n".join(parts)
 
-                base_err = str(worker_err) if worker_err else f"worker rc={rc}"
-                self._emit(OESEvent(
-                    kind="finished",
-                    success=False,
-                    message=f"OES 측정 실패(rc={rc})",
-                    out_csv=str(out_csv),
-                    rows=final_rows,
-                    elapsed_s=final_elapsed,
-                    error=base_err + extra,
-                ))
+            self._emit(OESEvent(
+                kind="finished",
+                success=bool(ok),
+                message=msg if ok else f"OES 측정 실패(rc={rc})",
+                out_csv=str(final_path),
+                rows=final_rows,
+                elapsed_s=final_elapsed,
+                error=err_msg,
+            ))
 
         except Exception as e:
             elapsed = time.time() - t0
@@ -507,7 +538,7 @@ class OESAsync:
     async def _stop_tail(self) -> None:
         if self._tail_task:
             self._tail_task.cancel()
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await self._tail_task
             self._tail_task = None
 
@@ -516,7 +547,7 @@ class OESAsync:
             t = getattr(self, name)
             if t:
                 t.cancel()
-                with contextlib.suppress(Exception):
+                with contextlib.suppress(asyncio.CancelledError, Exception):
                     await t
                 setattr(self, name, None)
 
@@ -525,67 +556,3 @@ class OESAsync:
                 self._proc.kill()
                 await self._proc.wait()
         self._proc = None
-
-    async def _move_to_nas(self, local_csv: Path, timeout_s: float = 30.0) -> Optional[Path]:
-        nas_dir = self._nas_dir
-        dest = nas_dir / local_csv.name
-
-        try:
-            nas_dir.mkdir(parents=True, exist_ok=True)
-        except Exception:
-            await self._status("[OES] NAS 폴더 생성 실패 → 로컬 유지")
-            return None
-
-        if os.name == "nt":
-            cmd = [
-                "robocopy",
-                str(local_csv.parent),
-                str(nas_dir),
-                local_csv.name,
-                "/R:1", "/W:1",
-                "/NFL", "/NDL", "/NJH", "/NJS", "/NP",
-            ]
-            try:
-                proc = await asyncio.create_subprocess_exec(
-                    *cmd,
-                    stdout=asyncio.subprocess.PIPE,
-                    stderr=asyncio.subprocess.PIPE,
-                    creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
-                )
-                try:
-                    await asyncio.wait_for(proc.wait(), timeout=timeout_s)
-                except asyncio.TimeoutError:
-                    with contextlib.suppress(Exception):
-                        proc.kill()
-                    await self._status("[OES] NAS 복사 timeout → 로컬 유지")
-                    return None
-
-                rc = int(proc.returncode or 0)
-                if rc >= 8:
-                    await self._status(f"[OES] NAS 복사 실패(rc={rc}) → 로컬 유지")
-                    return None
-            except Exception as e:
-                await self._status(f"[OES] NAS 복사 예외({type(e).__name__}) → 로컬 유지")
-                return None
-        else:
-            try:
-                import shutil
-                shutil.copy2(local_csv, dest)
-            except Exception:
-                return None
-
-        try:
-            if not dest.exists():
-                return None
-            if dest.stat().st_size != local_csv.stat().st_size:
-                return None
-        except Exception:
-            return None
-
-        try:
-            local_csv.unlink()
-        except Exception:
-            pass
-
-        await self._status(f"[OES] NAS 이동 완료: {dest}")
-        return dest
