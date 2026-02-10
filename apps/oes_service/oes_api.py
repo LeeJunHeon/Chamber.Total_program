@@ -150,20 +150,43 @@ def _add_dll_search_dir(dll_path: str) -> None:
 
 
 _STDOUT_BROKEN = False
+_JSON_LOCK = Lock()
 
 def _print_json(obj) -> None:
-    global _STDOUT_BROKEN
-    s = json.dumps(obj, ensure_ascii=False) + "\n"
+    """
+    JSONL 출력(부모 프로세스가 stdout pipe로 파싱).
 
-    if _STDOUT_BROKEN:
-        return
+    Windows/PyInstaller 환경에서 stdout 핸들이 깨져 있거나(Invalid argument 등),
+    부모가 먼저 종료되어 pipe가 닫힌 경우에도 워커가 여기서 '크래시' 하지 않도록
+    반드시 예외를 삼킨다.
+    """
+    global _STDOUT_BROKEN
+    s = json.dumps(obj, ensure_ascii=False)
 
     try:
-        sys.stdout.write(s)
-        sys.stdout.flush()
-    except (BrokenPipeError, OSError):
-        # stdout이 깨졌으면 워커가 여기서 죽지 않게 막는다
+        with _JSON_LOCK:
+            if _STDOUT_BROKEN:
+                raise OSError(22, "stdout already marked broken")
+
+            payload = (s + "\n").encode("utf-8", errors="backslashreplace")
+
+            # buffer가 있으면(대부분) 인코딩 문제도 줄고 더 안전
+            if getattr(sys.stdout, "buffer", None):
+                sys.stdout.buffer.write(payload)
+                sys.stdout.buffer.flush()
+            else:
+                sys.stdout.write(s + "\n")
+                sys.stdout.flush()
+
+    except Exception as e:
         _STDOUT_BROKEN = True
+        # 워커는 절대 여기서 죽으면 안 됨 → 파일 로그로만 남김
+        with contextlib.suppress(Exception):
+            _errlog_exc(f"_print_json failed: {type(e).__name__}: {e} kind={obj.get('kind') if isinstance(obj, dict) else None}")
+        # 마지막 시도: stderr (부모가 stderr를 읽는다면 확인 가능)
+        with contextlib.suppress(Exception):
+            sys.stderr.write(s + "\n")
+            sys.stderr.flush()
 
 
 # ================= 오류 로거 =================
@@ -494,29 +517,62 @@ class OESAsync:
                 self._get_wl.restype  = ctypes.c_int16
 
     def _scan_and_open(self) -> Tuple[int, str]:
+        info = {
+            "dll_path": self._dll_path,
+            "dll_exists": Path(self._dll_path).is_file(),
+            "target_usb_index": int(self._usb_index),
+        }
+
         try:
             _add_dll_search_dir(self._dll_path)
             self.sp_dll = ctypes.WinDLL(self._dll_path)
             self._bind_functions()
 
             n = int(self.sp_dll.spTestAllChannels(ctypes.c_int16(0)))
-            self._detected_channels = int(n)
+            info["detected_count"] = int(n)
 
             if n <= 0:
-                return -1, f"spTestAllChannels failed (n={n})"
+                msg = f"spTestAllChannels returned {n} (no device?)"
+                self._last_scan = info
+                self._last_error = msg
+                return -10, msg
 
-            ch = int(self._usb_index)
-            if ch < 0 or ch >= n:
-                return -2, f"target USB{ch} out of range (detected={n})"
+            usb = int(self._usb_index)
+            if usb < 0 or usb >= n:
+                msg = f"usb_index out of range: usb_index={usb}, detected={n}"
+                self._last_scan = info
+                self._last_error = msg
+                return -11, msg
 
-            rr = int(self.sp_dll.spSetupGivenChannel(ctypes.c_int16(ch)))
+            rr = int(self.sp_dll.spSetupGivenChannel(ctypes.c_int16(usb)))
+            info["spSetupGivenChannel"] = int(rr)
             if rr < 0:
-                return -3, f"target USB{ch} open failed (rr={rr})"
+                msg = f"spSetupGivenChannel failed: rr={rr}"
+                self._last_scan = info
+                self._last_error = msg
+                return -12, msg
 
-            self.sChannel = ch
-            return 0, f"open ok: USB{ch}"
+            # ✅ 일부 장비/드라이버 조합에서 Init 호출이 필요할 수 있음
+            rr2 = int(self.sp_dll.spInitGivenChannel(ctypes.c_int16(0), ctypes.c_int16(usb)))
+            info["spInitGivenChannel"] = int(rr2)
+            if rr2 < 0:
+                msg = f"spInitGivenChannel failed: rr={rr2}"
+                self._last_scan = info
+                self._last_error = msg
+                return -13, msg
+
+            self.sChannel = int(usb)
+            msg = f"open ok: USB{usb}"
+            self._last_scan = info
+            self._last_error = ""
+            return 0, msg
+
         except Exception as e:
-            return -9, f"scan/open exception: {type(e).__name__}: {e}"
+            msg = f"scan/open exception: {type(e).__name__}: {e}"
+            info["exception"] = msg
+            self._last_scan = info
+            self._last_error = msg
+            return -99, msg
         
     def _read_pixels(self, ch: int, npix: int) -> Tuple[int, Optional[np.ndarray]]:
         assert self.sp_dll is not None
@@ -571,20 +627,19 @@ class OESAsync:
 
     async def initialize_device(self) -> bool:
         r, msg = await self._call(self._scan_and_open)
-        self._last_scan_code = int(r)
-        self._last_scan_msg = str(msg)
-
         if r < 0 or self.sChannel < 0 or self.sp_dll is None:
-            self._last_error = self._last_scan_msg
+            self._last_error = self._last_error or msg
             return False
 
         try:
             self._npix = await self._call(self._ensure_npixels, int(self.sChannel))
+            if not self._npix or int(self._npix) <= 0:
+                self._last_error = f"npixels invalid: {self._npix}"
+                return False
         except Exception as e:
-            self._last_error = f"ensure_npixels failed: {type(e).__name__}: {e}"
+            self._last_error = f"ensure_npixels exception: {type(e).__name__}: {e}"
             return False
 
-        self._last_error = ""
         return True
 
     def _acquire_one_slice_avg(self):
@@ -692,27 +747,25 @@ async def cmd_init(ch: int, usb: int, dll_path: Optional[str], out_dir: Optional
         oes = OESAsync(chamber=int(ch), usb_index=int(usb), dll_path=dll_path, save_directory=str(temp_dir))
         ok = await oes.initialize_device()
 
-        _print_json({
+        payload = {
             "kind": "init",
             "ok": bool(ok),
             "ch": int(ch),
             "usb": int(usb),
             "resolved_usb": int(getattr(oes, "sChannel", -1)),
-            "model": str(getattr(oes, "_model_name", "UNKNOWN")),
-            "pixels": int(getattr(oes, "_npix", 0)),
-            "dll_resolved": dll_resolved,
-            "dll_exists": bool(dll_exists),
-            
-            # ✅ 추가
-            "detected_channels": int(getattr(oes, "_detected_channels", 0)),
-            "scan_code": int(getattr(oes, "_last_scan_code", 0)),
-            "scan_msg": str(getattr(oes, "_last_scan_msg", "")),
-            "error": str(getattr(oes, "_last_error", "")),
-        })
+            "pixels": int(getattr(oes, "_npix", 0) or 0),
+            "dll_resolved": str(getattr(oes, "_dll_path", "")),
+            "dll_exists": bool(Path(getattr(oes, "_dll_path", "")).is_file()),
+        }
+
+        if not ok:
+            payload["error"] = str(getattr(oes, "_last_error", "")) or "initialize_device failed"
+            payload["scan"] = getattr(oes, "_last_scan", {}) or {}
 
         with contextlib.suppress(Exception):
             await oes.cleanup()
 
+        _print_json(payload)
         return 0 if ok else 2
 
     except Exception as e:

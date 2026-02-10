@@ -203,110 +203,149 @@ class OESAsync:
                 n += 1
         return n
 
-    async def initialize_device(self) -> bool:
-        # ✅ 워커 경로는 매번 재계산(배치 바뀌는 경우 디버깅에 유리)
-        self._worker_cmd = _resolve_worker_command()
+    async def initialize_device(self, *, timeout_s: float = 20.0, force: bool = False) -> bool:
+        """
+        워커(cmd=init)를 한 번 실행해서 장치/드라이버/DLL 상태를 사전 점검한다.
+        - 성공 시: self._init_ok=True 로 캐시
+        - 실패 시: self._init_error / scan 정보 로그로 남김
+        """
+        if self._init_done and self._init_ok and not force:
+            return True
 
-        cmd = [
-            *self._worker_cmd,
-            "--cmd", "init",
-            "--ch", str(self._ch),
-            "--usb", str(self._usb),
-            # ✅ 중요: 워커 init도 out_dir를 받게 해서 "vanam 고정경로" 문제 제거
-            "--out_dir", str(self._local_dir),
-        ]
+        async with self._init_lock:
+            if self._init_task and not self._init_task.done():
+                return await self._init_task
+
+            self._init_task = asyncio.create_task(self._initialize_device_impl(timeout_s=timeout_s, force=force))
+            return await self._init_task
+
+
+    async def _initialize_device_impl(self, *, timeout_s: float, force: bool) -> bool:
+        cmd = [*self._worker_cmd, "--cmd", "init", "--ch", str(self._ch), "--usb", str(self._usb)]
         if self._dll_path:
             cmd += ["--dll_path", str(self._dll_path)]
 
-        worker_exe = Path(self._worker_cmd[0])
-        await self._status(
-            "[OES] init spawn\n"
-            f"  worker={worker_exe}\n"
-            f"  exists={worker_exe.exists()}\n"
-            f"  cmd={cmd}\n"
-            f"  base_dir={_main_exe_dir()}\n"
-            f"  cwd={Path.cwd()}\n"
-            f"  argv0={sys.argv[0]}\n"
-            f"  sys.executable={sys.executable}"
-        )
-        if not worker_exe.exists():
-            await self._status("[OES] 워커 exe 없음 → init 실패")
-            return False
+        self._init_done = False
+        self._init_ok = False
+        self._init_result = None
+        self._init_error = None
 
-        # ✅ init 무한대기 방지
-        init_timeout_s = float(os.environ.get("OES_INIT_TIMEOUT_S", "60"))
+        stderr_tail: List[str] = []
+        init_obj: Optional[dict] = None
+        proc: Optional[asyncio.subprocess.Process] = None
 
-        creationflags = _worker_creationflags()
+        show_console = os.environ.get("OES_WORKER_SHOW_CONSOLE", "0").strip() in ("1", "true", "True")
+        creationflags = 0
+        if os.name == "nt" and not show_console:
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
 
         try:
-            env = os.environ.copy()
-            env["PYTHONUNBUFFERED"] = "1"
-
-            # 워커 exe 폴더에서 실행(로그/log 폴더도 그쪽에 생김)
-            worker_dir = str(Path(self._worker_cmd[0]).resolve().parent)
+            await self._status(f"[OES] init spawn ch={self._ch} usb={self._usb} cmd={cmd}")
 
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 creationflags=creationflags,
-                cwd=worker_dir,
-                env=env,
             )
 
-            assert proc.stdout and proc.stderr
+            stderr_task = asyncio.create_task(_drain_stream(proc.stderr, stderr_tail, max_lines=80))
 
-            # ✅ init에서도 stderr tail 저장
-            self._stderr_tail.clear()
-            stderr_task = asyncio.create_task(
-                _drain_stream(proc.stderr, self._stderr_tail, max_lines=self._stderr_tail_max_lines)
-            )
+            deadline = asyncio.get_event_loop().time() + float(timeout_s)
+            while True:
+                remain = deadline - asyncio.get_event_loop().time()
+                if remain <= 0:
+                    raise asyncio.TimeoutError()
 
-            async def _wait_init() -> bool:
-                while True:
-                    line = await proc.stdout.readline()
-                    if not line:
-                        return False
-                    try:
-                        obj = json.loads(line.decode("utf-8", errors="ignore").strip())
-                    except Exception:
-                        continue
-                    if obj.get("kind") == "init":
-                        return bool(obj.get("ok", False))
-                    # 워커가 status를 주면 그대로 기록
-                    if obj.get("kind") == "status":
-                        msg = obj.get("message", "")
-                        if msg:
-                            await self._status(f"[OES] worker: {msg}")
+                line = await asyncio.wait_for(proc.stdout.readline(), timeout=remain)
+                if not line:
+                    break
+
+                s = line.decode("utf-8", errors="replace").strip()
+                if not s:
+                    continue
+
+                # 워커의 status도 그대로 로그에 남김
+                obj = None
+                try:
+                    obj = json.loads(s)
+                except Exception:
+                    await self._status(f"[OES][worker] {s}")
+                    continue
+
+                kind = obj.get("kind")
+                if kind == "status":
+                    await self._status(str(obj.get("message", "")))
+                elif kind == "init":
+                    init_obj = obj
+                    break
+                else:
+                    await self._status(f"[OES][worker] {obj}")
 
             try:
-                ok = await asyncio.wait_for(_wait_init(), timeout=init_timeout_s)
-            except asyncio.TimeoutError:
-                ok = False
-                await self._status(f"[OES] init TIMEOUT({init_timeout_s}s) → kill")
+                await asyncio.wait_for(proc.wait(), timeout=3.0)
+            except Exception:
                 with contextlib.suppress(Exception):
                     proc.kill()
-            finally:
                 with contextlib.suppress(Exception):
                     await proc.wait()
-                stderr_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await stderr_task
 
-            rc = int(proc.returncode or 0)
-            if (not ok) or rc != 0:
-                if self._stderr_tail:
-                    await self._status("[OES] init stderr_tail:\n" + "\n".join(self._stderr_tail[-50:]))
-                await self._status(f"[OES] init FAIL rc={rc}")
-            else:
-                await self._status("[OES] init OK")
+            with contextlib.suppress(Exception):
+                await stderr_task
 
-            return bool(ok)
+            rc = proc.returncode
+            if not init_obj:
+                self._init_error = f"init JSON not received (rc={rc})"
+                if stderr_tail:
+                    self._init_error += " | stderr_tail=" + " / ".join(stderr_tail[-5:])
+                await self._status(f"[OES] init FAIL: {self._init_error}")
+                self._init_done = True
+                return False
+
+            ok = bool(init_obj.get("ok", False))
+            if ok:
+                self._init_ok = True
+                self._init_result = init_obj
+                await self._status(f"[OES] init OK: {init_obj}")
+                self._init_done = True
+                return True
+
+            # ok=False → error/scan을 최대한 보여준다
+            err = init_obj.get("error") or "initialize_device failed"
+            scan = init_obj.get("scan") or {}
+            self._init_error = f"{err} | scan={scan}"
+            if stderr_tail:
+                self._init_error += " | stderr_tail=" + " / ".join(stderr_tail[-5:])
+
+            await self._status(f"[OES] init FAIL: {self._init_error}")
+            self._init_result = init_obj
+            self._init_done = True
+            return False
+
+        except asyncio.TimeoutError:
+            if proc is not None and proc.returncode is None:
+                with contextlib.suppress(Exception):
+                    proc.kill()
+                with contextlib.suppress(Exception):
+                    await proc.wait()
+
+            self._init_error = f"init timeout after {timeout_s}s"
+            if stderr_tail:
+                self._init_error += " | stderr_tail=" + " / ".join(stderr_tail[-5:])
+            await self._status(f"[OES] init TIMEOUT: {self._init_error}")
+            self._init_done = True
+            return False
 
         except Exception as e:
-            await self._status(f"[OES] init 예외: {type(e).__name__}: {e}")
-            if self._stderr_tail:
-                await self._status("[OES] init stderr_tail:\n" + "\n".join(self._stderr_tail[-50:]))
+            if proc is not None and proc.returncode is None:
+                with contextlib.suppress(Exception):
+                    proc.kill()
+                with contextlib.suppress(Exception):
+                    await proc.wait()
+
+            self._init_error = f"{type(e).__name__}: {e}"
+            await self._status(f"[OES] init EXC: {self._init_error}")
+            self._init_done = True
             return False
 
     async def run_measurement(self, duration_sec: float, integration_ms: int) -> None:

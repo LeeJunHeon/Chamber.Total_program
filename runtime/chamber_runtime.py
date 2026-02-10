@@ -2096,6 +2096,10 @@ class ChamberRuntime:
                 await self.dc_pulse.set_endpoint_reconnect(host, port)
 
             self._ensure_background_started()
+
+            # ✅ Start 클릭 시점에 OES init을 백그라운드로 '미리' 수행
+            self._kick_oes_init_background(force=True)
+
             self._on_process_status_changed(True)
 
             timeout = 10.0 if (use_dc_pulse or use_rf_pulse) else 8.0
@@ -2168,6 +2172,35 @@ class ChamberRuntime:
 
             self._start_next_process_from_queue(False)
             self._on_process_status_changed(False)
+
+    def _kick_oes_init_background(self, *, force: bool = True) -> None:
+        """Start 버튼을 눌렀을 때 OES init을 '백그라운드'로 미리 돌려둔다."""
+        if not getattr(self, "oes", None):
+            return
+
+        t = getattr(self, "_oes_init_task", None)
+        if t and not t.done():
+            return
+
+        async def _run():
+            try:
+                self.append_log(f"OES{self.ch}", "[OES] init (background) begin")
+                self._ensure_background_started()
+
+                ok = await self.oes.initialize_device(timeout_s=20.0, force=force)
+                self._oes_initialized = bool(ok)
+
+                if ok:
+                    self.append_log(f"OES{self.ch}", "[OES] init (background) OK")
+                else:
+                    err = getattr(self.oes, "_init_error", None) or "unknown"
+                    self.append_log(f"OES{self.ch}", f"[OES] init (background) FAIL: {err}")
+
+            except Exception as e:
+                self._oes_initialized = False
+                self.append_log(f"OES{self.ch}", f"[OES] init (background) EXC: {type(e).__name__}: {e}")
+
+        self._oes_init_task = self._spawn_detached(_run(), store=True, name=f"OES.init.{self.ch}")
 
     async def _wait_device_connected(self, dev: object, name: str, timeout_s: float) -> bool:
         try: t0 = asyncio.get_running_loop().time()
