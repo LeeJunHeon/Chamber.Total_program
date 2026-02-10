@@ -605,7 +605,7 @@ class OESAsync:
 # ====== 워커 측정 로직(append+flush CSV) ======
 
 def _default_out_dir(ch: int) -> Path:
-    base = Path(r"C:\Users\vanam\Desktop\OES")
+    base = Path(os.environ.get("OES_LOCAL_BASE", str(Path.home() / "Desktop" / "OES")))
     return base / f"CH{int(ch)}"
 
 
@@ -629,13 +629,15 @@ async def _acquire_first_frame(oes: OESAsync, retries: int = 20, delay_s: float 
 
 async def cmd_init(ch: int, usb: int, dll_path: Optional[str], out_dir: Optional[Path], out_csv: Optional[Path]) -> int:
     mtx = _WinMutex(f"Local\\VanaM_OES_USB{int(usb)}")
-    if not mtx.acquire(timeout_ms=60_000):
-        _errlog(f"cmd=init mutex timeout ch={ch} usb={usb}")
-        _print_json({"kind": "init", "ok": False, "ch": int(ch), "usb": int(usb), "error": "mutex timeout"})
-        return 4
+    acquired = mtx.acquire(timeout_ms=60_000)
 
     try:
-        # ✅ 1) init도 out_dir/out_csv를 우선 사용 (하드코딩 경로 의존 제거)
+        if not acquired:
+            _errlog(f"cmd=init mutex timeout ch={ch} usb={usb}")
+            _print_json({"kind":"init","ok":False,"ch":int(ch),"usb":int(usb),"error":"mutex timeout"})
+            return 4
+
+        # ✅ out_dir/out_csv 반영 + dll 실제 resolve 정보까지 남김
         if out_csv:
             temp_dir = Path(out_csv).expanduser().resolve().parent
         elif out_dir:
@@ -643,15 +645,12 @@ async def cmd_init(ch: int, usb: int, dll_path: Optional[str], out_dir: Optional
         else:
             temp_dir = _default_out_dir(ch)
 
-        # ✅ 2) 상태 로그(JSON)로도 남김(메인에서 바로 보임)
-        _print_json({"kind": "status", "message": f"[worker] init begin ch={ch} usb={usb} dir={temp_dir} dll={dll_path}"})
+        dll_resolved = _resolve_oes_dll_path(dll_path)
+        dll_exists = Path(dll_resolved).is_file()
 
-        oes = OESAsync(
-            chamber=int(ch),
-            usb_index=int(usb),
-            dll_path=dll_path,
-            save_directory=str(temp_dir),
-        )
+        _status(f"[worker] init begin ch={ch} usb={usb} dir={temp_dir} dll_arg={dll_path} dll_resolved={dll_resolved} dll_exists={dll_exists}")
+
+        oes = OESAsync(chamber=int(ch), usb_index=int(usb), dll_path=dll_path, save_directory=str(temp_dir))
         ok = await oes.initialize_device()
 
         _print_json({
@@ -662,6 +661,8 @@ async def cmd_init(ch: int, usb: int, dll_path: Optional[str], out_dir: Optional
             "resolved_usb": int(getattr(oes, "sChannel", -1)),
             "model": str(getattr(oes, "_model_name", "UNKNOWN")),
             "pixels": int(getattr(oes, "_npix", 0)),
+            "dll_resolved": dll_resolved,
+            "dll_exists": bool(dll_exists),
         })
 
         with contextlib.suppress(Exception):
@@ -680,7 +681,9 @@ async def cmd_init(ch: int, usb: int, dll_path: Optional[str], out_dir: Optional
             "trace": traceback.format_exc(),
         })
         return 3
+
     finally:
+        # ✅ acquired 실패든 성공이든 핸들 정리
         mtx.release()
 
 
@@ -696,15 +699,14 @@ async def cmd_measure(
     dll_path: Optional[str],
 ) -> int:
     mtx = _WinMutex(f"Local\\VanaM_OES_USB{int(usb)}")
-    if not mtx.acquire(timeout_ms=60_000):
-        _errlog(f"cmd=measure mutex timeout ch={ch} usb={usb}")
-        _print_json({"kind": "finished", "ok": False, "ch": int(ch), "usb": int(usb), "error": "mutex timeout"})
-        return 4
+    acquired = mtx.acquire(timeout_ms=60_000)
 
     t0 = time.time()
     rows = 0
+    f = None
+    oes = None
 
-    # ✅ temp_dir 계산은 기존대로 두되, out_dir_final을 확정한다
+    # ✅ out_dir_final / out_csv 확정(네가 작성한 로직 유지)
     if out_csv:
         out_csv = Path(out_csv).expanduser().resolve()
         out_dir_final = out_csv.parent
@@ -715,13 +717,16 @@ async def cmd_measure(
         out_dir_final = _default_out_dir(ch).resolve()
         out_csv = out_dir_final / _make_default_filename()
 
-    out_dir_final.mkdir(parents=True, exist_ok=True)
-
-    _print_json({"kind": "status", "message": f"[worker] measure begin ch={ch} usb={usb} out_csv={out_csv} dir={out_dir_final}"})
-
-    f = None
-
     try:
+        if not acquired:
+            _errlog(f"cmd=measure mutex timeout ch={ch} usb={usb}")
+            _print_json({"kind": "finished", "ok": False, "ch": int(ch), "usb": int(usb), "error": "mutex timeout"})
+            return 4
+
+        out_dir_final.mkdir(parents=True, exist_ok=True)
+
+        _print_json({"kind": "status", "message": f"[worker] measure begin ch={ch} usb={usb} out_csv={out_csv} dir={out_dir_final}"})
+
         oes = OESAsync(
             chamber=int(ch),
             usb_index=int(usb),
@@ -732,14 +737,18 @@ async def cmd_measure(
             debug_print=False,
         )
 
+        _print_json({"kind": "status", "message": f"[worker] init start ch={ch} usb={usb} dll_path={dll_path}"})
         ok = await oes.initialize_device()
+        _print_json({"kind": "status", "message": f"[worker] init done ok={ok} resolved_usb={getattr(oes,'sChannel',-1)} pixels={getattr(oes,'_npix',0)}"})
+
         if not ok or getattr(oes, "sChannel", -1) < 0:
             raise RuntimeError("OES initialize_device() failed")
 
         with contextlib.suppress(Exception):
             await oes._call(oes._apply_device_settings_blocking, int(oes.sChannel), int(integration_ms))
 
-        f = open(str(out_csv), "w", newline="", encoding="utf-8")   # ✅ Path 안전
+        _print_json({"kind": "status", "message": f"[worker] open csv: {out_csv}"})
+        f = open(str(out_csv), "w", newline="", encoding="utf-8")
         w = csv.writer(f)
 
         x, y = await _acquire_first_frame(oes)
@@ -786,19 +795,18 @@ async def cmd_measure(
 
         elapsed = time.time() - t0
 
-        # ✅ NAS 복사 전에 마지막 기록을 확정 (파일 측면)
         with contextlib.suppress(Exception):
             if f:
                 f.flush()
-                os.fsync(f.fileno())   # ← 핵심(가능하면)
+                os.fsync(f.fileno())
                 f.close()
                 f = None
 
-        # ✅ 그 다음 장비/DLL 정리 (장비 측면)
         with contextlib.suppress(Exception):
-            await oes.cleanup()
+            if oes:
+                await oes.cleanup()
+                oes = None
 
-        # ✅ out_csv가 Path로 이미 확정되어 있으니 그걸 사용
         nas_ok, nas_csv, nas_error, local_deleted = await _copy_csv_to_nas(Path(out_csv), int(ch))
 
         _print_json({
@@ -806,9 +814,9 @@ async def cmd_measure(
             "ok": True,
             "ch": int(ch),
             "usb": int(usb),
-            "out_csv": str(out_csv),                       # 로컬(실시간 tail용)
+            "out_csv": str(out_csv),
             "nas_ok": bool(nas_ok),
-            "nas_csv": str(nas_csv) if nas_csv else None,  # NAS 최종 경로
+            "nas_csv": str(nas_csv) if nas_csv else None,
             "nas_error": nas_error,
             "local_deleted": bool(local_deleted),
             "rows": int(rows),
@@ -839,6 +847,9 @@ async def cmd_measure(
         with contextlib.suppress(Exception):
             if f:
                 f.close()
+        with contextlib.suppress(Exception):
+            if oes:
+                await oes.cleanup()
         mtx.release()
 
 

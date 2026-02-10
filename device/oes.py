@@ -31,7 +31,7 @@ from typing import AsyncGenerator, Literal, Optional, List
 import numpy as np
 
 # ====== 고정 경로(사용자 요구) ======
-_LOCAL_BASE = Path(r"C:\Users\vanam\Desktop\OES")
+_LOCAL_BASE = Path(os.environ.get("OES_LOCAL_BASE", r"C:\Users\vanam\Desktop\OES"))
 # ====================================
 
 EventKind = Literal["status", "data", "finished"]
@@ -76,14 +76,24 @@ def _main_exe_dir() -> Path:
 
 def _resolve_worker_command() -> List[str]:
     """
-    ✅ 하드코딩 요구사항:
-    메인 공정 프로그램.exe 폴더 기준으로만 실행한다.
-      <main_exe_dir>\apps\oes_service\oes_worker.exe
-    (다른 후보/바탕화면/환경변수/스크립트 fallback 사용 안 함)
+    메인 공정 프로그램.exe 폴더 기준(하드코딩 디렉토리 유지)
+      <main_exe_dir>\apps\oes_service\{oes_worker.exe 또는 oes_api.exe}
     """
     base = _main_exe_dir()
-    exe = base / "apps" / "oes_service" / "oes_worker.exe"
-    return [str(exe)]
+    svc_dir = base / "apps" / "oes_service"
+
+    # ✅ 1순위: oes_worker.exe
+    exe1 = svc_dir / "oes_worker.exe"
+    if exe1.exists():
+        return [str(exe1)]
+
+    # ✅ 2순위: oes_api.exe (빌드/이름 불일치 대비)
+    exe2 = svc_dir / "oes_api.exe"
+    if exe2.exists():
+        return [str(exe2)]
+
+    # 없으면 기존 기대값(로그에서 expected로 보여주기 위함)
+    return [str(exe1)]
 
 
 async def _drain_stream(
@@ -283,6 +293,9 @@ class OESAsync:
         if self.is_running:
             await self._status("[OES] 이미 측정 중 → 요청 무시")
             return
+        
+        # ✅ measure 직전에도 워커 경로 재계산
+        self._worker_cmd = _resolve_worker_command()
 
         out_csv = self._local_dir / _make_filename()
         self._out_csv_local = out_csv
@@ -495,10 +508,16 @@ class OESAsync:
                     msg = obj.get("message", "")
                     if msg:
                         await self._status(f"[OES] {msg}")
-                elif k in ("finished", "fatal"):
-                    # ✅ 최종 결과 저장(성공/실패, rows, elapsed_s, error/trace 등)
-                    self._worker_finished = obj
 
+                elif k == "started":
+                    # ✅ 워커가 첫 프레임 확보 + CSV 헤더 작성 완료했다는 신호
+                    out_csv = obj.get("out_csv")
+                    cols = obj.get("cols")
+                    resolved_usb = obj.get("resolved_usb")
+                    await self._status(f"[OES] worker started out_csv={out_csv} cols={cols} usb={resolved_usb}")
+
+                elif k in ("finished", "fatal"):
+                    self._worker_finished = obj
                     ok = bool(obj.get("ok", False))
                     if ok:
                         await self._status("[OES] worker finished OK")
