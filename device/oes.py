@@ -55,56 +55,23 @@ def _make_filename() -> str:
     return f"OES_Data_{ts}.csv"
 
 
+def _main_exe_dir() -> Path:
+    """메인 공정 프로그램.exe가 있는 폴더"""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(sys.argv[0]).resolve().parent
+
+
 def _resolve_worker_command() -> List[str]:
     """
-    워커 실행 커맨드(리스트)를 반환한다.
-    우선순위:
-    1) 환경변수 OES_WORKER_EXE
-    2) 고정 배치 경로: C:\\Users\\vanam\\Desktop\\OES\\oes_worker.exe
-    3) 배포(onefolder) 기준 실행 폴더 내 apps/oes_service/oes_worker.exe
-    4) 소스 트리 기준 <project>/apps/oes_service/oes_worker.exe
-    5) 개발용 fallback: python apps/oes_service/oes_api.py
+    ✅ 하드코딩 요구사항:
+    메인 공정 프로그램.exe 폴더 기준으로만 실행한다.
+      <main_exe_dir>\apps\oes_service\oes_worker.exe
+    (다른 후보/바탕화면/환경변수/스크립트 fallback 사용 안 함)
     """
-    # 1) 환경변수 (최우선)
-    env = os.environ.get("OES_WORKER_EXE", "").strip()
-    if env:
-        p = Path(env)
-        if p.is_file():
-            return [str(p)]
-
-    # 2) ✅ 너가 지정한 고정 경로
-    fixed = Path(r"C:\Users\vanam\Desktop\OES\oes_worker.exe")
-    if fixed.is_file():
-        return [str(fixed)]
-
-    # 3) 배포(onefolder) 기준 후보
-    exe_dir = Path(sys.argv[0]).resolve().parent
-    cands = [
-        exe_dir / "apps" / "oes_service" / "oes_worker.exe",
-        exe_dir / "_internal" / "apps" / "oes_service" / "oes_worker.exe",
-    ]
-
-    # 4) 소스 트리 기준 후보 + 개발용 python fallback
-    try:
-        root = Path(__file__).resolve().parents[1]
-        cands += [
-            root / "apps" / "oes_service" / "oes_worker.exe",
-            root / "_internal" / "apps" / "oes_service" / "oes_worker.exe",
-        ]
-        script = root / "apps" / "oes_service" / "oes_api.py"
-    except Exception:
-        script = None
-
-    for p in cands:
-        if p.is_file():
-            return [str(p)]
-
-    # 5) 개발용 fallback (exe 없을 때만)
-    if script and script.is_file():
-        return [sys.executable, str(script)]
-
-    # 최후: PATH에서 찾도록 시도
-    return ["oes_worker.exe"]
+    base = _main_exe_dir()
+    exe = base / "apps" / "oes_service" / "oes_worker.exe"
+    return [str(exe)]
 
 
 async def _drain_stream(
@@ -213,6 +180,17 @@ class OESAsync:
         if self._dll_path:
             cmd += ["--dll_path", str(self._dll_path)]
 
+        # ✅ 워커 실행 파일 존재 확인(없으면 로그만 찍고 실패)
+        worker_exe = Path(self._worker_cmd[0])
+        if not worker_exe.exists():
+            await self._status(
+                "[OES] 워커 exe를 찾지 못함 → init 스킵\n"
+                f" expected={worker_exe}\n"
+                f" base_dir={_main_exe_dir()}\n"
+                f" cwd={Path.cwd()}"
+            )
+            return False
+
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -260,6 +238,27 @@ class OESAsync:
         
         # ✅ 이번 측정의 워커 결과 초기화
         self._worker_finished = None
+
+        worker_exe = Path(self._worker_cmd[0])
+        if not worker_exe.exists():
+            await self._status(
+                "[OES] 워커 exe를 찾지 못함 → 측정 스킵\n"
+                f" expected={worker_exe}\n"
+                f" base_dir={_main_exe_dir()}\n"
+                f" cwd={Path.cwd()}"
+            )
+            # ✅ finished 이벤트로 실패만 알리고 끝(공정은 다음 단계로 계속)
+            self._emit(OESEvent(
+                kind="finished",
+                success=False,
+                message="OES 측정 실패(워커 exe 없음)",
+                out_csv=str(self._out_csv_local) if self._out_csv_local else None,
+                rows=0,
+                elapsed_s=0.0,
+                error=f"worker exe not found: {worker_exe}",
+            ))
+            self.is_running = False
+            return
 
         cmd = [
             *self._worker_cmd,
