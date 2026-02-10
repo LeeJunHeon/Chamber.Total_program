@@ -130,6 +130,14 @@ class RFPowerAsync:
         self._w_inv_a = float(write_inv_a)
         self._w_inv_b = float(write_inv_b)
 
+    @property
+    def reflected_threshold_w(self) -> float:
+        return float(self._ref_th_w)
+
+    @property
+    def reflected_wait_timeout_s(self) -> float:
+        return float(self._ref_wait_to_s)
+
     # ======= 이벤트 스트림 =======
     async def events(self) -> AsyncGenerator[RFPowerEvent, None]:
         while True:
@@ -307,7 +315,11 @@ class RFPowerAsync:
                 if (time.monotonic() - (self._ref_wait_start_ts or 0.0)) > self._ref_wait_to_s:
                     # 실패 처리
                     self._ev_nowait(RFPowerEvent(kind="status", message="Ref.p 안정화 시간 초과. 즉시 중단합니다."))
-                    self._ev_nowait(RFPowerEvent(kind="target_failed", message="Ref.p 안정화 시간(60s) 초과"))
+                    msg = (
+                        f"Ref.p(REF) 안정화 시간({int(self._ref_wait_to_s)}s) 초과: "
+                        f"REF={self.reflected_w:.1f}W > TH={self._ref_th_w:.1f}W"
+                    )
+                    self._ev_nowait(RFPowerEvent(kind="target_failed", message=msg))
                     asyncio.create_task(self.cleanup())
             return
         else:

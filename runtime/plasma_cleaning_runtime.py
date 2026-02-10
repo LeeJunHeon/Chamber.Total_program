@@ -584,7 +584,15 @@ class PlasmaCleaningRuntime:
             await self.rf.start_process(float(power_w))
 
             try:
-                await asyncio.wait_for(self._rf_target_evt.wait(), timeout=60.0)
+                # RFPowerAsync의 REF 대기(기본 60s)보다 약간 길게 기다려서 레이스 방지
+                _wait_s = 60.0
+                try:
+                    if self.rf:
+                        _wait_s = max(_wait_s, float(getattr(self.rf, "reflected_wait_timeout_s", 60.0)) + 5.0)
+                except Exception:
+                    _wait_s = 60.0
+
+                await asyncio.wait_for(self._rf_target_evt.wait(), timeout=_wait_s)
 
                 # ★ 이벤트가 왔으면 성공/실패를 반드시 구분한다
                 if self._rf_target_ok is False:
@@ -620,21 +628,43 @@ class PlasmaCleaningRuntime:
                 raise asyncio.CancelledError()
 
             except asyncio.TimeoutError:
-                # timeout일 때만 “마지막 FWD 기반” 문구 생성(진짜 이벤트가 안 온 케이스)
                 last_fwd = None
+                last_ref = None
                 try:
                     meas = await self.plc.rf_read_fwd_ref(rf_ch=1) if self.plc else None
-                    if meas is not None:
-                        last_fwd = float(meas.get("forward", 0.0))
+                    if isinstance(meas, dict):
+                        last_fwd = float(meas.get("forward", 0.0) or 0.0)
+                        last_ref = float(meas.get("reflected", 0.0) or 0.0)
                 except Exception:
                     pass
 
-                if last_fwd is not None and last_fwd <= 0.5:
+                # 기준값(REF 임계치) — RFPowerAsync 쪽 값을 우선 사용
+                ref_th = 20.0
+                try:
+                    if self.rf:
+                        ref_th = float(getattr(self.rf, "reflected_threshold_w", 20.0))
+                except Exception:
+                    ref_th = 20.0
+
+                # ★ timeout 문구를 "REF 과다"로 분류해서 reason을 만든다
+                req = float(power_w)
+
+                if (last_ref is not None) and (last_ref > ref_th):
+                    reason = (
+                        f"RF Ref.p(REF) 과다로 파워 도달 실패: "
+                        f"REF={last_ref:.1f}W > TH={ref_th:.1f}W "
+                        f"(FWD={0.0 if last_fwd is None else last_fwd:.1f}W, SET={req:.1f}W)"
+                    )
+                elif (last_fwd is not None) and (last_fwd <= 0.5):
                     reason = "RF Power 도달 실패: 장비 OFF/SET 미설정(0W 지속/응답 없음)"
-                elif last_fwd is not None:
-                    reason = f"RF Power 도달 실패: timeout 60s (마지막 FWD={last_fwd:.1f}W)"
                 else:
-                    reason = "RF Power 도달 실패: timeout 60s"
+                    # 일반적인 “목표 미도달”
+                    if last_fwd is not None and last_ref is not None:
+                        reason = f"RF Power 도달 실패: 목표({req:.1f}W) 미도달, timeout 60s (FWD={last_fwd:.1f}W, REF={last_ref:.1f}W)"
+                    elif last_fwd is not None:
+                        reason = f"RF Power 도달 실패: 목표({req:.1f}W) 미도달, timeout 60s (FWD={last_fwd:.1f}W)"
+                    else:
+                        reason = f"RF Power 도달 실패: 목표({req:.1f}W) 미도달, timeout 60s"
 
                 self.append_log("RF", reason)
                 if getattr(self, "pc", None):
