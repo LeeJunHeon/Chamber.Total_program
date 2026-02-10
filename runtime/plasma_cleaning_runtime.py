@@ -598,6 +598,10 @@ class PlasmaCleaningRuntime:
                 if self._rf_target_ok is False:
                     reason = self._rf_target_reason or "RF 목표 파워 실패"
                     self.append_log("RF", f"RF START 실패 확정: {reason}")
+                    
+                    # ★ stop 오염 방지용 강제 실패 플래그도 같이 세팅
+                    self._forced_fail = True
+                    self._forced_fail_reason = reason
 
                     if getattr(self, "pc", None):
                         self.pc.last_result = "fail"
@@ -667,6 +671,11 @@ class PlasmaCleaningRuntime:
                         reason = f"RF Power 도달 실패: 목표({req:.1f}W) 미도달, timeout 60s"
 
                 self.append_log("RF", reason)
+
+                # ★ stop 오염 방지용 강제 실패 플래그
+                self._forced_fail = True
+                self._forced_fail_reason = reason
+
                 if getattr(self, "pc", None):
                     self.pc.last_result = "fail"
                     self.pc.last_reason = reason
@@ -679,6 +688,11 @@ class PlasmaCleaningRuntime:
             except Exception as e:
                 reason = f"RF Power 도달 실패: {type(e).__name__}: {e!s}"
                 self.append_log("RF", reason)
+
+                # ★ stop 오염 방지용 강제 실패 플래그
+                self._forced_fail = True
+                self._forced_fail_reason = reason
+
                 if getattr(self, "pc", None):
                     self.pc.last_result = "fail"
                     self.pc.last_reason = reason
