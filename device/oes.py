@@ -37,6 +37,17 @@ _LOCAL_BASE = Path(r"C:\Users\vanam\Desktop\OES")
 EventKind = Literal["status", "data", "finished"]
 
 
+def _env_flag(name: str, default: str = "0") -> bool:
+    v = os.environ.get(name, default).strip().lower()
+    return v in {"1", "true", "yes", "y", "on"}
+
+def _worker_creationflags() -> int:
+    # ✅ OES_WORKER_SHOW_CONSOLE=1이면 창 숨기지 않음
+    if os.name == "nt" and (not _env_flag("OES_WORKER_SHOW_CONSOLE", "0")):
+        return int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return 0
+
+
 @dataclass
 class OESEvent:
     kind: EventKind
@@ -171,59 +182,100 @@ class OESAsync:
         return n
 
     async def initialize_device(self) -> bool:
+        # ✅ 워커 경로는 매번 재계산(배치 바뀌는 경우 디버깅에 유리)
+        self._worker_cmd = _resolve_worker_command()
+
         cmd = [
             *self._worker_cmd,
             "--cmd", "init",
             "--ch", str(self._ch),
             "--usb", str(self._usb),
+            # ✅ 중요: 워커 init도 out_dir를 받게 해서 "vanam 고정경로" 문제 제거
+            "--out_dir", str(self._local_dir),
         ]
         if self._dll_path:
             cmd += ["--dll_path", str(self._dll_path)]
 
-        # ✅ 워커 실행 파일 존재 확인(없으면 로그만 찍고 실패)
         worker_exe = Path(self._worker_cmd[0])
+        await self._status(
+            "[OES] init spawn\n"
+            f"  worker={worker_exe}\n"
+            f"  exists={worker_exe.exists()}\n"
+            f"  cmd={cmd}\n"
+            f"  base_dir={_main_exe_dir()}\n"
+            f"  cwd={Path.cwd()}\n"
+            f"  argv0={sys.argv[0]}\n"
+            f"  sys.executable={sys.executable}"
+        )
         if not worker_exe.exists():
-            await self._status(
-                "[OES] 워커 exe를 찾지 못함 → init 스킵\n"
-                f" expected={worker_exe}\n"
-                f" base_dir={_main_exe_dir()}\n"
-                f" cwd={Path.cwd()}"
-            )
+            await self._status("[OES] 워커 exe 없음 → init 실패")
             return False
+
+        # ✅ init 무한대기 방지
+        init_timeout_s = float(os.environ.get("OES_INIT_TIMEOUT_S", "20"))
+
+        creationflags = _worker_creationflags()
 
         try:
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                creationflags=(getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0),
+                creationflags=creationflags,
             )
             assert proc.stdout and proc.stderr
-            stderr_task = asyncio.create_task(_drain_stream(proc.stderr))
-            ok = False
-            try:
+
+            # ✅ init에서도 stderr tail 저장
+            self._stderr_tail.clear()
+            stderr_task = asyncio.create_task(
+                _drain_stream(proc.stderr, self._stderr_tail, max_lines=self._stderr_tail_max_lines)
+            )
+
+            async def _wait_init() -> bool:
                 while True:
                     line = await proc.stdout.readline()
                     if not line:
-                        break
+                        return False
                     try:
                         obj = json.loads(line.decode("utf-8", errors="ignore").strip())
                     except Exception:
                         continue
                     if obj.get("kind") == "init":
-                        ok = bool(obj.get("ok", False))
-                        break
-                await proc.wait()
+                        return bool(obj.get("ok", False))
+                    # 워커가 status를 주면 그대로 기록
+                    if obj.get("kind") == "status":
+                        msg = obj.get("message", "")
+                        if msg:
+                            await self._status(f"[OES] worker: {msg}")
+
+            try:
+                ok = await asyncio.wait_for(_wait_init(), timeout=init_timeout_s)
+            except asyncio.TimeoutError:
+                ok = False
+                await self._status(f"[OES] init TIMEOUT({init_timeout_s}s) → kill")
+                with contextlib.suppress(Exception):
+                    proc.kill()
             finally:
+                with contextlib.suppress(Exception):
+                    await proc.wait()
                 stderr_task.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await stderr_task
 
-            await self._status(f"[OES] init {'OK' if ok else 'FAIL'} (CH{self._ch}/USB{self._usb})")
-            return ok
+            rc = int(proc.returncode or 0)
+            if (not ok) or rc != 0:
+                if self._stderr_tail:
+                    await self._status("[OES] init stderr_tail:\n" + "\n".join(self._stderr_tail[-50:]))
+                await self._status(f"[OES] init FAIL rc={rc}")
+            else:
+                await self._status("[OES] init OK")
+
+            return bool(ok)
 
         except Exception as e:
             await self._status(f"[OES] init 예외: {type(e).__name__}: {e}")
+            if self._stderr_tail:
+                await self._status("[OES] init stderr_tail:\n" + "\n".join(self._stderr_tail[-50:]))
             return False
 
     async def run_measurement(self, duration_sec: float, integration_ms: int) -> None:
@@ -278,12 +330,22 @@ class OESAsync:
         self.is_running = True
 
         try:
+            creationflags = _worker_creationflags()
+            await self._status(
+                "[OES] measure spawn\n"
+                f"  cmd={cmd}\n"
+                f"  creationflags={creationflags}\n"
+                f"  out_csv={out_csv}\n"
+                f"  cwd={Path.cwd()}"
+            )
+
             self._proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                creationflags=(getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0),
+                creationflags=creationflags,
             )
+
             assert self._proc.stdout and self._proc.stderr
 
             self._stderr_tail.clear()

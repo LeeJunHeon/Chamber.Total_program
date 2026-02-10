@@ -585,7 +585,7 @@ async def _acquire_first_frame(oes: OESAsync, retries: int = 20, delay_s: float 
     raise RuntimeError(f"first frame failed: {last_err}")
 
 
-async def cmd_init(ch: int, usb: int, dll_path: Optional[str]) -> int:
+async def cmd_init(ch: int, usb: int, dll_path: Optional[str], out_dir: Optional[Path], out_csv: Optional[Path]) -> int:
     mtx = _WinMutex(f"Local\\VanaM_OES_USB{int(usb)}")
     if not mtx.acquire(timeout_ms=60_000):
         _errlog(f"cmd=init mutex timeout ch={ch} usb={usb}")
@@ -648,11 +648,11 @@ async def cmd_measure(
     rows = 0
 
     if out_csv:
-        out_csv = Path(out_csv).expanduser()
-        out_dir_final = out_csv.parent
+        temp_dir = Path(out_csv).expanduser().parent
+    elif out_dir:
+        temp_dir = Path(out_dir).expanduser()
     else:
-        out_dir_final = Path(out_dir).expanduser() if out_dir else _default_out_dir(ch)
-        out_csv = out_dir_final / _make_default_filename()
+        temp_dir = _default_out_dir(ch)
 
     out_dir_final.mkdir(parents=True, exist_ok=True)
 
@@ -799,7 +799,9 @@ async def _amain(argv=None) -> int:
     args = build_parser().parse_args(argv)
 
     if args.cmd == "init":
-        return await cmd_init(args.ch, args.usb, args.dll_path)
+        out_dir = Path(args.out_dir) if args.out_dir else None
+        out_csv = Path(args.out_csv) if args.out_csv else None
+        return await cmd_init(args.ch, args.usb, args.dll_path, out_dir, out_csv)
 
     out_dir = Path(args.out_dir) if args.out_dir else None
     out_csv = Path(args.out_csv) if args.out_csv else None

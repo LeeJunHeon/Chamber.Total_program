@@ -397,8 +397,8 @@ class HostHandlers:
 
                     step = getattr(pc, "current_step", None)
                     if step is None:
-                        # START 직후 스텝 진입 전 구간은 IG로 단정하지 않음
-                        return False
+                        # START 직후 스텝 진입 전 Loadlock running
+                        return True
 
                     act = getattr(step, "action", None)
                     actv = getattr(act, "value", None)
