@@ -2601,9 +2601,37 @@ class ChamberRuntime:
         loop = self._loop_from_anywhere()
         try:
             current = asyncio.current_task()
-            live = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done() and t is not current]
-            for t in live: loop.call_soon(t.cancel)
-            if live: await asyncio.gather(*live, return_exceptions=True)
+            live = [t for t in getattr(self, "_bg_tasks", []) if t and (not t.done()) and (t is not current)]
+
+            # ✅ cancel은 call_soon만 하지 말고 즉시도 호출(안전)
+            for t in live:
+                with contextlib.suppress(Exception):
+                    t.cancel()
+                with contextlib.suppress(Exception):
+                    loop.call_soon(t.cancel)
+
+            if live:
+                done, pending = await asyncio.wait(live, timeout=3.0)
+
+                # 완료 task들의 예외는 로깅(원인 추적)
+                for t in done:
+                    with contextlib.suppress(Exception):
+                        exc = t.exception()
+                        if exc:
+                            nm = t.get_name() if hasattr(t, "get_name") else repr(t)
+                            self.append_log("MAIN", f"⚠ bg task done but raised: {nm}: {exc!r}")
+
+                # ✅ 핵심: pending이 남으면 여기서 멈추지 말고 로그 남기고 다음으로 진행
+                if pending:
+                    names = [t.get_name() if hasattr(t, "get_name") else repr(t) for t in pending]
+                    self.append_log("MAIN", f"⚠ bg task cancel timeout(3s): {names}")
+
+                    # 재취소(그래도 계속 돌면 다음 cleanup에서 장치가 닫히며 자연 종료되거나,
+                    # 추후 로그로 어떤 태스크가 문제인지 확인 가능)
+                    for t in pending:
+                        with contextlib.suppress(Exception):
+                            t.cancel()
+
         finally:
             self._bg_tasks = []
 
@@ -2614,13 +2642,46 @@ class ChamberRuntime:
         except Exception:
             pass
 
-        tasks = []
-        for dev in (self.ig, self.mfc, self.dc_pulse, self.rf_pulse, self.dc_power, self.rf_power, self.oes, self.rga):
+        cleanup_tasks: list[asyncio.Task] = []
+
+        dev_list = [
+            ("IG", self.ig),
+            ("MFC", self.mfc),
+            ("DCPulse", self.dc_pulse),
+            ("RFPulse", self.rf_pulse),
+            ("DCPower", self.dc_power),
+            ("RFPower", self.rf_power),
+            ("OES", self.oes),
+            ("RGA", self.rga),
+        ]
+
+        for name, dev in dev_list:
             if dev and hasattr(dev, "cleanup"):
-                try: tasks.append(dev.cleanup())
-                except Exception: pass
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+                try:
+                    cleanup_tasks.append(asyncio.create_task(dev.cleanup(), name=f"cleanup:{name}"))
+                except Exception:
+                    pass
+
+        if cleanup_tasks:
+            done, pending = await asyncio.wait(cleanup_tasks, timeout=8.0)
+
+            for t in done:
+                with contextlib.suppress(Exception):
+                    exc = t.exception()
+                    if exc:
+                        nm = t.get_name() if hasattr(t, "get_name") else "cleanup"
+                        self.append_log("MAIN", f"⚠ {nm} raised: {exc!r}")
+
+            if pending:
+                names = [t.get_name() if hasattr(t, "get_name") else "cleanup" for t in pending]
+                self.append_log("MAIN", f"⚠ device cleanup timeout(8s): {names}")
+
+                # ✅ 무한 대기 방지: 남은 cleanup은 취소하고, 추가로 짧게 한 번만 더 기다림
+                for t in pending:
+                    with contextlib.suppress(Exception):
+                        t.cancel()
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(asyncio.gather(*pending, return_exceptions=True), timeout=1.0)
 
         # 1) footer 먼저 (파일이 열려 있으면 "# ==== END ====" 남김)
         with contextlib.suppress(Exception):
@@ -2628,7 +2689,7 @@ class ChamberRuntime:
 
         # 2) writer 완전 종료 + 큐 리셋
         with contextlib.suppress(Exception):
-            await self._shutdown_log_writer()
+            await asyncio.wait_for(self._shutdown_log_writer(), timeout=3.0)
 
         # 3) 파일 경로/버퍼 초기화 (다음 런은 새 파일명으로 시작)
         self._log_file_path = None
