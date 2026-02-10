@@ -209,6 +209,48 @@ def _errlog_exc(msg: str) -> None:
 # ================= 오류 로거 =================
 
 
+# ================= 실행 로거(INFO) =================
+_RUN_LOGGER = None
+_RUN_LOCK = Lock()
+
+def _run_log_path() -> Path:
+    log_dir = _worker_base_dir() / "log"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    d = datetime.now().strftime("%Y%m%d")
+    return log_dir / f"{d}.run.log"
+
+def _get_run_logger() -> logging.Logger:
+    global _RUN_LOGGER
+    if _RUN_LOGGER is not None:
+        return _RUN_LOGGER
+    with _RUN_LOCK:
+        if _RUN_LOGGER is not None:
+            return _RUN_LOGGER
+        logger = logging.getLogger("OES_WORKER_RUN")
+        logger.setLevel(logging.INFO)
+        logger.propagate = False
+        fh = logging.FileHandler(_run_log_path(), encoding="utf-8")
+        fh.setLevel(logging.INFO)
+        fh.setFormatter(logging.Formatter(
+            "%(asctime)s [pid=%(process)d] %(message)s",
+            datefmt="%Y-%m-%d %H:%M:%S",
+        ))
+        logger.addHandler(fh)
+        _RUN_LOGGER = logger
+        return logger
+
+def _runlog(msg: str) -> None:
+    try:
+        _get_run_logger().info(msg)
+    except Exception:
+        pass
+
+def _status(msg: str) -> None:
+    _runlog(msg)
+    _print_json({"kind": "status", "message": msg})
+# ================= 실행 로거(INFO) =================
+
+
 # ===== 크로스-프로세스 뮤텍스(USB 채널 단위) =====
 # - 같은 USB 채널(예: USB0)을 두 워커가 동시에 잡지 못하도록 방지
 # - CH1(USB0) + CH2(USB1) 동시 측정은 가능(뮤텍스 이름이 다름)
@@ -593,8 +635,23 @@ async def cmd_init(ch: int, usb: int, dll_path: Optional[str], out_dir: Optional
         return 4
 
     try:
-        temp_dir = _default_out_dir(ch)
-        oes = OESAsync(chamber=int(ch), usb_index=int(usb), dll_path=dll_path, save_directory=str(temp_dir))
+        # ✅ 1) init도 out_dir/out_csv를 우선 사용 (하드코딩 경로 의존 제거)
+        if out_csv:
+            temp_dir = Path(out_csv).expanduser().resolve().parent
+        elif out_dir:
+            temp_dir = Path(out_dir).expanduser().resolve()
+        else:
+            temp_dir = _default_out_dir(ch)
+
+        # ✅ 2) 상태 로그(JSON)로도 남김(메인에서 바로 보임)
+        _print_json({"kind": "status", "message": f"[worker] init begin ch={ch} usb={usb} dir={temp_dir} dll={dll_path}"})
+
+        oes = OESAsync(
+            chamber=int(ch),
+            usb_index=int(usb),
+            dll_path=dll_path,
+            save_directory=str(temp_dir),
+        )
         ok = await oes.initialize_device()
 
         _print_json({
@@ -647,14 +704,20 @@ async def cmd_measure(
     t0 = time.time()
     rows = 0
 
+    # ✅ temp_dir 계산은 기존대로 두되, out_dir_final을 확정한다
     if out_csv:
-        temp_dir = Path(out_csv).expanduser().parent
+        out_csv = Path(out_csv).expanduser().resolve()
+        out_dir_final = out_csv.parent
     elif out_dir:
-        temp_dir = Path(out_dir).expanduser()
+        out_dir_final = Path(out_dir).expanduser().resolve()
+        out_csv = out_dir_final / _make_default_filename()
     else:
-        temp_dir = _default_out_dir(ch)
+        out_dir_final = _default_out_dir(ch).resolve()
+        out_csv = out_dir_final / _make_default_filename()
 
     out_dir_final.mkdir(parents=True, exist_ok=True)
+
+    _print_json({"kind": "status", "message": f"[worker] measure begin ch={ch} usb={usb} out_csv={out_csv} dir={out_dir_final}"})
 
     f = None
 
@@ -676,7 +739,7 @@ async def cmd_measure(
         with contextlib.suppress(Exception):
             await oes._call(oes._apply_device_settings_blocking, int(oes.sChannel), int(integration_ms))
 
-        f = open(out_csv, "w", newline="", encoding="utf-8")
+        f = open(str(out_csv), "w", newline="", encoding="utf-8")   # ✅ Path 안전
         w = csv.writer(f)
 
         x, y = await _acquire_first_frame(oes)
@@ -736,7 +799,7 @@ async def cmd_measure(
             await oes.cleanup()
 
         # ✅ out_csv가 Path로 이미 확정되어 있으니 그걸 사용
-        nas_ok, nas_csv, nas_error, local_deleted = await _copy_csv_to_nas(out_csv, int(ch))
+        nas_ok, nas_csv, nas_error, local_deleted = await _copy_csv_to_nas(Path(out_csv), int(ch))
 
         _print_json({
             "kind": "finished",
@@ -797,6 +860,7 @@ def build_parser() -> argparse.ArgumentParser:
 
 async def _amain(argv=None) -> int:
     args = build_parser().parse_args(argv)
+    _status(f"[worker] START argv={sys.argv} frozen={getattr(sys,'frozen',False)} base={_worker_base_dir()}")
 
     if args.cmd == "init":
         out_dir = Path(args.out_dir) if args.out_dir else None

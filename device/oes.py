@@ -42,8 +42,9 @@ def _env_flag(name: str, default: str = "0") -> bool:
     return v in {"1", "true", "yes", "y", "on"}
 
 def _worker_creationflags() -> int:
-    # ✅ OES_WORKER_SHOW_CONSOLE=1이면 창 숨기지 않음
-    if os.name == "nt" and (not _env_flag("OES_WORKER_SHOW_CONSOLE", "0")):
+    # ✅ 기본: 콘솔 창 보이기
+    # 숨기고 싶으면 OES_WORKER_HIDE_CONSOLE=1
+    if os.name == "nt" and _env_flag("OES_WORKER_HIDE_CONSOLE", "0"):
         return int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
     return 0
 
@@ -490,10 +491,10 @@ class OESAsync:
                 except Exception:
                     continue
                 k = obj.get("kind")
-                if k == "started":
-                    out_csv = obj.get("out_csv")
-                    if out_csv:
-                        await self._status(f"[OES] worker started: {out_csv}")
+                if k == "status":
+                    msg = obj.get("message", "")
+                    if msg:
+                        await self._status(f"[OES] {msg}")
                 elif k in ("finished", "fatal"):
                     # ✅ 최종 결과 저장(성공/실패, rows, elapsed_s, error/trace 등)
                     self._worker_finished = obj
@@ -509,13 +510,28 @@ class OESAsync:
             return
 
     async def _tail_csv(self, path: Path) -> None:
-        for _ in range(300):  # 최대 30초
+        t0 = time.time()
+        last_log = 0.0
+        while True:
             if path.exists() and path.stat().st_size > 0:
                 break
-            await asyncio.sleep(0.1)
 
-        if not path.exists():
-            return
+            # 워커가 먼저 죽었는데 CSV가 없으면 원인 로그
+            if self._proc and (self._proc.returncode is not None):
+                await self._status(f"[OES] CSV 미생성 상태로 워커 종료됨 rc={self._proc.returncode} path={path}")
+                return
+
+            # 5초마다 진행상황 로그
+            if (time.time() - last_log) > 5.0:
+                last_log = time.time()
+                await self._status(f"[OES] CSV 생성 대기중... {(last_log - t0):.1f}s path={path}")
+
+            # 60초 넘어가면 일단 종료(원인 파악용)
+            if (time.time() - t0) > 60.0:
+                await self._status(f"[OES] CSV 생성 대기 TIMEOUT(60s) path={path}")
+                return
+
+            await asyncio.sleep(0.1)
 
         try:
             with open(path, "r", encoding="utf-8", newline="") as f:
