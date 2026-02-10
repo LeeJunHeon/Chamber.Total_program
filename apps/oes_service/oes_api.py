@@ -149,9 +149,21 @@ def _add_dll_search_dir(dll_path: str) -> None:
         pass
 
 
+_STDOUT_BROKEN = False
+
 def _print_json(obj) -> None:
-    sys.stdout.write(json.dumps(obj, ensure_ascii=False) + "\n")
-    sys.stdout.flush()
+    global _STDOUT_BROKEN
+    s = json.dumps(obj, ensure_ascii=False) + "\n"
+
+    if _STDOUT_BROKEN:
+        return
+
+    try:
+        sys.stdout.write(s)
+        sys.stdout.flush()
+    except (BrokenPipeError, OSError):
+        # stdout이 깨졌으면 워커가 여기서 죽지 않게 막는다
+        _STDOUT_BROKEN = True
 
 
 # ================= 오류 로거 =================
@@ -414,6 +426,12 @@ class OESAsync:
         self._set_dbl_int = None
         self._get_wl = None
 
+        # __init__에 멤버 추가
+        self._last_scan_code: int = 0
+        self._last_scan_msg: str = ""
+        self._last_error: str = ""
+        self._detected_channels: int = 0
+
     async def _call(self, func, *args, **kwargs):
         loop = asyncio.get_running_loop()
         lock = _get_dll_lock()
@@ -481,7 +499,9 @@ class OESAsync:
             self.sp_dll = ctypes.WinDLL(self._dll_path)
             self._bind_functions()
 
-            n = int(self.sp_dll.spTestAllChannels(ctypes.c_int16(0)))  # type: ignore
+            n = int(self.sp_dll.spTestAllChannels(ctypes.c_int16(0)))
+            self._detected_channels = int(n)
+
             if n <= 0:
                 return -1, f"spTestAllChannels failed (n={n})"
 
@@ -489,17 +509,15 @@ class OESAsync:
             if ch < 0 or ch >= n:
                 return -2, f"target USB{ch} out of range (detected={n})"
 
-            rr = int(self.sp_dll.spSetupGivenChannel(ctypes.c_int16(ch)))  # type: ignore
+            rr = int(self.sp_dll.spSetupGivenChannel(ctypes.c_int16(ch)))
             if rr < 0:
                 return -3, f"target USB{ch} open failed (rr={rr})"
 
             self.sChannel = ch
             return 0, f"open ok: USB{ch}"
-
         except Exception as e:
-            # Python 레벨 예외는 여기서 잡아서 initialize_device()가 False로 떨어지게 만들 수 있음
             return -9, f"scan/open exception: {type(e).__name__}: {e}"
-
+        
     def _read_pixels(self, ch: int, npix: int) -> Tuple[int, Optional[np.ndarray]]:
         assert self.sp_dll is not None
         buf = (ctypes.c_int32 * npix)()
@@ -552,21 +570,21 @@ class OESAsync:
                 self._set_dbl_int(ctypes.c_double(float(integration_ms)), ctypes.c_int16(ch))
 
     async def initialize_device(self) -> bool:
-        r, _ = await self._call(self._scan_and_open)
+        r, msg = await self._call(self._scan_and_open)
+        self._last_scan_code = int(r)
+        self._last_scan_msg = str(msg)
+
         if r < 0 or self.sChannel < 0 or self.sp_dll is None:
+            self._last_error = self._last_scan_msg
             return False
 
         try:
             self._npix = await self._call(self._ensure_npixels, int(self.sChannel))
-        except Exception:
+        except Exception as e:
+            self._last_error = f"ensure_npixels failed: {type(e).__name__}: {e}"
             return False
 
-        with contextlib.suppress(Exception):
-            self._wl = await self._call(self._try_fetch_wl, int(self.sChannel), int(self._npix))
-
-        self._roi_start = max(0, min(int(self._roi_start), self._npix))
-        self._roi_end = max(self._roi_start + 1, min(int(self._roi_end), self._npix))
-
+        self._last_error = ""
         return True
 
     def _acquire_one_slice_avg(self):
@@ -684,6 +702,12 @@ async def cmd_init(ch: int, usb: int, dll_path: Optional[str], out_dir: Optional
             "pixels": int(getattr(oes, "_npix", 0)),
             "dll_resolved": dll_resolved,
             "dll_exists": bool(dll_exists),
+            
+            # ✅ 추가
+            "detected_channels": int(getattr(oes, "_detected_channels", 0)),
+            "scan_code": int(getattr(oes, "_last_scan_code", 0)),
+            "scan_msg": str(getattr(oes, "_last_scan_msg", "")),
+            "error": str(getattr(oes, "_last_error", "")),
         })
 
         with contextlib.suppress(Exception):
