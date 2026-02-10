@@ -41,11 +41,22 @@ def _env_flag(name: str, default: str = "0") -> bool:
     v = os.environ.get(name, default).strip().lower()
     return v in {"1", "true", "yes", "y", "on"}
 
+
 def _worker_creationflags() -> int:
-    # ✅ 기본: 콘솔 창 보이기
-    # 숨기고 싶으면 OES_WORKER_HIDE_CONSOLE=1
-    if os.name == "nt" and _env_flag("OES_WORKER_HIDE_CONSOLE", "0"):
+    """
+    - 기본: 부모 프로세스 콘솔 상속(creationflags=0)
+    - OES_WORKER_SHOW_CONSOLE=1 : 워커를 새 콘솔창으로 실행(디버깅용)
+    - OES_WORKER_HIDE_CONSOLE=1 : 콘솔 숨김(배포용)
+    """
+    if os.name != "nt":
+        return 0
+
+    if _env_flag("OES_WORKER_HIDE_CONSOLE", "0"):
         return int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+    if _env_flag("OES_WORKER_SHOW_CONSOLE", "0"):
+        return int(getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
+
     return 0
 
 
@@ -223,17 +234,26 @@ class OESAsync:
             return False
 
         # ✅ init 무한대기 방지
-        init_timeout_s = float(os.environ.get("OES_INIT_TIMEOUT_S", "20"))
+        init_timeout_s = float(os.environ.get("OES_INIT_TIMEOUT_S", "60"))
 
         creationflags = _worker_creationflags()
 
         try:
+            env = os.environ.copy()
+            env["PYTHONUNBUFFERED"] = "1"
+
+            # 워커 exe 폴더에서 실행(로그/log 폴더도 그쪽에 생김)
+            worker_dir = str(Path(self._worker_cmd[0]).resolve().parent)
+
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 creationflags=creationflags,
+                cwd=worker_dir,
+                env=env,
             )
+
             assert proc.stdout and proc.stderr
 
             # ✅ init에서도 stderr tail 저장
@@ -353,11 +373,17 @@ class OESAsync:
                 f"  cwd={Path.cwd()}"
             )
 
+            env = os.environ.copy()
+            env["PYTHONUNBUFFERED"] = "1"
+            worker_dir = str(Path(self._worker_cmd[0]).resolve().parent)
+
             self._proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
                 creationflags=creationflags,
+                cwd=worker_dir,
+                env=env,
             )
 
             assert self._proc.stdout and self._proc.stderr

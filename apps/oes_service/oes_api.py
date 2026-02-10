@@ -43,11 +43,18 @@ _NAS_CH_DIR = {
     2: _NAS_OES_ROOT / "CH2",
 }
 
+
+def _mutex_timeout_ms() -> int:
+    # 기본 5초: 공정 멈추지 않게 빨리 실패시키기
+    return int(os.environ.get("OES_MUTEX_TIMEOUT_MS", "5000"))
+
+
 def _nas_dir_for_ch(ch: int) -> Path:
     try:
         return _NAS_CH_DIR[int(ch)]
     except Exception:
         raise ValueError(f"Invalid chamber: {ch} (expected 1 or 2)")
+
 
 async def _copy_csv_to_nas(local_csv: Path, ch: int, *, timeout_s: float = 120.0):
     """
@@ -248,6 +255,15 @@ def _runlog(msg: str) -> None:
 def _status(msg: str) -> None:
     _runlog(msg)
     _print_json({"kind": "status", "message": msg})
+
+    # ✅ 콘솔 디버깅용: OES_WORKER_CONSOLE=1이면 stderr에도 출력
+    if os.environ.get("OES_WORKER_CONSOLE", "0") == "1":
+        try:
+            sys.stderr.write(msg + "\n")
+            sys.stderr.flush()
+        except Exception:
+            pass
+
 # ================= 실행 로거(INFO) =================
 
 
@@ -629,13 +645,18 @@ async def _acquire_first_frame(oes: OESAsync, retries: int = 20, delay_s: float 
 
 async def cmd_init(ch: int, usb: int, dll_path: Optional[str], out_dir: Optional[Path], out_csv: Optional[Path]) -> int:
     mtx = _WinMutex(f"Local\\VanaM_OES_USB{int(usb)}")
-    acquired = mtx.acquire(timeout_ms=60_000)
+    mutex_ms = _mutex_timeout_ms()
+
+    _status(f"[worker] init: acquiring mutex name={mtx.name} timeout_ms={mutex_ms}")
+    acquired = mtx.acquire(timeout_ms=mutex_ms)
 
     try:
         if not acquired:
             _errlog(f"cmd=init mutex timeout ch={ch} usb={usb}")
             _print_json({"kind":"init","ok":False,"ch":int(ch),"usb":int(usb),"error":"mutex timeout"})
             return 4
+        
+        _status(f"[worker] init: mutex acquired name={mtx.name}")
 
         # ✅ out_dir/out_csv 반영 + dll 실제 resolve 정보까지 남김
         if out_csv:
@@ -699,7 +720,10 @@ async def cmd_measure(
     dll_path: Optional[str],
 ) -> int:
     mtx = _WinMutex(f"Local\\VanaM_OES_USB{int(usb)}")
-    acquired = mtx.acquire(timeout_ms=60_000)
+    mutex_ms = _mutex_timeout_ms()
+
+    _status(f"[worker] measure: acquiring mutex name={mtx.name} timeout_ms={mutex_ms}")
+    acquired = mtx.acquire(timeout_ms=mutex_ms)
 
     t0 = time.time()
     rows = 0
@@ -719,8 +743,8 @@ async def cmd_measure(
 
     try:
         if not acquired:
-            _errlog(f"cmd=measure mutex timeout ch={ch} usb={usb}")
-            _print_json({"kind": "finished", "ok": False, "ch": int(ch), "usb": int(usb), "error": "mutex timeout"})
+            _errlog(f"cmd=measure mutex timeout ch={ch} usb={usb} timeout_ms={mutex_ms}")
+            _print_json({"kind":"finished","ok":False,"ch":int(ch),"usb":int(usb),"error":f"mutex timeout ({mutex_ms}ms)"})
             return 4
 
         out_dir_final.mkdir(parents=True, exist_ok=True)
