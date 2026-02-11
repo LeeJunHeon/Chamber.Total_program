@@ -379,6 +379,9 @@ class OESAsync:
         self._out_csv_local = out_csv
         self._x_axis = None
         self._rows_seen = 0
+
+        # ✅ STOP 상태 초기화
+        self._stop_requested = False
         
         # ✅ 이번 측정의 워커 결과 초기화
         self._worker_finished = None
@@ -560,19 +563,50 @@ class OESAsync:
             self.is_running = False
 
     async def stop_measurement(self) -> None:
-        if self._proc and self.is_running:
-            await self._status("[OES] stop_measurement → terminate")
-            with contextlib.suppress(Exception):
-                self._proc.terminate()
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(self._proc.wait(), timeout=5.0)
-            if self._proc.returncode is None:
-                with contextlib.suppress(Exception):
-                    self._proc.kill()
-                    await self._proc.wait()
+        # 측정 중이 아니면 tail만 정리하고 종료
+        if not self._proc or (not self.is_running):
+            await self._stop_tail()
+            return
+
+        proc = self._proc
+        self._stop_requested = True
+
+        await self._status(f"[OES] stop_measurement → request stop flag (pid={getattr(proc, 'pid', None)})")
+
+        # ✅ 1) tail을 먼저 멈춰서 파일 핸들을 최대한 빨리 풀어준다
+        #    (워커가 로컬 삭제를 해야 하므로)
         await self._stop_tail()
-        await self._cleanup_proc_tasks()
-        self.is_running = False
+
+        # ✅ 2) 워커가 감시하는 stop flag 생성
+        if not self._out_csv_local:
+            await self._status("[OES] stop_measurement: out_csv_local 없음 → stop flag 생성 스킵")
+        else:
+            stop_usb = self._out_csv_local.parent / f".stop_usb{int(self._usb)}.flag"
+            stop_csv = self._out_csv_local.with_suffix(self._out_csv_local.suffix + ".stop")
+
+            with contextlib.suppress(Exception):
+                stop_usb.write_text("stop\n", encoding="utf-8")
+            with contextlib.suppress(Exception):
+                stop_csv.write_text("stop\n", encoding="utf-8")
+
+        # ✅ 3) 워커가 NAS 업로드/정리 후 종료할 시간을 준다
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=60.0)
+        except asyncio.TimeoutError:
+            await self._status("[OES] stop: graceful timeout → terminate/kill fallback")
+            with contextlib.suppress(Exception):
+                proc.terminate()
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(proc.wait(), timeout=5.0)
+            if proc.returncode is None:
+                with contextlib.suppress(Exception):
+                    proc.kill()
+                    await proc.wait()
+
+        # ✅ stdout watcher가 finished JSON을 다 읽도록 잠깐 대기(선택)
+        if self._stdout_task:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(self._stdout_task, timeout=2.0)
 
     async def cleanup(self) -> None:
         await self.stop_measurement()
@@ -723,6 +757,7 @@ class OESAsync:
             self._tail_task = None
 
     async def _cleanup_proc_tasks(self) -> None:
+        # stdout/stderr task 정리
         for name in ("_stdout_task", "_stderr_task"):
             t = getattr(self, name)
             if t:
@@ -731,8 +766,25 @@ class OESAsync:
                     await t
                 setattr(self, name, None)
 
-        if self._proc and self._proc.returncode is None:
-            with contextlib.suppress(Exception):
-                self._proc.kill()
-                await self._proc.wait()
+        proc = self._proc
         self._proc = None
+
+        if not proc:
+            return
+
+        # ✅ STOP 요청이 있었으면 먼저 정상 종료를 기다린다
+        if proc.returncode is None and self._stop_requested:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(proc.wait(), timeout=20.0)
+
+        # 그래도 안 죽으면 terminate→kill 순서로만 “최후 수단”
+        if proc.returncode is None:
+            with contextlib.suppress(Exception):
+                proc.terminate()
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(proc.wait(), timeout=5.0)
+
+        if proc.returncode is None:
+            with contextlib.suppress(Exception):
+                proc.kill()
+                await proc.wait()
