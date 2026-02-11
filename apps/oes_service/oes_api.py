@@ -33,6 +33,9 @@ from typing import Optional, Tuple
 import ctypes
 from concurrent.futures import ThreadPoolExecutor
 
+import logging                  # ✅ 추가
+from threading import Lock      # ✅ 추가
+
 import numpy as np
 
 
@@ -190,9 +193,6 @@ def _print_json(obj) -> None:
 
 
 # ================= 오류 로거 =================
-import logging
-from threading import Lock
-
 _ERR_LOGGER = None
 _ERR_LOCK = Lock()
 
