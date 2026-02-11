@@ -31,10 +31,33 @@ from typing import AsyncGenerator, Literal, Optional, List
 import numpy as np
 
 # ====== 고정 경로(사용자 요구) ======
-_LOCAL_BASE = Path(r"C:\Users\vanam\Desktop\OES")
+_LOCAL_BASE = Path(os.environ.get("OES_LOCAL_BASE", r"C:\Users\vanam\Desktop\OES"))
 # ====================================
 
 EventKind = Literal["status", "data", "finished"]
+
+
+def _env_flag(name: str, default: str = "0") -> bool:
+    v = os.environ.get(name, default).strip().lower()
+    return v in {"1", "true", "yes", "y", "on"}
+
+
+def _worker_creationflags() -> int:
+    """
+    - 기본: 부모 프로세스 콘솔 상속(creationflags=0)
+    - OES_WORKER_SHOW_CONSOLE=1 : 워커를 새 콘솔창으로 실행(디버깅용)
+    - OES_WORKER_HIDE_CONSOLE=1 : 콘솔 숨김(배포용)
+    """
+    if os.name != "nt":
+        return 0
+
+    if _env_flag("OES_WORKER_HIDE_CONSOLE", "0"):
+        return int(getattr(subprocess, "CREATE_NO_WINDOW", 0))
+
+    if _env_flag("OES_WORKER_SHOW_CONSOLE", "0"):
+        return int(getattr(subprocess, "CREATE_NEW_CONSOLE", 0))
+
+    return 0
 
 
 @dataclass
@@ -55,56 +78,33 @@ def _make_filename() -> str:
     return f"OES_Data_{ts}.csv"
 
 
+def _main_exe_dir() -> Path:
+    """메인 공정 프로그램.exe가 있는 폴더"""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(sys.argv[0]).resolve().parent
+
+
 def _resolve_worker_command() -> List[str]:
     """
-    워커 실행 커맨드(리스트)를 반환한다.
-    우선순위:
-    1) 환경변수 OES_WORKER_EXE
-    2) 고정 배치 경로: C:\\Users\\vanam\\Desktop\\OES\\oes_worker.exe
-    3) 배포(onefolder) 기준 실행 폴더 내 apps/oes_service/oes_worker.exe
-    4) 소스 트리 기준 <project>/apps/oes_service/oes_worker.exe
-    5) 개발용 fallback: python apps/oes_service/oes_api.py
+    메인 공정 프로그램.exe 폴더 기준(하드코딩 디렉토리 유지)
+      <main_exe_dir>\apps\oes_service\{oes_worker.exe 또는 oes_api.exe}
     """
-    # 1) 환경변수 (최우선)
-    env = os.environ.get("OES_WORKER_EXE", "").strip()
-    if env:
-        p = Path(env)
-        if p.is_file():
-            return [str(p)]
+    base = _main_exe_dir()
+    svc_dir = base / "apps" / "oes_service"
 
-    # 2) ✅ 너가 지정한 고정 경로
-    fixed = Path(r"C:\Users\vanam\Desktop\OES\oes_worker.exe")
-    if fixed.is_file():
-        return [str(fixed)]
+    # ✅ 1순위: oes_worker.exe
+    exe1 = svc_dir / "oes_worker.exe"
+    if exe1.exists():
+        return [str(exe1)]
 
-    # 3) 배포(onefolder) 기준 후보
-    exe_dir = Path(sys.argv[0]).resolve().parent
-    cands = [
-        exe_dir / "apps" / "oes_service" / "oes_worker.exe",
-        exe_dir / "_internal" / "apps" / "oes_service" / "oes_worker.exe",
-    ]
+    # ✅ 2순위: oes_api.exe (빌드/이름 불일치 대비)
+    exe2 = svc_dir / "oes_api.exe"
+    if exe2.exists():
+        return [str(exe2)]
 
-    # 4) 소스 트리 기준 후보 + 개발용 python fallback
-    try:
-        root = Path(__file__).resolve().parents[1]
-        cands += [
-            root / "apps" / "oes_service" / "oes_worker.exe",
-            root / "_internal" / "apps" / "oes_service" / "oes_worker.exe",
-        ]
-        script = root / "apps" / "oes_service" / "oes_api.py"
-    except Exception:
-        script = None
-
-    for p in cands:
-        if p.is_file():
-            return [str(p)]
-
-    # 5) 개발용 fallback (exe 없을 때만)
-    if script and script.is_file():
-        return [sys.executable, str(script)]
-
-    # 최후: PATH에서 찾도록 시도
-    return ["oes_worker.exe"]
+    # 없으면 기존 기대값(로그에서 expected로 보여주기 위함)
+    return [str(exe1)]
 
 
 async def _drain_stream(
@@ -177,6 +177,14 @@ class OESAsync:
         # ✅ 워커가 stdout으로 준 최종 결과(JSON)를 저장
         self._worker_finished: Optional[dict] = None
 
+        # ✅ init(사전점검) 캐시/동기화 상태 (initialize_device에서 사용)
+        self._init_lock = asyncio.Lock()
+        self._init_task: Optional[asyncio.Task] = None
+        self._init_done: bool = False
+        self._init_ok: bool = False
+        self._init_result: Optional[dict] = None
+        self._init_error: Optional[str] = None
+
     def _emit(self, ev: OESEvent) -> None:
         try:
             self._ev_q.put_nowait(ev)
@@ -203,63 +211,201 @@ class OESAsync:
                 n += 1
         return n
 
-    async def initialize_device(self) -> bool:
-        cmd = [
-            *self._worker_cmd,
-            "--cmd", "init",
-            "--ch", str(self._ch),
-            "--usb", str(self._usb),
-        ]
+    async def initialize_device(self, *, timeout_s: float = 20.0, force: bool = False) -> bool:
+        """
+        워커(cmd=init)를 한 번 실행해서 장치/드라이버/DLL 상태를 사전 점검한다.
+        - 성공 시: self._init_ok=True 로 캐시
+        - 실패 시: self._init_error / scan 정보 로그로 남김
+        """
+        # ✅ init 직전에도 워커 경로 재계산(측정과 동일)
+        self._worker_cmd = _resolve_worker_command()
+
+        if self._init_done and self._init_ok and not force:
+            return True
+
+        async with self._init_lock:
+            if self._init_task and not self._init_task.done():
+                return await self._init_task
+
+            self._init_task = asyncio.create_task(self._initialize_device_impl(timeout_s=timeout_s, force=force))
+            return await self._init_task
+
+
+    async def _initialize_device_impl(self, *, timeout_s: float, force: bool) -> bool:
+        cmd = [*self._worker_cmd, "--cmd", "init", "--ch", str(self._ch), "--usb", str(self._usb)]
         if self._dll_path:
             cmd += ["--dll_path", str(self._dll_path)]
 
+        self._init_done = False
+        self._init_ok = False
+        self._init_result = None
+        self._init_error = None
+
+        stderr_tail: List[str] = []
+        init_obj: Optional[dict] = None
+        proc: Optional[asyncio.subprocess.Process] = None
+
+        show_console = os.environ.get("OES_WORKER_SHOW_CONSOLE", "0").strip() in ("1", "true", "True")
+        creationflags = 0
+        if os.name == "nt" and not show_console:
+            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+
         try:
+            await self._status(f"[OES] init spawn ch={self._ch} usb={self._usb} cmd={cmd}")
+
+            worker_exe = Path(self._worker_cmd[0])
+            worker_dir = worker_exe.resolve().parent
+
+            env = os.environ.copy()
+            env.setdefault("PYTHONUNBUFFERED", "1")
+
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                creationflags=(getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0),
+                cwd=str(worker_dir),
+                env=env,
+                creationflags=creationflags,
             )
-            assert proc.stdout and proc.stderr
-            stderr_task = asyncio.create_task(_drain_stream(proc.stderr))
-            ok = False
-            try:
-                while True:
-                    line = await proc.stdout.readline()
-                    if not line:
-                        break
-                    try:
-                        obj = json.loads(line.decode("utf-8", errors="ignore").strip())
-                    except Exception:
-                        continue
-                    if obj.get("kind") == "init":
-                        ok = bool(obj.get("ok", False))
-                        break
-                await proc.wait()
-            finally:
-                stderr_task.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await stderr_task
 
-            await self._status(f"[OES] init {'OK' if ok else 'FAIL'} (CH{self._ch}/USB{self._usb})")
-            return ok
+            stderr_task = asyncio.create_task(_drain_stream(proc.stderr, stderr_tail, max_lines=80))
+
+            deadline = asyncio.get_event_loop().time() + float(timeout_s)
+            while True:
+                remain = deadline - asyncio.get_event_loop().time()
+                if remain <= 0:
+                    raise asyncio.TimeoutError()
+
+                line = await asyncio.wait_for(proc.stdout.readline(), timeout=remain)
+                if not line:
+                    break
+
+                s = line.decode("utf-8", errors="replace").strip()
+                if not s:
+                    continue
+
+                # 워커의 status도 그대로 로그에 남김
+                obj = None
+                try:
+                    obj = json.loads(s)
+                except Exception:
+                    await self._status(f"[OES][worker] {s}")
+                    continue
+
+                kind = obj.get("kind")
+                if kind == "status":
+                    await self._status(str(obj.get("message", "")))
+                elif kind == "init":
+                    init_obj = obj
+                    break
+                else:
+                    await self._status(f"[OES][worker] {obj}")
+
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=3.0)
+            except Exception:
+                with contextlib.suppress(Exception):
+                    proc.kill()
+                with contextlib.suppress(Exception):
+                    await proc.wait()
+
+            with contextlib.suppress(Exception):
+                await stderr_task
+
+            rc = proc.returncode
+            if not init_obj:
+                self._init_error = f"init JSON not received (rc={rc})"
+                if stderr_tail:
+                    self._init_error += " | stderr_tail=" + " / ".join(stderr_tail[-5:])
+                await self._status(f"[OES] init FAIL: {self._init_error}")
+                self._init_done = True
+                return False
+
+            ok = bool(init_obj.get("ok", False))
+            if ok:
+                self._init_ok = True
+                self._init_result = init_obj
+                await self._status(f"[OES] init OK: {init_obj}")
+                self._init_done = True
+                return True
+
+            # ok=False → error/scan을 최대한 보여준다
+            err = init_obj.get("error") or "initialize_device failed"
+            scan = init_obj.get("scan") or {}
+            self._init_error = f"{err} | scan={scan}"
+            if stderr_tail:
+                self._init_error += " | stderr_tail=" + " / ".join(stderr_tail[-5:])
+
+            await self._status(f"[OES] init FAIL: {self._init_error}")
+            self._init_result = init_obj
+            self._init_done = True
+            return False
+
+        except asyncio.TimeoutError:
+            if proc is not None and proc.returncode is None:
+                with contextlib.suppress(Exception):
+                    proc.kill()
+                with contextlib.suppress(Exception):
+                    await proc.wait()
+
+            self._init_error = f"init timeout after {timeout_s}s"
+            if stderr_tail:
+                self._init_error += " | stderr_tail=" + " / ".join(stderr_tail[-5:])
+            await self._status(f"[OES] init TIMEOUT: {self._init_error}")
+            self._init_done = True
+            return False
 
         except Exception as e:
-            await self._status(f"[OES] init 예외: {type(e).__name__}: {e}")
+            if proc is not None and proc.returncode is None:
+                with contextlib.suppress(Exception):
+                    proc.kill()
+                with contextlib.suppress(Exception):
+                    await proc.wait()
+
+            self._init_error = f"{type(e).__name__}: {e}"
+            await self._status(f"[OES] init EXC: {self._init_error}")
+            self._init_done = True
             return False
 
     async def run_measurement(self, duration_sec: float, integration_ms: int) -> None:
         if self.is_running:
             await self._status("[OES] 이미 측정 중 → 요청 무시")
             return
+        
+        # ✅ measure 직전에도 워커 경로 재계산
+        self._worker_cmd = _resolve_worker_command()
 
         out_csv = self._local_dir / _make_filename()
         self._out_csv_local = out_csv
         self._x_axis = None
         self._rows_seen = 0
+
+        # ✅ STOP 상태 초기화
+        self._stop_requested = False
         
         # ✅ 이번 측정의 워커 결과 초기화
         self._worker_finished = None
+
+        worker_exe = Path(self._worker_cmd[0])
+        if not worker_exe.exists():
+            await self._status(
+                "[OES] 워커 exe를 찾지 못함 → 측정 스킵\n"
+                f" expected={worker_exe}\n"
+                f" base_dir={_main_exe_dir()}\n"
+                f" cwd={Path.cwd()}"
+            )
+            # ✅ finished 이벤트로 실패만 알리고 끝(공정은 다음 단계로 계속)
+            self._emit(OESEvent(
+                kind="finished",
+                success=False,
+                message="OES 측정 실패(워커 exe 없음)",
+                out_csv=str(self._out_csv_local) if self._out_csv_local else None,
+                rows=0,
+                elapsed_s=0.0,
+                error=f"worker exe not found: {worker_exe}",
+            ))
+            self.is_running = False
+            return
 
         cmd = [
             *self._worker_cmd,
@@ -279,12 +425,28 @@ class OESAsync:
         self.is_running = True
 
         try:
+            creationflags = _worker_creationflags()
+            await self._status(
+                "[OES] measure spawn\n"
+                f"  cmd={cmd}\n"
+                f"  creationflags={creationflags}\n"
+                f"  out_csv={out_csv}\n"
+                f"  cwd={Path.cwd()}"
+            )
+
+            env = os.environ.copy()
+            env["PYTHONUNBUFFERED"] = "1"
+            worker_dir = str(Path(self._worker_cmd[0]).resolve().parent)
+
             self._proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
-                creationflags=(getattr(subprocess, "CREATE_NO_WINDOW", 0) if os.name == "nt" else 0),
+                creationflags=creationflags,
+                cwd=worker_dir,
+                env=env,
             )
+
             assert self._proc.stdout and self._proc.stderr
 
             self._stderr_tail.clear()
@@ -401,19 +563,50 @@ class OESAsync:
             self.is_running = False
 
     async def stop_measurement(self) -> None:
-        if self._proc and self.is_running:
-            await self._status("[OES] stop_measurement → terminate")
-            with contextlib.suppress(Exception):
-                self._proc.terminate()
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(self._proc.wait(), timeout=5.0)
-            if self._proc.returncode is None:
-                with contextlib.suppress(Exception):
-                    self._proc.kill()
-                    await self._proc.wait()
+        # 측정 중이 아니면 tail만 정리하고 종료
+        if not self._proc or (not self.is_running):
+            await self._stop_tail()
+            return
+
+        proc = self._proc
+        self._stop_requested = True
+
+        await self._status(f"[OES] stop_measurement → request stop flag (pid={getattr(proc, 'pid', None)})")
+
+        # ✅ 1) tail을 먼저 멈춰서 파일 핸들을 최대한 빨리 풀어준다
+        #    (워커가 로컬 삭제를 해야 하므로)
         await self._stop_tail()
-        await self._cleanup_proc_tasks()
-        self.is_running = False
+
+        # ✅ 2) 워커가 감시하는 stop flag 생성
+        if not self._out_csv_local:
+            await self._status("[OES] stop_measurement: out_csv_local 없음 → stop flag 생성 스킵")
+        else:
+            stop_usb = self._out_csv_local.parent / f".stop_usb{int(self._usb)}.flag"
+            stop_csv = self._out_csv_local.with_suffix(self._out_csv_local.suffix + ".stop")
+
+            with contextlib.suppress(Exception):
+                stop_usb.write_text("stop\n", encoding="utf-8")
+            with contextlib.suppress(Exception):
+                stop_csv.write_text("stop\n", encoding="utf-8")
+
+        # ✅ 3) 워커가 NAS 업로드/정리 후 종료할 시간을 준다
+        try:
+            await asyncio.wait_for(proc.wait(), timeout=60.0)
+        except asyncio.TimeoutError:
+            await self._status("[OES] stop: graceful timeout → terminate/kill fallback")
+            with contextlib.suppress(Exception):
+                proc.terminate()
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(proc.wait(), timeout=5.0)
+            if proc.returncode is None:
+                with contextlib.suppress(Exception):
+                    proc.kill()
+                    await proc.wait()
+
+        # ✅ stdout watcher가 finished JSON을 다 읽도록 잠깐 대기(선택)
+        if self._stdout_task:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(self._stdout_task, timeout=2.0)
 
     async def cleanup(self) -> None:
         await self.stop_measurement()
@@ -429,14 +622,20 @@ class OESAsync:
                 except Exception:
                     continue
                 k = obj.get("kind")
-                if k == "started":
-                    out_csv = obj.get("out_csv")
-                    if out_csv:
-                        await self._status(f"[OES] worker started: {out_csv}")
-                elif k in ("finished", "fatal"):
-                    # ✅ 최종 결과 저장(성공/실패, rows, elapsed_s, error/trace 등)
-                    self._worker_finished = obj
+                if k == "status":
+                    msg = obj.get("message", "")
+                    if msg:
+                        await self._status(f"[OES] {msg}")
 
+                elif k == "started":
+                    # ✅ 워커가 첫 프레임 확보 + CSV 헤더 작성 완료했다는 신호
+                    out_csv = obj.get("out_csv")
+                    cols = obj.get("cols")
+                    resolved_usb = obj.get("resolved_usb")
+                    await self._status(f"[OES] worker started out_csv={out_csv} cols={cols} usb={resolved_usb}")
+
+                elif k in ("finished", "fatal"):
+                    self._worker_finished = obj
                     ok = bool(obj.get("ok", False))
                     if ok:
                         await self._status("[OES] worker finished OK")
@@ -448,13 +647,28 @@ class OESAsync:
             return
 
     async def _tail_csv(self, path: Path) -> None:
-        for _ in range(300):  # 최대 30초
+        t0 = time.time()
+        last_log = 0.0
+        while True:
             if path.exists() and path.stat().st_size > 0:
                 break
-            await asyncio.sleep(0.1)
 
-        if not path.exists():
-            return
+            # 워커가 먼저 죽었는데 CSV가 없으면 원인 로그
+            if self._proc and (self._proc.returncode is not None):
+                await self._status(f"[OES] CSV 미생성 상태로 워커 종료됨 rc={self._proc.returncode} path={path}")
+                return
+
+            # 5초마다 진행상황 로그
+            if (time.time() - last_log) > 5.0:
+                last_log = time.time()
+                await self._status(f"[OES] CSV 생성 대기중... {(last_log - t0):.1f}s path={path}")
+
+            # 60초 넘어가면 일단 종료(원인 파악용)
+            if (time.time() - t0) > 60.0:
+                await self._status(f"[OES] CSV 생성 대기 TIMEOUT(60s) path={path}")
+                return
+
+            await asyncio.sleep(0.1)
 
         try:
             with open(path, "r", encoding="utf-8", newline="") as f:
@@ -543,6 +757,7 @@ class OESAsync:
             self._tail_task = None
 
     async def _cleanup_proc_tasks(self) -> None:
+        # stdout/stderr task 정리
         for name in ("_stdout_task", "_stderr_task"):
             t = getattr(self, name)
             if t:
@@ -551,8 +766,25 @@ class OESAsync:
                     await t
                 setattr(self, name, None)
 
-        if self._proc and self._proc.returncode is None:
-            with contextlib.suppress(Exception):
-                self._proc.kill()
-                await self._proc.wait()
+        proc = self._proc
         self._proc = None
+
+        if not proc:
+            return
+
+        # ✅ STOP 요청이 있었으면 먼저 정상 종료를 기다린다
+        if proc.returncode is None and self._stop_requested:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(proc.wait(), timeout=20.0)
+
+        # 그래도 안 죽으면 terminate→kill 순서로만 “최후 수단”
+        if proc.returncode is None:
+            with contextlib.suppress(Exception):
+                proc.terminate()
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(proc.wait(), timeout=5.0)
+
+        if proc.returncode is None:
+            with contextlib.suppress(Exception):
+                proc.kill()
+                await proc.wait()
