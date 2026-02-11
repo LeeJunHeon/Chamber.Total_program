@@ -2098,7 +2098,7 @@ class ChamberRuntime:
             self._ensure_background_started()
 
             # ✅ Start 클릭 시점에 OES init을 백그라운드로 '미리' 수행
-            self._kick_oes_init_background(force=True)
+            self._kick_oes_init_background(force=False)
 
             self._on_process_status_changed(True)
 
