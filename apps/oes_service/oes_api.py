@@ -599,14 +599,30 @@ class OESAsync:
         return None
 
     def _ensure_npixels(self, ch: int) -> int:
-        for npix in (2048, 1024, 512, 4096):
+        # ✅ under-allocation 방지: 큰 버퍼부터 시도 (DLL이 픽셀 수만큼 써버리는 타입이면 이게 안전)
+        #   필요 시 환경변수로 튜닝 가능
+        cand = os.environ.get("OES_NPIX_CAND", "").strip()
+        if cand:
             try:
+                candidates = tuple(int(x) for x in cand.split(",") if x.strip())
+            except Exception:
+                candidates = (8192, 4096, 2048)
+        else:
+            candidates = (8192, 4096, 2048)
+
+        for npix in candidates:
+            try:
+                # 디버그용(네이티브 크래시 직전 마지막 시도를 로그에 남김)
+                _runlog(f"[worker] ensure_npixels: try npix={npix} ch={ch}")
                 r, arr = self._read_pixels(ch, npix)
+
+                # DLL별로 r 의미가 다를 수 있어 r>=0이면 일단 성공으로 보고 채택
                 if r >= 0 and arr is not None and arr.size == npix:
                     return int(npix)
             except Exception:
                 continue
-        raise RuntimeError("cannot determine pixel count")
+
+        raise RuntimeError(f"cannot determine pixel count (candidates={candidates})")
 
     def _apply_device_settings_blocking(self, ch: int, integration_ms: int) -> None:
         if self._set_baseline:
@@ -677,9 +693,21 @@ class OESAsync:
     async def cleanup(self) -> None:
         if self.sp_dll is None or self.sChannel < 0:
             return
+
         ch = int(self.sChannel)
+        dll = self.sp_dll  # 로컬로 잡아두고 handle 추출
+        h = getattr(dll, "_handle", None)
+
         with contextlib.suppress(Exception):
             await self._call(self._safe_close_channel_blocking, ch)
+
+        # ✅ DLL 언로드(옵션): 측정 끝났는데도 dll 파일이 잡힌 것처럼 보이는 문제를 줄임
+        if os.name == "nt" and h:
+            with contextlib.suppress(Exception):
+                k32 = ctypes.WinDLL("kernel32", use_last_error=True)
+                k32.FreeLibrary.argtypes = [ctypes.c_void_p]
+                k32.FreeLibrary.restype = ctypes.c_int
+                k32.FreeLibrary(ctypes.c_void_p(h))
 
         self.sChannel = -1
         self.sp_dll = None
