@@ -397,7 +397,7 @@ class HostHandlers:
 
                     step = getattr(pc, "current_step", None)
                     if step is None:
-                        # START 직후 스텝 진입 전 구간도 'IG 대기'로 간주하여 running 유지
+                        # START 직후 스텝 진입 전 Loadlock running
                         return True
 
                     act = getattr(step, "action", None)
@@ -405,9 +405,15 @@ class HostHandlers:
                     if actv is None:
                         actv = str(act) if act is not None else ""
 
-                    s = str(actv).upper()
+                    s = str(actv).strip().upper()
 
-                    return ("RGA" not in s)
+                    # Enum 문자열이 "Action.IG_CMD" 같은 형태면 뒤 토큰만 사용
+                    if "." in s:
+                        s = s.split(".")[-1].strip()
+
+                    # ✅ IG 단계일 때만 True
+                    return (s == "IG_CMD")
+
                 except Exception:
                     return False
 
