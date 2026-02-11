@@ -243,6 +243,7 @@ class ChamberRuntime:
         self._bg_started = False
         self._pc_stopping = False
         self._pending_device_cleanup = False
+        self._cleanup_timed_out = False  # ✅ cleanup 중 timeout 발생 여부(재시작 안전장치)
         self._last_polling_targets: TargetsMap | None = None
         self._last_state_text: str | None = None
         # 지연(다음 공정 예약)과 카운트다운을 분리
@@ -693,7 +694,7 @@ class ChamberRuntime:
                     # 예외/초기화 실패는 즉시 실패 처리
                     self._oes_active = False
                     self._oes_initialized = False  # 다음 런에서 재초기화 시도
-                    self.append_log("OES", f"OES 실패: {e!r} → 종료 절차로 전환")
+                    self.append_log("OES", f"OES 실패: {e!r}")
                     if self.chat:
                         with contextlib.suppress(Exception):
                             self.chat.notify_text(f"[OES] 실패: {e!r}")
@@ -2095,6 +2096,10 @@ class ChamberRuntime:
                 await self.dc_pulse.set_endpoint_reconnect(host, port)
 
             self._ensure_background_started()
+
+            # ✅ Start 클릭 시점에 OES init을 백그라운드로 '미리' 수행
+            self._kick_oes_init_background(force=False)
+
             self._on_process_status_changed(True)
 
             timeout = 10.0 if (use_dc_pulse or use_rf_pulse) else 8.0
@@ -2167,6 +2172,35 @@ class ChamberRuntime:
 
             self._start_next_process_from_queue(False)
             self._on_process_status_changed(False)
+
+    def _kick_oes_init_background(self, *, force: bool = True) -> None:
+        """Start 버튼을 눌렀을 때 OES init을 '백그라운드'로 미리 돌려둔다."""
+        if not getattr(self, "oes", None):
+            return
+
+        t = getattr(self, "_oes_init_task", None)
+        if t and not t.done():
+            return
+
+        async def _run():
+            try:
+                self.append_log(f"OES{self.ch}", "[OES] init (background) begin")
+                self._ensure_background_started()
+
+                ok = await self.oes.initialize_device(timeout_s=20.0, force=force)
+                self._oes_initialized = bool(ok)
+
+                if ok:
+                    self.append_log(f"OES{self.ch}", "[OES] init (background) OK")
+                else:
+                    err = getattr(self.oes, "_init_error", None) or "unknown"
+                    self.append_log(f"OES{self.ch}", f"[OES] init (background) FAIL: {err}")
+
+            except Exception as e:
+                self._oes_initialized = False
+                self.append_log(f"OES{self.ch}", f"[OES] init (background) EXC: {type(e).__name__}: {e}")
+
+        self._oes_init_task = self._spawn_detached(_run(), store=True, name=f"OES.init.{self.ch}")
 
     async def _wait_device_connected(self, dev: object, name: str, timeout_s: float) -> bool:
         try: t0 = asyncio.get_running_loop().time()
@@ -2492,6 +2526,12 @@ class ChamberRuntime:
 
     def request_stop_all(self, user_initiated: bool):
         self._cancel_delay_task()
+
+        # ✅ 이미 공정이 끝났으면 STOP 시퀀스 자체를 타지 않음(부작용 방지)
+        if not getattr(self.process_controller, "is_running", False):
+            self.append_log("MAIN", "정지 요청 무시: 실행 중 공정 없음(이미 종료됨)")
+            return
+        
         if getattr(self, "_pc_stopping", False):
             self.append_log("MAIN", "정지 요청 무시: 이미 종료 절차 진행 중")
             return
@@ -2580,11 +2620,13 @@ class ChamberRuntime:
             if self.rf_power and hasattr(self.rf_power, "set_process_status"):
                 with contextlib.suppress(Exception): self.rf_power.set_process_status(False)
             return
-        
+
+        # ✅ 이번 cleanup이 “완전히 끝났는지” 표시 (Start 재진입 안전장치)
+        self._cleanup_timed_out = False
+
         # ✅ heavy 시작 직후도 한 번 더 OFF
         with contextlib.suppress(Exception):
             if self.mfc and hasattr(self.mfc, "on_process_finished"):
-                # 호출 시 폴링과 내부 플래그를 초기화
                 self.mfc.on_process_finished(False)
             elif self.mfc and hasattr(self.mfc, "set_process_status"):
                 self.mfc.set_process_status(False)
@@ -2599,14 +2641,27 @@ class ChamberRuntime:
             with contextlib.suppress(Exception): self.rf_power.set_process_status(False)
 
         loop = self._loop_from_anywhere()
+
+        # 0) bg task cancel (timeout)
         try:
             current = asyncio.current_task()
             live = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done() and t is not current]
-            for t in live: loop.call_soon(t.cancel)
-            if live: await asyncio.gather(*live, return_exceptions=True)
+            for t in live:
+                with contextlib.suppress(Exception):
+                    t.cancel()
+
+            if live:
+                try:
+                    await asyncio.wait_for(asyncio.gather(*live, return_exceptions=True), timeout=5.0)
+                except asyncio.TimeoutError:
+                    self._cleanup_timed_out = True
+                    with contextlib.suppress(Exception):
+                        names = [getattr(t, "get_name", lambda: repr(t))() for t in live]
+                    self.append_log("MAIN", f"⚠ bg task cancel timeout: {names!r}")
         finally:
             self._bg_tasks = []
 
+        # 1) IG cancel (timeout 유지)
         try:
             if self.ig and hasattr(self.ig, "cancel_wait"):
                 with contextlib.suppress(asyncio.TimeoutError):
@@ -2614,30 +2669,68 @@ class ChamberRuntime:
         except Exception:
             pass
 
-        tasks = []
+        # 2) device cleanup (timeout)
+        cleanup_tasks: list[asyncio.Task] = []
         for dev in (self.ig, self.mfc, self.dc_pulse, self.rf_pulse, self.dc_power, self.rf_power, self.oes, self.rga):
             if dev and hasattr(dev, "cleanup"):
-                try: tasks.append(dev.cleanup())
-                except Exception: pass
-        if tasks:
-            await asyncio.gather(*tasks, return_exceptions=True)
+                try:
+                    coro = dev.cleanup()
+                except Exception:
+                    continue
+                try:
+                    nm = getattr(dev, "NAME", None) or dev.__class__.__name__
+                    cleanup_tasks.append(loop.create_task(coro, name=f"Cleanup.{nm}.CH{self.ch}"))
+                except Exception:
+                    cleanup_tasks.append(loop.create_task(coro))
 
-        # 1) footer 먼저 (파일이 열려 있으면 "# ==== END ====" 남김)
+        if cleanup_tasks:
+            done, pending = await asyncio.wait(cleanup_tasks, timeout=15.0)
+            if pending:
+                self._cleanup_timed_out = True
+                with contextlib.suppress(Exception):
+                    pn = [t.get_name() for t in pending]
+                self.append_log("MAIN", f"⚠ device cleanup timeout: {pn!r}")
+                for t in pending:
+                    with contextlib.suppress(Exception):
+                        t.cancel()
+                with contextlib.suppress(Exception):
+                    await asyncio.gather(*pending, return_exceptions=True)
+
+        # 3) footer 먼저
         with contextlib.suppress(Exception):
             self._close_run_log()
 
-        # 2) writer 완전 종료 + 큐 리셋
-        with contextlib.suppress(Exception):
-            await self._shutdown_log_writer()
+        # 4) writer 완전 종료 (timeout)
+        try:
+            t = loop.create_task(self._shutdown_log_writer(), name=f"ShutdownLogWriter.CH{self.ch}")
+            try:
+                await asyncio.wait_for(t, timeout=6.0)
+            except asyncio.TimeoutError:
+                self._cleanup_timed_out = True
+                self.append_log("MAIN", "⚠ log writer shutdown timeout")
+                with contextlib.suppress(Exception):
+                    t.cancel()
+                    await asyncio.gather(t, return_exceptions=True)
+        except Exception:
+            self._cleanup_timed_out = True
 
-        # 3) 파일 경로/버퍼 초기화 (다음 런은 새 파일명으로 시작)
+        # 5) 파일 경로/버퍼 초기화
         self._log_file_path = None
         with contextlib.suppress(Exception):
             self._prestart_buf.clear()
 
         self._bg_started = False
-        self._devices_started = False  # ✅ 다음 시작 때 장치 start() 다시 보장
+        self._devices_started = False
         self._run_select = None
+
+        # ✅ cleanup이 완전히 끝난 경우에만 “정리 완료”로 간주
+        if not self._cleanup_timed_out:
+            self._pending_device_cleanup = False
+            self._pc_stopping = False
+        else:
+            # 네가 걱정한 케이스 방지: UI가 idle처럼 보여도 Start는 막아둠
+            self._pending_device_cleanup = True
+            self.append_log("MAIN", "⚠ cleanup 미완료(타임아웃) → Start는 정리 완료 전까지 제한")
 
     def shutdown_fast(self) -> None:
         async def run():
@@ -3509,25 +3602,19 @@ class ChamberRuntime:
         self.append_log("MAIN", f"=== '{note}' 공정 준비 (장비 연결부터 기록) ===")
 
     def _open_run_log(self, params: Mapping[str, Any]) -> None:
-        # 1) 고유 파일경로 계산 (아직 self._log_file_path 노출 X)
         now_local = datetime.now()
         ts = now_local.strftime("%Y%m%d_%H%M%S")
 
-        # 1) 공정명 가져오기 (UI / CSV 공통)
         raw_name = str(params.get("process_note") or params.get("Process_name") or "").strip()
-
-        # 2) 공정명 비어있으면 기본값
         if not raw_name:
             raw_name = "Untitled"
 
-        # 3) 파일명에 못 쓰는 문자 제거 (Windows/SMB/NAS 호환)
         safe_name = re.sub(r'[\\/:*?"<>|]+', "_", raw_name)
         safe_name = re.sub(r"\s+", " ", safe_name).strip()
         safe_name = safe_name.replace(" ", "_")
         safe_name = safe_name.strip(" .")
         safe_name = safe_name[:60] if safe_name else "Untitled"
 
-        # 4) 최종 파일명: CH2_공정명_날짜_시간.txt
         base = (self._log_dir / f"CH{self.ch}_{safe_name}_{ts}").with_suffix(".txt")
         path = base
         i = 1
@@ -3535,32 +3622,29 @@ class ChamberRuntime:
             path = (self._log_dir / f"CH{self.ch}_{safe_name}_{ts}_{i}").with_suffix(".txt")
             i += 1
 
-        # 2) 우선 파일을 열어서 헤더를 '먼저' 기록 (line-buffering 권장)
-        fp = open(path, "a", encoding="utf-8", newline="", buffering=1)
-        try:
-            name = (params.get("process_note")
-                    or params.get("Process_name")
-                    or f"Run CH{self.ch}")
-            fp.write("# ==== Sputter Run ====\n")
-            fp.write(f"# started_at = {datetime.now().isoformat()}\n")
-            fp.write(f"# chamber = CH{self.ch}\n")
-            fp.write(f"# process_name = {name}\n")
-            if "process_time" in params:
-                fp.write(f"# time_min = {float(params.get('process_time', 0) or 0):.2f}\n")
-            fp.write("# ============================\n")
-            fp.flush()
-        finally:
-            # 3) 이제야 경로/핸들을 '노출' → 이 시점부터 writer가 파일에 씀
-            self._log_file_path = path
-            self._log_fp = fp
-            if not self._log_writer_task or self._log_writer_task.done():
-                self._set_task_later("_log_writer_task", self._log_writer_loop(), name=f"LogWriter.CH{self.ch}")
+        # ✅ 여기서부터 writer가 이 경로로만 쓴다 (직접 open 금지)
+        self._log_file_path = path
+        self._log_fp = None  # 더 이상 사용하지 않음
 
-            # 4) pre-start 버퍼를 파일에 옮긴 뒤 비운다(초반 상황도 기록 보존)
-            with contextlib.suppress(Exception):
-                for line in list(self._prestart_buf):
-                    self._log_enqueue_nowait(line)
-                self._prestart_buf.clear()
+        if not self._log_writer_task or self._log_writer_task.done():
+            self._set_task_later("_log_writer_task", self._log_writer_loop(), name=f"LogWriter.CH{self.ch}")
+
+        name = (params.get("process_note") or params.get("Process_name") or f"Run CH{self.ch}")
+
+        # ✅ 헤더도 큐로 기록(순서 보장)
+        self._log_enqueue_nowait("# ==== Sputter Run ====\n")
+        self._log_enqueue_nowait(f"# started_at = {datetime.now().isoformat()}\n")
+        self._log_enqueue_nowait(f"# chamber = CH{self.ch}\n")
+        self._log_enqueue_nowait(f"# process_name = {name}\n")
+        if "process_time" in params:
+            self._log_enqueue_nowait(f"# time_min = {float(params.get('process_time', 0) or 0):.2f}\n")
+        self._log_enqueue_nowait("# ============================\n")
+
+        # ✅ pre-start 버퍼도 헤더 뒤로 밀어 넣기
+        with contextlib.suppress(Exception):
+            for line in list(self._prestart_buf):
+                self._log_enqueue_nowait(line)
+            self._prestart_buf.clear()
 
         self.append_log("Logger", f"새 로그 파일 시작: {path.name}")
 
@@ -3606,9 +3690,10 @@ class ChamberRuntime:
 
                 # ✅ open/write/flush는 무조건 스레드로
                 try:
+                    loop = asyncio.get_running_loop()
                     await asyncio.wait_for(
-                        asyncio.to_thread(self._log_write_sync, self._log_file_path, text),
-                        timeout=5.0,  # NAS stall 대비: 너무 길게 잡지 말기
+                        loop.run_in_executor(self._log_io_exec, self._log_write_sync, self._log_file_path, text),
+                        timeout=5.0,
                     )
                 except Exception as e:
                     # NAS 쓰기/열기 실패 → 로컬로 전환 후 다시 시도
@@ -3618,8 +3703,9 @@ class ChamberRuntime:
                         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                         self._log_file_path = (local_dir / f"CH{self.ch}_{ts}_recovered.txt")
 
+                        loop = asyncio.get_running_loop()
                         await asyncio.wait_for(
-                            asyncio.to_thread(self._log_write_sync, self._log_file_path, text),
+                            loop.run_in_executor(self._log_io_exec, self._log_write_sync, self._log_file_path, text),
                             timeout=5.0,
                         )
                         self.append_log("Logger", f"NAS 로그 쓰기 실패({e!r}) → 로컬 폴백: {self._log_file_path}")
@@ -3634,39 +3720,62 @@ class ChamberRuntime:
             pass
 
     async def _shutdown_log_writer(self):
-        # 1) writer 중지
-        if self._log_writer_task:
-            self._log_writer_task.cancel()
-            with contextlib.suppress(Exception):
-                await self._log_writer_task
+        # ✅ 어떤 상황에도 상태 리셋은 보장 (취소/예외에도 finally 실행)
+        path = self._log_file_path
+        fp = self._log_fp
+        loop = asyncio.get_running_loop()
+
+        try:
+            # 1) writer 중지
+            t = self._log_writer_task
             self._log_writer_task = None
+            if t:
+                t.cancel()
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(t, timeout=2.0)
 
-        # 2) 파일 핸들이 없지만 경로가 있으면 다시 열어둠(드레인 위해)
-        if self._log_fp is None and self._log_file_path:
-            with contextlib.suppress(Exception):
-                self._log_file_path.parent.mkdir(parents=True, exist_ok=True)
-            with contextlib.suppress(Exception):
-                self._log_fp = open(self._log_file_path, "a", encoding="utf-8", newline="")
-
-        # 3) 큐에 남은 로그를 최대한 파일로 드레인
-        if self._log_fp:
+            # 2) 큐 드레인 (이벤트루프에서 빠르게 메모리로만)
+            drained: list[str] = []
             while True:
                 try:
-                    line = self._log_q.get_nowait()
+                    drained.append(self._log_q.get_nowait())
                 except asyncio.QueueEmpty:
                     break
+            text = "".join(drained)
+
+            # 3) (남아있을 수 있는) fp는 executor로 닫기
+            self._log_fp = None
+            if fp:
                 with contextlib.suppress(Exception):
-                    self._log_fp.write(line)
+                    await asyncio.wait_for(
+                        loop.run_in_executor(self._log_io_exec, fp.close),
+                        timeout=2.0,
+                    )
 
-            with contextlib.suppress(Exception):
-                self._log_fp.flush()
-            with contextlib.suppress(Exception):
-                self._log_fp.close()
+            # 4) 남은 로그를 executor에서 “한 번에” 쓰기
+            if path and text:
+                try:
+                    await asyncio.wait_for(
+                        loop.run_in_executor(self._log_io_exec, self._log_write_sync, path, text),
+                        timeout=6.0,
+                    )
+                except Exception:
+                    # 최후 폴백: 로컬로라도 남김
+                    with contextlib.suppress(Exception):
+                        local_dir = Path.cwd() / f"_Logs_local_CH{self.ch}"
+                        local_dir.mkdir(parents=True, exist_ok=True)
+                        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                        rec = local_dir / f"CH{self.ch}_{ts}_shutdown_drain.txt"
+                        await asyncio.wait_for(
+                            loop.run_in_executor(self._log_io_exec, self._log_write_sync, rec, text),
+                            timeout=6.0,
+                        )
 
-        # 4) 정리
-        self._log_fp = None
-        self._log_file_path = None
-        self._log_q = asyncio.Queue(maxsize=4096)
+        finally:
+            # 5) 정리 (다음 런 보장)
+            self._log_fp = None
+            self._log_file_path = None
+            self._log_q = asyncio.Queue(maxsize=4096)
 
     def _clear_queue_and_reset_ui(self) -> None:
         # 전역 runtime_state로 종료 시각을 기록하므로 로컬 타임스탬프는 불필요
@@ -3701,9 +3810,14 @@ class ChamberRuntime:
         with contextlib.suppress(Exception):
             self._prestart_buf.clear()
 
-        # 5) 종료 관련 내부 플래그도 함께 초기화
-        self._pending_device_cleanup = False
-        self._pc_stopping = False
+        # 5) 종료 관련 내부 플래그
+        # - cleanup 타임아웃이면 Start를 막아야 안전(“정리 덜 끝났는데 idle” 방지)
+        if not getattr(self, "_cleanup_timed_out", False):
+            self._pending_device_cleanup = False
+            self._pc_stopping = False
+        else:
+            self.append_log("MAIN", "⚠ cleanup timeout 상태 유지: Start 제한 유지")
+
 
     # ------------------------------------------------------------------
     # 기본 UI값/리셋
