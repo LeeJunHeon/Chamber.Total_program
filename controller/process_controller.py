@@ -341,6 +341,12 @@ class ProcessController:
             self._finish(False)
 
     def request_stop(self) -> None:
+        # ✅ 핵심: 공정이 이미 종료된 상태에서 들어오는 STOP은 무시
+        # (정상 종료 후 시간차로 들어온 stop 때문에 'stopped 종료 이벤트'가 다시 발생하는 걸 차단)
+        if not self.is_running:
+            self._emit_log("Process", "정지 요청: 실행 중 공정 없음(이미 종료됨) → 무시")
+            return
+
         if self._aborting:
             self._emit_log("Process", "정지 요청: 이미 긴급 중단 처리 중입니다.")
             return
@@ -359,13 +365,17 @@ class ProcessController:
             self._emit_log("Process", "[TEST MODE] STOP: 장비 종료 절차 스킵 (딜레이만 취소)")
             return
 
-        # ✅ 즉시 종료 절차로 진입 (러너의 '다음 틱'을 기다리지 않음)
+        # ✅ 즉시 종료 절차로 진입
         self._start_normal_shutdown()
 
-        # 공정 미실행 상태일 수 있으니 러너가 없다면 기동
+        # ✅ _start_normal_shutdown()에서 '종료 절차 없음'이면 _finish(False)로 is_running=False가 될 수 있음
         if not self.is_running:
-            self.is_running = True
-            self._current_step_idx = -1
+            return
+
+        # ✅ (안전장치) 러너가 비정상적으로 없거나 종료된 상태면, 종료 시퀀스 수행을 위해서만 재기동
+        t = self._runner_task
+        if t is None or t.done():
+            self._emit_log("Process", "정지 요청: runner가 없거나 종료됨 → 종료 시퀀스 수행 위해 runner 재기동")
             self._runner_task = asyncio.create_task(self._runner())
 
     def emergency_stop(self) -> None:
@@ -891,6 +901,11 @@ class ProcessController:
     # =========================
 
     def _start_normal_shutdown(self) -> None:
+        # ✅ 2중 방어: 이미 종료된 상태면 종료 절차 자체를 시작하지 않음
+        if not self.is_running:
+            self._emit_log("Process", "종료 절차 무시: 실행 중 공정 없음(이미 종료됨)")
+            return
+
         if self._aborting:
             self._emit_log("Process", "종료 절차 무시: 이미 긴급 중단 중입니다.")
             return
