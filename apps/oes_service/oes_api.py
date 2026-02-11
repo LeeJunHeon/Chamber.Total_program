@@ -856,17 +856,6 @@ async def cmd_measure(
     stopped = False
     stop_reason = None
 
-    # ✅ stop flag(메인이 만들어서 워커에게 정상 종료 요청)
-    stop_flag_usb = out_dir_final / f".stop_usb{int(usb)}.flag"
-    stop_flag_csv = Path(str(out_csv) + ".stop") if out_csv else None
-
-    # 이전 실행 잔재 제거(스테일 stop 방지)
-    with contextlib.suppress(Exception):
-        stop_flag_usb.unlink()
-    if stop_flag_csv:
-        with contextlib.suppress(Exception):
-            stop_flag_csv.unlink()
-
     try:
         if not acquired:
             _errlog(f"cmd=measure mutex timeout ch={ch} usb={usb} timeout_ms={mutex_ms}")
