@@ -593,9 +593,9 @@ class OESAsync:
             if r < 0:
                 return None
             
-            wl = np.frombuffer(wl_buf, dtype=np.float64, count=npix).astype(float)
+            wl = np.frombuffer(wl_buf, dtype=np.float64, count=buf_len).astype(float)
             wl = wl[:int(npix)]             # ✅ 실제 npix 길이에 맞춰 자르기
-            
+
             if np.all(np.isfinite(wl)) and (wl.max() > wl.min()):
                 return wl
         except Exception:
@@ -845,16 +845,19 @@ async def cmd_measure(
     f = None
     oes = None
 
-    # ✅ out_dir_final / out_csv 확정(네가 작성한 로직 유지)
-    if out_csv:
-        out_csv = Path(out_csv).expanduser().resolve()
-        out_dir_final = out_csv.parent
-    elif out_dir:
-        out_dir_final = Path(out_dir).expanduser().resolve()
-        out_csv = out_dir_final / _make_default_filename()
-    else:
-        out_dir_final = _default_out_dir(ch).resolve()
-        out_csv = out_dir_final / _make_default_filename()
+    # ✅ stop flag(메인이 만들어서 워커에게 정상 종료 요청)
+    stop_flag_usb = out_dir_final / f".stop_usb{int(usb)}.flag"
+    stop_flag_csv = Path(str(out_csv) + ".stop") if out_csv else None
+
+    # 이전 실행 잔재 제거(스테일 stop 방지)
+    with contextlib.suppress(Exception):
+        stop_flag_usb.unlink()
+    if stop_flag_csv:
+        with contextlib.suppress(Exception):
+            stop_flag_csv.unlink()
+
+    stopped = False
+    stop_reason = None
 
     try:
         if not acquired:
@@ -917,7 +920,21 @@ async def cmd_measure(
 
         deadline = time.time() + max(0.0, float(duration_s))
         while time.time() < deadline:
+            # ✅ stop 요청 감지(USB 기반 / CSV 기반)
+            if stop_flag_usb.exists() or (stop_flag_csv and stop_flag_csv.exists()):
+                stopped = True
+                stop_reason = "stop_flag"
+                _status(f"[worker] stop requested (usb_flag={stop_flag_usb.exists()} csv_flag={(stop_flag_csv.exists() if stop_flag_csv else None)})")
+                break
+
             await asyncio.sleep(float(sample_interval_s))
+
+            # sleep 직후 한번 더(반응성)
+            if stop_flag_usb.exists() or (stop_flag_csv and stop_flag_csv.exists()):
+                stopped = True
+                stop_reason = "stop_flag"
+                _status(f"[worker] stop requested (usb_flag={stop_flag_usb.exists()} csv_flag={(stop_flag_csv.exists() if stop_flag_csv else None)})")
+                break
 
             x2, y2 = await oes._call(oes._acquire_one_slice_avg)
             if x2 is None or y2 is None:
@@ -951,6 +968,8 @@ async def cmd_measure(
         _print_json({
             "kind": "finished",
             "ok": True,
+            "stopped": bool(stopped),
+            "stop_reason": stop_reason,
             "ch": int(ch),
             "usb": int(usb),
             "out_csv": str(out_csv),
@@ -964,17 +983,32 @@ async def cmd_measure(
         return 0
 
     except Exception as e:
-        _errlog_exc(
-            f"cmd=measure exception ch={ch} usb={usb} out_csv={out_csv} "
-            f"duration_s={duration_s} integration_ms={integration_ms} sample_interval_s={sample_interval_s} avg_count={avg_count}"
-        )
         elapsed = time.time() - t0
+
+        # ✅ 실패여도 로컬 CSV가 있으면 NAS 복사/로컬삭제 시도
+        nas_ok = False
+        nas_csv = None
+        nas_error = None
+        local_deleted = False
+        try:
+            if out_csv and Path(out_csv).exists():
+                nas_ok, nas_csv, nas_error, local_deleted = await _copy_csv_to_nas(Path(out_csv), int(ch))
+        except Exception as _e:
+            nas_ok = False
+            nas_error = f"nas copy exception: {type(_e).__name__}: {_e}"
+
         _print_json({
             "kind": "finished",
             "ok": False,
+            "stopped": bool(stopped),
+            "stop_reason": stop_reason,
             "ch": int(ch),
             "usb": int(usb),
             "out_csv": str(out_csv) if out_csv else None,
+            "nas_ok": bool(nas_ok),
+            "nas_csv": str(nas_csv) if nas_csv else None,
+            "nas_error": nas_error,
+            "local_deleted": bool(local_deleted),
             "rows": int(rows),
             "elapsed_s": float(elapsed),
             "error": f"{type(e).__name__}: {e}",
@@ -984,11 +1018,10 @@ async def cmd_measure(
 
     finally:
         with contextlib.suppress(Exception):
-            if f:
-                f.close()
-        with contextlib.suppress(Exception):
-            if oes:
-                await oes.cleanup()
+            stop_flag_usb.unlink()
+        if stop_flag_csv:
+            with contextlib.suppress(Exception):
+                stop_flag_csv.unlink()
         mtx.release()
 
 
