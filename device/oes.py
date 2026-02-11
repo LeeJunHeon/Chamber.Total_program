@@ -177,6 +177,14 @@ class OESAsync:
         # ✅ 워커가 stdout으로 준 최종 결과(JSON)를 저장
         self._worker_finished: Optional[dict] = None
 
+        # ✅ init(사전점검) 캐시/동기화 상태 (initialize_device에서 사용)
+        self._init_lock = asyncio.Lock()
+        self._init_task: Optional[asyncio.Task] = None
+        self._init_done: bool = False
+        self._init_ok: bool = False
+        self._init_result: Optional[dict] = None
+        self._init_error: Optional[str] = None
+
     def _emit(self, ev: OESEvent) -> None:
         try:
             self._ev_q.put_nowait(ev)
@@ -209,6 +217,9 @@ class OESAsync:
         - 성공 시: self._init_ok=True 로 캐시
         - 실패 시: self._init_error / scan 정보 로그로 남김
         """
+        # ✅ init 직전에도 워커 경로 재계산(측정과 동일)
+        self._worker_cmd = _resolve_worker_command()
+
         if self._init_done and self._init_ok and not force:
             return True
 
@@ -242,10 +253,18 @@ class OESAsync:
         try:
             await self._status(f"[OES] init spawn ch={self._ch} usb={self._usb} cmd={cmd}")
 
+            worker_exe = Path(self._worker_cmd[0])
+            worker_dir = worker_exe.resolve().parent
+
+            env = os.environ.copy()
+            env.setdefault("PYTHONUNBUFFERED", "1")
+
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
+                cwd=str(worker_dir),
+                env=env,
                 creationflags=creationflags,
             )
 

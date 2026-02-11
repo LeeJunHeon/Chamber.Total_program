@@ -694,7 +694,7 @@ class ChamberRuntime:
                     # 예외/초기화 실패는 즉시 실패 처리
                     self._oes_active = False
                     self._oes_initialized = False  # 다음 런에서 재초기화 시도
-                    self.append_log("OES", f"OES 실패: {e!r} → 종료 절차로 전환")
+                    self.append_log("OES", f"OES 실패: {e!r}")
                     if self.chat:
                         with contextlib.suppress(Exception):
                             self.chat.notify_text(f"[OES] 실패: {e!r}")
