@@ -245,10 +245,7 @@ class OESAsync:
         init_obj: Optional[dict] = None
         proc: Optional[asyncio.subprocess.Process] = None
 
-        show_console = os.environ.get("OES_WORKER_SHOW_CONSOLE", "0").strip() in ("1", "true", "True")
-        creationflags = 0
-        if os.name == "nt" and not show_console:
-            creationflags = getattr(subprocess, "CREATE_NO_WINDOW", 0x08000000)
+        creationflags = _worker_creationflags()
 
         try:
             await self._status(f"[OES] init spawn ch={self._ch} usb={self._usb} cmd={cmd}")
