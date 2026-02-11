@@ -845,6 +845,17 @@ async def cmd_measure(
     f = None
     oes = None
 
+    # ✅ out_dir_final/out_csv는 아직 확정 전 → 먼저 None/기본값으로 선언
+    out_dir_final: Optional[Path] = None
+    out_csv_final: Optional[Path] = None
+
+    # ✅ stop flag도 아직 확정 전
+    stop_flag_usb: Optional[Path] = None
+    stop_flag_csv: Optional[Path] = None
+
+    stopped = False
+    stop_reason = None
+
     # ✅ stop flag(메인이 만들어서 워커에게 정상 종료 요청)
     stop_flag_usb = out_dir_final / f".stop_usb{int(usb)}.flag"
     stop_flag_csv = Path(str(out_csv) + ".stop") if out_csv else None
@@ -856,18 +867,35 @@ async def cmd_measure(
         with contextlib.suppress(Exception):
             stop_flag_csv.unlink()
 
-    stopped = False
-    stop_reason = None
-
     try:
         if not acquired:
             _errlog(f"cmd=measure mutex timeout ch={ch} usb={usb} timeout_ms={mutex_ms}")
             _print_json({"kind":"finished","ok":False,"ch":int(ch),"usb":int(usb),"error":f"mutex timeout ({mutex_ms}ms)"})
             return 4
 
+        # ✅ (1) out_dir_final/out_csv 확정: out_csv 우선, 그다음 out_dir, 없으면 default
+        if out_csv:
+            out_csv_final = Path(out_csv).expanduser().resolve()
+            out_dir_final = out_csv_final.parent
+        else:
+            out_dir_final = Path(out_dir).expanduser().resolve() if out_dir else _default_out_dir(int(ch))
+            out_csv_final = out_dir_final / _make_default_filename()
+
+        # ✅ 확정된 값을 이후 코드가 쓰도록 덮어쓰기(아래 코드 수정 최소화)
+        out_csv = out_csv_final
+
+        # ✅ (2) 이제 out_dir_final을 만들 수 있음
         out_dir_final.mkdir(parents=True, exist_ok=True)
 
-        _print_json({"kind": "status", "message": f"[worker] measure begin ch={ch} usb={usb} out_csv={out_csv} dir={out_dir_final}"})
+        # ✅ (3) stop flag 경로 확정(이제 out_dir_final/out_csv가 확정돼서 안전)
+        stop_flag_usb = out_dir_final / f".stop_usb{int(usb)}.flag"
+        stop_flag_csv = Path(str(out_csv) + ".stop")  # out_csv는 이제 항상 Path
+
+        # 이전 실행 잔재 제거(스테일 stop 방지)
+        with contextlib.suppress(Exception):
+            stop_flag_usb.unlink()
+        with contextlib.suppress(Exception):
+            stop_flag_csv.unlink()
 
         oes = OESAsync(
             chamber=int(ch),
@@ -963,7 +991,7 @@ async def cmd_measure(
                 await oes.cleanup()
                 oes = None
 
-        nas_ok, nas_csv, nas_error, local_deleted = await _copy_csv_to_nas(Path(out_csv), int(ch))
+        nas_ok, nas_csv, nas_error, local_deleted = await _copy_csv_to_nas(out_csv, int(ch))
 
         _print_json({
             "kind": "finished",
@@ -1017,9 +1045,10 @@ async def cmd_measure(
         return 10
 
     finally:
-        with contextlib.suppress(Exception):
-            stop_flag_usb.unlink()
-        if stop_flag_csv:
+        if stop_flag_usb is not None:
+            with contextlib.suppress(Exception):
+                stop_flag_usb.unlink()
+        if stop_flag_csv is not None:
             with contextlib.suppress(Exception):
                 stop_flag_csv.unlink()
         mtx.release()
