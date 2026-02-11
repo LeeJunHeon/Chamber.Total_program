@@ -587,11 +587,15 @@ class OESAsync:
         if not self._get_wl or self.sp_dll is None:
             return None
         try:
-            wl_buf = (ctypes.c_double * npix)()
+            buf_len = max(int(npix), 8192)   # ✅ 최소 8192로 넉넉히
+            wl_buf = (ctypes.c_double * buf_len)()
             r = self._get_wl(wl_buf, ctypes.c_int16(ch))
             if r < 0:
                 return None
+            
             wl = np.frombuffer(wl_buf, dtype=np.float64, count=npix).astype(float)
+            wl = wl[:int(npix)]             # ✅ 실제 npix 길이에 맞춰 자르기
+            
             if np.all(np.isfinite(wl)) and (wl.max() > wl.min()):
                 return wl
         except Exception:
@@ -655,6 +659,12 @@ class OESAsync:
         except Exception as e:
             self._last_error = f"ensure_npixels exception: {type(e).__name__}: {e}"
             return False
+
+        # ✅ WL 테이블 로드(파장 헤더 복구 핵심)
+        try:
+            self._wl = await self._call(self._try_fetch_wl, int(self.sChannel), int(self._npix))
+        except Exception:
+            self._wl = None
 
         return True
 
