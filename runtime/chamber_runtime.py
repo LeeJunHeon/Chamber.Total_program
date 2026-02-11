@@ -2526,6 +2526,12 @@ class ChamberRuntime:
 
     def request_stop_all(self, user_initiated: bool):
         self._cancel_delay_task()
+
+        # ✅ 이미 공정이 끝났으면 STOP 시퀀스 자체를 타지 않음(부작용 방지)
+        if not getattr(self.process_controller, "is_running", False):
+            self.append_log("MAIN", "정지 요청 무시: 실행 중 공정 없음(이미 종료됨)")
+            return
+        
         if getattr(self, "_pc_stopping", False):
             self.append_log("MAIN", "정지 요청 무시: 이미 종료 절차 진행 중")
             return
