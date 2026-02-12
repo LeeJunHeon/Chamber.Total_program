@@ -169,6 +169,7 @@ class OESAsync:
         self._out_csv_local: Optional[Path] = None
         self._x_axis: Optional[np.ndarray] = None
         self._rows_seen: int = 0
+        self._stop_requested: bool = False   # ✅ 항상 존재하도록 초기화
 
         # stderr 마지막 N줄(라인 단위)만 보관
         self._stderr_tail: List[str] = []

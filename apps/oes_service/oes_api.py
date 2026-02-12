@@ -350,6 +350,25 @@ class _WinMutex:
         self.handle = None
 
 
+# ── 모델 정의 (device/oes.py와 동일) ─────────────────────────
+SP_CCD_SONY    = 0
+SP_CCD_TOSHIBA = 1
+SP_CCD_PDA     = 2   # SM303-Si (Hamamatsu S7031)
+SP_CCD_G9212   = 3   # SM303-InGaAs
+SP_CCD_S10420  = 4
+
+PIXELS = {
+    SP_CCD_PDA:     1056,
+    SP_CCD_G9212:    512,
+    SP_CCD_SONY:    2080,
+    SP_CCD_S10420:  2080,
+    SP_CCD_TOSHIBA: 3680,
+}
+
+CANDIDATE_PIXELS = [1056, 1024, 512, 2048, 4096, 3680, 2080]
+ORDER_USB = 0
+
+
 # ====== OES Direct-DLL core (기존 device/oes.py 로직을 워커 내부로 이관) ======
 
 ROI_START_DEFAULT = 10   # 이전 코드와 동일
@@ -435,6 +454,7 @@ class OESAsync:
         self._npix: int = 0
         self._wl: Optional[np.ndarray] = None
         self._model_name: str = "UNKNOWN"
+        self._model: Optional[int] = None
 
         self._chamber = int(chamber)
         self._usb_index = int(usb_index) if usb_index is not None else (0 if self._chamber == 1 else 1)
@@ -454,6 +474,7 @@ class OESAsync:
         self._last_scan_msg: str = ""
         self._last_error: str = ""
         self._detected_channels: int = 0
+        self._last_scan: dict = {}   # ✅ 명시
 
     async def _call(self, func, *args, **kwargs):
         loop = asyncio.get_running_loop()
@@ -516,6 +537,25 @@ class OESAsync:
                 self._get_wl.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_int16]
                 self._get_wl.restype  = ctypes.c_int16
 
+    def _pick_model_with_probe(self, ch: int) -> Optional[int]:
+        # device/oes.py와 동일: PDA → G9212 → SONY → TOSHIBA → S10420
+        for m in (SP_CCD_PDA, SP_CCD_G9212, SP_CCD_SONY, SP_CCD_TOSHIBA, SP_CCD_S10420):
+            try:
+                r = int(self.sp_dll.spInitGivenChannel(ctypes.c_int16(m), ctypes.c_int16(ch)))  # type: ignore
+            except Exception:
+                r = -1
+            if r >= 0:
+                self._model_name = {
+                    SP_CCD_PDA: "PDA",
+                    SP_CCD_G9212: "G9212",
+                    SP_CCD_SONY: "SONY",
+                    SP_CCD_TOSHIBA: "TOSHIBA",
+                    SP_CCD_S10420: "S10420",
+                }.get(m, "UNKNOWN")
+                self._model = int(m)  # ✅ 모델 기억
+                return int(m)
+        return None
+
     def _scan_and_open(self) -> Tuple[int, str]:
         info = {
             "dll_path": self._dll_path,
@@ -528,41 +568,62 @@ class OESAsync:
             self.sp_dll = ctypes.WinDLL(self._dll_path)
             self._bind_functions()
 
-            n = int(self.sp_dll.spTestAllChannels(ctypes.c_int16(0)))
+            # ① USB 스캔 & open 목록 확보 (device/oes.py 동일)
+            try:
+                n = int(self.sp_dll.spTestAllChannels(ctypes.c_int16(ORDER_USB)))  # type: ignore
+            except Exception:
+                n = 0
             info["detected_count"] = int(n)
 
+            opened: list[int] = []
+            for ch in range(max(0, n)):
+                try:
+                    rr = int(self.sp_dll.spSetupGivenChannel(ctypes.c_int16(ch)))  # type: ignore
+                    if rr >= 0:
+                        opened.append(ch)
+                except Exception:
+                    pass
+            info["opened"] = opened
+
             if n <= 0:
-                msg = f"spTestAllChannels returned {n} (no device?)"
+                msg = f"장치 스캔 실패: detected={n} opened={opened}"
                 self._last_scan = info
                 self._last_error = msg
                 return -10, msg
 
             usb = int(self._usb_index)
             if usb < 0 or usb >= n:
-                msg = f"usb_index out of range: usb_index={usb}, detected={n}"
+                msg = f"usb_index out of range: usb_index={usb}, detected={n}, opened={opened}"
                 self._last_scan = info
                 self._last_error = msg
                 return -11, msg
 
-            rr = int(self.sp_dll.spSetupGivenChannel(ctypes.c_int16(usb)))
-            info["spSetupGivenChannel"] = int(rr)
-            if rr < 0:
-                msg = f"spSetupGivenChannel failed: rr={rr}"
+            if usb not in opened:
+                msg = f"대상 USB{usb} 오픈 실패 (opened={opened})"
                 self._last_scan = info
                 self._last_error = msg
                 return -12, msg
 
-            # ✅ 일부 장비/드라이버 조합에서 Init 호출이 필요할 수 있음
-            rr2 = int(self.sp_dll.spInitGivenChannel(ctypes.c_int16(0), ctypes.c_int16(usb)))
-            info["spInitGivenChannel"] = int(rr2)
-            if rr2 < 0:
-                msg = f"spInitGivenChannel failed: rr={rr2}"
+            # ② 모델 자동판정 (probe)  ✅ 기존과 동일
+            model = self._pick_model_with_probe(usb)
+            info["model"] = self._model_name
+            if model is None:
+                msg = f"초기화 실패: USB{usb} — 모든 모델 probe 실패"
                 self._last_scan = info
                 self._last_error = msg
                 return -13, msg
 
+            # ③ 픽셀 수 확정 + WL(nm) 확보(가능 시)
+            self._npix = self._ensure_npixels(usb, int(model))
+
+            # ④ ROI 클램프 (기존과 동일 [10:1034]을 길이에 맞춤)
+            lim = self._npix if self._wl is None else int(min(self._npix, self._wl.size))
+            self._roi_end   = min(ROI_END_DEFAULT, int(lim))
+            self._roi_start = min(ROI_START_DEFAULT, max(0, self._roi_end - 1))
+
+            # ⑤ 상태 반영
             self.sChannel = int(usb)
-            msg = f"open ok: USB{usb}"
+            msg = f"open ok: USB{usb}, model={self._model_name}, pixels={self._npix}" + (", wl=nm" if self._wl is not None else ", wl=pixel")
             self._last_scan = info
             self._last_error = ""
             return 0, msg
@@ -573,75 +634,71 @@ class OESAsync:
             self._last_scan = info
             self._last_error = msg
             return -99, msg
-        
+            
     def _read_pixels(self, ch: int, npix: int) -> Tuple[int, Optional[np.ndarray]]:
         assert self.sp_dll is not None
         buf = (ctypes.c_int32 * npix)()
         r = self.sp_dll.spReadDataEx(buf, ctypes.c_int16(ch))  # type: ignore
         if r < 0:
             return int(r), None
-        arr = np.frombuffer(buf, dtype=np.int32, count=npix).astype(float)
+        arr = np.asarray(buf[:npix], dtype=float)
         return int(r), arr
 
-    def _try_fetch_wl(self, ch: int, npix: int) -> Optional[np.ndarray]:
-        if not self._get_wl or self.sp_dll is None:
+    def _try_fetch_wl(self, ch: int, length_hint: int) -> Optional[np.ndarray]:
+        if not self._get_wl:
             return None
+        n = max(1, int(length_hint))
+        buf = (ctypes.c_double * n)()
         try:
-            buf_len = max(int(npix), 8192)   # ✅ 최소 8192로 넉넉히
-            wl_buf = (ctypes.c_double * buf_len)()
-            r = self._get_wl(wl_buf, ctypes.c_int16(ch))
-            if r < 0:
-                return None
-            
-            wl = np.frombuffer(wl_buf, dtype=np.float64, count=buf_len).astype(float)
-            wl = wl[:int(npix)]             # ✅ 실제 npix 길이에 맞춰 자르기
-
-            if np.all(np.isfinite(wl)) and (wl.max() > wl.min()):
-                return wl
+            r = int(self._get_wl(buf, ctypes.c_int16(ch)))  # type: ignore
         except Exception:
             return None
-        return None
+        if r < 0:
+            return None
+        return np.asarray(buf, dtype=float)
 
-    def _ensure_npixels(self, ch: int) -> int:
-        # ✅ under-allocation 방지: 큰 버퍼부터 시도 (DLL이 픽셀 수만큼 써버리는 타입이면 이게 안전)
-        #   필요 시 환경변수로 튜닝 가능
-        cand = os.environ.get("OES_NPIX_CAND", "").strip()
-        if cand:
-            try:
-                candidates = tuple(int(x) for x in cand.split(",") if x.strip())
-            except Exception:
-                candidates = (8192, 4096, 2048)
+    def _ensure_npixels(self, ch: int, model: int) -> int:
+        # 1) 모델 기본 픽셀 길이로 1차 확정
+        guess = int(PIXELS.get(model, 2048))
+        rc, arr = self._read_pixels(ch, guess)
+        if rc >= 0 and arr is not None and arr.size > 10:
+            npix = int(arr.size)
         else:
-            candidates = (8192, 4096, 2048)
+            npix = guess
+            for cand in CANDIDATE_PIXELS:
+                rc2, arr2 = self._read_pixels(ch, cand)
+                if rc2 >= 0 and arr2 is not None and arr2.size > 10:
+                    npix = int(arr2.size)
+                    break
 
-        for npix in candidates:
-            try:
-                # 디버그용(네이티브 크래시 직전 마지막 시도를 로그에 남김)
-                _runlog(f"[worker] ensure_npixels: try npix={npix} ch={ch}")
-                r, arr = self._read_pixels(ch, npix)
+        # 2) 그 길이에 맞춰 WL 테이블 재획득(성공 시 nm축 사용)
+        wl = self._try_fetch_wl(ch, npix)
+        if wl is not None and wl.size >= min(npix, ROI_END_DEFAULT):
+            self._wl = wl[:npix]
+        else:
+            self._wl = None
 
-                # DLL별로 r 의미가 다를 수 있어 r>=0이면 일단 성공으로 보고 채택
-                if r >= 0 and arr is not None and arr.size == npix:
-                    return int(npix)
-            except Exception:
-                continue
-
-        raise RuntimeError(f"cannot determine pixel count (candidates={candidates})")
+        return int(npix)
 
     def _apply_device_settings_blocking(self, ch: int, integration_ms: int) -> None:
         if self._set_baseline:
             with contextlib.suppress(Exception):
                 self._set_baseline(ctypes.c_int16(ch))
-        if self._auto_dark:
+
+        # ✅ 기본은 기존과 동일하게 AutoDark 실행
+        #    단, 공정 중 시작되는 경우를 대비해서 env로 OFF 가능
+        do_autodark = os.environ.get("OES_AUTODARK", "1") == "1"
+        if do_autodark and self._auto_dark:
             with contextlib.suppress(Exception):
                 self._auto_dark(ctypes.c_int16(ch))
+
         if self._set_trg:
             with contextlib.suppress(Exception):
                 self._set_trg(ctypes.c_int16(11), ctypes.c_int16(ch))
         if self._set_tec:
             with contextlib.suppress(Exception):
                 self._set_tec(ctypes.c_int32(1), ctypes.c_int16(ch))
-        if self._set_dbl_int and integration_ms > 0:
+        if self._set_dbl_int:
             with contextlib.suppress(Exception):
                 self._set_dbl_int(ctypes.c_double(float(integration_ms)), ctypes.c_int16(ch))
 
@@ -651,20 +708,10 @@ class OESAsync:
             self._last_error = self._last_error or msg
             return False
 
-        try:
-            self._npix = await self._call(self._ensure_npixels, int(self.sChannel))
-            if not self._npix or int(self._npix) <= 0:
-                self._last_error = f"npixels invalid: {self._npix}"
-                return False
-        except Exception as e:
-            self._last_error = f"ensure_npixels exception: {type(e).__name__}: {e}"
+        # _scan_and_open() 내부에서 _npix/_wl/_roi까지 확정됨
+        if not self._npix or int(self._npix) <= 0:
+            self._last_error = f"npixels invalid: {self._npix}"
             return False
-
-        # ✅ WL 테이블 로드(파장 헤더 복구 핵심)
-        try:
-            self._wl = await self._call(self._try_fetch_wl, int(self.sChannel), int(self._npix))
-        except Exception:
-            self._wl = None
 
         return True
 
@@ -792,6 +839,7 @@ async def cmd_init(ch: int, usb: int, dll_path: Optional[str], out_dir: Optional
             "usb": int(usb),
             "resolved_usb": int(getattr(oes, "sChannel", -1)),
             "pixels": int(getattr(oes, "_npix", 0) or 0),
+            "model": str(getattr(oes, "_model_name", "UNKNOWN")),   # ✅ 추가
             "dll_resolved": str(getattr(oes, "_dll_path", "")),
             "dll_exists": bool(Path(getattr(oes, "_dll_path", "")).is_file()),
         }
@@ -925,6 +973,7 @@ async def cmd_measure(
             "resolved_usb": int(getattr(oes, "sChannel", -1)),
             "out_csv": str(out_csv),
             "cols": int(len(x_list)),
+            "model": str(getattr(oes, "_model_name", "UNKNOWN")),   # ✅ 추가
             "sample_interval_s": float(sample_interval_s),
             "avg_count": int(avg_count),
             "integration_ms": int(integration_ms),
