@@ -7,6 +7,7 @@ import asyncio
 import re
 import atexit
 import logging
+import contextlib
 from typing import Optional, Literal
 from pathlib import Path
 from contextvars import ContextVar
@@ -30,6 +31,13 @@ from PySide6.QtCore import Qt, QTimer
 from itertools import chain  # ← 추가
 from PySide6.QtGui import QCloseEvent
 from qasync import QEventLoop
+
+# ✅ Qt(C++) 객체가 이미 delete된 상태인지 체크 (Access Violation 방어)
+try:
+    from shiboken6 import isValid as _qt_is_valid
+except Exception:
+    def _qt_is_valid(obj) -> bool:
+        return obj is not None
 
 # UI / Controller
 from ui.main_window import Ui_Form
@@ -863,35 +871,72 @@ class MainWindow(QWidget):
         self._loop.create_task(self._restart_host())
 
     def _append_pc_log_autoscroll(self, msg: str) -> None:
-        w = getattr(self.ui, "pc_logMessage_edit", None)
-        if not w:
-            return
-
         line = str(msg)
-        sb = w.verticalScrollBar()
 
-        # 사용자가 최하단을 보고 있을 때만 바닥 고정
-        stick_to_bottom = True
-        try:
-            stick_to_bottom = (sb.value() >= (sb.maximum() - 2))
-        except Exception:
-            pass
+        def _ui() -> None:
+            w = getattr(self.ui, "pc_logMessage_edit", None)
+            if not w or not _qt_is_valid(w):
+                return
 
-        w.appendPlainText(line)
+            try:
+                sb = w.verticalScrollBar()
+            except Exception:
+                return
 
-        if stick_to_bottom:
+            # 사용자가 최하단을 보고 있을 때만 바닥 고정
+            stick_to_bottom = True
+            try:
+                stick_to_bottom = (sb.value() >= (sb.maximum() - 2))
+            except Exception:
+                pass
+
+            # ✅ UI 스레드에서만 append
+            try:
+                w.appendPlainText(line)
+            except Exception:
+                return
+
+            if not stick_to_bottom:
+                return
+
             if getattr(self, "_pc_log_autoscroll_pending", False):
                 return
             self._pc_log_autoscroll_pending = True
 
             def _scroll_bottom():
                 self._pc_log_autoscroll_pending = False
-                sbb = w.verticalScrollBar()
-                sbb.setValue(sbb.maximum())
-                w.ensureCursorVisible()
+
+                ww = getattr(self.ui, "pc_logMessage_edit", None)
+                if not ww or not _qt_is_valid(ww):
+                    return
+
+                with contextlib.suppress(Exception):
+                    sbb = ww.verticalScrollBar()
+                    sbb.setValue(sbb.maximum())
+                    ww.ensureCursorVisible()
 
             # 레이아웃 계산 이후에 최하단 재보정
             QTimer.singleShot(0, _scroll_bottom)
+
+        loop = getattr(self, "_loop", None)
+        if loop is None:
+            _ui()
+            return
+
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+
+        if running is loop:
+            _ui()
+        else:
+            # ✅ 다른 스레드/다른 루프에서 호출되어도 UI 루프에 안전하게 넘김
+            try:
+                loop.call_soon_threadsafe(_ui)
+            except Exception:
+                # 종료 중/loop 닫힘이면 무시
+                pass
 
 def main() -> int:
     _logger = setup_app_logging(
