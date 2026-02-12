@@ -15,6 +15,13 @@ from PySide6.QtWidgets import QMessageBox, QFileDialog, QPlainTextEdit, QDialog,
 from PySide6.QtGui import QTextCursor
 from PySide6.QtCore import Qt, QTimer  # ← 추가: 모달리티/속성 지정용
 
+# ✅ Qt(C++) 객체가 이미 delete된 상태인지 체크 (Access Violation 방어)
+try:
+    from shiboken6 import isValid as _qt_is_valid
+except Exception:
+    def _qt_is_valid(obj: Any) -> bool:
+        return obj is not None
+
 # 팝업 자동 닫기(5초) 유틸
 from util.timed_popup import attach_autoclose
 
@@ -3470,13 +3477,17 @@ class ChamberRuntime:
         self._ui_log_buf.append(line)
 
     def _flush_ui_log_to_ui(self) -> None:
-        if not self._w_log:
+        w = getattr(self, "_w_log", None)
+        if not w or not _qt_is_valid(w):
+            self._w_log = None
             return
         if not self._ui_log_buf:
             return
 
-        w = self._w_log
-        sb = w.verticalScrollBar()
+        try:
+            sb = w.verticalScrollBar()
+        except Exception:
+            return
 
         # ✅ 사용자가 이미 최하단을 보고 있을 때만 '바닥에 붙이는' 오토 스크롤 유지
         stick_to_bottom = True
@@ -3492,28 +3503,18 @@ class ChamberRuntime:
             s = self._ui_log_buf.popleft()
             if s is None:
                 continue
-
-            # ✅ 안전하게 문자열화 + 줄바꿈 정규화
             try:
                 s = str(s)
             except Exception:
                 continue
-
-            # ✅ 혹시 들어있을 수 있는 끝 개행 제거 (중복 개행 방지)
             s = s.rstrip("\r\n")
-
-            # ✅ 빈 줄은 버림 (맨 아래 공백줄의 주된 원인)
             if not s:
                 continue
-
             lines.append(s)
 
-        # 유효 라인이 하나도 없으면 끝
         if not lines:
             return
 
-        # ✅ 이전 출력 마지막에 개행을 붙이지 않기 때문에,
-        # 다음 배치가 올 때는 앞에 '\n' 한 번만 붙여서 줄이 자연스럽게 이어지게 한다.
         prefix = ""
         try:
             prefix = "" if w.document().isEmpty() else "\n"
@@ -3522,32 +3523,36 @@ class ChamberRuntime:
 
         text = prefix + "\n".join(lines)
 
-        # 사용자가 위를 보고 있으면(=최하단 아님) 스크롤 위치를 보존
         old_sb_val = None
         if not stick_to_bottom:
             with contextlib.suppress(Exception):
                 old_sb_val = sb.value()
 
-        w.moveCursor(QTextCursor.MoveOperation.End)
-        w.insertPlainText(text)
+        # ✅ 여기서도 invalid/타이밍 이슈를 최대한 방어
+        try:
+            w.moveCursor(QTextCursor.MoveOperation.End)
+            w.insertPlainText(text)
+        except Exception:
+            return
 
         if old_sb_val is not None:
             with contextlib.suppress(Exception):
                 sb.setValue(old_sb_val)
             return
 
-        # ✅ 최하단 stick 보정은 기존 로직 유지
         if not getattr(self, "_log_autoscroll_pending", False):
             self._log_autoscroll_pending = True
 
             def _scroll_bottom():
                 self._log_autoscroll_pending = False
                 ww = getattr(self, "_w_log", None)
-                if not ww:
+                if not ww or not _qt_is_valid(ww):
+                    self._w_log = None
                     return
-                sbb = ww.verticalScrollBar()
-                sbb.setValue(sbb.maximum())
-                ww.ensureCursorVisible()
+                with contextlib.suppress(Exception):
+                    sbb = ww.verticalScrollBar()
+                    sbb.setValue(sbb.maximum())
+                    ww.ensureCursorVisible()
 
             QTimer.singleShot(0, _scroll_bottom)
 
@@ -3559,8 +3564,12 @@ class ChamberRuntime:
             return nas_path
         except Exception:
             local_fallback.mkdir(parents=True, exist_ok=True)
-            if self._w_log:
-                self._w_log.appendPlainText(f"[Logger] NAS 폴더 접근 실패 → 로컬 폴백: {local_fallback}")
+
+            w = getattr(self, "_w_log", None)
+            if w and _qt_is_valid(w):
+                with contextlib.suppress(Exception):
+                    w.appendPlainText(f"[Logger] NAS 폴더 접근 실패 → 로컬 폴백: {local_fallback}")
+
             return local_fallback
 
     def _prepare_log_file(self, params: Mapping[str, Any]) -> None:
@@ -4122,7 +4131,13 @@ class ChamberRuntime:
         name = self._alias_leaf(name)
         if not getattr(self, "ui", None):
             return None
-        return getattr(self.ui, f"{self.prefix}{name}", None)
+
+        w = getattr(self.ui, f"{self.prefix}{name}", None)
+        if w is None:
+            return None
+        if not _qt_is_valid(w):
+            return None
+        return w
 
     def _parent_widget(self) -> Any | None:
         """메시지/파일 다이얼로그의 합리적 부모 위젯을 찾는다."""
@@ -4136,28 +4151,51 @@ class ChamberRuntime:
         return None
 
     async def _aopen_file(self, caption="CSV 선택", start_dir="", 
-                          name_filter="CSV Files (*.csv);;All Files (*.*)") -> str:
+                        name_filter="CSV Files (*.csv);;All Files (*.*)") -> str:
         if not self._has_ui():
             self.append_log("File", "headless: 파일 선택 UI 생략"); return ""
 
         dlg = QFileDialog(self._parent_widget() or None, caption, start_dir, name_filter)
         dlg.setFileMode(QFileDialog.ExistingFile)
 
+        # ✅ Windows 쉘/COM(네이티브 파일 다이얼로그) 우회
+        with contextlib.suppress(Exception):
+            dlg.setOption(QFileDialog.Option.DontUseNativeDialog, True)
+        with contextlib.suppress(Exception):
+            dlg.setOption(QFileDialog.DontUseNativeDialog, True)
+        with contextlib.suppress(Exception):
+            dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            dlg.setWindowModality(Qt.WindowModality.WindowModal)
+
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[str] = loop.create_future()
 
         def _done(result: int):
+            # ✅ finished가 중복으로 들어와도 Future를 두 번 set_result하지 않게
+            if fut.done():
+                return
             try:
                 if result == QDialog.Accepted and dlg.selectedFiles():
                     fut.set_result(dlg.selectedFiles()[0])
                 else:
                     fut.set_result("")  # 취소
             finally:
+                with contextlib.suppress(Exception):
+                    dlg.finished.disconnect(_done)
                 dlg.deleteLater()
 
         dlg.finished.connect(_done)
         dlg.open()
-        return await fut
+
+        try:
+            return await fut
+        finally:
+            # await 중 취소/예외에도 다이얼로그 정리
+            if _qt_is_valid(dlg):
+                with contextlib.suppress(Exception):
+                    dlg.close()
+                with contextlib.suppress(Exception):
+                    dlg.deleteLater()
 
     def _ensure_msgbox_store(self):
         if not hasattr(self, "_msg_boxes"):
