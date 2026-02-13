@@ -2131,28 +2131,24 @@ class ChamberRuntime:
                 "rf_pulse": use_rf_pulse,
             }
 
-            # ✅ 이번 런에서 Pulse를 쓸 거면: (공유 RS-232) 엔드포인트 지정 + 즉시 재연결
-            #    그리고 "반대편" 펄스는 cleanup()으로 소켓 점유를 해제해서 충돌을 방지
-            async def _safe_cleanup(_obj, _label: str) -> None:
-                if not _obj:
-                    return
-                try:
-                    await asyncio.wait_for(_obj.cleanup(), timeout=5.0)
-                    self.append_log(_label, "cleanup ok")
-                except Exception as _e:
-                    self.append_log(_label, f"cleanup ignore: {_e!r}")
+            # ✅ Pulse는 각 장비의 "자기 포트" 설정을 그대로 사용한다. (덮어쓰기 금지)
+            # - DC Pulse  : cfg.DCPULSE_TCP
+            # - RF Pulse  : RFPulseAsync 내부 설정(또는 cfg.RFPULSE_TCP가 있으면 그 값)
 
-            if use_dc_pulse:
-                await _safe_cleanup(self.rf_pulse, "RFPulse")
-            if use_rf_pulse:
-                await _safe_cleanup(self.dc_pulse, "DCPulse")
-
-            if use_dc_pulse and self.dc_pulse:
+            # (선택) DC는 필요시 재연결만 수행 (원래도 DC 포트를 써야 하니까 OK)
+            if use_dc_pulse and self.dc_pulse and hasattr(self.dc_pulse, "set_endpoint_reconnect"):
                 host, port = self.cfg.DCPULSE_TCP
                 await self.dc_pulse.set_endpoint_reconnect(host, port)
-            if use_rf_pulse and self.rf_pulse:
-                host, port = self.cfg.DCPULSE_TCP   # (현재 구성상) 같은 RS-232 라인/포트 공유
-                await self.rf_pulse.set_endpoint_reconnect(host, port)
+
+            # ✅ RF는 DCPULSE_TCP로 절대 덮어쓰지 않는다.
+            #    - RFPulseAsync가 내부적으로 RF 포트를 알고 있으면: 아무 것도 안 해도 됨
+            #    - cfg.RFPULSE_TCP가 준비되어 있으면: 그 값으로만 reconnect
+            if use_rf_pulse and self.rf_pulse and hasattr(self.rf_pulse, "set_endpoint_reconnect"):
+                rf_tcp = getattr(self.cfg, "RFPULSE_TCP", None)
+                if rf_tcp:
+                    host, port = rf_tcp
+                    await self.rf_pulse.set_endpoint_reconnect(host, port)
+                # else: RFPulseAsync 내부 설정을 그대로 사용
 
             self._ensure_background_started()
 
