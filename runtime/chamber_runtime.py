@@ -306,11 +306,11 @@ class ChamberRuntime:
         self.supports_dc_pulse = bool(supports_dc_pulse)
         self.supports_rf_pulse = bool(supports_rf_pulse)
 
-        # ✅ [임시] RF-Pulse 장비를 CH1로 이관
-        # - CH2: RF-Pulse는 선택/실행 모두 금지
-        # - CH1: DC-Pulse는 선택(위젯 이름은 남아있더라도) "실행" 금지
+        # ✅ Pulse 장비는 RS-232(또는 Serial-Server) 1포트를 번갈아 쓰는 구조
+        #    - CH1: RF/DC Pulse 둘 다 선택 가능 (동시에 선택은 validation에서 차단)
+        #    - CH2: Pulse 미사용 → 선택/실행 차단
         if self.ch == 1:
-            self.supports_dc_pulse = False
+            self.supports_dc_pulse = True
             self.supports_rf_pulse = True
         elif self.ch == 2:
             self.supports_rf_pulse = False
@@ -4133,10 +4133,12 @@ class ChamberRuntime:
             "g2Target_name": "gunTarget_name",
             "g3Target_name": "gunTarget_name",
 
-            # ✅ CH1: 실제 위젯 이름은 dcPulse*인데 라벨만 RF로 바꾼 상태
-            #    런타임은 rfPulse* (공통 leaf)로 접근하므로 CH1에서는 rfPulse* -> dcPulse*로 alias
-            "rfPulsePower_checkbox": "dcPulsePower_checkbox",
+            # ✅ CH1: Pulse 파라미터 입력칸은 1세트만 사용(공용) → rfPulse* 입력칸 접근 시 dcPulse*로 alias
+            #    (단, rfPulsePower_checkbox / dcPulsePower_checkbox는 실제 위젯 2개를 사용하므로 checkbox는 alias 하지 않음)
             "rfPulsePower_edit": "dcPulsePower_edit",
+            "rfPulseFreq_edit": "dcPulseFreq_edit",
+            "rfPulseDutyCycle_edit": "dcPulseDutyCycle_edit",
+
             "rfPulseFreq_edit": "dcPulseFreq_edit",
             "rfPulseDutyCycle_edit": "dcPulseDutyCycle_edit",
         }.get(leaf, leaf)

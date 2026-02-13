@@ -277,7 +277,7 @@ class Ui_Form(object):
         self.ch1_dcPulseDutyCycle_edit.setGeometry(QRect(10, 530, 201, 31))
         self.ch1_dcPulseDutyCycle_label = QLabel(self.page)
         self.ch1_dcPulseDutyCycle_label.setObjectName(u"ch1_dcPulseDutyCycle_label")
-        self.ch1_dcPulseDutyCycle_label.setGeometry(QRect(10, 510, 171, 21))
+        self.ch1_dcPulseDutyCycle_label.setGeometry(QRect(10, 510, 201, 21))
         self.ch1_dcPulseDutyCycle_label.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
         self.ch1_Sputtering_label = QLabel(self.page)
         self.ch1_Sputtering_label.setObjectName(u"ch1_Sputtering_label")
@@ -286,148 +286,200 @@ class Ui_Form(object):
         font1.setPointSize(20)
         self.ch1_Sputtering_label.setFont(font1)
         self.ch1_Sputtering_label.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
+
         self.ch1_Voltage_label = QLabel(self.page)
         self.ch1_Voltage_label.setObjectName(u"ch1_Voltage_label")
         self.ch1_Voltage_label.setGeometry(QRect(80, 710, 61, 21))
         self.ch1_Voltage_label.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
-        self.ch1_dcPulsePower_checkbox = QCheckBox(self.page)
+
+        # --- Pulse type selector (RF / DC) ---
+        self.ch1_pulsePower_group = QButtonGroup(Form)
+        self.ch1_pulsePower_group.setExclusive(True)
+
+        self.ch1_rfPulsePower_checkbox = QRadioButton(self.page)
+        self.ch1_rfPulsePower_checkbox.setObjectName(u"ch1_rfPulsePower_checkbox")
+        self.ch1_rfPulsePower_checkbox.setGeometry(QRect(10, 405, 90, 24))
+        self.ch1_pulsePower_group.addButton(self.ch1_rfPulsePower_checkbox)
+
+        self.ch1_dcPulsePower_checkbox = QRadioButton(self.page)
         self.ch1_dcPulsePower_checkbox.setObjectName(u"ch1_dcPulsePower_checkbox")
-        self.ch1_dcPulsePower_checkbox.setGeometry(QRect(10, 410, 161, 24))
+        self.ch1_dcPulsePower_checkbox.setGeometry(QRect(105, 405, 105, 24))
+        self.ch1_pulsePower_group.addButton(self.ch1_dcPulsePower_checkbox)
+
         self.ch1_integrationTime_label = QLabel(self.page)
         self.ch1_integrationTime_label.setObjectName(u"ch1_integrationTime_label")
         self.ch1_integrationTime_label.setGeometry(QRect(10, 160, 151, 21))
         self.ch1_integrationTime_label.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
+
         self.ch1_basePressure_label = QLabel(self.page)
         self.ch1_basePressure_label.setObjectName(u"ch1_basePressure_label")
         self.ch1_basePressure_label.setGeometry(QRect(10, 110, 141, 21))
         self.ch1_basePressure_label.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
+
         self.ch1_gasFlow_label = QLabel(self.page)
         self.ch1_gasFlow_label.setObjectName(u"ch1_gasFlow_label")
         self.ch1_gasFlow_label.setGeometry(QRect(10, 290, 121, 21))
         self.ch1_gasFlow_label.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
+
         self.ch1_forP_edit = QPlainTextEdit(self.page)
         self.ch1_forP_edit.setObjectName(u"ch1_forP_edit")
         self.ch1_forP_edit.setGeometry(QRect(10, 680, 91, 31))
         self.ch1_forP_edit.setReadOnly(True)
+
         self.ch1_gunTarget_name = QPlainTextEdit(self.page)
         self.ch1_gunTarget_name.setObjectName(u"ch1_gunTarget_name")
         self.ch1_gunTarget_name.setGeometry(QRect(10, 260, 201, 31))
+
         self.ch1_basePressure_edit = QPlainTextEdit(self.page)
         self.ch1_basePressure_edit.setObjectName(u"ch1_basePressure_edit")
         self.ch1_basePressure_edit.setGeometry(QRect(10, 130, 201, 31))
+
         self.ch1_processTime_edit = QPlainTextEdit(self.page)
         self.ch1_processTime_edit.setObjectName(u"ch1_processTime_edit")
         self.ch1_processTime_edit.setGeometry(QRect(10, 630, 201, 31))
+
         self.ch1_mainShutter_checkbox = QCheckBox(self.page)
         self.ch1_mainShutter_checkbox.setObjectName(u"ch1_mainShutter_checkbox")
         self.ch1_mainShutter_checkbox.setGeometry(QRect(10, 210, 101, 24))
+
         self.ch1_dcPulseFreq_edit = QPlainTextEdit(self.page)
         self.ch1_dcPulseFreq_edit.setObjectName(u"ch1_dcPulseFreq_edit")
         self.ch1_dcPulseFreq_edit.setGeometry(QRect(10, 480, 201, 31))
+
         self.ch1_refP_edit = QPlainTextEdit(self.page)
         self.ch1_refP_edit.setObjectName(u"ch1_refP_edit")
         self.ch1_refP_edit.setGeometry(QRect(120, 680, 91, 31))
         self.ch1_refP_edit.setReadOnly(True)
+
         self.ch1_logMessage_edit = QPlainTextEdit(self.page)
         self.ch1_logMessage_edit.setObjectName(u"ch1_logMessage_edit")
         self.ch1_logMessage_edit.setGeometry(QRect(230, 790, 841, 151))
+
         self.ch1_powerSelect_checkbox = QCheckBox(self.page)
         self.ch1_powerSelect_checkbox.setObjectName(u"ch1_powerSelect_checkbox")
         self.ch1_powerSelect_checkbox.setGeometry(QRect(120, 210, 101, 24))
+
         self.ch1_Ar_checkbox = QCheckBox(self.page)
         self.ch1_Ar_checkbox.setObjectName(u"ch1_Ar_checkbox")
         self.ch1_Ar_checkbox.setGeometry(QRect(10, 310, 41, 24))
+
         self.ch1_dcPulseFreq_label = QLabel(self.page)
         self.ch1_dcPulseFreq_label.setObjectName(u"ch1_dcPulseFreq_label")
-        self.ch1_dcPulseFreq_label.setGeometry(QRect(10, 460, 141, 21))
+        self.ch1_dcPulseFreq_label.setGeometry(QRect(10, 460, 201, 21))
         self.ch1_dcPulseFreq_label.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
+
         self.ch1_shutterDelay_edit = QPlainTextEdit(self.page)
         self.ch1_shutterDelay_edit.setObjectName(u"ch1_shutterDelay_edit")
         self.ch1_shutterDelay_edit.setGeometry(QRect(10, 580, 201, 31))
+
         self.ch1_workingPressure_label = QLabel(self.page)
         self.ch1_workingPressure_label.setObjectName(u"ch1_workingPressure_label")
         self.ch1_workingPressure_label.setGeometry(QRect(10, 360, 181, 21))
         self.ch1_workingPressure_label.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
+
         self.ch1_forP_label = QLabel(self.page)
         self.ch1_forP_label.setObjectName(u"ch1_forP_label")
         self.ch1_forP_label.setGeometry(QRect(10, 660, 51, 21))
         self.ch1_forP_label.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
+
         self.ch1_processList_label = QLabel(self.page)
         self.ch1_processList_label.setObjectName(u"ch1_processList_label")
         self.ch1_processList_label.setGeometry(QRect(10, 770, 81, 21))
         self.ch1_processList_label.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
+
         self.ch1_o2Flow_edit = QPlainTextEdit(self.page)
         self.ch1_o2Flow_edit.setObjectName(u"ch1_o2Flow_edit")
         self.ch1_o2Flow_edit.setGeometry(QRect(110, 330, 101, 31))
+
         self.ch1_dcPulsePower_edit = QPlainTextEdit(self.page)
         self.ch1_dcPulsePower_edit.setObjectName(u"ch1_dcPulsePower_edit")
         self.ch1_dcPulsePower_edit.setGeometry(QRect(10, 430, 201, 31))
+
         self.ch1_Voltage_edit = QPlainTextEdit(self.page)
         self.ch1_Voltage_edit.setObjectName(u"ch1_Voltage_edit")
         self.ch1_Voltage_edit.setGeometry(QRect(80, 730, 61, 31))
         self.ch1_Voltage_edit.setReadOnly(True)
+
         self.ch1_rgaGraph_label = QLabel(self.page)
         self.ch1_rgaGraph_label.setObjectName(u"ch1_rgaGraph_label")
         self.ch1_rgaGraph_label.setGeometry(QRect(230, 70, 81, 21))
         self.ch1_rgaGraph_label.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
+
         self.ch1_workingPressure_edit = QPlainTextEdit(self.page)
         self.ch1_workingPressure_edit.setObjectName(u"ch1_workingPressure_edit")
         self.ch1_workingPressure_edit.setGeometry(QRect(10, 380, 201, 31))
+
         self.ch1_Stop_button = QPushButton(self.page)
         self.ch1_Stop_button.setObjectName(u"ch1_Stop_button")
         self.ch1_Stop_button.setGeometry(QRect(120, 830, 91, 61))
+
         self.ch1_gunTargetName_label = QLabel(self.page)
         self.ch1_gunTargetName_label.setObjectName(u"ch1_gunTargetName_label")
         self.ch1_gunTargetName_label.setGeometry(QRect(10, 240, 131, 21))
         self.ch1_gunTargetName_label.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
+
         self.ch1_Current_edit = QPlainTextEdit(self.page)
         self.ch1_Current_edit.setObjectName(u"ch1_Current_edit")
         self.ch1_Current_edit.setGeometry(QRect(150, 730, 61, 31))
         self.ch1_Current_edit.setReadOnly(True)
+
         self.ch1_oesGraph_widget = QWidget(self.page)
         self.ch1_oesGraph_widget.setObjectName(u"ch1_oesGraph_widget")
         self.ch1_oesGraph_widget.setGeometry(QRect(230, 420, 841, 351))
+
         self.ch1_Start_button = QPushButton(self.page)
         self.ch1_Start_button.setObjectName(u"ch1_Start_button")
         self.ch1_Start_button.setGeometry(QRect(10, 830, 91, 61))
+
         self.ch1_intergrationTime_edit = QPlainTextEdit(self.page)
         self.ch1_intergrationTime_edit.setObjectName(u"ch1_intergrationTime_edit")
         self.ch1_intergrationTime_edit.setGeometry(QRect(10, 180, 201, 31))
+
         self.ch1_refP_label = QLabel(self.page)
         self.ch1_refP_label.setObjectName(u"ch1_refP_label")
         self.ch1_refP_label.setGeometry(QRect(120, 660, 51, 21))
         self.ch1_refP_label.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
+
         self.ch1_arFlow_edit = QPlainTextEdit(self.page)
         self.ch1_arFlow_edit.setObjectName(u"ch1_arFlow_edit")
         self.ch1_arFlow_edit.setGeometry(QRect(10, 330, 101, 31))
+
         self.ch1_processTime_label = QLabel(self.page)
         self.ch1_processTime_label.setObjectName(u"ch1_processTime_label")
         self.ch1_processTime_label.setGeometry(QRect(10, 610, 141, 21))
         self.ch1_processTime_label.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
+
         self.ch1_oesGraph_label = QLabel(self.page)
         self.ch1_oesGraph_label.setObjectName(u"ch1_oesGraph_label")
         self.ch1_oesGraph_label.setGeometry(QRect(230, 400, 81, 21))
         self.ch1_oesGraph_label.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
+
         self.ch1_rgaGraph_widget = QWidget(self.page)
         self.ch1_rgaGraph_widget.setObjectName(u"ch1_rgaGraph_widget")
         self.ch1_rgaGraph_widget.setGeometry(QRect(230, 90, 841, 311))
+
         self.ch1_O2_checkbox = QCheckBox(self.page)
         self.ch1_O2_checkbox.setObjectName(u"ch1_O2_checkbox")
         self.ch1_O2_checkbox.setGeometry(QRect(110, 310, 41, 24))
+
         self.ch1_logMessage_label = QLabel(self.page)
         self.ch1_logMessage_label.setObjectName(u"ch1_logMessage_label")
         self.ch1_logMessage_label.setGeometry(QRect(230, 770, 101, 21))
         self.ch1_logMessage_label.setAlignment(Qt.AlignmentFlag.AlignLeading|Qt.AlignmentFlag.AlignLeft|Qt.AlignmentFlag.AlignVCenter)
+
         self.ch1_processState_edit = QPlainTextEdit(self.page)
         self.ch1_processState_edit.setObjectName(u"ch1_processState_edit")
         self.ch1_processState_edit.setGeometry(QRect(230, 0, 841, 61))
         self.ch1_processState_edit.setFont(font)
+
         self.ch1_btnGoPC = QPushButton(self.page)
         self.ch1_btnGoPC.setObjectName(u"ch1_btnGoPC")
         self.ch1_btnGoPC.setGeometry(QRect(120, 0, 91, 61))
+
         self.ch1_btnGoCh2 = QPushButton(self.page)
         self.ch1_btnGoCh2.setObjectName(u"ch1_btnGoCh2")
         self.ch1_btnGoCh2.setGeometry(QRect(10, 0, 91, 61))
+        
         self.stackedWidget.addWidget(self.page)
         self.page_2 = QWidget()
         self.page_2.setObjectName(u"page_2")
@@ -671,7 +723,8 @@ class Ui_Form(object):
         QWidget.setTabOrder(self.ch1_O2_checkbox, self.ch1_arFlow_edit)
         QWidget.setTabOrder(self.ch1_arFlow_edit, self.ch1_o2Flow_edit)
         QWidget.setTabOrder(self.ch1_o2Flow_edit, self.ch1_workingPressure_edit)
-        QWidget.setTabOrder(self.ch1_workingPressure_edit, self.ch1_dcPulsePower_checkbox)
+        QWidget.setTabOrder(self.ch1_workingPressure_edit, self.ch1_rfPulsePower_checkbox)
+        QWidget.setTabOrder(self.ch1_rfPulsePower_checkbox, self.ch1_dcPulsePower_checkbox)
         QWidget.setTabOrder(self.ch1_dcPulsePower_checkbox, self.ch1_dcPulsePower_edit)
         QWidget.setTabOrder(self.ch1_dcPulsePower_edit, self.ch1_dcPulseFreq_edit)
         QWidget.setTabOrder(self.ch1_dcPulseFreq_edit, self.ch1_dcPulseDutyCycle_edit)
@@ -785,17 +838,18 @@ class Ui_Form(object):
         self.ch1_shutterDelay_label.setText(QCoreApplication.translate("Form", u"Shutter Delay [min]", None))
         self.ch1_Current_label.setText(QCoreApplication.translate("Form", u"Current", None))
         self.ch1_Power_label.setText(QCoreApplication.translate("Form", u"Power", None))
-        self.ch1_dcPulseDutyCycle_label.setText(QCoreApplication.translate("Form", u"RF Pulse Duty Cycle [%]", None))
+        self.ch1_dcPulseDutyCycle_label.setText(QCoreApplication.translate("Form", u"RF/DC Pulse Duty Cycle [%]", None))
         self.ch1_Sputtering_label.setText(QCoreApplication.translate("Form", u"CH.1 Sputtering", None))
         self.ch1_Voltage_label.setText(QCoreApplication.translate("Form", u"Voltage", None))
-        self.ch1_dcPulsePower_checkbox.setText(QCoreApplication.translate("Form", u"RF Pulse Power [W]", None))
+        self.ch1_rfPulsePower_checkbox.setText(QCoreApplication.translate("Form", u"RF Pulse", None))
+        self.ch1_dcPulsePower_checkbox.setText(QCoreApplication.translate("Form", u"DC Pulse", None))
         self.ch1_integrationTime_label.setText(QCoreApplication.translate("Form", u"Integration Time [ms]", None))
         self.ch1_basePressure_label.setText(QCoreApplication.translate("Form", u"Base Pressure [Torr]", None))
         self.ch1_gasFlow_label.setText(QCoreApplication.translate("Form", u"Gas Flow [sccm]", None))
         self.ch1_mainShutter_checkbox.setText(QCoreApplication.translate("Form", u"M.S. Open", None))
         self.ch1_powerSelect_checkbox.setText(QCoreApplication.translate("Form", u"P.W. Select", None))
         self.ch1_Ar_checkbox.setText(QCoreApplication.translate("Form", u"Ar", None))
-        self.ch1_dcPulseFreq_label.setText(QCoreApplication.translate("Form", u"DC Pulse Freq [kHz]", None))
+        self.ch1_dcPulseFreq_label.setText(QCoreApplication.translate("Form", u"RF/DC Pulse Freq [kHz]", None))
         self.ch1_workingPressure_label.setText(QCoreApplication.translate("Form", u"Working Pressure [mTorr]", None))
         self.ch1_forP_label.setText(QCoreApplication.translate("Form", u"For .P", None))
         self.ch1_processList_label.setText(QCoreApplication.translate("Form", u"Process List", None))
