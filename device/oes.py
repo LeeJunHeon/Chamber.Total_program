@@ -30,8 +30,10 @@ from typing import AsyncGenerator, Literal, Optional, List
 
 import numpy as np
 
-# ====== 고정 경로(사용자 요구) ======
-_LOCAL_BASE = Path(os.environ.get("OES_LOCAL_BASE", r"C:\Users\vanam\Desktop\OES"))
+# ====== OES 로컬 저장 경로 ======
+# 1) 환경변수 OES_LOCAL_BASE가 있으면 그 값을 사용
+# 2) 없으면 "현재 로그인 사용자" Desktop\OES 를 기본값으로 사용
+_LOCAL_BASE = Path(os.environ.get("OES_LOCAL_BASE", str(Path.home() / "Desktop" / "OES")))
 # ====================================
 
 EventKind = Literal["status", "data", "finished"]
@@ -154,7 +156,18 @@ class OESAsync:
         self._debug = bool(debug_print)
 
         self._local_dir = _LOCAL_BASE / f"CH{self._ch}"
-        self._local_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self._local_dir.mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            # Desktop 접근/권한 문제 시 LocalAppData로 폴백 (프로그램이 죽지 않게)
+            base = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "VanaM" / "OES"
+            self._local_dir = base / f"CH{self._ch}"
+            self._local_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            # 최후 폴백: 실행 폴더 아래 _OES
+            base = _main_exe_dir() / "_OES"
+            self._local_dir = base / f"CH{self._ch}"
+            self._local_dir.mkdir(parents=True, exist_ok=True)
 
         self._worker_cmd = _resolve_worker_command()
 
@@ -369,9 +382,33 @@ class OESAsync:
         if self.is_running:
             await self._status("[OES] 이미 측정 중 → 요청 무시")
             return
-        
+
         # ✅ measure 직전에도 워커 경로 재계산
         self._worker_cmd = _resolve_worker_command()
+
+        # ✅ 이전 run 찌꺼기(이벤트/stop flag/유령 워커) 정리
+        with contextlib.suppress(Exception):
+            await self._stop_tail()
+        with contextlib.suppress(Exception):
+            await self.drain_events()
+
+        # (1) 이전 STOP flag가 남아있으면 워커가 시작 직후 바로 종료될 수 있음 → 제거
+        stop_usb_flag = self._local_dir / f".stop_usb{int(self._usb)}.flag"
+        with contextlib.suppress(Exception):
+            stop_usb_flag.unlink()
+        with contextlib.suppress(Exception):
+            for p in self._local_dir.glob("*.stop"):
+                with contextlib.suppress(Exception):
+                    p.unlink()
+
+        # (2) run_measurement가 아닌데 워커 프로세스가 남아있으면(유령) → 종료 후 재시작
+        if self._proc:
+            if self._proc.returncode is None:
+                await self._status("[OES] 이전 워커 프로세스가 남아있음 → 정리 후 재시작")
+                with contextlib.suppress(Exception):
+                    await self.stop_measurement()
+            with contextlib.suppress(Exception):
+                await self._cleanup_proc_tasks()
 
         out_csv = self._local_dir / _make_filename()
         self._out_csv_local = out_csv
@@ -380,7 +417,7 @@ class OESAsync:
 
         # ✅ STOP 상태 초기화
         self._stop_requested = False
-        
+
         # ✅ 이번 측정의 워커 결과 초기화
         self._worker_finished = None
 
@@ -561,31 +598,38 @@ class OESAsync:
             self.is_running = False
 
     async def stop_measurement(self) -> None:
-        # 측정 중이 아니면 tail만 정리하고 종료
-        if not self._proc or (not self.is_running):
+        proc = self._proc
+        if not proc:
             await self._stop_tail()
             return
 
-        proc = self._proc
-        self._stop_requested = True
+        # ✅ 프로세스가 이미 끝났으면 tail/태스크만 정리하고 종료
+        if proc.returncode is not None:
+            await self._stop_tail()
+            # run_measurement가 돌고 있지 않은 '유령' 상태면 남은 태스크/프로세스 핸들까지 정리
+            if not self.is_running:
+                with contextlib.suppress(Exception):
+                    await self._cleanup_proc_tasks()
+            return
 
+        self._stop_requested = True
         await self._status(f"[OES] stop_measurement → request stop flag (pid={getattr(proc, 'pid', None)})")
 
-        # ✅ 1) tail을 먼저 멈춰서 파일 핸들을 최대한 빨리 풀어준다
-        #    (워커가 로컬 삭제를 해야 하므로)
+        # ✅ 1) tail을 먼저 멈춰서 파일 핸들을 최대한 빨리 풀어준다(워커 로컬삭제 가능하게)
         await self._stop_tail()
 
-        # ✅ 2) 워커가 감시하는 stop flag 생성
-        if not self._out_csv_local:
-            await self._status("[OES] stop_measurement: out_csv_local 없음 → stop flag 생성 스킵")
-        else:
+        # ✅ 2) stop flag 생성 + (중요) 나중에 지울 수 있게 경로를 잡아둠
+        stop_usb = self._local_dir / f".stop_usb{int(self._usb)}.flag"
+        stop_csv: Optional[Path] = None
+        if self._out_csv_local:
             stop_usb = self._out_csv_local.parent / f".stop_usb{int(self._usb)}.flag"
             stop_csv = self._out_csv_local.with_suffix(self._out_csv_local.suffix + ".stop")
 
+        with contextlib.suppress(Exception):
+            stop_usb.write_text("stop\\n", encoding="utf-8")
+        if stop_csv:
             with contextlib.suppress(Exception):
-                stop_usb.write_text("stop\n", encoding="utf-8")
-            with contextlib.suppress(Exception):
-                stop_csv.write_text("stop\n", encoding="utf-8")
+                stop_csv.write_text("stop\\n", encoding="utf-8")
 
         # ✅ 3) 워커가 NAS 업로드/정리 후 종료할 시간을 준다
         try:
@@ -599,12 +643,29 @@ class OESAsync:
             if proc.returncode is None:
                 with contextlib.suppress(Exception):
                     proc.kill()
+                with contextlib.suppress(Exception):
                     await proc.wait()
 
         # ✅ stdout watcher가 finished JSON을 다 읽도록 잠깐 대기(선택)
         if self._stdout_task:
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(self._stdout_task, timeout=2.0)
+
+        # ✅ 4) stop flag 정리(다음 측정이 막히지 않도록)
+        with contextlib.suppress(Exception):
+            stop_usb.unlink()
+        if stop_csv:
+            with contextlib.suppress(Exception):
+                stop_csv.unlink()
+        with contextlib.suppress(Exception):
+            for p in self._local_dir.glob("*.stop"):
+                with contextlib.suppress(Exception):
+                    p.unlink()
+
+        # ✅ run_measurement가 돌고 있지 않은 '유령' 상태면 여기서 프로세스/태스크까지 확실히 정리
+        if not self.is_running:
+            with contextlib.suppress(Exception):
+                await self._cleanup_proc_tasks()
 
     async def cleanup(self) -> None:
         await self.stop_measurement()

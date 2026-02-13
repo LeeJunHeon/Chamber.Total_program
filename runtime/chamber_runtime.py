@@ -2703,7 +2703,10 @@ class ChamberRuntime:
                     cleanup_tasks.append(loop.create_task(coro))
 
         if cleanup_tasks:
-            done, pending = await asyncio.wait(cleanup_tasks, timeout=15.0)
+            cleanup_timeout_s = 15.0
+            if self.oes is not None:
+                cleanup_timeout_s = 75.0  # ✅ OES만 여유 시간
+            done, pending = await asyncio.wait(cleanup_tasks, timeout=cleanup_timeout_s)
             if pending:
                 self._cleanup_timed_out = True
                 with contextlib.suppress(Exception):
