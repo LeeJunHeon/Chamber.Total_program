@@ -233,8 +233,12 @@ class AsyncDCPulse:
         self._out_on: bool = False                 # 출력 ON/OFF 내부 기억
         self._poll_period_s: float = DCP_POLL_INTERVAL_S
         self._last_ref_power_w: Optional[float] = None  # ← 세트포인트 저장
+
         self._spdev_n: int = 0                     # ← 연속 세트포인트 이탈 카운터
         self._low_curr_n: int = 0                  # ← 연속 저전류(I<=0.05A) 카운터
+
+        # ✅ STOP/종료 중에 ON/SET 계열 write 재전송을 막기 위한 가드
+        self._stop_guard: bool = False
 
     # ====== 공용 API ======
     async def start(self):
@@ -366,17 +370,34 @@ class AsyncDCPulse:
             await self._emit_failed("CONNECT", "연결 준비 실패")
             return False
         
+        # ✅ STOP/종료 가드는 이전 런에서 남아 있을 수 있으므로 공정 시작 시 해제
+        self._stop_guard = False
+        # ✅ 세트포인트 캐시는 성공 시에만 갱신하도록(아래 set_reference_power 수정) 시작 전 초기화
+        self._last_ref_power_w = None
+        
         # ✅ [ADD] 공정 시작 전: 폴링 OFF + 버퍼 정리 + Ctrl/Fault 사전 점검
         self.set_process_status(False)
         self._drain_rx_frames()
 
         ctrl = await self.read_control_mode()
+        # ✅ READ_CTRL_MODE가 None이면 즉시 중단 (뒤 단계 진행 금지)
+        if ctrl is None:
+            await self._emit_status("[PRECHECK] READ_CTRL_MODE 실패 → OUTPUT_ON 시퀀스 중단")
+            return False
+        # ✅ UNKNOWN도 안전상 중단 권장
+        if ctrl not in ("HOST", "REMOTE", "LOCAL"):
+            await self._emit_status(f"[PRECHECK] Control mode={ctrl} → OUTPUT_ON 시퀀스 중단")
+            return False
         if ctrl == "LOCAL":
             await self._emit_failed("PRECHECK", "Control mode=LOCAL (패널에서 HOST/REMOTE 전환 필요)")
             return False
 
         fault = await self.read_fault_code()
-        if fault and fault != 0:
+        # ✅ READ_FAULT가 None이면 안전상 중단
+        if fault is None:
+            await self._emit_status("[PRECHECK] READ_FAULT 실패 → OUTPUT_ON 시퀀스 중단")
+            return False
+        if fault != 0:
             await self._emit_status(f"[PRECHECK] fault=0x{fault:04X} → FAULT_RESET(0x6F) 시도")
             ok_reset = await self.fault_reset()
             if not ok_reset:
@@ -473,10 +494,12 @@ class AsyncDCPulse:
         # 10 W/step → 0..500 (5 kW)
         raw = int(round(float(value_w) / P_SET_STEP_W))
         raw = max(0, min(int(MAX_POWER_W // P_SET_STEP_W), raw))
-        self._last_ref_power_w = float(value_w)  # ← 세트포인트 기억
-        self._spdev_n = 0                        # ★ 세트포인트 이탈 카운터 초기화
-        self._low_curr_n = 0                     # ★ 저전류 카운터도 같이 초기화
-        return await self._write_cmd_data(0x83, raw, 2, label=f"REF_POWER({value_w:.0f}W)")
+        ok = await self._write_cmd_data(0x83, raw, 2, label=f"REF_POWER({value_w:.0f}W)")
+        if ok:
+            self._last_ref_power_w = float(value_w) # ← 세트포인트 기억
+            self._spdev_n = 0                       # ★ 세트포인트 이탈 카운터 초기화
+            self._low_curr_n = 0                    # ★ 저전류 카운터도 같이 초기화  
+        return bool(ok)
 
     async def output_on(self) -> bool:
         """0x80: 1=ON, 2=OFF."""
@@ -486,6 +509,9 @@ class AsyncDCPulse:
         return await self._write_cmd_data(0x80, 0x0001, 2, label="OUTPUT_ON")
 
     async def output_off(self) -> bool:
+        # ✅ STOP/종료 중 재전송 루프가 REG/REF/OUTPUT_ON으로 흘러가는 것을 차단
+        # (STOP 시퀀스에서 OUTPUT_OFF 이후 OUTPUT_ON이 다시 실행되는 현상 방지)
+        self._stop_guard = True
         self._drain_rx_frames()  # ← 잔여 0x9A 등 제거
         return await self._write_cmd_data(0x80, 0x0002, 2, label="OUTPUT_OFF")
 
@@ -742,8 +768,18 @@ class AsyncDCPulse:
 
         last_resp: Optional[bytes] = None
 
+        # ✅ STOP/종료 중에는 OUTPUT_OFF 외에 REG/REF/OUTPUT_ON 같은 "켜는/세팅하는" write가 절대 나가면 안 됨.
+        if self._stop_guard and base_label not in ("OUTPUT_OFF",):
+            await self._emit_status(f"[{base_label}] STOP_GUARD active → skip write")
+            return False
+
         for attempt in range(1, DCP_RECOVER_MAX_ATTEMPTS + 1):
             attempt_label = f"{base_label}[{attempt}/{DCP_RECOVER_MAX_ATTEMPTS}]"
+
+            # STOP 중간에 가드가 켜지면(예: 다른 태스크가 OUTPUT_OFF 호출), 이미 진입한 write도 즉시 중단
+            if self._stop_guard and base_label not in ("OUTPUT_OFF",):
+                await self._emit_status(f"[{base_label}] STOP_GUARD active → abort attempts")
+                return False
 
             # 시도 전 RX 잔여 제거(혼선 방지)
             self._purge_rx_frames()
@@ -810,6 +846,7 @@ class AsyncDCPulse:
                     # (1) ACK 성공이면 성공
                     if ack_ok:
                         self._out_on = False
+                        self._last_ref_power_w = None
                         await self._emit_confirmed(base_label)
                         self.set_process_status(False)
                         return True
