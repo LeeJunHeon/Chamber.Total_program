@@ -3,6 +3,10 @@
 from __future__ import annotations
 
 import csv, asyncio, contextlib, inspect, re, traceback, os, time
+import json
+import uuid
+from datetime import datetime
+from pathlib import Path
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
@@ -1662,11 +1666,19 @@ class ChamberRuntime:
         self._set_default_ui_values()
 
     async def _handle_process_list_clicked_async(self) -> None:
+        start_dir = getattr(self, "_last_process_list_dir", "") or r"\\VanaM_NAS\VanaM_toShare"
+
         file_path = await self._aopen_file(
             caption=f"CH{self.ch} 프로세스 리스트 파일 선택",
-            start_dir="",
+            start_dir=start_dir,
             name_filter="CSV Files (*.csv);;All Files (*)"
         )
+
+        if file_path:
+            # 다음번에 다시 열 때 마지막 폴더부터 열리게
+            with contextlib.suppress(Exception):
+                self._last_process_list_dir = str(Path(file_path).parent)
+
         if not file_path:
             self.append_log("File", "파일 선택 취소")
             return
