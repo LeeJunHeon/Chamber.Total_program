@@ -30,8 +30,10 @@ from typing import AsyncGenerator, Literal, Optional, List
 
 import numpy as np
 
-# ====== 고정 경로(사용자 요구) ======
-_LOCAL_BASE = Path(os.environ.get("OES_LOCAL_BASE", r"C:\Users\vanam\Desktop\OES"))
+# ====== OES 로컬 저장 경로 ======
+# 1) 환경변수 OES_LOCAL_BASE가 있으면 그 값을 사용
+# 2) 없으면 "현재 로그인 사용자" Desktop\OES 를 기본값으로 사용
+_LOCAL_BASE = Path(os.environ.get("OES_LOCAL_BASE", str(Path.home() / "Desktop" / "OES")))
 # ====================================
 
 EventKind = Literal["status", "data", "finished"]
@@ -154,7 +156,18 @@ class OESAsync:
         self._debug = bool(debug_print)
 
         self._local_dir = _LOCAL_BASE / f"CH{self._ch}"
-        self._local_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            self._local_dir.mkdir(parents=True, exist_ok=True)
+        except PermissionError:
+            # Desktop 접근/권한 문제 시 LocalAppData로 폴백 (프로그램이 죽지 않게)
+            base = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "VanaM" / "OES"
+            self._local_dir = base / f"CH{self._ch}"
+            self._local_dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            # 최후 폴백: 실행 폴더 아래 _OES
+            base = _main_exe_dir() / "_OES"
+            self._local_dir = base / f"CH{self._ch}"
+            self._local_dir.mkdir(parents=True, exist_ok=True)
 
         self._worker_cmd = _resolve_worker_command()
 
