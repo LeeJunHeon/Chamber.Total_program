@@ -687,10 +687,10 @@ class OESAsync:
 
         # ✅ 기본은 기존과 동일하게 AutoDark 실행
         #    단, 공정 중 시작되는 경우를 대비해서 env로 OFF 가능
-        do_autodark = os.environ.get("OES_AUTODARK", "1") == "1"
-        if do_autodark and self._auto_dark:
-            with contextlib.suppress(Exception):
-                self._auto_dark(ctypes.c_int16(ch))
+        # do_autodark = os.environ.get("OES_AUTODARK", "1") == "1"
+        # if do_autodark and self._auto_dark:
+        #     with contextlib.suppress(Exception):
+        #         self._auto_dark(ctypes.c_int16(ch))
 
         if self._set_trg:
             with contextlib.suppress(Exception):
