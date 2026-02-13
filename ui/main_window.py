@@ -298,12 +298,12 @@ class Ui_Form(object):
 
         self.ch1_rfPulsePower_checkbox = QRadioButton(self.page)
         self.ch1_rfPulsePower_checkbox.setObjectName(u"ch1_rfPulsePower_checkbox")
-        self.ch1_rfPulsePower_checkbox.setGeometry(QRect(10, 405, 90, 24))
+        self.ch1_rfPulsePower_checkbox.setGeometry(QRect(10, 409, 90, 24))
         self.ch1_pulsePower_group.addButton(self.ch1_rfPulsePower_checkbox)
 
         self.ch1_dcPulsePower_checkbox = QRadioButton(self.page)
         self.ch1_dcPulsePower_checkbox.setObjectName(u"ch1_dcPulsePower_checkbox")
-        self.ch1_dcPulsePower_checkbox.setGeometry(QRect(105, 405, 105, 24))
+        self.ch1_dcPulsePower_checkbox.setGeometry(QRect(105, 409, 105, 24))
         self.ch1_pulsePower_group.addButton(self.ch1_dcPulsePower_checkbox)
 
         self.ch1_integrationTime_label = QLabel(self.page)
