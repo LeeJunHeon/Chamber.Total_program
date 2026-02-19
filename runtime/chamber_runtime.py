@@ -255,6 +255,7 @@ class ChamberRuntime:
         self._pc_stopping = False
         self._pending_device_cleanup = False
         self._cleanup_timed_out = False  # ✅ cleanup 중 timeout 발생 여부(재시작 안전장치)
+        self._cleanup_timeout_oes_only = False  # ✅ OES cleanup만 timeout인 경우 예외 처리용
         self._last_polling_targets: TargetsMap | None = None
         self._last_state_text: str | None = None
         # 지연(다음 공정 예약)과 카운트다운을 분리
@@ -2750,6 +2751,11 @@ class ChamberRuntime:
 
         # ✅ 이번 cleanup이 “완전히 끝났는지” 표시 (Start 재진입 안전장치)
         self._cleanup_timed_out = False
+        self._cleanup_timeout_oes_only = False
+
+        bg_cancel_timeout = False
+        log_writer_timeout = False
+        pending_cleanup_names: list[str] = []
 
         # ✅ heavy 시작 직후도 한 번 더 OFF
         with contextlib.suppress(Exception):
@@ -3969,6 +3975,7 @@ class ChamberRuntime:
 
         # 5) 종료 관련 내부 플래그
         # - cleanup 타임아웃이면 Start를 막아야 안전(“정리 덜 끝났는데 idle” 방지)
+        # - 단, OES cleanup만 timeout이면(예외 처리) Start 제한은 해제
         if (not getattr(self, "_cleanup_timed_out", False)) or getattr(self, "_cleanup_timeout_oes_only", False):
             self._pending_device_cleanup = False
             self._pc_stopping = False
