@@ -2053,6 +2053,63 @@ class ChamberRuntime:
                             store=True,
                             name=f"StartAfterPreflight.CH{self.ch}")
 
+    # ✅ Gate(밸브) 인터락: 시작하려는 챔버의 Gate가 CLOSED인지 확인
+    async def _check_gate_closed_before_start(self) -> bool:
+        """
+        Gate lamp 기준 상태 판정.
+        - closed: CLOSE_LAMP=True & OPEN_LAMP=False
+        - open  : OPEN_LAMP=True  & CLOSE_LAMP=False
+        - moving_or_unknown: 둘 다 False
+        - invalid_both_true: 둘 다 True (배선/맵/PLC 로직 이상 가능)
+
+        시작 조건:
+        - 'closed'일 때만 True
+        - 그 외는 모두 False(시작 차단)
+        """
+        if not getattr(self, "plc", None):
+            self.append_log("MAIN", f"[CH{self.ch}] PLC 없음 → Gate 상태 확인 불가 → 시작 차단")
+            return False
+
+        ch = int(getattr(self, "ch", 0) or 0)
+        if ch not in (1, 2):
+            self.append_log("MAIN", f"[CH{self.ch}] 잘못된 CH={ch} → 시작 차단")
+            return False
+
+        open_key = f"G_V_{ch}_OPEN_LAMP"
+        close_key = f"G_V_{ch}_CLOSE_LAMP"
+
+        # (선택) 전이 상태(moving)일 때 잠깐만 재확인(짧게)
+        for _ in range(5):  # 5회 * 0.2s = 최대 1초
+            try:
+                open_lamp = bool(await self.plc.read_bit(open_key))
+                close_lamp = bool(await self.plc.read_bit(close_key))
+            except KeyError as e:
+                self.append_log("MAIN", f"[CH{self.ch}] PLC 주소맵에 gate lamp 키 없음: {e} → 시작 차단")
+                return False
+            except Exception as e:
+                self.append_log("MAIN", f"[CH{self.ch}] Gate lamp 읽기 실패: {type(e).__name__}: {e} → 시작 차단")
+                return False
+
+            if close_lamp and (not open_lamp):
+                # ✅ 정상: CLOSED
+                return True
+
+            if open_lamp and (not close_lamp):
+                # ❌ OPEN
+                self.append_log("MAIN", f"[CH{self.ch}] Gate 상태=OPEN (open={open_lamp}, close={close_lamp})")
+                return False
+
+            if open_lamp and close_lamp:
+                # ❌ 비정상(둘 다 TRUE)
+                self.append_log("MAIN", f"[CH{self.ch}] Gate lamp 이상(OPEN/CLOSE 모두 TRUE) (open={open_lamp}, close={close_lamp})")
+                return False
+
+            # 둘 다 False면 moving/unknown → 잠깐 기다렸다가 재확인
+            await asyncio.sleep(0.2)
+
+        self.append_log("MAIN", f"[CH{self.ch}] Gate 상태=moving_or_unknown (OPEN/CLOSE 모두 FALSE) → 시작 차단")
+        return False
+
     async def _start_after_preflight(self, params: NormParams) -> None:
         try:
             # ⬇️ 추가: 이전 런의 잔여 종료 플래그를 명시적으로 클리어
@@ -2195,6 +2252,21 @@ class ChamberRuntime:
                 except Exception:
                     pass
 
+                self._start_next_process_from_queue(False)
+                return
+            
+            # ✅ Gate(밸브) 인터락: 시작하려는 챔버의 Gate가 열려 있으면 공정 시작을 차단
+            # - Plasma Cleaning은 Gate를 열고 진행하므로, Gate Open 상태면 Sputter Start 금지
+            ok_gate = await self._check_gate_closed_before_start()
+            if not ok_gate:
+                self.append_log("MAIN", f"[CH{self.ch}] Gate Open → 공정 시작 차단")
+                # 상태/점유 정리
+                self._on_process_status_changed(False)
+                try:
+                    runtime_state.set_error("chamber", self.ch, "gate open")
+                    runtime_state.mark_finished("chamber", self.ch)
+                except Exception:
+                    pass
                 self._start_next_process_from_queue(False)
                 return
             
