@@ -2788,6 +2788,7 @@ class ChamberRuntime:
                     await asyncio.wait_for(asyncio.gather(*live, return_exceptions=True), timeout=5.0)
                 except asyncio.TimeoutError:
                     self._cleanup_timed_out = True
+                    bg_cancel_timeout = True
                     with contextlib.suppress(Exception):
                         names = [getattr(t, "get_name", lambda: repr(t))() for t in live]
                     self.append_log("MAIN", f"⚠ bg task cancel timeout: {names!r}")
@@ -2820,39 +2821,40 @@ class ChamberRuntime:
             cleanup_timeout_s = 15.0
             if self.oes is not None:
                 cleanup_timeout_s = 75.0  # ✅ OES만 여유 시간
-                done, pending = await asyncio.wait(cleanup_tasks, timeout=cleanup_timeout_s)
-                if pending:
-                    self._cleanup_timed_out = True
+                
+            done, pending = await asyncio.wait(cleanup_tasks, timeout=cleanup_timeout_s)
+            if pending:
+                self._cleanup_timed_out = True
 
-                    # ✅ 어떤 task가 남았는지 기록 + OES만 남은 경우를 판별하기 위해 보관
-                    pn: list[str] = []
+                # ✅ 어떤 task가 남았는지 기록 + OES만 남은 경우를 판별하기 위해 보관
+                pn: list[str] = []
+                with contextlib.suppress(Exception):
+                    pn = [t.get_name() for t in pending]
+                if not pn:
+                    pn = [repr(t) for t in pending]
+                pending_cleanup_names = list(pn)
+
+                self.append_log("MAIN", f"⚠ device cleanup timeout: {pending_cleanup_names!r}")
+
+                # ✅ timeout이 OES cleanup만 남은 경우:
+                #    - OES worker/stop-flag가 남아 다음 측정이 막히는 걸 방지하기 위해 cleanup_quick 1회
+                #    - 다음 공정에서 OES를 다시 init 하도록 플래그 리셋
+                if pending_cleanup_names and all(str(n).startswith("Cleanup.OES") for n in pending_cleanup_names):
                     with contextlib.suppress(Exception):
-                        pn = [t.get_name() for t in pending]
-                    if not pn:
-                        pn = [repr(t) for t in pending]
-                    pending_cleanup_names = list(pn)
+                        self.append_log("MAIN", "⚠ cleanup timeout은 OES만 해당 → OES cleanup_quick + 다음 런 재-init")
+                    try:
+                        if self.oes and hasattr(self.oes, "cleanup_quick"):
+                            await asyncio.shield(self.oes.cleanup_quick())
+                    except Exception:
+                        pass
+                    # 다음 측정에서 background init을 다시 수행하도록
+                    self._oes_initialized = False
 
-                    self.append_log("MAIN", f"⚠ device cleanup timeout: {pending_cleanup_names!r}")
-
-                    # ✅ timeout이 OES cleanup만 남은 경우:
-                    #    - OES worker/stop-flag가 남아 다음 측정이 막히는 걸 방지하기 위해 cleanup_quick 1회
-                    #    - 다음 공정에서 OES를 다시 init 하도록 플래그 리셋
-                    if pending_cleanup_names and all(str(n).startswith("Cleanup.OES") for n in pending_cleanup_names):
-                        with contextlib.suppress(Exception):
-                            self.append_log("MAIN", "⚠ cleanup timeout은 OES만 해당 → OES cleanup_quick + 다음 런 재-init")
-                        try:
-                            if self.oes and hasattr(self.oes, "cleanup_quick"):
-                                await asyncio.shield(self.oes.cleanup_quick())
-                        except Exception:
-                            pass
-                        # 다음 측정에서 background init을 다시 수행하도록
-                        self._oes_initialized = False
-
-                    for t in pending:
-                        with contextlib.suppress(Exception):
-                            t.cancel()
+                for t in pending:
                     with contextlib.suppress(Exception):
-                        await asyncio.gather(*pending, return_exceptions=True)
+                        t.cancel()
+                with contextlib.suppress(Exception):
+                    await asyncio.gather(*pending, return_exceptions=True)
 
         # 3) footer 먼저
         with contextlib.suppress(Exception):
