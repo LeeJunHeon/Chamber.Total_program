@@ -255,7 +255,6 @@ class ChamberRuntime:
         self._pc_stopping = False
         self._pending_device_cleanup = False
         self._cleanup_timed_out = False  # ✅ cleanup 중 timeout 발생 여부(재시작 안전장치)
-        self._cleanup_timeout_oes_only = False  # ✅ OES만 cleanup timeout인 경우 Start 제한 예외
         self._last_polling_targets: TargetsMap | None = None
         self._last_state_text: str | None = None
         # 지연(다음 공정 예약)과 카운트다운을 분리
@@ -2751,11 +2750,6 @@ class ChamberRuntime:
 
         # ✅ 이번 cleanup이 “완전히 끝났는지” 표시 (Start 재진입 안전장치)
         self._cleanup_timed_out = False
-        
-        self._cleanup_timeout_oes_only = False
-        bg_cancel_timeout = False
-        log_writer_timeout = False
-        pending_cleanup_names: list[str] = []
 
         # ✅ heavy 시작 직후도 한 번 더 OFF
         with contextlib.suppress(Exception):
@@ -2788,7 +2782,6 @@ class ChamberRuntime:
                     await asyncio.wait_for(asyncio.gather(*live, return_exceptions=True), timeout=5.0)
                 except asyncio.TimeoutError:
                     self._cleanup_timed_out = True
-                    bg_cancel_timeout = True
                     with contextlib.suppress(Exception):
                         names = [getattr(t, "get_name", lambda: repr(t))() for t in live]
                     self.append_log("MAIN", f"⚠ bg task cancel timeout: {names!r}")
@@ -2821,17 +2814,39 @@ class ChamberRuntime:
             cleanup_timeout_s = 15.0
             if self.oes is not None:
                 cleanup_timeout_s = 75.0  # ✅ OES만 여유 시간
-            done, pending = await asyncio.wait(cleanup_tasks, timeout=cleanup_timeout_s)
-            if pending:
-                self._cleanup_timed_out = True
-                with contextlib.suppress(Exception):
-                    pn = [t.get_name() for t in pending]
-                self.append_log("MAIN", f"⚠ device cleanup timeout: {pn!r}")
-                for t in pending:
+                done, pending = await asyncio.wait(cleanup_tasks, timeout=cleanup_timeout_s)
+                if pending:
+                    self._cleanup_timed_out = True
+
+                    # ✅ 어떤 task가 남았는지 기록 + OES만 남은 경우를 판별하기 위해 보관
+                    pn: list[str] = []
                     with contextlib.suppress(Exception):
-                        t.cancel()
-                with contextlib.suppress(Exception):
-                    await asyncio.gather(*pending, return_exceptions=True)
+                        pn = [t.get_name() for t in pending]
+                    if not pn:
+                        pn = [repr(t) for t in pending]
+                    pending_cleanup_names = list(pn)
+
+                    self.append_log("MAIN", f"⚠ device cleanup timeout: {pending_cleanup_names!r}")
+
+                    # ✅ timeout이 OES cleanup만 남은 경우:
+                    #    - OES worker/stop-flag가 남아 다음 측정이 막히는 걸 방지하기 위해 cleanup_quick 1회
+                    #    - 다음 공정에서 OES를 다시 init 하도록 플래그 리셋
+                    if pending_cleanup_names and all(str(n).startswith("Cleanup.OES") for n in pending_cleanup_names):
+                        with contextlib.suppress(Exception):
+                            self.append_log("MAIN", "⚠ cleanup timeout은 OES만 해당 → OES cleanup_quick + 다음 런 재-init")
+                        try:
+                            if self.oes and hasattr(self.oes, "cleanup_quick"):
+                                await asyncio.shield(self.oes.cleanup_quick())
+                        except Exception:
+                            pass
+                        # 다음 측정에서 background init을 다시 수행하도록
+                        self._oes_initialized = False
+
+                    for t in pending:
+                        with contextlib.suppress(Exception):
+                            t.cancel()
+                    with contextlib.suppress(Exception):
+                        await asyncio.gather(*pending, return_exceptions=True)
 
         # 3) footer 먼저
         with contextlib.suppress(Exception):
@@ -2844,12 +2859,16 @@ class ChamberRuntime:
                 await asyncio.wait_for(t, timeout=6.0)
             except asyncio.TimeoutError:
                 self._cleanup_timed_out = True
+                log_writer_timeout = True
                 self.append_log("MAIN", "⚠ log writer shutdown timeout")
                 with contextlib.suppress(Exception):
                     t.cancel()
                     await asyncio.gather(t, return_exceptions=True)
         except Exception:
             self._cleanup_timed_out = True
+            log_writer_timeout = True
+            with contextlib.suppress(Exception):
+                self.append_log("MAIN", "⚠ log writer shutdown exception")
 
         # 5) 파일 경로/버퍼 초기화
         self._log_file_path = None
@@ -2860,14 +2879,24 @@ class ChamberRuntime:
         self._devices_started = False
         self._run_select = None
 
+        # -----------------------------------------------------------
+        # ✅ cleanup timeout이 OES만 남은 경우 → Start 제한 해제
+        #    (bg task cancel / log writer 문제가 있으면 안전하지 않으니 제외)
+        # -----------------------------------------------------------
+        if getattr(self, "_cleanup_timed_out", False) and pending_cleanup_names:
+            if (not bg_cancel_timeout) and (not log_writer_timeout) and all(str(n).startswith("Cleanup.OES") for n in pending_cleanup_names):
+                self._cleanup_timeout_oes_only = True
+                self._cleanup_timed_out = False
+                self.append_log("MAIN", f"✅ cleanup timeout이 OES만 → Start 제한 해제 (pending={pending_cleanup_names!r})")
+
         # ✅ cleanup이 완전히 끝난 경우에만 “정리 완료”로 간주
-        if not self._cleanup_timed_out:
+        if (not getattr(self, "_cleanup_timed_out", False)) or getattr(self, "_cleanup_timeout_oes_only", False):
             self._pending_device_cleanup = False
             self._pc_stopping = False
         else:
-            # 네가 걱정한 케이스 방지: UI가 idle처럼 보여도 Start는 막아둠
             self._pending_device_cleanup = True
             self.append_log("MAIN", "⚠ cleanup 미완료(타임아웃) → Start는 정리 완료 전까지 제한")
+
 
     def shutdown_fast(self) -> None:
         async def run():
@@ -3940,12 +3969,11 @@ class ChamberRuntime:
 
         # 5) 종료 관련 내부 플래그
         # - cleanup 타임아웃이면 Start를 막아야 안전(“정리 덜 끝났는데 idle” 방지)
-        if not getattr(self, "_cleanup_timed_out", False):
+        if (not getattr(self, "_cleanup_timed_out", False)) or getattr(self, "_cleanup_timeout_oes_only", False):
             self._pending_device_cleanup = False
             self._pc_stopping = False
         else:
             self.append_log("MAIN", "⚠ cleanup timeout 상태 유지: Start 제한 유지")
-
 
     # ------------------------------------------------------------------
     # 기본 UI값/리셋
