@@ -318,7 +318,7 @@ class OESAsync:
                 with contextlib.suppress(Exception):
                     proc.kill()
                 with contextlib.suppress(Exception):
-                    await proc.wait()
+                    await asyncio.wait_for(proc.wait(), timeout=5.0)
 
             with contextlib.suppress(Exception):
                 await stderr_task
@@ -357,7 +357,7 @@ class OESAsync:
                 with contextlib.suppress(Exception):
                     proc.kill()
                 with contextlib.suppress(Exception):
-                    await proc.wait()
+                    await asyncio.wait_for(proc.wait(), timeout=5.0)
 
             self._init_error = f"init timeout after {timeout_s}s"
             if stderr_tail:
@@ -371,7 +371,7 @@ class OESAsync:
                 with contextlib.suppress(Exception):
                     proc.kill()
                 with contextlib.suppress(Exception):
-                    await proc.wait()
+                    await asyncio.wait_for(proc.wait(), timeout=5.0)
 
             self._init_error = f"{type(e).__name__}: {e}"
             await self._status(f"[OES] init EXC: {self._init_error}")
@@ -380,8 +380,16 @@ class OESAsync:
 
     async def run_measurement(self, duration_sec: float, integration_ms: int) -> None:
         if self.is_running:
-            await self._status("[OES] 이미 측정 중 → 요청 무시")
-            return
+            proc = self._proc
+            # ✅ 진짜 측정 중(워커 살아있음)인 경우에는 기존처럼 무시
+            if proc and (proc.returncode is None):
+                await self._status("[OES] 이미 측정 중 → 요청 무시")
+                return
+            # ✅ is_running만 True로 남은 '유령' 상태면 복구 후 재시작
+            await self._status("[OES] is_running=True 이지만 워커 없음/종료됨 → 유령상태 복구 후 재시작")
+            self.is_running = False
+            with contextlib.suppress(Exception):
+                await self._cleanup_proc_tasks()
 
         # ✅ measure 직전에도 워커 경로 재계산
         self._worker_cmd = _resolve_worker_command()
@@ -598,60 +606,121 @@ class OESAsync:
             self.is_running = False
 
     async def stop_measurement(self) -> None:
-        proc = self._proc
-        if not proc:
-            await self._stop_tail()
-            return
+        """
+        워커에게 stop flag를 요청하고 종료를 기다린 뒤, 남은 태스크/stop flag를 정리한다.
 
-        # ✅ 프로세스가 이미 끝났으면 tail/태스크만 정리하고 종료
-        if proc.returncode is not None:
+        ✅ 중요: chamber_runtime에서 cleanup task를 timeout으로 cancel()하는 경우가 있어
+        CancelledError가 들어와도 워커/flag가 남지 않도록 cleanup_quick을 한 번 수행한다.
+        """
+        try:
+            proc = self._proc
+            if not proc:
+                await self._stop_tail()
+                return
+
+            # ✅ 프로세스가 이미 끝났으면 tail/태스크만 정리하고 종료
+            if proc.returncode is not None:
+                await self._stop_tail()
+                # run_measurement가 돌고 있지 않은 '유령' 상태면 남은 태스크/프로세스 핸들까지 정리
+                if not self.is_running:
+                    with contextlib.suppress(Exception):
+                        await self._cleanup_proc_tasks()
+                return
+
+            self._stop_requested = True
+            await self._status(f"[OES] stop_measurement → request stop flag (pid={getattr(proc, 'pid', None)})")
+
+            # ✅ 1) tail을 먼저 멈춰서 파일 핸들을 최대한 빨리 풀어준다(워커 로컬삭제 가능하게)
             await self._stop_tail()
-            # run_measurement가 돌고 있지 않은 '유령' 상태면 남은 태스크/프로세스 핸들까지 정리
+
+            # ✅ 2) stop flag 생성 + (중요) 나중에 지울 수 있게 경로를 잡아둠
+            stop_usb = self._local_dir / f".stop_usb{int(self._usb)}.flag"
+            stop_csv: Optional[Path] = None
+            if self._out_csv_local:
+                stop_usb = self._out_csv_local.parent / f".stop_usb{int(self._usb)}.flag"
+                stop_csv = self._out_csv_local.with_suffix(self._out_csv_local.suffix + ".stop")
+
+            with contextlib.suppress(Exception):
+                stop_usb.write_text("stop\n", encoding="utf-8")
+            if stop_csv:
+                with contextlib.suppress(Exception):
+                    stop_csv.write_text("stop\n", encoding="utf-8")
+
+            # ✅ 3) 워커가 NAS 업로드/정리 후 종료할 시간을 준다
+            try:
+                await asyncio.wait_for(proc.wait(), timeout=60.0)
+            except asyncio.TimeoutError:
+                await self._status("[OES] stop: graceful timeout → terminate/kill fallback")
+                with contextlib.suppress(Exception):
+                    proc.terminate()
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(proc.wait(), timeout=5.0)
+                if proc.returncode is None:
+                    with contextlib.suppress(Exception):
+                        proc.kill()
+                    with contextlib.suppress(Exception):
+                        await asyncio.wait_for(proc.wait(), timeout=5.0)
+
+            # ✅ stdout watcher가 finished JSON을 다 읽도록 잠깐 대기(선택)
+            if self._stdout_task:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(self._stdout_task, timeout=2.0)
+
+            # ✅ 4) stop flag 정리(다음 측정이 막히지 않도록)
+            with contextlib.suppress(Exception):
+                stop_usb.unlink()
+            if stop_csv:
+                with contextlib.suppress(Exception):
+                    stop_csv.unlink()
+            with contextlib.suppress(Exception):
+                for p in self._local_dir.glob("*.stop"):
+                    with contextlib.suppress(Exception):
+                        p.unlink()
+
+            # ✅ run_measurement가 돌고 있지 않은 '유령' 상태면 여기서 프로세스/태스크까지 확실히 정리
             if not self.is_running:
                 with contextlib.suppress(Exception):
                     await self._cleanup_proc_tasks()
-            return
 
-        self._stop_requested = True
-        await self._status(f"[OES] stop_measurement → request stop flag (pid={getattr(proc, 'pid', None)})")
+        except asyncio.CancelledError:
+            # ✅ cleanup task cancel(타임아웃) 상황에서도 워커/flag가 남지 않게 '빠른 정리' 1회
+            with contextlib.suppress(Exception):
+                await self._status("[OES] stop_measurement cancelled → cleanup_quick")
+            with contextlib.suppress(Exception):
+                await asyncio.shield(self.cleanup_quick())
+            raise
 
-        # ✅ 1) tail을 먼저 멈춰서 파일 핸들을 최대한 빨리 풀어준다(워커 로컬삭제 가능하게)
-        await self._stop_tail()
+    async def cleanup(self) -> None:
+        await self.stop_measurement()
 
-        # ✅ 2) stop flag 생성 + (중요) 나중에 지울 수 있게 경로를 잡아둠
+    async def cleanup_quick(self) -> None:
+        """
+        STOP/cleanup 타임아웃 또는 cancel 상황에서도 다음 측정을 막지 않도록 하는 '빠른 정리'.
+        - tail/stdout/stderr 태스크 cancel
+        - stop flag 파일 제거
+        - 워커 terminate→kill (짧게 대기)
+        - 상태 플래그 리셋(is_running/stop_requested)
+        """
+        # tail 먼저 중지(파일 핸들 해제)
+        with contextlib.suppress(Exception):
+            await self._stop_tail()
+
+        # stdout/stderr task 정리
+        for name in ("_stdout_task", "_stderr_task"):
+            t = getattr(self, name, None)
+            if t:
+                t.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await t
+                setattr(self, name, None)
+
+        # stop flag 제거(다음 측정 시작 즉시 종료되는 문제 방지)
         stop_usb = self._local_dir / f".stop_usb{int(self._usb)}.flag"
         stop_csv: Optional[Path] = None
         if self._out_csv_local:
             stop_usb = self._out_csv_local.parent / f".stop_usb{int(self._usb)}.flag"
             stop_csv = self._out_csv_local.with_suffix(self._out_csv_local.suffix + ".stop")
 
-        with contextlib.suppress(Exception):
-            stop_usb.write_text("stop\\n", encoding="utf-8")
-        if stop_csv:
-            with contextlib.suppress(Exception):
-                stop_csv.write_text("stop\\n", encoding="utf-8")
-
-        # ✅ 3) 워커가 NAS 업로드/정리 후 종료할 시간을 준다
-        try:
-            await asyncio.wait_for(proc.wait(), timeout=60.0)
-        except asyncio.TimeoutError:
-            await self._status("[OES] stop: graceful timeout → terminate/kill fallback")
-            with contextlib.suppress(Exception):
-                proc.terminate()
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(proc.wait(), timeout=5.0)
-            if proc.returncode is None:
-                with contextlib.suppress(Exception):
-                    proc.kill()
-                with contextlib.suppress(Exception):
-                    await proc.wait()
-
-        # ✅ stdout watcher가 finished JSON을 다 읽도록 잠깐 대기(선택)
-        if self._stdout_task:
-            with contextlib.suppress(Exception):
-                await asyncio.wait_for(self._stdout_task, timeout=2.0)
-
-        # ✅ 4) stop flag 정리(다음 측정이 막히지 않도록)
         with contextlib.suppress(Exception):
             stop_usb.unlink()
         if stop_csv:
@@ -662,13 +731,21 @@ class OESAsync:
                 with contextlib.suppress(Exception):
                     p.unlink()
 
-        # ✅ run_measurement가 돌고 있지 않은 '유령' 상태면 여기서 프로세스/태스크까지 확실히 정리
-        if not self.is_running:
-            with contextlib.suppress(Exception):
-                await self._cleanup_proc_tasks()
+        proc = self._proc
+        self._proc = None
+        self._stop_requested = False
+        self.is_running = False
 
-    async def cleanup(self) -> None:
-        await self.stop_measurement()
+        if proc and (proc.returncode is None):
+            with contextlib.suppress(Exception):
+                proc.terminate()
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(proc.wait(), timeout=2.0)
+            if proc.returncode is None:
+                with contextlib.suppress(Exception):
+                    proc.kill()
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(proc.wait(), timeout=2.0)
 
     async def _watch_worker_stdout(self, stream: asyncio.StreamReader) -> None:
         try:
@@ -722,9 +799,15 @@ class OESAsync:
                 last_log = time.time()
                 await self._status(f"[OES] CSV 생성 대기중... {(last_log - t0):.1f}s path={path}")
 
-            # 60초 넘어가면 일단 종료(원인 파악용)
+            # 60초 넘어가면 워커가 init/DLL에서 걸렸을 가능성이 큼 → 여기서 kill해서 유령 상태를 방지
             if (time.time() - t0) > 60.0:
-                await self._status(f"[OES] CSV 생성 대기 TIMEOUT(60s) path={path}")
+                await self._status(f"[OES] CSV 생성 대기 TIMEOUT(60s) path={path} → 워커 kill")
+                proc = self._proc
+                if proc and (proc.returncode is None):
+                    with contextlib.suppress(Exception):
+                        proc.kill()
+                    with contextlib.suppress(Exception):
+                        await asyncio.wait_for(proc.wait(), timeout=5.0)
                 return
 
             await asyncio.sleep(0.1)
@@ -846,4 +929,4 @@ class OESAsync:
         if proc.returncode is None:
             with contextlib.suppress(Exception):
                 proc.kill()
-                await proc.wait()
+                await asyncio.wait_for(proc.wait(), timeout=5.0)

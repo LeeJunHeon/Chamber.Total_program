@@ -255,6 +255,7 @@ class ChamberRuntime:
         self._pc_stopping = False
         self._pending_device_cleanup = False
         self._cleanup_timed_out = False  # ✅ cleanup 중 timeout 발생 여부(재시작 안전장치)
+        self._cleanup_timeout_oes_only = False  # ✅ OES만 cleanup timeout인 경우 Start 제한 예외
         self._last_polling_targets: TargetsMap | None = None
         self._last_state_text: str | None = None
         # 지연(다음 공정 예약)과 카운트다운을 분리
@@ -2750,6 +2751,11 @@ class ChamberRuntime:
 
         # ✅ 이번 cleanup이 “완전히 끝났는지” 표시 (Start 재진입 안전장치)
         self._cleanup_timed_out = False
+        
+        self._cleanup_timeout_oes_only = False
+        bg_cancel_timeout = False
+        log_writer_timeout = False
+        pending_cleanup_names: list[str] = []
 
         # ✅ heavy 시작 직후도 한 번 더 OFF
         with contextlib.suppress(Exception):
@@ -2782,6 +2788,7 @@ class ChamberRuntime:
                     await asyncio.wait_for(asyncio.gather(*live, return_exceptions=True), timeout=5.0)
                 except asyncio.TimeoutError:
                     self._cleanup_timed_out = True
+                    bg_cancel_timeout = True
                     with contextlib.suppress(Exception):
                         names = [getattr(t, "get_name", lambda: repr(t))() for t in live]
                     self.append_log("MAIN", f"⚠ bg task cancel timeout: {names!r}")
