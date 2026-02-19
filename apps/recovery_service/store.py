@@ -30,12 +30,10 @@ def read(kind: str, ch: int = 0) -> Optional[dict[str, Any]]:
 def write_atomic(kind: str, ch: int, data: Mapping[str, Any]) -> None:
     """
     원자적 저장(tmp -> replace).
-    ✅ 디렉토리는 자동 생성하지 않음 (사용자가 만들어야 함)
+    ✅ 폴더가 없으면 자동 생성
     """
     path = _state_file(kind, ch)
-    base = path.parent
-    if not base.exists():
-        raise FileNotFoundError(f"recovery state dir not found: {base}")
+    path.parent.mkdir(parents=True, exist_ok=True)
 
     tmp = path.with_suffix(path.suffix + ".tmp")
     txt = json.dumps(dict(data), ensure_ascii=False, indent=2)
