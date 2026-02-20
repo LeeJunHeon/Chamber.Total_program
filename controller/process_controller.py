@@ -106,6 +106,7 @@ class ActionType(str, Enum):
     OES_RUN = "OES_RUN"
     # 펄스 완전 분리
     DC_PULSE_START = "DC_PULSE_START"
+    DC_PULSE_SET   = "DC_PULSE_SET"   # ✅ 추가: 출력 ON 유지 + setpoint 변경
     DC_PULSE_STOP  = "DC_PULSE_STOP"
     RF_PULSE_START = "RF_PULSE_START"
     RF_PULSE_STOP  = "RF_PULSE_STOP"
@@ -128,7 +129,7 @@ class ProcessStep:
                 raise ValueError("DELAY 액션은 duration이 필요합니다.")
             if self.parallel:
                 raise ValueError("DELAY는 병렬 블록에 포함할 수 없습니다.")
-        if self.action in (ActionType.DC_POWER_SET, ActionType.RF_POWER_SET, ActionType.IG_CMD):
+        if self.action in (ActionType.DC_POWER_SET, ActionType.RF_POWER_SET, ActionType.IG_CMD, ActionType.DC_PULSE_SET):
             if self.value is None:
                 raise ValueError(f"{self.action.name} 액션은 value가 필요합니다.")
         if self.action == ActionType.PLC_CMD:
@@ -194,6 +195,7 @@ class ProcessController:
         # 펄스 파워 (완전 분리)
         start_dc_pulse: Callable[[float, Optional[int], Optional[int]], None],
         stop_dc_pulse: Callable[[], None],
+        set_dc_pulse_power: Optional[Callable[[float], None]] = None,   # ✅ 추가
         start_rf_pulse: Callable[[float, Optional[int], Optional[int]], None],
         stop_rf_pulse: Callable[[], None],
 
@@ -217,6 +219,7 @@ class ProcessController:
         self._stop_rf_power = stop_rf_power
         self._start_dc_pulse = start_dc_pulse
         self._stop_dc_pulse  = stop_dc_pulse
+        self._set_dc_pulse_power = set_dc_pulse_power   # ✅ 추가
         self._start_rf_pulse = start_rf_pulse
         self._stop_rf_pulse  = stop_rf_pulse
         self._ig_wait = ig_wait
@@ -721,6 +724,17 @@ class ProcessController:
             self._start_dc_pulse(power, freq, duty)
             tokens.append(ExpectToken("DC_PULSE_TARGET"))
 
+        elif a == ActionType.DC_PULSE_SET:
+            # Output ON 상태에서 setpoint(REF_POWER)만 변경
+            power = float(step.value or 0.0)
+            if not self._set_dc_pulse_power:
+                raise RuntimeError("DC_PULSE_SET을 사용하려면 set_dc_pulse_power 콜백이 주입되어야 합니다.")
+            self._set_dc_pulse_power(power)
+
+            # ✅ 토큰은 '대기'가 아니라 실패 귀속(어느 스텝에서 실패했는지)을 위해 등록만 한다.
+            #    (스텝 생성 시 no_wait=True로 만들어 즉시 다음 스텝으로 진행)
+            tokens.append(ExpectToken("DC_PULSE_TARGET"))
+
         elif a == ActionType.DC_PULSE_STOP:
             self._stop_dc_pulse()
             tokens.append(ExpectToken("DCPULSE_OFF"))
@@ -1102,12 +1116,46 @@ class ProcessController:
         shutter_delay_min = float(params.get("shutter_delay", 0))
         shutter_delay_sec = shutter_delay_min * 60.0
         process_time_sec = process_time_min * 60.0
+
         dc_power = float(params.get("dc_power", 0))
         rf_power = float(params.get("rf_power", 0))
         try:
             integration_ms = int(float(params.get("integration_time", 60)))
         except Exception:
             integration_ms = 60
+
+        # --- (옵션) DC Pulse 중간 Power 변경: CSV에 둘 다 있으면 1회 변경 ---
+        #  - power_change_time: "5s", "5m", "0.5m", "1h30m" ...
+        #  - change_power_value: 100 (W)
+        raw_change_time = str(params.get("power_change_time", "") or "").strip()
+        raw_change_power = str(params.get("change_power_value", "") or "").strip()
+
+        change_time_sec = self._parse_duration_seconds(raw_change_time) if raw_change_time else 0.0
+        try:
+            change_power_value = float(raw_change_power) if raw_change_power else 0.0
+        except Exception:
+            change_power_value = 0.0
+
+        total_window_sec = float(shutter_delay_sec + process_time_sec)
+
+        # ✅ CSV에 값이 "둘 다" 있어야만 적용 + 범위 체크 + 콜백 주입 여부 체크
+        do_mid_dc_pulse_change = (
+            use_dc_pulse
+            and raw_change_time != ""
+            and raw_change_power != ""
+            and change_power_value > 0.0
+            and 0.0 < change_time_sec < total_window_sec
+            and self._set_dc_pulse_power is not None
+        )
+
+        # (선택) 둘 중 하나만 적었거나 범위가 이상하면 경고만 1회 출력(공정은 기존처럼 진행)
+        if use_dc_pulse and (raw_change_time != "" or raw_change_power != "") and not do_mid_dc_pulse_change:
+            self._emit_log(
+                "Process",
+                f"⚠ DC Pulse 중간 Power 변경 무시: power_change_time='{raw_change_time}', "
+                f"change_power_value='{raw_change_power}', window={total_window_sec:.1f}s, "
+                f"callback={'OK' if self._set_dc_pulse_power else 'MISSING'}"
+            )
 
         steps: List[ProcessStep] = []
 
@@ -1355,33 +1403,103 @@ class ProcessController:
             polling=False,                         
         ))
 
-        if shutter_delay_sec > 0:
-            steps.append(ProcessStep(
-                action=ActionType.DELAY,
-                duration=int(round(shutter_delay_sec * 1000.0)),
-                message=f'Shutter Delay {shutter_delay_min}분',
-                polling=False,                  
-            ))
+        # =========================
+        # Shutter Delay / Main Process
+        # (옵션) do_mid_dc_pulse_change면 1회 DC_PULSE_SET 삽입
+        # =========================
 
+        # --- Shutter Delay ---
+        if shutter_delay_sec > 0:
+            # 변경 시점이 Shutter Delay 안이면: Delay를 2개로 쪼개고 가운데 Power 변경
+            if do_mid_dc_pulse_change and change_time_sec < shutter_delay_sec:
+                part1 = float(change_time_sec)
+                part2 = float(shutter_delay_sec - change_time_sec)
+
+                if part1 > 0:
+                    steps.append(ProcessStep(
+                        action=ActionType.DELAY,
+                        duration=int(round(part1 * 1000.0)),
+                        message=f'Shutter Delay (변경 전) {part1/60.0:.2f}분',
+                        polling=False,
+                    ))
+
+                steps.append(ProcessStep(
+                    action=ActionType.DC_PULSE_SET,
+                    value=float(change_power_value),
+                    message=f'DC Pulse Power 변경 → {change_power_value}W (t={change_time_sec:.1f}s, ShutterDelay)',
+                    polling=False,
+                    no_wait=True,
+                ))
+
+                if part2 > 0:
+                    steps.append(ProcessStep(
+                        action=ActionType.DELAY,
+                        duration=int(round(part2 * 1000.0)),
+                        message=f'Shutter Delay (변경 후) {part2/60.0:.2f}분',
+                        polling=False,
+                    ))
+            else:
+                steps.append(ProcessStep(
+                    action=ActionType.DELAY,
+                    duration=int(round(shutter_delay_sec * 1000.0)),
+                    message=f'Shutter Delay {shutter_delay_min}분',
+                    polling=False,
+                ))
+
+        # --- Main Shutter ---
         if use_ms:
             steps.append(ProcessStep(
-                action=ActionType.PLC_CMD, params=('MS', True, self._ch), message='Main Shutter 열기'
+                action=ActionType.PLC_CMD,
+                params=('MS', True, self._ch),
+                message='Main Shutter 열기'
             ))
 
-        # --- 메인 공정 시간 ---
+        # --- Main Process Time ---
         if process_time_sec > 0:
             steps.append(ProcessStep(
                 action=ActionType.OES_RUN,
                 params=(process_time_sec, integration_ms),
                 message=f'OES 측정 시작 ({process_time_min}분, {integration_ms}ms)',
-                no_wait=True  # 백그라운드로 돌리고 즉시 다음 DELAY로
+                no_wait=True
             ))
-            steps.append(ProcessStep(
-                action=ActionType.DELAY,
-                duration=int(round(process_time_sec * 1000.0)),
-                message=f'메인 공정 진행 ({process_time_min}분)',
-                polling=True
-            ))
+
+            # 변경 시점이 Main 구간이면: Main Delay를 2개로 쪼개고 가운데 Power 변경
+            # (change_time_sec == shutter_delay_sec이면 into_main=0 → 메인 시작하자마자 변경)
+            if do_mid_dc_pulse_change and change_time_sec >= shutter_delay_sec and change_time_sec < (shutter_delay_sec + process_time_sec):
+                into_main = float(change_time_sec - shutter_delay_sec)
+                part1 = max(0.0, into_main)
+                part2 = max(0.0, float(process_time_sec - part1))
+
+                if part1 > 0:
+                    steps.append(ProcessStep(
+                        action=ActionType.DELAY,
+                        duration=int(round(part1 * 1000.0)),
+                        message=f'메인 공정 진행 (변경 전) {part1/60.0:.2f}분',
+                        polling=True
+                    ))
+
+                steps.append(ProcessStep(
+                    action=ActionType.DC_PULSE_SET,
+                    value=float(change_power_value),
+                    message=f'DC Pulse Power 변경 → {change_power_value}W (t={change_time_sec:.1f}s, Main)',
+                    polling=True,   # ✅ 메인 공정 중 polling 유지(중요)
+                    no_wait=True,
+                ))
+
+                if part2 > 0:
+                    steps.append(ProcessStep(
+                        action=ActionType.DELAY,
+                        duration=int(round(part2 * 1000.0)),
+                        message=f'메인 공정 진행 (변경 후) {part2/60.0:.2f}분',
+                        polling=True
+                    ))
+            else:
+                steps.append(ProcessStep(
+                    action=ActionType.DELAY,
+                    duration=int(round(process_time_sec * 1000.0)),
+                    message=f'메인 공정 진행 ({process_time_min}분)',
+                    polling=True
+                ))
 
         # --- 종료 시퀀스 ---
         steps.extend(self._create_shutdown_sequence(params))
@@ -1627,7 +1745,7 @@ class ProcessController:
                 n = i + 1
                 if step.action == ActionType.DELAY and step.duration is None:
                     errors.append(f"Step {n}: DELAY 액션에 duration이 없습니다.")
-                if step.action in [ActionType.DC_POWER_SET, ActionType.RF_POWER_SET, ActionType.IG_CMD]:
+                if step.action in [ActionType.DC_POWER_SET, ActionType.RF_POWER_SET, ActionType.IG_CMD, ActionType.DC_PULSE_SET]:
                     if step.value is None:
                         errors.append(f"Step {n}: {step.action.name} 액션에 value가 없습니다.")
                 if step.action == ActionType.DC_PULSE_START:
@@ -1803,11 +1921,23 @@ class ProcessController:
         return aliases.get(nm, nm)
 
     def _parse_duration_seconds(self, s: str) -> float:
+        """'5s', '5m', '1.5m', '0.5h', '1h30m', '1h30m10.5s' 등을 초(float)로 변환.
+        형식이 맞지 않으면 0.0 반환.
+        """
         s = (s or "").strip().lower()
-        m = re.fullmatch(r"(?:(\d+)h)?(?:(\d+)m)?(?:(\d+)s)?", s)
+        if not s:
+            return 0.0
+
+        # 숫자만 있으면 초로 취급
+        if re.fullmatch(r"\d+(?:\.\d+)?", s):
+            return float(s)
+
+        # h/m/s 각각 소수 허용 (조합 허용)
+        m = re.fullmatch(r"(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m)?(?:(\d+(?:\.\d+)?)s)?", s)
         if not m:
             return 0.0
-        h = int(m.group(1) or 0)
-        mi = int(m.group(2) or 0)
-        se = int(m.group(3) or 0)
-        return float(h*3600 + mi*60 + se)
+
+        h = float(m.group(1) or 0.0)
+        mi = float(m.group(2) or 0.0)
+        se = float(m.group(3) or 0.0)
+        return float(h * 3600.0 + mi * 60.0 + se)
