@@ -989,12 +989,6 @@ class ChamberRuntime:
                             self._pc_stopping = False
                             continue
 
-                        if getattr(self, "_pending_device_cleanup", False):
-                            with contextlib.suppress(Exception):
-                                self._spawn_detached(self._stop_device_watchdogs(light=False), name="FullCleanup")
-                            self._pending_device_cleanup = False
-                            self._pc_stopping = False
-
                         self._pc_stopping = False
                         self._start_next_process_from_queue(ok)
                         self._last_polling_targets = None
@@ -1074,11 +1068,6 @@ class ChamberRuntime:
                         except Exception:
                             pass
 
-                        if getattr(self, "_pending_device_cleanup", False):
-                            with contextlib.suppress(Exception):
-                                self._spawn_detached(self._stop_device_watchdogs(light=False), name="FullCleanup")
-                            self._pending_device_cleanup = False
-                            self._pc_stopping = False
                     except Exception as e:
                         self.append_log("MAIN", f"예외 발생 (aborted 처리): {e}")
                         # 예외 시 안전하게 UI를 '대기 중'으로 복귀
@@ -2509,30 +2498,24 @@ class ChamberRuntime:
             
             # ★ 장치 정리가 백그라운드에서 진행 중이면 대기 안내
             if getattr(self, "_pending_device_cleanup", False):
-                # 👉 runtime_state / process_controller 기준으로
-                #    실제 공정이 아직 도는지 한 번 확인
-                try:
-                    still_running = (
-                        self.process_controller.is_running
-                        or runtime_state.is_running("chamber", self.ch)
-                    )
-                except Exception:
-                    # 조회 중 예외가 나면 보수적으로 "아직 정리 중"으로 본다
-                    still_running = True
-
-                if still_running:
-                    # 실제로 아직 뭔가 도는 중이면 예전과 동일하게 막기
-                    self._host_report_start(False, "previous run cleanup in progress")
-                    self._post_warning("정리 중", "이전 공정 정리 중입니다. 잠시 후 다시 시작하세요.")
-                    return
-                else:
-                    # 👇 이전 공정은 이미 끝났는데 플래그만 남은 "유령 상태" → 플래그만 정리
+                # ✅ OES만 cleanup timeout인 경우는 다음 런에서 재-init으로 회복 가능 → 예외적으로 Start 허용
+                if getattr(self, "_cleanup_timeout_oes_only", False):
                     self.append_log(
                         "MAIN",
-                        f"[CH{self.ch}] 이전 공정 종료 확인 → cleanup 플래그만 초기화"
+                        f"[CH{self.ch}] cleanup timeout은 OES만 해당 → Start 허용(다음 런 OES 재-init)"
                     )
                     self._pending_device_cleanup = False
                     self._pc_stopping = False
+                else:
+                    # ✅ 그 외에는 "유령 상태"로 임의 해제하지 말고 확실히 막는 게 안전
+                    self._host_report_start(False, "previous run cleanup incomplete")
+                    self._post_warning(
+                        "정리 미완료",
+                        "이전 공정 장치 정리가 아직 끝나지 않았습니다.\n"
+                        "잠시 후 다시 시도하세요.\n"
+                        "오래 지속되면 프로그램 재시작 또는 정리 실패 장치(OES/RGA 등) 상태를 확인하세요."
+                    )
+                    return
             
             # ★ 추가(권장): 이미 다음 공정이 예약되어 있으면 Start 재클릭은 무시하고 안내
             t = getattr(self, "_delay_main_task", None)
@@ -2821,7 +2804,7 @@ class ChamberRuntime:
             cleanup_timeout_s = 15.0
             if self.oes is not None:
                 cleanup_timeout_s = 75.0  # ✅ OES만 여유 시간
-                
+
             done, pending = await asyncio.wait(cleanup_tasks, timeout=cleanup_timeout_s)
             if pending:
                 self._cleanup_timed_out = True
@@ -2853,8 +2836,20 @@ class ChamberRuntime:
                 for t in pending:
                     with contextlib.suppress(Exception):
                         t.cancel()
-                with contextlib.suppress(Exception):
-                    await asyncio.gather(*pending, return_exceptions=True)
+
+                # ✅ 중요: cancel 했는데도 안 죽는 cleanup이 있으면 여기서 무한 대기 가능
+                #          → UI가 "공정완료"에서 못 빠져나오는 원인
+                try:
+                    await asyncio.wait_for(
+                        asyncio.gather(*pending, return_exceptions=True),
+                        timeout=2.0
+                    )
+                except asyncio.TimeoutError:
+                    # cancel에 반응하지 않는 cleanup이 남은 것
+                    self._cleanup_timed_out = True
+                    with contextlib.suppress(Exception):
+                        pn2 = [getattr(t, "get_name", lambda: repr(t))() for t in pending]
+                    self.append_log("MAIN", f"⚠ cleanup cancel timeout(2s): {pn2!r} (detached/leaked)")
 
         # 3) footer 먼저
         with contextlib.suppress(Exception):
