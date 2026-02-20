@@ -620,6 +620,24 @@ class ChamberRuntime:
                     self.process_controller.on_dc_pulse_failed(why)
             self._spawn_detached(run())
 
+        # ✅ 추가: Output ON 상태에서 Power setpoint만 변경
+        def cb_dc_pulse_set_power(power: float) -> None:
+            async def run():
+                if not self.dc_pulse:
+                    self.append_log("DCPulse", "DC-Pulse 미지원 챔버입니다."); return
+                try:
+                    # 공정 중이면 이미 켜져있겠지만, 방어적으로 보장
+                    self._ensure_background_started()
+
+                    ok = await self.dc_pulse.set_reference_power(float(power))
+                    if not ok:
+                        self.process_controller.on_dc_pulse_failed("set_reference_power failed")
+                except Exception as e:
+                    why = f"DC-Pulse set_reference_power failed: {e!r}"
+                    self.append_log("DCPulse", why)
+                    self.process_controller.on_dc_pulse_failed(why)
+            self._spawn_detached(run())
+
         def cb_dc_pulse_stop():
             async def run():
                 if self.dc_pulse:
@@ -748,15 +766,22 @@ class ChamberRuntime:
             send_mfc=cb_mfc,
 
             # 연속 파워
-            send_dc_power=cb_dc_power, stop_dc_power=cb_dc_stop,
-            send_rf_power=cb_rf_power, stop_rf_power=cb_rf_stop,
+            send_dc_power=cb_dc_power, 
+            stop_dc_power=cb_dc_stop,
+            send_rf_power=cb_rf_power, 
+            stop_rf_power=cb_rf_stop,
 
             # 펄스 파워(완전 분리)
-            start_dc_pulse=cb_dc_pulse_start, stop_dc_pulse=cb_dc_pulse_stop,
-            start_rf_pulse=cb_rf_pulse_start, stop_rf_pulse=cb_rf_pulse_stop,
+            start_dc_pulse=cb_dc_pulse_start, 
+            stop_dc_pulse=cb_dc_pulse_stop,
+            set_dc_pulse_power=cb_dc_pulse_set_power,   # ✅ 추가
+            start_rf_pulse=cb_rf_pulse_start, 
+            stop_rf_pulse=cb_rf_pulse_stop,
 
-            ig_wait=cb_ig_wait, cancel_ig=cb_ig_cancel,
-            rga_scan=cb_rga_scan, oes_run=cb_oes_run,
+            ig_wait=cb_ig_wait, 
+            cancel_ig=cb_ig_cancel,
+            rga_scan=cb_rga_scan, 
+            oes_run=cb_oes_run,
 
             ch=self.ch,
             supports_dc_cont=self.supports_dc_cont,
@@ -3311,6 +3336,11 @@ class ChamberRuntime:
             # ★ 추가
             "chuck_position":    _pos,
         }
+
+        # ✅ (옵션) DC Pulse 중간 power 변경용 컬럼 전달
+        # - 비어있으면 ProcessController가 기존처럼 무시함
+        res["power_change_time"] = str(raw.get("power_change_time", "") or "").strip()
+        res["change_power_value"] = str(raw.get("change_power_value", "") or "").strip()
 
         # ------------------------------------------------------------
         # ✅ Pulse 파라미터 정규화 (CH2→CH1로 RF-Pulse 이동 반영)
