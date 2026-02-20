@@ -867,8 +867,10 @@ async def cmd_init(ch: int, usb: int, dll_path: Optional[str], out_dir: Optional
         return 3
 
     finally:
-        # ✅ acquired 실패든 성공이든 핸들 정리
-        mtx.release()
+        # ✅ acquired 성공했을 때만 release (혹은 release가 내부적으로 안전해도 가드는 두는 게 깔끔)
+        if acquired:
+            with contextlib.suppress(Exception):
+                mtx.release()
 
 
 async def cmd_measure(
@@ -903,6 +905,18 @@ async def cmd_measure(
 
     stopped = False
     stop_reason = None
+
+    # ✅ mutex를 "한 번만" 해제하기 위한 가드 (acquired=False면 해제하지 않음)
+    mutex_released = False
+    def _release_mutex_once() -> None:
+        nonlocal mutex_released
+        if mutex_released:
+            return
+        mutex_released = True
+        if not acquired:
+            return
+        with contextlib.suppress(Exception):
+            mtx.release()
 
     try:
         if not acquired:
@@ -1029,6 +1043,9 @@ async def cmd_measure(
                 await oes.cleanup()
                 oes = None
 
+        # ✅ 장비/DLL 정리 끝났으면 USB mutex는 즉시 해제 (NAS 복사는 mutex 없이)
+        _release_mutex_once()
+
         nas_ok, nas_csv, nas_error, local_deleted = await _copy_csv_to_nas(out_csv, int(ch))
 
         _print_json({
@@ -1050,6 +1067,9 @@ async def cmd_measure(
 
     except Exception as e:
         elapsed = time.time() - t0
+
+        # ✅ 실패 경로에서도 NAS 복사 전에 mutex 먼저 해제(다음 측정 막지 않기)
+        _release_mutex_once()
 
         # ✅ 실패여도 로컬 CSV가 있으면 NAS 복사/로컬삭제 시도
         nas_ok = False
@@ -1089,7 +1109,9 @@ async def cmd_measure(
         if stop_flag_csv is not None:
             with contextlib.suppress(Exception):
                 stop_flag_csv.unlink()
-        mtx.release()
+
+        # ✅ 앞에서 이미 해제했을 수도 있으므로 1회 해제로 통일
+        _release_mutex_once()
 
 
 def build_parser() -> argparse.ArgumentParser:
