@@ -2866,7 +2866,12 @@ class ChamberRuntime:
                 self.append_log("MAIN", "⚠ log writer shutdown timeout")
                 with contextlib.suppress(Exception):
                     t.cancel()
-                    await asyncio.gather(t, return_exceptions=True)
+                    try:
+                        await asyncio.wait_for(asyncio.gather(t, return_exceptions=True), timeout=2.0)
+                    except asyncio.TimeoutError:
+                        self._cleanup_timed_out = True
+                        log_writer_timeout = True
+                        self.append_log("MAIN", "⚠ log writer cancel timeout(2s): leaked")
         except Exception:
             self._cleanup_timed_out = True
             log_writer_timeout = True
