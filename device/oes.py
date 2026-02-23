@@ -633,10 +633,14 @@ class OESAsync:
 
         try:
             async with self._daemon_measure_lock:
+                safe_integ = int(integration_ms)
+                if safe_integ <= 0:
+                    safe_integ = int(os.environ.get("OES_DEFAULT_INTEGRATION_MS", "50") or 50)
+
                 sent = await self._daemon_send_cmd({
                     "cmd": "measure",
                     "duration_s": float(duration_sec),
-                    "integration_ms": int(integration_ms),
+                    "integration_ms": safe_integ,
                     "sample_interval_s": float(self._sample_interval_s),
                     "avg_count": int(self._avg_count),
                     "out_csv": str(out_csv),
