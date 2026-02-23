@@ -199,6 +199,20 @@ class OESAsync:
         self._init_result: Optional[dict] = None
         self._init_error: Optional[str] = None
 
+        # ✅ daemon(상주) 모드: OES_DAEMON=1 이면 워커를 1회만 띄워 USB/DLL 채널을 유지
+        self._daemon_enabled: bool = _env_flag("OES_DAEMON", "0")
+        self._daemon_proc: Optional[asyncio.subprocess.Process] = None
+        self._daemon_stdout_task: Optional[asyncio.Task] = None
+        self._daemon_stderr_task: Optional[asyncio.Task] = None
+        self._daemon_ready_ev: asyncio.Event = asyncio.Event()
+        self._daemon_lock: asyncio.Lock = asyncio.Lock()           # daemon start/stop 동기화
+        self._daemon_measure_lock: asyncio.Lock = asyncio.Lock()   # 측정 직렬화(한 번에 1회)
+        self._daemon_waiter: Optional[asyncio.Future] = None       # 현재 측정 finished 기다림
+        self._daemon_target_out_csv: Optional[str] = None          # finished 매칭 키(out_csv)
+        self._daemon_info: Optional[dict] = None                   # kind=daemon 응답 저장
+        self._daemon_stderr_tail: List[str] = []
+        self._daemon_stderr_tail_max_lines: int = 80
+
     def _emit(self, ev: OESEvent) -> None:
         try:
             self._ev_q.put_nowait(ev)
@@ -233,6 +247,10 @@ class OESAsync:
         """
         # ✅ init 직전에도 워커 경로 재계산(측정과 동일)
         self._worker_cmd = _resolve_worker_command()
+
+        # ✅ daemon 모드면 init(사전점검) 대신 daemon을 올려둔다.
+        if self._daemon_enabled:
+            return await self._ensure_daemon_started(timeout_s=timeout_s, force=force)
 
         if self._init_done and self._init_ok and not force:
             return True
@@ -377,8 +395,368 @@ class OESAsync:
             await self._status(f"[OES] init EXC: {self._init_error}")
             self._init_done = True
             return False
+        
+    # ---------------------------------------------------------------------
+    # Daemon mode helpers
+    # ---------------------------------------------------------------------
+    async def _ensure_daemon_started(self, *, timeout_s: float = 20.0, force: bool = False) -> bool:
+        """daemon 워커를 1회만 띄워 유지한다(ready까지 대기)."""
+        if not self._daemon_enabled:
+            return False
+
+        async with self._daemon_lock:
+            p = self._daemon_proc
+            if (not force) and p and (p.returncode is None) and self._daemon_ready_ev.is_set():
+                return True
+
+            await self._shutdown_daemon(graceful=True)
+
+            self._worker_cmd = _resolve_worker_command()
+            worker_exe = Path(self._worker_cmd[0])
+
+            if not worker_exe.exists():
+                await self._status(f"[OES] daemon 워커 exe 없음: {worker_exe}")
+                return False
+
+            cmd = [
+                *self._worker_cmd,
+                "--cmd", "daemon",
+                "--ch", str(self._ch),
+                "--usb", str(self._usb),
+                "--out_dir", str(self._local_dir),
+            ]
+            if self._dll_path:
+                cmd += ["--dll_path", str(self._dll_path)]
+
+            creationflags = _worker_creationflags()
+
+            env = os.environ.copy()
+            env.setdefault("PYTHONUNBUFFERED", "1")
+            worker_dir = str(worker_exe.resolve().parent)
+
+            await self._status(f"[OES] daemon spawn ch={self._ch} usb={self._usb} cmd={cmd} cwd={worker_dir}")
+
+            self._daemon_ready_ev.clear()
+            self._daemon_info = None
+            self._daemon_stderr_tail.clear()
+
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                cwd=worker_dir,
+                env=env,
+                creationflags=creationflags,
+            )
+
+            assert proc.stdout and proc.stderr and proc.stdin
+            self._daemon_proc = proc
+
+            self._daemon_stderr_task = asyncio.create_task(
+                _drain_stream(proc.stderr, self._daemon_stderr_tail, max_lines=self._daemon_stderr_tail_max_lines)
+            )
+            self._daemon_stdout_task = asyncio.create_task(self._watch_daemon_stdout(proc.stdout))
+
+            try:
+                await asyncio.wait_for(self._daemon_ready_ev.wait(), timeout=float(timeout_s))
+                await self._status(f"[OES] daemon READY: {self._daemon_info}")
+                return True
+            except asyncio.TimeoutError:
+                await self._status(f"[OES] daemon READY timeout after {timeout_s}s → kill")
+                await self._shutdown_daemon(graceful=False)
+                return False
+
+    async def _shutdown_daemon(self, *, graceful: bool = True) -> None:
+        """daemon 워커 종료(close 명령 or kill)."""
+        proc = self._daemon_proc
+        self._daemon_proc = None
+        self._daemon_ready_ev.clear()
+        self._daemon_info = None
+
+        # waiter 정리(대기 중이면 깨움)
+        w = self._daemon_waiter
+        self._daemon_waiter = None
+        self._daemon_target_out_csv = None
+        if w and (not w.done()):
+            w.set_result({"kind": "fatal", "ok": False, "error": "daemon stopped"})
+
+        # stdout/stderr task 정리
+        for name in ("_daemon_stdout_task", "_daemon_stderr_task"):
+            t = getattr(self, name, None)
+            if t:
+                t.cancel()
+                with contextlib.suppress(asyncio.CancelledError, Exception):
+                    await t
+                setattr(self, name, None)
+
+        if not proc:
+            return
+        if proc.returncode is not None:
+            return
+
+        if graceful and proc.stdin:
+            try:
+                proc.stdin.write((json.dumps({"cmd": "close"}, ensure_ascii=False) + "\n").encode("utf-8"))
+                await proc.stdin.drain()
+            except Exception:
+                pass
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(proc.wait(), timeout=2.0)
+
+        if proc.returncode is None:
+            with contextlib.suppress(Exception):
+                proc.terminate()
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(proc.wait(), timeout=2.0)
+
+        if proc.returncode is None:
+            with contextlib.suppress(Exception):
+                proc.kill()
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(proc.wait(), timeout=2.0)
+
+    async def _daemon_send_cmd(self, obj: dict) -> bool:
+        proc = self._daemon_proc
+        if not proc or proc.returncode is not None or not proc.stdin:
+            return False
+        try:
+            proc.stdin.write((json.dumps(obj, ensure_ascii=False) + "\n").encode("utf-8"))
+            await proc.stdin.drain()
+            return True
+        except Exception:
+            return False
+
+    async def _watch_daemon_stdout(self, stream: asyncio.StreamReader) -> None:
+        """daemon stdout(JSONL) 소비: READY/started/finished 라우팅."""
+        try:
+            while True:
+                line = await stream.readline()
+                if not line:
+                    return
+                s = line.decode("utf-8", errors="ignore").strip()
+                if not s:
+                    continue
+                try:
+                    obj = json.loads(s)
+                except Exception:
+                    await self._status(f"[OES][daemon] {s}")
+                    continue
+
+                k = obj.get("kind")
+                if k == "status":
+                    msg = obj.get("message", "")
+                    if msg:
+                        await self._status(f"[OES] {msg}")
+                    continue
+
+                if k == "daemon":
+                    self._daemon_info = obj
+                    if bool(obj.get("ok", False)):
+                        self._daemon_ready_ev.set()
+                    else:
+                        await self._status(f"[OES] daemon FAIL: {obj.get('error')}")
+                    continue
+
+                if k == "started":
+                    await self._status(f"[OES] daemon started out_csv={obj.get('out_csv')} cols={obj.get('cols')} usb={obj.get('resolved_usb')}")
+                    continue
+
+                if k in ("finished", "fatal"):
+                    # 현재 측정(out_csv)과 매칭될 때만 waiter에 전달
+                    target = self._daemon_target_out_csv
+                    if target and (str(obj.get("out_csv") or "") == str(target)):
+                        w = self._daemon_waiter
+                        if w and (not w.done()):
+                            w.set_result(obj)
+                            continue
+                    # 매칭 안되면 참고용 저장
+                    self._worker_finished = obj
+                    continue
+
+                # pong/reset/unknown 등
+                await self._status(f"[OES][daemon] {obj}")
+
+        except Exception:
+            return
+
+    async def _run_measurement_daemon(self, duration_sec: float, integration_ms: int) -> None:
+        """daemon에 measure 명령만 보내서 1회 측정. (ok=False면 예외로 올려 fallback 유도)"""
+        ok_daemon = await self._ensure_daemon_started(timeout_s=20.0, force=False)
+        if not ok_daemon:
+            raise RuntimeError("daemon not ready")
+
+        # ✅ 이전 run 찌꺼기 정리
+        with contextlib.suppress(Exception):
+            await self._stop_tail()
+        with contextlib.suppress(Exception):
+            await self.drain_events()
+
+        out_csv = self._local_dir / _make_filename()
+        self._out_csv_local = out_csv
+        self._x_axis = None
+        self._rows_seen = 0
+        self._stop_requested = False
+        self._worker_finished = None
+
+        # local stop 잔재 제거(daemon global stop은 건드리지 않는 게 안전)
+        stop_usb_flag = self._local_dir / f".stop_usb{int(self._usb)}.flag"
+        with contextlib.suppress(Exception):
+            stop_usb_flag.unlink()
+        with contextlib.suppress(Exception):
+            for p in self._local_dir.glob("*.stop"):
+                with contextlib.suppress(Exception):
+                    p.unlink()
+
+        loop = asyncio.get_running_loop()
+        fut = loop.create_future()
+        self._daemon_waiter = fut
+        self._daemon_target_out_csv = str(out_csv)
+
+        # tail 시작
+        self._tail_task = asyncio.create_task(self._tail_csv(out_csv))
+
+        t0 = time.time()
+        self.is_running = True
+
+        try:
+            async with self._daemon_measure_lock:
+                sent = await self._daemon_send_cmd({
+                    "cmd": "measure",
+                    "duration_s": float(duration_sec),
+                    "integration_ms": int(integration_ms),
+                    "sample_interval_s": float(self._sample_interval_s),
+                    "avg_count": int(self._avg_count),
+                    "out_csv": str(out_csv),
+                    "out_dir": str(self._local_dir),
+                })
+                if not sent:
+                    raise RuntimeError("daemon send failed")
+
+                await self._status(f"[OES] daemon measure start: {duration_sec/60:.1f}분, out={out_csv}")
+
+                timeout = max(10.0, float(duration_sec) + 60.0)
+                obj = await asyncio.wait_for(fut, timeout=timeout)
+
+            ok = bool(obj.get("ok", False))
+            if not ok:
+                # ok=False면 여기서 finished를 emit하지 않고 예외로 올려서 재기동/폴백 유도
+                raise RuntimeError(str(obj.get("error") or "daemon measure failed"))
+
+            # ✅ 성공(ok=True)일 때만 기존과 동일하게 finished emit
+            elapsed = float(obj.get("elapsed_s", time.time() - t0) or (time.time() - t0))
+            final_rows = int(obj.get("rows", self._rows_seen) or self._rows_seen)
+
+            nas_ok = bool(obj.get("nas_ok", False))
+            nas_csv = obj.get("nas_csv")
+            nas_error = obj.get("nas_error")
+            local_deleted = bool(obj.get("local_deleted", False))
+
+            final_path = out_csv
+            msg = "OES 측정 완료"
+
+            if nas_ok and nas_csv:
+                final_path = Path(str(nas_csv))
+                msg = "OES 측정 완료(NAS 저장)"
+            else:
+                msg = f"OES 측정 완료(로컬 저장, NAS 실패: {nas_error})" if nas_error else "OES 측정 완료(로컬 저장, NAS 미확인)"
+
+            # tail 종료 후 로컬삭제 보조(워커가 못 지운 경우)
+            await self._stop_tail()
+            if nas_ok and out_csv.exists() and (not local_deleted):
+                with contextlib.suppress(Exception):
+                    out_csv.unlink()
+
+            self._emit(OESEvent(
+                kind="finished",
+                success=True,
+                message=msg,
+                out_csv=str(final_path),
+                rows=final_rows,
+                elapsed_s=float(elapsed),
+                error=None,
+            ))
+
+        finally:
+            # daemon은 유지. tail/상태만 정리
+            with contextlib.suppress(Exception):
+                await self._stop_tail()
+            self._daemon_waiter = None
+            self._daemon_target_out_csv = None
+            self.is_running = False
+
+    async def _run_measurement_daemon_with_fallback(self, duration_sec: float, integration_ms: int) -> None:
+        """daemon 측정 → 실패 시 daemon 재기동 1회 → 그래도 실패면 one-shot fallback."""
+        try:
+            await self._run_measurement_daemon(duration_sec, integration_ms)
+            return
+        except Exception as e1:
+            await self._status(f"[OES] daemon 실패 → 재기동 후 재시도: {type(e1).__name__}: {e1}")
+            with contextlib.suppress(Exception):
+                await self._shutdown_daemon(graceful=False)
+
+            ok = await self._ensure_daemon_started(timeout_s=20.0, force=True)
+            if ok:
+                try:
+                    await self._run_measurement_daemon(duration_sec, integration_ms)
+                    return
+                except Exception as e2:
+                    await self._status(f"[OES] daemon 재시도 실패 → one-shot fallback: {type(e2).__name__}: {e2}")
+
+            # 최종 fallback: 기존 방식(워커 measure 1회 실행)
+            await self._run_measurement_oneshot(duration_sec, integration_ms)
+
+    async def _stop_measurement_daemon(self, *, wait: bool = True, timeout_s: float = 60.0) -> None:
+        """daemon 모드 stop: stop flag를 걸고(필요 시) 현재 측정 finished까지 기다림."""
+        if not self._daemon_proc or (self._daemon_proc.returncode is not None):
+            await self._stop_tail()
+            self._stop_requested = False
+            return
+
+        self._stop_requested = True
+        await self._status("[OES] daemon stop → request stop flag")
+
+        # tail 먼저 멈춰서 파일 핸들을 풀어준다
+        await self._stop_tail()
+
+        stop_usb = self._local_dir / f".stop_usb{int(self._usb)}.flag"
+        stop_csv: Optional[Path] = None
+        if self._out_csv_local:
+            stop_usb = self._out_csv_local.parent / f".stop_usb{int(self._usb)}.flag"
+            stop_csv = self._out_csv_local.with_suffix(self._out_csv_local.suffix + ".stop")
+
+        with contextlib.suppress(Exception):
+            stop_usb.write_text("stop\n", encoding="utf-8")
+        if stop_csv:
+            with contextlib.suppress(Exception):
+                stop_csv.write_text("stop\n", encoding="utf-8")
+
+        if not wait:
+            await self._status("[OES] daemon stop flag set(detach)")
+            return
+
+        w = self._daemon_waiter
+        if w and (not w.done()):
+            try:
+                await asyncio.wait_for(w, timeout=float(timeout_s))
+            except asyncio.TimeoutError:
+                await self._status("[OES] daemon stop wait timeout → daemon kill")
+                with contextlib.suppress(Exception):
+                    await self._shutdown_daemon(graceful=False)
+
+        with contextlib.suppress(Exception):
+            stop_usb.unlink()
+        if stop_csv:
+            with contextlib.suppress(Exception):
+                stop_csv.unlink()
 
     async def run_measurement(self, duration_sec: float, integration_ms: int) -> None:
+        """측정 엔트리포인트. OES_DAEMON=1이면 daemon 사용 + 실패 시 one-shot fallback."""
+        if self._daemon_enabled:
+            return await self._run_measurement_daemon_with_fallback(duration_sec, integration_ms)
+        return await self._run_measurement_oneshot(duration_sec, integration_ms)
+        
+    async def _run_measurement_oneshot(self, duration_sec: float, integration_ms: int) -> None:
         """
         ✅ 정책
         - 워커가 '진짜 측정 중'이면 요청 무시
@@ -397,7 +775,7 @@ class OESAsync:
             await self._status("[OES] 이전 워커가 종료/정리 중 → stop 요청 후 짧게 대기")
             with contextlib.suppress(Exception):
                 # wait=False: flag만 세팅하고 바로 리턴(아래에서 짧게 대기)
-                await self.stop_measurement(wait=False)
+                await self._stop_measurement_oneshot(wait=False)
 
             try:
                 preempt_wait_s = float(os.environ.get("OES_PREEMPT_WAIT_S", "5.0") or 5.0)
@@ -632,6 +1010,19 @@ class OESAsync:
             self.is_running = False
 
     async def stop_measurement(self, *, wait: bool = True, timeout_s: float = 60.0) -> None:
+        """STOP 엔트리포인트: 실제로 돌고 있는 측정(oneshot/daemon)을 우선 중지."""
+        # ✅ 1) one-shot 워커가 살아있으면 그걸 먼저 stop
+        p = self._proc
+        if p and (p.returncode is None):
+            return await self._stop_measurement_oneshot(wait=wait, timeout_s=timeout_s)
+
+        # ✅ 2) 그 외에는 daemon stop(daemon이 없으면 내부에서 그냥 정리만 하고 리턴)
+        if self._daemon_enabled:
+            return await self._stop_measurement_daemon(wait=wait, timeout_s=timeout_s)
+
+        return await self._stop_measurement_oneshot(wait=wait, timeout_s=timeout_s)
+
+    async def _stop_measurement_oneshot(self, *, wait: bool = True, timeout_s: float = 60.0) -> None:
         """
         워커에게 stop flag를 요청하고 종료를 기다린 뒤, 남은 태스크/stop flag를 정리한다.
 
@@ -742,6 +1133,11 @@ class OESAsync:
         # tail 먼저 중지(파일 핸들 해제)
         with contextlib.suppress(Exception):
             await self._stop_tail()
+
+        # ✅ daemon 모드면: 빠른정리 시 daemon 자체를 kill(다음 측정에서 재기동/폴백)
+        if self._daemon_enabled:
+            with contextlib.suppress(Exception):
+                await self._shutdown_daemon(graceful=False)
 
         # stdout/stderr task 정리
         for name in ("_stdout_task", "_stderr_task"):
