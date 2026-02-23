@@ -460,7 +460,14 @@ class OESAsync:
 
             try:
                 await asyncio.wait_for(self._daemon_ready_ev.wait(), timeout=float(timeout_s))
-                await self._status(f"[OES] daemon READY: {self._daemon_info}")
+
+                info = self._daemon_info or {}
+                if not bool(info.get("ok", False)):
+                    await self._status(f"[OES] daemon READY 실패: {info.get('error')}")
+                    await self._shutdown_daemon(graceful=False)
+                    return False
+
+                await self._status(f"[OES] daemon READY: {info}")
                 return True
             except asyncio.TimeoutError:
                 await self._status(f"[OES] daemon READY timeout after {timeout_s}s → kill")
@@ -533,6 +540,10 @@ class OESAsync:
             while True:
                 line = await stream.readline()
                 if not line:
+                    # ✅ daemon stdout이 닫힘(daemon 죽음) → 측정 대기 중이면 즉시 실패 처리해서 fallback이 빨리 돌게 함
+                    w = self._daemon_waiter
+                    if w and (not w.done()):
+                        w.set_result({"kind": "fatal", "ok": False, "error": "daemon stdout closed"})
                     return
                 s = line.decode("utf-8", errors="ignore").strip()
                 if not s:
@@ -552,9 +563,10 @@ class OESAsync:
 
                 if k == "daemon":
                     self._daemon_info = obj
-                    if bool(obj.get("ok", False)):
-                        self._daemon_ready_ev.set()
-                    else:
+                    # ✅ ok 여부와 관계없이 'daemon 응답을 받았다'는 의미로 event는 세팅
+                    self._daemon_ready_ev.set()
+
+                    if not bool(obj.get("ok", False)):
                         await self._status(f"[OES] daemon FAIL: {obj.get('error')}")
                     continue
 
@@ -1235,20 +1247,36 @@ class OESAsync:
                 await self._status(f"[OES] CSV 미생성 상태로 워커 종료됨 rc={self._proc.returncode} path={path}")
                 return
 
+            # ✅ daemon도 죽었는데 CSV가 없으면 즉시 종료(빠른 fallback 유도)
+            dproc = self._daemon_proc
+            if dproc and (dproc.returncode is not None):
+                await self._status(f"[OES] CSV 미생성 상태로 daemon 종료됨 rc={dproc.returncode} path={path}")
+                return
+            
             # 5초마다 진행상황 로그
             if (time.time() - last_log) > 5.0:
                 last_log = time.time()
                 await self._status(f"[OES] CSV 생성 대기중... {(last_log - t0):.1f}s path={path}")
 
-            # 60초 넘어가면 워커가 init/DLL에서 걸렸을 가능성이 큼 → 여기서 kill해서 유령 상태를 방지
+            # 60초 넘어가면 init/DLL/USB에서 걸렸을 가능성이 큼 → 여기서 kill해서 유령 상태를 방지
             if (time.time() - t0) > 60.0:
-                await self._status(f"[OES] CSV 생성 대기 TIMEOUT(60s) path={path} → 워커 kill")
+                await self._status(f"[OES] CSV 생성 대기 TIMEOUT(60s) path={path} → 워커/daemon kill")
+
+                # ✅ 1) one-shot 워커가 있으면 one-shot kill
                 proc = self._proc
                 if proc and (proc.returncode is None):
                     with contextlib.suppress(Exception):
                         proc.kill()
                     with contextlib.suppress(Exception):
                         await asyncio.wait_for(proc.wait(), timeout=5.0)
+                    return
+
+                # ✅ 2) daemon 모드면 daemon도 kill(=fallback을 빨리 돌게)
+                dproc = self._daemon_proc
+                if dproc and (dproc.returncode is None):
+                    with contextlib.suppress(Exception):
+                        await self._shutdown_daemon(graceful=False)
+
                 return
 
             await asyncio.sleep(0.1)
