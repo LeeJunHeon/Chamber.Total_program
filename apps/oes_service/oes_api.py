@@ -576,13 +576,17 @@ class OESAsync:
             info["detected_count"] = int(n)
 
             opened: list[int] = []
-            for ch in range(max(0, n)):
-                try:
-                    rr = int(self.sp_dll.spSetupGivenChannel(ctypes.c_int16(ch)))  # type: ignore
-                    if rr >= 0:
-                        opened.append(ch)
-                except Exception:
-                    pass
+            usb = int(self._usb_index)
+
+            # ✅ 불필요한 전 채널 setup 제거: target만 setup 해서 DLL hang 확률을 낮춤
+            try:
+                rr = int(self.sp_dll.spSetupGivenChannel(ctypes.c_int16(usb)))  # type: ignore
+                if rr >= 0:
+                    opened.append(usb)
+                info["setup_target_rc"] = int(rr)
+            except Exception as e:
+                info["setup_target_exc"] = f"{type(e).__name__}: {e}"
+
             info["opened"] = opened
 
             if n <= 0:
@@ -788,6 +792,26 @@ def _make_default_filename() -> str:
     return f"OES_Data_{ts}.csv"
 
 
+def _env_float(name: str, default: float) -> float:
+    try:
+        v = (os.environ.get(name, "") or "").strip()
+        return float(v) if v else float(default)
+    except Exception:
+        return float(default)
+
+
+def _stop_dir() -> Path:
+    # ✅ 메인이 out_dir 몰라도 stop 보낼 수 있게 "고정" stop 폴더 사용
+    base = Path(os.environ.get("OES_STOP_DIR", str(_worker_base_dir() / "stop")))
+    try:
+        base.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        # 최후: TEMP
+        base = Path(os.environ.get("TEMP", str(Path.home()))) / "VanaM_OES_STOP"
+        base.mkdir(parents=True, exist_ok=True)
+    return base
+
+
 async def _acquire_first_frame(oes: OESAsync, retries: int = 20, delay_s: float = 0.2):
     last_err = None
     for _ in range(max(1, retries)):
@@ -830,7 +854,17 @@ async def cmd_init(ch: int, usb: int, dll_path: Optional[str], out_dir: Optional
         _status(f"[worker] init begin ch={ch} usb={usb} dir={temp_dir} dll_arg={dll_path} dll_resolved={dll_resolved} dll_exists={dll_exists}")
 
         oes = OESAsync(chamber=int(ch), usb_index=int(usb), dll_path=dll_path, save_directory=str(temp_dir))
-        ok = await oes.initialize_device()
+        init_timeout_s = _env_float("OES_INIT_TIMEOUT_S", 25.0)
+        try:
+            ok = await asyncio.wait_for(oes.initialize_device(), timeout=init_timeout_s)
+        except asyncio.TimeoutError:
+            msg = f"OES init timeout after {init_timeout_s}s (ch={ch}, usb={usb})"
+            _errlog(msg)
+            _print_json({"kind":"init","ok":False,"ch":int(ch),"usb":int(usb),"error":msg})
+            if acquired:
+                with contextlib.suppress(Exception):
+                    mtx.release()
+            os._exit(124)
 
         payload = {
             "kind": "init",
@@ -938,15 +972,19 @@ async def cmd_measure(
         # ✅ (2) 이제 out_dir_final을 만들 수 있음
         out_dir_final.mkdir(parents=True, exist_ok=True)
 
-        # ✅ (3) stop flag 경로 확정(이제 out_dir_final/out_csv가 확정돼서 안전)
+        # ✅ (3) stop flag 경로 확정
+        #  - local(기존 호환)
         stop_flag_usb = out_dir_final / f".stop_usb{int(usb)}.flag"
-        stop_flag_csv = Path(str(out_csv) + ".stop")  # out_csv는 이제 항상 Path
+        stop_flag_csv = Path(str(out_csv) + ".stop")
+
+        #  - global(신규): 메인이 out_dir 몰라도 stop 보낼 수 있도록 고정 경로 추가
+        stop_dir = _stop_dir()
+        stop_flag_usb_global = stop_dir / f".stop_usb{int(usb)}.flag"
 
         # 이전 실행 잔재 제거(스테일 stop 방지)
-        with contextlib.suppress(Exception):
-            stop_flag_usb.unlink()
-        with contextlib.suppress(Exception):
-            stop_flag_csv.unlink()
+        for p in (stop_flag_usb, stop_flag_csv, stop_flag_usb_global):
+            with contextlib.suppress(Exception):
+                p.unlink()
 
         oes = OESAsync(
             chamber=int(ch),
@@ -959,7 +997,27 @@ async def cmd_measure(
         )
 
         _print_json({"kind": "status", "message": f"[worker] init start ch={ch} usb={usb} dll_path={dll_path}"})
-        ok = await oes.initialize_device()
+
+        init_timeout_s = _env_float("OES_INIT_TIMEOUT_S", 25.0)
+        try:
+            ok = await asyncio.wait_for(oes.initialize_device(), timeout=init_timeout_s)
+        except asyncio.TimeoutError:
+            msg = f"OES initialize_device timeout after {init_timeout_s}s (ch={ch}, usb={usb})"
+            _errlog(msg)
+
+            # ✅ 메인은 절대 기다리지 않게: 워커가 스스로 '확실히' 종료해야 함
+            _print_json({"kind": "finished", "ok": False, "ch": int(ch), "usb": int(usb), "out_csv": str(out_csv), "error": msg})
+
+            # mutex/stop파일 정리 후 하드 종료(스레드 hang으로 sys.exit가 먹지 않을 수 있음)
+            with contextlib.suppress(Exception):
+                stop_flag_usb.unlink()
+            with contextlib.suppress(Exception):
+                stop_flag_csv.unlink()
+            with contextlib.suppress(Exception):
+                stop_flag_usb_global.unlink()
+            _release_mutex_once()
+            os._exit(124)
+
         _print_json({"kind": "status", "message": f"[worker] init done ok={ok} resolved_usb={getattr(oes,'sChannel',-1)} pixels={getattr(oes,'_npix',0)}"})
 
         if not ok or getattr(oes, "sChannel", -1) < 0:
@@ -1001,7 +1059,7 @@ async def cmd_measure(
         deadline = time.time() + max(0.0, float(duration_s))
         while time.time() < deadline:
             # ✅ stop 요청 감지(USB 기반 / CSV 기반)
-            if stop_flag_usb.exists() or (stop_flag_csv and stop_flag_csv.exists()):
+            if stop_flag_usb_global.exists() or stop_flag_usb.exists() or (stop_flag_csv and stop_flag_csv.exists()):
                 stopped = True
                 stop_reason = "stop_flag"
                 _status(f"[worker] stop requested (usb_flag={stop_flag_usb.exists()} csv_flag={(stop_flag_csv.exists() if stop_flag_csv else None)})")
@@ -1010,7 +1068,7 @@ async def cmd_measure(
             await asyncio.sleep(float(sample_interval_s))
 
             # sleep 직후 한번 더(반응성)
-            if stop_flag_usb.exists() or (stop_flag_csv and stop_flag_csv.exists()):
+            if stop_flag_usb_global.exists() or stop_flag_usb.exists() or (stop_flag_csv and stop_flag_csv.exists()):
                 stopped = True
                 stop_reason = "stop_flag"
                 _status(f"[worker] stop requested (usb_flag={stop_flag_usb.exists()} csv_flag={(stop_flag_csv.exists() if stop_flag_csv else None)})")
@@ -1109,6 +1167,8 @@ async def cmd_measure(
         if stop_flag_csv is not None:
             with contextlib.suppress(Exception):
                 stop_flag_csv.unlink()
+        with contextlib.suppress(Exception):
+            stop_flag_usb_global.unlink()
 
         # ✅ 앞에서 이미 해제했을 수도 있으므로 1회 해제로 통일
         _release_mutex_once()
