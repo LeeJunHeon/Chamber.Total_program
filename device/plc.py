@@ -16,6 +16,10 @@ from __future__ import annotations
 import asyncio
 import inspect
 import time
+import csv
+import os
+from datetime import datetime
+from pathlib import Path
 from dataclasses import dataclass
 from typing import Any, Dict, Optional, Iterable
 from contextlib import asynccontextmanager
@@ -364,6 +368,10 @@ class AsyncPLC:
             return bool(self._client) and self._is_connected()
         except Exception:
             return False
+        
+    def is_busy(self) -> bool:
+        """공정/메인 제어가 PLC I/O 중인지(락 점유 중인지)"""
+        return self._lock.locked()
 
     # ---------- 내부 저수준 헬퍼 ----------
     def _is_connected(self) -> bool:
@@ -643,6 +651,90 @@ class AsyncPLC:
 
             except Exception as e:
                 raise self._to_plc_error(op, addr, e) from e
+            
+    # ---------- 블록(배열) 읽기 ----------
+    async def read_coils_block(self, start_addr: int, count: int) -> list[bool]:
+        """
+        FC1: 연속 코일을 한 번에 읽고 resp.bits[] 배열로 받는다.
+        (코일을 하나씩 read_coil 반복하는 방식이 아니라, PLC가 배열로 응답)
+        """
+        if count <= 0:
+            return []
+
+        op = "read_coils_block"
+        async with self._io_lock(op, addr=int(start_addr)):
+            try:
+                await asyncio.to_thread(self._connect_sync)
+                await self._throttle_and_heartbeat()
+
+                try:
+                    resp = await asyncio.to_thread(
+                        self._client.read_coils,
+                        int(start_addr),
+                        count=int(count),
+                        **self._uid_kwargs(),
+                    )
+                except Exception as e:
+                    pe = self._to_plc_error(op, int(start_addr), e)
+                    if pe.code in ("E401", "E402") or self._is_reset_err(e):
+                        await asyncio.to_thread(self._close_sync)
+                        await asyncio.to_thread(self._connect_sync)
+                        await self._throttle_and_heartbeat()
+                        resp = await asyncio.to_thread(
+                            self._client.read_coils,
+                            int(start_addr),
+                            count=int(count),
+                            **self._uid_kwargs(),
+                        )
+                    else:
+                        raise pe from e
+
+                self._ensure_ok(resp, op=op, addr=int(start_addr))
+                bits = list(getattr(resp, "bits", []) or [])
+                if len(bits) < count:
+                    bits.extend([False] * (count - len(bits)))
+                return [bool(x) for x in bits[:count]]
+
+            except Exception as e:
+                raise self._to_plc_error(op, int(start_addr), e) from e
+            
+    async def snapshot_all_coils_fast(
+        self,
+        *,
+        keys: Optional[Iterable[str]] = None,
+        max_coils_per_req: int = 2000,
+        skip_if_busy: bool = True,
+    ) -> Dict[str, bool]:
+        """
+        PLC_COIL_MAP에 있는 코일들을 블록 읽기로 빠르게 스냅샷.
+        - skip_if_busy=True면 공정 조작 중(락 점유)에는 이번 tick 스킵(공정 영향 0)
+        """
+        if skip_if_busy and self.is_busy():
+            return {}
+
+        use_keys = list(keys) if keys is not None else list(PLC_COIL_MAP.keys())
+        addr_map = {k: PLC_COIL_MAP[k] for k in use_keys if k in PLC_COIL_MAP}
+        if not addr_map:
+            return {}
+
+        addrs = list(addr_map.values())
+        mn, mx = min(addrs), max(addrs)
+        span = mx - mn + 1
+
+        out: Dict[str, bool] = {}
+
+        # ✅ 현재 맵은 1~3056 수준이라, "min~max 범위"를 2번 정도로 나눠 읽는 게 가장 빠르고 lock 점유도 짧은 편.
+        step = max(1, int(max_coils_per_req))
+        for start in range(mn, mx + 1, step):
+            cnt = min(step, (mx + 1) - start)
+            bits = await self.read_coils_block(start, cnt)
+
+            # 키 개수(약 100여개)만큼만 매핑 → O(keys)라 가볍다
+            for k, a in addr_map.items():
+                if start <= a < start + cnt:
+                    out[k] = bool(bits[a - start])
+
+        return out
 
     async def read_coils(self, addrs: Iterable[int]) -> Dict[int, bool]:
         out: Dict[int, bool] = {}
@@ -788,6 +880,136 @@ class AsyncPLC:
         interlocks = await self.read_interlocks()
         lamps = await self.read_lamps()
         return {"interlocks": interlocks, "lamps": lamps}
+    
+    # ---------- PLC COIL CSV LOGGER ----------
+    def _default_local_plc_log_dir(self) -> Path:
+        base = (
+            os.environ.get("LOCALAPPDATA")
+            or os.environ.get("APPDATA")
+            or str(Path.home())
+        )
+        return Path(base) / "CH_1_2_program" / "Logs" / "CH1&2_PLC"
+
+    def _pick_log_dir(self, nas_dir: Path, local_dir: Path) -> Path:
+        # NAS 우선, 실패하면 로컬
+        try:
+            nas_dir.mkdir(parents=True, exist_ok=True)
+            return nas_dir
+        except Exception:
+            try:
+                local_dir.mkdir(parents=True, exist_ok=True)
+            except Exception:
+                pass
+            return local_dir
+
+    def _daily_file_path(self, base_dir: Path, dt: datetime) -> Path:
+        return base_dir / f"{dt.strftime('%Y%m%d')}.csv"
+
+    async def start_plc_coil_csv_logger(
+        self,
+        *,
+        interval_s: float = 1.0,
+        nas_dir: str = r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CH1&2_PLC",
+        local_dir: Optional[str] = None,
+        keys: Optional[Iterable[str]] = None,
+    ) -> None:
+        """
+        프로그램 시작 시 호출:
+        await plc.start_plc_coil_csv_logger(...)
+        - 절대 공정에 영향 주지 않도록:
+        * PLC 락이 잡혀있으면 이번 tick 스킵
+        * 예외는 내부에서 삼키고 계속
+        """
+        if getattr(self, "_plc_coil_log_task", None) and not self._plc_coil_log_task.done():
+            return
+
+        self._plc_coil_log_stop = asyncio.Event()
+        self._plc_coil_log_interval = max(0.5, float(interval_s))  # 너무 짧으면 0.5s로 제한
+        self._plc_coil_log_keys = list(keys) if keys is not None else list(PLC_COIL_MAP.keys())
+
+        self._plc_coil_log_nas_dir = Path(nas_dir)
+        self._plc_coil_log_local_dir = Path(local_dir) if local_dir else self._default_local_plc_log_dir()
+
+        self._plc_coil_log_task = asyncio.create_task(self._plc_coil_log_loop(), name="PLCCoilCSVLogger")
+
+    async def stop_plc_coil_csv_logger(self) -> None:
+        evt = getattr(self, "_plc_coil_log_stop", None)
+        task = getattr(self, "_plc_coil_log_task", None)
+        if evt is not None:
+            evt.set()
+        if task is not None:
+            task.cancel()
+            try:
+                await task
+            except Exception:
+                pass
+        self._plc_coil_log_task = None
+
+    async def _plc_coil_log_loop(self) -> None:
+        evt: asyncio.Event = self._plc_coil_log_stop
+        interval = float(self._plc_coil_log_interval)
+        keys = list(self._plc_coil_log_keys)
+
+        while not evt.is_set():
+            t0 = time.perf_counter()
+            dt = datetime.now()
+
+            # ✅ 공정/메인 제어가 PLC 사용 중이면 스킵(공정 영향 0)
+            if self.is_busy():
+                await asyncio.sleep(interval)
+                continue
+
+            # ✅ 코일 스냅샷(블록 읽기). 실패해도 공정 영향 없게 예외 삼킴.
+            try:
+                snap = await self.snapshot_all_coils_fast(keys=keys, skip_if_busy=True)
+            except Exception as e:
+                # 절대 raise하지 않음
+                self.log("PLC COIL LOG: snapshot failed (ignored): %r", e)
+                await asyncio.sleep(interval)
+                continue
+
+            # ✅ 저장 위치(NAS 우선, 실패시 로컬)
+            base_dir = self._pick_log_dir(self._plc_coil_log_nas_dir, self._plc_coil_log_local_dir)
+            fp = self._daily_file_path(base_dir, dt)
+
+            row = [dt.isoformat(timespec="seconds")]
+            for k in keys:
+                v = bool(snap.get(k, False))
+                row.append("TRUE" if v else "FALSE")
+
+            header = ["Timestamp", *keys]
+
+            def _write_csv():
+                fp.parent.mkdir(parents=True, exist_ok=True)
+                need_header = (not fp.exists()) or (fp.stat().st_size == 0)
+                with open(fp, "a", encoding="utf-8-sig", newline="") as f:
+                    w = csv.writer(f)
+                    if need_header:
+                        w.writerow(header)
+                    w.writerow(row)
+
+            try:
+                await asyncio.to_thread(_write_csv)
+            except Exception as e:
+                # NAS에서 실패할 수 있으니 로컬로 한번 더 시도(여기도 실패하면 그냥 무시)
+                try:
+                    self.log("PLC COIL LOG: write failed (nas?). fallback local: %r", e)
+                    fp2 = self._daily_file_path(self._plc_coil_log_local_dir, dt)
+                    def _write_local():
+                        fp2.parent.mkdir(parents=True, exist_ok=True)
+                        need_header2 = (not fp2.exists()) or (fp2.stat().st_size == 0)
+                        with open(fp2, "a", encoding="utf-8-sig", newline="") as f:
+                            w = csv.writer(f)
+                            if need_header2:
+                                w.writerow(header)
+                            w.writerow(row)
+                    await asyncio.to_thread(_write_local)
+                except Exception:
+                    pass  # 최종적으로도 실패하면 그냥 무시(공정 영향 0)
+
+            # 주기 맞추기
+            elapsed = time.perf_counter() - t0
+            await asyncio.sleep(max(0.0, interval - elapsed))
 
     # ---------- 레거시/편의 ----------
     async def main_shutter_open(self, chamber: int = 1, *, momentary: bool = False):
