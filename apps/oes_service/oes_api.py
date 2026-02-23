@@ -1317,9 +1317,415 @@ async def cmd_measure(
         _release_mutex_once()
 
 
+# ====== Daemon mode (persistent OES) ======
+# - 워커 프로세스를 1회만 띄워 OES 채널을 열린 상태로 유지
+# - stdin(JSONL)로 명령을 받아 측정만 수행 (프로그램 종료 시에만 cleanup)
+#
+# stdin JSONL 예시:
+#   {"cmd":"ping"}
+#   {"cmd":"measure","duration_s":10,"integration_ms":50,"sample_interval_s":1.0,"avg_count":3,"out_dir":"C:/.../OES/CH1"}
+#   {"cmd":"reset"}
+#   {"cmd":"close"}
+#
+# stdout JSON은 기존과 동일하게 kind=status/started/finished 등을 사용한다.
+
+async def _stdin_readline_async() -> Optional[str]:
+    loop = asyncio.get_running_loop()
+    # Windows에서도 가장 안정적인 방식: blocking readline을 executor로 보냄
+    return await loop.run_in_executor(None, sys.stdin.readline)
+
+async def _daemon_read_cmd() -> Optional[dict]:
+    """stdin에서 JSON 한 줄을 읽어 dict로 반환. EOF면 None."""
+    try:
+        line = await _stdin_readline_async()
+    except Exception as e:
+        _errlog_exc(f"[daemon] stdin readline failed: {type(e).__name__}: {e}")
+        return None
+
+    if not line:
+        return None  # EOF
+
+    s = (line or "").strip()
+    if not s:
+        return {}
+
+    try:
+        obj = json.loads(s)
+        return obj if isinstance(obj, dict) else {"cmd": "_invalid", "raw": s[:500]}
+    except Exception as e:
+        _print_json({"kind": "status", "message": f"[daemon] invalid json: {type(e).__name__}: {e} raw={s[:200]}"})
+        return {}
+
+async def _daemon_reset_device(oes: OESAsync, *, ch: int, usb: int) -> bool:
+    """cleanup + initialize_device 재시도. (daemon 내부 복구용)"""
+    cleanup_timeout_s = _env_float("OES_CLEANUP_TIMEOUT_S", 5.0)
+    init_timeout_s = _env_float("OES_INIT_TIMEOUT_S", 25.0)
+
+    # cleanup
+    try:
+        await asyncio.wait_for(oes.cleanup(), timeout=cleanup_timeout_s)
+    except asyncio.TimeoutError:
+        _errlog(f"[daemon] reset cleanup timeout after {cleanup_timeout_s}s (ch={ch} usb={usb})")
+        return False
+    except Exception:
+        pass
+
+    # re-init (새로 객체를 만들지 않고 같은 객체 재사용)
+    try:
+        ok = await asyncio.wait_for(oes.initialize_device(), timeout=init_timeout_s)
+        return bool(ok)
+    except asyncio.TimeoutError:
+        _errlog(f"[daemon] reset init timeout after {init_timeout_s}s (ch={ch} usb={usb})")
+        return False
+    except Exception as e:
+        _errlog_exc(f"[daemon] reset init exception: {type(e).__name__}: {e} (ch={ch} usb={usb})")
+        return False
+
+async def _daemon_measure_once(
+    *,
+    oes: OESAsync,
+    ch: int,
+    usb: int,
+    duration_s: float,
+    integration_ms: int,
+    sample_interval_s: float,
+    avg_count: int,
+    out_dir: Optional[Path],
+    out_csv: Optional[Path],
+) -> int:
+    """daemon에서 1회 측정. (OES 채널은 열어둔 채 CSV만 생성/복사)"""
+    t0 = time.time()
+    rows = 0
+    f = None
+
+    # ✅ (1) out_dir/out_csv 확정
+    if out_csv:
+        out_csv_final = Path(out_csv).expanduser().resolve()
+        out_dir_final = out_csv_final.parent
+    else:
+        out_dir_final = Path(out_dir).expanduser().resolve() if out_dir else _default_out_dir(int(ch))
+        out_csv_final = out_dir_final / _make_default_filename()
+
+    out_dir_final.mkdir(parents=True, exist_ok=True)
+
+    # ✅ (2) stop flag 경로 확정
+    stop_flag_usb_local = out_dir_final / f".stop_usb{int(usb)}.flag"
+    stop_flag_csv = Path(str(out_csv_final) + ".stop")
+    stop_flag_usb_global = _stop_dir() / f".stop_usb{int(usb)}.flag"
+
+    # ✅ (3) 이전 잔재 제거(스테일 stop 방지)
+    # - global stop은 '실시간 STOP 신호'로도 쓰이므로 여기서 지우지 않는다.
+    for p in (stop_flag_usb_local, stop_flag_csv):
+        with contextlib.suppress(Exception):
+            p.unlink()
+
+    stopped = False
+    stop_reason = None
+
+    # ✅ (4) 장비 설정 적용(측정마다 integration/avg를 반영)
+    try:
+        oes._avg_count = int(max(1, int(avg_count)))  # type: ignore[attr-defined]
+    except Exception:
+        pass
+
+    with contextlib.suppress(Exception):
+        await oes._call(oes._apply_device_settings_blocking, int(oes.sChannel), int(integration_ms))
+
+    # ✅ (5) CSV open + header + 첫 프레임
+    _print_json({"kind": "status", "message": f"[daemon] open csv: {out_csv_final}"})
+    f = open(str(out_csv_final), "w", newline="", encoding="utf-8")
+    w = csv.writer(f)
+
+    x, y = await _acquire_first_frame(oes)
+    x_list = x.tolist() if hasattr(x, "tolist") else list(x)
+    y_list = y.tolist() if hasattr(y, "tolist") else list(y)
+
+    w.writerow(["Time"] + [float(v) for v in x_list])
+    f.flush()
+
+    _print_json({
+        "kind": "started",
+        "ok": True,
+        "ch": int(ch),
+        "usb": int(usb),
+        "resolved_usb": int(getattr(oes, "sChannel", -1)),
+        "out_csv": str(out_csv_final),
+        "cols": int(len(x_list)),
+        "model": str(getattr(oes, "_model_name", "UNKNOWN")),
+        "sample_interval_s": float(sample_interval_s),
+        "avg_count": int(avg_count),
+        "integration_ms": int(integration_ms),
+    })
+
+    now_s = datetime.now().strftime("%H:%M:%S")
+    w.writerow([now_s] + [float(v) for v in y_list])
+    rows += 1
+    f.flush()
+
+    hard_abort = False
+    hard_abort_error = None
+    hard_abort_exit_code = 0
+
+    deadline = time.time() + max(0.0, float(duration_s))
+    while time.time() < deadline:
+        # ✅ stop 요청 감지(USB 기반 / CSV 기반)
+        if stop_flag_usb_global.exists() or stop_flag_usb_local.exists() or stop_flag_csv.exists():
+            stopped = True
+            stop_reason = "stop_flag"
+            _status(
+                f"[daemon] stop requested (usb_global={stop_flag_usb_global.exists()} usb_local={stop_flag_usb_local.exists()} csv_flag={stop_flag_csv.exists()})"
+            )
+            break
+
+        await asyncio.sleep(float(sample_interval_s))
+
+        # sleep 직후 한번 더(반응성)
+        if stop_flag_usb_global.exists() or stop_flag_usb_local.exists() or stop_flag_csv.exists():
+            stopped = True
+            stop_reason = "stop_flag"
+            _status(
+                f"[daemon] stop requested (usb_global={stop_flag_usb_global.exists()} usb_local={stop_flag_usb_local.exists()} csv_flag={stop_flag_csv.exists()})"
+            )
+            break
+
+        read_timeout_s = _env_float("OES_READ_TIMEOUT_S", 2.0)
+        try:
+            x2, y2 = await asyncio.wait_for(oes._call(oes._acquire_one_slice_avg), timeout=read_timeout_s)
+        except asyncio.TimeoutError:
+            msg = f"OES read timeout after {read_timeout_s}s (daemon ch={ch} usb={usb})"
+            _errlog(msg)
+            hard_abort = True
+            hard_abort_error = msg
+            hard_abort_exit_code = 125
+            stopped = True
+            stop_reason = "read_timeout"
+            break
+
+        if x2 is None or y2 is None:
+            continue
+
+        y2_list = y2.tolist() if hasattr(y2, "tolist") else list(y2)
+        if len(y2_list) != len(x_list):
+            continue
+
+        now_s = datetime.now().strftime("%H:%M:%S")
+        w.writerow([now_s] + [float(v) for v in y2_list])
+        rows += 1
+        f.flush()
+
+    elapsed = time.time() - t0
+
+    # ✅ 파일 flush/close
+    with contextlib.suppress(Exception):
+        if f:
+            f.flush()
+            os.fsync(f.fileno())
+            f.close()
+            f = None
+
+    # ✅ NAS 복사 (daemon은 USB mutex를 계속 잡고 있으므로, 여기서 mutex release는 하지 않음)
+    nas_ok, nas_csv, nas_error, local_deleted = await _copy_csv_to_nas(out_csv_final, int(ch))
+
+    ok_final = (not hard_abort)
+
+    payload = {
+        "kind": "finished",
+        "ok": bool(ok_final),
+        "stopped": bool(stopped),
+        "stop_reason": stop_reason,
+        "ch": int(ch),
+        "usb": int(usb),
+        "out_csv": str(out_csv_final),
+        "nas_ok": bool(nas_ok),
+        "nas_csv": str(nas_csv) if nas_csv else None,
+        "nas_error": nas_error,
+        "local_deleted": bool(local_deleted),
+        "rows": int(rows),
+        "elapsed_s": float(elapsed),
+    }
+    if not ok_final and hard_abort_error:
+        payload["error"] = hard_abort_error
+
+    _print_json(payload)
+
+    # ✅ hard_abort면 DLL hang 의심이므로 daemon 자체를 자가 종료시키는 게 안전 (메인이 재기동/폴백)
+    if hard_abort and hard_abort_exit_code:
+        for p in (stop_flag_usb_local, stop_flag_csv, stop_flag_usb_global):
+            with contextlib.suppress(Exception):
+                p.unlink()
+        os._exit(int(hard_abort_exit_code))
+
+    # stop flag 정리
+    for p in (stop_flag_usb_local, stop_flag_csv, stop_flag_usb_global):
+        with contextlib.suppress(Exception):
+            p.unlink()
+
+    return 0 if ok_final else 10
+
+async def cmd_daemon(ch: int, usb: int, dll_path: Optional[str], out_dir: Optional[Path]) -> int:
+    """OES를 1회 initialize 후 살아있는 상태로 유지하는 daemon."""
+    mtx = _WinMutex(f"Local\\VanaM_OES_USB{int(usb)}")
+    mutex_ms = _mutex_timeout_ms()
+
+    _status(f"[worker] daemon: acquiring mutex name={mtx.name} timeout_ms={mutex_ms}")
+    acquired = mtx.acquire(timeout_ms=mutex_ms)
+    if not acquired:
+        _errlog(f"cmd=daemon mutex timeout ch={ch} usb={usb} timeout_ms={mutex_ms}")
+        _print_json({"kind": "daemon", "ok": False, "ch": int(ch), "usb": int(usb), "error": f"mutex timeout ({mutex_ms}ms)"})
+        return 4
+
+    oes = None
+    try:
+        # ✅ daemon 기본 출력 디렉토리(측정 명령에서 out_dir/out_csv 없을 때 사용)
+        base_dir = Path(out_dir).expanduser().resolve() if out_dir else _default_out_dir(int(ch))
+        base_dir.mkdir(parents=True, exist_ok=True)
+
+        oes = OESAsync(
+            chamber=int(ch),
+            usb_index=int(usb),
+            dll_path=dll_path,
+            save_directory=str(base_dir),
+            sample_interval_s=1.0,
+            avg_count=int(OES_AVG_COUNT),
+            debug_print=False,
+        )
+
+        init_timeout_s = _env_float("OES_INIT_TIMEOUT_S", 25.0)
+        _status(f"[worker] daemon init begin ch={ch} usb={usb} dir={base_dir} dll_path={dll_path}")
+        try:
+            ok = await asyncio.wait_for(oes.initialize_device(), timeout=init_timeout_s)
+        except asyncio.TimeoutError:
+            msg = f"OES init timeout after {init_timeout_s}s (cmd=daemon ch={ch} usb={usb})"
+            _errlog(msg)
+            _print_json({"kind": "daemon", "ok": False, "ch": int(ch), "usb": int(usb), "error": msg})
+            os._exit(124)
+
+        payload = {
+            "kind": "daemon",
+            "ok": bool(ok),
+            "ch": int(ch),
+            "usb": int(usb),
+            "resolved_usb": int(getattr(oes, "sChannel", -1)),
+            "pixels": int(getattr(oes, "_npix", 0) or 0),
+            "model": str(getattr(oes, "_model_name", "UNKNOWN")),
+            "dll_resolved": str(getattr(oes, "_dll_path", "")),
+            "dll_exists": bool(Path(getattr(oes, "_dll_path", "")).is_file()),
+            "out_dir": str(base_dir),
+        }
+        if not ok:
+            payload["error"] = str(getattr(oes, "_last_error", "")) or "initialize_device failed"
+            payload["scan"] = getattr(oes, "_last_scan", {}) or {}
+
+        _print_json(payload)
+
+        if not ok or getattr(oes, "sChannel", -1) < 0:
+            return 2
+
+        _status(f"[worker] daemon READY ch={ch} usb={usb} resolved={getattr(oes,'sChannel',-1)} pixels={getattr(oes,'_npix',0)}")
+
+        # ✅ daemon READY 직후: 이전 실행에서 남은 global stop 잔재만 1회 정리
+        with contextlib.suppress(Exception):
+            (_stop_dir() / f".stop_usb{int(usb)}.flag").unlink()
+
+        # ✅ 측정 동시 실행 방지
+        measure_lock = asyncio.Lock()
+
+        while True:
+            cmd_obj = await _daemon_read_cmd()
+            if cmd_obj is None:
+                _status("[daemon] stdin closed (EOF) → exit")
+                break
+
+            cmd = str(cmd_obj.get("cmd") or "").strip().lower()
+            if not cmd:
+                continue
+
+            if cmd in {"ping", "health"}:
+                _print_json({"kind": "pong", "ok": True, "ch": int(ch), "usb": int(usb), "ts": time.time()})
+                continue
+
+            if cmd in {"close", "exit", "quit"}:
+                _status("[daemon] close requested → cleanup & exit")
+                break
+
+            if cmd == "reset":
+                _status("[daemon] reset requested")
+                ok_reset = await _daemon_reset_device(oes, ch=int(ch), usb=int(usb))
+                _print_json({"kind": "reset", "ok": bool(ok_reset), "ch": int(ch), "usb": int(usb)})
+                continue
+
+            if cmd == "measure":
+                if measure_lock.locked():
+                    _print_json({"kind": "finished", "ok": False, "ch": int(ch), "usb": int(usb), "error": "busy"})
+                    continue
+
+                # cmd 파라미터
+                dur = float(cmd_obj.get("duration_s") or cmd_obj.get("duration") or 0.0)
+                integ = int(cmd_obj.get("integration_ms") or 0)
+                if integ <= 0:
+                    integ = int(os.environ.get("OES_DEFAULT_INTEGRATION_MS", "50"))  # 기본 50ms
+                si = float(cmd_obj.get("sample_interval_s") or 1.0)
+                ac = int(cmd_obj.get("avg_count") or OES_AVG_COUNT)
+
+                od = cmd_obj.get("out_dir")
+                oc = cmd_obj.get("out_csv")
+
+                od_p = Path(str(od)) if od else base_dir
+                oc_p = Path(str(oc)) if oc else None
+
+                async with measure_lock:
+                    try:
+                        rc = await _daemon_measure_once(
+                            oes=oes,
+                            ch=int(ch),
+                            usb=int(usb),
+                            duration_s=dur,
+                            integration_ms=integ,
+                            sample_interval_s=si,
+                            avg_count=ac,
+                            out_dir=od_p,
+                            out_csv=oc_p,
+                        )
+                        # 측정 실패(비-fatal)면 다음 측정을 위해 자동 reset 시도
+                        if rc != 0:
+                            with contextlib.suppress(Exception):
+                                ok_reset = await _daemon_reset_device(oes, ch=int(ch), usb=int(usb))
+                                _status(f"[daemon] auto-reset after measure rc={rc} ok={ok_reset}")
+                    except Exception as e:
+                        _errlog_exc(f"[daemon] measure exception: {type(e).__name__}: {e}")
+                        _print_json({"kind": "finished", "ok": False, "ch": int(ch), "usb": int(usb), "error": f"{type(e).__name__}: {e}", "trace": traceback.format_exc()})
+                        with contextlib.suppress(Exception):
+                            ok_reset = await _daemon_reset_device(oes, ch=int(ch), usb=int(usb))
+                            _status(f"[daemon] auto-reset after exception ok={ok_reset}")
+                continue
+
+            _print_json({"kind": "status", "message": f"[daemon] unknown cmd={cmd} obj={cmd_obj}"})
+
+        return 0
+
+    except Exception as e:
+        _errlog_exc(f"cmd=daemon fatal exception ch={ch} usb={usb}")
+        _print_json({"kind": "fatal", "ok": False, "ch": int(ch), "usb": int(usb), "error": f"{type(e).__name__}: {e}", "trace": traceback.format_exc()})
+        return 99
+
+    finally:
+        # ✅ daemon 종료 시에만 cleanup
+        if oes is not None:
+            cleanup_timeout_s = _env_float("OES_CLEANUP_TIMEOUT_S", 5.0)
+            try:
+                await asyncio.wait_for(oes.cleanup(), timeout=cleanup_timeout_s)
+            except asyncio.TimeoutError:
+                _errlog(f"[daemon] cleanup timeout after {cleanup_timeout_s}s (exit ch={ch} usb={usb})")
+            except Exception:
+                pass
+
+        with contextlib.suppress(Exception):
+            mtx.release()    
+
+
 def build_parser() -> argparse.ArgumentParser:
     p = argparse.ArgumentParser()
-    p.add_argument("--cmd", required=True, choices=["init", "measure"])
+    p.add_argument("--cmd", required=True, choices=["init", "measure", "daemon"])
     p.add_argument("--ch", required=True, type=int)
     p.add_argument("--usb", required=True, type=int)
     p.add_argument("--dll_path", type=str, default=None)
@@ -1341,6 +1747,10 @@ async def _amain(argv=None) -> int:
         out_dir = Path(args.out_dir) if args.out_dir else None
         out_csv = Path(args.out_csv) if args.out_csv else None
         return await cmd_init(args.ch, args.usb, args.dll_path, out_dir, out_csv)
+
+    if args.cmd == "daemon":
+        out_dir = Path(args.out_dir) if args.out_dir else None
+        return await cmd_daemon(args.ch, args.usb, args.dll_path, out_dir)
 
     out_dir = Path(args.out_dir) if args.out_dir else None
     out_csv = Path(args.out_csv) if args.out_csv else None
