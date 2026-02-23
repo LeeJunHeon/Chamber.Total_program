@@ -756,19 +756,25 @@ class OESAsync:
             return
 
         ch = int(self.sChannel)
-        dll = self.sp_dll  # 로컬로 잡아두고 handle 추출
+        dll = self.sp_dll
         h = getattr(dll, "_handle", None)
 
         with contextlib.suppress(Exception):
             await self._call(self._safe_close_channel_blocking, ch)
 
-        # ✅ DLL 언로드(옵션): 측정 끝났는데도 dll 파일이 잡힌 것처럼 보이는 문제를 줄임
-        if os.name == "nt" and h:
+        # ✅ DLL 언로드는 기본 OFF(크래시 리스크 줄임). 정말 필요할 때만 켜기.
+        do_unload = os.environ.get("OES_DLL_UNLOAD", "0") == "1"
+        if do_unload and os.name == "nt" and h:
             with contextlib.suppress(Exception):
                 k32 = ctypes.WinDLL("kernel32", use_last_error=True)
                 k32.FreeLibrary.argtypes = [ctypes.c_void_p]
                 k32.FreeLibrary.restype = ctypes.c_int
                 k32.FreeLibrary(ctypes.c_void_p(h))
+
+            # (선택) ctypes 객체가 나중에 다시 FreeLibrary 시도하는 걸 피하려는 안전장치
+            # 완벽 보장은 아니지만, 옵션일 때만 쓰는 게 낫다.
+            with contextlib.suppress(Exception):
+                setattr(dll, "_handle", None)
 
         self.sChannel = -1
         self.sp_dll = None
@@ -936,6 +942,7 @@ async def cmd_measure(
     # ✅ stop flag도 아직 확정 전
     stop_flag_usb: Optional[Path] = None
     stop_flag_csv: Optional[Path] = None
+    stop_flag_usb_global: Optional[Path] = None  # ✅ 추가: finally에서 안전하게 쓰기 위해
 
     stopped = False
     stop_reason = None
@@ -981,8 +988,32 @@ async def cmd_measure(
         stop_dir = _stop_dir()
         stop_flag_usb_global = stop_dir / f".stop_usb{int(usb)}.flag"
 
+        # ✅ 워커가 뜨기 전/초기화 직전에 들어온 stop도 살리기 (메인은 기다리지 않으니까 중요)
+        if stop_flag_usb_global.exists():
+            stopped = True
+            stop_reason = "pre_stop"
+            _status("[worker] stop already requested before init (global flag exists)")
+
+            _print_json({
+                "kind": "finished",
+                "ok": True,
+                "stopped": True,
+                "stop_reason": stop_reason,
+                "ch": int(ch),
+                "usb": int(usb),
+                "out_csv": str(out_csv) if out_csv else None,
+                "rows": int(rows),
+                "elapsed_s": float(time.time() - t0),
+                "nas_ok": False,
+                "nas_csv": None,
+                "nas_error": "pre_stop before init (no data)",
+                "local_deleted": False,
+            })
+            return 0
+
         # 이전 실행 잔재 제거(스테일 stop 방지)
-        for p in (stop_flag_usb, stop_flag_csv, stop_flag_usb_global):
+        # ✅ local stop만 제거 (global stop은 메인이 먼저 보낸 stop이 씹히지 않도록 유지)
+        for p in (stop_flag_usb, stop_flag_csv):
             with contextlib.suppress(Exception):
                 p.unlink()
 
@@ -1062,7 +1093,11 @@ async def cmd_measure(
             if stop_flag_usb_global.exists() or stop_flag_usb.exists() or (stop_flag_csv and stop_flag_csv.exists()):
                 stopped = True
                 stop_reason = "stop_flag"
-                _status(f"[worker] stop requested (usb_flag={stop_flag_usb.exists()} csv_flag={(stop_flag_csv.exists() if stop_flag_csv else None)})")
+                _status(
+                    f"[worker] stop requested "
+                    f"(usb_global={stop_flag_usb_global.exists()} usb_local={stop_flag_usb.exists()} "
+                    f"csv_flag={(stop_flag_csv.exists() if stop_flag_csv else None)})"
+                )
                 break
 
             await asyncio.sleep(float(sample_interval_s))
@@ -1071,10 +1106,22 @@ async def cmd_measure(
             if stop_flag_usb_global.exists() or stop_flag_usb.exists() or (stop_flag_csv and stop_flag_csv.exists()):
                 stopped = True
                 stop_reason = "stop_flag"
-                _status(f"[worker] stop requested (usb_flag={stop_flag_usb.exists()} csv_flag={(stop_flag_csv.exists() if stop_flag_csv else None)})")
+                _status(
+                    f"[worker] stop requested "
+                    f"(usb_global={stop_flag_usb_global.exists()} usb_local={stop_flag_usb.exists()} "
+                    f"csv_flag={(stop_flag_csv.exists() if stop_flag_csv else None)})"
+                )
                 break
 
-            x2, y2 = await oes._call(oes._acquire_one_slice_avg)
+            read_timeout_s = _env_float("OES_READ_TIMEOUT_S", 2.0)
+            try:
+                x2, y2 = await asyncio.wait_for(oes._call(oes._acquire_one_slice_avg), timeout=read_timeout_s)
+            except asyncio.TimeoutError:
+                msg = f"OES read timeout after {read_timeout_s}s (ch={ch}, usb={usb})"
+                _errlog(msg)
+                # 이 상태는 stop으로도 회복이 안 될 확률이 높으니 워커가 자가 종료로 정리
+                raise TimeoutError(msg)
+            
             if x2 is None or y2 is None:
                 continue
 
@@ -1126,10 +1173,24 @@ async def cmd_measure(
     except Exception as e:
         elapsed = time.time() - t0
 
-        # ✅ 실패 경로에서도 NAS 복사 전에 mutex 먼저 해제(다음 측정 막지 않기)
+        # ✅ 1) 실패여도 파일/버퍼를 최대한 정리해서 'size mismatch' 확률 줄이기
+        with contextlib.suppress(Exception):
+            if f:
+                f.flush()
+                os.fsync(f.fileno())
+                f.close()
+                f = None
+
+        # ✅ 2) DLL/채널 정리(실패했더라도 다음 런에 영향 최소화)
+        with contextlib.suppress(Exception):
+            if oes:
+                await oes.cleanup()
+                oes = None
+
+        # ✅ 3) 그 다음 mutex 해제(다음 측정 막지 않기)
         _release_mutex_once()
 
-        # ✅ 실패여도 로컬 CSV가 있으면 NAS 복사/로컬삭제 시도
+        # ✅ 4) 로컬 CSV가 있으면 NAS 복사 시도
         nas_ok = False
         nas_csv = None
         nas_error = None
@@ -1167,8 +1228,9 @@ async def cmd_measure(
         if stop_flag_csv is not None:
             with contextlib.suppress(Exception):
                 stop_flag_csv.unlink()
-        with contextlib.suppress(Exception):
-            stop_flag_usb_global.unlink()
+        if stop_flag_usb_global is not None:
+            with contextlib.suppress(Exception):
+                stop_flag_usb_global.unlink()
 
         # ✅ 앞에서 이미 해제했을 수도 있으므로 1회 해제로 통일
         _release_mutex_once()
