@@ -216,6 +216,19 @@ class MainWindow(QWidget):
                 self._broadcast_log("PLC", "부팅 시 자동 연결 성공")
             except Exception as e:
                 self._broadcast_log("PLC", f"부팅 시 자동 연결 실패: {e}")
+            finally:
+                # ✅ PLC COIL CSV 로깅 시작 (NAS 우선/로컬 폴백은 plc.py 내부 처리)
+                try:
+                    await self.plc.start_plc_coil_csv_logger(
+                        interval_s=1.0,
+                        nas_dir=r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CH1&2_PLC",
+                        local_dir=None,
+                        keys=None,  # PLC_COIL_MAP 전체
+                    )
+                    self._broadcast_log("PLC", "PLC COIL CSV 로깅 시작(1s)")
+                except Exception as e:
+                    self._broadcast_log("PLC", f"PLC COIL CSV 로깅 시작 실패: {e!r}")
+
         self._loop.create_task(_boot_plc())
 
         # 로그 루트 (NAS 실패 시 런타임 내부에서 폴백 처리)
@@ -723,6 +736,12 @@ class MainWindow(QWidget):
         # 1) 외부 제어 서버 먼저 종료 요청
         try:
             self._loop.create_task(self._stop_host())
+        except Exception:
+            pass
+
+        # ✅ PLC COIL CSV 로거 종료(공정 영향 X, 파일 핸들 정리)
+        try:
+            self._loop.create_task(self.plc.stop_plc_coil_csv_logger())
         except Exception:
             pass
 

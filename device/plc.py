@@ -959,6 +959,13 @@ class AsyncPLC:
                 await asyncio.sleep(interval)
                 continue
 
+            # ✅ 공정 task가 먼저 락을 잡을 기회를 주기(우선순위 체감 개선)
+            await asyncio.sleep(0)
+
+            if self.is_busy():
+                await asyncio.sleep(interval)
+                continue
+
             # ✅ 코일 스냅샷(블록 읽기). 실패해도 공정 영향 없게 예외 삼킴.
             try:
                 snap = await self.snapshot_all_coils_fast(keys=keys, skip_if_busy=True)
@@ -969,13 +976,21 @@ class AsyncPLC:
                 continue
 
             # ✅ 저장 위치(NAS 우선, 실패시 로컬)
-            base_dir = self._pick_log_dir(self._plc_coil_log_nas_dir, self._plc_coil_log_local_dir)
+            base_dir = await asyncio.to_thread(
+                self._pick_log_dir,
+                self._plc_coil_log_nas_dir,
+                self._plc_coil_log_local_dir,
+            )
             fp = self._daily_file_path(base_dir, dt)
+
+            # ✅ 스킵(경합으로 빈 스냅샷이면 "전부 FALSE" 기록 방지)
+            if not snap:
+                await asyncio.sleep(interval)
+                continue
 
             row = [dt.isoformat(timespec="seconds")]
             for k in keys:
-                v = bool(snap.get(k, False))
-                row.append("TRUE" if v else "FALSE")
+                row.append("TRUE" if snap.get(k, False) else "FALSE")
 
             header = ["Timestamp", *keys]
 
