@@ -819,15 +819,25 @@ def _stop_dir() -> Path:
 
 
 async def _acquire_first_frame(oes: OESAsync, retries: int = 20, delay_s: float = 0.2):
+    # ✅ 첫 프레임도 DLL hang 가능 → 타임아웃으로 끊기
+    call_timeout_s = _env_float("OES_FIRST_FRAME_TIMEOUT_S", 2.0)
+
     last_err = None
     for _ in range(max(1, retries)):
         try:
-            x, y = await oes._call(oes._acquire_one_slice_avg)
+            x, y = await asyncio.wait_for(
+                oes._call(oes._acquire_one_slice_avg),
+                timeout=call_timeout_s,
+            )
             if x is not None and y is not None:
                 return x, y
+        except asyncio.TimeoutError as e:
+            # ✅ 이건 DLL 스레드 hang 가능성이 높으니 즉시 상위로 올려서 워커가 '자가 종료' 루트로 가게 함
+            raise TimeoutError(f"first frame timeout after {call_timeout_s}s") from e
         except Exception as e:
             last_err = e
         await asyncio.sleep(delay_s)
+
     raise RuntimeError(f"first frame failed: {last_err}")
 
 
@@ -888,10 +898,22 @@ async def cmd_init(ch: int, usb: int, dll_path: Optional[str], out_dir: Optional
             payload["error"] = str(getattr(oes, "_last_error", "")) or "initialize_device failed"
             payload["scan"] = getattr(oes, "_last_scan", {}) or {}
 
-        with contextlib.suppress(Exception):
-            await oes.cleanup()
-
+        # ✅ 1) 결과를 먼저 부모에게 알림(디버깅/상태판단에 유리)
         _print_json(payload)
+
+        # ✅ 2) 그 다음 정리(정리가 hang이면 워커가 알아서 종료)
+        cleanup_timeout_s = _env_float("OES_CLEANUP_TIMEOUT_S", 5.0)
+        try:
+            await asyncio.wait_for(oes.cleanup(), timeout=cleanup_timeout_s)
+        except asyncio.TimeoutError:
+            msg = f"OES cleanup timeout after {cleanup_timeout_s}s (cmd=init ch={ch} usb={usb})"
+            _errlog(msg)
+            with contextlib.suppress(Exception):
+                mtx.release()
+            os._exit(126)
+        except Exception:
+            pass
+
         return 0 if ok else 2
 
     except Exception as e:
@@ -946,6 +968,11 @@ async def cmd_measure(
 
     stopped = False
     stop_reason = None
+
+    # ✅ DLL hang 의심 상황에서 워커가 최종적으로 '자가 종료(os._exit)'하도록 하는 플래그들
+    hard_abort = False
+    hard_abort_error: Optional[str] = None
+    hard_abort_exit_code: int = 0
 
     # ✅ mutex를 "한 번만" 해제하기 위한 가드 (acquired=False면 해제하지 않음)
     mutex_released = False
@@ -1119,8 +1146,14 @@ async def cmd_measure(
             except asyncio.TimeoutError:
                 msg = f"OES read timeout after {read_timeout_s}s (ch={ch}, usb={usb})"
                 _errlog(msg)
-                # 이 상태는 stop으로도 회복이 안 될 확률이 높으니 워커가 자가 종료로 정리
-                raise TimeoutError(msg)
+
+                # ✅ DLL hang 의심: 이후 DLL cleanup await는 더 위험 → cleanup 스킵하고 파일/NAS 처리 후 자가 종료 루트로
+                hard_abort = True
+                hard_abort_error = msg
+                hard_abort_exit_code = 125
+                stopped = True
+                stop_reason = "read_timeout"
+                break
             
             if x2 is None or y2 is None:
                 continue
@@ -1143,19 +1176,35 @@ async def cmd_measure(
                 f.close()
                 f = None
 
-        with contextlib.suppress(Exception):
-            if oes:
-                await oes.cleanup()
-                oes = None
+        cleanup_timeout_s = _env_float("OES_CLEANUP_TIMEOUT_S", 5.0)
+
+        if oes:
+            # ✅ read_timeout으로 hard_abort가 된 경우엔 cleanup 자체를 시도하지 않는 게 더 안전
+            if not hard_abort:
+                try:
+                    await asyncio.wait_for(oes.cleanup(), timeout=cleanup_timeout_s)
+                except asyncio.TimeoutError:
+                    msg = f"OES cleanup timeout after {cleanup_timeout_s}s (ch={ch}, usb={usb})"
+                    _errlog(msg)
+                    hard_abort = True
+                    hard_abort_error = hard_abort_error or msg
+                    hard_abort_exit_code = hard_abort_exit_code or 126
+                    stop_reason = stop_reason or "cleanup_timeout"
+                except Exception:
+                    pass
+
+            oes = None
 
         # ✅ 장비/DLL 정리 끝났으면 USB mutex는 즉시 해제 (NAS 복사는 mutex 없이)
         _release_mutex_once()
 
         nas_ok, nas_csv, nas_error, local_deleted = await _copy_csv_to_nas(out_csv, int(ch))
 
-        _print_json({
+        ok_final = (not hard_abort)
+
+        payload = {
             "kind": "finished",
-            "ok": True,
+            "ok": bool(ok_final),
             "stopped": bool(stopped),
             "stop_reason": stop_reason,
             "ch": int(ch),
@@ -1167,8 +1216,24 @@ async def cmd_measure(
             "local_deleted": bool(local_deleted),
             "rows": int(rows),
             "elapsed_s": float(elapsed),
-        })
-        return 0
+        }
+
+        if not ok_final and hard_abort_error:
+            payload["error"] = hard_abort_error
+
+        _print_json(payload)
+
+        # ✅ hard_abort면 DLL 스레드가 걸렸을 수 있으니, stop 파일/뮤텍스 정리 후 워커 자가 종료로 끝낸다
+        if hard_abort and hard_abort_exit_code:
+            # stop 파일은 finally를 기대하면 안 됨(os._exit) → 여기서 직접 정리
+            for p in (stop_flag_usb, stop_flag_csv, stop_flag_usb_global):
+                if p is not None:
+                    with contextlib.suppress(Exception):
+                        p.unlink()
+            _release_mutex_once()
+            os._exit(int(hard_abort_exit_code))
+
+        return 0 if ok_final else 10
 
     except Exception as e:
         elapsed = time.time() - t0
@@ -1182,9 +1247,25 @@ async def cmd_measure(
                 f = None
 
         # ✅ 2) DLL/채널 정리(실패했더라도 다음 런에 영향 최소화)
-        with contextlib.suppress(Exception):
-            if oes:
-                await oes.cleanup()
+        cleanup_timeout_s = _env_float("OES_CLEANUP_TIMEOUT_S", 5.0)
+
+        if oes:
+            try:
+                await asyncio.wait_for(oes.cleanup(), timeout=cleanup_timeout_s)
+            except asyncio.TimeoutError:
+                # 예외 경로에서 cleanup hang이면 워커가 계속 떠있을 수 있음 → 자가 종료 쪽으로
+                msg = f"OES cleanup timeout after {cleanup_timeout_s}s (exception path ch={ch} usb={usb})"
+                _errlog(msg)
+                # stop 파일/뮤텍스 정리 후 종료(마찬가지로 finally 기대 X)
+                for p in (stop_flag_usb, stop_flag_csv, stop_flag_usb_global):
+                    if p is not None:
+                        with contextlib.suppress(Exception):
+                            p.unlink()
+                _release_mutex_once()
+                os._exit(126)
+            except Exception:
+                pass
+            finally:
                 oes = None
 
         # ✅ 3) 그 다음 mutex 해제(다음 측정 막지 않기)
