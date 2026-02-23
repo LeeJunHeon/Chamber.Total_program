@@ -2798,12 +2798,11 @@ class ChamberRuntime:
             pass
 
         # 2) device cleanup (timeout)
-        # 2-A) ✅ OES cleanup은 워커(oes_worker.exe)가 스스로 정리하도록 "요청만" 하고 기다리지 않는다.
-        #      - stop/cleanup 요청을 백그라운드로 던지고 즉시 다음 단계로 진행
-        #      - 다음 공정에서 OES 사용 시 init을 다시 타도록 플래그 리셋
+        # 2-A) ✅ OES는 stop 요청만 던지고 기다리지 않는다.
+        #      - one-shot 모드: 다음 공정에서 init을 다시 타도록 캐시 리셋
+        #      - daemon 모드: OES daemon을 계속 유지하므로 캐시 유지
         if self.oes:
             with contextlib.suppress(Exception):
-                # ✅ oes.py에 stop_measurement(wait=False)가 구현돼 있다면 이게 가장 정확한 "명령만" 방식
                 if hasattr(self.oes, "stop_measurement"):
                     self._spawn_detached(
                         self.oes.stop_measurement(wait=False),
@@ -2811,13 +2810,15 @@ class ChamberRuntime:
                         name=f"Cleanup.OESAsync.CH{self.ch}.DETACHED",
                     )
                 else:
-                    # ✅ fallback: cleanup()를 detached로 (cleanup()이 wait=True면 오래 걸릴 수 있으니 가능하면 위를 권장)
                     self._spawn_detached(
                         self.oes.cleanup(),
                         store=False,
                         name=f"Cleanup.OESAsync.CH{self.ch}.DETACHED",
                     )
-            self._oes_initialized = False
+
+            # ✅ 핵심: daemon 모드에서는 init 캐시를 깨지 않는다(상주 유지)
+            if not bool(getattr(self.oes, "_daemon_enabled", False)):
+                self._oes_initialized = False
 
         # 2-B) device cleanup (timeout) - ✅ OES는 제외하고 나머지만 기다림
         cleanup_tasks: list[asyncio.Task] = []
