@@ -221,7 +221,7 @@ class MainWindow(QWidget):
                 try:
                     await self.plc.start_plc_coil_csv_logger(
                         interval_s=1.0,
-                        nas_dir=r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CH1&2_PLC",
+                        nas_dir=r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CH1&2\CH1&2_PLC",
                         local_dir=None,
                         keys=None,  # PLC_COIL_MAP 전체
                     )
@@ -232,7 +232,7 @@ class MainWindow(QWidget):
         self._loop.create_task(_boot_plc())
 
         # 로그 루트 (NAS 실패 시 런타임 내부에서 폴백 처리)
-        self._log_root = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs")
+        self._log_root = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CH1&2")
 
         # ✅ Server 페이지 생성/등록 (단 1회만)
         self.server_page: Optional[QWidget] = None
