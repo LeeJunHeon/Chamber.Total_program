@@ -888,7 +888,7 @@ class AsyncPLC:
             or os.environ.get("APPDATA")
             or str(Path.home())
         )
-        return Path(base) / "CH_1_2_program" / "Logs" / "CH1&2_PLC"
+        return Path(base) / "CH_1_2_program" / "Logs" / "CH1&2" / "CH1&2_PLC"
 
     def _pick_log_dir(self, nas_dir: Path, local_dir: Path) -> Path:
         # NAS 우선, 실패하면 로컬
@@ -909,7 +909,7 @@ class AsyncPLC:
         self,
         *,
         interval_s: float = 1.0,
-        nas_dir: str = r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CH1&2_PLC",
+        nas_dir: str = r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CH1&2\CH1&2_PLC",
         local_dir: Optional[str] = None,
         keys: Optional[Iterable[str]] = None,
     ) -> None:
