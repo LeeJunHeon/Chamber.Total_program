@@ -21,7 +21,7 @@ class DailyCommandCsvLogger:
     """
     하루에 파일 1개(remote_cmd_YYYYMMDD.csv)만 만들고,
     그날 들어온 모든 요청/응답을 한 파일에 append.
-    NAS 실패 시 로컬 Logs/PLC_Remote 로 자동 폴백.
+    NAS 실패 시 로컬 Logs/CH1&2/CH1&2_Server 로 자동 폴백.
     """
     HEADER = [
         "server_time",
@@ -43,12 +43,12 @@ class DailyCommandCsvLogger:
     def _init_dir(self) -> Path:
         # NAS 우선
         try:
-            root = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs")
+            root = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CH1&2")
             d = root / "CH1&2_Server"
             d.mkdir(parents=True, exist_ok=True)
             return d
         except Exception:
-            d = Path.cwd() / "Logs" / "CH1&2_Server"
+            d = Path.cwd() / "Logs" / "CH1&2" / "CH1&2_Server"
             d.mkdir(parents=True, exist_ok=True)
             return d
 
@@ -80,7 +80,7 @@ class DailyCommandCsvLogger:
                 await asyncio.to_thread(self._write_row_sync, fn, row)
             except Exception as e:
                 # NAS 실패 → 로컬 폴백
-                local = (Path.cwd() / "Logs" / "CH1&2_Server"  / fn.name)
+                local = (Path.cwd() / "Logs" / "CH1&2" / "CH1&2_Server" / fn.name)
                 local.parent.mkdir(parents=True, exist_ok=True)
 
                 # 1) 원래 row는 로컬에 저장
