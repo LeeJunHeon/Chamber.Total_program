@@ -71,8 +71,8 @@ PLC_COIL_MAP: Dict[str, int] = {
     "DCV_SET_2": 82,            # M00052
     "DCV_SET_3": 83,            # M00053
 
-    "S_G1_STEP1": 96,           # M00060
-    "S_G1_STEP2": 97,           # M00061
+    "LP_STEP1": 96,             # M00060
+    "LP_STEP2": 97,             # M00061
     "L_VAC_READY_SW": 98,       # M00062
     "L_ATM": 99,                # M00063
     "L_VAC_NOT_READY": 100,     # M00064
@@ -953,6 +953,11 @@ class AsyncPLC:
         while not evt.is_set():
             t0 = time.perf_counter()
             dt = datetime.now()
+
+            # ✅ PLC가 끊긴 상태에서는 로거가 connect/재시도를 하지 않음 → 공정 영향 0에 더 가까워짐
+            if not self.is_connected():
+                await asyncio.sleep(interval)
+                continue
 
             # ✅ 공정/메인 제어가 PLC 사용 중이면 스킵(공정 영향 0)
             if self.is_busy():
