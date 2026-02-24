@@ -26,7 +26,7 @@ class HostHandlers:
         # ================== 로그 저장 헬퍼 ==================
         # NAS 우선, 실패 시 로컬 폴백 디렉터리 준비
         try:
-            root = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs")
+            root = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CH1&2")
             d = root / "PLC_Remote"
             d.mkdir(parents=True, exist_ok=True)
             self._plc_log_dir = d              # 주 저장 폴더(NAS)
@@ -35,13 +35,13 @@ class HostHandlers:
             try:
                 self.ctx.log(
                     "PLC_REMOTE",
-                    f"[PLC_REMOTE_LOG_ERROR] NAS 로그 폴더 생성 실패: {e!r} → 로컬 Logs/PLC_Remote 사용",
+                    f"[PLC_REMOTE_LOG_ERROR] NAS 로그 폴더 생성 실패: {e!r} → 로컬 Logs/CH1&2/PLC_Remote 사용",
                 )
             except Exception:
                 # log() 자체가 실패해도 공정은 멈추지 않음
                 pass
 
-            d = Path.cwd() / "Logs" / "PLC_Remote"
+            d = Path.cwd() / "Logs" / "CH1&2" / "PLC_Remote"
             d.mkdir(parents=True, exist_ok=True)
             self._plc_log_dir = d              # 폴백 폴더(로컬)
 
@@ -90,7 +90,7 @@ class HostHandlers:
                     pass
 
             # 2차: 로컬 폴백(파일명은 동일 basename)
-            local = (Path.cwd() / "Logs" / "PLC_Remote" / file_path.name)
+            local = (Path.cwd() / "Logs" / "CH1&2" / "PLC_Remote" / file_path.name)
             try:
                 await asyncio.to_thread(self._write_line_sync, local, line)
             except Exception as e:
