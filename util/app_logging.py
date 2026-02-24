@@ -3,7 +3,7 @@
 r"""
 시스템성 로그 전용(프로그램 종료/크래시/미처리 예외/Warning/Qt 메시지 등) 로깅 유틸
 - 기존 공정/PLC/서버 로그는 그대로 두고,
-- '현재 저장이 안되고 있는 부분'만 \\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\ERROR 에
+- '현재 저장이 안되고 있는 부분'만 \\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CH1&2\ERROR 에
   하루 1개 파일로 저장한다.
 """
 
@@ -23,7 +23,7 @@ from pathlib import Path
 from typing import Optional
 
 
-DEFAULT_ERROR_ROOT = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\ERROR")
+DEFAULT_ERROR_ROOT = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CH1&2\ERROR")
 _DEFAULT_LOGGER_NAME: Optional[str] = None
 
 _FAULT_LOCK = threading.Lock()
@@ -89,7 +89,7 @@ def _safe_mkdir(p: Path) -> Path:
         return p
     except Exception:
         # UNC 실패 시 로컬 폴백
-        fallback = Path.cwd() / "Logs" / "ERROR"
+        fallback = Path.cwd() / "Logs" / "CH1&2" / "ERROR"
         fallback.mkdir(parents=True, exist_ok=True)
         return fallback
 
@@ -127,7 +127,7 @@ class _DailyFileHandler(logging.Handler):
             self._stream = open(self._paths.daily_log, "a", encoding=self._encoding, buffering=1)
         except Exception:
             # 혹시 UNC가 순간 끊겼으면 로컬 폴백
-            self._root = _safe_mkdir(Path.cwd() / "Logs" / "ERROR")
+            self._root = _safe_mkdir(Path.cwd() / "Logs" / "CH1&2" / "ERROR")
             self._paths = _build_paths(self._app_name, self._root)
             self._stream = open(self._paths.daily_log, "a", encoding=self._encoding, buffering=1)
 
