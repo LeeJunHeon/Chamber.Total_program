@@ -23,11 +23,10 @@ RGA_NET.update({
     "ch2": {"ip": "192.168.1.21", "user": "admin", "password": "admin"},
 })
 
-# (선택) 컨트롤러 지원 플래그(장비 스펙에 맞춰 설정)
-#  - CH2: RF Pulse 지원, RF 연속파는 미지원(예시)
+# 컨트롤러 지원 플래그
 SUPPORTS_DC = True
 SUPPORTS_RF_CONT = True
-SUPPORTS_RFPULSE = False
+SUPPORTS_RFPULSE = True
 
 RFPULSE_WATCHDOG_INTERVAL_MS        = 3000
 RFPULSE_RECONNECT_BACKOFF_START_MS  = 2000
