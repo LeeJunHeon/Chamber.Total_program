@@ -1833,7 +1833,7 @@ class ChamberRuntime:
             _set("dcPulseDutyCycle_edit", "" if str(duty).strip() in ("", "0", "nan") else str(duty).strip())
 
         else:
-            # CH2: DC-Pulse(있다면) / RF-Pulse(표시는 되더라도 실행은 validate에서 차단)
+            # CH2: DC-Pulse(옵션) / RF-Pulse 사용 가능 (supports + validate + 전역 점유로 안전 제어)
             _set("dcPulsePower_checkbox", params.get('use_dc_pulse', 'F') == 'T')
             _set("dcPulsePower_edit",     params.get('dc_pulse_power', '0'))
             dcf = str(params.get('dc_pulse_freq', '')).strip()
@@ -3341,7 +3341,7 @@ class ChamberRuntime:
                 "dc_pulse_freq": dc_pulse_freq,
                 "dc_pulse_duty": dc_pulse_duty,
 
-                # CH2는 RF-Pulse 미사용
+                # CH2도 RF-Pulse 사용 가능
                 "use_rf_pulse": use_rf_pulse,
                 "rf_pulse_power": rf_pulse_power,
                 "rf_pulse_freq": rf_pulse_freq,
@@ -3467,10 +3467,10 @@ class ChamberRuntime:
         res["change_power_value"] = str(raw.get("change_power_value", "") or "").strip()
 
         # ------------------------------------------------------------
-        # ✅ Pulse 파라미터 정규화 (CH2→CH1로 RF-Pulse 이동 반영)
-        #  - 체크박스(use_*) 뿐 아니라 값(power/freq/duty)로도 "요청"을 판단
-        #  - CH1: RF-Pulse만 허용 (DC 값이 들어오면 RF로 자동 이관)
-        #  - CH2: RF-Pulse 강제 OFF + 값 초기화
+        # ✅ Pulse 파라미터 정규화
+        #  - 체크(use_*) 뿐 아니라 값(power/freq/duty)로도 "요청"을 판단
+        #  - CH1/CH2 모두 RF/DC Pulse 사용 가능
+        #  - 단, RF-Pulse는 전역 점유(락)로 CH1/CH2 동시 사용 금지
         # ------------------------------------------------------------
         def _pos(v) -> bool:
             try:
