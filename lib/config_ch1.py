@@ -19,12 +19,12 @@ DCPULSE_TCP_PORT = 4007
 MFC_SCALE_FACTORS = {1: 1.0, 2: 1.0, 3: 1.0}
 
 # RGA LAN 접근 정보(두 채널 모두 공통에 있지만, 필요 시 오버라이드 예시)
-RGA_NET.update({
-    "ch1": {"ip": "192.168.1.20", "user": "admin", "password": "admin"},
-})
+# RGA_NET.update({
+#     "ch1": {"ip": "192.168.1.20", "user": "admin", "password": "admin"},
+# })
 
 # (선택) 컨트롤러 지원 플래그(장비 스펙에 맞춰 설정)
-#  - CH1: RF 연속파 없음, RF Pulse 없음 (예시) / DC만 사용한다면 아래처럼
+#  - CH1: RF 연속파 없음 / RF Pulse 사용 가능(동시 사용은 전역 락으로 차단)
 SUPPORTS_DC = True
 SUPPORTS_RF_CONT = False
 SUPPORTS_RFPULSE = True

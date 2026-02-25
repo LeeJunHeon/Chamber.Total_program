@@ -19,9 +19,9 @@ RFPULSE_TCP_PORT = 4005
 MFC_SCALE_FACTORS = {1: 1.0, 2: 10.0, 3: 2.0}
 
 # RGA LAN 접근 정보(필요 시 조정)
-RGA_NET.update({
-    "ch2": {"ip": "192.168.1.21", "user": "admin", "password": "admin"},
-})
+# RGA_NET.update({
+#     "ch2": {"ip": "192.168.1.21", "user": "admin", "password": "admin"},
+# })
 
 # 컨트롤러 지원 플래그
 SUPPORTS_DC = True
