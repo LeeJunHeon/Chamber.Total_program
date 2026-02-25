@@ -47,6 +47,10 @@ from controller.chat_notifier import ChatNotifier
 # ⬇️ 추가: 전역 런타임 상태 레지스트리
 from controller.runtime_state import runtime_state
 
+# ✅ RF-Pulse는 1대 공유(동시 사용 금지): CH1/CH2 중 1개만 점유 가능
+_RFPULSE_OWNER_LOCK = threading.Lock()
+_RFPULSE_OWNER_CH: int | None = None
+
 # 공정 컨트롤러(기존 CH2) + CH1은 별도 모듈이 있으면 사용, 없으면 CH2를 공용으로
 from controller.process_controller import ProcessController
 
@@ -210,6 +214,39 @@ class _CfgAdapter:
             str(self._get("DCPULSE_TCP_HOST", "192.168.1.50")),
             int(self._get("DCPULSE_TCP_PORT", 4007)),
         )
+
+    @property
+    def RFPULSE_TCP(self) -> Optional[tuple[str, int]]:
+        """
+        (우선) RFPULSE_TCP_HOST/RFPULSE_TCP_PORT
+        (폴백) RFPULSE_PORT="ip:port" 형태
+        없으면 None
+        """
+        host = self._get("RFPULSE_TCP_HOST", None)
+        port = self._get("RFPULSE_TCP_PORT", None)
+        if host is not None and port is not None:
+            try:
+                return (str(host), int(port))
+            except Exception:
+                return None
+
+        s = self._get("RFPULSE_PORT", None)
+        if not s:
+            return None
+
+        try:
+            # tuple/list (host, port)도 허용
+            if isinstance(s, (tuple, list)) and len(s) == 2:
+                return (str(s[0]), int(s[1]))
+
+            s = str(s).strip()
+            if ":" in s:
+                h, p = s.split(":", 1)
+                return (h.strip(), int(p.strip()))
+        except Exception:
+            return None
+
+        return None
     
 class ChamberRuntime:
     """
@@ -266,6 +303,7 @@ class ChamberRuntime:
         self._owns_plc = bool(owns_plc if owns_plc is not None else (int(chamber_no) == 1))  # 기본 CH1
         self._notify_plc_owner = on_plc_owner 
         self._last_running_state: Optional[bool] = None  
+        self._rf_pulse_reserved: bool = False
     
         # ✅ Host 응답용 Future (프리플라이트가 끝나면 결과를 세팅)
         self._host_start_future: Optional[asyncio.Future] = None
@@ -305,15 +343,6 @@ class ChamberRuntime:
         self.supports_rf_cont  = bool(supports_rf_cont)
         self.supports_dc_pulse = bool(supports_dc_pulse)
         self.supports_rf_pulse = bool(supports_rf_pulse)
-
-        # ✅ Pulse 장비는 RS-232(또는 Serial-Server) 1포트를 번갈아 쓰는 구조
-        #    - CH1: RF/DC Pulse 둘 다 선택 가능 (동시에 선택은 validation에서 차단)
-        #    - CH2: Pulse 미사용 → 선택/실행 차단
-        if self.ch == 1:
-            self.supports_dc_pulse = True
-            self.supports_rf_pulse = True
-        elif self.ch == 2:
-            self.supports_rf_pulse = False
 
         # UI 포인터
         self._w_log: QPlainTextEdit | None = self._u("logMessage_edit")
@@ -1636,6 +1665,25 @@ class ChamberRuntime:
         except Exception:
             return False
 
+    # (추가) RF-Pulse 전역 점유(동시 사용 금지) 유틸
+    def _try_reserve_rf_pulse(self) -> tuple[bool, int | None]:
+        """RF-Pulse 전역 점유 시도. 성공하면 (True, None), 실패하면 (False, owner_ch)."""
+        global _RFPULSE_OWNER_CH
+        with _RFPULSE_OWNER_LOCK:
+            if _RFPULSE_OWNER_CH is None or _RFPULSE_OWNER_CH == self.ch:
+                _RFPULSE_OWNER_CH = self.ch
+                self._rf_pulse_reserved = True
+                return True, None
+            return False, _RFPULSE_OWNER_CH
+
+    def _release_rf_pulse_reservation(self) -> None:
+        """내가 점유자라면 RF-Pulse 전역 점유 해제."""
+        global _RFPULSE_OWNER_CH
+        with _RFPULSE_OWNER_LOCK:
+            if _RFPULSE_OWNER_CH == self.ch:
+                _RFPULSE_OWNER_CH = None
+        self._rf_pulse_reserved = False
+
     def _apply_process_state_message(self, message: str) -> None:
         if getattr(self, "_last_state_text", None) == message:
             return
@@ -2197,6 +2245,27 @@ class ChamberRuntime:
             use_dc_pulse = bool(dc_requested) and self.supports_dc_pulse
             use_rf_pulse = bool(rf_requested) and self.supports_rf_pulse
 
+            # ✅ RF-Pulse 동시 사용 금지(전역 점유)
+            if use_rf_pulse:
+                ok_res, owner = self._try_reserve_rf_pulse()
+                if not ok_res:
+                    msg = f"RF-Pulse는 동시에 1개 챔버만 사용할 수 있습니다. 현재 CH{owner}에서 사용 중입니다."
+                    self.append_log("MAIN", msg)
+
+                    # Host start 요청도 즉시 실패로 응답(대기/타임아웃 방지)
+                    self._host_report_start(False, msg)
+
+                    self._auto_connect_enabled = False
+                    self._run_select = None
+                    self._on_process_status_changed(False)
+
+                    with contextlib.suppress(Exception):
+                        runtime_state.set_error("chamber", self.ch, msg)
+                        runtime_state.mark_finished("chamber", self.ch)
+
+                    self._start_next_process_from_queue(False)
+                    return
+
             self._run_select = {
                 "dc_pulse": use_dc_pulse,
                 "rf_pulse": use_rf_pulse,
@@ -2274,13 +2343,17 @@ class ChamberRuntime:
             ok_gate = await self._check_gate_closed_before_start()
             if not ok_gate:
                 self.append_log("MAIN", f"[CH{self.ch}] Gate Open → 공정 시작 차단")
-                # 상태/점유 정리
+
+                # ✅ 이미 올라간 연결/펌프/점유를 정리(특히 RF-Pulse 점유 해제 목적)
+                self._auto_connect_enabled = False
+                with contextlib.suppress(Exception):
+                    await self._stop_device_watchdogs(light=False)
+
                 self._on_process_status_changed(False)
-                try:
+                with contextlib.suppress(Exception):
                     runtime_state.set_error("chamber", self.ch, "gate open")
                     runtime_state.mark_finished("chamber", self.ch)
-                except Exception:
-                    pass
+
                 self._start_next_process_from_queue(False)
                 return
             
@@ -2305,6 +2378,15 @@ class ChamberRuntime:
             msg = f"오류: '{note}' 시작 실패. ({e})"
             self.append_log("MAIN", msg)
             self._post_critical("오류", msg)
+
+            # ✅ Host start 요청이 걸려있으면 즉시 실패 응답(대기/타임아웃 방지)
+            with contextlib.suppress(Exception):
+                self._host_report_start(False, msg)
+
+            # ✅ 자동 재연결 차단 + 워치독/점유 정리(RF-Pulse 점유 해제 포함)
+            self._auto_connect_enabled = False
+            with contextlib.suppress(Exception):
+                await self._stop_device_watchdogs(light=False)
 
             # ✅ 예외로 비정상 종료 → error 표시(정상 종료만 idle)
             with contextlib.suppress(Exception):
@@ -2898,6 +2980,15 @@ class ChamberRuntime:
         self._devices_started = False
         self._run_select = None
 
+        # ✅ RF-Pulse 전역 점유 해제(정리된 경우에만)
+        if getattr(self, "_rf_pulse_reserved", False):
+            # cleanup timeout 목록에 RFPulse가 남아있으면 점유 유지(동시 사용 방지)
+            rfpulse_pending = any("RFPulse" in n for n in (pending_cleanup_names or []))
+            if not rfpulse_pending:
+                self._release_rf_pulse_reservation()
+            else:
+                self.append_log("MAIN", "⚠ RF-Pulse cleanup 미완료 → 점유 유지(동시 사용 방지)")
+
         # ✅ cleanup이 완전히 끝난 경우에만 “정리 완료”로 간주
         if not getattr(self, "_cleanup_timed_out", False):
             self._pending_device_cleanup = False
@@ -3145,14 +3236,26 @@ class ChamberRuntime:
                     self._post_warning("입력값 확인", "RF Power(W)를 확인하세요.")
                     return None
 
-            # ✅ CH2: DC-Pulse(있다면)만 허용
+            # ✅ CH2: Pulse 선택(DC-Pulse / RF-Pulse)
             use_dc_pulse = self.supports_dc_pulse and bool(getattr(self._u("dcPulsePower_checkbox"), "isChecked", lambda: False)())
+            use_rf_pulse = self.supports_rf_pulse and bool(getattr(self._u("rfPulsePower_checkbox"), "isChecked", lambda: False)())
 
+            # 둘 다 선택 금지(장비/포트 충돌 방지)
+            if use_dc_pulse and use_rf_pulse:
+                self._post_warning("선택 오류", "DC-Pulse와 RF-Pulse는 동시에 선택할 수 없습니다.")
+                return None
+
+            # 기본값
             dc_pulse_power = 0.0
             dc_pulse_freq = None
             dc_pulse_duty = None
 
+            rf_pulse_power = 0.0
+            rf_pulse_freq = None
+            rf_pulse_duty = None
+
             if use_dc_pulse:
+                # ---- 기존 DC-Pulse 검증 유지 ----
                 try:
                     dc_pulse_power = float(self._get_text("dcPulsePower_edit") or "0")
                     if dc_pulse_power <= 0:
@@ -3164,7 +3267,7 @@ class ChamberRuntime:
                 txtf = self._get_text("dcPulseFreq_edit")
                 if txtf:
                     try:
-                        dc_pulse_freq = int(float(txtf))  # kHz
+                        dc_pulse_freq = int(float(txtf))
                         if dc_pulse_freq < 20 or dc_pulse_freq > 150:
                             raise ValueError()
                     except Exception:
@@ -3181,19 +3284,39 @@ class ChamberRuntime:
                         self._post_warning("입력값 확인", "DC-Pulse Duty(%)는 1..99 범위")
                         return None
 
-            # ✅ CH2: RF-Pulse는 장비 이동으로 미지원 → 체크돼도 Start 막지 말고 OFF 처리
-            rf_pulse_checked = bool(getattr(self._u("rfPulsePower_checkbox"), "isChecked", lambda: False)())
-            if rf_pulse_checked:
-                self.append_log("UI", "CH2: RF-Pulse 장비가 CH1로 이동 → RF-Pulse 선택은 무시하고 진행합니다.")
-                # UI도 즉시 내려주고 싶으면(선택):
-                with contextlib.suppress(Exception):
-                    w = self._u("rfPulsePower_checkbox")
-                    if w: w.setChecked(False)
+            if use_rf_pulse:
+                # ---- RF-Pulse 검증 ----
+                try:
+                    rf_pulse_power = float(self._get_text("rfPulsePower_edit") or "0")
+                    if rf_pulse_power <= 0:
+                        raise ValueError()
+                except Exception:
+                    self._post_warning("입력값 확인", "RF-Pulse Target Power(W)를 확인하세요.")
+                    return None
 
-            # ✅ 최소 1개 파워 동작이 선택됐는지 체크(정책)
-            # - 여기 정책은 네가 원하는 대로 바꿀 수 있음
-            if not (use_dc_power or use_rf_power or use_dc_pulse):
-                self._post_warning("선택 오류", "DC Power / RF Power / DC-Pulse 중 하나 이상 선택해야 합니다.")
+                txtf = self._get_text("rfPulseFreq_edit")
+                if txtf:
+                    try:
+                        rf_pulse_freq = int(float(txtf))  # kHz
+                        if rf_pulse_freq < 1 or rf_pulse_freq > 100:
+                            raise ValueError()
+                    except Exception:
+                        self._post_warning("입력값 확인", "RF-Pulse Freq(kHz)는 1..100 범위입니다.")
+                        return None
+
+                txtd = self._get_text("rfPulseDutyCycle_edit")
+                if txtd:
+                    try:
+                        rf_pulse_duty = int(float(txtd))
+                        if rf_pulse_duty < 1 or rf_pulse_duty > 99:
+                            raise ValueError()
+                    except Exception:
+                        self._post_warning("입력값 확인", "RF-Pulse Duty(%)는 1..99 범위입니다.")
+                        return None
+
+            # ✅ 최소 1개 파워 동작 선택 확인(정책)
+            if not (use_dc_power or use_rf_power or use_dc_pulse or use_rf_pulse):
+                self._post_warning("선택 오류", "DC Power / RF Power / DC-Pulse / RF-Pulse 중 하나 이상 선택해야 합니다.")
                 return None
 
             g1n = self._get_text("g1Target_name")
@@ -3219,10 +3342,10 @@ class ChamberRuntime:
                 "dc_pulse_duty": dc_pulse_duty,
 
                 # CH2는 RF-Pulse 미사용
-                "use_rf_pulse": False,
-                "rf_pulse_power": 0.0,
-                "rf_pulse_freq": None,
-                "rf_pulse_duty": None,
+                "use_rf_pulse": use_rf_pulse,
+                "rf_pulse_power": rf_pulse_power,
+                "rf_pulse_freq": rf_pulse_freq,
+                "rf_pulse_duty": rf_pulse_duty,
 
                 # ✅ P.W select는 Start를 막지 않음: 값만 전달
                 "use_power_select": bool(getattr(self._u("powerSelect_checkbox"), "isChecked", lambda: False)()),
@@ -3386,13 +3509,16 @@ class ChamberRuntime:
                 res["dc_power"] = 0.0
 
         elif self.ch == 2:
-            # ✅ CH2: RF-Pulse 장비가 CH1로 이동 → CH2에서는 무조건 사용 금지
+            # ✅ CH2: 값(power/freq/duty)이 들어오면 "요청"으로 간주해 use_rf_pulse를 True로 정규화
             if rf_requested:
-                self.append_log("Params", "CH2: RF-Pulse 사용 금지(장비 CH1로 이동) → RF-Pulse 설정을 무시하고 OFF 처리합니다.")
-            res["use_rf_pulse"] = False
-            res["rf_pulse_power"] = 0.0
-            res["rf_pulse_freq"] = None
-            res["rf_pulse_duty"] = None
+                if self.supports_rf_pulse:
+                    res["use_rf_pulse"] = True
+                else:
+                    self.append_log("Params", "CH2: RF-Pulse 미지원 설정 → RF-Pulse 요청을 무시하고 OFF 처리합니다.")
+                    res["use_rf_pulse"] = False
+                    res["rf_pulse_power"] = 0.0
+                    res["rf_pulse_freq"] = None
+                    res["rf_pulse_duty"] = None
 
         # 🔒 CH1은 N2 라인이 없으므로 강제 무시
         if self.ch == 1:
@@ -4055,8 +4181,9 @@ class ChamberRuntime:
             except Exception:
                 pass
 
-        # ✅ CH2: RF-Pulse UI 완전 차단
-        if self.ch == 2:
+        # ✅ CH2에서도 RF-Pulse 가능
+        #    단, config/생성자 설정상 supports_rf_pulse=False면 UI를 비활성화
+        if (self.ch == 2) and (not self.supports_rf_pulse):
             for leaf in ("rfPulsePower_checkbox", "rfPulsePower_edit", "rfPulseFreq_edit", "rfPulseDutyCycle_edit"):
                 _disable(leaf)
 
@@ -4539,31 +4666,37 @@ class ChamberRuntime:
                 if d is not None and not (1 <= d <= 99):
                     errs.append("DC Pulse Duty(%)는 1..99")
 
-            if p.get("use_rf_pulse"):
-                if p.get("rf_pulse_power", 0) <= 0:
-                    errs.append("RF Pulse Target Power(W)는 0보다 커야 합니다.")
-                f = p.get("rf_pulse_freq")
-                d = p.get("rf_pulse_duty")
-                if f is not None and not (1 <= f <= 100):
-                    errs.append("RF Pulse Freq(kHz)는 1..100")
-                if d is not None and not (1 <= d <= 99):
-                    errs.append("RF Pulse Duty(%)는 1..99")
-
         else:
-            # ✅ CH2: RF-Pulse 금지
             checked = int(p.get("use_g1", False)) + int(p.get("use_g2", False)) + int(p.get("use_g3", False))
             if checked == 0 or checked == 3:
                 errs.append("G1~G3 중 1개 또는 2개만 선택")
 
-            if p.get("use_rf_pulse"):
-                errs.append("CH2에서는 RF-Pulse를 사용할 수 없습니다. (장비가 CH1로 이동)")
+            use_rf_pulse = bool(p.get("use_rf_pulse"))
+            use_dc_pulse = bool(p.get("use_dc_pulse"))
 
-            # CH2는 RF-Pulse 없이도 돌아가야 하므로: DC Power 또는 RF Power 중 하나는 필요
-            if not (p.get("use_dc_power") or p.get("use_rf_power")):
-                errs.append("CH2는 DC Power 또는 RF Power 중 하나 이상 선택 필요 (RF-Pulse 사용 불가)")
+            # DC/RF Pulse 동시 선택 금지(안전)
+            if use_rf_pulse and use_dc_pulse:
+                errs.append("CH2에서는 DC Pulse와 RF Pulse를 동시에 선택할 수 없습니다.")
 
-            # (기존 규칙 유지 가능)
-            if p.get("use_rf_pulse") and p.get("use_rf_power"):
+            if use_rf_pulse:
+                if not self.supports_rf_pulse:
+                    errs.append("이 챔버는 RF-Pulse를 지원하지 않습니다.")
+                else:
+                    if p.get("rf_pulse_power", 0) <= 0:
+                        errs.append("RF Pulse Target Power(W)는 0보다 커야 합니다.")
+                    f = p.get("rf_pulse_freq")
+                    d = p.get("rf_pulse_duty")
+                    if f is not None and not (1 <= f <= 100):
+                        errs.append("RF Pulse Freq(kHz)는 1..100")
+                    if d is not None and not (1 <= d <= 99):
+                        errs.append("RF Pulse Duty(%)는 1..99")
+
+            # CH2는 (연속 DC/RF) 또는 (Pulse DC/RF) 중 하나 이상은 필요
+            if not (p.get("use_dc_power") or p.get("use_rf_power") or use_dc_pulse or use_rf_pulse):
+                errs.append("CH2는 DC/RF Power 또는 DC/RF Pulse 중 하나 이상 선택 필요")
+
+            # (방어) Pulse와 RF 연속 동시 금지 규칙 유지(원하면 삭제 가능)
+            if use_rf_pulse and p.get("use_rf_power"):
                 errs.append("RF Pulse와 RF Power는 동시에 선택할 수 없습니다.")
 
             if p.get("use_dc_power") and p.get("dc_power", 0) < 0:
