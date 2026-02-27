@@ -17,6 +17,8 @@ from PySide6.QtWidgets import (
     QPushButton,
     QMessageBox,
     QLabel,
+    QAbstractItemView,
+    QHeaderView,
 )
 
 from lib import user_config
@@ -58,24 +60,74 @@ def _parse_value(text: str, original: Any) -> Tuple[bool, Any, str]:
         try:
             return True, json.loads(s), ""
         except Exception:
-            return False, original, "dict/list는 JSON 형식으로 입력해야 합니다."
+            return False, original, "dict/list는 JSON 형식(JSON)으로 입력해야 합니다."
 
     return True, s, ""
 
 
 class _ParamTable(QTableWidget):
+    """
+    요구사항 반영:
+    - 파란 하이라이트(선택/현재셀/호버/휠 스크롤) 완전 제거
+    - 컬럼은 창 폭에 맞춰 꽉 차게(가로 늘어남 방지)
+    - 긴 텍스트는 ... (ElideRight)
+    - 편집 시에는 전체 텍스트를 보여주되(기본 QLineEdit),
+      "칸 안에서" 좌우 스크롤 가능 (라인에디터 기본 기능)
+    """
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
+
         self.setColumnCount(2)
         self.setHorizontalHeaderLabels(["KEY", "VALUE"])
-        self.setAlternatingRowColors(True)
         self.verticalHeader().setVisible(False)
-        self.setEditTriggers(QTableWidget.DoubleClicked | QTableWidget.EditKeyPressed | QTableWidget.AnyKeyPressed)
-        self.setSelectionBehavior(QTableWidget.SelectRows)
-        self.setSelectionMode(QTableWidget.SingleSelection)
+        self.setAlternatingRowColors(True)
+        self.setWordWrap(False)
+
+        # ✅ 편집 트리거
+        self.setEditTriggers(
+            QAbstractItemView.DoubleClicked
+            | QAbstractItemView.EditKeyPressed
+            | QAbstractItemView.AnyKeyPressed
+        )
+
+        # ✅ 파란 하이라이트 완전 제거 핵심 1) 선택 자체 OFF
+        self.setSelectionMode(QAbstractItemView.NoSelection)
+        self.setSelectionBehavior(QAbstractItemView.SelectItems)
+
+        # ✅ 파란 하이라이트 완전 제거 핵심 2) 뷰가 포커스를 가지지 않게(휠 스크롤로 current 생성 방지)
+        self.setFocusPolicy(Qt.NoFocus)
+
+        # ✅ 긴 텍스트는 ... 로
+        self.setTextElideMode(Qt.ElideRight)
+
+        # ✅ 가로폭 고정 정책: KEY는 적당히, VALUE는 나머지 전체 폭
+        hh = self.horizontalHeader()
+        hh.setDefaultAlignment(Qt.AlignCenter)
+        hh.setStretchLastSection(True)
+        hh.setSectionResizeMode(0, QHeaderView.Interactive)  # KEY
+        hh.setSectionResizeMode(1, QHeaderView.Stretch)      # VALUE
+        self.setColumnWidth(0, 260)  # KEY 기본 폭(필요하면 숫자만 조절)
+
+        # ✅ 절대 "내용 길이로 컬럼이 커지지 않게" (가로 스크롤바도 OFF)
+        self.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+
+        # ✅ selected / current / hover / focus 스타일 제거 (OS 테마가 current를 칠하는 경우까지 커버)
+        self.setStyleSheet("""
+        QTableWidget::item:selected { background: transparent; color: black; }
+        QTableWidget::item:hover { background: transparent; }
+        QTableWidget::item:focus { outline: none; }
+        QTableWidget { outline: none; }
+        """)
 
         self._base: Dict[str, Any] = {}
         self._tooltips: Dict[str, str] = {}
+
+    # ✅ 휠 스크롤 시 current cell이 생기면서 파랗게 보이는 현상 방지
+    def wheelEvent(self, event):
+        super().wheelEvent(event)
+        if self.state() != QAbstractItemView.EditingState:
+            self.clearSelection()
+            self.setCurrentCell(-1, -1)
 
     def set_params(self, base_params: Dict[str, Any], current_params: Dict[str, Any], tooltips: Dict[str, str]) -> None:
         self._base = dict(base_params or {})
@@ -88,23 +140,32 @@ class _ParamTable(QTableWidget):
             base_v = self._base.get(k)
             cur_v = (current_params or {}).get(k, base_v)
 
+            # KEY (읽기 전용)
             it_k = QTableWidgetItem(k)
             it_k.setFlags(it_k.flags() & ~Qt.ItemIsEditable)
+            it_k.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
 
             tip = self._tooltips.get(k, "")
             if tip:
                 tip2 = f"{tip}\n\n기본값: {base_v!r}\n타입: {type(base_v).__name__}"
-                it_k.setToolTip(tip2)
             else:
-                it_k.setToolTip(f"기본값: {base_v!r}\n타입: {type(base_v).__name__}")
+                tip2 = f"기본값: {base_v!r}\n타입: {type(base_v).__name__}"
+            it_k.setToolTip(tip2)
 
+            # VALUE (편집 가능)
             it_v = QTableWidgetItem(_json_one_line(cur_v))
-            it_v.setToolTip(it_k.toolTip())
+            it_v.setTextAlignment(Qt.AlignVCenter | Qt.AlignLeft)
+            # 툴팁은 “의미 설명” 유지 (요청: 수정할 때만 전체 내용 확인)
+            it_v.setToolTip(tip2)
 
             self.setItem(r, 0, it_k)
             self.setItem(r, 1, it_v)
 
-        self.resizeColumnsToContents()
+        # ✅ 여기서 resizeColumnsToContents() 절대 호출 금지
+        #    (긴 데이터가 있으면 컬럼이 창보다 커져버림)
+
+        self.clearSelection()
+        self.setCurrentCell(-1, -1)
 
     def collect_full_values(self) -> Tuple[bool, Dict[str, Any], str]:
         out: Dict[str, Any] = {}
@@ -189,6 +250,7 @@ class ConfigDialog(QDialog):
     def _wrap(self, widget: QWidget) -> QWidget:
         w = QWidget()
         v = QVBoxLayout(w)
+        v.setContentsMargins(6, 6, 6, 6)
         v.addWidget(widget)
         return w
 
@@ -273,10 +335,12 @@ class ConfigDialog(QDialog):
             self,
             "Config",
             "Apply(Runtime) 완료\n"
-            f"- common 적용: {res.get('communication+tsp->config_common')}\n"
-            f"- ch1 동기화: {res.get('sync_common->ch1')}\n"
-            f"- ch2 동기화: {res.get('sync_common->ch2')}\n"
-            f"- ch1 override: {res.get('apply_ch1')}\n"
-            f"- ch2 override: {res.get('apply_ch2')}\n\n"
+            f"- config_common(통신+TSP): {res.get('communication+tsp->config_common')}\n"
+            f"- common->ch1 동기화: {res.get('sync_common->ch1')}\n"
+            f"- common->ch2 동기화: {res.get('sync_common->ch2')}\n"
+            f"- comm(CH1_*) 적용: {res.get('apply_comm_ch1')}\n"
+            f"- comm(CH2_*) 적용: {res.get('apply_comm_ch2')}\n"
+            f"- ch1 공정 적용: {res.get('apply_ch1')}\n"
+            f"- ch2 공정 적용: {res.get('apply_ch2')}\n\n"
             "※ 일부 값은 재시작 후 완전 적용됩니다."
         )
