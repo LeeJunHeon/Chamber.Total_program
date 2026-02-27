@@ -2164,31 +2164,38 @@ class ChamberRuntime:
             return None
 
     def _safe_start_process(self, params: NormParams) -> None:
+        # 0) 이미 실행 중이면 즉시 실패 처리
         if self.process_controller.is_running:
             msg = "이미 다른 공정 실행 중"
             self.append_log("MAIN", msg)
 
-            # ✅ start 요청이 이미 들어온 상태일 수 있으므로(원격/버튼)
-            #    상태를 error 로 정리하고 running 해제
             with contextlib.suppress(Exception):
                 runtime_state.set_error("chamber", self.ch, msg)
                 runtime_state.mark_finished("chamber", self.ch)
 
-            # ✅ Host(start_with_recipe_string) 대기중이면 timeout 나지 않도록 즉시 FAIL 응답
             with contextlib.suppress(Exception):
                 self._host_report_start(False, msg)
 
+            self._set_state_text(msg)
             self._on_process_status_changed(False)
             return
-        
-        # ✅ 공통 start 진입점에서 단 1회만 마킹(큐/자동시작 포함)
-        # ✅ 사용자가 ‘멈춤’을 누를 수 있게: preflight 들어가는 순간부터 UI를 running으로 표시
+
+        # 1) ✅ Start 누르는 즉시 로그 파일 “생성” 보장 (멈춰도 파일이 남게)
+        try:
+            if not getattr(self, "_log_file_path", None):
+                self._open_run_log(params)  # 내부에서 writer 큐/헤더 기록
+        except Exception as e:
+            self.append_log("Logger", f"_open_run_log failed: {e!r}")
+
+        # 2) ✅ preflight 진입 순간부터 UI는 running (Stop 활성화)
         self._set_state_text("프리플라이트(장비 확인) 중…")
         self._on_process_status_changed(True)
 
+        # 3) ✅ 전역 running 마킹(큐/자동시작 포함) - 여기서 1회만
         with contextlib.suppress(Exception):
             runtime_state.mark_started("chamber", self.ch)
 
+        # 4) ✅ preflight 실행(예외는 _spawn_detached done_callback에서 로그로 남음)
         self._spawn_detached(
             self._start_after_preflight(params),
             store=True,
@@ -2223,8 +2230,10 @@ class ChamberRuntime:
         # (선택) 전이 상태(moving)일 때 잠깐만 재확인(짧게)
         for _ in range(5):  # 5회 * 0.2s = 최대 1초
             try:
-                open_lamp = bool(await self.plc.read_bit(open_key))
-                close_lamp = bool(await self.plc.read_bit(close_key))
+                open_lamp = await asyncio.wait_for(self.plc.read_bit(open_key),  timeout=0.6)
+                close_lamp = await asyncio.wait_for(self.plc.read_bit(close_key), timeout=0.6)
+                open_lamp  = bool(open_lamp)
+                close_lamp = bool(close_lamp)
 
                 # timeout/예외로 값을 못 읽으면 → “상태 확인 불가”로 시작 차단 + 사용자에게 알림
                 if open_lamp is None or close_lamp is None:
