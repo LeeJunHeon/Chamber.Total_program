@@ -154,10 +154,10 @@ class Ui_Form(object):
         self.preSputter_Stop_button.setGeometry(QRect(670, 280, 91, 61))
         self.pc_btnGoCh2 = QPushButton(self.page_3)
         self.pc_btnGoCh2.setObjectName(u"pc_btnGoCh2")
-        self.pc_btnGoCh2.setGeometry(QRect(30, 240, 211, 101))
+        self.pc_btnGoCh2.setGeometry(QRect(30, 195, 211, 101))
         self.pc_btnGoCh1 = QPushButton(self.page_3)
         self.pc_btnGoCh1.setObjectName(u"pc_btnGoCh1")
-        self.pc_btnGoCh1.setGeometry(QRect(30, 130, 211, 101))
+        self.pc_btnGoCh1.setGeometry(QRect(30, 85, 211, 101))
         self.TSP_basePressure_edit = QPlainTextEdit(self.page_3)
         self.TSP_basePressure_edit.setObjectName(u"TSP_basePressure_edit")
         self.TSP_basePressure_edit.setGeometry(QRect(300, 240, 201, 31))
@@ -240,7 +240,7 @@ class Ui_Form(object):
         self.PC_processList_button.setGeometry(QRect(960, 450, 61, 51))
         self.Power_Select_button = QPushButton(self.page_3)
         self.Power_Select_button.setObjectName(u"Power_Select_button")
-        self.Power_Select_button.setGeometry(QRect(30, 350, 101, 101))
+        self.Power_Select_button.setGeometry(QRect(30, 305, 101, 101))
         self.Power_Select_button.setCheckable(True)
         self.Power_Select_button.setChecked(False)  # 기본 OFF
         # 눌림 상태에 따라 라벨 변경
@@ -249,13 +249,13 @@ class Ui_Form(object):
         )
         self.Server_button = QPushButton(self.page_3)   # ✅ (추가) Server 버튼 1개
         self.Server_button.setObjectName(u"Server_button")   # ← ID(오브젝트명) 동일
-        self.Server_button.setGeometry(QRect(140, 350, 101, 101))
+        self.Server_button.setGeometry(QRect(140, 305, 101, 101))
 
         # ✅ (추가) Config 버튼: CH.1/CH.2 버튼과 동일 크기(211x101)
         #    Power Select(101) + Server(101) = 총 폭 211이므로, 그 아래를 한 버튼으로 통합 배치
         self.Config_button = QPushButton(self.page_3)
         self.Config_button.setObjectName(u"Config_button")
-        self.Config_button.setGeometry(QRect(30, 460, 211, 101))
+        self.Config_button.setGeometry(QRect(30, 415, 211, 101))
 
         self.stackedWidget.addWidget(self.page_3)
         self.page = QWidget()
