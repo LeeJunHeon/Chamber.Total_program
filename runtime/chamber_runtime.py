@@ -2049,7 +2049,11 @@ class ChamberRuntime:
 
                 # 🚫 첫 번째 스텝(인덱스 0)은 강제 60초 대기 없이 즉시 시작
                 first_step = (self.current_process_index == 0)
-                delay_s = (remain if first_step else max(60.0, remain))
+
+                # remain 자체가 "남은 시간"이므로 그대로 쓰는 게 맞음
+                delay_s = max(0.0, float(remain))
+
+                reason = ("최근 종료로 인한 대기" if first_step else "쿨다운 대기")
 
                 # ✅ Start를 눌러 “시작 시도”되는 순간 바로 로그 파일을 연다
                 with contextlib.suppress(Exception):
@@ -2144,6 +2148,21 @@ class ChamberRuntime:
         self._set_state_text("다음 공정 시작 준비 중…")
         self._safe_start_process(self._normalize_params_for_process(params))
 
+    # ✅ PLC read_bit에 timeout 강제 (무한대기 방지)
+    async def _plc_read_bit_safe(self, key: str, *, timeout_s: float = 0.6) -> bool | None:
+        if not getattr(self, "plc", None):
+            self.append_log("PLC", f"PLC 없음: read_bit({key})")
+            return None
+        try:
+            v = await asyncio.wait_for(self.plc.read_bit(key), timeout=timeout_s)
+            return bool(v)
+        except asyncio.TimeoutError:
+            self.append_log("PLC", f"read_bit timeout: {key} ({timeout_s:.1f}s)")
+            return None
+        except Exception as e:
+            self.append_log("PLC", f"read_bit failed: {key}: {e!r}")
+            return None
+
     def _safe_start_process(self, params: NormParams) -> None:
         if self.process_controller.is_running:
             msg = "이미 다른 공정 실행 중"
@@ -2163,12 +2182,18 @@ class ChamberRuntime:
             return
         
         # ✅ 공통 start 진입점에서 단 1회만 마킹(큐/자동시작 포함)
+        # ✅ 사용자가 ‘멈춤’을 누를 수 있게: preflight 들어가는 순간부터 UI를 running으로 표시
+        self._set_state_text("프리플라이트(장비 확인) 중…")
+        self._on_process_status_changed(True)
+
         with contextlib.suppress(Exception):
             runtime_state.mark_started("chamber", self.ch)
 
-        self._spawn_detached(self._start_after_preflight(params),
-                            store=True,
-                            name=f"StartAfterPreflight.CH{self.ch}")
+        self._spawn_detached(
+            self._start_after_preflight(params),
+            store=True,
+            name=f"StartAfterPreflight.CH{self.ch}",
+        )
 
     # ✅ Gate(밸브) 인터락: 시작하려는 챔버의 Gate가 CLOSED인지 확인
     async def _check_gate_closed_before_start(self) -> bool:
@@ -2200,6 +2225,11 @@ class ChamberRuntime:
             try:
                 open_lamp = bool(await self.plc.read_bit(open_key))
                 close_lamp = bool(await self.plc.read_bit(close_key))
+
+                # timeout/예외로 값을 못 읽으면 → “상태 확인 불가”로 시작 차단 + 사용자에게 알림
+                if open_lamp is None or close_lamp is None:
+                    self.append_log("MAIN", f"[CH{self.ch}] Gate 상태 읽기 실패/timeout → 시작 차단")
+                    return False
             except KeyError as e:
                 self.append_log("MAIN", f"[CH{self.ch}] PLC 주소맵에 gate lamp 키 없음: {e} → 시작 차단")
                 return False
@@ -2333,7 +2363,10 @@ class ChamberRuntime:
             # (선택) DC는 필요시 재연결만 수행 (원래도 DC 포트를 써야 하니까 OK)
             if use_dc_pulse and self.dc_pulse and hasattr(self.dc_pulse, "set_endpoint_reconnect"):
                 host, port = self.cfg.DCPULSE_TCP
-                await self.dc_pulse.set_endpoint_reconnect(host, port)
+                try:
+                    await asyncio.wait_for(self.dc_pulse.set_endpoint_reconnect(host, port), timeout=2.0)
+                except asyncio.TimeoutError:
+                    raise RuntimeError("DC-Pulse reconnect timeout(2s)")
 
             # ✅ RF는 DCPULSE_TCP로 절대 덮어쓰지 않는다.
             #    - RFPulseAsync가 내부적으로 RF 포트를 알고 있으면: 아무 것도 안 해도 됨
@@ -2342,7 +2375,10 @@ class ChamberRuntime:
                 rf_tcp = getattr(self.cfg, "RFPULSE_TCP", None)
                 if rf_tcp:
                     host, port = rf_tcp
-                    await self.rf_pulse.set_endpoint_reconnect(host, port)
+                    try:
+                        await asyncio.wait_for(self.rf_pulse.set_endpoint_reconnect(host, port), timeout=2.0)
+                    except asyncio.TimeoutError:
+                        raise RuntimeError("RF-Pulse reconnect timeout(2s)")
                 # else: RFPulseAsync 내부 설정을 그대로 사용
 
             self._ensure_background_started()
@@ -2855,6 +2891,37 @@ class ChamberRuntime:
                 t0 = time.monotonic()
                 while (time.monotonic() - t0) < grace_s:
                     if not self.process_controller.is_running:
+                        # ✅ Preflight 중이면 StartAfterPreflight 태스크를 찾아 취소
+                        cancelled = False
+                        for t in list(getattr(self, "_bg_tasks", []) or []):
+                            if not t or t.done():
+                                continue
+                            try:
+                                nm = t.get_name()
+                            except Exception:
+                                nm = ""
+                            if nm.startswith(f"StartAfterPreflight.CH{self.ch}"):
+                                t.cancel()
+                                cancelled = True
+
+                        if cancelled:
+                            self.append_log("MAIN", "정지 요청: Preflight 취소")
+                            self._auto_connect_enabled = False
+                            self._run_select = None
+
+                            # RF 점유 중이면 해제
+                            with contextlib.suppress(Exception):
+                                self._release_rf_pulse_reservation()
+
+                            with contextlib.suppress(Exception):
+                                runtime_state.set_error("chamber", self.ch, "user cancelled during preflight")
+                                runtime_state.mark_finished("chamber", self.ch)
+
+                            self._on_process_status_changed(False)
+                            self._set_state_text("대기 중")
+                            return
+
+                        self.append_log("MAIN", "정지 요청 무시: 실행 중 공정 없음(이미 종료됨)")
                         return
                     await asyncio.sleep(0.5)
 
