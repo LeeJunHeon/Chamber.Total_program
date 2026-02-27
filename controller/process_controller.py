@@ -1361,12 +1361,14 @@ class ProcessController:
                 message='Power Delay 20초', polling=False,
             ))
 
-        # 2) working_pressure < 5 인 경우: SP2로 먼저 제어 후 SP1 세팅
-        if working_pressure < 5.0:
+        # 2) working_pressure < 10 인 경우: SP2로 먼저 제어 후 SP1 세팅
+        BOOST_TARGET = 10.0
+
+        if working_pressure < BOOST_TARGET:
             steps.append(ProcessStep(
                 action=ActionType.MFC_CMD,
-                params=('SP2_SET', {'value': 5}),
-                message=f'목표 압력(SP2) {5:.2f} 설정',
+                params=('SP2_SET', {'value': BOOST_TARGET}),
+                message=f'목표 압력(SP2) {BOOST_TARGET:.2f} 설정',
             ))
             steps.append(ProcessStep(
                 action=ActionType.MFC_CMD,
@@ -1377,17 +1379,12 @@ class ProcessController:
             steps.append(ProcessStep(
                 action=ActionType.MFC_CMD,
                 params=("WAIT_PRESSURE", {
-                    "target": 5,
+                    "target": BOOST_TARGET,
                     "timeout_sec": 180.0,
                     "source": "ps",
                 }),
-                message=f'압력 도달 대기 (SP2, target={5:.2f}, timeout=180s)',
+                message=f'압력 도달 대기 (SP2, target={BOOST_TARGET:.2f}, timeout=180s)',
             ))
-            # steps.append(ProcessStep(
-            #     action=ActionType.DELAY,
-            #     duration=60000,
-            #     message='압력 안정화 대기 (SP2, 60초)',
-            # ))
             
         # SP2로 안정화 후 SP1 세팅
         # 3) working_pressure >= 5 인 경우: 기존처럼 SP1만 사용
