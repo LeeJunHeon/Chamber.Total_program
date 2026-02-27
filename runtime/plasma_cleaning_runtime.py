@@ -1578,7 +1578,6 @@ class PlasmaCleaningRuntime:
             target_pressure    = target_pressure,
             tol_mTorr          = _cfg_float("tol_mTorr", 0.2),
             wait_timeout_s     = _cfg_float("wait_timeout_s", 90.0),
-            settle_s           = _cfg_float("settle_s", 5.0),
             sp4_setpoint_mTorr = sp4_setpoint,
             rf_power_w         = rf_power,
             process_time_min   = process_time,

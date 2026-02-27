@@ -16,7 +16,6 @@ class PCParams:
     target_pressure: float = 5.0e-6
     tol_mTorr: float = 0.2
     wait_timeout_s: float = 90.0
-    settle_s: float = 5.0
     sp4_setpoint_mTorr: float = 2.0
     rf_power_w: float = 100.0
     process_time_min: float = 1.0
@@ -114,7 +113,6 @@ class PlasmaCleaningController:
             target_pressure = float(params.get("pc_target_pressure", 5.0e-6)),
             tol_mTorr = float(params.get("pc_tol_mTorr", 0.2)),
             wait_timeout_s = float(params.get("pc_wait_timeout_s", 90.0)),
-            settle_s = float(params.get("pc_settle_s", 5.0)),
             sp4_setpoint_mTorr = float(params.get("pc_sp4_setpoint_mTorr", 2.0)),
             rf_power_w = float(params.get("pc_rf_power_w", 100.0)),
             process_time_min = float(params.get("pc_process_time_min", 1.0)),
@@ -278,16 +276,6 @@ class PlasmaCleaningController:
             if not ok:
                 raise RuntimeError("Base pressure not reached (IG API)")
             self._show_state("Base pressure OK")    # ★ 상태창: IG 통과
-
-            # ✅ 안정화 대기(settle_s) 반영
-            settle = int(max(0.0, float(getattr(p, "settle_s", 0.0) or 0.0)))
-            if settle > 0:
-                self._show_state(f"Base pressure settle… ({settle}s)")
-                for left in range(settle, 0, -1):
-                    if self._stop_evt.is_set():
-                        raise asyncio.CancelledError()
-                    self._show_countdown(left)
-                    await asyncio.sleep(1.0)
 
             # 3) MFC 가스 설정 (Gas #3 N2) + 4) SP4 세팅/ON
             self._log("STEP", "3: Gas/Pressure 설정 시작")  # ★ LOG
