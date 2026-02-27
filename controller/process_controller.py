@@ -296,9 +296,7 @@ class ProcessController:
         try:
             self._token_owner.clear()
             self.current_params = params or {}
-            self.process_sequence = self._create_process_sequence(self.current_params)
 
-            # ✅ 공정명 키 통일: process_name을 표준으로
             pname = (
                 self.current_params.get("process_name")
                 or self.current_params.get("process_note")

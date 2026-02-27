@@ -843,6 +843,15 @@ class ChamberRuntime:
                 elif kind == "started":
                     params = payload.get("params", {}) or {}
 
+                    # ✅ 공정명 키 통일: process_name을 정식 키로 사용
+                    #    (레거시 키 Process_name / process_note는 동일값으로 유지)
+                    pname = str(params.get("process_name") or params.get("Process_name") or params.get("process_note") or "").strip()
+                    if not pname:
+                        pname = f"Run CH{self.ch}"
+                    params["process_name"] = pname
+                    params["Process_name"] = pname
+                    params["process_note"] = pname
+
                     # ✅ 시작 카드 전송(성공 시 로그 X, 실패만 로그)
                     # AFTER: 시작 카드 전송 후 즉시 flush
                     if self.chat:
@@ -903,8 +912,9 @@ class ChamberRuntime:
                     self._soon(self._graph_reset_safe)
 
                     # ✅ 텍스트 알림은 기존 그대로 유지
-                    name = (params.get("process_note")
+                    name = (params.get("process_name")
                             or params.get("Process_name")
+                            or params.get("process_note")
                             or f"Run CH{self.ch}")
                     t = params.get("process_time", 0) or 0
                     line = f"▶️ CH{self.ch} '{name}' 시작 (t={float(t):.1f}s)"
@@ -924,6 +934,54 @@ class ChamberRuntime:
                         is_test = bool(detail.get("test_mode", False))
                         is_stopped = bool(detail.get("stopped", False))
                         is_test_cancel = is_test and is_stopped
+
+                        # ============================
+                        # ✅ CSV용 Result/실제 시간 반영
+                        # ============================
+
+                        # 1) Result 매핑: (process_controller는 SUCCESS/FAIL/STOP을 보냄)
+                        raw_result = str(detail.get("result") or "").strip().upper()
+                        if raw_result in ("SUCCESS", "OK", "TRUE", "1"):
+                            result = "성공"
+                        elif raw_result in ("STOP", "STOPPED", "CANCEL", "CANCELED", "CANCELLED"):
+                            result = "stop"
+                        elif raw_result in ("FAIL", "FAILED", "ERROR", "FALSE", "0"):
+                            result = "실패"
+                        else:
+                            # detail에 result가 없을 때만 최소 폴백(추정 X: ok/stopped로만 결정)
+                            result = "stop" if is_stopped else ("성공" if ok else "실패")
+
+                        # 2) DataLogger의 process_params에 덮어쓰기(여기가 핵심)
+                        try:
+                            pp = getattr(self.data_logger, "process_params", None)
+                            if isinstance(pp, dict):
+                                # 공정명도 확실히 통일
+                                pname = str(detail.get("process_name") or detail.get("Process_name") or detail.get("process_note") or "").strip()
+                                if pname:
+                                    pp["process_name"] = pname
+                                    pp["Process_name"] = pname
+                                    pp["process_note"] = pname
+
+                                # Result 컬럼용
+                                pp["result"] = result
+                                pp["stopped"] = bool(is_stopped)
+
+                                # 실제 진행 시간(분) → 기존 컬럼(shutter_delay / process_time)에 그대로 넣기
+                                v = detail.get("actual_shutter_delay_min", None)
+                                if v is not None:
+                                    pp["shutter_delay"] = float(v)
+
+                                v = detail.get("actual_process_time_min", None)
+                                if v is not None:
+                                    pp["process_time"] = float(v)
+
+                        except Exception as e:
+                            self.append_log("CSV", f"Sputter Calib CSV 메타 갱신 실패(무시): {e!r}")
+
+                        # 3) 이제 기록(성공/실패/stop 모두 기록)
+                        self.append_log("CSV", f"Sputter Calib CSV 기록 요청 (ok={ok}, result={result})")
+                        self.data_logger.finalize_and_write_log(bool(ok))
+                        await asyncio.sleep(0.20)
 
                         ok_for_log = bool(detail.get("ok_for_log", ok))
 
