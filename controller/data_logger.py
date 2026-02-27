@@ -77,7 +77,7 @@ class DataLogger(QObject):
 
         # 최종 헤더
         self.header: List[str] = [
-            "Timestamp", "Process Note", "Base Pressure",
+            "Timestamp", "Process Name", "Result", "Base Pressure",
             "Main Shutter", "Shutter Delay", "Integration Time", "Power Select",
             "G1 Target", "G2 Target", "G3 Target",
             "Ar flow", "O2 flow", "N2 flow",
@@ -124,6 +124,13 @@ class DataLogger(QObject):
                 new_writer.writeheader()
                 for row in rows:
                     new_row = {h: row.get(h, "") for h in self.header}
+
+                    # ✅ 구헤더("Process Note") 값을 신헤더("Process Name")으로 이관
+                    if not new_row.get("Process Name"):
+                        pn = row.get("Process Name") or row.get("Process Note") or ""
+                        new_row["Process Name"] = pn
+
+                    # Result는 구파일엔 없었으니 기본은 빈칸(유지)
                     new_writer.writerow(new_row)
 
             # 원자적 교체
@@ -242,7 +249,8 @@ class DataLogger(QObject):
     @Slot(object)
     def finalize_and_write_log(self, was_successful: Optional[bool] = True) -> None:
         """공정 종료 시 평균 계산 후 CSV 1행을 백그라운드에서 기록."""
-        if not was_successful:
+        # ✅ None은 호출부가 '기록 스킵' 의도로 준 경우만 스킵
+        if was_successful is None:
             return
 
         # 평균치 헬퍼
@@ -279,10 +287,27 @@ class DataLogger(QObject):
         sd = self.process_params.get("shutter_delay", None)
         it = self.process_params.get("integration_time", None)
 
+        # ✅ Process Name: 다양한 키 호환 (기존 process_note/Process_name도 받아줌)
+        proc_name = (
+            self.process_params.get("process_name")
+            or self.process_params.get("Process_name")
+            or self.process_params.get("process_note")
+            or ""
+        )
+        proc_name = str(proc_name)
+
+        # ✅ Result: SUCCESS / FAIL / STOP
+        stopped = bool(self.process_params.get("stopped", False))
+        if bool(was_successful):
+            result = "SUCCESS"
+        else:
+            result = "STOP" if stopped else "FAIL"
+
         # 기록 데이터(문자열로 포맷)
         log_data: Dict[str, str] = {
             "Timestamp": ts0.strftime("%Y-%m-%d %H:%M:%S"),
-            "Process Note": str(self.process_params.get("process_note", "")),
+            "Process Name": proc_name,
+            "Result": result,
             "Base Pressure": f"{base_pressure:.2e}",
 
             "Main Shutter": "T" if use_ms else "F",
