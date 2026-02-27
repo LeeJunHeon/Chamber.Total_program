@@ -1582,6 +1582,10 @@ class PlasmaCleaningRuntime:
             sp4_setpoint_mTorr = sp4_setpoint,
             rf_power_w         = rf_power,
             process_time_min   = process_time,
+
+            # ✅ 컨트롤러 하드코딩 제거용(아래 controller 수정과 세트)
+            gv_open_lamp_delay_s = _cfg_float("gv_open_lamp_delay_s", 5.0),
+            ig_interval_ms       = _cfg_int("ig_interval_ms", 10_000),
         )
 
     def _set_state_text(self, text: str) -> None:

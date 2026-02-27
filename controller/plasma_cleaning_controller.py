@@ -11,22 +11,20 @@ from typing import Any, Awaitable, Callable, Optional
 # ===== 파라미터 =====
 @dataclass
 class PCParams:
-    # gas / mfc
-    gas_idx: int = 3                 # Gas #3 (N2) 사용
-    gas_flow_sccm: float = 0.0       # 유량 (FLOW_ON 시 적용)
-    # 압력
-    target_pressure: float = 5.0e-6  # IG 목표(이 값보다 낮아지면 통과)
-    tol_mTorr: float = 0.2           # IG 허용 편차
-    wait_timeout_s: float = 90.0     # IG 타임아웃
-    settle_s: float = 5.0            # 안정화 대기
-    # SP4 (Working Pressure)
+    gas_idx: int = 3
+    gas_flow_sccm: float = 0.0
+    target_pressure: float = 5.0e-6
+    tol_mTorr: float = 0.2
+    wait_timeout_s: float = 90.0
+    settle_s: float = 5.0
     sp4_setpoint_mTorr: float = 2.0
-    # RF
     rf_power_w: float = 100.0
-    # 프로세스 시간
-    process_time_min: float = 1.0        # 분 단위
-    
-    # --- TEST MODE 추가 ---
+    process_time_min: float = 1.0
+
+    # ✅ 하드코딩 제거용 (Config에서 조절)
+    gv_open_lamp_delay_s: float = 5.0     # GV OPEN_SW 후 OPEN_LAMP 확인까지 대기(초)
+    ig_interval_ms: int = 10_000          # IG base wait 체크 주기(ms)
+
     test_mode: bool = False
     test_duration_sec: Optional[float] = None
 
@@ -111,18 +109,22 @@ class PlasmaCleaningController:
         if self.is_running:
             self._log("PC", "이미 실행 중입니다."); return
         p = PCParams(
-            gas_idx               = int(params.get("pc_gas_mfc_idx", 3)),
-            gas_flow_sccm         = float(params.get("pc_gas_flow_sccm", 0.0)),
-            target_pressure       = float(params.get("pc_target_pressure", 5.0e-6)),
-            tol_mTorr             = float(params.get("pc_tol_mTorr", 0.2)),
-            wait_timeout_s        = float(params.get("pc_wait_timeout_s", 90.0)),
-            settle_s              = float(params.get("pc_settle_s", 5.0)),
-            sp4_setpoint_mTorr    = float(params.get("pc_sp4_setpoint_mTorr", 2.0)),
-            rf_power_w            = float(params.get("pc_rf_power_w", 100.0)),
-            process_time_min      = float(params.get("pc_process_time_min", 1.0)),
-            # --- 추가 ---
-            test_mode             = bool(params.get("test_mode", False)),
-            test_duration_sec     = float(params.get("test_duration_sec", 0.0)),
+            gas_idx = int(params.get("pc_gas_mfc_idx", 3)),
+            gas_flow_sccm = float(params.get("pc_gas_flow_sccm", 0.0)),
+            target_pressure = float(params.get("pc_target_pressure", 5.0e-6)),
+            tol_mTorr = float(params.get("pc_tol_mTorr", 0.2)),
+            wait_timeout_s = float(params.get("pc_wait_timeout_s", 90.0)),
+            settle_s = float(params.get("pc_settle_s", 5.0)),
+            sp4_setpoint_mTorr = float(params.get("pc_sp4_setpoint_mTorr", 2.0)),
+            rf_power_w = float(params.get("pc_rf_power_w", 100.0)),
+            process_time_min = float(params.get("pc_process_time_min", 1.0)),
+
+            # ✅ 추가
+            gv_open_lamp_delay_s = float(params.get("pc_gv_open_lamp_delay_s", 5.0)),
+            ig_interval_ms       = int(params.get("pc_ig_interval_ms", 10_000)),
+
+            test_mode = bool(params.get("test_mode", False)),
+            test_duration_sec = float(params.get("test_duration_sec", 0.0)),
         )
         self._stop_evt = asyncio.Event()
         self._task = asyncio.create_task(self._run(p), name="PC_Run")
@@ -224,7 +226,7 @@ class PlasmaCleaningController:
 
             self._log("PLC", "GV OPEN_SW 실행")
             await self._plc_gv_open()
-            await asyncio.sleep(5.0)  # 램프 확인 지연
+            await asyncio.sleep(max(0.0, float(getattr(p, "gv_open_lamp_delay_s", 5.0))))
             lamp = await self._plc_read_gv_open_lamp()
             self._log("PLC", f"GV OPEN_LAMP={lamp}")  # ★ LOG (result)
             if not lamp:
@@ -234,11 +236,15 @@ class PlasmaCleaningController:
             if not self._ig_wait_for_base_torr:
                 raise RuntimeError("IG API(ig_wait_for_base_torr)가 바인딩되지 않았습니다.")
 
-            self._log("IG", f"IG.wait_for_base_pressure: {p.target_pressure:.3e} Torr 대기 (RDI=10s 간격, 외부 폴링 없음)")
-            self._show_state("IG base wait…")       # ★ 상태창: IG 대기 시작
+            interval_ms = int(getattr(p, "ig_interval_ms", 10_000) or 10_000)
+            interval_s = interval_ms / 1000.0
+
+            self._log("IG", f"IG.wait_for_base_pressure: {p.target_pressure:.3e} Torr 대기 "
+                            f"(RDI={interval_s:.1f}s 간격, 외부 폴링 없음)")
+            self._show_state("IG base wait…")
 
             wait_task = asyncio.create_task(
-                self._ig_wait_for_base_torr(p.target_pressure, interval_ms=10_000),
+                self._ig_wait_for_base_torr(p.target_pressure, interval_ms=interval_ms),
                 name="IGBaseWait",
             )
 
@@ -272,6 +278,16 @@ class PlasmaCleaningController:
             if not ok:
                 raise RuntimeError("Base pressure not reached (IG API)")
             self._show_state("Base pressure OK")    # ★ 상태창: IG 통과
+
+            # ✅ 안정화 대기(settle_s) 반영
+            settle = int(max(0.0, float(getattr(p, "settle_s", 0.0) or 0.0)))
+            if settle > 0:
+                self._show_state(f"Base pressure settle… ({settle}s)")
+                for left in range(settle, 0, -1):
+                    if self._stop_evt.is_set():
+                        raise asyncio.CancelledError()
+                    self._show_countdown(left)
+                    await asyncio.sleep(1.0)
 
             # 3) MFC 가스 설정 (Gas #3 N2) + 4) SP4 세팅/ON
             self._log("STEP", "3: Gas/Pressure 설정 시작")  # ★ LOG
