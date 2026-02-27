@@ -260,6 +260,12 @@ class ProcessController:
         self._countdown_start_ns: int = 0
         self._countdown_base_msg: str = ""
 
+        # ✅ 실제 진행 시간 누적(ms)
+        # - Shutter Delay 구간에서 실제로 흐른 시간
+        # - Main Process 구간에서 실제로 흐른 시간
+        self._actual_shutter_delay_ms: int = 0
+        self._actual_process_time_ms: int = 0
+
         # 기대 토큰
         self._expect_group: Optional[ExpectGroup] = None
 
@@ -291,6 +297,27 @@ class ProcessController:
             self._token_owner.clear()
             self.current_params = params or {}
             self.process_sequence = self._create_process_sequence(self.current_params)
+
+            # ✅ 공정명 키 통일: process_name을 표준으로
+            pname = (
+                self.current_params.get("process_name")
+                or self.current_params.get("process_note")
+                or self.current_params.get("Process_name")
+                or "Untitled"
+            )
+            pname = str(pname).strip() or "Untitled"
+
+            self.current_params["process_name"] = pname
+            # (호환 유지) 다른 파일들이 아직 process_note/Process_name을 볼 수 있어서 같이 맞춰둠
+            self.current_params["process_note"] = pname
+            self.current_params["Process_name"] = pname
+
+            # ✅ 실제 시간 누적 초기화(이번 런 기준)
+            self._actual_shutter_delay_ms = 0
+            self._actual_process_time_ms = 0
+
+            self.process_sequence = self._create_process_sequence(self.current_params)
+
             ok, errors = self.validate_process_sequence()
             if not ok:
                 for m in errors:
@@ -825,6 +852,23 @@ class ProcessController:
             # [추가] 카운트다운 정상 완료 로그 1회
             self._emit_log("Process", f"{self._countdown_base_msg} 완료")
         finally:
+            # ✅ 실제로 흐른 시간 누적 (STOP/FAIL로 중단돼도 finally는 무조건 돈다)
+            try:
+                start_ns = int(self._countdown_start_ns or 0)
+                total_ms = int(self._countdown_total_ms or 0)
+                if start_ns > 0 and total_ms > 0:
+                    elapsed_ms = int((monotonic_ns() - start_ns) // 1_000_000)
+                    # 과도하게 커지는 것 방지(정상 완료/중단 모두)
+                    elapsed_ms = max(0, min(elapsed_ms, total_ms))
+
+                    msg = (self._countdown_base_msg or base_message or "").strip()
+                    if msg.startswith("Shutter Delay"):
+                        self._actual_shutter_delay_ms += elapsed_ms
+                    elif msg.startswith("메인 공정 진행"):
+                        self._actual_process_time_ms += elapsed_ms
+            except Exception:
+                pass
+
             # 종료 시에만 상태까지 정리
             self._cancel_countdown()
 
@@ -998,12 +1042,31 @@ class ProcessController:
         if not self.is_running:
             return
 
+        proc_name = (
+            self.current_params.get("process_name")
+            or self.current_params.get("process_note")
+            or self.current_params.get("Process_name")
+            or "Untitled"
+        )
+        proc_name = str(proc_name).strip() or "Untitled"
+
+        stopped = bool(self._stop_requested)
+
+        # ✅ Result: SUCCESS / STOP / FAIL
+        if bool(ok):
+            result = "SUCCESS"
+        else:
+            result = "STOP" if stopped else "FAIL"
+
         detail = {
-            "process_name": self.current_params.get("process_note",
-                                                    self.current_params.get("Process_name", "Untitled")),
-            "stopped": self._stop_requested,
+            "process_name": proc_name,
+            "result": result,                  # ✅ 추가
+            "stopped": stopped,
             "aborting": (self._aborting or self._in_emergency),
             "errors": list(self._shutdown_failures),
+            # ✅ 실제 진행 시간(분) 추가
+            "actual_shutter_delay_min": round(self._actual_shutter_delay_ms / 60000.0, 3),
+            "actual_process_time_min": round(self._actual_process_time_ms / 60000.0, 3),
         }
         
         # ✅ 리셋 전에 현재 상태를 캐싱
@@ -1721,7 +1784,8 @@ class ProcessController:
                 'message': self.current_step.message,
                 'parallel': self.current_step.parallel
             } if self.current_step else None),
-            'process_name': self.current_params.get('process_note', 'Untitled'),
+            'process_name': self.current_params.get('process_name',
+               self.current_params.get('process_note', 'Untitled')),
             'stop_requested': self._stop_requested,
             'aborting': self._aborting,
             # === 추가: 전체 공정 경과 ===
