@@ -370,12 +370,16 @@ class RFPulseAsync:
                 self._poll_task = self._spawn(self._poll_loop())
             return
 
-        # 폴링 중지 & 큐 정리
+        # 폴링 중지
         if self._poll_task:
             self._poll_task.cancel()
             self._poll_task = None
         self._poll_busy = False
-        self._purge_pending("polling off")
+
+        # ✅ 이미 큐도 없고 inflight도 없으면, 'polling off' purge/log 스킵
+        need_purge = (self._inflight is not None) or bool(self._cmd_q)
+        if need_purge:
+            self._purge_pending("polling off")
 
     def stop_process(self):
             """외부 stop: 폴링 off → RF OFF → power_off_finished 이벤트."""
@@ -1139,9 +1143,10 @@ class RFPulseAsync:
             purged += 1
             self._safe_callback(c.callback, None)
 
+        # ✅ polling off + purged==0 은 로그 스팸이므로 생략
         if reason:
-            # 비동기 로그는 태스크로
-            self._spawn(self._emit_status(f"대기 중 명령 {purged}개 폐기 ({reason})"))
+            if (purged > 0) or (reason != "polling off"):
+                self._spawn(self._emit_status(f"대기 중 명령 {purged}개 폐기 ({reason})"))
         return purged
     
     # =========== chamber_runtime.py에 맞춘 함수들 ===========
