@@ -22,6 +22,8 @@ from controller.plasma_cleaning_controller import PlasmaCleaningController, PCPa
 from device.rf_power import RFPowerAsync, RFPowerEvent
 from controller.runtime_state import runtime_state  # ★ 추가: 전역 쿨다운/이력
 
+from lib import user_config
+
 class PlasmaCleaningRuntime:
     """
     Plasma Cleaning 전용 런타임 (그래프/데이터로거 미사용 버전)
@@ -1519,8 +1521,30 @@ class PlasmaCleaningRuntime:
         except Exception as e:
             self.append_log("PC", f"장치 연결 해제 중 예외: {e!r}")
 
-
     def _read_params_from_ui(self) -> PCParams:
+        # ✅ Config(Plasma cleaning 탭) 기본값 로드
+        pc_cfg: dict = {}
+        try:
+            pc_cfg = (user_config.load() or {}).get("plasma_cleaning", {}) or {}
+            if not isinstance(pc_cfg, dict):
+                pc_cfg = {}
+        except Exception:
+            pc_cfg = {}
+
+        def _cfg_float(key: str, default: float) -> float:
+            try:
+                v = pc_cfg.get(key, default)
+                return float(v)
+            except Exception:
+                return float(default)
+
+        def _cfg_int(key: str, default: int) -> int:
+            try:
+                v = pc_cfg.get(key, default)
+                return int(v)
+            except Exception:
+                return int(default)
+
         def _read_plain_number(obj_name: str, default: float) -> float:
             w = _safe_get(self.ui, obj_name)
             if not w:
@@ -1534,26 +1558,30 @@ class PlasmaCleaningRuntime:
                     return float(w.value())
                 else:
                     txt = str(w)
-                return float(txt) if txt else default  # 과학표기(1e-5) 허용
+
+                # ✅ 비어 있으면 default(=config 값) 사용
+                return float(txt) if txt else default
             except Exception:
                 return default
 
-        gas_flow        = _read_plain_number("PC_gasFlow_edit",        0.0)
-        target_pressure = _read_plain_number("PC_targetPressure_edit", 5.0e-6)
-        sp4_setpoint    = _read_plain_number("PC_workingPressure_edit", 2.0)
-        rf_power        = _read_plain_number("PC_rfPower_edit",        100.0)
-        process_time    = _read_plain_number("PC_ProcessTime_edit",    1.0)
+        # ✅ UI 입력이 비어 있으면 Config 기본값을 사용
+        gas_flow        = _read_plain_number("PC_gasFlow_edit",         _cfg_float("gas_flow_sccm", 0.0))
+        target_pressure = _read_plain_number("PC_targetPressure_edit",  _cfg_float("target_pressure", 5.0e-6))
+        sp4_setpoint    = _read_plain_number("PC_workingPressure_edit", _cfg_float("sp4_setpoint_mTorr", 2.0))
+        rf_power        = _read_plain_number("PC_rfPower_edit",         _cfg_float("rf_power_w", 100.0))
+        process_time    = _read_plain_number("PC_ProcessTime_edit",     _cfg_float("process_time_min", 1.0))
 
+        # ✅ UI에 없는 항목도 Config로부터 적용
         return PCParams(
-            gas_idx               = 3,             # Gas #3 (N₂) 고정
-            gas_flow_sccm         = gas_flow,
-            target_pressure       = target_pressure,
-            tol_mTorr             = 0.2,
-            wait_timeout_s        = 90.0,
-            settle_s              = 5.0,
-            sp4_setpoint_mTorr    = sp4_setpoint,
-            rf_power_w            = rf_power,
-            process_time_min      = process_time,
+            gas_idx            = _cfg_int("gas_idx", 3),
+            gas_flow_sccm      = gas_flow,
+            target_pressure    = target_pressure,
+            tol_mTorr          = _cfg_float("tol_mTorr", 0.2),
+            wait_timeout_s     = _cfg_float("wait_timeout_s", 90.0),
+            settle_s           = _cfg_float("settle_s", 5.0),
+            sp4_setpoint_mTorr = sp4_setpoint,
+            rf_power_w         = rf_power,
+            process_time_min   = process_time,
         )
 
     def _set_state_text(self, text: str) -> None:
