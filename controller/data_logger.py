@@ -311,7 +311,7 @@ class DataLogger(QObject):
             "Base Pressure": f"{base_pressure:.2e}",
 
             "Main Shutter": "T" if use_ms else "F",
-            "Shutter Delay": f"{float(sd):.1f}" if sd not in (None, "") else "",
+            "Shutter Delay": f"{float(sd):.3f}" if sd not in (None, "") else "",
             "Integration Time": str(int(it)) if it not in (None, "") else "",
             "Power Select": "T" if use_ps else "F",
 

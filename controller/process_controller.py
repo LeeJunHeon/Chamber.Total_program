@@ -850,24 +850,7 @@ class ProcessController:
             # [추가] 카운트다운 정상 완료 로그 1회
             self._emit_log("Process", f"{self._countdown_base_msg} 완료")
         finally:
-            # ✅ 실제로 흐른 시간 누적 (STOP/FAIL로 중단돼도 finally는 무조건 돈다)
-            try:
-                start_ns = int(self._countdown_start_ns or 0)
-                total_ms = int(self._countdown_total_ms or 0)
-                if start_ns > 0 and total_ms > 0:
-                    elapsed_ms = int((monotonic_ns() - start_ns) // 1_000_000)
-                    # 과도하게 커지는 것 방지(정상 완료/중단 모두)
-                    elapsed_ms = max(0, min(elapsed_ms, total_ms))
-
-                    msg = (self._countdown_base_msg or base_message or "").strip()
-                    if msg.startswith("Shutter Delay"):
-                        self._actual_shutter_delay_ms += elapsed_ms
-                    elif msg.startswith("메인 공정 진행"):
-                        self._actual_process_time_ms += elapsed_ms
-            except Exception:
-                pass
-
-            # 종료 시에만 상태까지 정리
+            # 종료 시에만 상태까지 정리 (누적은 _cancel_countdown()에서 처리)
             self._cancel_countdown()
 
     async def _countdown_loop(self) -> None:
@@ -887,6 +870,29 @@ class ProcessController:
             return
 
     def _cancel_countdown(self) -> None:
+        """카운트다운 루프를 중단하고 상태를 정리한다.
+
+        STOP/FAIL 시 _start_normal_shutdown()에서 먼저 호출되면서 start/total이 0으로 지워져
+        실제 진행 시간이 0으로 남는 문제를 방지하기 위해,
+        상태를 지우기 전에 여기서 1회 누적 후 초기화한다.
+        (중복 호출되어도 start/total을 0으로 만들어 2중 누적 방지)
+        """
+        # ✅ 상태를 지우기 전에 실제로 흐른 시간 누적
+        try:
+            start_ns = int(self._countdown_start_ns or 0)
+            total_ms = int(self._countdown_total_ms or 0)
+            if start_ns > 0 and total_ms > 0:
+                elapsed_ms = int((monotonic_ns() - start_ns) // 1_000_000)
+                elapsed_ms = max(0, min(elapsed_ms, total_ms))
+
+                msg = (self._countdown_base_msg or "").strip()
+                if msg.startswith("Shutter Delay"):
+                    self._actual_shutter_delay_ms += elapsed_ms
+                elif msg.startswith("메인 공정 진행"):
+                    self._actual_process_time_ms += elapsed_ms
+        except Exception:
+            pass
+
         if self._countdown_task and not self._countdown_task.done():
             self._countdown_task.cancel()
         self._countdown_task = None
