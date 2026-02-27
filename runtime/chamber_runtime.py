@@ -980,20 +980,10 @@ class ChamberRuntime:
 
                         # 3) 이제 기록(성공/실패/stop 모두 기록)
                         self.append_log("CSV", f"Sputter Calib CSV 기록 요청 (ok={ok}, result={result})")
-                        self.data_logger.finalize_and_write_log(bool(ok))
-                        await asyncio.sleep(0.20)
-
-                        ok_for_log = bool(detail.get("ok_for_log", ok))
-
-                        # CSV 기록 시도 로그 남기기
-                        self.append_log("CSV", f"Sputter Calib CSV 기록 요청 (ok_for_log={ok_for_log})")
-
-                        self.data_logger.finalize_and_write_log(ok_for_log)
-                        await asyncio.sleep(0.20)
-
-                        # ✅ 종료 카드 전송(성공 시 로그 X, 실패만 로그)
-                        ok = bool(payload.get("ok", False))
-                        detail = dict(payload.get("detail", {}) or {})
+                        
+                        # - data_logger가 'ok=False면 return'인 현재 버전이면, 아래 인자를 ok로 두면 실패/stop이 기록되지 않습니다.
+                        # - data_logger를 실패/stop도 기록하도록 수정한 뒤에는 ok를 그대로 넘겨도 됩니다.
+                        self.data_logger.finalize_and_write_log(ok)
 
                         # ➊ 카드 헤더용 prefix: "CHx Sputter"
                         detail.setdefault("ch", self.ch)

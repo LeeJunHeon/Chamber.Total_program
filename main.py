@@ -125,6 +125,9 @@ class MainWindow(QWidget):
         self.ui = Ui_Form()
         self.ui.setupUi(self)
 
+        # ✅ Config 팝업 인스턴스 보관(가비지컬렉션/중복창 방지)
+        self._config_dialog = None
+
         # # ✅ CH2 공정 페이지 P.W Select 체크박스 항상 비활성화
         # self.ui.ch2_powerSelect_checkbox.setEnabled(False)
 
@@ -146,6 +149,10 @@ class MainWindow(QWidget):
         except Exception:
             pass
 
+        # ✅ loop/logger를 먼저 준비(시그널 핸들러에서 사용하므로)
+        self._loop = loop or asyncio.get_event_loop()
+        self._logger = get_app_logger()
+
         # Power_Select 버튼 토글 → PLC 코일 쓰기 (비동기)
         self.ui.Power_Select_button.toggled.connect(
             lambda on: self._loop.create_task(self._on_power_select_toggled(on))
@@ -164,9 +171,6 @@ class MainWindow(QWidget):
         self.ui.PC_workingPressure_edit.setPlainText("30")   # Working Pressure (mTorr)
         self.ui.PC_rfPower_edit.setPlainText("55")           # RF Power (W)
         self.ui.PC_ProcessTime_edit.setPlainText("0.25")     # Process Time (분)
-
-        self._loop = loop or asyncio.get_event_loop()
-        self._logger = get_app_logger()
 
         # --- 스택 및 페이지 매핑 (UI 객체명 고정)
         self._stack: QStackedWidget = self.ui.stackedWidget
@@ -586,6 +590,11 @@ class MainWindow(QWidget):
         btn_server = getattr(self.ui, "Server_button", None)
         if btn_server is not None:
             btn_server.clicked.connect(lambda: self._switch_page("server"))
+
+        # ✅ (추가) PC 페이지의 Config 버튼 → Config 팝업 열기
+        btn_cfg = getattr(self.ui, "Config_button", None)
+        if btn_cfg is not None:
+            btn_cfg.clicked.connect(self._open_config_dialog)
             
         # ✅ Server 페이지 우상단 네비 버튼 연결
         sp = getattr(self, "server_page", None)
@@ -715,6 +724,47 @@ class MainWindow(QWidget):
         page = self._pages.get(key)
         if page:
             self._stack.setCurrentWidget(page)
+
+    def _open_config_dialog(self) -> None:
+        """
+        Config 버튼 클릭 시 설정 팝업을 연다.
+        - ui/config_dialog.py가 아직 없거나 import 실패해도 프로그램이 죽지 않게 방어
+        - 중복으로 여러 창이 뜨지 않게 1개만 유지
+        """
+        # 1) 이미 떠 있으면 앞으로
+        try:
+            dlg = getattr(self, "_config_dialog", None)
+            if dlg is not None and _qt_is_valid(dlg):
+                dlg.raise_()
+                dlg.activateWindow()
+                return
+        except Exception:
+            pass
+
+        # 2) 지연 import: 파일이 아직 없어도 크래시 방지
+        try:
+            from ui.config_dialog import ConfigDialog  # (다음 단계에서 생성할 파일)
+        except Exception as e:
+            QMessageBox.warning(self, "Config", f"ConfigDialog 로드 실패: {e!r}\n(ui/config_dialog.py 생성 필요)")
+            return
+
+        # 3) 새로 생성해서 열기(모달 권장: open()은 블로킹 없이 모달로 동작)
+        try:
+            dlg = ConfigDialog(parent=self)
+            self._config_dialog = dlg
+
+            # 닫힐 때 참조 해제(다음에 다시 열 수 있게)
+            def _clear(_=None):
+                self._config_dialog = None
+
+            try:
+                dlg.finished.connect(_clear)
+            except Exception:
+                pass
+
+            dlg.open()
+        except Exception as e:
+            QMessageBox.warning(self, "Config", f"ConfigDialog 실행 실패: {e!r}")
 
     async def _on_power_select_toggled(self, on: bool) -> None:
         try:
