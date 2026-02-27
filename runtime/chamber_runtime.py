@@ -2027,16 +2027,18 @@ class ChamberRuntime:
                 # 입력값 검증
                 errs = self._validate_norm_params(norm)
                 if errs:
+                    # ✅ 레시피 오류도 파일 로그로 남기기
+                    with contextlib.suppress(Exception):
+                        if not getattr(self, "_log_file_path", None):
+                            self._open_run_log(norm)
+
                     self.append_log("Validate", "CSV 공정 파라미터 오류:\n - " + "\n - ".join(errs))
-                    # 전체 자동 실행 중단
                     self._clear_queue_and_reset_ui()
                     return
 
-                # 새 스텝마다 이전 파일을 정리하고, 항상 새로운 파일로 시작
-                try:
+                # 새 스텝마다 이전 파일 정리 후 새 파일로 시작
+                with contextlib.suppress(Exception):
                     self._spawn_detached(self._shutdown_log_writer())
-                except Exception:
-                    pass
                 self._log_file_path = None
 
                 # (NEW) 최근 'chamber' 종료 시각 기준 쿨다운을 반영해서 다음 스텝 대기
@@ -2049,20 +2051,25 @@ class ChamberRuntime:
                 first_step = (self.current_process_index == 0)
                 delay_s = (remain if first_step else max(60.0, remain))
 
-                # 지연이 없으면 바로 시작 예약
+                # ✅ Start를 눌러 “시작 시도”되는 순간 바로 로그 파일을 연다
+                with contextlib.suppress(Exception):
+                    if not getattr(self, "_log_file_path", None):
+                        self._open_run_log(norm)
+
+                # 지연이 없으면: 태스크 예약을 거치지 말고 즉시 시작(간헐적 예약 실패/정지 방지)
                 if delay_s <= 0.0:
-                    self._set_state_text("다음 공정 즉시 시작")
+                    self.append_log("MAIN", f"다음 공정 즉시 시작(쿨다운 remain={remain:.3f}s)")
+                    self._set_state_text("다음 공정 시작 준비 중…")
                     self._cancel_delay_task()
-                    self._set_task_later(
-                        "_delay_main_task",
-                        self._start_process_later(params, 0.0, reason="즉시 시작"),
-                        name=f"NextProcDelay.CH{self.ch}"
-                    )
+                    self._safe_start_process(norm)   # ✅ 검증된 norm으로 바로 진입
                     return
 
                 # 지연 필요 시: 첫 스텝이면 '최근 종료로 인한 대기', 이후 스텝은 '쿨다운 대기'
                 reason = ("최근 종료로 인한 대기" if first_step else "쿨다운 대기")
                 self._set_state_text(f"다음 공정 대기중 ({reason}) · 남은 시간 {self._fmt_hms(delay_s)}")
+
+                # 파일 로그에도 “왜/얼마나 기다리는지” 남김
+                self.append_log("MAIN", f"다음 공정 대기 시작: delay_s={delay_s:.1f}s, reason={reason}, remain={remain:.3f}s")
 
                 self._cancel_delay_task()
                 self._set_task_later(
@@ -2725,6 +2732,12 @@ class ChamberRuntime:
                 "t0_pressed_wall": datetime.now().isoformat(timespec="seconds"),
                 "t0_pressed_ns":   time.monotonic_ns(),
             }
+
+            # ✅ Start 클릭 즉시 로그 파일 생성 (프리플라이트 실패/입력오류도 파일에 남김)
+            with contextlib.suppress(Exception):
+                if not getattr(self, "_log_file_path", None):
+                    self._open_run_log(params)
+
             errs = self._validate_norm_params(cast(NormParams, params))
             if errs:
                 self._host_report_start(False, "; ".join(errs))
@@ -4385,14 +4398,69 @@ class ChamberRuntime:
             loop.call_soon_threadsafe(_create)
 
     def _set_task_later(self, attr_name: str, coro: Coroutine[Any, Any, Any], *, name: str | None = None) -> None:
+        """UI/다른 스레드 어디서든 안전하게 task를 만들고, 예외를 조용히 삼키지 않게 한다."""
         loop = self._loop
+
         def _create_and_set():
-            t = loop.create_task(coro, name=name)
+            try:
+                t = loop.create_task(coro, name=name)
+            except Exception as e:
+                with contextlib.suppress(Exception):
+                    coro.close()
+                tb = "".join(traceback.format_exception(type(e), e, e.__traceback__)).rstrip()
+                self.append_log("Task", f"[{name or attr_name}] create_task failed:\n{tb}")
+
+                if attr_name in ("_delay_main_task", "_log_writer_task"):
+                    with contextlib.suppress(Exception):
+                        self._set_state_text("내부 오류: 태스크 생성 실패(로그 확인)")
+                    with contextlib.suppress(Exception):
+                        self._post_critical(
+                            "내부 오류",
+                            "백그라운드 작업 생성에 실패했습니다.\n"
+                            "프로그램이 멈춘 것처럼 보일 수 있습니다.\n\n"
+                            "자세한 내용은 로그 파일(또는 터미널)을 확인해주세요.",
+                        )
+                setattr(self, attr_name, None)
+                return
+
             setattr(self, attr_name, t)
-        try: running = asyncio.get_running_loop()
-        except RuntimeError: running = None
-        if running is loop: loop.call_soon(_create_and_set)
-        else: loop.call_soon_threadsafe(_create_and_set)
+
+            def _done(task: asyncio.Task):
+                if task.cancelled():
+                    return
+                try:
+                    exc = task.exception()
+                except Exception as e2:
+                    self.append_log("Task", f"[{name or attr_name}] exception() failed: {e2!r}")
+                    return
+                if exc:
+                    tb2 = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).rstrip()
+                    self.append_log("Task", f"[{name or attr_name}] crashed:\n{tb2}")
+
+                    if attr_name == "_delay_main_task":
+                        with contextlib.suppress(Exception):
+                            self._set_state_text("다음 공정 예약 실패(로그 확인)")
+                        with contextlib.suppress(Exception):
+                            self._post_critical(
+                                "다음 공정 예약 실패",
+                                "다음 공정을 시작하기 위한 내부 작업이 중단되었습니다.\n"
+                                "자세한 내용은 로그 파일(또는 터미널)을 확인해주세요.",
+                            )
+
+                with contextlib.suppress(Exception):
+                    if getattr(self, attr_name, None) is task:
+                        setattr(self, attr_name, None)
+
+            t.add_done_callback(_done)
+
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+        if running is loop:
+            loop.call_soon(_create_and_set)
+        else:
+            loop.call_soon_threadsafe(_create_and_set)
 
     def _loop_from_anywhere(self) -> asyncio.AbstractEventLoop:
         try: return asyncio.get_running_loop()
