@@ -250,6 +250,13 @@ class Ui_Form(object):
         self.Server_button = QPushButton(self.page_3)   # ✅ (추가) Server 버튼 1개
         self.Server_button.setObjectName(u"Server_button")   # ← ID(오브젝트명) 동일
         self.Server_button.setGeometry(QRect(140, 350, 101, 101))
+
+        # ✅ (추가) Config 버튼: CH.1/CH.2 버튼과 동일 크기(211x101)
+        #    Power Select(101) + Server(101) = 총 폭 211이므로, 그 아래를 한 버튼으로 통합 배치
+        self.Config_button = QPushButton(self.page_3)
+        self.Config_button.setObjectName(u"Config_button")
+        self.Config_button.setGeometry(QRect(30, 460, 211, 101))
+
         self.stackedWidget.addWidget(self.page_3)
         self.page = QWidget()
         self.page.setObjectName(u"page")
@@ -834,6 +841,7 @@ class Ui_Form(object):
         self.PC_processList_button.setText(QCoreApplication.translate("Form", u"File\n" "Path", None))
         self.Power_Select_button.setText(QCoreApplication.translate("Form", u"Power\n" "Select: OFF", None))
         self.Server_button.setText(QCoreApplication.translate("Form", u"Server", None)) # ✅ (추가) Server 버튼 텍스트
+        self.Config_button.setText(QCoreApplication.translate("Form", u"Config", None)) # ✅ (추가) Config 버튼 텍스트
         self.ch1_processList_button.setText(QCoreApplication.translate("Form", u"Select File", None))
         self.ch1_shutterDelay_label.setText(QCoreApplication.translate("Form", u"Shutter Delay [min]", None))
         self.ch1_Current_label.setText(QCoreApplication.translate("Form", u"Current", None))
