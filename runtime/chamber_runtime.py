@@ -2531,16 +2531,19 @@ class ChamberRuntime:
         self._oes_init_task = self._spawn_detached(_run(), store=True, name=f"OES.init.{self.ch}")
 
     async def _wait_device_connected(self, dev: object, name: str, timeout_s: float) -> bool:
-        try: t0 = asyncio.get_running_loop().time()
-        except RuntimeError: t0 = 0.0
+        """장비 연결 여부가 True가 될 때까지 대기(타임아웃).
+        ⚠️ qasync(QEventLoop) 환경에서 loop.time()이 간헐적으로 정지/비정상 값을 반환하는 케이스가 있어,
+        프리플라이트가 영원히 끝나지 않는 현상을 막기 위해 time.monotonic() 기반으로 구현한다.
+        """
+        t0 = time.monotonic()
         while True:
             if self._is_dev_connected(dev):
                 return True
-            try: now = asyncio.get_running_loop().time()
-            except RuntimeError: now = t0 + timeout_s + 1.0
-            if now - t0 >= timeout_s:
-                self.append_log(name, "연결 확인 실패(타임아웃)")
+
+            if (time.monotonic() - t0) >= float(timeout_s):
+                self.append_log(name, f"연결 확인 실패(타임아웃 {timeout_s:.1f}s)")
                 return False
+
             await asyncio.sleep(0.2)
 
     async def _preflight_connect(self, params: Mapping[str, Any], timeout_s: float = 8.0) -> tuple[bool, list[str]]:
@@ -4629,14 +4632,23 @@ class ChamberRuntime:
         except Exception: return False
 
     async def _preflight_progress_log(self, need: list[tuple[str, object]], stop_evt: asyncio.Event) -> None:
+        """프리플라이트 진행 상황을 1초 간격으로 계속 로그에 남긴다.
+
+        기존 구현은 wait_for(timeout=1.0)에서 TimeoutError가 한 번 발생하면 함수가 종료되어
+        '연결 대기 중' 로그가 1회만 남고 이후 진행 상황이 보이지 않는 문제가 있었다.
+        """
         try:
             while not stop_evt.is_set():
                 missing = [name for name, dev in need if not self._is_dev_connected(dev)]
                 txt = ", ".join(missing) if missing else "모두 연결됨"
                 self.append_log("MAIN", f"연결 대기 중: {txt}")
-                await asyncio.wait_for(stop_evt.wait(), timeout=1.0)
-        except asyncio.TimeoutError:
-            pass
+
+                try:
+                    await asyncio.wait_for(stop_evt.wait(), timeout=1.0)
+                except asyncio.TimeoutError:
+                    continue
+        except asyncio.CancelledError:
+            raise
         except Exception as e:
             self.append_log("MAIN", f"프리플라이트 진행 로그 예외: {e!r}")
 

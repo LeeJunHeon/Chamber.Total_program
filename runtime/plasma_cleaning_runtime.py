@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import asyncio, contextlib, inspect, csv, os
+import asyncio, contextlib, inspect, csv, os, time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional, Mapping
@@ -348,12 +348,12 @@ class PlasmaCleaningRuntime:
                 raise RuntimeError(f"{name} 연결 실패: {e!r}")
 
         # 2) 타임아웃 내 모두 연결되었는지 대기
-        deadline = asyncio.get_running_loop().time() + float(timeout_s)
+        t0 = time.monotonic()
         while True:
             missing = [n for n, d in need if not self._is_dev_connected(d)]
             if not missing:
                 break
-            if asyncio.get_running_loop().time() >= deadline:
+            if (time.monotonic() - t0) >= float(timeout_s):
                 raise RuntimeError(f"장비 연결 타임아웃: {', '.join(missing)}")
             await asyncio.sleep(0.5)
 
