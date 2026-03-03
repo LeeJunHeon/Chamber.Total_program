@@ -21,18 +21,8 @@ from PySide6.QtCore import Qt
 from util.timed_popup import attach_autoclose
 import contextlib  # (_post_warning 정리 콜백에서 사용)
 
-# 설정(기본값)
-DEFAULT_HOST       = "192.168.1.50"
-DEFAULT_IG_PORT    = 4001     # CH1 IG
-DEFAULT_TSP_PORT   = 4004     # TSP
-DWELL_SEC          = 150.0    # 2분 30초
-POLL_SEC           = 5.0      # 5초
-VERIFY_WITH_STATUS = True     # TSP on/off 후 205 확인
-
-# ⬇ 매일 05:00 자동 예약 실행 설정
-ENABLE_TSP_DAILY_7AM = True   # 자동 예약을 끄려면 False
-DAILY_HH = 5
-DAILY_MM = 00
+from lib import config_common as cfgc
+from lib import config_ch1 as cfg1
 
 def _ts() -> str:
     return datetime.now().strftime("%H:%M:%S")
@@ -49,8 +39,8 @@ class TSPPageController:
         self,
         ui,
         *,
-        host: str = DEFAULT_HOST,
-        tcp_port: int = DEFAULT_TSP_PORT,
+        host: str | None = None,
+        tcp_port: int | None = None,
         addr: int = 0x01,  # main.py 호환용(미사용)
         loop: Optional[asyncio.AbstractEventLoop] = None,
         ig: Optional[AsyncIG] = None,  # 외부에서 IG 주입 가능
@@ -59,9 +49,17 @@ class TSPPageController:
     ) -> None:
         self.ui = ui
         self.loop = loop or asyncio.get_event_loop()
-        self.host = host
-        self.tsp_port = int(tcp_port)
-        self.ig_port = DEFAULT_IG_PORT
+
+        # ✅ 상수 없이도 안전하게 초기값 세팅(= config_common이 최우선)
+        self.host = str(getattr(cfgc, "TSP_TCP_HOST", "192.168.1.50")) if host is None else str(host)
+        self.tsp_port = int(getattr(cfgc, "TSP_TCP_PORT", 4004)) if tcp_port is None else int(tcp_port)
+        self.ig_port = int(getattr(cfgc, "TSP_IG_TCP_PORT", getattr(cfg1, "IG_TCP_PORT", 4001)))
+
+        # ✅ Apply(Runtime) 반영을 위해 config 값으로 즉시 갱신
+        self._refresh_from_config()
+
+        # ✅ Apply(Runtime) 반영을 위해 config 값으로 즉시 갱신
+        self._refresh_from_config()
 
         self.chat = chat
 
@@ -87,17 +85,42 @@ class TSPPageController:
         self._connect_buttons()
 
         self._defaults = {
-            "target": self._get_plain("TSP_targetPressure_edit") or "2.5e-07",
-            "cycles": self._get_plain("TSP_setCycle_edit") or "10",
+            "target": self._get_plain("TSP_targetPressure_edit") or str(getattr(cfgc, "TSP_UI_DEFAULT_TARGET", "2.5e-07")),
+            "cycles": self._get_plain("TSP_setCycle_edit") or str(getattr(cfgc, "TSP_UI_DEFAULT_CYCLES", 10)),
         }
         
         # ⬇ 프로그램 기동 시 매일 07:00 예약 등록
         try:
-            if ENABLE_TSP_DAILY_7AM:
-                when = self._next_time_at(DAILY_HH, DAILY_MM)
+            if getattr(self, "_tsp_daily_enable", False):
+                when = self._next_time_at(self._tsp_daily_hh, self._tsp_daily_mm)
                 self.schedule_run_at(when, repeat_daily=True)
         except Exception as _e:
             self._log(f"[TSP] 예약 초기화 실패: {_e!r}")
+
+    # ============== UI로 파라미터 수정 ==============
+    def _refresh_from_config(self) -> None:
+        # Host/Port (없으면 현재 하드코딩 폴백)
+        self.host = str(getattr(cfgc, "TSP_HOST", self.host or "192.168.1.50"))
+        self.tsp_port = int(getattr(cfgc, "TSP_TCP_PORT", self.tsp_port or 4004))
+
+        # IG는 CH1 포트를 그대로 쓰는 구조라면 config_ch1 우선
+        self.ig_port = int(getattr(cfgc, "TSP_IG_TCP_PORT", getattr(cfg1, "IG_TCP_PORT", 4001)))
+
+        # 공정 파라미터
+        self._tsp_on_sec = float(getattr(cfgc, "TSP_ON_SEC", 120.0))
+        self._tsp_off_sec = float(getattr(cfgc, "TSP_OFF_SEC", 150.0))
+        self._tsp_poll_sec = float(getattr(cfgc, "TSP_POLL_SEC", 10.0))
+        self._tsp_first_check_delay_sec = float(getattr(cfgc, "TSP_FIRST_CHECK_DELAY_SEC", 5.0))
+        self._tsp_verify_with_status = bool(getattr(cfgc, "TSP_VERIFY_WITH_STATUS", True))
+
+        # 쿨다운/타임아웃 여유
+        self._tsp_cooldown_s = float(getattr(cfgc, "TSP_COOLDOWN_S", 60.0))
+        self._tsp_timeout_margin_s = float(getattr(cfgc, "TSP_TOTAL_TIMEOUT_MARGIN_S", 300.0))
+
+        # 예약 실행(매일)
+        self._tsp_daily_enable = bool(getattr(cfgc, "TSP_DAILY_ENABLE", True))
+        self._tsp_daily_hh = int(getattr(cfgc, "TSP_DAILY_HH", 5))
+        self._tsp_daily_mm = int(getattr(cfgc, "TSP_DAILY_MM", 0))
 
     # ── UI 헬퍼 ─────────────────────────────────────────────
     def _log(self, msg: str) -> None:
@@ -249,14 +272,18 @@ class TSPPageController:
 
         # 2) 60초 쿨다운: CH1(Chamber/PC)와 글로벌 TSP의 최근 종료 시각을 모두 고려 → 최대값 사용
         try:
+            self._refresh_from_config()
+            cd = float(getattr(self, "_tsp_cooldown_s", 60.0))
+
             remain = max(
-                runtime_state.remaining_cooldown("chamber", 1, cooldown_s=60.0),
-                runtime_state.remaining_cooldown("pc", 1, cooldown_s=60.0),
-                runtime_state.remaining_cooldown("tsp", 0, cooldown_s=60.0),  # tsp는 ch=0
+                runtime_state.remaining_cooldown("chamber", 1, cooldown_s=cd),
+                runtime_state.remaining_cooldown("pc", 1, cooldown_s=cd),
+                runtime_state.remaining_cooldown("tsp", 0, cooldown_s=cd),
             )
             if remain > 0.0:
                 secs = int(remain + 0.999)
-                self._post_warning("대기 필요", f"이전 공정 종료 후 1분 대기 필요합니다.\n{secs}초 후에 시작하십시오.")
+                cd_s = int(float(cd) + 0.5)
+                self._post_warning("대기 필요", f"이전 공정 종료 후 {cd_s}초 대기 필요합니다.\n{secs}초 후에 시작하십시오.")
                 return
         except Exception:
             pass
@@ -291,6 +318,8 @@ class TSPPageController:
 
     # ── 내부 실행 루틴 ─────────────────────────────────────
     async def _run(self, target: float, cycles: int) -> None:
+        self._refresh_from_config()
+        
         try:
             # 시작 직전 레이스 가드(Chamber/PC/TSP 전체 확인)
             if (runtime_state.is_running("chamber", 1) or runtime_state.is_running("pc", 1)):
@@ -327,11 +356,11 @@ class TSPPageController:
             cfg = TSPRunConfig(
                 target_pressure=target,
                 cycles=cycles,
-                on_sec=120.0,                 # 2분
-                off_sec=150.0,                # 2분 30초
-                poll_sec=10.0,                # IG 10초 간격 RDI
-                first_check_delay_sec=5.0,    # IG ON 후 5초 대기
-                verify_with_status=True,
+                on_sec=float(getattr(self, "_tsp_on_sec", 120.0)),
+                off_sec=float(getattr(self, "_tsp_off_sec", 150.0)),
+                poll_sec=float(getattr(self, "_tsp_poll_sec", 10.0)),
+                first_check_delay_sec=float(getattr(self, "_tsp_first_check_delay_sec", 5.0)),
+                verify_with_status=bool(getattr(self, "_tsp_verify_with_status", True)),
             )
 
             # ★ 로그 파일 준비
@@ -364,7 +393,9 @@ class TSPPageController:
                 self.chat.notify_process_started(params)
 
             # 사이클 전체 상한: (on+off)×cycles + 여유 5분
-            total_timeout = cycles * (cfg.on_sec + cfg.off_sec) + 300.0
+            margin = float(getattr(self, "_tsp_timeout_margin_s", 300.0))
+            total_timeout = cycles * (cfg.on_sec + cfg.off_sec) + margin
+
             try:
                 result = await asyncio.wait_for(ctrl.run(cfg), timeout=total_timeout)
             except asyncio.TimeoutError:

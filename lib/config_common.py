@@ -241,3 +241,25 @@ ROBOT_RECIPE_FOLDERS = ("CH1", "CH2", "ALD")
 
 # NAS가 순간 느릴 때 무한 대기 방지
 RECIPE_SCAN_TIMEOUT_S = 8.0
+
+# =========================
+# TSP (Turbo/Trap process)
+# =========================
+TSP_IG_TCP_PORT = 4001                    # (선택) IG 포트. 없으면 config_ch1.IG_TCP_PORT 사용
+
+TSP_ON_SEC = 120.0                        # TSP ON 유지 시간(초)
+TSP_OFF_SEC = 150.0                       # TSP OFF 유지 시간(초)
+TSP_POLL_SEC = 10.0                       # IG RDI 폴링 간격(초)
+TSP_FIRST_CHECK_DELAY_SEC = 5.0           # IG ON 후 첫 체크까지 대기(초)
+TSP_VERIFY_WITH_STATUS = True             # TSP on/off 후 status(예: 205)로 확인 여부
+
+TSP_COOLDOWN_S = 60.0                     # 다른 공정 종료 후 시작 쿨다운(초)
+TSP_TOTAL_TIMEOUT_MARGIN_S = 300.0        # 전체 타임아웃 여유(초)
+
+TSP_DAILY_ENABLE = True                   # 매일 자동 실행
+TSP_DAILY_HH = 5                          # 자동 실행 시(HH)
+TSP_DAILY_MM = 0                          # 자동 실행 분(MM)
+
+# (선택) UI 기본값
+TSP_UI_DEFAULT_TARGET = "2.5e-07"         # TSP 페이지 target 기본 표시값
+TSP_UI_DEFAULT_CYCLES = 10                # TSP 페이지 cycles 기본 표시값
