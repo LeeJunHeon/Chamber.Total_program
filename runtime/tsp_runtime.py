@@ -58,9 +58,6 @@ class TSPPageController:
         # ✅ Apply(Runtime) 반영을 위해 config 값으로 즉시 갱신
         self._refresh_from_config()
 
-        # ✅ Apply(Runtime) 반영을 위해 config 값으로 즉시 갱신
-        self._refresh_from_config()
-
         self.chat = chat
 
         # ▼ NAS 로그 설정
@@ -100,7 +97,7 @@ class TSPPageController:
     # ============== UI로 파라미터 수정 ==============
     def _refresh_from_config(self) -> None:
         # Host/Port (없으면 현재 하드코딩 폴백)
-        self.host = str(getattr(cfgc, "TSP_HOST", self.host or "192.168.1.50"))
+        self.host = str(getattr(cfgc, "TSP_TCP_HOST", self.host or "192.168.1.50"))
         self.tsp_port = int(getattr(cfgc, "TSP_TCP_PORT", self.tsp_port or 4004))
 
         # IG는 CH1 포트를 그대로 쓰는 구조라면 config_ch1 우선
