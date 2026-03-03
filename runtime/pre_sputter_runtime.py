@@ -6,10 +6,6 @@ import asyncio
 from datetime import datetime, timedelta
 from typing import Optional, Callable
 
-from controller.runtime_state import runtime_state  # CH1/CH2 실행 상태 조회용
-# ch1, ch2는 runtime.chamber_runtime.ChamberRuntime 인스턴스여야 합니다.
-# (start_presputter_from_ui(), is_running, append_log 등을 가정)
-
 def _next_time_at(hh: int, mm: int) -> datetime:
     """
     오늘 hh:mm, 이미 지났으면 내일 같은 시각을 반환(로컬 시간 기준).
@@ -49,6 +45,8 @@ class PreSputterRuntime:
         mm: int = 0,
         parallel: bool = True,
         wait_log_interval_s: float = 60.0,
+        tick_s: float = 1.0,              # ✅ 추가
+        inter_ch_delay_s: float = 5.0,     # ✅ 추가
         ui=None,
     ) -> None:
         self.ch1 = ch1
@@ -60,8 +58,21 @@ class PreSputterRuntime:
         self.parallel = bool(parallel)
         self.wait_log_interval_s = float(wait_log_interval_s)
 
+        # ✅ 반드시 self에 저장 (없으면 AttributeError)
+        self.tick_s = float(tick_s)
+        self.inter_ch_delay_s = float(inter_ch_delay_s)
+
+        # 안전장치(0/음수 방지)
+        if self.tick_s <= 0:
+            self.tick_s = 1.0
+        if self.inter_ch_delay_s < 0:
+            self.inter_ch_delay_s = 0.0
+
         self._task: Optional[asyncio.Task] = None
         self._repeat_daily: bool = True
+        
+        # ✅ _log_sink 미초기화로 인한 AttributeError 방지
+        self._log_sink: Optional[Callable[[str], None]] = None
 
         self._ui = ui # ★ UI 참조 (없으면 None)
         self._ui_bound: bool = False            # ★ 추가: 중복 바인딩 방지
@@ -105,7 +116,10 @@ class PreSputterRuntime:
             )
             self._set_text(self._ui.preSputter_remainigTime_edit, "—")
 
-        loop = asyncio.get_event_loop_policy().get_event_loop()
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.get_event_loop_policy().get_event_loop()
         self._task = loop.create_task(self._loop(when), name="PreSputterRuntime")
         self._log(f"[PreSputter] 예약 등록: {when.strftime('%Y-%m-%d %H:%M:%S')} (매일 반복)")
 
@@ -200,7 +214,7 @@ class PreSputterRuntime:
                         break
                     if self._ui:
                         self._set_text(self._ui.preSputter_LeftTime_edit, self._fmt_hms(remain_s))
-                    await asyncio.sleep(1.0)
+                    await asyncio.sleep(self.tick_s)
                 if self._ui:
                     self._set_text(self._ui.preSputter_LeftTime_edit, "00:00:00")
 
@@ -255,7 +269,7 @@ class PreSputterRuntime:
         while (self.ch1 and self.ch1.is_running) or (self.ch2 and self.ch2.is_running):
             if self._ui:
                 self._set_text(self._ui.preSputter_remainigTime_edit, "—")
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(self.tick_s)
         if self._ui:
             self._set_text(self._ui.preSputter_remainigTime_edit, "00:00:00")
 
@@ -265,7 +279,8 @@ class PreSputterRuntime:
 
     async def _run_sequential(self) -> None:
         await self._run_one(self.ch1, "CH1")
-        await asyncio.sleep(5.0)  # 버스 안정화/로그 여유
+        if self.ch1 and self.ch2 and self.inter_ch_delay_s > 0:
+            await asyncio.sleep(self.inter_ch_delay_s)
         await self._run_one(self.ch2, "CH2")
 
     async def _run_one(self, ch, label: str) -> None:
@@ -280,7 +295,7 @@ class PreSputterRuntime:
         while ch.is_running:
             if self._ui:
                 self._set_text(self._ui.preSputter_remainigTime_edit, "—")
-            await asyncio.sleep(1.0)
+            await asyncio.sleep(self.tick_s)
         if self._ui:
             self._set_text(self._ui.preSputter_remainigTime_edit, "00:00:00")
 
