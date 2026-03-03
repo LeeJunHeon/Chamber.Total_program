@@ -100,8 +100,6 @@ class AsyncIG:
         # ★ 최신 base-wait만 cleanup 하도록 토큰 사용
         self._base_wait_token = None
 
-        self._first_read_delay_ms = int(self._cfg_get("IG_FIRST_READ_DELAY_MS", 5000))  # IG ON OK 후 첫 RDI 전 지연(1회)
-
         # ✅ 재점등(자동 ON 재시도) 제어 플래그/카운터
         self._suspend_reignite: bool = False     # 종료/취소 중 재점등 금지
         self._total_reignite_attempts: int = 0   # 누적 재점등 횟수
@@ -137,6 +135,9 @@ class AsyncIG:
         self._bg_poll_interval_ms = int(self._cfg_get("IG_POLLING_INTERVAL_MS", 10_000))
         self._inactivity_s = float(getattr(cfgc, "IG_INACTIVITY_REOPEN_S", 0.0))
         self._drain_timeout_s = float(self._cfg_get("IG_DRAIN_TIMEOUT_S", 2.0))
+        
+        # ✅ Apply 반영되도록 여기서 갱신
+        self._first_read_delay_ms = int(self._cfg_get("IG_FIRST_READ_DELAY_MS", 5000))
 
     def is_connected(self) -> bool:
         """프리플라이트/상태 체크용: 현재 TCP 연결 여부."""
@@ -1177,9 +1178,17 @@ class AsyncIG:
         공정 중이면 주기적으로 RDI를 읽어 pressure 이벤트를 방출하고,
         공정이 아니면 폴링을 중단한다. (wait_for_base()와는 별개 루프)
         """
+        # ✅ 동기 컨텍스트에서도 안전하게 loop 확보
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = asyncio.get_event_loop_policy().get_event_loop()
+
         if should_poll:
+            # ✅ 워치독/워커가 안 떠있을 수도 있으니 안전하게 start 예약
+            loop.create_task(self.start())
+
             if self._bg_poll_task is None or self._bg_poll_task.done():
-                loop = asyncio.get_running_loop()
                 self._bg_poll_task = loop.create_task(self._bg_poll_loop(), name="IGBgPoll")
         else:
             t = self._bg_poll_task
@@ -1187,7 +1196,7 @@ class AsyncIG:
                 t.cancel()
             self._bg_poll_task = None
 
-            # ✅ 추가: 공정 종료 시 잔여 명령/응답라인 정리(다음 공정 오염 방지)
+            # 공정 종료 시 잔여 명령/응답라인 정리(다음 공정 오염 방지)
             self._waiting_active = False
             self._suspend_reignite = True
             self._purge_pending("process finished")
@@ -1228,7 +1237,11 @@ class AsyncIG:
         self._override_host = str(host)
         self._override_port = int(port)
         if reconnect:
-            asyncio.create_task(self._bounce_connection())
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                loop = asyncio.get_event_loop_policy().get_event_loop()
+            loop.create_task(self._bounce_connection())
 
     async def _bounce_connection(self) -> None:
         await self.pause_watchdog()
