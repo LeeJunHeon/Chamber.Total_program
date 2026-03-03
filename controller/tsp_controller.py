@@ -1,22 +1,24 @@
 # controller/tsp_controller.py
 # -*- coding: utf-8 -*-
 from __future__ import annotations
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import Optional, Callable
 import asyncio, math, contextlib
+
+from lib import config_common as cfgc
 
 from device.tsp import AsyncTSP
 from device.ig import AsyncIG
 
 @dataclass
 class TSPRunConfig:
-    target_pressure: float            # 목표 압력(이하 도달 시 종료)
-    cycles: int                       # TSP ON/OFF 반복 횟수
-    on_sec: float = 120.0             # TSP ON 유지 시간(2분)
-    off_sec: float = 150.0            # TSP OFF 유지 시간(2분 30초)
-    poll_sec: float = 10.0            # IG RDI 폴링 주기(10초)
-    first_check_delay_sec: float = 5.0  # IG ON 후 첫 판정 전 대기(5초)
-    verify_with_status: bool = True   # TSP on/off 후 205 상태확인
+    target_pressure: float
+    cycles: int
+    on_sec: Optional[float] = None   # ✅ None이면 config_common(TSP_*)에서 채움
+    off_sec: Optional[float] = None
+    poll_sec: Optional[float] = None
+    first_check_delay_sec: Optional[float] = None
+    verify_with_status: Optional[bool] = None
 
 @dataclass
 class TSPRunResult:
@@ -58,8 +60,32 @@ class TSPProcessController:
     def _emit_cycle(self, cur: int, total: int) -> None:
         if self.cycle_cb: self.cycle_cb(cur, total)
 
+    def _resolve_cfg(self, cfg: TSPRunConfig) -> TSPRunConfig:
+        """
+        cfg의 None 필드를 config_common(TSP_*) 값으로 채운다.
+        -> TSP 설정은 이제 config_common.py에서만 관리.
+        """
+        on_sec = cfg.on_sec if cfg.on_sec is not None else float(getattr(cfgc, "TSP_ON_SEC", 120.0))
+        off_sec = cfg.off_sec if cfg.off_sec is not None else float(getattr(cfgc, "TSP_OFF_SEC", 150.0))
+        poll_sec = cfg.poll_sec if cfg.poll_sec is not None else float(getattr(cfgc, "TSP_POLL_SEC", 10.0))
+        first_wait = cfg.first_check_delay_sec if cfg.first_check_delay_sec is not None else float(getattr(cfgc, "TSP_FIRST_CHECK_DELAY_SEC", 5.0))
+        verify = cfg.verify_with_status if cfg.verify_with_status is not None else bool(getattr(cfgc, "TSP_VERIFY_WITH_STATUS", True))
+
+        # 안전장치(0/음수 방지)
+        on_sec = max(0.0, float(on_sec))
+        off_sec = max(0.0, float(off_sec))
+        poll_sec = max(0.1, float(poll_sec))  # 0이면 busy loop 방지
+        first_wait = max(0.0, float(first_wait))
+
+        return replace(cfg,
+                    on_sec=on_sec,
+                    off_sec=off_sec,
+                    poll_sec=poll_sec,
+                    first_check_delay_sec=first_wait,
+                    verify_with_status=verify)
+
     async def _poll_until(self, *, target: float, duration: float, poll_sec: float) -> tuple[bool, float]:
-        loop = asyncio.get_event_loop()
+        loop = asyncio.get_running_loop()
         deadline = loop.time() + max(0.0, duration)
         last_p = self._last_pressure
         while True:
@@ -75,15 +101,24 @@ class TSPProcessController:
             now = loop.time()
             if now >= deadline:
                 return False, last_p
-            await asyncio.sleep(min(poll_sec, max(0.0, deadline - now)))
+            
+            poll_s = max(0.1, float(poll_sec))  # ✅ 최소 폴링 간격
+            await asyncio.sleep(min(poll_s, max(0.0, deadline - now)))
 
     async def run(self, cfg: TSPRunConfig) -> TSPRunResult:
         cycles_done = 0
         self._last_pressure = math.nan
-        reason: Optional[str] = None
 
-        # 옵션 전달
-        self.tsp.verify_with_status = cfg.verify_with_status
+        # ✅ config_common 기반으로 None 필드 채움
+        cfg = self._resolve_cfg(cfg)
+
+        # ✅ cycles 유효성(0이면 바로 실패 처리)
+        if int(cfg.cycles) <= 0:
+            return TSPRunResult(False, 0, self._last_pressure, "invalid_cycles")
+
+        # 옵션 전달(그리고 원복을 위해 백업)
+        old_verify = getattr(self.tsp, "verify_with_status", None)
+        self.tsp.verify_with_status = bool(cfg.verify_with_status)
 
         try:
             self._emit_state("prepare")
@@ -145,6 +180,12 @@ class TSPProcessController:
 
         finally:
             self._emit_state("cleanup")
+
+            # ✅ verify_with_status 원복(존재할 때만)
+            with contextlib.suppress(Exception):
+                if old_verify is not None:
+                    self.tsp.verify_with_status = old_verify
+
             with contextlib.suppress(Exception):
                 await self.tsp.off()
             if self.turn_off_ig_on_finish:
