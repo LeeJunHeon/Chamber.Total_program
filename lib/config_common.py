@@ -85,19 +85,26 @@ RGA_NET = {
 # ======================================================================
 # IG (공통 상수; 포트는 채널 파일에서 오버라이드)
 # ======================================================================
-IG_TCP_HOST = "192.168.1.50"
-IG_TX_EOL   = b"\r"
-IG_SKIP_ECHO = True
-IG_WAIT_TIMEOUT = 600   # 목표 압력 대기 총 한도(초)
-IG_CONNECT_TIMEOUT_S = 3.0
-IG_TIMEOUT_MS = 3000
-IG_GAP_MS = 1000
-IG_POLLING_INTERVAL_MS = 10_000
-IG_WATCHDOG_INTERVAL_MS = 2_000
-IG_RECONNECT_BACKOFF_START_MS = 1000
-IG_RECONNECT_BACKOFF_MAX_MS = 20_000
-IG_REIGNITE_MAX_ATTEMPTS = 3
-IG_REIGNITE_BACKOFF_MS = [2000, 5000, 10000]
+IG_TCP_HOST = "192.168.1.50"              # IG TCP Host (MOXA/NPort)
+IG_TX_EOL   = b"\r"                       # IG 명령 EOL (기본 CR)
+IG_SKIP_ECHO = True                       # 장비가 보낸 에코라인을 응답에서 무시
+
+IG_CONNECT_TIMEOUT_S = 3.0                # TCP connect 타임아웃(초)
+IG_TIMEOUT_MS = 3000                      # 명령 1회 응답 타임아웃(ms)
+IG_GAP_MS = 1000                          # 명령 간 최소 간격(ms)
+
+IG_POLLING_INTERVAL_MS = 10_000           # RDI 폴링 기본 주기(ms)
+IG_WATCHDOG_INTERVAL_MS = 2_000           # 연결 상태 체크 주기(ms)
+IG_RECONNECT_BACKOFF_START_MS = 1000      # 재연결 backoff 시작(ms)
+IG_RECONNECT_BACKOFF_MAX_MS = 20_000      # 재연결 backoff 최대(ms)
+
+IG_WAIT_TIMEOUT = 600                     # base pressure 대기 총 한도(초)
+IG_REIGNITE_MAX_ATTEMPTS = 3              # "IG OFF" 자동 재점등 최대 횟수
+IG_REIGNITE_BACKOFF_MS = [2000, 5000, 10000]  # 재점등 실패 시 backoff(ms)
+
+IG_DRAIN_TIMEOUT_S = 2.0                  # ★ writer.drain() 최대 대기(초) (멈춤 방지)
+
+IG_FIRST_READ_DELAY_MS = 5000             # (선택) SIG 1 후 첫 RDI 전 대기(ms)
 
 
 # ======================================================================

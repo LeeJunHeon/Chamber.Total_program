@@ -20,11 +20,7 @@ from typing import Optional, Callable, Deque, AsyncGenerator, Literal
 import asyncio, time, contextlib, socket
 
 from lib import config_common as cfgc
-from lib.config_ch2 import (
-    IG_TCP_HOST, IG_TCP_PORT, IG_TX_EOL, IG_SKIP_ECHO, IG_TIMEOUT_MS, IG_GAP_MS, IG_CONNECT_TIMEOUT_S,
-    IG_POLLING_INTERVAL_MS, IG_WATCHDOG_INTERVAL_MS, IG_RECONNECT_BACKOFF_START_MS, 
-    IG_RECONNECT_BACKOFF_MAX_MS, IG_REIGNITE_MAX_ATTEMPTS, IG_REIGNITE_BACKOFF_MS, IG_WAIT_TIMEOUT
-)
+from lib import config_ch2 as cfg_default  # ✅ 기존 동작 유지용 기본 cfg(원하면 ch1 인스턴스는 config_ch1을 넘겨주면 됨)
 
 # =========================
 # 이벤트 모델
@@ -54,18 +50,27 @@ class Command:
 #  IG asyncio 컨트롤러
 # =========================
 class AsyncIG:
-    def __init__(self, host: Optional[str] = None, port: Optional[int] = None):
-        # 채널별 오버라이드(없으면 config 기본 사용)
+    def __init__(self, host: Optional[str] = None, port: Optional[int] = None, cfg=None):
+        # ✅ 이 인스턴스가 참조할 config 모듈(채널별로 config_ch1/config_ch2를 넘길 수 있음)
+        self._cfg = cfg if cfg is not None else cfg_default
+
         self._override_host: Optional[str] = host
         self._override_port: Optional[int] = port
 
-        # 연결/프로토콜
         self._reader: Optional[asyncio.StreamReader] = None
         self._writer: Optional[asyncio.StreamWriter] = None
         self._reader_task: Optional[asyncio.Task] = None
-        self._tx_eol: bytes = IG_TX_EOL
-        self._tx_eol_str: str = IG_TX_EOL.decode("ascii", "ignore")  # ← 1회만 디코드
-        self._skip_echo: bool = bool(IG_SKIP_ECHO)
+
+        # ✅ cfg에서 읽어오는 “캐시 값들”은 한 곳에서 갱신
+        self._tx_eol: bytes = b"\r"
+        self._tx_eol_str: str = "\r"
+        self._skip_echo: bool = True
+        self._poll_interval_ms: int = 10_000
+        self._bg_poll_interval_ms: int = 10_000
+        self._inactivity_s: float = 0.0
+        self._drain_timeout_s: float = 2.0
+
+        self._reload_cfg_cached()
 
         self._connected: bool = False         # ← 누락되어 있던 상태 플래그 추가
         self._ever_connected: bool = False
@@ -95,7 +100,7 @@ class AsyncIG:
         # ★ 최신 base-wait만 cleanup 하도록 토큰 사용
         self._base_wait_token = None
 
-        self._first_read_delay_ms = 5000  # IG ON OK 후 첫 RDI 전 지연(1회)
+        self._first_read_delay_ms = int(self._cfg_get("IG_FIRST_READ_DELAY_MS", 5000))  # IG ON OK 후 첫 RDI 전 지연(1회)
 
         # ✅ 재점등(자동 ON 재시도) 제어 플래그/카운터
         self._suspend_reignite: bool = False     # 종료/취소 중 재점등 금지
@@ -104,18 +109,34 @@ class AsyncIG:
 
         # ✅ 최근 읽은 압력과 폴링 인터벌(로그용)
         self._last_pressure: Optional[float] = None
-        self._poll_interval_ms: int = IG_POLLING_INTERVAL_MS
 
         # 워치독 일시정지 플래그
         self._wd_paused: bool = False
 
         # 백그라운드(상시) 압력 폴링 (wait_for_base와 별개)
         self._bg_poll_task: Optional[asyncio.Task] = None
-        self._bg_poll_interval_ms: int = IG_POLLING_INTERVAL_MS
 
         # ★ Inactivity 전략 필드
         self._inactivity_s: float = float(getattr(cfgc, "IG_INACTIVITY_REOPEN_S", 0.0))
         self._last_io_mono: float = 0.0
+
+    def _cfg_get(self, key: str, default):
+        # 우선순위: self._cfg(채널) → cfgc(공통) → default
+        if hasattr(self._cfg, key):
+            return getattr(self._cfg, key)
+        return getattr(cfgc, key, default)
+
+    def _reload_cfg_cached(self) -> None:
+        # 프로토콜/라인
+        self._tx_eol = self._cfg_get("IG_TX_EOL", b"\r")
+        self._tx_eol_str = self._tx_eol.decode("ascii", "ignore")
+        self._skip_echo = bool(self._cfg_get("IG_SKIP_ECHO", True))
+
+        # 폴링/유휴/드레인
+        self._poll_interval_ms = int(self._cfg_get("IG_POLLING_INTERVAL_MS", 10_000))
+        self._bg_poll_interval_ms = int(self._cfg_get("IG_POLLING_INTERVAL_MS", 10_000))
+        self._inactivity_s = float(getattr(cfgc, "IG_INACTIVITY_REOPEN_S", 0.0))
+        self._drain_timeout_s = float(self._cfg_get("IG_DRAIN_TIMEOUT_S", 2.0))
 
     def is_connected(self) -> bool:
         """프리플라이트/상태 체크용: 현재 TCP 연결 여부."""
@@ -126,6 +147,10 @@ class AsyncIG:
     # ---------------------------
     async def start(self):
         """워치독/커맨드 워커 시작. (연결은 워치독이 담당)"""
+
+        # ✅ Apply 후 값 변경이 start/connect 시점에 반영되도록
+        self._reload_cfg_cached()
+
         # 죽은 태스크 정리
         if self._watchdog_task and self._watchdog_task.done():
             self._watchdog_task = None
@@ -226,23 +251,30 @@ class AsyncIG:
         cmd_str: str,
         on_reply: Optional[Callable[[Optional[str]], None]] = None,
         *,
-        timeout_ms: int = IG_TIMEOUT_MS,
-        gap_ms: int = IG_GAP_MS,
+        timeout_ms: Optional[int] = None,
+        gap_ms: Optional[int] = None,
         tag: str = "",
         retries_left: int = 5,
         allow_no_reply: bool = False,
     ):
-        """명령을 큐에 추가(단일 직렬 처리)."""
+        if timeout_ms is None:
+            timeout_ms = int(self._cfg_get("IG_TIMEOUT_MS", 3000))
+        if gap_ms is None:
+            gap_ms = int(self._cfg_get("IG_GAP_MS", 1000))
+
         if not cmd_str.endswith(self._tx_eol_str):
             cmd_str += self._tx_eol_str
-        self._cmd_q.append(Command(cmd_str, on_reply, timeout_ms, gap_ms, tag, retries_left, allow_no_reply))
+        self._cmd_q.append(Command(cmd_str, on_reply, int(timeout_ms), int(gap_ms), tag, retries_left, allow_no_reply))
 
-    async def wait_for_base_pressure(self, base_pressure: float, interval_ms: int = IG_POLLING_INTERVAL_MS) -> bool:
+    async def wait_for_base_pressure(self, base_pressure: float, interval_ms: Optional[int] = None) -> bool:
         """
         IG를 켜고(SIG 1) 목표 압력에 도달할 때까지 폴링(RDI) 후, 도달하면 SIG 0로 끄고 True를 반환.
         시간 초과 시 SIG 0 후 False.
         (진행 중 이벤트는 events() 제너레이터로도 전달)
         """
+        if interval_ms is None:
+            interval_ms = int(self._cfg_get("IG_POLLING_INTERVAL_MS", 10_000))
+
         # ★ 이번 호출 토큰(세대) 생성
         my_token = object()
         self._base_wait_token = my_token
@@ -284,10 +316,11 @@ class AsyncIG:
         await self._emit_status(f"IG ON OK → 첫 RDI를 {self._first_read_delay_ms}ms 후 수행")
         await asyncio.sleep(self._first_read_delay_ms / 1000.0)
 
-        # ⬇️ 보냄/대기/타임아웃을 상태 로그로 노출
-        await self._emit_status(f"[FIRST READ] RDI 송신 및 응답 대기(최대 {IG_TIMEOUT_MS}ms)")
-        line = await self._send_and_wait_line("RDI", tag="[FIRST READ AFTER ON]", timeout_ms=IG_TIMEOUT_MS)
+        timeout_ms = int(self._cfg_get("IG_TIMEOUT_MS", 3000))
+        await self._emit_status(f"[FIRST READ] RDI 송신 및 응답 대기 (최대 {timeout_ms}ms)")
+        line = await self._send_and_wait_line("RDI", tag="[FIRST READ AFTER ON]", timeout_ms=timeout_ms)
 
+        limit_s = float(self._cfg_get("IG_WAIT_TIMEOUT", 600))
 
         if line is None:
             await self._emit_status("[FIRST READ] RDI 타임아웃 → 재연결 트리거")
@@ -308,10 +341,7 @@ class AsyncIG:
 
         try:
             # 하드 타임아웃: 내부 timeout + 첫 지연 + 여유
-            try:
-                limit_s = float(IG_WAIT_TIMEOUT)
-            except Exception:
-                limit_s = 120.0
+            limit_s = float(self._cfg_get("IG_WAIT_TIMEOUT", 600))
             hard_deadline = self._wait_start_s + limit_s + (self._first_read_delay_ms/1000.0) + 5.0
 
             while self._waiting_active:
@@ -393,19 +423,18 @@ class AsyncIG:
 
     def _resolve_endpoint(self) -> tuple[str, int]:
         """최종 접속 host/port 결정: override > config 기본값."""
-        host = self._override_host if self._override_host else IG_TCP_HOST
-        port = self._override_port if self._override_port else IG_TCP_PORT
-        return str(host), int(port)
-
+        host = self._override_host if self._override_host else str(self._cfg_get("IG_TCP_HOST", "127.0.0.1"))
+        port = self._override_port if self._override_port else int(self._cfg_get("IG_TCP_PORT", 4001))
+        return host, port
 
     # ---------------------------
     # 내부: 연결/워치독
     # ---------------------------
     async def _watchdog_loop(self):
-        backoff = IG_RECONNECT_BACKOFF_START_MS
+        backoff = int(self._cfg_get("IG_RECONNECT_BACKOFF_START_MS", 1000))
         while self._want_connected:
             if self._connected:
-                await asyncio.sleep(IG_WATCHDOG_INTERVAL_MS / 1000.0)
+                await asyncio.sleep(int(self._cfg_get("IG_WATCHDOG_INTERVAL_MS", 2000)) / 1000.0)
                 continue
 
             if self._ever_connected:
@@ -419,12 +448,12 @@ class AsyncIG:
                 host, port = self._resolve_endpoint()
                 reader, writer = await asyncio.wait_for(
                     asyncio.open_connection(host, port),
-                    timeout=max(0.5, float(IG_CONNECT_TIMEOUT_S))
+                    timeout=max(0.5, float(self._cfg_get("IG_CONNECT_TIMEOUT_S", 3.0)))
                 )
                 self._reader, self._writer = reader, writer
                 self._connected = True
                 self._ever_connected = True
-                backoff = IG_RECONNECT_BACKOFF_START_MS
+                backoff = int(self._cfg_get("IG_RECONNECT_BACKOFF_START_MS", 1000))
 
                 # ★ Keepalive는 config에 따름(기본 False 권장)
                 try:
@@ -456,7 +485,7 @@ class AsyncIG:
             except Exception as e:
                 host, port = self._resolve_endpoint()
                 await self._emit_status(f"{host}:{port} 연결 실패: {e}")
-                backoff = min(backoff * 2, IG_RECONNECT_BACKOFF_MAX_MS)
+                backoff = min(backoff * 2, int(self._cfg_get("IG_RECONNECT_BACKOFF_MAX_MS", 20_000)))
 
     async def _tcp_reader_loop(self):
         assert self._reader is not None
@@ -607,7 +636,7 @@ class AsyncIG:
                 # ★ 송신 직전에 IO 시각 갱신
                 self._last_io_mono = time.monotonic()
                 self._writer.write(payload)
-                await self._writer.drain()
+                await asyncio.wait_for(self._writer.drain(), timeout=self._drain_timeout_s)
             except Exception as e:
                 self._inflight = None
                 await self._emit_status(f"[SEND-ERROR] {cmd.tag} {sent_txt} 전송 오류: {e!r}")
@@ -677,10 +706,8 @@ class AsyncIG:
         """주기적 RDI 폴링(미도달 시 대기→재시도, 예외 안전)."""
         try:
             # IG_WAIT_TIMEOUT이 비정상이어도 안전하게 숫자로
-            try:
-                wait_limit_s = float(IG_WAIT_TIMEOUT)
-            except Exception:
-                wait_limit_s = 120.0  # 합리적 기본값
+            wait_limit_s = float(self._cfg_get("IG_WAIT_TIMEOUT", 600))
+            timeout_ms = int(self._cfg_get("IG_TIMEOUT_MS", 3000))
 
             while self._waiting_active:
                 if not self._connected:
@@ -688,7 +715,12 @@ class AsyncIG:
                     continue
 
                 # 1) RDI 1회 시도 (타임아웃은 per-command)
-                line = await self._send_and_wait_line("RDI", tag="[POLL RDI]", timeout_ms=IG_TIMEOUT_MS)
+                line = await self._send_and_wait_line(
+                    "RDI",
+                    tag="[POLL RDI]",
+                    timeout_ms=timeout_ms,
+                    retries=0,
+                )
                 if not self._waiting_active:
                     break
 
@@ -737,11 +769,13 @@ class AsyncIG:
             # ✅ 종료/취소 중에는 재점등 금지
             if not self._waiting_active or self._suspend_reignite:
                 return
+            
+            max_attempts = int(self._cfg_get("IG_REIGNITE_MAX_ATTEMPTS", 3))
 
             # ✅ 재점등 총 횟수 상한 (예: 3회) 초과 → 즉시 공정 실패 처리
-            if self._total_reignite_attempts >= int(IG_REIGNITE_MAX_ATTEMPTS):
+            if self._total_reignite_attempts >= max_attempts:
                 await self._emit_status(
-                    f"IG OFF 응답 반복 → 자동 재점등 중단(상한 {IG_REIGNITE_MAX_ATTEMPTS}회 도달). 공정 실패로 종료"
+                    f"IG OFF 응답 반복 → 자동 재점등 중단(상한 {max_attempts}회 도달). 공정 실패로 종료"
                 )
                 # 더 이상 이 wait 루프는 의미 없으므로 종료 플래그 설정
                 self._waiting_active = False
@@ -758,7 +792,7 @@ class AsyncIG:
             # 상한에 아직 도달하지 않았다면 재점등 시도
             self._total_reignite_attempts += 1
             await self._emit_status(
-                f"IG OFF 응답 감지 → 자동 재점등 시도({self._total_reignite_attempts}/{IG_REIGNITE_MAX_ATTEMPTS})"
+                f"IG OFF 응답 감지 → 자동 재점등 시도({self._total_reignite_attempts}/{max_attempts})"
             )
 
             # 폴링 태스크 루프 내에서는 다음 콜로 재개
@@ -767,7 +801,9 @@ class AsyncIG:
                 await self._emit_status("재점등 성공. 첫 RDI 후 폴링 재개")
                 await asyncio.sleep(self._first_read_delay_ms / 1000.0)
                 # 즉시 한 번 더 읽어 최신화
-                line2 = await self._send_and_wait_line("RDI", tag="[AFTER RE-ON]", timeout_ms=IG_TIMEOUT_MS)
+                timeout_ms = int(self._cfg_get("IG_TIMEOUT_MS", 3000))
+                line2 = await self._send_and_wait_line("RDI", tag="[AFTER RE-ON]", timeout_ms=timeout_ms, retries=0)
+
                 await self._handle_rdi_line(line2)
             else:
                 await self._emit_status("자동 재점등 실패(한도 도달). 폴링만 재개")
@@ -801,7 +837,8 @@ class AsyncIG:
             return False
 
         # ms 리스트를 초로 변환
-        delays_s = [max(0, int(ms)) / 1000.0 for ms in IG_REIGNITE_BACKOFF_MS] or [2.0, 5.0, 10.0]
+        backoffs = self._cfg_get("IG_REIGNITE_BACKOFF_MS", [2000, 5000, 10000])
+        delays_s = [max(0, int(ms)) / 1000.0 for ms in backoffs] or [2.0, 5.0, 10.0]
 
         for sec in delays_s:
             if not self._waiting_active or self._suspend_reignite:
@@ -817,7 +854,8 @@ class AsyncIG:
     async def _send_and_expect_ok(self, cmd: str, *, tag: str, retries: int) -> bool:
         """cmd 송신 후 'OK'로 시작하는 응답을 기대."""
         for i in range(max(1, int(retries))):
-            line = await self._send_and_wait_line(cmd, tag=tag, timeout_ms=IG_TIMEOUT_MS, retries=0)
+            timeout_ms = int(self._cfg_get("IG_TIMEOUT_MS", 3000))
+            line = await self._send_and_wait_line(cmd, tag=tag, timeout_ms=timeout_ms, retries=0)
             if (line or "").strip().upper().startswith("OK"):
                 return True
             # 'OK'가 아니면 재연결 트리거
@@ -840,8 +878,12 @@ class AsyncIG:
 
             # 워커 쪽 재시도는 끈다(retries_left=0)
             self.enqueue(
-                cmd, _cb, timeout_ms=timeout_ms, gap_ms=IG_GAP_MS,
-                tag=tag, retries_left=0, allow_no_reply=False
+                cmd,
+                _cb,
+                timeout_ms=timeout_ms,   # timeout만 함수 인자로 유지
+                tag=tag,
+                retries_left=0,
+                allow_no_reply=False,
             )
             try:
                 # 워커 타임아웃 + 약간의 마진(네고 가능)
@@ -861,14 +903,18 @@ class AsyncIG:
             and self._cmd_worker_task and not self._cmd_worker_task.done()
         ):
             try:
+                timeout_ms = int(self._cfg_get("IG_TIMEOUT_MS", 3000))
+                gap_base_ms = int(self._cfg_get("IG_GAP_MS", 1000))
+
                 self.enqueue(
                     "SIG 0",
-                    timeout_ms=IG_TIMEOUT_MS,
-                    gap_ms=max(int(wait_gap_ms), int(IG_GAP_MS)),
+                    timeout_ms=timeout_ms,
+                    gap_ms=max(int(wait_gap_ms), gap_base_ms),
                     tag="[IG OFF]",
                     retries_left=0,          # 워커 재시도는 끔(OFF는 best-effort)
-                    allow_no_reply=True,     # 응답은 안 기다림(대신 아래 (4)에서 늦은 응답 흡수)
+                    allow_no_reply=True,     # 응답은 안 기다림
                 )
+                
                 # 큐에서 빠져나가 실제 write/drain까지 끝날 시간을 약간 보장
                 await self._drain_until_idle(timeout_ms=max(600, int(wait_gap_ms) + 300))
                 await asyncio.sleep(max(0, int(wait_gap_ms)) / 1000.0)
@@ -883,7 +929,7 @@ class AsyncIG:
                 await self._emit_status("[SEND] SIG 0 (direct)")
                 self._last_io_mono = time.monotonic()
                 self._writer.write(b"SIG 0" + self._tx_eol)
-                await self._writer.drain()
+                await asyncio.wait_for(self._writer.drain(), timeout=self._drain_timeout_s)
                 await asyncio.sleep(max(0, wait_gap_ms) / 1000.0)
                 return True
             except Exception as e:
@@ -895,10 +941,10 @@ class AsyncIG:
             host, port = self._resolve_endpoint()
             _, writer = await asyncio.wait_for(
                 asyncio.open_connection(host, port),
-                timeout=max(0.5, float(IG_CONNECT_TIMEOUT_S))
+                timeout=max(0.5, float(self._cfg_get("IG_CONNECT_TIMEOUT_S", 3.0)))
             )
             writer.write(b"SIG 0" + self._tx_eol)
-            await writer.drain()
+            await asyncio.wait_for(writer.drain(), timeout=self._drain_timeout_s)
             writer.close()
             with contextlib.suppress(Exception):
                 await writer.wait_closed()
@@ -1043,7 +1089,9 @@ class AsyncIG:
         IGControllerLike.read_pressure 구현:
         - 'RDI' 1회 → 라인 파싱 → Torr(float) 반환
         """
-        line = await self._send_and_wait_line("RDI", tag="[read_pressure]", timeout_ms=IG_TIMEOUT_MS)
+        timeout_ms = int(self._cfg_get("IG_TIMEOUT_MS", 3000))
+        line = await self._send_and_wait_line("RDI", tag="[read_pressure]", timeout_ms=timeout_ms, retries=0)
+        
         if not line:
             raise RuntimeError("RDI timeout")
 
@@ -1158,7 +1206,9 @@ class AsyncIG:
                     continue
 
                 # 1회 RDI → pressure 이벤트
-                line = await self._send_and_wait_line("RDI", tag="[BG-POLL RDI]", timeout_ms=IG_TIMEOUT_MS, retries=0)
+                timeout_ms = int(self._cfg_get("IG_TIMEOUT_MS", 3000))
+                line = await self._send_and_wait_line("RDI", tag="[BG-POLL RDI]", timeout_ms=timeout_ms, retries=0)
+
                 if line:
                     s = line.strip().lower().replace("x10e", "e")
                     try:
