@@ -40,17 +40,29 @@ def format_error_message(info: ErrorInfo, *, detail: str = "") -> str:
         return f"해결방법: {fix}".strip()
     return ""
 
-def build_fail_payload(*, code: Optional[str] = None, message: Any = "", detail: Any = None) -> dict:
-    msg = _to_text(message).strip()
-    info = build_error_info(code=code, message=msg)
+def _one_line(s: str, limit: int = 2000) -> str:
+    s = " ".join((s or "").replace("\r", "\n").splitlines()).strip()
+    if len(s) > limit:
+        s = s[:limit] + "…"
+    return s
 
-    # ✅ message는 원인/해결방법만 (상세는 message에 넣지 않음)
+def build_fail_payload(*, code: Optional[str] = None, message: Any = "", detail: Any = None) -> dict:
+    raw = _one_line(_to_text(message).strip())
+    info = build_error_info(code=code, message=raw)
+
+    # ✅ 사용자 표시용(원인+해결방법)
     human = format_error_message(info)
+    if not human:
+        human = raw or "오류가 발생했습니다."
+
+    # ✅ 디버깅용(detail) — 기본은 원래 message를 저장
+    det = _one_line(_to_text(detail).strip()) if detail is not None else raw
 
     return {
         "result": "fail",
-        "message": human,      # ✅ 원인 + 해결방법만
+        "message": human,        # 팝업/채팅/기본 표시용
         "error_code": info.code,
+        "detail": det,           # ✅ 로그/분석용
     }
 
 def notify_all(
@@ -62,35 +74,36 @@ def notify_all(
     code: Optional[str] = None,
     message: Any = "",
 ) -> dict:
-    payload = build_fail_payload(code=code, message=message)
+    # ✅ detail에 원래 message를 그대로 넣어둠(호출부 수정 불필요)
+    payload = build_fail_payload(code=code, message=message, detail=message)
     text = payload.get("message", "")
+    detail = payload.get("detail", "")
 
-    # 1) UI 로그창
+    # 1) UI 로그창/파일 로그에는 detail까지 남김
     if callable(log):
         try:
-            log(f"ERROR/{src}", text)
+            err_code = str(payload.get("error_code", "") or "").strip()
+            log_text = text if not detail or detail == text else f"{text} | detail: {detail}"
+            if err_code:
+                log_text = f"[{err_code}] {log_text}"
+            log(f"ERROR/{src}", log_text)
         except Exception:
             pass
 
-    # 2) Google Chat
-    #    - HOST/통신 계열 오류는 '끝'이 없어서 집계하지 말고 발생 즉시 전송
-    #    - ChatNotifier에 notify_error_event(src, error_code, message) 경로를 우선 사용
+    # 2) Chat/Popup은 기존처럼 text만(너무 길어지는 것 방지)
     if chat is not None:
         try:
             err_code = str(payload.get("error_code", "") or "").strip()
-
             fn = getattr(chat, "notify_error_event", None)
             if callable(fn):
                 fn(src, err_code, text)
             else:
-                # 하위 호환(구버전 ChatNotifier)
                 fn2 = getattr(chat, "notify_error_with_src", None)
                 if callable(fn2):
                     fn2(src, text)
         except Exception:
             pass
 
-    # 3) 알림창(팝업)
     if callable(popup):
         try:
             popup(f"오류({src})", text)
