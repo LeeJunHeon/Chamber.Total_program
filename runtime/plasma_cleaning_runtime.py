@@ -333,16 +333,23 @@ class PlasmaCleaningRuntime:
                 continue
             try:
                 if name == "PLC":
-                    # PLC는 첫 I/O에서 연결 → 무해한 coil 읽기로 핸드셰이크
-                    await dev.read_coil(0)
+                    # ✅ PLC read가 멈추는 상황 방지
+                    await asyncio.wait_for(dev.read_coil(0), timeout=1.0)
                     self.append_log("PC", "PLC 핸드셰이크(read_coil 0)")
                 else:
                     fn = getattr(dev, "connect", None)
                     if not callable(fn):
                         raise RuntimeError(f"{name}는 connect()를 제공해야 합니다 (start() 금지)")
-                    res = fn()
-                    if inspect.isawaitable(res):
-                        await res
+
+                    # ✅ connect가 async면 wait_for로, sync면 to_thread로 이벤트루프 프리징 방지
+                    try:
+                        if inspect.iscoroutinefunction(fn):
+                            await asyncio.wait_for(fn(), timeout=3.0)
+                        else:
+                            await asyncio.wait_for(asyncio.to_thread(fn), timeout=3.0)
+                    except asyncio.TimeoutError:
+                        raise RuntimeError(f"{name} connect timeout(3s)")
+
                     self.append_log("PC", f"{name} connect 호출")
             except Exception as e:
                 raise RuntimeError(f"{name} 연결 실패: {e!r}")
@@ -1076,7 +1083,10 @@ class PlasmaCleaningRuntime:
             if self.plc:
                 key = f"G_V_{ch}_인터락"
                 self.append_log("PLC", "GV 인터락 확인(프리플라이트)")
-                gv_ok = bool(await self.plc.read_bit(key))
+                try:
+                    gv_ok = bool(await asyncio.wait_for(self.plc.read_bit(key), timeout=0.6))
+                except asyncio.TimeoutError:
+                    raise RuntimeError(f"GV 인터락 read timeout(0.6s): {key}")
         except Exception as e:
             msg = f"게이트밸브 인터락 상태 확인 실패: {e}"
             self._post_critical(

@@ -304,6 +304,10 @@ class ChamberRuntime:
         self._notify_plc_owner = on_plc_owner 
         self._last_running_state: Optional[bool] = None  
         self._rf_pulse_reserved: bool = False
+        
+        # ✅ 런(시작) 세대 번호: 프리플라이트/정리 레이스 방지 + watchdog 식별
+        self._run_gen: int = 0
+        self._active_run_gen: int = 0
     
         # ✅ Host 응답용 Future (프리플라이트가 끝나면 결과를 세팅)
         self._host_start_future: Optional[asyncio.Future] = None
@@ -2040,10 +2044,17 @@ class ChamberRuntime:
                     self.append_log("Validate", "CSV 공정 파라미터 오류:\n - " + "\n - ".join(errs))
                     self._clear_queue_and_reset_ui()
                     return
+                
+                # ✅ 중요:
+                # - 이전 공정의 finished 처리에서 이미 _stop_device_watchdogs(light=False)가
+                #   _shutdown_log_writer()까지 await로 끝내는 구조다.
+                # - 여기서 _shutdown_log_writer()를 detached로 또 돌리면,
+                #   "새 공정 시작"과 경합(race)하면서 새 로그/프리플라이트가 꼬일 수 있다.
+                #
+                # 따라서 "다음 공정 시작" 단계에서는 writer shutdown을 재호출하지 않는다.
+                # with contextlib.suppress(Exception):
+                #     self._spawn_detached(self._shutdown_log_writer())
 
-                # 새 스텝마다 이전 파일 정리 후 새 파일로 시작
-                with contextlib.suppress(Exception):
-                    self._spawn_detached(self._shutdown_log_writer())
                 self._log_file_path = None
 
                 # (NEW) 최근 'chamber' 종료 시각 기준 쿨다운을 반영해서 다음 스텝 대기
@@ -2167,6 +2178,36 @@ class ChamberRuntime:
         except Exception as e:
             self.append_log("PLC", f"read_bit failed: {key}: {e!r}")
             return None
+        
+    async def _preflight_watchdog(self, run_gen: int, timeout_s: float = 25.0) -> None:
+        """
+        프리플라이트가 특정 시간 안에 실제 공정(start_process)로 넘어가지 못하면
+        자동으로 stop/정리 시퀀스를 태워서 '프리플라이트에서 영구 멈춤'을 복구한다.
+        """
+        try:
+            await asyncio.sleep(float(timeout_s))
+
+            # 더 최신 Start가 있으면 무시
+            if int(getattr(self, "_active_run_gen", 0)) != int(run_gen):
+                return
+
+            # 이미 공정이 시작됐으면 정상
+            if bool(getattr(self.process_controller, "is_running", False)):
+                return
+
+            # 아직 프리플라이트 상태라면 "멈춤"으로 판단
+            state_txt = str(getattr(self, "_last_state_text", "") or "")
+            if "프리플라이트" not in state_txt:
+                return
+
+            self.append_log("MAIN", f"⚠ preflight watchdog timeout({timeout_s:.0f}s) → 자동 정리/상태 복구")
+            # Stop이 “공정중 아님”으로 막히던 케이스까지 복구해야 하므로 request_stop_all을 탄다.
+            self.request_stop_all(user_initiated=False)
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self.append_log("MAIN", f"preflight watchdog exception: {e!r}")
 
     def _safe_start_process(self, params: NormParams) -> None:
         # 0) 이미 실행 중이면 즉시 실패 처리
@@ -2201,10 +2242,22 @@ class ChamberRuntime:
             runtime_state.mark_started("chamber", self.ch)
 
         # 4) ✅ preflight 실행(예외는 _spawn_detached done_callback에서 로그로 남음)
+        # ✅ 이번 Start 시도 세대 번호 증가
+        self._run_gen = int(getattr(self, "_run_gen", 0)) + 1
+        gen = self._run_gen
+        self._active_run_gen = gen
+
         self._spawn_detached(
-            self._start_after_preflight(params),
+            self._start_after_preflight(params, gen),
             store=True,
-            name=f"StartAfterPreflight.CH{self.ch}",
+            name=f"StartAfterPreflight.CH{self.ch}.g{gen}",
+        )
+
+        # ✅ 프리플라이트 watchdog: 일정 시간 내 진행 없으면 자동 정리/복귀
+        self._spawn_detached(
+            self._preflight_watchdog(gen, timeout_s=25.0),
+            store=True,
+            name=f"PreflightWD.CH{self.ch}.g{gen}",
         )
 
     # ✅ Gate(밸브) 인터락: 시작하려는 챔버의 Gate가 CLOSED인지 확인
@@ -2271,8 +2324,12 @@ class ChamberRuntime:
         self.append_log("MAIN", f"[CH{self.ch}] Gate 상태=moving_or_unknown (OPEN/CLOSE 모두 FALSE) → 시작 차단")
         return False
 
-    async def _start_after_preflight(self, params: NormParams) -> None:
+    async def _start_after_preflight(self, params: NormParams, run_gen: int) -> None:
         try:
+            # ✅ 더 최신 Start가 들어오면(세대 불일치) 이 태스크는 조용히 종료
+            if int(getattr(self, "_active_run_gen", 0)) != int(run_gen):
+                return
+
             # ⬇️ 추가: 이전 런의 잔여 종료 플래그를 명시적으로 클리어
             self._pc_stopping = False
             self._pending_device_cleanup = False
@@ -4270,7 +4327,16 @@ class ChamberRuntime:
             # 5) 정리 (다음 런 보장)
             self._log_fp = None
             self._log_file_path = None
-            self._log_q = asyncio.Queue(maxsize=4096)
+
+            # ✅ 중요: Queue 객체 자체를 교체하지 않는다.
+            # - 교체하면 "기존 queue를 await 중인 writer/task"와 레이스가 생길 수 있고,
+            #   다음 공정에서 로그가 안 써지는 문제가 발생할 수 있다.
+            # - 이미 위에서 drain을 했으니, 안전하게 한번 더 비우기만 한다.
+            while True:
+                try:
+                    self._log_q.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
 
     def _clear_queue_and_reset_ui(self) -> None:
         # 전역 runtime_state로 종료 시각을 기록하므로 로컬 타임스탬프는 불필요
