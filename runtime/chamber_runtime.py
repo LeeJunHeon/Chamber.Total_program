@@ -1689,11 +1689,16 @@ class ChamberRuntime:
         self._set("Current_edit", f"{current:.3f}")
 
     def _on_process_status_changed(self, running: bool) -> None:
+        # ✅ Start/Stop 버튼은 '상태와 무관하게 항상 활성화' (사용자 요구)
         b_start = self._u("Start_button"); b_stop = self._u("Stop_button")
-        if b_start: b_start.setEnabled(not running)
-        if b_stop: b_stop.setEnabled(bool(running))
+        if b_start:
+            with contextlib.suppress(Exception):
+                b_start.setEnabled(True)
+        if b_stop:
+            with contextlib.suppress(Exception):
+                b_stop.setEnabled(True)
 
-        # ★ 변경점: running 값이 실제로 바뀐 경우에만 소유권 콜백 호출
+        # ★ PLC 소유권 콜백은 running 값이 실제로 바뀐 경우에만 호출
         prev = getattr(self, "_last_running_state", None)
         if prev is None or prev != running:
             cb = getattr(self, "_notify_plc_owner", None)
@@ -2840,12 +2845,8 @@ class ChamberRuntime:
 
     def request_stop_all(self, user_initiated: bool):
         self._cancel_delay_task()
-
-        # ✅ 이미 공정이 끝났으면 STOP 시퀀스 자체를 타지 않음(부작용 방지)
-        if not getattr(self.process_controller, "is_running", False):
-            self.append_log("MAIN", "정지 요청 무시: 실행 중 공정 없음(이미 종료됨)")
-            return
         
+        # ✅ 중복 STOP 가드
         if getattr(self, "_pc_stopping", False):
             self.append_log("MAIN", "정지 요청 무시: 이미 종료 절차 진행 중")
             return
@@ -2864,6 +2865,64 @@ class ChamberRuntime:
         # 라이트 정리: 출력/폴링 OFF (통신/cleanup 없음)
         self._spawn_detached(self._stop_device_watchdogs(light=True))
 
+        # ✅ [핵심] Preflight 중에는 ProcessController.is_running=False일 수 있다.
+        #         기존 코드는 여기서 "실행 중 공정 없음"으로 return 해서,
+        #         UI는 Stop이 켜져 있어도 실제 STOP/정리/상태복구가 전부 막혔다.
+        if not getattr(self.process_controller, "is_running", False):
+            self.append_log("MAIN", "STOP 요청: 공정 시작 전(Preflight/Idle) → 즉시 정리 시퀀스 수행")
+
+            # Start 재진입 방지
+            self._pc_stopping = True
+            self._pending_device_cleanup = True
+
+            async def _stop_preflight_or_idle():
+                cancelled = False
+                try:
+                    # 1) StartAfterPreflight/DeviceStart 태스크가 살아 있으면 취소
+                    for t in list(getattr(self, "_bg_tasks", []) or []):
+                        if not t or t.done():
+                            continue
+                        try:
+                            nm = t.get_name()
+                        except Exception:
+                            nm = ""
+                        if nm.startswith(f"StartAfterPreflight.CH{self.ch}") or nm.startswith(f"DevStart.CH{self.ch}"):
+                            with contextlib.suppress(Exception):
+                                t.cancel()
+                                cancelled = True
+
+                    if cancelled:
+                        self.append_log("MAIN", "정지 요청: Preflight/DeviceStart 태스크 취소")
+
+                    # 2) RF 점유 해제(있다면)
+                    with contextlib.suppress(Exception):
+                        self._release_rf_pulse_reservation()
+
+                    # 3) 컨트롤러 리셋(혹시 남아있는 상태 제거)
+                    with contextlib.suppress(Exception):
+                        self.process_controller.reset_controller()
+
+                    # 4) heavy cleanup: bg task cancel + device cleanup (timeout 포함)
+                    await self._stop_device_watchdogs(light=False)
+
+                    # 5) runtime_state 정리 (preflight에서도 mark_started가 찍혀 있을 수 있음)
+                    with contextlib.suppress(Exception):
+                        if runtime_state.is_running("chamber", self.ch):
+                            reason = "user cancelled during preflight" if cancelled else "user stop (idle)"
+                            runtime_state.set_error("chamber", self.ch, reason)
+                            runtime_state.mark_finished("chamber", self.ch)
+
+                finally:
+                    # 6) UI/로그 리셋
+                    with contextlib.suppress(Exception):
+                        self._clear_queue_and_reset_ui()
+                    with contextlib.suppress(Exception):
+                        self._set_state_text("대기 중")
+
+            self._spawn_detached(_stop_preflight_or_idle(), store=True, name=f"StopImmediate.CH{self.ch}")
+            return
+
+        # ✅ 여기부터는 "진짜 공정 실행 중"인 경우(기존 STOP 시퀀스 유지)
         self._pc_stopping = True
 
         # ✅ TEST 모드면 장비 정리/폴백 자체를 타면 안 됨
