@@ -53,6 +53,7 @@ POLL_INTERVAL_MS       = 5_000 #5초 rf pulse만 사용
 POLL_QUERY_TIMEOUT_MS  = 9000
 POLL_START_DELAY_AFTER_RF_ON_MS = 800
 
+
 # ======================================================================
 # RGA (외부 프로그램 실행 + CSV 저장)
 # ======================================================================
@@ -80,15 +81,6 @@ RGA_NET = {
     "ch2": {"ip": "192.168.1.21", "user": "admin", "password": "admin"},
 }
 
-# ======================================================================
-# TSP (공통; 포트만 공통 사용)
-# ======================================================================
-TSP_TCP_HOST = "192.168.1.50"
-TSP_TCP_PORT = 4004
-TSP_ADDR = 0x01
-TSP_CONNECT_TIMEOUT_S = 1.0
-TSP_WRITE_TIMEOUT_S   = 1.0
-TSP_POST_SEND_DELAY_MS = 10
 
 # ======================================================================
 # IG (공통 상수; 포트는 채널 파일에서 오버라이드)
@@ -107,6 +99,7 @@ IG_RECONNECT_BACKOFF_MAX_MS = 20_000
 IG_REIGNITE_MAX_ATTEMPTS = 3
 IG_REIGNITE_BACKOFF_MS = [2000, 5000, 10000]
 
+
 # ======================================================================
 # RF Power 보정 및 제어 설정(공통)
 # ======================================================================
@@ -120,6 +113,7 @@ RF_OFFSET_WATT_TO_DAC = 6.93
 RF_PARAM_ADC_TO_WATT = 0.0236431
 RF_OFFSET_ADC_TO_WATT = -1.3362
 RF_WATT_PER_VOLT = 63.49
+
 
 # ======================================================================
 # DC Power 보정 및 제어 설정(공통)
@@ -137,10 +131,12 @@ DC_OFFSET_ADC_TO_VOLT = -6.8453
 DC_PARAM_ADC_TO_AMP  = 0.000150567
 DC_OFFSET_ADC_TO_AMP = -0.003118
 
+
 # ======================================================================
 # OES
 # ======================================================================
 OES_AVG_COUNT = 3
+
 
 # ======================================================================
 # MFC (공통; 포트는 채널 파일에서 오버라이드)
@@ -210,6 +206,7 @@ MFC_COMMANDS = {
     'SP4_SET': lambda value: f"S4 {value}",
 }
 
+
 # ======================================================================
 # RF Pulse / DC Pulse (공통 기본값; 주소는 채널 파일에서 필요 시 오버라이드)
 # ======================================================================
@@ -223,6 +220,7 @@ DCPULSE_BAUD = 9600
 DCPULSE_ADDR = 1
 DCPULSE_DEFAULT_DELAY_MS = 180
 
+
 # ======================================================================
 # (선택) 프로세스 컨트롤러 기능 지원 플래그 기본값
 #  - 실제 장비 구성에 맞춰 채널 파일에서 오버라이드
@@ -230,6 +228,7 @@ DCPULSE_DEFAULT_DELAY_MS = 180
 SUPPORTS_DC = True
 SUPPORTS_RF_CONT = False
 SUPPORTS_RFPULSE = True
+
 
 # ======================================================================
 # ROBOT GET_RECIPE (NAS 레시피 폴더 스캔)
@@ -242,9 +241,17 @@ ROBOT_RECIPE_FOLDERS = ("CH1", "CH2", "ALD")
 # NAS가 순간 느릴 때 무한 대기 방지
 RECIPE_SCAN_TIMEOUT_S = 8.0
 
+
 # =========================
 # TSP (Turbo/Trap process)
 # =========================
+TSP_TCP_HOST = "192.168.1.50"
+TSP_TCP_PORT = 4004
+TSP_ADDR = 0x01
+TSP_CONNECT_TIMEOUT_S = 1.0
+TSP_WRITE_TIMEOUT_S   = 1.0
+TSP_POST_SEND_DELAY_MS = 10
+
 TSP_IG_TCP_PORT = 4001                    # (선택) IG 포트. 없으면 config_ch1.IG_TCP_PORT 사용
 
 TSP_ON_SEC = 120.0                        # TSP ON 유지 시간(초)
@@ -263,3 +270,60 @@ TSP_DAILY_MM = 0                          # 자동 실행 분(MM)
 # (선택) UI 기본값
 TSP_UI_DEFAULT_TARGET = "2.5e-07"         # TSP 페이지 target 기본 표시값
 TSP_UI_DEFAULT_CYCLES = 10                # TSP 페이지 cycles 기본 표시값
+
+
+# ======================================================================
+# PLC (Modbus-TCP)
+# ======================================================================
+PLC_TCP_HOST = "192.168.1.2"
+PLC_TCP_PORT = 502
+PLC_UNIT = 1
+
+PLC_TIMEOUT_S = 2.0
+PLC_CMD_GAP_MS = 150          # plc.py inter_cmd_gap_s(0.15s)와 매칭
+PLC_WATCHDOG_INTERVAL_S = 15.0
+
+PLC_RECONNECT_RETRY = 2
+PLC_RECONNECT_DELAY_S = 0.5
+
+PLC_CMD_PULSE_MS = 180
+
+PLC_LOCK_WARN_MS = 1000.0
+PLC_IO_WARN_MS = 1500.0
+
+# --- PLC COIL CSV LOGGER ---
+PLC_COIL_LOG_INTERVAL_S = 1.0
+PLC_COIL_LOG_NAS_DIR = r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CH1&2\CH1&2_PLC"
+# PLC_COIL_LOG_LOCAL_DIR = r"C:\...\Logs\CH1&2\CH1&2_PLC"   # 필요 시
+
+# ======================================================================
+# PLC (Calibration / Scaling)  - UI에서 수정 가능
+# ======================================================================
+
+# --- DC Power -> DAC 변환 (PLC power_write/power_apply에서 사용) ---
+PLC_DC_POWER_MIN_W = 0.0
+PLC_DC_POWER_MAX_W = 1000.0
+PLC_DC_DAC_FULL_SCALE = 4000
+PLC_DC_DAC_OFFSET = 0
+PLC_DC_WRITE_INDEX = 0  # 0→WRITE_0, 1→WRITE_1 ...
+
+# --- DC READ 스케일 (power_read에서 사용: raw * scale) ---
+PLC_DC_V_SCALE = 0.50316
+PLC_DC_I_SCALE = 0.00097405
+
+# --- RF Feedback 보정 (rf_read_fwd_ref에서 사용: a*raw + b) ---
+# CH1
+PLC_RF_CH1_FWD_A = 0.1503488383
+PLC_RF_CH1_FWD_B = 3.0664228165
+PLC_RF_CH1_REF_A = 0.1565388751
+PLC_RF_CH1_REF_B = 12.2067054791
+
+# CH2
+PLC_RF_CH2_FWD_A = 0.15059
+PLC_RF_CH2_FWD_B = -0.598
+PLC_RF_CH2_REF_A = 0.12940
+PLC_RF_CH2_REF_B = -0.267
+
+# --- RF 제로 오프셋(패널 idle 보정) ---
+PLC_RF_FORWARD_ZERO_W = 4.0
+PLC_RF_REFLECTED_ZERO_W = 14.0

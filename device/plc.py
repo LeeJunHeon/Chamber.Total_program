@@ -28,6 +28,8 @@ from pymodbus.pdu import ExceptionResponse
 from pymodbus.client import ModbusTcpClient
 from pymodbus.exceptions import ModbusException
 
+from lib import config_common as cfgc   # ✅ 추가: Config 팝업에서 바뀐 값 소스
+
 # ======================================================
 # 주소 맵 (단독 CLI에서 사용한 것과 동일)
 # ======================================================
@@ -307,9 +309,14 @@ class AsyncPLC:
     def __init__(self, ip: str = "192.168.1.2", port: int = 502, unit: int = 1,
                  timeout_s: float = 2.0, inter_cmd_gap_s: float = 0.15,
                  heartbeat_s: float = 15.0, pulse_ms: int = 180, logger=None):
+
         self.cfg = PLCConfig(ip=ip, port=port, unit=unit, timeout_s=timeout_s,
                              inter_cmd_gap_s=inter_cmd_gap_s, heartbeat_s=heartbeat_s,
                              pulse_ms=pulse_ms)
+        
+        # ✅ config_common 값이 있으면 덮어써서 “초기값”을 config 기준으로 맞춤
+        self._apply_cfg_from_config()
+
         self._client: Optional[ModbusTcpClient] = None
         self._uid_kw: Optional[str] = None  # 'unit' 또는 'slave'
         self._lock = asyncio.Lock()
@@ -335,9 +342,84 @@ class AsyncPLC:
             "G3": "SHUTTER_3_SW",
         }
 
+    # ============== UI로 파라미터 수정 ==============
+    def _apply_cfg_from_config(self) -> None:
+        """
+        config_common(cfgc)에 정의된 값이 있으면 self.cfg에 덮어쓴다.
+        - cfgc에 키가 없으면 기존 self.cfg 값을 유지(= 안전한 fallback)
+        """
+        # ---- 연결/통신 기본 ----
+        self.cfg.ip = str(getattr(cfgc, "PLC_TCP_HOST", self.cfg.ip))
+        self.cfg.port = int(getattr(cfgc, "PLC_TCP_PORT", self.cfg.port))
+        self.cfg.unit = int(getattr(cfgc, "PLC_UNIT", self.cfg.unit))
+        self.cfg.timeout_s = float(getattr(cfgc, "PLC_TIMEOUT_S", self.cfg.timeout_s))
+
+        # inter_cmd_gap: ms로 관리하고 싶으면 PLC_CMD_GAP_MS를 쓰고, 없으면 기존 값(s) 유지
+        if hasattr(cfgc, "PLC_CMD_GAP_MS"):
+            self.cfg.inter_cmd_gap_s = float(getattr(cfgc, "PLC_CMD_GAP_MS")) / 1000.0
+
+        # watchdog/heartbeat
+        self.cfg.heartbeat_s = float(getattr(cfgc, "PLC_WATCHDOG_INTERVAL_S", self.cfg.heartbeat_s))
+
+        # 재연결 정책
+        self.cfg.connect_retry = int(getattr(cfgc, "PLC_RECONNECT_RETRY", self.cfg.connect_retry))
+        self.cfg.connect_retry_delay_s = float(getattr(cfgc, "PLC_RECONNECT_DELAY_S", self.cfg.connect_retry_delay_s))
+
+        # momentary pulse 폭
+        self.cfg.pulse_ms = int(getattr(cfgc, "PLC_CMD_PULSE_MS", self.cfg.pulse_ms))
+
+        # 성능 경고 임계(ms)
+        self.cfg.lock_warn_ms = float(getattr(cfgc, "PLC_LOCK_WARN_MS", self.cfg.lock_warn_ms))
+        self.cfg.io_warn_ms = float(getattr(cfgc, "PLC_IO_WARN_MS", self.cfg.io_warn_ms))
+
+        # ------------------------------------------------------
+        # ✅ PLC 보정계수 / 스케일 (UI에서 수정 가능)
+        # ------------------------------------------------------
+
+        # DC write/scale
+        self.cfg.dc_power_min_w = float(getattr(cfgc, "PLC_DC_POWER_MIN_W", self.cfg.dc_power_min_w))
+        self.cfg.dc_power_max_w = float(getattr(cfgc, "PLC_DC_POWER_MAX_W", self.cfg.dc_power_max_w))
+        self.cfg.dc_dac_full_scale = int(getattr(cfgc, "PLC_DC_DAC_FULL_SCALE", self.cfg.dc_dac_full_scale))
+        self.cfg.dc_dac_offset = int(getattr(cfgc, "PLC_DC_DAC_OFFSET", self.cfg.dc_dac_offset))
+        self.cfg.dc_write_index = int(getattr(cfgc, "PLC_DC_WRITE_INDEX", self.cfg.dc_write_index))
+
+        self.cfg.dc_v_scale = float(getattr(cfgc, "PLC_DC_V_SCALE", self.cfg.dc_v_scale))
+        self.cfg.dc_i_scale = float(getattr(cfgc, "PLC_DC_I_SCALE", self.cfg.dc_i_scale))
+
+        # RF CH1
+        self.cfg.rf_fwd_a = float(getattr(cfgc, "PLC_RF_CH1_FWD_A", self.cfg.rf_fwd_a))
+        self.cfg.rf_fwd_b = float(getattr(cfgc, "PLC_RF_CH1_FWD_B", self.cfg.rf_fwd_b))
+        self.cfg.rf_ref_a = float(getattr(cfgc, "PLC_RF_CH1_REF_A", self.cfg.rf_ref_a))
+        self.cfg.rf_ref_b = float(getattr(cfgc, "PLC_RF_CH1_REF_B", self.cfg.rf_ref_b))
+
+        # RF CH2
+        self.cfg.rf2_fwd_a = float(getattr(cfgc, "PLC_RF_CH2_FWD_A", self.cfg.rf2_fwd_a))
+        self.cfg.rf2_fwd_b = float(getattr(cfgc, "PLC_RF_CH2_FWD_B", self.cfg.rf2_fwd_b))
+        self.cfg.rf2_ref_a = float(getattr(cfgc, "PLC_RF_CH2_REF_A", self.cfg.rf2_ref_a))
+        self.cfg.rf2_ref_b = float(getattr(cfgc, "PLC_RF_CH2_REF_B", self.cfg.rf2_ref_b))
+
+        # RF zero offsets
+        self.cfg.rf_forward_zero_w = float(getattr(cfgc, "PLC_RF_FORWARD_ZERO_W", self.cfg.rf_forward_zero_w))
+        self.cfg.rf_reflected_zero_w = float(getattr(cfgc, "PLC_RF_REFLECTED_ZERO_W", self.cfg.rf_reflected_zero_w))
+
+
+    async def apply_config(self, *, reconnect: bool = False) -> None:
+        """
+        Config 팝업에서 Apply 누른 뒤 호출용.
+        reconnect=True면 ip/port 변경 시 즉시 재연결.
+        """
+        old_ip, old_port = self.cfg.ip, self.cfg.port
+        self._apply_cfg_from_config()
+
+        if reconnect and (self.cfg.ip != old_ip or self.cfg.port != old_port):
+            await self.set_endpoint(self.cfg.ip, self.cfg.port, reconnect=True)
+
     # ---------- 연결/수명주기 ----------
     async def connect(self) -> None:
         self._closed = False
+
+        # ✅ connect 직전에 config 값을 재적용 (Apply 후 재연결/다음 연결에 반영)
+        self._apply_cfg_from_config()
 
         # ✅ 연결 성공 여부와 무관하게 하트비트 태스크는 살아있게(백그라운드 재연결용)
         if self._hb_task is None or self._hb_task.done():
@@ -906,12 +988,10 @@ class AsyncPLC:
         return base_dir / f"{dt.strftime('%Y%m%d')}.csv"
 
     async def start_plc_coil_csv_logger(
-        self,
-        *,
-        interval_s: float = 1.0,
-        nas_dir: str = r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CH1&2\CH1&2_PLC",
+        self, *, interval_s: Optional[float] = None,
+        nas_dir: Optional[str] = None,
         local_dir: Optional[str] = None,
-        keys: Optional[Iterable[str]] = None,
+        keys: Optional[Iterable[str]] = None
     ) -> None:
         """
         프로그램 시작 시 호출:
@@ -920,6 +1000,14 @@ class AsyncPLC:
         * PLC 락이 잡혀있으면 이번 tick 스킵
         * 예외는 내부에서 삼키고 계속
         """
+        if interval_s is None:
+            interval_s = float(getattr(cfgc, "PLC_COIL_LOG_INTERVAL_S", 1.0))
+        if nas_dir is None:
+            nas_dir = str(getattr(cfgc, "PLC_COIL_LOG_NAS_DIR",
+                                r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CH1&2\CH1&2_PLC"))
+        if local_dir is None and hasattr(cfgc, "PLC_COIL_LOG_LOCAL_DIR"):
+            local_dir = getattr(cfgc, "PLC_COIL_LOG_LOCAL_DIR")
+
         if getattr(self, "_plc_coil_log_task", None) and not self._plc_coil_log_task.done():
             return
 
