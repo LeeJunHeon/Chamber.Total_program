@@ -415,7 +415,7 @@ class DataLogger(QObject):
         with self._csv_write_lock:
             nas_file = self.log_file
 
-            self._local_dir.mkdir(parents=True, exist_ok=True)
+            # ✅ 여기서 로컬 mkdir 하지 않음 (NAS 정상일 때 빈 폴더 생성 방지)
             pending_file = self._local_dir / f"Ch{self._ch}_pending.csv"
 
             # 1) pending 먼저 NAS로 병합(가능하면)
@@ -437,6 +437,8 @@ class DataLogger(QObject):
                     self._log_func(f"Sputter Calib CSV NAS 기록 실패 → pending 적재: {e!r}")
 
             # 3) NAS 실패면 pending에 적재
+            #    ✅ 이 순간에만 _append_row_to_csv() 내부에서 parent.mkdir()가 호출되어
+            #       _CSV_local_CHx 폴더가 생성됨 :contentReference[oaicite:3]{index=3}
             try:
                 self._append_row_to_csv(pending_file, log_data)
                 self._session_started_at = None
@@ -445,4 +447,3 @@ class DataLogger(QObject):
             except Exception as e2:
                 if self._log_func:
                     self._log_func(f"Sputter Calib CSV pending 적재마저 실패: {e2!r}")
-
