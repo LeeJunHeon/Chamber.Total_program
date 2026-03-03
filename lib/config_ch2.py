@@ -31,3 +31,11 @@ SUPPORTS_RFPULSE = True
 RFPULSE_WATCHDOG_INTERVAL_MS        = 3000
 RFPULSE_RECONNECT_BACKOFF_START_MS  = 2000
 RFPULSE_RECONNECT_BACKOFF_MAX_MS    = 30_000
+
+# ============================================================
+# Process (공정 영향 파라미터)
+# ============================================================
+PC_PRESSURE_WAIT_TIMEOUT_S = 180.0        # WAIT_PRESSURE 최대 대기 시간(초)
+PC_WORKING_PRESSURE_BOOST_TARGET = 10.0   # working_pressure가 이 값보다 작으면 SP2로 먼저 부스팅
+PC_RF_PULSE_POST_ON_DELAY_MS = 20_000     # RF Pulse ON 직후 안정화 대기(ms)
+PC_POWER_OFF_TIMEOUT_MS = 240_000         # shutdown 중 power off 토큰 대기 최소(ms)

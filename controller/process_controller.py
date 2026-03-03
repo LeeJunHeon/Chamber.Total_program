@@ -12,6 +12,7 @@ from enum import Enum
 from time import monotonic_ns
 from typing import Optional, List, Tuple, Dict, Any, Callable
 from lib.config_common import SHUTDOWN_STEP_TIMEOUT_MS, SHUTDOWN_STEP_GAP_MS, RGA_STEP_TIMEOUT_MS
+from lib import config_ch1, config_ch2
 
 
 # =========================
@@ -229,6 +230,7 @@ class ProcessController:
 
         # ⬇️ 추가: 챔버/지원능력
         self._ch = int(ch)
+        self._cfg = config_ch1 if self._ch == 1 else config_ch2   # ✅ 채널별 설정 모듈
         self._supports_dc_cont = bool(supports_dc_cont)
         self._supports_rf_cont = bool(supports_rf_cont)
         self._supports_dc_pulse = bool(supports_dc_pulse)
@@ -678,7 +680,8 @@ class ProcessController:
                 }
 
                 if self._shutdown_in_progress:
-                    POWER_OFF_TIMEOUT_MS = max(240_000, SHUTDOWN_STEP_TIMEOUT_MS)  # ✅ 전원 OFF는 더 길게
+                    min_off_ms = int(getattr(self._cfg, "PC_POWER_OFF_TIMEOUT_MS", 240_000))
+                    POWER_OFF_TIMEOUT_MS = max(min_off_ms, SHUTDOWN_STEP_TIMEOUT_MS)  # ✅ 전원 OFF는 더 길게
 
                     if step.action in hard_wait_actions:
                         try:
@@ -1184,6 +1187,11 @@ class ProcessController:
         shutter_delay_sec = shutter_delay_min * 60.0
         process_time_sec = process_time_min * 60.0
 
+        # ✅ Config(채널별)에서 공정 파라미터 로드
+        pressure_wait_timeout_s = float(getattr(self._cfg, "PC_PRESSURE_WAIT_TIMEOUT_S", 180.0))
+        rf_pulse_post_on_delay_ms = int(getattr(self._cfg, "PC_RF_PULSE_POST_ON_DELAY_MS", 20_000))
+        boost_target = float(getattr(self._cfg, "PC_WORKING_PRESSURE_BOOST_TARGET", 10.0))
+
         dc_power = float(params.get("dc_power", 0))
         rf_power = float(params.get("rf_power", 0))
         try:
@@ -1308,12 +1316,12 @@ class ProcessController:
             action=ActionType.MFC_CMD,
             params=("WAIT_PRESSURE", {
                 "target": working_pressure,
-                "timeout_sec": 180.0,
+                "timeout_sec": pressure_wait_timeout_s,
                 "source": "ps",
                 "use_sp_target": True,
                 "sp_index": sp_index,
             }),
-            message=f'압력 도달 대기 (SP{sp_index} setpoint 기준, timeout=180s)',
+            message=f'압력 도달 대기 (SP{sp_index} setpoint 기준, timeout={pressure_wait_timeout_s:.0f}s)',
         ))
 
         # steps.append(ProcessStep(
@@ -1423,34 +1431,33 @@ class ProcessController:
             ))
 
         if use_rf_pulse:
+            delay_s = rf_pulse_post_on_delay_ms / 1000.0
             steps.append(ProcessStep(
-                action=ActionType.DELAY, duration=20_000,
-                message='Power Delay 20초', polling=False,
+                action=ActionType.DELAY, duration=rf_pulse_post_on_delay_ms,
+                message=f'Power Delay {delay_s:.0f}초', polling=False,
             ))
 
-        # 2) working_pressure < 10 인 경우: SP2로 먼저 제어 후 SP1 세팅
-        BOOST_TARGET = 10.0
-
-        if working_pressure < BOOST_TARGET:
+        # 2) working_pressure < boost_target 인 경우: SP2로 먼저 제어 후 SP1 세팅
+        if working_pressure < boost_target:
             steps.append(ProcessStep(
                 action=ActionType.MFC_CMD,
-                params=('SP2_SET', {'value': BOOST_TARGET}),
-                message=f'목표 압력(SP2) {BOOST_TARGET:.2f} 설정',
+                params=('SP2_SET', {'value': boost_target}),
+                message=f'목표 압력(SP2) {boost_target:.2f} 설정',
             ))
             steps.append(ProcessStep(
                 action=ActionType.MFC_CMD,
                 params=('SP2_ON', {}),
                 message='압력 제어(SP2) 시작',
             ))
-            # SP2로 제어하면서 실제 압력이 5 도달할 때까지 대기
+            # SP2로 제어하면서 실제 압력이 boost_target 도달할 때까지 대기
             steps.append(ProcessStep(
                 action=ActionType.MFC_CMD,
                 params=("WAIT_PRESSURE", {
-                    "target": BOOST_TARGET,
-                    "timeout_sec": 180.0,
+                    "target": boost_target,
+                    "timeout_sec": pressure_wait_timeout_s,
                     "source": "ps",
                 }),
-                message=f'압력 도달 대기 (SP2, target={BOOST_TARGET:.2f}, timeout=180s)',
+                message=f'압력 도달 대기 (SP2, target={boost_target:.2f}, timeout={pressure_wait_timeout_s:.0f}s)',
             ))
             
         # SP2로 안정화 후 SP1 세팅
