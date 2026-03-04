@@ -64,6 +64,12 @@ from lib import config_local as cfgl  # CHAT_WEBHOOK_URL 로드
 from PySide6.QtWidgets import QMessageBox
 from util.timed_popup import attach_autoclose
 
+# ✅ Runtime Dump(수동 상태 스냅샷) - PyInstaller 누락 방지용(없어도 크래시 안 나게)
+try:
+    from util.runtime_dump import request_dump
+except Exception:
+    request_dump = None
+
 # 시스템 로그 저장
 from util.app_logging import (
     setup_app_logging,
@@ -595,7 +601,12 @@ class MainWindow(QWidget):
         btn_cfg = getattr(self.ui, "Config_button", None)
         if btn_cfg is not None:
             btn_cfg.clicked.connect(self._open_config_dialog)
-            
+
+        # ✅ (추가) PC 페이지의 State Dump 버튼 → runtime dump 저장
+        btn_dump = getattr(self.ui, "RuntimeDump_button", None)
+        if btn_dump is not None:
+            btn_dump.clicked.connect(self._on_runtime_dump_clicked)
+
         # ✅ Server 페이지 우상단 네비 버튼 연결
         sp = getattr(self, "server_page", None)
         if sp is not None:
@@ -765,6 +776,75 @@ class MainWindow(QWidget):
             dlg.open()
         except Exception as e:
             QMessageBox.warning(self, "Config", f"ConfigDialog 실행 실패: {e!r}")
+
+    def _on_runtime_dump_clicked(self) -> None:
+        """
+        PC 페이지의 'State Dump' 버튼 클릭 시:
+        - util.runtime_dump.request_dump()로 현재 상태를 파일로 저장
+        - 저장 경로를 로그에 남김(시스템 로그에도 남기기 위해 WARN 태그 사용)
+        """
+        btn = getattr(self.ui, "RuntimeDump_button", None)
+
+        try:
+            # 연타 방지(짧게 비활성화)
+            try:
+                if btn is not None:
+                    btn.setEnabled(False)
+            except Exception:
+                pass
+
+            if request_dump is None:
+                # runtime_dump.py가 누락/에러면 사용자에게 즉시 알림
+                try:
+                    QMessageBox.warning(self, "Dump", "util/runtime_dump.py(request_dump) 로드 실패")
+                except Exception:
+                    pass
+                self._broadcast_log("ERROR/DUMP", "util.runtime_dump import 실패(request_dump=None)")
+                return
+
+            # 덤프에 포함할 “핵심 런타임 포인터/상태”
+            extra = {
+                "runtime_state": runtime_state.snapshot(),
+                "pc_use_ch": getattr(self, "_pc_use_ch", None),
+                "plc_owner": getattr(self, "_plc_owner", None),
+            }
+
+            # 주요 객체들도 같이(문자열 repr로 요약 저장)
+            for name in ("plc", "mfc1", "mfc2", "ig1", "ig2", "ch1", "ch2", "pc", "tsp_ctrl", "server_page"):
+                try:
+                    extra[name] = getattr(self, name, None)
+                except Exception:
+                    extra[name] = None
+
+            path = request_dump(
+                ui=self.ui,
+                loop=self._loop,
+                log_root=self._log_root,
+                extra_objects=extra,
+                reason="manual_button",
+            )
+
+            # 시스템 로그 파일에도 남기고 싶어서 WARN 포함
+            self._broadcast_log("WARN/DUMP", f"Runtime dump saved: {path}")
+
+        except RuntimeError as e:
+            # runtime_dump 쪽에서 "이미 진행 중" 같은 케이스를 RuntimeError로 던질 수 있음
+            self._broadcast_log("WARN/DUMP", f"Runtime dump skipped: {e}")
+
+        except Exception as e:
+            self._broadcast_log("ERROR/DUMP", f"Runtime dump failed: {e!r}")
+            try:
+                QMessageBox.warning(self, "Dump", f"Runtime dump failed: {e!r}")
+            except Exception:
+                pass
+
+        finally:
+            # 0.5초 뒤 버튼 복구
+            try:
+                if btn is not None:
+                    QTimer.singleShot(500, lambda: btn.setEnabled(True))
+            except Exception:
+                pass
 
     async def _on_power_select_toggled(self, on: bool) -> None:
         try:

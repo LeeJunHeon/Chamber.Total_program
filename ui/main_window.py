@@ -257,6 +257,15 @@ class Ui_Form(object):
         self.Config_button.setObjectName(u"Config_button")
         self.Config_button.setGeometry(QRect(30, 415, 211, 101))
 
+        # ✅ (추가) Runtime Dump 버튼: Config 버튼 하단(폭 동일 211), 얇게(높이 31)
+        # - Config: y=415, h=101 → 끝=516
+        # - Log Label: y=560 (겹치면 안 됨)
+        # - 따라서 y=520, h=31 권장(끝=551)
+        self.RuntimeDump_button = QPushButton(self.page_3)
+        self.RuntimeDump_button.setObjectName(u"RuntimeDump_button")
+        self.RuntimeDump_button.setGeometry(QRect(30, 520, 211, 31))
+        self.RuntimeDump_button.setToolTip(u"현재 프로그램 상태(쓰레드/asyncio task/UI/런타임)를 덤프로 저장")
+
         self.stackedWidget.addWidget(self.page_3)
         self.page = QWidget()
         self.page.setObjectName(u"page")
@@ -842,6 +851,7 @@ class Ui_Form(object):
         self.Power_Select_button.setText(QCoreApplication.translate("Form", u"Power\n" "Select: OFF", None))
         self.Server_button.setText(QCoreApplication.translate("Form", u"Server", None)) # ✅ (추가) Server 버튼 텍스트
         self.Config_button.setText(QCoreApplication.translate("Form", u"Config", None)) # ✅ (추가) Config 버튼 텍스트
+        self.RuntimeDump_button.setText(QCoreApplication.translate("Form", u"State Dump", None)) # ✅ (추가) Dump 버튼 텍스트
         self.ch1_processList_button.setText(QCoreApplication.translate("Form", u"Select File", None))
         self.ch1_shutterDelay_label.setText(QCoreApplication.translate("Form", u"Shutter Delay [min]", None))
         self.ch1_Current_label.setText(QCoreApplication.translate("Form", u"Current", None))
