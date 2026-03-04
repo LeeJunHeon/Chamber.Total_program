@@ -6,7 +6,8 @@ TCP 서버(I/O 전용)
 - 비즈니스 로직/장비 제어는 호출하지 않는다 (router/handlers가 담당)
 """
 from __future__ import annotations
-import asyncio, json, contextlib, traceback, csv, time
+import asyncio, json, contextlib, traceback, time
+from util.log_hub import DailyCsvDictAppender
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any
@@ -21,8 +22,11 @@ class DailyCommandCsvLogger:
     """
     하루에 파일 1개(remote_cmd_YYYYMMDD.csv)만 만들고,
     그날 들어온 모든 요청/응답을 한 파일에 append.
-    NAS 실패 시 로컬 Logs/CH1&2/CH1&2_Server 로 자동 폴백.
+
+    ✅ keep-handle(파일 핸들 유지) 방식
+    ✅ NAS(UNC) 우선 → 실패 시 로컬 폴백 → 이후 주기적으로 NAS 재시도
     """
+
     HEADER = [
         "server_time",
         "peer",
@@ -38,79 +42,66 @@ class DailyCommandCsvLogger:
 
     def __init__(self) -> None:
         self._lock: asyncio.Lock | None = None
-        self._dir = self._init_dir()
 
-    def _init_dir(self) -> Path:
-        # NAS 우선
-        try:
-            root = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CH1&2")
-            d = root / "CH1&2_Server"
-            d.mkdir(parents=True, exist_ok=True)
-            return d
-        except Exception:
-            d = Path.cwd() / "Logs" / "CH1&2" / "CH1&2_Server"
-            d.mkdir(parents=True, exist_ok=True)
-            return d
+        primary = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CH1&2") / "CH1&2_Server"
+        fallback = Path.cwd() / "Logs" / "CH1&2" / "CH1&2_Server"
 
-    def _file_path(self, now: datetime | None = None) -> Path:
-        now = now or datetime.now()
-        return self._dir / f"remote_cmd_{now:%Y%m%d}.csv"
+        self._writer = DailyCsvDictAppender(
+            primary_dir=primary,
+            fallback_dir=fallback,
+            filename_builder=lambda dt: f"remote_cmd_{dt:%Y%m%d}.csv",
+            fieldnames=self.HEADER,
+            encoding="utf-8-sig",
+            retry_primary_every_s=10.0,  # NAS 복구되면 10초마다 다시 붙기 시도
+        )
 
     def _ensure_lock(self) -> asyncio.Lock:
         if self._lock is None:
             self._lock = asyncio.Lock()
         return self._lock
 
-    def _write_row_sync(self, file_path: Path, row: dict) -> None:
-        file_path.parent.mkdir(parents=True, exist_ok=True)
-        new_file = (not file_path.exists()) or (file_path.stat().st_size == 0)
-
-        with open(file_path, "a", newline="", encoding="utf-8-sig") as f:
-            w = csv.DictWriter(f, fieldnames=self.HEADER)
-            if new_file:
-                w.writeheader()
-            w.writerow(row)
-
     async def append(self, row: dict) -> None:
         lock = self._ensure_lock()
-        fn = self._file_path()
+        dt = datetime.now()
 
         async with lock:
             try:
-                await asyncio.to_thread(self._write_row_sync, fn, row)
-            except Exception as e:
-                # NAS 실패 → 로컬 폴백
-                local = (Path.cwd() / "Logs" / "CH1&2" / "CH1&2_Server" / fn.name)
-                local.parent.mkdir(parents=True, exist_ok=True)
+                # ✅ keep-handle append
+                await asyncio.to_thread(self._writer.append_row, dt=dt, row=row)
 
-                # 1) 원래 row는 로컬에 저장
-                await asyncio.to_thread(self._write_row_sync, local, row)
-
-                # 2) "NAS에 누락됨" marker row를 로컬 CSV에 1줄 추가
-                try:
-                    def _cut(s: str, n: int = 500) -> str:
-                        return s if len(s) <= n else s[:n] + "...(truncated)"
+                # ✅ 이번 write에서 NAS→LOCAL 전환이 발생했으면 marker 1줄만 추가(원하면 유지)
+                if self._writer.consume_switched_flag():
+                    err = self._writer.state.last_error
+                    msg = f"NAS write failed -> switched to LOCAL (keep-handle). reason={err!r}"
+                    if len(msg) > 500:
+                        msg = msg[:500] + "...(truncated)"
 
                     marker = {
-                        "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
+                        "server_time": dt.strftime("%Y-%m-%d %H:%M:%S"),
                         "peer": str(row.get("peer", "")),
                         "request_id": str(row.get("request_id", "")),
                         "req_command": "__NAS_MISSING__",
                         "req_data_json": "",
                         "res_command": "",
                         "res_result": "WARN",
-                        "res_message": _cut(
-                            f"NAS write failed -> saved to local only. "
-                            f"(NAS may be missing this request) "
-                            f"cmd={row.get('req_command','')} id={row.get('request_id','')} "
-                            f"nas={fn} local={local} reason={e!r}"
-                        ),
+                        "res_message": msg,
                         "res_data_json": "",
                         "duration_ms": str(row.get("duration_ms", "")),
                     }
-                    await asyncio.to_thread(self._write_row_sync, local, marker)
-                except Exception:
-                    pass
+                    await asyncio.to_thread(self._writer.append_row, dt=dt, row=marker)
+
+            except Exception:
+                # ✅ 서버 기능에 영향 주지 않도록: CSV 로깅 실패는 무시
+                pass
+
+    async def aclose(self) -> None:
+        lock = self._ensure_lock()
+        async with lock:
+            try:
+                await asyncio.to_thread(self._writer.close)
+            except Exception:
+                pass
+
 
 class HostServer:
     def __init__(self, host: str, port: int, router: Router, log: LogFn, chat=None, popup=None) -> None:
@@ -133,6 +124,12 @@ class HostServer:
             self._server.close()
             await self._server.wait_closed()
             self.log("NET", "Host closed")
+
+        # ✅ keep-handle CSV logger close
+        try:
+            await self._cmd_csv.aclose()
+        except Exception:
+            pass
 
     async def _read_exact(self, r: asyncio.StreamReader, n: int) -> bytes:
         buf = b""

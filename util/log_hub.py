@@ -15,13 +15,14 @@ util/log_hub.py
 
 from __future__ import annotations
 
+import os
 import csv
 import threading
 import time
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Callable, Dict, Optional, Sequence
+from typing import Any, Callable, Dict, List, Optional, Sequence
 
 
 def _safe_mkdir(p: Path) -> None:
@@ -387,3 +388,68 @@ class SessionTextAppender:
                     self._fp.flush()
                 else:
                     raise
+
+class FixedCsvDictAppender:
+    """
+    고정 파일 1개를 keep-handle로 append 하는 writer.
+    - 파일이 없거나 비어있으면 헤더 1회 기록
+    - append 할 때마다 flush (필요 시 fsync까지)
+    """
+
+    def __init__(self, path: Path, fieldnames: List[str], *, encoding: str = "utf-8-sig", fsync_each_write: bool = False):
+        self.path = Path(path)
+        self.fieldnames = list(fieldnames)
+        self.encoding = encoding
+        self.fsync_each_write = bool(fsync_each_write)
+
+        self._fp: Optional[Any] = None
+        self._writer: Optional[csv.DictWriter] = None
+
+    def open(self) -> None:
+        if self._fp is not None:
+            return
+
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        new_file = (not self.path.exists()) or (self.path.stat().st_size == 0)
+
+        self._fp = open(self.path, "a", newline="", encoding=self.encoding)
+        self._writer = csv.DictWriter(self._fp, fieldnames=self.fieldnames)
+
+        if new_file:
+            self._writer.writeheader()
+            self._fp.flush()
+            if self.fsync_each_write:
+                try:
+                    os.fsync(self._fp.fileno())
+                except Exception:
+                    pass
+
+    def append_row(self, row: Dict[str, Any]) -> None:
+        if self._fp is None or self._writer is None:
+            self.open()
+
+        assert self._writer is not None and self._fp is not None
+        safe_row = {k: row.get(k, "") for k in self.fieldnames}
+        self._writer.writerow(safe_row)
+        self._fp.flush()
+        if self.fsync_each_write:
+            try:
+                os.fsync(self._fp.fileno())
+            except Exception:
+                pass
+
+    def close(self) -> None:
+        if self._fp is not None:
+            try:
+                self._fp.flush()
+            except Exception:
+                pass
+            try:
+                self._fp.close()
+            except Exception:
+                pass
+        self._fp = None
+        self._writer = None
+
+    def is_open(self) -> bool:
+        return self._fp is not None
