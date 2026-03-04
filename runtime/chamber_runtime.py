@@ -123,6 +123,14 @@ NormParams = TypedDict('NormParams', {
 # 폴링 타깃도 명확히 분리
 TargetsMap = Mapping[Literal["mfc", "dc", "rf", "dc_pulse", "rf_pulse"], bool]
 
+@dataclass(frozen=True)
+class _RunnerCmd:
+    kind: Literal["START", "START_QUEUE", "STOP", "PC_FINISHED"]
+    params: NormParams | None = None
+    ok: bool | None = None
+    detail: dict[str, Any] | None = None
+    user_initiated: bool = False
+
 # -----------------------------------------------------------------------------
 
 
@@ -304,6 +312,14 @@ class ChamberRuntime:
         self._notify_plc_owner = on_plc_owner 
         self._last_running_state: Optional[bool] = None  
         self._rf_pulse_reserved: bool = False
+
+        self._cmd_q: asyncio.Queue[_RunnerCmd] = asyncio.Queue(maxsize=200)
+        self._runner_task: asyncio.Task | None = None
+        self._runner_state: Literal["IDLE","PREFLIGHT","RUNNING","COOLDOWN","DELAY","CLEANUP","STOPPING"] = "IDLE"
+        self._runner_stage_task: asyncio.Task | None = None
+        self._runner_stage_kind: str | None = None
+        self._runner_queue_mode: bool = False
+        self._runner_next_params: NormParams | None = None
         
         # ✅ 런(시작) 세대 번호: 프리플라이트/정리 레이스 방지 + watchdog 식별
         self._run_gen: int = 0
@@ -1556,14 +1572,56 @@ class ChamberRuntime:
     # ------------------------------------------------------------------
     # 백그라운드 시작/보장
     def _ensure_task_alive(self, name: str, coro_factory: Callable[[], Coroutine[Any, Any, Any]]) -> None:
-        self._bg_tasks = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done()]
-        for t in self._bg_tasks:
+        """
+        ✅ 핵심 구조 변경
+        - Pump.*(이벤트 펌프)는 '상주(keep-alive)'로 유지
+        - 공정 종료 cleanup에서 cancel 대상으로 넣지 않음(= _bg_tasks에 넣지 않음)
+
+        왜?
+        - 기존 구조는 finished 처리 중 _stop_device_watchdogs()에서 _bg_tasks를 대량 cancel하는데,
+        이 cancel이 꼬이면 다음 공정 StartAfterPreflight가 생성/스케줄되지 않는 문제가 생김.
+        """
+        if not hasattr(self, "_keepalive_tasks"):
+            self._keepalive_tasks: dict[str, asyncio.Task] = {}
+
+        t = self._keepalive_tasks.get(name)
+        if t and not t.done():
+            return
+
+        loop = self._loop
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+
+        def _create() -> None:
             try:
-                if t.get_name() == name and not t.done():
+                task = loop.create_task(coro_factory(), name=name)
+            except Exception as e:
+                tb = "".join(traceback.format_exception(type(e), e, e.__traceback__)).rstrip()
+                self.append_log(f"Task{self.ch}", f"[{name}] create_task failed:\n{tb}")
+                return
+
+            def _done(tsk: asyncio.Task) -> None:
+                # 끝나면 dict에서 제거 (다음 ensure에서 재생성)
+                with contextlib.suppress(Exception):
+                    if self._keepalive_tasks.get(name) is tsk:
+                        self._keepalive_tasks.pop(name, None)
+                if tsk.cancelled():
                     return
-            except Exception:
-                pass
-        self._spawn_detached(coro_factory(), store=True, name=name)
+                with contextlib.suppress(Exception):
+                    exc = tsk.exception()
+                    if exc:
+                        tb2 = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).rstrip()
+                        self.append_log(f"Task{self.ch}", f"[{name}] crashed:\n{tb2}")
+
+            task.add_done_callback(_done)
+            self._keepalive_tasks[name] = task
+
+        if running is loop:
+            _create()
+        else:
+            loop.call_soon_threadsafe(_create)
 
     def _ensure_background_started(self) -> None:
         # 🔒 실패 등으로 자동 연결 차단 중이면 아무 것도 올리지 않음
@@ -2754,39 +2812,26 @@ class ChamberRuntime:
     # ------------------------------------------------------------------
     def _handle_start_clicked(self, _checked: bool = False):
         """
-        Start 버튼 / Host Start 요청 공통 진입점.
-        ★ 어떤 이유로든 예외가 나더라도 조용히 죽지 않고,
-        최소한 로그 + 알림창을 남기도록 전체를 보호한다.
+        ✅ 구조 변경:
+        - 기존: _safe_start_process()가 detached task로 preflight 시작
+        - 변경: Runner 큐에 START/START_QUEUE만 넣고 Runner가 순차 실행
         """
         try:
-            # ✅ 전역 runtime_state 기준 60초 쿨다운
+            self._ensure_runner_started()
+
             remain = runtime_state.remaining_cooldown("chamber", self.ch, cooldown_s=60.0)
             if remain > 0.0:
                 secs = int(remain + 0.999)
                 self._host_report_start(False, f"cooldown {remain:.0f}s remaining")
                 self._post_warning("대기 필요", f"이전 공정 종료 후 1분 대기 필요합니다.\n{secs}초 후에 시작하십시오.")
                 return
-            
-            # ★ 장치 정리가 백그라운드에서 진행 중이면 대기 안내
-            if getattr(self, "_pending_device_cleanup", False):
-                # ✅ cleanup이 아직 끝나지 않았으면 Start는 막는 게 안전
-                self._host_report_start(False, "previous run cleanup incomplete")
-                self._post_warning(
-                    "정리 미완료",
-                    "이전 공정 장치 정리가 아직 끝나지 않았습니다.\n"
-                    "잠시 후 다시 시도하세요.\n"
-                    "오래 지속되면 프로그램 재시작 또는 정리 실패 장치(RGA 등) 상태를 확인하세요."
-                )
-                return
-            
-            # ★ 추가(권장): 이미 다음 공정이 예약되어 있으면 Start 재클릭은 무시하고 안내
-            t = getattr(self, "_delay_main_task", None)
-            if t is not None and not t.done():
-                self._host_report_start(False, "main task delayed")
-                self._post_warning("대기 중", "다음 공정이 예약되어 있습니다. 카운트다운 종료 후 자동 시작합니다.")
+
+            # Runner가 바쁘면 중복 Start 금지
+            if getattr(self, "_runner_state", "IDLE") != "IDLE":
+                self._host_report_start(False, f"runner busy: {getattr(self,'_runner_state','')}")
+                self._post_warning("대기 중", "이전 공정/정리가 아직 진행 중입니다. 잠시 후 다시 시도하세요.")
                 return
 
-            # ✅ 교차 실행 차단: 해당 챔버가 이미 다른 런타임(CH/PC/TSP)에서 점유 중이면 시작 금지
             if runtime_state.is_running("chamber", self.ch):
                 self._host_report_start(False, "this chamber already running")
                 self._post_warning("실행 오류", f"CH{self.ch}는 이미 다른 공정이 실행 중입니다.")
@@ -2795,38 +2840,30 @@ class ChamberRuntime:
             if self.process_controller.is_running:
                 self._host_report_start(False, "process controller busy")
                 self._post_warning("실행 오류", "다른 공정이 실행 중입니다.")
-                return  
-            
-            # 재시도: 사용자가 Start를 누른 시점부터 자동 연결 허용
-            self._auto_connect_enabled = True
-
-            if getattr(self, "process_queue", None):
-                # 파일은 'started' 이벤트에서 _open_run_log()로 한 번만 생성
-                self.append_log("MAIN", f"[CH{self.ch}] 파일 기반 자동 공정 시작")
-                self.current_process_index = -1
-                self._start_next_process_from_queue(True)
                 return
 
+            self._auto_connect_enabled = True
+
+            # (1) 파일 기반 자동 공정
+            if getattr(self, "process_queue", None):
+                self.append_log("MAIN", f"[CH{self.ch}] 파일 기반 자동 공정 시작")
+                self.current_process_index = -1
+                self._runner_put(_RunnerCmd(kind="START_QUEUE"))
+                return
+
+            # (2) 단일 공정
             vals = self._validate_single_run_inputs()
             if vals is None:
                 self._host_report_start(False, "invalid inputs")
                 return
 
-            try:
-                base_pressure = float(self._get_text("basePressure_edit") or 1e-5)
-                working_pressure = float(self._get_text("workingPressure_edit") or 0.0)
-                shutter_delay = float(self._get_text("shutterDelay_edit") or 0.0)
-                process_time = float(self._get_text("processTime_edit") or 0.0)
+            base_pressure = float(self._get_text("basePressure_edit") or 1e-5)
+            working_pressure = float(self._get_text("workingPressure_edit") or 0.0)
+            shutter_delay = float(self._get_text("shutterDelay_edit") or 0.0)
+            process_time = float(self._get_text("processTime_edit") or 0.0)
 
-                # ✅ (추가) UI 수동 공정에서 공정명(Process Name)을 입력받아 로그/카드에 반영
-                # - integrationTime_edit 칸을 Process Name 입력칸으로 재활용
-                # - 비어 있으면 기존과 동일하게 기본값 사용
-                process_name = (self._get_text("integrationTime_edit") or '').strip()
-                process_note = process_name if process_name else f"Single CH{self.ch}"
-            except ValueError:
-                self.append_log("UI", "오류: 값 입력란을 확인해주세요.")
-                self._host_report_start(False, "invalid number input")  # ★ 추가
-                return
+            process_name = (self._get_text("integrationTime_edit") or "").strip()
+            process_note = process_name if process_name else f"Single CH{self.ch}"
 
             params: dict[str, Any] = {
                 "base_pressure": base_pressure,
@@ -2834,16 +2871,13 @@ class ChamberRuntime:
                 "working_pressure": working_pressure,
                 "shutter_delay": shutter_delay,
                 "process_time": process_time,
-                "process_note": process_note,   # ✅ 공정명(사용자 입력)이 로그/구글챗/CSV에 반영됨
-                "Process_name": process_note,   # ✅ 호환 위해 같이 유지
+                "process_note": process_note,
+                "Process_name": process_note,  # (다른 코드 참조가 있어 유지)
                 **vals,
-
-                # ✅ Start 버튼 "누른" 시각 (tz 없이, 초 단위)
                 "t0_pressed_wall": datetime.now().isoformat(timespec="seconds"),
                 "t0_pressed_ns":   time.monotonic_ns(),
             }
 
-            # ✅ Start 클릭 즉시 로그 파일 생성 (프리플라이트 실패/입력오류도 파일에 남김)
             with contextlib.suppress(Exception):
                 if not getattr(self, "_log_file_path", None):
                     self._open_run_log(params)
@@ -2852,36 +2886,17 @@ class ChamberRuntime:
             if errs:
                 self._host_report_start(False, "; ".join(errs))
                 self._post_warning("입력값 확인", "\n".join(f"- {e}" for e in errs))
-                return  
+                return
 
-            params["G1 Target"] = vals.get("G1_target_name", "")
-            params["G2 Target"] = vals.get("G2_target_name", "")
-            params["G3 Target"] = vals.get("G3_target_name", "")
+            self.append_log("MAIN", "입력 검증 통과 → Runner START")
+            self._runner_put(_RunnerCmd(kind="START", params=cast(NormParams, params)))
 
-            # ❌ 여기서는 running 마킹하지 않음 (공통 진입점 _safe_start_process에서 1회만 수행)
-            self.append_log("MAIN", "입력 검증 통과 → 장비 연결 확인 시작")
-            self._safe_start_process(cast(NormParams, params))
         except Exception as e:
             tb = "".join(traceback.format_exception(type(e), e, e.__traceback__)).rstrip()
-            self.append_log("MAIN", f"_handle_start_clicked 예외 발생:\n{tb}")
-
-            # ✅ 예외는 비정상 종료로 간주 → error latch + running 해제
-            with contextlib.suppress(Exception):
-                runtime_state.set_error("chamber", self.ch, f"exception: {e!r}")
-                runtime_state.mark_finished("chamber", self.ch)
-
-            # Host쪽에서도 실패 통보 받도록
+            self.append_log("MAIN", f"_handle_start_clicked 예외:\n{tb}")
             self._host_report_start(False, f"exception: {e!r}")
-
-            try:
-                self._post_critical(
-                    "실행 오류",
-                    "공정 시작 준비 중 내부 오류가 발생했습니다.\n"
-                    "자세한 내용은 로그 파일을 확인해주세요.",
-                )
-            except Exception:
-                pass
-
+            with contextlib.suppress(Exception):
+                self._post_critical("실행 오류", "공정 시작 준비 중 내부 오류가 발생했습니다.\n로그를 확인하세요.")
 
     def _handle_stop_clicked(self, _checked: bool = False):
         self.request_stop_all(user_initiated=True)
@@ -2904,173 +2919,12 @@ class ChamberRuntime:
             return False
 
     def request_stop_all(self, user_initiated: bool):
-        self._cancel_delay_task()
-        
-        # ✅ 중복 STOP 가드
-        if getattr(self, "_pc_stopping", False):
-            self.append_log("MAIN", "정지 요청 무시: 이미 종료 절차 진행 중")
-            return
-
-        # ✅ 현재 런이 TEST 모드인지 판정
-        is_test_mode = False
-        try:
-            is_test_mode = bool((getattr(self.process_controller, "current_params", {}) or {}).get("test_mode", False))
-        except Exception:
-            is_test_mode = False
-
-        # Stop 이후엔 자동 재연결 차단(사용자가 Start로 다시 올릴 때까지)
-        self._auto_connect_enabled = False
-        self._run_select = None
-
-        # 라이트 정리: 출력/폴링 OFF (통신/cleanup 없음)
-        self._spawn_detached(self._stop_device_watchdogs(light=True))
-
-        # ✅ [핵심] Preflight 중에는 ProcessController.is_running=False일 수 있다.
-        #         기존 코드는 여기서 "실행 중 공정 없음"으로 return 해서,
-        #         UI는 Stop이 켜져 있어도 실제 STOP/정리/상태복구가 전부 막혔다.
-        if not getattr(self.process_controller, "is_running", False):
-            self.append_log("MAIN", "STOP 요청: 공정 시작 전(Preflight/Idle) → 즉시 정리 시퀀스 수행")
-
-            # Start 재진입 방지
-            self._pc_stopping = True
-            self._pending_device_cleanup = True
-
-            async def _stop_preflight_or_idle():
-                cancelled = False
-                try:
-                    # 1) StartAfterPreflight/DeviceStart 태스크가 살아 있으면 취소
-                    for t in list(getattr(self, "_bg_tasks", []) or []):
-                        if not t or t.done():
-                            continue
-                        try:
-                            nm = t.get_name()
-                        except Exception:
-                            nm = ""
-                        if nm.startswith(f"StartAfterPreflight.CH{self.ch}") or nm.startswith(f"DevStart.CH{self.ch}"):
-                            with contextlib.suppress(Exception):
-                                t.cancel()
-                                cancelled = True
-
-                    if cancelled:
-                        self.append_log("MAIN", "정지 요청: Preflight/DeviceStart 태스크 취소")
-
-                    # 2) RF 점유 해제(있다면)
-                    with contextlib.suppress(Exception):
-                        self._release_rf_pulse_reservation()
-
-                    # 3) 컨트롤러 리셋(혹시 남아있는 상태 제거)
-                    with contextlib.suppress(Exception):
-                        self.process_controller.reset_controller()
-
-                    # 4) heavy cleanup: bg task cancel + device cleanup (timeout 포함)
-                    await self._stop_device_watchdogs(light=False)
-
-                    # 5) runtime_state 정리 (preflight에서도 mark_started가 찍혀 있을 수 있음)
-                    with contextlib.suppress(Exception):
-                        if runtime_state.is_running("chamber", self.ch):
-                            reason = "user cancelled during preflight" if cancelled else "user stop (idle)"
-                            runtime_state.set_error("chamber", self.ch, reason)
-                            runtime_state.mark_finished("chamber", self.ch)
-
-                finally:
-                    # 6) UI/로그 리셋
-                    with contextlib.suppress(Exception):
-                        self._clear_queue_and_reset_ui()
-                    with contextlib.suppress(Exception):
-                        self._set_state_text("대기 중")
-
-            self._spawn_detached(_stop_preflight_or_idle(), store=True, name=f"StopImmediate.CH{self.ch}")
-            return
-
-        # ✅ 여기부터는 "진짜 공정 실행 중"인 경우(기존 STOP 시퀀스 유지)
-        self._pc_stopping = True
-
-        # ✅ TEST 모드면 장비 정리/폴백 자체를 타면 안 됨
-        if is_test_mode:
-            self._pending_device_cleanup = False
-            self.append_log("MAIN", "[TEST MODE] STOP → 시뮬레이션(딜레이)만 취소, 장비 정리/폴백 스킵")
-            self.process_controller.request_stop()
-            return
-
-        # ✅ REAL MODE: 기존 동작 유지
-        self._pending_device_cleanup = True
-        self.process_controller.request_stop()
-
-        # ✅ 백업 타이머(고정 10분) - (기존 코드 그대로)
-        self._stop_fallback_gen = int(getattr(self, "_stop_fallback_gen", 0)) + 1
-        _gen = self._stop_fallback_gen
-
-        timeout_s = 600.0
-        self.append_log("MAIN", f"STOP fallback timer set: {timeout_s:.0f}s")
-
-        async def _fallback():
-            try:
-                await asyncio.sleep(timeout_s)
-                if _gen != int(getattr(self, "_stop_fallback_gen", 0)):
-                    return
-                if not (self._pc_stopping and self._pending_device_cleanup):
-                    return
-
-                self.append_log("MAIN", f"STOP fallback({timeout_s:.0f}s) → emergency shutdown")
-                with contextlib.suppress(Exception):
-                    self.process_controller.emergency_stop()
-
-                grace_s = 25.0
-                t0 = time.monotonic()
-                while (time.monotonic() - t0) < grace_s:
-                    if not self.process_controller.is_running:
-                        # ✅ Preflight 중이면 StartAfterPreflight 태스크를 찾아 취소
-                        cancelled = False
-                        for t in list(getattr(self, "_bg_tasks", []) or []):
-                            if not t or t.done():
-                                continue
-                            try:
-                                nm = t.get_name()
-                            except Exception:
-                                nm = ""
-                            if nm.startswith(f"StartAfterPreflight.CH{self.ch}"):
-                                t.cancel()
-                                cancelled = True
-
-                        if cancelled:
-                            self.append_log("MAIN", "정지 요청: Preflight 취소")
-                            self._auto_connect_enabled = False
-                            self._run_select = None
-
-                            # RF 점유 중이면 해제
-                            with contextlib.suppress(Exception):
-                                self._release_rf_pulse_reservation()
-
-                            with contextlib.suppress(Exception):
-                                runtime_state.set_error("chamber", self.ch, "user cancelled during preflight")
-                                runtime_state.mark_finished("chamber", self.ch)
-
-                            self._on_process_status_changed(False)
-                            self._set_state_text("대기 중")
-                            return
-
-                        self.append_log("MAIN", "정지 요청 무시: 실행 중 공정 없음(이미 종료됨)")
-                        return
-                    await asyncio.sleep(0.5)
-
-                self.append_log("MAIN", "STOP fallback → heavy cleanup + controller reset")
-
-                with contextlib.suppress(Exception):
-                    self.process_controller.reset_controller()
-
-                await self._stop_device_watchdogs(light=False)
-
-                with contextlib.suppress(Exception):
-                    runtime_state.mark_finished("chamber", self.ch)
-
-                self._pending_device_cleanup = False
-                self._pc_stopping = False
-                self._clear_queue_and_reset_ui()
-
-            except asyncio.CancelledError:
-                pass
-
-        self._spawn_detached(_fallback(), store=True, name=f"StopFallback.CH{self.ch}")
+        """
+        ✅ 구조 변경:
+        - STOP은 어떤 상태든 Runner로 일원화
+        - '공정 중이지 않다'로 STOP이 막히던 케이스 제거
+        """
+        self._runner_put(_RunnerCmd(kind="STOP", user_initiated=bool(user_initiated)))
 
     async def _stop_device_watchdogs(self, *, light: bool = False) -> None:
         if light:
@@ -4571,35 +4425,67 @@ class ChamberRuntime:
         s_ = float(m.group(3) or 0)
         return h * 3600 + m_ * 60 + s_
 
-    def _spawn_detached(self, coro, *, store: bool=False, name: str|None=None) -> None:
+    def _spawn_detached(
+        self,
+        coro: Coroutine[Any, Any, Any],
+        *,
+        store: bool = False,
+        name: str | None = None,
+    ) -> asyncio.Task | None:
+        """
+        ✅ 개선점
+        - 같은 이벤트루프 스레드에서 호출되면 즉시 create_task() 해서 Task를 반환
+        - 다른 스레드면 call_soon_threadsafe로 예약하고 None 반환
+        - create_task 실패/태스크 예외는 반드시 로그로 남김
+        """
         loop = self._loop
-        def _create():
-            t = loop.create_task(coro, name=name)
-            def _done(task: asyncio.Task):
+
+        def _attach_done_log(t: asyncio.Task) -> None:
+            def _done(task: asyncio.Task) -> None:
                 if task.cancelled():
                     return
                 try:
                     exc = task.exception()
                 except Exception as e:
-                    self.append_log(f"Task{self.ch}", f"exception() failed: {e!r}")
+                    self.append_log(f"Task{self.ch}", f"[{name or 'task'}] exception() failed: {e!r}")
                     return
                 if exc:
-                    import traceback
-                    tb = ''.join(traceback.format_exception(type(exc), exc, exc.__traceback__)).rstrip()
+                    tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).rstrip()
                     self.append_log(f"Task{self.ch}", f"[{name or 'task'}] crashed:\n{tb}")
-
             t.add_done_callback(_done)
-            if store:
-                self._bg_tasks.append(t)
 
+        def _create_here() -> asyncio.Task | None:
+            try:
+                t = loop.create_task(coro, name=name)
+            except Exception as e:
+                with contextlib.suppress(Exception):
+                    coro.close()
+                tb = "".join(traceback.format_exception(type(e), e, e.__traceback__)).rstrip()
+                self.append_log(f"Task{self.ch}", f"[{name or 'task'}] create_task failed:\n{tb}")
+                return None
+
+            _attach_done_log(t)
+            if store:
+                with contextlib.suppress(Exception):
+                    self._bg_tasks.append(t)
+            return t
+
+        # 같은 루프면 즉시 생성
         try:
             running = asyncio.get_running_loop()
         except RuntimeError:
             running = None
+
         if running is loop:
-            loop.call_soon(_create)
-        else:
-            loop.call_soon_threadsafe(_create)
+            return _create_here()
+
+        # 다른 스레드면 예약(반환 없음)
+        def _create_later() -> None:
+            _create_here()
+
+        with contextlib.suppress(Exception):
+            loop.call_soon_threadsafe(_create_later)
+        return None
 
     def _set_task_later(self, attr_name: str, coro: Coroutine[Any, Any, Any], *, name: str | None = None) -> None:
         """UI/다른 스레드 어디서든 안전하게 task를 만들고, 예외를 조용히 삼키지 않게 한다."""
