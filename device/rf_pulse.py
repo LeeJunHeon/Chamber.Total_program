@@ -20,12 +20,8 @@ from typing import Optional, Deque, Callable, AsyncGenerator, Literal, Tuple
 from collections import deque
 import asyncio, time, re, socket, contextlib
 
-from lib.config_ch2 import (
-    RFPULSE_TCP_HOST, RFPULSE_TCP_PORT, RFPULSE_ADDR, DEBUG_PRINT, ACK_TIMEOUT_MS,
-    QUERY_TIMEOUT_MS, RECV_FRAME_TIMEOUT_MS, CMD_GAP_MS, POST_WRITE_DELAY_MS,
-    ACK_FOLLOWUP_GRACE_MS, POLL_INTERVAL_MS, POLL_QUERY_TIMEOUT_MS, POLL_START_DELAY_AFTER_RF_ON_MS,
-    RFPULSE_WATCHDOG_INTERVAL_MS, RFPULSE_RECONNECT_BACKOFF_START_MS, RFPULSE_RECONNECT_BACKOFF_MAX_MS
-)
+from typing import Any
+from lib import config_common as cfgc
 
 # ===== RF Pulse 파워 모니터링 상수 =====
 # FORP: setpoint 대비 허용 오차(%)
@@ -174,8 +170,28 @@ Token = Tuple[Literal["ACK", "NAK", "FRAME"], Optional[bytes]]
 
 # ===== 메인 컨트롤러 =====
 class RFPulseAsync:
-    def __init__(self, *, debug_print: bool = DEBUG_PRINT):
-        self.debug_print = debug_print
+    def __init__(self, *, cfg: Any = None, debug_print: Optional[bool] = None):
+        """
+        cfg: lib.config_ch2 같은 모듈을 넣으면 해당 값을 우선 사용.
+             (UI에서 cfg 값을 바꾸면, rf_pulse가 그 값을 읽도록 만드는 핵심 구조)
+        debug_print: 강제 지정 시 cfg보다 우선
+        """
+        self._cfg = cfg if cfg is not None else cfgc
+
+        def _cfg_get(name: str, default=None):
+            if hasattr(self._cfg, name):
+                return getattr(self._cfg, name)
+            if hasattr(cfgc, name):
+                return getattr(cfgc, name)
+            return default
+
+        self._cfg_get = _cfg_get
+
+        # debug_print는 캐시 성격 → reload_runtime_cfg로 갱신 가능하게
+        if debug_print is None:
+            self.debug_print = self._cfg_bool("DEBUG_PRINT", False)
+        else:
+            self.debug_print = bool(debug_print)
 
         # TCP Streams
         self._reader: Optional[asyncio.StreamReader] = None
@@ -198,16 +214,16 @@ class RFPulseAsync:
         self._cmd_worker_task: Optional[asyncio.Task] = None
         self._poll_task: Optional[asyncio.Task] = None
         self._want_connected: bool = False
-        
-        # ★ 추가: start / resume_watchdog 동시 호출 방지용 락
+
+        # start/resume_watchdog 동시 호출 방지용 락
         self._start_lock = asyncio.Lock()
 
-        # 재연결 상태
-        self._reconnect_backoff_ms = RFPULSE_RECONNECT_BACKOFF_START_MS
+        # 재연결 상태(백오프는 cfg 기반 초기화)
+        self._reconnect_backoff_ms = self._cfg_int("RFPULSE_RECONNECT_BACKOFF_START_MS", 2000)
         self._just_reopened: bool = False
 
         # 런타임 상태
-        self.addr = int(RFPULSE_ADDR) if RFPULSE_ADDR is not None else 1
+        self.addr = self._cfg_int("RFPULSE_ADDR", 1)
         self._closing: bool = False
         self._stop_requested: bool = False
 
@@ -217,13 +233,47 @@ class RFPulseAsync:
         self._last_reflected_w: Optional[float] = None
         self._last_status: Optional[RfStatus] = None
 
-        # ★ 파워 모니터링용 상태
-        #   - _target_setpoint_w : 공정에서 요청한 FORP setpoint (W)
-        #   - _forp_out_of_range_count : setpoint에서 5% 이상 벗어난 횟수(연속)
-        #   - _refp_over_limit_count : REFP가 임계값 이상인 횟수(연속)
+        # 파워 모니터링용 상태
         self._target_setpoint_w: float = 0.0
         self._forp_out_of_range_count: int = 0
         self._refp_over_limit_count: int = 0
+
+    # ---------- cfg helper ----------
+    def _cfg_int(self, name: str, default: int) -> int:
+        v = self._cfg_get(name, default)
+        try:
+            return int(float(v))
+        except Exception:
+            return int(default)
+
+    def _cfg_float(self, name: str, default: float) -> float:
+        v = self._cfg_get(name, default)
+        try:
+            return float(v)
+        except Exception:
+            return float(default)
+
+    def _cfg_bool(self, name: str, default: bool = False) -> bool:
+        v = self._cfg_get(name, default)
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            return bool(v)
+        s = str(v).strip().lower()
+        if s in ("1", "true", "t", "yes", "y", "on"):
+            return True
+        if s in ("0", "false", "f", "no", "n", "off", ""):
+            return False
+        return bool(default)
+
+    def reload_runtime_cfg(self) -> None:
+        """
+        UI에서 cfg를 바꾼 뒤 즉시 반영이 필요한 값들만 갱신.
+        (예: debug_print/addr/백오프 시작값)
+        """
+        self.debug_print = self._cfg_bool("DEBUG_PRINT", self.debug_print)
+        self.addr = self._cfg_int("RFPULSE_ADDR", int(self.addr or 1))
+        self._reconnect_backoff_ms = self._cfg_int("RFPULSE_RECONNECT_BACKOFF_START_MS", int(self._reconnect_backoff_ms or 2000))
 
     # ---------- 공용 API ----------
     async def start(self):
@@ -289,29 +339,31 @@ class RFPulseAsync:
     # ---------- 고수준 시퀀스 ----------
     async def start_pulse_process(self, target_w: float, freq_hz: Optional[int] = None, duty_percent: Optional[int] = None):
         """
-        HOST(14,02) → MODE(FWD=6) → SETP → (FREQ/DUTY) → PULSING=1 → RF ON
-        실패 시 'target_failed' 이벤트, 성공 시 RF ON 직후 폴링 시작.
+        HOST(14,02) → MODE(FWD=6) → SETP → (FREQ/DUTY) → PULSING → RF ON
+        실패 시 command_failed 이벤트로만 통지(=호환용 FAILED target_reached 삭제)
+        성공 시 target_reached(OK) 1회만 발행
         """
         self._stop_requested = False
         self.set_process_status(False)
 
-        # ★ 모니터링용 setpoint/카운터 초기화
-        #   - target_w: 이번 공정에서 목표로 하는 FORP (W)
+        # 모니터링용 setpoint/카운터 초기화
         self._target_setpoint_w = float(target_w or 0.0)
         self._forp_out_of_range_count = 0
         self._refp_over_limit_count = 0
 
         async def fail(why: str):
             await self._emit_failed("START_SEQUENCE", why)
-            await self._event_q.put(RFPulseEvent(kind="target_reached", message="FAILED"))  # 호환을 위해 알림
             return False
+
+        ack_ms = self._cfg_int("ACK_TIMEOUT_MS", 2000)
 
         # HOST
         ok, _ = await self._exec_and_csr(CMD_SET_ACTIVE_CTRL, b"\x02", tag="[START HOST]")
-        if not ok: return await fail("HOST 실패")
+        if not ok:
+            return await fail("HOST 실패")
 
-        # (추가) RF OFF로 출력 상태 정리 (이전 공정 비정상 종료 대비)
-        ok, _ = await self._exec_and_csr(CMD_RF_OFF, b"", tag="[START PRE RF OFF]", timeout_ms=max(ACK_TIMEOUT_MS, 2500))
+        # RF OFF로 출력 상태 정리 (이전 공정 비정상 종료 대비)
+        ok, _ = await self._exec_and_csr(CMD_RF_OFF, b"", tag="[START PRE RF OFF]", timeout_ms=max(ack_ms, 2500))
         if not ok:
             return await fail("RF OFF(사전) 실패")
 
@@ -319,46 +371,62 @@ class RFPulseAsync:
 
         # MODE FWD
         ok, _ = await self._exec_and_csr(CMD_SET_CTRL_MODE, bytes([MODE_SET["fwd"]]), tag="[START MODE FWD]")
-        if not ok: return await fail("MODE=FWD 실패")
+        if not ok:
+            return await fail("MODE=FWD 실패")
 
         # SETPOINT
         sp = int(round(float(target_w)))
-        ok, _ = await self._exec_and_csr(CMD_SET_SETPOINT, bytes([sp & 0xFF, (sp >> 8) & 0xFF]),
-                                         tag=f"[START SETP {sp}W]")
-        if not ok: return await fail("SETP 실패")
+        ok, _ = await self._exec_and_csr(
+            CMD_SET_SETPOINT,
+            bytes([sp & 0xFF, (sp >> 8) & 0xFF]),
+            tag=f"[START SETP {sp}W]",
+        )
+        if not ok:
+            return await fail("SETP 실패")
 
         # FREQ
         if freq_hz is not None:
             hz = int(freq_hz)
             data_f = bytes([hz & 0xFF, (hz >> 8) & 0xFF, (hz >> 16) & 0xFF])
             ok, _ = await self._exec_and_csr(CMD_SET_PULSE_FREQ, data_f, tag="[START FREQ]")
-            if not ok: return await fail("PULSE FREQ 실패")
+            if not ok:
+                return await fail("PULSE FREQ 실패")
 
         # DUTY
         if duty_percent is not None:
             v = int(duty_percent) & 0xFFFF
             data_d = bytes([v & 0xFF, (v >> 8) & 0xFF])
             ok, _ = await self._exec_and_csr(CMD_SET_PULSE_DUTY, data_d, tag="[START DUTY]")
-            if not ok: return await fail("PULSE DUTY 실패")
+            if not ok:
+                return await fail("PULSE DUTY 실패")
 
-        # PULSING=1
-        pulse_mode = 1  # 기존 의미 그대로: internal
+        # PULSING (cfg로 모드 선택 가능)
+        pulse_mode = self._cfg_int("RFPULSE_PULSE_MODE", 1)
+        if pulse_mode not in PULSING_TX:
+            return await fail(f"PULSING 모드 범위 오류: {pulse_mode} (허용: {sorted(PULSING_TX.keys())})")
+
         ok, _ = await self._exec_and_csr(
             CMD_SET_PULSING,
             bytes([PULSING_TX[pulse_mode]]),
-            tag=f"[START PULSING {pulse_mode}]"
+            tag=f"[START PULSING {pulse_mode}]",
         )
-        if not ok: return await fail("PULSING 설정 실패")
+        if not ok:
+            return await fail("PULSING 설정 실패")
 
         # RF ON
-        ok, _ = await self._exec_and_csr(CMD_RF_ON, b"", tag="[START RF ON]", timeout_ms=max(ACK_TIMEOUT_MS, 2500))
-        if not ok: return await fail("RF ON 실패")
+        ok, _ = await self._exec_and_csr(CMD_RF_ON, b"", tag="[START RF ON]", timeout_ms=max(ack_ms, 2500))
+        if not ok:
+            return await fail("RF ON 실패")
 
         # 폴링 시작
-        await asyncio.sleep(POLL_START_DELAY_AFTER_RF_ON_MS / 1000.0)
+        start_delay_ms = self._cfg_int("POLL_START_DELAY_AFTER_RF_ON_MS", 800)
+        await asyncio.sleep(start_delay_ms / 1000.0)
+
         self.set_process_status(True)
-        # 구버전 호환: RF ON 완료 알림
+
+        # 성공 알림(1회만)
         await self._event_q.put(RFPulseEvent(kind="target_reached", message="OK"))
+        return True
 
     def set_process_status(self, should_poll: bool):
         """
@@ -425,8 +493,12 @@ class RFPulseAsync:
 
     # ---------- 내부: 연결/워치독 ----------
     def _resolve_endpoint(self) -> tuple[str, int]:
-        host = getattr(self, "_override_host", None) or RFPULSE_TCP_HOST
-        port = getattr(self, "_override_port", None) or RFPULSE_TCP_PORT
+        host = getattr(self, "_override_host", None) or self._cfg_get("RFPULSE_TCP_HOST", None)
+        port = getattr(self, "_override_port", None) or self._cfg_get("RFPULSE_TCP_PORT", None)
+
+        if host is None or port is None:
+            raise RuntimeError("RFPULSE_TCP_HOST / RFPULSE_TCP_PORT 가 config에 정의되어 있어야 합니다.")
+
         return str(host), int(port)
 
     def _on_tcp_disconnected(self):
@@ -451,13 +523,15 @@ class RFPulseAsync:
                 self._safe_callback(cmd.callback, None)
 
     async def _watchdog_loop(self):
-        backoff = RFPULSE_RECONNECT_BACKOFF_START_MS
+        backoff = self._cfg_int("RFPULSE_RECONNECT_BACKOFF_START_MS", 2000)
         while True:
             if not self._want_connected:
-                await asyncio.sleep(0.05); continue
+                await asyncio.sleep(0.05)
+                continue
 
             if self._connected:
-                await asyncio.sleep(RFPULSE_WATCHDOG_INTERVAL_MS / 1000.0)
+                wd_ms = self._cfg_int("RFPULSE_WATCHDOG_INTERVAL_MS", 3000)
+                await asyncio.sleep(wd_ms / 1000.0)
                 continue
 
             if self._ever_connected:
@@ -467,17 +541,18 @@ class RFPulseAsync:
             if not self._want_connected:
                 continue
 
-            # 연결 시도
             try:
                 host, port = self._resolve_endpoint()
+                connect_timeout_s = self._cfg_float("RFPULSE_CONNECT_TIMEOUT_S", 1.5)
+
                 reader, writer = await asyncio.wait_for(
                     asyncio.open_connection(host, port),
-                    timeout=1.5
+                    timeout=max(0.3, float(connect_timeout_s)),
                 )
                 self._reader, self._writer = reader, writer
                 self._connected = True
                 self._ever_connected = True
-                backoff = RFPULSE_RECONNECT_BACKOFF_START_MS
+                backoff = self._cfg_int("RFPULSE_RECONNECT_BACKOFF_START_MS", 2000)
 
                 # TCP keepalive (가능하면)
                 try:
@@ -492,13 +567,20 @@ class RFPulseAsync:
                     self._reader_task.cancel()
                     with contextlib.suppress(Exception):
                         await self._reader_task
+
                 self._reader_task = asyncio.create_task(self._tcp_reader_loop(), name="RFP-TcpReader")
                 self._just_reopened = True
                 await self._emit_status(f"{host}:{port} 연결 성공 (TCP)")
+
             except Exception as e:
-                host, port = self._resolve_endpoint()
-                await self._emit_status(f"{host}:{port} 연결 실패: {type(e).__name__}: {e!r}")
-                backoff = min(backoff * 2, RFPULSE_RECONNECT_BACKOFF_MAX_MS)
+                # host/port 재확인 로그
+                try:
+                    host, port = self._resolve_endpoint()
+                    await self._emit_status(f"{host}:{port} 연결 실패: {type(e).__name__}: {e!r}")
+                except Exception:
+                    await self._emit_status(f"RFPulse 연결 실패: {type(e).__name__}: {e!r}")
+
+                backoff = min(backoff * 2, self._cfg_int("RFPULSE_RECONNECT_BACKOFF_MAX_MS", 30_000))
 
     def _on_token(self, tok: Token):
         # 큐가 꽉 차면 가장 오래된 토큰을 버리고 새 토큰을 삽입
@@ -529,9 +611,9 @@ class RFPulseAsync:
             cmd = self._cmd_q.popleft()
             self._inflight = cmd
 
-            # 최소 인터커맨드 간격 보장
+            # 최소 인터커맨드 간격 보장 (cmd.gap_ms 사용)
             now = time.monotonic()
-            gap_need = (CMD_GAP_MS / 1000.0) - (now - self._last_send_mono)
+            gap_need = (cmd.gap_ms / 1000.0) - (now - self._last_send_mono)
             if gap_need > 0:
                 await asyncio.sleep(gap_need)
 
@@ -544,7 +626,7 @@ class RFPulseAsync:
                     except asyncio.QueueEmpty:
                         break
 
-            # 전송
+            # 전송 전 상태 확인
             if self._closing or not (self._connected and self._writer):
                 self._inflight = None
                 await asyncio.sleep(0)
@@ -552,17 +634,18 @@ class RFPulseAsync:
 
             pkt = _build_packet(self.addr, cmd.cmd, cmd.data)
             try:
-                # =================== Raw data log (debug) ==================
-                # ★ 보낼 때 1줄 (RAW)
+                # Raw data log (debug)
                 asyncio.create_task(self._emit_status(
                     f"[RFP][RAW][TX] addr={self.addr} cmd={self._cmd_label(cmd.cmd)} "
                     f"data={' '.join(f'{x:02X}' for x in (cmd.data or b''))} "
                     f"raw={' '.join(f'{x:02X}' for x in pkt)} tag={cmd.tag or ''}"
                 ))
-                # =================== Raw data log (debug) ==================
 
                 self._writer.write(pkt)
-                await self._writer.drain()
+
+                drain_timeout_s = self._cfg_float("RFPULSE_DRAIN_TIMEOUT_S", 2.0)
+                await asyncio.wait_for(self._writer.drain(), timeout=max(0.1, float(drain_timeout_s)))
+
                 self._last_send_mono = time.monotonic()
                 self._dbg("RFP TX", f"{cmd.tag or ('exec' if cmd.kind=='exec' else 'query')} "
                                     f"{self._cmd_label(cmd.cmd)} len={len(cmd.data)}")
@@ -584,7 +667,6 @@ class RFPulseAsync:
                 await asyncio.sleep(cmd.gap_ms / 1000.0)
                 continue
 
-            # 응답 대기
             ok = False
             result: Optional[bytes] = None
             fail_reason: Optional[str] = None
@@ -600,36 +682,36 @@ class RFPulseAsync:
             except Exception as e:
                 ok = False
                 fail_reason = f"error:{e}"
-                self._on_tcp_disconnected()   # ← 실제로 끊어서 워치독이 다시 붙도록
+                self._on_tcp_disconnected()
 
-            # ================== ★ CSR 기반 자동 복구 (여기에 추가) ==================
+            # CSR 기반 자동 복구
             if (not ok) and (cmd.kind == "exec") and (fail_reason is None) and result and (len(result) >= 1):
                 csr = result[0]
                 fail_reason = f"csr={csr}"
+
+                ack_ms = self._cfg_int("ACK_TIMEOUT_MS", 2000)
+                cmd_gap_ms = self._cfg_int("CMD_GAP_MS", 1500)
 
                 # CSR=1: HOST가 아니어서 거부 → HOST 재설정 후 재시도
                 if csr == 1 and (cmd.cmd != CMD_SET_ACTIVE_CTRL) and (cmd.retries_left > 0) and (not self._closing):
                     cmd.retries_left -= 1
 
-                    # 1) 원래 명령을 다시 시도하도록 큐에 복귀 (원래 명령은 HOST 다음에 실행돼야 함)
                     self._cmd_q.appendleft(cmd)
-
-                    # 2) HOST 재설정 명령을 큐 맨앞에 prepend
                     self._cmd_q.appendleft(RfCommand(
                         kind="exec",
                         cmd=CMD_SET_ACTIVE_CTRL,
                         data=b"\x02",
-                        timeout_ms=ACK_TIMEOUT_MS,
+                        timeout_ms=ack_ms,
                         callback=(lambda _b: None),
                         tag="[AUTO HOST]",
-                        gap_ms=max(200, CMD_GAP_MS),   # 내부 상태 전환 여유
+                        gap_ms=max(200, cmd_gap_ms),
                         retries_left=1,
                         allow_no_reply=False,
                         allow_when_closing=False,
                     ))
 
                     self._inflight = None
-                    await asyncio.sleep(0)  # yield
+                    await asyncio.sleep(0)
                     continue
 
                 is_start = (cmd.tag or "").startswith("[START")
@@ -643,10 +725,10 @@ class RFPulseAsync:
                         kind="exec",
                         cmd=CMD_RF_OFF,
                         data=b"",
-                        timeout_ms=ACK_TIMEOUT_MS,
-                        callback=(lambda _b: None),   # ← 아래 2)에서 설명
+                        timeout_ms=ack_ms,
+                        callback=(lambda _b: None),
                         tag="[AUTO RF_OFF]",
-                        gap_ms=max(200, CMD_GAP_MS),
+                        gap_ms=max(200, cmd_gap_ms),
                         retries_left=1,
                         allow_no_reply=False,
                         allow_when_closing=False,
@@ -655,7 +737,6 @@ class RFPulseAsync:
                     self._inflight = None
                     await asyncio.sleep(0)
                     continue
-            # ================== ★ CSR 기반 자동 복구 끝 ==================
 
             # 결과 처리
             if ok:
@@ -665,11 +746,10 @@ class RFPulseAsync:
                 await asyncio.sleep(cmd.gap_ms / 1000.0)
             else:
                 self._dbg("RFP FAIL", f"{cmd.tag} {self._cmd_label(cmd.cmd)}"
-                                      + (f" ({fail_reason})" if fail_reason else ""))
+                                    + (f" ({fail_reason})" if fail_reason else ""))
                 if cmd.retries_left > 0 and not self._closing:
                     cmd.retries_left -= 1
                     self._cmd_q.appendleft(cmd)
-                    # Busy(5)면 조금 더 여유
                     backoff_ms = max(150, cmd.gap_ms)
                     if isinstance(fail_reason, str) and fail_reason.startswith("csr=5"):
                         backoff_ms = max(int(cmd.gap_ms * 1.5), 1200)
@@ -771,12 +851,14 @@ class RFPulseAsync:
     async def _await_exec_csr(self, cmd: RfCommand) -> Tuple[bool, Optional[bytes]]:
         """ACK phase → CSR 프레임(동일 cmd, 동일 addr) 확보 → CSR=0 확인."""
         start = time.monotonic()
-        ack_deadline = start + min(ACK_TIMEOUT_MS, cmd.timeout_ms) / 1000.0
+
+        ack_ms = self._cfg_int("ACK_TIMEOUT_MS", 2000)
+        ack_deadline = start + min(ack_ms, cmd.timeout_ms) / 1000.0
         end_deadline = start + cmd.timeout_ms / 1000.0
 
         csr_bytes: Optional[bytes] = None
 
-        # 1) ACK phase: ACK/NAK 또는 '바로 온' 프레임 처리 (ACK은 무시, 성공판정엔 사용 안 함)
+        # 1) ACK phase
         while time.monotonic() < ack_deadline:
             remain = ack_deadline - time.monotonic()
             tok = await self._get_token(remain)
@@ -788,9 +870,8 @@ class RFPulseAsync:
             if kind == "FRAME" and payload and self._frame_match(payload, cmd.cmd):
                 csr_bytes = self._extract_data(payload)
                 break
-            # NOTE: ACK는 참고용 신호일 뿐, 여기선 성공 판정에 쓰지 않음
 
-        # 2) CSR 프레임 대기 (전체 타임아웃까지)
+        # 2) CSR 프레임 대기
         while (csr_bytes is None) and (time.monotonic() < end_deadline):
             remain = end_deadline - time.monotonic()
             tok = await self._get_token(remain)
@@ -803,7 +884,6 @@ class RFPulseAsync:
                 csr_bytes = self._extract_data(payload)
                 break
 
-        # ★ CSR 필수: 프레임 없으면 무조건 실패
         if (not csr_bytes) or (len(csr_bytes) < 1):
             return False, None
 
@@ -812,22 +892,23 @@ class RFPulseAsync:
             await self._emit_status(
                 f"CSR {csr} ({CSR_CODES.get(csr, 'Unknown')}) for {self._cmd_label(cmd.cmd)}"
             )
-            return False, csr_bytes   # ★ CSR 바이트를 유지해서 상위에서 대응 가능하게
+            return False, csr_bytes
 
-        if cmd.cmd == CMD_RF_ON:
-            await self._event_q.put(RFPulseEvent(kind="target_reached", message="OK"))
+        # ✅ 여기서 target_reached를 쏘지 않는다(중복/부작용 제거)
         return True, csr_bytes
+
 
     async def _await_query_data(self, cmd: RfCommand) -> Tuple[bool, Optional[bytes]]:
         """ACK phase(짧게) → 데이터 프레임(동일 cmd, 동일 addr) 확보."""
         start = time.monotonic()
-        # EXEC의 ACK은 장비 상태에 따라 늦어질 수 있어, 전체 타임아웃의 2/3까지 허용
-        ack_deadline = start + min(ACK_TIMEOUT_MS, (2 * cmd.timeout_ms) // 3) / 1000.0
+
+        ack_ms = self._cfg_int("ACK_TIMEOUT_MS", 2000)
+        ack_deadline = start + min(ack_ms, (2 * cmd.timeout_ms) // 3) / 1000.0
         end_deadline = start + cmd.timeout_ms / 1000.0
 
         data_bytes: Optional[bytes] = None
 
-        # 빠른 경로(ACK phase에서 바로 데이터 프레임 도착)
+        # 빠른 경로
         while time.monotonic() < ack_deadline:
             remain = ack_deadline - time.monotonic()
             tok = await self._get_token(remain)
@@ -837,11 +918,10 @@ class RFPulseAsync:
             if kind == "FRAME" and payload and self._frame_match(payload, cmd.cmd):
                 data_bytes = self._extract_data(payload)
                 break
-            # NAK는 무시하지 말고 실패 처리
             if kind == "NAK":
                 return False, None
 
-        # 남은 시간 동안 데이터 프레임 대기
+        # 남은 시간 동안 대기
         while (data_bytes is None) and (time.monotonic() < end_deadline):
             remain = end_deadline - time.monotonic()
             tok = await self._get_token(remain)
@@ -861,34 +941,43 @@ class RFPulseAsync:
                 if self._poll_busy or not self._connected:
                     await asyncio.sleep(0.05)
                     continue
+
                 self._poll_busy = True
                 try:
+                    poll_q_ms = self._cfg_int("POLL_QUERY_TIMEOUT_MS", self._cfg_int("QUERY_TIMEOUT_MS", 4500))
+                    poll_interval_ms = self._cfg_int("POLL_INTERVAL_MS", 1000)
+
                     st = await self._read_status()
                     if st:
                         await self._emit_status(f"STATUS {self._status_summary_str(st)}")
-                    f = await self._query_and_data(CMD_REPORT_FORWARD, b"", tag="[POLL FWD]",
-                                                timeout_ms=POLL_QUERY_TIMEOUT_MS)
-                    r = await self._query_and_data(CMD_REPORT_REFLECTED, b"", tag="[POLL REF]",
-                                                timeout_ms=POLL_QUERY_TIMEOUT_MS)
+
+                    f = await self._query_and_data(CMD_REPORT_FORWARD, b"", tag="[POLL FWD]", timeout_ms=poll_q_ms)
+                    r = await self._query_and_data(CMD_REPORT_REFLECTED, b"", tag="[POLL REF]", timeout_ms=poll_q_ms)
+
                     if f is not None:
                         self._last_forward_w = float(_u16le(f, 0) if len(f) >= 2 else 0.0)
                     if r is not None:
                         self._last_reflected_w = float(_u16le(r, 0) if len(r) >= 2 else 0.0)
 
-                    # ★★★ FORP/REFP 모니터링 로직 추가 ★★★
+                    # FORP/REFP 모니터링(임계값 cfg로)
                     if (
                         self._target_setpoint_w > 0.0
                         and self._last_forward_w is not None
                         and self._last_reflected_w is not None
-                        and not self._stop_requested      # 외부 stop 중에는 감시하지 않음
+                        and not self._stop_requested
                     ):
-                        # 최근 STATUS 기준으로 RF 출력이 실제 ON인지 확인
                         status = st or self._last_status
                         rf_on = bool(status.rf_output_on) if status is not None else True
 
                         if rf_on:
-                            # 1) FORP: setpoint 대비 5% 이상 이탈 여부
-                            tol = self._target_setpoint_w * (FORP_TOLERANCE_PERCENT / 100.0)
+                            forp_tol_pct = self._cfg_float("RFPULSE_FORP_TOLERANCE_PERCENT", 5.0)
+                            forp_limit_n = self._cfg_int("RFPULSE_FORP_CONSECUTIVE_LIMIT", 3)
+
+                            refp_limit_w = self._cfg_float("RFPULSE_REFP_LIMIT_WATTS", 20.0)
+                            refp_limit_n = self._cfg_int("RFPULSE_REFP_CONSECUTIVE_LIMIT", 3)
+
+                            # 1) FORP
+                            tol = self._target_setpoint_w * (forp_tol_pct / 100.0)
                             diff = abs(self._last_forward_w - self._target_setpoint_w)
 
                             if diff >= tol:
@@ -896,66 +985,66 @@ class RFPulseAsync:
                             else:
                                 self._forp_out_of_range_count = 0
 
-                            if self._forp_out_of_range_count >= FORP_CONSECUTIVE_LIMIT:
-                                # 상태 로그
+                            if self._forp_out_of_range_count >= forp_limit_n:
                                 await self._emit_status(
-                                    (
-                                        "FORP setpoint 이탈: "
-                                        f"meas={self._last_forward_w:.1f}W, "
-                                        f"target={self._target_setpoint_w:.1f}W, "
-                                        f"허용오차=±{FORP_TOLERANCE_PERCENT:.1f}% "
-                                        f"({self._forp_out_of_range_count}회 연속)"
-                                    )
+                                    "FORP setpoint 이탈: "
+                                    f"meas={self._last_forward_w:.1f}W, "
+                                    f"target={self._target_setpoint_w:.1f}W, "
+                                    f"허용오차=±{forp_tol_pct:.1f}% "
+                                    f"({self._forp_out_of_range_count}회 연속)"
                                 )
-                                # 공정 실패 이벤트 → chamber_runtime / process_controller 에서 공정 중지 처리
                                 await self._emit_failed(
                                     "FORP_MONITOR",
-                                    (
-                                        f"FORP가 setpoint에서 {FORP_TOLERANCE_PERCENT:.1f}% 이상 "
-                                        f"이탈({FORP_CONSECUTIVE_LIMIT}회 연속)"
-                                    ),
+                                    f"FORP가 setpoint에서 {forp_tol_pct:.1f}% 이상 이탈({forp_limit_n}회 연속)",
                                 )
-                                # 중복 트리거 방지
                                 self._forp_out_of_range_count = 0
 
-                            # 2) REFP: 임계값 이상 여부
-                            if self._last_reflected_w >= REFP_LIMIT_WATTS:
+                            # 2) REFP
+                            if self._last_reflected_w >= refp_limit_w:
                                 self._refp_over_limit_count += 1
                             else:
                                 self._refp_over_limit_count = 0
 
-                            if self._refp_over_limit_count >= REFP_CONSECUTIVE_LIMIT:
+                            if self._refp_over_limit_count >= refp_limit_n:
                                 await self._emit_status(
-                                    (
-                                        "REFP 과다 반사: "
-                                        f"meas={self._last_reflected_w:.1f}W, "
-                                        f"limit={REFP_LIMIT_WATTS:.1f}W "
-                                        f"({self._refp_over_limit_count}회 연속)"
-                                    )
+                                    "REFP 과다 반사: "
+                                    f"meas={self._last_reflected_w:.1f}W, "
+                                    f"limit={refp_limit_w:.1f}W "
+                                    f"({self._refp_over_limit_count}회 연속)"
                                 )
                                 await self._emit_failed(
                                     "REFP_MONITOR",
-                                    (
-                                        f"REFP가 {REFP_LIMIT_WATTS:.1f}W 이상 "
-                                        f"({REFP_CONSECUTIVE_LIMIT}회 연속)"
-                                    ),
+                                    f"REFP가 {refp_limit_w:.1f}W 이상 ({refp_limit_n}회 연속)",
                                 )
                                 self._refp_over_limit_count = 0
-                    # ★★★ FORP/REFP 모니터링 로직 끝 ★★★
 
                     if (self._last_forward_w is not None) and (self._last_reflected_w is not None):
-                        await self._event_q.put(RFPulseEvent(kind="power",
-                                                            forward=self._last_forward_w,
-                                                            reflected=self._last_reflected_w))
+                        await self._event_q.put(RFPulseEvent(
+                            kind="power",
+                            forward=self._last_forward_w,
+                            reflected=self._last_reflected_w,
+                        ))
+
                 finally:
                     self._poll_busy = False
-                await asyncio.sleep(POLL_INTERVAL_MS / 1000.0)
+
+                await asyncio.sleep(poll_interval_ms / 1000.0)
+
         except asyncio.CancelledError:
             self._poll_busy = False
 
     # ---------- 내부: 쿼리/exec 유틸 ----------
     async def _read_status(self) -> Optional[RfStatus]:
-        data = await self._query_and_data(CMD_REPORT_STATUS, b"", tag="[POLL WAKE]", timeout_ms=POLL_QUERY_TIMEOUT_MS)
+        # 폴링용 쿼리 타임아웃(ms): config에 없으면 QUERY_TIMEOUT_MS(기본 4500ms)를 fallback
+        poll_q_ms = self._cfg_int("POLL_QUERY_TIMEOUT_MS", self._cfg_int("QUERY_TIMEOUT_MS", 4500))
+
+        data = await self._query_and_data(
+            CMD_REPORT_STATUS,
+            b"",
+            tag="[POLL WAKE]",
+            timeout_ms=poll_q_ms,
+        )
+
         st = self._parse_status_0xA2(data)
         if st:
             self._last_status = st
@@ -965,47 +1054,105 @@ class RFPulseAsync:
 
     async def _exec_and_csr(self, cmd: int, data: bytes, *, tag: str = "", timeout_ms: Optional[int] = None) -> Tuple[bool, Optional[bytes]]:
         fut: asyncio.Future[Optional[bytes]] = asyncio.get_running_loop().create_future()
-        self._enqueue_exec(cmd, data, tag=tag, timeout_ms=timeout_ms or ACK_TIMEOUT_MS,
-                           callback=lambda b: (not fut.done()) and fut.set_result(b))
+
+        ack_ms = self._cfg_int("ACK_TIMEOUT_MS", 2000)
+        eff_timeout_ms = int(timeout_ms or ack_ms)
+
+        self._enqueue_exec(
+            cmd, data,
+            tag=tag,
+            timeout_ms=eff_timeout_ms,
+            callback=lambda b: (not fut.done()) and fut.set_result(b),
+        )
+
         try:
-            res = await asyncio.wait_for(fut, timeout=(timeout_ms or ACK_TIMEOUT_MS)/1000.0 + 2.0)
+            res = await asyncio.wait_for(fut, timeout=eff_timeout_ms / 1000.0 + 2.0)
         except asyncio.TimeoutError:
             return False, None
+
         if not res or len(res) < 1:
             return False, None
         return (res[0] == 0), res
 
-    async def _query_and_data(self, cmd: int, data: bytes, *, tag: str = "", timeout_ms: int = QUERY_TIMEOUT_MS) -> Optional[bytes]:
+
+    async def _query_and_data(self, cmd: int, data: bytes, *, tag: str = "", timeout_ms: Optional[int] = None) -> Optional[bytes]:
         fut: asyncio.Future[Optional[bytes]] = asyncio.get_running_loop().create_future()
-        self._enqueue_query(cmd, data, tag=tag, timeout_ms=timeout_ms,
-                            callback=lambda b: (not fut.done()) and fut.set_result(b))
+
+        q_ms = self._cfg_int("QUERY_TIMEOUT_MS", 4500)
+        eff_timeout_ms = int(timeout_ms or q_ms)
+
+        self._enqueue_query(
+            cmd, data,
+            tag=tag,
+            timeout_ms=eff_timeout_ms,
+            callback=lambda b: (not fut.done()) and fut.set_result(b),
+        )
+
         try:
-            return await asyncio.wait_for(fut, timeout=timeout_ms/1000.0 + 2.0)
+            return await asyncio.wait_for(fut, timeout=eff_timeout_ms / 1000.0 + 2.0)
         except asyncio.TimeoutError:
             return None
 
-    def _enqueue_exec(self, cmd: int, data: bytes, *, tag: str = "", timeout_ms: int = ACK_TIMEOUT_MS,
-                      gap_ms: int = CMD_GAP_MS, retries: int = 3, allow_no_reply: bool = False,
-                      allow_when_closing: bool = False, callback: Optional[Callable[[Optional[bytes]], None]] = None):
+
+    def _enqueue_exec(
+        self, cmd: int, data: bytes, *,
+        tag: str = "", timeout_ms: Optional[int] = None, gap_ms: Optional[int] = None,
+        retries: int = 3, allow_no_reply: bool = False, allow_when_closing: bool = False,
+        callback: Optional[Callable[[Optional[bytes]], None]] = None
+    ):
         if self._closing and not allow_when_closing:
             return
+
         cb = callback or (lambda _b: None)
+
+        ack_ms = self._cfg_int("ACK_TIMEOUT_MS", 2000)
+        cmd_gap_ms = self._cfg_int("CMD_GAP_MS", 1500)
+
+        eff_timeout_ms = int(timeout_ms or ack_ms)
+        eff_gap_ms = int(gap_ms or cmd_gap_ms)
+
         self._cmd_q.append(RfCommand(
-            kind="exec", cmd=cmd, data=data, timeout_ms=timeout_ms, gap_ms=gap_ms,
-            tag=tag, retries_left=retries, allow_no_reply=allow_no_reply,
-            allow_when_closing=allow_when_closing, callback=cb
+            kind="exec",
+            cmd=cmd,
+            data=data,
+            timeout_ms=eff_timeout_ms,
+            gap_ms=eff_gap_ms,
+            tag=tag,
+            retries_left=retries,
+            allow_no_reply=allow_no_reply,
+            allow_when_closing=allow_when_closing,
+            callback=cb,
         ))
 
-    def _enqueue_query(self, cmd: int, data: bytes, *, tag: str = "", timeout_ms: int = QUERY_TIMEOUT_MS,
-                       gap_ms: int = CMD_GAP_MS, retries: int = 3, allow_when_closing: bool = False,
-                       callback: Optional[Callable[[Optional[bytes]], None]] = None):
+
+    def _enqueue_query(
+        self, cmd: int, data: bytes, *,
+        tag: str = "", timeout_ms: Optional[int] = None, gap_ms: Optional[int] = None,
+        retries: int = 3, allow_when_closing: bool = False,
+        callback: Optional[Callable[[Optional[bytes]], None]] = None
+    ):
         if self._closing and not allow_when_closing:
             return
+
         cb = callback or (lambda _b: None)
+
+        q_ms = self._cfg_int("QUERY_TIMEOUT_MS", 4500)
+        cmd_gap_ms = self._cfg_int("CMD_GAP_MS", 1500)
+
+        eff_timeout_ms = int(timeout_ms or q_ms)
+        eff_gap_ms = int(gap_ms or cmd_gap_ms)
+
         self._cmd_q.append(RfCommand(
-            kind="query", cmd=cmd, data=data, timeout_ms=timeout_ms, gap_ms=gap_ms,
-            tag=tag, retries_left=retries, allow_no_reply=False,
-            allow_when_closing=allow_when_closing, callback=cb
+            kind="query",
+            cmd=cmd,
+            data=data,
+            timeout_ms=eff_timeout_ms,
+            gap_ms=eff_gap_ms,
+            tag=tag,
+            retries_left=retries,
+            allow_no_reply=False,
+            allow_when_closing=allow_when_closing,
+            callback=cb,
         ))
 
     # ---------- 내부: 토큰/프레임 도우미 ----------
@@ -1082,11 +1229,11 @@ class RFPulseAsync:
         if st.interlock_open:
             self._spawn(self._emit_status("STATUS: Interlock OPEN detected"))
         if st.overtemp:
-            asyncio.create_task(self._emit_status("STATUS: Over-Temperature detected"))
+            self._spawn(self._emit_status("STATUS: Over-Temperature detected"))
         if st.extended_fault:
-            asyncio.create_task(self._emit_status("STATUS: Extended fault present"))
+            self._spawn(self._emit_status("STATUS: Extended fault present"))
         if st.rf_on_requested and not st.rf_output_on:
-            asyncio.create_task(self._emit_status("STATUS: RF requested but output not ON yet"))
+            self._spawn(self._emit_status("STATUS: RF requested but output not ON yet"))
 
     # ---------- 이벤트/유틸 ----------
     async def _emit_status(self, msg: str):
