@@ -296,7 +296,14 @@ class ChamberRuntime:
         self._starter_threads: dict[str, asyncio.Task] = {}
         self._bg_started = False
         self._pending_device_cleanup = False
-        self._cleanup_timed_out = False  # ✅ cleanup 중 timeout 발생 여부(재시작 안전장치)
+        # ✅ cleanup 중 timeout 발생 여부(정상정리 실패 → 강제 복구 승격 기준)
+        self._cleanup_timed_out = False
+
+        # ✅ 강제 복구(Force Recovery) 반복 가드
+        # - cleanup timeout이 연속 발생할 때 무한 복구 루프를 막기 위해 카운터를 둔다.
+        # - 성공적으로 정리되면 0으로 리셋된다.
+        self._force_recover_count = 0
+
         self._last_polling_targets: TargetsMap | None = None
         self._last_state_text: str | None = None
         # ✅ Runner 구조에서는 delay/cooldown을 stage 코루틴에서 처리하므로 레거시 delay task를 사용하지 않는다.
@@ -2575,6 +2582,17 @@ class ChamberRuntime:
                 self._host_report_start(False, f"cooldown {remain:.0f}s remaining")
                 self._post_warning("대기 필요", f"이전 공정 종료 후 1분 대기 필요합니다.\n{secs}초 후에 시작하십시오.")
                 return
+            
+            # ✅ 이전 cleanup이 timeout으로 끝났고 강제 복구도 실패한 상태라면 Start를 막는다.
+            if bool(getattr(self, "_pending_device_cleanup", False)):
+                self._host_report_start(False, "cleanup pending")
+                self._post_warning(
+                    "정리 미완료",
+                    "이전 공정의 장치 정리가 완전히 끝나지 않았습니다(타임아웃).\n"
+                    "STOP을 한 번 더 눌러 강제 복구를 재시도하거나, 필요하면 프로그램을 재시작하세요.\n"
+                    "(정리 로그에 남아있는 장치 이름이 원인입니다.)",
+                )
+                return
 
             # Runner가 바쁘면 중복 Start 금지
             if getattr(self, "_runner_state", "IDLE") != "IDLE":
@@ -3124,7 +3142,9 @@ class ChamberRuntime:
                 with contextlib.suppress(Exception): self.rf_power.set_process_status(False)
             return
 
-        # ✅ 이번 cleanup이 “완전히 끝났는지” 표시 (Start 재진입 안전장치)
+        # ✅ 이번 cleanup이 “완전히 끝났는지” 표시
+        #    - False면 정상 정리 완료
+        #    - True면 정상 정리 실패(→ 아래에서 Force Recovery 승격)
         self._cleanup_timed_out = False
 
         pending_cleanup_names: list[str] = []
@@ -3193,7 +3213,7 @@ class ChamberRuntime:
                         name=f"Cleanup.OESAsync.CH{self.ch}.DETACHED",
                     )
 
-            # ✅ 핵심: daemon 모드에서는 init 캐시를 깨지 않는다(상주 유지)
+            # ✅ daemon 모드에서는 init 캐시를 깨지 않는다(상주 유지)
             if not bool(getattr(self.oes, "_daemon_enabled", False)):
                 self._oes_initialized = False
 
@@ -3230,7 +3250,7 @@ class ChamberRuntime:
                     with contextlib.suppress(Exception):
                         t.cancel()
 
-                # ✅ cancel 했는데도 안 죽는 cleanup이 있으면 여기서 무한 대기 가능 → 2초로 끊음(기존 유지)
+                # ✅ cancel 했는데도 안 죽는 cleanup이 있으면 여기서 무한 대기 가능 → 2초로 끊음
                 try:
                     await asyncio.wait_for(
                         asyncio.gather(*pending, return_exceptions=True),
@@ -3284,12 +3304,178 @@ class ChamberRuntime:
             else:
                 self.append_log("MAIN", "⚠ RF-Pulse cleanup 미완료 → 점유 유지(동시 사용 방지)")
 
-        # ✅ cleanup이 완전히 끝난 경우에만 “정리 완료”로 간주
+        # ------------------------------------------------------------------
+        # ✅ 정상 정리(Graceful cleanup) 완료 여부 판정
+        #    - _cleanup_timed_out == False : 정상 정리 완료 → 다음 공정 진행 허용
+        #    - _cleanup_timed_out == True  : 정상 정리 실패 → 자동 강제 복구(Force Recovery) 승격 시도
+        # ------------------------------------------------------------------
         if not getattr(self, "_cleanup_timed_out", False):
             self._pending_device_cleanup = False
+            # 강제 복구 카운터는 정상 정리 성공 시 리셋
+            self._force_recover_count = 0
+            return
+
+        # ✅ 정상 정리 실패: 자동 강제 복구 시도
+        ok_force = False
+        with contextlib.suppress(Exception):
+            ok_force = await asyncio.wait_for(
+                self._force_recover_after_cleanup_timeout(pending_cleanup_names),
+                timeout=25.0,
+            )
+
+        if ok_force:
+            # 강제 복구가 성공하면 Start 제한을 해제하고 다음 공정으로 진행 가능
+            self._cleanup_timed_out = False
+            self._pending_device_cleanup = False
+            self._force_recover_count = 0
+            self.append_log("MAIN", "🧯 강제 복구 성공 → Start 제한 해제")
         else:
+            # 강제 복구도 실패하면 안전상 Start 제한 유지
             self._pending_device_cleanup = True
-            self.append_log("MAIN", "⚠ cleanup 미완료(타임아웃) → Start는 정리 완료 전까지 제한")
+            self.append_log("MAIN", "⚠ cleanup 미완료(타임아웃) + 강제 복구 실패 → Start 제한 유지")
+
+    async def _force_recover_after_cleanup_timeout(self, pending_cleanup_names: list[str]) -> bool:
+        """
+        강제 복구(Force Recovery)
+
+        목적:
+        - 정상 정리(Graceful cleanup)가 timeout/누수로 실패했을 때,
+          프로그램 재시작 없이 다음 공정을 계속할 수 있도록
+          "통신/핸들/대기"를 최대한 강하게 끊고 내부 상태를 리셋한다.
+
+        성공 기준(현실적 기준):
+        - 여기서 예외 없이 수행되고, 최소한 'Start를 막아야 할 이유'를 줄였다고 판단되면 True
+        - 반복 실패가 누적되면 False(재시작 권고)
+        """
+        # 가드: 너무 자주 강제복구하면 오히려 누수/불안정 증가
+        self._force_recover_count = int(getattr(self, "_force_recover_count", 0)) + 1
+        if self._force_recover_count > 3:
+            self.append_log("MAIN", f"⚠ 강제 복구 {self._force_recover_count}회 반복 → 프로그램 재시작 권고")
+            return False
+
+        self.append_log("MAIN", f"🧯 강제 복구 시작 (count={self._force_recover_count}, pending={pending_cleanup_names!r})")
+
+        # 0) 자동 연결/폴링 강제 OFF (통신이 계속 발생하면 MOXA idle disconnect도 안 걸릴 수 있음)
+        self._auto_connect_enabled = False
+        with contextlib.suppress(Exception):
+            self._apply_polling_targets({"mfc": False, "dc_pulse": False, "rf_pulse": False, "dc": False, "rf": False})
+
+        # 1) starter task들 취소 (있다면)
+        try:
+            st = getattr(self, "_starter_threads", None)
+            if isinstance(st, dict) and st:
+                live = [t for t in st.values() if isinstance(t, asyncio.Task) and (not t.done())]
+                for t in live:
+                    with contextlib.suppress(Exception):
+                        t.cancel()
+                if live:
+                    with contextlib.suppress(asyncio.TimeoutError):
+                        await asyncio.wait_for(asyncio.gather(*live, return_exceptions=True), timeout=2.0)
+                st.clear()
+        except Exception:
+            pass
+
+        # 2) 장치 transport를 “가능한 만큼” 강제로 close (best-effort)
+        dev_list = [
+            ("IG", self.ig),
+            ("MFC", self.mfc),
+            ("DCPulse", self.dc_pulse),
+            ("RFPulse", self.rf_pulse),
+            ("DCPower", self.dc_power),
+            ("RFPower", self.rf_power),
+            ("RGA", self.rga),
+            ("OES", self.oes),
+        ]
+        for name, dev in dev_list:
+            if dev is None:
+                continue
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(self._hard_close_device_transport(dev, name), timeout=3.0)
+
+        # 3) 로그 writer가 누수(leaked)된 케이스는 executor/queue를 재생성해서 로그 기능을 살린다
+        try:
+            t = getattr(self, "_log_writer_task", None)
+            if isinstance(t, asyncio.Task) and (not t.done()):
+                with contextlib.suppress(Exception):
+                    t.cancel()
+                with contextlib.suppress(asyncio.TimeoutError):
+                    await asyncio.wait_for(asyncio.gather(t, return_exceptions=True), timeout=1.5)
+
+            ex = getattr(self, "_log_io_exec", None)
+            if ex is not None:
+                with contextlib.suppress(Exception):
+                    ex.shutdown(wait=False, cancel_futures=True)  # type: ignore[arg-type]
+
+            self._log_io_exec = ThreadPoolExecutor(max_workers=1, thread_name_prefix=f"LogIO.CH{self.ch}")
+            self._log_q = asyncio.Queue(maxsize=4096)
+            self._log_writer_task = None
+        except Exception:
+            self.append_log("MAIN", "⚠ 강제 복구: log writer 재초기화 실패(무시)")
+
+        # 4) 내부 상태 리셋 (다음 런에서 start/start_devices를 다시 태우도록)
+        self._bg_started = False
+        self._devices_started = False
+
+        self.append_log("MAIN", "🧯 강제 복구 완료(최대한 복구 시도)")
+        return True
+    
+    async def _hard_close_device_transport(self, dev: Any, label: str) -> None:
+        """
+        cleanup()이 timeout/누수로 실패했을 때, 가능한 방식으로 transport를 강제 close 한다.
+        - 장치 클래스마다 메서드명이 달라서, 존재하는 메서드를 best-effort로 호출한다.
+        """
+        # 1) 장치가 제공하는 강제 종료류 메서드 우선 시도
+        methods = [
+            "force_close",
+            "close_transport",
+            "disconnect",
+            "close",
+            "shutdown",
+            "stop",
+            "abort",
+            "reset_connection",
+        ]
+
+        for m in methods:
+            fn = getattr(dev, m, None)
+            if callable(fn):
+                try:
+                    r = fn()
+                    if inspect.isawaitable(r):
+                        await r
+                except Exception:
+                    pass
+
+        # 2) 내부 transport 후보 속성에서 close() 시도
+        candidate_attrs = [
+            "_ser", "ser", "_serial", "serial",
+            "_client", "client",
+            "_sock", "sock", "_socket", "socket",
+            "_writer", "writer",
+            "_transport", "transport",
+        ]
+
+        for a in candidate_attrs:
+            obj = getattr(dev, a, None)
+            if obj is None:
+                continue
+
+            close_fn = getattr(obj, "close", None)
+            if callable(close_fn):
+                with contextlib.suppress(Exception):
+                    r = close_fn()
+                    if inspect.isawaitable(r):
+                        await r
+
+            wc = getattr(obj, "wait_closed", None)
+            if callable(wc):
+                with contextlib.suppress(Exception):
+                    r = wc()
+                    if inspect.isawaitable(r):
+                        await r
+
+        with contextlib.suppress(Exception):
+            self.append_log("MAIN", f"🧯 force-close attempted: {label}")
 
     def shutdown_fast(self) -> None:
         async def run():
