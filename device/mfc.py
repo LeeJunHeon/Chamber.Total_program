@@ -668,7 +668,7 @@ class AsyncMFC:
         dec = self._cfg_int("MFC_PRESSURE_DECIMALS", 3)
 
         hw_val = round(float(ui_value) * float(scale), int(dec))
-        await self._emit_status(f"SP1 스케일: UI {ui_value:.2f} → 장비 {hw_val:.{dec}f}")
+        await self._emit_status(f"SP4 스케일: UI {ui_value:.2f} → 장비 {hw_val:.{dec}f}")
 
         # 설정 전송 (no-reply)
         self._enqueue(self._mk_cmd("SP4_SET", value=hw_val), None,
