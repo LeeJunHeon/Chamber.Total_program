@@ -16,7 +16,6 @@ from __future__ import annotations
 import asyncio
 import inspect
 import time
-import csv
 import os
 from datetime import datetime
 from pathlib import Path
@@ -29,6 +28,7 @@ from pymodbus.client import ModbusTcpClient
 from pymodbus.exceptions import ModbusException
 
 from lib import config_common as cfgc   # ✅ 추가: Config 팝업에서 바뀐 값 소스
+from util.log_hub import DailyCsvListAppender
 
 # ======================================================
 # 주소 맵 (단독 CLI에서 사용한 것과 동일)
@@ -972,21 +972,6 @@ class AsyncPLC:
         )
         return Path(base) / "CH_1_2_program" / "Logs" / "CH1&2" / "CH1&2_PLC"
 
-    def _pick_log_dir(self, nas_dir: Path, local_dir: Path) -> Path:
-        # NAS 우선, 실패하면 로컬
-        try:
-            nas_dir.mkdir(parents=True, exist_ok=True)
-            return nas_dir
-        except Exception:
-            try:
-                local_dir.mkdir(parents=True, exist_ok=True)
-            except Exception:
-                pass
-            return local_dir
-
-    def _daily_file_path(self, base_dir: Path, dt: datetime) -> Path:
-        return base_dir / f"{dt.strftime('%Y%m%d')}.csv"
-
     async def start_plc_coil_csv_logger(
         self, *, interval_s: Optional[float] = None,
         nas_dir: Optional[str] = None,
@@ -1018,20 +1003,41 @@ class AsyncPLC:
         self._plc_coil_log_nas_dir = Path(nas_dir)
         self._plc_coil_log_local_dir = Path(local_dir) if local_dir else self._default_local_plc_log_dir()
 
+        # ✅ keep-handle CSV writer 생성 (NAS 우선 → 실패 시 로컬 폴백, 이후 주기적으로 NAS 재시도)
+        self._plc_coil_csv_writer = DailyCsvListAppender(
+            primary_dir=self._plc_coil_log_nas_dir,
+            fallback_dir=self._plc_coil_log_local_dir,
+            filename_builder=lambda dt: f"{dt.strftime('%Y%m%d')}.csv",
+            encoding="utf-8-sig",
+            retry_primary_every_s=10.0,
+        )
+
         self._plc_coil_log_task = asyncio.create_task(self._plc_coil_log_loop(), name="PLCCoilCSVLogger")
 
     async def stop_plc_coil_csv_logger(self) -> None:
         evt = getattr(self, "_plc_coil_log_stop", None)
         task = getattr(self, "_plc_coil_log_task", None)
+
         if evt is not None:
             evt.set()
+
         if task is not None:
             task.cancel()
             try:
                 await task
             except Exception:
                 pass
+
         self._plc_coil_log_task = None
+
+        # ✅ keep-handle writer close
+        w = getattr(self, "_plc_coil_csv_writer", None)
+        if w is not None:
+            try:
+                await asyncio.to_thread(w.close)
+            except Exception:
+                pass
+        self._plc_coil_csv_writer = None
 
     async def _plc_coil_log_loop(self) -> None:
         evt: asyncio.Event = self._plc_coil_log_stop
@@ -1068,14 +1074,6 @@ class AsyncPLC:
                 await asyncio.sleep(interval)
                 continue
 
-            # ✅ 저장 위치(NAS 우선, 실패시 로컬)
-            base_dir = await asyncio.to_thread(
-                self._pick_log_dir,
-                self._plc_coil_log_nas_dir,
-                self._plc_coil_log_local_dir,
-            )
-            fp = self._daily_file_path(base_dir, dt)
-
             # ✅ 스킵(경합으로 빈 스냅샷이면 "전부 FALSE" 기록 방지)
             if not snap:
                 await asyncio.sleep(interval)
@@ -1087,62 +1085,32 @@ class AsyncPLC:
 
             header = ["Timestamp", *keys]
 
-            def _write_csv():
-                fp.parent.mkdir(parents=True, exist_ok=True)
-                need_header = (not fp.exists()) or (fp.stat().st_size == 0)
-                with open(fp, "a", encoding="utf-8-sig", newline="") as f:
-                    w = csv.writer(f)
-                    if need_header:
-                        w.writerow(header)
-                    w.writerow(row)
+            w = getattr(self, "_plc_coil_csv_writer", None)
+            if w is None:
+                # start가 호출되지 않았거나(비정상 흐름), 예외로 writer가 비워졌을 때 방어
+                w = DailyCsvListAppender(
+                    primary_dir=self._plc_coil_log_nas_dir,
+                    fallback_dir=self._plc_coil_log_local_dir,
+                    filename_builder=lambda dt: f"{dt.strftime('%Y%m%d')}.csv",
+                    encoding="utf-8-sig",
+                    retry_primary_every_s=10.0,
+                )
+                self._plc_coil_csv_writer = w
 
             try:
-                await asyncio.to_thread(_write_csv)
+                await asyncio.to_thread(w.append_row, dt=dt, header=header, row=row)
+
+                # (선택) 이번 write에서 NAS→LOCAL 폴백이 발생했으면 한 줄 남김
+                if w.consume_switched_flag():
+                    self.log("PLC COIL LOG: NAS write failed -> switched to LOCAL (keep-handle)")
+
             except Exception as e:
-                # NAS에서 실패할 수 있으니 로컬로 한번 더 시도(여기도 실패하면 그냥 무시)
-                try:
-                    self.log("PLC COIL LOG: write failed (nas?). fallback local: %r", e)
-                    fp2 = self._daily_file_path(self._plc_coil_log_local_dir, dt)
-                    def _write_local():
-                        fp2.parent.mkdir(parents=True, exist_ok=True)
-                        need_header2 = (not fp2.exists()) or (fp2.stat().st_size == 0)
-                        with open(fp2, "a", encoding="utf-8-sig", newline="") as f:
-                            w = csv.writer(f)
-                            if need_header2:
-                                w.writerow(header)
-                            w.writerow(row)
-                    await asyncio.to_thread(_write_local)
-                except Exception:
-                    pass  # 최종적으로도 실패하면 그냥 무시(공정 영향 0)
+                # ✅ 최종 실패는 공정 영향 없게 무시
+                self.log("PLC COIL LOG: write failed (ignored): %r", e)
 
             # 주기 맞추기
             elapsed = time.perf_counter() - t0
             await asyncio.sleep(max(0.0, interval - elapsed))
-
-    # ---------- 레거시/편의 ----------
-    async def main_shutter_open(self, chamber: int = 1, *, momentary: bool = False):
-        await self.main_shutter(chamber, open=True, momentary=momentary)
-
-    async def main_shutter_close(self, chamber: int = 1, *, momentary: bool = False):
-        await self.main_shutter(chamber, open=False, momentary=momentary)
-
-    async def gv_open(self, chamber: int = 1, *, momentary: bool = False):
-        await self.gate_valve(chamber, open=True, momentary=momentary)
-
-    async def gv_close(self, chamber: int = 1, *, momentary: bool = False):
-        await self.gate_valve(chamber, open=False, momentary=momentary)
-
-    async def door_open(self, chamber: int = 1, *, momentary: bool = False):
-        await self.door(chamber, open=True, momentary=momentary)
-
-    async def door_close(self, chamber: int = 1, *, momentary: bool = False):
-        await self.door(chamber, open=False, momentary=momentary)
-
-    async def vent_on(self, chamber: int = 1, *, momentary: bool = False):
-        await self.vent(chamber, on=True, momentary=momentary)
-
-    async def vent_off(self, chamber: int = 1, *, momentary: bool = False):
-        await self.vent(chamber, on=False, momentary=momentary)
 
     # ──────────────────────────────────────────────────────────
     # Power 공통 (DC/RF 등): family + index 기반
