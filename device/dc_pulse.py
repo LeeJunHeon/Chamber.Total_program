@@ -54,15 +54,19 @@ ACTIVATION_CHECK_DELAY_S = 5.0      # OUTPUT_ON 후 첫 측정까지 대기 (초
 
 # 폴링 주기(초)
 DCP_POLL_INTERVAL_S = 5.0
-DCP_CONNECT_TIMEOUT_S = 1.5
+DCP_CONNECT_TIMEOUT_S = 3.0          # 1.5 -> 3.0 (연결 여유)
 
 # 타이밍/리트라이
-DCP_TIMEOUT_MS = 1500               # 개별 명령 타임아웃
-DCP_GAP_MS = 1000                  # 명령 간 최소 간격
+DCP_TIMEOUT_MS = 2500               # 1500 -> 2500 (개별 명령 여유)
+DCP_GAP_MS = 1000
 DCP_WATCHDOG_INTERVAL_MS = 1000
 DCP_RECONNECT_BACKOFF_START_MS = 1000
 DCP_RECONNECT_BACKOFF_MAX_MS = 10000
-DCP_FIRST_CMD_EXTRA_TIMEOUT_MS = 1000
+DCP_FIRST_CMD_EXTRA_TIMEOUT_MS = 2000   # 1000 -> 2000 (재연결 직후 첫 명령 여유)
+
+# (추가) 재연결 직후 안정화/드레인 타임아웃 (하드코딩)
+DCP_POST_OPEN_QUIET_S = 0.8          # 기존 0.3초는 너무 짧을 수 있음
+DCP_DRAIN_TIMEOUT_S = 1.0            # drain이 멎는 상황 방지용
 
 # ✅ 명령 실패 시 fault 조회/클리어 후 1회 재전송 (LOCAL/REMOTE/ORIGIN 건드리지 않음)
 DCP_ENABLE_FAULT_RECOVER = getattr(cfgc, "DCP_ENABLE_FAULT_RECOVER", True)
@@ -227,7 +231,7 @@ class AsyncDCPulse:
         self._on_telemetry = on_telemetry
 
         # ★ Inactivity 전략 필드
-        self._inactivity_s: float = float(getattr(cfgc, "DCP_INACTIVITY_REOPEN_S", 0.0))
+        self._inactivity_s: float = float(getattr(cfgc, "DCP_INACTIVITY_REOPEN_S", 60.0))
         self._last_io_mono: float = 0.0
 
         self._out_on: bool = False                 # 출력 ON/OFF 내부 기억
@@ -700,6 +704,8 @@ class AsyncDCPulse:
         """
         # timeout/disconnect였으면 우선 재연결을 기다림
         if resp is None:
+            # watchdog이 꺼져있으면 재연결이 영영 안 될 수 있으니, 일단 켜준다
+            await self.start()
             ok_conn = await self._wait_until_connected(timeout=3.0)
             if not ok_conn:
                 await self._emit_status(f"[{label}] 실패 후 재연결 안됨 → 복구 중단")
@@ -1185,7 +1191,7 @@ class AsyncDCPulse:
 
             # 연결 직후 quiet 기간
             if self._just_reopened and self._last_connect_mono > 0.0:
-                remain = (self._last_connect_mono + 0.3) - time.monotonic()
+                remain = (self._last_connect_mono + DCP_POST_OPEN_QUIET_S) - time.monotonic()
                 if remain > 0:
                     await asyncio.sleep(remain)
                 self._just_reopened = False
@@ -1194,7 +1200,7 @@ class AsyncDCPulse:
             try:
                 self._last_io_mono = time.monotonic()   # ★ 송신 직전 IO 시각
                 self._writer.write(cmd.payload)
-                await self._writer.drain()
+                await asyncio.wait_for(self._writer.drain(), timeout=DCP_DRAIN_TIMEOUT_S)
             except Exception as e:
                 self._dbg("DCP", f"{cmd.label} 전송 오류: {e}")
                 self._inflight = None
@@ -1207,8 +1213,12 @@ class AsyncDCPulse:
                 continue
 
             # === 응답 대기: '자신의 응답'만 인정 ===
-            deadline = time.monotonic() + (cmd.timeout_ms/1000.0) + 2.0
-            exp_cmd = cmd.payload[1] if len(cmd.payload) >= 2 else None  # 우리가 방금 보낸 CMD
+            extra = 0.0
+            if self._last_connect_mono > 0.0 and (time.monotonic() - self._last_connect_mono) < 2.0:
+                extra = DCP_FIRST_CMD_EXTRA_TIMEOUT_MS / 1000.0
+
+            deadline = time.monotonic() + (cmd.timeout_ms/1000.0) + 2.0 + extra
+            exp_cmd = cmd.payload[1] if len(cmd.payload) >= 2 else None
             is_read  = cmd.label.startswith("READ_")
 
             try:
