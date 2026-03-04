@@ -48,11 +48,6 @@ CMD_GAP_MS             = 1500
 POST_WRITE_DELAY_MS    = 1500
 ACK_FOLLOWUP_GRACE_MS  = 500
 
-# 폴링
-POLL_INTERVAL_MS       = 5_000 #5초 rf pulse만 사용
-POLL_QUERY_TIMEOUT_MS  = 9000
-POLL_START_DELAY_AFTER_RF_ON_MS = 800
-
 
 # ======================================================================
 # RGA (외부 프로그램 실행 + CSV 저장)

@@ -12,8 +12,6 @@ RGA_CSV_PATH = r"\\VanaM_NAS\VanaM_Sputter\RGA\Ch.2\RGA_spectrums.csv"
 # IG / MFC
 IG_TCP_PORT  = 4002
 MFC_TCP_PORT = 4006
-RFPULSE_TCP_HOST = "192.168.1.50"
-RFPULSE_TCP_PORT = 4005
 
 # ★ CH2 전용 스케일: 3번 가스(N2)는 UI(sccm) → 장비(%FS) ×2.0
 MFC_SCALE_FACTORS = {1: 1.0, 2: 10.0, 3: 2.0}
@@ -28,9 +26,6 @@ SUPPORTS_DC = True
 SUPPORTS_RF_CONT = True
 SUPPORTS_RFPULSE = True
 
-RFPULSE_WATCHDOG_INTERVAL_MS        = 3000
-RFPULSE_RECONNECT_BACKOFF_START_MS  = 2000
-RFPULSE_RECONNECT_BACKOFF_MAX_MS    = 30_000
 
 # ============================================================
 # Process (공정 영향 파라미터)
