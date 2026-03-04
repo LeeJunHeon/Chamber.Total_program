@@ -24,31 +24,8 @@ from collections import deque
 from typing import Optional, Deque, Callable, AsyncGenerator, Literal
 import asyncio, re, time, contextlib, socket
 
-from lib import config_common as cfgc # ★ 추가
-from lib.config_ch1 import MFC_TCP_PORT
-from lib.config_common import (
-    MFC_TCP_HOST, MFC_TX_EOL, MFC_SKIP_ECHO, MFC_CONNECT_TIMEOUT_S,
-    MFC_COMMANDS, FLOW_ERROR_TOLERANCE, FLOW_ERROR_MAX_COUNT, MFC_SCALE_FACTORS, 
-    MFC_POLLING_INTERVAL_MS, MFC_STABILIZATION_INTERVAL_MS, MFC_WATCHDOG_INTERVAL_MS, 
-    MFC_RECONNECT_BACKOFF_START_MS, MFC_RECONNECT_BACKOFF_MAX_MS, MFC_TIMEOUT, MFC_GAP_MS, 
-    MFC_DELAY_MS, MFC_DELAY_MS_VALVE, DEBUG_PRINT, MFC_PRESSURE_SCALE, MFC_PRESSURE_DECIMALS,
-    MFC_SP1_VERIFY_TOL, MFC_POST_OPEN_QUIET_MS, MFC_ALLOW_NO_REPLY_DRAIN_MS,
-    MFC_FIRST_CMD_EXTRA_TIMEOUT_MS
-)
-
-# ==============================
-#   압력 도달 판정용 상수 (NEW)
-# ==============================
-# ※ 단위는 UI에서 사용하는 압력 단위 그대로 (예: mTorr)
-#    → UI에서 작업압 5.0 을 넣었다면 target_ui = 5.0 기준으로 계산
-
-# --- 압력 허용 오차 관련 상수 (UI 단위 기준, 예: mTorr) ---
-MFC_PRESSURE_TOL_ABS = 0.02     # 절대 오차 허용, 예: ±0.02 mTorr
-MFC_PRESSURE_TOL_REL = 0.05     # 상대 오차 허용, 예: ±5 %
-MFC_PRESSURE_STABLE_COUNT = 3   # 연속 몇 번 허용 범위 안에 들어와야 '안정'
-MFC_PRESSURE_TIMEOUT_SEC = 60.0 # 최대 기다릴 시간(초)
-MFC_PRESSURE_CHECK_INTERVAL_SEC = 1.0  # 압력 체크 주기(초)
-
+from lib import config_common as cfgc
+cfg_default = cfgc  # AsyncMFC 기본 cfg (원하면 ch1/ch2 모듈을 넘겨서 채널별 파라미터 사용)
 
 # =============== 이벤트 모델 ===============
 EventKind = Literal["status", "flow", "pressure", "command_confirmed", "command_failed"]
@@ -77,16 +54,30 @@ class Command:
 
 # =============== Async 컨트롤러 ===============
 class AsyncMFC:
-    def __init__(self, *, enable_verify: bool = True, enable_stabilization: Optional[bool] = None,
-                 host: Optional[str] = None, port: Optional[int] = None, scale_factors: Optional[dict[int, float]] = None):
-        self.debug_print = DEBUG_PRINT
+    def __init__(self, *, enable_verify: bool = True, enable_stabilization: Optional[bool] = None, host: Optional[str] = None, 
+                 port: Optional[int] = None, scale_factors: Optional[dict[int, float]] = None, cfg=None):
+        self._cfg = cfg if cfg is not None else cfg_default
+
+        def _cfg_get(name: str, default=None):
+            if hasattr(self._cfg, name):
+                return getattr(self._cfg, name)
+            if hasattr(cfgc, name):
+                return getattr(cfgc, name)
+            return default
+
+        self._cfg_get = _cfg_get
+
+        # ✅ config에서 즉시 읽기(=UI에서 값 바꾸면 반영 가능)
+        self.debug_print = self._cfg_bool("DEBUG_PRINT", False)
 
         # ← 런타임에서 채널별로 덮어쓸 TCP 엔드포인트(없으면 config 기본값 사용)
         self._override_host: Optional[str] = host
         self._override_port: Optional[int] = port
 
-        # ★ 인스턴스별 스케일 맵(없으면 기존 전역값 사용)
-        self.scale_factors: dict[int, float] = dict(scale_factors or MFC_SCALE_FACTORS)
+        # ★ 인스턴스별 스케일 맵(인자 우선, 없으면 config의 MFC_SCALE_FACTORS)
+        self.scale_factors: dict[int, float] = dict(
+            scale_factors or self._cfg_dict("MFC_SCALE_FACTORS", {1: 1.0, 2: 1.0, 3: 1.0})
+        )
 
         # ▼ 추가: 검증/안정화 플래그
         self._verify_enabled: bool = bool(enable_verify)
@@ -97,9 +88,11 @@ class AsyncMFC:
         self._reader: Optional[asyncio.StreamReader] = None
         self._writer: Optional[asyncio.StreamWriter] = None
         self._reader_task: Optional[asyncio.Task] = None
-        self._tx_eol: bytes = MFC_TX_EOL
-        self._tx_eol_str: str = MFC_TX_EOL.decode("ascii", "ignore")
-        self._skip_echo_flag: bool = bool(MFC_SKIP_ECHO)
+
+        # ✅ TCP Streams (EOL/echo는 런타임 필드로 캐시)
+        self._tx_eol: bytes = self._cfg_bytes("MFC_TX_EOL", b"\r")
+        self._tx_eol_str: str = self._tx_eol.decode("ascii", "ignore")
+        self._skip_echo_flag: bool = self._cfg_bool("MFC_SKIP_ECHO", True)
 
         self._connected: bool = False
         self._ever_connected: bool = False
@@ -127,8 +120,8 @@ class AsyncMFC:
         self._stab_task: Optional[asyncio.Task] = None
         self._wd_paused: bool = False    # ← 추가 (워치독 일시정지 상태)
 
-        # 재연결 백오프
-        self._reconnect_backoff_ms = MFC_RECONNECT_BACKOFF_START_MS
+        # 재연결 백오프(시작값)
+        self._reconnect_backoff_ms = self._cfg_int("MFC_RECONNECT_BACKOFF_START_MS", 1000)
 
         # 런타임/스케일/모니터링
         self.gas_map = {1: "Ar", 2: "O2", 3: "N2"}
@@ -158,13 +151,65 @@ class AsyncMFC:
         self._just_reopened: bool = False
 
         # ★ Inactivity 전략 필드
-        self._inactivity_s: float = float(getattr(cfgc, "MFC_INACTIVITY_REOPEN_S", 0.0))
+        self._inactivity_s: float = self._cfg_float("MFC_INACTIVITY_REOPEN_S", 0.0)
         self._last_io_mono: float = 0.0
 
 # =============== debug, R69 하지 않는 ==================
         # 현재 ON/OFF 상태를 R69 없이 자체 추적하기 위한 섀도우 마스크(좌→우: ch1..ch4)
         self._mask_shadow: str = "0000"
 # =============== debug, R69 하지 않는 ==================
+
+    # ---------- config helper (NEW) ----------
+    def _cfg_int(self, name: str, default: int) -> int:
+        v = self._cfg_get(name, default)
+        try:
+            return int(float(v))
+        except Exception:
+            return int(default)
+
+    def _cfg_float(self, name: str, default: float) -> float:
+        v = self._cfg_get(name, default)
+        try:
+            return float(v)
+        except Exception:
+            return float(default)
+
+    def _cfg_bool(self, name: str, default: bool = False) -> bool:
+        v = self._cfg_get(name, default)
+        if isinstance(v, bool):
+            return v
+        if isinstance(v, (int, float)):
+            return bool(v)
+        s = str(v).strip().lower()
+        if s in ("1", "true", "t", "yes", "y", "on"):
+            return True
+        if s in ("0", "false", "f", "no", "n", "off", ""):
+            return False
+        return bool(default)
+
+    def _cfg_bytes(self, name: str, default: bytes) -> bytes:
+        v = self._cfg_get(name, default)
+        if isinstance(v, (bytes, bytearray)):
+            return bytes(v)
+        if isinstance(v, str):
+            return v.encode("ascii", "ignore")
+        return bytes(default)
+
+    def _cfg_dict(self, name: str, default: dict) -> dict:
+        v = self._cfg_get(name, default)
+        return v if isinstance(v, dict) else dict(default)
+
+    def reload_runtime_cfg(self) -> None:
+        """
+        config 값을 런타임 필드로 다시 반영.
+        (특히 TX_EOL/echo/inactivity 같은 __init__ 캐시 성격)
+        """
+        self.debug_print = self._cfg_bool("DEBUG_PRINT", False)
+        self._tx_eol = self._cfg_bytes("MFC_TX_EOL", b"\r")
+        self._tx_eol_str = self._tx_eol.decode("ascii", "ignore")
+        self._skip_echo_flag = self._cfg_bool("MFC_SKIP_ECHO", True)
+        self._inactivity_s = self._cfg_float("MFC_INACTIVITY_REOPEN_S", 0.0)
+        self._reconnect_backoff_ms = self._cfg_int("MFC_RECONNECT_BACKOFF_START_MS", 1000)
 
     def is_connected(self) -> bool:
         """프리플라이트/상태 체크용: 현재 TCP 연결 여부를 반환."""
@@ -190,6 +235,9 @@ class AsyncMFC:
             self._watchdog_task = loop.create_task(self._watchdog_loop(), name="MFCWatchdog")
         if not self._cmd_worker_task:
             self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="MFCCmdWorker")
+
+        # ✅ 이벤트 큐 적체 방지: events() 구독자가 늦게 붙어도 중앙 큐를 비워준다
+        self._ensure_event_broadcast_task()
         #await self._emit_status("MFC 워치독/워커 시작")
 
     async def connect(self):
@@ -355,7 +403,7 @@ class AsyncMFC:
         self._flow_on_flags[channel] = True
 
         # 장비 반영 대기(예전 코드와 동일한 최소 대기 보장)
-        await asyncio.sleep(max(MFC_DELAY_MS, 200) / 1000.0)
+        await asyncio.sleep(max(self._cfg_int("MFC_DELAY_MS", 1000), 200) / 1000.0)
 
         # (옵션) 안정화 루프 유지 — R69 없이도 R60 기반 안정화는 가능
         if self._stab_enabled:
@@ -406,7 +454,7 @@ class AsyncMFC:
         self._mask_shadow = target
 
         # 장비 반영 대기 후 확정
-        await asyncio.sleep(max(MFC_DELAY_MS, 200) / 1000.0)
+        await asyncio.sleep(max(self._cfg_int("MFC_DELAY_MS", 1000), 200) / 1000.0)
         await self._emit_confirmed("FLOW_OFF")
 
     # === PlasmaCleaning: 선택 가스 전용 API (L{ch}{1/0} 개별 명령 사용) ===
@@ -446,7 +494,7 @@ class AsyncMFC:
                 self._stab_task = asyncio.create_task(self._stabilization_loop())
                 await self._emit_status(f"FLOW_ON: ch{ch} 안정화 시작 (목표 HW {tgt:.2f})")
                 return
-        await asyncio.sleep(max(MFC_DELAY_MS, 200) / 1000.0)
+        await asyncio.sleep(max(self._cfg_int("MFC_DELAY_MS", 1000), 200) / 1000.0)
         await self._emit_confirmed("FLOW_ON")
 
     async def flow_off_selected(self) -> None:
@@ -466,7 +514,7 @@ class AsyncMFC:
 
         self._enqueue(self._mk_cmd("FLOW_OFF", channel=ch), None,
                     allow_no_reply=True, tag=f"[FLOW_OFF ch{ch}]")
-        await asyncio.sleep(max(MFC_DELAY_MS, 200) / 1000.0)
+        await asyncio.sleep(max(self._cfg_int("MFC_DELAY_MS", 1000), 200) / 1000.0)
         await self._emit_confirmed("FLOW_OFF")
 
     # async def flow_on(self, channel: int):
@@ -491,7 +539,7 @@ class AsyncMFC:
     #         # 검증 없이 마스크만 적용 후 확정
     #         self._enqueue(self._mk_cmd("SET_ONOFF_MASK", target), None,
     #                     allow_no_reply=True, tag=f"[L0 {target}]")
-    #         await asyncio.sleep(max(MFC_DELAY_MS, 200) / 1000.0)
+    #         await asyncio.sleep(max(self._cfg_int("MFC_DELAY_MS", 1000), 200) / 1000.0)
     #         await self._emit_confirmed("FLOW_ON")
     #         return
 
@@ -544,7 +592,7 @@ class AsyncMFC:
     #     if not self._verify_enabled:
     #         self._enqueue(self._mk_cmd("SET_ONOFF_MASK", target), None,
     #                     allow_no_reply=True, tag=f"[L0 {target}]")
-    #         await asyncio.sleep(max(MFC_DELAY_MS, 200) / 1000.0)
+    #         await asyncio.sleep(max(self._cfg_int("MFC_DELAY_MS", 1000), 200) / 1000.0)
     #         await self._emit_confirmed("FLOW_OFF")
     #         return
 
@@ -557,7 +605,7 @@ class AsyncMFC:
     async def valve_open(self):
         if not self._verify_enabled:
             self._enqueue(self._mk_cmd("VALVE_OPEN"), None, allow_no_reply=True, tag="[VALVE_OPEN]")
-            await asyncio.sleep(MFC_DELAY_MS_VALVE / 1000.0)
+            await asyncio.sleep(self._cfg_int("MFC_DELAY_MS_VALVE", 5000) / 1000.0)
             await self._emit_confirmed("VALVE_OPEN")
             return
         await self._valve_move_and_verify("VALVE_OPEN")
@@ -565,20 +613,23 @@ class AsyncMFC:
     async def valve_close(self):
         if not self._verify_enabled:
             self._enqueue(self._mk_cmd("VALVE_CLOSE"), None, allow_no_reply=True, tag="[VALVE_CLOSE]")
-            await asyncio.sleep(MFC_DELAY_MS_VALVE / 1000.0)
+            await asyncio.sleep(self._cfg_int("MFC_DELAY_MS_VALVE", 5000) / 1000.0)
             await self._emit_confirmed("VALVE_CLOSE")
             return
         await self._valve_move_and_verify("VALVE_CLOSE")
 
     async def sp1_set(self, ui_value: float):
         """SP1_SET (UI→HW 변환) + (옵션) READ_SP1_VALUE 검증."""
-        hw_val = round(float(ui_value) * float(MFC_PRESSURE_SCALE), int(MFC_PRESSURE_DECIMALS))
-        await self._emit_status(f"SP1 스케일: UI {ui_value:.2f} → 장비 {hw_val:.{int(MFC_PRESSURE_DECIMALS)}f}")
+        scale = self._cfg_float("MFC_PRESSURE_SCALE", 0.1)
+        dec = self._cfg_int("MFC_PRESSURE_DECIMALS", 3)
+
+        hw_val = round(float(ui_value) * float(scale), int(dec))
+        await self._emit_status(f"SP1 스케일: UI {ui_value:.2f} → 장비 {hw_val:.{dec}f}")
 
         self._enqueue(self._mk_cmd("SP1_SET", value=hw_val), None, allow_no_reply=True, tag="[SP1_SET]")
 
         if not self._verify_enabled:
-            await asyncio.sleep(MFC_GAP_MS / 1000.0)
+            await asyncio.sleep(self._cfg_int("MFC_GAP_MS", 1000) / 1000.0)
             await self._emit_confirmed("SP1_SET")
             return
 
@@ -588,23 +639,19 @@ class AsyncMFC:
 
     async def sp2_set(self, ui_value: float):
         """SP2_SET (UI→HW 변환) + (옵션) READ_SP2_VALUE 검증."""
-        hw_val = round(float(ui_value) * float(MFC_PRESSURE_SCALE),
-                       int(MFC_PRESSURE_DECIMALS))
-        await self._emit_status(
-            f"SP2 스케일: UI {ui_value:.2f} → 장비 {hw_val:.{int(MFC_PRESSURE_DECIMALS)}f}"
-        )
+        scale = self._cfg_float("MFC_PRESSURE_SCALE", 0.1)
+        dec = self._cfg_int("MFC_PRESSURE_DECIMALS", 3)
+
+        hw_val = round(float(ui_value) * float(scale), int(dec))
+        await self._emit_status(f"SP2 스케일: UI {ui_value:.2f} → 장비 {hw_val:.{dec}f}")
 
         # 설정 전송 (no-reply)
-        self._enqueue(
-            self._mk_cmd("SP2_SET", value=hw_val),
-            None,
-            allow_no_reply=True,
-            tag="[SP2_SET]",
-        )
+        self._enqueue(self._mk_cmd("SP2_SET", value=hw_val), None,
+                    allow_no_reply=True, tag="[SP2_SET]")
 
         # 검증 비활성화면 즉시 확정
         if not self._verify_enabled:
-            await asyncio.sleep(MFC_GAP_MS / 1000.0)
+            await asyncio.sleep(self._cfg_int("MFC_GAP_MS", 1000) / 1000.0)
             await self._emit_confirmed("SP2_SET")
             return
 
@@ -617,10 +664,11 @@ class AsyncMFC:
 
     async def sp4_set(self, ui_value: float):
         """SP4_SET (UI→HW 변환) + (옵션) READ_SP4_VALUE 검증."""
-        hw_val = round(float(ui_value) * float(MFC_PRESSURE_SCALE), int(MFC_PRESSURE_DECIMALS))
-        await self._emit_status(
-            f"SP4 스케일: UI {ui_value:.2f} → 장비 {hw_val:.{int(MFC_PRESSURE_DECIMALS)}f}"
-        )
+        scale = self._cfg_float("MFC_PRESSURE_SCALE", 0.1)
+        dec = self._cfg_int("MFC_PRESSURE_DECIMALS", 3)
+
+        hw_val = round(float(ui_value) * float(scale), int(dec))
+        await self._emit_status(f"SP1 스케일: UI {ui_value:.2f} → 장비 {hw_val:.{dec}f}")
 
         # 설정 전송 (no-reply)
         self._enqueue(self._mk_cmd("SP4_SET", value=hw_val), None,
@@ -628,7 +676,7 @@ class AsyncMFC:
 
         # 검증 비활성화면 즉시 확정
         if not self._verify_enabled:
-            await asyncio.sleep(MFC_GAP_MS / 1000.0)
+            await asyncio.sleep(self._cfg_int("MFC_GAP_MS", 1000) / 1000.0)
             await self._emit_confirmed("SP4_SET")
             return
 
@@ -637,7 +685,7 @@ class AsyncMFC:
         if ok: await self._emit_confirmed("SP4_SET")
         else:  await self._emit_failed("SP4_SET", "SP4 설정 확인 실패")
 
-            # 🔹 추가: 장비에 현재 설정된 SP1~4 setpoint를 UI 단위로 읽기
+    # 🔹 추가: 장비에 현재 설정된 SP1~4 setpoint를 UI 단위로 읽기
     async def _read_sp_setpoint_ui(self, sp_idx: int) -> Optional[float]:
         """
         현재 SP{sp_idx}에 저장된 압력 setpoint를 읽어서
@@ -657,17 +705,17 @@ class AsyncMFC:
             return None
 
         key_read = f"READ_SP{idx}_VALUE"
-        if key_read not in MFC_COMMANDS:
-            await self._emit_status(
-                f"[READ_SP] '{key_read}' 명령이 MFC_COMMANDS에 정의되어 있지 않음"
-            )
+        cmds = self._cfg_get("MFC_COMMANDS", {})
+        if not isinstance(cmds, dict):
+            cmds = {}
+        if key_read not in cmds:
+            await self._emit_status(f"[READ_SP] '{key_read}' 명령이 MFC_COMMANDS에 정의되어 있지 않음")
             return None
 
-        # 장비로부터 "S{idx}+0.50 ..." 형식의 응답을 받음
         line = await self._send_and_wait_line(
             self._mk_cmd(key_read),
             tag=f"[READ_SP{idx}]",
-            timeout_ms=MFC_TIMEOUT,
+            timeout_ms=self._cfg_int("MFC_TIMEOUT", 2000),
             expect_prefixes=(f"S{idx}",),
         )
         if not (line and line.strip()):
@@ -679,50 +727,43 @@ class AsyncMFC:
             await self._emit_status(f"[READ_SP{idx}] 파싱 실패: {line!r}")
             return None
 
-        # HW 단위 → UI 압력 단위로 변환 (SP1_SET 때와 같은 스케일 사용)
-        try:
-            ui_val = float(val_hw) / float(MFC_PRESSURE_SCALE)
-        except Exception:
-            ui_val = float(val_hw)
+        # HW → UI 변환 (SPx_SET 때와 같은 스케일 사용)
+        scale = self._cfg_float("MFC_PRESSURE_SCALE", 0.1)
+        dec = self._cfg_int("MFC_PRESSURE_DECIMALS", 3)
 
-        ui_val = round(ui_val, int(MFC_PRESSURE_DECIMALS))
+        ui_val = float(val_hw) / float(scale)
+        ui_val = round(ui_val, int(dec))
 
         await self._emit_status(
             f"[READ_SP{idx}] 현재 setpoint (UI) = "
-            f"{ui_val:.{int(MFC_PRESSURE_DECIMALS)}f}"
+            f"{ui_val:.{dec}f}"
         )
         return ui_val
 
     # ==============================
     #   압력 도달 판정 유틸 (NEW)
     # ==============================
-    @staticmethod
-    def pressure_within_tolerance(target_ui: float, actual_ui: float) -> bool:
+    def pressure_within_tolerance(self, target_ui: float, actual_ui: float) -> bool:
         """
-        MFC_PRESSURE_* 상수를 사용해서 압력 도달 여부를 판정하는 헬퍼.
-
-        - target_ui, actual_ui : UI에서 사용하는 압력 단위(mTorr 등) 기준
-        - 절대/상대 오차 둘 중 하나라도 통과하면 True
+        채널 cfg(config_ch1/config_ch2) → common(config_common) 우선순위로 tolerance를 읽어서 판정.
         """
         if target_ui <= 0:
             return False
 
+        tol_abs = float(self._cfg_get("MFC_PRESSURE_TOL_ABS", 0.02))
+        tol_rel = float(self._cfg_get("MFC_PRESSURE_TOL_REL", 0.05))
+
         diff = abs(actual_ui - target_ui)
-
-        # 절대 오차 먼저 체크
-        if diff <= MFC_PRESSURE_TOL_ABS:
+        if diff <= tol_abs:
             return True
-
-        # 상대 오차 체크
-        if diff <= abs(target_ui) * MFC_PRESSURE_TOL_REL:
+        if diff <= abs(target_ui) * tol_rel:
             return True
-
         return False
 
     async def sp1_on(self):
         if not self._verify_enabled:
             self._enqueue(self._mk_cmd("SP1_ON"), None, allow_no_reply=True, tag="[SP1_ON]")
-            await asyncio.sleep(MFC_GAP_MS / 1000.0)
+            await asyncio.sleep(self._cfg_int("MFC_GAP_MS", 1000) / 1000.0)
             await self._emit_confirmed("SP1_ON")
             return
         ok = await self._verify_simple_flag("SP1_ON", expect_mask='1')
@@ -738,7 +779,7 @@ class AsyncMFC:
                 allow_no_reply=True,
                 tag="[SP2_ON]",
             )
-            await asyncio.sleep(MFC_GAP_MS / 1000.0)
+            await asyncio.sleep(self._cfg_int("MFC_GAP_MS", 1000) / 1000.0)
             await self._emit_confirmed("SP2_ON")
             return
 
@@ -751,7 +792,7 @@ class AsyncMFC:
     async def sp3_on(self):
         if not self._verify_enabled:
             self._enqueue(self._mk_cmd("SP3_ON"), None, allow_no_reply=True, tag="[SP3_ON]")
-            await asyncio.sleep(MFC_GAP_MS / 1000.0)
+            await asyncio.sleep(self._cfg_int("MFC_GAP_MS", 1000) / 1000.0)
             await self._emit_confirmed("SP3_ON")
             return
         ok = await self._verify_simple_flag("SP3_ON", expect_mask='3')
@@ -761,7 +802,7 @@ class AsyncMFC:
     async def sp4_on(self):
         if not self._verify_enabled:
             self._enqueue(self._mk_cmd("SP4_ON"), None, allow_no_reply=True, tag="[SP4_ON]")
-            await asyncio.sleep(MFC_GAP_MS / 1000.0)
+            await asyncio.sleep(self._cfg_int("MFC_GAP_MS", 1000) / 1000.0)
             await self._emit_confirmed("SP4_ON")
             return
         ok = await self._verify_simple_flag("SP4_ON", expect_mask='4')
@@ -786,7 +827,7 @@ class AsyncMFC:
         """R5(예: READ_PRESSURE) 읽고 UI 문자열/숫자로 이벤트 + 현재 압력값 반환."""
         line = await self._send_and_wait_line(
             self._mk_cmd("READ_PRESSURE"),
-            tag=tag, timeout_ms=MFC_TIMEOUT,
+            tag=tag, timeout_ms=self._cfg_int("MFC_TIMEOUT", 2000),
             expect_prefixes=("P",),
         )
         if not (line and line.strip()):
@@ -811,9 +852,14 @@ class AsyncMFC:
         :return: (성공 여부, 마지막으로 읽은 압력 값)
         """
         if timeout_sec is None:
-            timeout_sec = MFC_PRESSURE_TIMEOUT_SEC
+            timeout_sec = float(self._cfg_get("MFC_PRESSURE_TIMEOUT_SEC", 60.0))
         if check_interval_sec is None:
-            check_interval_sec = MFC_PRESSURE_CHECK_INTERVAL_SEC
+            check_interval_sec = float(self._cfg_get("MFC_PRESSURE_CHECK_INTERVAL_SEC", 1.0))
+
+        tol_abs = float(self._cfg_get("MFC_PRESSURE_TOL_ABS", 0.02))
+        tol_rel = float(self._cfg_get("MFC_PRESSURE_TOL_REL", 0.05))
+        stable_need = int(self._cfg_get("MFC_PRESSURE_STABLE_COUNT", 3))
+        fail_max = int(self._cfg_get("MFC_PRESSURE_READ_FAIL_STREAK_MAX", 3))
 
         if target_pressure <= 0:
             # 0 이하면 '압력 맞추기' 의미가 없으니 바로 실패 처리
@@ -829,7 +875,7 @@ class AsyncMFC:
 
         await self._emit_status(
             f"[PRESSURE] 목표압 {target_pressure:.3g} "
-            f"(tol_abs={MFC_PRESSURE_TOL_ABS}, tol_rel={MFC_PRESSURE_TOL_REL*100:.1f}%) "
+            f"(tol_abs={tol_abs}, tol_rel={tol_rel*100:.1f}%) "
             f"도달까지 대기 시작"
         )
 
@@ -841,7 +887,7 @@ class AsyncMFC:
                 stable_count = 0
 
                 # ✅ “진짜 응답 없음”이면 여기서 최종 실패(공정 중단)로 보는 기준
-                if fail_streak >= 3:   # 환경에 맞게 1~5 조정
+                if fail_streak >= fail_max:   # 환경에 맞게 1~5 조정
                     await self._emit_status(
                         f"[PRESSURE] READ_PRESSURE 연속 {fail_streak}회 실패 → 통신불가로 중단"
                     )
@@ -858,10 +904,10 @@ class AsyncMFC:
             if self.pressure_within_tolerance(target_pressure, current):
                 stable_count += 1
                 await self._emit_status(
-                    f"[PRESSURE] OK ({stable_count}/{MFC_PRESSURE_STABLE_COUNT}) "
+                    f"[PRESSURE] OK ({stable_count}/{stable_need}) "
                     f"target={target_pressure:.3g}, current={current:.3g}"
                 )
-                if stable_count >= MFC_PRESSURE_STABLE_COUNT:
+                if stable_count >= stable_need:
                     await self._emit_status(
                         f"[PRESSURE] 목표압 도달 및 안정: "
                         f"target={target_pressure:.3g}, current={current:.3g}"
@@ -930,8 +976,8 @@ class AsyncMFC:
                     asyncio.create_task(self._emit_confirmed("PS_ZEROING"))
 
                 self._enqueue(self._mk_cmd("PS_ZEROING"), _ok_cb,
-                            allow_no_reply=True, tag="[PS_ZEROING]",
-                            gap_ms=MFC_GAP_MS)  # 필요시 MFC_DELAY_MS 로 바꿔 더 길게도 가능
+                              allow_no_reply=True, tag="[PS_ZEROING]",
+                              gap_ms=self._cfg_int("MFC_ZEROING_GAP_MS", self._cfg_int("MFC_GAP_MS", 1000)))
                 await self._emit_status("압력 센서 Zeroing 명령 전송")
 
             elif key == "MFC_ZEROING":
@@ -941,8 +987,8 @@ class AsyncMFC:
                     asyncio.create_task(self._emit_confirmed("MFC_ZEROING"))
 
                 self._enqueue(self._mk_cmd("MFC_ZEROING", channel=ch), _ok_cb,
-                            allow_no_reply=True, tag=f"[MFC_ZEROING ch{ch}]",
-                            gap_ms=MFC_GAP_MS)  # 필요시 MFC_DELAY_MS 로 조절 가능
+                              allow_no_reply=True, tag=f"[MFC_ZEROING ch{ch}]",
+                              gap_ms=self._cfg_int("MFC_ZEROING_GAP_MS", self._cfg_int("MFC_GAP_MS", 1000)))
                 await self._emit_status(f"Ch{ch} MFC Zeroing 명령 전송")
 
             elif key == "SP1_ON":
@@ -973,7 +1019,8 @@ class AsyncMFC:
             elif key == "WAIT_PRESSURE":
                 # 기본 target (UI에서 넘어온 값; SP3/4에서 읽기 실패 시 fallback 용이었음)
                 target = _req("target", float)
-                timeout = float(args.get("timeout_sec", MFC_PRESSURE_TIMEOUT_SEC))
+                timeout_default = float(self._cfg_get("MFC_PRESSURE_TIMEOUT_SEC", 60.0))
+                timeout = float(args.get("timeout_sec", timeout_default))
 
                 # 새 옵션: 장비 SP setpoint를 먼저 읽어서 target으로 사용할지 여부
                 use_sp_target = bool(args.get("use_sp_target", False))
@@ -1022,10 +1069,11 @@ class AsyncMFC:
                             f"[WAIT_PRESSURE] 잘못된 sp_index={sp_index_raw!r} → UI target 사용"
                         )
 
+                check_default = float(self._cfg_get("MFC_PRESSURE_CHECK_INTERVAL_SEC", 1.0))
                 ok, last = await self.wait_for_pressure_reached(
                     target_pressure=target,
                     timeout_sec=timeout,
-                    check_interval_sec=MFC_PRESSURE_CHECK_INTERVAL_SEC,
+                    check_interval_sec=check_default,
                 )
                 if ok:
                     # → ProcessController 쪽에서 ExpectToken("MFC", "WAIT_PRESSURE") 를 기다리게 할 것
@@ -1048,13 +1096,20 @@ class AsyncMFC:
             await self._emit_failed(key, f"예외: {e}")
 
     # ---- 폴링 on/off (Process와 연동) ----
+    def _get_loop_safe(self) -> asyncio.AbstractEventLoop:
+        try:
+            return asyncio.get_running_loop()
+        except RuntimeError:
+            return asyncio.get_event_loop_policy().get_event_loop()
+
     def set_process_status(self, should_poll: bool):
+        loop = self._get_loop_safe()
         if should_poll:
             if self._poll_task is None or self._poll_task.done():
                 self._ev_nowait(MFCEvent(kind="status", message="Polling read 시작"))
-                self._poll_task = asyncio.create_task(self._poll_loop())
+                self._poll_task = loop.create_task(self._poll_loop())
         else:
-            if self._poll_task:
+            if self._poll_task: 
                 self._poll_task.cancel()
                 self._poll_task = None
             self._poll_cycle_active = False
@@ -1087,7 +1142,8 @@ class AsyncMFC:
         self._override_port = int(port)
         if reconnect:
             # 워치독만 잠깐 멈추고, 현재 연결은 정리
-            asyncio.create_task(self._bounce_connection())
+            loop = self._get_loop_safe()
+            loop.create_task(self._bounce_connection())
 
     async def _bounce_connection(self) -> None:
         # 워치독 일시정지
@@ -1102,16 +1158,16 @@ class AsyncMFC:
 
     def _resolve_endpoint(self) -> tuple[str, int]:
         """최종 접속할 host/port 결정: override > config 기본값."""
-        host = self._override_host if self._override_host else MFC_TCP_HOST
-        port = self._override_port if self._override_port else MFC_TCP_PORT
+        host = self._override_host if self._override_host else str(self._cfg_get("MFC_TCP_HOST", "127.0.0.1"))
+        port = self._override_port if self._override_port else int(self._cfg_get("MFC_TCP_PORT", 4000))
         return str(host), int(port)
 
     # ---------- 내부: 워치독/연결 ----------
     async def _watchdog_loop(self):
-        backoff = MFC_RECONNECT_BACKOFF_START_MS
+        backoff = self._cfg_int("MFC_RECONNECT_BACKOFF_START_MS", 1000)
         while self._want_connected:
             if self._connected:
-                await asyncio.sleep(MFC_WATCHDOG_INTERVAL_MS / 1000.0)
+                await asyncio.sleep(self._cfg_int("MFC_WATCHDOG_INTERVAL_MS", 1500) / 1000.0)
                 continue
 
             if self._ever_connected:
@@ -1125,18 +1181,18 @@ class AsyncMFC:
                 host, port = self._resolve_endpoint()
                 reader, writer = await asyncio.wait_for(
                     asyncio.open_connection(host, port),
-                    timeout=max(0.5, float(MFC_CONNECT_TIMEOUT_S))
+                    timeout=max(0.5, float(self._cfg_float("MFC_CONNECT_TIMEOUT_S", 3.0)))
                 )
                 self._reader, self._writer = reader, writer
                 self._connected = True
                 self._ever_connected = True
-                backoff = MFC_RECONNECT_BACKOFF_START_MS
+                backoff = self._cfg_int("MFC_RECONNECT_BACKOFF_START_MS", 1000)
 
                 # ★ Keepalive는 config에 따름(기본 False 권장)
                 try:
                     sock = writer.get_extra_info("socket")
                     if sock is not None:
-                        if bool(getattr(cfgc, "MFC_TCP_KEEPALIVE", False)):
+                        if self._cfg_bool("MFC_TCP_KEEPALIVE", False):
                             sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
                         else:
                             sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 0)
@@ -1159,7 +1215,7 @@ class AsyncMFC:
             except Exception as e:
                 host, port = self._resolve_endpoint()
                 await self._emit_status(f"{host}:{port} 연결 실패: {e}")
-                backoff = min(backoff * 2, MFC_RECONNECT_BACKOFF_MAX_MS)
+                backoff = min(backoff * 2, self._cfg_int("MFC_RECONNECT_BACKOFF_MAX_MS", 20000))
 
     def _on_tcp_disconnected(self):
         self._connected = False
@@ -1229,7 +1285,7 @@ class AsyncMFC:
 
             # 연결 직후에는 '한 번만' 조용히 기다리고(quiet), 강한 드레인은 금지
             if self._just_reopened and self._last_connect_mono > 0.0:
-                remain = (self._last_connect_mono + (MFC_POST_OPEN_QUIET_MS / 1000.0)) - time.monotonic()
+                remain = (self._last_connect_mono + (self._cfg_int("MFC_POST_OPEN_QUIET_MS", 800) / 1000.0)) - time.monotonic()
                 if remain > 0:
                     await asyncio.sleep(remain)
                 # 여기서는 드레인하지 않음: 초기 배너/ACK를 날려서 첫 응답 유실 가능
@@ -1242,7 +1298,8 @@ class AsyncMFC:
                 payload = cmd.cmd_str.encode("ascii", "ignore")
                 self._last_io_mono = time.monotonic()      # ★ 송신 직전 IO 시각 갱신
                 self._writer.write(payload)
-                await self._writer.drain()
+                drain_to = float(self._cfg_get("MFC_DRAIN_TIMEOUT_S", 2.0))
+                await asyncio.wait_for(self._writer.drain(), timeout=drain_to)
             except Exception as e:
                 self._dbg("MFC", f"{cmd.tag} {sent_txt} 전송 오류: {e}")
                 self._inflight = None
@@ -1258,8 +1315,10 @@ class AsyncMFC:
             if cmd.allow_no_reply:
                 self._inflight = None
                 await asyncio.sleep(cmd.gap_ms / 1000.0)
-                # OS 버퍼 purge 대신 라인 큐만 '가볍게' 흡수 → 레이스 최소화
-                await self._absorb_late_lines(150)
+
+                drain_ms = self._cfg_int("MFC_ALLOW_NO_REPLY_DRAIN_MS", 80)
+                await self._absorb_late_lines(drain_ms)
+
                 self._safe_callback(cmd.callback, None)
                 continue
 
@@ -1399,7 +1458,7 @@ class AsyncMFC:
             while True:
                 # 연결 안 됐으면 대기
                 if not self._connected:
-                    await asyncio.sleep(MFC_POLLING_INTERVAL_MS / 1000.0)
+                    await asyncio.sleep(self._cfg_int("MFC_POLLING_INTERVAL_MS", 3000) / 1000.0)
                     continue
                 # ★ 비-폴링 명령이 대기/진행 중이면 폴링 양보
                 if self._has_pending_non_poll_cmds():
@@ -1428,13 +1487,13 @@ class AsyncMFC:
 
                 # R5 → pressure 이벤트
                 line = await self._send_and_wait_line(self._mk_cmd("READ_PRESSURE"),
-                                                      tag="[POLL PRESS]", timeout_ms=MFC_TIMEOUT,
+                                                      tag="[POLL PRESS]", timeout_ms=self._cfg_int("MFC_TIMEOUT", 2000),
                                                       expect_prefixes=("P",))
                 if line:
                     self._emit_pressure_from_line_sync(line.strip())
 
                 self._poll_cycle_active = False
-                await asyncio.sleep(MFC_POLLING_INTERVAL_MS / 1000.0)
+                await asyncio.sleep(self._cfg_int("MFC_POLLING_INTERVAL_MS", 3000) / 1000.0)
         except asyncio.CancelledError:
             self._poll_cycle_active = False
 
@@ -1453,7 +1512,7 @@ class AsyncMFC:
                 if vals and (ch - 1) < len(vals):
                     actual_hw = float(vals[ch - 1])              # %FS(HW)
                 actual_ui = None if actual_hw is None else self._hw_to_ui(ch, actual_hw)  # sccm
-                tol = target * float(FLOW_ERROR_TOLERANCE)
+                tol = target * self._cfg_float("FLOW_ERROR_TOLERANCE", 0.05)
                 await self._emit_status(
                 f"GAS 확인... (목표: {self._hw_to_ui(ch, target):.2f}sccm, 현재: {(-1 if actual_ui is None else actual_ui):.2f}sccm)"
                 )
@@ -1474,7 +1533,7 @@ class AsyncMFC:
                     self._stab_pending_cmd = None
                     return
 
-                await asyncio.sleep(MFC_STABILIZATION_INTERVAL_MS / 1000.0)
+                await asyncio.sleep(self._cfg_int("MFC_STABILIZATION_INTERVAL_MS", 1000) / 1000.0)
         except asyncio.CancelledError:
             pass
 
@@ -1484,7 +1543,7 @@ class AsyncMFC:
         for attempt in range(1, 6):
             line = await self._send_and_wait_line(
                 self._mk_cmd("READ_FLOW_SET", channel=ch),
-                tag=f"[VERIFY SET ch{ch}]", timeout_ms=MFC_TIMEOUT,
+                tag=f"[VERIFY SET ch{ch}]", timeout_ms=self._cfg_int("MFC_TIMEOUT", 2000),
                 expect_prefixes=(f"Q{4 + int(ch)}",)
             )
 
@@ -1498,7 +1557,7 @@ class AsyncMFC:
             self._enqueue(self._mk_cmd("FLOW_SET", channel=ch, value=scaled_value), None,
                           allow_no_reply=True, tag=f"[RE-SET ch{ch}]")
             await self._emit_status(f"[FLOW_SET 검증 재시도] ch{ch}: 기대={scaled_value:.2f}, 응답={repr(line)} (시도 {attempt}/5)")
-            await asyncio.sleep(MFC_DELAY_MS / 1000.0)
+            await asyncio.sleep(self._cfg_int("MFC_DELAY_MS", 1000) / 1000.0)
         return False
 
     async def _set_onoff_mask_and_verify(self, bits_target: str) -> bool:
@@ -1509,7 +1568,7 @@ class AsyncMFC:
                         allow_no_reply=True, tag=f"[L0 {bits_target}]")
 
             # 장비 반영 시간 대기 (최소 200ms 보장)
-            await asyncio.sleep(max(MFC_DELAY_MS, 200) / 1000.0)
+            await asyncio.sleep(max(self._cfg_int("MFC_DELAY_MS", 1000), 200) / 1000.0)
 
             # ★ 직전 L0 에코/배너가 섞이지 않도록 라인 큐만 짧게 드레인
             await self._absorb_late_lines(120)
@@ -1518,7 +1577,7 @@ class AsyncMFC:
             now = ""
             for _ in range(2):
                 line = await self._send_and_wait_line(self._mk_cmd("READ_MFC_ON_OFF_STATUS"),
-                                                    tag="[VERIFY R69]", timeout_ms=MFC_TIMEOUT,
+                                                    tag="[VERIFY R69]", timeout_ms=self._cfg_int("MFC_TIMEOUT", 2000),
                                                     expect_prefixes=("L0","L"))
                 now = self._parse_r69_bits(line or "")
                 if now:
@@ -1529,21 +1588,24 @@ class AsyncMFC:
                 return True
 
             await self._emit_status(f"[L0 검증 재시도] now={now or '∅'}, want={bits_target} (시도 {attempt}/5)")
-            await asyncio.sleep(MFC_DELAY_MS / 1000.0)
+            await asyncio.sleep(self._cfg_int("MFC_DELAY_MS", 1000) / 1000.0)
         return False
 
     async def _valve_move_and_verify(self, origin_cmd: str):
         """VALVE_OPEN/CLOSE → READ_VALVE_POSITION 확인(재시도 시 재전송 포함)."""
         # 명령 전송 (no-reply)
         self._enqueue(self._mk_cmd(origin_cmd), None, allow_no_reply=True, tag=f"[{origin_cmd}]")
-        await self._emit_status(f"밸브 이동 대기 ({MFC_DELAY_MS_VALVE/1000:.0f}초)...")
-        await asyncio.sleep(MFC_DELAY_MS_VALVE / 1000.0)
+        delay_valve_ms = self._cfg_int("MFC_DELAY_MS_VALVE", 5000)
+        delay_cmd_ms = self._cfg_int("MFC_DELAY_MS", 1000)
+
+        await self._emit_status(f"밸브 이동 대기 ({delay_valve_ms/1000:.0f}초)...")
+        await asyncio.sleep(delay_valve_ms / 1000.0)
 
         for attempt in range(1, 6):
             line = await self._send_and_wait_line(
                 self._mk_cmd("READ_VALVE_POSITION"),
                 tag=f"[VERIFY VALVE {origin_cmd}]",
-                timeout_ms=MFC_TIMEOUT, expect_prefixes=("V",)
+                timeout_ms=self._cfg_int("MFC_TIMEOUT", 2000), expect_prefixes=("V",)
             )
 
             pos_ok = self._parse_valve_ok(origin_cmd, line or "")
@@ -1555,34 +1617,36 @@ class AsyncMFC:
             if attempt in (2, 4):
                 self._enqueue(self._mk_cmd(origin_cmd), None, allow_no_reply=True, tag=f"[RE-{origin_cmd}]")
                 await self._emit_status(f"{origin_cmd} 재전송 (시도 {attempt}/5)")
-                await asyncio.sleep(max(MFC_DELAY_MS, MFC_DELAY_MS_VALVE) / 1000.0)
+                await asyncio.sleep(max(delay_cmd_ms, delay_valve_ms) / 1000.0)
             else:
                 await self._emit_status(f"[{origin_cmd} 검증 재시도] 응답={repr(line)} (시도 {attempt}/5)")
-                await asyncio.sleep(MFC_DELAY_MS / 1000.0)
+                await asyncio.sleep(self._cfg_int("MFC_DELAY_MS", 1000) / 1000.0)
 
         await self._emit_failed(origin_cmd, "밸브 위치 확인 실패")
 
     async def _verify_sp1_set(self, hw_val: float, ui_val: float) -> bool:
         """READ_SP1_VALUE 로 HW값 비교(허용오차 MFC_SP1_VERIFY_TOL)."""
-        tol = max(float(MFC_SP1_VERIFY_TOL), 1e-9)
+        tol = max(self._cfg_float("MFC_SP1_VERIFY_TOL", 0.02), 1e-9)
+        dec = self._cfg_int("MFC_PRESSURE_DECIMALS", 3)
+
         for attempt in range(1, 6):
             line = await self._send_and_wait_line(
                 self._mk_cmd("READ_SP1_VALUE"),
                 tag="[VERIFY SP1_SET]", 
-                timeout_ms=MFC_TIMEOUT,
+                timeout_ms=self._cfg_int("MFC_TIMEOUT", 2000),
                 expect_prefixes=("S1",)
             )
             cur_hw = self._parse_pressure_value(line or "")
             if cur_hw is not None:
-                cur_hw = round(cur_hw, int(MFC_PRESSURE_DECIMALS))
+                cur_hw = round(cur_hw, int(dec))
             ok = (cur_hw is not None) and (abs(cur_hw - hw_val) <= tol)
             if ok:
                 await self._emit_status(
-                    f"SP1 설정 완료: UI {ui_val:.2f} (장비 {hw_val:.{int(MFC_PRESSURE_DECIMALS)}f})"
+                    f"SP1 설정 완료: UI {ui_val:.2f} (장비 {hw_val:.{dec}f})"
                 )
                 return True
             await self._emit_status(f"[SP1_SET 검증 재시도] 응답={repr(line)} (시도 {attempt}/5)")
-            await asyncio.sleep(MFC_DELAY_MS / 1000.0)
+            await asyncio.sleep(self._cfg_int("MFC_DELAY_MS", 1000) / 1000.0)
         return False
     
     async def _verify_sp_set(self, sp_idx: int, hw_val: float, ui_val: float) -> bool:
@@ -1591,11 +1655,16 @@ class AsyncMFC:
         - config에 READ_SP{sp_idx}_VALUE 키가 없으면 '검증 스킵'으로 간주하여 True 반환.
         - 장비 응답 접두사는 'S{sp_idx}'로 기대.
         """
-        tol = max(float(MFC_SP1_VERIFY_TOL), 1e-9)
+        tol = max(self._cfg_float("MFC_SP1_VERIFY_TOL", 0.02), 1e-9)
+        dec = self._cfg_int("MFC_PRESSURE_DECIMALS", 3)
         key_read = f"READ_SP{sp_idx}_VALUE"
 
         # 구성에 읽기 명령이 정의되지 않은 경우 검증 스킵
-        if key_read not in MFC_COMMANDS:
+        cmds = self._cfg_get("MFC_COMMANDS", {})
+        if not isinstance(cmds, dict):
+            cmds = {}
+
+        if key_read not in cmds:
             await self._emit_status(f"[VERIFY SP{sp_idx}_SET] 스킵: '{key_read}' 미정의 → 통과 처리")
             return True
 
@@ -1603,24 +1672,24 @@ class AsyncMFC:
             line = await self._send_and_wait_line(
                 self._mk_cmd(key_read),
                 tag=f"[VERIFY SP{sp_idx}_SET]",
-                timeout_ms=MFC_TIMEOUT,
+                timeout_ms=self._cfg_int("MFC_TIMEOUT", 2000),
                 expect_prefixes=(f"S{sp_idx}",)
             )
             cur_hw = self._parse_pressure_value(line or "")
             if cur_hw is not None:
-                cur_hw = round(cur_hw, int(MFC_PRESSURE_DECIMALS))
+                cur_hw = round(cur_hw, int(dec))
 
             ok = (cur_hw is not None) and (abs(cur_hw - hw_val) <= tol)
             if ok:
                 await self._emit_status(
-                    f"SP{sp_idx} 설정 완료: UI {ui_val:.2f} (장비 {hw_val:.{int(MFC_PRESSURE_DECIMALS)}f})"
+                    f"SP{sp_idx} 설정 완료: UI {ui_val:.2f} (장비 {hw_val:.{dec}f})"
                 )
                 return True
 
             await self._emit_status(
                 f"[SP{sp_idx}_SET 검증 재시도] 응답={repr(line)} (시도 {attempt}/5)"
             )
-            await asyncio.sleep(MFC_DELAY_MS / 1000.0)
+            await asyncio.sleep(self._cfg_int("MFC_DELAY_MS", 1000) / 1000.0)
 
         return False
 
@@ -1631,7 +1700,7 @@ class AsyncMFC:
         for attempt in range(1, 6):
             line = await self._send_and_wait_line(
                 self._mk_cmd("READ_SYSTEM_STATUS"),
-                tag=f"[VERIFY {cmd_key}]", timeout_ms=MFC_TIMEOUT,
+                tag=f"[VERIFY {cmd_key}]", timeout_ms=self._cfg_int("MFC_TIMEOUT", 2000),
                 expect_prefixes=("M",)
             )
 
@@ -1641,14 +1710,14 @@ class AsyncMFC:
                 await self._emit_status(f"{cmd_key} 활성화 확인")
                 return True
             await self._emit_status(f"[{cmd_key} 검증 재시도] 응답={repr(line)} (시도 {attempt}/5)")
-            await asyncio.sleep(MFC_DELAY_MS / 1000.0)
+            await asyncio.sleep(self._cfg_int("MFC_DELAY_MS", 1000) / 1000.0)
         return False
 
     # ---------- 내부: 단위 파서/도우미 ----------
     async def _read_r60_values(self, tag: str = "[READ R60]") -> Optional[list[float]]:
         line = await self._send_and_wait_line(
             self._mk_cmd("READ_FLOW_ALL"),
-            tag=tag, timeout_ms=MFC_TIMEOUT,
+            tag=tag, timeout_ms=self._cfg_int("MFC_TIMEOUT", 2000),
             expect_prefixes=("Q0",)
         )
         return self._parse_r60_values(line or "")
@@ -1656,7 +1725,7 @@ class AsyncMFC:
     async def _read_r69_bits(self) -> Optional[str]:
         line = await self._send_and_wait_line(
             self._mk_cmd("READ_MFC_ON_OFF_STATUS"),
-            tag="[READ R69]", timeout_ms=MFC_TIMEOUT,
+            tag="[READ R69]", timeout_ms=self._cfg_int("MFC_TIMEOUT", 2000),
             retries=3, expect_prefixes=("L0", "L")
         )
         return self._parse_r69_bits(line or "")
@@ -1727,8 +1796,11 @@ class AsyncMFC:
             return None
 
         # HW → UI 변환
-        ui_val = float(val_hw) / float(MFC_PRESSURE_SCALE)
-        fmt = "{:." + str(int(MFC_PRESSURE_DECIMALS)) + "f}"
+        scale = self._cfg_float("MFC_PRESSURE_SCALE", 0.1)
+        dec = self._cfg_int("MFC_PRESSURE_DECIMALS", 3)
+
+        ui_val = float(val_hw) / float(scale)
+        fmt = "{:." + str(int(dec)) + "f}"
         text = fmt.format(ui_val)
 
         # 이벤트 두 형태를 하나로 통합해 전달
@@ -1758,9 +1830,10 @@ class AsyncMFC:
             return
 
         # 기존 오차 판정 로직 유지
-        if abs(actual_flow_hw - target_flow) > (target_flow * float(FLOW_ERROR_TOLERANCE)):
+        tol_ratio = self._cfg_float("FLOW_ERROR_TOLERANCE", 0.05)
+        if abs(actual_flow_hw - target_flow) > (target_flow * float(tol_ratio)):
             self.flow_error_counters[channel] += 1
-            if self.flow_error_counters[channel] >= int(FLOW_ERROR_MAX_COUNT):
+            if self.flow_error_counters[channel] >= self._cfg_int("FLOW_ERROR_MAX_COUNT", 3):
                 self._ev_nowait(MFCEvent(
                     kind="status",
                     message=f"Ch{channel} GAS 불안정! (목표: {target_flow:.2f}, 현재: {actual_flow_hw:.2f})"
@@ -1771,9 +1844,15 @@ class AsyncMFC:
 
     # ---------- 내부: 공통 송수신 ----------
     def _enqueue(self, cmd_str: str, on_reply: Optional[Callable[[Optional[str]], None]],
-                *, timeout_ms: int = MFC_TIMEOUT, gap_ms: int = MFC_GAP_MS,
+                *, timeout_ms: Optional[int] = None, gap_ms: Optional[int] = None,
                 tag: str = "", retries_left: int = 5, allow_no_reply: bool = False,
                 expect_prefixes: tuple[str, ...] = ()):
+
+        if timeout_ms is None:
+            timeout_ms = self._cfg_int("MFC_TIMEOUT", 2000)
+        if gap_ms is None:
+            gap_ms = self._cfg_int("MFC_GAP_MS", 1000)
+
         if not cmd_str.endswith(self._tx_eol_str):
             cmd_str += self._tx_eol_str
         self._cmd_q.append(Command(
@@ -1812,7 +1891,7 @@ class AsyncMFC:
 
         self._enqueue(
             cmd_str, _cb, 
-            timeout_ms=timeout_ms, gap_ms=MFC_GAP_MS,
+            timeout_ms=timeout_ms, gap_ms=None,
             tag=tag, retries_left=max(0, int(retries)), allow_no_reply=False,
             expect_prefixes=expect_prefixes # ★ 워커에게 전달
         )
@@ -1820,16 +1899,18 @@ class AsyncMFC:
         # 오픈 직후 첫 응답은 여유 부여
         extra = 0.0
         if self._last_connect_mono > 0.0 and (time.monotonic() - self._last_connect_mono) < 2.0:
-            extra = MFC_FIRST_CMD_EXTRA_TIMEOUT_MS / 1000.0
+            extra = self._cfg_int("MFC_FIRST_CMD_EXTRA_TIMEOUT_MS", 2000) / 1000.0
         try:
             return await asyncio.wait_for(fut, timeout=(timeout_ms / 1000.0) + 2.0 + extra)
         except asyncio.TimeoutError:
             return None
 
-
     def _mk_cmd(self, key: str, *args, **kwargs) -> str:
         """MFC_COMMANDS 값이 함수/문자열 모두 허용."""
-        v = MFC_COMMANDS[key]
+        cmds = self._cfg_get("MFC_COMMANDS", {})
+        if not isinstance(cmds, dict):
+            cmds = {}
+        v = cmds[key]
         if callable(v):
             return str(v(*args, **kwargs))
         return str(v)
@@ -1916,11 +1997,21 @@ class AsyncMFC:
 
     # --- 유틸 ---
     def _ui_to_hw(self, ch: int, ui: float) -> float:
-        sf = float(self.scale_factors.get(ch, 1.0))
+        sf_map = self._cfg_get("MFC_SCALE_FACTORS", None)
+        if isinstance(sf_map, dict):
+            sf = float(sf_map.get(ch, 1.0))
+        else:
+            sf = float(self.scale_factors.get(ch, 1.0))
+
         return float(ui) * sf  # sccm -> %FS
 
     def _hw_to_ui(self, ch: int, hw: float) -> float:
-        sf = float(self.scale_factors.get(ch, 1.0))
+        sf_map = self._cfg_get("MFC_SCALE_FACTORS", None)
+        if isinstance(sf_map, dict):
+            sf = float(sf_map.get(ch, 1.0))
+        else:
+            sf = float(self.scale_factors.get(ch, 1.0))
+
         # sf==0 보호
         return float(hw) / (sf if sf != 0 else 1.0)  # %FS -> sccm
 
@@ -2014,10 +2105,11 @@ class AsyncMFC:
             return
 
         # 유휴 시간 초과면 세션 재시작
-        if self._inactivity_s > 0:
+        inactivity_s = self._cfg_float("MFC_INACTIVITY_REOPEN_S", 0.0)
+        if inactivity_s > 0:
             idle = time.monotonic() - (self._last_io_mono or 0.0)
-            if idle >= self._inactivity_s:
-                await self._emit_status(f"[MFC] idle {idle:.1f}s ≥ {self._inactivity_s:.1f}s → 세션 재시작")
+            if idle >= inactivity_s:
+                await self._emit_status(f"[MFC] idle {idle:.1f}s ≥ {inactivity_s:.1f}s → 세션 재시작")
                 self._on_tcp_disconnected()
 
 

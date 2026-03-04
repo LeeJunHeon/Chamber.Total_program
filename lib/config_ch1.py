@@ -36,3 +36,14 @@ PC_PRESSURE_WAIT_TIMEOUT_S = 180.0        # WAIT_PRESSURE 최대 대기 시간(�
 PC_WORKING_PRESSURE_BOOST_TARGET = 10.0   # working_pressure가 이 값보다 작으면 SP2로 먼저 부스팅
 PC_RF_PULSE_POST_ON_DELAY_MS = 20_000     # RF Pulse ON 직후 안정화 대기(ms)
 PC_POWER_OFF_TIMEOUT_MS = 240_000         # shutdown 중 power off 토큰 대기 최소(ms)
+
+# ============================================================
+# MFC 압력 도달 판정(공정 영향 파라미터; UI 단위=mTorr 기준)
+#  - WAIT_PRESSURE, PlasmaCleaning SP4 안정화 등에 사용
+# ============================================================
+MFC_PRESSURE_TOL_ABS = 0.02              # 절대 허용오차(±, mTorr)
+MFC_PRESSURE_TOL_REL = 0.05              # 상대 허용오차(±, 비율) → 0.05 = 5%
+MFC_PRESSURE_STABLE_COUNT = 3            # 연속 N회 허용 범위면 '안정'으로 판정
+MFC_PRESSURE_TIMEOUT_SEC = 60.0          # 기본 타임아웃(초)
+MFC_PRESSURE_CHECK_INTERVAL_SEC = 1.0    # 압력 읽기 주기(초)
+MFC_PRESSURE_READ_FAIL_STREAK_MAX = 3    # READ_PRESSURE 연속 실패 N회면 실패 처리
