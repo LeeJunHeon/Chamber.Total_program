@@ -299,9 +299,7 @@ class ChamberRuntime:
         self._cleanup_timed_out = False  # ✅ cleanup 중 timeout 발생 여부(재시작 안전장치)
         self._last_polling_targets: TargetsMap | None = None
         self._last_state_text: str | None = None
-        # 지연(다음 공정 예약)과 카운트다운을 분리
-        self._delay_main_task: Optional[asyncio.Task] = None
-        self._delay_countdown_task: Optional[asyncio.Task] = None
+        # ✅ Runner 구조에서는 delay/cooldown을 stage 코루틴에서 처리하므로 레거시 delay task를 사용하지 않는다.
         self._dc_failed_flag: bool = False     # ★ 추가
         self._auto_connect_enabled = True  # ← 실패시 False로 내려 자동 재연결 차단
         self._run_select: dict[str, bool] | None = None  # ← 이번 런에서 펄스 선택 상태
@@ -2758,18 +2756,19 @@ class ChamberRuntime:
 
     def _cancel_delay_task(self) -> None:
         """
-        (안전장치) 과거/레거시 경로에서 남아 있을 수 있는 지연 태스크를 취소한다.
+        ✅ Runner 구조 정리 버전
 
-        Runner 구조에서는 delay를 stage 코루틴에서 처리하지만,
-        - shutdown_fast / reset 경로에서 이 함수가 호출되고 있으며,
-        - AttributeError 방지 + 잠재 누수 방지 목적이므로 남겨 둔다.
+        Runner 구조에서는 과거의 _delay_main_task / _delay_countdown_task 를 사용하지 않습니다.
+        하지만 shutdown_fast / reset 경로에서 과거 이름(_cancel_delay_task)으로 호출하는 코드가 남아있어,
+        AttributeError 방지 및 '대기/쿨다운 stage' 즉시 중단을 위해 최소 기능의 호환 래퍼로 유지합니다.
+
+        현재 동작:
+        - Runner stage task가 살아있으면 cancel만 시도합니다(여기서는 await 하지 않음).
         """
-        for attr in ("_delay_main_task", "_delay_countdown_task"):
-            t = getattr(self, attr, None)
-            if isinstance(t, asyncio.Task) and (not t.done()):
-                with contextlib.suppress(Exception):
-                    t.cancel()
-            setattr(self, attr, None)
+        t = getattr(self, "_runner_stage_task", None)
+        if isinstance(t, asyncio.Task) and (not t.done()):
+            with contextlib.suppress(Exception):
+                t.cancel()
 
     
     async def _runner_handle_stop(self, user_initiated: bool) -> None:
@@ -4409,10 +4408,10 @@ class ChamberRuntime:
 
     async def start_with_recipe_string(self, recipe: str) -> None:
         """
-        Host 진입점:
-        - 프리플라이트를 새로 하지 않는다
-        - 기존 시작 경로(_handle_start_clicked)만 호출
-        - 프리플라이트가 보내줄 결과 신호(Future)만 잠깐 대기해 핸들러에 반환
+        Host 진입점(서버/원격 호출용):
+        - UI Start 버튼과 동일한 시작 경로(_handle_start_clicked)를 사용한다.
+        - 실제 프리플라이트/시작/정리/다음 공정 진행은 Runner(ChamberRuntime 내부)가 담당한다.
+        - 여기서는 '시작 가드 통과 여부(=프리플라이트 진입/거절)' 결과만 Future로 짧게 대기한다.
         """
         loop = asyncio.get_running_loop()
         self._host_start_future = loop.create_future()
@@ -4438,12 +4437,12 @@ class ChamberRuntime:
             self._update_ui_from_params(self.process_queue[0])
             self.append_log("File", f"CSV 로드 완료: {s} (총 {len(self.process_queue)}개)")
 
-            # 버튼과 동일 경로로 시작 (프리플라이트는 내부에서 호출됨)
+            # 버튼과 동일 경로로 시작 (Runner가 프리플라이트/큐 진행을 처리)
             self._handle_start_clicked(False)
         else:
             raise RuntimeError("지원하지 않는 레시피 형식입니다. CSV 경로만 허용됩니다.")
 
-        # ✅ 프리플라이트가 보내는 신호만 잠깐 대기 (타임아웃은 10초 권장)
+        # ✅ 시작 가드(=프리플라이트 진입/거절) 결과만 짧게 대기
         try:
             ok, reason = await asyncio.wait_for(self._host_start_future, timeout=10.0)
         except asyncio.TimeoutError:
@@ -4459,8 +4458,6 @@ class ChamberRuntime:
     # ------------------------------------------------------------------
     # 유틸
     # ------------------------------------------------------------------
-    import re
-
     def _parse_duration_seconds(self, s: str) -> float:
         """
         '10s', '1m', '1h30m', '2h' 형태 문자열을 초 단위로 변환.
@@ -4555,7 +4552,9 @@ class ChamberRuntime:
                 tb = "".join(traceback.format_exception(type(e), e, e.__traceback__)).rstrip()
                 self.append_log("Task", f"[{name or attr_name}] create_task failed:\n{tb}")
 
-                if attr_name in ("_delay_main_task", "_log_writer_task"):
+                # ✅ Runner 구조에서는 _delay_main_task 같은 레거시 예약 태스크를 사용하지 않는다.
+                #    따라서 사용자 알림은 '치명적인 백그라운드(writer 등)'에만 한정한다.
+                if attr_name in ("_log_writer_task",):
                     with contextlib.suppress(Exception):
                         self._set_state_text("내부 오류: 태스크 생성 실패(로그 확인)")
                     with contextlib.suppress(Exception):
@@ -4581,16 +4580,6 @@ class ChamberRuntime:
                 if exc:
                     tb2 = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).rstrip()
                     self.append_log("Task", f"[{name or attr_name}] crashed:\n{tb2}")
-
-                    if attr_name == "_delay_main_task":
-                        with contextlib.suppress(Exception):
-                            self._set_state_text("다음 공정 예약 실패(로그 확인)")
-                        with contextlib.suppress(Exception):
-                            self._post_critical(
-                                "다음 공정 예약 실패",
-                                "다음 공정을 시작하기 위한 내부 작업이 중단되었습니다.\n"
-                                "자세한 내용은 로그 파일(또는 터미널)을 확인해주세요.",
-                            )
 
                 with contextlib.suppress(Exception):
                     if getattr(self, attr_name, None) is task:
