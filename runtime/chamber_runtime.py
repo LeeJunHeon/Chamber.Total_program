@@ -342,11 +342,7 @@ class ChamberRuntime:
 
         if supports_rf_cont is None:
             v = _cfg_bool("SUPPORTS_RF_CONT")
-            
-            if self.ch == 2:
-                supports_rf_cont = True   # 🔥 CH2 RF 연속 파워 강제 허용
-            else:
-                supports_rf_cont = v if v is not None else False
+            supports_rf_cont = v if v is not None else False
 
         if supports_dc_pulse is None:
             v = _cfg_bool("SUPPORTS_DC_PULSE", "SUPPORTS_DCPULSE")
@@ -428,6 +424,7 @@ class ChamberRuntime:
             host=mfc_host, port=mfc_port, enable_verify=False, enable_stabilization=True,
             # ★ 챔버별 스케일을 드라이버에 주입
             scale_factors=scale_map,  # ✅ CH별 MFC 스케일 전달
+            cfg=self.cfg.mod,  # ✅ 채널 config 주입(=UI Apply 반영/CH별 오버라이드 반영)
         )
         self.ig  = ig or AsyncIG(host=ig_host, port=ig_port)
 
@@ -464,7 +461,27 @@ class ChamberRuntime:
         else:
             self.dc_pulse = None
 
-        self.rf_pulse = RFPulseAsync() if self.supports_rf_pulse else None
+        # RF Pulse (공유 장비)
+        if self.supports_rf_pulse:
+            # ✅ cfg 주입: UI Apply로 바뀐 값(타임아웃/간격/백오프 등)을 드라이버가 읽을 수 있게
+            self.rf_pulse = RFPulseAsync(cfg=self.cfg.mod)
+
+            # ✅ config 값 런타임 캐시 재반영(드라이버가 __init__에 캐시하는 값이 있으면 특히 중요)
+            with contextlib.suppress(Exception):
+                if hasattr(self.rf_pulse, "reload_runtime_cfg"):
+                    self.rf_pulse.reload_runtime_cfg()
+
+            # ✅ 프리플라이트 전에 endpoint를 먼저 세팅
+            # - (우선) RFPULSE_TCP_HOST/PORT
+            # - (폴백) RFPULSE_PORT="ip:port"
+            rf_tcp = getattr(self.cfg, "RFPULSE_TCP", None)
+            if rf_tcp and hasattr(self.rf_pulse, "set_endpoint"):
+                host, port = rf_tcp
+                with contextlib.suppress(Exception):
+                    self.rf_pulse.set_endpoint(host, port)
+
+        else:
+            self.rf_pulse = None
 
         # 연속 파워
         self.dc_power = None

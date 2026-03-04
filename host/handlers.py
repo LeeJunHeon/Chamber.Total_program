@@ -258,79 +258,87 @@ class HostHandlers:
     # ================== 공정 중 여부 체크 헬퍼 ==================
     def _fail_if_ch_busy(self, ch: int, action: str) -> Json | None:
         """
-        runtime_state를 이용해서 해당 CH에서 공정이 실행 중이면
-        명령을 차단하고, 실패 응답(Json)을 돌려준다.
+        해당 CH에서 공정/정리/대기(Runner 포함)가 진행 중이면 명령을 차단하고 실패 응답(Json)을 돌려준다.
 
-        - '공정'으로 보는 것:
-          · chamber(ch)  : 스퍼터 공정
-          · pc(ch)       : Plasma Cleaning 공정
-          · tsp(0, ch=1) : CH1과 연동된 TSP 공정
-        - runtime_state가 없거나 예외가 나면 차단하지 않고 그대로 진행
+        - 'busy'로 보는 것:
+          1) runtime_state 기준:
+             · chamber(ch)  : 스퍼터 공정
+             · pc(ch)       : Plasma Cleaning 공정
+             · tsp(0, ch=1) : CH1과 연동된 TSP 공정
+          2) ChamberRuntime(Runner) 기준:
+             · rt._runner_state != "IDLE"  (PREFLIGHT/COOLDOWN/DELAY/CLEANUP/STOPPING 포함)
+             · 또는 stage task가 살아있음
+
+        - runtime_state 조회가 실패하더라도, Runner 상태가 busy면 차단한다.
         """
         rs = getattr(self.ctx, "runtime_state", None)
-        if rs is None:
-            return None
 
         try:
-            reasons = []
+            reasons: list[str] = []
 
-            # CHx 스퍼터 공정
-            if getattr(rs, "is_running", None) and rs.is_running("chamber", ch):
-                reasons.append(f"CH{ch} 스퍼터 공정 실행 중")
+            # ------------------------------
+            # 1) runtime_state 기반 실행 여부
+            # ------------------------------
+            if rs is not None and getattr(rs, "is_running", None):
+                try:
+                    if rs.is_running("chamber", ch):
+                        reasons.append(f"CH{ch} 스퍼터 공정 실행 중")
+                except Exception:
+                    pass
 
-            # CHx Plasma Cleaning 공정
-            if getattr(rs, "is_running", None) and rs.is_running("pc", ch):
-                reasons.append(f"CH{ch} Plasma Cleaning 실행 중")
+                try:
+                    if rs.is_running("pc", ch):
+                        reasons.append(f"CH{ch} Plasma Cleaning 실행 중")
+                except Exception:
+                    pass
 
-            # TSP는 CH1과만 연관된 글로벌 공정으로 취급
-            if int(ch) == 1 and getattr(rs, "is_running", None) and rs.is_running("tsp", 0):
-                reasons.append("TSP 공정 실행 중")
+                try:
+                    if int(ch) == 1 and rs.is_running("tsp", 0):
+                        reasons.append("TSP 공정 실행 중")
+                except Exception:
+                    pass
+
+            # ------------------------------
+            # 2) Runner 상태(공정 종료 직후 cleanup / 다음 공정 대기 포함)
+            # ------------------------------
+            rt = getattr(self.ctx, f"ch{int(ch)}", None)
+            if rt is not None:
+                st = getattr(rt, "_runner_state", None)
+                if isinstance(st, str) and st and st.upper() != "IDLE":
+                    # 상태 문자열을 그대로 이유에 포함(디버깅에 유리)
+                    reasons.append(f"CH{ch} 상태={st}")
+
+                # stage task가 살아있는 동안도 busy로 간주
+                t = getattr(rt, "_runner_stage_task", None)
+                if isinstance(t, asyncio.Task):
+                    try:
+                        if not t.done():
+                            k = getattr(rt, "_runner_stage_kind", None)
+                            if k:
+                                reasons.append(f"CH{ch} stage={k}")
+                            else:
+                                reasons.append(f"CH{ch} stage 진행 중")
+                    except Exception:
+                        # done() 판정 실패 시에도 안전하게 busy로 처리
+                        reasons.append(f"CH{ch} stage 진행 중")
 
             if reasons:
-                # 예: "CH2_GATE_OPEN 불가 — CH2 스퍼터 공정 실행 중"
                 return self._fail(f"{action} 불가 — " + " / ".join(reasons), code="E205")
 
         except Exception:
-            # runtime_state 문제로 장비 조작까지 막히지 않도록, 에러 시에는 통과
+            # 상태 판단 예외가 장비 조작까지 막지 않도록, 예외 시에는 통과
             return None
 
         return None
-    
-    # ================== 내부 유틸 ==================
-    def _has_chamber_delay(self) -> bool:
-        """
-        CH1/CH2 중 하나라도 다음 공정이 _delay_main_task 로 예약되어 있으면 True.
-
-        - chamber_runtime._start_next_process_from_queue() 에서
-          self._set_task_later("_delay_main_task", ...) 로 설정되는 Task 를 본다.
-        - Task 가 존재하고 아직 done() 이 아니라면, 리스트 자동 실행이 진행 중이며
-          스텝 사이 대기 상태라고 판단한다.
-        """
-        for attr in ("ch1", "ch2"):
-            rt = getattr(self.ctx, attr, None)
-            if not rt:
-                continue
-
-            try:
-                t = getattr(rt, "_delay_main_task", None)
-            except Exception:
-                t = None
-
-            if t is not None:
-                try:
-                    if not t.done():
-                        return True
-                except Exception:
-                    # done() 호출에서 예외가 나더라도 상태 판단에는 영향 없도록 무시
-                    pass
-
-        return False
 
     # ================== CH1,2 상태 조회 ==================
     async def get_sputter_status(self, payload: Json) -> Json:
         """
         CH1/CH2/LoadLock 각각의 상태(idle/running/error) + 진공 여부를 한 번에 조회.
         Chamber_1 / Chamber_2 / Loadlock_Chamber / vacuum 4개 키를 돌려준다.
+
+        ✅ Runner 구조 반영:
+        - runtime_state가 idle여도, Runner가 COOLDOWN/DELAY/CLEANUP/PREFLIGHT 등으로 바쁘면 running으로 표시한다.
         """
         try:
             rs = getattr(self.ctx, "runtime_state", None)
@@ -339,8 +347,8 @@ class HostHandlers:
                 """
                 단일 CH 상태 계산:
                 - runtime_state.is_running("chamber", ch) 또는 is_running("pc", ch)가 True면 running
-                - 해당 CH의 리스트 공정 딜레이(_delay_main_task)가 살아 있어도 running
-                - 그 외는 idle
+                - Runner가 IDLE이 아니면(runner_state != "IDLE") running
+                - (둘 다 아니면) idle
                 - 조회 중 예외가 나면 error
                 """
                 running_ch = False
@@ -351,25 +359,24 @@ class HostHandlers:
                         if rs.is_running("chamber", ch) or rs.is_running("pc", ch):
                             running_ch = True
                 except Exception:
-                    # 상태 조회 자체에 문제가 있으면 error
                     return "error"
 
-                # 2) 리스트 자동 실행의 스텝 사이 대기도 running 으로 간주
-                attr = f"ch{ch}"
+                # 2) Runner 기반 실행/정리/대기 여부 (공정 종료 직후 next 대기 포함)
                 try:
-                    rt = getattr(self.ctx, attr, None)
+                    rt = getattr(self.ctx, f"ch{ch}", None)
                     if rt is not None:
-                        t = getattr(rt, "_delay_main_task", None)
-                        if t is not None:
-                            try:
-                                if not t.done():
-                                    running_ch = True
-                            except Exception:
-                                return "error"
+                        st = getattr(rt, "_runner_state", None)
+                        if isinstance(st, str) and st and st.upper() != "IDLE":
+                            running_ch = True
+                        else:
+                            # stage task가 살아있는 동안도 running으로 간주
+                            t = getattr(rt, "_runner_stage_task", None)
+                            if isinstance(t, asyncio.Task) and (not t.done()):
+                                running_ch = True
                 except Exception:
                     return "error"
 
-                # 3) 마지막 공정 실패 이력이 남아 있으면 error
+                # 3) 마지막 공정 실패 이력이 남아 있으면 error (단, running이 아닌 경우만)
                 if not running_ch:
                     try:
                         if rs is not None and getattr(rs, "has_error", None) and rs.has_error("chamber", ch):
@@ -378,13 +385,13 @@ class HostHandlers:
                         return "error"
 
                 return "running" if running_ch else "idle"
-            
+
             def _ch1_is_waiting_ig() -> bool:
                 """
                 CH1 공정이 IG 대기(IG 단계)인지 판정.
                 - CH1 process_controller가 running이고
                 - current_step.action.value == "IG_CMD" 인 동안 True
-                - start 직후 current_step이 아직 None인 짧은 구간도 True 처리(원하면 False로 변경 가능)
+                - start 직후 current_step이 아직 None인 짧은 구간도 True 처리
                 """
                 try:
                     rt = getattr(self.ctx, "ch1", None)
@@ -397,7 +404,6 @@ class HostHandlers:
 
                     step = getattr(pc, "current_step", None)
                     if step is None:
-                        # START 직후 스텝 진입 전 Loadlock running
                         return True
 
                     act = getattr(step, "action", None)
@@ -406,12 +412,9 @@ class HostHandlers:
                         actv = str(act) if act is not None else ""
 
                     s = str(actv).strip().upper()
-
-                    # Enum 문자열이 "Action.IG_CMD" 같은 형태면 뒤 토큰만 사용
                     if "." in s:
                         s = s.split(".")[-1].strip()
 
-                    # ✅ IG 단계일 때만 True
                     return (s == "IG_CMD")
 
                 except Exception:
@@ -422,15 +425,12 @@ class HostHandlers:
                 Loadlock(Plasma Cleaning) 상태 계산:
                 - runtime_state.is_running("pc", ch)가 1 또는 2 중 하나라도 True면 running
                 - 마지막 PC 실패 이력이 남아 있으면 error
-                - ✅ (추가) CH1 공정이 IG 단계(IG_CMD)인 동안에는 Loadlock을 running으로 "보이게" 유지
-                (IG 끝나고 RGA 시작하면 자동으로 idle로 돌아감)
+                - ✅ CH1 공정이 IG 단계(IG_CMD)인 동안에는 Loadlock을 running으로 표시 유지
                 - (fallback) plasma cleaning 런타임의 is_running / _running 플래그 사용
                 - 조회 중 예외가 나면 error
                 """
-                # 1) runtime_state 기준 (pc kind)
                 try:
                     if rs is not None and getattr(rs, "is_running", None):
-                        # 1-1) 하나라도 실행 중이면 running
                         for ch in (1, 2):
                             try:
                                 if rs.is_running("pc", ch):
@@ -438,7 +438,6 @@ class HostHandlers:
                             except Exception:
                                 continue
 
-                        # 1-2) 실행 중인 PC가 없으면, 마지막 실패 이력(PC) 있으면 error
                         if getattr(rs, "has_error", None):
                             for ch in (1, 2):
                                 try:
@@ -449,26 +448,20 @@ class HostHandlers:
                 except Exception:
                     return "error"
 
-                # ✅ 1.5) CH1이 IG 대기 단계면 Loadlock을 running으로 "보이게" 강제
-                # (Plasma Cleaning이 끝났고 Gate가 닫힌 뒤 CH1 공정이 시작해도 IG 동안 계속 running 유지)
                 if _ch1_is_waiting_ig():
                     return "running"
 
-                # 2) pc 런타임 플래그(fallback)
                 try:
                     pc = getattr(self.ctx, "pc", None)
                     if pc is not None:
                         fn = getattr(pc, "is_running", None)
 
                         if callable(fn):
-                            # 메서드면 호출해서 True/False를 받아야 함
                             try:
                                 cleaning = bool(fn())
                             except TypeError:
-                                # 혹시 시그니처가 달라 호출이 안 되면 _running으로 폴백
                                 cleaning = bool(getattr(pc, "_running", False))
                         else:
-                            # 속성(bool)일 수도 있으니 그대로 사용
                             cleaning = bool(fn) if isinstance(fn, bool) else bool(getattr(pc, "_running", False))
 
                         return "running" if cleaning else "idle"
@@ -477,33 +470,18 @@ class HostHandlers:
 
                 return "idle"
 
-            # ── CH1 / CH2 / Loadlock 상태 계산 ─────────────────────────────
             chamber_1 = _ch_state(1)
             chamber_2 = _ch_state(2)
             loadlock  = _loadlock_state()
 
-            # ✅ 단순 인터락(표시용):
-            # CH1이 공정 중(running)인 동안에는 CH2/Loadlock이 idle로 보이면 로봇이 움직이므로,
-            # CH2/Loadlock이 running이 아니면 running으로 "보이게" 고정한다.l
-            # CH1이 idle로 바뀌면 이 조건이 풀리면서 원래 상태(대개 idle)로 돌아간다.
-            # if chamber_1 == "running":
-            #     if chamber_2 != "running":
-            #         chamber_2 = "running"
-            #     if loadlock != "running":
-            #         loadlock = "running"
-
-            # ── PLC에서 진공 상태(L_ATM=FALSE)를 읽어 vacuum 여부 확인 ─────
             async with self._plc_command("GET_SPUTTER_STATUS"):
-                # ⇐ 여기서 클라이언트가 보낸 payload를 같이 남겨줌
                 self._log_client_request(payload)
 
                 async with self._plc_call():
                     atm = await self.ctx.plc.read_bit("L_ATM")
 
-                # L_ATM 이 False면 진공 유지(True)
                 vacuum = (not bool(atm))
 
-                # 통신 명세서 v3 포맷에 맞춰 응답
                 return self._ok(
                     Chamber_1=chamber_1,
                     Chamber_2=chamber_2,
