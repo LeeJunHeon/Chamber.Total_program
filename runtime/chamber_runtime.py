@@ -1648,10 +1648,24 @@ class ChamberRuntime:
     # ──────────────────────────────────────────────────────────────
     def _ensure_devices_started(self) -> None:
         """MFC/IG는 start(), PLC는 connect()로 워치독/하트비트까지 기동."""
+        # ✅ DevStart 태스크가 살아있으면 재생성하지 않음
+        t = getattr(self, "_devstart_task", None)
+        if isinstance(t, asyncio.Task) and (not t.done()):
+            self._devices_started = True
+            return
+
         if getattr(self, "_devices_started", False):
             return
+
+        task = self._spawn_detached(self._start_devices_task(), store=True, name=f"DevStart.CH{self.ch}")
+        if task is None:
+            # create_task 실패(또는 다른 스레드에서 예약만 된 경우) → 다음 주기에 재시도 가능하게 둠
+            self._devices_started = False
+            self.append_log("MAIN", "[DevStart] task 생성 실패/지연 → 다음 주기에 재시도")
+            return
+
+        self._devstart_task = task
         self._devices_started = True
-        self._spawn_detached(self._start_devices_task(), store=True, name=f"DevStart.CH{self.ch}")
 
     async def _start_devices_task(self) -> None:
         async def _maybe_start_or_connect(obj, label: str, *, log: bool = True):
@@ -2073,57 +2087,6 @@ class ChamberRuntime:
             raise
         except Exception as e:
             self.append_log("MAIN", f"preflight watchdog exception: {e!r}")
-
-    def _safe_start_process(self, params: NormParams) -> None:
-        # 0) 이미 실행 중이면 즉시 실패 처리
-        if self.process_controller.is_running:
-            msg = "이미 다른 공정 실행 중"
-            self.append_log("MAIN", msg)
-
-            with contextlib.suppress(Exception):
-                runtime_state.set_error("chamber", self.ch, msg)
-                runtime_state.mark_finished("chamber", self.ch)
-
-            with contextlib.suppress(Exception):
-                self._host_report_start(False, msg)
-
-            self._set_state_text(msg)
-            self._on_process_status_changed(False)
-            return
-
-        # 1) ✅ Start 누르는 즉시 로그 파일 “생성” 보장 (멈춰도 파일이 남게)
-        try:
-            if not getattr(self, "_log_file_path", None):
-                self._open_run_log(params)  # 내부에서 writer 큐/헤더 기록
-        except Exception as e:
-            self.append_log("Logger", f"_open_run_log failed: {e!r}")
-
-        # 2) ✅ preflight 진입 순간부터 UI는 running (Stop 활성화)
-        self._set_state_text("프리플라이트(장비 확인) 중…")
-        self._on_process_status_changed(True)
-
-        # 3) ✅ 전역 running 마킹(큐/자동시작 포함) - 여기서 1회만
-        with contextlib.suppress(Exception):
-            runtime_state.mark_started("chamber", self.ch)
-
-        # 4) ✅ preflight 실행(예외는 _spawn_detached done_callback에서 로그로 남음)
-        # ✅ 이번 Start 시도 세대 번호 증가
-        self._run_gen = int(getattr(self, "_run_gen", 0)) + 1
-        gen = self._run_gen
-        self._active_run_gen = gen
-
-        self._spawn_detached(
-            self._start_after_preflight(params, gen),
-            store=True,
-            name=f"StartAfterPreflight.CH{self.ch}.g{gen}",
-        )
-
-        # ✅ 프리플라이트 watchdog: 일정 시간 내 진행 없으면 자동 정리/복귀
-        self._spawn_detached(
-            self._preflight_watchdog(gen, timeout_s=25.0),
-            store=True,
-            name=f"PreflightWD.CH{self.ch}.g{gen}",
-        )
 
     # ✅ Gate(밸브) 인터락: 시작하려는 챔버의 Gate가 CLOSED인지 확인
     async def _check_gate_closed_before_start(self) -> bool:
@@ -2751,13 +2714,31 @@ class ChamberRuntime:
 
     def _runner_put(self, cmd: _RunnerCmd) -> None:
         """
-        Runner 명령 큐에 넣는다. (UI 스레드/어떤 스레드에서든 호출될 수 있음)
+        Runner 명령 큐에 넣는다.
+
+        ✅ 중요: asyncio.Queue는 thread-safe가 아니다.
+        - 현재 실행 중인 이벤트루프가 self._loop(=qasync loop)인 경우에만 put_nowait
+        - 그 외 스레드(Host/PLC/worker thread 등)에서는 loop.call_soon_threadsafe로 위임
         """
         self._ensure_runner_started()
+        loop = self._loop
+
+        def _do_put() -> None:
+            try:
+                self._cmd_q.put_nowait(cmd)
+            except asyncio.QueueFull:
+                self.append_log("MAIN", f"[Runner] cmd queue full → drop: {cmd.kind}")
+
         try:
-            self._cmd_q.put_nowait(cmd)
-        except asyncio.QueueFull:
-            self.append_log("MAIN", f"[Runner] cmd queue full → drop: {cmd.kind}")
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+
+        if running is loop:
+            _do_put()
+        else:
+            with contextlib.suppress(Exception):
+                loop.call_soon_threadsafe(_do_put)
 
 
     def _runner_start_stage(self, kind: str, coro: Coroutine[Any, Any, Any]) -> None:
@@ -2788,6 +2769,74 @@ class ChamberRuntime:
                 await t
         self._runner_stage_task = None
         self._runner_stage_kind = None
+
+
+    def _cancel_delay_task(self) -> None:
+        """
+        (안전장치) 과거/레거시 경로에서 남아 있을 수 있는 지연 태스크를 취소한다.
+
+        Runner 구조에서는 delay를 stage 코루틴에서 처리하지만,
+        - shutdown_fast / reset 경로에서 이 함수가 호출되고 있으며,
+        - AttributeError 방지 + 잠재 누수 방지 목적이므로 남겨 둔다.
+        """
+        for attr in ("_delay_main_task", "_delay_countdown_task"):
+            t = getattr(self, attr, None)
+            if isinstance(t, asyncio.Task) and (not t.done()):
+                with contextlib.suppress(Exception):
+                    t.cancel()
+            setattr(self, attr, None)
+
+    
+    async def _runner_handle_stop(self, user_initiated: bool) -> None:
+        """
+        Runner STOP 처리(단일 진입점).
+
+        원칙
+        1) 현재 stage(preflight/쿨다운/딜레이/advance 등)가 있으면 먼저 취소한다.
+        2) ProcessController가 RUNNING이면 장치 cleanup은 하지 않고 request_stop()만 보낸다.
+           - finished 이벤트가 들어오면 AFTER_FINISH stage가 cleanup을 수행한다.
+        3) RUNNING이 아니면 지금 즉시 heavy cleanup을 수행하고 UI를 Idle로 복구한다.
+
+        ✅ 공정 로직/장비 파라미터는 바꾸지 않고,
+           "정지 처리의 주체"만 Runner로 모으는 구조 변경이다.
+        """
+        self.append_log("MAIN", f"[Runner] STOP 요청(user={user_initiated}) state={getattr(self, '_runner_state', '')}")
+
+        # 리스트 자동 진행은 여기서 끊는다(완료/실패/STOP 후 다음 공정으로 넘어가지 않게)
+        self._runner_queue_mode = False
+
+        # 정지 중 자동 재연결/백그라운드 재기동 방지
+        self._auto_connect_enabled = False
+
+        # stage 취소 (프리플라이트/딜레이/큐 advance 등)
+        await self._runner_cancel_stage()
+
+        # 공정이 실행 중이면: PC에 stop 요청만 보낸다(장치 정리는 finished 이후)
+        if bool(getattr(self.process_controller, "is_running", False)):
+            self.append_log("MAIN", "[Runner] STOP → process_controller.request_stop()")
+            with contextlib.suppress(Exception):
+                self._set_state_text("STOP 요청 중... (공정 종료 대기)")
+            with contextlib.suppress(Exception):
+                self.process_controller.request_stop()
+            # 여기서는 상태를 IDLE로 만들지 않는다. finished가 오면 AFTER_FINISH가 정리한다.
+            return
+
+        # 공정 시작 전 상태(preflight/idle/delay)라면 지금 바로 정리한다.
+        self.append_log("MAIN", "[Runner] STOP → 공정 시작 전 상태, 즉시 정리(cleanup)")
+        with contextlib.suppress(Exception):
+            self._apply_polling_targets({"mfc": False, "dc_pulse": False, "rf_pulse": False, "dc": False, "rf": False})
+
+        # START stage에서 mark_started를 찍었을 수 있으므로, 여기서 running 상태가 남지 않게 마무리
+        with contextlib.suppress(Exception):
+            runtime_state.mark_finished("chamber", self.ch)
+
+        with contextlib.suppress(Exception):
+            await self._stop_device_watchdogs(light=False)
+
+        with contextlib.suppress(Exception):
+            self._clear_queue_and_reset_ui()
+
+        self._runner_state = "IDLE"
 
 
     async def _runner_main(self) -> None:
@@ -2822,7 +2871,8 @@ class ChamberRuntime:
                     # STOP은 즉시 처리(현재 stage 취소/정리)
                     self._runner_state = "STOPPING"
                     await self._runner_handle_stop(cmd.user_initiated)
-                    self._runner_state = "IDLE"
+                    # ✅ RUNNING 상태에서 STOP을 누른 경우 finished 이벤트가 오기 전까지 STOPPING 유지가 안전
+                    # (_runner_handle_stop 내부에서 최종 상태를 결정한다.)
 
                 else:
                     self.append_log("MAIN", f"[Runner] unknown cmd: {cmd.kind}")
@@ -2848,6 +2898,12 @@ class ChamberRuntime:
             gen = self._run_gen
             self._active_run_gen = gen
 
+            # ✅ 기존 _safe_start_process와 동일하게 "시작" 상태를 먼저 찍어 둔다.
+            # - preflight 중에도 다른 Start를 막고
+            # - Host/외부에서 is_running 판정을 일관되게 하기 위함
+            with contextlib.suppress(Exception):
+                runtime_state.mark_started("chamber", self.ch)
+
             # ✅ 프리플라이트/시작은 "await"로 직접 실행 (detached로 던지지 않음)
             await self._start_after_preflight(params, gen)
 
@@ -2856,7 +2912,7 @@ class ChamberRuntime:
 
         except asyncio.CancelledError:
             # STOP이 눌러져 stage가 취소될 수 있음
-            self.append_log("MAIN", f"[Runner] START_SINGLE cancelled")
+            self.append_log("MAIN", "[Runner] START_SINGLE cancelled")
             raise
 
         except Exception as e:
@@ -3044,6 +3100,12 @@ class ChamberRuntime:
             self._run_gen = int(getattr(self, "_run_gen", 0)) + 1
             gen = self._run_gen
             self._active_run_gen = gen
+
+            # ✅ 기존 _safe_start_process와 동일하게 "시작" 상태를 먼저 찍어 둔다.
+            #    - preflight 중에도 다른 Start를 막고
+            #    - Host/외부에서 is_running 판정을 일관되게 하기 위함
+            with contextlib.suppress(Exception):
+                runtime_state.mark_started("chamber", self.ch)
 
             await self._start_after_preflight(norm, gen)
             self._runner_state = "RUNNING"
