@@ -227,17 +227,40 @@ MFC_COMMANDS = {
 
 
 # ======================================================================
-# RF Pulse / DC Pulse (공통 기본값; 주소는 채널 파일에서 필요 시 오버라이드)
+# DC Pulse (공통 기본값; 주소는 채널 파일에서 필요 시 오버라이드)
 # ======================================================================
-RFPULSE_PORT = "192.168.1.50:4005"
-RFPULSE_BAUD = 9600
-RFPULSE_ADDR = 1
-RFPULSE_DEFAULT_DELAY_MS = 180
-
 DCPULSE_PORT = "192.168.1.50:4007"
 DCPULSE_BAUD = 9600
 DCPULSE_ADDR = 1
 DCPULSE_DEFAULT_DELAY_MS = 180
+
+
+# ======================================================================
+# RF Pulse (공통 기본값)
+# ======================================================================
+RFPULSE_TCP_HOST = "192.168.1.50"
+RFPULSE_TCP_PORT = 4005
+
+RFPULSE_ADDR = 1
+
+# 연결/워치독/재연결
+RFPULSE_CONNECT_TIMEOUT_S = 1.5
+RFPULSE_DRAIN_TIMEOUT_S = 2.0
+RFPULSE_WATCHDOG_INTERVAL_MS = 3000
+RFPULSE_RECONNECT_BACKOFF_START_MS = 2000
+RFPULSE_RECONNECT_BACKOFF_MAX_MS = 30_000
+
+# 폴링/모니터링(필요시 UI에서 조절)
+POLL_INTERVAL_MS = 5_000
+POLL_QUERY_TIMEOUT_MS = 9000
+POLL_START_DELAY_AFTER_RF_ON_MS = 800
+
+RFPULSE_PULSE_MODE = 1  # 0~5 중 사용(네 장비 프로토콜에 맞게)
+
+RFPULSE_FORP_TOLERANCE_PERCENT = 5.0
+RFPULSE_FORP_CONSECUTIVE_LIMIT = 3
+RFPULSE_REFP_LIMIT_WATTS = 20.0
+RFPULSE_REFP_CONSECUTIVE_LIMIT = 3
 
 
 # ======================================================================
