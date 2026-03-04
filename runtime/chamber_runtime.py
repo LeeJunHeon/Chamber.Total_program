@@ -11,8 +11,6 @@ import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Callable, Coroutine, Deque, Literal, Mapping, Optional, Sequence, TypedDict, cast, Union
-from pathlib import Path
-from datetime import datetime, timedelta
 from collections import deque
 
 from PySide6.QtWidgets import QMessageBox, QFileDialog, QPlainTextEdit, QDialog, QApplication
@@ -297,7 +295,6 @@ class ChamberRuntime:
         self._mfc_seq_lock = asyncio.Lock()
         self._starter_threads: dict[str, asyncio.Task] = {}
         self._bg_started = False
-        self._pc_stopping = False
         self._pending_device_cleanup = False
         self._cleanup_timed_out = False  # ✅ cleanup 중 timeout 발생 여부(재시작 안전장치)
         self._last_polling_targets: TargetsMap | None = None
@@ -905,7 +902,6 @@ class ChamberRuntime:
                             self.append_log("CHAT", f"구글챗 시작 카드 전송 실패: {e!r}")
 
                     # ✅ 시작시각 확정: 버튼-누른-시각 우선, 없으면 지금 시각 (둘 다 tz 없음)
-                    from datetime import datetime
                     params = dict(params)
                     t0 = params.get("t0_pressed_wall") or datetime.now().isoformat(timespec="seconds")
                     params["t0_wall"]   = t0
@@ -1091,8 +1087,6 @@ class ChamberRuntime:
                         #   은 Runner가 PC_FINISHED 명령을 받아 "순차적으로" 처리한다.
 
                         self._last_polling_targets = None
-                        # (레거시 플래그는 더 이상 쓰지 않으므로 남겨도 false로만 유지)
-                        self._pc_stopping = False
                     except Exception as e:
                         self.append_log("MAIN", f"예외 발생 (finished 처리): {e}")
                         # 예외 시 안전하게 UI를 '대기 중'으로 복귀
@@ -2057,36 +2051,6 @@ class ChamberRuntime:
         except Exception as e:
             self.append_log("PLC", f"read_bit failed: {key}: {e!r}")
             return None
-        
-    async def _preflight_watchdog(self, run_gen: int, timeout_s: float = 25.0) -> None:
-        """
-        프리플라이트가 특정 시간 안에 실제 공정(start_process)로 넘어가지 못하면
-        자동으로 stop/정리 시퀀스를 태워서 '프리플라이트에서 영구 멈춤'을 복구한다.
-        """
-        try:
-            await asyncio.sleep(float(timeout_s))
-
-            # 더 최신 Start가 있으면 무시
-            if int(getattr(self, "_active_run_gen", 0)) != int(run_gen):
-                return
-
-            # 이미 공정이 시작됐으면 정상
-            if bool(getattr(self.process_controller, "is_running", False)):
-                return
-
-            # 아직 프리플라이트 상태라면 "멈춤"으로 판단
-            state_txt = str(getattr(self, "_last_state_text", "") or "")
-            if "프리플라이트" not in state_txt:
-                return
-
-            self.append_log("MAIN", f"⚠ preflight watchdog timeout({timeout_s:.0f}s) → 자동 정리/상태 복구")
-            # Stop이 “공정중 아님”으로 막히던 케이스까지 복구해야 하므로 request_stop_all을 탄다.
-            self.request_stop_all(user_initiated=False)
-
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            self.append_log("MAIN", f"preflight watchdog exception: {e!r}")
 
     # ✅ Gate(밸브) 인터락: 시작하려는 챔버의 Gate가 CLOSED인지 확인
     async def _check_gate_closed_before_start(self) -> bool:
@@ -2158,8 +2122,7 @@ class ChamberRuntime:
             if int(getattr(self, "_active_run_gen", 0)) != int(run_gen):
                 return
 
-            # ⬇️ 추가: 이전 런의 잔여 종료 플래그를 명시적으로 클리어
-            self._pc_stopping = False
+            # ✅ 이전 런 cleanup 제한 플래그를 클리어 (정상 종료 후 다음 런 시작을 위해)
             self._pending_device_cleanup = False
 
             # ------------------------------------------------------------
@@ -2579,9 +2542,14 @@ class ChamberRuntime:
     # ------------------------------------------------------------------
     def _handle_start_clicked(self, _checked: bool = False):
         """
-        ✅ 구조 변경:
-        - 기존: _safe_start_process()가 detached task로 preflight 시작
-        - 변경: Runner 큐에 START/START_QUEUE만 넣고 Runner가 순차 실행
+        ✅ Runner 기반 시작 처리
+
+        - 기존(레거시): Start 클릭 시 프리플라이트/시작을 detached task로 흩뿌리고,
+        process_controller finished 이벤트 펌프에서 cleanup/다음 공정까지 직접 수행
+        → 공정 종료 직후 다음 공정 시작 레이스/태스크 누수로 “프리플라이트 멈춤”이 재발 가능
+
+        - 현재: Start 클릭은 Runner 큐에 START/START_QUEUE 명령만 enqueue.
+        실제 프리플라이트/공정 시작/종료 정리/다음 공정 진행은 Runner가 순차 처리
         """
         try:
             self._ensure_runner_started()
@@ -2888,7 +2856,7 @@ class ChamberRuntime:
     
     async def _runner_stage_start_single(self, params: NormParams) -> None:
         """
-        단일 공정 실행:
+        단일 공정 실행(Runner Stage):
         - preflight → process_controller.start_process()까지 진행
         - 실패하면 여기서 cleanup 후 IDLE로 복귀
         """
@@ -2978,7 +2946,7 @@ class ChamberRuntime:
 
     async def _runner_stage_advance_queue(self, was_successful: bool) -> None:
         """
-        큐 모드:
+        큐 모드(파일 기반 자동 공정) Runner Stage:
         - 다음 params 선택
         - delay step이면 대기 후 다음으로 계속
         - normal step이면 preflight → start_process 진입
@@ -3303,7 +3271,6 @@ class ChamberRuntime:
         # ✅ cleanup이 완전히 끝난 경우에만 “정리 완료”로 간주
         if not getattr(self, "_cleanup_timed_out", False):
             self._pending_device_cleanup = False
-            self._pc_stopping = False
         else:
             self._pending_device_cleanup = True
             self.append_log("MAIN", "⚠ cleanup 미완료(타임아웃) → Start는 정리 완료 전까지 제한")
@@ -4301,7 +4268,6 @@ class ChamberRuntime:
         # - cleanup 타임아웃이면 Start를 막아야 안전(“정리 덜 끝났는데 idle” 방지)
         if not getattr(self, "_cleanup_timed_out", False):
             self._pending_device_cleanup = False
-            self._pc_stopping = False
         else:
             self.append_log("MAIN", "⚠ cleanup timeout 상태 유지: Start 제한 유지")
 
