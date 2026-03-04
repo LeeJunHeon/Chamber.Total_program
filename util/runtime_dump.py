@@ -29,13 +29,15 @@ def _safe_mkdir(p: Path) -> Path:
         p.mkdir(parents=True, exist_ok=True)
         return p
     except Exception:
-        fallback = Path.cwd() / "Logs" / "CH1&2" / "ERROR" / "RUNTIME_DUMP"
+        # ✅ ERROR 폴더 아래가 아니라 CH1&2 아래에 RUNTIME_DUMP 생성
+        fallback = Path.cwd() / "Logs" / "CH1&2" / "RUNTIME_DUMP"
         fallback.mkdir(parents=True, exist_ok=True)
         return fallback
 
 def _dump_root(log_root: Optional[Path]) -> Path:
     base = Path(log_root) if log_root is not None else _DEFAULT_LOG_ROOT
-    return _safe_mkdir(base / "ERROR" / "RUNTIME_DUMP")
+    # ✅ CH1&2 바로 아래에 RUNTIME_DUMP 생성
+    return _safe_mkdir(base / "RUNTIME_DUMP")
 
 def _safe_repr(v: Any, max_len: int = 400) -> str:
     try:
