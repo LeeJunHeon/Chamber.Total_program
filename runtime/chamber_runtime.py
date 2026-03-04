@@ -1085,34 +1085,14 @@ class ChamberRuntime:
                         # 남아 있을 수 있는 폴링 스위치를 즉시 모두 내림(장치 내부 워치독 종료 유도)
                         self._apply_polling_targets({"mfc": False, "dc_pulse": False, "rf_pulse": False, "dc": False, "rf": False})
 
-                        # 1) 이제 실제로 장치/워치독을 내려서 RS-232/TCP 점유 해제
-                        if not is_test_cancel:
-                            self.append_log("MAIN", "공정 종료 → 모든 장치 연결 해제 및 워치독 중지")
-                            try:
-                                await self._stop_device_watchdogs(light=False)
-                            except Exception as e:
-                                self.append_log("MAIN", f"종료 정리 중 예외(무시): {e!r}")
-                        else:
-                            self.append_log("MAIN", "[TEST] STOP 종료 → 장치 정리 생략")
+                        # ✅ finished 이벤트에서는 "결과 기록/카드/알림"까지만 수행한다.
+                        #   - 장치 정리(_stop_device_watchdogs)
+                        #   - 다음 공정 진행(큐 advance)
+                        #   은 Runner가 PC_FINISHED 명령을 받아 "순차적으로" 처리한다.
 
-                        # ★ 추가: 혹시 남아 있을 수 있는 카운트다운/지연 태스크 누수 방지
-                        self._cancel_delay_task()
-
-                        # 2) 다음 공정 새 로그 파일을 위해 세션 리셋
-                        # (중요) 여기서는 파일을 건드리지 않음.
-                        # - 다음 공정이 있으면, 다음 공정 진입 직전에 닫고(None) 돌리고
-                        # - 마지막 공정이면, '모든 공정 완료'까지 기록한 뒤 닫는다.
-
-                        if getattr(self, "_pc_stopping", False):
-                            with contextlib.suppress(Exception):
-                                self._clear_queue_and_reset_ui()
-                            self._last_polling_targets = None
-                            self._pc_stopping = False
-                            continue
-
-                        self._pc_stopping = False
-                        self._start_next_process_from_queue(ok)
                         self._last_polling_targets = None
+                        # (레거시 플래그는 더 이상 쓰지 않으므로 남겨도 false로만 유지)
+                        self._pc_stopping = False
                     except Exception as e:
                         self.append_log("MAIN", f"예외 발생 (finished 처리): {e}")
                         # 예외 시 안전하게 UI를 '대기 중'으로 복귀
@@ -1154,6 +1134,10 @@ class ChamberRuntime:
                                     pass
 
                             runtime_state.mark_finished("chamber", self.ch)
+
+                            # ✅ Runner에 finished 통지 (정리/다음 공정 진행은 Runner가 담당)
+                            self._ensure_runner_started()
+                            self._runner_put(_RunnerCmd(kind="PC_FINISHED", ok=bool(ok), detail=dict(detail)))
 
                         except Exception:
                             pass
@@ -2045,183 +2029,6 @@ class ChamberRuntime:
         except Exception as e:
             self.append_log("UI", f"_set('{leaf}') 실패: {e!r}")
 
-    # ------------------------------------------------------------------
-    # 자동 시퀀스
-    def _start_next_process_from_queue(self, was_successful: bool) -> None:
-        if getattr(self, "_advancing", False):
-            self.append_log("MAIN", "자동 진행 중복 호출 무시"); return
-        self._advancing = True
-        try:
-            if self.process_controller.is_running and getattr(self, "current_process_index", -1) > -1:
-                self.append_log("MAIN", "경고: 전환 시점에 이미 실행 중"); return
-
-            if not was_successful:
-                self.append_log("MAIN", "이전 공정 실패 → 자동 중단")
-                self._clear_queue_and_reset_ui(); return
-
-            self.current_process_index = getattr(self, "current_process_index", -1) + 1
-            if self.current_process_index < len(getattr(self, "process_queue", [])):
-                params = self.process_queue[self.current_process_index]
-                self._update_ui_from_params(params)
-                if self._try_handle_delay_step(params):
-                    return
-                
-                # ------------------------------------------------------------
-                # TEST MODE : CSV의 #열이 test 이면 장비제어 없이 실행
-                # ------------------------------------------------------------
-                marker = str(params.get("#") or "").strip().lower()
-                if marker == "test":
-                    time_str = str(params.get("time") or "").strip()
-                    test_duration_sec = self._parse_duration_seconds(time_str.lower())
-
-                    params["test_mode"] = True
-                    params["test_duration_sec"] = test_duration_sec
-
-                    # ✅ 구글챗/카드에서 분 단위 값을 쓰는 경우 대비
-                    if test_duration_sec > 0:
-                        params.setdefault("process_time", round(test_duration_sec / 60.0, 3))
-
-                    # ✅ 카드/로그에 표시될 이름 보강
-                    params.setdefault("process_note", params.get("Process_name") or "TEST")
-
-                    self.append_log("MAIN", f"[TEST MODE] {test_duration_sec:.1f}s 동안 시뮬레이션 실행")
-                    self._safe_start_process(params)
-                    return
-                # ------------------------------------------------------------
-
-                norm = self._normalize_params_for_process(params)
-                
-                # 입력값 검증
-                errs = self._validate_norm_params(norm)
-                if errs:
-                    # ✅ 레시피 오류도 파일 로그로 남기기
-                    with contextlib.suppress(Exception):
-                        if not getattr(self, "_log_file_path", None):
-                            self._open_run_log(norm)
-
-                    self.append_log("Validate", "CSV 공정 파라미터 오류:\n - " + "\n - ".join(errs))
-                    self._clear_queue_and_reset_ui()
-                    return
-                
-                # ✅ 중요:
-                # - 이전 공정의 finished 처리에서 이미 _stop_device_watchdogs(light=False)가
-                #   _shutdown_log_writer()까지 await로 끝내는 구조다.
-                # - 여기서 _shutdown_log_writer()를 detached로 또 돌리면,
-                #   "새 공정 시작"과 경합(race)하면서 새 로그/프리플라이트가 꼬일 수 있다.
-                #
-                # 따라서 "다음 공정 시작" 단계에서는 writer shutdown을 재호출하지 않는다.
-                # with contextlib.suppress(Exception):
-                #     self._spawn_detached(self._shutdown_log_writer())
-
-                self._log_file_path = None
-
-                # (NEW) 최근 'chamber' 종료 시각 기준 쿨다운을 반영해서 다음 스텝 대기
-                try:
-                    remain = float(runtime_state.remaining_cooldown("chamber", self.ch, 60.0))
-                except Exception:
-                    remain = 0.0
-
-                # 🚫 첫 번째 스텝(인덱스 0)은 강제 60초 대기 없이 즉시 시작
-                first_step = (self.current_process_index == 0)
-
-                # remain 자체가 "남은 시간"이므로 그대로 쓰는 게 맞음
-                delay_s = max(0.0, float(remain))
-
-                reason = ("최근 종료로 인한 대기" if first_step else "쿨다운 대기")
-
-                # ✅ Start를 눌러 “시작 시도”되는 순간 바로 로그 파일을 연다
-                with contextlib.suppress(Exception):
-                    if not getattr(self, "_log_file_path", None):
-                        self._open_run_log(norm)
-
-                # 지연이 없으면: 태스크 예약을 거치지 말고 즉시 시작(간헐적 예약 실패/정지 방지)
-                if delay_s <= 0.0:
-                    self.append_log("MAIN", f"다음 공정 즉시 시작(쿨다운 remain={remain:.3f}s)")
-                    self._set_state_text("다음 공정 시작 준비 중…")
-                    self._cancel_delay_task()
-                    self._safe_start_process(norm)   # ✅ 검증된 norm으로 바로 진입
-                    return
-
-                # 지연 필요 시: 첫 스텝이면 '최근 종료로 인한 대기', 이후 스텝은 '쿨다운 대기'
-                reason = ("최근 종료로 인한 대기" if first_step else "쿨다운 대기")
-                self._set_state_text(f"다음 공정 대기중 ({reason}) · 남은 시간 {self._fmt_hms(delay_s)}")
-
-                # 파일 로그에도 “왜/얼마나 기다리는지” 남김
-                self.append_log("MAIN", f"다음 공정 대기 시작: delay_s={delay_s:.1f}s, reason={reason}, remain={remain:.3f}s")
-
-                self._cancel_delay_task()
-                self._set_task_later(
-                    "_delay_main_task",
-                    self._start_process_later(params, delay_s, reason=reason),
-                    name=f"NextProcDelay.CH{self.ch}"
-                )
-
-            else:
-                self._clear_queue_and_reset_ui()
-                # (주의) 장치 연결 해제는 finished 분기에서 이미 수행함
-                # ★ 추가: 정상 종료 + 더 이상 다음 공정이 없으면 장치 연결 해제(PLC 제외)
-                #self._spawn_detached(self._stop_device_watchdogs(light=False), name="FullCleanup.EndRun")
-        finally:
-            self._advancing = False
-
-    async def _start_process_later(self, params: RawParams, delay_s: float = 0.1, *, reason: str = "") -> None:
-        if delay_s <= 0.5:
-            self._safe_start_process(self._normalize_params_for_process(params))
-            return
-
-        # ETA 로그
-        rtxt = f" ({reason})" if reason else ""
-        try:
-            eta = datetime.now() + timedelta(seconds=delay_s)
-            self.append_log("MAIN", f"다음 공정 예약: {delay_s:.0f}s 후 {eta.strftime('%H:%M:%S')}{rtxt}")
-        except Exception:
-            pass
-
-        # 카운트다운 태스크만 관리(메인 태스크는 절대 자기 자신을 취소하지 않음)
-        async def _countdown_loop():
-            try:
-                remain = int(delay_s)
-                self._set_state_text(f"다음 공정 대기중{rtxt} · 남은 시간 {self._fmt_hms(remain)}")
-                while remain > 0:
-                    await asyncio.sleep(1)
-                    remain -= 1
-                    if remain <= 60 or (remain % 5 == 0):
-                        self._set_state_text(f"다음 공정 대기중{rtxt} · 남은 시간 {self._fmt_hms(remain)}")
-            except asyncio.CancelledError:
-                raise
-
-        loop = asyncio.get_running_loop()
-        # 기존 카운트다운이 있으면 취소
-        if self._delay_countdown_task and not self._delay_countdown_task.done():
-            self._delay_countdown_task.cancel()
-        # 새 카운트다운 등록
-        self._delay_countdown_task = loop.create_task(
-            _countdown_loop(), name=f"CH{self.ch}-NextProcCountdown"
-        )
-
-        try:
-            # 메인 태스크는 단순 대기만 수행(자기-취소 금지)
-            await asyncio.sleep(delay_s)
-        except asyncio.CancelledError:
-            self._set_state_text("다음 공정 대기 취소됨")
-            # 카운트다운도 함께 정리
-            if self._delay_countdown_task and not self._delay_countdown_task.done():
-                self._delay_countdown_task.cancel()
-            self._delay_countdown_task = None
-            raise
-        finally:
-            # 정상 시작/취소 직전 카운트다운 정리
-            if self._delay_countdown_task:
-                try:
-                    self._delay_countdown_task.cancel()
-                except Exception:
-                    pass
-                self._delay_countdown_task = None
-
-        # 이제 진짜 시작
-        self._set_state_text("다음 공정 시작 준비 중…")
-        self._safe_start_process(self._normalize_params_for_process(params))
-
     # ✅ PLC read_bit에 timeout 강제 (무한대기 방지)
     async def _plc_read_bit_safe(self, key: str, *, timeout_s: float = 0.6) -> bool | None:
         if not getattr(self, "plc", None):
@@ -2477,8 +2284,7 @@ class ChamberRuntime:
                         runtime_state.set_error("chamber", self.ch, msg)
                         runtime_state.mark_finished("chamber", self.ch)
 
-                    self._start_next_process_from_queue(False)
-                    return
+                    raise RuntimeError(msg)
 
             self._run_select = {
                 "dc_pulse": use_dc_pulse,
@@ -2555,8 +2361,7 @@ class ChamberRuntime:
                 except Exception:
                     pass
 
-                self._start_next_process_from_queue(False)
-                return
+                raise RuntimeError(f"preflight connect failed: {fail_list}")
             
             # ✅ Gate(밸브) 인터락: 시작하려는 챔버의 Gate가 열려 있으면 공정 시작을 차단
             # - Plasma Cleaning은 Gate를 열고 진행하므로, Gate Open 상태면 Sputter Start 금지
@@ -2574,8 +2379,7 @@ class ChamberRuntime:
                     runtime_state.set_error("chamber", self.ch, "gate open")
                     runtime_state.mark_finished("chamber", self.ch)
 
-                self._start_next_process_from_queue(False)
-                return
+                raise RuntimeError("gate open")
             
             # ★ 추가: 공정 시작 직전 Chuck 위치 선행 설정
             self._run_chuck_position = str(params.get("chuck_position") or "").strip().lower()
@@ -2613,8 +2417,8 @@ class ChamberRuntime:
                 runtime_state.set_error("chamber", self.ch, msg)
                 runtime_state.mark_finished("chamber", self.ch)
 
-            self._start_next_process_from_queue(False)
             self._on_process_status_changed(False)
+            raise RuntimeError(msg)
 
     def _kick_oes_init_background(self, *, force: bool = True) -> None:
         """Start 버튼을 눌렀을 때 OES init을 '백그라운드'로 미리 돌려둔다."""
@@ -2925,6 +2729,341 @@ class ChamberRuntime:
         - '공정 중이지 않다'로 STOP이 막히던 케이스 제거
         """
         self._runner_put(_RunnerCmd(kind="STOP", user_initiated=bool(user_initiated)))
+
+
+    # ======================= runner 메서드 =======================
+    def _ensure_runner_started(self) -> None:
+        """
+        챔버당 1개의 Runner 코루틴을 보장한다.
+        - Start/Stop/Finished/Next를 한 곳(Runner)에서만 순차 처리하기 위함.
+        """
+        t = getattr(self, "_runner_task", None)
+        if isinstance(t, asyncio.Task) and (not t.done()):
+            return
+
+        # _set_task_later는 loop 스레드/다른 스레드 어디서 호출돼도 안전하게 task를 만들어준다.
+        self._set_task_later(
+            "_runner_task",
+            self._runner_main(),
+            name=f"Runner.CH{self.ch}",
+        )
+
+
+    def _runner_put(self, cmd: _RunnerCmd) -> None:
+        """
+        Runner 명령 큐에 넣는다. (UI 스레드/어떤 스레드에서든 호출될 수 있음)
+        """
+        self._ensure_runner_started()
+        try:
+            self._cmd_q.put_nowait(cmd)
+        except asyncio.QueueFull:
+            self.append_log("MAIN", f"[Runner] cmd queue full → drop: {cmd.kind}")
+
+
+    def _runner_start_stage(self, kind: str, coro: Coroutine[Any, Any, Any]) -> None:
+        """
+        Runner 내부에서만 쓰는 '단일 stage task' 실행기.
+        - preflight / queue advance / cleanup 같은 긴 작업을 stage task로 돌려서
+        Runner 루프는 STOP 같은 명령을 계속 받을 수 있게 한다.
+        """
+        # 기존 stage 취소
+        t = getattr(self, "_runner_stage_task", None)
+        if isinstance(t, asyncio.Task) and (not t.done()):
+            t.cancel()
+
+        self._runner_stage_kind = kind
+        self._runner_stage_task = self._spawn_detached(
+            coro,
+            store=False,
+            name=f"RunnerStage.{kind}.CH{self.ch}",
+        )
+
+
+    async def _runner_cancel_stage(self) -> None:
+        """stage task가 있으면 취소하고 종료까지 기다린다."""
+        t = getattr(self, "_runner_stage_task", None)
+        if isinstance(t, asyncio.Task) and (not t.done()):
+            t.cancel()
+            with contextlib.suppress(Exception):
+                await t
+        self._runner_stage_task = None
+        self._runner_stage_kind = None
+
+
+    async def _runner_main(self) -> None:
+        """
+        ✅ 핵심: Start/Stop/Finished/Next를 Runner가 단일 진입점으로 처리한다.
+        """
+        self.append_log("MAIN", f"[Runner] started (CH{self.ch})")
+
+        while True:
+            cmd = await self._cmd_q.get()
+            try:
+                if cmd.kind == "START":
+                    if not isinstance(cmd.params, dict):
+                        self.append_log("MAIN", "[Runner] START: params missing → ignore")
+                        continue
+                    self._runner_queue_mode = False
+                    self._runner_state = "PREFLIGHT"
+                    self._runner_start_stage("START_SINGLE", self._runner_stage_start_single(cmd.params))
+
+                elif cmd.kind == "START_QUEUE":
+                    self._runner_queue_mode = True
+                    self._runner_state = "COOLDOWN"
+                    self._runner_start_stage("ADVANCE_QUEUE", self._runner_stage_advance_queue(was_successful=True))
+
+                elif cmd.kind == "PC_FINISHED":
+                    ok = bool(cmd.ok)
+                    detail = dict(cmd.detail or {})
+                    self._runner_state = "CLEANUP"
+                    self._runner_start_stage("AFTER_FINISH", self._runner_stage_after_finish(ok, detail))
+
+                elif cmd.kind == "STOP":
+                    # STOP은 즉시 처리(현재 stage 취소/정리)
+                    self._runner_state = "STOPPING"
+                    await self._runner_handle_stop(cmd.user_initiated)
+                    self._runner_state = "IDLE"
+
+                else:
+                    self.append_log("MAIN", f"[Runner] unknown cmd: {cmd.kind}")
+
+            except Exception as e:
+                tb = "".join(traceback.format_exception(type(e), e, e.__traceback__)).rstrip()
+                self.append_log("MAIN", f"[Runner] loop exception:\n{tb}")
+                # 최후 안전: UI/상태 리셋
+                with contextlib.suppress(Exception):
+                    self._clear_queue_and_reset_ui()
+                self._runner_state = "IDLE"
+
+    
+    async def _runner_stage_start_single(self, params: NormParams) -> None:
+        """
+        단일 공정 실행:
+        - preflight → process_controller.start_process()까지 진행
+        - 실패하면 여기서 cleanup 후 IDLE로 복귀
+        """
+        try:
+            # 세대 번호 갱신 (기존 로직 유지)
+            self._run_gen = int(getattr(self, "_run_gen", 0)) + 1
+            gen = self._run_gen
+            self._active_run_gen = gen
+
+            # ✅ 프리플라이트/시작은 "await"로 직접 실행 (detached로 던지지 않음)
+            await self._start_after_preflight(params, gen)
+
+            # 여기까지 왔으면 PC가 start_process를 호출한 상태(= RUNNING 진입)
+            self._runner_state = "RUNNING"
+
+        except asyncio.CancelledError:
+            # STOP이 눌러져 stage가 취소될 수 있음
+            self.append_log("MAIN", f"[Runner] START_SINGLE cancelled")
+            raise
+
+        except Exception as e:
+            self.append_log("MAIN", f"[Runner] START_SINGLE failed: {e!r}")
+            # 실패 시 정리 + UI 리셋
+            with contextlib.suppress(Exception):
+                self._auto_connect_enabled = False
+                await self._stop_device_watchdogs(light=False)
+            with contextlib.suppress(Exception):
+                self._clear_queue_and_reset_ui()
+            self._runner_state = "IDLE"
+
+    
+    async def _runner_stage_after_finish(self, ok: bool, detail: dict[str, Any]) -> None:
+        """
+        process_controller finished 이후:
+        - 장치 정리
+        - (큐 모드 + 성공이면) 다음 공정으로 advance
+        """
+        try:
+            stopped = bool(detail.get("stopped", False))
+            is_test = bool(detail.get("test_mode", False))
+            is_test_cancel = bool(is_test and stopped)
+
+            # 1) 자동연결 차단 후 정리
+            self._auto_connect_enabled = False
+
+            if not is_test_cancel:
+                self.append_log("MAIN", "[Runner] finished → device cleanup")
+                await self._stop_device_watchdogs(light=False)
+            else:
+                self.append_log("MAIN", "[Runner] [TEST] STOP finished → cleanup skip")
+
+            # 2) 공정 종료 후 공통 리셋
+            self._last_polling_targets = None
+            self._log_file_path = None  # 다음 공정에서 새 로그 열게
+
+            # 3) 큐 진행 여부 결정
+            #    - STOP/stopped면 다음 공정으로 넘어가지 않음
+            if self._runner_queue_mode and ok and (not stopped):
+                self.append_log("MAIN", "[Runner] queue advance (ok)")
+                self._runner_state = "COOLDOWN"
+                # 다음 스텝 stage로 진행
+                await asyncio.sleep(0)  # 이벤트루프 한 틱 양보(레이스 감소)
+                self._runner_start_stage("ADVANCE_QUEUE", self._runner_stage_advance_queue(was_successful=True))
+                return
+
+            # 큐 종료(실패/stop/마지막) → UI 정리
+            self.append_log("MAIN", f"[Runner] queue end (ok={ok}, stopped={stopped}) → reset")
+            self._runner_queue_mode = False
+            with contextlib.suppress(Exception):
+                self._clear_queue_and_reset_ui()
+            self._runner_state = "IDLE"
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self.append_log("MAIN", f"[Runner] AFTER_FINISH exception: {e!r}")
+            with contextlib.suppress(Exception):
+                self._clear_queue_and_reset_ui()
+            self._runner_state = "IDLE"
+
+
+    async def _runner_stage_advance_queue(self, was_successful: bool) -> None:
+        """
+        큐 모드:
+        - 다음 params 선택
+        - delay step이면 대기 후 다음으로 계속
+        - normal step이면 preflight → start_process 진입
+        """
+        if getattr(self, "_advancing", False):
+            self.append_log("MAIN", "[Runner] advance reentry blocked")
+            return
+
+        self._advancing = True
+        try:
+            if not was_successful:
+                self.append_log("MAIN", "[Runner] prev failed → stop queue")
+                self._runner_queue_mode = False
+                with contextlib.suppress(Exception):
+                    self._clear_queue_and_reset_ui()
+                self._runner_state = "IDLE"
+                return
+
+            # 다음 index
+            self.current_process_index = int(getattr(self, "current_process_index", -1)) + 1
+            q = list(getattr(self, "process_queue", []) or [])
+
+            if self.current_process_index >= len(q):
+                self.append_log("MAIN", "[Runner] queue finished → reset")
+                self._runner_queue_mode = False
+                with contextlib.suppress(Exception):
+                    self._clear_queue_and_reset_ui()
+                self._runner_state = "IDLE"
+                return
+
+            # 다음 step params
+            params = q[self.current_process_index]
+            self._update_ui_from_params(params)
+
+            # ------------------------------
+            # (A) delay step 처리 (기존과 동일 규칙)
+            # ------------------------------
+            name = str(params.get("Process_name") or params.get("process_note", "")).strip()
+            m = re.match(r"^\s*delay\s*(\d+)\s*([smhd]?)\s*$", name, re.IGNORECASE) if name else None
+            if m:
+                amount = int(m.group(1))
+                unit = (m.group(2) or "m").lower()
+                factor = {"s": 1.0, "m": 60.0, "h": 3600.0, "d": 86400.0}[unit]
+                duration_s = float(amount) * factor
+                unit_txt = {"s": "초", "m": "분", "h": "시간", "d": "일"}[unit]
+
+                self.append_log("Process", f"[Runner] '{name}' 단계: {amount}{unit_txt} 대기 시작")
+                # 상태 표시 + 카운트다운(취소 가능: STOP이 오면 stage task cancel됨)
+                remain = int(duration_s)
+                while remain > 0:
+                    self._set_state_text(f"지연 대기 중: {amount}{unit_txt} · 남은 시간 {self._fmt_hms(remain)}")
+                    await asyncio.sleep(1)
+                    remain -= 1
+
+                self.append_log("Process", f"[Runner] '{name}' 지연 완료 → 다음 스텝")
+                # delay step은 공정이 아니라 대기였으므로, 다음 스텝으로 계속 진행
+                # (현재 stage 코루틴에서 재귀/루프 대신 간단히 다음 stage로 이어감)
+                self.current_process_index -= 1  # 바로 아래에서 +1 되도록 롤백
+                await asyncio.sleep(0)
+                return await self._runner_stage_advance_queue(was_successful=True)
+
+            # ------------------------------
+            # (B) TEST MODE marker 처리 (기존과 동일)
+            # ------------------------------
+            marker = str(params.get("#") or "").strip().lower()
+            if marker == "test":
+                time_str = str(params.get("time") or "").strip()
+                test_duration_sec = self._parse_duration_seconds(time_str.lower())
+                params["test_mode"] = True
+                params["test_duration_sec"] = test_duration_sec
+                if test_duration_sec > 0:
+                    params.setdefault("process_time", round(test_duration_sec / 60.0, 3))
+                params.setdefault("process_note", params.get("Process_name") or "TEST")
+
+            norm = self._normalize_params_for_process(params)
+
+            # 검증(기존 동일)
+            errs = self._validate_norm_params(norm)
+            if errs:
+                with contextlib.suppress(Exception):
+                    if not getattr(self, "_log_file_path", None):
+                        self._open_run_log(norm)
+                self.append_log("Validate", "CSV 공정 파라미터 오류:\n - " + "\n - ".join(errs))
+                self._runner_queue_mode = False
+                with contextlib.suppress(Exception):
+                    self._clear_queue_and_reset_ui()
+                self._runner_state = "IDLE"
+                return
+
+            # 다음 공정은 새 로그 파일로
+            self._log_file_path = None
+            with contextlib.suppress(Exception):
+                self._open_run_log(norm)
+
+            # ------------------------------
+            # (C) 쿨다운(기존 동일)
+            # ------------------------------
+            try:
+                remain = float(runtime_state.remaining_cooldown("chamber", self.ch, 60.0))
+            except Exception:
+                remain = 0.0
+
+            first_step = (self.current_process_index == 0)
+            delay_s = max(0.0, float(remain))
+
+            if delay_s > 0.0 and not first_step:
+                reason = "쿨다운 대기"
+                self.append_log("MAIN", f"[Runner] cooldown wait: {delay_s:.1f}s ({reason})")
+                r = int(delay_s)
+                while r > 0:
+                    self._set_state_text(f"다음 공정 대기중 ({reason}) · 남은 시간 {self._fmt_hms(r)}")
+                    await asyncio.sleep(1)
+                    r -= 1
+
+            # ------------------------------
+            # (D) preflight → start (await로 직접)
+            # ------------------------------
+            self._runner_state = "PREFLIGHT"
+            self._run_gen = int(getattr(self, "_run_gen", 0)) + 1
+            gen = self._run_gen
+            self._active_run_gen = gen
+
+            await self._start_after_preflight(norm, gen)
+            self._runner_state = "RUNNING"
+
+        except asyncio.CancelledError:
+            self.append_log("MAIN", "[Runner] ADVANCE_QUEUE cancelled")
+            raise
+        except Exception as e:
+            self.append_log("MAIN", f"[Runner] ADVANCE_QUEUE failed: {e!r}")
+            self._runner_queue_mode = False
+            with contextlib.suppress(Exception):
+                self._auto_connect_enabled = False
+                await self._stop_device_watchdogs(light=False)
+            with contextlib.suppress(Exception):
+                self._clear_queue_and_reset_ui()
+            self._runner_state = "IDLE"
+        finally:
+            self._advancing = False
+    # ======================= runner 메서드 =======================
+
 
     async def _stop_device_watchdogs(self, *, light: bool = False) -> None:
         if light:
@@ -3640,135 +3779,6 @@ class ChamberRuntime:
         return res
 
     # --- delay 단계 ---
-    def _cancel_delay_task(self):
-        # 메인/카운트다운 모두 취소
-        for name in ("_delay_main_task", "_delay_countdown_task"):
-            t = getattr(self, name, None)
-            if t and not t.done():
-                t.cancel()
-            setattr(self, name, None)
-
-    def _on_delay_step_done(self, step_name: str):
-        self._delay_countdown_task = None
-        self._last_state_text = None
-        self.append_log("Process", f"'{step_name}' 지연 완료 → 다음 공정")
-
-        # ✉ delay 완료 챗 알림
-        if self.chat:
-            try:
-                total = len(getattr(self, "process_queue", []) or [])
-                cur   = int(getattr(self, "current_process_index", -1)) + 1
-                idx_txt = f" ({cur}/{total})" if total > 0 and cur > 0 else ""
-                msg = f"✅ CH{self.ch} delay 단계 완료{idx_txt}: '{step_name}'"
-
-                ret = self.chat.notify_text(msg)
-                if inspect.iscoroutine(ret):
-                    self._spawn_detached(ret, name=f"Chat.DelayDone.CH{self.ch}")
-                if hasattr(self.chat, "flush"):
-                    self.chat.flush()
-            except Exception as e:
-                self.append_log("CHAT", f"delay 완료 알림 실패: {e!r}")
-
-        self._start_next_process_from_queue(True)
-
-    async def _delay_sleep_then_continue(self, name: str, sec: float):
-        try:
-            await asyncio.sleep(sec)
-            self._on_delay_step_done(name)
-        except asyncio.CancelledError:
-            pass
-
-    async def _delay_countdown_then_continue(self, step_name: str, sec: float, amount: int, unit_txt: str):
-        """
-        지연(delay) 단계 동안 상태창에 카운트다운을 표시하고,
-        완료되면 다음 공정으로 이어간다. Stop 등으로 취소되면 즉시 종료.
-        """
-        def _fmt_hms(x: float) -> str:
-            if x < 0:
-                x = 0
-            s = int(x)
-            h, m = divmod(s, 3600)
-            m, s = divmod(m, 60)
-            return f"{h:02d}:{m:02d}:{s:02d}"
-
-        try:
-            remain = int(sec)
-            # 최초 1회 출력은 호출부에서 이미 했지만, 안전하게 한 번 더 보정 가능
-            if self._w_state:
-                self._w_state.setPlainText(f"지연 대기 중: {amount}{unit_txt} · 남은 시간 {_fmt_hms(remain)}")
-
-            # 1초 단위 감소, 1분 초과 구간은 5초마다 갱신하여 부하 감소
-            while remain > 0:
-                await asyncio.sleep(1)
-                remain -= 1
-                if remain <= 60 or (remain % 5 == 0):
-                    if self._w_state:
-                        self._w_state.setPlainText(f"지연 대기 중: {amount}{unit_txt} · 남은 시간 {_fmt_hms(remain)}")
-
-            # 지연 완료 → 다음 공정
-            self._on_delay_step_done(step_name)
-
-        except asyncio.CancelledError:
-            # Stop/Abort 등으로 취소된 경우
-            if self._w_state:
-                self._w_state.setPlainText("지연 대기 취소됨")
-            # 상위에서 _cancel_delay_task()로 핸들 정리됨
-            pass
-
-    def _try_handle_delay_step(self, params: Mapping[str, Any]) -> bool:
-        name = str(params.get("Process_name") or params.get("process_note", "")).strip()
-        if not name: 
-            return False
-        m = re.match(r"^\s*delay\s*(\d+)\s*([smhd]?)\s*$", name, re.IGNORECASE)
-        if not m: 
-            return False
-
-        amount = int(m.group(1))
-        unit = (m.group(2) or "m").lower()
-        factor = {"s":1.0, "m":60.0, "h":3600.0, "d":86400.0}[unit]
-        duration_s = amount * factor
-        unit_txt = {"s":"초","m":"분","h":"시간","d":"일"}[unit]
-
-        self.append_log("Process", f"'{name}' 단계 감지: {amount}{unit_txt} 대기 시작")
-
-        # ✉ delay 시작 챗 알림
-        if self.chat:
-            try:
-                total = len(getattr(self, "process_queue", []) or [])
-                cur   = int(getattr(self, "current_process_index", -1)) + 1
-                idx_txt = f" ({cur}/{total})" if total > 0 and cur > 0 else ""
-                msg = f"⏱️ CH{self.ch} delay 단계 시작{idx_txt}: {amount}{unit_txt} 대기"
-
-                ret = self.chat.notify_text(msg)
-                if inspect.iscoroutine(ret):
-                    self._spawn_detached(ret, name=f"Chat.DelayStart.CH{self.ch}")
-                if hasattr(self.chat, "flush"):
-                    self.chat.flush()
-            except Exception as e:
-                self.append_log("CHAT", f"delay 시작 알림 실패: {e!r}")
-
-        # 폴링 모두 정지(원래 로직 유지)
-        self._apply_polling_targets({"mfc": False, "dc_pulse": False, "rf_pulse": False, "dc": False, "rf": False})
-        self._last_polling_targets = None
-
-        # 상태창 초기 표시(남은 시간까지 같이)
-        if self._w_state:
-            # 첫 화면을 '남은 시간' 포함해 바로 표시
-            h = int(duration_s) // 3600
-            m_ = (int(duration_s) % 3600) // 60
-            s_ = int(duration_s) % 60
-            self._w_state.setPlainText(f"지연 대기 중: {amount}{unit_txt} · 남은 시간 {h:02d}:{m_:02d}:{s_:02d}")
-
-        # 기존 지연 태스크 취소 후, 카운트다운 코루틴 등록
-        self._cancel_delay_task()
-        self._set_task_later(
-            "_delay_countdown_task",
-            self._delay_countdown_then_continue(name, duration_s, amount, unit_txt),
-            name=f"Delay:{name}"
-        )
-
-        return True
-    
     def _graph_reset_safe(self) -> None:
         try:
             self.graph.reset()
