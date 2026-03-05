@@ -41,6 +41,7 @@ from device.dc_pulse import AsyncDCPulse
 from controller.graph_controller import GraphController
 from controller.data_logger import DataLogger
 from controller.chat_notifier import ChatNotifier
+from util.log_hub import SessionTextAppender
 
 # ⬇️ 추가: 전역 런타임 상태 레지스트리
 from controller.runtime_state import runtime_state
@@ -379,7 +380,11 @@ class ChamberRuntime:
         self._log_dir = self._ensure_log_dir(self._log_root / f"CH{self.ch}")
         self._log_file_path: Path | None = None
         self._prestart_buf: Deque[str] = deque(maxlen=1000)
-        self._log_fp = None
+
+        # ✅ keep-handle 공정(run) 로그 appender (log_hub)
+        # - 폴백 파일명(…_recovered.txt)은 chamber_runtime의 기존 로직을 그대로 쓰기 위해 fallback_dir은 안 씀
+        self._run_log_appender = SessionTextAppender(encoding="utf-8")
+
         self._log_q: asyncio.Queue[str] = asyncio.Queue(maxsize=4096)
         self._log_writer_task: asyncio.Task | None = None
 
@@ -4210,44 +4215,6 @@ class ChamberRuntime:
 
             return local_fallback
 
-    def _prepare_log_file(self, params: Mapping[str, Any]) -> None:
-        now_local = datetime.now()
-        ts = now_local.strftime("%Y%m%d_%H%M%S")
-
-        # 1) 공정명 가져오기 (UI / CSV 공통)
-        raw_name = str(params.get("process_note") or params.get("Process_name") or "").strip()
-
-        # 2) 공정명 비어있으면 기본값 (UI 단일공정은 이미 Single CHx로 들어오는 편이지만, 안전장치)
-        if not raw_name:
-            raw_name = "Untitled"
-
-        # 3) 파일명에 못 쓰는 문자 제거 (Windows/SMB/NAS 호환)
-        safe_name = re.sub(r'[\\/:*?"<>|]+', "_", raw_name)   # 금지문자 치환
-        safe_name = re.sub(r"\s+", " ", safe_name).strip()    # 공백 정리
-        safe_name = safe_name.replace(" ", "_")               # 공백 → _
-        safe_name = safe_name.strip(" .")                     # 끝점/끝공백 방지
-        safe_name = safe_name[:60] if safe_name else "Untitled"  # 너무 길면 잘라내기
-
-        # 4) 최종 파일명: CH2_공정명_날짜_시간.txt
-        base = self._log_dir / f"CH{self.ch}_{safe_name}_{ts}"
-        path = base.with_suffix(".txt")
-
-        i = 1
-        while path.exists():
-            path = (self._log_dir / f"CH{self.ch}_{safe_name}_{ts}_{i}").with_suffix(".txt")
-            i += 1
-
-        self._log_file_path = path
-        if self._log_fp is None:
-            self._log_fp = open(self._log_file_path, "a", encoding="utf-8", newline="")
-        if not self._log_writer_task or self._log_writer_task.done():
-            self._set_task_later("_log_writer_task", self._log_writer_loop(), name=f"LogWriter.CH{self.ch}")
-
-        # (삭제) prestart_buf는 _open_run_log에서 헤더 뒤로 밀어 넣는다.
-
-        note = str(params.get("process_note", "") or params.get("Process_name", "") or f"Run CH{self.ch}")
-        self.append_log("MAIN", f"=== '{note}' 공정 준비 (장비 연결부터 기록) ===")
-
     def _open_run_log(self, params: Mapping[str, Any]) -> None:
         now_local = datetime.now()
         ts = now_local.strftime("%Y%m%d_%H%M%S")
@@ -4309,11 +4276,13 @@ class ChamberRuntime:
                 self._log_q.put_nowait(line)
 
     def _log_write_sync(self, path: Path, text: str) -> None:
-        """⚠️ 반드시 to_thread로만 호출. (UI/이벤트루프에서 직접 호출 금지)"""
-        path.parent.mkdir(parents=True, exist_ok=True)
-        with open(path, "a", encoding="utf-8", newline="") as fp:
-            fp.write(text)
-            fp.flush()
+        """
+        ✅ keep-handle 방식 (util/log_hub.py의 SessionTextAppender 사용)
+        - path가 바뀌면: close → open 교체
+        - 같은 path면: 파일 핸들 유지한 채 write + flush
+        """
+        self._run_log_appender.set_primary_path(path)
+        self._run_log_appender.write(text)
 
     async def _log_writer_loop(self):
         try:
@@ -4367,13 +4336,11 @@ class ChamberRuntime:
             pass
 
     async def _shutdown_log_writer(self):
-        # ✅ 어떤 상황에도 상태 리셋은 보장 (취소/예외에도 finally 실행)
         path = self._log_file_path
-        fp = self._log_fp
         loop = asyncio.get_running_loop()
 
         try:
-            # 1) writer 중지
+            # 1) writer 중지 (기존 그대로)
             t = self._log_writer_task
             self._log_writer_task = None
             if t:
@@ -4381,7 +4348,7 @@ class ChamberRuntime:
                 with contextlib.suppress(Exception):
                     await asyncio.wait_for(t, timeout=2.0)
 
-            # 2) 큐 드레인 (이벤트루프에서 빠르게 메모리로만)
+            # 2) 큐 드레인 (기존 그대로)
             drained: list[str] = []
             while True:
                 try:
@@ -4390,16 +4357,7 @@ class ChamberRuntime:
                     break
             text = "".join(drained)
 
-            # 3) (남아있을 수 있는) fp는 executor로 닫기
-            self._log_fp = None
-            if fp:
-                with contextlib.suppress(Exception):
-                    await asyncio.wait_for(
-                        loop.run_in_executor(self._log_io_exec, fp.close),
-                        timeout=2.0,
-                    )
-
-            # 4) 남은 로그를 executor에서 “한 번에” 쓰기
+            # 3) 남은 로그를 “한 번에” 쓰기 (기존 호출 유지)
             if path and text:
                 try:
                     await asyncio.wait_for(
@@ -4407,7 +4365,7 @@ class ChamberRuntime:
                         timeout=6.0,
                     )
                 except Exception:
-                    # 최후 폴백: 로컬로라도 남김
+                    # 최후 폴백도 log_hub 경유(기존 정책 유지)
                     with contextlib.suppress(Exception):
                         local_dir = Path.cwd() / f"_Logs_local_CH{self.ch}"
                         local_dir.mkdir(parents=True, exist_ok=True)
@@ -4419,14 +4377,16 @@ class ChamberRuntime:
                         )
 
         finally:
-            # 5) 정리 (다음 런 보장)
-            self._log_fp = None
+            # ✅ keep-handle 닫기 (가장 중요)
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(
+                    loop.run_in_executor(self._log_io_exec, self._run_log_appender.close),
+                    timeout=2.0,
+                )
+
             self._log_file_path = None
 
-            # ✅ 중요: Queue 객체 자체를 교체하지 않는다.
-            # - 교체하면 "기존 queue를 await 중인 writer/task"와 레이스가 생길 수 있고,
-            #   다음 공정에서 로그가 안 써지는 문제가 발생할 수 있다.
-            # - 이미 위에서 drain을 했으니, 안전하게 한번 더 비우기만 한다.
+            # 큐 비우기(기존 그대로)
             while True:
                 try:
                     self._log_q.get_nowait()
