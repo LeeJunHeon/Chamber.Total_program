@@ -52,11 +52,30 @@ class ExpectGroup:
     """여러 기대 토큰이 모두 충족되어야 완료되는 그룹."""
     def __init__(self, tokens: List[ExpectToken]) -> None:
         self._tokens: List[ExpectToken] = list(tokens)
-        self._fut: asyncio.Future[bool] = asyncio.get_running_loop().create_future()
+
+        # ✅ running loop가 없을 수 있으므로 생성 지연
+        self._fut: Optional[asyncio.Future[bool]] = None
+
+        # ✅ future 생성 전에도 '완료/취소' 상태를 기억
+        self._completed: bool = not self._tokens
+        self._cancel_exc: Optional[BaseException] = None
+
+    def get_future(self) -> asyncio.Future[bool]:
+        """async 컨텍스트(= running loop 존재)에서 처음 필요해질 때 Future 생성."""
+        if self._fut is None:
+            self._fut = asyncio.get_running_loop().create_future()
+
+            # ✅ 이미 취소/완료 상태였다면 생성 즉시 반영
+            if self._cancel_exc is not None and not self._fut.done():
+                self._fut.set_exception(self._cancel_exc)
+            elif self._completed and not self._fut.done():
+                self._fut.set_result(True)
+
+        return self._fut
 
     @property
     def future(self) -> asyncio.Future[bool]:
-        return self._fut
+        return self.get_future()
 
     def empty(self) -> bool:
         return not self._tokens
@@ -65,29 +84,33 @@ class ExpectGroup:
         for i, t in enumerate(self._tokens):
             if t.matches(incoming):
                 del self._tokens[i]
-                if not self._tokens and not self._fut.done():
-                    self._fut.set_result(True)
+
+                if not self._tokens:
+                    self._completed = True
+                    if self._fut is not None and not self._fut.done():
+                        self._fut.set_result(True)
+
                 return True
         return False
-    
+
     # ✅ 추가: 토큰을 '소비'하지 않고, 현재 그룹이 이 토큰을 기다리는지 검사만
     def needs(self, incoming: ExpectToken) -> bool:
         return any(t.matches(incoming) for t in self._tokens)
-    
+
     def match_generic_ok(self) -> bool:
-        if (
-            len(self._tokens) == 1
-            and self._tokens[0].kind == "GENERIC_OK"
-            and not self._fut.done()
-        ):
+        if len(self._tokens) == 1 and self._tokens[0].kind == "GENERIC_OK":
             self._tokens.clear()
-            self._fut.set_result(True)
+            self._completed = True
+            if self._fut is not None and not self._fut.done():
+                self._fut.set_result(True)
             return True
         return False
 
     def cancel(self, reason: str = "cancelled") -> None:
-        if not self._fut.done():
-            self._fut.set_exception(asyncio.CancelledError(reason))
+        exc = asyncio.CancelledError(reason)
+        self._cancel_exc = exc
+        if self._fut is not None and not self._fut.done():
+            self._fut.set_exception(exc)
 
 
 # =========================
