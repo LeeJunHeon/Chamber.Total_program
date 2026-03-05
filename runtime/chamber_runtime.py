@@ -1156,7 +1156,6 @@ class ChamberRuntime:
                             runtime_state.mark_finished("chamber", self.ch)
 
                             # ✅ Runner에 finished 통지 (정리/다음 공정 진행은 Runner가 담당)
-                            self._ensure_runner_started()
                             self._runner_put(_RunnerCmd(kind="PC_FINISHED", ok=bool(ok), detail=dict(detail)))
 
                         except Exception:
@@ -2707,33 +2706,68 @@ class ChamberRuntime:
     # ======================= runner 메서드 =======================
     def _ensure_runner_started(self) -> None:
         """
-        챔버당 1개의 Runner 코루틴을 보장한다.
-        - Start/Stop/Finished/Next를 한 곳(Runner)에서만 순차 처리하기 위함.
-        """
-        t = getattr(self, "_runner_task", None)
-        if isinstance(t, asyncio.Task) and (not t.done()):
-            return
+        챔버당 1개의 Runner만 존재하도록 보장한다.
 
-        # _set_task_later는 loop 스레드/다른 스레드 어디서 호출돼도 안전하게 task를 만들어준다.
-        self._set_task_later(
-            "_runner_task",
-            self._runner_main,          # ✅ 코루틴을 미리 만들지 말고 factory로
-            name=f"Runner.CH{self.ch}",
-        )
+        핵심:
+        - '검사/생성'을 반드시 이벤트루프 스레드에서 수행해야 레이스로 2개가 뜨지 않는다.
+        - 이미 떠버린 중복 Runner가 있으면(all_tasks에서 name 기준) 자동 cancel해서 복구한다.
+        """
+        loop = self._loop
+        runner_name = f"Runner.CH{self.ch}"
+
+        def _start_in_loop() -> None:
+            # 1) 이미 떠있는 중복 Runner 정리(자가 복구)
+            try:
+                me = getattr(self, "_runner_task", None)
+                for t in asyncio.all_tasks():
+                    if t is me:
+                        continue
+                    if not isinstance(t, asyncio.Task):
+                        continue
+                    if t.done():
+                        continue
+                    # 이름이 동일한 Runner가 2개 이상이면 중복
+                    if getattr(t, "get_name", None) and t.get_name() == runner_name:
+                        t.cancel()
+                        with contextlib.suppress(Exception):
+                            self.append_log("MAIN", f"[Runner] duplicate runner cancelled: {t!r}")
+            except Exception:
+                pass
+
+            # 2) Runner가 없으면 1개만 생성
+            t = getattr(self, "_runner_task", None)
+            if isinstance(t, asyncio.Task) and (not t.done()):
+                return
+
+            try:
+                self._runner_task = loop.create_task(self._runner_main(), name=runner_name)
+            except Exception as e:
+                tb = "".join(traceback.format_exception(type(e), e, e.__traceback__)).rstrip()
+                self.append_log("Task", f"[{runner_name}] create_task failed:\n{tb}")
+
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+
+        if running is loop:
+            _start_in_loop()
+        else:
+            with contextlib.suppress(Exception):
+                loop.call_soon_threadsafe(_start_in_loop)
 
 
     def _runner_put(self, cmd: _RunnerCmd) -> None:
         """
         Runner 명령 큐에 넣는다.
-
-        ✅ 중요: asyncio.Queue는 thread-safe가 아니다.
-        - 현재 실행 중인 이벤트루프가 self._loop(=qasync loop)인 경우에만 put_nowait
-        - 그 외 스레드(Host/PLC/worker thread 등)에서는 loop.call_soon_threadsafe로 위임
+        - put을 수행하는 동일 tick(루프 스레드)에서 Runner 보장까지 같이 한다.
         """
-        self._ensure_runner_started()
         loop = self._loop
 
         def _do_put() -> None:
+            # ✅ put 직전에 루프 스레드에서 Runner 1개 보장(중복 정리 포함)
+            self._ensure_runner_started()
+
             try:
                 self._cmd_q.put_nowait(cmd)
             except asyncio.QueueFull:
