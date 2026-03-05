@@ -1579,7 +1579,7 @@ class ProcessController:
 
             # 변경 시점이 Main 구간이면: Main Delay를 2개로 쪼개고 가운데 Power 변경
             # (change_time_sec == shutter_delay_sec이면 into_main=0 → 메인 시작하자마자 변경)
-            if do_mid_dc_pulse_change and change_time_sec >= shutter_delay_sec and change_time_sec < (shutter_delay_sec + process_time_sec):
+            if do_mid_pulse_change  and change_time_sec >= shutter_delay_sec and change_time_sec < (shutter_delay_sec + process_time_sec):
                 into_main = float(change_time_sec - shutter_delay_sec)
                 part1 = max(0.0, into_main)
                 part2 = max(0.0, float(process_time_sec - part1))
