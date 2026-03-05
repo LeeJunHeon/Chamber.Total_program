@@ -731,40 +731,21 @@ class ChamberRuntime:
         def cb_rf_pulse_set_power(power: float) -> None:
             async def run():
                 if not self.rf_pulse:
-                    self.append_log("RFPulse", "RF-Pulse 미지원 챔버입니다."); return
+                    self.append_log("RFPulse", "RF-Pulse 미지원 챔버입니다.")
+                    return
                 try:
                     self._ensure_background_started()
 
-                    # rf_pulse.py에 CMD_SET_SETPOINT = 8 로 정의되어 있음 :contentReference[oaicite:4]{index=4}
-                    CMD_SET_SETPOINT = 8
-                    sp = int(round(float(power)))
-
-                    # _exec_and_csr는 (ok, res_bytes) 반환이며 res[0]이 CSR 코드(0이면 accepted)
-                    ok, res = await self.rf_pulse._exec_and_csr(
-                        CMD_SET_SETPOINT,
-                        bytes([sp & 0xFF, (sp >> 8) & 0xFF]),
-                        tag=f"[SET SETP {sp}W]",
-                    )
-
+                    ok = await self.rf_pulse.set_reference_power(float(power), pause_polling=True)
                     if not ok:
-                        csr = res[0] if res else None
-                        # CSR 2: RF output ON 상태라 변경 불가일 수 있음 :contentReference[oaicite:5]{index=5}
-                        self.process_controller.on_rf_pulse_failed(f"SETPOINT rejected (csr={csr})")
-                        return
-
-                    # ✅ 중요: rf_pulse 내부 모니터링 기준도 새 setpoint로 갱신
-                    # start_pulse_process에서 _target_setpoint_w / 카운터를 쓰고 있음 :contentReference[oaicite:6]{index=6}
-                    try:
-                        self.rf_pulse._target_setpoint_w = float(power)
-                        self.rf_pulse._forp_out_of_range_count = 0
-                        self.rf_pulse._refp_over_limit_count = 0
-                    except Exception:
-                        pass
+                        # rf_pulse.py 내부에서 CSR/timeout 원인까지 event/status로 남기고 False 반환함
+                        self.process_controller.on_rf_pulse_failed("set_reference_power failed")
 
                 except Exception as e:
-                    why = f"RF-Pulse setpoint change failed: {e!r}"
+                    why = f"RF-Pulse set_reference_power failed: {e!r}"
                     self.append_log("RFPulse", why)
                     self.process_controller.on_rf_pulse_failed(why)
+
             self._spawn_detached(run())
 
         def cb_rf_pulse_stop():
@@ -2883,6 +2864,11 @@ class ChamberRuntime:
         """
         t = getattr(self, "_runner_stage_task", None)
         if isinstance(t, asyncio.Task) and (not t.done()):
+            self.append_log(
+                "MAIN",
+                f"[Runner] _cancel_delay_task() → cancel stage kind={getattr(self,'_runner_stage_kind',None)} "
+                f"state={getattr(self,'_runner_state',None)}"
+            )
             with contextlib.suppress(Exception):
                 t.cancel()
 
@@ -3022,8 +3008,21 @@ class ChamberRuntime:
             self._runner_state = "RUNNING"
 
         except asyncio.CancelledError:
-            # STOP이 눌러져 stage가 취소될 수 있음
             self.append_log("MAIN", "[Runner] START_SINGLE cancelled")
+
+            # ✅ 이 stage가 "현재 stage"로 등록된 상태에서 취소된 경우만 복구
+            cur = asyncio.current_task()
+            if (
+                cur is not None
+                and getattr(self, "_runner_stage_task", None) is cur
+                and getattr(self, "_runner_stage_kind", None) == "START_SINGLE"
+                and getattr(self, "_runner_state", "") != "STOPPING"
+            ):
+                self._runner_queue_mode = False
+                self._runner_state = "IDLE"
+                with contextlib.suppress(Exception):
+                    self._clear_queue_and_reset_ui()
+
             raise
 
         except Exception as e:
@@ -3148,10 +3147,8 @@ class ChamberRuntime:
 
                     self.append_log("Process", f"[Runner] '{name}' 지연 완료 → 다음 스텝")
                     # delay step은 공정이 아니라 대기였으므로, 다음 스텝으로 계속 진행
-                    # (현재 stage 코루틴에서 재귀/루프 대신 간단히 다음 stage로 이어감)
-                    self.current_process_index -= 1  # 바로 아래에서 +1 되도록 롤백
                     await asyncio.sleep(0)
-                    continue  # ✅ 재귀 호출 대신 다음 loop로
+                    continue
 
                 # ------------------------------
                 # (B) TEST MODE marker 처리 (기존과 동일)
@@ -3225,7 +3222,22 @@ class ChamberRuntime:
 
         except asyncio.CancelledError:
             self.append_log("MAIN", "[Runner] ADVANCE_QUEUE cancelled")
+
+            cur = asyncio.current_task()
+            if (
+                cur is not None
+                and getattr(self, "_runner_stage_task", None) is cur
+                and getattr(self, "_runner_stage_kind", None) == "ADVANCE_QUEUE"
+                and getattr(self, "_runner_state", "") != "STOPPING"
+            ):
+                # ✅ queue 진행 중 취소로 끝났으면 다음 Start가 막히지 않도록 IDLE로 복구
+                self._runner_queue_mode = False
+                self._runner_state = "IDLE"
+                with contextlib.suppress(Exception):
+                    self._clear_queue_and_reset_ui()
+
             raise
+
         except Exception as e:
             self.append_log("MAIN", f"[Runner] ADVANCE_QUEUE failed: {e!r}")
             self._runner_queue_mode = False

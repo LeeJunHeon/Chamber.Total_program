@@ -23,6 +23,7 @@ from device.rf_power import RFPowerAsync, RFPowerEvent
 from controller.runtime_state import runtime_state  # ★ 추가: 전역 쿨다운/이력
 
 from lib import user_config
+from lib import config_common as cfgc
 
 class PlasmaCleaningRuntime:
     """
@@ -113,6 +114,8 @@ class PlasmaCleaningRuntime:
         self._host_start_future: Optional[asyncio.Future] = None
 
         self._runlog_buf = deque()
+
+        self._cfg_mod = cfgc
 
         parent = self._parent_widget() or QApplication.instance()  # QWidget 우선
         self._runlog_timer = QTimer(parent)
@@ -1110,6 +1113,10 @@ class PlasmaCleaningRuntime:
             )
             self._host_report_start(False, msg)
 
+            # ✅ 추가: 프리플라이트 이후 단계에서 실패하면 이벤트펌프/태스크 정리
+            with contextlib.suppress(Exception):
+                await self._final_cleanup()
+
             with contextlib.suppress(Exception):
                 runtime_state.set_error("pc", ch, msg)
                 runtime_state.mark_finished("pc", ch)
@@ -1124,6 +1131,10 @@ class PlasmaCleaningRuntime:
             self.append_log("PLC", msg)
             self._post_critical("게이트밸브 인터락", msg, clear_status_to_idle=True, ch=ch)
             self._host_report_start(False, msg)
+
+            # ✅ 추가: 이벤트펌프/태스크 정리
+            with contextlib.suppress(Exception):
+                await self._final_cleanup()
 
             with contextlib.suppress(Exception):
                 runtime_state.set_error("pc", ch, msg)
@@ -1385,7 +1396,7 @@ class PlasmaCleaningRuntime:
 
         finally:
             # ★★★ 가장 중요: 플래그 복구(예외 발생해도 다음 런에서 cleanup 동작)
-            self._cleanup_started = False
+            #self._cleanup_started = False
             self.append_log("MAIN", "[CLEANUP] end")  # (선택)
 
     def _apply_button_state(self, *, start_enabled: bool, stop_enabled: bool) -> None:
