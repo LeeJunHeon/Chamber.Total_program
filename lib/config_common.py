@@ -352,6 +352,11 @@ TSP_CONNECT_TIMEOUT_S = 1.0
 TSP_WRITE_TIMEOUT_S   = 1.0
 TSP_POST_SEND_DELAY_MS = 10
 
+# ✅ (추가) tsp.py 런타임 제어용
+TSP_TOLERATE_SHORT_RESP = True         # 1바이트 ACK/NACK만 오는 구현 허용 여부
+TSP_STATUS_POLL_INTERVAL_S = 0.05      # on/off verify 시 status 폴링 주기(초)
+TSP_RS232_ADDR = 0x80                  # device/tsp.py의 RS232 고정주소(기본 0x80)
+
 TSP_IG_TCP_PORT = 4001                    # (선택) IG 포트. 없으면 config_ch1.IG_TCP_PORT 사용
 
 TSP_ON_SEC = 120.0                        # TSP ON 유지 시간(초)
