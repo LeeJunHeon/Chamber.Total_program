@@ -465,8 +465,8 @@ class ChamberRuntime:
                         self.data_logger.log_dc_power(float(p), float(v), float(i))
                     except Exception:
                         pass
-            host, port = self.cfg.DCPULSE_TCP
-            self.dc_pulse = AsyncDCPulse(host=host, port=port, on_telemetry=_cb, cfg=self.cfg.mod)
+            # host/port는 드라이버가 cfg에서 스스로 읽게 둠(override 고정 방지)
+            self.dc_pulse = AsyncDCPulse(on_telemetry=_cb, cfg=self.cfg.mod)
         else:
             self.dc_pulse = None
 
@@ -484,7 +484,12 @@ class ChamberRuntime:
             # - (우선) RFPULSE_TCP_HOST/PORT
             # - (폴백) RFPULSE_PORT="ip:port"
             rf_tcp = getattr(self.cfg, "RFPULSE_TCP", None)
-            if rf_tcp and hasattr(self.rf_pulse, "set_endpoint"):
+
+            # ✅ 레거시 호환: RFPULSE_TCP_HOST/PORT가 없고, RFPULSE_PORT="ip:port"만 있을 때만 override를 건다
+            host_defined = self.cfg._get("RFPULSE_TCP_HOST", None)
+            port_defined = self.cfg._get("RFPULSE_TCP_PORT", None)
+
+            if (host_defined is None or port_defined is None) and rf_tcp and hasattr(self.rf_pulse, "set_endpoint"):
                 host, port = rf_tcp
                 with contextlib.suppress(Exception):
                     self.rf_pulse.set_endpoint(host, port)
