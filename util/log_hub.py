@@ -68,7 +68,7 @@ class DailyCsvListAppender:
         self._encoding = encoding
         self._retry_s = float(retry_primary_every_s)
 
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._fp = None
         self._writer = None
         self._cur_path: Optional[Path] = None
@@ -204,7 +204,7 @@ class DailyCsvDictAppender:
         self._encoding = encoding
         self._retry_s = float(retry_primary_every_s)
 
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._fp = None
         self._writer: Optional[csv.DictWriter] = None
         self._cur_path: Optional[Path] = None
@@ -314,7 +314,7 @@ class SessionTextAppender:
         self._encoding = encoding
         self._fallback_dir = Path(fallback_dir) if fallback_dir else None
 
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._primary_path: Optional[Path] = None
         self._cur_path: Optional[Path] = None
         self._fp = None
