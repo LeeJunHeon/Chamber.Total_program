@@ -727,6 +727,46 @@ class ChamberRuntime:
                 await self.rf_pulse.start_pulse_process(float(power), freq, duty)
             self._spawn_detached(run())
 
+        # ✅ 추가: Output ON 상태에서 RF-Pulse Power setpoint만 변경
+        def cb_rf_pulse_set_power(power: float) -> None:
+            async def run():
+                if not self.rf_pulse:
+                    self.append_log("RFPulse", "RF-Pulse 미지원 챔버입니다."); return
+                try:
+                    self._ensure_background_started()
+
+                    # rf_pulse.py에 CMD_SET_SETPOINT = 8 로 정의되어 있음 :contentReference[oaicite:4]{index=4}
+                    CMD_SET_SETPOINT = 8
+                    sp = int(round(float(power)))
+
+                    # _exec_and_csr는 (ok, res_bytes) 반환이며 res[0]이 CSR 코드(0이면 accepted)
+                    ok, res = await self.rf_pulse._exec_and_csr(
+                        CMD_SET_SETPOINT,
+                        bytes([sp & 0xFF, (sp >> 8) & 0xFF]),
+                        tag=f"[SET SETP {sp}W]",
+                    )
+
+                    if not ok:
+                        csr = res[0] if res else None
+                        # CSR 2: RF output ON 상태라 변경 불가일 수 있음 :contentReference[oaicite:5]{index=5}
+                        self.process_controller.on_rf_pulse_failed(f"SETPOINT rejected (csr={csr})")
+                        return
+
+                    # ✅ 중요: rf_pulse 내부 모니터링 기준도 새 setpoint로 갱신
+                    # start_pulse_process에서 _target_setpoint_w / 카운터를 쓰고 있음 :contentReference[oaicite:6]{index=6}
+                    try:
+                        self.rf_pulse._target_setpoint_w = float(power)
+                        self.rf_pulse._forp_out_of_range_count = 0
+                        self.rf_pulse._refp_over_limit_count = 0
+                    except Exception:
+                        pass
+
+                except Exception as e:
+                    why = f"RF-Pulse setpoint change failed: {e!r}"
+                    self.append_log("RFPulse", why)
+                    self.process_controller.on_rf_pulse_failed(why)
+            self._spawn_detached(run())
+
         def cb_rf_pulse_stop():
             async def run():
                 if not self.rf_pulse:
@@ -847,8 +887,10 @@ class ChamberRuntime:
             start_dc_pulse=cb_dc_pulse_start, 
             stop_dc_pulse=cb_dc_pulse_stop,
             set_dc_pulse_power=cb_dc_pulse_set_power,   # ✅ 추가
+
             start_rf_pulse=cb_rf_pulse_start, 
             stop_rf_pulse=cb_rf_pulse_stop,
+            set_rf_pulse_power=cb_rf_pulse_set_power,   # ✅ 추가
 
             ig_wait=cb_ig_wait, 
             cancel_ig=cb_ig_cancel,
