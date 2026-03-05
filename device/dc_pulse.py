@@ -20,56 +20,53 @@ from dataclasses import dataclass
 from typing import Optional, Callable, Deque, AsyncGenerator, Literal, Union
 from collections import deque
 import asyncio, time, contextlib, socket
-from lib.config_ch1 import DCPULSE_TCP_HOST, DCPULSE_TCP_PORT
-from lib import config_common as cfgc   # ★ 추가
+from lib import config_common as cfgc   # 공통 config(런타임 reload용)
 
-# ===== 파워 확인 파라미터 =====
-P_SET_TOL_PCT = getattr(cfgc, "DCP_P_SET_TOL_PCT", 0.05)  # ±5 %
-P_SET_TOL_W   = getattr(cfgc, "DCP_P_SET_TOL_W",   15.0)  # ±15 W
+# =============================================================================
+# 런타임 파라미터 기본값(Defaults)
+# - 중요: UI에서 config를 바꿔도 "모듈 상수"는 바뀌지 않으므로,
+#   AsyncDCPulse.reload_runtime_cfg()에서 cfg 값을 다시 읽어 self._xxx로 반영한다.
+# =============================================================================
 
-# 연속 세트포인트 이탈 허용 횟수(기본 3회). config_common.py에 DCP_P_SET_DEVIATE_MAX_N이 있으면 그 값을 사용.
-DCP_P_SET_DEVIATE_MAX_N = int(getattr(cfgc, "DCP_P_SET_DEVIATE_MAX_N", 3))
+# 엔드포인트 기본값(대부분 chamber_runtime에서 host/port override로 들어오므로 안전장치용)
+DEFAULT_DCPULSE_TCP_HOST = "192.168.1.50"
+DEFAULT_DCPULSE_TCP_PORT = 4007
 
-# ----- 저전류 감시 파라미터 (dc power와 동일 컨셉) -----
-DCP_I_LOW_THRESH_A    = getattr(cfgc, "DCP_I_LOW_THRESH_A", 0.05)  # A 이하를 저전류로 판단
-DCP_I_LOW_COUNT_MAX_N = int(getattr(cfgc, "DCP_I_LOW_COUNT_MAX_N", 3))  # 연속 허용 횟수
+# 파워 확인/감시
+DEFAULT_DCP_P_SET_TOL_PCT = 0.05
+DEFAULT_DCP_P_SET_TOL_W = 15.0
+DEFAULT_DCP_P_SET_DEVIATE_MAX_N = 3
 
-# ----- (기존) 워커 레벨 재시도 횟수 -----
-DCP_CMD_MAX_RETRIES = int(getattr(cfgc, "DCP_CMD_MAX_RETRIES", 5))  # (read 등) 워커 재시도용
+DEFAULT_DCP_I_LOW_THRESH_A = 0.05
+DEFAULT_DCP_I_LOW_COUNT_MAX_N = 3
 
-# ✅ (신규) "상위 루프" 총 시도 횟수: 1회 전송 → 실패 즉시 fault 처리 → 재전송
-# 실제 전송 시도 수 = DCP_RECOVER_MAX_ATTEMPTS
-DCP_RECOVER_MAX_ATTEMPTS = int(getattr(cfgc, "DCP_RECOVER_MAX_ATTEMPTS", 5))
+# 명령/복구 정책
+DEFAULT_DCP_CMD_MAX_RETRIES = 5
+DEFAULT_DCP_RECOVER_MAX_ATTEMPTS = 5
+DEFAULT_DCP_WRITE_WORKER_RETRIES = 0
+DEFAULT_DCP_ENABLE_FAULT_RECOVER = True
 
-# ✅ write 명령은 워커 blind retry를 쓰지 않고, _write_cmd_data()에서 루프 제어
-DCP_WRITE_WORKER_RETRIES = 0
+# 타이밍
+DEFAULT_DCP_ACTIVATION_CHECK_DELAY_S = 5.0
+DEFAULT_DCP_POLL_INTERVAL_S = 5.0
+DEFAULT_DCP_CONNECT_TIMEOUT_S = 3.0
 
-# OFF 이후 P=0 강제 여부(기본 False: 로그만 확인, True: 0W 아니면 실패 처리)
-STRICT_OFF_CONFIRM_BY_PIV     = getattr(cfgc, "DCP_STRICT_OFF_CONFIRM_BY_PIV", True)
-OFF_CONFIRM_TIMEOUT_S         = getattr(cfgc, "DCP_OFF_CONFIRM_TIMEOUT_S", 3.0)
-OFF_CONFIRM_POLL_INTERVAL_S   = getattr(cfgc, "DCP_OFF_CONFIRM_POLL_INTERVAL_S", 0.2)
+DEFAULT_DCP_TIMEOUT_MS = 2500
+DEFAULT_DCP_GAP_MS = 1000
+DEFAULT_DCP_WATCHDOG_INTERVAL_MS = 1000
+DEFAULT_DCP_RECONNECT_BACKOFF_START_MS = 1000
+DEFAULT_DCP_RECONNECT_BACKOFF_MAX_MS = 10000
+DEFAULT_DCP_FIRST_CMD_EXTRA_TIMEOUT_MS = 2000
 
-# === OUTPUT_ON 직후 간단 활성 확인 ===
-ACTIVATION_CHECK_DELAY_S = 5.0      # OUTPUT_ON 후 첫 측정까지 대기 (초)
+DEFAULT_DCP_POST_OPEN_QUIET_S = 0.8
+DEFAULT_DCP_DRAIN_TIMEOUT_S = 1.0
 
-# 폴링 주기(초)
-DCP_POLL_INTERVAL_S = 5.0
-DCP_CONNECT_TIMEOUT_S = 3.0          # 1.5 -> 3.0 (연결 여유)
+# TCP 전략
+DEFAULT_DCP_INACTIVITY_REOPEN_S = 60.0
+DEFAULT_DCP_TCP_KEEPALIVE = False
 
-# 타이밍/리트라이
-DCP_TIMEOUT_MS = 2500               # 1500 -> 2500 (개별 명령 여유)
-DCP_GAP_MS = 1000
-DCP_WATCHDOG_INTERVAL_MS = 1000
-DCP_RECONNECT_BACKOFF_START_MS = 1000
-DCP_RECONNECT_BACKOFF_MAX_MS = 10000
-DCP_FIRST_CMD_EXTRA_TIMEOUT_MS = 2000   # 1000 -> 2000 (재연결 직후 첫 명령 여유)
-
-# (추가) 재연결 직후 안정화/드레인 타임아웃 (하드코딩)
-DCP_POST_OPEN_QUIET_S = 0.8          # 기존 0.3초는 너무 짧을 수 있음
-DCP_DRAIN_TIMEOUT_S = 1.0            # drain이 멎는 상황 방지용
-
-# ✅ 명령 실패 시 fault 조회/클리어 후 1회 재전송 (LOCAL/REMOTE/ORIGIN 건드리지 않음)
-DCP_ENABLE_FAULT_RECOVER = getattr(cfgc, "DCP_ENABLE_FAULT_RECOVER", True)
+# Power clamp(정격)
+DEFAULT_DCP_MAX_POWER_W = 1000
 
 # ===== 통일된 스케일 상수 =====
 # (측정 raw -> 공학단위) 한 LSB가 얼마인지
@@ -195,12 +192,21 @@ class AsyncDCPulse:
         output_on()/output_off()
         prepare_and_start(power_w) → 위 4단계 일괄 수행
     """
-    def __init__(self, *, host: Optional[str] = None, port: Optional[int] = None,
-                 protocol: Optional[IProtocol] = None,
-                 on_telemetry: Optional[Callable[[float, float, float], None]] = None):
+    def __init__(
+        self,
+        *,
+        host: Optional[str] = None,
+        port: Optional[int] = None,
+        protocol: Optional[IProtocol] = None,
+        on_telemetry: Optional[Callable[[float, float, float], None]] = None,
+        cfg: Optional[object] = None,   # ✅ 추가: config_ch1/config_ch2/config_common 주입
+    ):
         # Endpoint override
         self._override_host = host
         self._override_port = port
+
+        # ✅ cfg 저장(없으면 config_common 사용)
+        self._cfg = cfg if cfg is not None else cfgc
 
         # Protocol (기본: Type4 Binary)
         self._proto: IProtocol = protocol if protocol else BinaryProtocol()
@@ -225,24 +231,126 @@ class AsyncDCPulse:
         # 기타
         self._last_connect_mono: float = 0.0
         self._just_reopened: bool = False
-        self.debug_print = DEBUG_PRINT
+        self.debug_print = DEBUG_PRINT  # (원래 동작 유지)
 
         # ↓↓↓ 추가: 측정값 알림용 콜백 (DataLogger.log_dcpulse_power 연결)
         self._on_telemetry = on_telemetry
 
-        # ★ Inactivity 전략 필드
-        self._inactivity_s: float = float(getattr(cfgc, "DCP_INACTIVITY_REOPEN_S", 60.0))
-        self._last_io_mono: float = 0.0
+        # 런타임 파라미터(기본값으로 먼저 세팅 후 reload로 덮어씀)
+        self._max_power_w = float(DEFAULT_DCP_MAX_POWER_W)
 
-        self._out_on: bool = False                 # 출력 ON/OFF 내부 기억
-        self._poll_period_s: float = DCP_POLL_INTERVAL_S
+        self._p_set_tol_pct = float(DEFAULT_DCP_P_SET_TOL_PCT)
+        self._p_set_tol_w = float(DEFAULT_DCP_P_SET_TOL_W)
+        self._p_set_deviate_max_n = int(DEFAULT_DCP_P_SET_DEVIATE_MAX_N)
+
+        self._i_low_thresh_a = float(DEFAULT_DCP_I_LOW_THRESH_A)
+        self._i_low_count_max_n = int(DEFAULT_DCP_I_LOW_COUNT_MAX_N)
+
+        self._cmd_max_retries = int(DEFAULT_DCP_CMD_MAX_RETRIES)
+        self._recover_max_attempts = int(DEFAULT_DCP_RECOVER_MAX_ATTEMPTS)
+        self._write_worker_retries = int(DEFAULT_DCP_WRITE_WORKER_RETRIES)
+        self._enable_fault_recover = bool(DEFAULT_DCP_ENABLE_FAULT_RECOVER)
+
+        self._activation_check_delay_s = float(DEFAULT_DCP_ACTIVATION_CHECK_DELAY_S)
+        self._poll_period_s = float(DEFAULT_DCP_POLL_INTERVAL_S)
+        self._connect_timeout_s = float(DEFAULT_DCP_CONNECT_TIMEOUT_S)
+
+        self._timeout_ms = int(DEFAULT_DCP_TIMEOUT_MS)
+        self._gap_ms = int(DEFAULT_DCP_GAP_MS)
+        self._watchdog_interval_ms = int(DEFAULT_DCP_WATCHDOG_INTERVAL_MS)
+
+        self._reconnect_backoff_start_ms = int(DEFAULT_DCP_RECONNECT_BACKOFF_START_MS)
+        self._reconnect_backoff_max_ms = int(DEFAULT_DCP_RECONNECT_BACKOFF_MAX_MS)
+        self._first_cmd_extra_timeout_ms = int(DEFAULT_DCP_FIRST_CMD_EXTRA_TIMEOUT_MS)
+
+        self._post_open_quiet_s = float(DEFAULT_DCP_POST_OPEN_QUIET_S)
+        self._drain_timeout_s = float(DEFAULT_DCP_DRAIN_TIMEOUT_S)
+
+        self._inactivity_s = float(DEFAULT_DCP_INACTIVITY_REOPEN_S)
+        self._tcp_keepalive = bool(DEFAULT_DCP_TCP_KEEPALIVE)
+
+        self._last_io_mono: float = 0.0
+        self._out_on: bool = False
         self._last_ref_power_w: Optional[float] = None  # ← 세트포인트 저장
 
-        self._spdev_n: int = 0                     # ← 연속 세트포인트 이탈 카운터
-        self._low_curr_n: int = 0                  # ← 연속 저전류(I<=0.05A) 카운터
+        self._spdev_n: int = 0
+        self._low_curr_n: int = 0
 
         # ✅ STOP/종료 중에 ON/SET 계열 write 재전송을 막기 위한 가드
         self._stop_guard: bool = False
+
+        # ✅ 여기서 config를 다시 읽어 런타임 값 반영
+        self.reload_runtime_cfg()
+
+    def _cfg_get(self, key: str, default):
+        # cfg(ch1/ch2) 우선 → 없으면 config_common → 없으면 default
+        if self._cfg is not None and hasattr(self._cfg, key):
+            return getattr(self._cfg, key)
+        if hasattr(cfgc, key):
+            return getattr(cfgc, key)
+        return default
+
+    def _cfg_int(self, key: str, default: int) -> int:
+        try:
+            return int(self._cfg_get(key, default))
+        except Exception:
+            return int(default)
+
+    def _cfg_float(self, key: str, default: float) -> float:
+        try:
+            return float(self._cfg_get(key, default))
+        except Exception:
+            return float(default)
+
+    def _cfg_bool(self, key: str, default: bool) -> bool:
+        try:
+            return bool(self._cfg_get(key, default))
+        except Exception:
+            return bool(default)
+
+    def reload_runtime_cfg(self) -> None:
+        """
+        UI에서 config 버튼으로 값을 바꾼 뒤:
+        - chamber_runtime에서 이 메서드를 호출하면
+        - dc_pulse 드라이버가 즉시 런타임 파라미터를 갱신한다.
+        핵심 로직은 손대지 않고 '숫자 읽는 방식'만 동적으로 만든다.
+        """
+        # Power clamp
+        self._max_power_w = max(0.0, self._cfg_float("DCP_MAX_POWER_W", DEFAULT_DCP_MAX_POWER_W))
+
+        # 감시 파라미터
+        self._p_set_tol_pct = max(0.0, self._cfg_float("DCP_P_SET_TOL_PCT", DEFAULT_DCP_P_SET_TOL_PCT))
+        self._p_set_tol_w = max(0.0, self._cfg_float("DCP_P_SET_TOL_W", DEFAULT_DCP_P_SET_TOL_W))
+        self._p_set_deviate_max_n = max(1, self._cfg_int("DCP_P_SET_DEVIATE_MAX_N", DEFAULT_DCP_P_SET_DEVIATE_MAX_N))
+
+        self._i_low_thresh_a = max(0.0, self._cfg_float("DCP_I_LOW_THRESH_A", DEFAULT_DCP_I_LOW_THRESH_A))
+        self._i_low_count_max_n = max(1, self._cfg_int("DCP_I_LOW_COUNT_MAX_N", DEFAULT_DCP_I_LOW_COUNT_MAX_N))
+
+        # 명령/복구 정책
+        self._cmd_max_retries = max(0, self._cfg_int("DCP_CMD_MAX_RETRIES", DEFAULT_DCP_CMD_MAX_RETRIES))
+        self._recover_max_attempts = max(1, self._cfg_int("DCP_RECOVER_MAX_ATTEMPTS", DEFAULT_DCP_RECOVER_MAX_ATTEMPTS))
+        self._write_worker_retries = max(0, self._cfg_int("DCP_WRITE_WORKER_RETRIES", DEFAULT_DCP_WRITE_WORKER_RETRIES))
+        self._enable_fault_recover = self._cfg_bool("DCP_ENABLE_FAULT_RECOVER", DEFAULT_DCP_ENABLE_FAULT_RECOVER)
+
+        # 타이밍
+        self._activation_check_delay_s = max(0.0, self._cfg_float("DCP_ACTIVATION_CHECK_DELAY_S", DEFAULT_DCP_ACTIVATION_CHECK_DELAY_S))
+        self._poll_period_s = max(0.1, self._cfg_float("DCP_POLL_INTERVAL_S", DEFAULT_DCP_POLL_INTERVAL_S))
+        self._connect_timeout_s = max(0.5, self._cfg_float("DCP_CONNECT_TIMEOUT_S", DEFAULT_DCP_CONNECT_TIMEOUT_S))
+
+        self._timeout_ms = max(200, self._cfg_int("DCP_TIMEOUT_MS", DEFAULT_DCP_TIMEOUT_MS))
+        self._gap_ms = max(0, self._cfg_int("DCP_GAP_MS", DEFAULT_DCP_GAP_MS))
+        self._watchdog_interval_ms = max(200, self._cfg_int("DCP_WATCHDOG_INTERVAL_MS", DEFAULT_DCP_WATCHDOG_INTERVAL_MS))
+
+        self._reconnect_backoff_start_ms = max(200, self._cfg_int("DCP_RECONNECT_BACKOFF_START_MS", DEFAULT_DCP_RECONNECT_BACKOFF_START_MS))
+        self._reconnect_backoff_max_ms = max(self._reconnect_backoff_start_ms, self._cfg_int("DCP_RECONNECT_BACKOFF_MAX_MS", DEFAULT_DCP_RECONNECT_BACKOFF_MAX_MS))
+        self._first_cmd_extra_timeout_ms = max(0, self._cfg_int("DCP_FIRST_CMD_EXTRA_TIMEOUT_MS", DEFAULT_DCP_FIRST_CMD_EXTRA_TIMEOUT_MS))
+
+        self._post_open_quiet_s = max(0.0, self._cfg_float("DCP_POST_OPEN_QUIET_S", DEFAULT_DCP_POST_OPEN_QUIET_S))
+        self._drain_timeout_s = max(0.0, self._cfg_float("DCP_DRAIN_TIMEOUT_S", DEFAULT_DCP_DRAIN_TIMEOUT_S))
+
+        # TCP 전략
+        self._inactivity_s = max(0.0, self._cfg_float("DCP_INACTIVITY_REOPEN_S", DEFAULT_DCP_INACTIVITY_REOPEN_S))
+        self._tcp_keepalive = self._cfg_bool("DCP_TCP_KEEPALIVE", DEFAULT_DCP_TCP_KEEPALIVE)
 
     # ====== 공용 API ======
     async def start(self):
@@ -331,8 +439,10 @@ class AsyncDCPulse:
             self._ev_nowait(DCPEvent(kind="status", message="Polling read 중지"))
 
     # 추가: 연결 완료 대기 헬퍼
-    async def _wait_until_connected(self, timeout: float = 3.0) -> bool:
-        deadline = time.monotonic() + timeout
+    async def _wait_until_connected(self, timeout: Optional[float] = None) -> bool:
+        if timeout is None:
+            timeout = float(self._connect_timeout_s)
+        deadline = time.monotonic() + float(timeout)
         while time.monotonic() < deadline:
             if self._connected and self._writer and not self._writer.is_closing():
                 return True
@@ -369,7 +479,7 @@ class AsyncDCPulse:
         """
 
         # 0) 연결 준비
-        ok_conn = await self._wait_until_connected(timeout=3.0)
+        ok_conn = await self._wait_until_connected(timeout=float(self._connect_timeout_s))
         if not ok_conn:
             await self._emit_failed("CONNECT", "연결 준비 실패")
             return False
@@ -490,14 +600,14 @@ class AsyncDCPulse:
             raw = int(round(value / I_SET_STEP_A))
         else:  # "P"
             raw = int(round(float(value) / P_SET_STEP_W))
-            raw = max(0, min(int(MAX_POWER_W // P_SET_STEP_W), raw))
+            raw = max(0, min(int(self._max_power_w // P_SET_STEP_W), raw))
         await self._write_cmd_data(0x83, raw, 2, label=f"REF_{mode.upper()}({value})")
 
     async def set_reference_power(self, value_w: float) -> bool:
         """출력 레벨(전력) 설정 — 10 W/step → 0~500."""
         # 10 W/step → 0..500 (5 kW)
         raw = int(round(float(value_w) / P_SET_STEP_W))
-        raw = max(0, min(int(MAX_POWER_W // P_SET_STEP_W), raw))
+        raw = max(0, min(int(self._max_power_w // P_SET_STEP_W), raw))
         ok = await self._write_cmd_data(0x83, raw, 2, label=f"REF_POWER({value_w:.0f}W)")
         if ok:
             self._last_ref_power_w = float(value_w) # ← 세트포인트 기억
@@ -555,7 +665,7 @@ class AsyncDCPulse:
 
     async def set_limits(self, *, p_w: float, i_a: float, v_v: float):
         p_raw = int(round(float(p_w) / P_SET_STEP_W))
-        p_raw = max(0, min(int(MAX_POWER_W // P_SET_STEP_W), p_raw))
+        p_raw = max(0, min(int(self._max_power_w // P_SET_STEP_W), p_raw))
         i_raw = int(round(i_a / I_SET_STEP_A))
         v_raw = int(round(v_v / V_SET_STEP_V))
 
@@ -576,12 +686,12 @@ class AsyncDCPulse:
                 fut.set_result(resp)
         payload = self._proto.pack_read(code)
         retries = 2
-        self._enqueue(Command(payload, label, DCP_TIMEOUT_MS, DCP_GAP_MS, retries, _cb))
+        self._enqueue(Command(payload, label, self._timeout_ms, self._gap_ms, retries, _cb))
         return await self._await_reply_bytes(
             label, fut,
-            timeout_ms=DCP_TIMEOUT_MS,
+            timeout_ms=self._timeout_ms,
             retries=retries,
-            gap_ms=DCP_GAP_MS
+            gap_ms=self._gap_ms
         )
 
     # 2) 현재 출력값 P/I/V 읽기 (0x9A → P,I,V 각 2바이트)
@@ -666,13 +776,13 @@ class AsyncDCPulse:
         payload = self._proto.pack_write(0x6F, 0x0001, width=2)
 
         # ✅ write는 워커 blind retry 없이 1회만(재시도는 상위 루프가 제어)
-        self._enqueue(Command(payload, label, DCP_TIMEOUT_MS, DCP_GAP_MS, DCP_WRITE_WORKER_RETRIES, _cb))
+        self._enqueue(Command(payload, label, self._timeout_ms, self._gap_ms, self._write_worker_retries, _cb))
 
         resp = await self._await_reply_bytes(
             label, fut,
-            timeout_ms=DCP_TIMEOUT_MS,
-            retries=DCP_WRITE_WORKER_RETRIES,
-            gap_ms=DCP_GAP_MS
+            timeout_ms=self._timeout_ms,
+            retries=self._write_worker_retries,
+            gap_ms=self._gap_ms
         )
 
         if not self._ok_from_resp(resp, label=label):
@@ -706,7 +816,7 @@ class AsyncDCPulse:
         if resp is None:
             # watchdog이 꺼져있으면 재연결이 영영 안 될 수 있으니, 일단 켜준다
             await self.start()
-            ok_conn = await self._wait_until_connected(timeout=3.0)
+            ok_conn = await self._wait_until_connected(timeout=float(self._connect_timeout_s))
             if not ok_conn:
                 await self._emit_status(f"[{label}] 실패 후 재연결 안됨 → 복구 중단")
                 return False
@@ -779,8 +889,8 @@ class AsyncDCPulse:
             await self._emit_status(f"[{base_label}] STOP_GUARD active → skip write")
             return False
 
-        for attempt in range(1, DCP_RECOVER_MAX_ATTEMPTS + 1):
-            attempt_label = f"{base_label}[{attempt}/{DCP_RECOVER_MAX_ATTEMPTS}]"
+        for attempt in range(1, self._recover_max_attempts + 1):
+            attempt_label = f"{base_label}[{attempt}/{self._recover_max_attempts}]"
 
             # STOP 중간에 가드가 켜지면(예: 다른 태스크가 OUTPUT_OFF 호출), 이미 진입한 write도 즉시 중단
             if self._stop_guard and base_label not in ("OUTPUT_OFF",):
@@ -798,16 +908,16 @@ class AsyncDCPulse:
             # ✅ write는 워커 재시도 0 (1회 전송)
             self._enqueue(Command(
                 payload, attempt_label,
-                DCP_TIMEOUT_MS, DCP_GAP_MS,
-                DCP_WRITE_WORKER_RETRIES,
+                self._timeout_ms, self._gap_ms,
+                self._write_worker_retries,
                 _cb
             ))
 
             resp = await self._await_reply_bytes(
                 attempt_label, fut,
-                timeout_ms=DCP_TIMEOUT_MS,
-                retries=DCP_WRITE_WORKER_RETRIES,
-                gap_ms=DCP_GAP_MS
+                timeout_ms=self._timeout_ms,
+                retries=self._write_worker_retries,
+                gap_ms=self._gap_ms
             )
             last_resp = resp
 
@@ -822,7 +932,7 @@ class AsyncDCPulse:
                         self._out_on = True
                         await self._emit_confirmed(base_label)
                         with contextlib.suppress(Exception):
-                            await asyncio.sleep(ACTIVATION_CHECK_DELAY_S)
+                            await asyncio.sleep(self._activation_check_delay_s)
                         self.set_process_status(True)
                         return True
 
@@ -833,12 +943,12 @@ class AsyncDCPulse:
                         self._out_on = True
                         await self._emit_confirmed(base_label + "_VERIFIED")
                         with contextlib.suppress(Exception):
-                            await asyncio.sleep(ACTIVATION_CHECK_DELAY_S)
+                            await asyncio.sleep(self._activation_check_delay_s)
                         self.set_process_status(True)
                         return True
 
                     # 실패 → 즉시 fault 처리 후 다음 attempt로
-                    if DCP_ENABLE_FAULT_RECOVER:
+                    if self._enable_fault_recover:
                         ok_retry = await self._recover_and_prepare_retry(base_label, resp)
                         if not ok_retry:
                             await self._emit_failed(base_label, "FAULT_RESET 실패/복구 불가")
@@ -877,7 +987,7 @@ class AsyncDCPulse:
                         return True
 
                     # 실패 → 즉시 fault 처리 후 다음 attempt로
-                    if DCP_ENABLE_FAULT_RECOVER:
+                    if self._enable_fault_recover:
                         ok_retry = await self._recover_and_prepare_retry(base_label, resp)
                         if not ok_retry:
                             await self._emit_failed(base_label, "FAULT_RESET 실패/복구 불가")
@@ -893,7 +1003,7 @@ class AsyncDCPulse:
                 return True
 
             # 실패 → 즉시 fault 처리 후 다음 attempt로
-            if DCP_ENABLE_FAULT_RECOVER:
+            if self._enable_fault_recover:
                 ok_retry = await self._recover_and_prepare_retry(base_label, resp)
                 if not ok_retry:
                     await self._emit_failed(base_label, "FAULT_RESET 실패/복구 불가")
@@ -903,7 +1013,7 @@ class AsyncDCPulse:
             continue
 
         # 여기까지 왔으면 총 시도 횟수 소진
-        await self._emit_failed(base_label, f"응답 없음/실패 — 총 {DCP_RECOVER_MAX_ATTEMPTS}회 시도, last={last_resp!r}")
+        await self._emit_failed(base_label, f"응답 없음/실패 — 총 {self._recover_max_attempts}회 시도, last={last_resp!r}")
         if base_label == "OUTPUT_ON":
             self.set_process_status(False)
         if base_label == "OUTPUT_OFF":
@@ -1015,22 +1125,20 @@ class AsyncDCPulse:
         return ok, p, hv_on
 
     # ===================== 실패시 검증하는 로직 =====================
-
-    async def _write_simple(self, code: int, *, label: str):
-        """데이터 없는 쓰기 명령(필요 시 사용)."""
+    async def _write_simple(self, code: int, label: str):
         fut = asyncio.get_running_loop().create_future()
         def _cb(_resp: Optional[bytes]):
             if not fut.done():
                 fut.set_result(_resp)
 
         payload = self._proto.pack_write(code, None, width=0)
-        retries = DCP_CMD_MAX_RETRIES
-        self._enqueue(Command(payload, label, DCP_TIMEOUT_MS, DCP_GAP_MS, retries, _cb))
+        retries = int(self._cmd_max_retries)
+        self._enqueue(Command(payload, label, int(self._timeout_ms), int(self._gap_ms), retries, _cb))
         resp = await self._await_reply_bytes(
             label, fut,
-            timeout_ms=DCP_TIMEOUT_MS,
+            timeout_ms=int(self._timeout_ms),
             retries=retries,
-            gap_ms=DCP_GAP_MS
+            gap_ms=int(self._gap_ms)
         )
 
         if self._ok_from_resp(resp):
@@ -1051,7 +1159,7 @@ class AsyncDCPulse:
         # 오픈 직후 여유
         extra = 0.0
         if self._last_connect_mono > 0.0 and (time.monotonic() - self._last_connect_mono) < 2.0:
-            extra = DCP_FIRST_CMD_EXTRA_TIMEOUT_MS / 1000.0
+            extra = self._first_cmd_extra_timeout_ms / 1000.0
 
         # 워커 쪽 per-attempt 대기 시간(현재 워커도 동일 계산 사용)
         per_attempt_s = (timeout_ms / 1000.0) + 2.0
@@ -1079,10 +1187,10 @@ class AsyncDCPulse:
 
     # ====== 내부: 연결/워치독/워커/리더 ======
     async def _watchdog_loop(self):
-        backoff = DCP_RECONNECT_BACKOFF_START_MS
+        backoff = int(self._reconnect_backoff_start_ms)
         while self._want_connected:
             if self._connected:
-                await asyncio.sleep(DCP_WATCHDOG_INTERVAL_MS / 1000.0)
+                await asyncio.sleep(float(self._watchdog_interval_ms) / 1000.0)
                 continue
             if self._ever_connected:
                 await self._emit_status(f"재연결 예약... ({backoff} ms)")
@@ -1093,18 +1201,18 @@ class AsyncDCPulse:
                 host, port = self._resolve_endpoint()
                 reader, writer = await asyncio.wait_for(
                     asyncio.open_connection(host, port),
-                    timeout=DCP_CONNECT_TIMEOUT_S
+                    timeout=float(self._connect_timeout_s)
                 )
                 self._reader, self._writer = reader, writer
                 self._connected = True
                 self._ever_connected = True
-                backoff = DCP_RECONNECT_BACKOFF_START_MS
+                backoff = int(self._reconnect_backoff_start_ms)
 
                 # ★ Keepalive는 설정에 따름(기본 False 권장)
                 try:
                     sock = writer.get_extra_info("socket")
                     if sock is not None:
-                        if bool(getattr(cfgc, "DCP_TCP_KEEPALIVE", False)):
+                        if bool(self._tcp_keepalive):
                             sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
                         else:
                             sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 0)
@@ -1125,7 +1233,7 @@ class AsyncDCPulse:
             except Exception as e:
                 host, port = self._resolve_endpoint()
                 await self._emit_status(f"{host}:{port} 연결 실패: {e}")
-                backoff = min(backoff * 2, DCP_RECONNECT_BACKOFF_MAX_MS)
+                backoff = min(backoff * 2, int(self._reconnect_backoff_max_ms))
 
     def _on_tcp_disconnected(self):
         self._connected = False
@@ -1191,7 +1299,7 @@ class AsyncDCPulse:
 
             # 연결 직후 quiet 기간
             if self._just_reopened and self._last_connect_mono > 0.0:
-                remain = (self._last_connect_mono + DCP_POST_OPEN_QUIET_S) - time.monotonic()
+                remain = (self._last_connect_mono + self._post_open_quiet_s) - time.monotonic()
                 if remain > 0:
                     await asyncio.sleep(remain)
                 self._just_reopened = False
@@ -1200,7 +1308,7 @@ class AsyncDCPulse:
             try:
                 self._last_io_mono = time.monotonic()   # ★ 송신 직전 IO 시각
                 self._writer.write(cmd.payload)
-                await asyncio.wait_for(self._writer.drain(), timeout=DCP_DRAIN_TIMEOUT_S)
+                await asyncio.wait_for(self._writer.drain(), timeout=self._drain_timeout_s)
             except Exception as e:
                 self._dbg("DCP", f"{cmd.label} 전송 오류: {e}")
                 self._inflight = None
@@ -1215,7 +1323,7 @@ class AsyncDCPulse:
             # === 응답 대기: '자신의 응답'만 인정 ===
             extra = 0.0
             if self._last_connect_mono > 0.0 and (time.monotonic() - self._last_connect_mono) < 2.0:
-                extra = DCP_FIRST_CMD_EXTRA_TIMEOUT_MS / 1000.0
+                extra = self._first_cmd_extra_timeout_ms / 1000.0
 
             deadline = time.monotonic() + (cmd.timeout_ms/1000.0) + 2.0 + extra
             exp_cmd = cmd.payload[1] if len(cmd.payload) >= 2 else None
@@ -1245,49 +1353,26 @@ class AsyncDCPulse:
                         if exp_cmd is not None and len(f) >= 1 and f[0] == exp_cmd:
                             frame = f
                             break
-                        # 0x9A 텔레메트리 등은 무시하고 계속 대기
                         continue
 
-            except asyncio.TimeoutError:
-                await self._emit_status(f"[TIMEOUT] {cmd.label}")
+                # inflight clear + 콜백
                 self._inflight = None
-                try:
-                    await asyncio.sleep(max(0.05, cmd.gap_ms / 1000.0))
-                except Exception:
-                    pass
+                self._safe_callback(cmd.callback, frame)
+
+            except asyncio.TimeoutError:
+                await self._emit_status(f"[TIMEOUT] {cmd.label} → 세션 재시작")
+                self._inflight = None
                 if cmd.retries_left > 0:
                     cmd.retries_left -= 1
                     self._cmd_q.appendleft(cmd)
                 else:
                     self._safe_callback(cmd.callback, None)
                 self._on_tcp_disconnected()
-                continue
-
-            self._inflight = None
-            decoded = self._proto.filter_and_decode(frame)
-
-            # ★ ERR(0x04) 응답은 READ/WRITE 모두 공통으로 최대 DCP_CMD_MAX_RETRIES 회까지 재시도
-            if decoded is not None and len(decoded) == 1 and decoded[0] == 0x04:
-                await self._emit_status(f"[NAK] {cmd.label} — retry({cmd.retries_left})")
-                await asyncio.sleep(max(0.05, cmd.gap_ms / 1000.0))
-
-                if cmd.retries_left > 0:
-                    # 재시도 가능 → 다시 큐 맨 앞에 넣고, 이번 응답은 무시
-                    cmd.retries_left -= 1
-                    self._cmd_q.appendleft(cmd)
-                else:
-                    # 마지막 재시도까지 모두 실패한 경우에만 콜백 호출
-                    if is_read:
-                        # 읽기 명령은 None 을 돌려서 상위에서 실패로 처리
-                        self._safe_callback(cmd.callback, None)
-                    else:
-                        # 쓰기 명령은 장비가 보낸 ERR(0x04)를 최종 결과로 전달
-                        self._safe_callback(cmd.callback, decoded)
-                continue
-
-            # 여기까지 왔으면 정상 프레임(ACK 또는 읽기 데이터)이므로 그대로 콜백
-            self._safe_callback(cmd.callback, decoded)
-            await asyncio.sleep(cmd.gap_ms / 1000.0)
+            except Exception as e:
+                await self._emit_status(f"[cmd] 예외: {e!r}")
+                self._inflight = None
+                self._safe_callback(cmd.callback, None)
+                self._on_tcp_disconnected()
 
     async def _tcp_reader_loop(self):
         assert self._reader is not None
@@ -1409,134 +1494,134 @@ class AsyncDCPulse:
 
     # ====== Poll 루프(필요 시 항목 확장) ======
     async def _poll_loop(self):
-        try:
-            while True:
-                t0 = time.monotonic()
-                try:
-                    if self._connected and self._out_on:
-                        res = await self.read_output_piv()
-                        # 👉 응답없음(None)은 '0이 아님'으로 간주하므로 그대로 지나감(pass)
-                        if res and "eng" in res:
-                            eng = res["eng"]
-                            p = float(eng.get("P_W", 0.0))
-                            v = float(eng.get("V_V", 0.0))
-                            i = float(eng.get("I_A", 0.0))
+            try:
+                while True:
+                    t0 = time.monotonic()
+                    try:
+                        if self._connected and self._out_on:
+                            res = await self.read_output_piv()
+                            # 👉 응답없음(None)은 '0이 아님'으로 간주하므로 그대로 지나감(pass)
+                            if res and "eng" in res:
+                                eng = res["eng"]
+                                p = float(eng.get("P_W", 0.0))
+                                v = float(eng.get("V_V", 0.0))
+                                i = float(eng.get("I_A", 0.0))
 
-                            # ① 저전류 감시: I <= 0.05 A가 연속 3회면 AUTO_STOP
-                            ref = float(self._last_ref_power_w or 0.0)
+                                # ① 저전류 감시: I <= thresh 가 연속 N회면 AUTO_STOP
+                                ref = float(self._last_ref_power_w or 0.0)
 
-                            if ref > 0.0:
-                                # 세트포인트가 잡혀 있을 때만 저전류 감시
-                                if i <= DCP_I_LOW_THRESH_A:
-                                    self._low_curr_n += 1
-                                    await self._emit_status(
-                                        f"[WARN] 저전류 감지: I={i:.3f} A "
-                                        f"({self._low_curr_n}/{DCP_I_LOW_COUNT_MAX_N})"
-                                    )
-                                    if self._low_curr_n >= DCP_I_LOW_COUNT_MAX_N:
-                                        reason = (
-                                            f"low_current: I <= {DCP_I_LOW_THRESH_A:.3f}A "
-                                            f"({self._low_curr_n}회 연속)"
-                                        )
-
-                                        # ✅ (추가) AUTO-STOP 시점 fault code 동봉 (원인 추적용)
-                                        fault = None
-                                        with contextlib.suppress(Exception):
-                                            fault = await self.read_fault_code()
-                                        if fault is not None and fault != 0:
-                                            reason += f", fault=0x{fault:04X}"
-
-                                        self._ev_nowait(DCPEvent(
-                                            kind="command_failed",
-                                            cmd="AUTO_STOP",
-                                            reason=reason,
-                                            power=p,
-                                            voltage=v,
-                                            current=i,
-                                            eng=eng,
-                                        ))
+                                if ref > 0.0:
+                                    # 세트포인트가 잡혀 있을 때만 저전류 감시
+                                    if i <= self._i_low_thresh_a:
+                                        self._low_curr_n += 1
                                         await self._emit_status(
-                                            "[AUTO-STOP] 저전류가 연속 발생 → OUTPUT_OFF & stop polling"
+                                            f"[WARN] 저전류 감지: I={i:.3f} A "
+                                            f"({self._low_curr_n}/{self._i_low_count_max_n})"
                                         )
-                                        with contextlib.suppress(Exception):
-                                            await self.output_off()
-                                        return
+                                        if self._low_curr_n >= self._i_low_count_max_n:
+                                            reason = (
+                                                f"low_current: I <= {self._i_low_thresh_a:.3f}A "
+                                                f"({self._low_curr_n}회 연속)"
+                                            )
+
+                                            # ✅ (추가) AUTO-STOP 시점 fault code 동봉 (원인 추적용)
+                                            fault = None
+                                            with contextlib.suppress(Exception):
+                                                fault = await self.read_fault_code()
+                                            if fault is not None and fault != 0:
+                                                reason += f", fault=0x{fault:04X}"
+
+                                            self._ev_nowait(DCPEvent(
+                                                kind="command_failed",
+                                                cmd="AUTO_STOP",
+                                                reason=reason,
+                                                power=p,
+                                                voltage=v,
+                                                current=i,
+                                                eng=eng,
+                                            ))
+                                            await self._emit_status(
+                                                "[AUTO-STOP] 저전류가 연속 발생 → OUTPUT_OFF & stop polling"
+                                            )
+                                            with contextlib.suppress(Exception):
+                                                await self.output_off()
+                                            return
+                                    else:
+                                        # 전류가 다시 정상으로 올라오면 저전류 카운터 리셋
+                                        if self._low_curr_n:
+                                            self._low_curr_n = 0
                                 else:
-                                    # 전류가 다시 정상으로 올라오면 저전류 카운터 리셋
+                                    # 세트포인트가 없으면 저전류 카운터도 리셋
                                     if self._low_curr_n:
                                         self._low_curr_n = 0
-                            else:
-                                # 세트포인트가 없으면 저전류 카운터도 리셋
-                                if self._low_curr_n:
-                                    self._low_curr_n = 0
 
-                            # ② 세트포인트 근접 확인 (허용오차: max(절대 W, 퍼센트))
-                            if ref > 0.0:
-                                tol = max(P_SET_TOL_W, abs(ref) * P_SET_TOL_PCT)
-                                if abs(p - ref) > tol:
-                                    # 연속 이탈 카운터 증가
-                                    self._spdev_n += 1
-                                    await self._emit_status(
-                                        f"[WARN] 현재 P={p:.1f} W, Set={ref:.1f} W, Tol=±{tol:.1f} W — 세트포인트 이탈 "
-                                        f"({self._spdev_n}/{DCP_P_SET_DEVIATE_MAX_N})"
-                                    )
-                                    # 연속 N회 이탈 시 자동 정지
-                                    if self._spdev_n >= DCP_P_SET_DEVIATE_MAX_N:
-                                        self._ev_nowait(DCPEvent(
-                                            kind="command_failed",
-                                            cmd="AUTO_STOP",
-                                            reason="target_failed",
-                                            power=p,
-                                            voltage=v,
-                                            current=i,
-                                            eng=eng,
-                                        ))
+                                # ② 세트포인트 근접 확인 (허용오차: max(절대 W, 퍼센트))
+                                if ref > 0.0:
+                                    tol = max(self._p_set_tol_w, abs(ref) * self._p_set_tol_pct)
+                                    if abs(p - ref) > tol:
+                                        # 연속 이탈 카운터 증가
+                                        self._spdev_n += 1
                                         await self._emit_status(
-                                            "[AUTO-STOP] 세트포인트 이탈이 연속 발생 → OUTPUT_OFF & stop polling"
+                                            f"[WARN] 현재 P={p:.1f} W, Set={ref:.1f} W, Tol=±{tol:.1f} W — 세트포인트 이탈 "
+                                            f"({self._spdev_n}/{self._p_set_deviate_max_n})"
                                         )
-                                        with contextlib.suppress(Exception):
-                                            await self.output_off()
-                                        return
+                                        # 연속 N회 이탈 시 자동 정지
+                                        if self._spdev_n >= self._p_set_deviate_max_n:
+                                            self._ev_nowait(DCPEvent(
+                                                kind="command_failed",
+                                                cmd="AUTO_STOP",
+                                                reason="target_failed",
+                                                power=p,
+                                                voltage=v,
+                                                current=i,
+                                                eng=eng,
+                                            ))
+                                            await self._emit_status(
+                                                "[AUTO-STOP] 세트포인트 이탈이 연속 발생 → OUTPUT_OFF & stop polling"
+                                            )
+                                            with contextlib.suppress(Exception):
+                                                await self.output_off()
+                                            return
+                                    else:
+                                        # 정상범위이면 카운터 리셋
+                                        if self._spdev_n:
+                                            self._spdev_n = 0
                                 else:
-                                    # 정상범위이면 카운터 리셋
+                                    # ref가 0 이하이면 카운터 리셋(비교대상 없음)
                                     if self._spdev_n:
                                         self._spdev_n = 0
-                            else:
-                                # ref가 0 이하이면 카운터 리셋(비교대상 없음)
-                                if self._spdev_n:
-                                    self._spdev_n = 0
 
-                            # ③ 텔레메트리 이벤트 전송 (기존 그대로 유지)
-                            ev = DCPEvent(
-                                kind="telemetry",
-                                data=eng,
-                                power=p,
-                                voltage=v,
-                                current=i,
-                                eng=eng,
-                            )
-                            self._ev_nowait(ev)
+                                # ③ 텔레메트리 이벤트 전송 (기존 그대로 유지)
+                                ev = DCPEvent(
+                                    kind="telemetry",
+                                    data=eng,
+                                    power=p,
+                                    voltage=v,
+                                    current=i,
+                                    eng=eng,
+                                )
+                                self._ev_nowait(ev)
 
-                            cb = getattr(self, "_on_telemetry", None)
-                            if cb:
-                                try:
-                                    cb(p, v, i)
-                                except Exception:
-                                    pass
-                    else:
-                        # 연결이 없거나 출력 OFF 상태면 카운터들 리셋
-                        if self._spdev_n:
-                            self._spdev_n = 0
-                        if self._low_curr_n:
-                            self._low_curr_n = 0
+                                cb = getattr(self, "_on_telemetry", None)
+                                if cb:
+                                    try:
+                                        cb(p, v, i)
+                                    except Exception:
+                                        pass
+                        else:
+                            # 연결이 없거나 출력 OFF 상태면 카운터들 리셋
+                            if self._spdev_n:
+                                self._spdev_n = 0
+                            if self._low_curr_n:
+                                self._low_curr_n = 0
 
-                except Exception as e:
-                    self._ev_nowait(DCPEvent(kind="status", message=f"[poll] 예외: {e!r}"))
+                    except Exception as e:
+                        self._ev_nowait(DCPEvent(kind="status", message=f"[poll] 예외: {e!r}"))
 
-                dt = time.monotonic() - t0
-                await asyncio.sleep(max(0.05, self._poll_period_s - dt))
-        except asyncio.CancelledError:
-            pass
+                    dt = time.monotonic() - t0
+                    await asyncio.sleep(max(0.05, self._poll_period_s - dt))
+            except asyncio.CancelledError:
+                pass
 
     # ====== 내부 유틸 ======
     def _drain_rx_frames(self, max_n: int = 128) -> int:
@@ -1554,8 +1639,8 @@ class AsyncDCPulse:
         self._on_telemetry = cb
 
     def _resolve_endpoint(self) -> tuple[str, int]:
-        host = self._override_host if self._override_host else DCPULSE_TCP_HOST
-        port = self._override_port if self._override_port else DCPULSE_TCP_PORT
+        host = self._override_host if self._override_host else self._cfg_get("DCPULSE_TCP_HOST", DEFAULT_DCPULSE_TCP_HOST)
+        port = self._override_port if self._override_port else self._cfg_int("DCPULSE_TCP_PORT", DEFAULT_DCPULSE_TCP_PORT)
         return str(host), int(port)
 
     def _enqueue(self, cmd: Command):
