@@ -1599,6 +1599,11 @@ class ChamberRuntime:
             running = None
 
         def _create() -> None:
+            # ✅ 추가: 예약 실행 시점에 “이미 살아있는 task”가 생겼으면 중복 생성 금지
+            exist = self._keepalive_tasks.get(name)
+            if exist and not exist.done():
+                return
+                
             try:
                 task = loop.create_task(coro_factory(), name=name)
             except Exception as e:
@@ -2712,7 +2717,7 @@ class ChamberRuntime:
         # _set_task_later는 loop 스레드/다른 스레드 어디서 호출돼도 안전하게 task를 만들어준다.
         self._set_task_later(
             "_runner_task",
-            self._runner_main(),
+            self._runner_main,          # ✅ 코루틴을 미리 만들지 말고 factory로
             name=f"Runner.CH{self.ch}",
         )
 
@@ -4240,7 +4245,7 @@ class ChamberRuntime:
         self._log_fp = None  # 더 이상 사용하지 않음
 
         if not self._log_writer_task or self._log_writer_task.done():
-            self._set_task_later("_log_writer_task", self._log_writer_loop(), name=f"LogWriter.CH{self.ch}")
+            self._set_task_later("_log_writer_task", self._log_writer_loop, name=f"LogWriter.CH{self.ch}")
 
         name = (params.get("process_note") or params.get("Process_name") or f"Run CH{self.ch}")
 
@@ -4684,11 +4689,31 @@ class ChamberRuntime:
             loop.call_soon_threadsafe(_create_later)
         return None
 
-    def _set_task_later(self, attr_name: str, coro: Coroutine[Any, Any, Any], *, name: str | None = None) -> None:
-        """UI/다른 스레드 어디서든 안전하게 task를 만들고, 예외를 조용히 삼키지 않게 한다."""
+    def _set_task_later(
+        self,
+        attr_name: str,
+        coro_factory: Callable[[], Coroutine[Any, Any, Any]],
+        *,
+        name: str | None = None
+    ) -> None:
+        """UI/다른 스레드 어디서든 안전하게 task를 만들고, 중복 생성을 방지한다."""
         loop = self._loop
 
         def _create_and_set():
+            # ✅ 추가: 예약 실행 시점에 이미 살아있으면 중복 생성 금지
+            exist = getattr(self, attr_name, None)
+            if isinstance(exist, asyncio.Task) and (not exist.done()):
+                return
+
+            # ✅ 추가: 코루틴은 loop 컨텍스트에서 생성
+            try:
+                coro = coro_factory()
+            except Exception as e:
+                tb = "".join(traceback.format_exception(type(e), e, e.__traceback__)).rstrip()
+                self.append_log("Task", f"[{name or attr_name}] coro_factory failed:\n{tb}")
+                setattr(self, attr_name, None)
+                return
+
             try:
                 t = loop.create_task(coro, name=name)
             except Exception as e:
@@ -4697,8 +4722,6 @@ class ChamberRuntime:
                 tb = "".join(traceback.format_exception(type(e), e, e.__traceback__)).rstrip()
                 self.append_log("Task", f"[{name or attr_name}] create_task failed:\n{tb}")
 
-                # ✅ Runner 구조에서는 _delay_main_task 같은 레거시 예약 태스크를 사용하지 않는다.
-                #    따라서 사용자 알림은 '치명적인 백그라운드(writer 등)'에만 한정한다.
                 if attr_name in ("_log_writer_task",):
                     with contextlib.suppress(Exception):
                         self._set_state_text("내부 오류: 태스크 생성 실패(로그 확인)")
@@ -4736,6 +4759,7 @@ class ChamberRuntime:
             running = asyncio.get_running_loop()
         except RuntimeError:
             running = None
+
         if running is loop:
             loop.call_soon(_create_and_set)
         else:
