@@ -427,6 +427,59 @@ class RFPulseAsync:
         # 성공 알림(1회만)
         await self._event_q.put(RFPulseEvent(kind="target_reached", message="OK"))
         return True
+    
+    async def set_reference_power(self, target_w: float, *, pause_polling: bool = True) -> bool:
+        """
+        공정 중(RF 출력 ON 상태) setpoint(Command 8)만 변경하는 API.
+        - CSV 리스트 공정에서 "특정 시간에 power setpoint 변경"할 때 사용
+        - 성공/실패를 bool로 반환 (상위 ProcessController 콜백에서 사용하기 좋게)
+        """
+        # 1) 입력 정규화
+        try:
+            sp = int(round(float(target_w)))
+        except Exception:
+            await self._emit_failed("SETP_CHANGE", f"invalid power: {target_w!r}")
+            return False
+
+        # 2) AE Bus setpoint는 2바이트(0~65535) 범위 밖이면 애초에 전송 의미가 없음
+        #    (실제 허용 상한은 'nominal power'에 의해 더 작을 수 있고,
+        #     그 경우 장비가 CSR=4(Data out of range)로 거부할 수 있음)
+        if not (0 <= sp <= 65535):
+            await self._emit_failed("SETP_CHANGE", f"out of range: {sp} (0..65535)")
+            return False
+
+        # 3) (선택) 폴링이 setpoint 변경 타이밍을 늦출 수 있으니 잠깐 끄고 다시 켬
+        #    - start_pulse_process도 시퀀스 중에는 폴링을 껐다가 켜는 구조라(호환성 OK)
+        was_polling = bool(self._poll_task and not self._poll_task.done())
+        if pause_polling and was_polling:
+            self.set_process_status(False)
+
+        # 4) START 태그가 아니어야 함!
+        #    - _cmd_worker_loop에서 CSR=2 자동복구(RF_OFF)는 [START...]에만 적용됨 :contentReference[oaicite:7]{index=7}
+        ok, csr_bytes = await self._exec_and_csr(
+            CMD_SET_SETPOINT,
+            bytes([sp & 0xFF, (sp >> 8) & 0xFF]),
+            tag=f"[RUN SETP {sp}W]",
+        )
+
+        if ok:
+            # 5) 모니터링 기준도 함께 갱신 (중요)
+            #    - _poll_loop의 FORP/REFP 감시가 _target_setpoint_w 기반 :contentReference[oaicite:8]{index=8}
+            self._target_setpoint_w = float(sp)
+            self._forp_out_of_range_count = 0
+            self._refp_over_limit_count = 0
+            await self._emit_status(f"SETP 변경 OK: {sp}W")
+        else:
+            csr = csr_bytes[0] if csr_bytes else None
+            if csr is not None:
+                await self._emit_failed("SETP_CHANGE", f"CSR {csr} ({CSR_CODES.get(csr, 'Unknown')})")
+            else:
+                await self._emit_failed("SETP_CHANGE", "no reply / timeout")
+
+        if pause_polling and was_polling:
+            self.set_process_status(True)
+
+        return bool(ok)
 
     def set_process_status(self, should_poll: bool):
         """
