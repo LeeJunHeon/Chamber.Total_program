@@ -22,72 +22,6 @@ from collections import deque
 import asyncio, time, contextlib, socket
 from lib import config_common as cfgc   # 공통 config(런타임 reload용)
 
-# =============================================================================
-# 런타임 파라미터 기본값(Defaults)
-# - 중요: UI에서 config를 바꿔도 "모듈 상수"는 바뀌지 않으므로,
-#   AsyncDCPulse.reload_runtime_cfg()에서 cfg 값을 다시 읽어 self._xxx로 반영한다.
-# =============================================================================
-
-# 엔드포인트 기본값(대부분 chamber_runtime에서 host/port override로 들어오므로 안전장치용)
-DEFAULT_DCPULSE_TCP_HOST = "192.168.1.50"
-DEFAULT_DCPULSE_TCP_PORT = 4007
-
-# 파워 확인/감시
-DEFAULT_DCP_P_SET_TOL_PCT = 0.05
-DEFAULT_DCP_P_SET_TOL_W = 15.0
-DEFAULT_DCP_P_SET_DEVIATE_MAX_N = 3
-
-DEFAULT_DCP_I_LOW_THRESH_A = 0.05
-DEFAULT_DCP_I_LOW_COUNT_MAX_N = 3
-
-# 명령/복구 정책
-DEFAULT_DCP_CMD_MAX_RETRIES = 5
-DEFAULT_DCP_RECOVER_MAX_ATTEMPTS = 5
-DEFAULT_DCP_WRITE_WORKER_RETRIES = 0
-DEFAULT_DCP_ENABLE_FAULT_RECOVER = True
-
-# 타이밍
-DEFAULT_DCP_ACTIVATION_CHECK_DELAY_S = 5.0
-DEFAULT_DCP_POLL_INTERVAL_S = 5.0
-DEFAULT_DCP_CONNECT_TIMEOUT_S = 3.0
-
-DEFAULT_DCP_TIMEOUT_MS = 2500
-DEFAULT_DCP_GAP_MS = 1000
-DEFAULT_DCP_WATCHDOG_INTERVAL_MS = 1000
-DEFAULT_DCP_RECONNECT_BACKOFF_START_MS = 1000
-DEFAULT_DCP_RECONNECT_BACKOFF_MAX_MS = 10000
-DEFAULT_DCP_FIRST_CMD_EXTRA_TIMEOUT_MS = 2000
-
-DEFAULT_DCP_POST_OPEN_QUIET_S = 0.8
-DEFAULT_DCP_DRAIN_TIMEOUT_S = 1.0
-
-# TCP 전략
-DEFAULT_DCP_INACTIVITY_REOPEN_S = 60.0
-DEFAULT_DCP_TCP_KEEPALIVE = False
-
-# Power clamp(정격)
-DEFAULT_DCP_MAX_POWER_W = 1000
-
-# ===== 통일된 스케일 상수 =====
-# (측정 raw -> 공학단위) 한 LSB가 얼마인지
-V_MEAS_V_PER_LSB = 1.468815 # 1 count ≈ 1.5 V  (매뉴얼 표준)
-I_MEAS_A_PER_LSB = 0.01     # 1 count = 0.01 A  (전류 10배 과다표시 교정)
-P_MEAS_W_PER_LSB = 10.0     # 1 count = 10 W
-
-RAMP_MS_PER_LSB  = 1.0      # 1 count = 1 ms
-ARC_US_PER_LSB   = 1.0      # 1 count = 1 us
-
-# (설정 공학단위 -> raw) 한 스텝 크기
-V_SET_STEP_V = 1.0          # 1 step = 1 V
-I_SET_STEP_A = 0.1          # 1 step = 0.1 A
-P_SET_STEP_W = 10.0         # 1 step = 10 W  (기존 POWER_SET_STEP_W)
-
-# 장비 정격(예: 1 kW면 1000)
-MAX_POWER_W = 1000          # → 10 W/step 기준 0..100 step
-
-
-DEBUG_PRINT = False
-
 # ========= 이벤트 모델 =========
 EventKind = Literal["status", "telemetry", "command_confirmed", "command_failed"]
 
@@ -231,43 +165,52 @@ class AsyncDCPulse:
         # 기타
         self._last_connect_mono: float = 0.0
         self._just_reopened: bool = False
-        self.debug_print = DEBUG_PRINT  # (원래 동작 유지)
 
-        # ↓↓↓ 추가: 측정값 알림용 콜백 (DataLogger.log_dcpulse_power 연결)
-        self._on_telemetry = on_telemetry
+        # 런타임 캐시(초기값은 reload에서 채움)
+        self.debug_print = False
 
-        # 런타임 파라미터(기본값으로 먼저 세팅 후 reload로 덮어씀)
-        self._max_power_w = float(DEFAULT_DCP_MAX_POWER_W)
+        self._max_power_w = 0.0
+        self._p_set_tol_pct = 0.0
+        self._p_set_tol_w = 0.0
+        self._p_set_deviate_max_n = 1
 
-        self._p_set_tol_pct = float(DEFAULT_DCP_P_SET_TOL_PCT)
-        self._p_set_tol_w = float(DEFAULT_DCP_P_SET_TOL_W)
-        self._p_set_deviate_max_n = int(DEFAULT_DCP_P_SET_DEVIATE_MAX_N)
+        self._i_low_thresh_a = 0.0
+        self._i_low_count_max_n = 1
 
-        self._i_low_thresh_a = float(DEFAULT_DCP_I_LOW_THRESH_A)
-        self._i_low_count_max_n = int(DEFAULT_DCP_I_LOW_COUNT_MAX_N)
+        self._cmd_max_retries = 0
+        self._recover_max_attempts = 1
+        self._write_worker_retries = 0
+        self._enable_fault_recover = True
 
-        self._cmd_max_retries = int(DEFAULT_DCP_CMD_MAX_RETRIES)
-        self._recover_max_attempts = int(DEFAULT_DCP_RECOVER_MAX_ATTEMPTS)
-        self._write_worker_retries = int(DEFAULT_DCP_WRITE_WORKER_RETRIES)
-        self._enable_fault_recover = bool(DEFAULT_DCP_ENABLE_FAULT_RECOVER)
+        self._activation_check_delay_s = 0.0
+        self._poll_period_s = 5.0
+        self._connect_timeout_s = 1.0
 
-        self._activation_check_delay_s = float(DEFAULT_DCP_ACTIVATION_CHECK_DELAY_S)
-        self._poll_period_s = float(DEFAULT_DCP_POLL_INTERVAL_S)
-        self._connect_timeout_s = float(DEFAULT_DCP_CONNECT_TIMEOUT_S)
+        self._timeout_ms = 1000
+        self._gap_ms = 0
+        self._watchdog_interval_ms = 1000
 
-        self._timeout_ms = int(DEFAULT_DCP_TIMEOUT_MS)
-        self._gap_ms = int(DEFAULT_DCP_GAP_MS)
-        self._watchdog_interval_ms = int(DEFAULT_DCP_WATCHDOG_INTERVAL_MS)
+        self._reconnect_backoff_start_ms = 1000
+        self._reconnect_backoff_max_ms = 10000
+        self._first_cmd_extra_timeout_ms = 0
 
-        self._reconnect_backoff_start_ms = int(DEFAULT_DCP_RECONNECT_BACKOFF_START_MS)
-        self._reconnect_backoff_max_ms = int(DEFAULT_DCP_RECONNECT_BACKOFF_MAX_MS)
-        self._first_cmd_extra_timeout_ms = int(DEFAULT_DCP_FIRST_CMD_EXTRA_TIMEOUT_MS)
+        self._post_open_quiet_s = 0.0
+        self._drain_timeout_s = 1.0
 
-        self._post_open_quiet_s = float(DEFAULT_DCP_POST_OPEN_QUIET_S)
-        self._drain_timeout_s = float(DEFAULT_DCP_DRAIN_TIMEOUT_S)
+        self._inactivity_s = 0.0
+        self._tcp_keepalive = False
 
-        self._inactivity_s = float(DEFAULT_DCP_INACTIVITY_REOPEN_S)
-        self._tcp_keepalive = bool(DEFAULT_DCP_TCP_KEEPALIVE)
+        # ---- 스케일/스텝 캐시 ----
+        self._v_meas_v_per_lsb = 1.0
+        self._i_meas_a_per_lsb = 1.0
+        self._p_meas_w_per_lsb = 1.0
+
+        self._ramp_ms_per_lsb = 1.0
+        self._arc_us_per_lsb = 1.0
+
+        self._v_set_step_v = 1.0
+        self._i_set_step_a = 1.0
+        self._p_set_step_w = 1.0
 
         self._last_io_mono: float = 0.0
         self._out_on: bool = False
@@ -315,42 +258,66 @@ class AsyncDCPulse:
         - dc_pulse 드라이버가 즉시 런타임 파라미터를 갱신한다.
         핵심 로직은 손대지 않고 '숫자 읽는 방식'만 동적으로 만든다.
         """
+        # DEBUG
+        self.debug_print = self._cfg_bool("DEBUG_PRINT", False)
+
         # Power clamp
-        self._max_power_w = max(0.0, self._cfg_float("DCP_MAX_POWER_W", DEFAULT_DCP_MAX_POWER_W))
+        self._max_power_w = max(0.0, self._cfg_float("DCP_MAX_POWER_W", 1000.0))
 
         # 감시 파라미터
-        self._p_set_tol_pct = max(0.0, self._cfg_float("DCP_P_SET_TOL_PCT", DEFAULT_DCP_P_SET_TOL_PCT))
-        self._p_set_tol_w = max(0.0, self._cfg_float("DCP_P_SET_TOL_W", DEFAULT_DCP_P_SET_TOL_W))
-        self._p_set_deviate_max_n = max(1, self._cfg_int("DCP_P_SET_DEVIATE_MAX_N", DEFAULT_DCP_P_SET_DEVIATE_MAX_N))
+        self._p_set_tol_pct = max(0.0, self._cfg_float("DCP_P_SET_TOL_PCT", 0.05))
+        self._p_set_tol_w = max(0.0, self._cfg_float("DCP_P_SET_TOL_W", 15.0))
+        self._p_set_deviate_max_n = max(1, self._cfg_int("DCP_P_SET_DEVIATE_MAX_N", 3))
 
-        self._i_low_thresh_a = max(0.0, self._cfg_float("DCP_I_LOW_THRESH_A", DEFAULT_DCP_I_LOW_THRESH_A))
-        self._i_low_count_max_n = max(1, self._cfg_int("DCP_I_LOW_COUNT_MAX_N", DEFAULT_DCP_I_LOW_COUNT_MAX_N))
+        self._i_low_thresh_a = max(0.0, self._cfg_float("DCP_I_LOW_THRESH_A", 0.05))
+        self._i_low_count_max_n = max(1, self._cfg_int("DCP_I_LOW_COUNT_MAX_N", 3))
 
         # 명령/복구 정책
-        self._cmd_max_retries = max(0, self._cfg_int("DCP_CMD_MAX_RETRIES", DEFAULT_DCP_CMD_MAX_RETRIES))
-        self._recover_max_attempts = max(1, self._cfg_int("DCP_RECOVER_MAX_ATTEMPTS", DEFAULT_DCP_RECOVER_MAX_ATTEMPTS))
-        self._write_worker_retries = max(0, self._cfg_int("DCP_WRITE_WORKER_RETRIES", DEFAULT_DCP_WRITE_WORKER_RETRIES))
-        self._enable_fault_recover = self._cfg_bool("DCP_ENABLE_FAULT_RECOVER", DEFAULT_DCP_ENABLE_FAULT_RECOVER)
+        self._cmd_max_retries = max(0, self._cfg_int("DCP_CMD_MAX_RETRIES", 5))
+        self._recover_max_attempts = max(1, self._cfg_int("DCP_RECOVER_MAX_ATTEMPTS", 5))
+        self._write_worker_retries = max(0, self._cfg_int("DCP_WRITE_WORKER_RETRIES", 0))
+        self._enable_fault_recover = self._cfg_bool("DCP_ENABLE_FAULT_RECOVER", True)
 
         # 타이밍
-        self._activation_check_delay_s = max(0.0, self._cfg_float("DCP_ACTIVATION_CHECK_DELAY_S", DEFAULT_DCP_ACTIVATION_CHECK_DELAY_S))
-        self._poll_period_s = max(0.1, self._cfg_float("DCP_POLL_INTERVAL_S", DEFAULT_DCP_POLL_INTERVAL_S))
-        self._connect_timeout_s = max(0.5, self._cfg_float("DCP_CONNECT_TIMEOUT_S", DEFAULT_DCP_CONNECT_TIMEOUT_S))
+        self._activation_check_delay_s = max(0.0, self._cfg_float("DCP_ACTIVATION_CHECK_DELAY_S", 5.0))
+        self._poll_period_s = max(0.1, self._cfg_float("DCP_POLL_INTERVAL_S", 5.0))
+        self._connect_timeout_s = max(0.5, self._cfg_float("DCP_CONNECT_TIMEOUT_S", 3.0))
 
-        self._timeout_ms = max(200, self._cfg_int("DCP_TIMEOUT_MS", DEFAULT_DCP_TIMEOUT_MS))
-        self._gap_ms = max(0, self._cfg_int("DCP_GAP_MS", DEFAULT_DCP_GAP_MS))
-        self._watchdog_interval_ms = max(200, self._cfg_int("DCP_WATCHDOG_INTERVAL_MS", DEFAULT_DCP_WATCHDOG_INTERVAL_MS))
+        self._timeout_ms = max(200, self._cfg_int("DCP_TIMEOUT_MS", 2500))
+        self._gap_ms = max(0, self._cfg_int("DCP_GAP_MS", 1000))
+        self._watchdog_interval_ms = max(200, self._cfg_int("DCP_WATCHDOG_INTERVAL_MS", 1000))
 
-        self._reconnect_backoff_start_ms = max(200, self._cfg_int("DCP_RECONNECT_BACKOFF_START_MS", DEFAULT_DCP_RECONNECT_BACKOFF_START_MS))
-        self._reconnect_backoff_max_ms = max(self._reconnect_backoff_start_ms, self._cfg_int("DCP_RECONNECT_BACKOFF_MAX_MS", DEFAULT_DCP_RECONNECT_BACKOFF_MAX_MS))
-        self._first_cmd_extra_timeout_ms = max(0, self._cfg_int("DCP_FIRST_CMD_EXTRA_TIMEOUT_MS", DEFAULT_DCP_FIRST_CMD_EXTRA_TIMEOUT_MS))
+        self._reconnect_backoff_start_ms = max(200, self._cfg_int("DCP_RECONNECT_BACKOFF_START_MS", 1000))
+        self._reconnect_backoff_max_ms = max(self._reconnect_backoff_start_ms,
+                                            self._cfg_int("DCP_RECONNECT_BACKOFF_MAX_MS", 10000))
+        self._first_cmd_extra_timeout_ms = max(0, self._cfg_int("DCP_FIRST_CMD_EXTRA_TIMEOUT_MS", 2000))
 
-        self._post_open_quiet_s = max(0.0, self._cfg_float("DCP_POST_OPEN_QUIET_S", DEFAULT_DCP_POST_OPEN_QUIET_S))
-        self._drain_timeout_s = max(0.0, self._cfg_float("DCP_DRAIN_TIMEOUT_S", DEFAULT_DCP_DRAIN_TIMEOUT_S))
+        self._post_open_quiet_s = max(0.0, self._cfg_float("DCP_POST_OPEN_QUIET_S", 0.8))
+        self._drain_timeout_s = max(0.0, self._cfg_float("DCP_DRAIN_TIMEOUT_S", 1.0))
 
-        # TCP 전략
-        self._inactivity_s = max(0.0, self._cfg_float("DCP_INACTIVITY_REOPEN_S", DEFAULT_DCP_INACTIVITY_REOPEN_S))
-        self._tcp_keepalive = self._cfg_bool("DCP_TCP_KEEPALIVE", DEFAULT_DCP_TCP_KEEPALIVE)
+        # TCP 전략(이 키는 config_common 상단에 이미 존재) :contentReference[oaicite:15]{index=15}
+        self._inactivity_s = max(0.0, self._cfg_float("DCP_INACTIVITY_REOPEN_S", 0.0))
+        self._tcp_keepalive = self._cfg_bool("DCP_TCP_KEEPALIVE", False)
+
+        # ---- 스케일/스텝(새로 추가) ----
+        self._v_meas_v_per_lsb = self._cfg_float("DCP_V_MEAS_V_PER_LSB", 1.468815)
+        self._i_meas_a_per_lsb = self._cfg_float("DCP_I_MEAS_A_PER_LSB", 0.01)
+        self._p_meas_w_per_lsb = self._cfg_float("DCP_P_MEAS_W_PER_LSB", 10.0)
+
+        self._ramp_ms_per_lsb = self._cfg_float("DCP_RAMP_MS_PER_LSB", 1.0)
+        self._arc_us_per_lsb  = self._cfg_float("DCP_ARC_US_PER_LSB", 1.0)
+
+        self._v_set_step_v = self._cfg_float("DCP_V_SET_STEP_V", 1.0)
+        self._i_set_step_a = self._cfg_float("DCP_I_SET_STEP_A", 0.1)
+        self._p_set_step_w = self._cfg_float("DCP_P_SET_STEP_W", 10.0)
+
+        # 방어: 0 방지
+        if self._p_set_step_w <= 0:
+            self._p_set_step_w = 10.0
+        if self._v_set_step_v <= 0:
+            self._v_set_step_v = 1.0
+        if self._i_set_step_a <= 0:
+            self._i_set_step_a = 0.1
 
     # ====== 공용 API ======
     async def start(self):
@@ -595,19 +562,20 @@ class AsyncDCPulse:
     async def set_reference(self, mode: Literal["V","I","P"], value: float):
         """0x83: 출력 레벨(참조) 설정 — 모드별 스케일 적용."""
         if mode.upper() == "V":
-            raw = int(round(value / V_SET_STEP_V))
+            raw = int(round(value / self._v_set_step_v))
         elif mode.upper() == "I":
-            raw = int(round(value / I_SET_STEP_A))
-        else:  # "P"
-            raw = int(round(float(value) / P_SET_STEP_W))
-            raw = max(0, min(int(self._max_power_w // P_SET_STEP_W), raw))
+            raw = int(round(value / self._i_set_step_a))
+        else:
+            raw = int(round(float(value) / self._p_set_step_w))
+            raw = max(0, min(int(self._max_power_w // self._p_set_step_w), raw))
+
         await self._write_cmd_data(0x83, raw, 2, label=f"REF_{mode.upper()}({value})")
 
     async def set_reference_power(self, value_w: float) -> bool:
         """출력 레벨(전력) 설정 — 10 W/step → 0~500."""
         # 10 W/step → 0..500 (5 kW)
-        raw = int(round(float(value_w) / P_SET_STEP_W))
-        raw = max(0, min(int(self._max_power_w // P_SET_STEP_W), raw))
+        raw = int(round(float(value_w) / self._p_set_step_w))
+        raw = max(0, min(int(self._max_power_w // self._p_set_step_w), raw))
         ok = await self._write_cmd_data(0x83, raw, 2, label=f"REF_POWER({value_w:.0f}W)")
         if ok:
             self._last_ref_power_w = float(value_w) # ← 세트포인트 기억
@@ -653,10 +621,10 @@ class AsyncDCPulse:
     # ====== 선택: 기타 설정(원 코드 호환) ======
     async def set_arc_params(self, *, detection_us: float, pause_us: float,
                              arc_voltage_v: float|int, arc_current_a: float|int, soft_level: int):
-        await self._write_cmd_data(0x05, int(round(detection_us / ARC_US_PER_LSB)), 2, label="ARC_DET_US")
-        await self._write_cmd_data(0x06, int(round(pause_us     / ARC_US_PER_LSB)), 2, label="ARC_PAUSE_US")
-        await self._write_cmd_data(0x07, int(round(float(arc_voltage_v) / V_SET_STEP_V)), 2, label="ARC_VOLT_V")
-        await self._write_cmd_data(0x08, int(round(float(arc_current_a) / I_SET_STEP_A)), 2, label="ARC_CURR_A")
+        await self._write_cmd_data(0x05, int(round(detection_us / self._arc_us_per_lsb)), 2, label="ARC_DET_US")
+        await self._write_cmd_data(0x06, int(round(pause_us     / self._arc_us_per_lsb)), 2, label="ARC_PAUSE_US")
+        await self._write_cmd_data(0x07, int(round(float(arc_voltage_v) / self._v_set_step_v)), 2, label="ARC_VOLT_V")
+        await self._write_cmd_data(0x08, int(round(float(arc_current_a) / self._i_set_step_a)), 2, label="ARC_CURR_A")
         await self._write_cmd_data(0x09, int(soft_level), 2, label="SOFT_ARC_LV")
 
     async def set_shutdown(self, *, delay_ms: int, pause_ms: int):
@@ -664,18 +632,18 @@ class AsyncDCPulse:
         await self._write_cmd_data(0x0B, int(pause_ms), 2, label="SHDN_PAUSE_MS")
 
     async def set_limits(self, *, p_w: float, i_a: float, v_v: float):
-        p_raw = int(round(float(p_w) / P_SET_STEP_W))
-        p_raw = max(0, min(int(self._max_power_w // P_SET_STEP_W), p_raw))
-        i_raw = int(round(i_a / I_SET_STEP_A))
-        v_raw = int(round(v_v / V_SET_STEP_V))
+        p_raw = int(round(float(p_w) / self._p_set_step_w))
+        p_raw = max(0, min(int(self._max_power_w // self._p_set_step_w), p_raw))
+        i_raw = int(round(i_a / self._i_set_step_a))
+        v_raw = int(round(v_v / self._v_set_step_v))
 
         await self._write_cmd_data(0x0C, p_raw, 2, label="LIM_P_W")
         await self._write_cmd_data(0x0D, i_raw, 2, label="LIM_I_A")
         await self._write_cmd_data(0x0E, v_raw, 2, label="LIM_V_V")
 
     async def set_ramp_and_ignition(self, *, ramp_ms: int, ignition_v: float):
-        await self._write_cmd_data(0x0F, int(round(ramp_ms   / RAMP_MS_PER_LSB)), 2, label="RAMP_MS")
-        await self._write_cmd_data(0x10, int(round(ignition_v / V_SET_STEP_V)),   2, label="IGN_V")
+        await self._write_cmd_data(0x0F, int(round(ramp_ms   / self._ramp_ms_per_lsb)), 2, label="RAMP_MS")
+        await self._write_cmd_data(0x10, int(round(ignition_v / self._v_set_step_v)),  2, label="IGN_V")
 
     # ====== 읽기(모니터링/상태) - 필요 시 확장 ======
     # 1) 원시 바이트를 그대로 돌려주는 읽기 헬퍼
@@ -716,9 +684,10 @@ class AsyncDCPulse:
         I_raw = (data[2] << 8) | data[3]
         V_raw = (data[4] << 8) | data[5]
 
-        P_W = P_raw * P_MEAS_W_PER_LSB
-        I_A = I_raw * I_MEAS_A_PER_LSB
-        V_V = V_raw * V_MEAS_V_PER_LSB
+        P_W = P_raw * self._p_meas_w_per_lsb
+        I_A = I_raw * self._i_meas_a_per_lsb
+        V_V = V_raw * self._v_meas_v_per_lsb
+
         return {"raw": {"P": P_raw, "I": I_raw, "V": V_raw},
                 "eng": {"P_W": P_W, "I_A": I_A, "V_V": V_V}}
     
@@ -1639,8 +1608,8 @@ class AsyncDCPulse:
         self._on_telemetry = cb
 
     def _resolve_endpoint(self) -> tuple[str, int]:
-        host = self._override_host if self._override_host else self._cfg_get("DCPULSE_TCP_HOST", DEFAULT_DCPULSE_TCP_HOST)
-        port = self._override_port if self._override_port else self._cfg_int("DCPULSE_TCP_PORT", DEFAULT_DCPULSE_TCP_PORT)
+        host = self._override_host if self._override_host else self._cfg_get("DCPULSE_TCP_HOST", "192.168.1.50")
+        port = self._override_port if self._override_port else self._cfg_int("DCPULSE_TCP_PORT", 4007)
         return str(host), int(port)
 
     def _enqueue(self, cmd: Command):

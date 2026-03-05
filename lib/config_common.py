@@ -224,10 +224,60 @@ MFC_COMMANDS = {
 # ======================================================================
 # DC Pulse (공통 기본값; 주소는 채널 파일에서 필요 시 오버라이드)
 # ======================================================================
+# (레거시 유지) - 기존 코드 호환용
 DCPULSE_PORT = "192.168.1.50:4007"
 DCPULSE_BAUD = 9600
 DCPULSE_ADDR = 1
 DCPULSE_DEFAULT_DELAY_MS = 180
+
+# (권장) dc_pulse.py가 endpoint로 사용하는 키
+DCPULSE_TCP_HOST = "192.168.1.50"
+DCPULSE_TCP_PORT = 4007
+
+# ----------------------------------------------------------------------
+# dc_pulse 런타임 튜닝(공정/통신 안정성 영향) - UI에서 수정 대상
+# ----------------------------------------------------------------------
+DCP_MAX_POWER_W = 1000
+
+DCP_P_SET_TOL_PCT = 0.05
+DCP_P_SET_TOL_W = 15.0
+DCP_P_SET_DEVIATE_MAX_N = 3
+
+DCP_I_LOW_THRESH_A = 0.05
+DCP_I_LOW_COUNT_MAX_N = 3
+
+DCP_CMD_MAX_RETRIES = 5
+DCP_RECOVER_MAX_ATTEMPTS = 5
+DCP_WRITE_WORKER_RETRIES = 0
+DCP_ENABLE_FAULT_RECOVER = True
+
+DCP_ACTIVATION_CHECK_DELAY_S = 5.0
+DCP_POLL_INTERVAL_S = 5.0
+DCP_CONNECT_TIMEOUT_S = 3.0
+
+DCP_TIMEOUT_MS = 2500
+DCP_GAP_MS = 1000
+DCP_WATCHDOG_INTERVAL_MS = 1000
+DCP_RECONNECT_BACKOFF_START_MS = 1000
+DCP_RECONNECT_BACKOFF_MAX_MS = 10000
+DCP_FIRST_CMD_EXTRA_TIMEOUT_MS = 2000
+
+DCP_POST_OPEN_QUIET_S = 0.8
+DCP_DRAIN_TIMEOUT_S = 1.0
+
+# ----------------------------------------------------------------------
+# 스케일/스텝(프로토콜/보정값) - config로 이관 가능하지만 UI 노출은 비추천
+# ----------------------------------------------------------------------
+DCP_V_MEAS_V_PER_LSB = 1.468815
+DCP_I_MEAS_A_PER_LSB = 0.01
+DCP_P_MEAS_W_PER_LSB = 10.0
+
+DCP_RAMP_MS_PER_LSB = 1.0
+DCP_ARC_US_PER_LSB  = 1.0
+
+DCP_V_SET_STEP_V = 1.0
+DCP_I_SET_STEP_A = 0.1
+DCP_P_SET_STEP_W = 10.0
 
 
 # ======================================================================
