@@ -738,8 +738,9 @@ class ChamberRuntime:
 
                     ok = await self.rf_pulse.set_reference_power(float(power), pause_polling=True)
                     if not ok:
-                        # rf_pulse.py 내부에서 CSR/timeout 원인까지 event/status로 남기고 False 반환함
-                        self.process_controller.on_rf_pulse_failed("set_reference_power failed")
+                        # rf_pulse가 command_failed 이벤트를 이미 올리므로,
+                        # 여기서는 로그만 남기고 실패 판정은 _pump_rfpulse_events로 일원화
+                        self.append_log("RFPulse", "set_reference_power returned False (will be handled by event pump)")
 
                 except Exception as e:
                     why = f"RF-Pulse set_reference_power failed: {e!r}"
@@ -4358,7 +4359,7 @@ class ChamberRuntime:
         self._log_file_path = path
 
         if not self._log_writer_task or self._log_writer_task.done():
-            self._set_task_later("_log_writer_task", self._log_writer_loop(), name=f"LogWriter.CH{self.ch}")
+            self._set_task_later("_log_writer_task", self._log_writer_loop, name=f"LogWriter.CH{self.ch}")
 
         name = (params.get("process_note") or params.get("Process_name") or f"Run CH{self.ch}")
 
