@@ -4242,7 +4242,6 @@ class ChamberRuntime:
 
         # ✅ 여기서부터 writer가 이 경로로만 쓴다 (직접 open 금지)
         self._log_file_path = path
-        self._log_fp = None  # 더 이상 사용하지 않음
 
         if not self._log_writer_task or self._log_writer_task.done():
             self._set_task_later("_log_writer_task", self._log_writer_loop, name=f"LogWriter.CH{self.ch}")
@@ -4340,45 +4339,65 @@ class ChamberRuntime:
             pass
 
     async def _shutdown_log_writer(self):
-        path = self._log_file_path
+        """
+        - 로그 writer task를 종료
+        - 큐에 남은 로그를 최종 기록
+        - keep-handle(appender) 핸들을 확실히 close
+        """
         loop = asyncio.get_running_loop()
-
+        path = self._log_file_path
+        
         try:
-            # 1) writer 중지 (기존 그대로)
-            t = self._log_writer_task
+            # 1) writer task 종료
+            t = getattr(self, "_log_writer_task", None)
             self._log_writer_task = None
             if t:
                 t.cancel()
                 with contextlib.suppress(Exception):
-                    await asyncio.wait_for(t, timeout=2.0)
+                    await asyncio.wait_for(asyncio.gather(t, return_exceptions=True), timeout=3.0)
 
-            # 2) 큐 드레인 (기존 그대로)
+            # 2) 큐 drain
             drained: list[str] = []
-            while True:
-                try:
-                    drained.append(self._log_q.get_nowait())
-                except asyncio.QueueEmpty:
-                    break
-            text = "".join(drained)
+            q = getattr(self, "_log_q", None)
+            if q is not None:
+                while True:
+                    try:
+                        drained.append(q.get_nowait())
+                    except asyncio.QueueEmpty:
+                        break
 
-            # 3) 남은 로그를 “한 번에” 쓰기 (기존 호출 유지)
-            if path and text:
-                try:
-                    await asyncio.wait_for(
-                        loop.run_in_executor(self._log_io_exec, self._log_write_sync, path, text),
-                        timeout=6.0,
-                    )
-                except Exception:
-                    # 최후 폴백도 log_hub 경유(기존 정책 유지)
-                    with contextlib.suppress(Exception):
-                        local_dir = Path.cwd() / f"_Logs_local_CH{self.ch}"
-                        local_dir.mkdir(parents=True, exist_ok=True)
-                        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-                        rec = local_dir / f"CH{self.ch}_{ts}_shutdown_drain.txt"
+            # 3) 남은 로그 최종 기록 (가능하면 원래 path, 실패하면 로컬 drain 파일)
+            if drained:
+                text = "".join(drained)
+
+                def _write_local_drain() -> None:
+                    local_dir = Path.cwd() / f"_Logs_local_CH{self.ch}"
+                    local_dir.mkdir(parents=True, exist_ok=True)
+                    ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+                    drain_path = local_dir / f"CH{self.ch}_{ts}_shutdown_drain.txt"
+                    with open(drain_path, "a", encoding="utf-8", newline="") as fp:
+                        fp.write(text)
+
+                if path:
+                    try:
                         await asyncio.wait_for(
-                            loop.run_in_executor(self._log_io_exec, self._log_write_sync, rec, text),
-                            timeout=6.0,
+                            loop.run_in_executor(self._log_io_exec, self._log_write_sync, path, text),
+                            timeout=6.0
                         )
+                    except Exception:
+                        # 원래 위치 쓰기 실패 → 로컬 drain 파일로라도 남김
+                        with contextlib.suppress(Exception):
+                            await asyncio.wait_for(loop.run_in_executor(self._log_io_exec, _write_local_drain), timeout=2.0)
+                else:
+                    # path 자체가 없으면 로컬 drain로
+                    with contextlib.suppress(Exception):
+                        await asyncio.wait_for(loop.run_in_executor(self._log_io_exec, _write_local_drain), timeout=2.0)
+
+            # 4) keep-handle 닫기 (핵심)
+            app = getattr(self, "_run_log_appender", None)
+            if app is not None:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(loop.run_in_executor(self._log_io_exec, app.close), timeout=2.0)
 
         finally:
             # ✅ keep-handle 닫기 (가장 중요)
