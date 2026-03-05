@@ -13,17 +13,12 @@ dc_power_async.py — asyncio 기반 DC Power 컨트롤러 (W 단위 직접 전�
 """
 
 from __future__ import annotations
-from dataclasses import dataclass
-from typing import Optional, Callable, Awaitable, AsyncGenerator, Literal
-import asyncio
 
-from lib.config_ch2 import (
-    DC_MAX_POWER,
-    DC_TOLERANCE_POWER,
-    DC_MAINTAIN_STEP,
-    DC_INTERVAL_MS,
-    DEBUG_PRINT,
-)
+import asyncio
+from dataclasses import dataclass
+from typing import Optional, Callable, Awaitable, AsyncGenerator, Literal, Any
+
+from lib import config_common as cfgc  # ✅ "모듈"로 import (값 고정 방지)
 
 # ========= 이벤트 모델 =========
 EventKind = Literal[
@@ -44,14 +39,6 @@ class DCPowerEvent:
     current: Optional[float] = None
     running: Optional[bool] = None
 
-# ========= 이벤트 모델 =========
-# ... (EventKind / DCPowerEvent 정의 아래 아무 곳)
-DC_LOW_W_THRESH = 1.0   # W 이하이면 '사실상 0W'로 간주
-DC_LOW_STREAK_N = 3     # 연속 3회(폴링 3번) 기준
-
-# DC 전류 저전류 감시 임계값/횟수
-DC_LOW_CURRENT_THRESH_A = 0.05  # A 이하를 "전류 거의 0"으로 간주
-DC_LOW_CURRENT_STREAK_N = 3     # 연속 3회(폴링 3번) 기준
 
 class DCPowerAsync:
     def __init__(
@@ -62,19 +49,30 @@ class DCPowerAsync:
         request_status_read: Optional[Callable[[], Awaitable[object]]] = None,
         toggle_enable: Optional[Callable[[bool], Awaitable[None]]] = None,  # ← 추가
         watt_deadband: float = 0.5,
+
+        # ✅ 추가: 채널 cfg 주입(없으면 config_common 사용)
+        cfg: Any | None = None,
     ):
-        """
-        send_dc_power:              검증 응답을 기대하는 W 단위 설정 (예: PLC.power_apply(..., family="DCV"))
-        send_dc_power_unverified:   no-reply W 단위 설정 (예: PLC.power_write(..., family="DCV"))
-        request_status_read:        (선택) 주기적 상태 읽기 트리거. (반환값이 있으면 (P,V,I)로 간주하여 섭취)
-        watt_deadband:              연속 전송 억제 데드밴드(W)
-        """
         self._send_dc_power = send_dc_power
         self._send_dc_power_unverified = send_dc_power_unverified
         self._request_status_read = request_status_read
         self._toggle_enable = toggle_enable
 
-        self.debug_print = DEBUG_PRINT
+        # ✅ cfg 모듈 보관 (config_ch1/config_ch2 모듈을 넣으면 거기 값 우선)
+        self._cfg = cfg
+
+        # ---- 런타임 캐시(초기값) ----
+        self.debug_print = False
+
+        self._dc_max_power = 1000.0
+        self._dc_tolerance_power = 1.0
+        self._dc_maintain_step = 1.0
+        self._dc_interval_ms = 5000
+
+        self._dc_low_w_thresh = 1.0
+        self._dc_low_streak_n = 3
+        self._dc_low_current_thresh_a = 0.05
+        self._dc_low_current_streak_n = 3
 
         # 파라미터
         self._watt_deadband = float(watt_deadband)
@@ -106,6 +104,40 @@ class DCPowerAsync:
         self._low_power_streak = 0
         self._low_current_streak = 0  # 저전류 감시용 카운터
 
+        # ✅ 마지막에 config 재로딩(=UI apply 대비)
+        self.reload_runtime_cfg()
+
+    def reload_runtime_cfg(self) -> None:
+        mod = self._cfg if self._cfg is not None else cfgc
+
+        # debug
+        self.debug_print = bool(getattr(mod, "DEBUG_PRINT", getattr(cfgc, "DEBUG_PRINT", self.debug_print)))
+
+        # 핵심 제어 파라미터
+        self._dc_max_power = float(getattr(mod, "DC_MAX_POWER", getattr(cfgc, "DC_MAX_POWER", self._dc_max_power)))
+        self._dc_tolerance_power = float(getattr(mod, "DC_TOLERANCE_POWER", getattr(cfgc, "DC_TOLERANCE_POWER", self._dc_tolerance_power)))
+        self._dc_maintain_step = float(getattr(mod, "DC_MAINTAIN_STEP", getattr(cfgc, "DC_MAINTAIN_STEP", self._dc_maintain_step)))
+        self._dc_interval_ms = int(getattr(mod, "DC_INTERVAL_MS", getattr(cfgc, "DC_INTERVAL_MS", self._dc_interval_ms)))
+
+        # 저전력/저전류 감시
+        self._dc_low_w_thresh = float(getattr(mod, "DC_LOW_W_THRESH", getattr(cfgc, "DC_LOW_W_THRESH", self._dc_low_w_thresh)))
+        self._dc_low_streak_n = int(getattr(mod, "DC_LOW_STREAK_N", getattr(cfgc, "DC_LOW_STREAK_N", self._dc_low_streak_n)))
+        self._dc_low_current_thresh_a = float(getattr(mod, "DC_LOW_CURRENT_THRESH_A", getattr(cfgc, "DC_LOW_CURRENT_THRESH_A", self._dc_low_current_thresh_a)))
+        self._dc_low_current_streak_n = int(getattr(mod, "DC_LOW_CURRENT_STREAK_N", getattr(cfgc, "DC_LOW_CURRENT_STREAK_N", self._dc_low_current_streak_n)))
+
+        # deadband도 config로 제어 가능하게(원하면)
+        self._watt_deadband = float(getattr(mod, "DC_WATT_DEADBAND", getattr(cfgc, "DC_WATT_DEADBAND", self._watt_deadband)))
+
+        # 방어
+        if self._dc_max_power < 0:
+            self._dc_max_power = 0.0
+        if self._dc_interval_ms < 50:
+            self._dc_interval_ms = 50
+        if self._dc_low_streak_n < 1:
+            self._dc_low_streak_n = 1
+        if self._dc_low_current_streak_n < 1:
+            self._dc_low_current_streak_n = 1
+
     # ======= 퍼블릭 이벤트 스트림 =======
     async def events(self) -> AsyncGenerator[DCPowerEvent, None]:
         while True:
@@ -118,9 +150,13 @@ class DCPowerAsync:
             await self._emit_status("경고: DC 파워가 이미 동작 중입니다.")
             return
 
-        self.target_power = float(max(0.0, min(DC_MAX_POWER, target_power)))
+        self.target_power = float(max(0.0, min(self._dc_max_power, target_power)))
         self._low_power_streak = 0    # ★ 저전력 카운터 리셋
         self._low_current_streak = 0  # ★ 저전류 카운터 리셋
+
+        if not self._toggle_enable:
+            await self._emit_status("DCV SET ON 실패: toggle_enable 콜백이 없습니다.")
+            return
 
         try:
             await self._toggle_enable(True)
@@ -128,6 +164,7 @@ class DCPowerAsync:
         except Exception as e:
             await self._emit_status(f"DCV SET ON 실패: {e!r}")
             return  # 실패 시 시작 중단을 원하면 유지
+        
         self._enabled = True
 
         self._is_running = True
@@ -235,22 +272,20 @@ class DCPowerAsync:
                         # === 연속 저전력 감시(최소 수정) ===
                         try:
                             p = float(self.power_w or 0.0)
-                            if p <= DC_LOW_W_THRESH:
+                            if p <= self._dc_low_w_thresh:
                                 self._low_power_streak += 1
-                                # (선택) 진행 상황 로그
                                 await self._emit_status(
-                                    f"저전력 감시: {self._low_power_streak}/{DC_LOW_STREAK_N} "
-                                    f"(meas={p:.1f}W ≤ {DC_LOW_W_THRESH:.1f}W)"
+                                    f"저전력 감시: {self._low_power_streak}/{self._dc_low_streak_n} "
+                                    f"(meas={p:.1f}W ≤ {self._dc_low_w_thresh:.1f}W)"
                                 )
-                                if self._low_power_streak >= DC_LOW_STREAK_N:
+                                if self._low_power_streak >= self._dc_low_streak_n:
                                     await self._emit_status(
-                                        f"DC 파워가 {DC_LOW_STREAK_N}회 연속 ≤ {DC_LOW_W_THRESH:.1f}W → 공정 중단"
+                                        f"DC 파워가 {self._dc_low_streak_n}회 연속 ≤ {self._dc_low_w_thresh:.1f}W → 공정 중단"
                                     )
-                                    # ★ 추가: 컨트롤러가 '실패'로 전환하도록 명시적 실패 이벤트 발행
                                     self._ev_nowait(DCPowerEvent(
                                         kind="target_failed",
-                                        message=(f"저전력 연속 {self._low_power_streak}/{DC_LOW_STREAK_N} "
-                                                f"(meas={float(self.power_w or 0.0):.1f}W ≤ {DC_LOW_W_THRESH:.1f}W)")
+                                        message=(f"저전력 연속 {self._low_power_streak}/{self._dc_low_streak_n} "
+                                                f"(meas={float(self.power_w or 0.0):.1f}W ≤ {self._dc_low_w_thresh:.1f}W)")
                                     ))
                                     asyncio.create_task(self.cleanup())
                                     break
@@ -264,43 +299,38 @@ class DCPowerAsync:
                         try:
                             if self._sent_target_reached:
                                 ia = float(self.current_a or 0.0)
-                                if ia <= DC_LOW_CURRENT_THRESH_A:
+                                if ia <= self._dc_low_current_thresh_a:
                                     self._low_current_streak += 1
                                     await self._emit_status(
                                         f"저전류 감시(목표 도달 후): "
-                                        f"{self._low_current_streak}/{DC_LOW_CURRENT_STREAK_N} "
-                                        f"(meas={ia:.3f}A ≤ {DC_LOW_CURRENT_THRESH_A:.3f}A)"
+                                        f"{self._low_current_streak}/{self._dc_low_current_streak_n} "
+                                        f"(meas={ia:.3f}A ≤ {self._dc_low_current_thresh_a:.3f}A)"
                                     )
-                                    if self._low_current_streak >= DC_LOW_CURRENT_STREAK_N:
+                                    if self._low_current_streak >= self._dc_low_current_streak_n:
                                         await self._emit_status(
                                             f"DC 전류가 목표 도달 후 "
-                                            f"{DC_LOW_CURRENT_STREAK_N}회 연속 ≤ "
-                                            f"{DC_LOW_CURRENT_THRESH_A:.3f}A → 공정 중단"
+                                            f"{self._dc_low_current_streak_n}회 연속 ≤ "
+                                            f"{self._dc_low_current_thresh_a:.3f}A → 공정 중단"
                                         )
                                         self._ev_nowait(DCPowerEvent(
                                             kind="target_failed",
                                             message=(
                                                 f"저전류 연속 {self._low_current_streak}/"
-                                                f"{DC_LOW_CURRENT_STREAK_N} "
-                                                f"(meas={ia:.3f}A ≤ {DC_LOW_CURRENT_THRESH_A:.3f}A)"
+                                                f"{self._dc_low_current_streak_n} "
+                                                f"(meas={ia:.3f}A ≤ {self._dc_low_current_thresh_a:.3f}A)"
                                             ),
                                         ))
                                         asyncio.create_task(self.cleanup())
                                         break
                                 else:
-                                    # 임계값을 넘으면 카운터 리셋
                                     if self._low_current_streak:
                                         self._low_current_streak = 0
-                            else:
-                                # 아직 목표 도달 전에는 저전류 카운터만 초기화
-                                if self._low_current_streak:
-                                    self._low_current_streak = 0
                         except Exception:
                             pass
 
                 except Exception as e:
                     await self._emit_status(f"상태 읽기 요청 실패: {e}")
-                await asyncio.sleep(DC_INTERVAL_MS / 1000.0)
+                await asyncio.sleep(self._dc_interval_ms / 1000.0)
         except asyncio.CancelledError:
             pass
 
@@ -345,7 +375,7 @@ class DCPowerAsync:
             error = float(self.target_power) - float(self.power_w)
 
             # 허용 오차 내 → 보정 스킵
-            if abs(error) <= float(DC_TOLERANCE_POWER):
+            if abs(error) <= float(self._dc_tolerance_power):
                 if not self._sent_target_reached:
                     self._ev_nowait(DCPowerEvent(kind="target_reached"))
                     self._sent_target_reached = True
@@ -353,8 +383,8 @@ class DCPowerAsync:
 
             # 마지막 전송값 기준으로 한 스텝 보정 (측정이 낮으면 +, 높으면 -)
             base = float(last_sent if last_sent is not None else self.target_power)
-            step = float(DC_MAINTAIN_STEP) if error > 0 else -float(DC_MAINTAIN_STEP)
-            new_power = max(0.0, min(float(DC_MAX_POWER), base + step))
+            step = float(self._dc_maintain_step) if error > 0 else -float(self._dc_maintain_step)
+            new_power = max(0.0, min(float(self._dc_max_power), base + step))
 
             # 데드밴드 적용 후 전송
             if (last_sent is None) or (abs(new_power - last_sent) >= deadband):
