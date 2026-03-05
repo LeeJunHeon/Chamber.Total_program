@@ -295,7 +295,7 @@ class AsyncDCPulse:
         self._post_open_quiet_s = max(0.0, self._cfg_float("DCP_POST_OPEN_QUIET_S", 0.8))
         self._drain_timeout_s = max(0.0, self._cfg_float("DCP_DRAIN_TIMEOUT_S", 1.0))
 
-        # TCP 전략(이 키는 config_common 상단에 이미 존재) :contentReference[oaicite:15]{index=15}
+        # TCP 전략(이 키는 config_common 상단에 이미 존재)
         self._inactivity_s = max(0.0, self._cfg_float("DCP_INACTIVITY_REOPEN_S", 0.0))
         self._tcp_keepalive = self._cfg_bool("DCP_TCP_KEEPALIVE", False)
 

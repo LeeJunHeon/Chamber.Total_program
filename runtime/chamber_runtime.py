@@ -424,9 +424,8 @@ class ChamberRuntime:
         ig_host,  ig_port  = self.cfg.IG_TCP
 
         # 설정에서 채널별 스케일 정보를 불러와 주입
-        try:
-            scale_map = getattr(self.cfg, "MFC_SCALE_FACTORS", {1: 1.0, 2: 1.0, 3: 1.0})
-        except Exception:
+        scale_map = self.cfg._get("MFC_SCALE_FACTORS", {1: 1.0, 2: 1.0, 3: 1.0})
+        if not isinstance(scale_map, dict):
             scale_map = {1: 1.0, 2: 1.0, 3: 1.0}
 
         # MFC/IG를 외부에서 주입하면 그대로 사용하고, 없으면 기존 방식대로 생성
@@ -448,7 +447,7 @@ class ChamberRuntime:
         self.rga = None
         try:
             # logger는 선택사항인데 ChamberRuntime에는 self.logger가 없으니 전달하지 않는다.
-            timeout_s = float(getattr(self.cfg, "RGA_WORKER_TIMEOUT_S", 60.0))
+            timeout_s = float(self.cfg._get("RGA_WORKER_TIMEOUT_S", 60.0))
             self.rga = RGAWorkerClient(ch=self.ch, logger=None, default_timeout_s=timeout_s)
         except Exception as e:
             # 기존 로그 시스템(append_log)로만 남긴다.
@@ -808,7 +807,7 @@ class ChamberRuntime:
 
         def cb_rga_scan():
             async def _run():
-                timeout_s = float(getattr(self.cfg, "RGA_WORKER_TIMEOUT_S", 60.0))
+                timeout_s = float(self.cfg._get("RGA_WORKER_TIMEOUT_S", 60.0))
                 self._soon(self._graph_clear_rga_plot_safe)
 
                 try:
