@@ -431,7 +431,7 @@ class ChamberRuntime:
             scale_factors=scale_map,  # ✅ CH별 MFC 스케일 전달
             cfg=self.cfg.mod,  # ✅ 채널 config 주입(=UI Apply 반영/CH별 오버라이드 반영)
         )
-        self.ig  = ig or AsyncIG(host=ig_host, port=ig_port)
+        self.ig  = ig or AsyncIG(host=ig_host, port=ig_port, cfg=self.cfg.mod)
 
         # OES 인스턴스 생성 시 현재 챔버 번호에 따라 USB 채널을 명시적으로 매핑한다.
         # CH1 → USB0, CH2 → USB1. OESAsync 내부 기본 동작도 동일하지만 명확성을 위해 전달한다.
@@ -462,7 +462,7 @@ class ChamberRuntime:
                     except Exception:
                         pass
             host, port = self.cfg.DCPULSE_TCP
-            self.dc_pulse = AsyncDCPulse(host=host, port=port, on_telemetry=_cb)
+            self.dc_pulse = AsyncDCPulse(host=host, port=port, on_telemetry=_cb, cfg=self.cfg.mod)
         else:
             self.dc_pulse = None
 
