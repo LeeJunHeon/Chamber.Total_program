@@ -1088,6 +1088,9 @@ class PlasmaCleaningRuntime:
                 runtime_state.set_error("pc", ch, msg)
                 runtime_state.mark_finished("pc", ch)
 
+            with contextlib.suppress(Exception):
+                await self._cleanup_tasks_only("preflight_connect failed")
+
             self._running = False
             with contextlib.suppress(Exception):
                 self._reset_ui_state()
@@ -1740,6 +1743,23 @@ class PlasmaCleaningRuntime:
         await self._cancel_and_wait(ev)
         self._bg_tasks.clear()
         self._event_tasks.clear()
+
+    async def _cleanup_tasks_only(self, reason: str = "") -> None:
+        """
+        프리플라이트 실패 등 '공정이 실제로 시작되기 전' 경로에서
+        장비(RF/MFC/PLC)에는 손대지 않고,
+        PC 런타임이 만든 태스크/로그만 정리한다.
+        """
+        if reason:
+            self.append_log("MAIN", f"[CLEANUP_TASKS_ONLY] {reason}")
+
+        # PC 런타임이 만든 태스크만 정리
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(self._shutdown_all_tasks(), timeout=3.0)
+
+        # run log가 열려있으면 닫기(열려있지 않으면 no-op)
+        with contextlib.suppress(Exception):
+            self._close_run_log()
 
     def shutdown_fast(self) -> None:
         """
