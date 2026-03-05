@@ -14,21 +14,11 @@ rf_power.py — asyncio 기반 RF Power 컨트롤러
 
 from __future__ import annotations
 from dataclasses import dataclass
-from typing import Optional, Callable, Awaitable, AsyncGenerator, Literal
+from typing import Optional, Callable, Awaitable, AsyncGenerator, Literal, Any
 import asyncio
 import time
 
-from lib.config_ch2 import (
-    RF_MAX_POWER,
-    RF_RAMP_STEP,
-    RF_MAINTAIN_STEP,
-    RF_TOLERANCE_POWER,
-    DEBUG_PRINT,
-)
-
-# forward power 저출력 감시 파라미터
-RF_LOW_POWER_THRESH_W = 1.0   # 이 W 이하이면 '너무 낮다'로 판단
-RF_LOW_POWER_COUNT_MAX_N = 3  # 연속 허용 횟수
+from lib import config_common as _cfg_common  # ✅ "모듈"로 import (값 고정 방지)
 
 # ========= 이벤트 모델 =========
 EventKind = Literal[
@@ -56,79 +46,107 @@ class RFPowerAsync:
         send_rf_power: Callable[[float], Awaitable[None]],
         send_rf_power_unverified: Callable[[float], Awaitable[None]],
         request_status_read: Optional[Callable[[], Awaitable[object]]] = None,
-        toggle_enable: Optional[Callable[[bool], Awaitable[None]]] = None,  # ← 추가 (DCV_SET_1 토글용)
+        toggle_enable: Optional[Callable[[bool], Awaitable[None]]] = None,
         poll_interval_ms: int = 1000,
         rampdown_interval_ms: int = 50,
         initial_step_w: float = 1.0,
         reflected_threshold_w: float = 20.0,
         reflected_wait_timeout_s: float = 60.0,
         maintain_need_consecutive: int = 2,
-        direct_mode: bool = False,   # ★ 추가: 즉시 설정/즉시 OFF 모드
-        # 목표 fwd W → 장비 입력 W 로 바꿔주는 역변환(기본값=무보정)
+        direct_mode: bool = False,
         write_inv_a: float = 1.0,
         write_inv_b: float = 0.0,
+
+        # ✅ 추가: 채널 cfg 주입(없으면 config_common 사용)
+        cfg: Any | None = None,
     ):
-        """
-        send_rf_power:              검증 응답을 기대하는 전송 (예: AsyncFaduino.set_rf_power)
-        send_rf_power_unverified:   no-reply 전송 (예: AsyncFaduino.set_rf_power_unverified)
-        request_status_read:        (선택) 주기적 상태 읽기 트리거(예: AsyncFaduino.force_rf_read)
-        """
-        # 주입 콜백(필드명에 _cb를 붙여 메서드와 충돌 방지)
+        # ✅ cfg 모듈 보관 (config_ch2 같은 채널 모듈을 넣으면 거기 값 우선)
+        self._cfg_mod = cfg if cfg is not None else _cfg_common
+
+        # 주입 콜백
         self._send_rf_power_cb = send_rf_power
         self._send_rf_power_unverified_cb = send_rf_power_unverified
         self._request_status_read = request_status_read
-        self._toggle_enable = toggle_enable           # ← 추가
-        self._enabled = False                         # ← 추가 (SET 래치 상태 캐시)
+        self._toggle_enable = toggle_enable
+        self._enabled = False
 
-        self.debug_print = DEBUG_PRINT
+        # ----------------------------
+        # init 파라미터를 "기본값"으로 일단 세팅 (config가 있으면 reload에서 덮어씀)
+        # ----------------------------
+        self.debug_print = bool(getattr(self._cfg_mod, "DEBUG_PRINT", getattr(_cfg_common, "DEBUG_PRINT", False)))
 
-        # 파라미터
         self._poll_interval_ms = int(poll_interval_ms)
-        # ✅ 램프다운 슬립을 폴링 주기와 동일하게 강제 → up/down 1 W/s 일치
-        self._rampdown_interval_ms = int(self._poll_interval_ms)
+        self._rampdown_interval_ms = int(rampdown_interval_ms)  # (현재 로직상 결국 poll과 맞출 예정)
         self._initial_step_w = float(initial_step_w)
         self._ref_th_w = float(reflected_threshold_w)
         self._ref_wait_to_s = float(reflected_wait_timeout_s)
         self._maintain_need_consecutive = int(maintain_need_consecutive)
 
-        # 상태
-        self.state = "IDLE"  # "IDLE", "RAMPING_UP", "MAINTAINING", "REF_P_WAITING"
+        # ✅ RF 제어 파라미터 런타임 캐시(기본값은 config_common에서 읽고, 없으면 하드 폴백)
+        self._rf_max_power = float(getattr(self._cfg_mod, "RF_MAX_POWER", getattr(_cfg_common, "RF_MAX_POWER", 600)))
+        self._rf_ramp_step = float(getattr(self._cfg_mod, "RF_RAMP_STEP", getattr(_cfg_common, "RF_RAMP_STEP", 1.0)))
+        self._rf_maintain_step = float(getattr(self._cfg_mod, "RF_MAINTAIN_STEP", getattr(_cfg_common, "RF_MAINTAIN_STEP", 0.1)))
+        self._rf_tolerance_power = float(getattr(self._cfg_mod, "RF_TOLERANCE_POWER", getattr(_cfg_common, "RF_TOLERANCE_POWER", 1.0)))
+
+        self._rf_low_power_thresh_w = float(getattr(self._cfg_mod, "RF_LOW_POWER_THRESH_W", getattr(_cfg_common, "RF_LOW_POWER_THRESH_W", 1.0)))
+        self._rf_low_power_count_max_n = int(getattr(self._cfg_mod, "RF_LOW_POWER_COUNT_MAX_N", getattr(_cfg_common, "RF_LOW_POWER_COUNT_MAX_N", 3)))
+
+        # 상태/측정/목표
+        self.state = "IDLE"
         self.previous_state = "IDLE"
         self._is_running = False
         self._is_ramping_down = False
         self._ref_wait_start_ts: Optional[float] = None
 
-        # 측정/목표
         self.target_power = 0.0
         self.current_power_step = 0.0
         self.forward_w = 0.0
         self.reflected_w = 0.0
 
-        # 전송 상태
         self._last_sent_w: Optional[float] = None
         self._rampdown_w: float = 0.0
 
-        self._maintain_count = 0  # 유지 보정 시 연속 오차 카운터
-
-        # 저출력(Forward power 너무 낮음) 연속 카운터
+        self._maintain_count = 0
         self._low_power_n: int = 0
 
-        # 태스크/큐
         self._poll_task: Optional[asyncio.Task] = None
         self._rampdown_task: Optional[asyncio.Task] = None
         self._adjust_task: Optional[asyncio.Task] = None
         self._event_q: asyncio.Queue[RFPowerEvent] = asyncio.Queue(maxsize=512)
 
-        self._power_off_evt = asyncio.Event()   # ★ 추가: 완료 대기용 내부 Event
-
+        self._power_off_evt = asyncio.Event()
         self._polling_enabled = True
 
-        #ramp up 없이 direct
-        self._direct_mode = bool(direct_mode)  # ★ 추가
-                
-        # ▶ 쓰기(전송)용 역변환 계수 저장
+        self._direct_mode = bool(direct_mode)
         self._w_inv_a = float(write_inv_a)
         self._w_inv_b = float(write_inv_b)
+
+        # ✅ 마지막에 config 재로딩(=UI apply 대비)
+        self.reload_runtime_cfg()
+
+    def reload_runtime_cfg(self) -> None:
+        """
+        UI에서 config 값을 바꾼 뒤, 이 메서드를 호출하면 즉시 반영되도록.
+        - cfg(채널) → 없으면 config_common 폴백
+        """
+        mod = self._cfg_mod
+
+        # debug
+        self.debug_print = bool(getattr(mod, "DEBUG_PRINT", getattr(_cfg_common, "DEBUG_PRINT", self.debug_print)))
+
+        # RF 핵심 파라미터
+        self._rf_max_power = float(getattr(mod, "RF_MAX_POWER", getattr(_cfg_common, "RF_MAX_POWER", self._rf_max_power)))
+        self._rf_ramp_step = float(getattr(mod, "RF_RAMP_STEP", getattr(_cfg_common, "RF_RAMP_STEP", self._rf_ramp_step)))
+        self._rf_maintain_step = float(getattr(mod, "RF_MAINTAIN_STEP", getattr(_cfg_common, "RF_MAINTAIN_STEP", self._rf_maintain_step)))
+        self._rf_tolerance_power = float(getattr(mod, "RF_TOLERANCE_POWER", getattr(_cfg_common, "RF_TOLERANCE_POWER", self._rf_tolerance_power)))
+
+        # 저출력 감시
+        self._rf_low_power_thresh_w = float(getattr(mod, "RF_LOW_POWER_THRESH_W", getattr(_cfg_common, "RF_LOW_POWER_THRESH_W", self._rf_low_power_thresh_w)))
+        self._rf_low_power_count_max_n = int(getattr(mod, "RF_LOW_POWER_COUNT_MAX_N", getattr(_cfg_common, "RF_LOW_POWER_COUNT_MAX_N", self._rf_low_power_count_max_n)))
+
+        # (선택) poll/rampdown 등도 config로 빼고 싶으면 여기서 키를 추가로 읽으면 됨
+        # - 기존 의도대로 rampdown은 poll과 동일하게 강제 유지
+        self._rampdown_interval_ms = int(self._poll_interval_ms)
 
     @property
     def reflected_threshold_w(self) -> float:
@@ -150,7 +168,7 @@ class RFPowerAsync:
             await self._emit_status("경고: RF 파워가 이미 동작 중입니다.")
             return
 
-        self.target_power = float(max(0.0, min(RF_MAX_POWER, target_power)))
+        self.target_power = float(max(0.0, min(self._rf_max_power, target_power)))
         self.current_power_step = float(self._initial_step_w)
 
         # ★ 새 런 시작 시 '첫 WRITE 보장'을 위해 중복 억제 캐시 초기화
@@ -332,18 +350,18 @@ class RFPowerAsync:
         # 2) 저출력(forward power 너무 낮음) 감시
         #    - target_power > 0 인 런에서만 체크
         if self.target_power > 0.0:
-            if self.forward_w <= RF_LOW_POWER_THRESH_W:
+            if self.forward_w <= self._rf_low_power_thresh_w:
                 # 연속 저출력 카운트 증가
                 self._low_power_n += 1
                 self._ev_nowait(RFPowerEvent(
                     kind="status",
                     message=(
                         f"저출력 감지: Forward={self.forward_w:.1f}W "
-                        f"({self._low_power_n}/{RF_LOW_POWER_COUNT_MAX_N})"
+                        f"({self._low_power_n}/{self._rf_low_power_count_max_n})"
                     ),
                 ))
 
-                if self._low_power_n >= RF_LOW_POWER_COUNT_MAX_N:
+                if self._low_power_n >= self._rf_low_power_count_max_n:
                     # 3회(기본) 연속 저출력이면 실패 처리 + 정지
                     self._ev_nowait(RFPowerEvent(
                         kind="status",
@@ -352,7 +370,7 @@ class RFPowerAsync:
                     self._ev_nowait(RFPowerEvent(
                         kind="target_failed",
                         message=(
-                            f"Forward power <= {RF_LOW_POWER_THRESH_W:.1f}W "
+                            f"Forward power <= {self._rf_low_power_thresh_w:.1f}W "
                             f"{self._low_power_n}회 연속"
                         ),
                     ))
@@ -414,7 +432,7 @@ class RFPowerAsync:
 
     async def _rampdown_loop(self):
         try:
-            step_w = float(RF_RAMP_STEP)
+            step_w = float(self._rf_ramp_step)
             while self._is_ramping_down:
                 if self._rampdown_w <= 0.0:
                     # ★ 0W 전송 직전, 실제 전송값(보정 우회값)을 로그로 남김
@@ -470,7 +488,7 @@ class RFPowerAsync:
                 send_needed = False
 
                 # 허용 오차 내 → 유지 상태로 전환
-                if abs(diff) <= float(RF_TOLERANCE_POWER):
+                if abs(diff) <= float(self._rf_tolerance_power):
                     await self._emit_status(f"{self.target_power:.1f}W 도달. 파워 유지 시작")
                     self.state = "MAINTAINING"
                     # ⛔ 목표값 재전송하지 않음 — 직전에 forward를 만들어낸 setpoint를 그대로 유지
@@ -482,14 +500,16 @@ class RFPowerAsync:
                 # ▶ 스텝 계산 (상승/오버슈트 복귀)
                 if diff > 0:
                     # 목표보다 낮으면 계속 올림 (목표 초과 허용 → 실제 도달 유도)
-                    new_power = min(self.current_power_step + float(RF_RAMP_STEP),
-                                    float(RF_MAX_POWER))                      # ← target 클램프 제거
+                    new_power = min(
+                        self.current_power_step + float(self._rf_ramp_step),
+                        float(self._rf_max_power),
+                    )
                 else:
-                    new_power = max(0.0, self.current_power_step - float(RF_MAINTAIN_STEP))
+                    new_power = max(0.0, self.current_power_step - float(self._rf_maintain_step))
                     await self._emit_status("목표 파워 초과. 출력 하강 시도...")
 
                 # 범위 체크 + 실제 전송 여부 판단 (데드밴드 삭제, ε만 유지)
-                new_power = max(0.0, min(float(RF_MAX_POWER), float(new_power)))
+                new_power = max(0.0, min(float(self._rf_max_power), float(new_power)))
 
                 if (last_sent is None) or (abs(new_power - last_sent) > 1e-6):
                     await self._send_rf_power(float(new_power))
@@ -503,13 +523,13 @@ class RFPowerAsync:
                         f"Ramp-Up... 목표스텝:{self.current_power_step:.1f}W, 현재:{self.forward_w:.1f}W"
                     )
 
-                return # ★ 이번 호출은 램프업까지만. 유지 보정은 다음 측정 때.
+                return  # ★ 이번 호출은 램프업까지만. 유지 보정은 다음 측정 때.
 
             elif self.state == "MAINTAINING":
                 error = float(self.target_power) - float(self.forward_w)
 
                 # 허용 오차 내 → 보정 스킵
-                if abs(error) <= float(RF_TOLERANCE_POWER):
+                if abs(error) <= float(self._rf_tolerance_power):
                     self._maintain_count = 0
                     return
 
@@ -519,11 +539,11 @@ class RFPowerAsync:
                     return
                 self._maintain_count = 0
 
-                step = float(RF_MAINTAIN_STEP) if error > 0 else -float(RF_MAINTAIN_STEP)
+                step = float(self._rf_maintain_step) if error > 0 else -float(self._rf_maintain_step)
 
                 # ✅ 누적 기준을 항상 current_power_step으로
                 base = self.current_power_step
-                new_power = max(0.0, min(float(RF_MAX_POWER), float(base) + step))
+                new_power = max(0.0, min(float(self._rf_max_power), float(base) + step))
 
                 # ✅ 다음 루프에서도 누적되도록 항상 갱신
                 self.current_power_step = float(new_power)
@@ -545,7 +565,7 @@ class RFPowerAsync:
         """
         장치에 W 단위로 전송(검증 응답 기대). 클램프/중복 억제 포함.
         """
-        power_w = max(0.0, min(RF_MAX_POWER, float(power_w)))
+        power_w = max(0.0, min(self._rf_max_power, float(power_w)))
         if self._last_sent_w is not None and abs(power_w - self._last_sent_w) < 1e-6:
             return
         
@@ -562,7 +582,7 @@ class RFPowerAsync:
         """
         no-reply 전송 경로(램프다운 등). 실패는 status로만 보고.
         """
-        power_w = max(0.0, min(RF_MAX_POWER, float(power_w)))
+        power_w = max(0.0, min(self._rf_max_power, float(power_w)))
         scaled = self._xform_write(power_w)
         try:
             await self._send_rf_power_unverified_cb(scaled)  # ← 보정된 값으로 전송
@@ -575,7 +595,7 @@ class RFPowerAsync:
         if desired_forward_w <= 0.01:
             return 0.0
         v = self._w_inv_a * float(desired_forward_w) + self._w_inv_b
-        return max(0.0, min(float(RF_MAX_POWER), v))
+        return max(0.0, min(float(self._rf_max_power), v))
     
     async def wait_power_off(self, timeout_s: float = 8.0) -> bool:
         try:

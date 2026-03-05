@@ -109,6 +109,11 @@ RF_MAX_POWER = 600
 RF_RAMP_STEP = 1.0
 RF_MAINTAIN_STEP = 0.1
 RF_TOLERANCE_POWER = 1
+
+# forward power 저출력 감시 파라미터 (UI에서 조정 가능)
+RF_LOW_POWER_THRESH_W = 1.0      # 이 W 이하이면 '너무 낮다'로 판단
+RF_LOW_POWER_COUNT_MAX_N = 3     # 연속 허용 횟수
+
 # 보정계수
 RF_PARAM_WATT_TO_DAC = 6.79
 RF_OFFSET_WATT_TO_DAC = 6.93
