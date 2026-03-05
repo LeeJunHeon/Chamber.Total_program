@@ -338,19 +338,31 @@ class PlasmaCleaningRuntime:
                     self.append_log("PC", "PLC 핸드셰이크(read_coil 0)")
                 else:
                     fn = getattr(dev, "connect", None)
-                    if not callable(fn):
-                        raise RuntimeError(f"{name}는 connect()를 제공해야 합니다 (start() 금지)")
 
-                    # ✅ connect가 async면 wait_for로, sync면 to_thread로 이벤트루프 프리징 방지
-                    try:
-                        if inspect.iscoroutinefunction(fn):
-                            await asyncio.wait_for(fn(), timeout=3.0)
-                        else:
-                            await asyncio.wait_for(asyncio.to_thread(fn), timeout=3.0)
-                    except asyncio.TimeoutError:
-                        raise RuntimeError(f"{name} connect timeout(3s)")
+                    # ✅ 1) connect() 우선
+                    if callable(fn):
+                        try:
+                            if inspect.iscoroutinefunction(fn):
+                                await asyncio.wait_for(fn(), timeout=3.0)
+                            else:
+                                await asyncio.wait_for(asyncio.to_thread(fn), timeout=3.0)
+                        except asyncio.TimeoutError:
+                            raise RuntimeError(f"{name} connect timeout(3s)")
+                        self.append_log("PC", f"{name} connect 호출")
+                    else:
+                        # ✅ 2) connect()가 없으면 start()로 폴백 (장비 구현 차이 흡수)
+                        st = getattr(dev, "start", None)
+                        if not callable(st):
+                            raise RuntimeError(f"{name}는 connect() 또는 start() 중 하나를 제공해야 합니다")
+                        try:
+                            if inspect.iscoroutinefunction(st):
+                                await asyncio.wait_for(st(), timeout=3.0)
+                            else:
+                                await asyncio.wait_for(asyncio.to_thread(st), timeout=3.0)
+                        except asyncio.TimeoutError:
+                            raise RuntimeError(f"{name} start timeout(3s)")
+                        self.append_log("PC", f"{name} start 호출")
 
-                    self.append_log("PC", f"{name} connect 호출")
             except Exception as e:
                 raise RuntimeError(f"{name} 연결 실패: {e!r}")
 
@@ -814,6 +826,7 @@ class PlasmaCleaningRuntime:
             direct_mode=True, # ★ Plasma Cleaning에서는 DC처럼 즉시 ON/OFF
             write_inv_a=1.74,      # ← 보정 스케일 적용
             write_inv_b=0.0,      # ← 오프셋(기본 0)
+            cfg=getattr(self, "_cfg_mod", None),  # ✅ (있으면) cfg 주입
         )
 
     # =========================
@@ -2211,6 +2224,22 @@ class PlasmaCleaningRuntime:
         dlg.finished.connect(_done)
         dlg.open()
         return await fut
+    
+    def reload_runtime_cfg(self) -> None:
+        """
+        ConfigDialog Apply(Runtime) 이후 main에서 호출 가능.
+        - PCParams는 _read_params_from_ui에서 매번 읽으므로 여기서는 장비 캐시만 갱신
+        """
+        # RFPowerAsync 캐시 갱신
+        with contextlib.suppress(Exception):
+            if self.rf and hasattr(self.rf, "reload_runtime_cfg"):
+                self.rf.reload_runtime_cfg()
+
+        # MFC/IG 캐시 갱신
+        for dev in (self.mfc_gas, self.mfc_pressure, self.ig):
+            with contextlib.suppress(Exception):
+                if dev and hasattr(dev, "reload_runtime_cfg"):
+                    dev.reload_runtime_cfg()
     
     # ======= 서버 통신을 통한 실행 api =======
     async def start_with_recipe_string(self, recipe: str) -> None:
