@@ -167,16 +167,7 @@ class MainWindow(QWidget):
         # ▼ 추가: 텍스트 에디트에서 Tab을 '다음 칸 이동'으로 동작시키기
         self._enable_tab_moves_focus()
 
-        # ▼ TSP 기본값(UI에 채워 넣기)
-        self.ui.TSP_targetPressure_edit.setPlainText("2.5e-7")
-        self.ui.TSP_setCycle_edit.setPlainText("10")
-
-        # ▼ Plasma Cleaning 기본값(UI에 채워 넣기)
-        self.ui.PC_targetPressure_edit.setPlainText("5e-6")  # Target Pressure
-        self.ui.PC_gasFlow_edit.setPlainText("30")           # Gas Flow (sccm)
-        self.ui.PC_workingPressure_edit.setPlainText("30")   # Working Pressure (mTorr)
-        self.ui.PC_rfPower_edit.setPlainText("55")           # RF Power (W)
-        self.ui.PC_ProcessTime_edit.setPlainText("0.25")     # Process Time (분)
+        self._apply_ui_defaults_from_config(overwrite=False)
 
         # --- 스택 및 페이지 매핑 (UI 객체명 고정)
         self._stack: QStackedWidget = self.ui.stackedWidget
@@ -275,28 +266,49 @@ class MainWindow(QWidget):
         scale1 = getattr(config_ch1, "MFC_SCALE_FACTORS", getattr(cfgc, "MFC_SCALE_FACTORS", {1: 1.0, 2: 1.0, 3: 10.0}))
         scale2 = getattr(config_ch2, "MFC_SCALE_FACTORS", getattr(cfgc, "MFC_SCALE_FACTORS", {1: 1.0, 2: 10.0, 3: 2.0}))
 
-        self.mfc1: AsyncMFC = AsyncMFC(
+        def _new_mfc(**kwargs):
+            try:
+                return AsyncMFC(**kwargs)
+            except TypeError:
+                # cfg를 아직 지원 안 하는 버전이어도 기존처럼 동작하게 폴백
+                kwargs.pop("cfg", None)
+                return AsyncMFC(**kwargs)
+
+        def _new_ig(**kwargs):
+            try:
+                return AsyncIG(**kwargs)
+            except TypeError:
+                kwargs.pop("cfg", None)
+                return AsyncIG(**kwargs)
+
+        self.mfc1: AsyncMFC = _new_mfc(
             host=getattr(config_ch1, "MFC_TCP_HOST", getattr(cfgc, "MFC_TCP_HOST", "192.168.1.50")),
             port=getattr(config_ch1, "MFC_TCP_PORT", 4003),
             enable_verify=False,
             enable_stabilization=True,
             scale_factors=scale1,
+            cfg=config_ch1,   # ✅ 추가
         )
-        self.mfc2: AsyncMFC = AsyncMFC(
+
+        self.mfc2: AsyncMFC = _new_mfc(
             host=getattr(config_ch2, "MFC_TCP_HOST", getattr(cfgc, "MFC_TCP_HOST", "192.168.1.50")),
             port=getattr(config_ch2, "MFC_TCP_PORT", 4006),
             enable_verify=False,
             enable_stabilization=True,
             scale_factors=scale2,
+            cfg=config_ch2,   # ✅ 추가
         )
 
-        self.ig1: AsyncIG = AsyncIG(
+        self.ig1: AsyncIG = _new_ig(
             host=getattr(config_ch1, "IG_TCP_HOST", getattr(cfgc, "IG_TCP_HOST", "192.168.1.50")),
             port=getattr(config_ch1, "IG_TCP_PORT", 4001),
+            cfg=config_ch1,   # ✅ 추가
         )
-        self.ig2: AsyncIG = AsyncIG(
+
+        self.ig2: AsyncIG = _new_ig(
             host=getattr(config_ch2, "IG_TCP_HOST", getattr(cfgc, "IG_TCP_HOST", "192.168.1.50")),
             port=getattr(config_ch2, "IG_TCP_PORT", 4002),
+            cfg=config_ch2,   # ✅ 추가
         )
 
         # Plasma Cleaning에서 선택된 챔버 추적(기본 CH1)
@@ -387,11 +399,12 @@ class MainWindow(QWidget):
                 pass
 
         # === TSP 런타임 생성 ===
+        tsp_addr = getattr(cfgc, "TSP_RS232_ADDR", getattr(cfgc, "TSP_ADDR", 0x80))
         self.tsp_ctrl = TSPPageController(
             ui=self.ui,
             host=cfgc.TSP_TCP_HOST,
             tcp_port=cfgc.TSP_TCP_PORT,
-            addr=cfgc.TSP_ADDR,
+            addr=int(tsp_addr),
             loop=self._loop,
             chat=self.chat_tsp,     # TSP 전용 Notifier 주입
             log_dir=self._log_root, # ★ NAS 로그 루트 전달 (CH/PC와 동일)
@@ -776,6 +789,156 @@ class MainWindow(QWidget):
             dlg.open()
         except Exception as e:
             QMessageBox.warning(self, "Config", f"ConfigDialog 실행 실패: {e!r}")
+
+    def on_config_applied(self) -> None:
+        """
+        ConfigDialog Apply(Runtime) 직후 호출됨.
+        - 실행 중이면 reconnect는 피하고, 가능한 범위에서 reload만 수행
+        - 실행 중이 아니면 endpoint 변경까지 반영(가능한 장비만)
+        """
+        # 1) UI 기본값도 config로 다시 채우기(원하면)
+        try:
+            self._apply_ui_defaults_from_config(overwrite=False)
+        except Exception:
+            pass
+
+        # 2) 비동기 장비 리로드는 loop로 넘김
+        try:
+            self._loop.create_task(self._apply_config_to_devices_async())
+        except Exception:
+            pass
+
+    def _is_any_runtime_running(self) -> bool:
+        # runtime_state에 any_running이 있으면 그걸 최우선 사용
+        with contextlib.suppress(Exception):
+            fn = getattr(runtime_state, "any_running", None)
+            if callable(fn):
+                return bool(fn())
+
+        # snapshot 기반(키 이름이 프로젝트마다 달라서 최대한 방어)
+        with contextlib.suppress(Exception):
+            snap = runtime_state.snapshot()
+            if isinstance(snap, dict):
+                for k in ("any_running", "running", "is_running"):
+                    if k in snap:
+                        return bool(snap[k])
+
+        # fallback: 각 런타임의 running 플래그를 보수적으로 검사
+        def _rt_running(rt) -> bool:
+            if not rt:
+                return False
+            ir = getattr(rt, "is_running", None)
+            if isinstance(ir, bool):
+                return ir
+            if callable(ir):
+                with contextlib.suppress(Exception):
+                    return bool(ir())
+            return bool(getattr(rt, "_running", False))
+
+        return _rt_running(getattr(self, "pc", None)) or _rt_running(getattr(self, "ch1", None)) or _rt_running(getattr(self, "ch2", None))
+
+    async def _apply_config_to_devices_async(self) -> None:
+        running = self._is_any_runtime_running()
+
+        # (A) PLC: 실행 중이면 reconnect는 피함(공정 안정 우선)
+        with contextlib.suppress(Exception):
+            if not running and hasattr(self.plc, "set_endpoint_reconnect"):
+                await self.plc.set_endpoint_reconnect(cfgc.PLC_TCP_HOST, int(cfgc.PLC_TCP_PORT))
+            elif not running and hasattr(self.plc, "set_endpoint"):
+                await self.plc.set_endpoint(cfgc.PLC_TCP_HOST, int(cfgc.PLC_TCP_PORT), reconnect=True)
+
+        # (B) IG/MFC: reload_runtime_cfg가 있으면 우선 호출
+        for dev in (getattr(self, "ig1", None), getattr(self, "ig2", None),
+                    getattr(self, "mfc1", None), getattr(self, "mfc2", None)):
+            with contextlib.suppress(Exception):
+                if dev and hasattr(dev, "reload_runtime_cfg"):
+                    dev.reload_runtime_cfg()
+
+        # endpoint 변경은 “안전할 때만”
+        if not running:
+            # IG endpoint
+            for ig, cfgm in ((getattr(self, "ig1", None), config_ch1), (getattr(self, "ig2", None), config_ch2)):
+                if not ig:
+                    continue
+                host = getattr(cfgm, "IG_TCP_HOST", getattr(cfgc, "IG_TCP_HOST", None))
+                port = getattr(cfgm, "IG_TCP_PORT", None)
+                with contextlib.suppress(Exception):
+                    if hasattr(ig, "set_endpoint_reconnect"):
+                        await ig.set_endpoint_reconnect(str(host), int(port))
+                    elif hasattr(ig, "set_endpoint"):
+                        try:
+                            ig.set_endpoint(str(host), int(port), reconnect=True)
+                        except TypeError:
+                            ig.set_endpoint(str(host), int(port))
+
+            # MFC endpoint
+            for mfc, cfgm in ((getattr(self, "mfc1", None), config_ch1), (getattr(self, "mfc2", None), config_ch2)):
+                if not mfc:
+                    continue
+                host = getattr(cfgm, "MFC_TCP_HOST", getattr(cfgc, "MFC_TCP_HOST", None))
+                port = getattr(cfgm, "MFC_TCP_PORT", None)
+                with contextlib.suppress(Exception):
+                    if hasattr(mfc, "set_endpoint_reconnect"):
+                        await mfc.set_endpoint_reconnect(str(host), int(port))
+                    elif hasattr(mfc, "set_endpoint"):
+                        mfc.set_endpoint(str(host), int(port), reconnect=True)
+
+        # (C) ChamberRuntime 내부 장비들 reload (있으면)
+        for rt in (getattr(self, "ch1", None), getattr(self, "ch2", None)):
+            if not rt:
+                continue
+            for name in ("dc_pulse", "rf_pulse", "dc_power", "rf_power"):
+                dev = getattr(rt, name, None)
+                with contextlib.suppress(Exception):
+                    if dev and hasattr(dev, "reload_runtime_cfg"):
+                        dev.reload_runtime_cfg()
+
+        # (D) PC 런타임도 내부적으로 config를 다시 읽을 수 있으면 호출
+        pc = getattr(self, "pc", None)
+        with contextlib.suppress(Exception):
+            if pc and hasattr(pc, "reload_runtime_cfg"):
+                pc.reload_runtime_cfg()
+
+        # (E) TSP 컨트롤러 (가능한 API만 안전 호출)
+        tsp = getattr(self, "tsp_ctrl", None)
+        with contextlib.suppress(Exception):
+            if tsp and hasattr(tsp, "reload_runtime_cfg"):
+                tsp.reload_runtime_cfg()
+            elif tsp and hasattr(tsp, "set_endpoint"):
+                # addr는 RS232 키가 있으면 우선 사용
+                addr = getattr(cfgc, "TSP_RS232_ADDR", getattr(cfgc, "TSP_ADDR", 0x80))
+                tsp.set_endpoint(cfgc.TSP_TCP_HOST, int(cfgc.TSP_TCP_PORT), int(addr))
+
+    def _apply_ui_defaults_from_config(self, *, overwrite: bool) -> None:
+        """
+        overwrite=False: 사용자가 UI에 이미 뭔가 입력해 둔 경우 덮어쓰지 않음(안전)
+        overwrite=True : config 값으로 강제로 UI를 갱신
+        """
+        # TSP: config_common 기반
+        def _set_plain(w, value: str) -> None:
+            if not w:
+                return
+            if (not overwrite) and w.toPlainText().strip():
+                return
+            w.setPlainText(str(value))
+
+        _set_plain(getattr(self.ui, "TSP_targetPressure_edit", None), getattr(cfgc, "TSP_UI_DEFAULT_TARGET", "2.5e-7"))
+        _set_plain(getattr(self.ui, "TSP_setCycle_edit", None), getattr(cfgc, "TSP_UI_DEFAULT_CYCLES", "10"))
+
+        # Plasma Cleaning: user_config.json(plasma_cleaning) 기반
+        try:
+            from lib import user_config
+            pc_cfg = (user_config.load() or {}).get("plasma_cleaning", {}) or {}
+            if not isinstance(pc_cfg, dict):
+                pc_cfg = {}
+        except Exception:
+            pc_cfg = {}
+
+        _set_plain(getattr(self.ui, "PC_targetPressure_edit", None), pc_cfg.get("target_pressure", "5e-6"))
+        _set_plain(getattr(self.ui, "PC_gasFlow_edit", None), pc_cfg.get("gas_flow_sccm", "30"))
+        _set_plain(getattr(self.ui, "PC_workingPressure_edit", None), pc_cfg.get("sp4_setpoint_mTorr", "30"))
+        _set_plain(getattr(self.ui, "PC_rfPower_edit", None), pc_cfg.get("rf_power_w", "55"))
+        _set_plain(getattr(self.ui, "PC_ProcessTime_edit", None), pc_cfg.get("process_time_min", "0.25"))
 
     def _on_runtime_dump_clicked(self) -> None:
         """
