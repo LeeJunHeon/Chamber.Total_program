@@ -110,6 +110,7 @@ class ActionType(str, Enum):
     DC_PULSE_SET   = "DC_PULSE_SET"   # ✅ 추가: 출력 ON 유지 + setpoint 변경
     DC_PULSE_STOP  = "DC_PULSE_STOP"
     RF_PULSE_START = "RF_PULSE_START"
+    RF_PULSE_SET   = "RF_PULSE_SET"   # ✅ 추가: 출력 ON 유지 + setpoint 변경
     RF_PULSE_STOP  = "RF_PULSE_STOP"
 
 
@@ -130,7 +131,7 @@ class ProcessStep:
                 raise ValueError("DELAY 액션은 duration이 필요합니다.")
             if self.parallel:
                 raise ValueError("DELAY는 병렬 블록에 포함할 수 없습니다.")
-        if self.action in (ActionType.DC_POWER_SET, ActionType.RF_POWER_SET, ActionType.IG_CMD, ActionType.DC_PULSE_SET):
+        if self.action in (ActionType.DC_POWER_SET, ActionType.RF_POWER_SET, ActionType.IG_CMD, ActionType.DC_PULSE_SET, ActionType.RF_PULSE_SET):
             if self.value is None:
                 raise ValueError(f"{self.action.name} 액션은 value가 필요합니다.")
         if self.action == ActionType.PLC_CMD:
@@ -199,6 +200,7 @@ class ProcessController:
         set_dc_pulse_power: Optional[Callable[[float], None]] = None,   # ✅ 추가
         start_rf_pulse: Callable[[float, Optional[int], Optional[int]], None],
         stop_rf_pulse: Callable[[], None],
+        set_rf_pulse_power: Optional[Callable[[float], None]] = None,   # ✅ 추가: RF setpoint 변경
 
         ig_wait: Callable[[float], None],
         cancel_ig: Callable[[], None],
@@ -223,6 +225,7 @@ class ProcessController:
         self._set_dc_pulse_power = set_dc_pulse_power   # ✅ 추가
         self._start_rf_pulse = start_rf_pulse
         self._stop_rf_pulse  = stop_rf_pulse
+        self._set_rf_pulse_power = set_rf_pulse_power   # ✅ 추가
         self._ig_wait = ig_wait
         self._cancel_ig = cancel_ig
         self._rga_scan = rga_scan
@@ -774,6 +777,16 @@ class ProcessController:
             self._start_rf_pulse(power, freq, duty)
             tokens.append(ExpectToken("RF_TARGET"))
 
+        elif a == ActionType.RF_PULSE_SET:
+            # Output ON 상태에서 setpoint(REF_POWER)만 변경
+            power = float(step.value or 0.0)
+            if not self._set_rf_pulse_power:
+                raise RuntimeError("RF_PULSE_SET을 사용하려면 set_rf_pulse_power 콜백이 주입되어야 합니다.")
+            self._set_rf_pulse_power(power)
+
+            # 토큰은 '대기'가 아니라 실패 귀속을 위해 등록만 (스텝 생성 시 no_wait=True)
+            tokens.append(ExpectToken("RF_TARGET"))
+
         elif a == ActionType.RF_PULSE_STOP:
             self._stop_rf_pulse()
             tokens.append(ExpectToken("RFPULSE_OFF"))
@@ -1223,13 +1236,43 @@ class ProcessController:
             and self._set_dc_pulse_power is not None
         )
 
-        # (선택) 둘 중 하나만 적었거나 범위가 이상하면 경고만 1회 출력(공정은 기존처럼 진행)
+        do_mid_rf_pulse_change = (
+            use_rf_pulse
+            and raw_change_time != ""
+            and raw_change_power != ""
+            and change_power_value > 0.0
+            and 0.0 < change_time_sec < total_window_sec
+            and self._set_rf_pulse_power is not None
+        )
+
+        # 둘 다 켜진 경우는 설계상 애매하니(동일 컬럼 공유) 우선순위 명시
+        if do_mid_dc_pulse_change and do_mid_rf_pulse_change:
+            self._emit_log("Process", "⚠ Pulse 중간 Power 변경: DC/RF Pulse가 동시에 활성 → DC 우선, RF는 무시")
+            do_mid_rf_pulse_change = False
+
+        do_mid_pulse_change = (do_mid_dc_pulse_change or do_mid_rf_pulse_change)
+        pulse_set_action = (
+            ActionType.DC_PULSE_SET if do_mid_dc_pulse_change else
+            ActionType.RF_PULSE_SET if do_mid_rf_pulse_change else
+            None
+        )
+        pulse_set_label = "DC Pulse" if do_mid_dc_pulse_change else ("RF Pulse" if do_mid_rf_pulse_change else "Pulse")
+
+        # 경고 로그(DC/RF 각각)
         if use_dc_pulse and (raw_change_time != "" or raw_change_power != "") and not do_mid_dc_pulse_change:
             self._emit_log(
                 "Process",
                 f"⚠ DC Pulse 중간 Power 변경 무시: power_change_time='{raw_change_time}', "
                 f"change_power_value='{raw_change_power}', window={total_window_sec:.1f}s, "
                 f"callback={'OK' if self._set_dc_pulse_power else 'MISSING'}"
+            )
+
+        if use_rf_pulse and (raw_change_time != "" or raw_change_power != "") and not do_mid_rf_pulse_change:
+            self._emit_log(
+                "Process",
+                f"⚠ RF Pulse 중간 Power 변경 무시: power_change_time='{raw_change_time}', "
+                f"change_power_value='{raw_change_power}', window={total_window_sec:.1f}s, "
+                f"callback={'OK' if self._set_rf_pulse_power else 'MISSING'}"
             )
 
         steps: List[ProcessStep] = []
@@ -1482,7 +1525,7 @@ class ProcessController:
         # --- Shutter Delay ---
         if shutter_delay_sec > 0:
             # 변경 시점이 Shutter Delay 안이면: Delay를 2개로 쪼개고 가운데 Power 변경
-            if do_mid_dc_pulse_change and change_time_sec < shutter_delay_sec:
+            if do_mid_pulse_change  and change_time_sec < shutter_delay_sec:
                 part1 = float(change_time_sec)
                 part2 = float(shutter_delay_sec - change_time_sec)
 
@@ -1495,9 +1538,9 @@ class ProcessController:
                     ))
 
                 steps.append(ProcessStep(
-                    action=ActionType.DC_PULSE_SET,
+                    action=pulse_set_action,
                     value=float(change_power_value),
-                    message=f'DC Pulse Power 변경 → {change_power_value}W (t={change_time_sec:.1f}s, ShutterDelay)',
+                    message=f'{pulse_set_label} Power 변경 → {change_power_value}W (t={change_time_sec:.1f}s, ShutterDelay)',
                     polling=False,
                     no_wait=True,
                 ))
@@ -1550,10 +1593,10 @@ class ProcessController:
                     ))
 
                 steps.append(ProcessStep(
-                    action=ActionType.DC_PULSE_SET,
+                    action=pulse_set_action,
                     value=float(change_power_value),
-                    message=f'DC Pulse Power 변경 → {change_power_value}W (t={change_time_sec:.1f}s, Main)',
-                    polling=True,   # ✅ 메인 공정 중 polling 유지(중요)
+                    message=f'{pulse_set_label} Power 변경 → {change_power_value}W (t={change_time_sec:.1f}s, Main)',
+                    polling=True,   # 메인 공정 중 polling 유지
                     no_wait=True,
                 ))
 
@@ -1817,7 +1860,7 @@ class ProcessController:
                 n = i + 1
                 if step.action == ActionType.DELAY and step.duration is None:
                     errors.append(f"Step {n}: DELAY 액션에 duration이 없습니다.")
-                if step.action in [ActionType.DC_POWER_SET, ActionType.RF_POWER_SET, ActionType.IG_CMD, ActionType.DC_PULSE_SET]:
+                if step.action in [ActionType.DC_POWER_SET, ActionType.RF_POWER_SET, ActionType.IG_CMD, ActionType.DC_PULSE_SET, ActionType.RF_PULSE_SET]:
                     if step.value is None:
                         errors.append(f"Step {n}: {step.action.name} 액션에 value가 없습니다.")
                 if step.action == ActionType.DC_PULSE_START:
