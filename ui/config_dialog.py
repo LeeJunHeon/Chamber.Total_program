@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import contextlib
 from typing import Any, Dict, Tuple
 
 from PySide6.QtCore import Qt
@@ -33,8 +34,9 @@ def _json_one_line(v: Any) -> str:
 def _parse_value(text: str, original: Any) -> Tuple[bool, Any, str]:
     s = (text or "").strip()
 
-    if s == "" and original is None:
-        return True, None, ""
+    # ✅ 빈칸은 "기본값(original)로 되돌리기"로 처리 (입력 편의)
+    if s == "":
+        return True, original, ""
 
     if isinstance(original, bool):
         sl = s.lower()
@@ -330,6 +332,14 @@ class ConfigDialog(QDialog):
 
         self._cfg = merged
         self._refresh()
+
+        # ✅ Apply(Runtime) 후, 메인(부모)에게 런타임 리로드 요청
+        # main.py 쪽에 on_config_applied()만 만들어두면
+        # 장비 reload_runtime_cfg()/endpoint 갱신 등을 한 번에 처리 가능
+        with contextlib.suppress(Exception):
+            p = self.parent()
+            if p is not None and hasattr(p, "on_config_applied"):
+                p.on_config_applied()
 
         QMessageBox.information(
             self,
