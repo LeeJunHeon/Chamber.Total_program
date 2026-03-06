@@ -1464,7 +1464,7 @@ class ProcessController:
         if rf_pulse_duty is not None:
             rf_pulse_duty = int(rf_pulse_duty)
 
-        if use_rf_pulse:
+        if use_rf_pulse and self._ch == 2:
             # ✅ UI 옵션 없이: RF Pulse를 쓰면 자동으로 POWER_SELECT ON
             steps.append(ProcessStep(
                 action=ActionType.PLC_CMD,
@@ -1683,12 +1683,13 @@ class ProcessController:
                 message='RF Pulse Off'
             ))
 
-            # ✅ 경로 원복: POWER_SELECT OFF
-            steps.append(ProcessStep(
-                action=ActionType.PLC_CMD,
-                params=("SW_POWER_SELECT", False),
-                message="Power Select OFF (SW_POWER_SELECT)"
-            ))
+            # ✅ CH2에서 RF Pulse를 쓴 경우에만 POWER_SELECT OFF
+            if self._ch == 2:
+                steps.append(ProcessStep(
+                    action=ActionType.PLC_CMD,
+                    params=("SW_POWER_SELECT", False),
+                    message="Power Select OFF (SW_POWER_SELECT)"
+                ))
 
         use_any = any(params.get(k, False) for k in ("use_ar", "use_o2", "use_n2"))
 
@@ -1774,13 +1775,14 @@ class ProcessController:
                 parallel=both, no_wait=True
             ))
             
-            # ✅ 경로 원복: POWER_SELECT 즉시 OFF
-            steps.append(ProcessStep(
-                action=ActionType.PLC_CMD,
-                params=("SW_POWER_SELECT", False),
-                message='[긴급] Power Select 즉시 OFF',
-                no_wait=True
-            ))
+            # ✅ CH2에서 RF Pulse를 쓴 경우에만 POWER_SELECT 즉시 OFF
+            if self._ch == 2:
+                steps.append(ProcessStep(
+                    action=ActionType.PLC_CMD,
+                    params=("SW_POWER_SELECT", False),
+                    message='[긴급] Power Select 즉시 OFF',
+                    no_wait=True
+                ))
 
         if use_dc_pulse:
             steps.append(ProcessStep(
