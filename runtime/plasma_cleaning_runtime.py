@@ -320,56 +320,62 @@ class PlasmaCleaningRuntime:
         except Exception:
             return False
 
-    async def _preflight_connect(self, timeout_s: float = 10.0) -> None:
-        """공정 시작 전 장비 연결 보장. 모두 연결되면 리턴, 아니면 예외."""
+    async def _preflight_connect(self, timeout_s: float | None = None) -> None:
+        cfgm = getattr(self, "_cfg_mod", cfgc)
+
+        if timeout_s is None:
+            timeout_s = float(getattr(cfgm, "PC_PREFLIGHT_TIMEOUT_S", 10.0))
+
+        plc_handshake_timeout_s = float(getattr(cfgm, "PC_PREFLIGHT_PLC_HANDSHAKE_TIMEOUT_S", 1.0))
+        device_connect_timeout_s = float(getattr(cfgm, "PC_PREFLIGHT_DEVICE_CONNECT_TIMEOUT_S", 3.0))
+        connect_poll_interval_s = float(getattr(cfgm, "PC_PREFLIGHT_CONNECT_POLL_INTERVAL_S", 0.5))
+
         self.append_log("PC", "프리플라이트: 장비 연결 확인/시작")
         need: list[tuple[str, object]] = []
-        if self.plc:      need.append(("PLC", self.plc))
-        if self.mfc_gas:  need.append(("MFC(GAS)", self.mfc_gas))
-        if self.mfc_pressure:  need.append(("MFC(SP4)", self.mfc_pressure))
-        if self.ig:       need.append(("IG", self.ig))
+        if self.plc:
+            need.append(("PLC", self.plc))
+        if self.mfc_gas:
+            need.append(("MFC(GAS)", self.mfc_gas))
+        if self.mfc_pressure:
+            need.append(("MFC(SP4)", self.mfc_pressure))
+        if self.ig:
+            need.append(("IG", self.ig))
 
-        # 1) 미연결이면 start/connect(or PLC 핸드셰이크) 시도
         for name, dev in need:
             if self._is_dev_connected(dev):
                 self.append_log("PC", f"{name} 이미 연결됨")
                 continue
             try:
                 if name == "PLC":
-                    # ✅ PLC read가 멈추는 상황 방지
-                    await asyncio.wait_for(dev.read_coil(0), timeout=1.0)
+                    await asyncio.wait_for(dev.read_coil(0), timeout=plc_handshake_timeout_s)
                     self.append_log("PC", "PLC 핸드셰이크(read_coil 0)")
                 else:
                     fn = getattr(dev, "connect", None)
 
-                    # ✅ 1) connect() 우선
                     if callable(fn):
                         try:
                             if inspect.iscoroutinefunction(fn):
-                                await asyncio.wait_for(fn(), timeout=3.0)
+                                await asyncio.wait_for(fn(), timeout=device_connect_timeout_s)
                             else:
-                                await asyncio.wait_for(asyncio.to_thread(fn), timeout=3.0)
+                                await asyncio.wait_for(asyncio.to_thread(fn), timeout=device_connect_timeout_s)
                         except asyncio.TimeoutError:
-                            raise RuntimeError(f"{name} connect timeout(3s)")
+                            raise RuntimeError(f"{name} connect timeout({device_connect_timeout_s:.1f}s)")
                         self.append_log("PC", f"{name} connect 호출")
                     else:
-                        # ✅ 2) connect()가 없으면 start()로 폴백 (장비 구현 차이 흡수)
                         st = getattr(dev, "start", None)
                         if not callable(st):
                             raise RuntimeError(f"{name}는 connect() 또는 start() 중 하나를 제공해야 합니다")
                         try:
                             if inspect.iscoroutinefunction(st):
-                                await asyncio.wait_for(st(), timeout=3.0)
+                                await asyncio.wait_for(st(), timeout=device_connect_timeout_s)
                             else:
-                                await asyncio.wait_for(asyncio.to_thread(st), timeout=3.0)
+                                await asyncio.wait_for(asyncio.to_thread(st), timeout=device_connect_timeout_s)
                         except asyncio.TimeoutError:
-                            raise RuntimeError(f"{name} start timeout(3s)")
+                            raise RuntimeError(f"{name} start timeout({device_connect_timeout_s:.1f}s)")
                         self.append_log("PC", f"{name} start 호출")
-
             except Exception as e:
                 raise RuntimeError(f"{name} 연결 실패: {e!r}")
 
-        # 2) 타임아웃 내 모두 연결되었는지 대기
         t0 = time.monotonic()
         while True:
             missing = [n for n, d in need if not self._is_dev_connected(d)]
@@ -377,50 +383,7 @@ class PlasmaCleaningRuntime:
                 break
             if (time.monotonic() - t0) >= float(timeout_s):
                 raise RuntimeError(f"장비 연결 타임아웃: {', '.join(missing)}")
-            await asyncio.sleep(0.5)
-
-        # 3) 이벤트 펌프 기동 (중복 방지)
-        if not hasattr(self, "_event_tasks"):
-            self._event_tasks = []
-
-        # ★ 취소/종료된 태스크는 리스트에서 제거 (좀비 방지)
-        _alive = []
-        for t in self._event_tasks:
-            try:
-                if t and (not t.cancelled()) and (not t.done()):
-                    _alive.append(t)
-            except Exception:
-                pass
-        self._event_tasks = _alive
-
-        def _has_task(name: str) -> bool:
-            # ★ 살아있는 태스크만 대상으로 이름 비교
-            return any((getattr(t, "get_name", lambda: "")() == name) for t in self._event_tasks)
-
-        if self.rf and not _has_task("PC.Pump.RF"):
-            self._event_tasks.append(asyncio.create_task(self._pump_rf_events(), name="PC.Pump.RF"))
-
-        # 같은 MFC 인스턴스를 가리키면 펌프는 '하나만' 띄운다
-        if self.mfc_gas is self.mfc_pressure:
-            if self.mfc_gas and not _has_task("PC.Pump.MFC.COMBINED"):
-                sel = f"CH{self._selected_ch}"
-                self._event_tasks.append(asyncio.create_task(
-                    self._pump_mfc_events(self.mfc_gas, f"MFC(SP4/GAS-{sel})"),
-                    name="PC.Pump.MFC.COMBINED"))
-        else:
-            if self.mfc_gas and not _has_task("PC.Pump.MFC.GAS"):
-                self._event_tasks.append(asyncio.create_task(
-                    self._pump_mfc_events(self.mfc_gas, "MFC(GAS)"),
-                    name="PC.Pump.MFC.GAS"))
-            if self.mfc_pressure and not _has_task("PC.Pump.MFC.SP4"):
-                sel = f"CH{self._selected_ch}"
-                self._event_tasks.append(asyncio.create_task(
-                    self._pump_mfc_events(self.mfc_pressure, f"MFC(SP4-{sel})"),
-                    name="PC.Pump.MFC.SP4"))
-
-        if self.ig and not _has_task("PC.Pump.IG"):
-            sel = f"CH{self._selected_ch}"
-            self._event_tasks.append(asyncio.create_task(self._pump_ig_events(f"IG-{sel}"), name="PC.Pump.IG"))
+            await asyncio.sleep(connect_poll_interval_s)
 
     # =========================
     # 퍼블릭: 바인딩/설정 갱신
@@ -609,12 +572,21 @@ class PlasmaCleaningRuntime:
 
             try:
                 # RFPowerAsync의 REF 대기(기본 60s)보다 약간 길게 기다려서 레이스 방지
-                _wait_s = 60.0
+                cfgm = getattr(self, "_cfg_mod", cfgc)
+
+                rf_target_wait_timeout_s = float(getattr(cfgm, "PC_RF_TARGET_WAIT_TIMEOUT_S", 60.0))
+                rf_target_wait_extra_s = float(getattr(cfgm, "PC_RF_TARGET_WAIT_EXTRA_S", 5.0))
+                rf_fail_ref_threshold_w = float(getattr(cfgm, "PC_RF_FAIL_REF_THRESHOLD_W", 20.0))
+
+                _wait_s = rf_target_wait_timeout_s
                 try:
                     if self.rf:
-                        _wait_s = max(_wait_s, float(getattr(self.rf, "reflected_wait_timeout_s", 60.0)) + 5.0)
+                        _wait_s = max(
+                            _wait_s,
+                            float(getattr(self.rf, "reflected_wait_timeout_s", rf_target_wait_timeout_s)) + rf_target_wait_extra_s
+                        )
                 except Exception:
-                    _wait_s = 60.0
+                    _wait_s = rf_target_wait_timeout_s
 
                 await asyncio.wait_for(self._rf_target_evt.wait(), timeout=_wait_s)
 
@@ -667,12 +639,12 @@ class PlasmaCleaningRuntime:
                     pass
 
                 # 기준값(REF 임계치) — RFPowerAsync 쪽 값을 우선 사용
-                ref_th = 20.0
+                ref_th = rf_fail_ref_threshold_w
                 try:
                     if self.rf:
-                        ref_th = float(getattr(self.rf, "reflected_threshold_w", 20.0))
+                        ref_th = float(getattr(self.rf, "reflected_threshold_w", rf_fail_ref_threshold_w))
                 except Exception:
-                    ref_th = 20.0
+                    ref_th = rf_fail_ref_threshold_w
 
                 # ★ timeout 문구를 "REF 과다"로 분류해서 reason을 만든다
                 req = float(power_w)
@@ -819,17 +791,25 @@ class PlasmaCleaningRuntime:
             # RF SET 래치(DCV_SET_1)는 여기가 유일한 경로
             await self.plc.power_enable(bool(on), family="DCV", set_idx=1)
 
+        cfgm = getattr(self, "_cfg_mod", cfgc)
+
+        rf_poll_interval_ms = int(getattr(cfgm, "PC_RF_POLL_INTERVAL_MS", 1000))
+        rf_rampdown_interval_ms = int(getattr(cfgm, "PC_RF_RAMPDOWN_INTERVAL_MS", 50))
+        rf_direct_mode = bool(getattr(cfgm, "PC_RF_DIRECT_MODE", True))
+        rf_write_inv_a = float(getattr(cfgm, "PC_RF_WRITE_INV_A", 1.74))
+        rf_write_inv_b = float(getattr(cfgm, "PC_RF_WRITE_INV_B", 0.0))
+
         return RFPowerAsync(
             send_rf_power=_rf_send,
             send_rf_power_unverified=_rf_send_unverified,
             request_status_read=_rf_request_read,
             toggle_enable=_rf_toggle_enable,
-            poll_interval_ms=1000,
-            rampdown_interval_ms=50,
-            direct_mode=True, # ★ Plasma Cleaning에서는 DC처럼 즉시 ON/OFF
-            write_inv_a=1.74,      # ← 보정 스케일 적용
-            write_inv_b=0.0,      # ← 오프셋(기본 0)
-            cfg=getattr(self, "_cfg_mod", None),  # ✅ (있으면) cfg 주입
+            poll_interval_ms=rf_poll_interval_ms,
+            rampdown_interval_ms=rf_rampdown_interval_ms,
+            direct_mode=rf_direct_mode,   # ★ Plasma Cleaning용 기본값 유지
+            write_inv_a=rf_write_inv_a,
+            write_inv_b=rf_write_inv_b,
+            cfg=getattr(self, "_cfg_mod", None),
         )
 
     # =========================
@@ -1072,7 +1052,7 @@ class PlasmaCleaningRuntime:
 
         try:
             # 1) 사전 연결 점검
-            await self._preflight_connect(timeout_s=10.0)
+            await self._preflight_connect()
         except Exception as e:
             msg = f"장치 연결에 실패했습니다: {e}"
             self._post_critical(
@@ -1305,15 +1285,19 @@ class PlasmaCleaningRuntime:
         if not self.rf:
             return
         # 1) ramp-down 시작
+        cfgm = getattr(self, "_cfg_mod", cfgc)
+        rf_cleanup_timeout_s = float(getattr(cfgm, "PC_RF_CLEANUP_TIMEOUT_S", 5.0))
+        rf_wait_power_off_timeout_s = float(getattr(cfgm, "PC_RF_WAIT_POWER_OFF_TIMEOUT_S", 15.0))
+
         try:
-            await asyncio.wait_for(self.rf.cleanup(), timeout=5.0)
+            await asyncio.wait_for(self.rf.cleanup(), timeout=rf_cleanup_timeout_s)
         except asyncio.TimeoutError:
-            self.append_log("RF", "cleanup timeout → 계속 진행")
+            self.append_log("RF", f"cleanup timeout({rf_cleanup_timeout_s:.1f}s) → 계속 진행")
 
         # 2) ramp-down 완료 신호 대기
         ok = False
         try:
-            ok = await self.rf.wait_power_off(timeout_s=15.0)
+            ok = await self.rf.wait_power_off(timeout_s=rf_wait_power_off_timeout_s)
         except Exception as e:
             self.append_log("RF", f"wait_power_off error: {e!r}")
 
@@ -1568,6 +1552,20 @@ class PlasmaCleaningRuntime:
         except Exception:
             pc_cfg = {}
 
+        cfgm = getattr(self, "_cfg_mod", cfgc)
+
+        # ✅ 공통 기본값은 config_common.py에서 가져온다.
+        default_gas_idx = int(getattr(cfgm, "PC_DEFAULT_GAS_IDX", 3))
+        default_gas_flow = float(getattr(cfgm, "PC_DEFAULT_GAS_FLOW_SCCM", 0.0))
+        default_target_pressure = float(getattr(cfgm, "PC_DEFAULT_TARGET_PRESSURE_TORR", 5.0e-6))
+        default_tol_mtorr = float(getattr(cfgm, "PC_DEFAULT_TOL_MTORR", 0.2))
+        default_wait_timeout_s = float(getattr(cfgm, "PC_DEFAULT_WAIT_TIMEOUT_S", 90.0))
+        default_sp4_setpoint = float(getattr(cfgm, "PC_DEFAULT_SP4_SETPOINT_MTORR", 2.0))
+        default_rf_power = float(getattr(cfgm, "PC_DEFAULT_RF_POWER_W", 100.0))
+        default_process_time = float(getattr(cfgm, "PC_DEFAULT_PROCESS_TIME_MIN", 1.0))
+        default_gv_open_lamp_delay_s = float(getattr(cfgm, "PC_DEFAULT_GV_OPEN_LAMP_DELAY_S", 5.0))
+        default_ig_interval_ms = int(getattr(cfgm, "PC_DEFAULT_IG_INTERVAL_MS", 10_000))
+
         def _cfg_float(key: str, default: float) -> float:
             try:
                 v = pc_cfg.get(key, default)
@@ -1602,26 +1600,23 @@ class PlasmaCleaningRuntime:
                 return default
 
         # ✅ UI 입력이 비어 있으면 Config 기본값을 사용
-        gas_flow        = _read_plain_number("PC_gasFlow_edit",         _cfg_float("gas_flow_sccm", 0.0))
-        target_pressure = _read_plain_number("PC_targetPressure_edit",  _cfg_float("target_pressure", 5.0e-6))
-        sp4_setpoint    = _read_plain_number("PC_workingPressure_edit", _cfg_float("sp4_setpoint_mTorr", 2.0))
-        rf_power        = _read_plain_number("PC_rfPower_edit",         _cfg_float("rf_power_w", 100.0))
-        process_time    = _read_plain_number("PC_ProcessTime_edit",     _cfg_float("process_time_min", 1.0))
+        gas_flow        = _read_plain_number("PC_gasFlow_edit",         _cfg_float("gas_flow_sccm", default_gas_flow))
+        target_pressure = _read_plain_number("PC_targetPressure_edit",  _cfg_float("target_pressure", default_target_pressure))
+        sp4_setpoint    = _read_plain_number("PC_workingPressure_edit", _cfg_float("sp4_setpoint_mTorr", default_sp4_setpoint))
+        rf_power        = _read_plain_number("PC_rfPower_edit",         _cfg_float("rf_power_w", default_rf_power))
+        process_time    = _read_plain_number("PC_ProcessTime_edit",     _cfg_float("process_time_min", default_process_time))
 
-        # ✅ UI에 없는 항목도 Config로부터 적용
         return PCParams(
-            gas_idx            = _cfg_int("gas_idx", 3),
+            gas_idx            = _cfg_int("gas_idx", default_gas_idx),
             gas_flow_sccm      = gas_flow,
             target_pressure    = target_pressure,
-            tol_mTorr          = _cfg_float("tol_mTorr", 0.2),
-            wait_timeout_s     = _cfg_float("wait_timeout_s", 90.0),
+            tol_mTorr          = _cfg_float("tol_mTorr", default_tol_mtorr),
+            wait_timeout_s     = _cfg_float("wait_timeout_s", default_wait_timeout_s),
             sp4_setpoint_mTorr = sp4_setpoint,
             rf_power_w         = rf_power,
             process_time_min   = process_time,
-
-            # ✅ 컨트롤러 하드코딩 제거용(아래 controller 수정과 세트)
-            gv_open_lamp_delay_s = _cfg_float("gv_open_lamp_delay_s", 5.0),
-            ig_interval_ms       = _cfg_int("ig_interval_ms", 10_000),
+            gv_open_lamp_delay_s = _cfg_float("gv_open_lamp_delay_s", default_gv_open_lamp_delay_s),
+            ig_interval_ms       = _cfg_int("ig_interval_ms", default_ig_interval_ms),
         )
 
     def _set_state_text(self, text: str) -> None:
@@ -2320,10 +2315,17 @@ class PlasmaCleaningRuntime:
                 raise RuntimeError("지원하지 않는 레시피 형식입니다. CSV 경로만 허용됩니다.")
 
             # 🔎 여기서 프리플라이트 결과 신호만 대기 (예: 최대 10초)
+            host_start_wait_timeout_s = float(
+                getattr(self._cfg_mod, "PC_HOST_START_WAIT_TIMEOUT_S", 10.0)
+            )
+
             try:
-                ok, reason = await asyncio.wait_for(self._host_start_future, timeout=10.0)
+                ok, reason = await asyncio.wait_for(self._host_start_future, timeout=host_start_wait_timeout_s)
             except asyncio.TimeoutError:
-                raise RuntimeError("preflight timeout (쿨다운/가드 등으로 프리플라이트에 도달하지 못했습니다)")
+                raise RuntimeError(
+                    f"preflight timeout({host_start_wait_timeout_s:.1f}s) "
+                    "(쿨다운/가드 등으로 프리플라이트에 도달하지 못했습니다)"
+                )
 
             if not ok:
                 # 실패 사유를 그대로 Host에 전달

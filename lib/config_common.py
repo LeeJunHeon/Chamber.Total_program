@@ -509,3 +509,43 @@ PROCESS_GAS_INFO = {
 
 PROCESS_DEFAULT_BASE_PRESSURE = 1e-5
 PROCESS_DEFAULT_OES_INTEGRATION_MS = 60
+
+
+# ======================================================================
+# plasma_cleaning_runtime.py 공통 런타임 기본값
+# - 현재 plasma_cleaning_runtime.py의 하드코딩 값을 그대로 이관
+# - 동작 변경 없이, 나중에 UI/외부설정으로 조정하기 위한 준비
+# ======================================================================
+
+# Plasma Cleaning 기본 fallback 값
+PC_DEFAULT_GAS_IDX = 3
+PC_DEFAULT_GAS_FLOW_SCCM = 0.0
+PC_DEFAULT_TARGET_PRESSURE_TORR = 5.0e-6
+PC_DEFAULT_TOL_MTORR = 0.2
+PC_DEFAULT_WAIT_TIMEOUT_S = 90.0
+PC_DEFAULT_SP4_SETPOINT_MTORR = 2.0
+PC_DEFAULT_RF_POWER_W = 100.0
+PC_DEFAULT_PROCESS_TIME_MIN = 1.0
+PC_DEFAULT_GV_OPEN_LAMP_DELAY_S = 5.0
+PC_DEFAULT_IG_INTERVAL_MS = 10_000
+
+# Plasma Cleaning 프리플라이트
+PC_PREFLIGHT_TIMEOUT_S = 10.0
+PC_PREFLIGHT_PLC_HANDSHAKE_TIMEOUT_S = 1.0
+PC_PREFLIGHT_DEVICE_CONNECT_TIMEOUT_S = 3.0
+PC_PREFLIGHT_CONNECT_POLL_INTERVAL_S = 0.5
+
+# Plasma Cleaning RF (PLC DCV ch=1 경로)
+PC_RF_POLL_INTERVAL_MS = 1000
+PC_RF_RAMPDOWN_INTERVAL_MS = 50
+PC_RF_DIRECT_MODE = True
+PC_RF_WRITE_INV_A = 1.74
+PC_RF_WRITE_INV_B = 0.0
+PC_RF_TARGET_WAIT_TIMEOUT_S = 60.0
+PC_RF_TARGET_WAIT_EXTRA_S = 5.0
+PC_RF_FAIL_REF_THRESHOLD_W = 20.0
+
+# Plasma Cleaning 기타 timeout
+PC_RF_CLEANUP_TIMEOUT_S = 5.0
+PC_RF_WAIT_POWER_OFF_TIMEOUT_S = 15.0
+PC_HOST_START_WAIT_TIMEOUT_S = 10.0
