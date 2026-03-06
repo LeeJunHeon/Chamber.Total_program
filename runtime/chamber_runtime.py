@@ -322,7 +322,6 @@ class ChamberRuntime:
         self._runner_stage_task: asyncio.Task | None = None
         self._runner_stage_kind: str | None = None
         self._runner_queue_mode: bool = False
-        self._runner_next_params: NormParams | None = None
 
         # ✅ Runner cmd 디바운스(중복/잔여 STOP이 다음 START를 끊는 레이스 차단)
         self._runner_cmd_start_enqueued: bool = False
@@ -586,15 +585,6 @@ class ChamberRuntime:
 
     # ------------------------------------------------------------------
     # 공정 컨트롤러 바인딩
-
-    # 클래스 내부 어딘가(예: _bind_process_controller 위/아래)
-    async def mfc_dispatch(self, cmd: str, args: Mapping[str, Any] | None = None, *, atomic: bool = False):
-        """같은 AsyncMFC 내부 큐로 안전하게 보냄. atomic=True면 짧은 시퀀스 원자 실행."""
-        if atomic:
-            async with self._mfc_seq_lock:
-                await self.mfc.handle_command(cmd, args or {})
-        else:
-            await self.mfc.handle_command(cmd, args or {})
 
     def _bind_process_controller(self) -> None:
         # === 콜백 정의(PLC/MFC/파워/OES/RGA/IG) ===
@@ -974,8 +964,6 @@ class ChamberRuntime:
                     params["t0_wall"]   = t0
                     params["started_at"] = t0  # 하위호환 키 동일값
 
-                    # 런 시작 시각/세션 정보 저장
-                    self._run_started_wall = datetime.now()
                     self._oes_active = False  # OES는 별도 cb에서 True로 바꿈
 
                     # Plasma Cleaning 스타일 헤더 포함한 오픈 (중복 방지)
@@ -2021,26 +2009,10 @@ class ChamberRuntime:
             rfd = str(params.get('rf_pulse_duty_cycle', '')).strip()
             _set("rfPulseFreq_edit",      '' if rff in ('', '0') else rff)
             _set("rfPulseDutyCycle_edit", '' if rfd in ('', '0') else rfd)
-        
-        # DC-Pulse
-        # _set("dcPulsePower_checkbox", params.get('use_dc_pulse', 'F') == 'T')
-        # _set("dcPulsePower_edit",     params.get('dc_pulse_power', '0'))
-        # dcf = str(params.get('dc_pulse_freq', '')).strip()
-        # dcd = str(params.get('dc_pulse_duty_cycle', '')).strip()
-        # _set("dcPulseFreq_edit",       '' if dcf in ('', '0') else dcf)
-        # _set("dcPulseDutyCycle_edit",  '' if dcd in ('', '0') else dcd)
 
         # DC-Power
         _set("dcPower_checkbox", params.get('use_dc_power', 'F') == 'T')
         _set("dcPower_edit", params.get('dc_power', '0'))
-
-        # RF-Pulse
-        # _set("rfPulsePower_checkbox", params.get('use_rf_pulse', 'F') == 'T')
-        # _set("rfPulsePower_edit",     params.get('rf_pulse_power', '0'))
-        # rff = str(params.get('rf_pulse_freq', '')).strip()
-        # rfd = str(params.get('rf_pulse_duty_cycle', '')).strip()
-        # _set("rfPulseFreq_edit",       '' if rff in ('', '0') else rff)
-        # _set("rfPulseDutyCycle_edit",  '' if rfd in ('', '0') else rfd)
 
         # RF-Power
         _set("rfPower_checkbox", params.get('use_rf_power', 'F') == 'T')
@@ -2103,21 +2075,6 @@ class ChamberRuntime:
                 return
         except Exception as e:
             self.append_log("UI", f"_set('{leaf}') 실패: {e!r}")
-
-    # ✅ PLC read_bit에 timeout 강제 (무한대기 방지)
-    async def _plc_read_bit_safe(self, key: str, *, timeout_s: float = 0.6) -> bool | None:
-        if not getattr(self, "plc", None):
-            self.append_log("PLC", f"PLC 없음: read_bit({key})")
-            return None
-        try:
-            v = await asyncio.wait_for(self.plc.read_bit(key), timeout=timeout_s)
-            return bool(v)
-        except asyncio.TimeoutError:
-            self.append_log("PLC", f"read_bit timeout: {key} ({timeout_s:.1f}s)")
-            return None
-        except Exception as e:
-            self.append_log("PLC", f"read_bit failed: {key}: {e!r}")
-            return None
 
     # ✅ Gate(밸브) 인터락: 시작하려는 챔버의 Gate가 CLOSED인지 확인
     async def _check_gate_closed_before_start(self) -> bool:
@@ -2922,11 +2879,21 @@ class ChamberRuntime:
             return
 
         self._runner_stage_kind = kind
-        self._runner_stage_task = self._spawn_detached(
+        t_stage = self._spawn_detached(
             coro,
             store=False,
             name=f"RunnerStage.{kind}.CH{self.ch}",
         )
+        self._runner_stage_task = t_stage
+
+        if isinstance(t_stage, asyncio.Task):
+            def _clear_stage_done(task: asyncio.Task) -> None:
+                with contextlib.suppress(Exception):
+                    if getattr(self, "_runner_stage_task", None) is task:
+                        self._runner_stage_task = None
+                        self._runner_stage_kind = None
+
+            t_stage.add_done_callback(_clear_stage_done)
 
 
     async def _runner_cancel_stage(
@@ -3256,9 +3223,17 @@ class ChamberRuntime:
             if self._runner_queue_mode and ok and (not stopped):
                 self.append_log("MAIN", "[Runner] queue advance (ok)")
                 self._runner_state = "COOLDOWN"
-                # 다음 스텝 stage로 진행
-                await asyncio.sleep(0)  # 이벤트루프 한 틱 양보(레이스 감소)
-                await self._runner_start_stage("ADVANCE_QUEUE", self._runner_stage_advance_queue(was_successful=True))
+
+                # 중요:
+                # AFTER_FINISH stage 내부에서 다음 stage를 직접 시작하면
+                # 현재 _runner_stage_task가 아직 자기 자신(AFTER_FINISH)이라
+                # "start_stage blocked: previous stage still alive kind=AFTER_FINISH"
+                # 가 발생할 수 있다.
+                #
+                # 따라서 현재 stage가 완전히 끝난 뒤,
+                # runner main 루프가 다음 START_QUEUE 명령을 처리하도록
+                # 다음 틱에 enqueue만 하고 여기서는 바로 반환한다.
+                self._soon(self._runner_put, _RunnerCmd(kind="START_QUEUE"))
                 return
 
             # 큐 종료(실패/stop/마지막) → UI 정리
