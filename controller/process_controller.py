@@ -263,7 +263,11 @@ class ProcessController:
         self._supports_rf_pulse = bool(supports_rf_pulse)
 
         # ✅ 항상 존재하는 가스 채널 맵(소스 오브 트루스)
-        self._gas_info = {"AR": {"channel": 1}, "O2": {"channel": 2}, "N2": {"channel": 3}}
+        self._gas_info = dict(getattr(self._cfg, "PROCESS_GAS_INFO", {
+            "AR": {"channel": 1},
+            "O2": {"channel": 2},
+            "N2": {"channel": 3},
+        }))
 
         # 런타임 상태
         self.is_running: bool = False
@@ -1167,7 +1171,7 @@ class ProcessController:
         use_dc_pulse = req_dc_pulse and self._supports_dc_pulse
         use_rf_pulse = req_rf_pulse and self._supports_rf_pulse
 
-        gun_list = [] if self._ch == 1 else ["G1", "G2", "G3"]
+        gun_list = list(getattr(self._cfg, "PROCESS_GUN_SHUTTERS", []))
 
         return {
             'use_ms': bool(params.get("use_ms", False)),
@@ -1175,7 +1179,7 @@ class ProcessController:
             'use_rf': use_rf,
             'use_dc_pulse': use_dc_pulse,
             'use_rf_pulse': use_rf_pulse,
-            'gas_info': {"AR": {"channel": 1}, "O2": {"channel": 2}, "N2": {"channel": 3}},
+            'gas_info': dict(getattr(self._cfg, "PROCESS_GAS_INFO", self._gas_info)),
             'gun_shutters': gun_list,
             'req_dc': req_dc_cont, 'req_rf': req_rf_cont, 'req_dcp': req_dc_pulse, 'req_rfp': req_rf_pulse,
         }
@@ -1216,7 +1220,8 @@ class ProcessController:
         gas_info      = common_info.get('gas_info') or self._gas_info
         gun_shutters  = common_info.get('gun_shutters', [])
 
-        base_pressure = float(params.get("base_pressure", 1e-5))
+        default_base_pressure = float(getattr(self._cfg, "PROCESS_DEFAULT_BASE_PRESSURE", 1e-5))
+        base_pressure = float(params.get("base_pressure", default_base_pressure))
         working_pressure = float(params.get("working_pressure", 0))
         process_time_min = float(params.get("process_time", 0))
         shutter_delay_min = float(params.get("shutter_delay", 0))
@@ -1230,10 +1235,12 @@ class ProcessController:
 
         dc_power = float(params.get("dc_power", 0))
         rf_power = float(params.get("rf_power", 0))
+
+        default_integration_ms = int(getattr(self._cfg, "PROCESS_DEFAULT_OES_INTEGRATION_MS", 60))
         try:
-            integration_ms = int(float(params.get("integration_time", 60)))
+            integration_ms = int(float(params.get("integration_time", default_integration_ms)))
         except Exception:
-            integration_ms = 60
+            integration_ms = default_integration_ms
 
         # --- (옵션) DC Pulse 중간 Power 변경: CSV에 둘 다 있으면 1회 변경 ---
         #  - power_change_time: "5s", "5m", "0.5m", "1h30m" ...
@@ -1363,10 +1370,22 @@ class ProcessController:
                     )
                 ])
 
-        # --- 압력 제어 시작 (CH1은 SP3, 그 외는 SP4) ---
-        sp_on_cmd   = 'SP3_ON' if self._ch == 1 else 'SP4_ON'
-        sp_on_label = 'SP3'    if self._ch == 1 else 'SP4'
-        sp_index    = 3        if self._ch == 1 else 4   # 🔹 현재 채널에서 사용하는 SP 번호
+        # --- 압력 제어 시작 (채널별 config) ---
+        sp_on_cmd = getattr(
+            self._cfg,
+            "PROCESS_PRESSURE_CONTROL_SP_ON_CMD",
+            'SP3_ON' if self._ch == 1 else 'SP4_ON'
+        )
+        sp_on_label = getattr(
+            self._cfg,
+            "PROCESS_PRESSURE_CONTROL_SP_LABEL",
+            'SP3' if self._ch == 1 else 'SP4'
+        )
+        sp_index = int(getattr(
+            self._cfg,
+            "PROCESS_PRESSURE_CONTROL_SP_INDEX",
+            3 if self._ch == 1 else 4
+        ))   # 🔹 현재 채널에서 사용하는 SP 번호
         
         # 1) 먼저 채널별 압력 제어 SP3 / SP4를 활성화
         steps.append(ProcessStep(
@@ -1752,8 +1771,7 @@ class ProcessController:
         use_rf_pulse = bool(ci.get('use_rf_pulse', False))
 
         # ✅ gas_info가 비어도 안전하게 폴백
-        default_gas_info = {"AR": {"channel": 1}, "O2": {"channel": 2}, "N2": {"channel": 3}}
-        gas_info = ci.get('gas_info') or default_gas_info
+        gas_info = ci.get('gas_info') or self._gas_info
 
         both = (use_dc or use_dc_pulse) and (use_rf or use_rf_pulse)
 

@@ -495,3 +495,17 @@ CHAMBER_PULSE_RECONNECT_TIMEOUT_S = 2.0
 CHAMBER_PREFLIGHT_TIMEOUT_S = 8.0
 CHAMBER_PREFLIGHT_TIMEOUT_WITH_PULSE_S = 10.0
 CHAMBER_OES_INIT_TIMEOUT_S = 20.0
+
+
+# ======================================================================
+# process_controller.py의 파라미터
+# ======================================================================
+
+PROCESS_GAS_INFO = {
+    "AR": {"channel": 1},
+    "O2": {"channel": 2},
+    "N2": {"channel": 3},
+}
+
+PROCESS_DEFAULT_BASE_PRESSURE = 1e-5
+PROCESS_DEFAULT_OES_INTEGRATION_MS = 60
