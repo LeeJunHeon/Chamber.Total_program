@@ -427,7 +427,10 @@ class ChamberRuntime:
         # 데이터 로거 (Sputter Calib CSV) - CH 로그로 로그를 흘려보내도록 콜백 전달
         self.data_logger = DataLogger(
             ch=self.ch,
-            csv_dir=Path(r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database"),
+            csv_dir=Path(str(self.cfg._get(
+                "SPUTTER_CALIB_DB_DIR",
+                r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database",
+            ))),
             log_func=lambda msg: self.append_log("CSV", msg),
         )
 
@@ -451,7 +454,11 @@ class ChamberRuntime:
 
         # OES 인스턴스 생성 시 현재 챔버 번호에 따라 USB 채널을 명시적으로 매핑한다.
         # CH1 → USB0, CH2 → USB1. OESAsync 내부 기본 동작도 동일하지만 명확성을 위해 전달한다.
-        _usb_index = 0 if self.ch == 1 else 1
+        if self.ch == 1:
+            _usb_index = int(self.cfg._get("CHAMBER_OES_USB_INDEX_CH1", 0))
+        else:
+            _usb_index = int(self.cfg._get("CHAMBER_OES_USB_INDEX_CH2", 1))
+
         self.oes = OESAsync(chamber=self.ch, usb_index=_usb_index)
         self._oes_initialized = False  # ✅ 워커 init(장치 스캔) 1회만 수행하도록 캐시
 
@@ -552,8 +559,8 @@ class ChamberRuntime:
 
             async def _rf_request_read():
                 try:
-                    # ★ CH2는 제로잉 미적용
-                    return await self.plc.rf_read_fwd_ref(rf_ch=2, zeroing=False)
+                    rf_zeroing = bool(self.cfg._get("CHAMBER_RF_CONT_ZEROING", False))
+                    return await self.plc.rf_read_fwd_ref(rf_ch=2, zeroing=rf_zeroing)
                 except Exception as e:
                     self.append_log("RF", f"read failed: {e!r}")
                     return None
@@ -566,12 +573,11 @@ class ChamberRuntime:
                 send_rf_power_unverified=_rf_send_unverified,
                 request_status_read=_rf_request_read,
                 toggle_enable=_rf_toggle_enable,
-                poll_interval_ms=1000,
-                rampdown_interval_ms=50,
-                direct_mode=False,
-                # 필요 시 CH2 전용 역변환 계수로 조정. 없으면 Plasma Cleaning과 동일값 사용 가능.
-                write_inv_a=1.6546,   # ← 엑셀 기반 역보정
-                write_inv_b=2.6323,   # ← (입력W = 1.6546*목표W + 2.6323)
+                poll_interval_ms=int(self.cfg._get("CHAMBER_RF_CONT_POLL_INTERVAL_MS", 1000)),
+                rampdown_interval_ms=int(self.cfg._get("CHAMBER_RF_CONT_RAMPDOWN_INTERVAL_MS", 50)),
+                direct_mode=bool(self.cfg._get("CHAMBER_RF_CONT_DIRECT_MODE", False)),
+                write_inv_a=float(self.cfg._get("CHAMBER_RF_CONT_WRITE_INV_A", 1.6546)),
+                write_inv_b=float(self.cfg._get("CHAMBER_RF_CONT_WRITE_INV_B", 2.6323)),
             )
 
         # === ProcessController 바인딩 ===
@@ -1890,7 +1896,10 @@ class ChamberRuntime:
         self._set_default_ui_values()
 
     async def _handle_process_list_clicked_async(self) -> None:
-        start_dir = getattr(self, "_last_process_list_dir", "") or r"\\VanaM_NAS\VanaM_toShare"
+        start_dir = (
+            getattr(self, "_last_process_list_dir", "")
+            or str(self.cfg._get("PROCESS_LIST_START_DIR", r"\\VanaM_NAS\VanaM_toShare"))
+        )
 
         file_path = await self._aopen_file(
             caption=f"CH{self.ch} 프로세스 리스트 파일 선택",
@@ -2101,12 +2110,16 @@ class ChamberRuntime:
         open_key = f"G_V_{ch}_OPEN_LAMP"
         close_key = f"G_V_{ch}_CLOSE_LAMP"
 
+        gate_retry_count = int(self.cfg._get("CHAMBER_GATE_RECHECK_COUNT", 5))
+        gate_read_timeout_s = float(self.cfg._get("CHAMBER_GATE_READ_TIMEOUT_S", 0.6))
+        gate_retry_interval_s = float(self.cfg._get("CHAMBER_GATE_RECHECK_INTERVAL_S", 0.2))
+
         # (선택) 전이 상태(moving)일 때 잠깐만 재확인(짧게)
-        for _ in range(5):  # 5회 * 0.2s = 최대 1초
+        for _ in range(gate_retry_count):  # 5회 * 0.2s = 최대 1초
             try:
-                open_lamp = await asyncio.wait_for(self.plc.read_bit(open_key),  timeout=0.6)
-                close_lamp = await asyncio.wait_for(self.plc.read_bit(close_key), timeout=0.6)
-                open_lamp  = bool(open_lamp)
+                open_lamp = await asyncio.wait_for(self.plc.read_bit(open_key), timeout=gate_read_timeout_s)
+                close_lamp = await asyncio.wait_for(self.plc.read_bit(close_key), timeout=gate_read_timeout_s)
+                open_lamp = bool(open_lamp)
                 close_lamp = bool(close_lamp)
 
                 # timeout/예외로 값을 못 읽으면 → “상태 확인 불가”로 시작 차단 + 사용자에게 알림
@@ -2135,7 +2148,7 @@ class ChamberRuntime:
                 return False
 
             # 둘 다 False면 moving/unknown → 잠깐 기다렸다가 재확인
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(gate_retry_interval_s)
 
         self.append_log("MAIN", f"[CH{self.ch}] Gate 상태=moving_or_unknown (OPEN/CLOSE 모두 FALSE) → 시작 차단")
         return False
@@ -2147,13 +2160,16 @@ class ChamberRuntime:
         host: str,
         port: int,
         *,
-        timeout_s: float = 2.0,
+        timeout_s: float | None = None,
     ) -> None:
         """
         STOP 직후 다음 런에서 pulse reconnect 중 내부 watchdog cancel이
         CancelledError로 새는 경우를 '조용한 stage cancel'이 아니라
         '명시적인 reconnect 실패'로 바꿔준다.
         """
+        if timeout_s is None:
+            timeout_s = float(self.cfg._get("CHAMBER_PULSE_RECONNECT_TIMEOUT_S", 2.0))
+
         if not dev or not hasattr(dev, "set_endpoint_reconnect"):
             return
 
@@ -2285,6 +2301,8 @@ class ChamberRuntime:
             # - DC Pulse  : cfg.DCPULSE_TCP
             # - RF Pulse  : RFPulseAsync 내부 설정(또는 cfg.RFPULSE_TCP가 있으면 그 값)
 
+            pulse_reconnect_timeout_s = float(self.cfg._get("CHAMBER_PULSE_RECONNECT_TIMEOUT_S", 2.0))
+
             # (선택) DC는 필요시 재연결만 수행
             if use_dc_pulse and self.dc_pulse and hasattr(self.dc_pulse, "set_endpoint_reconnect"):
                 host, port = self.cfg.DCPULSE_TCP
@@ -2293,7 +2311,7 @@ class ChamberRuntime:
                     "DC-Pulse",
                     host,
                     port,
-                    timeout_s=2.0,
+                    timeout_s=pulse_reconnect_timeout_s,
                 )
 
             # ✅ RF는 DCPULSE_TCP로 절대 덮어쓰지 않는다.
@@ -2308,7 +2326,7 @@ class ChamberRuntime:
                         "RF-Pulse",
                         host,
                         port,
-                        timeout_s=2.0,
+                        timeout_s=pulse_reconnect_timeout_s,
                     )
                 # else: RFPulseAsync 내부 설정을 그대로 사용
 
@@ -2319,7 +2337,10 @@ class ChamberRuntime:
 
             self._on_process_status_changed(True)
 
-            timeout = 10.0 if (use_dc_pulse or use_rf_pulse) else 8.0
+            timeout_no_pulse = float(self.cfg._get("CHAMBER_PREFLIGHT_TIMEOUT_S", 8.0))
+            timeout_with_pulse = float(self.cfg._get("CHAMBER_PREFLIGHT_TIMEOUT_WITH_PULSE_S", 10.0))
+            timeout = timeout_with_pulse if (use_dc_pulse or use_rf_pulse) else timeout_no_pulse
+            
             ok, failed = await self._preflight_connect(params, timeout_s=timeout)
 
             if not ok:
@@ -2434,7 +2455,8 @@ class ChamberRuntime:
                 self.append_log(f"OES{self.ch}", "[OES] init (background) begin")
                 self._ensure_background_started()
 
-                ok = await self.oes.initialize_device(timeout_s=20.0, force=force)
+                oes_init_timeout_s = float(self.cfg._get("CHAMBER_OES_INIT_TIMEOUT_S", 20.0))
+                ok = await self.oes.initialize_device(timeout_s=oes_init_timeout_s, force=force)
                 self._oes_initialized = bool(ok)
 
                 if ok:
@@ -2538,7 +2560,9 @@ class ChamberRuntime:
             self.append_log("PLC", f"[CH{self.ch}] PLC 미연결 상태 → Chuck 제어 불가")
             return False
 
-        timeout_s = 60.0
+        timeout_s = float(self.cfg._get("CHAMBER_CHUCK_MOVE_TIMEOUT_S", 60.0))
+        power_on_settle_s = float(self.cfg._get("CHAMBER_CHUCK_POWER_ON_SETTLE_S", 0.2))
+        poll_interval_s = float(self.cfg._get("CHAMBER_CHUCK_POLL_INTERVAL_S", 0.3))
 
         try:
             # (A) 이미 목표 위치인지 먼저 한 번 확인
@@ -2561,7 +2585,7 @@ class ChamberRuntime:
             )
 
             await self.plc.write_switch(power_sw, True)
-            await asyncio.sleep(0.2)
+            await asyncio.sleep(power_on_settle_s)
             await self.plc.write_switch(move_sw, True)
 
             # (C) 램프 폴링 (최대 timeout_s)
@@ -2583,7 +2607,7 @@ class ChamberRuntime:
                     )
                     return True
 
-                await asyncio.sleep(0.3)
+                await asyncio.sleep(poll_interval_s)
 
             # (D) 타임아웃: 스위치 OFF 후 실패 반환
             with contextlib.suppress(Exception):

@@ -446,3 +446,36 @@ PLC_RF_CH2_REF_B = -0.267
 # --- RF 제로 오프셋(패널 idle 보정) ---
 PLC_RF_FORWARD_ZERO_W = 4.0
 PLC_RF_REFLECTED_ZERO_W = 14.0
+
+
+# ======================================================================
+# chamber_runtime.py 공통 런타임 기본값
+# - 현재 chamber_runtime.py의 하드코딩 값을 그대로 이관
+# - 동작 변경 없이, 나중에 UI/외부설정으로 조정하기 위한 준비
+# ======================================================================
+
+PROCESS_LIST_START_DIR = r"\\VanaM_NAS\VanaM_toShare"
+SPUTTER_CALIB_DB_DIR = r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database"
+
+CHAMBER_OES_USB_INDEX_CH1 = 0
+CHAMBER_OES_USB_INDEX_CH2 = 1
+
+CHAMBER_RF_CONT_POLL_INTERVAL_MS = 1000
+CHAMBER_RF_CONT_RAMPDOWN_INTERVAL_MS = 50
+CHAMBER_RF_CONT_DIRECT_MODE = False
+CHAMBER_RF_CONT_ZEROING = False
+CHAMBER_RF_CONT_WRITE_INV_A = 1.6546
+CHAMBER_RF_CONT_WRITE_INV_B = 2.6323
+
+CHAMBER_GATE_RECHECK_COUNT = 5
+CHAMBER_GATE_READ_TIMEOUT_S = 0.6
+CHAMBER_GATE_RECHECK_INTERVAL_S = 0.2
+
+CHAMBER_CHUCK_MOVE_TIMEOUT_S = 60.0
+CHAMBER_CHUCK_POWER_ON_SETTLE_S = 0.2
+CHAMBER_CHUCK_POLL_INTERVAL_S = 0.3
+
+CHAMBER_PULSE_RECONNECT_TIMEOUT_S = 2.0
+CHAMBER_PREFLIGHT_TIMEOUT_S = 8.0
+CHAMBER_PREFLIGHT_TIMEOUT_WITH_PULSE_S = 10.0
+CHAMBER_OES_INIT_TIMEOUT_S = 20.0
