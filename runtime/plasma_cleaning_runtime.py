@@ -88,6 +88,7 @@ class PlasmaCleaningRuntime:
 
         # 상태/태스크
         self._bg_tasks: list[asyncio.Task] = []
+        self._event_tasks: list[asyncio.Task] = []   # ★ 추가
         self._running: bool = False
         self._selected_ch: int = 1  # 라디오에 맞춰 set_selected_ch로 갱신
         self._pc_gas_idx: Optional[int] = None  # ← PC에서 선택된 gas_idx 저장(스케일 계산용)
@@ -1778,10 +1779,14 @@ class PlasmaCleaningRuntime:
         """PC 런타임이 만든 태스크만 전부 종료(취소+완료 대기)."""
         bg = list(getattr(self, "_bg_tasks", []))
         ev = list(getattr(self, "_event_tasks", []))
+
         await self._cancel_and_wait(bg)
         await self._cancel_and_wait(ev)
-        self._bg_tasks.clear()
-        self._event_tasks.clear()
+
+        if hasattr(self, "_bg_tasks") and self._bg_tasks is not None:
+            self._bg_tasks.clear()
+        if hasattr(self, "_event_tasks") and self._event_tasks is not None:
+            self._event_tasks.clear()
 
     async def _cleanup_tasks_only(self, reason: str = "") -> None:
         """
@@ -1867,6 +1872,13 @@ class PlasmaCleaningRuntime:
         self.set_ig_callbacks(_ensure_on, _read_mTorr)
 
     def _open_run_log(self, p: PCParams) -> None:
+        # ★ 이전 세션 타이머가 멈춰 있었다면 다시 시작
+        try:
+            if getattr(self, "_runlog_timer", None) and not self._runlog_timer.isActive():
+                self._runlog_timer.start()
+        except Exception:
+            pass
+
         # 세션 ID = 시작 시각
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._log_session_id = ts
