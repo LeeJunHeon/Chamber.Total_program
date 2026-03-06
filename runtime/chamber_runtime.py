@@ -381,12 +381,17 @@ class ChamberRuntime:
         self._log_file_path: Path | None = None
         self._prestart_buf: Deque[str] = deque(maxlen=1000)
 
-        # ✅ keep-handle 공정(run) 로그 appender (log_hub)
-        # - 폴백 파일명(…_recovered.txt)은 chamber_runtime의 기존 로직을 그대로 쓰기 위해 fallback_dir은 안 씀
-        self._run_log_appender = SessionTextAppender(encoding="utf-8")
+        # ✅ 로컬 폴백 디렉토리(필요 시에만 파일 생성됨)
+        self._local_log_dir = Path.cwd() / f"_Logs_local_CH{self.ch}"
 
-        self._log_q: asyncio.Queue[str] = asyncio.Queue(maxsize=4096)
+        # ✅ primary(NAS) 실패 시: fallback_dir/<same name>으로 1회 자동 전환
+        self._run_log_appender = SessionTextAppender(fallback_dir=self._local_log_dir, encoding="utf-8")
+
+        self._log_q: asyncio.Queue[str | None] = asyncio.Queue(maxsize=4096)
         self._log_writer_task: asyncio.Task | None = None
+
+        # ✅ 로그 writer shutdown 중복 호출 방지(동시 shutdown 레이스 방지)
+        self._log_shutdown_lock = asyncio.Lock()
 
         # ✅ 로그 파일 I/O는 이벤트루프 밖(전용 1-thread)에서만 수행
         self._log_io_exec = ThreadPoolExecutor(
@@ -1144,9 +1149,8 @@ class ChamberRuntime:
                         self._last_polling_targets = None
                     except Exception as e:
                         self.append_log("MAIN", f"예외 발생 (finished 처리): {e}")
-                        # 예외 시 안전하게 UI를 '대기 중'으로 복귀
-                        with contextlib.suppress(Exception):
-                            self._clear_queue_and_reset_ui()
+                        # ✅ finished 처리 중 예외가 나도 Runner/큐 상태를 건드리지 않는다.
+                        #    (late/stale 이벤트가 다음 공정을 cancel시키는 레이스 방지)
 
                     finally:
                         try:
@@ -1191,7 +1195,21 @@ class ChamberRuntime:
                             pass
 
                 elif kind == "aborted":
+                    # ✅ 중요:
+                    # aborted 이벤트는 finished 이후에도 "추가로" 따라올 수 있음(후행 이벤트).
+                    # 여기서 UI reset / Runner stage cancel을 하면,
+                    # 이전 공정의 늦은 aborted가 "다음 공정"의 START_SINGLE/ADVANCE_QUEUE를 끊어버리는 레이스가 생긴다.
+                    # 따라서 aborted는 알림/로그만 남기고,
+                    # 정리/다음 공정 진행은 finished → PC_FINISHED → Runner가 담당한다.
                     try:
+                        # (선택) 상태 로그만 남김
+                        self.append_log(
+                            "MAIN",
+                            f"[PC] aborted event received (runner_state={getattr(self, '_runner_state', None)}, "
+                            f"stage={getattr(self, '_runner_stage_kind', None)})"
+                        )
+
+                        # (선택) 알림만
                         if self.chat:
                             try:
                                 ret = self.chat.notify_text(f"🛑 CH{self.ch} 공정 중단")
@@ -1199,33 +1217,15 @@ class ChamberRuntime:
                                     await ret
                             except Exception as e:
                                 self.append_log("CHAT", f"구글챗 중단 알림 전송 실패: {e!r}")
-                        with contextlib.suppress(Exception):
-                            self._clear_queue_and_reset_ui()
 
-                        # ✅ 전역: CH 공정 '종료' 시각 마킹 (중단도 종료로 취급)
-                        try:
-                            # finished에서 이미 error reason을 남겼을 수 있으니 덮어쓰지 않게 방어
-                            if not runtime_state.has_error("chamber", self.ch):
-                                runtime_state.set_error("chamber", self.ch, "aborted")
-                            runtime_state.mark_finished("chamber", self.ch)
-                        except Exception:
-                            pass
-
-                        # ★ 추가: 혹시 남아 있을 수 있는 카운트다운/지연 태스크 누수 방지
-                        self._cancel_delay_task()
-                        
-                        # MFC 내부 상태 완전 초기화 (실패 종료)
-                        try:
-                            if self.mfc and hasattr(self.mfc, "on_process_finished"):
-                                self.mfc.on_process_finished(False)
-                        except Exception:
-                            pass
+                        # ✅ 절대 하지 말 것:
+                        # - self._clear_queue_and_reset_ui()
+                        # - self._cancel_delay_task()
+                        # - self.mfc.on_process_finished(False)
 
                     except Exception as e:
-                        self.append_log("MAIN", f"예외 발생 (aborted 처리): {e}")
-                        # 예외 시 안전하게 UI를 '대기 중'으로 복귀
-                        with contextlib.suppress(Exception):
-                            self._clear_queue_and_reset_ui()
+                        self.append_log("MAIN", f"예외 발생 (aborted 처리): {e!r}")
+                        # ✅ 여기서도 UI reset 금지 (레이스 트리거)
 
                 elif kind == "polling_targets":
                     targets = dict(payload.get("targets") or {})
@@ -2841,42 +2841,57 @@ class ChamberRuntime:
     async def _runner_cancel_stage(self, *, timeout: float = 2.0) -> None:
         """stage task가 있으면 취소하고 종료까지(최대 timeout) 기다린다."""
         t = getattr(self, "_runner_stage_task", None)
+
+        # ✅ 핵심: cancel 전에 stage 참조를 먼저 끊는다.
+        #    → cancel된 stage가 CancelledError 처리에서
+        #      '_runner_stage_task is cur' 조건을 만족 못해서
+        #      UI/큐 reset 레이스가 사라짐
+        self._runner_stage_task = None
+        self._runner_stage_kind = None
+
         if isinstance(t, asyncio.Task) and (not t.done()):
-            # ✅ 자기 자신 await 방지
             cur = asyncio.current_task()
             if t is not cur:
                 t.cancel()
-                # ✅ CancelledError는 BaseException 계열이라 별도 suppress 필요
                 with contextlib.suppress(asyncio.CancelledError, Exception):
                     await asyncio.wait_for(t, timeout=timeout)
-            else:
-                # 현재 task가 stage 본인인 경우: 굳이 self-cancel/await 하지 않는다.
-                pass
-
-        self._runner_stage_task = None
-        self._runner_stage_kind = None
 
 
     def _cancel_delay_task(self) -> None:
         """
-        ✅ Runner 구조 정리 버전
+        ✅ 레거시 호환: 'delay/countdown task'만 정리하는 안전 버전
 
-        Runner 구조에서는 과거의 _delay_main_task / _delay_countdown_task 를 사용하지 않습니다.
-        하지만 shutdown_fast / reset 경로에서 과거 이름(_cancel_delay_task)으로 호출하는 코드가 남아있어,
-        AttributeError 방지 및 '대기/쿨다운 stage' 즉시 중단을 위해 최소 기능의 호환 래퍼로 유지합니다.
+        Runner 구조에서는 START_SINGLE/ADVANCE_QUEUE 같은 stage는 _runner_stage_task로 운용된다.
+        그런데 _cancel_delay_task()가 stage를 cancel하면,
+        '이전 공정의 늦은 aborted/reset/cleanup'이 '다음 공정 stage'까지 끊어버리는 레이스가 생긴다.
 
-        현재 동작:
-        - Runner stage task가 살아있으면 cancel만 시도합니다(여기서는 await 하지 않음).
+        따라서 이 함수는:
+        - 과거 레거시 delay/countdown task가 남아있을 때만 cancel
+        - ❌ _runner_stage_task(현재 stage)는 절대 cancel하지 않는다
+        (stage 취소는 STOP/_runner_cancel_stage 또는 shutdown_fast에서 명시적으로 수행)
         """
-        t = getattr(self, "_runner_stage_task", None)
-        if isinstance(t, asyncio.Task) and (not t.done()):
-            self.append_log(
-                "MAIN",
-                f"[Runner] _cancel_delay_task() → cancel stage kind={getattr(self,'_runner_stage_kind',None)} "
-                f"state={getattr(self,'_runner_state',None)}"
-            )
+        legacy_attrs = (
+            "_delay_main_task",
+            "_delay_countdown_task",
+            "_delay_task",
+            "_countdown_task",
+        )
+
+        cancelled_any = False
+        for attr in legacy_attrs:
+            t = getattr(self, attr, None)
+            if isinstance(t, asyncio.Task) and (not t.done()):
+                cancelled_any = True
+                with contextlib.suppress(Exception):
+                    t.cancel()
+            # 참조 제거(다음 런에 영향 방지)
             with contextlib.suppress(Exception):
-                t.cancel()
+                if getattr(self, attr, None) is t:
+                    setattr(self, attr, None)
+
+        # (선택) 디버그 로그: 레거시가 실제로 있었을 때만
+        if cancelled_any:
+            self.append_log("MAIN", "[Legacy] cancel delay/countdown tasks")
 
     
     async def _runner_handle_stop(self, user_initiated: bool) -> None:
@@ -2960,11 +2975,22 @@ class ChamberRuntime:
                     await self._runner_start_stage("START_SINGLE", self._runner_stage_start_single(cmd.params))
 
                 elif cmd.kind == "START_QUEUE":
+                    if self._runner_state != "IDLE":
+                        self.append_log("MAIN", f"[Runner] START_QUEUE ignored (state={self._runner_state}, stage={self._runner_stage_kind})")
+                        continue
+
                     self._runner_queue_mode = True
                     self._runner_state = "COOLDOWN"
                     await self._runner_start_stage("ADVANCE_QUEUE", self._runner_stage_advance_queue(was_successful=True))
 
                 elif cmd.kind == "PC_FINISHED":
+                    prev_state = getattr(self, "_runner_state", "IDLE")
+
+                    # ✅ RUNNING/STOPPING 흐름이 아닌데 finished가 오면 “stale 이벤트”로 보고 무시
+                    if prev_state not in ("RUNNING", "STOPPING", "CLEANUP"):
+                        self.append_log("MAIN", f"[Runner] PC_FINISHED ignored (state={prev_state})")
+                        continue
+
                     ok = bool(cmd.ok)
                     detail = dict(cmd.detail or {})
                     self._runner_state = "CLEANUP"
@@ -3225,6 +3251,10 @@ class ChamberRuntime:
 
                 await self._start_after_preflight(norm, gen)
                 self._runner_state = "RUNNING"
+
+                # ✅ 핵심: 공정을 “시작”했으면 ADVANCE_QUEUE stage는 여기서 종료.
+                #    finished 이벤트는 Runner가 PC_FINISHED로 받아 AFTER_FINISH → 다음 ADVANCE_QUEUE로 이어간다.
+                return
 
         except asyncio.CancelledError:
             self.append_log("MAIN", "[Runner] ADVANCE_QUEUE cancelled")
@@ -4390,7 +4420,7 @@ class ChamberRuntime:
         with contextlib.suppress(Exception):
             self._log_enqueue_nowait("# ==== END ====\n")
 
-    def _log_enqueue_nowait(self, line: str) -> None:
+    def _log_enqueue_nowait(self, line: str | None) -> None:
         try:
             self._log_q.put_nowait(line)
         except asyncio.QueueFull:
@@ -4504,10 +4534,30 @@ class ChamberRuntime:
                             loop.run_in_executor(self._log_io_exec, self._log_write_sync, path, text),
                             timeout=6.0
                         )
-                    except Exception:
-                        # 원래 위치 쓰기 실패 → 로컬 drain 파일로라도 남김
+                    except Exception as e:
+                        # ✅ 1) 로컬로 “같은 파일명”에 이어 붙이기 (END가 여기라도 붙게)
+                        def _write_local_same_name() -> None:
+                            local_dir = Path.cwd() / f"_Logs_local_CH{self.ch}"
+                            local_dir.mkdir(parents=True, exist_ok=True)
+
+                            # 원래 파일명이 있으면 그대로 사용
+                            target = local_dir / Path(path).name
+                            with open(target, "a", encoding="utf-8", newline="") as fp:
+                                fp.write(text)
+
+                            # 실패 원인도 같이 남기기(최소 1줄)
+                            with open(target, "a", encoding="utf-8", newline="") as fp:
+                                fp.write(f"# [shutdown] final flush failed: {e!r}\n")
+
                         with contextlib.suppress(Exception):
-                            await asyncio.wait_for(loop.run_in_executor(self._log_io_exec, _write_local_drain), timeout=2.0)
+                            await asyncio.wait_for(loop.run_in_executor(self._log_io_exec, _write_local_same_name), timeout=2.0)
+
+                        # ✅ 2) UI에도 한 줄은 남기기(파일 큐에 다시 넣지 말고, 위젯에 직접)
+                        w = getattr(self, "_w_log", None)
+                        if w and _qt_is_valid(w):
+                            with contextlib.suppress(Exception):
+                                w.appendPlainText(f"[Logger] ⚠ final flush failed → local fallback (reason={e!r})")
+                                
                 else:
                     # path 자체가 없으면 로컬 drain로
                     with contextlib.suppress(Exception):
@@ -4539,7 +4589,7 @@ class ChamberRuntime:
     def _clear_queue_and_reset_ui(self) -> None:
         # 전역 runtime_state로 종료 시각을 기록하므로 로컬 타임스탬프는 불필요
         # ★ 추가: 남아 있을 수 있는 카운트다운 태스크 정리
-        self._cancel_delay_task()
+        #self._cancel_delay_task()
 
         # 1) 리스트 공정 인덱스/큐 초기화
         self.current_process_index = -1
