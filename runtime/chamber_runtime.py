@@ -323,7 +323,11 @@ class ChamberRuntime:
         self._runner_stage_kind: str | None = None
         self._runner_queue_mode: bool = False
         self._runner_next_params: NormParams | None = None
-        
+
+        # ✅ stage 취소(교체) 의도 플래그: Runner가 stage를 교체하기 위해 cancel 하는 경우를 구분
+        self._expected_stage_cancel_task: asyncio.Task | None = None
+        self._expected_stage_cancel_kind: str | None = None
+    
         # ✅ 런(시작) 세대 번호: 프리플라이트/정리 레이스 방지 + watchdog 식별
         self._run_gen: int = 0
         self._active_run_gen: int = 0
@@ -1149,8 +1153,9 @@ class ChamberRuntime:
                         self._last_polling_targets = None
                     except Exception as e:
                         self.append_log("MAIN", f"예외 발생 (finished 처리): {e}")
-                        # ✅ finished 처리 중 예외가 나도 Runner/큐 상태를 건드리지 않는다.
-                        #    (late/stale 이벤트가 다음 공정을 cancel시키는 레이스 방지)
+                        # ✅ 여기서 Runner/큐/UI를 리셋하지 않는다.
+                        # (stale finished/후행 이벤트가 다음 공정을 끊는 레이스 방지)
+                        pass
 
                     finally:
                         try:
@@ -1195,21 +1200,7 @@ class ChamberRuntime:
                             pass
 
                 elif kind == "aborted":
-                    # ✅ 중요:
-                    # aborted 이벤트는 finished 이후에도 "추가로" 따라올 수 있음(후행 이벤트).
-                    # 여기서 UI reset / Runner stage cancel을 하면,
-                    # 이전 공정의 늦은 aborted가 "다음 공정"의 START_SINGLE/ADVANCE_QUEUE를 끊어버리는 레이스가 생긴다.
-                    # 따라서 aborted는 알림/로그만 남기고,
-                    # 정리/다음 공정 진행은 finished → PC_FINISHED → Runner가 담당한다.
                     try:
-                        # (선택) 상태 로그만 남김
-                        self.append_log(
-                            "MAIN",
-                            f"[PC] aborted event received (runner_state={getattr(self, '_runner_state', None)}, "
-                            f"stage={getattr(self, '_runner_stage_kind', None)})"
-                        )
-
-                        # (선택) 알림만
                         if self.chat:
                             try:
                                 ret = self.chat.notify_text(f"🛑 CH{self.ch} 공정 중단")
@@ -1218,14 +1209,28 @@ class ChamberRuntime:
                             except Exception as e:
                                 self.append_log("CHAT", f"구글챗 중단 알림 전송 실패: {e!r}")
 
-                        # ✅ 절대 하지 말 것:
-                        # - self._clear_queue_and_reset_ui()
-                        # - self._cancel_delay_task()
-                        # - self.mfc.on_process_finished(False)
+                        # ✅ runtime_state는 '중단'으로만 마킹(선택)
+                        try:
+                            if not runtime_state.has_error("chamber", self.ch):
+                                runtime_state.set_error("chamber", self.ch, "aborted")
+                            runtime_state.mark_finished("chamber", self.ch)
+                        except Exception:
+                            pass
+
+                        # ✅ 핵심: aborted는 Runner에만 통지하고,
+                        #    UI/큐/딜레이/스테이지는 절대 여기서 건드리지 않는다.
+                        self._runner_put(_RunnerCmd(
+                            kind="PC_FINISHED",
+                            ok=False,
+                            detail={"stopped": True, "reason": "aborted"}
+                        ))
+
+                        self.append_log("MAIN", f"[PC] aborted event received → forwarded to Runner (ignored if stale)")
 
                     except Exception as e:
-                        self.append_log("MAIN", f"예외 발생 (aborted 처리): {e!r}")
-                        # ✅ 여기서도 UI reset 금지 (레이스 트리거)
+                        self.append_log("MAIN", f"예외 발생 (aborted 처리): {e}")
+                        # ❌ 여기서도 _clear_queue_and_reset_ui() 같은 리셋 금지
+                        pass
 
                 elif kind == "polling_targets":
                     targets = dict(payload.get("targets") or {})
@@ -2218,6 +2223,10 @@ class ChamberRuntime:
                 # ✅ 상태 RUNNING (UI/상태/구글챗 흐름은 정상 공정과 동일)
                 self._on_process_status_changed(True)
 
+                # ✅ 더 최신 Start가 들어오면(세대 불일치) start_process 호출 금지
+                if int(getattr(self, "_active_run_gen", 0)) != int(run_gen):
+                    return
+
                 # ✅ 핵심: ProcessController가 TEST MODE(DELAY) 시퀀스로 실행
                 self.process_controller.start_process(params)
                 return
@@ -2380,6 +2389,10 @@ class ChamberRuntime:
 
             self._last_polling_targets = None
             self.append_log("MAIN", "장비 연결 확인 완료 → 공정 시작")
+
+            with contextlib.suppress(Exception):
+                runtime_state.mark_started("chamber", self.ch)
+
             self.process_controller.start_process(params)
 
         except Exception as e:
@@ -2653,6 +2666,11 @@ class ChamberRuntime:
             if getattr(self, "process_queue", None):
                 self.append_log("MAIN", f"[CH{self.ch}] 파일 기반 자동 공정 시작")
                 self.current_process_index = -1
+
+                # ✅ 클릭-연타/중복 signal로 START_QUEUE가 2번 enqueue 되는 레이스 방지
+                #    (ADVANCE_QUEUE cancelled → 멈춤 방지)
+                self._runner_state = "COOLDOWN"
+
                 self._runner_put(_RunnerCmd(kind="START_QUEUE"))
                 return
 
@@ -2694,6 +2712,10 @@ class ChamberRuntime:
                 return
 
             self.append_log("MAIN", "입력 검증 통과 → Runner START")
+
+            # ✅ 클릭-연타/중복 signal 방지: enqueue 전에 먼저 busy 마킹
+            self._runner_state = "PREFLIGHT"
+
             self._runner_put(_RunnerCmd(kind="START", params=cast(NormParams, params)))
 
         except Exception as e:
@@ -2822,13 +2844,24 @@ class ChamberRuntime:
         kind: str,
         coro: Coroutine[Any, Any, Any],
         *,
-        cancel_timeout: float = 2.0,
+        cancel_timeout: float = 10.0,
     ) -> None:
         """
         Runner 내부에서만 쓰는 '단일 stage task' 실행기.
-        - 기존 stage는 cancel 후 "완전히 끝날 때까지" 잠깐 기다려 레이스를 제거한다.
+        - 기존 stage는 cancel 후 "완전히 끝날 때까지" 기다려 레이스를 제거한다.
+
+        ✅ 중요: stage cancel이 timeout이면(=아직 살아있을 수 있음) 새 stage를 시작하면 안 된다.
+        (유령 stage + 동시 실행 → ADVANCE_QUEUE cancelled / 대기중 멈춤 유발)
         """
-        await self._runner_cancel_stage(timeout=cancel_timeout)
+        await self._runner_cancel_stage(timeout=cancel_timeout, reason=f"start:{kind}")
+
+        # cancel이 timeout이면 _runner_stage_task가 그대로 남아있다 → 새 stage 시작 금지
+        t_prev = getattr(self, "_runner_stage_task", None)
+        if isinstance(t_prev, asyncio.Task) and (not t_prev.done()):
+            self.append_log("MAIN", f"[Runner] start_stage blocked: previous stage still alive kind={getattr(self, '_runner_stage_kind', None)}")
+            # 시작은 막되, UI는 멈춰있는 것처럼 보이지 않게 IDLE로 표시(단, pending cleanup으로 Start는 차단됨)
+            self._runner_state = "IDLE"
+            return
 
         self._runner_stage_kind = kind
         self._runner_stage_task = self._spawn_detached(
@@ -2838,23 +2871,71 @@ class ChamberRuntime:
         )
 
 
-    async def _runner_cancel_stage(self, *, timeout: float = 2.0) -> None:
-        """stage task가 있으면 취소하고 종료까지(최대 timeout) 기다린다."""
+    async def _runner_cancel_stage(
+        self,
+        *,
+        timeout: float = 10.0,
+        reason: str = "stage-switch",
+    ) -> None:
+        """
+        stage task가 있으면 취소하고 종료까지(최대 timeout) 기다린다.
+
+        ✅ 핵심:
+        - timeout 내에 stage가 끝나지 않으면: 참조를 지우지 않는다(유령 stage 방지)
+        - 대신 _pending_device_cleanup=True로 승격해서 다음 Start를 차단한다.
+        """
         t = getattr(self, "_runner_stage_task", None)
 
-        # ✅ 핵심: cancel 전에 stage 참조를 먼저 끊는다.
-        #    → cancel된 stage가 CancelledError 처리에서
-        #      '_runner_stage_task is cur' 조건을 만족 못해서
-        #      UI/큐 reset 레이스가 사라짐
-        self._runner_stage_task = None
-        self._runner_stage_kind = None
+        # stage가 없거나 이미 끝났으면 정리
+        if not isinstance(t, asyncio.Task) or t.done():
+            self._runner_stage_task = None
+            self._runner_stage_kind = None
+            return
 
-        if isinstance(t, asyncio.Task) and (not t.done()):
-            cur = asyncio.current_task()
-            if t is not cur:
-                t.cancel()
-                with contextlib.suppress(asyncio.CancelledError, Exception):
-                    await asyncio.wait_for(t, timeout=timeout)
+        cur = asyncio.current_task()
+        if t is cur:
+            return
+
+        kind = getattr(self, "_runner_stage_kind", None)
+        state = getattr(self, "_runner_state", None)
+
+        # Runner가 의도적으로 cancel하는 경우 표시(취소 핸들러에서 “예상된 취소”로 처리)
+        self._expected_stage_cancel_task = t
+        self._expected_stage_cancel_kind = kind
+
+        self.append_log(
+            "MAIN",
+            f"[Runner] cancel stage begin kind={kind} state={state} reason={reason} timeout={timeout:.1f}s"
+        )
+
+        try:
+            t.cancel()
+            try:
+                await asyncio.wait_for(t, timeout=timeout)
+            except asyncio.TimeoutError:
+                # ❗ stage가 아직 살아있을 수 있음 → 참조 유지 + 시작 차단
+                self.append_log(
+                    "MAIN",
+                    f"[Runner] stage cancel TIMEOUT ({timeout:.1f}s) kind={kind} state={state} → pending cleanup"
+                )
+                self._pending_device_cleanup = True
+                self._cleanup_timed_out = True
+                with contextlib.suppress(Exception):
+                    self._set_state_text("정리 지연(취소 타임아웃). STOP을 한 번 더 눌러 복구를 시도하세요.")
+                return
+            except asyncio.CancelledError:
+                pass
+            except Exception as e:
+                self.append_log("MAIN", f"[Runner] stage cancel wait exception kind={kind}: {e!r} (ignored)")
+        finally:
+            if getattr(self, "_expected_stage_cancel_task", None) is t:
+                self._expected_stage_cancel_task = None
+                self._expected_stage_cancel_kind = None
+
+        # 여기까지 왔으면 done이거나 거의 확실히 종료
+        if t.done():
+            self._runner_stage_task = None
+            self._runner_stage_kind = None
 
 
     def _cancel_delay_task(self) -> None:
@@ -2916,7 +2997,17 @@ class ChamberRuntime:
         self._auto_connect_enabled = False
 
         # stage 취소 (프리플라이트/딜레이/큐 advance 등)
-        await self._runner_cancel_stage()
+        await self._runner_cancel_stage(timeout=10.0, reason="stop")
+
+        # cancel timeout이면 stage가 아직 살아있을 수 있다 → 강제 복구 모드로 승격
+        t_stage = getattr(self, "_runner_stage_task", None)
+        if isinstance(t_stage, asyncio.Task) and (not t_stage.done()):
+            self.append_log("MAIN", f"[Runner] STOP: stage cancel incomplete(kind={getattr(self,'_runner_stage_kind',None)}) → pending cleanup")
+            self._pending_device_cleanup = True
+            self._runner_state = "IDLE"
+            with contextlib.suppress(Exception):
+                self._set_state_text("정리 지연(취소 미완료). STOP을 한 번 더 눌러 복구를 시도하세요.")
+            return
 
         # 공정이 실행 중이면: PC에 stop 요청만 보낸다(장치 정리는 finished 이후)
         if bool(getattr(self.process_controller, "is_running", False)):
@@ -2948,15 +3039,11 @@ class ChamberRuntime:
 
     async def _runner_main(self, token: str) -> None:
         """
-        ✅ 핵심: Start/Stop/Finished/Next를 Runner가 단일 진입점으로 처리한다.
+        Runner 메인 루프:
+        - UI/Host/기타 경로에서 들어오는 START/START_QUEUE/STOP/PC_FINISHED를 '단일 지점'에서 순차 처리.
+        - stage 실행은 _runner_start_stage()로 통일한다.
         """
-        self.append_log("MAIN", f"[Runner] started (CH{self.ch}) token={token[:8]}")
-
         while True:
-            # ✅ 최신 runner가 아니면 종료
-            if getattr(self, "_runner_token", None) != token:
-                return
-        
             cmd = await self._cmd_q.get()
 
             # ✅ get 직후에도 재확인: stale runner가 명령을 “먹어버리는” 걸 방지
@@ -2967,16 +3054,31 @@ class ChamberRuntime:
 
             try:
                 if cmd.kind == "START":
+                    # ✅ 중복 START 방지: stage가 이미 실행 중이면 무시
+                    t_stage = getattr(self, "_runner_stage_task", None)
+                    if isinstance(t_stage, asyncio.Task) and (not t_stage.done()):
+                        self.append_log(
+                            "MAIN",
+                            f"[Runner] START ignored (stage running kind={getattr(self,'_runner_stage_kind',None)})"
+                        )
+                        continue
+
                     if not isinstance(cmd.params, dict):
                         self.append_log("MAIN", "[Runner] START: params missing → ignore")
                         continue
+
                     self._runner_queue_mode = False
                     self._runner_state = "PREFLIGHT"
                     await self._runner_start_stage("START_SINGLE", self._runner_stage_start_single(cmd.params))
 
                 elif cmd.kind == "START_QUEUE":
-                    if self._runner_state != "IDLE":
-                        self.append_log("MAIN", f"[Runner] START_QUEUE ignored (state={self._runner_state}, stage={self._runner_stage_kind})")
+                    # ✅ 중복 START_QUEUE 방지: stage가 이미 실행 중이면 무시
+                    t_stage = getattr(self, "_runner_stage_task", None)
+                    if isinstance(t_stage, asyncio.Task) and (not t_stage.done()):
+                        self.append_log(
+                            "MAIN",
+                            f"[Runner] START_QUEUE ignored (stage running kind={getattr(self,'_runner_stage_kind',None)})"
+                        )
                         continue
 
                     self._runner_queue_mode = True
@@ -3000,8 +3102,6 @@ class ChamberRuntime:
                     # STOP은 즉시 처리(현재 stage 취소/정리)
                     self._runner_state = "STOPPING"
                     await self._runner_handle_stop(cmd.user_initiated)
-                    # ✅ RUNNING 상태에서 STOP을 누른 경우 finished 이벤트가 오기 전까지 STOPPING 유지가 안전
-                    # (_runner_handle_stop 내부에서 최종 상태를 결정한다.)
 
                 else:
                     self.append_log("MAIN", f"[Runner] unknown cmd: {cmd.kind}")
@@ -3009,7 +3109,6 @@ class ChamberRuntime:
             except Exception as e:
                 tb = "".join(traceback.format_exception(type(e), e, e.__traceback__)).rstrip()
                 self.append_log("MAIN", f"[Runner] loop exception:\n{tb}")
-                # 최후 안전: UI/상태 리셋
                 with contextlib.suppress(Exception):
                     self._clear_queue_and_reset_ui()
                 self._runner_state = "IDLE"
@@ -3042,19 +3141,16 @@ class ChamberRuntime:
         except asyncio.CancelledError:
             self.append_log("MAIN", "[Runner] START_SINGLE cancelled")
 
-            # ✅ 이 stage가 "현재 stage"로 등록된 상태에서 취소된 경우만 복구
-            cur = asyncio.current_task()
-            if (
-                cur is not None
-                and getattr(self, "_runner_stage_task", None) is cur
-                and getattr(self, "_runner_stage_kind", None) == "START_SINGLE"
-                and getattr(self, "_runner_state", "") != "STOPPING"
-            ):
-                self._runner_queue_mode = False
-                self._runner_state = "IDLE"
-                with contextlib.suppress(Exception):
-                    self._clear_queue_and_reset_ui()
+            # ✅ Runner가 stage 교체/STOP 처리 중 의도적으로 cancel한 경우:
+            #    - 여기서 queue/UI/state를 건드리면 다음 stage(또는 STOP cleanup)가 망가질 수 있음
+            if getattr(self, "_expected_stage_cancel_task", None) is asyncio.current_task():
+                raise
 
+            # ✅ 의도치 않은 cancel(외부 cancel/레이스)일 때만 최소 복구
+            with contextlib.suppress(Exception):
+                runtime_state.mark_finished("chamber", self.ch)
+            self._runner_queue_mode = False
+            self._runner_state = "IDLE"
             raise
 
         except Exception as e:
@@ -3125,11 +3221,6 @@ class ChamberRuntime:
         - delay step이면 대기 후 다음으로 계속
         - normal step이면 preflight → start_process 진입
         """
-        if getattr(self, "_advancing", False):
-            self.append_log("MAIN", "[Runner] advance reentry blocked")
-            return
-
-        self._advancing = True
         try:
             if not was_successful:
                 self.append_log("MAIN", "[Runner] prev failed → stop queue")
@@ -3178,7 +3269,6 @@ class ChamberRuntime:
                         remain -= 1
 
                     self.append_log("Process", f"[Runner] '{name}' 지연 완료 → 다음 스텝")
-                    # delay step은 공정이 아니라 대기였으므로, 다음 스텝으로 계속 진행
                     await asyncio.sleep(0)
                     continue
 
@@ -3243,35 +3333,24 @@ class ChamberRuntime:
                 gen = self._run_gen
                 self._active_run_gen = gen
 
-                # ✅ 기존 _safe_start_process와 동일하게 "시작" 상태를 먼저 찍어 둔다.
-                #    - preflight 중에도 다른 Start를 막고
-                #    - Host/외부에서 is_running 판정을 일관되게 하기 위함
                 with contextlib.suppress(Exception):
                     runtime_state.mark_started("chamber", self.ch)
 
                 await self._start_after_preflight(norm, gen)
                 self._runner_state = "RUNNING"
-
-                # ✅ 핵심: 공정을 “시작”했으면 ADVANCE_QUEUE stage는 여기서 종료.
-                #    finished 이벤트는 Runner가 PC_FINISHED로 받아 AFTER_FINISH → 다음 ADVANCE_QUEUE로 이어간다.
                 return
 
         except asyncio.CancelledError:
             self.append_log("MAIN", "[Runner] ADVANCE_QUEUE cancelled")
 
-            cur = asyncio.current_task()
-            if (
-                cur is not None
-                and getattr(self, "_runner_stage_task", None) is cur
-                and getattr(self, "_runner_stage_kind", None) == "ADVANCE_QUEUE"
-                and getattr(self, "_runner_state", "") != "STOPPING"
-            ):
-                # ✅ queue 진행 중 취소로 끝났으면 다음 Start가 막히지 않도록 IDLE로 복구
-                self._runner_queue_mode = False
-                self._runner_state = "IDLE"
-                with contextlib.suppress(Exception):
-                    self._clear_queue_and_reset_ui()
+            if getattr(self, "_expected_stage_cancel_task", None) is asyncio.current_task():
+                raise
 
+            with contextlib.suppress(Exception):
+                runtime_state.mark_finished("chamber", self.ch)
+
+            self._runner_queue_mode = False
+            self._runner_state = "IDLE"
             raise
 
         except Exception as e:
@@ -3283,8 +3362,6 @@ class ChamberRuntime:
             with contextlib.suppress(Exception):
                 self._clear_queue_and_reset_ui()
             self._runner_state = "IDLE"
-        finally:
-            self._advancing = False
     # ======================= runner 메서드 =======================
 
 
