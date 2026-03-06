@@ -307,7 +307,7 @@ class RFPulseAsync:
     async def cleanup(self):
         self._closing = True
         self._want_connected = False
-        self.set_process_status(False) # 폴링만 중지하고, SAFE 시퀀스는 수행하지 않음
+        self.set_process_status(False)  # 폴링만 중지, SAFE 시퀀스는 여기서 안 함
         await asyncio.sleep(0.2)
 
         await self._cancel_task("_poll_task")
@@ -322,12 +322,33 @@ class RFPulseAsync:
             with contextlib.suppress(Exception):
                 await self._reader_task
             self._reader_task = None
+
         if self._writer:
-            with contextlib.suppress(Exception):
+            try:
                 self._writer.close()
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(self._writer.wait_closed(), timeout=0.8)
+            except Exception:
+                transport = getattr(self._writer, "transport", None)
+                if transport:
+                    with contextlib.suppress(Exception):
+                        transport.abort()
+
+        # 남아 있을 수 있는 ACK/NAK/FRAME 토큰 제거
+        while True:
+            try:
+                self._tok_q.get_nowait()
+            except asyncio.QueueEmpty:
+                break
+
         self._reader = None
         self._writer = None
         self._connected = False
+        self._just_reopened = False
+        self._last_forward_w = None
+        self._last_reflected_w = None
+        self._last_status = None
+
         await self._emit_status("RFPulse 연결 종료됨")
 
     async def events(self) -> AsyncGenerator[RFPulseEvent, None]:
@@ -1311,6 +1332,8 @@ class RFPulseAsync:
             t.cancel()
             try:
                 await t
+            except asyncio.CancelledError:
+                pass
             except Exception:
                 pass
             setattr(self, name, None)
@@ -1374,6 +1397,8 @@ class RFPulseAsync:
             t.cancel()
             try:
                 await t
+            except asyncio.CancelledError:
+                pass
             except Exception:
                 pass
             self._watchdog_task = None

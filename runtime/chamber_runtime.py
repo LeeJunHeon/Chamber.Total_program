@@ -324,6 +324,10 @@ class ChamberRuntime:
         self._runner_queue_mode: bool = False
         self._runner_next_params: NormParams | None = None
 
+        # ✅ Runner cmd 디바운스(중복/잔여 STOP이 다음 START를 끊는 레이스 차단)
+        self._runner_cmd_start_enqueued: bool = False
+        self._runner_cmd_stop_enqueued: bool = False
+
         # ✅ stage 취소(교체) 의도 플래그: Runner가 stage를 교체하기 위해 cancel 하는 경우를 구분
         self._expected_stage_cancel_task: asyncio.Task | None = None
         self._expected_stage_cancel_kind: str | None = None
@@ -768,10 +772,9 @@ class ChamberRuntime:
                 if not self.rf_pulse:
                     return
                 try:
-                    # stop_process가 동기/blocking이어도 UI 안 멈추게
-                    res = await asyncio.to_thread(self.rf_pulse.stop_process)
-                    if inspect.isawaitable(res):
-                        await res
+                    # stop_process는 실제 I/O를 여기서 block하지 않고
+                    # 내부 명령 큐에 RF OFF를 넣는 구조이므로 직접 호출만 하면 충분함
+                    self.rf_pulse.stop_process()
                 except Exception as e:
                     self.append_log("RFPulse", f"stop_process failed: {e!r}")
             self._spawn_detached(run())
@@ -2179,6 +2182,42 @@ class ChamberRuntime:
 
         self.append_log("MAIN", f"[CH{self.ch}] Gate 상태=moving_or_unknown (OPEN/CLOSE 모두 FALSE) → 시작 차단")
         return False
+    
+    async def _pulse_reconnect_safe(
+        self,
+        dev: Any,
+        label: str,
+        host: str,
+        port: int,
+        *,
+        timeout_s: float = 2.0,
+    ) -> None:
+        """
+        STOP 직후 다음 런에서 pulse reconnect 중 내부 watchdog cancel이
+        CancelledError로 새는 경우를 '조용한 stage cancel'이 아니라
+        '명시적인 reconnect 실패'로 바꿔준다.
+        """
+        if not dev or not hasattr(dev, "set_endpoint_reconnect"):
+            return
+
+        try:
+            self.append_log("MAIN", f"[Runner] {label} reconnect 시작: {host}:{port}")
+            await asyncio.wait_for(dev.set_endpoint_reconnect(host, port), timeout=timeout_s)
+            self.append_log("MAIN", f"[Runner] {label} reconnect 완료")
+        except asyncio.TimeoutError:
+            raise RuntimeError(f"{label} reconnect timeout({timeout_s:.1f}s)")
+        except asyncio.CancelledError:
+            # STOP / stage-switch로 의도적으로 취소된 경우는 그대로 올려보낸다.
+            if getattr(self, "_expected_stage_cancel_task", None) is asyncio.current_task():
+                raise
+
+            self.append_log(
+                "MAIN",
+                f"[Runner] {label} reconnect 중 예상치 못한 CancelledError 발생"
+            )
+            raise RuntimeError(f"{label} reconnect cancelled unexpectedly")
+        except Exception as e:
+            raise RuntimeError(f"{label} reconnect failed: {e!r}")
 
     async def _start_after_preflight(self, params: NormParams, run_gen: int) -> None:
         try:
@@ -2289,13 +2328,16 @@ class ChamberRuntime:
             # - DC Pulse  : cfg.DCPULSE_TCP
             # - RF Pulse  : RFPulseAsync 내부 설정(또는 cfg.RFPULSE_TCP가 있으면 그 값)
 
-            # (선택) DC는 필요시 재연결만 수행 (원래도 DC 포트를 써야 하니까 OK)
+            # (선택) DC는 필요시 재연결만 수행
             if use_dc_pulse and self.dc_pulse and hasattr(self.dc_pulse, "set_endpoint_reconnect"):
                 host, port = self.cfg.DCPULSE_TCP
-                try:
-                    await asyncio.wait_for(self.dc_pulse.set_endpoint_reconnect(host, port), timeout=2.0)
-                except asyncio.TimeoutError:
-                    raise RuntimeError("DC-Pulse reconnect timeout(2s)")
+                await self._pulse_reconnect_safe(
+                    self.dc_pulse,
+                    "DC-Pulse",
+                    host,
+                    port,
+                    timeout_s=2.0,
+                )
 
             # ✅ RF는 DCPULSE_TCP로 절대 덮어쓰지 않는다.
             #    - RFPulseAsync가 내부적으로 RF 포트를 알고 있으면: 아무 것도 안 해도 됨
@@ -2304,10 +2346,13 @@ class ChamberRuntime:
                 rf_tcp = getattr(self.cfg, "RFPULSE_TCP", None)
                 if rf_tcp:
                     host, port = rf_tcp
-                    try:
-                        await asyncio.wait_for(self.rf_pulse.set_endpoint_reconnect(host, port), timeout=2.0)
-                    except asyncio.TimeoutError:
-                        raise RuntimeError("RF-Pulse reconnect timeout(2s)")
+                    await self._pulse_reconnect_safe(
+                        self.rf_pulse,
+                        "RF-Pulse",
+                        host,
+                        port,
+                        timeout_s=2.0,
+                    )
                 # else: RFPulseAsync 내부 설정을 그대로 사용
 
             self._ensure_background_started()
@@ -2667,10 +2712,7 @@ class ChamberRuntime:
                 self.append_log("MAIN", f"[CH{self.ch}] 파일 기반 자동 공정 시작")
                 self.current_process_index = -1
 
-                # ✅ 클릭-연타/중복 signal로 START_QUEUE가 2번 enqueue 되는 레이스 방지
-                #    (ADVANCE_QUEUE cancelled → 멈춤 방지)
-                self._runner_state = "COOLDOWN"
-
+                # Runner state는 Runner 내부에서만 변경
                 self._runner_put(_RunnerCmd(kind="START_QUEUE"))
                 return
 
@@ -2713,9 +2755,7 @@ class ChamberRuntime:
 
             self.append_log("MAIN", "입력 검증 통과 → Runner START")
 
-            # ✅ 클릭-연타/중복 signal 방지: enqueue 전에 먼저 busy 마킹
-            self._runner_state = "PREFLIGHT"
-
+            # ✅ Runner만 _runner_state를 소유하게 한다(여기서 선점 금지)
             self._runner_put(_RunnerCmd(kind="START", params=cast(NormParams, params)))
 
         except Exception as e:
@@ -2812,19 +2852,37 @@ class ChamberRuntime:
 
 
     def _runner_put(self, cmd: _RunnerCmd) -> None:
-        """
-        Runner 명령 큐에 넣는다.
-        - put을 수행하는 동일 tick(루프 스레드)에서 Runner 보장까지 같이 한다.
-        """
         loop = self._loop
 
         def _do_put() -> None:
             # ✅ put 직전에 루프 스레드에서 Runner 1개 보장(중복 정리 포함)
             self._ensure_runner_started()
 
+            # ============================================================
+            # ✅ 핵심: START/STOP 중복 enqueue 차단 (레이스/잔여 STOP 방지)
+            # ============================================================
+            if cmd.kind in ("START", "START_QUEUE"):
+                if getattr(self, "_runner_cmd_start_enqueued", False):
+                    self.append_log("MAIN", f"[Runner] drop duplicate {cmd.kind} (already enqueued)")
+                    return
+                self._runner_cmd_start_enqueued = True
+
+            elif cmd.kind == "STOP":
+                # STOP은 연타/중복 시그널이 들어오면 다음 START를 끊을 수 있으므로 1개만 유지
+                # 단, _pending_device_cleanup(취소 타임아웃) 상태에서는 STOP 재시도가 필요하니 허용
+                if getattr(self, "_runner_cmd_stop_enqueued", False) and (not getattr(self, "_pending_device_cleanup", False)):
+                    self.append_log("MAIN", "[Runner] drop duplicate STOP (already enqueued)")
+                    return
+                self._runner_cmd_stop_enqueued = True
+
             try:
                 self._cmd_q.put_nowait(cmd)
             except asyncio.QueueFull:
+                # rollback
+                if cmd.kind in ("START", "START_QUEUE"):
+                    self._runner_cmd_start_enqueued = False
+                elif cmd.kind == "STOP":
+                    self._runner_cmd_stop_enqueued = False
                 self.append_log("MAIN", f"[Runner] cmd queue full → drop: {cmd.kind}")
 
         try:
@@ -3045,6 +3103,12 @@ class ChamberRuntime:
         """
         while True:
             cmd = await self._cmd_q.get()
+
+            # ✅ 디바운스 플래그 해제: 이제부터는 Runner state/stage로 중복 방지
+            if cmd.kind in ("START", "START_QUEUE"):
+                self._runner_cmd_start_enqueued = False
+            elif cmd.kind == "STOP":
+                self._runner_cmd_stop_enqueued = False
 
             # ✅ get 직후에도 재확인: stale runner가 명령을 “먹어버리는” 걸 방지
             if getattr(self, "_runner_token", None) != token:

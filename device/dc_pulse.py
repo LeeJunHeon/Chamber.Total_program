@@ -1646,6 +1646,8 @@ class AsyncDCPulse:
             t.cancel()
             try:
                 await t
+            except asyncio.CancelledError:
+                pass
             except Exception:
                 pass
             setattr(self, name, None)
@@ -1689,6 +1691,8 @@ class AsyncDCPulse:
             t.cancel()
             try:
                 await t
+            except asyncio.CancelledError:
+                pass
             except Exception:
                 pass
             self._watchdog_task = None
