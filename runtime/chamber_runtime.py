@@ -4626,42 +4626,57 @@ class ChamberRuntime:
                 # ✅ open/write/flush는 무조건 스레드로
                 try:
                     loop = asyncio.get_running_loop()
-                    await asyncio.wait_for(
-                        loop.run_in_executor(self._log_io_exec, self._log_write_sync, self._log_file_path, text),
-                        timeout=5.0,
+
+                    # SessionTextAppender가 내부에서
+                    # 1) NAS 기록
+                    # 2) 실패 시 self._local_log_dir 로 자동 폴백
+                    # 을 처리하므로, 여기서는 "직접 로컬 파일 쓰기"를 하지 않는다.
+                    await loop.run_in_executor(
+                        self._log_io_exec,
+                        self._log_write_sync,
+                        self._log_file_path,
+                        text,
                     )
-                except Exception as e:
+
+                    # ✅ SessionTextAppender가 이번 write에서 fallback으로 전환됐는지 1회 알림
                     try:
-                        local_dir = Path.cwd() / f"_Logs_local_CH{self.ch}"
-                        local_dir.mkdir(parents=True, exist_ok=True)
-
-                        base_name = (
-                            Path(self._log_file_path).name
-                            if self._log_file_path
-                            else f"CH{self.ch}_{datetime.now():%Y%m%d_%H%M%S}.txt"
+                        switched = await loop.run_in_executor(
+                            self._log_io_exec,
+                            self._run_log_appender.consume_switched_flag,
                         )
-                        local_path = local_dir / base_name
+                        if switched:
+                            cur_path = getattr(self._run_log_appender, "current_path", None)
+                            self._soon(
+                                self._enqueue_ui_log,
+                                f"[{datetime.now().strftime('%H:%M:%S')}] [CH{self.ch}:Logger] 세션 로그를 로컬 폴백으로 전환: {cur_path}"
+                            )
+                    except Exception:
+                        pass
 
-                        def _write_local_direct() -> None:
-                            with open(local_path, "a", encoding="utf-8", newline="") as fp:
+                except Exception as e:
+                    # ✅ 여기서 정상 run 파일명으로 직접 로컬 append 하지 않는다.
+                    #    그렇게 하면 '부분 로그', 'end만 있는 로그', '중복 로그'가 생긴다.
+                    try:
+                        local_dir = self._local_log_dir
+                        local_dir.mkdir(parents=True, exist_ok=True)
+                        emergency_path = local_dir / f"CH{self.ch}_{datetime.now():%Y%m%d_%H%M%S}_writer_pending.txt"
+
+                        def _write_emergency() -> None:
+                            with open(emergency_path, "a", encoding="utf-8", newline="") as fp:
+                                fp.write("# [log-writer pending]\n")
+                                if self._log_file_path:
+                                    fp.write(f"# source_path = {self._log_file_path}\n")
+                                fp.write(f"# reason = {e!r}\n")
                                 fp.write(text)
 
-                        loop = asyncio.get_running_loop()
-                        await asyncio.wait_for(
-                            loop.run_in_executor(self._log_io_exec, _write_local_direct),
-                            timeout=5.0,
-                        )
+                        await loop.run_in_executor(self._log_io_exec, _write_emergency)
 
                         self._soon(
                             self._enqueue_ui_log,
-                            f"[{datetime.now().strftime('%H:%M:%S')}] [CH{self.ch}:Logger] NAS 로그 쓰기 실패({e!r}) → 로컬 폴백: {local_path}"
+                            f"[{datetime.now().strftime('%H:%M:%S')}] [CH{self.ch}:Logger] 세션 로그 긴급 보관 파일 생성: {emergency_path}"
                         )
                     except Exception:
-                        # ✅ 최악: 로컬도 실패하면, 유실을 최소화하려고 재큐잉(단, 무한루프 주의)
-                        # 필요하면 여기서 batch를 파일 대신 메모리 버퍼로 보관하는 쪽이 더 안전
-                        await asyncio.sleep(0.2)
-                        for s in batch[:50]:  # 너무 많이 재큐잉하면 또 폭주할 수 있으니 제한
-                            self._soon(self._log_enqueue_nowait, s)
+                        pass
 
         except asyncio.CancelledError:
             pass
