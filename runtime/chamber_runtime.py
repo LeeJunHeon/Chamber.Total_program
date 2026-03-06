@@ -3250,7 +3250,6 @@ class ChamberRuntime:
 
             # 2) 공정 종료 후 공통 리셋
             self._last_polling_targets = None
-            self._log_file_path = None  # 다음 공정에서 새 로그 열게
 
             # 3) 큐 진행 여부 결정
             #    - STOP/stopped면 다음 공정으로 넘어가지 않음
