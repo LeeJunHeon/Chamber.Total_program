@@ -1,5 +1,21 @@
 # lib/config_common.py
 
+
+from pathlib import Path
+
+
+# =========================================================
+# Local fallback paths
+# - 폴더는 실제 write 시점에만 생성되도록, 여기서는 Path만 정의
+# =========================================================
+LOCAL_FALLBACK_ROOT = Path.cwd() / "Logs_LocalFallback"
+
+LOCAL_FALLBACK_CH1_DIR = LOCAL_FALLBACK_ROOT / "CH1"
+LOCAL_FALLBACK_CH2_DIR = LOCAL_FALLBACK_ROOT / "CH2"
+LOCAL_FALLBACK_SERVER_DIR = LOCAL_FALLBACK_ROOT / "Server"
+PLC_COIL_LOG_LOCAL_DIR = LOCAL_FALLBACK_ROOT / "PLC_Coil"
+
+
 # === 외부 제어 호스트 서버 설정 ===
 HOST_SERVER_HOST = "0.0.0.0"   # 로컬만 쓰면 "127.0.0.1"
 HOST_SERVER_PORT = 50070       # 방화벽 인바운드 허용 필요

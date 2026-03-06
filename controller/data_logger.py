@@ -10,6 +10,7 @@ from typing import Dict, List, Optional, Callable
 
 from PySide6.QtCore import QObject, Slot
 from util.log_hub import FixedCsvDictAppender
+from lib import config_common as cfgc
 
 
 class DataLogger(QObject):
@@ -35,7 +36,15 @@ class DataLogger(QObject):
         self._nas_dir = Path(csv_dir) if csv_dir else Path(
             r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database"
         )
-        self._local_dir = Path.cwd() / f"_CSV_local_CH{self._ch}"
+        
+        self._local_dir = Path(
+            getattr(
+                cfgc,
+                f"LOCAL_FALLBACK_CH{self._ch}_DIR",
+                Path.cwd() / "Logs_LocalFallback" / f"CH{self._ch}",
+            )
+        )
+
         self._csv_write_lock = threading.Lock()
 
         # NAS 디렉터리 생성 시도 (실패해도 폴백하지 않고, 매번 기록 시마다 다시 시도)

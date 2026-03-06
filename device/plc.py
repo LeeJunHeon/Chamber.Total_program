@@ -965,12 +965,13 @@ class AsyncPLC:
     
     # ---------- PLC COIL CSV LOGGER ----------
     def _default_local_plc_log_dir(self) -> Path:
-        base = (
-            os.environ.get("LOCALAPPDATA")
-            or os.environ.get("APPDATA")
-            or str(Path.home())
+        return Path(
+            getattr(
+                cfgc,
+                "PLC_COIL_LOG_LOCAL_DIR",
+                Path.cwd() / "Logs_LocalFallback" / "PLC_Coil",
+            )
         )
-        return Path(base) / "CH_1_2_program" / "Logs" / "CH1&2" / "CH1&2_PLC"
 
     async def start_plc_coil_csv_logger(
         self, *, interval_s: Optional[float] = None,

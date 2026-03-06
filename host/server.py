@@ -8,6 +8,7 @@ TCP 서버(I/O 전용)
 from __future__ import annotations
 import asyncio, json, contextlib, traceback, time
 from util.log_hub import DailyCsvDictAppender
+from lib import config_common as cfgc
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any
@@ -44,7 +45,13 @@ class DailyCommandCsvLogger:
         self._lock: asyncio.Lock | None = None
 
         primary = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CH1&2") / "CH1&2_Server"
-        fallback = Path.cwd() / "Logs" / "CH1&2" / "CH1&2_Server"
+        fallback = Path(
+            getattr(
+                cfgc,
+                "LOCAL_FALLBACK_SERVER_DIR",
+                Path.cwd() / "Logs_LocalFallback" / "Server",
+            )
+        )
 
         self._writer = DailyCsvDictAppender(
             primary_dir=primary,

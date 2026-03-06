@@ -7,6 +7,7 @@ import re
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
+from lib import config_common as cfgc
 
 from PySide6.QtCore import Qt, Signal, QTimer
 from PySide6.QtWidgets import (
@@ -57,7 +58,7 @@ class ServerPage(QWidget):
 
         # ✅ ServerPage 로그를 하루 1파일(.log)로 자동 저장
         # - ServerPage로 들어오는 로그는 "전부" 저장(Pause/HideStatus 여부 무관)
-        # - NAS(log_root) 실패 시 로컬 ./Logs/CH1&2/CH1&2_Server 로 폴백
+        # - NAS(log_root) 실패 시 로컬 ./Logs_LocalFallback/Server 로 폴백
         self._daily_buf: list[str] = []
         self._daily_ext = ".log"   # 요구사항: .log 고정
 
@@ -281,7 +282,7 @@ class ServerPage(QWidget):
     def _daily_log_dir(self) -> Path:
         """
         NAS 우선: <log_root>/CH1&2_Server
-        실패 시 로컬: ./Logs/CH1&2/CH1&2_Server
+        실패 시 로컬: ./Logs_LocalFallback/Server
         """
         # 1) NAS(log_root) 우선
         if self._log_root:
@@ -293,7 +294,13 @@ class ServerPage(QWidget):
                 pass
 
         # 2) 로컬 폴백
-        d = Path.cwd() / "Logs" / "CH1&2" / "CH1&2_Server"
+        d = Path(
+            getattr(
+                cfgc,
+                "LOCAL_FALLBACK_SERVER_DIR",
+                Path.cwd() / "Logs_LocalFallback" / "Server",
+            )
+        )
         d.mkdir(parents=True, exist_ok=True)
         return d
 
@@ -329,7 +336,17 @@ class ServerPage(QWidget):
 
     def _save_log_to_file(self) -> None:
         try:
-            base = (self._log_root / "CH1&2_Server") if self._log_root else (Path.cwd() / "Logs" / "CH1&2" / "CH1&2_Server")
+            base = (
+                self._log_root / "CH1&2_Server"
+                if self._log_root
+                else Path(
+                    getattr(
+                        cfgc,
+                        "LOCAL_FALLBACK_SERVER_DIR",
+                        Path.cwd() / "Logs_LocalFallback" / "Server",
+                    )
+                )
+            )
             base.mkdir(parents=True, exist_ok=True)
 
             ts = datetime.now().strftime("%Y%m%d_%H%M%S")

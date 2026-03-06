@@ -381,18 +381,26 @@ class ChamberRuntime:
         except Exception:
             self.append_log("Graph", "reset skipped (headless)")
 
-        # 로그 파일 경로 관리(세션 단위) + 사전 버퍼
         self._log_root = Path(log_dir)
-        # ✅ CH 로그를 루트 바로 아래 CH1/CH2에 저장
+
+        # ✅ config_common.py 경로 사용
+        self._local_log_dir = Path(
+            self.cfg._get(
+                f"LOCAL_FALLBACK_CH{self.ch}_DIR",
+                Path.cwd() / "Logs_LocalFallback" / f"CH{self.ch}",
+            )
+        )
+
+        # ✅ CH 로그는 NAS 경로를 우선 사용
         self._log_dir = self._ensure_log_dir(self._log_root / f"CH{self.ch}")
         self._log_file_path: Path | None = None
         self._prestart_buf: Deque[str] = deque(maxlen=1000)
 
-        # ✅ 로컬 폴백 디렉토리(필요 시에만 파일 생성됨)
-        self._local_log_dir = Path.cwd() / f"_Logs_local_CH{self.ch}"
-
-        # ✅ primary(NAS) 실패 시: fallback_dir/<same name>으로 1회 자동 전환
-        self._run_log_appender = SessionTextAppender(fallback_dir=self._local_log_dir, encoding="utf-8")
+        # ✅ 실제 write 실패 시에만 fallback_dir 쪽에 생성/전환
+        self._run_log_appender = SessionTextAppender(
+            fallback_dir=self._local_log_dir,
+            encoding="utf-8",
+        )
 
         self._log_q: asyncio.Queue[str | None] = asyncio.Queue(maxsize=4096)
         self._log_writer_task: asyncio.Task | None = None
@@ -4494,19 +4502,16 @@ class ChamberRuntime:
 
     def _ensure_log_dir(self, root: Path) -> Path:
         nas_path = Path(root)
-        local_fallback = Path.cwd() / f"_Logs_local_CH{self.ch}"
         try:
             nas_path.mkdir(parents=True, exist_ok=True)
-            return nas_path
         except Exception:
-            local_fallback.mkdir(parents=True, exist_ok=True)
-
             w = getattr(self, "_w_log", None)
             if w and _qt_is_valid(w):
                 with contextlib.suppress(Exception):
-                    w.appendPlainText(f"[Logger] NAS 폴더 접근 실패 → 로컬 폴백: {local_fallback}")
-
-            return local_fallback
+                    w.appendPlainText(
+                        f"[Logger] NAS 폴더 접근 실패 → 실제 기록 시 CH{self.ch} 로컬 폴백 예정: {self._local_log_dir}"
+                    )
+        return nas_path
 
     def _open_run_log(self, params: Mapping[str, Any]) -> None:
         now_local = datetime.now()
@@ -4673,7 +4678,7 @@ class ChamberRuntime:
                     text = "".join(drained)
 
                     def _write_local_drain() -> None:
-                        local_dir = Path.cwd() / f"_Logs_local_CH{self.ch}"
+                        local_dir = self._local_log_dir
                         local_dir.mkdir(parents=True, exist_ok=True)
                         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
                         drain_path = local_dir / f"CH{self.ch}_{ts}_shutdown_drain.txt"
@@ -4688,7 +4693,7 @@ class ChamberRuntime:
                             )
                         except Exception as e:
                             def _write_local_same_name() -> None:
-                                local_dir = Path.cwd() / f"_Logs_local_CH{self.ch}"
+                                local_dir = self._local_log_dir
                                 local_dir.mkdir(parents=True, exist_ok=True)
 
                                 target = local_dir / Path(path).name
