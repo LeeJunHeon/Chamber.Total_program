@@ -402,7 +402,12 @@ class AsyncDCPulse:
             if self._poll_task:
                 self._poll_task.cancel()
                 self._poll_task = None
-            self._purge_pending("polling off")  # ✅ 추가: 공정 종료/STOP 라이트 정리에서도 잔여 제거
+
+            # ✅ polling off에서는 poll read만 정리한다.
+            #    REF_POWER / OUTPUT_OFF / READ_FAULT 같은 control/diagnostic 흐름까지 끊어버리면
+            #    setpoint 변경/종료 시퀀스가 None 응답으로 무너진다.
+            self._purge_pending("polling off", only_poll_reads=True, drop_inflight=False)
+
             self._ev_nowait(DCPEvent(kind="status", message="Polling read 중지"))
 
     # 추가: 연결 완료 대기 헬퍼
@@ -571,17 +576,28 @@ class AsyncDCPulse:
 
         await self._write_cmd_data(0x83, raw, 2, label=f"REF_{mode.upper()}({value})")
 
-    async def set_reference_power(self, value_w: float) -> bool:
+    async def set_reference_power(self, value_w: float, *, pause_polling: bool = False) -> bool:
         """출력 레벨(전력) 설정 — 10 W/step → 0~500."""
-        # 10 W/step → 0..500 (5 kW)
         raw = int(round(float(value_w) / self._p_set_step_w))
         raw = max(0, min(int(self._max_power_w // self._p_set_step_w), raw))
-        ok = await self._write_cmd_data(0x83, raw, 2, label=f"REF_POWER({value_w:.0f}W)")
-        if ok:
-            self._last_ref_power_w = float(value_w) # ← 세트포인트 기억
-            self._spdev_n = 0                       # ★ 세트포인트 이탈 카운터 초기화
-            self._low_curr_n = 0                    # ★ 저전류 카운터도 같이 초기화  
-        return bool(ok)
+
+        was_polling = bool(self._poll_task and not self._poll_task.done())
+
+        if pause_polling and was_polling:
+            self.set_process_status(False)
+
+        try:
+            ok = await self._write_cmd_data(0x83, raw, 2, label=f"REF_POWER({value_w:.0f}W)")
+            if ok:
+                self._last_ref_power_w = float(value_w)
+                self._spdev_n = 0
+                self._low_curr_n = 0
+            return bool(ok)
+
+        finally:
+            # STOP/종료 중이면 polling을 다시 켜지 않는다.
+            if pause_polling and was_polling and self._out_on and not self._stop_guard:
+                self.set_process_status(True)
 
     async def output_on(self) -> bool:
         """0x80: 1=ON, 2=OFF."""
@@ -1652,20 +1668,42 @@ class AsyncDCPulse:
                 pass
             setattr(self, name, None)
 
-    def _purge_pending(self, reason: str = "") -> int:
+    def _base_cmd_label(self, label: str) -> str:
+        return str(label or "").split("[", 1)[0].strip().upper()
+
+    def _is_poll_read_label(self, label: str) -> bool:
+        # 현재 poll loop가 주기적으로 넣는 읽기는 READ_PIV 하나다.
+        return self._base_cmd_label(label) in {"READ_PIV"}
+
+    def _purge_pending(
+        self,
+        reason: str = "",
+        *,
+        only_poll_reads: bool = False,
+        drop_inflight: bool = True,
+    ) -> int:
         purged = 0
-        if self._inflight is not None:
+
+        # inflight는 polling off에서 건드리지 않는다.
+        if drop_inflight and self._inflight is not None:
             cmd = self._inflight
-            self._inflight = None
-            purged += 1
-            self._safe_callback(cmd.callback, None)
+            if (not only_poll_reads) or self._is_poll_read_label(cmd.label):
+                self._inflight = None
+                purged += 1
+                self._safe_callback(cmd.callback, None)
+
         kept = deque()
         while self._cmd_q:
             c = self._cmd_q.popleft()
-            # 모두 폐기
-            purged += 1
-            self._safe_callback(c.callback, None)
+
+            if (not only_poll_reads) or self._is_poll_read_label(c.label):
+                purged += 1
+                self._safe_callback(c.callback, None)
+            else:
+                kept.append(c)
+
         self._cmd_q = kept
+
         if reason:
             self._ev_nowait(DCPEvent(kind="status", message=f"대기 중 명령 {purged}개 폐기 ({reason})"))
         return purged

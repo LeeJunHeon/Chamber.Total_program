@@ -714,22 +714,32 @@ class ChamberRuntime:
                     self.process_controller.on_dc_pulse_failed(why)
             self._spawn_detached(run())
 
-        # ✅ 추가: Output ON 상태에서 Power setpoint만 변경
+        # ✅ Output ON 상태에서 Power setpoint만 변경
+        #    - 변경 중에는 DCP polling을 잠시 멈춰 queue 혼선을 줄인다.
+        #    - 실패 판정은 dc_pulse.events() -> _pump_dcpulse_events 에서 일원화한다.
         def cb_dc_pulse_set_power(power: float) -> None:
             async def run():
                 if not self.dc_pulse:
-                    self.append_log("DCPulse", "DC-Pulse 미지원 챔버입니다."); return
+                    self.append_log("DCPulse", "DC-Pulse 미지원 챔버입니다.")
+                    return
                 try:
-                    # 공정 중이면 이미 켜져있겠지만, 방어적으로 보장
                     self._ensure_background_started()
 
-                    ok = await self.dc_pulse.set_reference_power(float(power))
+                    ok = await self.dc_pulse.set_reference_power(
+                        float(power),
+                        pause_polling=True,
+                    )
                     if not ok:
-                        self.process_controller.on_dc_pulse_failed("set_reference_power failed")
+                        self.append_log(
+                            "DCPulse",
+                            "set_reference_power returned False (will be handled by event pump)"
+                        )
+
                 except Exception as e:
                     why = f"DC-Pulse set_reference_power failed: {e!r}"
                     self.append_log("DCPulse", why)
                     self.process_controller.on_dc_pulse_failed(why)
+
             self._spawn_detached(run())
 
         def cb_dc_pulse_stop():
@@ -1517,9 +1527,15 @@ class ChamberRuntime:
 
                 elif k == "command_confirmed":
                     cmd = (ev.cmd or "").upper()
-                    # VERIFIED 포함 처리
+
+                    # 시작 step은 OUTPUT_ON 확인으로 완료
                     if cmd.startswith("OUTPUT_ON"):
                         self.process_controller.on_dc_pulse_target_reached()
+
+                    # 중간 power 변경 step은 REF_POWER 확인으로 완료
+                    elif cmd.startswith("REF_POWER"):
+                        self.process_controller.on_dc_pulse_set_confirmed()
+
                     elif cmd.startswith("OUTPUT_OFF"):
                         self.process_controller.on_dc_pulse_off_finished()
 
@@ -1530,8 +1546,14 @@ class ChamberRuntime:
 
                     self.append_log(f"DCPulse{self.ch}", f"CMD FAIL: {cmd} ({why_raw})")
 
-                    # ★ 세트포인트 5회 연속 이탈 또는 P=0W로 인해 드라이버가 AUTO_STOP을 올리면
-                    #    → 공정 실패 처리 + 명확한 챗 알림
+                    # ✅ 내부 진단/복구용 명령 실패는 공정 실패로 승격하지 않는다.
+                    #    - READ_FAULT / READ_CTRL_MODE / READ_STATUS / READ_PIV
+                    #    - FAULT_RESET
+                    # 이런 실패는 base command(REF_POWER / OUTPUT_ON / OUTPUT_OFF) 판단의 보조일 뿐이다.
+                    if cmd.startswith("READ_") or cmd == "FAULT_RESET":
+                        continue
+
+                    # AUTO_STOP은 진짜 공정 실패
                     if cmd == "AUTO_STOP" or "target_failed" in why:
                         if self.chat:
                             with contextlib.suppress(Exception):

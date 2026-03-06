@@ -550,6 +550,9 @@ class ProcessController:
     def on_dc_pulse_target_reached(self) -> None:
         self._match_token(ExpectToken("DC_PULSE_TARGET"))
 
+    def on_dc_pulse_set_confirmed(self) -> None:
+        self._match_token(ExpectToken("DC_PULSE_SET"))
+
     def on_dc_pulse_off_finished(self) -> None:
         self._match_token(ExpectToken("DCPULSE_OFF"))
 
@@ -789,9 +792,8 @@ class ProcessController:
                 raise RuntimeError("DC_PULSE_SET을 사용하려면 set_dc_pulse_power 콜백이 주입되어야 합니다.")
             self._set_dc_pulse_power(power)
 
-            # ✅ 토큰은 '대기'가 아니라 실패 귀속(어느 스텝에서 실패했는지)을 위해 등록만 한다.
-            #    (스텝 생성 시 no_wait=True로 만들어 즉시 다음 스텝으로 진행)
-            tokens.append(ExpectToken("DC_PULSE_TARGET"))
+            # ✅ 시작(OUTPUT_ON) 완료와, 중간 setpoint 변경(REF_POWER ACK)을 분리해서 기다린다.
+            tokens.append(ExpectToken("DC_PULSE_SET"))
 
         elif a == ActionType.DC_PULSE_STOP:
             self._stop_dc_pulse()
@@ -1288,6 +1290,10 @@ class ProcessController:
         )
         pulse_set_label = "DC Pulse" if do_mid_dc_pulse_change else ("RF Pulse" if do_mid_rf_pulse_change else "Pulse")
 
+        # ✅ DC Pulse는 REF_POWER ACK까지 기다린 뒤 다음 Delay로 넘어간다.
+        #    RF Pulse는 기존 동작 유지(no_wait).
+        pulse_set_no_wait = (pulse_set_action != ActionType.DC_PULSE_SET)
+
         # 경고 로그(DC/RF 각각)
         if use_dc_pulse and (raw_change_time != "" or raw_change_power != "") and not do_mid_dc_pulse_change:
             self._emit_log(
@@ -1584,7 +1590,7 @@ class ProcessController:
                     value=float(change_power_value),
                     message=f'{pulse_set_label} Power 변경 → {change_power_value}W (t={change_time_sec:.1f}s, ShutterDelay)',
                     polling=False,
-                    no_wait=True,
+                    no_wait=pulse_set_no_wait,
                 ))
 
                 if part2 > 0:
@@ -1638,8 +1644,8 @@ class ProcessController:
                     action=pulse_set_action,
                     value=float(change_power_value),
                     message=f'{pulse_set_label} Power 변경 → {change_power_value}W (t={change_time_sec:.1f}s, Main)',
-                    polling=True,   # 메인 공정 중 polling 유지
-                    no_wait=True,
+                    polling=True,
+                    no_wait=pulse_set_no_wait,
                 ))
 
                 if part2 > 0:
@@ -1939,7 +1945,7 @@ class ProcessController:
     def _device_token_kinds(self, source: str) -> Tuple[str, ...]:
         # on_* 실패 콜백에서 넘기는 source 문자열과, 그 스텝이 생성하는 토큰 kind를 매핑
         m = {
-            "DCPulse":   ("DC_PULSE_TARGET", "DCPULSE_OFF"),
+            "DCPulse":   ("DC_PULSE_TARGET", "DC_PULSE_SET", "DCPULSE_OFF"),
             "RFPulse":   ("RF_TARGET", "RFPULSE_OFF"),
             "RF Power":  ("RF_TARGET", "GENERIC_OK"),
             "DC Power":  ("DC_TARGET", "GENERIC_OK"),
