@@ -133,6 +133,7 @@ class MainWindow(QWidget):
 
         # ✅ Config 팝업 인스턴스 보관(가비지컬렉션/중복창 방지)
         self._config_dialog = None
+        self._cfg_apply_task: Optional[asyncio.Task] = None
 
         # # ✅ CH2 공정 페이지 P.W Select 체크박스 항상 비활성화
         # self.ui.ch2_powerSelect_checkbox.setEnabled(False)
@@ -796,15 +797,20 @@ class MainWindow(QWidget):
         - 실행 중이면 reconnect는 피하고, 가능한 범위에서 reload만 수행
         - 실행 중이 아니면 endpoint 변경까지 반영(가능한 장비만)
         """
-        # 1) UI 기본값도 config로 다시 채우기(원하면)
+        running = self._is_any_runtime_running()
+
+        # 실행 중이 아닐 때만 UI를 새 config 값으로 강제 동기화
         try:
-            self._apply_ui_defaults_from_config(overwrite=False)
+            self._apply_ui_defaults_from_config(overwrite=not running)
         except Exception:
             pass
 
-        # 2) 비동기 장비 리로드는 loop로 넘김
+        # 비동기 장비 리로드는 loop로 넘김
         try:
-            self._loop.create_task(self._apply_config_to_devices_async())
+            prev = getattr(self, "_cfg_apply_task", None)
+            if prev and not prev.done():
+                prev.cancel()
+            self._cfg_apply_task = self._loop.create_task(self._apply_config_to_devices_async())
         except Exception:
             pass
 
@@ -883,10 +889,15 @@ class MainWindow(QWidget):
                     elif hasattr(mfc, "set_endpoint"):
                         mfc.set_endpoint(str(host), int(port), reconnect=True)
 
-        # (C) ChamberRuntime 내부 장비들 reload (있으면)
+        # (C) ChamberRuntime 자체 + 내부 장비들 reload
         for rt in (getattr(self, "ch1", None), getattr(self, "ch2", None)):
             if not rt:
                 continue
+
+            with contextlib.suppress(Exception):
+                if hasattr(rt, "reload_runtime_cfg"):
+                    rt.reload_runtime_cfg()
+
             for name in ("dc_pulse", "rf_pulse", "dc_power", "rf_power"):
                 dev = getattr(rt, name, None)
                 with contextlib.suppress(Exception):
@@ -934,11 +945,26 @@ class MainWindow(QWidget):
         except Exception:
             pc_cfg = {}
 
-        _set_plain(getattr(self.ui, "PC_targetPressure_edit", None), pc_cfg.get("target_pressure", "5e-6"))
-        _set_plain(getattr(self.ui, "PC_gasFlow_edit", None), pc_cfg.get("gas_flow_sccm", "30"))
-        _set_plain(getattr(self.ui, "PC_workingPressure_edit", None), pc_cfg.get("sp4_setpoint_mTorr", "30"))
-        _set_plain(getattr(self.ui, "PC_rfPower_edit", None), pc_cfg.get("rf_power_w", "55"))
-        _set_plain(getattr(self.ui, "PC_ProcessTime_edit", None), pc_cfg.get("process_time_min", "0.25"))
+        _set_plain(
+            getattr(self.ui, "PC_targetPressure_edit", None),
+            pc_cfg.get("target_pressure", str(getattr(cfgc, "PC_DEFAULT_TARGET_PRESSURE_TORR", 5.0e-6)))
+        )
+        _set_plain(
+            getattr(self.ui, "PC_gasFlow_edit", None),
+            pc_cfg.get("gas_flow_sccm", str(getattr(cfgc, "PC_DEFAULT_GAS_FLOW_SCCM", 0.0)))
+        )
+        _set_plain(
+            getattr(self.ui, "PC_workingPressure_edit", None),
+            pc_cfg.get("sp4_setpoint_mTorr", str(getattr(cfgc, "PC_DEFAULT_SP4_SETPOINT_MTORR", 2.0)))
+        )
+        _set_plain(
+            getattr(self.ui, "PC_rfPower_edit", None),
+            pc_cfg.get("rf_power_w", str(getattr(cfgc, "PC_DEFAULT_RF_POWER_W", 100.0)))
+        )
+        _set_plain(
+            getattr(self.ui, "PC_ProcessTime_edit", None),
+            pc_cfg.get("process_time_min", str(getattr(cfgc, "PC_DEFAULT_PROCESS_TIME_MIN", 1.0)))
+        )
 
     def _on_runtime_dump_clicked(self) -> None:
         """
