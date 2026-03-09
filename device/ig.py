@@ -115,7 +115,7 @@ class AsyncIG:
         self._bg_poll_task: Optional[asyncio.Task] = None
 
         # ★ Inactivity 전략 필드
-        self._inactivity_s: float = float(getattr(cfgc, "IG_INACTIVITY_REOPEN_S", 0.0))
+        self._inactivity_s: float = float(self._cfg_get("IG_INACTIVITY_REOPEN_S", 0.0))
         self._last_io_mono: float = 0.0
 
     def _cfg_get(self, key: str, default):
@@ -133,11 +133,20 @@ class AsyncIG:
         # 폴링/유휴/드레인
         self._poll_interval_ms = int(self._cfg_get("IG_POLLING_INTERVAL_MS", 10_000))
         self._bg_poll_interval_ms = int(self._cfg_get("IG_POLLING_INTERVAL_MS", 10_000))
-        self._inactivity_s = float(getattr(cfgc, "IG_INACTIVITY_REOPEN_S", 0.0))
+        self._inactivity_s = float(self._cfg_get("IG_INACTIVITY_REOPEN_S", 0.0))
         self._drain_timeout_s = float(self._cfg_get("IG_DRAIN_TIMEOUT_S", 2.0))
-        
+
         # ✅ Apply 반영되도록 여기서 갱신
         self._first_read_delay_ms = int(self._cfg_get("IG_FIRST_READ_DELAY_MS", 5000))
+
+    def reload_runtime_cfg(self) -> None:
+        """
+        Config Apply(Runtime) 후 main.py에서 호출하는 public 훅.
+        - 실행 중 공정을 흔들지 않도록 연결은 건드리지 않고
+        - 캐시성 설정값만 다시 읽는다.
+        - endpoint 변경/재연결은 main.py가 안전한 시점에 따로 처리한다.
+        """
+        self._reload_cfg_cached()
 
     def is_connected(self) -> bool:
         """프리플라이트/상태 체크용: 현재 TCP 연결 여부."""
