@@ -128,25 +128,61 @@ class RFPowerAsync:
         """
         UI에서 config 값을 바꾼 뒤, 이 메서드를 호출하면 즉시 반영되도록.
         - cfg(채널) → 없으면 config_common 폴백
+        - 기존 RF 공정 로직(start/cleanup/poll/adjust)은 건드리지 않고
+        '다음 동작부터 써야 하는 캐시성 값'만 다시 읽는다.
         """
-        mod = self._cfg_mod
+        mod = self._cfg_mod if self._cfg_mod is not None else _cfg_common
 
-        # debug
-        self.debug_print = bool(getattr(mod, "DEBUG_PRINT", getattr(_cfg_common, "DEBUG_PRINT", self.debug_print)))
+        # 공통 디버그
+        self.debug_print = bool(
+            getattr(mod, "DEBUG_PRINT", getattr(_cfg_common, "DEBUG_PRINT", self.debug_print))
+        )
 
-        # RF 핵심 파라미터
-        self._rf_max_power = float(getattr(mod, "RF_MAX_POWER", getattr(_cfg_common, "RF_MAX_POWER", self._rf_max_power)))
-        self._rf_ramp_step = float(getattr(mod, "RF_RAMP_STEP", getattr(_cfg_common, "RF_RAMP_STEP", self._rf_ramp_step)))
-        self._rf_maintain_step = float(getattr(mod, "RF_MAINTAIN_STEP", getattr(_cfg_common, "RF_MAINTAIN_STEP", self._rf_maintain_step)))
-        self._rf_tolerance_power = float(getattr(mod, "RF_TOLERANCE_POWER", getattr(_cfg_common, "RF_TOLERANCE_POWER", self._rf_tolerance_power)))
+        # RF 핵심 제어 파라미터
+        self._rf_max_power = float(
+            getattr(mod, "RF_MAX_POWER", getattr(_cfg_common, "RF_MAX_POWER", self._rf_max_power))
+        )
+        self._rf_ramp_step = float(
+            getattr(mod, "RF_RAMP_STEP", getattr(_cfg_common, "RF_RAMP_STEP", self._rf_ramp_step))
+        )
+        self._rf_maintain_step = float(
+            getattr(mod, "RF_MAINTAIN_STEP", getattr(_cfg_common, "RF_MAINTAIN_STEP", self._rf_maintain_step))
+        )
+        self._rf_tolerance_power = float(
+            getattr(mod, "RF_TOLERANCE_POWER", getattr(_cfg_common, "RF_TOLERANCE_POWER", self._rf_tolerance_power))
+        )
 
-        # 저출력 감시
-        self._rf_low_power_thresh_w = float(getattr(mod, "RF_LOW_POWER_THRESH_W", getattr(_cfg_common, "RF_LOW_POWER_THRESH_W", self._rf_low_power_thresh_w)))
-        self._rf_low_power_count_max_n = int(getattr(mod, "RF_LOW_POWER_COUNT_MAX_N", getattr(_cfg_common, "RF_LOW_POWER_COUNT_MAX_N", self._rf_low_power_count_max_n)))
+        self._rf_low_power_thresh_w = float(
+            getattr(mod, "RF_LOW_POWER_THRESH_W", getattr(_cfg_common, "RF_LOW_POWER_THRESH_W", self._rf_low_power_thresh_w))
+        )
+        self._rf_low_power_count_max_n = int(
+            getattr(mod, "RF_LOW_POWER_COUNT_MAX_N", getattr(_cfg_common, "RF_LOW_POWER_COUNT_MAX_N", self._rf_low_power_count_max_n))
+        )
 
-        # (선택) poll/rampdown 등도 config로 빼고 싶으면 여기서 키를 추가로 읽으면 됨
-        # - 기존 의도대로 rampdown은 poll과 동일하게 강제 유지
-        self._rampdown_interval_ms = int(self._poll_interval_ms)
+        # ✅ 추가 1) reflected 관련 기준도 reload 반영
+        self._ref_th_w = float(
+            getattr(mod, "RF_REFLECTED_THRESHOLD_W", getattr(_cfg_common, "RF_REFLECTED_THRESHOLD_W", self._ref_th_w))
+        )
+        self._ref_wait_to_s = float(
+            getattr(mod, "RF_REFLECTED_WAIT_TIMEOUT_S", getattr(_cfg_common, "RF_REFLECTED_WAIT_TIMEOUT_S", self._ref_wait_to_s))
+        )
+
+        # ✅ 추가 2) chamber runtime에서 생성자에 넣어주던 RF 연속파 운전값도 reload 반영
+        self._poll_interval_ms = int(
+            getattr(mod, "CHAMBER_RF_CONT_POLL_INTERVAL_MS", getattr(_cfg_common, "CHAMBER_RF_CONT_POLL_INTERVAL_MS", self._poll_interval_ms))
+        )
+        self._rampdown_interval_ms = int(
+            getattr(mod, "CHAMBER_RF_CONT_RAMPDOWN_INTERVAL_MS", getattr(_cfg_common, "CHAMBER_RF_CONT_RAMPDOWN_INTERVAL_MS", self._rampdown_interval_ms))
+        )
+        self._direct_mode = bool(
+            getattr(mod, "CHAMBER_RF_CONT_DIRECT_MODE", getattr(_cfg_common, "CHAMBER_RF_CONT_DIRECT_MODE", self._direct_mode))
+        )
+        self._w_inv_a = float(
+            getattr(mod, "CHAMBER_RF_CONT_WRITE_INV_A", getattr(_cfg_common, "CHAMBER_RF_CONT_WRITE_INV_A", self._w_inv_a))
+        )
+        self._w_inv_b = float(
+            getattr(mod, "CHAMBER_RF_CONT_WRITE_INV_B", getattr(_cfg_common, "CHAMBER_RF_CONT_WRITE_INV_B", self._w_inv_b))
+        )
 
     @property
     def reflected_threshold_w(self) -> float:
