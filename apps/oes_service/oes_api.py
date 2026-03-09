@@ -541,9 +541,13 @@ class OESAsync:
         # device/oes.py와 동일: PDA → G9212 → SONY → TOSHIBA → S10420
         for m in (SP_CCD_PDA, SP_CCD_G9212, SP_CCD_SONY, SP_CCD_TOSHIBA, SP_CCD_S10420):
             try:
+                _runlog(f"[scan] spInitGivenChannel begin model={m} ch={ch}")
                 r = int(self.sp_dll.spInitGivenChannel(ctypes.c_int16(m), ctypes.c_int16(ch)))  # type: ignore
-            except Exception:
+                _runlog(f"[scan] spInitGivenChannel rc={r} model={m} ch={ch}")
+            except Exception as e:
+                _runlog(f"[scan] spInitGivenChannel EXC model={m} ch={ch}: {type(e).__name__}: {e}")
                 r = -1
+
             if r >= 0:
                 self._model_name = {
                     SP_CCD_PDA: "PDA",
@@ -552,8 +556,9 @@ class OESAsync:
                     SP_CCD_TOSHIBA: "TOSHIBA",
                     SP_CCD_S10420: "S10420",
                 }.get(m, "UNKNOWN")
-                self._model = int(m)  # ✅ 모델 기억
+                self._model = int(m)
                 return int(m)
+
         return None
 
     def _scan_and_open(self) -> Tuple[int, str]:
@@ -564,28 +569,40 @@ class OESAsync:
         }
 
         try:
+            _runlog(f"[scan] load dll begin path={self._dll_path}")
             _add_dll_search_dir(self._dll_path)
-            self.sp_dll = ctypes.WinDLL(self._dll_path)
-            self._bind_functions()
 
-            # ① USB 스캔 & open 목록 확보 (device/oes.py 동일)
+            self.sp_dll = ctypes.WinDLL(self._dll_path)
+            _runlog("[scan] load dll ok")
+
+            self._bind_functions()
+            _runlog("[scan] bind ok")
+
             try:
+                _runlog(f"[scan] spTestAllChannels begin order={ORDER_USB}")
                 n = int(self.sp_dll.spTestAllChannels(ctypes.c_int16(ORDER_USB)))  # type: ignore
-            except Exception:
-                n = 0
+                _runlog(f"[scan] spTestAllChannels rc={n}")
+            except Exception as e:
+                _runlog(f"[scan] spTestAllChannels EXC: {type(e).__name__}: {e}")
+                raise
+
             info["detected_count"] = int(n)
 
             opened: list[int] = []
             usb = int(self._usb_index)
 
-            # ✅ 불필요한 전 채널 setup 제거: target만 setup 해서 DLL hang 확률을 낮춤
             try:
+                _runlog(f"[scan] spSetupGivenChannel begin usb={usb}")
                 rr = int(self.sp_dll.spSetupGivenChannel(ctypes.c_int16(usb)))  # type: ignore
+                _runlog(f"[scan] spSetupGivenChannel rc={rr} usb={usb}")
+
                 if rr >= 0:
                     opened.append(usb)
                 info["setup_target_rc"] = int(rr)
             except Exception as e:
                 info["setup_target_exc"] = f"{type(e).__name__}: {e}"
+                _runlog(f"[scan] spSetupGivenChannel EXC usb={usb}: {type(e).__name__}: {e}")
+                raise
 
             info["opened"] = opened
 
@@ -595,7 +612,6 @@ class OESAsync:
                 self._last_error = msg
                 return -10, msg
 
-            usb = int(self._usb_index)
             if usb < 0 or usb >= n:
                 msg = f"usb_index out of range: usb_index={usb}, detected={n}, opened={opened}"
                 self._last_scan = info
@@ -608,8 +624,10 @@ class OESAsync:
                 self._last_error = msg
                 return -12, msg
 
-            # ② 모델 자동판정 (probe)  ✅ 기존과 동일
+            _runlog(f"[scan] probe begin usb={usb}")
             model = self._pick_model_with_probe(usb)
+            _runlog(f"[scan] probe end usb={usb} model={self._model_name} model_id={model}")
+
             info["model"] = self._model_name
             if model is None:
                 msg = f"초기화 실패: USB{usb} — 모든 모델 probe 실패"
@@ -617,15 +635,13 @@ class OESAsync:
                 self._last_error = msg
                 return -13, msg
 
-            # ③ 픽셀 수 확정 + WL(nm) 확보(가능 시)
             self._npix = self._ensure_npixels(usb, int(model))
+            _runlog(f"[scan] ensure_npixels ok usb={usb} npix={self._npix}")
 
-            # ④ ROI 클램프 (기존과 동일 [10:1034]을 길이에 맞춤)
             lim = self._npix if self._wl is None else int(min(self._npix, self._wl.size))
-            self._roi_end   = min(ROI_END_DEFAULT, int(lim))
+            self._roi_end = min(ROI_END_DEFAULT, int(lim))
             self._roi_start = min(ROI_START_DEFAULT, max(0, self._roi_end - 1))
 
-            # ⑤ 상태 반영
             self.sChannel = int(usb)
             msg = f"open ok: USB{usb}, model={self._model_name}, pixels={self._npix}" + (", wl=nm" if self._wl is not None else ", wl=pixel")
             self._last_scan = info
@@ -637,8 +653,9 @@ class OESAsync:
             info["exception"] = msg
             self._last_scan = info
             self._last_error = msg
+            _errlog_exc(msg)
             return -99, msg
-            
+                
     def _read_pixels(self, ch: int, npix: int) -> Tuple[int, Optional[np.ndarray]]:
         assert self.sp_dll is not None
         buf = (ctypes.c_int32 * npix)()
