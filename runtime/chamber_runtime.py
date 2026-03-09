@@ -599,6 +599,140 @@ class ChamberRuntime:
 
     # ------------------------------------------------------------------
     # 공정 컨트롤러 바인딩
+    # ------------------------------------------------------------------
+    def reload_runtime_cfg(self) -> None:
+        """
+        ConfigDialog Apply(Runtime) 후 ChamberRuntime 본체의 '안전한 캐시'만 다시 읽는다.
+
+        원칙
+        - 기존 공정 로직(Runner / preflight / cleanup / polling 흐름)은 건드리지 않는다.
+        - 실행 중/정리 중에는 위험한 값(지원 플래그/장비 생성 의존 값)은 바꾸지 않는다.
+        - config 값이 비어 있으면 기존처럼 config_ch* -> config_common -> default 로 폴백한다.
+        """
+        try:
+            cfg_mod = getattr(getattr(self, "cfg", None), "mod", None)
+            if cfg_mod is None:
+                return
+
+            # ✅ 항상 최신 모듈 값을 보도록 adapter만 다시 감싼다.
+            self.cfg = _CfgAdapter(cfg_mod, self.ch)
+
+            # ------------------------------------------------------------------
+            # 1) 항상 안전한 경로/캐시만 먼저 갱신
+            # ------------------------------------------------------------------
+            self._local_log_dir = Path(
+                self.cfg._get(
+                    f"LOCAL_FALLBACK_CH{self.ch}_DIR",
+                    Path.cwd() / "Logs_LocalFallback" / f"CH{self.ch}",
+                )
+            )
+
+            # SessionTextAppender fallback_dir 갱신 (가능한 API만 안전 호출)
+            with contextlib.suppress(Exception):
+                if hasattr(self._run_log_appender, "fallback_dir"):
+                    self._run_log_appender.fallback_dir = self._local_log_dir
+                elif hasattr(self._run_log_appender, "set_fallback_dir"):
+                    self._run_log_appender.set_fallback_dir(self._local_log_dir)
+
+            # DataLogger 저장 경로 갱신
+            with contextlib.suppress(Exception):
+                if getattr(self, "data_logger", None) is not None:
+                    self.data_logger.csv_dir = Path(
+                        str(
+                            self.cfg._get(
+                                "SPUTTER_CALIB_DB_DIR",
+                                r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database",
+                            )
+                        )
+                    )
+
+            # ------------------------------------------------------------------
+            # 2) 실행 중/정리 중이면 여기서 중단
+            #    - 기존 plasma cleaning runtime 때처럼 공정 흐름을 흔들지 않기 위함
+            # ------------------------------------------------------------------
+            busy = bool(getattr(self.process_controller, "is_running", False)) or (
+                str(getattr(self, "_runner_state", "IDLE")).upper() != "IDLE"
+            )
+
+            if busy:
+                self.append_log(
+                    "Config",
+                    "Apply(Runtime): 공정/정리 진행 중이므로 ChamberRuntime 고정 캐시는 다음 공정부터 반영됩니다."
+                )
+                return
+
+            # ------------------------------------------------------------------
+            # 3) 비실행 중일 때만 support 플래그 재평가
+            #    - 단, 이미 생성된 장비 객체가 없는 항목은 즉시 ON 반영하지 않는다.
+            #      (예: rf_pulse 객체가 없는데 SUPPORTS_RFPULSE만 True로 바꾸는 경우)
+            # ------------------------------------------------------------------
+            def _cfg_bool(*names: str):
+                for n in names:
+                    v = self.cfg._get(n, None)
+                    if v is not None:
+                        return bool(v)
+                return None
+
+            desired_dc_cont = self.supports_dc_cont
+            v = _cfg_bool("SUPPORTS_DC_CONT", "SUPPORTS_DC")
+            if v is not None:
+                desired_dc_cont = bool(v)
+
+            desired_rf_cont = self.supports_rf_cont
+            v = _cfg_bool("SUPPORTS_RF_CONT")
+            if v is not None:
+                desired_rf_cont = bool(v)
+
+            desired_dc_pulse = self.supports_dc_pulse
+            v = _cfg_bool("SUPPORTS_DC_PULSE", "SUPPORTS_DCPULSE")
+            if v is not None:
+                desired_dc_pulse = bool(v)
+
+            desired_rf_pulse = self.supports_rf_pulse
+            v = _cfg_bool("SUPPORTS_RFPULSE", "SUPPORTS_RF_PULSE")
+            if v is not None:
+                desired_rf_pulse = bool(v)
+
+            # ✅ 실제 즉시 반영 가능한 값만 적용
+            #    - 객체가 이미 존재하는 장치만 True 반영 가능
+            #    - 객체가 없는 장치를 True로 바꾸는 건 런타임 재생성/프로그램 재시작이 필요
+            effective_dc_cont = bool(desired_dc_cont and (self.dc_power is not None))
+            effective_rf_cont = bool(desired_rf_cont and (self.rf_power is not None))
+            effective_dc_pulse = bool(desired_dc_pulse and (self.dc_pulse is not None))
+            effective_rf_pulse = bool(desired_rf_pulse and (self.rf_pulse is not None))
+
+            if desired_dc_cont and self.dc_power is None:
+                self.append_log("Config", "DC 연속파 지원 ON 요청은 현재 runtime에 dc_power 객체가 없어 즉시 반영하지 않습니다. 프로그램 재시작 후 반영됩니다.")
+            if desired_rf_cont and self.rf_power is None:
+                self.append_log("Config", "RF 연속파 지원 ON 요청은 현재 runtime에 rf_power 객체가 없어 즉시 반영하지 않습니다. 프로그램 재시작 후 반영됩니다.")
+            if desired_dc_pulse and self.dc_pulse is None:
+                self.append_log("Config", "DC-Pulse 지원 ON 요청은 현재 runtime에 dc_pulse 객체가 없어 즉시 반영하지 않습니다. 프로그램 재시작 후 반영됩니다.")
+            if desired_rf_pulse and self.rf_pulse is None:
+                self.append_log("Config", "RF-Pulse 지원 ON 요청은 현재 runtime에 rf_pulse 객체가 없어 즉시 반영하지 않습니다. 프로그램 재시작 후 반영됩니다.")
+
+            self.supports_dc_cont = effective_dc_cont
+            self.supports_rf_cont = effective_rf_cont
+            self.supports_dc_pulse = effective_dc_pulse
+            self.supports_rf_pulse = effective_rf_pulse
+
+            # ProcessController도 동일하게 맞춘다.
+            with contextlib.suppress(Exception):
+                self.process_controller.supports_dc_cont = self.supports_dc_cont
+                self.process_controller.supports_rf_cont = self.supports_rf_cont
+                self.process_controller.supports_dc_pulse = self.supports_dc_pulse
+                self.process_controller.supports_rf_pulse = self.supports_rf_pulse
+
+            # ------------------------------------------------------------------
+            # 4) 참고 로그
+            #    - OES USB index 같은 값은 OES 객체를 새로 만들지 않는 이상 hot reload 대상이 아님
+            # ------------------------------------------------------------------
+            self.append_log(
+                "Config",
+                "ChamberRuntime 설정 캐시 갱신 완료 (실행 중 위험한 값은 건드리지 않음, 일부 장치 생성 의존 값은 재시작 필요)"
+            )
+
+        except Exception as e:
+            self.append_log("Config", f"reload_runtime_cfg 실패: {e!r}")
 
     def _bind_process_controller(self) -> None:
         # === 콜백 정의(PLC/MFC/파워/OES/RGA/IG) ===
