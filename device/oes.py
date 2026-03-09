@@ -239,7 +239,7 @@ class OESAsync:
                 n += 1
         return n
 
-    async def initialize_device(self, *, timeout_s: float = 20.0, force: bool = False) -> bool:
+    async def initialize_device(self, *, timeout_s: float = 30.0, force: bool = False) -> bool:
         """
         워커(cmd=init)를 한 번 실행해서 장치/드라이버/DLL 상태를 사전 점검한다.
         - 성공 시: self._init_ok=True 로 캐시
@@ -399,7 +399,7 @@ class OESAsync:
     # ---------------------------------------------------------------------
     # Daemon mode helpers
     # ---------------------------------------------------------------------
-    async def _ensure_daemon_started(self, *, timeout_s: float = 20.0, force: bool = False) -> bool:
+    async def _ensure_daemon_started(self, *, timeout_s: float = 30.0, force: bool = False) -> bool:
         """daemon 워커를 1회만 띄워 유지한다(ready까지 대기)."""
         if not self._daemon_enabled:
             return False
@@ -594,7 +594,7 @@ class OESAsync:
 
     async def _run_measurement_daemon(self, duration_sec: float, integration_ms: int) -> None:
         """daemon에 measure 명령만 보내서 1회 측정. (ok=False면 예외로 올려 fallback 유도)"""
-        ok_daemon = await self._ensure_daemon_started(timeout_s=20.0, force=False)
+        ok_daemon = await self._ensure_daemon_started(timeout_s=30.0, force=False)
         if not ok_daemon:
             raise RuntimeError("daemon not ready")
 
@@ -711,7 +711,7 @@ class OESAsync:
             with contextlib.suppress(Exception):
                 await self._shutdown_daemon(graceful=False)
 
-            ok = await self._ensure_daemon_started(timeout_s=20.0, force=True)
+            ok = await self._ensure_daemon_started(timeout_s=30.0, force=True)
             if ok:
                 try:
                     await self._run_measurement_daemon(duration_sec, integration_ms)
