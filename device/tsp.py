@@ -123,42 +123,59 @@ class AsyncTSP:
     def reload_runtime_cfg(self) -> None:
         """
         UI에서 config 값을 바꾼 뒤 호출하면 런타임에 반영되도록.
-        cfg(채널) → 없으면 config_common 순으로 읽는다.
+        - cfg(채널) → 없으면 config_common 순으로 읽는다.
+        - 기존 ON/OFF/상태확인 로직은 건드리지 않고
+        endpoint/주소/타임아웃/검증 옵션 같은 런타임 설정만 갱신한다.
         """
-        mod = self._cfg_mod
+        mod = self._cfg_mod if self._cfg_mod is not None else cfgc
 
-        # endpoint: host/port는 "비어있을 때만" config로 채움(기존 생성 방식 깨지지 않게)
-        if not self.host:
-            self.host = str(getattr(mod, "TSP_TCP_HOST", getattr(cfgc, "TSP_TCP_HOST", self.host)))
-        if not self.port:
-            self.port = int(getattr(mod, "TSP_TCP_PORT", getattr(cfgc, "TSP_TCP_PORT", self.port or 0)))
+        # 변경 전 값 백업
+        old_host = self.host
+        old_port = int(self.port)
+        old_addr = int(self._addr_rs232)
+
+        # ✅ endpoint는 항상 config 기준으로 다시 읽는다
+        self.host = str(getattr(mod, "TSP_TCP_HOST", getattr(cfgc, "TSP_TCP_HOST", self.host)))
+        self.port = int(getattr(mod, "TSP_TCP_PORT", getattr(cfgc, "TSP_TCP_PORT", self.port or 0)))
 
         # 타임아웃/딜레이
-        self.connect_timeout = float(getattr(mod, "TSP_CONNECT_TIMEOUT_S",
-                                             getattr(cfgc, "TSP_CONNECT_TIMEOUT_S", self.connect_timeout)))
+        self.connect_timeout = float(
+            getattr(mod, "TSP_CONNECT_TIMEOUT_S",
+                    getattr(cfgc, "TSP_CONNECT_TIMEOUT_S", self.connect_timeout))
+        )
 
         # config는 WRITE_TIMEOUT_S로 되어 있음 → io_timeout에 매핑
-        self.io_timeout = float(getattr(mod, "TSP_WRITE_TIMEOUT_S",
-                                        getattr(cfgc, "TSP_WRITE_TIMEOUT_S", self.io_timeout)))
+        self.io_timeout = float(
+            getattr(mod, "TSP_WRITE_TIMEOUT_S",
+                    getattr(cfgc, "TSP_WRITE_TIMEOUT_S", self.io_timeout))
+        )
 
-        post_ms = float(getattr(mod, "TSP_POST_SEND_DELAY_MS",
-                                getattr(cfgc, "TSP_POST_SEND_DELAY_MS", self.post_send_delay * 1000.0)))
+        post_ms = float(
+            getattr(mod, "TSP_POST_SEND_DELAY_MS",
+                    getattr(cfgc, "TSP_POST_SEND_DELAY_MS", self.post_send_delay * 1000.0))
+        )
         self.post_send_delay = max(0.0, post_ms / 1000.0)
 
         # verify / tolerate
-        self.verify_with_status = bool(getattr(mod, "TSP_VERIFY_WITH_STATUS",
-                                               getattr(cfgc, "TSP_VERIFY_WITH_STATUS", self.verify_with_status)))
-        self.tolerate_short_resp = bool(getattr(mod, "TSP_TOLERATE_SHORT_RESP",
-                                                getattr(cfgc, "TSP_TOLERATE_SHORT_RESP", self.tolerate_short_resp)))
+        self.verify_with_status = bool(
+            getattr(mod, "TSP_VERIFY_WITH_STATUS",
+                    getattr(cfgc, "TSP_VERIFY_WITH_STATUS", self.verify_with_status))
+        )
+        self.tolerate_short_resp = bool(
+            getattr(mod, "TSP_TOLERATE_SHORT_RESP",
+                    getattr(cfgc, "TSP_TOLERATE_SHORT_RESP", self.tolerate_short_resp))
+        )
 
-        # keepalive는 config_common 공통키(TSP_TCP_KEEPALIVE) 사용
-        self._tcp_keepalive = bool(getattr(mod, "TSP_TCP_KEEPALIVE",
-                                           getattr(cfgc, "TSP_TCP_KEEPALIVE", self._tcp_keepalive)))
+        # keepalive
+        self._tcp_keepalive = bool(
+            getattr(mod, "TSP_TCP_KEEPALIVE",
+                    getattr(cfgc, "TSP_TCP_KEEPALIVE", self._tcp_keepalive))
+        )
 
         # 주소/폴링 주기
         addr = getattr(mod, "TSP_RS232_ADDR", None)
         if addr is None:
-            addr = getattr(mod, "TSP_ADDR", None)  # ✅ 레거시 키 호환
+            addr = getattr(mod, "TSP_ADDR", None)   # 레거시 키 호환
         if addr is None:
             addr = getattr(cfgc, "TSP_RS232_ADDR", None)
         if addr is None:
@@ -166,8 +183,10 @@ class AsyncTSP:
 
         self._addr_rs232 = int(addr) & 0xFF
 
-        self._status_poll_interval_s = float(getattr(mod, "TSP_STATUS_POLL_INTERVAL_S",
-                                                     getattr(cfgc, "TSP_STATUS_POLL_INTERVAL_S", self._status_poll_interval_s)))
+        self._status_poll_interval_s = float(
+            getattr(mod, "TSP_STATUS_POLL_INTERVAL_S",
+                    getattr(cfgc, "TSP_STATUS_POLL_INTERVAL_S", self._status_poll_interval_s))
+        )
 
         # 방어
         if self.connect_timeout < 0.1:
@@ -176,6 +195,14 @@ class AsyncTSP:
             self.io_timeout = 0.1
         if self._status_poll_interval_s < 0.01:
             self._status_poll_interval_s = 0.01
+
+        # ✅ endpoint 또는 addr가 바뀌었으면 현재 연결을 끊어서 다음 호출에서 재연결되게 함
+        if (old_host != self.host) or (old_port != int(self.port)) or (old_addr != int(self._addr_rs232)):
+            with contextlib.suppress(Exception):
+                if self._writer is not None:
+                    self._writer.close()
+            self._reader = None
+            self._writer = None
 
     # ── 연결/종료 ───────────────────────────────────────────
     @property
@@ -204,6 +231,27 @@ class AsyncTSP:
                 await asyncio.wait_for(self._writer.wait_closed(), timeout=max(0.1, self.io_timeout))
         self._reader = None
         self._writer = None
+
+    def set_endpoint(self, host: str, port: int, addr: Optional[int] = None) -> None:
+        """
+        TSP endpoint/addr를 즉시 바꾸고, 현재 연결은 끊어서 다음 ensure_open에서 재연결되게 한다.
+        """
+        changed = (str(host) != str(self.host)) or (int(port) != int(self.port))
+        self.host = str(host)
+        self.port = int(port)
+
+        if addr is not None:
+            new_addr = int(addr) & 0xFF
+            if new_addr != int(self._addr_rs232):
+                changed = True
+            self._addr_rs232 = new_addr
+
+        if changed:
+            with contextlib.suppress(Exception):
+                if self._writer is not None:
+                    self._writer.close()
+            self._reader = None
+            self._writer = None
 
     # ── 송수신 ──────────────────────────────────────────────
     async def _send(self, b: bytes) -> None:

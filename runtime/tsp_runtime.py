@@ -119,6 +119,41 @@ class TSPPageController:
         self._tsp_daily_hh = int(getattr(cfgc, "TSP_DAILY_HH", 5))
         self._tsp_daily_mm = int(getattr(cfgc, "TSP_DAILY_MM", 0))
 
+    def reload_runtime_cfg(self) -> None:
+        """
+        Config Apply(Runtime) 후 main.py에서 호출하는 훅.
+        - 현재 공정 로직은 건드리지 않고
+        - controller 캐시/기본 UI값/살아있는 장비 캐시만 갱신한다.
+        """
+        # 1) 컨트롤러 캐시 갱신
+        self._refresh_from_config()
+
+        # 2) 공정 종료 후 되돌릴 UI 기본값도 현재 config 기준으로 갱신
+        self._defaults["target"] = str(getattr(cfgc, "TSP_UI_DEFAULT_TARGET", self._defaults.get("target", "2.5e-07")))
+        self._defaults["cycles"] = str(getattr(cfgc, "TSP_UI_DEFAULT_CYCLES", self._defaults.get("cycles", "10")))
+
+        # 3) 살아있는 장비가 있으면 캐시 reload만 시도
+        with contextlib.suppress(Exception):
+            if self.tsp and hasattr(self.tsp, "reload_runtime_cfg"):
+                self.tsp.reload_runtime_cfg()
+
+        with contextlib.suppress(Exception):
+            if self.ig and hasattr(self.ig, "reload_runtime_cfg"):
+                self.ig.reload_runtime_cfg()
+
+    def set_endpoint(self, host: str, port: int, addr: int | None = None) -> None:
+        """
+        main.py fallback 경로용.
+        TSP runtime이 다음 실행부터 새 host/port를 쓰도록 내부 값을 갱신하고,
+        이미 살아있는 tsp 장비가 있으면 해당 장비에도 endpoint를 반영한다.
+        """
+        self.host = str(host)
+        self.tsp_port = int(port)
+
+        with contextlib.suppress(Exception):
+            if self.tsp and hasattr(self.tsp, "set_endpoint"):
+                self.tsp.set_endpoint(str(host), int(port), int(addr) if addr is not None else None)
+
     # ── UI 헬퍼 ─────────────────────────────────────────────
     def _log(self, msg: str) -> None:
         now_ui = datetime.now().strftime("%H:%M:%S")
