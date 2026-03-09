@@ -2317,8 +2317,8 @@ class PlasmaCleaningRuntime:
             if self.rf and hasattr(self.rf, "reload_runtime_cfg"):
                 self.rf.reload_runtime_cfg()
 
-        # MFC/IG 캐시 갱신
-        for dev in (self.mfc_gas, self.mfc_pressure, self.ig):
+        # PLC/MFC/IG 캐시 갱신
+        for dev in (self.plc, self.mfc_gas, self.mfc_pressure, self.ig):
             with contextlib.suppress(Exception):
                 if dev and hasattr(dev, "reload_runtime_cfg"):
                     dev.reload_runtime_cfg()
