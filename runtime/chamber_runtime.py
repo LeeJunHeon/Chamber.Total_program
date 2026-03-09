@@ -808,44 +808,29 @@ class ChamberRuntime:
 
         def cb_oes_run(duration_sec: float, integration_ms: int):
             async def run():
-                # ✅ OES는 외부 워커(oes_worker.exe)로 측정한다.
-                #    - 메인 프로세스에서 DLL 로드/장비 연결을 하지 않음
-                #    - 워커가 로컬 CSV를 append+flush로 기록
-                #    - 메인(OESAsync)이 CSV를 tail 해서 실시간 스펙트럼 이벤트를 발행
-                #    - 종료 시 워커가 NAS 복사 후 finished(JSON)로 결과 통지
                 try:
-                    # ✅ 공정이 멈추지 않도록 OES 이벤트 펌프는 항상 살아 있어야 함
-                    # (auto_connect 차단 상태에서도 OES step은 돌 수 있으므로 별도로 보장)
                     self._ensure_task_alive(f"Pump.OES.{self.ch}", self._pump_oes_events)
-
-                    # (기존 동작 유지) 나머지 백그라운드 장치/펌프도 필요 시 기동
                     self._ensure_background_started()
 
-                    # ✅ 이전 런 잔여 이벤트(특히 finished)를 제거
                     if hasattr(self.oes, "drain_events"):
                         with contextlib.suppress(Exception):
                             await self.oes.drain_events()
 
-                    # ✅ 워커 init(장치 스캔)은 1회만 수행 (실패 시 캐시 무효화)
+                    # ✅ 실제 공정 경로에서도 동일 timeout 정책을 강제
+                    oes_init_timeout_s = float(self.cfg._get("CHAMBER_OES_INIT_TIMEOUT_S", 30.0))
+
                     if not getattr(self, "_oes_initialized", False):
-                        ok = await self.oes.initialize_device()
+                        ok = await self.oes.initialize_device(timeout_s=oes_init_timeout_s, force=False)
                         if not ok:
-                            raise RuntimeError("OES 초기화 실패")
+                            detail = getattr(self.oes, "_init_error", None) or "unknown"
+                            raise RuntimeError(f"OES 초기화 실패: {detail}")
                         self._oes_initialized = True
 
                     self._soon(self._safe_clear_oes_plot)
-
-                    # 이번 런에서만 finished 이벤트를 처리하도록 플래그 ON
                     self._oes_active = True
-
-                    # 측정 시작(완료/실패는 _pump_oes_events의 'finished'에서 단일 경로로 처리)
                     await self.oes.run_measurement(duration_sec, integration_ms)
 
-                    # ⚠️ 여기서 _oes_active를 끄지 않는다.
-                    # finished 이벤트가 큐에 들어온 뒤 pump가 처리할 때 끄는 게 레이스가 없다.
-
                 except Exception as e:
-                    # 예외/초기화 실패는 즉시 실패 처리
                     self._oes_active = False
                     self._oes_initialized = False  # 다음 런에서 재초기화 시도
                     self.append_log("OES", f"OES 실패: {e!r}")
@@ -2472,7 +2457,7 @@ class ChamberRuntime:
             raise RuntimeError(msg)
 
     def _kick_oes_init_background(self, *, force: bool = True) -> None:
-        """Start 버튼을 눌렀을 때 OES init을 '백그라운드'로 미리 돌려둔다."""
+        """Start 버튼을 눌렀을 때 OES init을 백그라운드로 미리 수행한다."""
         if not getattr(self, "oes", None):
             return
 
@@ -2485,15 +2470,23 @@ class ChamberRuntime:
                 self.append_log(f"OES{self.ch}", "[OES] init (background) begin")
                 self._ensure_background_started()
 
-                oes_init_timeout_s = float(self.cfg._get("CHAMBER_OES_INIT_TIMEOUT_S", 20.0))
-                ok = await self.oes.initialize_device(timeout_s=oes_init_timeout_s, force=force)
+                # ✅ 메인 timeout은 워커 내부 timeout(25s)보다 길어야 함
+                oes_init_timeout_s = float(self.cfg._get("CHAMBER_OES_INIT_TIMEOUT_S", 30.0))
+
+                ok = await self.oes.initialize_device(
+                    timeout_s=oes_init_timeout_s,
+                    force=force,
+                )
                 self._oes_initialized = bool(ok)
 
                 if ok:
-                    self.append_log(f"OES{self.ch}", "[OES] init (background) OK")
+                    self.append_log(f"OES{self.ch}", f"[OES] init (background) OK (timeout={oes_init_timeout_s:.1f}s)")
                 else:
                     err = getattr(self.oes, "_init_error", None) or "unknown"
-                    self.append_log(f"OES{self.ch}", f"[OES] init (background) FAIL: {err}")
+                    self.append_log(
+                        f"OES{self.ch}",
+                        f"[OES] init (background) FAIL: {err} (timeout={oes_init_timeout_s:.1f}s)"
+                    )
 
             except Exception as e:
                 self._oes_initialized = False
