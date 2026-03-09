@@ -318,8 +318,40 @@ class ProcessController:
         # === 토큰 소유권 맵: (kind, spec) -> step_idx ===
         self._token_owner: Dict[Tuple[str, Any], int] = {}
 
-    # ===== 공정 시작/중단 API =====
+    # ===== 지원 플래그 property =====
+    @property
+    def supports_dc_cont(self) -> bool:
+        return bool(self._supports_dc_cont)
 
+    @supports_dc_cont.setter
+    def supports_dc_cont(self, v: bool) -> None:
+        self._supports_dc_cont = bool(v)
+
+    @property
+    def supports_rf_cont(self) -> bool:
+        return bool(self._supports_rf_cont)
+
+    @supports_rf_cont.setter
+    def supports_rf_cont(self, v: bool) -> None:
+        self._supports_rf_cont = bool(v)
+
+    @property
+    def supports_dc_pulse(self) -> bool:
+        return bool(self._supports_dc_pulse)
+
+    @supports_dc_pulse.setter
+    def supports_dc_pulse(self, v: bool) -> None:
+        self._supports_dc_pulse = bool(v)
+
+    @property
+    def supports_rf_pulse(self) -> bool:
+        return bool(self._supports_rf_pulse)
+
+    @supports_rf_pulse.setter
+    def supports_rf_pulse(self, v: bool) -> None:
+        self._supports_rf_pulse = bool(v)
+
+    # ===== 공정 시작/중단 API =====
     def start_process(self, params: Dict[str, Any]) -> None:
         if self.is_running:
             self._emit_log("Process", "오류: 이미 다른 공정이 실행 중입니다.")
