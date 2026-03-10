@@ -1,7 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-from typing import Sequence, List, Tuple
+from typing import Sequence, List, Tuple, Any
 from PySide6.QtCore import Qt, QMargins, QPointF, QRect
 from PySide6.QtGui import QFont, QPen, QPainter
 from PySide6.QtWidgets import QWidget, QVBoxLayout, QSizePolicy
@@ -9,6 +9,12 @@ from PySide6.QtCharts import (
     QChart, QChartView, QLineSeries, QScatterSeries,
     QValueAxis, QLogValueAxis
 )
+
+try:
+    from shiboken6 import isValid as _qt_is_valid
+except Exception:
+    def _qt_is_valid(obj: Any) -> bool:
+        return obj is not None
 
 # ===== 통일 설정 (여기만 바꾸면 전체가 같이 바뀜) =====
 LABEL_FONT_PT = 9     # 축 눈금/제목 모두 동일 포인트 크기
@@ -128,6 +134,36 @@ class GraphController:
         self.oes_view = TightChartView(self.oes_chart, left=75, top=30, right=28, bottom=60)
         self._mount_chart_view(oes_widget, self.oes_view)
 
+    def _is_alive_qt_obj(self, obj: Any) -> bool:
+        try:
+            return obj is not None and _qt_is_valid(obj)
+        except Exception:
+            return False
+
+    def _is_oes_graph_alive(self) -> bool:
+        try:
+            return all([
+                self._is_alive_qt_obj(getattr(self, "oes_chart", None)),
+                self._is_alive_qt_obj(getattr(self, "oes_axis_x", None)),
+                self._is_alive_qt_obj(getattr(self, "oes_axis_y", None)),
+                self._is_alive_qt_obj(getattr(self, "oes_series", None)),
+                self._is_alive_qt_obj(getattr(self, "oes_view", None)),
+            ])
+        except Exception:
+            return False
+
+    def _is_rga_graph_alive(self) -> bool:
+        try:
+            return all([
+                self._is_alive_qt_obj(getattr(self, "rga_chart", None)),
+                self._is_alive_qt_obj(getattr(self, "rga_axis_x", None)),
+                self._is_alive_qt_obj(getattr(self, "rga_axis_y", None)),
+                self._is_alive_qt_obj(getattr(self, "rga_scatter", None)),
+                self._is_alive_qt_obj(getattr(self, "rga_view", None)),
+            ])
+        except Exception:
+            return False
+
     # ─────────────────────── public API ───────────────────────
     def update_rga_plot(self, x_data: Sequence[float], y_torr: Sequence[float]) -> None:
         for s in self._rga_stem_series:
@@ -187,6 +223,11 @@ class GraphController:
 
     def update_oes_plot(self, x_data: Sequence[float], y_data: Sequence[float]) -> None:
         """OES: 선 그래프 (x는 100~1200 범위로 클리핑, x축 눈금 100 단위 고정)"""
+
+        # ✅ 이미 Qt 객체가 파괴됐으면 아무 것도 하지 않음
+        if not self._is_oes_graph_alive():
+            return
+
         # numpy/리스트 모두 안전하게 1D로 정규화
         try:
             import numpy as _np
@@ -196,38 +237,62 @@ class GraphController:
             x_arr = list(x_data or [])
             y_arr = list(y_data or [])
 
-        # 비어있거나 None이면 스킵, 길이 불일치시 맞춰 절단
         if x_arr is None or y_arr is None:
             return
+
         n = min(len(x_arr), len(y_arr))
         if n < 2:
             return
+
         x_arr = x_arr[:n]
         y_arr = y_arr[:n]
 
-        self.oes_series.clear()
         xmin, xmax = self.OES_X_RANGE
-
         pairs: List[Tuple[float, float]] = []
+
         for x, y in zip(x_arr, y_arr):
             try:
-                xf = float(x); yf = float(y)
+                xf = float(x)
+                yf = float(y)
             except Exception:
                 continue
+
             if xf < xmin or xf > xmax:
                 continue
+
             pairs.append((xf, yf))
 
         if len(pairs) < 2:
             return
 
         pairs.sort(key=lambda p: p[0])
+
+        # ✅ clear 직전에도 다시 확인
+        if not self._is_oes_graph_alive():
+            return
+
+        try:
+            self.oes_series.clear()
+        except Exception:
+            return
+
         for x, y in pairs:
-            self.oes_series.append(QPointF(x, y))
+            if not self._is_oes_graph_alive():
+                return
+            try:
+                self.oes_series.append(QPointF(x, y))
+            except Exception:
+                return
 
         # x축: 100 간격 고정 / y축: 기본 범위 유지
-        self._setup_oes_x_axis_base(self.oes_axis_x)
-        self.oes_axis_y.setRange(*self.OES_Y_RANGE)
+        if not self._is_oes_graph_alive():
+            return
+
+        try:
+            self._setup_oes_x_axis_base(self.oes_axis_x)
+            self.oes_axis_y.setRange(*self.OES_Y_RANGE)
+        except Exception:
+            return
 
     def clear_rga_plot(self) -> None:
         self.rga_scatter.clear()
@@ -238,13 +303,33 @@ class GraphController:
         self.rga_axis_y.setRange(*self.RGA_Y_RANGE_TORR)
 
     def clear_oes_plot(self) -> None:
-        self.oes_series.clear()
-        self._setup_oes_x_axis_base(self.oes_axis_x)
-        self.oes_axis_y.setRange(*self.OES_Y_RANGE)
+        if not self._is_oes_graph_alive():
+            return
+
+        try:
+            self.oes_series.clear()
+        except Exception:
+            return
+
+        if not self._is_oes_graph_alive():
+            return
+
+        try:
+            self._setup_oes_x_axis_base(self.oes_axis_x)
+            self.oes_axis_y.setRange(*self.OES_Y_RANGE)
+        except Exception:
+            return
 
     def reset(self) -> None:
-        self.clear_rga_plot()
-        self.clear_oes_plot()
+        try:
+            self.clear_rga_plot()
+        except Exception:
+            pass
+
+        try:
+            self.clear_oes_plot()
+        except Exception:
+            pass
 
     # ─────────────────────── helpers ───────────────────────
     def _setup_oes_x_axis_base(self, axis: QValueAxis,) -> None:
