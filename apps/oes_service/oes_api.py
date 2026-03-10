@@ -655,6 +655,45 @@ class OESAsync:
             self._last_error = msg
             _errlog_exc(msg)
             return -99, msg
+        
+    def _load_and_bind_blocking(self) -> None:
+        _runlog(f"[scan] load dll begin path={self._dll_path}")
+        _add_dll_search_dir(self._dll_path)
+        self.sp_dll = ctypes.WinDLL(self._dll_path)
+        _runlog("[scan] load dll ok")
+
+        self._bind_functions()
+        _runlog("[scan] bind ok")
+
+    def _test_all_channels_blocking(self) -> int:
+        assert self.sp_dll is not None
+        _runlog(f"[scan] spTestAllChannels begin order={ORDER_USB}")
+        n = int(self.sp_dll.spTestAllChannels(ctypes.c_int16(ORDER_USB)))  # type: ignore
+        _runlog(f"[scan] spTestAllChannels rc={n}")
+        return n
+
+    def _setup_channel_blocking(self, usb: int) -> int:
+        assert self.sp_dll is not None
+        _runlog(f"[scan] spSetupGivenChannel begin usb={usb}")
+        rr = int(self.sp_dll.spSetupGivenChannel(ctypes.c_int16(usb)))  # type: ignore
+        _runlog(f"[scan] spSetupGivenChannel rc={rr} usb={usb}")
+        return rr
+
+    def _probe_model_blocking(self, usb: int) -> Optional[int]:
+        _runlog(f"[scan] probe begin usb={usb}")
+        model = self._pick_model_with_probe(usb)
+        _runlog(f"[scan] probe end usb={usb} model={self._model_name} model_id={model}")
+        return model
+
+    def _finalize_channel_blocking(self, usb: int, model: int) -> None:
+        self._npix = self._ensure_npixels(usb, int(model))
+        _runlog(f"[scan] ensure_npixels ok usb={usb} npix={self._npix}")
+
+        lim = self._npix if self._wl is None else int(min(self._npix, self._wl.size))
+        self._roi_end = min(ROI_END_DEFAULT, int(lim))
+        self._roi_start = min(ROI_START_DEFAULT, max(0, self._roi_end - 1))
+
+        self.sChannel = int(usb)
                 
     def _read_pixels(self, ch: int, npix: int) -> Tuple[int, Optional[np.ndarray]]:
         assert self.sp_dll is not None
@@ -724,17 +763,103 @@ class OESAsync:
                 self._set_dbl_int(ctypes.c_double(float(integration_ms)), ctypes.c_int16(ch))
 
     async def initialize_device(self) -> bool:
-        r, msg = await self._call(self._scan_and_open)
-        if r < 0 or self.sChannel < 0 or self.sp_dll is None:
-            self._last_error = self._last_error or msg
+        info = {
+            "dll_path": self._dll_path,
+            "dll_exists": Path(self._dll_path).is_file(),
+            "target_usb_index": int(self._usb_index),
+        }
+
+        usb = int(self._usb_index)
+        total_timeout_s = _env_float("OES_INIT_TIMEOUT_S", 25.0)
+
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + float(total_timeout_s)
+        current_stage = "start"
+
+        async def _run_step(stage: str, max_timeout_s: float, func, *args):
+            nonlocal current_stage
+            current_stage = stage
+
+            remain = deadline - loop.time()
+            if remain <= 0:
+                raise asyncio.TimeoutError()
+
+            timeout_s = min(float(max_timeout_s), float(remain))
+            _runlog(f"[init] step={stage} timeout={timeout_s:.1f}s")
+
+            return await asyncio.wait_for(self._call(func, *args), timeout=timeout_s)
+
+        try:
+            await _run_step("load_bind", 3.0, self._load_and_bind_blocking)
+
+            n = int(await _run_step("test_all_channels", 4.0, self._test_all_channels_blocking))
+            info["detected_count"] = int(n)
+            self._detected_channels = int(n)
+
+            if n <= 0:
+                msg = f"장치 스캔 실패: detected={n}"
+                self._last_scan = info
+                self._last_error = msg
+                return False
+
+            if usb < 0 or usb >= n:
+                msg = f"usb_index out of range: usb_index={usb}, detected={n}"
+                self._last_scan = info
+                self._last_error = msg
+                return False
+
+            rr = int(await _run_step("setup_channel", 4.0, self._setup_channel_blocking, usb))
+            info["setup_target_rc"] = int(rr)
+            info["opened"] = [usb] if rr >= 0 else []
+
+            if rr < 0:
+                msg = f"대상 USB{usb} 오픈 실패 (setup_rc={rr})"
+                self._last_scan = info
+                self._last_error = msg
+                return False
+
+            model = await _run_step("probe_model", 8.0, self._probe_model_blocking, usb)
+            info["model"] = self._model_name
+
+            if model is None:
+                msg = f"초기화 실패: USB{usb} — 모든 모델 probe 실패"
+                self._last_scan = info
+                self._last_error = msg
+                return False
+
+            await _run_step("finalize_channel", 4.0, self._finalize_channel_blocking, usb, int(model))
+
+            if not self._npix or int(self._npix) <= 0:
+                msg = f"npixels invalid: {self._npix}"
+                self._last_scan = info
+                self._last_error = msg
+                return False
+
+            msg = (
+                f"open ok: USB{usb}, model={self._model_name}, pixels={self._npix}"
+                + (", wl=nm" if self._wl is not None else ", wl=pixel")
+            )
+            self._last_scan = info
+            self._last_error = ""
+            _runlog(f"[init] success usb={usb} msg={msg}")
+            return True
+
+        except asyncio.TimeoutError:
+            info["timeout_stage"] = current_stage
+            msg = f"initialize timeout at stage={current_stage} usb={usb} scan={info}"
+            self._last_scan = info
+            self._last_error = msg
+            _errlog(msg)
             return False
 
-        # _scan_and_open() 내부에서 _npix/_wl/_roi까지 확정됨
-        if not self._npix or int(self._npix) <= 0:
-            self._last_error = f"npixels invalid: {self._npix}"
+        except Exception as e:
+            msg = f"initialize exception: {type(e).__name__}: {e}"
+            info["exception"] = msg
+            info["failed_stage"] = current_stage
+            self._last_scan = info
+            self._last_error = msg
+            _errlog_exc(msg)
             return False
-
-        return True
 
     def _acquire_one_slice_avg(self):
         if self.sp_dll is None or self.sChannel < 0 or self._npix <= 0:
@@ -1096,7 +1221,8 @@ async def cmd_measure(
         _print_json({"kind": "status", "message": f"[worker] init done ok={ok} resolved_usb={getattr(oes,'sChannel',-1)} pixels={getattr(oes,'_npix',0)}"})
 
         if not ok or getattr(oes, "sChannel", -1) < 0:
-            raise RuntimeError("OES initialize_device() failed")
+            init_err = str(getattr(oes, "_last_error", "")) or "OES initialize_device() failed"
+            raise RuntimeError(init_err)
 
         with contextlib.suppress(Exception):
             await oes._call(oes._apply_device_settings_blocking, int(oes.sChannel), int(integration_ms))

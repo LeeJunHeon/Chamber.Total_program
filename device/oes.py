@@ -280,13 +280,21 @@ class OESAsync:
         creationflags = _worker_creationflags()
 
         try:
-            await self._status(f"[OES] init spawn ch={self._ch} usb={self._usb} cmd={cmd}")
-
             worker_exe = Path(self._worker_cmd[0])
             worker_dir = worker_exe.resolve().parent
 
             env = os.environ.copy()
             env.setdefault("PYTHONUNBUFFERED", "1")
+
+            # ✅ 부모보다 워커 timeout을 약간 더 짧게 줘야
+            # 워커가 스스로 원인 JSON을 찍고 종료할 시간을 확보할 수 있다.
+            worker_init_timeout = max(5.0, float(timeout_s) - 2.0)
+            env["OES_INIT_TIMEOUT_S"] = str(worker_init_timeout)
+
+            await self._status(
+                f"[OES] init spawn ch={self._ch} usb={self._usb} "
+                f"parent_timeout={timeout_s}s worker_timeout={worker_init_timeout}s cmd={cmd}"
+            )
 
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
@@ -901,7 +909,7 @@ class OESAsync:
             env["PYTHONUNBUFFERED"] = "1"
             worker_dir = str(Path(self._worker_cmd[0]).resolve().parent)
 
-            self._proc = await asyncio.create_subprocess_exec(
+            proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
                 stderr=asyncio.subprocess.PIPE,
@@ -909,28 +917,30 @@ class OESAsync:
                 cwd=worker_dir,
                 env=env,
             )
+            self._proc = proc
 
-            assert self._proc.stdout and self._proc.stderr
+            assert proc.stdout and proc.stderr
 
             self._stderr_tail.clear()
             self._stderr_task = asyncio.create_task(
-                _drain_stream(self._proc.stderr, self._stderr_tail, max_lines=self._stderr_tail_max_lines)
+                _drain_stream(proc.stderr, self._stderr_tail, max_lines=self._stderr_tail_max_lines)
             )
-            self._stdout_task = asyncio.create_task(self._watch_worker_stdout(self._proc.stdout))
+            self._stdout_task = asyncio.create_task(self._watch_worker_stdout(proc.stdout))
             self._tail_task = asyncio.create_task(self._tail_csv(out_csv))
 
             await self._status(f"[OES] 측정 시작: {duration_sec/60:.1f}분, out={out_csv}")
 
             timeout = max(10.0, float(duration_sec) + 60.0)
             try:
-                await asyncio.wait_for(self._proc.wait(), timeout=timeout)
+                await asyncio.wait_for(proc.wait(), timeout=timeout)
             except asyncio.TimeoutError:
                 await self._status("[OES] 워커 timeout → 강제 종료")
                 with contextlib.suppress(Exception):
-                    self._proc.kill()
-                await self._proc.wait()
+                    proc.kill()
+                with contextlib.suppress(Exception):
+                    await proc.wait()
 
-            rc = int(self._proc.returncode or 0)
+            rc = int(proc.returncode or 0)
 
             if self._stdout_task:
                 with contextlib.suppress(Exception):
@@ -1182,16 +1192,6 @@ class OESAsync:
                     p.unlink()
 
         proc = self._proc
-        self._proc = None
-        self._stop_requested = False
-        self.is_running = False
-
-        # ✅ 강제 종료/빠른정리 후에는 init 캐시를 무효화(다음 init을 다시 타게)
-        self._init_task = None
-        self._init_done = False
-        self._init_ok = False
-        self._init_result = None
-        self._init_error = None
 
         if proc and (proc.returncode is None):
             with contextlib.suppress(Exception):
@@ -1203,6 +1203,19 @@ class OESAsync:
                     proc.kill()
                 with contextlib.suppress(Exception):
                     await asyncio.wait_for(proc.wait(), timeout=2.0)
+
+        if self._proc is proc:
+            self._proc = None
+
+        self._stop_requested = False
+        self.is_running = False
+
+        # ✅ 강제 종료/빠른정리 후에는 init 캐시를 무효화(다음 init을 다시 타게)
+        self._init_task = None
+        self._init_done = False
+        self._init_ok = False
+        self._init_result = None
+        self._init_error = None
 
     async def _watch_worker_stdout(self, stream: asyncio.StreamReader) -> None:
         try:
@@ -1374,7 +1387,7 @@ class OESAsync:
     async def _cleanup_proc_tasks(self) -> None:
         # stdout/stderr task 정리
         for name in ("_stdout_task", "_stderr_task"):
-            t = getattr(self, name)
+            t = getattr(self, name, None)
             if t:
                 t.cancel()
                 with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -1382,8 +1395,6 @@ class OESAsync:
                 setattr(self, name, None)
 
         proc = self._proc
-        self._proc = None
-
         if not proc:
             return
 
@@ -1402,4 +1413,8 @@ class OESAsync:
         if proc.returncode is None:
             with contextlib.suppress(Exception):
                 proc.kill()
+            with contextlib.suppress(Exception):
                 await asyncio.wait_for(proc.wait(), timeout=5.0)
+
+        if self._proc is proc:
+            self._proc = None
