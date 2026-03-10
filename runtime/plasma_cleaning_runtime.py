@@ -1391,40 +1391,85 @@ class PlasmaCleaningRuntime:
 
         # 4) 여기서는 끝. (정리/종료 통지는 _on_click_start()의 finally에서 '단일' 수행)
         return
-
-    async def _safe_rf_stop(self) -> None:
-        # ▶ 방어: 어떤 경로로 불려도 카운트다운 표시는 종료
-        self._process_timer_active = False
-
+    
+    async def _force_finalize_rf_stop(self) -> None:
+        """
+        RF를 외부에서 강제로 0W/SET OFF 한 뒤,
+        RFPowerAsync 내부에 남아 있을 수 있는 task/상태를 정리한다.
+        - ramp-down 로그가 계속 찍히는 현상 방지
+        - 다음 run 시작 시 stale state 방지
+        """
         if not self.rf:
             return
-        # 1) ramp-down 시작
+
+        # 1) 내부 task 정리
+        for attr in ("_rampdown_task", "_adjust_task", "_poll_task"):
+            with contextlib.suppress(Exception):
+                t = getattr(self.rf, attr, None)
+                if t and not t.done():
+                    t.cancel()
+                    await asyncio.gather(t, return_exceptions=True)
+                setattr(self.rf, attr, None)
+
+        # 2) 내부 상태 초기화
+        with contextlib.suppress(Exception):
+            self.rf._is_ramping_down = False
+        with contextlib.suppress(Exception):
+            self.rf._is_running = False
+        with contextlib.suppress(Exception):
+            self.rf._enabled = False
+        with contextlib.suppress(Exception):
+            self.rf.state = "IDLE"
+        with contextlib.suppress(Exception):
+            self.rf.target_power = 0.0
+            self.rf.current_power_step = 0.0
+            self.rf._last_sent_w = 0.0
+
+        # 3) 상위 wait가 더 이상 막히지 않도록 완료 이벤트 세팅
+        with contextlib.suppress(Exception):
+            self.rf._power_off_evt.set()
+
+    async def _safe_rf_stop(self) -> None:
+        # ▶ 어떤 경로로 불려도 카운트다운 표시는 종료
+        self._process_timer_active = False
+
+        # RF 객체가 없더라도 나머지 장치는 정리해야 함
+        if not self.rf:
+            await self._shutdown_rest_devices()
+            return
+
         cfgm = getattr(self, "_cfg_mod", cfgc)
         rf_cleanup_timeout_s = float(getattr(cfgm, "PC_RF_CLEANUP_TIMEOUT_S", 5.0))
         rf_wait_power_off_timeout_s = float(getattr(cfgm, "PC_RF_WAIT_POWER_OFF_TIMEOUT_S", 15.0))
 
+        # 1) RF cleanup 요청
         try:
             await asyncio.wait_for(self.rf.cleanup(), timeout=rf_cleanup_timeout_s)
         except asyncio.TimeoutError:
             self.append_log("RF", f"cleanup timeout({rf_cleanup_timeout_s:.1f}s) → 계속 진행")
+        except Exception as e:
+            self.append_log("RF", f"cleanup error: {e!r}")
 
-        # 2) ramp-down 완료 신호 대기
+        # 2) RF OFF 완료 신호 대기
         ok = False
         try:
             ok = await self.rf.wait_power_off(timeout_s=rf_wait_power_off_timeout_s)
         except Exception as e:
             self.append_log("RF", f"wait_power_off error: {e!r}")
 
-        # 3) 실패 시 강제 종료(failsafe)
-        if not ok and self.plc:
-            self.append_log("RF", "ramp-down 완료 신호 timeout → 강제 0W/SET OFF")
-            with contextlib.suppress(Exception):
-                await self.plc.power_write(0.0, family="DCV", write_idx=1)
-            with contextlib.suppress(Exception):
-                await self.plc.power_enable(False, family="DCV", set_idx=1)
+        # 3) timeout/실패 시 PLC 강제 OFF + RF 내부 stale task/state 정리
+        if not ok:
+            if self.plc:
+                self.append_log("RF", "ramp-down 완료 신호 timeout → 강제 0W/SET OFF")
+                with contextlib.suppress(Exception):
+                    await self.plc.power_write(0.0, family="DCV", write_idx=1)
+                with contextlib.suppress(Exception):
+                    await self.plc.power_enable(False, family="DCV", set_idx=1)
 
-        # 4) RF 완전 종료 → 나머지 중단 공정 실행
-        await self._shutdown_rest_devices()        # ← 이제 정의 추가(아래)
+            await self._force_finalize_rf_stop()
+
+        # 4) RF 종료 후 나머지 장치 정리
+        await self._shutdown_rest_devices()
 
     # =========================
     # 내부 헬퍼들

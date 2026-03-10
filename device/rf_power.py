@@ -117,6 +117,7 @@ class RFPowerAsync:
         self._power_off_evt = asyncio.Event()
         self._polling_enabled = True
 
+        self._init_direct_mode = bool(direct_mode)
         self._direct_mode = bool(direct_mode)
         self._w_inv_a = float(write_inv_a)
         self._w_inv_b = float(write_inv_b)
@@ -174,15 +175,28 @@ class RFPowerAsync:
         self._rampdown_interval_ms = int(
             getattr(mod, "CHAMBER_RF_CONT_RAMPDOWN_INTERVAL_MS", getattr(_cfg_common, "CHAMBER_RF_CONT_RAMPDOWN_INTERVAL_MS", self._rampdown_interval_ms))
         )
-        self._direct_mode = bool(
-            getattr(mod, "CHAMBER_RF_CONT_DIRECT_MODE", getattr(_cfg_common, "CHAMBER_RF_CONT_DIRECT_MODE", self._direct_mode))
-        )
-        self._w_inv_a = float(
-            getattr(mod, "CHAMBER_RF_CONT_WRITE_INV_A", getattr(_cfg_common, "CHAMBER_RF_CONT_WRITE_INV_A", self._w_inv_a))
-        )
-        self._w_inv_b = float(
-            getattr(mod, "CHAMBER_RF_CONT_WRITE_INV_B", getattr(_cfg_common, "CHAMBER_RF_CONT_WRITE_INV_B", self._w_inv_b))
-        )
+        if self._init_direct_mode:
+            self._direct_mode = bool(
+                getattr(mod, "PC_RF_DIRECT_MODE", getattr(_cfg_common, "PC_RF_DIRECT_MODE", self._direct_mode))
+            )
+        else:
+            self._direct_mode = bool(
+                getattr(mod, "CHAMBER_RF_CONT_DIRECT_MODE", getattr(_cfg_common, "CHAMBER_RF_CONT_DIRECT_MODE", self._direct_mode))
+            )
+        if self._init_direct_mode:
+            self._w_inv_a = float(
+                getattr(mod, "PC_RF_WRITE_INV_A", getattr(_cfg_common, "PC_RF_WRITE_INV_A", self._w_inv_a))
+            )
+            self._w_inv_b = float(
+                getattr(mod, "PC_RF_WRITE_INV_B", getattr(_cfg_common, "PC_RF_WRITE_INV_B", self._w_inv_b))
+            )
+        else:
+            self._w_inv_a = float(
+                getattr(mod, "CHAMBER_RF_CONT_WRITE_INV_A", getattr(_cfg_common, "CHAMBER_RF_CONT_WRITE_INV_A", self._w_inv_a))
+            )
+            self._w_inv_b = float(
+                getattr(mod, "CHAMBER_RF_CONT_WRITE_INV_B", getattr(_cfg_common, "CHAMBER_RF_CONT_WRITE_INV_B", self._w_inv_b))
+            )
 
     @property
     def reflected_threshold_w(self) -> float:
