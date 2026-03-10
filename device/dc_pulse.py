@@ -1155,12 +1155,19 @@ class AsyncDCPulse:
     async def _confirm_off_quick(self) -> tuple[bool, Optional[float], Optional[bool]]:
         """
         OUTPUT_OFF 후 빠른 교차 확인:
-        - 주판정: READ_PIV → P==0W이면 OK
-        - 보조판정: READ_STATUS → HV On=False 이면 OK
-        둘 다 불만족(P>0W 그리고 HV On=True)이면 False 반환.
+        - 주판정: READ_STATUS(0x90) → HV Off이면 OK
+        - 보조판정: STATUS 확인 불가일 때만 READ_PIV(0x9A) → P==0W이면 OK
         반환: (ok, P_W or None, hv_on or None)
         """
-        # 1) 실제 전력(P) 확인
+        # 1) 먼저 상태(HV On) 확인
+        flags = await self.read_status_flags()
+        hv_on = None
+        if flags is not None:
+            hv_on = self._hv_on_from_status(flags)
+            if hv_on is False:
+                return True, None, False
+
+        # 2) STATUS 확인이 안 되거나 아직 HV On이면, 보조로 실제 전력(P) 확인
         piv = await self.read_output_piv()
         p = None
         if piv and "eng" in piv:
@@ -1169,14 +1176,7 @@ class AsyncDCPulse:
             except Exception:
                 p = None
 
-        # 2) 상태(HV On) 확인
-        flags = await self.read_status_flags()
-        hv_on = None
-        if flags is not None:
-            hv_on = self._hv_on_from_status(flags)
-
-        # 판정: P==0W이면 OK, 아니면 보조로 HV Off면 OK
-        ok = (p is not None and p == 0.0) or (hv_on is False)
+        ok = (p is not None and p == 0.0)
         return ok, p, hv_on
 
     # ===================== 실패시 검증하는 로직 =====================

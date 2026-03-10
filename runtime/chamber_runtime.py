@@ -1669,10 +1669,34 @@ class ChamberRuntime:
                     self.append_log(f"DCPulse{self.ch}", f"CMD FAIL: {cmd} ({why_raw})")
 
                     # ✅ 내부 진단/복구용 명령 실패는 공정 실패로 승격하지 않는다.
-                    #    - READ_FAULT / READ_CTRL_MODE / READ_STATUS / READ_PIV
-                    #    - FAULT_RESET
-                    # 이런 실패는 base command(REF_POWER / OUTPUT_ON / OUTPUT_OFF) 판단의 보조일 뿐이다.
                     if cmd.startswith("READ_") or cmd == "FAULT_RESET":
+                        continue
+
+                    # ✅ OUTPUT_OFF 실패는 별도 안전 경고
+                    if cmd.startswith("OUTPUT_OFF"):
+                        alert = (
+                            f"⚠️ CH{self.ch} DC Pulse OUTPUT OFF 실패 - 출력 상태 미확인 "
+                            f"(켜져 있을 가능성 있음). 장비 패널의 HV/OUTPUT 상태를 즉시 확인하세요."
+                        )
+
+                        self.append_log(f"DCPulse{self.ch}", alert)
+
+                        try:
+                            warns = getattr(self, "_run_warnings", None)
+                            if isinstance(warns, list):
+                                warns.append("DC Pulse OUTPUT OFF 실패(출력 상태 미확인)")
+                        except Exception:
+                            pass
+
+                        if self.chat:
+                            with contextlib.suppress(Exception):
+                                self.chat.notify_error_with_src("DCPulse", alert)
+                                if hasattr(self.chat, "flush"):
+                                    self.chat.flush()
+
+                        self.process_controller.on_dc_pulse_failed(
+                            "OUTPUT_OFF 미확인(출력 상태 미확인)"
+                        )
                         continue
 
                     # AUTO_STOP은 진짜 공정 실패
@@ -1683,6 +1707,8 @@ class ChamberRuntime:
                                     "DCPulse",
                                     "세트포인트 이탈(연속) 또는 P=0W 감지 → 전체 공정 중단"
                                 )
+                                if hasattr(self.chat, "flush"):
+                                    self.chat.flush()
 
                     self.process_controller.on_dc_pulse_failed(why_raw)
 
