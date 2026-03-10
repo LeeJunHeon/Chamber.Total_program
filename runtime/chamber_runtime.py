@@ -341,6 +341,9 @@ class ChamberRuntime:
         # QMessageBox 참조 저장소(비모달 유지용)
         self._msg_boxes: list[QMessageBox] = []  # ← 추가
 
+        # ✅ 종료/정리 중에는 UI 콜백 예약을 중단하기 위한 플래그
+        self._shutting_down: bool = False
+
         # ✅ 기본 전략: config의 SUPPORTS_*를 최우선으로, 없으면 기존 CH 기본값으로 폴백
         def _cfg_bool(*names: str):
             for n in names:
@@ -3934,7 +3937,12 @@ class ChamberRuntime:
 
     def shutdown_fast(self) -> None:
         async def run():
+            # ✅ 종료 플래그 먼저
+            self._shutting_down = True
+            self._auto_connect_enabled = False
+
             self._cancel_delay_task()
+
             try:
                 if self.ig and hasattr(self.ig, "cancel_wait"):
                     with contextlib.suppress(Exception):
@@ -3944,16 +3952,64 @@ class ChamberRuntime:
 
             loop = asyncio.get_running_loop()
             current = asyncio.current_task()
+
+            # ✅ runner / stage task도 먼저 정지
+            runner_tasks = []
+            for t in (
+                getattr(self, "_runner_stage_task", None),
+                getattr(self, "_runner_task", None),
+            ):
+                if isinstance(t, asyncio.Task) and (not t.done()) and t is not current:
+                    runner_tasks.append(t)
+
+            for t in runner_tasks:
+                with contextlib.suppress(Exception):
+                    t.cancel()
+
+            if runner_tasks:
+                with contextlib.suppress(Exception):
+                    await asyncio.gather(*runner_tasks, return_exceptions=True)
+
+            self._runner_stage_task = None
+            self._runner_stage_kind = None
+            self._runner_task = None
+
+            # ✅ 일반 bg task 정지
             live = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done() and t is not current]
-            for t in live: loop.call_soon(t.cancel)
-            if live: await asyncio.gather(*live, return_exceptions=True)
+            for t in live:
+                with contextlib.suppress(Exception):
+                    loop.call_soon(t.cancel)
+
+            if live:
+                with contextlib.suppress(Exception):
+                    await asyncio.gather(*live, return_exceptions=True)
+
             self._bg_tasks = []
+
+            # ✅ keepalive task 정지 (기존 누락 핵심)
+            keepalive = [
+                t for t in getattr(self, "_keepalive_tasks", {}).values()
+                if t and not t.done() and t is not current
+            ]
+            for t in keepalive:
+                with contextlib.suppress(Exception):
+                    loop.call_soon(t.cancel)
+
+            if keepalive:
+                with contextlib.suppress(Exception):
+                    await asyncio.gather(*keepalive, return_exceptions=True)
+
+            self._keepalive_tasks = {}
+
             self._bg_started = False
             self._devices_started = False
+            self._run_select = None
 
+            # ✅ 장치 정리
             tasks = []
             for dev in (self.ig, self.mfc, self.dc_pulse, self.rf_pulse, self.dc_power, self.rf_power, self.oes, self.rga):
-                if not dev: continue
+                if not dev:
+                    continue
                 try:
                     if hasattr(dev, "cleanup_quick"):
                         tasks.append(dev.cleanup_quick())
@@ -3961,23 +4017,22 @@ class ChamberRuntime:
                         tasks.append(dev.cleanup())
                 except Exception:
                     pass
+
             if tasks:
                 await asyncio.gather(*tasks, return_exceptions=True)
 
-            # 1) footer 먼저 (파일이 열려 있으면 "# ==== END ====" 남김)
+            # ✅ 로그 마무리
             with contextlib.suppress(Exception):
                 self._close_run_log()
 
-            # 2) writer 완전 종료 + 큐 리셋
             with contextlib.suppress(Exception):
                 await self._shutdown_log_writer()
 
-            # 3) 파일 경로/버퍼 초기화 (다음 런은 새 파일명으로 시작)
             self._log_file_path = None
             with contextlib.suppress(Exception):
                 self._prestart_buf.clear()
 
-        self._spawn_detached(run())
+        self._spawn_detached(run(), name=f"ShutdownFast.CH{self.ch}")
 
     # ------------------------------------------------------------------
     # 입력 검증 / 정규화 / delay 처리
@@ -4493,11 +4548,27 @@ class ChamberRuntime:
     def _post_update_oes_plot(self, x: Sequence[float], y: Sequence[float]) -> None:
         def _safe_draw():
             try:
+                # ✅ 종료 중이면 그래프 갱신 자체를 버림
+                if getattr(self, "_shutting_down", False):
+                    return
+
+                graph = getattr(self, "graph", None)
+                if not graph or not _qt_is_valid(graph):
+                    return
+
+                # ✅ 최소한 OES 그래프 핵심 객체가 살아있는지 확인
+                for obj_name in ("oes_series", "oes_axis_x", "oes_axis_y"):
+                    obj = getattr(graph, obj_name, None)
+                    if obj is None or not _qt_is_valid(obj):
+                        return
+
                 xx = x.tolist() if hasattr(x, "tolist") else list(x)
                 yy = y.tolist() if hasattr(y, "tolist") else list(y)
-                self.graph.update_oes_plot(xx, yy)
+                graph.update_oes_plot(xx, yy)
+
             except Exception as e:
                 self.append_log("OES", f"그래프 업데이트 실패(무시): {e!r}")
+
         self._soon(_safe_draw)
 
     # ------------------------------------------------------------------
@@ -5279,19 +5350,39 @@ class ChamberRuntime:
     def _soon(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
         def _safe():
             try:
+                # ✅ 종료 중이면 예약된 콜백도 실행하지 않음
+                if getattr(self, "_shutting_down", False):
+                    return
                 fn(*args, **kwargs)
             except Exception as e:
                 tb = ''.join(traceback.format_exception(type(e), e, e.__traceback__)).rstrip()
                 self.append_log(f"CB{self.ch}", f"callback failed:\n{tb}")
-        loop = self._loop
+
+        loop = getattr(self, "_loop", None)
+        if loop is None:
+            return
+
+        # ✅ 종료 중이면 새 콜백 예약 자체를 막음
+        if getattr(self, "_shutting_down", False):
+            return
+
+        with contextlib.suppress(Exception):
+            if loop.is_closed():
+                return
+
         try:
             running = asyncio.get_running_loop()
         except RuntimeError:
             running = None
-        if running is loop:
-            loop.call_soon(_safe)
-        else:
-            loop.call_soon_threadsafe(_safe)
+
+        try:
+            if running is loop:
+                loop.call_soon(_safe)
+            else:
+                loop.call_soon_threadsafe(_safe)
+        except RuntimeError:
+            # loop 종료 직전이면 조용히 무시
+            pass
 
     def _is_dev_connected(self, dev: object) -> bool:
         try:
