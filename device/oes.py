@@ -199,8 +199,10 @@ class OESAsync:
         self._init_result: Optional[dict] = None
         self._init_error: Optional[str] = None
 
-        # ✅ daemon(상주) 모드: OES_DAEMON=1 이면 워커를 1회만 띄워 USB/DLL 채널을 유지
-        self._daemon_enabled: bool = _env_flag("OES_DAEMON", "0")
+        # ✅ daemon(상주) 모드: 기본값을 ON으로 변경
+        # - 별도 환경변수를 주지 않아도 daemon 모드로 동작
+        # - 필요하면 환경변수 OES_DAEMON=0 으로 비활성화 가능
+        self._daemon_enabled: bool = _env_flag("OES_DAEMON", "1")
         self._daemon_proc: Optional[asyncio.subprocess.Process] = None
         self._daemon_stdout_task: Optional[asyncio.Task] = None
         self._daemon_stderr_task: Optional[asyncio.Task] = None
