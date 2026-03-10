@@ -1521,15 +1521,16 @@ class ProcessController:
         if rf_pulse_duty is not None:
             rf_pulse_duty = int(rf_pulse_duty)
 
-        if use_rf_pulse and self._ch == 2:
-            # ✅ UI 옵션 없이: RF Pulse를 쓰면 자동으로 POWER_SELECT ON
-            steps.append(ProcessStep(
-                action=ActionType.PLC_CMD,
-                params=("SW_POWER_SELECT", True),
-                message="Power Select ON (SW_POWER_SELECT)"
-            ))
+        if use_rf_pulse:
+            # ✅ CH2에서만 POWER_SELECT ON
+            if self._ch == 2:
+                steps.append(ProcessStep(
+                    action=ActionType.PLC_CMD,
+                    params=("SW_POWER_SELECT", True),
+                    message="Power Select ON (SW_POWER_SELECT)"
+                ))
 
-            # 로그/메시지는 kHz로 보기 좋게 표시
+            # ✅ CH1/CH2 공통으로 RF Pulse 시작
             f_txt = f"{float(rf_pulse_freq_khz):.3f}kHz" if rf_pulse_freq_khz is not None else "keep"
             d_txt = f"{rf_pulse_duty}%" if rf_pulse_duty is not None else "keep"
             steps.append(ProcessStep(
