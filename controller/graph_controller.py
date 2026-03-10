@@ -166,10 +166,8 @@ class GraphController:
 
     # ─────────────────────── public API ───────────────────────
     def update_rga_plot(self, x_data: Sequence[float], y_torr: Sequence[float]) -> None:
-        for s in self._rga_stem_series:
-            self.rga_chart.removeSeries(s)
-        self._rga_stem_series.clear()
-        self.rga_scatter.clear()
+        if not self._is_rga_graph_alive():
+            return
 
         # numpy/리스트 모두 안전하게 1D로 정규화
         try:
@@ -182,44 +180,76 @@ class GraphController:
 
         if x_arr is None or y_arr is None:
             return
+
         n = min(len(x_arr), len(y_arr))
         if n < 1:
             return
+
         x_arr = x_arr[:n]
         y_arr = y_arr[:n]
 
         pts: List[Tuple[float, float]] = []
         x_min, x_max = self.RGA_X_RANGE
+
         for x, y in zip(x_arr, y_arr):
             try:
-                xf = float(x); yf = float(y)
+                xf = float(x)
+                yf = float(y)
             except Exception:
                 continue
+
             if xf < x_min or xf > x_max:
                 continue
             if yf <= 0.0:
                 continue
+
             pts.append((xf, yf))
 
         if not pts:
             return
 
+        if not self._is_rga_graph_alive():
+            return
+
+        try:
+            for s in list(self._rga_stem_series):
+                self.rga_chart.removeSeries(s)
+            self._rga_stem_series.clear()
+            self.rga_scatter.clear()
+        except Exception:
+            return
+
         ymin = self.RGA_Y_RANGE_TORR[0]
-        stem_pen = QPen(Qt.red); stem_pen.setWidth(1)
+        stem_pen = QPen(Qt.red)
+        stem_pen.setWidth(1)
 
         for xf, yf in pts:
-            self.rga_scatter.append(QPointF(xf, yf))
-            line = QLineSeries()
-            line.setPen(stem_pen)
-            line.append(xf, ymin)
-            line.append(xf, yf)
-            self.rga_chart.addSeries(line)
-            line.attachAxis(self.rga_axis_x)
-            line.attachAxis(self.rga_axis_y)
-            self._rga_stem_series.append(line)
+            if not self._is_rga_graph_alive():
+                return
 
-        self.rga_axis_x.setRange(*self.RGA_X_RANGE)
-        self.rga_axis_y.setRange(*self.RGA_Y_RANGE_TORR)
+            try:
+                self.rga_scatter.append(QPointF(xf, yf))
+
+                line = QLineSeries()
+                line.setPen(stem_pen)
+                line.append(xf, ymin)
+                line.append(xf, yf)
+
+                self.rga_chart.addSeries(line)
+                line.attachAxis(self.rga_axis_x)
+                line.attachAxis(self.rga_axis_y)
+                self._rga_stem_series.append(line)
+            except Exception:
+                return
+
+        if not self._is_rga_graph_alive():
+            return
+
+        try:
+            self.rga_axis_x.setRange(*self.RGA_X_RANGE)
+            self.rga_axis_y.setRange(*self.RGA_Y_RANGE_TORR)
+        except Exception:
+            return
 
     def update_oes_plot(self, x_data: Sequence[float], y_data: Sequence[float]) -> None:
         """OES: 선 그래프 (x는 100~1200 범위로 클리핑, x축 눈금 100 단위 고정)"""
@@ -295,12 +325,25 @@ class GraphController:
             return
 
     def clear_rga_plot(self) -> None:
-        self.rga_scatter.clear()
-        for s in self._rga_stem_series:
-            self.rga_chart.removeSeries(s)
-        self._rga_stem_series.clear()
-        self.rga_axis_x.setRange(*self.RGA_X_RANGE)
-        self.rga_axis_y.setRange(*self.RGA_Y_RANGE_TORR)
+        if not self._is_rga_graph_alive():
+            return
+
+        try:
+            self.rga_scatter.clear()
+            for s in list(self._rga_stem_series):
+                self.rga_chart.removeSeries(s)
+            self._rga_stem_series.clear()
+        except Exception:
+            return
+
+        if not self._is_rga_graph_alive():
+            return
+
+        try:
+            self.rga_axis_x.setRange(*self.RGA_X_RANGE)
+            self.rga_axis_y.setRange(*self.RGA_Y_RANGE_TORR)
+        except Exception:
+            return
 
     def clear_oes_plot(self) -> None:
         if not self._is_oes_graph_alive():
