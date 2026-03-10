@@ -12,6 +12,12 @@ from PySide6.QtGui import QTextCursor
 from PySide6.QtWidgets import QMessageBox, QPlainTextEdit, QApplication, QWidget
 from PySide6.QtCore import Qt, QTimer   # ⬅ 챔버와 동일한 모달리티/속성 적용용
 
+try:
+    from shiboken6 import isValid as _qt_is_valid
+except Exception:
+    def _qt_is_valid(obj: Any) -> bool:
+        return obj is not None
+
 from util.timed_popup import attach_autoclose
 
 # 장비/컨트롤러
@@ -113,6 +119,9 @@ class PlasmaCleaningRuntime:
 
         # 호스트에게 프리플라이트 결과를 전달하기 위한 Future 추가
         self._host_start_future: Optional[asyncio.Future] = None
+        
+        # ✅ 마지막으로 열었던 CSV 폴더 기억
+        self._last_process_list_dir: str = ""
 
         self._runlog_buf = deque()
 
@@ -2266,10 +2275,21 @@ class PlasmaCleaningRuntime:
 
     async def _handle_process_list_clicked_async(self) -> None:
         """PC_processList_button → 파일 선택 → 첫 행으로 UI 세팅(단발)."""
+        start_dir = (
+            getattr(self, "_last_process_list_dir", "")
+            or str(getattr(self, "_cfg_mod", cfgc)._get("PROCESS_LIST_START_DIR", r"\\VanaM_NAS\VanaM_toShare"))
+        )
+
         file_path = await self._aopen_file(
             caption="Plasma Cleaning 레시피(CSV) 선택",
+            start_dir=start_dir,
             name_filter="CSV Files (*.csv);;All Files (*)"
         )
+
+        if file_path:
+            with contextlib.suppress(Exception):
+                self._last_process_list_dir = str(Path(file_path).parent)
+
         if not file_path:
             self.append_log("File", "파일 선택 취소")
             return
@@ -2279,7 +2299,7 @@ class PlasmaCleaningRuntime:
             self._post_warning("CSV 오류", "데이터 행이 없습니다.")
             return
 
-        self._loaded_recipe_row = dict(row)  # ✅ 추가
+        self._loaded_recipe_row = dict(row)
         self._apply_recipe_row_to_ui(row)
         self.append_log("File", f"CSV 로드 완료: {file_path}\n→ UI에 값 세팅")
 
@@ -2287,25 +2307,52 @@ class PlasmaCleaningRuntime:
         """Qt 비동기 파일 열기 다이얼로그 (QFileDialog). 취소 시 빈 문자열."""
         if not self._has_ui():
             return ""
+
         from PySide6.QtWidgets import QFileDialog, QDialog
+
         dlg = QFileDialog(self._parent_widget() or None, caption, start_dir, name_filter)
         dlg.setFileMode(QFileDialog.ExistingFile)
+
+        # ✅ Windows 네이티브 파일 다이얼로그 우회
+        with contextlib.suppress(Exception):
+            dlg.setOption(QFileDialog.Option.DontUseNativeDialog, True)
+        with contextlib.suppress(Exception):
+            dlg.setOption(QFileDialog.DontUseNativeDialog, True)
+
+        # ✅ 챔버 런타임과 동일하게 수명/모달리티 고정
+        with contextlib.suppress(Exception):
+            dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            dlg.setWindowModality(Qt.WindowModality.WindowModal)
 
         loop = asyncio.get_running_loop()
         fut: asyncio.Future[str] = loop.create_future()
 
         def _done(result: int):
+            # ✅ finished 중복 호출 방지
+            if fut.done():
+                return
             try:
                 if result == QDialog.Accepted and dlg.selectedFiles():
                     fut.set_result(dlg.selectedFiles()[0])
                 else:
                     fut.set_result("")
             finally:
-                dlg.deleteLater()
+                with contextlib.suppress(Exception):
+                    dlg.finished.disconnect(_done)
+                with contextlib.suppress(Exception):
+                    dlg.deleteLater()
 
         dlg.finished.connect(_done)
         dlg.open()
-        return await fut
+
+        try:
+            return await fut
+        finally:
+            if _qt_is_valid(dlg):
+                with contextlib.suppress(Exception):
+                    dlg.close()
+                with contextlib.suppress(Exception):
+                    dlg.deleteLater()
     
     def reload_runtime_cfg(self) -> None:
         """
