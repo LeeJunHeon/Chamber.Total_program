@@ -460,6 +460,13 @@ class AsyncDCPulse:
         self._stop_guard = False
         # ✅ 세트포인트 캐시는 성공 시에만 갱신하도록(아래 set_reference_power 수정) 시작 전 초기화
         self._last_ref_power_w = None
+
+        # ✅ Host 제어 공정이면 ONOFF/REFER/MODE master를 Host로 다시 강제
+        if master == "host":
+            ok_master = await self.set_master_host_all()
+            if not ok_master:
+                await self._emit_failed("PRECHECK", "ONOFF/REFER/MODE master를 HOST로 강제하지 못함")
+                return False
         
         # ✅ [ADD] 공정 시작 전: 폴링 OFF + 버퍼 정리 + Ctrl/Fault 사전 점검
         self.set_process_status(False)
@@ -547,12 +554,26 @@ class AsyncDCPulse:
         return bool(ok2)
 
     # ====== 고수준 제어 ======
-    async def set_master_host_all(self):
-        for cmd, name in ((0x7B, "MASTER_ONOFF"),
-                        (0x7C, "MASTER_REFER"),
-                        (0x7D, "MASTER_MODE")):
-            await self._write_cmd_data(cmd, 0x0003, 2, label=name)
-        await asyncio.sleep(0.2)  # 전환 유예
+    async def set_master_host_all(self) -> bool:
+        """
+        매뉴얼:
+        - 0x7B = ONOFF Master
+        - 0x7C = Refer. Master
+        - 0x7D = Mode Master
+        - 0x0003 = Host
+        """
+        for cmd, name in (
+            (0x7B, "MASTER_ONOFF"),
+            (0x7C, "MASTER_REFER"),
+            (0x7D, "MASTER_MODE"),
+        ):
+            ok = await self._write_cmd_data(cmd, 0x0003, 2, label=name)
+            if not ok:
+                await self._emit_failed(name, "HOST master 강제 실패")
+                return False
+
+        await asyncio.sleep(0.2)  # 장비 내부 반영 유예
+        return True
 
     async def set_regulation(self, mode: Literal["V","I","P"]) -> bool:
         """0x81: 제어 모드 설정 (1=V, 2=I, 3=P)."""
@@ -787,45 +808,84 @@ class AsyncDCPulse:
             return False
 
         return True
+    
+
+    async def _reopen_session_for_retry(self, label: str, timeout: float = 3.0) -> bool:
+        """
+        OUTPUT_OFF 같은 크리티컬 명령이 ERR(04) 연속으로 막힐 때
+        현재 TCP 세션을 강제로 내리고 watchdog reconnect로 새 세션을 연다.
+        """
+        await self.start()  # watchdog/cmd worker 살아있게 보장
+
+        try:
+            self._on_tcp_disconnected()
+        except Exception:
+            pass
+
+        ok = await self._wait_until_connected(timeout=timeout)
+        if not ok:
+            await self._emit_status(f"[{label}] 세션 재연결 실패")
+            return False
+
+        self._purge_rx_frames()
+        self._drain_rx_frames()
+        await asyncio.sleep(0.25)
+        await self._emit_status(f"[{label}] 세션 재연결 완료 → 재시도")
+        return True
 
 
     # [ADD] 명령 실패 시 fault 확인/클리어 후 재전송 여부 결정
     async def _recover_and_prepare_retry(self, label: str, resp: Optional[bytes]) -> bool:
         """
-        write 명령 실패(NAK/timeout) 시:
-        1) READ_FAULT_CODE(0x9E)
-        2) fault != 0이면 FAULT_RESET(0x6F, data=0x0001)
-        3) 동일 명령을 1회 재전송할지 여부 반환
+        write 명령 실패(NAK/timeout) 시 복구 판단.
+        핵심:
+        - timeout/disconnect(None)면 재연결 대기
+        - OUTPUT_OFF 에서 ERR(04) + fault 조회 실패/무fault 지속이면
+        세션 꼬임 가능성을 보고 세션 재연결 후 재시도
         """
-        # timeout/disconnect였으면 우선 재연결을 기다림
+        # 1) timeout/disconnect
         if resp is None:
-            # watchdog이 꺼져있으면 재연결이 영영 안 될 수 있으니, 일단 켜준다
             await self.start()
             ok_conn = await self._wait_until_connected(timeout=float(self._connect_timeout_s))
             if not ok_conn:
                 await self._emit_status(f"[{label}] 실패 후 재연결 안됨 → 복구 중단")
                 return False
 
-        # 다음 재전송이 잔여 echo(0x06/0x04)에 오염되지 않게 비움
+        # 2) 잔여 프레임/버퍼 정리
         self._purge_rx_frames()
+        self._drain_rx_frames()
 
+        # 3) fault 확인
         fault = await self.read_fault_code()
+
+        # OUTPUT_OFF 인데 fault 조회 자체가 안 되면,
+        # 단순 재전송보다 세션 재연결이 훨씬 안전하다.
         if fault is None:
+            if label == "OUTPUT_OFF":
+                await self._emit_status(f"[{label}] 실패 후 fault 조회 실패 → 세션 재연결 후 재전송")
+                return await self._reopen_session_for_retry(label)
+
             await self._emit_status(f"[{label}] 실패 후 fault 조회 실패 → 단순 재전송 1회 시도")
             return True
 
+        # fault=0 이어도 OUTPUT_OFF 에서 명시적 ERR(04)가 왔다면
+        # 장비 fault가 아니라 세션 꼬임/타이밍 문제일 수 있으므로 재연결을 우선
         if fault == 0:
+            if label == "OUTPUT_OFF" and resp is not None and len(resp) == 1 and resp[0] == 0x04:
+                await self._emit_status(f"[{label}] fault=0 이지만 ERR(04) 지속 → 세션 재연결 후 재전송")
+                return await self._reopen_session_for_retry(label)
+
             await self._emit_status(f"[{label}] 실패 후 fault=0 → 단순 재전송 1회 시도")
             return True
 
+        # 4) 실제 fault면 reset 시도
         await self._emit_status(f"[{label}] 실패 후 fault=0x{fault:04X} → FAULT_RESET 후 재전송")
         ok_reset = await self.fault_reset()
         if not ok_reset:
             await self._emit_status(f"[{label}] FAULT_RESET 실패 → 재전송 중단")
             return False
 
-        # 장비 내부 정리 시간(너무 짧으면 바로 NAK가 재발할 수 있음)
-        await asyncio.sleep(1.0) # 1초
+        await asyncio.sleep(1.0)
         return True
 
     # ====== 내부: 명령 헬퍼 ======
@@ -998,7 +1058,17 @@ class AsyncDCPulse:
             continue
 
         # 여기까지 왔으면 총 시도 횟수 소진
-        await self._emit_failed(base_label, f"응답 없음/실패 — 총 {self._recover_max_attempts}회 시도, last={last_resp!r}")
+        if base_label == "OUTPUT_OFF":
+            await self._emit_failed(
+                base_label,
+                f"OUTPUT_OFF 미확인 — 총 {self._recover_max_attempts}회 시도, last={last_resp!r} (출력 상태 미확인)"
+            )
+        else:
+            await self._emit_failed(
+                base_label,
+                f"응답 없음/실패 — 총 {self._recover_max_attempts}회 시도, last={last_resp!r}"
+            )
+
         if base_label == "OUTPUT_ON":
             self.set_process_status(False)
         if base_label == "OUTPUT_OFF":
