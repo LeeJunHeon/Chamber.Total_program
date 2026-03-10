@@ -889,14 +889,74 @@ class PlasmaCleaningRuntime:
 
         # 3) 비동기 핸들러 연결 (최신 권장 create_task 사용)
         if w_start:
-            w_start.clicked.connect(lambda: asyncio.create_task(self._on_click_start()))
+            w_start.clicked.connect(lambda: self._spawn_detached(self._on_click_start(), name="PC.ClickStart"))
         if w_stop:
-            w_stop.clicked.connect(lambda: asyncio.create_task(self._on_click_stop()))
+            w_stop.clicked.connect(lambda: self._spawn_detached(self._on_click_stop(), name="PC.ClickStop"))
         if w_proc:
-            w_proc.clicked.connect(lambda: asyncio.create_task(self._handle_process_list_clicked_async()))
+            w_proc.clicked.connect(lambda: self._spawn_detached(self._handle_process_list_clicked_async(), name="PC.ClickOpenCSV"))
 
         # 4) 중복 연결 방지 플래그
         self._buttons_connected = True
+
+    def _spawn_detached(
+        self,
+        coro,
+        *,
+        name: str = "PC.Detached",
+        store: bool = True,
+    ):
+        """
+        Qt clicked signal 등 '현재 running loop가 보장되지 않는' 곳에서도
+        self._loop 에 안전하게 코루틴을 태운다.
+        """
+        loop = getattr(self, "_loop", None)
+        if loop is None:
+            self.append_log("TASK", f"{name}: loop 없음")
+            return None
+
+        created: dict[str, asyncio.Task] = {}
+
+        def _create() -> None:
+            try:
+                task = loop.create_task(coro, name=name)
+                created["task"] = task
+
+                if store:
+                    self._bg_tasks.append(task)
+
+                def _done(tsk: asyncio.Task) -> None:
+                    if store:
+                        with contextlib.suppress(ValueError):
+                            self._bg_tasks.remove(tsk)
+
+                    if tsk.cancelled():
+                        return
+
+                    with contextlib.suppress(Exception):
+                        exc = tsk.exception()
+                        if exc:
+                            self.append_log("TASK", f"{name} failed: {exc!r}")
+
+                task.add_done_callback(_done)
+
+            except Exception as e:
+                self.append_log("TASK", f"{name} create_task 실패: {e!r}")
+
+        try:
+            running = asyncio.get_running_loop()
+        except RuntimeError:
+            running = None
+
+        try:
+            if running is loop:
+                _create()
+            else:
+                loop.call_soon_threadsafe(_create)
+        except Exception as e:
+            self.append_log("TASK", f"{name} schedule 실패: {e!r}")
+            return None
+
+        return created.get("task")
 
     # Host 프리플라이트 결과 전달용 헬퍼
     def _host_report_start(self, ok: bool, reason: str = "") -> None:
@@ -2277,8 +2337,15 @@ class PlasmaCleaningRuntime:
         """PC_processList_button → 파일 선택 → 첫 행으로 UI 세팅(단발)."""
         start_dir = (
             getattr(self, "_last_process_list_dir", "")
-            or str(getattr(self, "_cfg_mod", cfgc)._get("PROCESS_LIST_START_DIR", r"\\VanaM_NAS\VanaM_toShare"))
+            or str(getattr(getattr(self, "_cfg_mod", cfgc), "PROCESS_LIST_START_DIR", r"\\VanaM_NAS\VanaM_toShare"))
         )
+
+        try:
+            if start_dir and not Path(start_dir).exists():
+                self.append_log("File", f"시작 폴더 없음 → 기본 위치로 열기: {start_dir}")
+                start_dir = ""
+        except Exception:
+            start_dir = ""
 
         file_path = await self._aopen_file(
             caption="Plasma Cleaning 레시피(CSV) 선택",

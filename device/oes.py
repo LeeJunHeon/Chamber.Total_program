@@ -88,7 +88,7 @@ def _main_exe_dir() -> Path:
 
 
 def _resolve_worker_command() -> List[str]:
-    """
+    r"""
     메인 공정 프로그램.exe 폴더 기준(하드코딩 디렉토리 유지)
       <main_exe_dir>\apps\oes_service\{oes_worker.exe 또는 oes_api.exe}
     """
