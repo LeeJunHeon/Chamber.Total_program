@@ -907,6 +907,13 @@ class OESAsync:
 
             env = os.environ.copy()
             env["PYTHONUNBUFFERED"] = "1"
+
+            # ✅ measure 경로에서도 worker init timeout을 명시적으로 맞춘다.
+            #    그래야 worker 내부 initialize_device()가 너무 오래 끌지 않고,
+            #    실패 원인 로그도 더 일관되게 남는다.
+            worker_init_timeout = max(5.0, min(25.0, float(duration_sec) + 10.0))
+            env["OES_INIT_TIMEOUT_S"] = str(worker_init_timeout)
+
             worker_dir = str(Path(self._worker_cmd[0]).resolve().parent)
 
             proc = await asyncio.create_subprocess_exec(
