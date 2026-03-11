@@ -420,6 +420,12 @@ class MainWindow(QWidget):
         # ★ 외부 제어 서버 기동
         self._host_handle = None
 
+        # ✅ 현재 host가 어떤 주소/포트로 떠 있어야 하는지 추적
+        self._host_bound = (
+            str(getattr(cfgc, "HOST_SERVER_HOST", "0.0.0.0")),
+            int(getattr(cfgc, "HOST_SERVER_PORT", 0)),
+        )
+
         # host → log(tag, text) 콜백
         def _netlog(tag: str, text: str) -> None:
             msg = str(text)
@@ -778,6 +784,39 @@ class MainWindow(QWidget):
             dlg = ConfigDialog(parent=self)
             self._config_dialog = dlg
 
+            # ✅ Apply(Runtime) → MainWindow 반영 훅 연결
+            try:
+                connected = False
+
+                for sig_name in ("sigApplied", "sigApplyRuntime", "applied"):
+                    sig = getattr(dlg, sig_name, None)
+                    if sig is None:
+                        continue
+                    try:
+                        sig.connect(self.on_config_applied)
+                        connected = True
+                        break
+                    except Exception:
+                        pass
+
+                # signal 대신 callback setter를 쓰는 구현도 방어
+                if (not connected) and hasattr(dlg, "set_apply_callback"):
+                    try:
+                        dlg.set_apply_callback(self.on_config_applied)
+                        connected = True
+                    except Exception:
+                        pass
+
+                # callback 속성 직접 주입 방식도 방어
+                if (not connected) and hasattr(dlg, "on_applied"):
+                    try:
+                        dlg.on_applied = self.on_config_applied
+                        connected = True
+                    except Exception:
+                        pass
+            except Exception:
+                pass
+
             # 닫힐 때 참조 해제(다음에 다시 열 수 있게)
             def _clear(_=None):
                 self._config_dialog = None
@@ -890,7 +929,10 @@ class MainWindow(QWidget):
                         mfc.set_endpoint(str(host), int(port), reconnect=True)
 
         # (C) ChamberRuntime 자체 + 내부 장비들 reload
-        for rt in (getattr(self, "ch1", None), getattr(self, "ch2", None)):
+        for rt, cfgm in (
+            (getattr(self, "ch1", None), config_ch1),
+            (getattr(self, "ch2", None), config_ch2),
+        ):
             if not rt:
                 continue
 
@@ -903,6 +945,34 @@ class MainWindow(QWidget):
                 with contextlib.suppress(Exception):
                     if dev and hasattr(dev, "reload_runtime_cfg"):
                         dev.reload_runtime_cfg()
+
+            # ✅ pulse endpoint 변경은 idle일 때만 실제 reconnect
+            if not running:
+                dp = getattr(rt, "dc_pulse", None)
+                if dp is not None:
+                    dp_host = getattr(cfgm, "DCPULSE_TCP_HOST", getattr(cfgc, "DCPULSE_TCP_HOST", None))
+                    dp_port = getattr(cfgm, "DCPULSE_TCP_PORT", getattr(cfgc, "DCPULSE_TCP_PORT", None))
+                    with contextlib.suppress(Exception):
+                        if hasattr(dp, "set_endpoint_reconnect"):
+                            await dp.set_endpoint_reconnect(str(dp_host), int(dp_port))
+                        elif hasattr(dp, "set_endpoint"):
+                            try:
+                                dp.set_endpoint(str(dp_host), int(dp_port), reconnect=True)
+                            except TypeError:
+                                dp.set_endpoint(str(dp_host), int(dp_port))
+
+                rp = getattr(rt, "rf_pulse", None)
+                if rp is not None:
+                    rp_host = getattr(cfgm, "RFPULSE_TCP_HOST", getattr(cfgc, "RFPULSE_TCP_HOST", None))
+                    rp_port = getattr(cfgm, "RFPULSE_TCP_PORT", getattr(cfgc, "RFPULSE_TCP_PORT", None))
+                    with contextlib.suppress(Exception):
+                        if hasattr(rp, "set_endpoint_reconnect"):
+                            await rp.set_endpoint_reconnect(str(rp_host), int(rp_port))
+                        elif hasattr(rp, "set_endpoint"):
+                            try:
+                                rp.set_endpoint(str(rp_host), int(rp_port), reconnect=True)
+                            except TypeError:
+                                rp.set_endpoint(str(rp_host), int(rp_port))
 
         # (D) PC 런타임도 내부적으로 config를 다시 읽을 수 있으면 호출
         pc = getattr(self, "pc", None)
@@ -919,6 +989,34 @@ class MainWindow(QWidget):
                 # addr는 RS232 키가 있으면 우선 사용
                 addr = getattr(cfgc, "TSP_RS232_ADDR", getattr(cfgc, "TSP_ADDR", 0x80))
                 tsp.set_endpoint(cfgc.TSP_TCP_HOST, int(cfgc.TSP_TCP_PORT), int(addr))
+
+                # (F) Host server: host/port 변경 시 재바인딩
+        new_host = str(getattr(cfgc, "HOST_SERVER_HOST", "0.0.0.0"))
+        new_port = int(getattr(cfgc, "HOST_SERVER_PORT", 0))
+        old_host, old_port = getattr(self, "_host_bound", (None, None))
+
+        # server page 표시값은 항상 최신으로 맞춤
+        with contextlib.suppress(Exception):
+            sp = getattr(self, "server_page", None)
+            if sp and hasattr(sp, "set_host_info"):
+                sp.set_host_info(new_host, new_port)
+
+        if (new_host, new_port) != (old_host, old_port):
+            if running:
+                self._broadcast_log(
+                    "NET",
+                    f"Host 설정 변경 감지: {old_host}:{old_port} -> {new_host}:{new_port} "
+                    f"(실행 중이라 host 재기동은 보류)"
+                )
+            else:
+                if getattr(self, "_host_handle", None):
+                    await self._restart_host()
+                else:
+                    self._host_bound = (new_host, new_port)
+                    self._broadcast_log(
+                        "NET",
+                        f"Host 설정 반영 대기: {new_host}:{new_port} (현재 host 미실행 상태)"
+                    )
 
     def _apply_ui_defaults_from_config(self, *, overwrite: bool) -> None:
         """
@@ -964,6 +1062,27 @@ class MainWindow(QWidget):
         _set_plain(
             getattr(self.ui, "PC_ProcessTime_edit", None),
             pc_cfg.get("process_time_min", str(getattr(cfgc, "PC_DEFAULT_PROCESS_TIME_MIN", 1.0)))
+        )
+        # CH1/CH2: 현재 config로 기본값이 확정된 항목만 UI 반영
+        _set_plain(
+            getattr(self.ui, "ch1_basePressure_edit", None),
+            str(getattr(config_ch1, "PROCESS_DEFAULT_BASE_PRESSURE",
+                        getattr(cfgc, "PROCESS_DEFAULT_BASE_PRESSURE", 1e-5)))
+        )
+        _set_plain(
+            getattr(self.ui, "ch2_basePressure_edit", None),
+            str(getattr(config_ch2, "PROCESS_DEFAULT_BASE_PRESSURE",
+                        getattr(cfgc, "PROCESS_DEFAULT_BASE_PRESSURE", 1e-5)))
+        )
+        _set_plain(
+            getattr(self.ui, "ch2_basePressure_edit", None),
+            str(getattr(config_ch2, "PROCESS_DEFAULT_BASE_PRESSURE",
+                        getattr(cfgc, "PROCESS_DEFAULT_BASE_PRESSURE", 1e-5)))
+        )
+        _set_plain(
+            getattr(self.ui, "ch2_integrationTime_edit", None),
+            str(getattr(config_ch2, "PROCESS_DEFAULT_OES_INTEGRATION_MS",
+                        getattr(cfgc, "PROCESS_DEFAULT_OES_INTEGRATION_MS", 60)))
         )
 
     def _on_runtime_dump_clicked(self) -> None:
@@ -1154,6 +1273,11 @@ class MainWindow(QWidget):
                 runtime_state=runtime_state,
                 chat=self.chat_host,
                 popup=self._host_popup,
+            )
+
+            self._host_bound = (
+                str(cfgc.HOST_SERVER_HOST),
+                int(cfgc.HOST_SERVER_PORT),
             )
 
             # ✅ server 페이지 상태 RUNNING 갱신
