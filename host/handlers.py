@@ -734,16 +734,19 @@ class HostHandlers:
     async def vacuum_on(self, data: Json) -> Json:
         """
         VACUUM ON 시퀀스:
-        0) L_VENT_SW = False 선행 정지
-        1) L_R_P_SW = True  (러핑펌프 ON)
-        2) L_R_V_인터락 == True 확인
-        3) L_R_V_SW = True  (러핑밸브 ON)
-        4) L_VAC_READY_SW == True 까지 대기 (기본 600s)
-        
-        ✅ 추가:
-        - 시작 전에 gate가 close인지 확인하고, 확인되면 다음 단계로 진행
-        (옵션 없음: gate가 CLOSED가 아니면 즉시 실패 반환)
-        - 실패/예외/타임아웃 포함 어떤 경로든 L_R_P_SW/L_R_V_SW OFF 원복 보장
+        1) gate close 확인
+        2) 이미 L_VAC_READY_SW=True 이면 즉시 성공 응답
+        3) 아니면
+        - L_VENT_SW=False
+        - L_R_P_SW=True
+        - 5초 대기
+        - L_R_V_인터락 확인
+        - L_R_V_SW=True
+        4) timeout까지 폴링:
+        - 폴링 중에는 L_VAC_READY_SW=True만 기다림
+        - L_VAC_READY_SW=True -> L_R_V_SW=False -> 5초 -> L_R_P_SW=False -> 성공
+        - timeout 시점에 L_VAC_READY_SW가 끝까지 안 들어왔고 L_VAC_NOT_READY=True면 실패
+        5) 실패/예외 시에는 러핑밸브/펌프 OFF 원복
         """
         timeout_s = float(data.get("timeout_s", 600.0))  # 기본 10분
 
@@ -751,89 +754,172 @@ class HostHandlers:
             self._log_client_request(data)
 
             success = False
+            cleanup_done = False
+
+            async def _stop_roughing(delay_s: float = 5.0) -> None:
+                """
+                러핑밸브 OFF -> delay -> 러핑펌프 OFF
+                실패 경로에서 중복 원복을 막기 위해 cleanup_done=True 처리
+                """
+                nonlocal cleanup_done
+
+                with contextlib.suppress(Exception):
+                    async with self._plc_call():
+                        await self.ctx.plc.write_switch("L_R_V_SW", False)
+
+                await asyncio.sleep(delay_s)
+
+                with contextlib.suppress(Exception):
+                    async with self._plc_call():
+                        await self.ctx.plc.write_switch("L_R_P_SW", False)
+
+                cleanup_done = True
+
             try:
-                # ✅ gate_open 레이스 방지: loadlock 스위치 ON 전까지만 잠깐 락
+                # ✅ gate_open 레이스 방지:
+                #    gate 상태 확인 + 초기 VAC_READY fast-path + pump ON 까지만 잠깐 락
                 async with self.ctx.lock_ch1:
                     async with self.ctx.lock_ch2:
                         ok, msg, code = await self._require_gates_closed()
                         if not ok:
                             return self._fail(msg, code=code)
 
-                        # 0) 벤트 OFF
+                        # 1) 이미 ready 상태면 현재 러핑 상태까지 같이 확인
+                        async with self._plc_call():
+                            vac_ready_now = bool(await self.ctx.plc.read_bit("L_VAC_READY_SW"))
+                            pump_sw_now = bool(await self.ctx.plc.read_bit("L_R_P_SW"))
+                            valve_sw_now = bool(await self.ctx.plc.read_bit("L_R_V_SW"))
+
+                        if vac_ready_now:
+                            # 정상 상태: READY이고 러핑도 이미 정리됨
+                            if (not pump_sw_now) and (not valve_sw_now):
+                                success = True
+                                return self._ok("VACUUM_ON: 이미 L_VAC_READY_SW=TRUE 상태")
+
+                            # 비정상 상태: READY인데 러핑이 남아있음 → 직접 정리 후 성공/실패 판정
+                            await _stop_roughing(delay_s=5.0)
+
+                            off_deadline = time.monotonic() + 10.0
+                            while time.monotonic() < off_deadline:
+                                async with self._plc_call():
+                                    pump_sw2 = bool(await self.ctx.plc.read_bit("L_R_P_SW"))
+                                    valve_sw2 = bool(await self.ctx.plc.read_bit("L_R_V_SW"))
+
+                                if (not pump_sw2) and (not valve_sw2):
+                                    success = True
+                                    return self._ok(
+                                        "VACUUM_ON: 이미 L_VAC_READY_SW=TRUE였고 "
+                                        "L_R_V_SW OFF → 5초 → L_R_P_SW OFF 정리 완료"
+                                    )
+
+                                await asyncio.sleep(0.5)
+
+                            return self._fail(
+                                "VACUUM_ON 실패 — L_VAC_READY_SW=TRUE였지만 "
+                                "L_R_P_SW/L_R_V_SW OFF 완료 확인 실패",
+                                code="E312",
+                            )
+
+                        # 2) 벤트 OFF
                         async with self._plc_call():
                             await self.ctx.plc.write_switch("L_VENT_SW", False)
                         await asyncio.sleep(0.3)
 
-                        # 0-1) 러핑펌프 OFF 타이머 체크
+                        # 3) 러핑펌프 OFF 타이머 체크
                         async with self._plc_call():
                             if await self.ctx.plc.read_bit("L_R_P_OFF_TIMER"):
-                                return self._fail("러핑펌프 OFF 타이머 진행 중 → 잠시 후 재시도", code="E309")
+                                return self._fail(
+                                    "러핑펌프 OFF 타이머 진행 중 → 잠시 후 재시도",
+                                    code="E309",
+                                )
 
-                        # 1) 러핑펌프 ON  ← 여기까지 오면 gate_open이 이제 확실히 차단됨(L_R_P_SW TRUE)
+                        # 4) 러핑펌프 ON
                         async with self._plc_call():
                             await self.ctx.plc.write_switch("L_R_P_SW", True)
 
-                # ✅ 펌프 기동 안정화 텀 (3초)
-                await asyncio.sleep(3.0)
+                # ✅ 펌프 기동 안정화 텀: 5초
+                await asyncio.sleep(5.0)
 
-                # 2) 러핑밸브 인터락
+                # 5) 러핑밸브 인터락 확인
                 async with self._plc_call():
-                    if not await self.ctx.plc.read_bit("L_R_V_인터락"):
-                        return self._fail("L_R_V_인터락=FALSE → 러핑밸브 개방 불가", code="E310")
+                    rv_interlock = bool(await self.ctx.plc.read_bit("L_R_V_인터락"))
 
-                # 3) 러핑밸브 ON
+                if not rv_interlock:
+                    # 요청사항:
+                    # 인터락으로 막히면 L_R_P_SW를 꺼야 함
+                    await _stop_roughing(delay_s=5.0)
+                    return self._fail(
+                        "L_R_V_인터락=FALSE → 러핑밸브 개방 불가 (L_R_P_SW/L_R_V_SW OFF 처리)",
+                        code="E310",
+                    )
+
+                # 6) 러핑밸브 ON
                 async with self._plc_call():
                     await self.ctx.plc.write_switch("L_R_V_SW", True)
 
-                # 4) VAC_READY + 러핑펌프/밸브 OFF 상태까지 폴링
-                deadline = time.monotonic() + float(timeout_s)
+                # 7) timeout까지 폴링
+                deadline = time.monotonic() + timeout_s
                 while time.monotonic() < deadline:
                     async with self._plc_call():
-                        vac_ready = await self.ctx.plc.read_bit("L_VAC_READY_SW")
-                        pump_sw  = await self.ctx.plc.read_bit("L_R_P_SW")
-                        valve_sw = await self.ctx.plc.read_bit("L_R_V_SW")
+                        vac_ready = bool(await self.ctx.plc.read_bit("L_VAC_READY_SW"))
 
-                    # 조건:
-                    # 1) L_VAC_READY_SW == TRUE
-                    # 2) L_R_P_SW == FALSE  (러핑펌프 스위치 OFF)
-                    # 3) L_R_V_SW == FALSE  (러핑밸브 스위치 OFF)
-                    if vac_ready and (not pump_sw) and (not valve_sw):
-                        success = True
-                        return self._ok("VACUUM_ON 완료 — VAC_READY && L_R_P_SW/L_R_V_SW=FALSE 확인")
+                    # 7-1) READY가 들어오면 handlers가 직접 동일한 순서로 shutdown 수행
+                    if vac_ready:
+                        await _stop_roughing(delay_s=5.0)
+
+                        # OFF 확인을 짧게 한 번 더 봄
+                        off_deadline = time.monotonic() + 10.0
+                        while time.monotonic() < off_deadline:
+                            async with self._plc_call():
+                                pump_sw2 = bool(await self.ctx.plc.read_bit("L_R_P_SW"))
+                                valve_sw2 = bool(await self.ctx.plc.read_bit("L_R_V_SW"))
+
+                            if (not pump_sw2) and (not valve_sw2):
+                                success = True
+                                return self._ok(
+                                    "VACUUM_ON 완료 — L_VAC_READY_SW=TRUE 확인 후 "
+                                    "L_R_V_SW OFF → 5초 → L_R_P_SW OFF 완료"
+                                )
+
+                            await asyncio.sleep(0.5)
+
+                        return self._fail(
+                            "VACUUM_ON 실패 — L_VAC_READY_SW=TRUE였지만 "
+                            "L_R_P_SW/L_R_V_SW OFF 완료 확인 실패",
+                            code="E312",
+                        )
 
                     await asyncio.sleep(0.5)
 
-                # (타임아웃 사유 보강: 읽을 때만 락)
+                # 8) timeout
                 not_ready = False
                 try:
                     async with self._plc_call():
-                        not_ready = await self.ctx.plc.read_bit("L_VAC_NOT_READY")
+                        not_ready = bool(await self.ctx.plc.read_bit("L_VAC_NOT_READY"))
                 except Exception:
                     pass
 
+                if not_ready:
+                    return self._fail(
+                        f"VACUUM_ON 실패 — {int(timeout_s)}s 타임아웃 시점까지 "
+                        f"L_VAC_READY_SW=TRUE 미도달, L_VAC_NOT_READY=TRUE",
+                        code="E312",
+                    )
+
                 return self._fail(
-                    f"VACUUM_ON 타임아웃: {int(timeout_s)}s 내 "
-                    f"L_VAC_READY_SW && 펌프/밸브 OFF 상태 미도달 "
-                    f"(L_VAC_NOT_READY={not_ready}) — door/밸브 상태 확인",
+                    f"VACUUM_ON 타임아웃 — {int(timeout_s)}s 내 "
+                    f"L_VAC_READY_SW=TRUE 미도달 (L_VAC_NOT_READY=FALSE)",
                     code="E312",
                 )
 
             except Exception as e:
-                # 예외 사유는 message로 그대로 클라이언트 전달
                 return self._fail(e)
-            
+
             finally:
-                # ✅ 원복: 실패면 밸브 OFF → (락 밖에서) 3초 → 펌프 OFF
-                # - gate가 열려있거나 인터락 실패/타임아웃 등으로 중간 종료돼도
-                #   러핑펌프/밸브가 켜진 채로 남지 않게 함
-                if not success:
-                    with contextlib.suppress(Exception):
-                        async with self._plc_call():
-                            await self.ctx.plc.write_switch("L_R_V_SW", False)
-                    await asyncio.sleep(3.0)  # ✅ 락 밖
-                    with contextlib.suppress(Exception):
-                        async with self._plc_call():
-                            await self.ctx.plc.write_switch("L_R_P_SW", False)
+                # ✅ 실패/예외 경로 원복
+                # - 이미 _stop_roughing()을 수행한 경우(cleanup_done=True)는 중복 정리 안 함
+                if (not success) and (not cleanup_done):
+                    await _stop_roughing(delay_s=5.0)
 
     async def vacuum_off(self, data: Json) -> Json:
         """
@@ -868,7 +954,7 @@ class HostHandlers:
                             async with self._plc_call():
                                 await self.ctx.plc.write_switch("L_VENT_SW", False)
                                 await self.ctx.plc.write_switch("L_R_V_SW", False)
-                            await asyncio.sleep(3.0)
+                            await asyncio.sleep(5.0)
                             async with self._plc_call():
                                 await self.ctx.plc.write_switch("L_R_P_SW", False)
 
@@ -879,7 +965,7 @@ class HostHandlers:
                         async with self._plc_call():
                             await self.ctx.plc.write_switch("L_R_V_SW", False)
 
-                        await asyncio.sleep(3.0)
+                        await asyncio.sleep(5.0)
 
                         async with self._plc_call():
                             await self.ctx.plc.write_switch("L_R_P_SW", False)
