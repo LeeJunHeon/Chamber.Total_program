@@ -50,19 +50,28 @@ def build_fail_payload(*, code: Optional[str] = None, message: Any = "", detail:
     raw = _one_line(_to_text(message).strip())
     info = build_error_info(code=code, message=raw)
 
-    # ✅ 사용자 표시용(원인+해결방법)
+    # 1) 카탈로그 기반 기본 문구
     human = format_error_message(info)
     if not human:
         human = raw or "오류가 발생했습니다."
 
-    # ✅ 디버깅용(detail) — 기본은 원래 message를 저장
+    # 2) 디테일(실제 예외 원문)
     det = _one_line(_to_text(detail).strip()) if detail is not None else raw
+
+    # 3) 외부/로그에 보여줄 최종 message
+    #    - 특히 E110/E999 같은 generic 오류는 실제 원인을 앞에 붙여서 보이게 한다.
+    display = human
+    if det and det != human and det not in human:
+        if info.code in {"E110", "E999"}:
+            display = f"{det} | 분류: {human}"
+        else:
+            display = f"{human} | 원인: {det}"
 
     return {
         "result": "fail",
-        "message": human,        # 팝업/채팅/기본 표시용
+        "message": display,
         "error_code": info.code,
-        "detail": det,           # ✅ 로그/분석용
+        "detail": det,
     }
 
 def notify_all(
