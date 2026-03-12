@@ -82,36 +82,47 @@ class ConfigApplyController:
         return False
 
     async def apply_runtime(self, main_window) -> Dict[str, Any]:
-        """
-        Apply(Runtime) 시 호출
-        - 현재 저장된 user_config를 읽음
-        - 이전 기준선과 비교해서 changed-only 추출
-        - 지금 적용 가능한 항목만 immediate
-        - 나머지는 blocked_now
-        """
         current = self._load_snapshot()
 
-        # config module(cfgc/config_ch1/config_ch2)에 최신값 반영
-        with contextlib.suppress(Exception):
-            user_config.apply_overrides(current)
-
+        # ✅ live baseline(마지막 실제 적용 상태)와 저장된 target(current)를 비교
         new_changes = self._diff_snapshots(self._last_seen_snapshot, current)
-        self._last_seen_snapshot = copy.deepcopy(current)
-
         state = self._runtime_state(main_window)
         plan = self._classify_changes(new_changes, state)
 
+        # ✅ 실제 적용 가능한 값만 live snapshot에 반영
+        live_snapshot = copy.deepcopy(self._last_seen_snapshot)
+        self._overlay_snapshot_with_changes(live_snapshot, plan.immediate)
+
+        # ✅ blocked 값은 live config에 반영하지 않음
+        with contextlib.suppress(Exception):
+            user_config.apply_overrides(live_snapshot)
+
         if plan.immediate:
             await self._apply_immediate(main_window, plan.immediate, state)
+
+        # ✅ baseline도 실제 적용된 값까지만 전진
+        self._last_seen_snapshot = copy.deepcopy(live_snapshot)
 
         return {
             "state": state,
             "new_changes": new_changes,
             "applied_now": plan.immediate,
-            "deferred": [],      # main.py 호환용
+            "deferred": [],
             "blocked_now": plan.blocked_now,
-            "pending": [],       # main.py 호환용
+            "pending": [],
         }
+    
+    def _overlay_snapshot_with_changes(
+        self,
+        base_snapshot: Dict[str, Dict[str, Any]],
+        changes: Iterable[ConfigChange],
+    ) -> None:
+        for chg in changes:
+            sec = chg.section
+            key = chg.key
+            if sec not in base_snapshot or not isinstance(base_snapshot[sec], dict):
+                base_snapshot[sec] = {}
+            base_snapshot[sec][key] = copy.deepcopy(chg.new)
 
     async def flush_pending_if_safe(self, main_window) -> Dict[str, Any]:
         """
