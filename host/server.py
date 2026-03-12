@@ -13,7 +13,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any
 from .protocol import HEADER_SIZE, unpack_header, pack_message, PROTOCOL_VERSION
-from util.error_reporter import notify_all
+from errors.error_reporter import notify_all
 from .router import Router
 
 Json = Dict[str, Any]

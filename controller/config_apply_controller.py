@@ -4,7 +4,7 @@ import copy
 import contextlib
 import inspect
 from dataclasses import dataclass, field
-from typing import Any, Dict, Iterable, List, Optional, Tuple
+from typing import Any, Dict, Iterable, List, Tuple
 
 from lib import user_config
 from lib import config_common as cfgc
@@ -35,7 +35,6 @@ class ConfigChange:
 @dataclass
 class ApplyPlan:
     immediate: List[ConfigChange] = field(default_factory=list)
-    deferred: List[ConfigChange] = field(default_factory=list)
     blocked_now: List[ConfigChange] = field(default_factory=list)
 
 
@@ -45,16 +44,15 @@ class ApplyPlan:
 
 class ConfigApplyController:
     """
-    목적
-    - user_config.json의 변경점을 누적 추적
-    - 변경된 값만(changed-only) 런타임에 적용
-    - 공정 중이면 section / key 성격에 따라
-      immediate / deferred / blocked_now 로 분류
-    - blocked_now도 pending 큐에 남겨 두었다가, 나중에 idle 상태에서 재시도 가능
+    정책
+    - changed-only
+    - 지금 적용 가능한 값만 즉시 적용
+    - 지금 적용 불가능하면 blocked_now 로만 반환
+    - pending / deferred / 자동 flush 없음
 
     주의
-    - 이 파일은 '정책 + 분기 + changed-only 적용'을 담당
-    - 실제 UI popup / QMessageBox는 main.py에서 처리
+    - main.py와의 호환을 위해 deferred / pending 키는 빈 리스트로 반환
+    - has_pending() / flush_pending_if_safe() 도 남겨두되, 항상 빈 동작
     """
 
     SECTION_ORDER = (
@@ -67,38 +65,29 @@ class ConfigApplyController:
 
     def __init__(self) -> None:
         self._last_seen_snapshot: Dict[str, Dict[str, Any]] = self._load_snapshot()
-        self._pending: Dict[Tuple[str, str], ConfigChange] = {}
 
     # --------------------------------------------------------
     # Public API
     # --------------------------------------------------------
 
     def reset_baseline(self) -> None:
-        """
-        현재 저장된 user_config.json을 기준선으로 다시 잡음.
-        보통 프로그램 시작 직후 1회 호출하거나,
-        강제로 pending을 버리고 싶을 때 사용.
-        """
         self._last_seen_snapshot = self._load_snapshot()
-        self._pending.clear()
 
     def get_pending_items(self) -> List[ConfigChange]:
-        return list(self._pending.values())
+        # 단순 정책: pending 사용 안 함
+        return []
 
     def has_pending(self) -> bool:
-        return bool(self._pending)
+        # 단순 정책: pending 사용 안 함
+        return False
 
     async def apply_runtime(self, main_window) -> Dict[str, Any]:
         """
-        main.py에서 Apply(Runtime) 시 호출할 메인 진입점.
-
-        동작 순서
-        1) 최신 user_config.json 로드
-        2) 이전 스냅샷과 diff 계산
-        3) 새 diff를 pending에 merge
-        4) 현재 런타임 상태 기준으로 immediate / deferred / blocked_now 분류
-        5) immediate만 지금 적용
-        6) 나머지는 pending에 유지
+        Apply(Runtime) 시 호출
+        - 현재 저장된 user_config를 읽음
+        - 이전 기준선과 비교해서 changed-only 추출
+        - 지금 적용 가능한 항목만 immediate
+        - 나머지는 blocked_now
         """
         current = self._load_snapshot()
 
@@ -107,52 +96,35 @@ class ConfigApplyController:
             user_config.apply_overrides(current)
 
         new_changes = self._diff_snapshots(self._last_seen_snapshot, current)
-        self._merge_pending(new_changes)
         self._last_seen_snapshot = copy.deepcopy(current)
 
         state = self._runtime_state(main_window)
-        plan = self._classify_pending(state)
+        plan = self._classify_changes(new_changes, state)
 
         if plan.immediate:
             await self._apply_immediate(main_window, plan.immediate, state)
-
-            # 성공한 immediate 항목은 pending에서 제거
-            for chg in plan.immediate:
-                self._pending.pop(chg.path, None)
-
-        result = {
-            "state": state,
-            "new_changes": new_changes,
-            "applied_now": plan.immediate,
-            "deferred": plan.deferred,
-            "blocked_now": plan.blocked_now,
-            "pending": self.get_pending_items(),
-        }
-        return result
-
-    async def flush_pending_if_safe(self, main_window) -> Dict[str, Any]:
-        """
-        공정 종료 후나 idle 시점에 호출하면,
-        현재 pending 중 지금 적용 가능한 항목만 다시 적용함.
-        """
-        current = self._load_snapshot()
-        with contextlib.suppress(Exception):
-            user_config.apply_overrides(current)
-
-        state = self._runtime_state(main_window)
-        plan = self._classify_pending(state)
-
-        if plan.immediate:
-            await self._apply_immediate(main_window, plan.immediate, state)
-            for chg in plan.immediate:
-                self._pending.pop(chg.path, None)
 
         return {
             "state": state,
+            "new_changes": new_changes,
             "applied_now": plan.immediate,
-            "deferred": plan.deferred,
+            "deferred": [],      # main.py 호환용
             "blocked_now": plan.blocked_now,
-            "pending": self.get_pending_items(),
+            "pending": [],       # main.py 호환용
+        }
+
+    async def flush_pending_if_safe(self, main_window) -> Dict[str, Any]:
+        """
+        단순 정책: 자동 flush 없음.
+        main.py가 아직 이 함수를 호출하더라도 안전하게 빈 결과만 반환.
+        """
+        state = self._runtime_state(main_window)
+        return {
+            "state": state,
+            "applied_now": [],
+            "deferred": [],
+            "blocked_now": [],
+            "pending": [],
         }
 
     # --------------------------------------------------------
@@ -190,10 +162,6 @@ class ConfigApplyController:
                     changes.append(ConfigChange(sec, key, old_v, new_v))
 
         return changes
-
-    def _merge_pending(self, new_changes: Iterable[ConfigChange]) -> None:
-        for chg in new_changes:
-            self._pending[chg.path] = chg
 
     # --------------------------------------------------------
     # Runtime State
@@ -245,57 +213,56 @@ class ConfigApplyController:
         )
         return any(tok in key for tok in endpoint_tokens)
 
-    def _classify_change(self, chg: ConfigChange, state: Dict[str, bool]) -> str:
+    def _can_apply_now(self, chg: ConfigChange, state: Dict[str, bool]) -> bool:
         """
-        return: "immediate" | "deferred" | "blocked_now"
-        """
+        True  -> 지금 적용 가능
+        False -> 지금 적용 금지(blocked_now)
 
+        정책
+        - communication:
+            - 공용 endpoint 계열은 공정 중 금지
+            - 공용 non-endpoint도 공정 중 금지
+        - ch1:
+            - CH1 실행 중이면 CH1 섹션 변경 금지
+        - ch2:
+            - CH2 실행 중이면 CH2 섹션 변경 금지
+        - plasma_cleaning:
+            - PC 실행 중이면 금지
+        - tsp:
+            - 보수적으로 any_running이면 금지
+        """
         sec = chg.section
-        key = chg.key
 
-        # shared/common
         if sec == "communication":
-            if self._is_endpoint_key(key):
-                # 공용 통신 endpoint는 공정 중 즉시 적용 금지
-                return "blocked_now" if state["any_running"] else "immediate"
-            # endpoint가 아니더라도 공용 영역은 공정 중에는 바로 건드리지 않음
-            return "deferred" if state["any_running"] else "immediate"
+            return not state["any_running"]
 
-        # chamber-local
         if sec == "ch1":
-            if self._is_endpoint_key(key):
-                return "blocked_now" if state["ch1_running"] else "immediate"
-            return "deferred" if state["ch1_running"] else "immediate"
+            return not state["ch1_running"]
 
         if sec == "ch2":
-            if self._is_endpoint_key(key):
-                return "blocked_now" if state["ch2_running"] else "immediate"
-            return "deferred" if state["ch2_running"] else "immediate"
+            return not state["ch2_running"]
 
-        # plasma cleaning local runtime
         if sec == "plasma_cleaning":
-            if self._is_endpoint_key(key):
-                return "blocked_now" if state["pc_running"] else "immediate"
-            return "deferred" if state["pc_running"] else "immediate"
+            return not state["pc_running"]
 
-        # TSP는 별도 runtime busy 플래그가 명확하지 않으므로 보수적으로 처리
         if sec == "tsp":
-            if self._is_endpoint_key(key):
-                return "blocked_now" if state["any_running"] else "immediate"
-            return "deferred" if state["any_running"] else "immediate"
+            return not state["any_running"]
 
-        return "immediate"
+        return True
 
-    def _classify_pending(self, state: Dict[str, bool]) -> ApplyPlan:
+    def _classify_changes(
+        self,
+        changes: Iterable[ConfigChange],
+        state: Dict[str, bool],
+    ) -> ApplyPlan:
         plan = ApplyPlan()
-        for chg in self._pending.values():
-            mode = self._classify_change(chg, state)
-            if mode == "immediate":
+
+        for chg in changes:
+            if self._can_apply_now(chg, state):
                 plan.immediate.append(chg)
-            elif mode == "deferred":
-                plan.deferred.append(chg)
             else:
                 plan.blocked_now.append(chg)
+
         return plan
 
     # --------------------------------------------------------
@@ -320,49 +287,44 @@ class ConfigApplyController:
 
         # communication
         if comm_keys:
-            await self._apply_communication_scope(main_window, comm_keys, state)
+            await self._apply_communication_scope(main_window, comm_keys)
 
         # chamber scopes
         if ch1_keys:
             await self._apply_chamber_scope(
                 main_window=main_window,
-                chamber_name="ch1",
                 chamber_rt=getattr(main_window, "ch1", None),
                 ig=getattr(main_window, "ig1", None),
                 mfc=getattr(main_window, "mfc1", None),
                 cfgm=config_ch1,
                 keys=ch1_keys,
-                running=state["ch1_running"],
             )
 
         if ch2_keys:
             await self._apply_chamber_scope(
                 main_window=main_window,
-                chamber_name="ch2",
                 chamber_rt=getattr(main_window, "ch2", None),
                 ig=getattr(main_window, "ig2", None),
                 mfc=getattr(main_window, "mfc2", None),
                 cfgm=config_ch2,
                 keys=ch2_keys,
-                running=state["ch2_running"],
             )
 
         # plasma cleaning
         if pc_keys:
-            await self._apply_pc_scope(main_window, pc_keys, state)
+            await self._apply_pc_scope(main_window, pc_keys)
 
         # tsp
         if tsp_keys:
-            await self._apply_tsp_scope(main_window, tsp_keys, state)
+            await self._apply_tsp_scope(main_window, tsp_keys)
 
         # UI 기본값 동기화
-        # - 기존 main.py의 helper를 그대로 재사용
-        # - running 중이면 overwrite=False
+        # - running 상태가 아니어야 여기까지 왔으므로 overwrite=True 로 갱신
         if touched_sections & {"tsp", "plasma_cleaning", "ch1", "ch2"}:
             with contextlib.suppress(Exception):
                 fn = getattr(main_window, "_apply_ui_defaults_from_config", None)
                 if callable(fn):
-                    fn(overwrite=not state["any_running"])
+                    fn(overwrite=True)
 
         # 로그
         with contextlib.suppress(Exception):
@@ -375,31 +337,28 @@ class ConfigApplyController:
         self,
         main_window,
         keys: Iterable[str],
-        state: Dict[str, bool],
     ) -> None:
         keys = {str(k).upper() for k in keys}
 
         # 1) PLC
         if any(k.startswith("PLC_") for k in keys):
-            await self._apply_plc(main_window, allow_reconnect=not state["any_running"])
+            await self._apply_plc(main_window, allow_reconnect=True)
 
         # 2) HOST SERVER
         if any(k.startswith("HOST_SERVER_") for k in keys):
-            await self._apply_host_server(main_window, allow_restart=not state["any_running"])
+            await self._apply_host_server(main_window, allow_restart=True)
 
         # 3) IG common
         if any(k.startswith("IG_") for k in keys):
-            await self._reload_ig_pair(main_window, allow_reconnect=not state["any_running"])
+            await self._reload_ig_pair(main_window, allow_reconnect=True)
 
         # 4) MFC common
         if any(k.startswith("MFC_") for k in keys):
-            await self._reload_mfc_pair(main_window, allow_reconnect=not state["any_running"])
+            await self._reload_mfc_pair(main_window, allow_reconnect=True)
 
         # 5) common pulse params
         if any(k.startswith("DCPULSE_") or k.startswith("RFPULSE_") for k in keys):
-            # 공용 pulse 설정은 안전하게 각 chamber runtime reload만 수행
-            # endpoint reconnect는 any_running == False일 때만 허용
-            await self._reload_common_pulses(main_window, allow_reconnect=not state["any_running"])
+            await self._reload_common_pulses(main_window, allow_reconnect=True)
 
         # 6) 기타 공용 설정이 영향을 줄 수 있는 runtime들
         if any(
@@ -430,13 +389,11 @@ class ConfigApplyController:
     async def _apply_chamber_scope(
         self,
         main_window,
-        chamber_name: str,
         chamber_rt,
         ig,
         mfc,
         cfgm,
         keys: Iterable[str],
-        running: bool,
     ) -> None:
         keys = {str(k).upper() for k in keys}
 
@@ -462,30 +419,23 @@ class ConfigApplyController:
                 if dev and hasattr(dev, "reload_runtime_cfg"):
                     dev.reload_runtime_cfg()
 
-        # 3) endpoint reconnect는 해당 chamber가 idle일 때만
-        if running:
-            return
-
-        # IG endpoint
+        # 3) endpoint reconnect는 이 시점엔 이미 적용 가능 상태로 분류된 경우만 들어옴
         if any(k.startswith("IG_") for k in keys):
             host = getattr(cfgm, "IG_TCP_HOST", getattr(cfgc, "IG_TCP_HOST", None))
             port = getattr(cfgm, "IG_TCP_PORT", None)
             await self._safe_set_endpoint(ig, host, port)
 
-        # MFC endpoint
         if any(k.startswith("MFC_") for k in keys):
             host = getattr(cfgm, "MFC_TCP_HOST", getattr(cfgc, "MFC_TCP_HOST", None))
             port = getattr(cfgm, "MFC_TCP_PORT", None)
             await self._safe_set_endpoint(mfc, host, port)
 
-        # DC Pulse endpoint
         if any(k.startswith("DCPULSE_") for k in keys):
             dp = getattr(chamber_rt, "dc_pulse", None) if chamber_rt else None
             host = getattr(cfgm, "DCPULSE_TCP_HOST", getattr(cfgc, "DCPULSE_TCP_HOST", None))
             port = getattr(cfgm, "DCPULSE_TCP_PORT", getattr(cfgc, "DCPULSE_TCP_PORT", None))
             await self._safe_set_endpoint(dp, host, port)
 
-        # RF Pulse endpoint
         if any(k.startswith("RFPULSE_") for k in keys):
             rp = getattr(chamber_rt, "rf_pulse", None) if chamber_rt else None
             host = getattr(cfgm, "RFPULSE_TCP_HOST", getattr(cfgc, "RFPULSE_TCP_HOST", None))
@@ -496,7 +446,6 @@ class ConfigApplyController:
         self,
         main_window,
         keys: Iterable[str],
-        state: Dict[str, bool],
     ) -> None:
         pc = getattr(main_window, "pc", None)
         with contextlib.suppress(Exception):
@@ -507,7 +456,6 @@ class ConfigApplyController:
         self,
         main_window,
         keys: Iterable[str],
-        state: Dict[str, bool],
     ) -> None:
         tsp = getattr(main_window, "tsp_ctrl", None)
         if tsp is None:
@@ -517,10 +465,7 @@ class ConfigApplyController:
             if hasattr(tsp, "reload_runtime_cfg"):
                 tsp.reload_runtime_cfg()
 
-        # endpoint 계열은 any_running=False일 때만 reconnect 허용
         keys = {str(k).upper() for k in keys}
-        if state["any_running"]:
-            return
 
         if any(k.startswith("TSP_") and self._is_endpoint_key(k) for k in keys):
             host = getattr(cfgc, "TSP_TCP_HOST", None)
@@ -567,18 +512,8 @@ class ConfigApplyController:
             return
 
         if not allow_restart:
-            # 지금은 재기동 금지 상태이므로 bound는 바꾸지 않음
-            with contextlib.suppress(Exception):
-                log = getattr(main_window, "_broadcast_log", None)
-                if callable(log):
-                    log(
-                        "NET",
-                        f"Host 설정 변경 대기: {old_host}:{old_port} -> {new_host}:{new_port} "
-                        f"(실행 중이라 즉시 재기동 금지)"
-                    )
             return
 
-        # idle이면 restart or update bound
         with contextlib.suppress(Exception):
             if getattr(main_window, "_host_handle", None):
                 ret = main_window._restart_host()

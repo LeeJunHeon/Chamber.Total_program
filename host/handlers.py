@@ -13,7 +13,7 @@ import asyncio, time, contextlib, os
 from pathlib import Path                      # ← 추가: 경로
 from datetime import datetime                 # ← 추가: 파일명 타임스탬프
 from contextlib import asynccontextmanager    # ← 추가: 비동기 컨텍스트
-from util.error_reporter import notify_all
+from errors.error_reporter import notify_all
 from lib import config_common as cfg
 
 Json = Dict[str, Any]

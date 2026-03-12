@@ -44,6 +44,7 @@ from ui.main_window import Ui_Form
 from runtime.tsp_runtime import TSPPageController
 from runtime.pre_sputter_runtime import PreSputterRuntime
 from controller.chat_notifier import ChatNotifier
+from controller.config_apply_controller import ConfigApplyController
 
 # 공유 장비(PLC, IG, MFC)
 from device.plc import AsyncPLC
@@ -134,14 +135,16 @@ class MainWindow(QWidget):
         # ✅ Config 팝업 인스턴스 보관(가비지컬렉션/중복창 방지)
         self._config_dialog = None
         self._cfg_apply_task: Optional[asyncio.Task] = None
+        self._cfg_flush_task: Optional[asyncio.Task] = None
 
-        # # ✅ CH2 공정 페이지 P.W Select 체크박스 항상 비활성화
-        # self.ui.ch2_powerSelect_checkbox.setEnabled(False)
+        # ✅ Config changed-only / deferred / blocked 적용 컨트롤러
+        self._cfg_apply_ctrl = ConfigApplyController()
 
-        # # ✅ RF Select(=Power_Select_button) 항상 비활성화
-        # if hasattr(self.ui, "Power_Select_button"):
-        #     self.ui.Power_Select_button.setEnabled(False)
-        #     self.ui.Power_Select_button.setToolTip("비활성화(고정)")
+        # ✅ 공정 종료 후 pending config 자동 반영용 주기 타이머
+        self._cfg_flush_timer = QTimer(self)
+        self._cfg_flush_timer.setInterval(2000)  # 2초마다 안전하게 체크
+        self._cfg_flush_timer.timeout.connect(self._on_cfg_flush_timer)
+        self._cfg_flush_timer.start()
 
         # ✅ Integration Time 입력칸을 'Process Name' 입력으로 재활용 (CH1/CH2)
         #   - CSV 자동공정: Process_name 표시
@@ -830,193 +833,106 @@ class MainWindow(QWidget):
         except Exception as e:
             QMessageBox.warning(self, "Config", f"ConfigDialog 실행 실패: {e!r}")
 
-    def on_config_applied(self) -> None:
+    def on_config_applied(self, *args) -> None:
         """
         ConfigDialog Apply(Runtime) 직후 호출됨.
-        - 실행 중이면 reconnect는 피하고, 가능한 범위에서 reload만 수행
-        - 실행 중이 아니면 endpoint 변경까지 반영(가능한 장비만)
+        - 변경된 값만(changed-only) 적용
+        - 공정 중이면 deferred / blocked 정책 적용
         """
-        running = self._is_any_runtime_running()
-
-        # 실행 중이 아닐 때만 UI를 새 config 값으로 강제 동기화
-        try:
-            self._apply_ui_defaults_from_config(overwrite=not running)
-        except Exception:
-            pass
-
-        # 비동기 장비 리로드는 loop로 넘김
         try:
             prev = getattr(self, "_cfg_apply_task", None)
             if prev and not prev.done():
                 prev.cancel()
-            self._cfg_apply_task = self._loop.create_task(self._apply_config_to_devices_async())
+
+            self._cfg_apply_task = self._loop.create_task(self._run_config_apply_async())
+        except Exception as e:
+            self._broadcast_log("ERROR/CFG", f"Config apply task 시작 실패: {e!r}")
+
+    async def _run_config_apply_async(self) -> None:
+        try:
+            result = await self._cfg_apply_ctrl.apply_runtime(self)
+            self._show_config_apply_result(result, from_pending=False)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self._broadcast_log("ERROR/CFG", f"Config apply 실패: {e!r}")
+            with contextlib.suppress(Exception):
+                QMessageBox.warning(self, "Config", f"Config apply 실패: {e!r}")
+
+    def _on_cfg_flush_timer(self) -> None:
+        """
+        pending config가 있고, 현재 flush task가 없으면 idle 여부를 확인해서
+        자동 반영을 시도한다.
+        """
+        try:
+            ctrl = getattr(self, "_cfg_apply_ctrl", None)
+            if ctrl is None or not ctrl.has_pending():
+                return
+
+            task = getattr(self, "_cfg_flush_task", None)
+            if task and not task.done():
+                return
+
+            self._cfg_flush_task = self._loop.create_task(self._flush_pending_config_async())
         except Exception:
             pass
 
-    def _is_any_runtime_running(self) -> bool:
-        # runtime_state에 any_running이 있으면 그걸 최우선 사용
-        with contextlib.suppress(Exception):
-            fn = getattr(runtime_state, "any_running", None)
-            if callable(fn):
-                return bool(fn())
+    async def _flush_pending_config_async(self) -> None:
+        try:
+            result = await self._cfg_apply_ctrl.flush_pending_if_safe(self)
+            applied = result.get("applied_now") or []
+            if applied:
+                self._show_config_apply_result(result, from_pending=True)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self._broadcast_log("ERROR/CFG", f"Pending config 자동 반영 실패: {e!r}")
 
-        # snapshot 기반(키 이름이 프로젝트마다 달라서 최대한 방어)
-        with contextlib.suppress(Exception):
-            snap = runtime_state.snapshot()
-            if isinstance(snap, dict):
-                for k in ("any_running", "running", "is_running"):
-                    if k in snap:
-                        return bool(snap[k])
+    def _show_config_apply_result(self, result: dict, *, from_pending: bool) -> None:
+        def _fmt(items, limit: int = 8) -> str:
+            names = []
+            for item in items or []:
+                try:
+                    names.append(item.dotted)
+                except Exception:
+                    pass
+            if not names:
+                return "-"
+            names = sorted(names)
+            if len(names) <= limit:
+                return ", ".join(names)
+            return ", ".join(names[:limit]) + f" 외 {len(names) - limit}건"
 
-        # fallback: 각 런타임의 running 플래그를 보수적으로 검사
-        def _rt_running(rt) -> bool:
-            if not rt:
-                return False
-            ir = getattr(rt, "is_running", None)
-            if isinstance(ir, bool):
-                return ir
-            if callable(ir):
-                with contextlib.suppress(Exception):
-                    return bool(ir())
-            return bool(getattr(rt, "_running", False))
+        applied = result.get("applied_now") or []
+        deferred = result.get("deferred") or []
+        blocked = result.get("blocked_now") or []
+        pending = result.get("pending") or []
 
-        return _rt_running(getattr(self, "pc", None)) or _rt_running(getattr(self, "ch1", None)) or _rt_running(getattr(self, "ch2", None))
+        if applied:
+            self._broadcast_log(
+                "CFG",
+                f"{'자동 반영' if from_pending else '즉시 반영'} 완료: {_fmt(applied)}"
+            )
 
-    async def _apply_config_to_devices_async(self) -> None:
-        running = self._is_any_runtime_running()
+        if deferred and not from_pending:
+            self._broadcast_log(
+                "CFG",
+                f"공정 종료 후 자동 적용 대기: {_fmt(deferred)}"
+            )
 
-        # (A) PLC: 실행 중이면 reconnect는 피함(공정 안정 우선)
-        with contextlib.suppress(Exception):
-            if not running and hasattr(self.plc, "set_endpoint_reconnect"):
-                await self.plc.set_endpoint_reconnect(cfgc.PLC_TCP_HOST, int(cfgc.PLC_TCP_PORT))
-            elif not running and hasattr(self.plc, "set_endpoint"):
-                await self.plc.set_endpoint(cfgc.PLC_TCP_HOST, int(cfgc.PLC_TCP_PORT), reconnect=True)
-
-        # (B) IG/MFC: reload_runtime_cfg가 있으면 우선 호출
-        for dev in (getattr(self, "ig1", None), getattr(self, "ig2", None),
-                    getattr(self, "mfc1", None), getattr(self, "mfc2", None)):
+        if blocked and not from_pending:
+            self._broadcast_log(
+                "WARN/CFG",
+                f"공정 중 즉시 적용 금지: {_fmt(blocked)}"
+            )
             with contextlib.suppress(Exception):
-                if dev and hasattr(dev, "reload_runtime_cfg"):
-                    dev.reload_runtime_cfg()
-
-        # endpoint 변경은 “안전할 때만”
-        if not running:
-            # IG endpoint
-            for ig, cfgm in ((getattr(self, "ig1", None), config_ch1), (getattr(self, "ig2", None), config_ch2)):
-                if not ig:
-                    continue
-                host = getattr(cfgm, "IG_TCP_HOST", getattr(cfgc, "IG_TCP_HOST", None))
-                port = getattr(cfgm, "IG_TCP_PORT", None)
-                with contextlib.suppress(Exception):
-                    if hasattr(ig, "set_endpoint_reconnect"):
-                        await ig.set_endpoint_reconnect(str(host), int(port))
-                    elif hasattr(ig, "set_endpoint"):
-                        try:
-                            ig.set_endpoint(str(host), int(port), reconnect=True)
-                        except TypeError:
-                            ig.set_endpoint(str(host), int(port))
-
-            # MFC endpoint
-            for mfc, cfgm in ((getattr(self, "mfc1", None), config_ch1), (getattr(self, "mfc2", None), config_ch2)):
-                if not mfc:
-                    continue
-                host = getattr(cfgm, "MFC_TCP_HOST", getattr(cfgc, "MFC_TCP_HOST", None))
-                port = getattr(cfgm, "MFC_TCP_PORT", None)
-                with contextlib.suppress(Exception):
-                    if hasattr(mfc, "set_endpoint_reconnect"):
-                        await mfc.set_endpoint_reconnect(str(host), int(port))
-                    elif hasattr(mfc, "set_endpoint"):
-                        mfc.set_endpoint(str(host), int(port), reconnect=True)
-
-        # (C) ChamberRuntime 자체 + 내부 장비들 reload
-        for rt, cfgm in (
-            (getattr(self, "ch1", None), config_ch1),
-            (getattr(self, "ch2", None), config_ch2),
-        ):
-            if not rt:
-                continue
-
-            with contextlib.suppress(Exception):
-                if hasattr(rt, "reload_runtime_cfg"):
-                    rt.reload_runtime_cfg()
-
-            for name in ("dc_pulse", "rf_pulse", "dc_power", "rf_power"):
-                dev = getattr(rt, name, None)
-                with contextlib.suppress(Exception):
-                    if dev and hasattr(dev, "reload_runtime_cfg"):
-                        dev.reload_runtime_cfg()
-
-            # ✅ pulse endpoint 변경은 idle일 때만 실제 reconnect
-            if not running:
-                dp = getattr(rt, "dc_pulse", None)
-                if dp is not None:
-                    dp_host = getattr(cfgm, "DCPULSE_TCP_HOST", getattr(cfgc, "DCPULSE_TCP_HOST", None))
-                    dp_port = getattr(cfgm, "DCPULSE_TCP_PORT", getattr(cfgc, "DCPULSE_TCP_PORT", None))
-                    with contextlib.suppress(Exception):
-                        if hasattr(dp, "set_endpoint_reconnect"):
-                            await dp.set_endpoint_reconnect(str(dp_host), int(dp_port))
-                        elif hasattr(dp, "set_endpoint"):
-                            try:
-                                dp.set_endpoint(str(dp_host), int(dp_port), reconnect=True)
-                            except TypeError:
-                                dp.set_endpoint(str(dp_host), int(dp_port))
-
-                rp = getattr(rt, "rf_pulse", None)
-                if rp is not None:
-                    rp_host = getattr(cfgm, "RFPULSE_TCP_HOST", getattr(cfgc, "RFPULSE_TCP_HOST", None))
-                    rp_port = getattr(cfgm, "RFPULSE_TCP_PORT", getattr(cfgc, "RFPULSE_TCP_PORT", None))
-                    with contextlib.suppress(Exception):
-                        if hasattr(rp, "set_endpoint_reconnect"):
-                            await rp.set_endpoint_reconnect(str(rp_host), int(rp_port))
-                        elif hasattr(rp, "set_endpoint"):
-                            try:
-                                rp.set_endpoint(str(rp_host), int(rp_port), reconnect=True)
-                            except TypeError:
-                                rp.set_endpoint(str(rp_host), int(rp_port))
-
-        # (D) PC 런타임도 내부적으로 config를 다시 읽을 수 있으면 호출
-        pc = getattr(self, "pc", None)
-        with contextlib.suppress(Exception):
-            if pc and hasattr(pc, "reload_runtime_cfg"):
-                pc.reload_runtime_cfg()
-
-        # (E) TSP 컨트롤러 (가능한 API만 안전 호출)
-        tsp = getattr(self, "tsp_ctrl", None)
-        with contextlib.suppress(Exception):
-            if tsp and hasattr(tsp, "reload_runtime_cfg"):
-                tsp.reload_runtime_cfg()
-            elif tsp and hasattr(tsp, "set_endpoint"):
-                # addr는 RS232 키가 있으면 우선 사용
-                addr = getattr(cfgc, "TSP_RS232_ADDR", getattr(cfgc, "TSP_ADDR", 0x80))
-                tsp.set_endpoint(cfgc.TSP_TCP_HOST, int(cfgc.TSP_TCP_PORT), int(addr))
-
-                # (F) Host server: host/port 변경 시 재바인딩
-        new_host = str(getattr(cfgc, "HOST_SERVER_HOST", "0.0.0.0"))
-        new_port = int(getattr(cfgc, "HOST_SERVER_PORT", 0))
-        old_host, old_port = getattr(self, "_host_bound", (None, None))
-
-        # server page 표시값은 항상 최신으로 맞춤
-        with contextlib.suppress(Exception):
-            sp = getattr(self, "server_page", None)
-            if sp and hasattr(sp, "set_host_info"):
-                sp.set_host_info(new_host, new_port)
-
-        if (new_host, new_port) != (old_host, old_port):
-            if running:
-                self._broadcast_log(
-                    "NET",
-                    f"Host 설정 변경 감지: {old_host}:{old_port} -> {new_host}:{new_port} "
-                    f"(실행 중이라 host 재기동은 보류)"
+                QMessageBox.information(
+                    self,
+                    "Config",
+                    "일부 설정은 공정 중 즉시 적용할 수 없습니다.\n\n"
+                    f"금지 항목: {_fmt(blocked)}\n"
+                    f"대기 항목 포함 총 pending: {len(pending)}건"
                 )
-            else:
-                if getattr(self, "_host_handle", None):
-                    await self._restart_host()
-                else:
-                    self._host_bound = (new_host, new_port)
-                    self._broadcast_log(
-                        "NET",
-                        f"Host 설정 반영 대기: {new_host}:{new_port} (현재 host 미실행 상태)"
-                    )
 
     def _apply_ui_defaults_from_config(self, *, overwrite: bool) -> None:
         """
@@ -1073,16 +989,6 @@ class MainWindow(QWidget):
             getattr(self.ui, "ch2_basePressure_edit", None),
             str(getattr(config_ch2, "PROCESS_DEFAULT_BASE_PRESSURE",
                         getattr(cfgc, "PROCESS_DEFAULT_BASE_PRESSURE", 1e-5)))
-        )
-        _set_plain(
-            getattr(self.ui, "ch2_basePressure_edit", None),
-            str(getattr(config_ch2, "PROCESS_DEFAULT_BASE_PRESSURE",
-                        getattr(cfgc, "PROCESS_DEFAULT_BASE_PRESSURE", 1e-5)))
-        )
-        _set_plain(
-            getattr(self.ui, "ch2_integrationTime_edit", None),
-            str(getattr(config_ch2, "PROCESS_DEFAULT_OES_INTEGRATION_MS",
-                        getattr(cfgc, "PROCESS_DEFAULT_OES_INTEGRATION_MS", 60)))
         )
 
     def _on_runtime_dump_clicked(self) -> None:
@@ -1171,6 +1077,22 @@ class MainWindow(QWidget):
                     pass
 
     def closeEvent(self, event: QCloseEvent) -> None:
+        # ✅ config pending flush timer 종료
+        try:
+            if hasattr(self, "_cfg_flush_timer") and self._cfg_flush_timer:
+                self._cfg_flush_timer.stop()
+        except Exception:
+            pass
+
+        # ✅ config apply task / flush task 정리
+        for tname in ("_cfg_apply_task", "_cfg_flush_task"):
+            try:
+                t = getattr(self, tname, None)
+                if t and not t.done():
+                    t.cancel()
+            except Exception:
+                pass
+
         # 1) 외부 제어 서버 먼저 종료 요청
         try:
             self._loop.create_task(self._stop_host())
