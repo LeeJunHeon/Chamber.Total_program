@@ -1025,13 +1025,12 @@ class MainWindow(QWidget):
 
     def closeEvent(self, event: QCloseEvent) -> None:
         # ✅ config apply task / flush task 정리
-        for tname in ("_cfg_apply_task", "_cfg_flush_task"):
-            try:
-                t = getattr(self, tname, None)
-                if t and not t.done():
-                    t.cancel()
-            except Exception:
-                pass
+        try:
+            t = getattr(self, "_cfg_apply_task", None)
+            if t and not t.done():
+                t.cancel()
+        except Exception:
+            pass
 
         # 1) 외부 제어 서버 먼저 종료 요청
         try:
