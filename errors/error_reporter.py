@@ -26,15 +26,22 @@ def _one_line(text: str, limit: int = 2000) -> str:
 
 def _build_log_text(payload: dict) -> str:
     err_code = str(payload.get("error_code", "") or "").strip()
+    action = str(payload.get("client_action", "") or "").strip()
     message = _one_line(_to_text(payload.get("message", "")))
     detail = _one_line(_to_text(payload.get("detail", "")))
 
     log_text = message
     if detail and detail != message:
-        log_text = f"{message} | detail: {detail}"
+        log_text = f"{message} | 상세: {detail}"
 
+    prefix = []
     if err_code:
-        log_text = f"[{err_code}] {log_text}"
+        prefix.append(err_code)
+    if action:
+        prefix.append(action)
+
+    if prefix:
+        log_text = f"[{' / '.join(prefix)}] {log_text}"
 
     return log_text.strip()
 

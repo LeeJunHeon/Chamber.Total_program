@@ -35,7 +35,11 @@ class ErrorCatalog:
     def normalize_code(self, code: str | None, *, fallback: str = "E999") -> str:
         if not code:
             return fallback
+
         norm = str(code).strip().upper()
+        if norm.isdigit() and len(norm) == 3:
+            norm = f"E{norm}"
+
         if norm in ERROR_REGISTRY:
             return norm
         return fallback
