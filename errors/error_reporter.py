@@ -2,7 +2,6 @@ from __future__ import annotations
 
 from typing import Any, Callable, Optional
 
-from .app_error import AppError
 from .error_payload import (
     build_error_payload,
     build_error_payload_from_code,
@@ -40,6 +39,15 @@ def _build_log_text(payload: dict) -> str:
     return log_text.strip()
 
 
+def _build_user_text(payload: dict) -> str:
+    message = _one_line(_to_text(payload.get("message", "")))
+    detail = _one_line(_to_text(payload.get("detail", "")))
+
+    if detail and detail != message:
+        return f"{message} | 상세: {detail}"
+    return message
+
+
 def report_payload(
     payload: dict,
     *,
@@ -52,7 +60,7 @@ def report_payload(
     이미 만들어진 표준 fail payload를
     log/chat/popup 으로 전파한다.
     """
-    text = _one_line(_to_text(payload.get("message", "")))
+    text = _build_user_text(payload)
     err_code = str(payload.get("error_code", "") or "").strip()
 
     # 1) 로그
@@ -78,7 +86,11 @@ def report_payload(
     # 3) Popup
     if callable(popup):
         try:
-            popup(f"오류({src})", text)
+            title = f"오류({src})"
+            if err_code:
+                title = f"오류({src}, {err_code})"
+
+            popup(title, text)
         except Exception:
             pass
 
