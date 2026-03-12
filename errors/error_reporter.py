@@ -1,108 +1,70 @@
-# util/error_reporter.py
 from __future__ import annotations
+
 from typing import Any, Callable, Optional
 
-from .error_catalog import ErrorCatalog, ErrorInfo
+from .app_error import AppError
+from .error_payload import (
+    build_error_payload,
+    build_error_payload_from_code,
+    build_handler_error_payload,
+    build_unknown_error_payload,
+)
 
-_CATALOG = ErrorCatalog()
 
-def _to_text(err: Any) -> str:
+def _to_text(value: Any) -> str:
     try:
-        return "" if err is None else str(err)
+        return "" if value is None else str(value)
     except Exception:
-        return repr(err)
+        return repr(value)
 
-def build_error_info(*, code: Optional[str] = None, message: Any = "") -> ErrorInfo:
-    msg = _to_text(message).strip()
 
-    if code:
-        c = code if code.startswith("E") else f"E{code}"
-        return _CATALOG.get(c, default_message=msg)
-
-    guessed = _CATALOG.guess_code(msg)
-    if guessed:
-        return _CATALOG.get(guessed, default_message=msg)
-
-    # 최후 fallback
-    return _CATALOG.get("E110", default_message=msg or "Handler crash")
-
-def format_error_message(info: ErrorInfo, *, detail: str = "") -> str:
-    # ✅ message에는 "원인 + 해결방법"만 보냄
-    # ✅ 줄바꿈(\n, \r) 자체를 만들지 않도록 1줄로 정리
-    cause = " ".join((info.cause or "").replace("\r", "\n").splitlines()).strip()
-    fix   = " ".join((info.fix   or "").replace("\r", "\n").splitlines()).strip()
-
-    if cause and fix:
-        return f"{cause} 해결방법: {fix}".strip()
-    if cause:
-        return cause
-    if fix:
-        return f"해결방법: {fix}".strip()
-    return ""
-
-def _one_line(s: str, limit: int = 2000) -> str:
-    s = " ".join((s or "").replace("\r", "\n").splitlines()).strip()
+def _one_line(text: str, limit: int = 2000) -> str:
+    s = " ".join((text or "").replace("\r", "\n").splitlines()).strip()
     if len(s) > limit:
         s = s[:limit] + "…"
     return s
 
-def build_fail_payload(*, code: Optional[str] = None, message: Any = "", detail: Any = None) -> dict:
-    raw = _one_line(_to_text(message).strip())
-    info = build_error_info(code=code, message=raw)
 
-    # 1) 카탈로그 기반 기본 문구
-    human = format_error_message(info)
-    if not human:
-        human = raw or "오류가 발생했습니다."
+def _build_log_text(payload: dict) -> str:
+    err_code = str(payload.get("error_code", "") or "").strip()
+    message = _one_line(_to_text(payload.get("message", "")))
+    detail = _one_line(_to_text(payload.get("detail", "")))
 
-    # 2) 디테일(실제 예외 원문)
-    det = _one_line(_to_text(detail).strip()) if detail is not None else raw
+    log_text = message
+    if detail and detail != message:
+        log_text = f"{message} | detail: {detail}"
 
-    # 3) 외부/로그에 보여줄 최종 message
-    #    - 특히 E110/E999 같은 generic 오류는 실제 원인을 앞에 붙여서 보이게 한다.
-    display = human
-    if det and det != human and det not in human:
-        if info.code in {"E110", "E999"}:
-            display = f"{det} | 분류: {human}"
-        else:
-            display = f"{human} | 원인: {det}"
+    if err_code:
+        log_text = f"[{err_code}] {log_text}"
 
-    return {
-        "result": "fail",
-        "message": display,
-        "error_code": info.code,
-        "detail": det,
-    }
+    return log_text.strip()
 
-def notify_all(
+
+def report_payload(
+    payload: dict,
     *,
     log: Optional[Callable[[str, str], None]] = None,
     chat: Any = None,
     popup: Optional[Callable[[str, str], None]] = None,
     src: str = "HOST",
-    code: Optional[str] = None,
-    message: Any = "",
 ) -> dict:
-    # ✅ detail에 원래 message를 그대로 넣어둠(호출부 수정 불필요)
-    payload = build_fail_payload(code=code, message=message, detail=message)
-    text = payload.get("message", "")
-    detail = payload.get("detail", "")
+    """
+    이미 만들어진 표준 fail payload를
+    log/chat/popup 으로 전파한다.
+    """
+    text = _one_line(_to_text(payload.get("message", "")))
+    err_code = str(payload.get("error_code", "") or "").strip()
 
-    # 1) UI 로그창/파일 로그에는 detail까지 남김
+    # 1) 로그
     if callable(log):
         try:
-            err_code = str(payload.get("error_code", "") or "").strip()
-            log_text = text if not detail or detail == text else f"{text} | detail: {detail}"
-            if err_code:
-                log_text = f"[{err_code}] {log_text}"
-            log(f"ERROR/{src}", log_text)
+            log(f"ERROR/{src}", _build_log_text(payload))
         except Exception:
             pass
 
-    # 2) Chat/Popup은 기존처럼 text만(너무 길어지는 것 방지)
+    # 2) Chat
     if chat is not None:
         try:
-            err_code = str(payload.get("error_code", "") or "").strip()
             fn = getattr(chat, "notify_error_event", None)
             if callable(fn):
                 fn(src, err_code, text)
@@ -113,6 +75,7 @@ def notify_all(
         except Exception:
             pass
 
+    # 3) Popup
     if callable(popup):
         try:
             popup(f"오류({src})", text)
@@ -120,3 +83,117 @@ def notify_all(
             pass
 
     return payload
+
+
+def notify_error(
+    exc: BaseException,
+    *,
+    log: Optional[Callable[[str, str], None]] = None,
+    chat: Any = None,
+    popup: Optional[Callable[[str, str], None]] = None,
+    src: str = "HOST",
+    default_code: str = "E999",
+    detail: str | None = None,
+    meta: Optional[dict] = None,
+) -> dict:
+    """
+    어떤 예외든 표준 fail payload로 만든 뒤 report한다.
+
+    일반적인 runtime/device/controller 경계에서 사용.
+    """
+    payload = build_error_payload(
+        exc,
+        default_code=default_code,
+        detail=detail,
+        meta=meta,
+    )
+    return report_payload(
+        payload,
+        log=log,
+        chat=chat,
+        popup=popup,
+        src=src,
+    )
+
+
+def notify_handler_error(
+    exc: BaseException,
+    *,
+    log: Optional[Callable[[str, str], None]] = None,
+    chat: Any = None,
+    popup: Optional[Callable[[str, str], None]] = None,
+    src: str = "HOST",
+    meta: Optional[dict] = None,
+) -> dict:
+    """
+    handler 경계용.
+    - AppError면 본래 code 유지
+    - 일반 예외면 E110 fallback
+    """
+    payload = build_handler_error_payload(exc, meta=meta)
+    return report_payload(
+        payload,
+        log=log,
+        chat=chat,
+        popup=popup,
+        src=src,
+    )
+
+
+def notify_unknown_error(
+    exc: BaseException,
+    *,
+    log: Optional[Callable[[str, str], None]] = None,
+    chat: Any = None,
+    popup: Optional[Callable[[str, str], None]] = None,
+    src: str = "HOST",
+    meta: Optional[dict] = None,
+) -> dict:
+    """
+    최상단 경계용.
+    알 수 없는 예외를 E999로 표준화해서 report한다.
+    """
+    payload = build_unknown_error_payload(exc, meta=meta)
+    return report_payload(
+        payload,
+        log=log,
+        chat=chat,
+        popup=popup,
+        src=src,
+    )
+
+
+def notify_error_code(
+    code: str,
+    *,
+    log: Optional[Callable[[str, str], None]] = None,
+    chat: Any = None,
+    popup: Optional[Callable[[str, str], None]] = None,
+    src: str = "HOST",
+    detail: str = "",
+    meta: Optional[dict] = None,
+) -> dict:
+    """
+    예외 객체 없이 에러코드만으로 즉시 report할 때 사용.
+    """
+    payload = build_error_payload_from_code(
+        code,
+        detail=detail,
+        meta=meta,
+    )
+    return report_payload(
+        payload,
+        log=log,
+        chat=chat,
+        popup=popup,
+        src=src,
+    )
+
+
+__all__ = [
+    "report_payload",
+    "notify_error",
+    "notify_handler_error",
+    "notify_unknown_error",
+    "notify_error_code",
+]
