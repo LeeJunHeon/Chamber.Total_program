@@ -13,7 +13,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any
 from .protocol import HEADER_SIZE, unpack_header, pack_message, PROTOCOL_VERSION
-from errors.error_reporter import notify_all
+from errors.error_reporter import (
+    notify_error_code,
+    notify_unknown_error,
+)
 from .router import Router
 
 Json = Dict[str, Any]
@@ -165,22 +168,19 @@ class HostServer:
                 header = await self._read_exact(reader, HEADER_SIZE)
                 version, flags, cmd_len, body_len, ts = unpack_header(header)
                 if version != PROTOCOL_VERSION:
-                    fail = notify_all(
+                    fail = notify_error_code(
+                        "E102",
                         log=self.log,
                         chat=self.chat,
                         popup=self.popup,
                         src="HOST",
-                        code="E102",
-                        message=f"Unsupported protocol version: {version}",
+                        detail=f"Unsupported protocol version: {version}",
+                        meta={"peer": str(peer)},
                     )
 
                     packet = pack_message("VERSION_ERROR_RESULT", {
                         "request_id": "",
-                        "data": {
-                            "result": "fail",
-                            "message": fail.get("message", ""),
-                            "error_code": fail.get("error_code", "E102"),
-                        },
+                        "data": fail,
                     })
 
                     writer.write(packet)
@@ -231,13 +231,14 @@ class HostServer:
                     except Exception:
                         pass
 
-                    fail = notify_all(
+                    fail = notify_error_code(
+                        "E104",
                         log=self.log,
                         chat=self.chat,
                         popup=self.popup,
                         src="HOST",
-                        code="E104",
-                        message=f"Invalid JSON: {e}",
+                        detail=f"Invalid JSON: {e}",
+                        meta={"peer": str(peer)},
                     )
 
                     packet = pack_message("PARSE_ERROR_RESULT", {
@@ -291,13 +292,14 @@ class HostServer:
                     except Exception:
                         pass
 
-                    fail = notify_all(
+                    fail = notify_error_code(
+                        "E105",
                         log=self.log,
                         chat=self.chat,
                         popup=self.popup,
                         src="HOST",
-                        code="E105",
-                        message="Missing 'command' in request",
+                        detail="Missing 'command' in request",
+                        meta={"peer": str(peer), "request_id": req_id},
                     )
 
                     packet = pack_message("UNKNOWN_RESULT", {
@@ -315,14 +317,17 @@ class HostServer:
                     tb = traceback.format_exc()
                     self.log("NET", f"Handler error for {cmd}: {e}\n{tb}")
 
-                    # ✅ E110 강제 제거: message 기반 추정/폴백(또는 handlers에서 이미 E412/E401로 잡게)
-                    fail = notify_all(
+                    fail = notify_unknown_error(
+                        e,
                         log=self.log,
                         chat=self.chat,
                         popup=self.popup,
                         src="HOST",
-                        code=None,  # ← 강제하지 않음
-                        message=f"{cmd} handler crash: {type(e).__name__}: {e}",
+                        meta={
+                            "peer": str(peer),
+                            "request_id": req_id,
+                            "cmd": cmd,
+                        },
                     )
                     res_cmd, res_data = f"{cmd}_RESULT", fail
 
@@ -331,19 +336,36 @@ class HostServer:
                 try:
                     # res_data가 dict가 아니면 방어
                     if not isinstance(res_data, dict):
-                        res_data = notify_all(
+                        res_data = notify_error_code(
+                            "E111",
                             log=self.log,
                             chat=self.chat,
                             popup=self.popup,
                             src="HOST",
-                            code="E110",
-                            message=f"Handler returned non-dict: {type(res_data).__name__} raw={repr(res_data)}",
+                            detail=f"Handler returned non-dict: {type(res_data).__name__} raw={repr(res_data)}",
+                            meta={
+                                "peer": str(peer),
+                                "request_id": req_id,
+                                "cmd": cmd,
+                            },
                         )
 
                     # ✅ fail인데 error_code 없으면: server는 '결정'하지 않고 기본값만 넣는다
                     if isinstance(res_data, dict) and res_data.get("result") == "fail" and "error_code" not in res_data:
                         self.log("NET", f"[WARN] fail without error_code: cmd={cmd} id={req_id} res={res_data!r}")
-                        res_data["error_code"] = "E110"
+                        res_data = notify_error_code(
+                            "E110",
+                            log=self.log,
+                            chat=self.chat,
+                            popup=self.popup,
+                            src="HOST",
+                            detail=f"Fail payload missing error_code: {res_data!r}",
+                            meta={
+                                "peer": str(peer),
+                                "request_id": req_id,
+                                "cmd": cmd,
+                            },
+                        )
 
                     row = {
                         "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
@@ -378,7 +400,25 @@ class HostServer:
                     except Exception:
                         pass
 
-                packet = pack_message(res_cmd, {"request_id": req_id, "data": res_data})
+                try:
+                    packet = pack_message(res_cmd, {"request_id": req_id, "data": res_data})
+                except Exception as pe:
+                    fail = notify_error_code(
+                        "E107",
+                        log=self.log,
+                        chat=self.chat,
+                        popup=self.popup,
+                        src="HOST",
+                        detail=f"Response serialization failed: {type(pe).__name__}: {pe}",
+                        meta={
+                            "peer": str(peer),
+                            "request_id": req_id,
+                            "cmd": cmd,
+                            "res_cmd": res_cmd,
+                        },
+                    )
+                    packet = pack_message(res_cmd, {"request_id": req_id, "data": fail})
+
                 writer.write(packet)
                 await writer.drain()
 
