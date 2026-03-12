@@ -363,6 +363,7 @@ class ConfigApplyController:
         # 6) 기타 공용 설정이 영향을 줄 수 있는 runtime들
         if any(
             k.startswith(prefix)
+            for k in keys
             for prefix in (
                 "RGA_",
                 "OES_",
