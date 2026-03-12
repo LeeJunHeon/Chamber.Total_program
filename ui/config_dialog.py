@@ -221,7 +221,8 @@ class ConfigDialog(QDialog):
 
         self._hint = QLabel(
             "※ Save: config/user_config.json에 저장\n"
-            "※ Apply(Runtime): config_* 모듈 변수는 즉시 갱신하지만, 이미 생성된 장비 인스턴스(포트/호스트 등)는 재시작 전까지 반영되지 않을 수 있습니다."
+            "※ Apply(Runtime): 저장된 변경값 중 현재 적용 가능한 항목만 즉시 적용합니다.\n"
+            "   공정 중이거나 현재 상태에서 적용 불가능한 항목은 적용되지 않으며 안내 메시지가 표시됩니다."
         )
         self._hint.setWordWrap(True)
 
@@ -328,29 +329,12 @@ class ConfigDialog(QDialog):
             return
 
         merged = user_config.load(path)
-        res = user_config.apply_overrides(merged)
 
         self._cfg = merged
         self._refresh()
 
-        # ✅ Apply(Runtime) 후, 메인(부모)에게 런타임 리로드 요청
-        # main.py 쪽에 on_config_applied()만 만들어두면
-        # 장비 reload_runtime_cfg()/endpoint 갱신 등을 한 번에 처리 가능
+        # ✅ 실제 적용 판단은 main.py / ConfigApplyController가 담당
         with contextlib.suppress(Exception):
             p = self.parent()
             if p is not None and hasattr(p, "on_config_applied"):
                 p.on_config_applied()
-
-        QMessageBox.information(
-            self,
-            "Config",
-            "Apply(Runtime) 완료\n"
-            f"- config_common(통신+TSP): {res.get('communication+tsp->config_common')}\n"
-            f"- common->ch1 동기화: {res.get('sync_common->ch1')}\n"
-            f"- common->ch2 동기화: {res.get('sync_common->ch2')}\n"
-            f"- comm(CH1_*) 적용: {res.get('apply_comm_ch1')}\n"
-            f"- comm(CH2_*) 적용: {res.get('apply_comm_ch2')}\n"
-            f"- ch1 공정 적용: {res.get('apply_ch1')}\n"
-            f"- ch2 공정 적용: {res.get('apply_ch2')}\n\n"
-            "※ 일부 값은 재시작 후 완전 적용됩니다."
-        )
