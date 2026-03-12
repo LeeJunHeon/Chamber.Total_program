@@ -13,7 +13,10 @@ import asyncio, time, contextlib, os
 from pathlib import Path                      # ← 추가: 경로
 from datetime import datetime                 # ← 추가: 파일명 타임스탬프
 from contextlib import asynccontextmanager    # ← 추가: 비동기 컨텍스트
-from errors.error_reporter import notify_all
+from errors.error_reporter import (
+    notify_error_code,
+    notify_handler_error,
+)
 from lib import config_common as cfg
 
 Json = Dict[str, Any]
@@ -237,21 +240,67 @@ class HostHandlers:
         return res
 
     def _fail(self, e, *, code: str | None = None, src: str = "HOST") -> Json:
-        # ✅ code 미지정이면 예외 객체에서 자동 추출
-        if code is None and isinstance(e, Exception):
+        """
+        표준 fail payload를 만들고 log/chat/popup 및 응답 로그에 반영한다.
+
+        규칙:
+        - code가 명시되면 notify_error_code 사용
+        - code가 없고 예외 객체면 notify_handler_error 사용
+        - KeyError는 주소맵/키 누락 계열로 E411 우선 부여
+        """
+        # 이미 fail payload면 그대로 사용
+        if isinstance(e, dict) and e.get("result") == "fail":
+            self._log_client_response(e)
+            return e
+
+        # 1) code 자동 추출
+        if code is None and isinstance(e, BaseException):
             code = getattr(e, "code", None) or getattr(e, "error_code", None)
-            # KeyError는 주소맵/키 누락으로 취급
             if code is None and isinstance(e, KeyError):
                 code = "E411"
 
-        res: Json = notify_all(
+        # 2) detail 문자열 정리
+        if isinstance(e, BaseException):
+            detail = getattr(e, "detail", None) or str(e)
+        else:
+            detail = "" if e is None else str(e)
+
+        # 3) meta (있으면 같이 싣기)
+        meta: dict[str, Any] = {}
+        if self._current_cmd_tag:
+            meta["cmd"] = self._current_cmd_tag
+        if self._plc_cmd_file is not None:
+            meta["plc_log_file"] = str(self._plc_cmd_file)
+
+        reporter_kwargs = dict(
             log=self.ctx.log,
             chat=getattr(self.ctx, "chat", None),
             popup=getattr(self.ctx, "popup", None),
             src=src,
-            code=code,
-            message=e,
+            meta=(meta or None),
         )
+
+        # 4) code가 명시된 경우
+        if code:
+            res: Json = notify_error_code(
+                code,
+                detail=detail,
+                **reporter_kwargs,
+            )
+        # 5) 예외 객체면 handler 경계 처리
+        elif isinstance(e, BaseException):
+            res = notify_handler_error(
+                e,
+                **reporter_kwargs,
+            )
+        # 6) 문자열인데 code도 없으면 handler fallback
+        else:
+            res = notify_error_code(
+                "E110",
+                detail=detail or "Handler failure",
+                **reporter_kwargs,
+            )
+
         self._log_client_response(res)
         return res
 
@@ -621,8 +670,8 @@ class HostHandlers:
                     return self._ok("SPUTTER START OK", ch=ch)
                 except Exception as e:
                     code = getattr(e, "code", None) or getattr(e, "error_code", None)
-                    msg = getattr(e, "message", None) or str(e)
-                    return self._fail(msg, code=code)
+                    detail = getattr(e, "detail", None) or getattr(e, "message", None) or str(e)
+                    return self._fail(detail, code=code)
 
     async def start_plasma_cleaning(self, data: Json) -> Json:
         """
@@ -634,11 +683,17 @@ class HostHandlers:
         recipe = str(data.get("recipe") or "").strip()
 
         if not recipe:
-            return self._fail("recipe가 비어 있습니다. (CSV 경로 또는 레시피 문자열 필요)")
+            return self._fail(
+                "recipe가 비어 있습니다. (CSV 경로 또는 레시피 문자열 필요)",
+                code="E202",
+            )
 
         pc = getattr(self.ctx, "pc", None)
         if not pc:
-            return self._fail("Plasma Cleaning runtime not ready")
+            return self._fail(
+                "Plasma Cleaning runtime not ready",
+                code="E204",
+            )
 
         # 🔹 START_PLASMA_CLEANING 전용 로그 파일 생성
         async with self._plc_command("START_PLASMA_CLEANING"):
@@ -654,8 +709,8 @@ class HostHandlers:
                 return self._ok("PLASMA CLEANING START OK")
             except Exception as e:
                 code = getattr(e, "code", None) or getattr(e, "error_code", None)
-                msg = getattr(e, "message", None) or str(e)
-                return self._fail(msg, code=code)
+                detail = getattr(e, "detail", None) or getattr(e, "message", None) or str(e)
+                return self._fail(detail, code=code)
 
     # ================== LoadLock vacuum 제어 ==================
     async def _read_gate_state(self, ch: int) -> dict:
@@ -973,7 +1028,10 @@ class HostHandlers:
                         # 1) 벤트 인터락 확인
                         async with self._plc_call():
                             if not await self.ctx.plc.read_bit("L_VENT_인터락"):
-                                return self._fail("L_VENT_인터락=FALSE → 벤트 불가")
+                                return self._fail(
+                                    "L_VENT_인터락=FALSE → 벤트 불가",
+                                    code="E311",
+                                )
 
                         # 2) 벤트 ON  ← 여기까지 오면 gate_open이 이제 확실히 차단됨(L_VENT_SW TRUE)
                         async with self._plc_call():
@@ -1149,7 +1207,7 @@ class HostHandlers:
         elif ch == 2:
             interlock, sw, lamp = "G_V_2_인터락", "G_V_2_OPEN_SW", "G_V_2_OPEN_LAMP"
         else:
-            return self._fail(f"지원하지 않는 CH: {ch}")
+            return self._fail(f"지원하지 않는 CH: {ch}", code="E201")
 
         try:
             async with self.ctx.lock_ch1:
@@ -1246,11 +1304,11 @@ class HostHandlers:
             return busy
 
         if ch == 1:
-            interlock, sw, lamp = "G_V_1_인터락", "G_V_1_CLOSE_SW", "G_V_1_CLOSE_LAMP"
+            sw, lamp = "G_V_1_CLOSE_SW", "G_V_1_CLOSE_LAMP"
         elif ch == 2:
-            interlock, sw, lamp = "G_V_2_인터락", "G_V_2_CLOSE_SW", "G_V_2_CLOSE_LAMP"
+            sw, lamp = "G_V_2_CLOSE_SW", "G_V_2_CLOSE_LAMP"
         else:
-            return self._fail(f"지원하지 않는 CH: {ch}")
+            return self._fail(f"지원하지 않는 CH: {ch}", code="E201")
 
         lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
         async with lock:  # CH 절차 충돌 방지는 유지
@@ -1303,13 +1361,19 @@ class HostHandlers:
 
                     # gate close 실패
                     if ch == 2 and ms_err is None:
-                        return self._fail(f"CH2_GATE_CLOSE 실패 — {lamp}=FALSE (대기 {int(wait_s)}s) + MAIN_SHUTTER_CLOSE 시도 완료")
+                        return self._fail(
+                            f"CH2_GATE_CLOSE 실패 — {lamp}=FALSE (대기 {int(wait_s)}s) + MAIN_SHUTTER_CLOSE 시도 완료",
+                            code="E305",
+                        )
                     if ch == 2 and ms_err is not None:
                         return self._fail(
                             f"CH2_GATE_CLOSE 실패 — {lamp}=FALSE (대기 {int(wait_s)}s) + MAIN_SHUTTER_CLOSE도 실패: {type(ms_err).__name__}: {ms_err}",
                             code="E331",
                         )
-                    return self._fail(f"CH{ch}_GATE_CLOSE 실패 — {lamp}=FALSE (대기 {int(wait_s)}s)")
+                    return self._fail(
+                        f"CH{ch}_GATE_CLOSE 실패 — {lamp}=FALSE (대기 {int(wait_s)}s)",
+                        code="E305",
+                    )
 
                 except Exception as e:
                     return self._fail(e)
@@ -1338,7 +1402,7 @@ class HostHandlers:
                 2, "Z_M_P_2_SW", "Z_M_P_2_MID_SW", "Z2_MID_LOCATION", "mid", timeout_s
             )
         else:
-            return self._fail(f"지원하지 않는 CH: {ch}")
+            return self._fail(f"지원하지 않는 CH: {ch}", code="E201")
 
     async def chuck_down(self, data: Json) -> Json:
         """
@@ -1363,7 +1427,7 @@ class HostHandlers:
                 2, "Z_M_P_2_SW", "Z_M_P_2_CCW_SW", "Z2_DOWN_LOCATION", "down", timeout_s
             )
         else:
-            return self._fail(f"지원하지 않는 CH: {ch}")
+            return self._fail(f"지원하지 않는 CH: {ch}", code="E201")
 
     async def _read_chuck_position(self, ch: int) -> dict:
         """
