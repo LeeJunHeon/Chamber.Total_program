@@ -135,16 +135,9 @@ class MainWindow(QWidget):
         # ✅ Config 팝업 인스턴스 보관(가비지컬렉션/중복창 방지)
         self._config_dialog = None
         self._cfg_apply_task: Optional[asyncio.Task] = None
-        self._cfg_flush_task: Optional[asyncio.Task] = None
 
-        # ✅ Config changed-only / deferred / blocked 적용 컨트롤러
+        # ✅ Config 적용 정책 컨트롤러
         self._cfg_apply_ctrl = ConfigApplyController()
-
-        # ✅ 공정 종료 후 pending config 자동 반영용 주기 타이머
-        self._cfg_flush_timer = QTimer(self)
-        self._cfg_flush_timer.setInterval(2000)  # 2초마다 안전하게 체크
-        self._cfg_flush_timer.timeout.connect(self._on_cfg_flush_timer)
-        self._cfg_flush_timer.start()
 
         # ✅ Integration Time 입력칸을 'Process Name' 입력으로 재활용 (CH1/CH2)
         #   - CSV 자동공정: Process_name 표시
@@ -787,7 +780,7 @@ class MainWindow(QWidget):
             dlg = ConfigDialog(parent=self)
             self._config_dialog = dlg
 
-            # ✅ Apply(Runtime) → MainWindow 반영 훅 연결
+            # ✅ Apply(Runtime) -> MainWindow.on_config_applied 연결
             try:
                 connected = False
 
@@ -802,7 +795,6 @@ class MainWindow(QWidget):
                     except Exception:
                         pass
 
-                # signal 대신 callback setter를 쓰는 구현도 방어
                 if (not connected) and hasattr(dlg, "set_apply_callback"):
                     try:
                         dlg.set_apply_callback(self.on_config_applied)
@@ -810,7 +802,6 @@ class MainWindow(QWidget):
                     except Exception:
                         pass
 
-                # callback 속성 직접 주입 방식도 방어
                 if (not connected) and hasattr(dlg, "on_applied"):
                     try:
                         dlg.on_applied = self.on_config_applied
@@ -836,8 +827,8 @@ class MainWindow(QWidget):
     def on_config_applied(self, *args) -> None:
         """
         ConfigDialog Apply(Runtime) 직후 호출됨.
-        - 변경된 값만(changed-only) 적용
-        - 공정 중이면 deferred / blocked 정책 적용
+        - 현재 적용 가능한 값만 즉시 적용
+        - 적용 불가 항목은 알림/로그로만 안내
         """
         try:
             prev = getattr(self, "_cfg_apply_task", None)
@@ -851,13 +842,44 @@ class MainWindow(QWidget):
     async def _run_config_apply_async(self) -> None:
         try:
             result = await self._cfg_apply_ctrl.apply_runtime(self)
-            self._show_config_apply_result(result, from_pending=False)
+            self._show_config_apply_result(result)
         except asyncio.CancelledError:
             raise
         except Exception as e:
             self._broadcast_log("ERROR/CFG", f"Config apply 실패: {e!r}")
             with contextlib.suppress(Exception):
                 QMessageBox.warning(self, "Config", f"Config apply 실패: {e!r}")
+
+    def _show_config_apply_result(self, result: dict) -> None:
+        def _fmt(items, limit: int = 8) -> str:
+            names = []
+            for item in items or []:
+                try:
+                    names.append(item.dotted)
+                except Exception:
+                    pass
+            if not names:
+                return "-"
+            names = sorted(names)
+            if len(names) <= limit:
+                return ", ".join(names)
+            return ", ".join(names[:limit]) + f" 외 {len(names) - limit}건"
+
+        applied = result.get("applied_now") or []
+        blocked = result.get("blocked_now") or []
+
+        if applied:
+            self._broadcast_log("CFG", f"즉시 반영 완료: {_fmt(applied)}")
+
+        if blocked:
+            self._broadcast_log("WARN/CFG", f"현재 적용 불가: {_fmt(blocked)}")
+            with contextlib.suppress(Exception):
+                QMessageBox.information(
+                    self,
+                    "Config",
+                    "일부 설정은 현재 상태에서는 적용할 수 없습니다.\n\n"
+                    f"적용 불가 항목: {_fmt(blocked)}"
+                )
 
     def _on_cfg_flush_timer(self) -> None:
         """
@@ -1079,8 +1101,9 @@ class MainWindow(QWidget):
     def closeEvent(self, event: QCloseEvent) -> None:
         # ✅ config pending flush timer 종료
         try:
-            if hasattr(self, "_cfg_flush_timer") and self._cfg_flush_timer:
-                self._cfg_flush_timer.stop()
+            t = getattr(self, "_cfg_apply_task", None)
+            if t and not t.done():
+                t.cancel()
         except Exception:
             pass
 
