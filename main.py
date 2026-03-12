@@ -881,81 +881,6 @@ class MainWindow(QWidget):
                     f"적용 불가 항목: {_fmt(blocked)}"
                 )
 
-    def _on_cfg_flush_timer(self) -> None:
-        """
-        pending config가 있고, 현재 flush task가 없으면 idle 여부를 확인해서
-        자동 반영을 시도한다.
-        """
-        try:
-            ctrl = getattr(self, "_cfg_apply_ctrl", None)
-            if ctrl is None or not ctrl.has_pending():
-                return
-
-            task = getattr(self, "_cfg_flush_task", None)
-            if task and not task.done():
-                return
-
-            self._cfg_flush_task = self._loop.create_task(self._flush_pending_config_async())
-        except Exception:
-            pass
-
-    async def _flush_pending_config_async(self) -> None:
-        try:
-            result = await self._cfg_apply_ctrl.flush_pending_if_safe(self)
-            applied = result.get("applied_now") or []
-            if applied:
-                self._show_config_apply_result(result, from_pending=True)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            self._broadcast_log("ERROR/CFG", f"Pending config 자동 반영 실패: {e!r}")
-
-    def _show_config_apply_result(self, result: dict, *, from_pending: bool) -> None:
-        def _fmt(items, limit: int = 8) -> str:
-            names = []
-            for item in items or []:
-                try:
-                    names.append(item.dotted)
-                except Exception:
-                    pass
-            if not names:
-                return "-"
-            names = sorted(names)
-            if len(names) <= limit:
-                return ", ".join(names)
-            return ", ".join(names[:limit]) + f" 외 {len(names) - limit}건"
-
-        applied = result.get("applied_now") or []
-        deferred = result.get("deferred") or []
-        blocked = result.get("blocked_now") or []
-        pending = result.get("pending") or []
-
-        if applied:
-            self._broadcast_log(
-                "CFG",
-                f"{'자동 반영' if from_pending else '즉시 반영'} 완료: {_fmt(applied)}"
-            )
-
-        if deferred and not from_pending:
-            self._broadcast_log(
-                "CFG",
-                f"공정 종료 후 자동 적용 대기: {_fmt(deferred)}"
-            )
-
-        if blocked and not from_pending:
-            self._broadcast_log(
-                "WARN/CFG",
-                f"공정 중 즉시 적용 금지: {_fmt(blocked)}"
-            )
-            with contextlib.suppress(Exception):
-                QMessageBox.information(
-                    self,
-                    "Config",
-                    "일부 설정은 공정 중 즉시 적용할 수 없습니다.\n\n"
-                    f"금지 항목: {_fmt(blocked)}\n"
-                    f"대기 항목 포함 총 pending: {len(pending)}건"
-                )
-
     def _apply_ui_defaults_from_config(self, *, overwrite: bool) -> None:
         """
         overwrite=False: 사용자가 UI에 이미 뭔가 입력해 둔 경우 덮어쓰지 않음(안전)
@@ -1099,14 +1024,6 @@ class MainWindow(QWidget):
                     pass
 
     def closeEvent(self, event: QCloseEvent) -> None:
-        # ✅ config pending flush timer 종료
-        try:
-            t = getattr(self, "_cfg_apply_task", None)
-            if t and not t.done():
-                t.cancel()
-        except Exception:
-            pass
-
         # ✅ config apply task / flush task 정리
         for tname in ("_cfg_apply_task", "_cfg_flush_task"):
             try:
