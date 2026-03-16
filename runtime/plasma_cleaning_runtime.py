@@ -1331,8 +1331,6 @@ class PlasmaCleaningRuntime:
             lr = str(getattr(self.pc, "last_result", "") or "").strip().lower()
             ls = str(getattr(self.pc, "last_reason", "") or "").strip()
             led = str(getattr(self.pc, "last_error_detail", "") or "").strip()
-            lec = getattr(self.pc, "last_error_code", None)
-            lem = dict(getattr(self.pc, "last_error_meta", {}) or {})
 
             # 사용자가 STOP을 눌렀거나 컨트롤러가 'stop'을 준 경우를 모두 STOP으로 간주
             stopped_final = bool(self._stop_requested or lr == "stop")

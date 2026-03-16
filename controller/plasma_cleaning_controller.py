@@ -208,10 +208,11 @@ class PlasmaCleaningController:
         self.last_reason = err_detail
 
         # 최초/최신 실패를 여기에 보존
-        self.last_error_code = err_code
-        self.last_error_source = str(source or "").strip() or "PC"
-        self.last_error_detail = err_detail
-        self.last_error_meta = dict(err_meta or {})
+        if not self.last_error_detail:
+            self.last_error_code = err_code
+            self.last_error_source = str(source or "").strip() or "PC"
+            self.last_error_detail = err_detail
+            self.last_error_meta = dict(err_meta or {})
 
     def on_mfc_confirmed(self, cmd: str) -> None:
         self._last_mfc_cmd_result = (cmd, True, "")
