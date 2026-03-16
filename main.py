@@ -136,6 +136,11 @@ class MainWindow(QWidget):
         self._config_dialog = None
         self._cfg_apply_task: Optional[asyncio.Task] = None
 
+        # ✅ 종료 시퀀스 상태 플래그
+        self._closing_started: bool = False
+        self._close_ready: bool = False
+        self._close_task: Optional[asyncio.Task] = None
+
         # ✅ Config 적용 정책 컨트롤러
         self._cfg_apply_ctrl = ConfigApplyController()
 
@@ -1023,59 +1028,90 @@ class MainWindow(QWidget):
                 except Exception:
                     pass
 
-    def closeEvent(self, event: QCloseEvent) -> None:
-        # ✅ config apply task / flush task 정리
+    async def _shutdown_app_async(self) -> None:
+        # 1) config apply task 정리
         try:
             t = getattr(self, "_cfg_apply_task", None)
             if t and not t.done():
                 t.cancel()
+                with contextlib.suppress(Exception):
+                    await t
         except Exception:
             pass
 
-        # 1) 외부 제어 서버 먼저 종료 요청
-        try:
-            self._loop.create_task(self._stop_host())
-        except Exception:
-            pass
+        # 2) 외부 제어 서버 종료
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(self._stop_host(), timeout=3.0)
 
-        # ✅ PLC COIL CSV 로거 종료(공정 영향 X, 파일 핸들 정리)
-        try:
-            self._loop.create_task(self.plc.stop_plc_coil_csv_logger())
-        except Exception:
-            pass
+        # 3) PLC COIL CSV logger 종료
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(self.plc.stop_plc_coil_csv_logger(), timeout=3.0)
 
-        # 2) 공유 장치/런타임 정리
-        try:
-            if self.pc:
-                self.pc.shutdown_fast()
-        except Exception:
-            pass
-        try:
-            if self.ch1:
-                self.ch1.shutdown_fast()
-        except Exception:
-            pass
-        try:
-            if self.ch2:
-                self.ch2.shutdown_fast()
-        except Exception:
-            pass
-        for c in (getattr(self, "chat_host", None),
-                getattr(self, "chat_ch1", None),
-                getattr(self, "chat_ch2", None),
-                getattr(self, "chat_pc", None),
-                getattr(self, "chat_tsp", None)):
-            try:
+        # 4) 런타임 종료는 반드시 "기다린다"
+        for rt in (
+            getattr(self, "pc", None),
+            getattr(self, "ch1", None),
+            getattr(self, "ch2", None),
+        ):
+            if not rt:
+                continue
+
+            fn_async = getattr(rt, "shutdown_fast_async", None)
+            if callable(fn_async):
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(fn_async(), timeout=8.0)
+            else:
+                fn = getattr(rt, "shutdown_fast", None)
+                if callable(fn):
+                    with contextlib.suppress(Exception):
+                        fn()
+
+        # 5) Chat notifier 종료
+        for c in (
+            getattr(self, "chat_host", None),
+            getattr(self, "chat_ch1", None),
+            getattr(self, "chat_ch2", None),
+            getattr(self, "chat_pc", None),
+            getattr(self, "chat_tsp", None),
+        ):
+            with contextlib.suppress(Exception):
                 if c:
                     c.shutdown()
-            except Exception:
-                pass
-        try:
+
+        # 6) Qt 로그 핸들러 원복
+        with contextlib.suppress(Exception):
             uninstall_qt_message_logging(get_app_logger())
+
+    def closeEvent(self, event: QCloseEvent) -> None:
+        # ✅ cleanup 완료 후 다시 들어온 close면 실제 종료
+        if self._close_ready:
+            event.accept()
+            return super().closeEvent(event)
+
+        # ✅ 이미 종료 시퀀스 시작됨 → 중복 close 무시
+        if self._closing_started:
+            event.ignore()
+            return
+
+        self._closing_started = True
+        event.ignore()
+
+        with contextlib.suppress(Exception):
+            self.setEnabled(False)
+
+        async def _run_close():
+            try:
+                await self._shutdown_app_async()
+            finally:
+                self._close_ready = True
+                QTimer.singleShot(0, self.close)
+
+        try:
+            self._close_task = self._loop.create_task(_run_close())
         except Exception:
-            pass
-        event.accept()
-        super().closeEvent(event)
+            self._close_ready = True
+            event.accept()
+            super().closeEvent(event)
 
     def _selected_presputter_ch(self) -> int:
         """Pre-Sputter 라디오 상태로 선택 챔버 반환(기본 1)."""

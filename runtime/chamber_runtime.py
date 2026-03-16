@@ -4117,104 +4117,104 @@ class ChamberRuntime:
         with contextlib.suppress(Exception):
             self.append_log("MAIN", f"🧯 force-close attempted: {label}")
 
-    def shutdown_fast(self) -> None:
-        async def run():
-            # ✅ 종료 플래그 먼저
-            self._shutting_down = True
-            self._auto_connect_enabled = False
+    async def shutdown_fast_async(self) -> None:
+        self._shutting_down = True
+        self._auto_connect_enabled = False
 
-            self._cancel_delay_task()
+        self._cancel_delay_task()
 
+        try:
+            if self.ig and hasattr(self.ig, "cancel_wait"):
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(self.ig.cancel_wait(), timeout=1.0)
+        except Exception:
+            pass
+
+        loop = asyncio.get_running_loop()
+        current = asyncio.current_task()
+
+        # ✅ runner / stage task 먼저 정지
+        runner_tasks = []
+        for t in (
+            getattr(self, "_runner_stage_task", None),
+            getattr(self, "_runner_task", None),
+        ):
+            if isinstance(t, asyncio.Task) and (not t.done()) and t is not current:
+                runner_tasks.append(t)
+
+        for t in runner_tasks:
+            with contextlib.suppress(Exception):
+                t.cancel()
+
+        if runner_tasks:
+            with contextlib.suppress(Exception):
+                await asyncio.gather(*runner_tasks, return_exceptions=True)
+
+        self._runner_stage_task = None
+        self._runner_stage_kind = None
+        self._runner_task = None
+
+        # ✅ 일반 bg task 정지
+        live = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done() and t is not current]
+        for t in live:
+            with contextlib.suppress(Exception):
+                loop.call_soon(t.cancel)
+
+        if live:
+            with contextlib.suppress(Exception):
+                await asyncio.gather(*live, return_exceptions=True)
+
+        self._bg_tasks = []
+
+        # ✅ keepalive task 정지
+        keepalive = [
+            t for t in getattr(self, "_keepalive_tasks", {}).values()
+            if t and not t.done() and t is not current
+        ]
+        for t in keepalive:
+            with contextlib.suppress(Exception):
+                loop.call_soon(t.cancel)
+
+        if keepalive:
+            with contextlib.suppress(Exception):
+                await asyncio.gather(*keepalive, return_exceptions=True)
+
+        self._keepalive_tasks = {}
+
+        self._bg_started = False
+        self._devices_started = False
+        self._run_select = None
+
+        # ✅ 장치 정리
+        tasks = []
+        for dev in (self.ig, self.mfc, self.dc_pulse, self.rf_pulse, self.dc_power, self.rf_power, self.oes, self.rga):
+            if not dev:
+                continue
             try:
-                if self.ig and hasattr(self.ig, "cancel_wait"):
-                    with contextlib.suppress(Exception):
-                        await asyncio.wait_for(self.ig.cancel_wait(), timeout=1.0)
+                if hasattr(dev, "cleanup_quick"):
+                    tasks.append(dev.cleanup_quick())
+                elif hasattr(dev, "cleanup"):
+                    tasks.append(dev.cleanup())
             except Exception:
                 pass
 
-            loop = asyncio.get_running_loop()
-            current = asyncio.current_task()
+        if tasks:
+            await asyncio.gather(*tasks, return_exceptions=True)
 
-            # ✅ runner / stage task도 먼저 정지
-            runner_tasks = []
-            for t in (
-                getattr(self, "_runner_stage_task", None),
-                getattr(self, "_runner_task", None),
-            ):
-                if isinstance(t, asyncio.Task) and (not t.done()) and t is not current:
-                    runner_tasks.append(t)
+        # ✅ 로그 마무리
+        with contextlib.suppress(Exception):
+            self._close_run_log()
 
-            for t in runner_tasks:
-                with contextlib.suppress(Exception):
-                    t.cancel()
+        with contextlib.suppress(Exception):
+            await self._shutdown_log_writer()
 
-            if runner_tasks:
-                with contextlib.suppress(Exception):
-                    await asyncio.gather(*runner_tasks, return_exceptions=True)
+        self._log_file_path = None
+        with contextlib.suppress(Exception):
+            self._prestart_buf.clear()
 
-            self._runner_stage_task = None
-            self._runner_stage_kind = None
-            self._runner_task = None
 
-            # ✅ 일반 bg task 정지
-            live = [t for t in getattr(self, "_bg_tasks", []) if t and not t.done() and t is not current]
-            for t in live:
-                with contextlib.suppress(Exception):
-                    loop.call_soon(t.cancel)
-
-            if live:
-                with contextlib.suppress(Exception):
-                    await asyncio.gather(*live, return_exceptions=True)
-
-            self._bg_tasks = []
-
-            # ✅ keepalive task 정지 (기존 누락 핵심)
-            keepalive = [
-                t for t in getattr(self, "_keepalive_tasks", {}).values()
-                if t and not t.done() and t is not current
-            ]
-            for t in keepalive:
-                with contextlib.suppress(Exception):
-                    loop.call_soon(t.cancel)
-
-            if keepalive:
-                with contextlib.suppress(Exception):
-                    await asyncio.gather(*keepalive, return_exceptions=True)
-
-            self._keepalive_tasks = {}
-
-            self._bg_started = False
-            self._devices_started = False
-            self._run_select = None
-
-            # ✅ 장치 정리
-            tasks = []
-            for dev in (self.ig, self.mfc, self.dc_pulse, self.rf_pulse, self.dc_power, self.rf_power, self.oes, self.rga):
-                if not dev:
-                    continue
-                try:
-                    if hasattr(dev, "cleanup_quick"):
-                        tasks.append(dev.cleanup_quick())
-                    elif hasattr(dev, "cleanup"):
-                        tasks.append(dev.cleanup())
-                except Exception:
-                    pass
-
-            if tasks:
-                await asyncio.gather(*tasks, return_exceptions=True)
-
-            # ✅ 로그 마무리
-            with contextlib.suppress(Exception):
-                self._close_run_log()
-
-            with contextlib.suppress(Exception):
-                await self._shutdown_log_writer()
-
-            self._log_file_path = None
-            with contextlib.suppress(Exception):
-                self._prestart_buf.clear()
-
-        self._spawn_detached(run(), name=f"ShutdownFast.CH{self.ch}")
+    def shutdown_fast(self) -> None:
+        self._spawn_detached(self.shutdown_fast_async(), name=f"ShutdownFast.CH{self.ch}")
 
     # ------------------------------------------------------------------
     # 입력 검증 / 정규화 / delay 처리
