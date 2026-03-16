@@ -1957,37 +1957,50 @@ class PlasmaCleaningRuntime:
         with contextlib.suppress(Exception):
             self._close_run_log()
 
-    def shutdown_fast(self) -> None:
+    async def shutdown_fast_async(self) -> None:
         """
-        앱 종료 시 빠른 정리:
+        앱 종료 시 빠른 정리 (await 가능):
         - PC 런타임이 만든 asyncio task 취소/대기
         - PC run log 파일 닫기
-        - (필요 시) 상태 플래그 정리
+        - 최소 상태 플래그 정리
         """
-        async def _run():
-            # 1) 태스크 정리
-            with contextlib.suppress(Exception):
-                await self._shutdown_all_tasks()
+        # ✅ 종료 의도 명시
+        with contextlib.suppress(Exception):
+            self._stop_requested = True
 
-            # 2) 로그 파일 닫기
-            with contextlib.suppress(Exception):
-                self._close_run_log()
+        with contextlib.suppress(Exception):
+            self._process_timer_active = False
 
-            # 3) 상태 플래그 정리(종료 중이라면 의미상 정리)
-            with contextlib.suppress(Exception):
-                self._running = False
+        with contextlib.suppress(Exception):
+            self._state_header = ""
 
+        # 1) 태스크 정리
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(self._shutdown_all_tasks(), timeout=3.0)
+
+        # 2) 로그 파일 닫기
+        with contextlib.suppress(Exception):
+            self._close_run_log()
+
+        # 3) 상태 플래그 정리
+        with contextlib.suppress(Exception):
+            self._running = False
+
+
+    def shutdown_fast(self) -> None:
+        """
+        기존 호출부 호환용 wrapper.
+        """
         loop = getattr(self, "_loop", None)
         if loop is None:
             return
 
         def _create_task():
             try:
-                loop.create_task(_run(), name="PC.shutdown_fast")
+                loop.create_task(self.shutdown_fast_async(), name="PC.shutdown_fast")
             except Exception:
                 pass
 
-        # Qt 스레드/다른 스레드에서 호출될 수 있으니 thread-safe하게 스케줄
         try:
             running = asyncio.get_running_loop()
         except RuntimeError:
@@ -1999,7 +2012,6 @@ class PlasmaCleaningRuntime:
             else:
                 loop.call_soon_threadsafe(_create_task)
         except Exception:
-            # loop가 이미 닫혔거나 종료 중이면 조용히 무시
             pass
 
     def _ensure_task(self, name: str, coro_fn: Callable[[], Awaitable[None]]) -> None:
