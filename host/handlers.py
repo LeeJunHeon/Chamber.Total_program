@@ -567,7 +567,7 @@ class HostHandlers:
                 )
 
         except Exception as e:
-            return self._fail(f"GET_SPUTTER_STATUS 실패: {type(e).__name__}: {e}", code=getattr(e, "code", None))
+            return self._fail(e, code=getattr(e, "code", None))
         
     # ================== 레시피 조회 ==========================
     async def get_recipe(self, data: Json) -> Json:
@@ -632,8 +632,7 @@ class HostHandlers:
             except KeyError as e:
                 return self._fail(f"PLC 주소맵에 {key}가 없습니다: {e}", code="E411")
             except Exception as e:
-                # ✅ PLC 통신 실패(E401/E402/E403)를 그대로 반영
-                return self._fail(f"{key} 읽기 실패: {type(e).__name__}: {e}", code=getattr(e, "code", None) or "E412")
+                return self._fail(e, code=getattr(e, "code", None) or "E412")
 
             async with self._plc_command(f"GET_LOADING_{which}_SENSOR"):
                 # ✅ 클라이언트 요청 payload도 기록
@@ -687,8 +686,7 @@ class HostHandlers:
                 except KeyError as e:
                     return self._fail(f"PLC 주소맵에 gate lamp 키가 없습니다: {e}", code="E411")
                 except Exception as e:
-                    # ✅ PLCError면 e.code(E401/E402/E403)가 자동으로 들어가게 됨(_fail 개선 덕분)
-                    return self._fail(f"Gate 상태 조회 실패: {type(e).__name__}: {e}", code=getattr(e, "code", None) or "E412")
+                    return self._fail(e, code=getattr(e, "code", None) or "E412")
 
                 if st["state"] != "closed":
                     return self._fail(f"START_SPUTTER 불가 — CH{ch} gate가 CLOSED가 아님({st['state']})", code="E301")
@@ -1518,7 +1516,7 @@ class HostHandlers:
                     cur = await self._read_chuck_position(ch)
                 except Exception as e:
                     return self._fail(
-                        f"CH{ch} Chuck 위치 조회 실패: {type(e).__name__}: {e}",
+                        e,
                         code="E412",
                     )
                 # chuck이 이미 목표 위치면 즉시 성공 응답
