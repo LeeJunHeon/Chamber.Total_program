@@ -51,6 +51,13 @@ class HostHandlers:
         self._plc_cmd_file = None              # 요청중 파일 경로(컨텍스트 내에서만 셋)
         self._current_cmd_tag: str | None = None  # 현재 처리 중인 명령 태그(VACUUM_OFF, 4PIN_DOWN 등)
 
+        # Loadlock 전환(VACUUM_ON / VACUUM_OFF) 전용 상태
+        self._loadlock_transition_lock = asyncio.Lock()
+        self._loadlock_transition_tag: str | None = None
+
+        # Gate OPEN/CLOSE 절차끼리만 직렬화
+        self._loadlock_gate_lock = asyncio.Lock()
+
     def _write_line_sync(self, file_path: Path, line: str) -> None:
         """동기 파일 쓰기(예외는 호출부에서 처리)."""
         file_path.parent.mkdir(parents=True, exist_ok=True)
@@ -303,6 +310,15 @@ class HostHandlers:
 
         self._log_client_response(res)
         return res
+    
+    def _is_loadlock_transition_active(self) -> bool:
+        return self._loadlock_transition_lock.locked()
+
+    def _fail_if_loadlock_transition_busy(self, action: str) -> Json | None:
+        if self._is_loadlock_transition_active():
+            tag = self._loadlock_transition_tag or "LOADLOCK_TRANSITION"
+            return self._fail(f"{action} 불가 — {tag} 진행 중", code="E321")
+        return None
 
     # ================== 공정 중 여부 체크 헬퍼 ==================
     def _fail_if_ch_busy(self, ch: int, action: str) -> Json | None:
