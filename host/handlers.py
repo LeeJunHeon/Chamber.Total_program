@@ -678,6 +678,11 @@ class HostHandlers:
         # ✅ CH별 절차 충돌 방지 락
         lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
         async with lock:
+            # ✅ lock 획득 후 다시 한 번 확인
+            busy = self._fail_if_ch_busy(ch, f"START_SPUTTER_CH{ch}")
+            if busy is not None:
+                return busy
+    
             async with self._plc_command(f"START_SPUTTER_CH{ch}"):
                 self._log_client_request(data)
 
@@ -1250,6 +1255,11 @@ class HostHandlers:
             ch_lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
 
             async with ch_lock:
+                # ✅ 같은 CH 공정 상태를 lock 안에서 다시 확인
+                busy = self._fail_if_ch_busy(ch, f"CH{ch}_GATE_OPEN")
+                if busy is not None:
+                    return busy
+                
                 async with self._loadlock_gate_lock:
                     # ✅ 락 획득 후 다시 한 번 확인
                     busy_ll = self._fail_if_loadlock_transition_busy(f"CH{ch}_GATE_OPEN")
@@ -1357,6 +1367,11 @@ class HostHandlers:
         ch_lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
 
         async with ch_lock:
+            # ✅ lock 획득 후 다시 확인
+            busy = self._fail_if_ch_busy(ch, f"CH{ch}_GATE_CLOSE")
+            if busy is not None:
+                return busy
+
             async with self._loadlock_gate_lock:
                 async with self._plc_command(f"GATE_CLOSE_CH{ch}"):
                     self._log_client_request(data)
@@ -1508,6 +1523,11 @@ class HostHandlers:
         """
         lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
         async with lock:
+            # ✅ lock 획득 후 다시 확인
+            busy = self._fail_if_ch_busy(ch, f"CH{ch}_CHUCK_{target_name.upper()}")
+            if busy is not None:
+                return busy
+    
             async with self._plc_command(f"CHUCK_{target_name.upper()}_CH{ch}"):
                 # 클라이언트 요청에 대응되는 Chuck 이동 파라미터를 남김
                 self._log_client_request({"ch": ch, "target": target_name, "timeout_s": timeout_s})
