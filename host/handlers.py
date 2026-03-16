@@ -847,10 +847,13 @@ class HostHandlers:
                 cleanup_done = True
 
             try:
-                # ✅ gate_open 레이스 방지:
-                #    gate 상태 확인 + 초기 VAC_READY fast-path + pump ON 까지만 잠깐 락
-                async with self.ctx.lock_ch1:
-                    async with self.ctx.lock_ch2:
+                busy = self._fail_if_loadlock_transition_busy("VACUUM_ON")
+                if busy is not None:
+                    return busy
+
+                async with self._loadlock_transition_lock:
+                    self._loadlock_transition_tag = "VACUUM_ON"
+                    try:
                         ok, msg, code = await self._require_gates_closed()
                         if not ok:
                             return self._fail(msg, code=code)
@@ -908,6 +911,9 @@ class HostHandlers:
                         async with self._plc_call():
                             await self.ctx.plc.write_switch("L_R_P_SW", True)
 
+                    finally:
+                        self._loadlock_transition_tag = None
+
                 # ✅ 펌프 기동 안정화 텀: 5초
                 await asyncio.sleep(5.0)
 
@@ -933,6 +939,16 @@ class HostHandlers:
                 while time.monotonic() < deadline:
                     async with self._plc_call():
                         vac_ready = bool(await self.ctx.plc.read_bit("L_VAC_READY_SW"))
+                        pump_sw = bool(await self.ctx.plc.read_bit("L_R_P_SW"))
+                        valve_sw = bool(await self.ctx.plc.read_bit("L_R_V_SW"))
+
+                    # ✅ READY 전인데 러핑 상태가 중간에 깨졌으면 즉시 실패
+                    if (not vac_ready) and ((not pump_sw) or (not valve_sw)):
+                        return self._fail(
+                            f"VACUUM_ON 실패 — 진행 중 러핑 상태 이탈 "
+                            f"(L_VAC_READY_SW={vac_ready}, L_R_P_SW={pump_sw}, L_R_V_SW={valve_sw})",
+                            code="E312",
+                        )
 
                     # 7-1) READY가 들어오면 handlers가 직접 동일한 순서로 shutdown 수행
                     if vac_ready:
@@ -1009,75 +1025,84 @@ class HostHandlers:
             self._log_client_request(data)
 
             success = False
+
+            busy = self._fail_if_loadlock_transition_busy("VACUUM_OFF")
+            if busy is not None:
+                return busy
+    
             try:
-                # ✅ gate_open 레이스 방지: VENT_SW TRUE 쓰기 전까지만 잠깐 락
-                async with self.ctx.lock_ch1:
-                    async with self.ctx.lock_ch2:
-                        ok, msg, code = await self._require_gates_closed()
-                        if not ok:
-                            return self._fail(msg, code=code)
-                        
-                        # ✅ (추가) 0) 이미 대기압이면(L_ATM=TRUE) 즉시 성공 응답 (인터락은 이미 확인함)
+                async with self._loadlock_transition_lock:
+                self._loadlock_transition_tag = "VACUUM_OFF"
+                try:
+                    # ✅ gate_open 레이스 방지: VENT_SW TRUE 쓰기 전까지만 잠깐 락
+                    ok, msg, code = await self._require_gates_closed()
+                    if not ok:
+                        return self._fail(msg, code=code)
+                            
+                    # ✅ (추가) 0) 이미 대기압이면(L_ATM=TRUE) 즉시 성공 응답 (인터락은 이미 확인함)
+                    async with self._plc_call():
+                        atm_now = bool(await self.ctx.plc.read_bit("L_ATM"))
+                    if atm_now:
+                        # ✅ 이미 대기압이어도 'VACUUM_OFF 종료 상태'를 맞춰주고 응답
                         async with self._plc_call():
-                            atm_now = bool(await self.ctx.plc.read_bit("L_ATM"))
-                        if atm_now:
-                            # ✅ 이미 대기압이어도 'VACUUM_OFF 종료 상태'를 맞춰주고 응답
-                            async with self._plc_call():
-                                await self.ctx.plc.write_switch("L_VENT_SW", False)
-                                await self.ctx.plc.write_switch("L_R_V_SW", False)
-                            await asyncio.sleep(5.0)
-                            async with self._plc_call():
-                                await self.ctx.plc.write_switch("L_R_P_SW", False)
-
-                            success = True
-                            return self._ok("VACUUM_OFF: 이미 대기압 상태 (L_ATM=TRUE)")
-
-                        # 0) 러핑밸브/펌프 OFF
-                        async with self._plc_call():
+                            await self.ctx.plc.write_switch("L_VENT_SW", False)
                             await self.ctx.plc.write_switch("L_R_V_SW", False)
-
                         await asyncio.sleep(5.0)
-
                         async with self._plc_call():
                             await self.ctx.plc.write_switch("L_R_P_SW", False)
 
-                        # 1) 벤트 인터락 확인
-                        async with self._plc_call():
-                            if not await self.ctx.plc.read_bit("L_VENT_인터락"):
-                                return self._fail(
-                                    "L_VENT_인터락=FALSE → 벤트 불가",
-                                    code="E311",
-                                )
+                        success = True
+                        return self._ok("VACUUM_OFF: 이미 대기압 상태 (L_ATM=TRUE)")
 
-                        # 2) 벤트 ON  ← 여기까지 오면 gate_open이 이제 확실히 차단됨(L_VENT_SW TRUE)
-                        async with self._plc_call():
-                            await self.ctx.plc.write_switch("L_VENT_SW", True)
-
-                # 3) L_ATM TRUE 대기 (폴링 루프는 락 없이, 읽을 때만 짧게)
-                deadline = time.monotonic() + timeout_s
-                while time.monotonic() < deadline:
+                    # 0) 러핑밸브/펌프 OFF
                     async with self._plc_call():
-                        atm = await self.ctx.plc.read_bit("L_ATM")
+                        await self.ctx.plc.write_switch("L_R_V_SW", False)
 
-                    if atm:
-                        # 3-1) 진공 해제 완료 → 벤트 밸브 닫기
+                    await asyncio.sleep(5.0)
+
+                    async with self._plc_call():
+                        await self.ctx.plc.write_switch("L_R_P_SW", False)
+
+                    # 1) 벤트 인터락 확인
+                    async with self._plc_call():
+                        if not await self.ctx.plc.read_bit("L_VENT_인터락"):
+                            return self._fail(
+                                "L_VENT_인터락=FALSE → 벤트 불가",
+                                code="E311",
+                            )
+
+                    # 2) 벤트 ON  ← 여기까지 오면 gate_open이 이제 확실히 차단됨(L_VENT_SW TRUE)
+                    async with self._plc_call():
+                        await self.ctx.plc.write_switch("L_VENT_SW", True)
+
+                    # 3) L_ATM TRUE 대기 (폴링 루프는 락 없이, 읽을 때만 짧게)
+                    deadline = time.monotonic() + timeout_s
+                    while time.monotonic() < deadline:
+                        async with self._plc_call():
+                            atm = await self.ctx.plc.read_bit("L_ATM")
+
+                        if atm:
+                            # 3-1) 진공 해제 완료 → 벤트 밸브 닫기
+                            async with self._plc_call():
+                                await self.ctx.plc.write_switch("L_VENT_SW", False)
+                            success = True
+                            # 3-2) 벤트 OFF까지 처리된 후에 성공 응답
+                            return self._ok("VACUUM_OFF 완료 (L_ATM=TRUE, L_VENT_SW=FALSE)")
+
+                        await asyncio.sleep(0.5)
+
+                    # 4) 타임아웃 → 벤트 OFF 시도 후 실패 응답
+                    with contextlib.suppress(Exception):
                         async with self._plc_call():
                             await self.ctx.plc.write_switch("L_VENT_SW", False)
-                        success = True
-                        # 3-2) 벤트 OFF까지 처리된 후에 성공 응답
-                        return self._ok("VACUUM_OFF 완료 (L_ATM=TRUE, L_VENT_SW=FALSE)")
 
-                    await asyncio.sleep(0.5)
-
-                # 4) 타임아웃 → 벤트 OFF 시도 후 실패 응답
-                with contextlib.suppress(Exception):
-                    async with self._plc_call():
-                        await self.ctx.plc.write_switch("L_VENT_SW", False)
-
-                return self._fail(
-                    f"VACUUM_OFF 타임아웃: {int(timeout_s)}s 내 L_ATM TRUE 미도달 (N2 gas 부족)",
-                    code="E313",
-                )
+                    return self._fail(
+                        f"VACUUM_OFF 타임아웃: {int(timeout_s)}s 내 L_ATM TRUE 미도달 (N2 gas 부족)",
+                        code="E313",
+                    )
+                
+                finally:
+                    self._loadlock_transition_tag = None
 
             except Exception as e:
                 return self._fail(e)
@@ -1217,6 +1242,11 @@ class HostHandlers:
         busy = self._fail_if_ch_busy(ch, f"CH{ch}_GATE_OPEN")
         if busy is not None:
             return busy
+        
+        # 🔹 Loadlock VACUUM_ON / VACUUM_OFF 진행 중이면 Gate Open 금지
+        busy_ll = self._fail_if_loadlock_transition_busy(f"CH{ch}_GATE_OPEN")
+        if busy_ll is not None:
+            return busy_ll
 
         if ch == 1:
             interlock, sw, lamp = "G_V_1_인터락", "G_V_1_OPEN_SW", "G_V_1_OPEN_LAMP"
