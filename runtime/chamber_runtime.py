@@ -1048,22 +1048,24 @@ class ChamberRuntime:
                     self._oes_active = False
                     self._oes_initialized = False  # 다음 런에서 재초기화 시도
                     self.append_log("OES", f"OES 실패: {e!r}")
+
                     if self.chat:
                         with contextlib.suppress(Exception):
                             self.chat.notify_text(f"[OES] 실패: {e!r}")
                             if hasattr(self.chat, "flush"):
                                 self.chat.flush()
-                        self.process_controller.on_oes_failed(
-                            "OES",
-                            e,
-                            code=getattr(e, "code", None) or getattr(e, "error_code", None),
-                            meta={
-                                "stage": "run_measurement",
-                                "ch": self.ch,
-                                "duration_sec": float(duration_sec),
-                                "integration_ms": int(integration_ms),
-                            },
-                        )
+
+                    self.process_controller.on_oes_failed(
+                        "OES",
+                        e,
+                        code=getattr(e, "code", None) or getattr(e, "error_code", None),
+                        meta={
+                            "stage": "run_measurement",
+                            "ch": self.ch,
+                            "duration_sec": float(duration_sec),
+                            "integration_ms": int(integration_ms),
+                        },
+                    )
 
             self._spawn_detached(run())
 
