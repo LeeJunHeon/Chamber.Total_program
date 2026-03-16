@@ -11,6 +11,7 @@ from dataclasses import dataclass
 from enum import Enum
 from time import monotonic_ns
 from typing import Optional, List, Tuple, Dict, Any, Callable
+from errors.app_error import AppError
 from lib.config_common import SHUTDOWN_STEP_TIMEOUT_MS, SHUTDOWN_STEP_GAP_MS, RGA_STEP_TIMEOUT_MS
 from lib import config_ch1, config_ch2
 
@@ -151,31 +152,33 @@ class ProcessStep:
     def __post_init__(self):
         if self.action == ActionType.DELAY:
             if self.duration is None:
-                raise ValueError("DELAY 액션은 duration이 필요합니다.")
+                raise AppError(code="E214", detail="DELAY 액션은 duration이 필요합니다.")
             if self.parallel:
-                raise ValueError("DELAY는 병렬 블록에 포함할 수 없습니다.")
-        if self.action in (ActionType.DC_POWER_SET, ActionType.RF_POWER_SET, ActionType.IG_CMD, ActionType.DC_PULSE_SET, ActionType.RF_PULSE_SET):
-            if self.value is None:
-                raise ValueError(f"{self.action.name} 액션은 value가 필요합니다.")
+                raise AppError(code="E215", detail="DELAY는 병렬 블록에 포함할 수 없습니다.")
+
         if self.action == ActionType.PLC_CMD:
             if not self.params or len(self.params) not in (2, 3):
-                raise ValueError("PLC_CMD params는 (name:str, on:any[, ch:int]) 형태여야 합니다.")
+                raise AppError(code="E216", detail="PLC_CMD params는 (name:str, on:any[, ch:int]) 형태여야 합니다.")
+
         if self.action == ActionType.MFC_CMD:
             if not self.params or len(self.params) != 2 or not isinstance(self.params[1], dict):
-                raise ValueError("MFC_CMD params는 (cmd:str, args:dict) 형태여야 합니다.")
+                raise AppError(code="E217", detail="MFC_CMD params는 (cmd:str, args:dict) 형태여야 합니다.")
+
         if self.action == ActionType.OES_RUN:
             if not self.params or len(self.params) != 2:
-                raise ValueError("OES_RUN params는 (process_time_sec:float, integration_ms:int) 형태여야 합니다.")
+                raise AppError(code="E218", detail="OES_RUN params는 (process_time_sec:float, integration_ms:int) 형태여야 합니다.")
+
         if self.action == ActionType.DC_PULSE_START:
             if self.value is None:
-                raise ValueError("DC_PULSE_START에는 value(타깃 파워)가 필요합니다.")
+                raise AppError(code="E219", detail="DC_PULSE_START에는 value(타깃 파워)가 필요합니다.")
             if not self.params or len(self.params) != 2:
-                raise ValueError("DC_PULSE_START params는 (freqkHz|None, duty%|None) 형태여야 합니다.")
+                raise AppError(code="E221", detail="DC_PULSE_START params는 (freqkHz|None, duty%|None) 형태여야 합니다.")
+
         if self.action == ActionType.RF_PULSE_START:
             if self.value is None:
-                raise ValueError("RF_PULSE_START에는 value(타깃 파워)가 필요합니다.")
+                raise AppError(code="E220", detail="RF_PULSE_START에는 value(타깃 파워)가 필요합니다.")
             if not self.params or len(self.params) != 2:
-                raise ValueError("RF_PULSE_START params는 (freqkHz|None, duty%|None) 형태로 받고 내부에서 Hz로 변환합니다.")
+                raise AppError(code="E222", detail="RF_PULSE_START params는 (freqkHz|None, duty%|None) 형태로 받고 내부에서 Hz로 변환합니다.")
 
 
 # =========================
@@ -285,6 +288,12 @@ class ProcessController:
     
         # ✅ 추가: 런타임 실패 전파 플래그
         self._process_failed: bool = False
+
+        # ✅ 추가: 대표 실패 정보(첫 실패 원인 보존)
+        self._last_error_code: str | None = None
+        self._last_error_source: str | None = None
+        self._last_error_detail: str = ""
+        self._last_error_meta: Dict[str, Any] = {}
 
         # 대기/카운트다운
         self._countdown_task: Optional[asyncio.Task] = None
@@ -398,6 +407,12 @@ class ProcessController:
 
             # ✅ 추가: 이번 런은 실패 아님으로 초기화
             self._process_failed = False
+
+            # ✅ 추가: 대표 실패 초기화
+            self._last_error_code = None
+            self._last_error_source = None
+            self._last_error_detail = ""
+            self._last_error_meta = {}
 
             self.is_running = True
             # ✅ 이전 런의 abort 상태 초기화
@@ -522,6 +537,11 @@ class ProcessController:
 
         # ✅ 추가: 리셋 시에도 초기화
         self._process_failed = False
+
+        self._last_error_code = None
+        self._last_error_source = None
+        self._last_error_detail = ""
+        self._last_error_meta = {}
         
         # 폴링 캐시 초기화
         self._last_polling_active = None
@@ -541,34 +561,72 @@ class ProcessController:
     def on_mfc_confirmed(self, cmd: str) -> None:
         self._match_token(ExpectToken("MFC", cmd))
 
-    def on_mfc_failed(self, cmd: str, why: str) -> None:
+    def on_mfc_failed(
+        self,
+        cmd: str,
+        why: str | BaseException,
+        *,
+        code: str | None = None,
+        meta: Dict[str, Any] | None = None,
+    ) -> None:
         incoming = ExpectToken("MFC", cmd)
 
-        # ✅ 현재 스텝이 기다리던 MFC라면: 공정 실패 처리
+        merged_meta = {"cmd": cmd}
+        if isinstance(meta, dict):
+            merged_meta.update(meta)
+
         if self._expect_group and self._expect_group.needs(incoming):
-            self._step_failed("MFC", f"{cmd}: {why}")
+            self._step_failed("MFC", why, code=code, meta=merged_meta)
             return
 
-        # ✅ 현재 스텝과 무관한 실패는 경고만
-        self._emit_log("MFC", f"경고(무시): {cmd}: {why} (현재 스텝과 무관)")
+        err_code, err_detail, _ = self._normalize_error_info(why, code=code, meta=merged_meta)
+        if err_code:
+            self._emit_log("MFC", f"경고(무시): {cmd}: {err_code} - {err_detail} (현재 스텝과 무관)")
+        else:
+            self._emit_log("MFC", f"경고(무시): {cmd}: {err_detail} (현재 스텝과 무관)")
 
     def on_plc_confirmed(self, cmd: str) -> None:
         self._match_token(ExpectToken("PLC", cmd))
 
-    def on_plc_failed(self, cmd: str, why: str) -> None:
-        self._step_failed("PLC", f"{cmd}: {why}")
+    def on_plc_failed(
+        self,
+        cmd: str,
+        why: str | BaseException,
+        *,
+        code: str | None = None,
+        meta: Dict[str, Any] | None = None,
+    ) -> None:
+        merged_meta = {"cmd": cmd}
+        if isinstance(meta, dict):
+            merged_meta.update(meta)
+
+        self._step_failed("PLC", why, code=code, meta=merged_meta)
 
     def on_ig_ok(self) -> None:
         self._match_token(ExpectToken("IG_OK"))
 
-    def on_ig_failed(self, src: str, why: str) -> None:
-        self._step_failed(src or "IG", why)
+    def on_ig_failed(
+        self,
+        src: str,
+        why: str | BaseException,
+        *,
+        code: str | None = None,
+        meta: Dict[str, Any] | None = None,
+    ) -> None:
+        self._step_failed(src or "IG", why, code=code, meta=meta)
 
     def on_rga_finished(self) -> None:
         self._match_token(ExpectToken("RGA_OK"))
 
-    def on_rga_failed(self, src: str, why: str) -> None:
-        self._step_failed(src or "RGA", why)
+    def on_rga_failed(
+        self,
+        src: str,
+        why: str | BaseException,
+        *,
+        code: str | None = None,
+        meta: Dict[str, Any] | None = None,
+    ) -> None:
+        self._step_failed(src or "RGA", why, code=code, meta=meta)
 
     def on_dc_target_reached(self) -> None:
         self._match_token(ExpectToken("DC_TARGET"))
@@ -576,8 +634,14 @@ class ProcessController:
     def on_rf_target_reached(self) -> None:
         self._match_token(ExpectToken("RF_TARGET"))
 
-    def on_rf_target_failed(self, why: str) -> None:
-        self._step_failed("RF Power", why or "unknown")
+    def on_rf_target_failed(
+        self,
+        why: str | BaseException,
+        *,
+        code: str | None = None,
+        meta: Dict[str, Any] | None = None,
+    ) -> None:
+        self._step_failed("RF Power", why, code=code, meta=meta)
 
     def on_dc_pulse_target_reached(self) -> None:
         self._match_token(ExpectToken("DC_PULSE_TARGET"))
@@ -588,8 +652,14 @@ class ProcessController:
     def on_dc_pulse_off_finished(self) -> None:
         self._match_token(ExpectToken("DCPULSE_OFF"))
 
-    def on_dc_pulse_failed(self, why: str) -> None:
-        self._step_failed("DCPulse", why or "unknown")
+    def on_dc_pulse_failed(
+        self,
+        why: str | BaseException,
+        *,
+        code: str | None = None,
+        meta: Dict[str, Any] | None = None,
+    ) -> None:
+        self._step_failed("DCPulse", why, code=code, meta=meta)
 
     def on_rf_pulse_target_reached(self) -> None:
         # RF 펄스 타깃 도달은 연속 RF와 동일 판정으로 통일
@@ -598,8 +668,14 @@ class ProcessController:
     def on_rf_pulse_off_finished(self) -> None:
         self._match_token(ExpectToken("RFPULSE_OFF"))
 
-    def on_rf_pulse_failed(self, why: str) -> None:
-        self._step_failed("RFPulse", why or "unknown")
+    def on_rf_pulse_failed(
+        self,
+        why: str | BaseException,
+        *,
+        code: str | None = None,
+        meta: Dict[str, Any] | None = None,
+    ) -> None:
+        self._step_failed("RFPulse", why, code=code, meta=meta)
 
     def on_device_step_ok(self) -> None:
         # 일반 OK는 해당 스텝이 실제로 GENERIC_OK를 요구할 때만 인정
@@ -821,7 +897,11 @@ class ProcessController:
             # Output ON 상태에서 setpoint(REF_POWER)만 변경
             power = float(step.value or 0.0)
             if not self._set_dc_pulse_power:
-                raise RuntimeError("DC_PULSE_SET을 사용하려면 set_dc_pulse_power 콜백이 주입되어야 합니다.")
+                raise AppError(
+                    code="E715",
+                    detail="DC_PULSE_SET을 사용하려면 set_dc_pulse_power 콜백이 주입되어야 합니다.",
+                    meta={"action": "DC_PULSE_SET", "ch": self._ch},
+                )
             self._set_dc_pulse_power(power)
 
             # ✅ 시작(OUTPUT_ON) 완료와, 중간 setpoint 변경(REF_POWER ACK)을 분리해서 기다린다.
@@ -842,7 +922,11 @@ class ProcessController:
             # Output ON 상태에서 setpoint(REF_POWER)만 변경
             power = float(step.value or 0.0)
             if not self._set_rf_pulse_power:
-                raise RuntimeError("RF_PULSE_SET을 사용하려면 set_rf_pulse_power 콜백이 주입되어야 합니다.")
+                raise AppError(
+                    code="E716",
+                    detail="RF_PULSE_SET을 사용하려면 set_rf_pulse_power 콜백이 주입되어야 합니다.",
+                    meta={"action": "RF_PULSE_SET", "ch": self._ch},
+                )
             self._set_rf_pulse_power(power)
 
             # 토큰은 '대기'가 아니라 실패 귀속을 위해 등록만 (스텝 생성 시 no_wait=True)
@@ -878,7 +962,11 @@ class ProcessController:
             # OES는 no_wait로 운용(별도 토큰 없음)
 
         else:
-            raise ValueError(f"알 수 없는 Action: {a}")
+            raise AppError(
+                code="E213",
+                detail=f"알 수 없는 Action: {a}",
+                meta={"action": str(a)},
+            )
 
         return tokens
 
@@ -1033,6 +1121,59 @@ class ProcessController:
             "dc": use_dc and not use_dc_pulse,   # DC 펄스를 쓸 때만 DC 연속 폴링 off
             "rf": use_rf and not use_rf_pulse,   # RF 펄스를 쓸 때만 RF 연속 폴링 off
         }
+    
+
+    def _normalize_error_info(
+        self,
+        reason: str | BaseException,
+        *,
+        code: str | None = None,
+        meta: Dict[str, Any] | None = None,
+    ) -> tuple[str | None, str, Dict[str, Any]]:
+        err_code = code
+        err_detail = ""
+        err_meta: Dict[str, Any] = {}
+
+        if isinstance(reason, BaseException):
+            if err_code is None:
+                err_code = getattr(reason, "code", None) or getattr(reason, "error_code", None)
+
+            err_detail = getattr(reason, "detail", None) or str(reason)
+
+            src_meta = getattr(reason, "meta", None)
+            if isinstance(src_meta, dict):
+                err_meta.update(src_meta)
+
+            err_meta["cause_type"] = type(reason).__name__
+        else:
+            err_detail = "" if reason is None else str(reason)
+
+        if isinstance(meta, dict):
+            err_meta.update(meta)
+
+        err_detail = str(err_detail).strip()
+        if not err_detail:
+            err_detail = "unknown"
+
+        return err_code, err_detail, err_meta
+
+
+    def _remember_primary_error(
+        self,
+        source: str,
+        *,
+        code: str | None,
+        detail: str,
+        meta: Dict[str, Any] | None = None,
+    ) -> None:
+        # 첫 번째 실패만 대표 원인으로 보존
+        if self._last_error_source or self._last_error_detail:
+            return
+
+        self._last_error_code = (str(code).strip().upper() if code else None)
+        self._last_error_source = str(source).strip() or "UNKNOWN"
+        self._last_error_detail = str(detail).strip()
+        self._last_error_meta = dict(meta or {})
 
 
     # =========================
@@ -1086,13 +1227,24 @@ class ProcessController:
             self._emit_log("Process", f"종료 절차 시작 오류: {e}")
             self._finish(False)
 
-    def _step_failed(self, source: str, reason: str) -> None:
+    def _step_failed(
+        self,
+        source: str,
+        reason: str | BaseException,
+        *,
+        code: str | None = None,
+        meta: Dict[str, Any] | None = None,
+    ) -> None:
         if not self.is_running:
             return
 
-        full = f"[{source} - {reason}]"
+        err_code, err_detail, err_meta = self._normalize_error_info(reason, code=code, meta=meta)
 
-        # ⬇️ 추가: 실패를 원 스텝에 귀속
+        if err_code:
+            full = f"[{source} - {err_code}: {err_detail}]"
+        else:
+            full = f"[{source} - {err_detail}]"
+
         owner_idx = self._owner_step_for_source(source)
         if owner_idx is not None and 0 <= owner_idx < len(self.process_sequence):
             owner_step = self.process_sequence[owner_idx]
@@ -1100,9 +1252,16 @@ class ProcessController:
             owner_act  = owner_step.action.name
         else:
             cur = self.current_step
-            owner_idx = self._current_step_idx
             owner_no  = self._current_step_idx + 1
             owner_act = cur.action.name if cur else "UNKNOWN"
+
+        # ✅ 대표 실패 원인은 최초 1회만 저장
+        self._remember_primary_error(
+            source,
+            code=err_code,
+            detail=err_detail,
+            meta=err_meta,
+        )
 
         if self._aborting or self._shutdown_in_progress:
             self._shutdown_error = True
@@ -1113,7 +1272,6 @@ class ProcessController:
                 self._expect_group = None
             return
 
-        # 평시 실패 → 이번 런 실패로 확정 + 원 스텝에 귀속
         self._process_failed = True
         self._shutdown_failures.append(f"Step {owner_no} {owner_act}: {full}")
         self._emit_log("Process", f"오류 발생: {full}. 종료 절차를 시작합니다.")
@@ -1141,11 +1299,17 @@ class ProcessController:
 
         detail = {
             "process_name": proc_name,
-            "result": result,                  # ✅ 추가
+            "result": result,
             "stopped": stopped,
             "aborting": (self._aborting or self._in_emergency),
             "errors": list(self._shutdown_failures),
-            # ✅ 실제 진행 시간(분) 추가
+
+            # ✅ 추가: 대표 실패 정보
+            "error_code": self._last_error_code,
+            "error_source": self._last_error_source,
+            "error_detail": self._last_error_detail,
+            "error_meta": dict(self._last_error_meta or {}),
+
             "actual_shutter_delay_min": round(self._actual_shutter_delay_ms / 60000.0, 3),
             "actual_process_time_min": round(self._actual_process_time_ms / 60000.0, 3),
         }
