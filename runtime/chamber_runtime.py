@@ -896,7 +896,15 @@ class ChamberRuntime:
                 except Exception as e:
                     why = f"DC-Pulse set_reference_power failed: {e!r}"
                     self.append_log("DCPulse", why)
-                    self.process_controller.on_dc_pulse_failed(why)
+                    self.process_controller.on_dc_pulse_failed(
+                        e,
+                        code=getattr(e, "code", None) or getattr(e, "error_code", None),
+                        meta={
+                            "stage": "set_reference_power",
+                            "ch": self.ch,
+                            "power": float(power),
+                        },
+                    )
 
             self._spawn_detached(run())
 
@@ -905,16 +913,40 @@ class ChamberRuntime:
                 if self.dc_pulse:
                     try:
                         await self.dc_pulse.output_off()
-                    except Exception:
-                        self.process_controller.on_dc_pulse_failed("output_off failed")
+                    except Exception as e:
+                        self.append_log("DCPulse", f"output_off failed: {e!r}")
+                        self.process_controller.on_dc_pulse_failed(
+                            e,
+                            code=getattr(e, "code", None) or getattr(e, "error_code", None),
+                            meta={
+                                "stage": "output_off",
+                                "ch": self.ch,
+                            },
+                        )
             self._spawn_detached(run())
 
         def cb_rf_pulse_start(power: float, freq: int | None, duty: int | None) -> None:
             async def run():
                 if not self.rf_pulse:
-                    self.append_log("RFPulse", "RF-Pulse 미지원 챔버입니다."); return
-                self._ensure_background_started()
-                await self.rf_pulse.start_pulse_process(float(power), freq, duty)
+                    self.append_log("RFPulse", "RF-Pulse 미지원 챔버입니다.")
+                    return
+                try:
+                    self._ensure_background_started()
+                    await self.rf_pulse.start_pulse_process(float(power), freq, duty)
+                except Exception as e:
+                    why = f"RF-Pulse start failed: {e!r}"
+                    self.append_log("RFPulse", why)
+                    self.process_controller.on_rf_pulse_failed(
+                        e,
+                        code=getattr(e, "code", None) or getattr(e, "error_code", None),
+                        meta={
+                            "stage": "start_pulse_process",
+                            "ch": self.ch,
+                            "power": float(power),
+                            "freq": freq,
+                            "duty": duty,
+                        },
+                    )
             self._spawn_detached(run())
 
         # ✅ 추가: Output ON 상태에서 RF-Pulse Power setpoint만 변경
@@ -935,7 +967,15 @@ class ChamberRuntime:
                 except Exception as e:
                     why = f"RF-Pulse set_reference_power failed: {e!r}"
                     self.append_log("RFPulse", why)
-                    self.process_controller.on_rf_pulse_failed(why)
+                    self.process_controller.on_rf_pulse_failed(
+                        e,
+                        code=getattr(e, "code", None) or getattr(e, "error_code", None),
+                        meta={
+                            "stage": "set_reference_power",
+                            "ch": self.ch,
+                            "power": float(power),
+                        },
+                    )
 
             self._spawn_detached(run())
 
@@ -1781,7 +1821,15 @@ class ChamberRuntime:
                                 if hasattr(self.chat, "flush"):
                                     self.chat.flush()
 
-                    self.process_controller.on_dc_pulse_failed(why_raw)
+                    self.process_controller.on_dc_pulse_failed(
+                        why_raw,
+                        code=getattr(ev, "code", None) or getattr(ev, "error_code", None),
+                        meta={
+                            "cmd": cmd,
+                            "kind": k,
+                            "ch": self.ch,
+                        },
+                    )
 
             except Exception as e:
                 # 펌프 루프 자체가 죽지 않도록 방어
