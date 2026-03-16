@@ -33,7 +33,7 @@ class Router:
         self._handlers[c] = handler
 
     async def dispatch(self, command: str, data: Json) -> Tuple[str, Json]:
-        c = command.upper().strip()
+        c = _normalize_command(command)
         h = self._handlers.get(c)
 
         if not c:

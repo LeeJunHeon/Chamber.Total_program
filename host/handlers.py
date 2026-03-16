@@ -272,10 +272,22 @@ class HostHandlers:
         else:
             detail = "" if e is None else str(e)
 
-        # 3) meta (있으면 같이 싣기)
+        # 3) meta 병합
         meta: dict[str, Any] = {}
+
+        # 예외 객체가 이미 들고 있는 meta를 먼저 살린다
+        if isinstance(e, BaseException):
+            exc_meta = getattr(e, "meta", None)
+            if isinstance(exc_meta, dict):
+                meta.update(exc_meta)
+
+        # host 명령 태그는 별도로 보존
         if self._current_cmd_tag:
-            meta["cmd"] = self._current_cmd_tag
+            if "cmd" in meta and meta["cmd"] != self._current_cmd_tag:
+                meta["host_cmd"] = self._current_cmd_tag
+            else:
+                meta["cmd"] = self._current_cmd_tag
+
         if self._plc_cmd_file is not None:
             meta["plc_log_file"] = str(self._plc_cmd_file)
 
@@ -685,9 +697,7 @@ class HostHandlers:
                     await chamber.start_with_recipe_string(recipe)
                     return self._ok("SPUTTER START OK", ch=ch)
                 except Exception as e:
-                    code = getattr(e, "code", None) or getattr(e, "error_code", None)
-                    detail = getattr(e, "detail", None) or getattr(e, "message", None) or str(e)
-                    return self._fail(detail, code=code)
+                    return self._fail(e)
 
     async def start_plasma_cleaning(self, data: Json) -> Json:
         """
@@ -724,9 +734,7 @@ class HostHandlers:
                 await pc.start_with_recipe_string(recipe)
                 return self._ok("PLASMA CLEANING START OK")
             except Exception as e:
-                code = getattr(e, "code", None) or getattr(e, "error_code", None)
-                detail = getattr(e, "detail", None) or getattr(e, "message", None) or str(e)
-                return self._fail(detail, code=code)
+                return self._fail(e)
 
     # ================== LoadLock vacuum 제어 ==================
     async def _read_gate_state(self, ch: int) -> dict:
@@ -814,7 +822,8 @@ class HostHandlers:
         - L_R_V_인터락 확인
         - L_R_V_SW=True
         4) timeout까지 폴링:
-        - 폴링 중에는 L_VAC_READY_SW=True만 기다림
+        - 폴링 중에는 L_VAC_READY_SW / L_R_P_SW / L_R_V_SW 를 함께 확인
+        - READY 전인데 L_R_P_SW 또는 L_R_V_SW가 꺼지면 실패
         - L_VAC_READY_SW=True -> L_R_V_SW=False -> 5초 -> L_R_P_SW=False -> 성공
         - timeout 시점에 L_VAC_READY_SW가 끝까지 안 들어왔고 L_VAC_NOT_READY=True면 실패
         5) 실패/예외 시에는 러핑밸브/펌프 OFF 원복
@@ -865,12 +874,10 @@ class HostHandlers:
                             valve_sw_now = bool(await self.ctx.plc.read_bit("L_R_V_SW"))
 
                         if vac_ready_now:
-                            # 정상 상태: READY이고 러핑도 이미 정리됨
                             if (not pump_sw_now) and (not valve_sw_now):
                                 success = True
                                 return self._ok("VACUUM_ON: 이미 L_VAC_READY_SW=TRUE 상태")
 
-                            # 비정상 상태: READY인데 러핑이 남아있음 → 직접 정리 후 성공/실패 판정
                             await _stop_roughing(delay_s=5.0)
 
                             off_deadline = time.monotonic() + 10.0
@@ -911,93 +918,87 @@ class HostHandlers:
                         async with self._plc_call():
                             await self.ctx.plc.write_switch("L_R_P_SW", True)
 
-                    finally:
-                        self._loadlock_transition_tag = None
+                        await asyncio.sleep(5.0)
 
-                # ✅ 펌프 기동 안정화 텀: 5초
-                await asyncio.sleep(5.0)
+                        # 5) 러핑밸브 인터락 확인
+                        async with self._plc_call():
+                            rv_interlock = bool(await self.ctx.plc.read_bit("L_R_V_인터락"))
 
-                # 5) 러핑밸브 인터락 확인
-                async with self._plc_call():
-                    rv_interlock = bool(await self.ctx.plc.read_bit("L_R_V_인터락"))
+                        if not rv_interlock:
+                            await _stop_roughing(delay_s=5.0)
+                            return self._fail(
+                                "L_R_V_인터락=FALSE → 러핑밸브 개방 불가 (L_R_P_SW/L_R_V_SW OFF 처리)",
+                                code="E310",
+                            )
 
-                if not rv_interlock:
-                    # 요청사항:
-                    # 인터락으로 막히면 L_R_P_SW를 꺼야 함
-                    await _stop_roughing(delay_s=5.0)
-                    return self._fail(
-                        "L_R_V_인터락=FALSE → 러핑밸브 개방 불가 (L_R_P_SW/L_R_V_SW OFF 처리)",
-                        code="E310",
-                    )
+                        # 6) 러핑밸브 ON
+                        async with self._plc_call():
+                            await self.ctx.plc.write_switch("L_R_V_SW", True)
 
-                # 6) 러핑밸브 ON
-                async with self._plc_call():
-                    await self.ctx.plc.write_switch("L_R_V_SW", True)
-
-                # 7) timeout까지 폴링
-                deadline = time.monotonic() + timeout_s
-                while time.monotonic() < deadline:
-                    async with self._plc_call():
-                        vac_ready = bool(await self.ctx.plc.read_bit("L_VAC_READY_SW"))
-                        pump_sw = bool(await self.ctx.plc.read_bit("L_R_P_SW"))
-                        valve_sw = bool(await self.ctx.plc.read_bit("L_R_V_SW"))
-
-                    # ✅ READY 전인데 러핑 상태가 중간에 깨졌으면 즉시 실패
-                    if (not vac_ready) and ((not pump_sw) or (not valve_sw)):
-                        return self._fail(
-                            f"VACUUM_ON 실패 — 진행 중 러핑 상태 이탈 "
-                            f"(L_VAC_READY_SW={vac_ready}, L_R_P_SW={pump_sw}, L_R_V_SW={valve_sw})",
-                            code="E312",
-                        )
-
-                    # 7-1) READY가 들어오면 handlers가 직접 동일한 순서로 shutdown 수행
-                    if vac_ready:
-                        await _stop_roughing(delay_s=5.0)
-
-                        # OFF 확인을 짧게 한 번 더 봄
-                        off_deadline = time.monotonic() + 10.0
-                        while time.monotonic() < off_deadline:
+                        # 7) timeout까지 폴링
+                        deadline = time.monotonic() + timeout_s
+                        while time.monotonic() < deadline:
                             async with self._plc_call():
-                                pump_sw2 = bool(await self.ctx.plc.read_bit("L_R_P_SW"))
-                                valve_sw2 = bool(await self.ctx.plc.read_bit("L_R_V_SW"))
+                                vac_ready = bool(await self.ctx.plc.read_bit("L_VAC_READY_SW"))
+                                pump_sw = bool(await self.ctx.plc.read_bit("L_R_P_SW"))
+                                valve_sw = bool(await self.ctx.plc.read_bit("L_R_V_SW"))
 
-                            if (not pump_sw2) and (not valve_sw2):
-                                success = True
-                                return self._ok(
-                                    "VACUUM_ON 완료 — L_VAC_READY_SW=TRUE 확인 후 "
-                                    "L_R_V_SW OFF → 5초 → L_R_P_SW OFF 완료"
+                            if (not vac_ready) and ((not pump_sw) or (not valve_sw)):
+                                return self._fail(
+                                    f"VACUUM_ON 실패 — 진행 중 러핑 상태 이탈 "
+                                    f"(L_VAC_READY_SW={vac_ready}, L_R_P_SW={pump_sw}, L_R_V_SW={valve_sw})",
+                                    code="E312",
+                                )
+
+                            if vac_ready:
+                                await _stop_roughing(delay_s=5.0)
+
+                                off_deadline = time.monotonic() + 10.0
+                                while time.monotonic() < off_deadline:
+                                    async with self._plc_call():
+                                        pump_sw2 = bool(await self.ctx.plc.read_bit("L_R_P_SW"))
+                                        valve_sw2 = bool(await self.ctx.plc.read_bit("L_R_V_SW"))
+
+                                    if (not pump_sw2) and (not valve_sw2):
+                                        success = True
+                                        return self._ok(
+                                            "VACUUM_ON 완료 — L_VAC_READY_SW=TRUE 확인 후 "
+                                            "L_R_V_SW OFF → 5초 → L_R_P_SW OFF 완료"
+                                        )
+
+                                    await asyncio.sleep(0.5)
+
+                                return self._fail(
+                                    "VACUUM_ON 실패 — L_VAC_READY_SW=TRUE였지만 "
+                                    "L_R_P_SW/L_R_V_SW OFF 완료 확인 실패",
+                                    code="E312",
                                 )
 
                             await asyncio.sleep(0.5)
 
+                        # 8) timeout
+                        not_ready = False
+                        try:
+                            async with self._plc_call():
+                                not_ready = bool(await self.ctx.plc.read_bit("L_VAC_NOT_READY"))
+                        except Exception:
+                            pass
+
+                        if not_ready:
+                            return self._fail(
+                                f"VACUUM_ON 실패 — {int(timeout_s)}s 타임아웃 시점까지 "
+                                f"L_VAC_READY_SW=TRUE 미도달, L_VAC_NOT_READY=TRUE",
+                                code="E312",
+                            )
+
                         return self._fail(
-                            "VACUUM_ON 실패 — L_VAC_READY_SW=TRUE였지만 "
-                            "L_R_P_SW/L_R_V_SW OFF 완료 확인 실패",
+                            f"VACUUM_ON 타임아웃 — {int(timeout_s)}s 내 "
+                            f"L_VAC_READY_SW=TRUE 미도달 (L_VAC_NOT_READY=FALSE)",
                             code="E312",
                         )
 
-                    await asyncio.sleep(0.5)
-
-                # 8) timeout
-                not_ready = False
-                try:
-                    async with self._plc_call():
-                        not_ready = bool(await self.ctx.plc.read_bit("L_VAC_NOT_READY"))
-                except Exception:
-                    pass
-
-                if not_ready:
-                    return self._fail(
-                        f"VACUUM_ON 실패 — {int(timeout_s)}s 타임아웃 시점까지 "
-                        f"L_VAC_READY_SW=TRUE 미도달, L_VAC_NOT_READY=TRUE",
-                        code="E312",
-                    )
-
-                return self._fail(
-                    f"VACUUM_ON 타임아웃 — {int(timeout_s)}s 내 "
-                    f"L_VAC_READY_SW=TRUE 미도달 (L_VAC_NOT_READY=FALSE)",
-                    code="E312",
-                )
+                    finally:
+                        self._loadlock_transition_tag = None
 
             except Exception as e:
                 return self._fail(e)
@@ -1011,12 +1012,10 @@ class HostHandlers:
     async def vacuum_off(self, data: Json) -> Json:
         """
         VACUUM OFF 시퀀스:
-        - 긴 대기/폴링 동안에는 PLC 락을 잡지 않도록, I/O 구간만 _plc_call()으로 감싼다.
-        - 예외/타임아웃이 나도 VENT_SW를 가능한 한 False로 되돌리도록 finally 보장.
         0) L_R_V_SW=False → L_R_P_SW=False 선행 정지
         1) L_VENT_인터락 True 확인
         2) L_VENT_SW = True (벤트 시작)
-        3) L_ATM == True 까지 대기 (기본 240s)
+        3) L_ATM == True 까지 대기
         4) L_VENT_SW = False
         """
         timeout_s = float(data.get("timeout_s", 240.0))
@@ -1029,86 +1028,80 @@ class HostHandlers:
             busy = self._fail_if_loadlock_transition_busy("VACUUM_OFF")
             if busy is not None:
                 return busy
-    
+
             try:
                 async with self._loadlock_transition_lock:
-                self._loadlock_transition_tag = "VACUUM_OFF"
-                try:
-                    # ✅ gate_open 레이스 방지: VENT_SW TRUE 쓰기 전까지만 잠깐 락
-                    ok, msg, code = await self._require_gates_closed()
-                    if not ok:
-                        return self._fail(msg, code=code)
-                            
-                    # ✅ (추가) 0) 이미 대기압이면(L_ATM=TRUE) 즉시 성공 응답 (인터락은 이미 확인함)
-                    async with self._plc_call():
-                        atm_now = bool(await self.ctx.plc.read_bit("L_ATM"))
-                    if atm_now:
-                        # ✅ 이미 대기압이어도 'VACUUM_OFF 종료 상태'를 맞춰주고 응답
+                    self._loadlock_transition_tag = "VACUUM_OFF"
+                    try:
+                        ok, msg, code = await self._require_gates_closed()
+                        if not ok:
+                            return self._fail(msg, code=code)
+
+                        # 이미 대기압이면 종료 상태만 맞추고 성공
                         async with self._plc_call():
-                            await self.ctx.plc.write_switch("L_VENT_SW", False)
+                            atm_now = bool(await self.ctx.plc.read_bit("L_ATM"))
+                        if atm_now:
+                            async with self._plc_call():
+                                await self.ctx.plc.write_switch("L_VENT_SW", False)
+                                await self.ctx.plc.write_switch("L_R_V_SW", False)
+                            await asyncio.sleep(5.0)
+                            async with self._plc_call():
+                                await self.ctx.plc.write_switch("L_R_P_SW", False)
+
+                            success = True
+                            return self._ok("VACUUM_OFF: 이미 대기압 상태 (L_ATM=TRUE)")
+
+                        # 0) 러핑밸브/펌프 OFF
+                        async with self._plc_call():
                             await self.ctx.plc.write_switch("L_R_V_SW", False)
+
                         await asyncio.sleep(5.0)
+
                         async with self._plc_call():
                             await self.ctx.plc.write_switch("L_R_P_SW", False)
 
-                        success = True
-                        return self._ok("VACUUM_OFF: 이미 대기압 상태 (L_ATM=TRUE)")
-
-                    # 0) 러핑밸브/펌프 OFF
-                    async with self._plc_call():
-                        await self.ctx.plc.write_switch("L_R_V_SW", False)
-
-                    await asyncio.sleep(5.0)
-
-                    async with self._plc_call():
-                        await self.ctx.plc.write_switch("L_R_P_SW", False)
-
-                    # 1) 벤트 인터락 확인
-                    async with self._plc_call():
-                        if not await self.ctx.plc.read_bit("L_VENT_인터락"):
-                            return self._fail(
-                                "L_VENT_인터락=FALSE → 벤트 불가",
-                                code="E311",
-                            )
-
-                    # 2) 벤트 ON  ← 여기까지 오면 gate_open이 이제 확실히 차단됨(L_VENT_SW TRUE)
-                    async with self._plc_call():
-                        await self.ctx.plc.write_switch("L_VENT_SW", True)
-
-                    # 3) L_ATM TRUE 대기 (폴링 루프는 락 없이, 읽을 때만 짧게)
-                    deadline = time.monotonic() + timeout_s
-                    while time.monotonic() < deadline:
+                        # 1) 벤트 인터락 확인
                         async with self._plc_call():
-                            atm = await self.ctx.plc.read_bit("L_ATM")
+                            if not await self.ctx.plc.read_bit("L_VENT_인터락"):
+                                return self._fail(
+                                    "L_VENT_인터락=FALSE → 벤트 불가",
+                                    code="E311",
+                                )
 
-                        if atm:
-                            # 3-1) 진공 해제 완료 → 벤트 밸브 닫기
+                        # 2) 벤트 ON
+                        async with self._plc_call():
+                            await self.ctx.plc.write_switch("L_VENT_SW", True)
+
+                        # 3) L_ATM TRUE 대기
+                        deadline = time.monotonic() + timeout_s
+                        while time.monotonic() < deadline:
+                            async with self._plc_call():
+                                atm = await self.ctx.plc.read_bit("L_ATM")
+
+                            if atm:
+                                async with self._plc_call():
+                                    await self.ctx.plc.write_switch("L_VENT_SW", False)
+                                success = True
+                                return self._ok("VACUUM_OFF 완료 (L_ATM=TRUE, L_VENT_SW=FALSE)")
+
+                            await asyncio.sleep(0.5)
+
+                        with contextlib.suppress(Exception):
                             async with self._plc_call():
                                 await self.ctx.plc.write_switch("L_VENT_SW", False)
-                            success = True
-                            # 3-2) 벤트 OFF까지 처리된 후에 성공 응답
-                            return self._ok("VACUUM_OFF 완료 (L_ATM=TRUE, L_VENT_SW=FALSE)")
 
-                        await asyncio.sleep(0.5)
+                        return self._fail(
+                            f"VACUUM_OFF 타임아웃: {int(timeout_s)}s 내 L_ATM TRUE 미도달 (N2 gas 부족)",
+                            code="E313",
+                        )
 
-                    # 4) 타임아웃 → 벤트 OFF 시도 후 실패 응답
-                    with contextlib.suppress(Exception):
-                        async with self._plc_call():
-                            await self.ctx.plc.write_switch("L_VENT_SW", False)
-
-                    return self._fail(
-                        f"VACUUM_OFF 타임아웃: {int(timeout_s)}s 내 L_ATM TRUE 미도달 (N2 gas 부족)",
-                        code="E313",
-                    )
-                
-                finally:
-                    self._loadlock_transition_tag = None
+                    finally:
+                        self._loadlock_transition_tag = None
 
             except Exception as e:
                 return self._fail(e)
-            
+
             finally:
-                # ✅ 실패/예외면 벤트 밸브가 열려있는 채로 남지 않게 강제 OFF
                 if not success:
                     with contextlib.suppress(Exception):
                         async with self._plc_call():
@@ -1256,15 +1249,43 @@ class HostHandlers:
             return self._fail(f"지원하지 않는 CH: {ch}", code="E201")
 
         try:
-            async with self.ctx.lock_ch1:
-                async with self.ctx.lock_ch2:
+            ch_lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
+
+            async with ch_lock:
+                async with self._loadlock_gate_lock:
+                    # ✅ 락 획득 후 다시 한 번 확인
+                    busy_ll = self._fail_if_loadlock_transition_busy(f"CH{ch}_GATE_OPEN")
+                    if busy_ll is not None:
+                        return busy_ll
+
                     async with self._plc_command(f"GATE_OPEN_CH{ch}"):
                         self._log_client_request(data)
 
-                        # ✅ (추가) 0) gate lamp 먼저 확인: 이미 OPEN이면 즉시 OK (불필요 동작 방지)
+                        # 0) gate lamp 먼저 확인: 이미 OPEN이면 즉시 OK (불필요 동작 방지)
                         cur_st = await self._read_gate_state(ch)
+
+                        if cur_st["state"] == "invalid_both_true":
+                            return self._fail(
+                                f"CH{ch} gate lamp 이상(OPEN/CLOSE 모두 TRUE): {cur_st}",
+                                code="E306",
+                            )
+
+                        # 1) 먼저 Loadlock 상태 확인
+                        ok_ll, msg_ll = await self._require_loadlock_safe_for_gate_open()
+                        if not ok_ll:
+                            return self._fail(msg_ll, code="E321")
+
+                        # 2) 다른 챔버 gate도 먼저 확인
+                        other = 2 if ch == 1 else 1
+                        other_st = await self._read_gate_state(other)
+                        if other_st["state"] != "closed":
+                            return self._fail(
+                                f"다른 챔버 Gate가 CLOSED가 아님: CH{other}={other_st['state']} → CH{ch}_GATE_OPEN 불가",
+                                code="E303",
+                            )
+
+                        # 3) 여기까지 통과한 뒤에만 '이미 OPEN' fast-path 허용
                         if cur_st["state"] == "open":
-                            # ✅ CH2: gate가 이미 OPEN이어도 main shutter는 OPEN으로 맞춰준다.
                             if ch == 2:
                                 async with self._plc_call():
                                     if not await self.ctx.plc.read_bit("MAIN_SHUTTER_2_인터락"):
@@ -1274,26 +1295,6 @@ class HostHandlers:
                                 return self._ok(f"CH2_GATE_OPEN: 이미 OPEN + MAIN_SHUTTER_OPEN", current=cur_st)
 
                             return self._ok(f"CH{ch}_GATE_OPEN: 이미 OPEN 상태", current=cur_st)
-
-                        if cur_st["state"] == "invalid_both_true":
-                            return self._fail(
-                                f"CH{ch} gate lamp 이상(OPEN/CLOSE 모두 TRUE): {cur_st}",
-                                code="E306",
-                            )
-                        
-                        # ✅ (추가-1) Loadlock이 vacuum on/off 전환 상태인지 체크
-                        ok_ll, msg_ll = await self._require_loadlock_safe_for_gate_open()
-                        if not ok_ll:
-                            return self._fail(msg_ll, code="E321") # ✅ Loadlock 상태로 Gate Open 차단
-
-                        # ✅ (추가-2) 다른 챔버 gate가 열려있거나(또는 closed가 아니면) 금지
-                        other = 2 if ch == 1 else 1
-                        other_st = await self._read_gate_state(other)
-                        if other_st["state"] != "closed":
-                            return self._fail(
-                                f"다른 챔버 Gate가 CLOSED가 아님: CH{other}={other_st['state']} → CH{ch}_GATE_OPEN 불가",
-                                code="E303",
-                            )
 
                         # 1) 인터락 확인 — 읽는 순간만 락
                         async with self._plc_call():
@@ -1328,9 +1329,8 @@ class HostHandlers:
                         return self._ok(f"CH{ch}_GATE_OPEN 완료 — {lamp}=TRUE (대기 {int(wait_s)}s)")
 
         except Exception as e:
-            # gate_open에서 예외는 대부분 PLC I/O/상태조회 계열 → E412로 정규화
             return self._fail(
-                f"CH{ch}_GATE_OPEN 처리 중 예외: {type(e).__name__}: {e}",
+                e,
                 code=getattr(e, "code", None) or "E412",
             )
 
@@ -1356,73 +1356,75 @@ class HostHandlers:
         else:
             return self._fail(f"지원하지 않는 CH: {ch}", code="E201")
 
-        lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
-        async with lock:  # CH 절차 충돌 방지는 유지
-            async with self._plc_command(f"GATE_CLOSE_CH{ch}"):
-                self._log_client_request(data)
-                try:
-                    # ✅ (추가) 0) gate lamp 먼저 확인: 이미 CLOSED면 즉시 OK
-                    cur_st = await self._read_gate_state(ch)
-                    if cur_st["state"] == "closed":
-                        # ✅ CH2: gate가 이미 CLOSED여도 main shutter는 CLOSE로 맞춰준다.
+        ch_lock = self.ctx.lock_ch1 if ch == 1 else self.ctx.lock_ch2
+
+        async with ch_lock:
+            async with self._loadlock_gate_lock:
+                async with self._plc_command(f"GATE_CLOSE_CH{ch}"):
+                    self._log_client_request(data)
+                    try:
+                        # ✅ (추가) 0) gate lamp 먼저 확인: 이미 CLOSED면 즉시 OK
+                        cur_st = await self._read_gate_state(ch)
+                        if cur_st["state"] == "closed":
+                            # ✅ CH2: gate가 이미 CLOSED여도 main shutter는 CLOSE로 맞춰준다.
+                            if ch == 2:
+                                async with self._plc_call():
+                                    await self.ctx.plc.main_shutter(2, open=False)
+                                return self._ok("CH2_GATE_CLOSE: 이미 CLOSED + MAIN_SHUTTER_CLOSE", current=cur_st)
+
+                            return self._ok(f"CH{ch}_GATE_CLOSE: 이미 CLOSED 상태", current=cur_st)
+
+                        if cur_st["state"] == "invalid_both_true":
+                            return self._fail(
+                                f"CH{ch} gate lamp 이상(OPEN/CLOSE 모두 TRUE): {cur_st}",
+                                code="E306",
+                            )
+
+                        # 1) 스위치 펄스 — 쓰는 순간만 락
+                        async with self._plc_call():
+                            await self.ctx.plc.press_switch(sw)
+
+                        # 2) 대기(락 없음)
+                        await asyncio.sleep(wait_s)
+
+                        # 3) 램프 확인 — 읽는 순간만 락
+                        async with self._plc_call():
+                            ok = await self.ctx.plc.read_bit(lamp)
+
+                        # ✅ CH2: gate close 요청이면 마지막에 main shutter close는 best-effort로 시도(안전)
+                        ms_err = None
                         if ch == 2:
-                            async with self._plc_call():
-                                await self.ctx.plc.main_shutter(2, open=False)
-                            return self._ok("CH2_GATE_CLOSE: 이미 CLOSED + MAIN_SHUTTER_CLOSE", current=cur_st)
+                            try:
+                                async with self._plc_call():
+                                    await self.ctx.plc.main_shutter(2, open=False)
+                            except Exception as e:
+                                ms_err = e
 
-                        return self._ok(f"CH{ch}_GATE_CLOSE: 이미 CLOSED 상태", current=cur_st)
+                        if ok:
+                            if ch == 2 and ms_err is not None:
+                                return self._fail(f"CH2_GATE_CLOSE는 성공했지만 MAIN_SHUTTER_CLOSE 실패: {type(ms_err).__name__}: {ms_err}", code="E331")
+                            if ch == 2:
+                                return self._ok(f"CH2_GATE_CLOSE 완료 — {lamp}=TRUE + MAIN_SHUTTER_CLOSE (대기 {int(wait_s)}s)")
+                            return self._ok(f"CH{ch}_GATE_CLOSE 완료 — {lamp}=TRUE (대기 {int(wait_s)}s)")
 
-                    if cur_st["state"] == "invalid_both_true":
-                        return self._fail(
-                            f"CH{ch} gate lamp 이상(OPEN/CLOSE 모두 TRUE): {cur_st}",
-                            code="E306",
-                        )
-
-                    # 1) 스위치 펄스 — 쓰는 순간만 락
-                    async with self._plc_call():
-                        await self.ctx.plc.press_switch(sw)
-
-                    # 2) 대기(락 없음)
-                    await asyncio.sleep(wait_s)
-
-                    # 3) 램프 확인 — 읽는 순간만 락
-                    async with self._plc_call():
-                        ok = await self.ctx.plc.read_bit(lamp)
-
-                    # ✅ CH2: gate close 요청이면 마지막에 main shutter close는 best-effort로 시도(안전)
-                    ms_err = None
-                    if ch == 2:
-                        try:
-                            async with self._plc_call():
-                                await self.ctx.plc.main_shutter(2, open=False)
-                        except Exception as e:
-                            ms_err = e
-
-                    if ok:
+                        # gate close 실패
+                        if ch == 2 and ms_err is None:
+                            return self._fail(
+                                f"CH2_GATE_CLOSE 실패 — {lamp}=FALSE (대기 {int(wait_s)}s) + MAIN_SHUTTER_CLOSE 시도 완료",
+                                code="E305",
+                            )
                         if ch == 2 and ms_err is not None:
-                            return self._fail(f"CH2_GATE_CLOSE는 성공했지만 MAIN_SHUTTER_CLOSE 실패: {type(ms_err).__name__}: {ms_err}", code="E331")
-                        if ch == 2:
-                            return self._ok(f"CH2_GATE_CLOSE 완료 — {lamp}=TRUE + MAIN_SHUTTER_CLOSE (대기 {int(wait_s)}s)")
-                        return self._ok(f"CH{ch}_GATE_CLOSE 완료 — {lamp}=TRUE (대기 {int(wait_s)}s)")
-
-                    # gate close 실패
-                    if ch == 2 and ms_err is None:
+                            return self._fail(
+                                f"CH2_GATE_CLOSE 실패 — {lamp}=FALSE (대기 {int(wait_s)}s) + MAIN_SHUTTER_CLOSE도 실패: {type(ms_err).__name__}: {ms_err}",
+                                code="E331",
+                            )
                         return self._fail(
-                            f"CH2_GATE_CLOSE 실패 — {lamp}=FALSE (대기 {int(wait_s)}s) + MAIN_SHUTTER_CLOSE 시도 완료",
+                            f"CH{ch}_GATE_CLOSE 실패 — {lamp}=FALSE (대기 {int(wait_s)}s)",
                             code="E305",
                         )
-                    if ch == 2 and ms_err is not None:
-                        return self._fail(
-                            f"CH2_GATE_CLOSE 실패 — {lamp}=FALSE (대기 {int(wait_s)}s) + MAIN_SHUTTER_CLOSE도 실패: {type(ms_err).__name__}: {ms_err}",
-                            code="E331",
-                        )
-                    return self._fail(
-                        f"CH{ch}_GATE_CLOSE 실패 — {lamp}=FALSE (대기 {int(wait_s)}s)",
-                        code="E305",
-                    )
 
-                except Exception as e:
-                    return self._fail(e)
+                    except Exception as e:
+                        return self._fail(e)
 
     # ================== CH1,2 chuck 제어 ==================
     async def chuck_up(self, data: Json) -> Json:
@@ -1582,6 +1584,6 @@ class HostHandlers:
                             await self.ctx.plc.write_switch(move_sw, False)
                             await self.ctx.plc.write_switch(power_sw, False)
                     return self._fail(
-                        f"CH{ch} Chuck {target_name.upper()} 처리 중 예외: {type(e).__name__}: {e}",
+                        e,
                         code="E412",
                     )
