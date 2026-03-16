@@ -794,8 +794,19 @@ class ChamberRuntime:
                     except RuntimeError:
                         pass
 
-                    self.process_controller.on_plc_failed(nname, str(e))
-
+                    self.process_controller.on_plc_failed(
+                        nname,
+                        e,
+                        code=getattr(e, "code", None) or getattr(e, "error_code", None),
+                        meta={
+                            "cmd": nname,
+                            "raw_cmd": raw,
+                            "ch": self.ch,
+                            "requested_on": onb,
+                            "op": getattr(e, "op", None),
+                            "addr": getattr(e, "addr", None),
+                        },
+                    )
                     self.append_log("PLC", f"명령 실패: {raw} -> {onb}: {e!r}")
             self._spawn_detached(run())
 
@@ -848,7 +859,17 @@ class ChamberRuntime:
                 except Exception as e:
                     why = f"DC-Pulse start failed: {e!r}"
                     self.append_log("DCPulse", why)
-                    self.process_controller.on_dc_pulse_failed(why)
+                    self.process_controller.on_dc_pulse_failed(
+                        e,
+                        code=getattr(e, "code", None) or getattr(e, "error_code", None),
+                        meta={
+                            "stage": "prepare_and_start",
+                            "ch": self.ch,
+                            "power": float(power),
+                            "freq": freq,
+                            "duty": duty,
+                        },
+                    )
             self._spawn_detached(run())
 
         # ✅ Output ON 상태에서 Power setpoint만 변경
@@ -1437,8 +1458,17 @@ class ChamberRuntime:
             elif k == "command_confirmed":
                 self.process_controller.on_mfc_confirmed(ev.cmd or "")
             elif k == "command_failed":
-                why = ev.reason or "unknown"
-                self.process_controller.on_mfc_failed(ev.cmd or "", why)
+                self.process_controller.on_mfc_failed(
+                    ev.cmd or "",
+                    ev.reason or "unknown",
+                    code=getattr(ev, "code", None) or getattr(ev, "error_code", None),
+                    meta={
+                        "cmd": ev.cmd,
+                        "gas": getattr(ev, "gas", None),
+                        "kind": k,
+                        "ch": self.ch,
+                    },
+                )
                 # 중복 방지: 런타임에서 MFC 장비오류 카드는 전송하지 않음
             elif k == "flow":
                 gas = ev.gas or ""
@@ -1476,8 +1506,16 @@ class ChamberRuntime:
             elif k == "base_reached":
                 self.process_controller.on_ig_ok()
             elif k == "base_failed":
-                why = ev.message or "unknown"
-                self.process_controller.on_ig_failed("IG", why)
+                self.process_controller.on_ig_failed(
+                    "IG",
+                    ev.message or "unknown",
+                    code=getattr(ev, "code", None) or getattr(ev, "error_code", None),
+                    meta={
+                        "kind": k,
+                        "pressure": getattr(ev, "pressure", None),
+                        "ch": self.ch,
+                    },
+                )
                 # 중복 방지: 런타임에서 IG 오류 카드는 전송하지 않음
 
     async def _pump_rga_events(self) -> None:
@@ -1559,9 +1597,20 @@ class ChamberRuntime:
                 self.append_log(f"DC{self.ch}", f"측정: {float(ev.power or 0.0):.1f} W, {float(ev.voltage or 0.0):.1f} V, {float(ev.current or 0.0):.3f} A")
             elif k == "target_reached":
                 self.process_controller.on_dc_target_reached()
-            elif k == "target_failed":                      # ★ 추가: 실패 통지 받으면
-                self._dc_failed_flag = True                 #    실패 플래그 세우고
-                self.process_controller._step_failed("DC Power", ev.message or "low-power")  
+            elif k == "target_failed":
+                self._dc_failed_flag = True
+                self.process_controller._step_failed(
+                    "DC Power",
+                    ev.message or "low-power",
+                    code=getattr(ev, "code", None) or getattr(ev, "error_code", None),
+                    meta={
+                        "kind": k,
+                        "power": getattr(ev, "power", None),
+                        "voltage": getattr(ev, "voltage", None),
+                        "current": getattr(ev, "current", None),
+                        "ch": self.ch,
+                    },
+                )
             elif k == "power_off_finished":
                 if not self._dc_failed_flag:                # ★ 추가: 실패 시에는 OK 토큰(다음 스텝 진행) 차단
                     self.process_controller.on_device_step_ok()
@@ -1586,8 +1635,16 @@ class ChamberRuntime:
             elif k == "target_reached":
                 self.process_controller.on_rf_target_reached()
             elif k == "target_failed":
-                why = ev.message or "unknown"
-                self.process_controller.on_rf_target_failed(why)
+                self.process_controller.on_rf_target_failed(
+                    ev.message or "unknown",
+                    code=getattr(ev, "code", None) or getattr(ev, "error_code", None),
+                    meta={
+                        "kind": k,
+                        "forward": getattr(ev, "forward", None),
+                        "reflected": getattr(ev, "reflected", None),
+                        "ch": self.ch,
+                    },
+                )
             elif k == "power_off_finished":
                 self.process_controller.on_device_step_ok()
 
@@ -1607,8 +1664,15 @@ class ChamberRuntime:
             elif k == "target_reached":
                 self.process_controller.on_rf_pulse_target_reached()
             elif k == "command_failed":
-                why = ev.reason or "unknown"
-                self.process_controller.on_rf_pulse_failed(why)
+                self.process_controller.on_rf_pulse_failed(
+                    ev.reason or "unknown",
+                    code=getattr(ev, "code", None) or getattr(ev, "error_code", None),
+                    meta={
+                        "cmd": getattr(ev, "cmd", None),
+                        "kind": k,
+                        "ch": self.ch,
+                    },
+                )
             elif k == "power_off_finished":
                 self.process_controller.on_rf_pulse_off_finished()
 
@@ -1695,7 +1759,14 @@ class ChamberRuntime:
                                     self.chat.flush()
 
                         self.process_controller.on_dc_pulse_failed(
-                            "OUTPUT_OFF 미확인(출력 상태 미확인)"
+                            "OUTPUT_OFF 미확인(출력 상태 미확인)",
+                            code=getattr(ev, "code", None) or getattr(ev, "error_code", None),
+                            meta={
+                                "cmd": cmd,
+                                "kind": k,
+                                "ch": self.ch,
+                                "safety": "output_state_unconfirmed",
+                            },
                         )
                         continue
 

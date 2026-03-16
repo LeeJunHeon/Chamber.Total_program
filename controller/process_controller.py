@@ -156,6 +156,19 @@ class ProcessStep:
             if self.parallel:
                 raise AppError(code="E215", detail="DELAY는 병렬 블록에 포함할 수 없습니다.")
 
+        # ✅ value 필수 액션은 다시 복구
+        if self.action in (
+            ActionType.DC_POWER_SET,
+            ActionType.RF_POWER_SET,
+            ActionType.IG_CMD,
+            ActionType.DC_PULSE_SET,
+            ActionType.RF_PULSE_SET,
+        ):
+            if self.value is None:
+                # 이 부분은 현재 전용 코드가 명확히 준비된 게 아니므로
+                # 임의 코드 추정 없이 ValueError 유지하는 것이 안전
+                raise ValueError(f"{self.action.name} 액션은 value가 필요합니다.")
+
         if self.action == ActionType.PLC_CMD:
             if not self.params or len(self.params) not in (2, 3):
                 raise AppError(code="E216", detail="PLC_CMD params는 (name:str, on:any[, ch:int]) 형태여야 합니다.")
