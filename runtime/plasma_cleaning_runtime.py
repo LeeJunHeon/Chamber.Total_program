@@ -212,10 +212,19 @@ class PlasmaCleaningRuntime:
             elif k == "command_failed":
                 self.append_log(label, f"FAIL: {ev.cmd or ''} ({ev.reason or 'unknown'})")
 
-                # ▶ 컨트롤러에도 실패 통지 → 컨트롤러가 STOP 플래그 세팅
                 try:
                     if getattr(self, "pc", None):
-                        self.pc.on_mfc_failed(getattr(ev, "cmd", "") or "", getattr(ev, "reason", "") or "unknown")
+                        self.pc.on_mfc_failed(
+                            getattr(ev, "cmd", "") or "",
+                            getattr(ev, "reason", "") or "unknown",
+                            code=getattr(ev, "code", None) or getattr(ev, "error_code", None),
+                            meta={
+                                "kind": k,
+                                "gas": getattr(ev, "gas", None),
+                                "label": label,
+                                "ch": self._selected_ch,
+                            },
+                        )
                 except Exception:
                     pass
 
@@ -293,15 +302,17 @@ class PlasmaCleaningRuntime:
                     pc = getattr(self, "pc", None)
                     if pc is not None:
                         with contextlib.suppress(Exception):
-                            pc.last_result = "fail"
-                            pc.last_reason = reason
-
-                            # ⚠️ 여기서 무조건 request_stop()을 걸면 컨트롤러가 "stop"으로 분류할 수 있음.
-                            #    start 단계(목표 대기 중)에는 _rf_start()가 CancelledError로 끊어주므로 굳이 stop 이벤트를 올릴 필요가 없음.
-                            #    공정 타이머가 이미 활성화된(= 실제 공정 진행 중) 경우에만 정지 신호를 올린다.
-                            if getattr(self, "_process_timer_active", False) and hasattr(pc, "request_stop"):
-                                pc.request_stop()
-                                self.append_log("PC", "RF 실패 감지(공정 중) → PC 컨트롤러에 STOP 요청")
+                            pc.on_rf_failed(
+                                reason,
+                                code=getattr(ev, "code", None) or getattr(ev, "error_code", None),
+                                meta={
+                                    "kind": ev.kind,
+                                    "forward": getattr(ev, "forward", None),
+                                    "reflected": getattr(ev, "reflected", None),
+                                    "ch": self._selected_ch,
+                                },
+                            )
+                            self.append_log("PC", "RF 실패 감지 → PC 컨트롤러에 FAIL 전달")
 
                     # 목표 대기 중인 _rf_start()를 깨움(성공/실패 구분은 _rf_target_ok로)
                     self._rf_target_evt.set()
@@ -622,6 +633,10 @@ class PlasmaCleaningRuntime:
             self._rf_target_reason = ""
             self._rf_target_evt.clear()
 
+            # ✅ 추가: 어떤 경로로 가도 항상 정의되도록 초기화
+            last_fwd = None
+            last_ref = None
+
             await self.rf.start_process(float(power_w))
 
             try:
@@ -653,10 +668,6 @@ class PlasmaCleaningRuntime:
                     self._forced_fail = True
                     self._forced_fail_reason = reason
 
-                    if getattr(self, "pc", None):
-                        self.pc.last_result = "fail"
-                        self.pc.last_reason = reason
-
                     # 안전 정지(램프다운)
                     self._process_timer_active = False
                     with contextlib.suppress(Exception):
@@ -673,9 +684,19 @@ class PlasmaCleaningRuntime:
                 # ★ 이벤트는 왔는데 플래그가 None이면(이상 케이스) 실패로 정리
                 reason = "RF START 실패: target 이벤트 수신했지만 결과 플래그 없음"
                 self.append_log("RF", reason)
+
                 if getattr(self, "pc", None):
-                    self.pc.last_result = "fail"
-                    self.pc.last_reason = reason
+                    self.pc.on_rf_failed(
+                        reason,
+                        meta={
+                            "stage": "_rf_start",
+                            "power_w": float(power_w),
+                            "selected_ch": self._selected_ch,
+                            "last_fwd": last_fwd,
+                            "last_ref": last_ref,
+                        },
+                    )
+
                 self._process_timer_active = False
                 with contextlib.suppress(Exception):
                     await self._safe_rf_stop()
@@ -727,8 +748,16 @@ class PlasmaCleaningRuntime:
                 self._forced_fail_reason = reason
 
                 if getattr(self, "pc", None):
-                    self.pc.last_result = "fail"
-                    self.pc.last_reason = reason
+                    self.pc.on_rf_failed(
+                        reason,
+                        meta={
+                            "stage": "_rf_start",
+                            "power_w": float(power_w),
+                            "selected_ch": self._selected_ch,
+                            "last_fwd": last_fwd,
+                            "last_ref": last_ref,
+                        },
+                    )
 
                 self._process_timer_active = False
                 with contextlib.suppress(Exception):
@@ -744,8 +773,17 @@ class PlasmaCleaningRuntime:
                 self._forced_fail_reason = reason
 
                 if getattr(self, "pc", None):
-                    self.pc.last_result = "fail"
-                    self.pc.last_reason = reason
+                    self.pc.on_rf_failed(
+                        reason,
+                        meta={
+                            "stage": "_rf_start",
+                            "power_w": float(power_w),
+                            "selected_ch": self._selected_ch,
+                            "last_fwd": last_fwd,
+                            "last_ref": last_ref,
+                        },
+                    )
+
                 self._process_timer_active = False
                 with contextlib.suppress(Exception):
                     await self._safe_rf_stop()
@@ -1290,19 +1328,21 @@ class PlasmaCleaningRuntime:
             except Exception as e:
                 exc_reason = f"{type(e).__name__}: {e!s}"
 
-
-            lr = str(getattr(self.pc, "last_result", "") or "").strip().lower()   # "success" | "fail" | "stop"
+            lr = str(getattr(self.pc, "last_result", "") or "").strip().lower()
             ls = str(getattr(self.pc, "last_reason", "") or "").strip()
+            led = str(getattr(self.pc, "last_error_detail", "") or "").strip()
+            lec = getattr(self.pc, "last_error_code", None)
+            lem = dict(getattr(self.pc, "last_error_meta", {}) or {})
 
             # 사용자가 STOP을 눌렀거나 컨트롤러가 'stop'을 준 경우를 모두 STOP으로 간주
             stopped_final = bool(self._stop_requested or lr == "stop")
 
             if exc_reason:
                 ok_final = False
-                final_reason = exc_reason or ls or "runtime/controller error"
+                final_reason = exc_reason or led or ls or "runtime/controller error"
             else:
                 ok_final = (lr == "success")
-                final_reason = (None if ok_final else (ls or "runtime/controller error"))
+                final_reason = (None if ok_final else (led or ls or "runtime/controller error"))
 
             # ★ 추가: RF쪽에서 강제 실패가 확정된 경우(stop으로 오염돼도 failed로 고정)
             if getattr(self, "_forced_fail", False):
@@ -2123,6 +2163,18 @@ class PlasmaCleaningRuntime:
             "status": status,
             "stopped": bool(stopped),
         }
+
+        pc = getattr(self, "pc", None)
+        if pc is not None:
+            if getattr(pc, "last_error_code", None):
+                payload["error_code"] = pc.last_error_code
+            if getattr(pc, "last_error_source", ""):
+                payload["error_source"] = pc.last_error_source
+            if getattr(pc, "last_error_detail", ""):
+                payload["error_detail"] = pc.last_error_detail
+            if getattr(pc, "last_error_meta", None):
+                payload["error_meta"] = dict(pc.last_error_meta)
+
         if reason:
             payload["reason"] = str(reason)
             payload["errors"] = [str(reason)]

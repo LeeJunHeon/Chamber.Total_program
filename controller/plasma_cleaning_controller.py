@@ -99,6 +99,15 @@ class PlasmaCleaningController:
         self.last_result: str = "success"
         self.last_reason: str = ""
 
+        # ✅ 추가: 구조화된 실패 정보
+        self.last_error_code: Optional[str] = None
+        self.last_error_source: str = ""
+        self.last_error_detail: str = ""
+        self.last_error_meta: dict[str, Any] = {}
+
+        # ✅ 추가: MFC 최근 명령 결과 캐시
+        self._last_mfc_cmd_result: tuple[str, bool, str] = ("", True, "")
+
         self._final_notified = False           # ★ 중복발송 가드(권장)
 
     # ─────────────────────────────────────────────────────────────
@@ -144,6 +153,66 @@ class PlasmaCleaningController:
 
         self._stop_evt.set()
 
+    def _normalize_failure(
+        self,
+        reason: str | BaseException,
+        *,
+        code: str | None = None,
+        meta: Optional[dict[str, Any]] = None,
+    ) -> tuple[str | None, str, dict[str, Any]]:
+        err_code = code
+        err_detail = ""
+        err_meta: dict[str, Any] = {}
+
+        if isinstance(reason, BaseException):
+            if err_code is None:
+                err_code = getattr(reason, "code", None) or getattr(reason, "error_code", None)
+
+            err_detail = (
+                getattr(reason, "detail", None)
+                or getattr(reason, "message", None)
+                or str(reason)
+            )
+
+            src_meta = getattr(reason, "meta", None)
+            if isinstance(src_meta, dict):
+                err_meta.update(src_meta)
+
+            err_meta["cause_type"] = type(reason).__name__
+        else:
+            err_detail = str(reason or "").strip()
+
+        if isinstance(meta, dict):
+            err_meta.update(meta)
+
+        if not err_detail:
+            err_detail = "unknown"
+
+        if err_code is not None:
+            err_code = str(err_code).strip().upper() or None
+
+        return err_code, err_detail, err_meta
+
+    def _set_failure(
+        self,
+        source: str,
+        reason: str | BaseException,
+        *,
+        code: str | None = None,
+        meta: Optional[dict[str, Any]] = None,
+        result: str = "fail",
+    ) -> None:
+        err_code, err_detail, err_meta = self._normalize_failure(reason, code=code, meta=meta)
+
+        self.last_result = result
+        self.last_reason = err_detail
+
+        # 최초/최신 실패를 여기에 보존
+        self.last_error_code = err_code
+        self.last_error_source = str(source or "").strip() or "PC"
+        self.last_error_detail = err_detail
+        self.last_error_meta = dict(err_meta or {})
+
     def on_mfc_confirmed(self, cmd: str) -> None:
         self._last_mfc_cmd_result = (cmd, True, "")
         self._log("MFC", f"명령 완료: {cmd}")
@@ -152,16 +221,43 @@ class PlasmaCleaningController:
         if cmd == "FLOW_ON":
             self._mfc_flow_on_evt.set()
 
-    def on_mfc_failed(self, cmd: str, reason: str) -> None:
-        self._last_mfc_cmd_result = (cmd, False, reason)
-        self._log("MFC", f"명령 실패: {cmd} - {reason}")
+    def on_mfc_failed(
+        self,
+        cmd: str,
+        reason: str | BaseException,
+        *,
+        code: str | None = None,
+        meta: Optional[dict[str, Any]] = None,
+    ) -> None:
+        err_code, err_detail, err_meta = self._normalize_failure(
+            reason,
+            code=code,
+            meta={"cmd": cmd, **(meta or {})},
+        )
 
-        # ★ FLOW_ON 실패 시에도 대기중인 쪽을 깨워주기 위해 이벤트 세팅
+        self._last_mfc_cmd_result = (cmd, False, err_detail)
+        self._log("MFC", f"명령 실패: {cmd} - {err_detail}")
+
         if cmd == "FLOW_ON":
             self._mfc_flow_on_evt.set()
 
-        # 실패 시 전체 STOP
-        self.request_stop(reason=f"MFC command failed: {cmd} - {reason}")
+        # ✅ 실패는 stop이 아니라 fail로 기록
+        self._set_failure("MFC", err_detail, code=err_code, meta=err_meta, result="fail")
+
+        # ✅ 공정 루프만 중단 신호
+        self._stop_evt.set()
+
+    def on_rf_failed(
+        self,
+        reason: str | BaseException,
+        *,
+        code: str | None = None,
+        meta: Optional[dict[str, Any]] = None,
+    ) -> None:
+        err_code, err_detail, err_meta = self._normalize_failure(reason, code=code, meta=meta)
+        self._log("RF", f"실패: {err_detail}")
+        self._set_failure("RF", err_detail, code=err_code, meta=err_meta, result="fail")
+        self._stop_evt.set()
 
     # ─────────────────────────────────────────────────────────────
     # 내부 실행 시퀀스
@@ -169,6 +265,11 @@ class PlasmaCleaningController:
     async def _run(self, p: PCParams) -> None:
         self.last_result = "success"
         self.last_reason = ""
+
+        self.last_error_code = None
+        self.last_error_source = ""
+        self.last_error_detail = ""
+        self.last_error_meta = {}
 
         self._stop_evt = asyncio.Event()  # ★ 매 실행마다 초기화
         self.is_running = True
@@ -479,9 +580,7 @@ class PlasmaCleaningController:
             self._log("PC", "CancelledError: 외부 STOP 또는 경쟁 종료로 중단")
 
         except Exception as e:
-            # ★ LOG: 예외 스택 트레이스까지 남김
-            self.last_result = "fail"
-            self.last_reason = f"{type(e).__name__}: {e!s}"
+            self._set_failure("PC", e, result="fail")
             self._log("PC", f"오류: {e!r}\n{traceback.format_exc()}")
         finally:
             self._log("STEP", "종료 시퀀스 진입")  # ★ LOG
