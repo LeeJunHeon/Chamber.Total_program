@@ -644,6 +644,15 @@ class ProcessController:
     def on_dc_target_reached(self) -> None:
         self._match_token(ExpectToken("DC_TARGET"))
 
+    def on_dc_target_failed(
+        self,
+        why: str | BaseException,
+        *,
+        code: str | None = None,
+        meta: Dict[str, Any] | None = None,
+    ) -> None:
+        self._step_failed("DC Power", why, code=code, meta=meta)
+
     def on_rf_target_reached(self) -> None:
         self._match_token(ExpectToken("RF_TARGET"))
 
@@ -698,10 +707,21 @@ class ProcessController:
         # OES는 no_wait로 돌도록 구성(로그만)
         self._emit_log("OES", "OES 측정 종료(정상).")
 
-    def on_oes_failed(self, src: str, why: str) -> None:
-        # OES는 공정 비차단: 로그만 남기고 계속 진행
-        self._emit_log(src or "OES", f"오류 무시하고 계속: {why}")
-        # 혹시 현재 대기가 'GENERIC_OK' 하나만 기다리는 상황이면 통과시켜 준다(있어도/없어도 무해)
+    def on_oes_failed(
+        self,
+        src: str,
+        why: str | BaseException,
+        *,
+        code: str | None = None,
+        meta: Dict[str, Any] | None = None,
+    ) -> None:
+        err_code, err_detail, _ = self._normalize_error_info(why, code=code, meta=meta)
+
+        if err_code:
+            self._emit_log(src or "OES", f"오류 무시하고 계속: {err_code} - {err_detail}")
+        else:
+            self._emit_log(src or "OES", f"오류 무시하고 계속: {err_detail}")
+
         if self._expect_group:
             self._expect_group.match_generic_ok()
 

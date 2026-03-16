@@ -854,7 +854,17 @@ class ChamberRuntime:
                     # (선행 단계에서 이미 연결/워치독이 올라와 있으므로 start()는 생략해도 무방)
                     ok = await self.dc_pulse.prepare_and_start(power_w=float(power), freq=freq, duty=duty)
                     if not ok:
-                        self.process_controller.on_dc_pulse_failed("prepare_and_start failed")
+                        self.process_controller.on_dc_pulse_failed(
+                            "prepare_and_start failed",
+                            meta={
+                                "stage": "prepare_and_start",
+                                "ch": self.ch,
+                                "power": float(power),
+                                "freq": freq,
+                                "duty": duty,
+                                "returned_ok": False,
+                            },
+                        )
                         return
                 except Exception as e:
                     why = f"DC-Pulse start failed: {e!r}"
@@ -984,11 +994,17 @@ class ChamberRuntime:
                 if not self.rf_pulse:
                     return
                 try:
-                    # stop_process는 실제 I/O를 여기서 block하지 않고
-                    # 내부 명령 큐에 RF OFF를 넣는 구조이므로 직접 호출만 하면 충분함
                     self.rf_pulse.stop_process()
                 except Exception as e:
                     self.append_log("RFPulse", f"stop_process failed: {e!r}")
+                    self.process_controller.on_rf_pulse_failed(
+                        e,
+                        code=getattr(e, "code", None) or getattr(e, "error_code", None),
+                        meta={
+                            "stage": "stop_process",
+                            "ch": self.ch,
+                        },
+                    )
             self._spawn_detached(run())
 
         def cb_ig_wait(base_pressure: float) -> None:
@@ -1037,7 +1053,17 @@ class ChamberRuntime:
                             self.chat.notify_text(f"[OES] 실패: {e!r}")
                             if hasattr(self.chat, "flush"):
                                 self.chat.flush()
-                    self.process_controller.on_oes_failed("OES", str(e))
+                        self.process_controller.on_oes_failed(
+                            "OES",
+                            e,
+                            code=getattr(e, "code", None) or getattr(e, "error_code", None),
+                            meta={
+                                "stage": "run_measurement",
+                                "ch": self.ch,
+                                "duration_sec": float(duration_sec),
+                                "integration_ms": int(integration_ms),
+                            },
+                        )
 
             self._spawn_detached(run())
 
@@ -1639,8 +1665,7 @@ class ChamberRuntime:
                 self.process_controller.on_dc_target_reached()
             elif k == "target_failed":
                 self._dc_failed_flag = True
-                self.process_controller._step_failed(
-                    "DC Power",
+                self.process_controller.on_dc_target_failed(
                     ev.message or "low-power",
                     code=getattr(ev, "code", None) or getattr(ev, "error_code", None),
                     meta={
@@ -1892,7 +1917,17 @@ class ChamberRuntime:
                         self._oes_active = False
                         # 실패 시 다음 런에서 init을 다시 시도하도록 캐시 무효화
                         self._oes_initialized = False
-                        self.process_controller.on_oes_failed("OES", msg)
+                        self.process_controller.on_oes_failed(
+                            "OES",
+                            msg,
+                            meta={
+                                "kind": k,
+                                "success": ok,
+                                "csv": out_csv,
+                                "stderr_tail": err_tail,
+                                "ch": self.ch,
+                            },
+                        )
                     continue
 
                 self.append_log(f"OES{self.ch}", f"알 수 없는 이벤트: {ev!r}")
