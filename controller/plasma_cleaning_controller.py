@@ -11,21 +11,20 @@ from typing import Any, Awaitable, Callable, Optional
 # ===== 파라미터 =====
 @dataclass
 class PCParams:
-    gas_idx: int = 3
-    gas_flow_sccm: float = 0.0
-    target_pressure: float = 5.0e-6
-    tol_mTorr: float = 0.2
-    wait_timeout_s: float = 90.0
-    sp4_setpoint_mTorr: float = 2.0
-    rf_power_w: float = 100.0
-    process_time_min: float = 1.0
+    gas_idx: int = 3                    # 사용할 가스 채널 번호
+    gas_flow_sccm: float = 0.0          # 공정 가스 유량(sccm)
+    target_pressure: float = 5.0e-6     # base pressure 목표(Torr)
+    tol_mTorr: float = 0.2              # 압력 허용 오차(mTorr)
+    wait_timeout_s: float = 90.0        # 목표 압력 대기 타임아웃(초)
+    sp4_setpoint_mTorr: float = 2.0     # ACS SP4 설정값(mTorr)
+    rf_power_w: float = 100.0           # RF 파워 설정(W)
+    process_time_min: float = 1.0       # 공정 시간(분)
 
-    # ✅ 하드코딩 제거용 (Config에서 조절)
-    gv_open_lamp_delay_s: float = 5.0     # GV OPEN_SW 후 OPEN_LAMP 확인까지 대기(초)
-    ig_interval_ms: int = 10_000          # IG base wait 체크 주기(ms)
+    gv_open_lamp_delay_s: float = 5.0   # GV OPEN_SW 후 OPEN_LAMP 확인까지 대기(초)
+    ig_interval_ms: int = 10_000        # IG base wait 체크 주기(ms)
 
-    test_mode: bool = False
-    test_duration_sec: Optional[float] = None
+    test_mode: bool = False             # 테스트 모드 사용 여부
+    test_duration_sec: Optional[float] = None  # 테스트 모드 시간(초)
 
 # ===== 컨트롤러 =====
 class PlasmaCleaningController:

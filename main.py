@@ -60,6 +60,7 @@ from runtime.server_page import ServerPage  # ✅ NEW (server_page.py 위치에 
 from lib import config_ch1, config_ch2
 from lib import config_common as cfgc
 from lib import config_local as cfgl  # CHAT_WEBHOOK_URL 로드
+from lib import user_config
 
 # 에러코드 팝업
 from PySide6.QtWidgets import QMessageBox
@@ -131,6 +132,18 @@ class MainWindow(QWidget):
         super().__init__()
         self.ui = Ui_Form()
         self.ui.setupUi(self)
+
+        # ✅ 저장된 user_config를 프로그램 시작 직후 live config에 먼저 반영
+        #    반드시 런타임/장비 객체 생성 전에 실행되어야 함
+        try:
+            self._boot_user_cfg = user_config.load()
+            user_config.apply_overrides(self._boot_user_cfg)
+        except Exception as e:
+            self._boot_user_cfg = None
+            try:
+                print(f"[Config] startup apply failed: {e!r}", file=sys.stderr)
+            except Exception:
+                pass
 
         # ✅ Config 팝업 인스턴스 보관(가비지컬렉션/중복창 방지)
         self._config_dialog = None
