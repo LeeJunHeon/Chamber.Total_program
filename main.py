@@ -148,6 +148,8 @@ class MainWindow(QWidget):
         # ✅ Config 팝업 인스턴스 보관(가비지컬렉션/중복창 방지)
         self._config_dialog = None
         self._cfg_apply_task: Optional[asyncio.Task] = None
+        self._boot_plc_task: Optional[asyncio.Task] = None
+        self._host_task: Optional[asyncio.Task] = None
 
         # ✅ 종료 시퀀스 상태 플래그
         self._closing_started: bool = False
@@ -230,22 +232,29 @@ class MainWindow(QWidget):
             try:
                 await self.plc.connect()
                 self._broadcast_log("PLC", "부팅 시 자동 연결 성공")
+            except asyncio.CancelledError:
+                return
             except Exception as e:
                 self._broadcast_log("PLC", f"부팅 시 자동 연결 실패: {e}")
-            finally:
-                # ✅ PLC COIL CSV 로깅 시작 (NAS 우선/로컬 폴백은 plc.py 내부 처리)
-                try:
-                    await self.plc.start_plc_coil_csv_logger(
-                        interval_s=1.0,
-                        nas_dir=r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CH1&2\CH1&2_PLC",
-                        local_dir=None,
-                        keys=None,  # PLC_COIL_MAP 전체
-                    )
-                    self._broadcast_log("PLC", "PLC COIL CSV 로깅 시작(1s)")
-                except Exception as e:
-                    self._broadcast_log("PLC", f"PLC COIL CSV 로깅 시작 실패: {e!r}")
 
-        self._loop.create_task(_boot_plc())
+            # 종료 시작 후에는 logger를 새로 띄우지 않음
+            if self._closing_started:
+                return
+
+            try:
+                await self.plc.start_plc_coil_csv_logger(
+                    interval_s=1.0,
+                    nas_dir=r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CH1&2\CH1&2_PLC",
+                    local_dir=None,
+                    keys=None,
+                )
+                self._broadcast_log("PLC", "PLC COIL CSV 로깅 시작(1s)")
+            except asyncio.CancelledError:
+                return
+            except Exception as e:
+                self._broadcast_log("PLC", f"PLC COIL CSV 로깅 시작 실패: {e!r}")
+
+        self._boot_plc_task = self._loop.create_task(_boot_plc())
 
         # 로그 루트 (NAS 실패 시 런타임 내부에서 폴백 처리)
         self._log_root = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CH1&2")
@@ -471,7 +480,7 @@ class MainWindow(QWidget):
                     pass
 
         self._netlog = _netlog
-        self._loop.create_task(self._boot_host())
+        self._host_task = self._loop.create_task(self._boot_host())
 
     # ───────────────────────────────────────────────────────────
     def _set_plc_owner(self, ch: Optional[int]) -> None:
@@ -1042,25 +1051,24 @@ class MainWindow(QWidget):
                     pass
 
     async def _shutdown_app_async(self) -> None:
-        # 1) config apply task 정리
-        try:
-            t = getattr(self, "_cfg_apply_task", None)
+        # 1) 시작/적용 task 먼저 정리
+        for attr in ("_cfg_apply_task", "_boot_plc_task", "_host_task"):
+            t = getattr(self, attr, None)
             if t and not t.done():
                 t.cancel()
-                with contextlib.suppress(Exception):
+                with contextlib.suppress(asyncio.CancelledError, Exception):
                     await t
-        except Exception:
-            pass
+            setattr(self, attr, None)
 
         # 2) 외부 제어 서버 종료
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(asyncio.CancelledError, Exception):
             await asyncio.wait_for(self._stop_host(), timeout=3.0)
 
         # 3) PLC COIL CSV logger 종료
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(asyncio.CancelledError, Exception):
             await asyncio.wait_for(self.plc.stop_plc_coil_csv_logger(), timeout=3.0)
 
-        # 4) 런타임 종료는 반드시 "기다린다"
+        # 4) 런타임 종료
         for rt in (
             getattr(self, "pc", None),
             getattr(self, "ch1", None),
@@ -1071,7 +1079,7 @@ class MainWindow(QWidget):
 
             fn_async = getattr(rt, "shutdown_fast_async", None)
             if callable(fn_async):
-                with contextlib.suppress(Exception):
+                with contextlib.suppress(asyncio.CancelledError, Exception):
                     await asyncio.wait_for(fn_async(), timeout=8.0)
             else:
                 fn = getattr(rt, "shutdown_fast", None)
@@ -1079,7 +1087,11 @@ class MainWindow(QWidget):
                     with contextlib.suppress(Exception):
                         fn()
 
-        # 5) Chat notifier 종료
+        # 5) 공유 PLC 종료 (heartbeat / socket / to_thread 정리)
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await asyncio.wait_for(self.plc.close(), timeout=3.0)
+
+        # 6) Chat notifier 종료
         for c in (
             getattr(self, "chat_host", None),
             getattr(self, "chat_ch1", None),
@@ -1091,7 +1103,7 @@ class MainWindow(QWidget):
                 if c:
                     c.shutdown()
 
-        # 6) Qt 로그 핸들러 원복
+        # 7) Qt 로그 핸들러 원복
         with contextlib.suppress(Exception):
             uninstall_qt_message_logging(get_app_logger())
 
@@ -1234,13 +1246,22 @@ class MainWindow(QWidget):
         await self._boot_host()
 
     def request_host_start(self) -> None:
-        self._loop.create_task(self._boot_host())
+        prev = getattr(self, "_host_task", None)
+        if prev and not prev.done():
+            prev.cancel()
+        self._host_task = self._loop.create_task(self._boot_host())
 
     def request_host_stop(self) -> None:
-        self._loop.create_task(self._stop_host())
+        prev = getattr(self, "_host_task", None)
+        if prev and not prev.done():
+            prev.cancel()
+        self._host_task = self._loop.create_task(self._stop_host())
 
     def request_host_restart(self) -> None:
-        self._loop.create_task(self._restart_host())
+        prev = getattr(self, "_host_task", None)
+        if prev and not prev.done():
+            prev.cancel()
+        self._host_task = self._loop.create_task(self._restart_host())
 
     def _append_pc_log_autoscroll(self, msg: str) -> None:
         line = str(msg)
@@ -1339,6 +1360,8 @@ def main() -> int:
     try:
         with loop:
             loop.run_forever()
+    except KeyboardInterrupt:
+        pass
     finally:
         # ✅ closeEvent를 안 타고 빠져나와도 Qt handler 원복
         try:

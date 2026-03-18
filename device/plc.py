@@ -437,6 +437,8 @@ class AsyncPLC:
             self._hb_task.cancel()
             try:
                 await self._hb_task
+            except asyncio.CancelledError:
+                pass
             except Exception:
                 pass
             self._hb_task = None
@@ -1026,6 +1028,8 @@ class AsyncPLC:
             task.cancel()
             try:
                 await task
+            except asyncio.CancelledError:
+                pass
             except Exception:
                 pass
 
