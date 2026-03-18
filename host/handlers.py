@@ -813,28 +813,67 @@ class HostHandlers:
             return False, f"Loadlock 상태로 인해 GATE_OPEN 불가 ({detail})"
         return True, "Loadlock 상태 OK"
 
+    async def _read_loadlock_vacuum_transition_bits(self) -> dict[str, bool]:
+        """
+        VACUUM_ON/VACUUM_OFF 전환 판정용 Loadlock 상태 스냅샷.
+
+        읽는 비트:
+        - L_VAC_READY_SW
+        - L_VAC_NOT_READY
+        - LP_STEP1
+        - LP_STEP2
+        - L_R_P_SW
+        - L_R_V_SW
+
+        주의:
+        - 현재는 개별 read_bit()를 순서대로 호출하는 스냅샷이며,
+        완전한 atomic block read는 아니다.
+        - 대신 polling grace(transition_grace_s / both_off_grace_s)로
+        PLC 전이 시점의 관측 race를 흡수한다.
+        """
+        async with self._plc_call():
+            return {
+                "L_VAC_READY_SW": bool(await self.ctx.plc.read_bit("L_VAC_READY_SW")),
+                "L_VAC_NOT_READY": bool(await self.ctx.plc.read_bit("L_VAC_NOT_READY")),
+                "LP_STEP1": bool(await self.ctx.plc.read_bit("LP_STEP1")),
+                "LP_STEP2": bool(await self.ctx.plc.read_bit("LP_STEP2")),
+                "L_R_P_SW": bool(await self.ctx.plc.read_bit("L_R_P_SW")),
+                "L_R_V_SW": bool(await self.ctx.plc.read_bit("L_R_V_SW")),
+            }
+
     async def vacuum_on(self, data: Json) -> Json:
         """
         VACUUM ON 시퀀스:
         1) gate close 확인
-        2) 이미 L_VAC_READY_SW=True 이면 즉시 성공 응답
+        2) 이미 L_VAC_READY_SW=True 이면 현재 러핑 상태까지 확인
+        - 이미 L_R_P_SW=False, L_R_V_SW=False 이면 즉시 성공
+        - READY는 TRUE인데 러핑이 아직 남아 있으면 러핑 OFF 정리 후 성공
         3) 아니면
         - L_VENT_SW=False
         - L_R_P_SW=True
         - 5초 대기
         - L_R_V_인터락 확인
         - L_R_V_SW=True
-        4) timeout까지 폴링:
-        - 폴링 중에는 L_VAC_READY_SW / L_R_P_SW / L_R_V_SW 를 함께 확인
-        - PLC L_PUMPING 시퀀스상
-        (L_VAC_READY_SW=False, L_R_P_SW=True, L_R_V_SW=False)는
-        LP_STEP2 정상 전이 상태이므로 짧게 허용
-        - 위 상태가 유예시간 내에 L_VAC_READY_SW=True로 이어지지 않으면 실패
-        - READY 전에 L_R_P_SW가 먼저 꺼지거나,
-        READY 전에 L_R_P_SW/L_R_V_SW가 모두 꺼지면 실패
-        - L_VAC_READY_SW=True 확인 후 L_R_V_SW/L_R_P_SW OFF 완료되면 성공
-        - timeout 시점에 L_VAC_READY_SW가 끝까지 안 들어왔고 L_VAC_NOT_READY=True면 실패
-        5) 실패/예외 시에는 러핑밸브/펌프 OFF 원복
+        4) timeout까지 Loadlock 전이 비트 스냅샷을 폴링:
+        - L_VAC_READY_SW
+        - L_VAC_NOT_READY
+        - LP_STEP1
+        - LP_STEP2
+        - L_R_P_SW
+        - L_R_V_SW
+        5) 폴링 판정 원칙:
+        - L_VAC_READY_SW=True 이면 성공 우선
+        - L_VAC_NOT_READY=True 이면 실패 우선
+        - PLC L_PUMPING stop sequence
+            (LP_STEP1 -> 60s 후 L_R_V_SW OFF + LP_STEP2 ON
+            -> 3s 후 L_R_P_SW OFF + L_VAC_READY_SW ON)를 정상 경로로 본다
+        - 따라서 READY 전에 러핑 출력이 일부/전부 OFF로 보여도
+            LP_STEP1/LP_STEP2 진행 중이거나 READY/NOT_READY 반영 race 구간이면
+            짧은 grace 후 재확인한다
+        - READY/NOT_READY 판정 없이 비정상 OFF 상태가 지속되면 실패한다
+        6) READY 확인 후에는 PLC가 러핑 OFF를 스스로 정리하는지 먼저 기다리고,
+        필요할 때만 fallback으로 L_R_V_SW -> delay -> L_R_P_SW 순서로 OFF 정리한다
+        7) 실패/예외 시에는 러핑밸브/펌프 OFF 원복
         """
         timeout_s = float(data.get("timeout_s", 600.0))  # 기본 10분
 
@@ -876,10 +915,10 @@ class HostHandlers:
                             return self._fail(msg, code=code)
 
                         # 1) 이미 ready 상태면 현재 러핑 상태까지 같이 확인
-                        async with self._plc_call():
-                            vac_ready_now = bool(await self.ctx.plc.read_bit("L_VAC_READY_SW"))
-                            pump_sw_now = bool(await self.ctx.plc.read_bit("L_R_P_SW"))
-                            valve_sw_now = bool(await self.ctx.plc.read_bit("L_R_V_SW"))
+                        snap0 = await self._read_loadlock_vacuum_transition_bits()
+                        vac_ready_now = snap0["L_VAC_READY_SW"]
+                        pump_sw_now = snap0["L_R_P_SW"]
+                        valve_sw_now = snap0["L_R_V_SW"]
 
                         if vac_ready_now:
                             if (not pump_sw_now) and (not valve_sw_now):
@@ -947,73 +986,59 @@ class HostHandlers:
                         deadline = time.monotonic() + timeout_s
 
                         # PLC L_PUMPING 문서 기준:
-                        # - LP_STEP1 종료 후 L_R_V_SW가 먼저 OFF
-                        # - LP_STEP2 3초 뒤 L_R_P_SW OFF + L_VAC_READY_SW ON
-                        # 따라서 (vac_ready=False, pump_sw=True, valve_sw=False)는
-                        # 정상 전이 상태로 잠깐 허용해야 한다.
-                        lp_step2_deadline: float | None = None
-                        lp_step2_grace_s = 5.0  # PLC 3초 + 통신/폴링 여유
+                        # - LP_STEP1 -> 60s 후 L_R_V_SW OFF + LP_STEP2 ON
+                        # - LP_STEP2 -> 3s 후 L_R_P_SW OFF + L_VAC_READY_SW ON
+                        # - 장시간 미도달 실패는 L_VAC_NOT_READY로 별도 판정
+                        #
+                        # 따라서 raw coil(L_R_P_SW / L_R_V_SW) 상태만으로 즉시 실패시키지 않고,
+                        # LP_STEP1 / LP_STEP2 / L_VAC_NOT_READY와 함께 본다.
+                        # 특히 READY 직전/직후에는 pump/valve OFF가 먼저 관측될 수 있으므로
+                        # 짧은 grace 후 재확인한다.
+                        transition_deadline: float | None = None
+                        both_off_deadline: float | None = None
+
+                        transition_grace_s = 5.0   # LP_STEP2 3초 + 폴링 여유
+                        both_off_grace_s = 3.0     # READY/NOT_READY 반영 race 흡수용
 
                         while time.monotonic() < deadline:
-                            async with self._plc_call():
-                                vac_ready = bool(await self.ctx.plc.read_bit("L_VAC_READY_SW"))
-                                pump_sw = bool(await self.ctx.plc.read_bit("L_R_P_SW"))
-                                valve_sw = bool(await self.ctx.plc.read_bit("L_R_V_SW"))
+                            snap = await self._read_loadlock_vacuum_transition_bits()
 
-                            if not vac_ready:
-                                # 정상 러핑 진행 중
-                                if pump_sw and valve_sw:
-                                    lp_step2_deadline = None
+                            vac_ready = snap["L_VAC_READY_SW"]
+                            vac_not_ready = snap["L_VAC_NOT_READY"]
+                            lp_step1 = snap["LP_STEP1"]
+                            lp_step2 = snap["LP_STEP2"]
+                            pump_sw = snap["L_R_P_SW"]
+                            valve_sw = snap["L_R_V_SW"]
 
-                                # ✅ PLC 정상 중간 상태(LP_STEP2 진입 직후)
-                                elif pump_sw and (not valve_sw):
-                                    now = time.monotonic()
-                                    if lp_step2_deadline is None:
-                                        lp_step2_deadline = now + lp_step2_grace_s
-                                    elif now >= lp_step2_deadline:
-                                        return self._fail(
-                                            "VACUUM_ON 실패 — LP_STEP2 유예시간 내 "
-                                            "L_VAC_READY_SW=TRUE 미도달 "
-                                            f"(L_VAC_READY_SW={vac_ready}, "
-                                            f"L_R_P_SW={pump_sw}, L_R_V_SW={valve_sw})",
-                                            code="E312",
-                                        )
-
-                                # 비정상: READY 전에 펌프가 먼저 꺼짐
-                                elif (not pump_sw) and valve_sw:
-                                    return self._fail(
-                                        "VACUUM_ON 실패 — READY 전 러핑펌프가 먼저 OFF됨 "
-                                        f"(L_VAC_READY_SW={vac_ready}, "
-                                        f"L_R_P_SW={pump_sw}, L_R_V_SW={valve_sw})",
-                                        code="E312",
-                                    )
-
-                                # 비정상: READY 전에 펌프/밸브가 둘 다 OFF
-                                elif (not pump_sw) and (not valve_sw):
-                                    return self._fail(
-                                        "VACUUM_ON 실패 — READY 전 러핑밸브/펌프가 모두 OFF됨 "
-                                        f"(L_VAC_READY_SW={vac_ready}, "
-                                        f"L_R_P_SW={pump_sw}, L_R_V_SW={valve_sw})",
-                                        code="E312",
-                                    )
-
+                            # 1) 성공 우선
                             if vac_ready:
-                                lp_step2_deadline = None
+                                transition_deadline = None
+                                both_off_deadline = None
+
+                                # 먼저 PLC가 스스로 OFF 정리하는지 짧게 기다린다.
+                                off_deadline = time.monotonic() + 5.0
+                                while time.monotonic() < off_deadline:
+                                    snap2 = await self._read_loadlock_vacuum_transition_bits()
+                                    if (not snap2["L_R_P_SW"]) and (not snap2["L_R_V_SW"]):
+                                        success = True
+                                        return self._ok(
+                                            "VACUUM_ON 완료 — PLC의 L_VAC_READY_SW=TRUE 및 "
+                                            "러핑 OFF 완료 확인"
+                                        )
+                                    await asyncio.sleep(0.2)
+
+                                # PLC가 아직 정리하지 못했을 때만 fallback으로 OFF
                                 await _stop_roughing(delay_s=5.0)
 
                                 off_deadline = time.monotonic() + 10.0
                                 while time.monotonic() < off_deadline:
-                                    async with self._plc_call():
-                                        pump_sw2 = bool(await self.ctx.plc.read_bit("L_R_P_SW"))
-                                        valve_sw2 = bool(await self.ctx.plc.read_bit("L_R_V_SW"))
-
-                                    if (not pump_sw2) and (not valve_sw2):
+                                    snap2 = await self._read_loadlock_vacuum_transition_bits()
+                                    if (not snap2["L_R_P_SW"]) and (not snap2["L_R_V_SW"]):
                                         success = True
                                         return self._ok(
                                             "VACUUM_ON 완료 — L_VAC_READY_SW=TRUE 확인 후 "
-                                            "L_R_V_SW OFF → 5초 → L_R_P_SW OFF 완료"
+                                            "fallback으로 L_R_V_SW/L_R_P_SW OFF 정리 완료"
                                         )
-
                                     await asyncio.sleep(0.5)
 
                                 return self._fail(
@@ -1022,26 +1047,107 @@ class HostHandlers:
                                     code="E312",
                                 )
 
+                            # 2) 실패 우선
+                            if vac_not_ready:
+                                return self._fail(
+                                    "VACUUM_ON 실패 — PLC가 L_VAC_NOT_READY=TRUE로 판정 "
+                                    f"(LP_STEP1={lp_step1}, LP_STEP2={lp_step2}, "
+                                    f"L_R_P_SW={pump_sw}, L_R_V_SW={valve_sw})",
+                                    code="E312",
+                                )
+
+                            # 3) 정상 러핑 진행 중
+                            if pump_sw and valve_sw:
+                                transition_deadline = None
+                                both_off_deadline = None
+
+                            # 4) stop-sequence 진입 또는 그 직전 관측
+                            elif pump_sw and (not valve_sw):
+                                now = time.monotonic()
+                                both_off_deadline = None
+
+                                if transition_deadline is None:
+                                    transition_deadline = now + transition_grace_s
+                                elif now >= transition_deadline:
+                                    return self._fail(
+                                        "VACUUM_ON 실패 — stop-sequence 진입 후 "
+                                        "L_VAC_READY_SW가 유예시간 내 들어오지 않음 "
+                                        f"(LP_STEP1={lp_step1}, LP_STEP2={lp_step2}, "
+                                        f"L_R_P_SW={pump_sw}, L_R_V_SW={valve_sw})",
+                                        code="E312",
+                                    )
+
+                            # 5) READY 직전/직후 폴링 race 흡수
+                            elif (not pump_sw) and (not valve_sw):
+                                now = time.monotonic()
+                                transition_deadline = None
+
+                                if both_off_deadline is None:
+                                    both_off_deadline = now + both_off_grace_s
+                                elif now >= both_off_deadline:
+                                    snap2 = await self._read_loadlock_vacuum_transition_bits()
+
+                                    if snap2["L_VAC_READY_SW"]:
+                                        await asyncio.sleep(0.2)
+                                        continue
+
+                                    if snap2["L_VAC_NOT_READY"]:
+                                        return self._fail(
+                                            "VACUUM_ON 실패 — 러핑 OFF 후 PLC가 "
+                                            "L_VAC_NOT_READY=TRUE로 판정",
+                                            code="E312",
+                                        )
+
+                                    return self._fail(
+                                        "VACUUM_ON 실패 — READY/NOT_READY 판정 없이 "
+                                        "L_R_P_SW/L_R_V_SW 모두 OFF 상태 지속 "
+                                        f"(LP_STEP1={lp_step1}, LP_STEP2={lp_step2})",
+                                        code="E312",
+                                    )
+
+                            # 6) 이 조합은 비정상
+                            elif (not pump_sw) and valve_sw:
+                                return self._fail(
+                                    "VACUUM_ON 실패 — READY 전 러핑펌프가 먼저 OFF됨 "
+                                    f"(LP_STEP1={lp_step1}, LP_STEP2={lp_step2}, "
+                                    f"L_R_P_SW={pump_sw}, L_R_V_SW={valve_sw})",
+                                    code="E312",
+                                )
+
                             await asyncio.sleep(0.5)
 
                         # 8) timeout
-                        not_ready = False
                         try:
-                            async with self._plc_call():
-                                not_ready = bool(await self.ctx.plc.read_bit("L_VAC_NOT_READY"))
+                            snap_timeout = await self._read_loadlock_vacuum_transition_bits()
                         except Exception:
-                            pass
+                            snap_timeout = None
 
-                        if not_ready:
+                        if snap_timeout and snap_timeout["L_VAC_NOT_READY"]:
                             return self._fail(
                                 f"VACUUM_ON 실패 — {int(timeout_s)}s 타임아웃 시점까지 "
-                                f"L_VAC_READY_SW=TRUE 미도달, L_VAC_NOT_READY=TRUE",
+                                "L_VAC_READY_SW=TRUE 미도달, L_VAC_NOT_READY=TRUE "
+                                f"(LP_STEP1={snap_timeout['LP_STEP1']}, "
+                                f"LP_STEP2={snap_timeout['LP_STEP2']}, "
+                                f"L_R_P_SW={snap_timeout['L_R_P_SW']}, "
+                                f"L_R_V_SW={snap_timeout['L_R_V_SW']})",
+                                code="E312",
+                            )
+
+                        if snap_timeout:
+                            return self._fail(
+                                f"VACUUM_ON 타임아웃 — {int(timeout_s)}s 내 "
+                                "L_VAC_READY_SW=TRUE 미도달 "
+                                f"(L_VAC_NOT_READY={snap_timeout['L_VAC_NOT_READY']}, "
+                                f"LP_STEP1={snap_timeout['LP_STEP1']}, "
+                                f"LP_STEP2={snap_timeout['LP_STEP2']}, "
+                                f"L_R_P_SW={snap_timeout['L_R_P_SW']}, "
+                                f"L_R_V_SW={snap_timeout['L_R_V_SW']})",
                                 code="E312",
                             )
 
                         return self._fail(
                             f"VACUUM_ON 타임아웃 — {int(timeout_s)}s 내 "
-                            f"L_VAC_READY_SW=TRUE 미도달 (L_VAC_NOT_READY=FALSE)",
+                            "L_VAC_READY_SW=TRUE 미도달 (상태 스냅샷 읽기 실패)",
                             code="E312",
                         )
 
@@ -1390,9 +1496,12 @@ class HostHandlers:
     async def gate_close(self, data: Json) -> Json:
         """
         CHx_GATE_CLOSE 시퀀스:
+        0) LOADING_{ch}_SENSOR_LAMP 먼저 확인
+           - FALSE면 close 명령을 보내지 않고 즉시 실패
+           - 실패 사유는 응답/로그/chat으로 그대로 전달
         1) G_V_{ch}_CLOSE_SW 펄스
         2) wait_s 후 G_V_{ch}_CLOSE_LAMP 확인
-        (※ gate close는 interlock 체크를 하지 않도록 설계)
+        (※ gate close 자체의 최종 permissive는 PLC 내부에서 다시 판단)
         """
         ch = int(data.get("ch", 1))
         wait_s = float(data.get("wait_s", 5.0))  # 기본 5초
@@ -1403,9 +1512,17 @@ class HostHandlers:
             return busy
 
         if ch == 1:
-            sw, lamp = "G_V_1_CLOSE_SW", "G_V_1_CLOSE_LAMP"
+            sw, lamp, sensor_lamp = (
+                "G_V_1_CLOSE_SW",
+                "G_V_1_CLOSE_LAMP",
+                "LOADING_1_SENSOR_LAMP",
+            )
         elif ch == 2:
-            sw, lamp = "G_V_2_CLOSE_SW", "G_V_2_CLOSE_LAMP"
+            sw, lamp, sensor_lamp = (
+                "G_V_2_CLOSE_SW",
+                "G_V_2_CLOSE_LAMP",
+                "LOADING_2_SENSOR_LAMP",
+            )
         else:
             return self._fail(f"지원하지 않는 CH: {ch}", code="E201")
 
@@ -1437,6 +1554,28 @@ class HostHandlers:
                                 f"CH{ch} gate lamp 이상(OPEN/CLOSE 모두 TRUE): {cur_st}",
                                 code="E306",
                             )
+                        
+                        # 0) gate close permissive용 loading sensor lamp 확인
+                        try:
+                            async with self._plc_call():
+                                sensor_ok = bool(await self.ctx.plc.read_bit(sensor_lamp))
+                        except KeyError as e:
+                            return self._fail(
+                                f"PLC 주소맵에 {sensor_lamp} 키가 없습니다: {e}",
+                                code="E411",
+                            )
+                        except Exception as e:
+                            return self._fail(
+                                e,
+                                code=getattr(e, "code", None) or "E412",
+                            )
+
+                        if not sensor_ok:
+                            return self._fail(
+                                f"CH{ch}_GATE_CLOSE 불가 — {sensor_lamp}=FALSE "
+                                f"(arm/loading sensor 미감지, gate close 명령 미전송)",
+                                code="E305",
+                            )
 
                         # 1) 스위치 펄스 — 쓰는 순간만 락
                         async with self._plc_call():
@@ -1448,6 +1587,7 @@ class HostHandlers:
                         # 3) 램프 확인 — 읽는 순간만 락
                         async with self._plc_call():
                             ok = await self.ctx.plc.read_bit(lamp)
+                            sensor_after = bool(await self.ctx.plc.read_bit(sensor_lamp))
 
                         # ✅ CH2: gate close 요청이면 마지막에 main shutter close는 best-effort로 시도(안전)
                         ms_err = None
@@ -1468,16 +1608,21 @@ class HostHandlers:
                         # gate close 실패
                         if ch == 2 and ms_err is None:
                             return self._fail(
-                                f"CH2_GATE_CLOSE 실패 — {lamp}=FALSE (대기 {int(wait_s)}s) + MAIN_SHUTTER_CLOSE 시도 완료",
+                                f"CH2_GATE_CLOSE 실패 — {lamp}=FALSE, "
+                                f"{sensor_lamp}={sensor_after} (대기 {int(wait_s)}s) "
+                                f"+ MAIN_SHUTTER_CLOSE 시도 완료",
                                 code="E305",
                             )
                         if ch == 2 and ms_err is not None:
                             return self._fail(
-                                f"CH2_GATE_CLOSE 실패 — {lamp}=FALSE (대기 {int(wait_s)}s) + MAIN_SHUTTER_CLOSE도 실패: {type(ms_err).__name__}: {ms_err}",
+                                f"CH2_GATE_CLOSE 실패 — {lamp}=FALSE, "
+                                f"{sensor_lamp}={sensor_after} (대기 {int(wait_s)}s) "
+                                f"+ MAIN_SHUTTER_CLOSE도 실패: {type(ms_err).__name__}: {ms_err}",
                                 code="E331",
                             )
                         return self._fail(
-                            f"CH{ch}_GATE_CLOSE 실패 — {lamp}=FALSE (대기 {int(wait_s)}s)",
+                            f"CH{ch}_GATE_CLOSE 실패 — {lamp}=FALSE, "
+                            f"{sensor_lamp}={sensor_after} (대기 {int(wait_s)}s)",
                             code="E305",
                         )
 
