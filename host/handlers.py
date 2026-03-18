@@ -826,8 +826,13 @@ class HostHandlers:
         - L_R_V_SW=True
         4) timeout까지 폴링:
         - 폴링 중에는 L_VAC_READY_SW / L_R_P_SW / L_R_V_SW 를 함께 확인
-        - READY 전인데 L_R_P_SW 또는 L_R_V_SW가 꺼지면 실패
-        - L_VAC_READY_SW=True -> L_R_V_SW=False -> 5초 -> L_R_P_SW=False -> 성공
+        - PLC L_PUMPING 시퀀스상
+        (L_VAC_READY_SW=False, L_R_P_SW=True, L_R_V_SW=False)는
+        LP_STEP2 정상 전이 상태이므로 짧게 허용
+        - 위 상태가 유예시간 내에 L_VAC_READY_SW=True로 이어지지 않으면 실패
+        - READY 전에 L_R_P_SW가 먼저 꺼지거나,
+        READY 전에 L_R_P_SW/L_R_V_SW가 모두 꺼지면 실패
+        - L_VAC_READY_SW=True 확인 후 L_R_V_SW/L_R_P_SW OFF 완료되면 성공
         - timeout 시점에 L_VAC_READY_SW가 끝까지 안 들어왔고 L_VAC_NOT_READY=True면 실패
         5) 실패/예외 시에는 러핑밸브/펌프 OFF 원복
         """
@@ -940,20 +945,60 @@ class HostHandlers:
 
                         # 7) timeout까지 폴링
                         deadline = time.monotonic() + timeout_s
+
+                        # PLC L_PUMPING 문서 기준:
+                        # - LP_STEP1 종료 후 L_R_V_SW가 먼저 OFF
+                        # - LP_STEP2 3초 뒤 L_R_P_SW OFF + L_VAC_READY_SW ON
+                        # 따라서 (vac_ready=False, pump_sw=True, valve_sw=False)는
+                        # 정상 전이 상태로 잠깐 허용해야 한다.
+                        lp_step2_deadline: float | None = None
+                        lp_step2_grace_s = 5.0  # PLC 3초 + 통신/폴링 여유
+
                         while time.monotonic() < deadline:
                             async with self._plc_call():
                                 vac_ready = bool(await self.ctx.plc.read_bit("L_VAC_READY_SW"))
                                 pump_sw = bool(await self.ctx.plc.read_bit("L_R_P_SW"))
                                 valve_sw = bool(await self.ctx.plc.read_bit("L_R_V_SW"))
 
-                            if (not vac_ready) and ((not pump_sw) or (not valve_sw)):
-                                return self._fail(
-                                    f"VACUUM_ON 실패 — 진행 중 러핑 상태 이탈 "
-                                    f"(L_VAC_READY_SW={vac_ready}, L_R_P_SW={pump_sw}, L_R_V_SW={valve_sw})",
-                                    code="E312",
-                                )
+                            if not vac_ready:
+                                # 정상 러핑 진행 중
+                                if pump_sw and valve_sw:
+                                    lp_step2_deadline = None
+
+                                # ✅ PLC 정상 중간 상태(LP_STEP2 진입 직후)
+                                elif pump_sw and (not valve_sw):
+                                    now = time.monotonic()
+                                    if lp_step2_deadline is None:
+                                        lp_step2_deadline = now + lp_step2_grace_s
+                                    elif now >= lp_step2_deadline:
+                                        return self._fail(
+                                            "VACUUM_ON 실패 — LP_STEP2 유예시간 내 "
+                                            "L_VAC_READY_SW=TRUE 미도달 "
+                                            f"(L_VAC_READY_SW={vac_ready}, "
+                                            f"L_R_P_SW={pump_sw}, L_R_V_SW={valve_sw})",
+                                            code="E312",
+                                        )
+
+                                # 비정상: READY 전에 펌프가 먼저 꺼짐
+                                elif (not pump_sw) and valve_sw:
+                                    return self._fail(
+                                        "VACUUM_ON 실패 — READY 전 러핑펌프가 먼저 OFF됨 "
+                                        f"(L_VAC_READY_SW={vac_ready}, "
+                                        f"L_R_P_SW={pump_sw}, L_R_V_SW={valve_sw})",
+                                        code="E312",
+                                    )
+
+                                # 비정상: READY 전에 펌프/밸브가 둘 다 OFF
+                                elif (not pump_sw) and (not valve_sw):
+                                    return self._fail(
+                                        "VACUUM_ON 실패 — READY 전 러핑밸브/펌프가 모두 OFF됨 "
+                                        f"(L_VAC_READY_SW={vac_ready}, "
+                                        f"L_R_P_SW={pump_sw}, L_R_V_SW={valve_sw})",
+                                        code="E312",
+                                    )
 
                             if vac_ready:
+                                lp_step2_deadline = None
                                 await _stop_roughing(delay_s=5.0)
 
                                 off_deadline = time.monotonic() + 10.0
