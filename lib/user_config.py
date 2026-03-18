@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 import time
 from dataclasses import fields as dc_fields, is_dataclass
 from pathlib import Path
@@ -18,7 +19,13 @@ from typing import Any, Dict, Optional, Tuple, Iterable
 # ============================================================
 
 def _project_root() -> Path:
-    # .../CH_1_2_program/lib/user_config.py -> parents[1] == .../CH_1_2_program
+    # EXE(PyInstaller) 실행 시:
+    #   exe가 있는 폴더를 프로젝트 루트처럼 취급
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+
+    # 소스(.py) 실행 시:
+    #   .../CH_1_2_program/lib/user_config.py -> parents[1] == .../CH_1_2_program
     return Path(__file__).resolve().parents[1]
 
 
