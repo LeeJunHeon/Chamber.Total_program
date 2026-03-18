@@ -3664,6 +3664,11 @@ class ChamberRuntime:
                     duration_s = float(amount) * factor
                     unit_txt = {"s": "초", "m": "분", "h": "시간", "d": "일"}[unit]
 
+                    # ✅ 외부 START_SPUTTER는 "큐 공정이 정상 수락되어 delay 단계에 진입"한 시점도 성공으로 본다.
+                    #    delay-first recipe에서는 실제 preflight가 나중에 실행되므로,
+                    #    여기서 host 응답 future를 먼저 success로 완료해 timeout fail을 막는다.
+                    self._host_report_start(True, f"delay accepted: {amount}{unit_txt}")
+
                     self.append_log("Process", f"[Runner] '{name}' 단계: {amount}{unit_txt} 대기 시작")
                     # 상태 표시 + 카운트다운(취소 가능: STOP이 오면 stage task cancel됨)
                     remain = int(duration_s)
@@ -5353,11 +5358,20 @@ class ChamberRuntime:
             raise RuntimeError("지원하지 않는 레시피 형식입니다. CSV 경로만 허용됩니다.")
 
         # ✅ 시작 가드(=프리플라이트 진입/거절) 결과만 짧게 대기
+        host_start_wait_timeout_s = float(
+            self.cfg._get("CHAMBER_HOST_START_WAIT_TIMEOUT_S", 10.0)
+        )
+
         try:
-            ok, reason = await asyncio.wait_for(self._host_start_future, timeout=10.0)
+            ok, reason = await asyncio.wait_for(
+                self._host_start_future,
+                timeout=host_start_wait_timeout_s,
+            )
         except asyncio.TimeoutError:
-            # 프리플라이트가 호출되지 않은 경우(초기 가드에서 막힘) 대비
-            raise RuntimeError("preflight timeout (start guard 또는 내부 대기로 인해 프리플라이트 미도달)")
+            raise RuntimeError(
+                f"preflight timeout ({host_start_wait_timeout_s:.1f}s) "
+                "(start guard 또는 내부 대기로 인해 프리플라이트 미도달)"
+            )
         finally:
             self._host_start_future = None
 
