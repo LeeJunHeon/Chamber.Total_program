@@ -373,7 +373,7 @@ class MainWindow(QWidget):
                 ch1=None, ch2=self.ch2, chat=None, hh=6, mm=0, parallel=False, ui=self.ui
             )
             self.pre_ch2.set_pc_logger(self._append_pc_log_autoscroll)
-            self.pre_ch2.start_daily()   # ← 프로그램 시작 시 CH2 자동 예약
+            # CH2는 기본 자동 예약하지 않음
             # ─────────────────────────────────────────────────────────────
 
             # ★ 라디오 기본값: CH1 선택
@@ -385,8 +385,8 @@ class MainWindow(QWidget):
 
             # ★ UI 버튼을 메인에서 직접 분기 연결(선택된 챔버만 제어)
             try:
-                self.ui.preSputter_Start_button.clicked.connect(self._on_presputter_start_clicked)
-                self.ui.preSputter_Stop_button.clicked.connect(self._on_presputter_stop_clicked)
+                self.ui.preSputter_Start_button.clicked.connect(self._on_presputter_reserve_clicked)
+                self.ui.preSputter_Stop_button.clicked.connect(self._on_presputter_cancel_clicked)
             except Exception:
                 pass
         except Exception as e:
@@ -1134,13 +1134,13 @@ class MainWindow(QWidget):
         except Exception:
             return 1
 
-    def _on_presputter_start_clicked(self) -> None:
+    def _on_presputter_reserve_clicked(self) -> None:
         ch = self._selected_presputter_ch()
         rt = self.pre_ch1 if ch == 1 else self.pre_ch2
         if rt:
-            rt.schedule_from_ui()  # ← 해당 챔버만 예약 갱신/시작
+            rt.schedule_from_ui()  # ← 해당 챔버만 예약 등록/갱신
 
-    def _on_presputter_stop_clicked(self) -> None:
+    def _on_presputter_cancel_clicked(self) -> None:
         ch = self._selected_presputter_ch()
         rt = self.pre_ch1 if ch == 1 else self.pre_ch2
         if rt:
