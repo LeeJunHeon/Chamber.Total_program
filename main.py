@@ -79,7 +79,8 @@ from util.app_logging import (
     install_asyncio_exception_logging,
     install_warnings_logging,
     install_qt_message_logging,
-    uninstall_qt_message_logging,   # ✅ 추가
+    uninstall_qt_message_logging,
+    install_signal_logging,
     get_app_logger,
 )
 
@@ -1494,6 +1495,7 @@ def main() -> int:
     )
     install_global_exception_hooks(_logger)
     install_warnings_logging(_logger)
+    install_signal_logging(_logger)
 
     app = QApplication(sys.argv)
 

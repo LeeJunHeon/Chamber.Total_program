@@ -10,6 +10,7 @@ r"""
 from __future__ import annotations
 
 import os
+import signal
 import atexit
 import asyncio
 import faulthandler
@@ -69,10 +70,12 @@ def _enable_faulthandler_once(logger: logging.Logger, file_path: Path) -> None:
             return
 
         raw_fp = open(file_path, "a", encoding="utf-8", buffering=1)
-        faulthandler.enable(file=raw_fp, all_threads=True)
+        fault_fp = _FaultTimestampWriter(raw_fp)
+
+        faulthandler.enable(file=fault_fp, all_threads=True)
 
         # logger 객체에 붙여 GC 방지 + 종료 시 닫기
-        setattr(logger, "_vanam_fault_fp", raw_fp)
+        setattr(logger, "_vanam_fault_fp", fault_fp)
 
         _FAULT_ENABLED = True
 
@@ -133,7 +136,7 @@ class _DailyFileHandler(logging.Handler):
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
-            with self._write_lock:            # ✅ 추가
+            with self._write_lock:
                 today = date.today()
                 if today != self._cur_date:
                     self._cur_date = today
@@ -145,11 +148,26 @@ class _DailyFileHandler(logging.Handler):
                     self._open_for_today()
 
                 msg = self.format(record)
-                self._stream.write(msg + "\n")
+
                 try:
+                    self._stream.write(msg + "\n")
                     self._stream.flush()
+                    return
                 except Exception:
-                    pass
+                    # 현재 스트림 쓰기 실패 → 로컬 폴백으로 1회 재오픈 시도
+                    try:
+                        if self._stream:
+                            self._stream.close()
+                    except Exception:
+                        pass
+
+                    self._root = _safe_mkdir(Path.cwd() / "Logs" / "CH1&2" / "ERROR")
+                    self._paths = _build_paths(self._app_name, self._root)
+                    self._stream = open(self._paths.daily_log, "a", encoding=self._encoding, buffering=1)
+
+                    self._stream.write(msg + "\n")
+                    self._stream.flush()
+
         except Exception:
             # 로깅 중 예외는 절대 앱을 죽이면 안 됨
             pass
@@ -433,4 +451,34 @@ def uninstall_qt_message_logging(logger: Optional[logging.Logger] = None) -> Non
     finally:
         _QT_MSG_HANDLER = None
         _QT_PREV_MSG_HANDLER = None
+
+def install_signal_logging(logger: logging.Logger) -> None:
+    """프로세스 종료 신호(SIGINT/SIGTERM/SIGBREAK) 로깅"""
+    candidates = []
+
+    for name in ("SIGINT", "SIGTERM", "SIGBREAK"):
+        sig = getattr(signal, name, None)
+        if sig is not None:
+            candidates.append((name, sig))
+
+    for sig_name, sig_value in candidates:
+        try:
+            prev = signal.getsignal(sig_value)
+
+            def _handler(signum, frame, _sig_name=sig_name, _prev=prev):
+                try:
+                    logger.critical("PROCESS SIGNAL RECEIVED: %s (%s)", _sig_name, signum)
+                except Exception:
+                    pass
+
+                try:
+                    if callable(_prev):
+                        _prev(signum, frame)
+                except Exception:
+                    pass
+
+            signal.signal(sig_value, _handler)
+            logger.info("signal handler installed: %s", sig_name)
+        except Exception:
+            logger.exception("signal handler install failed: %s", sig_name)
 
