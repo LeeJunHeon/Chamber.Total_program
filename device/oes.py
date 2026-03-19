@@ -175,6 +175,7 @@ class OESAsync:
 
         self.is_running: bool = False
         self._proc: Optional[asyncio.subprocess.Process] = None
+        self._init_proc: Optional[asyncio.subprocess.Process] = None
         self._tail_task: Optional[asyncio.Task] = None
         self._stdout_task: Optional[asyncio.Task] = None
         self._stderr_task: Optional[asyncio.Task] = None
@@ -306,6 +307,7 @@ class OESAsync:
                 env=env,
                 creationflags=creationflags,
             )
+            self._init_proc = proc
 
             stderr_task = asyncio.create_task(_drain_stream(proc.stderr, stderr_tail, max_lines=80))
 
@@ -379,6 +381,15 @@ class OESAsync:
             self._init_result = init_obj
             self._init_done = True
             return False
+        
+        except asyncio.CancelledError:
+            if proc is not None and proc.returncode is None:
+                with contextlib.suppress(Exception):
+                    proc.kill()
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(proc.wait(), timeout=5.0)
+            self._init_proc = None
+            raise
 
         except asyncio.TimeoutError:
             if proc is not None and proc.returncode is None:
@@ -405,6 +416,14 @@ class OESAsync:
             await self._status(f"[OES] init EXC: {self._init_error}")
             self._init_done = True
             return False
+
+        finally:
+            if stderr_task is not None:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(stderr_task, timeout=1.0)
+
+            if self._init_proc is proc:
+                self._init_proc = None
         
     # ---------------------------------------------------------------------
     # Daemon mode helpers
@@ -1173,6 +1192,21 @@ class OESAsync:
         if self._daemon_enabled:
             with contextlib.suppress(Exception):
                 await self._shutdown_daemon(graceful=False)
+
+        init_proc = self._init_proc
+        if init_proc and (init_proc.returncode is None):
+            with contextlib.suppress(Exception):
+                init_proc.terminate()
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(init_proc.wait(), timeout=2.0)
+            if init_proc.returncode is None:
+                with contextlib.suppress(Exception):
+                    init_proc.kill()
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(init_proc.wait(), timeout=2.0)
+
+        if self._init_proc is init_proc:
+            self._init_proc = None
 
         # stdout/stderr task 정리
         for name in ("_stdout_task", "_stderr_task"):
