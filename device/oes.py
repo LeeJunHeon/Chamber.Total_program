@@ -279,6 +279,7 @@ class OESAsync:
         stderr_tail: List[str] = []
         init_obj: Optional[dict] = None
         proc: Optional[asyncio.subprocess.Process] = None
+        stderr_task: Optional[asyncio.Task] = None
 
         creationflags = _worker_creationflags()
 
