@@ -55,7 +55,10 @@ class RGAWorkerClient:
         self.default_timeout_s = float(default_timeout_s)
 
         self._q: asyncio.Queue[RGAEvent] = asyncio.Queue()
-        self._connected = True  # chamber_runtime에서 “있으면 pump” 정도로만 사용
+        self._connected = True
+
+        # 현재 실행 중인 worker 프로세스 추적
+        self._proc: Optional[asyncio.subprocess.Process] = None
 
     @staticmethod
     def _main_exe_dir() -> Path:
@@ -101,6 +104,31 @@ class RGAWorkerClient:
                 except Exception:
                     continue
         return None
+    
+    async def _terminate_current_proc(self, *, force_kill: bool = False) -> None:
+        proc = self._proc
+        if proc is None:
+            return
+
+        try:
+            if proc.returncode is None:
+                if not force_kill:
+                    with contextlib.suppress(Exception):
+                        proc.terminate()
+                    with contextlib.suppress(Exception):
+                        await asyncio.wait_for(proc.wait(), timeout=2.0)
+
+                if proc.returncode is None:
+                    with contextlib.suppress(Exception):
+                        proc.kill()
+                    with contextlib.suppress(Exception):
+                        await asyncio.wait_for(proc.wait(), timeout=2.0)
+            else:
+                with contextlib.suppress(Exception):
+                    await asyncio.wait_for(proc.wait(), timeout=0.2)
+        finally:
+            if self._proc is proc:
+                self._proc = None
 
     async def scan_histogram_to_csv(self, timeout_s: Optional[float] = None) -> None:
         """
@@ -115,7 +143,7 @@ class RGAWorkerClient:
             timeout_s = self.default_timeout_s
 
         max_attempts = 3
-        retry_delay_s = 1.0  # 실패 후 재시도 전에 잠깐 쉬기(너무 공격적으로 재시도하면 PC/프로세스가 더 꼬일 수 있음)
+        retry_delay_s = 1.0  # 실패 후 재시도 전에 잠깐 쉬기
 
         creationflags = 0
         if sys.platform.startswith("win"):
@@ -126,74 +154,98 @@ class RGAWorkerClient:
 
         last_fail: Dict[str, Any] = {"message": "unknown"}
 
-        for attempt in range(1, max_attempts + 1):
-            fail: Optional[Dict[str, Any]] = None
-
-            # 1) worker 커맨드 해석
-            try:
-                cmd_base = self._resolve_worker_cmd()
-            except Exception as e:
-                fail = {
-                    "message": f"RGA worker resolve failed: {e!r}",
-                    "attempt": attempt,
-                    "attempts": max_attempts,
-                }
-
-            if fail is None:
-                cmd = [*cmd_base, "--ch", str(self.ch), "--timeout", str(timeout_s)]
-                await self._q.put(
-                    RGAEvent("status", {"message": f"RGA worker attempt {attempt}/{max_attempts} start: {' '.join(cmd)}"})
-                )
-
-                proc = None
+        try:
+            for attempt in range(1, max_attempts + 1):
+                fail: Optional[Dict[str, Any]] = None
+                proc: Optional[asyncio.subprocess.Process] = None
+                cmd: list[str] = []
                 out = ""
                 err = ""
                 returncode = None
 
-                # 2) 프로세스 실행
+                # 1) worker 커맨드 해석
                 try:
-                    proc = await asyncio.create_subprocess_exec(
-                        *cmd,
-                        stdout=asyncio.subprocess.PIPE,
-                        stderr=asyncio.subprocess.PIPE,
-                        stdin=asyncio.subprocess.DEVNULL,
-                        creationflags=creationflags,
-                    )
-                except FileNotFoundError as e:
-                    fail = {
-                        "message": f"RGA worker exec failed: {e!r}",
-                        "attempt": attempt,
-                        "attempts": max_attempts,
-                        "cmd": cmd,
-                    }
+                    cmd_base = self._resolve_worker_cmd()
                 except Exception as e:
                     fail = {
-                        "message": f"RGA worker exec unexpected error: {e!r}",
+                        "message": f"RGA worker resolve failed: {e!r}",
                         "attempt": attempt,
                         "attempts": max_attempts,
-                        "cmd": cmd,
                     }
 
-                # 3) stdout/stderr 수집(+timeout)
                 if fail is None:
+                    cmd = [*cmd_base, "--ch", str(self.ch), "--timeout", str(timeout_s)]
+                    await self._q.put(
+                        RGAEvent(
+                            "status",
+                            {
+                                "message": f"RGA worker attempt {attempt}/{max_attempts} start: {' '.join(cmd)}"
+                            },
+                        )
+                    )
+
+                    # 2) 프로세스 실행
+                    try:
+                        proc = await asyncio.create_subprocess_exec(
+                            *cmd,
+                            stdout=asyncio.subprocess.PIPE,
+                            stderr=asyncio.subprocess.PIPE,
+                            stdin=asyncio.subprocess.DEVNULL,
+                            creationflags=creationflags,
+                        )
+                        self._proc = proc
+                    except FileNotFoundError as e:
+                        fail = {
+                            "message": f"RGA worker exec failed: {e!r}",
+                            "attempt": attempt,
+                            "attempts": max_attempts,
+                            "cmd": cmd,
+                        }
+                    except Exception as e:
+                        fail = {
+                            "message": f"RGA worker exec unexpected error: {e!r}",
+                            "attempt": attempt,
+                            "attempts": max_attempts,
+                            "cmd": cmd,
+                        }
+
+                # 3) stdout/stderr 수집(+timeout)
+                if fail is None and proc is not None:
                     try:
                         out_b, err_b = await asyncio.wait_for(proc.communicate(), timeout=timeout_s)
                         returncode = proc.returncode
                         out = (out_b or b"").decode("utf-8", errors="replace")
                         err = (err_b or b"").decode("utf-8", errors="replace")
-                    except asyncio.TimeoutError:
-                        with contextlib.suppress(Exception):
-                            proc.kill()
-                        with contextlib.suppress(Exception):
-                            await asyncio.wait_for(proc.wait(), timeout=2.0)
 
+                        if self._proc is proc:
+                            self._proc = None
+
+                    except asyncio.TimeoutError:
+                        await self._terminate_current_proc(force_kill=True)
                         fail = {
                             "message": f"RGA worker timeout ({timeout_s}s)",
                             "attempt": attempt,
                             "attempts": max_attempts,
                             "cmd": cmd,
                         }
+
+                    except asyncio.CancelledError:
+                        if self.logger:
+                            try:
+                                self.logger.warning(
+                                    "[RGA] scan task cancelled (ch=%s, attempt=%s/%s)",
+                                    self.ch,
+                                    attempt,
+                                    max_attempts,
+                                )
+                            except Exception:
+                                pass
+
+                        await self._terminate_current_proc(force_kill=True)
+                        raise
+
                     except Exception as e:
+                        await self._terminate_current_proc(force_kill=True)
                         fail = {
                             "message": f"RGA worker communicate error: {e!r}",
                             "attempt": attempt,
@@ -233,34 +285,70 @@ class RGAWorkerClient:
                         mass_axis = payload.get("mass_axis") or []
                         pressures = payload.get("pressures") or []
 
-                        await self._q.put(RGAEvent("data", {"mass_axis": mass_axis, "pressures": pressures, "meta": payload}))
-                        await self._q.put(RGAEvent("finished", {"message": f"RGA scan finished (attempt {attempt}/{max_attempts})"}))
+                        await self._q.put(
+                            RGAEvent(
+                                "data",
+                                {
+                                    "mass_axis": mass_axis,
+                                    "pressures": pressures,
+                                    "meta": payload,
+                                },
+                            )
+                        )
+                        await self._q.put(
+                            RGAEvent(
+                                "finished",
+                                {"message": f"RGA scan finished (attempt {attempt}/{max_attempts})"},
+                            )
+                        )
                         return
 
-            # ===== 실패 처리 =====
-            last_fail = fail or {"message": "unknown", "attempt": attempt, "attempts": max_attempts}
+                # ===== 실패 처리 =====
+                last_fail = fail or {
+                    "message": "unknown",
+                    "attempt": attempt,
+                    "attempts": max_attempts,
+                }
 
-            # ✅ 실패 원인은 로그(파일)에도 남김
-            if self.logger:
-                try:
-                    self.logger.error("[RGA] attempt %s/%s failed: %s | detail=%s",
-                                    attempt, max_attempts, last_fail.get("message"), {k: last_fail.get(k) for k in ("cmd", "returncode")})
-                except Exception:
-                    pass
+                if self.logger:
+                    try:
+                        self.logger.error(
+                            "[RGA] attempt %s/%s failed: %s | detail=%s",
+                            attempt,
+                            max_attempts,
+                            last_fail.get("message"),
+                            {k: last_fail.get(k) for k in ("cmd", "returncode")},
+                        )
+                    except Exception:
+                        pass
 
-            if attempt < max_attempts:
-                # 1~2번째 실패: status만 남기고 재시도 (중요: failed/finished 내보내면 공정이 다음 단계로 넘어가버림)
+                if attempt < max_attempts:
+                    await self._q.put(
+                        RGAEvent(
+                            "status",
+                            {
+                                "message": f"[RGA] attempt {attempt}/{max_attempts} 실패 → 재시도({retry_delay_s}s): {last_fail.get('message')}"
+                            },
+                        )
+                    )
+                    if retry_delay_s > 0:
+                        await asyncio.sleep(retry_delay_s)
+                    continue
+
+                # ✅ 3번째(최종) 실패: 여기서만 failed + finished
+                await self._q.put(RGAEvent("failed", last_fail))
                 await self._q.put(
-                    RGAEvent("status", {"message": f"[RGA] attempt {attempt}/{max_attempts} 실패 → 재시도({retry_delay_s}s): {last_fail.get('message')}"})
+                    RGAEvent(
+                        "finished",
+                        {"message": f"RGA scan finished (failed after {max_attempts})"},
+                    )
                 )
-                if retry_delay_s > 0:
-                    await asyncio.sleep(retry_delay_s)
-                continue
+                return
 
-            # ✅ 3번째(최종) 실패: 여기서만 failed + finished → 런타임이 다음 단계로 진행
-            await self._q.put(RGAEvent("failed", last_fail))
-            await self._q.put(RGAEvent("finished", {"message": f"RGA scan finished (failed after {max_attempts})"}))
-            return
+        except asyncio.CancelledError:
+            # 상위 런타임/프로그램 종료 시 task cancel → worker 잔류 방지
+            await self._terminate_current_proc(force_kill=True)
+            raise
 
     async def events(self) -> AsyncIterator[RGAEvent]:
         # ✅ cleanup 때문에 영구 종료되면 다음 공정에서 RGA finished 신호가 안 올라와서 무한대기함
@@ -269,5 +357,5 @@ class RGAWorkerClient:
             yield ev
 
     async def cleanup(self) -> None:
-        # ✅ 여기서 스트림을 닫지 않는다(외부 pump task cancel로 종료)
-        return
+        # 현재 살아 있는 worker 프로세스가 있으면 종료
+        await self._terminate_current_proc(force_kill=False)
