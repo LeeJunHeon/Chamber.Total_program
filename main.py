@@ -156,6 +156,15 @@ class MainWindow(QWidget):
         self._close_ready: bool = False
         self._close_task: Optional[asyncio.Task] = None
 
+        # ✅ 공정 중 종료 차단 팝업 중복 방지
+        self._close_block_popup_open: bool = False
+
+        # ✅ 종료 확인 팝업 중복 방지
+        self._close_confirm_popup_open: bool = False
+
+        # ✅ 공정 중 종료 시도 dump 중복 방지
+        self._close_block_dumped_once: bool = False
+
         # ✅ Config 적용 정책 컨트롤러
         self._cfg_apply_ctrl = ConfigApplyController()
 
@@ -965,59 +974,112 @@ class MainWindow(QWidget):
                         getattr(cfgc, "PROCESS_DEFAULT_BASE_PRESSURE", 1e-5)))
         )
 
+    def _runtime_is_running(self, obj) -> bool:
+        if not obj:
+            return False
+
+        try:
+            ir = getattr(obj, "is_running", None)
+
+            if callable(ir):
+                return bool(ir())
+
+            if isinstance(ir, bool):
+                return ir
+
+            return bool(getattr(obj, "_running", False))
+        except Exception:
+            return False
+
+    def _active_run_labels(self) -> list[str]:
+        active: list[str] = []
+
+        try:
+            if self._runtime_is_running(getattr(self, "ch1", None)):
+                active.append("CH1 Sputter")
+        except Exception:
+            pass
+
+        try:
+            if self._runtime_is_running(getattr(self, "ch2", None)):
+                active.append("CH2 Sputter")
+        except Exception:
+            pass
+
+        try:
+            if self._runtime_is_running(getattr(self, "pc", None)):
+                ch = getattr(self, "_pc_use_ch", None)
+                if ch in (1, 2):
+                    active.append(f"Plasma Cleaning (CH{ch})")
+                else:
+                    active.append("Plasma Cleaning")
+        except Exception:
+            pass
+
+        try:
+            if runtime_state.is_running("tsp"):
+                active.append("TSP")
+        except Exception:
+            pass
+
+        return list(dict.fromkeys(active))
+
+    def _build_runtime_dump_extra(self) -> dict:
+        extra = {
+            "runtime_state": runtime_state.snapshot(),
+            "pc_use_ch": getattr(self, "_pc_use_ch", None),
+            "plc_owner": getattr(self, "_plc_owner", None),
+            "closing_started": getattr(self, "_closing_started", False),
+            "close_ready": getattr(self, "_close_ready", False),
+        }
+
+        for name in ("plc", "mfc1", "mfc2", "ig1", "ig2", "ch1", "ch2", "pc", "tsp_ctrl", "server_page"):
+            try:
+                extra[name] = getattr(self, name, None)
+            except Exception:
+                extra[name] = None
+
+        return extra
+
+    def _request_runtime_dump_internal(self, reason: str, *, log_tag: str = "WARN/DUMP") -> Optional[str]:
+        if request_dump is None:
+            self._broadcast_log("ERROR/DUMP", "util.runtime_dump import 실패(request_dump=None)")
+            return None
+
+        try:
+            path = request_dump(
+                ui=self.ui,
+                loop=self._loop,
+                log_root=self._log_root,
+                extra_objects=self._build_runtime_dump_extra(),
+                reason=reason,
+            )
+            self._broadcast_log(log_tag, f"Runtime dump saved({reason}): {path}")
+            return str(path)
+        except RuntimeError as e:
+            self._broadcast_log("WARN/DUMP", f"Runtime dump skipped({reason}): {e}")
+            return None
+        except Exception as e:
+            self._broadcast_log("ERROR/DUMP", f"Runtime dump failed({reason}): {e!r}")
+            return None
+
     def _on_runtime_dump_clicked(self) -> None:
-        """
-        PC 페이지의 'State Dump' 버튼 클릭 시:
-        - util.runtime_dump.request_dump()로 현재 상태를 파일로 저장
-        - 저장 경로를 로그에 남김(시스템 로그에도 남기기 위해 WARN 태그 사용)
-        """
         btn = getattr(self.ui, "RuntimeDump_button", None)
 
         try:
-            # 연타 방지(짧게 비활성화)
             try:
                 if btn is not None:
                     btn.setEnabled(False)
             except Exception:
                 pass
 
-            if request_dump is None:
-                # runtime_dump.py가 누락/에러면 사용자에게 즉시 알림
+            path = self._request_runtime_dump_internal("manual_button", log_tag="WARN/DUMP")
+
+            if path is None and request_dump is None:
                 try:
                     QMessageBox.warning(self, "Dump", "util/runtime_dump.py(request_dump) 로드 실패")
                 except Exception:
                     pass
-                self._broadcast_log("ERROR/DUMP", "util.runtime_dump import 실패(request_dump=None)")
-                return
-
-            # 덤프에 포함할 “핵심 런타임 포인터/상태”
-            extra = {
-                "runtime_state": runtime_state.snapshot(),
-                "pc_use_ch": getattr(self, "_pc_use_ch", None),
-                "plc_owner": getattr(self, "_plc_owner", None),
-            }
-
-            # 주요 객체들도 같이(문자열 repr로 요약 저장)
-            for name in ("plc", "mfc1", "mfc2", "ig1", "ig2", "ch1", "ch2", "pc", "tsp_ctrl", "server_page"):
-                try:
-                    extra[name] = getattr(self, name, None)
-                except Exception:
-                    extra[name] = None
-
-            path = request_dump(
-                ui=self.ui,
-                loop=self._loop,
-                log_root=self._log_root,
-                extra_objects=extra,
-                reason="manual_button",
-            )
-
-            # 시스템 로그 파일에도 남기고 싶어서 WARN 포함
-            self._broadcast_log("WARN/DUMP", f"Runtime dump saved: {path}")
-
-        except RuntimeError as e:
-            # runtime_dump 쪽에서 "이미 진행 중" 같은 케이스를 RuntimeError로 던질 수 있음
-            self._broadcast_log("WARN/DUMP", f"Runtime dump skipped: {e}")
 
         except Exception as e:
             self._broadcast_log("ERROR/DUMP", f"Runtime dump failed: {e!r}")
@@ -1027,7 +1089,6 @@ class MainWindow(QWidget):
                 pass
 
         finally:
-            # 0.5초 뒤 버튼 복구
             try:
                 if btn is not None:
                     QTimer.singleShot(500, lambda: btn.setEnabled(True))
@@ -1051,6 +1112,14 @@ class MainWindow(QWidget):
                     pass
 
     async def _shutdown_app_async(self) -> None:
+        with contextlib.suppress(Exception):
+            self._logger.warning(
+                "_shutdown_app_async entered. runtime_state=%s",
+                runtime_state.snapshot(),
+            )
+
+        self._broadcast_log("WARN/EXIT", "앱 종료 정리 시작")
+
         # 1) 시작/적용 task 먼저 정리
         for attr in ("_cfg_apply_task", "_boot_plc_task", "_host_task"):
             t = getattr(self, attr, None)
@@ -1107,6 +1176,11 @@ class MainWindow(QWidget):
         with contextlib.suppress(Exception):
             uninstall_qt_message_logging(get_app_logger())
 
+        with contextlib.suppress(Exception):
+            self._logger.warning("_shutdown_app_async completed")
+
+        self._broadcast_log("WARN/EXIT", "앱 종료 정리 완료")
+
     def closeEvent(self, event: QCloseEvent) -> None:
         # ✅ cleanup 완료 후 다시 들어온 close면 실제 종료
         if self._close_ready:
@@ -1118,8 +1192,89 @@ class MainWindow(QWidget):
             event.ignore()
             return
 
+        # ✅ 공정 실행 중이면 종료 차단
+        active = self._active_run_labels()
+        if active:
+            detail = ", ".join(active)
+
+            with contextlib.suppress(Exception):
+                self._logger.warning(
+                    "closeEvent blocked while process running. active=%s, runtime_state=%s",
+                    detail,
+                    runtime_state.snapshot(),
+                )
+
+            self._broadcast_log("WARN/EXIT", f"프로그램 종료 차단: 실행 중 공정 = {detail}")
+
+            # 종료 시도 당시 상태를 1회만 dump 저장
+            if not self._close_block_dumped_once:
+                self._close_block_dumped_once = True
+                with contextlib.suppress(Exception):
+                    self._request_runtime_dump_internal("close_blocked_while_running", log_tag="WARN/DUMP")
+
+            if not self._close_block_popup_open:
+                self._close_block_popup_open = True
+                try:
+                    box = QMessageBox(self)
+                    box.setIcon(QMessageBox.Warning)
+                    box.setWindowTitle("프로그램 종료 차단")
+                    box.setText(
+                        "현재 공정이 진행 중이므로 프로그램을 종료할 수 없습니다.\n\n"
+                        f"실행 중: {detail}\n\n"
+                        "공정을 먼저 정상 종료 또는 정지한 뒤 프로그램을 닫아주세요."
+                    )
+                    box.setStandardButtons(QMessageBox.Ok)
+                    box.finished.connect(lambda *_: setattr(self, "_close_block_popup_open", False))
+                    attach_autoclose(box, ms=5000)
+                    box.show()
+                except Exception:
+                    self._close_block_popup_open = False
+
+            event.ignore()
+            return
+
+        # ✅ 공정이 없을 때도 종료 전 사용자 확인
+        if self._close_confirm_popup_open:
+            event.ignore()
+            return
+
+        self._close_confirm_popup_open = True
+        try:
+            reply = QMessageBox.question(
+                self,
+                "프로그램 종료 확인",
+                "프로그램을 종료하시겠습니까?",
+                QMessageBox.Yes | QMessageBox.No,
+                QMessageBox.No,
+            )
+        finally:
+            self._close_confirm_popup_open = False
+
+        if reply != QMessageBox.Yes:
+            with contextlib.suppress(Exception):
+                self._logger.warning("closeEvent canceled by user")
+            self._broadcast_log("WARN/EXIT", "사용자가 프로그램 종료를 취소했습니다.")
+            event.ignore()
+            return
+
+        # 종료 확인 완료 → 실제 종료 시작
+        self._close_block_dumped_once = False
         self._closing_started = True
         event.ignore()
+
+        try:
+            spontaneous = event.spontaneous() if hasattr(event, "spontaneous") else None
+        except Exception:
+            spontaneous = None
+
+        with contextlib.suppress(Exception):
+            self._logger.warning(
+                "closeEvent accepted. spontaneous=%s, runtime_state=%s",
+                spontaneous,
+                runtime_state.snapshot(),
+            )
+
+        self._broadcast_log("WARN/EXIT", "프로그램 종료 시퀀스 시작")
 
         with contextlib.suppress(Exception):
             self.setEnabled(False)
@@ -1343,6 +1498,11 @@ def main() -> int:
     app = QApplication(sys.argv)
 
     install_qt_message_logging(_logger)
+
+    try:
+        app.aboutToQuit.connect(lambda: _logger.warning("QApplication.aboutToQuit emitted"))
+    except Exception:
+        pass
 
     try:
         app.aboutToQuit.connect(lambda: uninstall_qt_message_logging(_logger))
