@@ -253,7 +253,7 @@ class MainWindow(QWidget):
 
             try:
                 await self.plc.start_plc_coil_csv_logger(
-                    interval_s=1.0,
+                    interval_s=5.0,
                     nas_dir=r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CH1&2\CH1&2_PLC",
                     local_dir=None,
                     keys=None,

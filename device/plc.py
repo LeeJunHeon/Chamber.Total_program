@@ -782,16 +782,54 @@ class AsyncPLC:
             except Exception as e:
                 raise self._to_plc_error(op, int(start_addr), e) from e
             
+    def _build_sparse_ranges(
+        self,
+        addrs: Iterable[int],
+        *,
+        max_gap: int = 8,
+        max_span: int = 64,
+    ) -> list[tuple[int, int]]:
+        """
+        실제 주소들만 기반으로, 가까운 주소끼리만 묶어서
+        (start, count) 범위를 만든다.
+        - max_gap: 다음 주소와의 간격이 이 값 이하일 때만 같은 블록으로 묶음
+        - max_span: 한 블록 최대 길이
+        """
+        xs = sorted({int(a) for a in addrs})
+        if not xs:
+            return []
+
+        ranges: list[tuple[int, int]] = []
+        start = xs[0]
+        prev = xs[0]
+
+        for a in xs[1:]:
+            span_if_extend = a - start + 1
+            gap = a - prev
+
+            if gap <= max_gap and span_if_extend <= max_span:
+                prev = a
+                continue
+
+            ranges.append((start, prev - start + 1))
+            start = prev = a
+
+        ranges.append((start, prev - start + 1))
+        return ranges
+            
     async def snapshot_all_coils_fast(
         self,
         *,
         keys: Optional[Iterable[str]] = None,
-        max_coils_per_req: int = 2000,
+        max_coils_per_req: int = 64,
+        max_gap: int = 8,
         skip_if_busy: bool = True,
     ) -> Dict[str, bool]:
         """
-        PLC_COIL_MAP에 있는 코일들을 블록 읽기로 빠르게 스냅샷.
-        - skip_if_busy=True면 공정 조작 중(락 점유)에는 이번 tick 스킵(공정 영향 0)
+        PLC_COIL_MAP에 있는 실제 사용 코일만 sparse block read로 스냅샷.
+        - 기존처럼 min~max 전체를 훑지 않음
+        - 가까운 주소끼리만 작은 블록으로 읽음
+        - skip_if_busy=True면 공정 제어 중에는 스킵
         """
         if skip_if_busy and self.is_busy():
             return {}
@@ -801,21 +839,19 @@ class AsyncPLC:
         if not addr_map:
             return {}
 
-        addrs = list(addr_map.values())
-        mn, mx = min(addrs), max(addrs)
-        span = mx - mn + 1
-
         out: Dict[str, bool] = {}
+        ranges = self._build_sparse_ranges(
+            addr_map.values(),
+            max_gap=max(0, int(max_gap)),
+            max_span=max(1, int(max_coils_per_req)),
+        )
 
-        # ✅ 현재 맵은 1~3056 수준이라, "min~max 범위"를 2번 정도로 나눠 읽는 게 가장 빠르고 lock 점유도 짧은 편.
-        step = max(1, int(max_coils_per_req))
-        for start in range(mn, mx + 1, step):
-            cnt = min(step, (mx + 1) - start)
+        for start, cnt in ranges:
             bits = await self.read_coils_block(start, cnt)
+            end = start + cnt
 
-            # 키 개수(약 100여개)만큼만 매핑 → O(keys)라 가볍다
             for k, a in addr_map.items():
-                if start <= a < start + cnt:
+                if start <= a < end:
                     out[k] = bool(bits[a - start])
 
         return out
@@ -878,6 +914,78 @@ class AsyncPLC:
         v = await self.read_reg(addr)
         #self.log("read reg %s (addr=%d) -> %d", name_or_addr, addr, v)
         return v
+    
+    async def read_regs_block(self, start_addr: int, count: int) -> list[int]:
+        """
+        FC3: 연속 holding register를 한 번에 읽는다.
+        """
+        if count <= 0:
+            return []
+
+        op = "read_regs_block"
+        async with self._io_lock(op, addr=int(start_addr)):
+            try:
+                await asyncio.to_thread(self._connect_sync)
+                await self._throttle_and_heartbeat()
+
+                try:
+                    resp = await asyncio.to_thread(
+                        self._client.read_holding_registers,
+                        int(start_addr),
+                        count=int(count),
+                        **self._uid_kwargs(),
+                    )
+                except Exception as e:
+                    pe = self._to_plc_error(op, int(start_addr), e)
+                    if pe.code in ("E401", "E402") or self._is_reset_err(e):
+                        await asyncio.to_thread(self._close_sync)
+                        await asyncio.to_thread(self._connect_sync)
+                        await self._throttle_and_heartbeat()
+                        resp = await asyncio.to_thread(
+                            self._client.read_holding_registers,
+                            int(start_addr),
+                            count=int(count),
+                            **self._uid_kwargs(),
+                        )
+                    else:
+                        raise pe from e
+
+                self._ensure_ok(resp, op=op, addr=int(start_addr))
+                regs = list(getattr(resp, "registers", []) or [])
+                if len(regs) < count:
+                    regs.extend([0] * (count - len(regs)))
+                return [int(x) for x in regs[:count]]
+
+            except Exception as e:
+                raise self._to_plc_error(op, int(start_addr), e) from e
+            
+    async def snapshot_regs_fast(
+        self,
+        *,
+        keys: Optional[Iterable[str]] = None,
+        skip_if_busy: bool = True,
+    ) -> Dict[str, int]:
+        """
+        PLC_REG_MAP에 있는 holding register 스냅샷.
+        현재 DCV 계열은 D00000~D00011로 연속이라 1회 block read로 충분.
+        """
+        if skip_if_busy and self.is_busy():
+            return {}
+
+        use_keys = list(keys) if keys is not None else list(PLC_REG_MAP.keys())
+        addr_map = {k: PLC_REG_MAP[k] for k in use_keys if k in PLC_REG_MAP}
+        if not addr_map:
+            return {}
+
+        mn = min(addr_map.values())
+        mx = max(addr_map.values())
+
+        regs = await self.read_regs_block(mn, mx - mn + 1)
+
+        out: Dict[str, int] = {}
+        for k, a in addr_map.items():
+            out[k] = int(regs[a - mn])
+        return out
 
     # ---------- Faduino 스타일 고수준 ----------
     async def door(self, chamber: int, *, open: bool, momentary: bool = False) -> None:
@@ -979,7 +1087,8 @@ class AsyncPLC:
         self, *, interval_s: Optional[float] = None,
         nas_dir: Optional[str] = None,
         local_dir: Optional[str] = None,
-        keys: Optional[Iterable[str]] = None
+        keys: Optional[Iterable[str]] = None,
+        reg_keys: Optional[Iterable[str]] = None,
     ) -> None:
         """
         프로그램 시작 시 호출:
@@ -1015,6 +1124,12 @@ class AsyncPLC:
             retry_primary_every_s=10.0,
         )
 
+        self._plc_reg_log_keys = list(reg_keys) if reg_keys is not None else [
+            "DCV_READ_0", "DCV_READ_1", "DCV_READ_2", "DCV_READ_3",
+            "DCV_WRITE_0", "DCV_WRITE_1", "DCV_WRITE_2", "DCV_WRITE_3",
+            "DCV_READ_4", "DCV_READ_5", "DCV_READ_6", "DCV_READ_7",
+        ]
+
         self._plc_coil_log_task = asyncio.create_task(self._plc_coil_log_loop(), name="PLCCoilCSVLogger")
 
     async def stop_plc_coil_csv_logger(self) -> None:
@@ -1048,6 +1163,7 @@ class AsyncPLC:
         evt: asyncio.Event = self._plc_coil_log_stop
         interval = float(self._plc_coil_log_interval)
         keys = list(self._plc_coil_log_keys)
+        reg_keys = list(getattr(self, "_plc_reg_log_keys", []))
 
         while not evt.is_set():
             t0 = time.perf_counter()
@@ -1072,23 +1188,37 @@ class AsyncPLC:
 
             # ✅ 코일 스냅샷(블록 읽기). 실패해도 공정 영향 없게 예외 삼킴.
             try:
-                snap = await self.snapshot_all_coils_fast(keys=keys, skip_if_busy=True)
+                snap = await self.snapshot_all_coils_fast(
+                    keys=keys,
+                    skip_if_busy=True,
+                    max_coils_per_req=64,
+                    max_gap=8,
+                )
             except Exception as e:
-                # 절대 raise하지 않음
                 self.log("PLC COIL LOG: snapshot failed (ignored): %r", e)
                 await asyncio.sleep(interval)
                 continue
 
-            # ✅ 스킵(경합으로 빈 스냅샷이면 "전부 FALSE" 기록 방지)
             if not snap:
                 await asyncio.sleep(interval)
                 continue
+
+            reg_snap: Dict[str, int] = {}
+            if reg_keys:
+                try:
+                    reg_snap = await self.snapshot_regs_fast(keys=reg_keys, skip_if_busy=True)
+                except Exception as e:
+                    self.log("PLC REG LOG: snapshot failed (ignored): %r", e)
+                    reg_snap = {}
 
             row = [dt.isoformat(timespec="seconds")]
             for k in keys:
                 row.append("TRUE" if snap.get(k, False) else "FALSE")
 
-            header = ["Timestamp", *keys]
+            for k in reg_keys:
+                row.append(str(reg_snap.get(k, "")))
+
+            header = ["Timestamp", *keys, *reg_keys]
 
             w = getattr(self, "_plc_coil_csv_writer", None)
             if w is None:
