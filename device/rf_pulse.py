@@ -118,6 +118,9 @@ class RfStatus:
 def _u16le(buf: bytes, i: int = 0) -> int:
     return buf[i] | (buf[i+1] << 8)
 
+def _u24le(buf: bytes, i: int = 0) -> int:
+    return buf[i] | (buf[i+1] << 8) | (buf[i+2] << 16)
+
 # ===== 프레임 빌더 =====
 def _build_packet(addr: int, cmd: int, data: bytes=b"") -> bytes:
     if not (0 <= addr <= 31):
@@ -907,9 +910,10 @@ class RFPulseAsync:
                     rx_cmd  = pkt[1]
                     length_bits = hdr & 0x07
                     data_len = pkt[2] if length_bits == 7 else length_bits
+                    decoded_suffix = self._decode_frame_suffix(rx_cmd, pkt)
                     asyncio.create_task(self._emit_status(
                         f"[RFP][RAW][RX] FRAME addr={rx_addr} cmd={self._cmd_label(rx_cmd)} "
-                        f"len={data_len} raw={' '.join(f'{x:02X}' for x in pkt)}"
+                        f"len={data_len} raw={' '.join(f'{x:02X}' for x in pkt)}{decoded_suffix}"
                     ))
 
                     # 4) 프레임 토큰 방출
@@ -1275,6 +1279,69 @@ class RFPulseAsync:
             return None
 
     # ---------- 파싱/검증/로그 ----------
+    def _decode_frame_suffix(self, cmd: int, pkt: bytes) -> str:
+        """
+        RX FRAME 로그용 해석 문자열 생성.
+        raw 로그는 유지하고, 사람이 읽을 수 있는 10진수 값을 뒤에 덧붙인다.
+        """
+        try:
+            data = self._extract_data(pkt)
+
+            if cmd == CMD_REPORT_FORWARD:
+                if len(data) >= 2:
+                    return f" decoded={_u16le(data, 0)} W"
+                return " decoded=<short_payload>"
+
+            if cmd == CMD_REPORT_REFLECTED:
+                if len(data) >= 2:
+                    return f" decoded={_u16le(data, 0)} W"
+                return " decoded=<short_payload>"
+
+            if cmd == CMD_REPORT_DELIVERED:
+                if len(data) >= 2:
+                    return f" decoded={_u16le(data, 0)} W"
+                return " decoded=<short_payload>"
+
+            if cmd == CMD_REPORT_SETPOINT:
+                if len(data) >= 2:
+                    return f" decoded={_u16le(data, 0)} W"
+                return " decoded=<short_payload>"
+
+            if cmd == CMD_REPORT_PULSE_FREQ:
+                if len(data) >= 3:
+                    return f" decoded={_u24le(data, 0)} Hz"
+                return " decoded=<short_payload>"
+
+            if cmd == CMD_REPORT_PULSE_DUTY:
+                if len(data) >= 2:
+                    return f" decoded={_u16le(data, 0)} %"
+                return " decoded=<short_payload>"
+
+            if cmd == CMD_REPORT_PULSING:
+                if len(data) >= 1:
+                    mode_map = {
+                        0: "OFF",
+                        1: "INTERNAL",
+                        2: "EXTERNAL",
+                        3: "EXTERNAL_INVERTED",
+                        4: "GATED_INTERNAL",
+                        5: "GATED_INTERNAL_INVERTED",
+                    }
+                    mode = data[0]
+                    return f" decoded={mode} ({mode_map.get(mode, 'UNKNOWN')})"
+                return " decoded=<short_payload>"
+
+            if cmd == CMD_REPORT_STATUS:
+                st = self._parse_status_0xA2(data)
+                if st is not None:
+                    return f" decoded={self._status_summary_str(st)}"
+                return " decoded=<status_parse_fail>"
+
+            return ""
+
+        except Exception as e:
+            return f" decoded_error={type(e).__name__}:{e}"
+
     def _parse_status_0xA2(self, data: Optional[bytes]) -> Optional[RfStatus]:
         if not data or len(data) < 4:
             self._spawn(self._emit_status("STATUS payload too short"))

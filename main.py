@@ -258,7 +258,7 @@ class MainWindow(QWidget):
                     local_dir=None,
                     keys=None,
                 )
-                self._broadcast_log("PLC", "PLC COIL CSV 로깅 시작(1s)")
+                self._broadcast_log("PLC", "PLC COIL CSV 로깅 시작(5s)")
             except asyncio.CancelledError:
                 return
             except Exception as e:
