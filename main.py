@@ -425,6 +425,16 @@ class MainWindow(QWidget):
                 chat=self.chat_pc,         # PC 전용 Notifier
             )
 
+            # ✅ 카메라 레코더 생성 및 각 런타임에 주입
+            try:
+                from util.camera_recorder import CameraRecorder
+                _recorder = CameraRecorder(camera_index=1, interval=1.0)
+                self.ch1.camera_recorder = _recorder
+                self.ch2.camera_recorder = _recorder
+                self.pc.camera_recorder  = _recorder
+            except Exception as e:
+                print(f"[CameraRecorder] 초기화 실패 (무시): {e!r}")
+
         except Exception as e:
             self.pc = None
             try:

@@ -1077,6 +1077,12 @@ class PlasmaCleaningRuntime:
         # ✅ start 수락 즉시 RUNNING + error clear
         with contextlib.suppress(Exception):
             runtime_state.mark_started("pc", ch)
+
+        # ✅ 카메라 녹화 시작
+        with contextlib.suppress(Exception):
+            recorder = getattr(self, "camera_recorder", None)
+            if recorder:
+                recorder.start("CLEANING")
         
         # =============================================================
         # 테스트 모드
@@ -1629,6 +1635,13 @@ class PlasmaCleaningRuntime:
             cur = bool(runtime_state.is_running("pc", ch))
             if cur != self._running:
                 runtime_state.set_running("pc", self._running, ch)
+
+        # ✅ 카메라 녹화 정지 (종료 시만)
+        if not is_running:
+            with contextlib.suppress(Exception):
+                recorder = getattr(self, "camera_recorder", None)
+                if recorder:
+                    recorder.stop()
 
         # 버튼/UI 반영
         if self._running:

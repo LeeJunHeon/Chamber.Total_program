@@ -766,8 +766,19 @@ class ChamberRuntime:
                         await self.plc.write_switch(f"MAIN_{int(self.ch)}_GAS_SW", onb)
                     elif nname in ("AR", "O2", "N2", "MAIN"):
                         await self.plc.gas(int(self.ch), nname, on=onb)
+                        
                     elif nname == "MS":
                         await self.plc.main_shutter(int(self.ch), open=onb)
+
+                        # ✅ Main Shutter 기준 카메라 녹화 시작/정지
+                        with contextlib.suppress(Exception):
+                            recorder = getattr(self, "camera_recorder", None)
+                            if recorder:
+                                if onb:   # 셔터 열림 → 녹화 시작
+                                    recorder.start(f"CH{self.ch}")
+                                else:     # 셔터 닫힘 → 녹화 정지
+                                    recorder.stop()
+
                     elif nname in ("G1", "G2", "G3"):
                         idx = int(nname[1])
                         await self.plc.write_switch(f"SHUTTER_{idx}_SW", onb)
