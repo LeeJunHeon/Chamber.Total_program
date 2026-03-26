@@ -14,7 +14,7 @@ import traceback
 from pathlib import Path
 from typing import Any, Optional
 
-_DEFAULT_LOG_ROOT = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CH1&2")
+_DEFAULT_LOG_ROOT = Path(r"\\VanaM_NAS\VanaM_Sputter\Sputter\Logs\CH1&2")
 
 _DUMP_LOCK = threading.Lock()
 _DUMP_IN_PROGRESS = False

@@ -1101,7 +1101,7 @@ class AsyncPLC:
             interval_s = float(getattr(cfgc, "PLC_COIL_LOG_INTERVAL_S", 1.0))
         if nas_dir is None:
             nas_dir = str(getattr(cfgc, "PLC_COIL_LOG_NAS_DIR",
-                                r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CH1&2\CH1&2_PLC"))
+                                r"\\VanaM_NAS\VanaM_Sputter\Sputter\Logs\CH1&2\CH1&2_PLC"))
         if local_dir is None and hasattr(cfgc, "PLC_COIL_LOG_LOCAL_DIR"):
             local_dir = getattr(cfgc, "PLC_COIL_LOG_LOCAL_DIR")
 

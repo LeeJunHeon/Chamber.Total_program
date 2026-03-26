@@ -428,7 +428,7 @@ PLC_IO_WARN_MS = 1500.0
 
 # --- PLC COIL CSV LOGGER ---
 PLC_COIL_LOG_INTERVAL_S = 1.0
-PLC_COIL_LOG_NAS_DIR = r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\CH1&2\CH1&2_PLC"
+PLC_COIL_LOG_NAS_DIR = r"\\VanaM_NAS\VanaM_Sputter\Sputter\Logs\CH1&2\CH1&2_PLC"
 # PLC_COIL_LOG_LOCAL_DIR = r"C:\...\Logs\CH1&2\CH1&2_PLC"   # 필요 시
 
 # ======================================================================
