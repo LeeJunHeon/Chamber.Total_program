@@ -432,8 +432,9 @@ class MainWindow(QWidget):
                 self.ch1.camera_recorder = _recorder
                 self.ch2.camera_recorder = _recorder
                 self.pc.camera_recorder  = _recorder
+                self._broadcast_log("CAM", "CameraRecorder 초기화 성공")
             except Exception as e:
-                print(f"[CameraRecorder] 초기화 실패 (무시): {e!r}")
+                self._broadcast_log("CAM", f"CameraRecorder 초기화 실패: {e!r}")
 
         except Exception as e:
             self.pc = None
