@@ -114,6 +114,10 @@ _MODE_CONFIG: dict[str, dict] = {
 
 CONFIG_FILE = "rf_config.json"
 
+# 급변 감지 임계값 (이전 값 대비 이 % 이상 변하면 이미지 저장)
+# 예: 20.0 → 이전 값이 100이면 80 미만이거나 120 초과일 때 저장
+SPIKE_THRESHOLD_PCT: float = 20.0
+
 
 # ──────────────────────────────────────────────────────────
 # OCR 함수
@@ -302,9 +306,13 @@ class CameraRecorder:
         fieldnames = ["timestamp"] + self._active_labels
         err_count  = 0
         img_count  = 0
+        saved_count = 0
+
+        # ── 이전 값 캐시 (급변 감지용) ────────────────────
+        prev_values: dict[str, float | None] = {lbl: None for lbl in self._active_labels}
 
         logger.info("[CameraRecorder] CSV  → %s", csv_path)
-        logger.info("[CameraRecorder] 이미지 → %s", raw_dir)
+        logger.info("[CameraRecorder] 이미지 → %s (조건부 저장)", raw_dir)
 
         try:
             with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
@@ -332,30 +340,58 @@ class CameraRecorder:
                     now_hms = now_dt.strftime("%H%M%S")                  # 파일명용
 
                     # ── 회전 보정 ────────────────────────
-                    # 카메라 설치 각도에 따라 변경:
-                    #   cv2.ROTATE_90_CLOCKWISE        (90도 시계방향)
-                    #   cv2.ROTATE_90_COUNTERCLOCKWISE (90도 반시계방향)
-                    #   cv2.ROTATE_180                 (180도)
                     frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
 
-                    # ── 이미지 저장 ──────────────────────
-                    img_name = raw_dir / f"{now_hms}_{img_count:04d}.jpg"
-                    try:
-                        cv2.imwrite(str(img_name), frame)
-                    except Exception as e:
-                        logger.warning("[CameraRecorder] 이미지 저장 실패: %s", e)
-
-                    # ── OCR → CSV ────────────────────────
+                    # ── OCR ──────────────────────────────
                     row: dict = {"timestamp": now_str}
+                    ocr_failed   = False   # 하나라도 인식 실패
+                    spike_detect = False   # 하나라도 급변 감지
+
                     for label, roi, p in zip(_ALL_LABELS, self._rois, self._params):
                         if label not in self._active_labels:
                             continue
                         y1, y2, x1, x2 = roi
                         crop = frame[y1:y2, x1:x2]
-                        row[label] = _ocr_crop(crop, p["scale"], p["tv"], p["psm"])
+                        result = _ocr_crop(crop, p["scale"], p["tv"], p["psm"])
+                        row[label] = result
 
+                        if result is None:
+                            # OCR 실패
+                            ocr_failed = True
+                        else:
+                            # 급변 감지: 이전 값 대비 SPIKE_THRESHOLD % 이상 변화
+                            try:
+                                cur_val  = float(result)
+                                prev_val = prev_values.get(label)
+                                if prev_val is not None and prev_val != 0.0:
+                                    change_pct = abs(cur_val - prev_val) / abs(prev_val) * 100.0
+                                    if change_pct >= SPIKE_THRESHOLD_PCT:
+                                        spike_detect = True
+                                        logger.info(
+                                            "[CameraRecorder] 급변 감지 %s: %.0f → %.0f (%.1f%%)",
+                                            label, prev_val, cur_val, change_pct,
+                                        )
+                                prev_values[label] = cur_val
+                            except (ValueError, TypeError):
+                                pass
+
+                    # ── CSV 기록 ─────────────────────────
                     writer.writerow(row)
                     f.flush()
+
+                    # ── 조건부 이미지 저장 ───────────────
+                    # 저장 조건: OCR 실패 OR 급변 감지
+                    if ocr_failed or spike_detect:
+                        saved_count += 1
+                        reason = []
+                        if ocr_failed:   reason.append("ocr_fail")
+                        if spike_detect: reason.append("spike")
+                        reason_str = "_".join(reason)
+                        img_name = raw_dir / f"{now_hms}_{img_count:04d}_{reason_str}.jpg"
+                        try:
+                            cv2.imwrite(str(img_name), frame)
+                        except Exception as e:
+                            logger.warning("[CameraRecorder] 이미지 저장 실패: %s", e)
 
                     # ── 인터벌 대기 (stop_event 감지 포함) ──
                     elapsed  = time.time() - t0
@@ -370,6 +406,6 @@ class CameraRecorder:
         finally:
             cap.release()
             logger.info(
-                "[CameraRecorder] 완료 — 이미지 %d장 | CSV: %s",
-                img_count, csv_path,
+                "[CameraRecorder] 완료 — 촬영 %d장, 저장 %d장 | CSV: %s",
+                img_count, saved_count, csv_path,
             )
