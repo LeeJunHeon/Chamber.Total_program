@@ -215,7 +215,7 @@ class RobotServerApp:
     def __init__(self, loop: asyncio.AbstractEventLoop) -> None:
         self.loop = loop
 
-        log_root = Path(r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs")
+        log_root = Path(r"\\VanaM_NAS\VanaM_Sputter\Sputter\Logs")
         self.page = ServerPage(log_root=log_root)
         self.page.set_host_info(cfgc.HOST_SERVER_HOST, int(cfgc.HOST_SERVER_PORT))
         self.page.set_running(False)
