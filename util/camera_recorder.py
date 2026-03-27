@@ -33,6 +33,7 @@ CameraRecorder
 from __future__ import annotations
 
 import csv
+import sys
 import json
 import logging
 import os
@@ -49,11 +50,18 @@ import numpy as np
 try:
     import pytesseract
     if platform.system() == "Windows":
+        # PyInstaller 빌드 시 exe 옆 Tesseract-OCR 폴더 우선 탐색
+        if getattr(sys, "frozen", False):
+            _base = Path(sys.executable).parent
+        else:
+            _base = Path(__file__).resolve().parent.parent
+
         _candidates = [
-            r"C:\Program Files\Tesseract-OCR\tesseract.exe",
-            r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+            _base / "Tesseract-OCR" / "tesseract.exe",          # 빌드 포함
+            Path(r"C:\Program Files\Tesseract-OCR\tesseract.exe"),   # 시스템 설치
+            Path(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"),
         ]
-        _found = next((p for p in _candidates if os.path.exists(p)), None)
+        _found = next((str(p) for p in _candidates if p.exists()), None)
         if _found:
             pytesseract.pytesseract.tesseract_cmd = _found
     _TESSERACT_OK = True
@@ -86,7 +94,7 @@ _DEFAULT_ROIS = [
 ]
 
 _DEFAULT_PARAMS = [
-    dict(scale=5, tv=  0, psm=6),  # CH1_FWD
+    dict(scale=6, tv=  0, psm=8),  # CH1_FWD
     dict(scale=6, tv=  0, psm=8),  # CH1_REF
     dict(scale=6, tv=  0, psm=8),  # CH1_LOAD
     dict(scale=6, tv=120, psm=8),  # CH1_TUNE
@@ -356,7 +364,7 @@ class CameraRecorder:
                     ocr_failed   = False   # 하나라도 인식 실패
                     spike_detect = False   # 하나라도 급변 감지
 
-                    for label, roi, p in zip(_ALL_LABELS, self._rois, self._params):
+                    for label, roi, p in zip(self._active_labels, self._rois, self._params):
                         y1, y2, x1, x2 = roi
                         crop = frame[y1:y2, x1:x2]
                         result = _ocr_crop(crop, p["scale"], p["tv"], p["psm"])
