@@ -41,6 +41,7 @@ from device.dc_pulse import AsyncDCPulse
 from controller.graph_controller import GraphController
 from controller.data_logger import DataLogger
 from controller.chat_notifier import ChatNotifier
+from controller.process_monitor import ProcessMonitor
 from util.log_hub import SessionTextAppender
 
 # ⬇️ 추가: 전역 런타임 상태 레지스트리
@@ -291,6 +292,15 @@ class ChamberRuntime:
         self._loop = loop
         self.plc = plc
         self.chat = chat
+
+        # --- 공정 모니터링 (gas/pressure 편차 → 별도 웹훅) ---
+        try:
+            from lib import config_local as _cfgl
+            _monitor_url = getattr(_cfgl, "CHAT_WEBHOOK_MONITOR_URL", "").strip()
+        except Exception:
+            _monitor_url = ""
+        self._process_monitor = ProcessMonitor(ch=self.ch, webhook_url=_monitor_url)
+
         self.cfg = _CfgAdapter(cfg, self.ch)
         self._bg_tasks: list[asyncio.Task[Any]] = []
         self._mfc_seq_lock = asyncio.Lock()
@@ -1243,6 +1253,10 @@ class ChamberRuntime:
                     line = f"▶️ CH{self.ch} '{name}' 시작 (t={float(t):.1f}s)"
                     self.append_log("MAIN", line)
 
+                    # ★ 공정 모니터 활성화 (gas/pressure 편차 감시)
+                    with contextlib.suppress(Exception):
+                        self._process_monitor.activate(params)
+
                     # 폴링 타깃 초기화
                     self._last_polling_targets = None
 
@@ -1380,6 +1394,10 @@ class ChamberRuntime:
                             self.mfc.on_process_finished(ok)
                         except Exception:
                             pass
+
+                        # ★ 공정 모니터 비활성화
+                        with contextlib.suppress(Exception):
+                            self._process_monitor.deactivate()
 
                         # 0) 재연결 선차단 + 폴링 완전 OFF
                         self._auto_connect_enabled = False
@@ -1561,6 +1579,13 @@ class ChamberRuntime:
                 with contextlib.suppress(Exception):
                     self._dl_fire_and_forget(self.data_logger.log_mfc_flow, gas, flow)
                 self.append_log(f"MFC{self.ch}", f"[poll] {gas}: {flow:.2f} sccm")
+                
+                # ★ 공정 모니터: 메인 공정 폴링 구간에서만 체크
+                targets = getattr(self, "_last_polling_targets", None) or {}
+                if targets.get("mfc"):
+                    with contextlib.suppress(Exception):
+                        self._process_monitor.check_flow(gas, flow)
+
             elif k == "pressure":
                 txt = ev.text or (f"{ev.value:.3g}" if ev.value is not None else "")
 
@@ -1571,6 +1596,11 @@ class ChamberRuntime:
                 if targets.get("mfc"):
                     with contextlib.suppress(Exception):
                         self.data_logger.log_mfc_pressure(txt)
+
+                    # ★ 공정 모니터: pressure 체크
+                    if ev.value is not None:
+                        with contextlib.suppress(Exception):
+                            self._process_monitor.check_pressure(float(ev.value))
 
                 # UI / 로그에는 기존처럼 항상 표시
                 self.append_log(f"MFC{self.ch}", f"[poll] ChamberP: {txt}")
