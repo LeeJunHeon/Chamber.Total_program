@@ -37,6 +37,59 @@ import logging                  # ✅ 추가
 from threading import Lock      # ✅ 추가
 
 import numpy as np
+import ssl
+import urllib.request
+
+
+# ── OES Anomaly Detection ──────────────────────────────────
+_AR_WAVELENGTH_NM = 818.8223079
+_ANOMALY_THRESHOLD = 0.10
+_ANOMALY_WEBHOOK_URL = ""
+_ANOMALY_ENABLED = False
+
+def _load_anomaly_config() -> None:
+    """worker exe 옆의 oes_config.json을 읽어서 전역 설정 반영."""
+    global _AR_WAVELENGTH_NM, _ANOMALY_THRESHOLD, _ANOMALY_WEBHOOK_URL, _ANOMALY_ENABLED
+    cfg_path = _worker_base_dir() / "oes_config.json"
+    try:
+        if not cfg_path.exists():
+            return
+        with open(cfg_path, "r", encoding="utf-8") as fp:
+            cfg = json.loads(fp.read())
+        _ANOMALY_ENABLED = bool(cfg.get("enabled", False))
+        _ANOMALY_WEBHOOK_URL = str(cfg.get("webhook_url", "") or "").strip()
+        _AR_WAVELENGTH_NM = float(cfg.get("ar_wavelength", _AR_WAVELENGTH_NM))
+        _ANOMALY_THRESHOLD = float(cfg.get("threshold", _ANOMALY_THRESHOLD))
+    except Exception:
+        pass
+
+def _find_ar_index(x_list: list) -> Optional[int]:
+    """x_list(파장 리스트)에서 Ar 파장에 가장 가까운 인덱스 반환."""
+    if not x_list:
+        return None
+    try:
+        arr = np.array(x_list, dtype=float)
+        idx = int(np.argmin(np.abs(arr - _AR_WAVELENGTH_NM)))
+        if abs(arr[idx] - _AR_WAVELENGTH_NM) > 5.0:
+            return None
+        return idx
+    except Exception:
+        return None
+
+def _post_anomaly_webhook(msg: str) -> None:
+    """Google Chat webhook으로 이상 알림 전송 (blocking, 실패 무시)."""
+    url = _ANOMALY_WEBHOOK_URL
+    if not url:
+        return
+    try:
+        payload = json.dumps({"text": msg}).encode("utf-8")
+        req = urllib.request.Request(url, data=payload, headers={"Content-Type": "application/json"})
+        ctx = ssl.create_default_context()
+        with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
+            resp.read()
+    except Exception:
+        pass
+# ── OES Anomaly Detection END ──────────────────────────────
 
 
 # NAS 저장 경로 (고정)
@@ -1257,6 +1310,12 @@ async def cmd_measure(
         rows += 1
         f.flush()
 
+        # ── OES Anomaly: Ar 감시 초기화 (첫 데이터 행은 baseline에서 제외) ──
+        _ar_idx = _find_ar_index(x_list) if _ANOMALY_ENABLED else None
+        _ar_sum = 0.0
+        _ar_count = 0
+        _ar_alerted = False
+
         deadline = time.time() + max(0.0, float(duration_s))
         while time.time() < deadline:
             # ✅ stop 요청 감지(USB 기반 / CSV 기반)
@@ -1309,6 +1368,33 @@ async def cmd_measure(
             w.writerow([now_s] + [float(v) for v in y2_list])
             rows += 1
             f.flush()
+
+            # ── OES Anomaly: Ar 파장 감시 ──
+            if _ar_idx is not None and not _ar_alerted:
+                try:
+                    ar_val = float(y2_list[_ar_idx])
+                    if _ar_count == 0:
+                        _ar_sum = ar_val
+                        _ar_count = 1
+                    else:
+                        ar_mean = _ar_sum / _ar_count
+                        if ar_mean != 0 and abs(ar_val - ar_mean) / abs(ar_mean) >= _ANOMALY_THRESHOLD:
+                            _ar_alerted = True
+                            pct = ((ar_val - ar_mean) / ar_mean) * 100
+                            direction = "급등" if pct > 0 else "급락"
+                            alert_msg = (
+                                f"⚠️ OES 이상 감지 (CH{ch})\n"
+                                f"Ar {_AR_WAVELENGTH_NM:.1f}nm {direction}: "
+                                f"{ar_val:.1f} (평균 {ar_mean:.1f}, {pct:+.1f}%)\n"
+                                f"측정 행: {rows}"
+                            )
+                            _status(f"[worker] ANOMALY: {alert_msg}")
+                            await asyncio.to_thread(_post_anomaly_webhook, alert_msg)
+                        else:
+                            _ar_sum += ar_val
+                            _ar_count += 1
+                except Exception:
+                    pass
 
         elapsed = time.time() - t0
 
@@ -1605,6 +1691,12 @@ async def _daemon_measure_once(
     rows += 1
     f.flush()
 
+    # ── OES Anomaly: Ar 감시 초기화 (첫 데이터 행은 baseline에서 제외) ──
+    _ar_idx = _find_ar_index(x_list) if _ANOMALY_ENABLED else None
+    _ar_sum = 0.0
+    _ar_count = 0
+    _ar_alerted = False
+
     hard_abort = False
     hard_abort_error = None
     hard_abort_exit_code = 0
@@ -1655,6 +1747,33 @@ async def _daemon_measure_once(
         w.writerow([now_s] + [float(v) for v in y2_list])
         rows += 1
         f.flush()
+
+        # ── OES Anomaly: Ar 파장 감시 ──
+        if _ar_idx is not None and not _ar_alerted:
+            try:
+                ar_val = float(y2_list[_ar_idx])
+                if _ar_count == 0:
+                    _ar_sum = ar_val
+                    _ar_count = 1
+                else:
+                    ar_mean = _ar_sum / _ar_count
+                    if ar_mean != 0 and abs(ar_val - ar_mean) / abs(ar_mean) >= _ANOMALY_THRESHOLD:
+                        _ar_alerted = True
+                        pct = ((ar_val - ar_mean) / ar_mean) * 100
+                        direction = "급등" if pct > 0 else "급락"
+                        alert_msg = (
+                            f"⚠️ OES 이상 감지 (CH{ch})\n"
+                            f"Ar {_AR_WAVELENGTH_NM:.1f}nm {direction}: "
+                            f"{ar_val:.1f} (평균 {ar_mean:.1f}, {pct:+.1f}%)\n"
+                            f"측정 행: {rows}"
+                        )
+                        _status(f"[daemon] ANOMALY: {alert_msg}")
+                        await asyncio.to_thread(_post_anomaly_webhook, alert_msg)
+                    else:
+                        _ar_sum += ar_val
+                        _ar_count += 1
+            except Exception:
+                pass
 
     elapsed = time.time() - t0
 
@@ -1884,7 +2003,8 @@ def build_parser() -> argparse.ArgumentParser:
 
 async def _amain(argv=None) -> int:
     args = build_parser().parse_args(argv)
-    _status(f"[worker] START argv={sys.argv} frozen={getattr(sys,'frozen',False)} base={_worker_base_dir()}")
+    _load_anomaly_config()
+    _status(f"[worker] START argv={sys.argv} frozen={getattr(sys,'frozen',False)} base={_worker_base_dir()} anomaly={_ANOMALY_ENABLED}")
 
     if args.cmd == "init":
         out_dir = Path(args.out_dir) if args.out_dir else None

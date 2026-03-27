@@ -1,5 +1,6 @@
 ### Google Chat ###
 lib/config_local.py
+apps/oes_service/oes_config.json
 
 ### Python ###
 # Byte-compiled / optimized / DLL files
