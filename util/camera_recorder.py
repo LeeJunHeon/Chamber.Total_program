@@ -305,6 +305,13 @@ class CameraRecorder:
             logger.error("[CameraRecorder] 카메라 열기 실패 (index=%d)", self._cam_idx)
             return
 
+        # 해상도 강제 설정 (ROI 좌표가 1920x1080 기준)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1920)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+        actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+        actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
+        logger.info("[CameraRecorder] 카메라 해상도: %dx%d", actual_w, actual_h)
+
         fieldnames = ["timestamp"] + self._active_labels
         err_count  = 0
         img_count  = 0
@@ -383,7 +390,7 @@ class CameraRecorder:
                     writer.writerow(row)
                     f.flush()
 
-                    # ── 조건부 이미지 저장 ───────────────
+                    # ── 조건부 이미지 저장 (진단 이미지) ───────────────
                     # 저장 조건: OCR 실패 OR 급변 감지
                     if ocr_failed or spike_detect:
                         saved_count += 1
@@ -391,9 +398,20 @@ class CameraRecorder:
                         if ocr_failed:   reason.append("ocr_fail")
                         if spike_detect: reason.append("spike")
                         reason_str = "_".join(reason)
-                        img_name = raw_dir / f"{now_hms}_{img_count:04d}_{reason_str}.jpg"
+
+                        # ROI 박스 + OCR 결과 오버레이한 진단 이미지 저장
                         try:
-                            cv2.imwrite(str(img_name), frame)
+                            diag = frame.copy()
+                            for lbl, roi, p in zip(_ALL_LABELS, self._rois, self._params):
+                                y1d, y2d, x1d, x2d = roi
+                                color = (0, 255, 80) if lbl in self._check_labels else (120, 120, 120)
+                                cv2.rectangle(diag, (x1d, y1d), (x2d, y2d), color, 2)
+                                val = row.get(lbl, "")
+                                cv2.putText(diag, f"{lbl.split('_',1)[-1]}:{val or '?'}",
+                                            (x1d, max(y1d - 4, 12)),
+                                            cv2.FONT_HERSHEY_SIMPLEX, 0.38, color, 1)
+                            img_name = raw_dir / f"{now_hms}_{img_count:04d}_{reason_str}.jpg"
+                            cv2.imwrite(str(img_name), diag)
                         except Exception as e:
                             logger.warning("[CameraRecorder] 이미지 저장 실패: %s", e)
 
