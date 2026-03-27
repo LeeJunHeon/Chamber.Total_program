@@ -106,10 +106,10 @@ _ALL_LABELS = [
 
 # 모드별 기록 레이블 + 챔버 서브폴더명
 _MODE_CONFIG: dict[str, dict] = {
-    "CH1":      {"labels": ["CH1_FWD", "CH1_REF", "CH1_LOAD", "CH1_TUNE"], "folder": "CH1"},
-    "CH2":      {"labels": ["CH2_FWD", "CH2_REF", "CH2_LOAD", "CH2_TUNE"], "folder": "CH2"},
-    "CLEANING": {"labels": ["RF3_LOAD", "RF3_TUNE"],                        "folder": "CLEANING"},
-    "ALL":      {"labels": _ALL_LABELS,                                     "folder": "ALL"},
+    "CH1":      {"labels": _ALL_LABELS, "active": ["CH1_FWD", "CH1_REF", "CH1_LOAD", "CH1_TUNE"], "folder": "CH1"},
+    "CH2":      {"labels": _ALL_LABELS, "active": ["CH2_FWD", "CH2_REF", "CH2_LOAD", "CH2_TUNE"], "folder": "CH2"},
+    "CLEANING": {"labels": _ALL_LABELS, "active": ["RF3_LOAD", "RF3_TUNE"],                        "folder": "CLEANING"},
+    "ALL":      {"labels": _ALL_LABELS, "active": _ALL_LABELS,                                     "folder": "ALL"},
 }
 
 CONFIG_FILE = "rf_config.json"
@@ -216,6 +216,7 @@ class CameraRecorder:
 
         self._mode          = "ALL"
         self._active_labels = list(_ALL_LABELS)
+        self._check_labels  = list(_ALL_LABELS)  # ← 추가
         self._mode_folder   = "ALL"
 
         self._load_config()
@@ -253,8 +254,9 @@ class CameraRecorder:
 
             self._mode = mode.upper()
             mc = _MODE_CONFIG.get(self._mode, _MODE_CONFIG["ALL"])
-            self._active_labels = mc["labels"]
-            self._mode_folder   = mc["folder"]
+            self._active_labels  = mc["labels"]   # CSV 컬럼 (항상 10개)
+            self._check_labels   = mc["active"]   # 에러 판단 대상
+            self._mode_folder    = mc["folder"]
             self._stop_event.clear()
 
             self._thread = threading.Thread(
@@ -340,7 +342,7 @@ class CameraRecorder:
                     now_hms = now_dt.strftime("%H%M%S")                  # 파일명용
 
                     # ── 회전 보정 ────────────────────────
-                    frame = cv2.rotate(frame, cv2.ROTATE_90_COUNTERCLOCKWISE)
+                    frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
 
                     # ── OCR ──────────────────────────────
                     row: dict = {"timestamp": now_str}
@@ -348,12 +350,14 @@ class CameraRecorder:
                     spike_detect = False   # 하나라도 급변 감지
 
                     for label, roi, p in zip(_ALL_LABELS, self._rois, self._params):
-                        if label not in self._active_labels:
-                            continue
                         y1, y2, x1, x2 = roi
                         crop = frame[y1:y2, x1:x2]
                         result = _ocr_crop(crop, p["scale"], p["tv"], p["psm"])
                         row[label] = result
+
+                        # 에러/급변 판단은 해당 공정 관련 레이블만
+                        if label not in self._check_labels:
+                            continue
 
                         if result is None:
                             # OCR 실패
