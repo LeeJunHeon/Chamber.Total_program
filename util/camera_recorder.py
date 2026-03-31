@@ -126,6 +126,9 @@ CONFIG_FILE = "rf_config.json"
 # 예: 20.0 → 이전 값이 100이면 80 미만이거나 120 초과일 때 저장
 SPIKE_THRESHOLD_PCT: float = 20.0
 
+# 원본 프레임 저장 간격 (초) — 템플릿 수집용
+# 0 이하로 설정하면 원본 저장 비활성화
+RAW_FRAME_SAVE_INTERVAL_S: float = 10.0
 
 # ──────────────────────────────────────────────────────────
 # OCR 함수
@@ -317,6 +320,19 @@ class CameraRecorder:
         except Exception as e:
             logger.error("[CameraRecorder] 폴더 생성 실패: %s", e)
             return
+        
+        # ── 원본 프레임 저장 폴더 (템플릿 수집용) ──────────
+        frames_dir = mode_dir / "frames" / ts
+        _save_raw = RAW_FRAME_SAVE_INTERVAL_S > 0
+        if _save_raw:
+            try:
+                frames_dir.mkdir(parents=True, exist_ok=True)
+                logger.info("[CameraRecorder] 원본 프레임 → %s (%.0f초 간격)",
+                            frames_dir, RAW_FRAME_SAVE_INTERVAL_S)
+            except Exception as e:
+                logger.warning("[CameraRecorder] frames 폴더 생성 실패: %s", e)
+                _save_raw = False
+        _last_frame_save: float = 0.0
 
         # ── 2) 카메라 오픈 ────────────────────────────────
         cap = cv2.VideoCapture(self._cam_idx)
@@ -369,6 +385,15 @@ class CameraRecorder:
 
                     # ── 회전 보정 ────────────────────────
                     frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+
+                    # ── 원본 프레임 저장 (템플릿 수집용) ──
+                    if _save_raw and (time.time() - _last_frame_save) >= RAW_FRAME_SAVE_INTERVAL_S:
+                        try:
+                            fname = frames_dir / f"{now_hms}_{img_count:04d}.jpg"
+                            cv2.imwrite(str(fname), frame)
+                            _last_frame_save = time.time()
+                        except Exception as e:
+                            logger.warning("[CameraRecorder] 원본 프레임 저장 실패: %s", e)
 
                     # ── OCR ──────────────────────────────
                     row: dict = {"timestamp": now_str}
