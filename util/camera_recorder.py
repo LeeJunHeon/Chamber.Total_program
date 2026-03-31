@@ -94,16 +94,16 @@ _DEFAULT_ROIS = [
 ]
 
 _DEFAULT_PARAMS = [
-    dict(scale=6, tv=  0, psm=8),  # CH1_FWD
-    dict(scale=6, tv=  0, psm=8),  # CH1_REF
-    dict(scale=6, tv=  0, psm=8),  # CH1_LOAD
-    dict(scale=6, tv=120, psm=8),  # CH1_TUNE
-    dict(scale=6, tv=  0, psm=8),  # RF3_LOAD
-    dict(scale=6, tv=  0, psm=8),  # RF3_TUNE
-    dict(scale=6, tv=  0, psm=8),  # CH2_FWD
-    dict(scale=6, tv=  0, psm=8),  # CH2_REF
-    dict(scale=6, tv=100, psm=8),  # CH2_LOAD
-    dict(scale=7, tv=140, psm=8),  # CH2_TUNE
+    dict(scale=6, tv=110, psm=7, digits=3),  # CH1_FWD   — 기대 3자리 (예: 014)
+    dict(scale=6, tv=110, psm=7, digits=3),  # CH1_REF   — 기대 3자리 (예: 032)
+    dict(scale=6, tv=110, psm=7, digits=3),  # CH1_LOAD  — 기대 3자리 (예: 126)
+    dict(scale=6, tv=120, psm=7, digits=3),  # CH1_TUNE  — 기대 3자리 (예: 282) ※ 카메라 재조정 필요
+    dict(scale=6, tv=110, psm=7, digits=4),  # RF3_LOAD  — 기대 4자리 (예: -003, 부호 포함)
+    dict(scale=6, tv=110, psm=7, digits=3),  # RF3_TUNE  — 기대 3자리 (예: 000)
+    dict(scale=6, tv=110, psm=7, digits=3),  # CH2_FWD   # TODO: 실 장비 미검증
+    dict(scale=6, tv=110, psm=7, digits=3),  # CH2_REF   # TODO: 실 장비 미검증
+    dict(scale=6, tv=100, psm=7, digits=3),  # CH2_LOAD  # TODO: 실 장비 미검증
+    dict(scale=7, tv=140, psm=7, digits=3),  # CH2_TUNE  # TODO: 실 장비 미검증
 ]
 
 _ALL_LABELS = [
@@ -130,7 +130,7 @@ SPIKE_THRESHOLD_PCT: float = 20.0
 # ──────────────────────────────────────────────────────────
 # OCR 함수
 # ──────────────────────────────────────────────────────────
-def _ocr_crop(crop: np.ndarray, scale: int, tv: int, psm: int) -> Optional[str]:
+def _ocr_crop(crop: np.ndarray, scale: int, tv: int, psm: int, digits: int = 0) -> Optional[str]:
     """단일 ROI 크롭 → 숫자 문자열 (실패 시 None)"""
     if not _TESSERACT_OK or crop is None or crop.size == 0:
         return None
@@ -148,8 +148,9 @@ def _ocr_crop(crop: np.ndarray, scale: int, tv: int, psm: int) -> Optional[str]:
         if th.sum() / (255 * th.size) > 0.5:
             th = cv2.bitwise_not(th)
 
-        k = np.ones((2, 2), np.uint8)
-        th = cv2.morphologyEx(th, cv2.MORPH_OPEN, k)
+        k_close = np.ones((2, 2), np.uint8)
+        th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, k_close)
+        th = cv2.medianBlur(th, 3)
         th = cv2.copyMakeBorder(th, 15, 15, 15, 15,
                                 cv2.BORDER_CONSTANT, value=0)
 
@@ -169,8 +170,18 @@ def _ocr_crop(crop: np.ndarray, scale: int, tv: int, psm: int) -> Optional[str]:
                 if result:
                     break
 
-        return result if result else None
-    except Exception:
+        if not result:
+            return None
+
+        # 자릿수 검증: 기대 자릿수와 다르면 인식 실패로 처리
+        if digits > 0 and len(result) != digits:
+            logger.debug("[OCR] 자릿수 불일치: 기대 %d, 인식 '%s' (%d자)", digits, result, len(result))
+            return None
+
+        return result
+    
+    except Exception as e:
+        logger.warning("[OCR] 크롭 처리 오류: %s", e)
         return None
 
 
@@ -366,8 +377,12 @@ class CameraRecorder:
 
                     for label, roi, p in zip(self._active_labels, self._rois, self._params):
                         y1, y2, x1, x2 = roi
-                        crop = frame[y1:y2, x1:x2]
-                        result = _ocr_crop(crop, p["scale"], p["tv"], p["psm"])
+                        fh, fw = frame.shape[:2]
+                        pad = 5
+                        y1p, y2p = max(0, y1 - pad), min(fh, y2 + pad)
+                        x1p, x2p = max(0, x1 - pad), min(fw, x2 + pad)
+                        crop = frame[y1p:y2p, x1p:x2p]
+                        result = _ocr_crop(crop, p["scale"], p["tv"], p["psm"], digits=p.get("digits", 0))
                         row[label] = result
 
                         # 에러/급변 판단은 해당 공정 관련 레이블만
