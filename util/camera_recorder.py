@@ -28,6 +28,7 @@ CameraRecorder
 - start() / stop() 논블로킹, 즉시 반환
 - OCR 실패 / 카메라 오류 → 내부에서 처리, 메인 공정에 예외 전파 없음
 - NAS 접근 불가 시 로컬 경로(rf_logs/)로 자동 폴백
+- ROI별 캐스케이드 OCR: 1순위 실패 시 2순위, 3순위 자동 시도
 """
 
 from __future__ import annotations
@@ -77,8 +78,7 @@ NAS_LOG_ROOT   = Path(r"\\VanaM_NAS\VanaM_Sputter\Sputter\Logs\CH1&2\Camera_Logs
 LOCAL_FALLBACK = Path("rf_logs")   # NAS 접근 불가 시 폴백
 
 # ──────────────────────────────────────────────────────────
-# 기본 ROI / OCR 파라미터 (이 사진 기준 좌표)
-# 카메라 위치가 바뀌면 rf_config.json 으로 재설정
+# 기본 ROI (카메라 위치가 바뀌면 rf_config.json 으로 재설정)
 # ──────────────────────────────────────────────────────────
 _DEFAULT_ROIS = [
     [571, 610,  191, 291],   # CH1_FWD
@@ -86,24 +86,94 @@ _DEFAULT_ROIS = [
     [604, 642,  630, 715],   # CH1_LOAD
     [611, 650,  794, 886],   # CH1_TUNE
     [997,1042,  277, 413],   # RF3_LOAD
-    [994,1038,  501, 605],   # RF3_TUNE
+    [994,1038,  465, 605],   # RF3_TUNE   ← 마이너스 부호 포함 (x1=465)
     [1372,1417, 203, 295],   # CH2_FWD
     [1348,1394, 384, 499],   # CH2_REF
     [1332,1375, 598, 714],   # CH2_LOAD
     [1312,1350, 775, 878],   # CH2_TUNE
 ]
 
+# ──────────────────────────────────────────────────────────
+# ROI별 캐스케이드 OCR 설정
+#
+# method 종류:
+#   "norm_otsu"  = R채널 → 확대 → 정규화(0~255) → OTSU 자동 이진화
+#   "norm_fixed" = R채널 → 확대 → 정규화(0~255) → 고정 tv 이진화
+#   "rg_otsu"    = (R-G)차분 → 확대 → 정규화 → OTSU
+#   "rg_fixed"   = (R-G)차분 → 확대 → 정규화 → 고정 tv
+#   "fixed"      = R채널 → 확대 → 고정 tv 이진화 (정규화 없음)
+#
+# 추가 옵션:
+#   morph_k: CLOSE 커널 크기 (기본 2)
+#   border:  Tesseract 입력 패딩 (기본 15)
+# ──────────────────────────────────────────────────────────
 _DEFAULT_PARAMS = [
-    dict(scale=6, tv=110, psm=7, digits=3),  # CH1_FWD   — 기대 3자리 (예: 014)
-    dict(scale=6, tv=110, psm=7, digits=3),  # CH1_REF   — 기대 3자리 (예: 032)
-    dict(scale=6, tv=110, psm=7, digits=3),  # CH1_LOAD  — 기대 3자리 (예: 126)
-    dict(scale=6, tv=120, psm=7, digits=3),  # CH1_TUNE  — 기대 3자리 (예: 282) ※ 카메라 재조정 필요
-    dict(scale=6, tv=110, psm=7, digits=4),  # RF3_LOAD  — 기대 4자리 (예: -003, 부호 포함)
-    dict(scale=6, tv=110, psm=7, digits=3),  # RF3_TUNE  — 기대 3자리 (예: 000)
-    dict(scale=6, tv=110, psm=7, digits=3),  # CH2_FWD   # TODO: 실 장비 미검증
-    dict(scale=6, tv=110, psm=7, digits=3),  # CH2_REF   # TODO: 실 장비 미검증
-    dict(scale=6, tv=100, psm=7, digits=3),  # CH2_LOAD  # TODO: 실 장비 미검증
-    dict(scale=7, tv=140, psm=7, digits=3),  # CH2_TUNE  # TODO: 실 장비 미검증
+    # CH1_FWD — 92%
+    {"scale": 6, "digits": 3, "methods": [
+        {"method": "norm_otsu",  "psm": 7},
+        {"method": "fixed",      "tv": 110, "psm": 7},
+        {"method": "norm_fixed", "tv": 128, "psm": 7},
+        {"method": "norm_otsu",  "psm": 8},
+    ]},
+    # CH1_REF — 98%
+    {"scale": 6, "digits": 3, "methods": [
+        {"method": "norm_fixed", "tv": 128, "psm": 7},
+        {"method": "fixed",      "tv": 110, "psm": 7},
+        {"method": "norm_otsu",  "psm": 7},
+    ]},
+    # CH1_LOAD — 100%
+    {"scale": 6, "digits": 3, "methods": [
+        {"method": "fixed",      "tv": 140, "psm": 7},
+        {"method": "norm_otsu",  "psm": 7},
+    ]},
+    # CH1_TUNE — 100%
+    {"scale": 6, "digits": 3, "methods": [
+        {"method": "fixed",      "tv": 120, "psm": 7},
+        {"method": "fixed",      "tv": 100, "psm": 8},
+        {"method": "norm_otsu",  "psm": 8},
+        {"method": "norm_fixed", "tv": 128, "psm": 8},
+    ]},
+    # RF3_LOAD — 95%
+    {"scale": 6, "digits": 4, "methods": [
+        {"method": "fixed",      "tv": 150, "psm": 7},
+        {"method": "norm_otsu",  "psm": 7},
+        {"method": "fixed",      "tv": 150, "psm": 8},
+    ]},
+    # RF3_TUNE — 90%
+    {"scale": 6, "digits": 4, "methods": [
+        {"method": "norm_fixed", "tv": 170, "psm": 8},
+        {"method": "fixed",      "tv": 160, "psm": 8},
+        {"method": "norm_fixed", "tv": 180, "psm": 8},
+        {"method": "norm_fixed", "tv": 160, "psm": 8},
+        {"method": "norm_otsu",  "psm": 8},
+    ]},
+    # CH2_FWD — 100%
+    {"scale": 6, "digits": 3, "methods": [
+        {"method": "norm_otsu",  "psm": 7},
+        {"method": "fixed",      "tv": 110, "psm": 7},
+        {"method": "norm_fixed", "tv": 128, "psm": 7},
+        {"method": "norm_otsu",  "psm": 8},
+    ]},
+    # CH2_REF — 100%
+    {"scale": 6, "digits": 4, "methods": [
+        {"method": "norm_otsu",  "psm": 7},
+        {"method": "norm_fixed", "tv": 128, "psm": 7},
+    ]},
+    # CH2_LOAD — 100%
+    {"scale": 6, "digits": 4, "methods": [
+        {"method": "norm_otsu",  "psm": 7},
+        {"method": "fixed",      "tv": 140, "psm": 7},
+        {"method": "norm_otsu",  "psm": 8},
+    ]},
+    # CH2_TUNE — 57%
+    {"scale": 7, "digits": 3, "methods": [
+        {"method": "rg_otsu",    "psm": 7},
+        {"method": "fixed",      "tv": 140, "psm": 7},
+        {"method": "norm_fixed", "tv": 128, "psm": 8, "morph_k": 3, "border": 25},
+        {"method": "norm_fixed", "tv": 128, "psm": 7, "morph_k": 3, "border": 25},
+        {"method": "norm_otsu",  "psm": 8},
+        {"method": "rg_fixed",   "tv": 120, "psm": 7},
+    ]},
 ]
 
 _ALL_LABELS = [
@@ -123,69 +193,120 @@ _MODE_CONFIG: dict[str, dict] = {
 CONFIG_FILE = "rf_config.json"
 
 # 급변 감지 임계값 (이전 값 대비 이 % 이상 변하면 이미지 저장)
-# 예: 20.0 → 이전 값이 100이면 80 미만이거나 120 초과일 때 저장
 SPIKE_THRESHOLD_PCT: float = 20.0
 
-# 원본 프레임 저장 간격 (초) — 템플릿 수집용
-# 0 이하로 설정하면 원본 저장 비활성화
-RAW_FRAME_SAVE_INTERVAL_S: float = 10.0
 
 # ──────────────────────────────────────────────────────────
-# OCR 함수
+# OCR 전처리 방식
 # ──────────────────────────────────────────────────────────
-def _ocr_crop(crop: np.ndarray, scale: int, tv: int, psm: int, digits: int = 0) -> Optional[str]:
-    """단일 ROI 크롭 → 숫자 문자열 (실패 시 None)"""
+def _apply_method(crop: np.ndarray, scale: int, method: str, tv: int = 0) -> Optional[np.ndarray]:
+    """전처리 방식 적용 → 이진화 이미지 반환"""
+    try:
+        if method == "norm_otsu":
+            big = cv2.resize(crop[:, :, 2], None, fx=scale, fy=scale,
+                             interpolation=cv2.INTER_LANCZOS4)
+            vmin, vmax = float(big.min()), float(big.max())
+            if vmax - vmin < 1:
+                return None
+            big = ((big.astype(float) - vmin) / (vmax - vmin) * 255).astype(np.uint8)
+            _, th = cv2.threshold(big, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            return th
+
+        elif method == "norm_fixed":
+            big = cv2.resize(crop[:, :, 2], None, fx=scale, fy=scale,
+                             interpolation=cv2.INTER_LANCZOS4)
+            vmin, vmax = float(big.min()), float(big.max())
+            if vmax - vmin < 1:
+                return None
+            big = ((big.astype(float) - vmin) / (vmax - vmin) * 255).astype(np.uint8)
+            _, th = cv2.threshold(big, tv, 255, cv2.THRESH_BINARY)
+            return th
+
+        elif method == "rg_otsu":
+            r = crop[:, :, 2].astype(float)
+            g = crop[:, :, 1].astype(float)
+            diff = np.clip(r - g, 0, 255).astype(np.uint8)
+            big = cv2.resize(diff, None, fx=scale, fy=scale,
+                             interpolation=cv2.INTER_LANCZOS4)
+            vmin, vmax = float(big.min()), float(big.max())
+            if vmax - vmin < 1:
+                return None
+            big = ((big.astype(float) - vmin) / (vmax - vmin) * 255).astype(np.uint8)
+            _, th = cv2.threshold(big, 0, 255, cv2.THRESH_BINARY + cv2.THRESH_OTSU)
+            return th
+
+        elif method == "rg_fixed":
+            r = crop[:, :, 2].astype(float)
+            g = crop[:, :, 1].astype(float)
+            diff = np.clip(r - g, 0, 255).astype(np.uint8)
+            big = cv2.resize(diff, None, fx=scale, fy=scale,
+                             interpolation=cv2.INTER_LANCZOS4)
+            vmin, vmax = float(big.min()), float(big.max())
+            if vmax - vmin < 1:
+                return None
+            big = ((big.astype(float) - vmin) / (vmax - vmin) * 255).astype(np.uint8)
+            _, th = cv2.threshold(big, tv, 255, cv2.THRESH_BINARY)
+            return th
+
+        elif method == "fixed":
+            big = cv2.resize(crop[:, :, 2], None, fx=scale, fy=scale,
+                             interpolation=cv2.INTER_LANCZOS4)
+            _, th = cv2.threshold(big, tv, 255, cv2.THRESH_BINARY)
+            return th
+
+    except Exception as e:
+        logger.warning("[OCR] _apply_method 오류 (%s): %s", method, e)
+    return None
+
+
+def _post_process(th: np.ndarray, morph_k: int = 2) -> np.ndarray:
+    """이진화 후 공통 후처리: 반전체크 + CLOSE + medianBlur"""
+    if th.sum() / (255 * th.size) > 0.5:
+        th = cv2.bitwise_not(th)
+    k = np.ones((morph_k, morph_k), np.uint8)
+    th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, k)
+    th = cv2.medianBlur(th, 3)
+    return th
+
+
+def _run_tesseract(th: np.ndarray, psm: int, border: int = 15) -> str:
+    """Tesseract 실행 → 숫자+마이너스 문자열 반환"""
+    bordered = cv2.copyMakeBorder(th, border, border, border, border,
+                                  cv2.BORDER_CONSTANT, value=0)
+    cfg = f'--psm {psm} --oem 3 -c tessedit_char_whitelist=0123456789-'
+    raw = pytesseract.image_to_string(bordered, config=cfg).strip()
+    return ''.join(c for c in raw if c.isdigit() or c == '-')
+
+
+def _ocr_cascade(crop: np.ndarray, params: dict) -> Optional[str]:
+    """ROI별 캐스케이드 OCR — 1순위 실패 시 2순위, 3순위 자동 시도."""
     if not _TESSERACT_OK or crop is None or crop.size == 0:
         return None
-    try:
-        led = crop[:, :, 2]   # R 채널 (빨간 LED)
-        big = cv2.resize(led, None, fx=scale, fy=scale,
-                         interpolation=cv2.INTER_LANCZOS4)
-        if tv == 0:
-            _, th = cv2.threshold(big, 0, 255,
-                                  cv2.THRESH_BINARY + cv2.THRESH_OTSU)
-        else:
-            _, th = cv2.threshold(big, tv, 255, cv2.THRESH_BINARY)
 
-        # 흰 픽셀 과반이면 배경이 밝은 것 → 반전
-        if th.sum() / (255 * th.size) > 0.5:
-            th = cv2.bitwise_not(th)
+    scale  = params["scale"]
+    digits = params["digits"]
 
-        k_close = np.ones((2, 2), np.uint8)
-        th = cv2.morphologyEx(th, cv2.MORPH_CLOSE, k_close)
-        th = cv2.medianBlur(th, 3)
-        th = cv2.copyMakeBorder(th, 15, 15, 15, 15,
-                                cv2.BORDER_CONSTANT, value=0)
+    for m in params.get("methods", []):
+        try:
+            method  = m["method"]
+            psm     = m["psm"]
+            morph_k = m.get("morph_k", 2)
+            border  = m.get("border", 15)
 
-        cfg = f'--psm {psm} --oem 3 -c tessedit_char_whitelist=0123456789-'
-        raw = pytesseract.image_to_string(th, config=cfg).strip()
-        result = ''.join(c for c in raw if c.isdigit() or c == '-')
+            th = _apply_method(crop, scale, method, m.get("tv", 0))
+            if th is None:
+                continue
 
-        # 실패 시 다른 psm으로 재시도
-        if not result:
-            for fallback in [8, 7, 6, 13]:
-                if fallback == psm:
-                    continue
-                cfg2 = (f'--psm {fallback} --oem 3 '
-                        f'-c tessedit_char_whitelist=0123456789-')
-                raw2 = pytesseract.image_to_string(th, config=cfg2).strip()
-                result = ''.join(c for c in raw2 if c.isdigit() or c == '-')
-                if result:
-                    break
+            th = _post_process(th, morph_k)
+            result = _run_tesseract(th, psm, border)
 
-        if not result:
-            return None
+            if result and len(result) == digits:
+                return result
 
-        # 자릿수 검증: 기대 자릿수와 다르면 인식 실패로 처리
-        if digits > 0 and len(result) != digits:
-            logger.debug("[OCR] 자릿수 불일치: 기대 %d, 인식 '%s' (%d자)", digits, result, len(result))
-            return None
+        except Exception as e:
+            logger.warning("[OCR] cascade 오류 (%s): %s", m.get("method", "?"), e)
 
-        return result
-    
-    except Exception as e:
-        logger.warning("[OCR] 크롭 처리 오류: %s", e)
-        return None
+    return None
 
 
 # ──────────────────────────────────────────────────────────
@@ -238,7 +359,7 @@ class CameraRecorder:
 
         self._mode          = "ALL"
         self._active_labels = list(_ALL_LABELS)
-        self._check_labels  = list(_ALL_LABELS)  # ← 추가
+        self._check_labels  = list(_ALL_LABELS)
         self._mode_folder   = "ALL"
 
         self._load_config()
@@ -268,7 +389,6 @@ class CameraRecorder:
         mode : "CH1" | "CH2" | "CLEANING" | "ALL"
         """
         with self._lock:
-            # 이미 돌고 있으면 먼저 종료
             if self._thread and self._thread.is_alive():
                 logger.debug("[CameraRecorder] 이전 스레드 정리")
                 self._stop_event.set()
@@ -283,7 +403,7 @@ class CameraRecorder:
 
             self._thread = threading.Thread(
                 target=self._record_loop,
-                daemon=True,              # 메인 프로세스 종료 시 자동 종료
+                daemon=True,
                 name=f"CameraRecorder-{self._mode}",
             )
             self._thread.start()
@@ -310,8 +430,8 @@ class CameraRecorder:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
 
         root      = _resolve_root()
-        mode_dir  = root / self._mode_folder          # …/CH1/
-        raw_dir   = mode_dir / "raw" / ts             # …/CH1/raw/20260326_143022/
+        mode_dir  = root / self._mode_folder
+        raw_dir   = mode_dir / "raw" / ts
         csv_path  = mode_dir / f"{self._mode_folder}_{ts}.csv"
 
         try:
@@ -320,19 +440,6 @@ class CameraRecorder:
         except Exception as e:
             logger.error("[CameraRecorder] 폴더 생성 실패: %s", e)
             return
-        
-        # ── 원본 프레임 저장 폴더 (템플릿 수집용) ──────────
-        frames_dir = mode_dir / "frames" / ts
-        _save_raw = RAW_FRAME_SAVE_INTERVAL_S > 0
-        if _save_raw:
-            try:
-                frames_dir.mkdir(parents=True, exist_ok=True)
-                logger.info("[CameraRecorder] 원본 프레임 → %s (%.0f초 간격)",
-                            frames_dir, RAW_FRAME_SAVE_INTERVAL_S)
-            except Exception as e:
-                logger.warning("[CameraRecorder] frames 폴더 생성 실패: %s", e)
-                _save_raw = False
-        _last_frame_save: float = 0.0
 
         # ── 2) 카메라 오픈 ────────────────────────────────
         cap = cv2.VideoCapture(self._cam_idx)
@@ -340,7 +447,6 @@ class CameraRecorder:
             logger.error("[CameraRecorder] 카메라 열기 실패 (index=%d)", self._cam_idx)
             return
 
-        # 해상도 강제 설정 (ROI 좌표가 1920x1080 기준)
         cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1920)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
         actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
@@ -380,25 +486,16 @@ class CameraRecorder:
                     img_count += 1
 
                     now_dt  = datetime.now()
-                    now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")       # CSV용
-                    now_hms = now_dt.strftime("%H%M%S")                  # 파일명용
+                    now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
+                    now_hms = now_dt.strftime("%H%M%S")
 
                     # ── 회전 보정 ────────────────────────
                     frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
 
-                    # ── 원본 프레임 저장 (템플릿 수집용) ──
-                    if _save_raw and (time.time() - _last_frame_save) >= RAW_FRAME_SAVE_INTERVAL_S:
-                        try:
-                            fname = frames_dir / f"{now_hms}_{img_count:04d}.jpg"
-                            cv2.imwrite(str(fname), frame)
-                            _last_frame_save = time.time()
-                        except Exception as e:
-                            logger.warning("[CameraRecorder] 원본 프레임 저장 실패: %s", e)
-
-                    # ── OCR ──────────────────────────────
+                    # ── OCR (캐스케이드) ──────────────────
                     row: dict = {"timestamp": now_str}
-                    ocr_failed   = False   # 하나라도 인식 실패
-                    spike_detect = False   # 하나라도 급변 감지
+                    ocr_failed   = False
+                    spike_detect = False
 
                     for label, roi, p in zip(self._active_labels, self._rois, self._params):
                         y1, y2, x1, x2 = roi
@@ -407,7 +504,8 @@ class CameraRecorder:
                         y1p, y2p = max(0, y1 - pad), min(fh, y2 + pad)
                         x1p, x2p = max(0, x1 - pad), min(fw, x2 + pad)
                         crop = frame[y1p:y2p, x1p:x2p]
-                        result = _ocr_crop(crop, p["scale"], p["tv"], p["psm"], digits=p.get("digits", 0))
+
+                        result = _ocr_cascade(crop, p)
                         row[label] = result
 
                         # 에러/급변 판단은 해당 공정 관련 레이블만
@@ -415,10 +513,8 @@ class CameraRecorder:
                             continue
 
                         if result is None:
-                            # OCR 실패
                             ocr_failed = True
                         else:
-                            # 급변 감지: 이전 값 대비 SPIKE_THRESHOLD % 이상 변화
                             try:
                                 cur_val  = float(result)
                                 prev_val = prev_values.get(label)
@@ -438,8 +534,7 @@ class CameraRecorder:
                     writer.writerow(row)
                     f.flush()
 
-                    # ── 조건부 이미지 저장 (진단 이미지) ───────────────
-                    # 저장 조건: OCR 실패 OR 급변 감지
+                    # ── 조건부 이미지 저장 (진단 이미지) ──
                     if ocr_failed or spike_detect:
                         saved_count += 1
                         reason = []
@@ -447,11 +542,10 @@ class CameraRecorder:
                         if spike_detect: reason.append("spike")
                         reason_str = "_".join(reason)
 
-                        # ROI 박스 + OCR 결과 오버레이한 진단 이미지 저장
                         try:
                             diag = frame.copy()
-                            for lbl, roi, p in zip(_ALL_LABELS, self._rois, self._params):
-                                y1d, y2d, x1d, x2d = roi
+                            for lbl, roi_d, pd in zip(_ALL_LABELS, self._rois, self._params):
+                                y1d, y2d, x1d, x2d = roi_d
                                 color = (0, 255, 80) if lbl in self._check_labels else (120, 120, 120)
                                 cv2.rectangle(diag, (x1d, y1d), (x2d, y2d), color, 2)
                                 val = row.get(lbl, "")
