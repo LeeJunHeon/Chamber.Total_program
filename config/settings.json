@@ -1,360 +1,389 @@
 {
-  "__meta__": {
-    "version": 1,
-    "description": "CH12 Program 설정 파일. exe 옆 config/ 폴더에 위치하며, 메모장으로 편집 가능합니다.",
-    "note_json_exclude": "Path, bytes, lambda, 계산식 값은 JSON에 포함할 수 없어 .py 파일에서 유지됩니다."
-  },
+  // ================================================================
+  //  CH12 Program 설정 파일
+  //  - 이 파일의 값을 수정하고 프로그램을 재시작하면 반영됩니다.
+  //  - 값을 잘못 입력하면 해당 값만 무시되고 기본값이 사용됩니다.
+  //  - "//" 뒤의 글자는 설명이며, 프로그램에 영향을 주지 않습니다.
+  // ================================================================
 
 
   "common": {
 
-    "__section__ HOST_SERVER": "외부 제어 호스트 서버 설정",
-    "HOST_SERVER_HOST": "0.0.0.0",
-    "HOST_SERVER_PORT": 50070,
+    // ── 외부 제어 호스트 서버 ──
+    "HOST_SERVER_HOST": "0.0.0.0",         // 서버 IP ("0.0.0.0" = 모든 접속 허용, "127.0.0.1" = 로컬만)
+    "HOST_SERVER_PORT": 50070,             // 서버 포트 (방화벽 인바운드 허용 필요)
 
-    "__section__ TCP_INACTIVITY": "TCP 유휴재연결(초). 0이면 사용 안함",
-    "IG_INACTIVITY_REOPEN_S": 0,
-    "MFC_INACTIVITY_REOPEN_S": 0,
-    "TSP_INACTIVITY_REOPEN_S": 0,
-    "DCP_INACTIVITY_REOPEN_S": 0,
-    "RFP_INACTIVITY_REOPEN_S": 0,
+    // ── TCP 유휴 재연결 (초) ──
+    // 장비와 통신이 없는 상태가 이 시간만큼 지속되면 자동으로 재연결합니다.
+    // 0으로 설정하면 이 기능을 사용하지 않습니다.
+    "IG_INACTIVITY_REOPEN_S": 0,           // IG (이온게이지)
+    "MFC_INACTIVITY_REOPEN_S": 0,          // MFC (가스유량계)
+    "TSP_INACTIVITY_REOPEN_S": 0,          // TSP (티타늄 승화 펌프)
+    "DCP_INACTIVITY_REOPEN_S": 0,          // DC Pulse 전원
+    "RFP_INACTIVITY_REOPEN_S": 0,          // RF Pulse 전원
 
-    "__section__ TCP_KEEPALIVE": "TCP Keepalive 사용 여부 (대부분 false 권장)",
+    // ── TCP Keepalive ──
+    // true로 설정하면 주기적으로 연결 확인 패킷을 보냅니다.
+    // 대부분 false 권장 (위의 유휴 재연결과 동시 사용 시 충돌 가능)
     "IG_TCP_KEEPALIVE": false,
     "MFC_TCP_KEEPALIVE": false,
     "TSP_TCP_KEEPALIVE": false,
     "DCP_TCP_KEEPALIVE": false,
     "RFP_TCP_KEEPALIVE": false,
 
-    "__section__ DEBUG": "디버그",
-    "DEBUG_PRINT": false,
+    // ── 디버그 ──
+    "DEBUG_PRINT": false,                  // true로 바꾸면 상세 디버그 메시지 출력
 
-    "__section__ SHUTDOWN": "종료 시퀀스 대기 정책",
-    "SHUTDOWN_STEP_TIMEOUT_MS": 2500,
-    "SHUTDOWN_STEP_GAP_MS": 500,
+    // ── 프로그램 종료 시퀀스 ──
+    "SHUTDOWN_STEP_TIMEOUT_MS": 2500,      // 종료 중 각 단계 확인 대기 시간 (ms)
+    "SHUTDOWN_STEP_GAP_MS": 500,           // 종료 단계 사이 대기 시간 (ms)
 
-    "__section__ COMMON_TIMING": "공통 통신 타이밍/타임아웃",
-    "ACK_TIMEOUT_MS": 2000,
-    "QUERY_TIMEOUT_MS": 4500,
-    "RECV_FRAME_TIMEOUT_MS": 4000,
-    "CMD_GAP_MS": 1500,
-    "POST_WRITE_DELAY_MS": 1500,
-    "ACK_FOLLOWUP_GRACE_MS": 500,
+    // ── 공통 통신 타이밍 ──
+    // 장비와의 명령 송수신 타이밍입니다. 통신 오류가 잦으면 값을 늘려보세요.
+    "ACK_TIMEOUT_MS": 2000,                // 장비 응답 대기 시간 (ms)
+    "QUERY_TIMEOUT_MS": 4500,              // 조회 명령 응답 대기 시간 (ms)
+    "RECV_FRAME_TIMEOUT_MS": 4000,         // 데이터 수신 대기 시간 (ms)
+    "CMD_GAP_MS": 1500,                    // 명령 사이 최소 간격 (ms)
+    "POST_WRITE_DELAY_MS": 1500,           // 쓰기 명령 후 대기 시간 (ms)
+    "ACK_FOLLOWUP_GRACE_MS": 500,          // 응답 확인 후 추가 대기 (ms)
 
-    "__section__ RGA": "RGA (외부 프로그램 실행 + CSV 저장)",
-    "RGA_WORKER_TIMEOUT_S": 60.0,
-    "RGA_XLSX_SHEET": "Histogram",
+    // ── RGA (잔류가스분석기) ──
+    "RGA_WORKER_TIMEOUT_S": 60.0,          // RGA 측정 최대 대기 시간 (초)
+    "RGA_XLSX_SHEET": "Histogram",         // RGA CSV 시트 이름
 
-    "__section__ IG": "IG (공통; 포트는 ch1/ch2에서 오버라이드)",
-    "IG_TCP_HOST": "192.168.1.50",
-    "IG_SKIP_ECHO": true,
-    "IG_CONNECT_TIMEOUT_S": 3.0,
-    "IG_TIMEOUT_MS": 3000,
-    "IG_GAP_MS": 1000,
-    "IG_POLLING_INTERVAL_MS": 10000,
-    "IG_WATCHDOG_INTERVAL_MS": 2000,
-    "IG_RECONNECT_BACKOFF_START_MS": 1000,
-    "IG_RECONNECT_BACKOFF_MAX_MS": 20000,
-    "IG_WAIT_TIMEOUT": 600,
-    "IG_REIGNITE_MAX_ATTEMPTS": 3,
-    "IG_REIGNITE_BACKOFF_MS": [2000, 5000, 10000],
-    "IG_DRAIN_TIMEOUT_S": 2.0,
-    "IG_FIRST_READ_DELAY_MS": 5000,
+    // ── IG (이온게이지) ──
+    // 진공도를 측정하는 장비입니다. 포트는 ch1/ch2 섹션에서 각각 설정합니다.
+    "IG_TCP_HOST": "192.168.1.50",         // IG가 연결된 MOXA(TCP-Serial 변환기) IP
+    "IG_SKIP_ECHO": true,                  // 장비가 보낸 에코 무시 (보통 true)
+    "IG_CONNECT_TIMEOUT_S": 3.0,           // IG 연결 타임아웃 (초)
+    "IG_TIMEOUT_MS": 3000,                 // IG 명령 응답 대기 (ms)
+    "IG_GAP_MS": 1000,                     // IG 명령 사이 최소 간격 (ms)
+    "IG_POLLING_INTERVAL_MS": 10000,       // 진공도 자동 읽기 주기 (ms). 10000 = 10초마다
+    "IG_WATCHDOG_INTERVAL_MS": 2000,       // IG 연결 상태 확인 주기 (ms)
+    "IG_RECONNECT_BACKOFF_START_MS": 1000, // 재연결 시도 간격 시작값 (ms)
+    "IG_RECONNECT_BACKOFF_MAX_MS": 20000,  // 재연결 시도 간격 최대값 (ms)
+    "IG_WAIT_TIMEOUT": 600,                // 베이스 진공 도달 최대 대기 (초). 600 = 10분
+    "IG_REIGNITE_MAX_ATTEMPTS": 3,         // IG 자동 재점등 최대 횟수
+    "IG_REIGNITE_BACKOFF_MS": [2000, 5000, 10000],  // 재점등 실패 시 재시도 간격 (ms)
+    "IG_DRAIN_TIMEOUT_S": 2.0,             // 데이터 전송 완료 대기 (초)
+    "IG_FIRST_READ_DELAY_MS": 5000,        // IG ON 후 첫 읽기까지 대기 (ms)
 
-    "__section__ RF": "RF Power 보정 및 제어 설정(공통)",
-    "RF_MAX_POWER": 600,
-    "RF_RAMP_STEP": 1.0,
-    "RF_MAINTAIN_STEP": 0.1,
-    "RF_TOLERANCE_POWER": 1,
-    "RF_LOW_POWER_THRESH_W": 1.0,
-    "RF_LOW_POWER_COUNT_MAX_N": 3,
-    "RF_PARAM_WATT_TO_DAC": 6.79,
-    "RF_OFFSET_WATT_TO_DAC": 6.93,
-    "RF_PARAM_ADC_TO_WATT": 0.0236431,
-    "RF_OFFSET_ADC_TO_WATT": -1.3362,
-    "RF_WATT_PER_VOLT": 63.49,
+    // ── RF Power (고주파 전원) ──
+    // RF 전원의 출력 보정 및 제어 파라미터입니다.
+    "RF_MAX_POWER": 600,                   // RF 최대 출력 (W)
+    "RF_RAMP_STEP": 1.0,                   // 출력 올릴 때 한 단계 크기 (W)
+    "RF_MAINTAIN_STEP": 0.1,               // 출력 유지 중 미세 조정 단계 (W)
+    "RF_TOLERANCE_POWER": 1,               // 목표 출력 허용 오차 (W)
+    "RF_LOW_POWER_THRESH_W": 1.0,          // 이 값 이하면 '출력 없음'으로 판단 (W)
+    "RF_LOW_POWER_COUNT_MAX_N": 3,         // 연속 이 횟수만큼 저출력이면 경고
+    // RF 보정계수 (캘리브레이션 값 - 장비 교정 후 변경)
+    "RF_PARAM_WATT_TO_DAC": 6.79,          // W -> DAC 변환 기울기
+    "RF_OFFSET_WATT_TO_DAC": 6.93,         // W -> DAC 변환 오프셋
+    "RF_PARAM_ADC_TO_WATT": 0.0236431,     // ADC -> W 변환 기울기
+    "RF_OFFSET_ADC_TO_WATT": -1.3362,      // ADC -> W 변환 오프셋
+    "RF_WATT_PER_VOLT": 63.49,             // 전압당 출력 (W/V)
 
-    "__section__ DC": "DC Power 보정 및 제어 설정(공통)",
-    "DC_MAX_POWER": 1000,
-    "DC_INTERVAL_MS": 5000,
-    "DC_RAMP_STEP": 5,
-    "DC_MAINTAIN_STEP": 1,
-    "DC_TOLERANCE_POWER": 1,
-    "DC_LOW_W_THRESH": 1.0,
-    "DC_LOW_STREAK_N": 3,
-    "DC_LOW_CURRENT_THRESH_A": 0.05,
-    "DC_LOW_CURRENT_STREAK_N": 3,
-    "DC_WATT_DEADBAND": 0.5,
-    "DC_PARAM_WATT_TO_DAC": 4.0835,
-    "DC_OFFSET_WATT_TO_DAC": 5.275,
-    "DC_PARAM_ADC_TO_VOLT": 0.076112,
-    "DC_OFFSET_ADC_TO_VOLT": -6.8453,
-    "DC_PARAM_ADC_TO_AMP": 0.000150567,
-    "DC_OFFSET_ADC_TO_AMP": -0.003118,
+    // ── DC Power (직류 전원) ──
+    // DC 전원의 출력 보정 및 제어 파라미터입니다.
+    "DC_MAX_POWER": 1000,                  // DC 최대 출력 (W)
+    "DC_INTERVAL_MS": 5000,                // DC 상태 확인 주기 (ms)
+    "DC_RAMP_STEP": 5,                     // 출력 올릴 때 한 단계 크기 (W)
+    "DC_MAINTAIN_STEP": 1,                 // 출력 유지 중 미세 조정 단계 (W)
+    "DC_TOLERANCE_POWER": 1,               // 목표 출력 허용 오차 (W)
+    "DC_LOW_W_THRESH": 1.0,                // 이 값 이하면 '출력 없음'으로 판단 (W)
+    "DC_LOW_STREAK_N": 3,                  // 연속 이 횟수만큼 저출력이면 경고
+    "DC_LOW_CURRENT_THRESH_A": 0.05,       // 이 값 이하면 '전류 없음'으로 판단 (A)
+    "DC_LOW_CURRENT_STREAK_N": 3,          // 연속 이 횟수만큼 저전류이면 경고
+    "DC_WATT_DEADBAND": 0.5,               // 이 범위 내 변화는 무시 (불필요한 재전송 방지) (W)
+    // DC 보정계수 (캘리브레이션 값 - 장비 교정 후 변경)
+    "DC_PARAM_WATT_TO_DAC": 4.0835,        // W -> DAC 변환 기울기
+    "DC_OFFSET_WATT_TO_DAC": 5.275,        // W -> DAC 변환 오프셋
+    "DC_PARAM_ADC_TO_VOLT": 0.076112,      // ADC -> 전압 변환 기울기
+    "DC_OFFSET_ADC_TO_VOLT": -6.8453,      // ADC -> 전압 변환 오프셋
+    "DC_PARAM_ADC_TO_AMP": 0.000150567,    // ADC -> 전류 변환 기울기
+    "DC_OFFSET_ADC_TO_AMP": -0.003118,     // ADC -> 전류 변환 오프셋
 
-    "__section__ OES": "OES",
-    "OES_AVG_COUNT": 3,
+    // ── OES (광학 방출 분광기) ──
+    "OES_AVG_COUNT": 3,                    // OES 측정 평균 횟수
 
-    "__section__ MFC": "MFC (공통; 포트는 ch1/ch2에서 오버라이드)",
-    "MFC_TCP_HOST": "192.168.1.50",
-    "MFC_TCP_PORT": 4003,
-    "MFC_SKIP_ECHO": true,
-    "MFC_CONNECT_TIMEOUT_S": 3.0,
-    "MFC_DRAIN_TIMEOUT_S": 2.0,
-    "FLOW_ERROR_TOLERANCE": 0.05,
-    "FLOW_ERROR_MAX_COUNT": 3,
-    "MFC_POST_OPEN_QUIET_MS": 800,
-    "MFC_ALLOW_NO_REPLY_DRAIN_MS": 80,
-    "MFC_FIRST_CMD_EXTRA_TIMEOUT_MS": 2000,
-    "MFC_ZEROING_GAP_MS": 1000,
-    "MFC_POLLING_INTERVAL_MS": 3000,
-    "MFC_STABILIZATION_INTERVAL_MS": 1000,
-    "MFC_WATCHDOG_INTERVAL_MS": 1500,
-    "MFC_RECONNECT_BACKOFF_START_MS": 1000,
-    "MFC_RECONNECT_BACKOFF_MAX_MS": 20000,
-    "MFC_TIMEOUT": 2000,
-    "MFC_GAP_MS": 1000,
-    "MFC_DELAY_MS": 1000,
-    "MFC_DELAY_MS_VALVE": 5000,
+    // ── MFC (가스 유량 제어기) ──
+    // 공정 가스 유량을 제어하는 장비입니다. 포트는 ch1/ch2 섹션에서 각각 설정합니다.
+    "MFC_TCP_HOST": "192.168.1.50",        // MFC가 연결된 MOXA IP
+    "MFC_TCP_PORT": 4003,                  // MFC 기본 포트 (채널별로 오버라이드됨)
+    "MFC_SKIP_ECHO": true,                 // 장비 에코 무시 (보통 true)
+    "MFC_CONNECT_TIMEOUT_S": 3.0,          // MFC 연결 타임아웃 (초)
+    "MFC_DRAIN_TIMEOUT_S": 2.0,            // 데이터 전송 완료 대기 (초)
+    "FLOW_ERROR_TOLERANCE": 0.05,          // 유량 오차 허용 범위 (비율, 0.05 = 5%)
+    "FLOW_ERROR_MAX_COUNT": 3,             // 유량 오차 연속 허용 횟수
+    "MFC_POST_OPEN_QUIET_MS": 800,         // 밸브 오픈 후 안정화 대기 (ms)
+    "MFC_ALLOW_NO_REPLY_DRAIN_MS": 80,     // 무응답 허용 시간 (ms)
+    "MFC_FIRST_CMD_EXTRA_TIMEOUT_MS": 2000,// 첫 명령 추가 대기 (ms)
+    "MFC_ZEROING_GAP_MS": 1000,            // MFC 영점 조정 후 대기 (ms)
+    "MFC_POLLING_INTERVAL_MS": 3000,       // 유량 자동 읽기 주기 (ms)
+    "MFC_STABILIZATION_INTERVAL_MS": 1000, // 유량 안정화 확인 주기 (ms)
+    "MFC_WATCHDOG_INTERVAL_MS": 1500,      // MFC 연결 상태 확인 주기 (ms)
+    "MFC_RECONNECT_BACKOFF_START_MS": 1000,// 재연결 시도 간격 시작값 (ms)
+    "MFC_RECONNECT_BACKOFF_MAX_MS": 20000, // 재연결 시도 간격 최대값 (ms)
+    "MFC_TIMEOUT": 2000,                   // MFC 명령 응답 대기 (ms)
+    "MFC_GAP_MS": 1000,                    // MFC 명령 사이 최소 간격 (ms)
+    "MFC_DELAY_MS": 1000,                  // MFC 일반 지연 (ms)
+    "MFC_DELAY_MS_VALVE": 5000,            // 밸브 동작 후 대기 (ms)
+    // MFC 채널별 유량 스케일 (UI 입력값 x 스케일 = 장비 전송값)
+    // 예: "2": 10.0 이면, UI에서 5 sccm 입력 시 장비에 50으로 전송
     "MFC_SCALE_FACTORS": {"1": 1.0, "2": 10.0, "3": 1.0},
-    "MFC_PRESSURE_SCALE": 0.1,
-    "MFC_PRESSURE_DECIMALS": 3,
-    "MFC_SP1_VERIFY_TOL": 0.1,
-    "MFC_PRESSURE_TOL_ABS": 0.02,
-    "MFC_PRESSURE_TOL_REL": 0.05,
-    "MFC_PRESSURE_STABLE_COUNT": 3,
-    "MFC_PRESSURE_TIMEOUT_SEC": 60.0,
-    "MFC_PRESSURE_CHECK_INTERVAL_SEC": 1.0,
-    "MFC_PRESSURE_READ_FAIL_STREAK_MAX": 3,
+    "MFC_PRESSURE_SCALE": 0.1,             // 압력 읽기 스케일 (raw x 이 값 = 실제 압력)
+    "MFC_PRESSURE_DECIMALS": 3,            // 압력 표시 소수점 자릿수
+    "MFC_SP1_VERIFY_TOL": 0.1,             // SP1 설정값 검증 허용 오차
+    "MFC_PRESSURE_TOL_ABS": 0.02,          // 압력 도달 판정: 절대 오차 (mTorr)
+    "MFC_PRESSURE_TOL_REL": 0.05,          // 압력 도달 판정: 상대 오차 (0.05 = 5%)
+    "MFC_PRESSURE_STABLE_COUNT": 3,        // 압력 안정 판정에 필요한 연속 확인 횟수
+    "MFC_PRESSURE_TIMEOUT_SEC": 60.0,      // 목표 압력 도달 최대 대기 (초)
+    "MFC_PRESSURE_CHECK_INTERVAL_SEC": 1.0,// 압력 확인 주기 (초)
+    "MFC_PRESSURE_READ_FAIL_STREAK_MAX": 3,// 압력 읽기 연속 실패 허용 횟수
 
-    "__section__ DCPULSE": "DC Pulse (공통 기본값)",
-    "DCPULSE_PORT": "192.168.1.50:4007",
-    "DCPULSE_BAUD": 9600,
-    "DCPULSE_ADDR": 1,
-    "DCPULSE_DEFAULT_DELAY_MS": 180,
-    "DCPULSE_TCP_HOST": "192.168.1.50",
-    "DCPULSE_TCP_PORT": 4007,
-    "DCP_MAX_POWER_W": 1000,
-    "DCP_P_SET_TOL_PCT": 0.05,
-    "DCP_P_SET_TOL_W": 15.0,
-    "DCP_P_SET_DEVIATE_MAX_N": 3,
-    "DCP_I_LOW_THRESH_A": 0.05,
-    "DCP_I_LOW_COUNT_MAX_N": 3,
-    "DCP_CMD_MAX_RETRIES": 5,
-    "DCP_RECOVER_MAX_ATTEMPTS": 5,
-    "DCP_WRITE_WORKER_RETRIES": 0,
-    "DCP_ENABLE_FAULT_RECOVER": true,
-    "DCP_ACTIVATION_CHECK_DELAY_S": 5.0,
-    "DCP_POLL_INTERVAL_S": 5.0,
-    "DCP_CONNECT_TIMEOUT_S": 3.0,
-    "DCP_TIMEOUT_MS": 2500,
-    "DCP_GAP_MS": 1000,
-    "DCP_WATCHDOG_INTERVAL_MS": 1000,
-    "DCP_RECONNECT_BACKOFF_START_MS": 1000,
-    "DCP_RECONNECT_BACKOFF_MAX_MS": 10000,
-    "DCP_FIRST_CMD_EXTRA_TIMEOUT_MS": 2000,
-    "DCP_POST_OPEN_QUIET_S": 0.8,
-    "DCP_DRAIN_TIMEOUT_S": 1.0,
-    "DCP_V_MEAS_V_PER_LSB": 1.468815,
-    "DCP_I_MEAS_A_PER_LSB": 0.01,
-    "DCP_P_MEAS_W_PER_LSB": 10.0,
-    "DCP_RAMP_MS_PER_LSB": 1.0,
-    "DCP_ARC_US_PER_LSB": 1.0,
-    "DCP_V_SET_STEP_V": 1.0,
-    "DCP_I_SET_STEP_A": 0.1,
-    "DCP_P_SET_STEP_W": 10.0,
+    // ── DC Pulse 전원 ──
+    "DCPULSE_PORT": "192.168.1.50:4007",   // DC Pulse 연결 주소 (레거시 호환용)
+    "DCPULSE_BAUD": 9600,                  // 시리얼 통신 속도 (bps)
+    "DCPULSE_ADDR": 1,                     // 장비 주소
+    "DCPULSE_DEFAULT_DELAY_MS": 180,       // 기본 명령 지연 (ms)
+    "DCPULSE_TCP_HOST": "192.168.1.50",    // DC Pulse TCP IP
+    "DCPULSE_TCP_PORT": 4007,              // DC Pulse TCP 포트
+    "DCP_MAX_POWER_W": 1000,               // DC Pulse 최대 출력 (W)
+    "DCP_P_SET_TOL_PCT": 0.05,             // 출력 설정 허용 오차 (비율, 0.05 = 5%)
+    "DCP_P_SET_TOL_W": 15.0,              // 출력 설정 허용 오차 (W)
+    "DCP_P_SET_DEVIATE_MAX_N": 3,          // 출력 이탈 연속 허용 횟수
+    "DCP_I_LOW_THRESH_A": 0.05,            // 저전류 판단 기준 (A)
+    "DCP_I_LOW_COUNT_MAX_N": 3,            // 저전류 연속 허용 횟수
+    "DCP_CMD_MAX_RETRIES": 5,              // 명령 실패 시 최대 재시도 횟수
+    "DCP_RECOVER_MAX_ATTEMPTS": 5,         // 장애 복구 최대 시도 횟수
+    "DCP_WRITE_WORKER_RETRIES": 0,         // 쓰기 워커 재시도 (0 = 재시도 안함)
+    "DCP_ENABLE_FAULT_RECOVER": true,      // 장애 자동 복구 사용 여부
+    "DCP_ACTIVATION_CHECK_DELAY_S": 5.0,   // 전원 활성화 확인까지 대기 (초)
+    "DCP_POLL_INTERVAL_S": 5.0,            // 상태 확인 주기 (초)
+    "DCP_CONNECT_TIMEOUT_S": 3.0,          // 연결 타임아웃 (초)
+    "DCP_TIMEOUT_MS": 2500,                // 명령 응답 대기 (ms)
+    "DCP_GAP_MS": 1000,                    // 명령 사이 최소 간격 (ms)
+    "DCP_WATCHDOG_INTERVAL_MS": 1000,      // 연결 상태 확인 주기 (ms)
+    "DCP_RECONNECT_BACKOFF_START_MS": 1000,// 재연결 간격 시작값 (ms)
+    "DCP_RECONNECT_BACKOFF_MAX_MS": 10000, // 재연결 간격 최대값 (ms)
+    "DCP_FIRST_CMD_EXTRA_TIMEOUT_MS": 2000,// 첫 명령 추가 대기 (ms)
+    "DCP_POST_OPEN_QUIET_S": 0.8,          // 연결 직후 안정화 대기 (초)
+    "DCP_DRAIN_TIMEOUT_S": 1.0,            // 데이터 전송 완료 대기 (초)
+    // DC Pulse 보정계수 (캘리브레이션 값 - 장비 교정 후 변경)
+    "DCP_V_MEAS_V_PER_LSB": 1.468815,     // 전압 측정: 1 LSB당 전압 (V)
+    "DCP_I_MEAS_A_PER_LSB": 0.01,         // 전류 측정: 1 LSB당 전류 (A)
+    "DCP_P_MEAS_W_PER_LSB": 10.0,         // 전력 측정: 1 LSB당 전력 (W)
+    "DCP_RAMP_MS_PER_LSB": 1.0,           // 램프 시간: 1 LSB당 시간 (ms)
+    "DCP_ARC_US_PER_LSB": 1.0,            // 아크 시간: 1 LSB당 시간 (us)
+    "DCP_V_SET_STEP_V": 1.0,              // 전압 설정 단위 (V)
+    "DCP_I_SET_STEP_A": 0.1,              // 전류 설정 단위 (A)
+    "DCP_P_SET_STEP_W": 10.0,             // 전력 설정 단위 (W)
 
-    "__section__ RFPULSE": "RF Pulse (공통 기본값)",
-    "RFPULSE_TCP_HOST": "192.168.1.50",
-    "RFPULSE_TCP_PORT": 4005,
-    "RFPULSE_ADDR": 1,
-    "RFPULSE_CONNECT_TIMEOUT_S": 1.5,
-    "RFPULSE_DRAIN_TIMEOUT_S": 2.0,
-    "RFPULSE_WATCHDOG_INTERVAL_MS": 3000,
-    "RFPULSE_RECONNECT_BACKOFF_START_MS": 2000,
-    "RFPULSE_RECONNECT_BACKOFF_MAX_MS": 30000,
-    "POLL_INTERVAL_MS": 5000,
-    "POLL_QUERY_TIMEOUT_MS": 9000,
-    "POLL_START_DELAY_AFTER_RF_ON_MS": 800,
-    "RFPULSE_PULSE_MODE": 1,
-    "RFPULSE_FORP_TOLERANCE_PERCENT": 5.0,
-    "RFPULSE_FORP_CONSECUTIVE_LIMIT": 3,
-    "RFPULSE_REFP_LIMIT_WATTS": 20.0,
-    "RFPULSE_REFP_CONSECUTIVE_LIMIT": 3,
+    // ── RF Pulse 전원 ──
+    "RFPULSE_TCP_HOST": "192.168.1.50",    // RF Pulse TCP IP
+    "RFPULSE_TCP_PORT": 4005,              // RF Pulse TCP 포트
+    "RFPULSE_ADDR": 1,                     // 장비 주소
+    "RFPULSE_CONNECT_TIMEOUT_S": 1.5,      // 연결 타임아웃 (초)
+    "RFPULSE_DRAIN_TIMEOUT_S": 2.0,        // 데이터 전송 완료 대기 (초)
+    "RFPULSE_WATCHDOG_INTERVAL_MS": 3000,  // 연결 상태 확인 주기 (ms)
+    "RFPULSE_RECONNECT_BACKOFF_START_MS": 2000,  // 재연결 간격 시작값 (ms)
+    "RFPULSE_RECONNECT_BACKOFF_MAX_MS": 30000,   // 재연결 간격 최대값 (ms)
+    "POLL_INTERVAL_MS": 5000,              // RF Pulse 상태 확인 주기 (ms)
+    "POLL_QUERY_TIMEOUT_MS": 9000,         // RF Pulse 조회 타임아웃 (ms)
+    "POLL_START_DELAY_AFTER_RF_ON_MS": 800,// RF ON 후 첫 확인까지 대기 (ms)
+    "RFPULSE_PULSE_MODE": 1,               // 펄스 모드 (0~5, 장비 프로토콜에 따라 설정)
+    "RFPULSE_FORP_TOLERANCE_PERCENT": 5.0, // Forward Power 허용 오차 (%)
+    "RFPULSE_FORP_CONSECUTIVE_LIMIT": 3,   // Forward Power 오차 연속 허용 횟수
+    "RFPULSE_REFP_LIMIT_WATTS": 20.0,      // Reflected Power 경고 기준 (W)
+    "RFPULSE_REFP_CONSECUTIVE_LIMIT": 3,   // Reflected Power 초과 연속 허용 횟수
 
-    "__section__ SUPPORTS": "프로세스 컨트롤러 기능 지원 플래그 기본값",
-    "SUPPORTS_DC": true,
-    "SUPPORTS_RF_CONT": false,
-    "SUPPORTS_RFPULSE": true,
+    // ── 공정 장비 지원 플래그 ──
+    // true/false로 해당 장비 사용 여부를 설정합니다.
+    "SUPPORTS_DC": true,                   // DC Power 사용
+    "SUPPORTS_RF_CONT": false,             // RF Continuous 사용 (CH2에서 true로 오버라이드됨)
+    "SUPPORTS_RFPULSE": true,              // RF Pulse 사용
 
-    "__section__ PLC": "PLC (Modbus-TCP)",
-    "PLC_TCP_HOST": "192.168.1.2",
-    "PLC_TCP_PORT": 502,
-    "PLC_UNIT": 1,
-    "PLC_TIMEOUT_S": 2.0,
-    "PLC_CMD_GAP_MS": 150,
-    "PLC_WATCHDOG_INTERVAL_S": 15.0,
-    "PLC_RECONNECT_RETRY": 2,
-    "PLC_RECONNECT_DELAY_S": 0.5,
-    "PLC_CMD_PULSE_MS": 180,
-    "PLC_LOCK_WARN_MS": 1000.0,
-    "PLC_IO_WARN_MS": 1500.0,
-    "PLC_COIL_LOG_INTERVAL_S": 1.0,
+    // ── PLC (공정 제어 PLC) ──
+    "PLC_TCP_HOST": "192.168.1.2",         // PLC IP 주소
+    "PLC_TCP_PORT": 502,                   // PLC Modbus 포트 (기본 502)
+    "PLC_UNIT": 1,                         // PLC Unit ID
+    "PLC_TIMEOUT_S": 2.0,                  // PLC 응답 타임아웃 (초)
+    "PLC_CMD_GAP_MS": 150,                 // PLC 명령 사이 최소 간격 (ms)
+    "PLC_WATCHDOG_INTERVAL_S": 15.0,       // PLC 연결 확인(하트비트) 주기 (초)
+    "PLC_RECONNECT_RETRY": 2,              // PLC 재연결 최대 시도 횟수
+    "PLC_RECONNECT_DELAY_S": 0.5,          // PLC 재연결 시도 간격 (초)
+    "PLC_CMD_PULSE_MS": 180,               // PLC 펄스 명령 유지 시간 (ms)
+    "PLC_LOCK_WARN_MS": 1000.0,            // PLC 잠금 대기 경고 기준 (ms)
+    "PLC_IO_WARN_MS": 1500.0,              // PLC I/O 지연 경고 기준 (ms)
+    "PLC_COIL_LOG_INTERVAL_S": 1.0,        // PLC 코일 상태 로그 기록 주기 (초)
     "PLC_COIL_LOG_NAS_DIR": "\\\\VanaM_NAS\\VanaM_Sputter\\Sputter\\Logs\\CH1&2\\CH1&2_PLC",
 
-    "__section__ PLC_CALIB": "PLC (Calibration / Scaling)",
-    "PLC_DC_POWER_MIN_W": 0.0,
-    "PLC_DC_POWER_MAX_W": 1000.0,
-    "PLC_DC_DAC_FULL_SCALE": 4000,
-    "PLC_DC_DAC_OFFSET": 0,
-    "PLC_DC_WRITE_INDEX": 0,
-    "PLC_DC_V_SCALE": 0.50316,
-    "PLC_DC_I_SCALE": 0.00097405,
-    "PLC_RF_CH1_FWD_A": 0.1503488383,
-    "PLC_RF_CH1_FWD_B": 3.0664228165,
-    "PLC_RF_CH1_REF_A": 0.1565388751,
-    "PLC_RF_CH1_REF_B": 12.2067054791,
-    "PLC_RF_CH2_FWD_A": 0.15059,
-    "PLC_RF_CH2_FWD_B": -0.598,
-    "PLC_RF_CH2_REF_A": 0.12940,
-    "PLC_RF_CH2_REF_B": -0.267,
-    "PLC_RF_FORWARD_ZERO_W": 4.0,
-    "PLC_RF_REFLECTED_ZERO_W": 14.0,
+    // ── PLC 보정계수 (캘리브레이션) ──
+    // PLC를 통한 전력 제어 및 측정 변환에 사용되는 값입니다.
+    // 장비 교정 후에만 변경하세요.
+    "PLC_DC_POWER_MIN_W": 0.0,             // DC 최소 출력 (W)
+    "PLC_DC_POWER_MAX_W": 1000.0,          // DC 최대 출력 (W)
+    "PLC_DC_DAC_FULL_SCALE": 4000,         // DAC 풀스케일 값
+    "PLC_DC_DAC_OFFSET": 0,                // DAC 오프셋
+    "PLC_DC_WRITE_INDEX": 0,               // DC 쓰기 레지스터 인덱스 (0=WRITE_0)
+    "PLC_DC_V_SCALE": 0.50316,             // DC 전압 읽기 스케일 (raw x 이 값 = V)
+    "PLC_DC_I_SCALE": 0.00097405,          // DC 전류 읽기 스케일 (raw x 이 값 = A)
+    // RF 피드백 보정 (PLC에서 읽은 raw 값 -> 실제 W 변환: W = A x raw + B)
+    "PLC_RF_CH1_FWD_A": 0.1503488383,     // CH1 Forward 기울기
+    "PLC_RF_CH1_FWD_B": 3.0664228165,     // CH1 Forward 오프셋
+    "PLC_RF_CH1_REF_A": 0.1565388751,     // CH1 Reflected 기울기
+    "PLC_RF_CH1_REF_B": 12.2067054791,    // CH1 Reflected 오프셋
+    "PLC_RF_CH2_FWD_A": 0.15059,          // CH2 Forward 기울기
+    "PLC_RF_CH2_FWD_B": -0.598,           // CH2 Forward 오프셋
+    "PLC_RF_CH2_REF_A": 0.12940,          // CH2 Reflected 기울기
+    "PLC_RF_CH2_REF_B": -0.267,           // CH2 Reflected 오프셋
+    "PLC_RF_FORWARD_ZERO_W": 4.0,         // Forward Power 대기 상태 오프셋 (W)
+    "PLC_RF_REFLECTED_ZERO_W": 14.0,      // Reflected Power 대기 상태 오프셋 (W)
 
-    "__section__ CHAMBER": "chamber_runtime.py 공통 런타임 기본값",
+    // ── 챔버 공정 런타임 ──
     "PROCESS_LIST_START_DIR": "\\\\VanaM_NAS\\VanaM_toShare",
     "SPUTTER_CALIB_DB_DIR": "\\\\VanaM_NAS\\VanaM_Sputter\\Sputter\\Calib\\Database",
-    "CHAMBER_OES_USB_INDEX_CH1": 0,
-    "CHAMBER_OES_USB_INDEX_CH2": 1,
-    "CHAMBER_RF_CONT_POLL_INTERVAL_MS": 1000,
-    "CHAMBER_RF_CONT_RAMPDOWN_INTERVAL_MS": 50,
-    "CHAMBER_RF_CONT_DIRECT_MODE": false,
-    "CHAMBER_RF_CONT_ZEROING": false,
-    "CHAMBER_RF_CONT_WRITE_INV_A": 1.6546,
-    "CHAMBER_RF_CONT_WRITE_INV_B": 2.6323,
-    "CHAMBER_GATE_RECHECK_COUNT": 5,
-    "CHAMBER_GATE_READ_TIMEOUT_S": 0.6,
-    "CHAMBER_GATE_RECHECK_INTERVAL_S": 0.2,
-    "CHAMBER_CHUCK_MOVE_TIMEOUT_S": 60.0,
-    "CHAMBER_CHUCK_POWER_ON_SETTLE_S": 0.2,
-    "CHAMBER_CHUCK_POLL_INTERVAL_S": 0.3,
-    "CHAMBER_PULSE_RECONNECT_TIMEOUT_S": 2.0,
-    "CHAMBER_PREFLIGHT_TIMEOUT_S": 8.0,
-    "CHAMBER_PREFLIGHT_TIMEOUT_WITH_PULSE_S": 10.0,
-    "CHAMBER_OES_INIT_TIMEOUT_S": 20.0,
-    "CHAMBER_HOST_START_WAIT_TIMEOUT_S": 10.0,
+    "CHAMBER_OES_USB_INDEX_CH1": 0,        // CH1용 OES USB 인덱스
+    "CHAMBER_OES_USB_INDEX_CH2": 1,        // CH2용 OES USB 인덱스
+    "CHAMBER_RF_CONT_POLL_INTERVAL_MS": 1000,      // RF Continuous 상태 확인 주기 (ms)
+    "CHAMBER_RF_CONT_RAMPDOWN_INTERVAL_MS": 50,    // RF 출력 내릴 때 단계 간격 (ms)
+    "CHAMBER_RF_CONT_DIRECT_MODE": false,           // RF Continuous 직접 제어 모드
+    "CHAMBER_RF_CONT_ZEROING": false,               // RF Continuous 영점 보정 사용
+    "CHAMBER_RF_CONT_WRITE_INV_A": 1.6546,         // RF Continuous W->DAC 역변환 기울기
+    "CHAMBER_RF_CONT_WRITE_INV_B": 2.6323,         // RF Continuous W->DAC 역변환 오프셋
+    "CHAMBER_GATE_RECHECK_COUNT": 5,       // 게이트밸브 상태 재확인 횟수
+    "CHAMBER_GATE_READ_TIMEOUT_S": 0.6,    // 게이트밸브 읽기 타임아웃 (초)
+    "CHAMBER_GATE_RECHECK_INTERVAL_S": 0.2,// 게이트밸브 재확인 간격 (초)
+    "CHAMBER_CHUCK_MOVE_TIMEOUT_S": 60.0,  // 척 이동 최대 대기 (초)
+    "CHAMBER_CHUCK_POWER_ON_SETTLE_S": 0.2,// 척 전원 ON 후 안정화 대기 (초)
+    "CHAMBER_CHUCK_POLL_INTERVAL_S": 0.3,  // 척 상태 확인 주기 (초)
+    "CHAMBER_PULSE_RECONNECT_TIMEOUT_S": 2.0,      // Pulse 전원 재연결 타임아웃 (초)
+    "CHAMBER_PREFLIGHT_TIMEOUT_S": 8.0,             // 공정 시작 전 장비 점검 타임아웃 (초)
+    "CHAMBER_PREFLIGHT_TIMEOUT_WITH_PULSE_S": 10.0, // Pulse 포함 시 장비 점검 타임아웃 (초)
+    "CHAMBER_OES_INIT_TIMEOUT_S": 20.0,             // OES 초기화 타임아웃 (초)
+    "CHAMBER_HOST_START_WAIT_TIMEOUT_S": 10.0,      // 호스트 서버 시작 대기 타임아웃 (초)
 
-    "__section__ PROCESS": "process_controller.py 파라미터",
-    "PROCESS_DEFAULT_BASE_PRESSURE": 1e-5,
-    "PROCESS_DEFAULT_OES_INTEGRATION_MS": 60,
-    "PC_PRESSURE_WAIT_TIMEOUT_S": 180.0,
-    "PC_WORKING_PRESSURE_BOOST_TARGET": 10.0,
-    "PC_RF_PULSE_POST_ON_DELAY_MS": 20000,
-    "PC_POWER_OFF_TIMEOUT_MS": 240000,
+    // ── 공정 제어 ──
+    "PROCESS_DEFAULT_BASE_PRESSURE": 1e-5, // 기본 베이스 진공도 (Torr)
+    "PROCESS_DEFAULT_OES_INTEGRATION_MS": 60,       // OES 기본 적분 시간 (ms)
+    "PC_PRESSURE_WAIT_TIMEOUT_S": 180.0,            // 압력 대기 최대 시간 (초). 180 = 3분
+    "PC_WORKING_PRESSURE_BOOST_TARGET": 10.0,       // 이 값 미만의 working pressure는 SP2로 부스팅 (mTorr)
+    "PC_RF_PULSE_POST_ON_DELAY_MS": 20000,          // RF Pulse ON 후 안정화 대기 (ms). 20000 = 20초
+    "PC_POWER_OFF_TIMEOUT_MS": 240000,              // 전원 OFF 완료 대기 (ms). 240000 = 4분
 
-    "__section__ RECIPE": "ROBOT GET_RECIPE (NAS 레시피 폴더 스캔)",
+    // ── 레시피 (NAS 레시피 폴더 스캔) ──
     "ROBOT_RECIPE_ROOT_DIR": "\\\\VanaM_NAS\\VanaM_toShare\\JH_Lee\\Recipe",
-    "ROBOT_RECIPE_FOLDERS": ["CH1", "CH2", "ALD"],
-    "RECIPE_SCAN_TIMEOUT_S": 8.0,
+    "ROBOT_RECIPE_FOLDERS": ["CH1", "CH2", "ALD"],  // 허용 레시피 폴더
+    "RECIPE_SCAN_TIMEOUT_S": 8.0,          // 레시피 폴더 스캔 타임아웃 (초)
 
-    "__section__ TSP": "TSP (Turbo/Trap process)",
-    "TSP_TCP_HOST": "192.168.1.50",
-    "TSP_TCP_PORT": 4004,
-    "TSP_ADDR": 128,
-    "TSP_CONNECT_TIMEOUT_S": 2.0,
-    "TSP_WRITE_TIMEOUT_S": 1.2,
-    "TSP_POST_SEND_DELAY_MS": 20,
-    "TSP_TOLERATE_SHORT_RESP": true,
-    "TSP_STATUS_POLL_INTERVAL_S": 0.05,
-    "TSP_RS232_ADDR": 128,
-    "TSP_IG_TCP_PORT": 4001,
-    "TSP_ON_SEC": 120.0,
-    "TSP_OFF_SEC": 150.0,
-    "TSP_POLL_SEC": 10.0,
-    "TSP_FIRST_CHECK_DELAY_SEC": 5.0,
-    "TSP_VERIFY_WITH_STATUS": true,
-    "TSP_COOLDOWN_S": 60.0,
-    "TSP_TOTAL_TIMEOUT_MARGIN_S": 300.0,
-    "TSP_DAILY_ENABLE": true,
-    "TSP_DAILY_HH": 5,
-    "TSP_DAILY_MM": 0,
-    "TSP_UI_DEFAULT_TARGET": "2.5e-07",
-    "TSP_UI_DEFAULT_CYCLES": 10,
+    // ── TSP (티타늄 승화 펌프) ──
+    "TSP_TCP_HOST": "192.168.1.50",        // TSP가 연결된 MOXA IP
+    "TSP_TCP_PORT": 4004,                  // TSP TCP 포트
+    "TSP_ADDR": 128,                       // TSP RS232 주소 (0x80 = 128)
+    "TSP_CONNECT_TIMEOUT_S": 2.0,          // TSP 연결 타임아웃 (초)
+    "TSP_WRITE_TIMEOUT_S": 1.2,            // TSP 쓰기 타임아웃 (초)
+    "TSP_POST_SEND_DELAY_MS": 20,          // TSP 명령 전송 후 대기 (ms)
+    "TSP_TOLERATE_SHORT_RESP": true,       // 1바이트 짧은 응답 허용
+    "TSP_STATUS_POLL_INTERVAL_S": 0.05,    // TSP 상태 확인 주기 (초)
+    "TSP_RS232_ADDR": 128,                 // TSP RS232 고정 주소 (0x80 = 128)
+    "TSP_IG_TCP_PORT": 4001,               // TSP에서 사용하는 IG 포트
+    "TSP_ON_SEC": 120.0,                   // TSP ON 유지 시간 (초). 120 = 2분
+    "TSP_OFF_SEC": 150.0,                  // TSP OFF 유지 시간 (초). 150 = 2분 30초
+    "TSP_POLL_SEC": 10.0,                  // IG 진공도 확인 주기 (초)
+    "TSP_FIRST_CHECK_DELAY_SEC": 5.0,      // IG ON 후 첫 체크까지 대기 (초)
+    "TSP_VERIFY_WITH_STATUS": true,        // TSP on/off 후 상태 확인 여부
+    "TSP_COOLDOWN_S": 60.0,                // 다른 공정 종료 후 TSP 시작까지 쿨다운 (초)
+    "TSP_TOTAL_TIMEOUT_MARGIN_S": 300.0,   // 전체 TSP 프로세스 타임아웃 여유 (초). 300 = 5분
+    "TSP_DAILY_ENABLE": true,              // TSP 매일 자동 실행 여부
+    "TSP_DAILY_HH": 5,                     // 자동 실행 시각 (시)
+    "TSP_DAILY_MM": 0,                     // 자동 실행 시각 (분)
+    "TSP_UI_DEFAULT_TARGET": "2.5e-07",    // TSP 페이지 기본 목표 진공도 표시값
+    "TSP_UI_DEFAULT_CYCLES": 10,           // TSP 페이지 기본 사이클 수 표시값
 
-    "__section__ PC": "Plasma Cleaning 런타임 기본값",
-    "PC_DEFAULT_GAS_IDX": 3,
-    "PC_DEFAULT_GAS_FLOW_SCCM": 0.0,
-    "PC_DEFAULT_TARGET_PRESSURE_TORR": 5.0e-6,
-    "PC_DEFAULT_TOL_MTORR": 0.2,
-    "PC_DEFAULT_WAIT_TIMEOUT_S": 90.0,
-    "PC_DEFAULT_SP4_SETPOINT_MTORR": 2.0,
-    "PC_DEFAULT_RF_POWER_W": 100.0,
-    "PC_DEFAULT_PROCESS_TIME_MIN": 1.0,
-    "PC_DEFAULT_GV_OPEN_LAMP_DELAY_S": 5.0,
-    "PC_DEFAULT_IG_INTERVAL_MS": 10000,
-    "PC_PREFLIGHT_TIMEOUT_S": 10.0,
-    "PC_PREFLIGHT_PLC_HANDSHAKE_TIMEOUT_S": 1.0,
-    "PC_PREFLIGHT_DEVICE_CONNECT_TIMEOUT_S": 3.0,
-    "PC_PREFLIGHT_CONNECT_POLL_INTERVAL_S": 0.5,
-    "PC_RF_POLL_INTERVAL_MS": 1000,
-    "PC_RF_RAMPDOWN_INTERVAL_MS": 50,
-    "PC_RF_DIRECT_MODE": true,
-    "PC_RF_WRITE_INV_A": 1.74,
-    "PC_RF_WRITE_INV_B": 0.0,
-    "PC_RF_TARGET_WAIT_TIMEOUT_S": 60.0,
-    "PC_RF_TARGET_WAIT_EXTRA_S": 5.0,
-    "PC_RF_FAIL_REF_THRESHOLD_W": 20.0,
-    "PC_RF_CLEANUP_TIMEOUT_S": 5.0,
-    "PC_RF_WAIT_POWER_OFF_TIMEOUT_S": 15.0,
-    "PC_HOST_START_WAIT_TIMEOUT_S": 10.0
+    // ── Plasma Cleaning (플라즈마 클리닝) ──
+    "PC_DEFAULT_GAS_IDX": 3,               // 클리닝 가스 채널 번호 (3 = N2)
+    "PC_DEFAULT_GAS_FLOW_SCCM": 0.0,       // 기본 가스 유량 (sccm)
+    "PC_DEFAULT_TARGET_PRESSURE_TORR": 5.0e-6,     // 기본 목표 진공도 (Torr)
+    "PC_DEFAULT_TOL_MTORR": 0.2,           // 압력 허용 오차 (mTorr)
+    "PC_DEFAULT_WAIT_TIMEOUT_S": 90.0,     // 진공 대기 타임아웃 (초)
+    "PC_DEFAULT_SP4_SETPOINT_MTORR": 2.0,  // SP4 기본 설정값 (mTorr)
+    "PC_DEFAULT_RF_POWER_W": 100.0,        // 클리닝 기본 RF 출력 (W)
+    "PC_DEFAULT_PROCESS_TIME_MIN": 1.0,    // 클리닝 기본 공정 시간 (분)
+    "PC_DEFAULT_GV_OPEN_LAMP_DELAY_S": 5.0,// 게이트밸브 오픈 확인 대기 (초)
+    "PC_DEFAULT_IG_INTERVAL_MS": 10000,    // 클리닝 중 IG 읽기 주기 (ms)
+    "PC_PREFLIGHT_TIMEOUT_S": 10.0,        // 클리닝 시작 전 장비 점검 타임아웃 (초)
+    "PC_PREFLIGHT_PLC_HANDSHAKE_TIMEOUT_S": 1.0,   // PLC 핸드셰이크 타임아웃 (초)
+    "PC_PREFLIGHT_DEVICE_CONNECT_TIMEOUT_S": 3.0,  // 장비 연결 타임아웃 (초)
+    "PC_PREFLIGHT_CONNECT_POLL_INTERVAL_S": 0.5,   // 장비 연결 확인 주기 (초)
+    "PC_RF_POLL_INTERVAL_MS": 1000,        // 클리닝 RF 상태 확인 주기 (ms)
+    "PC_RF_RAMPDOWN_INTERVAL_MS": 50,      // 클리닝 RF 출력 내리기 간격 (ms)
+    "PC_RF_DIRECT_MODE": true,             // 클리닝 RF 직접 제어 모드
+    "PC_RF_WRITE_INV_A": 1.74,             // 클리닝 RF W->DAC 역변환 기울기
+    "PC_RF_WRITE_INV_B": 0.0,              // 클리닝 RF W->DAC 역변환 오프셋
+    "PC_RF_TARGET_WAIT_TIMEOUT_S": 60.0,   // 목표 RF 출력 도달 대기 (초)
+    "PC_RF_TARGET_WAIT_EXTRA_S": 5.0,      // 목표 도달 후 추가 대기 (초)
+    "PC_RF_FAIL_REF_THRESHOLD_W": 20.0,    // Reflected Power 실패 기준 (W)
+    "PC_RF_CLEANUP_TIMEOUT_S": 5.0,        // RF 정리 타임아웃 (초)
+    "PC_RF_WAIT_POWER_OFF_TIMEOUT_S": 15.0,// RF OFF 완료 대기 (초)
+    "PC_HOST_START_WAIT_TIMEOUT_S": 10.0   // 호스트 서버 시작 대기 (초)
   },
 
 
+  // ================================================================
+  //  CH1 (Chamber 1) 전용 설정
+  //  여기 있는 값은 common 섹션의 같은 이름 값을 CH1에서만 덮어씁니다.
+  // ================================================================
   "ch1": {
-    "__section__ ID": "채널 식별 (수정 금지)",
+    // ── 채널 식별 (수정 금지) ──
     "CH_ID": 1,
     "CH_NAME": "ch1",
 
-    "__section__ RGA": "RGA CSV 저장 경로",
+    // ── RGA CSV 저장 경로 ──
     "RGA_CSV_PATH": "\\\\VanaM_NAS\\VanaM_Sputter\\RGA\\Ch.1\\RGA_spectrums.csv",
 
-    "__section__ PORT": "채널별 포트 오버라이드",
-    "IG_TCP_PORT": 4001,
-    "MFC_TCP_PORT": 4003,
+    // ── 통신 포트 (CH1 전용) ──
+    "IG_TCP_PORT": 4001,                   // CH1 이온게이지 포트
+    "MFC_TCP_PORT": 4003,                  // CH1 가스유량계 포트
 
-    "__section__ MFC": "MFC 스케일",
+    // ── MFC 유량 스케일 (CH1 전용) ──
+    // CH1은 모든 가스 채널이 1:1 스케일
     "MFC_SCALE_FACTORS": {"1": 1.0, "2": 1.0, "3": 1.0},
 
-    "__section__ PROCESS": "process_controller.py 파라미터",
-    "PROCESS_GUN_SHUTTERS": [],
-    "PROCESS_PRESSURE_CONTROL_SP_ON_CMD": "SP3_ON",
-    "PROCESS_PRESSURE_CONTROL_SP_LABEL": "SP3",
-    "PROCESS_PRESSURE_CONTROL_SP_INDEX": 3
+    // ── 공정 파라미터 (CH1 전용) ──
+    "PROCESS_GUN_SHUTTERS": [],                        // 사용하는 건 셔터 목록 (CH1은 없음)
+    "PROCESS_PRESSURE_CONTROL_SP_ON_CMD": "SP3_ON",    // 압력 제어 Set-Point 명령
+    "PROCESS_PRESSURE_CONTROL_SP_LABEL": "SP3",        // 압력 제어 Set-Point 표시 이름
+    "PROCESS_PRESSURE_CONTROL_SP_INDEX": 3              // 압력 제어 Set-Point 번호
   },
 
 
+  // ================================================================
+  //  CH2 (Chamber 2) 전용 설정
+  //  여기 있는 값은 common 섹션의 같은 이름 값을 CH2에서만 덮어씁니다.
+  // ================================================================
   "ch2": {
-    "__section__ ID": "채널 식별 (수정 금지)",
+    // ── 채널 식별 (수정 금지) ──
     "CH_ID": 2,
     "CH_NAME": "ch2",
 
-    "__section__ RGA": "RGA CSV 저장 경로",
+    // ── RGA CSV 저장 경로 ──
     "RGA_CSV_PATH": "\\\\VanaM_NAS\\VanaM_Sputter\\RGA\\Ch.2\\RGA_spectrums.csv",
 
-    "__section__ PORT": "채널별 포트 오버라이드",
-    "IG_TCP_PORT": 4002,
-    "MFC_TCP_PORT": 4006,
+    // ── 통신 포트 (CH2 전용) ──
+    "IG_TCP_PORT": 4002,                   // CH2 이온게이지 포트
+    "MFC_TCP_PORT": 4006,                  // CH2 가스유량계 포트
 
-    "__section__ MFC": "MFC 스케일",
+    // ── MFC 유량 스케일 (CH2 전용) ──
+    // CH2 2번 가스(O2)는 x10, 3번 가스(N2)는 x2
     "MFC_SCALE_FACTORS": {"1": 1.0, "2": 10.0, "3": 2.0},
 
-    "__section__ SUPPORTS": "기능 지원 플래그",
-    "SUPPORTS_RF_CONT": true,
+    // ── 장비 지원 플래그 (CH2 전용) ──
+    "SUPPORTS_RF_CONT": true,              // CH2는 RF Continuous 사용
 
-    "__section__ PROCESS": "process_controller.py 파라미터",
-    "PROCESS_GUN_SHUTTERS": ["G1", "G2", "G3"],
-    "PROCESS_PRESSURE_CONTROL_SP_ON_CMD": "SP4_ON",
-    "PROCESS_PRESSURE_CONTROL_SP_LABEL": "SP4",
-    "PROCESS_PRESSURE_CONTROL_SP_INDEX": 4
+    // ── 공정 파라미터 (CH2 전용) ──
+    "PROCESS_GUN_SHUTTERS": ["G1", "G2", "G3"],       // 사용하는 건 셔터 목록
+    "PROCESS_PRESSURE_CONTROL_SP_ON_CMD": "SP4_ON",    // 압력 제어 Set-Point 명령
+    "PROCESS_PRESSURE_CONTROL_SP_LABEL": "SP4",        // 압력 제어 Set-Point 표시 이름
+    "PROCESS_PRESSURE_CONTROL_SP_INDEX": 4              // 압력 제어 Set-Point 번호
   }
 }

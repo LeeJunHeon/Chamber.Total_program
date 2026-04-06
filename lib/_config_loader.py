@@ -193,7 +193,9 @@ def load_settings(path: Optional[Path] = None) -> Dict[str, Any]:
 
     try:
         raw = json_path.read_text(encoding="utf-8")
-        data = json.loads(raw)
+        import re
+        stripped = re.sub(r'//.*', '', raw)
+        data = json.loads(stripped)
     except json.JSONDecodeError as e:
         logger.error("[ConfigLoader] JSON 파싱 실패: %s → 기존 .py 값 사용", e)
         return {}
