@@ -137,6 +137,10 @@ class MainWindow(QWidget):
         # ✅ 저장된 user_config를 프로그램 시작 직후 live config에 먼저 반영
         #    반드시 런타임/장비 객체 생성 전에 실행되어야 함
         try:
+            # ✅ settings.json → config 모듈에 안전하게 덮어쓰기
+            from lib._config_loader import load_settings
+            load_settings()
+
             self._boot_user_cfg = user_config.load()
             user_config.apply_overrides(self._boot_user_cfg)
         except Exception as e:
