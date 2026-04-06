@@ -781,12 +781,24 @@ class ChamberRuntime:
                         await self.plc.main_shutter(int(self.ch), open=onb)
 
                         # ✅ Main Shutter 기준 카메라 녹화 시작/정지
+                        # RF 파워 사용 공정에서만 카메라 활성화
+                        #   CH1: RF Pulse 사용 시
+                        #   CH2: RF Power 또는 RF Pulse 사용 시
+                        #   CLEANING: RF Power 사용 시
                         try:
                             recorder = getattr(self, "camera_recorder", None)
                             if recorder:
                                 if onb:
-                                    recorder.start(f"CH{self.ch}")
-                                    self.append_log("CAM", f"[CH{self.ch}] 카메라 녹화 시작")
+                                    pc = getattr(self, "process_controller", None)
+                                    params = getattr(pc, "current_params", {}) or {}
+                                    use_rf       = bool(params.get("use_rf", False))
+                                    use_rf_pulse = bool(params.get("use_rf_pulse", False))
+
+                                    if use_rf or use_rf_pulse:
+                                        recorder.start(f"CH{self.ch}")
+                                        self.append_log("CAM", f"[CH{self.ch}] 카메라 녹화 시작 (RF={'RF' if use_rf else ''}{'Pulse' if use_rf_pulse else ''})")
+                                    else:
+                                        self.append_log("CAM", f"[CH{self.ch}] RF 미사용 공정 → 카메라 건너뜀")
                                 else:
                                     recorder.stop()
                                     self.append_log("CAM", f"[CH{self.ch}] 카메라 녹화 정지")
