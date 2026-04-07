@@ -79,12 +79,26 @@ class ProcessMonitor:
         if wp > 0:
             self._targets["pressure"] = wp
 
-        self._active = bool(self._targets)
+        # use_ms=False면 targets도 등록하지 않음
+        if not params.get("use_ms", False):
+            self._targets.clear()
+            return
+
+        self._active = False  # shutter open 전까지는 항상 비활성
 
     def deactivate(self) -> None:
         """공정 종료 시 감시 해제."""
         self._active = False
         self._targets.clear()
+
+    def notify_shutter_open(self) -> None:
+        """Main Shutter 열릴 때 감시 시작."""
+        if self._targets:
+            self._active = True
+
+    def notify_shutter_close(self) -> None:
+        """Main Shutter 닫힐 때 감시 중단."""
+        self._active = False
 
     @property
     def is_active(self) -> bool:
