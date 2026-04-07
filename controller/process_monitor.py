@@ -60,13 +60,13 @@ class ProcessMonitor:
         self._pending: Set[asyncio.Task] = set()
 
     # ── 라이프사이클 ──────────────────────────────────────
-
     def activate(self, params: dict) -> None:
-        """
-        공정 시작 시 세팅값을 등록한다.
-        사용 중인 가스(use_ar/o2/n2 == True)와 working_pressure만 감시 대상.
-        """
         self._targets.clear()
+        self._active = False
+
+        # use_ms=False면 등록 없이 즉시 종료
+        if not params.get("use_ms", False):
+            return
 
         gas_map = {"ar": "Ar", "o2": "O2", "n2": "N2"}
         for key, gas_name in gas_map.items():
@@ -78,13 +78,6 @@ class ProcessMonitor:
         wp = float(params.get("working_pressure", 0))
         if wp > 0:
             self._targets["pressure"] = wp
-
-        # use_ms=False면 targets도 등록하지 않음
-        if not params.get("use_ms", False):
-            self._targets.clear()
-            return
-
-        self._active = False  # shutter open 전까지는 항상 비활성
 
     def deactivate(self) -> None:
         """공정 종료 시 감시 해제."""
