@@ -1323,7 +1323,7 @@ async def cmd_measure(
         _ar_sum = 0.0
         _ar_count = 0
         _ar_row_num = 0
-        _ar_buf = []
+        _ar_cutoff = time.time() + max(0.0, float(duration_s)) - (_ANOMALY_SKIP_LAST * float(sample_interval_s))
 
         deadline = time.time() + max(0.0, float(duration_s))
         while time.time() < deadline:
@@ -1385,29 +1385,28 @@ async def cmd_measure(
                     _ar_row_num += 1
                     if _ar_row_num <= _ANOMALY_SKIP_FIRST:
                         pass  # 처음 N행 스킵
+                    elif time.time() > _ar_cutoff:
+                        pass  # 마지막 N초 구간 스킵
                     else:
-                        _ar_buf.append(ar_val)
-                        if len(_ar_buf) > _ANOMALY_SKIP_LAST:
-                            check_val = _ar_buf.pop(0)
-                            if _ar_count == 0:
-                                _ar_sum = check_val
-                                _ar_count = 1
+                        if _ar_count == 0:
+                            _ar_sum = ar_val
+                            _ar_count = 1
+                        else:
+                            ar_mean = _ar_sum / _ar_count
+                            if ar_mean != 0 and abs(ar_val - ar_mean) / abs(ar_mean) >= _ANOMALY_THRESHOLD:
+                                pct = ((ar_val - ar_mean) / ar_mean) * 100
+                                direction = "급등" if pct > 0 else "급락"
+                                alert_msg = (
+                                    f"⚠️ OES 이상 감지 (CH{ch})\n"
+                                    f"Ar {_AR_WAVELENGTH_NM:.1f}nm {direction}: "
+                                    f"{ar_val:.1f} (평균 {ar_mean:.1f}, {pct:+.1f}%)\n"
+                                    f"측정 행: {rows}"
+                                )
+                                _status(f"[worker] ANOMALY: {alert_msg}")
+                                await asyncio.to_thread(_post_anomaly_webhook, alert_msg)
                             else:
-                                ar_mean = _ar_sum / _ar_count
-                                if ar_mean != 0 and abs(check_val - ar_mean) / abs(ar_mean) >= _ANOMALY_THRESHOLD:
-                                    pct = ((check_val - ar_mean) / ar_mean) * 100
-                                    direction = "급등" if pct > 0 else "급락"
-                                    alert_msg = (
-                                        f"⚠️ OES 이상 감지 (CH{ch})\n"
-                                        f"Ar {_AR_WAVELENGTH_NM:.1f}nm {direction}: "
-                                        f"{check_val:.1f} (평균 {ar_mean:.1f}, {pct:+.1f}%)\n"
-                                        f"측정 행: {rows - _ANOMALY_SKIP_LAST}"
-                                    )
-                                    _status(f"[worker] ANOMALY: {alert_msg}")
-                                    await asyncio.to_thread(_post_anomaly_webhook, alert_msg)
-                                else:
-                                    _ar_sum += check_val
-                                    _ar_count += 1
+                                _ar_sum += ar_val
+                                _ar_count += 1
                 except Exception:
                     pass
 
@@ -1711,13 +1710,13 @@ async def _daemon_measure_once(
     _ar_sum = 0.0
     _ar_count = 0
     _ar_row_num = 0
-    _ar_buf = []
 
     hard_abort = False
     hard_abort_error = None
     hard_abort_exit_code = 0
 
     deadline = time.time() + max(0.0, float(duration_s))
+    _ar_cutoff = deadline - (_ANOMALY_SKIP_LAST * float(sample_interval_s))
     while time.time() < deadline:
         # ✅ stop 요청 감지(USB 기반 / CSV 기반)
         if stop_flag_usb_global.exists() or stop_flag_usb_local.exists() or stop_flag_csv.exists():
@@ -1771,29 +1770,28 @@ async def _daemon_measure_once(
                 _ar_row_num += 1
                 if _ar_row_num <= _ANOMALY_SKIP_FIRST:
                     pass  # 처음 N행 스킵
+                elif time.time() > _ar_cutoff:
+                    pass  # 마지막 N초 구간 스킵
                 else:
-                    _ar_buf.append(ar_val)
-                    if len(_ar_buf) > _ANOMALY_SKIP_LAST:
-                        check_val = _ar_buf.pop(0)
-                        if _ar_count == 0:
-                            _ar_sum = check_val
-                            _ar_count = 1
+                    if _ar_count == 0:
+                        _ar_sum = ar_val
+                        _ar_count = 1
+                    else:
+                        ar_mean = _ar_sum / _ar_count
+                        if ar_mean != 0 and abs(ar_val - ar_mean) / abs(ar_mean) >= _ANOMALY_THRESHOLD:
+                            pct = ((ar_val - ar_mean) / ar_mean) * 100
+                            direction = "급등" if pct > 0 else "급락"
+                            alert_msg = (
+                                f"⚠️ OES 이상 감지 (CH{ch})\n"
+                                f"Ar {_AR_WAVELENGTH_NM:.1f}nm {direction}: "
+                                f"{ar_val:.1f} (평균 {ar_mean:.1f}, {pct:+.1f}%)\n"
+                                f"측정 행: {rows}"
+                            )
+                            _status(f"[daemon] ANOMALY: {alert_msg}")
+                            await asyncio.to_thread(_post_anomaly_webhook, alert_msg)
                         else:
-                            ar_mean = _ar_sum / _ar_count
-                            if ar_mean != 0 and abs(check_val - ar_mean) / abs(ar_mean) >= _ANOMALY_THRESHOLD:
-                                pct = ((check_val - ar_mean) / ar_mean) * 100
-                                direction = "급등" if pct > 0 else "급락"
-                                alert_msg = (
-                                    f"⚠️ OES 이상 감지 (CH{ch})\n"
-                                    f"Ar {_AR_WAVELENGTH_NM:.1f}nm {direction}: "
-                                    f"{check_val:.1f} (평균 {ar_mean:.1f}, {pct:+.1f}%)\n"
-                                    f"측정 행: {rows - _ANOMALY_SKIP_LAST}"
-                                )
-                                _status(f"[daemon] ANOMALY: {alert_msg}")
-                                await asyncio.to_thread(_post_anomaly_webhook, alert_msg)
-                            else:
-                                _ar_sum += check_val
-                                _ar_count += 1
+                            _ar_sum += ar_val
+                            _ar_count += 1
             except Exception:
                 pass
 
