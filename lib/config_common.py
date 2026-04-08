@@ -542,9 +542,18 @@ PC_RF_RAMPDOWN_INTERVAL_MS = 50
 PC_RF_DIRECT_MODE = True
 PC_RF_WRITE_INV_A = 1.74
 PC_RF_WRITE_INV_B = 0.0
-PC_RF_TARGET_WAIT_TIMEOUT_S = 60.0
+
+PC_RF_TARGET_WAIT_TIMEOUT_S = 120.0  # 50W→300W@3W/s ≈ 83s + 여유 → 120s
 PC_RF_TARGET_WAIT_EXTRA_S = 5.0
 PC_RF_FAIL_REF_THRESHOLD_W = 20.0
+
+# Plasma Cleaning RF kick+ramp (target > threshold 일 때)
+PC_RF_RAMP_KICK_THRESHOLD_W = 100.0  # 이 값 초과 시 kick+ramp 방식 적용
+PC_RF_RAMP_INITIAL_KICK_W   = 50.0   # 첫 kick 전송값(W)
+PC_RF_RAMP_STEP             = 50.0   # ramp-up 증가량(W/poll, poll=1000ms → 50W/s)
+PC_RF_RAMP_DOWN_STEP        = 1.0    # overshoot 시 ramp-down 감소량(W/poll → 1W/s)
+PC_RF_RAMP_SHUTDOWN_CUT_W   = 50.0   # 종료 ramp-down 중 이 값 이하 도달 시 즉시 OFF(W)
+PC_RF_RAMP_FINE_UP_STEP     = 3.0    # setpoint 도달 후 FWD 못 미칠 때 상승 단계(W)
 
 # Plasma Cleaning 기타 timeout
 PC_RF_CLEANUP_TIMEOUT_S = 5.0

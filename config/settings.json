@@ -320,10 +320,18 @@
     "PC_RF_DIRECT_MODE": true,             // 클리닝 RF 직접 제어 모드
     "PC_RF_WRITE_INV_A": 1.74,             // 클리닝 RF W->DAC 역변환 기울기
     "PC_RF_WRITE_INV_B": 0.0,              // 클리닝 RF W->DAC 역변환 오프셋
-    "PC_RF_TARGET_WAIT_TIMEOUT_S": 60.0,   // 목표 RF 출력 도달 대기 (초)
+    "PC_RF_TARGET_WAIT_TIMEOUT_S": 120.0,  // 목표 RF 출력 도달 대기 (초). kick+ramp 시 50W→300W@3W/s ≈ 83s + 여유
     "PC_RF_TARGET_WAIT_EXTRA_S": 5.0,      // 목표 도달 후 추가 대기 (초)
     "PC_RF_FAIL_REF_THRESHOLD_W": 20.0,    // Reflected Power 실패 기준 (W)
+    // ── Plasma Cleaning RF kick+ramp ──
+    // target > PC_RF_RAMP_KICK_THRESHOLD_W 이면 kick 후 ramp 방식으로 출력을 올립니다.
+    "PC_RF_RAMP_KICK_THRESHOLD_W": 100.0,  // 이 값 초과 시 kick+ramp 방식 적용 (W)
+    "PC_RF_RAMP_INITIAL_KICK_W": 50.0,     // 첫 번째 kick 전송값 (W)
+    "PC_RF_RAMP_STEP": 50.0,               // ramp-up 증가량 (W/s, poll 주기 1000ms 기준)
+    "PC_RF_RAMP_DOWN_STEP": 1.0,           // overshoot 시 ramp-down 감소량 (W/s)
+    "PC_RF_RAMP_SHUTDOWN_CUT_W": 50.0,     // 종료 ramp-down 중 이 값 이하 도달 시 즉시 OFF (W)
     "PC_RF_CLEANUP_TIMEOUT_S": 5.0,        // RF 정리 타임아웃 (초)
+    "PC_RF_RAMP_FINE_UP_STEP": 3.0,        // setpoint 도달 후 FWD 못 미칠 때 상승 단계 (W)
     "PC_RF_WAIT_POWER_OFF_TIMEOUT_S": 15.0,// RF OFF 완료 대기 (초)
     "PC_HOST_START_WAIT_TIMEOUT_S": 10.0   // 호스트 서버 시작 대기 (초)
   },

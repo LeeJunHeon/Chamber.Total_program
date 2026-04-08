@@ -91,6 +91,13 @@ class RFPowerAsync:
         self._rf_low_power_thresh_w = float(getattr(self._cfg_mod, "RF_LOW_POWER_THRESH_W", getattr(_cfg_common, "RF_LOW_POWER_THRESH_W", 1.0)))
         self._rf_low_power_count_max_n = int(getattr(self._cfg_mod, "RF_LOW_POWER_COUNT_MAX_N", getattr(_cfg_common, "RF_LOW_POWER_COUNT_MAX_N", 3)))
 
+        # ★ kick+ramp 파라미터 (direct_mode 전용, reload_runtime_cfg에서 덮어씀)
+        self._rf_ramp_kick_threshold_w: float = 100.0
+        self._rf_ramp_initial_kick_w: float = 50.0
+        self._rf_ramp_down_step: float = 1.0
+        self._rf_ramp_shutdown_cut_w: float = 50.0
+        self._rf_ramp_fine_up_step: float = 3.0
+
         # 상태/측정/목표
         self.state = "IDLE"
         self.previous_state = "IDLE"
@@ -190,6 +197,25 @@ class RFPowerAsync:
             self._w_inv_b = float(
                 getattr(mod, "PC_RF_WRITE_INV_B", getattr(_cfg_common, "PC_RF_WRITE_INV_B", self._w_inv_b))
             )
+            # ★ kick+ramp 파라미터 읽기
+            self._rf_ramp_kick_threshold_w = float(
+                getattr(mod, "PC_RF_RAMP_KICK_THRESHOLD_W", getattr(_cfg_common, "PC_RF_RAMP_KICK_THRESHOLD_W", self._rf_ramp_kick_threshold_w))
+            )
+            self._rf_ramp_initial_kick_w = float(
+                getattr(mod, "PC_RF_RAMP_INITIAL_KICK_W", getattr(_cfg_common, "PC_RF_RAMP_INITIAL_KICK_W", self._rf_ramp_initial_kick_w))
+            )
+            self._rf_ramp_step = float(
+                getattr(mod, "PC_RF_RAMP_STEP", getattr(_cfg_common, "PC_RF_RAMP_STEP", self._rf_ramp_step))
+            )
+            self._rf_ramp_down_step = float(
+                getattr(mod, "PC_RF_RAMP_DOWN_STEP", getattr(_cfg_common, "PC_RF_RAMP_DOWN_STEP", self._rf_ramp_down_step))
+            )
+            self._rf_ramp_shutdown_cut_w = float(
+                getattr(mod, "PC_RF_RAMP_SHUTDOWN_CUT_W", getattr(_cfg_common, "PC_RF_RAMP_SHUTDOWN_CUT_W", self._rf_ramp_shutdown_cut_w))
+            )
+            self._rf_ramp_fine_up_step = float(
+                getattr(mod, "PC_RF_RAMP_FINE_UP_STEP", getattr(_cfg_common, "PC_RF_RAMP_FINE_UP_STEP", self._rf_ramp_fine_up_step))
+            )
         else:
             self._w_inv_a = float(
                 getattr(mod, "CHAMBER_RF_CONT_WRITE_INV_A", getattr(_cfg_common, "CHAMBER_RF_CONT_WRITE_INV_A", self._w_inv_a))
@@ -243,19 +269,34 @@ class RFPowerAsync:
             await self._emit_state_changed(True)
             # ▶ 유지가 아니라 램프업으로 시작해야 도달 이벤트가 발생합니다.
             self.state = "RAMPING_UP"
-            await self._emit_status(f"Direct set: {self.target_power:.1f} W")
 
-            # 1) 목표 W 1회 전송 + 기준 동기화(먼저!)
-            try:
-                await self._send_rf_power(float(self.target_power))
-                self.current_power_step = float(self.target_power)
-                self._last_sent_w = float(self.target_power)
-                await self._emit_status(f"Direct set {self.target_power:.1f}W 전송 — 도달 판정 대기")
-            except Exception as e:
-                await self._emit_status(f"Direct set 실패: {e!r}")
-                return  # 전송 실패 시 여기서 종료
+            # ★ target > kick_threshold(100W) → kick+ramp 방식
+            if float(self.target_power) > float(self._rf_ramp_kick_threshold_w):
+                kick_w = min(float(self._rf_ramp_initial_kick_w), float(self.target_power))
+                await self._emit_status(
+                    f"Kick+Ramp 시작: {kick_w:.1f}W kick → {self.target_power:.1f}W까지 "
+                    f"↑{self._rf_ramp_step:.1f}W/s, ↓{self._rf_ramp_down_step:.1f}W/s"
+                )
+                try:
+                    await self._send_rf_power(kick_w)
+                    self.current_power_step = kick_w
+                    await self._emit_status(f"Kick {kick_w:.1f}W 전송 완료 — ramp 시작 대기")
+                except Exception as e:
+                    await self._emit_status(f"Kick 전송 실패: {e!r}")
+                    return
+            else:
+                # target ≤ 100W → 기존 방식(목표값 직접 전송)
+                await self._emit_status(f"Direct set: {self.target_power:.1f} W")
+                try:
+                    await self._send_rf_power(float(self.target_power))
+                    self.current_power_step = float(self.target_power)
+                    self._last_sent_w = float(self.target_power)
+                    await self._emit_status(f"Direct set {self.target_power:.1f}W 전송 — 도달 판정 대기")
+                except Exception as e:
+                    await self._emit_status(f"Direct set 실패: {e!r}")
+                    return
 
-            # 2) 그 다음 폴링 활성화/재시작
+            # 폴링 활성화/재시작 (kick+ramp / direct 공통)
             self._polling_enabled = True
             if self._request_status_read is not None:
                 if self._poll_task and not self._poll_task.done():
@@ -324,13 +365,28 @@ class RFPowerAsync:
         self._is_running = False
         await self._emit_state_changed(False)
 
-        # ========= ★ direct_mode 분기: 즉시 OFF =========
+        # ========= ★ direct_mode 분기 =========
         if getattr(self, "_direct_mode", False):
-            # ★ 이번 종료 싸이클 기준으로 off 대기 이벤트 초기화
             self._power_off_evt.clear()
+
+            # ★ kick+ramp로 켰던 경우 → 3W/s ramp-down 후 50W에서 즉시 OFF
+            if float(self.target_power) > float(self._rf_ramp_kick_threshold_w):
+                self.state = "IDLE"
+                await self._cancel_task("_poll_task")
+                await self._cancel_task("_adjust_task")
+                await self._emit_status(
+                    f"Kick+Ramp shutdown: {self._rf_ramp_step:.1f}W/s 하강 → "
+                    f"{self._rf_ramp_shutdown_cut_w:.1f}W 도달 시 즉시 OFF"
+                )
+                self._is_ramping_down = True
+                self._rampdown_w = self._last_sent_w if self._last_sent_w is not None else float(self.target_power)
+                self._rampdown_task = asyncio.create_task(self._rampdown_loop_kick(), name="RF_RampDown_Kick")
+                return
+
+            # target ≤ 100W → 기존 방식: 즉시 OFF
             try:
-                await self._set_rf_unverified(0.0)  # 0W 즉시
-                self._last_sent_w = 0.0             # ★ 캐시도 0으로 동기화(다음 런 첫 WRITE 보장)
+                await self._set_rf_unverified(0.0)
+                self._last_sent_w = 0.0
                 self._ev_nowait(RFPowerEvent(kind="display", forward=0.0, reflected=0.0))
             finally:
                 if self._toggle_enable and self._enabled:
@@ -341,7 +397,6 @@ class RFPowerAsync:
                         self._enabled = False
 
             self.state = "IDLE"
-            # 상위에서 wait_power_off()로 기다리므로 완료 신호 즉시 방출
             self._ev_nowait(RFPowerEvent(kind="power_off_finished"))
             self._power_off_evt.set()
             return
@@ -522,6 +577,52 @@ class RFPowerAsync:
             if not self._is_ramping_down:
                 self._power_off_evt.set()
 
+    async def _rampdown_loop_kick(self):
+        """
+        Kick+Ramp 종료 전용 루프.
+        - _rf_ramp_step(3W)씩 1초 간격으로 하강
+        - _rf_ramp_shutdown_cut_w(50W) 이하 도달 시 즉시 OFF
+        """
+        try:
+            step_w = float(self._rf_ramp_step)
+            cut_w  = float(self._rf_ramp_shutdown_cut_w)
+
+            while self._is_ramping_down:
+                if self._rampdown_w <= cut_w:
+                    # 50W 이하 → 즉시 OFF
+                    await self._emit_status(
+                        f"Ramp-Down: {self._rampdown_w:.1f}W ≤ {cut_w:.1f}W → 즉시 OFF"
+                    )
+                    await self._set_rf_unverified(0.0)
+                    self._last_sent_w = 0.0
+                    self._ev_nowait(RFPowerEvent(kind="display", forward=0.0, reflected=0.0))
+                    if self._toggle_enable and self._enabled:
+                        try:
+                            await self._toggle_enable(False)
+                            await self._emit_status("RF SET OFF")
+                        finally:
+                            self._enabled = False
+                    await self._emit_status("RF 파워 ramp-down 완료")
+                    self._is_ramping_down = False
+                    self._ev_nowait(RFPowerEvent(kind="power_off_finished"))
+                    self._power_off_evt.set()
+                    return
+
+                self._rampdown_w = max(cut_w, self._rampdown_w - step_w)
+                self._last_sent_w = self._rampdown_w
+                await self._emit_status(f"Ramp-Down step: {self._rampdown_w:.1f}W")
+                await self._set_rf_unverified(self._rampdown_w)
+                await asyncio.sleep(1.0)  # 1초 간격 → 50W/s
+
+        except asyncio.CancelledError:
+            pass
+        except Exception as e:
+            await self._emit_status(f"Kick 램프다운 오류: {e}")
+        finally:
+            if self._is_ramping_down:
+                self._is_ramping_down = False
+                self._power_off_evt.set()
+
     async def _adjust_once(self):
         """
         목표 파워까지 램프업하고, 도달 후에는 유지 보정.
@@ -549,14 +650,25 @@ class RFPowerAsync:
 
                 # ▶ 스텝 계산 (상승/오버슈트 복귀)
                 if diff > 0:
-                    # 목표보다 낮으면 계속 올림 (목표 초과 허용 → 실제 도달 유도)
-                    new_power = min(
-                        self.current_power_step + float(self._rf_ramp_step),
-                        float(self._rf_max_power),
-                    )
+                    if self.current_power_step < float(self.target_power):
+                        # setpoint가 target 미만 → 50W씩 빠르게 올림 (target 초과 방지)
+                        new_power = min(
+                            self.current_power_step + float(self._rf_ramp_step),
+                            float(self.target_power),
+                        )
+                    else:
+                        # setpoint가 이미 target인데 FWD 못 미침 → 3W fine-tuning
+                        new_power = min(
+                            self.current_power_step + float(self._rf_ramp_fine_up_step),
+                            float(self._rf_max_power),
+                        )
                 else:
-                    new_power = max(0.0, self.current_power_step - float(self._rf_maintain_step))
-                    await self._emit_status("목표 파워 초과. 출력 하강 시도...")
+                    # ★ overshoot: _rf_ramp_down_step(1W/s)으로 하강
+                    new_power = max(0.0, self.current_power_step - float(self._rf_ramp_down_step))
+                    await self._emit_status(
+                        f"목표 파워 초과. Ramp-Down 시도... "
+                        f"(step→{new_power:.1f}W, FWD={self.forward_w:.1f}W)"
+                    )
 
                 # 범위 체크 + 실제 전송 여부 판단 (데드밴드 삭제, ε만 유지)
                 new_power = max(0.0, min(float(self._rf_max_power), float(new_power)))
