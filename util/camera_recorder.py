@@ -186,8 +186,8 @@ _ALL_LABELS = [
 _MODE_CONFIG: dict[str, dict] = {
     "CH1":      {"labels": _ALL_LABELS, "active": ["CH1_FWD", "CH1_REF", "CH1_LOAD", "CH1_TUNE"], "folder": "CH1"},
     "CH2":      {"labels": _ALL_LABELS, "active": ["CH2_FWD", "CH2_REF", "CH2_LOAD", "CH2_TUNE"], "folder": "CH2"},
-    "CLEANING": {"labels": _ALL_LABELS, "active": ["RF3_LOAD", "RF3_TUNE"],                        "folder": "CLEANING"},
-    "ALL":      {"labels": _ALL_LABELS, "active": _ALL_LABELS,                                     "folder": "ALL"},
+    "CLEANING": {"labels": _ALL_LABELS, "active": ["CH1_FWD", "CH1_REF", "CH1_LOAD", "CH1_TUNE"], "folder": "CLEANING"},
+    "ALL":      {"labels": _ALL_LABELS, "active": _ALL_LABELS,                                    "folder": "ALL"},
 }
 
 CONFIG_FILE = "rf_config.json"
