@@ -222,6 +222,9 @@ class AsyncDCPulse:
         # ✅ STOP/종료 중에 ON/SET 계열 write 재전송을 막기 위한 가드
         self._stop_guard: bool = False
 
+        # ★ 추가: on_telemetry 콜백 저장 (3/19 리팩토링 시 누락됨)
+        self._on_telemetry = on_telemetry
+
         # ✅ 여기서 config를 다시 읽어 런타임 값 반영
         self.reload_runtime_cfg()
 
@@ -727,6 +730,25 @@ class AsyncDCPulse:
 
         return {"raw": {"P": P_raw, "I": I_raw, "V": V_raw},
                 "eng": {"P_W": P_W, "I_A": I_A, "V_V": V_V}}
+    
+    # ★ Soft/Hard Arc per second 읽기 (0xAE / 0xAF)
+    async def read_soft_arc_per_sec(self) -> Optional[int]:
+        """0xAE: 초당 소프트 아크 발생 횟수. 실패 시 None."""
+        resp = await self._read_raw(0xAE, "READ_ARC_SOFT")
+        if not resp or len(resp) < 2:
+            return None
+        if len(resp) == 1 and resp[0] == 0x04:
+            return None
+        return (resp[-2] << 8) | resp[-1]
+
+    async def read_hard_arc_per_sec(self) -> Optional[int]:
+        """0xAF: 초당 하드 아크 발생 횟수. 실패 시 None."""
+        resp = await self._read_raw(0xAF, "READ_ARC_HARD")
+        if not resp or len(resp) < 2:
+            return None
+        if len(resp) == 1 and resp[0] == 0x04:
+            return None
+        return (resp[-2] << 8) | resp[-1]
     
     # 3) 현재 Control Mode 읽기 (0x9C) READ_CTRL_MODE: CHK 제거 후 최하위 바이트 사용
     async def read_control_mode(self) -> Optional[str]:
@@ -1549,24 +1571,27 @@ class AsyncDCPulse:
 
     # ====== Poll 루프(필요 시 항목 확장) ======
     async def _poll_loop(self):
-            try:
-                while True:
-                    t0 = time.monotonic()
-                    try:
-                        if self._connected and self._out_on:
+        try:
+            _piv_last: float = 0.0   # 마지막 PIV 읽기 시각
+            _arc_last: float = 0.0   # 마지막 ARC 읽기 시각
+            while True:
+                now = time.monotonic()
+                try:
+                    if self._connected and self._out_on:
+
+                        # ─── PIV 읽기 (_poll_period_s 마다) ───────────────────
+                        if now - _piv_last >= self._poll_period_s:
+                            _piv_last = time.monotonic()
                             res = await self.read_output_piv()
-                            # 👉 응답없음(None)은 '0이 아님'으로 간주하므로 그대로 지나감(pass)
                             if res and "eng" in res:
                                 eng = res["eng"]
                                 p = float(eng.get("P_W", 0.0))
                                 v = float(eng.get("V_V", 0.0))
                                 i = float(eng.get("I_A", 0.0))
 
-                                # ① 저전류 감시: I <= thresh 가 연속 N회면 AUTO_STOP
+                                # ① 저전류 감시
                                 ref = float(self._last_ref_power_w or 0.0)
-
                                 if ref > 0.0:
-                                    # 세트포인트가 잡혀 있을 때만 저전류 감시
                                     if i <= self._i_low_thresh_a:
                                         self._low_curr_n += 1
                                         await self._emit_status(
@@ -1578,22 +1603,16 @@ class AsyncDCPulse:
                                                 f"low_current: I <= {self._i_low_thresh_a:.3f}A "
                                                 f"({self._low_curr_n}회 연속)"
                                             )
-
-                                            # ✅ (추가) AUTO-STOP 시점 fault code 동봉 (원인 추적용)
                                             fault = None
                                             with contextlib.suppress(Exception):
                                                 fault = await self.read_fault_code()
                                             if fault is not None and fault != 0:
                                                 reason += f", fault=0x{fault:04X}"
-
                                             self._ev_nowait(DCPEvent(
                                                 kind="command_failed",
                                                 cmd="AUTO_STOP",
                                                 reason=reason,
-                                                power=p,
-                                                voltage=v,
-                                                current=i,
-                                                eng=eng,
+                                                power=p, voltage=v, current=i, eng=eng,
                                             ))
                                             await self._emit_status(
                                                 "[AUTO-STOP] 저전류가 연속 발생 → OUTPUT_OFF & stop polling"
@@ -1602,34 +1621,27 @@ class AsyncDCPulse:
                                                 await self.output_off()
                                             return
                                     else:
-                                        # 전류가 다시 정상으로 올라오면 저전류 카운터 리셋
                                         if self._low_curr_n:
                                             self._low_curr_n = 0
                                 else:
-                                    # 세트포인트가 없으면 저전류 카운터도 리셋
                                     if self._low_curr_n:
                                         self._low_curr_n = 0
 
-                                # ② 세트포인트 근접 확인 (허용오차: max(절대 W, 퍼센트))
+                                # ② 세트포인트 근접 확인
                                 if ref > 0.0:
                                     tol = max(self._p_set_tol_w, abs(ref) * self._p_set_tol_pct)
                                     if abs(p - ref) > tol:
-                                        # 연속 이탈 카운터 증가
                                         self._spdev_n += 1
                                         await self._emit_status(
                                             f"[WARN] 현재 P={p:.1f} W, Set={ref:.1f} W, Tol=±{tol:.1f} W — 세트포인트 이탈 "
                                             f"({self._spdev_n}/{self._p_set_deviate_max_n})"
                                         )
-                                        # 연속 N회 이탈 시 자동 정지
                                         if self._spdev_n >= self._p_set_deviate_max_n:
                                             self._ev_nowait(DCPEvent(
                                                 kind="command_failed",
                                                 cmd="AUTO_STOP",
                                                 reason="target_failed",
-                                                power=p,
-                                                voltage=v,
-                                                current=i,
-                                                eng=eng,
+                                                power=p, voltage=v, current=i, eng=eng,
                                             ))
                                             await self._emit_status(
                                                 "[AUTO-STOP] 세트포인트 이탈이 연속 발생 → OUTPUT_OFF & stop polling"
@@ -1638,45 +1650,64 @@ class AsyncDCPulse:
                                                 await self.output_off()
                                             return
                                     else:
-                                        # 정상범위이면 카운터 리셋
                                         if self._spdev_n:
                                             self._spdev_n = 0
                                 else:
-                                    # ref가 0 이하이면 카운터 리셋(비교대상 없음)
                                     if self._spdev_n:
                                         self._spdev_n = 0
 
-                                # ③ 텔레메트리 이벤트 전송 (기존 그대로 유지)
+                                # ③ 텔레메트리 이벤트 전송
                                 ev = DCPEvent(
                                     kind="telemetry",
-                                    data=eng,
-                                    power=p,
-                                    voltage=v,
-                                    current=i,
-                                    eng=eng,
+                                    data=eng, power=p, voltage=v, current=i, eng=eng,
                                 )
                                 self._ev_nowait(ev)
-
                                 cb = getattr(self, "_on_telemetry", None)
                                 if cb:
                                     try:
                                         cb(p, v, i)
                                     except Exception:
                                         pass
-                        else:
-                            # 연결이 없거나 출력 OFF 상태면 카운터들 리셋
-                            if self._spdev_n:
-                                self._spdev_n = 0
-                            if self._low_curr_n:
-                                self._low_curr_n = 0
 
-                    except Exception as e:
-                        self._ev_nowait(DCPEvent(kind="status", message=f"[poll] 예외: {e!r}"))
+                        # ─── ARC 읽기 (1초마다, 실패 무시) ───────────────────
+                        now2 = time.monotonic()
+                        if now2 - _arc_last >= 1.0:
+                            _arc_last = now2
+                            soft: Optional[int] = None
+                            hard: Optional[int] = None
+                            with contextlib.suppress(Exception):
+                                soft = await self.read_soft_arc_per_sec()
+                            with contextlib.suppress(Exception):
+                                hard = await self.read_hard_arc_per_sec()
+                            # 둘 중 하나라도 읽혔으면 status 이벤트 → .txt 로그에 기록됨
+                            if soft is not None or hard is not None:
+                                s_str = str(soft) if soft is not None else "?"
+                                h_str = str(hard) if hard is not None else "?"
+                                self._ev_nowait(DCPEvent(
+                                    kind="status",
+                                    message=f"[arc] Soft={s_str}/s Hard={h_str}/s"
+                                ))
 
-                    dt = time.monotonic() - t0
-                    await asyncio.sleep(max(0.05, self._poll_period_s - dt))
-            except asyncio.CancelledError:
-                pass
+                    else:
+                        # 연결이 없거나 출력 OFF 상태면 카운터·타임스탬프 리셋
+                        _piv_last = 0.0
+                        _arc_last = 0.0
+                        if self._spdev_n:
+                            self._spdev_n = 0
+                        if self._low_curr_n:
+                            self._low_curr_n = 0
+
+                except Exception as e:
+                    self._ev_nowait(DCPEvent(kind="status", message=f"[poll] 예외: {e!r}"))
+
+                # ─── sleep: PIV/ARC 중 더 가까운 쪽에 맞춰 깨어남 ──────────
+                now3 = time.monotonic()
+                next_piv = max(0.0, _piv_last + self._poll_period_s - now3)
+                next_arc = max(0.0, _arc_last + 1.0 - now3)
+                await asyncio.sleep(max(0.05, min(next_piv, next_arc)))
+
+        except asyncio.CancelledError:
+            pass
 
     # ====== 내부 유틸 ======
     def _drain_rx_frames(self, max_n: int = 128) -> int:
@@ -1742,8 +1773,8 @@ class AsyncDCPulse:
         return str(label or "").split("[", 1)[0].strip().upper()
 
     def _is_poll_read_label(self, label: str) -> bool:
-        # 현재 poll loop가 주기적으로 넣는 읽기는 READ_PIV 하나다.
-        return self._base_cmd_label(label) in {"READ_PIV"}
+        # 현재 poll loop가 주기적으로 넣는 읽기는 READ_PIV, READ_ARC_SOFT, READ_ARC_HARD
+        return self._base_cmd_label(label) in {"READ_PIV", "READ_ARC_SOFT", "READ_ARC_HARD"}
 
     def _purge_pending(
         self,
