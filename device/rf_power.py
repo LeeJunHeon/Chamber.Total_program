@@ -387,7 +387,6 @@ class RFPowerAsync:
             try:
                 await self._set_rf_unverified(0.0)
                 self._last_sent_w = 0.0
-                self._ev_nowait(RFPowerEvent(kind="display", forward=0.0, reflected=0.0))
             finally:
                 if self._toggle_enable and self._enabled:
                     try:
@@ -544,7 +543,6 @@ class RFPowerAsync:
                     scaled0 = self._xform_write(0.0)
                     await self._emit_status(f"Ramp-Down final: target=0.0W → write={scaled0:.3f}W")
                     await self._set_rf_unverified(0.0)
-                    self._ev_nowait(RFPowerEvent(kind="display", forward=0.0, reflected=0.0))
 
                     # ▼ RF 사용 종료 시 SET OFF (DCV_SET_1 = False)
                     if self._toggle_enable and self._enabled:
