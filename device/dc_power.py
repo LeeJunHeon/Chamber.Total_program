@@ -354,7 +354,6 @@ class DCPowerAsync:
                     self._enabled = False
 
             # 표시/이벤트 정리
-            self._ev_nowait(DCPowerEvent(kind="display", power=0.0, voltage=0.0, current=0.0))
             await self._emit_status("DC 파워 ramp-down 완료 (snap-to-zero)")
             self._ev_nowait(DCPowerEvent(kind="power_off_finished"))
 
