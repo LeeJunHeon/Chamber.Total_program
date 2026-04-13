@@ -28,22 +28,19 @@ def _parse_slot(loc_name: str) -> tuple[int, str] | None:
 
 
 def _fetch_slots_sync(url: str) -> list:
-    import urllib.request, json
+    import urllib.request, json, ssl
+
+    ctx = ssl.create_default_context()
+    ctx.check_hostname = False
+    ctx.verify_mode = ssl.CERT_NONE
+
     req = urllib.request.Request(
         url, headers={"Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT_S) as resp:
+    with urllib.request.urlopen(req, timeout=_TIMEOUT_S, context=ctx) as resp:
         return json.loads(resp.read().decode())
 
 
 async def fetch_gun_targets(ch: int) -> Dict[str, str]:
-    """
-    챔버 번호(1 or 2)를 받아서 현재 장착된 타겟 이름을 반환.
-
-    반환 예:
-      {"G1 Target": "TiN 3inch", "G2 Target": "Pt 3inch", "G3 Target": ""}
-
-    실패 시 빈 딕셔너리 반환 — 메인 공정에 영향 없음.
-    """
     try:
         from lib import config_common as _cfgc
         url = getattr(_cfgc, "INVENTORY_API_URL", _DEFAULT_URL)
@@ -68,7 +65,6 @@ async def fetch_gun_targets(ch: int) -> Dict[str, str]:
         ch_num, gun_key = parsed
         if ch_num != ch:
             continue
-        # itemName 없으면 빈 문자열
         result[gun_key] = slot.get("itemName") or ""
 
     return result

@@ -5423,6 +5423,9 @@ class ChamberRuntime:
         with contextlib.suppress(Exception):
             self.graph.reset()
 
+            # ✅ 공정 종료 후 타겟 초기화됐으므로 DB에서 재로드
+            asyncio.ensure_future(self._load_gun_targets())
+
     # ======= 서버 통신 api =======
     def _host_report_start(self, ok: bool, reason: str = "") -> None:
         fut = getattr(self, "_host_start_future", None)
@@ -6037,24 +6040,29 @@ class ChamberRuntime:
 
     # Gun Target 자동 불러오기 (재고 DB 연동)
     async def _load_gun_targets(self) -> None:
-        """
-        프로그램 시작 시 재고 DB에서 타겟 정보 불러와 UI 입력칸에 자동 입력.
-        실패해도 조용히 무시 — 메인 공정에 영향 없음.
-        사용자가 칸을 직접 수정하면 그 값이 공정에 사용됨.
-        """
-        try:
-            from util.inventory_client import fetch_gun_targets
-            targets = await fetch_gun_targets(self.ch)
-        except Exception:
-            return  # 네트워크 실패 등 → 조용히 종료, UI 그대로 유지
+            """
+            재고 DB에서 타겟 정보 불러와 UI 입력칸에 자동 입력.
+            실패 시 UI 로그에 기록 — 메인 공정에 영향 없음.
+            사용자가 칸을 직접 수정하면 그 값이 공정에 사용됨.
+            """
+            try:
+                from util.inventory_client import fetch_gun_targets
+                targets = await fetch_gun_targets(self.ch)
+            except Exception as e:
+                self.append_log("TARGET", f"[CH{self.ch}] 타겟 정보 불러오기 실패: {e!r}")
+                return
 
-        if self.ch == 1:
-            w = self._u("gunTarget_name")  # → ch1_gunTarget_name
-            if w and not w.toPlainText().strip():
-                w.setPlainText(targets.get("G1 Target", ""))
-
-        elif self.ch == 2:
-            for gun_num in (1, 2, 3):
-                w = self._u(f"g{gun_num}Target_name")  # → ch2_g{n}Target_name
+            if self.ch == 1:
+                w = self._u("gunTarget_name")
                 if w and not w.toPlainText().strip():
-                    w.setPlainText(targets.get(f"G{gun_num} Target", ""))
+                    val = targets.get("G1 Target", "")
+                    w.setPlainText(val)
+                    w.setToolTip(val)
+
+            elif self.ch == 2:
+                for gun_num in (1, 2, 3):
+                    w = self._u(f"g{gun_num}Target_name")
+                    if w and not w.toPlainText().strip():
+                        val = targets.get(f"G{gun_num} Target", "")
+                        w.setPlainText(val)
+                        w.setToolTip(val)
