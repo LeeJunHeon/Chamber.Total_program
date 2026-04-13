@@ -6042,12 +6042,13 @@ class ChamberRuntime:
         실패해도 조용히 무시 — 메인 공정에 영향 없음.
         사용자가 칸을 직접 수정하면 그 값이 공정에 사용됨.
         """
-        with contextlib.suppress(Exception):
+        try:
             from util.inventory_client import fetch_gun_targets
             targets = await fetch_gun_targets(self.ch)
+        except Exception:
+            return  # 네트워크 실패 등 → 조용히 종료, UI 그대로 유지
 
         if self.ch == 1:
-            # CH1: 위젯명이 ch1_gunTarget_name (g1Target_name과 불일치 버그 수정)
             w = self._u("gunTarget_name")  # → ch1_gunTarget_name
             if w and not w.toPlainText().strip():
                 w.setPlainText(targets.get("G1 Target", ""))
