@@ -37,6 +37,13 @@ from device.rf_power import RFPowerAsync
 from device.rf_pulse import RFPulseAsync
 from device.dc_pulse import AsyncDCPulse
 
+# Google Drive 로그 (선택적 import — 없어도 동작)
+try:
+    from util.gdrive_logger import save_process_log as _gdrive_save
+    _GDRIVE_OK = True
+except ImportError:
+    _GDRIVE_OK = False
+
 # 그래프/로거/알림
 from controller.graph_controller import GraphController
 from controller.data_logger import DataLogger
@@ -1255,6 +1262,12 @@ class ChamberRuntime:
 
                     try:
                         self.data_logger.start_new_log_session(params)
+
+                        # ✅ Arc 카운터 초기화
+                        if self.dc_pulse is not None:
+                            with contextlib.suppress(Exception):
+                                self.dc_pulse.reset_arc_counts()
+
                         # 성공 시에도 명시적으로 남겨 두면 나중에 추적이 쉬움
                         self.append_log("CSV", "Sputter Calib 로그 세션 시작")
                     except Exception as e:
@@ -1340,6 +1353,32 @@ class ChamberRuntime:
                         # - data_logger가 'ok=False면 return'인 현재 버전이면, 아래 인자를 ok로 두면 실패/stop이 기록되지 않습니다.
                         # - data_logger를 실패/stop도 기록하도록 수정한 뒤에는 ok를 그대로 넘겨도 됩니다.
                         self.data_logger.finalize_and_write_log(ok)
+
+                        # ✅ Google Drive 엑셀 로그 (메인 공정과 완전 독립)
+                        if _GDRIVE_OK and ok:
+                            with contextlib.suppress(Exception):
+                                # Arc 카운트를 process_params 에 삽입
+                                if self.dc_pulse is not None:
+                                    s, h = self.dc_pulse.arc_counts
+                                    self.data_logger.process_params["soft_arc_count"] = s
+                                    self.data_logger.process_params["hard_arc_count"] = h
+
+                                from lib import config_common as _cfgc
+                                asyncio.create_task(
+                                    _gdrive_save(
+                                        ch=self.ch,
+                                        data_logger=self.data_logger,
+                                        operator=self.data_logger.process_params.get("operator", ""),
+                                        substrate=self.data_logger.process_params.get("substrate", ""),
+                                        note=self.data_logger.process_params.get("note", ""),
+                                        pc_params=getattr(self, "_gdrive_pc_params", None),
+                                        log_dir=None,   # config_common.GDRIVE_LOG_DIR 자동 사용
+                                        arc_thresh=getattr(_cfgc, "GDRIVE_ARC_ALERT_THRESH", 5),
+                                        refp_warn=getattr(_cfgc, "GDRIVE_REF_P_WARN_W", 20.0),
+                                        webhook_url=getattr(_cfgc, "CHAT_WEBHOOK_MONITOR_URL", ""),
+                                        arc_alert_sent=getattr(self, "_gdrive_arc_sent", False),
+                                    )
+                                )
 
                         # ➊ 카드 헤더용 prefix: "CHx Sputter"
                         detail.setdefault("ch", self.ch)

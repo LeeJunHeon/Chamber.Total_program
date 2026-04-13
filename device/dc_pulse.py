@@ -464,6 +464,10 @@ class AsyncDCPulse:
         # ✅ 세트포인트 캐시는 성공 시에만 갱신하도록(아래 set_reference_power 수정) 시작 전 초기화
         self._last_ref_power_w = None
 
+        # ✅ 추가: Arc 누적 카운터 (공정 시작 시 reset_arc_counts() 호출)
+        self._soft_arc_total: int = 0
+        self._hard_arc_total: int = 0
+
         # ✅ Host 제어 공정이면 ONOFF/REFER/MODE master를 Host로 다시 강제
         if master == "host":
             ok_master = await self.set_master_host_all()
@@ -749,6 +753,16 @@ class AsyncDCPulse:
         if len(resp) == 1 and resp[0] == 0x04:
             return None
         return (resp[-2] << 8) | resp[-1]
+    
+    def reset_arc_counts(self) -> None:
+        """공정 시작 시 호출 — Arc 누적 카운터 초기화."""
+        self._soft_arc_total = 0
+        self._hard_arc_total = 0
+
+    @property
+    def arc_counts(self) -> tuple[int, int]:
+        """(soft_arc_total, hard_arc_total) 반환."""
+        return self._soft_arc_total, self._hard_arc_total
     
     # 3) 현재 Control Mode 읽기 (0x9C) READ_CTRL_MODE: CHK 제거 후 최하위 바이트 사용
     async def read_control_mode(self) -> Optional[str]:
@@ -1687,6 +1701,12 @@ class AsyncDCPulse:
                                     kind="status",
                                     message=f"[arc] Soft={s_str}/s Hard={h_str}/s"
                                 ))
+
+                                # ✅ 누적 카운터 갱신
+                                if soft is not None:
+                                    self._soft_arc_total += soft
+                                if hard is not None:
+                                    self._hard_arc_total += hard
 
                     else:
                         # 연결이 없거나 출력 OFF 상태면 카운터·타임스탬프 리셋

@@ -559,3 +559,10 @@ PC_RF_RAMP_FINE_UP_STEP     = 3.0    # setpoint 도달 후 FWD 못 미칠 때 �
 PC_RF_CLEANUP_TIMEOUT_S = 5.0
 PC_RF_WAIT_POWER_OFF_TIMEOUT_S = 15.0
 PC_HOST_START_WAIT_TIMEOUT_S = 10.0
+
+# ======================================================================
+# Google Drive 공정 로그 저장 설정
+# ======================================================================
+GDRIVE_LOG_DIR       = "G:/공유 드라이브/VanaM_Sputter/Process_log"
+GDRIVE_ARC_ALERT_THRESH = 5      # Arc 누적 이 값 이상 시 Chat 알림
+GDRIVE_REF_P_WARN_W     = 20.0  # Reflected Power 경고 기준 (W)
