@@ -3,11 +3,12 @@
 Google Drive 공정 로그 저장 모듈
 
 동작:
-- 공정 종료 시 G:/공유 드라이브/VanaM_Sputter/Process_log/CH{n}.xlsx 에 1행 append
+- 공정 종료 시 G:/공유 드라이브/VanaM_Sputter/Process_log/CH{n}.xlsx 에 행 append
+- 파워 소스가 여러 개면 파워별로 행 분리, 나머지 데이터는 동일하게 채움
 - 파일 없으면 헤더/스타일 포함 신규 생성
-- 이상치 셀 자동 강조 (Arc >= 임계값, Ref.p 초과, Base Pressure 불량)
+- 이상치 셀 자동 강조 (Arc, Ref.p, Base Pressure, SP vs Avg 10% 초과)
 - Arc 임계값 이상 시 Google Chat 알림 (공정당 1회)
-- 메인 공정과 완전 독립 — 저장 실패 시 로컬 fallback, 예외 절대 전파 안 함
+- 메인 공정과 완전 독립: 예외 절대 전파 안 함, 실패 시 로컬 fallback
 """
 
 import asyncio
@@ -28,8 +29,10 @@ from openpyxl.utils import get_column_letter
 _DEFAULT_GDRIVE_DIR     = Path("G:/공유 드라이브/VanaM_Sputter/Process_log")
 _DEFAULT_ARC_THRESH     = 5
 _DEFAULT_REFP_WARN_W    = 20.0
+# [수정 3] SP vs Avg 편차 강조 기준 (비율)
+_SP_DIFF_RATIO          = 0.10   # 10% 이상 편차 시 강조
 
-# ── 색상 팔레트 ──────────────────────────────────────────────────
+# ── 색상 ────────────────────────────────────────────────────────
 _T = {
     "기본 정보"       : ("1C2833", "2C3E50", "ABB2B9"),
     "Plasma Cleaning" : ("2E4057", "4A6278", "BDC3C7"),
@@ -38,61 +41,62 @@ _T = {
 _WHITE    = "FFFFFF"
 _ROW_ODD  = "FFFFFF"
 _ROW_EVEN = "F2F3F4"
-_WARN_ARC = "FADBD8"
-_WARN_REF = "FDEBD0"
-_WARN_PRE = "FFF9C4"
+_WARN_ARC = "FADBD8"   # Arc 발생
+_WARN_REF = "FDEBD0"   # Ref.p 초과
+_WARN_PRE = "FFF9C4"   # Base Pressure 불량
+_WARN_SP  = "E8DAEF"   # [수정 3] SP vs Avg 편차
 _FG       = "1C2833"
 
 # ── 컬럼 정의: (헤더, 단위, 너비, 그룹, data_key) ────────────────
 _COLS: List[Tuple] = [
     # 기본 정보
-    ("날짜",            "YYYY-MM-DD HH:MM:SS", 19, "기본 정보",       "timestamp"),
-    ("담당자",          "",              8,  "기본 정보",       "operator"),
-    ("Process Name",    "",             16,  "기본 정보",       "process_name"),
-    ("비고",            "",             18,  "기본 정보",       "note"),
-    ("기판",            "",             12,  "기본 정보",       "substrate"),
-    ("Main Shutter",    "T/F",           8,  "기본 정보",       "main_shutter"),
-    ("Power Select",    "T/F",           8,  "기본 정보",       "power_select"),
-    ("G1 Target",       "",              9,  "기본 정보",       "G1 Target"),
-    ("G2 Target",       "",              9,  "기본 정보",       "G2 Target"),
-    ("G3 Target",       "",              9,  "기본 정보",       "G3 Target"),
-    ("Chuck",           "up/mid/down",  11,  "기본 정보",       "chuck_position"),
+    ("날짜",           "YYYY-MM-DD HH:MM:SS", 19, "기본 정보",       "timestamp"),
+    ("담당자",         "",              8,  "기본 정보",       "operator"),
+    ("Process Name",   "",             16,  "기본 정보",       "process_name"),
+    ("비고",           "",             18,  "기본 정보",       "note"),
+    ("기판",           "",             12,  "기본 정보",       "substrate"),
+    ("Main Shutter",   "T/F",           8,  "기본 정보",       "main_shutter"),
+    ("Power Select",   "T/F",           8,  "기본 정보",       "power_select"),
+    ("G1 Target",      "",              9,  "기본 정보",       "G1 Target"),
+    ("G2 Target",      "",              9,  "기본 정보",       "G2 Target"),
+    ("G3 Target",      "",              9,  "기본 정보",       "G3 Target"),
+    ("Chuck",          "up/mid/down",  11,  "기본 정보",       "chuck_position"),
     # Plasma Cleaning
-    ("Time",            "min",           7,  "Plasma Cleaning", "pc_time"),
-    ("Base Pressure",   "Torr",         12,  "Plasma Cleaning", "pc_base_pressure"),
-    ("SP Ar",           "sccm",          8,  "Plasma Cleaning", "pc_sp_ar"),
-    ("Avg Ar",          "sccm",          8,  "Plasma Cleaning", "pc_avg_ar"),
-    ("SP Pressure",     "mTorr",         9,  "Plasma Cleaning", "pc_sp_pressure"),
-    ("Avg Pressure",    "mTorr",         9,  "Plasma Cleaning", "pc_avg_pressure"),
-    ("SP Power",        "W",             8,  "Plasma Cleaning", "pc_sp_power"),
-    ("Avg For.p",       "W",             9,  "Plasma Cleaning", "pc_avg_forp"),
-    ("Avg Ref.p",       "W",             9,  "Plasma Cleaning", "pc_avg_refp"),
-    ("Avg Load",        "a.u.",          8,  "Plasma Cleaning", "pc_avg_load"),
-    ("Avg Tune",        "a.u.",          8,  "Plasma Cleaning", "pc_avg_tune"),
+    ("Time",           "min",           7,  "Plasma Cleaning", "pc_time"),
+    ("Base Pressure",  "Torr",         12,  "Plasma Cleaning", "pc_base_pressure"),
+    ("SP Ar",          "sccm",          8,  "Plasma Cleaning", "pc_sp_ar"),
+    ("Avg Ar",         "sccm",          8,  "Plasma Cleaning", "pc_avg_ar"),
+    ("SP Pressure",    "mTorr",         9,  "Plasma Cleaning", "pc_sp_pressure"),
+    ("Avg Pressure",   "mTorr",         9,  "Plasma Cleaning", "pc_avg_pressure"),
+    ("SP Power",       "W",             8,  "Plasma Cleaning", "pc_sp_power"),
+    ("Avg For.p",      "W",             9,  "Plasma Cleaning", "pc_avg_forp"),
+    ("Avg Ref.p",      "W",             9,  "Plasma Cleaning", "pc_avg_refp"),
+    ("Avg Load",       "a.u.",          8,  "Plasma Cleaning", "pc_avg_load"),
+    ("Avg Tune",       "a.u.",          8,  "Plasma Cleaning", "pc_avg_tune"),
     # Main Process
-    ("Shutter Delay",   "min",           9,  "Main Process",    "shutter_delay"),
-    ("Process Time",    "min",           9,  "Main Process",    "process_time"),
-    ("Base Pressure",   "Torr",         12,  "Main Process",    "base_pressure"),
-    ("SP Ar",           "sccm",          8,  "Main Process",    "sp_ar"),
-    ("Avg Ar",          "sccm",          8,  "Main Process",    "avg_ar"),
-    ("SP N2",           "sccm",          8,  "Main Process",    "sp_n2"),
-    ("Avg N2",          "sccm",          8,  "Main Process",    "avg_n2"),
-    ("SP O2",           "sccm",          8,  "Main Process",    "sp_o2"),
-    ("Avg O2",          "sccm",          8,  "Main Process",    "avg_o2"),
-    ("SP Pressure",     "mTorr",         9,  "Main Process",    "sp_pressure"),
-    ("Avg Pressure",    "mTorr",         9,  "Main Process",    "avg_pressure"),
-    ("Power Source",    "DC/RF/Pulse",  10,  "Main Process",    "power_source"),
-    ("SP Power",        "W",             8,  "Main Process",    "sp_power"),
-    ("Avg For.p",       "W",             9,  "Main Process",    "avg_forp"),
-    ("Avg Ref.p",       "W",             9,  "Main Process",    "avg_refp"),
-    ("Avg Load",        "a.u.",          8,  "Main Process",    "avg_load"),
-    ("Avg Tune",        "a.u.",          8,  "Main Process",    "avg_tune"),
-    ("Avg Voltage",     "V",             9,  "Main Process",    "avg_voltage"),
-    ("Avg Current",     "A",             9,  "Main Process",    "avg_current"),
-    ("Duty Cycle",      "%",             8,  "Main Process",    "duty_cycle"),
-    ("Frequency",       "kHz",           8,  "Main Process",    "frequency"),
-    ("Soft Arc",        "count",         8,  "Main Process",    "soft_arc"),
-    ("Hard Arc",        "count",         8,  "Main Process",    "hard_arc"),
+    ("Shutter Delay",  "min",           9,  "Main Process",    "shutter_delay"),
+    ("Process Time",   "min",           9,  "Main Process",    "process_time"),
+    ("Base Pressure",  "Torr",         12,  "Main Process",    "base_pressure"),
+    ("SP Ar",          "sccm",          8,  "Main Process",    "sp_ar"),
+    ("Avg Ar",         "sccm",          8,  "Main Process",    "avg_ar"),
+    ("SP N2",          "sccm",          8,  "Main Process",    "sp_n2"),
+    ("Avg N2",         "sccm",          8,  "Main Process",    "avg_n2"),
+    ("SP O2",          "sccm",          8,  "Main Process",    "sp_o2"),
+    ("Avg O2",         "sccm",          8,  "Main Process",    "avg_o2"),
+    ("SP Pressure",    "mTorr",         9,  "Main Process",    "sp_pressure"),
+    ("Avg Pressure",   "mTorr",         9,  "Main Process",    "avg_pressure"),
+    ("Power Source",   "DC/RF/DCPulse/RFPulse", 14, "Main Process", "power_source"),
+    ("SP Power",       "W",             8,  "Main Process",    "sp_power"),
+    ("Avg For.p",      "W",             9,  "Main Process",    "avg_forp"),
+    ("Avg Ref.p",      "W",             9,  "Main Process",    "avg_refp"),
+    ("Avg Load",       "a.u.",          8,  "Main Process",    "avg_load"),
+    ("Avg Tune",       "a.u.",          8,  "Main Process",    "avg_tune"),
+    ("Avg Voltage",    "V",             9,  "Main Process",    "avg_voltage"),
+    ("Avg Current",    "A",             9,  "Main Process",    "avg_current"),
+    ("Duty Cycle",     "%",             8,  "Main Process",    "duty_cycle"),
+    ("Frequency",      "kHz",           8,  "Main Process",    "frequency"),
+    ("Soft Arc",       "count",         8,  "Main Process",    "soft_arc"),
+    ("Hard Arc",       "count",         8,  "Main Process",    "hard_arc"),
 ]
 
 # 그룹별 컬럼 인덱스 목록 (1-based)
@@ -102,7 +106,7 @@ for _ci, (*_, _grp, _key) in enumerate(_COLS, 1):
 
 _GRP_STARTS = {cols[0] for cols in _GRP_COLS.values()}
 
-# ── 내부 락 (프로세스 내 동시 쓰기 방지) ──────────────────────────
+# ── 내부 락 ──────────────────────────────────────────────────────
 _write_lock = threading.Lock()
 
 
@@ -132,7 +136,6 @@ def _build_headers(ws) -> None:
     thin  = Side(style="thin",   color="E0E0E0")
     thick = Side(style="medium", color="FFFFFF")
 
-    # Row 1: 그룹 헤더 (병합 + 색상)
     for grp, cols in _GRP_COLS.items():
         c1, c2 = cols[0], cols[-1]
         bg = _T[grp][0]
@@ -150,7 +153,6 @@ def _build_headers(ws) -> None:
                     PatternFill("solid", fgColor=bg)
     ws.row_dimensions[1].height = 16
 
-    # Row 2: 컬럼 헤더 / Row 3: 단위
     for ci, (name, unit, width, grp, _) in enumerate(_COLS, 1):
         ws.column_dimensions[get_column_letter(ci)].width = width
         _cs(ws, 2, ci, name, bg=_T[grp][1], fg=_WHITE,
@@ -160,7 +162,6 @@ def _build_headers(ws) -> None:
     ws.row_dimensions[2].height = 32
     ws.row_dimensions[3].height = 13
 
-    # 경계선: 그룹 시작 굵게, 나머지 얇게
     for r in range(1, 4):
         for ci in range(1, len(_COLS) + 1):
             left = thick if ci in _GRP_STARTS else thin
@@ -176,7 +177,6 @@ def _get_or_create_wb(path: Path):
             ws = wb.active
             return wb, ws
         except Exception:
-            # 파일 손상 시 백업 후 신규 생성
             broken = path.with_suffix(".broken.xlsx")
             with contextlib.suppress(Exception):
                 path.rename(broken)
@@ -195,18 +195,54 @@ def _next_data_row(ws) -> int:
     return max(4, ws.max_row + 1)
 
 
-def _cell_bg(key: str, value: Any,
-             row_bg: str, arc_thresh: int, refp_warn: float) -> str:
-    """이상치 여부로 배경색 결정."""
+# [수정 3] SP vs Avg 비교 쌍 정의
+_SP_AVG_PAIRS = {
+    "avg_ar"         : "sp_ar",
+    "avg_n2"         : "sp_n2",
+    "avg_o2"         : "sp_o2",
+    "avg_pressure"   : "sp_pressure",
+    "avg_forp"       : "sp_power",
+    "pc_avg_ar"      : "pc_sp_ar",
+    "pc_avg_pressure": "pc_sp_pressure",
+    "pc_avg_forp"    : "pc_sp_power",
+}
+
+
+def _cell_bg(key: str, value: Any, row_bg: str,
+             arc_thresh: int, refp_warn: float,
+             data: Dict[str, Any]) -> str:
+    """
+    [수정 3] 이상치 여부로 배경색 결정.
+    - Arc 발생 → 빨강
+    - Ref.p 초과 → 주황
+    - Base Pressure 불량 → 노랑
+    - SP vs Avg 10% 초과 편차 → 보라
+    """
+    # Arc 발생
     if key in ("soft_arc", "hard_arc"):
         if isinstance(value, (int, float)) and value > 0:
             return _WARN_ARC
-    if key == "avg_refp":
+
+    # Ref.p 초과
+    if key in ("avg_refp", "pc_avg_refp"):
         if isinstance(value, (int, float)) and value > refp_warn:
             return _WARN_REF
+
+    # Base Pressure 불량 (1e-5 Torr 이상이면 진공 불량)
     if key in ("base_pressure", "pc_base_pressure"):
         if isinstance(value, (int, float)) and value > 1e-5:
             return _WARN_PRE
+
+    # SP vs Avg 편차 (10% 초과 시 강조)
+    if key in _SP_AVG_PAIRS:
+        sp_key = _SP_AVG_PAIRS[key]
+        sp_val = data.get(sp_key)
+        if (isinstance(value, (int, float))
+                and isinstance(sp_val, (int, float))
+                and sp_val > 0):
+            if abs(value - sp_val) / sp_val > _SP_DIFF_RATIO:
+                return _WARN_SP
+
     return row_bg
 
 
@@ -223,7 +259,8 @@ def _write_data_row(ws, row_num: int, data: Dict[str, Any],
         if value == "":
             value = None
 
-        bg = _cell_bg(key, value, row_bg, arc_thresh, refp_warn)
+        # [수정 3] data 딕셔너리 전달
+        bg = _cell_bg(key, value, row_bg, arc_thresh, refp_warn, data)
 
         cell = ws.cell(row=row_num, column=ci)
         cell.value = value
@@ -234,7 +271,6 @@ def _write_data_row(ws, row_num: int, data: Dict[str, Any],
             horizontal="left" if ci in left_cols else "center",
             vertical="center")
 
-        # 숫자 포맷
         if key == "timestamp" and isinstance(value, datetime):
             cell.number_format = "YYYY-MM-DD HH:MM:SS"
         if key in ("base_pressure", "pc_base_pressure") \
@@ -278,7 +314,7 @@ def _send_arc_chat(ch: int, process_name: str,
 
 def _save_sync(
     ch: int,
-    data: Dict[str, Any],
+    rows: List[Dict[str, Any]],   # [수정 4] 단일 dict → 리스트
     log_dir: Path,
     arc_thresh: int,
     refp_warn: float,
@@ -288,37 +324,37 @@ def _save_sync(
 ) -> bool:
     """
     실제 Excel 저장.
+    [수정 4] rows 리스트의 각 항목을 순서대로 행으로 기록.
     반환값: 이번 호출에서 Arc 알림을 발송했으면 True.
-    예외를 절대 전파하지 않음 — 실패 시 로컬 fallback.
+    예외를 절대 전파하지 않음.
     """
     def _do_save(target: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         with _write_lock:
             wb, ws = _get_or_create_wb(target)
             row_num = _next_data_row(ws)
-            _write_data_row(ws, row_num, data, arc_thresh, refp_warn)
+            # [수정 4] 여러 행 순서대로 기록
+            for row_data in rows:
+                _write_data_row(ws, row_num, row_data, arc_thresh, refp_warn)
+                row_num += 1
             wb.save(str(target))
 
-    # 1) Google Drive 경로에 저장 시도
     main_path = log_dir / f"CH{ch}.xlsx"
-    save_ok = False
     try:
         _do_save(main_path)
-        save_ok = True
-    except Exception as e:
-        # 2) 실패 시 로컬 fallback 저장 (메인 공정에 영향 없음)
+    except Exception:
         with contextlib.suppress(Exception):
             fb_path = local_fallback_dir / f"CH{ch}_pending.xlsx"
             _do_save(fb_path)
 
-    # 3) Arc 알림 (공정당 1회, 저장 성공 여부와 무관)
-    soft = int(data.get("soft_arc") or 0)
-    hard = int(data.get("hard_arc") or 0)
+    # Arc 알림 — 첫 번째 행 기준
+    soft = int(rows[0].get("soft_arc") or 0)
+    hard = int(rows[0].get("hard_arc") or 0)
     if (soft + hard) >= arc_thresh and not arc_alert_sent and webhook_url:
         with contextlib.suppress(Exception):
             _send_arc_chat(
                 ch,
-                str(data.get("process_name", "")),
+                str(rows[0].get("process_name", "")),
                 soft, hard, webhook_url,
             )
         return True
@@ -344,44 +380,16 @@ def _build_data(
     substrate: str,
     note: str,
     pc_params: Optional[Dict],
-) -> Dict[str, Any]:
-    """DataLogger 인스턴스에서 Excel 1행 데이터 딕셔너리 생성."""
+) -> List[Dict[str, Any]]:   # [수정 4] 반환 타입: 단일 dict → 리스트
+    """
+    DataLogger 인스턴스에서 Excel 행 데이터 생성.
+    [수정 4] 파워 소스가 여러 개면 파워별 행 분리, 나머지 데이터 동일하게 복사.
+    """
     dl = data_logger
     pp = dl.process_params
 
     # 타임스탬프
     ts = getattr(dl, "_session_started_at", None) or datetime.now()
-
-    # Power Source 문자열 생성
-    sources = []
-    if pp.get("use_dc_pulse"):
-        sources.append("DC Pulse")
-    elif pp.get("use_dc_power"):
-        sources.append("DC")
-    if pp.get("use_rf_pulse"):
-        sources.append("RF Pulse")
-    elif pp.get("use_rf_power"):
-        sources.append("RF")
-    power_source = " + ".join(sources)
-
-    # DC Pulse 우선, 없으면 DC Continuous
-    avg_v   = _avg(getattr(dl, "dc_pulse_voltage_readings", []) or
-                   getattr(dl, "dc_voltage_readings",       []))
-    avg_i   = _avg(getattr(dl, "dc_pulse_current_readings", []) or
-                   getattr(dl, "dc_current_readings",       []))
-
-    # RF Pulse 우선, 없으면 RF Continuous
-    avg_fp  = _avg(getattr(dl, "rf_pulse_for_p_readings", []) or
-                   getattr(dl, "rf_for_p_readings",        []))
-    avg_rp  = _avg(getattr(dl, "rf_pulse_ref_p_readings", []) or
-                   getattr(dl, "rf_ref_p_readings",        []))
-
-    avg_load = _avg(getattr(dl, "rf_load_readings", []))
-    avg_tune = _avg(getattr(dl, "rf_tune_readings", []))
-
-    # SP Power: DC Pulse > RF Pulse > DC > RF 우선순위
-    sp_power = (pp.get("dc_pulse_power") or pp.get("rf_pulse_power")
-                or pp.get("dc_power")    or pp.get("rf_power"))
 
     # Base Pressure: 공정 중 IG 최솟값
     if getattr(dl, "ig_pressure_readings", []):
@@ -391,7 +399,8 @@ def _build_data(
 
     _pc = pc_params or {}
 
-    return {
+    # ── 공통 데이터 (파워 소스와 무관한 모든 필드) ──────────────
+    base_data: Dict[str, Any] = {
         # 기본 정보
         "timestamp"      : ts,
         "operator"       : operator or pp.get("operator", ""),
@@ -405,7 +414,7 @@ def _build_data(
         "G2 Target"      : pp.get("G2 Target", ""),
         "G3 Target"      : pp.get("G3 Target", ""),
         "chuck_position" : pp.get("chuck_position", ""),
-        # Plasma Cleaning (chamber_runtime.py 에서 pc_params 로 전달)
+        # Plasma Cleaning
         "pc_time"          : _pc.get("time"),
         "pc_base_pressure" : _pc.get("base_pressure"),
         "pc_sp_ar"         : _pc.get("sp_ar"),
@@ -417,33 +426,94 @@ def _build_data(
         "pc_avg_refp"      : _pc.get("avg_refp"),
         "pc_avg_load"      : _pc.get("avg_load"),
         "pc_avg_tune"      : _pc.get("avg_tune"),
-        # Main Process 설정값
+        # Main Process — 가스/압력 (파워와 무관)
         "shutter_delay"  : pp.get("shutter_delay"),
         "process_time"   : pp.get("process_time"),
         "base_pressure"  : base_pres,
-        "sp_ar"          : pp.get("ar_flow") or pp.get("sp_ar"),
-        "sp_n2"          : pp.get("n2_flow") or pp.get("sp_n2"),
-        "sp_o2"          : pp.get("o2_flow") or pp.get("sp_o2"),
+        # [수정 2] 실제 TypedDict 키명으로 수정: Ar_flow(대문자), N2_flow, O2_flow
+        "sp_ar"          : pp.get("Ar_flow") or pp.get("ar_flow"),
+        "sp_n2"          : pp.get("N2_flow") or pp.get("n2_flow"),
+        "sp_o2"          : pp.get("O2_flow") or pp.get("o2_flow"),
         "sp_pressure"    : pp.get("working_pressure") or pp.get("sp_pressure"),
-        "power_source"   : power_source,
-        "sp_power"       : sp_power,
-        "duty_cycle"     : pp.get("dc_pulse_duty") or pp.get("rf_pulse_duty"),
-        "frequency"      : pp.get("dc_pulse_freq")  or pp.get("rf_pulse_freq"),
-        # Main Process 실측 평균
         "avg_ar"         : _avg(dl.mfc_flow_readings.get("Ar", [])),
         "avg_n2"         : _avg(dl.mfc_flow_readings.get("N2", [])),
         "avg_o2"         : _avg(dl.mfc_flow_readings.get("O2", [])),
         "avg_pressure"   : _avg(dl.mfc_pressure_readings),
-        "avg_voltage"    : avg_v,
-        "avg_current"    : avg_i,
-        "avg_forp"       : avg_fp,
-        "avg_refp"       : avg_rp,
-        "avg_load"       : avg_load,
-        "avg_tune"       : avg_tune,
-        # Arc (dc_pulse.py 의 arc_counts 에서 전달됨)
+        # Arc
         "soft_arc"       : int(pp.get("soft_arc_count") or 0),
         "hard_arc"       : int(pp.get("hard_arc_count") or 0),
     }
+
+    # ── [수정 4] 파워 소스별 행 분리 ────────────────────────────
+    power_rows = []
+
+    if pp.get("use_dc_pulse"):
+        power_rows.append({
+            "power_source" : "DC Pulse",
+            "sp_power"     : pp.get("dc_pulse_power"),
+            "avg_forp"     : _avg(getattr(dl, "dc_pulse_power_readings", [])),
+            "avg_refp"     : None,
+            "avg_load"     : None,
+            "avg_tune"     : None,
+            "avg_voltage"  : _avg(getattr(dl, "dc_pulse_voltage_readings", [])),
+            "avg_current"  : _avg(getattr(dl, "dc_pulse_current_readings", [])),
+            # [수정 2] dc_pulse_duty_cycle (TypedDict 실제 키명)
+            "duty_cycle"   : pp.get("dc_pulse_duty_cycle"),
+            "frequency"    : pp.get("dc_pulse_freq"),
+        })
+    elif pp.get("use_dc_power"):
+        power_rows.append({
+            "power_source" : "DC",
+            "sp_power"     : pp.get("dc_power"),
+            "avg_forp"     : _avg(getattr(dl, "dc_power_readings", [])),
+            "avg_refp"     : None,
+            "avg_load"     : None,
+            "avg_tune"     : None,
+            "avg_voltage"  : _avg(getattr(dl, "dc_voltage_readings", [])),
+            "avg_current"  : _avg(getattr(dl, "dc_current_readings", [])),
+            "duty_cycle"   : None,
+            "frequency"    : None,
+        })
+
+    if pp.get("use_rf_pulse"):
+        power_rows.append({
+            "power_source" : "RF Pulse",
+            "sp_power"     : pp.get("rf_pulse_power"),
+            "avg_forp"     : _avg(getattr(dl, "rf_pulse_for_p_readings", [])),
+            "avg_refp"     : _avg(getattr(dl, "rf_pulse_ref_p_readings", [])),
+            "avg_load"     : _avg(getattr(dl, "rf_load_readings", [])),
+            "avg_tune"     : _avg(getattr(dl, "rf_tune_readings", [])),
+            "avg_voltage"  : None,
+            "avg_current"  : None,
+            # [수정 2] rf_pulse_duty_cycle (TypedDict 실제 키명)
+            "duty_cycle"   : pp.get("rf_pulse_duty_cycle"),
+            "frequency"    : pp.get("rf_pulse_freq"),
+        })
+    elif pp.get("use_rf_power"):
+        power_rows.append({
+            "power_source" : "RF",
+            "sp_power"     : pp.get("rf_power"),
+            "avg_forp"     : _avg(getattr(dl, "rf_for_p_readings", [])),
+            "avg_refp"     : _avg(getattr(dl, "rf_ref_p_readings", [])),
+            "avg_load"     : _avg(getattr(dl, "rf_load_readings", [])),
+            "avg_tune"     : _avg(getattr(dl, "rf_tune_readings", [])),
+            "avg_voltage"  : None,
+            "avg_current"  : None,
+            "duty_cycle"   : None,
+            "frequency"    : None,
+        })
+
+    # 파워 소스가 없으면 base_data 그대로 1행
+    if not power_rows:
+        return [base_data]
+
+    # 파워별로 base_data 복사 후 파워 필드만 덮어쓰기
+    result = []
+    for pr in power_rows:
+        row = dict(base_data)
+        row.update(pr)
+        result.append(row)
+    return result
 
 
 # ════════════════════════════════════════════════════════════════
@@ -468,14 +538,14 @@ async def save_process_log(
     """
     비동기 진입점 — chamber_runtime.py 에서 asyncio.create_task() 로 호출.
     메인 공정에 영향 없음: 모든 예외를 내부에서 처리.
-
     반환값: 이번 호출에서 Arc 알림 발송 여부.
     """
     try:
-        data = _build_data(ch, data_logger, operator, substrate,
+        # [수정 4] rows 리스트 반환
+        rows = _build_data(ch, data_logger, operator, substrate,
                            note, pc_params)
     except Exception:
-        return False   # 데이터 빌드 실패 → 조용히 종료
+        return False
 
     target_dir = log_dir or _DEFAULT_GDRIVE_DIR
     fb_dir     = local_fallback or (Path.cwd() / "Logs_LocalFallback")
@@ -486,7 +556,7 @@ async def save_process_log(
             None,
             partial(
                 _save_sync,
-                ch, data, target_dir,
+                ch, rows, target_dir,    # [수정 4] rows 전달
                 arc_thresh, refp_warn,
                 arc_alert_sent, webhook_url,
                 fb_dir,
