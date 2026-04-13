@@ -65,6 +65,8 @@ async def fetch_gun_targets(ch: int) -> Dict[str, str]:
         ch_num, gun_key = parsed
         if ch_num != ch:
             continue
-        result[gun_key] = slot.get("itemName") or ""
+        item_name = slot.get("itemName") or ""
+        unit_id = slot.get("targetUnitId")
+        result[gun_key] = f"{item_name} ({unit_id})" if unit_id is not None else item_name
 
     return result
