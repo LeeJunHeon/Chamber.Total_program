@@ -6040,29 +6040,29 @@ class ChamberRuntime:
 
     # Gun Target 자동 불러오기 (재고 DB 연동)
     async def _load_gun_targets(self) -> None:
-            """
-            재고 DB에서 타겟 정보 불러와 UI 입력칸에 자동 입력.
-            실패 시 UI 로그에 기록 — 메인 공정에 영향 없음.
-            사용자가 칸을 직접 수정하면 그 값이 공정에 사용됨.
-            """
-            try:
-                from util.inventory_client import fetch_gun_targets
-                targets = await fetch_gun_targets(self.ch)
-            except Exception as e:
-                self.append_log("TARGET", f"[CH{self.ch}] 타겟 정보 불러오기 실패: {e!r}")
-                return
+        """
+        재고 DB에서 타겟 정보 불러와 UI 입력칸에 자동 입력.
+        실패 시 UI 로그에 기록 — 메인 공정에 영향 없음.
+        사용자가 칸을 직접 수정하면 그 값이 공정에 사용됨.
+        """
+        try:
+            from util.inventory_client import fetch_gun_targets
+            targets = await fetch_gun_targets(self.ch)
+        except Exception as e:
+            self.append_log("TARGET", f"[CH{self.ch}] 타겟 정보 불러오기 실패: {e!r}")
+            return
 
-            if self.ch == 1:
-                w = self._u("gunTarget_name")
+        if self.ch == 1:
+            w = self._u("gunTarget_name")
+            if w and not w.toPlainText().strip():
+                val = targets.get("G1 Target", "")
+                w.setPlainText(val)
+                w.setToolTip(val)
+
+        elif self.ch == 2:
+            for gun_num in (1, 2, 3):
+                w = self._u(f"g{gun_num}Target_name")
                 if w and not w.toPlainText().strip():
-                    val = targets.get("G1 Target", "")
+                    val = targets.get(f"G{gun_num} Target", "")
                     w.setPlainText(val)
                     w.setToolTip(val)
-
-            elif self.ch == 2:
-                for gun_num in (1, 2, 3):
-                    w = self._u(f"g{gun_num}Target_name")
-                    if w and not w.toPlainText().strip():
-                        val = targets.get(f"G{gun_num} Target", "")
-                        w.setPlainText(val)
-                        w.setToolTip(val)
