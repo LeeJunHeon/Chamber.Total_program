@@ -5423,8 +5423,8 @@ class ChamberRuntime:
         with contextlib.suppress(Exception):
             self.graph.reset()
 
-            # ✅ 공정 종료 후 타겟 초기화됐으므로 DB에서 재로드
-            asyncio.ensure_future(self._load_gun_targets())
+        # ✅ 공정 종료 후 타겟 초기화됐으므로 DB에서 재로드
+        asyncio.ensure_future(self._load_gun_targets())
 
     # ======= 서버 통신 api =======
     def _host_report_start(self, ok: bool, reason: str = "") -> None:
