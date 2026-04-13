@@ -608,6 +608,9 @@ class ChamberRuntime:
                 write_inv_b=float(self.cfg._get("CHAMBER_RF_CONT_WRITE_INV_B", 2.6323)),
             )
 
+        # Gun Target 자동 불러오기 (재고 DB 연동)
+        asyncio.ensure_future(self._load_gun_targets())
+
         # === ProcessController 바인딩 ===
         self._bind_process_controller()
 
@@ -6031,3 +6034,26 @@ class ChamberRuntime:
 
         return errs
     # ============================= 입력값 검증 헬퍼 =============================  
+
+    # Gun Target 자동 불러오기 (재고 DB 연동)
+    async def _load_gun_targets(self) -> None:
+        """
+        프로그램 시작 시 재고 DB에서 타겟 정보 불러와 UI 입력칸에 자동 입력.
+        실패해도 조용히 무시 — 메인 공정에 영향 없음.
+        사용자가 칸을 직접 수정하면 그 값이 공정에 사용됨.
+        """
+        with contextlib.suppress(Exception):
+            from util.inventory_client import fetch_gun_targets
+            targets = await fetch_gun_targets(self.ch)
+
+        if self.ch == 1:
+            # CH1: 위젯명이 ch1_gunTarget_name (g1Target_name과 불일치 버그 수정)
+            w = self._u("gunTarget_name")  # → ch1_gunTarget_name
+            if w and not w.toPlainText().strip():
+                w.setPlainText(targets.get("G1 Target", ""))
+
+        elif self.ch == 2:
+            for gun_num in (1, 2, 3):
+                w = self._u(f"g{gun_num}Target_name")  # → ch2_g{n}Target_name
+                if w and not w.toPlainText().strip():
+                    w.setPlainText(targets.get(f"G{gun_num} Target", ""))
