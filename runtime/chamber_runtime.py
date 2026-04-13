@@ -330,6 +330,7 @@ class ChamberRuntime:
         self._run_select: dict[str, bool] | None = None  # ← 이번 런에서 펄스 선택 상태
         self._owns_plc = bool(owns_plc if owns_plc is not None else (int(chamber_no) == 1))  # 기본 CH1
         self._notify_plc_owner = on_plc_owner 
+        self._main_done_callback: Optional[Callable] = None
         self._last_running_state: Optional[bool] = None  
         self._rf_pulse_reserved: bool = False
 
@@ -1367,21 +1368,35 @@ class ChamberRuntime:
                                     self.data_logger.process_params["hard_arc_count"] = h
 
                                 from lib import config_common as _cfgc
-                                asyncio.create_task(
-                                    _gdrive_save(
-                                        ch=self.ch,
-                                        data_logger=self.data_logger,
-                                        operator=self.data_logger.process_params.get("operator", ""),
-                                        substrate=self.data_logger.process_params.get("substrate", ""),
-                                        note=self.data_logger.process_params.get("note", ""),
-                                        pc_params=getattr(self, "_gdrive_pc_params", None),
-                                        log_dir=None,   # config_common.GDRIVE_LOG_DIR 자동 사용
-                                        arc_thresh=getattr(_cfgc, "GDRIVE_ARC_ALERT_THRESH", 5),
-                                        refp_warn=getattr(_cfgc, "GDRIVE_REF_P_WARN_W", 20.0),
-                                        webhook_url=getattr(_cfgc, "CHAT_WEBHOOK_MONITOR_URL", ""),
-                                        arc_alert_sent=getattr(self, "_gdrive_arc_sent", False),
+
+                                # ✅ pending_log 콜백으로 PC params 조회
+                                _pname = str(
+                                    self.data_logger.process_params.get("process_name")
+                                    or self.data_logger.process_params.get("Process_name")
+                                    or ""
+                                ).strip()
+                                _cb = getattr(self, "_main_done_callback", None)
+                                _pc_params = _cb(self.ch, _pname, self.data_logger) if callable(_cb) else None
+
+                                # "PENDING" 반환 = Main이 먼저 완료, main.py가 PC 대기 중 → 저장 생략
+                                if _pc_params == "PENDING":
+                                    pass
+                                else:
+                                    asyncio.create_task(
+                                        _gdrive_save(
+                                            ch=self.ch,
+                                            data_logger=self.data_logger,
+                                            operator=self.data_logger.process_params.get("operator", ""),
+                                            substrate=self.data_logger.process_params.get("substrate", ""),
+                                            note=self.data_logger.process_params.get("note", ""),
+                                            pc_params=_pc_params if isinstance(_pc_params, dict) else None,
+                                            log_dir=None,
+                                            arc_thresh=getattr(_cfgc, "GDRIVE_ARC_ALERT_THRESH", 5),
+                                            refp_warn=getattr(_cfgc, "GDRIVE_REF_P_WARN_W", 20.0),
+                                            webhook_url=getattr(_cfgc, "CHAT_WEBHOOK_MONITOR_URL", ""),
+                                            arc_alert_sent=getattr(self, "_gdrive_arc_sent", False),
+                                        )
                                     )
-                                )
 
                         # ➊ 카드 헤더용 prefix: "CHx Sputter"
                         detail.setdefault("ch", self.ch)
@@ -5931,9 +5946,10 @@ class ChamberRuntime:
         """이 런타임이 PLC 로그의 현재 소유자인지 토글"""
         prev = getattr(self, "_owns_plc", False)
         self._owns_plc = bool(owns)
-        # 필요하면 디버깅용 로그(선택)
-        # if prev != self._owns_plc:
-        #     self.append_log("MAIN", f"PLC log owner -> {self._owns_plc}")
+
+    def set_main_done_callback(self, callback: Callable) -> None:
+        """Main Process 완료 시 main.py의 pending_log 조회용 콜백 설정."""
+        self._main_done_callback = callback
     # ============================= PLC 로그 소유 관리 =============================
 
     # ============================= 입력값 검증 헬퍼 =============================

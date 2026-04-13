@@ -123,6 +123,15 @@ class PlasmaCleaningRuntime:
         # ✅ 마지막으로 열었던 CSV 폴더 기억
         self._last_process_list_dir: str = ""
 
+        # ── PC 완료 데이터 수집 (gdrive 로그 연동용) ──────────────
+        self._pc_forp_readings:     list = []   # RF FWD 수집
+        self._pc_refp_readings:     list = []   # RF REF 수집
+        self._pc_flow_readings:     list = []   # MFC 가스 유량 수집
+        self._pc_pressure_readings: list = []   # MFC SP4 압력 수집
+        self._pc_ig_readings:       list = []   # IG 압력 수집 (base pressure용)
+        self._current_process_name: str  = ""   # 현재 공정명
+        self._pc_done_callback: Optional[Callable] = None  # main.py → pending_log 연동
+
         self._runlog_buf = deque()
 
         self._cfg_mod = cfgc
@@ -232,9 +241,18 @@ class PlasmaCleaningRuntime:
                 gas  = getattr(ev, "gas", "") or ""
                 flow = float(getattr(ev, "value", 0.0) or 0.0)
                 self.append_log(label, f"[poll] {gas}: {flow:.2f} sccm")
+                # ✅ 데이터 수집
+                with contextlib.suppress(Exception):
+                    if getattr(self, "_running", False):
+                        self._pc_flow_readings.append(flow)
             elif k == "pressure":
                 txt = ev.text or (f"{ev.value:.3g}" if ev.value is not None else "")
                 self.append_log(label, f"[poll] ChamberP: {txt}")
+                # ✅ 데이터 수집
+                with contextlib.suppress(Exception):
+                    val = getattr(ev, "value", None)
+                    if getattr(self, "_running", False) and isinstance(val, (int, float)):
+                        self._pc_pressure_readings.append(float(val))
 
     async def _pump_ig_events(self, label: str) -> None:
         if not self.ig:
@@ -247,6 +265,10 @@ class PlasmaCleaningRuntime:
                 p = getattr(ev, "pressure", None)
                 txt = f"{p:.3e} Torr" if isinstance(p, (int, float)) else (ev.message or "")
                 self.append_log(label, f"[poll] {txt}")
+                # ✅ 데이터 수집 (base pressure용 — 전체 수집 후 min 사용)
+                with contextlib.suppress(Exception):
+                    if isinstance(p, (int, float)) and getattr(self, "_running", False):
+                        self._pc_ig_readings.append(float(p))
             elif k == "base_reached":
                 self.append_log(label, "Base pressure reached")
             elif k == "base_failed":
@@ -270,6 +292,11 @@ class PlasmaCleaningRuntime:
 
                     # 2) 상태창은 카운트다운 유지 → 덮어쓰지 않고 로그만 남김
                     self.append_log("RF", f"FWD={ev.forward:.1f}, REF={ev.reflected:.1f} (W)")
+                    # ✅ 데이터 수집
+                    with contextlib.suppress(Exception):
+                        if getattr(self, "_running", False):
+                            self._pc_forp_readings.append(float(ev.forward))
+                            self._pc_refp_readings.append(float(ev.reflected))
                     continue
 
                 elif ev.kind == "status":
@@ -1289,8 +1316,16 @@ class PlasmaCleaningRuntime:
         # ★ 여기까지 왔으면 Host 프리플라이트 성공
         self._host_report_start(True, "preflight OK")
 
-        # 5) UI/로그 준비
+        # 5) UI/로그 준비 — 데이터 수집 버퍼 초기화
+        self._pc_forp_readings     = []
+        self._pc_refp_readings     = []
+        self._pc_flow_readings     = []
+        self._pc_pressure_readings = []
+        self._pc_ig_readings       = []
+        self._current_process_name = self._get_process_name()
+
         p = self._read_params_from_ui()
+
         self._last_process_time_min = float(p.process_time_min)
         self._running = True
         self._set_running_ui_state()
@@ -1388,6 +1423,14 @@ class PlasmaCleaningRuntime:
                 await self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final)
             except Exception as e:
                 self.append_log("PC", f"notify_finish_once error: {e!r}")
+
+            # ✅ [D] PC 완료 데이터를 main.py의 pending_log에 전달
+            with contextlib.suppress(Exception):
+                cb = getattr(self, "_pc_done_callback", None)
+                if callable(cb):
+                    pc_params = self._build_pc_params_dict(p)
+                    ch = int(getattr(self, "_selected_ch", 1))
+                    cb(ch, self._current_process_name, pc_params)
 
             # # [A] 🔁 순서 변경: 종료 통지 먼저 (runtime_state 즉시 해제 + 종료 챗 선송)
             # try:
@@ -1751,6 +1794,43 @@ class PlasmaCleaningRuntime:
             # PLC는 공유자원 → 절대 끊지 않음
         except Exception as e:
             self.append_log("PC", f"장치 연결 해제 중 예외: {e!r}")
+
+    def set_pc_done_callback(self, callback: Callable) -> None:
+        """PC 완료 시 호출될 콜백 설정 (main.py에서 pending_log 저장에 사용)."""
+        self._pc_done_callback = callback
+
+    def _get_process_name(self) -> str:
+        """PC_processName_edit 위젯에서 공정 이름 읽기."""
+        w = _safe_get(self.ui, "PC_processName_edit")
+        if not w:
+            return ""
+        try:
+            if hasattr(w, "toPlainText"):
+                return w.toPlainText().strip()
+            elif hasattr(w, "text"):
+                return w.text().strip()
+        except Exception:
+            pass
+        return ""
+
+    def _build_pc_params_dict(self, p: PCParams) -> dict:
+        """PC 완료 데이터를 gdrive_logger가 기대하는 dict로 변환."""
+        def _avg(lst: list) -> Optional[float]:
+            return round(sum(lst) / len(lst), 4) if lst else None
+
+        return {
+            "time"          : float(p.process_time_min),
+            "base_pressure" : min(self._pc_ig_readings) if self._pc_ig_readings else None,
+            "sp_ar"         : float(p.gas_flow_sccm),
+            "avg_ar"        : _avg(self._pc_flow_readings),
+            "sp_pressure"   : float(p.sp4_setpoint_mTorr),
+            "avg_pressure"  : _avg(self._pc_pressure_readings),
+            "sp_power"      : float(p.rf_power_w),
+            "avg_forp"      : _avg(self._pc_forp_readings),
+            "avg_refp"      : _avg(self._pc_refp_readings),
+            "avg_load"      : None,
+            "avg_tune"      : None,
+        }
 
     def _read_params_from_ui(self) -> PCParams:
         # ✅ Config(Plasma cleaning 탭) 기본값 로드
@@ -2434,11 +2514,12 @@ class PlasmaCleaningRuntime:
             return s
 
         # 3) UI에 값 세팅
-        self._set_plaintext("PC_targetPressure_edit",   _f("base_pressure"))     # Torr
-        self._set_plaintext("PC_gasFlow_edit",          _f("gas_flow"))          # sccm
-        self._set_plaintext("PC_workingPressure_edit",  _f("working_pressure"))  # mTorr
-        self._set_plaintext("PC_rfPower_edit",          _f("rf_power"))          # W
-        self._set_plaintext("PC_ProcessTime_edit",      _f("process_time"))      # min
+        self._set_plaintext("PC_processName_edit",      str(row.get("process_name", "") or row.get("Process_name", "")).strip())
+        self._set_plaintext("PC_targetPressure_edit",   _f("base_pressure"))
+        self._set_plaintext("PC_gasFlow_edit",          _f("gas_flow"))
+        self._set_plaintext("PC_workingPressure_edit",  _f("working_pressure"))
+        self._set_plaintext("PC_rfPower_edit",          _f("rf_power"))
+        self._set_plaintext("PC_ProcessTime_edit",      _f("process_time"))
 
     def _read_first_row_from_csv(self, file_path: str) -> Optional[dict]:
         """CSV의 첫 데이터 행(헤더 제외)을 dict로 반환. 없으면 None."""

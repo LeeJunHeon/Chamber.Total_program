@@ -517,6 +517,91 @@ def _build_data(
 
 
 # ════════════════════════════════════════════════════════════════
+# PC 단독 행 저장 (Plasma Cleaning 데이터만 있을 때)
+# ════════════════════════════════════════════════════════════════
+
+def _build_pc_only_data(pc_params: Dict[str, Any]) -> List[Dict[str, Any]]:
+    """PC 데이터만으로 1개 행 생성 (Main Process 섹션 빈칸)."""
+    _pc = pc_params or {}
+    row: Dict[str, Any] = {
+        # 기본 정보
+        "timestamp"       : datetime.now(),
+        "operator"        : "",
+        "process_name"    : "Plasma Cleaning",
+        "note"            : "",
+        "substrate"       : "",
+        "main_shutter"    : "",
+        "power_select"    : "",
+        "G1 Target"       : "",
+        "G2 Target"       : "",
+        "G3 Target"       : "",
+        "chuck_position"  : "",
+        # Plasma Cleaning
+        "pc_time"         : _pc.get("time"),
+        "pc_base_pressure": _pc.get("base_pressure"),
+        "pc_sp_ar"        : _pc.get("sp_ar"),
+        "pc_avg_ar"       : _pc.get("avg_ar"),
+        "pc_sp_pressure"  : _pc.get("sp_pressure"),
+        "pc_avg_pressure" : _pc.get("avg_pressure"),
+        "pc_sp_power"     : _pc.get("sp_power"),
+        "pc_avg_forp"     : _pc.get("avg_forp"),
+        "pc_avg_refp"     : _pc.get("avg_refp"),
+        "pc_avg_load"     : _pc.get("avg_load"),
+        "pc_avg_tune"     : _pc.get("avg_tune"),
+        # Main Process — 모두 None (빈칸)
+        "shutter_delay"   : None,
+        "process_time"    : None,
+        "base_pressure"   : None,
+        "sp_ar"           : None,
+        "avg_ar"          : None,
+        "sp_n2"           : None,
+        "avg_n2"          : None,
+        "sp_o2"           : None,
+        "avg_o2"          : None,
+        "sp_pressure"     : None,
+        "avg_pressure"    : None,
+        "power_source"    : None,
+        "sp_power"        : None,
+        "avg_forp"        : None,
+        "avg_refp"        : None,
+        "avg_load"        : None,
+        "avg_tune"        : None,
+        "avg_voltage"     : None,
+        "avg_current"     : None,
+        "duty_cycle"      : None,
+        "frequency"       : None,
+        "soft_arc"        : 0,
+        "hard_arc"        : 0,
+    }
+    return [row]
+
+
+def save_pc_only(
+    ch: int,
+    pc_params: Dict[str, Any],
+    log_dir: Path,
+    arc_thresh: int = _DEFAULT_ARC_THRESH,
+    refp_warn: float = _DEFAULT_REFP_WARN_W,
+) -> None:
+    """
+    PC 단독 행을 xlsx에 동기 저장.
+    main.py의 _save_pc_only_row → run_in_executor에서 호출.
+    예외를 절대 전파하지 않음.
+    """
+    try:
+        rows = _build_pc_only_data(pc_params)
+        fb_dir = log_dir / "LocalFallback"
+        _save_sync(
+            ch, rows, log_dir,
+            arc_thresh, refp_warn,
+            False, "",   # arc_alert_sent=False, webhook_url="" (PC는 Arc 알림 없음)
+            fb_dir,
+        )
+    except Exception:
+        pass
+
+
+# ════════════════════════════════════════════════════════════════
 # 공개 API
 # ════════════════════════════════════════════════════════════════
 

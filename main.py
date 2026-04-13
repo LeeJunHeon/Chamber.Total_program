@@ -384,6 +384,10 @@ class MainWindow(QWidget):
             on_plc_owner=self._set_plc_owner,
         )
 
+        # ✅ PC ↔ Main Process 로그 연동 콜백 등록
+        self.ch1.set_main_done_callback(self._on_main_done)
+        self.ch2.set_main_done_callback(self._on_main_done)
+
         try:
             # ── Pre-Sputter: 챔버 전용 런타임 2개로 분리 ───────────────────────────
             self.pre_ch1 = PreSputterRuntime(
@@ -439,6 +443,10 @@ class MainWindow(QWidget):
                 self._broadcast_log("CAM", "CameraRecorder 초기화 성공")
             except Exception as e:
                 self._broadcast_log("CAM", f"CameraRecorder 초기화 실패: {e!r}")
+
+            # ✅ PC 완료 데이터 pending_log 연동
+            self._pending_log: dict = {}   # {ch: {process_name: {"pc": dict|None, "main": dict|None}}}
+            self.pc.set_pc_done_callback(self._on_pc_done)
 
         except Exception as e:
             self.pc = None
@@ -798,6 +806,111 @@ class MainWindow(QWidget):
             pc.append_log("PC", f"[Plasma Cleaning] Use CH{ch} IG, SP4 → MFC{ch}, GasFlow → MFC1 ch3")
         except Exception:
             pass
+
+    # ── Plasma Cleaning ↔ Main Process 로그 연동 ─────────────────────
+    def _on_pc_done(self, ch: int, process_name: str, pc_params: dict) -> None:
+        """
+        PC 완료 시 plasma_cleaning_runtime.py가 호출하는 콜백.
+        - process_name이 있으면 pending_log에 저장 → Main Process 완료 시 merge
+        - process_name이 없으면 즉시 PC 단독 행으로 xlsx 저장
+        - 동일 ch + 동일 이름의 PC 데이터가 이미 있으면 먼저 단독 저장 후 교체
+        """
+        import asyncio, contextlib
+
+        if not hasattr(self, "_pending_log"):
+            self._pending_log = {}
+
+        ch_log = self._pending_log.setdefault(ch, {})
+
+        if not process_name:
+            # process_name 없음 → Main Process와 매칭 불가 → PC 단독 행 즉시 저장
+            asyncio.ensure_future(self._save_pc_only_row(ch, pc_params))
+            return
+
+        existing = ch_log.get(process_name)
+        if existing is not None and existing.get("pc") is not None:
+            # 같은 이름으로 PC가 이미 pending → 기존 것을 단독 저장 후 교체
+            old_pc = existing["pc"]
+            asyncio.ensure_future(self._save_pc_only_row(ch, old_pc))
+
+        # pending에 저장 (Main Process 완료를 기다림)
+        if process_name not in ch_log:
+            ch_log[process_name] = {"pc": None, "main": None}
+        ch_log[process_name]["pc"] = pc_params
+
+        # Main이 이미 pending에 있으면 즉시 merge 저장
+        if ch_log[process_name].get("main") is not None:
+            main_data = ch_log[process_name]["main"]
+            del ch_log[process_name]
+            asyncio.ensure_future(self._save_merged_row(ch, process_name, pc_params, main_data))
+
+    def _on_main_done(self, ch: int, process_name: str, data_logger, pc_params_override=None) -> None:
+        """
+        Main Process 완료 시 chamber_runtime.py가 호출하는 콜백.
+        - pending_log에 PC 데이터가 있으면 merge 저장
+        - 없으면 Main 단독 행으로 저장 (기존 동작 유지)
+        반환값: PC params dict (chamber_runtime이 gdrive_save에 전달할 값), 없으면 None
+        """
+        if not hasattr(self, "_pending_log"):
+            self._pending_log = {}
+
+        ch_log = self._pending_log.get(ch, {})
+
+        if not process_name or process_name not in ch_log:
+            # 매칭 없음 → None 반환 (chamber_runtime이 기존처럼 단독 Main 저장)
+            return None
+
+        entry = ch_log.get(process_name, {})
+
+        if entry.get("pc") is not None:
+            # PC 데이터 있음 → 꺼내서 반환 (chamber_runtime이 merge 저장)
+            pc_params = entry["pc"]
+            del ch_log[process_name]
+            return pc_params
+
+        # PC pending 없음 (Main이 먼저 완료된 경우) → 저장 후 PC 대기
+        ch_log[process_name] = {"pc": None, "main": data_logger}
+        return "PENDING"
+
+    async def _save_pc_only_row(self, ch: int, pc_params: dict) -> None:
+        """PC 데이터만으로 xlsx에 단독 행 저장."""
+        import contextlib
+        try:
+            from util.gdrive_logger import save_pc_only
+            from lib import config_common as _cfgc
+            from pathlib import Path
+            log_dir = Path(getattr(_cfgc, "GDRIVE_LOG_DIR",
+                                   "G:/공유 드라이브/VanaM_Sputter/Process_log"))
+            arc_thresh  = getattr(_cfgc, "GDRIVE_ARC_ALERT_THRESH", 5)
+            refp_warn   = getattr(_cfgc, "GDRIVE_REF_P_WARN_W", 20.0)
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(
+                None,
+                lambda: save_pc_only(ch, pc_params, log_dir, arc_thresh, refp_warn),
+            )
+        except Exception as e:
+            self._broadcast_log("GDrive", f"PC 단독 행 저장 실패: {e!r}")
+
+    async def _save_merged_row(self, ch: int, process_name: str,
+                                pc_params: dict, data_logger) -> None:
+        try:
+            from util.gdrive_logger import save_process_log 
+            from lib import config_common as _cfgc
+            await save_process_log(   
+                ch=ch,
+                data_logger=data_logger,
+                operator=getattr(data_logger, "process_params", {}).get("operator", ""),
+                substrate=getattr(data_logger, "process_params", {}).get("substrate", ""),
+                note=getattr(data_logger, "process_params", {}).get("note", ""),
+                pc_params=pc_params,
+                log_dir=None,
+                arc_thresh=getattr(_cfgc, "GDRIVE_ARC_ALERT_THRESH", 5),
+                refp_warn=getattr(_cfgc, "GDRIVE_REF_P_WARN_W", 20.0),
+                webhook_url=getattr(_cfgc, "CHAT_WEBHOOK_MONITOR_URL", ""),
+                arc_alert_sent=False,
+            )
+        except Exception as e:
+            self._broadcast_log("GDrive", f"PC+Main merge 저장 실패: {e!r}")
 
     def _switch_page(self, key: Literal["pc", "ch1", "ch2", "server"]) -> None:
         page = self._pages.get(key)
