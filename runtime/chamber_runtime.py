@@ -310,7 +310,11 @@ class ChamberRuntime:
             _monitor_url = getattr(_cfgl, "CHAT_WEBHOOK_MONITOR_URL", "").strip()
         except Exception:
             _monitor_url = ""
-        self._process_monitor = ProcessMonitor(ch=self.ch, webhook_url=_monitor_url)
+        self._process_monitor = ProcessMonitor(
+            ch=self.ch,
+            webhook_url=_monitor_url,
+            log_func=self.append_log,
+        )
 
         self.cfg = _CfgAdapter(cfg, self.ch)
         self._bg_tasks: list[asyncio.Task[Any]] = []

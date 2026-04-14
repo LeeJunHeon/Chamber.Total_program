@@ -50,10 +50,12 @@ class ProcessMonitor:
         ch: int,
         webhook_url: str = "",
         tolerance: float = 0.3,
+        log_func=None,
     ):
         self._ch = ch
         self._webhook_url = (webhook_url or "").strip()
         self._tolerance = tolerance       # ±0.3 (sccm / mTorr 동일)
+        self._log_func = log_func
         self._targets: Dict[str, float] = {}   # {"Ar": 20.0, "O2": 5.0, "pressure": 3.000}
         self._active = False
         self._ctx = ssl.create_default_context()
@@ -140,6 +142,11 @@ class ProcessMonitor:
     # ── 웹훅 전송 ────────────────────────────────────────
 
     def _alert(self, message: str) -> None:
+        if self._log_func:
+            try:
+                self._log_func("Monitor", message)
+            except Exception:
+                pass
         if not self._webhook_url:
             return
         payload = {"text": message}
