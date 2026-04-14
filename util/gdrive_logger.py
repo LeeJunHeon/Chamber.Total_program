@@ -57,6 +57,8 @@ _COLS: List[Tuple] = [
     ("G1 Target",      "",              9,  "기본 정보",       "G1 Target"),
     ("G2 Target",      "",              9,  "기본 정보",       "G2 Target"),
     ("G3 Target",      "",              9,  "기본 정보",       "G3 Target"),
+    ("Dep.rate",       "nm/s",          9,  "기본 정보",       "dep_rate"),
+    ("Thickness",      "nm",            9,  "기본 정보",       "thickness"),
     ("Chuck",          "up/mid/down",  11,  "기본 정보",       "chuck_position"),
     # Plasma Cleaning
     ("Time",           "min",           7,  "Plasma Cleaning", "pc_time"),
@@ -415,6 +417,8 @@ def _build_data(
         # Main Process — 가스/압력 (파워와 무관)
         "shutter_delay"  : pp.get("shutter_delay"),
         "process_time"   : pp.get("process_time"),
+        "dep_rate"       : pp.get("dep_rate"),
+        "thickness"      : pp.get("thickness"),
         "base_pressure"  : base_pres,
         # [수정 2] 실제 TypedDict 키명으로 수정: Ar_flow(대문자), N2_flow, O2_flow
         "sp_ar"          : pp.get("Ar_flow") or pp.get("ar_flow"),
@@ -541,6 +545,8 @@ def _build_pc_only_data(pc_params: Dict[str, Any]) -> List[Dict[str, Any]]:
         # Main Process — 모두 None (빈칸)
         "shutter_delay"   : None,
         "process_time"    : None,
+        "dep_rate"        : None,
+        "thickness"       : None,
         "base_pressure"   : None,
         "sp_ar"           : None,
         "avg_ar"          : None,
