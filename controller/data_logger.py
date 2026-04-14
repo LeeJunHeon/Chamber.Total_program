@@ -82,6 +82,9 @@ class DataLogger(QObject):
         self.mfc_flow_readings: Dict[str, List[float]] = {"Ar": [], "O2": [], "N2": []}
         self.mfc_pressure_readings: List[float] = []
 
+        # ✅ Main Shutter 기준 수집 제어
+        self._shutter_open: bool = False
+
         # ✅ 세션 시작 시각 저장용(내부에서 캡처)
         self._session_started_at: Optional[datetime] = None
 
@@ -207,6 +210,11 @@ class DataLogger(QObject):
         for gas in self.mfc_flow_readings:
             self.mfc_flow_readings[gas].clear()
         self.mfc_pressure_readings.clear()
+        self._shutter_open = False
+        
+        # use_ms=False면 처음부터 수집 활성화
+        if not params.get("use_ms", False):
+            self._shutter_open = True
 
     @Slot(object)
     def log_ig_pressure(self, pressure: object) -> None:
@@ -219,30 +227,66 @@ class DataLogger(QObject):
         except Exception:
             pass
 
+    def notify_shutter_open(self) -> None:
+        """Main Shutter 열릴 때 모든 버퍼 초기화 후 수집 시작."""
+        self.dc_power_readings.clear()
+        self.dc_voltage_readings.clear()
+        self.dc_current_readings.clear()
+        self.dc_pulse_power_readings.clear()
+        self.dc_pulse_voltage_readings.clear()
+        self.dc_pulse_current_readings.clear()
+        self.rf_for_p_readings.clear()
+        self.rf_ref_p_readings.clear()
+        self.rf_pulse_for_p_readings.clear()
+        self.rf_pulse_ref_p_readings.clear()
+        for gas in self.mfc_flow_readings:
+            self.mfc_flow_readings[gas].clear()
+        self.mfc_pressure_readings.clear()
+        self._shutter_open = True
+
+    def notify_shutter_close(self) -> None:
+        """Main Shutter 닫힐 때 수집 중단."""
+        self._shutter_open = False
+
     @Slot(float, float, float)
     def log_dc_power(self, power: float, voltage: float, current: float) -> None:
+        if not self._shutter_open:
+            return
+        
         self.dc_power_readings.append(float(power))
         self.dc_voltage_readings.append(float(voltage))
         self.dc_current_readings.append(float(current))
 
     @Slot(float, float, float)
     def log_dcpulse_power(self, power: float, voltage: float, current: float) -> None:
+        if not self._shutter_open:
+            return
+        
         self.dc_pulse_power_readings.append(float(power))
         self.dc_pulse_voltage_readings.append(float(voltage))
         self.dc_pulse_current_readings.append(float(current))
 
     @Slot(float, float)
     def log_rf_power(self, for_p: float, ref_p: float) -> None:
+        if not self._shutter_open:
+            return
+
         self.rf_for_p_readings.append(float(for_p))
         self.rf_ref_p_readings.append(float(ref_p))
 
     @Slot(float, float)
     def log_rfpulse_power(self, for_p: float, ref_p: float) -> None:
+        if not self._shutter_open:
+            return
+
         self.rf_pulse_for_p_readings.append(float(for_p))
         self.rf_pulse_ref_p_readings.append(float(ref_p))
 
     @Slot(str, float)
     def log_mfc_flow(self, gas_name: str, flow_value: float) -> None:
+        if not self._shutter_open:
+            return
+
         key = {"AR": "Ar", "O2": "O2", "N2": "N2"}.get(gas_name.strip().upper())
         if key:
             self.mfc_flow_readings[key].append(float(flow_value))
@@ -254,6 +298,9 @@ class DataLogger(QObject):
         - 문자열 'V+100.00', '100.00', 'P=100.00' 등 → 숫자만 추출
         - 숫자형(float/int)도 그대로 수집
         """
+        if not self._shutter_open:
+            return
+    
         try:
             if isinstance(pressure, (int, float)):
                 self.mfc_pressure_readings.append(float(pressure))

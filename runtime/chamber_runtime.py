@@ -802,6 +802,13 @@ class ChamberRuntime:
                             else:
                                 self._process_monitor.notify_shutter_close()
 
+                        # ✅ data_logger shutter 연동
+                        with contextlib.suppress(Exception):
+                            if onb:
+                                self.data_logger.notify_shutter_open()
+                            else:
+                                self.data_logger.notify_shutter_close()
+
                         # ✅ Main Shutter 기준 카메라 녹화 시작/정지
                         # RF 파워 사용 공정에서만 카메라 활성화
                         #   CH1: RF Pulse 사용 시
