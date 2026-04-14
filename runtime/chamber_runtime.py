@@ -3029,6 +3029,18 @@ class ChamberRuntime:
         power_on_settle_s = float(self.cfg._get("CHAMBER_CHUCK_POWER_ON_SETTLE_S", 0.2))
         poll_interval_s = float(self.cfg._get("CHAMBER_CHUCK_POLL_INTERVAL_S", 0.3))
 
+        async def _read_actual_pos() -> str:
+            """3개 lamp 비트를 읽어 실제 위치 반환. 실패 시 'unknown'."""
+            try:
+                up  = bool(await self.plc.read_bit(f"Z{ch}_UP_LOCATION"))
+                mid = bool(await self.plc.read_bit(f"Z{ch}_MID_LOCATION"))
+                dn  = bool(await self.plc.read_bit(f"Z{ch}_DOWN_LOCATION"))
+                if int(up) + int(mid) + int(dn) == 1:
+                    return "up" if up else ("mid" if mid else "down")
+            except Exception:
+                pass
+            return "unknown"
+
         try:
             # (A) 이미 목표 위치인지 먼저 한 번 확인
             try:
@@ -3041,6 +3053,7 @@ class ChamberRuntime:
                     "PLC",
                     f"[CH{self.ch}] Chuck '{pos}' 이미 목표 위치 ({lamp_bit}=True) → 이동 생략",
                 )
+                # ✅ 이미 목표 위치 → params 그대로 유지 (pos == 실측값)
                 return True
 
             # (B) POWER ON → MOVE ON
@@ -3048,6 +3061,8 @@ class ChamberRuntime:
                 "PLC",
                 f"[CH{self.ch}] Chuck '{pos}' 이동 시작: {power_sw} → {move_sw} → {lamp_bit} 폴링",
             )
+            # ✅ 상태창 표시
+            self._set_state_text(f"Chuck {pos.upper()} 이동 중…")
 
             await self.plc.write_switch(power_sw, True)
             await asyncio.sleep(power_on_settle_s)
@@ -3070,6 +3085,7 @@ class ChamberRuntime:
                         "PLC",
                         f"[CH{self.ch}] Chuck '{pos}' 이동 성공 ({lamp_bit}=True)",
                     )
+                    # ✅ 성공: lamp 확인으로 이미 pos 검증됨 → params 그대로 유지
                     return True
 
                 await asyncio.sleep(poll_interval_s)
@@ -3079,10 +3095,13 @@ class ChamberRuntime:
                 await self.plc.write_switch(move_sw, False)
                 await self.plc.write_switch(power_sw, False)
 
+            actual = await _read_actual_pos()
             self.append_log(
                 "PLC",
-                f"[CH{self.ch}] Chuck '{pos}' 타임아웃({int(timeout_s)}s) — {lamp_bit}=False",
+                f"[CH{self.ch}] Chuck '{pos}' 타임아웃({int(timeout_s)}s) — 실측 위치: {actual}",
             )
+            # ✅ 실패: 실측 위치로 덮어씀
+            params["chuck_position"] = actual  # type: ignore[index]
             return False
 
         except Exception as e:
@@ -3094,10 +3113,13 @@ class ChamberRuntime:
                 except Exception:
                     pass
 
+            actual = await _read_actual_pos()
             self.append_log(
                 "PLC",
-                f"[CH{self.ch}] Chuck '{pos}' 이동 중 예외: {e!r}",
+                f"[CH{self.ch}] Chuck '{pos}' 이동 중 예외: {e!r} — 실측 위치: {actual}",
             )
+            # ✅ 실패: 실측 위치로 덮어씀
+            params["chuck_position"] = actual  # type: ignore[index]
             return False
 
     # ------------------------------------------------------------------
