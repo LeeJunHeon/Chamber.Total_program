@@ -60,7 +60,9 @@ class ServerPage(QWidget):
         # - ServerPage로 들어오는 로그는 "전부" 저장(Pause/HideStatus 여부 무관)
         # - NAS(log_root) 실패 시 로컬 ./Logs_LocalFallback/Server 로 폴백
         self._daily_buf: list[str] = []
-        self._daily_ext = ".log"   # 요구사항: .log 고정
+        self._daily_ext = ".log"
+        self._daily_fp = None           # ← 추가: 파일 핸들 유지
+        self._daily_fp_path: Optional[Path] = None  # ← 추가: 오늘 경로 추적
 
         self._daily_flush_timer = QTimer(self)
         self._daily_flush_timer.setInterval(1000)  # 1초마다 파일로 flush
@@ -323,12 +325,26 @@ class ServerPage(QWidget):
         self._daily_buf = []
 
         try:
-            fp = self._daily_log_path()
-            fp.parent.mkdir(parents=True, exist_ok=True)
-            with open(fp, "a", encoding="utf-8") as f:
-                f.write("\n".join(lines) + "\n")
+            today_path = self._daily_log_path()
+
+            # 날짜 바뀌거나 처음이면 핸들 교체
+            if self._daily_fp is None or self._daily_fp_path != today_path:
+                if self._daily_fp is not None:
+                    try:
+                        self._daily_fp.close()
+                    except Exception:
+                        pass
+                today_path.parent.mkdir(parents=True, exist_ok=True)
+                self._daily_fp = open(today_path, "a", encoding="utf-8")
+                self._daily_fp_path = today_path
+
+            self._daily_fp.write("\n".join(lines) + "\n")
+            self._daily_fp.flush()
+
         except Exception as e:
-            # 자동 저장 실패는 UI/통신을 방해하면 안 됨 → 표시만 하고 무시
+            # 핸들 오류 시 리셋
+            self._daily_fp = None
+            self._daily_fp_path = None
             try:
                 self.lblSaved.setText(f"Auto-save failed: {e!r}")
             except Exception:
@@ -356,9 +372,15 @@ class ServerPage(QWidget):
         except Exception as e:
             self.lblSaved.setText(f"Save failed: {e!r}")
 
-    def closeEvent(self, event) -> None:  # noqa: N802 (Qt naming)
+    def closeEvent(self, event) -> None:
         try:
             self._flush_daily_log()
+        except Exception:
+            pass
+        try:
+            if self._daily_fp is not None:
+                self._daily_fp.close()
+                self._daily_fp = None
         except Exception:
             pass
         try:
