@@ -69,6 +69,8 @@ RawParams = TypedDict('RawParams', {
     'working_pressure': float | str,
     'process_time': float | str,
     'shutter_delay': float | str,
+    'dep_rate': float | str | None,
+    'thickness': float | str | None,
     'integration_time': int | str,
     'Ar': Literal['T','F'] | bool,
     'O2': Literal['T','F'] | bool,
@@ -107,6 +109,8 @@ NormParams = TypedDict('NormParams', {
     'working_pressure': float,
     'process_time': float,
     'shutter_delay': float,
+    'dep_rate': float | None,
+    'thickness': float | None,
     'integration_time': int,
     'use_ar': bool, 'use_o2': bool, 'use_n2': bool,
     'ar_flow': float, 'o2_flow': float, 'n2_flow': float,
@@ -2528,6 +2532,8 @@ class ChamberRuntime:
         _set("workingPressure_edit", params.get('working_pressure', '0'))
         _set("basePressure_edit", params.get('base_pressure', '0'))
         _set("shutterDelay_edit", params.get('shutter_delay', '0'))
+        _set("depRate_edit",   str(params.get('dep_rate',  '') or ''))
+        _set("thickness_edit", str(params.get('thickness', '') or ''))
 
         _set("G1_checkbox", params.get('gun1', 'F') == 'T')
         _set("G2_checkbox", params.get('gun2', 'F') == 'T')
@@ -3227,7 +3233,17 @@ class ChamberRuntime:
             base_pressure = float(self._get_text("basePressure_edit") or 1e-5)
             working_pressure = float(self._get_text("workingPressure_edit") or 0.0)
             shutter_delay = float(self._get_text("shutterDelay_edit") or 0.0)
-            process_time = float(self._get_text("processTime_edit") or 0.0)
+
+            _dep_rate_txt  = (self._get_text("depRate_edit")   or "").strip()
+            _thickness_txt = (self._get_text("thickness_edit") or "").strip()
+            _dep_rate  = float(_dep_rate_txt)  if _dep_rate_txt  else None
+            _thickness = float(_thickness_txt) if _thickness_txt else None
+
+            if _dep_rate and _thickness and _dep_rate > 0:
+                process_time = _thickness / _dep_rate / 60.0  # nm/(nm/s) → s → min
+                self._set("processTime_edit", str(process_time))
+            else:
+                process_time = float(self._get_text("processTime_edit") or 0.0)
 
             process_name = (self._get_text("integrationTime_edit") or "").strip()
             process_note = process_name if process_name else f"Single CH{self.ch}"
@@ -3238,6 +3254,8 @@ class ChamberRuntime:
                 "working_pressure": working_pressure,
                 "shutter_delay": shutter_delay,
                 "process_time": process_time,
+                "dep_rate":    _dep_rate,      
+                "thickness":   _thickness,      
                 "process_note": process_note,
                 "Process_name": process_note,  # (다른 코드 참조가 있어 유지)
                 **vals,
@@ -4781,6 +4799,8 @@ class ChamberRuntime:
             "base_pressure":     fget("base_pressure", "1e-5"),
             "working_pressure":  fget("working_pressure", "0"),
             "process_time":      fget("process_time", "0"),
+            "dep_rate":          fget("dep_rate", "0") or None,
+            "thickness":         fget("thickness", "0") or None,
             "shutter_delay":     fget("shutter_delay", "0"),
             "integration_time":  iget("integration_time", "60"),
             "dc_power":          fget("dc_power", "0"),
