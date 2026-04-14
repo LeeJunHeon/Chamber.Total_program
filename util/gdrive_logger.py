@@ -41,10 +41,7 @@ _T = {
 _WHITE    = "FFFFFF"
 _ROW_ODD  = "FFFFFF"
 _ROW_EVEN = "F2F3F4"
-_WARN_ARC = "FADBD8"   # Arc 발생
-_WARN_REF = "FDEBD0"   # Ref.p 초과
-_WARN_PRE = "FFF9C4"   # Base Pressure 불량
-_WARN_SP  = "E8DAEF"   # [수정 3] SP vs Avg 편차
+_WARN_ARC = "FADBD8"   # 이상치 — 빨강으로 통일
 _FG       = "1C2833"
 
 # ── 컬럼 정의: (헤더, 단위, 너비, 그룹, data_key) ────────────────
@@ -212,26 +209,14 @@ def _cell_bg(key: str, value: Any, row_bg: str,
              arc_thresh: int, refp_warn: float,
              data: Dict[str, Any]) -> str:
     """
-    [수정 3] 이상치 여부로 배경색 결정.
-    - Arc 발생 → 빨강
-    - Ref.p 초과 → 주황
-    - Base Pressure 불량 → 노랑
-    - SP vs Avg 10% 초과 편차 → 보라
+    이상치 여부로 배경색 결정 (빨강으로 통일).
+    - Arc 누적 >= arc_thresh → 빨강
+    - SP vs Avg 10% 초과 편차 → 빨강
     """
-    # Arc 발생
+    # Arc 누적 임계값 이상
     if key in ("soft_arc", "hard_arc"):
-        if isinstance(value, (int, float)) and value > 0:
+        if isinstance(value, (int, float)) and value >= arc_thresh:
             return _WARN_ARC
-
-    # Ref.p 초과
-    if key in ("avg_refp", "pc_avg_refp"):
-        if isinstance(value, (int, float)) and value > refp_warn:
-            return _WARN_REF
-
-    # Base Pressure 불량 (1e-5 Torr 이상이면 진공 불량)
-    if key in ("base_pressure", "pc_base_pressure"):
-        if isinstance(value, (int, float)) and value > 1e-5:
-            return _WARN_PRE
 
     # SP vs Avg 편차 (10% 초과 시 강조)
     if key in _SP_AVG_PAIRS:
@@ -241,7 +226,7 @@ def _cell_bg(key: str, value: Any, row_bg: str,
                 and isinstance(sp_val, (int, float))
                 and sp_val > 0):
             if abs(value - sp_val) / sp_val > _SP_DIFF_RATIO:
-                return _WARN_SP
+                return _WARN_ARC
 
     return row_bg
 
