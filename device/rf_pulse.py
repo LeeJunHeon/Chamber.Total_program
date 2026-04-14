@@ -452,6 +452,26 @@ class RFPulseAsync:
         await self._event_q.put(RFPulseEvent(kind="target_reached", message="OK"))
         return True
     
+    async def read_actual_pulse_params(self) -> Optional[dict]:
+        """cmd 193(freq) + 196(duty) 읽고 off_time 역산. 실패 시 None.
+        반환: {"freq_khz": float, "duty_pct": int, "off_time_us": float|None}
+        """
+        f_data = await self._query_and_data(CMD_REPORT_PULSE_FREQ, b"", tag="[READ PULSE FREQ]")
+        d_data = await self._query_and_data(CMD_REPORT_PULSE_DUTY, b"", tag="[READ PULSE DUTY]")
+        if f_data is None or len(f_data) < 3:
+            return None
+        if d_data is None or len(d_data) < 2:
+            return None
+        freq_hz  = _u24le(f_data, 0)
+        duty_pct = _u16le(d_data, 0)
+        freq_khz = round(freq_hz / 1000.0, 3)
+        if freq_hz > 0:
+            period_us   = 1_000_000.0 / freq_hz
+            off_time_us = round(period_us * (1.0 - duty_pct / 100.0), 2)
+        else:
+            off_time_us = None
+        return {"freq_khz": freq_khz, "duty_pct": duty_pct, "off_time_us": off_time_us}
+    
     async def set_reference_power(self, target_w: float, *, pause_polling: bool = True) -> bool:
         """
         공정 중(RF 출력 ON 상태) setpoint(Command 8)만 변경하는 API.

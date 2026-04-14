@@ -753,6 +753,39 @@ class AsyncDCPulse:
         if len(resp) == 1 and resp[0] == 0x04:
             return None
         return (resp[-2] << 8) | resp[-1]
+
+    async def read_pulse_freq_khz(self) -> Optional[int]:
+        """0xA6: 장비에 현재 설정된 Pulse Freq (kHz)."""
+        resp = await self._read_raw(0xA6, "READ_PULSE_FREQ")
+        if not resp or len(resp) < 2:
+            return None
+        if len(resp) == 1 and resp[0] == 0x04:
+            return None
+        return (resp[-2] << 8) | resp[-1]
+
+    async def read_off_time_raw(self) -> Optional[int]:
+        """0xA7: 장비에 현재 설정된 Off Time raw값 (DC=9, 10~100 = 1.0~10.0us x10)."""
+        resp = await self._read_raw(0xA7, "READ_OFF_TIME")
+        if not resp or len(resp) < 2:
+            return None
+        if len(resp) == 1 and resp[0] == 0x04:
+            return None
+        return (resp[-2] << 8) | resp[-1]
+
+    async def read_actual_pulse_params(self) -> Optional[dict]:
+        """freq + off_time 읽고 duty_cycle 역산. 실패 시 None.
+        반환: {"freq_khz": int, "off_time_us": float|None, "duty_pct": float}
+        """
+        freq_khz = await self.read_pulse_freq_khz()
+        off_raw  = await self.read_off_time_raw()
+        if freq_khz is None or off_raw is None:
+            return None
+        if off_raw == 9:  # DC 모드
+            return {"freq_khz": freq_khz, "off_time_us": None, "duty_pct": 100.0}
+        off_time_us = off_raw / 10.0
+        period_us   = 1000.0 / max(freq_khz, 1)
+        duty_pct    = round((period_us - off_time_us) / period_us * 100, 1)
+        return {"freq_khz": freq_khz, "off_time_us": off_time_us, "duty_pct": duty_pct}
     
     def reset_arc_counts(self) -> None:
         """공정 시작 시 호출 — Arc 누적 카운터 초기화."""

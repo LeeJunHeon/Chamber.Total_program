@@ -92,6 +92,7 @@ _COLS: List[Tuple] = [
     ("Avg Current",    "A",             9,  "Main Process",    "avg_current"),
     ("Duty Cycle",     "%",             8,  "Main Process",    "duty_cycle"),
     ("Frequency",      "kHz",           8,  "Main Process",    "frequency"),
+    ("Off Time",       "μs",            8,  "Main Process",    "off_time"),
     ("Soft Arc",       "count",         8,  "Main Process",    "soft_arc"),
     ("Hard Arc",       "count",         8,  "Main Process",    "hard_arc"),
 ]
@@ -443,8 +444,9 @@ def _build_data(
             "avg_voltage"  : _avg(getattr(dl, "dc_pulse_voltage_readings", [])),
             "avg_current"  : _avg(getattr(dl, "dc_pulse_current_readings", [])),
             # [수정 2] dc_pulse_duty_cycle (TypedDict 실제 키명)
-            "duty_cycle"   : pp.get("dc_pulse_duty_cycle"),
+            "duty_cycle"   : pp.get("dc_pulse_duty_cycle") or pp.get("dc_pulse_duty"),
             "frequency"    : pp.get("dc_pulse_freq"),
+            "off_time"     : pp.get("dc_pulse_off_time_us"),
         })
     elif pp.get("use_dc_power"):
         power_rows.append({
@@ -458,6 +460,7 @@ def _build_data(
             "avg_current"  : _avg(getattr(dl, "dc_current_readings", [])),
             "duty_cycle"   : None,
             "frequency"    : None,
+            "off_time"     : None,
         })
 
     if pp.get("use_rf_pulse"):
@@ -473,6 +476,7 @@ def _build_data(
             # [수정 2] rf_pulse_duty_cycle (TypedDict 실제 키명)
             "duty_cycle"   : pp.get("rf_pulse_duty_cycle"),
             "frequency"    : pp.get("rf_pulse_freq"),
+            "off_time"     : pp.get("rf_pulse_off_time_us"),
         })
     elif pp.get("use_rf_power"):
         power_rows.append({
@@ -486,6 +490,7 @@ def _build_data(
             "avg_current"  : None,
             "duty_cycle"   : None,
             "frequency"    : None,
+            "off_time"     : None,
         })
 
     # 파워 소스가 없으면 base_data 그대로 1행
@@ -555,6 +560,7 @@ def _build_pc_only_data(pc_params: Dict[str, Any]) -> List[Dict[str, Any]]:
         "avg_current"     : None,
         "duty_cycle"      : None,
         "frequency"       : None,
+        "off_time"        : None,
         "soft_arc"        : 0,
         "hard_arc"        : 0,
     }

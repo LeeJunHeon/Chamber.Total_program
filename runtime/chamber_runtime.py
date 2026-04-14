@@ -910,6 +910,16 @@ class ChamberRuntime:
                     self._ensure_background_started()
                     # (선행 단계에서 이미 연결/워치독이 올라와 있으므로 start()는 생략해도 무방)
                     ok = await self.dc_pulse.prepare_and_start(power_w=float(power), freq=freq, duty=duty)
+                    if ok:
+                        with contextlib.suppress(Exception):
+                            pr = await self.dc_pulse.read_actual_pulse_params()
+                            if pr:
+                                pp = getattr(self.data_logger, "process_params", None)
+                                if isinstance(pp, dict):
+                                    pp["dc_pulse_freq"]       = pr["freq_khz"]
+                                    pp["dc_pulse_duty_cycle"] = pr["duty_pct"]
+                                    pp["dc_pulse_off_time_us"]= pr["off_time_us"]
+
                     if not ok:
                         self.process_controller.on_dc_pulse_failed(
                             "prepare_and_start failed",
@@ -1000,6 +1010,15 @@ class ChamberRuntime:
                 try:
                     self._ensure_background_started()
                     await self.rf_pulse.start_pulse_process(float(power), freq, duty)
+                    with contextlib.suppress(Exception):
+                        pr = await self.rf_pulse.read_actual_pulse_params()
+                        if pr:
+                            pp = getattr(self.data_logger, "process_params", None)
+                            if isinstance(pp, dict):
+                                pp["rf_pulse_freq"]        = pr["freq_khz"]
+                                pp["rf_pulse_duty_cycle"]  = pr["duty_pct"]
+                                pp["rf_pulse_off_time_us"] = pr["off_time_us"]
+
                 except Exception as e:
                     why = f"RF-Pulse start failed: {e!r}"
                     self.append_log("RFPulse", why)
@@ -2437,11 +2456,11 @@ class ChamberRuntime:
 
             rf_power = params.get("rf_pulse_power", "0")
             rf_freq  = str(params.get("rf_pulse_freq", "")).strip()
-            rf_duty  = str(params.get("rf_pulse_duty_cycle", "")).strip()
+            rf_duty  = str(params.get("rf_pulse_duty_cycle") or params.get("rf_pulse_duty") or "").strip()
 
             dc_power = params.get("dc_pulse_power", "0")
             dc_freq  = str(params.get("dc_pulse_freq", "")).strip()
-            dc_duty  = str(params.get("dc_pulse_duty_cycle", "")).strip()
+            dc_duty  = str(params.get("dc_pulse_duty_cycle") or params.get("dc_pulse_duty") or "").strip()
 
             rf_requested = use_rf_flag or _pos_num(rf_power) or (rf_freq not in ("", "0")) or (rf_duty not in ("", "0"))
             dc_requested = use_dc_flag or _pos_num(dc_power) or (dc_freq not in ("", "0")) or (dc_duty not in ("", "0"))
@@ -2480,14 +2499,14 @@ class ChamberRuntime:
             _set("dcPulsePower_checkbox", params.get('use_dc_pulse', 'F') == 'T')
             _set("dcPulsePower_edit",     params.get('dc_pulse_power', '0'))
             dcf = str(params.get('dc_pulse_freq', '')).strip()
-            dcd = str(params.get('dc_pulse_duty_cycle', '')).strip()
+            dcd = str(params.get('dc_pulse_duty_cycle') or params.get('dc_pulse_duty') or '').strip()
             _set("dcPulseFreq_edit",      '' if dcf in ('', '0') else dcf)
             _set("dcPulseDutyCycle_edit", '' if dcd in ('', '0') else dcd)
 
             _set("rfPulsePower_checkbox", params.get('use_rf_pulse', 'F') == 'T')
             _set("rfPulsePower_edit",     params.get('rf_pulse_power', '0'))
             rff = str(params.get('rf_pulse_freq', '')).strip()
-            rfd = str(params.get('rf_pulse_duty_cycle', '')).strip()
+            rfd = str(params.get('rf_pulse_duty_cycle') or params.get('rf_pulse_duty') or '').strip()
             _set("rfPulseFreq_edit",      '' if rff in ('', '0') else rff)
             _set("rfPulseDutyCycle_edit", '' if rfd in ('', '0') else rfd)
 
