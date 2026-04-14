@@ -2550,10 +2550,18 @@ class ChamberRuntime:
                     or str(params.get('G2 Target', '')).strip()
                     or str(params.get('G3 Target', '')).strip())
             _set("g1Target_name", name)
+            if not name:
+                asyncio.ensure_future(self._load_gun_targets())
         else:
             _set("g1Target_name", str(params.get('G1 Target', '')).strip())
             _set("g2Target_name", str(params.get('G2 Target', '')).strip())
             _set("g3Target_name", str(params.get('G3 Target', '')).strip())
+            if not any([
+                str(params.get('G1 Target', '')).strip(),
+                str(params.get('G2 Target', '')).strip(),
+                str(params.get('G3 Target', '')).strip(),
+            ]):
+                asyncio.ensure_future(self._load_gun_targets())
 
     def _set(self, leaf: str, v: Any) -> None:
         w = self._u(leaf)
