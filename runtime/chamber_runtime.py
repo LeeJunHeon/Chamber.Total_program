@@ -1901,6 +1901,21 @@ class ChamberRuntime:
                         f"[telemetry] P={float(P or 0):.1f} W, V={float(V or 0):.2f} V, I={float(I or 0):.3f} A"
                     )
 
+                elif k == "arc_threshold_reached":
+                    soft = int(getattr(ev, "power", 0) or 0)
+                    hard = int(getattr(ev, "voltage", 0) or 0)
+                    msg = (
+                        f"⚠️ *CH{self.ch} DC Pulse Arc 경고*\n"
+                        f"공정: {str(getattr(self.process_controller, 'current_params', {}).get('process_name') or f'CH{self.ch}')}\n"
+                        f"Soft Arc: {soft}회  Hard Arc: {hard}회  합계: {soft + hard}회"
+                    )
+                    self.append_log(f"DCPulse{self.ch}", msg)
+                    if self.chat:
+                        with contextlib.suppress(Exception):
+                            self.chat.notify_error_with_src("DCPulse", msg)
+                            if hasattr(self.chat, "flush"):
+                                self.chat.flush()
+
                 elif k == "command_confirmed":
                     cmd = (ev.cmd or "").upper()
 

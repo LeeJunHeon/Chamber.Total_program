@@ -735,19 +735,19 @@ class AsyncDCPulse:
         return {"raw": {"P": P_raw, "I": I_raw, "V": V_raw},
                 "eng": {"P_W": P_W, "I_A": I_A, "V_V": V_V}}
     
-    # ★ Soft/Hard Arc per second 읽기 (0xAE / 0xAF)
-    async def read_soft_arc_per_sec(self) -> Optional[int]:
-        """0xAE: 초당 소프트 아크 발생 횟수. 실패 시 None."""
-        resp = await self._read_raw(0xAE, "READ_ARC_SOFT")
+    # Soft/Hard Arc 누적값 읽기 (0x96 / 0x99) — 출력 ON 이후 장비가 누적 관리
+    async def read_soft_arc_total(self) -> Optional[int]:
+        """0x96: 출력 ON 이후 누적 Soft Arc 수. 실패 시 None."""
+        resp = await self._read_raw(0x96, "READ_ARC_SOFT")
         if not resp or len(resp) < 2:
             return None
         if len(resp) == 1 and resp[0] == 0x04:
             return None
         return (resp[-2] << 8) | resp[-1]
 
-    async def read_hard_arc_per_sec(self) -> Optional[int]:
-        """0xAF: 초당 하드 아크 발생 횟수. 실패 시 None."""
-        resp = await self._read_raw(0xAF, "READ_ARC_HARD")
+    async def read_hard_arc_total(self) -> Optional[int]:
+        """0x99: 출력 ON 이후 누적 Hard Arc 수. 실패 시 None."""
+        resp = await self._read_raw(0x99, "READ_ARC_HARD")
         if not resp or len(resp) < 2:
             return None
         if len(resp) == 1 and resp[0] == 0x04:
@@ -758,6 +758,7 @@ class AsyncDCPulse:
         """공정 시작 시 호출 — Arc 누적 카운터 초기화."""
         self._soft_arc_total = 0
         self._hard_arc_total = 0
+        self._arc_alert_sent: bool = False
 
     @property
     def arc_counts(self) -> tuple[int, int]:
@@ -1587,7 +1588,6 @@ class AsyncDCPulse:
     async def _poll_loop(self):
         try:
             _piv_last: float = 0.0   # 마지막 PIV 읽기 시각
-            _arc_last: float = 0.0   # 마지막 ARC 읽기 시각
             while True:
                 now = time.monotonic()
                 try:
@@ -1683,35 +1683,42 @@ class AsyncDCPulse:
                                     except Exception:
                                         pass
 
-                        # ─── ARC 읽기 (1초마다, 실패 무시) ───────────────────
-                        now2 = time.monotonic()
-                        if now2 - _arc_last >= 1.0:
-                            _arc_last = now2
+                        # ─── ARC 읽기 (PIV와 동일 주기, 장비 누적값 직접 읽기) ───
+                        # PIV 블록이 실행된 직후 (now - _piv_last 가 방금 갱신됨)에 함께 읽는다.
+                        # _piv_last가 방금 갱신됐으면 ARC도 읽도록 동일 조건 사용
+                        if now - _piv_last >= self._poll_period_s - 0.05:
                             soft: Optional[int] = None
                             hard: Optional[int] = None
                             with contextlib.suppress(Exception):
-                                soft = await self.read_soft_arc_per_sec()
+                                soft = await self.read_soft_arc_total()
                             with contextlib.suppress(Exception):
-                                hard = await self.read_hard_arc_per_sec()
-                            # 둘 중 하나라도 읽혔으면 status 이벤트 → .txt 로그에 기록됨
+                                hard = await self.read_hard_arc_total()
                             if soft is not None or hard is not None:
-                                s_str = str(soft) if soft is not None else "?"
-                                h_str = str(hard) if hard is not None else "?"
+                                s = soft if soft is not None else self._soft_arc_total
+                                h = hard if hard is not None else self._hard_arc_total
+                                # 장비 누적값으로 갱신
+                                if soft is not None:
+                                    self._soft_arc_total = soft
+                                if hard is not None:
+                                    self._hard_arc_total = hard
                                 self._ev_nowait(DCPEvent(
                                     kind="status",
-                                    message=f"[arc] Soft={s_str}/s Hard={h_str}/s"
+                                    message=f"[arc] Soft(total)={s} Hard(total)={h}"
                                 ))
-
-                                # ✅ 누적 카운터 갱신
-                                if soft is not None:
-                                    self._soft_arc_total += soft
-                                if hard is not None:
-                                    self._hard_arc_total += hard
+                                # 임계값 도달 시 1회만 이벤트 emit
+                                thresh = int(getattr(self, "_arc_alert_thresh", 5))
+                                if (s + h) >= thresh and not getattr(self, "_arc_alert_sent", False):
+                                    self._arc_alert_sent = True
+                                    self._ev_nowait(DCPEvent(
+                                        kind="arc_threshold_reached",
+                                        message=f"Arc 누적 임계값 도달 (Soft={s}, Hard={h}, 합계={s+h})",
+                                        power=float(s),
+                                        voltage=float(h),
+                                    ))
 
                     else:
                         # 연결이 없거나 출력 OFF 상태면 카운터·타임스탬프 리셋
                         _piv_last = 0.0
-                        _arc_last = 0.0
                         if self._spdev_n:
                             self._spdev_n = 0
                         if self._low_curr_n:
@@ -1720,11 +1727,10 @@ class AsyncDCPulse:
                 except Exception as e:
                     self._ev_nowait(DCPEvent(kind="status", message=f"[poll] 예외: {e!r}"))
 
-                # ─── sleep: PIV/ARC 중 더 가까운 쪽에 맞춰 깨어남 ──────────
+                # ─── sleep: PIV 주기에 맞춰 깨어남 (ARC는 PIV와 동일 주기)
                 now3 = time.monotonic()
                 next_piv = max(0.0, _piv_last + self._poll_period_s - now3)
-                next_arc = max(0.0, _arc_last + 1.0 - now3)
-                await asyncio.sleep(max(0.05, min(next_piv, next_arc)))
+                await asyncio.sleep(max(0.05, next_piv))
 
         except asyncio.CancelledError:
             pass
@@ -1794,7 +1800,8 @@ class AsyncDCPulse:
 
     def _is_poll_read_label(self, label: str) -> bool:
         # 현재 poll loop가 주기적으로 넣는 읽기는 READ_PIV, READ_ARC_SOFT, READ_ARC_HARD
-        return self._base_cmd_label(label) in {"READ_PIV", "READ_ARC_SOFT", "READ_ARC_HARD"}
+        return self._base_cmd_label(label) in {"READ_PIV", "READ_ARC_SOFT", "READ_ARC_HARD",
+                                        "READ_ARC_TOTAL_SOFT", "READ_ARC_TOTAL_HARD"}
 
     def _purge_pending(
         self,
