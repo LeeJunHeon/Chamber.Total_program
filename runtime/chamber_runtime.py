@@ -2399,7 +2399,31 @@ class ChamberRuntime:
 
         if self._w_log:
             self._w_log.setMaximumBlockCount(2000)
+
+        # ✅ Dep.Rate / Thickness 입력 시 Process Time 자동계산
+        dep_w   = self._u("depRate_edit")
+        thick_w = self._u("thickness_edit")
+        if dep_w:
+            dep_w.textChanged.connect(self._recalc_process_time)
+        if thick_w:
+            thick_w.textChanged.connect(self._recalc_process_time)
+
         self._set_default_ui_values()
+
+    def _recalc_process_time(self) -> None:
+        """Dep.Rate 또는 Thickness 변경 시 Process Time 자동계산."""
+        try:
+            dep   = float(self._get_text("depRate_edit")   or 0)
+            thick = float(self._get_text("thickness_edit") or 0)
+            if dep > 0 and thick > 0:
+                t_min = thick / dep / 60.0
+                # 시그널 루프 방지: processTime_edit 값이 이미 같으면 갱신 안 함
+                current = self._get_text("processTime_edit")
+                new_val = f"{t_min:.3f}"
+                if current != new_val:
+                    self._set("processTime_edit", new_val)
+        except Exception:
+            pass
 
     async def _handle_process_list_clicked_async(self) -> None:
         start_dir = (
@@ -3258,12 +3282,7 @@ class ChamberRuntime:
             _dep_rate  = float(_dep_rate_txt)  if _dep_rate_txt  else None
             _thickness = float(_thickness_txt) if _thickness_txt else None
 
-            if _dep_rate and _thickness and _dep_rate > 0:
-                process_time = _thickness / _dep_rate / 60.0  # nm/(nm/s) → s → min
-                self._set("processTime_edit", str(process_time))
-            else:
-                process_time = float(self._get_text("processTime_edit") or 0.0)
-
+            process_time = float(self._get_text("processTime_edit") or 0.0)
             process_name = (self._get_text("integrationTime_edit") or "").strip()
             process_note = process_name if process_name else f"Single CH{self.ch}"
 
@@ -5456,7 +5475,7 @@ class ChamberRuntime:
                 _set("dcPulsePower_checkbox", True)   # CH1: DC Pulse 사용
                 _set("dcPower_checkbox", False)
                 _set("shutterDelay_edit", "0")
-                _set("processTime_edit", "30")
+                #_set("processTime_edit", "30")
             elif self.ch == 2:
                 _set("basePressure_edit", "9e-6")
                 _set("G2_checkbox", True)             # CH2: G2 사용
@@ -5464,7 +5483,7 @@ class ChamberRuntime:
                 _set("dcPower_checkbox", True)        # CH2: DC Power 사용
                 _set("dcPulsePower_checkbox", False)
                 _set("shutterDelay_edit", "5")
-                _set("processTime_edit", "25")
+                #_set("processTime_edit", "25")
         except Exception:
             pass
 
