@@ -59,7 +59,6 @@ from runtime.server_page import ServerPage  # ✅ NEW (server_page.py 위치에 
 from lib import config_ch1, config_ch2
 from lib import config_common as cfgc
 from lib import config_local as cfgl  # CHAT_WEBHOOK_URL 로드
-from lib import user_config
 
 # 에러코드 팝업
 from PySide6.QtWidgets import QMessageBox
@@ -133,17 +132,11 @@ class MainWindow(QWidget):
         self.ui = Ui_Form()
         self.ui.setupUi(self)
 
-        # ✅ 저장된 user_config를 프로그램 시작 직후 live config에 먼저 반영
-        #    반드시 런타임/장비 객체 생성 전에 실행되어야 함
+        # ✅ settings.json → config 모듈에 안전하게 덮어쓰기
         try:
-            # ✅ settings.json → config 모듈에 안전하게 덮어쓰기
             from lib._config_loader import load_settings
             load_settings()
-
-            self._boot_user_cfg = user_config.load()
-            user_config.apply_overrides(self._boot_user_cfg)
         except Exception as e:
-            self._boot_user_cfg = None
             try:
                 print(f"[Config] startup apply failed: {e!r}", file=sys.stderr)
             except Exception:
@@ -922,35 +915,28 @@ class MainWindow(QWidget):
         _set_plain(getattr(self.ui, "TSP_targetPressure_edit", None), getattr(cfgc, "TSP_UI_DEFAULT_TARGET", "2.5e-7"))
         _set_plain(getattr(self.ui, "TSP_setCycle_edit", None), getattr(cfgc, "TSP_UI_DEFAULT_CYCLES", "10"))
 
-        # Plasma Cleaning: user_config.json(plasma_cleaning) 기반
-        try:
-            from lib import user_config
-            pc_cfg = (user_config.load() or {}).get("plasma_cleaning", {}) or {}
-            if not isinstance(pc_cfg, dict):
-                pc_cfg = {}
-        except Exception:
-            pc_cfg = {}
-
+        # Plasma Cleaning: config_common 기본값 기반
         _set_plain(
             getattr(self.ui, "PC_targetPressure_edit", None),
-            pc_cfg.get("target_pressure", str(getattr(cfgc, "PC_DEFAULT_TARGET_PRESSURE_TORR", 5.0e-6)))
+            str(getattr(cfgc, "PC_DEFAULT_TARGET_PRESSURE_TORR", 5.0e-6))
         )
         _set_plain(
             getattr(self.ui, "PC_gasFlow_edit", None),
-            pc_cfg.get("gas_flow_sccm", str(getattr(cfgc, "PC_DEFAULT_GAS_FLOW_SCCM", 0.0)))
+            str(getattr(cfgc, "PC_DEFAULT_GAS_FLOW_SCCM", 0.0))
         )
         _set_plain(
             getattr(self.ui, "PC_workingPressure_edit", None),
-            pc_cfg.get("sp4_setpoint_mTorr", str(getattr(cfgc, "PC_DEFAULT_SP4_SETPOINT_MTORR", 2.0)))
+            str(getattr(cfgc, "PC_DEFAULT_SP4_SETPOINT_MTORR", 2.0))
         )
         _set_plain(
             getattr(self.ui, "PC_rfPower_edit", None),
-            pc_cfg.get("rf_power_w", str(getattr(cfgc, "PC_DEFAULT_RF_POWER_W", 100.0)))
+            str(getattr(cfgc, "PC_DEFAULT_RF_POWER_W", 100.0))
         )
         _set_plain(
             getattr(self.ui, "PC_ProcessTime_edit", None),
-            pc_cfg.get("process_time_min", str(getattr(cfgc, "PC_DEFAULT_PROCESS_TIME_MIN", 1.0)))
+            str(getattr(cfgc, "PC_DEFAULT_PROCESS_TIME_MIN", 1.0))
         )
+        
         # CH1/CH2: 현재 config로 기본값이 확정된 항목만 UI 반영
         _set_plain(
             getattr(self.ui, "ch1_basePressure_edit", None),
