@@ -28,7 +28,6 @@ from controller.plasma_cleaning_controller import PlasmaCleaningController, PCPa
 from device.rf_power import RFPowerAsync, RFPowerEvent
 from controller.runtime_state import runtime_state  # ★ 추가: 전역 쿨다운/이력
 
-from lib import user_config
 from lib import config_common as cfgc
 
 class PlasmaCleaningRuntime:
@@ -1835,13 +1834,6 @@ class PlasmaCleaningRuntime:
     def _read_params_from_ui(self) -> PCParams:
         # ✅ Config(Plasma cleaning 탭) 기본값 로드
         pc_cfg: dict = {}
-        try:
-            pc_cfg = (user_config.load() or {}).get("plasma_cleaning", {}) or {}
-            if not isinstance(pc_cfg, dict):
-                pc_cfg = {}
-        except Exception:
-            pc_cfg = {}
-
         cfgm = getattr(self, "_cfg_mod", cfgc)
 
         # ✅ 공통 기본값은 config_common.py에서 가져온다.
