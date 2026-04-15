@@ -44,7 +44,6 @@ from ui.main_window import Ui_Form
 from runtime.tsp_runtime import TSPPageController
 from runtime.pre_sputter_runtime import PreSputterRuntime
 from controller.chat_notifier import ChatNotifier
-from controller.config_apply_controller import ConfigApplyController
 
 # 공유 장비(PLC, IG, MFC)
 from device.plc import AsyncPLC
@@ -151,8 +150,6 @@ class MainWindow(QWidget):
                 pass
 
         # ✅ Config 팝업 인스턴스 보관(가비지컬렉션/중복창 방지)
-        self._config_dialog = None
-        self._cfg_apply_task: Optional[asyncio.Task] = None
         self._boot_plc_task: Optional[asyncio.Task] = None
         self._host_task: Optional[asyncio.Task] = None
 
@@ -169,9 +166,6 @@ class MainWindow(QWidget):
 
         # ✅ 공정 중 종료 시도 dump 중복 방지
         self._close_block_dumped_once: bool = False
-
-        # ✅ Config 적용 정책 컨트롤러
-        self._cfg_apply_ctrl = ConfigApplyController()
 
         # ✅ Integration Time 입력칸을 'Process Name' 입력으로 재활용 (CH1/CH2)
         #   - CSV 자동공정: Process_name 표시
@@ -673,11 +667,6 @@ class MainWindow(QWidget):
         if btn_server is not None:
             btn_server.clicked.connect(lambda: self._switch_page("server"))
 
-        # ✅ (추가) PC 페이지의 Config 버튼 → Config 팝업 열기
-        btn_cfg = getattr(self.ui, "Config_button", None)
-        if btn_cfg is not None:
-            btn_cfg.clicked.connect(self._open_config_dialog)
-
         # ✅ (추가) PC 페이지의 State Dump 버튼 → runtime dump 저장
         btn_dump = getattr(self.ui, "RuntimeDump_button", None)
         if btn_dump is not None:
@@ -917,135 +906,6 @@ class MainWindow(QWidget):
         if page:
             self._stack.setCurrentWidget(page)
 
-    def _open_config_dialog(self) -> None:
-        """
-        Config 버튼 클릭 시 설정 팝업을 연다.
-        - ui/config_dialog.py가 아직 없거나 import 실패해도 프로그램이 죽지 않게 방어
-        - 중복으로 여러 창이 뜨지 않게 1개만 유지
-        """
-        # 1) 이미 떠 있으면 앞으로
-        try:
-            dlg = getattr(self, "_config_dialog", None)
-            if dlg is not None and _qt_is_valid(dlg):
-                dlg.raise_()
-                dlg.activateWindow()
-                return
-        except Exception:
-            pass
-
-        # 2) 지연 import: 파일이 아직 없어도 크래시 방지
-        try:
-            from ui.config_dialog import ConfigDialog  # (다음 단계에서 생성할 파일)
-        except Exception as e:
-            QMessageBox.warning(self, "Config", f"ConfigDialog 로드 실패: {e!r}\n(ui/config_dialog.py 생성 필요)")
-            return
-
-        # 3) 새로 생성해서 열기(모달 권장: open()은 블로킹 없이 모달로 동작)
-        try:
-            dlg = ConfigDialog(parent=self)
-            self._config_dialog = dlg
-
-            # ✅ Apply(Runtime) -> MainWindow.on_config_applied 연결
-            try:
-                connected = False
-
-                for sig_name in ("sigApplied", "sigApplyRuntime", "applied"):
-                    sig = getattr(dlg, sig_name, None)
-                    if sig is None:
-                        continue
-                    try:
-                        sig.connect(self.on_config_applied)
-                        connected = True
-                        break
-                    except Exception:
-                        pass
-
-                if (not connected) and hasattr(dlg, "set_apply_callback"):
-                    try:
-                        dlg.set_apply_callback(self.on_config_applied)
-                        connected = True
-                    except Exception:
-                        pass
-
-                if (not connected) and hasattr(dlg, "on_applied"):
-                    try:
-                        dlg.on_applied = self.on_config_applied
-                        connected = True
-                    except Exception:
-                        pass
-            except Exception:
-                pass
-
-            # 닫힐 때 참조 해제(다음에 다시 열 수 있게)
-            def _clear(_=None):
-                self._config_dialog = None
-
-            try:
-                dlg.finished.connect(_clear)
-            except Exception:
-                pass
-
-            dlg.open()
-        except Exception as e:
-            QMessageBox.warning(self, "Config", f"ConfigDialog 실행 실패: {e!r}")
-
-    def on_config_applied(self, *args) -> None:
-        """
-        ConfigDialog Apply(Runtime) 직후 호출됨.
-        - 현재 적용 가능한 값만 즉시 적용
-        - 적용 불가 항목은 알림/로그로만 안내
-        """
-        try:
-            prev = getattr(self, "_cfg_apply_task", None)
-            if prev and not prev.done():
-                prev.cancel()
-
-            self._cfg_apply_task = self._loop.create_task(self._run_config_apply_async())
-        except Exception as e:
-            self._broadcast_log("ERROR/CFG", f"Config apply task 시작 실패: {e!r}")
-
-    async def _run_config_apply_async(self) -> None:
-        try:
-            result = await self._cfg_apply_ctrl.apply_runtime(self)
-            self._show_config_apply_result(result)
-        except asyncio.CancelledError:
-            raise
-        except Exception as e:
-            self._broadcast_log("ERROR/CFG", f"Config apply 실패: {e!r}")
-            with contextlib.suppress(Exception):
-                QMessageBox.warning(self, "Config", f"Config apply 실패: {e!r}")
-
-    def _show_config_apply_result(self, result: dict) -> None:
-        def _fmt(items, limit: int = 8) -> str:
-            names = []
-            for item in items or []:
-                try:
-                    names.append(item.dotted)
-                except Exception:
-                    pass
-            if not names:
-                return "-"
-            names = sorted(names)
-            if len(names) <= limit:
-                return ", ".join(names)
-            return ", ".join(names[:limit]) + f" 외 {len(names) - limit}건"
-
-        applied = result.get("applied_now") or []
-        blocked = result.get("blocked_now") or []
-
-        if applied:
-            self._broadcast_log("CFG", f"즉시 반영 완료: {_fmt(applied)}")
-
-        if blocked:
-            self._broadcast_log("WARN/CFG", f"현재 적용 불가: {_fmt(blocked)}")
-            with contextlib.suppress(Exception):
-                QMessageBox.information(
-                    self,
-                    "Config",
-                    "일부 설정은 현재 상태에서는 적용할 수 없습니다.\n\n"
-                    f"적용 불가 항목: {_fmt(blocked)}"
-                )
-
     def _apply_ui_defaults_from_config(self, *, overwrite: bool) -> None:
         """
         overwrite=False: 사용자가 UI에 이미 뭔가 입력해 둔 경우 덮어쓰지 않음(안전)
@@ -1250,7 +1110,7 @@ class MainWindow(QWidget):
         self._broadcast_log("WARN/EXIT", "앱 종료 정리 시작")
 
         # 1) 시작/적용 task 먼저 정리
-        for attr in ("_cfg_apply_task", "_boot_plc_task", "_host_task"):
+        for attr in ("_boot_plc_task", "_host_task"):
             t = getattr(self, attr, None)
             if t and not t.done():
                 t.cancel()
