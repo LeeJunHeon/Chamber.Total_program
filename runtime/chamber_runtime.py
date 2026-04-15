@@ -1305,6 +1305,7 @@ class ChamberRuntime:
                         if self.dc_pulse is not None:
                             with contextlib.suppress(Exception):
                                 self.dc_pulse.reset_arc_counts()
+                        self._gdrive_arc_sent = False
 
                         # 성공 시에도 명시적으로 남겨 두면 나중에 추적이 쉬움
                         self.append_log("CSV", "Sputter Calib 로그 세션 시작")
@@ -1416,7 +1417,12 @@ class ChamberRuntime:
                                 if _pc_params == "PENDING":
                                     pass
                                 else:
-                                    asyncio.create_task(
+                                    def _on_gdrive_done(t):
+                                        with contextlib.suppress(Exception):
+                                            if t.result():
+                                                self._gdrive_arc_sent = True
+
+                                    _t = asyncio.create_task(
                                         _gdrive_save(
                                             ch=self.ch,
                                             data_logger=self.data_logger,
@@ -1431,6 +1437,7 @@ class ChamberRuntime:
                                             arc_alert_sent=getattr(self, "_gdrive_arc_sent", False),
                                         )
                                     )
+                                    _t.add_done_callback(_on_gdrive_done)
 
                         # ➊ 카드 헤더용 prefix: "CHx Sputter"
                         detail.setdefault("ch", self.ch)
@@ -2581,9 +2588,7 @@ class ChamberRuntime:
 
         # ---- CH1: 단일 타겟 위젯에 한 번만 세팅 ----
         if self.ch == 1:
-            name = (str(params.get('G1 Target', '')).strip()
-                    or str(params.get('G2 Target', '')).strip()
-                    or str(params.get('G3 Target', '')).strip())
+            name = str(params.get('G1 Target', '')).strip()
             _set("g1Target_name", name)
             if not name:
                 asyncio.ensure_future(self._load_gun_targets())
