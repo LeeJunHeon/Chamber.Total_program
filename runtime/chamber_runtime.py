@@ -4780,9 +4780,24 @@ class ChamberRuntime:
             s = str(raw.get(key, '')).strip()
             return int(float(s)) if s != '' else None
 
-        g1t = str(raw.get("G1 Target", "")).strip()
-        g2t = str(raw.get("G2 Target", "")).strip()
-        g3t = str(raw.get("G3 Target", "")).strip()
+        # CSV는 "G1 Target"(공백), UI는 "G1_target_name"(언더스코어) 키를 씀 → 둘 다 시도
+        _g1_raw = str(raw.get("G1 Target", "") or raw.get("G1_target_name", "")).strip()
+        _g2_raw = str(raw.get("G2 Target", "") or raw.get("G2_target_name", "")).strip()
+        _g3_raw = str(raw.get("G3 Target", "") or raw.get("G3_target_name", "")).strip()
+
+        # CSV는 "gun1", UI는 "use_g1" 키를 씀 → 둘 다 시도
+        _use_g1 = bool(raw.get("use_g1", False)) or tf(raw.get("gun1", "F"))
+        _use_g2 = bool(raw.get("use_g2", False)) or tf(raw.get("gun2", "F"))
+        _use_g3 = bool(raw.get("use_g3", False)) or tf(raw.get("gun3", "F"))
+
+        # CH1: 건이 1개이므로 항상 G1에만 저장
+        # CH2: 선택된 건의 타겟만 저장, 나머지는 빈칸
+        if self.ch == 1:
+            g1t, g2t, g3t = _g1_raw, "", ""
+        else:
+            g1t = _g1_raw if _use_g1 else ""
+            g2t = _g2_raw if _use_g2 else ""
+            g3t = _g3_raw if _use_g3 else ""
 
         # ▼ 추가: chuck_position(up/mid/down, 공란이면 스킵)
         _pos = str(raw.get("chuck_position", "")).strip().lower()
@@ -4862,9 +4877,9 @@ class ChamberRuntime:
             "ar_flow":           fget("Ar_flow", "0"),
             "o2_flow":           fget("O2_flow", "0"),
             "n2_flow":           fget("N2_flow", "0"),
-            "use_g1":            tf(raw.get("gun1", "F")),
-            "use_g2":            tf(raw.get("gun2", "F")),
-            "use_g3":            tf(raw.get("gun3", "F")),
+            "use_g1":            _use_g1,
+            "use_g2":            _use_g2,
+            "use_g3":            _use_g3,
             "use_ms":            tf(raw.get("main_shutter", "F")),
             "process_note":      raw.get("Process_name", raw.get("process_note", "")),
             "G1_target_name":    g1t, "G2_target_name": g2t, "G3_target_name": g3t,
