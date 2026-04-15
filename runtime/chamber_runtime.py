@@ -634,8 +634,6 @@ class ChamberRuntime:
     # ------------------------------------------------------------------
     def reload_runtime_cfg(self) -> None:
         """
-        ConfigDialog Apply(Runtime) 후 ChamberRuntime 본체의 '안전한 캐시'만 다시 읽는다.
-
         원칙
         - 기존 공정 로직(Runner / preflight / cleanup / polling 흐름)은 건드리지 않는다.
         - 실행 중/정리 중에는 위험한 값(지원 플래그/장비 생성 의존 값)은 바꾸지 않는다.
