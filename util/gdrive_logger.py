@@ -86,6 +86,7 @@ _COLS: List[Tuple] = [
     ("Avg Pressure",   "mTorr",         9,  "Main Process",    "avg_pressure"),
     ("Power Source",   "DC/RF/DCPulse/RFPulse", 14, "Main Process", "power_source"),
     ("SP Power",       "W",             8,  "Main Process",    "sp_power"),
+    ("Avg Power",      "W",             9,  "Main Process",    "avg_power"),
     ("Avg For.p",      "W",             9,  "Main Process",    "avg_forp"),
     ("Avg Ref.p",      "W",             9,  "Main Process",    "avg_refp"),
     ("Avg Load",       "a.u.",          8,  "Main Process",    "avg_load"),
@@ -441,7 +442,8 @@ def _build_data(
         power_rows.append({
             "power_source" : "DC Pulse",
             "sp_power"     : pp.get("dc_pulse_power"),
-            "avg_forp"     : _avg(getattr(dl, "dc_pulse_power_readings", [])),
+            "avg_power"    : _avg(getattr(dl, "dc_pulse_power_readings", [])),
+            "avg_forp"     : None,   # ← DC Pulse는 Forward Power 없음
             "avg_refp"     : None,
             "avg_load"     : None,
             "avg_tune"     : None,
@@ -456,7 +458,8 @@ def _build_data(
         power_rows.append({
             "power_source" : "DC",
             "sp_power"     : pp.get("dc_power"),
-            "avg_forp"     : _avg(getattr(dl, "dc_power_readings", [])),
+            "avg_power"    : _avg(getattr(dl, "dc_power_readings", [])),
+            "avg_forp"     : None,
             "avg_refp"     : None,
             "avg_load"     : None,
             "avg_tune"     : None,

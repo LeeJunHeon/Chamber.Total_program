@@ -2953,6 +2953,12 @@ class ChamberRuntime:
                 self._run_warnings.append(warn)
                 # ✅ 여기서 실패처리/return/큐 fail 처리/critical/error 기록 전부 하지 않음
 
+            if not params.get("chuck_position"):
+                if self.plc:
+                    actual = await self._read_chuck_pos(ch)
+                    if actual != "unknown":
+                        params["chuck_position"] = actual
+
             self._last_polling_targets = None
             self.append_log("MAIN", "장비 연결 확인 완료 → 공정 시작")
 
@@ -3072,6 +3078,17 @@ class ChamberRuntime:
             self._host_report_start(False, "장비 연결 실패: " + ", ".join(failed))
 
         return ok, failed
+    
+    async def _read_chuck_pos(self, ch: int) -> str:
+        try:
+            up  = bool(await self.plc.read_bit(f"Z{ch}_UP_LOCATION"))
+            mid = bool(await self.plc.read_bit(f"Z{ch}_MID_LOCATION"))
+            dn  = bool(await self.plc.read_bit(f"Z{ch}_DOWN_LOCATION"))
+            if int(up) + int(mid) + int(dn) == 1:
+                return "up" if up else ("mid" if mid else "down")
+        except Exception:
+            pass
+        return "unknown"
     
     async def _set_chuck_position_if_needed(self, params: Mapping[str, Any]) -> bool:
         """
@@ -3303,6 +3320,11 @@ class ChamberRuntime:
                 "t0_pressed_wall": datetime.now().isoformat(timespec="seconds"),
                 "t0_pressed_ns":   time.monotonic_ns(),
             }
+
+            # vals에 "G1_target_name"이 있으므로 "G1 Target" 키도 동기화
+            params.setdefault("G1 Target",  params.get("G1_target_name", ""))
+            params.setdefault("G2 Target",  params.get("G2_target_name", ""))
+            params.setdefault("G3 Target",  params.get("G3_target_name", ""))
 
             with contextlib.suppress(Exception):
                 if not getattr(self, "_log_file_path", None):
