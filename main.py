@@ -809,13 +809,17 @@ class MainWindow(QWidget):
             asyncio.ensure_future(self._save_pc_only_row(ch, pc_params))
             return
 
+        # 수정: _done_ 마커 체크 추가
+        # Main이 이미 standalone 완료한 경우 → PC 즉시 단독 저장
+        if ch_log.pop(f"_done_{process_name}", False):
+            asyncio.ensure_future(self._save_pc_only_row(ch, pc_params))
+            return
+
         existing = ch_log.get(process_name)
         if existing is not None and existing.get("pc") is not None:
-            # 같은 이름으로 PC가 이미 pending → 기존 것을 단독 저장 후 교체
             old_pc = existing["pc"]
             asyncio.ensure_future(self._save_pc_only_row(ch, old_pc))
 
-        # pending에 저장 (Main Process 완료를 기다림)
         if process_name not in ch_log:
             ch_log[process_name] = {"pc": None, "main": None}
         ch_log[process_name]["pc"] = pc_params
@@ -836,12 +840,16 @@ class MainWindow(QWidget):
         if not hasattr(self, "_pending_log"):
             self._pending_log = {}
 
-        ch_log = self._pending_log.get(ch, {})
+        ch_log = self._pending_log.setdefault(ch, {})  # get → setdefault
 
-        if not process_name or process_name not in ch_log:
-            # 매칭 없음 → None 반환 (chamber_runtime이 기존처럼 단독 Main 저장)
+        if not process_name:
             return None
 
+        if process_name not in ch_log:
+            # PC pending 없음 → standalone 저장. 단, PC가 나중에 올 경우를 위해 마커 남김
+            ch_log[f"_done_{process_name}"] = True
+            return None
+        
         entry = ch_log.get(process_name, {})
 
         if entry.get("pc") is not None:
@@ -936,7 +944,7 @@ class MainWindow(QWidget):
             getattr(self.ui, "PC_ProcessTime_edit", None),
             str(getattr(cfgc, "PC_DEFAULT_PROCESS_TIME_MIN", 1.0))
         )
-        
+
         # CH1/CH2: 현재 config로 기본값이 확정된 항목만 UI 반영
         _set_plain(
             getattr(self.ui, "ch1_basePressure_edit", None),
