@@ -203,6 +203,7 @@ _SP_AVG_PAIRS = {
     "avg_o2"         : "sp_o2",
     "avg_pressure"   : "sp_pressure",
     "avg_forp"       : "sp_power",
+    "avg_power"      : "sp_power",
     "pc_avg_ar"      : "pc_sp_ar",
     "pc_avg_pressure": "pc_sp_pressure",
     "pc_avg_forp"    : "pc_sp_power",
