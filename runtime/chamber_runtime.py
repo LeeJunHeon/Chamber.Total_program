@@ -3302,6 +3302,7 @@ class ChamberRuntime:
             _dep_rate  = float(_dep_rate_txt)  if _dep_rate_txt  else None
             _thickness = float(_thickness_txt) if _thickness_txt else None
 
+            self._recalc_process_time()   # ← 추가: 위젯 자동계산 강제 반영
             process_time = float(self._get_text("processTime_edit") or 0.0)
             process_name = (self._get_text("integrationTime_edit") or "").strip()
             process_note = process_name if process_name else f"Single CH{self.ch}"
