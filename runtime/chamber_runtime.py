@@ -2561,8 +2561,7 @@ class ChamberRuntime:
         # RF-Power
         _set("rfPower_checkbox", params.get('use_rf_power', 'F') == 'T')
         _set("rfPower_edit",     params.get('rf_power', '0'))
-
-        _set("processTime_edit", params.get('process_time', '0'))
+        
         # ✅ Integration Time 입력칸을 'Process Name' 입력으로 재활용
         #    (CSV 자동 공정: Process_name 표시 / UI 수동 공정: 사용자가 입력)
         _set("integrationTime_edit", params.get('Process_name', params.get('process_note', '')))
@@ -2574,6 +2573,7 @@ class ChamberRuntime:
         _set("shutterDelay_edit", params.get('shutter_delay', '0'))
         _set("depRate_edit",   str(params.get('dep_rate',  '') or ''))
         _set("thickness_edit", str(params.get('thickness', '') or ''))
+        _set("processTime_edit", params.get('process_time', '0'))
 
         _set("G1_checkbox", params.get('gun1', 'F') == 'T')
         _set("G2_checkbox", params.get('gun2', 'F') == 'T')
@@ -2955,7 +2955,7 @@ class ChamberRuntime:
 
             if not params.get("chuck_position"):
                 if self.plc:
-                    actual = await self._read_chuck_pos(ch)
+                    actual = await self._read_chuck_pos(self.ch)
                     if actual != "unknown":
                         params["chuck_position"] = actual
 
