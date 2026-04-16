@@ -2571,9 +2571,16 @@ class ChamberRuntime:
         _set("workingPressure_edit", params.get('working_pressure', '0'))
         _set("basePressure_edit", params.get('base_pressure', '0'))
         _set("shutterDelay_edit", params.get('shutter_delay', '0'))
-        _set("depRate_edit",   str(params.get('dep_rate',  '') or ''))
+        
+        # ✅ dep.rate: CSV 헤더가 "dep.rate"(점) 또는 "dep_rate"(밑줄) 둘 다 지원
+        _dep_rate_val = str(params.get('dep_rate', '') or params.get('dep.rate', '') or '')
+        _set("depRate_edit",   _dep_rate_val)
         _set("thickness_edit", str(params.get('thickness', '') or ''))
-        _set("processTime_edit", params.get('process_time', '0'))
+        # ✅ processTime_edit: 명시적 값이 있을 때만 덮어씀
+        #    (없으면 위 thickness_edit textChanged → _recalc_process_time이 계산한 값 유지)
+        _pt = params.get('process_time', 0)
+        if float(_pt or 0) > 0:
+            _set("processTime_edit", _pt)
 
         _set("G1_checkbox", params.get('gun1', 'F') == 'T')
         _set("G2_checkbox", params.get('gun2', 'F') == 'T')
@@ -4874,12 +4881,36 @@ class ChamberRuntime:
             rf_pulse_freq  = iget_opt("rf_pulse_freq")
             rf_pulse_duty  = iget_opt("rf_pulse_duty_cycle")
 
+        # ✅ dep.rate: CSV 헤더가 "dep.rate"(점) 또는 "dep_rate"(밑줄) 둘 다 지원
+        def fget_deprate() -> float | None:
+            for key in ("dep_rate", "dep.rate"):
+                s = str(raw.get(key, "")).strip()
+                if s:
+                    try:
+                        v = float(s)
+                        return v if v > 0 else None
+                    except Exception:
+                        pass
+            return None
+
+        _dep_rate  = fget_deprate()
+        _thickness = fget("thickness", "0") or None
+
+        # ✅ process_time 역산: CSV에서 비어있고 dep_rate + thickness가 모두 있으면 자동 계산
+        _process_time = fget("process_time", "0")
+        if _process_time <= 0.0 and _dep_rate and _thickness:
+            try:
+                _process_time = float(_thickness) / float(_dep_rate) / 60.0  # nm / (nm/s) / 60 = 분
+                self.append_log("Params", f"process_time 자동 계산: {_thickness}nm ÷ {_dep_rate}nm/s = {_process_time:.3f}분")
+            except Exception:
+                pass
+
         res: NormParams = {
             "base_pressure":     fget("base_pressure", "1e-5"),
             "working_pressure":  fget("working_pressure", "0"),
-            "process_time":      fget("process_time", "0"),
-            "dep_rate":          fget("dep_rate", "0") or None,
-            "thickness":         fget("thickness", "0") or None,
+            "process_time":      _process_time,
+            "dep_rate":          _dep_rate,
+            "thickness":         _thickness,
             "shutter_delay":     fget("shutter_delay", "0"),
             "integration_time":  iget("integration_time", "60"),
             "dc_power":          fget("dc_power", "0"),
