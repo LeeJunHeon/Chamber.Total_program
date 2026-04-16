@@ -36,7 +36,7 @@ _SP_DIFF_RATIO          = 0.10   # 10% 이상 편차 시 강조
 _T = {
     "기본 정보"       : ("1C2833", "2C3E50", "ABB2B9"),
     "Plasma Cleaning" : ("2E4057", "4A6278", "BDC3C7"),
-    "Main Process"    : ("1C2833", "2C3E50", "ABB2B9"),
+    "Main Process"    : ("2E4057", "4A6278", "BDC3C7"),  # ← 엑셀 포맷과 동일하게 변경
 }
 _WHITE    = "FFFFFF"
 _ROW_ODD  = "FFFFFF"
@@ -46,7 +46,7 @@ _FG       = "1C2833"
 
 # ── Main Process 시트 컬럼 정의 ─────────────────────────────────
 _COLS_MAIN: List[Tuple] = [
-    # 기본 정보 (13개)
+    # 기본 정보 (13개, A~M)
     ("날짜",           "YYYY-MM-DD HH:MM:SS", 19, "기본 정보",    "timestamp"),
     ("담당자",         "",              8,  "기본 정보",    "operator"),
     ("Process Name",   "",             16,  "기본 정보",    "process_name"),
@@ -60,21 +60,9 @@ _COLS_MAIN: List[Tuple] = [
     ("Dep.rate",       "nm/s",         10,  "기본 정보",    "dep_rate"),
     ("Thickness",      "nm",            9,  "기본 정보",    "thickness"),
     ("Chuck",          "up/mid/down",  11,  "기본 정보",    "chuck_position"),
-    # Plasma Cleaning (11개)
-    ("Time",           "min",           7,  "Plasma Cleaning", "pc_time"),
-    ("Base Pressure",  "Torr",         12,  "Plasma Cleaning", "pc_base_pressure"),
-    ("SP Ar",          "sccm",          8,  "Plasma Cleaning", "pc_sp_ar"),
-    ("Avg Ar",         "sccm",          8,  "Plasma Cleaning", "pc_avg_ar"),
-    ("SP Pressure",    "mTorr",         9,  "Plasma Cleaning", "pc_sp_pressure"),
-    ("Avg Pressure",   "mTorr",         9,  "Plasma Cleaning", "pc_avg_pressure"),
-    ("SP Power",       "W",             8,  "Plasma Cleaning", "pc_sp_power"),
-    ("Avg For.p",      "W",             9,  "Plasma Cleaning", "pc_avg_forp"),
-    ("Avg Ref.p",      "W",             9,  "Plasma Cleaning", "pc_avg_refp"),
-    ("Avg Load",       "a.u.",          8,  "Plasma Cleaning", "pc_avg_load"),
-    ("Avg Tune",       "a.u.",          8,  "Plasma Cleaning", "pc_avg_tune"),
-    # Main Process (25개)
-    ("Shutter Delay",  "min",           9,  "Main Process", "shutter_delay"),
-    ("Process Time",   "min",           9,  "Main Process", "process_time"),
+    # Main Process (25개, N~AL)
+    ("Shutter Delay",  "min",           8,  "Main Process", "shutter_delay"),
+    ("Process Time",   "min",           8,  "Main Process", "process_time"),
     ("Base Pressure",  "Torr",         12,  "Main Process", "base_pressure"),
     ("SP Ar",          "sccm",          8,  "Main Process", "sp_ar"),
     ("Avg Ar",         "sccm",          8,  "Main Process", "avg_ar"),
@@ -238,9 +226,7 @@ _SP_AVG_PAIRS = {
     "avg_pressure"   : "sp_pressure",
     "avg_forp"       : "sp_power",
     "avg_power"      : "sp_power",
-    "pc_avg_ar"      : "pc_sp_ar",
-    "pc_avg_pressure": "pc_sp_pressure",
-    "pc_avg_forp"    : "pc_sp_power",
+    # pc_avg_* 항목 제거 — Main Process 시트에 PC 컬럼 없으므로
 }
 
 
@@ -423,8 +409,6 @@ def _build_data(
     else:
         base_pres = pp.get("base_pressure")
 
-    _pc = pc_params or {}
-
     # ── 공통 데이터 (파워 소스와 무관한 모든 필드) ──────────────
     base_data: Dict[str, Any] = {
         # 기본 정보
@@ -440,18 +424,6 @@ def _build_data(
         "G2 Target"      : pp.get("G2 Target", ""),
         "G3 Target"      : pp.get("G3 Target", ""),
         "chuck_position" : pp.get("chuck_position", ""),
-        # Plasma Cleaning
-        "pc_time"          : _pc.get("time"),
-        "pc_base_pressure" : _pc.get("base_pressure"),
-        "pc_sp_ar"         : _pc.get("sp_ar"),
-        "pc_avg_ar"        : _pc.get("avg_ar"),
-        "pc_sp_pressure"   : _pc.get("sp_pressure"),
-        "pc_avg_pressure"  : _pc.get("avg_pressure"),
-        "pc_sp_power"      : _pc.get("sp_power"),
-        "pc_avg_forp"      : _pc.get("avg_forp"),
-        "pc_avg_refp"      : _pc.get("avg_refp"),
-        "pc_avg_load"      : _pc.get("avg_load"),
-        "pc_avg_tune"      : _pc.get("avg_tune"),
         # Main Process — 가스/압력 (파워와 무관)
         "shutter_delay"  : pp.get("shutter_delay"),
         "process_time"   : pp.get("process_time"),

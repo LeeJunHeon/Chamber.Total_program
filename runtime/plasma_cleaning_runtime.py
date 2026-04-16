@@ -1818,6 +1818,7 @@ class PlasmaCleaningRuntime:
             return round(sum(lst) / len(lst), 4) if lst else None
 
         return {
+            "process_name"  : self._current_process_name or "Plasma Cleaning",  # ← 추가
             "time"          : float(p.process_time_min),
             "base_pressure" : min(self._pc_ig_readings) if self._pc_ig_readings else None,
             "sp_ar"         : float(p.gas_flow_sccm),
