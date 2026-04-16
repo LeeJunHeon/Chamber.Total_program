@@ -1393,16 +1393,13 @@ class ChamberRuntime:
 
                         # ✅ Google Drive 엑셀 로그 (메인 공정과 완전 독립)
                         if _GDRIVE_OK and ok:
-                            with contextlib.suppress(Exception):
-                                # Arc 카운트를 process_params 에 삽입
+                            try:
+                                from lib import config_common as _cfgc
                                 if self.dc_pulse is not None:
                                     s, h = self.dc_pulse.arc_counts
                                     self.data_logger.process_params["soft_arc_count"] = s
                                     self.data_logger.process_params["hard_arc_count"] = h
 
-                                from lib import config_common as _cfgc
-
-                                # ✅ pending_log 콜백으로 PC params 조회
                                 _pname = str(
                                     self.data_logger.process_params.get("process_name")
                                     or self.data_logger.process_params.get("Process_name")
@@ -1411,31 +1408,33 @@ class ChamberRuntime:
                                 _cb = getattr(self, "_main_done_callback", None)
                                 _pc_params = _cb(self.ch, _pname, self.data_logger) if callable(_cb) else None
 
-                                # "PENDING" 반환 = Main이 먼저 완료, main.py가 PC 대기 중 → 저장 생략
-                                if _pc_params == "PENDING":
-                                    pass
-                                else:
-                                    def _on_gdrive_done(t):
-                                        with contextlib.suppress(Exception):
-                                            if t.result():
-                                                self._gdrive_arc_sent = True
-
-                                    _t = asyncio.create_task(
-                                        _gdrive_save(
-                                            ch=self.ch,
-                                            data_logger=self.data_logger,
-                                            operator=self.data_logger.process_params.get("operator", ""),
-                                            substrate=self.data_logger.process_params.get("substrate", ""),
-                                            note=self.data_logger.process_params.get("note", ""),
-                                            pc_params=_pc_params if isinstance(_pc_params, dict) else None,
-                                            log_dir=None,
-                                            arc_thresh=getattr(_cfgc, "GDRIVE_ARC_ALERT_THRESH", 5),
-                                            refp_warn=getattr(_cfgc, "GDRIVE_REF_P_WARN_W", 20.0),
-                                            webhook_url=getattr(_cfgc, "CHAT_WEBHOOK_MONITOR_URL", ""),
-                                            arc_alert_sent=getattr(self, "_gdrive_arc_sent", False),
-                                        )
+                                # ✅ PENDING은 더 이상 반환되지 않으므로 None or dict만 옴
+                                _t = asyncio.create_task(
+                                    _gdrive_save(
+                                        ch=self.ch,
+                                        data_logger=self.data_logger,
+                                        operator=self.data_logger.process_params.get("operator", ""),
+                                        substrate=self.data_logger.process_params.get("substrate", ""),
+                                        note=self.data_logger.process_params.get("note", ""),
+                                        pc_params=_pc_params if isinstance(_pc_params, dict) else None,
+                                        log_dir=None,
+                                        arc_thresh=getattr(_cfgc, "GDRIVE_ARC_ALERT_THRESH", 5),
+                                        refp_warn=getattr(_cfgc, "GDRIVE_REF_P_WARN_W", 20.0),
+                                        webhook_url=getattr(_cfgc, "CHAT_WEBHOOK_MONITOR_URL", ""),
+                                        arc_alert_sent=getattr(self, "_gdrive_arc_sent", False),
                                     )
-                                    _t.add_done_callback(_on_gdrive_done)
+                                )
+                                def _on_gdrive_done(t):
+                                    try:
+                                        if t.result():
+                                            self._gdrive_arc_sent = True
+                                        self.append_log("CSV", "GDrive 저장 완료")
+                                    except Exception as e:
+                                        self.append_log("CSV", f"GDrive 저장 실패: {e!r}")
+                                _t.add_done_callback(_on_gdrive_done)
+
+                            except Exception as e:
+                                self.append_log("CSV", f"GDrive 저장 준비 실패: {e!r}")
 
                         # ➊ 카드 헤더용 prefix: "CHx Sputter"
                         detail.setdefault("ch", self.ch)

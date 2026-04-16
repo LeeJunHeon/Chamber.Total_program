@@ -44,23 +44,23 @@ _ROW_EVEN = "F2F3F4"
 _WARN_ARC = "FADBD8"   # 이상치 — 빨강으로 통일
 _FG       = "1C2833"
 
-# ── 컬럼 정의: (헤더, 단위, 너비, 그룹, data_key) ────────────────
-_COLS: List[Tuple] = [
-    # 기본 정보
-    ("날짜",           "YYYY-MM-DD HH:MM:SS", 19, "기본 정보",       "timestamp"),
-    ("담당자",         "",              8,  "기본 정보",       "operator"),
-    ("Process Name",   "",             16,  "기본 정보",       "process_name"),
-    ("비고",           "",             18,  "기본 정보",       "note"),
-    ("기판",           "",             12,  "기본 정보",       "substrate"),
-    ("Main Shutter",   "T/F",           8,  "기본 정보",       "main_shutter"),
-    ("Power Select",   "T/F",           8,  "기본 정보",       "power_select"),
-    ("G1 Target",      "",              9,  "기본 정보",       "G1 Target"),
-    ("G2 Target",      "",              9,  "기본 정보",       "G2 Target"),
-    ("G3 Target",      "",              9,  "기본 정보",       "G3 Target"),
-    ("Dep.rate",       "nm/s",          9,  "기본 정보",       "dep_rate"),
-    ("Thickness",      "nm",            9,  "기본 정보",       "thickness"),
-    ("Chuck",          "up/mid/down",  11,  "기본 정보",       "chuck_position"),
-    # Plasma Cleaning
+# ── Main Process 시트 컬럼 정의 ─────────────────────────────────
+_COLS_MAIN: List[Tuple] = [
+    # 기본 정보 (13개)
+    ("날짜",           "YYYY-MM-DD HH:MM:SS", 19, "기본 정보",    "timestamp"),
+    ("담당자",         "",              8,  "기본 정보",    "operator"),
+    ("Process Name",   "",             16,  "기본 정보",    "process_name"),
+    ("비고",           "",             18,  "기본 정보",    "note"),
+    ("기판",           "",             12,  "기본 정보",    "substrate"),
+    ("Main Shutter",   "T/F",           9,  "기본 정보",    "main_shutter"),
+    ("Power Select",   "T/F",           9,  "기본 정보",    "power_select"),
+    ("G1 Target",      "",              9,  "기본 정보",    "G1 Target"),
+    ("G2 Target",      "",              9,  "기본 정보",    "G2 Target"),
+    ("G3 Target",      "",              9,  "기본 정보",    "G3 Target"),
+    ("Dep.rate",       "nm/s",         10,  "기본 정보",    "dep_rate"),
+    ("Thickness",      "nm",            9,  "기본 정보",    "thickness"),
+    ("Chuck",          "up/mid/down",  11,  "기본 정보",    "chuck_position"),
+    # Plasma Cleaning (11개)
     ("Time",           "min",           7,  "Plasma Cleaning", "pc_time"),
     ("Base Pressure",  "Torr",         12,  "Plasma Cleaning", "pc_base_pressure"),
     ("SP Ar",          "sccm",          8,  "Plasma Cleaning", "pc_sp_ar"),
@@ -72,40 +72,66 @@ _COLS: List[Tuple] = [
     ("Avg Ref.p",      "W",             9,  "Plasma Cleaning", "pc_avg_refp"),
     ("Avg Load",       "a.u.",          8,  "Plasma Cleaning", "pc_avg_load"),
     ("Avg Tune",       "a.u.",          8,  "Plasma Cleaning", "pc_avg_tune"),
-    # Main Process
-    ("Shutter Delay",  "min",           9,  "Main Process",    "shutter_delay"),
-    ("Process Time",   "min",           9,  "Main Process",    "process_time"),
-    ("Base Pressure",  "Torr",         12,  "Main Process",    "base_pressure"),
-    ("SP Ar",          "sccm",          8,  "Main Process",    "sp_ar"),
-    ("Avg Ar",         "sccm",          8,  "Main Process",    "avg_ar"),
-    ("SP N2",          "sccm",          8,  "Main Process",    "sp_n2"),
-    ("Avg N2",         "sccm",          8,  "Main Process",    "avg_n2"),
-    ("SP O2",          "sccm",          8,  "Main Process",    "sp_o2"),
-    ("Avg O2",         "sccm",          8,  "Main Process",    "avg_o2"),
-    ("SP Pressure",    "mTorr",         9,  "Main Process",    "sp_pressure"),
-    ("Avg Pressure",   "mTorr",         9,  "Main Process",    "avg_pressure"),
-    ("Power Source",   "DC/RF/DCPulse/RFPulse", 14, "Main Process", "power_source"),
-    ("SP Power",       "W",             8,  "Main Process",    "sp_power"),
-    ("Avg Power",      "W",             9,  "Main Process",    "avg_power"),
-    ("Avg For.p",      "W",             9,  "Main Process",    "avg_forp"),
-    ("Avg Ref.p",      "W",             9,  "Main Process",    "avg_refp"),
-    ("Avg Load",       "a.u.",          8,  "Main Process",    "avg_load"),
-    ("Avg Tune",       "a.u.",          8,  "Main Process",    "avg_tune"),
-    ("Avg Voltage",    "V",             9,  "Main Process",    "avg_voltage"),
-    ("Avg Current",    "A",             9,  "Main Process",    "avg_current"),
-    ("Duty Cycle",     "%",             8,  "Main Process",    "duty_cycle"),
-    ("Frequency",      "kHz",           8,  "Main Process",    "frequency"),
-    ("Off Time",       "μs",            8,  "Main Process",    "off_time"),
-    ("Soft Arc",       "count",         8,  "Main Process",    "soft_arc"),
-    ("Hard Arc",       "count",         8,  "Main Process",    "hard_arc"),
+    # Main Process (25개)
+    ("Shutter Delay",  "min",           9,  "Main Process", "shutter_delay"),
+    ("Process Time",   "min",           9,  "Main Process", "process_time"),
+    ("Base Pressure",  "Torr",         12,  "Main Process", "base_pressure"),
+    ("SP Ar",          "sccm",          8,  "Main Process", "sp_ar"),
+    ("Avg Ar",         "sccm",          8,  "Main Process", "avg_ar"),
+    ("SP N2",          "sccm",          8,  "Main Process", "sp_n2"),
+    ("Avg N2",         "sccm",          8,  "Main Process", "avg_n2"),
+    ("SP O2",          "sccm",          8,  "Main Process", "sp_o2"),
+    ("Avg O2",         "sccm",          8,  "Main Process", "avg_o2"),
+    ("SP Pressure",    "mTorr",         9,  "Main Process", "sp_pressure"),
+    ("Avg Pressure",   "mTorr",         9,  "Main Process", "avg_pressure"),
+    ("Power Source",   "DC/RF/DCPulse/RFPulse", 19, "Main Process", "power_source"),
+    ("SP Power",       "W",             8,  "Main Process", "sp_power"),
+    ("Avg Power",      "W",             9,  "Main Process", "avg_power"),
+    ("Avg For.p",      "W",             9,  "Main Process", "avg_forp"),
+    ("Avg Ref.p",      "W",             9,  "Main Process", "avg_refp"),
+    ("Avg Load",       "a.u.",          8,  "Main Process", "avg_load"),
+    ("Avg Tune",       "a.u.",          8,  "Main Process", "avg_tune"),
+    ("Avg Voltage",    "V",             9,  "Main Process", "avg_voltage"),
+    ("Avg Current",    "A",             9,  "Main Process", "avg_current"),
+    ("Duty Cycle",     "%",             8,  "Main Process", "duty_cycle"),
+    ("Frequency",      "kHz",           8,  "Main Process", "frequency"),
+    ("Off Time",       "μs",            8,  "Main Process", "off_time"),
+    ("Soft Arc",       "count",         8,  "Main Process", "soft_arc"),
+    ("Hard Arc",       "count",         8,  "Main Process", "hard_arc"),
 ]
 
-# 그룹별 컬럼 인덱스 목록 (1-based)
-_GRP_COLS: Dict[str, List[int]] = {}
-for _ci, (*_, _grp, _key) in enumerate(_COLS, 1):
-    _GRP_COLS.setdefault(_grp, []).append(_ci)
+# ── Plasma Cleaning 시트 컬럼 정의 ──────────────────────────────
+_COLS_PC: List[Tuple] = [
+    # 기본 정보 (5개 — Main Shutter/Power Select/Gun/Chuck 없음)
+    ("날짜",           "YYYY-MM-DD HH:MM:SS", 19, "기본 정보",       "timestamp"),
+    ("담당자",         "",              8,  "기본 정보",       "operator"),
+    ("Process Name",   "",             16,  "기본 정보",       "process_name"),
+    ("비고",           "",             18,  "기본 정보",       "note"),
+    ("기판",           "",             12,  "기본 정보",       "substrate"),
+    # Plasma Cleaning (11개)
+    ("Time",           "min",           7,  "Plasma Cleaning", "pc_time"),
+    ("Base Pressure",  "Torr",         12,  "Plasma Cleaning", "pc_base_pressure"),
+    ("SP Ar",          "sccm",          8,  "Plasma Cleaning", "pc_sp_ar"),
+    ("Avg Ar",         "sccm",          8,  "Plasma Cleaning", "pc_avg_ar"),
+    ("SP Pressure",    "mTorr",         9,  "Plasma Cleaning", "pc_sp_pressure"),
+    ("Avg Pressure",   "mTorr",         9,  "Plasma Cleaning", "pc_avg_pressure"),
+    ("SP Power",       "W",             8,  "Plasma Cleaning", "pc_sp_power"),
+    ("Avg For.p",      "W",             9,  "Plasma Cleaning", "pc_avg_forp"),
+    ("Avg Ref.p",      "W",             9,  "Plasma Cleaning", "pc_avg_refp"),
+    ("Avg Load",       "a.u.",          8,  "Plasma Cleaning", "pc_avg_load"),
+    ("Avg Tune",       "a.u.",          8,  "Plasma Cleaning", "pc_avg_tune"),
+]
 
-_GRP_STARTS = {cols[0] for cols in _GRP_COLS.values()}
+# 시트별 그룹 인덱스 계산
+_GRP_COLS_MAIN: Dict[str, List[int]] = {}
+for _ci, (*_, _grp, _key) in enumerate(_COLS_MAIN, 1):
+    _GRP_COLS_MAIN.setdefault(_grp, []).append(_ci)
+_GRP_STARTS_MAIN = {cols[0] for cols in _GRP_COLS_MAIN.values()}
+
+_GRP_COLS_PC: Dict[str, List[int]] = {}
+for _ci, (*_, _grp, _key) in enumerate(_COLS_PC, 1):
+    _GRP_COLS_PC.setdefault(_grp, []).append(_ci)
+_GRP_STARTS_PC = {cols[0] for cols in _GRP_COLS_PC.values()}
 
 # ── 내부 락 ──────────────────────────────────────────────────────
 _write_lock = threading.Lock()
@@ -132,13 +158,13 @@ def _cs(ws, r: int, c: int, val=None, bg: Optional[str] = None,
     return cell
 
 
-def _build_headers(ws) -> None:
+def _build_headers(ws, cols: List[Tuple], grp_cols: Dict, grp_starts: set) -> None:
     """Row 1 그룹 / Row 2 컬럼명 / Row 3 단위 헤더 생성."""
     thin  = Side(style="thin",   color="E0E0E0")
     thick = Side(style="medium", color="FFFFFF")
 
-    for grp, cols in _GRP_COLS.items():
-        c1, c2 = cols[0], cols[-1]
+    for grp, gcols in grp_cols.items():
+        c1, c2 = gcols[0], gcols[-1]
         bg = _T[grp][0]
         if c1 < c2:
             ws.merge_cells(
@@ -148,13 +174,13 @@ def _build_headers(ws) -> None:
         cell.font = Font(name="Arial", bold=True, size=9, color=_WHITE)
         cell.fill = PatternFill("solid", fgColor=bg)
         cell.alignment = Alignment(horizontal="center", vertical="center")
-        for c in cols[1:]:
+        for c in gcols[1:]:
             with contextlib.suppress(AttributeError):
                 ws.cell(row=1, column=c).fill = \
                     PatternFill("solid", fgColor=bg)
     ws.row_dimensions[1].height = 16
 
-    for ci, (name, unit, width, grp, _) in enumerate(_COLS, 1):
+    for ci, (name, unit, width, grp, _) in enumerate(cols, 1):
         ws.column_dimensions[get_column_letter(ci)].width = width
         _cs(ws, 2, ci, name, bg=_T[grp][1], fg=_WHITE,
             bold=True, size=9, wrap=True)
@@ -164,18 +190,26 @@ def _build_headers(ws) -> None:
     ws.row_dimensions[3].height = 13
 
     for r in range(1, 4):
-        for ci in range(1, len(_COLS) + 1):
-            left = thick if ci in _GRP_STARTS else thin
+        for ci in range(1, len(cols) + 1):
+            left = thick if ci in grp_starts else thin
             ws.cell(row=r, column=ci).border = Border(
                 left=left, right=thin, top=thin, bottom=thin)
 
 
-def _get_or_create_wb(path: Path):
-    """파일 열기(기존) 또는 신규 생성. (wb, ws) 반환."""
+def _get_or_create_wb(path: Path, sheet_name: str,
+                       cols: List[Tuple], grp_cols: Dict, grp_starts: set):
+    """파일 열기(기존) 또는 신규 생성. 시트명 기준으로 시트 선택. (wb, ws) 반환."""
     if path.exists():
         try:
             wb = load_workbook(str(path))
-            ws = wb.active
+            if sheet_name in wb.sheetnames:
+                ws = wb[sheet_name]
+            else:
+                # 파일은 있는데 해당 시트가 없으면 새로 추가
+                ws = wb.create_sheet(sheet_name)
+                ws.sheet_view.showGridLines = False
+                ws.freeze_panes = "A4"
+                _build_headers(ws, cols, grp_cols, grp_starts)
             return wb, ws
         except Exception:
             broken = path.with_suffix(".broken.xlsx")
@@ -184,10 +218,10 @@ def _get_or_create_wb(path: Path):
 
     wb = Workbook()
     ws = wb.active
-    ws.title = "공정 로그"
+    ws.title = sheet_name
     ws.sheet_view.showGridLines = False
     ws.freeze_panes = "A4"
-    _build_headers(ws)
+    _build_headers(ws, cols, grp_cols, grp_starts)
     return wb, ws
 
 
@@ -237,14 +271,15 @@ def _cell_bg(key: str, value: Any, row_bg: str,
 
 
 def _write_data_row(ws, row_num: int, data: Dict[str, Any],
-                    arc_thresh: int, refp_warn: float) -> None:
+                    arc_thresh: int, refp_warn: float,
+                    cols: List[Tuple]) -> None:
     """데이터 딕셔너리를 ws의 row_num 행에 기록."""
     thin = Side(style="thin", color="CCCCCC")
     brd  = Border(left=thin, right=thin, top=thin, bottom=thin)
     row_bg = _ROW_ODD if row_num % 2 == 0 else _ROW_EVEN
     left_cols = {3, 4, 5}   # Process Name, 비고, 기판
 
-    for ci, (_, __, ___, ____, key) in enumerate(_COLS, 1):
+    for ci, (_, __, ___, ____, key) in enumerate(cols, 1):
         value = data.get(key)
         if value == "":
             value = None
@@ -304,28 +339,29 @@ def _send_arc_chat(ch: int, process_name: str,
 
 def _save_sync(
     ch: int,
-    rows: List[Dict[str, Any]],   # [수정 4] 단일 dict → 리스트
+    rows: List[Dict[str, Any]],
     log_dir: Path,
     arc_thresh: int,
     refp_warn: float,
     arc_alert_sent: bool,
     webhook_url: str,
     local_fallback_dir: Path,
+    sheet_name: str,
+    cols: List[Tuple],
+    grp_cols: Dict,
+    grp_starts: set,
 ) -> bool:
     """
-    실제 Excel 저장.
-    [수정 4] rows 리스트의 각 항목을 순서대로 행으로 기록.
+    실제 Excel 저장. sheet_name 기준으로 해당 시트에 기록.
     반환값: 이번 호출에서 Arc 알림을 발송했으면 True.
-    예외를 절대 전파하지 않음.
     """
     def _do_save(target: Path) -> None:
         target.parent.mkdir(parents=True, exist_ok=True)
         with _write_lock:
-            wb, ws = _get_or_create_wb(target)
+            wb, ws = _get_or_create_wb(target, sheet_name, cols, grp_cols, grp_starts)
             row_num = _next_data_row(ws)
-            # [수정 4] 여러 행 순서대로 기록
             for row_data in rows:
-                _write_data_row(ws, row_num, row_data, arc_thresh, refp_warn)
+                _write_data_row(ws, row_num, row_data, arc_thresh, refp_warn, cols)
                 row_num += 1
             wb.save(str(target))
 
@@ -337,7 +373,7 @@ def _save_sync(
             fb_path = local_fallback_dir / f"CH{ch}_pending.xlsx"
             _do_save(fb_path)
 
-    # Arc 알림 — 첫 번째 행 기준
+    # Arc 알림 — 첫 번째 행 기준 (Main Process 시트에만 Arc 있음)
     soft = int(rows[0].get("soft_arc") or 0)
     hard = int(rows[0].get("hard_arc") or 0)
     if (soft + hard) >= arc_thresh and not arc_alert_sent and webhook_url:
@@ -519,21 +555,15 @@ def _build_data(
 # ════════════════════════════════════════════════════════════════
 
 def _build_pc_only_data(pc_params: Dict[str, Any]) -> List[Dict[str, Any]]:
-    """PC 데이터만으로 1개 행 생성 (Main Process 섹션 빈칸)."""
+    """PC 데이터만으로 1개 행 생성 — Plasma Cleaning 시트 전용."""
     _pc = pc_params or {}
     row: Dict[str, Any] = {
-        # 기본 정보
+        # 기본 정보 (5개만 — Plasma Cleaning 시트 스펙)
         "timestamp"       : datetime.now(),
         "operator"        : "",
-        "process_name"    : "Plasma Cleaning",
+        "process_name"    : _pc.get("process_name", "Plasma Cleaning"),
         "note"            : "",
         "substrate"       : "",
-        "main_shutter"    : "",
-        "power_select"    : "",
-        "G1 Target"       : "",
-        "G2 Target"       : "",
-        "G3 Target"       : "",
-        "chuck_position"  : "",
         # Plasma Cleaning
         "pc_time"         : _pc.get("time"),
         "pc_base_pressure": _pc.get("base_pressure"),
@@ -546,33 +576,6 @@ def _build_pc_only_data(pc_params: Dict[str, Any]) -> List[Dict[str, Any]]:
         "pc_avg_refp"     : _pc.get("avg_refp"),
         "pc_avg_load"     : _pc.get("avg_load"),
         "pc_avg_tune"     : _pc.get("avg_tune"),
-        # Main Process — 모두 None (빈칸)
-        "shutter_delay"   : None,
-        "process_time"    : None,
-        "dep_rate"        : None,
-        "thickness"       : None,
-        "base_pressure"   : None,
-        "sp_ar"           : None,
-        "avg_ar"          : None,
-        "sp_n2"           : None,
-        "avg_n2"          : None,
-        "sp_o2"           : None,
-        "avg_o2"          : None,
-        "sp_pressure"     : None,
-        "avg_pressure"    : None,
-        "power_source"    : None,
-        "sp_power"        : None,
-        "avg_forp"        : None,
-        "avg_refp"        : None,
-        "avg_load"        : None,
-        "avg_tune"        : None,
-        "avg_voltage"     : None,
-        "avg_current"     : None,
-        "duty_cycle"      : None,
-        "frequency"       : None,
-        "off_time"        : None,
-        "soft_arc"        : 0,
-        "hard_arc"        : 0,
     }
     return [row]
 
@@ -595,11 +598,12 @@ def save_pc_only(
         _save_sync(
             ch, rows, log_dir,
             arc_thresh, refp_warn,
-            False, "",   # arc_alert_sent=False, webhook_url="" (PC는 Arc 알림 없음)
+            False, "",
             fb_dir,
+            "Plasma Cleaning", _COLS_PC, _GRP_COLS_PC, _GRP_STARTS_PC,
         )
     except Exception:
-        pass
+        raise
 
 
 # ════════════════════════════════════════════════════════════════
@@ -631,7 +635,7 @@ async def save_process_log(
         rows = _build_data(ch, data_logger, operator, substrate,
                            note, pc_params)
     except Exception:
-        return False
+        raise
 
     target_dir = log_dir or _DEFAULT_GDRIVE_DIR
     fb_dir     = local_fallback or (Path.cwd() / "Logs_LocalFallback")
@@ -642,12 +646,13 @@ async def save_process_log(
             None,
             partial(
                 _save_sync,
-                ch, rows, target_dir,    # [수정 4] rows 전달
+                ch, rows, target_dir,
                 arc_thresh, refp_warn,
                 arc_alert_sent, webhook_url,
                 fb_dir,
+                "Main Process", _COLS_MAIN, _GRP_COLS_MAIN, _GRP_STARTS_MAIN,
             ),
         )
         return sent
     except Exception:
-        return False
+        raise

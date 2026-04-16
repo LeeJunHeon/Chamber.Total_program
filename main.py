@@ -811,26 +811,20 @@ class MainWindow(QWidget):
 
         # 수정: _done_ 마커 체크 추가
         # Main이 이미 standalone 완료한 경우 → PC 즉시 단독 저장
-        if ch_log.pop(f"_done_{process_name}", False):
-            asyncio.ensure_future(self._save_pc_only_row(ch, pc_params))
-            return
-
         existing = ch_log.get(process_name)
         if existing is not None and existing.get("pc") is not None:
+            # 동일 이름 PC가 이미 대기 중 → 이전 것 먼저 단독 저장
             old_pc = existing["pc"]
             asyncio.ensure_future(self._save_pc_only_row(ch, old_pc))
 
-        if process_name not in ch_log:
-            ch_log[process_name] = {"pc": None, "main": None}
-        ch_log[process_name]["pc"] = pc_params
+        # PC 데이터 저장
+        ch_log[process_name] = {"pc": pc_params, "main": None}
 
-        # Main이 이미 pending에 있으면 즉시 merge 저장
-        if ch_log[process_name].get("main") is not None:
-            main_data = ch_log[process_name]["main"]
-            del ch_log[process_name]
-            asyncio.ensure_future(self._save_merged_row(ch, process_name, pc_params, main_data))
-
-    def _on_main_done(self, ch: int, process_name: str, data_logger, pc_params_override=None) -> None:
+        # ✅ 메인을 기다리지 않고, 바로 단독 저장
+        # (메인이 나중에 완료되면 _on_main_done에서 pc 데이터를 가져가 병합 저장)
+        asyncio.ensure_future(self._save_pc_only_row(ch, pc_params))
+        
+    def _on_main_done(self, ch, process_name, data_logger, pc_params_override=None):
         """
         Main Process 완료 시 chamber_runtime.py가 호출하는 콜백.
         - pending_log에 PC 데이터가 있으면 merge 저장
@@ -840,27 +834,25 @@ class MainWindow(QWidget):
         if not hasattr(self, "_pending_log"):
             self._pending_log = {}
 
-        ch_log = self._pending_log.setdefault(ch, {})  # get → setdefault
+        ch_log = self._pending_log.setdefault(ch, {})
 
         if not process_name:
             return None
 
-        if process_name not in ch_log:
-            # PC pending 없음 → standalone 저장. 단, PC가 나중에 올 경우를 위해 마커 남김
-            ch_log[f"_done_{process_name}"] = True
-            return None
-        
         entry = ch_log.get(process_name, {})
 
         if entry.get("pc") is not None:
-            # PC 데이터 있음 → 꺼내서 반환 (chamber_runtime이 merge 저장)
+            # PC 데이터 있음 → 꺼내서 반환 (병합 저장)
             pc_params = entry["pc"]
             del ch_log[process_name]
             return pc_params
 
-        # PC pending 없음 (Main이 먼저 완료된 경우) → 저장 후 PC 대기
-        ch_log[process_name] = {"pc": None, "main": data_logger}
-        return "PENDING"
+        # ✅ PC 없음 → 즉시 None 반환 (PENDING 반환하지 않음)
+        # 마커도 남기지 않음 — 다음 공정에 영향 주지 않도록
+        with contextlib.suppress(Exception):
+            ch_log.pop(process_name, None)
+            ch_log.pop(f"_done_{process_name}", None)
+        return None
 
     async def _save_pc_only_row(self, ch: int, pc_params: dict) -> None:
         """PC 데이터만으로 xlsx에 단독 행 저장."""
