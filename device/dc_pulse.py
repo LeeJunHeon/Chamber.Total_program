@@ -915,6 +915,9 @@ class AsyncDCPulse:
         """
         # 1) timeout/disconnect
         if resp is None:
+            if not self._want_connected:   # ← 추가
+                await self._emit_status(f"[{label}] cleanup 중 → 재연결 시도 안 함")
+                return False
             await self.start()
             ok_conn = await self._wait_until_connected(timeout=float(self._connect_timeout_s))
             if not ok_conn:
