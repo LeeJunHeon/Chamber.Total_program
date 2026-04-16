@@ -2571,7 +2571,7 @@ class ChamberRuntime:
         _set("workingPressure_edit", params.get('working_pressure', '0'))
         _set("basePressure_edit", params.get('base_pressure', '0'))
         _set("shutterDelay_edit", params.get('shutter_delay', '0'))
-        
+
         # ✅ dep.rate: CSV 헤더가 "dep.rate"(점) 또는 "dep_rate"(밑줄) 둘 다 지원
         _dep_rate_val = str(params.get('dep_rate', '') or params.get('dep.rate', '') or '')
         _set("depRate_edit",   _dep_rate_val)
@@ -3920,6 +3920,15 @@ class ChamberRuntime:
                 params = q[self.current_process_index]
                 self._update_ui_from_params(params)
 
+                # ✅ CSV에 G1/G2/G3 Target이 비어있으면 DB에서 로딩 완료 대기
+                _needs_db = not any([
+                    str(params.get("G1 Target", "") or params.get("G1_target_name", "")).strip(),
+                    str(params.get("G2 Target", "") or params.get("G2_target_name", "")).strip(),
+                    str(params.get("G3 Target", "") or params.get("G3_target_name", "")).strip(),
+                ])
+                if _needs_db:
+                    await self._load_gun_targets()
+
                 # ------------------------------
                 # (A) delay step 처리 (기존과 동일 규칙)
                 # ------------------------------
@@ -4813,18 +4822,22 @@ class ChamberRuntime:
             s = str(raw.get(key, '')).strip()
             return int(float(s)) if s != '' else None
 
-        # CSV는 "G1 Target"(공백), UI는 "G1_target_name"(언더스코어) 키를 씀 → 둘 다 시도
         _g1_raw = str(raw.get("G1 Target", "") or raw.get("G1_target_name", "")).strip()
         _g2_raw = str(raw.get("G2 Target", "") or raw.get("G2_target_name", "")).strip()
         _g3_raw = str(raw.get("G3 Target", "") or raw.get("G3_target_name", "")).strip()
 
-        # CSV는 "gun1", UI는 "use_g1" 키를 씀 → 둘 다 시도
+        # ✅ CSV/params에 없으면 UI 위젯에서 직접 읽기 (DB 로딩값 포함)
+        if not _g1_raw:
+            _g1_raw = self._get_text("g1Target_name")
+        if not _g2_raw:
+            _g2_raw = self._get_text("g2Target_name")
+        if not _g3_raw:
+            _g3_raw = self._get_text("g3Target_name")
+
         _use_g1 = bool(raw.get("use_g1", False)) or tf(raw.get("gun1", "F"))
         _use_g2 = bool(raw.get("use_g2", False)) or tf(raw.get("gun2", "F"))
         _use_g3 = bool(raw.get("use_g3", False)) or tf(raw.get("gun3", "F"))
 
-        # CH1: 건이 1개이므로 항상 G1에만 저장
-        # CH2: 선택된 건의 타겟만 저장, 나머지는 빈칸
         if self.ch == 1:
             g1t, g2t, g3t = _g1_raw, "", ""
         else:
