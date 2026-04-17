@@ -458,8 +458,8 @@ def _build_data(
         "avg_o2"         : _avg(dl.mfc_flow_readings.get("O2", [])),
         "avg_pressure"   : _avg(dl.mfc_pressure_readings),
         # Arc
-        "soft_arc"       : int(pp.get("soft_arc_count") or 0),
-        "hard_arc"       : int(pp.get("hard_arc_count") or 0),
+        "soft_arc"       : int(pp.get("soft_arc_count") or 0) if pp.get("use_dc_pulse") else None,
+        "hard_arc"       : int(pp.get("hard_arc_count") or 0) if pp.get("use_dc_pulse") else None,
     }
 
     # ── [수정 4] 파워 소스별 행 분리 ────────────────────────────
@@ -508,7 +508,7 @@ def _build_data(
             "avg_voltage"  : None,
             "avg_current"  : None,
             # [수정 2] rf_pulse_duty_cycle (TypedDict 실제 키명)
-            "duty_cycle"   : pp.get("rf_pulse_duty_cycle"),
+            "duty_cycle"   : pp.get("rf_pulse_duty_cycle") or pp.get("rf_pulse_duty"),
             "frequency"    : pp.get("rf_pulse_freq"),
             "off_time"     : pp.get("rf_pulse_off_time_us"),
         })
