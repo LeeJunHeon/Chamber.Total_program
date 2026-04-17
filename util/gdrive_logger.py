@@ -214,8 +214,16 @@ def _get_or_create_wb(path: Path, sheet_name: str,
 
 
 def _next_data_row(ws) -> int:
-    """다음 빈 데이터 행 번호 반환 (헤더 3행 다음부터)."""
-    return max(4, ws.max_row + 1)
+    """다음 빈 데이터 행 번호 반환 (헤더 3행 다음부터).
+
+    [수정] ws.max_row는 서식(폰트/배경색)만 있고 값이 없는 phantom row도
+    포함하므로 그대로 사용하면 데이터가 수백 행 아래로 밀린다.
+    바닥에서 위로 스캔해 실제 값이 있는 마지막 행을 찾아 +1을 반환한다.
+    """
+    for r in range(ws.max_row, 3, -1):
+        if any(cell.value is not None for cell in ws[r]):
+            return r + 1
+    return 4
 
 
 # [수정 3] SP vs Avg 비교 쌍 정의
@@ -259,14 +267,24 @@ def _cell_bg(key: str, value: Any, row_bg: str,
 def _write_data_row(ws, row_num: int, data: Dict[str, Any],
                     arc_thresh: int, refp_warn: float,
                     cols: List[Tuple]) -> None:
-    """데이터 딕셔너리를 ws의 row_num 행에 기록."""
+    """데이터 딕셔너리를 ws의 row_num 행에 기록.
+
+    [수정] 모든 값이 None인 빈 행에는 서식도 적용하지 않는다.
+    서식만 적용된 행(phantom row)은 ws.max_row에 카운트되어
+    _next_data_row()가 잘못된 행 번호를 반환하는 원인이 된다.
+    """
+    # 실제 쓸 값이 하나도 없으면 phantom row 방지를 위해 아무것도 하지 않음
+    values = {key: data.get(key) for _, __, ___, ____, key in cols}
+    if not any(v is not None and v != "" for v in values.values()):
+        return
+
     thin = Side(style="thin", color="CCCCCC")
     brd  = Border(left=thin, right=thin, top=thin, bottom=thin)
     row_bg = _ROW_ODD if row_num % 2 == 0 else _ROW_EVEN
     left_cols = {3, 4, 5}   # Process Name, 비고, 기판
 
     for ci, (_, __, ___, ____, key) in enumerate(cols, 1):
-        value = data.get(key)
+        value = values[key]
         if value == "":
             value = None
 
@@ -564,6 +582,7 @@ def save_pc_only(
     main.py의 _save_pc_only_row → run_in_executor에서 호출.
     예외를 절대 전파하지 않음.
     """
+    # [수정] 예외를 전파하지 않음 — PC 저장 실패가 메인 공정에 영향을 주면 안 됨
     try:
         rows = _build_pc_only_data(pc_params)
         fb_dir = log_dir / "LocalFallback"
@@ -574,8 +593,10 @@ def save_pc_only(
             fb_dir,
             "Plasma Cleaning", _COLS_PC, _GRP_COLS_PC, _GRP_STARTS_PC,
         )
-    except Exception:
-        raise
+    except Exception as e:
+        with contextlib.suppress(Exception):
+            import logging
+            logging.getLogger(__name__).warning("GDrive save_pc_only 실패: %s", e)
 
 
 # ════════════════════════════════════════════════════════════════
@@ -602,12 +623,15 @@ async def save_process_log(
     메인 공정에 영향 없음: 모든 예외를 내부에서 처리.
     반환값: 이번 호출에서 Arc 알림 발송 여부.
     """
+    # [수정] 예외를 전파하지 않음 — GDrive 저장 실패가 메인 공정에 영향을 주면 안 됨
     try:
-        # [수정 4] rows 리스트 반환
         rows = _build_data(ch, data_logger, operator, substrate,
                            note, pc_params)
-    except Exception:
-        raise
+    except Exception as e:
+        with contextlib.suppress(Exception):
+            import logging
+            logging.getLogger(__name__).warning("GDrive _build_data 실패: %s", e)
+        return False
 
     target_dir = log_dir or _DEFAULT_GDRIVE_DIR
     fb_dir     = local_fallback or (Path.cwd() / "Logs_LocalFallback")
@@ -626,5 +650,8 @@ async def save_process_log(
             ),
         )
         return sent
-    except Exception:
-        raise
+    except Exception as e:
+        with contextlib.suppress(Exception):
+            import logging
+            logging.getLogger(__name__).warning("GDrive _save_sync 실패: %s", e)
+        return False
