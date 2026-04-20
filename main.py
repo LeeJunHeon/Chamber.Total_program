@@ -431,8 +431,12 @@ class MainWindow(QWidget):
             except Exception as e:
                 self._broadcast_log("CAM", f"CameraRecorder 초기화 실패: {e!r}")
 
-            # ✅ PC 완료 데이터 pending_log 연동
-            self._pending_log: dict = {}   # {ch: {process_name: {"pc": dict|None, "main": dict|None}}}
+            # ✅ PC GDrive 저장 경로 주입 + 콜백 등록
+            self._pending_log: dict = {}
+            self.pc.set_gdrive_log_dir(
+                Path(getattr(cfgc, "GDRIVE_LOG_DIR",
+                             "G:/공유 드라이브/VanaM_Sputter/Process_log"))
+            )
             self.pc.set_pc_done_callback(self._on_pc_done)
 
         except Exception as e:
@@ -790,39 +794,20 @@ class MainWindow(QWidget):
             pass
 
     # ── Plasma Cleaning ↔ Main Process 로그 연동 ─────────────────────
-    def _on_pc_done(self, ch: int, process_name: str, pc_params: dict) -> None:
+    def _on_pc_done(self, ch: int, process_name: str) -> None:
         """
         PC 완료 시 plasma_cleaning_runtime.py가 호출하는 콜백.
-        - process_name이 있으면 pending_log에 저장 → Main Process 완료 시 merge
-        - process_name이 없으면 즉시 PC 단독 행으로 xlsx 저장
-        - 동일 ch + 동일 이름의 PC 데이터가 이미 있으면 먼저 단독 저장 후 교체
+        저장은 plasma_cleaning_runtime이 직접 처리하므로 여기서는 하지 않음.
+        pending_log 정리만 담당.
         """
-        import asyncio, contextlib
-
         if not hasattr(self, "_pending_log"):
             self._pending_log = {}
 
         ch_log = self._pending_log.setdefault(ch, {})
 
-        if not process_name:
-            # process_name 없음 → Main Process와 매칭 불가 → PC 단독 행 즉시 저장
-            asyncio.ensure_future(self._save_pc_only_row(ch, pc_params))
-            return
-
-        # 수정: _done_ 마커 체크 추가
-        # Main이 이미 standalone 완료한 경우 → PC 즉시 단독 저장
-        existing = ch_log.get(process_name)
-        if existing is not None and existing.get("pc") is not None:
-            # 동일 이름 PC가 이미 대기 중 → 이전 것 먼저 단독 저장
-            old_pc = existing["pc"]
-            asyncio.ensure_future(self._save_pc_only_row(ch, old_pc))
-
-        # PC 데이터 저장
-        ch_log[process_name] = {"pc": pc_params, "main": None}
-
-        # ✅ 메인을 기다리지 않고, 바로 단독 저장
-        # (메인이 나중에 완료되면 _on_main_done에서 pc 데이터를 가져가 병합 저장)
-        asyncio.ensure_future(self._save_pc_only_row(ch, pc_params))
+        # 이전 공정 잔존 데이터 정리 (stale 중복 저장 원인이었던 부분)
+        if process_name:
+            ch_log.pop(process_name, None)
         
     def _on_main_done(self, ch, process_name, data_logger, pc_params_override=None):
         """

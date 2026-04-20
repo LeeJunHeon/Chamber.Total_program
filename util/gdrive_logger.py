@@ -228,13 +228,17 @@ def _next_data_row(ws) -> int:
 
 # [수정 3] SP vs Avg 비교 쌍 정의
 _SP_AVG_PAIRS = {
+    # Main Process 시트
     "avg_ar"         : "sp_ar",
     "avg_n2"         : "sp_n2",
     "avg_o2"         : "sp_o2",
     "avg_pressure"   : "sp_pressure",
     "avg_forp"       : "sp_power",
     "avg_power"      : "sp_power",
-    # pc_avg_* 항목 제거 — Main Process 시트에 PC 컬럼 없으므로
+    # Plasma Cleaning 시트 — PC 컬럼도 편차 하이라이트
+    "pc_avg_ar"      : "pc_sp_ar",
+    "pc_avg_pressure": "pc_sp_pressure",
+    "pc_avg_forp"    : "pc_sp_power",
 }
 
 
@@ -281,7 +285,17 @@ def _write_data_row(ws, row_num: int, data: Dict[str, Any],
     thin = Side(style="thin", color="CCCCCC")
     brd  = Border(left=thin, right=thin, top=thin, bottom=thin)
     row_bg = _ROW_ODD if row_num % 2 == 0 else _ROW_EVEN
-    left_cols = {3, 4, 5}   # Process Name, 비고, 기판
+    # 컬럼 인덱스(ci)가 아닌 key 기반으로 왼쪽 정렬 결정.
+    # _write_data_row()는 Main Process / Plasma Cleaning 시트 양쪽에서 호출되므로
+    # ci 기준은 시트마다 컬럼 구조가 달라 부작용 발생.
+    _LEFT_KEYS = {
+        "process_name",  # Process Name (양 시트)
+        "note",          # 비고 (양 시트)
+        "substrate",     # 기판 (양 시트)
+        "G1 Target",     # G1 Target (Main Process만)
+        "G2 Target",     # G2 Target (Main Process만)
+        "G3 Target",     # G3 Target (Main Process만)
+    }
 
     for ci, (_, __, ___, ____, key) in enumerate(cols, 1):
         value = values[key]
@@ -297,7 +311,7 @@ def _write_data_row(ws, row_num: int, data: Dict[str, Any],
         cell.fill = PatternFill("solid", fgColor=bg)
         cell.border = brd
         cell.alignment = Alignment(
-            horizontal="left" if ci in left_cols else "center",
+            horizontal="left" if key in _LEFT_KEYS else "center",
             vertical="center")
 
         if key == "timestamp" and isinstance(value, datetime):
@@ -438,9 +452,10 @@ def _build_data(
         "substrate"      : substrate,
         "main_shutter"   : "T" if pp.get("use_ms") else "F",
         "power_select"   : "T" if pp.get("use_power_select") else "F",
+        # CH1은 G1 건 하나만 사용 → G2/G3 강제 공백
         "G1 Target"      : pp.get("G1 Target", ""),
-        "G2 Target"      : pp.get("G2 Target", ""),
-        "G3 Target"      : pp.get("G3 Target", ""),
+        "G2 Target"      : pp.get("G2 Target", "") if ch != 1 else "",
+        "G3 Target"      : pp.get("G3 Target", "") if ch != 1 else "",
         "chuck_position" : pp.get("chuck_position", ""),
         # Main Process — 가스/압력 (파워와 무관)
         "shutter_delay"  : pp.get("shutter_delay"),
@@ -569,7 +584,6 @@ def _build_pc_only_data(pc_params: Dict[str, Any]) -> List[Dict[str, Any]]:
     }
     return [row]
 
-
 def save_pc_only(
     ch: int,
     pc_params: Dict[str, Any],
@@ -577,12 +591,9 @@ def save_pc_only(
     arc_thresh: int = _DEFAULT_ARC_THRESH,
     refp_warn: float = _DEFAULT_REFP_WARN_W,
 ) -> None:
+    """PC 완료 시 Plasma Cleaning 시트에 1행 저장.
+    plasma_cleaning_runtime에서 공정 종료 시 직접 1회 호출 — 중복 방지 로직 불필요.
     """
-    PC 단독 행을 xlsx에 동기 저장.
-    main.py의 _save_pc_only_row → run_in_executor에서 호출.
-    예외를 절대 전파하지 않음.
-    """
-    # [수정] 예외를 전파하지 않음 — PC 저장 실패가 메인 공정에 영향을 주면 안 됨
     try:
         rows = _build_pc_only_data(pc_params)
         fb_dir = log_dir / "LocalFallback"

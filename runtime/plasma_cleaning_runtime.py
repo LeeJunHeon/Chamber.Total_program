@@ -123,13 +123,14 @@ class PlasmaCleaningRuntime:
         self._last_process_list_dir: str = ""
 
         # ── PC 완료 데이터 수집 (gdrive 로그 연동용) ──────────────
-        self._pc_forp_readings:     list = []   # RF FWD 수집
-        self._pc_refp_readings:     list = []   # RF REF 수집
-        self._pc_flow_readings:     list = []   # MFC 가스 유량 수집
-        self._pc_pressure_readings: list = []   # MFC SP4 압력 수집
-        self._pc_ig_readings:       list = []   # IG 압력 수집 (base pressure용)
-        self._current_process_name: str  = ""   # 현재 공정명
-        self._pc_done_callback: Optional[Callable] = None  # main.py → pending_log 연동
+        self._pc_forp_readings:     list = []
+        self._pc_refp_readings:     list = []
+        self._pc_flow_readings:     list = []
+        self._pc_pressure_readings: list = []
+        self._pc_ig_readings:       list = []
+        self._current_process_name: str  = ""
+        self._pc_done_callback: Optional[Callable] = None  # main.py 연동 (저장 외 용도)
+        self._gdrive_log_dir: Optional[Path] = None        # GDrive 저장 경로 (set_gdrive_log_dir로 주입)
 
         self._runlog_buf = deque()
 
@@ -240,10 +241,18 @@ class PlasmaCleaningRuntime:
                 gas  = getattr(ev, "gas", "") or ""
                 flow = float(getattr(ev, "value", 0.0) or 0.0)
                 self.append_log(label, f"[poll] {gas}: {flow:.2f} sccm")
-                # ✅ 데이터 수집
+                # ✅ 데이터 수집 — PC에서 선택된 가스 채널(gas_idx=3, N2)만 수집
+                # poll_loop는 모든 채널(Ar/O2/N2)을 emit하므로 필터 필수
                 with contextlib.suppress(Exception):
                     if getattr(self, "_running", False):
-                        self._pc_flow_readings.append(flow)
+                        selected_idx  = int(getattr(self, "_pc_gas_idx", 3) or 3)
+                        selected_gas  = ""
+                        if self.mfc_gas and hasattr(self.mfc_gas, "gas_map"):
+                            selected_gas = self.mfc_gas.gas_map.get(selected_idx, "N2")
+                        # selected_gas가 결정되지 않았거나 이벤트 채널과 일치할 때만 수집
+                        if not selected_gas or gas == selected_gas:
+                            self._pc_flow_readings.append(flow)
+
             elif k == "pressure":
                 txt = ev.text or (f"{ev.value:.3g}" if ev.value is not None else "")
                 self.append_log(label, f"[poll] ChamberP: {txt}")
@@ -1323,6 +1332,17 @@ class PlasmaCleaningRuntime:
         self._pc_ig_readings       = []
         self._current_process_name = self._get_process_name()
 
+        # MFC 폴링 시작 — flow/pressure 이벤트 수집을 위해 _poll_loop() 활성화
+        # (종료 시 _final_cleanup에서 set_process_status(False)로 반드시 해제됨)
+        with contextlib.suppress(Exception):
+            if self.mfc_gas and hasattr(self.mfc_gas, "set_process_status"):
+                self.mfc_gas.set_process_status(True)
+        with contextlib.suppress(Exception):
+            if (self.mfc_pressure
+                    and self.mfc_pressure is not self.mfc_gas
+                    and hasattr(self.mfc_pressure, "set_process_status")):
+                self.mfc_pressure.set_process_status(True)
+
         p = self._read_params_from_ui()
 
         self._last_process_time_min = float(p.process_time_min)
@@ -1423,29 +1443,23 @@ class PlasmaCleaningRuntime:
             except Exception as e:
                 self.append_log("PC", f"notify_finish_once error: {e!r}")
 
-            # ✅ [D] PC 완료 데이터를 main.py의 pending_log에 전달
+            # ✅ [D] GDrive Plasma Cleaning 시트에 직접 저장 (main.py 경유 불필요)
+            with contextlib.suppress(Exception):
+                from util import gdrive_logger as _gl
+                from functools import partial as _partial
+                _pc_params = self._build_pc_params_dict(p)
+                _ch        = int(getattr(self, "_selected_ch", 1))
+                _dir       = self._gdrive_log_dir or _gl._DEFAULT_GDRIVE_DIR
+                asyncio.get_event_loop().run_in_executor(
+                    None, _partial(_gl.save_pc_only, _ch, _pc_params, _dir)
+                )
+
+            # ✅ [D-2] main.py 연동 콜백 (pending_log 정리용)
             with contextlib.suppress(Exception):
                 cb = getattr(self, "_pc_done_callback", None)
                 if callable(cb):
-                    pc_params = self._build_pc_params_dict(p)
-                    ch = int(getattr(self, "_selected_ch", 1))
-                    cb(ch, self._current_process_name, pc_params)
-
-            # # [A] 🔁 순서 변경: 종료 통지 먼저 (runtime_state 즉시 해제 + 종료 챗 선송)
-            # try:
-            #     await self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final)  # ← 순서 ↑
-            # except Exception as e:
-            #     self.append_log("PC", f"notify_finish_once error: {e!r}")
-
-            # # [B] 그 다음 장치/태스크 정리 (오래 걸려도 상관없음)
-            # await self._final_cleanup()
-
-            # # [C] 마지막으로 UI 복구
-            # self._running = False
-            # self._process_timer_active = False
-            # self._reset_ui_state(restore_time_min=self._last_process_time_min)
-            # self._set_state_text("대기 중")
-            # self.append_log("MAIN", "[FINALLY] idle UI 복구 완료")
+                    cb(int(getattr(self, "_selected_ch", 1)),
+                       self._current_process_name)
 
     async def _on_click_stop(self) -> None:
         # 0) 실행/중복 가드
@@ -1798,6 +1812,10 @@ class PlasmaCleaningRuntime:
         """PC 완료 시 호출될 콜백 설정 (main.py에서 pending_log 저장에 사용)."""
         self._pc_done_callback = callback
 
+    def set_gdrive_log_dir(self, path: Path) -> None:
+        """GDrive 저장 경로 주입 — main.py에서 초기화 시 1회 호출."""
+        self._gdrive_log_dir = path
+
     def _get_process_name(self) -> str:
         """PC_processName_edit 위젯에서 공정 이름 읽기."""
         w = _safe_get(self.ui, "PC_processName_edit")
@@ -1818,7 +1836,7 @@ class PlasmaCleaningRuntime:
             return round(sum(lst) / len(lst), 4) if lst else None
 
         return {
-            "process_name"  : self._current_process_name or "Plasma Cleaning",  # ← 추가
+            "process_name"  : self._current_process_name or "Plasma Cleaning",
             "time"          : float(p.process_time_min),
             "base_pressure" : min(self._pc_ig_readings) if self._pc_ig_readings else None,
             "sp_ar"         : float(p.gas_flow_sccm),
