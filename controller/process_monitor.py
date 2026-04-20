@@ -139,6 +139,15 @@ class ProcessMonitor:
                 f"(편차: {diff:+.3f})"
             )
 
+    def notify_arc_warning(self, soft_arc: int, hard_arc: int, process_name: str = "") -> None:
+        """Arc 임계값 도달 시 즉시 Monitor 웹훅으로 텍스트 전송."""
+        total = soft_arc + hard_arc
+        lines = [f"⚠️ CH{self._ch} DC Pulse Arc 경고"]
+        if process_name:
+            lines.append(f"공정: {process_name}")
+        lines.append(f"Soft Arc: {soft_arc}회  Hard Arc: {hard_arc}회  합계: {total}회")
+        self._alert("\n".join(lines))
+
     # ── 웹훅 전송 ────────────────────────────────────────
 
     def _alert(self, message: str) -> None:

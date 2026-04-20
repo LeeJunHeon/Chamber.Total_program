@@ -1942,17 +1942,22 @@ class ChamberRuntime:
                 elif k == "arc_threshold_reached":
                     soft = int(getattr(ev, "power", 0) or 0)
                     hard = int(getattr(ev, "voltage", 0) or 0)
+                    proc_name = str(
+                        getattr(self.process_controller, "current_params", {}).get("process_name")
+                        or f"CH{self.ch}"
+                    )
                     msg = (
-                        f"⚠️ *CH{self.ch} DC Pulse Arc 경고*\n"
-                        f"공정: {str(getattr(self.process_controller, 'current_params', {}).get('process_name') or f'CH{self.ch}')}\n"
+                        f"⚠️ CH{self.ch} DC Pulse Arc 경고\n"
+                        f"공정: {proc_name}\n"
                         f"Soft Arc: {soft}회  Hard Arc: {hard}회  합계: {soft + hard}회"
                     )
                     self.append_log(f"DCPulse{self.ch}", msg)
-                    if self.chat:
-                        with contextlib.suppress(Exception):
-                            self.chat.notify_error_with_src("DCPulse", msg)
-                            if hasattr(self.chat, "flush"):
-                                self.chat.flush()
+                    with contextlib.suppress(Exception):
+                        self._process_monitor.notify_arc_warning(
+                            soft_arc=soft,
+                            hard_arc=hard,
+                            process_name=proc_name,
+                        )
 
                 elif k == "command_confirmed":
                     cmd = (ev.cmd or "").upper()
