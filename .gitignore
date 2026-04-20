@@ -217,3 +217,17 @@ $RECYCLE.BIN/
 
 # Windows shortcuts
 *.lnk
+
+### Camera / Logs (로컬 전용 — 추적 금지) ###
+# NAS에서 복사한 카메라 로그 원본 (CSV + raw 이미지)
+Camera_Logs/
+
+# camera_recorder의 로컬 폴백 저장소 (NAS 접근 실패 시)
+rf_logs/
+
+# 작업 중 임시 파일 (NEW 접미사로 된 실험 버전 등)
+*_NEW.py
+
+# 향후 CNN 학습 아티팩트 (디짓 데이터셋, 학습 리포트)
+digit_dataset/
+*_report.txt
