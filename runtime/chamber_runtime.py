@@ -1296,15 +1296,16 @@ class ChamberRuntime:
                     else:
                         self.append_log("Logger", f"이미 열린 로그 파일 사용: {self._log_file_path.name}")
 
-                    try:
-                        self.data_logger.start_new_log_session(params)
+                    self.data_logger.start_new_log_session(params)
+                    self._runtime_arc_notified = False  # ✅ 추가: 런타임 레벨 arc 알림 중복 방지 플래그
 
+                    try:
                         # ✅ Arc 카운터 초기화
                         if self.dc_pulse is not None:
                             with contextlib.suppress(Exception):
                                 self.dc_pulse.reset_arc_counts()
                         self._gdrive_arc_sent = False
-
+                        
                         # 성공 시에도 명시적으로 남겨 두면 나중에 추적이 쉬움
                         self.append_log("CSV", "Sputter Calib 로그 세션 시작")
                     except Exception as e:
@@ -1619,11 +1620,11 @@ class ChamberRuntime:
                     if active and self._auto_connect_enabled and self.process_controller.is_running:
                         self._ensure_background_started()
 
-                    # (선택 안전망) active=False면 폴링 타깃을 모두 내리도록 명시
-                    if not active:
-                        self._apply_polling_targets({
-                            "mfc": False, "dc_pulse": False, "rf_pulse": False, "dc": False, "rf": False
-                        })
+                    # ✅ 제거: "안전망" _apply_polling_targets 호출 삭제
+                    #    → polling_targets 이벤트에서 이미 처리됨. 여기서 또 호출하면 모든 장비에
+                    #      set_process_status(False)가 중복 실행되어 로그 노이즈 + 불필요한 큐 정리 발생
+                    # if not active:
+                    #     self._apply_polling_targets({"mfc": False, ...})
 
                     params = getattr(self.process_controller, "current_params", {}) or {}
                     use_dc_pulse = bool(params.get("use_dc_pulse", False))
@@ -1631,11 +1632,6 @@ class ChamberRuntime:
                     use_dc_cont  = bool(params.get("use_dc_power", False))
                     use_rf_cont  = bool(params.get("use_rf_power", False))
 
-                    # 핵심 변경:
-                    # - 같은 "계열"만 상호배타
-                    #   · DC 연속 ⭕ + RF Pulse ⭕  → 허용
-                    #   · DC 연속 ❌ + DC Pulse ⭕  → 금지 (동시 X)
-                    #   · RF 연속 ❌ + RF Pulse ⭕  → 금지 (동시 X)
                     base_targets = {
                         "mfc":      active,
                         "dc_pulse": active and self.supports_dc_pulse and use_dc_pulse and not use_dc_cont,
@@ -1644,7 +1640,6 @@ class ChamberRuntime:
                         "rf":       active and self.supports_rf_cont  and use_rf_cont  and not use_rf_pulse,
                     }
 
-                    # 이전 'polling_targets'로 특정 장치만 허용했으면 그 범위 내에서만 켜기(AND)
                     if self._last_polling_targets:
                         lt = self._last_polling_targets
                         targets = {
@@ -1940,6 +1935,11 @@ class ChamberRuntime:
                     )
 
                 elif k == "arc_threshold_reached":
+                    # ✅ 런타임 레벨 중복 방지 (dc_pulse 내부 가드의 2차 방어선)
+                    if getattr(self, "_runtime_arc_notified", False):
+                        continue
+                    self._runtime_arc_notified = True
+
                     soft = int(getattr(ev, "power", 0) or 0)
                     hard = int(getattr(ev, "voltage", 0) or 0)
                     proc_name = str(

@@ -222,6 +222,11 @@ class AsyncDCPulse:
         # ✅ STOP/종료 중에 ON/SET 계열 write 재전송을 막기 위한 가드
         self._stop_guard: bool = False
 
+        # ✅ Arc 누적 카운터 및 알림 플래그 초기화 (공정 시작 시 reset_arc_counts()로 재초기화)
+        self._soft_arc_total: int = 0
+        self._hard_arc_total: int = 0
+        self._arc_alert_sent: bool = False
+
         # ★ 추가: on_telemetry 콜백 저장 (3/19 리팩토링 시 누락됨)
         self._on_telemetry = on_telemetry
 
@@ -324,16 +329,24 @@ class AsyncDCPulse:
 
     # ====== 공용 API ======
     async def start(self):
+        # 1) 죽은 태스크 정리
         if self._watchdog_task and self._watchdog_task.done():
             self._watchdog_task = None
         if self._cmd_worker_task and self._cmd_worker_task.done():
             self._cmd_worker_task = None
+
+        # 2) 둘 다 살아있으면 중복 생성 불필요
         if self._watchdog_task and self._cmd_worker_task:
             return
+
         self._want_connected = True
         loop = asyncio.get_running_loop()
-        self._watchdog_task = loop.create_task(self._watchdog_loop(), name="DCPWatchdog")
-        self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="DCPCmdWorker")
+
+        # 3) ✅ 없는 것만 생성 (살아있는 태스크 절대 overwrite 금지 → orphan 방지)
+        if not self._watchdog_task:
+            self._watchdog_task = loop.create_task(self._watchdog_loop(), name="DCPWatchdog")
+        if not self._cmd_worker_task:
+            self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="DCPCmdWorker")
 
     async def cleanup(self):
         await self._emit_status("DCP 종료 절차 시작")
@@ -376,6 +389,11 @@ class AsyncDCPulse:
         self._out_on = False
         self._last_io_mono = 0.0
 
+        # ✅ Arc 상태 리셋 (다음 공정 오염 방지)
+        self._soft_arc_total = 0
+        self._hard_arc_total = 0
+        self._arc_alert_sent = False
+
     async def events(self) -> AsyncGenerator[DCPEvent, None]:
         while True:
             ev = await self._event_q.get()
@@ -402,16 +420,14 @@ class AsyncDCPulse:
                 self._ev_nowait(DCPEvent(kind="status", message=f"Polling read 시작({self._poll_period_s:.1f}s)"))
                 self._poll_task = asyncio.create_task(self._poll_loop())
         else:
+            # ✅ 실제로 실행 중이었을 때만 로그 (중복 호출 시 노이즈 방지)
+            was_running = self._poll_task is not None and not self._poll_task.done()
             if self._poll_task:
                 self._poll_task.cancel()
                 self._poll_task = None
-
-            # ✅ polling off에서는 poll read만 정리한다.
-            #    REF_POWER / OUTPUT_OFF / READ_FAULT 같은 control/diagnostic 흐름까지 끊어버리면
-            #    setpoint 변경/종료 시퀀스가 None 응답으로 무너진다.
             self._purge_pending("polling off", only_poll_reads=True, drop_inflight=False)
-
-            self._ev_nowait(DCPEvent(kind="status", message="Polling read 중지"))
+            if was_running:
+                self._ev_nowait(DCPEvent(kind="status", message="Polling read 중지"))
 
     # 추가: 연결 완료 대기 헬퍼
     async def _wait_until_connected(self, timeout: Optional[float] = None) -> bool:
