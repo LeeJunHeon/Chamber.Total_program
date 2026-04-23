@@ -7,7 +7,6 @@ import json
 import uuid
 from datetime import datetime
 from pathlib import Path
-import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import Any, Callable, Coroutine, Deque, Literal, Mapping, Optional, Sequence, TypedDict, cast, Union
@@ -53,10 +52,6 @@ from util.log_hub import SessionTextAppender
 
 # ⬇️ 추가: 전역 런타임 상태 레지스트리
 from controller.runtime_state import runtime_state
-
-# ✅ RF-Pulse는 1대 공유(동시 사용 금지): CH1/CH2 중 1개만 점유 가능
-_RFPULSE_OWNER_LOCK = threading.Lock()
-_RFPULSE_OWNER_CH: int | None = None
 
 # 공정 컨트롤러(기존 CH2) + CH1은 별도 모듈이 있으면 사용, 없으면 CH2를 공용으로
 from controller.process_controller import ProcessController
@@ -339,8 +334,7 @@ class ChamberRuntime:
         self._owns_plc = bool(owns_plc if owns_plc is not None else (int(chamber_no) == 1))  # 기본 CH1
         self._notify_plc_owner = on_plc_owner 
         self._main_done_callback: Optional[Callable] = None
-        self._last_running_state: Optional[bool] = None  
-        self._rf_pulse_reserved: bool = False
+        self._last_running_state: Optional[bool] = None
 
         self._cmd_q: asyncio.Queue[_RunnerCmd] = asyncio.Queue(maxsize=200)
         self._runner_task: asyncio.Task | None = None
@@ -2348,25 +2342,6 @@ class ChamberRuntime:
         except Exception:
             return False
 
-    # (추가) RF-Pulse 전역 점유(동시 사용 금지) 유틸
-    def _try_reserve_rf_pulse(self) -> tuple[bool, int | None]:
-        """RF-Pulse 전역 점유 시도. 성공하면 (True, None), 실패하면 (False, owner_ch)."""
-        global _RFPULSE_OWNER_CH
-        with _RFPULSE_OWNER_LOCK:
-            if _RFPULSE_OWNER_CH is None or _RFPULSE_OWNER_CH == self.ch:
-                _RFPULSE_OWNER_CH = self.ch
-                self._rf_pulse_reserved = True
-                return True, None
-            return False, _RFPULSE_OWNER_CH
-
-    def _release_rf_pulse_reservation(self) -> None:
-        """내가 점유자라면 RF-Pulse 전역 점유 해제."""
-        global _RFPULSE_OWNER_CH
-        with _RFPULSE_OWNER_LOCK:
-            if _RFPULSE_OWNER_CH == self.ch:
-                _RFPULSE_OWNER_CH = None
-        self._rf_pulse_reserved = False
-
     def _apply_process_state_message(self, message: str) -> None:
         if getattr(self, "_last_state_text", None) == message:
             return
@@ -2543,7 +2518,7 @@ class ChamberRuntime:
             _set("dcPulseDutyCycle_edit", "" if str(duty).strip() in ("", "0", "nan") else str(duty).strip())
 
         else:
-            # CH2: DC-Pulse(옵션) / RF-Pulse 사용 가능 (supports + validate + 전역 점유로 안전 제어)
+            # CH2: DC-Pulse(옵션) / RF-Pulse 사용 가능 (supports + validate로 안전 제어)
             _set("dcPulsePower_checkbox", params.get('use_dc_pulse', 'F') == 'T')
             _set("dcPulsePower_edit",     params.get('dc_pulse_power', '0'))
             dcf = str(params.get('dc_pulse_freq', '')).strip()
@@ -2826,26 +2801,6 @@ class ChamberRuntime:
             use_dc_pulse = bool(dc_requested) and self.supports_dc_pulse
             use_rf_pulse = bool(rf_requested) and self.supports_rf_pulse
 
-            # ✅ RF-Pulse 동시 사용 금지(전역 점유)
-            if use_rf_pulse:
-                ok_res, owner = self._try_reserve_rf_pulse()
-                if not ok_res:
-                    msg = f"RF-Pulse는 동시에 1개 챔버만 사용할 수 있습니다. 현재 CH{owner}에서 사용 중입니다."
-                    self.append_log("MAIN", msg)
-
-                    # Host start 요청도 즉시 실패로 응답(대기/타임아웃 방지)
-                    self._host_report_start(False, msg)
-
-                    self._auto_connect_enabled = False
-                    self._run_select = None
-                    self._on_process_status_changed(False)
-
-                    with contextlib.suppress(Exception):
-                        runtime_state.set_error("chamber", self.ch, msg)
-                        runtime_state.mark_finished("chamber", self.ch)
-
-                    raise RuntimeError(msg)
-
             self._run_select = {
                 "dc_pulse": use_dc_pulse,
                 "rf_pulse": use_rf_pulse,
@@ -2925,7 +2880,7 @@ class ChamberRuntime:
 
                 self._on_process_status_changed(False)
 
-                # ✅ 전역 점유/쿨다운을 ‘실패 종료’로 명확히 정리
+                # ✅ 실패 종료 상태를 runtime_state에 명확히 기록
                 try:
                     runtime_state.set_error("chamber", self.ch, f"preflight connect failed: {fail_list}")
                     runtime_state.mark_finished("chamber", self.ch)
@@ -4221,15 +4176,6 @@ class ChamberRuntime:
         self._devices_started = False
         self._run_select = None
 
-        # ✅ RF-Pulse 전역 점유 해제(정리된 경우에만)
-        if getattr(self, "_rf_pulse_reserved", False):
-            # cleanup timeout 목록에 RFPulse가 남아있으면 점유 유지(동시 사용 방지)
-            rfpulse_pending = any("RFPulse" in n for n in (pending_cleanup_names or []))
-            if not rfpulse_pending:
-                self._release_rf_pulse_reservation()
-            else:
-                self.append_log("MAIN", "⚠ RF-Pulse cleanup 미완료 → 점유 유지(동시 사용 방지)")
-
         # ------------------------------------------------------------------
         # ✅ 정상 정리(Graceful cleanup) 완료 여부 판정
         #    - _cleanup_timed_out == False : 정상 정리 완료 → 다음 공정 진행 허용
@@ -4972,8 +4918,7 @@ class ChamberRuntime:
         # ------------------------------------------------------------
         # ✅ Pulse 파라미터 정규화
         #  - 체크(use_*) 뿐 아니라 값(power/freq/duty)로도 "요청"을 판단
-        #  - CH1/CH2 모두 RF/DC Pulse 사용 가능
-        #  - 단, RF-Pulse는 전역 점유(락)로 CH1/CH2 동시 사용 금지
+        #  - CH1/CH2 각자 독립된 RF Pulse 장비 사용 (CH1: port 4008, CH2: port 4005)
         # ------------------------------------------------------------
         def _pos(v) -> bool:
             try:

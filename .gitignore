@@ -231,3 +231,4 @@ rf_logs/
 # 향후 CNN 학습 아티팩트 (디짓 데이터셋, 학습 리포트)
 digit_dataset/
 *_report.txt
+cnn_digit/

@@ -13,6 +13,9 @@ RGA_CSV_PATH = r"\\VanaM_NAS\VanaM_Sputter\RGA\Ch.1\RGA_spectrums.csv"
 IG_TCP_PORT  = 4001
 MFC_TCP_PORT = 4003
 
+# ★ RF Pulse (CH1 전용) — HOST는 config_common의 192.168.1.50 사용
+RFPULSE_TCP_PORT = 4008  # ← RS-232 허브 신규 포트 확정 후 여기만 수정
+
 # ★ CH1 전용 스케일: 2번 가스(O2)만 1.0로 덮어쓰기
 MFC_SCALE_FACTORS = {1: 1.0, 2: 1.0, 3: 1.0}
 
