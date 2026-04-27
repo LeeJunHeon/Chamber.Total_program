@@ -2594,7 +2594,7 @@ class PlasmaCleaningRuntime:
 
         from PySide6.QtWidgets import QFileDialog, QDialog
 
-        dlg = QFileDialog(self._parent_widget() or None, caption, start_dir, name_filter)
+        dlg = QFileDialog(self._parent_widget() or None, caption, "", name_filter)
         dlg.setFileMode(QFileDialog.ExistingFile)
 
         # ✅ Windows 네이티브 파일 다이얼로그 우회
@@ -2628,6 +2628,8 @@ class PlasmaCleaningRuntime:
 
         dlg.finished.connect(_done)
         dlg.open()
+        if start_dir:
+            QTimer.singleShot(50, lambda: dlg.setDirectory(start_dir) if _qt_is_valid(dlg) else None)
 
         try:
             return await fut

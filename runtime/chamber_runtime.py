@@ -5950,7 +5950,7 @@ class ChamberRuntime:
         if not self._has_ui():
             self.append_log("File", "headless: 파일 선택 UI 생략"); return ""
 
-        dlg = QFileDialog(self._parent_widget() or None, caption, start_dir, name_filter)
+        dlg = QFileDialog(self._parent_widget() or None, caption, "", name_filter)
         dlg.setFileMode(QFileDialog.ExistingFile)
 
         # ✅ Windows 쉘/COM(네이티브 파일 다이얼로그) 우회
@@ -5981,6 +5981,8 @@ class ChamberRuntime:
 
         dlg.finished.connect(_done)
         dlg.open()
+        if start_dir:
+            QTimer.singleShot(50, lambda: dlg.setDirectory(start_dir) if _qt_is_valid(dlg) else None)
 
         try:
             return await fut
