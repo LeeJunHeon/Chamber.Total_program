@@ -382,19 +382,21 @@ class RFPulseAsync:
         ack_ms = self._cfg_int("ACK_TIMEOUT_MS", 2000)
 
         # HOST
-        ok, csr_bytes = await self._exec_and_csr(CMD_SET_ACTIVE_CTRL, b"\x02", tag="[START HOST]")
-        if not ok:
-            csr = csr_bytes[0] if csr_bytes else None
-            if csr == 1:
-                # CSR=1 → 이미 HOST 모드인지 cmd 155로 직접 확인
-                mode_data = await self._query_and_data(155, b"", tag="[CHECK CTRL MODE]")
-                current_mode = mode_data[0] if mode_data else None
-                if current_mode == 2:
-                    await self._emit_status("SET_ACTIVE_CTRL CSR=1, 모드 확인: HOST(2) → 계속 진행")
-                else:
-                    return await fail(f"HOST 전환 실패 (CSR=1, 현재 모드={current_mode})")
-            else:
-                return await fail(f"HOST 실패 (CSR={csr})")
+        # HOST 모드 확인 → 필요할 때만 전환
+        mode_data = await self._query_and_data(155, b"", tag="[READ CTRL MODE]")
+        current_mode = mode_data[0] if mode_data else None
+
+        if current_mode is None:
+            return await fail("HOST 모드 확인 실패 (READ_ACTIVE_CTRL 응답 없음)")
+
+        if current_mode != 2:
+            ok, csr_bytes = await self._exec_and_csr(CMD_SET_ACTIVE_CTRL, b"\x02", tag="[START HOST]")
+            if not ok:
+                csr = csr_bytes[0] if csr_bytes else None
+                return await fail(f"HOST 전환 실패 (CSR={csr}, 이전 모드={current_mode})")
+            await self._emit_status(f"HOST 모드 전환 완료 (이전 모드={current_mode})")
+        else:
+            await self._emit_status("이미 HOST 모드 → SET_ACTIVE_CTRL 생략")
 
         # RF OFF로 출력 상태 정리 (이전 공정 비정상 종료 대비)
         ok, _ = await self._exec_and_csr(CMD_RF_OFF, b"", tag="[START PRE RF OFF]", timeout_ms=max(ack_ms, 2500))

@@ -1010,7 +1010,7 @@ class HostHandlers:
                         both_off_deadline: float | None = None
 
                         transition_grace_s = 5.0   # LP_STEP2 3초 + 폴링 여유
-                        both_off_grace_s = 3.0     # READY/NOT_READY 반영 race 흡수용
+                        both_off_grace_s = 5.0     # READY/NOT_READY 반영 race 흡수용
 
                         while time.monotonic() < deadline:
                             snap = await self._read_loadlock_vacuum_transition_bits()
