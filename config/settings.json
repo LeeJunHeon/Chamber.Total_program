@@ -246,7 +246,7 @@
     "CHAMBER_OES_USB_INDEX_CH1": 0,        // CH1용 OES USB 인덱스
     "CHAMBER_OES_USB_INDEX_CH2": 1,        // CH2용 OES USB 인덱스
     "CHAMBER_RF_CONT_POLL_INTERVAL_MS": 1000,      // RF Continuous 상태 확인 주기 (ms)
-    "CHAMBER_RF_CONT_RAMPDOWN_INTERVAL_MS": 50,    // RF 출력 내릴 때 단계 간격 (ms)
+    "CHAMBER_RF_CONT_RAMPDOWN_INTERVAL_MS": 1000,    // RF 출력 내릴 때 단계 간격 (ms)
     "CHAMBER_RF_CONT_DIRECT_MODE": false,           // RF Continuous 직접 제어 모드
     "CHAMBER_RF_CONT_ZEROING": false,               // RF Continuous 영점 보정 사용
     "CHAMBER_RF_CONT_WRITE_INV_A": 1.6546,         // RF Continuous W->DAC 역변환 기울기
