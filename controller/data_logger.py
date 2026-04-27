@@ -502,6 +502,7 @@ class DataLogger(QObject):
                     self._log_func(f"Sputter Calib CSV 1행 기록 완료 (NAS, keep-handle) → {nas_file}")
                 return
             except Exception as e:
+                self._nas_app.close()   # ← 이 한 줄 추가: 스테일 핸들 제거
                 if self._log_func:
                     self._log_func(f"Sputter Calib CSV NAS 기록 실패 → pending 적재: {e!r}")
 
