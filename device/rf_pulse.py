@@ -627,7 +627,7 @@ class RFPulseAsync:
                 cmd.retries_left -= 1
                 self._cmd_q.appendleft(cmd)
             else:
-                self._safe_callback(cmd.callback, None)
+                self._safe_callback(cmd.callback, result)
 
     async def _watchdog_loop(self):
         backoff = self._cfg_int("RFPULSE_RECONNECT_BACKOFF_START_MS", 2000)
