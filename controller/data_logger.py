@@ -490,6 +490,7 @@ class DataLogger(QObject):
             try:
                 self._flush_pending_to_nas(nas_file, pending_file)
             except Exception as e:
+                self._nas_app.close()
                 if self._log_func:
                     self._log_func(f"Sputter Calib CSV pending 병합 실패(다음에 재시도): {e!r}")
 
