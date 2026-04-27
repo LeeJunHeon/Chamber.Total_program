@@ -529,7 +529,12 @@ class PlasmaCleaningRuntime:
             if not self.plc:
                 return True
             key = f"G_V_{self._selected_ch}_인터락"  # CH1→G_V_1_인터락, CH2→G_V_2_인터락
-            return await self.plc.read_bit(key)
+            try:
+                return await asyncio.wait_for(self.plc.read_bit(key), timeout=3.0)
+            except asyncio.TimeoutError:
+                # PLC lock 경합으로 3초 내 응답 없음 → 안전 실패(GV 인터락 불확실)
+                self.append_log("PLC", f"GV 인터락 read timeout (3s) — lock 경합 추정: {key}")
+                return False
 
         async def _plc_gv_open() -> None:
             if self.plc:

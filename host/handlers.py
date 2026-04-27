@@ -197,11 +197,12 @@ class HostHandlers:
         명령 컨텍스트: 파일을 만들지 않고, 현재 명령 TAG만 유지한다.
         (명령 req/res CSV 로깅은 host/server.py에서 하루 1개 파일로 처리)
         """
+        prev_tag = self._current_cmd_tag  # 중첩 호출 시 이전 태그 보존
         self._current_cmd_tag = tag
         try:
             yield
         finally:
-            self._current_cmd_tag = None
+            self._current_cmd_tag = prev_tag  # None 대신 이전 값으로 복원
             self._plc_cmd_file = None  # 안전하게 항상 None 유지
 
     @asynccontextmanager
@@ -699,6 +700,9 @@ class HostHandlers:
                 try:
                     await chamber.start_with_recipe_string(recipe)
                     return self._ok("SPUTTER START OK", ch=ch)
+                except RuntimeError as e:
+                    # 런타임 내부 프리플라이트/쿨다운/중복 실행 등 명시적 거절
+                    return self._fail(str(e), code=getattr(e, "code", None) or "E410")
                 except Exception as e:
                     return self._fail(e)
 
@@ -730,12 +734,11 @@ class HostHandlers:
             self._log_client_request(data)
 
             try:
-                # 런타임 내부에서:
-                #  - runtime_state.check_can_start("pc", 선택된 CH) 호출
-                #  - IG/MFC/PLC 상태 프리플라이트
-                #  - 문제 있으면 _host_report_start(False, reason) → 여기서 예외로 전달
                 await pc.start_with_recipe_string(recipe)
                 return self._ok("PLASMA CLEANING START OK")
+            except RuntimeError as e:
+                # 런타임 내부 프리플라이트/쿨다운/중복 실행 등 명시적 거절
+                return self._fail(str(e), code=getattr(e, "code", None) or "E420")
             except Exception as e:
                 return self._fail(e)
 
