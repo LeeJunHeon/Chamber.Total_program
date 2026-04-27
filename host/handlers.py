@@ -964,26 +964,35 @@ class HostHandlers:
                                     code="E309",
                                 )
 
-                        # 4) 러핑펌프 ON
+                        # 3-b) PLC L_PUMPING 시퀀스 진행 중 여부 확인
+                        # LP_STEP1 또는 LP_STEP2가 True면 PLC가 이미 자동으로 시퀀스 진행 중.
+                        # 이 상태에서 소프트웨어가 L_R_P_SW / L_R_V_SW를 쓰면
+                        # PLC 타이머가 강제로 덮어써서 시퀀스가 꼬이므로 쓰기 전부 스킵.
                         async with self._plc_call():
-                            await self.ctx.plc.write_switch("L_R_P_SW", True)
+                            lp_step1_active = bool(await self.ctx.plc.read_bit("LP_STEP1"))
+                            lp_step2_active = bool(await self.ctx.plc.read_bit("LP_STEP2"))
 
-                        await asyncio.sleep(5.0)
+                        if not (lp_step1_active or lp_step2_active):
+                            # 4) 러핑펌프 ON
+                            async with self._plc_call():
+                                await self.ctx.plc.write_switch("L_R_P_SW", True)
 
-                        # 5) 러핑밸브 인터락 확인
-                        async with self._plc_call():
-                            rv_interlock = bool(await self.ctx.plc.read_bit("L_R_V_인터락"))
+                            await asyncio.sleep(5.0)
 
-                        if not rv_interlock:
-                            await _stop_roughing(delay_s=5.0)
-                            return self._fail(
-                                "L_R_V_인터락=FALSE → 러핑밸브 개방 불가 (L_R_P_SW/L_R_V_SW OFF 처리)",
-                                code="E310",
-                            )
+                            # 5) 러핑밸브 인터락 확인
+                            async with self._plc_call():
+                                rv_interlock = bool(await self.ctx.plc.read_bit("L_R_V_인터락"))
 
-                        # 6) 러핑밸브 ON
-                        async with self._plc_call():
-                            await self.ctx.plc.write_switch("L_R_V_SW", True)
+                            if not rv_interlock:
+                                await _stop_roughing(delay_s=5.0)
+                                return self._fail(
+                                    "L_R_V_인터락=FALSE → 러핑밸브 개방 불가 (L_R_P_SW/L_R_V_SW OFF 처리)",
+                                    code="E310",
+                                )
+
+                            # 6) 러핑밸브 ON
+                            async with self._plc_call():
+                                await self.ctx.plc.write_switch("L_R_V_SW", True)
 
                         # 7) timeout까지 폴링
                         deadline = time.monotonic() + timeout_s
