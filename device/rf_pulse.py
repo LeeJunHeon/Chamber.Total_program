@@ -627,7 +627,7 @@ class RFPulseAsync:
                 cmd.retries_left -= 1
                 self._cmd_q.appendleft(cmd)
             else:
-                self._safe_callback(cmd.callback, result)
+                self._safe_callback(cmd.callback, None)
 
     async def _watchdog_loop(self):
         backoff = self._cfg_int("RFPULSE_RECONNECT_BACKOFF_START_MS", 2000)
@@ -862,7 +862,7 @@ class RFPulseAsync:
                         backoff_ms = max(int(cmd.gap_ms * 1.5), 1200)
                     await asyncio.sleep(backoff_ms / 1000.0)
                 else:
-                    self._safe_callback(cmd.callback, None)
+                    self._safe_callback(cmd.callback, result)
                     self._inflight = None
                     await asyncio.sleep(cmd.gap_ms / 1000.0)
 

@@ -2895,6 +2895,17 @@ class ChamberRuntime:
             if not ok_gate:
                 self.append_log("MAIN", f"[CH{self.ch}] Gate Open → 공정 시작 차단")
 
+                # ↓ 이 블록 추가
+                if self.chat:
+                    with contextlib.suppress(Exception):
+                        _gate_note = params.get("process_note") or params.get("Process_name") or "알 수 없음"
+                        self.chat.notify_error_event(
+                            f"CH{self.ch}",
+                            "E301",
+                            f"Gate Open 상태 → 공정 시작 차단 (공정: {_gate_note})",
+                        )
+                        self.chat.flush()
+
                 # ✅ 이미 올라간 연결/펌프/점유를 정리(특히 RF-Pulse 점유 해제 목적)
                 self._auto_connect_enabled = False
                 with contextlib.suppress(Exception):
