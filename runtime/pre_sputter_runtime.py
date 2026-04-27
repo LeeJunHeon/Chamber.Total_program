@@ -277,6 +277,10 @@ class PreSputterRuntime:
         pretty = ", ".join([f"{label}:{'OK' if ok else 'FAIL'}" for label, ok in started]) or "None"
         self._log(f"[PreSputter] 병렬 실행 완료 ({pretty})")
 
+        if self.chat and hasattr(self.chat, "flush"):
+            try: self.chat.flush()
+            except Exception: pass
+
     async def _run_sequential(self) -> None:
         await self._run_one(self.ch1, "CH1")
         if self.ch1 and self.ch2 and self.inter_ch_delay_s > 0:
@@ -287,10 +291,18 @@ class PreSputterRuntime:
         if not ch:
             return
         if ch.is_running:
-            self._log(f"[PreSputter] {label} 이미 실행 중 → 건너뜀"); return
+            self._log(f"[PreSputter] {label} 이미 실행 중 → 건너뜀"); 
+            if self.chat and hasattr(self.chat, "flush"):
+                try: self.chat.flush()
+                except Exception: pass
+            return
         ok = ch.start_presputter_from_ui()
         if not ok:
-            self._log(f"[PreSputter] {label} 시작 실패"); return
+            self._log(f"[PreSputter] {label} 시작 실패"); 
+            if self.chat and hasattr(self.chat, "flush"):
+                try: self.chat.flush()
+                except Exception: pass
+            return
         # _run_one()의 감시 루프 대체
         while ch.is_running:
             if self._ui:
@@ -300,6 +312,10 @@ class PreSputterRuntime:
             self._set_text(self._ui.preSputter_remainigTime_edit, "00:00:00")
 
         self._log(f"[PreSputter] {label} 완료")
+
+        if self.chat and hasattr(self.chat, "flush"):
+            try: self.chat.flush()
+            except Exception: pass
 
     # ★ 공개 API: 메인에서 바로 호출할 수 있도록 이름 변경
     def schedule_from_ui(self) -> None:
