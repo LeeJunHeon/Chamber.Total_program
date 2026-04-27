@@ -503,7 +503,17 @@ class DataLogger(QObject):
                     self._log_func(f"Sputter Calib CSV 1행 기록 완료 (NAS, keep-handle) → {nas_file}")
                 return
             except Exception as e:
-                self._nas_app.close()   # ← 이 한 줄 추가: 스테일 핸들 제거
+                self._nas_app.close()
+                # SMB 세션 타임아웃 대응: 핸들 해제 후 1회 재시도
+                try:
+                    self._nas_app.open()
+                    self._nas_app.append_row(log_data)
+                    self._session_started_at = None
+                    if self._log_func:
+                        self._log_func(f"Sputter Calib CSV NAS 재시도 성공 → {nas_file}")
+                    return
+                except Exception:
+                    pass
                 if self._log_func:
                     self._log_func(f"Sputter Calib CSV NAS 기록 실패 → pending 적재: {e!r}")
 
