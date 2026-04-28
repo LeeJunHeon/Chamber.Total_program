@@ -2628,13 +2628,15 @@ class ChamberRuntime:
         - 그 외는 모두 False(시작 차단)
         """
         self._gate_fail_reason: str = "unknown"
-        
+
         if not getattr(self, "plc", None):
+            self._gate_fail_reason = "PLC 연결 없음"
             self.append_log("MAIN", f"[CH{self.ch}] PLC 없음 → Gate 상태 확인 불가 → 시작 차단")
             return False
 
         ch = int(getattr(self, "ch", 0) or 0)
         if ch not in (1, 2):
+            self._gate_fail_reason = f"잘못된 CH 번호 ({ch})"
             self.append_log("MAIN", f"[CH{self.ch}] 잘못된 CH={ch} → 시작 차단")
             return False
 
@@ -2654,6 +2656,7 @@ class ChamberRuntime:
                 close_lamp = bool(close_lamp)
 
             except KeyError as e:
+                self._gate_fail_reason = f"PLC 주소맵 키 없음 ({e})"
                 self.append_log("MAIN", f"[CH{self.ch}] PLC 주소맵에 gate lamp 키 없음: {e} → 시작 차단")
                 return False
             except Exception as e:
@@ -2667,17 +2670,20 @@ class ChamberRuntime:
 
             if open_lamp and (not close_lamp):
                 # ❌ OPEN
+                self._gate_fail_reason = "Gate OPEN 상태"
                 self.append_log("MAIN", f"[CH{self.ch}] Gate 상태=OPEN (open={open_lamp}, close={close_lamp})")
                 return False
 
             if open_lamp and close_lamp:
                 # ❌ 비정상(둘 다 TRUE)
+                self._gate_fail_reason = "Gate lamp 이상 (OPEN/CLOSE 모두 True)"
                 self.append_log("MAIN", f"[CH{self.ch}] Gate lamp 이상(OPEN/CLOSE 모두 TRUE) (open={open_lamp}, close={close_lamp})")
                 return False
 
             # 둘 다 False면 moving/unknown → 잠깐 기다렸다가 재확인
             await asyncio.sleep(gate_retry_interval_s)
 
+        self._gate_fail_reason = "Gate 이동 중 / 상태 불명 (재시도 초과)"
         self.append_log("MAIN", f"[CH{self.ch}] Gate 상태=moving_or_unknown (OPEN/CLOSE 모두 FALSE) → 시작 차단")
         return False
     
@@ -2892,6 +2898,7 @@ class ChamberRuntime:
             # - Plasma Cleaning은 Gate를 열고 진행하므로, Gate Open 상태면 Sputter Start 금지
             ok_gate = await self._check_gate_closed_before_start()
             if not ok_gate:
+                _gate_reason = getattr(self, '_gate_fail_reason', 'Gate 상태 이상')
                 self.append_log("MAIN", f"[CH{self.ch}] Gate Open → 공정 시작 차단")
 
                 # ↓ 이 블록 추가
