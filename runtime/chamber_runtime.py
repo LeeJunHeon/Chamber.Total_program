@@ -2899,7 +2899,7 @@ class ChamberRuntime:
             ok_gate = await self._check_gate_closed_before_start()
             if not ok_gate:
                 _gate_reason = getattr(self, '_gate_fail_reason', 'Gate 상태 이상')
-                self.append_log("MAIN", f"[CH{self.ch}] Gate Open → 공정 시작 차단")
+                self.append_log("MAIN", f"[CH{self.ch}] Gate 체크 실패 ({_gate_reason}) → 공정 시작 차단")
 
                 # ↓ 이 블록 추가
                 if self.chat:
@@ -2908,7 +2908,7 @@ class ChamberRuntime:
                         self.chat.notify_error_event(
                             f"CH{self.ch}",
                             "E301",
-                            f"Gate Open 상태 → 공정 시작 차단 (공정: {_gate_note})",
+                            f"Gate 체크 실패: {_gate_reason} → 공정 시작 차단 (공정: {_gate_note})",
                         )
                         self.chat.flush()
 
@@ -2919,10 +2919,10 @@ class ChamberRuntime:
 
                 self._on_process_status_changed(False)
                 with contextlib.suppress(Exception):
-                    runtime_state.set_error("chamber", self.ch, "gate open")
+                    runtime_state.set_error("chamber", self.ch, f"gate check failed: {_gate_reason}")
                     runtime_state.mark_finished("chamber", self.ch)
 
-                raise RuntimeError("gate open")
+                raise RuntimeError(f"gate check failed: {_gate_reason}")
             
             # ★ 추가: 공정 시작 직전 Chuck 위치 선행 설정
             self._run_chuck_position = str(params.get("chuck_position") or "").strip().lower()
