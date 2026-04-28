@@ -1466,7 +1466,7 @@ class HostHandlers:
                     async with self._plc_command(f"GATE_OPEN_CH{ch}"):
                         self._log_client_request(data)
 
-                        # 0) gate lamp 먼저 확인: 이미 OPEN이면 즉시 OK (불필요 동작 방지)
+                        # 0) gate lamp 먼저 확인
                         cur_st = await self._read_gate_state(ch)
 
                         if cur_st["state"] == "invalid_both_true":
@@ -1475,21 +1475,7 @@ class HostHandlers:
                                 code="E306",
                             )
 
-                        # 1) 먼저 Loadlock 상태 확인
-                        ok_ll, msg_ll = await self._require_loadlock_safe_for_gate_open()
-                        if not ok_ll:
-                            return self._fail(msg_ll, code="E321")
-
-                        # 2) 다른 챔버 gate도 먼저 확인
-                        other = 2 if ch == 1 else 1
-                        other_st = await self._read_gate_state(other)
-                        if other_st["state"] != "closed":
-                            return self._fail(
-                                f"다른 챔버 Gate가 CLOSED가 아님: CH{other}={other_st['state']} → CH{ch}_GATE_OPEN 불가",
-                                code="E303",
-                            )
-
-                        # 3) 여기까지 통과한 뒤에만 '이미 OPEN' fast-path 허용
+                        # 1) 이미 OPEN이면 loadlock/other-gate 체크 없이 즉시 반환
                         if cur_st["state"] == "open":
                             if ch == 2:
                                 async with self._plc_call():
@@ -1500,6 +1486,20 @@ class HostHandlers:
                                 return self._ok(f"CH2_GATE_OPEN: 이미 OPEN + MAIN_SHUTTER_OPEN", current=cur_st)
 
                             return self._ok(f"CH{ch}_GATE_OPEN: 이미 OPEN 상태", current=cur_st)
+
+                        # 2) 실제로 gate를 열어야 할 때만 Loadlock 상태 확인
+                        ok_ll, msg_ll = await self._require_loadlock_safe_for_gate_open()
+                        if not ok_ll:
+                            return self._fail(msg_ll, code="E321")
+
+                        # 3) 다른 챔버 gate 확인
+                        other = 2 if ch == 1 else 1
+                        other_st = await self._read_gate_state(other)
+                        if other_st["state"] != "closed":
+                            return self._fail(
+                                f"다른 챔버 Gate가 CLOSED가 아님: CH{other}={other_st['state']} → CH{ch}_GATE_OPEN 불가",
+                                code="E303",
+                            )
 
                         # 1) 인터락 확인 — 읽는 순간만 락
                         async with self._plc_call():
