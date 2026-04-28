@@ -2627,6 +2627,8 @@ class ChamberRuntime:
         - 'closed'일 때만 True
         - 그 외는 모두 False(시작 차단)
         """
+        self._gate_fail_reason: str = "unknown"
+        
         if not getattr(self, "plc", None):
             self.append_log("MAIN", f"[CH{self.ch}] PLC 없음 → Gate 상태 확인 불가 → 시작 차단")
             return False
@@ -2644,22 +2646,18 @@ class ChamberRuntime:
         gate_retry_interval_s = float(self.cfg._get("CHAMBER_GATE_RECHECK_INTERVAL_S", 0.2))
 
         # (선택) 전이 상태(moving)일 때 잠깐만 재확인(짧게)
-        for _ in range(gate_retry_count):  # 5회 * 0.2s = 최대 1초
+        for _ in range(gate_retry_count):  # 최대 gate_retry_count 회 재시도
             try:
                 open_lamp = await asyncio.wait_for(self.plc.read_bit(open_key), timeout=gate_read_timeout_s)
                 close_lamp = await asyncio.wait_for(self.plc.read_bit(close_key), timeout=gate_read_timeout_s)
                 open_lamp = bool(open_lamp)
                 close_lamp = bool(close_lamp)
 
-                # timeout/예외로 값을 못 읽으면 → “상태 확인 불가”로 시작 차단 + 사용자에게 알림
-                if open_lamp is None or close_lamp is None:
-                    self.append_log("MAIN", f"[CH{self.ch}] Gate 상태 읽기 실패/timeout → 시작 차단")
-                    return False
             except KeyError as e:
                 self.append_log("MAIN", f"[CH{self.ch}] PLC 주소맵에 gate lamp 키 없음: {e} → 시작 차단")
                 return False
             except Exception as e:
-                self.append_log("MAIN", f"[CH{self.ch}] Gate lamp 읽기 실패: {type(e).__name__}: {e} → 시작 차단")
+                self.append_log("MAIN", f"[CH{self.ch}] Gate lamp 읽기 실패: {type(e).__name__}: {e} → 재시도 중")
                 await asyncio.sleep(gate_retry_interval_s)
                 continue
 
