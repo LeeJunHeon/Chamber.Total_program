@@ -2660,7 +2660,8 @@ class ChamberRuntime:
                 return False
             except Exception as e:
                 self.append_log("MAIN", f"[CH{self.ch}] Gate lamp 읽기 실패: {type(e).__name__}: {e} → 시작 차단")
-                return False
+                await asyncio.sleep(gate_retry_interval_s)
+                continue
 
             if close_lamp and (not open_lamp):
                 # ✅ 정상: CLOSED
