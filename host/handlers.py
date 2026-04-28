@@ -383,8 +383,15 @@ class HostHandlers:
             if rt is not None:
                 st = getattr(rt, "_runner_state", None)
                 if isinstance(st, str) and st and st.upper() != "IDLE":
-                    # 상태 문자열을 그대로 이유에 포함(디버깅에 유리)
-                    reasons.append(f"CH{ch} 상태={st}")
+                    _STATE_MSG = {
+                        "PREFLIGHT":     f"CH{ch} 공정 시작 준비 중",
+                        "RUNNING":       f"CH{ch} 공정 실행 중",
+                        "CLEANUP":       f"CH{ch} 공정 종료 처리 중",
+                        "STOPPING":      f"CH{ch} 공정 정지 중",
+                        "COOLDOWN":      f"CH{ch} 다음 공정 대기 중",
+                        "DELAY":         f"CH{ch} 공정 간 대기 중",
+                    }
+                    reasons.append(_STATE_MSG.get(st.upper(), f"CH{ch} 처리 중 ({st})"))
 
                 # stage task가 살아있는 동안도 busy로 간주
                 t = getattr(rt, "_runner_stage_task", None)
@@ -392,13 +399,18 @@ class HostHandlers:
                     try:
                         if not t.done():
                             k = getattr(rt, "_runner_stage_kind", None)
+                            _STAGE_MSG = {
+                                "ADVANCE_QUEUE": f"CH{ch} 리스트 공정 대기 중 (다음 공정 예약됨)",
+                                "PROCESS":       f"CH{ch} 공정 실행 중",
+                                "PREFLIGHT":     f"CH{ch} 공정 시작 준비 중",
+                                "CLEANUP":       f"CH{ch} 공정 종료 처리 중",
+                            }
                             if k:
-                                reasons.append(f"CH{ch} stage={k}")
+                                reasons.append(_STAGE_MSG.get(k, f"CH{ch} 처리 중 ({k})"))
                             else:
-                                reasons.append(f"CH{ch} stage 진행 중")
+                                reasons.append(f"CH{ch} 처리 중")
                     except Exception:
-                        # done() 판정 실패 시에도 안전하게 busy로 처리
-                        reasons.append(f"CH{ch} stage 진행 중")
+                        reasons.append(f"CH{ch} 처리 중")
 
             if reasons:
                 return self._fail(f"{action} 불가 — " + " / ".join(reasons), code="E205")
@@ -1008,6 +1020,7 @@ class HostHandlers:
                         # 짧은 grace 후 재확인한다.
                         transition_deadline: float | None = None
                         both_off_deadline: float | None = None
+                        lp_step_off_deadline: float | None = None
 
                         transition_grace_s = 5.0   # LP_STEP2 3초 + 폴링 여유
                         both_off_grace_s = 5.0     # READY/NOT_READY 반영 race 흡수용
@@ -1093,6 +1106,27 @@ class HostHandlers:
                             elif (not pump_sw) and (not valve_sw):
                                 now = time.monotonic()
                                 transition_deadline = None
+
+                                # ✅ LP_STEP1 또는 LP_STEP2가 True인 채 both_off가 읽히는 경우:
+                                # 6개 비트를 순차로 읽는 동안 PLC 스캔이 진행되어 발생하는 race.
+                                # PLC 실제 시퀀스: LP_STEP1(6초) → LP_STEP2(0.3초) → L_VAC_READY_SW SET.
+                                # 5초 카운트를 시작하지 말고, 별도 15초 제한으로 다음 폴링을 기다린다.
+                                if lp_step1 or lp_step2:
+                                    if lp_step_off_deadline is None:
+                                        lp_step_off_deadline = now + 15.0
+                                    elif now >= lp_step_off_deadline:
+                                        return self._fail(
+                                            "VACUUM_ON 실패 — LP_STEP 진행 중 "
+                                            "L_VAC_READY_SW 미도달 (15s 초과) "
+                                            f"(LP_STEP1={lp_step1}, LP_STEP2={lp_step2})",
+                                            code="E312",
+                                        )
+                                    both_off_deadline = None
+                                    await asyncio.sleep(0.5)
+                                    continue
+
+                                # LP_STEP 모두 False → 정상 race 흡수 구간
+                                lp_step_off_deadline = None
 
                                 if both_off_deadline is None:
                                     both_off_deadline = now + both_off_grace_s
