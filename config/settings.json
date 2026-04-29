@@ -338,7 +338,11 @@
     // ── Google Drive 공정 로그 ──
     "GDRIVE_LOG_DIR": "G:/공유 드라이브/VanaM_Sputter/Process_log",  // GDrive 저장 경로
     "GDRIVE_ARC_ALERT_THRESH": 5,     // Arc 누적 이 횟수 이상 시 Chat 알림
-    "GDRIVE_REF_P_WARN_W": 20.0       // Reflected Power 경고 기준 (W)
+    "GDRIVE_REF_P_WARN_W": 20.0,      // Reflected Power 경고 기준 (W)
+
+    // ── 공정 모니터링 (Main Shutter open 후 편차 알림) ──
+    "PROCESS_MONITOR_TOLERANCE_FLOW_SCCM": 0.3,        // 가스 유량 ±sccm
+    "PROCESS_MONITOR_TOLERANCE_PRESSURE_MTORR": 0.3    // 작업압 ±mTorr (30 mTorr 기준 ≈ ±1.7%)
   },
 
 

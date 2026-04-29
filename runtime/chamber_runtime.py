@@ -305,9 +305,12 @@ class ChamberRuntime:
             _monitor_url = getattr(_cfgl, "CHAT_WEBHOOK_MONITOR_URL", "").strip()
         except Exception:
             _monitor_url = ""
+        from lib import config_common as _cfgc
         self._process_monitor = ProcessMonitor(
             ch=self.ch,
             webhook_url=_monitor_url,
+            flow_tolerance=getattr(_cfgc, "PROCESS_MONITOR_TOLERANCE_FLOW_SCCM", 0.3),
+            pressure_tolerance=getattr(_cfgc, "PROCESS_MONITOR_TOLERANCE_PRESSURE_MTORR", 0.3),
             log_func=self.append_log,
         )
 

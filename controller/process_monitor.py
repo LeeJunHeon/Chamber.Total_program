@@ -49,12 +49,14 @@ class ProcessMonitor:
         *,
         ch: int,
         webhook_url: str = "",
-        tolerance: float = 0.3,
+        flow_tolerance: float = 0.3,
+        pressure_tolerance: float = 0.3,
         log_func=None,
     ):
         self._ch = ch
         self._webhook_url = (webhook_url or "").strip()
-        self._tolerance = tolerance       # ±0.3 (sccm / mTorr 동일)
+        self._flow_tol = flow_tolerance        # 가스 유량 ±sccm
+        self._pressure_tol = pressure_tolerance # 작업압 ±mTorr
         self._log_func = log_func
         self._targets: Dict[str, float] = {}   # {"Ar": 20.0, "O2": 5.0, "pressure": 3.000}
         self._active = False
@@ -113,7 +115,7 @@ class ProcessMonitor:
 
         target = self._targets[gas]
         diff = value - target
-        if abs(diff) >= self._tolerance:
+        if abs(diff) >= self._flow_tol:
             self._alert(
                 f"⚠️ CH{self._ch} {gas} flow 편차\n"
                 f"세팅: {target:.2f} sccm → 실측: {value:.2f} sccm "
@@ -132,7 +134,7 @@ class ProcessMonitor:
 
         target = self._targets["pressure"]
         diff = value - target
-        if abs(diff) >= self._tolerance:
+        if abs(diff) >= self._pressure_tol:
             self._alert(
                 f"⚠️ CH{self._ch} Pressure 편차\n"
                 f"세팅: {target:.3f} mTorr → 실측: {value:.3f} mTorr "
