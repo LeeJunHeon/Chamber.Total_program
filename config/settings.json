@@ -342,7 +342,7 @@
 
     // ── 공정 모니터링 (Main Shutter open 후 편차 알림) ──
     "PROCESS_MONITOR_TOLERANCE_FLOW_SCCM": 0.3,        // 가스 유량 ±sccm
-    "PROCESS_MONITOR_TOLERANCE_PRESSURE_MTORR": 0.3    // 작업압 ±mTorr (30 mTorr 기준 ≈ ±1.7%)
+    "PROCESS_MONITOR_TOLERANCE_PRESSURE_MTORR": 0.3    // 작업압 ±mTorr (30 mTorr 기준 ≈ ±1%)
   },
 
 
