@@ -855,6 +855,42 @@ class HostHandlers:
                 "L_R_P_SW": bool(await self.ctx.plc.read_bit("L_R_P_SW")),
                 "L_R_V_SW": bool(await self.ctx.plc.read_bit("L_R_V_SW")),
             }
+        
+    async def _read_loadlock_vacuum_diag(self) -> dict[str, bool | None]:
+        """
+        VACUUM_ON 실패/타임아웃 시점에 1회만 호출되는 진단 비트 스냅샷.
+
+        - 폴링 루프에서는 호출되지 않으므로 race 윈도우에 영향 없음.
+        - address map에 없을 수 있는 비트는 read 실패 시 None.
+
+        수집 대상 (PLC 변수표 기준):
+        - L_GAUGE_A           (P00003) : 로드락 진공게이지 setpoint A raw 신호
+        - L_GAUGE_A_INTERLOCK (M01700) : 30 스캔 안정 후 SET. LP_STEP1 SET 조건
+        - L_R_P_OUT           (P00030) : 러핑펌프 실제 출력 코일
+        - L_R_V_OUT           (P00031) : 러핑밸브 실제 출력 코일
+        - L_VENT_OUT          (P00034) : 벤트밸브 출력 (배기-벤트 충돌 진단용)
+        - L_ATM_SENSOR        (P00009) : 로드락 ATM 센서
+        """
+        names = [
+            "L_GAUGE_A",
+            "L_GAUGE_A_INTERLOCK",
+            "L_R_P_OUT",
+            "L_R_V_OUT",
+            "L_VENT_OUT",
+            "L_ATM_SENSOR",
+        ]
+        result: dict[str, bool | None] = {}
+        try:
+            async with self._plc_call():
+                for name in names:
+                    try:
+                        result[name] = bool(await self.ctx.plc.read_bit(name))
+                    except Exception:
+                        result[name] = None
+        except Exception:
+            for name in names:
+                result.setdefault(name, None)
+        return result
 
     async def vacuum_on(self, data: Json) -> Json:
         """
@@ -890,7 +926,7 @@ class HostHandlers:
         필요할 때만 fallback으로 L_R_V_SW -> delay -> L_R_P_SW 순서로 OFF 정리한다
         7) 실패/예외 시에는 러핑밸브/펌프 OFF 원복
         """
-        timeout_s = float(data.get("timeout_s", 600.0))  # 기본 10분
+        timeout_s = float(data.get("timeout_s", 660.0))  # 기본 11분 (PLC T0052 600s + 60s 여유)
 
         async with self._plc_command("VACUUM_ON"):
             self._log_client_request(data)
@@ -1137,17 +1173,31 @@ class HostHandlers:
                                         await asyncio.sleep(0.2)
                                         continue
 
+                                    # 실패 직전 진단 비트 수집 (1회만)
+                                    diag = await self._read_loadlock_vacuum_diag()
+
                                     if snap2["L_VAC_NOT_READY"]:
                                         return self._fail(
                                             "VACUUM_ON 실패 — 러핑 OFF 후 PLC가 "
-                                            "L_VAC_NOT_READY=TRUE로 판정",
+                                            "L_VAC_NOT_READY=TRUE로 판정 "
+                                            f"(L_GAUGE_A={diag['L_GAUGE_A']}, "
+                                            f"L_GAUGE_A_INTERLOCK={diag['L_GAUGE_A_INTERLOCK']}, "
+                                            f"L_R_P_OUT={diag['L_R_P_OUT']}, "
+                                            f"L_R_V_OUT={diag['L_R_V_OUT']})",
                                             code="E312",
                                         )
 
                                     return self._fail(
                                         "VACUUM_ON 실패 — READY/NOT_READY 판정 없이 "
                                         "L_R_P_SW/L_R_V_SW 모두 OFF 상태 지속 "
-                                        f"(LP_STEP1={lp_step1}, LP_STEP2={lp_step2})",
+                                        f"(LP_STEP1={snap2['LP_STEP1']}, "
+                                        f"LP_STEP2={snap2['LP_STEP2']}, "
+                                        f"L_VAC_NOT_READY={snap2['L_VAC_NOT_READY']}, "
+                                        f"L_GAUGE_A={diag['L_GAUGE_A']}, "
+                                        f"L_GAUGE_A_INTERLOCK={diag['L_GAUGE_A_INTERLOCK']}, "
+                                        f"L_R_P_OUT={diag['L_R_P_OUT']}, "
+                                        f"L_R_V_OUT={diag['L_R_V_OUT']}, "
+                                        f"L_VENT_OUT={diag['L_VENT_OUT']})",
                                         code="E312",
                                     )
 
@@ -1168,6 +1218,9 @@ class HostHandlers:
                         except Exception:
                             snap_timeout = None
 
+                        # 진단 비트 1회 수집 (실패해도 모두 None으로 채워 안전)
+                        diag = await self._read_loadlock_vacuum_diag()
+
                         if snap_timeout and snap_timeout["L_VAC_NOT_READY"]:
                             return self._fail(
                                 f"VACUUM_ON 실패 — {int(timeout_s)}s 타임아웃 시점까지 "
@@ -1175,7 +1228,13 @@ class HostHandlers:
                                 f"(LP_STEP1={snap_timeout['LP_STEP1']}, "
                                 f"LP_STEP2={snap_timeout['LP_STEP2']}, "
                                 f"L_R_P_SW={snap_timeout['L_R_P_SW']}, "
-                                f"L_R_V_SW={snap_timeout['L_R_V_SW']})",
+                                f"L_R_V_SW={snap_timeout['L_R_V_SW']}, "
+                                f"L_GAUGE_A={diag['L_GAUGE_A']}, "
+                                f"L_GAUGE_A_INTERLOCK={diag['L_GAUGE_A_INTERLOCK']}, "
+                                f"L_R_P_OUT={diag['L_R_P_OUT']}, "
+                                f"L_R_V_OUT={diag['L_R_V_OUT']}, "
+                                f"L_VENT_OUT={diag['L_VENT_OUT']}, "
+                                f"L_ATM_SENSOR={diag['L_ATM_SENSOR']})",
                                 code="E312",
                             )
 
@@ -1187,13 +1246,23 @@ class HostHandlers:
                                 f"LP_STEP1={snap_timeout['LP_STEP1']}, "
                                 f"LP_STEP2={snap_timeout['LP_STEP2']}, "
                                 f"L_R_P_SW={snap_timeout['L_R_P_SW']}, "
-                                f"L_R_V_SW={snap_timeout['L_R_V_SW']})",
+                                f"L_R_V_SW={snap_timeout['L_R_V_SW']}, "
+                                f"L_GAUGE_A={diag['L_GAUGE_A']}, "
+                                f"L_GAUGE_A_INTERLOCK={diag['L_GAUGE_A_INTERLOCK']}, "
+                                f"L_R_P_OUT={diag['L_R_P_OUT']}, "
+                                f"L_R_V_OUT={diag['L_R_V_OUT']}, "
+                                f"L_VENT_OUT={diag['L_VENT_OUT']}, "
+                                f"L_ATM_SENSOR={diag['L_ATM_SENSOR']})",
                                 code="E312",
                             )
 
                         return self._fail(
                             f"VACUUM_ON 타임아웃 — {int(timeout_s)}s 내 "
-                            "L_VAC_READY_SW=TRUE 미도달 (상태 스냅샷 읽기 실패)",
+                            "L_VAC_READY_SW=TRUE 미도달 (상태 스냅샷 읽기 실패) "
+                            f"(L_GAUGE_A={diag['L_GAUGE_A']}, "
+                            f"L_GAUGE_A_INTERLOCK={diag['L_GAUGE_A_INTERLOCK']}, "
+                            f"L_R_P_OUT={diag['L_R_P_OUT']}, "
+                            f"L_R_V_OUT={diag['L_R_V_OUT']})",
                             code="E312",
                         )
 
