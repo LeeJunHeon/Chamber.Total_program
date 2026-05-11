@@ -846,8 +846,10 @@ class ChamberRuntime:
                         #    process_params["use_power_select"] 에 기록.
                         #    - 종료 시퀀스의 OFF write 에서는 덮어쓰지 않도록
                         #      `if onb` 로 가드 (Start 시점 상태만 보존).
+                        #    - PLC read 실패 시 레시피 값(start_new_log_session
+                        #      에서 미리 채워진 값)을 그대로 유지하고 로그만 남김.
                         if onb:
-                            with contextlib.suppress(Exception):
+                            try:
                                 actual = bool(await self.plc.read_bit("SW_RF_SELECT"))
                                 pp = getattr(self.data_logger, "process_params", None)
                                 if isinstance(pp, dict):
@@ -855,6 +857,16 @@ class ChamberRuntime:
                                 self.append_log(
                                     "PLC",
                                     f"[CH{self.ch}] SW_RF_SELECT 실측 기록(use_power_select={actual})"
+                                )
+                            except Exception as e:
+                                # PLC 읽기 실패 → process_params 변경하지 않음
+                                # (start_new_log_session 에서 채워진 레시피 값이 유지됨)
+                                pp = getattr(self.data_logger, "process_params", None)
+                                recipe_val = pp.get("use_power_select") if isinstance(pp, dict) else None
+                                self.append_log(
+                                    "PLC",
+                                    f"[CH{self.ch}] SW_RF_SELECT 읽기 실패({e!r}) → "
+                                    f"레시피 값 유지(use_power_select={recipe_val})"
                                 )
 
                     else:
