@@ -838,6 +838,25 @@ class ChamberRuntime:
                     elif nname in ("G1", "G2", "G3"):
                         idx = int(nname[1])
                         await self.plc.write_switch(f"SHUTTER_{idx}_SW", onb)
+
+                    elif nname == "SW_RF_SELECT":
+                        # 일반 write 동작은 동일
+                        await self.plc.write_switch("SW_RF_SELECT", onb)
+                        # ✅ Start 시퀀스의 ON write 직후, 실측값을 로그용
+                        #    process_params["use_power_select"] 에 기록.
+                        #    - 종료 시퀀스의 OFF write 에서는 덮어쓰지 않도록
+                        #      `if onb` 로 가드 (Start 시점 상태만 보존).
+                        if onb:
+                            with contextlib.suppress(Exception):
+                                actual = bool(await self.plc.read_bit("SW_RF_SELECT"))
+                                pp = getattr(self.data_logger, "process_params", None)
+                                if isinstance(pp, dict):
+                                    pp["use_power_select"] = actual
+                                self.append_log(
+                                    "PLC",
+                                    f"[CH{self.ch}] SW_RF_SELECT 실측 기록(use_power_select={actual})"
+                                )
+
                     else:
                         await self.plc.write_switch(raw, onb)
 
