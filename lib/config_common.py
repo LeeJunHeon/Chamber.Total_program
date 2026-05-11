@@ -335,6 +335,7 @@ RFPULSE_FORP_TOLERANCE_PERCENT = 5.0
 RFPULSE_FORP_CONSECUTIVE_LIMIT = 3
 RFPULSE_REFP_LIMIT_WATTS = 20.0
 RFPULSE_REFP_CONSECUTIVE_LIMIT = 3
+RFPULSE_REFP_WARN_WATTS = 0.0   # ← 추가: REFP 경고 임계값(W). 0.0=비활성. CH2는 settings.json에서 5.0으로 오버라이드.
 
 
 # ======================================================================
