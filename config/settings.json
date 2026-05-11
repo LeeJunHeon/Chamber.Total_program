@@ -398,9 +398,12 @@
     "SUPPORTS_RF_CONT": true,              // CH2는 RF Continuous 사용
 
     // ── 공정 파라미터 (CH2 전용) ──
-    "PROCESS_GUN_SHUTTERS": ["G1", "G2", "G3"],       // 사용하는 건 셔터 목록
-    "PROCESS_PRESSURE_CONTROL_SP_ON_CMD": "SP4_ON",    // 압력 제어 Set-Point 명령
-    "PROCESS_PRESSURE_CONTROL_SP_LABEL": "SP4",        // 압력 제어 Set-Point 표시 이름
-    "PROCESS_PRESSURE_CONTROL_SP_INDEX": 4              // 압력 제어 Set-Point 번호
+    "PROCESS_GUN_SHUTTERS": ["G1", "G2", "G3"],      // 사용하는 건 셔터 목록
+    "PROCESS_PRESSURE_CONTROL_SP_ON_CMD": "SP4_ON",  // 압력 제어 Set-Point 명령
+    "PROCESS_PRESSURE_CONTROL_SP_LABEL": "SP4",      // 압력 제어 Set-Point 표시 이름
+    "PROCESS_PRESSURE_CONTROL_SP_INDEX": 4,          // 압력 제어 Set-Point 번호
+
+    "PC_RF_PULSE_POST_ON_DELAY_MS": 30000,           // RF Pulse ON 후 안정화 대기 (ms). CH1과 달리 30초로 설정
+    "RFPULSE_REFP_WARN_WATTS": 5.0                   // REFP가 이 값 이상이면 즉시 챗 경고 알림 (공정은 계속 진행)
   }
 }

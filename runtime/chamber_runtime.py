@@ -1875,6 +1875,15 @@ class ChamberRuntime:
             k = ev.kind
             if k == "status":
                 self.append_log(f"RFPulse{self.ch}", ev.message or "")
+                
+                # ★ 신규: REFP_WARN 메시지는 챗 알림으로도 전달
+                msg = ev.message or ""
+                if ("REFP_WARN" in msg or "REFP 정상 복귀" in msg) and self.chat:
+                    with contextlib.suppress(Exception):
+                        self.chat.notify_text(f"[CH{self.ch} RFPulse] {msg}")
+                        if hasattr(self.chat, "flush"):
+                            self.chat.flush()
+                            
             elif k == "power":
                 with contextlib.suppress(Exception):
                     fwd = float(ev.forward or 0.0)
