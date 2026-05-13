@@ -150,6 +150,27 @@ class ProcessMonitor:
         lines.append(f"Soft Arc: {soft_arc}회  Hard Arc: {hard_arc}회  합계: {total}회")
         self._alert("\n".join(lines))
 
+    def notify_refp_warning(
+        self,
+        reflected_w: float,
+        warn_w: float,
+        *,
+        recovered: bool = False,
+        process_name: str = "",
+    ) -> None:
+        """RF Pulse REFP 경고/정상 복귀를 Monitor 웹훅으로 즉시 전송."""
+        if recovered:
+            lines = [f"✅ CH{self._ch} REFP 정상 복귀"]
+        else:
+            lines = [f"⚠️ CH{self._ch} REFP 경고 (공정 계속 진행)"]
+        if process_name:
+            lines.append(f"공정: {process_name}")
+        if recovered:
+            lines.append(f"REFP: {reflected_w:.1f}W  <  기준 {warn_w:.1f}W")
+        else:
+            lines.append(f"REFP: {reflected_w:.1f}W  ≥  기준 {warn_w:.1f}W")
+        self._alert("\n".join(lines))
+
     # ── 웹훅 전송 ────────────────────────────────────────
 
     def _alert(self, message: str) -> None:

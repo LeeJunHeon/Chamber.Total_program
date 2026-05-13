@@ -1907,13 +1907,27 @@ class ChamberRuntime:
             if k == "status":
                 self.append_log(f"RFPulse{self.ch}", ev.message or "")
                 
-                # ★ 신규: REFP_WARN 메시지는 챗 알림으로도 전달
+                # ★ 변경: REFP 경고/복귀는 Monitor 웹훅(가스/압력 편차와 동일 채널)으로 전달
                 msg = ev.message or ""
-                if ("REFP_WARN" in msg or "REFP 정상 복귀" in msg) and self.chat:
+                if "REFP_WARN" in msg or "REFP 정상 복귀" in msg:
                     with contextlib.suppress(Exception):
-                        self.chat.notify_text(f"[CH{self.ch} RFPulse] {msg}")
-                        if hasattr(self.chat, "flush"):
-                            self.chat.flush()
+                        import re
+                        # 원본 메시지:
+                        #   "⚠ REFP_WARN: REFP=5.3W ≥ 5.0W (공정은 계속 진행)"
+                        #   "REFP 정상 복귀: REFP=2.1W < 5.0W"
+                        nums = re.findall(r"(\d+(?:\.\d+)?)\s*W", msg)
+                        refp_w = float(nums[0]) if len(nums) >= 1 else 0.0
+                        warn_w = float(nums[1]) if len(nums) >= 2 else 0.0
+                        recovered = ("정상 복귀" in msg)
+                        proc_name = str(
+                            getattr(self.process_controller, "current_params", {}).get("process_name")
+                            or f"CH{self.ch}"
+                        )
+                        self._process_monitor.notify_refp_warning(
+                            refp_w, warn_w,
+                            recovered=recovered,
+                            process_name=proc_name,
+                        )
                             
             elif k == "power":
                 with contextlib.suppress(Exception):
