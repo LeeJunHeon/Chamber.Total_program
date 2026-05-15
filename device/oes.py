@@ -737,6 +737,11 @@ class OESAsync:
             await self._run_measurement_daemon(duration_sec, integration_ms)
             return
         except Exception as e1:
+            # ✅ stop 요청에 의한 종료이면 fallback 재기동 금지 (의도된 종료)
+            if self._stop_requested:
+                await self._status(f"[OES] stop 요청으로 종료됨 → fallback 재기동 skip ({type(e1).__name__})")
+                return
+            
             await self._status(f"[OES] daemon 실패 → 재기동 후 재시도: {type(e1).__name__}: {e1}")
             with contextlib.suppress(Exception):
                 await self._shutdown_daemon(graceful=False)
