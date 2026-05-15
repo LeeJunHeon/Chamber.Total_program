@@ -730,7 +730,12 @@ class HostHandlers:
                     return self._ok("SPUTTER START OK", ch=ch)
                 except RuntimeError as e:
                     # 런타임 내부 프리플라이트/쿨다운/중복 실행 등 명시적 거절
-                    return self._fail(str(e), code=getattr(e, "code", None) or "E410")
+                    _msg = str(e)
+                    _code = getattr(e, "code", None)
+                    if not _code and ("1분 대기" in _msg or "cooldown" in _msg.lower()):
+                        # ✅ 쿨다운은 BUSY 상태 — STOP이 아닌 RETRY_LATER로 분류
+                        _code = "E700"
+                    return self._fail(_msg, code=_code or "E410")
                 except Exception as e:
                     return self._fail(e)
 
@@ -766,7 +771,12 @@ class HostHandlers:
                 return self._ok("PLASMA CLEANING START OK")
             except RuntimeError as e:
                 # 런타임 내부 프리플라이트/쿨다운/중복 실행 등 명시적 거절
-                return self._fail(str(e), code=getattr(e, "code", None) or "E420")
+                _msg = str(e)
+                _code = getattr(e, "code", None)
+                if not _code and ("1분 대기" in _msg or "cooldown" in _msg.lower()):
+                    # ✅ 쿨다운은 BUSY 상태 — STOP이 아닌 RETRY_LATER로 분류
+                    _code = "E700"
+                return self._fail(_msg, code=_code or "E420")
             except Exception as e:
                 return self._fail(e)
 

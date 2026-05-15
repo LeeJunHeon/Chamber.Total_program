@@ -11,6 +11,7 @@ from typing import Dict, Iterable, List, Mapping
 ACTION_RETRY = "RETRY"
 ACTION_STOP = "STOP"
 ACTION_IGNORE = "IGNORE"
+ACTION_RETRY_LATER = "RETRY_LATER"   # ✅ 잠시 후 재시도 (쿨다운/BUSY 상태)
 
 SEV_WARN = "WARN"
 SEV_ERROR = "ERROR"
@@ -1678,6 +1679,21 @@ ERROR_REGISTRY: Dict[str, ErrorDefinition] = {
         severity=SEV_WARN,
         cause="기본 로그 저장 경로가 설정되지 않았습니다.",
         fix="로그 초기화 시 primary_path를 설정하십시오.",
+    ),
+    # ===================================================
+    # E7xx: 운영 상태 (BUSY / COOLDOWN / 대기 중)
+    # 진짜 에러가 아니라 "잠시 후 재시도" 안내.
+    # client_action=RETRY_LATER 로 STOP과 구분됨.
+    # ===================================================
+    "E700": ErrorDefinition(
+        code="E700",
+        title="공정 쿨다운 대기 중",
+        category="BUSY",
+        client_action=ACTION_RETRY_LATER,
+        severity=SEV_WARN,
+        cause="이전 공정 종료 후 쿨다운 시간(60초)이 필요합니다.",
+        fix="안내된 시간 이후 다시 시도하십시오.",
+        is_fallback=False,
     ),
     "E999": ErrorDefinition(
         code="E999",
