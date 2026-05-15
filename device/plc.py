@@ -320,6 +320,12 @@ class AsyncPLC:
         self._client: Optional[ModbusTcpClient] = None
         self._uid_kw: Optional[str] = None  # 'unit' 또는 'slave'
         self._lock = asyncio.Lock()
+
+        # ✅ 양보 메커니즘: 외부 우선순위 PLC I/O 대기자 카운터
+        #    snapshot loop가 매 block 직전 이 값을 확인하여 양보 여부 결정
+        self._priority_waiters: int = 0
+        self._last_io_ts = 0.0
+
         self._last_io_ts = 0.0
         self._hb_task: Optional[asyncio.Task] = None
         self._closed = False
@@ -737,16 +743,18 @@ class AsyncPLC:
                 raise self._to_plc_error(op, addr, e) from e
             
     # ---------- 블록(배열) 읽기 ----------
-    async def read_coils_block(self, start_addr: int, count: int) -> list[bool]:
+    async def read_coils_block(self, start_addr: int, count: int, *, priority: str = "high") -> list[bool]:
         """
         FC1: 연속 코일을 한 번에 읽고 resp.bits[] 배열로 받는다.
         (코일을 하나씩 read_coil 반복하는 방식이 아니라, PLC가 배열로 응답)
+
+        priority: "high" (기본, 외부) / "low" (snapshot 등 양보 가능 백그라운드)
         """
         if count <= 0:
             return []
 
         op = "read_coils_block"
-        async with self._io_lock(op, addr=int(start_addr)):
+        async with self._io_lock(op, addr=int(start_addr), priority=priority):
             try:
                 await asyncio.to_thread(self._connect_sync)
                 await self._throttle_and_heartbeat()
@@ -847,7 +855,12 @@ class AsyncPLC:
         )
 
         for start, cnt in ranges:
-            bits = await self.read_coils_block(start, cnt)
+            # ✅ 양보 체크: 외부 우선순위 PLC I/O 대기자가 있으면 즉시 종료
+            #    (사용자 정책: 이번 tick은 csv 비워두고, 다음 tick에서 재시도)
+            if self._priority_waiters > 0:
+                return {}
+
+            bits = await self.read_coils_block(start, cnt, priority="low")
             end = start + cnt
 
             for k, a in addr_map.items():
@@ -915,15 +928,17 @@ class AsyncPLC:
         #self.log("read reg %s (addr=%d) -> %d", name_or_addr, addr, v)
         return v
     
-    async def read_regs_block(self, start_addr: int, count: int) -> list[int]:
+    async def read_regs_block(self, start_addr: int, count: int, *, priority: str = "high") -> list[int]:
         """
         FC3: 연속 holding register를 한 번에 읽는다.
+
+        priority: "high" (기본, 외부) / "low" (snapshot 등 양보 가능 백그라운드)
         """
         if count <= 0:
             return []
 
         op = "read_regs_block"
-        async with self._io_lock(op, addr=int(start_addr)):
+        async with self._io_lock(op, addr=int(start_addr), priority=priority):
             try:
                 await asyncio.to_thread(self._connect_sync)
                 await self._throttle_and_heartbeat()
@@ -977,10 +992,14 @@ class AsyncPLC:
         if not addr_map:
             return {}
 
+        # ✅ 양보 체크: 외부 우선순위 대기자 있으면 즉시 빈 dict
+        if self._priority_waiters > 0:
+            return {}
+
         mn = min(addr_map.values())
         mx = max(addr_map.values())
 
-        regs = await self.read_regs_block(mn, mx - mn + 1)
+        regs = await self.read_regs_block(mn, mx - mn + 1, priority="low")
 
         out: Dict[str, int] = {}
         for k, a in addr_map.items():
@@ -1434,14 +1453,30 @@ class AsyncPLC:
         
     # =============== 유틸 ===============
     @asynccontextmanager
-    async def _io_lock(self, op: str, *, addr: Optional[int] = None):
+    async def _io_lock(self, op: str, *, addr: Optional[int] = None, priority: str = "high"):
         """
         락 획득 대기(wait)와 락 내부 실행(in-lock) 시간을 분리 계측하고,
         임계치 초과 시 self.log로 WARN을 남긴다.
+
+        priority:
+          - "high" (기본): 외부 read/write. 락 대기 시 _priority_waiters를 +1 하여
+                          snapshot loop에 양보 요청을 알린다.
+          - "low"        : snapshot 등 백그라운드 작업. 카운터 미영향.
         """
         loop = asyncio.get_running_loop()
         t_wait_start = loop.time()
-        await self._lock.acquire()
+
+        # ✅ 외부 우선순위 요청은 대기 큐 진입 시점부터 카운터 +1
+        is_priority = (priority == "high")
+        if is_priority:
+            self._priority_waiters += 1
+        try:
+            await self._lock.acquire()
+        except BaseException:
+            if is_priority:
+                self._priority_waiters -= 1
+            raise
+
         waited_ms = (loop.time() - t_wait_start) * 1000.0
 
         try:
@@ -1467,6 +1502,9 @@ class AsyncPLC:
                 self._lock.release()
             except RuntimeError:
                 pass
+            # ✅ 락 해제 후 카운터 감소 (다음 tick의 snapshot이 다시 진행 가능하게)
+            if is_priority:
+                self._priority_waiters -= 1
     # =============== 유틸 ===============
 
     # =============== chamber_runtime.py 호환용 함수 ===============
