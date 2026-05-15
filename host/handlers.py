@@ -10,6 +10,7 @@ from __future__ import annotations
 from typing import Dict, Any
 from .context import HostContext
 import asyncio, time, contextlib, os
+from contextvars import ContextVar             # ✅ 추가: 코루틴별 독립 태그 저장
 from pathlib import Path                      # ← 추가: 경로
 from datetime import datetime                 # ← 추가: 파일명 타임스탬프
 from contextlib import asynccontextmanager    # ← 추가: 비동기 컨텍스트
@@ -21,6 +22,10 @@ from lib import config_common as cfg
 
 Json = Dict[str, Any]
 
+# ✅ 코루틴별 독립 태그 저장소 (race 방지)
+# 인스턴스 변수는 동시 요청 시 서로 덮어쓰는 문제가 있어,
+# 비동기 코루틴마다 자기만의 슬롯을 제공하는 ContextVar로 변경.
+_cmd_tag_var: ContextVar[str | None] = ContextVar("plc_cmd_tag", default=None)
 
 class HostHandlers:
     def __init__(self, ctx: HostContext) -> None:
@@ -48,15 +53,26 @@ class HostHandlers:
             d.mkdir(parents=True, exist_ok=True)
             self._plc_log_dir = d              # 폴백 폴더(로컬)
 
-        self._plc_cmd_file = None              # 요청중 파일 경로(컨텍스트 내에서만 셋)
-        self._current_cmd_tag: str | None = None  # 현재 처리 중인 명령 태그(VACUUM_OFF, 4PIN_DOWN 등)
+        self._plc_cmd_file = None              # 호스트 명령 파일(파일을 만들지는 않음)
+        # ⚠ _current_cmd_tag 는 인스턴스 변수가 아니라 property로 ContextVar 라우팅
+        # (모듈 상단의 _cmd_tag_var 참조) — 동시 요청 시 태그 오염 방지
 
-        # Loadlock 전환(VACUUM_ON / VACUUM_OFF) 전용 상태
+        # Loadlock 전환(VACUUM_ON / VACUUM_OFF) 동시 진입 방지
         self._loadlock_transition_lock = asyncio.Lock()
         self._loadlock_transition_tag: str | None = None
 
-        # Gate OPEN/CLOSE 절차끼리만 직렬화
+        # Gate OPEN/CLOSE 직렬화 락(채널 공용)
         self._loadlock_gate_lock = asyncio.Lock()
+
+    # ✅ ContextVar property — 기존 코드(self._current_cmd_tag = X / tag = self._current_cmd_tag)가
+    #    그대로 동작하지만, 내부적으로는 코루틴별 독립 슬롯에 저장/조회된다.
+    @property
+    def _current_cmd_tag(self) -> str | None:
+        return _cmd_tag_var.get()
+
+    @_current_cmd_tag.setter
+    def _current_cmd_tag(self, v: str | None) -> None:
+        _cmd_tag_var.set(v)
 
     def _write_line_sync(self, file_path: Path, line: str) -> None:
         """동기 파일 쓰기(예외는 호출부에서 처리)."""
