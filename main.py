@@ -243,13 +243,16 @@ class MainWindow(QWidget):
                 return
 
             try:
+                # interval_s를 명시하지 않아 settings.json/config_common.py 의
+                # PLC_COIL_LOG_INTERVAL_S 값을 따라간다.
                 await self.plc.start_plc_coil_csv_logger(
-                    interval_s=5.0,
-                    nas_dir=r"\\VanaM_NAS\VanaM_Sputter\Sputter\Logs\CH1&2\CH1&2_PLC",
+                    nas_dir=r"\\VanaM_NAS\VanaM_Sputter\Sputter_Logs\CH1_2\CH1_2_PLC",
                     local_dir=None,
                     keys=None,
                 )
-                self._broadcast_log("PLC", "PLC COIL CSV 로깅 시작(5s)")
+                from lib import config_common as _cfgc
+                _iv = float(getattr(_cfgc, "PLC_COIL_LOG_INTERVAL_S", 5.0))
+                self._broadcast_log("PLC", f"PLC COIL CSV ... ({_iv:g}s)")
             except asyncio.CancelledError:
                 return
             except Exception as e:
