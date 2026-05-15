@@ -47,12 +47,15 @@ def _build_log_text(payload: dict) -> str:
 
 
 def _build_user_text(payload: dict) -> str:
+    err_code = str(payload.get("error_code", "") or "").strip()
     message = _one_line(_to_text(payload.get("message", "")))
     detail = _one_line(_to_text(payload.get("detail", "")))
 
+    prefix = f"[{err_code}] " if err_code else ""
+
     if detail and detail != message:
-        return f"{message} | 상세: {detail}"
-    return message
+        return f"{prefix}{message} | 상세: {detail}"
+    return f"{prefix}{message}"
 
 
 def report_payload(
