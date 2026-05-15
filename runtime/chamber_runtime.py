@@ -4222,10 +4222,12 @@ class ChamberRuntime:
             self._close_run_log()
 
         # 4) writer 완전 종료 (timeout)
+        #    내부 NAS flush(6.0s) + close(2.0s+2.0s) 가 직렬 실행되므로,
+        #    호출측은 그보다 큰 10.0s 로 잡아 정상 케이스에서 오발동 방지.
         try:
             t = loop.create_task(self._shutdown_log_writer(), name=f"ShutdownLogWriter.CH{self.ch}")
             try:
-                await asyncio.wait_for(t, timeout=6.0)
+                await asyncio.wait_for(t, timeout=10.0)
             except asyncio.TimeoutError:
                 self._cleanup_timed_out = True
                 self.append_log("MAIN", "⚠ log writer shutdown timeout")
