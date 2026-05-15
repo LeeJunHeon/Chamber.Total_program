@@ -62,7 +62,7 @@
     "IG_WATCHDOG_INTERVAL_MS": 2000,       // IG 연결 상태 확인 주기 (ms)
     "IG_RECONNECT_BACKOFF_START_MS": 1000, // 재연결 시도 간격 시작값 (ms)
     "IG_RECONNECT_BACKOFF_MAX_MS": 20000,  // 재연결 시도 간격 최대값 (ms)
-    "IG_WAIT_TIMEOUT": 600,                // 베이스 진공 도달 최대 대기 (초). 600 = 10분
+    "IG_WAIT_TIMEOUT": 900,                // 베이스 진공 도달 최대 대기 (초). 900 = 15분
     "IG_REIGNITE_MAX_ATTEMPTS": 3,         // IG 자동 재점등 최대 횟수
     "IG_REIGNITE_BACKOFF_MS": [2000, 5000, 10000],  // 재점등 실패 시 재시도 간격 (ms)
     "IG_DRAIN_TIMEOUT_S": 2.0,             // 데이터 전송 완료 대기 (초)
@@ -362,6 +362,9 @@
     "IG_TCP_PORT": 4001,                   // CH1 이온게이지 포트
     "MFC_TCP_PORT": 4003,                  // CH1 가스유량계 포트
 
+    // ── IG 베이스 진공 대기 시간 (CH1 전용) ──
+    "IG_WAIT_TIMEOUT": 900,                // 베이스 진공 도달 최대 대기 (초). 900 = 15분
+
     // ── MFC 유량 스케일 (CH1 전용) ──
     // CH1은 모든 가스 채널이 1:1 스케일
     "MFC_SCALE_FACTORS": {"1": 1.0, "2": 1.0, "3": 1.0},
@@ -389,6 +392,9 @@
     // ── 통신 포트 (CH2 전용) ──
     "IG_TCP_PORT": 4002,                   // CH2 이온게이지 포트
     "MFC_TCP_PORT": 4006,                  // CH2 가스유량계 포트
+
+    // ── IG 베이스 진공 대기 시간 (CH2 전용) ──
+    "IG_WAIT_TIMEOUT": 900,                // 베이스 진공 도달 최대 대기 (초). 900 = 15분
 
     // ── MFC 유량 스케일 (CH2 전용) ──
     // CH2 2번 가스(O2)는 x10, 3번 가스(N2)는 x2
