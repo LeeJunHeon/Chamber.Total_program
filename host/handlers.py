@@ -1199,6 +1199,19 @@ class HostHandlers:
                                         await asyncio.sleep(0.2)
                                         continue
 
+                                    # ✅ 진단 비트 1회 수집 (실패해도 모두 None으로 채워 안전)
+                                    #    L1247의 timeout 분기와 별도 경로이므로 여기서 별도 수집 필요.
+                                    #    이 try-except가 없으면 아래 self.ctx.log()에서
+                                    #    UnboundLocalError("cannot access local variable 'diag'") 발생.
+                                    try:
+                                        diag = await self._read_loadlock_vacuum_diag()
+                                    except Exception:
+                                        diag = {
+                                            "L_GAUGE_A": None, "L_GAUGE_A_INTERLOCK": None,
+                                            "L_R_P_OUT": None, "L_R_V_OUT": None,
+                                            "L_VENT_OUT": None, "L_ATM_SENSOR": None,
+                                        }
+
                                     # 전체 진단은 로그 파일에만 (Google Chat 알림 길이 절약)
                                     self.ctx.log(
                                         "PLC_REMOTE",

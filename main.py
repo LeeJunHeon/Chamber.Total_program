@@ -1139,6 +1139,14 @@ class MainWindow(QWidget):
         with contextlib.suppress(Exception):
             uninstall_qt_message_logging(get_app_logger())
 
+        # ✅ 8) asyncio default executor 명시 종료 (qasync hang 방지 핵심)
+        #    PLC close / NAS to_thread 등이 executor 스레드에 남아있으면
+        #    메인 스레드 종료 시 join 무한 대기 → 프로세스 잔존 / atexit 미실행.
+        #    이 호출 한 줄이 표준 cleanup 절차의 마지막 단계.
+        with contextlib.suppress(Exception):
+            _loop = asyncio.get_running_loop()
+            await _loop.shutdown_default_executor()
+
         with contextlib.suppress(Exception):
             self._logger.warning("_shutdown_app_async completed")
 
@@ -1477,6 +1485,14 @@ def main() -> int:
     asyncio.set_event_loop(loop)
 
     install_asyncio_exception_logging(loop, _logger)
+
+    # ✅ Qt 종료 시 asyncio loop도 명시 정지 (run_forever 탈출 트리거)
+    #    aboutToQuit이 emit되면 메인 스레드와 다를 수 있으므로 call_soon_threadsafe 필수.
+    #    QEventLoop(app) 정의 이후여야 loop 변수가 클로저에 잡힘.
+    try:
+        app.aboutToQuit.connect(lambda: loop.call_soon_threadsafe(loop.stop))
+    except Exception:
+        pass
 
     w = MainWindow(loop)
     w.show()
