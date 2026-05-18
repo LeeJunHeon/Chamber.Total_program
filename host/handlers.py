@@ -1241,8 +1241,11 @@ class HostHandlers:
                                         )
 
                                     return self._fail(
-                                        "VACUUM_ON 실패 — L_R_P_SW/L_R_V_SW 모두 OFF로 전환 "
-                                        f"(L_R_P_OUT={diag['L_R_P_OUT']}, "
+                                        "VACUUM_ON 실패 — PLC가 자체적으로 "
+                                        "L_R_P_SW/L_R_V_SW를 OFF로 전환 "
+                                        "(진공 게이지 인터락 미충족) "
+                                        f"(L_GAUGE_A_INTERLOCK={diag['L_GAUGE_A_INTERLOCK']}, "
+                                        f"L_R_P_OUT={diag['L_R_P_OUT']}, "
                                         f"L_R_V_OUT={diag['L_R_V_OUT']})",
                                         code="E312",
                                     )
@@ -1284,6 +1287,7 @@ class HostHandlers:
                             return self._fail(
                                 f"VACUUM_ON 실패 — {int(timeout_s)}s 타임아웃, "
                                 "PLC가 L_VAC_NOT_READY=TRUE로 판정 "
+                                "(진공 게이지 인터락 미충족) "
                                 f"(L_GAUGE_A_INTERLOCK={diag['L_GAUGE_A_INTERLOCK']})",
                                 code="E312",
                             )
@@ -1291,6 +1295,7 @@ class HostHandlers:
                         if snap_timeout:
                             return self._fail(
                                 f"VACUUM_ON 타임아웃 — {int(timeout_s)}s 내 진공 미도달 "
+                                "(진공 게이지 인터락/펌프/누설 점검 필요) "
                                 f"(L_GAUGE_A_INTERLOCK={diag['L_GAUGE_A_INTERLOCK']}, "
                                 f"L_R_P_SW={snap_timeout['L_R_P_SW']}, "
                                 f"L_R_V_SW={snap_timeout['L_R_V_SW']})",
