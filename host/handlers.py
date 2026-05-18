@@ -732,7 +732,11 @@ class HostHandlers:
                     # 런타임 내부 프리플라이트/쿨다운/중복 실행 등 명시적 거절
                     _msg = str(e)
                     _code = getattr(e, "code", None)
-                    if not _code and ("1분 대기" in _msg or "cooldown" in _msg.lower()):
+                    if not _code and (
+                        "1분 대기" in _msg 
+                        or "cooldown" in _msg.lower()
+                        or "preflight timeout" in _msg.lower()
+                    ):
                         # ✅ 쿨다운은 BUSY 상태 — STOP이 아닌 RETRY_LATER로 분류
                         _code = "E700"
                     return self._fail(_msg, code=_code or "E410")
@@ -773,7 +777,11 @@ class HostHandlers:
                 # 런타임 내부 프리플라이트/쿨다운/중복 실행 등 명시적 거절
                 _msg = str(e)
                 _code = getattr(e, "code", None)
-                if not _code and ("1분 대기" in _msg or "cooldown" in _msg.lower()):
+                if not _code and (
+                    "1분 대기" in _msg 
+                    or "cooldown" in _msg.lower()
+                    or "preflight timeout" in _msg.lower()
+                ):
                     # ✅ 쿨다운은 BUSY 상태 — STOP이 아닌 RETRY_LATER로 분류
                     _code = "E700"
                 return self._fail(_msg, code=_code or "E420")
@@ -1017,7 +1025,7 @@ class HostHandlers:
                                         "L_R_V_SW OFF → 5초 → L_R_P_SW OFF 정리 완료"
                                     )
 
-                                await asyncio.sleep(0.5)
+                                await asyncio.sleep(1.0)
 
                             return self._fail(
                                 "VACUUM_ON 실패 — L_VAC_READY_SW=TRUE였지만 "
@@ -1126,7 +1134,7 @@ class HostHandlers:
                                             "VACUUM_ON 완료 — L_VAC_READY_SW=TRUE 확인 후 "
                                             "fallback으로 L_R_V_SW/L_R_P_SW OFF 정리 완료"
                                         )
-                                    await asyncio.sleep(0.5)
+                                    await asyncio.sleep(1.0)
 
                                 return self._fail(
                                     "VACUUM_ON 실패 — L_VAC_READY_SW=TRUE였지만 "
@@ -1184,7 +1192,7 @@ class HostHandlers:
                                             code="E312",
                                         )
                                     both_off_deadline = None
-                                    await asyncio.sleep(0.5)
+                                    await asyncio.sleep(1.0)
                                     continue
 
                                 # LP_STEP 모두 False → 정상 race 흡수 구간
@@ -1248,7 +1256,7 @@ class HostHandlers:
                                     code="E312",
                                 )
 
-                            await asyncio.sleep(0.5)
+                            await asyncio.sleep(1.0)
 
                         # 8) timeout
                         try:

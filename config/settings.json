@@ -213,8 +213,8 @@
     "PLC_RECONNECT_RETRY": 2,              // PLC 재연결 최대 시도 횟수
     "PLC_RECONNECT_DELAY_S": 0.5,          // PLC 재연결 시도 간격 (초)
     "PLC_CMD_PULSE_MS": 180,               // PLC 펄스 명령 유지 시간 (ms)
-    "PLC_LOCK_WARN_MS": 1000.0,            // PLC 잠금 대기 경고 기준 (ms)
-    "PLC_IO_WARN_MS": 1500.0,              // PLC I/O 지연 경고 기준 (ms)
+    "PLC_LOCK_WARN_MS": 2500.0,            // PLC 잠금 대기 경고 기준 (ms)
+    "PLC_IO_WARN_MS": 2500.0,              // PLC I/O 지연 경고 기준 (ms)
     "PLC_COIL_LOG_INTERVAL_S": 5.0,        // PLC 코일 상태 로그 기록 주기 (초)
     "PLC_COIL_LOG_NAS_DIR": "\\\\VanaM_NAS\\VanaM_Sputter\\Sputter\\Logs\\CH1&2\\CH1&2_PLC",
 
@@ -261,7 +261,7 @@
     "CHAMBER_PREFLIGHT_TIMEOUT_S": 8.0,             // 공정 시작 전 장비 점검 타임아웃 (초)
     "CHAMBER_PREFLIGHT_TIMEOUT_WITH_PULSE_S": 10.0, // Pulse 포함 시 장비 점검 타임아웃 (초)
     "CHAMBER_OES_INIT_TIMEOUT_S": 20.0,             // OES 초기화 타임아웃 (초)
-    "CHAMBER_HOST_START_WAIT_TIMEOUT_S": 10.0,      // 호스트 서버 시작 대기 타임아웃 (초)
+    "CHAMBER_HOST_START_WAIT_TIMEOUT_S": 20.0,      // 호스트 서버 시작 대기 타임아웃 (초)
 
     // ── 공정 제어 ──
     "PROCESS_DEFAULT_BASE_PRESSURE": 1e-5, // 기본 베이스 진공도 (Torr)
@@ -333,7 +333,7 @@
     "PC_RF_CLEANUP_TIMEOUT_S": 5.0,        // RF 정리 타임아웃 (초)
     "PC_RF_RAMP_FINE_UP_STEP": 3.0,        // setpoint 도달 후 FWD 못 미칠 때 상승 단계 (W)
     "PC_RF_WAIT_POWER_OFF_TIMEOUT_S": 15.0,// RF OFF 완료 대기 (초)
-    "PC_HOST_START_WAIT_TIMEOUT_S": 10.0,  // 호스트 서버 시작 대기 (초)
+    "PC_HOST_START_WAIT_TIMEOUT_S": 20.0,  // 호스트 서버 시작 대기 (초)
 
     // ── Google Drive 공정 로그 ──
     "GDRIVE_LOG_DIR": "G:/공유 드라이브/VanaM_Sputter/Process_log",  // GDrive 저장 경로

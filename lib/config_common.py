@@ -496,7 +496,7 @@ CHAMBER_PULSE_RECONNECT_TIMEOUT_S = 2.0
 CHAMBER_PREFLIGHT_TIMEOUT_S = 8.0
 CHAMBER_PREFLIGHT_TIMEOUT_WITH_PULSE_S = 10.0
 CHAMBER_OES_INIT_TIMEOUT_S = 20.0
-CHAMBER_HOST_START_WAIT_TIMEOUT_S = 10.0
+CHAMBER_HOST_START_WAIT_TIMEOUT_S = 20.0
 
 
 # ======================================================================
@@ -559,7 +559,7 @@ PC_RF_RAMP_FINE_UP_STEP     = 3.0    # setpoint 도달 후 FWD 못 미칠 때 �
 # Plasma Cleaning 기타 timeout
 PC_RF_CLEANUP_TIMEOUT_S = 5.0
 PC_RF_WAIT_POWER_OFF_TIMEOUT_S = 15.0
-PC_HOST_START_WAIT_TIMEOUT_S = 10.0
+PC_HOST_START_WAIT_TIMEOUT_S = 20.0
 
 # ======================================================================
 # Google Drive 공정 로그 저장 설정
