@@ -1073,84 +1073,84 @@ class RFPulseAsync:
                         self._last_reflected_w = float(_u16le(r, 0) if len(r) >= 2 else 0.0)
 
                     # FORP/REFP 모니터링(임계값 cfg로)
+                    # ★ 수정: rf_on(=STATUS.rf_output_on) 가드 제거
+                    #   - 이전 동작: 장비가 fault 없이 자체적으로 RF OFF되면 STATUS.on=0이 되고,
+                    #     이 가드 때문에 FORP=0인데도 검출 로직 자체가 스킵되어 공정이 무한 진행됨.
+                    #   - 의도적인 OFF(stop_requested) / target=0은 바깥쪽 if에서 이미 차단됨.
                     if (
                         self._target_setpoint_w > 0.0
                         and self._last_forward_w is not None
                         and self._last_reflected_w is not None
                         and not self._stop_requested
                     ):
-                        status = st or self._last_status
-                        rf_on = bool(status.rf_output_on) if status is not None else True
+                        forp_tol_pct = self._cfg_float("RFPULSE_FORP_TOLERANCE_PERCENT", 5.0)
+                        forp_limit_n = self._cfg_int("RFPULSE_FORP_CONSECUTIVE_LIMIT", 3)
 
-                        if rf_on:
-                            forp_tol_pct = self._cfg_float("RFPULSE_FORP_TOLERANCE_PERCENT", 5.0)
-                            forp_limit_n = self._cfg_int("RFPULSE_FORP_CONSECUTIVE_LIMIT", 3)
+                        refp_limit_w = self._cfg_float("RFPULSE_REFP_LIMIT_WATTS", 20.0)
+                        refp_limit_n = self._cfg_int("RFPULSE_REFP_CONSECUTIVE_LIMIT", 3)
 
-                            refp_limit_w = self._cfg_float("RFPULSE_REFP_LIMIT_WATTS", 20.0)
-                            refp_limit_n = self._cfg_int("RFPULSE_REFP_CONSECUTIVE_LIMIT", 3)
+                        # ★ 신규: REFP 경고 임계값 (알림 전용, 공정은 계속 진행)
+                        # 0.0 이면 기능 비활성 (CH1에서 키를 안 두면 자동으로 OFF)
+                        refp_warn_w = self._cfg_float("RFPULSE_REFP_WARN_WATTS", 0.0)
 
-                            # ★ 신규: REFP 경고 임계값 (알림 전용, 공정은 계속 진행)
-                            # 0.0 이면 기능 비활성 (CH1에서 키를 안 두면 자동으로 OFF)
-                            refp_warn_w = self._cfg_float("RFPULSE_REFP_WARN_WATTS", 0.0)
+                        # 1) FORP
+                        tol = self._target_setpoint_w * (forp_tol_pct / 100.0)
+                        diff = abs(self._last_forward_w - self._target_setpoint_w)
 
-                            # 1) FORP
-                            tol = self._target_setpoint_w * (forp_tol_pct / 100.0)
-                            diff = abs(self._last_forward_w - self._target_setpoint_w)
+                        if diff >= tol:
+                            self._forp_out_of_range_count += 1
+                        else:
+                            self._forp_out_of_range_count = 0
 
-                            if diff >= tol:
-                                self._forp_out_of_range_count += 1
+                        if self._forp_out_of_range_count >= forp_limit_n:
+                            await self._emit_status(
+                                "FORP setpoint 이탈: "
+                                f"meas={self._last_forward_w:.1f}W, "
+                                f"target={self._target_setpoint_w:.1f}W, "
+                                f"허용오차=±{forp_tol_pct:.1f}% "
+                                f"({self._forp_out_of_range_count}회 연속)"
+                            )
+                            await self._emit_failed(
+                                "FORP_MONITOR",
+                                f"FORP가 setpoint에서 {forp_tol_pct:.1f}% 이상 이탈({forp_limit_n}회 연속)",
+                            )
+                            self._forp_out_of_range_count = 0
+
+                        # 2) REFP
+                        if self._last_reflected_w >= refp_limit_w:
+                            self._refp_over_limit_count += 1
+                        else:
+                            self._refp_over_limit_count = 0
+
+                        if self._refp_over_limit_count >= refp_limit_n:
+                            await self._emit_status(
+                                "REFP 과다 반사: "
+                                f"meas={self._last_reflected_w:.1f}W, "
+                                f"limit={refp_limit_w:.1f}W "
+                                f"({self._refp_over_limit_count}회 연속)"
+                            )
+                            await self._emit_failed(
+                                "REFP_MONITOR",
+                                f"REFP가 {refp_limit_w:.1f}W 이상 ({refp_limit_n}회 연속)",
+                            )
+                            self._refp_over_limit_count = 0
+
+                        # ★ 신규: REFP 경고 (즉시 알림, 공정 중단 X)
+                        if refp_warn_w > 0.0:
+                            if self._last_reflected_w >= refp_warn_w:
+                                if not self._refp_warn_active:
+                                    await self._emit_status(
+                                        f"⚠ REFP_WARN: REFP={self._last_reflected_w:.1f}W "
+                                        f"≥ {refp_warn_w:.1f}W (공정은 계속 진행)"
+                                    )
+                                    self._refp_warn_active = True
                             else:
-                                self._forp_out_of_range_count = 0
-
-                            if self._forp_out_of_range_count >= forp_limit_n:
-                                await self._emit_status(
-                                    "FORP setpoint 이탈: "
-                                    f"meas={self._last_forward_w:.1f}W, "
-                                    f"target={self._target_setpoint_w:.1f}W, "
-                                    f"허용오차=±{forp_tol_pct:.1f}% "
-                                    f"({self._forp_out_of_range_count}회 연속)"
-                                )
-                                await self._emit_failed(
-                                    "FORP_MONITOR",
-                                    f"FORP가 setpoint에서 {forp_tol_pct:.1f}% 이상 이탈({forp_limit_n}회 연속)",
-                                )
-                                self._forp_out_of_range_count = 0
-
-                            # 2) REFP
-                            if self._last_reflected_w >= refp_limit_w:
-                                self._refp_over_limit_count += 1
-                            else:
-                                self._refp_over_limit_count = 0
-
-                            if self._refp_over_limit_count >= refp_limit_n:
-                                await self._emit_status(
-                                    "REFP 과다 반사: "
-                                    f"meas={self._last_reflected_w:.1f}W, "
-                                    f"limit={refp_limit_w:.1f}W "
-                                    f"({self._refp_over_limit_count}회 연속)"
-                                )
-                                await self._emit_failed(
-                                    "REFP_MONITOR",
-                                    f"REFP가 {refp_limit_w:.1f}W 이상 ({refp_limit_n}회 연속)",
-                                )
-                                self._refp_over_limit_count = 0
-
-                            # ★ 신규: REFP 경고 (즉시 알림, 공정 중단 X)
-                            if refp_warn_w > 0.0:
-                                if self._last_reflected_w >= refp_warn_w:
-                                    if not self._refp_warn_active:
-                                        await self._emit_status(
-                                            f"⚠ REFP_WARN: REFP={self._last_reflected_w:.1f}W "
-                                            f"≥ {refp_warn_w:.1f}W (공정은 계속 진행)"
-                                        )
-                                        self._refp_warn_active = True
-                                else:
-                                    if self._refp_warn_active:
-                                        await self._emit_status(
-                                            f"REFP 정상 복귀: REFP={self._last_reflected_w:.1f}W "
-                                            f"< {refp_warn_w:.1f}W"
-                                        )
-                                        self._refp_warn_active = False
+                                if self._refp_warn_active:
+                                    await self._emit_status(
+                                        f"REFP 정상 복귀: REFP={self._last_reflected_w:.1f}W "
+                                        f"< {refp_warn_w:.1f}W"
+                                    )
+                                    self._refp_warn_active = False
 
                     if (self._last_forward_w is not None) and (self._last_reflected_w is not None):
                         await self._event_q.put(RFPulseEvent(
