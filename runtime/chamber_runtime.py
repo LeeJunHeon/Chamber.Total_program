@@ -5580,6 +5580,7 @@ class ChamberRuntime:
         # ← 추가: 챔버별 기본 체크
         try:
             if self.ch == 1:
+                _set("integrationTime_edit", "RF pulse_pre_30min")  # ★ 추가: Process Name (위젯은 alias로 intergrationTime_edit으로 매핑됨)
                 _set("basePressure_edit", "5e-6")             # 5.00E-06
                 _set("workingPressure_edit", "5")             # 5 mTorr
                 _set("arFlow_edit", "20")                     # 20 sccm
@@ -5592,8 +5593,9 @@ class ChamberRuntime:
                 _set("rfPulseFreq_edit", "20")                # 20 kHz
                 _set("rfPulseDutyCycle_edit", "80")           # 80 %
                 _set("G1_checkbox", True)                     # gun1 사용
+                _set("mainShutter_checkbox", True)            # ★ 추가: main_shutter=T
                 _set("shutterDelay_edit", "5")                # 5 초
-                #_set("processTime_edit", "25")
+                _set("processTime_edit", "25")                # ★ 변경: 주석 해제, 25분 기본값
             elif self.ch == 2:
                 _set("basePressure_edit", "9e-6")
                 _set("G2_checkbox", True)             # CH2: G2 사용
@@ -5653,6 +5655,7 @@ class ChamberRuntime:
                 self._u("Ar_checkbox") and self._u("Ar_checkbox").setChecked(True)
                 self._u("rfPulsePower_checkbox") and self._u("rfPulsePower_checkbox").setChecked(True)
                 self._u("G1_checkbox") and self._u("G1_checkbox").setChecked(True)
+                self._u("mainShutter_checkbox") and self._u("mainShutter_checkbox").setChecked(True)  # ★ 추가
             elif self.ch == 2:
                 self._u("G2_checkbox") and self._u("G2_checkbox").setChecked(True)
                 self._u("Ar_checkbox") and self._u("Ar_checkbox").setChecked(True)
