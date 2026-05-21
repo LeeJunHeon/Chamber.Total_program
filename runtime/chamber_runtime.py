@@ -5580,13 +5580,20 @@ class ChamberRuntime:
         # ← 추가: 챔버별 기본 체크
         try:
             if self.ch == 1:
-                _set("basePressure_edit", "1e-6")
+                _set("basePressure_edit", "5e-6")             # 5.00E-06
+                _set("workingPressure_edit", "5")             # 5 mTorr
+                _set("arFlow_edit", "20")                     # 20 sccm
                 _set("Ar_checkbox", True)
-                _set("rfPulsePower_checkbox", True)   # CH1: RF Pulse 사용 (기본)
+                _set("rfPulsePower_checkbox", True)           # CH1: RF Pulse 사용 (기본)
                 _set("dcPulsePower_checkbox", False)
                 _set("dcPower_checkbox", False)
-                _set("shutterDelay_edit", "0")
-                #_set("processTime_edit", "30")
+                _set("dcPower_edit", "0")                     # RF Pulse 운전이므로 DC=0
+                _set("rfPulsePower_edit", "250")              # 250 W (CH1은 dcPulsePower_edit로 alias됨)
+                _set("rfPulseFreq_edit", "20")                # 20 kHz
+                _set("rfPulseDutyCycle_edit", "80")           # 80 %
+                _set("G1_checkbox", True)                     # gun1 사용
+                _set("shutterDelay_edit", "5")                # 5 초
+                #_set("processTime_edit", "25")
             elif self.ch == 2:
                 _set("basePressure_edit", "9e-6")
                 _set("G2_checkbox", True)             # CH2: G2 사용
@@ -5645,6 +5652,7 @@ class ChamberRuntime:
             if self.ch == 1:
                 self._u("Ar_checkbox") and self._u("Ar_checkbox").setChecked(True)
                 self._u("rfPulsePower_checkbox") and self._u("rfPulsePower_checkbox").setChecked(True)
+                self._u("G1_checkbox") and self._u("G1_checkbox").setChecked(True)
             elif self.ch == 2:
                 self._u("G2_checkbox") and self._u("G2_checkbox").setChecked(True)
                 self._u("Ar_checkbox") and self._u("Ar_checkbox").setChecked(True)
