@@ -5582,7 +5582,8 @@ class ChamberRuntime:
             if self.ch == 1:
                 _set("basePressure_edit", "1e-6")
                 _set("Ar_checkbox", True)
-                _set("dcPulsePower_checkbox", True)   # CH1: DC Pulse 사용
+                _set("rfPulsePower_checkbox", True)   # CH1: RF Pulse 사용 (기본)
+                _set("dcPulsePower_checkbox", False)
                 _set("dcPower_checkbox", False)
                 _set("shutterDelay_edit", "0")
                 #_set("processTime_edit", "30")
@@ -5643,7 +5644,7 @@ class ChamberRuntime:
         try:
             if self.ch == 1:
                 self._u("Ar_checkbox") and self._u("Ar_checkbox").setChecked(True)
-                self._u("dcPulsePower_checkbox") and self._u("dcPulsePower_checkbox").setChecked(True)
+                self._u("rfPulsePower_checkbox") and self._u("rfPulsePower_checkbox").setChecked(True)
             elif self.ch == 2:
                 self._u("G2_checkbox") and self._u("G2_checkbox").setChecked(True)
                 self._u("Ar_checkbox") and self._u("Ar_checkbox").setChecked(True)
