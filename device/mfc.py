@@ -448,6 +448,11 @@ class AsyncMFC:
         # 섀도우 마스크 갱신(내부 상태 유지용)
         target = self._mask_set(channel, False)
 
+        # ★ 보호: TCP 끊김/종료 진행 중이면 송신 불가 → 가짜 OK 방지
+        if (not self._connected) or (not self._want_connected):
+            await self._emit_failed("FLOW_OFF", "MFC not ready (disconnected/shutdown)")
+            return
+
         # ▶ 개별 채널 OFF (L{ch}0) — 마스크(L0) 금지
         self._enqueue(self._mk_cmd("FLOW_OFF", channel=channel), None,
                     allow_no_reply=True, tag=f"[FLOW_OFF ch{channel}]")
@@ -511,6 +516,11 @@ class AsyncMFC:
 
         # ✅ OFF 플래그
         self._flow_on_flags[ch] = False
+
+        # ★ 보호: TCP 끊김/종료 진행 중이면 송신 불가 → 가짜 OK 방지
+        if (not self._connected) or (not self._want_connected):
+            await self._emit_failed("FLOW_OFF", "MFC not ready (disconnected/shutdown)")
+            return
 
         self._enqueue(self._mk_cmd("FLOW_OFF", channel=ch), None,
                     allow_no_reply=True, tag=f"[FLOW_OFF ch{ch}]")
@@ -603,6 +613,10 @@ class AsyncMFC:
     #         await self._emit_failed("FLOW_OFF", "L0 적용 불일치")
 
     async def valve_open(self):
+        # ★ 보호: TCP 끊김/종료 진행 중이면 송신 불가 → 가짜 OK 방지
+        if (not self._connected) or (not self._want_connected):
+            await self._emit_failed("VALVE_OPEN", "MFC not ready (disconnected/shutdown)")
+            return
         if not self._verify_enabled:
             self._enqueue(self._mk_cmd("VALVE_OPEN"), None, allow_no_reply=True, tag="[VALVE_OPEN]")
             await asyncio.sleep(self._cfg_int("MFC_DELAY_MS_VALVE", 5000) / 1000.0)
@@ -611,6 +625,10 @@ class AsyncMFC:
         await self._valve_move_and_verify("VALVE_OPEN")
 
     async def valve_close(self):
+        # ★ 보호: TCP 끊김/종료 진행 중이면 송신 불가 → 가짜 OK 방지
+        if (not self._connected) or (not self._want_connected):
+            await self._emit_failed("VALVE_CLOSE", "MFC not ready (disconnected/shutdown)")
+            return
         if not self._verify_enabled:
             self._enqueue(self._mk_cmd("VALVE_CLOSE"), None, allow_no_reply=True, tag="[VALVE_CLOSE]")
             await asyncio.sleep(self._cfg_int("MFC_DELAY_MS_VALVE", 5000) / 1000.0)
@@ -1917,17 +1935,22 @@ class AsyncMFC:
 
     def _purge_pending(self, reason: str = "") -> int:
         purged = 0
+        purged_tags: list[str] = []   # ★ 폐기되는 명령 tag 수집 (race condition 사후 분석용)
 
         # 1) ✅ inflight + cmd_q 비우기    
         if self._inflight is not None:
             cmd = self._inflight
             self._inflight = None
             purged += 1
+            if cmd.tag:
+                purged_tags.append(cmd.tag)
             self._safe_callback(cmd.callback, None)
 
         while self._cmd_q:
             c = self._cmd_q.popleft()
             purged += 1
+            if c.tag:
+                purged_tags.append(c.tag)
             self._safe_callback(c.callback, None)
 
         # 2) ✅ 라인 큐 비우기 (이전 응답/에코가 다음 명령과 섞이는 문제 방지)
@@ -1947,7 +1970,12 @@ class AsyncMFC:
         self._poll_cycle_active = False
 
         if reason:
-            self._ev_nowait(MFCEvent(kind="status", message=f"대기 중 명령 {purged}개 폐기 ({reason})"))
+            if purged_tags:
+                self._ev_nowait(MFCEvent(kind="status",
+                    message=f"대기 중 명령 {purged}개 폐기 ({reason}) tags={purged_tags!r}"))
+            else:
+                self._ev_nowait(MFCEvent(kind="status",
+                    message=f"대기 중 명령 {purged}개 폐기 ({reason})"))
         return purged
 
     # ---------- 내부: 이벤트/로그 ----------
