@@ -1534,7 +1534,10 @@ class ChamberRuntime:
                                         self.append_log("CHAT", f"실패 이유 텍스트 알림 실패: {_e!r}")
 
                         try:
-                            self.mfc.on_process_finished(ok)
+                            if self._skip_mfc_finalize_due_to_pc():
+                                self.append_log("MFC", "PC 실행 중 → mfc on_process_finished 생략(공유 자원 보호)")
+                            else:
+                                self.mfc.on_process_finished(ok)
                         except Exception:
                             pass
 
@@ -2933,7 +2936,9 @@ class ChamberRuntime:
                     pass
 
                 # (선택) 폴링 상태도 명시적으로 내려줌 — 없어도 무방
-                with contextlib.suppress(Exception): self.mfc.set_process_status(False)
+                with contextlib.suppress(Exception):
+                    if not self._skip_mfc_finalize_due_to_pc():
+                        self.mfc.set_process_status(False)
                 with contextlib.suppress(Exception):
                     if hasattr(self.ig, "set_process_status"): self.ig.set_process_status(False)
                 with contextlib.suppress(Exception):
@@ -4083,10 +4088,29 @@ class ChamberRuntime:
             self._runner_state = "IDLE"
     # ======================= runner 메서드 =======================
 
+    
+    def _skip_mfc_finalize_due_to_pc(self) -> bool:
+        """
+        CH1 chamber 종료 시, PC가 mfc1(gas)을 공유 사용 중이면
+        mfc 폴링/상태 리셋/cleanup을 모두 생략한다.
+        (PC.mfc_gas는 main.py에서 항상 self.mfc1 = self.ch1.mfc 로 주입됨)
+        CH2 chamber의 self.mfc는 mfc2이므로 공유 이슈 없음 → 항상 False.
+        """
+        try:
+            if int(self.ch) != 1:
+                return False
+            # PC가 어느 챔버를 선택했든 mfc_gas는 mfc1을 쓰므로 둘 다 체크
+            return bool(runtime_state.is_running("pc", 1)) or \
+                   bool(runtime_state.is_running("pc", 2))
+        except Exception:
+            return False
+
 
     async def _stop_device_watchdogs(self, *, light: bool = False) -> None:
         if light:
-            with contextlib.suppress(Exception): self.mfc.set_process_status(False)
+            with contextlib.suppress(Exception):
+                if not self._skip_mfc_finalize_due_to_pc():
+                    self.mfc.set_process_status(False)
             if self.dc_pulse:
                 with contextlib.suppress(Exception): self.dc_pulse.set_process_status(False)
             if self.rf_pulse:
@@ -4106,7 +4130,9 @@ class ChamberRuntime:
 
         # ✅ heavy 시작 직후도 한 번 더 OFF
         with contextlib.suppress(Exception):
-            if self.mfc and hasattr(self.mfc, "on_process_finished"):
+            if self._skip_mfc_finalize_due_to_pc():
+                self.append_log("MFC", "PC 실행 중 → mfc 폴링/상태 리셋 생략(공유 자원 보호)")
+            elif self.mfc and hasattr(self.mfc, "on_process_finished"):
                 self.mfc.on_process_finished(False)
             elif self.mfc and hasattr(self.mfc, "set_process_status"):
                 self.mfc.set_process_status(False)
@@ -4173,8 +4199,14 @@ class ChamberRuntime:
                 self._oes_initialized = False
 
         # 2-B) device cleanup (timeout) - ✅ OES는 제외하고 나머지만 기다림
+        # ✅ PC가 mfc1(gas)을 공유 사용 중이면 self.mfc.cleanup()을 생략 (공유 자원 보호)
+        _skip_mfc = self._skip_mfc_finalize_due_to_pc()
+        if _skip_mfc:
+            self.append_log("MFC", "PC 실행 중 → mfc cleanup 생략 (공유 자원 보호)")
         cleanup_tasks: list[asyncio.Task] = []
         for dev in (self.ig, self.mfc, self.dc_pulse, self.rf_pulse, self.dc_power, self.rf_power, self.rga):
+            if dev is self.mfc and _skip_mfc:
+                continue
             if dev and hasattr(dev, "cleanup"):
                 try:
                     coro = dev.cleanup()
