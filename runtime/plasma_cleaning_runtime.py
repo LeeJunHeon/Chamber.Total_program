@@ -243,8 +243,9 @@ class PlasmaCleaningRuntime:
                 self.append_log(label, f"[poll] {gas}: {flow:.2f} sccm")
                 # ✅ 데이터 수집 — PC에서 선택된 가스 채널(gas_idx=3, N2)만 수집
                 # poll_loop는 모든 채널(Ar/O2/N2)을 emit하므로 필터 필수
+                # ★ process_time 카운트가 active일 때만 수집 (RF 안정화 전 값 제외)
                 with contextlib.suppress(Exception):
-                    if getattr(self, "_running", False):
+                    if getattr(self, "_process_timer_active", False):
                         selected_idx  = int(getattr(self, "_pc_gas_idx", 3) or 3)
                         selected_gas  = ""
                         if self.mfc_gas and hasattr(self.mfc_gas, "gas_map"):
@@ -256,10 +257,10 @@ class PlasmaCleaningRuntime:
             elif k == "pressure":
                 txt = ev.text or (f"{ev.value:.3g}" if ev.value is not None else "")
                 self.append_log(label, f"[poll] ChamberP: {txt}")
-                # ✅ 데이터 수집
+                # ✅ 데이터 수집 — ★ process_time 카운트가 active일 때만
                 with contextlib.suppress(Exception):
                     val = getattr(ev, "value", None)
-                    if getattr(self, "_running", False) and isinstance(val, (int, float)):
+                    if getattr(self, "_process_timer_active", False) and isinstance(val, (int, float)):
                         self._pc_pressure_readings.append(float(val))
 
     async def _pump_ig_events(self, label: str) -> None:
@@ -300,9 +301,10 @@ class PlasmaCleaningRuntime:
 
                     # 2) 상태창은 카운트다운 유지 → 덮어쓰지 않고 로그만 남김
                     self.append_log("RF", f"FWD={ev.forward:.1f}, REF={ev.reflected:.1f} (W)")
-                    # ✅ 데이터 수집
+                    # ✅ 데이터 수집 — ★ process_time 카운트가 active일 때만
+                    #   (RF 안정화 전 ramp-up 구간의 낮은 FWD/높은 REF 제외)
                     with contextlib.suppress(Exception):
-                        if getattr(self, "_running", False):
+                        if getattr(self, "_process_timer_active", False):
                             self._pc_forp_readings.append(float(ev.forward))
                             self._pc_refp_readings.append(float(ev.reflected))
                     continue
