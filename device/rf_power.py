@@ -102,6 +102,7 @@ class RFPowerAsync:
         #   - 0 또는 target_power 이하이면 기능 OFF (기존 동작과 동일)
         self._rf_blind_ramp_fwd_threshold_w: float = 70.0   # 이 FWD까지는 REF 무시하고 ramp-up
         self._rf_blind_ramp_settle_s: float        = 60.0  # 임계값 도달 후 안정화 대기(s)
+        self._rf_blind_settle_early_exit_ref_w: float = 1.0    # ★ 안정화 중 REF.p가 이 값 이하면 조기 종료 (0이면 OFF)
         self._ref_check_armed: bool                = False  # REF.p 감시 ON 여부
         self._blind_reach_ts: Optional[float]      = None   # FWD 임계값 도달 시점
 
@@ -188,6 +189,9 @@ class RFPowerAsync:
         )
         self._rf_blind_ramp_settle_s = float(
             getattr(mod, "RF_BLIND_RAMP_SETTLE_S", getattr(_cfg_common, "RF_BLIND_RAMP_SETTLE_S", self._rf_blind_ramp_settle_s))
+        )
+        self._rf_blind_settle_early_exit_ref_w = float(
+            getattr(mod, "RF_BLIND_SETTLE_EARLY_EXIT_REF_W", getattr(_cfg_common, "RF_BLIND_SETTLE_EARLY_EXIT_REF_W", self._rf_blind_settle_early_exit_ref_w))
         )
 
         # ✅ 추가 2) chamber runtime에서 생성자에 넣어주던 RF 연속파 운전값도 reload 반영
@@ -729,6 +733,18 @@ class RFPowerAsync:
                 # FWD 임계값 도달 후 안정화 대기. setpoint는 그대로 두고 시간만 카운트.
                 now = time.monotonic()
                 elapsed = now - (self._blind_reach_ts or now)
+
+                # ★ REF.p가 이미 충분히 낮으면 시간 대기 없이 즉시 조기 종료
+                early_th = float(self._rf_blind_settle_early_exit_ref_w)
+                if early_th > 0.0 and self.reflected_w <= early_th:
+                    self._ref_check_armed = True
+                    self.state = "RAMPING_UP"
+                    await self._emit_status(
+                        f"REF.p({self.reflected_w:.1f}W) ≤ {early_th:.1f}W → 안정화 대기 조기 종료 "
+                        f"({elapsed:.1f}s 경과). REF.p 감시 ON → ramp-up 재개"
+                    )
+                    return
+
                 if elapsed >= float(self._rf_blind_ramp_settle_s):
                     self._ref_check_armed = True
                     self.state = "RAMPING_UP"
