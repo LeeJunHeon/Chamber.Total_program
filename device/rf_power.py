@@ -272,7 +272,7 @@ class RFPowerAsync:
         if getattr(self, "_direct_mode", False):
             self._ref_check_armed = True
         # 임계값 ≤ 0 이거나 target ≤ 임계값이면 의미가 없으므로 즉시 REF 감시 ON
-        if (float(self._rf_blind_ramp_fwd_threshold_w) <= 0.0
+        elif (float(self._rf_blind_ramp_fwd_threshold_w) <= 0.0
             or float(self.target_power) <= float(self._rf_blind_ramp_fwd_threshold_w)):
             self._ref_check_armed = True
         else:

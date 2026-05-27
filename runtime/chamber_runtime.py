@@ -5347,6 +5347,11 @@ class ChamberRuntime:
 
     def _close_run_log(self) -> None:
         """종료 마커만 큐에 넣고, 실제 flush/close는 _shutdown_log_writer()에서 처리."""
+        # ★ 이미 정리되어 path가 없으면 END 마커 중복 enqueue 금지
+        #   (cleanup 후 _clear_queue_and_reset_ui가 또 호출되는 경로에서
+        #    fallback 폴더에 'END만 있는 drain 파일'이 생기는 문제 차단)
+        if not getattr(self, "_log_file_path", None):
+            return
         with contextlib.suppress(Exception):
             self._log_enqueue_nowait("# ==== END ====\n")
 
@@ -5514,11 +5519,20 @@ class ChamberRuntime:
                                 with contextlib.suppress(Exception):
                                     w.appendPlainText(f"[Logger] ⚠ final flush failed → local fallback (reason={e!r})")
                     else:
-                        with contextlib.suppress(Exception):
-                            await asyncio.wait_for(
-                                loop.run_in_executor(self._log_io_exec, _write_local_drain),
-                                timeout=2.0
-                            )
+                        # ★ path가 없는 시점에 drained가 END 마커 하나뿐이면
+                        #   의미 있는 데이터가 없으므로 fallback drain 파일을 만들지 않는다.
+                        meaningful = any(
+                            line and line.strip() and "==== END ====" not in line
+                            for line in drained
+                        )
+                        if not meaningful:
+                            pass  # skip drain 파일 생성
+                        else:
+                            with contextlib.suppress(Exception):
+                                await asyncio.wait_for(
+                                    loop.run_in_executor(self._log_io_exec, _write_local_drain),
+                                    timeout=2.0
+                                )
 
                 # 4) keep-handle 닫기
                 app = getattr(self, "_run_log_appender", None)
