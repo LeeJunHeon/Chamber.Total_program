@@ -463,15 +463,26 @@ class PlasmaCleaningRuntime:
         # ★ PC + CH2처럼 mfc_gas / mfc_pressure가 서로 다른 인스턴스이면
         #   각각 gas-only / pressure-only로 폴링 마스크 분리 (R60/R5 무의미 read 제거)
         #   CH1 PC는 동일 인스턴스이므로 분리 안 함 (둘 다 True 유지).
+        #   ★ CH1 챔버가 실행 중이면 mfc_gas(=mfc1)의 pressure 폴링이 필요하므로
+        #     마스크 분리를 생략한다 (CH1 챔버 소유권 침범 방지).
         with contextlib.suppress(Exception):
             if (self.mfc_gas is not None
                 and self.mfc_pressure is not None
                 and self.mfc_gas is not self.mfc_pressure):
-                if hasattr(self.mfc_gas, "set_poll_mask"):
-                    self.mfc_gas.set_poll_mask(gas=True, pressure=False)
-                if hasattr(self.mfc_pressure, "set_poll_mask"):
-                    self.mfc_pressure.set_poll_mask(gas=False, pressure=True)
-                self.append_log("PC", "MFC 폴링 마스크 분리: GAS→R60만, SP4→R5만")
+                ch1_chamber_running = False
+                try:
+                    ch1_chamber_running = bool(runtime_state.is_running("chamber", 1))
+                except Exception:
+                    pass
+
+                if ch1_chamber_running:
+                    self.append_log("PC", "CH1 챔버 실행 중 → MFC 폴링 마스크 분리 생략")
+                else:
+                    if hasattr(self.mfc_gas, "set_poll_mask"):
+                        self.mfc_gas.set_poll_mask(gas=True, pressure=False)
+                    if hasattr(self.mfc_pressure, "set_poll_mask"):
+                        self.mfc_pressure.set_poll_mask(gas=False, pressure=True)
+                    self.append_log("PC", "MFC 폴링 마스크 분리: GAS→R60만, SP4→R5만")
 
         if self.rf and not _has_task("PC.Pump.RF"):
             self._event_tasks.append(asyncio.create_task(self._pump_rf_events(), name="PC.Pump.RF"))
