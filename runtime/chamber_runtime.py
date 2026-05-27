@@ -5152,6 +5152,14 @@ class ChamberRuntime:
                 and self.process_controller.is_running:
             self._ensure_background_started()
 
+        # ★ 챔버 공정에서 MFC 폴링을 켜는 시점에 mask reset
+        #   (PC가 분리해놨을 수 있으므로 안전한 default 둘 다 True로 복귀.
+        #    이로써 PC + 챔버 동시 실행 시 챔버의 R5/R60 폴링 보장)
+        if mfc_on:
+            with contextlib.suppress(Exception):
+                if hasattr(self.mfc, "set_poll_mask"):
+                    self.mfc.set_poll_mask(gas=True, pressure=True)
+
         with contextlib.suppress(Exception):
             self.mfc.set_process_status(mfc_on)
 
