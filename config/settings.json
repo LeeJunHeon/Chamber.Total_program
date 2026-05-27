@@ -80,8 +80,8 @@
     "RF_REFLECTED_THRESHOLD_W": 20.0,      // REF.p 감시 임계 (W). 초과 시 REF_P_WAITING 진입
     "RF_REFLECTED_WAIT_TIMEOUT_S": 60.0,   // REF_P_WAITING 최대 대기 (초)
     // Blind ramp-up (FWD가 임계값 도달 전까지 REF.p 감시 OFF)
-    "RF_BLIND_RAMP_FWD_THRESHOLD_W": 60.0, // FWD가 이 값 도달 전까지 REF 무시. 0이면 기능 OFF
-    "RF_BLIND_RAMP_SETTLE_S": 120.0,       // FWD 임계값 도달 후 안정화 대기 (초)
+    "RF_BLIND_RAMP_FWD_THRESHOLD_W": 70.0, // FWD가 이 값 도달 전까지 REF 무시. 0이면 기능 OFF
+    "RF_BLIND_RAMP_SETTLE_S": 60.0,       // FWD 임계값 도달 후 안정화 대기 (초)
     // RF 보정계수 (캘리브레이션 값 - 장비 교정 후 변경)
     "RF_PARAM_WATT_TO_DAC": 6.79,          // W -> DAC 변환 기울기
     "RF_OFFSET_WATT_TO_DAC": 6.93,         // W -> DAC 변환 오프셋
