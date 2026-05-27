@@ -460,6 +460,19 @@ class PlasmaCleaningRuntime:
         def _has_task(name: str) -> bool:
             return any((getattr(t, "get_name", lambda: "")() == name) for t in self._event_tasks)
 
+        # ★ PC + CH2처럼 mfc_gas / mfc_pressure가 서로 다른 인스턴스이면
+        #   각각 gas-only / pressure-only로 폴링 마스크 분리 (R60/R5 무의미 read 제거)
+        #   CH1 PC는 동일 인스턴스이므로 분리 안 함 (둘 다 True 유지).
+        with contextlib.suppress(Exception):
+            if (self.mfc_gas is not None
+                and self.mfc_pressure is not None
+                and self.mfc_gas is not self.mfc_pressure):
+                if hasattr(self.mfc_gas, "set_poll_mask"):
+                    self.mfc_gas.set_poll_mask(gas=True, pressure=False)
+                if hasattr(self.mfc_pressure, "set_poll_mask"):
+                    self.mfc_pressure.set_poll_mask(gas=False, pressure=True)
+                self.append_log("PC", "MFC 폴링 마스크 분리: GAS→R60만, SP4→R5만")
+
         if self.rf and not _has_task("PC.Pump.RF"):
             self._event_tasks.append(asyncio.create_task(self._pump_rf_events(), name="PC.Pump.RF"))
 
@@ -1604,6 +1617,16 @@ class PlasmaCleaningRuntime:
             with contextlib.suppress(Exception):
                 if self.ig and hasattr(self.ig, "cancel_wait"):
                     await asyncio.wait_for(self.ig.cancel_wait(), timeout=2.0)
+
+            # ★ MFC 폴링 마스크 원복 (PC에서 분리했을 수 있으므로 항상 둘 다 ON으로 복귀)
+            #   다음 챔버 공정에서 두 MFC가 정상적으로 R60+R5 모두 폴링하도록 보장.
+            with contextlib.suppress(Exception):
+                if self.mfc_gas and hasattr(self.mfc_gas, "set_poll_mask"):
+                    self.mfc_gas.set_poll_mask(gas=True, pressure=True)
+                if (self.mfc_pressure
+                    and self.mfc_pressure is not self.mfc_gas
+                    and hasattr(self.mfc_pressure, "set_poll_mask")):
+                    self.mfc_pressure.set_poll_mask(gas=True, pressure=True)
 
             # (B) MFC 폴링/자동재연결 명시 중단
             with contextlib.suppress(Exception):

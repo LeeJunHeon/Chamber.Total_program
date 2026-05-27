@@ -114,6 +114,12 @@ class AsyncMFC:
 
         # 태스크들
         self._want_connected: bool = False
+
+        # ★ 폴링 마스크 — 인스턴스가 gas-only/pressure-only로 동작해야 할 때 사용
+        #   기본은 둘 다 True (기존 동작 유지). PC에서 일시적으로 한쪽만 켤 수 있음.
+        self._poll_gas_enabled: bool = True
+        self._poll_pressure_enabled: bool = True
+
         self._watchdog_task: Optional[asyncio.Task] = None
         self._cmd_worker_task: Optional[asyncio.Task] = None
         self._poll_task: Optional[asyncio.Task] = None
@@ -636,6 +642,16 @@ class AsyncMFC:
             await self._emit_confirmed("VALVE_CLOSE")
             return
         await self._valve_move_and_verify("VALVE_CLOSE")
+
+    def set_poll_mask(self, *, gas: bool = True, pressure: bool = True) -> None:
+        """
+        폴링 루프에서 어떤 register를 읽을지 마스크.
+        - 기본은 둘 다 True (R60 gas + R5 pressure 모두 읽음 = 기존 동작).
+        - Plasma Cleaning에서 두 MFC 인스턴스를 gas-only/pressure-only로
+          일시 분리할 때 사용. PC 종료 시 반드시 둘 다 True로 원복할 것.
+        """
+        self._poll_gas_enabled = bool(gas)
+        self._poll_pressure_enabled = bool(pressure)
 
     async def sp1_set(self, ui_value: float):
         """SP1_SET (UI→HW 변환) + (옵션) READ_SP1_VALUE 검증."""
@@ -1493,23 +1509,25 @@ class AsyncMFC:
                     continue
                 self._poll_cycle_active = True
 
-                # R60 → flow 이벤트 + 모니터링
-                vals = await self._read_r60_values(tag="[POLL R60]")
-                if vals:
-                    for ch, name in self.gas_map.items():
-                        idx = ch - 1
-                        if idx < len(vals):
-                            v_hw = float(vals[idx])               # %FS
-                            v_ui = self._hw_to_ui(ch, v_hw)      # sccm
-                            await self._emit_flow(name, v_ui)
-                            self._monitor_flow(ch, v_hw)         # %FS
+                # R60 → flow 이벤트 + 모니터링  (★ gas 마스크가 ON일 때만)
+                if self._poll_gas_enabled:
+                    vals = await self._read_r60_values(tag="[POLL R60]")
+                    if vals:
+                        for ch, name in self.gas_map.items():
+                            idx = ch - 1
+                            if idx < len(vals):
+                                v_hw = float(vals[idx])               # %FS
+                                v_ui = self._hw_to_ui(ch, v_hw)      # sccm
+                                await self._emit_flow(name, v_ui)
+                                self._monitor_flow(ch, v_hw)         # %FS
 
-                # R5 → pressure 이벤트
-                line = await self._send_and_wait_line(self._mk_cmd("READ_PRESSURE"),
-                                                      tag="[POLL PRESS]", timeout_ms=self._cfg_int("MFC_TIMEOUT", 2000),
-                                                      expect_prefixes=("P",))
-                if line:
-                    self._emit_pressure_from_line_sync(line.strip())
+                # R5 → pressure 이벤트  (★ pressure 마스크가 ON일 때만)
+                if self._poll_pressure_enabled:
+                    line = await self._send_and_wait_line(self._mk_cmd("READ_PRESSURE"),
+                                                          tag="[POLL PRESS]", timeout_ms=self._cfg_int("MFC_TIMEOUT", 2000),
+                                                          expect_prefixes=("P",))
+                    if line:
+                        self._emit_pressure_from_line_sync(line.strip())
 
                 self._poll_cycle_active = False
                 await asyncio.sleep(self._cfg_int("MFC_POLLING_INTERVAL_MS", 3000) / 1000.0)
