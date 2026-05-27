@@ -98,6 +98,13 @@ class RFPowerAsync:
         self._rf_ramp_shutdown_cut_w: float = 50.0
         self._rf_ramp_fine_up_step: float = 3.0
 
+        # ★ Blind ramp-up 파라미터 (FWD가 임계값 도달 전까지 REF.p 감시 OFF)
+        #   - 0 또는 target_power 이하이면 기능 OFF (기존 동작과 동일)
+        self._rf_blind_ramp_fwd_threshold_w: float = 70.0   # 이 FWD까지는 REF 무시하고 ramp-up
+        self._rf_blind_ramp_settle_s: float        = 60.0  # 임계값 도달 후 안정화 대기(s)
+        self._ref_check_armed: bool                = False  # REF.p 감시 ON 여부
+        self._blind_reach_ts: Optional[float]      = None   # FWD 임계값 도달 시점
+
         # 상태/측정/목표
         self.state = "IDLE"
         self.previous_state = "IDLE"
@@ -175,6 +182,14 @@ class RFPowerAsync:
             getattr(mod, "RF_REFLECTED_WAIT_TIMEOUT_S", getattr(_cfg_common, "RF_REFLECTED_WAIT_TIMEOUT_S", self._ref_wait_to_s))
         )
 
+        # ✅ 추가 1-2) Blind ramp-up 파라미터도 reload 반영
+        self._rf_blind_ramp_fwd_threshold_w = float(
+            getattr(mod, "RF_BLIND_RAMP_FWD_THRESHOLD_W", getattr(_cfg_common, "RF_BLIND_RAMP_FWD_THRESHOLD_W", self._rf_blind_ramp_fwd_threshold_w))
+        )
+        self._rf_blind_ramp_settle_s = float(
+            getattr(mod, "RF_BLIND_RAMP_SETTLE_S", getattr(_cfg_common, "RF_BLIND_RAMP_SETTLE_S", self._rf_blind_ramp_settle_s))
+        )
+
         # ✅ 추가 2) chamber runtime에서 생성자에 넣어주던 RF 연속파 운전값도 reload 반영
         self._poll_interval_ms = int(
             getattr(mod, "CHAMBER_RF_CONT_POLL_INTERVAL_MS", getattr(_cfg_common, "CHAMBER_RF_CONT_POLL_INTERVAL_MS", self._poll_interval_ms))
@@ -250,6 +265,15 @@ class RFPowerAsync:
         # ★ 새 런 시작 시 '첫 WRITE 보장'을 위해 중복 억제 캐시 초기화
         self._last_sent_w = None
         self._low_power_n = 0       # ★ 저출력 카운터 리셋
+
+        # ★ Blind ramp-up 상태 초기화
+        self._blind_reach_ts = None
+        # 임계값 ≤ 0 이거나 target ≤ 임계값이면 의미가 없으므로 즉시 REF 감시 ON
+        if (float(self._rf_blind_ramp_fwd_threshold_w) <= 0.0
+            or float(self.target_power) <= float(self._rf_blind_ramp_fwd_threshold_w)):
+            self._ref_check_armed = True
+        else:
+            self._ref_check_armed = False
 
         # ▼ RF 사용 전 SET 래치 ON (DCV_SET_1 = True)
         if self._toggle_enable:
@@ -425,31 +449,32 @@ class RFPowerAsync:
         # 디스플레이 이벤트 즉시 방출
         self._ev_nowait(RFPowerEvent(kind="display", forward=self.forward_w, reflected=self.reflected_w))
         
-        # 1) Ref.p 과다 → 대기/타임아웃
-        if self.reflected_w > self._ref_th_w:
-            if self.state != "REF_P_WAITING":
-                self.previous_state = self.state
-                self.state = "REF_P_WAITING"
-                self._ref_wait_start_ts = time.monotonic()
-                self._ev_nowait(RFPowerEvent(kind="status",
-                                             message=f"Ref.p({self.reflected_w:.1f}W) 안정화 대기 시작 (최대 {int(self._ref_wait_to_s)}초)"))
+        # 1) Ref.p 과다 감시 (blind ramp 단계에서는 OFF)
+        if self._ref_check_armed:
+            if self.reflected_w > self._ref_th_w:
+                if self.state != "REF_P_WAITING":
+                    self.previous_state = self.state
+                    self.state = "REF_P_WAITING"
+                    self._ref_wait_start_ts = time.monotonic()
+                    self._ev_nowait(RFPowerEvent(kind="status",
+                                                 message=f"Ref.p({self.reflected_w:.1f}W) 안정화 대기 시작 (최대 {int(self._ref_wait_to_s)}초)"))
+                else:
+                    if (time.monotonic() - (self._ref_wait_start_ts or 0.0)) > self._ref_wait_to_s:
+                        # 실패 처리
+                        self._ev_nowait(RFPowerEvent(kind="status", message="Ref.p 안정화 시간 초과. 즉시 중단합니다."))
+                        msg = (
+                            f"Ref.p(REF) 안정화 시간({int(self._ref_wait_to_s)}s) 초과: "
+                            f"REF={self.reflected_w:.1f}W > TH={self._ref_th_w:.1f}W"
+                        )
+                        self._ev_nowait(RFPowerEvent(kind="target_failed", message=msg))
+                        asyncio.create_task(self.cleanup())
+                return
             else:
-                if (time.monotonic() - (self._ref_wait_start_ts or 0.0)) > self._ref_wait_to_s:
-                    # 실패 처리
-                    self._ev_nowait(RFPowerEvent(kind="status", message="Ref.p 안정화 시간 초과. 즉시 중단합니다."))
-                    msg = (
-                        f"Ref.p(REF) 안정화 시간({int(self._ref_wait_to_s)}s) 초과: "
-                        f"REF={self.reflected_w:.1f}W > TH={self._ref_th_w:.1f}W"
-                    )
-                    self._ev_nowait(RFPowerEvent(kind="target_failed", message=msg))
-                    asyncio.create_task(self.cleanup())
-            return
-        else:
-            if self.state == "REF_P_WAITING":
-                self._ev_nowait(RFPowerEvent(kind="status",
-                                             message=f"Ref.p 안정화 완료({self.reflected_w:.1f}W). 공정 재개"))
-                self.state = self.previous_state
-                self._ref_wait_start_ts = None
+                if self.state == "REF_P_WAITING":
+                    self._ev_nowait(RFPowerEvent(kind="status",
+                                                 message=f"Ref.p 안정화 완료({self.reflected_w:.1f}W). 공정 재개"))
+                    self.state = self.previous_state
+                    self._ref_wait_start_ts = None
 
         # 2) 저출력(forward power 너무 낮음) 감시
         #    - target_power > 0 인 런에서만 체크
@@ -633,6 +658,18 @@ class RFPowerAsync:
             last_sent: Optional[float] = self._last_sent_w
 
             if self.state == "RAMPING_UP":
+                # ★ Blind ramp 단계: FWD가 임계값 도달 → 안정화 대기 단계로 전환
+                if (not self._ref_check_armed) and \
+                   self.forward_w >= float(self._rf_blind_ramp_fwd_threshold_w):
+                    self.state = "BLIND_SETTLE"
+                    self._blind_reach_ts = time.monotonic()
+                    await self._emit_status(
+                        f"Blind ramp 완료: FWD={self.forward_w:.1f}W 도달 "
+                        f"(임계 {self._rf_blind_ramp_fwd_threshold_w:.1f}W) → "
+                        f"{int(self._rf_blind_ramp_settle_s)}초 안정화 대기 (REF.p 감시 OFF)"
+                    )
+                    return
+
                 diff = float(self.target_power) - float(self.forward_w)
                 send_needed = False
 
@@ -684,6 +721,19 @@ class RFPowerAsync:
                     )
 
                 return  # ★ 이번 호출은 램프업까지만. 유지 보정은 다음 측정 때.
+            
+            elif self.state == "BLIND_SETTLE":
+                # FWD 임계값 도달 후 안정화 대기. setpoint는 그대로 두고 시간만 카운트.
+                now = time.monotonic()
+                elapsed = now - (self._blind_reach_ts or now)
+                if elapsed >= float(self._rf_blind_ramp_settle_s):
+                    self._ref_check_armed = True
+                    self.state = "RAMPING_UP"
+                    await self._emit_status(
+                        f"안정화 대기 완료 ({elapsed:.1f}s 경과). REF.p 감시 ON → ramp-up 재개"
+                    )
+                # settle 중에는 _send_rf_power 호출 없음 (직전 setpoint 유지)
+                return
 
             elif self.state == "MAINTAINING":
                 error = float(self.target_power) - float(self.forward_w)

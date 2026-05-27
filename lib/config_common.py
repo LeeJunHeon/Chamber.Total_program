@@ -130,6 +130,14 @@ RF_TOLERANCE_POWER = 1
 RF_LOW_POWER_THRESH_W = 1.0      # 이 W 이하이면 '너무 낮다'로 판단
 RF_LOW_POWER_COUNT_MAX_N = 3     # 연속 허용 횟수
 
+# Reflected power 감시 (RF Continuous, rf_power.py)
+RF_REFLECTED_THRESHOLD_W    = 20.0   # 이 W 초과 시 REF_P_WAITING 진입
+RF_REFLECTED_WAIT_TIMEOUT_S = 60.0   # REF_P_WAITING 최대 대기(s)
+
+# Blind ramp-up (FWD 임계값 도달 전까지 REF.p 감시 OFF)
+RF_BLIND_RAMP_FWD_THRESHOLD_W = 70.0   # 0 또는 target_power 이상이면 기능 OFF
+RF_BLIND_RAMP_SETTLE_S        = 60.0  # 임계값 도달 후 안정화 대기(s)
+
 # 보정계수
 RF_PARAM_WATT_TO_DAC = 6.79
 RF_OFFSET_WATT_TO_DAC = 6.93
