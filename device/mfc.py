@@ -448,9 +448,10 @@ class AsyncMFC:
         # 섀도우 마스크 갱신(내부 상태 유지용)
         target = self._mask_set(channel, False)
 
-        # ★ 보호: TCP 끊김/종료 진행 중이면 송신 불가 → 가짜 OK 방지
-        if (not self._connected) or (not self._want_connected):
-            await self._emit_failed("FLOW_OFF", "MFC not ready (disconnected/shutdown)")
+        # ★ 보호: shutdown 진행 중이면 송신 불가 → 가짜 OK 방지
+        #   (일시 TCP 끊김은 cmd_worker가 reconnect 후 자동 처리하도록 enqueue 허용)
+        if not self._want_connected:
+            await self._emit_failed("FLOW_OFF", "MFC not ready (shutdown)")
             return
 
         # ▶ 개별 채널 OFF (L{ch}0) — 마스크(L0) 금지
@@ -517,9 +518,9 @@ class AsyncMFC:
         # ✅ OFF 플래그
         self._flow_on_flags[ch] = False
 
-        # ★ 보호: TCP 끊김/종료 진행 중이면 송신 불가 → 가짜 OK 방지
-        if (not self._connected) or (not self._want_connected):
-            await self._emit_failed("FLOW_OFF", "MFC not ready (disconnected/shutdown)")
+        # ★ 보호: shutdown 진행 중이면 송신 불가 → 가짜 OK 방지
+        if not self._want_connected:
+            await self._emit_failed("FLOW_OFF", "MFC not ready (shutdown)")
             return
 
         self._enqueue(self._mk_cmd("FLOW_OFF", channel=ch), None,
@@ -613,9 +614,9 @@ class AsyncMFC:
     #         await self._emit_failed("FLOW_OFF", "L0 적용 불일치")
 
     async def valve_open(self):
-        # ★ 보호: TCP 끊김/종료 진행 중이면 송신 불가 → 가짜 OK 방지
-        if (not self._connected) or (not self._want_connected):
-            await self._emit_failed("VALVE_OPEN", "MFC not ready (disconnected/shutdown)")
+        # ★ 보호: shutdown 진행 중이면 송신 불가 → 가짜 OK 방지
+        if not self._want_connected:
+            await self._emit_failed("VALVE_OPEN", "MFC not ready (shutdown)")
             return
         if not self._verify_enabled:
             self._enqueue(self._mk_cmd("VALVE_OPEN"), None, allow_no_reply=True, tag="[VALVE_OPEN]")
@@ -625,9 +626,9 @@ class AsyncMFC:
         await self._valve_move_and_verify("VALVE_OPEN")
 
     async def valve_close(self):
-        # ★ 보호: TCP 끊김/종료 진행 중이면 송신 불가 → 가짜 OK 방지
-        if (not self._connected) or (not self._want_connected):
-            await self._emit_failed("VALVE_CLOSE", "MFC not ready (disconnected/shutdown)")
+        # ★ 보호: shutdown 진행 중이면 송신 불가 → 가짜 OK 방지
+        if not self._want_connected:
+            await self._emit_failed("VALVE_CLOSE", "MFC not ready (shutdown)")
             return
         if not self._verify_enabled:
             self._enqueue(self._mk_cmd("VALVE_CLOSE"), None, allow_no_reply=True, tag="[VALVE_CLOSE]")
