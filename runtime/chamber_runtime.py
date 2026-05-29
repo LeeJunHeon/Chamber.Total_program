@@ -2482,7 +2482,6 @@ class ChamberRuntime:
         )
 
         if file_path:
-            # 다음번에 다시 열 때 마지막 폴더부터 열리게
             with contextlib.suppress(Exception):
                 self._last_process_list_dir = str(Path(file_path).parent)
 
@@ -2491,20 +2490,40 @@ class ChamberRuntime:
             return
 
         self.append_log("File", f"선택된 파일: {file_path}")
-        try:
+
+        # ✅ NAS CSV open을 executor로 분리
+        loop = asyncio.get_running_loop()
+        def _load_csv_rows():
+            rows = []
             with open(file_path, mode='r', encoding='utf-8-sig', newline='') as csvfile:
                 reader = csv.DictReader(csvfile)
-                self.process_queue: list[RawParams] = []
-                self.current_process_index: int = -1
                 for row in reader:
-                    name = (row.get('Process_name') or row.get('#') or f"공정 {len(self.process_queue)+1}").strip()
+                    name = (row.get('Process_name') or row.get('#') 
+                            or f"공정 {len(rows)+1}").strip()
                     row['Process_name'] = name
-                    self.process_queue.append(cast(RawParams, row))
-                if not self.process_queue:
-                    self.append_log("File", "파일에 공정이 없습니다.")
-                    return
-                self.append_log("File", f"총 {len(self.process_queue)}개 공정 읽음.")
-                self._update_ui_from_params(self.process_queue[0])
+                    rows.append(row)
+            return rows
+
+        try:
+            rows = await asyncio.wait_for(
+                loop.run_in_executor(None, _load_csv_rows),
+                timeout=30.0
+            )
+        except asyncio.TimeoutError:
+            self.append_log("File", f"CSV 로드 30초 timeout (NAS 응답 지연): {file_path}")
+            return
+        except Exception as e:
+            self.append_log("File", f"파일 처리 오류: {e}")
+            return
+
+        self.process_queue = [cast(RawParams, r) for r in rows]
+        self.current_process_index = -1
+        if not self.process_queue:
+            self.append_log("File", "파일에 공정이 없습니다.")
+            return
+
+        self.append_log("File", f"총 {len(self.process_queue)}개 공정 읽음.")
+        self._update_ui_from_params(self.process_queue[0])
         except Exception as e:
             self.append_log("File", f"파일 처리 오류: {e}")
 
@@ -5321,30 +5340,28 @@ class ChamberRuntime:
     def _open_run_log(self, params: Mapping[str, Any]) -> None:
         now_local = datetime.now()
         ts = now_local.strftime("%Y%m%d_%H%M%S")
-
+        
         raw_name = str(params.get("process_note") or params.get("Process_name") or "").strip()
         if not raw_name:
             raw_name = "Untitled"
-
+        
         safe_name = re.sub(r'[\\/:*?"<>|]+', "_", raw_name)
         safe_name = re.sub(r"\s+", " ", safe_name).strip()
         safe_name = safe_name.replace(" ", "_")
         safe_name = safe_name.strip(" .")
         safe_name = safe_name[:60] if safe_name else "Untitled"
-
-        base = (self._log_dir / f"CH{self.ch}_{safe_name}_{ts}").with_suffix(".txt")
-        path = base
-        i = 1
-        while path.exists():
-            path = (self._log_dir / f"CH{self.ch}_{safe_name}_{ts}_{i}").with_suffix(".txt")
-            i += 1
-
-        # ✅ 여기서부터 writer가 이 경로로만 쓴다 (직접 open 금지)
-        self._log_file_path = path
-
+        
+        # ✅ NAS path.exists()는 동기지만, 호출하는 곳에서 이미 executor 안에 있다면 OK
+        # 여기서 더 안전하게: 마이크로초까지 timestamp를 넣어 충돌 가능성 최소화
+        ts_ms = now_local.strftime("%Y%m%d_%H%M%S_%f")[:-3]  # ms 단위
+        base = (self._log_dir / f"CH{self.ch}_{safe_name}_{ts_ms}").with_suffix(".txt")
+        
+        # ✅ 즉시 사용 (path.exists() 루프 제거 — 충돌 확률 거의 0)
+        self._log_file_path = base
+        
         if not self._log_writer_task or self._log_writer_task.done():
             self._set_task_later("_log_writer_task", self._log_writer_loop, name=f"LogWriter.CH{self.ch}")
-
+        
         name = (params.get("process_note") or params.get("Process_name") or f"Run CH{self.ch}")
 
         # ✅ 헤더도 큐로 기록(순서 보장)
@@ -5763,23 +5780,38 @@ class ChamberRuntime:
             # 현재 UI 값으로 단발 시작 (버튼과 동일 경로)
             self._handle_start_clicked(False)
         elif s.lower().endswith(".csv"):
-            if not os.path.exists(s):
-                raise RuntimeError(f"CSV 파일을 찾을 수 없습니다: {s}")
-            # CSV 로드 + 큐 구성 + 첫 행 UI 반영 (네 코드 그대로)
-            with open(s, mode='r', encoding='utf-8-sig', newline='') as csvfile:
-                reader = csv.DictReader(csvfile)
-                self.process_queue = []
-                self.current_process_index = -1
-                for row in reader:
-                    name = (row.get('Process_name') or row.get('#') or f"공정 {len(self.process_queue)+1}").strip()
-                    row['Process_name'] = name
-                    self.process_queue.append(cast(RawParams, row))
+            # ✅ 동기 NAS 호출을 executor로 분리 (asyncio loop block 방지)
+            loop = asyncio.get_running_loop()
+            
+            def _load_csv_sync(path: str):
+                if not os.path.exists(path):
+                    raise RuntimeError(f"CSV 파일을 찾을 수 없습니다: {path}")
+                rows = []
+                with open(path, mode='r', encoding='utf-8-sig', newline='') as csvfile:
+                    reader = csv.DictReader(csvfile)
+                    for row in reader:
+                        name = (row.get('Process_name') or row.get('#') 
+                                or f"공정 {len(rows)+1}").strip()
+                        row['Process_name'] = name
+                        rows.append(row)
+                return rows
+            
+            try:
+                # NAS open + read를 thread pool에서 실행, 30초 timeout
+                rows = await asyncio.wait_for(
+                    loop.run_in_executor(None, _load_csv_sync, s),
+                    timeout=30.0
+                )
+            except asyncio.TimeoutError:
+                raise RuntimeError(f"CSV 로드 30초 timeout (NAS 응답 지연): {s}")
+            
+            self.process_queue = [cast(RawParams, r) for r in rows]
+            self.current_process_index = -1
             if not self.process_queue:
                 raise RuntimeError("CSV에 공정 데이터가 없습니다.")
             self._update_ui_from_params(self.process_queue[0])
             self.append_log("File", f"CSV 로드 완료: {s} (총 {len(self.process_queue)}개)")
 
-            # 버튼과 동일 경로로 시작 (Runner가 프리플라이트/큐 진행을 처리)
             self._handle_start_clicked(False)
         else:
             raise RuntimeError("지원하지 않는 레시피 형식입니다. CSV 경로만 허용됩니다.")
