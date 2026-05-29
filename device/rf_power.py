@@ -106,6 +106,7 @@ class RFPowerAsync:
         self._rf_blind_ramp_reach_timeout_s: float = 60.0   # ★ FWD가 임계값에 도달하지 못한 채 blind ramp가 이 시간을 넘기면 실패 처리(0이면 OFF)
         self._ref_check_armed: bool                = False  # REF.p 감시 ON 여부
         self._blind_reach_ts: Optional[float]      = None   # FWD 임계값 도달 시점
+        self._blind_ramp_start_ts: Optional[float] = None   # blind ramp 시작 시점(도달 타임아웃 측정용)
 
         # 상태/측정/목표
         self.state = "IDLE"
