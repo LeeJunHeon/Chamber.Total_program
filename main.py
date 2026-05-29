@@ -246,8 +246,8 @@ class MainWindow(QWidget):
                 # interval_s를 명시하지 않아 settings.json/config_common.py 의
                 # PLC_COIL_LOG_INTERVAL_S 값을 따라간다.
                 await self.plc.start_plc_coil_csv_logger(
-                    nas_dir=r"\\VanaM_NAS\VanaM_Sputter\Sputter_Logs\CH1_2\CH1_2_PLC",
-                    local_dir=None,
+                    # nas_dir/local_dir 미지정 → config_common.py 의
+                    #   PLC_COIL_LOG_NAS_DIR / PLC_COIL_LOG_LOCAL_DIR 값을 그대로 사용
                     keys=None,
                 )
                 from lib import config_common as _cfgc
