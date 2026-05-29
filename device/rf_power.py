@@ -103,6 +103,7 @@ class RFPowerAsync:
         self._rf_blind_ramp_fwd_threshold_w: float = 70.0   # 이 FWD까지는 REF 무시하고 ramp-up
         self._rf_blind_ramp_settle_s: float        = 60.0  # 임계값 도달 후 안정화 대기(s)
         self._rf_blind_settle_early_exit_ref_w: float = 1.0    # ★ 안정화 중 REF.p가 이 값 이하면 조기 종료 (0이면 OFF)
+        self._rf_blind_ramp_reach_timeout_s: float = 60.0   # ★ FWD가 임계값에 도달하지 못한 채 blind ramp가 이 시간을 넘기면 실패 처리(0이면 OFF)
         self._ref_check_armed: bool                = False  # REF.p 감시 ON 여부
         self._blind_reach_ts: Optional[float]      = None   # FWD 임계값 도달 시점
 
@@ -193,6 +194,10 @@ class RFPowerAsync:
         self._rf_blind_settle_early_exit_ref_w = float(
             getattr(mod, "RF_BLIND_SETTLE_EARLY_EXIT_REF_W", getattr(_cfg_common, "RF_BLIND_SETTLE_EARLY_EXIT_REF_W", self._rf_blind_settle_early_exit_ref_w))
         )
+        # ★ blind ramp 도달 타임아웃도 reload 반영
+        self._rf_blind_ramp_reach_timeout_s = float(
+            getattr(mod, "RF_BLIND_RAMP_REACH_TIMEOUT_S", getattr(_cfg_common, "RF_BLIND_RAMP_REACH_TIMEOUT_S", self._rf_blind_ramp_reach_timeout_s))
+        )
 
         # ✅ 추가 2) chamber runtime에서 생성자에 넣어주던 RF 연속파 운전값도 reload 반영
         self._poll_interval_ms = int(
@@ -272,6 +277,7 @@ class RFPowerAsync:
 
         # ★ Blind ramp-up 상태 초기화
         self._blind_reach_ts = None
+        self._blind_ramp_start_ts = time.monotonic()   # ★ 도달 타임아웃 측정 시작
         # Plasma Cleaning(direct_mode=kick+ramp)에는 blind ramp 적용 안 함 → 즉시 REF 감시 ON
         if getattr(self, "_direct_mode", False):
             self._ref_check_armed = True
@@ -455,6 +461,27 @@ class RFPowerAsync:
 
         # 디스플레이 이벤트 즉시 방출
         self._ev_nowait(RFPowerEvent(kind="display", forward=self.forward_w, reflected=self.reflected_w))
+
+        # 0) Blind ramp 도달 감시: FWD가 임계값에 도달하지 못한 채(=REF 감시 ON 전)
+        #    설정 시간(기본 60s)을 넘기면 실패 처리. (FWD 정체 → setpoint만 max까지 올라가는 무한 진행 방지)
+        if (not self._ref_check_armed) \
+           and (float(self._rf_blind_ramp_reach_timeout_s) > 0.0) \
+           and (self.state == "RAMPING_UP") \
+           and (self._blind_ramp_start_ts is not None):
+            blind_elapsed = time.monotonic() - self._blind_ramp_start_ts
+            if blind_elapsed > float(self._rf_blind_ramp_reach_timeout_s):
+                self._ev_nowait(RFPowerEvent(
+                    kind="status",
+                    message="Blind ramp 도달 시간 초과. RF 공정을 중단합니다."
+                ))
+                msg = (
+                    f"Blind ramp 도달 시간({int(self._rf_blind_ramp_reach_timeout_s)}s) 초과: "
+                    f"FWD={self.forward_w:.1f}W < 임계 {self._rf_blind_ramp_fwd_threshold_w:.1f}W "
+                    f"(REF={self.reflected_w:.1f}W)"
+                )
+                self._ev_nowait(RFPowerEvent(kind="target_failed", message=msg))
+                asyncio.create_task(self.cleanup())
+                return
         
         # 1) Ref.p 과다 감시 (blind ramp 단계에서는 OFF)
         if self._ref_check_armed:
