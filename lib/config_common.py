@@ -138,7 +138,7 @@ RF_REFLECTED_WAIT_TIMEOUT_S = 60.0   # REF_P_WAITING 최대 대기(s)
 RF_BLIND_RAMP_FWD_THRESHOLD_W = 70.0   # 0 또는 target_power 이상이면 기능 OFF
 RF_BLIND_RAMP_SETTLE_S        = 60.0  # 임계값 도달 후 안정화 대기(s)
 RF_BLIND_SETTLE_EARLY_EXIT_REF_W = 1.0    # 안정화 중 REF.p가 이 값 이하면 조기 종료 (0이면 OFF)
-RF_BLIND_RAMP_REACH_TIMEOUT_S = 100.0   # FWD가 임계값 도달 못한 채 blind ramp가 이 시간 넘기면 실패 처리(0이면 OFF)
+RF_BLIND_RAMP_REACH_TIMEOUT_S = 150.0   # FWD가 임계값 도달 못한 채 blind ramp가 이 시간 넘기면 실패 처리(0이면 OFF)
 
 
 # 보정계수
