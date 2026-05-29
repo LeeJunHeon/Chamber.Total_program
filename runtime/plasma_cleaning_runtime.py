@@ -2593,10 +2593,22 @@ class PlasmaCleaningRuntime:
             or str(getattr(getattr(self, "_cfg_mod", cfgc), "PROCESS_LIST_START_DIR", r"\\VanaM_NAS\VanaM_toShare"))
         )
 
+        loop = asyncio.get_running_loop()
+
         try:
-            if start_dir and not Path(start_dir).exists():
-                self.append_log("File", f"시작 폴더 없음 → 기본 위치로 열기: {start_dir}")
-                start_dir = ""
+            if start_dir:
+                # ✅ NAS exists 체크도 executor + 짧은 timeout
+                try:
+                    exists_ok = await asyncio.wait_for(
+                        loop.run_in_executor(None, lambda: Path(start_dir).exists()),
+                        timeout=3.0
+                    )
+                except asyncio.TimeoutError:
+                    exists_ok = False
+                
+                if not exists_ok:
+                    self.append_log("File", f"시작 폴더 없음/응답지연 → 기본 위치로 열기: {start_dir}")
+                    start_dir = ""
         except Exception:
             start_dir = ""
 
@@ -2614,7 +2626,19 @@ class PlasmaCleaningRuntime:
             self.append_log("File", "파일 선택 취소")
             return
 
-        row = self._read_first_row_from_csv(file_path)
+        # ✅ NAS CSV read를 executor로
+        try:
+            row = await asyncio.wait_for(
+                loop.run_in_executor(None, self._read_first_row_from_csv, file_path),
+                timeout=30.0
+            )
+        except asyncio.TimeoutError:
+            self.append_log("File", f"CSV 로드 30초 timeout (NAS 응답 지연): {file_path}")
+            return
+        except Exception as e:
+            self.append_log("File", f"CSV 읽기 실패: {e!r}")
+            return
+
         if not row:
             self._post_warning("CSV 오류", "데이터 행이 없습니다.")
             return
@@ -2719,22 +2743,31 @@ class PlasmaCleaningRuntime:
         try:
             s = (recipe or "").strip()
             if not s:
-                # 현재 UI 값으로 버튼 클릭과 동일하게 실행 (비동기)
                 asyncio.create_task(self._on_click_start())
             elif s.lower().endswith(".csv"):
-                if not os.path.exists(s):
-                    raise RuntimeError(f"CSV 파일을 찾을 수 없습니다: {s}")
+                # ✅ NAS 동기 호출을 executor로 분리 (asyncio loop block 방지)
+                loop = asyncio.get_running_loop()
 
-                row = self._read_first_row_from_csv(s)
+                def _load_csv_sync(path: str):
+                    if not os.path.exists(path):
+                        raise RuntimeError(f"CSV 파일을 찾을 수 없습니다: {path}")
+                    return self._read_first_row_from_csv(path)
+
+                try:
+                    row = await asyncio.wait_for(
+                        loop.run_in_executor(None, _load_csv_sync, s),
+                        timeout=30.0
+                    )
+                except asyncio.TimeoutError:
+                    raise RuntimeError(f"CSV 로드 30초 timeout (NAS 응답 지연): {s}")
+
                 if not row:
                     raise RuntimeError("CSV에 데이터 행이 없습니다.")
 
-                self._loaded_recipe_row = dict(row)  # ✅ 추가
-                # CSV → UI 세팅 (use_ch 있으면 set_selected_ch까지 내부 적용)
+                self._loaded_recipe_row = dict(row)
                 self._apply_recipe_row_to_ui(row)
                 self.append_log("File", f"CSV 로드 완료: {s} → UI에 값 세팅")
 
-                # 기존 Start 경로로 실행 (쿨다운/프리플라이트/로깅/종료 처리 모두 기존대로, 비동기)
                 asyncio.create_task(self._on_click_start())
             else:
                 raise RuntimeError("지원하지 않는 레시피 형식입니다. CSV 경로만 허용됩니다.")
