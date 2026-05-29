@@ -89,7 +89,7 @@
     "RF_PARAM_ADC_TO_WATT": 0.0236431,     // ADC -> W 변환 기울기
     "RF_OFFSET_ADC_TO_WATT": -1.3362,      // ADC -> W 변환 오프셋
     "RF_WATT_PER_VOLT": 63.49,             // 전압당 출력 (W/V)
-    "RF_BLIND_RAMP_REACH_TIMEOUT_S": 60.0,   // ★ FWD가 임계값에 도달하지 못한 채 blind ramp가 이 시간을 넘기면 실패 처리(초). 0이면 OFF
+    "RF_BLIND_RAMP_REACH_TIMEOUT_S": 100.0,// ★ FWD가 임계값에 도달하지 못한 채 blind ramp가 이 시간을 넘기면 실패 처리(초). 0이면 OFF
 
     // ── DC Power (직류 전원) ──
     // DC 전원의 출력 보정 및 제어 파라미터입니다.
