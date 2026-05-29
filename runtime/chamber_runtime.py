@@ -3965,7 +3965,18 @@ class ChamberRuntime:
                     str(params.get("G3 Target", "") or params.get("G3_target_name", "")).strip(),
                 ])
                 if _needs_db:
-                    await self._load_gun_targets()
+                    try:
+                        await asyncio.wait_for(self._load_gun_targets(), timeout=3.0)
+                    except asyncio.TimeoutError:
+                        self.append_log(
+                            "TARGET",
+                            f"[CH{self.ch}] Gun Target DB 3초 초과 — 빈 값으로 진행 (공정 진행)"
+                        )
+                    except Exception as e:
+                        self.append_log(
+                            "TARGET",
+                            f"[CH{self.ch}] Gun Target DB 실패: {e!r} — 빈 값으로 진행"
+                        )
 
                 # ------------------------------
                 # (A) delay step 처리 (기존과 동일 규칙)

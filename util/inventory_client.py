@@ -28,16 +28,22 @@ def _parse_slot(loc_name: str) -> tuple[int, str] | None:
 
 
 def _fetch_slots_sync(url: str) -> list:
-    import urllib.request, json, ssl
+    import urllib.request, json, ssl, socket
 
-    ctx = ssl.create_default_context()
-    ctx.check_hostname = False
-    ctx.verify_mode = ssl.CERT_NONE
+    # ✅ DNS resolution + TCP connect도 timeout 적용 (urlopen timeout 별개)
+    old_to = socket.getdefaulttimeout()
+    socket.setdefaulttimeout(_TIMEOUT_S)
+    try:
+        ctx = ssl.create_default_context()
+        ctx.check_hostname = False
+        ctx.verify_mode = ssl.CERT_NONE
 
-    req = urllib.request.Request(
-        url, headers={"Accept": "application/json"})
-    with urllib.request.urlopen(req, timeout=_TIMEOUT_S, context=ctx) as resp:
-        return json.loads(resp.read().decode())
+        req = urllib.request.Request(
+            url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=_TIMEOUT_S, context=ctx) as resp:
+            return json.loads(resp.read().decode())
+    finally:
+        socket.setdefaulttimeout(old_to)  # ✅ 글로벌 변경 원복
 
 
 async def fetch_gun_targets(ch: int) -> Dict[str, str]:
