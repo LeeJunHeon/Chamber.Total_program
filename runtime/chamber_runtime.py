@@ -2524,8 +2524,6 @@ class ChamberRuntime:
 
         self.append_log("File", f"총 {len(self.process_queue)}개 공정 읽음.")
         self._update_ui_from_params(self.process_queue[0])
-        except Exception as e:
-            self.append_log("File", f"파일 처리 오류: {e}")
 
     def _update_ui_from_params(self, params: RawParams) -> None:
         if self._w_log:
@@ -5379,7 +5377,7 @@ class ChamberRuntime:
                 self._log_enqueue_nowait(line)
             self._prestart_buf.clear()
 
-        self.append_log("Logger", f"새 로그 파일 시작: {path.name}")
+        self.append_log("Logger", f"새 로그 파일 시작: {base.name}")
 
     def _close_run_log(self) -> None:
         """종료 마커만 큐에 넣고, 실제 flush/close는 _shutdown_log_writer()에서 처리."""
