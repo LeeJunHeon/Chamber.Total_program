@@ -438,9 +438,14 @@ PLC_CMD_PULSE_MS = 180
 PLC_LOCK_WARN_MS = 2500.0
 PLC_IO_WARN_MS = 2500.0
 
+# --- 통합 로그 루트 (PC/Server/ERROR/Dump 공통) ---
+# NAS UNC 직접 쓰기 → Google Drive 동기화 폴더로 변경 (SMB 무한 블로킹/UI hang 방지)
+# G: 가상 드라이브는 로컬 디스크처럼 동작하고, NAS 반영은 Google Drive 앱이 백그라운드 처리
+LOG_ROOT_DIR = r"G:\공유 드라이브\VanaM_Sputter\Sputter\Logs\CH1&2"
+
 # --- PLC COIL CSV LOGGER ---
 PLC_COIL_LOG_INTERVAL_S = 5.0
-PLC_COIL_LOG_NAS_DIR = r"\\VanaM_NAS\VanaM_Sputter\Sputter\Logs\CH1&2\CH1&2_PLC"
+PLC_COIL_LOG_NAS_DIR = r"G:\공유 드라이브\VanaM_Sputter\Sputter\Logs\CH1&2\CH1&2_PLC"
 # PLC_COIL_LOG_LOCAL_DIR = r"C:\...\Logs\CH1&2\CH1&2_PLC"   # 필요 시
 
 # ======================================================================
@@ -483,7 +488,7 @@ PLC_RF_REFLECTED_ZERO_W = 14.0
 # ======================================================================
 
 PROCESS_LIST_START_DIR = r"\\VanaM_NAS\VanaM_toShare"
-SPUTTER_CALIB_DB_DIR = r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database"
+SPUTTER_CALIB_DB_DIR = r"G:\공유 드라이브\VanaM_Sputter\Sputter\Calib\Database"
 
 CHAMBER_OES_USB_INDEX_CH1 = 0
 CHAMBER_OES_USB_INDEX_CH2 = 1

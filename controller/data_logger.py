@@ -32,9 +32,10 @@ class DataLogger(QObject):
         self._ch = int(ch)  # ← 추가: 폴백 경로명/파일명에 사용
         self._log_func = log_func              # CH 로그로 넘길 콜백
 
-        # NAS / 로컬 디렉터리 경로를 항상 둘 다 들고 있게 변경
+        # NAS UNC 직접 쓰기 → Google Drive 동기화 폴더로 변경 (UI hang 방지)
         self._nas_dir = Path(csv_dir) if csv_dir else Path(
-            r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database"
+            getattr(cfgc, "SPUTTER_CALIB_DB_DIR",
+                    r"G:\공유 드라이브\VanaM_Sputter\Sputter\Calib\Database")
         )
         
         self._local_dir = Path(

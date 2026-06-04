@@ -260,8 +260,11 @@ class MainWindow(QWidget):
 
         self._boot_plc_task = self._loop.create_task(_boot_plc())
 
-        # 로그 루트 (NAS 실패 시 런타임 내부에서 폴백 처리)
-        self._log_root = Path(r"\\VanaM_NAS\VanaM_Sputter\Sputter\Logs\CH1&2")
+        # 로그 루트 (Google Drive 동기화 폴더 → NAS 자동 반영. 로컬 폴백은 런타임 내부 처리)
+        self._log_root = Path(
+            getattr(cfgc, "LOG_ROOT_DIR",
+                    r"G:\공유 드라이브\VanaM_Sputter\Sputter\Logs\CH1&2")
+        )
 
         # ✅ Server 페이지 생성/등록 (단 1회만)
         self.server_page: Optional[QWidget] = None

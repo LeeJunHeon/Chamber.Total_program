@@ -24,7 +24,7 @@ from pathlib import Path
 from typing import Optional
 
 
-DEFAULT_ERROR_ROOT = Path(r"\\VanaM_NAS\VanaM_Sputter\Sputter\Logs\CH1&2\ERROR")
+DEFAULT_ERROR_ROOT = Path(r"G:\공유 드라이브\VanaM_Sputter\Sputter\Logs\CH1&2\ERROR")
 _DEFAULT_LOGGER_NAME: Optional[str] = None
 
 _FAULT_LOCK = threading.Lock()

@@ -224,7 +224,8 @@
     "PLC_LOCK_WARN_MS": 2500.0,            // PLC 잠금 대기 경고 기준 (ms)
     "PLC_IO_WARN_MS": 2500.0,              // PLC I/O 지연 경고 기준 (ms)
     "PLC_COIL_LOG_INTERVAL_S": 5.0,        // PLC 코일 상태 로그 기록 주기 (초)
-    "PLC_COIL_LOG_NAS_DIR": "\\\\VanaM_NAS\\VanaM_Sputter\\Sputter\\Logs\\CH1&2\\CH1&2_PLC",
+    "PLC_COIL_LOG_NAS_DIR": "G:\\공유 드라이브\\VanaM_Sputter\\Sputter\\Logs\\CH1&2\\CH1&2_PLC",
+    "LOG_ROOT_DIR": "G:\\공유 드라이브\\VanaM_Sputter\\Sputter\\Logs\\CH1&2",
 
     // ── PLC 보정계수 (캘리브레이션) ──
     // PLC를 통한 전력 제어 및 측정 변환에 사용되는 값입니다.
@@ -250,7 +251,7 @@
 
     // ── 챔버 공정 런타임 ──
     "PROCESS_LIST_START_DIR": "\\\\VanaM_NAS\\VanaM_toShare",
-    "SPUTTER_CALIB_DB_DIR": "\\\\VanaM_NAS\\VanaM_Sputter\\Sputter\\Calib\\Database",
+    "SPUTTER_CALIB_DB_DIR": "G:\\공유 드라이브\\VanaM_Sputter\\Sputter\\Calib\\Database",
     "CHAMBER_OES_USB_INDEX_CH1": 0,        // CH1용 OES USB 인덱스
     "CHAMBER_OES_USB_INDEX_CH2": 1,        // CH2용 OES USB 인덱스
     "CHAMBER_RF_CONT_POLL_INTERVAL_MS": 1000,      // RF Continuous 상태 확인 주기 (ms)
