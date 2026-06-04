@@ -64,6 +64,14 @@ class ServerPage(QWidget):
         self._daily_fp = None           # ← 추가: 파일 핸들 유지
         self._daily_fp_path: Optional[Path] = None  # ← 추가: 오늘 경로 추적
 
+        # ✅ 로그 flush를 메인 스레드에서 분리 (G드라이브/NAS 지연 시 UI freeze 방지)
+        from concurrent.futures import ThreadPoolExecutor
+        self._daily_io_exec = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="ServerLogIO"
+        )
+        self._daily_flush_inflight = False   # 백그라운드 flush 진행 중 플래그
+        self._daily_dir_ready: Optional[Path] = None  # mkdir 완료된 디렉터리 캐시
+
         self._daily_flush_timer = QTimer(self)
         self._daily_flush_timer.setInterval(1000)  # 1초마다 파일로 flush
         self._daily_flush_timer.timeout.connect(self._flush_daily_log)
@@ -283,14 +291,18 @@ class ServerPage(QWidget):
                 
     def _daily_log_dir(self) -> Path:
         """
-        NAS 우선: <log_root>/CH1&2_Server
+        NAS/G드라이브 우선: <log_root>/CH1&2_Server
         실패 시 로컬: ./Logs_LocalFallback/Server
+        ✅ mkdir은 디렉터리가 바뀔 때만 1회 수행(매 tick 호출 방지)
         """
-        # 1) NAS(log_root) 우선
+        # 1) log_root 우선
         if self._log_root:
+            d = self._log_root / "CH1&2_Server"
+            if self._daily_dir_ready == d:
+                return d
             try:
-                d = self._log_root / "CH1&2_Server"
                 d.mkdir(parents=True, exist_ok=True)
+                self._daily_dir_ready = d
                 return d
             except Exception:
                 pass
@@ -303,7 +315,9 @@ class ServerPage(QWidget):
                 Path.cwd() / "Logs_LocalFallback" / "Server",
             )
         )
-        d.mkdir(parents=True, exist_ok=True)
+        if self._daily_dir_ready != d:
+            d.mkdir(parents=True, exist_ok=True)
+            self._daily_dir_ready = d
         return d
 
     def _daily_log_path(self) -> Path:
@@ -320,10 +334,19 @@ class ServerPage(QWidget):
     def _flush_daily_log(self) -> None:
         if not self._daily_buf:
             return
+        # ✅ 직전 flush가 아직 진행 중이면 이번 tick은 건너뜀(버퍼는 유지되어 다음 tick에 함께 기록)
+        if self._daily_flush_inflight:
+            return
 
         lines = self._daily_buf
         self._daily_buf = []
+        self._daily_flush_inflight = True
 
+        # ✅ 실제 파일 I/O는 백그라운드 스레드에서 (메인 스레드 freeze 방지)
+        self._daily_io_exec.submit(self._flush_daily_log_sync, lines)
+
+    def _flush_daily_log_sync(self, lines: list[str]) -> None:
+        """백그라운드 스레드에서 실행되는 실제 파일 기록."""
         try:
             today_path = self._daily_log_path()
 
@@ -341,14 +364,17 @@ class ServerPage(QWidget):
             self._daily_fp.write("\n".join(lines) + "\n")
             self._daily_fp.flush()
 
-        except Exception as e:
-            # 핸들 오류 시 리셋
-            self._daily_fp = None
-            self._daily_fp_path = None
+        except Exception:
+            # 핸들 오류 시 리셋 (다음 tick에 재오픈 시도)
             try:
-                self.lblSaved.setText(f"Auto-save failed: {e!r}")
+                if self._daily_fp is not None:
+                    self._daily_fp.close()
             except Exception:
                 pass
+            self._daily_fp = None
+            self._daily_fp_path = None
+        finally:
+            self._daily_flush_inflight = False
 
     def _save_log_to_file(self) -> None:
         try:
@@ -373,8 +399,17 @@ class ServerPage(QWidget):
             self.lblSaved.setText(f"Save failed: {e!r}")
 
     def closeEvent(self, event) -> None:
+        # ✅ 종료 시: 남은 버퍼를 동기로 1회 기록(타이머는 곧 멈추므로 여기서만 직접 기록)
         try:
-            self._flush_daily_log()
+            if self._daily_buf and not self._daily_flush_inflight:
+                lines = self._daily_buf
+                self._daily_buf = []
+                self._flush_daily_log_sync(lines)
+        except Exception:
+            pass
+        # ✅ 백그라운드 풀 정리(짧게 대기)
+        try:
+            self._daily_io_exec.shutdown(wait=True, cancel_futures=False)
         except Exception:
             pass
         try:

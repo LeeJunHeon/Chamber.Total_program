@@ -136,6 +136,13 @@ class PlasmaCleaningRuntime:
 
         self._cfg_mod = cfgc
 
+        # ✅ 로그 flush를 메인 스레드에서 분리 (G드라이브/NAS 지연 시 UI freeze 방지)
+        from concurrent.futures import ThreadPoolExecutor
+        self._runlog_io_exec = ThreadPoolExecutor(
+            max_workers=1, thread_name_prefix="PCRunLogIO"
+        )
+        self._runlog_flush_inflight = False
+
         parent = self._parent_widget() or QApplication.instance()  # QWidget 우선
         self._runlog_timer = QTimer(parent)
         self._runlog_timer.setInterval(1000)
@@ -2037,23 +2044,36 @@ class PlasmaCleaningRuntime:
             self._flush_run_log()
 
     def _flush_run_log(self) -> None:
-        """버퍼에 쌓인 파일 로그를 한 번에 파일로 flush."""
+        """버퍼에 쌓인 파일 로그를 백그라운드 스레드로 flush (메인 스레드 freeze 방지)."""
         fp = getattr(self, "_log_fp", None)
         if not fp:
             return
         if not self._runlog_buf:
+            return
+        # ✅ 직전 flush가 아직 진행 중이면 이번 tick은 건너뜀(버퍼 유지)
+        if self._runlog_flush_inflight:
             return
 
         lines = []
         while self._runlog_buf and len(lines) < 2000:
             lines.append(self._runlog_buf.popleft())
 
+        if not lines:
+            return
+
+        self._runlog_flush_inflight = True
+        self._runlog_io_exec.submit(self._flush_run_log_sync, fp, lines)
+
+    def _flush_run_log_sync(self, fp, lines: list[str]) -> None:
+        """백그라운드 스레드에서 실행되는 실제 파일 기록."""
         try:
             fp.write("\n".join(lines) + "\n")
             fp.flush()
         except Exception:
             # 파일 오류는 공정을 죽이지 않게
             pass
+        finally:
+            self._runlog_flush_inflight = False
 
     async def _cancel_and_wait(self, tasks: list[asyncio.Task]) -> None:
         curr = asyncio.current_task()
@@ -2209,16 +2229,35 @@ class PlasmaCleaningRuntime:
         self._log_fp.flush()
 
     def _close_run_log(self) -> None:
-        # ✅ 마지막 남은 버퍼를 먼저 flush
-        try:
-            self._flush_run_log()
-        except Exception:
-            pass
-
-        # ✅ 타이머 중지
+        # ✅ 타이머 먼저 중지(추가 flush 예약 방지)
         try:
             if getattr(self, "_runlog_timer", None):
                 self._runlog_timer.stop()
+        except Exception:
+            pass
+
+        # ✅ 진행 중인 백그라운드 flush가 끝나길 잠깐 대기
+        try:
+            exec_ = getattr(self, "_runlog_io_exec", None)
+            if exec_ is not None:
+                # 남은 작업 완료 대기 (짧게)
+                import time as _t
+                _deadline = _t.monotonic() + 3.0
+                while self._runlog_flush_inflight and _t.monotonic() < _deadline:
+                    _t.sleep(0.02)
+        except Exception:
+            pass
+
+        # ✅ 마지막 남은 버퍼를 동기로 직접 기록(타이머 멈췄으므로 안전)
+        try:
+            fp = getattr(self, "_log_fp", None)
+            if fp and self._runlog_buf:
+                lines = []
+                while self._runlog_buf:
+                    lines.append(self._runlog_buf.popleft())
+                if lines:
+                    fp.write("\n".join(lines) + "\n")
+                    fp.flush()
         except Exception:
             pass
 

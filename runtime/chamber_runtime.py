@@ -5434,11 +5434,14 @@ class ChamberRuntime:
                     # 1) NAS 기록
                     # 2) 실패 시 self._local_log_dir 로 자동 폴백
                     # 을 처리하므로, 여기서는 "직접 로컬 파일 쓰기"를 하지 않는다.
-                    await loop.run_in_executor(
-                        self._log_io_exec,
-                        self._log_write_sync,
-                        self._log_file_path,
-                        text,
+                    await asyncio.wait_for(
+                        loop.run_in_executor(
+                            self._log_io_exec,
+                            self._log_write_sync,
+                            self._log_file_path,
+                            text,
+                        ),
+                        timeout=5.0,
                     )
 
                     # ✅ SessionTextAppender가 이번 write에서 fallback으로 전환됐는지 1회 알림

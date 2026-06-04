@@ -89,14 +89,15 @@ class DailyCsvListAppender:
 
     def close(self) -> None:
         with self._lock:
+            fp = self._fp
+            self._fp = None       # ✅ 먼저 None으로 (GC가 invalidated 핸들에 접근하는 것 방지)
+            self._writer = None
             try:
-                if self._fp is not None:
-                    self._fp.flush()
-                    self._fp.close()
+                if fp is not None:
+                    fp.flush()
+                    fp.close()
             except Exception:
                 pass
-            self._fp = None
-            self._writer = None
             self._cur_path = None
             self._cur_header = None
 
@@ -223,15 +224,16 @@ class DailyCsvDictAppender:
 
     def close(self) -> None:
         with self._lock:
-            try:
-                if self._fp is not None:
-                    self._fp.flush()
-                    self._fp.close()
-            except Exception:
-                pass
-            self._fp = None
+            fp = self._fp
+            self._fp = None       # ✅ 먼저 None으로
             self._writer = None
             self._cur_path = None
+            try:
+                if fp is not None:
+                    fp.flush()
+                    fp.close()
+            except Exception:
+                pass
 
     def _path_for(self, dt: datetime, *, use_fallback: bool) -> Path:
         base = self._fallback_dir if use_fallback else self._primary_dir
@@ -341,14 +343,15 @@ class SessionTextAppender:
 
     def close(self) -> None:
         with self._lock:
+            fp = self._fp
+            self._fp = None       # ✅ 먼저 None으로
+            self._cur_path = None
             try:
-                if self._fp is not None:
-                    self._fp.flush()
-                    self._fp.close()
+                if fp is not None:
+                    fp.flush()
+                    fp.close()
             except Exception:
                 pass
-            self._fp = None
-            self._cur_path = None
 
     def _open(self, path: Path) -> None:
         _safe_mkdir(path.parent)
@@ -439,17 +442,18 @@ class FixedCsvDictAppender:
                 pass
 
     def close(self) -> None:
-        if self._fp is not None:
-            try:
-                self._fp.flush()
-            except Exception:
-                pass
-            try:
-                self._fp.close()
-            except Exception:
-                pass
-        self._fp = None
+        fp = self._fp
+        self._fp = None       # ✅ 먼저 None으로
         self._writer = None
+        if fp is not None:
+            try:
+                fp.flush()
+            except Exception:
+                pass
+            try:
+                fp.close()
+            except Exception:
+                pass
 
     def is_open(self) -> bool:
         return self._fp is not None
