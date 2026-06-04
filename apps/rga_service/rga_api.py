@@ -27,13 +27,13 @@ CH_CONFIG: Dict[int, Dict[str, str]] = {
         "ip": "192.168.1.20",
         "user": "admin",
         "password": "admin",
-        "csv": r"\\VanaM_NAS\VanaM_Sputter\RGA\Ch.1\RGA_spectrums.csv",
+        "csv": r"G:\공유 드라이브\VanaM_Sputter\RGA\Ch.1\RGA_spectrums.csv",
     },
     2: {
         "ip": "192.168.1.21",
         "user": "admin",
         "password": "admin",
-        "csv": r"\\VanaM_NAS\VanaM_Sputter\RGA\Ch.2\RGA_spectrums.csv",
+        "csv": r"G:\공유 드라이브\VanaM_Sputter\RGA\Ch.2\RGA_spectrums.csv",
     },
 }
 # =======================================

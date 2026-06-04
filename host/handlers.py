@@ -34,7 +34,8 @@ class HostHandlers:
         # ================== 로그 저장 헬퍼 ==================
         # NAS 우선, 실패 시 로컬 폴백 디렉터리 준비
         try:
-            root = Path(r"\\VanaM_NAS\VanaM_Sputter\Sputter\Logs\CH1&2")
+            root = Path(getattr(cfg, "LOG_ROOT_DIR",
+                        r"G:\공유 드라이브\VanaM_Sputter\Sputter\Logs\CH1&2"))
             d = root / "PLC_Remote"
             d.mkdir(parents=True, exist_ok=True)
             self._plc_log_dir = d              # 주 저장 폴더(NAS)

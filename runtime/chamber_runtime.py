@@ -463,7 +463,7 @@ class ChamberRuntime:
             ch=self.ch,
             csv_dir=Path(str(self.cfg._get(
                 "SPUTTER_CALIB_DB_DIR",
-                r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database",
+                r"G:\공유 드라이브\VanaM_Sputter\Sputter\Calib\Database",
             ))),
             log_func=lambda msg: self.append_log("CSV", msg),
         )
@@ -668,7 +668,7 @@ class ChamberRuntime:
                         str(
                             self.cfg._get(
                                 "SPUTTER_CALIB_DB_DIR",
-                                r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database",
+                                r"G:\공유 드라이브\VanaM_Sputter\Sputter\Calib\Database",
                             )
                         )
                     )

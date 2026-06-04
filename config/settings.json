@@ -365,7 +365,7 @@
     "CH_NAME": "ch1",
 
     // ── RGA CSV 저장 경로 ──
-    "RGA_CSV_PATH": "\\\\VanaM_NAS\\VanaM_Sputter\\RGA\\Ch.1\\RGA_spectrums.csv",
+    "RGA_CSV_PATH": "G:\\공유 드라이브\\VanaM_Sputter\\RGA\\Ch.1\\RGA_spectrums.csv",
 
     // ── 통신 포트 (CH1 전용) ──
     "IG_TCP_PORT": 4001,                   // CH1 이온게이지 포트
@@ -396,7 +396,7 @@
     "CH_NAME": "ch2",
 
     // ── RGA CSV 저장 경로 ──
-    "RGA_CSV_PATH": "\\\\VanaM_NAS\\VanaM_Sputter\\RGA\\Ch.2\\RGA_spectrums.csv",
+    "RGA_CSV_PATH": "G:\\공유 드라이브\\VanaM_Sputter\\RGA\\Ch.2\\RGA_spectrums.csv",
 
     // ── 통신 포트 (CH2 전용) ──
     "IG_TCP_PORT": 4002,                   // CH2 이온게이지 포트

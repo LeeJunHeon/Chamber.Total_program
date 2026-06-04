@@ -77,8 +77,8 @@ RGA_STEP_TIMEOUT_MS = int(RGA_WORKER_TIMEOUT_S * 1000) + 5_000
 
 # 채널별 CSV 기본 저장 경로(필요 시 main에서 ch를 선택해 사용)
 RGA_XLSX_PATH = {
-    "ch1": r"\\VanaM_NAS\VanaM_Sputter\RGA\Ch.1\RGA_spectrums.csv",
-    "ch2": r"\\VanaM_NAS\VanaM_Sputter\RGA\Ch.2\RGA_spectrums.csv",
+    "ch1": r"G:\공유 드라이브\VanaM_Sputter\RGA\Ch.1\RGA_spectrums.csv",
+    "ch2": r"G:\공유 드라이브\VanaM_Sputter\RGA\Ch.2\RGA_spectrums.csv",
 }
 RGA_XLSX_SHEET = "Histogram"
 

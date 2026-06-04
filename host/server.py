@@ -47,7 +47,8 @@ class DailyCommandCsvLogger:
     def __init__(self) -> None:
         self._lock: asyncio.Lock | None = None
 
-        primary = Path(r"\\VanaM_NAS\VanaM_Sputter\Sputter\Logs\CH1&2") / "CH1&2_Server"
+        primary = Path(getattr(cfgc, "LOG_ROOT_DIR",
+                       r"G:\공유 드라이브\VanaM_Sputter\Sputter\Logs\CH1&2")) / "CH1&2_Server"
         fallback = Path(
             getattr(
                 cfgc,

@@ -100,8 +100,8 @@ def _post_anomaly_webhook(msg: str) -> None:
 # ── OES Anomaly Detection END ──────────────────────────────
 
 
-# NAS 저장 경로 (고정)
-_NAS_OES_ROOT = Path(r"\\VanaM_NAS\VanaM_Sputter\OES")
+# 저장 경로 (Google Drive 동기화 폴더 → NAS 자동 반영)
+_NAS_OES_ROOT = Path(r"G:\공유 드라이브\VanaM_Sputter\OES")
 _NAS_CH_DIR = {
     1: _NAS_OES_ROOT / "CH1",
     2: _NAS_OES_ROOT / "CH2",

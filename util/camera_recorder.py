@@ -83,7 +83,7 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────
 # 저장 루트
 # ──────────────────────────────────────────────────────────
-NAS_LOG_ROOT   = Path(r"\\VanaM_NAS\VanaM_Sputter\Sputter\Logs\CH1&2\Camera_Logs")
+NAS_LOG_ROOT   = Path(r"G:\공유 드라이브\VanaM_Sputter\Sputter\Logs\CH1&2\Camera_Logs")
 LOCAL_FALLBACK = Path("rf_logs")   # NAS 접근 불가 시 폴백
 
 # ──────────────────────────────────────────────────────────
