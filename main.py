@@ -216,6 +216,17 @@ class MainWindow(QWidget):
         self.chat_pc   = _new_chat("PC")
         self.chat_tsp  = _new_chat("TSP")
 
+        # ★ PLC 끊김 전용 ChatNotifier (별도 웹훅 URL)
+        _plc_url = (getattr(cfgl, "CHAT_WEBHOOK_PLC_DISCONNECT_URL", "") or "").strip()
+        self.chat_plc = ChatNotifier(_plc_url) if _plc_url else None
+        if self.chat_plc is not None:
+            try:
+                self.chat_plc.setObjectName("ChatNotifier_PLC_DISCONNECT")
+            except Exception:
+                pass
+            self.chat_plc.set_defer(False)   # 끊김/재연결은 항상 즉시 전송
+            self.chat_plc.start()
+
         # ── 현재 PLC 로그의 소유 챔버 (1/2). 없으면 None → 방송 모드
         self._plc_owner: Optional[int] = None
         self.pc = None  # Plasma Cleaning 런타임 핸들
@@ -226,12 +237,13 @@ class MainWindow(QWidget):
         # ★ PLC 연결 상태 변화 → 구글챗 알림 연결
         def _on_plc_conn_change(connected: bool, detail: str):
             try:
-                notifier = self.chat_host or self.chat_ch1 or self.chat_ch2 or self.chat_pc
+                notifier = self.chat_plc
                 if notifier is None:
                     return
                 if connected:
-                    # 재연결: 성공 카드(텍스트)로 즉시 전송
-                    notifier.notify_text(f"✅ {detail}")
+                    # 재연결: 성공 카드로 즉시 전송
+                    notifier._post_card("PLC 재연결", subtitle=detail,
+                                        status="SUCCESS", urgent=True)
                 else:
                     # 끊김: 장비 오류 카드로 즉시 전송
                     notifier.notify_error_event("PLC", "E401", detail)
