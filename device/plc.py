@@ -679,7 +679,7 @@ class AsyncPLC:
         """heartbeat ping 성공 시 호출. 끊김 상태였으면 '재연결' 알림 1회 발송."""
         # 끊김 알림을 이미 보낸 상태에서 복구된 경우에만 '재연결' 알림
         if self._disconnect_alerted:
-            self._fire_conn_change(True, f"PLC 재연결 성공 ({self.cfg.ip}:{self.cfg.port})")
+            self._fire_conn_change(True, f"[CH1&2] PLC 재연결 성공 ({self.cfg.ip}:{self.cfg.port})")
         # 상태 리셋 (다음 끊김을 새 사이클로 추적)
         self._disconnect_since = 0.0
         self._disconnect_alerted = False
@@ -701,7 +701,7 @@ class AsyncPLC:
             elapsed = int(now - self._disconnect_since)
             self._fire_conn_change(
                 False,
-                f"PLC 연결 끊김 {elapsed}초 경과, 재연결 실패 ({self.cfg.ip}:{self.cfg.port})"
+                f"[CH1&2 공용] PLC 연결 끊김 {elapsed}초 경과, 재연결 실패 ({self.cfg.ip}:{self.cfg.port})"
             )
 
     # ---------- 저수준 IO(직렬화) ----------
