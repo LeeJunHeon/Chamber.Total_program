@@ -330,6 +330,21 @@ class AsyncPLC:
         self._hb_task: Optional[asyncio.Task] = None
         self._closed = False
         self._hb_paused: bool = False   # ← 추가
+
+        # ── 연결 상태 변화 알림(구글챗)용 ──────────────────────────
+        # main.py에서 set_conn_change_callback()으로 주입.
+        # 시그니처: cb(connected: bool, detail: str)
+        self._conn_change_cb = None
+        # True=연결정상, False=끊김, None=아직 판단 전(부팅 직후)
+        self._conn_alert_state: Optional[bool] = None
+        # 끊김을 처음 감지한 시각(monotonic). 끊김 알림 발송 후 None로 리셋하지 않고
+        # 재연결 시에만 리셋. 0.0이면 "현재 끊김 추적 안 함".
+        self._disconnect_since: float = 0.0
+        # "끊김" 알림을 이미 보냈는지 (중복 방지)
+        self._disconnect_alerted: bool = False
+        # 끊김 알림까지 대기 시간(초)
+        self._disconnect_alert_after_s: float = 60.0
+
         self.log = logger or (lambda *a, **k: None)
 
         # 혼합 대/소문자/논리명 별칭
@@ -370,6 +385,11 @@ class AsyncPLC:
         # 재연결 정책
         self.cfg.connect_retry = int(getattr(cfgc, "PLC_RECONNECT_RETRY", self.cfg.connect_retry))
         self.cfg.connect_retry_delay_s = float(getattr(cfgc, "PLC_RECONNECT_DELAY_S", self.cfg.connect_retry_delay_s))
+
+        # 끊김 알림 대기 시간
+        self._disconnect_alert_after_s = float(
+            getattr(cfgc, "PLC_DISCONNECT_ALERT_AFTER_S", self._disconnect_alert_after_s)
+        )
 
         # momentary pulse 폭
         self.cfg.pulse_ms = int(getattr(cfgc, "PLC_CMD_PULSE_MS", self.cfg.pulse_ms))
@@ -479,6 +499,22 @@ class AsyncPLC:
             except Exception:
                 pass
         return False
+    
+    def set_conn_change_callback(self, cb) -> None:
+        """연결 상태 변화 알림 콜백 등록.
+        cb(connected: bool, detail: str) 형태. main.py에서 ChatNotifier에 연결.
+        """
+        self._conn_change_cb = cb
+
+    def _fire_conn_change(self, connected: bool, detail: str = "") -> None:
+        """콜백을 안전하게 호출(예외는 삼킴)."""
+        cb = self._conn_change_cb
+        if cb is None:
+            return
+        try:
+            cb(bool(connected), str(detail))
+        except Exception:
+            pass
 
     def _detect_uid_kw(self, method) -> Optional[str]:
         try:
@@ -600,19 +636,26 @@ class AsyncPLC:
                     continue
 
                 # ✅ 1) PLC가 이미 바쁘면(락 점유 중) 워치독은 이번 tick 스킵
+                #    단, 락이 잡혀 있다 = 정상 I/O 진행 중이므로 "연결됨"으로 간주
                 if self._lock.locked():
+                    self._mark_conn_ok()
                     continue
 
+                ping_ok = False
                 try:
                     # ✅ 2) 워치독은 "가벼운 ping"만. (여기서는 재연결까지 하지 않음)
-                    #    가능하면 read_coil(0) 대신 low-level read_coils 1개가 더 안전.
                     async with self._io_lock("heartbeat", addr=0):
                         await asyncio.to_thread(self._connect_sync)
                         if self._client is None:
-                            continue
-                        await asyncio.to_thread(self._client.read_coils, 0, count=1, **self._uid_kwargs())
+                            ping_ok = False
+                        else:
+                            await asyncio.to_thread(
+                                self._client.read_coils, 0, count=1, **self._uid_kwargs()
+                            )
+                            ping_ok = True
 
                 except Exception:
+                    ping_ok = False
                     # ✅ 3) 실패 시 재연결을 락 안에서 길게 하지 말고,
                     #    소켓 꼬임 방지를 위해 close만 조용히 시도(선택)
                     try:
@@ -622,8 +665,44 @@ class AsyncPLC:
                     except Exception:
                         pass
 
+                # ✅ 4) ping 결과로 연결 상태/알림 처리
+                if ping_ok:
+                    self._mark_conn_ok()
+                else:
+                    self._mark_conn_fail()
+
         except asyncio.CancelledError:
             return
+
+    # ---------- 연결 상태/알림 처리 ----------
+    def _mark_conn_ok(self) -> None:
+        """heartbeat ping 성공 시 호출. 끊김 상태였으면 '재연결' 알림 1회 발송."""
+        # 끊김 알림을 이미 보낸 상태에서 복구된 경우에만 '재연결' 알림
+        if self._disconnect_alerted:
+            self._fire_conn_change(True, f"PLC 재연결 성공 ({self.cfg.ip}:{self.cfg.port})")
+        # 상태 리셋 (다음 끊김을 새 사이클로 추적)
+        self._disconnect_since = 0.0
+        self._disconnect_alerted = False
+        self._conn_alert_state = True
+
+    def _mark_conn_fail(self) -> None:
+        """heartbeat ping 실패 시 호출. 최초 끊김 시각을 기록하고,
+        대기 시간 경과 + 미발송 상태면 '끊김' 알림 1회 발송."""
+        now = time.monotonic()
+        if self._disconnect_since == 0.0:
+            # 끊김 추적 시작
+            self._disconnect_since = now
+        self._conn_alert_state = False
+
+        # 아직 알림 안 보냈고, 경과 시간이 임계 넘으면 1회 발송
+        if (not self._disconnect_alerted) and \
+           (now - self._disconnect_since >= float(self._disconnect_alert_after_s)):
+            self._disconnect_alerted = True
+            elapsed = int(now - self._disconnect_since)
+            self._fire_conn_change(
+                False,
+                f"PLC 연결 끊김 {elapsed}초 경과, 재연결 실패 ({self.cfg.ip}:{self.cfg.port})"
+            )
 
     # ---------- 저수준 IO(직렬화) ----------
     def _to_plc_error(self, op: str, addr: int | None, e: Exception) -> PLCError:

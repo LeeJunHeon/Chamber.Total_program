@@ -433,6 +433,10 @@ PLC_WATCHDOG_INTERVAL_S = 15.0
 PLC_RECONNECT_RETRY = 2
 PLC_RECONNECT_DELAY_S = 0.5
 
+# PLC 연결 끊김 → 구글챗 알림 발송까지 대기 시간 (초)
+# 끊긴 뒤 이 시간이 지나도 재연결 안 되면 "끊김" 알림 1회 발송
+PLC_DISCONNECT_ALERT_AFTER_S = 60.0
+
 PLC_CMD_PULSE_MS = 180
 
 PLC_LOCK_WARN_MS = 2500.0

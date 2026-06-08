@@ -223,6 +223,25 @@ class MainWindow(QWidget):
         # PLC (공유) : 실제 AsyncPLC 인스턴스는 하나만 생성
         self.plc: AsyncPLC = AsyncPLC(logger=self._plc_log)
 
+        # ★ PLC 연결 상태 변화 → 구글챗 알림 연결
+        def _on_plc_conn_change(connected: bool, detail: str):
+            try:
+                notifier = self.chat_host or self.chat_ch1 or self.chat_ch2 or self.chat_pc
+                if notifier is None:
+                    return
+                if connected:
+                    # 재연결: 성공 카드(텍스트)로 즉시 전송
+                    notifier.notify_text(f"✅ {detail}")
+                else:
+                    # 끊김: 장비 오류 카드로 즉시 전송
+                    notifier.notify_error_event("PLC", "E401", detail)
+            except Exception:
+                pass
+            # UI 로그에도 남김
+            self._broadcast_log("PLC", detail)
+
+        self.plc.set_conn_change_callback(_on_plc_conn_change)
+
         # ★ 챔버/플라즈마별 PLC Proxy 생성 (로그 출처 구분용)
         self._plc_ch1 = _PLCProxy(self.plc, "CH1")
         self._plc_ch2 = _PLCProxy(self.plc, "CH2")
