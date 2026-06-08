@@ -701,7 +701,7 @@ class AsyncPLC:
             elapsed = int(now - self._disconnect_since)
             self._fire_conn_change(
                 False,
-                f"[CH1&2 공용] PLC 연결 끊김 {elapsed}초 경과, 재연결 실패 ({self.cfg.ip}:{self.cfg.port})"
+                f"[CH1&2] PLC 연결 끊김 {elapsed}초 경과, 재연결 실패 ({self.cfg.ip}:{self.cfg.port})"
             )
 
     # ---------- 저수준 IO(직렬화) ----------
