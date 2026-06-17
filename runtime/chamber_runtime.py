@@ -819,7 +819,7 @@ class ChamberRuntime:
                                 if onb:
                                     pc = getattr(self, "process_controller", None)
                                     params = getattr(pc, "current_params", {}) or {}
-                                    use_rf       = bool(params.get("use_rf", False))
+                                    use_rf       = bool(params.get("use_rf_power", False))
                                     use_rf_pulse = bool(params.get("use_rf_pulse", False))
 
                                     if use_rf or use_rf_pulse:
