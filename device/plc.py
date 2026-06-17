@@ -314,6 +314,10 @@ class AsyncPLC:
                              inter_cmd_gap_s=inter_cmd_gap_s, heartbeat_s=heartbeat_s,
                              pulse_ms=pulse_ms)
         
+        # 끊김 알림 대기 시간 — _apply_cfg_from_config()가 getattr fallback 기본값으로
+        # 이 값을 읽으므로, 반드시 호출 '전에' 초기화해야 함
+        self._disconnect_alert_after_s: float = 60.0
+        
         # ✅ config_common 값이 있으면 덮어써서 “초기값”을 config 기준으로 맞춤
         self._apply_cfg_from_config()
 
@@ -342,8 +346,6 @@ class AsyncPLC:
         self._disconnect_since: float = 0.0
         # "끊김" 알림을 이미 보냈는지 (중복 방지)
         self._disconnect_alerted: bool = False
-        # 끊김 알림까지 대기 시간(초)
-        self._disconnect_alert_after_s: float = 60.0
 
         self.log = logger or (lambda *a, **k: None)
 
