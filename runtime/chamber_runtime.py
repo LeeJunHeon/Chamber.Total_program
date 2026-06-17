@@ -5219,7 +5219,9 @@ class ChamberRuntime:
         self._soon(self._enqueue_ui_log, line_ui)
 
         if not getattr(self, "_log_file_path", None):
-            self._soon(self._prestart_buf.append, line_file)
+            buf = getattr(self, "_prestart_buf", None)
+            if buf is not None:
+                self._soon(buf.append, line_file)
             return
         self._soon(self._log_enqueue_nowait, line_file)
 
