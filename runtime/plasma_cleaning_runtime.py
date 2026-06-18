@@ -252,7 +252,11 @@ class PlasmaCleaningRuntime:
                 # poll_loop는 모든 채널(Ar/O2/N2)을 emit하므로 필터 필수
                 # ★ process_time 카운트가 active일 때만 수집 (RF 안정화 전 값 제외)
                 with contextlib.suppress(Exception):
-                    if getattr(self, "_process_timer_active", False):
+                    # ★ flow는 GAS MFC가 보낸 이벤트만 수집한다.
+                    #   CH2 PC는 mfc_gas(=CH1 MFC)와 mfc_pressure(=CH2 SP4)가 서로 다른 인스턴스인데,
+                    #   SP4의 R60은 가스 채널이 전부 0이라 함께 수집되면 평균이 절반(예: 14.95)으로 떨어진다.
+                    #   CH1 PC는 두 MFC가 동일 인스턴스라 아래 조건이 그대로 True가 되어 정상 수집된다.
+                    if getattr(self, "_process_timer_active", False) and (mfc is self.mfc_gas):
                         selected_idx  = int(getattr(self, "_pc_gas_idx", 3) or 3)
                         selected_gas  = ""
                         if self.mfc_gas and hasattr(self.mfc_gas, "gas_map"):
@@ -267,7 +271,12 @@ class PlasmaCleaningRuntime:
                 # ✅ 데이터 수집 — ★ process_time 카운트가 active일 때만
                 with contextlib.suppress(Exception):
                     val = getattr(ev, "value", None)
-                    if getattr(self, "_process_timer_active", False) and isinstance(val, (int, float)):
+                    # ★ pressure는 압력 제어 MFC(mfc_pressure=SP4)가 보낸 이벤트만 수집한다.
+                    #   CH2 PC에서 GAS MFC의 R5까지 섞이면 평균이 엉뚱한 값(예: 17.5)이 된다.
+                    #   CH1 PC는 두 MFC가 동일 인스턴스라 조건이 그대로 True가 되어 정상 수집된다.
+                    if (getattr(self, "_process_timer_active", False)
+                            and isinstance(val, (int, float))
+                            and (mfc is self.mfc_pressure)):
                         self._pc_pressure_readings.append(float(val))
 
     async def _pump_ig_events(self, label: str) -> None:
@@ -1886,7 +1895,9 @@ class PlasmaCleaningRuntime:
         return {
             "process_name"  : self._current_process_name or "Plasma Cleaning",
             "time"          : float(p.process_time_min),
-            "base_pressure" : min(self._pc_ig_readings) if self._pc_ig_readings else None,
+            # base pressure: IG는 목표 도달 직후 꺼지므로, 읽기 리스트의 마지막 값이 곧 도달 시점의 실제 진공도.
+            # (기존 min()은 리스트가 초반 값만 들고 있을 때 실제보다 높게 찍힐 수 있어 마지막 값으로 변경)
+            "base_pressure" : self._pc_ig_readings[-1] if self._pc_ig_readings else None,
             "sp_ar"         : float(p.gas_flow_sccm),
             "avg_ar"        : _avg(self._pc_flow_readings),
             "sp_pressure"   : float(p.sp4_setpoint_mTorr),
