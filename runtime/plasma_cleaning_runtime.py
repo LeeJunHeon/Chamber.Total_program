@@ -964,6 +964,14 @@ class PlasmaCleaningRuntime:
         async def _rf_toggle_enable(on: bool):
             # RF SET 래치(DCV_SET_1)는 여기가 유일한 경로
             await self.plc.power_enable(bool(on), family="DCV", set_idx=1)
+            # ✅ 카메라: RF 파워 on/off에 연동 (켜질 때 촬영 시작, 꺼질 때 종료)
+            with contextlib.suppress(Exception):
+                recorder = getattr(self, "camera_recorder", None)
+                if recorder:
+                    if on:
+                        recorder.start("CLEANING")
+                    else:
+                        recorder.stop()
 
         cfgm = getattr(self, "_cfg_mod", cfgc)
 
@@ -1160,11 +1168,8 @@ class PlasmaCleaningRuntime:
         with contextlib.suppress(Exception):
             runtime_state.mark_started("pc", ch)
 
-        # ✅ 카메라 녹화 시작
-        with contextlib.suppress(Exception):
-            recorder = getattr(self, "camera_recorder", None)
-            if recorder:
-                recorder.start("CLEANING")
+        # ✅ 카메라 녹화: 공정 시작이 아니라 RF 파워 on 시점(_rf_toggle_enable)에서 시작한다.
+        #    (종료: _rf_toggle_enable(False) + 공정 종료 시 stop() 안전망)
         
         # =============================================================
         # 테스트 모드

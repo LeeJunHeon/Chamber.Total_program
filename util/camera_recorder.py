@@ -704,63 +704,35 @@ class CameraRecorder:
 
     # ── 내부: 녹화 루프 ────────────────────────────────────
     def _record_loop(self) -> None:
-        """백그라운드 스레드 본체. 예외가 나도 메인에 전파하지 않는다."""
+            """백그라운드 스레드 본체. 1초 주기로 촬영하여 원본 이미지만 저장한다.
+            (OCR/파싱 없음. 예외가 나도 메인 공정에 전파하지 않는다.)"""
 
-        # ── 1) 경로 결정 ──────────────────────────────────
-        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            # ── 1) 저장 폴더: {root}/{모드}/{YYYYMMDD_HHMMSS}/ ──
+            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+            save_dir = _resolve_root() / self._mode_folder / ts
+            try:
+                save_dir.mkdir(parents=True, exist_ok=True)
+            except Exception as e:
+                logger.error("[CameraRecorder] 폴더 생성 실패: %s", e)
+                return
 
-        root      = _resolve_root()
-        mode_dir  = root / self._mode_folder
-        raw_dir   = mode_dir / "raw" / ts
-        csv_path  = mode_dir / f"{self._mode_folder}_{ts}.csv"
+            # ── 2) 카메라 오픈 ──
+            cap = cv2.VideoCapture(self._cam_idx)
+            if not cap.isOpened():
+                logger.error("[CameraRecorder] 카메라 열기 실패 (index=%d)", self._cam_idx)
+                return
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1920)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+            logger.info("[CameraRecorder] 시작 mode=%s → %s", self._mode, save_dir)
 
-        try:
-            mode_dir.mkdir(parents=True, exist_ok=True)
-            raw_dir.mkdir(parents=True, exist_ok=True)
-        except Exception as e:
-            logger.error("[CameraRecorder] 폴더 생성 실패: %s", e)
-            return
+            err_count = 0
+            img_count = 0
 
-        # ── 2) 카메라 오픈 ────────────────────────────────
-        cap = cv2.VideoCapture(self._cam_idx)
-        if not cap.isOpened():
-            logger.error("[CameraRecorder] 카메라 열기 실패 (index=%d)", self._cam_idx)
-            return
-
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1920)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-        actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
-        actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        logger.info("[CameraRecorder] 카메라 해상도: %dx%d", actual_w, actual_h)
-
-        fieldnames = ["timestamp"] + self._active_labels
-        err_count  = 0
-        img_count  = 0
-        saved_count = 0
-
-        # ── 누적 카운터 / 히스토리 ────────────────────────
-        success_count = {lbl: 0 for lbl in self._active_labels}
-        fail_count    = {lbl: 0 for lbl in self._active_labels}
-        off_count     = {lbl: 0 for lbl in self._active_labels}
-        outlier_count = {lbl: 0 for lbl in self._active_labels}
-        prev_values: dict = {lbl: None for lbl in self._active_labels}
-        history: dict = {
-            lbl: deque(maxlen=TEMPORAL_HISTORY_N) for lbl in self._active_labels
-        }
-
-        logger.info("[CameraRecorder] CSV  → %s", csv_path)
-        logger.info("[CameraRecorder] 이미지 → %s (조건부 저장)", raw_dir)
-
-        try:
-            with open(csv_path, "w", newline="", encoding="utf-8-sig") as f:
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
-                writer.writeheader()
-                f.flush()
-
+            # ── 3) 캡처 루프 ──
+            try:
                 while not self._stop_event.is_set():
                     t0 = time.time()
 
-                    # ── 프레임 캡처 ──────────────────────
                     ret, frame = cap.read()
                     if not ret:
                         err_count += 1
@@ -772,140 +744,25 @@ class CameraRecorder:
                     err_count = 0
                     img_count += 1
 
-                    now_dt  = datetime.now()
-                    now_str = now_dt.strftime("%Y-%m-%d %H:%M:%S")
-                    now_hms = now_dt.strftime("%H%M%S")
-
-                    # ── 회전 보정 ────────────────────────
+                    # 분석 파이프라인과 동일 방향(세로 1080x1920)으로 회전 후 저장
                     frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+                    now_hms = datetime.now().strftime("%H%M%S")
+                    try:
+                        img_name = save_dir / f"{now_hms}_{img_count:04d}.jpg"
+                        cv2.imwrite(str(img_name), frame)
+                    except Exception as e:
+                        logger.warning("[CameraRecorder] 이미지 저장 실패: %s", e)
 
-                    # ── OCR (ON/OFF 선체크 + 캐스케이드) ──
-                    row: dict = {"timestamp": now_str}
-                    ocr_failed   = False
-                    spike_detect = False
-
-                    for label, roi, p in zip(self._active_labels, self._rois, self._params):
-                        y1, y2, x1, x2 = roi
-                        fh, fw = frame.shape[:2]
-                        pad = 5
-                        y1p, y2p = max(0, y1 - pad), min(fh, y2 + pad)
-                        x1p, x2p = max(0, x1 - pad), min(fw, x2 + pad)
-                        crop = frame[y1p:y2p, x1p:x2p]
-
-                        # ① ON/OFF 판정 — OFF면 OCR 건너뛰고 None 기록
-                        if not _is_display_on(crop):
-                            row[label] = None
-                            off_count[label] += 1
-                            # 활성 채널이 OFF면 failed 로 간주하지 않음 (램프 전/후 정상)
-                            continue
-
-                        # ② 캐스케이드 OCR
-                        result = _ocr_cascade(crop, p)
-
-                        # ③ 시계열 검증 — 히스토리 기반 outlier 식별
-                        if result is not None:
-                            try:
-                                cur_val = float(result)
-                                if _temporal_is_outlier(cur_val, history[label]):
-                                    outlier_count[label] += 1
-                                    # 기록은 유지하되, diag 이미지 저장 트리거
-                                    if label in self._check_labels:
-                                        spike_detect = True
-                                history[label].append(cur_val)
-                            except (ValueError, TypeError):
-                                pass
-
-                        row[label] = result
-
-                        # 에러/급변 판단은 해당 공정 관련 레이블만
-                        if label in self._check_labels:
-                            if result is None:
-                                ocr_failed = True
-                                fail_count[label] += 1
-                            else:
-                                success_count[label] += 1
-                                try:
-                                    cur_val  = float(result)
-                                    prev_val = prev_values.get(label)
-                                    if prev_val is not None and prev_val != 0.0:
-                                        change_pct = abs(cur_val - prev_val) / abs(prev_val) * 100.0
-                                        if change_pct >= SPIKE_THRESHOLD_PCT:
-                                            spike_detect = True
-                                            logger.info(
-                                                "[CameraRecorder] 급변 감지 %s: %.0f → %.0f (%.1f%%)",
-                                                label, prev_val, cur_val, change_pct,
-                                            )
-                                    prev_values[label] = cur_val
-                                except (ValueError, TypeError):
-                                    pass
-                        else:
-                            # 비활성 채널도 success/fail은 집계 (ON 상태였을 때)
-                            if result is None:
-                                fail_count[label] += 1
-                            else:
-                                success_count[label] += 1
-
-                    # ── CSV 기록 ─────────────────────────
-                    writer.writerow(row)
-                    f.flush()
-
-                    # ── 조건부 이미지 저장 (진단 이미지) ──
-                    if ocr_failed or spike_detect:
-                        saved_count += 1
-                        reason = []
-                        if ocr_failed:   reason.append("ocr_fail")
-                        if spike_detect: reason.append("spike")
-                        reason_str = "_".join(reason)
-
-                        try:
-                            diag = frame.copy()
-                            for lbl, roi_d, pd in zip(_ALL_LABELS, self._rois, self._params):
-                                y1d, y2d, x1d, x2d = roi_d
-                                color = (0, 255, 80) if lbl in self._check_labels else (120, 120, 120)
-                                cv2.rectangle(diag, (x1d, y1d), (x2d, y2d), color, 2)
-                                val = row.get(lbl, "")
-                                cv2.putText(diag, f"{lbl.split('_',1)[-1]}:{val or '?'}",
-                                            (x1d, max(y1d - 4, 12)),
-                                            cv2.FONT_HERSHEY_SIMPLEX, 0.38, color, 1)
-                            img_name = raw_dir / f"{now_hms}_{img_count:04d}_{reason_str}.jpg"
-                            cv2.imwrite(str(img_name), diag)
-                        except Exception as e:
-                            logger.warning("[CameraRecorder] 이미지 저장 실패: %s", e)
-
-                    # ── 인터벌 대기 (stop_event 감지 포함) ──
-                    elapsed  = time.time() - t0
+                    # 인터벌 대기 (stop_event 즉시 감지)
+                    elapsed = time.time() - t0
                     deadline = time.time() + max(0.0, self._interval - elapsed)
                     while time.time() < deadline:
                         if self._stop_event.is_set():
                             break
                         time.sleep(0.05)
 
-        except Exception as e:
-            logger.error("[CameraRecorder] 루프 오류: %s", e)
-        finally:
-            cap.release()
-            # ROI별 누적 성공률 요약
-            try:
-                summary_lines = []
-                for lbl in self._active_labels:
-                    succ = success_count[lbl]
-                    fail = fail_count[lbl]
-                    off  = off_count[lbl]
-                    out  = outlier_count[lbl]
-                    total = succ + fail + off
-                    if total == 0:
-                        continue
-                    on_total = succ + fail
-                    rate = (succ / on_total * 100.0) if on_total > 0 else 0.0
-                    marker = "*" if lbl in self._check_labels else " "
-                    summary_lines.append(
-                        f"  {marker} {lbl:10s}  ON={on_total:4d} 성공={succ:4d} "
-                        f"실패={fail:4d}  OFF={off:4d}  의심={out:3d}  인식율={rate:5.1f}%"
-                    )
-                logger.info("[CameraRecorder] ROI별 인식 요약:\n" + "\n".join(summary_lines))
-            except Exception:
-                pass
-            logger.info(
-                "[CameraRecorder] 완료 — 촬영 %d장, 저장 %d장 | CSV: %s",
-                img_count, saved_count, csv_path,
-            )
+            except Exception as e:
+                logger.error("[CameraRecorder] 루프 오류: %s", e)
+            finally:
+                cap.release()
+                logger.info("[CameraRecorder] 완료 — 촬영 %d장 | 폴더: %s", img_count, save_dir)
