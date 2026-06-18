@@ -704,65 +704,65 @@ class CameraRecorder:
 
     # ── 내부: 녹화 루프 ────────────────────────────────────
     def _record_loop(self) -> None:
-            """백그라운드 스레드 본체. 1초 주기로 촬영하여 원본 이미지만 저장한다.
-            (OCR/파싱 없음. 예외가 나도 메인 공정에 전파하지 않는다.)"""
+        """백그라운드 스레드 본체. 1초 주기로 촬영하여 원본 이미지만 저장한다.
+        (OCR/파싱 없음. 예외가 나도 메인 공정에 전파하지 않는다.)"""
 
-            # ── 1) 저장 폴더: {root}/{모드}/{YYYYMMDD_HHMMSS}/ ──
-            ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-            save_dir = _resolve_root() / self._mode_folder / ts
-            try:
-                save_dir.mkdir(parents=True, exist_ok=True)
-            except Exception as e:
-                logger.error("[CameraRecorder] 폴더 생성 실패: %s", e)
-                return
+        # ── 1) 저장 폴더: {root}/{모드}/{YYYYMMDD_HHMMSS}/ ──
+        ts = datetime.now().strftime("%Y%m%d_%H%M%S")
+        save_dir = _resolve_root() / self._mode_folder / ts
+        try:
+            save_dir.mkdir(parents=True, exist_ok=True)
+        except Exception as e:
+            logger.error("[CameraRecorder] 폴더 생성 실패: %s", e)
+            return
 
-            # ── 2) 카메라 오픈 ──
-            cap = cv2.VideoCapture(self._cam_idx)
-            if not cap.isOpened():
-                logger.error("[CameraRecorder] 카메라 열기 실패 (index=%d)", self._cam_idx)
-                return
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1920)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-            logger.info("[CameraRecorder] 시작 mode=%s → %s", self._mode, save_dir)
+        # ── 2) 카메라 오픈 ──
+        cap = cv2.VideoCapture(self._cam_idx)
+        if not cap.isOpened():
+            logger.error("[CameraRecorder] 카메라 열기 실패 (index=%d)", self._cam_idx)
+            return
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1920)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+        logger.info("[CameraRecorder] 시작 mode=%s → %s", self._mode, save_dir)
 
-            err_count = 0
-            img_count = 0
+        err_count = 0
+        img_count = 0
 
-            # ── 3) 캡처 루프 ──
-            try:
-                while not self._stop_event.is_set():
-                    t0 = time.time()
+        # ── 3) 캡처 루프 ──
+        try:
+            while not self._stop_event.is_set():
+                t0 = time.time()
 
-                    ret, frame = cap.read()
-                    if not ret:
-                        err_count += 1
-                        if err_count > 10:
-                            logger.error("[CameraRecorder] 카메라 읽기 반복 실패")
-                            break
-                        time.sleep(0.3)
-                        continue
-                    err_count = 0
-                    img_count += 1
+                ret, frame = cap.read()
+                if not ret:
+                    err_count += 1
+                    if err_count > 10:
+                        logger.error("[CameraRecorder] 카메라 읽기 반복 실패")
+                        break
+                    time.sleep(0.3)
+                    continue
+                err_count = 0
+                img_count += 1
 
-                    # 분석 파이프라인과 동일 방향(세로 1080x1920)으로 회전 후 저장
-                    frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
-                    now_hms = datetime.now().strftime("%H%M%S")
-                    try:
-                        img_name = save_dir / f"{now_hms}_{img_count:04d}.jpg"
-                        cv2.imwrite(str(img_name), frame)
-                    except Exception as e:
-                        logger.warning("[CameraRecorder] 이미지 저장 실패: %s", e)
+                # 분석 파이프라인과 동일 방향(세로 1080x1920)으로 회전 후 저장
+                frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
+                now_hms = datetime.now().strftime("%H%M%S")
+                try:
+                    img_name = save_dir / f"{now_hms}_{img_count:04d}.jpg"
+                    cv2.imwrite(str(img_name), frame)
+                except Exception as e:
+                    logger.warning("[CameraRecorder] 이미지 저장 실패: %s", e)
 
-                    # 인터벌 대기 (stop_event 즉시 감지)
-                    elapsed = time.time() - t0
-                    deadline = time.time() + max(0.0, self._interval - elapsed)
-                    while time.time() < deadline:
-                        if self._stop_event.is_set():
-                            break
-                        time.sleep(0.05)
+                # 인터벌 대기 (stop_event 즉시 감지)
+                elapsed = time.time() - t0
+                deadline = time.time() + max(0.0, self._interval - elapsed)
+                while time.time() < deadline:
+                    if self._stop_event.is_set():
+                        break
+                    time.sleep(0.05)
 
-            except Exception as e:
-                logger.error("[CameraRecorder] 루프 오류: %s", e)
-            finally:
-                cap.release()
-                logger.info("[CameraRecorder] 완료 — 촬영 %d장 | 폴더: %s", img_count, save_dir)
+        except Exception as e:
+            logger.error("[CameraRecorder] 루프 오류: %s", e)
+        finally:
+            cap.release()
+            logger.info("[CameraRecorder] 완료 — 촬영 %d장 | 폴더: %s", img_count, save_dir)
