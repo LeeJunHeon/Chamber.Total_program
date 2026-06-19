@@ -823,6 +823,7 @@ class ChamberRuntime:
                                     use_rf_pulse = bool(params.get("use_rf_pulse", False))
 
                                     if use_rf or use_rf_pulse:
+                                        recorder.set_log_callback(self._cam_log)  # ✅ 카메라 로그 → 공정 로그+화면
                                         recorder.start(f"CH{self.ch}")
                                         self.append_log("CAM", f"[CH{self.ch}] 카메라 녹화 시작 (RF={'RF' if use_rf else ''}{'Pulse' if use_rf_pulse else ''})")
                                     else:
@@ -5210,6 +5211,11 @@ class ChamberRuntime:
 
     # ------------------------------------------------------------------
     # 로그
+    def _cam_log(self, msg: str) -> None:
+        """CameraRecorder(백그라운드 스레드) 메시지를 공정 로그 + 화면으로 보낸다.
+        append_log가 내부 _soon으로 이미 스레드 마샬링하므로 직접 호출해도 안전하다."""
+        self.append_log("CAM", msg)
+
     def append_log(self, source: str, msg: str) -> None:
         now_ui = datetime.now().strftime("%H:%M:%S")
         now_file = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
