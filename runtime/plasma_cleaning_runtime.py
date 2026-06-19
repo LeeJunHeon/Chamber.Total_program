@@ -1496,15 +1496,17 @@ class PlasmaCleaningRuntime:
                 self.append_log("PC", f"notify_finish_once error: {e!r}")
 
             # ✅ [D] GDrive Plasma Cleaning 시트에 직접 저장 (main.py 경유 불필요)
-            with contextlib.suppress(Exception):
-                from util import gdrive_logger as _gl
-                from functools import partial as _partial
-                _pc_params = self._build_pc_params_dict(p)
-                _ch        = int(getattr(self, "_selected_ch", 1))
-                _dir       = self._gdrive_log_dir or _gl._DEFAULT_GDRIVE_DIR
-                asyncio.get_event_loop().run_in_executor(
-                    None, _partial(_gl.save_pc_only, _ch, _pc_params, _dir)
-                )
+            #   ★ 성공한 런만 저장 (STOP/실패는 avg=None·미도달 base가 찍히므로 제외)
+            if ok_final and not stopped_final:
+                with contextlib.suppress(Exception):
+                    from util import gdrive_logger as _gl
+                    from functools import partial as _partial
+                    _pc_params = self._build_pc_params_dict(p)
+                    _ch        = int(getattr(self, "_selected_ch", 1))
+                    _dir       = self._gdrive_log_dir or _gl._DEFAULT_GDRIVE_DIR
+                    asyncio.get_event_loop().run_in_executor(
+                        None, _partial(_gl.save_pc_only, _ch, _pc_params, _dir)
+                    )
 
             # ✅ [D-2] main.py 연동 콜백 (pending_log 정리용)
             with contextlib.suppress(Exception):
