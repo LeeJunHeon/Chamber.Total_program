@@ -768,7 +768,13 @@ class CameraRecorder:
                 now_hms = datetime.now().strftime("%H%M%S")
                 try:
                     img_name = save_dir / f"{now_hms}_{img_count:04d}.jpg"
-                    cv2.imwrite(str(img_name), frame)
+                    # ✅ 한글 경로(공유 드라이브)에서 cv2.imwrite가 조용히 실패하는 문제 방지:
+                    #    메모리로 JPG 인코딩 → write_bytes로 기록(유니코드 경로 안전)
+                    ok_enc, buf = cv2.imencode(".jpg", frame)
+                    if ok_enc:
+                        img_name.write_bytes(buf.tobytes())
+                    else:
+                        self._log("이미지 인코딩 실패")
                 except Exception as e:
                     self._log(f"이미지 저장 실패: {e}")
 
