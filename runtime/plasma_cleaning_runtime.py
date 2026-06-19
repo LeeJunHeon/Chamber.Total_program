@@ -969,6 +969,7 @@ class PlasmaCleaningRuntime:
                 recorder = getattr(self, "camera_recorder", None)
                 if recorder:
                     if on:
+                        recorder.set_log_callback(self._cam_log)  # ✅ 카메라 로그 → 공정 로그+화면
                         recorder.start("CLEANING")
                     else:
                         recorder.stop()
@@ -1991,6 +1992,14 @@ class PlasmaCleaningRuntime:
             return
         try:
             self._w_state.setPlainText(str(text))
+        except Exception:
+            pass
+
+    def _cam_log(self, msg: str) -> None:
+        """CameraRecorder(백그라운드 스레드) 메시지를 메인 스레드로 넘겨
+        공정 로그(PC_*.log) + 화면에 출력한다."""
+        try:
+            self._loop.call_soon_threadsafe(lambda: self.append_log("CAM", msg))
         except Exception:
             pass
 

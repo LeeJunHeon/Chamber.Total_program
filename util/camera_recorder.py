@@ -638,7 +638,26 @@ class CameraRecorder:
         self._check_labels  = list(_ALL_LABELS)
         self._mode_folder   = "ALL"
 
+        # ✅ 공정 로그(append_log)로 메시지를 보낼 콜백 (런타임이 주입)
+        self._log_cb = None
+
         self._load_config()
+
+    # ── 공정 로그 콜백 ─────────────────────────────────────
+    def set_log_callback(self, cb) -> None:
+        """런타임의 append_log로 메시지를 보낼 콜백 주입. None이면 시스템 logger 사용."""
+        self._log_cb = cb
+
+    def _log(self, msg: str) -> None:
+        """콜백이 있으면 공정 로그(+화면)로, 없으면 시스템 logger로 보낸다."""
+        cb = self._log_cb
+        if cb is not None:
+            try:
+                cb(msg)
+                return
+            except Exception:
+                pass
+        logger.info(msg)
 
     # ── 설정 로드 ──────────────────────────────────────────
     def _load_config(self) -> None:
@@ -713,17 +732,17 @@ class CameraRecorder:
         try:
             save_dir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
-            logger.error("[CameraRecorder] 폴더 생성 실패: %s", e)
+            self._log(f"폴더 생성 실패: {e}")
             return
 
         # ── 2) 카메라 오픈 ──
         cap = cv2.VideoCapture(self._cam_idx)
         if not cap.isOpened():
-            logger.error("[CameraRecorder] 카메라 열기 실패 (index=%d)", self._cam_idx)
+            self._log(f"카메라 열기 실패 (index={self._cam_idx})")
             return
         cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1920)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
-        logger.info("[CameraRecorder] 시작 mode=%s → %s", self._mode, save_dir)
+        self._log(f"카메라 시작 mode={self._mode} → {save_dir}")
 
         err_count = 0
         img_count = 0
@@ -737,7 +756,7 @@ class CameraRecorder:
                 if not ret:
                     err_count += 1
                     if err_count > 10:
-                        logger.error("[CameraRecorder] 카메라 읽기 반복 실패")
+                        self._log("카메라 읽기 반복 실패")
                         break
                     time.sleep(0.3)
                     continue
@@ -751,7 +770,7 @@ class CameraRecorder:
                     img_name = save_dir / f"{now_hms}_{img_count:04d}.jpg"
                     cv2.imwrite(str(img_name), frame)
                 except Exception as e:
-                    logger.warning("[CameraRecorder] 이미지 저장 실패: %s", e)
+                    self._log(f"이미지 저장 실패: {e}")
 
                 # 인터벌 대기 (stop_event 즉시 감지)
                 elapsed = time.time() - t0
@@ -762,7 +781,7 @@ class CameraRecorder:
                     time.sleep(0.05)
 
         except Exception as e:
-            logger.error("[CameraRecorder] 루프 오류: %s", e)
+            self._log(f"루프 오류: {e}")
         finally:
             cap.release()
-            logger.info("[CameraRecorder] 완료 — 촬영 %d장 | 폴더: %s", img_count, save_dir)
+            self._log(f"완료 — 촬영 {img_count}장 | 폴더: {save_dir}")
