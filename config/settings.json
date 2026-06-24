@@ -263,6 +263,9 @@
     "CHAMBER_GATE_RECHECK_COUNT": 5,       // 게이트밸브 상태 재확인 횟수
     "CHAMBER_GATE_READ_TIMEOUT_S": 0.6,    // 게이트밸브 읽기 타임아웃 (초)
     "CHAMBER_GATE_RECHECK_INTERVAL_S": 0.2,// 게이트밸브 재확인 간격 (초)
+    "CHAMBER_MAINVALVE_RECHECK_COUNT": 5,       // Main Valve 열림 재확인 횟수
+    "CHAMBER_MAINVALVE_READ_TIMEOUT_S": 0.6,    // Main Valve 코일 읽기 타임아웃 (초)
+    "CHAMBER_MAINVALVE_RECHECK_INTERVAL_S": 0.2,// Main Valve 재확인 간격 (초)
     "CHAMBER_CHUCK_MOVE_TIMEOUT_S": 60.0,  // 척 이동 최대 대기 (초)
     "CHAMBER_CHUCK_POWER_ON_SETTLE_S": 0.2,// 척 전원 ON 후 안정화 대기 (초)
     "CHAMBER_CHUCK_POLL_INTERVAL_S": 0.3,  // 척 상태 확인 주기 (초)
