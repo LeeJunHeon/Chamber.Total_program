@@ -2764,6 +2764,72 @@ class ChamberRuntime:
         self._gate_fail_reason = "Gate 이동 중 / 상태 불명 (재시도 초과)"
         self.append_log("MAIN", f"[CH{self.ch}] Gate 상태=moving_or_unknown (OPEN/CLOSE 모두 FALSE) → 시작 차단")
         return False
+
+    async def _check_main_valve_open_before_start(self) -> bool:
+        """
+        Main Valve 열림 여부 판정 (PLC 미수정 — 프로그램에서 재구성).
+        래더상 M_V_OUT = M_V_SW AND M_V_인터락 (일반 코일)이므로,
+        두 코일을 읽어 둘 다 True면 실제 밸브 OUT=True(열림)와 동일하다.
+        인터락 조건: AIR · GAUGE_A · ROTARY_PUMP · FORELINE · TURBO_START · /VENT
+        → 둘 다 True면 '터보 가동 + 벤트 아님 + 압력 낮음'까지 함께 보장.
+
+        시작 조건:
+        - sw=True & interlock=True 일 때만 True (그 외 시작 차단)
+        """
+        self._mv_fail_reason: str = "unknown"
+
+        if not getattr(self, "plc", None):
+            self._mv_fail_reason = "PLC 연결 없음"
+            self.append_log("MAIN", f"[CH{self.ch}] PLC 없음 → Main Valve 상태 확인 불가 → 시작 차단")
+            return False
+
+        ch = int(getattr(self, "ch", 0) or 0)
+        if ch not in (1, 2):
+            self._mv_fail_reason = f"잘못된 CH 번호 ({ch})"
+            self.append_log("MAIN", f"[CH{self.ch}] 잘못된 CH={ch} → 시작 차단")
+            return False
+
+        sw_key = f"M_V_{ch}_SW"
+        itlk_key = f"M_V_{ch}_인터락"
+
+        mv_retry_count = int(self.cfg._get("CHAMBER_MAINVALVE_RECHECK_COUNT", 5))
+        mv_read_timeout_s = float(self.cfg._get("CHAMBER_MAINVALVE_READ_TIMEOUT_S", 0.6))
+        mv_retry_interval_s = float(self.cfg._get("CHAMBER_MAINVALVE_RECHECK_INTERVAL_S", 0.2))
+
+        last_sw = False
+        last_itlk = False
+
+        for _ in range(mv_retry_count):
+            try:
+                sw = await asyncio.wait_for(self.plc.read_bit(sw_key), timeout=mv_read_timeout_s)
+                itlk = await asyncio.wait_for(self.plc.read_bit(itlk_key), timeout=mv_read_timeout_s)
+                sw = bool(sw)
+                itlk = bool(itlk)
+            except KeyError as e:
+                self._mv_fail_reason = f"PLC 주소맵 키 없음 ({e})"
+                self.append_log("MAIN", f"[CH{self.ch}] PLC 주소맵에 Main Valve 키 없음: {e} → 시작 차단")
+                return False
+            except Exception as e:
+                self.append_log("MAIN", f"[CH{self.ch}] Main Valve 읽기 실패: {type(e).__name__}: {e} → 재시도 중")
+                await asyncio.sleep(mv_retry_interval_s)
+                continue
+
+            if sw and itlk:
+                # ✅ M_V_OUT = SW AND 인터락 = True → Main Valve 열림
+                return True
+
+            last_sw, last_itlk = sw, itlk
+            # 아직 열림 아님(전이 중일 수 있음) → 잠깐 후 재확인
+            await asyncio.sleep(mv_retry_interval_s)
+
+        if not last_itlk:
+            self._mv_fail_reason = "Main Valve 인터락 불충족 (벤트 상태이거나 터보/러프펌프/압력 조건 미충족)"
+        elif not last_sw:
+            self._mv_fail_reason = "Main Valve가 열려있지 않음 (인터락 충족, 밸브 미개방)"
+        else:
+            self._mv_fail_reason = "Main Valve 상태 불명"
+        self.append_log("MAIN", f"[CH{self.ch}] Main Valve 미개방 (sw={last_sw}, interlock={last_itlk}) → 시작 차단")
+        return False
     
     async def _pulse_reconnect_safe(
         self,
@@ -3003,6 +3069,35 @@ class ChamberRuntime:
                     runtime_state.mark_finished("chamber", self.ch)
 
                 raise RuntimeError(f"gate check failed: {_gate_reason}")
+            
+            # ✅ Main Valve 인터락: Main Valve가 열려 있을 때만 공정 시작 허용
+            # - PLC 미수정. 래더상 M_V_OUT = M_V_SW AND M_V_인터락 → 두 코일을 읽어 재구성.
+            # - 벤트/터보정지/압력높음이면 인터락이 깨져 차단됨.
+            ok_mv = await self._check_main_valve_open_before_start()
+            if not ok_mv:
+                _mv_reason = getattr(self, '_mv_fail_reason', 'Main Valve 상태 이상')
+                self.append_log("MAIN", f"[CH{self.ch}] Main Valve 체크 실패 ({_mv_reason}) → 공정 시작 차단")
+
+                if self.chat:
+                    with contextlib.suppress(Exception):
+                        _mv_note = params.get("process_note") or params.get("Process_name") or "알 수 없음"
+                        self.chat.notify_error_event(
+                            f"CH{self.ch}",
+                            "E301",
+                            f"Main Valve 체크 실패: {_mv_reason} → 공정 시작 차단 (공정: {_mv_note})",
+                        )
+                        self.chat.flush()
+
+                self._auto_connect_enabled = False
+                with contextlib.suppress(Exception):
+                    await self._stop_device_watchdogs(light=False)
+
+                self._on_process_status_changed(False)
+                with contextlib.suppress(Exception):
+                    runtime_state.set_error("chamber", self.ch, f"main valve check failed: {_mv_reason}")
+                    runtime_state.mark_finished("chamber", self.ch)
+
+                raise RuntimeError(f"main valve check failed: {_mv_reason}")
             
             # ★ 추가: 공정 시작 직전 Chuck 위치 선행 설정
             self._run_chuck_position = str(params.get("chuck_position") or "").strip().lower()

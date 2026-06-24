@@ -725,6 +725,21 @@ class HostHandlers:
 
                 if st["state"] != "closed":
                     return self._fail(f"START_SPUTTER 불가 — CH{ch} gate가 CLOSED가 아님({st['state']})", code="E301")
+                
+                # ✅ Main Valve 인터락: Main Valve가 열려 있을 때만 START 허용
+                try:
+                    mv = await self._read_main_valve_state(ch)
+                except KeyError as e:
+                    return self._fail(f"PLC 주소맵에 Main Valve 키가 없습니다: {e}", code="E411")
+                except Exception as e:
+                    return self._fail(e, code=getattr(e, "code", None) or "E412")
+
+                if mv["state"] != "open":
+                    return self._fail(
+                        f"START_SPUTTER 불가 — CH{ch} Main Valve가 열려있지 않음"
+                        f"(state={mv['state']}, sw={mv['sw']}, interlock={mv['interlock']})",
+                        code="E301",
+                    )
 
                 try:
                     await chamber.start_with_recipe_string(recipe)
@@ -819,6 +834,33 @@ class HostHandlers:
 
         return {"ch": ch, "state": state, "open_lamp": open_lamp, "close_lamp": close_lamp}
     
+    async def _read_main_valve_state(self, ch: int) -> dict:
+        """
+        Main Valve 상태 판정 (PLC 미수정 — 프로그램에서 재구성).
+        래더상 M_V_OUT = M_V_SW AND M_V_인터락 (일반 코일)이라 두 코일로 재구성한다.
+        - open         : sw=True & interlock=True   (= M_V_OUT True, 열림)
+        - interlock_off: interlock=False            (벤트/터보정지/압력높음 등)
+        - closed       : interlock=True & sw=False  (인터락 충족, 밸브 미개방)
+        """
+        if ch not in (1, 2):
+            raise ValueError(f"지원하지 않는 CH: {ch}")
+
+        sw_key = f"M_V_{ch}_SW"
+        itlk_key = f"M_V_{ch}_인터락"
+
+        async with self._plc_call():
+            sw = bool(await self.ctx.plc.read_bit(sw_key))
+            interlock = bool(await self.ctx.plc.read_bit(itlk_key))
+
+        if sw and interlock:
+            state = "open"
+        elif not interlock:
+            state = "interlock_off"
+        else:
+            state = "closed"
+
+        return {"ch": ch, "state": state, "sw": sw, "interlock": interlock}
+
     async def _require_gates_closed(self) -> tuple[bool, str, str | None]:
         """
         CH1, CH2 모두 gate가 '닫힘' 상태인지 확인.
