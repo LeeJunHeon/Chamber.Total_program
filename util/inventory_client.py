@@ -3,7 +3,7 @@ import asyncio
 import contextlib
 from typing import Dict
 
-_DEFAULT_URL = "https://inventory.vanam.synology.me/api/chamber-slots"
+_DEFAULT_URL = "https://vanam.synology.me/inventory/api/chamber-slots"
 _TIMEOUT_S = 5.0
 
 # Location name 매핑

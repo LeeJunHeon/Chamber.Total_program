@@ -20,6 +20,12 @@ PLC_COIL_LOG_LOCAL_DIR = LOCAL_FALLBACK_ROOT / "PLC_Coil"
 HOST_SERVER_HOST = "0.0.0.0"   # 로컬만 쓰면 "127.0.0.1"
 HOST_SERVER_PORT = 50070       # 방화벽 인바운드 허용 필요
 
+# === 재고관리 웹앱(Gun Target 자동 불러오기) API ===
+# 재고 웹앱이 서브도메인(inventory.vanam.synology.me) →
+# 경로기반(vanam.synology.me/inventory)으로 변경됨.
+# 이 변수를 선언해 두어야 settings.json "common" 섹션에서 오버라이드 가능.
+INVENTORY_API_URL = "https://vanam.synology.me/inventory/api/chamber-slots"
+
 # === 내부 브릿지(메인 공정 프로그램 ↔ 로봇 서버 프록시) 설정 ===
 # - 메인 공정 프로그램이 로봇 서버에게 제공하는 "로컬 전용" Host(IPC) 포트
 # - 반드시 127.0.0.1 로 고정(외부 접근 차단)
