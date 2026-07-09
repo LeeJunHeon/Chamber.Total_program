@@ -174,6 +174,45 @@ def _apply_section(module: Any, section_data: Dict[str, Any], section_name: str)
 # Public API
 # ──────────────────────────────────────────────────────────
 
+def _strip_jsonc_comments(text: str) -> str:
+    """
+    // 라인 주석과 /* */ 블록 주석 제거. 단, 문자열 내부의 //(예: https://)는 보존.
+    """
+    out = []
+    i = 0
+    n = len(text)
+    in_str = False
+    esc = False
+    while i < n:
+        c = text[i]
+        if in_str:
+            out.append(c)
+            if esc:
+                esc = False
+            elif c == "\\":
+                esc = True
+            elif c == '"':
+                in_str = False
+            i += 1
+        else:
+            if c == '"':
+                in_str = True
+                out.append(c)
+                i += 1
+            elif c == "/" and i + 1 < n and text[i + 1] == "/":
+                while i < n and text[i] != "\n":
+                    i += 1
+            elif c == "/" and i + 1 < n and text[i + 1] == "*":
+                i += 2
+                while i + 1 < n and not (text[i] == "*" and text[i + 1] == "/"):
+                    i += 1
+                i += 2
+            else:
+                out.append(c)
+                i += 1
+    return "".join(out)
+
+
 def load_settings(path: Optional[Path] = None) -> Dict[str, Any]:
     """
     settings.json을 읽어서 config 모듈들에 적용한다.
@@ -193,8 +232,7 @@ def load_settings(path: Optional[Path] = None) -> Dict[str, Any]:
 
     try:
         raw = json_path.read_text(encoding="utf-8")
-        import re
-        stripped = re.sub(r'//.*', '', raw)
+        stripped = _strip_jsonc_comments(raw)
         data = json.loads(stripped)
     except json.JSONDecodeError as e:
         logger.error("[ConfigLoader] JSON 파싱 실패: %s → 기존 .py 값 사용", e)
