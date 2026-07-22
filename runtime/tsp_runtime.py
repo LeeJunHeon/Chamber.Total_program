@@ -62,9 +62,9 @@ class TSPPageController:
 
         # ▼ NAS 로그 설정
         self._log_root = Path(log_dir) if log_dir else Path.cwd()
-        self._log_dir = self._ensure_log_dir(self._log_root / "TSP")
         self._log_file_path: Path | None = None
         self._prestart_buf: Deque[str] = deque(maxlen=1000)
+        self._log_dir = self._ensure_log_dir(self._log_root / "TSP")
         self._log_q: asyncio.Queue[str] = asyncio.Queue(maxsize=4096)
         self._log_fp = None
         self._log_writer_task: asyncio.Task | None = None
@@ -395,10 +395,18 @@ class TSPPageController:
                 verify_with_status=bool(getattr(self, "_tsp_verify_with_status", True)),
             )
 
-            # ★ 로그 파일 준비
+            # ★ 로그 파일 준비 (여기서 G:/로컬을 판단 — 실행할 때마다 다시 판단한다)
             now_local = datetime.now().astimezone()
             ts = now_local.strftime("%Y%m%d_%H%M%S")
-            self._log_file_path = (self._log_dir / f"TSP_{ts}").with_suffix(".txt")
+            _log_dir = self._log_dir
+            try:
+                _log_dir.mkdir(parents=True, exist_ok=True)
+            except Exception as _e:
+                _log_dir = Path(getattr(cfgc, "LOCAL_FALLBACK_ROOT", Path.cwd() / "Logs_LocalFallback")) / "TSP"
+                with contextlib.suppress(Exception):
+                    _log_dir.mkdir(parents=True, exist_ok=True)
+                self._log(f"[Logger] 로그 폴더 접근 실패({_e!r}) → 이번 실행은 로컬에 기록: {_log_dir}")
+            self._log_file_path = (_log_dir / f"TSP_{ts}").with_suffix(".txt")
             if not self._log_writer_task or self._log_writer_task.done():
                 self._log_writer_task = asyncio.create_task(self._log_writer_loop(), name="LogWriter.TSP")
 
@@ -543,15 +551,13 @@ class TSPPageController:
     # NAS 로그 유틸리티
     # ─────────────────────────────────────────────────────
     def _ensure_log_dir(self, root: Path) -> Path:
+        """판단을 미룬다: 실패해도 primary 경로를 그대로 반환하고,
+        실제 폴백은 로그 파일을 여는 시점에 결정한다(chamber_runtime과 동일한 패턴).
+        여기서 self._log()를 호출하면 __init__ 순서 문제로 AttributeError가 나므로 호출하지 않는다."""
         nas = Path(root)
-        local = Path.cwd() / "_Logs_local_TSP"
-        try:
+        with contextlib.suppress(Exception):
             nas.mkdir(parents=True, exist_ok=True)
-            return nas
-        except Exception:
-            local.mkdir(parents=True, exist_ok=True)
-            self._log("[Logger] NAS 폴더 접근 실패 → 로컬 폴백 사용")
-            return local
+        return nas
 
     def _log_enqueue_nowait(self, line: str) -> None:
         try:

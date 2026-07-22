@@ -66,7 +66,10 @@ class PlasmaCleaningRuntime:
         self.chat = chat
         self._log_dir = log_dir            # 기본 로그 루트
         self._pc_log_dir = (log_dir / "Plasma_Cleaning")
-        self._pc_log_dir.mkdir(parents=True, exist_ok=True)
+        # 여기서 실패해도 죽지 않는다. 경로는 primary(G:) 그대로 유지하고,
+        # 실제 폴백 판단은 _open_run_log()에서 실행 시점에 한다.
+        with contextlib.suppress(Exception):
+            self._pc_log_dir.mkdir(parents=True, exist_ok=True)
 
         self._log_fp = None                # 현재 런 세션 로그 파일 핸들
         self._log_session_id = None        # 파일명에 들어갈 세션 ID (timestamp)
@@ -2239,8 +2242,25 @@ class PlasmaCleaningRuntime:
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         self._log_session_id = ts
         fname = f"PC_{ts}_CH{self._selected_ch}.log"
-        path = self._pc_log_dir / fname
-        self._log_fp = open(path, "a", encoding="utf-8", buffering=1)  # line-buffered
+
+        # 여기서 G:/로컬을 판단 — 실행할 때마다 다시 판단한다
+        _dir = self._pc_log_dir
+        try:
+            _dir.mkdir(parents=True, exist_ok=True)
+        except Exception:
+            _dir = Path(getattr(cfgc, "LOCAL_FALLBACK_ROOT", Path.cwd() / "Logs_LocalFallback")) / "Plasma_Cleaning"
+            with contextlib.suppress(Exception):
+                _dir.mkdir(parents=True, exist_ok=True)
+
+        path = _dir / fname
+        try:
+            self._log_fp = open(path, "a", encoding="utf-8", buffering=1)  # line-buffered
+        except Exception as _e:
+            # 로그 파일을 못 열어도 공정은 진행되어야 한다
+            self._log_fp = None
+            with contextlib.suppress(Exception):
+                self.append_log("PC", f"런 로그 파일 열기 실패 → 파일 기록 없이 진행: {_e!r}")
+            return
 
         # 헤더 기록
         self._log_fp.write("# ==== Plasma Cleaning Run ====\n")

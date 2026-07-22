@@ -17,6 +17,7 @@ import faulthandler
 import logging
 import sys
 import threading
+import time
 import warnings
 from dataclasses import dataclass
 from datetime import datetime, date
@@ -108,44 +109,91 @@ class _DailyFileHandler(logging.Handler):
     """
     하루 1개 파일을 유지하는 핸들러.
     - 파일명에 날짜가 들어가며, 날짜가 바뀌면 자동으로 새 파일로 reopen.
+    - primary(G: 등) 접근 실패 시 로컬 폴백에 기록하되, primary 경로 자체는 절대
+      덮어쓰지 않고 주기적으로 복귀를 시도한다(타이머/스레드 없음. emit() 안에서만 판단).
     """
+    RETRY_PRIMARY_EVERY_S = 30.0
+
     def __init__(self, app_name: str, root: Path, level: int = logging.INFO, encoding: str = "utf-8"):
         super().__init__(level=level)
         self._app_name = app_name
-        self._root = root
+        self._primary_root = Path(root)                                # ✅ 절대 변경하지 않음
+        self._fallback_root = Path.cwd() / "Logs" / "CH1&2" / "ERROR"
         self._encoding = encoding
         self._cur_date: date = date.today()
         self._stream = None
-        self._write_lock = threading.Lock()   # ✅ 추가
-        self._paths = _build_paths(app_name, root)
-        self._open_for_today()
+        self._cur_path: Optional[Path] = None
+        self._using_fallback: bool = False
+        self._last_primary_try: float = 0.0
+        self._write_lock = threading.Lock()
+        self._open_stream()
 
     @property
     def current_path(self) -> Path:
-        return self._paths.daily_log
+        # 스트림이 없어도 항상 유효한 Path를 반환한다(호출부에서 .parent 를 사용함)
+        if self._cur_path is not None:
+            return self._cur_path
+        return self._fallback_root / f"{self._app_name}_{datetime.now():%Y%m%d}.log"
 
-    def _open_for_today(self) -> None:
-        self._paths = _build_paths(self._app_name, self._root)
-        try:
-            self._stream = open(self._paths.daily_log, "a", encoding=self._encoding, buffering=1)
-        except Exception:
-            # 혹시 UNC가 순간 끊겼으면 로컬 폴백
-            self._root = _safe_mkdir(Path.cwd() / "Logs" / "CH1&2" / "ERROR")
-            self._paths = _build_paths(self._app_name, self._root)
-            self._stream = open(self._paths.daily_log, "a", encoding=self._encoding, buffering=1)
+    def _close_stream(self) -> None:
+        s, self._stream = self._stream, None
+        if s is not None:
+            try:
+                s.flush()
+            except Exception:
+                pass
+            try:
+                s.close()
+            except Exception:
+                pass
+
+    def _open_stream(self) -> None:
+        """primary 를 먼저 시도하고, 실패하면 fallback. 둘 다 실패하면 _stream=None."""
+        name = f"{self._app_name}_{datetime.now():%Y%m%d}.log"
+        for root, is_fb in ((self._primary_root, False), (self._fallback_root, True)):
+            try:
+                root.mkdir(parents=True, exist_ok=True)
+                p = root / name
+                self._stream = open(p, "a", encoding=self._encoding, buffering=1)
+                self._cur_path = p
+                self._using_fallback = is_fb
+                if is_fb:
+                    self._last_primary_try = time.monotonic()
+                return
+            except Exception:
+                continue
+        self._stream = None
+        self._using_fallback = True
+        self._last_primary_try = time.monotonic()
 
     def emit(self, record: logging.LogRecord) -> None:
         try:
             with self._write_lock:
+                # 1) 날짜가 바뀌면 새 파일로 (이때 primary 부터 다시 시도)
                 today = date.today()
                 if today != self._cur_date:
                     self._cur_date = today
-                    try:
-                        if self._stream:
-                            self._stream.close()
-                    except Exception:
-                        pass
-                    self._open_for_today()
+                    self._close_stream()
+                    self._open_stream()
+
+                # 2) 폴백 중이면 주기적으로 primary 복귀 시도 (타이머/스레드 없음)
+                if self._using_fallback and (time.monotonic() - self._last_primary_try) >= self.RETRY_PRIMARY_EVERY_S:
+                    self._last_primary_try = time.monotonic()
+                    self._close_stream()
+                    self._open_stream()
+                    if (not self._using_fallback) and self._stream is not None:
+                        try:
+                            self._stream.write(
+                                f"# [{datetime.now():%Y-%m-%d %H:%M:%S}] primary 로그 경로 복구 → {self._cur_path}\n"
+                            )
+                        except Exception:
+                            pass
+
+                # 3) 스트림이 없으면 한 번 더 열어본다
+                if self._stream is None:
+                    self._open_stream()
+                    if self._stream is None:
+                        return
 
                 msg = self.format(record)
 
@@ -154,19 +202,15 @@ class _DailyFileHandler(logging.Handler):
                     self._stream.flush()
                     return
                 except Exception:
-                    # 현재 스트림 쓰기 실패 → 로컬 폴백으로 1회 재오픈 시도
-                    try:
-                        if self._stream:
-                            self._stream.close()
-                    except Exception:
-                        pass
-
-                    self._root = _safe_mkdir(Path.cwd() / "Logs" / "CH1&2" / "ERROR")
-                    self._paths = _build_paths(self._app_name, self._root)
-                    self._stream = open(self._paths.daily_log, "a", encoding=self._encoding, buffering=1)
-
-                    self._stream.write(msg + "\n")
-                    self._stream.flush()
+                    # 쓰기 실패 → 재오픈 1회 시도
+                    self._close_stream()
+                    self._open_stream()
+                    if self._stream is not None:
+                        try:
+                            self._stream.write(msg + "\n")
+                            self._stream.flush()
+                        except Exception:
+                            pass
 
         except Exception:
             # 로깅 중 예외는 절대 앱을 죽이면 안 됨
@@ -174,8 +218,7 @@ class _DailyFileHandler(logging.Handler):
 
     def close(self) -> None:
         try:
-            if self._stream:
-                self._stream.close()
+            self._close_stream()
         except Exception:
             pass
         super().close()
