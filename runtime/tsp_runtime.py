@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-import asyncio, contextlib
+import asyncio, contextlib, re
 from collections import deque
 from typing import Optional, Deque, Any, Mapping
 from datetime import datetime, timedelta
@@ -82,15 +82,22 @@ class TSPPageController:
 
         self._connect_buttons()
 
+        # ⬇ 예약 시각 입력창 초기값(비어 있으면 config 기본값 TSP_DAILY_HH:MM 으로 채움)
+        with contextlib.suppress(Exception):
+            if not (self._get_plain("TSP_SetTime_edit") or ""):
+                self._sync_schedule_time_ui(self._tsp_daily_hh, self._tsp_daily_mm)
+
         self._defaults = {
             "target": self._get_plain("TSP_targetPressure_edit") or str(getattr(cfgc, "TSP_UI_DEFAULT_TARGET", "2.5e-07")),
             "cycles": self._get_plain("TSP_setCycle_edit") or str(getattr(cfgc, "TSP_UI_DEFAULT_CYCLES", 10)),
         }
         
-        # ⬇ 프로그램 기동 시 매일 TSP_DAILY_HH:MM 예약 등록
+        # ⬇ 프로그램 기동 시 매일 예약 등록 (시각은 UI 입력창 우선, 없으면 config)
         try:
             if getattr(self, "_tsp_daily_enable", False):
-                when = self._next_time_at(self._tsp_daily_hh, self._tsp_daily_mm)
+                hh, mm = self._effective_schedule_time()
+                self._tsp_daily_hh, self._tsp_daily_mm = hh, mm
+                when = self._next_time_at(hh, mm)
                 self.schedule_run_at(when, repeat_daily=True)
         except Exception as _e:
             self._log(f"[TSP] 예약 초기화 실패: {_e!r}")
@@ -226,13 +233,50 @@ class TSPPageController:
                 stop_btn.clicked.connect(self.on_stop_clicked)    # type: ignore[attr-defined]
             except Exception:
                 pass
-        sch_btn = getattr(self.ui, "TSP_Schedule_button", None)
-        if sch_btn is not None:
+        sch_cb = self._schedule_widget()
+        if sch_cb is not None:
             try:
-                sch_btn.setCheckable(True)                        # type: ignore[attr-defined]
-                sch_btn.toggled.connect(self.on_schedule_toggled) # type: ignore[attr-defined]
+                sch_cb.setCheckable(True)                        # type: ignore[attr-defined]
+                sch_cb.toggled.connect(self.on_schedule_toggled) # type: ignore[attr-defined]
             except Exception:
                 pass
+
+    # ── 예약 시각/체크박스 헬퍼 ───────────────────────────
+    def _schedule_widget(self):
+        """예약 체크박스(신규 → 구 QPushButton 순으로 탐색)."""
+        for name in ("TSP_Schedule_checkbox", "TSP_Schedule_button"):
+            w = getattr(self.ui, name, None)
+            if w is not None:
+                return w
+        return None
+
+    def _read_schedule_time_from_ui(self) -> Optional[tuple[int, int]]:
+        """TSP_SetTime_edit에서 'HH:MM'(또는 '5시30분')을 파싱. 실패 시 None."""
+        raw = self._get_plain("TSP_SetTime_edit")
+        if not raw:
+            return None
+        m = re.match(r"^\s*(\d{1,2})\s*(?::|시)\s*(\d{1,2})", raw)
+        if not m:
+            return None
+        hh, mm = int(m.group(1)), int(m.group(2))
+        if not (0 <= hh <= 23 and 0 <= mm <= 59):
+            return None
+        return (hh, mm)
+
+    def _effective_schedule_time(self) -> tuple[int, int]:
+        """UI 입력이 유효하면 그 값, 아니면 config(TSP_DAILY_HH/MM) 기본값."""
+        t = self._read_schedule_time_from_ui()
+        if t is not None:
+            return t
+        hh = int(getattr(self, "_tsp_daily_hh", 5))
+        mm = int(getattr(self, "_tsp_daily_mm", 0))
+        if self._get_plain("TSP_SetTime_edit"):
+            self._log(f"예약 시각 형식 오류(예: 05:00) → 기본값 {hh:02d}:{mm:02d} 사용")
+        return (hh, mm)
+
+    def _sync_schedule_time_ui(self, hh: int, mm: int) -> None:
+        """예약 시각 입력창을 정규화된 HH:MM 표기로 맞춘다."""
+        self._set_plain("TSP_SetTime_edit", f"{int(hh):02d}:{int(mm):02d}")
 
     def _reset_ui_defaults(self) -> None:
         # 입력값: 프로그램 처음 켰을 때의 값을 복원
@@ -356,11 +400,14 @@ class TSPPageController:
 
     # ── 예약 토글 ──────────────────────────────────────────
     def on_schedule_toggled(self, checked: bool) -> None:
-        """예약 토글: checked=True면 매일 예약 등록, False면 예약 취소."""
+        """예약 체크박스: 체크하면 UI 입력 시각으로 매일 예약, 해제하면 예약 취소."""
         if checked:
             try:
                 self._refresh_from_config()
-                when = self._next_time_at(self._tsp_daily_hh, self._tsp_daily_mm)
+                hh, mm = self._effective_schedule_time()   # UI 입력 우선, 실패 시 config
+                self._tsp_daily_hh, self._tsp_daily_mm = hh, mm
+                self._sync_schedule_time_ui(hh, mm)        # 입력창을 HH:MM으로 정규화
+                when = self._next_time_at(hh, mm)
                 self.schedule_run_at(when, repeat_daily=True)
             except Exception as e:
                 self._log(f"[TSP] 예약 등록 실패: {e!r}")
@@ -372,25 +419,28 @@ class TSPPageController:
                 self._refresh_schedule_ui()
 
     def _refresh_schedule_ui(self, when: Optional[datetime] = None) -> None:
-        """예약 상태를 토글 버튼/표시창에 반영 (시그널 재진입 차단)."""
+        """예약 상태를 체크박스/표시창에 반영 (시그널 재진입 차단)."""
         alive = bool(self._schedule_task and not self._schedule_task.done())
         if when is not None:
             self._schedule_when = when
         elif not alive:
             self._schedule_when = None
 
-        btn = getattr(self.ui, "TSP_Schedule_button", None)
-        if btn is not None:
-            with contextlib.suppress(Exception):
-                btn.blockSignals(True)
-                btn.setChecked(alive)
-                btn.setText("예약 ON" if alive else "예약 OFF")
-                btn.blockSignals(False)
+        cb = self._schedule_widget()
+        if cb is not None:
+            try:
+                cb.blockSignals(True)
+                cb.setChecked(alive)
+            except Exception:
+                pass
+            finally:
+                with contextlib.suppress(Exception):
+                    cb.blockSignals(False)
 
         if alive and self._schedule_when is not None:
-            txt = self._schedule_when.strftime("매일 %H:%M / 다음 %m-%d %H:%M")
+            txt = self._schedule_when.strftime("Daily %H:%M / Next %m-%d %H:%M")
         else:
-            txt = "예약 없음"
+            txt = "No schedule"
         self._set_plain("TSP_scheduleState_edit", txt)
 
 

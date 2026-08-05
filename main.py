@@ -937,6 +937,15 @@ class MainWindow(QWidget):
         _set_plain(getattr(self.ui, "TSP_targetPressure_edit", None), getattr(cfgc, "TSP_UI_DEFAULT_TARGET", "2.5e-7"))
         _set_plain(getattr(self.ui, "TSP_setCycle_edit", None), getattr(cfgc, "TSP_UI_DEFAULT_CYCLES", "10"))
 
+        # TSP 자동 예약 시각(기본 05:00) — 사용자가 UI에서 변경 가능
+        _set_plain(
+            getattr(self.ui, "TSP_SetTime_edit", None),
+            "{:02d}:{:02d}".format(
+                int(getattr(cfgc, "TSP_DAILY_HH", 5)),
+                int(getattr(cfgc, "TSP_DAILY_MM", 0)),
+            ),
+        )
+
         # Plasma Cleaning: config_common 기본값 기반
         _set_plain(
             getattr(self.ui, "PC_targetPressure_edit", None),
