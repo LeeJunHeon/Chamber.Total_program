@@ -78,6 +78,7 @@ class TSPPageController:
         # ⬇ 예약 실행 상태
         self._schedule_task: Optional[asyncio.Task] = None
         self._schedule_repeat_daily: bool = False
+        self._schedule_when: Optional[datetime] = None
 
         self._connect_buttons()
 
@@ -86,13 +87,16 @@ class TSPPageController:
             "cycles": self._get_plain("TSP_setCycle_edit") or str(getattr(cfgc, "TSP_UI_DEFAULT_CYCLES", 10)),
         }
         
-        # ⬇ 프로그램 기동 시 매일 07:00 예약 등록
+        # ⬇ 프로그램 기동 시 매일 TSP_DAILY_HH:MM 예약 등록
         try:
             if getattr(self, "_tsp_daily_enable", False):
                 when = self._next_time_at(self._tsp_daily_hh, self._tsp_daily_mm)
                 self.schedule_run_at(when, repeat_daily=True)
         except Exception as _e:
             self._log(f"[TSP] 예약 초기화 실패: {_e!r}")
+
+        # ⬇ 예약 토글 버튼/표시창 초기 상태 반영
+        self._refresh_schedule_ui()
 
     # ============== UI로 파라미터 수정 ==============
     def _refresh_from_config(self) -> None:
@@ -222,6 +226,13 @@ class TSPPageController:
                 stop_btn.clicked.connect(self.on_stop_clicked)    # type: ignore[attr-defined]
             except Exception:
                 pass
+        sch_btn = getattr(self.ui, "TSP_Schedule_button", None)
+        if sch_btn is not None:
+            try:
+                sch_btn.setCheckable(True)                        # type: ignore[attr-defined]
+                sch_btn.toggled.connect(self.on_schedule_toggled) # type: ignore[attr-defined]
+            except Exception:
+                pass
 
     def _reset_ui_defaults(self) -> None:
         # 입력값: 프로그램 처음 켰을 때의 값을 복원
@@ -338,14 +349,49 @@ class TSPPageController:
         self._busy = True
 
     def on_stop_clicked(self) -> None:
-        # 1) 실행 중이면 즉시 중단
+        # 실행 중이면 즉시 중단 (예약은 건드리지 않는다 → 예약 해제는 토글 버튼 전용)
         if self._task and not self._task.done():
             self._log("[TSP] 중단 요청")
             self._task.cancel()
 
-        # 2) 실행 중이 아니더라도, 예약이 걸려 있으면 예약 취소
-        if self._schedule_task and not self._schedule_task.done():
-            self.cancel_schedule()  # 내부에서 "[TSP] 예약 실행 취소됨" 로그 출력
+    # ── 예약 토글 ──────────────────────────────────────────
+    def on_schedule_toggled(self, checked: bool) -> None:
+        """예약 토글: checked=True면 매일 예약 등록, False면 예약 취소."""
+        if checked:
+            try:
+                self._refresh_from_config()
+                when = self._next_time_at(self._tsp_daily_hh, self._tsp_daily_mm)
+                self.schedule_run_at(when, repeat_daily=True)
+            except Exception as e:
+                self._log(f"[TSP] 예약 등록 실패: {e!r}")
+                self._refresh_schedule_ui()
+        else:
+            if self._schedule_task and not self._schedule_task.done():
+                self.cancel_schedule()
+            else:
+                self._refresh_schedule_ui()
+
+    def _refresh_schedule_ui(self, when: Optional[datetime] = None) -> None:
+        """예약 상태를 토글 버튼/표시창에 반영 (시그널 재진입 차단)."""
+        alive = bool(self._schedule_task and not self._schedule_task.done())
+        if when is not None:
+            self._schedule_when = when
+        elif not alive:
+            self._schedule_when = None
+
+        btn = getattr(self.ui, "TSP_Schedule_button", None)
+        if btn is not None:
+            with contextlib.suppress(Exception):
+                btn.blockSignals(True)
+                btn.setChecked(alive)
+                btn.setText("예약 ON" if alive else "예약 OFF")
+                btn.blockSignals(False)
+
+        if alive and self._schedule_when is not None:
+            txt = self._schedule_when.strftime("매일 %H:%M / 다음 %m-%d %H:%M")
+        else:
+            txt = "예약 없음"
+        self._set_plain("TSP_scheduleState_edit", txt)
 
 
     # ── 내부 실행 루틴 ─────────────────────────────────────
@@ -615,6 +661,7 @@ class TSPPageController:
         )
 
         self._log(f"[TSP] 예약 실행 등록: {when.strftime('%Y-%m-%d %H:%M:%S')} (매일={self._schedule_repeat_daily})")
+        self._refresh_schedule_ui(when)
 
     def cancel_schedule(self, silent: bool = False) -> None:
         """예약 실행 취소."""
@@ -622,6 +669,8 @@ class TSPPageController:
             self._schedule_task.cancel()
         self._schedule_task = None
         self._schedule_repeat_daily = False
+        self._schedule_when = None
+        self._refresh_schedule_ui()
         if not silent:
             self._log("[TSP] 예약 실행 취소됨")
 
@@ -651,6 +700,7 @@ class TSPPageController:
 
                     when = when + timedelta(days=1)
                     self._log(f"[TSP] 다음 반복 예약: {when.strftime('%Y-%m-%d %H:%M:%S')}")
+                    self._refresh_schedule_ui(when)
                     continue  # ← 오늘은 건너뜀
 
                 # 실행 트리거
@@ -665,10 +715,12 @@ class TSPPageController:
 
                 when = when + timedelta(days=1)
                 self._log(f"[TSP] 다음 반복 예약: {when.strftime('%Y-%m-%d %H:%M:%S')}")
+                self._refresh_schedule_ui(when)
         except asyncio.CancelledError:
             # 취소 시 조용히 종료
             pass
         finally:
-            if not self._schedule_repeat_daily:
+            if asyncio.current_task() is self._schedule_task:
                 self._schedule_task = None
+                self._refresh_schedule_ui()
 
