@@ -340,20 +340,27 @@ class TSPPageController:
         self._busy = False
         self._task = None
 
-    def on_start_clicked(self) -> None:
+    def on_start_clicked(self) -> bool:
+        """TSP 공정 시작. 실제로 시작했으면 True, 차단됐으면 False."""
+        self._start_block_reason = None
+
         if self._busy:
-            self._log("이미 실행 중입니다."); return
+            self._start_block_reason = "TSP 공정이 이미 실행 중"
+            self._log("이미 실행 중입니다.")
+            return False
 
         # 1) 교차 실행 차단: CH1 리소스(Chamber/PC) 또는 TSP 자체가 실행 중이면 금지
         try:
             # 1) 교차 실행 차단 → ✔ 챔버 공정과 동일한 메시지, ✔ 로그 제거
             if (runtime_state.is_running("chamber", 1) or runtime_state.is_running("pc", 1)):
+                self._start_block_reason = "CH1에서 다른 공정(Chamber/PC) 실행 중"
                 self._post_warning("실행 오류", "CH1는 이미 다른 공정이 실행 중입니다.")
-                return
+                return False
             if runtime_state.is_running("tsp"):
                 # 챔버 런타임은 process_controller 바쁨시 "다른 공정이 실행 중입니다."를 씁니다.
+                self._start_block_reason = "다른 TSP 공정 실행 중"
                 self._post_warning("실행 오류", "다른 공정이 실행 중입니다.")
-                return
+                return False
         except Exception:
             pass
 
@@ -370,8 +377,9 @@ class TSPPageController:
             if remain > 0.0:
                 secs = int(remain + 0.999)
                 cd_s = int(float(cd) + 0.5)
+                self._start_block_reason = f"이전 공정 종료 후 쿨다운 {cd_s}초 미경과(잔여 {secs}초)"
                 self._post_warning("대기 필요", f"이전 공정 종료 후 {cd_s}초 대기 필요합니다.\n{secs}초 후에 시작하십시오.")
-                return
+                return False
         except Exception:
             pass
 
@@ -379,8 +387,9 @@ class TSPPageController:
             target = self._read_target()
             cycles = self._read_cycles()
         except Exception as e:
+            self._start_block_reason = f"입력값 파싱 실패({e})"
             self._log(f"[ERROR] 입력 파싱 실패: {e}")
-            return
+            return False
 
         # 표시 초기화
         self._set_plain("TSP_nowCycle_edit", "0")
@@ -391,6 +400,7 @@ class TSPPageController:
         t.add_done_callback(lambda fut: self._on_run_done(fut))
         self._task = t
         self._busy = True
+        return True
 
     def on_stop_clicked(self) -> None:
         # 실행 중이면 즉시 중단 (예약은 건드리지 않는다 → 예약 해제는 토글 버튼 전용)
@@ -438,7 +448,7 @@ class TSPPageController:
                     cb.blockSignals(False)
 
         if alive and self._schedule_when is not None:
-            txt = self._schedule_when.strftime("Daily %H:%M / Next %m-%d %H:%M")
+            txt = self._schedule_when.strftime("Daily %H:%M / Next %m-%d")
         else:
             txt = "No schedule"
         self._set_plain("TSP_scheduleState_edit", txt)
@@ -754,10 +764,17 @@ class TSPPageController:
                     continue  # ← 오늘은 건너뜀
 
                 # 실행 트리거
+                started = False
                 try:
-                    self.on_start_clicked()
+                    started = bool(self.on_start_clicked())
                 except Exception as e:
                     self._log(f"[TSP] 예약 시작 실패: {e!r}")
+                if not started:
+                    why = getattr(self, "_start_block_reason", None) or "사유 불명"
+                    self._log(
+                        f"[TSP] ⚠ 예약({when.strftime('%m-%d %H:%M')}) 실행 못함 "
+                        f"→ 오늘 건너뜀 (사유: {why})"
+                    )
 
                 if not self._schedule_repeat_daily:
                     self._log("[TSP] 1회 예약 실행 완료(반복 없음).")
