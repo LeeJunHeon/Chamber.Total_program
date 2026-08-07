@@ -1206,10 +1206,10 @@ class HostHandlers:
                                     code="E312",
                                 )
 
-                            # 2-b) 러핑 진행 중 게이트 감시 (외부 개입 감지)
+                            # 2-b) 러핑 진행 중 게이트 상태 감시
                             # - 이 프로그램은 VACUUM_ON 중 게이트를 조작하지 않고,
                             #   래더에도 G_V_x_OPEN_SW를 SET하는 코일이 없다(소프트웨어 전용 비트).
-                            #   따라서 러핑 중 게이트가 CLOSED가 아니게 되면 외부 쓰기다.
+                            #   즉 러핑 중 게이트 상태 변화는 이 프로그램/래더 동작 범위 밖의 원인이다.
                             # - 게이트 개방은 진공 형성을 물리적으로 무효화하므로
                             #   grace 타이머 만료(오해 소지 있는 '시간 초과')를 기다리지 않고
                             #   즉시 명확한 사유로 중단한다.
@@ -1242,8 +1242,7 @@ class HostHandlers:
                                         f"VACUUM_ON 중단 — 러핑 진행 중 CH{confirm['ch']} gate가 "
                                         f"CLOSED가 아님(state={confirm['state']}, "
                                         f"OPEN_LAMP={confirm['open_lamp']}, "
-                                        f"CLOSE_LAMP={confirm['close_lamp']}). "
-                                        "VACUUM_ON 중 GATE 열림으로 중단",
+                                        f"CLOSE_LAMP={confirm['close_lamp']})",
                                         code="E301",
                                     )
 
@@ -1271,7 +1270,7 @@ class HostHandlers:
                                     #     → L_R_V_인터락 하강 → 래더가 L_R_V_SW만 리셋 (하드웨어 원인)
                                     # (b) LP_STEP1=TRUE & LP_STEP2=FALSE 유지 → T0050(60s) 정상 경로가
                                     #     아닌데 L_R_V_SW만 OFF. 래더에 이 조합을 만드는 경로 없음
-                                    #     → 외부 쓰기 또는 순간적인 AIR 압력 저하 의심
+                                    #     → 정상 시퀀스 경로가 아님 (순간 AIR 압력 저하 또는 프로그램 외 요인)
                                     if diag.get("L_R_P_OFF_TIMER"):
                                         return self._fail(
                                             "VACUUM_ON 실패 — 러핑 중 에어압 알람"
@@ -1323,7 +1322,6 @@ class HostHandlers:
                                             f"(LP_STEP1={lp_step1}, LP_STEP2={lp_step2}, diag={diag})",
                                             code="E312",
                                         )
-                                    
                                     both_off_deadline = None
                                     await asyncio.sleep(1.0)
                                     continue
@@ -1380,7 +1378,7 @@ class HostHandlers:
                                     f"[VACUUM_ON_DIAG/pump_off_valve_on] snap={snap}, diag={diag}",
                                 )
                                 # 밸브 ON 상태에서 펌프 SW만 OFF되는 조합은 래더에 경로가 없다
-                                # (L_R_P_SW 리셋은 항상 L_R_V_SW OFF 이후 단계) → 외부 개입 의심.
+                                # (L_R_P_SW 리셋은 항상 L_R_V_SW OFF 이후 단계 → 프로그램 외 요인).
                                 return self._fail(
                                     "VACUUM_ON 실패 — READY 전 러핑펌프가 먼저 OFF됨 "
                                     f"(LP_STEP1={lp_step1}, LP_STEP2={lp_step2}, "

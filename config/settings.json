@@ -269,6 +269,7 @@
     "CHAMBER_CHUCK_MOVE_TIMEOUT_S": 120.0,  // 척 이동 최대 대기 (초)
     "CHAMBER_CHUCK_POWER_ON_SETTLE_S": 0.2,// 척 전원 ON 후 안정화 대기 (초)
     "CHAMBER_CHUCK_POLL_INTERVAL_S": 0.3,  // 척 상태 확인 주기 (초)
+    "CHUCK_POSITION_RESOLVE_TIMEOUT_S": 90.0, // 호스트 척 명령: 위치 불명 시 확정 대기 최대 (초)
     "CHAMBER_PULSE_RECONNECT_TIMEOUT_S": 2.0,      // Pulse 전원 재연결 타임아웃 (초)
     "CHAMBER_PREFLIGHT_TIMEOUT_S": 8.0,             // 공정 시작 전 장비 점검 타임아웃 (초)
     "CHAMBER_PREFLIGHT_TIMEOUT_WITH_PULSE_S": 10.0, // Pulse 포함 시 장비 점검 타임아웃 (초)
