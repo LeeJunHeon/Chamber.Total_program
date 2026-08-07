@@ -947,6 +947,12 @@ class HostHandlers:
         - L_R_V_OUT           (P00031) : 러핑밸브 실제 출력 코일
         - L_VENT_OUT          (P00034) : 벤트밸브 출력 (배기-벤트 충돌 진단용)
         - L_ATM_SENSOR        (P00009) : 로드락 ATM 센서
+        - L_R_P_OFF_TIMER     (M00003) : 에어압 알람 → 러핑펌프 출력 차단(인터락 하강 원인 구분용)
+        - L_R_V_인터락        (M00031) : 러핑밸브 인터락 현재값
+        - G_V_1_OPEN_LAMP     (M00228) : CH1 게이트 열림 램프
+        - G_V_1_CLOSE_LAMP    (M00229) : CH1 게이트 닫힘 램프
+        - G_V_2_OPEN_LAMP     (M00248) : CH2 게이트 열림 램프
+        - G_V_2_CLOSE_LAMP    (M00249) : CH2 게이트 닫힘 램프
         """
         names = [
             "L_GAUGE_A",
@@ -955,6 +961,12 @@ class HostHandlers:
             "L_R_V_OUT",
             "L_VENT_OUT",
             "L_ATM_SENSOR",
+            "L_R_P_OFF_TIMER",
+            "L_R_V_인터락",
+            "G_V_1_OPEN_LAMP",
+            "G_V_1_CLOSE_LAMP",
+            "G_V_2_OPEN_LAMP",
+            "G_V_2_CLOSE_LAMP",
         ]
         result: dict[str, bool | None] = {}
         try:
@@ -1194,6 +1206,47 @@ class HostHandlers:
                                     code="E312",
                                 )
 
+                            # 2-b) 러핑 진행 중 게이트 감시 (외부 개입 감지)
+                            # - 이 프로그램은 VACUUM_ON 중 게이트를 조작하지 않고,
+                            #   래더에도 G_V_x_OPEN_SW를 SET하는 코일이 없다(소프트웨어 전용 비트).
+                            #   따라서 러핑 중 게이트가 CLOSED가 아니게 되면 외부 쓰기다.
+                            # - 게이트 개방은 진공 형성을 물리적으로 무효화하므로
+                            #   grace 타이머 만료(오해 소지 있는 '시간 초과')를 기다리지 않고
+                            #   즉시 명확한 사유로 중단한다.
+                            # - 감시 자체가 새 실패 원인이 되지 않도록 read 예외는 무시한다.
+                            gate_bad = None
+                            try:
+                                for gch in (1, 2):
+                                    gst = await self._read_gate_state(gch)
+                                    if gst.get("state") != "closed":
+                                        gate_bad = gst
+                                        break
+                            except Exception:
+                                gate_bad = None
+
+                            if gate_bad is not None:
+                                # 판독 경계 오탐 방지: 0.5s 후 1회 재확인
+                                await asyncio.sleep(0.5)
+                                confirm = None
+                                with contextlib.suppress(Exception):
+                                    confirm = await self._read_gate_state(int(gate_bad["ch"]))
+
+                                if confirm is not None and confirm.get("state") != "closed":
+                                    diag = await self._read_loadlock_vacuum_diag()
+                                    self.ctx.log(
+                                        "PLC_REMOTE",
+                                        f"[VACUUM_ON_DIAG/gate_not_closed] gate={confirm}, "
+                                        f"snap={snap}, diag={diag}",
+                                    )
+                                    return self._fail(
+                                        f"VACUUM_ON 중단 — 러핑 진행 중 CH{confirm['ch']} gate가 "
+                                        f"CLOSED가 아님(state={confirm['state']}, "
+                                        f"OPEN_LAMP={confirm['open_lamp']}, "
+                                        f"CLOSE_LAMP={confirm['close_lamp']}). "
+                                        "VACUUM_ON 중 GATE 열림으로 중단",
+                                        code="E301",
+                                    )
+
                             # 3) 정상 러핑 진행 중
                             if pump_sw and valve_sw:
                                 transition_deadline = None
@@ -1207,11 +1260,38 @@ class HostHandlers:
                                 if transition_deadline is None:
                                     transition_deadline = now + transition_grace_s
                                 elif now >= transition_deadline:
+                                    diag = await self._read_loadlock_vacuum_diag()
+                                    self.ctx.log(
+                                        "PLC_REMOTE",
+                                        f"[VACUUM_ON_DIAG/stop_seq_stall] snap={snap}, diag={diag}",
+                                    )
+
+                                    # 원인 구분:
+                                    # (a) L_R_P_OFF_TIMER=TRUE → 에어압 알람으로 L_R_P_OUT 차단
+                                    #     → L_R_V_인터락 하강 → 래더가 L_R_V_SW만 리셋 (하드웨어 원인)
+                                    # (b) LP_STEP1=TRUE & LP_STEP2=FALSE 유지 → T0050(60s) 정상 경로가
+                                    #     아닌데 L_R_V_SW만 OFF. 래더에 이 조합을 만드는 경로 없음
+                                    #     → 외부 쓰기 또는 순간적인 AIR 압력 저하 의심
+                                    if diag.get("L_R_P_OFF_TIMER"):
+                                        return self._fail(
+                                            "VACUUM_ON 실패 — 러핑 중 에어압 알람"
+                                            "(L_R_P_OFF_TIMER=TRUE)으로 러핑밸브 인터락이 해제됨 "
+                                            "→ AIR 공급/러핑펌프 하드웨어 점검 필요 "
+                                            f"(LP_STEP1={lp_step1}, LP_STEP2={lp_step2}, diag={diag})",
+                                            code="E312",
+                                        )
+                                    if lp_step1 and (not lp_step2):
+                                        return self._fail(
+                                            "VACUUM_ON 실패 — LP_STEP1 유지 상태에서 T0050(60s) "
+                                            "정상 경로가 아닌데 L_R_V_SW가 OFF됨. "
+                                            f"(LP_STEP1={lp_step1}, LP_STEP2={lp_step2}, diag={diag})",
+                                            code="E312",
+                                        )
                                     return self._fail(
                                         "VACUUM_ON 실패 — stop-sequence 진입 후 "
                                         "L_VAC_READY_SW가 유예시간 내 들어오지 않음 "
                                         f"(LP_STEP1={lp_step1}, LP_STEP2={lp_step2}, "
-                                        f"L_R_P_SW={pump_sw}, L_R_V_SW={valve_sw})",
+                                        f"L_R_P_SW={pump_sw}, L_R_V_SW={valve_sw}, diag={diag})",
                                         code="E312",
                                     )
 
@@ -1228,12 +1308,22 @@ class HostHandlers:
                                     if lp_step_off_deadline is None:
                                         lp_step_off_deadline = now + 15.0
                                     elif now >= lp_step_off_deadline:
+                                        diag = await self._read_loadlock_vacuum_diag()
+                                        self.ctx.log(
+                                            "PLC_REMOTE",
+                                            f"[VACUUM_ON_DIAG/lp_step_stall] snap={snap}, diag={diag}",
+                                        )
+                                        # LP_STEP이 살아있는 채 L_R_P_SW/L_R_V_SW가 모두 OFF로
+                                        # 15초 지속되는 조합은 래더가 만들 수 없다.
+                                        # (L_R_P_SW 리셋 렁은 STEP2→T0051, NOT_READY→T0053 둘뿐이고
+                                        #  두 경로 모두 STEP 비트를 함께 정리한다)
                                         return self._fail(
-                                            "VACUUM_ON 실패 — LP_STEP 진행 중 "
-                                            "L_VAC_READY_SW 미도달 (15s 초과) "
-                                            f"(LP_STEP1={lp_step1}, LP_STEP2={lp_step2})",
+                                            "VACUUM_ON 실패 — LP_STEP 진행 중 러핑 스위치가 "
+                                            "OFF된 채 L_VAC_READY_SW 미도달 (15s 초과). "
+                                            f"(LP_STEP1={lp_step1}, LP_STEP2={lp_step2}, diag={diag})",
                                             code="E312",
                                         )
+                                    
                                     both_off_deadline = None
                                     await asyncio.sleep(1.0)
                                     continue
@@ -1257,23 +1347,12 @@ class HostHandlers:
                                     try:
                                         diag = await self._read_loadlock_vacuum_diag()
                                     except Exception:
-                                        diag = {
-                                            "L_GAUGE_A": None, "L_GAUGE_A_INTERLOCK": None,
-                                            "L_R_P_OUT": None, "L_R_V_OUT": None,
-                                            "L_VENT_OUT": None, "L_ATM_SENSOR": None,
-                                        }
+                                        diag = {}
 
                                     # 전체 진단은 로그 파일에만 (Google Chat 알림 길이 절약)
                                     self.ctx.log(
                                         "PLC_REMOTE",
-                                        f"[VACUUM_ON_DIAG/both_off] "
-                                        f"L_GAUGE_A={diag['L_GAUGE_A']}, "
-                                        f"L_GAUGE_A_INTERLOCK={diag['L_GAUGE_A_INTERLOCK']}, "
-                                        f"L_R_P_OUT={diag['L_R_P_OUT']}, "
-                                        f"L_R_V_OUT={diag['L_R_V_OUT']}, "
-                                        f"L_VENT_OUT={diag['L_VENT_OUT']}, "
-                                        f"L_ATM_SENSOR={diag['L_ATM_SENSOR']}, "
-                                        f"snap2={snap2}",
+                                        f"[VACUUM_ON_DIAG/both_off] diag={diag}, snap2={snap2}",
                                     )
 
                                     if snap2["L_VAC_NOT_READY"]:
@@ -1287,18 +1366,25 @@ class HostHandlers:
                                         "VACUUM_ON 실패 — PLC가 자체적으로 "
                                         "L_R_P_SW/L_R_V_SW를 OFF로 전환 "
                                         "(진공 게이지 인터락 미충족) "
-                                        f"(L_GAUGE_A_INTERLOCK={diag['L_GAUGE_A_INTERLOCK']}, "
-                                        f"L_R_P_OUT={diag['L_R_P_OUT']}, "
-                                        f"L_R_V_OUT={diag['L_R_V_OUT']})",
+                                        f"(L_GAUGE_A_INTERLOCK={diag.get('L_GAUGE_A_INTERLOCK')}, "
+                                        f"L_R_P_OUT={diag.get('L_R_P_OUT')}, "
+                                        f"L_R_V_OUT={diag.get('L_R_V_OUT')})",
                                         code="E312",
                                     )
 
                             # 6) 이 조합은 비정상
                             elif (not pump_sw) and valve_sw:
+                                diag = await self._read_loadlock_vacuum_diag()
+                                self.ctx.log(
+                                    "PLC_REMOTE",
+                                    f"[VACUUM_ON_DIAG/pump_off_valve_on] snap={snap}, diag={diag}",
+                                )
+                                # 밸브 ON 상태에서 펌프 SW만 OFF되는 조합은 래더에 경로가 없다
+                                # (L_R_P_SW 리셋은 항상 L_R_V_SW OFF 이후 단계) → 외부 개입 의심.
                                 return self._fail(
                                     "VACUUM_ON 실패 — READY 전 러핑펌프가 먼저 OFF됨 "
                                     f"(LP_STEP1={lp_step1}, LP_STEP2={lp_step2}, "
-                                    f"L_R_P_SW={pump_sw}, L_R_V_SW={valve_sw})",
+                                    f"L_R_P_SW={pump_sw}, L_R_V_SW={valve_sw}, diag={diag})",
                                     code="E312",
                                 )
 
@@ -1316,14 +1402,7 @@ class HostHandlers:
                         # 전체 진단은 로그 파일에만
                         self.ctx.log(
                             "PLC_REMOTE",
-                            f"[VACUUM_ON_DIAG/timeout] "
-                            f"snap={snap_timeout}, "
-                            f"L_GAUGE_A={diag['L_GAUGE_A']}, "
-                            f"L_GAUGE_A_INTERLOCK={diag['L_GAUGE_A_INTERLOCK']}, "
-                            f"L_R_P_OUT={diag['L_R_P_OUT']}, "
-                            f"L_R_V_OUT={diag['L_R_V_OUT']}, "
-                            f"L_VENT_OUT={diag['L_VENT_OUT']}, "
-                            f"L_ATM_SENSOR={diag['L_ATM_SENSOR']}",
+                            f"[VACUUM_ON_DIAG/timeout] snap={snap_timeout}, diag={diag}",
                         )
 
                         if snap_timeout and snap_timeout["L_VAC_NOT_READY"]:
@@ -1331,7 +1410,7 @@ class HostHandlers:
                                 f"VACUUM_ON 실패 — {int(timeout_s)}s 타임아웃, "
                                 "PLC가 L_VAC_NOT_READY=TRUE로 판정 "
                                 "(진공 게이지 인터락 미충족) "
-                                f"(L_GAUGE_A_INTERLOCK={diag['L_GAUGE_A_INTERLOCK']})",
+                                f"(L_GAUGE_A_INTERLOCK={diag.get('L_GAUGE_A_INTERLOCK')})",
                                 code="E312",
                             )
 
@@ -1339,7 +1418,7 @@ class HostHandlers:
                             return self._fail(
                                 f"VACUUM_ON 타임아웃 — {int(timeout_s)}s 내 진공 미도달 "
                                 "(진공 게이지 인터락/펌프/누설 점검 필요) "
-                                f"(L_GAUGE_A_INTERLOCK={diag['L_GAUGE_A_INTERLOCK']}, "
+                                f"(L_GAUGE_A_INTERLOCK={diag.get('L_GAUGE_A_INTERLOCK')}, "
                                 f"L_R_P_SW={snap_timeout['L_R_P_SW']}, "
                                 f"L_R_V_SW={snap_timeout['L_R_V_SW']})",
                                 code="E312",
@@ -1929,15 +2008,34 @@ class HostHandlers:
                         e,
                         code="E412",
                     )
+                # ✅ MID 목표인데 위치 불명이면 즉시 실패하지 않고 확정을 기다린다.
+                # Z-MOTION 래더 특성(챔버12_plc.pdf p44~45):
+                # - Z*_LOCATION 램프는 위치 센서(SGN)가 3초(T0004/T0005/T0006) 유지된 뒤에만 점등
+                # - 위치 이탈 직후/이동 중/도착 후 3초까지는 세 램프가 모두 OFF (설계상 데드윈도우)
+                # → 이동/안정화가 끝날 때까지 폴링으로 흡수한 뒤 판정한다 (E318 오탐 방지).
+                #   척이 실제로 이동 중이었다면 도착 위치가 잡히는 즉시 빠져나온다.
+                if target_name == "mid" and cur["position"] == "unknown":
+                    resolve_timeout_s = float(
+                        getattr(cfg, "CHUCK_POSITION_RESOLVE_TIMEOUT_S", 90.0)
+                    )
+                    resolve_deadline = time.monotonic() + resolve_timeout_s
+                    while time.monotonic() < resolve_deadline:
+                        await asyncio.sleep(1.0)
+                        with contextlib.suppress(Exception):
+                            cur = await self._read_chuck_position(ch)
+                        if cur["position"] != "unknown":
+                            break
+
                 # chuck이 이미 목표 위치면 즉시 성공 응답
                 if cur["position"] == target_name:
                     return self._ok(f"CH{ch} Chuck OK — 이미 {target_name.upper()} 위치", current=cur)
-                
-                # ✅ 핵심: 위치 불명(UP/MID/DOWN 모두 OFF 또는 2개 이상 ON) 상태에서 MID 자동은 실패 확률 높음
-                #    → 오래 기다리지 말고 즉시 원인 명확하게 실패 처리
+
+                # MID 이동은 래더가 현재 위치 센서(UP/DOWN SGN)로 방향을 결정하므로
+                # 위치가 끝내 확정되지 않으면 이동 불가 → 명확히 실패 처리
                 if target_name == "mid" and cur["position"] == "unknown":
                     return self._fail(
-                        f"CH{ch} Chuck 위치 불명(UP/MID/DOWN 모두 OFF 또는 중복 ON) → MID 이동 불가. "
+                        f"CH{ch} Chuck 위치 불명 상태 지속({int(resolve_timeout_s)}s 대기 후에도 "
+                        f"UP/MID/DOWN 모두 OFF 또는 중복 ON) → MID 이동 불가. "
                         f"먼저 CH{ch}_CHUCK_DOWN 등으로 위치를 확정한 뒤 재시도. snapshot={cur}",
                         code="E318",
                     )

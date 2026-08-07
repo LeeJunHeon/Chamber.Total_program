@@ -523,6 +523,14 @@ CHAMBER_CHUCK_MOVE_TIMEOUT_S = 120.0
 CHAMBER_CHUCK_POWER_ON_SETTLE_S = 0.2
 CHAMBER_CHUCK_POLL_INTERVAL_S = 0.3
 
+# 호스트 척 이동 명령(CHx_CHUCK_UP=MID)에서 위치 불명
+# (UP/MID/DOWN 램프 모두 OFF 또는 중복 ON) 시 즉시 실패(E318)하지 않고
+# 위치가 확정될 때까지 기다리는 최대 시간.
+# Z-MOTION 래더의 LOCATION 램프는 센서 3초 안정 후에만 점등되며(T0004~T0006),
+# 이동 중에는 세 램프가 모두 OFF가 되는 데드윈도우가 설계상 존재한다.
+# 척 전체 이동시간(~70s) + 램프 안정화(3s) + 여유를 반영해 90s.
+CHUCK_POSITION_RESOLVE_TIMEOUT_S = 90.0
+
 CHAMBER_PULSE_RECONNECT_TIMEOUT_S = 2.0
 CHAMBER_PREFLIGHT_TIMEOUT_S = 8.0
 CHAMBER_PREFLIGHT_TIMEOUT_WITH_PULSE_S = 10.0
