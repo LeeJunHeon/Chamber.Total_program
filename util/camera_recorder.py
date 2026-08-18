@@ -726,22 +726,28 @@ class CameraRecorder:
         """백그라운드 스레드 본체. 1초 주기로 촬영하여 원본 이미지만 저장한다.
         (OCR/파싱 없음. 예외가 나도 메인 공정에 전파하지 않는다.)"""
 
-        # ── 1) 저장 폴더: {root}/{모드}/{YYYYMMDD_HHMMSS}/ ──
+        # ── 1) 카메라 오픈 ──
+        # ★ 저장 폴더 생성보다 먼저 수행한다.
+        #   오픈 실패 시 빈 세션 폴더가 NAS로 동기화되면,
+        #   판독 워커가 그 폴더를 empty로 매니페스트에 영구 기록해 재처리가 막힌다.
+        cap = cv2.VideoCapture(self._cam_idx)
+        if not cap.isOpened():
+            cap.release()
+            self._log(f"카메라 열기 실패 (index={self._cam_idx}) — 이번 공정 영상 미기록")
+            return
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1920)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
+
+        # ── 2) 저장 폴더: {root}/{모드}/{YYYYMMDD_HHMMSS}/ ──
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
         save_dir = _resolve_root() / self._mode_folder / ts
         try:
             save_dir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
+            cap.release()
             self._log(f"폴더 생성 실패: {e}")
             return
 
-        # ── 2) 카메라 오픈 ──
-        cap = cv2.VideoCapture(self._cam_idx)
-        if not cap.isOpened():
-            self._log(f"카메라 열기 실패 (index={self._cam_idx})")
-            return
-        cap.set(cv2.CAP_PROP_FRAME_WIDTH,  1920)
-        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, 1080)
         self._log(f"카메라 시작 mode={self._mode} → {save_dir}")
 
         err_count = 0
@@ -791,3 +797,11 @@ class CameraRecorder:
         finally:
             cap.release()
             self._log(f"완료 — 촬영 {img_count}장 | 폴더: {save_dir}")
+            # 오픈은 됐지만 한 장도 못 찍은 경우(케이블 접촉 불량 등)에도
+            # 빈 폴더를 남기지 않는다. rmdir은 비어 있을 때만 성공하므로 안전.
+            if img_count == 0:
+                try:
+                    save_dir.rmdir()
+                    self._log(f"촬영 0장 → 빈 폴더 삭제: {save_dir.name}")
+                except Exception:
+                    pass
