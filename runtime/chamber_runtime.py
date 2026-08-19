@@ -1868,7 +1868,7 @@ class ChamberRuntime:
                 )
             elif k == "power_off_finished":
                 if not self._dc_failed_flag:                # ★ 추가: 실패 시에는 OK 토큰(다음 스텝 진행) 차단
-                    self.process_controller.on_device_step_ok()
+                    self.process_controller.on_dc_off_finished()
                 else:
                     self._dc_failed_flag = False            #    1회성 플래그 해제
 
@@ -1901,7 +1901,7 @@ class ChamberRuntime:
                     },
                 )
             elif k == "power_off_finished":
-                self.process_controller.on_device_step_ok()
+                self.process_controller.on_rf_off_finished()
 
     async def _pump_rfpulse_events(self) -> None:
         if not self.rf_pulse:

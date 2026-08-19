@@ -42,7 +42,7 @@ class PCEvent:
 @dataclass(frozen=True)
 class ExpectToken:
     """해당 스텝 완료 판정을 위해 필요한 '확인 토큰'."""
-    kind: str        # 'MFC','PLC','DC_TARGET','RF_TARGET','IG_OK','RGA_OK','DCPULSE_OFF','RFPULSE_OFF','GENERIC_OK', ...
+    kind: str        # 'MFC','PLC','DC_TARGET','DC_OFF','RF_TARGET','RF_OFF','IG_OK','RGA_OK','DCPULSE_OFF','RFPULSE_OFF','GENERIC_OK', ...
     spec: Any = None # 세부 식별자 (예: 명령 문자열)
 
     def matches(self, other: "ExpectToken") -> bool:
@@ -644,6 +644,9 @@ class ProcessController:
     def on_dc_target_reached(self) -> None:
         self._match_token(ExpectToken("DC_TARGET"))
 
+    def on_dc_off_finished(self) -> None:
+        self._match_token(ExpectToken("DC_OFF"))
+
     def on_dc_target_failed(
         self,
         why: str | BaseException,
@@ -655,6 +658,9 @@ class ProcessController:
 
     def on_rf_target_reached(self) -> None:
         self._match_token(ExpectToken("RF_TARGET"))
+
+    def on_rf_off_finished(self) -> None:
+        self._match_token(ExpectToken("RF_OFF"))
 
     def on_rf_target_failed(
         self,
@@ -909,7 +915,7 @@ class ProcessController:
 
         elif a == ActionType.DC_POWER_STOP:
             self._stop_dc_power()
-            tokens.append(ExpectToken("GENERIC_OK"))  # 하위 호환
+            tokens.append(ExpectToken("DC_OFF"))
 
         elif a == ActionType.RF_POWER_SET:
             self._send_rf_power(float(step.value))
@@ -917,7 +923,7 @@ class ProcessController:
 
         elif a == ActionType.RF_POWER_STOP:
             self._stop_rf_power()
-            tokens.append(ExpectToken("GENERIC_OK"))  # 하위 호환
+            tokens.append(ExpectToken("RF_OFF"))
 
         elif a == ActionType.DC_PULSE_START:
             power = float(step.value or 0.0)
@@ -2177,8 +2183,8 @@ class ProcessController:
         m = {
             "DCPulse":   ("DC_PULSE_TARGET", "DC_PULSE_SET", "DCPULSE_OFF"),
             "RFPulse":   ("RF_TARGET", "RFPULSE_OFF"),
-            "RF Power":  ("RF_TARGET", "GENERIC_OK"),
-            "DC Power":  ("DC_TARGET", "GENERIC_OK"),
+            "RF Power":  ("RF_TARGET", "RF_OFF"),
+            "DC Power":  ("DC_TARGET", "DC_OFF"),
             "MFC":       ("MFC",),
             "PLC":       ("PLC",),
             "IG":        ("IG_OK",),
