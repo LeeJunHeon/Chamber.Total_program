@@ -32,7 +32,7 @@ class PCEvent:
       - 'finished'           : {'ok': bool, 'detail': dict}
       - 'aborted'            : {}
       - 'polling'            : {'active': bool}
-      - 'polling_targets'    : {'targets': {'mfc':bool, 'dc':bool, 'rf':bool,
+      - 'polling_targets'    : {'targets': {'mfc':bool, 'dc':bool, 'dc2':bool, 'rf':bool,
                                             'dc_pulse':bool, 'rf_pulse':bool}}
     """
     kind: str
@@ -42,7 +42,7 @@ class PCEvent:
 @dataclass(frozen=True)
 class ExpectToken:
     """해당 스텝 완료 판정을 위해 필요한 '확인 토큰'."""
-    kind: str        # 'MFC','PLC','DC_TARGET','DC_OFF','RF_TARGET','RF_OFF','IG_OK','RGA_OK','DCPULSE_OFF','RFPULSE_OFF','GENERIC_OK', ...
+    kind: str        # 'MFC','PLC','DC_TARGET','DC_OFF','DC2_TARGET','DC2_OFF','RF_TARGET','RF_OFF','IG_OK','RGA_OK','DCPULSE_OFF','RFPULSE_OFF','GENERIC_OK', ...
     spec: Any = None # 세부 식별자 (예: 명령 문자열)
 
     def matches(self, other: "ExpectToken") -> bool:
@@ -128,6 +128,8 @@ class ActionType(str, Enum):
     RF_POWER_SET = "RF_POWER_SET"
     DC_POWER_STOP = "DC_POWER_STOP"
     RF_POWER_STOP = "RF_POWER_STOP"
+    DC2_POWER_SET = "DC2_POWER_SET"
+    DC2_POWER_STOP = "DC2_POWER_STOP"
     OES_RUN = "OES_RUN"
     # 펄스 완전 분리
     DC_PULSE_START = "DC_PULSE_START"
@@ -159,6 +161,7 @@ class ProcessStep:
         # ✅ value 필수 액션은 다시 복구
         if self.action in (
             ActionType.DC_POWER_SET,
+            ActionType.DC2_POWER_SET,
             ActionType.RF_POWER_SET,
             ActionType.IG_CMD,
             ActionType.DC_PULSE_SET,
@@ -232,6 +235,8 @@ class ProcessController:
         stop_dc_power: Callable[[], None],
         send_rf_power: Callable[[float], None],
         stop_rf_power: Callable[[], None],
+        send_dc_power2: Optional[Callable[[float], None]] = None,
+        stop_dc_power2: Optional[Callable[[], None]] = None,
 
         # 펄스 파워 (완전 분리)
         start_dc_pulse: Callable[[float, Optional[int], Optional[int]], None],
@@ -251,6 +256,7 @@ class ProcessController:
         supports_rf_cont: bool,
         supports_dc_pulse: bool,
         supports_rf_pulse: bool,
+        supports_dc_cont2: bool = False,
     ) -> None:
         self.event_q: asyncio.Queue[PCEvent] = asyncio.Queue(maxsize=2000)
         self._send_plc = send_plc                   # 🔁 보관 멤버도 교체
@@ -259,6 +265,8 @@ class ProcessController:
         self._stop_dc_power = stop_dc_power
         self._send_rf_power = send_rf_power
         self._stop_rf_power = stop_rf_power
+        self._send_dc_power2 = send_dc_power2
+        self._stop_dc_power2 = stop_dc_power2
         self._start_dc_pulse = start_dc_pulse
         self._stop_dc_pulse  = stop_dc_pulse
         self._set_dc_pulse_power = set_dc_pulse_power   # ✅ 추가
@@ -277,6 +285,8 @@ class ProcessController:
         self._supports_rf_cont = bool(supports_rf_cont)
         self._supports_dc_pulse = bool(supports_dc_pulse)
         self._supports_rf_pulse = bool(supports_rf_pulse)
+        # ✅ 콜백이 주입되지 않았으면 지원 불가로 강등 (스텝 생성 자체를 막음)
+        self._supports_dc_cont2 = bool(supports_dc_cont2) and (send_dc_power2 is not None) and (stop_dc_power2 is not None)
 
         # ✅ 항상 존재하는 가스 채널 맵(소스 오브 트루스)
         self._gas_info = dict(getattr(self._cfg, "PROCESS_GAS_INFO", {
@@ -341,13 +351,21 @@ class ProcessController:
         self._token_owner: Dict[Tuple[str, Any], int] = {}
 
     # ===== 지원 플래그 property =====
-    @property
     def supports_dc_cont(self) -> bool:
         return bool(self._supports_dc_cont)
 
     @supports_dc_cont.setter
     def supports_dc_cont(self, v: bool) -> None:
         self._supports_dc_cont = bool(v)
+
+    @property
+    def supports_dc_cont2(self) -> bool:
+        return bool(self._supports_dc_cont2)
+
+    @supports_dc_cont2.setter
+    def supports_dc_cont2(self, v: bool) -> None:
+        # 콜백이 없으면 True로 올릴 수 없음
+        self._supports_dc_cont2 = bool(v) and (self._send_dc_power2 is not None) and (self._stop_dc_power2 is not None)
 
     @property
     def supports_rf_cont(self) -> bool:
@@ -647,6 +665,21 @@ class ProcessController:
     def on_dc_off_finished(self) -> None:
         self._match_token(ExpectToken("DC_OFF"))
 
+    def on_dc2_target_reached(self) -> None:
+        self._match_token(ExpectToken("DC2_TARGET"))
+
+    def on_dc2_off_finished(self) -> None:
+        self._match_token(ExpectToken("DC2_OFF"))
+
+    def on_dc2_target_failed(
+        self,
+        why: str | BaseException,
+        *,
+        code: str | None = None,
+        meta: Dict[str, Any] | None = None,
+    ) -> None:
+        self._step_failed("DC2 Power", why, code=code, meta=meta)
+
     def on_dc_target_failed(
         self,
         why: str | BaseException,
@@ -855,6 +888,7 @@ class ProcessController:
                 hard_wait_actions = {
                     ActionType.RF_POWER_STOP,
                     ActionType.DC_POWER_STOP,
+                    ActionType.DC2_POWER_STOP,
                     ActionType.RF_PULSE_STOP,
                     ActionType.DC_PULSE_STOP,
                 }
@@ -916,6 +950,26 @@ class ProcessController:
         elif a == ActionType.DC_POWER_STOP:
             self._stop_dc_power()
             tokens.append(ExpectToken("DC_OFF"))
+
+        elif a == ActionType.DC2_POWER_SET:
+            if not self._send_dc_power2:
+                raise AppError(
+                    code="E717",
+                    detail="DC2_POWER_SET을 사용하려면 send_dc_power2 콜백이 주입되어야 합니다.",
+                    meta={"action": "DC2_POWER_SET", "ch": self._ch},
+                )
+            self._send_dc_power2(float(step.value))
+            tokens.append(ExpectToken("DC2_TARGET"))
+
+        elif a == ActionType.DC2_POWER_STOP:
+            if not self._stop_dc_power2:
+                raise AppError(
+                    code="E718",
+                    detail="DC2_POWER_STOP을 사용하려면 stop_dc_power2 콜백이 주입되어야 합니다.",
+                    meta={"action": "DC2_POWER_STOP", "ch": self._ch},
+                )
+            self._stop_dc_power2()
+            tokens.append(ExpectToken("DC2_OFF"))
 
         elif a == ActionType.RF_POWER_SET:
             self._send_rf_power(float(step.value))
@@ -1144,12 +1198,13 @@ class ProcessController:
         active=False면 전부 False.
         """
         if not active:
-            return {"mfc": False, "dc": False, "rf": False, "dc_pulse": False, "rf_pulse": False}
+            return {"mfc": False, "dc": False, "dc2": False, "rf": False, "dc_pulse": False, "rf_pulse": False}
 
         info = self._get_common_process_info(self.current_params or {})
         use_dc_pulse = bool(info.get("use_dc_pulse", False))
         use_rf_pulse = bool(info.get("use_rf_pulse", False))
         use_dc       = bool(info.get("use_dc", False))
+        use_dc2      = bool(info.get("use_dc2", False))
         use_rf       = bool(info.get("use_rf", False))
 
         # RF 펄스를 쓴다고 DC 연속 폴링까지 막을 필요는 없음
@@ -1158,6 +1213,7 @@ class ProcessController:
             "dc_pulse": use_dc_pulse,
             "rf_pulse": use_rf_pulse,
             "dc": use_dc and not use_dc_pulse,   # DC 펄스를 쓸 때만 DC 연속 폴링 off
+            "dc2": use_dc2 and not use_dc_pulse,
             "rf": use_rf and not use_rf_pulse,   # RF 펄스를 쓸 때만 RF 연속 폴링 off
         }
     
@@ -1399,11 +1455,13 @@ class ProcessController:
 
     def _get_common_process_info(self, params: Dict[str, Any]) -> Dict[str, Any]:
         req_dc_cont  = bool(params.get("use_dc_power", False)) and float(params.get("dc_power", 0)) > 0
+        req_dc_cont2 = bool(params.get("use_dc_power2", False)) and float(params.get("dc_power2", 0)) > 0
         req_rf_cont  = bool(params.get("use_rf_power", False)) and float(params.get("rf_power", 0)) > 0
         req_dc_pulse = bool(params.get("use_dc_pulse", False)) and float(params.get("dc_pulse_power", 0)) > 0
         req_rf_pulse = bool(params.get("use_rf_pulse", False)) and float(params.get("rf_pulse_power", 0)) > 0
 
         use_dc       = req_dc_cont  and self._supports_dc_cont
+        use_dc2      = req_dc_cont2 and self._supports_dc_cont2
         use_rf       = req_rf_cont  and self._supports_rf_cont
         use_dc_pulse = req_dc_pulse and self._supports_dc_pulse
         use_rf_pulse = req_rf_pulse and self._supports_rf_pulse
@@ -1413,12 +1471,14 @@ class ProcessController:
         return {
             'use_ms': bool(params.get("use_ms", False)),
             'use_dc': use_dc,
+            'use_dc2': use_dc2,
             'use_rf': use_rf,
             'use_dc_pulse': use_dc_pulse,
             'use_rf_pulse': use_rf_pulse,
             'gas_info': dict(getattr(self._cfg, "PROCESS_GAS_INFO", self._gas_info)),
             'gun_shutters': gun_list,
-            'req_dc': req_dc_cont, 'req_rf': req_rf_cont, 'req_dcp': req_dc_pulse, 'req_rfp': req_rf_pulse,
+            'req_dc': req_dc_cont, 'req_dc2': req_dc_cont2, 'req_rf': req_rf_cont,
+            'req_dcp': req_dc_pulse, 'req_rfp': req_rf_pulse,
         }
 
     def _create_process_sequence(self, params: Dict[str, Any]) -> List[ProcessStep]:
@@ -1448,6 +1508,7 @@ class ProcessController:
 
         common_info = self._get_common_process_info(params)
         use_dc        = common_info['use_dc']
+        use_dc2       = common_info['use_dc2']
         use_rf        = common_info['use_rf']
         use_dc_pulse  = common_info['use_dc_pulse']
         use_rf_pulse  = common_info['use_rf_pulse']
@@ -1471,6 +1532,7 @@ class ProcessController:
         boost_target = float(getattr(self._cfg, "PC_WORKING_PRESSURE_BOOST_TARGET", 10.0))
 
         dc_power = float(params.get("dc_power", 0))
+        dc_power2 = float(params.get("dc_power2", 0))
         rf_power = float(params.get("rf_power", 0))
 
         default_integration_ms = int(getattr(self._cfg, "PROCESS_DEFAULT_OES_INTEGRATION_MS", 60))
@@ -1675,11 +1737,12 @@ class ProcessController:
             ))
 
         # 병렬: DC(연속) + (RF 연속/펄스)만 허용
-        want_parallel = use_dc and (use_rf or use_rf_pulse)
+        want_parallel = (use_dc or use_dc2) and (use_rf or use_rf_pulse)
 
         # (선택) 요청했지만 미지원인 경우 안내 로그
         ci = common_info
         if ci.get('req_dc')  and not use_dc:        self._emit_log("Process", "주의: 이 챔버는 DC 연속 파워 미지원 → DC 단계 스킵")
+        if ci.get('req_dc2') and not use_dc2:       self._emit_log("Process", "주의: 이 챔버는 DC2 연속 파워 미지원 → DC2 단계 스킵")
         if ci.get('req_rf')  and not use_rf:        self._emit_log("Process", "주의: 이 챔버는 RF 연속 파워 미지원 → RF 단계 스킵")
         if ci.get('req_dcp') and not use_dc_pulse:  self._emit_log("Process", "주의: 이 챔버는 DC Pulse 미지원 → Pulse 단계 스킵")
         if ci.get('req_rfp') and not use_rf_pulse:  self._emit_log("Process", "주의: 이 챔버는 RF Pulse 미지원 → Pulse 단계 스킵")
@@ -1688,8 +1751,16 @@ class ProcessController:
         if use_dc:
             steps.append(ProcessStep(
                 action=ActionType.DC_POWER_SET, value=dc_power,
-                message=f'DC Power {dc_power}W 설정',
+                message=f'DC1 Power {dc_power}W 설정',
                 parallel=want_parallel, polling=False,
+            ))
+
+        # DC2 연속 (순차 램프업 — 동시 램프가 필요하면 parallel=True로 변경)
+        if use_dc2:
+            steps.append(ProcessStep(
+                action=ActionType.DC2_POWER_SET, value=dc_power2,
+                message=f'DC2 Power {dc_power2}W 설정',
+                parallel=False, polling=False,
             ))
 
         # --- DC 펄스
@@ -1908,6 +1979,7 @@ class ProcessController:
         info = self._get_common_process_info(params)
 
         use_dc = force_all or info['use_dc']
+        use_dc2 = force_all or info['use_dc2']
         use_rf = force_all or info['use_rf']
         use_dc_pulse  = force_all or info['use_dc_pulse']   # ← 추가
         use_rf_pulse = force_all or info['use_rf_pulse']
@@ -1923,7 +1995,13 @@ class ProcessController:
         if use_dc:        
             steps.append(ProcessStep(
                 action=ActionType.DC_POWER_STOP, 
-                message='DC Power Off'
+                message='DC1 Power Off'
+            ))
+
+        if use_dc2:
+            steps.append(ProcessStep(
+                action=ActionType.DC2_POWER_STOP,
+                message='DC2 Power Off'
             ))
 
         if use_rf:        
@@ -2008,6 +2086,7 @@ class ProcessController:
 
         # ✅ 키 누락 대비: .get() + 기본값
         use_dc       = bool(ci.get('use_dc', False))
+        use_dc2      = bool(ci.get('use_dc2', False))
         use_rf       = bool(ci.get('use_rf', False))
         use_dc_pulse = bool(ci.get('use_dc_pulse', False))
         use_rf_pulse = bool(ci.get('use_rf_pulse', False))
@@ -2015,11 +2094,17 @@ class ProcessController:
         # ✅ gas_info가 비어도 안전하게 폴백
         gas_info = ci.get('gas_info') or self._gas_info
 
-        both = (use_dc or use_dc_pulse) and (use_rf or use_rf_pulse)
+        both = (use_dc or use_dc2 or use_dc_pulse) and (use_rf or use_rf_pulse)
 
         if use_dc:
             steps.append(ProcessStep(
-                action=ActionType.DC_POWER_STOP, message='[긴급] DC Power 즉시 차단',
+                action=ActionType.DC_POWER_STOP, message='[긴급] DC1 Power 즉시 차단',
+                parallel=both, no_wait=True
+            ))
+
+        if use_dc2:
+            steps.append(ProcessStep(
+                action=ActionType.DC2_POWER_STOP, message='[긴급] DC2 Power 즉시 차단',
                 parallel=both, no_wait=True
             ))
 
@@ -2145,7 +2230,7 @@ class ProcessController:
                 n = i + 1
                 if step.action == ActionType.DELAY and step.duration is None:
                     errors.append(f"Step {n}: DELAY 액션에 duration이 없습니다.")
-                if step.action in [ActionType.DC_POWER_SET, ActionType.RF_POWER_SET, ActionType.IG_CMD, ActionType.DC_PULSE_SET, ActionType.RF_PULSE_SET]:
+                if step.action in [ActionType.DC_POWER_SET, ActionType.DC2_POWER_SET, ActionType.RF_POWER_SET, ActionType.IG_CMD, ActionType.DC_PULSE_SET, ActionType.RF_PULSE_SET]:
                     if step.value is None:
                         errors.append(f"Step {n}: {step.action.name} 액션에 value가 없습니다.")
                 if step.action == ActionType.DC_PULSE_START:
@@ -2185,6 +2270,7 @@ class ProcessController:
             "RFPulse":   ("RF_TARGET", "RFPULSE_OFF"),
             "RF Power":  ("RF_TARGET", "RF_OFF"),
             "DC Power":  ("DC_TARGET", "DC_OFF"),
+            "DC2 Power": ("DC2_TARGET", "DC2_OFF"),
             "MFC":       ("MFC",),
             "PLC":       ("PLC",),
             "IG":        ("IG_OK",),
