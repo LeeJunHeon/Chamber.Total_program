@@ -1901,7 +1901,13 @@ async def cmd_daemon(ch: int, usb: int, dll_path: Optional[str], out_dir: Option
         _print_json(payload)
 
         if not ok or getattr(oes, "sChannel", -1) < 0:
-            return 2
+            # ✅ init 실패 시 executor 스레드가 DLL 호출에 갇혀 있을 수 있음.
+            #    정상 return이면 인터프리터 종료가 비데몬 스레드 join에서 무한 대기
+            #    → 워커 좀비화 → 디바이스 핸들 점유 → 이후 모든 시도가 같은 지점에서 hang.
+            #    measure / total-timeout 경로(os._exit)와 동일하게 하드 종료로 대칭화.
+            with contextlib.suppress(Exception):
+                mtx.release()
+            os._exit(2)
 
         _status(f"[worker] daemon READY ch={ch} usb={usb} resolved={getattr(oes,'sChannel',-1)} pixels={getattr(oes,'_npix',0)}")
 
@@ -2064,4 +2070,12 @@ def main(argv=None) -> int:
 
 
 if __name__ == "__main__":
-    raise SystemExit(main())
+    # ✅ 워커는 절대 '정상 인터프리터 종료'를 하지 않는다.
+    #    DLL 호출에 갇힌 executor 스레드가 있으면 join에서 영구 대기(좀비)하므로,
+    #    모든 finally/뮤텍스 해제가 끝난 뒤(asyncio.run 반환 후) 하드 종료로 프로세스를 확실히 회수한다.
+    #    _print_json은 매 호출마다 flush하므로 부모가 읽는 JSON 유실 없음.
+    _rc = main()
+    with contextlib.suppress(Exception):
+        sys.stdout.flush()
+        sys.stderr.flush()
+    os._exit(int(_rc))
