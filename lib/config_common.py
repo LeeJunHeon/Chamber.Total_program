@@ -360,6 +360,7 @@ RFPULSE_REFP_WARN_WATTS = 0.0   # ← 추가: REFP 경고 임계값(W). 0.0=비�
 #  - 실제 장비 구성에 맞춰 채널 파일에서 오버라이드
 # ======================================================================
 SUPPORTS_DC = True
+SUPPORTS_DC2 = False            # DC Power 2호기 (CH2 전용, 기본 OFF)
 SUPPORTS_RF_CONT = False
 SUPPORTS_RFPULSE = True
 

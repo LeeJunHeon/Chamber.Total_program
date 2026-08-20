@@ -127,7 +127,7 @@ NormParams = TypedDict('NormParams', {
 }, total=False)
 
 # 폴링 타깃도 명확히 분리
-TargetsMap = Mapping[Literal["mfc", "dc", "rf", "dc_pulse", "rf_pulse"], bool]
+TargetsMap = Mapping[Literal["mfc", "dc", "dc2", "rf", "dc_pulse", "rf_pulse"], bool]
 
 @dataclass(frozen=True)
 class _RunnerCmd:
@@ -286,6 +286,7 @@ class ChamberRuntime:
         mfc: Optional[AsyncMFC] = None,
         ig: Optional[AsyncIG] = None,
         supports_dc_cont: Optional[bool] = None,   # DC 연속
+        supports_dc_cont2: Optional[bool] = None,  # DC 연속 2호기 (CH2 전용)
         supports_rf_cont: Optional[bool] = None,   # RF 연속
         supports_dc_pulse: Optional[bool] = None,  # DC-Pulse
         supports_rf_pulse: Optional[bool] = None,  # RF-Pulse
@@ -332,6 +333,9 @@ class ChamberRuntime:
         self._last_state_text: str | None = None
         # ✅ Runner 구조에서는 delay/cooldown을 stage 코루틴에서 처리하므로 레거시 delay task를 사용하지 않는다.
         self._dc_failed_flag: bool = False     # ★ 추가
+        self._dc2_failed_flag: bool = False    # ★ DC2용 (dc_power2)
+        # ★ DC 실측 표시 버퍼: {유닛: (P, V, I) | None}. None이면 '-' 로 표시
+        self._dc_disp: dict[int, tuple[float, float, float] | None] = {1: None, 2: None}
         self._auto_connect_enabled = True  # ← 실패시 False로 내려 자동 재연결 차단
         self._run_select: dict[str, bool] | None = None  # ← 이번 런에서 펄스 선택 상태
         self._owns_plc = bool(owns_plc if owns_plc is not None else (int(chamber_no) == 1))  # 기본 CH1
@@ -379,6 +383,10 @@ class ChamberRuntime:
             v = _cfg_bool("SUPPORTS_DC_CONT", "SUPPORTS_DC")  # 레거시 키도 허용
             supports_dc_cont = v if v is not None else (self.ch == 2)
 
+        if supports_dc_cont2 is None:
+            v = _cfg_bool("SUPPORTS_DC_CONT2", "SUPPORTS_DC2")
+            supports_dc_cont2 = v if v is not None else False   # 기본 OFF
+
         if supports_rf_cont is None:
             v = _cfg_bool("SUPPORTS_RF_CONT")
             supports_rf_cont = v if v is not None else False
@@ -392,6 +400,7 @@ class ChamberRuntime:
             supports_rf_pulse = v if v is not None else (self.ch == 2)
 
         self.supports_dc_cont  = bool(supports_dc_cont)
+        self.supports_dc_cont2 = bool(supports_dc_cont2) and (self.ch == 2)   # DC2는 CH2 전용
         self.supports_rf_cont  = bool(supports_rf_cont)
         self.supports_dc_pulse = bool(supports_dc_pulse)
         self.supports_rf_pulse = bool(supports_rf_pulse)
@@ -579,6 +588,35 @@ class ChamberRuntime:
                 toggle_enable=_dc_toggle_enable,   # ← 추가
             )
 
+        # 연속 파워 2호기 (CH2 전용)
+        #  - SET: DCV_SET_3(M00053), WRITE: DCV_WRITE_3(D00007)
+        #  - READ: DCV_READ_6/7(D00010/D00011) = V/I
+        #  - 스케일은 1호기와 동일 기종이므로 cfg.dc_* 기본값 그대로 사용
+        self.dc_power2 = None
+        if self.supports_dc_cont2 and self.plc:
+            async def _dc2_send(power: float):
+                await self.plc.power_write(power, family="DCV", write_idx=3)
+
+            async def _dc2_send_unverified(power: float):
+                await self.plc.power_write(power, family="DCV", write_idx=3)
+
+            async def _dc2_read():
+                try:
+                    P, V, I = await self.plc.power_read(family="DCV", v_idx=6, i_idx=7)
+                    return (P, V, I)
+                except Exception as e:
+                    self.append_log("DCpower2", f"read failed: {e!r}")
+
+            async def _dc2_toggle_enable(on: bool):
+                await self.plc.power_enable(on, family="DCV", set_idx=3)
+
+            self.dc_power2 = DCPowerAsync(
+                send_dc_power=_dc2_send,
+                send_dc_power_unverified=_dc2_send_unverified,
+                request_status_read=_dc2_read,
+                toggle_enable=_dc2_toggle_enable,
+            )
+
         self.rf_power = None
         if self.supports_rf_cont and self.plc:
             # (CH2 전용) RF 연속 제어 — RF channel 2 사용
@@ -705,6 +743,11 @@ class ChamberRuntime:
             if v is not None:
                 desired_dc_cont = bool(v)
 
+            desired_dc_cont2 = self.supports_dc_cont2
+            v = _cfg_bool("SUPPORTS_DC_CONT2", "SUPPORTS_DC2")
+            if v is not None:
+                desired_dc_cont2 = bool(v)
+
             desired_rf_cont = self.supports_rf_cont
             v = _cfg_bool("SUPPORTS_RF_CONT")
             if v is not None:
@@ -724,12 +767,15 @@ class ChamberRuntime:
             #    - 객체가 이미 존재하는 장치만 True 반영 가능
             #    - 객체가 없는 장치를 True로 바꾸는 건 런타임 재생성/프로그램 재시작이 필요
             effective_dc_cont = bool(desired_dc_cont and (self.dc_power is not None))
+            effective_dc_cont2 = bool(desired_dc_cont2 and (self.dc_power2 is not None))
             effective_rf_cont = bool(desired_rf_cont and (self.rf_power is not None))
             effective_dc_pulse = bool(desired_dc_pulse and (self.dc_pulse is not None))
             effective_rf_pulse = bool(desired_rf_pulse and (self.rf_pulse is not None))
 
             if desired_dc_cont and self.dc_power is None:
                 self.append_log("Config", "DC 연속파 지원 ON 요청은 현재 runtime에 dc_power 객체가 없어 즉시 반영하지 않습니다. 프로그램 재시작 후 반영됩니다.")
+            if desired_dc_cont2 and self.dc_power2 is None:
+                self.append_log("Config", "DC 연속파 2호기 지원 ON 요청은 현재 runtime에 dc_power2 객체가 없어 즉시 반영하지 않습니다. 프로그램 재시작 후 반영됩니다.")
             if desired_rf_cont and self.rf_power is None:
                 self.append_log("Config", "RF 연속파 지원 ON 요청은 현재 runtime에 rf_power 객체가 없어 즉시 반영하지 않습니다. 프로그램 재시작 후 반영됩니다.")
             if desired_dc_pulse and self.dc_pulse is None:
@@ -738,6 +784,7 @@ class ChamberRuntime:
                 self.append_log("Config", "RF-Pulse 지원 ON 요청은 현재 runtime에 rf_pulse 객체가 없어 즉시 반영하지 않습니다. 프로그램 재시작 후 반영됩니다.")
 
             self.supports_dc_cont = effective_dc_cont
+            self.supports_dc_cont2 = effective_dc_cont2
             self.supports_rf_cont = effective_rf_cont
             self.supports_dc_pulse = effective_dc_pulse
             self.supports_rf_pulse = effective_rf_pulse
@@ -745,6 +792,7 @@ class ChamberRuntime:
             # ProcessController도 동일하게 맞춘다.
             with contextlib.suppress(Exception):
                 self.process_controller.supports_dc_cont = self.supports_dc_cont
+                self.process_controller.supports_dc_cont2 = self.supports_dc_cont2
                 self.process_controller.supports_rf_cont = self.supports_rf_cont
                 self.process_controller.supports_dc_pulse = self.supports_dc_pulse
                 self.process_controller.supports_rf_pulse = self.supports_rf_pulse
@@ -929,6 +977,16 @@ class ChamberRuntime:
         def cb_dc_stop():
             if self.dc_power:
                 self._spawn_detached(self.dc_power.cleanup())
+
+        def cb_dc_power2(value: float):
+            if not self.dc_power2:
+                self.append_log("DCpower2", "이 챔버는 DC 연속 파워 2호기를 지원하지 않습니다.")
+                return
+            self._spawn_detached(self.dc_power2.start_process(float(value)))
+
+        def cb_dc2_stop():
+            if self.dc_power2:
+                self._spawn_detached(self.dc_power2.cleanup())
 
         def cb_rf_power(value: float):
             if not self.rf_power:
@@ -1222,6 +1280,8 @@ class ChamberRuntime:
             # 연속 파워
             send_dc_power=cb_dc_power, 
             stop_dc_power=cb_dc_stop,
+            send_dc_power2=cb_dc_power2,
+            stop_dc_power2=cb_dc2_stop,
             send_rf_power=cb_rf_power, 
             stop_rf_power=cb_rf_stop,
 
@@ -1241,6 +1301,7 @@ class ChamberRuntime:
 
             ch=self.ch,
             supports_dc_cont=self.supports_dc_cont,
+            supports_dc_cont2=self.supports_dc_cont2,
             supports_rf_cont=self.supports_rf_cont,
             supports_dc_pulse=self.supports_dc_pulse,
             supports_rf_pulse=self.supports_rf_pulse,
@@ -1551,7 +1612,7 @@ class ChamberRuntime:
                         self._run_select = None
                         self._last_polling_targets = None
                         # 남아 있을 수 있는 폴링 스위치를 즉시 모두 내림(장치 내부 워치독 종료 유도)
-                        self._apply_polling_targets({"mfc": False, "dc_pulse": False, "rf_pulse": False, "dc": False, "rf": False})
+                        self._apply_polling_targets({"mfc": False, "dc_pulse": False, "rf_pulse": False, "dc": False, "dc2": False, "rf": False})
 
                         # ✅ finished 이벤트에서는 "결과 기록/카드/알림"까지만 수행한다.
                         #   - 장치 정리(_stop_device_watchdogs)
@@ -1662,6 +1723,7 @@ class ChamberRuntime:
                     use_dc_pulse = bool(params.get("use_dc_pulse", False))
                     use_rf_pulse = bool(params.get("use_rf_pulse", False))
                     use_dc_cont  = bool(params.get("use_dc_power", False))
+                    use_dc_cont2 = bool(params.get("use_dc_power2", False))
                     use_rf_cont  = bool(params.get("use_rf_power", False))
 
                     base_targets = {
@@ -1669,6 +1731,7 @@ class ChamberRuntime:
                         "dc_pulse": active and self.supports_dc_pulse and use_dc_pulse and not use_dc_cont,
                         "rf_pulse": active and self.supports_rf_pulse and use_rf_pulse and not use_rf_cont,
                         "dc":       active and self.supports_dc_cont  and use_dc_cont  and not use_dc_pulse,
+                        "dc2":      active and self.supports_dc_cont2 and use_dc_cont2 and not use_dc_pulse,
                         "rf":       active and self.supports_rf_cont  and use_rf_cont  and not use_rf_pulse,
                     }
 
@@ -1679,6 +1742,7 @@ class ChamberRuntime:
                             "dc_pulse": base_targets["dc_pulse"] and bool(lt.get("dc_pulse", False)),
                             "rf_pulse": base_targets["rf_pulse"] and bool(lt.get("rf_pulse", False)),
                             "dc":       base_targets["dc"]       and bool(lt.get("dc", False)),
+                            "dc2":      base_targets["dc2"]      and bool(lt.get("dc2", False)),
                             "rf":       base_targets["rf"]       and bool(lt.get("rf", False)),
                         }
                     else:
@@ -1871,6 +1935,44 @@ class ChamberRuntime:
                     self.process_controller.on_dc_off_finished()
                 else:
                     self._dc_failed_flag = False            #    1회성 플래그 해제
+
+    async def _pump_dc2_events(self) -> None:
+        if not self.dc_power2:
+            return
+        async for ev in self.dc_power2.events():
+            k = ev.kind
+            if k == "status":
+                self.append_log(f"DC2_{self.ch}", ev.message or "")
+            elif k == "display":
+                with contextlib.suppress(Exception):
+                    self.data_logger.log_dc2_power(
+                        float(ev.power  or 0.0),
+                        float(ev.voltage or 0.0),
+                        float(ev.current or 0.0),
+                    )
+                self._display_dc(ev.power, ev.voltage, ev.current, unit=2)
+                self.append_log(f"DC2_{self.ch}", f"측정: {float(ev.power or 0.0):.1f} W, {float(ev.voltage or 0.0):.1f} V, {float(ev.current or 0.0):.3f} A")
+            elif k == "target_reached":
+                self.process_controller.on_dc2_target_reached()
+            elif k == "target_failed":
+                self._dc2_failed_flag = True
+                self.process_controller.on_dc2_target_failed(
+                    ev.message or "low-power",
+                    code=getattr(ev, "code", None) or getattr(ev, "error_code", None),
+                    meta={
+                        "kind": k,
+                        "power": getattr(ev, "power", None),
+                        "voltage": getattr(ev, "voltage", None),
+                        "current": getattr(ev, "current", None),
+                        "ch": self.ch,
+                        "unit": 2,
+                    },
+                )
+            elif k == "power_off_finished":
+                if not self._dc2_failed_flag:
+                    self.process_controller.on_dc2_off_finished()
+                else:
+                    self._dc2_failed_flag = False
 
     async def _pump_rf_events(self) -> None:
         if not self.rf_power:
@@ -2253,6 +2355,8 @@ class ChamberRuntime:
             # 연속 DC/RF는 PLC 경유 제어라 기존 그대로(변경 없음)
             if self.dc_power:
                 self._ensure_task_alive(f"Pump.DC.{self.ch}", self._pump_dc_events)
+            if self.dc_power2:
+                self._ensure_task_alive(f"Pump.DC2.{self.ch}", self._pump_dc2_events)
             if self.rf_power:
                 self._ensure_task_alive(f"Pump.RF.{self.ch}", self._pump_rf_events)
 
@@ -2366,12 +2470,35 @@ class ChamberRuntime:
         self._set("forP_edit", f"{for_p:.2f}")
         self._set("refP_edit", f"{ref_p:.2f}")
 
-    def _display_dc(self, power: Optional[float], voltage: Optional[float], current: Optional[float]) -> None:
+    def _display_dc(self, power: Optional[float], voltage: Optional[float], current: Optional[float],
+                    *, unit: int = 1) -> None:
         if power is None or voltage is None or current is None:
             self.append_log("MAIN", "P/V/I 비어있음"); return
-        self._set("Power_edit",   f"{power:.1f}")
-        self._set("Voltage_edit", f"{voltage:.1f}")
-        self._set("Current_edit", f"{current:.3f}")
+
+        # DC2 미도입(=dc_power2 None)이면 기존 단일 표시 그대로 유지 (CH1 DC Pulse 경로 포함)
+        if self.dc_power2 is None:
+            self._set("Power_edit",   f"{power:.1f}")
+            self._set("Voltage_edit", f"{voltage:.1f}")
+            self._set("Current_edit", f"{current:.3f}")
+            return
+
+        u = 2 if int(unit) == 2 else 1
+        self._dc_disp[u] = (float(power), float(voltage), float(current))
+        self._render_dc_display()
+
+    def _render_dc_display(self) -> None:
+        """DC1|DC2 병기 렌더. 값이 없는 유닛은 '-' 로 표시."""
+        d1 = self._dc_disp.get(1)
+        d2 = self._dc_disp.get(2)
+
+        def _pair(i: int, fmt: str) -> str:
+            a = format(d1[i], fmt) if d1 else "-"
+            b = format(d2[i], fmt) if d2 else "-"
+            return f"{a}|{b}"
+
+        self._set("Power_edit",   _pair(0, ".0f"))
+        self._set("Voltage_edit", _pair(1, ".0f"))
+        self._set("Current_edit", _pair(2, ".2f"))
 
     def _on_process_status_changed(self, running: bool) -> None:
         # ✅ Start/Stop 버튼은 '상태와 무관하게 항상 활성화' (사용자 요구)
@@ -4241,6 +4368,8 @@ class ChamberRuntime:
                 with contextlib.suppress(Exception): self.rf_pulse.set_process_status(False)
             if self.dc_power and hasattr(self.dc_power, "set_process_status"):
                 with contextlib.suppress(Exception): self.dc_power.set_process_status(False)
+            if self.dc_power2 and hasattr(self.dc_power2, "set_process_status"):
+                with contextlib.suppress(Exception): self.dc_power2.set_process_status(False)
             if self.rf_power and hasattr(self.rf_power, "set_process_status"):
                 with contextlib.suppress(Exception): self.rf_power.set_process_status(False)
             return
@@ -4267,6 +4396,8 @@ class ChamberRuntime:
             with contextlib.suppress(Exception): self.rf_pulse.set_process_status(False)
         if self.dc_power and hasattr(self.dc_power, "set_process_status"):
             with contextlib.suppress(Exception): self.dc_power.set_process_status(False)
+        if self.dc_power2 and hasattr(self.dc_power2, "set_process_status"):
+            with contextlib.suppress(Exception): self.dc_power2.set_process_status(False)
         if self.rf_power and hasattr(self.rf_power, "set_process_status"):
             with contextlib.suppress(Exception): self.rf_power.set_process_status(False)
 
@@ -4328,7 +4459,7 @@ class ChamberRuntime:
         if _skip_mfc:
             self.append_log("MFC", "PC 실행 중 → mfc cleanup 생략 (공유 자원 보호)")
         cleanup_tasks: list[asyncio.Task] = []
-        for dev in (self.ig, self.mfc, self.dc_pulse, self.rf_pulse, self.dc_power, self.rf_power, self.rga):
+        for dev in (self.ig, self.mfc, self.dc_pulse, self.rf_pulse, self.dc_power, self.dc_power2, self.rf_power, self.rga):
             if dev is self.mfc and _skip_mfc:
                 continue
             if dev and hasattr(dev, "cleanup"):
@@ -4486,6 +4617,7 @@ class ChamberRuntime:
             ("DCPulse", self.dc_pulse),
             ("RFPulse", self.rf_pulse),
             ("DCPower", self.dc_power),
+            ("DCPower2", self.dc_power2),
             ("RFPower", self.rf_power),
             ("RGA", self.rga),
             ("OES", self.oes),
@@ -4651,7 +4783,7 @@ class ChamberRuntime:
 
         # ✅ 장치 정리
         tasks = []
-        for dev in (self.ig, self.mfc, self.dc_pulse, self.rf_pulse, self.dc_power, self.rf_power, self.oes, self.rga):
+        for dev in (self.ig, self.mfc, self.dc_pulse, self.rf_pulse, self.dc_power, self.dc_power2, self.rf_power, self.oes, self.rga):
             if not dev:
                 continue
             try:
@@ -5268,10 +5400,11 @@ class ChamberRuntime:
         dcpl_on = bool(targets.get('dc_pulse', False))
         rfpl_on = bool(targets.get('rf_pulse', False))
         dc_on   = bool(targets.get('dc', False))
+        dc2_on  = bool(targets.get('dc2', False))
         rf_on   = bool(targets.get('rf', False))
 
         # ✅ 어떤 폴링이라도 실제로 켜야 할 때 + 자동연결 허용 + 공정 실행 중일 때만 자동 기동
-        if (mfc_on or dcpl_on or rfpl_on or dc_on or rf_on) \
+        if (mfc_on or dcpl_on or rfpl_on or dc_on or dc2_on or rf_on) \
                 and self._auto_connect_enabled \
                 and self.process_controller.is_running:
             self._ensure_background_started()
@@ -5299,6 +5432,10 @@ class ChamberRuntime:
         if self.dc_power and hasattr(self.dc_power, "set_process_status"):
             with contextlib.suppress(Exception):
                 self.dc_power.set_process_status(dc_on)
+
+        if self.dc_power2 and hasattr(self.dc_power2, "set_process_status"):
+            with contextlib.suppress(Exception):
+                self.dc_power2.set_process_status(dc2_on)
 
         if self.rf_power and hasattr(self.rf_power, "set_process_status"):
             with contextlib.suppress(Exception):
@@ -5851,6 +5988,9 @@ class ChamberRuntime:
 
         _s = self._u("processState_edit")
         if _s: _s.setPlainText("대기 중")
+
+        # ★ DC 표시 버퍼 초기화 (다음 공정에서 미사용 유닛이 '-' 로 나오도록)
+        self._dc_disp = {1: None, 2: None}
 
         for leaf in ("Power_edit","Voltage_edit","Current_edit","forP_edit","refP_edit"):
             w = self._u(leaf)

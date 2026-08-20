@@ -208,6 +208,7 @@
     // ── 공정 장비 지원 플래그 ──
     // true/false로 해당 장비 사용 여부를 설정합니다.
     "SUPPORTS_DC": true,                   // DC Power 사용
+    "SUPPORTS_DC2": false,                 // DC Power 2호기 (CH2에서 true로 오버라이드됨)
     "SUPPORTS_RF_CONT": false,             // RF Continuous 사용 (CH2에서 true로 오버라이드됨)
     "SUPPORTS_RFPULSE": true,              // RF Pulse 사용
 
@@ -423,6 +424,7 @@
 
     // ── 장비 지원 플래그 (CH2 전용) ──
     "SUPPORTS_RF_CONT": true,              // CH2는 RF Continuous 사용
+    "SUPPORTS_DC2": true,                  // CH2는 DC Power 2호기 사용
 
     // ── 공정 파라미터 (CH2 전용) ──
     "PROCESS_GUN_SHUTTERS": ["G1", "G2", "G3"],      // 사용하는 건 셔터 목록
