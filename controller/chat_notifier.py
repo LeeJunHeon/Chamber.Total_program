@@ -306,7 +306,13 @@ class ChatNotifier(QObject):
         use_dc = self._b(p, "use_dc_power")
         dcp = self._num(p.get("dc_power"))
         if use_dc or dcp is not None:
-            items.append(f"DC {int(dcp)} W" if dcp is not None else "DC — W")
+            items.append(f"DC1 {int(dcp)} W" if dcp is not None else "DC1 — W")
+
+        # DC2(연속) — 사용 체크 + 양수 값일 때만 표기 (미사용 시 노이즈 방지)
+        use_dc2 = self._b(p, "use_dc_power2")
+        dcp2 = self._num(p.get("dc_power2"))
+        if use_dc2 and dcp2:
+            items.append(f"DC2 {int(dcp2)} W")
 
         # RF(연속) — 장비가 지원하지 않아도 값이 주어지면 묵시적으로 표기(안 들어오면 생략)
         use_rf = self._b(p, "use_rf_power")

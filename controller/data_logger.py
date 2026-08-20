@@ -68,6 +68,10 @@ class DataLogger(QObject):
         self.dc_voltage_readings: List[float] = []
         self.dc_current_readings: List[float] = []
 
+        self.dc2_power_readings: List[float] = []
+        self.dc2_voltage_readings: List[float] = []
+        self.dc2_current_readings: List[float] = []
+
         # DC Pulse 폴링값(평균용)
         self.dc_pulse_power_readings: List[float] = []
         self.dc_pulse_voltage_readings: List[float] = []
@@ -98,6 +102,7 @@ class DataLogger(QObject):
             "Working Pressure", "Process Time",
             "RF: For.P", "RF: Ref. P",
             "DC: V", "DC: I", "DC: P",
+            "DC2: V", "DC2: I", "DC2: P",
             "RF Pulse: P", "RF Pulse: Freq", "RF Pulse: Duty Cycle",
             "DC Pulse: P", "DC Pulse: V", "DC Pulse: I", "DC Pulse: Freq", "DC Pulse: Duty Cycle",
             "RF Pulse: For.P", "RF Pulse: Ref.P", "Chuck Position",
@@ -197,6 +202,9 @@ class DataLogger(QObject):
         self.dc_power_readings.clear()
         self.dc_voltage_readings.clear()
         self.dc_current_readings.clear()
+        self.dc2_power_readings.clear()
+        self.dc2_voltage_readings.clear()
+        self.dc2_current_readings.clear()
 
         self.dc_pulse_power_readings.clear()
         self.dc_pulse_voltage_readings.clear()
@@ -233,6 +241,9 @@ class DataLogger(QObject):
         self.dc_power_readings.clear()
         self.dc_voltage_readings.clear()
         self.dc_current_readings.clear()
+        self.dc2_power_readings.clear()
+        self.dc2_voltage_readings.clear()
+        self.dc2_current_readings.clear()
         self.dc_pulse_power_readings.clear()
         self.dc_pulse_voltage_readings.clear()
         self.dc_pulse_current_readings.clear()
@@ -257,6 +268,15 @@ class DataLogger(QObject):
         self.dc_power_readings.append(float(power))
         self.dc_voltage_readings.append(float(voltage))
         self.dc_current_readings.append(float(current))
+
+    @Slot(float, float, float)
+    def log_dc2_power(self, power: float, voltage: float, current: float) -> None:
+        if not self._shutter_open:
+            return
+
+        self.dc2_power_readings.append(float(power))
+        self.dc2_voltage_readings.append(float(voltage))
+        self.dc2_current_readings.append(float(current))
 
     @Slot(float, float, float)
     def log_dcpulse_power(self, power: float, voltage: float, current: float) -> None:
@@ -334,6 +354,7 @@ class DataLogger(QObject):
         # 사용 플래그
         use_rf = bool(self.process_params.get("use_rf_power", False))
         use_dc = bool(self.process_params.get("use_dc_power", False))
+        use_dc2 = bool(self.process_params.get("use_dc_power2", False))
         use_rfp = bool(self.process_params.get("use_rf_pulse", False))
         use_dcp = bool(self.process_params.get("use_dc_pulse", False))  # ← 추가
 
@@ -402,6 +423,11 @@ class DataLogger(QObject):
             "DC: V": f"{_avg(self.dc_voltage_readings):.2f}" if (use_dc and self.dc_voltage_readings) else "",
             "DC: I": f"{_avg(self.dc_current_readings):.2f}" if (use_dc and self.dc_current_readings) else "",
             "DC: P": f"{_avg(self.dc_power_readings):.2f}"   if (use_dc and self.dc_power_readings) else "",
+
+            # DC2
+            "DC2: V": f"{_avg(self.dc2_voltage_readings):.2f}" if (use_dc2 and self.dc2_voltage_readings) else "",
+            "DC2: I": f"{_avg(self.dc2_current_readings):.2f}" if (use_dc2 and self.dc2_current_readings) else "",
+            "DC2: P": f"{_avg(self.dc2_power_readings):.2f}"   if (use_dc2 and self.dc2_power_readings) else "",
 
             # RF Pulse 설정값
             "RF Pulse: P":          (f"{float(rfp_p):.2f}" if (use_rfp and rfp_p not in (None, "")) else ""),

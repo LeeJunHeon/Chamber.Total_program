@@ -512,6 +512,23 @@ def _build_data(
             "off_time"     : None,
         })
 
+    # DC2 연속 — DC1과 독립 행 (elif 체인 밖: DC1과 동시 사용 시 두 행 모두 기록)
+    if pp.get("use_dc_power2"):
+        power_rows.append({
+            "power_source" : "DC2",
+            "sp_power"     : pp.get("dc_power2"),
+            "avg_power"    : _avg(getattr(dl, "dc2_power_readings", [])),
+            "avg_forp"     : None,
+            "avg_refp"     : None,
+            "avg_load"     : None,
+            "avg_tune"     : None,
+            "avg_voltage"  : _avg(getattr(dl, "dc2_voltage_readings", [])),
+            "avg_current"  : _avg(getattr(dl, "dc2_current_readings", [])),
+            "duty_cycle"   : None,
+            "frequency"    : None,
+            "off_time"     : None,
+        })
+
     if pp.get("use_rf_pulse"):
         power_rows.append({
             "power_source" : "RF Pulse",
