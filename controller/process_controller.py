@@ -351,6 +351,7 @@ class ProcessController:
         self._token_owner: Dict[Tuple[str, Any], int] = {}
 
     # ===== 지원 플래그 property =====
+    @property
     def supports_dc_cont(self) -> bool:
         return bool(self._supports_dc_cont)
 
