@@ -586,6 +586,7 @@ class ChamberRuntime:
                 send_dc_power_unverified=_dc_send_unverified,
                 request_status_read=_dc_read,
                 toggle_enable=_dc_toggle_enable,   # ← 추가
+                name="DC1",
             )
 
         # 연속 파워 2호기 (CH2 전용)
@@ -615,6 +616,7 @@ class ChamberRuntime:
                 send_dc_power_unverified=_dc2_send_unverified,
                 request_status_read=_dc2_read,
                 toggle_enable=_dc2_toggle_enable,
+                name="DC2",
             )
 
         self.rf_power = None
@@ -1905,7 +1907,7 @@ class ChamberRuntime:
         async for ev in self.dc_power.events():
             k = ev.kind
             if k == "status":
-                self.append_log(f"DC{self.ch}", ev.message or "")
+                self.append_log("DC1", ev.message or "")
             elif k == "display":
                 with contextlib.suppress(Exception):
                     self.data_logger.log_dc_power(
@@ -1914,7 +1916,7 @@ class ChamberRuntime:
                         float(ev.current or 0.0),
                     )
                 self._display_dc(ev.power, ev.voltage, ev.current)
-                self.append_log(f"DC{self.ch}", f"측정: {float(ev.power or 0.0):.1f} W, {float(ev.voltage or 0.0):.1f} V, {float(ev.current or 0.0):.3f} A")
+                self.append_log("DC1", f"측정: {float(ev.power or 0.0):.1f} W, {float(ev.voltage or 0.0):.1f} V, {float(ev.current or 0.0):.3f} A")
             elif k == "target_reached":
                 self.process_controller.on_dc_target_reached()
             elif k == "target_failed":
@@ -1942,7 +1944,7 @@ class ChamberRuntime:
         async for ev in self.dc_power2.events():
             k = ev.kind
             if k == "status":
-                self.append_log(f"DC2_{self.ch}", ev.message or "")
+                self.append_log("DC2", ev.message or "")
             elif k == "display":
                 with contextlib.suppress(Exception):
                     self.data_logger.log_dc2_power(
@@ -1951,7 +1953,7 @@ class ChamberRuntime:
                         float(ev.current or 0.0),
                     )
                 self._display_dc(ev.power, ev.voltage, ev.current, unit=2)
-                self.append_log(f"DC2_{self.ch}", f"측정: {float(ev.power or 0.0):.1f} W, {float(ev.voltage or 0.0):.1f} V, {float(ev.current or 0.0):.3f} A")
+                self.append_log("DC2", f"측정: {float(ev.power or 0.0):.1f} W, {float(ev.voltage or 0.0):.1f} V, {float(ev.current or 0.0):.3f} A")
             elif k == "target_reached":
                 self.process_controller.on_dc2_target_reached()
             elif k == "target_failed":

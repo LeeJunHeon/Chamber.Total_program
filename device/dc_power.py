@@ -52,11 +52,18 @@ class DCPowerAsync:
 
         # ✅ 추가: 채널 cfg 주입(없으면 config_common 사용)
         cfg: Any | None = None,
+
+        # ✅ 추가: 인스턴스 식별자 (태스크/정리 로그에서 DC1/DC2 구분용)
+        name: str = "DC",
     ):
         self._send_dc_power = send_dc_power
         self._send_dc_power_unverified = send_dc_power_unverified
         self._request_status_read = request_status_read
         self._toggle_enable = toggle_enable
+
+        # 인스턴스 식별자. NAME은 chamber_runtime의 Cleanup 태스크 이름에도 사용된다.
+        self._name = str(name or "DC")
+        self.NAME = self._name
 
         # ✅ cfg 모듈 보관 (config_ch1/config_ch2 모듈을 넣으면 거기 값 우선)
         self._cfg = cfg
@@ -187,7 +194,7 @@ class DCPowerAsync:
         # 첫 보정 1회 태스크 기동
         if self._adjust_task and not self._adjust_task.done():
             self._adjust_task.cancel()
-        self._adjust_task = asyncio.create_task(self._adjust_once(), name="DC_Adjust")
+        self._adjust_task = asyncio.create_task(self._adjust_once(), name=f"{self._name}_Adjust")
 
     def set_process_status(self, active: bool) -> None:
         """외부에서 폴링 on/off(연결은 유지)."""
@@ -196,7 +203,7 @@ class DCPowerAsync:
             return
         if active:
             if self._control_task is None or self._control_task.done():
-                self._control_task = asyncio.create_task(self._control_loop(), name="DC_Poll")
+                self._control_task = asyncio.create_task(self._control_loop(), name=f"{self._name}_Poll")
         else:
             if self._control_task:
                 self._control_task.cancel()
@@ -216,7 +223,7 @@ class DCPowerAsync:
         # 램프다운 시작
         await self._emit_status("DC 파워 ramp-down 시작")
         # 스텝다운 루프 대신 '즉시 0 한 번'만 전송
-        self._rampdown_task = asyncio.create_task(self._rampdown_loop(), name="DC_RampDown")
+        self._rampdown_task = asyncio.create_task(self._rampdown_loop(), name=f"{self._name}_RampDown")
 
     # ======= 외부(브리지/UI)에서 전달하는 측정값 =======
     def update_measurements(self, power: float, voltage: float, current: float):
@@ -233,7 +240,7 @@ class DCPowerAsync:
         # 램프업/유지 보정은 태스크로 비동기 실행(중복 호출 시 최신만 수행)
         if self._adjust_task and not self._adjust_task.done():
             self._adjust_task.cancel()
-        self._adjust_task = asyncio.create_task(self._adjust_once(), name="DC_Adjust")
+        self._adjust_task = asyncio.create_task(self._adjust_once(), name=f"{self._name}_Adjust")
 
     # ======= 내부 루프 =======
     def _ingest_status_result(self, res: object) -> None:
