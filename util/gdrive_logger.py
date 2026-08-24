@@ -390,10 +390,10 @@ def _save_sync(
         with contextlib.suppress(Exception):
             fb_path = local_fallback_dir / f"CH{ch}_pending.xlsx"
             _do_save(fb_path)
-
-    # Arc 알림 — 첫 번째 행 기준 (Main Process 시트에만 Arc 있음)
-    soft = int(rows[0].get("soft_arc") or 0)
-    hard = int(rows[0].get("hard_arc") or 0)
+            
+    # ✅ Arc는 DC Pulse 행에만 실리므로 전 행 최대값으로 판정(행 순서 의존 제거)
+    soft = max((int(r.get("soft_arc") or 0) for r in rows), default=0)
+    hard = max((int(r.get("hard_arc") or 0) for r in rows), default=0)
     if (soft + hard) >= arc_thresh and not arc_alert_sent and webhook_url:
         with contextlib.suppress(Exception):
             _send_arc_chat(
@@ -472,9 +472,9 @@ def _build_data(
         "avg_n2"         : _avg(dl.mfc_flow_readings.get("N2", [])),
         "avg_o2"         : _avg(dl.mfc_flow_readings.get("O2", [])),
         "avg_pressure"   : _avg(dl.mfc_pressure_readings),
-        # Arc
-        "soft_arc"       : int(pp.get("soft_arc_count") or 0) if pp.get("use_dc_pulse") else None,
-        "hard_arc"       : int(pp.get("hard_arc_count") or 0) if pp.get("use_dc_pulse") else None,
+        # Arc — 실측값은 DC Pulse 행(power_rows)에만 기록, 나머지 행은 공란
+        "soft_arc"       : None,
+        "hard_arc"       : None,
     }
 
     # ── [수정 4] 파워 소스별 행 분리 ────────────────────────────
@@ -495,6 +495,9 @@ def _build_data(
             "duty_cycle"   : pp.get("dc_pulse_duty_cycle") or pp.get("dc_pulse_duty"),
             "frequency"    : pp.get("dc_pulse_freq"),
             "off_time"     : pp.get("dc_pulse_off_time_us"),
+            # ✅ Arc 실측(런 종료 시 드라이버 arc_counts에서 채집) — DC Pulse 행 전용
+            "soft_arc"     : int(pp.get("soft_arc_count") or 0),
+            "hard_arc"     : int(pp.get("hard_arc_count") or 0),
         })
     if pp.get("use_dc_power"):
         power_rows.append({
