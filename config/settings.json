@@ -155,7 +155,7 @@
     "DCPULSE_ADDR": 1,                     // 장비 주소
     "DCPULSE_DEFAULT_DELAY_MS": 180,       // 기본 명령 지연 (ms)
     "DCPULSE_TCP_HOST": "192.168.1.50",    // DC Pulse TCP IP
-    "DCPULSE_TCP_PORT": 4007,              // DC Pulse TCP 포트
+    "DCPULSE_TCP_PORT": 4005,              // DC Pulse TCP 포트 (현재 MOXA에서 RF_PULSE2와 공유)
     "DCP_MAX_POWER_W": 1000,               // DC Pulse 최대 출력 (W)
     "DCP_P_SET_TOL_PCT": 0.05,             // 출력 설정 허용 오차 (비율, 0.05 = 5%)
     "DCP_P_SET_TOL_W": 15.0,              // 출력 설정 허용 오차 (W)
