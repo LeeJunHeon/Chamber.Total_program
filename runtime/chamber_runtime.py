@@ -2535,26 +2535,6 @@ class ChamberRuntime:
             finally:
                 grp.setExclusive(True)
 
-    def _wire_pulse_radio_toggle(self) -> None:
-        """(CH1/CH2 공통) 체크된 펄스 라디오를 다시 클릭하면 해제되도록 배선."""
-        for leaf in ("rfPulsePower_checkbox", "dcPulsePower_checkbox"):
-            btn = self._u(leaf)
-            if btn is None or not hasattr(btn, "pressed"):
-                continue
-            # pressed는 토글 '이전' 상태를 캡처, clicked에서 이전에 이미 체크였으면 해제
-            btn.pressed.connect(lambda b=btn: setattr(b, "_was_checked_before_click", bool(b.isChecked())))
-            def _on_clicked(_checked=False, b=btn):
-                if getattr(b, "_was_checked_before_click", False):
-                    grp = getattr(self.ui, f"{self.prefix}pulsePower_group", None) if getattr(self, "ui", None) else None
-                    try:
-                        if grp is not None:
-                            grp.setExclusive(False)
-                        b.setChecked(False)
-                    finally:
-                        if grp is not None:
-                            grp.setExclusive(True)
-            btn.clicked.connect(_on_clicked)
-
     @staticmethod
     def _pulse_endpoint_of(dev) -> Optional[str]:
         """펄스 드라이버의 실효 엔드포인트 'host:port'. 해석 실패 시 None(가드는 fail-open)."""

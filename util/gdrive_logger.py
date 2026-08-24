@@ -390,7 +390,7 @@ def _save_sync(
         with contextlib.suppress(Exception):
             fb_path = local_fallback_dir / f"CH{ch}_pending.xlsx"
             _do_save(fb_path)
-            
+
     # ✅ Arc는 DC Pulse 행에만 실리므로 전 행 최대값으로 판정(행 순서 의존 제거)
     soft = max((int(r.get("soft_arc") or 0) for r in rows), default=0)
     hard = max((int(r.get("hard_arc") or 0) for r in rows), default=0)

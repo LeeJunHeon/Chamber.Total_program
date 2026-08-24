@@ -190,7 +190,7 @@ class ProcessMonitor:
 
         if not self._webhook_url:
             return
-        
+
         payload = {"text": message}
         try:
             loop = asyncio.get_running_loop()
