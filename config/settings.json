@@ -419,6 +419,11 @@
     "IG_TCP_PORT": 4002,                   // CH2 이온게이지 포트
     "MFC_TCP_PORT": 4006,                  // CH2 가스유량계 포트
 
+    "RFPULSE_TCP_PORT": 4005,
+    "DCPULSE_TCP_PORT": 4005,
+    "SUPPORTS_RFPULSE": true,
+    "SUPPORTS_DCPULSE": true,
+
     // ── IG 베이스 진공 대기 시간 (CH2 전용) ──
     "IG_WAIT_TIMEOUT": 900,                // 베이스 진공 도달 최대 대기 (초). 900 = 15분
 
