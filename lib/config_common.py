@@ -363,6 +363,7 @@ SUPPORTS_DC = True
 SUPPORTS_DC2 = False            # DC Power 2호기 (CH2 전용, 기본 OFF)
 SUPPORTS_RF_CONT = False
 SUPPORTS_RFPULSE = True
+SUPPORTS_DCPULSE = True         # DC Pulse (CH1/CH2 공용, 채널별로 끄려면 settings ch 섹션에서 false)
 
 
 # ======================================================================

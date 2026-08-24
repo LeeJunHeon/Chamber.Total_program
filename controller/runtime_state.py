@@ -68,6 +68,8 @@ class RuntimeState:
     _last_error_mono: Dict[str, Dict[int, float]] = field(
         default_factory=lambda: {"chamber": {}, "pc": {}, "tsp": {}}
     )
+    # 공유 펄스 장비 엔드포인트 클레임: {"host:port": {"ch": int, "kind": str}}
+    _pulse_claims: Dict[str, Dict[str, object]] = field(default_factory=dict)
 
     # ---------- 기본 마킹 API ----------
     def mark_started(self, kind: str, channel: Optional[int] = None) -> None:
@@ -96,6 +98,35 @@ class RuntimeState:
             self.mark_started(kind, channel)
         else:
             self.mark_finished(kind, channel)
+
+    # ---------- 공유 펄스 장비 엔드포인트 클레임 ----------
+    def claim_pulse_endpoint(self, endpoint: str, kind: str, ch: int) -> Tuple[bool, Optional[Dict[str, object]]]:
+        """
+        endpoint('host:port')를 ch가 점유 시도.
+        - 비어 있거나 '같은 챔버'가 이미 점유 중이면 성공(재클레임 허용)
+        - '다른 챔버'가 점유 중이면 실패 + 소유자 정보 반환
+        """
+        key = str(endpoint).strip().lower()
+        c = 1 if int(ch or 1) != 2 else 2
+        with self._lock:
+            owner = self._pulse_claims.get(key)
+            if owner is not None and int(owner.get("ch", 0)) != c:
+                return False, dict(owner)
+            self._pulse_claims[key] = {"ch": c, "kind": str(kind)}
+            return True, None
+
+    def release_pulse_endpoints(self, ch: int) -> None:
+        """해당 챔버가 점유한 모든 펄스 엔드포인트 클레임 해제."""
+        c = 1 if int(ch or 1) != 2 else 2
+        with self._lock:
+            for k in [k for k, v in self._pulse_claims.items() if int(v.get("ch", 0)) == c]:
+                self._pulse_claims.pop(k, None)
+
+    def pulse_endpoint_owner(self, endpoint: str) -> Optional[Dict[str, object]]:
+        """디버그/조회용: 해당 엔드포인트의 현재 소유자."""
+        with self._lock:
+            v = self._pulse_claims.get(str(endpoint).strip().lower())
+            return dict(v) if v else None
 
     # ---------- 조회/스냅샷 ----------
     def is_running(self, kind: str, channel: Optional[int] = None) -> bool:

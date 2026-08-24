@@ -2505,7 +2505,45 @@ class ChamberRuntime:
         self._set("Voltage_edit", _pair(1, ".0f"))
         self._set("Current_edit", _pair(2, ".2f"))
 
+    def _wire_pulse_radio_toggle(self) -> None:
+        """(CH1/CH2 공통) 체크된 펄스 라디오를 다시 클릭하면 해제되도록 배선."""
+        for leaf in ("rfPulsePower_checkbox", "dcPulsePower_checkbox"):
+            btn = self._u(leaf)
+            if btn is None or not hasattr(btn, "pressed"):
+                continue
+            # pressed는 토글 '이전' 상태를 캡처, clicked에서 이전에 이미 체크였으면 해제
+            btn.pressed.connect(lambda b=btn: setattr(b, "_was_checked_before_click", bool(b.isChecked())))
+            def _on_clicked(_checked=False, b=btn):
+                if getattr(b, "_was_checked_before_click", False):
+                    grp = getattr(self.ui, f"{self.prefix}pulsePower_group", None) if getattr(self, "ui", None) else None
+                    try:
+                        if grp is not None:
+                            grp.setExclusive(False)
+                        b.setChecked(False)
+                    finally:
+                        if grp is not None:
+                            grp.setExclusive(True)
+            btn.clicked.connect(_on_clicked)
+
+    @staticmethod
+    def _pulse_endpoint_of(dev) -> Optional[str]:
+        """펄스 드라이버의 실효 엔드포인트 'host:port'. 해석 실패 시 None(가드는 fail-open)."""
+        try:
+            fn = getattr(dev, "_resolve_endpoint", None)
+            if callable(fn):
+                host, port = fn()
+                return f"{str(host).strip()}:{int(port)}"
+        except Exception:
+            pass
+        return None
+
     def _on_process_status_changed(self, running: bool) -> None:
+        # ✅ 공정 종료 시 이 챔버가 점유한 펄스 엔드포인트 클레임을 일괄 해제
+        #    (정상/실패/중단/preflight 실패 모두 이 함수를 지나므로 해제 누락 불가)
+        if not running:
+            with contextlib.suppress(Exception):
+                runtime_state.release_pulse_endpoints(self.ch)
+
         # ✅ Start/Stop 버튼은 '상태와 무관하게 항상 활성화' (사용자 요구)
         b_start = self._u("Start_button"); b_stop = self._u("Stop_button")
         if b_start:
@@ -2573,6 +2611,9 @@ class ChamberRuntime:
         btn = self._u("processList_button")
         if btn:
             btn.clicked.connect(lambda: self._spawn_detached(self._handle_process_list_clicked_async()))
+
+        # ✅ 펄스 라디오(RF/DC) 재클릭 해제 배선 (CH1/CH2 공통)
+        self._wire_pulse_radio_toggle()
 
         if self._w_log:
             self._w_log.setMaximumBlockCount(2000)
@@ -3128,6 +3169,35 @@ class ChamberRuntime:
             self._kick_oes_init_background(force=False)
 
             self._on_process_status_changed(True)
+
+            # ✅ 공유 펄스 장비 가드: '같은 엔드포인트'를 다른 챔버가 사용 중이면 시작 거부
+            #    - 엔드포인트가 다르면(향후 장비 증설) 동시 실행 허용
+            #    - 같은 챔버의 재클레임은 허용, 해석 실패 시 가드 스킵(fail-open)
+            #    - 해제는 _on_process_status_changed(False)에서 일괄 수행
+            _pulse_claims: list[tuple[str, str]] = []
+            if use_dc_pulse and self.dc_pulse:
+                _ep = self._pulse_endpoint_of(self.dc_pulse)
+                if _ep:
+                    _pulse_claims.append(("DC-Pulse", _ep))
+            if use_rf_pulse and self.rf_pulse:
+                _ep = self._pulse_endpoint_of(self.rf_pulse)
+                if _ep:
+                    _pulse_claims.append(("RF-Pulse", _ep))
+            for _kind_nm, _ep in _pulse_claims:
+                _ok_claim, _owner = runtime_state.claim_pulse_endpoint(_ep, _kind_nm, self.ch)
+                if not _ok_claim:
+                    _o_ch = _owner.get("ch") if isinstance(_owner, dict) else "?"
+                    _o_kind = _owner.get("kind") if isinstance(_owner, dict) else "?"
+                    _msg = f"{_kind_nm} 시작 불가: 동일 주소({_ep}) 장비를 CH{_o_ch}({_o_kind}) 공정이 사용 중입니다."
+                    self.append_log("MAIN", _msg)
+                    self._post_warning("공유 장비 사용 중", _msg)
+                    with contextlib.suppress(Exception):
+                        self._host_report_start(False, _msg)
+                    with contextlib.suppress(Exception):
+                        runtime_state.set_error("chamber", self.ch, _msg)
+                        runtime_state.mark_finished("chamber", self.ch)
+                    self._on_process_status_changed(False)   # ← 부분 클레임도 여기서 해제됨
+                    return
 
             timeout_no_pulse = float(self.cfg._get("CHAMBER_PREFLIGHT_TIMEOUT_S", 8.0))
             timeout_with_pulse = float(self.cfg._get("CHAMBER_PREFLIGHT_TIMEOUT_WITH_PULSE_S", 10.0))
@@ -5041,16 +5111,16 @@ class ChamberRuntime:
             rf_pulse_duty = None
 
             if use_dc_pulse:
-                # ---- 기존 DC-Pulse 검증 유지 ----
+                # ---- DC-Pulse 검증 (입력칸은 RF와 공유: CH1과 동일 UX) ----
                 try:
-                    dc_pulse_power = float(self._get_text("dcPulsePower_edit") or "0")
+                    dc_pulse_power = float(self._get_text("rfPulsePower_edit") or "0")
                     if dc_pulse_power <= 0:
                         raise ValueError()
                 except Exception:
                     self._post_warning("입력값 확인", "DC-Pulse Target Power(W)를 확인하세요.")
                     return None
 
-                txtf = self._get_text("dcPulseFreq_edit")
+                txtf = self._get_text("rfPulseFreq_edit")
                 if txtf:
                     try:
                         dc_pulse_freq = int(float(txtf))
@@ -5060,7 +5130,7 @@ class ChamberRuntime:
                         self._post_warning("입력값 확인", "DC-Pulse Freq(kHz)는 20..150 범위입니다.")
                         return None
 
-                txtd = self._get_text("dcPulseDutyCycle_edit")
+                txtd = self._get_text("rfPulseDutyCycle_edit")
                 if txtd:
                     try:
                         dc_pulse_duty = int(float(txtd))

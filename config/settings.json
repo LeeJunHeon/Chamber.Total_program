@@ -211,6 +211,7 @@
     "SUPPORTS_DC2": false,                 // DC Power 2호기 (CH2에서 true로 오버라이드됨)
     "SUPPORTS_RF_CONT": false,             // RF Continuous 사용 (CH2에서 true로 오버라이드됨)
     "SUPPORTS_RFPULSE": true,              // RF Pulse 사용
+    "SUPPORTS_DCPULSE": true,              // DC Pulse 사용 (CH1/CH2 공용)
 
     // ── PLC (공정 제어 PLC) ──
     "PLC_TCP_HOST": "192.168.1.2",         // PLC IP 주소
