@@ -155,7 +155,7 @@
     "DCPULSE_ADDR": 1,                     // 장비 주소
     "DCPULSE_DEFAULT_DELAY_MS": 180,       // 기본 명령 지연 (ms)
     "DCPULSE_TCP_HOST": "192.168.1.50",    // DC Pulse TCP IP
-    "DCPULSE_TCP_PORT": 4005,              // DC Pulse TCP 포트 (현재 MOXA에서 RF_PULSE2와 공유)
+    "DCPULSE_TCP_PORT": 4007,              // DC Pulse TCP 포트 (현재는 4005, 4007은 기본값)
     "DCP_MAX_POWER_W": 1000,               // DC Pulse 최대 출력 (W)
     "DCP_P_SET_TOL_PCT": 0.05,             // 출력 설정 허용 오차 (비율, 0.05 = 5%)
     "DCP_P_SET_TOL_W": 15.0,              // 출력 설정 허용 오차 (W)
@@ -419,10 +419,13 @@
     "IG_TCP_PORT": 4002,                   // CH2 이온게이지 포트
     "MFC_TCP_PORT": 4006,                  // CH2 가스유량계 포트
 
-    "RFPULSE_TCP_PORT": 4005,
-    "DCPULSE_TCP_PORT": 4005,
-    "SUPPORTS_RFPULSE": true,
-    "SUPPORTS_DCPULSE": true,
+    // ── CH2 Pulse 전원: MOXA Port 5(TCP 4005) 교체 사용 ──
+    // RF Pulse와 DC Pulse를 동시에 연결하는 구성이 아님.
+    // Port 5의 연결 장비를 교체하고, DC Pulse 사용 시 MOXA Parity를 None으로 변경.
+    "RFPULSE_TCP_PORT": 4005,              // RF Pulse 연결 시: MOXA Port 5
+    "DCPULSE_TCP_PORT": 4005,              // DC Pulse 연결 시: MOXA Port 5 + Null Modem
+    "SUPPORTS_RFPULSE": true,              // CH2 RF Pulse 메뉴/제어 활성화
+    "SUPPORTS_DCPULSE": true,              // CH2 DC Pulse 메뉴/제어 활성화
 
     // ── IG 베이스 진공 대기 시간 (CH2 전용) ──
     "IG_WAIT_TIMEOUT": 900,                // 베이스 진공 도달 최대 대기 (초). 900 = 15분
