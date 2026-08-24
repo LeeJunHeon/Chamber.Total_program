@@ -1208,14 +1208,14 @@ class ProcessController:
         use_dc2      = bool(info.get("use_dc2", False))
         use_rf       = bool(info.get("use_rf", False))
 
-        # RF 펄스를 쓴다고 DC 연속 폴링까지 막을 필요는 없음
+        # ✅ 동시 사용 허용 정책: 같은 계열(펄스↔연속) 폴링 상호 배타 제거
         return {
             "mfc": True,
             "dc_pulse": use_dc_pulse,
             "rf_pulse": use_rf_pulse,
-            "dc": use_dc and not use_dc_pulse,   # DC 펄스를 쓸 때만 DC 연속 폴링 off
-            "dc2": use_dc2 and not use_dc_pulse,
-            "rf": use_rf and not use_rf_pulse,   # RF 펄스를 쓸 때만 RF 연속 폴링 off
+            "dc": use_dc,
+            "dc2": use_dc2,
+            "rf": use_rf,
         }
     
 
@@ -1815,13 +1815,15 @@ class ProcessController:
                 parallel=want_parallel, polling=False,
             ))
 
-        elif use_rf:
+        if use_rf:
             # RF 연속 사용 전에 POWER_SELECT = False
-            steps.append(ProcessStep(
-                action=ActionType.PLC_CMD,
-                params=("SW_POWER_SELECT", False),
-                message="Power Select OFF (SW_POWER_SELECT)",
-            ))
+            # ⚠ RF Pulse와 동시 사용 시에는 릴레이를 펄스 경로(ON)로 유지 — 배선 확인 후 필요 시 조정
+            if not use_rf_pulse:
+                steps.append(ProcessStep(
+                    action=ActionType.PLC_CMD,
+                    params=("SW_POWER_SELECT", False),
+                    message="Power Select OFF (SW_POWER_SELECT)",
+                ))
 
             steps.append(ProcessStep(
                 action=ActionType.RF_POWER_SET, value=rf_power,

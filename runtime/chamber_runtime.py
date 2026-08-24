@@ -1731,13 +1731,14 @@ class ChamberRuntime:
                     use_dc_cont2 = bool(params.get("use_dc_power2", False))
                     use_rf_cont  = bool(params.get("use_rf_power", False))
 
+                    # ✅ 동시 사용 허용 정책: 같은 계열(펄스↔연속) 상호 배타 제거
                     base_targets = {
                         "mfc":      active,
-                        "dc_pulse": active and self.supports_dc_pulse and use_dc_pulse and not use_dc_cont,
-                        "rf_pulse": active and self.supports_rf_pulse and use_rf_pulse and not use_rf_cont,
-                        "dc":       active and self.supports_dc_cont  and use_dc_cont  and not use_dc_pulse,
-                        "dc2":      active and self.supports_dc_cont2 and use_dc_cont2 and not use_dc_pulse,
-                        "rf":       active and self.supports_rf_cont  and use_rf_cont  and not use_rf_pulse,
+                        "dc_pulse": active and self.supports_dc_pulse and use_dc_pulse,
+                        "rf_pulse": active and self.supports_rf_pulse and use_rf_pulse,
+                        "dc":       active and self.supports_dc_cont  and use_dc_cont,
+                        "dc2":      active and self.supports_dc_cont2 and use_dc_cont2,
+                        "rf":       active and self.supports_rf_cont  and use_rf_cont,
                     }
 
                     if self._last_polling_targets:
@@ -2758,27 +2759,15 @@ class ChamberRuntime:
             rf_requested = use_rf_flag or _pos_num(rf_power) or (rf_freq not in ("", "0")) or (rf_duty not in ("", "0"))
             dc_requested = use_dc_flag or _pos_num(dc_power) or (dc_freq not in ("", "0")) or (dc_duty not in ("", "0"))
 
-            sel = None
-            if use_rf_flag and not use_dc_flag:
-                sel = "rf"
-            elif use_dc_flag and not use_rf_flag:
-                sel = "dc"
-            elif rf_requested and not dc_requested:
-                sel = "rf"
-            elif dc_requested and not rf_requested:
-                sel = "dc"
-            elif rf_requested and dc_requested:
-                sel = "rf"
-                self.append_log("UI", "[CH1] CSV에 RF/DC Pulse가 동시에 설정됨 → UI는 RF로 표시(실행은 validate에서 차단)")
-            else:
-                sel = None  # pulse 미사용
+            # ✅ 동시 사용 허용: 체크박스는 각자 요청대로 표시, 공유 입력칸은 RF 우선 값 표시
+            self._set_pulse_radio("rfPulsePower_checkbox", rf_requested)
+            self._set_pulse_radio("dcPulsePower_checkbox", dc_requested)
+            if rf_requested and dc_requested:
+                self.append_log("UI", "[CH1] RF/DC Pulse 동시 레시피 → 입력칸(공유)에는 RF 값 표시, 실행은 각자 값 사용")
 
-            self._set_pulse_radio("rfPulsePower_checkbox", sel == "rf")
-            self._set_pulse_radio("dcPulsePower_checkbox", sel == "dc")
-
-            if sel == "rf":
+            if rf_requested:
                 power, freq, duty = rf_power, rf_freq, rf_duty
-            elif sel == "dc":
+            elif dc_requested:
                 power, freq, duty = dc_power, dc_freq, dc_duty
             else:
                 power, freq, duty = "0", "", ""
@@ -2792,7 +2781,9 @@ class ChamberRuntime:
             use_rfp = params.get('use_rf_pulse', 'F') == 'T'
             use_dcp = params.get('use_dc_pulse', 'F') == 'T'
             self._set_pulse_radio("rfPulsePower_checkbox", use_rfp)
-            self._set_pulse_radio("dcPulsePower_checkbox", use_dcp and not use_rfp)
+            self._set_pulse_radio("dcPulsePower_checkbox", use_dcp)
+            if use_rfp and use_dcp:
+                self.append_log("UI", "[CH2] RF/DC Pulse 동시 레시피 → 입력칸(공유)에는 RF 값 표시, 실행은 각자 값 사용")
 
             if use_rfp:
                 pw  = str(params.get('rf_pulse_power', '0'))
@@ -4321,31 +4312,49 @@ class ChamberRuntime:
                         )
 
                 # ------------------------------
-                # (A) delay step 처리 (기존과 동일 규칙)
+                # (A) delay step 처리
+                #  ① 전용 'delay' 컬럼 우선: 10 → 10분, 90s / 10m / 1h30m 형식 지원
+                #  ② (하위호환) Process_name의 'delay 10m' 패턴
                 # ------------------------------
                 name = str(params.get("Process_name") or params.get("process_note", "")).strip()
-                m = re.match(r"^\s*delay\s*(\d+)\s*([smhd]?)\s*$", name, re.IGNORECASE) if name else None
-                if m:
-                    amount = int(m.group(1))
-                    unit = (m.group(2) or "m").lower()
-                    factor = {"s": 1.0, "m": 60.0, "h": 3600.0, "d": 86400.0}[unit]
-                    duration_s = float(amount) * factor
-                    unit_txt = {"s": "초", "m": "분", "h": "시간", "d": "일"}[unit]
+                duration_s = 0.0
+                label = ""
+
+                _dcol = str(params.get("delay", "") or "").strip()
+                if _dcol:
+                    try:
+                        duration_s = float(_dcol) * 60.0          # 숫자만 → 분
+                        label = f"{_dcol}분"
+                    except Exception:
+                        duration_s = float(self._parse_duration_seconds(_dcol.lower()))
+                        label = _dcol
+                else:
+                    m = re.match(r"^\s*delay\s*(\d+)\s*([smhd]?)\s*$", name, re.IGNORECASE) if name else None
+                    if m:
+                        amount = int(m.group(1))
+                        unit = (m.group(2) or "m").lower()
+                        factor = {"s": 1.0, "m": 60.0, "h": 3600.0, "d": 86400.0}[unit]
+                        duration_s = float(amount) * factor
+                        unit_txt = {"s": "초", "m": "분", "h": "시간", "d": "일"}[unit]
+                        label = f"{amount}{unit_txt}"
+
+                if duration_s > 0:
+                    disp = name if name else f"delay {label}"
 
                     # ✅ 외부 START_SPUTTER는 "큐 공정이 정상 수락되어 delay 단계에 진입"한 시점도 성공으로 본다.
                     #    delay-first recipe에서는 실제 preflight가 나중에 실행되므로,
                     #    여기서 host 응답 future를 먼저 success로 완료해 timeout fail을 막는다.
-                    self._host_report_start(True, f"delay accepted: {amount}{unit_txt}")
+                    self._host_report_start(True, f"delay accepted: {label}")
 
-                    self.append_log("Process", f"[Runner] '{name}' 단계: {amount}{unit_txt} 대기 시작")
+                    self.append_log("Process", f"[Runner] '{disp}' 단계: {label} 대기 시작")
                     # 상태 표시 + 카운트다운(취소 가능: STOP이 오면 stage task cancel됨)
                     remain = int(duration_s)
                     while remain > 0:
-                        self._set_state_text(f"지연 대기 중: {amount}{unit_txt} · 남은 시간 {self._fmt_hms(remain)}")
+                        self._set_state_text(f"지연 대기 중: {label} · 남은 시간 {self._fmt_hms(remain)}")
                         await asyncio.sleep(1)
                         remain -= 1
 
-                    self.append_log("Process", f"[Runner] '{name}' 지연 완료 → 다음 스텝")
+                    self.append_log("Process", f"[Runner] '{disp}' 지연 완료 → 다음 스텝")
                     await asyncio.sleep(0)
                     continue
 
@@ -4948,11 +4957,6 @@ class ChamberRuntime:
             use_rf_pulse = self.supports_rf_pulse and bool(getattr(self._u("rfPulsePower_checkbox"), "isChecked", lambda: False)())
             use_dc_pulse = self.supports_dc_pulse and bool(getattr(self._u("dcPulsePower_checkbox"), "isChecked", lambda: False)())
 
-            # 둘 다 선택 금지
-            if use_rf_pulse and use_dc_pulse:
-                self._post_warning("선택 오류", "RF-Pulse와 DC-Pulse는 동시에 선택할 수 없습니다.")
-                return None
-
             # 최소 1개 선택
             if not (use_rf_pulse or use_dc_pulse):
                 if self.supports_rf_pulse:
@@ -5120,11 +5124,6 @@ class ChamberRuntime:
             # ✅ CH2: Pulse 선택(DC-Pulse / RF-Pulse)
             use_dc_pulse = self.supports_dc_pulse and bool(getattr(self._u("dcPulsePower_checkbox"), "isChecked", lambda: False)())
             use_rf_pulse = self.supports_rf_pulse and bool(getattr(self._u("rfPulsePower_checkbox"), "isChecked", lambda: False)())
-
-            # 둘 다 선택 금지(장비/포트 충돌 방지)
-            if use_dc_pulse and use_rf_pulse:
-                self._post_warning("선택 오류", "DC-Pulse와 RF-Pulse는 동시에 선택할 수 없습니다.")
-                return None
 
             # 기본값
             dc_pulse_power = 0.0
@@ -5422,22 +5421,13 @@ class ChamberRuntime:
         )
 
         if self.ch == 1:
-            # ✅ CH1: RF/DC Pulse 둘 다 허용 (동시 선택은 validate에서 차단)
+            # ✅ CH1: RF/DC Pulse 둘 다 허용 (동시 사용 허용 정책)
             #    - 체크(use_*) 뿐 아니라 값(power/freq/duty)로도 "요청"을 판단
-            #    - 둘 다 요청이면 그대로 두고 validate에서 막는다.
             if rf_requested:
                 res["use_rf_pulse"] = True
             if dc_requested:
                 res["use_dc_pulse"] = True
-
-            # ✅ (선택) Pulse와 연속전력 동시 요청 방지: Pulse가 켜지면 연속 전력은 끔
-            if rf_requested or dc_requested:
-                res["use_rf_power"] = False
-                res["rf_power"] = 0.0
-                res["use_dc_power"] = False
-                res["dc_power"] = 0.0
-                res["use_dc_power2"] = False
-                res["dc_power2"] = 0.0
+            # (참고) CH1의 연속 파워 차단은 settings ch1의 SUPPORTS_* 게이트가 담당
 
         elif self.ch == 2:
             # ✅ CH2: 값(power/freq/duty)이 들어오면 "요청"으로 간주해 use_rf_pulse를 True로 정규화
@@ -6698,9 +6688,6 @@ class ChamberRuntime:
             use_rf = bool(p.get("use_rf_pulse"))
             use_dc = bool(p.get("use_dc_pulse"))
 
-            if use_rf and use_dc:
-                errs.append("CH1에서는 RF Pulse와 DC Pulse를 동시에 선택할 수 없습니다.")
-
             if not (use_rf or use_dc):
                 errs.append("CH1은 RF Pulse 또는 DC Pulse 중 하나를 반드시 선택해야 합니다.")
 
@@ -6732,10 +6719,6 @@ class ChamberRuntime:
             use_rf_pulse = bool(p.get("use_rf_pulse"))
             use_dc_pulse = bool(p.get("use_dc_pulse"))
 
-            # DC/RF Pulse 동시 선택 금지(안전)
-            if use_rf_pulse and use_dc_pulse:
-                errs.append("CH2에서는 DC Pulse와 RF Pulse를 동시에 선택할 수 없습니다.")
-
             if use_rf_pulse:
                 if not self.supports_rf_pulse:
                     errs.append("이 챔버는 RF-Pulse를 지원하지 않습니다.")
@@ -6752,10 +6735,6 @@ class ChamberRuntime:
             # CH2는 (연속 DC/RF) 또는 (Pulse DC/RF) 중 하나 이상은 필요
             if not (p.get("use_dc_power") or p.get("use_dc_power2") or p.get("use_rf_power") or use_dc_pulse or use_rf_pulse):
                 errs.append("CH2는 DC1/DC2/RF Power 또는 DC/RF Pulse 중 하나 이상 선택 필요")
-
-            # (방어) Pulse와 RF 연속 동시 금지 규칙 유지(원하면 삭제 가능)
-            if use_rf_pulse and p.get("use_rf_power"):
-                errs.append("RF Pulse와 RF Power는 동시에 선택할 수 없습니다.")
 
             if p.get("use_dc_power") and p.get("dc_power", 0) < 0:
                 errs.append("DC Target Power(W)는 0 이상이어야 합니다.")

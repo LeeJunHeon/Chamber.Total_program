@@ -496,7 +496,7 @@ def _build_data(
             "frequency"    : pp.get("dc_pulse_freq"),
             "off_time"     : pp.get("dc_pulse_off_time_us"),
         })
-    elif pp.get("use_dc_power"):
+    if pp.get("use_dc_power"):
         power_rows.append({
             "power_source" : "DC",
             "sp_power"     : pp.get("dc_power"),
@@ -544,7 +544,7 @@ def _build_data(
             "frequency"    : pp.get("rf_pulse_freq"),
             "off_time"     : pp.get("rf_pulse_off_time_us"),
         })
-    elif pp.get("use_rf_power"):
+    if pp.get("use_rf_power"):
         power_rows.append({
             "power_source" : "RF",
             "sp_power"     : pp.get("rf_power"),

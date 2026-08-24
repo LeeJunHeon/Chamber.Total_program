@@ -110,7 +110,9 @@ class RuntimeState:
         c = 1 if int(ch or 1) != 2 else 2
         with self._lock:
             owner = self._pulse_claims.get(key)
-            if owner is not None and int(owner.get("ch", 0)) != c:
+            # 다른 챔버가 점유 중이거나, 같은 챔버라도 '다른 종류' 드라이버가 같은 포트를 점유 중이면 거부
+            # (한 시리얼 포트 = 한 장비. 같은 챔버·같은 종류의 재클레임만 허용)
+            if owner is not None and (int(owner.get("ch", 0)) != c or str(owner.get("kind")) != str(kind)):
                 return False, dict(owner)
             self._pulse_claims[key] = {"ch": c, "kind": str(kind)}
             return True, None

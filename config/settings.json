@@ -372,6 +372,9 @@
     "CH_ID": 1,
     "CH_NAME": "ch1",
 
+    // ── 장비 지원 플래그 (CH1 전용) ──
+    "SUPPORTS_DC": false,                  // CH1은 연속 DC 없음 (DCV0는 CH2 DC1 레지스터)
+
     // ── RGA CSV 저장 경로 ──
     "RGA_CSV_PATH": "G:\\공유 드라이브\\VanaM_Sputter\\RGA\\Ch.1\\RGA_spectrums.csv",
 
