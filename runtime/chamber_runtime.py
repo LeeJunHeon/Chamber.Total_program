@@ -2403,6 +2403,16 @@ class ChamberRuntime:
         self._devices_started = True
 
     async def _start_devices_task(self) -> None:
+        # ✅ 개발자 모드: PLC/MFC/IG 자동 연결 생략 (연결 실패·재시도 로그 스팸 방지)
+        #    Start 시 preflight는 그대로 동작하므로 시작 흐름 테스트에는 영향 없음
+        try:
+            from lib import config_common as _cc
+            if getattr(_cc, "DEV_MODE", False):
+                self.append_log("MAIN", "[DEV] 개발자 모드: 장치 자동 연결 생략")
+                return
+        except Exception:
+            pass
+
         async def _maybe_start_or_connect(obj, label: str, *, log: bool = True):
             if not obj:
                 return

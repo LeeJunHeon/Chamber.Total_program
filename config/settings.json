@@ -213,6 +213,9 @@
     "SUPPORTS_RFPULSE": true,              // RF Pulse 사용
     "SUPPORTS_DCPULSE": true,              // DC Pulse 사용 (CH1/CH2 공용)
 
+    // ── 개발자 모드 ──
+    "DEV_MODE": false,                     // true: 챗/모니터 웹훅·구드 기록·장치 자동연결 차단 (개발 PC 전용)
+
     // ── PLC (공정 제어 PLC) ──
     "PLC_TCP_HOST": "192.168.1.2",         // PLC IP 주소
     "PLC_TCP_PORT": 502,                   // PLC Modbus 포트 (기본 502)

@@ -651,6 +651,14 @@ async def save_process_log(
     메인 공정에 영향 없음: 모든 예외를 내부에서 처리.
     반환값: 이번 호출에서 Arc 알림 발송 여부.
     """
+    # ✅ 개발자 모드: 구글드라이브 시트 기록 전체 생략
+    try:
+        from lib import config_common as _cc
+        if getattr(_cc, "DEV_MODE", False):
+            return False
+    except Exception:
+        pass
+
     # [수정] 예외를 전파하지 않음 — GDrive 저장 실패가 메인 공정에 영향을 주면 안 됨
     try:
         rows = _build_data(ch, data_logger, operator, substrate,

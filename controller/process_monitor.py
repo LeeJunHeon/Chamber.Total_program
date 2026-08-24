@@ -179,8 +179,18 @@ class ProcessMonitor:
                 self._log_func("Monitor", message)
             except Exception:
                 pass
+
+        # ✅ 개발자 모드: 모니터 웹훅 차단 (Monitor 로그는 유지)
+        try:
+            from lib import config_common as _cc
+            if getattr(_cc, "DEV_MODE", False):
+                return
+        except Exception:
+            pass
+
         if not self._webhook_url:
             return
+        
         payload = {"text": message}
         try:
             loop = asyncio.get_running_loop()

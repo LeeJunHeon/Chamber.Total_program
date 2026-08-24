@@ -115,6 +115,13 @@ class ChatNotifier(QObject):
         return self.webhook_default or None
 
     async def _post_async(self, payload: dict, webhook_url: Optional[str]):
+        # ✅ 개발자 모드: 실제 웹훅 전송 차단 (시작/종료/에러/아크 등 모든 챗 알림의 단일 초크포인트)
+        try:
+            from lib import config_common as _cc
+            if getattr(_cc, "DEV_MODE", False):
+                return
+        except Exception:
+            pass
         if not webhook_url or not payload:
             return
         data = json.dumps(payload).encode("utf-8")
