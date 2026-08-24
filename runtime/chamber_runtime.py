@@ -2773,8 +2773,8 @@ class ChamberRuntime:
             else:
                 sel = None  # pulse 미사용
 
-            _set("rfPulsePower_checkbox", sel == "rf")
-            _set("dcPulsePower_checkbox", sel == "dc")
+            self._set_pulse_radio("rfPulsePower_checkbox", sel == "rf")
+            self._set_pulse_radio("dcPulsePower_checkbox", sel == "dc")
 
             if sel == "rf":
                 power, freq, duty = rf_power, rf_freq, rf_duty
@@ -2788,20 +2788,26 @@ class ChamberRuntime:
             _set("dcPulseDutyCycle_edit", "" if str(duty).strip() in ("", "0", "nan") else str(duty).strip())
 
         else:
-            # CH2: DC-Pulse(옵션) / RF-Pulse 사용 가능 (supports + validate로 안전 제어)
-            _set("dcPulsePower_checkbox", params.get('use_dc_pulse', 'F') == 'T')
-            _set("dcPulsePower_edit",     params.get('dc_pulse_power', '0'))
-            dcf = str(params.get('dc_pulse_freq', '')).strip()
-            dcd = str(params.get('dc_pulse_duty_cycle') or params.get('dc_pulse_duty') or '').strip()
-            _set("dcPulseFreq_edit",      '' if dcf in ('', '0') else dcf)
-            _set("dcPulseDutyCycle_edit", '' if dcd in ('', '0') else dcd)
+            # CH2: 입력칸은 rfPulse* 1세트를 RF/DC 공유(CH1과 동일 UX), 선택은 라디오로 표시
+            use_rfp = params.get('use_rf_pulse', 'F') == 'T'
+            use_dcp = params.get('use_dc_pulse', 'F') == 'T'
+            self._set_pulse_radio("rfPulsePower_checkbox", use_rfp)
+            self._set_pulse_radio("dcPulsePower_checkbox", use_dcp and not use_rfp)
 
-            _set("rfPulsePower_checkbox", params.get('use_rf_pulse', 'F') == 'T')
-            _set("rfPulsePower_edit",     params.get('rf_pulse_power', '0'))
-            rff = str(params.get('rf_pulse_freq', '')).strip()
-            rfd = str(params.get('rf_pulse_duty_cycle') or params.get('rf_pulse_duty') or '').strip()
-            _set("rfPulseFreq_edit",      '' if rff in ('', '0') else rff)
-            _set("rfPulseDutyCycle_edit", '' if rfd in ('', '0') else rfd)
+            if use_rfp:
+                pw  = str(params.get('rf_pulse_power', '0'))
+                frq = str(params.get('rf_pulse_freq', '')).strip()
+                dty = str(params.get('rf_pulse_duty_cycle') or params.get('rf_pulse_duty') or '').strip()
+            elif use_dcp:
+                pw  = str(params.get('dc_pulse_power', '0'))
+                frq = str(params.get('dc_pulse_freq', '')).strip()
+                dty = str(params.get('dc_pulse_duty_cycle') or params.get('dc_pulse_duty') or '').strip()
+            else:
+                pw, frq, dty = "0", "", ""
+
+            _set("rfPulsePower_edit",     pw)
+            _set("rfPulseFreq_edit",      '' if frq in ('', '0') else frq)
+            _set("rfPulseDutyCycle_edit", '' if dty in ('', '0') else dty)
 
         # DC-Power
         _set("dcPower_checkbox", params.get('use_dc_power', 'F') == 'T')
@@ -2841,32 +2847,6 @@ class ChamberRuntime:
         _set("N2_checkbox", params.get('N2', 'F') == 'T')
         _set("mainShutter_checkbox", params.get('main_shutter', 'F') == 'T')
         _set("powerSelect_checkbox", params.get('power_select', 'F') == 'T')
-
-        # ---- 펄스(RF/DC) 반영: 라디오는 전용 세터, 값칸은 채널별 공유 입력칸 ----
-        #  - CH1 공유칸 = dcPulse* / CH2 공유칸 = rfPulse* (라벨은 둘 다 "RF/DC Pulse")
-        #  - 실행 경로(서버/큐)는 raw 직행이므로 이 블록은 UI 표시 전용
-        use_rfp = params.get('use_rf_pulse', 'F') == 'T'
-        use_dcp = params.get('use_dc_pulse', 'F') == 'T'
-        self._set_pulse_radio("rfPulsePower_checkbox", use_rfp)
-        self._set_pulse_radio("dcPulsePower_checkbox", use_dcp and not use_rfp)
-
-        if self.ch == 1:
-            _p_leaf, _f_leaf, _d_leaf = "dcPulsePower_edit", "dcPulseFreq_edit", "dcPulseDutyCycle_edit"
-        else:
-            _p_leaf, _f_leaf, _d_leaf = "rfPulsePower_edit", "rfPulseFreq_edit", "rfPulseDutyCycle_edit"
-
-        if use_rfp:
-            _set(_p_leaf, str(params.get('rf_pulse_power', '') or ''))
-            _set(_f_leaf, str(params.get('rf_pulse_freq', '') or ''))
-            _set(_d_leaf, str(params.get('rf_pulse_duty', params.get('rf_pulse_duty_cycle', '')) or ''))
-        elif use_dcp:
-            _set(_p_leaf, str(params.get('dc_pulse_power', '') or ''))
-            _set(_f_leaf, str(params.get('dc_pulse_freq', '') or ''))
-            _set(_d_leaf, str(params.get('dc_pulse_duty', params.get('dc_pulse_duty_cycle', '')) or ''))
-        else:
-            _set(_p_leaf, "")
-            _set(_f_leaf, "")
-            _set(_d_leaf, "")
 
         # ---- CH1: 단일 타겟 위젯에 한 번만 세팅 ----
         if self.ch == 1:
