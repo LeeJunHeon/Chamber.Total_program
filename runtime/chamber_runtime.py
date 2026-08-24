@@ -2505,6 +2505,25 @@ class ChamberRuntime:
         self._set("Voltage_edit", _pair(1, ".0f"))
         self._set("Current_edit", _pair(2, ".2f"))
 
+    def _set_pulse_radio(self, leaf: str, checked: bool) -> None:
+        """펄스 라디오 전용 세터.
+        exclusive QButtonGroup의 라디오는 setChecked(False) 직접 호출이 무효이므로
+        (Qt 사양) setExclusive 토글 트릭으로 해제한다. 그룹이 없으면 일반 setChecked 폴백.
+        """
+        btn = self._u(leaf)
+        if btn is None:
+            return
+        grp = getattr(self.ui, f"{self.prefix}pulsePower_group", None) if getattr(self, "ui", None) else None
+        with contextlib.suppress(Exception):
+            if checked or grp is None:
+                btn.setChecked(bool(checked))
+                return
+            try:
+                grp.setExclusive(False)
+                btn.setChecked(False)
+            finally:
+                grp.setExclusive(True)
+
     def _wire_pulse_radio_toggle(self) -> None:
         """(CH1/CH2 공통) 체크된 펄스 라디오를 다시 클릭하면 해제되도록 배선."""
         for leaf in ("rfPulsePower_checkbox", "dcPulsePower_checkbox"):
@@ -2822,6 +2841,32 @@ class ChamberRuntime:
         _set("N2_checkbox", params.get('N2', 'F') == 'T')
         _set("mainShutter_checkbox", params.get('main_shutter', 'F') == 'T')
         _set("powerSelect_checkbox", params.get('power_select', 'F') == 'T')
+
+        # ---- 펄스(RF/DC) 반영: 라디오는 전용 세터, 값칸은 채널별 공유 입력칸 ----
+        #  - CH1 공유칸 = dcPulse* / CH2 공유칸 = rfPulse* (라벨은 둘 다 "RF/DC Pulse")
+        #  - 실행 경로(서버/큐)는 raw 직행이므로 이 블록은 UI 표시 전용
+        use_rfp = params.get('use_rf_pulse', 'F') == 'T'
+        use_dcp = params.get('use_dc_pulse', 'F') == 'T'
+        self._set_pulse_radio("rfPulsePower_checkbox", use_rfp)
+        self._set_pulse_radio("dcPulsePower_checkbox", use_dcp and not use_rfp)
+
+        if self.ch == 1:
+            _p_leaf, _f_leaf, _d_leaf = "dcPulsePower_edit", "dcPulseFreq_edit", "dcPulseDutyCycle_edit"
+        else:
+            _p_leaf, _f_leaf, _d_leaf = "rfPulsePower_edit", "rfPulseFreq_edit", "rfPulseDutyCycle_edit"
+
+        if use_rfp:
+            _set(_p_leaf, str(params.get('rf_pulse_power', '') or ''))
+            _set(_f_leaf, str(params.get('rf_pulse_freq', '') or ''))
+            _set(_d_leaf, str(params.get('rf_pulse_duty', params.get('rf_pulse_duty_cycle', '')) or ''))
+        elif use_dcp:
+            _set(_p_leaf, str(params.get('dc_pulse_power', '') or ''))
+            _set(_f_leaf, str(params.get('dc_pulse_freq', '') or ''))
+            _set(_d_leaf, str(params.get('dc_pulse_duty', params.get('dc_pulse_duty_cycle', '')) or ''))
+        else:
+            _set(_p_leaf, "")
+            _set(_f_leaf, "")
+            _set(_d_leaf, "")
 
         # ---- CH1: 단일 타겟 위젯에 한 번만 세팅 ----
         if self.ch == 1:
@@ -5979,14 +6024,14 @@ class ChamberRuntime:
         _set("dcPower_edit", "130")
         _set("dcPower2_edit", "0")
 
-        # DC-Pulse
-        _set("dcPulsePower_checkbox", False)
+        # DC-Pulse (라디오는 전용 세터: exclusive 그룹 해제 트릭 필요)
+        self._set_pulse_radio("dcPulsePower_checkbox", False)
         _set("dcPulsePower_edit", "200")
         _set("dcPulseFreq_edit", "")
         _set("dcPulseDutyCycle_edit", "")
 
-        # RF-Pulse
-        _set("rfPulsePower_checkbox", False)
+        # RF-Pulse (라디오는 전용 세터)
+        self._set_pulse_radio("rfPulsePower_checkbox", False)
         _set("rfPulsePower_edit", "100")
         _set("rfPulseFreq_edit", "")
         _set("rfPulseDutyCycle_edit", "")
@@ -6047,10 +6092,16 @@ class ChamberRuntime:
                 pass
 
         # ✅ CH2에서도 RF-Pulse 가능
-        #    단, config/생성자 설정상 supports_rf_pulse=False면 UI를 비활성화
+        #    단, 입력칸(rfPulse*_edit)은 DC-Pulse와 공유하므로:
+        #    - RF 미지원이어도 DC-Pulse를 지원하면 입력칸은 살리고 RF 라디오만 비활성화
+        #    - RF/DC 둘 다 미지원일 때만 입력칸까지 비활성화
         if (self.ch == 2) and (not self.supports_rf_pulse):
-            for leaf in ("rfPulsePower_checkbox", "rfPulsePower_edit", "rfPulseFreq_edit", "rfPulseDutyCycle_edit"):
-                _disable(leaf)
+            _disable("rfPulsePower_checkbox")
+            if not self.supports_dc_pulse:
+                for leaf in ("rfPulsePower_edit", "rfPulseFreq_edit", "rfPulseDutyCycle_edit"):
+                    _disable(leaf)
+        if (self.ch == 2) and (not self.supports_dc_pulse):
+            _disable("dcPulsePower_checkbox")
 
     def _reset_ui_after_process(self):
         self._set_default_ui_values()
