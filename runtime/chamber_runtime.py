@@ -6155,21 +6155,48 @@ class ChamberRuntime:
         if not s:
             # 현재 UI 값으로 단발 시작 (버튼과 동일 경로)
             self._handle_start_clicked(False)
-        elif s.lower().endswith(".csv"):
+        elif s.lower().endswith((".csv", ".xlsx")):
             # ✅ 동기 NAS 호출을 executor로 분리 (asyncio loop block 방지)
             loop = asyncio.get_running_loop()
             
             def _load_csv_sync(path: str):
                 if not os.path.exists(path):
-                    raise RuntimeError(f"CSV 파일을 찾을 수 없습니다: {path}")
+                    raise RuntimeError(f"레시피 파일을 찾을 수 없습니다: {path}")
                 rows = []
-                with open(path, mode='r', encoding='utf-8-sig', newline='') as csvfile:
-                    reader = csv.DictReader(csvfile)
-                    for row in reader:
-                        name = (row.get('Process_name') or row.get('#') 
-                                or f"공정 {len(rows)+1}").strip()
-                        row['Process_name'] = name
-                        rows.append(row)
+
+                def _push(row: dict):
+                    name = (str(row.get('Process_name') or row.get('#') or '').strip()
+                            or f"공정 {len(rows)+1}")
+                    row['Process_name'] = name
+                    rows.append(row)
+
+                if path.lower().endswith(".xlsx"):
+                    # ✅ 로봇 경로 시작도 UI 로더와 동일하게 xlsx 지원
+                    from openpyxl import load_workbook
+                    wb = load_workbook(path, read_only=True, data_only=True)
+                    try:
+                        ws = wb.worksheets[0]
+                        it = ws.iter_rows(values_only=True)
+                        header = [str(h).strip() if h is not None else "" for h in next(it, [])]
+                        for vals in it:
+                            row = {}
+                            empty = True
+                            for h, v in zip(header, vals):
+                                if not h:
+                                    continue
+                                sv = "" if v is None else str(v).strip()
+                                if sv:
+                                    empty = False
+                                row[h] = sv
+                            if not empty:
+                                _push(row)
+                    finally:
+                        wb.close()
+                else:
+                    with open(path, mode='r', encoding='utf-8-sig', newline='') as csvfile:
+                        reader = csv.DictReader(csvfile)
+                        for row in reader:
+                            _push(row)
                 return rows
             
             try:

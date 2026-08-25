@@ -1699,6 +1699,10 @@ class AsyncDCPulse:
                         if now - _piv_last >= self._poll_period_s:
                             _piv_last = time.monotonic()
                             res = await self.read_output_piv()
+                            if not (res and "eng" in res):
+                                # ✅ 산발성 NAK 완화: 0.3s 후 1회 재시도 (버스트 구간엔 무효 → 케이블 조치 필요)
+                                await asyncio.sleep(0.3)
+                                res = await self.read_output_piv()
                             # ✅ [EL: 2026-08-25 런4] 플라즈마 중 시리얼 NAK 간헐 폭주 →
                             #    연속 5회(≈25초) 읽기 실패 시 1회 경고(감시 공백 가시화)
                             if res and "eng" in res:

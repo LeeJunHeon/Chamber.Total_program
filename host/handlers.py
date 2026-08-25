@@ -605,7 +605,7 @@ class HostHandlers:
         GET_RECIPE
         - data: {"folder": "CH1" | "CH2" | "ALD"}
         - 루트(ROBOT_RECIPE_ROOT_DIR) 아래의 해당 폴더만 스캔 (재귀 없음)
-        - .csv 파일명 리스트 반환
+        - .csv / .xlsx 파일명 리스트 반환
         """
         try:
             folder = str(data.get("folder") or "").strip().upper()
@@ -626,7 +626,7 @@ class HostHandlers:
                 files: list[str] = []
                 with os.scandir(target_dir) as it:
                     for ent in it:
-                        if ent.is_file() and ent.name.lower().endswith(".csv"):
+                        if ent.is_file() and ent.name.lower().endswith((".csv", ".xlsx")):
                             files.append(ent.name)
                 files.sort(key=str.lower)
                 return files
