@@ -324,7 +324,9 @@ class RFPulseAsync:
         # TCP 종료
         if self._reader_task:
             self._reader_task.cancel()
-            with contextlib.suppress(Exception):
+            # ✅ [FIX] suppress(Exception)은 CancelledError를 잡지 못해 cleanup이 중단됨
+            #    (dc_pulse.py와 동일 결함 → writer close/큐 정리 스킵 방지)
+            with contextlib.suppress(Exception, asyncio.CancelledError):
                 await self._reader_task
             self._reader_task = None
 

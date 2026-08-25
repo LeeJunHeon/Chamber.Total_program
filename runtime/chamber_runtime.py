@@ -3160,6 +3160,38 @@ class ChamberRuntime:
                 "rf_pulse": use_rf_pulse,
             }
 
+            # ✅ [FIX] 공유 엔드포인트 가드를 reconnect/background start보다 '먼저' 수행.
+            #    (기존: reconnect → bg start → claim 순서라, 거부 직전에 이미 MOXA 세션을
+            #     건드려 다른 챔버의 정상 연결을 흔들 수 있었음)
+            # 공유 펄스 장비 가드: '같은 엔드포인트'를 다른 챔버가 사용 중이면 시작 거부
+            #    - 엔드포인트가 다르면(향후 장비 증설) 동시 실행 허용
+            #    - 같은 챔버의 재클레임은 허용, 해석 실패 시 가드 스킵(fail-open)
+            #    - 해제는 _on_process_status_changed(False)에서 일괄 수행
+            _pulse_claims: list[tuple[str, str]] = []
+            if use_dc_pulse and self.dc_pulse:
+                _ep = self._pulse_endpoint_of(self.dc_pulse)
+                if _ep:
+                    _pulse_claims.append(("DC-Pulse", _ep))
+            if use_rf_pulse and self.rf_pulse:
+                _ep = self._pulse_endpoint_of(self.rf_pulse)
+                if _ep:
+                    _pulse_claims.append(("RF-Pulse", _ep))
+            for _kind_nm, _ep in _pulse_claims:
+                _ok_claim, _owner = runtime_state.claim_pulse_endpoint(_ep, _kind_nm, self.ch)
+                if not _ok_claim:
+                    _o_ch = _owner.get("ch") if isinstance(_owner, dict) else "?"
+                    _o_kind = _owner.get("kind") if isinstance(_owner, dict) else "?"
+                    _msg = f"{_kind_nm} 시작 불가: 동일 주소({_ep}) 장비를 CH{_o_ch}({_o_kind}) 공정이 사용 중입니다."
+                    self.append_log("MAIN", _msg)
+                    self._post_warning("공유 장비 사용 중", _msg)
+                    with contextlib.suppress(Exception):
+                        self._host_report_start(False, _msg)
+                    with contextlib.suppress(Exception):
+                        runtime_state.set_error("chamber", self.ch, _msg)
+                        runtime_state.mark_finished("chamber", self.ch)
+                    self._on_process_status_changed(False)   # ← 부분 클레임도 여기서 해제됨
+                    return
+
             # ✅ Pulse는 각 장비의 "자기 포트" 설정을 그대로 사용한다. (덮어쓰기 금지)
             # - DC Pulse  : cfg.DCPULSE_TCP
             # - RF Pulse  : RFPulseAsync 내부 설정(또는 cfg.RFPULSE_TCP가 있으면 그 값)
@@ -3199,35 +3231,6 @@ class ChamberRuntime:
             self._kick_oes_init_background(force=False)
 
             self._on_process_status_changed(True)
-
-            # ✅ 공유 펄스 장비 가드: '같은 엔드포인트'를 다른 챔버가 사용 중이면 시작 거부
-            #    - 엔드포인트가 다르면(향후 장비 증설) 동시 실행 허용
-            #    - 같은 챔버의 재클레임은 허용, 해석 실패 시 가드 스킵(fail-open)
-            #    - 해제는 _on_process_status_changed(False)에서 일괄 수행
-            _pulse_claims: list[tuple[str, str]] = []
-            if use_dc_pulse and self.dc_pulse:
-                _ep = self._pulse_endpoint_of(self.dc_pulse)
-                if _ep:
-                    _pulse_claims.append(("DC-Pulse", _ep))
-            if use_rf_pulse and self.rf_pulse:
-                _ep = self._pulse_endpoint_of(self.rf_pulse)
-                if _ep:
-                    _pulse_claims.append(("RF-Pulse", _ep))
-            for _kind_nm, _ep in _pulse_claims:
-                _ok_claim, _owner = runtime_state.claim_pulse_endpoint(_ep, _kind_nm, self.ch)
-                if not _ok_claim:
-                    _o_ch = _owner.get("ch") if isinstance(_owner, dict) else "?"
-                    _o_kind = _owner.get("kind") if isinstance(_owner, dict) else "?"
-                    _msg = f"{_kind_nm} 시작 불가: 동일 주소({_ep}) 장비를 CH{_o_ch}({_o_kind}) 공정이 사용 중입니다."
-                    self.append_log("MAIN", _msg)
-                    self._post_warning("공유 장비 사용 중", _msg)
-                    with contextlib.suppress(Exception):
-                        self._host_report_start(False, _msg)
-                    with contextlib.suppress(Exception):
-                        runtime_state.set_error("chamber", self.ch, _msg)
-                        runtime_state.mark_finished("chamber", self.ch)
-                    self._on_process_status_changed(False)   # ← 부분 클레임도 여기서 해제됨
-                    return
 
             timeout_no_pulse = float(self.cfg._get("CHAMBER_PREFLIGHT_TIMEOUT_S", 8.0))
             timeout_with_pulse = float(self.cfg._get("CHAMBER_PREFLIGHT_TIMEOUT_WITH_PULSE_S", 10.0))

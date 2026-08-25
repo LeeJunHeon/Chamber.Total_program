@@ -188,6 +188,7 @@ class AsyncDCPulse:
 
         self._timeout_ms = 1000
         self._gap_ms = 0
+        self._last_send_mono = 0.0   # ✅ 커맨드 최소 간격(gap) 기준 시각
         self._watchdog_interval_ms = 1000
 
         self._reconnect_backoff_start_ms = 1000
@@ -357,8 +358,10 @@ class AsyncDCPulse:
         self._purge_pending("shutdown")
 
         if self._reader_task:
+            # ✅ [FIX] suppress(Exception)은 CancelledError를 잡지 못해 cleanup 전체가 중단됨
+            #    (→ writer close / 프레임 큐 비움 스킵 → 다음 런에 잔여 상태 유입)
             self._reader_task.cancel()
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(Exception, asyncio.CancelledError):
                 await self._reader_task
             self._reader_task = None
 
@@ -563,12 +566,14 @@ class AsyncDCPulse:
             want_khz = int(round(float(freq)))
             applied = False
             for attempt in (1, 2):
-                pr = await self.read_actual_pulse_params()
-                if pr is None:
-                    await self._emit_status("[VERIFY] 펄스 파라미터 read-back 실패(통신) → 검증 생략")
+                # ✅ [FIX] read_actual_pulse_params()는 A6+A7을 함께 읽어 A7만 실패해도
+                #    전체가 None → 검증이 무력화됨. 주파수 검증은 A6 단독으로 수행.
+                got = await self.read_pulse_freq_khz()
+                if got is None:
+                    await self._emit_status("[VERIFY] PULSE_FREQ read-back 실패(통신) → 검증 생략")
                     applied = True
                     break
-                got_khz = int(pr.get("freq_khz") or 0)
+                got_khz = int(got)
                 if got_khz == want_khz:
                     applied = True
                     break
@@ -1219,9 +1224,10 @@ class AsyncDCPulse:
         if not resp or len(resp) < 2:
             return None, b"", None
         cmd = resp[0]
-        data = resp[1:]          # ✅ 마지막 바이트를 CHK로 오인하지 않음
-        if data and data[-1] == 0x03:  # 혹시 ETX가 섞여 들어온 드문 경우만 방어적으로 제거
-            data = data[:-1]
+        # ✅ [FIX] 파서(_tcp_reader_loop)가 이미 STX/ETX/CHK를 제거하고 CMD+DATA만 큐에 넣는다.
+        #    여기서 끝의 0x03을 또 벗기면 하위바이트가 3인 값(STATUS 0x0003=HV ON, FAULT 0x0003 등)이
+        #    0x0000으로 붕괴되어 HV/fault를 오판한다. → trailing 0x03 제거 금지.
+        data = resp[1:]
         return cmd, data, None   # ✅ CHK는 원래 큐에 안 들어오므로 None
 
     # ❷ [ADD] 1B/2B 데이터 모두 수용하는 플래그 추출
@@ -1479,6 +1485,14 @@ class AsyncDCPulse:
 
             cmd = self._cmd_q.popleft()
             self._inflight = cmd
+
+            # ✅ [FIX] 최소 인터커맨드 간격 보장 (매뉴얼 권장: 통신주기 100ms 이상)
+            #    기존에는 gap_ms가 timeout 계산에만 쓰이고 실제 대기가 없어 연속 전송됨
+            #    → 장비 수신 파서 과부하/NAK 유발. rf_pulse.py와 동일 방식으로 적용.
+            _gap_need = (cmd.gap_ms / 1000.0) - (time.monotonic() - self._last_send_mono)
+            if _gap_need > 0:
+                await asyncio.sleep(_gap_need)
+
             # ▶ 송신 바이트(hex)까지 함께 기록
             await self._emit_status(f"[SEND] {cmd.label} → {cmd.payload.hex(' ')}")
             
@@ -1501,6 +1515,7 @@ class AsyncDCPulse:
             # 전송
             try:
                 self._last_io_mono = time.monotonic()   # ★ 송신 직전 IO 시각
+                self._last_send_mono = self._last_io_mono   # ✅ gap 기준 시각 갱신
                 self._writer.write(cmd.payload)
                 await asyncio.wait_for(self._writer.drain(), timeout=self._drain_timeout_s)
             except Exception as e:
