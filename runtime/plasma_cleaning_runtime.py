@@ -2856,7 +2856,7 @@ class PlasmaCleaningRuntime:
 
                 asyncio.create_task(self._on_click_start())
             else:
-                raise RuntimeError("지원하지 않는 레시피 형식입니다. CSV 경로만 허용됩니다.")
+                raise RuntimeError("지원하지 않는 레시피 형식입니다. CSV/XLSX 파일 경로만 허용됩니다.")
 
             # 🔎 여기서 프리플라이트 결과 신호만 대기 (예: 최대 10초)
             host_start_wait_timeout_s = float(

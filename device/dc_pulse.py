@@ -1638,13 +1638,39 @@ class AsyncDCPulse:
                                     self._frame_q.put_nowait(bytes([b]))
                         del buf[:i_stx]
 
-                    # 2) 여기부터는 기존 STX..ETX+CHK 프레이밍 파서 그대로
-                    try:
-                        i_etx = buf.index(0x03, 1)
-                    except ValueError:
-                        break
-
-                    if len(buf) < i_etx + 2:
+                    # 2) ETX 위치 결정 — [EL: READ 응답 데이터에 0x03 포함 시(예: soft arc≥768,
+                    #    arc=3, PIV의 P raw=3 등) 첫 0x03을 ETX로 오인 → CHKFAIL/프레임 유실 버그 수정]
+                    #    ① 길이 규칙 우선: 읽기 응답 데이터 = 0x9A(PIV) 6B, 그 외 2B
+                    #    ② 불일치 시 체크섬 유도 탐색(0x03 후보 중 CHK 일치, ETX idx ≤ 8)
+                    #    ③ 후보 없음: 미완성 → 추가 수신 대기 / 10B 이상 정체 시 1B 재동기
+                    i_etx = -1
+                    if len(buf) >= 2:
+                        _dlen = 6 if buf[1] == 0x9A else 2
+                        _pos = 2 + _dlen
+                        if len(buf) >= _pos + 2:
+                            if buf[_pos] == 0x03 and (_chk_nibble_sum(bytes(buf[:_pos + 1])) & 0xFF) == (buf[_pos + 1] & 0xFF):
+                                i_etx = _pos
+                            else:
+                                _j = 2
+                                while _j <= min(8, len(buf) - 2):
+                                    try:
+                                        _j = buf.index(0x03, _j)
+                                    except ValueError:
+                                        break
+                                    if _j > 8 or len(buf) < _j + 2:
+                                        break
+                                    if (_chk_nibble_sum(bytes(buf[:_j + 1])) & 0xFF) == (buf[_j + 1] & 0xFF):
+                                        i_etx = _j
+                                        break
+                                    _j += 1
+                    if i_etx < 0:
+                        if len(buf) >= 10:
+                            self._ev_nowait(DCPEvent(
+                                kind="status",
+                                message=f"[CHKFAIL] resync: head={bytes(buf[:10]).hex(' ')}"
+                            ))
+                            del buf[0]
+                            continue
                         break
 
                     core = bytes(buf[:i_etx + 1])   # STX..ETX

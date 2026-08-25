@@ -6217,7 +6217,7 @@ class ChamberRuntime:
 
             self._handle_start_clicked(False)
         else:
-            raise RuntimeError("지원하지 않는 레시피 형식입니다. CSV 경로만 허용됩니다.")
+            raise RuntimeError("지원하지 않는 레시피 형식입니다. CSV/XLSX 파일 경로만 허용됩니다.")
 
         # ✅ 시작 가드(=프리플라이트 진입/거절) 결과만 짧게 대기
         host_start_wait_timeout_s = float(
