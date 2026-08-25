@@ -557,7 +557,36 @@ class AsyncDCPulse:
 
         # duty만 숫자인 경우(주파수 미지정)는 off_time_us 계산 불가 → 유지
         # 필요하면 별도 API(set_off_time_us)로 직접 지정하세요.
-        
+
+        # ✅ [EL: 2026-08-25 런3] 쓰기 ACK 후 미적용(40kHz 잔존) 실측 → read-back 검증
+        if not _is_keep(freq) and freq is not None:
+            want_khz = int(round(float(freq)))
+            applied = False
+            for attempt in (1, 2):
+                pr = await self.read_actual_pulse_params()
+                if pr is None:
+                    await self._emit_status("[VERIFY] 펄스 파라미터 read-back 실패(통신) → 검증 생략")
+                    applied = True
+                    break
+                got_khz = int(pr.get("freq_khz") or 0)
+                if got_khz == want_khz:
+                    applied = True
+                    break
+                if attempt == 1:
+                    await self._emit_status(
+                        f"[VERIFY] PULSE_FREQ 미적용 감지 (요청 {want_khz}kHz ≠ 장비 {got_khz}kHz) → 0.5s 후 재기록"
+                    )
+                    await asyncio.sleep(0.5)
+                    if not await self.set_pulse_freq_khz(float(freq)):
+                        break
+                    await asyncio.sleep(0.5)
+            if not applied:
+                await self._emit_failed(
+                    "PULSE_FREQ",
+                    f"쓰기 ACK 후에도 미적용 지속 (요청 {want_khz}kHz) — 장비 마스터/패널 상태 점검 필요"
+                )
+                return False
+
         # 3) 제어 모드 = Power
         ok_reg = await self.set_regulation_power()
         if not ok_reg:
@@ -574,7 +603,26 @@ class AsyncDCPulse:
 
         # 5) 출력 ON (성공시에만)
         ok2 = await self.output_on()
-        return bool(ok2)
+        if not ok2:
+            return False
+
+        # ✅ [EL: 2026-08-25 런3] ON ACK 후에도 출력 미기동(V=I=P=0) 실측
+        #    → STATUS의 HV-On 비트로 실확인. 읽기 실패(None)는 오탐 방지 위해 통과(기존 동작 유지)
+        flags = await self.read_status_flags()
+        if flags is not None and not self._hv_on_from_status(flags):
+            f2 = await self.read_fault_code()
+            m_on  = await self._read_raw(0xBB, "READ_MASTER_ONOFF")
+            m_ref = await self._read_raw(0xBC, "READ_MASTER_REFER")
+            m_md  = await self._read_raw(0xBD, "READ_MASTER_MODE")
+            def _hx(b): return b.hex() if b else "-"
+            await self._emit_failed(
+                "OUTPUT_ON",
+                "ACK 수신했지만 HV Off 상태 — 장비가 ON을 무시함 "
+                f"(fault={('0x%04X' % f2) if f2 is not None else '조회실패'}, "
+                f"master ONOFF/REFER/MODE={_hx(m_on)}/{_hx(m_ref)}/{_hx(m_md)})"
+            )
+            return False
+        return True
 
     # ====== 고수준 제어 ======
     async def set_master_host_all(self) -> bool:
@@ -954,7 +1002,8 @@ class AsyncDCPulse:
                 await self._emit_status(f"[{label}] 실패 후 fault 조회 실패 → 세션 재연결 후 재전송")
                 return await self._reopen_session_for_retry(label)
 
-            await self._emit_status(f"[{label}] 실패 후 fault 조회 실패 → 단순 재전송 1회 시도")
+            await self._emit_status(f"[{label}] 실패 후 fault 조회 실패 → 1초 대기 후 재전송")
+            await asyncio.sleep(1.0)
             return True
 
         # fault=0 이어도 OUTPUT_OFF 에서 명시적 ERR(04)가 왔다면
@@ -964,7 +1013,8 @@ class AsyncDCPulse:
                 await self._emit_status(f"[{label}] fault=0 이지만 ERR(04) 지속 → 세션 재연결 후 재전송")
                 return await self._reopen_session_for_retry(label)
 
-            await self._emit_status(f"[{label}] 실패 후 fault=0 → 단순 재전송 1회 시도")
+            await self._emit_status(f"[{label}] 실패 후 fault=0 → 1초 대기 후 재전송")
+            await asyncio.sleep(1.0)
             return True
 
         # 4) 실제 fault면 reset 시도
@@ -1649,6 +1699,19 @@ class AsyncDCPulse:
                         if now - _piv_last >= self._poll_period_s:
                             _piv_last = time.monotonic()
                             res = await self.read_output_piv()
+                            # ✅ [EL: 2026-08-25 런4] 플라즈마 중 시리얼 NAK 간헐 폭주 →
+                            #    연속 5회(≈25초) 읽기 실패 시 1회 경고(감시 공백 가시화)
+                            if res and "eng" in res:
+                                if getattr(self, "_poll_nak_n", 0) >= 5:
+                                    await self._emit_status("[INFO] 텔레메트리 읽기 회복 (NAK 연속 종료)")
+                                self._poll_nak_n = 0
+                            else:
+                                self._poll_nak_n = getattr(self, "_poll_nak_n", 0) + 1
+                                if self._poll_nak_n == 5:
+                                    await self._emit_status(
+                                        "[WARN] 텔레메트리 연속 5회 NAK — DCP 시리얼 라인 노이즈 의심 "
+                                        "(저전류/이탈 감시 공백 중)"
+                                    )
                             if res and "eng" in res:
                                 eng = res["eng"]
                                 p = float(eng.get("P_W", 0.0))

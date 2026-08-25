@@ -1736,6 +1736,15 @@ class ProcessController:
                 action=ActionType.PLC_CMD, params=("SW_RF_SELECT", True),
                 message="Power_select: Power Select ON (SW_RF_SELECT)"
             ))
+            # ✅ [EL: 2026-08-25 런1·2] 릴레이 전환 직후 EnerPulse가 3~6초간
+            #    전 명령 NAK(ERR 0x04) → 첫 통신 전 안정화 대기
+            settle_ms = int(getattr(self._cfg, "PC_POWER_SELECT_SETTLE_MS", 7_000))
+            if settle_ms > 0:
+                steps.append(ProcessStep(
+                    action=ActionType.DELAY, duration=settle_ms,
+                    message=f"Power Select 안정화 대기 ({settle_ms/1000:.0f}초)",
+                    polling=False,
+                ))
 
         # 병렬: DC(연속) + (RF 연속/펄스)만 허용
         want_parallel = (use_dc or use_dc2) and (use_rf or use_rf_pulse)

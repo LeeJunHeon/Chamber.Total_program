@@ -294,7 +294,7 @@ class ChatNotifier(QObject):
         dcdt = self._num(p.get("dc_pulse_duty", p.get("dc_pulse_duty_cycle")))
         if use_dcp or (dcpw is not None or dcfq is not None or dcdt is not None):
             pw_txt = f"{int(dcpw)} W" if dcpw is not None else "—"
-            fq_txt = f"{int(dcfq)} Hz" if dcfq is not None else "keep"
+            fq_txt = f"{int(dcfq)} kHz" if dcfq is not None else "keep"
             dt_txt = f"{int(dcdt)} %" if dcdt is not None else "keep"
             items.append(f"DC Pulse {pw_txt} @ {fq_txt}, {dt_txt}")
 
@@ -305,7 +305,7 @@ class ChatNotifier(QObject):
         rfdt = self._num(p.get("rf_pulse_duty", p.get("rf_pulse_duty_cycle")))
         if use_rfp or (rfpw is not None or rffq is not None or rfdt is not None):
             pw_txt = f"{int(rfpw)} W" if rfpw is not None else "—"
-            fq_txt = f"{int(rffq)} Hz" if rffq is not None else "keep"
+            fq_txt = f"{int(rffq)} kHz" if rffq is not None else "keep"
             dt_txt = f"{int(rfdt)} %" if rfdt is not None else "keep"
             items.append(f"RF Pulse {pw_txt} @ {fq_txt}, {dt_txt}")
 

@@ -382,6 +382,7 @@ SUPPORTS_DCPULSE = True         # DC Pulse (CH1/CH2 공용, 채널별로 끄려�
 PC_PRESSURE_WAIT_TIMEOUT_S = 180.0        # WAIT_PRESSURE 최대 대기 시간(초)
 PC_WORKING_PRESSURE_BOOST_TARGET = 10.0   # working_pressure가 이 값보다 작으면 SP2로 먼저 부스팅
 PC_RF_PULSE_POST_ON_DELAY_MS = 20_000     # RF Pulse ON 직후 안정화 대기(ms)
+PC_POWER_SELECT_SETTLE_MS = 7_000         # SW_RF_SELECT 전환 후 DCP 통신 안정화 대기(ms, 실측 NAK 3~6초)
 PC_POWER_OFF_TIMEOUT_MS = 240_000         # shutdown 중 power off 토큰 대기 최소(ms)
 
 
