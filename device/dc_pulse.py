@@ -524,6 +524,7 @@ class AsyncDCPulse:
                 return False
 
         # 2) (옵션) freq/duty 모두 숫자면 off_time_us를 계산해서 0x67로 전송
+        want_off_raw: Optional[int] = None   # ✅ OFF_TIME 검증 기준값 (미전송 시 None)
         if not _is_keep(freq) and freq is not None:
             f_khz = float(freq)
             ok_f = await self.set_pulse_freq_khz(f_khz)  # 0x66
@@ -545,17 +546,28 @@ class AsyncDCPulse:
                         f"Off가 {off_time_us:.1f}us로 10.0us 상한 초과 → 장비가 10.0us로 클램프"
                     )
 
+                # ✅ [EL-028] Off Time은 주파수 종속 파라미터(20kHz→최대10.0us, 50kHz→8.0us).
+                #    주파수 변경 직후에는 장비 내부 재계산이 끝나지 않아 0x67이 ACK만 되고
+                #    적용되지 않는 현상 실측(8/25 21:10 런: freq 적용 O, off 미적용).
+                #    → 주파수 반영이 끝날 시간을 준 뒤 Off Time을 보낸다.
+                _settle_s = float(self._cfg_int("DCP_FREQ_SETTLE_MS", 500)) / 1000.0
+                if _settle_s > 0:
+                    await asyncio.sleep(_settle_s)
+
                 # 장비 스펙: DC=9, 1.0~10.0us → 10~100 (x10 스케일)
                 if d_pct >= 100.0 or off_time_us < 1.0:
                     ok_dc = await self.set_off_time_dc()         # 0x67, DC=9
                     if not ok_dc:
                         await self._emit_status("OFF_TIME(DC) 설정 실패 → OUTPUT_ON 시퀀스 중단")
                         return False
+                    want_off_raw = 9
                 else:
                     ok_off = await self.set_off_time_us(off_time_us)  # 0x67
                     if not ok_off:
                         await self._emit_status("OFF_TIME 설정 실패 → OUTPUT_ON 시퀀스 중단")
                         return False
+                    # set_off_time_us와 동일한 환산/클램프 (검증 기준값)
+                    want_off_raw = min(100, max(10, int(round(off_time_us * 10.0))))
             # duty가 keep/None이면 주파수만 적용(Off Time 유지)
 
         # duty만 숫자인 경우(주파수 미지정)는 off_time_us 계산 불가 → 유지
@@ -589,6 +601,45 @@ class AsyncDCPulse:
                 await self._emit_failed(
                     "PULSE_FREQ",
                     f"쓰기 ACK 후에도 미적용 지속 (요청 {want_khz}kHz) — 장비 마스터/패널 상태 점검 필요"
+                )
+                return False
+
+        # ✅ [EL-028] OFF_TIME(duty) read-back 검증 — freq와 동일 패턴.
+        #    기존에는 검증이 freq에만 있어, duty가 미적용이어도 조용히 다른 듀티로 운전됐다.
+        if want_off_raw is not None:
+            off_applied = False
+            for attempt in (1, 2):
+                got_raw = await self.read_off_time_raw()
+                if got_raw is None:
+                    await self._emit_status("[VERIFY] OFF_TIME read-back 실패(통신) → 검증 생략")
+                    off_applied = True
+                    break
+                if int(got_raw) == int(want_off_raw):
+                    off_applied = True
+                    break
+                if attempt == 1:
+                    await self._emit_status(
+                        f"[VERIFY] OFF_TIME 미적용 감지 "
+                        f"(요청 raw={want_off_raw} ≠ 장비 raw={got_raw}) → 0.5s 후 재기록"
+                    )
+                    await asyncio.sleep(0.5)
+                    _ok_rw = (await self.set_off_time_dc()) if want_off_raw == 9 \
+                        else (await self.set_off_time_us(want_off_raw / 10.0))
+                    if not _ok_rw:
+                        break
+                    await asyncio.sleep(0.5)
+            if not off_applied:
+                _w = "DC" if want_off_raw == 9 else f"{want_off_raw / 10.0:.1f}us"
+                _g = "DC" if int(got_raw) == 9 else f"{int(got_raw) / 10.0:.1f}us"
+                _duty_real = None
+                if not _is_keep(freq) and freq is not None and int(got_raw) != 9:
+                    _p = 1000.0 / max(1e-6, float(freq))
+                    _duty_real = (_p - int(got_raw) / 10.0) / _p * 100.0
+                await self._emit_failed(
+                    "OFF_TIME",
+                    f"쓰기 ACK 후에도 미적용 지속 (요청 {_w} ≠ 장비 {_g}"
+                    + (f", 실제 듀티 {_duty_real:.0f}%" if _duty_real is not None else "")
+                    + ") — 주파수별 Off Time 상한/Key Lock/마스터 상태 점검 필요"
                 )
                 return False
 

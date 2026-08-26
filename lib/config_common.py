@@ -303,6 +303,8 @@ DCP_CONNECT_TIMEOUT_S = 3.0
 
 DCP_TIMEOUT_MS = 2500
 DCP_GAP_MS = 150   # 명령 사이 최소 간격(ms). 매뉴얼 권장 100ms↑. gap 실제 적용 후 1000→150 (시퀀스 지연 방지)
+DCP_FREQ_SETTLE_MS = 500   # PULSE_FREQ 변경 후 OFF_TIME 전송까지 대기(ms). Off Time은 주파수 종속이라
+                           # 재계산 전에 보내면 ACK만 되고 미적용됨 (2026-08-25 실측)
 DCP_WATCHDOG_INTERVAL_MS = 1000
 DCP_RECONNECT_BACKOFF_START_MS = 1000
 DCP_RECONNECT_BACKOFF_MAX_MS = 10000
