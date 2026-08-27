@@ -625,3 +625,20 @@ GDRIVE_REF_P_WARN_W     = 20.0  # Reflected Power 경고 기준 (W)
 # ======================================================================
 PROCESS_MONITOR_TOLERANCE_FLOW_SCCM     = 0.3   # 가스 유량 ±sccm
 PROCESS_MONITOR_TOLERANCE_PRESSURE_MTORR = 0.3  # 작업압 ±mTorr
+
+
+# ======================================================================
+# 로봇 ETA (예상 종료 시간) 전달 설정
+# ======================================================================
+# START_SPUTTER 응답의 min_total_s, GET_SPUTTER_STATUS 응답의 eta.CHn.remaining_s
+# 계산에 사용된다. 문제 발생 시 ETA_ENABLED=false 로 두면 항상 null이 나가서
+# 기존 동작(로봇이 idle 폴링)으로 즉시 복귀한다.
+ETA_ENABLED = True
+
+# 메인 공정 종료 -> Chamber_n 이 idle 로 바뀔 때까지 걸리는 시간(초).
+# 파워 ramp-down + 가스 OFF + CLEANUP + COOLDOWN(60s) 포함. 채널별 실측값 사용.
+ETA_TAIL_S = 120.0
+
+# START_SPUTTER 의 min_total_s(하한 보증) 계산용 tail(초).
+# "절대 이보다 빨리 끝나지 않는다"를 보장해야 하므로 ETA_TAIL_S보다 짧게 잡는다.
+ETA_TAIL_MIN_S = 90.0

@@ -10,6 +10,7 @@ import asyncio
 from dataclasses import dataclass
 from enum import Enum
 from time import monotonic_ns
+from datetime import datetime
 from typing import Optional, List, Tuple, Dict, Any, Callable
 from errors.app_error import AppError
 from lib.config_common import SHUTDOWN_STEP_TIMEOUT_MS, SHUTDOWN_STEP_GAP_MS, RGA_STEP_TIMEOUT_MS
@@ -324,6 +325,12 @@ class ProcessController:
         self._countdown_start_ns: int = 0
         self._countdown_base_msg: str = ""
 
+        # ✅ 로봇 ETA(예상 종료 시각)
+        # - Shutter Delay(없으면 Main Process) 진입 시점에 1회 확정된다.
+        # - 확정 전 / 무효화 후에는 0 이며, 이때 eta_remaining_s()는 None을 반환한다.
+        self._eta_end_ns: int = 0
+        self._run_id: str = ""
+
         # ✅ 실제 진행 시간 누적(ms)
         # - Shutter Delay 구간에서 실제로 흐른 시간
         # - Main Process 구간에서 실제로 흐른 시간
@@ -418,6 +425,10 @@ class ProcessController:
             # ✅ 실제 시간 누적 초기화(이번 런 기준)
             self._actual_shutter_delay_ms = 0
             self._actual_process_time_ms = 0
+
+            # ✅ 로봇 ETA: 이번 런 식별자 발급 + 종료 예정 시각 초기화
+            self._run_id = f"CH{self._ch}-{datetime.now():%Y%m%d-%H%M%S}"
+            self._eta_end_ns = 0
 
             self.process_sequence = self._create_process_sequence(self.current_params)
 
@@ -566,6 +577,10 @@ class ProcessController:
         self.current_params.clear()
         self.process_sequence.clear()
         self._current_step_idx = -1
+
+        # ✅ 로봇 ETA 초기화
+        self._eta_end_ns = 0
+        self._run_id = ""
 
         # ✅ 추가: 리셋 시에도 초기화
         self._process_failed = False
@@ -796,6 +811,11 @@ class ProcessController:
                     return
 
                 step = self.process_sequence[self._current_step_idx]
+
+                # ✅ 로봇 ETA: Shutter Delay(없으면 Main Process) 진입 시 1회 확정
+                if self._eta_end_ns <= 0:
+                    self._try_confirm_eta(step)
+
                 self._emit_state(step.message)
                 self._emit_log("Process",
                                f"[{'종료절차' if self._shutdown_in_progress else '공정'} "
@@ -1159,6 +1179,112 @@ class ProcessController:
         self._countdown_start_ns = 0
         self._countdown_base_msg = ""
 
+    # ==================================================================
+    # 로봇 ETA (예상 종료 시간)
+    # ==================================================================
+    # 접두사로 "확정 시점"을 판별한다.
+    #  - Shutter Delay 가 있으면 거기서, 없으면(0분) 메인 공정에서 확정된다.
+    #  - 중간 파워 변경으로 구간이 쪼개져도("... (변경 전)") 첫 조각에서 잡히고,
+    #    남은 조각들은 _eta_sum_delay_from()에서 함께 합산되므로 정확하다.
+    _ETA_CONFIRM_PREFIXES = ("Shutter Delay", "메인 공정 진행")
+
+    @property
+    def run_id(self) -> str:
+        """이번 런의 식별자. 공정이 바뀌면 값이 달라진다."""
+        return self._run_id
+
+    def _eta_sum_delay_from(self, idx: int) -> float:
+        """idx(포함) 이후 모든 DELAY 스텝의 duration 합(초)."""
+        total_ms = 0
+        for st in self.process_sequence[idx:]:
+            if st.action is ActionType.DELAY and not st.no_wait and st.duration:
+                total_ms += int(st.duration)
+        return total_ms / 1000.0
+
+    def _try_confirm_eta(self, step: ProcessStep) -> None:
+        """
+        Shutter Delay(없으면 메인 공정) 진입 시 종료 예정 시각을 1회 확정한다.
+        확정 이후 구간은 전부 타이머이므로 남은 시간은 단순 뺄셈이 된다.
+        """
+        if self._shutdown_in_progress or self._aborting or self._in_emergency:
+            return
+        if step.action is not ActionType.DELAY:
+            return
+
+        msg = (step.message or "").strip()
+        if not msg.startswith(self._ETA_CONFIRM_PREFIXES):
+            return
+
+        try:
+            if not bool(getattr(self._cfg, "ETA_ENABLED", True)):
+                return
+
+            remain_s = self._eta_sum_delay_from(self._current_step_idx)
+            tail_s = float(getattr(self._cfg, "ETA_TAIL_S", 120.0))
+            total_s = max(0.0, remain_s + tail_s)
+
+            self._eta_end_ns = monotonic_ns() + int(total_s * 1_000_000_000)
+            self._emit_log(
+                "Process",
+                f"[ETA] 종료 예정 확정: {total_s:.0f}s "
+                f"(타이머 {remain_s:.0f}s + tail {tail_s:.0f}s)"
+            )
+        except Exception as e:
+            # ETA는 부가 기능이므로 어떤 경우에도 공정을 방해하지 않는다.
+            self._eta_end_ns = 0
+            self._emit_log("Process", f"[ETA] 확정 실패(무시): {e}")
+
+    def eta_remaining_s(self) -> Optional[int]:
+        """
+        로봇에 내려줄 '남은 초'. 순수 메모리 계산이며 I/O가 없다.
+        확정 전이거나 실패/정지/종료 절차 중이면 None(=응답에서 null).
+        """
+        try:
+            if not bool(getattr(self._cfg, "ETA_ENABLED", True)):
+                return None
+            if not self.is_running:
+                return None
+            if self._eta_end_ns <= 0:
+                return None
+            if (self._shutdown_in_progress or self._stop_requested
+                    or self._aborting or self._in_emergency or self._process_failed):
+                return None
+            return max(0, round((self._eta_end_ns - monotonic_ns()) / 1e9))
+        except Exception:
+            return None
+
+    def estimate_min_total_s(self, rows: list) -> Optional[int]:
+        """
+        START_SPUTTER 응답용 '하한 보증'(초).
+        조건 대기(IG/MFC/압력/램프업)를 전부 0초로 두고 타이머 구간만 더하므로,
+        실제 공정은 반드시 이 값보다 오래 걸린다.
+        rows: 레시피 행 목록(각 행에 shutter_delay/process_time, 단위=분)
+        """
+        try:
+            cfg_mod = self._cfg
+            if not bool(getattr(cfg_mod, "ETA_ENABLED", True)):
+                return None
+            if not rows:
+                return None
+
+            def _f(v) -> float:
+                try:
+                    txt = str(v).strip()
+                    return float(txt) if txt else 0.0
+                except Exception:
+                    return 0.0
+
+            timer_s = 0.0
+            for row in rows:
+                row = row or {}
+                timer_s += _f(row.get("shutter_delay", 0)) * 60.0
+                timer_s += _f(row.get("process_time", 0)) * 60.0
+
+            tail_s = float(getattr(cfg_mod, "ETA_TAIL_MIN_S", 90.0))
+            return max(0, round(timer_s + tail_s))
+        except Exception:
+            return None
+
     def _apply_polling(self, active: bool) -> None:
         active = bool(active)
         targets = self._compute_polling_targets(active)
@@ -1290,6 +1416,10 @@ class ProcessController:
             return
 
         self._shutdown_in_progress = True
+
+        # ✅ 로봇 ETA 무효화: 원래 계획이 폐기되고 종료 시퀀스로 교체되므로
+        self._eta_end_ns = 0
+
         self._emit_log("Process", "정지 요청 - 안전한 종료 절차를 시작합니다.")
     
         # ⬇️ 폴링 즉시 OFF (로그는 1회만 출력됨)

@@ -362,6 +362,13 @@
     "PROCESS_MONITOR_TOLERANCE_FLOW_SCCM": 0.3,        // 가스 유량 ±sccm
     "PROCESS_MONITOR_TOLERANCE_PRESSURE_MTORR": 0.3,   // 작업압 ±mTorr (30 mTorr 기준 ≈ ±1%)
 
+    // ── 로봇 ETA (예상 종료 시간) ──
+    // START_SPUTTER 응답의 min_total_s, GET_SPUTTER_STATUS 응답의 eta 계산에 사용.
+    // 문제 발생 시 ETA_ENABLED를 false로 두면 항상 null이 나가서 기존 동작으로 복귀합니다.
+    "ETA_ENABLED": true,                   // ETA 기능 사용 여부
+    "ETA_TAIL_S": 120.0,                   // 메인 공정 종료 → idle 까지 (초). 실측값
+    "ETA_TAIL_MIN_S": 90.0,                // 하한 보증용 tail (초). ETA_TAIL_S보다 짧게
+
     "INVENTORY_API_URL": "https://vanam.synology.me/inventory/api/chamber-slots"
   },
 
@@ -399,7 +406,11 @@
     "PROCESS_GUN_SHUTTERS": [],                        // 사용하는 건 셔터 목록 (CH1은 없음)
     "PROCESS_PRESSURE_CONTROL_SP_ON_CMD": "SP3_ON",    // 압력 제어 Set-Point 명령
     "PROCESS_PRESSURE_CONTROL_SP_LABEL": "SP3",        // 압력 제어 Set-Point 표시 이름
-    "PROCESS_PRESSURE_CONTROL_SP_INDEX": 3              // 압력 제어 Set-Point 번호
+    "PROCESS_PRESSURE_CONTROL_SP_INDEX": 3,             // 압력 제어 Set-Point 번호
+
+    // ── 로봇 ETA (CH1 전용) ──
+    "ETA_TAIL_S": 120.0,                   // 메인 공정 종료 → idle 까지 (초)
+    "ETA_TAIL_MIN_S": 90.0                 // 하한 보증용 tail (초)
   },
 
 
@@ -448,6 +459,10 @@
     "PROCESS_PRESSURE_CONTROL_SP_INDEX": 4,          // 압력 제어 Set-Point 번호
 
     "PC_RF_PULSE_POST_ON_DELAY_MS": 30000,           // RF Pulse ON 후 안정화 대기 (ms). CH1과 달리 30초로 설정
-    "RFPULSE_REFP_WARN_WATTS": 5.0                   // REFP가 이 값 이상이면 즉시 챗 경고 알림 (공정은 계속 진행)
+    "RFPULSE_REFP_WARN_WATTS": 5.0,                  // REFP가 이 값 이상이면 즉시 챗 경고 알림 (공정은 계속 진행)
+
+    // ── 로봇 ETA (CH2 전용) ──
+    "ETA_TAIL_S": 120.0,                   // 메인 공정 종료 → idle 까지 (초)
+    "ETA_TAIL_MIN_S": 90.0                 // 하한 보증용 tail (초)
   }
 }

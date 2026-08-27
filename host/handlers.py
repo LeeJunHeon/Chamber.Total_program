@@ -438,6 +438,64 @@ class HostHandlers:
 
         return None
 
+    # ================== 로봇 ETA (예상 종료 시간) ==================
+    def _eta_min_total_s(self, chamber) -> int | None:
+        """
+        START_SPUTTER 응답용 '하한 보증'(초).
+        레시피의 타이머 구간(shutter_delay + process_time)만 더한 값이라
+        실제 공정은 반드시 이보다 오래 걸린다. 로봇은 이 시간 동안
+        느린 주기로 폴링하면 된다.
+        """
+        try:
+            pc = getattr(chamber, "process_controller", None)
+            if pc is None:
+                return None
+
+            rows = list(getattr(chamber, "process_queue", None) or [])
+            if not rows:
+                return None
+
+            # 아직 진행하지 않은 행부터 합산 (시작 직후에는 index=-1 → 전체)
+            idx = int(getattr(chamber, "current_process_index", -1))
+            rows = rows[max(0, idx):]
+
+            return pc.estimate_min_total_s(rows)
+        except Exception:
+            # ETA는 부가 정보이므로 START 응답 자체를 실패시키지 않는다.
+            return None
+
+    def _build_eta(self) -> Json:
+        """
+        GET_SPUTTER_STATUS 응답의 eta 블록.
+        - remaining_s: Shutter Delay 진입 후에만 숫자, 그 외에는 null
+        - run_id     : 런 식별자. 값이 바뀌면 로봇은 들고 있던 숫자를 버려야 한다
+        순수 메모리 읽기이며 PLC/파일 접근이 없다.
+        """
+        out: Json = {}
+        for ch in (1, 2):
+            entry: Json = {"remaining_s": None, "run_id": None}
+            try:
+                rt = getattr(self.ctx, f"ch{ch}", None)
+                pc = getattr(rt, "process_controller", None) if rt is not None else None
+                if pc is None:
+                    out[f"CH{ch}"] = entry
+                    continue
+
+                entry["run_id"] = getattr(pc, "run_id", "") or None
+
+                # 큐 모드: 마지막 행이 아니면 로봇 진입 시점이 확정되지 않는다
+                queue = list(getattr(rt, "process_queue", None) or [])
+                idx = int(getattr(rt, "current_process_index", -1))
+                if queue and idx < len(queue) - 1:
+                    out[f"CH{ch}"] = entry
+                    continue
+
+                entry["remaining_s"] = pc.eta_remaining_s()
+            except Exception:
+                pass
+            out[f"CH{ch}"] = entry
+        return out
+
     # ================== CH1,2 상태 조회 ==================
     async def get_sputter_status(self, payload: Json) -> Json:
         """
@@ -594,6 +652,7 @@ class HostHandlers:
                     Chamber_2=chamber_2,
                     Loadlock_Chamber=loadlock,
                     vacuum=vacuum,
+                    eta=self._build_eta(),
                 )
 
         except Exception as e:
@@ -743,7 +802,11 @@ class HostHandlers:
 
                 try:
                     await chamber.start_with_recipe_string(recipe)
-                    return self._ok("SPUTTER START OK", ch=ch)
+                    return self._ok(
+                        "SPUTTER START OK",
+                        ch=ch,
+                        min_total_s=self._eta_min_total_s(chamber),
+                    )
                 except RuntimeError as e:
                     # 런타임 내부 프리플라이트/쿨다운/중복 실행 등 명시적 거절
                     _msg = str(e)
