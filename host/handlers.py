@@ -468,20 +468,17 @@ class HostHandlers:
         """
         GET_SPUTTER_STATUS 응답의 eta 블록.
         - remaining_s: Shutter Delay 진입 후에만 숫자, 그 외에는 null
-        - run_id     : 런 식별자. 값이 바뀌면 로봇은 들고 있던 숫자를 버려야 한다
         순수 메모리 읽기이며 PLC/파일 접근이 없다.
         """
         out: Json = {}
         for ch in (1, 2):
-            entry: Json = {"remaining_s": None, "run_id": None}
+            entry: Json = {"remaining_s": None}
             try:
                 rt = getattr(self.ctx, f"ch{ch}", None)
                 pc = getattr(rt, "process_controller", None) if rt is not None else None
                 if pc is None:
                     out[f"CH{ch}"] = entry
                     continue
-
-                entry["run_id"] = getattr(pc, "run_id", "") or None
 
                 # 큐 모드: 마지막 행이 아니면 로봇 진입 시점이 확정되지 않는다
                 queue = list(getattr(rt, "process_queue", None) or [])

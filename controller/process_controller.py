@@ -10,7 +10,6 @@ import asyncio
 from dataclasses import dataclass
 from enum import Enum
 from time import monotonic_ns
-from datetime import datetime
 from typing import Optional, List, Tuple, Dict, Any, Callable
 from errors.app_error import AppError
 from lib.config_common import SHUTDOWN_STEP_TIMEOUT_MS, SHUTDOWN_STEP_GAP_MS, RGA_STEP_TIMEOUT_MS
@@ -329,7 +328,6 @@ class ProcessController:
         # - Shutter Delay(없으면 Main Process) 진입 시점에 1회 확정된다.
         # - 확정 전 / 무효화 후에는 0 이며, 이때 eta_remaining_s()는 None을 반환한다.
         self._eta_end_ns: int = 0
-        self._run_id: str = ""
 
         # ✅ 실제 진행 시간 누적(ms)
         # - Shutter Delay 구간에서 실제로 흐른 시간
@@ -426,8 +424,7 @@ class ProcessController:
             self._actual_shutter_delay_ms = 0
             self._actual_process_time_ms = 0
 
-            # ✅ 로봇 ETA: 이번 런 식별자 발급 + 종료 예정 시각 초기화
-            self._run_id = f"CH{self._ch}-{datetime.now():%Y%m%d-%H%M%S}"
+            # ✅ 로봇 ETA: 종료 예정 시각 초기화
             self._eta_end_ns = 0
 
             self.process_sequence = self._create_process_sequence(self.current_params)
@@ -580,7 +577,6 @@ class ProcessController:
 
         # ✅ 로봇 ETA 초기화
         self._eta_end_ns = 0
-        self._run_id = ""
 
         # ✅ 추가: 리셋 시에도 초기화
         self._process_failed = False
@@ -1187,11 +1183,6 @@ class ProcessController:
     #  - 중간 파워 변경으로 구간이 쪼개져도("... (변경 전)") 첫 조각에서 잡히고,
     #    남은 조각들은 _eta_sum_delay_from()에서 함께 합산되므로 정확하다.
     _ETA_CONFIRM_PREFIXES = ("Shutter Delay", "메인 공정 진행")
-
-    @property
-    def run_id(self) -> str:
-        """이번 런의 식별자. 공정이 바뀌면 값이 달라진다."""
-        return self._run_id
 
     def _eta_sum_delay_from(self, idx: int) -> float:
         """idx(포함) 이후 모든 DELAY 스텝의 duration 합(초)."""

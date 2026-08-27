@@ -409,6 +409,7 @@
     "PROCESS_PRESSURE_CONTROL_SP_INDEX": 3,             // 압력 제어 Set-Point 번호
 
     // ── 로봇 ETA (CH1 전용) ──
+    "ETA_ENABLED": true,                   // ETA 기능 사용 여부 (CH1)
     "ETA_TAIL_S": 120.0,                   // 메인 공정 종료 → idle 까지 (초)
     "ETA_TAIL_MIN_S": 90.0                 // 하한 보증용 tail (초)
   },
@@ -462,6 +463,7 @@
     "RFPULSE_REFP_WARN_WATTS": 5.0,                  // REFP가 이 값 이상이면 즉시 챗 경고 알림 (공정은 계속 진행)
 
     // ── 로봇 ETA (CH2 전용) ──
+    "ETA_ENABLED": true,                   // ETA 기능 사용 여부 (CH2)
     "ETA_TAIL_S": 120.0,                   // 메인 공정 종료 → idle 까지 (초)
     "ETA_TAIL_MIN_S": 90.0                 // 하한 보증용 tail (초)
   }
