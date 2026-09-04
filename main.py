@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import os
 import asyncio
 import re
 import atexit
@@ -26,8 +27,9 @@ if sys.platform.startswith("win"):
 from host.setup import install_host
 from controller.runtime_state import runtime_state
 
-from PySide6.QtWidgets import QApplication, QWidget, QStackedWidget, QPlainTextEdit, QTextEdit
-from PySide6.QtCore import Qt, QTimer
+from PySide6.QtWidgets import (QApplication, QWidget, QStackedWidget, QPlainTextEdit,
+                               QTextEdit, QPushButton, QFileDialog, QDialog)
+from PySide6.QtCore import Qt, QTimer, QRect, QSettings
 from itertools import chain  # ← 추가
 from PySide6.QtGui import QCloseEvent
 from qasync import QEventLoop
@@ -415,13 +417,13 @@ class MainWindow(QWidget):
         try:
             # ── Pre-Sputter: 챔버 전용 런타임 2개로 분리 ───────────────────────────
             self.pre_ch1 = PreSputterRuntime(
-                ch1=self.ch1, ch2=None, chat=None, hh=6, mm=0, parallel=False, ui=self.ui
+                ch1=self.ch1, ch2=None, chat=self.chat_ch1, hh=6, mm=0, parallel=False, ui=self.ui
             )
             self.pre_ch1.set_pc_logger(self._append_pc_log_autoscroll)
             self.pre_ch1.start_daily()   # ← 프로그램 시작 시 CH1 자동 예약
 
             self.pre_ch2 = PreSputterRuntime(
-                ch1=None, ch2=self.ch2, chat=None, hh=6, mm=0, parallel=False, ui=self.ui
+                ch1=None, ch2=self.ch2, chat=self.chat_ch2, hh=6, mm=0, parallel=False, ui=self.ui
             )
             self.pre_ch2.set_pc_logger(self._append_pc_log_autoscroll)
             # CH2는 기본 자동 예약하지 않음
@@ -456,6 +458,10 @@ class MainWindow(QWidget):
             # ★ 'Remaining Time' → '예약 상태' 표시로 용도 변경 (라벨은 런타임에 변경)
             with contextlib.suppress(Exception):
                 self.ui.preSputter_remainigTime_label.setText("Reservation")
+
+            # ★ Pre-Sputter 전용 레시피 선택 위젯(코드로 동적 생성) + 저장된 경로 복원
+            self._build_presputter_recipe_widgets()
+            self._load_presputter_recipe_paths()
 
             self._refresh_presputter_ui()
         except Exception as e:
@@ -1346,6 +1352,132 @@ class MainWindow(QWidget):
             w = getattr(self.ui, "preSputter_LeftTime_edit", None)
             if w is not None:
                 w.setPlainText(left)
+            w = getattr(self, "preSputter_Recipe_edit", None)
+            if w is not None and _qt_is_valid(w):
+                w.setPlainText(self._presputter_recipe_display(rt))
+
+    # ─────────────────────────────────────────────────────────────────
+    # Pre-Sputter 전용 레시피
+    # ─────────────────────────────────────────────────────────────────
+    PRESPUTTER_SETTINGS_ORG = "VanaM"
+    PRESPUTTER_SETTINGS_APP = "CH1_2_Program"
+
+    def _presputter_settings(self) -> QSettings:
+        return QSettings(self.PRESPUTTER_SETTINGS_ORG, self.PRESPUTTER_SETTINGS_APP)
+
+    def _presputter_recipe_display(self, rt) -> str:
+        """Recipe edit에 표시할 문자열."""
+        path = getattr(rt, "recipe_path", None) if rt else None
+        if not path:
+            return "UI 현재값 사용"
+        name = os.path.basename(path)
+        if not os.path.exists(path):
+            return f"{name} (파일 없음)"
+        return name
+
+    def _build_presputter_recipe_widgets(self) -> None:
+        """Pre-Sputter 그룹 하단 빈 영역에 Recipe 버튼/표시 위젯을 동적 생성."""
+        with contextlib.suppress(Exception):
+            parent = self.ui.preSputter_Start_button.parentWidget()
+
+            self.preSputter_Recipe_button = QPushButton("Recipe", parent)
+            self.preSputter_Recipe_button.setObjectName("preSputter_Recipe_button")
+            self.preSputter_Recipe_button.setGeometry(QRect(560, 350, 91, 31))
+            self.preSputter_Recipe_button.clicked.connect(self._on_presputter_recipe_clicked)
+
+            self.preSputter_Recipe_edit = QPlainTextEdit(parent)
+            self.preSputter_Recipe_edit.setObjectName("preSputter_Recipe_edit")
+            self.preSputter_Recipe_edit.setGeometry(QRect(560, 385, 201, 31))
+            self.preSputter_Recipe_edit.setReadOnly(True)
+            self.preSputter_Recipe_edit.setPlainText("UI 현재값 사용")
+
+            self.preSputter_Recipe_button.show()
+            self.preSputter_Recipe_edit.show()
+
+    def _load_presputter_recipe_paths(self) -> None:
+        """QSettings에 저장된 Pre-Sputter 레시피 경로를 복원해 런타임에 주입."""
+        with contextlib.suppress(Exception):
+            st = self._presputter_settings()
+            for key, rt in (("presputter/recipe_ch1", self.pre_ch1),
+                            ("presputter/recipe_ch2", self.pre_ch2)):
+                if not rt:
+                    continue
+                path = st.value(key, "", type=str) or ""
+                if not path:
+                    continue
+                # ★ 파일이 없어도 경로는 유지(표시에 '(파일 없음)' 접미사)
+                rt.set_recipe_path(path)
+                if not os.path.exists(path):
+                    self._broadcast_log("Auto", f"PreSputter 레시피 파일 없음: {path}")
+
+    def _save_presputter_recipe_path(self, ch: int, path: str) -> None:
+        with contextlib.suppress(Exception):
+            st = self._presputter_settings()
+            st.setValue(f"presputter/recipe_ch{int(ch)}", path or "")
+            st.sync()
+
+    def _on_presputter_recipe_clicked(self) -> None:
+        ch = self._selected_presputter_ch()
+        rt = self.pre_ch1 if ch == 1 else self.pre_ch2
+        if not rt:
+            return
+        self._loop.create_task(self._pick_presputter_recipe(ch, rt))
+
+    async def _pick_presputter_recipe(self, ch: int, rt) -> None:
+        """레시피 파일 선택(네이티브 다이얼로그 우회 — UI 멈춤 방지)."""
+        cur = getattr(rt, "recipe_path", None) or ""
+        start_dir = os.path.dirname(cur) if cur else ""
+
+        dlg = QFileDialog(
+            self, f"CH{ch} Pre-Sputter 레시피 선택", "",
+            "Recipe Files (*.csv *.xlsx);;CSV Files (*.csv);;Excel Files (*.xlsx);;All Files (*.*)",
+        )
+        dlg.setFileMode(QFileDialog.ExistingFile)
+        with contextlib.suppress(Exception):
+            dlg.setOption(QFileDialog.Option.DontUseNativeDialog, True)
+        with contextlib.suppress(Exception):
+            dlg.setOption(QFileDialog.DontUseNativeDialog, True)
+        with contextlib.suppress(Exception):
+            dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            dlg.setWindowModality(Qt.WindowModality.WindowModal)
+
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future[str] = loop.create_future()
+
+        def _done(result: int):
+            if fut.done():
+                return
+            try:
+                if result == QDialog.Accepted and dlg.selectedFiles():
+                    fut.set_result(dlg.selectedFiles()[0])
+                else:
+                    fut.set_result("")  # 취소 → 기존 값 유지
+            finally:
+                with contextlib.suppress(Exception):
+                    dlg.finished.disconnect(_done)
+                dlg.deleteLater()
+
+        dlg.finished.connect(_done)
+        dlg.open()
+        if start_dir:
+            QTimer.singleShot(50, lambda: dlg.setDirectory(start_dir) if _qt_is_valid(dlg) else None)
+
+        try:
+            path = await fut
+        finally:
+            if _qt_is_valid(dlg):
+                with contextlib.suppress(Exception):
+                    dlg.close()
+                with contextlib.suppress(Exception):
+                    dlg.deleteLater()
+
+        if not path:
+            return  # ★ 취소 = 변경 없음
+
+        rt.set_recipe_path(path)
+        self._save_presputter_recipe_path(ch, path)
+        self._broadcast_log("Auto", f"PreSputter CH{ch} 레시피 지정: {path}")
+        self._refresh_presputter_ui()
 
     def _on_presputter_reserve_clicked(self) -> None:
         ch = self._selected_presputter_ch()

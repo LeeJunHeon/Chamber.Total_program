@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import os
 from datetime import datetime, timedelta
 from typing import Optional, Callable
 
@@ -48,6 +49,7 @@ class PreSputterRuntime:
         tick_s: float = 1.0,              # ✅ 추가
         inter_ch_delay_s: float = 5.0,     # ✅ 추가
         ui=None,
+        recipe_path: Optional[str] = None,
     ) -> None:
         self.ch1 = ch1
         self.ch2 = ch2
@@ -82,6 +84,9 @@ class PreSputterRuntime:
         self._left_text: str = "--:--:--"
         self._ui_sink: Optional[Callable[[], None]] = None
 
+        # ★ Pre-Sputter 전용 레시피(.csv/.xlsx). None이면 UI 현재값으로 단발 실행.
+        self._recipe_path: Optional[str] = (recipe_path or None)
+
         # 어떤 챔버용 런타임인지 로그에 표기하려고 라벨 보유
         if ch1 and not ch2:
             self._label = "CH1"
@@ -107,9 +112,22 @@ class PreSputterRuntime:
     def left_text(self) -> str:
         return self._left_text
 
+    @property
+    def recipe_path(self) -> Optional[str]:
+        return self._recipe_path
+
+    def set_recipe_path(self, path: Optional[str]) -> None:
+        """Pre-Sputter 전용 레시피 경로를 지정(None/빈 문자열이면 UI 현재값 사용)."""
+        self._recipe_path = (path or None)
+
     def set_ui_sink(self, fn: Callable[[], None]) -> None:
         """상태가 바뀔 때마다 호출될 렌더링 콜백(인자 없음)을 주입."""
         self._ui_sink = fn
+
+    def _flush_chat(self) -> None:
+        if self.chat and hasattr(self.chat, "flush"):
+            try: self.chat.flush()
+            except Exception: pass
 
     def _push_ui(self) -> None:
         fn = self._ui_sink
@@ -283,27 +301,46 @@ class PreSputterRuntime:
         self._push_ui()
 
         started = []
-        if self.ch1 and not self.ch1.is_running:
-            ok = self.ch1.start_presputter_from_ui()
-            started.append(("CH1", ok))
-        if self.ch2 and not self.ch2.is_running:
-            ok = self.ch2.start_presputter_from_ui()
-            started.append(("CH2", ok))
+        failed = False
+        # ★ 사용자가 UI에 열어둔 레시피 큐가 이 예약으로 실행되지 않도록 격리
+        snaps = []
+        try:
+            for ch, label in ((self.ch1, "CH1"), (self.ch2, "CH2")):
+                if not ch or ch.is_running:
+                    continue
+                snaps.append((ch, self._snapshot_queue(ch)))
+                if self._recipe_path:
+                    self._log(f"[PreSputter] {label} 레시피 실행: {os.path.basename(self._recipe_path)}")
+                    try:
+                        await ch.start_with_recipe_string(self._recipe_path)
+                        ok = True
+                    except Exception as e:
+                        ok = False
+                        failed = True
+                        self._log(f"[PreSputter] {label} 레시피 시작 실패: {e!r}")
+                else:
+                    self._log(f"[PreSputter] {label} UI 현재값으로 실행")
+                    ok = ch.start_presputter_from_ui()
+                    if not ok:
+                        failed = True
+                started.append((label, ok))
 
-        # 종료까지 감시(둘 다 False가 될 때까지)
-        while (self.ch1 and self.ch1.is_running) or (self.ch2 and self.ch2.is_running):
-            await asyncio.sleep(self.tick_s)
-        self._status_text = f"완료 · 다음 {self._hhmm()}"
-        self._left_text = self._next_left_text()
-        self._push_ui()
-
+            # 종료까지 감시(둘 다 False가 될 때까지)
+            while (self.ch1 and self.ch1.is_running) or (self.ch2 and self.ch2.is_running):
+                await asyncio.sleep(self.tick_s)
+        finally:
+            # ★ 예외/취소에도 반드시 큐를 되돌린다(restore는 동기 함수 — await 금지)
+            for ch, snap in snaps:
+                self._restore_queue(ch, snap)
+            self._status_text = (
+                f"실행 실패 · 다음 {self._hhmm()}" if failed else f"완료 · 다음 {self._hhmm()}"
+            )
+            self._left_text = self._next_left_text()
+            self._push_ui()
 
         pretty = ", ".join([f"{label}:{'OK' if ok else 'FAIL'}" for label, ok in started]) or "None"
         self._log(f"[PreSputter] 병렬 실행 완료 ({pretty})")
-
-        if self.chat and hasattr(self.chat, "flush"):
-            try: self.chat.flush()
-            except Exception: pass
+        self._flush_chat()
 
     async def _run_sequential(self) -> None:
         await self._run_one(self.ch1, "CH1")
@@ -311,36 +348,79 @@ class PreSputterRuntime:
             await asyncio.sleep(self.inter_ch_delay_s)
         await self._run_one(self.ch2, "CH2")
 
+    def _snapshot_queue(self, ch):
+        """실행 직전 챔버의 레시피 큐를 비우고 백업(미지원 챔버면 None)."""
+        fn = getattr(ch, "snapshot_recipe_queue", None)
+        if not callable(fn):
+            return None
+        try:
+            return fn()
+        except Exception:
+            return None
+
+    def _restore_queue(self, ch, snap) -> None:
+        """백업한 레시피 큐를 되돌린다(동기 — finally에서 호출 가능)."""
+        if snap is None:
+            return
+        fn = getattr(ch, "restore_recipe_queue", None)
+        if not callable(fn):
+            return
+        try:
+            fn(snap)
+        except Exception:
+            pass
+
     async def _run_one(self, ch, label: str) -> None:
         if not ch:
             return
         if ch.is_running:
-            self._log(f"[PreSputter] {label} 이미 실행 중 → 건너뜀"); 
-            if self.chat and hasattr(self.chat, "flush"):
-                try: self.chat.flush()
-                except Exception: pass
+            self._log(f"[PreSputter] {label} 이미 실행 중 → 건너뜀")
+            self._flush_chat()
             return
+
         self._status_text = "Pre-Sputter 실행 중"
         self._left_text = "00:00:00"
         self._push_ui()
-        ok = ch.start_presputter_from_ui()
-        if not ok:
-            self._log(f"[PreSputter] {label} 시작 실패"); 
-            if self.chat and hasattr(self.chat, "flush"):
-                try: self.chat.flush()
-                except Exception: pass
-            return
-        while ch.is_running:
-            await asyncio.sleep(self.tick_s)
-        self._status_text = f"완료 · 다음 {self._hhmm()}"
-        self._left_text = self._next_left_text()
-        self._push_ui()
+
+        failed = False
+        # ★ 사용자가 UI에 열어둔 레시피 큐가 이 예약으로 실행되지 않도록 격리
+        snap = self._snapshot_queue(ch)
+        try:
+            if self._recipe_path:
+                self._log(f"[PreSputter] {label} 레시피 실행: {os.path.basename(self._recipe_path)}")
+                try:
+                    await ch.start_with_recipe_string(self._recipe_path)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    # ★ 조용한 폴백 금지: 실패로 끝낸다
+                    failed = True
+                    self._log(f"[PreSputter] {label} 레시피 시작 실패: {e!r}")
+                    return
+            else:
+                self._log(f"[PreSputter] {label} UI 현재값으로 실행")
+                ok = ch.start_presputter_from_ui()
+                if not ok:
+                    failed = True
+                    self._log(f"[PreSputter] {label} 시작 실패")
+                    return
+
+            # 공정이 완전히 끝날 때까지 감시
+            while ch.is_running:
+                await asyncio.sleep(self.tick_s)
+        finally:
+            # ★ 예외/취소/조기 return 어느 경우에도 큐를 되돌린다
+            #    (restore는 동기 함수이므로 finally 안에서 await하지 않는다)
+            self._restore_queue(ch, snap)
+            self._status_text = (
+                f"실행 실패 · 다음 {self._hhmm()}" if failed else f"완료 · 다음 {self._hhmm()}"
+            )
+            self._left_text = self._next_left_text()
+            self._push_ui()
+            self._flush_chat()
 
         self._log(f"[PreSputter] {label} 완료")
-
-        if self.chat and hasattr(self.chat, "flush"):
-            try: self.chat.flush()
-            except Exception: pass
+        self._flush_chat()
 
     # ★ 공개 API: 메인에서 바로 호출할 수 있도록 이름 변경
     def schedule_from_ui(self) -> None:

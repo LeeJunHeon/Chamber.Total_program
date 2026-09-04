@@ -6144,6 +6144,41 @@ class ChamberRuntime:
         if fut is not None and not fut.done():
             fut.set_result((bool(ok), str(reason)))
 
+    # ─────────────────────────────────────────────────────
+    # Pre-Sputter 큐 격리용 공개 API
+    #   사용자가 UI에 열어둔 레시피 큐가 Pre-Sputter 예약 시각에
+    #   본 공정으로 실행되는 것을 막기 위해 임시 보관/복구한다.
+    # ─────────────────────────────────────────────────────
+    def snapshot_recipe_queue(self) -> tuple[list, int]:
+        """현재 로드된 레시피 큐와 인덱스를 백업하고 큐를 비운다."""
+        q = list(getattr(self, "process_queue", []) or [])
+        idx = int(getattr(self, "current_process_index", -1))
+        try:
+            if hasattr(self, "process_queue"):
+                self.process_queue.clear()
+            else:
+                self.process_queue = []
+        except Exception:
+            self.process_queue = []
+        self.current_process_index = -1
+        if q:
+            self.append_log("MAIN", f"[CH{self.ch}] 레시피 큐 {len(q)}건 임시 보관 (Pre-Sputter)")
+        return (q, idx)
+
+    def restore_recipe_queue(self, snap: tuple[list, int]) -> None:
+        """snapshot_recipe_queue()로 백업한 큐를 되돌린다."""
+        try:
+            q, idx = snap
+        except Exception:
+            return
+        if not q:
+            return
+        self.process_queue = list(q)
+        self.current_process_index = int(idx)
+        with contextlib.suppress(Exception):
+            self._update_ui_from_params(self.process_queue[0])
+        self.append_log("MAIN", f"[CH{self.ch}] 레시피 큐 {len(q)}건 복구 완료")
+
     async def start_with_recipe_string(self, recipe: str) -> None:
         """
         Host 진입점(서버/원격 호출용):
