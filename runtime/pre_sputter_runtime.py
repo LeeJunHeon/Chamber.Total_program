@@ -77,6 +77,11 @@ class PreSputterRuntime:
         self._ui = ui # ★ UI 참조 (없으면 None)
         self._ui_bound: bool = False            # ★ 추가: 중복 바인딩 방지
 
+        # ★ 표시 전용 상태(위젯 직접 쓰기 금지: main이 렌더링을 소유)
+        self._status_text: str = "예약 없음"
+        self._left_text: str = "--:--:--"
+        self._ui_sink: Optional[Callable[[], None]] = None
+
         # 어떤 챔버용 런타임인지 로그에 표기하려고 라벨 보유
         if ch1 and not ch2:
             self._label = "CH1"
@@ -94,6 +99,33 @@ class PreSputterRuntime:
         h, m, sec = s // 3600, (s % 3600) // 60, s % 60
         return f"{h:02d}:{m:02d}:{sec:02d}"
 
+    @property
+    def status_text(self) -> str:
+        return self._status_text
+
+    @property
+    def left_text(self) -> str:
+        return self._left_text
+
+    def set_ui_sink(self, fn: Callable[[], None]) -> None:
+        """상태가 바뀔 때마다 호출될 렌더링 콜백(인자 없음)을 주입."""
+        self._ui_sink = fn
+
+    def _push_ui(self) -> None:
+        fn = self._ui_sink
+        if not fn:
+            return
+        try:
+            fn()
+        except Exception:
+            pass
+
+    def _hhmm(self) -> str:
+        return f"{int(self.hh):02d}:{int(self.mm):02d}"
+
+    def _next_left_text(self) -> str:
+        return self._fmt_hms((_next_time_at(self.hh, self.mm) - datetime.now()).total_seconds())
+
     def _set_text(self, w, s: str) -> None:
         if not w: return
         try:
@@ -110,11 +142,9 @@ class PreSputterRuntime:
         # ★ UI 초기 표기
         if self._ui:
             self._set_text(self._ui.preSputter_SetTime_edit, when.strftime("%H:%M"))
-            self._set_text(
-                self._ui.preSputter_LeftTime_edit,
-                self._fmt_hms((when - datetime.now()).total_seconds()),
-            )
-            self._set_text(self._ui.preSputter_remainigTime_edit, "—")
+        self._status_text = f"예약됨 · 매일 {self._hhmm()}"
+        self._left_text = self._fmt_hms((when - datetime.now()).total_seconds())
+        self._push_ui()
 
         try:
             loop = asyncio.get_running_loop()
@@ -129,30 +159,21 @@ class PreSputterRuntime:
             return
         self._ui = ui
 
-        # Start → UI의 ‘시간’으로만 매일 예약 파라미터 갱신 (Base Pressure 무시)
-        try:
-            if hasattr(ui, "preSputter_Start_button"):
-                ui.preSputter_Start_button.clicked.connect(self._on_start_clicked)
-        except Exception:
-            pass
-
-        # Stop → 예약만 취소
-        try:
-            if hasattr(ui, "preSputter_Stop_button"):
-                ui.preSputter_Stop_button.clicked.connect(self.stop)
-        except Exception:
-            pass
-
+        # ★ Start/Stop 버튼 연결은 main.py가 라디오 기반으로 라우팅한다.
+        #    여기서 다시 connect하면 중복 호출이 되므로 UI 참조만 보관한다.
         self._ui_bound = True
-        self._log("[PreSputter] UI 버튼 바인딩 완료(Start=예약 파라미터 갱신, Stop=예약 취소)")
 
-    def stop(self, *, silent: bool = False) -> None:
+    def stop(self, _checked: bool = False, *, silent: bool = False) -> None:
         """예약 취소(진행 중 공정은 건드리지 않음)."""
         had_task = bool(self._task and not self._task.done())
         if had_task:
             self._task.cancel()
         self._task = None
         self._repeat_daily = False
+        # ★ 취소 여부와 무관하게 표시는 항상 초기화
+        self._status_text = "예약 없음"
+        self._left_text = "--:--:--"
+        self._push_ui()
         # 실제로 취소한 경우에만, 그리고 silent가 아닐 때만 로그 출력
         if (not silent) and had_task:
             self._log("예약 취소됨")
@@ -162,10 +183,8 @@ class PreSputterRuntime:
         hh, mm = self._read_time_from_ui()
         if hh is None:
             self._log("[PreSputter] 잘못된 시간 형식입니다. 예) 08:30")
-            lab = getattr(self._ui, "preSputter_LeftTime_label", None)
-            if lab:
-                try: lab.setText("Invalid time (HH:MM)")
-                except Exception: pass
+            self._status_text = "시간 형식 오류 (HH:MM)"
+            self._push_ui()
             return
 
         # 1) 파라미터 갱신
@@ -212,11 +231,11 @@ class PreSputterRuntime:
                     remain_s = (when - datetime.now()).total_seconds()
                     if remain_s <= 0:
                         break
-                    if self._ui:
-                        self._set_text(self._ui.preSputter_LeftTime_edit, self._fmt_hms(remain_s))
+                    self._left_text = self._fmt_hms(remain_s)
+                    self._push_ui()
                     await asyncio.sleep(self.tick_s)
-                if self._ui:
-                    self._set_text(self._ui.preSputter_LeftTime_edit, "00:00:00")
+                self._left_text = "00:00:00"
+                self._push_ui()
 
                 # 2) 내 챔버가 바쁘면 이번 예약은 PASS (대기하지 않음)
                 def _my_ch_busy() -> bool:
@@ -230,6 +249,9 @@ class PreSputterRuntime:
                         break
                     # 다음날 재예약
                     when = when + timedelta(days=1)
+                    self._status_text = f"PASS(공정 중) · 다음 {self._hhmm()}"
+                    self._left_text = self._fmt_hms((when - datetime.now()).total_seconds())
+                    self._push_ui()
                     self._log(f"[PreSputter] 다음 반복 예약: {when.strftime('%Y-%m-%d %H:%M:%S')}")
                     continue
 
@@ -256,6 +278,10 @@ class PreSputterRuntime:
 
     async def _run_parallel(self) -> None:
         # 같은 챔버의 중복 실행만 막고(CH간은 허용), 둘 다 트리거
+        self._status_text = "Pre-Sputter 실행 중"
+        self._left_text = "00:00:00"
+        self._push_ui()
+
         started = []
         if self.ch1 and not self.ch1.is_running:
             ok = self.ch1.start_presputter_from_ui()
@@ -265,13 +291,11 @@ class PreSputterRuntime:
             started.append(("CH2", ok))
 
         # 종료까지 감시(둘 다 False가 될 때까지)
-        # _run_parallel()의 감시 루프 대체
         while (self.ch1 and self.ch1.is_running) or (self.ch2 and self.ch2.is_running):
-            if self._ui:
-                self._set_text(self._ui.preSputter_remainigTime_edit, "—")
             await asyncio.sleep(self.tick_s)
-        if self._ui:
-            self._set_text(self._ui.preSputter_remainigTime_edit, "00:00:00")
+        self._status_text = f"완료 · 다음 {self._hhmm()}"
+        self._left_text = self._next_left_text()
+        self._push_ui()
 
 
         pretty = ", ".join([f"{label}:{'OK' if ok else 'FAIL'}" for label, ok in started]) or "None"
@@ -296,6 +320,9 @@ class PreSputterRuntime:
                 try: self.chat.flush()
                 except Exception: pass
             return
+        self._status_text = "Pre-Sputter 실행 중"
+        self._left_text = "00:00:00"
+        self._push_ui()
         ok = ch.start_presputter_from_ui()
         if not ok:
             self._log(f"[PreSputter] {label} 시작 실패"); 
@@ -303,13 +330,11 @@ class PreSputterRuntime:
                 try: self.chat.flush()
                 except Exception: pass
             return
-        # _run_one()의 감시 루프 대체
         while ch.is_running:
-            if self._ui:
-                self._set_text(self._ui.preSputter_remainigTime_edit, "—")
             await asyncio.sleep(self.tick_s)
-        if self._ui:
-            self._set_text(self._ui.preSputter_remainigTime_edit, "00:00:00")
+        self._status_text = f"완료 · 다음 {self._hhmm()}"
+        self._left_text = self._next_left_text()
+        self._push_ui()
 
         self._log(f"[PreSputter] {label} 완료")
 
@@ -323,10 +348,8 @@ class PreSputterRuntime:
         hh, mm = self._read_time_from_ui()
         if hh is None:
             self._log("[설정] 잘못된 시간 형식(HH:MM)")
-            lab = getattr(self._ui, "preSputter_LeftTime_label", None)
-            if lab:
-                try: lab.setText("Invalid time (HH:MM)")
-                except Exception: pass
+            self._status_text = "시간 형식 오류 (HH:MM)"
+            self._push_ui()
             return
 
         self.hh, self.mm = int(hh), int(mm)

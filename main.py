@@ -425,6 +425,11 @@ class MainWindow(QWidget):
             )
             self.pre_ch2.set_pc_logger(self._append_pc_log_autoscroll)
             # CH2는 기본 자동 예약하지 않음
+
+            # ★ 표시 갱신은 main이 소유(런타임은 상태만 보유)
+            for rt in (self.pre_ch1, self.pre_ch2):
+                if rt:
+                    rt.set_ui_sink(self._refresh_presputter_ui)
             # ─────────────────────────────────────────────────────────────
 
             # ★ 라디오 기본값: CH1 선택
@@ -440,6 +445,19 @@ class MainWindow(QWidget):
                 self.ui.preSputter_Stop_button.clicked.connect(self._on_presputter_cancel_clicked)
             except Exception:
                 pass
+
+            # ★ 라디오 전환 시 선택 챔버의 예약 상태를 즉시 반영
+            for _rb_name in ("preSputter_useChamber1_radio", "preSputter_useChamber2_radio"):
+                _rb = getattr(self.ui, _rb_name, None)
+                if _rb is not None:
+                    with contextlib.suppress(Exception):
+                        _rb.toggled.connect(lambda _checked=False: self._refresh_presputter_ui())
+
+            # ★ 'Remaining Time' → '예약 상태' 표시로 용도 변경 (라벨은 런타임에 변경)
+            with contextlib.suppress(Exception):
+                self.ui.preSputter_remainigTime_label.setText("Reservation")
+
+            self._refresh_presputter_ui()
         except Exception as e:
             self._broadcast_log("Auto", f"PreSputter 예약 초기화 실패: {e!r}")
 
@@ -1314,6 +1332,20 @@ class MainWindow(QWidget):
             return 2 if (rb2 and rb2.isChecked()) else 1
         except Exception:
             return 1
+
+    def _refresh_presputter_ui(self) -> None:
+        """선택된 챔버의 Pre-Sputter 예약 상태를 UI에 렌더링."""
+        with contextlib.suppress(Exception):
+            ch = self._selected_presputter_ch()
+            rt = self.pre_ch1 if ch == 1 else self.pre_ch2
+            status = rt.status_text if rt else "예약 없음"
+            left = rt.left_text if rt else "--:--:--"
+            w = getattr(self.ui, "preSputter_remainigTime_edit", None)
+            if w is not None:
+                w.setPlainText(status)
+            w = getattr(self.ui, "preSputter_LeftTime_edit", None)
+            if w is not None:
+                w.setPlainText(left)
 
     def _on_presputter_reserve_clicked(self) -> None:
         ch = self._selected_presputter_ch()
