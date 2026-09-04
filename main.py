@@ -1339,22 +1339,31 @@ class MainWindow(QWidget):
         except Exception:
             return 1
 
+    @staticmethod
+    def _set_plaintext_if_changed(w, text: str) -> None:
+        """같은 내용이면 setPlainText를 건너뛴다(매 틱 재렌더 방지)."""
+        if w is None or not _qt_is_valid(w):
+            return
+        with contextlib.suppress(Exception):
+            if w.toPlainText() == text:
+                return
+            w.setPlainText(text)
+
     def _refresh_presputter_ui(self) -> None:
-        """선택된 챔버의 Pre-Sputter 예약 상태를 UI에 렌더링."""
+        """선택된 챔버의 Pre-Sputter 예약 상태를 UI에 렌더링.
+        ★ 카운트다운 tick마다 호출되므로 os.path 계열(NAS stat) 호출 금지."""
         with contextlib.suppress(Exception):
             ch = self._selected_presputter_ch()
             rt = self.pre_ch1 if ch == 1 else self.pre_ch2
             status = rt.status_text if rt else "예약 없음"
             left = rt.left_text if rt else "--:--:--"
-            w = getattr(self.ui, "preSputter_remainigTime_edit", None)
-            if w is not None:
-                w.setPlainText(status)
-            w = getattr(self.ui, "preSputter_LeftTime_edit", None)
-            if w is not None:
-                w.setPlainText(left)
-            w = getattr(self, "preSputter_Recipe_edit", None)
-            if w is not None and _qt_is_valid(w):
-                w.setPlainText(self._presputter_recipe_display(rt))
+            self._set_plaintext_if_changed(
+                getattr(self.ui, "preSputter_remainigTime_edit", None), status)
+            self._set_plaintext_if_changed(
+                getattr(self.ui, "preSputter_LeftTime_edit", None), left)
+            self._set_plaintext_if_changed(
+                getattr(self, "preSputter_Recipe_edit", None),
+                self._presputter_recipe_display(ch, rt))
 
     # ─────────────────────────────────────────────────────────────────
     # Pre-Sputter 전용 레시피
@@ -1365,15 +1374,34 @@ class MainWindow(QWidget):
     def _presputter_settings(self) -> QSettings:
         return QSettings(self.PRESPUTTER_SETTINGS_ORG, self.PRESPUTTER_SETTINGS_APP)
 
-    def _presputter_recipe_display(self, rt) -> str:
-        """Recipe edit에 표시할 문자열."""
-        path = getattr(rt, "recipe_path", None) if rt else None
+    def _update_presputter_recipe_cache(self, ch: int, path: str) -> None:
+        """★ os.path.exists()를 호출하는 유일한 지점.
+        NAS(SMB) 경로 stat이 Qt 메인 스레드를 블로킹할 수 있으므로,
+        부팅 1회와 사용자가 경로를 새로 고른 직후에만 호출한다."""
+        if not hasattr(self, "_presputter_recipe_cache"):
+            self._presputter_recipe_cache = {}
+        if not path:
+            self._presputter_recipe_cache[int(ch)] = ("", "UI 현재값 사용")
+            return
+        name = os.path.basename(path)
+        exists = False
+        with contextlib.suppress(Exception):
+            exists = os.path.exists(path)
+        self._presputter_recipe_cache[int(ch)] = (
+            path, name if exists else f"{name} (파일 없음)"
+        )
+
+    def _presputter_recipe_display(self, ch: int, rt) -> str:
+        """Recipe edit에 표시할 문자열(캐시 조회만 — 파일 접근 없음)."""
+        path = (getattr(rt, "recipe_path", None) if rt else None) or ""
         if not path:
             return "UI 현재값 사용"
-        name = os.path.basename(path)
-        if not os.path.exists(path):
-            return f"{name} (파일 없음)"
-        return name
+        cache = getattr(self, "_presputter_recipe_cache", None) or {}
+        cached = cache.get(int(ch))
+        if cached and cached[0] == path:
+            return cached[1]
+        # 캐시 미스: 존재 확인 없이 파일명만 표시
+        return os.path.basename(path)
 
     def _build_presputter_recipe_widgets(self) -> None:
         """Pre-Sputter 그룹 하단 빈 영역에 Recipe 버튼/표시 위젯을 동적 생성."""
@@ -1398,8 +1426,8 @@ class MainWindow(QWidget):
         """QSettings에 저장된 Pre-Sputter 레시피 경로를 복원해 런타임에 주입."""
         with contextlib.suppress(Exception):
             st = self._presputter_settings()
-            for key, rt in (("presputter/recipe_ch1", self.pre_ch1),
-                            ("presputter/recipe_ch2", self.pre_ch2)):
+            for ch_no, key, rt in ((1, "presputter/recipe_ch1", self.pre_ch1),
+                                   (2, "presputter/recipe_ch2", self.pre_ch2)):
                 if not rt:
                     continue
                 path = st.value(key, "", type=str) or ""
@@ -1407,7 +1435,8 @@ class MainWindow(QWidget):
                     continue
                 # ★ 파일이 없어도 경로는 유지(표시에 '(파일 없음)' 접미사)
                 rt.set_recipe_path(path)
-                if not os.path.exists(path):
+                self._update_presputter_recipe_cache(ch_no, path)   # exists() 1회
+                if "(파일 없음)" in self._presputter_recipe_cache[ch_no][1]:
                     self._broadcast_log("Auto", f"PreSputter 레시피 파일 없음: {path}")
 
     def _save_presputter_recipe_path(self, ch: int, path: str) -> None:
@@ -1421,7 +1450,31 @@ class MainWindow(QWidget):
         rt = self.pre_ch1 if ch == 1 else self.pre_ch2
         if not rt:
             return
-        self._loop.create_task(self._pick_presputter_recipe(ch, rt))
+        self._spawn_detached(self._pick_presputter_recipe(ch, rt),
+                             name="PreSputter.PickRecipe")
+
+    def _spawn_detached(self, coro, *, name: str = "detached") -> None:
+        """참조를 보관해 GC로 죽지 않게 하고, 예외를 로그로 남긴다."""
+        if not hasattr(self, "_detached_tasks"):
+            self._detached_tasks = set()
+        try:
+            task = self._loop.create_task(coro, name=name)
+        except Exception as e:
+            self._broadcast_log("Auto", f"{name} task 생성 실패: {e!r}")
+            with contextlib.suppress(Exception):
+                coro.close()
+            return
+        self._detached_tasks.add(task)
+
+        def _done(t: asyncio.Task) -> None:
+            self._detached_tasks.discard(t)
+            if t.cancelled():
+                return
+            exc = t.exception()
+            if exc is not None:
+                self._broadcast_log("Auto", f"{name} 예외: {exc!r}")
+
+        task.add_done_callback(_done)
 
     async def _pick_presputter_recipe(self, ch: int, rt) -> None:
         """레시피 파일 선택(네이티브 다이얼로그 우회 — UI 멈춤 방지)."""
@@ -1475,6 +1528,7 @@ class MainWindow(QWidget):
             return  # ★ 취소 = 변경 없음
 
         rt.set_recipe_path(path)
+        self._update_presputter_recipe_cache(ch, path)   # exists() 1회
         self._save_presputter_recipe_path(ch, path)
         self._broadcast_log("Auto", f"PreSputter CH{ch} 레시피 지정: {path}")
         self._refresh_presputter_ui()

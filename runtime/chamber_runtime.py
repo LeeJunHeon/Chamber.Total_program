@@ -2583,6 +2583,20 @@ class ChamberRuntime:
         except Exception:
             return False
 
+    @property
+    def is_busy(self) -> bool:
+        """외부 감시용: START enqueue ~ 큐 완주/UI 정리 완료까지 True.
+        is_running(process_controller 기준)과 달리 프리플라이트·Chuck 이동·
+        큐 행 사이 구간에서도 True 를 유지한다."""
+        if bool(getattr(self, "_runner_cmd_start_enqueued", False)):
+            return True
+        if str(getattr(self, "_runner_state", "IDLE")) != "IDLE":
+            return True
+        try:
+            return bool(self.process_controller.is_running)
+        except Exception:
+            return False
+
     def _apply_process_state_message(self, message: str) -> None:
         if getattr(self, "_last_state_text", None) == message:
             return
@@ -6172,6 +6186,14 @@ class ChamberRuntime:
         except Exception:
             return
         if not q:
+            return
+        # ★ 공정이 아직 살아 있으면(프리플라이트/Chuck 이동/큐 행 사이 포함)
+        #   복구하지 않는다. 실행 중인 큐를 사용자 레시피로 덮어쓰면 Runner가
+        #   엉뚱한 행을 본 공정으로 돌리게 되므로, 보관분을 버리는 쪽이 안전하다.
+        if self.is_busy:
+            self.append_log("MAIN",
+                f"[CH{self.ch}] 공정 진행 중 → 레시피 큐 복구 생략(실행 큐 보호). "
+                f"보관분 {len(q)}건은 파기됨 — 필요 시 파일을 다시 여십시오.")
             return
         self.process_queue = list(q)
         self.current_process_index = int(idx)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import time
 from datetime import datetime, timedelta
 from typing import Optional, Callable
 
@@ -50,6 +51,7 @@ class PreSputterRuntime:
         inter_ch_delay_s: float = 5.0,     # ✅ 추가
         ui=None,
         recipe_path: Optional[str] = None,
+        start_confirm_timeout_s: float = 60.0,
     ) -> None:
         self.ch1 = ch1
         self.ch2 = ch2
@@ -59,6 +61,9 @@ class PreSputterRuntime:
         self.mm = int(mm)
         self.parallel = bool(parallel)
         self.wait_log_interval_s = float(wait_log_interval_s)
+        # 시작 명령을 Runner가 실제로 집을 때까지 기다리는 한도
+        # (프리플라이트 8초 + Chuck 이동 39초 실측 + 여유)
+        self.start_confirm_timeout_s = float(start_confirm_timeout_s)
 
         # ✅ 반드시 self에 저장 (없으면 AttributeError)
         self.tick_s = float(tick_s)
@@ -153,7 +158,9 @@ class PreSputterRuntime:
             pass
 
     def start_daily(self) -> None:
-        self.stop(silent=False)
+        # ★ 재예약은 취소가 아니므로 chat/로그에 "예약 취소됨"을 내지 않는다.
+        #   (Cancel 버튼 경로는 stop(silent=False)를 그대로 사용)
+        self.stop(silent=True)
         self._repeat_daily = True   # ★ 매일 반복
         when = _next_time_at(self.hh, self.mm)
 
@@ -257,8 +264,9 @@ class PreSputterRuntime:
 
                 # 2) 내 챔버가 바쁘면 이번 예약은 PASS (대기하지 않음)
                 def _my_ch_busy() -> bool:
-                    return ((self.ch1 and self.ch1.is_running) or
-                            (self.ch2 and self.ch2.is_running))
+                    # ★ 프리플라이트/Chuck 이동 중인 챔버에 START를 걸면
+                    #   Runner가 "runner busy"로 거절하므로 is_busy로 판정한다.
+                    return self._ch_busy(self.ch1) or self._ch_busy(self.ch2)
 
                 if _my_ch_busy():
                     self._log("[PreSputter] 해당 챔버가 이미 공정 중 → 이번 예약 PASS")
@@ -306,7 +314,7 @@ class PreSputterRuntime:
         snaps = []
         try:
             for ch, label in ((self.ch1, "CH1"), (self.ch2, "CH2")):
-                if not ch or ch.is_running:
+                if not ch or self._ch_busy(ch):
                     continue
                 snaps.append((ch, self._snapshot_queue(ch)))
                 if self._recipe_path:
@@ -323,10 +331,14 @@ class PreSputterRuntime:
                     ok = ch.start_presputter_from_ui()
                     if not ok:
                         failed = True
+                # 1) Runner가 시작 명령을 실제로 집을 때까지 대기
+                if ok and not await self._await_start_confirmed(ch, label):
+                    ok = False
+                    failed = True
                 started.append((label, ok))
 
-            # 종료까지 감시(둘 다 False가 될 때까지)
-            while (self.ch1 and self.ch1.is_running) or (self.ch2 and self.ch2.is_running):
+            # 2) 프리플라이트·Chuck 이동·큐 전 행이 모두 끝날 때까지 감시
+            while self._ch_busy(self.ch1) or self._ch_busy(self.ch2):
                 await asyncio.sleep(self.tick_s)
         finally:
             # ★ 예외/취소에도 반드시 큐를 되돌린다(restore는 동기 함수 — await 금지)
@@ -347,6 +359,27 @@ class PreSputterRuntime:
         if self.ch1 and self.ch2 and self.inter_ch_delay_s > 0:
             await asyncio.sleep(self.inter_ch_delay_s)
         await self._run_one(self.ch2, "CH2")
+
+    def _ch_busy(self, ch) -> bool:
+        """챔버가 '시작 명령 접수 ~ 큐 완주/정리 완료' 사이인지.
+        is_running은 process_controller 기준이라 프리플라이트/Chuck 이동/
+        큐 행 사이에서 False로 떨어진다 → is_busy를 우선 사용한다."""
+        if not ch:
+            return False
+        v = getattr(ch, "is_busy", None)
+        if v is not None:
+            return bool(v)
+        return bool(getattr(ch, "is_running", False))   # 하위 호환 폴백
+
+    async def _await_start_confirmed(self, ch, label: str) -> bool:
+        """Runner가 시작 명령을 실제로 집을 때까지 대기."""
+        t0 = time.monotonic()
+        while (not self._ch_busy(ch)) and (time.monotonic() - t0) < self.start_confirm_timeout_s:
+            await asyncio.sleep(0.2)
+        if not self._ch_busy(ch):
+            self._log(f"[PreSputter] {label} 시작 신호 미확인 (timeout)")
+            return False
+        return True
 
     def _snapshot_queue(self, ch):
         """실행 직전 챔버의 레시피 큐를 비우고 백업(미지원 챔버면 None)."""
@@ -373,7 +406,7 @@ class PreSputterRuntime:
     async def _run_one(self, ch, label: str) -> None:
         if not ch:
             return
-        if ch.is_running:
+        if self._ch_busy(ch):
             self._log(f"[PreSputter] {label} 이미 실행 중 → 건너뜀")
             self._flush_chat()
             return
@@ -405,8 +438,12 @@ class PreSputterRuntime:
                     self._log(f"[PreSputter] {label} 시작 실패")
                     return
 
-            # 공정이 완전히 끝날 때까지 감시
-            while ch.is_running:
+            # 1) Runner가 시작 명령을 실제로 집을 때까지 대기
+            if not await self._await_start_confirmed(ch, label):
+                failed = True
+                return
+            # 2) 프리플라이트·Chuck 이동·큐 전 행이 끝날 때까지 감시
+            while self._ch_busy(ch):
                 await asyncio.sleep(self.tick_s)
         finally:
             # ★ 예외/취소/조기 return 어느 경우에도 큐를 되돌린다
