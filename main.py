@@ -416,17 +416,17 @@ class MainWindow(QWidget):
 
         try:
             # ── Pre-Sputter: 챔버 전용 런타임 2개로 분리 ───────────────────────────
+            # ★ PreSputter 예약 알림은 구글챗으로 보내지 않는다(chat=None).
+            #   공정 자체의 start/종료 알림은 챔버 notifier가 담당한다.
             self.pre_ch1 = PreSputterRuntime(
-                ch1=self.ch1, ch2=None, chat=self.chat_ch1, hh=6, mm=0, parallel=False, ui=self.ui
+                ch1=self.ch1, ch2=None, chat=None, hh=6, mm=0, parallel=False, ui=self.ui
             )
             self.pre_ch1.set_pc_logger(self._append_pc_log_autoscroll)
-            self.pre_ch1.start_daily()   # ← 프로그램 시작 시 CH1 자동 예약
 
             self.pre_ch2 = PreSputterRuntime(
-                ch1=None, ch2=self.ch2, chat=self.chat_ch2, hh=6, mm=0, parallel=False, ui=self.ui
+                ch1=None, ch2=self.ch2, chat=None, hh=6, mm=0, parallel=False, ui=self.ui
             )
             self.pre_ch2.set_pc_logger(self._append_pc_log_autoscroll)
-            # CH2는 기본 자동 예약하지 않음
 
             # ★ 표시 갱신은 main이 소유(런타임은 상태만 보유)
             for rt in (self.pre_ch1, self.pre_ch2):
@@ -453,7 +453,7 @@ class MainWindow(QWidget):
                 _rb = getattr(self.ui, _rb_name, None)
                 if _rb is not None:
                     with contextlib.suppress(Exception):
-                        _rb.toggled.connect(lambda _checked=False: self._refresh_presputter_ui())
+                        _rb.toggled.connect(lambda _checked=False: self._on_presputter_chamber_changed())
 
             # ★ 'Remaining Time' → '예약 상태' 표시로 용도 변경 (라벨은 런타임에 변경)
             with contextlib.suppress(Exception):
@@ -462,6 +462,9 @@ class MainWindow(QWidget):
             # ★ Pre-Sputter 전용 레시피 선택 위젯(코드로 동적 생성) + 저장된 경로 복원
             self._build_presputter_recipe_widgets()
             self._load_presputter_recipe_paths()
+
+            # ★ 저장된 예약(챔버/시각) 복원 — sink 등록 뒤에 실행해야 표시가 반영된다
+            self._restore_presputter_reservations()
 
             self._refresh_presputter_ui()
         except Exception as e:
@@ -1533,17 +1536,73 @@ class MainWindow(QWidget):
         self._broadcast_log("Auto", f"PreSputter CH{ch} 레시피 지정: {path}")
         self._refresh_presputter_ui()
 
+    def _save_presputter_reservation(self, ch: int, reserved: bool,
+                                     hh: "int | None", mm: "int | None") -> None:
+        """예약 상태를 QSettings에 기록(재시작 후 복원용)."""
+        with contextlib.suppress(Exception):
+            st = self._presputter_settings()
+            st.setValue(f"presputter/reserved_ch{int(ch)}", bool(reserved))
+            if reserved and hh is not None and mm is not None:
+                st.setValue(f"presputter/reserve_hhmm_ch{int(ch)}", f"{int(hh):02d}:{int(mm):02d}")
+            st.sync()
+
+    def _restore_presputter_reservations(self) -> None:
+        """QSettings에 저장된 예약을 챔버별로 복원한다."""
+        with contextlib.suppress(Exception):
+            st = self._presputter_settings()
+            for ch, rt in ((1, self.pre_ch1), (2, self.pre_ch2)):
+                reserved = st.value(f"presputter/reserved_ch{ch}", False, type=bool)
+                hhmm = st.value(f"presputter/reserve_hhmm_ch{ch}", "", type=str) or ""
+                if not (rt and reserved):
+                    continue
+                m = re.match(r"^\s*(\d{1,2})\s*:\s*(\d{1,2})\s*$", hhmm)
+                if not m:
+                    self._broadcast_log("Auto", f"PreSputter CH{ch} 예약 복원 실패: 시각 형식 오류({hhmm!r})")
+                    continue
+                hh, mm = int(m.group(1)), int(m.group(2))
+                if not (0 <= hh <= 23 and 0 <= mm <= 59):
+                    self._broadcast_log("Auto", f"PreSputter CH{ch} 예약 복원 실패: 범위 초과({hhmm!r})")
+                    continue
+                rt.hh, rt.mm = hh, mm
+                rt.start_daily()
+                self._broadcast_log("Auto", f"PreSputter CH{ch} 예약 복원: 매일 {hh:02d}:{mm:02d}")
+        # 복원 중 두 챔버가 순서대로 SetTime을 썼을 수 있으므로 선택 챔버 값으로 바로잡는다
+        self._sync_presputter_settime_from_selected()
+
+    def _sync_presputter_settime_from_selected(self) -> None:
+        """선택된 챔버에 살아있는 예약이 있으면 그 시각을 SetTime 입력창에 표시.
+        ★ 매 틱 도는 _refresh_presputter_ui()에서는 호출하지 않는다
+          (사용자가 타이핑 중일 수 있음)."""
+        with contextlib.suppress(Exception):
+            ch = self._selected_presputter_ch()
+            rt = self.pre_ch1 if ch == 1 else self.pre_ch2
+            if not rt or not getattr(rt, "is_reserved", False):
+                return  # 예약이 없으면 입력창을 건드리지 않는다
+            self._set_plaintext_if_changed(
+                getattr(self.ui, "preSputter_SetTime_edit", None),
+                f"{int(rt.hh):02d}:{int(rt.mm):02d}",
+            )
+
+    def _on_presputter_chamber_changed(self) -> None:
+        """Pre-Sputter 라디오 전환 시 상태/레시피/예약시각을 함께 갱신."""
+        self._refresh_presputter_ui()
+        self._sync_presputter_settime_from_selected()
+
     def _on_presputter_reserve_clicked(self) -> None:
         ch = self._selected_presputter_ch()
         rt = self.pre_ch1 if ch == 1 else self.pre_ch2
-        if rt:
-            rt.schedule_from_ui()  # ← 해당 챔버만 예약 등록/갱신
+        if not rt:
+            return
+        if rt.schedule_from_ui():  # ← 해당 챔버만 예약 등록/갱신
+            self._save_presputter_reservation(ch, True, rt.hh, rt.mm)
 
     def _on_presputter_cancel_clicked(self) -> None:
         ch = self._selected_presputter_ch()
         rt = self.pre_ch1 if ch == 1 else self.pre_ch2
-        if rt:
-            rt.stop(silent=False)  # ← 해당 챔버만 예약 취소
+        if not rt:
+            return
+        rt.stop(silent=False)  # ← 해당 챔버만 예약 취소
+        self._save_presputter_reservation(ch, False, None, None)
 
     def _enable_tab_moves_focus(self) -> None:
         # ✔ 각각 찾아서 합치기

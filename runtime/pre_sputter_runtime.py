@@ -118,6 +118,12 @@ class PreSputterRuntime:
         return self._left_text
 
     @property
+    def is_reserved(self) -> bool:
+        """예약 태스크가 살아 있는지(= 예약이 걸려 있는지)."""
+        t = self._task
+        return bool(t and not t.done())
+
+    @property
     def recipe_path(self) -> Optional[str]:
         return self._recipe_path
 
@@ -475,17 +481,18 @@ class PreSputterRuntime:
         self._flush_chat()
 
     # ★ 공개 API: 메인에서 바로 호출할 수 있도록 이름 변경
-    def schedule_from_ui(self) -> None:
-        """UI의 예약시각/베이스프레셔를 읽어 매일 예약을 갱신."""
+    def schedule_from_ui(self) -> bool:
+        """UI의 예약시각을 읽어 매일 예약을 갱신. 성공 시 True."""
         hh, mm = self._read_time_from_ui()
         if hh is None:
             self._log("[설정] 잘못된 시간 형식(HH:MM)")
             self._status_text = "시간 형식 오류 (HH:MM)"
             self._push_ui()
-            return
+            return False
 
         self.hh, self.mm = int(hh), int(mm)
         self.start_daily()
+        return True
 
     def _log(self, msg: str) -> None:
         line = f"[{datetime.now():%H:%M:%S}] [PreSputter] {self._label} {msg}"
