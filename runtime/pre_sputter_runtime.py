@@ -310,6 +310,7 @@ class PreSputterRuntime:
 
         started = []
         failed = False
+        cancelled = False
         # ★ 사용자가 UI에 열어둔 레시피 큐가 이 예약으로 실행되지 않도록 격리
         snaps = []
         try:
@@ -340,15 +341,22 @@ class PreSputterRuntime:
             # 2) 프리플라이트·Chuck 이동·큐 전 행이 모두 끝날 때까지 감시
             while self._ch_busy(self.ch1) or self._ch_busy(self.ch2):
                 await asyncio.sleep(self.tick_s)
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
         finally:
             # ★ 예외/취소에도 반드시 큐를 되돌린다(restore는 동기 함수 — await 금지)
             for ch, snap in snaps:
                 self._restore_queue(ch, snap)
-            self._status_text = (
-                f"실행 실패 · 다음 {self._hhmm()}" if failed else f"완료 · 다음 {self._hhmm()}"
-            )
-            self._left_text = self._next_left_text()
-            self._push_ui()
+            # ★ 취소(Cancel 버튼)일 때는 stop()이 이미 "예약 없음/--:--:--"을
+            #   세팅했으므로 표시를 덮어쓰지 않는다.
+            if not cancelled:
+                self._status_text = (
+                    f"실행 실패 · 다음 {self._hhmm()}" if failed else f"완료 · 다음 {self._hhmm()}"
+                )
+                self._left_text = self._next_left_text()
+                self._push_ui()
+            self._flush_chat()
 
         pretty = ", ".join([f"{label}:{'OK' if ok else 'FAIL'}" for label, ok in started]) or "None"
         self._log(f"[PreSputter] 병렬 실행 완료 ({pretty})")
@@ -416,6 +424,7 @@ class PreSputterRuntime:
         self._push_ui()
 
         failed = False
+        cancelled = False
         # ★ 사용자가 UI에 열어둔 레시피 큐가 이 예약으로 실행되지 않도록 격리
         snap = self._snapshot_queue(ch)
         try:
@@ -445,15 +454,21 @@ class PreSputterRuntime:
             # 2) 프리플라이트·Chuck 이동·큐 전 행이 끝날 때까지 감시
             while self._ch_busy(ch):
                 await asyncio.sleep(self.tick_s)
+        except asyncio.CancelledError:
+            cancelled = True
+            raise
         finally:
             # ★ 예외/취소/조기 return 어느 경우에도 큐를 되돌린다
             #    (restore는 동기 함수이므로 finally 안에서 await하지 않는다)
             self._restore_queue(ch, snap)
-            self._status_text = (
-                f"실행 실패 · 다음 {self._hhmm()}" if failed else f"완료 · 다음 {self._hhmm()}"
-            )
-            self._left_text = self._next_left_text()
-            self._push_ui()
+            # ★ 취소(Cancel 버튼)일 때는 stop()이 이미 "예약 없음/--:--:--"을
+            #   세팅했으므로 표시를 덮어쓰지 않는다.
+            if not cancelled:
+                self._status_text = (
+                    f"실행 실패 · 다음 {self._hhmm()}" if failed else f"완료 · 다음 {self._hhmm()}"
+                )
+                self._left_text = self._next_left_text()
+                self._push_ui()
             self._flush_chat()
 
         self._log(f"[PreSputter] {label} 완료")
