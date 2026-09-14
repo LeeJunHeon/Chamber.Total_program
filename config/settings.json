@@ -229,8 +229,8 @@
     "PLC_LOCK_WARN_MS": 2500.0,            // PLC 잠금 대기 경고 기준 (ms)
     "PLC_IO_WARN_MS": 2500.0,              // PLC I/O 지연 경고 기준 (ms)
     "PLC_COIL_LOG_INTERVAL_S": 5.0,        // PLC 코일 상태 로그 기록 주기 (초)
-    "PLC_COIL_LOG_NAS_DIR": "G:\\공유 드라이브\\VanaM_Sputter\\Sputter\\Logs\\CH1&2\\CH1&2_PLC",
-    "LOG_ROOT_DIR": "G:\\공유 드라이브\\VanaM_Sputter\\Sputter\\Logs\\CH1&2",
+    "PLC_COIL_LOG_NAS_DIR": "C:\\VanaM_Logs\\CH1&2\\CH1&2_PLC",   // 로컬 (NAS 반영은 log_sync 워커)
+    "LOG_ROOT_DIR": "C:\\VanaM_Logs\\CH1&2",                     // 로컬 (NAS 반영은 log_sync 워커)
     "CAMERA_LOG_ROOT": "C:\\VanaM_Logs\\Camera_Logs",   // 카메라 사진 저장 루트(로컬)
     "CAMERA_MIN_FREE_GB": 20.0,                         // 이 값 미만이면 촬영 시작 안 함 (GB)
     "RF_READER_STATE_DIR": "C:\\VanaM_Logs\\Camera_Logs\\_state",  // 판독 매니페스트/로그
@@ -240,6 +240,14 @@
     "RF_READER_RETENTION_DAYS": 14,                                // 판독 완료 세션 폴더 보관 기간(일)
     "RF_READER_MIN_FREE_GB": 20.0,                                 // 이 값 미만이면 보관 기간 무시하고 오래된 것부터 정리
     "RF_READER_UPLOAD_ALERT_DAYS": 2,                              // 미전송 CSV 가 이 일수 이상 밀리면 알림
+
+    // ── 로컬 로그 → NAS 주기 동기화 워커 (apps/log_sync_service) ──
+    "LOG_SYNC_ENABLED": true,
+    "LOG_SYNC_PAIRS": [                                            // [src(로컬), dst(NAS)] 단방향 증분 복사
+      ["C:\\VanaM_Logs\\CH1&2", "\\\\VanaM_NAS\\VanaM_Sputter\\Sputter\\Logs\\CH1&2"]
+    ],
+    "LOG_SYNC_STATE_DIR": "C:\\VanaM_Logs\\_sync_state",          // state.json / run.log
+    "LOG_SYNC_ALERT_AFTER_FAILS": 6,                               // 연속 실패 이 횟수 이상이면 알림
 
     // ── PLC 보정계수 (캘리브레이션) ──
     // PLC를 통한 전력 제어 및 측정 변환에 사용되는 값입니다.

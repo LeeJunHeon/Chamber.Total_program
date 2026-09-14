@@ -494,9 +494,11 @@ class MainWindow(QWidget):
                     except Exception:
                         pass
                     try:
+                        # 카메라 데몬 스레드에서 호출됨 → ChatNotifier 는 이벤트 루프에서 실행되어야
+                        # _schedule_post() 의 get_running_loop() 가 성공한다. 루프로 마샬링.
                         chat = getattr(self, "chat_host", None)
                         if chat is not None:
-                            chat.notify_error_with_src("CAM", msg)
+                            self._loop.call_soon_threadsafe(chat.notify_error_with_src, "CAM", msg)
                     except Exception:
                         pass
 
@@ -1791,6 +1793,17 @@ class MainWindow(QWidget):
                 pass
 
 def main() -> int:
+    # ✅ settings.json 을 먼저 적용해야 setup_app_logging 이 LOG_ROOT_DIR override 를 반영한다.
+    #    (MainWindow.__init__ 의 load_settings() 는 그대로 둔다 — 두 번 호출돼도 무해)
+    try:
+        from lib._config_loader import load_settings
+        load_settings()
+    except Exception as e:
+        try:
+            print(f"[Config] early apply failed: {e!r}", file=sys.stderr)
+        except Exception:
+            pass
+
     _logger = setup_app_logging(
         app_name="CH_1_2_program",
         file_level=logging.INFO,      # ✅ INFO까지 파일에 저장

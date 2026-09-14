@@ -3,8 +3,8 @@
 r"""
 시스템성 로그 전용(프로그램 종료/크래시/미처리 예외/Warning/Qt 메시지 등) 로깅 유틸
 - 기존 공정/PLC/서버 로그는 그대로 두고,
-- '현재 저장이 안되고 있는 부분'만 \\VanaM_NAS\VanaM_Sputter\Sputter\Logs\CH1&2\ERROR 에
-  하루 1개 파일로 저장한다.
+- '현재 저장이 안되고 있는 부분'만 {LOG_ROOT_DIR}\ERROR (기본 C:\VanaM_Logs\CH1&2\ERROR) 에
+  하루 1개 파일로 저장한다. (경로는 호출 시점에 config_common 에서 동적 조회)
 """
 
 from __future__ import annotations
@@ -24,9 +24,23 @@ from datetime import datetime, date
 from pathlib import Path
 from typing import Optional
 
+from lib import config_common as cfgc
 
-DEFAULT_ERROR_ROOT = Path(r"G:\공유 드라이브\VanaM_Sputter\Sputter\Logs\CH1&2\ERROR")
 _DEFAULT_LOGGER_NAME: Optional[str] = None
+
+
+def _default_error_root() -> Path:
+    """config_common.LOG_ROOT_DIR / ERROR — settings.json override 반영을 위해 호출 시점에 getattr."""
+    return Path(getattr(cfgc, "LOG_ROOT_DIR", r"C:\VanaM_Logs\CH1&2")) / "ERROR"
+
+
+def _local_fallback_root() -> Path:
+    """primary 실패 시 폴백: exe 기준 절대경로 (cwd 는 예측 불가)."""
+    if getattr(sys, "frozen", False):
+        base = Path(sys.executable).parent
+    else:
+        base = Path(__file__).resolve().parents[1]
+    return base / "Logs_LocalFallback" / "ERROR"
 
 _FAULT_LOCK = threading.Lock()
 _FAULT_ENABLED = False
@@ -92,8 +106,8 @@ def _safe_mkdir(p: Path) -> Path:
         p.mkdir(parents=True, exist_ok=True)
         return p
     except Exception:
-        # UNC 실패 시 로컬 폴백
-        fallback = Path.cwd() / "Logs" / "CH1&2" / "ERROR"
+        # primary 실패 시 로컬 폴백 (exe 기준 절대경로)
+        fallback = _local_fallback_root()
         fallback.mkdir(parents=True, exist_ok=True)
         return fallback
 
@@ -118,7 +132,7 @@ class _DailyFileHandler(logging.Handler):
         super().__init__(level=level)
         self._app_name = app_name
         self._primary_root = Path(root)                                # ✅ 절대 변경하지 않음
-        self._fallback_root = Path.cwd() / "Logs" / "CH1&2" / "ERROR"
+        self._fallback_root = _local_fallback_root()
         self._encoding = encoding
         self._cur_date: date = date.today()
         self._stream = None
@@ -226,7 +240,7 @@ class _DailyFileHandler(logging.Handler):
 
 def setup_app_logging(
     app_name: str = "CH_1_2_program",
-    root: Path = DEFAULT_ERROR_ROOT,
+    root: Optional[Path] = None,
     file_level: int = logging.INFO,     # ✅ 파일에도 INFO 저장
     console_level: int = logging.INFO,
     enable_console: bool = False,
@@ -238,6 +252,10 @@ def setup_app_logging(
     """
     global _DEFAULT_LOGGER_NAME
     _DEFAULT_LOGGER_NAME = app_name
+
+    if root is None:
+        root = _default_error_root()
+    root = Path(root)
 
     logger = logging.getLogger(app_name)
 

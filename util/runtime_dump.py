@@ -14,7 +14,21 @@ import traceback
 from pathlib import Path
 from typing import Any, Optional
 
-_DEFAULT_LOG_ROOT = Path(r"G:\공유 드라이브\VanaM_Sputter\Sputter\Logs\CH1&2")
+from lib import config_common as _cfgc
+
+
+def _default_log_root() -> Path:
+    """config_common.LOG_ROOT_DIR — settings.json override 반영을 위해 호출 시점에 getattr."""
+    return Path(getattr(_cfgc, "LOG_ROOT_DIR", r"C:\VanaM_Logs\CH1&2"))
+
+
+def _local_fallback_root() -> Path:
+    """폴백: exe 기준 절대경로 (cwd 는 예측 불가)."""
+    if getattr(sys, "frozen", False):
+        base = Path(sys.executable).parent
+    else:
+        base = Path(__file__).resolve().parents[1]
+    return base / "Logs_LocalFallback" / "RUNTIME_DUMP"
 
 _DUMP_LOCK = threading.Lock()
 _DUMP_IN_PROGRESS = False
@@ -29,13 +43,13 @@ def _safe_mkdir(p: Path) -> Path:
         p.mkdir(parents=True, exist_ok=True)
         return p
     except Exception:
-        # ✅ ERROR 폴더 아래가 아니라 CH1&2 아래에 RUNTIME_DUMP 생성
-        fallback = Path.cwd() / "Logs" / "CH1&2" / "RUNTIME_DUMP"
+        # ✅ 폴백은 exe 기준 절대경로
+        fallback = _local_fallback_root()
         fallback.mkdir(parents=True, exist_ok=True)
         return fallback
 
 def _dump_root(log_root: Optional[Path]) -> Path:
-    base = Path(log_root) if log_root is not None else _DEFAULT_LOG_ROOT
+    base = Path(log_root) if log_root is not None else _default_log_root()
     # ✅ CH1&2 바로 아래에 RUNTIME_DUMP 생성
     return _safe_mkdir(base / "RUNTIME_DUMP")
 

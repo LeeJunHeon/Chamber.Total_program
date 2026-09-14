@@ -462,13 +462,13 @@ PLC_LOCK_WARN_MS = 2500.0
 PLC_IO_WARN_MS = 2500.0
 
 # --- 통합 로그 루트 (PC/Server/ERROR/Dump 공통) ---
-# NAS UNC 직접 쓰기 → Google Drive 동기화 폴더로 변경 (SMB 무한 블로킹/UI hang 방지)
-# G: 가상 드라이브는 로컬 디스크처럼 동작하고, NAS 반영은 Google Drive 앱이 백그라운드 처리
-LOG_ROOT_DIR = r"G:\공유 드라이브\VanaM_Sputter\Sputter\Logs\CH1&2"
+# 메인 프로그램은 로컬 C: 에만 쓴다 (빠르고 사라지지 않음).
+# NAS 반영은 별도 프로세스 apps/log_sync_service/log_sync.py 가 주기 동기화 (SMB 지연이 UI 에 영향 없음).
+LOG_ROOT_DIR = r"C:\VanaM_Logs\CH1&2"
 
 # --- PLC COIL CSV LOGGER ---
 PLC_COIL_LOG_INTERVAL_S = 5.0
-PLC_COIL_LOG_NAS_DIR = r"G:\공유 드라이브\VanaM_Sputter\Sputter\Logs\CH1&2\CH1&2_PLC"
+PLC_COIL_LOG_NAS_DIR = r"C:\VanaM_Logs\CH1&2\CH1&2_PLC"
 # PLC_COIL_LOG_LOCAL_DIR = r"C:\...\Logs\CH1&2\CH1&2_PLC"   # 필요 시
 
 # ======================================================================
@@ -658,3 +658,13 @@ RF_READER_NAS_DIR           = r"\\VanaM_NAS\VanaM_Sputter\Sputter\Logs\CH1&2\Cam
 RF_READER_RETENTION_DAYS    = 14      # 판독 완료 세션 폴더 보관 기간(일)
 RF_READER_MIN_FREE_GB       = 20.0    # 이 값 미만이면 보관 기간 무시하고 오래된 것부터 정리
 RF_READER_UPLOAD_ALERT_DAYS = 2       # 미전송 CSV 가 이 일수 이상 밀리면 알림
+
+# ======================================================================
+# 로컬 로그 → NAS 주기 동기화 워커 (apps/log_sync_service/log_sync.py)
+# ======================================================================
+LOG_SYNC_ENABLED = True
+LOG_SYNC_PAIRS = [                                  # [src(로컬), dst(NAS)] — 단방향 증분 복사, dst 삭제 없음
+    [r"C:\VanaM_Logs\CH1&2", r"\\VanaM_NAS\VanaM_Sputter\Sputter\Logs\CH1&2"],
+]
+LOG_SYNC_STATE_DIR = r"C:\VanaM_Logs\_sync_state"   # state.json / run.log
+LOG_SYNC_ALERT_AFTER_FAILS = 6                       # 연속 실패 이 횟수 이상이면 알림(10분 주기 기준 1시간)
