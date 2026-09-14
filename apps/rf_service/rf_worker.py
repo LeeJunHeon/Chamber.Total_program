@@ -26,7 +26,7 @@ torch 불필요. onnxruntime + opencv + numpy 만 필요.
   RF_READER_MIN_FREE_GB       사진 루트 여유 임계(GB) — 미만이면 완료 세션을 오래된 순으로 정리
   RF_READER_UPLOAD_ALERT_DAYS 미전송 CSV 가 이 일수 이상 밀리면 알림
   RF_SETTINGS          settings.json 경로 직접 지정
-  rf_config.json       (exe 옆) {"webhook_url": "...", "enabled": true} — 구글챗 알림
+  rf_worker_config.json       (exe 옆) {"webhook_url": "...", "enabled": true} — 구글챗 알림
   RF_MODEL             onnx 경로(기본 models/cnn.onnx)
   RF_SINCE             "YYYYMMDD_HHMMSS" 이상 세션만
   RF_TTA               1(기본) TTA 사용 / 0 끔(빠름)
@@ -110,7 +110,7 @@ def _asset_path(rel: str) -> Path:
 
 
 def _worker_base_dir() -> Path:
-    """exe 옆(번들되지 않는 파일: rf_config.json) 기준 폴더.
+    """exe 옆(번들되지 않는 파일: rf_worker_config.json) 기준 폴더.
     frozen: exe 폴더 / dev: 이 파일 폴더.  (_asset_path 는 번들 대상 전용)"""
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
@@ -123,9 +123,9 @@ _NOTIFY_ENABLED = False
 
 
 def _load_notify_config() -> None:
-    """exe 옆 rf_config.json → webhook_url / enabled. 없거나 비어 있으면 알림 생략(에러 아님)."""
+    """exe 옆 rf_worker_config.json → webhook_url / enabled. 없거나 비어 있으면 알림 생략(에러 아님)."""
     global _NOTIFY_URL, _NOTIFY_ENABLED
-    cfg_path = _worker_base_dir() / "rf_config.json"
+    cfg_path = _worker_base_dir() / "rf_worker_config.json"
     try:
         if not cfg_path.exists():
             return

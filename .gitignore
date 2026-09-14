@@ -1,7 +1,7 @@
 ### Google Chat ###
 lib/config_local.py
 apps/oes_service/oes_config.json
-apps/rf_service/rf_config.json
+apps/rf_service/rf_worker_config.json
 apps/log_sync_service/log_sync_config.json
 
 ### Python ###
