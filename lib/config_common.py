@@ -649,3 +649,8 @@ ETA_TAIL_MIN_S = 90.0
 # ======================================================================
 CAMERA_LOG_ROOT    = r"C:\VanaM_Logs\Camera_Logs"   # 카메라 사진 저장 루트(로컬)
 CAMERA_MIN_FREE_GB = 20.0                            # 이 값 미만이면 촬영 시작 안 함 (GB)
+
+# RF 디스플레이 판독 워커 (apps/rf_service/rf_worker.py)
+RF_READER_STATE_DIR = r"C:\VanaM_Logs\Camera_Logs\_state"   # 판독 매니페스트/로그
+RF_READER_CSV_DIR   = r"C:\VanaM_Logs\Camera_Logs\_csv"     # 판독 결과 CSV(로컬 정본)
+RF_READER_STALE_MIN = 10.0                                   # 이 분 내 수정된 세션은 진행 중으로 보고 보류

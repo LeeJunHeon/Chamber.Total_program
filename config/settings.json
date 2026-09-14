@@ -233,6 +233,9 @@
     "LOG_ROOT_DIR": "G:\\공유 드라이브\\VanaM_Sputter\\Sputter\\Logs\\CH1&2",
     "CAMERA_LOG_ROOT": "C:\\VanaM_Logs\\Camera_Logs",   // 카메라 사진 저장 루트(로컬)
     "CAMERA_MIN_FREE_GB": 20.0,                         // 이 값 미만이면 촬영 시작 안 함 (GB)
+    "RF_READER_STATE_DIR": "C:\\VanaM_Logs\\Camera_Logs\\_state",  // 판독 매니페스트/로그
+    "RF_READER_CSV_DIR": "C:\\VanaM_Logs\\Camera_Logs\\_csv",      // 판독 결과 CSV(로컬 정본)
+    "RF_READER_STALE_MIN": 10.0,                                   // 이 분 내 수정된 세션은 진행 중으로 보고 보류
 
     // ── PLC 보정계수 (캘리브레이션) ──
     // PLC를 통한 전력 제어 및 측정 변환에 사용되는 값입니다.
