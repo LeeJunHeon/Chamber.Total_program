@@ -21,7 +21,12 @@ torch 불필요. onnxruntime + opencv + numpy 만 필요.
   RF_READER_STATE_DIR  manifest.json / run.log  (env RF_STATE_DIR)
   RF_READER_CSV_DIR    판독 결과 CSV(로컬 정본)  (env RF_CSV_DIR)
   RF_READER_STALE_MIN  이 분 내 수정 세션 보류   (env RF_STALE_MIN)
+  RF_READER_NAS_DIR    CSV 사본 전송 대상(NAS)  (env RF_NAS_DIR)
+  RF_READER_RETENTION_DAYS    판독 완료 세션 폴더 보관 기간(일)
+  RF_READER_MIN_FREE_GB       사진 루트 여유 임계(GB) — 미만이면 완료 세션을 오래된 순으로 정리
+  RF_READER_UPLOAD_ALERT_DAYS 미전송 CSV 가 이 일수 이상 밀리면 알림
   RF_SETTINGS          settings.json 경로 직접 지정
+  rf_config.json       (exe 옆) {"webhook_url": "...", "enabled": true} — 구글챗 알림
   RF_MODEL             onnx 경로(기본 models/cnn.onnx)
   RF_SINCE             "YYYYMMDD_HHMMSS" 이상 세션만
   RF_TTA               1(기본) TTA 사용 / 0 끔(빠름)
@@ -34,8 +39,12 @@ import glob
 import json
 import os
 import re
+import shutil
+import ssl
 import sys
 import time
+import traceback
+import urllib.request
 from collections import Counter
 from datetime import datetime, timedelta
 from pathlib import Path
@@ -100,6 +109,57 @@ def _asset_path(rel: str) -> Path:
     return Path(__file__).resolve().parent / rel
 
 
+def _worker_base_dir() -> Path:
+    """exe 옆(번들되지 않는 파일: rf_config.json) 기준 폴더.
+    frozen: exe 폴더 / dev: 이 파일 폴더.  (_asset_path 는 번들 대상 전용)"""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parent
+
+
+# ===================== 구글챗 알림 (oes_api.py 패턴) =====================
+_NOTIFY_URL = ""
+_NOTIFY_ENABLED = False
+
+
+def _load_notify_config() -> None:
+    """exe 옆 rf_config.json → webhook_url / enabled. 없거나 비어 있으면 알림 생략(에러 아님)."""
+    global _NOTIFY_URL, _NOTIFY_ENABLED
+    cfg_path = _worker_base_dir() / "rf_config.json"
+    try:
+        if not cfg_path.exists():
+            return
+        with open(cfg_path, "r", encoding="utf-8") as fp:
+            cfg = json.loads(fp.read())
+        _NOTIFY_ENABLED = bool(cfg.get("enabled", True))
+        _NOTIFY_URL = str(cfg.get("webhook_url", "") or "").strip()
+    except Exception:
+        pass
+
+
+def notify(msg: str) -> None:
+    """Google Chat webhook 으로 문제 알림 (blocking, 실패 전부 무시). 정상 완료 알림은 보내지 않는다."""
+    if not _NOTIFY_ENABLED or not _NOTIFY_URL:
+        return
+    try:
+        payload = json.dumps({"text": f"[RF-Reader] {msg}"}).encode("utf-8")
+        req = urllib.request.Request(_NOTIFY_URL, data=payload,
+                                     headers={"Content-Type": "application/json"})
+        ctx = ssl.create_default_context()
+        with urllib.request.urlopen(req, timeout=5, context=ctx) as resp:
+            resp.read()
+    except Exception:
+        pass
+
+
+def _free_gb(path) -> float:
+    """경로가 속한 디스크의 여유(GB). 조회 실패 시 inf (가드로 워커가 막히지 않도록)."""
+    try:
+        return shutil.disk_usage(path).free / (1024 ** 3)
+    except Exception:
+        return float("inf")
+
+
 def _find_settings_json() -> Path | None:
     """settings.json 탐색: 1) env RF_SETTINGS  2) 시작 폴더에서 위로 최대 4단계 config/settings.json."""
     env = os.environ.get("RF_SETTINGS", "").strip()
@@ -139,7 +199,14 @@ def _load_config(log):
     state_dir   = getattr(cfgc, "RF_READER_STATE_DIR", r"C:\VanaM_Logs\Camera_Logs\_state")
     csv_dir     = getattr(cfgc, "RF_READER_CSV_DIR",   r"C:\VanaM_Logs\Camera_Logs\_csv")
     stale_min   = float(getattr(cfgc, "RF_READER_STALE_MIN", 10.0))
-    return camera_root, state_dir, csv_dir, stale_min, settings
+    extra = {
+        "nas_dir":           getattr(cfgc, "RF_READER_NAS_DIR",
+                                     r"\\VanaM_NAS\VanaM_Sputter\Sputter\Logs\CH1&2\Camera_Logs"),
+        "retention_days":    int(getattr(cfgc, "RF_READER_RETENTION_DAYS", 14)),
+        "min_free_gb":       float(getattr(cfgc, "RF_READER_MIN_FREE_GB", 20.0)),
+        "upload_alert_days": int(getattr(cfgc, "RF_READER_UPLOAD_ALERT_DAYS", 2)),
+    }
+    return camera_root, state_dir, csv_dir, stale_min, settings, extra
 
 
 # ===================== ONNX 추론 (model.py predict_digits 대체) =====================
@@ -369,19 +436,170 @@ def save_manifest(path, man):
     os.replace(tmp, path)
 
 
+# ===================== NAS 전송 (로컬 CSV 정본 → NAS 사본, 재읽기 검증) =====================
+def _count_lines(path):
+    with open(path, "rb") as f:
+        return sum(1 for _ in f)
+
+
+def upload_csvs(csv_dir, nas_dir, alert_days, log):
+    """마커(.uploaded) 없는 CSV 전부 NAS 로 복사 → 재읽기 검증 → 마커 생성.
+    NAS 상태는 사진 삭제와 무관. 반환: (업로드성공, 미전송)."""
+    pending = []
+    for mode in MODES:
+        for f in sorted(glob.glob(os.path.join(csv_dir, mode, "*.csv"))):
+            if not os.path.exists(f + ".uploaded"):
+                pending.append((mode, f))
+    if not pending:
+        return 0, 0
+
+    # NAS 접근 자체가 안 되면 전송 단계 전체 건너뜀
+    try:
+        os.makedirs(nas_dir, exist_ok=True)
+        if not os.path.isdir(nas_dir):
+            raise RuntimeError("폴더 아님")
+    except Exception as e:
+        log(f"  [upload] NAS 접근 불가({nas_dir}): {e} → 전송 건너뜀(미전송 {len(pending)}개)")
+        _check_upload_backlog(pending, alert_days, log)
+        return 0, len(pending)
+
+    n_ok = 0
+    for mode, src in pending:
+        name = os.path.basename(src)
+        dst_dir = os.path.join(nas_dir, mode)
+        dst = os.path.join(dst_dir, name)
+        tmp = dst + ".tmp"
+        try:
+            os.makedirs(dst_dir, exist_ok=True)
+            shutil.copyfile(src, tmp)                       # 로컬 읽기 → NAS 쓰기
+            os.replace(tmp, dst)                            # NAS 안에서 원자적 교체
+            # 반드시 NAS 파일을 다시 읽어 검증
+            sz_dst, sz_src = os.path.getsize(dst), os.path.getsize(src)
+            if sz_dst != sz_src:
+                raise RuntimeError(f"바이트 크기 불일치 {sz_dst} != {sz_src}")
+            ln_dst, ln_src = _count_lines(dst), _count_lines(src)
+            if ln_dst != ln_src:
+                raise RuntimeError(f"줄 수 불일치 {ln_dst} != {ln_src}")
+            with open(src + ".uploaded", "w"):
+                pass
+            n_ok += 1
+        except Exception as e:
+            log(f"  [upload] 실패 {mode}/{name}: {e}")
+            try:
+                if os.path.exists(tmp):
+                    os.remove(tmp)
+            except Exception:
+                pass
+    n_pending = len(pending) - n_ok
+    log(f"  [upload] 성공={n_ok} 미전송={n_pending}")
+    _check_upload_backlog([p for p in pending if not os.path.exists(p[1] + ".uploaded")],
+                          alert_days, log)
+    return n_ok, n_pending
+
+
+def _check_upload_backlog(pending, alert_days, log):
+    """마커 없는 CSV 중 mtime 이 alert_days 보다 오래된 것이 있으면 알림."""
+    if not pending:
+        return
+    now = time.time()
+    ages = [(now - os.path.getmtime(f)) / 86400.0 for _, f in pending if os.path.exists(f)]
+    if not ages:
+        return
+    oldest = max(ages)
+    if oldest >= alert_days:
+        msg = f"CSV {len(pending)}개가 {int(oldest)}일째 NAS 미전송"
+        log(f"  [upload] ! {msg}")
+        notify(msg)
+
+
+# ===================== 보관 기간 정리 / 디스크 가드 =====================
+def _session_date(name):
+    """세션 폴더명(YYYYMMDD_HHMMSS) → datetime. mtime 은 쓰지 않는다(삭제로 갱신됨)."""
+    try:
+        return datetime.strptime(name, "%Y%m%d_%H%M%S")
+    except ValueError:
+        return None
+
+
+def _done_sessions(root, man):
+    """매니페스트 status=='done' 인 세션 폴더만 [(date, mode, dir, name)] 오래된 순.
+    미처리 세션은 여기 포함되지 않으므로 어떤 정리 단계에서도 삭제되지 않는다.
+    CSV_DIR / STATE_DIR(_csv/_state) 은 MODES 하위 세션 패턴이 아니므로 대상이 아니다."""
+    out = []
+    for mode, sdir, name in discover_sessions(root):
+        ent = man.get(f"{mode}/{name}")
+        if not isinstance(ent, dict) or ent.get("status") != "done":
+            continue
+        d = _session_date(name)
+        if d is None:
+            continue
+        out.append((d, mode, sdir, name))
+    return sorted(out, key=lambda t: t[0])
+
+
+def _rmtree_session(sdir, log):
+    try:
+        shutil.rmtree(sdir)
+        return True
+    except Exception as e:
+        log(f"  [cleanup] 삭제 실패 {sdir}: {e}")
+        return False
+
+
+def cleanup_retention(root, man, retention_days, log):
+    """(a) 매니페스트 done + (b) 폴더명 날짜가 retention_days 보다 오래된 세션 폴더 삭제.
+    매니페스트 항목은 지우지 않는다(재판독 방지)."""
+    cutoff = datetime.now() - timedelta(days=retention_days)
+    n = 0
+    for d, mode, sdir, name in _done_sessions(root, man):
+        if d >= cutoff:
+            continue
+        if _rmtree_session(sdir, log):
+            log(f"  [cleanup] 삭제 {mode}/{name}")
+            n += 1
+    log(f"  [cleanup] 보관기간({retention_days}일) 초과 완료세션 삭제={n}")
+    return n
+
+
+def disk_guard(root, man, min_free_gb, log):
+    """여유 < 임계면 done 세션을 오래된 순으로 삭제하며 임계를 넘을 때까지 반복(보관기간 무시).
+    다 지워도 부족하면 알림. 반환: 정리한 세션 수."""
+    free = _free_gb(root)
+    if free >= min_free_gb:
+        return 0
+    log(f"  [disk] 여유 부족 {free:.1f}GB < {min_free_gb:.1f}GB → 완료 세션 오래된 순 정리 시작")
+    n = 0
+    for d, mode, sdir, name in _done_sessions(root, man):
+        if _rmtree_session(sdir, log):
+            log(f"  [disk] 삭제 {mode}/{name}")
+            n += 1
+        free = _free_gb(root)
+        if free >= min_free_gb:
+            break
+    log(f"  [disk] 정리한 세션={n} 여유={free:.1f}GB")
+    if free < min_free_gb:
+        msg = (f"디스크 여유 부족 {free:.1f}GB < {min_free_gb:.1f}GB "
+               f"(정리 가능한 완료 세션 {n}개 삭제 후에도 부족)")
+        log(f"  [disk] ! {msg}")
+        notify(msg)
+    return n
+
+
 def main():
     early = []                        # 설정 로드 전 로그 버퍼(run.log 위치 확정 후 기록)
     def _pre_log(*x):
         line = " ".join(str(v) for v in x)
         print(line, flush=True); early.append(line)
 
-    cfg_root, cfg_state, cfg_csv, cfg_stale, settings_path = _load_config(_pre_log)
+    cfg_root, cfg_state, cfg_csv, cfg_stale, settings_path, cfg_x = _load_config(_pre_log)
+    _load_notify_config()
 
     ap = argparse.ArgumentParser()
     ap.add_argument("--root", default=os.environ.get("RF_CAMERA_LOGS", cfg_root))
     ap.add_argument("--model", default=os.environ.get("RF_MODEL", str(_asset_path("models/cnn.onnx"))))
     ap.add_argument("--state-dir", default=os.environ.get("RF_STATE_DIR", cfg_state))
     ap.add_argument("--csv-dir", default=os.environ.get("RF_CSV_DIR", cfg_csv))
+    ap.add_argument("--nas-dir", default=os.environ.get("RF_NAS_DIR", cfg_x["nas_dir"]))
     ap.add_argument("--stale-min", type=float, default=float(os.environ.get("RF_STALE_MIN", cfg_stale)))
     ap.add_argument("--since", default=os.environ.get("RF_SINCE", ""))
     ap.add_argument("--no-tta", action="store_true", default=os.environ.get("RF_TTA", "1") == "0")
@@ -412,6 +630,8 @@ def main():
     log(f"  root={a.root}")
     log(f"  state_dir={a.state_dir}")
     log(f"  csv_dir={a.csv_dir}")
+    log(f"  nas_dir={a.nas_dir} retention={cfg_x['retention_days']}d min_free={cfg_x['min_free_gb']}GB "
+        f"upload_alert={cfg_x['upload_alert_days']}d notify={'on' if (_NOTIFY_ENABLED and _NOTIFY_URL) else 'off'}")
     log(f"  model={a.model} slots={slots_path} tta={tta} stale_min={a.stale_min} "
         f"since={a.since or '-'} dry_run={a.dry_run}")
     if not os.path.exists(a.model):
@@ -421,6 +641,13 @@ def main():
     if not os.path.isdir(a.root):
         log(f"  ! 루트 없음: {a.root}"); sys.exit(2)
 
+    # ── 디스크 가드 (판독 전) ──
+    free_start = _free_gb(a.root)
+    log(f"  디스크 여유(시작)={free_start:.1f}GB")
+    n_guard = 0
+    if not a.dry_run:
+        n_guard = disk_guard(a.root, man, cfg_x["min_free_gb"], log)
+
     net = OnnxDigit(a.model)
     mats = build_homographies(); slots = load_slots(str(slots_path))
 
@@ -428,6 +655,7 @@ def main():
     log(f"  발견 세션 {len(sessions)}개")
 
     n_done = n_skip = n_hold = 0
+    n_del_img = n_keep_img = 0
     for mode, sdir, name in sessions:
         key = f"{mode}/{name}"
         if key in man:
@@ -441,6 +669,7 @@ def main():
                                   tta=tta, dry_run=a.dry_run, log=log)
             if not a.dry_run and res.get("status") == "done":
                 res["at"] = _now(); man[key] = res; n_done += 1
+                n_del_img += int(res.get("deleted", 0)); n_keep_img += int(res.get("kept", 0))
             elif res.get("status") in ("empty", "no_valid_frames"):
                 # 빈 세션은 매니페스트에 남겨 재시도 방지(원하면 제외 가능)
                 if not a.dry_run:
@@ -451,8 +680,19 @@ def main():
 
     if not a.dry_run:
         save_manifest(man_path, man)
-    log(f"[rf-worker] 완료 {time.time()-t0:.1f}s  처리={n_done} "
-        f"건너뜀={n_skip} 보류={n_hold}")
+
+    # ── NAS 전송 (판독 루프 뒤; 사진 삭제 판정과 무관) → 보관 기간 정리 ──
+    n_up = n_pend = n_clean = 0
+    if not a.dry_run:
+        n_up, n_pend = upload_csvs(a.csv_dir, a.nas_dir, cfg_x["upload_alert_days"], log)
+        n_clean = cleanup_retention(a.root, man, cfg_x["retention_days"], log)
+    else:
+        log("  [dry-run] 디스크 가드 / NAS 전송 / 보관 정리 생략")
+
+    free_end = _free_gb(a.root)
+    log(f"[rf-worker] 완료 {time.time()-t0:.1f}s  처리={n_done} 건너뜀={n_skip} 보류={n_hold} "
+        f"삭제사진={n_del_img} 보존사진={n_keep_img} 업로드성공={n_up} 미전송={n_pend} "
+        f"정리한세션={n_clean + n_guard} 디스크여유={free_start:.1f}→{free_end:.1f}GB")
     run_log.close()
 
 
@@ -461,4 +701,25 @@ def _now():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit:
+        raise
+    except Exception:
+        tb = traceback.format_exc()
+        print(tb, flush=True)
+        # traceback → run.log (state_dir 해석 실패 시 exe 옆 run_error.log)
+        try:
+            try:
+                st = os.environ.get("RF_STATE_DIR") or _load_config(lambda *x: None)[1]
+                os.makedirs(st, exist_ok=True)
+                lp = os.path.join(st, "run.log")
+            except Exception:
+                lp = str(_worker_base_dir() / "run_error.log")
+            with open(lp, "a", encoding="utf-8") as f:
+                f.write(f"{_now()} [rf-worker] ! 예상 못 한 예외\n{tb}\n")
+        except Exception:
+            pass
+        _load_notify_config()
+        notify(f"워커 비정상 종료: {tb.strip().splitlines()[-1]}")
+        sys.exit(1)
