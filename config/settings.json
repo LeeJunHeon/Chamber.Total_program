@@ -231,6 +231,8 @@
     "PLC_COIL_LOG_INTERVAL_S": 5.0,        // PLC 코일 상태 로그 기록 주기 (초)
     "PLC_COIL_LOG_NAS_DIR": "G:\\공유 드라이브\\VanaM_Sputter\\Sputter\\Logs\\CH1&2\\CH1&2_PLC",
     "LOG_ROOT_DIR": "G:\\공유 드라이브\\VanaM_Sputter\\Sputter\\Logs\\CH1&2",
+    "CAMERA_LOG_ROOT": "C:\\VanaM_Logs\\Camera_Logs",   // 카메라 사진 저장 루트(로컬)
+    "CAMERA_MIN_FREE_GB": 20.0,                         // 이 값 미만이면 촬영 시작 안 함 (GB)
 
     // ── PLC 보정계수 (캘리브레이션) ──
     // PLC를 통한 전력 제어 및 측정 변환에 사용되는 값입니다.

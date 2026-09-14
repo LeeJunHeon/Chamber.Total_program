@@ -487,7 +487,20 @@ class MainWindow(QWidget):
             # ✅ 카메라 레코더 생성 및 각 런타임에 주입
             try:
                 from util.camera_recorder import CameraRecorder
-                _recorder = CameraRecorder(camera_index=1, interval=1.0)
+                def _cam_notify(msg: str) -> None:
+                    # 알림 실패가 촬영/공정에 전파되지 않도록 전부 try/except
+                    try:
+                        self._broadcast_log("CAM", msg)
+                    except Exception:
+                        pass
+                    try:
+                        chat = getattr(self, "chat_host", None)
+                        if chat is not None:
+                            chat.notify_error_with_src("CAM", msg)
+                    except Exception:
+                        pass
+
+                _recorder = CameraRecorder(camera_index=1, interval=1.0, notify_cb=_cam_notify)
                 self.ch1.camera_recorder = _recorder
                 self.ch2.camera_recorder = _recorder
                 self.pc.camera_recorder  = _recorder

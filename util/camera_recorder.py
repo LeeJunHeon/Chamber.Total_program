@@ -47,15 +47,18 @@ import json
 import logging
 import os
 import platform
+import shutil
 import threading
 import time
 from collections import deque
 from datetime import datetime
 from pathlib import Path
-from typing import Optional
+from typing import Callable, Optional
 
 import cv2
 import numpy as np
+
+from lib import config_common as cfgc
 
 try:
     import pytesseract
@@ -83,8 +86,8 @@ logger = logging.getLogger(__name__)
 # ──────────────────────────────────────────────────────────
 # 저장 루트
 # ──────────────────────────────────────────────────────────
-NAS_LOG_ROOT   = Path(r"G:\공유 드라이브\VanaM_Sputter\Sputter\Logs\CH1&2\Camera_Logs")
-LOCAL_FALLBACK = Path("rf_logs")   # NAS 접근 불가 시 폴백
+# 저장 루트는 config_common.CAMERA_LOG_ROOT (settings.json override 반영을 위해
+# 호출 시점에 getattr 로 동적 조회). 생성 실패 시 exe 기준 절대경로로 폴백.
 
 # ──────────────────────────────────────────────────────────
 # 기본 ROI
@@ -590,15 +593,34 @@ def _temporal_is_outlier(cur: float, history: deque) -> bool:
 # ══════════════════════════════════════════════════════════
 # 경로 헬퍼
 # ══════════════════════════════════════════════════════════
+def _local_fallback_root() -> Path:
+    """설정 루트 생성 실패 시 사용할 exe 기준 절대경로 폴백."""
+    if getattr(sys, "frozen", False):
+        base = Path(sys.executable).parent
+    else:
+        base = Path(__file__).resolve().parents[1]
+    return base / "Logs_LocalFallback" / "Camera_Logs"
+
+
 def _resolve_root() -> Path:
-    """NAS 접근 가능하면 NAS, 아니면 로컬 폴백 반환."""
+    """config의 CAMERA_LOG_ROOT를 생성해 반환. 실패 시 exe 기준 로컬 폴백 반환."""
+    root = Path(getattr(cfgc, "CAMERA_LOG_ROOT", r"C:\VanaM_Logs\Camera_Logs"))
     try:
-        NAS_LOG_ROOT.mkdir(parents=True, exist_ok=True)
-        return NAS_LOG_ROOT
+        root.mkdir(parents=True, exist_ok=True)
+        return root
     except Exception as e:
-        logger.warning("[CameraRecorder] NAS 접근 실패 → 로컬 저장: %s", e)
-        LOCAL_FALLBACK.mkdir(parents=True, exist_ok=True)
-        return LOCAL_FALLBACK
+        fb = _local_fallback_root()
+        logger.warning("[CameraRecorder] 저장 루트 생성 실패(%s: %s) → 폴백 경로 사용: %s", root, e, fb)
+        fb.mkdir(parents=True, exist_ok=True)
+        return fb
+
+
+def _free_gb(path: Path) -> float:
+    """경로가 속한 디스크의 여유 공간(GB). 조회 실패 시 inf (가드로 촬영이 막히지 않도록)."""
+    try:
+        return shutil.disk_usage(path).free / (1024 ** 3)
+    except Exception:
+        return float("inf")
 
 
 # ══════════════════════════════════════════════════════════
@@ -621,6 +643,7 @@ class CameraRecorder:
         camera_index: int = 1,
         interval: float = 1.0,
         config_file: str | Path = CONFIG_FILE,
+        notify_cb: Optional[Callable[[str], None]] = None,
     ) -> None:
         self._cam_idx     = camera_index
         self._interval    = max(0.2, float(interval))
@@ -640,6 +663,8 @@ class CameraRecorder:
 
         # ✅ 공정 로그(append_log)로 메시지를 보낼 콜백 (런타임이 주입)
         self._log_cb = None
+        # ✅ 디스크 여유 부족 등 외부 알림(구글챗) 콜백 (선택)
+        self._notify_cb = notify_cb
 
         self._load_config()
 
@@ -658,6 +683,16 @@ class CameraRecorder:
             except Exception:
                 pass
         logger.info(msg)
+
+    def _notify(self, msg: str) -> None:
+        """알림 콜백이 있으면 호출한다. 예외는 삼킨다(촬영/공정에 전파 금지)."""
+        cb = self._notify_cb
+        if cb is None:
+            return
+        try:
+            cb(msg)
+        except Exception:
+            pass
 
     # ── 설정 로드 ──────────────────────────────────────────
     def _load_config(self) -> None:
@@ -726,6 +761,16 @@ class CameraRecorder:
         """백그라운드 스레드 본체. 1초 주기로 촬영하여 원본 이미지만 저장한다.
         (OCR/파싱 없음. 예외가 나도 메인 공정에 전파하지 않는다.)"""
 
+        # ── 0) 디스크 여유 가드 (카메라 오픈보다 먼저) ──
+        root = _resolve_root()
+        thr  = float(getattr(cfgc, "CAMERA_MIN_FREE_GB", 20.0))
+        free = _free_gb(root)
+        if free < thr:
+            msg = f"디스크 여유 부족({free:.1f}GB < {thr:.1f}GB) — 이번 공정 영상 미기록"
+            self._log(msg)
+            self._notify(msg)
+            return
+
         # ── 1) 카메라 오픈 ──
         # ★ 저장 폴더 생성보다 먼저 수행한다.
         #   오픈 실패 시 빈 세션 폴더가 NAS로 동기화되면,
@@ -740,7 +785,7 @@ class CameraRecorder:
 
         # ── 2) 저장 폴더: {root}/{모드}/{YYYYMMDD_HHMMSS}/ ──
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        save_dir = _resolve_root() / self._mode_folder / ts
+        save_dir = root / self._mode_folder / ts
         try:
             save_dir.mkdir(parents=True, exist_ok=True)
         except Exception as e:
@@ -768,6 +813,15 @@ class CameraRecorder:
                     continue
                 err_count = 0
                 img_count += 1
+
+                # 촬영 중 디스크 여유 재검사 (300장마다)
+                if img_count % 300 == 0:
+                    free = _free_gb(root)
+                    if free < thr:
+                        msg = f"디스크 여유 부족({free:.1f}GB < {thr:.1f}GB) — 촬영 중단"
+                        self._log(msg)
+                        self._notify(msg)
+                        break
 
                 # 분석 파이프라인과 동일 방향(세로 1080x1920)으로 회전 후 저장
                 frame = cv2.rotate(frame, cv2.ROTATE_90_CLOCKWISE)
