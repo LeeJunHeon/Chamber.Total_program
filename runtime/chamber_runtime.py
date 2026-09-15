@@ -2738,6 +2738,15 @@ class ChamberRuntime:
             self.append_log("File", f"파일 처리 오류: {e}")
             return
 
+        _raw_errs = self._validate_raw_rows(list(rows or []))
+        if _raw_errs:
+            self.append_log("File", f"레시피 오류 {len(_raw_errs)}건:\n - " + "\n - ".join(_raw_errs))
+            self._post_warning(
+                "레시피 오류",
+                f"레시피 오류 {len(_raw_errs)}건:\n" + "\n".join(f"- {e}" for e in _raw_errs),
+            )
+            return
+
         self.process_queue = [cast(RawParams, r) for r in rows]
         self.current_process_index = -1
         if not self.process_queue:
@@ -4411,6 +4420,8 @@ class ChamberRuntime:
                         if not getattr(self, "_log_file_path", None):
                             self._open_run_log(norm)
                     self.append_log("Validate", "CSV 공정 파라미터 오류:\n - " + "\n - ".join(errs))
+                    with contextlib.suppress(Exception):
+                        self._host_report_start(False, "CSV 공정 파라미터 오류: " + "; ".join(errs))
                     self._runner_queue_mode = False
                     with contextlib.suppress(Exception):
                         self._clear_queue_and_reset_ui()
@@ -4472,6 +4483,8 @@ class ChamberRuntime:
 
         except Exception as e:
             self.append_log("MAIN", f"[Runner] ADVANCE_QUEUE failed: {e!r}")
+            with contextlib.suppress(Exception):
+                self._host_report_start(False, f"공정 시작 실패: {e}")
             self._runner_queue_mode = False
             with contextlib.suppress(Exception):
                 self._auto_connect_enabled = False
@@ -5277,10 +5290,6 @@ class ChamberRuntime:
         def iget(key, default="0"):
             try: return int(float(str(raw.get(key, default)).strip()))
             except Exception: return int(default)
-        def iget_opt(key):
-            s = str(raw.get(key, '')).strip()
-            return int(float(s)) if s != '' else None
-
         _g1_raw = str(raw.get("G1 Target", "") or raw.get("G1_target_name", "")).strip()
         _g2_raw = str(raw.get("G2 Target", "") or raw.get("G2_target_name", "")).strip()
         _g3_raw = str(raw.get("G3 Target", "") or raw.get("G3_target_name", "")).strip()
@@ -5344,14 +5353,14 @@ class ChamberRuntime:
         else:
             # ✅ CH2: 기존 키 그대로 사용
             use_dc_pulse = tf(raw.get("use_dc_pulse", "F"))
-            dc_pulse_power = fget("dc_pulse_power", "0")
-            dc_pulse_freq  = iget_opt("dc_pulse_freq")
-            dc_pulse_duty  = iget_opt("dc_pulse_duty_cycle")
+            dc_pulse_power = _float_from_keys("0", "dc_pulse_power")
+            dc_pulse_freq  = _opt_int_from_keys("dc_pulse_freq")
+            dc_pulse_duty  = _opt_int_from_keys("dc_pulse_duty_cycle")
 
             use_rf_pulse = tf(raw.get("use_rf_pulse", "F"))
-            rf_pulse_power = fget("rf_pulse_power", "0")
-            rf_pulse_freq  = iget_opt("rf_pulse_freq")
-            rf_pulse_duty  = iget_opt("rf_pulse_duty_cycle")
+            rf_pulse_power = _float_from_keys("0", "rf_pulse_power")
+            rf_pulse_freq  = _opt_int_from_keys("rf_pulse_freq")
+            rf_pulse_duty  = _opt_int_from_keys("rf_pulse_duty_cycle")
 
         # ✅ dep.rate: CSV 헤더가 "dep.rate"(점) 또는 "dep_rate"(밑줄) 둘 다 지원
         def fget_deprate() -> float | None:
@@ -6268,6 +6277,12 @@ class ChamberRuntime:
             except asyncio.TimeoutError:
                 raise RuntimeError(f"CSV 로드 30초 timeout (NAS 응답 지연): {s}")
             
+            _raw_errs = self._validate_raw_rows(list(rows or []))
+            if _raw_errs:
+                raise RuntimeError(
+                    f"레시피 오류 {len(_raw_errs)}건:\n - " + "\n - ".join(_raw_errs)
+                )
+
             self.process_queue = [cast(RawParams, r) for r in rows]
             self.current_process_index = -1
             if not self.process_queue:
@@ -6753,6 +6768,88 @@ class ChamberRuntime:
     # ============================= PLC 로그 소유 관리 =============================
 
     # ============================= 입력값 검증 헬퍼 =============================
+    # _normalize_params_for_process 가 실제로 파싱하는 컬럼 목록
+    #  - float: fget / _float_from_keys / fget_deprate 대상
+    #  - int  : iget / _opt_int_from_keys 대상
+    #  - T/F  : tf 대상
+    _RAW_FLOAT_KEYS = (
+        "base_pressure", "working_pressure", "process_time", "shutter_delay",
+        "thickness", "dep_rate", "dep.rate",
+        "dc_power", "dc_power2", "rf_power",
+        "dc_pulse_power", "rf_pulse_power",
+        "Ar_flow", "O2_flow", "N2_flow",
+    )
+    _RAW_INT_KEYS = (
+        "integration_time",
+        "dc_pulse_freq", "dc_pulse_duty_cycle",
+        "rf_pulse_freq", "rf_pulse_duty_cycle",
+    )
+    _RAW_TF_KEYS = (
+        "gun1", "gun2", "gun3",
+        "use_dc_pulse", "use_rf_pulse",
+        "use_rf_power", "use_dc_power", "use_dc_power2",
+        "Ar", "O2", "N2",
+        "main_shutter", "power_select",
+    )
+    # tf() 가 True 로 인정하는 값 + 명시적 False 값 (그 외는 오탈자로 간주)
+    _TF_TRUE_TOKENS = ("T", "TRUE", "1", "Y", "YES")
+    _TF_FALSE_TOKENS = ("F", "FALSE", "0", "N", "NO")
+
+    def _validate_raw_rows(self, rows: list[dict]) -> list[str]:
+        """
+        CSV/XLSX 로 읽은 원본 행을 파일 로드 시점에 전수 검증한다.
+        - 빈 칸은 항상 합법(미지정)
+        - 값이 있는데 해당 타입으로 변환이 안 되면 오류
+        반환: 사람이 읽는 오류 메시지 목록 (최대 20건 + "... 외 N건")
+        """
+        errs: list[str] = []
+        overflow = 0
+
+        def _add(msg: str) -> None:
+            nonlocal overflow
+            if len(errs) < 20:
+                errs.append(msg)
+            else:
+                overflow += 1
+
+        for idx, row in enumerate(rows or []):
+            if not isinstance(row, dict):
+                continue
+            # 헤더를 1행으로 보는 사람 기준 행 번호
+            lineno = idx + 2
+            name = str(row.get("Process_name", "") or "").strip()
+            where = f"{lineno}행" + (f"('{name}')" if name else "")
+
+            for key in self._RAW_FLOAT_KEYS:
+                v = str(row.get(key, "") or "").strip()
+                if v == "":
+                    continue
+                try:
+                    float(v)
+                except Exception:
+                    _add(f"{where} {key}='{v}' → 숫자가 아닙니다")
+
+            for key in self._RAW_INT_KEYS:
+                v = str(row.get(key, "") or "").strip()
+                if v == "":
+                    continue
+                try:
+                    int(float(v))
+                except Exception:
+                    _add(f"{where} {key}='{v}' → 숫자가 아닙니다")
+
+            for key in self._RAW_TF_KEYS:
+                v = str(row.get(key, "") or "").strip()
+                if v == "":
+                    continue
+                u = v.upper()
+                if u not in self._TF_TRUE_TOKENS and u not in self._TF_FALSE_TOKENS:
+                    _add(f"{where} {key}='{v}' → T/F 값이 아닙니다")
+
+        if overflow > 0:
+            errs.append(f"... 외 {overflow}건")
+        return errs
+
     def _validate_norm_params(self, p: NormParams) -> list[str]:
         errs: list[str] = []
 
