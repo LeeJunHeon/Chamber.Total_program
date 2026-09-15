@@ -2490,7 +2490,11 @@ class PlasmaCleaningRuntime:
             if not isinstance(parent, QWidget):
                 raise RuntimeError("parent widget not found")
 
+            if not self._popup_should_show(title, text):
+                return
+
             box = QMessageBox(parent)
+            box._popup_key = (str(title), str(text))
             box.setWindowTitle(title)
             box.setText(text)
             box.setIcon(QMessageBox.Warning)
@@ -2527,7 +2531,11 @@ class PlasmaCleaningRuntime:
         - 비모달 + 참조 보관(_msg_boxes)으로 GC 방지
         """
         try:
+            if not self._popup_should_show(title, str(text)):
+                return
+
             box = QMessageBox(self.ui)
+            box._popup_key = (str(title), str(text))
             box.setIcon(QMessageBox.Critical)
             box.setWindowTitle(title)
             box.setText(str(text))
@@ -2536,6 +2544,10 @@ class PlasmaCleaningRuntime:
 
             # ✅ OK 눌렀을 때만 idle로 복귀
             def _on_closed(result: int) -> None:
+                try:
+                    self._msg_boxes.remove(box)
+                except ValueError:
+                    pass
                 try:
                     if clear_status_to_idle and result == int(QMessageBox.Ok):
                         # ch 미지정이면 현재 선택 채널 사용
@@ -2565,6 +2577,22 @@ class PlasmaCleaningRuntime:
         """메시지박스 참조를 보관해서 GC로 사라지지 않게 유지"""
         if not hasattr(self, "_msg_boxes"):
             self._msg_boxes = []
+
+    # 동시에 떠 있을 수 있는 팝업 최대 개수
+    _POPUP_MAX_OPEN = 5
+
+    def _popup_should_show(self, title: str, text: str) -> bool:
+        """이미 같은 (제목, 본문) 창이 떠 있거나 상한을 넘으면 False(로그만 남김)."""
+        self._ensure_msgbox_store()
+        key = (str(title), str(text))
+        for b in list(self._msg_boxes):
+            if getattr(b, "_popup_key", None) == key:
+                self.append_log("PC", f"(중복 억제) {title}: {text}")
+                return False
+        if len(self._msg_boxes) >= self._POPUP_MAX_OPEN:
+            self.append_log("PC", f"(팝업 상한 초과) {title}: {text}")
+            return False
+        return True
 
     def _parent_widget(self) -> Optional[QWidget]:
         """

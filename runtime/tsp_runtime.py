@@ -324,13 +324,33 @@ class TSPPageController:
         if not hasattr(self, "_msg_boxes"):
             self._msg_boxes = []  # type: ignore[attr-defined]
 
+    # 동시에 떠 있을 수 있는 팝업 최대 개수
+    _POPUP_MAX_OPEN = 5
+
+    def _popup_should_show(self, title: str, text: str) -> bool:
+        """이미 같은 (제목, 본문) 창이 떠 있거나 상한을 넘으면 False(로그만 남김)."""
+        self._ensure_msgbox_store()
+        key = (str(title), str(text))
+        for b in list(self._msg_boxes):  # type: ignore[attr-defined]
+            if getattr(b, "_popup_key", None) == key:
+                self._log(f"(중복 억제) {title}: {text}")
+                return False
+        if len(self._msg_boxes) >= self._POPUP_MAX_OPEN:  # type: ignore[attr-defined]
+            self._log(f"(팝업 상한 초과) {title}: {text}")
+            return False
+        return True
+
     def _post_warning(self, title: str, text: str, auto_close_ms: int = 5000) -> None:
         """비차단 WindowModal 경고창 + 5초 자동 닫힘(기본)"""
         if not self._has_ui():
             return
 
+        if not self._popup_should_show(title, text):
+            return
+
         self._ensure_msgbox_store()
         box = QMessageBox(self._parent_widget() or None)
+        box._popup_key = (str(title), str(text))
         box.setWindowTitle(title)
         box.setText(text)
         box.setIcon(QMessageBox.Warning)

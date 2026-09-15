@@ -6665,12 +6665,33 @@ class ChamberRuntime:
         if not hasattr(self, "_msg_boxes"):
             self._msg_boxes = []
 
+    # 동시에 떠 있을 수 있는 팝업 최대 개수
+    _POPUP_MAX_OPEN = 5
+
+    def _popup_should_show(self, title: str, text: str) -> bool:
+        """이미 같은 (제목, 본문) 창이 떠 있거나 상한을 넘으면 False(로그만 남김).
+        판정은 (title, text) 완전 일치 — 서로 다른 오류가 묶이지 않도록."""
+        self._ensure_msgbox_store()
+        key = (str(title), str(text))
+        for b in list(self._msg_boxes):
+            if getattr(b, "_popup_key", None) == key:
+                self.append_log("UI", f"(중복 억제) {title}: {text}")
+                return False
+        if len(self._msg_boxes) >= self._POPUP_MAX_OPEN:
+            self.append_log("UI", f"(팝업 상한 초과) {title}: {text}")
+            return False
+        return True
+
     def _post_warning(self, title: str, text: str, auto_close_ms: int = 5000) -> None:
         if not self._has_ui():
             self.append_log("WARN", f"{title}: {text}"); return
 
+        if not self._popup_should_show(title, text):
+            return
+
         self._ensure_msgbox_store()
         box = QMessageBox(self._parent_widget() or None)
+        box._popup_key = (str(title), str(text))
         box.setWindowTitle(title)
         box.setText(text)
         box.setIcon(QMessageBox.Warning)
@@ -6694,8 +6715,12 @@ class ChamberRuntime:
         if not self._has_ui():
             self.append_log("ERROR", f"{title}: {text}"); return
 
+        if not self._popup_should_show(title, text):
+            return
+
         self._ensure_msgbox_store()
         box = QMessageBox(self._parent_widget() or None)
+        box._popup_key = (str(title), str(text))
         box.setWindowTitle(title)
         box.setText(text)
         box.setIcon(QMessageBox.Critical)

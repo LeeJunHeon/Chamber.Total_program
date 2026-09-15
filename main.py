@@ -1758,14 +1758,52 @@ class MainWindow(QWidget):
             if sp and hasattr(sp, "set_running"):
                 sp.set_running(False)
     
+    # 동시에 떠 있을 수 있는 호스트 팝업 최대 개수
+    _HOST_POPUP_MAX_OPEN = 5
+    # 호스트 팝업 자동 닫힘(ms)
+    _HOST_POPUP_AUTOCLOSE_MS = 15000
+
+    def _host_popup_should_show(self, title: str, text: str) -> bool:
+        """이미 같은 (제목, 본문) 창이 떠 있거나 상한을 넘으면 False(로그만 남김)."""
+        if not hasattr(self, "_host_msg_boxes"):
+            self._host_msg_boxes = []
+        key = (str(title), str(text))
+        for b in list(self._host_msg_boxes):
+            if getattr(b, "_popup_key", None) == key:
+                self._broadcast_log("HOST", f"(중복 억제) {title}: {text}")
+                return False
+        if len(self._host_msg_boxes) >= self._HOST_POPUP_MAX_OPEN:
+            self._broadcast_log("HOST", f"(팝업 상한 초과) {title}: {text}")
+            return False
+        return True
+
     def _host_popup(self, title: str, text: str) -> None:
+        if not self._host_popup_should_show(title, text):
+            return
+
         box = QMessageBox(self)
         box.setWindowTitle(title)
         box.setText(text)
         box.setIcon(QMessageBox.Critical)
         box.setStandardButtons(QMessageBox.Ok)
+        box._popup_key = (str(title), str(text))
+
+        self._host_msg_boxes.append(box)
+
+        def _cleanup(_res: int):
+            try:
+                self._host_msg_boxes.remove(box)
+            except ValueError:
+                pass
+            try:
+                box.deleteLater()
+            except Exception:
+                pass
+        box.finished.connect(_cleanup)
+
         box.open()
-        attach_autoclose(box, ms=0)  # 자동닫힘 원치 않으면 0
+        # ✅ Critical 이지만 화면을 계속 가리지 않도록 15초 자동 닫힘
+        attach_autoclose(box, ms=self._HOST_POPUP_AUTOCLOSE_MS)
 
     async def _restart_host(self) -> None:
         await self._stop_host()
