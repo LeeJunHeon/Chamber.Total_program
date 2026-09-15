@@ -6778,6 +6778,7 @@ class ChamberRuntime:
         "dc_power", "dc_power2", "rf_power",
         "dc_pulse_power", "rf_pulse_power",
         "Ar_flow", "O2_flow", "N2_flow",
+        "change_power_value",
     )
     _RAW_INT_KEYS = (
         "integration_time",
@@ -6794,6 +6795,31 @@ class ChamberRuntime:
     # tf() 가 True 로 인정하는 값 + 명시적 False 값 (그 외는 오탈자로 간주)
     _TF_TRUE_TOKENS = ("T", "TRUE", "1", "Y", "YES")
     _TF_FALSE_TOKENS = ("F", "FALSE", "0", "N", "NO")
+    # 열거형 컬럼: 허용값(소문자) 목록
+    _RAW_ENUM_KEYS = {"chuck_position": ("up", "mid", "down")}
+    # 기간 표기 컬럼 (controller/process_controller.py _parse_duration_seconds 와 동일 규칙)
+    _RAW_DURATION_KEYS = ("power_change_time",)
+    _DURATION_NUM_RE = re.compile(r"\d+(?:\.\d+)?")
+    _DURATION_HMS_RE = re.compile(
+        r"(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m)?(?:(\d+(?:\.\d+)?)s)?"
+    )
+
+    @classmethod
+    def _parse_duration_for_validate(cls, s: str) -> float:
+        """_parse_duration_seconds(process_controller) 와 동일 규칙. 형식 불일치면 0.0"""
+        s = (s or "").strip().lower()
+        if not s:
+            return 0.0
+        if cls._DURATION_NUM_RE.fullmatch(s):
+            return float(s)
+        m = cls._DURATION_HMS_RE.fullmatch(s)
+        if not m:
+            return 0.0
+        return float(
+            float(m.group(1) or 0.0) * 3600.0
+            + float(m.group(2) or 0.0) * 60.0
+            + float(m.group(3) or 0.0)
+        )
 
     def _validate_raw_rows(self, rows: list[dict]) -> list[str]:
         """
@@ -6845,6 +6871,30 @@ class ChamberRuntime:
                 u = v.upper()
                 if u not in self._TF_TRUE_TOKENS and u not in self._TF_FALSE_TOKENS:
                     _add(f"{where} {key}='{v}' → T/F 값이 아닙니다")
+
+            for key, allowed in self._RAW_ENUM_KEYS.items():
+                v = str(row.get(key, "") or "").strip()
+                if v == "":
+                    continue
+                if v.lower() not in allowed:
+                    _add(f"{where} {key}='{v}' → {'/'.join(allowed)} 중 하나여야 합니다")
+
+            for key in self._RAW_DURATION_KEYS:
+                v = str(row.get(key, "") or "").strip()
+                if v == "":
+                    continue
+                if self._parse_duration_for_validate(v) <= 0.0:
+                    _add(f"{where} {key}='{v}' → 기간 형식이 아닙니다 (예: 30s, 5m, 1h30m)")
+
+            # 중간 파워 변경은 두 칸이 모두 있어야 동작한다
+            _cpv = str(row.get("change_power_value", "") or "").strip()
+            _pct = str(row.get("power_change_time", "") or "").strip()
+            if bool(_cpv) != bool(_pct):
+                _add(
+                    f"{where} change_power_value 와 power_change_time 은 "
+                    f"함께 입력해야 합니다 "
+                    f"(현재: change_power_value='{_cpv}', power_change_time='{_pct}')"
+                )
 
         if overflow > 0:
             errs.append(f"... 외 {overflow}건")
