@@ -132,7 +132,6 @@ NormParams = TypedDict('NormParams', {
 # 폴링 타깃도 명확히 분리
 TargetsMap = Mapping[Literal["mfc", "dc", "dc2", "rf", "dc_pulse", "rf_pulse"], bool]
 
-@dataclass(frozen=True)
 def _fallback_log_root() -> Path:
     """로그 폴백 뿌리. 호출 시점에 config_common 을 읽는다(DEC-033).
     cwd 는 쓰지 않는다 — 관리자 바로가기의 '시작 위치'가 비면 System32 가 된다."""
@@ -148,6 +147,7 @@ def _fallback_log_root() -> Path:
         return _base / "Logs_LocalFallback"
 
 
+@dataclass(frozen=True)
 class _RunnerCmd:
     kind: Literal["START", "START_QUEUE", "STOP", "PC_FINISHED"]
     params: NormParams | None = None
