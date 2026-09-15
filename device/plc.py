@@ -330,6 +330,9 @@ class AsyncPLC:
         self._priority_waiters: int = 0
         self._last_io_ts = 0.0
 
+        # ✅ 코일 스냅샷 블록 계획(적응형). 공격적 → 보수적 순서.
+        self._coil_plan_idx: int = self._default_coil_plan_idx()
+
         self._last_io_ts = 0.0
         self._hb_task: Optional[asyncio.Task] = None
         self._closed = False
@@ -443,6 +446,43 @@ class AsyncPLC:
             await self.set_endpoint(self.cfg.ip, self.cfg.port, reconnect=True)
 
     # ---------- 연결/수명주기 ----------
+    # ✅ 코일 스냅샷 블록 계획표: (max_gap, max_span)
+    #    앞쪽일수록 공격적(블록 수가 적다), 마지막은 기존 동작과 동일한 안전값.
+    _COIL_BLOCK_PLANS: tuple[tuple[int, int], ...] = (
+        (2000, 2000), (256, 512), (64, 256), (8, 64),
+    )
+    # FC1 한도: 한 블록 최대 코일 수
+    _COIL_BLOCK_HARD_MAX = 2000
+
+    @classmethod
+    def _default_coil_plan_idx(cls) -> int:
+        """설정값을 읽고 범위를 벗어나면 마지막(가장 안전) 인덱스로 클램프."""
+        last = len(cls._COIL_BLOCK_PLANS) - 1
+        try:
+            i = int(getattr(cfgc, "PLC_COIL_LOG_BLOCK_PLAN", 0))
+        except Exception:
+            return last
+        if i < 0 or i > last:
+            return last
+        return i
+
+    def _coil_ranges_for_plan(self, addrs, idx: int):
+        """계획 idx 부터 시작해, 블록 길이가 FC1 한도를 넘지 않는
+        첫 계획의 (인덱스, ranges) 를 돌려준다."""
+        last = len(self._COIL_BLOCK_PLANS) - 1
+        i = max(0, min(int(idx), last))
+        while True:
+            gap, span = self._COIL_BLOCK_PLANS[i]
+            ranges = self._build_sparse_ranges(
+                addrs, max_gap=max(0, int(gap)), max_span=max(1, int(span))
+            )
+            if not ranges or max(c for _, c in ranges) <= self._COIL_BLOCK_HARD_MAX:
+                return i, ranges
+            if i >= last:
+                # 마지막 계획이라도 한도를 넘으면 그대로 두고 반환(방어적 종료)
+                return i, ranges
+            i += 1
+
     async def connect(self) -> None:
         self._closed = False
 
@@ -456,6 +496,8 @@ class AsyncPLC:
         async with self._io_lock("connect"):
             await asyncio.to_thread(self._connect_sync)
 
+        # ✅ 재연결 시 블록 계획을 설정값으로 되돌려 재탐색
+        self._coil_plan_idx = self._default_coil_plan_idx()
         self.log("TCP 연결 성공: %s:%s (unit=%s)", self.cfg.ip, self.cfg.port, self.cfg.unit)
 
     async def close(self) -> None:
@@ -906,19 +948,39 @@ class AsyncPLC:
         ranges.append((start, prev - start + 1))
         return ranges
             
+    def _snapshot_budget_s(self) -> float:
+        try:
+            v = float(getattr(cfgc, "PLC_COIL_LOG_BUDGET_S", 4.0))
+        except Exception:
+            v = 4.0
+        return v if v > 0.0 else 4.0
+
+    async def _yield_to_priority(self, deadline: float) -> bool:
+        """우선순위 대기자가 빌 때까지 짧게 폴링하며 양보한다.
+        ★ 반드시 락을 놓은 상태(블록 사이)에서만 호출할 것.
+        True=진행 가능, False=예산 초과
+        """
+        while self._priority_waiters > 0:
+            if time.perf_counter() >= deadline:
+                return False
+            await asyncio.sleep(0.02)
+        return time.perf_counter() < deadline
+
     async def snapshot_all_coils_fast(
         self,
         *,
         keys: Optional[Iterable[str]] = None,
-        max_coils_per_req: int = 64,
-        max_gap: int = 8,
-        skip_if_busy: bool = True,
+        max_coils_per_req: Optional[int] = None,
+        max_gap: Optional[int] = None,
+        skip_if_busy: bool = False,
     ) -> Dict[str, bool]:
         """
         PLC_COIL_MAP에 있는 실제 사용 코일만 sparse block read로 스냅샷.
         - 기존처럼 min~max 전체를 훑지 않음
-        - 가까운 주소끼리만 작은 블록으로 읽음
-        - skip_if_busy=True면 공정 제어 중에는 스킵
+        - max_gap/max_coils_per_req 를 명시하지 않으면 현재 블록 계획
+          (self._coil_plan_idx)을 사용한다. 명시하면 그 값이 우선한다.
+        - 우선순위 I/O 대기자가 생기면 포기하지 않고 양보한 뒤
+          같은 블록부터 이어서 읽는다. 예산 초과 시에만 {} 반환.
         """
         if skip_if_busy and self.is_busy():
             return {}
@@ -929,19 +991,36 @@ class AsyncPLC:
             return {}
 
         out: Dict[str, bool] = {}
-        ranges = self._build_sparse_ranges(
-            addr_map.values(),
-            max_gap=max(0, int(max_gap)),
-            max_span=max(1, int(max_coils_per_req)),
-        )
+
+        if max_gap is not None or max_coils_per_req is not None:
+            # 호출자가 명시한 값 우선 (기존 기본값 사용)
+            ranges = self._build_sparse_ranges(
+                addr_map.values(),
+                max_gap=max(0, int(8 if max_gap is None else max_gap)),
+                max_span=max(1, int(64 if max_coils_per_req is None else max_coils_per_req)),
+            )
+        else:
+            _idx, ranges = self._coil_ranges_for_plan(addr_map.values(), self._coil_plan_idx)
+            if _idx != self._coil_plan_idx:
+                # FC1 한도 방어로 계획이 밀린 경우 그 결과를 고정
+                self._coil_plan_idx = _idx
+
+        deadline = time.perf_counter() + self._snapshot_budget_s()
 
         for start, cnt in ranges:
-            # ✅ 양보 체크: 외부 우선순위 PLC I/O 대기자가 있으면 즉시 종료
-            #    (사용자 정책: 이번 tick은 csv 비워두고, 다음 tick에서 재시도)
-            if self._priority_waiters > 0:
+            # ✅ 양보: 대기자가 0이 될 때까지 기다렸다가 같은 블록부터 재개.
+            #    락은 블록 사이라 이미 놓은 상태이므로 락을 쥐고 기다리지 않는다.
+            if not await self._yield_to_priority(deadline):
                 return {}
 
-            bits = await self.read_coils_block(start, cnt, priority="low")
+            try:
+                bits = await self.read_coils_block(start, cnt, priority="low")
+            except PLCError as e:
+                if getattr(e, "code", None) == "E403":
+                    # 블록이 PLC 주소 범위를 벗어난 것으로 보고 한 단계 보수적으로
+                    self._demote_coil_plan(addr_map.values(), reason=str(e))
+                raise
+
             end = start + cnt
 
             for k, a in addr_map.items():
@@ -949,6 +1028,29 @@ class AsyncPLC:
                     out[k] = bool(bits[a - start])
 
         return out
+
+    def _demote_coil_plan(self, addrs, *, reason: str = "") -> None:
+        """E403(주소 범위 초과)에서 한 단계 보수적인 계획으로 내린다.
+        계획이 실제로 바뀐 순간에만 로그를 한 줄 남긴다."""
+        last = len(self._COIL_BLOCK_PLANS) - 1
+        old_idx = int(self._coil_plan_idx)
+        if old_idx >= last:
+            return
+        try:
+            addrs = list(addrs)
+            _, old_ranges = self._coil_ranges_for_plan(addrs, old_idx)
+            new_idx, new_ranges = self._coil_ranges_for_plan(addrs, old_idx + 1)
+            if new_idx == old_idx:
+                return
+            self._coil_plan_idx = new_idx
+            self.log(
+                "PLC COIL LOG: block plan %d(blocks=%d, max_span=%d) -> %d(blocks=%d, max_span=%d) [E403] %s",
+                old_idx, len(old_ranges), self._COIL_BLOCK_PLANS[old_idx][1],
+                new_idx, len(new_ranges), self._COIL_BLOCK_PLANS[new_idx][1],
+                reason,
+            )
+        except Exception:
+            self._coil_plan_idx = min(old_idx + 1, last)
 
     async def read_coils(self, addrs: Iterable[int]) -> Dict[int, bool]:
         out: Dict[int, bool] = {}
@@ -1059,7 +1161,7 @@ class AsyncPLC:
         self,
         *,
         keys: Optional[Iterable[str]] = None,
-        skip_if_busy: bool = True,
+        skip_if_busy: bool = False,
     ) -> Dict[str, int]:
         """
         PLC_REG_MAP에 있는 holding register 스냅샷.
@@ -1073,8 +1175,8 @@ class AsyncPLC:
         if not addr_map:
             return {}
 
-        # ✅ 양보 체크: 외부 우선순위 대기자 있으면 즉시 빈 dict
-        if self._priority_waiters > 0:
+        # ✅ 양보: 대기자가 빌 때까지 기다렸다가 1회 재시도. 예산 초과 시에만 {}.
+        if not await self._yield_to_priority(time.perf_counter() + self._snapshot_budget_s()):
             return {}
 
         mn = min(addr_map.values())
@@ -1265,48 +1367,81 @@ class AsyncPLC:
         keys = list(self._plc_coil_log_keys)
         reg_keys = list(getattr(self, "_plc_reg_log_keys", []))
 
+        # ✅ 스킵 사유 계측
+        try:
+            summary_s = float(getattr(cfgc, "PLC_COIL_LOG_SUMMARY_S", 60.0))
+        except Exception:
+            summary_s = 60.0
+        stats = dict(ok=0, disconnected=0, empty_snapshot=0,
+                     budget_timeout=0, plc_error=0, write_failed=0)
+        last_summary = time.perf_counter()
+
+        def _emit_summary(force: bool = False) -> None:
+            nonlocal last_summary
+            now = time.perf_counter()
+            if not force and (now - last_summary) < max(1.0, summary_s):
+                return
+            last_summary = now
+            skips = sum(v for k, v in stats.items() if k != "ok")
+            if skips > 0:
+                try:
+                    n_blocks = len(self._coil_ranges_for_plan(
+                        [PLC_COIL_MAP[k] for k in keys if k in PLC_COIL_MAP],
+                        self._coil_plan_idx)[1])
+                except Exception:
+                    n_blocks = -1
+                self.log(
+                    "PLC COIL LOG summary(%.0fs): ok=%d disconnected=%d empty=%d "
+                    "budget_timeout=%d plc_error=%d write_failed=%d (plan=%d, blocks=%d)",
+                    max(1.0, summary_s), stats["ok"], stats["disconnected"],
+                    stats["empty_snapshot"], stats["budget_timeout"],
+                    stats["plc_error"], stats["write_failed"],
+                    self._coil_plan_idx, n_blocks,
+                )
+            for k in stats:
+                stats[k] = 0
+
         while not evt.is_set():
             t0 = time.perf_counter()
             dt = datetime.now()
 
             # ✅ PLC가 끊긴 상태에서는 로거가 connect/재시도를 하지 않음 → 공정 영향 0에 더 가까워짐
             if not self.is_connected():
-                await asyncio.sleep(interval)
-                continue
-
-            # ✅ 공정/메인 제어가 PLC 사용 중이면 스킵(공정 영향 0)
-            if self.is_busy():
+                stats["disconnected"] += 1
+                _emit_summary()
                 await asyncio.sleep(interval)
                 continue
 
             # ✅ 공정 task가 먼저 락을 잡을 기회를 주기(우선순위 체감 개선)
+            #    is_busy() 선차단은 제거 — 실제 경합 회피는 snapshot 쪽
+            #    _priority_waiters 양보가 담당한다.
             await asyncio.sleep(0)
 
-            if self.is_busy():
-                await asyncio.sleep(interval)
-                continue
-
             # ✅ 코일 스냅샷(블록 읽기). 실패해도 공정 영향 없게 예외 삼킴.
+            _snap_t0 = time.perf_counter()
             try:
-                snap = await self.snapshot_all_coils_fast(
-                    keys=keys,
-                    skip_if_busy=True,
-                    max_coils_per_req=64,
-                    max_gap=8,
-                )
+                snap = await self.snapshot_all_coils_fast(keys=keys)
             except Exception as e:
+                stats["plc_error"] += 1
+                _emit_summary()
                 self.log("PLC COIL LOG: snapshot failed (ignored): %r", e)
                 await asyncio.sleep(interval)
                 continue
 
             if not snap:
+                # 예산 초과(양보 지속)인지, 대상 키가 없어 빈 것인지 구분
+                if (time.perf_counter() - _snap_t0) >= self._snapshot_budget_s():
+                    stats["budget_timeout"] += 1
+                else:
+                    stats["empty_snapshot"] += 1
+                _emit_summary()
                 await asyncio.sleep(interval)
                 continue
 
             reg_snap: Dict[str, int] = {}
             if reg_keys:
                 try:
-                    reg_snap = await self.snapshot_regs_fast(keys=reg_keys, skip_if_busy=True)
+                    reg_snap = await self.snapshot_regs_fast(keys=reg_keys)
                 except Exception as e:
                     self.log("PLC REG LOG: snapshot failed (ignored): %r", e)
                     reg_snap = {}
@@ -1339,9 +1474,14 @@ class AsyncPLC:
                 if w.consume_switched_flag():
                     self.log("PLC COIL LOG: NAS write failed -> switched to LOCAL (keep-handle)")
 
+                stats["ok"] += 1
+
             except Exception as e:
                 # ✅ 최종 실패는 공정 영향 없게 무시
+                stats["write_failed"] += 1
                 self.log("PLC COIL LOG: write failed (ignored): %r", e)
+
+            _emit_summary()
 
             # 주기 맞추기
             elapsed = time.perf_counter() - t0
