@@ -1,19 +1,34 @@
 # lib/config_common.py
 
 
+import sys
 from pathlib import Path
+
+
+def _exe_base_dir() -> Path:
+    """폴백 로그 뿌리의 기준 디렉터리.
+    관리자 권한 바로가기의 '시작 위치'가 비면 cwd 가 System32 가 되므로 cwd 를 쓰지 않는다."""
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve().parent
+    return Path(__file__).resolve().parents[1]
 
 
 # =========================================================
 # Local fallback paths
 # - 폴더는 실제 write 시점에만 생성되도록, 여기서는 Path만 정의
 # =========================================================
-LOCAL_FALLBACK_ROOT = Path.cwd() / "Logs_LocalFallback"
+LOCAL_FALLBACK_ROOT = _exe_base_dir() / "Logs_LocalFallback"
 
 LOCAL_FALLBACK_CH1_DIR = LOCAL_FALLBACK_ROOT / "CH1"
 LOCAL_FALLBACK_CH2_DIR = LOCAL_FALLBACK_ROOT / "CH2"
 LOCAL_FALLBACK_SERVER_DIR = LOCAL_FALLBACK_ROOT / "Server"
 PLC_COIL_LOG_LOCAL_DIR = LOCAL_FALLBACK_ROOT / "PLC_Coil"
+LOCAL_FALLBACK_PC_DIR      = LOCAL_FALLBACK_ROOT / "Plasma_Cleaning"
+LOCAL_FALLBACK_TSP_DIR     = LOCAL_FALLBACK_ROOT / "TSP"
+LOCAL_FALLBACK_ERROR_DIR   = LOCAL_FALLBACK_ROOT / "ERROR"
+LOCAL_FALLBACK_DUMP_DIR    = LOCAL_FALLBACK_ROOT / "RUNTIME_DUMP"
+LOCAL_FALLBACK_RGA_DIR     = LOCAL_FALLBACK_ROOT / "RGA"
+LOCAL_FALLBACK_SYSTEM_DIR  = LOCAL_FALLBACK_ROOT / "SYSTEM"
 
 
 # === 외부 제어 호스트 서버 설정 ===

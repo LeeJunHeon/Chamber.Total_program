@@ -133,6 +133,21 @@ NormParams = TypedDict('NormParams', {
 TargetsMap = Mapping[Literal["mfc", "dc", "dc2", "rf", "dc_pulse", "rf_pulse"], bool]
 
 @dataclass(frozen=True)
+def _fallback_log_root() -> Path:
+    """로그 폴백 뿌리. 호출 시점에 config_common 을 읽는다(DEC-033).
+    cwd 는 쓰지 않는다 — 관리자 바로가기의 '시작 위치'가 비면 System32 가 된다."""
+    import sys as _sys
+    if getattr(_sys, "frozen", False):
+        _base = Path(_sys.executable).resolve().parent
+    else:
+        _base = Path(__file__).resolve().parents[1]
+    try:
+        from lib import config_common as _cc
+        return Path(getattr(_cc, "LOCAL_FALLBACK_ROOT", _base / "Logs_LocalFallback"))
+    except Exception:
+        return _base / "Logs_LocalFallback"
+
+
 class _RunnerCmd:
     kind: Literal["START", "START_QUEUE", "STOP", "PC_FINISHED"]
     params: NormParams | None = None
@@ -182,7 +197,7 @@ class _CfgAdapter:
 
         if p:
             return Path(p)
-        return Path.cwd() / f"RGA_CH{self.ch}.csv"
+        return _fallback_log_root() / "RGA" / f"RGA_CH{self.ch}.csv"
 
     @property
     def RGA_NET(self) -> Mapping[str, Any]:
@@ -425,7 +440,7 @@ class ChamberRuntime:
         self._local_log_dir = Path(
             self.cfg._get(
                 f"LOCAL_FALLBACK_CH{self.ch}_DIR",
-                Path.cwd() / "Logs_LocalFallback" / f"CH{self.ch}",
+                _fallback_log_root() / f"CH{self.ch}",
             )
         )
 
@@ -693,7 +708,7 @@ class ChamberRuntime:
             self._local_log_dir = Path(
                 self.cfg._get(
                     f"LOCAL_FALLBACK_CH{self.ch}_DIR",
-                    Path.cwd() / "Logs_LocalFallback" / f"CH{self.ch}",
+                    _fallback_log_root() / f"CH{self.ch}",
                 )
             )
 

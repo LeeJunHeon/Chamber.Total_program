@@ -13,6 +13,21 @@ from util.log_hub import FixedCsvDictAppender
 from lib import config_common as cfgc
 
 
+def _fallback_log_root() -> Path:
+    """로그 폴백 뿌리. 호출 시점에 config_common 을 읽는다(DEC-033).
+    cwd 는 쓰지 않는다 — 관리자 바로가기의 '시작 위치'가 비면 System32 가 된다."""
+    import sys as _sys
+    if getattr(_sys, "frozen", False):
+        _base = Path(_sys.executable).resolve().parent
+    else:
+        _base = Path(__file__).resolve().parents[1]
+    try:
+        from lib import config_common as _cc
+        return Path(getattr(_cc, "LOCAL_FALLBACK_ROOT", _base / "Logs_LocalFallback"))
+    except Exception:
+        return _base / "Logs_LocalFallback"
+
+
 class DataLogger(QObject):
     """
     CH별로 공정 요약 데이터를 CSV에 1행 기록.
@@ -42,7 +57,7 @@ class DataLogger(QObject):
             getattr(
                 cfgc,
                 f"LOCAL_FALLBACK_CH{self._ch}_DIR",
-                Path.cwd() / "Logs_LocalFallback" / f"CH{self._ch}",
+                _fallback_log_root() / f"CH{self._ch}",
             )
         )
 

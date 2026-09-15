@@ -37,10 +37,11 @@ def _default_error_root() -> Path:
 def _local_fallback_root() -> Path:
     """primary 실패 시 폴백: exe 기준 절대경로 (cwd 는 예측 불가)."""
     if getattr(sys, "frozen", False):
-        base = Path(sys.executable).parent
+        base = Path(sys.executable).resolve().parent
     else:
         base = Path(__file__).resolve().parents[1]
-    return base / "Logs_LocalFallback" / "ERROR"
+    root = getattr(cfgc, "LOCAL_FALLBACK_ROOT", base / "Logs_LocalFallback")
+    return Path(root) / "ERROR"
 
 _FAULT_LOCK = threading.Lock()
 _FAULT_ENABLED = False

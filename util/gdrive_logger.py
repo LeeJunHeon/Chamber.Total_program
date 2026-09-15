@@ -129,6 +129,21 @@ _write_lock = threading.Lock()
 # 스타일 헬퍼
 # ════════════════════════════════════════════════════════════════
 
+def _fallback_log_root() -> Path:
+    """로그 폴백 뿌리. 호출 시점에 config_common 을 읽는다(DEC-033).
+    cwd 는 쓰지 않는다 — 관리자 바로가기의 '시작 위치'가 비면 System32 가 된다."""
+    import sys as _sys
+    if getattr(_sys, "frozen", False):
+        _base = Path(_sys.executable).resolve().parent
+    else:
+        _base = Path(__file__).resolve().parents[1]
+    try:
+        from lib import config_common as _cc
+        return Path(getattr(_cc, "LOCAL_FALLBACK_ROOT", _base / "Logs_LocalFallback"))
+    except Exception:
+        return _base / "Logs_LocalFallback"
+
+
 def _cs(ws, r: int, c: int, val=None, bg: Optional[str] = None,
         fg: str = _FG, bold: bool = False, size: int = 9,
         ha: str = "center", wrap: bool = False,
@@ -673,7 +688,7 @@ async def save_process_log(
         return False
 
     target_dir = log_dir or _DEFAULT_GDRIVE_DIR
-    fb_dir     = local_fallback or (Path.cwd() / "Logs_LocalFallback")
+    fb_dir     = local_fallback or _fallback_log_root()
 
     loop = asyncio.get_event_loop()
     try:

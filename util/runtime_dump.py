@@ -25,10 +25,15 @@ def _default_log_root() -> Path:
 def _local_fallback_root() -> Path:
     """폴백: exe 기준 절대경로 (cwd 는 예측 불가)."""
     if getattr(sys, "frozen", False):
-        base = Path(sys.executable).parent
+        base = Path(sys.executable).resolve().parent
     else:
         base = Path(__file__).resolve().parents[1]
-    return base / "Logs_LocalFallback" / "RUNTIME_DUMP"
+    try:
+        from lib import config_common as _cc
+        root = getattr(_cc, "LOCAL_FALLBACK_ROOT", base / "Logs_LocalFallback")
+    except Exception:
+        root = base / "Logs_LocalFallback"
+    return Path(root) / "RUNTIME_DUMP"
 
 _DUMP_LOCK = threading.Lock()
 _DUMP_IN_PROGRESS = False

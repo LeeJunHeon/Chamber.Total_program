@@ -30,6 +30,21 @@ from controller.runtime_state import runtime_state  # ★ 추가: 전역 쿨다�
 
 from lib import config_common as cfgc
 
+def _fallback_log_root() -> Path:
+    """로그 폴백 뿌리. 호출 시점에 config_common 을 읽는다(DEC-033).
+    cwd 는 쓰지 않는다 — 관리자 바로가기의 '시작 위치'가 비면 System32 가 된다."""
+    import sys as _sys
+    if getattr(_sys, "frozen", False):
+        _base = Path(_sys.executable).resolve().parent
+    else:
+        _base = Path(__file__).resolve().parents[1]
+    try:
+        from lib import config_common as _cc
+        return Path(getattr(_cc, "LOCAL_FALLBACK_ROOT", _base / "Logs_LocalFallback"))
+    except Exception:
+        return _base / "Logs_LocalFallback"
+
+
 class PlasmaCleaningRuntime:
     """
     Plasma Cleaning 전용 런타임 (그래프/데이터로거 미사용 버전)
@@ -2248,7 +2263,7 @@ class PlasmaCleaningRuntime:
         try:
             _dir.mkdir(parents=True, exist_ok=True)
         except Exception:
-            _dir = Path(getattr(cfgc, "LOCAL_FALLBACK_ROOT", Path.cwd() / "Logs_LocalFallback")) / "Plasma_Cleaning"
+            _dir = _fallback_log_root() / "Plasma_Cleaning"
             with contextlib.suppress(Exception):
                 _dir.mkdir(parents=True, exist_ok=True)
 

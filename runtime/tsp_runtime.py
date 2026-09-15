@@ -24,6 +24,21 @@ import contextlib  # (_post_warning 정리 콜백에서 사용)
 from lib import config_common as cfgc
 from lib import config_ch1 as cfg1
 
+def _fallback_log_root() -> Path:
+    """로그 폴백 뿌리. 호출 시점에 config_common 을 읽는다(DEC-033).
+    cwd 는 쓰지 않는다 — 관리자 바로가기의 '시작 위치'가 비면 System32 가 된다."""
+    import sys as _sys
+    if getattr(_sys, "frozen", False):
+        _base = Path(_sys.executable).resolve().parent
+    else:
+        _base = Path(__file__).resolve().parents[1]
+    try:
+        from lib import config_common as _cc
+        return Path(getattr(_cc, "LOCAL_FALLBACK_ROOT", _base / "Logs_LocalFallback"))
+    except Exception:
+        return _base / "Logs_LocalFallback"
+
+
 def _ts() -> str:
     return datetime.now().strftime("%H:%M:%S")
 
@@ -61,7 +76,9 @@ class TSPPageController:
         self.chat = chat
 
         # ▼ NAS 로그 설정
-        self._log_root = Path(log_dir) if log_dir else Path.cwd()
+        self._log_root = Path(log_dir) if log_dir else Path(
+            getattr(cfgc, "LOG_ROOT_DIR", _fallback_log_root())
+        )
         self._log_file_path: Path | None = None
         self._prestart_buf: Deque[str] = deque(maxlen=1000)
         self._log_dir = self._ensure_log_dir(self._log_root / "TSP")
@@ -508,7 +525,7 @@ class TSPPageController:
             try:
                 _log_dir.mkdir(parents=True, exist_ok=True)
             except Exception as _e:
-                _log_dir = Path(getattr(cfgc, "LOCAL_FALLBACK_ROOT", Path.cwd() / "Logs_LocalFallback")) / "TSP"
+                _log_dir = _fallback_log_root() / "TSP"
                 with contextlib.suppress(Exception):
                     _log_dir.mkdir(parents=True, exist_ok=True)
                 self._log(f"[Logger] 로그 폴더 접근 실패({_e!r}) → 이번 실행은 로컬에 기록: {_log_dir}")

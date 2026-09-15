@@ -11,6 +11,7 @@ import logging
 import contextlib
 from typing import Optional, Literal
 from pathlib import Path
+from datetime import datetime
 from contextvars import ContextVar
 
 # (선택) 개발 실행 시 import 깨짐 방지
@@ -661,12 +662,70 @@ class MainWindow(QWidget):
             pass
 
         # 4) 기본: 방송 모드(CH1/CH2)
+        #    특정 챔버/PC 로 라우팅되지 않은 로그이므로 SYSTEM 파일에도 남긴다
+        self._system_log_append(src, msg)
         if getattr(self, "ch1", None):
             self.ch1.append_log("PLC(Global)", msg)
         if getattr(self, "ch2", None):
             self.ch2.append_log("PLC(Global)", msg)
 
+    # ── 어디에도 귀속되지 않는 로그를 SYSTEM 일자 파일로 남긴다 ──
+    def _system_log_dirs(self) -> tuple[Path, Path]:
+        """(정본, 폴백) SYSTEM 디렉터리."""
+        from lib import config_common as _cc
+        primary = Path(getattr(_cc, "LOG_ROOT_DIR", r"C:\VanaM_Logs\CH1&2")) / "SYSTEM"
+        fb = getattr(_cc, "LOCAL_FALLBACK_SYSTEM_DIR", None)
+        if fb is None:
+            base = (Path(sys.executable).resolve().parent
+                    if getattr(sys, "frozen", False)
+                    else Path(__file__).resolve().parent)
+            fb = base / "Logs_LocalFallback" / "SYSTEM"
+        return primary, Path(fb)
+
+    @staticmethod
+    def _system_log_write_sync(dirs: tuple[Path, Path], fname: str, line: str) -> None:
+        """정본 → 실패 시 폴백. append 모드로 열고 쓰고 닫는다(날짜 변경 자동 처리)."""
+        for d in dirs:
+            try:
+                d.mkdir(parents=True, exist_ok=True)
+                with open(d / fname, "a", encoding="utf-8") as f:
+                    f.write(line)
+                return
+            except Exception:
+                continue
+
+    def _system_log_append(self, source: str, msg: str) -> None:
+        """SYSTEM 로그 한 줄 추가. 어떤 예외도 밖으로 내보내지 않는다."""
+        try:
+            now = datetime.now()
+            line = f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] [{source}] {msg}\n"
+            fname = f"{now.strftime('%Y%m%d')}.log"
+            dirs = self._system_log_dirs()
+        except Exception:
+            return
+
+        # 디스크 쓰기는 이벤트 루프를 막지 않게 to_thread 로.
+        # 루프가 없으면(초기화/종료 중) 동기로 쓴다.
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+        if loop is not None:
+            try:
+                t = loop.create_task(
+                    asyncio.to_thread(self._system_log_write_sync, dirs, fname, line)
+                )
+                t.add_done_callback(lambda _t: _t.exception() if not _t.cancelled() else None)
+                return
+            except Exception:
+                pass
+        try:
+            self._system_log_write_sync(dirs, fname, line)
+        except Exception:
+            pass
+
     def _broadcast_log(self, source: str, msg: str) -> None:
+        self._system_log_append(source, msg)
         try:
             self._log_global(source, msg)
             if hasattr(self, "ch1") and self.ch1:
@@ -688,16 +747,22 @@ class MainWindow(QWidget):
         try:
             src = (source or "")
             src_u = src.upper()
+            # ✅ 출처뿐 아니라 메시지 본문 접두어로도 레벨을 판정한다
+            #    (예: PLC 의 "WARN lock-wait ..." 가 INFO 로 묻히던 문제)
+            msg_s = (msg or "").strip()
+            msg_u = msg_s.upper()
             level = logging.INFO
 
             if (
                 src_u.startswith("ERROR") or src_u.startswith("ERR") or
-                "ERROR" in src_u or msg.strip().startswith("❌")
+                "ERROR" in src_u or msg_s.startswith("❌") or
+                msg_u.startswith("ERROR")
             ):
                 level = logging.ERROR
             elif (
                 src_u.startswith("WARN") or "WARN" in src_u or
-                msg.strip().startswith("⚠")
+                msg_s.startswith("⚠") or
+                msg_u.startswith("WARN")
             ):
                 level = logging.WARNING
 

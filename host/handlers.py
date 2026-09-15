@@ -27,32 +27,34 @@ Json = Dict[str, Any]
 # 비동기 코루틴마다 자기만의 슬롯을 제공하는 ContextVar로 변경.
 _cmd_tag_var: ContextVar[str | None] = ContextVar("plc_cmd_tag", default=None)
 
+def _fallback_log_root() -> Path:
+    """로그 폴백 뿌리. 호출 시점에 config_common 을 읽는다(DEC-033).
+    cwd 는 쓰지 않는다 — 관리자 바로가기의 '시작 위치'가 비면 System32 가 된다."""
+    import sys as _sys
+    if getattr(_sys, "frozen", False):
+        _base = Path(_sys.executable).resolve().parent
+    else:
+        _base = Path(__file__).resolve().parents[1]
+    try:
+        from lib import config_common as _cc
+        return Path(getattr(_cc, "LOCAL_FALLBACK_ROOT", _base / "Logs_LocalFallback"))
+    except Exception:
+        return _base / "Logs_LocalFallback"
+
+
 class HostHandlers:
     def __init__(self, ctx: HostContext) -> None:
         self.ctx = ctx
 
         # ================== 로그 저장 헬퍼 ==================
-        # NAS 우선, 실패 시 로컬 폴백 디렉터리 준비
+        # ⚠ PLC_Remote 는 현재 쓰는 코드가 없다(_plc_cmd_file 이 항상 None).
+        #    빈 폴더만 생기므로 폴더를 만들지 않고 경로만 들고 있는다.
         try:
             root = Path(getattr(cfg, "LOG_ROOT_DIR",
                         r"G:\공유 드라이브\VanaM_Sputter\Sputter\Logs\CH1&2"))
-            d = root / "PLC_Remote"
-            d.mkdir(parents=True, exist_ok=True)
-            self._plc_log_dir = d              # 주 저장 폴더(NAS)
-        except Exception as e:
-            # NAS 로그 폴더 생성 실패 사유를 로그창에 출력
-            try:
-                self.ctx.log(
-                    "PLC_REMOTE",
-                    f"[PLC_REMOTE_LOG_ERROR] NAS 로그 폴더 생성 실패: {e!r} → 로컬 Logs/CH1&2/PLC_Remote 사용",
-                )
-            except Exception:
-                # log() 자체가 실패해도 공정은 멈추지 않음
-                pass
-
-            d = Path.cwd() / "Logs" / "CH1&2" / "PLC_Remote"
-            d.mkdir(parents=True, exist_ok=True)
-            self._plc_log_dir = d              # 폴백 폴더(로컬)
+        except Exception:
+            root = _fallback_log_root()
+        self._plc_log_dir = root / "PLC_Remote"
 
         self._plc_cmd_file = None              # 호스트 명령 파일(파일을 만들지는 않음)
         # ⚠ _current_cmd_tag 는 인스턴스 변수가 아니라 property로 ContextVar 라우팅
@@ -117,7 +119,7 @@ class HostHandlers:
                     pass
 
             # 2차: 로컬 폴백(파일명은 동일 basename)
-            local = (Path.cwd() / "Logs" / "CH1&2" / "PLC_Remote" / file_path.name)
+            local = (_fallback_log_root() / "PLC_Remote" / file_path.name)
             try:
                 await asyncio.to_thread(self._write_line_sync, local, line)
             except Exception as e:

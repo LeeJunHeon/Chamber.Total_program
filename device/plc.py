@@ -232,6 +232,21 @@ PLC_TIMER_MAP: Dict[str, int] = {
 # 에러코드
 # ======================================================
 
+def _fallback_log_root() -> Path:
+    """로그 폴백 뿌리. 호출 시점에 config_common 을 읽는다(DEC-033).
+    cwd 는 쓰지 않는다 — 관리자 바로가기의 '시작 위치'가 비면 System32 가 된다."""
+    import sys as _sys
+    if getattr(_sys, "frozen", False):
+        _base = Path(_sys.executable).resolve().parent
+    else:
+        _base = Path(__file__).resolve().parents[1]
+    try:
+        from lib import config_common as _cc
+        return Path(getattr(_cc, "LOCAL_FALLBACK_ROOT", _base / "Logs_LocalFallback"))
+    except Exception:
+        return _base / "Logs_LocalFallback"
+
+
 class PLCError(RuntimeError):
     def __init__(self, code: str, message: str, *, op: str | None = None, addr: int | None = None, cause: Exception | None = None):
         super().__init__(message)
@@ -1281,7 +1296,7 @@ class AsyncPLC:
             getattr(
                 cfgc,
                 "PLC_COIL_LOG_LOCAL_DIR",
-                Path.cwd() / "Logs_LocalFallback" / "PLC_Coil",
+                _fallback_log_root() / "PLC_Coil",
             )
         )
 
