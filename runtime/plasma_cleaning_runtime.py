@@ -2531,11 +2531,13 @@ class PlasmaCleaningRuntime:
         - 비모달 + 참조 보관(_msg_boxes)으로 GC 방지
         """
         try:
-            if not self._popup_should_show(title, str(text)):
+            if not self._popup_should_show(title, str(text),
+                                           bypass_cap=bool(clear_status_to_idle)):
                 return
 
             box = QMessageBox(self.ui)
             box._popup_key = (str(title), str(text))
+            box._popup_clears_idle = bool(clear_status_to_idle)
             box.setIcon(QMessageBox.Critical)
             box.setWindowTitle(title)
             box.setText(str(text))
@@ -2581,15 +2583,20 @@ class PlasmaCleaningRuntime:
     # 동시에 떠 있을 수 있는 팝업 최대 개수
     _POPUP_MAX_OPEN = 5
 
-    def _popup_should_show(self, title: str, text: str) -> bool:
-        """이미 같은 (제목, 본문) 창이 떠 있거나 상한을 넘으면 False(로그만 남김)."""
+    def _popup_should_show(self, title: str, text: str, *, bypass_cap: bool = False) -> bool:
+        """이미 같은 (제목, 본문) 창이 떠 있거나 상한을 넘으면 False(로그만 남김).
+        bypass_cap=True: 사용자 확인이 반드시 필요한 팝업 → 상한으로 버리지 않는다."""
         self._ensure_msgbox_store()
         key = (str(title), str(text))
         for b in list(self._msg_boxes):
             if getattr(b, "_popup_key", None) == key:
+                # ★ 확인이 필요한 팝업(bypass_cap)은, 기존 창이 같은 해제 책임을
+                #    지고 있을 때만 억제한다. 아니면 새 창을 띄워 해제 경로를 보장.
+                if bypass_cap and not getattr(b, "_popup_clears_idle", False):
+                    break
                 self.append_log("PC", f"(중복 억제) {title}: {text}")
                 return False
-        if len(self._msg_boxes) >= self._POPUP_MAX_OPEN:
+        if not bypass_cap and len(self._msg_boxes) >= self._POPUP_MAX_OPEN:
             self.append_log("PC", f"(팝업 상한 초과) {title}: {text}")
             return False
         return True
