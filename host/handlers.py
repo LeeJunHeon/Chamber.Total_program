@@ -808,6 +808,9 @@ class HostHandlers:
                     # 런타임 내부 프리플라이트/쿨다운/중복 실행 등 명시적 거절
                     _msg = str(e)
                     _code = getattr(e, "code", None)
+                    if not _code and _msg.lstrip().startswith("레시피 오류"):
+                        # ✅ 레시피 값 오류 — 파일 로드 시점 전수 검증 실패
+                        _code = "E230"
                     if not _code and (
                         "1분 대기" in _msg 
                         or "cooldown" in _msg.lower()
@@ -815,7 +818,7 @@ class HostHandlers:
                     ):
                         # ✅ 쿨다운은 BUSY 상태 — STOP이 아닌 RETRY_LATER로 분류
                         _code = "E700"
-                    return self._fail(_msg, code=_code or "E410")
+                    return self._fail(_msg, code=_code or "E511")
                 except Exception as e:
                     return self._fail(e)
 

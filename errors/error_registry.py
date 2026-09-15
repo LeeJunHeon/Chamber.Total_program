@@ -257,6 +257,15 @@ ERROR_REGISTRY: Dict[str, ErrorDefinition] = {
         cause="현재 지원하지 않는 레시피 형식입니다.",
         fix="지원되는 CSV 형식으로 레시피를 준비하십시오.",
     ),
+    "E230": ErrorDefinition(
+        code="E230",
+        title="레시피 값 오류",
+        category="RECIPE",
+        client_action=ACTION_STOP,
+        severity=SEV_ERROR,
+        cause="레시피의 일부 칸에 해당 컬럼 형식과 맞지 않는 값이 있습니다.",
+        fix="오류 메시지에 표시된 행과 컬럼의 값을 확인한 뒤 레시피를 수정하여 다시 시도하십시오.",
+    ),
     "E210": ErrorDefinition(
         code="E210",
         title="사전점검 시간 초과",
