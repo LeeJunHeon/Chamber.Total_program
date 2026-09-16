@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
-import asyncio, contextlib, inspect, csv, os, time
+import asyncio, contextlib, inspect, csv, os, re, time
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable, Optional, Mapping
@@ -43,6 +43,15 @@ def _fallback_log_root() -> Path:
         return Path(getattr(_cc, "LOCAL_FALLBACK_ROOT", _base / "Logs_LocalFallback"))
     except Exception:
         return _base / "Logs_LocalFallback"
+
+
+# ✅ SYSTEM 일자 로그 (공정 로그 파일이 없을 때의 최종 보관처)
+#    import 실패가 런타임을 죽이지 않도록 방어한다.
+try:
+    from util.system_log import system_log_append as _system_log_append
+except Exception:  # pragma: no cover
+    def _system_log_append(source: str, msg: str) -> None:  # type: ignore[misc]
+        return
 
 
 class PlasmaCleaningRuntime:
@@ -2078,8 +2087,13 @@ class PlasmaCleaningRuntime:
             pass
 
     def _queue_run_log_line(self, line: str) -> None:
-        # ✅ 파일이 열려있을 때만 버퍼링/저장 (안 열려 있으면 쌓지 않음)
+        # ✅ 파일이 열려있을 때만 버퍼링/저장.
+        #    안 열려 있으면 버리지 말고 SYSTEM 일자 파일로 보낸다.
         if not getattr(self, "_log_fp", None):
+            # line 은 "[HH:MM:SS] src: msg" 형태다. SYSTEM 헬퍼가 자기 형식으로
+            # 시각을 붙이므로 앞의 시각 표기는 떼어내 중복을 없앤다.
+            _m = re.match(r"^\[\d{2}:\d{2}:\d{2}\]\s*(.*)$", str(line))
+            _system_log_append("PC", _m.group(1) if _m else str(line))
             return
 
         self._runlog_buf.append(line)

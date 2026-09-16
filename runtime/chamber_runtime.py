@@ -147,6 +147,15 @@ def _fallback_log_root() -> Path:
         return _base / "Logs_LocalFallback"
 
 
+# ✅ SYSTEM 일자 로그 (공정 로그 파일이 없을 때의 최종 보관처)
+#    import 실패가 런타임을 죽이지 않도록 방어한다.
+try:
+    from util.system_log import system_log_append as _system_log_append
+except Exception:  # pragma: no cover
+    def _system_log_append(source: str, msg: str) -> None:  # type: ignore[misc]
+        return
+
+
 @dataclass(frozen=True)
 class _RunnerCmd:
     kind: Literal["START", "START_QUEUE", "STOP", "PC_FINISHED"]
@@ -5602,6 +5611,9 @@ class ChamberRuntime:
             buf = getattr(self, "_prestart_buf", None)
             if buf is not None:
                 self._soon(buf.append, line_file)
+            # ✅ 프리버퍼는 공정이 시작되지 않으면 소멸하므로, SYSTEM 파일에도 남긴다
+            #    (공정 시작 시 프리버퍼 flush 동작은 그대로 유지 — 일부 중복은 의도된 것)
+            _system_log_append(f"CH{self.ch}:{source}", msg)
             return
         self._soon(self._log_enqueue_nowait, line_file)
 

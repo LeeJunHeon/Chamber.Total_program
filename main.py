@@ -129,6 +129,15 @@ class _PLCProxy:
 CH_HINT_RE = re.compile(r"\[CH\s*(\d)\]|\bCH(?:=|:)?\s*(\d)\b", re.IGNORECASE)
 # ───────────────────────────────────────────────────────────
 
+# ✅ SYSTEM 일자 로그 (공정 로그 파일이 없을 때의 최종 보관처)
+#    import 실패가 런타임을 죽이지 않도록 방어한다.
+try:
+    from util.system_log import system_log_append as _system_log_append
+except Exception:  # pragma: no cover
+    def _system_log_append(source: str, msg: str) -> None:  # type: ignore[misc]
+        return
+
+
 class MainWindow(QWidget):
     def __init__(self, loop: Optional[asyncio.AbstractEventLoop] = None):
         super().__init__()
@@ -670,59 +679,10 @@ class MainWindow(QWidget):
             self.ch2.append_log("PLC(Global)", msg)
 
     # ── 어디에도 귀속되지 않는 로그를 SYSTEM 일자 파일로 남긴다 ──
-    def _system_log_dirs(self) -> tuple[Path, Path]:
-        """(정본, 폴백) SYSTEM 디렉터리."""
-        from lib import config_common as _cc
-        primary = Path(getattr(_cc, "LOG_ROOT_DIR", r"C:\VanaM_Logs\CH1&2")) / "SYSTEM"
-        fb = getattr(_cc, "LOCAL_FALLBACK_SYSTEM_DIR", None)
-        if fb is None:
-            base = (Path(sys.executable).resolve().parent
-                    if getattr(sys, "frozen", False)
-                    else Path(__file__).resolve().parent)
-            fb = base / "Logs_LocalFallback" / "SYSTEM"
-        return primary, Path(fb)
-
-    @staticmethod
-    def _system_log_write_sync(dirs: tuple[Path, Path], fname: str, line: str) -> None:
-        """정본 → 실패 시 폴백. append 모드로 열고 쓰고 닫는다(날짜 변경 자동 처리)."""
-        for d in dirs:
-            try:
-                d.mkdir(parents=True, exist_ok=True)
-                with open(d / fname, "a", encoding="utf-8") as f:
-                    f.write(line)
-                return
-            except Exception:
-                continue
-
+    #    실제 구현은 util/system_log.py (동기 쓰기 + threading.Lock).
+    #    여기는 기존 호출 지점(_broadcast_log / _plc_log)을 위한 얇은 래퍼다.
     def _system_log_append(self, source: str, msg: str) -> None:
-        """SYSTEM 로그 한 줄 추가. 어떤 예외도 밖으로 내보내지 않는다."""
-        try:
-            now = datetime.now()
-            line = f"[{now.strftime('%Y-%m-%d %H:%M:%S')}] [{source}] {msg}\n"
-            fname = f"{now.strftime('%Y%m%d')}.log"
-            dirs = self._system_log_dirs()
-        except Exception:
-            return
-
-        # 디스크 쓰기는 이벤트 루프를 막지 않게 to_thread 로.
-        # 루프가 없으면(초기화/종료 중) 동기로 쓴다.
-        try:
-            loop = asyncio.get_running_loop()
-        except RuntimeError:
-            loop = None
-        if loop is not None:
-            try:
-                t = loop.create_task(
-                    asyncio.to_thread(self._system_log_write_sync, dirs, fname, line)
-                )
-                t.add_done_callback(lambda _t: _t.exception() if not _t.cancelled() else None)
-                return
-            except Exception:
-                pass
-        try:
-            self._system_log_write_sync(dirs, fname, line)
-        except Exception:
-            pass
+        _system_log_append(source, msg)
 
     def _broadcast_log(self, source: str, msg: str) -> None:
         self._system_log_append(source, msg)
@@ -1293,14 +1253,16 @@ class MainWindow(QWidget):
         #    PLC close / NAS to_thread 등이 executor 스레드에 남아있으면
         #    메인 스레드 종료 시 join 무한 대기 → 프로세스 잔존 / atexit 미실행.
         #    이 호출 한 줄이 표준 cleanup 절차의 마지막 단계.
+        # ✅ executor 를 내리기 '전'에 마지막 로그를 남긴다.
+        #    (내린 뒤에 남기면 to_thread 경로가 pending 으로 버려져 줄을 잃는다)
+        self._broadcast_log("WARN/EXIT", "앱 종료 정리 완료")
+
         with contextlib.suppress(Exception):
             _loop = asyncio.get_running_loop()
             await _loop.shutdown_default_executor()
 
         with contextlib.suppress(Exception):
             self._logger.warning("_shutdown_app_async completed")
-
-        self._broadcast_log("WARN/EXIT", "앱 종료 정리 완료")
 
     def closeEvent(self, event: QCloseEvent) -> None:
         # ✅ cleanup 완료 후 다시 들어온 close면 실제 종료
