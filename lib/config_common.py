@@ -486,6 +486,8 @@ PLC_COIL_LOG_INTERVAL_S = 5.0
 PLC_COIL_LOG_BLOCK_PLAN = 0     # 시작 블록 계획 (0=최소블록 ~ 3=현재와 동일한 안전값)
 PLC_COIL_LOG_BUDGET_S   = 4.0   # 한 tick 스냅샷 총 예산(초). INTERVAL_S 보다 작아야 한다
 PLC_COIL_LOG_SUMMARY_S  = 60.0  # 스킵 사유 요약 로그 주기(초)
+PLC_COIL_LOG_PROMOTE_AFTER = 12 # 연속 성공 이 횟수마다 블록 계획 한 단계 승격 (0이면 승격 안 함)
+PLC_RECONNECT_BACKOFF_S = 5.0   # 연결 실패 후 이 시간 동안은 재연결을 재시도하지 않는다(0이면 사용 안 함)
 PLC_COIL_LOG_NAS_DIR = r"C:\VanaM_Logs\CH1&2\CH1&2_PLC"
 # PLC_COIL_LOG_LOCAL_DIR = r"C:\...\Logs\CH1&2\CH1&2_PLC"   # 필요 시
 

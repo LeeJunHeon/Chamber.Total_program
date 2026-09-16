@@ -26,6 +26,14 @@ from contextlib import asynccontextmanager
 from pymodbus.pdu import ExceptionResponse
 from pymodbus.client import ModbusTcpClient
 from pymodbus.exceptions import ModbusException
+try:
+    # pymodbus 3.x 예외 계층. 타입 기준 분류에 사용한다.
+    #  - ConnectionException : 연결 불가 / 소켓 없음 / 상대가 끊음 / Not connected
+    #  - ModbusIOException   : 응답 없음 / transaction id 불일치 / 디코드 실패
+    from pymodbus.exceptions import ConnectionException, ModbusIOException
+except Exception:      # pragma: no cover - 구버전/설치 이상 시 문자열 판정으로 폴백
+    ConnectionException = ()   # type: ignore[assignment,misc]
+    ModbusIOException = ()     # type: ignore[assignment,misc]
 
 from lib import config_common as cfgc   # ✅ 추가: Config 팝업에서 바뀐 값 소스
 from util.log_hub import DailyCsvListAppender
@@ -347,6 +355,11 @@ class AsyncPLC:
 
         # ✅ 코일 스냅샷 블록 계획(적응형). 공격적 → 보수적 순서.
         self._coil_plan_idx: int = self._default_coil_plan_idx()
+        # 연속 성공 횟수(승격 판정용)
+        self._coil_plan_ok_streak: int = 0
+
+        # ✅ 재연결 백오프: 이 시각 전에는 소켓 connect 를 다시 시도하지 않는다.
+        self._next_connect_attempt_at: float = 0.0
 
         self._last_io_ts = 0.0
         self._hb_task: Optional[asyncio.Task] = None
@@ -500,6 +513,8 @@ class AsyncPLC:
 
     async def connect(self) -> None:
         self._closed = False
+        # ✅ 명시적 connect (사용자/부팅/set_endpoint) 는 의도적 행위이므로 백오프를 무시한다
+        self._next_connect_attempt_at = 0.0
 
         # ✅ connect 직전에 config 값을 재적용 (Apply 후 재연결/다음 연결에 반영)
         self._apply_cfg_from_config()
@@ -511,8 +526,10 @@ class AsyncPLC:
         async with self._io_lock("connect"):
             await asyncio.to_thread(self._connect_sync)
 
-        # ✅ 재연결 시 블록 계획을 설정값으로 되돌려 재탐색
-        self._coil_plan_idx = self._default_coil_plan_idx()
+        # ✅ 재연결 시 계획을 즉시 되돌리지는 않는다(강등↔승격 왕복 방지).
+        #    복구는 _maybe_promote_coil_plan 의 "연속 성공" 규칙으로만 한다.
+        self._coil_plan_ok_streak = 0
+        self._next_connect_attempt_at = 0.0
         self.log("TCP 연결 성공: %s:%s (unit=%s)", self.cfg.ip, self.cfg.port, self.cfg.unit)
 
     async def close(self) -> None:
@@ -600,6 +617,22 @@ class AsyncPLC:
             raise PLCError("E403", f"PLC Modbus isError(): {resp}", op=op, addr=addr)
         return resp
 
+    def _reconnect_backoff_s(self) -> float:
+        """연결 실패 후 재연결을 미룰 시간(초). 0이면 백오프 사용 안 함."""
+        try:
+            v = float(getattr(cfgc, "PLC_RECONNECT_BACKOFF_S", 5.0))
+        except Exception:
+            v = 5.0
+        return v if v > 0.0 else 0.0
+
+    def _coil_plan_promote_after(self) -> int:
+        """연속 성공 이 횟수마다 블록 계획을 한 단계 승격. 0이면 승격 안 함."""
+        try:
+            v = int(getattr(cfgc, "PLC_COIL_LOG_PROMOTE_AFTER", 12))
+        except Exception:
+            v = 12
+        return v if v > 0 else 0
+
     def _is_reset_err(self, e: Exception) -> bool:
         s = str(e).lower()
         return (
@@ -624,6 +657,19 @@ class AsyncPLC:
             self._client = ModbusTcpClient(self.cfg.ip, port=self.cfg.port, timeout=self.cfg.timeout_s)
 
         if not self._is_connected():
+            # ✅ 재연결 백오프: 끊긴 동안 매 명령이 7.5초를 통째로 태우지 않게 한다.
+            #    (소켓이 살아 있으면 위 _is_connected() 에서 이미 반환되므로
+            #     "읽기만 늦는" 경우에는 절대 개입하지 않는다)
+            _bo = self._reconnect_backoff_s()
+            if _bo > 0.0:
+                _now = time.monotonic()
+                if _now < float(getattr(self, "_next_connect_attempt_at", 0.0) or 0.0):
+                    raise PLCError("E401", "PLC 재연결 대기 중 (backoff)", op="connect")
+                # 시도 '전'에 먼저 걸어 동시 진입을 막고,
+                # 실패 후에도 다시 걸어 "시도 종료 시점부터" _bo 초를 쉬게 한다.
+                # (시도 자체가 timeout x retry 로 _bo 보다 길 수 있기 때문)
+                self._next_connect_attempt_at = _now + _bo
+
             ok = False
             last_exc: Optional[Exception] = None
 
@@ -658,9 +704,16 @@ class AsyncPLC:
                 self._client = None
                 self._uid_kw = None
 
+                # ✅ 실패 확정 → 지금부터 _bo 초 동안은 소켓을 건드리지 않는다
+                if _bo > 0.0:
+                    self._next_connect_attempt_at = time.monotonic() + _bo
+
                 if last_exc is not None:
                     raise PLCError("E401", f"Modbus TCP 연결 실패 ({self.cfg.ip}:{self.cfg.port}) - {last_exc!r}", op="connect")
                 raise PLCError("E401", f"Modbus TCP 연결 실패 ({self.cfg.ip}:{self.cfg.port})", op="connect")
+
+            # ✅ 연결 성공 → 백오프 즉시 해제
+            self._next_connect_attempt_at = 0.0
 
             # 성공 시 keepalive
             try:
@@ -769,13 +822,29 @@ class AsyncPLC:
             return e
         s = str(e).lower()
 
-        # 연결/끊김 계열
+        # ✅ 1순위: pymodbus 예외 "타입"으로 분류한다.
+        #    (문자열 판정만 쓰면 pymodbus 3.11 의 "No response received ..." 가
+        #     E403 으로 새어 재연결·재시도 안전망이 통째로 죽는다)
+        if ConnectionException and isinstance(e, ConnectionException):
+            return PLCError("E401", f"PLC 연결 오류: {type(e).__name__}: {e}", op=op, addr=addr, cause=e)
+
+        if ModbusIOException and isinstance(e, ModbusIOException):
+            # 응답 없음 / transaction id 불일치 / 디코드 실패 — 소켓이 오염된 상태이므로
+            # "닫고 재연결 후 1회 재시도"가 올바른 대응이다.
+            return PLCError("E402", f"PLC 응답 없음/프레임 오류: {type(e).__name__}: {e}",
+                            op=op, addr=addr, cause=e)
+
+        # 연결/끊김 계열 (OSError·socket 계열 보조 경로)
         if self._is_reset_err(e) or ("connection" in s and "reset" in s) or ("refused" in s) or ("no route" in s):
             return PLCError("E401", f"PLC 연결 오류: {type(e).__name__}: {e}", op=op, addr=addr, cause=e)
 
-        # timeout/응답없음 계열
-        if ("timeout" in s) or ("timed out" in s) or ("no answer" in s) or ("응답" in s and "없" in s):
-            return PLCError("E402", f"PLC timeout/응답없음: {type(e).__name__}: {e}", op=op, addr=addr, cause=e)
+        # 응답없음/타임아웃 계열 (pymodbus 아닌 경로에서 올라온 예외용 안전망)
+        if (("timeout" in s) or ("timed out" in s) or ("no answer" in s)
+                or ("no response" in s) or ("client cannot connect" in s)
+                or ("connection unexpectedly closed" in s)
+                or ("응답" in s and "없" in s)):
+            return PLCError("E402", f"PLC 응답 없음/타임아웃: {type(e).__name__}: {e}",
+                            op=op, addr=addr, cause=e)
 
         # Modbus 계열
         if isinstance(e, ModbusException) or ("modbus" in s):
@@ -1044,6 +1113,50 @@ class AsyncPLC:
 
         return out
 
+    def _note_coil_plan_result(self, addrs, ok: bool) -> None:
+        """스냅샷 tick 결과를 반영한다.
+        ok=False 면 연속 성공 카운터를 리셋, ok=True 면 누적해 승격을 판정한다."""
+        if not ok:
+            self._coil_plan_ok_streak = 0
+            return
+
+        base = self._default_coil_plan_idx()
+        if int(self._coil_plan_idx) <= base:
+            # 이미 기본 계획 이상(=덜 보수적)이면 승격할 것이 없다
+            self._coil_plan_ok_streak = 0
+            return
+
+        need = self._coil_plan_promote_after()
+        if need <= 0:
+            return
+
+        self._coil_plan_ok_streak = int(self._coil_plan_ok_streak) + 1
+        if self._coil_plan_ok_streak < need:
+            return
+
+        self._coil_plan_ok_streak = 0
+        old_idx = int(self._coil_plan_idx)
+        new_idx = max(base, old_idx - 1)
+        if new_idx == old_idx:
+            return
+        try:
+            addrs = list(addrs)
+            _, old_ranges = self._coil_ranges_for_plan(addrs, old_idx)
+            _chk, new_ranges = self._coil_ranges_for_plan(addrs, new_idx)
+            if _chk != new_idx:
+                # FC1 한도 방어로 되밀린 계획이면 승격하지 않는다
+                return
+            self._coil_plan_idx = new_idx
+            self.log(
+                "WARN PLC COIL LOG: block plan %d(blocks=%d, max_span=%d) -> %d(blocks=%d, max_span=%d) "
+                "[promote after %d ok]",
+                old_idx, len(old_ranges), self._COIL_BLOCK_PLANS[old_idx][1],
+                new_idx, len(new_ranges), self._COIL_BLOCK_PLANS[new_idx][1],
+                need,
+            )
+        except Exception:
+            pass
+
     def _demote_coil_plan(self, addrs, *, reason: str = "") -> None:
         """E403(주소 범위 초과)에서 한 단계 보수적인 계획으로 내린다.
         계획이 실제로 바뀐 순간에만 로그를 한 줄 남긴다."""
@@ -1058,8 +1171,9 @@ class AsyncPLC:
             if new_idx == old_idx:
                 return
             self._coil_plan_idx = new_idx
+            self._coil_plan_ok_streak = 0
             self.log(
-                "PLC COIL LOG: block plan %d(blocks=%d, max_span=%d) -> %d(blocks=%d, max_span=%d) [E403] %s",
+                "WARN PLC COIL LOG: block plan %d(blocks=%d, max_span=%d) -> %d(blocks=%d, max_span=%d) [E403] %s",
                 old_idx, len(old_ranges), self._COIL_BLOCK_PLANS[old_idx][1],
                 new_idx, len(new_ranges), self._COIL_BLOCK_PLANS[new_idx][1],
                 reason,
@@ -1406,7 +1520,7 @@ class AsyncPLC:
                 except Exception:
                     n_blocks = -1
                 self.log(
-                    "PLC COIL LOG summary(%.0fs): ok=%d disconnected=%d empty=%d "
+                    "WARN PLC COIL LOG summary(%.0fs): ok=%d disconnected=%d empty=%d "
                     "budget_timeout=%d plc_error=%d write_failed=%d (plan=%d, blocks=%d)",
                     max(1.0, summary_s), stats["ok"], stats["disconnected"],
                     stats["empty_snapshot"], stats["budget_timeout"],
@@ -1423,6 +1537,7 @@ class AsyncPLC:
             # ✅ PLC가 끊긴 상태에서는 로거가 connect/재시도를 하지 않음 → 공정 영향 0에 더 가까워짐
             if not self.is_connected():
                 stats["disconnected"] += 1
+                self._note_coil_plan_result([PLC_COIL_MAP[k] for k in keys if k in PLC_COIL_MAP], False)
                 _emit_summary()
                 await asyncio.sleep(interval)
                 continue
@@ -1438,8 +1553,9 @@ class AsyncPLC:
                 snap = await self.snapshot_all_coils_fast(keys=keys)
             except Exception as e:
                 stats["plc_error"] += 1
+                self._note_coil_plan_result([PLC_COIL_MAP[k] for k in keys if k in PLC_COIL_MAP], False)
                 _emit_summary()
-                self.log("PLC COIL LOG: snapshot failed (ignored): %r", e)
+                self.log("WARN PLC COIL LOG: snapshot failed (ignored): %r", e)
                 await asyncio.sleep(interval)
                 continue
 
@@ -1449,6 +1565,7 @@ class AsyncPLC:
                     stats["budget_timeout"] += 1
                 else:
                     stats["empty_snapshot"] += 1
+                self._note_coil_plan_result([PLC_COIL_MAP[k] for k in keys if k in PLC_COIL_MAP], False)
                 _emit_summary()
                 await asyncio.sleep(interval)
                 continue
@@ -1490,6 +1607,8 @@ class AsyncPLC:
                     self.log("PLC COIL LOG: NAS write failed -> switched to LOCAL (keep-handle)")
 
                 stats["ok"] += 1
+                # ✅ 완전 성공(오류 없음 + 예산 초과 없음 + 빈 결과 아님)
+                self._note_coil_plan_result([PLC_COIL_MAP[k] for k in keys if k in PLC_COIL_MAP], True)
 
             except Exception as e:
                 # ✅ 최종 실패는 공정 영향 없게 무시
