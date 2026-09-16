@@ -998,12 +998,23 @@ class HostHandlers:
                 "L_R_V_SW": bool(await self.ctx.plc.read_bit("L_R_V_SW")),
             }
         
-    async def _read_loadlock_vacuum_diag(self) -> dict[str, bool | None]:
+    async def _read_loadlock_vacuum_diag(self) -> dict[str, bool | str]:
         """
         VACUUM_ON 실패/타임아웃 시점에 1회만 호출되는 진단 비트 스냅샷.
 
         - 폴링 루프에서는 호출되지 않으므로 race 윈도우에 영향 없음.
-        - address map에 없을 수 있는 비트는 read 실패 시 None.
+        - 값은 셋 중 하나다:
+            bool       : 정상적으로 읽은 값
+            "미매핑"   : 주소맵에 없어 '영원히' 읽을 수 없는 이름 (아래 참조)
+            "읽기실패" : 주소는 있으나 이번 read 가 예외로 실패
+
+        ⚠ 아래 P 영역 5개(L_GAUGE_A / L_R_P_OUT / L_R_V_OUT / L_VENT_OUT /
+          L_ATM_SENSOR)는 현재 Modbus 로 접근할 수 없다.
+          이 PLC 의 Modbus 서버는 비트 base=M0000, 워드 base=D0000 으로 설정되어
+          있어 모드버스 창문이 M 영역(비트)과 D 영역(워드)에만 열려 있다.
+          P 영역은 그 창문 밖이라 주소맵에 항목을 추가해도 읽히지 않는다.
+          (래더에서 이 P 비트들을 미사용 M 비트로 미러링하는 작업이 별도 예정)
+          → 이 이름들은 read 를 시도하지 않고 "미매핑" 으로 채운다.
 
         수집 대상 (PLC 변수표 기준):
         - L_GAUGE_A           (P00003) : 로드락 진공게이지 setpoint A raw 신호
@@ -1033,17 +1044,29 @@ class HostHandlers:
             "G_V_2_OPEN_LAMP",
             "G_V_2_CLOSE_LAMP",
         ]
-        result: dict[str, bool | None] = {}
+        def _is_mapped(nm: str) -> bool:
+            """PLC 이름 해석 경로(_addr: 별칭 → COIL_MAP → REG_MAP)를 그대로 재사용한다."""
+            try:
+                self.ctx.plc._addr(nm)
+                return True
+            except Exception:
+                return False
+
+        result: dict[str, bool | str] = {}
         try:
             async with self._plc_call():
                 for name in names:
+                    if not _is_mapped(name):
+                        # 주소맵에 없음 → read 시도조차 하지 않는다(매번 KeyError 발생 제거)
+                        result[name] = "미매핑"
+                        continue
                     try:
                         result[name] = bool(await self.ctx.plc.read_bit(name))
                     except Exception:
-                        result[name] = None
+                        result[name] = "읽기실패"
         except Exception:
             for name in names:
-                result.setdefault(name, None)
+                result.setdefault(name, "미매핑" if not _is_mapped(name) else "읽기실패")
         return result
 
     async def vacuum_on(self, data: Json) -> Json:
@@ -1336,7 +1359,7 @@ class HostHandlers:
                                     # (b) LP_STEP1=TRUE & LP_STEP2=FALSE 유지 → T0050(60s) 정상 경로가
                                     #     아닌데 L_R_V_SW만 OFF. 래더에 이 조합을 만드는 경로 없음
                                     #     → 정상 시퀀스 경로가 아님 (순간 AIR 압력 저하 또는 프로그램 외 요인)
-                                    if diag.get("L_R_P_OFF_TIMER"):
+                                    if diag.get("L_R_P_OFF_TIMER") is True:
                                         return self._fail(
                                             "VACUUM_ON 실패 — 러핑 중 에어압 알람"
                                             "(L_R_P_OFF_TIMER=TRUE)으로 러핑밸브 인터락이 해제됨 "
@@ -1425,13 +1448,24 @@ class HostHandlers:
                                             code="E312",
                                         )
 
+                                    # ⚠ 원인을 단정하지 않는다. 관측된 사실만 싣는다.
+                                    #    ("미매핑" 값은 근거가 못 되므로 메시지에 넣지 않는다.
+                                    #     전체 diag 는 위 VACUUM_ON_DIAG/both_off 로그에 남는다)
+                                    _gi = diag.get('L_GAUGE_A_INTERLOCK')
+                                    _gi_txt = (f", L_GAUGE_A_INTERLOCK={_gi}"
+                                               if _gi != "미매핑" else "")
                                     return self._fail(
-                                        "VACUUM_ON 실패 — PLC가 자체적으로 "
-                                        "L_R_P_SW/L_R_V_SW를 OFF로 전환 "
-                                        "(진공 게이지 인터락 미충족) "
-                                        f"(L_GAUGE_A_INTERLOCK={diag.get('L_GAUGE_A_INTERLOCK')}, "
-                                        f"L_R_P_OUT={diag.get('L_R_P_OUT')}, "
-                                        f"L_R_V_OUT={diag.get('L_R_V_OUT')})",
+                                        "VACUUM_ON 실패 — L_VAC_READY_SW/L_VAC_NOT_READY 없이 "
+                                        "L_R_P_SW와 L_R_V_SW가 모두 OFF로 전환됨 "
+                                        f"(L_VAC_READY_SW={snap2['L_VAC_READY_SW']}, "
+                                        f"L_VAC_NOT_READY={snap2['L_VAC_NOT_READY']}, "
+                                        f"LP_STEP1={snap2['LP_STEP1']}, "
+                                        f"LP_STEP2={snap2['LP_STEP2']}, "
+                                        f"L_R_P_SW={snap2['L_R_P_SW']}, "
+                                        f"L_R_V_SW={snap2['L_R_V_SW']}"
+                                        f"{_gi_txt}) "
+                                        "원인 미확정 — 상세 진단은 로그의 "
+                                        "VACUUM_ON_DIAG/both_off 참조",
                                         code="E312",
                                     )
 
