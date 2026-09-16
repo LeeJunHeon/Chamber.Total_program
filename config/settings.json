@@ -229,7 +229,7 @@
     "PLC_LOCK_WARN_MS": 2500.0,            // PLC 잠금 대기 경고 기준 (ms)
     "PLC_IO_WARN_MS": 2500.0,              // PLC I/O 지연 경고 기준 (ms)
     "PLC_COIL_LOG_INTERVAL_S": 5.0,        // PLC 코일 상태 로그 기록 주기 (초)
-    "PLC_COIL_LOG_BLOCK_PLAN": 0,          // 코일 스냅샷 시작 블록 계획 (0=최소블록, 3=가장 보수적)
+    "PLC_COIL_LOG_BLOCK_PLAN": 1,          // 코일 스냅샷 시작 블록 계획 (0=최소블록, 3=가장 보수적)
     "PLC_COIL_LOG_BUDGET_S": 4.0,          // 한 tick 스냅샷 총 예산 (초). INTERVAL_S 보다 작게
     "PLC_COIL_LOG_SUMMARY_S": 60.0,        // 스킵 사유 요약 로그 주기 (초)
     "PLC_COIL_LOG_NAS_DIR": "C:\\VanaM_Logs\\CH1&2\\CH1&2_PLC",   // 로컬 (NAS 반영은 log_sync 워커)

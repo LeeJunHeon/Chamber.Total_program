@@ -2781,22 +2781,14 @@ class ChamberRuntime:
 
         _set = self._set
 
+        # ✅ CH1/CH2 가 같은 T/F 해석을 쓰도록 공용 헬퍼
+        def _is_true(v) -> bool:
+            return str(v).strip().upper() in ("T", "TRUE", "1", "Y", "YES")
+
         # --- Pulse UI ---
         if self.ch == 1:
             # ✅ CH1: Pulse 입력(Edit/Freq/Duty)은 dcPulse* 1세트를 공용으로 사용한다.
             #    RF/DC 선택은 라디오(rfPulsePower_checkbox / dcPulsePower_checkbox)로 표시한다.
-            def _is_true(v) -> bool:
-                return str(v).strip().upper() in ("T", "TRUE", "1", "Y", "YES")
-
-            def _pos_num(v) -> bool:
-                try:
-                    s = str(v).strip()
-                    if s == "" or s.lower() == "nan":
-                        return False
-                    return float(s) > 0.0
-                except Exception:
-                    return False
-
             use_rf_flag = _is_true(params.get("use_rf_pulse", "F"))
             use_dc_flag = _is_true(params.get("use_dc_pulse", "F"))
 
@@ -2808,18 +2800,16 @@ class ChamberRuntime:
             dc_freq  = str(params.get("dc_pulse_freq", "")).strip()
             dc_duty  = str(params.get("dc_pulse_duty_cycle") or params.get("dc_pulse_duty") or "").strip()
 
-            rf_requested = use_rf_flag or _pos_num(rf_power) or (rf_freq not in ("", "0")) or (rf_duty not in ("", "0"))
-            dc_requested = use_dc_flag or _pos_num(dc_power) or (dc_freq not in ("", "0")) or (dc_duty not in ("", "0"))
-
-            # ✅ 동시 사용 허용: 체크박스는 각자 요청대로 표시, 공유 입력칸은 RF 우선 값 표시
-            self._set_pulse_radio("rfPulsePower_checkbox", rf_requested)
-            self._set_pulse_radio("dcPulsePower_checkbox", dc_requested)
-            if rf_requested and dc_requested:
+            # ✅ 표시 판정도 use_*_pulse 만 따른다(값 기반 승격 없음)
+            #    동시 사용 허용: 체크박스는 각자 표시, 공유 입력칸은 RF 우선 값 표시
+            self._set_pulse_radio("rfPulsePower_checkbox", use_rf_flag)
+            self._set_pulse_radio("dcPulsePower_checkbox", use_dc_flag)
+            if use_rf_flag and use_dc_flag:
                 self.append_log("UI", "[CH1] RF/DC Pulse 동시 레시피 → 입력칸(공유)에는 RF 값 표시, 실행은 각자 값 사용")
 
-            if rf_requested:
+            if use_rf_flag:
                 power, freq, duty = rf_power, rf_freq, rf_duty
-            elif dc_requested:
+            elif use_dc_flag:
                 power, freq, duty = dc_power, dc_freq, dc_duty
             else:
                 power, freq, duty = "0", "", ""
@@ -2830,8 +2820,8 @@ class ChamberRuntime:
 
         else:
             # CH2: 입력칸은 rfPulse* 1세트를 RF/DC 공유(CH1과 동일 UX), 선택은 라디오로 표시
-            use_rfp = params.get('use_rf_pulse', 'F') == 'T'
-            use_dcp = params.get('use_dc_pulse', 'F') == 'T'
+            use_rfp = _is_true(params.get('use_rf_pulse', 'F'))
+            use_dcp = _is_true(params.get('use_dc_pulse', 'F'))
             self._set_pulse_radio("rfPulsePower_checkbox", use_rfp)
             self._set_pulse_radio("dcPulsePower_checkbox", use_dcp)
             if use_rfp and use_dcp:
@@ -3169,29 +3159,9 @@ class ChamberRuntime:
             self._auto_connect_enabled = True
 
             # ✅ 이번 런에서 실제로 사용할 펄스만 표시(IG/MFC는 항상 연결이므로 제외)
-            def _pos(v) -> bool:
-                try:
-                    return float(v) > 0.0
-                except Exception:
-                    return False
-
-            # ✅ "요청" 판정(체크박스 + 값)
-            rf_requested = (
-                bool(params.get("use_rf_pulse", False))
-                or _pos(params.get("rf_pulse_power", 0.0))
-                or (params.get("rf_pulse_freq") is not None)
-                or (params.get("rf_pulse_duty") is not None)
-            )
-
-            dc_requested = (
-                bool(params.get("use_dc_pulse", False))
-                or _pos(params.get("dc_pulse_power", 0.0))
-                or (params.get("dc_pulse_freq") is not None)
-                or (params.get("dc_pulse_duty") is not None)
-            )
-
-            use_dc_pulse = bool(dc_requested) and self.supports_dc_pulse
-            use_rf_pulse = bool(rf_requested) and self.supports_rf_pulse
+            #    판정 기준은 use_*_pulse 뿐이다. 값(power/freq/duty)으로 추정하지 않는다.
+            use_rf_pulse = bool(params.get("use_rf_pulse", False)) and self.supports_rf_pulse
+            use_dc_pulse = bool(params.get("use_dc_pulse", False)) and self.supports_dc_pulse
 
             self._run_select = {
                 "dc_pulse": use_dc_pulse,
@@ -5452,49 +5422,57 @@ class ChamberRuntime:
 
         # ------------------------------------------------------------
         # ✅ Pulse 파라미터 정규화
-        #  - 체크(use_*) 뿐 아니라 값(power/freq/duty)로도 "요청"을 판단
+        #  - use_*_pulse 컬럼이 "사용 여부의 유일한 기준"이다.
+        #    power/freq/duty 값으로 사용을 추정(승격)하지 않는다.
+        #  - use_*=F 이면 남아 있는 값은 0/None 으로 지워서 하류로 새지 않게 한다.
         #  - CH1/CH2 각자 독립된 RF Pulse 장비 사용 (CH1: port 4008, CH2: port 4005)
         # ------------------------------------------------------------
-        def _pos(v) -> bool:
+        def _normalize_pulse(kind: str, supported: bool) -> None:
+            """kind: "rf" | "dc" """
+            use_key = f"use_{kind}_pulse"
+            p_key, f_key, d_key = (f"{kind}_pulse_power",
+                                   f"{kind}_pulse_freq",
+                                   f"{kind}_pulse_duty")
+            label = "RF-Pulse" if kind == "rf" else "DC-Pulse"
+
+            _power = res.get(p_key, 0.0) or 0.0
+            _freq = res.get(f_key)
+            _duty = res.get(d_key)
+
+            def _clear() -> None:
+                res[use_key] = False
+                res[p_key] = 0.0
+                res[f_key] = None
+                res[d_key] = None
+
+            if bool(res.get(use_key)):
+                if supported:
+                    return
+                _clear()
+                self.append_log(
+                    "Params",
+                    f"CH{self.ch}: {label} 미지원 설정 → OFF 처리합니다.",
+                )
+                return
+
+            # use_*=F : 값이 남아 있으면 무시했음을 한 줄 남긴다(경고일 뿐, 공정을 막지 않는다)
+            _had_value = False
             try:
-                return float(v) > 0.0
+                _had_value = float(_power) > 0.0
             except Exception:
-                return False
+                _had_value = False
+            _had_value = _had_value or (_freq is not None) or (_duty is not None)
 
-        rf_requested = (
-            bool(res.get("use_rf_pulse"))
-            or _pos(res.get("rf_pulse_power", 0.0))
-            or (res.get("rf_pulse_freq") is not None)
-            or (res.get("rf_pulse_duty") is not None)
-        )
+            _clear()
+            if _had_value:
+                self.append_log(
+                    "Params",
+                    f"{label}: {use_key}=F 이므로 사용하지 않습니다 "
+                    f"(레시피의 power={_power}, freq={_freq}, duty={_duty} 은 무시).",
+                )
 
-        dc_requested = (
-            bool(res.get("use_dc_pulse"))
-            or _pos(res.get("dc_pulse_power", 0.0))
-            or (res.get("dc_pulse_freq") is not None)
-            or (res.get("dc_pulse_duty") is not None)
-        )
-
-        if self.ch == 1:
-            # ✅ CH1: RF/DC Pulse 둘 다 허용 (동시 사용 허용 정책)
-            #    - 체크(use_*) 뿐 아니라 값(power/freq/duty)로도 "요청"을 판단
-            if rf_requested:
-                res["use_rf_pulse"] = True
-            if dc_requested:
-                res["use_dc_pulse"] = True
-            # (참고) CH1의 연속 파워 차단은 settings ch1의 SUPPORTS_* 게이트가 담당
-
-        elif self.ch == 2:
-            # ✅ CH2: 값(power/freq/duty)이 들어오면 "요청"으로 간주해 use_rf_pulse를 True로 정규화
-            if rf_requested:
-                if self.supports_rf_pulse:
-                    res["use_rf_pulse"] = True
-                else:
-                    self.append_log("Params", "CH2: RF-Pulse 미지원 설정 → RF-Pulse 요청을 무시하고 OFF 처리합니다.")
-                    res["use_rf_pulse"] = False
-                    res["rf_pulse_power"] = 0.0
-                    res["rf_pulse_freq"] = None
-                    res["rf_pulse_duty"] = None
+        _normalize_pulse("rf", bool(self.supports_rf_pulse))
+        _normalize_pulse("dc", bool(self.supports_dc_pulse))
 
         # 🔒 CH1은 N2 라인이 없으므로 강제 무시
         if self.ch == 1:
