@@ -10,6 +10,8 @@ import asyncio, json, contextlib, traceback, time
 from util.log_hub import DailyCsvDictAppender
 from lib import config_common as cfgc
 from datetime import datetime
+
+from host.request_ctx import set_request_ctx, reset_request_ctx
 from pathlib import Path
 from typing import Optional, Callable, Dict, Any
 from .protocol import HEADER_SIZE, unpack_header, pack_message, PROTOCOL_VERSION
@@ -327,6 +329,17 @@ class HostServer:
                     continue
 
                 t0 = time.perf_counter()
+                # ✅ 요청 컨텍스트: 바디 파싱이 끝난 지금이 '명령을 받은 시각'이다.
+                #    핸들러가 get_request_ctx() 로 읽어 호스트 요청 공정 로그에 쓴다.
+                _ctx_token = None
+                try:
+                    _ctx_token = set_request_ctx({
+                        "request_id": req_id,
+                        "peer": str(peer),
+                        "received_at": datetime.now(),
+                    })
+                except Exception:
+                    _ctx_token = None
                 try:
                     res_cmd, res_data = await self.router.dispatch(cmd, data)
                 except Exception as e:
@@ -346,9 +359,12 @@ class HostServer:
                         },
                     )
                     res_cmd, res_data = f"{cmd}_RESULT", fail
+                finally:
+                    reset_request_ctx(_ctx_token)
 
                 dt_ms = int((time.perf_counter() - t0) * 1000)
 
+                _pending_cmd_row = None   # 응답 전송 후 기록할 명령 CSV 행
                 try:
                     # res_data가 dict가 아니면 방어
                     if not isinstance(res_data, dict):
@@ -383,7 +399,9 @@ class HostServer:
                             },
                         )
 
-                    row = {
+                    # ✅ row 구성만 여기서 하고, 실제 append 는 응답 write/drain '이후'에 한다
+                    #    (응답이 CSV 쓰기를 기다리지 않게 — 내용은 그대로)
+                    _pending_cmd_row = {
                         "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                         "peer": str(peer),
                         "request_id": req_id,
@@ -395,12 +413,11 @@ class HostServer:
                         "res_data_json": _safe_json(res_data),
                         "duration_ms": dt_ms,
                     }
-                    await self._cmd_csv.append(row)
 
                 except Exception as log_e:
                     # ✅ 로깅 자체가 실패했을 때도 CSV에 1줄 남김
                     try:
-                        err_row = {
+                        _pending_cmd_row = {
                             "server_time": datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
                             "peer": str(peer),
                             "request_id": req_id,
@@ -412,9 +429,8 @@ class HostServer:
                             "res_data_json": _safe_json({"res_cmd": res_cmd, "res_data_repr": repr(res_data)}),
                             "duration_ms": dt_ms if isinstance(dt_ms, int) else 0,
                         }
-                        await self._cmd_csv.append(err_row)
                     except Exception:
-                        pass
+                        _pending_cmd_row = None
 
                 try:
                     packet = pack_message(res_cmd, {"request_id": req_id, "data": res_data})
@@ -437,6 +453,13 @@ class HostServer:
 
                 writer.write(packet)
                 await writer.drain()
+
+                # ✅ 응답을 보낸 뒤에 명령 CSV 기록 (응답 지연 방지)
+                try:
+                    if _pending_cmd_row is not None:
+                        await self._cmd_csv.append(_pending_cmd_row)
+                except Exception:
+                    pass
 
                 # === 서버 → 클라이언트 응답 로그 ===
                 # 내가 어떤 응답을 보냈는지 server 로그창에 남김

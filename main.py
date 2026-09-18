@@ -1253,6 +1253,11 @@ class MainWindow(QWidget):
         #    PLC close / NAS to_thread 등이 executor 스레드에 남아있으면
         #    메인 스레드 종료 시 join 무한 대기 → 프로세스 잔존 / atexit 미실행.
         #    이 호출 한 줄이 표준 cleanup 절차의 마지막 단계.
+        # ✅ 호스트 요청 공정 로그 워커 종료(최대 2초만 대기)
+        with contextlib.suppress(Exception):
+            from util.host_process_log import get_host_log as _ghl
+            _ghl().close(2.0)
+
         # ✅ executor 를 내리기 '전'에 마지막 로그를 남긴다.
         #    (내린 뒤에 남기면 to_thread 경로가 pending 으로 버려져 줄을 잃는다)
         self._broadcast_log("WARN/EXIT", "앱 종료 정리 완료")
@@ -1699,6 +1704,14 @@ class MainWindow(QWidget):
 
             # ✅ NET 로그도 server 페이지로
             self._netlog("NET", f"Host started on {cfgc.HOST_SERVER_HOST}:{cfgc.HOST_SERVER_PORT}")
+
+            # ✅ 호스트 요청 공정 공유 CSV 로그: 이전 종료 미마무리 복구 + 워커 기동
+            #    로컬 파일만 보므로 빠르지만, NAS 지연에 휘말리지 않도록 스레드에서 실행한다.
+            with contextlib.suppress(Exception):
+                import threading as _th
+                from util.host_process_log import get_host_log as _ghl
+                _th.Thread(target=lambda: _ghl().startup_recover(),
+                           name="HostLogStartupRecover", daemon=True).start()
 
         except Exception as e:
             sp = getattr(self, "server_page", None)

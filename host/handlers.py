@@ -42,6 +42,15 @@ def _fallback_log_root() -> Path:
         return _base / "Logs_LocalFallback"
 
 
+# ✅ 호스트 요청 공정 공유 CSV 로그 (규약 v3.1). import 실패가 서버를 죽이지 않게 방어.
+try:
+    from host.request_ctx import get_request_ctx as _get_request_ctx
+    from util.host_process_log import get_host_log as _get_host_log
+except Exception:  # pragma: no cover
+    _get_request_ctx = None       # type: ignore[assignment]
+    _get_host_log = None          # type: ignore[assignment]
+
+
 class HostHandlers:
     def __init__(self, ctx: HostContext) -> None:
         self.ctx = ctx
@@ -732,7 +741,74 @@ class HostHandlers:
             return self._fail(e)
 
     # ================== CH1,2/plasma cleaning 공정 제어 ==================
+    # ================== 호스트 요청 공정 로그 헬퍼 ==================
+    #  요청 1건 = 공유 CSV 1줄. 시작/종료는 런타임이 기록하고,
+    #  핸들러는 "요청 등록"과 "거절(수락 전에 끝난 경우)"만 담당한다.
+    @staticmethod
+    def _hostlog():
+        return _get_host_log() if _get_host_log is not None else None
+
+    def _hostlog_begin(self, target: str, recipe: str) -> str:
+        """요청 수신 시점에 기록키를 발급한다. 실패해도 빈 문자열만 돌려준다."""
+        try:
+            hl = self._hostlog()
+            if hl is None:
+                return ""
+            rid, peer, rx = "", "", None
+            if _get_request_ctx is not None:
+                c = _get_request_ctx()
+                rid, peer, rx = c.request_id, c.peer, c.received_at
+            if rx is None:
+                rx = datetime.now()
+            return hl.request(
+                target=str(target),
+                request_id=rid,
+                peer=peer,
+                received_at=rx,
+                recipe_name=os.path.basename(str(recipe or "")),
+            )
+        except Exception:
+            return ""
+
+    def _hostlog_reject_if_unowned(self, key: str, reason: str) -> None:
+        """런타임이 아직 수락하지 않은(=시작하지 않은) 요청이면 '거절'로 1줄 남긴다."""
+        try:
+            hl = self._hostlog()
+            if hl is None or not key:
+                return
+            if not hl.is_owned(key):
+                hl.reject(key, reason)
+        except Exception:
+            pass
+
+    @staticmethod
+    def _hostlog_reason_from_res(res) -> str:
+        try:
+            if isinstance(res, dict):
+                return f"{res.get('error_code', '') or ''} {res.get('message', '') or ''}".strip()
+        except Exception:
+            pass
+        return "요청 거절"
+
     async def start_sputter(self, data: Json) -> Json:
+        """START_SPUTTER 래퍼 — 호스트 요청 공정 로그의 요청/거절만 담당.
+        실제 처리는 _start_sputter_impl. 모든 fail 반환 경로를 한 곳에서 잡는다."""
+        try:
+            _ch = int(data.get("ch") or 0)
+        except Exception:
+            _ch = 0
+        key = self._hostlog_begin(f"CH{_ch}" if _ch in (1, 2) else "CH?",
+                                  str(data.get("recipe") or ""))
+        try:
+            res = await self._start_sputter_impl(data, _hostlog_key=key)
+        except BaseException as e:
+            self._hostlog_reject_if_unowned(key, f"핸들러 예외: {e!r}")
+            raise
+        if isinstance(res, dict) and res.get("result") == "fail":
+            self._hostlog_reject_if_unowned(key, self._hostlog_reason_from_res(res))
+        return res
+
+    async def _start_sputter_impl(self, data: Json, *, _hostlog_key: str = "") -> Json:
         """
         START_SPUTTER 핸들러
         - data: {"ch": 1 or 2, "recipe": "csv 경로 또는 레시피 문자열"}
@@ -800,7 +876,16 @@ class HostHandlers:
                     )
 
                 try:
-                    await chamber.start_with_recipe_string(recipe)
+                    _c = _get_request_ctx() if _get_request_ctx is not None else None
+                    await chamber.start_with_recipe_string(
+                        recipe,
+                        origin="host",
+                        origin_meta={
+                            "key": _hostlog_key,
+                            "request_id": getattr(_c, "request_id", "") if _c else "",
+                            "peer": getattr(_c, "peer", "") if _c else "",
+                        },
+                    )
                     return self._ok(
                         "SPUTTER START OK",
                         ch=ch,
@@ -825,6 +910,24 @@ class HostHandlers:
                     return self._fail(e)
 
     async def start_plasma_cleaning(self, data: Json) -> Json:
+        """START_PLASMA_CLEANING 래퍼 — 호스트 요청 공정 로그의 요청/거절만 담당."""
+        _sel = 1
+        try:
+            _pc = getattr(self.ctx, "pc", None)
+            _sel = int(getattr(_pc, "_selected_ch", 1) or 1)
+        except Exception:
+            _sel = 1
+        key = self._hostlog_begin(f"PC(CH{_sel})", str(data.get("recipe") or ""))
+        try:
+            res = await self._start_plasma_cleaning_impl(data, _hostlog_key=key)
+        except BaseException as e:
+            self._hostlog_reject_if_unowned(key, f"핸들러 예외: {e!r}")
+            raise
+        if isinstance(res, dict) and res.get("result") == "fail":
+            self._hostlog_reject_if_unowned(key, self._hostlog_reason_from_res(res))
+        return res
+
+    async def _start_plasma_cleaning_impl(self, data: Json, *, _hostlog_key: str = "") -> Json:
         """
         START_PLASMA_CLEANING 핸들러
         - data: {"recipe": "csv 경로 또는 레시피 문자열", ...}
@@ -852,7 +955,16 @@ class HostHandlers:
             self._log_client_request(data)
 
             try:
-                await pc.start_with_recipe_string(recipe)
+                _c = _get_request_ctx() if _get_request_ctx is not None else None
+                await pc.start_with_recipe_string(
+                    recipe,
+                    origin="host",
+                    origin_meta={
+                        "key": _hostlog_key,
+                        "request_id": getattr(_c, "request_id", "") if _c else "",
+                        "peer": getattr(_c, "peer", "") if _c else "",
+                    },
+                )
                 return self._ok("PLASMA CLEANING START OK")
             except RuntimeError as e:
                 # 런타임 내부 프리플라이트/쿨다운/중복 실행 등 명시적 거절

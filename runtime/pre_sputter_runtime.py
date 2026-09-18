@@ -327,7 +327,7 @@ class PreSputterRuntime:
                 if self._recipe_path:
                     self._log(f"[PreSputter] {label} 레시피 실행: {os.path.basename(self._recipe_path)}")
                     try:
-                        await ch.start_with_recipe_string(self._recipe_path)
+                        await ch.start_with_recipe_string(self._recipe_path, origin="presputter")
                         ok = True
                     except Exception as e:
                         ok = False
@@ -437,7 +437,7 @@ class PreSputterRuntime:
             if self._recipe_path:
                 self._log(f"[PreSputter] {label} 레시피 실행: {os.path.basename(self._recipe_path)}")
                 try:
-                    await ch.start_with_recipe_string(self._recipe_path)
+                    await ch.start_with_recipe_string(self._recipe_path, origin="presputter")
                 except asyncio.CancelledError:
                     raise
                 except Exception as e:

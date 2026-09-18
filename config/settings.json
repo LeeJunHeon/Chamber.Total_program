@@ -241,6 +241,12 @@
     "PLC_COIL_LOG_SUMMARY_S": 60.0,        // 스킵 사유 요약 로그 주기 (초)
     "PLC_COIL_LOG_PROMOTE_AFTER": 12,      // 연속 성공 이 횟수마다 블록 계획 한 단계 승격 (0=승격 안 함)
     "PLC_RECONNECT_BACKOFF_S": 5.0,        // 연결 실패 후 재연결을 미룰 시간 (초, 0=사용 안 함)
+    // --- 호스트 요청 공정 공유 CSV 로그 (ALD 와 공용 파일, 규약 v3.1) ---
+    "HOST_LOG_ENABLED": true,                  // false 면 전부 no-op
+    "HOST_LOG_NAS_DIR": "\\\\VanaM_NAS\\VanaM_toShare\\JH_Lee\\Logs\\Robot",
+    "HOST_LOG_LOCAL_DIR": "C:\\VanaM_Logs\\Robot",
+    "HOST_LOG_RETRY_S": 30,                    // NAS 전송 재시도 주기 (초)
+    "HOST_LOG_LOCK_STALE_S": 30,               // 오래된 잠금 파일 판정 기준 (초)
     "PLC_COIL_LOG_NAS_DIR": "C:\\VanaM_Logs\\CH1&2\\CH1&2_PLC",   // 로컬 (NAS 반영은 log_sync 워커)
     "LOG_ROOT_DIR": "C:\\VanaM_Logs\\CH1&2",                     // 로컬 (NAS 반영은 log_sync 워커)
     "CAMERA_LOG_ROOT": "C:\\VanaM_Logs\\Camera_Logs",   // 카메라 사진 저장 루트(로컬)

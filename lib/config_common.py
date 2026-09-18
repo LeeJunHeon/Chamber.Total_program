@@ -497,6 +497,13 @@ PLC_COIL_LOG_BUDGET_S   = 4.0   # 한 tick 스냅샷 총 예산(초). INTERVAL_S
 PLC_COIL_LOG_SUMMARY_S  = 60.0  # 스킵 사유 요약 로그 주기(초)
 PLC_COIL_LOG_PROMOTE_AFTER = 12 # 연속 성공 이 횟수마다 블록 계획 한 단계 승격 (0이면 승격 안 함)
 PLC_RECONNECT_BACKOFF_S = 5.0   # 연결 실패 후 이 시간 동안은 재연결을 재시도하지 않는다(0이면 사용 안 함)
+
+# --- 호스트(로봇/스케줄러) 요청 공정 공유 CSV 로그 (ALD 와 공용 파일, 규약 v3.1) ---
+HOST_LOG_ENABLED = True
+HOST_LOG_NAS_DIR = r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\Robot"
+HOST_LOG_LOCAL_DIR = r"C:\VanaM_Logs\Robot"
+HOST_LOG_RETRY_S = 30            # NAS 전송 재시도 주기(초)
+HOST_LOG_LOCK_STALE_S = 30       # 이 시간보다 오래된 잠금 파일은 죽은 것으로 보고 제거(초)
 PLC_COIL_LOG_NAS_DIR = r"C:\VanaM_Logs\CH1&2\CH1&2_PLC"
 # PLC_COIL_LOG_LOCAL_DIR = r"C:\...\Logs\CH1&2\CH1&2_PLC"   # 필요 시
 

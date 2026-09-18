@@ -45,6 +45,13 @@ def _fallback_log_root() -> Path:
         return _base / "Logs_LocalFallback"
 
 
+# ✅ 호스트 요청 공정 공유 CSV 로그 (규약 v3.1)
+try:
+    from util.host_process_log import get_host_log as _get_host_log
+except Exception:  # pragma: no cover
+    _get_host_log = None          # type: ignore[assignment]
+
+
 # ✅ SYSTEM 일자 로그 (공정 로그 파일이 없을 때의 최종 보관처)
 #    import 실패가 런타임을 죽이지 않도록 방어한다.
 try:
@@ -1131,7 +1138,8 @@ class PlasmaCleaningRuntime:
             # 여기서 예외 터져도 공정은 그대로 진행되게 조용히 무시
             pass
 
-    async def _on_click_start(self) -> None:
+    async def _on_click_start(self, *, origin: str = "ui",
+                              origin_meta: Optional[dict] = None) -> None:
         # ------------------------------------------------------------
         # TEST MODE 판정 (# == test)
         # ------------------------------------------------------------
@@ -1317,6 +1325,9 @@ class PlasmaCleaningRuntime:
         self._running = True
         self._stop_requested = False
         self._final_notified = False
+        # ✅ 호스트 요청 공정 로그: 여기서부터 PC 가 소유한다 (TEST MODE 는 기록하지 않는다)
+        with contextlib.suppress(Exception):
+            self._host_run_begin_pc(origin, origin_meta)
         with contextlib.suppress(Exception):
             runtime_state.set_running("pc", True, ch)
         with contextlib.suppress(Exception):
@@ -2388,11 +2399,67 @@ class PlasmaCleaningRuntime:
         # 버튼은 중앙 헬퍼로만 토글
         self._apply_button_state(start_enabled=True, stop_enabled=False)
 
+    # ================== 호스트 요청 공정 로그 ==================
+    @staticmethod
+    def _hostlog():
+        return _get_host_log() if _get_host_log is not None else None
+
+    def _host_run_begin_pc(self, origin: str, origin_meta: Optional[dict]) -> None:
+        """프리플라이트 통과 후 _running=True 시점에 호출. host 가 아니면 기록하지 않는다."""
+        self._pc_host_key = None
+        if str(origin or "ui") != "host":
+            return
+        key = str(dict(origin_meta or {}).get("key") or "")
+        hl = self._hostlog()
+        if hl is None or not key:
+            return
+        hl.mark_owned(key)
+
+        # 레시피 정보
+        csv_path = str(getattr(self, "_host_recipe_path", "") or "")
+        row_count = 1
+        if csv_path:
+            with contextlib.suppress(Exception):
+                with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
+                    row_count = max(1, sum(1 for _ in csv.reader(f)) - 1)
+        pname = ""
+        with contextlib.suppress(Exception):
+            _r = getattr(self, "_loaded_recipe_row", None) or {}
+            pname = str(_r.get("Process_name") or _r.get("process_name") or "").strip()
+
+        with contextlib.suppress(Exception):
+            hl.update(key,
+                      recipe_name=os.path.basename(csv_path) if csv_path else "",
+                      row_count=row_count,
+                      process_names=pname)
+        lf = ""
+        with contextlib.suppress(Exception):
+            _p = getattr(self, "_log_file_path", None)
+            lf = os.path.basename(str(_p)) if _p else ""
+        with contextlib.suppress(Exception):
+            hl.mark_started(key, datetime.now(), log_file=lf or None)
+        self._pc_host_key = key
+
     async def _notify_finish_once(self, *, ok: bool, reason: str | None = None, stopped: bool = False) -> None:
         # 0) 재진입 차단
         if self._final_notified:
             return
         self._final_notified = True
+
+        # ✅ 호스트 요청 공정 로그: 결과 1줄 확정 (멱등)
+        with contextlib.suppress(Exception):
+            _key = getattr(self, "_pc_host_key", None)
+            if _key:
+                self._pc_host_key = None
+                _hl = self._hostlog()
+                if _hl is not None:
+                    if stopped:
+                        _res, _rsn = "STOP", (reason or "사용자 STOP")
+                    elif ok:
+                        _res, _rsn = "성공", ""
+                    else:
+                        _res, _rsn = "실패", (reason or "error")
+                    _hl.finalize(_key, _res, _rsn, datetime.now())
 
         # 1) 전역 종료/해제 — 챗이 실패해도 반드시 풀림
         try:
@@ -2867,7 +2934,9 @@ class PlasmaCleaningRuntime:
                     dev.reload_runtime_cfg()
     
     # ======= 서버 통신을 통한 실행 api =======
-    async def start_with_recipe_string(self, recipe: str) -> None:
+    async def start_with_recipe_string(self, recipe: str, *,
+                                       origin: str = "host",
+                                       origin_meta: Optional[dict] = None) -> None:
         """
         외부 제어(Host) 진입점.
 
@@ -2893,7 +2962,7 @@ class PlasmaCleaningRuntime:
         try:
             s = (recipe or "").strip()
             if not s:
-                asyncio.create_task(self._on_click_start())
+                asyncio.create_task(self._on_click_start(origin=origin, origin_meta=origin_meta))
             elif s.lower().endswith(".csv"):
                 # ✅ NAS 동기 호출을 executor로 분리 (asyncio loop block 방지)
                 loop = asyncio.get_running_loop()
@@ -2918,7 +2987,8 @@ class PlasmaCleaningRuntime:
                 self._apply_recipe_row_to_ui(row)
                 self.append_log("File", f"CSV 로드 완료: {s} → UI에 값 세팅")
 
-                asyncio.create_task(self._on_click_start())
+                self._host_recipe_path = s
+                asyncio.create_task(self._on_click_start(origin=origin, origin_meta=origin_meta))
             else:
                 raise RuntimeError("지원하지 않는 레시피 형식입니다. CSV/XLSX 파일 경로만 허용됩니다.")
 

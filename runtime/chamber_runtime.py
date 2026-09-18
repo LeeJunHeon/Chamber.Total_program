@@ -165,6 +165,18 @@ except Exception:  # pragma: no cover
 # UI 입력 파서가 "검증 실패"를 알리는 센티널 (None = 공란 = 유지 와 구분하기 위함)
 _DCP_OFF_INVALID = object()
 
+# ✅ 호스트 요청 공정 공유 CSV 로그 (규약 v3.1). import 실패가 런타임을 죽이지 않게 방어.
+try:
+    from util.host_process_log import (
+        get_host_log as _get_host_log,
+        RESULT_SUCCESS as _R_OK, RESULT_FAIL as _R_FAIL,
+        RESULT_STOP as _R_STOP, RESULT_UNKNOWN as _R_UNK,
+    )
+except Exception:  # pragma: no cover
+    _get_host_log = None          # type: ignore[assignment]
+    _R_OK, _R_FAIL, _R_STOP, _R_UNK = "성공", "실패", "STOP", "미확인"
+
+
 # ✅ DC Pulse 듀티 ↔ Off Time 환산 (device/dc_pulse.py 와 동일 규칙)
 #    매뉴얼 품기28-EPPEP102-V08 p.29/p.60: 장비 파라미터는 Freq(kHz)/Off Time(us) 뿐이다.
 try:
@@ -1522,6 +1534,24 @@ class ChamberRuntime:
                         else:
                             # detail에 result가 없을 때만 최소 폴백(추정 X: ok/stopped로만 결정)
                             result = "stop" if is_stopped else ("성공" if ok else "실패")
+
+                        # ✅ 호스트 요청 공정 로그: 이 행의 결과만 기억해 둔다.
+                        #    (다중 행 레시피는 큐 전체가 끝나야 1줄로 확정된다)
+                        with contextlib.suppress(Exception):
+                            _hr = getattr(self, "_host_run", None)
+                            if isinstance(_hr, dict):
+                                _errs = detail.get("errors") or []
+                                _hr["last_row"] = {
+                                    "ok": bool(ok),
+                                    "stopped": bool(is_stopped),
+                                    "result": result,
+                                    "reason": str(
+                                        detail.get("reason")
+                                        or detail.get("error_detail")
+                                        or (_errs[0] if _errs else "")
+                                        or ""
+                                    ),
+                                }
 
                         # 2) DataLogger의 process_params에 덮어쓰기(여기가 핵심)
                         try:
@@ -3576,6 +3606,10 @@ class ChamberRuntime:
 
             self.process_controller.start_process(params)
 
+            # ✅ 호스트 요청 공정 로그: 실제 시작 시각 + per-run 로그 파일명
+            with contextlib.suppress(Exception):
+                self._host_run_mark_started()
+
         except Exception as e:
             note = params.get("process_note", "알 수 없는")
             msg = f"오류: '{note}' 시작 실패. ({e})"
@@ -3837,7 +3871,9 @@ class ChamberRuntime:
     # ------------------------------------------------------------------
     # Start/Stop (개별 챔버)
     # ------------------------------------------------------------------
-    def _handle_start_clicked(self, _checked: bool = False):
+    def _handle_start_clicked(self, _checked: bool = False, *,
+                              origin: str = "ui",
+                              origin_meta: Optional[dict] = None):
         """
         ✅ Runner 기반 시작 처리
 
@@ -3891,6 +3927,9 @@ class ChamberRuntime:
             if getattr(self, "process_queue", None):
                 self.append_log("MAIN", f"[CH{self.ch}] 파일 기반 자동 공정 시작")
                 self.current_process_index = -1
+
+                # ✅ 호스트 요청 공정 로그: 여기서부터 러너가 소유한다
+                self._host_run_begin(origin, origin_meta)
 
                 # Runner state는 Runner 내부에서만 변경
                 self._runner_put(_RunnerCmd(kind="START_QUEUE"))
@@ -3948,6 +3987,9 @@ class ChamberRuntime:
 
             self.append_log("MAIN", "입력 검증 통과 → Runner START")
 
+            # ✅ 호스트 요청 공정 로그: 여기서부터 러너가 소유한다
+            self._host_run_begin(origin, origin_meta)
+
             # ✅ Runner만 _runner_state를 소유하게 한다(여기서 선점 금지)
             self._runner_put(_RunnerCmd(kind="START", params=cast(NormParams, params)))
 
@@ -3971,7 +4013,7 @@ class ChamberRuntime:
             return False
         try:
             # 버튼 클릭과 동일 경로(쿨다운·검증·프리플라이트·로깅 모두 재사용)
-            self._handle_start_clicked(False)
+            self._handle_start_clicked(False, origin="presputter")
             self.append_log("MAIN", f"[CH{self.ch}] PreSputter 자동 시작 (UI 현재값)")
             return True
         except Exception as e:
@@ -4292,6 +4334,10 @@ class ChamberRuntime:
         with contextlib.suppress(Exception):
             await self._stop_device_watchdogs(light=False)
 
+        # ✅ 호스트 요청 공정 로그: 시작 전 사용자 STOP
+        with contextlib.suppress(Exception):
+            self._host_run_set_explicit("STOP", "사용자 STOP (시작 전)")
+
         with contextlib.suppress(Exception):
             self._clear_queue_and_reset_ui()
 
@@ -4427,6 +4473,8 @@ class ChamberRuntime:
                 self._auto_connect_enabled = False
                 await self._stop_device_watchdogs(light=False)
             with contextlib.suppress(Exception):
+                self._host_run_set_explicit("실패", f"시작 실패: {e}")
+            with contextlib.suppress(Exception):
                 self._clear_queue_and_reset_ui()
             self._runner_state = "IDLE"
 
@@ -4484,6 +4532,8 @@ class ChamberRuntime:
         except Exception as e:
             self.append_log("MAIN", f"[Runner] AFTER_FINISH exception: {e!r}")
             with contextlib.suppress(Exception):
+                self._host_run_set_explicit("미확인", f"AFTER_FINISH 예외: {e}")
+            with contextlib.suppress(Exception):
                 self._clear_queue_and_reset_ui()
             self._runner_state = "IDLE"
 
@@ -4513,6 +4563,8 @@ class ChamberRuntime:
                 if self.current_process_index >= len(q):
                     self.append_log("MAIN", "[Runner] queue finished → reset")
                     self._runner_queue_mode = False
+                    with contextlib.suppress(Exception):
+                        self._host_run_set_explicit("성공", "")
                     with contextlib.suppress(Exception):
                         self._clear_queue_and_reset_ui()
                     self._runner_state = "IDLE"
@@ -4615,6 +4667,8 @@ class ChamberRuntime:
                         self._host_report_start(False, "CSV 공정 파라미터 오류: " + "; ".join(errs))
                     self._runner_queue_mode = False
                     with contextlib.suppress(Exception):
+                        self._host_run_set_explicit("실패", "레시피 파라미터 오류: " + "; ".join(errs))
+                    with contextlib.suppress(Exception):
                         self._clear_queue_and_reset_ui()
                     self._runner_state = "IDLE"
                     return
@@ -4676,6 +4730,8 @@ class ChamberRuntime:
             self.append_log("MAIN", f"[Runner] ADVANCE_QUEUE failed: {e!r}")
             with contextlib.suppress(Exception):
                 self._host_report_start(False, f"공정 시작 실패: {e}")
+            with contextlib.suppress(Exception):
+                self._host_run_set_explicit("실패", f"공정 시작 실패: {e}")
             self._runner_queue_mode = False
             with contextlib.suppress(Exception):
                 self._auto_connect_enabled = False
@@ -6052,6 +6108,15 @@ class ChamberRuntime:
         self._log_enqueue_nowait(f"# started_at = {datetime.now().isoformat()}\n")
         self._log_enqueue_nowait(f"# chamber = CH{self.ch}\n")
         self._log_enqueue_nowait(f"# process_name = {name}\n")
+        # ✅ 이 런이 어디서 시작됐는지 (host / ui / presputter)
+        with contextlib.suppress(Exception):
+            _org = str(getattr(self, "_run_origin", "") or "ui")
+            self._log_enqueue_nowait(f"# origin = {_org}\n")
+            if _org == "host":
+                _m = dict(getattr(self, "_run_origin_meta", None) or {})
+                self._log_enqueue_nowait(
+                    f"# request_id = {_m.get('request_id', '')} peer = {_m.get('peer', '')}\n"
+                )
         if "process_time" in params:
             self._log_enqueue_nowait(f"# time_min = {float(params.get('process_time', 0) or 0):.2f}\n")
         self._log_enqueue_nowait("# ============================\n")
@@ -6277,7 +6342,115 @@ class ChamberRuntime:
                     except asyncio.QueueEmpty:
                         break
 
+    # ================== 호스트 요청 공정 로그 ==================
+    #  origin=="host" 인 런만 기록한다(UI 버튼 / UI 파일 / Pre-Sputter 는 제외).
+    #  요청 1건 = CSV 1줄이므로, 다중 행 레시피도 큐 전체가 끝나야 한 줄로 확정한다.
+    @staticmethod
+    def _hostlog():
+        return _get_host_log() if _get_host_log is not None else None
+
+    def _host_run_begin(self, origin: str, origin_meta: Optional[dict]) -> None:
+        """러너가 요청을 수락한 시점(=_runner_put) 에 호출. host 가 아니면 기록하지 않는다."""
+        try:
+            self._run_origin = str(origin or "ui")
+            self._run_origin_meta = dict(origin_meta or {})
+            if self._run_origin != "host":
+                self._host_run = None
+                return
+            key = str(self._run_origin_meta.get("key") or "")
+            hl = self._hostlog()
+            if hl is not None and key:
+                hl.mark_owned(key)
+            self._host_run = {
+                "key": key, "started": False, "log_files": [],
+                "last_row": None, "explicit": None,
+            }
+        except Exception:
+            self._host_run = None
+
+    def _host_run_mark_started(self) -> None:
+        """start_process 가 예외 없이 호출된 직후 1회. 2번째 행부터는 로그파일만 추가."""
+        hr = getattr(self, "_host_run", None)
+        if not isinstance(hr, dict):
+            return
+        hl = self._hostlog()
+        key = str(hr.get("key") or "")
+        if hl is None or not key:
+            return
+        lf = ""
+        with contextlib.suppress(Exception):
+            _p = getattr(self, "_log_file_path", None)
+            lf = os.path.basename(str(_p)) if _p else ""
+
+        if not hr.get("started"):
+            hr["started"] = True
+            if lf:
+                hr["log_files"] = [lf]
+            hl.mark_started(key, datetime.now(), log_file=lf or None)
+        else:
+            if lf:
+                files = list(hr.get("log_files") or [])
+                if lf not in files:
+                    files.append(lf)
+                    hr["log_files"] = files
+                    hl.update(key, log_files=files)
+
+    def _host_run_key(self) -> str:
+        hr = getattr(self, "_host_run", None)
+        return str((hr or {}).get("key") or "")
+
+    def _host_run_set_explicit(self, result: str, reason: str = "") -> None:
+        """러너 종료 지점에서 결과를 못박는다(_clear_queue_and_reset_ui 직전 호출)."""
+        try:
+            hr = getattr(self, "_host_run", None)
+            if isinstance(hr, dict) and hr.get("explicit") is None:
+                hr["explicit"] = (str(result), str(reason or ""))
+        except Exception:
+            pass
+
+    def _host_run_finalize(self) -> None:
+        """런 종료 — 결과 1줄을 확정한다. finalize 가 멱등이라 중복 호출은 안전하다."""
+        try:
+            hr = getattr(self, "_host_run", None)
+            if not isinstance(hr, dict):
+                return
+            key = str(hr.get("key") or "")
+            hl = self._hostlog()
+            self._host_run = None
+            self._run_origin = None
+            if hl is None or not key:
+                return
+
+            exp = hr.get("explicit")
+            if exp:
+                result, reason = exp[0], exp[1]
+            else:
+                lr = hr.get("last_row")
+                if isinstance(lr, dict):
+                    if lr.get("stopped"):
+                        result, reason = _R_STOP, (lr.get("reason") or "사용자 STOP")
+                    elif lr.get("ok"):
+                        result, reason = _R_OK, ""
+                    else:
+                        result, reason = _R_FAIL, (lr.get("reason") or "")
+                elif not hr.get("started"):
+                    # 시작조차 하지 않고 큐가 끝났다 = 대기 행만 있는 레시피
+                    result, reason = _R_OK, "공정 행 없음(대기만)"
+                else:
+                    result, reason = _R_UNK, "종료 경로 미확인"
+
+            with contextlib.suppress(Exception):
+                hl.finalize(key, result, reason, datetime.now())
+        except Exception:
+            with contextlib.suppress(Exception):
+                self._host_run = None
+                self._run_origin = None
+
     def _clear_queue_and_reset_ui(self) -> None:
+        # ✅ 호스트 요청 공정이면 여기서 1줄 확정 (멱등)
+        with contextlib.suppress(Exception):
+            self._host_run_finalize()
+
         # 전역 runtime_state로 종료 시각을 기록하므로 로컬 타임스탬프는 불필요
         # ★ 추가: 남아 있을 수 있는 카운트다운 태스크 정리
         #self._cancel_delay_task()
@@ -6510,7 +6683,9 @@ class ChamberRuntime:
             self._update_ui_from_params(self.process_queue[0])
         self.append_log("MAIN", f"[CH{self.ch}] 레시피 큐 {len(q)}건 복구 완료")
 
-    async def start_with_recipe_string(self, recipe: str) -> None:
+    async def start_with_recipe_string(self, recipe: str, *,
+                                       origin: str = "host",
+                                       origin_meta: Optional[dict] = None) -> None:
         """
         Host 진입점(서버/원격 호출용):
         - UI Start 버튼과 동일한 시작 경로(_handle_start_clicked)를 사용한다.
@@ -6523,7 +6698,7 @@ class ChamberRuntime:
         s = (recipe or "").strip()
         if not s:
             # 현재 UI 값으로 단발 시작 (버튼과 동일 경로)
-            self._handle_start_clicked(False)
+            self._handle_start_clicked(False, origin=origin, origin_meta=origin_meta)
         elif s.lower().endswith((".csv", ".xlsx")):
             # ✅ 동기 NAS 호출을 executor로 분리 (asyncio loop block 방지)
             loop = asyncio.get_running_loop()
@@ -6583,6 +6758,21 @@ class ChamberRuntime:
                     f"레시피 오류 {len(_raw_errs)}건:\n - " + "\n - ".join(_raw_errs)
                 )
 
+            # ✅ 호스트 요청 공정 로그: 레시피 정보 갱신(검증 통과 직후)
+            if origin == "host":
+                with contextlib.suppress(Exception):
+                    hl = self._hostlog()
+                    _key = str((origin_meta or {}).get("key") or "")
+                    if hl is not None and _key:
+                        hl.update(
+                            _key,
+                            recipe_name=os.path.basename(s),
+                            row_count=len(rows),
+                            process_names=" / ".join(
+                                str(r.get("Process_name", "") or "").strip() for r in rows
+                            ),
+                        )
+
             self.process_queue = [cast(RawParams, r) for r in rows]
             self.current_process_index = -1
             if not self.process_queue:
@@ -6590,7 +6780,7 @@ class ChamberRuntime:
             self._update_ui_from_params(self.process_queue[0])
             self.append_log("File", f"CSV 로드 완료: {s} (총 {len(self.process_queue)}개)")
 
-            self._handle_start_clicked(False)
+            self._handle_start_clicked(False, origin=origin, origin_meta=origin_meta)
         else:
             raise RuntimeError("지원하지 않는 레시피 형식입니다. CSV/XLSX 파일 경로만 허용됩니다.")
 
