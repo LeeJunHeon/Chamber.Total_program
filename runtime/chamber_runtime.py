@@ -5536,7 +5536,8 @@ class ChamberRuntime:
             return None
 
         def _off_time_from_keys(*keys):
-            """Off Time [us] 파서. 공란=None(유지), "DC"=DC 모드, 숫자=us."""
+            """Off Time [us] 파서. 공란=None(유지), "DC"=DC 모드, 숫자=us.
+            해석 불가는 앞단 _validate_raw_rows 가 이미 막지만, 이중 안전망으로 로그를 남긴다."""
             for k in keys:
                 sv = str(raw.get(k, "")).strip()
                 if sv == "":
@@ -5546,6 +5547,10 @@ class ChamberRuntime:
                 try:
                     return round(float(sv), 1)
                 except Exception:
+                    self.append_log(
+                        "Params",
+                        f"[경고] {k}='{sv}' 해석 불가 → 유지"
+                    )
                     return None
             return None
 
@@ -6335,6 +6340,11 @@ class ChamberRuntime:
         except Exception:
             pass
 
+        # ✅ 프로그램 시작 직후부터 라디오 선택에 따라 공유 입력칸 라벨이 바뀌도록 연결
+        #    (중복 연결은 _bind_pulse_label_signals 내부 가드가 막는다)
+        with contextlib.suppress(Exception):
+            self._bind_pulse_label_signals()
+
         self._apply_ui_lockouts()
 
     def _apply_ui_lockouts(self) -> None:
@@ -7030,7 +7040,8 @@ class ChamberRuntime:
                 q.pop(k, None)
 
         if not bool(q.get("use_dc_pulse", False)):
-            _drop(("dc_pulse_power", "dc_pulse_freq", "dc_pulse_duty", "dc_pulse_duty_cycle"))
+            _drop(("dc_pulse_power", "dc_pulse_freq", "dc_pulse_off_time",
+                   "dc_pulse_duty", "dc_pulse_duty_cycle"))
         if not bool(q.get("use_rf_pulse", False)):
             _drop(("rf_pulse_power", "rf_pulse_freq", "rf_pulse_duty", "rf_pulse_duty_cycle"))
         if not bool(q.get("use_dc_power", False)):
@@ -7065,12 +7076,16 @@ class ChamberRuntime:
         "dc_pulse_power", "rf_pulse_power",
         "Ar_flow", "O2_flow", "N2_flow",
         "change_power_value",
+        # RF(CESAR)는 kHz 실수 허용(0.5kHz=500Hz) — 사양 3-5
+        "rf_pulse_freq",
     )
     _RAW_INT_KEYS = (
         "integration_time",
         "dc_pulse_freq", "dc_pulse_duty_cycle",
-        "rf_pulse_freq", "rf_pulse_duty_cycle",
+        "rf_pulse_duty_cycle",
     )
+    # Off Time 컬럼: 공란=유지 / "DC"=DC 모드 / 숫자=µs (매뉴얼 p.50)
+    _RAW_OFF_TIME_KEYS = ("dc_pulse_off_time",)
     _RAW_TF_KEYS = (
         "gun1", "gun2", "gun3",
         "use_dc_pulse", "use_rf_pulse",
@@ -7165,6 +7180,17 @@ class ChamberRuntime:
                 if v.lower() not in allowed:
                     _add(f"{where} {key}='{v}' → {'/'.join(allowed)} 중 하나여야 합니다")
 
+            for key in self._RAW_OFF_TIME_KEYS:
+                v = str(row.get(key, "") or "").strip()
+                if v == "":
+                    continue
+                if v.upper() == "DC":
+                    continue
+                try:
+                    float(v)
+                except Exception:
+                    _add(f"{where} {key}='{v}' → 숫자(µs) 또는 DC 여야 합니다")
+
             for key in self._RAW_DURATION_KEYS:
                 v = str(row.get(key, "") or "").strip()
                 if v == "":
@@ -7184,6 +7210,58 @@ class ChamberRuntime:
 
         if overflow > 0:
             errs.append(f"... 외 {overflow}건")
+        return errs
+
+    def _validate_rf_pulse_params(self, p: NormParams) -> list[str]:
+        """RF Pulse(CESAR 1310) 주파수/듀티 검증. 주파수는 kHz 실수 허용."""
+        errs: list[str] = []
+        f = p.get("rf_pulse_freq")
+        d = p.get("rf_pulse_duty")
+        if f is not None:
+            _fmax = self._rfp_freq_max_khz()
+            if not (0.001 <= float(f) <= _fmax):
+                errs.append(
+                    f"RF Pulse Freq {float(f):g}kHz 는 허용 범위 0.001~{_fmax:g}kHz 밖입니다 "
+                    "(CESAR 사양 3-5: 1Hz~30kHz — 초과 시 W40으로 출력 차단)"
+                )
+        if d is not None and not (1 <= d <= 99):
+            errs.append("RF Pulse Duty(%)는 1..99")
+        return errs
+
+    def _validate_dc_pulse_params(self, p: NormParams) -> list[str]:
+        """DC Pulse(EnerPulse EP5) 주파수/Off Time 검증.
+
+        ⚠ 장비 파라미터는 Freq(kHz)와 Off Time(us) 뿐이며 듀티 개념이 없다(매뉴얼 p.29/p.60).
+           Off Time 상한은 주파수 종속(p.13 그림3: min(10.0, 400/f)).
+        """
+        errs: list[str] = []
+        f = p.get("dc_pulse_freq")
+        if f is not None and not (20 <= f <= 150):
+            errs.append("DC Pulse Freq(kHz)는 20..150")
+
+        off = p.get("dc_pulse_off_time")
+        if off is None:
+            return errs                      # 공란 = 장비 현재값 유지
+        if isinstance(off, str):
+            if off.strip().upper() != "DC":
+                errs.append(f"DC Pulse Off Time '{off}' 은 숫자(µs) 또는 DC 여야 합니다")
+            return errs                      # "DC" 는 통과
+
+        try:
+            off_v = float(off)
+        except Exception:
+            errs.append(f"DC Pulse Off Time '{off}' 은 숫자(µs) 또는 DC 여야 합니다")
+            return errs
+
+        _max = _dcp_max_off(float(f)) if f else 10.0
+        if off_v < 1.0:
+            errs.append(f"DC Pulse Off Time {off_v:.1f}µs 는 최소 1.0µs 미만입니다 (매뉴얼 p.12/13)")
+        elif off_v > _max:
+            _fx = f"{float(f):g}kHz" if f else "(주파수 미지정 → 절대 상한)"
+            errs.append(
+                f"DC Pulse Off Time {off_v:.1f}µs 는 {_fx} 상한 {_max:.1f}µs 초과"
+                "(매뉴얼 p.13 그림3)"
+            )
         return errs
 
     def _validate_norm_params(self, p: NormParams) -> list[str]:
@@ -7228,22 +7306,12 @@ class ChamberRuntime:
             if use_rf:
                 if p.get("rf_pulse_power", 0) <= 0:
                     errs.append("RF Pulse Target Power(W)는 0보다 커야 합니다.")
-                f = p.get("rf_pulse_freq")
-                d = p.get("rf_pulse_duty")
-                if f is not None and not (1 <= f <= 100):
-                    errs.append("RF Pulse Freq(kHz)는 1..100")
-                if d is not None and not (1 <= d <= 99):
-                    errs.append("RF Pulse Duty(%)는 1..99")
+                errs.extend(self._validate_rf_pulse_params(p))
 
             if use_dc:
                 if p.get("dc_pulse_power", 0) <= 0:
                     errs.append("DC Pulse Target Power(W)는 0보다 커야 합니다.")
-                f = p.get("dc_pulse_freq")
-                d = p.get("dc_pulse_duty")
-                if f is not None and not (20 <= f <= 150):
-                    errs.append("DC Pulse Freq(kHz)는 20..150")
-                if d is not None and not (1 <= d <= 99):
-                    errs.append("DC Pulse Duty(%)는 1..99")
+                errs.extend(self._validate_dc_pulse_params(p))
 
         else:
             checked = int(p.get("use_g1", False)) + int(p.get("use_g2", False)) + int(p.get("use_g3", False))
@@ -7259,12 +7327,16 @@ class ChamberRuntime:
                 else:
                     if p.get("rf_pulse_power", 0) <= 0:
                         errs.append("RF Pulse Target Power(W)는 0보다 커야 합니다.")
-                    f = p.get("rf_pulse_freq")
-                    d = p.get("rf_pulse_duty")
-                    if f is not None and not (1 <= f <= 100):
-                        errs.append("RF Pulse Freq(kHz)는 1..100")
-                    if d is not None and not (1 <= d <= 99):
-                        errs.append("RF Pulse Duty(%)는 1..99")
+                    errs.extend(self._validate_rf_pulse_params(p))
+
+            # ✅ CH2 에도 DC Pulse 검증을 추가한다(기존에는 없었다)
+            if use_dc_pulse:
+                if not self.supports_dc_pulse:
+                    errs.append("이 챔버는 DC-Pulse를 지원하지 않습니다.")
+                else:
+                    if p.get("dc_pulse_power", 0) <= 0:
+                        errs.append("DC Pulse Target Power(W)는 0보다 커야 합니다.")
+                    errs.extend(self._validate_dc_pulse_params(p))
 
             # CH2는 (연속 DC/RF) 또는 (Pulse DC/RF) 중 하나 이상은 필요
             if not (p.get("use_dc_power") or p.get("use_dc_power2") or p.get("use_rf_power") or use_dc_pulse or use_rf_pulse):

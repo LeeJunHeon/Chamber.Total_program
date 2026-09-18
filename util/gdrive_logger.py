@@ -144,6 +144,24 @@ def _fallback_log_root() -> Path:
         return _base / "Logs_LocalFallback"
 
 
+def _dcp_off_time_value(pp: dict):
+    """DC Pulse Off Time [µs] 값. 실측(dc_pulse_off_time_us) 우선, 없으면 레시피 값.
+    "DC" 모드나 미지정은 None."""
+    v = pp.get("dc_pulse_off_time_us", None)
+    if v not in (None, ""):
+        try:
+            return float(v)
+        except Exception:
+            pass
+    raw = pp.get("dc_pulse_off_time", None)
+    if raw in (None, "") or isinstance(raw, str):
+        return None
+    try:
+        return float(raw)
+    except Exception:
+        return None
+
+
 def _cs(ws, r: int, c: int, val=None, bg: Optional[str] = None,
         fg: str = _FG, bold: bool = False, size: int = 9,
         ha: str = "center", wrap: bool = False,
@@ -509,7 +527,8 @@ def _build_data(
             # [수정 2] dc_pulse_duty_cycle (TypedDict 실제 키명)
             "duty_cycle"   : pp.get("dc_pulse_duty_cycle") or pp.get("dc_pulse_duty"),
             "frequency"    : pp.get("dc_pulse_freq"),
-            "off_time"     : pp.get("dc_pulse_off_time_us"),
+            # 실측이 없으면 레시피 값으로 대체 ("DC"/None 이면 None)
+            "off_time"     : _dcp_off_time_value(pp),
             # ✅ Arc 실측(런 종료 시 드라이버 arc_counts에서 채집) — DC Pulse 행 전용
             "soft_arc"     : int(pp.get("soft_arc_count") or 0),
             "hard_arc"     : int(pp.get("hard_arc_count") or 0),

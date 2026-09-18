@@ -277,6 +277,8 @@ class AsyncDCPulse:
         self._out_on: bool = False
         # ✅ [C] 마지막 실패 사유(runtime 이 읽어 구글챗까지 전달)
         self.last_failure: Optional[str] = None
+        # prepare_and_start 실행 중인지 — 하위 실패에 phase="prepare" 자동 태깅용
+        self._prepare_active: bool = False
         self._last_ref_power_w: Optional[float] = None  # ← 세트포인트 저장
 
         self._spdev_n: int = 0
@@ -506,7 +508,19 @@ class AsyncDCPulse:
         return False
 
     # ====== 상위 시퀀스 편의 API ======
-    async def prepare_and_start(
+    async def prepare_and_start(self, power_w: float, **kw):
+        """prepare 구간 표시 래퍼. 본문은 _prepare_and_start_impl.
+
+        구간 안에서 발생한 하위 실패(_write_cmd_data 재시도 소진 등)도
+        _emit_failed 가 phase="prepare" 로 자동 태깅하도록 한다.
+        """
+        self._prepare_active = True
+        try:
+            return await self._prepare_and_start_impl(power_w, **kw)
+        finally:
+            self._prepare_active = False
+
+    async def _prepare_and_start_impl(
         self,
         power_w: float,
         *,
@@ -2324,7 +2338,14 @@ class AsyncDCPulse:
 
         phase="prepare" 는 prepare_and_start 가 직접 False 를 리턴하는 경로를 뜻한다.
         (runtime 이 이미 on_dc_pulse_failed 로 보고하므로 이벤트 펌프는 재보고하지 않는다)
+
+        ✅ prepare_and_start 실행 중이면 phase 를 명시하지 않은 하위 실패
+           (_write_cmd_data 재시도 소진, set_master_host_all 실패 등)에도 자동으로
+           "prepare" 를 붙인다. 폴링 루프의 AUTO_STOP / output_off 는 prepare 밖이므로
+           태깅되지 않는다.
         """
+        if phase is None and getattr(self, "_prepare_active", False):
+            phase = "prepare"
         self.last_failure = f"{label}: {why}"
         await self._event_q.put(DCPEvent(
             kind="command_failed", cmd=label, reason=why,

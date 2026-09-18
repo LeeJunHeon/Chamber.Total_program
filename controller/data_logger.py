@@ -120,6 +120,7 @@ class DataLogger(QObject):
             "DC2: V", "DC2: I", "DC2: P",
             "RF Pulse: P", "RF Pulse: Freq", "RF Pulse: Duty Cycle",
             "DC Pulse: P", "DC Pulse: V", "DC Pulse: I", "DC Pulse: Freq", "DC Pulse: Duty Cycle",
+            "DC Pulse: Off Time",
             "RF Pulse: For.P", "RF Pulse: Ref.P", "Chuck Position",
         ]
 
@@ -141,6 +142,26 @@ class DataLogger(QObject):
     # ──────────────────────────────────────────────────────────────
     # 초기 헤더 정리
     # ──────────────────────────────────────────────────────────────
+    def _dcp_off_time_text(self) -> str:
+        """DC Pulse Off Time [µs] 표기.
+        실측(dc_pulse_off_time_us) 우선 → 레시피 dc_pulse_off_time(숫자) → "DC" → 공란."""
+        pp = self.process_params
+        v = pp.get("dc_pulse_off_time_us", None)
+        if v not in (None, ""):
+            try:
+                return f"{float(v):.1f}"
+            except Exception:
+                pass
+        raw = pp.get("dc_pulse_off_time", None)
+        if raw in (None, ""):
+            return ""
+        if isinstance(raw, str):
+            return "DC" if raw.strip().upper() == "DC" else ""
+        try:
+            return f"{float(raw):.1f}"
+        except Exception:
+            return ""
+
     def _ensure_header(self) -> None:
         """기존 CSV가 구헤더면 새 헤더로 업그레이드(기존 행 보존, 새 컬럼 공란)."""
         if not self.log_file.exists():
@@ -458,6 +479,8 @@ class DataLogger(QObject):
             "DC Pulse: I": f"{_avg(self.dc_pulse_current_readings):.2f}" if (use_dcp and self.dc_pulse_current_readings) else "",
             "DC Pulse: Freq":       (str(int(dcp_f))        if (use_dcp and dcp_f not in (None, "")) else ""),
             "DC Pulse: Duty Cycle": (str(int(dcp_d))        if (use_dcp and dcp_d not in (None, "")) else ""),
+            # ⚠ EnerPulse EP5 장비 파라미터는 Off Time(us) — 듀티는 파생값(매뉴얼 p.29/p.60)
+            "DC Pulse: Off Time":   (self._dcp_off_time_text() if use_dcp else ""),
 
             # RF Pulse 폴링 평균
             "RF Pulse: For.P": f"{_avg(self.rf_pulse_for_p_readings):.2f}" if (use_rfp and self.rf_pulse_for_p_readings) else "",
