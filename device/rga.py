@@ -333,7 +333,7 @@ class RGAWorkerClient:
                         elif not payload.get("csv_ok", True):
                             _fbtxt = payload.get("csv_path") or "실패"
                             await self._q.put(RGAEvent("status", {
-                                "message": (f"[RGA] CSV 저장 실패(primary=…): "
+                                "message": (f"[RGA] CSV 저장 실패(primary={_pri or '(기본값)'}): "
                                             f"{payload.get('csv_error') or 'unknown'} → fallback={_fbtxt}")
                             }))
                         elif payload.get("csv_fallback_used"):

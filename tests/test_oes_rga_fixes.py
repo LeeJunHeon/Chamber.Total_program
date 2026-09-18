@@ -234,7 +234,10 @@ def test_3e_cmd_has_csv_args():
 def test_4_worker_csv_fallback():
     tmp = Path(tempfile.mkdtemp())
     runner = tmp / "run_worker.py"
-    bad = ("Q:\\nope\\x.csv" if os.name == "nt" else "/nonexistent-root/x.csv")
+    # 정본은 '일반 파일 아래' 경로 → root/관리자 권한에서도 반드시 실패한다
+    afile = tmp / "afile"
+    afile.write_text("not a dir", encoding="utf-8")
+    bad = str(afile / "x.csv")
     fb = tmp / "fb" / "RGA_spectrums.csv"
     runner.write_text(textwrap.dedent(f'''
         import sys, json
@@ -258,7 +261,7 @@ def test_4_worker_csv_fallback():
     assert rows[0][0] == "Time" and len(rows[0]) == 3, rows[0]
 
     # 둘 다 실패 → ok:true, csv_ok:false
-    bad2 = ("Q:\\nope\\y.csv" if os.name == "nt" else "/nonexistent-root/y.csv")
+    bad2 = str(afile / "y.csv")      # 폴백도 같은 방식으로 반드시 실패
     runner2 = tmp / "run_worker2.py"
     runner2.write_text(textwrap.dedent(f'''
         import sys
