@@ -2233,18 +2233,8 @@ class ChamberRuntime:
 
                     self.append_log(f"DCPulse{self.ch}", f"CMD FAIL: {cmd} ({why_raw})")
 
-                    # ✅ [C] prepare_and_start 가 직접 False 를 리턴하는 경로는
-                    #    cb_dc_pulse_start 가 last_failure 로 이미 보고했다.
-                    #    여기서 또 보고하면 "Step 0 UNKNOWN" 으로 덮어써지므로 생략한다.
-                    #    (로그는 위에서 남겼고, AUTO_STOP/OUTPUT_OFF 처리는 아래 그대로)
-                    if ((ev.data or {}).get("phase") == "prepare"):
-                        continue
-
-                    # ✅ 내부 진단/복구용 명령 실패는 공정 실패로 승격하지 않는다.
-                    if cmd.startswith("READ_") or cmd == "FAULT_RESET":
-                        continue
-
                     # ✅ OUTPUT_OFF 실패는 별도 안전 경고
+                    #    (phase 검사보다 '먼저' — prepare 창 안의 STOP 도 놓치지 않는다)
                     if cmd.startswith("OUTPUT_OFF"):
                         alert = (
                             f"⚠️ CH{self.ch} DC Pulse OUTPUT OFF 실패 - 출력 상태 미확인 "
@@ -2276,6 +2266,19 @@ class ChamberRuntime:
                                 "safety": "output_state_unconfirmed",
                             },
                         )
+                        continue
+
+                    # ✅ [C] prepare_and_start 가 직접 False 를 리턴하는 경로는
+                    #    cb_dc_pulse_start 가 last_failure 로 이미 보고했다.
+                    #    여기서 또 보고하면 "Step 0 UNKNOWN" 으로 덮어써지므로 생략한다.
+                    #    ⚠ OUTPUT_OFF 안전 경고는 '위에서' 먼저 처리한다 — 설정 단계 도중
+                    #       STOP 이 들어오면 output_off() 가 prepare 창 안에서 실행되므로,
+                    #       이 검사가 앞에 있으면 안전 경고가 통째로 사라진다(이중 안전망).
+                    if ((ev.data or {}).get("phase") == "prepare"):
+                        continue
+
+                    # ✅ 내부 진단/복구용 명령 실패는 공정 실패로 승격하지 않는다.
+                    if cmd.startswith("READ_") or cmd == "FAULT_RESET":
                         continue
 
                     # AUTO_STOP은 진짜 공정 실패

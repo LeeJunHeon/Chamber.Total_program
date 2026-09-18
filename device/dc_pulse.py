@@ -2341,10 +2341,17 @@ class AsyncDCPulse:
 
         ✅ prepare_and_start 실행 중이면 phase 를 명시하지 않은 하위 실패
            (_write_cmd_data 재시도 소진, set_master_host_all 실패 등)에도 자동으로
-           "prepare" 를 붙인다. 폴링 루프의 AUTO_STOP / output_off 는 prepare 밖이므로
-           태깅되지 않는다.
+           "prepare" 를 붙인다.
+
+        ⚠ 단, OUTPUT_OFF / AUTO_STOP 은 prepare 창 안에서 발생하더라도 절대 태깅하지
+           않는다. 설정 단계 도중 사용자 STOP 이 들어오면 output_off() 가 prepare 창
+           안에서 실행되는데, 여기에 phase="prepare" 가 붙으면 runtime 이 이를 건너뛰어
+           "OUTPUT OFF 실패 — 출력 상태 미확인" 안전 경고가 사라진다.
         """
-        if phase is None and getattr(self, "_prepare_active", False):
+        _NEVER_PREPARE = ("OUTPUT_OFF", "AUTO_STOP")
+        if (phase is None
+                and getattr(self, "_prepare_active", False)
+                and not str(label).upper().startswith(_NEVER_PREPARE)):
             phase = "prepare"
         self.last_failure = f"{label}: {why}"
         await self._event_q.put(DCPEvent(
