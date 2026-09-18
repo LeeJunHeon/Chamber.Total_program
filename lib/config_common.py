@@ -92,8 +92,36 @@ ACK_FOLLOWUP_GRACE_MS  = 500
 # ✅ RGA worker 실행/응답 타임아웃(초) - 요청대로 1분
 RGA_WORKER_TIMEOUT_S = 60.0
 
-# ✅ ProcessController가 RGA_OK 토큰을 기다리는 최대 시간(ms)
-#    worker timeout(60s) + 이벤트/그래프 처리 여유 5s
+# ✅ RGA 재시도 예산 (device/rga.py 가 호출 시점에 읽는다)
+RGA_MAX_ATTEMPTS = 3          # 워커 실행 총 시도 횟수 (최소 1)
+RGA_RETRY_DELAY_S = 1.0       # 실패 후 재시도 전 대기(초)
+
+
+def rga_step_timeout_ms() -> int:
+    """RGA_SCAN 스텝이 RGA_OK 토큰을 기다리는 예산(ms).
+
+    = 시도횟수 x 워커 timeout + 재시도 대기 + 5초 여유.
+    ⚠ 모듈 전역을 import 시점에 고정하면 settings.json 오버라이드가 반영되지 않으므로,
+      호출 시점에 sys.modules 의 현재 속성으로 읽어 계산한다(DEC-033).
+    """
+    import sys as _sys
+    _m = _sys.modules[__name__]
+    try:
+        n = max(1, int(getattr(_m, "RGA_MAX_ATTEMPTS", 3)))
+    except Exception:
+        n = 3
+    try:
+        t = float(getattr(_m, "RGA_WORKER_TIMEOUT_S", 60.0))
+    except Exception:
+        t = 60.0
+    try:
+        d = max(0.0, float(getattr(_m, "RGA_RETRY_DELAY_S", 1.0)))
+    except Exception:
+        d = 1.0
+    return int(n * t * 1000 + (n - 1) * d * 1000 + 5000)
+
+
+# ⚠ 호환용 상수 — 새 코드에서 import 하지 말 것(rga_step_timeout_ms() 를 쓴다).
 RGA_STEP_TIMEOUT_MS = int(RGA_WORKER_TIMEOUT_S * 1000) + 5_000
 
 # 채널별 CSV 기본 저장 경로(필요 시 main에서 ch를 선택해 사용)

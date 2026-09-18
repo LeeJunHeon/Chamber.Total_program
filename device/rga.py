@@ -17,6 +17,7 @@ import contextlib  # 파일 상단에 추가
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, AsyncIterator, Dict, Optional, Tuple
+from lib import config_common   # ✅ DEC-033: 호출 시점 getattr
 
 
 @dataclass
@@ -130,6 +131,30 @@ class RGAWorkerClient:
             if self._proc is proc:
                 self._proc = None
 
+    def _resolve_csv_paths(self) -> tuple[str, str]:
+        """(정본, 폴백) CSV 경로. DEC-033: 호출 시점에 읽는다."""
+        primary = ""
+        try:
+            v = getattr(config_common, "RGA_CSV_PATH", None)
+            if v is None:
+                v = getattr(config_common, "RGA_XLSX_PATH", None)
+            if isinstance(v, dict):
+                primary = str(v.get(f"ch{int(self.ch)}", "") or "")
+            elif v:
+                primary = str(v)
+        except Exception:
+            primary = ""
+
+        fallback = ""
+        try:
+            from pathlib import Path as _P
+            d = getattr(config_common, "LOCAL_FALLBACK_RGA_DIR", None)
+            if d:
+                fallback = str(_P(str(d)) / f"Ch.{int(self.ch)}" / "RGA_spectrums.csv")
+        except Exception:
+            fallback = ""
+        return primary, fallback
+
     async def scan_histogram_to_csv(self, timeout_s: Optional[float] = None) -> None:
         """
         worker 실행 → JSON 받기 → 이벤트 푸시
@@ -142,8 +167,15 @@ class RGAWorkerClient:
         if timeout_s is None:
             timeout_s = self.default_timeout_s
 
-        max_attempts = 3
-        retry_delay_s = 1.0  # 실패 후 재시도 전에 잠깐 쉬기
+        # ✅ DEC-033: 호출 시점에 설정을 읽는다(모듈 import 시 고정 금지)
+        try:
+            max_attempts = max(1, int(getattr(config_common, "RGA_MAX_ATTEMPTS", 3)))
+        except Exception:
+            max_attempts = 3
+        try:
+            retry_delay_s = max(0.0, float(getattr(config_common, "RGA_RETRY_DELAY_S", 1.0)))
+        except Exception:
+            retry_delay_s = 1.0
 
         creationflags = 0
         if sys.platform.startswith("win"):
@@ -153,6 +185,12 @@ class RGAWorkerClient:
             return (s or "")[-n:]
 
         last_fail: Dict[str, Any] = {"message": "unknown"}
+
+        _budget_s = max_attempts * float(timeout_s) + max(0, max_attempts - 1) * retry_delay_s
+        await self._q.put(RGAEvent("status", {
+            "message": (f"[RGA] 스캔 시작 — 예산 {max_attempts}회 x {float(timeout_s):g}s"
+                        f"(+대기 {retry_delay_s:g}s) = 총 {_budget_s:g}s")
+        }))
 
         try:
             for attempt in range(1, max_attempts + 1):
@@ -175,6 +213,12 @@ class RGAWorkerClient:
 
                 if fail is None:
                     cmd = [*cmd_base, "--ch", str(self.ch), "--timeout", str(timeout_s)]
+                    # ✅ CSV 경로를 인자로 넘긴다 (워커 내부 하드코딩 제거)
+                    _pri, _fb = self._resolve_csv_paths()
+                    if _pri:
+                        cmd += ["--csv", _pri]
+                    if _fb:
+                        cmd += ["--csv_fallback", _fb]
                     await self._q.put(
                         RGAEvent(
                             "status",
@@ -281,7 +325,22 @@ class RGAWorkerClient:
                             "stderr": _tail(err),
                         }
                     else:
-                        # ✅ 성공
+                        # ✅ 성공(측정 성공). CSV 저장 실패는 공정 실패가 아니다.
+                        if payload.get("worker_version") is None:
+                            await self._q.put(RGAEvent("status", {
+                                "message": "[RGA] 구버전 rga_worker.exe — CSV 경로 인자 미지원"
+                            }))
+                        elif not payload.get("csv_ok", True):
+                            _fbtxt = payload.get("csv_path") or "실패"
+                            await self._q.put(RGAEvent("status", {
+                                "message": (f"[RGA] CSV 저장 실패(primary=…): "
+                                            f"{payload.get('csv_error') or 'unknown'} → fallback={_fbtxt}")
+                            }))
+                        elif payload.get("csv_fallback_used"):
+                            await self._q.put(RGAEvent("status", {
+                                "message": f"[RGA] CSV 정본 저장 실패 → 로컬 폴백에 저장: {payload.get('csv_path')}"
+                            }))
+
                         mass_axis = payload.get("mass_axis") or []
                         pressures = payload.get("pressures") or []
 

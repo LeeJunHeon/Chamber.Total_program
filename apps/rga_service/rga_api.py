@@ -4,7 +4,11 @@
 RGA Worker (standalone exe or script)
 - 목적: RGA 측정(srsinst) + CSV append + JSON(1줄) stdout 응답
 - 메인 프로그램이 subprocess로 실행해서 stdout JSON을 읽는다.
-- 메인 → worker 전달 파라미터는 --ch, --timeout 만 사용한다.
+- 메인 → worker 전달 파라미터: --ch, --timeout, --csv, --csv_fallback
+  (--csv / --csv_fallback 이 없으면 CH_CONFIG 기본값과 exe 폴더 아래 로컬 폴백을 쓴다)
+- 측정과 CSV 저장을 분리한다: 측정이 성공하면 CSV 저장이 실패해도 ok:true 로 응답하고,
+  csv_ok / csv_path / csv_error / csv_fallback_used 로 저장 결과를 알린다.
+  (CSV 드라이브가 없다고 해서 측정 결과를 버리지 않는다)
 """
 
 from __future__ import annotations
@@ -12,6 +16,8 @@ from __future__ import annotations
 import argparse
 import csv
 import json
+import os
+import socket
 import sys
 import time
 import traceback
@@ -118,11 +124,36 @@ def rga_measure_once(ip: str, user: str, password: str):
         except Exception:
             pass
 
+def _default_fallback_csv(ch: int) -> Path:
+    """exe(또는 스크립트) 폴더 아래 로컬 폴백 경로."""
+    if getattr(sys, "frozen", False):
+        base = Path(sys.executable).resolve().parent
+    else:
+        base = Path(__file__).resolve().parent
+    return base / "Logs_LocalFallback" / "RGA" / f"Ch.{int(ch)}" / "RGA_spectrums.csv"
+
+
+def _save_csv(path: Path, pressures: List[float], ts: str) -> None:
+    """한 파일에 저장. 컬럼 수 불일치는 구조 변경 방지를 위해 예외."""
+    existing_n = _read_existing_header_cols(path)
+    if existing_n and existing_n != len(pressures):
+        raise RuntimeError(
+            f"CSV column mismatch: existing Mass={existing_n}, new Mass={len(pressures)} "
+            f"(구조 변경 방지로 중단)"
+        )
+    path.parent.mkdir(parents=True, exist_ok=True)
+    ensure_csv_header(path, n=len(pressures))
+    append_row(path, ts, pressures)
+
+
 def main() -> int:
     ap = argparse.ArgumentParser()
     ap.add_argument("--ch", type=int, required=True, choices=[1, 2])
-    ap.add_argument("--timeout", type=float, default=30.0)  # 메인에서 subprocess timeout으로 사용
-    args = ap.parse_args()
+    ap.add_argument("--timeout", type=float, default=30.0)
+    ap.add_argument("--csv", type=str, default="")           # 정본 CSV 경로
+    ap.add_argument("--csv_fallback", type=str, default="")  # 정본 실패 시 로컬 폴백
+    # 모르는 인자는 무시한다(구/신 메인 혼용 대비)
+    args, _unknown = ap.parse_known_args()
 
     t0 = time.time()
     try:
@@ -130,31 +161,53 @@ def main() -> int:
         ip = cfg["ip"]
         user = cfg["user"]
         password = cfg["password"]
-        csv_path = Path(cfg["csv"])
 
+        primary = Path(args.csv) if args.csv else Path(cfg["csv"])
+        fallback = Path(args.csv_fallback) if args.csv_fallback else _default_fallback_csv(args.ch)
+
+        # ✅ --timeout 을 실제로 쓴다: 장비가 응답하지 않을 때 부모가 죽이기 전에
+        #    워커 안에서 socket timeout 예외로 끝나 원인을 JSON 으로 남기게 한다.
+        try:
+            socket.setdefaulttimeout(max(5.0, float(args.timeout)))
+        except Exception:
+            pass
+
+        # ① 측정 (여기 실패만 '측정 실패')
         mass_axis, pressures = rga_measure_once(ip, user, password)
-
-        # CSV 구조(컬럼 수) 유지 체크
-        existing_n = _read_existing_header_cols(csv_path)
-        if existing_n and existing_n != len(pressures):
-            raise RuntimeError(
-                f"CSV column mismatch: existing Mass={existing_n}, new Mass={len(pressures)} "
-                f"(구조 변경 방지로 중단)"
-            )
-
-        ensure_csv_header(csv_path, n=len(pressures))
         ts = now_str()
-        append_row(csv_path, ts, pressures)
+
+        # ② CSV 저장 (실패해도 측정 결과는 살린다)
+        csv_ok = False
+        csv_used = ""
+        csv_fallback_used = False
+        csv_errors: List[str] = []
+        try:
+            _save_csv(primary, pressures, ts)
+            csv_ok = True
+            csv_used = str(primary)
+        except Exception as e1:
+            csv_errors.append(f"primary({primary}): {type(e1).__name__}: {e1}")
+            try:
+                _save_csv(fallback, pressures, ts)
+                csv_ok = True
+                csv_used = str(fallback)
+                csv_fallback_used = True
+            except Exception as e2:
+                csv_errors.append(f"fallback({fallback}): {type(e2).__name__}: {e2}")
 
         dt_ms = int((time.time() - t0) * 1000)
 
         payload = {
             "ok": True,
+            "worker_version": 2,
             "ch": int(args.ch),
             "ip": ip,
             "timestamp": ts,
             "duration_ms": dt_ms,
-            "csv_path": str(csv_path),
+            "csv_ok": csv_ok,
+            "csv_path": csv_used,
+            "csv_error": " | ".join(csv_errors),
+            "csv_fallback_used": csv_fallback_used,
             "mass_axis": mass_axis,
             "pressures": pressures,
         }
@@ -165,6 +218,7 @@ def main() -> int:
         dt_ms = int((time.time() - t0) * 1000)
         payload = {
             "ok": False,
+            "worker_version": 2,
             "stage": "worker",
             "ch": int(getattr(args, "ch", 0) or 0),
             "duration_ms": dt_ms,

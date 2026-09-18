@@ -30,6 +30,8 @@ from typing import AsyncGenerator, Literal, Optional, List
 
 import numpy as np
 
+from lib import config_common   # ✅ DEC-033: 호출 시점 getattr 로 읽는다
+
 # ====== OES 로컬 저장 경로 ======
 # 1) 환경변수 OES_LOCAL_BASE가 있으면 그 값을 사용
 # 2) 없으면 "현재 로그인 사용자" Desktop\OES 를 기본값으로 사용
@@ -462,9 +464,19 @@ class OESAsync:
 
             env = os.environ.copy()
             env.setdefault("PYTHONUNBUFFERED", "1")
+
+            # ✅ init 경로와 동일한 공식: 부모가 READY 를 기다리는 시간보다
+            #    워커가 2초 먼저 포기해야 원인 JSON/stderr 를 남길 시간이 생긴다.
+            #    (워커의 cmd_daemon / _daemon_reset_device 가 이 env 를 읽는다)
+            worker_init_timeout = max(5.0, float(timeout_s) - 2.0)
+            env["OES_INIT_TIMEOUT_S"] = str(worker_init_timeout)
             worker_dir = str(worker_exe.resolve().parent)
 
-            await self._status(f"[OES] daemon spawn ch={self._ch} usb={self._usb} cmd={cmd} cwd={worker_dir}")
+            await self._status(
+                f"[OES] daemon spawn ch={self._ch} usb={self._usb} "
+                f"parent_timeout={timeout_s}s worker_timeout={worker_init_timeout}s "
+                f"cmd={cmd} cwd={worker_dir}"
+            )
 
             self._daemon_ready_ev.clear()
             self._daemon_info = None
@@ -624,7 +636,7 @@ class OESAsync:
 
     async def _run_measurement_daemon(self, duration_sec: float, integration_ms: int) -> None:
         """daemon에 measure 명령만 보내서 1회 측정. (ok=False면 예외로 올려 fallback 유도)"""
-        ok_daemon = await self._ensure_daemon_started(timeout_s=30.0, force=False)
+        ok_daemon = await self._ensure_daemon_started(timeout_s=float(getattr(config_common, "CHAMBER_OES_INIT_TIMEOUT_S", 30.0)), force=False)
         if not ok_daemon:
             raise RuntimeError("daemon not ready")
 
@@ -746,7 +758,7 @@ class OESAsync:
             with contextlib.suppress(Exception):
                 await self._shutdown_daemon(graceful=False)
 
-            ok = await self._ensure_daemon_started(timeout_s=30.0, force=True)
+            ok = await self._ensure_daemon_started(timeout_s=float(getattr(config_common, "CHAMBER_OES_INIT_TIMEOUT_S", 30.0)), force=True)
             if ok:
                 try:
                     await self._run_measurement_daemon(duration_sec, integration_ms)

@@ -12,7 +12,8 @@ from enum import Enum
 from time import monotonic_ns
 from typing import Optional, List, Tuple, Dict, Any, Callable, Union
 from errors.app_error import AppError
-from lib.config_common import SHUTDOWN_STEP_TIMEOUT_MS, SHUTDOWN_STEP_GAP_MS, RGA_STEP_TIMEOUT_MS
+from lib.config_common import SHUTDOWN_STEP_TIMEOUT_MS, SHUTDOWN_STEP_GAP_MS
+from lib import config_common as _cfgc   # ✅ RGA 스텝 예산은 호출 시점에 계산한다
 from lib import config_ch1, config_ch2
 
 
@@ -659,7 +660,17 @@ class ProcessController:
     ) -> None:
         self._step_failed(src or "IG", why, code=code, meta=meta)
 
+    def _rga_is_stale(self, what: str) -> bool:
+        """예산 초과로 이미 포기한 RGA 스텝의 뒤늦은 이벤트인지.
+        (그대로 두면 late failed 가 '다음 스텝'을 실패시킬 수 있다)"""
+        if getattr(self, "_rga_step_abandoned", False):
+            self._emit_log("Process", f"[RGA] 예산 초과 후 도착한 {what} 무시(stale)")
+            return True
+        return False
+
     def on_rga_finished(self) -> None:
+        if self._rga_is_stale("finished"):
+            return
         self._match_token(ExpectToken("RGA_OK"))
 
     def on_rga_failed(
@@ -670,6 +681,8 @@ class ProcessController:
         code: str | None = None,
         meta: Dict[str, Any] | None = None,
     ) -> None:
+        if self._rga_is_stale("failed"):
+            return
         self._step_failed(src or "RGA", why, code=code, meta=meta)
 
     def on_dc_target_reached(self) -> None:
@@ -930,13 +943,21 @@ class ProcessController:
                 else:
                     # 평시: abort와 경쟁
                     if step.action == ActionType.RGA_SCAN:
+                        # ✅ 예산 = 시도횟수 x 워커 timeout + 재시도 대기 + 여유 (호출 시점 계산)
+                        _rga_budget_ms = _cfgc.rga_step_timeout_ms()
                         try:
                             aborted = await asyncio.wait_for(
                                 self._wait_or_abort(fut, allow_abort=not self._in_emergency),
-                                timeout=max(0.001, RGA_STEP_TIMEOUT_MS) / 1000.0,
+                                timeout=max(0.001, _rga_budget_ms) / 1000.0,
                             )
                         except asyncio.TimeoutError:
-                            self._emit_log("Process", "RGA 스캔 대기 시간 초과 → 그래프 스킵, 다음 단계 진행")
+                            self._emit_log(
+                                "Process",
+                                f"RGA 스캔 대기 시간 초과(예산 {_rga_budget_ms / 1000.0:g}s) "
+                                "→ 그래프 스킵, 다음 단계 진행"
+                            )
+                            # ✅ 이 스텝은 포기했다 — 뒤늦게 오는 RGA finished/failed 는 무시한다
+                            self._rga_step_abandoned = True
                             if self._expect_group:
                                 self._expect_group.cancel("rga-timeout")
                                 self._expect_group = None
@@ -1053,6 +1074,8 @@ class ProcessController:
 
         elif a == ActionType.RGA_SCAN:
             self._rga_scan()
+            # ✅ 새 RGA 스텝 시작 — 이전 스텝의 stale 가드 해제
+            self._rga_step_abandoned = False
             tokens.append(ExpectToken("RGA_OK"))
 
         elif a == ActionType.PLC_CMD:
