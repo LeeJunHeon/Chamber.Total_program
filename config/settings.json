@@ -246,7 +246,8 @@
     "HOST_LOG_NAS_DIR": "\\\\VanaM_NAS\\VanaM_toShare\\JH_Lee\\Logs\\Robot",
     "HOST_LOG_LOCAL_DIR": "C:\\VanaM_Logs\\Robot",
     "HOST_LOG_RETRY_S": 30,                    // NAS 전송 재시도 주기 (초)
-    "HOST_LOG_LOCK_STALE_S": 30,               // 오래된 잠금 파일 판정 기준 (초)
+    // age = 내 PC 시각 − NAS mtime 이라 시계 오차에 취약, 잠금 보유는 수십 ms 이므로 120초로 여유
+    "HOST_LOG_LOCK_STALE_S": 120,              // 오래된 잠금 파일 판정 기준 (초)
     "PLC_COIL_LOG_NAS_DIR": "C:\\VanaM_Logs\\CH1&2\\CH1&2_PLC",   // 로컬 (NAS 반영은 log_sync 워커)
     "LOG_ROOT_DIR": "C:\\VanaM_Logs\\CH1&2",                     // 로컬 (NAS 반영은 log_sync 워커)
     "CAMERA_LOG_ROOT": "C:\\VanaM_Logs\\Camera_Logs",   // 카메라 사진 저장 루트(로컬)

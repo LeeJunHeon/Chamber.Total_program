@@ -2416,12 +2416,13 @@ class PlasmaCleaningRuntime:
         hl.mark_owned(key)
 
         # 레시피 정보
+        # ⚠ 여기서 CSV 를 다시 열지 않는다(이벤트 루프 안 동기 NAS 읽기 금지).
+        #    행 수는 start_with_recipe_string 의 executor 안에서 미리 세어 둔 값을 쓴다.
         csv_path = str(getattr(self, "_host_recipe_path", "") or "")
-        row_count = 1
-        if csv_path:
-            with contextlib.suppress(Exception):
-                with open(csv_path, "r", encoding="utf-8-sig", newline="") as f:
-                    row_count = max(1, sum(1 for _ in csv.reader(f)) - 1)
+        try:
+            row_count = int(getattr(self, "_host_recipe_rows", 1) or 1)
+        except Exception:
+            row_count = 1
         pname = ""
         with contextlib.suppress(Exception):
             _r = getattr(self, "_loaded_recipe_row", None) or {}
@@ -2962,6 +2963,9 @@ class PlasmaCleaningRuntime:
         try:
             s = (recipe or "").strip()
             if not s:
+                # UI 현재값 단발 실행 — 레시피 파일이 없다
+                self._host_recipe_path = ""
+                self._host_recipe_rows = 1
                 asyncio.create_task(self._on_click_start(origin=origin, origin_meta=origin_meta))
             elif s.lower().endswith(".csv"):
                 # ✅ NAS 동기 호출을 executor로 분리 (asyncio loop block 방지)
@@ -2970,10 +2974,15 @@ class PlasmaCleaningRuntime:
                 def _load_csv_sync(path: str):
                     if not os.path.exists(path):
                         raise RuntimeError(f"CSV 파일을 찾을 수 없습니다: {path}")
-                    return self._read_first_row_from_csv(path)
+                    # ✅ 호스트 요청 공정 로그용 데이터 행 수도 여기서(=executor 안에서) 센다
+                    _rows = 1
+                    with contextlib.suppress(Exception):
+                        with open(path, "r", encoding="utf-8-sig", newline="") as _f:
+                            _rows = max(1, sum(1 for _ in csv.reader(_f)) - 1)
+                    return self._read_first_row_from_csv(path), _rows
 
                 try:
-                    row = await asyncio.wait_for(
+                    row, _n_rows = await asyncio.wait_for(
                         loop.run_in_executor(None, _load_csv_sync, s),
                         timeout=30.0
                     )
@@ -2988,6 +2997,7 @@ class PlasmaCleaningRuntime:
                 self.append_log("File", f"CSV 로드 완료: {s} → UI에 값 세팅")
 
                 self._host_recipe_path = s
+                self._host_recipe_rows = int(_n_rows or 1)
                 asyncio.create_task(self._on_click_start(origin=origin, origin_meta=origin_meta))
             else:
                 raise RuntimeError("지원하지 않는 레시피 형식입니다. CSV/XLSX 파일 경로만 허용됩니다.")

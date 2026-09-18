@@ -154,8 +154,11 @@ class HostProcessLog:
             return 30.0
 
     def _lock_stale_s(self) -> float:
+        """오래된 잠금 판정 기준(초).
+        age = 내 PC 시각 − NAS mtime 이라 시계 오차에 취약하다.
+        잠금 보유 시간은 수십 ms 수준이므로 120초로 여유를 둔다."""
         try:
-            return max(1.0, float(self._cfg("HOST_LOG_LOCK_STALE_S", 30)))
+            return max(1.0, float(self._cfg("HOST_LOG_LOCK_STALE_S", 120)))
         except Exception:
             return 30.0
 

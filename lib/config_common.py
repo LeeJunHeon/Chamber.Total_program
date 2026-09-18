@@ -503,7 +503,8 @@ HOST_LOG_ENABLED = True
 HOST_LOG_NAS_DIR = r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Logs\Robot"
 HOST_LOG_LOCAL_DIR = r"C:\VanaM_Logs\Robot"
 HOST_LOG_RETRY_S = 30            # NAS 전송 재시도 주기(초)
-HOST_LOG_LOCK_STALE_S = 30       # 이 시간보다 오래된 잠금 파일은 죽은 것으로 보고 제거(초)
+HOST_LOG_LOCK_STALE_S = 120      # 이 시간보다 오래된 잠금 파일은 죽은 것으로 보고 제거(초)
+# age = 내 PC 시각 − NAS mtime 이라 시계 오차에 취약, 잠금 보유는 수십 ms 이므로 120초로 여유
 PLC_COIL_LOG_NAS_DIR = r"C:\VanaM_Logs\CH1&2\CH1&2_PLC"
 # PLC_COIL_LOG_LOCAL_DIR = r"C:\...\Logs\CH1&2\CH1&2_PLC"   # 필요 시
 

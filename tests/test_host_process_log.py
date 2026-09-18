@@ -34,14 +34,22 @@ from util.host_process_log import (                      # noqa: E402
 
 
 # ─────────────────────────── 헬퍼 ───────────────────────────
-def _setup(tmp: Path) -> HostProcessLog:
-    """임시 폴더를 NAS/로컬로 지정한 새 인스턴스."""
+def _setup(tmp: Path, *, worker: bool = True) -> HostProcessLog:
+    """임시 폴더를 NAS/로컬로 지정한 새 인스턴스.
+
+    worker=False 면 백그라운드 워커를 띄우지 않는다(_ensure_worker 를 no-op 으로).
+    finalize 가 워커를 깨워 테스트가 상태를 만들기 전에 NAS 로 보내버리는
+    경합을 없애고, 전송은 테스트가 _flush_once() 로만 수행한다.
+    """
     cfgc.HOST_LOG_ENABLED = True
     cfgc.HOST_LOG_NAS_DIR = str(tmp / "nas")
     cfgc.HOST_LOG_LOCAL_DIR = str(tmp / "local")
     cfgc.HOST_LOG_RETRY_S = 30
-    cfgc.HOST_LOG_LOCK_STALE_S = 30
-    return HostProcessLog()
+    cfgc.HOST_LOG_LOCK_STALE_S = 120
+    h = HostProcessLog()
+    if not worker:
+        h._ensure_worker = lambda: None          # type: ignore[assignment]
+    return h
 
 
 def _nas_rows(tmp: Path, ymd: str):
@@ -133,7 +141,7 @@ def test_3_finalize_is_idempotent():
 # ─────────────────────────── 4 ───────────────────────────
 def test_4_lock_fresh_and_stale():
     tmp = Path(tempfile.mkdtemp())
-    h = _setup(tmp)
+    h = _setup(tmp, worker=False)
     rx = datetime(2026, 9, 18, 12, 0, 0)
     k = h.request(target="CH1", request_id="r4", peer="p:1", received_at=rx)
     h.finalize(k, RESULT_SUCCESS)
@@ -142,15 +150,15 @@ def test_4_lock_fresh_and_stale():
     lock.parent.mkdir(parents=True, exist_ok=True)
     lock.write_text("other 999 now", encoding="utf-8")   # 신선한 잠금
 
-    cfgc.HOST_LOG_LOCK_STALE_S = 30
+    cfgc.HOST_LOG_LOCK_STALE_S = 120
     t0 = time.time()
     h._flush_once()
     assert time.time() - t0 < 20, "잠금 대기는 25회 x 0.2s 안쪽"
     assert len(_pending_rows(tmp)) == 1, "신선한 잠금 → pending 유지"
     assert not (Path(cfgc.HOST_LOG_NAS_DIR) / "Robot_20260918.csv").exists()
 
-    # 오래된 잠금(mtime -60s) → 제거 후 기록
-    old = time.time() - 60
+    # 오래된 잠금(mtime -180s) → 제거 후 기록 (기준 120초)
+    old = time.time() - 180
     os.utime(lock, (old, old))
     h._flush_once()
     assert _pending_rows(tmp) == []
@@ -191,7 +199,7 @@ def test_5_nas_down_then_recover_keeps_order():
 # ─────────────────────────── 6 ───────────────────────────
 def test_6_no_duplicate_when_already_on_nas():
     tmp = Path(tempfile.mkdtemp())
-    h = _setup(tmp)
+    h = _setup(tmp, worker=False)
     rx = datetime(2026, 9, 18, 14, 0, 0)
     k = h.request(target="CH1", request_id="r6", peer="p:1", received_at=rx)
     h.finalize(k, RESULT_SUCCESS)
@@ -215,7 +223,7 @@ def test_6_no_duplicate_when_already_on_nas():
 # ─────────────────────────── 7 ───────────────────────────
 def test_7_startup_recover():
     tmp = Path(tempfile.mkdtemp())
-    h = _setup(tmp)
+    h = _setup(tmp, worker=False)
     rx = datetime(2026, 9, 18, 15, 0, 0)
 
     # (a) pending 에 있고 open 에도 있는 키 → open 만 삭제
@@ -238,13 +246,12 @@ def test_7_startup_recover():
                   "recipe_name": "", "row_count": "", "process_names": "", "log_files": []}
     h._save_open(cur)
 
-    h.startup_recover()
-    h.close(2.0)
+    h.startup_recover()          # worker=False 이므로 전송은 일어나지 않는다
+    h.close(0.1)
     assert h._load_open() == {}, "open 은 비워진다"
 
-    # 워커가 이미 NAS 로 보냈을 수 있으므로 pending + NAS 를 합쳐서 본다
-    rows = [r[1:] for r in _pending_rows(tmp)]          # 앞의 요청날짜 칸 제거
-    rows += _nas_rows(tmp, "20260918")[1][1:]           # 헤더 제외
+    # 전송은 하지 않았으므로 pending 만 본다(앞의 요청날짜 칸 제거)
+    rows = [r[1:] for r in _pending_rows(tmp)]
     by_key = {}
     for r in rows:
         by_key.setdefault(r[-1], []).append(r)
@@ -326,7 +333,7 @@ def test_9_two_processes_no_interleaving():
 def test_10_chamber_runtime_integration():
     from runtime.chamber_runtime import ChamberRuntime
     tmp = Path(tempfile.mkdtemp())
-    h = _setup(tmp)
+    h = _setup(tmp, worker=False)
 
     import util.host_process_log as HPL
     HPL._INSTANCE = h                      # 런타임이 같은 인스턴스를 보게 한다
@@ -389,7 +396,26 @@ def test_10_chamber_runtime_integration():
     assert r[5] == RESULT_STOP and "시작 전" in r[6]
     assert r[2] == "", "시작시각 빈칸"
 
-    # (d) UI origin 은 아무 것도 기록하지 않는다
+    # (d) 이전 런이 finalize 를 거치지 않고 남아 있으면, 새 요청 수락 시 먼저 닫는다
+    k_dangling = h.request(target="CH1", request_id="m4a", peer="p:1", received_at=rx)
+    k_next = h.request(target="CH1", request_id="m4b", peer="p:1", received_at=rx)
+    o = mk()
+    o._host_run_begin("host", {"key": k_dangling})
+    o._log_file_path = Path("dangling.txt"); o._host_run_mark_started()
+    # finalize 없이 곧바로 다음 요청 수락 (비정상 경로)
+    o._host_run_begin("host", {"key": k_next})
+    assert o._host_run["key"] == k_next, "새 런으로 교체"
+    o._host_run_set_explicit("성공", "")
+    o._host_run_finalize()
+    h._flush_once()
+    _, rows = _nas_rows(tmp, "20260918")
+    rd = [x for x in rows[1:] if x[-1] == k_dangling]
+    rn = [x for x in rows[1:] if x[-1] == k_next]
+    assert len(rd) == 1 and rd[0][5] == "미확인", "이전 런은 '미확인' 으로 닫힌다"
+    assert "종료 미확인" in rd[0][6]
+    assert len(rn) == 1 and rn[0][5] == RESULT_SUCCESS, "새 런은 정상 기록"
+
+    # (e) UI origin 은 아무 것도 기록하지 않는다
     before = len(_nas_rows(tmp, "20260918")[1])
     o = mk()
     o._host_run_begin("ui", None)

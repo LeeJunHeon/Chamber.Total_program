@@ -6352,6 +6352,17 @@ class ChamberRuntime:
     def _host_run_begin(self, origin: str, origin_meta: Optional[dict]) -> None:
         """러너가 요청을 수락한 시점(=_runner_put) 에 호출. host 가 아니면 기록하지 않는다."""
         try:
+            # ✅ 이전 런이 finalize 를 거치지 않고 남아 있으면(비정상 경로) 먼저 닫는다.
+            #    그대로 두면 open 에 영원히 남아 재시작 시 '중단(재시작)' 으로만 정리된다.
+            _prev = getattr(self, "_host_run", None)
+            if isinstance(_prev, dict) and str(_prev.get("key") or ""):
+                with contextlib.suppress(Exception):
+                    _hl = self._hostlog()
+                    if _hl is not None:
+                        _hl.finalize(str(_prev["key"]), "미확인",
+                                     "다음 요청 수락 전 종료 미확인", datetime.now())
+                self._host_run = None
+
             self._run_origin = str(origin or "ui")
             self._run_origin_meta = dict(origin_meta or {})
             if self._run_origin != "host":
