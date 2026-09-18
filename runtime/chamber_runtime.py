@@ -2617,23 +2617,76 @@ class ChamberRuntime:
         self._set("Current_edit", _pair(2, ".2f"))
 
     def _set_pulse_radio(self, leaf: str, checked: bool) -> None:
-        """펄스 체크박스 전용 세터.
-        exclusive QButtonGroup에 묶인 체크박스는 setChecked(False) 직접 호출이 무효이므로
-        (Qt 사양) setExclusive 토글 트릭으로 해제한다. 그룹이 없으면 일반 setChecked 폴백.
+        """펄스 선택 라디오 세터.
+        위젯이 autoExclusive(False) 이고 QButtonGroup 에도 묶여 있지 않으므로
+        setChecked(bool) 만으로 켜고 끌 수 있다(둘 다 미선택 상태 유지 가능).
+        배타 처리는 _bind_pulse_selector_signals 가 담당한다.
         """
         btn = self._u(leaf)
         if btn is None:
             return
-        grp = getattr(self.ui, f"{self.prefix}pulsePower_group", None) if getattr(self, "ui", None) else None
         with contextlib.suppress(Exception):
-            if checked or grp is None:
-                btn.setChecked(bool(checked))
+            btn.setChecked(bool(checked))
+
+    # ── 펄스 선택 라디오: 배타 처리 + 공유 입력칸 라벨 전환 ──
+    #  - DC Pulse: 장비 파라미터가 Off Time(µs). 듀티 개념이 없다(매뉴얼 p.29/p.60)
+    #  - RF Pulse: CESAR 는 듀티(%)가 장비 파라미터다(사양 4-75)
+    _PULSE_LABEL_DC = "DC Pulse Off Time [µs]"
+    _PULSE_LABEL_RF = "RF Pulse Duty Cycle [%]"
+    _PULSE_LABEL_NONE = "Duty [%] / Off Time [µs]"
+
+    def _sync_pulse_duty_label(self) -> None:
+        """현재 선택에 맞춰 공유 입력칸 라벨 문구를 바꾼다. 위젯이 없으면 조용히 통과."""
+        with contextlib.suppress(Exception):
+            # CH1 은 _alias_leaf 가 dcPulseDutyCycle_label 로 바꿔주고, CH2 는 이 이름 그대로다
+            lab = self._u("rfPulseDutyCycle_label")
+            if lab is None or not hasattr(lab, "setText"):
                 return
+            dc_on = bool(getattr(self._u("dcPulsePower_radio"), "isChecked", lambda: False)())
+            rf_on = bool(getattr(self._u("rfPulsePower_radio"), "isChecked", lambda: False)())
+            if dc_on:
+                lab.setText(self._PULSE_LABEL_DC)
+            elif rf_on:
+                lab.setText(self._PULSE_LABEL_RF)
+            else:
+                lab.setText(self._PULSE_LABEL_NONE)
+
+    def _bind_pulse_selector_signals(self) -> None:
+        """두 라디오의 toggled 에 배타 처리 + 라벨 전환을 연결한다(중복 연결 방지).
+
+        autoExclusive=False 이므로 선택된 라디오를 다시 클릭하면 그대로 해제된다
+        (= '둘 다 미선택' 상태를 만들 수 있다). 한쪽이 켜지면 다른 쪽을 끈다.
+        """
+        if getattr(self, "_pulse_sel_bound", False):
+            return
+
+        def _on_toggled(checked: bool, me: str, other: str) -> None:
+            if getattr(self, "_pulse_sel_syncing", False):
+                return
+            self._pulse_sel_syncing = True
             try:
-                grp.setExclusive(False)
-                btn.setChecked(False)
+                if checked:
+                    with contextlib.suppress(Exception):
+                        w = self._u(other)
+                        if w is not None and bool(getattr(w, "isChecked", lambda: False)()):
+                            w.setChecked(False)
             finally:
-                grp.setExclusive(True)
+                self._pulse_sel_syncing = False
+            self._sync_pulse_duty_label()
+
+        n = 0
+        for me, other in (("dcPulsePower_radio", "rfPulsePower_radio"),
+                          ("rfPulsePower_radio", "dcPulsePower_radio")):
+            w = self._u(me)
+            sig = getattr(w, "toggled", None) if w is not None else None
+            if sig is None:
+                continue
+            with contextlib.suppress(Exception):
+                sig.connect(lambda checked=False, _m=me, _o=other: _on_toggled(checked, _m, _o))
+                n += 1
+        if n:
+            self._pulse_sel_bound = True
+        self._sync_pulse_duty_label()
 
     def _dcp_off_text_for_ui(self, params, freq_txt: str) -> str:
         """레시피 dict → 공유 입력칸에 표시할 DC Pulse Off Time 문자열.
@@ -2935,7 +2988,7 @@ class ChamberRuntime:
         # --- Pulse UI ---
         if self.ch == 1:
             # ✅ CH1: Pulse 입력(Edit/Freq/Duty)은 dcPulse* 1세트를 공용으로 사용한다.
-            #    RF/DC 선택은 라디오(rfPulsePower_checkbox / dcPulsePower_checkbox)로 표시한다.
+            #    RF/DC 선택은 라디오(rfPulsePower_radio / dcPulsePower_radio)로 표시한다.
             use_rf_flag = _is_true(params.get("use_rf_pulse", "F"))
             use_dc_flag = _is_true(params.get("use_dc_pulse", "F"))
 
@@ -2950,8 +3003,8 @@ class ChamberRuntime:
 
             # ✅ 표시 판정은 use_*_pulse 만 따른다(값 기반 승격 없음)
             #    ⚠ RF/DC 동시 선택은 Start 시 거부된다(같은 시리얼 포트, 입력칸 공유)
-            self._set_pulse_radio("rfPulsePower_checkbox", use_rf_flag)
-            self._set_pulse_radio("dcPulsePower_checkbox", use_dc_flag)
+            self._set_pulse_radio("rfPulsePower_radio", use_rf_flag)
+            self._set_pulse_radio("dcPulsePower_radio", use_dc_flag)
             if use_rf_flag and use_dc_flag:
                 self.append_log("UI", "[CH1] RF/DC Pulse 동시 지정 레시피 → Start 시 거부됨")
 
@@ -2970,8 +3023,8 @@ class ChamberRuntime:
             # CH2: 입력칸은 rfPulse* 1세트를 RF/DC 공유(CH1과 동일 UX), 선택은 라디오로 표시
             use_rfp = _is_true(params.get('use_rf_pulse', 'F'))
             use_dcp = _is_true(params.get('use_dc_pulse', 'F'))
-            self._set_pulse_radio("rfPulsePower_checkbox", use_rfp)
-            self._set_pulse_radio("dcPulsePower_checkbox", use_dcp)
+            self._set_pulse_radio("rfPulsePower_radio", use_rfp)
+            self._set_pulse_radio("dcPulsePower_radio", use_dcp)
             if use_rfp and use_dcp:
                 self.append_log("UI", "[CH2] RF/DC Pulse 동시 지정 레시피 → Start 시 거부됨")
 
@@ -2990,6 +3043,10 @@ class ChamberRuntime:
             _set("rfPulsePower_edit",     pw)
             _set("rfPulseFreq_edit",      '' if frq in ('', '0') else frq)
             _set("rfPulseDutyCycle_edit", '' if dty in ('', '0') else dty)
+
+        # ✅ 라디오 세팅 후 공유 입력칸 라벨을 현재 선택에 맞춘다
+        self._bind_pulse_selector_signals()
+        self._sync_pulse_duty_label()
 
         # DC-Power
         _set("dcPower_checkbox", params.get('use_dc_power', 'F') == 'T')
@@ -5132,8 +5189,8 @@ class ChamberRuntime:
                 return None
 
             # ✅ CH1에서 RF-Pulse 임시 사용: 지원 여부(supports) 반영
-            use_rf_pulse = self.supports_rf_pulse and bool(getattr(self._u("rfPulsePower_checkbox"), "isChecked", lambda: False)())
-            use_dc_pulse = self.supports_dc_pulse and bool(getattr(self._u("dcPulsePower_checkbox"), "isChecked", lambda: False)())
+            use_rf_pulse = self.supports_rf_pulse and bool(getattr(self._u("rfPulsePower_radio"), "isChecked", lambda: False)())
+            use_dc_pulse = self.supports_dc_pulse and bool(getattr(self._u("dcPulsePower_radio"), "isChecked", lambda: False)())
 
             # ✅ RF/DC Pulse 동시 선택 거부 (같은 시리얼 포트 + 입력칸 공유)
             if use_rf_pulse and use_dc_pulse:
@@ -5316,8 +5373,8 @@ class ChamberRuntime:
                     return None
 
             # ✅ CH2: Pulse 선택(DC-Pulse / RF-Pulse)
-            use_dc_pulse = self.supports_dc_pulse and bool(getattr(self._u("dcPulsePower_checkbox"), "isChecked", lambda: False)())
-            use_rf_pulse = self.supports_rf_pulse and bool(getattr(self._u("rfPulsePower_checkbox"), "isChecked", lambda: False)())
+            use_dc_pulse = self.supports_dc_pulse and bool(getattr(self._u("dcPulsePower_radio"), "isChecked", lambda: False)())
+            use_rf_pulse = self.supports_rf_pulse and bool(getattr(self._u("rfPulsePower_radio"), "isChecked", lambda: False)())
 
             # ✅ RF/DC Pulse 동시 선택 거부 (같은 시리얼 포트 + 입력칸 공유)
             if use_rf_pulse and use_dc_pulse:
@@ -6274,13 +6331,13 @@ class ChamberRuntime:
         _set("dcPower2_edit", "0")
 
         # DC-Pulse (라디오는 전용 세터: exclusive 그룹 해제 트릭 필요)
-        self._set_pulse_radio("dcPulsePower_checkbox", False)
+        self._set_pulse_radio("dcPulsePower_radio", False)
         _set("dcPulsePower_edit", "200")
         _set("dcPulseFreq_edit", "")
         _set("dcPulseDutyCycle_edit", "")
 
         # RF-Pulse (라디오는 전용 세터)
-        self._set_pulse_radio("rfPulsePower_checkbox", False)
+        self._set_pulse_radio("rfPulsePower_radio", False)
         _set("rfPulsePower_edit", "100")
         _set("rfPulseFreq_edit", "")
         _set("rfPulseDutyCycle_edit", "")
@@ -6297,8 +6354,8 @@ class ChamberRuntime:
                 _set("workingPressure_edit", "5")             # 5 mTorr
                 _set("arFlow_edit", "20")                     # 20 sccm
                 _set("Ar_checkbox", True)
-                _set("rfPulsePower_checkbox", True)           # CH1: RF Pulse 사용 (기본)
-                _set("dcPulsePower_checkbox", False)
+                _set("rfPulsePower_radio", True)           # CH1: RF Pulse 사용 (기본)
+                _set("dcPulsePower_radio", False)
                 _set("dcPower_checkbox", False)
                 _set("dcPower_edit", "0")                     # RF Pulse 운전이므로 DC=0
                 _set("rfPulsePower_edit", "250")              # 250 W (CH1은 dcPulsePower_edit로 alias됨)
@@ -6315,11 +6372,15 @@ class ChamberRuntime:
                 _set("dcPower_checkbox", True)        # CH2: DC Power 사용
                 _set("dcPower2_checkbox", False)      # DC2는 기본 미사용
                 _set("dcPower2_edit", "0")
-                _set("dcPulsePower_checkbox", False)
+                _set("dcPulsePower_radio", False)
                 _set("shutterDelay_edit", "5")
                 #_set("processTime_edit", "25")
         except Exception:
             pass
+
+        # ✅ 시작 직후부터 라디오 배타 처리 + 라벨 전환이 동작하도록 연결
+        with contextlib.suppress(Exception):
+            self._bind_pulse_selector_signals()
 
         self._apply_ui_lockouts()
 
@@ -6345,12 +6406,12 @@ class ChamberRuntime:
         #    - RF 미지원이어도 DC-Pulse를 지원하면 입력칸은 살리고 RF 라디오만 비활성화
         #    - RF/DC 둘 다 미지원일 때만 입력칸까지 비활성화
         if (self.ch == 2) and (not self.supports_rf_pulse):
-            _disable("rfPulsePower_checkbox")
+            _disable("rfPulsePower_radio")
             if not self.supports_dc_pulse:
                 for leaf in ("rfPulsePower_edit", "rfPulseFreq_edit", "rfPulseDutyCycle_edit"):
                     _disable(leaf)
         if (self.ch == 2) and (not self.supports_dc_pulse):
-            _disable("dcPulsePower_checkbox")
+            _disable("dcPulsePower_radio")
 
     def _reset_ui_after_process(self):
         self._set_default_ui_values()
@@ -6362,7 +6423,7 @@ class ChamberRuntime:
 
         for name in (
             "G1_checkbox","G2_checkbox","G3_checkbox","Ar_checkbox","O2_checkbox","N2_checkbox",
-            "mainShutter_checkbox","dcPulsePower_checkbox","rfPulsePower_checkbox","dcPower_checkbox","dcPower2_checkbox","powerSelect_checkbox",
+            "mainShutter_checkbox","dcPulsePower_radio","rfPulsePower_radio","dcPower_checkbox","dcPower2_checkbox","powerSelect_checkbox",
         ):
             w = self._u(name)
             if w is not None:
@@ -6373,7 +6434,7 @@ class ChamberRuntime:
         try:
             if self.ch == 1:
                 self._u("Ar_checkbox") and self._u("Ar_checkbox").setChecked(True)
-                self._u("rfPulsePower_checkbox") and self._u("rfPulsePower_checkbox").setChecked(True)
+                self._u("rfPulsePower_radio") and self._u("rfPulsePower_radio").setChecked(True)
                 self._u("G1_checkbox") and self._u("G1_checkbox").setChecked(True)
                 self._u("mainShutter_checkbox") and self._u("mainShutter_checkbox").setChecked(True)  # ★ 추가
             elif self.ch == 2:
@@ -6804,11 +6865,13 @@ class ChamberRuntime:
             "g3Target_name": "gunTarget_name",
 
             # ✅ CH1: Pulse 입력(Edit/Freq/Duty)은 1세트를 공용(dcPulse*)으로 유지한다.
-            #    - RF/DC 선택은 라디오(rfPulsePower_checkbox / dcPulsePower_checkbox)로 처리
+            #    - RF/DC 선택은 라디오(rfPulsePower_radio / dcPulsePower_radio)로 처리
             #    - 따라서 edit/freq/duty만 rfPulse* → dcPulse*로 alias 한다.
             "rfPulsePower_edit": "dcPulsePower_edit",
             "rfPulseFreq_edit": "dcPulseFreq_edit",
             "rfPulseDutyCycle_edit": "dcPulseDutyCycle_edit",
+            # ✅ 공유 입력칸 라벨(선택에 따라 문구 전환)
+            "rfPulseDutyCycle_label": "dcPulseDutyCycle_label",
 
         }.get(leaf, leaf)
 
