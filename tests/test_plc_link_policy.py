@@ -31,6 +31,17 @@ from device.plc import AsyncPLC, PLCError                 # noqa: E402
 from lib import config_common as cfgc                     # noqa: E402
 from pymodbus.exceptions import ConnectionException, ModbusIOException   # noqa: E402
 from pymodbus.pdu import ExceptionResponse                # noqa: E402
+import pymodbus                                           # noqa: E402
+
+
+def _pm_version() -> tuple:
+    try:
+        return tuple(int(x) for x in str(pymodbus.__version__).split(".")[:2])
+    except Exception:
+        return (0, 0)
+
+
+_PM_VER = _pm_version()
 
 
 # ───────────────────────── 가짜 클라이언트 ─────────────────────────
@@ -201,6 +212,39 @@ def test_2_consecutive_timeouts_recreate_socket():
     rec = [m for m in logs if "소켓 재생성 #1" in m]
     assert rec, logs
     assert "연속 타임아웃" in rec[0], rec[0]
+
+
+# ───────────────────────── 2b ─────────────────────────
+def test_2b_new_socket_gets_fresh_budget():
+    """임계로 소켓을 재생성한 직후 타임아웃 1회가 또 재생성을 부르면 안 된다.
+    새 연결은 다시 PLC_TIMEOUT_CLOSE_AFTER 예산을 받는다."""
+    _reset_cfg()
+    _set_cfg(PLC_TIMEOUT_CLOSE_AFTER=3)
+    p, logs = _mk()
+    TO = ModbusIOException
+
+    # 연속 3회로 임계 도달 → 재생성 (재시도는 성공시키지 않고 실패로 끝낸다)
+    FakeClient.script = [TO("x"), TO("x")]                    # consec 2
+    with __import__("contextlib").suppress(PLCError):
+        asyncio.run(p.read_coil(1))
+    FakeClient.script = [TO("x"), TO("x")]                    # consec 3 → 재생성 후 재시도도 TO
+    with __import__("contextlib").suppress(PLCError):
+        asyncio.run(p.read_coil(1))
+    assert any("소켓 재생성" in m for m in logs), logs
+    # ✅ 재접속에 성공했으므로 카운터는 0 이어야 한다(새 예산)
+    assert p._consec_timeouts == 0, f"새 소켓은 새 예산: {p._consec_timeouts}"
+
+    # 재생성 직후 타임아웃 1회 → 추가 close 없이 같은 소켓 재시도 후 성공
+    cli = _cur(p)
+    closed_before = cli.closed
+    n_recon_before = len([m for m in logs if "소켓 재생성" in m])
+    FakeClient.script = [TO("x"), _Resp([True])]
+    v = asyncio.run(p.read_coil(1))
+    assert v is True
+    assert _cur(p) is cli, "같은 소켓을 유지해야 한다"
+    assert cli.closed == closed_before, "추가 close 호출 0회"
+    assert len([m for m in logs if "소켓 재생성" in m]) == n_recon_before, "추가 재생성 없음"
+    assert p._consec_timeouts == 0, "성공하면 카운터 0"
 
 
 # ───────────────────────── 3 ─────────────────────────
@@ -413,6 +457,7 @@ class _MiniModbusServer(threading.Thread):
 
     def __init__(self):
         super().__init__(daemon=True)
+        self.last_reply_ts = 0.0   # 마지막 응답 시각(유휴 판정용)
         self.srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.srv.bind(("127.0.0.1", 0))
@@ -435,22 +480,36 @@ class _MiniModbusServer(threading.Thread):
             except Exception:
                 break
 
+    @staticmethod
+    def _recv_exact(c, n):
+        """n 바이트를 다 받을 때까지 읽는다. 부족하면 None."""
+        buf = b""
+        while len(buf) < n:
+            try:
+                b = c.recv(n - len(buf))
+            except Exception:
+                return None
+            if not b:
+                return None
+            buf += b
+        return buf
+
     def _serve(self, c):
         c.settimeout(5.0)
         try:
             while not self._stop:
-                try:
-                    hdr = c.recv(7)
-                except Exception:
+                hdr = self._recv_exact(c, 7)     # MBAP: tid(2) pid(2) len(2) uid(1)
+                if hdr is None:
                     return
-                if not hdr or len(hdr) < 7:
+                tid, _pid, ln, _uid = struct.unpack(">HHHB", hdr)
+                # ⚠ length 필드는 unit id 를 '포함' 한다. 남은 PDU 는 ln-1 바이트.
+                #    (FC1 요청은 PDU 5바이트라 프레임 전체가 12바이트다.
+                #     예전처럼 11바이트만 읽으면, 소켓을 유지하는 pymodbus 3.11 에서
+                #     두 번째 요청부터 헤더가 1바이트 밀려 transaction id 가 어긋난다)
+                need = max(0, int(ln) - 1)
+                if need and self._recv_exact(c, need) is None:
                     return
-                tid, _pid, _ln, _uid = struct.unpack(">HHHB", hdr)
-                try:
-                    c.recv(2)          # fc + payload 일부
-                    c.recv(2)
-                except Exception:
-                    pass
+
                 m = self.mode
                 if m == "close":
                     c.close()
@@ -461,9 +520,23 @@ class _MiniModbusServer(threading.Thread):
                     time.sleep(1.2)    # timeout(0.5s) 초과 → 늦은 응답
                 body = struct.pack(">BBB", 1, 1, 0x01)     # FC1, bytecount 1, bits=0x01
                 c.sendall(struct.pack(">HHHB", tid, 0, len(body) + 1, 1) + body)
+                self.last_reply_ts = time.monotonic()
         finally:
             with __import__("contextlib").suppress(Exception):
                 c.close()
+
+    def wait_idle(self, quiet_s: float = 0.1, timeout_s: float = 3.0) -> None:
+        """서버가 마지막 응답을 보낸 뒤 quiet_s 동안 조용해질 때까지 기다린다.
+        단일 스레드 서버가 delay sleep 중인데 다음 요청을 보내 또 타임아웃나는 것을 막는다."""
+        end = time.monotonic() + timeout_s
+        while time.monotonic() < end:
+            last = self.last_reply_ts
+            if last and (time.monotonic() - last) >= quiet_s:
+                return
+            if not last:
+                time.sleep(quiet_s)
+                return
+            time.sleep(0.02)
 
     def stop(self):
         self._stop = True
@@ -502,11 +575,14 @@ def test_z_real_socket_policy():
         assert srv.accepts == 1, srv.accepts
 
         # (a') 응답 지연 → 타임아웃
-        #  ⚠ pymodbus 의 ModbusTransactionManager.execute 는 응답이 없으면
-        #    self.client.close() 를 스스로 호출하고, 타임아웃을 '예외'가 아니라
-        #    ModbusIOException '객체'로 돌려준다. 따라서
-        #      - 소켓 재생성 자체는 우리가 막을 수 없다(accepts 는 늘 수 있다)
-        #      - 대신 우리 계층은 close 하지 않고, E402 로 분류해 정책을 태운다
+        #  ⚠ 버전별 동작이 다르다.
+        #    - pymodbus 3.6.x : ModbusTransactionManager.execute 가 응답이 없으면
+        #      self.client.close() 를 스스로 호출한다 → 소켓 재생성을 우리가 막을 수 없다.
+        #    - pymodbus 3.11.x (requirements.build.txt 고정) : 동기 클라이언트는
+        #      타임아웃에 소켓을 닫지 않고 "No response received after N retries,
+        #      continue with next request" 만 남기고 같은 소켓을 계속 쓴다.
+        #      (장비 로그에 찍힌 문구가 이 3.11.2 것이다)
+        #    어느 쪽이든 우리 계층은 close 하지 않고 E402 로 분류해 정책을 태운다.
         srv.mode = "delay"
         code = ""
         try:
@@ -518,7 +594,12 @@ def test_z_real_socket_policy():
         assert not any("소켓 재생성" in m for m in logs),             [m for m in logs if "재생성" in m]
         assert p._consec_timeouts >= 1, "연속 타임아웃이 계수돼야 한다"
 
+        if _PM_VER >= (3, 7):
+            assert srv.accepts == 1, f"pymodbus>=3.7 은 타임아웃에 소켓을 닫지 않는다 (accepts={srv.accepts})"
+
+        # 단일 스레드 서버가 아직 delay sleep 중일 수 있다 → 유휴가 될 때까지 대기
         srv.mode = "ok"
+        srv.wait_idle()
         asyncio.run(p.read_coil(0))
         assert p._consec_timeouts == 0, "성공하면 리셋"
 
@@ -532,7 +613,14 @@ def test_z_real_socket_policy():
             asyncio.run(p.read_coil(0))
         assert srv.accepts > base, f"끊기면 재접속해야 한다 (accepts={srv.accepts})"
 
-        # (c) 연속 silent 로 임계 도달 → 우리 계층이 소켓 재생성 로그를 남긴다
+        # (c) 연속 silent
+        #  ⚠ 버전에 따라 결과가 다르다.
+        #    - 3.11.x: 소켓이 유지되므로 연속 타임아웃이 누적돼 임계에 도달하고,
+        #      우리 계층이 "소켓 재생성 ... 연속 타임아웃" 로그를 남긴다.
+        #    - 3.6.x : 라이브러리가 매번 소켓을 닫아 _connect_sync 가 재접속하고,
+        #      그때마다 '새 소켓은 새 예산' 정책으로 카운터가 0 으로 리셋된다.
+        #      따라서 우리 임계에는 도달하지 않는다(우리가 닫는 게 아니다).
+        #    임계 경로 자체는 가짜 클라이언트 테스트(test_2 / test_2b)가 결정적으로 덮는다.
         ours.clear()
         logs.clear()
         p._consec_timeouts = 0
@@ -540,7 +628,10 @@ def test_z_real_socket_policy():
         for _ in range(4):
             with __import__("contextlib").suppress(Exception):
                 asyncio.run(p.read_coil(0))
-        assert any("소켓 재생성" in m and "연속 타임아웃" in m for m in logs),             [m for m in logs if "재생성" in m]
+        if _PM_VER >= (3, 7):
+            assert any("소켓 재생성" in m and "연속 타임아웃" in m for m in logs), [m for m in logs if "재생성" in m]
+        else:
+            assert ours == [], "3.6.x 에서는 라이브러리가 닫으므로 우리는 닫지 않는다"
     finally:
         with __import__("contextlib").suppress(Exception):
             asyncio.run(p.close())

@@ -836,6 +836,10 @@ class AsyncPLC:
                 # ✅ 연결 성공 → 백오프 즉시 해제
                 self._next_connect_attempt_at = 0.0
                 self._connected_since = time.monotonic()
+                # ✅ 새 소켓은 새 예산을 받는다.
+                #    임계 경로로 방금 재생성했다면 카운터가 이미 임계 이상이라,
+                #    첫 성공 전에 타임아웃이 한 번만 나도 즉시 또 재생성된다.
+                self._consec_timeouts = 0
                 if self._connect_fail_streak > 0:
                     _down = (time.monotonic() - self._disconnected_at) if self._disconnected_at else 0.0
                     with contextlib.suppress(Exception):
