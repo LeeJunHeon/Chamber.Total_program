@@ -66,6 +66,29 @@ CMD_REPORT_PULSING      = 177
 CMD_REPORT_PULSE_FREQ   = 193
 CMD_REPORT_PULSE_DUTY   = 196
 
+# ========= CESAR 1310 펄스 사양 (순수 함수 — 테스트 가능) =========
+# 사양 3-5 : RF pulse frequency 1 Hz ~ 30 kHz, duty 0~99%
+# 4-74     : cmd 93 주파수 Hz (3B LSB first). 프로토콜상 1~100000 이지만 사양 최대를 넘기지 않는다.
+# 4-75     : cmd 96 듀티 1~99%. 최소 On/Off 시간 16 us.
+# 5-33     : 듀티 가능 범위는 PRF 가 높을수록 좁아진다(30kHz 에서 약 40~60%).
+# 트러블슈팅 W40 : 펄스 한계를 넘기면 출력이 차단된다.
+RFP_FREQ_MIN_HZ = 1
+RFP_FREQ_MAX_HZ_DEFAULT = 30000
+RFP_MIN_ON_OFF_US = 16.0
+
+
+def rfp_duty_limits_pct(f_khz: float) -> tuple[float, float]:
+    """최소 On/Off 16us 규칙에서 나오는 듀티 허용 범위 (%) — 사양 4-75 / 5-33.
+
+    On  시간 = period * duty/100      >= 16us  ->  duty >= 1.6 * f_kHz
+    Off 시간 = period * (1-duty/100)  >= 16us  ->  duty <= 100 - 1.6 * f_kHz
+    """
+    f = float(f_khz)
+    lo = round(RFP_MIN_ON_OFF_US * f / 10.0, 2)      # 16us * f[kHz] / 1000 * 100(%)
+    hi = round(100.0 - lo, 2)
+    return lo, hi
+
+
 CSR_CODES = {
     0:  "Command accepted",
     1:  "Wrong control mode (not HOST)",
@@ -425,21 +448,87 @@ class RFPulseAsync:
         if not ok:
             return await fail("SETP 실패")
 
-        # FREQ
-        if freq_hz is not None:
+        # ── 듀티 사전 검증은 '경고만' (차단은 장비 CSR 에 맡긴다) ──
+        #    사양 4-75 최소 On/Off 16us, 5-33 PRF 가 높을수록 듀티 범위가 좁아짐
+        if freq_hz is not None and duty_percent is not None:
+            _fk = float(freq_hz) / 1000.0
+            _lo, _hi = rfp_duty_limits_pct(_fk)
+            if not (_lo <= float(duty_percent) <= _hi):
+                await self._emit_status(
+                    f"[WARN] duty {float(duty_percent):g}% @{_fk:g}kHz — "
+                    f"CESAR 매뉴얼(16us 규칙) 기준 범위 {_lo:g}~{_hi:g}% 밖 — "
+                    "장비가 CSR 51로 거부할 수 있음"
+                )
+
+        async def _send_freq() -> tuple[bool, Optional[int]]:
             hz = int(freq_hz)
             data_f = bytes([hz & 0xFF, (hz >> 8) & 0xFF, (hz >> 16) & 0xFF])
-            ok, _ = await self._exec_and_csr(CMD_SET_PULSE_FREQ, data_f, tag="[START FREQ]")
+            _ok, _csr_b = await self._exec_and_csr(CMD_SET_PULSE_FREQ, data_f, tag="[START FREQ]")
+            return _ok, (_csr_b[0] if _csr_b else None)
+
+        async def _send_duty() -> tuple[bool, Optional[int]]:
+            v = int(duty_percent) & 0xFFFF
+            data_d = bytes([v & 0xFF, (v >> 8) & 0xFF])
+            _ok, _csr_b = await self._exec_and_csr(CMD_SET_PULSE_DUTY, data_d, tag="[START DUTY]")
+            return _ok, (_csr_b[0] if _csr_b else None)
+
+        # FREQ
+        _freq_retry_pending = False
+        if freq_hz is not None:
+            ok, csr = await _send_freq()
             if not ok:
-                return await fail("PULSE FREQ 실패")
+                # CSR 50(주파수 범위)/51(듀티 범위)은 "현재 듀티와 조합 불가"일 수 있다.
+                # duty 도 주어졌으면 DUTY→FREQ 순서로 1회 재시도한다(사양 5-33).
+                if csr in (50, 51) and duty_percent is not None:
+                    await self._emit_status(
+                        f"[RETRY] FREQ 거부 (CSR {csr}: {CSR_CODES.get(csr, 'Unknown')}) → "
+                        "DUTY 먼저 적용 후 FREQ 재시도"
+                    )
+                    _freq_retry_pending = True
+                else:
+                    return await fail(
+                        f"PULSE FREQ 실패 (CSR {csr}: {CSR_CODES.get(csr, 'Unknown')})"
+                        if csr is not None else "PULSE FREQ 실패"
+                    )
 
         # DUTY
         if duty_percent is not None:
-            v = int(duty_percent) & 0xFFFF
-            data_d = bytes([v & 0xFF, (v >> 8) & 0xFF])
-            ok, _ = await self._exec_and_csr(CMD_SET_PULSE_DUTY, data_d, tag="[START DUTY]")
+            ok, csr = await _send_duty()
             if not ok:
-                return await fail("PULSE DUTY 실패")
+                return await fail(
+                    f"PULSE DUTY 실패 (CSR {csr}: {CSR_CODES.get(csr, 'Unknown')})"
+                    if csr is not None else "PULSE DUTY 실패"
+                )
+
+        # FREQ 재시도 (DUTY 적용 후 1회)
+        if _freq_retry_pending:
+            ok, csr = await _send_freq()
+            if not ok:
+                return await fail(
+                    f"PULSE FREQ 실패(DUTY 선적용 후 재시도) "
+                    f"(CSR {csr}: {CSR_CODES.get(csr, 'Unknown')})"
+                    if csr is not None else "PULSE FREQ 실패(DUTY 선적용 후 재시도)"
+                )
+
+        # ── 설정 read-back (cmd 193/196). 불일치는 경고만, 실패 처리하지 않는다 ──
+        if freq_hz is not None or duty_percent is not None:
+            with contextlib.suppress(Exception):
+                _pr = await self.read_actual_pulse_params()
+                if _pr:
+                    _got_hz = int(round(float(_pr["freq_khz"]) * 1000.0))
+                    await self._emit_status(
+                        f"[VERIFY] RF Pulse f={_got_hz} Hz, duty={_pr['duty_pct']}%"
+                    )
+                    if freq_hz is not None and _got_hz != int(freq_hz):
+                        await self._emit_status(
+                            f"[WARN] RF Pulse 주파수 불일치 (요청 {int(freq_hz)} Hz ≠ 장비 {_got_hz} Hz)"
+                        )
+                    if duty_percent is not None and int(_pr["duty_pct"]) != int(duty_percent):
+                        await self._emit_status(
+                            f"[WARN] RF Pulse 듀티 불일치 (요청 {int(duty_percent)}% ≠ 장비 {_pr['duty_pct']}%)"
+                        )
+                else:
+                    await self._emit_status("[VERIFY] RF Pulse 설정 read-back 실패(통신) → 검증 생략")
 
         # PULSING (cfg로 모드 선택 가능)
         pulse_mode = self._cfg_int("RFPULSE_PULSE_MODE", 1)

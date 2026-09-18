@@ -10,7 +10,7 @@ import asyncio
 from dataclasses import dataclass
 from enum import Enum
 from time import monotonic_ns
-from typing import Optional, List, Tuple, Dict, Any, Callable
+from typing import Optional, List, Tuple, Dict, Any, Callable, Union
 from errors.app_error import AppError
 from lib.config_common import SHUTDOWN_STEP_TIMEOUT_MS, SHUTDOWN_STEP_GAP_MS, RGA_STEP_TIMEOUT_MS
 from lib import config_ch1, config_ch2
@@ -188,7 +188,7 @@ class ProcessStep:
             if self.value is None:
                 raise AppError(code="E219", detail="DC_PULSE_START에는 value(타깃 파워)가 필요합니다.")
             if not self.params or len(self.params) != 2:
-                raise AppError(code="E221", detail="DC_PULSE_START params는 (freqkHz|None, duty%|None) 형태여야 합니다.")
+                raise AppError(code="E221", detail="DC_PULSE_START params는 (freq_kHz|None, off_time_us|'DC'|None) 형태여야 합니다.")
 
         if self.action == ActionType.RF_PULSE_START:
             if self.value is None:
@@ -239,7 +239,8 @@ class ProcessController:
         stop_dc_power2: Optional[Callable[[], None]] = None,
 
         # 펄스 파워 (완전 분리)
-        start_dc_pulse: Callable[[float, Optional[int], Optional[int]], None],
+        # params=(freq_kHz|None, off_time_us: float|"DC"|None)
+        start_dc_pulse: Callable[[float, Optional[int], Union[float, str, None]], None],
         stop_dc_pulse: Callable[[], None],
         set_dc_pulse_power: Optional[Callable[[float], None]] = None,   # ✅ 추가
         start_rf_pulse: Callable[[float, Optional[int], Optional[int]], None],
@@ -999,8 +1000,8 @@ class ProcessController:
         elif a == ActionType.DC_PULSE_START:
             power = float(step.value or 0.0)
             freq = step.params[0] if step.params else None
-            duty = step.params[1] if step.params else None
-            self._start_dc_pulse(power, freq, duty)
+            off_time = step.params[1] if step.params else None   # us | "DC" | None
+            self._start_dc_pulse(power, freq, off_time)
             tokens.append(ExpectToken("DC_PULSE_TARGET"))
 
         elif a == ActionType.DC_PULSE_SET:
@@ -1895,22 +1896,33 @@ class ProcessController:
             ))
 
         # --- DC 펄스
+        # ⚠ EnerPulse EP5 장비 파라미터는 Pulse Freq(kHz)와 Off Time(us) 뿐이다
+        #    (매뉴얼 품기28-EPPEP102-V08 p.29/p.60). 듀티는 표시용 파생값이다.
         dc_pulse_power = float(params.get("dc_pulse_power", 0))
-        dc_pulse_freq  = params.get("dc_pulse_freq", None)   # UI: kHz
-        dc_pulse_duty  = params.get("dc_pulse_duty", None)   # UI: %
+        dc_pulse_freq  = params.get("dc_pulse_freq", None)        # kHz (정수)
+        dc_pulse_off   = params.get("dc_pulse_off_time", None)    # us | "DC" | None
 
         if dc_pulse_freq is not None:
             dc_pulse_freq = int(dc_pulse_freq)               # 그대로 kHz 정수
-        if dc_pulse_duty is not None:
-            dc_pulse_duty = int(dc_pulse_duty)               # 그대로 %
+        if dc_pulse_off is not None and not isinstance(dc_pulse_off, str):
+            dc_pulse_off = round(float(dc_pulse_off), 1)
 
         if use_dc_pulse:
             f_txt = f"{dc_pulse_freq}kHz" if dc_pulse_freq is not None else "keep"
-            d_txt = f"{dc_pulse_duty}%" if dc_pulse_duty is not None else "keep"
+            if dc_pulse_off is None:
+                o_txt = "keep"
+            elif isinstance(dc_pulse_off, str):
+                o_txt = str(dc_pulse_off).upper()            # "DC"
+            else:
+                o_txt = f"{float(dc_pulse_off):.1f}us"
+                if dc_pulse_freq:
+                    _period = 1000.0 / max(1e-6, float(dc_pulse_freq))
+                    _duty = round((_period - float(dc_pulse_off)) / _period * 100.0, 1)
+                    o_txt += f"(듀티 {_duty:g}%)"
             steps.append(ProcessStep(
                 action=ActionType.DC_PULSE_START, value=dc_pulse_power,
-                params=(dc_pulse_freq, dc_pulse_duty),  # kHz, %
-                message=f'DC Pulse 설정 및 ON (P={dc_pulse_power}W, f={f_txt}, duty={d_txt})',
+                params=(dc_pulse_freq, dc_pulse_off),   # kHz, us|"DC"|None
+                message=f'DC Pulse 설정 및 ON (P={dc_pulse_power}W, f={f_txt}, off={o_txt})',
                 parallel=False, polling=False,
             ))
 
@@ -2370,7 +2382,7 @@ class ProcessController:
                     if step.value is None:
                         errors.append(f"Step {n}: DC_PULSE_START에 value(파워)가 없습니다.")
                     if step.params is None or len(step.params) != 2:
-                        errors.append(f"Step {n}: DC_PULSE_START params=(freq, duty) 필요.")
+                        errors.append(f"Step {n}: DC_PULSE_START params=(freq_kHz, off_time_us) 필요.")
                 if step.action == ActionType.RF_PULSE_START:
                     if step.value is None:
                         errors.append(f"Step {n}: RF_PULSE_START에 value(파워)가 없습니다.")

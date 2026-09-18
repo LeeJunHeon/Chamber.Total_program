@@ -314,6 +314,15 @@ DCP_ENABLE_FAULT_RECOVER = True
 
 DCP_ACTIVATION_CHECK_DELAY_S = 5.0
 DCP_POLL_INTERVAL_S = 5.0
+
+# --- DC Pulse: Operation Mode / Arc 알림 (EnerPulse EP5 매뉴얼 품기28-EPPEP102-V08) ---
+DCP_REQUIRE_HOST_MODE = True     # p.18: Remote/Local 에서는 시리얼 제어 불가 → HOST 아니면 시작 거부
+DCP_ARC_ALERT_RATE_PER_S = 20    # (soft+hard) 초당 아크율이 이 값 이상이고
+DCP_ARC_ALERT_RATE_N = 2         #   이 횟수만큼 연속 관측되면 경고
+DCP_ARC_ALERT_RUN_TOTAL = 1000   # 또는 런 누적(soft+hard)이 이 값 이상이면 경고 (런당 1회)
+
+# --- RF Pulse(CESAR 1310) ---
+RFPULSE_FREQ_MAX_HZ = 30000      # 사양 3-5: RF pulse frequency 1Hz~30kHz (초과 시 W40 출력 차단)
 DCP_CONNECT_TIMEOUT_S = 3.0
 
 DCP_TIMEOUT_MS = 2500
@@ -637,7 +646,7 @@ PC_HOST_START_WAIT_TIMEOUT_S = 20.0
 # Google Drive 공정 로그 저장 설정
 # ======================================================================
 GDRIVE_LOG_DIR       = "G:/공유 드라이브/VanaM_Sputter/Process_log"
-GDRIVE_ARC_ALERT_THRESH = 5      # Arc 누적 이 값 이상 시 Chat 알림
+GDRIVE_ARC_ALERT_THRESH = 1000   # Arc 런 누적 이 값 이상 시 Chat 알림 (DCP_ARC_ALERT_RUN_TOTAL 과 동일)
 GDRIVE_REF_P_WARN_W     = 20.0  # Reflected Power 경고 기준 (W)
 
 # ======================================================================

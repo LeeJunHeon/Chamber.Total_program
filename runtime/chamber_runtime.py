@@ -81,6 +81,7 @@ RawParams = TypedDict('RawParams', {
     'rf_power': float | str,
 
     # 🔥 펄스 완전 분리(레거시 키 전부 제거)
+    'dc_pulse_off_time': str | float,
     'use_dc_pulse': Literal['T','F'] | bool,
     'dc_pulse_power': float | str,
     'dc_pulse_freq': int | str | None,
@@ -116,10 +117,15 @@ NormParams = TypedDict('NormParams', {
     'use_rf_power': bool, 'rf_power': float,
 
     'use_dc_pulse': bool, 'dc_pulse_power': float,
-    'dc_pulse_freq': int | None, 'dc_pulse_duty': int | None,
+    # ⚠ EnerPulse EP5 장비 파라미터는 Pulse Freq(kHz)와 Off Time(us) 뿐 (매뉴얼 p.29/p.60).
+    #    dc_pulse_off_time 이 1급 파라미터이고 dc_pulse_duty 는 표시용 파생값이다.
+    'dc_pulse_freq': int | None,
+    'dc_pulse_off_time': float | str | None,
+    'dc_pulse_duty': float | None,
 
     'use_rf_pulse': bool, 'rf_pulse_power': float,
-    'rf_pulse_freq': int | None, 'rf_pulse_duty': int | None,
+    # RF(CESAR)는 kHz 실수 허용(예: 0.5kHz = 500Hz)
+    'rf_pulse_freq': float | None, 'rf_pulse_duty': int | None,
 
     'use_g1': bool, 'use_g2': bool, 'use_g3': bool, 'use_ms': bool,
     'process_note': str,
@@ -154,6 +160,29 @@ try:
 except Exception:  # pragma: no cover
     def _system_log_append(source: str, msg: str) -> None:  # type: ignore[misc]
         return
+
+
+# UI 입력 파서가 "검증 실패"를 알리는 센티널 (None = 공란 = 유지 와 구분하기 위함)
+_DCP_OFF_INVALID = object()
+
+# ✅ DC Pulse 듀티 ↔ Off Time 환산 (device/dc_pulse.py 와 동일 규칙)
+#    매뉴얼 품기28-EPPEP102-V08 p.29/p.60: 장비 파라미터는 Freq(kHz)/Off Time(us) 뿐이다.
+try:
+    from device.dc_pulse import (
+        dcp_duty_to_off_time_us as _dcp_duty_to_off,
+        dcp_off_time_to_duty_pct as _dcp_off_to_duty,
+        dcp_max_off_time_us as _dcp_max_off,
+    )
+except Exception:  # pragma: no cover
+    def _dcp_duty_to_off(f_khz: float, duty_pct: float) -> float:
+        return round(max(0.0, (1000.0 / max(1e-6, f_khz)) * (1.0 - duty_pct / 100.0)), 1)
+
+    def _dcp_off_to_duty(f_khz: float, off_us: float) -> float:
+        _p = 1000.0 / max(1e-6, f_khz)
+        return round((_p - off_us) / _p * 100.0, 1)
+
+    def _dcp_max_off(f_khz: float) -> float:
+        return round(min(10.0, 400.0 / max(1e-6, f_khz)), 1)
 
 
 @dataclass(frozen=True)
@@ -1030,34 +1059,51 @@ class ChamberRuntime:
         def cb_dc_pulse_start(
             power: float,
             freq: Union[int, float, str, None],
-            duty: Union[int, float, str, None],
+            off_time: Union[int, float, str, None],
         ) -> None:
+            """params=(freq_kHz|None, off_time_us|"DC"|None).
+            ⚠ 장비 파라미터는 Freq(kHz)/Off Time(us) 뿐 (매뉴얼 p.29/p.60)."""
             async def run():
                 if not self.dc_pulse:
                     self.append_log("DCPulse", "DC-Pulse 미지원 챔버입니다."); return
                 try:
                     self._ensure_background_started()
                     # (선행 단계에서 이미 연결/워치독이 올라와 있으므로 start()는 생략해도 무방)
-                    ok = await self.dc_pulse.prepare_and_start(power_w=float(power), freq=freq, duty=duty)
+                    ok = await self.dc_pulse.prepare_and_start(
+                        power_w=float(power), freq=freq, off_time_us=off_time
+                    )
                     if ok:
+                        # ✅ 실측값으로 process_params 갱신 (CSV/GDrive/챗이 실제 적용값을 쓰도록)
                         with contextlib.suppress(Exception):
                             pr = await self.dc_pulse.read_actual_pulse_params()
                             if pr:
                                 pp = getattr(self.data_logger, "process_params", None)
                                 if isinstance(pp, dict):
-                                    pp["dc_pulse_freq"]       = pr["freq_khz"]
-                                    pp["dc_pulse_duty_cycle"] = pr["duty_pct"]
-                                    pp["dc_pulse_off_time_us"]= pr["off_time_us"]
+                                    pp["dc_pulse_freq"]        = pr["freq_khz"]
+                                    pp["dc_pulse_duty"]        = pr["duty_pct"]
+                                    pp["dc_pulse_duty_cycle"]  = pr["duty_pct"]
+                                    pp["dc_pulse_off_time_us"] = pr["off_time_us"]
+                                    pp["dc_pulse_off_time"]    = (
+                                        "DC" if pr["off_time_us"] is None else pr["off_time_us"]
+                                    )
+                                _off_txt = ("DC" if pr["off_time_us"] is None
+                                            else f"{float(pr['off_time_us']):.1f}us")
+                                self.append_log(
+                                    "DCPulse",
+                                    f"[실측] f={pr['freq_khz']}kHz, off={_off_txt}, duty={pr['duty_pct']}%"
+                                )
 
                     if not ok:
+                        # ✅ [C] 장비가 남긴 실제 실패 사유를 그대로 상위로 전달한다
+                        why = getattr(self.dc_pulse, "last_failure", None) or "prepare_and_start failed"
                         self.process_controller.on_dc_pulse_failed(
-                            "prepare_and_start failed",
+                            why,
                             meta={
                                 "stage": "prepare_and_start",
                                 "ch": self.ch,
                                 "power": float(power),
                                 "freq": freq,
-                                "duty": duty,
+                                "off_time": off_time,
                                 "returned_ok": False,
                             },
                         )
@@ -1073,7 +1119,7 @@ class ChamberRuntime:
                             "ch": self.ch,
                             "power": float(power),
                             "freq": freq,
-                            "duty": duty,
+                            "off_time": off_time,
                         },
                     )
             self._spawn_detached(run())
@@ -1541,7 +1587,11 @@ class ChamberRuntime:
                                         arc_thresh=getattr(_cfgc, "GDRIVE_ARC_ALERT_THRESH", 5),
                                         refp_warn=getattr(_cfgc, "GDRIVE_REF_P_WARN_W", 20.0),
                                         webhook_url=getattr(_cfgc, "CHAT_WEBHOOK_MONITOR_URL", ""),
-                                        arc_alert_sent=getattr(self, "_gdrive_arc_sent", False),
+                                        # ✅ runtime 이 이미 Arc 경고를 보냈으면 GDrive 는 중복 발송하지 않는다
+                                        arc_alert_sent=bool(
+                                            getattr(self, "_runtime_arc_notified", False)
+                                            or getattr(self, "_gdrive_arc_sent", False)
+                                        ),
                                     )
                                 )
                                 def _on_gdrive_done(t):
@@ -1555,6 +1605,13 @@ class ChamberRuntime:
 
                             except Exception as e:
                                 self.append_log("CSV", f"GDrive 저장 준비 실패: {e!r}")
+
+                        # ✅ Arc (런 누적) — 챗 종료 카드에 표시
+                        with contextlib.suppress(Exception):
+                            if self.dc_pulse is not None:
+                                _s, _h = self.dc_pulse.arc_counts
+                                detail.setdefault("soft_arc_count", int(_s))
+                                detail.setdefault("hard_arc_count", int(_h))
 
                         # ➊ 카드 헤더용 prefix: "CHx Sputter"
                         detail.setdefault("ch", self.ch)
@@ -2127,16 +2184,25 @@ class ChamberRuntime:
                         continue
                     self._runtime_arc_notified = True
 
-                    soft = int(getattr(ev, "power", 0) or 0)
-                    hard = int(getattr(ev, "voltage", 0) or 0)
+                    _d = ev.data or {}
+                    soft = int(_d.get("run_soft", getattr(ev, "power", 0) or 0))
+                    hard = int(_d.get("run_hard", getattr(ev, "voltage", 0) or 0))
                     proc_name = str(
                         getattr(self.process_controller, "current_params", {}).get("process_name")
                         or f"CH{self.ch}"
                     )
+                    _el = float(_d.get("elapsed_s", 0.0) or 0.0)
+                    _el_txt = f"{int(_el // 60)}분{int(_el % 60):02d}초" if _el >= 60 else f"{_el:.0f}초"
+                    _rate = _d.get("rate")
+                    _rate_lim = _d.get("rate_limit")
+                    _tot_lim = _d.get("run_total_limit")
                     msg = (
                         f"⚠️ CH{self.ch} DC Pulse Arc 경고\n"
                         f"공정: {proc_name}\n"
-                        f"Soft Arc: {soft}회  Hard Arc: {hard}회  합계: {soft + hard}회"
+                        f"출력 ON 후 {_el_txt} — 런 누적 Soft {soft} / Hard {hard} (합 {soft + hard})\n"
+                        f"최근 아크율 soft+hard {_rate if _rate is not None else '-'}/s "
+                        f"(기준 {_rate_lim}/s x{_d.get('rate_n', '')} 또는 누적 {_tot_lim})\n"
+                        f"장비 원시값 SAT={_d.get('raw_soft', '-')} ANT={_d.get('raw_hard', '-')}"
                     )
                     self.append_log(f"DCPulse{self.ch}", msg)
                     with contextlib.suppress(Exception):
@@ -2166,6 +2232,13 @@ class ChamberRuntime:
                     cmd = (ev.cmd or "").upper()
 
                     self.append_log(f"DCPulse{self.ch}", f"CMD FAIL: {cmd} ({why_raw})")
+
+                    # ✅ [C] prepare_and_start 가 직접 False 를 리턴하는 경로는
+                    #    cb_dc_pulse_start 가 last_failure 로 이미 보고했다.
+                    #    여기서 또 보고하면 "Step 0 UNKNOWN" 으로 덮어써지므로 생략한다.
+                    #    (로그는 위에서 남겼고, AUTO_STOP/OUTPUT_OFF 처리는 아래 그대로)
+                    if ((ev.data or {}).get("phase") == "prepare"):
+                        continue
 
                     # ✅ 내부 진단/복구용 명령 실패는 공정 실패로 승격하지 않는다.
                     if cmd.startswith("READ_") or cmd == "FAULT_RESET":
@@ -2559,6 +2632,104 @@ class ChamberRuntime:
             finally:
                 grp.setExclusive(True)
 
+    # 공유 Freq/Duty 입력칸 라벨 문구
+    #  - DC Pulse: 장비 파라미터는 Off Time(us). 듀티 개념이 없다(매뉴얼 p.29/p.60)
+    #  - RF Pulse: CESAR 는 듀티(%)가 장비 파라미터다(사양 4-75)
+    _PULSE_LABEL_DC = "DC Pulse Off Time [µs] (DC=DC모드, 공란=유지)"
+    _PULSE_LABEL_RF = "RF Pulse Duty Cycle [%]"
+
+    def _pulse_label_leaf(self) -> str:
+        """CH1은 ch1_dcPulseDutyCycle_label, CH2는 ch2_rfPulseDutyCycle_label."""
+        return "dcPulseDutyCycle_label" if self.ch == 1 else "rfPulseDutyCycle_label"
+
+    def _sync_pulse_duty_label(self) -> None:
+        """라디오 선택에 맞춰 공유 입력칸 라벨 문구를 바꾼다."""
+        with contextlib.suppress(Exception):
+            lab = self._u(self._pulse_label_leaf())
+            if lab is None or not hasattr(lab, "setText"):
+                return
+            dc_on = bool(getattr(self._u("dcPulsePower_checkbox"), "isChecked", lambda: False)())
+            lab.setText(self._PULSE_LABEL_DC if dc_on else self._PULSE_LABEL_RF)
+
+    def _bind_pulse_label_signals(self) -> None:
+        """라디오 toggled 시그널에 라벨 전환을 연결한다(중복 연결 방지)."""
+        if getattr(self, "_pulse_label_bound", False):
+            return
+        n = 0
+        for leaf in ("dcPulsePower_checkbox", "rfPulsePower_checkbox"):
+            w = self._u(leaf)
+            sig = getattr(w, "toggled", None) if w is not None else None
+            if sig is None:
+                continue
+            with contextlib.suppress(Exception):
+                sig.connect(lambda _checked=False: self._sync_pulse_duty_label())
+                n += 1
+        if n:
+            self._pulse_label_bound = True
+            self._sync_pulse_duty_label()
+
+    def _dcp_off_text_for_ui(self, params, freq_txt: str) -> str:
+        """레시피 dict → 공유 입력칸에 표시할 DC Pulse Off Time 문자열.
+        dc_pulse_off_time 우선, 없으면 레거시 dc_pulse_duty_cycle 을 환산한다."""
+        raw = str(params.get("dc_pulse_off_time", "") or "").strip()
+        if raw:
+            if raw.upper() == "DC":
+                return "DC"
+            try:
+                return f"{float(raw):.1f}"
+            except Exception:
+                return raw
+        legacy = str(params.get("dc_pulse_duty_cycle") or params.get("dc_pulse_duty") or "").strip()
+        if not legacy:
+            return ""
+        try:
+            f = float(str(freq_txt).strip())
+            if f > 0:
+                return f"{_dcp_duty_to_off(f, float(legacy)):.1f}"
+        except Exception:
+            pass
+        return ""
+
+    def _rfp_freq_max_khz(self) -> float:
+        """RF Pulse 주파수 상한 [kHz]. CESAR 사양 3-5 = 30 kHz (설정으로 조정 가능)."""
+        try:
+            hz = float(self.cfg._get("RFPULSE_FREQ_MAX_HZ", 30000.0))
+        except Exception:
+            hz = 30000.0
+        return (hz if hz > 0 else 30000.0) / 1000.0
+
+    def _parse_dcp_off_time_input(self, txt: Optional[str], freq_khz):
+        """공유 입력칸의 DC Pulse Off Time 입력을 파싱한다.
+
+        반환: None(공란=유지) / "DC"(DC 모드) / float(us) / _DCP_OFF_INVALID(검증 실패)
+        매뉴얼 품기28-EPPEP102-V08 p.12/13: Off Time 은 1.0 ~ min(10.0, 400/f_kHz) us.
+        """
+        sv = str(txt or "").strip()
+        if sv == "":
+            return None
+        if sv.upper() == "DC":
+            return "DC"
+        try:
+            v = round(float(sv), 1)
+        except Exception:
+            self._post_warning(
+                "입력값 확인",
+                "DC-Pulse Off Time 은 숫자(µs) 또는 'DC' 여야 합니다.\n"
+                "공란이면 장비 현재값을 유지합니다."
+            )
+            return _DCP_OFF_INVALID
+
+        _max = _dcp_max_off(float(freq_khz)) if freq_khz else 10.0
+        if not (1.0 <= v <= _max):
+            _fx = f"{float(freq_khz):g}kHz 기준 " if freq_khz else "(주파수 공란 → 절대 상한) "
+            self._post_warning(
+                "입력값 확인",
+                f"DC-Pulse Off Time {v:.1f}µs 는 허용 범위 밖입니다.\n"
+                f"{_fx}1.0 ~ {_max:.1f}µs (매뉴얼 p.13 그림3: 상한 = min(10.0, 400/f))"
+            )
+            return _DCP_OFF_INVALID
+        return v
+
     @staticmethod
     def _pulse_endpoint_of(dev) -> Optional[str]:
         """펄스 드라이버의 실효 엔드포인트 'host:port'. 해석 실패 시 None(가드는 fail-open)."""
@@ -2807,7 +2978,8 @@ class ChamberRuntime:
 
             dc_power = params.get("dc_pulse_power", "0")
             dc_freq  = str(params.get("dc_pulse_freq", "")).strip()
-            dc_duty  = str(params.get("dc_pulse_duty_cycle") or params.get("dc_pulse_duty") or "").strip()
+            # ✅ DC 는 공유 입력칸에 Off Time(us)을 표시한다(레거시 duty 만 있으면 환산).
+            dc_duty  = self._dcp_off_text_for_ui(params, dc_freq)
 
             # ✅ 표시 판정도 use_*_pulse 만 따른다(값 기반 승격 없음)
             #    동시 사용 허용: 체크박스는 각자 표시, 공유 입력칸은 RF 우선 값 표시
@@ -2843,13 +3015,18 @@ class ChamberRuntime:
             elif use_dcp:
                 pw  = str(params.get('dc_pulse_power', '0'))
                 frq = str(params.get('dc_pulse_freq', '')).strip()
-                dty = str(params.get('dc_pulse_duty_cycle') or params.get('dc_pulse_duty') or '').strip()
+                # ✅ DC 는 공유 입력칸에 Off Time(us)을 표시한다(레거시 duty 만 있으면 환산).
+                dty = self._dcp_off_text_for_ui(params, frq)
             else:
                 pw, frq, dty = "0", "", ""
 
             _set("rfPulsePower_edit",     pw)
             _set("rfPulseFreq_edit",      '' if frq in ('', '0') else frq)
             _set("rfPulseDutyCycle_edit", '' if dty in ('', '0') else dty)
+
+        # ✅ 공유 입력칸 라벨을 현재 라디오 선택에 맞춘다
+        self._bind_pulse_label_signals()
+        self._sync_pulse_duty_label()
 
         # DC-Power
         _set("dcPower_checkbox", params.get('use_dc_power', 'F') == 'T')
@@ -5006,7 +5183,7 @@ class ChamberRuntime:
                 return None
 
             # 기본값
-            dc_pulse_power = 0.0; dc_pulse_freq = None; dc_pulse_duty = None
+            dc_pulse_power = 0.0; dc_pulse_freq = None; dc_pulse_off = None; dc_pulse_duty = None
             rf_pulse_power = 0.0; rf_pulse_freq = None; rf_pulse_duty = None
 
             if use_dc_pulse:
@@ -5029,15 +5206,11 @@ class ChamberRuntime:
                         self._post_warning("입력값 확인", "DC-Pulse Freq(kHz)는 20..150 범위입니다.")
                         return None
 
+                # ✅ 공유 입력칸은 DC 선택 시 Off Time(us). "DC"=DC 모드, 공란=유지
                 txtd = self._get_text("dcPulseDutyCycle_edit")
-                if txtd:
-                    try:
-                        dc_pulse_duty = int(float(txtd))
-                        if dc_pulse_duty < 1 or dc_pulse_duty > 99:
-                            raise ValueError()
-                    except ValueError:
-                        self._post_warning("입력값 확인", "DC-Pulse Duty(%)는 1..99 범위")
-                        return None
+                dc_pulse_off = self._parse_dcp_off_time_input(txtd, dc_pulse_freq)
+                if dc_pulse_off is _DCP_OFF_INVALID:
+                    return None
 
             if use_rf_pulse:
                 # ---- CH2에서 쓰는 RF-Pulse 검증 로직을 CH1에도 동일 적용 ----
@@ -5051,12 +5224,18 @@ class ChamberRuntime:
 
                 txtf = self._get_text("dcPulseFreq_edit")
                 if txtf:
+                    _fmax_khz = self._rfp_freq_max_khz()
                     try:
-                        rf_pulse_freq = int(float(txtf))  # kHz
-                        if rf_pulse_freq < 1 or rf_pulse_freq > 100:
+                        # ✅ CESAR 는 kHz 실수 허용(0.5kHz=500Hz). int 절단 금지
+                        rf_pulse_freq = float(txtf)
+                        if not (0.001 <= rf_pulse_freq <= _fmax_khz):
                             raise ValueError()
                     except ValueError:
-                        self._post_warning("입력값 확인", "RF Pulse Freq(kHz)는 1..100 범위입니다.")
+                        self._post_warning(
+                            "입력값 확인",
+                            f"RF Pulse Freq(kHz)는 0.001..{_fmax_khz:g} 범위입니다.\n"
+                            "(CESAR 사양 3-5: 1Hz~30kHz — 초과 시 W40으로 출력 차단)"
+                        )
                         return None
 
                 txtd = self._get_text("dcPulseDutyCycle_edit")
@@ -5085,7 +5264,12 @@ class ChamberRuntime:
                 "use_dc_pulse": use_dc_pulse,
                 "dc_pulse_power": dc_pulse_power,
                 "dc_pulse_freq": dc_pulse_freq,
-                "dc_pulse_duty": dc_pulse_duty,
+                "dc_pulse_off_time": dc_pulse_off,
+                "dc_pulse_duty": (
+                    100.0 if isinstance(dc_pulse_off, str)
+                    else (_dcp_off_to_duty(float(dc_pulse_freq), float(dc_pulse_off))
+                          if (dc_pulse_off is not None and dc_pulse_freq) else None)
+                ),
 
                 "use_rf_pulse": use_rf_pulse,
                 "rf_pulse_power": rf_pulse_power,
@@ -5166,6 +5350,7 @@ class ChamberRuntime:
             # 기본값
             dc_pulse_power = 0.0
             dc_pulse_freq = None
+            dc_pulse_off = None
             dc_pulse_duty = None
 
             rf_pulse_power = 0.0
@@ -5192,15 +5377,11 @@ class ChamberRuntime:
                         self._post_warning("입력값 확인", "DC-Pulse Freq(kHz)는 20..150 범위입니다.")
                         return None
 
+                # ✅ 공유 입력칸은 DC 선택 시 Off Time(us). "DC"=DC 모드, 공란=유지
                 txtd = self._get_text("rfPulseDutyCycle_edit")
-                if txtd:
-                    try:
-                        dc_pulse_duty = int(float(txtd))
-                        if dc_pulse_duty < 1 or dc_pulse_duty > 99:
-                            raise ValueError()
-                    except Exception:
-                        self._post_warning("입력값 확인", "DC-Pulse Duty(%)는 1..99 범위")
-                        return None
+                dc_pulse_off = self._parse_dcp_off_time_input(txtd, dc_pulse_freq)
+                if dc_pulse_off is _DCP_OFF_INVALID:
+                    return None
 
             if use_rf_pulse:
                 # ---- RF-Pulse 검증 ----
@@ -5214,12 +5395,18 @@ class ChamberRuntime:
 
                 txtf = self._get_text("rfPulseFreq_edit")
                 if txtf:
+                    _fmax_khz = self._rfp_freq_max_khz()
                     try:
-                        rf_pulse_freq = int(float(txtf))  # kHz
-                        if rf_pulse_freq < 1 or rf_pulse_freq > 100:
+                        # ✅ CESAR 는 kHz 실수 허용(0.5kHz=500Hz). int 절단 금지
+                        rf_pulse_freq = float(txtf)
+                        if not (0.001 <= rf_pulse_freq <= _fmax_khz):
                             raise ValueError()
                     except Exception:
-                        self._post_warning("입력값 확인", "RF-Pulse Freq(kHz)는 1..100 범위입니다.")
+                        self._post_warning(
+                            "입력값 확인",
+                            f"RF-Pulse Freq(kHz)는 0.001..{_fmax_khz:g} 범위입니다.\n"
+                            "(CESAR 사양 3-5: 1Hz~30kHz — 초과 시 W40으로 출력 차단)"
+                        )
                         return None
 
                 txtd = self._get_text("rfPulseDutyCycle_edit")
@@ -5259,7 +5446,12 @@ class ChamberRuntime:
                 "use_dc_pulse": use_dc_pulse,
                 "dc_pulse_power": dc_pulse_power,
                 "dc_pulse_freq": dc_pulse_freq,
-                "dc_pulse_duty": dc_pulse_duty,
+                "dc_pulse_off_time": dc_pulse_off,
+                "dc_pulse_duty": (
+                    100.0 if isinstance(dc_pulse_off, str)
+                    else (_dcp_off_to_duty(float(dc_pulse_freq), float(dc_pulse_off))
+                          if (dc_pulse_off is not None and dc_pulse_freq) else None)
+                ),
 
                 # CH2도 RF-Pulse 사용 가능
                 "use_rf_pulse": use_rf_pulse,
@@ -5332,16 +5524,43 @@ class ChamberRuntime:
                         break
             return float(default)
 
+        def _opt_float_from_keys(*keys):
+            """공란이면 None, 숫자면 float. 변환 실패도 None(전수검증이 별도로 잡는다)."""
+            for k in keys:
+                s = str(raw.get(k, "")).strip()
+                if s != "":
+                    try:
+                        return float(s)
+                    except Exception:
+                        return None
+            return None
+
+        def _off_time_from_keys(*keys):
+            """Off Time [us] 파서. 공란=None(유지), "DC"=DC 모드, 숫자=us."""
+            for k in keys:
+                sv = str(raw.get(k, "")).strip()
+                if sv == "":
+                    continue
+                if sv.upper() == "DC":
+                    return "DC"
+                try:
+                    return round(float(sv), 1)
+                except Exception:
+                    return None
+            return None
+
         if self.ch == 1:
             # ✅ CH1: RF/DC Pulse 둘 다 CSV에서 독립적으로 사용 (두 컬럼 유지)
             use_dc_pulse = tf(raw.get("use_dc_pulse", "F"))
             dc_pulse_power = _float_from_keys("0", "dc_pulse_power")
             dc_pulse_freq  = _opt_int_from_keys("dc_pulse_freq")
-            dc_pulse_duty  = _opt_int_from_keys("dc_pulse_duty_cycle")
+            dc_pulse_off   = _off_time_from_keys("dc_pulse_off_time")
+            dc_pulse_duty_legacy = _opt_int_from_keys("dc_pulse_duty_cycle")
 
             use_rf_pulse = tf(raw.get("use_rf_pulse", "F"))
             rf_pulse_power = _float_from_keys("0", "rf_pulse_power")
-            rf_pulse_freq  = _opt_int_from_keys("rf_pulse_freq")
+            # RF(CESAR)는 kHz 실수 허용 — int 절단 금지(0.5kHz = 500Hz)
+            rf_pulse_freq  = _opt_float_from_keys("rf_pulse_freq")
             rf_pulse_duty  = _opt_int_from_keys("rf_pulse_duty_cycle")
 
         else:
@@ -5349,12 +5568,38 @@ class ChamberRuntime:
             use_dc_pulse = tf(raw.get("use_dc_pulse", "F"))
             dc_pulse_power = _float_from_keys("0", "dc_pulse_power")
             dc_pulse_freq  = _opt_int_from_keys("dc_pulse_freq")
-            dc_pulse_duty  = _opt_int_from_keys("dc_pulse_duty_cycle")
+            dc_pulse_off   = _off_time_from_keys("dc_pulse_off_time")
+            dc_pulse_duty_legacy = _opt_int_from_keys("dc_pulse_duty_cycle")
 
             use_rf_pulse = tf(raw.get("use_rf_pulse", "F"))
             rf_pulse_power = _float_from_keys("0", "rf_pulse_power")
-            rf_pulse_freq  = _opt_int_from_keys("rf_pulse_freq")
+            rf_pulse_freq  = _opt_float_from_keys("rf_pulse_freq")
             rf_pulse_duty  = _opt_int_from_keys("rf_pulse_duty_cycle")
+
+        # ── Off Time 결정 (CH1/CH2 공통) ──
+        #    dc_pulse_off_time 이 1급. 없고 레거시 dc_pulse_duty_cycle 만 있으면 환산한다.
+        if dc_pulse_off is None and dc_pulse_duty_legacy is not None:
+            if dc_pulse_freq:
+                dc_pulse_off = _dcp_duty_to_off(float(dc_pulse_freq), float(dc_pulse_duty_legacy))
+                self.append_log(
+                    "Params",
+                    f"[호환] dc_pulse_duty_cycle {dc_pulse_duty_legacy}% @{dc_pulse_freq}kHz "
+                    f"→ dc_pulse_off_time {dc_pulse_off:.1f}us 로 환산"
+                )
+            else:
+                self.append_log(
+                    "Params",
+                    f"[경고] dc_pulse_duty_cycle={dc_pulse_duty_legacy}% 가 있으나 dc_pulse_freq 가 비어 "
+                    "Off Time 으로 환산할 수 없습니다 → Off Time 유지(keep)"
+                )
+
+        # 표시용 듀티(파생값). Off Time 과 주파수가 모두 있을 때만 계산한다.
+        if isinstance(dc_pulse_off, str):          # "DC"
+            dc_pulse_duty = 100.0
+        elif dc_pulse_off is not None and dc_pulse_freq:
+            dc_pulse_duty = _dcp_off_to_duty(float(dc_pulse_freq), float(dc_pulse_off))
+        else:
+            dc_pulse_duty = None
 
         # ✅ dep.rate: CSV 헤더가 "dep.rate"(점) 또는 "dep_rate"(밑줄) 둘 다 지원
         def fget_deprate() -> float | None:
@@ -5395,7 +5640,8 @@ class ChamberRuntime:
             "use_dc_pulse":      use_dc_pulse,
             "dc_pulse_power":    dc_pulse_power,
             "dc_pulse_freq":     dc_pulse_freq,
-            "dc_pulse_duty":     dc_pulse_duty,
+            "dc_pulse_off_time": dc_pulse_off,     # us | "DC" | None (1급)
+            "dc_pulse_duty":     dc_pulse_duty,    # 표시용 파생값
 
             "use_rf_pulse":      use_rf_pulse,
             "rf_pulse_power":    rf_pulse_power,
@@ -5453,6 +5699,8 @@ class ChamberRuntime:
                 res[p_key] = 0.0
                 res[f_key] = None
                 res[d_key] = None
+                if kind == "dc":
+                    res["dc_pulse_off_time"] = None
 
             if bool(res.get(use_key)):
                 if supported:
@@ -6575,6 +6823,8 @@ class ChamberRuntime:
             "rfPulsePower_edit": "dcPulsePower_edit",
             "rfPulseFreq_edit": "dcPulseFreq_edit",
             "rfPulseDutyCycle_edit": "dcPulseDutyCycle_edit",
+            # ✅ 공유 입력칸 라벨(라디오 선택에 따라 문구 전환)
+            "rfPulseDutyCycle_label": "dcPulseDutyCycle_label",
 
         }.get(leaf, leaf)
 

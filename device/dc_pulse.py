@@ -4,7 +4,11 @@
 dc_pulse.py — EnerPulse 5 Pulser RS-232 제어 (MOXA NPort 등 TCP-Serial 게이트웨이 경유)
 - asyncio Streams + 단일 명령 큐 + 워치독
 - 프로토콜 Type4(STX/ETX/CHK) 바이너리 프레이밍 (RS-232 전용)
-- 장비에서 Host/Mode/펄스 파라미터는 수동 설정, 코드는 Power setpoint(0x83)와 Output On/Off(0x80)만 제어
+- 코드가 제어하는 범위: Master(0x7B/0x7C/0x7D), Regulation(0x82), Power setpoint(0x83),
+  Pulse Sync(0x65), Pulse Freq(0x66), Off Time(0x67), Output On/Off(0x80), Fault Reset(0x6F),
+  Arc Count Reset(0x8C). 읽기: 0x91/0x96/0x99/0x9C/0x9E/0xA5/0xA6/0xA7/0xAE/0xAF/0xBB~0xBD.
+- ⚠ 장비 파라미터는 "Pulse Freq(kHz)"와 "Off Time(us)" 두 가지뿐이며 듀티(%) 개념이 없다
+  (매뉴얼 품기28-EPPEP102-V08 p.29 / p.60). 듀티는 표시·레거시 레시피 호환용 파생값이다.
 
 사용 예:
     dcp = AsyncDCPulse(host="192.168.1.50", port=4010)
@@ -23,7 +27,7 @@ import asyncio, time, contextlib, socket
 from lib import config_common as cfgc   # 공통 config(런타임 reload용)
 
 # ========= 이벤트 모델 =========
-EventKind = Literal["status", "telemetry", "command_confirmed", "command_failed"]
+EventKind = Literal["status", "telemetry", "command_confirmed", "command_failed", "arc_threshold_reached"]
 
 @dataclass
 class DCPEvent:
@@ -74,6 +78,62 @@ def _chk_nibble_sum(items: bytes) -> int:
 
 def _is_keep(x) -> bool:
     return isinstance(x, str) and x.strip().lower() == "keep"
+
+
+def _is_dc_mode(x) -> bool:
+    """Off Time 값이 'DC' (DC 모드, raw 9) 를 뜻하는지."""
+    return isinstance(x, str) and x.strip().upper() == "DC"
+
+
+# ========= EnerPulse EP5 펄스 파라미터 규격 (순수 함수 — 테스트 가능) =========
+# 매뉴얼 품기28-EPPEP102-V08
+#  - p.12/13 : 출력 주파수 20~150 kHz. Off Time(Reverse Time) = DC 또는 1.0~10.0 us.
+#              최대 Off Time 은 주파수에 따라 감소(그림3 곡선).
+#  - p.50    : 0x67 Off Time = 9(DC) / 10~100 (1.0~10.0 us, x10 스케일).
+#              예) 5 us -> 02 67 00 32 03 9E
+#  - p.50    : 0x66 Pulse Freq = 20~150 (kHz)
+DCP_FREQ_MIN_KHZ: int = 20
+DCP_FREQ_MAX_KHZ: int = 150
+DCP_OFF_MIN_US: float = 1.0
+DCP_OFF_ABS_MAX_US: float = 10.0
+DCP_OFF_RAW_DC: int = 9
+
+
+def dcp_max_off_time_us(f_khz: float) -> float:
+    """주파수별 Off Time 상한 [us] (매뉴얼 p.13 그림3 곡선 = min(10.0, 400/f_kHz)).
+
+    20/30/40kHz->10.0, 50->8.0, 60->6.7, 70->5.7, 80->5.0, 90->4.4,
+    100->4.0, 110->3.6, 120->3.3, 130->3.1, 140->2.9, 150->2.7
+    """
+    f = float(f_khz)
+    if f <= 0.0:
+        return DCP_OFF_ABS_MAX_US
+    return round(min(DCP_OFF_ABS_MAX_US, 400.0 / f), 1)
+
+
+def dcp_off_time_to_raw(off_us: float) -> int:
+    """Off Time [us] -> 0x67 raw (x10 스케일, 매뉴얼 p.50). 클램프하지 않는다."""
+    return int(round(float(off_us) * 10.0))
+
+
+def dcp_raw_to_off_time(raw: int) -> Optional[float]:
+    """0x67/0xA7 raw -> Off Time [us]. DC(9) 는 None."""
+    r = int(raw)
+    if r == DCP_OFF_RAW_DC:
+        return None
+    return r / 10.0
+
+
+def dcp_duty_to_off_time_us(f_khz: float, duty_pct: float) -> float:
+    """[레거시 호환] 듀티(%) -> Off Time [us]. period = 1000/f_kHz."""
+    period_us = 1000.0 / max(1e-6, float(f_khz))
+    return round(max(0.0, period_us * (1.0 - float(duty_pct) / 100.0)), 1)
+
+
+def dcp_off_time_to_duty_pct(f_khz: float, off_us: float) -> float:
+    """Off Time [us] -> 표시용 듀티(%). 소수 1자리."""
+    period_us = 1000.0 / max(1e-6, float(f_khz))
+    return round((period_us - float(off_us)) / period_us * 100.0, 1)
 
 class BinaryProtocol(IProtocol):
     """
@@ -215,6 +275,8 @@ class AsyncDCPulse:
 
         self._last_io_mono: float = 0.0
         self._out_on: bool = False
+        # ✅ [C] 마지막 실패 사유(runtime 이 읽어 구글챗까지 전달)
+        self.last_failure: Optional[str] = None
         self._last_ref_power_w: Optional[float] = None  # ← 세트포인트 저장
 
         self._spdev_n: int = 0
@@ -450,6 +512,9 @@ class AsyncDCPulse:
         *,
         # 'keep' 또는 None이면 변경하지 않음
         freq: Optional[Union[float, int, str]] = None,
+        # ✅ Off Time(us) 이 1급 파라미터. None/"keep"=유지, "DC"=DC 모드, 숫자=us
+        off_time_us: Optional[Union[float, int, str]] = None,
+        # [레거시 호환 전용] 듀티(%). off_time_us 가 None 이고 freq 가 숫자일 때만 환산.
         duty: Optional[Union[float, int, str]] = None,
         # 펄스 동기 모드: 'int' 또는 'ext' (None이면 유지)
         sync: Optional[Literal["int", "ext"]] = None,
@@ -472,10 +537,13 @@ class AsyncDCPulse:
         (실패 이벤트는 각 명령에서 command_failed 로 이미 올라감)
         """
 
+        # ✅ [C] 이번 런의 실패 사유 초기화 (runtime 이 종료 후 읽어 챗으로 전달)
+        self.last_failure = None
+
         # 0) 연결 준비
         ok_conn = await self._wait_until_connected(timeout=float(self._connect_timeout_s))
         if not ok_conn:
-            await self._emit_failed("CONNECT", "연결 준비 실패")
+            await self._emit_failed("CONNECT", "연결 준비 실패", phase="prepare")
             return False
         
         # ✅ STOP/종료 가드는 이전 런에서 남아 있을 수 있으므로 공정 시작 시 해제
@@ -491,7 +559,8 @@ class AsyncDCPulse:
         if master == "host":
             ok_master = await self.set_master_host_all()
             if not ok_master:
-                await self._emit_failed("PRECHECK", "ONOFF/REFER/MODE master를 HOST로 강제하지 못함")
+                await self._emit_failed("PRECHECK", "ONOFF/REFER/MODE master를 HOST로 강제하지 못함",
+                                        phase="prepare")
                 return False
         
         # ✅ [ADD] 공정 시작 전: 폴링 OFF + 버퍼 정리 + Ctrl/Fault 사전 점검
@@ -501,81 +570,179 @@ class AsyncDCPulse:
         ctrl = await self.read_control_mode()
         # ✅ READ_CTRL_MODE가 None이면 즉시 중단 (뒤 단계 진행 금지)
         if ctrl is None:
-            await self._emit_status("[PRECHECK] READ_CTRL_MODE 실패 → OUTPUT_ON 시퀀스 중단")
+            await self._emit_failed("PRECHECK", "READ_CTRL_MODE(0x9C) 실패 → OUTPUT_ON 시퀀스 중단",
+                                    phase="prepare")
             return False
-        # ✅ UNKNOWN도 안전상 중단 권장
+        # ✅ UNKNOWN도 안전상 중단
         if ctrl not in ("HOST", "REMOTE", "LOCAL"):
-            await self._emit_status(f"[PRECHECK] Control mode={ctrl} → OUTPUT_ON 시퀀스 중단")
+            await self._emit_failed("PRECHECK", f"Control mode={ctrl} → OUTPUT_ON 시퀀스 중단",
+                                    phase="prepare")
             return False
-        if ctrl == "LOCAL":
-            await self._emit_failed("PRECHECK", "Control mode=LOCAL (패널에서 HOST/REMOTE 전환 필요)")
+
+        # ✅ 매뉴얼 p.18: Remote/Local 에서는 시리얼로 '상태 모니터링만' 가능하고
+        #    설정·제어가 불가하다. p.56: 0x9C Control Mode Host=01/Remote=02/Local=04.
+        #    → HOST 가 아니면 1초 후 1회 재확인하고, 그래도 아니면 실패로 중단한다.
+        if self._cfg_bool("DCP_REQUIRE_HOST_MODE", True):
+            if ctrl != "HOST":
+                await self._emit_status(f"[PRECHECK] Control mode={ctrl} → 1초 후 재확인")
+                await asyncio.sleep(1.0)
+                ctrl2 = await self.read_control_mode()
+                if ctrl2 == "HOST":
+                    ctrl = ctrl2
+                else:
+                    _raw = {"REMOTE": "0x02", "LOCAL": "0x04"}.get(str(ctrl2 or ctrl), "?")
+                    await self._emit_failed(
+                        "PRECHECK",
+                        f"DC Pulse 패널 Operation Mode={ctrl2 or ctrl}(0x9C={_raw}) — "
+                        "매뉴얼 p.18: 시리얼 제어 불가, 전면 패널에서 HOST로 전환 후 재시작",
+                        phase="prepare",
+                    )
+                    return False
+        elif ctrl == "LOCAL":
+            # 설정으로 HOST 강제를 끈 경우는 기존처럼 LOCAL 만 거부
+            await self._emit_failed("PRECHECK", "Control mode=LOCAL (패널에서 HOST/REMOTE 전환 필요)",
+                                    phase="prepare")
             return False
 
         fault = await self.read_fault_code()
         # ✅ READ_FAULT가 None이면 안전상 중단
         if fault is None:
-            await self._emit_status("[PRECHECK] READ_FAULT 실패 → OUTPUT_ON 시퀀스 중단")
+            await self._emit_failed("PRECHECK", "READ_FAULT(0x9E) 실패 → OUTPUT_ON 시퀀스 중단",
+                                    phase="prepare")
             return False
         if fault != 0:
             await self._emit_status(f"[PRECHECK] fault=0x{fault:04X} → FAULT_RESET(0x6F) 시도")
             ok_reset = await self.fault_reset()
             if not ok_reset:
-                await self._emit_failed("PRECHECK", "FAULT_RESET 실패(인터락/점화/케이블/진공 상태 확인 필요)")
+                await self._emit_failed("PRECHECK", "FAULT_RESET 실패(인터락/점화/케이블/진공 상태 확인 필요)",
+                                        phase="prepare")
                 return False
 
-        # 2) (옵션) freq/duty 모두 숫자면 off_time_us를 계산해서 0x67로 전송
+        # ══════════════════════════════════════════════════════════════
+        # 2) 펄스 파라미터 (매뉴얼 품기28-EPPEP102-V08)
+        #    장비 파라미터는 Pulse Freq(kHz)와 Off Time(us) 둘뿐이다(p.29 / p.60).
+        #    듀티(%)는 장비에 없는 개념이므로 레거시 레시피 호환용으로만 환산한다.
+        # ══════════════════════════════════════════════════════════════
         want_off_raw: Optional[int] = None   # ✅ OFF_TIME 검증 기준값 (미전송 시 None)
-        if not _is_keep(freq) and freq is not None:
-            f_khz = float(freq)
-            ok_f = await self.set_pulse_freq_khz(f_khz)  # 0x66
 
+        _freq_given = (freq is not None) and (not _is_keep(freq))
+        _off_given = (off_time_us is not None) and (not _is_keep(off_time_us))
+
+        # ── 2-a) 레거시 duty → off_time 환산 (off_time_us 가 없고 freq 가 숫자일 때만) ──
+        if (not _off_given) and _freq_given and (duty is not None) and (not _is_keep(duty)):
+            _d = float(duty)
+            off_time_us = dcp_duty_to_off_time_us(float(freq), _d)
+            _off_given = True
+            await self._emit_status(
+                f"[호환] duty {_d:g}% @{float(freq):g}kHz → Off {float(off_time_us):.1f}us"
+            )
+
+        # ── 2-b) 전송 전 검증 (실패하면 장비에 아무것도 쓰지 않는다) ──
+        f_for_check: Optional[float] = None
+        if _freq_given:
+            _fv = float(freq)
+            if _fv != int(round(_fv)):
+                await self._emit_failed(
+                    "PULSE_PARAM",
+                    f"Pulse Freq {_fv}kHz는 정수가 아닙니다 — 매뉴얼 p.50: 0x66은 정수 kHz만 허용",
+                    phase="prepare",
+                )
+                return False
+            _fi = int(round(_fv))
+            if not (DCP_FREQ_MIN_KHZ <= _fi <= DCP_FREQ_MAX_KHZ):
+                await self._emit_failed(
+                    "PULSE_PARAM",
+                    f"Pulse Freq {_fi}kHz는 허용 범위 {DCP_FREQ_MIN_KHZ}~{DCP_FREQ_MAX_KHZ}kHz 밖"
+                    "(매뉴얼 p.12/p.50) — 레시피 수정 필요",
+                    phase="prepare",
+                )
+                return False
+            f_for_check = float(_fi)
+
+        if _off_given and not _is_dc_mode(off_time_us):
+            _ov = round(float(off_time_us), 1)
+            if f_for_check is None:
+                # freq 가 keep 인데 off 만 숫자 → 0xA6 으로 현재 주파수를 읽어 그 값으로 검증
+                _cur = await self.read_pulse_freq_khz()
+                if _cur is None:
+                    await self._emit_failed(
+                        "PULSE_PARAM",
+                        "Off Time 검증용 현재 주파수(0xA6) 읽기 실패 — Off Time 상한을 확인할 수 없음",
+                        phase="prepare",
+                    )
+                    return False
+                f_for_check = float(int(_cur))
+                await self._emit_status(
+                    f"[PARAM] freq=keep → 장비 현재 주파수 {f_for_check:g}kHz 기준으로 Off Time 검증"
+                )
+            _max_off = dcp_max_off_time_us(f_for_check)
+            if _ov < DCP_OFF_MIN_US:
+                await self._emit_failed(
+                    "PULSE_PARAM",
+                    f"Off Time {_ov:.1f}us는 최소 {DCP_OFF_MIN_US:.1f}us 미만"
+                    "(매뉴얼 p.12/13) — 레시피 수정 필요",
+                    phase="prepare",
+                )
+                return False
+            if _ov > _max_off:
+                await self._emit_failed(
+                    "PULSE_PARAM",
+                    f"Off Time {_ov:.1f}us는 {f_for_check:g}kHz 상한 {_max_off:.1f}us 초과"
+                    "(매뉴얼 그림3) — 레시피 수정 필요",
+                    phase="prepare",
+                )
+                return False
+            off_time_us = _ov
+
+        # ── 2-c) Pulse Sync: 이번 런에서 freq/off 를 쓰면 Int(0)인지 확인 (p.49/57) ──
+        if _freq_given or _off_given:
+            _sync_now = await self._read_raw(0xA5, "READ_PULSE_SYNC")
+            if _sync_now is None:
+                await self._emit_status("[WARN] Pulse Sync(0xA5) 읽기 실패 → 확인 생략")
+            else:
+                _cmd_s, _data_s, _ = self._unpack_rs232_payload(_sync_now)
+                _sv = (_data_s[-1] & 0xFF) if _data_s else None
+                if _sv is not None and _sv != 0:
+                    await self._emit_status(
+                        f"[PARAM] Pulse Sync=Ext({_sv}) 감지 → Int(0x65=0)로 전환 (매뉴얼 p.49)"
+                    )
+                    await self.set_pulse_sync("int")
+
+        # ── 2-d) 명시 sync 인자가 있으면 그대로 반영 ──
+        if sync is not None:
+            await self.set_pulse_sync(sync)
+
+        # ── 2-e) 주파수 전송 (0x66) ──
+        if _freq_given:
+            ok_f = await self.set_pulse_freq_khz(float(f_for_check))
             if not ok_f:
-                await self._emit_status("PULSE_FREQ 설정 실패 → OUTPUT_ON 시퀀스 중단")
+                await self._emit_failed("PULSE_FREQ", "0x66 설정 실패 → OUTPUT_ON 시퀀스 중단",
+                                        phase="prepare")
                 return False
 
-            if not _is_keep(duty) and duty is not None:
-                d_pct = float(duty)
-                # 주기[us] = 1,000 / f[kHz]
-                period_us = 1000.0 / max(1e-6, f_khz)
-                # off_time_us = period * (1 - duty)
-                off_time_us = max(0.0, period_us * (1.0 - d_pct / 100.0))
-
-                if off_time_us > 10.0:
-                    await self._emit_status(
-                        f"요청 듀티 {d_pct:.1f}% @ {f_khz:.0f}kHz 불가 → "
-                        f"Off가 {off_time_us:.1f}us로 10.0us 상한 초과 → 장비가 10.0us로 클램프"
-                    )
-
-                # ✅ [EL-028] Off Time은 주파수 종속 파라미터(20kHz→최대10.0us, 50kHz→8.0us).
-                #    주파수 변경 직후에는 장비 내부 재계산이 끝나지 않아 0x67이 ACK만 되고
-                #    적용되지 않는 현상 실측(8/25 21:10 런: freq 적용 O, off 미적용).
-                #    → 주파수 반영이 끝날 시간을 준 뒤 Off Time을 보낸다.
+        # ── 2-f) Off Time 전송 (0x67) ──
+        if _off_given:
+            # [EL-028] 주파수 변경 직후에는 장비 내부 재계산이 끝나지 않아 0x67이 ACK만 되고
+            #          적용되지 않는 현상 실측(8/25 21:10 런). 주파수를 바꿨다면 잠시 기다린다.
+            if _freq_given:
                 _settle_s = float(self._cfg_int("DCP_FREQ_SETTLE_MS", 500)) / 1000.0
                 if _settle_s > 0:
                     await asyncio.sleep(_settle_s)
 
-                # 장비 스펙: DC=9, 1.0~10.0us → 10~100 (x10 스케일)
-                if d_pct >= 100.0 or off_time_us < 1.0:
-                    ok_dc = await self.set_off_time_dc()         # 0x67, DC=9
-                    if not ok_dc:
-                        await self._emit_status("OFF_TIME(DC) 설정 실패 → OUTPUT_ON 시퀀스 중단")
-                        return False
-                    want_off_raw = 9
-                else:
-                    ok_off = await self.set_off_time_us(off_time_us)  # 0x67
-                    if not ok_off:
-                        await self._emit_status("OFF_TIME 설정 실패 → OUTPUT_ON 시퀀스 중단")
-                        return False
-                    # set_off_time_us와 동일한 환산/클램프 (검증 기준값)
-                    want_off_raw = min(100, max(10, int(round(off_time_us * 10.0))))
-            # duty가 keep/None이면 주파수만 적용(Off Time 유지)
+            if _is_dc_mode(off_time_us):
+                ok_off = await self.set_off_time_dc()          # 0x67, DC=9 (p.50)
+                want_off_raw = DCP_OFF_RAW_DC
+            else:
+                ok_off = await self.set_off_time_us(float(off_time_us))   # 0x67 (p.50)
+                want_off_raw = dcp_off_time_to_raw(float(off_time_us))
+            if not ok_off:
+                await self._emit_failed("OFF_TIME", "0x67 설정 실패 → OUTPUT_ON 시퀀스 중단",
+                                        phase="prepare")
+                return False
 
-        # duty만 숫자인 경우(주파수 미지정)는 off_time_us 계산 불가 → 유지
-        # 필요하면 별도 API(set_off_time_us)로 직접 지정하세요.
-
-        # ✅ [EL: 2026-08-25 런3] 쓰기 ACK 후 미적용(40kHz 잔존) 실측 → read-back 검증
-        if not _is_keep(freq) and freq is not None:
-            want_khz = int(round(float(freq)))
+        # ✅ [EL: 2026-08-25 런3] 쓰기 ACK 후 미적용(40kHz 잔존) 실측 → read-back 검증 (p.57 0xA6)
+        if _freq_given:
+            want_khz = int(round(float(f_for_check)))
             applied = False
             for attempt in (1, 2):
                 # ✅ [FIX] read_actual_pulse_params()는 A6+A7을 함께 읽어 A7만 실패해도
@@ -594,20 +761,21 @@ class AsyncDCPulse:
                         f"[VERIFY] PULSE_FREQ 미적용 감지 (요청 {want_khz}kHz ≠ 장비 {got_khz}kHz) → 0.5s 후 재기록"
                     )
                     await asyncio.sleep(0.5)
-                    if not await self.set_pulse_freq_khz(float(freq)):
+                    if not await self.set_pulse_freq_khz(float(want_khz)):
                         break
                     await asyncio.sleep(0.5)
             if not applied:
                 await self._emit_failed(
                     "PULSE_FREQ",
-                    f"쓰기 ACK 후에도 미적용 지속 (요청 {want_khz}kHz) — 장비 마스터/패널 상태 점검 필요"
+                    f"쓰기 ACK 후에도 미적용 지속 (요청 {want_khz}kHz) — 장비 마스터/패널 상태 점검 필요",
+                    phase="prepare",
                 )
                 return False
 
-        # ✅ [EL-028] OFF_TIME(duty) read-back 검증 — freq와 동일 패턴.
-        #    기존에는 검증이 freq에만 있어, duty가 미적용이어도 조용히 다른 듀티로 운전됐다.
+        # ✅ OFF_TIME read-back 검증 (p.57 0xA7) — freq 와 동일 패턴.
         if want_off_raw is not None:
             off_applied = False
+            got_raw: Optional[int] = None
             for attempt in (1, 2):
                 got_raw = await self.read_off_time_raw()
                 if got_raw is None:
@@ -623,30 +791,22 @@ class AsyncDCPulse:
                         f"(요청 raw={want_off_raw} ≠ 장비 raw={got_raw}) → 0.5s 후 재기록"
                     )
                     await asyncio.sleep(0.5)
-                    _ok_rw = (await self.set_off_time_dc()) if want_off_raw == 9 \
+                    _ok_rw = (await self.set_off_time_dc()) if want_off_raw == DCP_OFF_RAW_DC \
                         else (await self.set_off_time_us(want_off_raw / 10.0))
                     if not _ok_rw:
                         break
                     await asyncio.sleep(0.5)
+
             if not off_applied:
-                _w = "DC" if want_off_raw == 9 else f"{want_off_raw / 10.0:.1f}us"
-                _g = "DC" if int(got_raw) == 9 else f"{int(got_raw) / 10.0:.1f}us"
-                _duty_real = None
-                if not _is_keep(freq) and freq is not None and int(got_raw) != 9:
-                    _p = 1000.0 / max(1e-6, float(freq))
-                    _duty_real = (_p - int(got_raw) / 10.0) / _p * 100.0
-                await self._emit_failed(
-                    "OFF_TIME",
-                    f"쓰기 ACK 후에도 미적용 지속 (요청 {_w} ≠ 장비 {_g}"
-                    + (f", 실제 듀티 {_duty_real:.0f}%" if _duty_real is not None else "")
-                    + ") — 주파수별 Off Time 상한/Key Lock/마스터 상태 점검 필요"
-                )
+                # ── 재기록 후에도 불일치 → 진단 수행 후 실패 ──
+                await self._emit_failed_off_time(want_off_raw, got_raw, f_for_check)
                 return False
 
         # 3) 제어 모드 = Power
         ok_reg = await self.set_regulation_power()
         if not ok_reg:
-            await self._emit_status("REG_POWER 실패 → OUTPUT_ON 시퀀스 중단")
+            await self._emit_failed("REG_POWER", "제어 모드=Power 설정 실패 → OUTPUT_ON 시퀀스 중단",
+                                    phase="prepare")
             return False
 
         # 4) 출력 Setpoint(Power) 설정
@@ -654,8 +814,15 @@ class AsyncDCPulse:
         if not ok:
             # 여기서는 output_off() 를 직접 호출하지 않고,
             # 실패 이벤트 + False 리턴만으로 상위 종료 시퀀스에 맡긴다.
-            await self._emit_status("REF_POWER 실패 → OUTPUT_ON 생략")
+            await self._emit_failed("REF_POWER", f"출력 Setpoint({power_w:g}W) 설정 실패 → OUTPUT_ON 생략",
+                                    phase="prepare")
             return False
+
+        # ✅ [D] 런 기준선: OUTPUT_ON 직전에 Hard/Soft Arc Count Reset (매뉴얼 p.53, 0x8C=2)
+        #    ACK 실패는 경고만 — baseline 차감으로도 런 누적을 구할 수 있다.
+        with contextlib.suppress(Exception):
+            if not await self.reset_arc_counters_device():
+                await self._emit_status("[WARN] Arc Count Reset(0x8C=2) ACK 실패 → baseline 차감으로 대체")
 
         # 5) 출력 ON (성공시에만)
         ok2 = await self.output_on()
@@ -675,10 +842,99 @@ class AsyncDCPulse:
                 "OUTPUT_ON",
                 "ACK 수신했지만 HV Off 상태 — 장비가 ON을 무시함 "
                 f"(fault={('0x%04X' % f2) if f2 is not None else '조회실패'}, "
-                f"master ONOFF/REFER/MODE={_hx(m_on)}/{_hx(m_ref)}/{_hx(m_md)})"
+                f"master ONOFF/REFER/MODE={_hx(m_on)}/{_hx(m_ref)}/{_hx(m_md)})",
+                phase="prepare",
             )
             return False
+
+        # ✅ [D] HV-On 확인 직후 0x96/0x99 를 1회 읽어 런 baseline 저장 (매뉴얼 p.55).
+        #    p.31: SAT/ANT 는 재기동 시 0부터 누적되므로, 리셋이 듣지 않은 장비에서도
+        #    baseline 차감으로 "이번 런" 값을 얻을 수 있다.
+        self._arc_baseline_soft = 0
+        self._arc_baseline_hard = 0
+        with contextlib.suppress(Exception):
+            _bs = await self.read_soft_arc_total()
+            _bh = await self.read_hard_arc_total()
+            self._arc_baseline_soft = int(_bs or 0)
+            self._arc_baseline_hard = int(_bh or 0)
+        self._arc_run_start_ts = time.monotonic()
+        self._arc_rate_hit_n = 0
+        self._arc_alert_sent = False
+        await self._emit_status(
+            f"[arc] baseline SAT={self._arc_baseline_soft} ANT={self._arc_baseline_hard}"
+        )
         return True
+
+    async def _emit_failed_off_time(self, want_raw: int, got_raw: Optional[int],
+                                    f_khz: Optional[float]) -> None:
+        """OFF_TIME 재기록 후에도 불일치 → 진단을 수행하고 실패 사유를 구성한다.
+
+        (a) 0xA5(Pulse Sync), 0x91(Operation 정보), 0xBB/0xBC/0xBD(마스터 상태)를 읽고
+        (b) 요청값 −0.1us(최소 1.0)를 1회 써 본 뒤 0xA7 재확인.
+            → 진단 결과는 로그/메시지에만 반영하고 성공으로 처리하지 않는다.
+        매뉴얼: p.49/57(0x65/0xA5), p.54(0x91), p.59(0xBB/0xBC/0xBD), p.57(0xA7)
+        """
+        def _fmt(raw: Optional[int]) -> str:
+            if raw is None:
+                return "조회실패"
+            return "DC" if int(raw) == DCP_OFF_RAW_DC else f"{int(raw) / 10.0:.1f}us"
+
+        _want_txt = _fmt(want_raw)
+        _got_txt = _fmt(got_raw)
+
+        # 요청/실제 듀티(표시용)
+        _want_duty = _got_duty = None
+        if f_khz and want_raw != DCP_OFF_RAW_DC:
+            _want_duty = dcp_off_time_to_duty_pct(f_khz, want_raw / 10.0)
+        if f_khz and got_raw is not None and int(got_raw) != DCP_OFF_RAW_DC:
+            _got_duty = dcp_off_time_to_duty_pct(f_khz, int(got_raw) / 10.0)
+
+        # (a) 상태 수집
+        _sync_txt = "조회실패"
+        with contextlib.suppress(Exception):
+            _r = await self._read_raw(0xA5, "READ_PULSE_SYNC")
+            if _r:
+                _c, _d, _ = self._unpack_rs232_payload(_r)
+                if _d:
+                    _sync_txt = "Int" if (_d[-1] & 0xFF) == 0 else f"Ext({_d[-1] & 0xFF})"
+        _oper_txt = "-"
+        with contextlib.suppress(Exception):
+            _r = await self._read_raw(0x91, "READ_OPERATION")
+            _oper_txt = _r.hex(" ") if _r else "-"
+
+        def _hx(b):
+            return b.hex() if b else "-"
+        m_on = m_ref = m_md = None
+        with contextlib.suppress(Exception):
+            m_on = await self._read_raw(0xBB, "READ_MASTER_ONOFF")
+            m_ref = await self._read_raw(0xBC, "READ_MASTER_REFER")
+            m_md = await self._read_raw(0xBD, "READ_MASTER_MODE")
+
+        # (b) 요청값 −0.1us 로 1회 시험 기록 (성공으로 처리하지 않음)
+        _probe_txt = "생략"
+        if want_raw != DCP_OFF_RAW_DC:
+            _probe_raw = max(int(DCP_OFF_MIN_US * 10), int(want_raw) - 1)
+            if _probe_raw != int(want_raw):
+                with contextlib.suppress(Exception):
+                    await self.set_off_time_us(_probe_raw / 10.0)
+                    await asyncio.sleep(0.3)
+                    _back = await self.read_off_time_raw()
+                    _probe_txt = f"{_probe_raw / 10.0:.1f}us 요청→장비 {_fmt(_back)}"
+
+        _max_txt = f"{dcp_max_off_time_us(f_khz):.1f}us" if f_khz else "?"
+        await self._emit_failed(
+            "OFF_TIME",
+            f"DC Pulse Off Time 미적용: 요청 {_want_txt}"
+            + (f"({f_khz:g}kHz" if f_khz else "(")
+            + (f", 듀티 {_want_duty:g}%)" if _want_duty is not None else ")")
+            + f" → 장비 {_got_txt} 유지"
+            + (f"(듀티 {_got_duty:g}%)" if _got_duty is not None else "")
+            + f". 매뉴얼 상한 {_max_txt} 이내인데 거부됨. "
+            + f"진단: {_probe_txt} / PulseSync={_sync_txt} / "
+            + f"마스터 ONOFF={_hx(m_on)} REF={_hx(m_ref)} MODE={_hx(m_md)} / 0x91={_oper_txt}"
+            + " — 패널 Off Time·Key Lock 확인 필요",
+            phase="prepare",
+        )
 
     # ====== 고수준 제어 ======
     async def set_master_host_all(self) -> bool:
@@ -767,20 +1023,42 @@ class AsyncDCPulse:
         return await self._write_cmd_data(0x65, val, 2, label=f"PULSE_SYNC({mode.upper()})")
 
     async def set_pulse_freq_khz(self, freq_khz: float) -> bool:
-        # 0x66: 20~150 (kHz)
+        """0x66 Pulse Freq (kHz, 20~150 — 매뉴얼 p.50).
+        ⚠ 범위 검증은 prepare_and_start 의 전송 전 검증에서 수행한다(여기서 클램프하지 않음).
+        """
         val = int(round(freq_khz))
-        val = min(150, max(20, val))
         return await self._write_cmd_data(0x66, val, 2, label=f"PULSE_FREQ({val}kHz)")
 
     async def set_off_time_us(self, off_time_us: float) -> bool:
-        # 0x67: DC=9, 1.0~10.0us → 10~100 (x10 스케일)
-        x10 = int(round(off_time_us * 10.0))
-        x10 = min(100, max(10, x10))
-        applied_us = x10 / 10.0
-        return await self._write_cmd_data(0x67, x10, 2, label=f"OFF_TIME({applied_us:.1f}us)")
+        """0x67 Off Time (DC=9, 1.0~10.0us → 10~100 x10 스케일 — 매뉴얼 p.50).
+        ⚠ 상한은 주파수 종속(p.13 그림3)이며 prepare_and_start 에서 이미 검증한다.
+           여기서 클램프하면 "요청과 다른 값이 조용히 적용"되므로 클램프하지 않는다.
+        """
+        x10 = dcp_off_time_to_raw(off_time_us)
+        return await self._write_cmd_data(0x67, x10, 2, label=f"OFF_TIME({x10 / 10.0:.1f}us)")
 
     async def set_off_time_dc(self) -> bool:
-        return await self._write_cmd_data(0x67, 9, 2, label="OFF_TIME(DC)")
+        return await self._write_cmd_data(0x67, DCP_OFF_RAW_DC, 2, label="OFF_TIME(DC)")
+
+    async def reset_arc_counters_device(self) -> bool:
+        """0x8C 데이터 2 = Hard/Soft Arc Count Reset (매뉴얼 p.53).
+        런 기준선을 0 으로 맞추기 위해 OUTPUT_ON 직전에 1회 호출한다.
+        """
+        return await self._write_cmd_data(0x8C, 2, 2, label="ARC_COUNT_RESET")
+
+    async def read_soft_arc_per_sec(self) -> Optional[int]:
+        """0xAE: Soft Arc per Second (매뉴얼 p.57/58)."""
+        resp = await self._read_raw(0xAE, "READ_ARC_SOFT_RATE")
+        if not resp or len(resp) < 2 or (len(resp) == 1 and resp[0] == 0x04):
+            return None
+        return (resp[-2] << 8) | resp[-1]
+
+    async def read_hard_arc_per_sec(self) -> Optional[int]:
+        """0xAF: Hard Arc per Second (매뉴얼 p.57/58)."""
+        resp = await self._read_raw(0xAF, "READ_ARC_HARD_RATE")
+        if not resp or len(resp) < 2 or (len(resp) == 1 and resp[0] == 0x04):
+            return None
+        return (resp[-2] << 8) | resp[-1]
 
     # ====== 선택: 기타 설정(원 코드 호환) ======
     async def set_arc_params(self, *, detection_us: float, pause_us: float,
@@ -908,10 +1186,14 @@ class AsyncDCPulse:
         return {"freq_khz": freq_khz, "off_time_us": off_time_us, "duty_pct": duty_pct}
     
     def reset_arc_counts(self) -> None:
-        """공정 시작 시 호출 — Arc 누적 카운터 초기화."""
+        """공정 시작 시 호출 — Arc 누적 카운터/기준선 초기화."""
         self._soft_arc_total = 0
         self._hard_arc_total = 0
         self._arc_alert_sent: bool = False
+        self._arc_baseline_soft: int = 0
+        self._arc_baseline_hard: int = 0
+        self._arc_rate_hit_n: int = 0
+        self._arc_run_start_ts: float = 0.0
 
     @property
     def arc_counts(self) -> tuple[int, int]:
@@ -1894,37 +2176,89 @@ class AsyncDCPulse:
                                     except Exception:
                                         pass
 
-                        # ─── ARC 읽기 (PIV와 동일 주기, 장비 누적값 직접 읽기) ───
-                        # PIV 블록이 실행된 직후 (now - _piv_last 가 방금 갱신됨)에 함께 읽는다.
-                        # _piv_last가 방금 갱신됐으면 ARC도 읽도록 동일 조건 사용
-                        if now - _piv_last >= self._poll_period_s - 0.05:
+                            # ─── ARC 읽기 (PIV 읽기 직후, 같은 주기로 항상 수행) ───
+                            #  [BUGFIX] 이전 구현은 `now - _piv_last >= period - 0.05` 였는데
+                            #  _piv_last 가 이 블록 진입 시 now 이후로 갱신되므로 거의 항상 거짓 →
+                            #  런 전체에서 0~2회만 읽혔다(2026-09-17 15:46 런 실측 2회).
+                            #  → PIV 블록 내부로 옮겨 매 주기 반드시 읽는다.
                             soft: Optional[int] = None
                             hard: Optional[int] = None
+                            s_rate: Optional[int] = None
+                            h_rate: Optional[int] = None
                             with contextlib.suppress(Exception):
-                                soft = await self.read_soft_arc_total()
+                                soft = await self.read_soft_arc_total()     # 0x96 SAT (p.55)
                             with contextlib.suppress(Exception):
-                                hard = await self.read_hard_arc_total()
+                                hard = await self.read_hard_arc_total()     # 0x99 ANT (p.55)
+                            with contextlib.suppress(Exception):
+                                s_rate = await self.read_soft_arc_per_sec()  # 0xAE (p.57/58)
+                            with contextlib.suppress(Exception):
+                                h_rate = await self.read_hard_arc_per_sec()  # 0xAF (p.57/58)
+
                             if soft is not None or hard is not None:
-                                s = soft if soft is not None else self._soft_arc_total
-                                h = hard if hard is not None else self._hard_arc_total
-                                # 장비 누적값으로 갱신
-                                if soft is not None:
-                                    self._soft_arc_total = soft
-                                if hard is not None:
-                                    self._hard_arc_total = hard
+                                raw_s = soft if soft is not None else self._soft_arc_total
+                                raw_h = hard if hard is not None else self._hard_arc_total
+
+                                # 장비가 도중에 리셋되면 raw 가 baseline 보다 작아진다 → baseline 재설정
+                                if soft is not None and soft < int(getattr(self, "_arc_baseline_soft", 0)):
+                                    self._arc_baseline_soft = 0
+                                if hard is not None and hard < int(getattr(self, "_arc_baseline_hard", 0)):
+                                    self._arc_baseline_hard = 0
+
+                                run_s = max(0, int(raw_s) - int(getattr(self, "_arc_baseline_soft", 0)))
+                                run_h = max(0, int(raw_h) - int(getattr(self, "_arc_baseline_hard", 0)))
+                                self._soft_arc_total = run_s
+                                self._hard_arc_total = run_h
+
+                                _rate_sum = int(s_rate or 0) + int(h_rate or 0)
                                 self._ev_nowait(DCPEvent(
                                     kind="status",
-                                    message=f"[arc] Soft(total)={s} Hard(total)={h}"
+                                    message=(
+                                        f"[arc] run soft={run_s} hard={run_h} | "
+                                        f"rate soft/s={s_rate if s_rate is not None else '-'} "
+                                        f"hard/s={h_rate if h_rate is not None else '-'} | "
+                                        f"raw SAT={raw_s} ANT={raw_h}"
+                                    ),
                                 ))
-                                # 임계값 도달 시 1회만 이벤트 emit
-                                thresh = int(getattr(self, "_arc_alert_thresh", 5))
-                                if (s + h) >= thresh and not getattr(self, "_arc_alert_sent", False):
+
+                                # ── 알림 정책 ──
+                                _rate_lim = self._cfg_float("DCP_ARC_ALERT_RATE_PER_S", 20.0)
+                                _rate_n = self._cfg_int("DCP_ARC_ALERT_RATE_N", 2)
+                                _run_lim = self._cfg_int("DCP_ARC_ALERT_RUN_TOTAL", 1000)
+
+                                if _rate_lim > 0 and _rate_sum >= _rate_lim:
+                                    self._arc_rate_hit_n = int(getattr(self, "_arc_rate_hit_n", 0)) + 1
+                                else:
+                                    self._arc_rate_hit_n = 0
+
+                                _by_rate = (_rate_n > 0 and self._arc_rate_hit_n >= _rate_n)
+                                _by_total = (_run_lim > 0 and (run_s + run_h) >= _run_lim)
+
+                                if (_by_rate or _by_total) and not getattr(self, "_arc_alert_sent", False):
                                     self._arc_alert_sent = True
+                                    _elapsed = max(0.0, time.monotonic()
+                                                   - float(getattr(self, "_arc_run_start_ts", 0.0) or time.monotonic()))
                                     self._ev_nowait(DCPEvent(
                                         kind="arc_threshold_reached",
-                                        message=f"Arc 누적 임계값 도달 (Soft={s}, Hard={h}, 합계={s+h})",
-                                        power=float(s),
-                                        voltage=float(h),
+                                        message=(
+                                            f"Arc 경고 (런 누적 Soft={run_s}, Hard={run_h}, "
+                                            f"합계={run_s + run_h}, 최근 {_rate_sum}/s)"
+                                        ),
+                                        power=float(run_s),
+                                        voltage=float(run_h),
+                                        data={
+                                            "run_soft": run_s,
+                                            "run_hard": run_h,
+                                            "rate": _rate_sum,
+                                            "rate_soft": s_rate,
+                                            "rate_hard": h_rate,
+                                            "raw_soft": int(raw_s),
+                                            "raw_hard": int(raw_h),
+                                            "elapsed_s": round(_elapsed, 1),
+                                            "by_rate": _by_rate,
+                                            "by_total": _by_total,
+                                            "rate_limit": _rate_lim,
+                                            "run_total_limit": _run_lim,
+                                        },
                                     ))
 
                     else:
@@ -1985,8 +2319,17 @@ class AsyncDCPulse:
     async def _emit_confirmed(self, label: str):
         await self._event_q.put(DCPEvent(kind="command_confirmed", cmd=label))
 
-    async def _emit_failed(self, label: str, why: str):
-        await self._event_q.put(DCPEvent(kind="command_failed", cmd=label, reason=why))
+    async def _emit_failed(self, label: str, why: str, *, phase: Optional[str] = None):
+        """실패 사유를 last_failure 에 보관하고 이벤트로도 올린다.
+
+        phase="prepare" 는 prepare_and_start 가 직접 False 를 리턴하는 경로를 뜻한다.
+        (runtime 이 이미 on_dc_pulse_failed 로 보고하므로 이벤트 펌프는 재보고하지 않는다)
+        """
+        self.last_failure = f"{label}: {why}"
+        await self._event_q.put(DCPEvent(
+            kind="command_failed", cmd=label, reason=why,
+            data={"phase": phase} if phase else None,
+        ))
 
     def _ev_nowait(self, ev: DCPEvent):
         try:

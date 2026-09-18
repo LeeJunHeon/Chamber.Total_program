@@ -3,6 +3,7 @@
 
 from PySide6.QtCore import QObject, Slot
 import asyncio
+import contextlib
 import json
 import ssl
 import urllib.request
@@ -288,15 +289,26 @@ class ChatNotifier(QObject):
         items = []
 
         # DC Pulse
+        # ⚠ EnerPulse EP5 장비 파라미터는 Freq(kHz)/Off Time(us) 뿐이고 듀티는 파생값이다
+        #    (매뉴얼 품기28-EPPEP102-V08 p.29/p.60)
         use_dcp = self._b(p, "use_dc_pulse")
         dcpw = self._num(p.get("dc_pulse_power"))
         dcfq = self._num(p.get("dc_pulse_freq"))
+        dcoff_raw = p.get("dc_pulse_off_time", p.get("dc_pulse_off_time_us"))
         dcdt = self._num(p.get("dc_pulse_duty", p.get("dc_pulse_duty_cycle")))
-        if use_dcp or (dcpw is not None or dcfq is not None or dcdt is not None):
+        if use_dcp or (dcpw is not None or dcfq is not None
+                       or dcoff_raw not in (None, "") or dcdt is not None):
             pw_txt = f"{int(dcpw)} W" if dcpw is not None else "—"
             fq_txt = f"{int(dcfq)} kHz" if dcfq is not None else "keep"
-            dt_txt = f"{int(dcdt)} %" if dcdt is not None else "keep"
-            items.append(f"DC Pulse {pw_txt} @ {fq_txt}, {dt_txt}")
+            if dcoff_raw in (None, ""):
+                off_txt = "Off keep"
+            elif isinstance(dcoff_raw, str) and dcoff_raw.strip().upper() == "DC":
+                off_txt = "Off DC"
+            else:
+                _ov = self._num(dcoff_raw)
+                off_txt = f"Off {float(_ov):.1f} µs" if _ov is not None else "Off keep"
+            dt_txt = f" (duty {float(dcdt):g}%)" if dcdt is not None else ""
+            items.append(f"DC Pulse {pw_txt} @ {fq_txt}, {off_txt}{dt_txt}")
 
         # RF Pulse
         use_rfp = self._b(p, "use_rf_pulse")
@@ -305,8 +317,9 @@ class ChatNotifier(QObject):
         rfdt = self._num(p.get("rf_pulse_duty", p.get("rf_pulse_duty_cycle")))
         if use_rfp or (rfpw is not None or rffq is not None or rfdt is not None):
             pw_txt = f"{int(rfpw)} W" if rfpw is not None else "—"
-            fq_txt = f"{int(rffq)} kHz" if rffq is not None else "keep"
-            dt_txt = f"{int(rfdt)} %" if rfdt is not None else "keep"
+            # CESAR 는 kHz 실수 허용(0.5kHz=500Hz) — int 절단 금지
+            fq_txt = f"{float(rffq):g} kHz" if rffq is not None else "keep"
+            dt_txt = f"duty {int(rfdt)}%" if rfdt is not None else "duty keep"
             items.append(f"RF Pulse {pw_txt} @ {fq_txt}, {dt_txt}")
 
         # DC(연속)
@@ -455,6 +468,13 @@ class ChatNotifier(QObject):
                     fields = {"공정 이름": name, "원인": preview}
                 else:
                     fields = {"공정 이름": name, "원인": "알 수 없음"}
+
+        # ✅ Arc (런 누적) — 두 값이 모두 있을 때만 표기
+        _sa = merged.get("soft_arc_count")
+        _ha = merged.get("hard_arc_count")
+        if _sa is not None and _ha is not None:
+            with contextlib.suppress(Exception):
+                fields.setdefault("Arc (런 누적)", f"Soft {int(_sa)} / Hard {int(_ha)}")
 
         # ✅ chuck position / warnings (기존 유지)
         pos = merged.get("chuck_position")
