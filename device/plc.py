@@ -14,7 +14,11 @@ plc.py — Modbus-TCP PLC 컨트롤러 — 단일 클래스 통합판
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import inspect
+import socket
+import subprocess
+import threading
 import time
 import os
 from datetime import datetime
@@ -361,6 +365,21 @@ class AsyncPLC:
         # ✅ 재연결 백오프: 이 시각 전에는 소켓 connect 를 다시 시도하지 않는다.
         self._next_connect_attempt_at: float = 0.0
 
+        # ✅ 링크 정책 상태
+        #    PLC 가 수 초 무응답일 때 소켓을 닫고 재접속하면, 이 PLC 는 그 뒤 1.5~3분간
+        #    새 SYN 에 응답하지 않아 분 단위 단절이 된다. 그래서 타임아웃 1회로는
+        #    소켓을 닫지 않고 같은 소켓으로 재시도한다.
+        self._consec_timeouts: int = 0        # 연속 타임아웃(E402) 횟수
+        self._reconnect_count: int = 0        # 소켓 재생성 누적
+        self._connected_since: float = 0.0    # 현재 소켓이 연결된 시각(monotonic)
+        self._last_success_ts: float = 0.0    # 마지막 성공 I/O 시각
+        self._connect_fail_streak: int = 0    # 연속 접속 실패 횟수
+        self._disconnected_at: float = 0.0    # 소켓이 없어진 시각
+        self._last_connect_diag: str = ""     # 마지막 진단 분류
+        self._last_diag_ts: float = 0.0       # 마지막 진단 시각
+        self._diag_running: bool = False      # 진단 스레드 중복 실행 방지
+        self._sock_lock = threading.Lock()    # _connect_sync/_close_sync 동시 실행 방지
+
         self._last_io_ts = 0.0
         self._hb_task: Optional[asyncio.Task] = None
         self._closed = False
@@ -524,7 +543,7 @@ class AsyncPLC:
             self._hb_task = asyncio.create_task(self._heartbeat_loop(), name="PLCHeartbeat")
 
         async with self._io_lock("connect"):
-            await asyncio.to_thread(self._connect_sync)
+            await self._locked_thread(self._connect_sync, full=True)
 
         # ✅ 재연결 시 계획을 즉시 되돌리지는 않는다(강등↔승격 왕복 방지).
         #    복구는 _maybe_promote_coil_plan 의 "연속 성공" 규칙으로만 한다.
@@ -546,7 +565,7 @@ class AsyncPLC:
             self._hb_task = None
         # 🔒 모든 I/O와 동기화하여 안전 종료
         async with self._io_lock("close"):
-            await asyncio.to_thread(self._close_sync)
+            await self._locked_thread(self._close_sync)
         self.log("TCP 연결 종료")
 
     def is_connected(self) -> bool:
@@ -592,21 +611,90 @@ class AsyncPLC:
         except Exception:
             pass
 
+    def _new_client(self) -> "ModbusTcpClient":
+        """pymodbus 클라이언트 생성 지점을 한 곳으로 모은다.
+
+        ⚠ retries=0 이 핵심이다. pymodbus 기본 retries=3 이면 무응답 요청 1회가
+          timeout x4 로 늘어나 우리 타임아웃 정책과 어긋난다(재시도는 우리만 한다).
+          3.6.x 는 **kwargs 로 받고 3.11.x 는 명시 인자라 둘 다 통과한다.
+        """
+        try:
+            return ModbusTcpClient(self.cfg.ip, port=self.cfg.port,
+                                   timeout=self.cfg.timeout_s, retries=0)
+        except TypeError:
+            # retries 를 모르는 버전 방어
+            return ModbusTcpClient(self.cfg.ip, port=self.cfg.port, timeout=self.cfg.timeout_s)
+
     def _detect_uid_kw(self, method) -> Optional[str]:
+        """유닛 ID 키워드 탐지. pymodbus 3.6=slave, 3.11=device_id."""
         try:
             params = inspect.signature(method).parameters
-            if "slave" in params:
-                return "slave"
-            if "unit" in params:
-                return "unit"
+            for k in ("slave", "unit", "device_id"):
+                if k in params:
+                    return k
         except Exception:
             pass
         return None
 
-    def _uid_kwargs(self) -> dict:
+    def _uid_kwargs(self, method=None) -> dict:
+        """유닛 ID kwargs. method 를 주면 그 메서드의 signature 로 다시 확인한다
+        (버전에 따라 메서드마다 키워드가 다를 수 있다)."""
+        if method is not None:
+            try:
+                kw = self._detect_uid_kw(method)
+                if kw:
+                    return {kw: self.cfg.unit}
+                # signature 에 없고 **kwargs 만 있으면 기존 탐지값을 쓴다
+                params = inspect.signature(method).parameters
+                if not any(pp.kind == inspect.Parameter.VAR_KEYWORD for pp in params.values()):
+                    return {}
+            except Exception:
+                pass
         if self._uid_kw:
             return {self._uid_kw: self.cfg.unit}
         return {}
+
+    def _note_io_success(self) -> None:
+        """원시 연산 성공 시: 연속 타임아웃 리셋 + pymodbus 내부 카운터 원복."""
+        self._consec_timeouts = 0
+        self._last_success_ts = time.monotonic()
+        # pymodbus 동기 클라이언트는 성공해도 count_until_disconnect 를 되돌리지 않아
+        # 누적되면 로그가 "CLOSING CONNECTION" 으로 바뀐다(소켓을 닫진 않는다).
+        with contextlib.suppress(Exception):
+            tr = getattr(self._client, "transaction", None)
+            if tr is not None:
+                mx = getattr(tr, "max_until_disconnect", None)
+                if mx is not None:
+                    tr.count_until_disconnect = mx
+
+    def _drain_socket(self) -> int:
+        """늦게 도착한 응답/부분 프레임 찌꺼기를 버린다. 최대 8회 / 50 ms.
+
+        pymodbus 는 transaction id 로 늦은 '완성 프레임'은 걸러내지만
+        부분 프레임은 걸러내지 못해 다음 응답과 섞인다.
+        """
+        n = 0
+        try:
+            cli = self._client
+            sock = getattr(cli, "socket", None) if cli is not None else None
+            if sock is None:
+                return 0
+            deadline = time.monotonic() + 0.05
+            with contextlib.suppress(Exception):
+                sock.setblocking(False)
+            for _ in range(8):
+                if time.monotonic() >= deadline:
+                    break
+                try:
+                    b = sock.recv(4096)
+                except Exception:
+                    break
+                if not b:
+                    break
+                n += len(b)
+        except Exception:
+            pass
+        return n
 
     def _ensure_ok(self, resp, *, op: str, addr: int | None = None):
         if resp is None:
@@ -652,89 +740,238 @@ class AsyncPLC:
         # ✅ 여기서는 heartbeat I/O 하지 않음 (중복 제거)
         self._last_io_ts = time.monotonic()
 
-    def _connect_sync(self) -> None:
-        if self._client is None:
-            self._client = ModbusTcpClient(self.cfg.ip, port=self.cfg.port, timeout=self.cfg.timeout_s)
+    def _connect_sync(self, *, full: bool = True) -> None:
+        """소켓을 보장한다.
 
-        if not self._is_connected():
-            # ✅ 재연결 백오프: 끊긴 동안 매 명령이 7.5초를 통째로 태우지 않게 한다.
-            #    (소켓이 살아 있으면 위 _is_connected() 에서 이미 반환되므로
-            #     "읽기만 늦는" 경우에는 절대 개입하지 않는다)
-            _bo = self._reconnect_backoff_s()
-            if _bo > 0.0:
-                _now = time.monotonic()
-                if _now < float(getattr(self, "_next_connect_attempt_at", 0.0) or 0.0):
-                    raise PLCError("E401", "PLC 재연결 대기 중 (backoff)", op="connect")
-                # 시도 '전'에 먼저 걸어 동시 진입을 막고,
-                # 실패 후에도 다시 걸어 "시도 종료 시점부터" _bo 초를 쉬게 한다.
-                # (시도 자체가 timeout x retry 로 _bo 보다 길 수 있기 때문)
-                self._next_connect_attempt_at = _now + _bo
+        full=True  : 백그라운드/명시적 경로 — connect_retry+1 회 시도(기존 동작)
+        full=False : 공정/명령 앞단 — PLC_FG_CONNECT_ATTEMPTS(기본 1)회만 시도
+                     (끊긴 상태에서 로봇 명령이 7.5초를 통째로 떠안지 않게 한다)
+        """
+        with self._sock_lock:
+            if self._client is None:
+                self._client = self._new_client()
 
-            ok = False
-            last_exc: Optional[Exception] = None
-
-            for _ in range(int(getattr(self.cfg, "connect_retry", 0)) + 1):
-                try:
-                    ok = bool(self._client.connect())
-                except Exception as e:
-                    last_exc = e
-                    ok = False
-
-                if ok:
-                    break
-
-                # 실패 → close + client 재생성
-                try:
-                    self._client.close()
-                except Exception:
-                    pass
-                self._client = None
-                self._uid_kw = None
-
-                self._client = ModbusTcpClient(self.cfg.ip, port=self.cfg.port, timeout=self.cfg.timeout_s)
-                time.sleep(max(0.0, float(getattr(self.cfg, "connect_retry_delay_s", 0.0))))
-
-            if not ok:
-                # 최종 실패 → 상태 정리 후 E401
-                try:
-                    if self._client is not None:
-                        self._client.close()
-                except Exception:
-                    pass
-                self._client = None
-                self._uid_kw = None
-
-                # ✅ 실패 확정 → 지금부터 _bo 초 동안은 소켓을 건드리지 않는다
+            if not self._is_connected():
+                # ✅ 재연결 백오프: 끊긴 동안 매 명령이 접속 시도를 반복하지 않게 한다.
+                #    (소켓이 살아 있으면 위 _is_connected() 에서 이미 반환되므로
+                #     "읽기만 늦는" 경우에는 절대 개입하지 않는다)
+                _bo = self._reconnect_backoff_s()
                 if _bo > 0.0:
-                    self._next_connect_attempt_at = time.monotonic() + _bo
+                    _now = time.monotonic()
+                    if _now < float(getattr(self, "_next_connect_attempt_at", 0.0) or 0.0):
+                        raise PLCError("E401", "PLC 재연결 대기 중 (backoff)", op="connect")
+                    # 시도 '전'에 먼저 걸어 동시 진입을 막고,
+                    # 실패 후에도 다시 걸어 "시도 종료 시점부터" _bo 초를 쉬게 한다.
+                    self._next_connect_attempt_at = _now + _bo
 
-                if last_exc is not None:
-                    raise PLCError("E401", f"Modbus TCP 연결 실패 ({self.cfg.ip}:{self.cfg.port}) - {last_exc!r}", op="connect")
-                raise PLCError("E401", f"Modbus TCP 연결 실패 ({self.cfg.ip}:{self.cfg.port})", op="connect")
+                if full:
+                    attempts = int(getattr(self.cfg, "connect_retry", 0)) + 1
+                else:
+                    try:
+                        attempts = max(1, int(getattr(cfgc, "PLC_FG_CONNECT_ATTEMPTS", 1)))
+                    except Exception:
+                        attempts = 1
 
-            # ✅ 연결 성공 → 백오프 즉시 해제
-            self._next_connect_attempt_at = 0.0
+                ok = False
+                last_exc: Optional[Exception] = None
+                delay = max(0.0, float(getattr(self.cfg, "connect_retry_delay_s", 0.0)))
 
-            # 성공 시 keepalive
-            try:
-                import socket
-                if getattr(self._client, "socket", None):
-                    self._client.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
-            except Exception:
-                pass
+                for i in range(attempts):
+                    try:
+                        ok = bool(self._client.connect())
+                    except Exception as e:
+                        last_exc = e
+                        ok = False
 
-            self._last_io_ts = time.monotonic()
+                    if ok:
+                        break
 
-        if self._uid_kw is None and self._client is not None:
-            self._uid_kw = self._detect_uid_kw(self._client.read_coils)
+                    # 실패 → close + client 재생성
+                    try:
+                        self._client.close()
+                    except Exception:
+                        pass
+                    self._client = None
+                    self._uid_kw = None
+                    self._client = self._new_client()
+
+                    # ✅ 시도 '사이'에만 쉰다(마지막 실패 뒤의 불필요한 sleep 제거)
+                    if delay > 0.0 and i < attempts - 1:
+                        time.sleep(delay)
+
+                if not ok:
+                    # 최종 실패 → 상태 정리 후 E401
+                    try:
+                        if self._client is not None:
+                            self._client.close()
+                    except Exception:
+                        pass
+                    self._client = None
+                    self._uid_kw = None
+                    if self._disconnected_at == 0.0:
+                        self._disconnected_at = time.monotonic()
+                    self._connect_fail_streak += 1
+
+                    # ✅ 실패 확정 → 지금부터 _bo 초 동안은 소켓을 건드리지 않는다
+                    if _bo > 0.0:
+                        self._next_connect_attempt_at = time.monotonic() + _bo
+
+                    # ✅ 원인 진단(별도 스레드, 최소 간격 제한)
+                    self._diag_connect_failure()
+
+                    _diag = self._last_connect_diag or "미확인"
+                    _suffix = f" (시도 {attempts}회, 분류={_diag})"
+                    if last_exc is not None:
+                        raise PLCError(
+                            "E401",
+                            f"Modbus TCP 연결 실패 ({self.cfg.ip}:{self.cfg.port}) - {last_exc!r}{_suffix}",
+                            op="connect",
+                        )
+                    raise PLCError(
+                        "E401",
+                        f"Modbus TCP 연결 실패 ({self.cfg.ip}:{self.cfg.port}){_suffix}",
+                        op="connect",
+                    )
+
+                # ✅ 연결 성공 → 백오프 즉시 해제
+                self._next_connect_attempt_at = 0.0
+                self._connected_since = time.monotonic()
+                if self._connect_fail_streak > 0:
+                    _down = (time.monotonic() - self._disconnected_at) if self._disconnected_at else 0.0
+                    with contextlib.suppress(Exception):
+                        self.log("WARN PLC 재접속 성공 (실패 %d회, 끊긴 뒤 %.0f초)",
+                                 self._connect_fail_streak, _down)
+                self._connect_fail_streak = 0
+                self._disconnected_at = 0.0
+
+                # 성공 시 keepalive
+                try:
+                    if getattr(self._client, "socket", None):
+                        self._client.socket.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+                except Exception:
+                    pass
+
+                self._last_io_ts = time.monotonic()
+
+            if self._uid_kw is None and self._client is not None:
+                self._uid_kw = self._detect_uid_kw(self._client.read_coils)
 
     def _close_sync(self):
-        if self._client is not None:
+        with self._sock_lock:
+            if self._client is not None:
+                try:
+                    self._client.close()
+                finally:
+                    self._client = None
+                    self._uid_kw = None
+                    self._connected_since = 0.0
+                    if self._disconnected_at == 0.0:
+                        self._disconnected_at = time.monotonic()
+
+    # ---------- 재접속 / 진단 ----------
+    def _log_reconnect(self, reason: str, op: str) -> None:
+        """소켓을 닫기 '직전' 에 항상 남긴다(왜 재생성했는지 추적용)."""
+        with contextlib.suppress(Exception):
+            self._reconnect_count += 1
+            held = (time.monotonic() - self._connected_since) if self._connected_since else 0.0
+            self.log("WARN PLC 소켓 재생성 #%d (사유=%s, op=%s, 이전 연결 유지 %.0f초)",
+                     self._reconnect_count, reason, op, held)
+
+    def _diag_connect_failure(self) -> None:
+        """접속 최종 실패의 원인을 별도 스레드에서 한 줄로 남긴다.
+        락과 무관하게 돌며 어떤 예외도 밖으로 내지 않는다."""
+        try:
+            if not bool(getattr(cfgc, "PLC_DIAG_PROBE", True)):
+                return
+            if self._diag_running:
+                return
             try:
-                self._client.close()
-            finally:
-                self._client = None
-                self._uid_kw = None
+                min_gap = float(getattr(cfgc, "PLC_DIAG_MIN_INTERVAL_S", 60.0))
+            except Exception:
+                min_gap = 60.0
+            now = time.monotonic()
+            if self._last_diag_ts and (now - self._last_diag_ts) < min_gap:
+                return
+            self._last_diag_ts = now
+            self._diag_running = True
+
+            host, port, tmo = self.cfg.ip, int(self.cfg.port), float(self.cfg.timeout_s)
+            moxa = str(getattr(cfgc, "MFC_TCP_HOST", "192.168.1.50"))
+
+            def _work():
+                try:
+                    cls = self._probe_connect(host, port, tmo)
+                    self._last_connect_diag = cls
+                    p_plc = self._probe_ping(host)
+                    p_moxa = self._probe_ping(moxa)
+                    with contextlib.suppress(Exception):
+                        self.log("WARN PLC 진단: connect=%s | ping PLC(%s)=%s | ping MOXA(%s)=%s",
+                                 cls, host, p_plc, moxa, p_moxa)
+                except Exception:
+                    pass
+                finally:
+                    self._diag_running = False
+
+            threading.Thread(target=_work, name="PLCConnectDiag", daemon=True).start()
+        except Exception:
+            self._diag_running = False
+
+    @staticmethod
+    def _probe_connect(host: str, port: int, timeout_s: float) -> str:
+        """raw socket 으로 접속해 errno 를 사람이 읽을 분류로 바꾼다."""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sk:
+                sk.settimeout(max(0.5, float(timeout_s)))
+                rc = sk.connect_ex((host, int(port)))
+            if rc == 0:
+                return "접속됨"
+            if rc in (110, 10060):          # ETIMEDOUT / WSAETIMEDOUT
+                return "SYN 무응답(타임아웃)"
+            if rc in (111, 10061):          # ECONNREFUSED / WSAECONNREFUSED
+                return "접속 거부(RST)"
+            if rc in (113, 101, 10065, 10051):   # EHOSTUNREACH/ENETUNREACH/WSA*
+                return "도달 불가"
+            return f"errno={rc}"
+        except socket.timeout:
+            return "SYN 무응답(타임아웃)"
+        except Exception as e:
+            return f"probe 실패: {type(e).__name__}"
+
+    @staticmethod
+    def _probe_ping(host: str) -> str:
+        """Windows 에서만 ping 1회. 그 외 OS 는 생략."""
+        if os.name != "nt":
+            return "생략"
+        try:
+            cf = getattr(subprocess, "CREATE_NO_WINDOW", 0)
+            r = subprocess.run(["ping", "-n", "1", "-w", "500", str(host)],
+                               capture_output=True, timeout=3, creationflags=cf)
+            return "응답" if r.returncode == 0 else "무응답"
+        except Exception as e:
+            return f"실패({type(e).__name__})"
+
+    async def _locked_thread(self, fn, *args, **kwargs):
+        """_io_lock 안에서 실행하는 to_thread 래퍼.
+
+        ⚠ 호출부(runtime)는 wait_for(plc.read_bit(...), 0.6) 로 취소를 건다.
+          그냥 to_thread 를 await 하면 취소 즉시 _io_lock 의 finally 가 락을 놓는데,
+          스레드는 아직 소켓을 쓰는 중이라 다른 태스크가 그 소켓을 close/reconnect 할 수 있다.
+          여기서는 취소되더라도 스레드가 끝날 때까지 기다린 뒤 취소를 전파한다
+          (= 락이 스레드 종료 전에 풀리지 않는다). 취소 자체는 그대로 전파된다.
+        """
+        fut = asyncio.ensure_future(asyncio.to_thread(fn, *args, **kwargs))
+        try:
+            return await asyncio.shield(fut)
+        except asyncio.CancelledError:
+            grace = (
+                float(self.cfg.timeout_s) * (int(getattr(self.cfg, "connect_retry", 0)) + 2)
+                + float(getattr(self.cfg, "connect_retry_delay_s", 0.0))
+                * (int(getattr(self.cfg, "connect_retry", 0)) + 1)
+                + 1.0
+            )
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(asyncio.shield(fut), timeout=grace)
+            raise
 
     async def _heartbeat_loop(self):
         try:
@@ -748,34 +985,31 @@ class AsyncPLC:
                     continue
 
                 # ✅ 1) PLC가 이미 바쁘면(락 점유 중) 워치독은 이번 tick 스킵
-                #    단, 락이 잡혀 있다 = 정상 I/O 진행 중이므로 "연결됨"으로 간주
+                #    ⚠ 단, "락이 잡혀 있다"가 곧 "연결됨"은 아니다.
+                #       재접속 시도 중에도 락은 잡혀 있으므로, 실제 연결일 때만 OK 로 본다.
                 if self._lock.locked():
-                    self._mark_conn_ok()
+                    if self.is_connected():
+                        self._mark_conn_ok()
                     continue
 
                 ping_ok = False
                 try:
-                    # ✅ 2) 워치독은 "가벼운 ping"만. (여기서는 재연결까지 하지 않음)
+                    # ✅ 2) 워치독은 "가벼운 ping"만.
+                    #    접속은 백그라운드라 full=True(3회), 이후 I/O 는 _run_io 정책을
+                    #    그대로 따른다 → 타임아웃 1회로는 소켓을 닫지 않는다.
                     async with self._io_lock("heartbeat", addr=0):
-                        await asyncio.to_thread(self._connect_sync)
+                        await self._locked_thread(self._connect_sync, full=True)
+                        await self._throttle_and_heartbeat()
                         if self._client is None:
                             ping_ok = False
                         else:
-                            await asyncio.to_thread(
-                                self._client.read_coils, 0, count=1, **self._uid_kwargs()
-                            )
+                            await self._run_io("heartbeat", 0, "read_coils", 0, count=1)
                             ping_ok = True
 
                 except Exception:
+                    # ✅ 3) 여기서는 소켓을 닫지 않는다.
+                    #    닫기는 _run_io 안에서만(E401/reset 또는 연속 타임아웃 임계) 일어난다.
                     ping_ok = False
-                    # ✅ 3) 실패 시 재연결을 락 안에서 길게 하지 말고,
-                    #    소켓 꼬임 방지를 위해 close만 조용히 시도(선택)
-                    try:
-                        if not self._lock.locked():
-                            async with self._io_lock("hb_close"):
-                                await asyncio.to_thread(self._close_sync)
-                    except Exception:
-                        pass
 
                 # ✅ 4) ping 결과로 연결 상태/알림 처리
                 if ping_ok:
@@ -852,24 +1086,103 @@ class AsyncPLC:
 
         return PLCError("E403", f"PLC 통신 오류: {type(e).__name__}: {e}", op=op, addr=addr, cause=e)
 
+    async def _run_io(self, op: str, addr, fn_name: str,
+                      *args, priority: str = "high", **kwargs):
+        """_io_lock 안에서 원시 연산 1회를 수행한다(재시도/재접속 정책 포함).
+
+        정책(이 PLC 는 소켓을 닫으면 1.5~3분간 새 SYN 에 응답하지 않는다):
+          - E403            : 그대로 raise (기존과 동일)
+          - E401 / reset    : 소켓이 죽었다 → close + connect(full=False) + 1회 재시도
+          - E402(무응답)
+              priority=low  : 재시도도 close 도 하지 않고 즉시 raise (코일 로거는 이 tick 만 포기)
+              연속 임계 도달 : close + connect + 1회 재시도
+              그 외          : drain 후 '같은 소켓' 으로 1회 재시도 (소켓 유지)
+        반환값은 pymodbus 응답. _ensure_ok 는 호출부에서 기존처럼 수행한다.
+        """
+        await self._locked_thread(self._connect_sync, full=False)
+        await self._throttle_and_heartbeat()
+
+        def _bound():
+            cli = self._client
+            if cli is None:
+                raise PLCError("E401", "PLC 연결 없음", op=op, addr=addr)
+            return getattr(cli, fn_name)
+
+        def _kw(m):
+            return {**kwargs, **self._uid_kwargs(m)}
+
+        def _check(resp):
+            """pymodbus 는 타임아웃을 '예외'가 아니라 ModbusIOException '객체'로
+            돌려주기도 한다. 그대로 두면 _ensure_ok 가 isError()==True 를 보고
+            E403(장비가 거절)으로 분류해 타임아웃 정책을 통째로 건너뛴다.
+            여기서 다시 raise 해 E402 경로를 타게 한다."""
+            if ModbusIOException and isinstance(resp, ModbusIOException):
+                raise resp
+            return resp
+
+        try:
+            m = _bound()
+            resp = _check(await self._locked_thread(m, *args, **_kw(m)))
+            self._note_io_success()
+            return resp
+        except Exception as e:
+            pe = self._to_plc_error(op, addr, e)
+
+            if pe.code == "E403":
+                raise pe from e
+
+            if pe.code == "E401" or self._is_reset_err(e):
+                # 소켓이 죽었거나 상대가 끊었다 — 재생성이 유일한 복구다
+                self._log_reconnect(f"{pe.code}/reset", op)
+                await self._locked_thread(self._close_sync)
+                await self._locked_thread(self._connect_sync, full=False)
+                await self._throttle_and_heartbeat()
+                m = _bound()
+                resp = _check(await self._locked_thread(m, *args, **_kw(m)))
+                self._note_io_success()
+                return resp
+
+            # ── E402: 응답 없음/프레임 오류 ──
+            self._consec_timeouts += 1
+
+            if priority == "low":
+                # 코일 로거 등 백그라운드는 절대 소켓을 닫지 않는다
+                raise pe from e
+
+            try:
+                close_after = max(1, int(getattr(cfgc, "PLC_TIMEOUT_CLOSE_AFTER", 3)))
+            except Exception:
+                close_after = 3
+
+            if self._consec_timeouts >= close_after:
+                self._log_reconnect(f"연속 타임아웃 {self._consec_timeouts}회", op)
+                await self._locked_thread(self._close_sync)
+                await self._locked_thread(self._connect_sync, full=False)
+                await self._throttle_and_heartbeat()
+                m = _bound()
+                resp = _check(await self._locked_thread(m, *args, **_kw(m)))
+                self._note_io_success()
+                return resp
+
+            # 임계 미만 — 소켓을 지키고 같은 소켓으로 1회만 재시도
+            await self._locked_thread(self._drain_socket)
+            await self._throttle_and_heartbeat()
+            try:
+                m = _bound()
+                resp = _check(await self._locked_thread(m, *args, **_kw(m)))
+            except Exception as e2:
+                pe2 = self._to_plc_error(op, addr, e2)
+                if pe2.code == "E402":
+                    self._consec_timeouts += 1
+                raise pe2 from e2
+            self._note_io_success()
+            return resp
+
     async def read_coil(self, addr: int) -> bool:
         op = "read_coil"
         async with self._io_lock(op, addr=addr):
             try:
-                await asyncio.to_thread(self._connect_sync)
-                await self._throttle_and_heartbeat()
-                try:
-                    resp = await asyncio.to_thread(self._client.read_coils, addr, count=1, **self._uid_kwargs())
-                except Exception as e:
-                    pe = self._to_plc_error(op, addr, e)
-                    if pe.code in ("E401", "E402") or self._is_reset_err(e):
-                        await asyncio.to_thread(self._close_sync)
-                        await asyncio.to_thread(self._connect_sync)
-                        await self._throttle_and_heartbeat()
-                        resp = await asyncio.to_thread(self._client.read_coils, addr, count=1, **self._uid_kwargs())
-                    else:
-                        raise pe from e
-
+                resp = await self._run_io(op, addr, "read_coils", addr, count=1)
                 self._ensure_ok(resp, op=op, addr=addr)
                 return bool(resp.bits[0])
 
@@ -880,22 +1193,8 @@ class AsyncPLC:
         op = "write_coil"
         async with self._io_lock(op, addr=addr):
             try:
-                await asyncio.to_thread(self._connect_sync)
-                await self._throttle_and_heartbeat()
-
-                try:
-                    resp = await asyncio.to_thread(self._client.write_coil, addr, bool(state), **self._uid_kwargs())
-                except Exception as e:
-                    pe = self._to_plc_error(op, addr, e)
-                    # ✅ reset 뿐 아니라 timeout/연결계열(E401/E402)도 1회 재연결 후 재시도
-                    if pe.code in ("E401", "E402") or self._is_reset_err(e):
-                        await asyncio.to_thread(self._close_sync)
-                        await asyncio.to_thread(self._connect_sync)
-                        await self._throttle_and_heartbeat()
-                        resp = await asyncio.to_thread(self._client.write_coil, addr, bool(state), **self._uid_kwargs())
-                    else:
-                        raise pe from e
-
+                # 같은 값의 재기록이므로 재시도는 안전하다(기존도 재접속 후 재시도했다)
+                resp = await self._run_io(op, addr, "write_coil", addr, bool(state))
                 self._ensure_ok(resp, op=op, addr=addr)
 
             except Exception as e:
@@ -905,20 +1204,7 @@ class AsyncPLC:
         op = "read_reg"
         async with self._io_lock(op, addr=addr):
             try:
-                await asyncio.to_thread(self._connect_sync)
-                await self._throttle_and_heartbeat()
-                try:
-                    resp = await asyncio.to_thread(self._client.read_holding_registers, addr, count=1, **self._uid_kwargs())
-                except Exception as e:
-                    pe = self._to_plc_error(op, addr, e)
-                    if pe.code in ("E401", "E402") or self._is_reset_err(e):
-                        await asyncio.to_thread(self._close_sync)
-                        await asyncio.to_thread(self._connect_sync)
-                        await self._throttle_and_heartbeat()
-                        resp = await asyncio.to_thread(self._client.read_holding_registers, addr, count=1, **self._uid_kwargs())
-                    else:
-                        raise pe from e
-
+                resp = await self._run_io(op, addr, "read_holding_registers", addr, count=1)
                 self._ensure_ok(resp, op=op, addr=addr)
                 return int(resp.registers[0])
 
@@ -929,33 +1215,19 @@ class AsyncPLC:
         op = "write_reg"
         async with self._io_lock(op, addr=addr):
             try:
-                await asyncio.to_thread(self._connect_sync)
-                await self._throttle_and_heartbeat()
-
-                try:
-                    resp = await asyncio.to_thread(self._client.write_register, addr, int(value), **self._uid_kwargs())
-                except Exception as e:
-                    pe = self._to_plc_error(op, addr, e)
-                    if pe.code in ("E401", "E402") or self._is_reset_err(e):
-                        await asyncio.to_thread(self._close_sync)
-                        await asyncio.to_thread(self._connect_sync)
-                        await self._throttle_and_heartbeat()
-                        resp = await asyncio.to_thread(self._client.write_register, addr, int(value), **self._uid_kwargs())
-                    else:
-                        raise pe from e
-
+                resp = await self._run_io(op, addr, "write_register", addr, int(value))
                 self._ensure_ok(resp, op=op, addr=addr)
 
             except Exception as e:
                 raise self._to_plc_error(op, addr, e) from e
-            
-    # ---------- 블록(배열) 읽기 ----------
+
     async def read_coils_block(self, start_addr: int, count: int, *, priority: str = "high") -> list[bool]:
         """
         FC1: 연속 코일을 한 번에 읽고 resp.bits[] 배열로 받는다.
         (코일을 하나씩 read_coil 반복하는 방식이 아니라, PLC가 배열로 응답)
 
         priority: "high" (기본, 외부) / "low" (snapshot 등 양보 가능 백그라운드)
+                  low 는 타임아웃 시 재시도·재접속을 하지 않고 즉시 포기한다.
         """
         if count <= 0:
             return []
@@ -963,31 +1235,10 @@ class AsyncPLC:
         op = "read_coils_block"
         async with self._io_lock(op, addr=int(start_addr), priority=priority):
             try:
-                await asyncio.to_thread(self._connect_sync)
-                await self._throttle_and_heartbeat()
-
-                try:
-                    resp = await asyncio.to_thread(
-                        self._client.read_coils,
-                        int(start_addr),
-                        count=int(count),
-                        **self._uid_kwargs(),
-                    )
-                except Exception as e:
-                    pe = self._to_plc_error(op, int(start_addr), e)
-                    if pe.code in ("E401", "E402") or self._is_reset_err(e):
-                        await asyncio.to_thread(self._close_sync)
-                        await asyncio.to_thread(self._connect_sync)
-                        await self._throttle_and_heartbeat()
-                        resp = await asyncio.to_thread(
-                            self._client.read_coils,
-                            int(start_addr),
-                            count=int(count),
-                            **self._uid_kwargs(),
-                        )
-                    else:
-                        raise pe from e
-
+                resp = await self._run_io(
+                    op, int(start_addr), "read_coils",
+                    int(start_addr), count=int(count), priority=priority,
+                )
                 self._ensure_ok(resp, op=op, addr=int(start_addr))
                 bits = list(getattr(resp, "bits", []) or [])
                 if len(bits) < count:
@@ -996,7 +1247,7 @@ class AsyncPLC:
 
             except Exception as e:
                 raise self._to_plc_error(op, int(start_addr), e) from e
-            
+
     def _build_sparse_ranges(
         self,
         addrs: Iterable[int],
@@ -1245,6 +1496,7 @@ class AsyncPLC:
         FC3: 연속 holding register를 한 번에 읽는다.
 
         priority: "high" (기본, 외부) / "low" (snapshot 등 양보 가능 백그라운드)
+                  low 는 타임아웃 시 재시도·재접속을 하지 않고 즉시 포기한다.
         """
         if count <= 0:
             return []
@@ -1252,31 +1504,10 @@ class AsyncPLC:
         op = "read_regs_block"
         async with self._io_lock(op, addr=int(start_addr), priority=priority):
             try:
-                await asyncio.to_thread(self._connect_sync)
-                await self._throttle_and_heartbeat()
-
-                try:
-                    resp = await asyncio.to_thread(
-                        self._client.read_holding_registers,
-                        int(start_addr),
-                        count=int(count),
-                        **self._uid_kwargs(),
-                    )
-                except Exception as e:
-                    pe = self._to_plc_error(op, int(start_addr), e)
-                    if pe.code in ("E401", "E402") or self._is_reset_err(e):
-                        await asyncio.to_thread(self._close_sync)
-                        await asyncio.to_thread(self._connect_sync)
-                        await self._throttle_and_heartbeat()
-                        resp = await asyncio.to_thread(
-                            self._client.read_holding_registers,
-                            int(start_addr),
-                            count=int(count),
-                            **self._uid_kwargs(),
-                        )
-                    else:
-                        raise pe from e
-
+                resp = await self._run_io(
+                    op, int(start_addr), "read_holding_registers",
+                    int(start_addr), count=int(count), priority=priority,
+                )
                 self._ensure_ok(resp, op=op, addr=int(start_addr))
                 regs = list(getattr(resp, "registers", []) or [])
                 if len(regs) < count:
@@ -1285,7 +1516,7 @@ class AsyncPLC:
 
             except Exception as e:
                 raise self._to_plc_error(op, int(start_addr), e) from e
-            
+
     async def snapshot_regs_fast(
         self,
         *,
@@ -1502,7 +1733,7 @@ class AsyncPLC:
         except Exception:
             summary_s = 60.0
         stats = dict(ok=0, disconnected=0, empty_snapshot=0,
-                     budget_timeout=0, plc_error=0, write_failed=0)
+                     budget_timeout=0, plc_error=0, write_failed=0, backoff=0)
         last_summary = time.perf_counter()
 
         def _emit_summary(force: bool = False) -> None:
@@ -1521,10 +1752,10 @@ class AsyncPLC:
                     n_blocks = -1
                 self.log(
                     "WARN PLC COIL LOG summary(%.0fs): ok=%d disconnected=%d empty=%d "
-                    "budget_timeout=%d plc_error=%d write_failed=%d (plan=%d, blocks=%d)",
+                    "budget_timeout=%d plc_error=%d write_failed=%d backoff=%d (plan=%d, blocks=%d)",
                     max(1.0, summary_s), stats["ok"], stats["disconnected"],
                     stats["empty_snapshot"], stats["budget_timeout"],
-                    stats["plc_error"], stats["write_failed"],
+                    stats["plc_error"], stats["write_failed"], stats["backoff"],
                     self._coil_plan_idx, n_blocks,
                 )
             for k in stats:
@@ -1537,6 +1768,15 @@ class AsyncPLC:
             # ✅ PLC가 끊긴 상태에서는 로거가 connect/재시도를 하지 않음 → 공정 영향 0에 더 가까워짐
             if not self.is_connected():
                 stats["disconnected"] += 1
+                self._note_coil_plan_result([PLC_COIL_MAP[k] for k in keys if k in PLC_COIL_MAP], False)
+                _emit_summary()
+                await asyncio.sleep(interval)
+                continue
+
+            # ✅ PLC 가 흔들리는 동안(연속 타임아웃 진행 중)에는 로거가 손을 뗀다.
+            #    하트비트나 다른 명령이 성공해 카운터가 0 이 되면 자동 재개된다.
+            if int(getattr(self, "_consec_timeouts", 0)) > 0:
+                stats["backoff"] += 1
                 self._note_coil_plan_result([PLC_COIL_MAP[k] for k in keys if k in PLC_COIL_MAP], False)
                 _emit_summary()
                 await asyncio.sleep(interval)
