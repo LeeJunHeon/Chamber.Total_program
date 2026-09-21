@@ -130,6 +130,7 @@ class PlasmaCleaningRuntime:
         self._event_tasks: list[asyncio.Task] = []   # ★ 추가
         self._running: bool = False
         self._selected_ch: int = 1  # 라디오에 맞춰 set_selected_ch로 갱신
+        self._cam_owner_active: str = ""   # 카메라에 참여할 때 쓴 owner. 해제까지 고정(공정 중 채널 전환에도 짝 유지).
         self._pc_gas_idx: Optional[int] = None  # ← PC에서 선택된 gas_idx 저장(스케일 계산용)
 
         self._rf_target_evt = asyncio.Event()   # ★ 목표 도달 이벤트 대기용
@@ -1006,14 +1007,17 @@ class PlasmaCleaningRuntime:
             with contextlib.suppress(Exception):
                 recorder = getattr(self, "camera_recorder", None)
                 if recorder:
-                    _cam_owner = f"pc{self._selected_ch}"
                     if on:
                         # 카메라는 1대: 참여자 집합으로 한 세션을 공유(둘 이상이면 ALL 승격, 같은 모드면 재시작 없음)
-                        recorder.set_log_callback(self._cam_log, owner=_cam_owner)  # ✅ 카메라 로그 → 공정 로그+화면
-                        recorder.start(owner=_cam_owner)                            # mode 는 참여자 집합이 정한다
+                        owner = self._cam_owner_for_start()                          # 참여 시점의 owner 를 고정
+                        recorder.set_log_callback(self._cam_log, owner=owner)        # ✅ start 보다 먼저 — 시작/승격 메시지가 공정 로그로
+                        recorder.start(owner=owner)                                  # mode 는 참여자 집합이 정한다
                         self.append_log("CAM", f"카메라 녹화 시작 (mode={recorder.current_mode})")
                     else:
-                        if not recorder.stop(owner=_cam_owner):
+                        owner = self._cam_owner_for_stop()                           # 참여할 때 쓴 owner 로 해제
+                        ok = recorder.stop(owner=owner)
+                        self._cam_owner_active = ""                                  # 내 참여는 끝났다(결과와 무관)
+                        if not ok:
                             self.append_log("CAM", "카메라 사용 종료 — 다른 공정이 계속 촬영 중")
 
         cfgm = getattr(self, "_cfg_mod", cfgc)
@@ -1782,7 +1786,8 @@ class PlasmaCleaningRuntime:
             with contextlib.suppress(Exception):
                 recorder = getattr(self, "camera_recorder", None)
                 if recorder:
-                    recorder.stop(owner=f"pc{self._selected_ch}")   # 다른 참여자가 남아 있으면 촬영은 계속된다
+                    recorder.stop(owner=self._cam_owner_for_stop())   # 참여할 때 쓴 owner 로 해제(남은 참여자가 있으면 촬영은 계속)
+                    self._cam_owner_active = ""
 
         # 버튼/UI 반영
         if self._running:
@@ -1793,6 +1798,18 @@ class PlasmaCleaningRuntime:
     # =========================
     # MFC 소유권(사용자 집합) — 장치 인스턴스 기준. 채널 조합 하드코딩 없음.
     # =========================
+    # =========================
+    # 카메라 참여 owner — 참여 시점에 고정 (공정 중 라디오 전환으로 _selected_ch 가 바뀌어도 해제 짝이 맞도록)
+    # =========================
+    def _cam_owner_for_start(self) -> str:
+        """참여 시점의 owner 를 확정하고 기억한다."""
+        self._cam_owner_active = f"pc{int(getattr(self, '_selected_ch', 1))}"
+        return self._cam_owner_active
+
+    def _cam_owner_for_stop(self) -> str:
+        """참여할 때 쓴 owner 를 그대로 돌려준다. 없으면 현재 채널로 폴백."""
+        return getattr(self, "_cam_owner_active", "") or f"pc{int(getattr(self, '_selected_ch', 1))}"
+
     def _mfc_owner(self) -> str:
         return f"pc{int(getattr(self, '_selected_ch', 1))}"
 

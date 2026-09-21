@@ -139,5 +139,57 @@ def test_8_pc_alone_is_cleaning(rec):
     assert rec.current_mode == "CLEANING"
 
 
+# ── PC 런타임의 owner 고정 (공정 중 채널 전환) ─────────────────────
+def _pc_with(rec):
+    """PlasmaCleaningRuntime 을 __init__ 없이 최소 구성 (카메라 호출부만 사용)."""
+    from runtime.plasma_cleaning_runtime import PlasmaCleaningRuntime
+    p = PlasmaCleaningRuntime.__new__(PlasmaCleaningRuntime)
+    p._selected_ch = 1
+    p._cam_owner_active = ""
+    p.camera_recorder = rec
+    p.logs = []
+    p.append_log = lambda src, msg: p.logs.append(f"[{src}] {msg}")
+    p._cam_log = lambda msg: p.append_log("CAM", msg)
+    return p
+
+
+def _pc_cam_start(p):
+    rec = p.camera_recorder
+    owner = p._cam_owner_for_start()
+    rec.set_log_callback(p._cam_log, owner=owner)
+    rec.start(owner=owner)
+
+
+def _pc_cam_stop(p):
+    rec = p.camera_recorder
+    ok = rec.stop(owner=p._cam_owner_for_stop())
+    p._cam_owner_active = ""
+    return ok
+
+
+def test_pc_channel_switch_mid_run(rec):
+    p = _pc_with(rec)
+    _pc_cam_start(p)
+    assert rec.current_users == {"pc1"} and rec.current_mode == "CLEANING"
+    p._selected_ch = 2                         # 공정 중 라디오 전환
+    assert _pc_cam_stop(p) is True
+    assert rec.current_users == set()
+    assert _wait_stop(rec)
+    assert p._cam_owner_active == ""
+
+
+def test_pc_owner_cleared_after_stop(rec):
+    rec.start(owner="chamber1")                # 다른 공정이 촬영 중
+    p = _pc_with(rec)
+    _pc_cam_start(p)
+    assert rec.current_mode == "ALL" and rec.current_users == {"chamber1", "pc1"}
+    p._selected_ch = 2
+    assert _pc_cam_stop(p) is False            # chamber1 이 남아 촬영 계속
+    assert rec.is_running and rec.current_users == {"chamber1"}
+    assert p._cam_owner_active == ""
+    # 시작·승격 메시지는 콜백을 먼저 등록했으므로 PC 공정 로그에 남는다
+    assert any("카메라 모드 승격 CH1→ALL" in m for m in p.logs), p.logs
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
