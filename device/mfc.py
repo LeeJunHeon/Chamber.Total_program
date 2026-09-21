@@ -53,6 +53,17 @@ class Command:
     expect_prefixes: tuple[str, ...] = ()
 
 # =============== Async 컨트롤러 ===============
+def mfc_resource_key(mfc) -> str:
+    """런타임이 소유권 관리에 쓰는 자원 키. main.py 가 붙인 resource_key 가 없으면
+    "MFC@host:port" 로 폴백(로그용 안전값). 채널 번호로 키를 추측하지 않는다."""
+    key = str(getattr(mfc, "resource_key", "") or "").strip()
+    if key:
+        return key
+    host = getattr(mfc, "host", None) or getattr(mfc, "_override_host", None) or "?"
+    port = getattr(mfc, "port", None) or getattr(mfc, "_override_port", None) or "?"
+    return f"MFC@{host}:{port}"
+
+
 class AsyncMFC:
     def __init__(self, *, enable_verify: bool = True, enable_stabilization: Optional[bool] = None, host: Optional[str] = None, 
                  port: Optional[int] = None, scale_factors: Optional[dict[int, float]] = None, cfg=None):
@@ -66,6 +77,9 @@ class AsyncMFC:
             return default
 
         self._cfg_get = _cfg_get
+
+        # 공유 자원 키("MFC1"/"MFC2"). main.py 가 생성 직후 붙인다. 런타임은 mfc_resource_key() 로만 읽는다.
+        self.resource_key: str = ""
 
         # ✅ config에서 즉시 읽기(=UI에서 값 바꾸면 반영 가능)
         self.debug_print = self._cfg_bool("DEBUG_PRINT", False)

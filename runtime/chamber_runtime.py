@@ -28,7 +28,7 @@ from util.timed_popup import attach_autoclose
 
 # 장비
 from device.ig import AsyncIG
-from device.mfc import AsyncMFC
+from device.mfc import AsyncMFC, mfc_resource_key
 from device.oes import OESAsync
 from device.rga import RGAWorkerClient
 from device.dc_power import DCPowerAsync
@@ -941,14 +941,18 @@ class ChamberRuntime:
                                     use_rf_pulse = bool(params.get("use_rf_pulse", False))
 
                                     if use_rf or use_rf_pulse:
-                                        recorder.set_log_callback(self._cam_log)  # ✅ 카메라 로그 → 공정 로그+화면
-                                        recorder.start(f"CH{self.ch}")
-                                        self.append_log("CAM", f"[CH{self.ch}] 카메라 녹화 시작 (RF={'RF' if use_rf else ''}{'Pulse' if use_rf_pulse else ''})")
+                                        # 카메라는 1대(선점 우선): 다른 소유자가 쓰는 중이면 이번 공정 녹화만 건너뛴다
+                                        _cam_owner = f"chamber{self.ch}"
+                                        if recorder.start(f"CH{self.ch}", owner=_cam_owner):
+                                            recorder.set_log_callback(self._cam_log, owner=_cam_owner)  # ✅ 카메라 로그 → 공정 로그+화면 (False 면 무시)
+                                            self.append_log("CAM", f"[CH{self.ch}] 카메라 녹화 시작 (RF={'RF' if use_rf else ''}{'Pulse' if use_rf_pulse else ''})")
+                                        else:
+                                            self.append_log("CAM", f"[CH{self.ch}] 카메라 사용 중({recorder.current_owner}) → 이번 공정 녹화 건너뜀")
                                     else:
                                         self.append_log("CAM", f"[CH{self.ch}] RF 미사용 공정 → 카메라 건너뜀")
                                 else:
-                                    recorder.stop()
-                                    self.append_log("CAM", f"[CH{self.ch}] 카메라 녹화 정지")
+                                    if recorder.stop(owner=f"chamber{self.ch}"):
+                                        self.append_log("CAM", f"[CH{self.ch}] 카메라 녹화 정지")
                             else:
                                 self.append_log("CAM", "camera_recorder 없음 (None)")
                         except Exception as e:
@@ -5945,13 +5949,29 @@ class ChamberRuntime:
         # ★ 챔버 공정에서 MFC 폴링을 켜는 시점에 mask reset
         #   (PC가 분리해놨을 수 있으므로 안전한 default 둘 다 True로 복귀.
         #    이로써 PC + 챔버 동시 실행 시 챔버의 R5/R60 폴링 보장)
+        # ★ MFC 는 PC 런타임과 인스턴스를 공유할 수 있다 → 사용자 집합(runtime_state)로 소유권 관리.
+        #   켤 때: 획득 → 마스크 원복 → 기동. 끌 때: 해제 후 마지막 사용자였을 때만 폴링 중단.
+        _mfc_key = mfc_resource_key(self.mfc)
+        _mfc_owner = f"chamber{self.ch}"
         if mfc_on:
+            with contextlib.suppress(Exception):
+                runtime_state.acquire_shared(_mfc_key, _mfc_owner)
             with contextlib.suppress(Exception):
                 if hasattr(self.mfc, "set_poll_mask"):
                     self.mfc.set_poll_mask(gas=True, pressure=True)
-
-        with contextlib.suppress(Exception):
-            self.mfc.set_process_status(mfc_on)
+            with contextlib.suppress(Exception):
+                self.mfc.set_process_status(True)
+        else:
+            _left = 0
+            with contextlib.suppress(Exception):
+                _left = runtime_state.release_shared(_mfc_key, _mfc_owner)
+            if _left == 0:
+                with contextlib.suppress(Exception):
+                    self.mfc.set_process_status(False)
+            else:
+                with contextlib.suppress(Exception):
+                    self.append_log("MFC", f"{_mfc_key} 폴링 유지 — 사용 중: "
+                                           f"{', '.join(sorted(runtime_state.shared_users(_mfc_key)))}")
 
         if self.dc_pulse:
             with contextlib.suppress(Exception):

@@ -656,6 +656,9 @@ class CameraRecorder:
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
 
+        # ✅ 소유자(선점 우선). "" 이면 소유자 없음. 카메라는 1대이므로 이 필드가 곧 진실이다.
+        self._owner: str = ""
+
         self._mode          = "ALL"
         self._active_labels = list(_ALL_LABELS)
         self._check_labels  = list(_ALL_LABELS)
@@ -669,9 +672,19 @@ class CameraRecorder:
         self._load_config()
 
     # ── 공정 로그 콜백 ─────────────────────────────────────
-    def set_log_callback(self, cb) -> None:
-        """런타임의 append_log로 메시지를 보낼 콜백 주입. None이면 시스템 logger 사용."""
-        self._log_cb = cb
+    def set_log_callback(self, cb, owner: str = "") -> bool:
+        """런타임의 append_log로 메시지를 보낼 콜백 주입. None이면 시스템 logger 사용.
+        owner 가 비었거나 현재 소유자와 같으면 설정(True). 다른 소유자면 무시(False)."""
+        with self._lock:
+            if owner and self._owner and owner != self._owner:
+                return False
+            self._log_cb = cb
+            return True
+
+    @property
+    def current_owner(self) -> str:
+        with self._lock:
+            return self._owner
 
     def _log(self, msg: str) -> None:
         """콜백이 있으면 공정 로그(+화면)로, 없으면 시스템 logger로 보낸다."""
@@ -718,11 +731,18 @@ class CameraRecorder:
             logger.warning("[CameraRecorder] config 로드 실패: %s", e)
 
     # ── Public API ─────────────────────────────────────────
-    def start(self, mode: str = "ALL") -> None:
+    def start(self, mode: str = "ALL", owner: str = "") -> bool:
         """
         백그라운드 녹화 시작. 즉시 반환(논블로킹).
+        owner="" 이면 기존과 동일(무조건 재시작, True).
+        다른 owner 가 소유 중이고 스레드가 살아 있으면 아무것도 하지 않고 False(선점 우선).
         """
         with self._lock:
+            if owner:
+                if self._owner and self._owner != owner and self._thread and self._thread.is_alive():
+                    logger.info("[CameraRecorder] 사용 중(owner=%s) → %s 요청 거절", self._owner, owner)
+                    return False
+                self._owner = owner
             if self._thread and self._thread.is_alive():
                 logger.debug("[CameraRecorder] 이전 스레드 정리")
                 self._stop_event.set()
@@ -741,12 +761,19 @@ class CameraRecorder:
                 name=f"CameraRecorder-{self._mode}",
             )
             self._thread.start()
-            logger.info("[CameraRecorder] 시작 mode=%s", self._mode)
+            logger.info("[CameraRecorder] 시작 mode=%s owner=%s", self._mode, self._owner or "-")
+            return True
 
-    def stop(self) -> None:
-        """녹화 정지 요청. 즉시 반환(논블로킹)."""
+    def stop(self, owner: str = "") -> bool:
+        """녹화 정지 요청. 즉시 반환(논블로킹).
+        owner="" 이면 기존과 동일(무조건 정지, True). 소유자와 다르면 무시(False)."""
+        with self._lock:
+            if owner and self._owner and owner != self._owner:
+                return False
+            self._owner = ""
         self._stop_event.set()
         logger.info("[CameraRecorder] 정지 요청")
+        return True
 
     @property
     def is_running(self) -> bool:

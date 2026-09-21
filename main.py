@@ -369,6 +369,7 @@ class MainWindow(QWidget):
             scale_factors=scale1,
             cfg=config_ch1,   # ✅ 추가
         )
+        self.mfc1.resource_key = "MFC1"   # 공유 자원 키(런타임 소유권 관리용)
 
         self.mfc2: AsyncMFC = _new_mfc(
             host=getattr(config_ch2, "MFC_TCP_HOST", getattr(cfgc, "MFC_TCP_HOST", "192.168.1.50")),
@@ -378,6 +379,7 @@ class MainWindow(QWidget):
             scale_factors=scale2,
             cfg=config_ch2,   # ✅ 추가
         )
+        self.mfc2.resource_key = "MFC2"
 
         self.ig1: AsyncIG = _new_ig(
             host=getattr(config_ch1, "IG_TCP_HOST", getattr(cfgc, "IG_TCP_HOST", "192.168.1.50")),

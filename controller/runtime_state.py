@@ -65,6 +65,8 @@ class RuntimeState:
     _last_error: Dict[str, Dict[int, str]] = field(
         default_factory=lambda: {"chamber": {}, "pc": {}, "tsp": {}}
     )
+    # 공유 자원 사용자 집합: resource -> {owner, ...}
+    _shared_users: Dict[str, set] = field(default_factory=dict)
     _last_error_mono: Dict[str, Dict[int, float]] = field(
         default_factory=lambda: {"chamber": {}, "pc": {}, "tsp": {}}
     )
@@ -129,6 +131,40 @@ class RuntimeState:
         with self._lock:
             v = self._pulse_claims.get(str(endpoint).strip().lower())
             return dict(v) if v else None
+
+    # ---------- 공유 자원 사용자 집합(참조 카운트) ----------
+    #  자원 키  : "MFC1", "MFC2", "CAMERA"
+    #  owner    : "chamber1", "chamber2", "pc1", "pc2"
+    #  MFC 처럼 여러 주체가 동시에 정당하게 쓰는 자원용. 마지막 사용자가 손을 뗄 때(=release 가 0 을
+    #  반환할 때)만 정리(폴링 중단/마스크 원복)한다.
+    def acquire_shared(self, resource: str, owner: str) -> int:
+        """사용자 집합에 owner 를 넣고 집합 크기를 반환. 같은 owner 재호출은 멱등."""
+        r, o = str(resource), str(owner)
+        with self._lock:
+            users = self._shared_users.setdefault(r, set())
+            users.add(o)
+            return len(users)
+
+    def release_shared(self, resource: str, owner: str) -> int:
+        """owner 를 빼고 남은 사용자 수를 반환. 없던 owner 면 현재 크기 그대로. 0 이면 마지막 사용자."""
+        r, o = str(resource), str(owner)
+        with self._lock:
+            users = self._shared_users.get(r)
+            if not users:
+                return 0
+            users.discard(o)
+            if not users:
+                self._shared_users.pop(r, None)
+                return 0
+            return len(users)
+
+    def shared_users(self, resource: str) -> set:
+        with self._lock:
+            return set(self._shared_users.get(str(resource), set()))
+
+    def shared_snapshot(self) -> Dict[str, list]:
+        with self._lock:
+            return {k: sorted(v) for k, v in self._shared_users.items() if v}
 
     # ---------- 조회/스냅샷 ----------
     def is_running(self, kind: str, channel: Optional[int] = None) -> bool:
@@ -275,6 +311,7 @@ class RuntimeState:
                 "last_start_mono": {k: dict(v) for k, v in self._last_start_mono.items()},
                 "last_finish_mono": {k: dict(v) for k, v in self._last_finish_mono.items()},
                 "last_error": {k: dict(v) for k, v in self._last_error.items()},
+                "shared": {k: sorted(v) for k, v in self._shared_users.items() if v},
             }
 
 
