@@ -12,7 +12,11 @@
     "DCP_REQUIRE_HOST_MODE": true,          // HOST 모드가 아니면 시작 거부 (p.18)
     "DCP_ARC_ALERT_RATE_PER_S": 20,         // (soft+hard) 초당 아크율 경고 기준
     "DCP_ARC_ALERT_RATE_N": 2,              // 위 기준을 이 횟수 연속 관측 시 경고
-    "DCP_ARC_ALERT_RUN_TOTAL": 1000,        // 또는 런 누적(soft+hard) 이 값 이상이면 경고
+    "DCP_ARC_ALERT_RUN_TOTAL": 1000,        // (사용 안 함) 런 누적 단독 경고는 폐지
+    "DCP_ARC_IGN_WINDOW_S": 30.0,           // OUTPUT_ON 이후 이 시간까지를 점화 구간으로 본다
+    "DCP_ARC_FAST_INTERVAL_S": 1.0,         // 점화 구간 고속 폴링 주기(초)
+    "DCP_ARC_IGN_WARN": 3000,               // 점화 구간 아크(soft+hard) 경고 기준
+    "DCP_ARC_DEPO_WARN": 500,               // 증착 구간 아크(soft+hard) 경고 기준
     // --- RF Pulse(CESAR 1310) ---
     "RFPULSE_FREQ_MAX_HZ": 30000,           // 사양 3-5: 1Hz~30kHz (초과 시 W40 출력 차단)
 
@@ -397,7 +401,7 @@
 
     // ── Google Drive 공정 로그 ──
     "GDRIVE_LOG_DIR": "G:/공유 드라이브/VanaM_Sputter/Process_log",  // GDrive 저장 경로
-    "GDRIVE_ARC_ALERT_THRESH": 1000,  // Arc 런 누적 이 횟수 이상 시 Chat 알림 (DCP_ARC_ALERT_RUN_TOTAL 과 동일)
+    "GDRIVE_ARC_ALERT_THRESH": 5000,  // Arc 런 누적 이 횟수 이상 시 Chat 알림 (점화 아크 포함 총합 기준)
     "GDRIVE_REF_P_WARN_W": 20.0,      // Reflected Power 경고 기준 (W)
 
     // ── 공정 모니터링 (Main Shutter open 후 편차 알림) ──
@@ -424,7 +428,11 @@
     "DCP_REQUIRE_HOST_MODE": true,          // HOST 모드가 아니면 시작 거부 (p.18)
     "DCP_ARC_ALERT_RATE_PER_S": 20,         // (soft+hard) 초당 아크율 경고 기준
     "DCP_ARC_ALERT_RATE_N": 2,              // 위 기준을 이 횟수 연속 관측 시 경고
-    "DCP_ARC_ALERT_RUN_TOTAL": 1000,        // 또는 런 누적(soft+hard) 이 값 이상이면 경고
+    "DCP_ARC_ALERT_RUN_TOTAL": 1000,        // (사용 안 함) 런 누적 단독 경고는 폐지
+    "DCP_ARC_IGN_WINDOW_S": 30.0,           // OUTPUT_ON 이후 이 시간까지를 점화 구간으로 본다
+    "DCP_ARC_FAST_INTERVAL_S": 1.0,         // 점화 구간 고속 폴링 주기(초)
+    "DCP_ARC_IGN_WARN": 3000,               // 점화 구간 아크(soft+hard) 경고 기준
+    "DCP_ARC_DEPO_WARN": 500,               // 증착 구간 아크(soft+hard) 경고 기준
     // --- RF Pulse(CESAR 1310) ---
     "RFPULSE_FREQ_MAX_HZ": 30000,           // 사양 3-5: 1Hz~30kHz (초과 시 W40 출력 차단)
     // ── 채널 식별 (수정 금지) ──
@@ -473,7 +481,11 @@
     "DCP_REQUIRE_HOST_MODE": true,          // HOST 모드가 아니면 시작 거부 (p.18)
     "DCP_ARC_ALERT_RATE_PER_S": 20,         // (soft+hard) 초당 아크율 경고 기준
     "DCP_ARC_ALERT_RATE_N": 2,              // 위 기준을 이 횟수 연속 관측 시 경고
-    "DCP_ARC_ALERT_RUN_TOTAL": 1000,        // 또는 런 누적(soft+hard) 이 값 이상이면 경고
+    "DCP_ARC_ALERT_RUN_TOTAL": 1000,        // (사용 안 함) 런 누적 단독 경고는 폐지
+    "DCP_ARC_IGN_WINDOW_S": 30.0,           // OUTPUT_ON 이후 이 시간까지를 점화 구간으로 본다
+    "DCP_ARC_FAST_INTERVAL_S": 1.0,         // 점화 구간 고속 폴링 주기(초)
+    "DCP_ARC_IGN_WARN": 3000,               // 점화 구간 아크(soft+hard) 경고 기준
+    "DCP_ARC_DEPO_WARN": 500,               // 증착 구간 아크(soft+hard) 경고 기준
     // --- RF Pulse(CESAR 1310) ---
     "RFPULSE_FREQ_MAX_HZ": 30000,           // 사양 3-5: 1Hz~30kHz (초과 시 W40 출력 차단)
     // ── 채널 식별 (수정 금지) ──

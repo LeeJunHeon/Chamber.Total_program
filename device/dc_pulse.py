@@ -174,6 +174,32 @@ class BinaryProtocol(IProtocol):
         # 필요 시 여기서 파싱/검증 추가 가능.
         return payload if payload else None
     
+def _arc_split(run_s: int, run_h: int,
+               ign_s: "int | None", ign_h: "int | None") -> dict:
+    """런 누적과 점화 구간 누적으로 점화/증착 구간을 분해한다(순수 함수).
+
+    run_*  : OUTPUT_ON 이후 현재(또는 종료)까지의 누적
+    ign_*  : 점화 창이 닫힌 시점의 누적. 아직 점화 창 안이면 None.
+             → 이 경우 전부 점화 구간으로 본다(증착 0).
+    음수/역전은 장비 자체 리셋 등으로 생길 수 있어 0 으로 클램프한다.
+    """
+    rs = max(0, int(run_s or 0))
+    rh = max(0, int(run_h or 0))
+    if ign_s is None or ign_h is None:
+        i_s, i_h = rs, rh
+    else:
+        i_s = min(rs, max(0, int(ign_s)))
+        i_h = min(rh, max(0, int(ign_h)))
+    d_s = max(0, rs - i_s)
+    d_h = max(0, rh - i_h)
+    return {
+        "run_soft": rs, "run_hard": rh, "run_total": rs + rh,
+        "ign_soft": i_s, "ign_hard": i_h, "ign_total": i_s + i_h,
+        "depo_soft": d_s, "depo_hard": d_h, "depo_total": d_s + d_h,
+        "ign_closed": not (ign_s is None or ign_h is None),
+    }
+
+
 # ========= EnerPulse 컨트롤러 =========
 class AsyncDCPulse:
     """
@@ -291,6 +317,19 @@ class AsyncDCPulse:
         self._soft_arc_total: int = 0
         self._hard_arc_total: int = 0
         self._arc_alert_sent: bool = False
+        self._arc_baseline_soft: int = 0
+        self._arc_baseline_hard: int = 0
+        self._arc_rate_hit_n: int = 0
+        self._arc_reset_ok: bool = False
+        self._arc_run_start_ts: float = 0.0
+        self._arc_ign_soft: Optional[int] = None    # 점화 창이 닫힌 시점의 런 누적
+        self._arc_ign_hard: Optional[int] = None
+        self._arc_final_soft: Optional[int] = None  # OUTPUT_OFF 직전 확정값(런 누적)
+        self._arc_final_hard: Optional[int] = None
+        self._arc_prev_raw_s: Optional[int] = None  # 자체 계산 rate 용
+        self._arc_prev_raw_h: Optional[int] = None
+        self._arc_prev_ts: float = 0.0
+        self._arc_zero_reset_logged: bool = False
 
         # ★ 추가: on_telemetry 콜백 저장 (3/19 리팩토링 시 누락됨)
         self._on_telemetry = on_telemetry
@@ -832,11 +871,50 @@ class AsyncDCPulse:
                                     phase="prepare")
             return False
 
-        # ✅ [D] 런 기준선: OUTPUT_ON 직전에 Hard/Soft Arc Count Reset (매뉴얼 p.53, 0x8C=2)
-        #    ACK 실패는 경고만 — baseline 차감으로도 런 누적을 구할 수 있다.
+        # ✅ [D] 런 기준선 — 반드시 OUTPUT_ON '이전' 에 확정한다.
+        #    (과거에는 HV-On 확인 직후에 읽어, 점화 순간의 아크 폭주가 통째로
+        #     baseline 에 흡수돼 런 값에서 차감돼 버렸다. 2026-09-19 10:09 런 실측:
+        #     baseline SAT=15050 ANT=7515 ← 직전 런 종료값 10430/4780. 즉 점화 아크 수천 개가 사라졌다.)
+        # 4-a) 리셋 '전' 값
+        _pre_s: Optional[int] = None
+        _pre_h: Optional[int] = None
+        with contextlib.suppress(Exception):
+            _pre_s = await self.read_soft_arc_total()
+        with contextlib.suppress(Exception):
+            _pre_h = await self.read_hard_arc_total()
+
+        # 4-b) Hard/Soft Arc Count Reset (매뉴얼 p.53, 0x8C=2)
         with contextlib.suppress(Exception):
             if not await self.reset_arc_counters_device():
                 await self._emit_status("[WARN] Arc Count Reset(0x8C=2) ACK 실패 → baseline 차감으로 대체")
+
+        # 4-c) 리셋 '후' 값 = 이번 런의 baseline. 동시에 0x8C 가 실제로 먹혔는지 검증한다
+        #      (ACK 만으로는 알 수 없었던 문제 2). 읽기 실패 시 baseline 0 → 차감 없음(안전측).
+        self._arc_baseline_soft = 0
+        self._arc_baseline_hard = 0
+        _post_s: Optional[int] = None
+        _post_h: Optional[int] = None
+        with contextlib.suppress(Exception):
+            _post_s = await self.read_soft_arc_total()
+        with contextlib.suppress(Exception):
+            _post_h = await self.read_hard_arc_total()
+        self._arc_baseline_soft = int(_post_s or 0)
+        self._arc_baseline_hard = int(_post_h or 0)
+
+        # 리셋이 먹혔다 = 후값이 0 이거나 전값보다 작아졌다
+        def _shrunk(a, b) -> bool:
+            if b is None:
+                return False
+            return int(b) == 0 or (a is not None and int(b) < int(a))
+
+        self._arc_reset_ok = bool(_shrunk(_pre_s, _post_s) or _shrunk(_pre_h, _post_h))
+        await self._emit_status(
+            f"[arc] reset 확인: pre SAT={_pre_s if _pre_s is not None else '-'} "
+            f"ANT={_pre_h if _pre_h is not None else '-'} → "
+            f"post SAT={_post_s if _post_s is not None else '-'} "
+            f"ANT={_post_h if _post_h is not None else '-'} "
+            f"(0x8C 동작={'예' if self._arc_reset_ok else '아니오'})"
+        )
 
         # 5) 출력 ON (성공시에만)
         ok2 = await self.output_on()
@@ -861,22 +939,20 @@ class AsyncDCPulse:
             )
             return False
 
-        # ✅ [D] HV-On 확인 직후 0x96/0x99 를 1회 읽어 런 baseline 저장 (매뉴얼 p.55).
-        #    p.31: SAT/ANT 는 재기동 시 0부터 누적되므로, 리셋이 듣지 않은 장비에서도
-        #    baseline 차감으로 "이번 런" 값을 얻을 수 있다.
-        self._arc_baseline_soft = 0
-        self._arc_baseline_hard = 0
-        with contextlib.suppress(Exception):
-            _bs = await self.read_soft_arc_total()
-            _bh = await self.read_hard_arc_total()
-            self._arc_baseline_soft = int(_bs or 0)
-            self._arc_baseline_hard = int(_bh or 0)
+        # ✅ [D] 런 계측 상태 초기화. baseline 은 위 4-c 에서 이미 확정됐으므로 여기서 읽지 않는다.
         self._arc_run_start_ts = time.monotonic()
         self._arc_rate_hit_n = 0
         self._arc_alert_sent = False
-        await self._emit_status(
-            f"[arc] baseline SAT={self._arc_baseline_soft} ANT={self._arc_baseline_hard}"
-        )
+        self._arc_ign_soft = None
+        self._arc_ign_hard = None
+        self._arc_final_soft = None
+        self._arc_final_hard = None
+        self._arc_prev_raw_s = None
+        self._arc_prev_raw_h = None
+        self._arc_prev_ts = 0.0
+        self._arc_zero_reset_logged = False
+        self._soft_arc_total = 0
+        self._hard_arc_total = 0
         return True
 
     async def _emit_failed_off_time(self, want_raw: int, got_raw: Optional[int],
@@ -1025,11 +1101,49 @@ class AsyncDCPulse:
         return await self._write_cmd_data(0x80, 0x0001, 2, label="OUTPUT_ON")
 
     async def output_off(self) -> bool:
-        # ✅ STOP/종료 중 재전송 루프가 REG/REF/OUTPUT_ON으로 흘러가는 것을 차단
-        # (STOP 시퀀스에서 OUTPUT_OFF 이후 OUTPUT_ON이 다시 실행되는 현상 방지)
+        # ✅ 출력을 끄기 '직전' 에 0x96/0x99 를 읽어 런 종료값을 확정한다.
+        #    (이전에는 폴링이 우연히 마지막으로 찍은 표본이 종료값이 됐다 — 문제 4)
+        #    통신이 늦어도 OUTPUT_OFF 가 지연되면 안 되므로 짧은 타임아웃 + 전면 예외 억제.
+        if self._out_on and self._arc_final_soft is None:
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(self._capture_arc_final(), timeout=1.5)
+
+        # ✅ STOP/종료 중 재전송 루프 차단
         self._stop_guard = True
         self._drain_rx_frames()  # ← 잔여 0x9A 등 제거
         return await self._write_cmd_data(0x80, 0x0002, 2, label="OUTPUT_OFF")
+
+    async def _capture_arc_final(self) -> None:
+        """OUTPUT_OFF 직전 아크 종료값 확정(실패해도 조용히 포기)."""
+        fs: Optional[int] = None
+        fh: Optional[int] = None
+        with contextlib.suppress(Exception):
+            fs = await self.read_soft_arc_total()
+        with contextlib.suppress(Exception):
+            fh = await self.read_hard_arc_total()
+        if fs is None and fh is None:
+            return
+        raw_s = int(fs) if fs is not None else (int(self._soft_arc_total)
+                                                + int(getattr(self, "_arc_baseline_soft", 0)))
+        raw_h = int(fh) if fh is not None else (int(self._hard_arc_total)
+                                                + int(getattr(self, "_arc_baseline_hard", 0)))
+        run_s = max(0, raw_s - int(getattr(self, "_arc_baseline_soft", 0)))
+        run_h = max(0, raw_h - int(getattr(self, "_arc_baseline_hard", 0)))
+        # 폴링이 이미 더 큰 값을 봤다면(장비 자체 리셋 등) 큰 쪽을 남긴다
+        run_s = max(run_s, int(self._soft_arc_total))
+        run_h = max(run_h, int(self._hard_arc_total))
+        self._arc_final_soft = run_s
+        self._arc_final_hard = run_h
+        self._soft_arc_total = run_s
+        self._hard_arc_total = run_h
+        d = _arc_split(run_s, run_h, self._arc_ign_soft, self._arc_ign_hard)
+        await self._emit_status(
+            f"[arc] 종료 확정: run soft={run_s} hard={run_h} 합계={d['run_total']} | "
+            f"점화={d['ign_total']} 증착={d['depo_total']} | "
+            f"raw SAT={raw_s} ANT={raw_h} (baseline "
+            f"{int(getattr(self, '_arc_baseline_soft', 0))}/"
+            f"{int(getattr(self, '_arc_baseline_hard', 0))})"
+        )
 
     async def set_pulse_sync(self, mode: Literal["int","ext"]) -> bool:
         # 0x65: Int=0, Ext=1
@@ -1208,11 +1322,57 @@ class AsyncDCPulse:
         self._arc_baseline_hard: int = 0
         self._arc_rate_hit_n: int = 0
         self._arc_run_start_ts: float = 0.0
+        self._arc_reset_ok = False
+        self._arc_ign_soft = None
+        self._arc_ign_hard = None
+        self._arc_final_soft = None
+        self._arc_final_hard = None
+        self._arc_prev_raw_s = None
+        self._arc_prev_raw_h = None
+        self._arc_prev_ts = 0.0
+        self._arc_zero_reset_logged = False
 
     @property
     def arc_counts(self) -> tuple[int, int]:
-        """(soft_arc_total, hard_arc_total) 반환."""
+        """(soft_arc_total, hard_arc_total) 반환.
+
+        OUTPUT_OFF 직전에 확정값을 읽어 뒀으면 그 값을 우선한다
+        (폴링 주기 때문에 마지막 5초분이 누락되던 문제 4).
+        """
+        if self._arc_final_soft is not None and self._arc_final_hard is not None:
+            return int(self._arc_final_soft), int(self._arc_final_hard)
         return self._soft_arc_total, self._hard_arc_total
+
+    @property
+    def arc_summary(self) -> dict:
+        """점화/증착 구간이 분리된 아크 요약."""
+        s_, h_ = self.arc_counts
+        d = _arc_split(s_, h_, self._arc_ign_soft, self._arc_ign_hard)
+        d["reset_ok"] = bool(getattr(self, "_arc_reset_ok", False))
+        d["final_read"] = bool(self._arc_final_soft is not None
+                               and self._arc_final_hard is not None)
+        d["baseline_soft"] = int(getattr(self, "_arc_baseline_soft", 0))
+        d["baseline_hard"] = int(getattr(self, "_arc_baseline_hard", 0))
+        d["ign_window_s"] = self._cfg_float("DCP_ARC_IGN_WINDOW_S", 30.0)
+        return d
+
+    # ---------- 점화 구간 고속 샘플링 ----------
+    def _in_arc_fast_window(self) -> bool:
+        """OUTPUT_ON 이후 DCP_ARC_IGN_WINDOW_S 이내인가."""
+        t0 = float(getattr(self, "_arc_run_start_ts", 0.0) or 0.0)
+        if t0 <= 0.0:
+            return False
+        win = max(0.0, self._cfg_float("DCP_ARC_IGN_WINDOW_S", 30.0))
+        if win <= 0.0:
+            return False
+        return (time.monotonic() - t0) < win
+
+    def _effective_poll_period(self) -> float:
+        """현재 적용할 폴링 주기(점화 창 안에서는 고속)."""
+        if self._in_arc_fast_window():
+            fast = self._cfg_float("DCP_ARC_FAST_INTERVAL_S", 1.0)
+            return max(0.2, min(float(self._poll_period_s), fast))
+        return float(self._poll_period_s)
     
     # 3) 현재 Control Mode 읽기 (0x9C) READ_CTRL_MODE: CHK 제거 후 최하위 바이트 사용
     async def read_control_mode(self) -> Optional[str]:
@@ -2083,8 +2243,9 @@ class AsyncDCPulse:
                 try:
                     if self._connected and self._out_on:
 
-                        # ─── PIV 읽기 (_poll_period_s 마다) ───────────────────
-                        if now - _piv_last >= self._poll_period_s:
+                        # ─── PIV 읽기 (유효 주기마다. 점화 창에서는 고속) ─────
+                        _period = self._effective_poll_period()
+                        if now - _piv_last >= _period:
                             _piv_last = time.monotonic()
                             res = await self.read_output_piv()
                             if not (res and "eng" in res):
@@ -2110,9 +2271,18 @@ class AsyncDCPulse:
                                 v = float(eng.get("V_V", 0.0))
                                 i = float(eng.get("I_A", 0.0))
 
+                                # ✅ [필수] 점화 고속 창에서는 AUTO-STOP 판정을 '중지' 한다.
+                                #    고속 창(1초 주기)에서 기존 연속 N회 기준을 그대로 쓰면
+                                #    AUTO-STOP 이 5배 빨리 걸려 공정 동작이 바뀐다(금지).
+                                #    → 카운터를 증가시키지도, 0 으로 리셋하지도 않고 값을 그대로 유지하고
+                                #      해당 WARN emit 도 생략한다. 텔레메트리 이벤트/로그는 평소대로 남긴다.
+                                _fast = self._in_arc_fast_window()
+
                                 # ① 저전류 감시
                                 ref = float(self._last_ref_power_w or 0.0)
-                                if ref > 0.0:
+                                if _fast:
+                                    pass
+                                elif ref > 0.0:
                                     if i <= self._i_low_thresh_a:
                                         self._low_curr_n += 1
                                         await self._emit_status(
@@ -2149,7 +2319,9 @@ class AsyncDCPulse:
                                         self._low_curr_n = 0
 
                                 # ② 세트포인트 근접 확인
-                                if ref > 0.0:
+                                if _fast:
+                                    pass
+                                elif ref > 0.0:
                                     tol = max(self._p_set_tol_w, abs(ref) * self._p_set_tol_pct)
                                     if abs(p - ref) > tol:
                                         self._spdev_n += 1
@@ -2203,51 +2375,109 @@ class AsyncDCPulse:
                                 soft = await self.read_soft_arc_total()     # 0x96 SAT (p.55)
                             with contextlib.suppress(Exception):
                                 hard = await self.read_hard_arc_total()     # 0x99 ANT (p.55)
-                            with contextlib.suppress(Exception):
-                                s_rate = await self.read_soft_arc_per_sec()  # 0xAE (p.57/58)
-                            with contextlib.suppress(Exception):
-                                h_rate = await self.read_hard_arc_per_sec()  # 0xAF (p.57/58)
+                            if not self._in_arc_fast_window():
+                                # 고속 창에서는 프레임 수를 늘리지 않기 위해 rate 읽기를 생략한다
+                                # (어차피 0xAE/0xAF 는 실측에서 soft/s=0 hard/s=1 고정으로만 돌아왔다 —
+                                #  아래 calc_rate 로 누적 증가분에서 직접 계산한다)
+                                with contextlib.suppress(Exception):
+                                    s_rate = await self.read_soft_arc_per_sec()  # 0xAE (p.57/58)
+                                with contextlib.suppress(Exception):
+                                    h_rate = await self.read_hard_arc_per_sec()  # 0xAF (p.57/58)
 
                             if soft is not None or hard is not None:
                                 raw_s = soft if soft is not None else self._soft_arc_total
                                 raw_h = hard if hard is not None else self._hard_arc_total
 
                                 # 장비가 도중에 리셋되면 raw 가 baseline 보다 작아진다 → baseline 재설정
+                                #  (매뉴얼 p.31: ANT/SAT 는 출력 재기동 시 스스로 0 부터 누적될 수 있다.
+                                #   조용히 보정하면 원인을 알 수 없으므로 런당 1회 로그를 남긴다.)
+                                _zr = False
                                 if soft is not None and soft < int(getattr(self, "_arc_baseline_soft", 0)):
+                                    _zr = True
                                     self._arc_baseline_soft = 0
                                 if hard is not None and hard < int(getattr(self, "_arc_baseline_hard", 0)):
+                                    _zr = True
                                     self._arc_baseline_hard = 0
+                                if _zr and not getattr(self, "_arc_zero_reset_logged", False):
+                                    self._arc_zero_reset_logged = True
+                                    await self._emit_status(
+                                        f"[arc] 장비 자체 리셋 감지 → baseline 0 으로 보정 "
+                                        f"(raw SAT={raw_s} ANT={raw_h})"
+                                    )
 
                                 run_s = max(0, int(raw_s) - int(getattr(self, "_arc_baseline_soft", 0)))
                                 run_h = max(0, int(raw_h) - int(getattr(self, "_arc_baseline_hard", 0)))
                                 self._soft_arc_total = run_s
                                 self._hard_arc_total = run_h
 
+                                # ── 자체 계산 rate: 장비의 0xAE/0xAF 는 실측에서 고정값만 돌려줬다.
+                                #    직전 표본과의 누적 증가분 / 경과시간 으로 직접 구한다.
+                                _now_ts = time.monotonic()
+                                calc_rate: Optional[float] = None
+                                _prev_s = getattr(self, "_arc_prev_raw_s", None)
+                                _prev_h = getattr(self, "_arc_prev_raw_h", None)
+                                _prev_ts = float(getattr(self, "_arc_prev_ts", 0.0) or 0.0)
+                                if _prev_ts > 0.0 and _now_ts > _prev_ts:
+                                    _d = (max(0, int(raw_s) - int(_prev_s or 0))
+                                          + max(0, int(raw_h) - int(_prev_h or 0)))
+                                    calc_rate = _d / (_now_ts - _prev_ts)
+                                self._arc_prev_raw_s = int(raw_s)
+                                self._arc_prev_raw_h = int(raw_h)
+                                self._arc_prev_ts = _now_ts
+
+                                # ── 점화 구간 종료 확정: 창이 닫힌 뒤 첫 표본의 누적을 점화 누적으로 잡는다
+                                if (self._arc_ign_soft is None
+                                        and float(getattr(self, "_arc_run_start_ts", 0.0) or 0.0) > 0.0
+                                        and not self._in_arc_fast_window()):
+                                    self._arc_ign_soft = run_s
+                                    self._arc_ign_hard = run_h
+                                    await self._emit_status(
+                                        f"[arc] 점화 구간 종료(+{self._cfg_float('DCP_ARC_IGN_WINDOW_S', 30.0):.0f}s): "
+                                        f"점화 soft={run_s} hard={run_h} 합계={run_s + run_h}"
+                                    )
+
+                                _split = _arc_split(run_s, run_h,
+                                                    self._arc_ign_soft, self._arc_ign_hard)
                                 _rate_sum = int(s_rate or 0) + int(h_rate or 0)
+                                _cr_txt = f"{calc_rate:.1f}" if calc_rate is not None else "-"
                                 self._ev_nowait(DCPEvent(
                                     kind="status",
                                     message=(
                                         f"[arc] run soft={run_s} hard={run_h} | "
+                                        f"점화={_split['ign_total']} 증착={_split['depo_total']} | "
+                                        f"calc/s={_cr_txt} | "
                                         f"rate soft/s={s_rate if s_rate is not None else '-'} "
                                         f"hard/s={h_rate if h_rate is not None else '-'} | "
                                         f"raw SAT={raw_s} ANT={raw_h}"
+                                        f"{' | fast' if self._in_arc_fast_window() else ''}"
                                     ),
                                 ))
 
                                 # ── 알림 정책 ──
+                                #  런 누적 단독(DCP_ARC_ALERT_RUN_TOTAL) 기준은 폐지했다.
+                                #  점화 아크는 원래 수천 개가 나므로 그 기준으로는 매 런 경고가 뜬다.
+                                #  → 점화/증착을 나눠 각각 다른 기준으로 본다.
                                 _rate_lim = self._cfg_float("DCP_ARC_ALERT_RATE_PER_S", 20.0)
                                 _rate_n = self._cfg_int("DCP_ARC_ALERT_RATE_N", 2)
-                                _run_lim = self._cfg_int("DCP_ARC_ALERT_RUN_TOTAL", 1000)
+                                _ign_lim = self._cfg_int("DCP_ARC_IGN_WARN", 3000)
+                                _depo_lim = self._cfg_int("DCP_ARC_DEPO_WARN", 500)
+                                _run_lim = self._cfg_int("DCP_ARC_ALERT_RUN_TOTAL", 1000)  # 하위 호환 표시용
 
-                                if _rate_lim > 0 and _rate_sum >= _rate_lim:
+                                # 장비 rate 가 못 미더우므로 자체 계산치도 함께 본다
+                                _rate_obs = max(float(_rate_sum),
+                                                float(calc_rate) if calc_rate is not None else 0.0)
+                                if _rate_lim > 0 and _rate_obs >= _rate_lim:
                                     self._arc_rate_hit_n = int(getattr(self, "_arc_rate_hit_n", 0)) + 1
                                 else:
                                     self._arc_rate_hit_n = 0
 
                                 _by_rate = (_rate_n > 0 and self._arc_rate_hit_n >= _rate_n)
-                                _by_total = (_run_lim > 0 and (run_s + run_h) >= _run_lim)
+                                _by_ign = (_ign_lim > 0 and _split["ign_closed"]
+                                           and _split["ign_total"] >= _ign_lim)
+                                _by_depo = (_depo_lim > 0 and _split["depo_total"] >= _depo_lim)
+                                _by_total = False   # (사용 안 함, 하위 호환용 키)
 
-                                if (_by_rate or _by_total) and not getattr(self, "_arc_alert_sent", False):
+                                if (_by_rate or _by_ign or _by_depo) and not getattr(self, "_arc_alert_sent", False):
                                     self._arc_alert_sent = True
                                     _elapsed = max(0.0, time.monotonic()
                                                    - float(getattr(self, "_arc_run_start_ts", 0.0) or time.monotonic()))
@@ -2255,7 +2485,8 @@ class AsyncDCPulse:
                                         kind="arc_threshold_reached",
                                         message=(
                                             f"Arc 경고 (런 누적 Soft={run_s}, Hard={run_h}, "
-                                            f"합계={run_s + run_h}, 최근 {_rate_sum}/s)"
+                                            f"합계={_split['run_total']} | 점화={_split['ign_total']}"
+                                            f" 증착={_split['depo_total']}, 최근 {_rate_obs:.1f}/s)"
                                         ),
                                         power=float(run_s),
                                         voltage=float(run_h),
@@ -2270,8 +2501,20 @@ class AsyncDCPulse:
                                             "elapsed_s": round(_elapsed, 1),
                                             "by_rate": _by_rate,
                                             "by_total": _by_total,
+                                            "by_ign": _by_ign,
+                                            "by_depo": _by_depo,
+                                            "ign_soft": _split["ign_soft"],
+                                            "ign_hard": _split["ign_hard"],
+                                            "ign_total": _split["ign_total"],
+                                            "depo_soft": _split["depo_soft"],
+                                            "depo_hard": _split["depo_hard"],
+                                            "depo_total": _split["depo_total"],
+                                            "calc_rate": (round(calc_rate, 2)
+                                                          if calc_rate is not None else None),
                                             "rate_limit": _rate_lim,
                                             "run_total_limit": _run_lim,
+                                            "ign_limit": _ign_lim,
+                                            "depo_limit": _depo_lim,
                                         },
                                     ))
 
@@ -2288,7 +2531,7 @@ class AsyncDCPulse:
 
                 # ─── sleep: PIV 주기에 맞춰 깨어남 (ARC는 PIV와 동일 주기)
                 now3 = time.monotonic()
-                next_piv = max(0.0, _piv_last + self._poll_period_s - now3)
+                next_piv = max(0.0, _piv_last + self._effective_poll_period() - now3)
                 await asyncio.sleep(max(0.05, next_piv))
 
         except asyncio.CancelledError:

@@ -1595,6 +1595,21 @@ class ChamberRuntime:
                                     s, h = self.dc_pulse.arc_counts
                                     self.data_logger.process_params["soft_arc_count"] = s
                                     self.data_logger.process_params["hard_arc_count"] = h
+                                    # ✅ 점화/증착 구간을 나눈 요약을 로그로 남긴다
+                                    #    (엑셀 열은 기존 Soft/Hard 그대로 — 열 추가 금지)
+                                    with contextlib.suppress(Exception):
+                                        _as = self.dc_pulse.arc_summary
+                                        self.append_log(
+                                            f"DCPulse{self.ch}",
+                                            f"[arc] 런 요약: 합계={_as['run_total']} "
+                                            f"(soft={_as['run_soft']} hard={_as['run_hard']}) | "
+                                            f"점화={_as['ign_total']} "
+                                            f"(soft={_as['ign_soft']} hard={_as['ign_hard']}) | "
+                                            f"증착={_as['depo_total']} "
+                                            f"(soft={_as['depo_soft']} hard={_as['depo_hard']}) | "
+                                            f"0x8C 동작={'예' if _as['reset_ok'] else '아니오'}, "
+                                            f"종료값 확정={'예' if _as['final_read'] else '아니오'}"
+                                        )
 
                                 _pname = str(
                                     self.data_logger.process_params.get("process_name")
@@ -1642,6 +1657,12 @@ class ChamberRuntime:
                                 _s, _h = self.dc_pulse.arc_counts
                                 detail.setdefault("soft_arc_count", int(_s))
                                 detail.setdefault("hard_arc_count", int(_h))
+                                with contextlib.suppress(Exception):
+                                    _as = self.dc_pulse.arc_summary
+                                    detail.setdefault("arc_ign_total", int(_as["ign_total"]))
+                                    detail.setdefault("arc_depo_total", int(_as["depo_total"]))
+                                    detail.setdefault("arc_reset_ok", bool(_as["reset_ok"]))
+                                    detail.setdefault("arc_final_read", bool(_as["final_read"]))
 
                         # ➊ 카드 헤더용 prefix: "CHx Sputter"
                         detail.setdefault("ch", self.ch)
@@ -2224,14 +2245,24 @@ class ChamberRuntime:
                     _el = float(_d.get("elapsed_s", 0.0) or 0.0)
                     _el_txt = f"{int(_el // 60)}분{int(_el % 60):02d}초" if _el >= 60 else f"{_el:.0f}초"
                     _rate = _d.get("rate")
+                    _calc = _d.get("calc_rate")
                     _rate_lim = _d.get("rate_limit")
-                    _tot_lim = _d.get("run_total_limit")
+                    _why = ", ".join(
+                        w for w, on in (
+                            ("아크율", _d.get("by_rate")),
+                            ("점화 구간 과다", _d.get("by_ign")),
+                            ("증착 구간 과다", _d.get("by_depo")),
+                        ) if on
+                    ) or "-"
                     msg = (
-                        f"⚠️ CH{self.ch} DC Pulse Arc 경고\n"
+                        f"⚠️ CH{self.ch} DC Pulse Arc 경고 ({_why})\n"
                         f"공정: {proc_name}\n"
                         f"출력 ON 후 {_el_txt} — 런 누적 Soft {soft} / Hard {hard} (합 {soft + hard})\n"
-                        f"최근 아크율 soft+hard {_rate if _rate is not None else '-'}/s "
-                        f"(기준 {_rate_lim}/s x{_d.get('rate_n', '')} 또는 누적 {_tot_lim})\n"
+                        f"점화 {_d.get('ign_total', '-')} (기준 {_d.get('ign_limit', '-')}) / "
+                        f"증착 {_d.get('depo_total', '-')} (기준 {_d.get('depo_limit', '-')})\n"
+                        f"최근 아크율 장비 {_rate if _rate is not None else '-'}/s, "
+                        f"계산 {_calc if _calc is not None else '-'}/s "
+                        f"(기준 {_rate_lim}/s x{_d.get('rate_n', '')})\n"
                         f"장비 원시값 SAT={_d.get('raw_soft', '-')} ANT={_d.get('raw_hard', '-')}"
                     )
                     self.append_log(f"DCPulse{self.ch}", msg)
