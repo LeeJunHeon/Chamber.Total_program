@@ -2224,9 +2224,13 @@ class ChamberRuntime:
                             pass
 
                     self._display_dc(P, V, I)
+                    # 원시 삼중값 병기(감사용) — 앞부분 P=/V=/I= 형식은 기존 분석 스크립트 호환을 위해 유지
+                    _raw = getattr(ev, "raw", None) or {}
+                    _raw_s = (f" (raw P/I/V={_raw.get('P')}/{_raw.get('I')}/{_raw.get('V')})"
+                              if _raw else "")
                     self.append_log(
                         f"DCPulse{self.ch}",
-                        f"[telemetry] P={float(P or 0):.1f} W, V={float(V or 0):.2f} V, I={float(I or 0):.3f} A"
+                        f"[telemetry] P={float(P or 0):.1f} W, V={float(V or 0):.2f} V, I={float(I or 0):.3f} A{_raw_s}"
                     )
 
                 elif k == "arc_threshold_reached":

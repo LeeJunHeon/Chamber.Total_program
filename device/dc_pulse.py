@@ -41,6 +41,28 @@ class DCPEvent:
     voltage: Optional[float] = None
     current: Optional[float] = None
     eng: Optional[dict] = None
+    raw: Optional[dict] = None   # telemetry: 0x9A 원시 정수 {"P","I","V"} (감사용)
+
+# ========= PIV 환산/정합성 (순수 함수 — 테스트 가능) =========
+def _piv_scale(raw: dict, w_lsb: float, a_lsb: float, v_lsb: float) -> dict:
+    """0x9A 원시 정수(P/I/V)에 LSB 상수를 곱해 엔지니어링 값으로 만든다."""
+    P_raw = int(raw.get("P", 0)); I_raw = int(raw.get("I", 0)); V_raw = int(raw.get("V", 0))
+    return {"raw": {"P": P_raw, "I": I_raw, "V": V_raw},
+            "eng": {"P_W": P_raw * float(w_lsb),
+                    "I_A": I_raw * float(a_lsb),
+                    "V_V": V_raw * float(v_lsb)}}
+
+
+PIV_SCALE_ERR_MAX_PCT = 15.0
+
+
+def _piv_scale_check(P_W: float, I_A: float, V_V: float) -> Optional[tuple[bool, float]]:
+    """P 와 V x I 의 정합성. (ok, 오차%) — P 또는 I 가 0 이면 None(판정 불가)."""
+    if P_W <= 0.0 or I_A <= 0.0:
+        return None
+    err = abs(P_W - V_V * I_A) / max(1.0, P_W) * 100.0
+    return (err <= PIV_SCALE_ERR_MAX_PCT, err)
+
 
 # ========= 명령 레코드 =========
 @dataclass
@@ -330,6 +352,7 @@ class AsyncDCPulse:
         self._arc_prev_raw_h: Optional[int] = None
         self._arc_prev_ts: float = 0.0
         self._arc_zero_reset_logged: bool = False
+        self._piv_scale_checked: bool = False       # 런당 1회 P vs VxI 정합성 자가진단
 
         # ★ 추가: on_telemetry 콜백 저장 (3/19 리팩토링 시 누락됨)
         self._on_telemetry = on_telemetry
@@ -412,7 +435,8 @@ class AsyncDCPulse:
         self._tcp_keepalive = self._cfg_bool("DCP_TCP_KEEPALIVE", False)
 
         # ---- 스케일/스텝(새로 추가) ----
-        self._v_meas_v_per_lsb = self._cfg_float("DCP_V_MEAS_V_PER_LSB", 1.468815)
+        # 전압은 장비가 이미 V 단위 정수로 준다(2026-09-21 실측). 설정 누락 시에도 1.0 유지.
+        self._v_meas_v_per_lsb = self._cfg_float("DCP_V_MEAS_V_PER_LSB", 1.0)
         self._i_meas_a_per_lsb = self._cfg_float("DCP_I_MEAS_A_PER_LSB", 0.01)
         self._p_meas_w_per_lsb = self._cfg_float("DCP_P_MEAS_W_PER_LSB", 10.0)
 
@@ -953,6 +977,7 @@ class AsyncDCPulse:
         self._arc_zero_reset_logged = False
         self._soft_arc_total = 0
         self._hard_arc_total = 0
+        self._piv_scale_checked = False
         return True
 
     async def _emit_failed_off_time(self, want_raw: int, got_raw: Optional[int],
@@ -1254,12 +1279,8 @@ class AsyncDCPulse:
         I_raw = (data[2] << 8) | data[3]
         V_raw = (data[4] << 8) | data[5]
 
-        P_W = P_raw * self._p_meas_w_per_lsb
-        I_A = I_raw * self._i_meas_a_per_lsb
-        V_V = V_raw * self._v_meas_v_per_lsb
-
-        return {"raw": {"P": P_raw, "I": I_raw, "V": V_raw},
-                "eng": {"P_W": P_W, "I_A": I_A, "V_V": V_V}}
+        return _piv_scale({"P": P_raw, "I": I_raw, "V": V_raw},
+                          self._p_meas_w_per_lsb, self._i_meas_a_per_lsb, self._v_meas_v_per_lsb)
     
     # Soft/Hard Arc 누적값 읽기 (0x96 / 0x99) — 출력 ON 이후 장비가 누적 관리
     async def read_soft_arc_total(self) -> Optional[int]:
@@ -2349,10 +2370,31 @@ class AsyncDCPulse:
                                     if self._spdev_n:
                                         self._spdev_n = 0
 
-                                # ③ 텔레메트리 이벤트 전송
+                                # ②-b 런당 1회 스케일 정합성 자가진단 (점화 창이 닫힌 뒤 첫 정상 표본).
+                                #     경고만 남기고 공정에는 개입하지 않는다.
+                                if not _fast and not getattr(self, "_piv_scale_checked", False):
+                                    chk = _piv_scale_check(p, i, v)
+                                    if chk is not None:
+                                        self._piv_scale_checked = True
+                                        ok, err = chk
+                                        rr = res.get("raw") or {}
+                                        if ok:
+                                            await self._emit_status(
+                                                f"[piv] 스케일 정합 OK (P={p:.1f} W, VxI={v*i:.1f} W, 오차 {err:.1f}%)"
+                                            )
+                                        else:
+                                            await self._emit_status(
+                                                f"[piv] 스케일 의심 — P={p:.1f} W vs VxI={v*i:.1f} W (오차 {err:.1f}%) | "
+                                                f"raw P/I/V={rr.get('P')}/{rr.get('I')}/{rr.get('V')} | "
+                                                f"상수 W/LSB={self._p_meas_w_per_lsb} A/LSB={self._i_meas_a_per_lsb} "
+                                                f"V/LSB={self._v_meas_v_per_lsb}"
+                                            )
+
+                                # ③ 텔레메트리 이벤트 전송 (raw: 감사용 원시 삼중값)
                                 ev = DCPEvent(
                                     kind="telemetry",
                                     data=eng, power=p, voltage=v, current=i, eng=eng,
+                                    raw=res.get("raw"),
                                 )
                                 self._ev_nowait(ev)
                                 cb = getattr(self, "_on_telemetry", None)

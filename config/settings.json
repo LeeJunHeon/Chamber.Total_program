@@ -191,7 +191,8 @@
     "DCP_POST_OPEN_QUIET_S": 0.8,          // 연결 직후 안정화 대기 (초)
     "DCP_DRAIN_TIMEOUT_S": 1.0,            // 데이터 전송 완료 대기 (초)
     // DC Pulse 보정계수 (캘리브레이션 값 - 장비 교정 후 변경)
-    "DCP_V_MEAS_V_PER_LSB": 1.468815,     // 전압 측정: 1 LSB당 전압 (V)
+    "DCP_V_MEAS_V_PER_LSB": 1.0,          // 전압 측정: 1 LSB당 전압 (V). 장비가 이미 V 단위 정수로 준다 —
+                                          // 2026-09-21 실측 1,624표본에서 P = V_raw x I 가 성립(구 1.468815 는 근거 불명)
     "DCP_I_MEAS_A_PER_LSB": 0.01,         // 전류 측정: 1 LSB당 전류 (A)
     "DCP_P_MEAS_W_PER_LSB": 10.0,         // 전력 측정: 1 LSB당 전력 (W)
     "DCP_RAMP_MS_PER_LSB": 1.0,           // 램프 시간: 1 LSB당 시간 (ms)
