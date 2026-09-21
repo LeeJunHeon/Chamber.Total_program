@@ -42,6 +42,7 @@ def _pm_version() -> tuple:
 
 
 _PM_VER = _pm_version()
+_ORIG_PROBE_CONNECT = AsyncPLC.__dict__["_probe_connect"].__func__   # test_11 이 클래스 속성을 덮어쓰므로 원본 보관
 
 
 # ───────────────────────── 가짜 클라이언트 ─────────────────────────
@@ -449,6 +450,114 @@ def test_11_diag_runs_once_per_interval():
     # 접속 실패 메시지에 시도횟수/분류가 붙는지
     fails = [m for m in logs if "Modbus TCP 연결 실패" in m]
     _reset_cfg()
+
+
+# ───────────────────────── 12 ─────────────────────────
+def test_12_diag_is_not_stale():
+    """E401 메시지의 '분류=' 는 이전 실패의 묵은 진단값을 쓰지 않는다."""
+    _reset_cfg()
+    _set_cfg(PLC_DIAG_PROBE=False, PLC_DIAG_MIN_INTERVAL_S=60.0)
+    p, logs = _mk()
+    FakeClient.connect_ok = False
+    # (a) 묵은 값: 90초 전 기록
+    p._last_connect_diag = "SYN 무응답(타임아웃, errno=10060)"
+    p._last_connect_diag_ts = time.monotonic() - 90.0
+    try:
+        asyncio.run(p.read_coil(1))
+        raise AssertionError("E401 이 나야 한다")
+    except PLCError as e:
+        assert e.code == "E401"
+        assert "분류=미확인" in str(e), str(e)
+        assert "SYN 무응답" not in str(e), str(e)
+    # (b) 진단 스레드 진행 중
+    p, logs = _mk()
+    FakeClient.connect_ok = False
+    p._last_connect_diag = "SYN 무응답(타임아웃, errno=10060)"
+    p._last_connect_diag_ts = time.monotonic() - 90.0
+    p._diag_running = True
+    try:
+        asyncio.run(p.read_coil(1))
+    except PLCError as e:
+        assert "분류=진단중" in str(e), str(e)
+    # (c) 신선한 값은 그대로 쓴다
+    p, logs = _mk()
+    FakeClient.connect_ok = False
+    p._last_connect_diag = "접속 거부(RST, errno=10061)"
+    p._last_connect_diag_ts = time.monotonic()
+    try:
+        asyncio.run(p.read_coil(1))
+    except PLCError as e:
+        assert "분류=접속 거부(RST, errno=10061)" in str(e), str(e)
+    _reset_cfg()
+
+
+# ───────────────────────── 13 ─────────────────────────
+def test_13_probe_connect_errno_map():
+    class _Sk:
+        rc = 0
+        def __init__(self, *a, **k): pass
+        def __enter__(self): return self
+        def __exit__(self, *a): return False
+        def settimeout(self, t): pass
+        def connect_ex(self, addr): return _Sk.rc
+
+    orig = PLC.socket.socket
+    PLC.socket.socket = _Sk          # type: ignore[assignment]
+    try:
+        expect = {
+            0:     "접속됨",
+            10035: "판정보류(접속 진행중, errno=10035)",
+            10056: "접속됨(이미 연결, errno=10056)",
+            10013: "차단됨(방화벽/권한, errno=10013)",
+            10060: "SYN 무응답(타임아웃, errno=10060)",
+            10061: "접속 거부(RST, errno=10061)",
+            10065: "도달 불가(errno=10065)",
+            12345: "미분류(errno=12345)",
+        }
+        for rc, want in expect.items():
+            _Sk.rc = rc
+            got = _ORIG_PROBE_CONNECT("10.0.0.1", 502, 0.5)
+            assert got == want, (rc, got, want)
+    finally:
+        PLC.socket.socket = orig      # type: ignore[assignment]
+
+
+# ───────────────────────── 14 ─────────────────────────
+def test_14_link_transition_logged():
+    """끊김 감지 1줄 / 복구 1줄 — 채팅 알림 횟수는 기존과 동일."""
+    _reset_cfg()
+    # (a) 임계 미만 끊김: 알림 0회, 로그는 감지 1 + 복구 1
+    p, logs = _mk()
+    fired = []
+    p._fire_conn_change = lambda ok, detail="": fired.append((ok, detail))   # type: ignore[assignment]
+    p._disconnect_alert_after_s = 60.0
+    for _ in range(5):
+        p._mark_conn_fail()
+    p._mark_conn_ok()
+    down = [m for m in logs if m.startswith("WARN PLC 링크 끊김 감지")]
+    up = [m for m in logs if m.startswith("WARN PLC 링크 복구")]
+    assert len(down) == 1, down
+    assert len(up) == 1 and "채팅알림=미발송" in up[0], up
+    assert fired == [], fired
+    # 복구 뒤에는 새 사이클
+    p._mark_conn_fail()
+    assert len([m for m in logs if m.startswith("WARN PLC 링크 끊김 감지")]) == 2
+
+    # (b) 임계 초과 끊김: 끊김 알림 1 + 재연결 알림 1 (기존과 동일), 로그 감지 1 + 복구 1
+    p, logs = _mk()
+    fired = []
+    p._fire_conn_change = lambda ok, detail="": fired.append((ok, detail))   # type: ignore[assignment]
+    p._disconnect_alert_after_s = 0.0
+    for _ in range(5):
+        p._mark_conn_fail()
+    p._mark_conn_ok()
+    assert [ok for ok, _ in fired] == [False, True], fired
+    assert len([m for m in logs if m.startswith("WARN PLC 링크 끊김 감지")]) == 1
+    up = [m for m in logs if m.startswith("WARN PLC 링크 복구")]
+    assert len(up) == 1 and "채팅알림=발송" in up[0], up
+    # 끊김 상태가 아니었으면 복구 로그도 없다
+    p._mark_conn_ok()
+    assert len([m for m in logs if m.startswith("WARN PLC 링크 복구")]) == 1
 
 
 # ───────────────────────── 실소켓 ─────────────────────────

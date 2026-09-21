@@ -388,6 +388,68 @@ def install_global_exception_hooks(logger: logging.Logger) -> None:
         logger.exception("sys.unraisablehook install failed")
 
 
+# 이 접두사가 붙은 태스크는 생성한 쪽이 반드시 await 해서 예외를 처리한다.
+# 따라서 done_callback 에서 크래시로 보지 않는다.
+# (device/plc.py 가 여기서 import 한다. 리터럴을 복제한 곳이 생기면 두 곳을 같이 고칠 것)
+AWAITED_TASK_PREFIX = "awaited:"
+
+# "진짜" 태스크 크래시의 중복 억제 창(초). 같은 키의 재발은 창 안에서 기록하지 않고 세기만 한다.
+TASK_CRASH_DEDUP_S = 60.0
+_TASK_CRASH_MAX_KEYS = 256
+_task_crash_lock = threading.Lock()
+_task_crash_seen: dict = {}      # key -> {"first": 첫 발생 시각, "n": 억제된 횟수}
+
+
+def _task_crash_key(exc: BaseException) -> tuple:
+    """(예외 타입 이름, str(exc)[:200], 트레이스백 마지막 프레임 "파일:라인")"""
+    loc = ""
+    try:
+        tb = exc.__traceback__
+        while tb is not None and tb.tb_next is not None:
+            tb = tb.tb_next
+        if tb is not None:
+            loc = f"{tb.tb_frame.f_code.co_filename}:{tb.tb_lineno}"
+    except Exception:
+        pass
+    try:
+        msg = str(exc)[:200]
+    except Exception:
+        msg = ""
+    return (type(exc).__name__, msg, loc)
+
+
+def _task_crash_dedup(exc: BaseException, now: Optional[float] = None) -> tuple:
+    """중복 억제 판정. 반환 (record, summaries)
+
+    record    : 이번 예외를 전체 트레이스백으로 기록할지
+    summaries : 먼저 남길 "반복 억제" 요약 목록 [(key_str, n, elapsed_s), ...]
+                (창 만료 후 같은 키 재발 + 억제 카운트가 남은 채 만료된 다른 키들)
+    """
+    if now is None:
+        now = time.monotonic()
+    key = _task_crash_key(exc)
+    summaries = []
+    with _task_crash_lock:
+        for k, st in list(_task_crash_seen.items()):
+            if k != key and (now - st["first"]) >= TASK_CRASH_DEDUP_S:
+                if st["n"] > 0:
+                    summaries.append((f"{k[0]}: {k[1]} @ {k[2]}", st["n"], now - st["first"]))
+                del _task_crash_seen[k]
+        st = _task_crash_seen.get(key)
+        if st is not None and (now - st["first"]) < TASK_CRASH_DEDUP_S:
+            st["n"] += 1
+            return False, summaries
+        if st is not None:
+            if st["n"] > 0:
+                summaries.append((f"{key[0]}: {key[1]} @ {key[2]}", st["n"], now - st["first"]))
+            del _task_crash_seen[key]
+        _task_crash_seen[key] = {"first": now, "n": 0}
+        while len(_task_crash_seen) > _TASK_CRASH_MAX_KEYS:
+            oldest = min(_task_crash_seen, key=lambda k: _task_crash_seen[k]["first"])
+            del _task_crash_seen[oldest]
+    return True, summaries
+
+
 def install_asyncio_exception_logging(loop: asyncio.AbstractEventLoop, logger: logging.Logger) -> None:
     """asyncio loop 예외 + task 크래시 즉시 로깅"""
     def _loop_handler(_loop, context):
@@ -412,6 +474,14 @@ def install_asyncio_exception_logging(loop: asyncio.AbstractEventLoop, logger: l
         return
 
     def _done_callback(task: asyncio.Task):
+        # 생성한 쪽이 await 해서 처리하는 태스크는 크래시가 아니다
+        # (task.exception() 을 여기서 소비하지 않도록 이름만 보고 return)
+        try:
+            name = task.get_name() or ""
+        except Exception:
+            name = ""
+        if name.startswith(AWAITED_TASK_PREFIX):
+            return
         try:
             exc = task.exception()
         except asyncio.CancelledError:
@@ -420,7 +490,14 @@ def install_asyncio_exception_logging(loop: asyncio.AbstractEventLoop, logger: l
             logger.exception("task.exception() failed")
             return
         if exc:
-            logger.error("TASK CRASHED", exc_info=exc)
+            try:
+                record, summaries = _task_crash_dedup(exc)
+            except Exception:
+                record, summaries = True, []
+            for k_s, n, dur in summaries:
+                logger.error("TASK CRASHED (반복 억제) %s | 같은 오류 %d회 (%.0f초 동안)", k_s, n, dur)
+            if record:
+                logger.error("TASK CRASHED", exc_info=exc)
 
     def _create_task_patched(coro, *args, **kwargs):
         task = orig_create_task(coro, *args, **kwargs)

@@ -6,6 +6,8 @@ import asyncio
 import contextlib
 import json
 import ssl
+import threading
+import time
 import urllib.request
 from typing import Optional, List, Dict, Any, Set, Tuple
 
@@ -52,6 +54,9 @@ class ChatNotifier(QObject):
         # 실행 컨텍스트
         self._last_started_params: Optional[dict] = None
         self._errors: List[str] = []          # 누적 오류(집계용)
+        # notify_error_event 중복 억제: (src, code, cause[:120]) -> {"first": 첫 발생, "n": 억제 횟수}
+        self._err_dedup: Dict[Tuple[str, str, str], Dict[str, float]] = {}
+        self._err_dedup_lock = threading.Lock()
         self._error_seen: Set[str] = set()    # 종료 리포트 중복 방지
         self._finished_sent: bool = False
 
@@ -620,6 +625,59 @@ class ChatNotifier(QObject):
         subtitle = f"[{src}] {code} | {cause}" if code else f"[{src}] {cause}"
         fields = {"해결방법": fix} if fix else None
 
+        # ✅ 중복 억제(이 함수가 유일한 관문이므로 여기서만).
+        #    창 안 재발은 세기만 하고, 창 만료 후 재발은 요약을 subtitle 끝에 덧붙여 새 사이클 시작
+        send, suffix = self._err_dedup_decide((src, code, cause[:120]), now=time.monotonic())
+        if not send:
+            return
+        subtitle = subtitle + suffix
+
         # urgent=True: 버퍼에 쌓지 말고 즉시 전송(루프가 없으면 flush 때 전송)
         self._post_card("장비 오류", subtitle=subtitle, status="FAIL", fields=fields, urgent=True)
+
+    # ── 오류 카드 중복 억제 ──────────────────────────────────────────
+    @staticmethod
+    def _err_dedup_window_s() -> float:
+        """CHAT_ERR_DEDUP_S (초). 0 이면 억제 안 함."""
+        try:
+            from lib import config_common as _cc
+            return max(0.0, float(getattr(_cc, "CHAT_ERR_DEDUP_S", 60.0)))
+        except Exception:
+            return 60.0
+
+    @staticmethod
+    def _err_dedup_summary(elapsed_s: float, n: int) -> str:
+        return f" | 직전 {elapsed_s:.0f}초 동안 같은 오류 {int(n)}회 반복"
+
+    def _err_dedup_decide(self, key: Tuple[str, str, str], *, now: float) -> Tuple[bool, str]:
+        """(전송 여부, subtitle 접미사). 창=0 이면 항상 (True, "").
+        억제된 건이 있는 채로 만료된 다른 키는 여기서 훑어 요약 카드를 먼저 내보낸다(타이머 없음)."""
+        win = self._err_dedup_window_s()
+        if win <= 0.0:
+            return True, ""
+        suffix = ""
+        expired_cards: List[str] = []
+        with self._err_dedup_lock:
+            for k, st in list(self._err_dedup.items()):
+                if k == key or (now - st["first"]) < win:
+                    continue
+                if st["n"] > 0:
+                    sub_k = f"[{k[0]}] {k[1]} | {k[2]}" if k[1] else f"[{k[0]}] {k[2]}"
+                    expired_cards.append(sub_k + self._err_dedup_summary(now - st["first"], int(st["n"])))
+                del self._err_dedup[k]
+            st = self._err_dedup.get(key)
+            if st is not None and (now - st["first"]) < win:
+                st["n"] += 1
+                send = False
+            else:
+                if st is not None and st["n"] > 0:
+                    suffix = self._err_dedup_summary(now - st["first"], int(st["n"]))
+                self._err_dedup[key] = {"first": now, "n": 0}
+                while len(self._err_dedup) > 256:
+                    oldest = min(self._err_dedup, key=lambda k: self._err_dedup[k]["first"])
+                    del self._err_dedup[oldest]
+                send = True
+        for sub in expired_cards:
+            self._post_card("장비 오류", subtitle=sub, status="FAIL", urgent=True)
+        return send, suffix
 

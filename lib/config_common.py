@@ -516,6 +516,9 @@ PLC_RECONNECT_DELAY_S = 0.5
 # 끊긴 뒤 이 시간이 지나도 재연결 안 되면 "끊김" 알림 1회 발송
 PLC_DISCONNECT_ALERT_AFTER_S = 60.0
 
+# 같은 오류 카드(src, code, cause) 재전송 억제 창 (초). 0 이면 억제 안 함(기존 동작과 동일)
+CHAT_ERR_DEDUP_S = 60.0
+
 PLC_CMD_PULSE_MS = 180
 
 PLC_LOCK_WARN_MS = 2500.0

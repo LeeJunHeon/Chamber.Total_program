@@ -41,6 +41,7 @@ except Exception:      # pragma: no cover - 구버전/설치 이상 시 문자�
 
 from lib import config_common as cfgc   # ✅ 추가: Config 팝업에서 바뀐 값 소스
 from util.log_hub import DailyCsvListAppender
+from util.app_logging import AWAITED_TASK_PREFIX   # await 되는 내부 태스크 표식(TASK CRASHED 오탐 방지)
 
 # ======================================================
 # 주소 맵 (단독 CLI에서 사용한 것과 동일)
@@ -376,6 +377,7 @@ class AsyncPLC:
         self._connect_fail_streak: int = 0    # 연속 접속 실패 횟수
         self._disconnected_at: float = 0.0    # 소켓이 없어진 시각
         self._last_connect_diag: str = ""     # 마지막 진단 분류
+        self._last_connect_diag_ts: float = 0.0   # 그 분류가 기록된 시각(monotonic) — 묵은 값 판별용
         self._last_diag_ts: float = 0.0       # 마지막 진단 시각
         self._diag_running: bool = False      # 진단 스레드 중복 실행 방지
         self._sock_lock = threading.Lock()    # _connect_sync/_close_sync 동시 실행 방지
@@ -819,7 +821,8 @@ class AsyncPLC:
                     # ✅ 원인 진단(별도 스레드, 최소 간격 제한)
                     self._diag_connect_failure()
 
-                    _diag = self._last_connect_diag or "미확인"
+                    # ⚠ 진단은 별도 스레드에서 나중에 채워진다 → 묵은 값(이전 실패의 분류)은 쓰지 않는다
+                    _diag = self._current_connect_diag()
                     _suffix = f" (시도 {attempts}회, 분류={_diag})"
                     if last_exc is not None:
                         raise PLCError(
@@ -881,6 +884,22 @@ class AsyncPLC:
             self.log("WARN PLC 소켓 재생성 #%d (사유=%s, op=%s, 이전 연결 유지 %.0f초)",
                      self._reconnect_count, reason, op, held)
 
+    def _current_connect_diag(self) -> str:
+        """E401 메시지에 붙일 진단 분류. 진행 중이면 "진단중", 묵었으면(> PLC_DIAG_MIN_INTERVAL_S) "미확인"."""
+        if self._diag_running:
+            return "진단중"
+        cls = self._last_connect_diag
+        if not cls:
+            return "미확인"
+        try:
+            min_gap = float(getattr(cfgc, "PLC_DIAG_MIN_INTERVAL_S", 60.0))
+        except Exception:
+            min_gap = 60.0
+        ts = float(getattr(self, "_last_connect_diag_ts", 0.0) or 0.0)
+        if ts <= 0.0 or (time.monotonic() - ts) > min_gap:
+            return "미확인"
+        return cls
+
     def _diag_connect_failure(self) -> None:
         """접속 최종 실패의 원인을 별도 스레드에서 한 줄로 남긴다.
         락과 무관하게 돌며 어떤 예외도 밖으로 내지 않는다."""
@@ -906,6 +925,7 @@ class AsyncPLC:
                 try:
                     cls = self._probe_connect(host, port, tmo)
                     self._last_connect_diag = cls
+                    self._last_connect_diag_ts = time.monotonic()
                     p_plc = self._probe_ping(host)
                     p_moxa = self._probe_ping(moxa)
                     with contextlib.suppress(Exception):
@@ -930,12 +950,18 @@ class AsyncPLC:
             if rc == 0:
                 return "접속됨"
             if rc in (110, 10060):          # ETIMEDOUT / WSAETIMEDOUT
-                return "SYN 무응답(타임아웃)"
+                return f"SYN 무응답(타임아웃, errno={rc})"
             if rc in (111, 10061):          # ECONNREFUSED / WSAECONNREFUSED
-                return "접속 거부(RST)"
+                return f"접속 거부(RST, errno={rc})"
             if rc in (113, 101, 10065, 10051):   # EHOSTUNREACH/ENETUNREACH/WSA*
-                return "도달 불가"
-            return f"errno={rc}"
+                return f"도달 불가(errno={rc})"
+            if rc in (10035, 115, 36):      # WSAEWOULDBLOCK / EINPROGRESS / EINPROGRESS(BSD)
+                return f"판정보류(접속 진행중, errno={rc})"
+            if rc in (10056, 106):          # WSAEISCONN / EISCONN
+                return f"접속됨(이미 연결, errno={rc})"
+            if rc in (10013, 13):           # WSAEACCES / EACCES
+                return f"차단됨(방화벽/권한, errno={rc})"
+            return f"미분류(errno={rc})"
         except socket.timeout:
             return "SYN 무응답(타임아웃)"
         except Exception as e:
@@ -964,6 +990,9 @@ class AsyncPLC:
           (= 락이 스레드 종료 전에 풀리지 않는다). 취소 자체는 그대로 전파된다.
         """
         fut = asyncio.ensure_future(asyncio.to_thread(fn, *args, **kwargs))
+        # 이 태스크의 예외는 바로 아래 await 가 100% 받는다 → 크래시 로거가 오기록하지 않도록 표식만
+        with contextlib.suppress(Exception):
+            fut.set_name(f"{AWAITED_TASK_PREFIX}plc:{getattr(fn, '__name__', 'io')}")
         try:
             return await asyncio.shield(fut)
         except asyncio.CancelledError:
@@ -1027,6 +1056,11 @@ class AsyncPLC:
     # ---------- 연결 상태/알림 처리 ----------
     def _mark_conn_ok(self) -> None:
         """heartbeat ping 성공 시 호출. 끊김 상태였으면 '재연결' 알림 1회 발송."""
+        # 끊김 상태였으면(채팅 알림 발송 여부와 무관) 복구 로그는 항상 1줄 남긴다
+        if self._disconnect_since != 0.0:
+            self.log("WARN PLC 링크 복구 (끊김 %.1f초, 채팅알림=%s)",
+                     time.monotonic() - self._disconnect_since,
+                     "발송" if self._disconnect_alerted else "미발송")
         # 끊김 알림을 이미 보낸 상태에서 복구된 경우에만 '재연결' 알림
         if self._disconnect_alerted:
             self._fire_conn_change(True, f"[CH1&2] PLC 재연결 성공 ({self.cfg.ip}:{self.cfg.port})")
@@ -1040,8 +1074,9 @@ class AsyncPLC:
         대기 시간 경과 + 미발송 상태면 '끊김' 알림 1회 발송."""
         now = time.monotonic()
         if self._disconnect_since == 0.0:
-            # 끊김 추적 시작
+            # 끊김 추적 시작 (사이클당 정확히 1회 로그 — 채팅 알림 정책과 무관)
             self._disconnect_since = now
+            self.log("WARN PLC 링크 끊김 감지 (채팅 알림 임계 %.0f초)", self._disconnect_alert_after_s)
         self._conn_alert_state = False
 
         # 아직 알림 안 보냈고, 경과 시간이 임계 넘으면 1회 발송
@@ -1737,7 +1772,8 @@ class AsyncPLC:
         except Exception:
             summary_s = 60.0
         stats = dict(ok=0, disconnected=0, empty_snapshot=0,
-                     budget_timeout=0, plc_error=0, write_failed=0, backoff=0)
+                     budget_timeout=0, plc_error=0, write_failed=0, backoff=0,
+                     reg_failed=0)   # reg_failed: 행은 기록됐으나 레지스터 칸만 공백(끊김의 전조)
         last_summary = time.perf_counter()
 
         def _emit_summary(force: bool = False) -> None:
@@ -1746,8 +1782,8 @@ class AsyncPLC:
             if not force and (now - last_summary) < max(1.0, summary_s):
                 return
             last_summary = now
-            skips = sum(v for k, v in stats.items() if k != "ok")
-            if skips > 0:
+            skips = sum(v for k, v in stats.items() if k not in ("ok", "reg_failed"))
+            if skips > 0 or stats["reg_failed"] > 0:
                 try:
                     n_blocks = len(self._coil_ranges_for_plan(
                         [PLC_COIL_MAP[k] for k in keys if k in PLC_COIL_MAP],
@@ -1756,11 +1792,12 @@ class AsyncPLC:
                     n_blocks = -1
                 self.log(
                     "WARN PLC COIL LOG summary(%.0fs): ok=%d disconnected=%d empty=%d "
-                    "budget_timeout=%d plc_error=%d write_failed=%d backoff=%d (plan=%d, blocks=%d)",
+                    "budget_timeout=%d plc_error=%d write_failed=%d backoff=%d (plan=%d, blocks=%d) "
+                    "reg_failed=%d",
                     max(1.0, summary_s), stats["ok"], stats["disconnected"],
                     stats["empty_snapshot"], stats["budget_timeout"],
                     stats["plc_error"], stats["write_failed"], stats["backoff"],
-                    self._coil_plan_idx, n_blocks,
+                    self._coil_plan_idx, n_blocks, stats["reg_failed"],
                 )
             for k in stats:
                 stats[k] = 0
@@ -1819,7 +1856,8 @@ class AsyncPLC:
                 try:
                     reg_snap = await self.snapshot_regs_fast(keys=reg_keys)
                 except Exception as e:
-                    self.log("PLC REG LOG: snapshot failed (ignored): %r", e)
+                    stats["reg_failed"] += 1
+                    self.log("WARN PLC REG LOG: snapshot failed (ignored): %r", e)
                     reg_snap = {}
 
             row = [dt.isoformat(timespec="seconds")]
