@@ -115,6 +115,16 @@
     "DC_LOW_STREAK_N": 3,                  // 연속 이 횟수만큼 저출력이면 경고
     "DC_LOW_CURRENT_THRESH_A": 0.05,       // 이 값 이하면 '전류 없음'으로 판단 (A)
     "DC_LOW_CURRENT_STREAK_N": 3,          // 연속 이 횟수만큼 저전류이면 경고
+    // --- DC 과전류 인터락 (DC Pulse / DC Power 공용) — 세트포인트 전력 기준 전류 상한 ---
+    // ENABLE 과 ENABLE_CONT 를 나눈 이유: DC Power/DC2 의 전류는 PLC_DC_I_SCALE(미검증) 을 거치므로 별도로 끌 수 있게 분리.
+    "DC_OVERCURRENT_ENABLE": true,         // DC Pulse 쪽 과전류 인터락 사용
+    "DC_OVERCURRENT_ENABLE_CONT": true,    // DC Power/DC2(PLC 경유) 쪽 과전류 인터락 사용
+    "DC_OVERCURRENT_P1_W": 300.0,          // 이 전력 이하는 I1 고정 (W)
+    "DC_OVERCURRENT_I1_A": 1.0,            // P1 이하 전류 상한 (A)
+    "DC_OVERCURRENT_P2_W": 600.0,          // 선형 구간 상단 전력 (W)
+    "DC_OVERCURRENT_I2_A": 2.0,            // P2 에서의 전류 상한 (A)
+    "DC_OVERCURRENT_STREAK_N": 1,          // 연속 이 횟수 초과 시 차단 (1=즉시)
+    "DC_OVERCURRENT_EXTRAPOLATE": true,    // false 면 P2 이상에서 I2 로 클램프
     "DC_WATT_DEADBAND": 0.5,               // 이 범위 내 변화는 무시 (불필요한 재전송 방지) (W)
     // DC 보정계수 (캘리브레이션 값 - 장비 교정 후 변경)
     "DC_PARAM_WATT_TO_DAC": 4.0835,        // W -> DAC 변환 기울기

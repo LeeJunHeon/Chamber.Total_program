@@ -25,6 +25,7 @@ from typing import Optional, Callable, Deque, AsyncGenerator, Literal, Union
 from collections import deque
 import asyncio, time, contextlib, socket
 from lib import config_common as cfgc   # 공통 config(런타임 reload용)
+from lib.power_limits import dc_overcurrent_limit_a   # DC 과전류 인터락 상한(세트포인트 기준)
 
 # ========= 이벤트 모델 =========
 EventKind = Literal["status", "telemetry", "command_confirmed", "command_failed", "arc_threshold_reached"]
@@ -331,6 +332,7 @@ class AsyncDCPulse:
 
         self._spdev_n: int = 0
         self._low_curr_n: int = 0
+        self._overcurr_n: int = 0     # 과전류 연속 카운터(점화 고속창에서도 판정)
 
         # ✅ STOP/종료 중에 ON/SET 계열 write 재전송을 막기 위한 가드
         self._stop_guard: bool = False
@@ -978,6 +980,7 @@ class AsyncDCPulse:
         self._soft_arc_total = 0
         self._hard_arc_total = 0
         self._piv_scale_checked = False
+        self._overcurr_n = 0
         return True
 
     async def _emit_failed_off_time(self, want_raw: int, got_raw: Optional[int],
@@ -2255,6 +2258,59 @@ class AsyncDCPulse:
     async def _read_one_frame(self, timeout_s: float) -> bytes:
         return await asyncio.wait_for(self._frame_q.get(), timeout=timeout_s)
 
+    # ====== 과전류 인터락 ======
+    async def _check_overcurrent(self, p: float, v: float, i, eng, raw=None) -> bool:
+        """세트포인트(_last_ref_power_w) 기준 전류 상한 초과 시 저전류 AUTO-STOP 과 같은 경로로 차단.
+        차단했으면 True(호출부는 폴링을 끝낸다). 점화 고속창 여부와 무관하게 호출된다."""
+        if not self._cfg_bool("DC_OVERCURRENT_ENABLE", True):
+            return False
+        try:
+            i = float(i)
+        except Exception:
+            return False
+        if i != i or i in (float("inf"), float("-inf")):
+            return False
+        ref_w = float(self._last_ref_power_w or 0.0)
+        limit = dc_overcurrent_limit_a(ref_w if ref_w > 0.0 else None)
+        if i > limit:
+            self._overcurr_n += 1
+        else:
+            if self._overcurr_n:
+                self._overcurr_n = 0
+            return False
+        streak_n = max(1, self._cfg_int("DC_OVERCURRENT_STREAK_N", 1))
+        if self._overcurr_n < streak_n:
+            await self._emit_status(
+                f"[WARN] 과전류 감지: I={i:.3f} A > {limit:.3f} A ({self._overcurr_n}/{streak_n})"
+            )
+            return False
+
+        # 감사용 원시값 병기
+        raw_s = ""
+        if raw:
+            raw_s = f" | raw P/I/V={raw.get('P')}/{raw.get('I')}/{raw.get('V')}"
+        await self._emit_status(
+            f"[overcurrent] I={i:.3f}A > 한계 {limit:.3f}A | 설정={ref_w:.0f}W "
+            f"| P={p:.1f}W V={v:.1f}V{raw_s}"
+        )
+        reason = (f"overcurrent: I={i:.3f}A > {limit:.3f}A "
+                  f"(설정 {ref_w:.0f}W 기준, {self._overcurr_n}회 연속)")
+        fault = None
+        with contextlib.suppress(Exception):
+            fault = await self.read_fault_code()
+        if fault is not None and fault != 0:
+            reason += f", fault=0x{fault:04X}"
+        self._ev_nowait(DCPEvent(
+            kind="command_failed",
+            cmd="AUTO_STOP",
+            reason=reason,
+            power=p, voltage=v, current=i, eng=eng,
+        ))
+        await self._emit_status("[AUTO-STOP] 과전류 → OUTPUT_OFF & stop polling")
+        with contextlib.suppress(Exception):
+            await self.output_off()
+        return True
+
     # ====== Poll 루프(필요 시 항목 확장) ======
     async def _poll_loop(self):
         try:
@@ -2291,6 +2347,12 @@ class AsyncDCPulse:
                                 p = float(eng.get("P_W", 0.0))
                                 v = float(eng.get("V_V", 0.0))
                                 i = float(eng.get("I_A", 0.0))
+
+                                # ⓪ 과전류 인터락 — ★ 점화 고속창 가드(_fast) 보다 앞에서 판정한다.
+                                #    타겟 파손으로 이어지는 과전류는 정확히 점화 구간에서 잡아야 하기 때문
+                                #    (2026-09-19 CH2: 190W 설정에 ON 직후 첫 샘플 2.71A → 타겟 파손).
+                                if await self._check_overcurrent(p, v, i, eng, res.get("raw")):
+                                    return
 
                                 # ✅ [필수] 점화 고속 창에서는 AUTO-STOP 판정을 '중지' 한다.
                                 #    고속 창(1초 주기)에서 기존 연속 N회 기준을 그대로 쓰면

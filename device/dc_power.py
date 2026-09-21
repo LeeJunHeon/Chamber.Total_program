@@ -19,6 +19,7 @@ from dataclasses import dataclass
 from typing import Optional, Callable, Awaitable, AsyncGenerator, Literal, Any
 
 from lib import config_common as cfgc  # ✅ "모듈"로 import (값 고정 방지)
+from lib.power_limits import dc_overcurrent_limit_a   # DC 과전류 인터락 상한(세트포인트 기준)
 
 # ========= 이벤트 모델 =========
 EventKind = Literal[
@@ -110,6 +111,7 @@ class DCPowerAsync:
 
         self._low_power_streak = 0
         self._low_current_streak = 0  # 저전류 감시용 카운터
+        self._overcurrent_streak = 0  # 과전류 인터락 카운터(램프업 중에도 판정)
 
         # ✅ 마지막에 config 재로딩(=UI apply 대비)
         self.reload_runtime_cfg()
@@ -160,6 +162,7 @@ class DCPowerAsync:
         self.target_power = float(max(0.0, min(self._dc_max_power, target_power)))
         self._low_power_streak = 0    # ★ 저전력 카운터 리셋
         self._low_current_streak = 0  # ★ 저전류 카운터 리셋
+        self._overcurrent_streak = 0  # ★ 과전류 카운터 리셋
 
         if not self._toggle_enable:
             await self._emit_status("DCV SET ON 실패: toggle_enable 콜백이 없습니다.")
@@ -264,6 +267,45 @@ class DCPowerAsync:
         except Exception:
             pass
 
+    async def _check_overcurrent(self) -> bool:
+        """세트포인트(target_power) 기준 전류 상한 초과 판정. 차단이면 status + target_failed 를 내고 True.
+        (호출부가 cleanup() 을 띄우고 루프를 끝낸다 — 저전류 감시와 같은 경로)"""
+        mod = self._cfg if self._cfg is not None else cfgc
+        if not bool(getattr(mod, "DC_OVERCURRENT_ENABLE_CONT", getattr(cfgc, "DC_OVERCURRENT_ENABLE_CONT", True))):
+            return False
+        try:
+            ia = float(self.current_a or 0.0)
+        except Exception:
+            return False
+        if ia != ia or ia in (float("inf"), float("-inf")):
+            return False
+        tp = float(self.target_power or 0.0)
+        limit = dc_overcurrent_limit_a(tp if tp > 0.0 else None)
+        if ia > limit:
+            self._overcurrent_streak += 1
+        else:
+            if self._overcurrent_streak:
+                self._overcurrent_streak = 0
+            return False
+        streak_n = max(1, int(getattr(mod, "DC_OVERCURRENT_STREAK_N", getattr(cfgc, "DC_OVERCURRENT_STREAK_N", 1))))
+        if self._overcurrent_streak < streak_n:
+            await self._emit_status(
+                f"과전류 감시: {self._overcurrent_streak}/{streak_n} (meas={ia:.3f}A > {limit:.3f}A)"
+            )
+            return False
+        msg = (f"DC 과전류: meas={ia:.3f}A > 한계 {limit:.3f}A "
+               f"(목표 {tp:.1f}W 기준, {self._overcurrent_streak}회 연속) → 공정 중단")
+        # PLC_DC_I_SCALE 은 실측 검증 전이므로, 트립 시 원시값을 같이 남겨 한 번의 런으로 스케일을 검증할 수 있게 한다.
+        try:
+            scale = float(getattr(mod, "PLC_DC_I_SCALE", getattr(cfgc, "PLC_DC_I_SCALE")))
+            if scale > 0.0:
+                msg += f" | I_scale={scale:g} (raw≈{ia / scale:.0f})"
+        except Exception:
+            pass
+        await self._emit_status(msg)
+        self._ev_nowait(DCPowerEvent(kind="target_failed", message=msg))
+        return True
+
     async def _control_loop(self):
         """(선택) 주기적으로 상태 읽기 요청을 보내는 루프 + 결과 섭취."""
         try:
@@ -275,7 +317,15 @@ class DCPowerAsync:
                     res = await self._request_status_read() if self._request_status_read else None
                     if res is not None:
                         self._ingest_status_result(res)
-                        
+
+                        # === 과전류 인터락 (★ 저전력 감시보다 앞, 목표 도달 게이트 없음 — 램프업 중이 가장 위험) ===
+                        try:
+                            if await self._check_overcurrent():
+                                asyncio.create_task(self.cleanup())
+                                break
+                        except Exception:
+                            pass
+
                         # === 연속 저전력 감시(최소 수정) ===
                         try:
                             p = float(self.power_w or 0.0)

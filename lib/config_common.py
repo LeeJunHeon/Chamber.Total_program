@@ -214,6 +214,20 @@ DC_LOW_CURRENT_THRESH_A = 0.05      # A 이하를 "전류 거의 0"으로 간주
 DC_LOW_CURRENT_STREAK_N = 3         # 연속 N회 기준
 DC_WATT_DEADBAND = 0.5              # 연속 전송 억제 데드밴드(W) (init 기본값과 통일)
 
+# --- DC 과전류 인터락 (DC Pulse / DC Power 공용) ---
+#  세트포인트 전력 기준 전류 상한(lib/power_limits.py). 2026-09-19 CH2 DC Pulse 190W 설정에
+#  ON 직후 2.71A(정상 대비 약 5배) → 타겟 파손이 근거.
+#  ENABLE 과 ENABLE_CONT 를 나눈 이유: DC Power/DC2 의 전류는 PLC_DC_I_SCALE(미검증) 을
+#  거치므로 별도로 끌 수 있게 분리.
+DC_OVERCURRENT_ENABLE       = True    # DC Pulse 쪽 인터락 사용
+DC_OVERCURRENT_ENABLE_CONT  = True    # DC Power/DC2(PLC 경유) 쪽 인터락 사용
+DC_OVERCURRENT_P1_W         = 300.0   # 이 전력 이하는 I1 고정
+DC_OVERCURRENT_I1_A         = 1.0
+DC_OVERCURRENT_P2_W         = 600.0
+DC_OVERCURRENT_I2_A         = 2.0
+DC_OVERCURRENT_STREAK_N     = 1       # 연속 N회 초과 시 차단 (1=즉시)
+DC_OVERCURRENT_EXTRAPOLATE  = True    # False 면 P2 이상에서 I2 로 클램프
+
 # 보정계수
 DC_PARAM_WATT_TO_DAC = 4.0835
 DC_OFFSET_WATT_TO_DAC = 5.275
