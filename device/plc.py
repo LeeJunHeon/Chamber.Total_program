@@ -42,6 +42,7 @@ except Exception:      # pragma: no cover - 구버전/설치 이상 시 문자�
 from lib import config_common as cfgc   # ✅ 추가: Config 팝업에서 바뀐 값 소스
 from util.log_hub import DailyCsvListAppender
 from util.app_logging import AWAITED_TASK_PREFIX   # await 되는 내부 태스크 표식(TASK CRASHED 오탐 방지)
+from lib import link_state                          # PLC 링크 다운 플래그(채팅 억제용, controller 와 공유)
 
 # ======================================================
 # 주소 맵 (단독 CLI에서 사용한 것과 동일)
@@ -1056,9 +1057,16 @@ class AsyncPLC:
     # ---------- 연결 상태/알림 처리 ----------
     def _mark_conn_ok(self) -> None:
         """heartbeat ping 성공 시 호출. 끊김 상태였으면 '재연결' 알림 1회 발송."""
+        link_state.set_plc_link_down(False)
         # 끊김 상태였으면(채팅 알림 발송 여부와 무관) 복구 로그는 항상 1줄 남긴다
         if self._disconnect_since != 0.0:
-            self.log("WARN PLC 링크 복구 (끊김 %.1f초, 채팅알림=%s)",
+            _tail = ""
+            if not self._disconnect_alerted:
+                # 복구 카드가 나가지 않는 짧은 끊김: 억제 카운터가 남지 않도록 여기서 비우고 로그에만 남긴다
+                _tot, _by = link_state.consume_suppressed()
+                if _tot > 0:
+                    _tail = f" | 억제된 알림 {link_state.format_suppressed(_tot, _by)}"
+            self.log("WARN PLC 링크 복구 (끊김 %.1f초, 채팅알림=%s)" + _tail,
                      time.monotonic() - self._disconnect_since,
                      "발송" if self._disconnect_alerted else "미발송")
         # 끊김 알림을 이미 보낸 상태에서 복구된 경우에만 '재연결' 알림
@@ -1076,6 +1084,7 @@ class AsyncPLC:
         if self._disconnect_since == 0.0:
             # 끊김 추적 시작 (사이클당 정확히 1회 로그 — 채팅 알림 정책과 무관)
             self._disconnect_since = now
+            link_state.set_plc_link_down(True)
             self.log("WARN PLC 링크 끊김 감지 (채팅 알림 임계 %.0f초)", self._disconnect_alert_after_s)
         self._conn_alert_state = False
 

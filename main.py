@@ -61,6 +61,7 @@ from runtime.server_page import ServerPage  # ✅ NEW (server_page.py 위치에 
 # 챔버별 설정
 from lib import config_ch1, config_ch2
 from lib import config_common as cfgc
+from lib import link_state  # PLC 링크 다운 중 억제된 알림 건수(재연결 카드에 합산)
 from lib import config_local as cfgl  # CHAT_WEBHOOK_URL 로드
 
 # 에러코드 팝업
@@ -253,12 +254,17 @@ class MainWindow(QWidget):
                 if notifier is None:
                     return
                 if connected:
-                    # 재연결: 성공 카드로 즉시 전송
-                    notifier._post_card("PLC 재연결", subtitle=detail,
+                    # 재연결: 성공 카드로 즉시 전송 (+ 끊긴 동안 억제된 연결 알림 건수)
+                    total, by_code = link_state.consume_suppressed()
+                    sub = detail
+                    if total > 0:
+                        sub += (f" | 끊긴 동안 억제된 연결 알림 {total}건 "
+                                f"({link_state.format_suppressed(total, by_code)})")
+                    notifier._post_card("PLC 재연결", subtitle=sub,
                                         status="SUCCESS", urgent=True)
                 else:
-                    # 끊김: 장비 오류 카드로 즉시 전송
-                    notifier.notify_error_event("PLC", "E401", detail)
+                    # 끊김: 장비 오류 카드로 즉시 전송 (link_event=True → 링크 다운 억제를 통과하는 유일한 호출)
+                    notifier.notify_error_event("PLC", "E401", detail, link_event=True)
             except Exception:
                 pass
             # UI 로그에도 남김

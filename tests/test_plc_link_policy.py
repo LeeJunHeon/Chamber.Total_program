@@ -29,6 +29,7 @@ import device.plc as PLC                                  # noqa: E402
 _REAL_CLIENT = PLC.ModbusTcpClient                        # 실소켓 테스트에서 복원용
 from device.plc import AsyncPLC, PLCError                 # noqa: E402
 from lib import config_common as cfgc                     # noqa: E402
+from lib import link_state                                # noqa: E402
 from pymodbus.exceptions import ConnectionException, ModbusIOException   # noqa: E402
 from pymodbus.pdu import ExceptionResponse                # noqa: E402
 import pymodbus                                           # noqa: E402
@@ -523,21 +524,31 @@ def test_13_probe_connect_errno_map():
 
 
 # ───────────────────────── 14 ─────────────────────────
-def test_14_link_transition_logged():
-    """끊김 감지 1줄 / 복구 1줄 — 채팅 알림 횟수는 기존과 동일."""
+def test_14_link_state_toggled():
+    """첫 실패에 link down, 복구에 up. 끊김 감지 1줄 / 복구 1줄 — 채팅 알림 횟수는 기존과 동일."""
     _reset_cfg()
+    link_state.set_plc_link_down(False)
+    link_state.consume_suppressed()
     # (a) 임계 미만 끊김: 알림 0회, 로그는 감지 1 + 복구 1
     p, logs = _mk()
     fired = []
     p._fire_conn_change = lambda ok, detail="": fired.append((ok, detail))   # type: ignore[assignment]
     p._disconnect_alert_after_s = 60.0
-    for _ in range(5):
+    assert link_state.is_plc_link_down() is False
+    p._mark_conn_fail()
+    assert link_state.is_plc_link_down() is True, "첫 실패에 link down"
+    for _ in range(4):
         p._mark_conn_fail()
+    link_state.note_suppressed("E401"); link_state.note_suppressed("E402")   # 끊긴 동안 억제된 카드 가정
     p._mark_conn_ok()
+    assert link_state.is_plc_link_down() is False, "복구에 link up"
     down = [m for m in logs if m.startswith("WARN PLC 링크 끊김 감지")]
     up = [m for m in logs if m.startswith("WARN PLC 링크 복구")]
     assert len(down) == 1, down
     assert len(up) == 1 and "채팅알림=미발송" in up[0], up
+    # 복구 카드가 안 나가는 짧은 끊김 → 억제 카운터는 여기서 비워지고 로그 뒤에 덧붙는다
+    assert "억제된 알림 E401 1건, E402 1건" in up[0], up
+    assert link_state.suppressed_total() == 0
     assert fired == [], fired
     # 복구 뒤에는 새 사이클
     p._mark_conn_fail()
@@ -552,6 +563,7 @@ def test_14_link_transition_logged():
         p._mark_conn_fail()
     p._mark_conn_ok()
     assert [ok for ok, _ in fired] == [False, True], fired
+    assert link_state.is_plc_link_down() is False
     assert len([m for m in logs if m.startswith("WARN PLC 링크 끊김 감지")]) == 1
     up = [m for m in logs if m.startswith("WARN PLC 링크 복구")]
     assert len(up) == 1 and "채팅알림=발송" in up[0], up

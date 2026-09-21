@@ -17,6 +17,8 @@ try:
 except Exception:
     _cfg = None
 
+from lib import link_state   # PLC 링크 다운 플래그(device/plc 가 세팅) — 끊김 중 E401/E402 카드 억제
+
 
 class ChatNotifier(QObject):
     """
@@ -589,11 +591,15 @@ class ChatNotifier(QObject):
     #    - 기존 notify_error_with_src() 는 (공정 중) 누적 집계 카드 용도로 유지
     # ------------------------------------------------------------------
     @Slot(str, str, str)
-    def notify_error_event(self, src: str, error_code: str, message: str):
+    def notify_error_event(self, src: str, error_code: str, message: str,
+                           *, link_event: bool = False):
         """통신/서버 계열 오류를 **발생 즉시** Google Chat에 전송한다.
 
         주의:
         - 여기서는 self._errors(집계용)에 넣지 않는다. (모아보내기 방지)
+        - link_event=True 는 PLC 링크 끊김 알림 자체(main._on_plc_conn_change)에서만 쓴다.
+          그 외 호출은 링크 다운 중 PLC 연결계 코드(E401/E402)의 채팅 전송만 생략된다
+          (오류 처리·로그·호스트 응답은 그대로).
         - message는 이미 1줄로 정리된 상태를 기대하지만,
         여기서도 한 번 더 '\\n'/'\\r'을 제거해 안전하게 보정한다.
         """
@@ -625,7 +631,13 @@ class ChatNotifier(QObject):
         subtitle = f"[{src}] {code} | {cause}" if code else f"[{src}] {cause}"
         fields = {"해결방법": fix} if fix else None
 
-        # ✅ 중복 억제(이 함수가 유일한 관문이므로 여기서만).
+        # (a) 링크 차단: PLC 링크 다운 중 연결계 코드는 채팅 전송만 생략(건수는 재연결 카드에 합산)
+        if (not link_event) and self._plc_link_suppress_on() \
+           and code in self._plc_link_codes() and link_state.is_plc_link_down():
+            link_state.note_suppressed(code)
+            return
+
+        # (b) 일반 중복 억제(이 함수가 유일한 관문이므로 여기서만).
         #    창 안 재발은 세기만 하고, 창 만료 후 재발은 요약을 subtitle 끝에 덧붙여 새 사이클 시작
         send, suffix = self._err_dedup_decide((src, code, cause[:120]), now=time.monotonic())
         if not send:
@@ -634,6 +646,27 @@ class ChatNotifier(QObject):
 
         # urgent=True: 버퍼에 쌓지 말고 즉시 전송(루프가 없으면 flush 때 전송)
         self._post_card("장비 오류", subtitle=subtitle, status="FAIL", fields=fields, urgent=True)
+
+    # ── PLC 링크 다운 중 연결계 카드 억제 ─────────────────────────────
+    @staticmethod
+    def _plc_link_suppress_on() -> bool:
+        try:
+            from lib import config_common as _cc
+            return bool(getattr(_cc, "CHAT_PLC_LINK_SUPPRESS", True))
+        except Exception:
+            return True
+
+    @staticmethod
+    def _plc_link_codes() -> Set[str]:
+        """CHAT_PLC_LINK_CODES 를 대문자·공백 제거 set 으로 정규화."""
+        try:
+            from lib import config_common as _cc
+            codes = getattr(_cc, "CHAT_PLC_LINK_CODES", ["E401", "E402"])
+        except Exception:
+            codes = ["E401", "E402"]
+        if isinstance(codes, str):
+            codes = codes.split(",")
+        return {str(c).strip().upper() for c in codes if str(c).strip()}
 
     # ── 오류 카드 중복 억제 ──────────────────────────────────────────
     @staticmethod
