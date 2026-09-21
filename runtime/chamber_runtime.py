@@ -941,18 +941,18 @@ class ChamberRuntime:
                                     use_rf_pulse = bool(params.get("use_rf_pulse", False))
 
                                     if use_rf or use_rf_pulse:
-                                        # 카메라는 1대(선점 우선): 다른 소유자가 쓰는 중이면 이번 공정 녹화만 건너뛴다
+                                        # 카메라는 1대: 참여자 집합으로 한 세션을 공유(둘 이상이면 ALL 승격, 같은 모드면 재시작 없음)
                                         _cam_owner = f"chamber{self.ch}"
-                                        if recorder.start(f"CH{self.ch}", owner=_cam_owner):
-                                            recorder.set_log_callback(self._cam_log, owner=_cam_owner)  # ✅ 카메라 로그 → 공정 로그+화면 (False 면 무시)
-                                            self.append_log("CAM", f"[CH{self.ch}] 카메라 녹화 시작 (RF={'RF' if use_rf else ''}{'Pulse' if use_rf_pulse else ''})")
-                                        else:
-                                            self.append_log("CAM", f"[CH{self.ch}] 카메라 사용 중({recorder.current_owner}) → 이번 공정 녹화 건너뜀")
+                                        recorder.set_log_callback(self._cam_log, owner=_cam_owner)  # ✅ 카메라 로그 → 공정 로그+화면
+                                        recorder.start(owner=_cam_owner)                            # mode 는 참여자 집합이 정한다
+                                        self.append_log("CAM", f"[CH{self.ch}] 카메라 녹화 시작 (mode={recorder.current_mode}, RF={'RF' if use_rf else ''}{'Pulse' if use_rf_pulse else ''})")
                                     else:
                                         self.append_log("CAM", f"[CH{self.ch}] RF 미사용 공정 → 카메라 건너뜀")
                                 else:
                                     if recorder.stop(owner=f"chamber{self.ch}"):
                                         self.append_log("CAM", f"[CH{self.ch}] 카메라 녹화 정지")
+                                    else:
+                                        self.append_log("CAM", f"[CH{self.ch}] 카메라 사용 종료 — 다른 공정이 계속 촬영 중")
                             else:
                                 self.append_log("CAM", "camera_recorder 없음 (None)")
                         except Exception as e:

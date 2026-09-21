@@ -1008,13 +1008,13 @@ class PlasmaCleaningRuntime:
                 if recorder:
                     _cam_owner = f"pc{self._selected_ch}"
                     if on:
-                        # 카메라는 1대(선점 우선): 다른 소유자가 쓰는 중이면 이번 녹화만 건너뛴다
-                        if recorder.start("CLEANING", owner=_cam_owner):
-                            recorder.set_log_callback(self._cam_log, owner=_cam_owner)  # ✅ 카메라 로그 → 공정 로그+화면
-                        else:
-                            self.append_log("CAM", f"카메라 사용 중({recorder.current_owner}) → 이번 공정 녹화 건너뜀")
+                        # 카메라는 1대: 참여자 집합으로 한 세션을 공유(둘 이상이면 ALL 승격, 같은 모드면 재시작 없음)
+                        recorder.set_log_callback(self._cam_log, owner=_cam_owner)  # ✅ 카메라 로그 → 공정 로그+화면
+                        recorder.start(owner=_cam_owner)                            # mode 는 참여자 집합이 정한다
+                        self.append_log("CAM", f"카메라 녹화 시작 (mode={recorder.current_mode})")
                     else:
-                        recorder.stop(owner=_cam_owner)
+                        if not recorder.stop(owner=_cam_owner):
+                            self.append_log("CAM", "카메라 사용 종료 — 다른 공정이 계속 촬영 중")
 
         cfgm = getattr(self, "_cfg_mod", cfgc)
 
@@ -1782,7 +1782,7 @@ class PlasmaCleaningRuntime:
             with contextlib.suppress(Exception):
                 recorder = getattr(self, "camera_recorder", None)
                 if recorder:
-                    recorder.stop(owner=f"pc{self._selected_ch}")   # 내 것이 아니면 무시된다
+                    recorder.stop(owner=f"pc{self._selected_ch}")   # 다른 참여자가 남아 있으면 촬영은 계속된다
 
         # 버튼/UI 반영
         if self._running:

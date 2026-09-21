@@ -249,6 +249,10 @@ _MODE_CONFIG: dict[str, dict] = {
     "ALL":      {"labels": _ALL_LABELS, "active": _ALL_LABELS,                                    "folder": "ALL"},
 }
 
+# owner → 단독 사용 시 모드. 참여자가 둘 이상이면 "ALL" 로 승격(강등 없음). 알 수 없는 owner 는 "ALL".
+_OWNER_MODE: dict[str, str] = {"chamber1": "CH1", "chamber2": "CH2",
+                               "pc1": "CLEANING", "pc2": "CLEANING"}
+
 CONFIG_FILE = "rf_config.json"
 
 
@@ -656,8 +660,10 @@ class CameraRecorder:
         self._thread: Optional[threading.Thread] = None
         self._lock = threading.Lock()
 
-        # ✅ 소유자(선점 우선). "" 이면 소유자 없음. 카메라는 1대이므로 이 필드가 곧 진실이다.
-        self._owner: str = ""
+        # ✅ 참여자 집합. 카메라는 1대이고 프레임에 모든 디스플레이가 들어가므로 한 세션을 공유한다.
+        #    이 집합이 곧 진실(runtime_state 에 상태를 두지 않는다). 전부 self._lock 안에서 접근.
+        self._users: set[str] = set()
+        self._log_cbs: dict[str, Callable[[str], None]] = {}   # owner -> 로그 콜백
 
         self._mode          = "ALL"
         self._active_labels = list(_ALL_LABELS)
@@ -672,30 +678,53 @@ class CameraRecorder:
         self._load_config()
 
     # ── 공정 로그 콜백 ─────────────────────────────────────
-    def set_log_callback(self, cb, owner: str = "") -> bool:
+    def set_log_callback(self, cb, owner: str = "") -> None:
         """런타임의 append_log로 메시지를 보낼 콜백 주입. None이면 시스템 logger 사용.
-        owner 가 비었거나 현재 소유자와 같으면 설정(True). 다른 소유자면 무시(False)."""
+        owner 가 있으면 owner 별로 보관해 동시 사용 중인 공정 로그 모두에 전달한다."""
         with self._lock:
-            if owner and self._owner and owner != self._owner:
-                return False
-            self._log_cb = cb
-            return True
+            if owner:
+                if cb is None:
+                    self._log_cbs.pop(owner, None)
+                else:
+                    self._log_cbs[owner] = cb
+            else:
+                self._log_cb = cb
 
     @property
-    def current_owner(self) -> str:
+    def current_mode(self) -> str:
         with self._lock:
-            return self._owner
+            return self._mode
+
+    @property
+    def current_users(self) -> set[str]:
+        with self._lock:
+            return set(self._users)
+
+    def _desired_mode(self) -> str:
+        """참여자 집합으로 정한 모드(락 안에서만 호출). 0명→"", 1명→그 owner 의 모드, 2명 이상→"ALL".
+        현재 모드가 이미 ALL 이면 항상 ALL(강등 금지)."""
+        if (self._mode == "ALL" and self._users
+                and self._thread and self._thread.is_alive() and not self._stop_event.is_set()):
+            return "ALL"     # 진행 중인 ALL 세션은 유지 (생성자 기본값 "ALL" 은 세션이 아니므로 해당 없음)
+        if not self._users:
+            return ""
+        if len(self._users) == 1:
+            return _OWNER_MODE.get(next(iter(self._users)), "ALL")
+        return "ALL"
 
     def _log(self, msg: str) -> None:
-        """콜백이 있으면 공정 로그(+화면)로, 없으면 시스템 logger로 보낸다."""
-        cb = self._log_cb
-        if cb is not None:
+        """콜백이 있으면 공정 로그(+화면)로 — 기본 콜백과 owner 별 콜백 전부 —, 없으면 시스템 logger."""
+        with self._lock:
+            cbs = [self._log_cb] + list(self._log_cbs.values())
+        cbs = [cb for cb in cbs if cb is not None]
+        if not cbs:
+            logger.info(msg)
+            return
+        for cb in cbs:
             try:
                 cb(msg)
-                return
             except Exception:
                 pass
-        logger.info(msg)
 
     def _notify(self, msg: str) -> None:
         """알림 콜백이 있으면 호출한다. 예외는 삼킨다(촬영/공정에 전파 금지)."""
@@ -734,21 +763,28 @@ class CameraRecorder:
     def start(self, mode: str = "ALL", owner: str = "") -> bool:
         """
         백그라운드 녹화 시작. 즉시 반환(논블로킹).
-        owner="" 이면 기존과 동일(무조건 재시작, True).
-        다른 owner 가 소유 중이고 스레드가 살아 있으면 아무것도 하지 않고 False(선점 우선).
+        owner="" 이면 기존과 완전히 동일(무조건 재시작, True). _users 는 건드리지 않는다.
+        owner 가 있으면 mode 인자는 무시하고 참여자 집합이 모드를 정한다:
+          · 스레드가 살아 있고 이미 그 모드면 아무것도 하지 않는다(★ 재시작 금지)
+          · 모드가 달라지면(둘째 참여자 → ALL 승격) 1회만 재시작
         """
         with self._lock:
+            want = mode.upper()
+            promote_from = ""
             if owner:
-                if self._owner and self._owner != owner and self._thread and self._thread.is_alive():
-                    logger.info("[CameraRecorder] 사용 중(owner=%s) → %s 요청 거절", self._owner, owner)
-                    return False
-                self._owner = owner
+                self._users.add(owner)
+                want = self._desired_mode() or "ALL"
+                alive = bool(self._thread and self._thread.is_alive())
+                if alive and self._mode == want:
+                    return True
+                if alive:
+                    promote_from = self._mode
             if self._thread and self._thread.is_alive():
                 logger.debug("[CameraRecorder] 이전 스레드 정리")
                 self._stop_event.set()
                 self._thread.join(timeout=3.0)
 
-            self._mode = mode.upper()
+            self._mode = want
             mc = _MODE_CONFIG.get(self._mode, _MODE_CONFIG["ALL"])
             self._active_labels  = mc["labels"]   # CSV 컬럼 (항상 10개)
             self._check_labels   = mc["active"]   # 에러 판단 대상
@@ -761,16 +797,25 @@ class CameraRecorder:
                 name=f"CameraRecorder-{self._mode}",
             )
             self._thread.start()
-            logger.info("[CameraRecorder] 시작 mode=%s owner=%s", self._mode, self._owner or "-")
-            return True
+            logger.info("[CameraRecorder] 시작 mode=%s users=%s", self._mode, sorted(self._users) or "-")
+            users_now = sorted(self._users)
+        if promote_from:
+            self._log(f"카메라 모드 승격 {promote_from}→{want} (참여: {users_now})")
+        return True
 
     def stop(self, owner: str = "") -> bool:
         """녹화 정지 요청. 즉시 반환(논블로킹).
-        owner="" 이면 기존과 동일(무조건 정지, True). 소유자와 다르면 무시(False)."""
+        owner="" 이면 기존과 동일(무조건 정지, True).
+        owner 가 있으면 참여자에서 빼고, 남은 참여자가 없을 때만 정지(True). 남아 있으면 False(강등 재시작 없음)."""
         with self._lock:
-            if owner and self._owner and owner != self._owner:
-                return False
-            self._owner = ""
+            if owner:
+                self._users.discard(owner)
+                if self._users:
+                    return False
+                self._log_cbs.clear()
+            else:
+                self._users.clear()
+                self._log_cbs.clear()
         self._stop_event.set()
         logger.info("[CameraRecorder] 정지 요청")
         return True

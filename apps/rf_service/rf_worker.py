@@ -90,7 +90,7 @@ KEEP_CONF_CELL = {
     if f"RF_KEEP_CONF_{lbl}" in os.environ
 }
 KEEP_CONF_CELL.setdefault("RF3_TUNE", 0.30)
-MODES = ["CH1", "CH2", "CLEANING"]
+MODES = ["CH1", "CH2", "CLEANING", "ALL"]   # ALL: 챔버 동시 촬영 시 CameraRecorder 가 승격하는 폴더
 SESSION_RE = re.compile(r"^\d{8}_\d{6}$")
 
 
