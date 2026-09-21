@@ -191,5 +191,52 @@ def test_pc_owner_cleared_after_stop(rec):
     assert any("카메라 모드 승격 CH1→ALL" in m for m in p.logs), p.logs
 
 
+# ── 로그 콜백 락 분리 회귀 (start() 의 join 이 촬영 스레드의 finally _log 와 교착하던 문제) ──
+def _loop_with_final_log(self):
+    try:
+        while not self._stop_event.is_set():
+            time.sleep(0.02)
+    finally:
+        self._log("완료 — 촬영 0장 | 폴더: (stub)")
+
+
+@pytest.fixture
+def rec_final(monkeypatch):
+    monkeypatch.setattr(CameraRecorder, "_record_loop", _loop_with_final_log)
+    monkeypatch.setattr(CameraRecorder, "_load_config", lambda self: None)
+    r = CameraRecorder(camera_index=99)
+    yield r
+    r.stop()
+    if r._thread:
+        r._thread.join(timeout=1.0)
+
+
+def test_promote_restart_is_not_blocked_by_log_lock(rec_final):
+    r = rec_final
+    r.start(owner="chamber1")
+    time.sleep(0.2)
+    t0 = time.perf_counter()
+    r.start(owner="chamber2")
+    dt = time.perf_counter() - t0
+    assert dt < 1.0, f"승격 재시작이 {dt:.3f}s 걸렸다 (join 이 _log 락에 막힘)"
+    assert r.current_mode == "ALL" and r.current_users == {"chamber1", "chamber2"}
+    r.stop(owner="chamber1"); r.stop(owner="chamber2")
+    assert _wait_stop(r)
+
+
+def test_log_fanout_during_restart(rec_final):
+    r = rec_final
+    got1, got2 = [], []
+    r.set_log_callback(got1.append, owner="chamber1")
+    r.set_log_callback(got2.append, owner="chamber2")
+    r.start(owner="chamber1")
+    time.sleep(0.1)
+    r.start(owner="chamber2")
+    assert any("카메라 모드 승격" in m for m in got1), got1
+    assert any("카메라 모드 승격" in m for m in got2), got2
+    r.stop()
+    assert _wait_stop(r)
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

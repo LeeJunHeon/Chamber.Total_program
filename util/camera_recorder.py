@@ -664,6 +664,9 @@ class CameraRecorder:
         #    이 집합이 곧 진실(runtime_state 에 상태를 두지 않는다). 전부 self._lock 안에서 접근.
         self._users: set[str] = set()
         self._log_cbs: dict[str, Callable[[str], None]] = {}   # owner -> 로그 콜백
+        # _log_cb / _log_cbs 전용 락. _lock 과 절대 중첩하지 않는다.
+        # _log() 는 촬영 스레드에서 불리므로 세션 락(_lock)을 건드리면 start() 의 join 을 막는다.
+        self._cb_lock = threading.Lock()
 
         self._mode          = "ALL"
         self._active_labels = list(_ALL_LABELS)
@@ -681,7 +684,7 @@ class CameraRecorder:
     def set_log_callback(self, cb, owner: str = "") -> None:
         """런타임의 append_log로 메시지를 보낼 콜백 주입. None이면 시스템 logger 사용.
         owner 가 있으면 owner 별로 보관해 동시 사용 중인 공정 로그 모두에 전달한다."""
-        with self._lock:
+        with self._cb_lock:
             if owner:
                 if cb is None:
                     self._log_cbs.pop(owner, None)
@@ -713,8 +716,9 @@ class CameraRecorder:
         return "ALL"
 
     def _log(self, msg: str) -> None:
-        """콜백이 있으면 공정 로그(+화면)로 — 기본 콜백과 owner 별 콜백 전부 —, 없으면 시스템 logger."""
-        with self._lock:
+        """콜백이 있으면 공정 로그(+화면)로 — 기본 콜백과 owner 별 콜백 전부 —, 없으면 시스템 logger.
+        ⚠ 세션 락(_lock)이 아니라 _cb_lock 만 쓴다(촬영 스레드에서 호출됨)."""
+        with self._cb_lock:
             cbs = [self._log_cb] + list(self._log_cbs.values())
         cbs = [cb for cb in cbs if cb is not None]
         if not cbs:
@@ -812,10 +816,10 @@ class CameraRecorder:
                 self._users.discard(owner)
                 if self._users:
                     return False
-                self._log_cbs.clear()
             else:
                 self._users.clear()
-                self._log_cbs.clear()
+        with self._cb_lock:
+            self._log_cbs.clear()
         self._stop_event.set()
         logger.info("[CameraRecorder] 정지 요청")
         return True
