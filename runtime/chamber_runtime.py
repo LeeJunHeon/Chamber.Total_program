@@ -2061,6 +2061,18 @@ class ChamberRuntime:
                 self.process_controller.on_dc_target_reached()
             elif k == "target_failed":
                 self._dc_failed_flag = True
+                # 즉시 챗 카드(과전류/출력 이상 구분). 전송 실패가 공정 실패 처리를 막지 않도록 suppress
+                _msg = str(ev.message or "")
+                if self.chat:
+                    with contextlib.suppress(Exception):
+                        _unit = "DC Power"
+                        if "과전류" in _msg or "overcurrent" in _msg.lower():
+                            _head = f"⚠️ CH{self.ch} {_unit} 과전류 차단 → 전체 공정 중단"
+                        else:
+                            _head = f"CH{self.ch} {_unit} 출력 이상 → 전체 공정 중단"
+                        self.chat.notify_error_with_src("DC1", f"{_head} | {_msg}")
+                        if hasattr(self.chat, "flush"):
+                            self.chat.flush()
                 self.process_controller.on_dc_target_failed(
                     ev.message or "low-power",
                     code=getattr(ev, "code", None) or getattr(ev, "error_code", None),
@@ -2098,6 +2110,18 @@ class ChamberRuntime:
                 self.process_controller.on_dc2_target_reached()
             elif k == "target_failed":
                 self._dc2_failed_flag = True
+                # 즉시 챗 카드(과전류/출력 이상 구분). 전송 실패가 공정 실패 처리를 막지 않도록 suppress
+                _msg = str(ev.message or "")
+                if self.chat:
+                    with contextlib.suppress(Exception):
+                        _unit = "DC2"
+                        if "과전류" in _msg or "overcurrent" in _msg.lower():
+                            _head = f"⚠️ CH{self.ch} {_unit} 과전류 차단 → 전체 공정 중단"
+                        else:
+                            _head = f"CH{self.ch} {_unit} 출력 이상 → 전체 공정 중단"
+                        self.chat.notify_error_with_src("DC2", f"{_head} | {_msg}")
+                        if hasattr(self.chat, "flush"):
+                            self.chat.flush()
                 self.process_controller.on_dc2_target_failed(
                     ev.message or "low-power",
                     code=getattr(ev, "code", None) or getattr(ev, "error_code", None),
@@ -2350,14 +2374,17 @@ class ChamberRuntime:
                     if cmd.startswith("READ_") or cmd == "FAULT_RESET":
                         continue
 
-                    # AUTO_STOP은 진짜 공정 실패
+                    # AUTO_STOP은 진짜 공정 실패 — 챗 카드에 실제 사유(why_raw)를 싣는다
                     if cmd == "AUTO_STOP" or "target_failed" in why:
                         if self.chat:
                             with contextlib.suppress(Exception):
-                                self.chat.notify_error_with_src(
-                                    "DCPulse",
-                                    "세트포인트 이탈(연속) 또는 P=0W 감지 → 전체 공정 중단"
-                                )
+                                if "overcurrent" in why:
+                                    _head = f"⚠️ CH{self.ch} DC Pulse 과전류 차단 → 전체 공정 중단"
+                                elif "low_current" in why:
+                                    _head = f"CH{self.ch} DC Pulse 저전류 감지 → 전체 공정 중단"
+                                else:
+                                    _head = f"CH{self.ch} DC Pulse 세트포인트 이탈(연속) 또는 P=0W 감지 → 전체 공정 중단"
+                                self.chat.notify_error_with_src("DCPulse", f"{_head} | {why_raw}")
                                 if hasattr(self.chat, "flush"):
                                     self.chat.flush()
 

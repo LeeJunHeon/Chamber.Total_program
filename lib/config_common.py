@@ -227,6 +227,8 @@ DC_OVERCURRENT_P2_W         = 600.0
 DC_OVERCURRENT_I2_A         = 2.0
 DC_OVERCURRENT_STREAK_N     = 1       # 연속 N회 초과 시 차단 (1=즉시)
 DC_OVERCURRENT_EXTRAPOLATE  = True    # False 면 P2 이상에서 I2 로 클램프
+DC_OVERCURRENT_ARM_ON_START   = True   # OUTPUT_ON 직후 활성화 대기(DCP_ACTIVATION_CHECK_DELAY_S) 중에도 과전류 감시
+DC_OVERCURRENT_ARM_INTERVAL_S = 0.5    # 그 구간의 확인 주기 (초)
 
 # 보정계수
 DC_PARAM_WATT_TO_DAC = 4.0835

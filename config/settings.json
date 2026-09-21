@@ -125,6 +125,8 @@
     "DC_OVERCURRENT_I2_A": 2.0,            // P2 에서의 전류 상한 (A)
     "DC_OVERCURRENT_STREAK_N": 1,          // 연속 이 횟수 초과 시 차단 (1=즉시)
     "DC_OVERCURRENT_EXTRAPOLATE": true,    // false 면 P2 이상에서 I2 로 클램프
+    "DC_OVERCURRENT_ARM_ON_START": true,   // OUTPUT_ON 직후 활성화 대기(5초) 중에도 과전류 감시 (폴링 시작 전 사각지대 제거)
+    "DC_OVERCURRENT_ARM_INTERVAL_S": 0.5,  // 그 구간의 확인 주기 (초)
     "DC_WATT_DEADBAND": 0.5,               // 이 범위 내 변화는 무시 (불필요한 재전송 방지) (W)
     // DC 보정계수 (캘리브레이션 값 - 장비 교정 후 변경)
     "DC_PARAM_WATT_TO_DAC": 4.0835,        // W -> DAC 변환 기울기

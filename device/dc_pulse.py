@@ -1651,8 +1651,9 @@ class AsyncDCPulse:
                     if ack_ok:
                         self._out_on = True
                         await self._emit_confirmed(base_label)
-                        with contextlib.suppress(Exception):
-                            await asyncio.sleep(self._activation_check_delay_s)
+                        # 활성화 대기(5초) 동안 과전류만 감시. 차단됐으면 output_off() 완료 상태 → 폴링을 켜지 않는다
+                        if await self._watch_overcurrent_during_activation():
+                            return False
                         self.set_process_status(True)
                         return True
 
@@ -1662,8 +1663,9 @@ class AsyncDCPulse:
                     if ver is True:
                         self._out_on = True
                         await self._emit_confirmed(base_label + "_VERIFIED")
-                        with contextlib.suppress(Exception):
-                            await asyncio.sleep(self._activation_check_delay_s)
+                        # 활성화 대기(5초) 동안 과전류만 감시. 차단됐으면 output_off() 완료 상태 → 폴링을 켜지 않는다
+                        if await self._watch_overcurrent_during_activation():
+                            return False
                         self.set_process_status(True)
                         return True
 
@@ -2310,6 +2312,53 @@ class AsyncDCPulse:
         with contextlib.suppress(Exception):
             await self.output_off()
         return True
+
+    async def _watch_overcurrent_during_activation(self) -> bool:
+        """OUTPUT_ON ACK 직후 활성화 대기(_activation_check_delay_s) 동안 과전류만 감시한다. 차단했으면 True.
+
+        ARM_ON_START=False 면 기존과 동일하게 delay 만큼 sleep 하고 False.
+        읽기 실패/NAK 는 정상 상황(장비가 아직 응답 못 줄 수 있음) → 재시도 없이 다음 구간.
+        총 대기 시간은 delay 를 넘지 않는다(읽기에 쓴 시간을 뺀 만큼만 sleep). 예외를 밖으로 내지 않는다."""
+        delay = max(0.0, float(self._activation_check_delay_s))
+        try:
+            armed = self._cfg_bool("DC_OVERCURRENT_ARM_ON_START", True)
+            interval = max(0.05, self._cfg_float("DC_OVERCURRENT_ARM_INTERVAL_S", 0.5))
+        except Exception:
+            armed, interval = False, 0.5
+        if not armed or delay <= 0.0:
+            with contextlib.suppress(Exception):
+                await asyncio.sleep(delay)
+            return False
+
+        t_end = time.monotonic() + delay
+        try:
+            await self._emit_status(
+                f"[overcurrent] 활성화 대기 {delay:.1f}초 구간 감시 시작 ({interval:.1f}초 간격)"
+            )
+            while True:
+                now = time.monotonic()
+                if now >= t_end:
+                    break
+                res = None
+                with contextlib.suppress(Exception):
+                    res = await self.read_output_piv()
+                if res and "eng" in res:
+                    eng = res["eng"]
+                    p = float(eng.get("P_W", 0.0))
+                    v = float(eng.get("V_V", 0.0))
+                    i = float(eng.get("I_A", 0.0))
+                    if await self._check_overcurrent(p, v, i, eng, res.get("raw")):
+                        return True
+                remain = t_end - time.monotonic()
+                if remain <= 0.0:
+                    break
+                await asyncio.sleep(min(interval, remain))
+        except Exception:
+            with contextlib.suppress(Exception):
+                remain = t_end - time.monotonic()
+                if remain > 0.0:
+                    await asyncio.sleep(remain)
+        return False
 
     # ====== Poll 루프(필요 시 항목 확장) ======
     async def _poll_loop(self):
