@@ -18,6 +18,110 @@ from lib import config_ch1, config_ch2
 
 
 # =========================
+# START_SPUTTER ETA(min_total_s) 하한 계산 — 순수 함수 (Qt/asyncio/self 비의존)
+#   런타임이 실제로 적용하는 규칙과 1:1 로 같아야 한다:
+#   · delay 행   : chamber_runtime._runner_stage_advance_queue() 의 "(A) delay step 처리"
+#   · process_time 역산 : chamber_runtime._normalize_params_for_process() 의 fget_deprate()/역산 블록
+#   추정 함수가 process_queue 의 "CSV 원본 행"을 그대로 받으므로(정규화 결과는 원본에 되돌려 쓰지 않는다),
+#   두께 기반 레시피의 process_time 역산과 delay 행 대기를 여기서 똑같이 재현한다.
+#   (2026-09-22 실측: 150nm ÷ 0.0429 nm/s 레시피에서 min_total_s=390 이 나가던 문제 — 실제 약 68분)
+# =========================
+
+_ETA_DELAY_NAME_RE = re.compile(r"^\s*delay\s*(\d+)\s*([smhd]?)\s*$", re.IGNORECASE)
+_ETA_DURATION_RE = re.compile(r"(?:(\d+(?:\.\d+)?)h)?(?:(\d+(?:\.\d+)?)m)?(?:(\d+(?:\.\d+)?)s)?")
+
+
+def _eta_f(v) -> float:
+    """빈 문자열/None/이상값 → 0.0 (예외 없음)."""
+    try:
+        txt = str(v).strip() if v is not None else ""
+        return float(txt) if txt else 0.0
+    except Exception:
+        return 0.0
+
+
+def _eta_parse_duration_seconds(s: str) -> float:
+    """chamber_runtime._parse_duration_seconds() 와 동일 규칙: '10s','1m','1h30m' → 초. 단위 없으면 분."""
+    if not s:
+        return 0.0
+    s = s.replace(" ", "").lower()
+    m = _ETA_DURATION_RE.match(s)
+    if not m:
+        try:
+            return float(s) * 60.0
+        except Exception:
+            return 0.0
+    h = float(m.group(1) or 0)
+    m_ = float(m.group(2) or 0)
+    s_ = float(m.group(3) or 0)
+    return h * 3600 + m_ * 60 + s_
+
+
+def eta_delay_seconds(row: dict) -> float:
+    """(A) delay 행 판정. 대기 초를 돌려준다(0 이면 delay 행 아님). 런타임 블록과 동일 규칙."""
+    row = row or {}
+    name = str(row.get("Process_name") or row.get("process_note", "") or "").strip()
+    duration_s = 0.0
+    _dcol = str(row.get("delay", "") or "").strip()
+    if _dcol:
+        try:
+            duration_s = float(_dcol) * 60.0          # 숫자만 → 분
+        except Exception:
+            duration_s = float(_eta_parse_duration_seconds(_dcol.lower()))
+    else:
+        m = _ETA_DELAY_NAME_RE.match(name) if name else None
+        if m:
+            amount = int(m.group(1))
+            unit = (m.group(2) or "m").lower()
+            factor = {"s": 1.0, "m": 60.0, "h": 3600.0, "d": 86400.0}[unit]
+            duration_s = float(amount) * factor
+    return duration_s if duration_s > 0 else 0.0
+
+
+def eta_row_process_time_min(row: dict) -> float:
+    """(B) 일반 행의 process_time(분). 비어 있거나 0 이하이고 dep_rate·thickness 가 유효하면 역산.
+    _normalize_params_for_process() 의 fget_deprate()/역산 블록과 동일 규칙."""
+    row = row or {}
+    pt = _eta_f(row.get("process_time", "0"))
+    if pt > 0.0:
+        return pt
+    dep_rate = None
+    for key in ("dep_rate", "dep.rate"):
+        s = str(row.get(key, "") or "").strip()
+        if s:
+            try:
+                v = float(s)
+                dep_rate = v if v > 0 else None
+                break
+            except Exception:
+                pass
+    thickness = _eta_f(row.get("thickness", "0")) or None
+    if dep_rate and thickness:
+        try:
+            return float(thickness) / float(dep_rate) / 60.0    # nm / (nm/s) / 60 = 분
+        except Exception:
+            return pt
+    return pt
+
+
+def eta_row_min_seconds(row: dict) -> float:
+    """행 1개의 최소 소요 초. delay 행이면 대기 초만, 아니면 (shutter_delay + process_time) x 60."""
+    row = row or {}
+    d = eta_delay_seconds(row)
+    if d > 0:
+        return d
+    return (_eta_f(row.get("shutter_delay", 0)) + eta_row_process_time_min(row)) * 60.0
+
+
+def eta_min_total_seconds(rows: list, tail_s: float = 90.0) -> float:
+    """rows 전체의 하한(초) = Σ eta_row_min_seconds + tail_s. 조건 대기(IG/MFC/압력/램프업)는 0 으로 둔다."""
+    total = 0.0
+    for row in (rows or []):
+        total += eta_row_min_seconds(row or {})
+    return total + float(tail_s)
+
+
+# =========================
 # 이벤트/토큰 구조
 # =========================
 
@@ -1282,21 +1386,9 @@ class ProcessController:
             if not rows:
                 return None
 
-            def _f(v) -> float:
-                try:
-                    txt = str(v).strip()
-                    return float(txt) if txt else 0.0
-                except Exception:
-                    return 0.0
-
-            timer_s = 0.0
-            for row in rows:
-                row = row or {}
-                timer_s += _f(row.get("shutter_delay", 0)) * 60.0
-                timer_s += _f(row.get("process_time", 0)) * 60.0
-
+            # ✅ 런타임 규칙(delay 행 대기, thickness÷dep_rate 역산)과 동일한 순수 함수로 합산
             tail_s = float(getattr(cfg_mod, "ETA_TAIL_MIN_S", 90.0))
-            return max(0, round(timer_s + tail_s))
+            return max(0, round(eta_min_total_seconds(rows, tail_s)))
         except Exception:
             return None
 
