@@ -572,6 +572,123 @@ def test_14_link_state_toggled():
     assert len([m for m in logs if m.startswith("WARN PLC 링크 복구")]) == 1
 
 
+# ───────────────────────── 15~19: 저우선 격리 ─────────────────────────
+def test_15_low_timeout_does_not_touch_high_counter():
+    _reset_cfg()
+    p, logs = _mk()
+    asyncio.run(p.read_coil(1))                 # 소켓 확보 (high)
+    cli = _cur(p)
+    connects = FakeClient.connect_calls
+    for _ in range(10):
+        FakeClient.script = [ModbusIOException("no resp")]
+        try:
+            asyncio.run(p.read_coils_block(0, 4, priority="low"))
+            raise AssertionError("E402 가 나야 한다")
+        except PLCError as e:
+            assert e.code == "E402", e.code
+    assert p._consec_timeouts == 0, p._consec_timeouts
+    assert p._consec_timeouts_low == 10, p._consec_timeouts_low
+    assert _cur(p) is cli and cli.closed == 0, "소켓 재생성 0회"
+    assert FakeClient.connect_calls == connects
+    assert not any("소켓 재생성" in m for m in logs)
+
+
+def test_16_low_e401_does_not_reconnect():
+    _reset_cfg()
+    p, logs = _mk()
+    asyncio.run(p.read_coil(1))                 # 소켓 확보
+    cli = _cur(p)
+    connects = FakeClient.connect_calls
+    FakeClient.script = [ConnectionException("Connection unexpectedly closed")]
+    try:
+        asyncio.run(p.read_coils_block(0, 4, priority="low"))
+        raise AssertionError("E401 이 나야 한다")
+    except PLCError as e:
+        assert e.code == "E401", e.code
+    assert _cur(p) is cli and cli.closed == 0, "low 는 close 하지 않는다"
+    assert FakeClient.connect_calls == connects, "low 는 connect 하지 않는다"
+    assert cli.io_calls == 2, "low 는 재시도하지 않는다 (확보 1 + 실패 1)"
+    assert p._consec_timeouts == 0 and p._consec_timeouts_low == 1
+    assert not any("소켓 재생성" in m for m in logs)
+
+
+def test_17_low_success_does_not_clear_high_counter():
+    _reset_cfg()
+    _set_cfg(PLC_TIMEOUT_CLOSE_AFTER=10)
+    p, logs = _mk()
+    asyncio.run(p.read_coil(1))                 # 소켓 확보
+    # high 2회 타임아웃(각 호출: 실패 → 같은 소켓 재시도도 실패 → +1)
+    for _ in range(2):
+        FakeClient.script = [ModbusIOException("no resp"), _Resp([True])]
+        asyncio.run(p.read_coil(1))
+    # 첫 실패는 +1, 재시도 성공은 카운터를 0 으로 되돌리므로 직접 2 로 세팅해 시나리오를 고정
+    p._consec_timeouts = 2
+    p._consec_timeouts_low = 3
+    FakeClient.script = [_Resp([True, False, True, False])]
+    asyncio.run(p.read_coils_block(0, 4, priority="low"))
+    assert p._consec_timeouts == 2, "low 성공은 high 카운터를 지우지 않는다"
+    assert p._consec_timeouts_low == 0
+    # high 성공은 둘 다 지운다
+    p._consec_timeouts_low = 3
+    asyncio.run(p.read_coil(1))
+    assert p._consec_timeouts == 0 and p._consec_timeouts_low == 0
+    _reset_cfg()
+
+
+def test_18_low_does_not_connect_when_down():
+    _reset_cfg()
+    p, logs = _mk()
+    asyncio.run(p.read_coil(1))                 # 소켓 확보
+    # 링크 다운: 소켓이 닫혔다(재접속 실패 후의 상태)
+    asyncio.run(p._locked_thread(p._close_sync))
+    assert not p.is_connected() and p._disconnected_at > 0.0
+    connects = FakeClient.connect_calls
+    try:
+        asyncio.run(p.read_coils_block(0, 4, priority="low"))
+        raise AssertionError("E401 이 나야 한다")
+    except PLCError as e:
+        assert e.code == "E401" and "저우선" in str(e), str(e)
+    assert FakeClient.connect_calls == connects, "low 는 접속을 시도하지 않는다"
+    assert p._consec_timeouts == 0
+
+
+def test_19_logger_self_backoff_by_low_counter():
+    _reset_cfg()
+    _set_cfg(PLC_COIL_LOG_BACKOFF_AFTER=2)
+    p, logs = _mk()
+    asyncio.run(p.read_coil(1))                 # 연결 상태
+    p._consec_timeouts = 0
+    p._consec_timeouts_low = 2
+    snaps = []
+
+    async def _snap(keys=None):
+        snaps.append(1)
+        return {}
+    p.snapshot_all_coils_fast = _snap           # type: ignore[assignment]
+    p._plc_coil_log_stop = asyncio.Event()
+    p._plc_coil_log_interval = 0.01
+    p._plc_coil_log_keys = list(PLC.PLC_COIL_MAP.keys())[:4]
+    p._plc_reg_log_keys = []
+    _set_cfg(PLC_COIL_LOG_SUMMARY_S=0.0)        # 요약 주기 하한(1초)으로 → 1초 뒤 요약 1회
+    plan_results = []
+    p._note_coil_plan_result = lambda addrs, ok: plan_results.append(ok)   # type: ignore[assignment]
+
+    async def _run():
+        t = asyncio.create_task(p._plc_coil_log_loop())
+        await asyncio.sleep(1.15)
+        p._plc_coil_log_stop.set()
+        with contextlib.suppress(Exception):
+            await asyncio.wait_for(t, timeout=1.0)
+    import contextlib
+    asyncio.run(_run())
+    assert snaps == [], "low 임계 도달 시 스냅샷을 시도하지 않는다"
+    assert plan_results and all(ok is False for ok in plan_results), "backoff 경로로 집계"
+    summ = [m for m in logs if "PLC COIL LOG summary" in m]
+    assert summ and "low_fail=2" in summ[0], summ
+    assert "backoff=0 " not in summ[0], summ[0]
+    _reset_cfg()
+
+
 # ───────────────────────── 실소켓 ─────────────────────────
 class _MiniModbusServer(threading.Thread):
     """FC1 만 흉내내는 최소 Modbus/TCP 서버. mode: ok|delay|silent|close"""

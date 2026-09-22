@@ -371,7 +371,12 @@ class AsyncPLC:
         #    PLC 가 수 초 무응답일 때 소켓을 닫고 재접속하면, 이 PLC 는 그 뒤 1.5~3분간
         #    새 SYN 에 응답하지 않아 분 단위 단절이 된다. 그래서 타임아웃 1회로는
         #    소켓을 닫지 않고 같은 소켓으로 재시도한다.
-        self._consec_timeouts: int = 0        # 연속 타임아웃(E402) 횟수
+        # 역할 분리:
+        #   _consec_timeouts      = high 전용. 소켓 재생성 판단에만 사용.
+        #   _consec_timeouts_low  = low 전용. 로거 자기억제에만 사용.
+        self._consec_timeouts: int = 0        # 연속 타임아웃(E402) 횟수 (high 전용)
+        self._consec_timeouts_low: int = 0    # 저우선(코일/레지스터 로거) 전용 연속 실패.
+                                              # 소켓 재생성 판단에는 절대 쓰지 않는다.
         self._reconnect_count: int = 0        # 소켓 재생성 누적
         self._connected_since: float = 0.0    # 현재 소켓이 연결된 시각(monotonic)
         self._last_success_ts: float = 0.0    # 마지막 성공 I/O 시각
@@ -657,9 +662,14 @@ class AsyncPLC:
             return {self._uid_kw: self.cfg.unit}
         return {}
 
-    def _note_io_success(self) -> None:
-        """원시 연산 성공 시: 연속 타임아웃 리셋 + pymodbus 내부 카운터 원복."""
-        self._consec_timeouts = 0
+    def _note_io_success(self, priority: str = "high") -> None:
+        """원시 연산 성공 시: 연속 타임아웃 리셋 + pymodbus 내부 카운터 원복.
+        priority=low 는 low 카운터만 리셋한다(로거 성공이 high 타임아웃 증거를 지우면 안 된다)."""
+        if priority == "low":
+            self._consec_timeouts_low = 0
+        else:
+            self._consec_timeouts = 0
+            self._consec_timeouts_low = 0
         self._last_success_ts = time.monotonic()
         # pymodbus 동기 클라이언트는 성공해도 count_until_disconnect 를 되돌리지 않아
         # 누적되면 로그가 "CLOSING CONNECTION" 으로 바뀐다(소켓을 닫진 않는다).
@@ -844,6 +854,7 @@ class AsyncPLC:
                 #    임계 경로로 방금 재생성했다면 카운터가 이미 임계 이상이라,
                 #    첫 성공 전에 타임아웃이 한 번만 나도 즉시 또 재생성된다.
                 self._consec_timeouts = 0
+                self._consec_timeouts_low = 0
                 if self._connect_fail_streak > 0:
                     _down = (time.monotonic() - self._disconnected_at) if self._disconnected_at else 0.0
                     with contextlib.suppress(Exception):
@@ -1139,15 +1150,28 @@ class AsyncPLC:
         """_io_lock 안에서 원시 연산 1회를 수행한다(재시도/재접속 정책 포함).
 
         정책(이 PLC 는 소켓을 닫으면 1.5~3분간 새 SYN 에 응답하지 않는다):
+          - priority=low    : 접속 시도·close·재시도 전부 하지 않고 즉시 raise.
+                              공통 타임아웃 카운터(_consec_timeouts)도 건드리지 않는다
+                              (저우선 전용 _consec_timeouts_low 만 증가 — 로거 자기억제용).
+                              연결이 없으면(한 번이라도 끊긴 뒤) 접속 없이 E401.
           - E403            : 그대로 raise (기존과 동일)
           - E401 / reset    : 소켓이 죽었다 → close + connect(full=False) + 1회 재시도
           - E402(무응답)
-              priority=low  : 재시도도 close 도 하지 않고 즉시 raise (코일 로거는 이 tick 만 포기)
               연속 임계 도달 : close + connect + 1회 재시도
               그 외          : drain 후 '같은 소켓' 으로 1회 재시도 (소켓 유지)
         반환값은 pymodbus 응답. _ensure_ok 는 호출부에서 기존처럼 수행한다.
         """
-        await self._locked_thread(self._connect_sync, full=False)
+        if priority == "low":
+            # 저우선은 끊긴 링크를 되살리지 않는다. (_is_connected 는 클라이언트 속성만 읽으므로 락 불필요)
+            # 예외: 프로세스 기동 후 아직 한 번도 접속/끊김이 없던 상태(_client None, _disconnected_at 0)
+            #       — 이때의 최초 접속은 재접속이 아니므로 기존대로 허용한다.
+            if not self._is_connected():
+                if self._client is None and float(getattr(self, "_disconnected_at", 0.0) or 0.0) == 0.0:
+                    await self._locked_thread(self._connect_sync, full=False)
+                else:
+                    raise PLCError("E401", "PLC 연결 없음(저우선 — 접속 시도 안 함)", op=op, addr=addr)
+        else:
+            await self._locked_thread(self._connect_sync, full=False)
         await self._throttle_and_heartbeat()
 
         def _bound():
@@ -1171,7 +1195,7 @@ class AsyncPLC:
         try:
             m = _bound()
             resp = _check(await self._locked_thread(m, *args, **_kw(m)))
-            self._note_io_success()
+            self._note_io_success(priority)
             return resp
         except Exception as e:
             pe = self._to_plc_error(op, addr, e)
@@ -1180,6 +1204,10 @@ class AsyncPLC:
                 raise pe from e
 
             if pe.code == "E401" or self._is_reset_err(e):
+                if priority == "low":
+                    # 저우선은 close/connect/재시도 전부 금지 — 이 tick 만 포기
+                    self._consec_timeouts_low += 1
+                    raise pe from e
                 # 소켓이 죽었거나 상대가 끊었다 — 재생성이 유일한 복구다
                 self._log_reconnect(f"{pe.code}/reset", op)
                 await self._locked_thread(self._close_sync)
@@ -1187,15 +1215,16 @@ class AsyncPLC:
                 await self._throttle_and_heartbeat()
                 m = _bound()
                 resp = _check(await self._locked_thread(m, *args, **_kw(m)))
-                self._note_io_success()
+                self._note_io_success(priority)
                 return resp
 
             # ── E402: 응답 없음/프레임 오류 ──
-            self._consec_timeouts += 1
-
             if priority == "low":
-                # 코일 로거 등 백그라운드는 절대 소켓을 닫지 않는다
+                # 코일 로거 등 백그라운드는 절대 소켓을 닫지 않고, 공통(high) 카운터도 올리지 않는다
+                self._consec_timeouts_low += 1
                 raise pe from e
+
+            self._consec_timeouts += 1
 
             try:
                 close_after = max(1, int(getattr(cfgc, "PLC_TIMEOUT_CLOSE_AFTER", 3)))
@@ -1209,7 +1238,7 @@ class AsyncPLC:
                 await self._throttle_and_heartbeat()
                 m = _bound()
                 resp = _check(await self._locked_thread(m, *args, **_kw(m)))
-                self._note_io_success()
+                self._note_io_success(priority)
                 return resp
 
             # 임계 미만 — 소켓을 지키고 같은 소켓으로 1회만 재시도
@@ -1223,7 +1252,7 @@ class AsyncPLC:
                 if pe2.code == "E402":
                     self._consec_timeouts += 1
                 raise pe2 from e2
-            self._note_io_success()
+            self._note_io_success(priority)
             return resp
 
     async def read_coil(self, addr: int) -> bool:
@@ -1802,11 +1831,12 @@ class AsyncPLC:
                 self.log(
                     "WARN PLC COIL LOG summary(%.0fs): ok=%d disconnected=%d empty=%d "
                     "budget_timeout=%d plc_error=%d write_failed=%d backoff=%d (plan=%d, blocks=%d) "
-                    "reg_failed=%d",
+                    "reg_failed=%d low_fail=%d",
                     max(1.0, summary_s), stats["ok"], stats["disconnected"],
                     stats["empty_snapshot"], stats["budget_timeout"],
                     stats["plc_error"], stats["write_failed"], stats["backoff"],
                     self._coil_plan_idx, n_blocks, stats["reg_failed"],
+                    int(getattr(self, "_consec_timeouts_low", 0)),
                 )
             for k in stats:
                 stats[k] = 0
@@ -1825,7 +1855,12 @@ class AsyncPLC:
 
             # ✅ PLC 가 흔들리는 동안(연속 타임아웃 진행 중)에는 로거가 손을 뗀다.
             #    하트비트나 다른 명령이 성공해 카운터가 0 이 되면 자동 재개된다.
-            if int(getattr(self, "_consec_timeouts", 0)) > 0:
+            #    + 저우선 자기억제: 로거 자신의 연속 실패가 임계(PLC_COIL_LOG_BACKOFF_AFTER)에 닿아도 쉰다
+            #      (low 실패가 high 카운터를 올리지 않게 되면서 사라질 뻔한 자기제한을 전용 카운터로 보존)
+            _low_n = int(getattr(self, "_consec_timeouts_low", 0))
+            _low_th = max(0, int(getattr(cfgc, "PLC_COIL_LOG_BACKOFF_AFTER", 2)))
+            if int(getattr(self, "_consec_timeouts", 0)) > 0 \
+               or (_low_th > 0 and _low_n >= _low_th):
                 stats["backoff"] += 1
                 self._note_coil_plan_result([PLC_COIL_MAP[k] for k in keys if k in PLC_COIL_MAP], False)
                 _emit_summary()
