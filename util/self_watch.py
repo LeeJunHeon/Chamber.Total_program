@@ -160,8 +160,8 @@ def task_inventory(loop: asyncio.AbstractEventLoop, top: int = 30) -> list[tuple
 
 
 def write_dump(reasons: list[str], s: Dict[str, Any], loop: Optional[asyncio.AbstractEventLoop],
-               out_dir: Optional[Path] = None) -> Optional[Path]:
-    """상세 덤프 파일을 쓴다. 실패하면 None."""
+               out_dir: Optional[Path] = None, *, include_tracemalloc: bool = True) -> Optional[Path]:
+    """상세 덤프 파일을 쓴다. 실패하면 None. include_tracemalloc=False 면 그 항목만 생략(동기 폴백용)."""
     try:
         d = out_dir or selfwatch_dir()
         d.mkdir(parents=True, exist_ok=True)
@@ -178,7 +178,9 @@ def write_dump(reasons: list[str], s: Dict[str, Any], loop: Optional[asyncio.Abs
         lines += ["", "[tracemalloc — lineno 상위 30]"]
         try:
             import tracemalloc
-            if tracemalloc.is_tracing():
+            if not include_tracemalloc:
+                lines.append("(동기 폴백 — 생략)")
+            elif tracemalloc.is_tracing():
                 cur, peak = tracemalloc.get_traced_memory()
                 lines.append(f"traced={cur/1048576:.1f}MB peak={peak/1048576:.1f}MB")
                 for st in tracemalloc.take_snapshot().statistics("lineno")[:30]:
@@ -212,6 +214,13 @@ class SelfWatch:
         self._last_dump_ts: Dict[str, float] = {}
         self._header_written: set[str] = set()
         self._io_lock = threading.Lock()
+        # CSV 기록용 워커 1개를 재사용(매 tick 스레드 생성 금지). submit 실패 시 동기 폴백.
+        self._io_exec = None
+        try:
+            from concurrent.futures import ThreadPoolExecutor
+            self._io_exec = ThreadPoolExecutor(max_workers=1, thread_name_prefix="SelfWatchIO")
+        except Exception:
+            self._io_exec = None
 
     # -- 공개 --
     def start(self) -> None:
@@ -229,6 +238,11 @@ class SelfWatch:
         try:
             if self._task and not self._task.done():
                 self._task.cancel()
+        except Exception:
+            pass
+        try:
+            if self._io_exec is not None:
+                self._io_exec.shutdown(wait=False)
         except Exception:
             pass
 
@@ -270,16 +284,40 @@ class SelfWatch:
                 pass
 
     def tick(self) -> Optional[Dict[str, Any]]:
-        """1회 샘플링 + CSV 기록(스레드) + 임계 판정. 예외를 내지 않는다."""
+        """1회 샘플링 + CSV 기록 + 임계 판정. 예외를 내지 않는다.
+
+        ⚠ 메모리 고갈로 스레드 생성/submit 이 실패하는 상황이 바로 이 계측이 필요한 순간이다.
+          (a) sample 실패 시에만 조기 return, (b) CSV 는 별도 try(실패 시 동기 폴백),
+          (c) 임계 판정·덤프는 CSV 성공 여부와 무관하게 반드시 실행한다."""
         try:
             s = sample(self._loop)
-            threading.Thread(target=self._append_csv, args=(dict(s),), name="SelfWatchIO", daemon=True).start()
-            reasons = self.check_thresholds(s)
-            if reasons:
-                self._handle_violation(reasons, s)
-            return s
         except Exception:
             return None
+        # (b) CSV 기록 — 워커 재사용, 실패하면 같은 스레드에서 동기 1회
+        try:
+            submitted = False
+            try:
+                if self._io_exec is not None:
+                    self._io_exec.submit(self._append_csv, dict(s))
+                    submitted = True
+            except Exception:
+                submitted = False
+            if not submitted:
+                self._append_csv(dict(s))
+        except Exception:
+            pass
+        # (c) 임계 판정 — CSV 와 무관하게 반드시
+        reasons: list[str] = []
+        try:
+            reasons = self.check_thresholds(s)
+        except Exception:
+            reasons = []
+        try:
+            if reasons:
+                self._handle_violation(reasons, s)
+        except Exception:
+            pass
+        return s
 
     @staticmethod
     def check_thresholds(s: Dict[str, Any]) -> list[str]:
@@ -311,16 +349,20 @@ class SelfWatch:
                 return
             for k in fresh:
                 self._last_dump_ts[k] = now
-            # 덤프(파일 I/O)와 챗은 스레드에서 — 루프를 막지 않는다. 태스크 인벤토리만 루프에서 미리 뜬다.
+            # 덤프(파일 I/O)와 챗은 스레드에서 — 루프를 막지 않는다.
+            # 스레드 생성이 실패하면(메모리 고갈) 동기 폴백: tracemalloc 상위 30 만 생략하고 나머지는 기록한다.
             snap_loop = self._loop
-            threading.Thread(target=self._dump_and_notify, args=(list(reasons), dict(s), snap_loop),
-                             name="SelfWatchDump", daemon=True).start()
+            try:
+                threading.Thread(target=self._dump_and_notify, args=(list(reasons), dict(s), snap_loop),
+                                 name="SelfWatchDump", daemon=True).start()
+            except Exception:
+                self._dump_and_notify(list(reasons), dict(s), snap_loop, sync_fallback=True)
         except Exception:
             pass
 
-    def _dump_and_notify(self, reasons: list[str], s: Dict[str, Any], loop) -> None:
+    def _dump_and_notify(self, reasons: list[str], s: Dict[str, Any], loop, *, sync_fallback: bool = False) -> None:
         try:
-            p = write_dump(reasons, s, loop)
+            p = write_dump(reasons, s, loop, include_tracemalloc=not sync_fallback)
             name = p.name if p else "(덤프 실패)"
             self._emit(f"[selfwatch] 자원 임계 초과: {', '.join(reasons)} → {name}")
             chat = self._chat

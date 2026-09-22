@@ -1811,7 +1811,8 @@ class AsyncPLC:
             summary_s = 60.0
         stats = dict(ok=0, disconnected=0, empty_snapshot=0,
                      budget_timeout=0, plc_error=0, write_failed=0, backoff=0,
-                     reg_failed=0)   # reg_failed: 행은 기록됐으나 레지스터 칸만 공백(끊김의 전조)
+                     reg_failed=0,   # reg_failed: 행은 기록됐으나 레지스터 칸만 공백(끊김의 전조)
+                     low_fail=0)     # low_fail: 이 구간의 저우선(코일/레지스터) 스냅샷 실패 횟수(구간 누적)
         last_summary = time.perf_counter()
 
         def _emit_summary(force: bool = False) -> None:
@@ -1820,7 +1821,7 @@ class AsyncPLC:
             if not force and (now - last_summary) < max(1.0, summary_s):
                 return
             last_summary = now
-            skips = sum(v for k, v in stats.items() if k not in ("ok", "reg_failed"))
+            skips = sum(v for k, v in stats.items() if k not in ("ok", "reg_failed", "low_fail"))
             if skips > 0 or stats["reg_failed"] > 0:
                 try:
                     n_blocks = len(self._coil_ranges_for_plan(
@@ -1836,7 +1837,7 @@ class AsyncPLC:
                     stats["empty_snapshot"], stats["budget_timeout"],
                     stats["plc_error"], stats["write_failed"], stats["backoff"],
                     self._coil_plan_idx, n_blocks, stats["reg_failed"],
-                    int(getattr(self, "_consec_timeouts_low", 0)),
+                    stats["low_fail"],
                 )
             for k in stats:
                 stats[k] = 0
@@ -1878,6 +1879,7 @@ class AsyncPLC:
                 snap = await self.snapshot_all_coils_fast(keys=keys)
             except Exception as e:
                 stats["plc_error"] += 1
+                stats["low_fail"] += 1
                 self._note_coil_plan_result([PLC_COIL_MAP[k] for k in keys if k in PLC_COIL_MAP], False)
                 _emit_summary()
                 self.log("WARN PLC COIL LOG: snapshot failed (ignored): %r", e)
@@ -1901,6 +1903,7 @@ class AsyncPLC:
                     reg_snap = await self.snapshot_regs_fast(keys=reg_keys)
                 except Exception as e:
                     stats["reg_failed"] += 1
+                    stats["low_fail"] += 1
                     self.log("WARN PLC REG LOG: snapshot failed (ignored): %r", e)
                     reg_snap = {}
 

@@ -176,8 +176,9 @@ class ChatNotifier(QObject):
 
         await asyncio.to_thread(_blocking_post)
 
-    def _schedule_post(self, payload: dict, webhook_url: Optional[str]):
-        """비동기 전송 태스크를 스케줄하고 참조를 보관(가비지 방지)."""
+    def _schedule_post(self, payload: dict, webhook_url: Optional[str], urgent: bool = False):
+        """비동기 전송 태스크를 스케줄하고 참조를 보관(가비지 방지).
+        urgent=True(공정 실패·인터락 등) 는 CHAT_PENDING_MAX 를 무시하되 CHAT_PENDING_HARD_MAX 는 넘지 못한다."""
         if not webhook_url:
             return
         try:
@@ -188,8 +189,11 @@ class ChatNotifier(QObject):
             return
 
         # ✅ 대기 상한: Google Chat 레이트리밋(429) 등으로 태스크가 쌓이면 새 카드를 드롭하고 건수만 센다
+        #    (긴급 카드는 소프트 상한을 통과, 하드 상한만 적용)
         try:
-            if len(self._pending) >= self._post_limits()[1]:
+            soft, hard = self._post_limits()[1], self._pending_hard_max()
+            n_pend = len(self._pending)
+            if n_pend >= hard or (n_pend >= soft and not urgent):
                 self._dropped += 1
                 return
             if self._dropped > 0:
@@ -201,6 +205,15 @@ class ChatNotifier(QObject):
         task = loop.create_task(self._post_async(payload, webhook_url))
         self._pending.add(task)
         task.add_done_callback(lambda t: self._pending.discard(t))
+
+    @staticmethod
+    def _pending_hard_max() -> int:
+        """urgent 도 넘지 못하는 대기 태스크 하드 상한(기본 1000)."""
+        try:
+            from lib import config_common as _cc
+            return max(1, int(getattr(_cc, "CHAT_PENDING_HARD_MAX", 1000)))
+        except Exception:
+            return 1000
 
     @staticmethod
     def _annotate_dropped(payload: dict, n: int) -> dict:
@@ -246,7 +259,7 @@ class ChatNotifier(QObject):
         if self._defer and not urgent:
             self._buffer.append((payload, webhook))
             return
-        self._schedule_post(payload, webhook)
+        self._schedule_post(payload, webhook, urgent=urgent)
 
     # ---------- 텍스트/카드 ----------
     def _post_text(self, text: str, urgent: bool = False, route_params: Optional[dict] = None):

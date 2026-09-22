@@ -399,6 +399,8 @@ class ServerPage(QWidget):
 
             self._daily_fp.write("\n".join(lines) + "\n")
             self._daily_fp.flush()
+            # ✅ 기록이 정상 완료됐으면 넘침 경고를 다시 낼 수 있게 리셋(재발 시 침묵 방지)
+            self._daily_buf_overflow_logged = False
 
         except Exception:
             # 핸들 오류 시 리셋 (다음 tick에 재오픈 시도)

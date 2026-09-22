@@ -280,7 +280,8 @@
     "LOG_ROOT_DIR": "C:\\VanaM_Logs\\CH1&2",                     // 로컬 (NAS 반영은 log_sync 워커)
     // ── 구글챗 전송 폭주 보호 ──
     "CHAT_POST_CONCURRENCY": 4,            // 동시 POST 상한
-    "CHAT_PENDING_MAX": 200,               // 대기 전송 태스크 상한 (초과 카드는 드롭, 다음 카드에 건수 표기)
+    "CHAT_PENDING_MAX": 200,               // 대기 전송 태스크 상한 (초과 카드는 드롭, 다음 카드에 건수 표기) — urgent 카드는 통과
+    "CHAT_PENDING_HARD_MAX": 1000,         // urgent(공정 실패·인터락) 카드도 넘지 못하는 하드 상한
     // ── 프로세스 자기 감시 (2026-09-20 0xc0000409 재발 시 원인 확정용, logs: LOG_ROOT_DIR/selfwatch) ──
     "SELFWATCH_ENABLE": true,              // 자기 감시 사용
     "SELFWATCH_INTERVAL_S": 30.0,          // 샘플링 주기 (초)

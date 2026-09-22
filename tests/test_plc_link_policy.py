@@ -684,7 +684,8 @@ def test_19_logger_self_backoff_by_low_counter():
     assert snaps == [], "low 임계 도달 시 스냅샷을 시도하지 않는다"
     assert plan_results and all(ok is False for ok in plan_results), "backoff 경로로 집계"
     summ = [m for m in logs if "PLC COIL LOG summary" in m]
-    assert summ and "low_fail=2" in summ[0], summ
+    # low_fail 은 구간 누적 카운터(이 구간엔 스냅샷 시도 자체가 없었으므로 0), 억제는 backoff 로 집계된다
+    assert summ and "low_fail=0" in summ[0] and "backoff=" in summ[0], summ
     assert "backoff=0 " not in summ[0], summ[0]
     _reset_cfg()
 
