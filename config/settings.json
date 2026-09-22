@@ -249,7 +249,9 @@
     "PLC_UNIT": 1,                         // PLC Unit ID
     "PLC_TIMEOUT_S": 2.0,                  // PLC 응답 타임아웃 (초)
     "PLC_CMD_GAP_MS": 150,                 // PLC 명령 사이 최소 간격 (ms)
-    "PLC_WATCHDOG_INTERVAL_S": 15.0,       // PLC 연결 확인(하트비트) 주기 (초)
+    "PLC_WATCHDOG_INTERVAL_S": 8.0,        // PLC 연결 확인(하트비트) 주기 (초). 실제 주기는 이 값 x0.75.
+                                           // PLC(FEnet) 의 '수신 타임아웃/서버 동작시' 가 15초라 그 안에 최소 2회는 요청이 가야 한다.
+                                           // PLC 쪽 타임아웃을 늘리면 이 값도 같이 올릴 것.
     "PLC_RECONNECT_RETRY": 2,              // PLC 재연결 최대 시도 횟수
     "PLC_RECONNECT_DELAY_S": 0.5,          // PLC 재연결 시도 간격 (초)
     "PLC_CMD_PULSE_MS": 180,               // PLC 펄스 명령 유지 시간 (ms)

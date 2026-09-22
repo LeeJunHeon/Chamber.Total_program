@@ -524,7 +524,10 @@ PLC_UNIT = 1
 
 PLC_TIMEOUT_S = 2.0
 PLC_CMD_GAP_MS = 150          # plc.py inter_cmd_gap_s(0.15s)와 매칭
-PLC_WATCHDOG_INTERVAL_S = 15.0
+# PLC 연결 확인(하트비트) 주기 (초). 실제 주기는 이 값 x0.75.
+# PLC(FEnet) 의 '수신 타임아웃/서버 동작시' 가 15초라 그 안에 최소 2회는 요청이 가야 한다.
+# PLC 쪽 타임아웃을 늘리면 이 값도 같이 올릴 것. (15.0 → 8.0: 실제 11.25s → 6.0s, 여유 3.75s → 9.0s)
+PLC_WATCHDOG_INTERVAL_S = 8.0
 
 PLC_RECONNECT_RETRY = 2
 PLC_RECONNECT_DELAY_S = 0.5
