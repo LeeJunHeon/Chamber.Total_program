@@ -318,7 +318,7 @@ class MainWindow(QWidget):
         # ✅ Server 페이지 생성/등록 (단 1회만)
         self.server_page: Optional[QWidget] = None
         try:
-            self.server_page = ServerPage(log_root=self._log_root)
+            self.server_page = ServerPage(log_root=self._log_root, loop=self._loop)   # 루프 주입(워커 로그 마샬링)
             self._stack.addWidget(self.server_page)
             self._pages["server"] = self.server_page
 

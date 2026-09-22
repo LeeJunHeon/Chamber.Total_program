@@ -562,7 +562,7 @@ SELFWATCH_TASKS_MAX = 500          # asyncio 태스크 수 임계
 SELFWATCH_HANDLES_MAX = 5000       # 커널 핸들 수 임계
 SELFWATCH_USER_OBJ_MAX = 5000      # USER 오브젝트 수 임계
 SELFWATCH_DUMP_COOLDOWN_S = 600.0  # 같은 임계 위반 덤프 쿨다운(초)
-SELFWATCH_TRACEMALLOC = True       # 시작 시 tracemalloc.start(1)
+SELFWATCH_TRACEMALLOC = False      # 원인 추적이 꼭 필요할 때만 True (CPU 수 배·메모리 수십~백 MB 오버헤드). 나머지 감시·덤프는 없이도 동작
 
 # --- PLC COIL CSV LOGGER ---
 PLC_COIL_LOG_INTERVAL_S = 5.0

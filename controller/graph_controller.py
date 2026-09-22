@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import math
 import time
 from typing import Sequence, List, Tuple, Any
 from PySide6.QtCore import Qt, QMargins, QPointF, QRect
@@ -199,6 +200,9 @@ class GraphController:
             except Exception:
                 continue
 
+            # replace() 는 append() 와 달리 isValidValue 검사가 없다 — NaN/Inf 한 점이면 로그축 시리즈 전체가 안 그려진다
+            if not (math.isfinite(xf) and math.isfinite(yf)):
+                continue
             if xf < x_min or xf > x_max:
                 continue
             if yf <= 0.0:
@@ -310,6 +314,8 @@ class GraphController:
             except Exception:
                 continue
 
+            if not (math.isfinite(xf) and math.isfinite(yf)):   # replace() 는 NaN/Inf 를 거르지 않는다
+                continue
             if xf < xmin or xf > xmax:
                 continue
 

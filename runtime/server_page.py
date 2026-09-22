@@ -4,6 +4,9 @@
 from __future__ import annotations
 
 import re
+import asyncio
+import contextlib
+import logging
 from datetime import datetime
 from pathlib import Path
 from typing import Optional
@@ -64,9 +67,12 @@ class ServerPage(QWidget):
         r"^(?P<ts>\d{4}-\d{2}-\d{2}\s+\d{2}:\d{2}:\d{2})\s+(?P<rest>.*)$"
     )
 
-    def __init__(self, *, log_root: Optional[Path] = None) -> None:
+    def __init__(self, *, log_root: Optional[Path] = None,
+                 loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
         super().__init__()
         self._log_root = Path(log_root) if log_root else None
+        # ✅ 이벤트 루프(=Qt GUI 스레드). 워커 스레드에서 온 append_log 를 여기로 마샬링한다. run_forever 전에 주입.
+        self._loop: Optional[asyncio.AbstractEventLoop] = loop
 
         self._clients: set[str] = set()
         self._max_lines = 5000
@@ -241,7 +247,49 @@ class ServerPage(QWidget):
 
         return f"{ts} [{tag}] {rest}"
 
+    # ---- 스레드 마샬링 (PlasmaCleaningRuntime._on_loop_thread 와 동일한 3상태 판정) ----
+    def set_loop(self, loop: Optional[asyncio.AbstractEventLoop]) -> None:
+        self._loop = loop
+
+    def _on_loop_thread(self) -> Optional[bool]:
+        """현재 스레드가 self._loop 의 스레드면 True, 아니면 False, 루프가 없거나 닫혔으면 None.
+        (qasync 에서는 Qt 메인 스레드 == 루프 스레드. running loop 로 판정)"""
+        loop = getattr(self, "_loop", None)
+        if loop is None:
+            return None
+        try:
+            if loop.is_closed():
+                return None
+        except Exception:
+            return None
+        try:
+            return asyncio.get_running_loop() is loop
+        except RuntimeError:
+            return False
+
     def append_log(self, tag: str, text: str) -> None:
+        # ✅ Qt 위젯(chkPause/chkHideStatus/logEdit)은 GUI 스레드에서만. 호스트 PLC 명령 중에는
+        #    plc.log 가 ServerPage 로 오는데(_plc_file_logger → ctx.log → sp.append_log),
+        #    PLC 재접속/진단 로그는 to_thread 워커·PLCConnectDiag 스레드에서 나온다.
+        #    워커면 루프 스레드로 넘기고 즉시 반환. 루프가 없거나 닫혔으면 logging 으로만 남긴다.
+        #    (_daily_buf 는 루프 스레드 전용 — None 경로에서 워커가 직접 append 하면 _flush_daily_log 의
+        #     리스트 교체(lines = buf; buf = []) 와 경쟁해 줄이 유실/중복될 수 있으므로 건드리지 않는다)
+        try:
+            on = self._on_loop_thread()
+        except Exception:
+            on = None
+        if on is False:
+            try:
+                self._loop.call_soon_threadsafe(self.append_log, tag, text)
+            except Exception:
+                with contextlib.suppress(Exception):
+                    logging.getLogger("server_page").warning("[%s] %s", tag, text)
+            return
+        if on is None:
+            with contextlib.suppress(Exception):
+                logging.getLogger("server_page").warning("[%s] %s", tag, text)
+            return
+
         msg = str(text)
 
         # ✅ 1) "전부 저장" (Pause/HideStatus 무관)

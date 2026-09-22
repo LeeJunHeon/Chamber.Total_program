@@ -292,7 +292,7 @@
     "SELFWATCH_HANDLES_MAX": 5000,         // 커널 핸들 수 임계
     "SELFWATCH_USER_OBJ_MAX": 5000,        // USER 오브젝트 수 임계
     "SELFWATCH_DUMP_COOLDOWN_S": 600.0,    // 같은 임계 위반 덤프 쿨다운 (초)
-    "SELFWATCH_TRACEMALLOC": true,         // 시작 시 tracemalloc(frame depth 1) 사용
+    "SELFWATCH_TRACEMALLOC": false,        // 원인 추적이 꼭 필요할 때만 true (CPU 수 배·메모리 수십~백 MB 오버헤드)
     "CAMERA_LOG_ROOT": "C:\\VanaM_Logs\\Camera_Logs",   // 카메라 사진 저장 루트(로컬)
     "CAMERA_MIN_FREE_GB": 20.0,                         // 이 값 미만이면 촬영 시작 안 함 (GB)
     "RF_READER_STATE_DIR": "C:\\VanaM_Logs\\Camera_Logs\\_state",  // 판독 매니페스트/로그

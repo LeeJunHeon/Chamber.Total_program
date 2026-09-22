@@ -193,5 +193,126 @@ def test_4_camera_start_wrapped_in_to_thread():
     asyncio.run(_main())
 
 
+# ───────────────────────── ServerPage (b9bd05a 후속) ─────────────────────────
+def _mk_server_page(loop=None):
+    _qapp()
+    from runtime.server_page import ServerPage
+    sp = ServerPage(log_root=None, loop=loop)
+    sp._daily_flush_timer.stop()
+    return sp
+
+
+class _Chk:
+    def __init__(self, rec, name):
+        self._rec, self._name = rec, name
+
+    def isChecked(self):
+        self._rec.append((threading.get_ident(), self._name))
+        return False
+
+
+class _Edit:
+    def __init__(self, rec):
+        self._rec = rec
+
+    def appendPlainText(self, line):
+        self._rec.append((threading.get_ident(), "appendPlainText:" + line))
+
+    def verticalScrollBar(self):
+        class _SB:
+            def setValue(self, v): pass
+
+            def maximum(self): return 0
+        return _SB()
+
+
+def test_6_server_page_append_log_marshals_to_loop_thread():
+    async def _main():
+        loop = asyncio.get_running_loop()
+        sp = _mk_server_page(loop=loop)
+        rec = []
+        sp.chkPause = _Chk(rec, "isChecked:pause")
+        sp.chkHideStatus = _Chk(rec, "isChecked:hide")
+        sp.chkAutoScroll = _Chk(rec, "isChecked:auto")
+        sp.logEdit = _Edit(rec)
+        loop_tid = threading.get_ident()
+        wtid = {}
+
+        def _worker():
+            wtid["id"] = threading.get_ident()
+            sp.append_log("PLC_REMOTE", "[ERROR/HOST] Modbus TCP 연결 실패 (192.168.1.2:502) (시도 1회, 분류=미확인)")
+        t = threading.Thread(target=_worker, name="FakePLCWorker")
+        t.start()
+        t.join(2.0)
+        assert rec == [], "워커 스레드에서 위젯을 직접 만지면 안 된다"
+        for _ in range(20):
+            if any(n.startswith("appendPlainText") for _, n in rec):
+                break
+            await asyncio.sleep(0.01)
+        assert rec, "루프 스레드에서 처리돼야 한다"
+        assert all(tid == loop_tid and tid != wtid["id"] for tid, _ in rec), rec
+        assert any(n.startswith("appendPlainText") and "Modbus TCP 연결 실패" in n for _, n in rec)
+        assert any("Modbus TCP 연결 실패" in l for l in sp._daily_buf)     # 파일 버퍼도 루프 스레드에서
+        try:
+            sp.deleteLater()
+        except Exception:
+            pass
+    asyncio.run(_main())
+
+
+def test_7_server_page_without_loop_logs_only(caplog):
+    import logging
+    sp = _mk_server_page(loop=None)
+    rec = []
+    sp.chkPause = _Chk(rec, "isChecked:pause")
+    sp.chkHideStatus = _Chk(rec, "isChecked:hide")
+    sp.logEdit = _Edit(rec)
+    with caplog.at_level(logging.WARNING, logger="server_page"):
+        sp.append_log("NET", "client 1.2.3.4:5 connected")
+    assert rec == []
+    assert sp._daily_buf == []                    # 루프 스레드 전용 버퍼는 건드리지 않는다
+    assert any("client 1.2.3.4:5 connected" in r.getMessage() for r in caplog.records)
+    # 워커 스레드에서도 예외 없이
+    err = []
+
+    def _w():
+        try:
+            sp.append_log("PLC_REMOTE", "x")
+        except Exception as e:
+            err.append(e)
+    t = threading.Thread(target=_w); t.start(); t.join(2.0)
+    assert err == [] and rec == []
+    try:
+        sp.deleteLater()
+    except Exception:
+        pass
+
+
+def test_8_replace_never_receives_non_finite(monkeypatch):
+    import math
+    from lib import config_common as cfgc
+    monkeypatch.setattr(cfgc, "OES_PLOT_MIN_INTERVAL_S", 0.0, raising=False)
+    g = _mk_graph()
+    got = {"oes": None, "rga": None, "stems": []}
+    monkeypatch.setattr(g.oes_series, "replace", lambda pts: got.__setitem__("oes", list(pts)))
+    monkeypatch.setattr(g.rga_scatter, "replace", lambda pts: got.__setitem__("rga", list(pts)))
+    nan, inf = float("nan"), float("inf")
+    xs = [100.0, 200.0, nan, 300.0, 400.0, inf, 500.0]
+    ys = [1.0, nan, 2.0, 3.0, inf, 4.0, -inf]
+    g.update_oes_plot(xs, ys)
+    assert got["oes"] is not None and len(got["oes"]) == 2      # (100,1),(300,3) 만
+    assert all(math.isfinite(p.x()) and math.isfinite(p.y()) for p in got["oes"])
+
+    rxs = [2.0, 18.0, nan, 28.0, 32.0, 40.0]
+    rys = [1e-8, nan, 1e-8, inf, 1e-7, 1e-9]
+    g.update_rga_plot(rxs, rys)
+    assert got["rga"] is not None and len(got["rga"]) == 3
+    assert all(math.isfinite(p.x()) and math.isfinite(p.y()) for p in got["rga"])
+    for s in g._rga_stem_series:
+        for i in range(s.count()):
+            p = s.at(i)
+            assert math.isfinite(p.x()) and math.isfinite(p.y())
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
