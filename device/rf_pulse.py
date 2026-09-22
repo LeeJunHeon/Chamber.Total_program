@@ -218,6 +218,8 @@ class RFPulseAsync:
             self.debug_print = self._cfg_bool("DEBUG_PRINT", False)
         else:
             self.debug_print = bool(debug_print)
+        # RAW 프레임 로그 게이트(캐시). False 면 정주기 폴링([POLL …]) 프레임만 생략
+        self._rfp_raw_log = self._cfg_bool("RFPULSE_RAW_LOG", False)
 
         # TCP Streams
         self._reader: Optional[asyncio.StreamReader] = None
@@ -300,6 +302,7 @@ class RFPulseAsync:
         (예: debug_print/addr/백오프 시작값)
         """
         self.debug_print = self._cfg_bool("DEBUG_PRINT", self.debug_print)
+        self._rfp_raw_log = self._cfg_bool("RFPULSE_RAW_LOG", self._rfp_raw_log)
         self.addr = self._cfg_int("RFPULSE_ADDR", int(self.addr or 1))
         self._reconnect_backoff_ms = self._cfg_int("RFPULSE_RECONNECT_BACKOFF_START_MS", int(self._reconnect_backoff_ms or 2000))
 
@@ -799,6 +802,21 @@ class RFPulseAsync:
             except Exception:
                 pass
 
+    # ---------- RAW 프레임 로그 게이트 ----------
+    def _raw_log_on(self, tag) -> bool:
+        """RFPULSE_RAW_LOG=True 면 전부 남긴다. False 면 "[POLL" 로 시작하는 태그(정주기 폴링)의 프레임만 생략.
+        (실측: RF Pulse 런 1건에서 TX 9,466건 중 9,452건이 [POLL …] — RAW 라인이 로그의 ~30%, 태스크 2.8만 개)"""
+        if getattr(self, "_rfp_raw_log", False):
+            return True
+        return not str(tag or "").startswith("[POLL")
+
+    def _raw_log_on_inflight(self) -> bool:
+        """수신 측 판정: 단일 in-flight 명령의 tag 로 판정. in-flight 가 없으면(비요청 프레임) 남긴다."""
+        cmd = getattr(self, "_inflight", None)
+        if cmd is None:
+            return True
+        return self._raw_log_on(getattr(cmd, "tag", None))
+
     # ---------- 내부: 명령 워커 ----------
     async def _cmd_worker_loop(self):
         while True:
@@ -837,12 +855,13 @@ class RFPulseAsync:
 
             pkt = _build_packet(self.addr, cmd.cmd, cmd.data)
             try:
-                # Raw data log (debug)
-                asyncio.create_task(self._emit_status(
-                    f"[RFP][RAW][TX] addr={self.addr} cmd={self._cmd_label(cmd.cmd)} "
-                    f"data={' '.join(f'{x:02X}' for x in (cmd.data or b''))} "
-                    f"raw={' '.join(f'{x:02X}' for x in pkt)} tag={cmd.tag or ''}"
-                ))
+                # Raw data log (debug) — 게이트 안쪽에서만 문자열 생성/태스크 생성
+                if self._raw_log_on(cmd.tag):
+                    asyncio.create_task(self._emit_status(
+                        f"[RFP][RAW][TX] addr={self.addr} cmd={self._cmd_label(cmd.cmd)} "
+                        f"data={' '.join(f'{x:02X}' for x in (cmd.data or b''))} "
+                        f"raw={' '.join(f'{x:02X}' for x in pkt)} tag={cmd.tag or ''}"
+                    ))
 
                 self._writer.write(pkt)
 
@@ -983,8 +1002,9 @@ class RFPulseAsync:
                     # 1) ACK/NAK 단일 토큰
                     if buf[0] == 0x06:
                         del buf[:1]
-                        # ★ 받을 때 1줄 (ACK) - debug
-                        asyncio.create_task(self._emit_status("[RFP][RAW][RX] ACK(0x06)"))
+                        # ★ 받을 때 1줄 (ACK) - debug (in-flight 태그로 게이트)
+                        if self._raw_log_on_inflight():
+                            asyncio.create_task(self._emit_status("[RFP][RAW][RX] ACK(0x06)"))
                         self._on_token(("ACK", None))
                         continue
                     if buf[0] == 0x15:
@@ -1036,11 +1056,12 @@ class RFPulseAsync:
                     rx_cmd  = pkt[1]
                     length_bits = hdr & 0x07
                     data_len = pkt[2] if length_bits == 7 else length_bits
-                    decoded_suffix = self._decode_frame_suffix(rx_cmd, pkt)
-                    asyncio.create_task(self._emit_status(
-                        f"[RFP][RAW][RX] FRAME addr={rx_addr} cmd={self._cmd_label(rx_cmd)} "
-                        f"len={data_len} raw={' '.join(f'{x:02X}' for x in pkt)}{decoded_suffix}"
-                    ))
+                    if self._raw_log_on_inflight():          # in-flight 태그로 게이트 (cs_bad/NAK 는 항상 남김)
+                        decoded_suffix = self._decode_frame_suffix(rx_cmd, pkt)
+                        asyncio.create_task(self._emit_status(
+                            f"[RFP][RAW][RX] FRAME addr={rx_addr} cmd={self._cmd_label(rx_cmd)} "
+                            f"len={data_len} raw={' '.join(f'{x:02X}' for x in pkt)}{decoded_suffix}"
+                        ))
 
                     # 4) 프레임 토큰 방출
                     self._on_token(("FRAME", pkt))

@@ -943,6 +943,9 @@ class AsyncDCPulse:
         )
 
         # 5) 출력 ON (성공시에만)
+        #    과전류 카운터는 여기서(=런 시작) 초기화한다. output_on() 안의 활성화 대기 감시(5초)가
+        #    _overcurr_n 을 올리므로, 그 뒤에서 0 으로 밀면 STREAK_N>=2 일 때 부분 카운트가 유실된다.
+        self._overcurr_n = 0
         ok2 = await self.output_on()
         if not ok2:
             return False
@@ -980,7 +983,6 @@ class AsyncDCPulse:
         self._soft_arc_total = 0
         self._hard_arc_total = 0
         self._piv_scale_checked = False
-        self._overcurr_n = 0
         return True
 
     async def _emit_failed_off_time(self, want_raw: int, got_raw: Optional[int],
@@ -1378,6 +1380,9 @@ class AsyncDCPulse:
         d["baseline_soft"] = int(getattr(self, "_arc_baseline_soft", 0))
         d["baseline_hard"] = int(getattr(self, "_arc_baseline_hard", 0))
         d["ign_window_s"] = self._cfg_float("DCP_ARC_IGN_WINDOW_S", 30.0)
+        # 이번 런에서 DC Pulse 출력이 실제로 켜졌는가 — _arc_run_start_ts 는 reset_arc_counts() 에서 0,
+        # _prepare_and_start_impl 에서 output_on 성공 + HV 확인 뒤에만 설정되고 런 중 0 으로 되돌아가지 않는다
+        d["ran"] = bool(float(getattr(self, "_arc_run_start_ts", 0.0) or 0.0) > 0.0)
         return d
 
     # ---------- 점화 구간 고속 샘플링 ----------

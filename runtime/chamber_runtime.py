@@ -1602,19 +1602,22 @@ class ChamberRuntime:
                                     self.data_logger.process_params["hard_arc_count"] = h
                                     # ✅ 점화/증착 구간을 나눈 요약을 로그로 남긴다
                                     #    (엑셀 열은 기존 Soft/Hard 그대로 — 열 추가 금지)
+                                    #    DC Pulse 출력을 실제로 켠 런(ran)에서만 — RF Pulse 전용 런에서
+                                    #    "합계=0 … 0x8C 동작=아니오" 가 찍혀 리셋 실패로 오독되던 문제
                                     with contextlib.suppress(Exception):
                                         _as = self.dc_pulse.arc_summary
-                                        self.append_log(
-                                            f"DCPulse{self.ch}",
-                                            f"[arc] 런 요약: 합계={_as['run_total']} "
-                                            f"(soft={_as['run_soft']} hard={_as['run_hard']}) | "
-                                            f"점화={_as['ign_total']} "
-                                            f"(soft={_as['ign_soft']} hard={_as['ign_hard']}) | "
-                                            f"증착={_as['depo_total']} "
-                                            f"(soft={_as['depo_soft']} hard={_as['depo_hard']}) | "
-                                            f"0x8C 동작={'예' if _as['reset_ok'] else '아니오'}, "
-                                            f"종료값 확정={'예' if _as['final_read'] else '아니오'}"
-                                        )
+                                        if _as.get("ran"):
+                                            self.append_log(
+                                                f"DCPulse{self.ch}",
+                                                f"[arc] 런 요약: 합계={_as['run_total']} "
+                                                f"(soft={_as['run_soft']} hard={_as['run_hard']}) | "
+                                                f"점화={_as['ign_total']} "
+                                                f"(soft={_as['ign_soft']} hard={_as['ign_hard']}) | "
+                                                f"증착={_as['depo_total']} "
+                                                f"(soft={_as['depo_soft']} hard={_as['depo_hard']}) | "
+                                                f"0x8C 동작={'예' if _as['reset_ok'] else '아니오'}, "
+                                                f"종료값 확정={'예' if _as['final_read'] else '아니오'}"
+                                            )
 
                                 _pname = str(
                                     self.data_logger.process_params.get("process_name")

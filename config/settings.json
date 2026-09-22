@@ -220,6 +220,7 @@
     "RFPULSE_ADDR": 1,                     // 장비 주소
     "RFPULSE_CONNECT_TIMEOUT_S": 1.5,      // 연결 타임아웃 (초)
     "RFPULSE_DRAIN_TIMEOUT_S": 2.0,        // 데이터 전송 완료 대기 (초)
+    "RFPULSE_RAW_LOG": false,              // RF Pulse 원시 프레임 로그. false 면 정주기 폴링 프레임([POLL ...])만 생략하고, 설정/제어 명령과 NAK·체크섬 오류는 항상 남는다
     "RFPULSE_WATCHDOG_INTERVAL_MS": 3000,  // 연결 상태 확인 주기 (ms)
     "RFPULSE_RECONNECT_BACKOFF_START_MS": 2000,  // 재연결 간격 시작값 (ms)
     "RFPULSE_RECONNECT_BACKOFF_MAX_MS": 30000,   // 재연결 간격 최대값 (ms)
