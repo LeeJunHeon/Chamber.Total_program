@@ -66,6 +66,9 @@ class ChatNotifier(QObject):
         self._ctx = ssl.create_default_context()
         self._pending: set[asyncio.Task] = set()
         self._started: bool = False
+        # ✅ 전송 폭주 보호: 동시 POST 수 제한 + 대기 태스크 상한(초과분은 드롭하고 건수만 센다)
+        self._post_sem: Optional[asyncio.Semaphore] = None
+        self._dropped: int = 0
 
     # ---------- 라이프사이클 ----------
     def start(self):
@@ -132,6 +135,32 @@ class ChatNotifier(QObject):
             pass
         if not webhook_url or not payload:
             return
+        sem = self._get_post_sem()
+        if sem is not None:
+            async with sem:
+                await self._post_async_inner(payload, webhook_url)
+        else:
+            await self._post_async_inner(payload, webhook_url)
+
+    @staticmethod
+    def _post_limits() -> Tuple[int, int]:
+        """(동시 POST 상한, 대기 태스크 상한). config 조회 실패 시 (4, 200)."""
+        try:
+            from lib import config_common as _cc
+            return (max(1, int(getattr(_cc, "CHAT_POST_CONCURRENCY", 4))),
+                    max(1, int(getattr(_cc, "CHAT_PENDING_MAX", 200))))
+        except Exception:
+            return (4, 200)
+
+    def _get_post_sem(self) -> Optional[asyncio.Semaphore]:
+        try:
+            if self._post_sem is None:
+                self._post_sem = asyncio.Semaphore(self._post_limits()[0])
+            return self._post_sem
+        except Exception:
+            return None
+
+    async def _post_async_inner(self, payload: dict, webhook_url: str):
         data = json.dumps(payload).encode("utf-8")
 
         def _blocking_post():
@@ -158,9 +187,41 @@ class ChatNotifier(QObject):
             self._buffer.append((payload, webhook_url))
             return
 
+        # ✅ 대기 상한: Google Chat 레이트리밋(429) 등으로 태스크가 쌓이면 새 카드를 드롭하고 건수만 센다
+        try:
+            if len(self._pending) >= self._post_limits()[1]:
+                self._dropped += 1
+                return
+            if self._dropped > 0:
+                payload = self._annotate_dropped(payload, self._dropped)
+                self._dropped = 0
+        except Exception:
+            pass
+
         task = loop.create_task(self._post_async(payload, webhook_url))
         self._pending.add(task)
         task.add_done_callback(lambda t: self._pending.discard(t))
+
+    @staticmethod
+    def _annotate_dropped(payload: dict, n: int) -> dict:
+        """다음 전송 카드 본문에 '(전송 실패로 생략된 알림 N건)' 을 1회 표기."""
+        note = f"(전송 실패로 생략된 알림 {n}건)"
+        try:
+            pl = json.loads(json.dumps(payload))   # 깊은 복사
+            if "text" in pl and isinstance(pl["text"], str):
+                pl["text"] = pl["text"] + "\n" + note
+                return pl
+            cards = pl.get("cardsV2") or pl.get("cards")
+            if isinstance(cards, list) and cards:
+                card = cards[0].get("card", cards[0])
+                secs = card.get("sections")
+                if isinstance(secs, list) and secs:
+                    secs[-1].setdefault("widgets", []).append({"textParagraph": {"text": note}})
+                    return pl
+            pl.setdefault("text", note)
+            return pl
+        except Exception:
+            return payload
 
     # ---------- 지연/버퍼 ----------
     def set_defer(self, on: bool):

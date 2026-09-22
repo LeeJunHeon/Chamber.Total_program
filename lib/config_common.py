@@ -547,6 +547,21 @@ PLC_IO_WARN_MS = 2500.0
 # NAS 반영은 별도 프로세스 apps/log_sync_service/log_sync.py 가 주기 동기화 (SMB 지연이 UI 에 영향 없음).
 LOG_ROOT_DIR = r"C:\VanaM_Logs\CH1&2"
 
+# --- 구글챗 전송 폭주 보호 ---
+CHAT_POST_CONCURRENCY = 4      # 동시 POST 상한
+CHAT_PENDING_MAX = 200         # 대기 전송 태스크 상한(초과 카드는 드롭, 다음 카드에 건수 표기)
+
+# --- 프로세스 자기 감시 (util/self_watch.py) — 2026-09-20 0xc0000409 재발 시 원인 확정용 ---
+SELFWATCH_ENABLE = True
+SELFWATCH_INTERVAL_S = 30.0        # 샘플링 주기(초)
+SELFWATCH_DIR = ""                 # 비우면 LOG_ROOT_DIR/selfwatch
+SELFWATCH_PRIVATE_MB = 2000        # PrivateBytes(커밋) 임계 (MB)
+SELFWATCH_TASKS_MAX = 500          # asyncio 태스크 수 임계
+SELFWATCH_HANDLES_MAX = 5000       # 커널 핸들 수 임계
+SELFWATCH_USER_OBJ_MAX = 5000      # USER 오브젝트 수 임계
+SELFWATCH_DUMP_COOLDOWN_S = 600.0  # 같은 임계 위반 덤프 쿨다운(초)
+SELFWATCH_TRACEMALLOC = True       # 시작 시 tracemalloc.start(1)
+
 # --- PLC COIL CSV LOGGER ---
 PLC_COIL_LOG_INTERVAL_S = 5.0
 PLC_COIL_LOG_BLOCK_PLAN = 0     # 시작 블록 계획 (0=최소블록 ~ 3=현재와 동일한 안전값)

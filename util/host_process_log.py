@@ -123,6 +123,9 @@ class HostProcessLog:
         self._stop = threading.Event()
         self._worker: Optional[threading.Thread] = None
         self._mem_queue: List[str] = []        # pending 파일 기록 실패 시 임시 보관
+        self._mem_queue_max: int = 10000       # 상한(줄). 파일 기록이 계속 실패해도 무한 누적하지 않는다
+        self._mem_queue_dropped: int = 0
+        self._mem_queue_drop_warned: bool = False
         # NAS 전송은 프로세스 안에서 한 번에 하나만 (워커 스레드 ↔ 명시 호출 경쟁 방지)
         self._flush_lk = threading.Lock()
 
@@ -314,6 +317,7 @@ class HostProcessLog:
                 if not self._append_pending(ymd, row):
                     # 로컬 기록 실패 → open 유지, 메모리 큐로 워커에 위임
                     self._mem_queue.append(_csv_line([ymd] + row))
+                    self._trim_mem_queue()
                     self._kick.set()
                     _dbg(f"pending 기록 실패 → 메모리 큐 보관 key={key}")
                     return True
@@ -485,6 +489,20 @@ class HostProcessLog:
         프로세스 내 동시 실행을 막아 pending 재작성이 서로를 덮어쓰지 않게 한다."""
         with self._flush_lk:
             self._flush_once_locked()
+
+    def _trim_mem_queue(self) -> None:
+        """_lk 안에서 호출. 상한 초과분은 가장 오래된 것부터 버리고 1회만 경고."""
+        try:
+            over = len(self._mem_queue) - int(self._mem_queue_max)
+            if over > 0:
+                del self._mem_queue[:over]
+                self._mem_queue_dropped += over
+                if not self._mem_queue_drop_warned:
+                    self._mem_queue_drop_warned = True
+                    _dbg(f"WARN 메모리 큐 상한({self._mem_queue_max}줄) 초과 — 가장 오래된 {over}줄 폐기 "
+                         f"(파일 기록 실패가 계속되고 있음)")
+        except Exception:
+            pass
 
     def _flush_once_locked(self) -> None:
         with self._lk:

@@ -339,8 +339,24 @@ class ServerPage(QWidget):
         # 하루 1파일
         return self._daily_log_dir() / f"server_page_{datetime.now():%Y%m%d}{self._daily_ext}"
 
+    _DAILY_BUF_HARD_MAX = 50000   # 하드 상한(줄). flush 가 계속 실패해도 메모리가 무한 증가하지 않게
+
     def _queue_daily_line(self, line: str) -> None:
         self._daily_buf.append(line)
+
+        # 하드 상한: 초과하면 가장 오래된 절반을 버린다(1회만 기록)
+        try:
+            if len(self._daily_buf) > self._DAILY_BUF_HARD_MAX:
+                n_drop = len(self._daily_buf) // 2
+                del self._daily_buf[:n_drop]
+                if not getattr(self, "_daily_buf_overflow_logged", False):
+                    self._daily_buf_overflow_logged = True
+                    msg = f"server_page 일별 로그 버퍼 상한 초과 — {n_drop}줄 폐기"
+                    self._daily_buf.append(self._format_with_ts("SERVER", msg))
+                    import logging
+                    logging.getLogger("server_page").warning(msg)   # 버퍼가 또 잘려도 시스템 로그엔 남는다
+        except Exception:
+            pass
 
         # 메모리 보호: 너무 많이 쌓이면 즉시 flush
         if len(self._daily_buf) >= 2000:
@@ -358,7 +374,12 @@ class ServerPage(QWidget):
         self._daily_flush_inflight = True
 
         # ✅ 실제 파일 I/O는 백그라운드 스레드에서 (메인 스레드 freeze 방지)
-        self._daily_io_exec.submit(self._flush_daily_log_sync, lines)
+        #    submit 실패(executor 종료 등) 시 inflight 가 True 로 굳어 버퍼가 무한 증가하므로 반드시 복구
+        try:
+            self._daily_io_exec.submit(self._flush_daily_log_sync, lines)
+        except Exception:
+            self._daily_flush_inflight = False
+            self._daily_buf[0:0] = lines      # 앞쪽에 복원(순서 유지)
 
     def _flush_daily_log_sync(self, lines: list[str]) -> None:
         """백그라운드 스레드에서 실행되는 실제 파일 기록."""

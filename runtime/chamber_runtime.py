@@ -6948,7 +6948,16 @@ class ChamberRuntime:
                 if exc:
                     tb = "".join(traceback.format_exception(type(exc), exc, exc.__traceback__)).rstrip()
                     self.append_log(f"Task{self.ch}", f"[{name or 'task'}] crashed:\n{tb}")
-            t.add_done_callback(_done)
+
+            def _done_and_forget(task: asyncio.Task) -> None:
+                try:
+                    _done(task)
+                finally:
+                    # ✅ 완료된 Task 를 _bg_tasks 에 남겨두면 예외/트레이스백/프레임을 붙잡아 무한 누적된다
+                    #    (plasma_cleaning_runtime 과 동일하게 완료 즉시 제거)
+                    with contextlib.suppress(ValueError, AttributeError, Exception):
+                        self._bg_tasks.remove(task)
+            t.add_done_callback(_done_and_forget)
 
         def _create_here() -> asyncio.Task | None:
             try:

@@ -1929,6 +1929,16 @@ def main() -> int:
     w = MainWindow(loop)
     w.show()
 
+    # ✅ 프로세스 자기 감시(메모리/핸들/태스크) — 기존 초기화 뒤에 덧붙인다. 실패해도 조용히 넘어간다.
+    try:
+        from util.self_watch import start_self_watch, stop_self_watch
+        _sw_chat = getattr(w, "chat_plc", None) or getattr(w, "chat_ch1", None)
+        start_self_watch(loop, chat=_sw_chat, log=lambda m: _logger.warning(m))
+        with contextlib.suppress(Exception):
+            app.aboutToQuit.connect(stop_self_watch)
+    except Exception:
+        pass
+
     try:
         with loop:
             loop.run_forever()

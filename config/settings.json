@@ -278,6 +278,19 @@
     "HOST_LOG_LOCK_STALE_S": 120,              // 오래된 잠금 파일 판정 기준 (초)
     "PLC_COIL_LOG_NAS_DIR": "C:\\VanaM_Logs\\CH1&2\\CH1&2_PLC",   // 로컬 (NAS 반영은 log_sync 워커)
     "LOG_ROOT_DIR": "C:\\VanaM_Logs\\CH1&2",                     // 로컬 (NAS 반영은 log_sync 워커)
+    // ── 구글챗 전송 폭주 보호 ──
+    "CHAT_POST_CONCURRENCY": 4,            // 동시 POST 상한
+    "CHAT_PENDING_MAX": 200,               // 대기 전송 태스크 상한 (초과 카드는 드롭, 다음 카드에 건수 표기)
+    // ── 프로세스 자기 감시 (2026-09-20 0xc0000409 재발 시 원인 확정용, logs: LOG_ROOT_DIR/selfwatch) ──
+    "SELFWATCH_ENABLE": true,              // 자기 감시 사용
+    "SELFWATCH_INTERVAL_S": 30.0,          // 샘플링 주기 (초)
+    "SELFWATCH_DIR": "",                   // 저장 폴더 (비우면 LOG_ROOT_DIR/selfwatch)
+    "SELFWATCH_PRIVATE_MB": 2000,          // PrivateBytes(커밋) 임계 (MB) — 초과 시 덤프 + 챗 카드
+    "SELFWATCH_TASKS_MAX": 500,            // asyncio 태스크 수 임계
+    "SELFWATCH_HANDLES_MAX": 5000,         // 커널 핸들 수 임계
+    "SELFWATCH_USER_OBJ_MAX": 5000,        // USER 오브젝트 수 임계
+    "SELFWATCH_DUMP_COOLDOWN_S": 600.0,    // 같은 임계 위반 덤프 쿨다운 (초)
+    "SELFWATCH_TRACEMALLOC": true,         // 시작 시 tracemalloc(frame depth 1) 사용
     "CAMERA_LOG_ROOT": "C:\\VanaM_Logs\\Camera_Logs",   // 카메라 사진 저장 루트(로컬)
     "CAMERA_MIN_FREE_GB": 20.0,                         // 이 값 미만이면 촬영 시작 안 함 (GB)
     "RF_READER_STATE_DIR": "C:\\VanaM_Logs\\Camera_Logs\\_state",  // 판독 매니페스트/로그
