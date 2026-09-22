@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 from __future__ import annotations
 
+import time
 from typing import Sequence, List, Tuple, Any
 from PySide6.QtCore import Qt, QMargins, QPointF, QRect
 from PySide6.QtGui import QFont, QPen, QPainter
@@ -211,36 +212,37 @@ class GraphController:
         if not self._is_rga_graph_alive():
             return
 
+        # ✅ 시리즈를 매번 remove/add/attachAxis 하지 않는다 — 시리즈 풀을 재사용하고 replace() 한 번씩.
+        #    (로그 Y축이라 NaN 구분자 방식 대신 풀 방식을 쓴다)
+        ymin = self.RGA_Y_RANGE_TORR[0]
         try:
-            for s in list(self._rga_stem_series):
-                self.rga_chart.removeSeries(s)
-            self._rga_stem_series.clear()
-            self.rga_scatter.clear()
+            need = len(pts) - len(self._rga_stem_series)
+            if need > 0:
+                stem_pen = QPen(Qt.red)
+                stem_pen.setWidth(1)
+                for _ in range(need):
+                    line = QLineSeries()
+                    line.setPen(stem_pen)
+                    self.rga_chart.addSeries(line)
+                    line.attachAxis(self.rga_axis_x)
+                    line.attachAxis(self.rga_axis_y)
+                    self._rga_stem_series.append(line)
         except Exception:
             return
 
-        ymin = self.RGA_Y_RANGE_TORR[0]
-        stem_pen = QPen(Qt.red)
-        stem_pen.setWidth(1)
+        if not self._is_rga_graph_alive():
+            return
 
-        for xf, yf in pts:
-            if not self._is_rga_graph_alive():
-                return
-
-            try:
-                self.rga_scatter.append(QPointF(xf, yf))
-
-                line = QLineSeries()
-                line.setPen(stem_pen)
-                line.append(xf, ymin)
-                line.append(xf, yf)
-
-                self.rga_chart.addSeries(line)
-                line.attachAxis(self.rga_axis_x)
-                line.attachAxis(self.rga_axis_y)
-                self._rga_stem_series.append(line)
-            except Exception:
-                return
+        try:
+            self.rga_scatter.replace([QPointF(xf, yf) for xf, yf in pts])
+            for i, line in enumerate(self._rga_stem_series):
+                if i < len(pts):
+                    xf, yf = pts[i]
+                    line.replace([QPointF(xf, ymin), QPointF(xf, yf)])
+                else:
+                    line.replace([])            # 남는 풀 시리즈는 비운다
+        except Exception:
+            return
 
         if not self._is_rga_graph_alive():
             return
@@ -251,12 +253,33 @@ class GraphController:
         except Exception:
             return
 
+    @staticmethod
+    def _oes_plot_min_interval_s() -> float:
+        try:
+            from lib import config_common as _cc
+            return max(0.0, float(getattr(_cc, "OES_PLOT_MIN_INTERVAL_S", 0.5)))
+        except Exception:
+            return 0.5
+
     def update_oes_plot(self, x_data: Sequence[float], y_data: Sequence[float]) -> None:
-        """OES: 선 그래프 (x는 100~1200 범위로 클리핑, x축 눈금 100 단위 고정)"""
+        """OES: 선 그래프 (x는 100~1200 범위로 클리핑, x축 눈금 100 단위 고정)
+
+        ✅ 점마다 append 하면 QtCharts 가 매번 QPainterPath 를 재생성해 O(n²)(2048점, 초당 1회 → 루프 정지).
+           replace() 한 번으로 교체하고, OES_PLOT_MIN_INTERVAL_S 이내 연속 호출은 건너뛴다(쓰로틀)."""
 
         # ✅ 이미 Qt 객체가 파괴됐으면 아무 것도 하지 않음
         if not self._is_oes_graph_alive():
             return
+
+        # 쓰로틀: 직전 draw 로부터 최소 간격 이내면 건너뛴다(마지막 수신 데이터만 의미 있음)
+        try:
+            now = time.monotonic()
+            last = float(getattr(self, "_oes_last_draw_ts", 0.0) or 0.0)
+            if last > 0.0 and (now - last) < self._oes_plot_min_interval_s():
+                return
+            self._oes_last_draw_ts = now
+        except Exception:
+            pass
 
         # numpy/리스트 모두 안전하게 1D로 정규화
         try:
@@ -302,17 +325,9 @@ class GraphController:
             return
 
         try:
-            self.oes_series.clear()
+            self.oes_series.replace([QPointF(x, y) for x, y in pairs])   # O(n) 1회 갱신
         except Exception:
             return
-
-        for x, y in pairs:
-            if not self._is_oes_graph_alive():
-                return
-            try:
-                self.oes_series.append(QPointF(x, y))
-            except Exception:
-                return
 
         # x축: 100 간격 고정 / y축: 기본 범위 유지
         if not self._is_oes_graph_alive():
@@ -331,8 +346,7 @@ class GraphController:
         try:
             self.rga_scatter.clear()
             for s in list(self._rga_stem_series):
-                self.rga_chart.removeSeries(s)
-            self._rga_stem_series.clear()
+                s.replace([])                   # 풀은 유지, 내용만 비운다
         except Exception:
             return
 

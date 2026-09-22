@@ -21,6 +21,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Any, Tuple
 from functools import partial
 
+from concurrent.futures import ThreadPoolExecutor
 from openpyxl import Workbook, load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
@@ -668,6 +669,10 @@ def save_pc_only(
 # 공개 API
 # ════════════════════════════════════════════════════════════════
 
+# G: 드라이브 엑셀 로드/저장 전용 풀(1워커). asyncio.to_thread 가 쓰는 기본 풀과 분리한다.
+_GDRIVE_EXEC = ThreadPoolExecutor(max_workers=1, thread_name_prefix="GDriveIO")
+
+
 async def save_process_log(
     ch: int,
     data_logger,
@@ -712,7 +717,7 @@ async def save_process_log(
     loop = asyncio.get_event_loop()
     try:
         sent = await loop.run_in_executor(
-            None,
+            _GDRIVE_EXEC,    # 전용 1워커 풀 — 수 초~수십 초짜리 엑셀 로드/저장이 기본 풀(PLC I/O 공유)을 막지 않게
             partial(
                 _save_sync,
                 ch, rows, target_dir,

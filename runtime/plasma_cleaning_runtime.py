@@ -1011,7 +1011,8 @@ class PlasmaCleaningRuntime:
                         # 카메라는 1대: 참여자 집합으로 한 세션을 공유(둘 이상이면 ALL 승격, 같은 모드면 재시작 없음)
                         owner = self._cam_owner_for_start()                          # 참여 시점의 owner 를 고정
                         recorder.set_log_callback(self._cam_log, owner=owner)        # ✅ start 보다 먼저 — 시작/승격 메시지가 공정 로그로
-                        recorder.start(owner=owner)                                  # mode 는 참여자 집합이 정한다
+                        # start() 는 이전 녹화 스레드를 join(3s) 할 수 있다 → 루프를 막지 않도록 스레드에서
+                        await asyncio.to_thread(recorder.start, owner=owner)         # mode 는 참여자 집합이 정한다
                         self.append_log("CAM", f"카메라 녹화 시작 (mode={recorder.current_mode})")
                     else:
                         owner = self._cam_owner_for_stop()                           # 참여할 때 쓴 owner 로 해제
@@ -2060,20 +2061,74 @@ class PlasmaCleaningRuntime:
     def _set_state_text(self, text: str) -> None:
         if not self._w_state:
             return
+        if self._on_loop_thread() is False:          # 워커 스레드 → 루프로
+            self._soon(self._set_state_text, text)
+            return
         try:
             self._w_state.setPlainText(str(text))
         except Exception:
             pass
 
     def _cam_log(self, msg: str) -> None:
-        """CameraRecorder(백그라운드 스레드) 메시지를 메인 스레드로 넘겨
-        공정 로그(PC_*.log) + 화면에 출력한다."""
+        """CameraRecorder(백그라운드 스레드) 메시지 → 공정 로그(PC_*.log) + 화면.
+        append_log 가 스스로 루프 스레드로 마샬링하므로 여기서는 그대로 넘긴다."""
         try:
-            self._loop.call_soon_threadsafe(lambda: self.append_log("CAM", msg))
+            self.append_log("CAM", msg)
+        except Exception:
+            pass
+
+    # ---- 스레드 마샬링 (ChamberRuntime._soon 과 동일 패턴) ----
+    def _on_loop_thread(self) -> Optional[bool]:
+        """현재 스레드가 self._loop 의 스레드면 True, 아니면 False, 루프가 없거나 닫혔으면 None.
+        (qasync 에서는 Qt 메인 스레드 == 루프 스레드. main_thread 비교가 아니라 running loop 로 판정)"""
+        loop = getattr(self, "_loop", None)
+        if loop is None:
+            return None
+        try:
+            if loop.is_closed():
+                return None
+        except Exception:
+            return None
+        try:
+            return asyncio.get_running_loop() is loop
+        except RuntimeError:
+            return False
+
+    def _soon(self, fn: Callable[..., Any], *args: Any, **kwargs: Any) -> None:
+        """fn 을 루프 스레드에서 실행한다(루프 스레드면 즉시 예약, 아니면 threadsafe 예약). 실패는 조용히 무시."""
+        def _safe():
+            try:
+                fn(*args, **kwargs)
+            except Exception:
+                pass
+        on = self._on_loop_thread()
+        if on is None:
+            return
+        try:
+            if on:
+                self._loop.call_soon(_safe)
+            else:
+                self._loop.call_soon_threadsafe(_safe)
         except Exception:
             pass
 
     def append_log(self, src: str, msg: str) -> None:
+        # ✅ Qt 위젯(QPlainTextEdit)은 GUI 스레드에서만 만져야 한다. 워커 스레드(PLC to_thread,
+        #    PLCConnectDiag, 카메라 데몬 등)에서 오면 루프 스레드로 넘기고 즉시 반환한다.
+        #    루프가 없거나 닫혔으면 UI 는 건너뛰고 파일 로그만 남긴다.
+        try:
+            on = self._on_loop_thread()
+        except Exception:
+            on = None
+        if on is False:
+            try:
+                self._loop.call_soon_threadsafe(self.append_log, src, msg)
+            except Exception:
+                with contextlib.suppress(Exception):
+                    self._queue_run_log_line(f"[{datetime.now().strftime('%H:%M:%S')}] {src}: {msg}")
+            return
+        ui_ok = (on is True)
+
         # 🔇 Plasma Cleaning 화면에서 MFC/IG의 [poll] 라인 숨김(표시만 억제)
         try:
             if isinstance(msg, str) and msg.lstrip().startswith("[poll]"):
@@ -2083,8 +2138,8 @@ class PlasmaCleaningRuntime:
             pass
 
         line = f"[{datetime.now().strftime('%H:%M:%S')}] {src}: {msg}"
-        # UI
-        if self._w_log:
+        # UI (루프 스레드일 때만)
+        if ui_ok and self._w_log:
             try:
                 w = self._w_log
                 sb = w.verticalScrollBar()
@@ -2595,6 +2650,9 @@ class PlasmaCleaningRuntime:
                             await asyncio.wait_for(f2, timeout=2.0)
 
     def _post_warning(self, title: str, text: str, auto_close_ms: int = 5000) -> None:
+        if self._on_loop_thread() is False:          # QMessageBox 는 GUI 스레드에서만
+            self._soon(self._post_warning, title, text, auto_close_ms)
+            return
         try:
             if not self._has_ui():
                 raise RuntimeError("UI/parent not ready")
@@ -2644,6 +2702,9 @@ class PlasmaCleaningRuntime:
         - auto-close 없음 (계속 떠있음)
         - 비모달 + 참조 보관(_msg_boxes)으로 GC 방지
         """
+        if self._on_loop_thread() is False:          # QMessageBox 는 GUI 스레드에서만
+            self._soon(self._post_critical, title, text, clear_status_to_idle=clear_status_to_idle, ch=ch)
+            return
         try:
             if not self._popup_should_show(title, str(text),
                                            bypass_cap=bool(clear_status_to_idle)):

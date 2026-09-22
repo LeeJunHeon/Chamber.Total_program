@@ -1,6 +1,10 @@
 # util/inventory_client.py
 import asyncio
 import contextlib
+from concurrent.futures import ThreadPoolExecutor
+
+# 재고 서버 HTTP 전용 풀(1워커) — 기본 풀(PLC I/O 공유)을 막지 않게 분리
+_INV_EXEC = ThreadPoolExecutor(max_workers=1, thread_name_prefix="InventoryIO")
 from typing import Dict
 
 _DEFAULT_URL = "https://vanam.synology.me/inventory/api/chamber-slots"
@@ -59,7 +63,7 @@ async def fetch_gun_targets(ch: int) -> Dict[str, str]:
 
     try:
         loop = asyncio.get_event_loop()
-        slots = await loop.run_in_executor(None, _fetch_slots_sync, url)
+        slots = await loop.run_in_executor(_INV_EXEC, _fetch_slots_sync, url)
     except Exception:
         return result   # 네트워크 실패 → 빈 딕셔너리, 메인 공정 무영향
 

@@ -944,7 +944,8 @@ class ChamberRuntime:
                                         # 카메라는 1대: 참여자 집합으로 한 세션을 공유(둘 이상이면 ALL 승격, 같은 모드면 재시작 없음)
                                         _cam_owner = f"chamber{self.ch}"
                                         recorder.set_log_callback(self._cam_log, owner=_cam_owner)  # ✅ 카메라 로그 → 공정 로그+화면
-                                        recorder.start(owner=_cam_owner)                            # mode 는 참여자 집합이 정한다
+                                        # start() 는 이전 녹화 스레드를 join(3s) 할 수 있다 → 루프를 막지 않도록 스레드에서
+                                        await asyncio.to_thread(recorder.start, owner=_cam_owner)   # mode 는 참여자 집합이 정한다
                                         self.append_log("CAM", f"[CH{self.ch}] 카메라 녹화 시작 (mode={recorder.current_mode}, RF={'RF' if use_rf else ''}{'Pulse' if use_rf_pulse else ''})")
                                     else:
                                         self.append_log("CAM", f"[CH{self.ch}] RF 미사용 공정 → 카메라 건너뜀")

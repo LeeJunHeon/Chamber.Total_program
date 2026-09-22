@@ -508,7 +508,8 @@ class MainWindow(QWidget):
                 def _cam_notify(msg: str) -> None:
                     # 알림 실패가 촬영/공정에 전파되지 않도록 전부 try/except
                     try:
-                        self._broadcast_log("CAM", msg)
+                        # 카메라 데몬 스레드에서 호출됨 → 로그(Qt 위젯)도 루프 스레드로 마샬링
+                        self._loop.call_soon_threadsafe(self._broadcast_log, "CAM", msg)
                     except Exception:
                         pass
                     try:
@@ -1915,6 +1916,14 @@ def main() -> int:
 
     loop = QEventLoop(app)
     asyncio.set_event_loop(loop)
+
+    # ✅ qasync 기본 executor 는 QThreadExecutor(max_workers=10) 고정 — asyncio.to_thread(PLC I/O 포함)가
+    #    이 풀을 공유하므로 넉넉히 키운다. 실패해도 조용히 넘어간다.
+    try:
+        from concurrent.futures import ThreadPoolExecutor as _TPE
+        loop.set_default_executor(_TPE(max_workers=32, thread_name_prefix="AppIO"))
+    except Exception:
+        pass
 
     install_asyncio_exception_logging(loop, _logger)
 
