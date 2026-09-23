@@ -546,8 +546,8 @@ def test_14_link_state_toggled():
     up = [m for m in logs if m.startswith("WARN PLC 링크 복구")]
     assert len(down) == 1, down
     assert len(up) == 1 and "채팅알림=미발송" in up[0], up
-    # 복구 카드가 안 나가는 짧은 끊김 → 억제 카운터는 여기서 비워지고 로그 뒤에 덧붙는다
-    assert "억제된 알림 E401 1건, E402 1건" in up[0], up
+    # 2026-09-23: 억제 카운터는 링크 up 전이(note_link_up → 재연결 카드)가 소진한다.
+    #             _mark_conn_ok 의 복구 로그는 조회만 하므로 전이 후에는 0 이다.
     assert link_state.suppressed_total() == 0
     assert fired == [], fired
     # 복구 뒤에는 새 사이클

@@ -125,9 +125,9 @@ def test_5_full_cycle_exactly_two_cards(env):
     assert plc_cards[1]["title"] == "PLC 재연결" and plc_cards[1]["status"] == "SUCCESS"
     assert "억제된 연결 알림 80건 (E401 40건, E402 40건)" in plc_cards[1]["subtitle"], plc_cards[1]
     assert link_state.suppressed_total() == 0
-    # 복구 후에는 다시 정상 전송
+    # 2026-09-23: 복구 후에도 링크 코드의 개별 카드는 나가지 않는다(항상 억제, 건수만 누적)
     n_host.notify_error_event("HOST", "E401", "x")
-    assert len(host_cards) == 1
+    assert host_cards == [] and link_state.suppressed_total() == 1
 
 
 def test_6_suppress_off_keeps_legacy(env):

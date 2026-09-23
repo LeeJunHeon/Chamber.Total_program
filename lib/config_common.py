@@ -535,7 +535,9 @@ PLC_RECONNECT_DELAY_S = 0.5
 
 # PLC 연결 끊김 → 구글챗 알림 발송까지 대기 시간 (초)
 # 끊긴 뒤 이 시간이 지나도 재연결 안 되면 "끊김" 알림 1회 발송
-PLC_DISCONNECT_ALERT_AFTER_S = 60.0
+# 링크 끊김/재연결 챗은 link_state 가 전이 즉시 1장씩 보낸다(2026-09-23). 이 값은 하위호환용으로 남기며
+# 0 = 즉시(권장). 0 보다 크면 plc._mark_conn_fail 의 UI 로그용 _fire_conn_change 만 그만큼 늦어진다.
+PLC_DISCONNECT_ALERT_AFTER_S = 0.0
 
 # --- 구글챗 오류 카드 억제 ---
 CHAT_PLC_LINK_SUPPRESS = True        # 링크 다운 중 PLC 연결계 오류 카드 억제 (False 면 기존 동작)

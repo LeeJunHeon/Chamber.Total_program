@@ -247,30 +247,50 @@ class MainWindow(QWidget):
         # PLC (공유) : 실제 AsyncPLC 인스턴스는 하나만 생성
         self.plc: AsyncPLC = AsyncPLC(logger=self._plc_log)
 
-        # ★ PLC 연결 상태 변화 → 구글챗 알림 연결
+        # ★ PLC 연결 상태 변화 → UI 로그만. 링크 챗 카드는 link_state 발송기(아래)가 단일 소스로 보낸다.
         def _on_plc_conn_change(connected: bool, detail: str):
-            try:
-                notifier = self.chat_plc
-                if notifier is None:
-                    return
-                if connected:
-                    # 재연결: 성공 카드로 즉시 전송 (+ 끊긴 동안 억제된 연결 알림 건수)
-                    total, by_code = link_state.consume_suppressed()
-                    sub = detail
-                    if total > 0:
-                        sub += (f" | 끊긴 동안 억제된 연결 알림 {total}건 "
-                                f"({link_state.format_suppressed(total, by_code)})")
-                    notifier._post_card("PLC 재연결", subtitle=sub,
-                                        status="SUCCESS", urgent=True)
-                else:
-                    # 끊김: 장비 오류 카드로 즉시 전송 (link_event=True → 링크 다운 억제를 통과하는 유일한 호출)
-                    notifier.notify_error_event("PLC", "E401", detail, link_event=True)
-            except Exception:
-                pass
-            # UI 로그에도 남김
             self._broadcast_log("PLC", detail)
 
         self.plc.set_conn_change_callback(_on_plc_conn_change)
+
+        # ★ PLC 링크 전이 → 구글챗 2장(끊김/재연결). 전이는 워커 스레드(to_thread)에서도 일어나므로
+        #   발송은 반드시 이벤트 루프 스레드로 마샬링한다.
+        def _emit_link_card(kind: str, info: dict) -> None:
+            def _send():
+                try:
+                    notifier = self.chat_plc
+                    if notifier is None:
+                        return
+                    ep = f"{self.plc.cfg.ip}:{self.plc.cfg.port}"
+                    if kind == "down":
+                        ts = datetime.fromtimestamp(float(info.get("at") or 0.0)).strftime("%H:%M:%S")
+                        _rsn = str(info.get("reason") or "미확인")
+                        _op = str(info.get("op") or "")
+                        sub = f"[CH1&2] PLC 연결 끊김 ({ep}) | 감지 {ts} | 사유={_rsn}"
+                        if _op:
+                            sub += f" | op={_op}"
+                        notifier._post_card("PLC 연결 끊김", subtitle=sub, status="FAIL", urgent=True)
+                    else:
+                        sub = str(info.get("detail") or f"[CH1&2] PLC 재연결 성공 ({ep})")
+                        sub += f" | 끊김 {float(info.get('elapsed_s') or 0.0):.1f}초"
+                        _tot = int(info.get("suppressed_total") or 0)
+                        if _tot > 0:
+                            sub += (f" | 끊긴 동안 억제된 연결 알림 {_tot}건 "
+                                    f"({link_state.format_suppressed(_tot, info.get('suppressed_by_code') or {})})")
+                        _diag = str(info.get("diag") or "")
+                        if _diag and _diag not in ("미확인", "진단중"):
+                            sub += f" | 진단={_diag}"
+                        notifier._post_card("PLC 재연결", subtitle=sub, status="SUCCESS", urgent=True)
+                except Exception:
+                    pass
+            try:
+                self._loop.call_soon_threadsafe(_send)
+            except Exception:
+                with contextlib.suppress(Exception):
+                    _send()
+
+        with contextlib.suppress(Exception):
+            link_state.set_emitter(_emit_link_card)
 
         # ★ 챔버/플라즈마별 PLC Proxy 생성 (로그 출처 구분용)
         self._plc_ch1 = _PLCProxy(self.plc, "CH1")

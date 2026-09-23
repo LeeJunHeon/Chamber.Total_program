@@ -705,9 +705,11 @@ class ChatNotifier(QObject):
         subtitle = f"[{src}] {code} | {cause}" if code else f"[{src}] {cause}"
         fields = {"해결방법": fix} if fix else None
 
-        # (a) 링크 차단: PLC 링크 다운 중 연결계 코드는 채팅 전송만 생략(건수는 재연결 카드에 합산)
+        # (a) 링크 차단: PLC 연결계 코드의 개별 "장비 오류" 카드는 링크 상태·타이밍과 무관하게 항상 억제한다.
+        #     (down 전이보다 먼저 온 오류가 카드로 새던 창을 없앤다 — 건수만 세어 재연결 카드에 싣는다)
+        #     server_page/ERROR 로그에는 그대로 남고, 공정 이벤트 카드(E3xx 등)는 억제 대상이 아니다.
         if (not link_event) and self._plc_link_suppress_on() \
-           and code in self._plc_link_codes() and link_state.is_plc_link_down():
+           and code in self._plc_link_codes():
             link_state.note_suppressed(code)
             return
 

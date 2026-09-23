@@ -772,6 +772,8 @@ class AsyncPLC:
                 if _bo > 0.0:
                     _now = time.monotonic()
                     if _now < float(getattr(self, "_next_connect_attempt_at", 0.0) or 0.0):
+                        with contextlib.suppress(Exception):
+                            link_state.note_link_down("접속 실패(backoff 대기)", "connect")
                         raise PLCError("E401", "PLC 재연결 대기 중 (backoff)", op="connect")
                     # 시도 '전'에 먼저 걸어 동시 진입을 막고,
                     # 실패 후에도 다시 걸어 "시도 종료 시점부터" _bo 초를 쉬게 한다.
@@ -834,6 +836,8 @@ class AsyncPLC:
 
                     # ⚠ 진단은 별도 스레드에서 나중에 채워진다 → 묵은 값(이전 실패의 분류)은 쓰지 않는다
                     _diag = self._current_connect_diag()
+                    with contextlib.suppress(Exception):   # 접속 최종 실패 = 링크 down
+                        link_state.note_link_down(f"접속 실패(시도 {attempts}회, 분류={_diag})", "connect")
                     _suffix = f" (시도 {attempts}회, 분류={_diag})"
                     if last_exc is not None:
                         raise PLCError(
@@ -845,6 +849,13 @@ class AsyncPLC:
                         "E401",
                         f"Modbus TCP 연결 실패 ({self.cfg.ip}:{self.cfg.port}){_suffix}",
                         op="connect",
+                    )
+
+                # ✅ 접속 성공 = 링크 up. down 이었을 때만 재연결 카드 1장(경로/호출자 무관)
+                with contextlib.suppress(Exception):
+                    link_state.note_link_up(
+                        f"[CH1&2] PLC 재연결 성공 ({self.cfg.ip}:{self.cfg.port})",
+                        self._current_connect_diag(),
                     )
 
                 # ✅ 연결 성공 → 백오프 즉시 해제
@@ -1067,14 +1078,16 @@ class AsyncPLC:
 
     # ---------- 연결 상태/알림 처리 ----------
     def _mark_conn_ok(self) -> None:
-        """heartbeat ping 성공 시 호출. 끊김 상태였으면 '재연결' 알림 1회 발송."""
-        link_state.set_plc_link_down(False)
+        """heartbeat ping 성공 시 호출. 링크 카드는 link_state(접속 성공 지점)가 보내므로 여기선 로그/상태만."""
+        with contextlib.suppress(Exception):
+            link_state.note_link_up(f"[CH1&2] PLC 재연결 성공 ({self.cfg.ip}:{self.cfg.port})",
+                                    self._current_connect_diag())
         # 끊김 상태였으면(채팅 알림 발송 여부와 무관) 복구 로그는 항상 1줄 남긴다
         if self._disconnect_since != 0.0:
             _tail = ""
             if not self._disconnect_alerted:
-                # 복구 카드가 나가지 않는 짧은 끊김: 억제 카운터가 남지 않도록 여기서 비우고 로그에만 남긴다
-                _tot, _by = link_state.consume_suppressed()
+                # 억제 카운터 리셋은 note_link_up(재연결 카드)이 담당한다 — 여기선 조회만(다음 카드의 건수를 뺏지 않게)
+                _tot, _by = link_state.suppressed_snapshot()
                 if _tot > 0:
                     _tail = f" | 억제된 알림 {link_state.format_suppressed(_tot, _by)}"
             self.log("WARN PLC 링크 복구 (끊김 %.1f초, 채팅알림=%s)" + _tail,
@@ -1095,7 +1108,8 @@ class AsyncPLC:
         if self._disconnect_since == 0.0:
             # 끊김 추적 시작 (사이클당 정확히 1회 로그 — 채팅 알림 정책과 무관)
             self._disconnect_since = now
-            link_state.set_plc_link_down(True)
+            with contextlib.suppress(Exception):   # 이미 I/O 경로에서 down 이면 여기선 카드 없음
+                link_state.note_link_down("하트비트 실패", "heartbeat")
             self.log("WARN PLC 링크 끊김 감지 (채팅 알림 임계 %.0f초)", self._disconnect_alert_after_s)
         self._conn_alert_state = False
 
@@ -1204,6 +1218,11 @@ class AsyncPLC:
                 raise pe from e
 
             if pe.code == "E401" or self._is_reset_err(e):
+                # ✅ 소켓을 잃은 첫 순간 = 링크 down. 호스트가 이 오류로 응답/리포트하기 전에 전이한다(경합 창 0).
+                #    저우선도 '감지' 는 하되 재접속/소켓 재생성은 하지 않는다(b3c35a7 정책 유지).
+                with contextlib.suppress(Exception):
+                    link_state.note_link_down(
+                        "RST/연결 끊김" if self._is_reset_err(e) else "E401 연결 오류", op)
                 if priority == "low":
                     # 저우선은 close/connect/재시도 전부 금지 — 이 tick 만 포기
                     self._consec_timeouts_low += 1
@@ -1232,6 +1251,8 @@ class AsyncPLC:
                 close_after = 3
 
             if self._consec_timeouts >= close_after:
+                with contextlib.suppress(Exception):      # 소켓 재생성 = 링크 down
+                    link_state.note_link_down(f"연속 타임아웃 {self._consec_timeouts}회", op)
                 self._log_reconnect(f"연속 타임아웃 {self._consec_timeouts}회", op)
                 await self._locked_thread(self._close_sync)
                 await self._locked_thread(self._connect_sync, full=False)
