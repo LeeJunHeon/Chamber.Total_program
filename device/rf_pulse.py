@@ -255,6 +255,12 @@ class RFPulseAsync:
         self._closing: bool = False
         self._stop_requested: bool = False
 
+        # ---- 출력 OFF 확인 상태 (2026-09-23 CH1: RF_OFF 가 240초 동안 전송조차 안 된 사고) ----
+        self._off_task: Optional[asyncio.Task] = None      # _power_off_sequence 태스크
+        self._output_maybe_on: bool = False                # RF_ON 을 write 한 뒤 True, RF_OFF(CSR=0) 로 False
+        self.output_off_unconfirmed: bool = False          # (public) OFF 시퀀스가 확인 없이 끝났다
+        self.cleanup_off_unconfirmed: bool = False         # (public) 이번 cleanup 에서 OFF 확인 실패
+
         # 폴링/전력 캐시
         self._poll_busy: bool = False
         self._last_forward_w: Optional[float] = None
@@ -336,12 +342,51 @@ class RFPulseAsync:
                 self._cmd_worker_task = loop.create_task(self._cmd_worker_loop(), name="RFP-CmdWorker")
 
     async def cleanup(self):
+        # ✅ 안전망: 연결을 닫기 전에 '출력이 켜져 있을 수 있으면' OFF 를 확인한다.
+        #    (러너 예외/취소로 종료 절차 없이 정리되는 경우 대비. 2026-09-23 CH1 사고)
+        self.cleanup_off_unconfirmed = False
+        _wait_s = self._cfg_float("RFPULSE_CLEANUP_OFF_WAIT_S", 8.0)
+        try:
+            if self._off_in_progress():
+                t = self._off_task
+                # ⚠ 기다림이 OFF 태스크를 취소해선 안 된다 → asyncio.wait 사용
+                done, pending = await asyncio.wait({t}, timeout=max(0.0, _wait_s))
+                if pending:
+                    await self._emit_status("정리 대기 초과 — RF OFF 시퀀스 취소")
+                    for _t in pending:
+                        _t.cancel()
+                    with contextlib.suppress(Exception, asyncio.CancelledError):
+                        await asyncio.wait(pending, timeout=1.0)
+            elif self._output_maybe_on and self._worker_alive():
+                # 이번 런에서 동작 중인 장치만 — 워커가 없으면(안 쓴 장치) 새로 연결하지 않는다
+                self._stop_requested = True
+                await self._emit_status("정리 전 RF 출력 OFF 확인")
+                self._off_task = self._spawn(self._power_off_sequence())
+                t = self._off_task
+                if t is not None:
+                    done, pending = await asyncio.wait({t}, timeout=max(0.0, _wait_s))
+                    if pending:
+                        await self._emit_status("정리 대기 초과 — RF OFF 시퀀스 취소")
+                        for _t in pending:
+                            _t.cancel()
+                        with contextlib.suppress(Exception, asyncio.CancelledError):
+                            await asyncio.wait(pending, timeout=1.0)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self._dbg("RFP", f"cleanup OFF 확인 실패: {e!r}")
+
+        if self._output_maybe_on:
+            self.cleanup_off_unconfirmed = True
+            self.output_off_unconfirmed = True
+
         self._closing = True
         self._want_connected = False
         self.set_process_status(False)  # 폴링만 중지, SAFE 시퀀스는 여기서 안 함
         await asyncio.sleep(0.2)
 
         await self._cancel_task("_poll_task")
+        await self._cancel_task("_off_task")
         await self._cancel_task("_cmd_worker_task")
         await self._cancel_task("_watchdog_task")
 
@@ -406,7 +451,18 @@ class RFPulseAsync:
         self._refp_over_limit_count = 0
         self._refp_warn_active = False
 
+        async def _stopped() -> bool:
+            """정지 요청이 들어왔으면 중단 로그만 남긴다(이벤트 없음)."""
+            if not self._stop_requested:
+                return False
+            await self._emit_status("STOP 요청 → RF Pulse 시작 시퀀스 중단")
+            return True
+
         async def fail(why: str):
+            if self._stop_requested:
+                # 정지 때문에 실패한 것이므로 command_failed 를 보내지 않는다
+                await self._emit_status("STOP 요청 → RF Pulse 시작 시퀀스 중단")
+                return False
             await self._emit_failed("START_SEQUENCE", why)
             return False
 
@@ -414,12 +470,16 @@ class RFPulseAsync:
 
         # HOST
         # HOST 모드 확인 → 필요할 때만 전환
+        if await _stopped():
+            return False
         mode_data = await self._query_and_data(155, b"", tag="[READ CTRL MODE]")
         current_mode = mode_data[0] if mode_data else None
 
         if current_mode is None:
             return await fail("HOST 모드 확인 실패 (READ_ACTIVE_CTRL 응답 없음)")
 
+        if await _stopped():
+            return False
         if current_mode != 2:
             ok, csr_bytes = await self._exec_and_csr(CMD_SET_ACTIVE_CTRL, b"\x02", tag="[START HOST]")
             if not ok:
@@ -430,6 +490,8 @@ class RFPulseAsync:
             await self._emit_status("이미 HOST 모드 → SET_ACTIVE_CTRL 생략")
 
         # RF OFF로 출력 상태 정리 (이전 공정 비정상 종료 대비)
+        if await _stopped():
+            return False
         ok, _ = await self._exec_and_csr(CMD_RF_OFF, b"", tag="[START PRE RF OFF]", timeout_ms=max(ack_ms, 2500))
         if not ok:
             return await fail("RF OFF(사전) 실패")
@@ -437,11 +499,15 @@ class RFPulseAsync:
         await asyncio.sleep(0.2)  # 릴레이/출력 안정화 여유
 
         # MODE FWD
+        if await _stopped():
+            return False
         ok, _ = await self._exec_and_csr(CMD_SET_CTRL_MODE, bytes([MODE_SET["fwd"]]), tag="[START MODE FWD]")
         if not ok:
             return await fail("MODE=FWD 실패")
 
         # SETPOINT
+        if await _stopped():
+            return False
         sp = int(round(float(target_w)))
         ok, _ = await self._exec_and_csr(
             CMD_SET_SETPOINT,
@@ -476,6 +542,8 @@ class RFPulseAsync:
             return _ok, (_csr_b[0] if _csr_b else None)
 
         # FREQ
+        if await _stopped():
+            return False
         _freq_retry_pending = False
         if freq_hz is not None:
             ok, csr = await _send_freq()
@@ -495,6 +563,8 @@ class RFPulseAsync:
                     )
 
         # DUTY
+        if await _stopped():
+            return False
         if duty_percent is not None:
             ok, csr = await _send_duty()
             if not ok:
@@ -514,6 +584,8 @@ class RFPulseAsync:
                 )
 
         # ── 설정 read-back (cmd 193/196). 불일치는 경고만, 실패 처리하지 않는다 ──
+        if await _stopped():
+            return False
         if freq_hz is not None or duty_percent is not None:
             with contextlib.suppress(Exception):
                 _pr = await self.read_actual_pulse_params()
@@ -534,6 +606,8 @@ class RFPulseAsync:
                     await self._emit_status("[VERIFY] RF Pulse 설정 read-back 실패(통신) → 검증 생략")
 
         # PULSING (cfg로 모드 선택 가능)
+        if await _stopped():
+            return False
         pulse_mode = self._cfg_int("RFPULSE_PULSE_MODE", 1)
         if pulse_mode not in PULSING_TX:
             return await fail(f"PULSING 모드 범위 오류: {pulse_mode} (허용: {sorted(PULSING_TX.keys())})")
@@ -547,6 +621,8 @@ class RFPulseAsync:
             return await fail("PULSING 설정 실패")
 
         # RF ON
+        if await _stopped():
+            return False
         ok, _ = await self._exec_and_csr(CMD_RF_ON, b"", tag="[START RF ON]", timeout_ms=max(ack_ms, 2500))
         if not ok:
             return await fail("RF ON 실패")
@@ -554,6 +630,9 @@ class RFPulseAsync:
         # 폴링 시작
         start_delay_ms = self._cfg_int("POLL_START_DELAY_AFTER_RF_ON_MS", 800)
         await asyncio.sleep(start_delay_ms / 1000.0)
+
+        if await _stopped():
+            return False
 
         self.set_process_status(True)
 
@@ -587,6 +666,11 @@ class RFPulseAsync:
         - CSV 리스트 공정에서 "특정 시간에 power setpoint 변경"할 때 사용
         - 성공/실패를 bool로 반환 (상위 ProcessController 콜백에서 사용하기 좋게)
         """
+        # 0) 정지 요청 이후에는 전송하지 않는다
+        if self._stop_requested:
+            await self._emit_status("STOP 요청 → SETP 변경 생략")
+            return False
+
         # 1) 입력 정규화
         try:
             sp = int(round(float(target_w)))
@@ -622,6 +706,9 @@ class RFPulseAsync:
             self._forp_out_of_range_count = 0
             self._refp_over_limit_count = 0
             await self._emit_status(f"SETP 변경 OK: {sp}W")
+        elif self._stop_requested:
+            # 전송 도중 정지가 들어온 경우 — 실패 이벤트를 보내지 않는다
+            await self._emit_status("STOP 요청 → SETP 변경 실패 통지 생략")
         else:
             csr = csr_bytes[0] if csr_bytes else None
             if csr is not None:
@@ -650,36 +737,164 @@ class RFPulseAsync:
             self._poll_task = None
         self._poll_busy = False
 
-        # ✅ 이미 큐도 없고 inflight도 없으면, 'polling off' purge/log 스킵
-        need_purge = (self._inflight is not None) or bool(self._cmd_q)
-        if need_purge:
-            self._purge_pending("polling off")
+        # ✅ 폴링 조회만 제거한다 — 제어 명령(RF_OFF/SETP 등)과 in-flight 는 건드리지 않는다
+        #    (기존엔 전체 폐기라 stop 직후 set_process_status(False) 가 RF_OFF 를 지웠다)
+        purged = self._purge_polling_queries()
+        if purged > 0:
+            self._spawn(self._emit_status(f"대기 중 명령 {purged}개 폐기 (polling off)"))
+
+    def _put_event_drop_oldest(self, ev: "RFPulseEvent") -> None:
+        """OFF 경로 전용 이벤트 투입. 이벤트 큐가 가득 차도 막히지 않게 가장 오래된 것을 버린다.
+        (OFF 완료/실패 통지가 큐 때문에 지연되면 공정 컨트롤러가 끝까지 대기한다)"""
+        for _ in range(4):
+            try:
+                self._event_q.put_nowait(ev)
+                return
+            except asyncio.QueueFull:
+                try:
+                    self._event_q.get_nowait()
+                except Exception:
+                    return
+
+    async def _off_status(self, msg: str) -> None:
+        self._put_event_drop_oldest(RFPulseEvent(kind="status", message=msg))
+        if self.debug_print:
+            print(f"[RFP][status] {msg}")
+
+    def _off_in_progress(self) -> bool:
+        t = self._off_task
+        return bool(t and not t.done())
+
+    async def _power_off_sequence(self) -> None:
+        """RF 출력 OFF 를 '확인' 될 때까지 시도한다.
+
+        불변 조건: 이 코루틴 1회는 RFPULSE_OFF_DEADLINE_S 안에
+        power_off_finished 또는 command_failed(cmd="RF_OFF") 중 정확히 하나로 끝난다.
+        (취소되면 이벤트 없이 종료)
+        OFF 도중에는 재연결을 끊지 않는다 — _want_connected=False 는 cleanup 만 한다.
+        """
+        deadline = time.monotonic() + self._cfg_float("RFPULSE_OFF_DEADLINE_S", 20.0)
+        ack_ms = self._cfg_int("ACK_TIMEOUT_MS", 2000)
+        attempts = 0
+        confirmed = False
+        try:
+            # 1) 연결 보장 — 끊겨 있으면 워치독을 재기동해 백오프를 초기값으로 되돌린다(즉시 재시도)
+            self._want_connected = True
+            await self.start()
+            if not self._connected:
+                with contextlib.suppress(Exception):
+                    await self.pause_watchdog()
+                self._reconnect_backoff_ms = self._cfg_int("RFPULSE_RECONNECT_BACKOFF_START_MS", 2000)
+                with contextlib.suppress(Exception):
+                    await self.resume_watchdog()
+
+            # 2) deadline 까지 RF_OFF 를 '확인형' 으로 반복
+            while not confirmed:
+                remain = deadline - time.monotonic()
+                if remain <= 0:
+                    break
+                attempts += 1
+                loop = asyncio.get_running_loop()
+                fut: asyncio.Future = loop.create_future()
+                tag = "[RF OFF]" if attempts == 1 else f"[RF OFF #{attempts}]"
+                self._enqueue_exec(
+                    CMD_RF_OFF, b"",
+                    tag=tag,
+                    timeout_ms=max(ack_ms, 2500),
+                    retries=2,
+                    allow_no_reply=False,          # ACK+CSR 을 반드시 본다
+                    allow_when_closing=True,
+                    callback=lambda b: (not fut.done()) and fut.set_result(b),
+                )
+                remain = deadline - time.monotonic()
+                if remain <= 0:
+                    break
+                try:
+                    res = await asyncio.wait_for(fut, timeout=remain)
+                except asyncio.TimeoutError:
+                    break                          # 큐에 남은 RF_OFF 가 나중에 나가도 무해
+
+                if res and len(res) >= 1 and res[0] == 0:
+                    confirmed = True
+                    break
+
+                if res and len(res) >= 1:
+                    csr = res[0]
+                    await self._off_status(
+                        f"RF OFF 거부 (CSR {csr}: {CSR_CODES.get(csr, 'Unknown')}) → STATUS 로 출력 확인"
+                    )
+                    st = None
+                    with contextlib.suppress(Exception):
+                        _d = await self._query_off_status()
+                        st = self._parse_status_0xA2(_d)
+                    if st is not None and not st.rf_output_on:
+                        confirmed = True
+                        break
+                else:
+                    await self._off_status(
+                        f"RF OFF 미확인 → 재시도 (남은 {max(0.0, deadline - time.monotonic()):.0f}초)"
+                    )
+                if (deadline - time.monotonic()) <= 0:
+                    break
+                await asyncio.sleep(0.5)
+
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            with contextlib.suppress(Exception):
+                await self._off_status(f"RF OFF 시퀀스 예외: {e!r}")
+
+        if confirmed:
+            self._output_maybe_on = False
+            self.output_off_unconfirmed = False
+            self._put_event_drop_oldest(RFPulseEvent(kind="power_off_finished"))
+            return
+
+        self.output_off_unconfirmed = True
+        _el = self._cfg_float("RFPULSE_OFF_DEADLINE_S", 20.0)
+        with contextlib.suppress(Exception):
+            await self._off_status(
+                f"RF OFF 확인 실패 — {_el:.0f}초 동안 {attempts}회 시도, 출력 상태 미확인 "
+                f"(연결={'O' if self._connected else 'X'})"
+            )
+        self._put_event_drop_oldest(RFPulseEvent(
+            kind="command_failed", cmd="RF_OFF",
+            reason=f"RF Pulse OFF 미확인 — {_el:.0f}초 동안 {attempts}회 시도, 출력 상태 미확인",
+        ))
+
+    async def _query_off_status(self) -> Optional[bytes]:
+        """OFF 확인용 STATUS(cmd 162) 조회. cleanup 중에도 나가도록 allow_when_closing=True."""
+        loop = asyncio.get_running_loop()
+        fut: asyncio.Future = loop.create_future()
+        q_ms = self._cfg_int("QUERY_TIMEOUT_MS", 4500)
+        self._enqueue_query(
+            CMD_REPORT_STATUS, b"",
+            tag="[OFF STATUS]",
+            timeout_ms=q_ms,
+            retries=1,
+            allow_when_closing=True,
+            callback=lambda b: (not fut.done()) and fut.set_result(b),
+        )
+        try:
+            return await asyncio.wait_for(fut, timeout=q_ms / 1000.0 + 1.0)
+        except asyncio.TimeoutError:
+            return None
 
     def stop_process(self):
-            """외부 stop: 폴링 off → RF OFF → power_off_finished 이벤트."""
+            """외부 stop: 폴링 off → (확인형) RF OFF → power_off_finished / command_failed 정확히 1회."""
             # 공정 중단 플래그만 세팅
             self._stop_requested = True
 
             # 폴링만 먼저 정지 (SAFE는 수행하지 않음)
             self.set_process_status(False)
 
-            async def _notify_off():
-                # ProcessController에서 RFPULSE_OFF 토큰으로 처리
-                await self._event_q.put(RFPulseEvent(kind="power_off_finished"))
+            # 대기 중인 제어 명령은 버리고 RF_OFF 만 남긴다(RF ON 이 OFF 뒤에 나가는 것을 막는다)
+            self._purge_pending("stop", keep_rf_off=True)
 
-            # 조건 없이 RF OFF 한 번 전송
-            self._enqueue_exec(
-                CMD_RF_OFF,
-                b"",
-                tag="[RF OFF]",
-                allow_no_reply=True,        # 응답 없어도 콜백 호출
-                allow_when_closing=True,
-                callback=lambda _b: self._spawn(_notify_off()),
-            )
-
-            # 필요하다면 여기서 _want_connected 를 False로 둘 수도 있음
-            # (지금 구조를 유지하고 싶으면 아래 줄은 그냥 그대로 두면 됨)
-            self._want_connected = False
+            # OFF 시퀀스는 런당 1개만 (두 번 눌러도 이벤트는 1회)
+            if self._off_in_progress():
+                return
+            self._off_task = self._spawn(self._power_off_sequence())
 
     async def poll_once(self):
         """원샷 WAKE→FWD→REF 읽기 및 이벤트 방출."""
@@ -832,6 +1047,14 @@ class RFPulseAsync:
             cmd = self._cmd_q.popleft()
             self._inflight = cmd
 
+            # ✅ 정지 가드(꺼낸 직후): 정지 요청 후에는 RF_OFF / SET_ACTIVE_CTRL 외의 exec 를 보내지 않는다
+            if self._stop_guard_blocks(cmd):
+                self._inflight = None
+                self._safe_callback(cmd.callback, None)
+                self._spawn(self._emit_status(f"[STOP_GUARD] {self._cmd_label(cmd.cmd)} 전송 차단"))
+                await asyncio.sleep(0)
+                continue
+
             # 최소 인터커맨드 간격 보장 (cmd.gap_ms 사용)
             now = time.monotonic()
             gap_need = (cmd.gap_ms / 1000.0) - (now - self._last_send_mono)
@@ -847,10 +1070,26 @@ class RFPulseAsync:
                     except asyncio.QueueEmpty:
                         break
 
-            # 전송 전 상태 확인
-            if self._closing or not (self._connected and self._writer):
+            # ✅ 정지 가드(write 직전): gap 대기 중에 정지가 들어온 경우
+            if self._stop_guard_blocks(cmd):
                 self._inflight = None
+                self._safe_callback(cmd.callback, None)
+                self._spawn(self._emit_status(f"[STOP_GUARD] {self._cmd_label(cmd.cmd)} 전송 차단"))
                 await asyncio.sleep(0)
+                continue
+
+            # 전송 전 상태 확인
+            #  · _closing + allow_when_closing=False → 콜백 None 으로 '명확한 실패' 처리
+            #  · 연결이 없으면 버리지 않고 큐 앞으로 되돌린다(명령 유실 방지)
+            if self._closing and not cmd.allow_when_closing:
+                self._inflight = None
+                self._safe_callback(cmd.callback, None)
+                await asyncio.sleep(0)
+                continue
+            if not (self._connected and self._writer):
+                self._inflight = None
+                self._cmd_q.appendleft(cmd)
+                await asyncio.sleep(0.05)
                 continue
 
             pkt = _build_packet(self.addr, cmd.cmd, cmd.data)
@@ -862,6 +1101,9 @@ class RFPulseAsync:
                         f"data={' '.join(f'{x:02X}' for x in (cmd.data or b''))} "
                         f"raw={' '.join(f'{x:02X}' for x in pkt)} tag={cmd.tag or ''}"
                     ))
+
+                if cmd.cmd == CMD_RF_ON:
+                    self._output_maybe_on = True      # write 직전 — 이후 출력이 켜져 있을 수 있다
 
                 self._writer.write(pkt)
 
@@ -962,6 +1204,8 @@ class RFPulseAsync:
 
             # 결과 처리
             if ok:
+                if cmd.cmd == CMD_RF_OFF and cmd.kind == "exec":
+                    self._output_maybe_on = False     # CSR=0 — PRE RF OFF / AUTO RF_OFF 포함
                 self._dbg("RFP OK", f"{cmd.tag} {self._cmd_label(cmd.cmd)}")
                 self._safe_callback(cmd.callback, result)
                 self._inflight = None
@@ -1581,25 +1825,63 @@ class RFPulseAsync:
         if self.debug_print:
             print(f"[{src}] {msg}")
 
-    def _purge_pending(self, reason: str = "") -> int:
+    def _stop_guard_blocks(self, cmd: "RfCommand") -> bool:
+        """정지 요청 이후에는 RF_OFF / SET_ACTIVE_CTRL(HOST 복구) / 조회 외의 명령을 보내지 않는다.
+        (RF ON 이 RF OFF 뒤에 전송되는 것을 막는다)"""
+        if not self._stop_requested:
+            return False
+        if cmd.kind != "exec":
+            return False
+        return cmd.cmd not in (CMD_RF_OFF, CMD_SET_ACTIVE_CTRL)
+
+    def _purge_polling_queries(self) -> int:
+        """폴링 조회([POLL …])만 큐에서 제거한다. in-flight 와 제어 명령은 건드리지 않는다."""
+        if not self._cmd_q:
+            return 0
+        keep: Deque[RfCommand] = deque()
+        purged = 0
+        while self._cmd_q:
+            c = self._cmd_q.popleft()
+            if c.kind == "query" and str(c.tag or "").startswith("[POLL"):
+                purged += 1
+                self._safe_callback(c.callback, None)
+            else:
+                keep.append(c)
+        self._cmd_q = keep
+        return purged
+
+    def _purge_pending(self, reason: str = "", *, keep_rf_off: bool = False) -> int:
         """
         명령 큐/인플라이트를 폐기하고 콜백에 실패(None) 통지.
         MFC와 동일한 패턴으로 구현하여 shutdown/polling off 시 충돌 방지.
+        keep_rf_off=True 면 큐의 RF_OFF 는 남기고, in-flight 도 RF_OFF 면 건드리지 않는다(stop 경로).
         """
         purged = 0
 
         # Inflight 하나 정리
         if self._inflight is not None:
             cmd = self._inflight
-            self._inflight = None
-            purged += 1
-            self._safe_callback(cmd.callback, None)
+            if not (keep_rf_off and cmd.kind == "exec" and cmd.cmd == CMD_RF_OFF):
+                self._inflight = None
+                purged += 1
+                self._safe_callback(cmd.callback, None)
 
         # 큐 비우기
-        while self._cmd_q:
-            c = self._cmd_q.popleft()
-            purged += 1
-            self._safe_callback(c.callback, None)
+        if keep_rf_off:
+            keep: Deque[RfCommand] = deque()
+            while self._cmd_q:
+                c = self._cmd_q.popleft()
+                if c.kind == "exec" and c.cmd == CMD_RF_OFF:
+                    keep.append(c)
+                else:
+                    purged += 1
+                    self._safe_callback(c.callback, None)
+            self._cmd_q = keep
+        else:
+            while self._cmd_q:
+                c = self._cmd_q.popleft()
+                purged += 1
+                self._safe_callback(c.callback, None)
 
         # ✅ polling off + purged==0 은 로그 스팸이므로 생략
         if reason:
@@ -1621,6 +1903,11 @@ class RFPulseAsync:
         except Exception:
             pass
         await self.start()
+
+    def _worker_alive(self) -> bool:
+        """이번 런에서 이 장치가 동작 중인가(명령 워커가 살아 있는가)."""
+        t = self._cmd_worker_task
+        return bool(t and not t.done())
 
     def is_connected(self) -> bool:
         return bool(self._connected)

@@ -2214,14 +2214,30 @@ class ChamberRuntime:
             elif k == "target_reached":
                 self.process_controller.on_rf_pulse_target_reached()
             elif k == "command_failed":
+                _cmd = str(getattr(ev, "cmd", None) or "")
+                _meta = {"cmd": getattr(ev, "cmd", None), "kind": k, "ch": self.ch}
+                if _cmd == "RF_OFF":
+                    # ⚠ 출력이 켜져 있을 수 있다 — DC Pulse OUTPUT_OFF 실패와 같은 방식으로 먼저 경고
+                    alert = (f"⚠️ CH{self.ch} RF Pulse OFF 실패 - 출력 상태 미확인 "
+                             f"(켜져 있을 가능성 있음). RF Pulse 장비의 출력 상태를 즉시 확인하세요.")
+                    self.append_log(f"RFPulse{self.ch}", alert)
+                    try:
+                        warns = getattr(self, "_run_warnings", None)
+                        if isinstance(warns, list):
+                            warns.append("RF Pulse OFF 실패(출력 상태 미확인)")
+                    except Exception:
+                        pass
+                    if self.chat:
+                        with contextlib.suppress(Exception):
+                            self.chat.notify_error_with_src("RFPulse", alert)
+                            if hasattr(self.chat, "flush"):
+                                self.chat.flush()
+                    _meta["safety"] = "output_state_unconfirmed"
+
                 self.process_controller.on_rf_pulse_failed(
                     ev.reason or "unknown",
                     code=getattr(ev, "code", None) or getattr(ev, "error_code", None),
-                    meta={
-                        "cmd": getattr(ev, "cmd", None),
-                        "kind": k,
-                        "ch": self.ch,
-                    },
+                    meta=_meta,
                 )
             elif k == "power_off_finished":
                 self.process_controller.on_rf_pulse_off_finished()
@@ -4975,6 +4991,24 @@ class ChamberRuntime:
                     with contextlib.suppress(Exception):
                         pn2 = [getattr(t, "get_name", lambda: repr(t))() for t in pending]
                     self.append_log("MAIN", f"⚠ cleanup cancel timeout(2s): {pn2!r} (detached/leaked)")
+
+        # 2-C) ✅ 정리 중 출력 OFF 미확인 경고 — 이 시점엔 이벤트 펌프가 이미 취소돼
+        #      장치 이벤트(command_failed)가 전달되지 않으므로 여기서 직접 알린다.
+        for _dev, _nm in ((self.rf_pulse, "RF Pulse"), (self.dc_pulse, "DC Pulse"),
+                          (self.dc_power, "DC Power"), (self.dc_power2, "DC Power2"),
+                          (self.rf_power, "RF Power")):
+            if _dev is None:
+                continue
+            if not getattr(_dev, "cleanup_off_unconfirmed", False):
+                continue
+            _w = f"⚠ 정리 중 {_nm} 출력 OFF 미확인 — 장비 출력 상태 확인 필요"
+            with contextlib.suppress(Exception):
+                self.append_log("MAIN", _w)
+            if self.chat:
+                with contextlib.suppress(Exception):
+                    self.chat.notify_error_with_src(_nm, _w)
+                    if hasattr(self.chat, "flush"):
+                        self.chat.flush()
 
         # 3) footer 먼저
         with contextlib.suppress(Exception):

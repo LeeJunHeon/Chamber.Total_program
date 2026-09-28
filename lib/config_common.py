@@ -416,6 +416,8 @@ RFPULSE_ADDR = 1
 # 연결/워치독/재연결
 RFPULSE_CONNECT_TIMEOUT_S = 1.5
 RFPULSE_DRAIN_TIMEOUT_S = 2.0
+RFPULSE_OFF_DEADLINE_S = 20.0      # RF Pulse OFF 확인 최대 시간(재연결 포함). 넘기면 '출력 상태 미확인' 실패
+RFPULSE_CLEANUP_OFF_WAIT_S = 8.0   # cleanup 전 OFF 확인 대기(장치 cleanup 전체 15초 제한 안)
 RFPULSE_RAW_LOG = False   # RF Pulse 원시 프레임 로그. False 면 정주기 폴링 프레임([POLL …])만 생략하고, 설정/제어 명령과 NAK·체크섬 오류는 항상 남는다
 RFPULSE_WATCHDOG_INTERVAL_MS = 3000
 RFPULSE_RECONNECT_BACKOFF_START_MS = 2000
