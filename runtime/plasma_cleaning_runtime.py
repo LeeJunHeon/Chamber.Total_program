@@ -1175,13 +1175,6 @@ class PlasmaCleaningRuntime:
             pass
         # ------------------------------------------------------------
 
-        self._cleanup_started = False  # ★ 추가: 새 런마다 정리 가드 초기화
-
-        # ★ 추가(권장): RF 실패 보정 플래그 초기화
-        self._forced_fail = False
-        self._forced_fail_reason = None
-        self._rf_off_unconfirmed_reason = None
-
         # start 버튼 중복 클릭 방지
         if getattr(self, "_running", False):
             msg = "이미 Plasma Cleaning이 실행 중입니다."
@@ -1217,6 +1210,16 @@ class PlasmaCleaningRuntime:
             self._host_report_start(False, msg)   # ★ Host 실패
             return
         
+        # ✅ 결과 플래그 초기화는 '시작이 수락된 뒤'에만 한다.
+        #    호스트 START_PLASMA_CLEANING 은 실행 중인지 보지 않고 들어오므로,
+        #    거절 전에 초기화하면 진행 중인 런의 플래그가 지워진다.
+        self._cleanup_started = False  # ★ 추가: 새 런마다 정리 가드 초기화
+
+        # ★ 추가(권장): RF 실패 보정 플래그 초기화
+        self._forced_fail = False
+        self._forced_fail_reason = None
+        self._rf_off_unconfirmed_reason = None
+
         # ✅ start 수락 즉시 RUNNING + error clear
         with contextlib.suppress(Exception):
             runtime_state.mark_started("pc", ch)
