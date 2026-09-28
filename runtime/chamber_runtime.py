@@ -2092,7 +2092,8 @@ class ChamberRuntime:
                 # ⚠ 0W 쓰기 미확인 — 출력이 켜져 있을 수 있다
                 self._warn_power_off_unconfirmed("DC1", ev)
                 self._dc_failed_flag = False                # 다음 종료 절차의 정상 OFF 를 삼키지 않게
-                self.process_controller.on_dc_target_failed(
+                self.process_controller.on_power_off_failed(
+                    "DC Power", "DC_OFF",
                     ev.message or "DC1 Power OFF 미확인",
                     code=getattr(ev, "code", None) or getattr(ev, "error_code", None),
                     meta={"kind": k, "ch": self.ch, "safety": "output_state_unconfirmed"},
@@ -2150,7 +2151,8 @@ class ChamberRuntime:
             elif k == "power_off_failed":
                 self._warn_power_off_unconfirmed("DC2", ev)
                 self._dc2_failed_flag = False
-                self.process_controller.on_dc2_target_failed(
+                self.process_controller.on_power_off_failed(
+                    "DC2 Power", "DC2_OFF",
                     ev.message or "DC2 Power OFF 미확인",
                     code=getattr(ev, "code", None) or getattr(ev, "error_code", None),
                     meta={"kind": k, "ch": self.ch, "safety": "output_state_unconfirmed"},
@@ -2191,7 +2193,8 @@ class ChamberRuntime:
                 )
             elif k == "power_off_failed":
                 self._warn_power_off_unconfirmed("RF", ev)
-                self.process_controller.on_rf_target_failed(
+                self.process_controller.on_power_off_failed(
+                    "RF Power", "RF_OFF",
                     ev.message or "RF Power OFF 미확인",
                     code=getattr(ev, "code", None) or getattr(ev, "error_code", None),
                     meta={"kind": k, "ch": self.ch, "safety": "output_state_unconfirmed"},
@@ -2275,12 +2278,19 @@ class ChamberRuntime:
                             if hasattr(self.chat, "flush"):
                                 self.chat.flush()
                     _meta["safety"] = "output_state_unconfirmed"
-
-                self.process_controller.on_rf_pulse_failed(
-                    ev.reason or "unknown",
-                    code=getattr(ev, "code", None) or getattr(ev, "error_code", None),
-                    meta=_meta,
-                )
+                    # ✅ OFF 실패는 '그 전원의 단계' 만 끝낸다
+                    self.process_controller.on_power_off_failed(
+                        "RFPulse", "RFPULSE_OFF",
+                        ev.reason or "unknown",
+                        code=getattr(ev, "code", None) or getattr(ev, "error_code", None),
+                        meta=_meta,
+                    )
+                else:
+                    self.process_controller.on_rf_pulse_failed(
+                        ev.reason or "unknown",
+                        code=getattr(ev, "code", None) or getattr(ev, "error_code", None),
+                        meta=_meta,
+                    )
             elif k == "power_off_finished":
                 self.process_controller.on_rf_pulse_off_finished()
 
@@ -2411,7 +2421,8 @@ class ChamberRuntime:
                                 if hasattr(self.chat, "flush"):
                                     self.chat.flush()
 
-                        self.process_controller.on_dc_pulse_failed(
+                        self.process_controller.on_power_off_failed(
+                            "DCPulse", "DCPULSE_OFF",
                             "OUTPUT_OFF 미확인(출력 상태 미확인)",
                             code=getattr(ev, "code", None) or getattr(ev, "error_code", None),
                             meta={

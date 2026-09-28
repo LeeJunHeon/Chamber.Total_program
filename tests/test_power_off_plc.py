@@ -365,6 +365,42 @@ def test_m_rf_direct_kick_path():
     asyncio.run(_main())
 
 
+def test_o_kick_zero_fail_no_display_zero():
+    """kick 경로에서 0W 미확인이면 display(0,0) 을 내지 않는다(화면이 0 으로 오인되지 않게)."""
+    async def _main():
+        rec = Rec(); d = _mk_rf(rec, _CfgRFDirect(), direct=True)
+        await _rf_start(d, rec, 300.0)                  # > 임계 → kick 경로
+        rec._uf_always = True
+        t0 = time.perf_counter()
+        await d.cleanup(); await _wait_task(d, timeout=10.0)
+        dt = time.perf_counter() - t0
+        evs = _drain(d)
+        zero_disp = [e for e in _kinds(evs, "display")
+                     if float(e.forward or 0) == 0.0 and float(e.reflected or 0) == 0.0]
+        assert zero_disp == [], "0W 미확인인데 display(0,0) 을 냈다"
+        assert len(_kinds(evs, "power_off_failed")) == 1
+        assert _kinds(evs, "power_off_finished") == []
+        print(f"  (o) {dt:.2f}s display(0,0) 없음, power_off_failed 1회")
+    asyncio.run(_main())
+
+
+def test_p_kick_normal_display_then_finished():
+    async def _main():
+        rec = Rec(); d = _mk_rf(rec, _CfgRFDirect(), direct=True)
+        await _rf_start(d, rec, 300.0)
+        await d.cleanup(); await _wait_task(d, timeout=10.0)
+        evs = _drain(d)
+        zero_disp_idx = [i for i, e in enumerate(evs)
+                         if e.kind == "display" and float(e.forward or 0) == 0.0
+                         and float(e.reflected or 0) == 0.0]
+        fin_idx = [i for i, e in enumerate(evs) if e.kind == "power_off_finished"]
+        assert len(zero_disp_idx) == 1, zero_disp_idx
+        assert len(fin_idx) == 1
+        assert zero_disp_idx[0] < fin_idx[0], "display → power_off_finished 순서"
+        print("  (p) display(0,0) 1회 → power_off_finished")
+    asyncio.run(_main())
+
+
 # ═════════════ process_controller: RF_POWER_STOP 한도 ═════════════
 def test_n_rf_power_stop_timeout():
     from controller.process_controller import rf_power_stop_timeout_ms

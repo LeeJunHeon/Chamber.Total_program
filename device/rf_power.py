@@ -658,10 +658,10 @@ class RFPowerAsync:
                         f"Ramp-Down: {self._rampdown_w:.1f}W ≤ {cut_w:.1f}W → 즉시 OFF"
                     )
                     _ok = await self._finish_power_off()      # 0W 확인 후에만 SET OFF
-                    self._ev_nowait(RFPowerEvent(kind="display", forward=0.0, reflected=0.0))
                     self._is_ramping_down = False
                     if not _ok:
-                        return
+                        return                                   # 0W 미확인이면 화면을 0 으로 만들지 않는다
+                    self._ev_nowait(RFPowerEvent(kind="display", forward=0.0, reflected=0.0))
                     await self._emit_status("RF 파워 ramp-down 완료")
                     self._ev_nowait(RFPowerEvent(kind="power_off_finished"))
                     self._power_off_evt.set()

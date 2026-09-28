@@ -870,6 +870,28 @@ class ProcessController:
     ) -> None:
         self._step_failed("RF Power", why, code=code, meta=meta)
 
+    def on_power_off_failed(
+        self,
+        source: str,
+        off_kind: str,
+        why: str | BaseException,
+        *,
+        code: str | None = None,
+        meta: Dict[str, Any] | None = None,
+    ) -> None:
+        """전원 OFF 실패(출력 상태 미확인) 전용 통지.
+
+        종료 절차 중이면 '그 전원의 단계'만 끝낸다. 지금 대기 중인 단계가 다른 전원의 것이면
+        실패만 기록하고 대기는 유지한다(= 이벤트가 안 온 것과 같은 진행).
+        정상 모드에서는 기존 on_*_failed 와 같은 결과(종료 절차 시작)."""
+        if not self.is_running:
+            return
+        if self._aborting or self._shutdown_in_progress:
+            owns = bool(self._expect_group and self._expect_group.needs(ExpectToken(off_kind)))
+            self._step_failed(source, why, code=code, meta=meta, cancel_wait=owns)
+            return
+        self._step_failed(source, why, code=code, meta=meta)
+
     def on_dc_pulse_target_reached(self) -> None:
         self._match_token(ExpectToken("DC_PULSE_TARGET"))
 
@@ -1606,6 +1628,7 @@ class ProcessController:
         *,
         code: str | None = None,
         meta: Dict[str, Any] | None = None,
+        cancel_wait: bool = True,
     ) -> None:
         if not self.is_running:
             return
@@ -1638,6 +1661,16 @@ class ProcessController:
         if self._aborting or self._shutdown_in_progress:
             self._shutdown_error = True
             self._shutdown_failures.append(f"Step {owner_no} {owner_act}: {full}")
+            if not cancel_wait:
+                # ✅ 다른 전원의 OFF 실패로 '지금 대기 중인 단계'를 끊지 않는다.
+                #    (DC 의 늦은 OFF 실패가 RF_POWER_STOP 대기를 끊어 램프다운 중에 가스를 닫던 문제)
+                _cur = self.current_step
+                _cur_act = _cur.action.name if _cur else "UNKNOWN"
+                self._emit_log(
+                    "Process",
+                    f"경고: 종료 중 {source} 실패 기록 — 현재 단계({_cur_act}) 대기는 유지 (사유: {full})"
+                )
+                return
             self._emit_log("Process", f"경고: 종료 중 단계 실패 → 계속 진행 ({owner_act}, 사유: {full})")
             if self._expect_group:
                 self._expect_group.cancel("failure-during-shutdown")

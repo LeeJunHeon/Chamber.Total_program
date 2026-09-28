@@ -143,6 +143,9 @@ class PlasmaCleaningRuntime:
         self._forced_fail: bool = False
         self._forced_fail_reason: Optional[str] = None
 
+        # ★ RF OFF 미확인(0W 쓰기 실패) 사유 — 런당 1회만 알린다
+        self._rf_off_unconfirmed_reason: Optional[str] = None
+
         self._state_header: str = ""            # ★ 현재 단계 제목 보관
 
         # ▶ 공정(Process) 타이머 활성화 여부 (SP4/IG 대기는 False)
@@ -1177,6 +1180,7 @@ class PlasmaCleaningRuntime:
         # ★ 추가(권장): RF 실패 보정 플래그 초기화
         self._forced_fail = False
         self._forced_fail_reason = None
+        self._rf_off_unconfirmed_reason = None
 
         # start 버튼 중복 클릭 방지
         if getattr(self, "_running", False):
@@ -1536,6 +1540,12 @@ class PlasmaCleaningRuntime:
             # [A] 먼저 실제 정리 (장치/태스크)
             await self._final_cleanup()
 
+            # [A2] RF OFF 미확인이면 결과를 실패로 확정(이미 실패/STOP 이면 그대로 — 알림은 이미 나갔다)
+            ok_final, stopped_final, final_reason = apply_rf_off_unconfirmed(
+                ok_final, stopped_final, final_reason,
+                getattr(self, "_rf_off_unconfirmed_reason", None),
+            )
+
             # [B] UI 복구/플래그 정리
             self._running = False
             self._process_timer_active = False
@@ -1600,6 +1610,75 @@ class PlasmaCleaningRuntime:
         # 4) 여기서는 끝. (정리/종료 통지는 _on_click_start()의 finally에서 '단일' 수행)
         return
     
+    async def _stop_rf_internal_tasks(self) -> None:
+        """RF 내부 task(_rampdown_task/_adjust_task/_poll_task)를 취소하고 끝날 때까지 기다린다.
+        ⚠ 강제 0W 를 쓰기 '전' 에 불러야 한다 — 진행 중인 램프다운 쓰기가 0W 뒤에 끼어들면
+          SET OFF 이후 D/A 에 0 이 아닌 값이 남는다(PLC 락은 FIFO 라 취소 후 대기하면 순서가 보장된다)."""
+        if not self.rf:
+            return
+        for attr in ("_rampdown_task", "_adjust_task", "_poll_task"):
+            with contextlib.suppress(Exception):
+                t = getattr(self.rf, attr, None)
+                if t and not t.done():
+                    t.cancel()
+                    await asyncio.gather(t, return_exceptions=True)
+                setattr(self.rf, attr, None)
+
+    def _note_rf_off_unconfirmed(self, reason: str) -> None:
+        """RF OFF 미확인(0W 쓰기 실패) — 런당 1회만 로그 + 챗."""
+        if self._rf_off_unconfirmed_reason:
+            return
+        self._rf_off_unconfirmed_reason = str(reason)
+        _ch = int(getattr(self, "_selected_ch", 1))
+        alert = (f"⚠️ CH{_ch} Plasma Cleaning RF Power OFF 실패 - 출력 상태 미확인 "
+                 f"(켜져 있을 가능성 있음). RF 전원 출력과 PLC D/A(DCV_SET_1/DCV_WRITE_1)를 즉시 확인하세요.")
+        with contextlib.suppress(Exception):
+            self.append_log("RF", alert)
+        chat = getattr(self, "chat", None)
+        if chat is not None:
+            with contextlib.suppress(Exception):
+                chat.notify_error_with_src("PC", alert)
+                if hasattr(chat, "flush"):
+                    chat.flush()
+
+    async def _force_rf_zero_then_set_off(self) -> bool:
+        """강제 0W → (확인되면) SET OFF. 0W 가 확인되지 않으면 SET OFF 하지 않고 False."""
+        if not self.plc:
+            self._note_rf_off_unconfirmed("PLC 없음 — 강제 0W 를 보낼 수 없음")
+            return False
+        cfgm = getattr(self, "_cfg_mod", cfgc)
+        deadline_s = float(getattr(cfgm, "POWER_OFF_ZERO_DEADLINE_S",
+                                   getattr(cfgc, "POWER_OFF_ZERO_DEADLINE_S", 10.0)) or 10.0)
+        t0 = time.monotonic()
+        n = 0
+        last_err = ""
+        while True:
+            n += 1
+            try:
+                await self.plc.power_write(0.0, family="DCV", write_idx=1)
+                break
+            except Exception as e:
+                last_err = f"{e!r}"
+                if (time.monotonic() - t0) >= deadline_s:
+                    self._note_rf_off_unconfirmed(
+                        f"강제 0W 쓰기 실패 ({time.monotonic() - t0:.1f}초, {n}회, {last_err})"
+                    )
+                    return False
+                await asyncio.sleep(0.5)
+
+        # 0W 확인 → SET OFF (실패는 경고만: 출력은 이미 0)
+        for i in range(3):
+            try:
+                await self.plc.power_enable(False, family="DCV", set_idx=1)
+                return True
+            except Exception as e:
+                if i >= 2:
+                    with contextlib.suppress(Exception):
+                        self.append_log("RF", f"RF SET OFF 실패 — 0W 는 확인됨 ({e!r})")
+                    return True
+                await asyncio.sleep(0.2)
+        return True
+
     async def _force_finalize_rf_stop(self) -> None:
         """
         RF를 외부에서 강제로 0W/SET OFF 한 뒤,
@@ -1611,13 +1690,7 @@ class PlasmaCleaningRuntime:
             return
 
         # 1) 내부 task 정리
-        for attr in ("_rampdown_task", "_adjust_task", "_poll_task"):
-            with contextlib.suppress(Exception):
-                t = getattr(self.rf, attr, None)
-                if t and not t.done():
-                    t.cancel()
-                    await asyncio.gather(t, return_exceptions=True)
-                setattr(self.rf, attr, None)
+        await self._stop_rf_internal_tasks()
 
         # 2) 내부 상태 초기화
         with contextlib.suppress(Exception):
@@ -1667,12 +1740,14 @@ class PlasmaCleaningRuntime:
 
         # 3) timeout/실패 시 PLC 강제 OFF + RF 내부 stale task/state 정리
         if not ok:
+            # ① RF 내부 태스크를 먼저 멈춘다(진행 중 램프다운 쓰기가 강제 0W 뒤에 끼어드는 것 방지)
+            await self._stop_rf_internal_tasks()
             if self.plc:
                 self.append_log("RF", "ramp-down 완료 신호 timeout → 강제 0W/SET OFF")
-                with contextlib.suppress(Exception):
-                    await self.plc.power_write(0.0, family="DCV", write_idx=1)
-                with contextlib.suppress(Exception):
-                    await self.plc.power_enable(False, family="DCV", set_idx=1)
+                # ② 0W 를 확인하고 나서야 SET OFF (확인 실패 시 SET OFF 안 함 + 미확인 알림)
+                await self._force_rf_zero_then_set_off()
+            else:
+                self._note_rf_off_unconfirmed("PLC 없음 — 강제 0W 를 보낼 수 없음")
 
             await self._force_finalize_rf_stop()
 
@@ -3148,6 +3223,17 @@ def _find_first(ui: Any, names: list[str]) -> Any:
         if w is not None:
             return w
     return None
+
+def apply_rf_off_unconfirmed(ok: bool, stopped: bool, reason: Optional[str],
+                             off_reason: Optional[str]):
+    """RF OFF 미확인(0W 쓰기 실패)을 공정 결과에 반영한다 — 순수 함수.
+
+    off_reason 이 있고 아직 성공으로 판정된 런만 실패로 바꾼다.
+    이미 실패/STOP 이거나 사유가 없으면 그대로(알림은 이미 나갔으므로 대표 사유를 덮지 않는다)."""
+    if off_reason and ok:
+        return False, False, str(off_reason)
+    return ok, stopped, reason
+
 
 def _mfc_name(m: Optional[AsyncMFC]) -> str:
     if not m:
