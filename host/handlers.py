@@ -42,6 +42,31 @@ def _fallback_log_root() -> Path:
         return _base / "Logs_LocalFallback"
 
 
+def loadlock_error_channel(rs) -> "int | None":
+    """Loadlock(Plasma Cleaning)을 error 로 볼 채널 번호(없으면 None) — 순수 함수(Qt/asyncio/self 비의존).
+
+    로드락은 물리적으로 하나다. 따라서 판정 기준은 "에러 이력이 하나라도 있는가"(채널 OR)가 아니라
+    "로드락에서 마지막으로 끝난 플라즈마 클리닝이 실패였는가" 여야 한다.
+    (2026-09-23 ch1 실패 뒤 ch2 를 네 번 성공시켜도 Loadlock 이 5일 동안 error 로 남던 사고)
+
+      1. 각 채널의 last_finished("pc", ch) 로 마지막 종료 시각(monotonic)을 얻는다
+      2. 종료 시각이 있는 채널 중 가장 최근에 끝난 채널을 골라 has_error 면 그 번호, 아니면 None
+      3. 양쪽 다 종료 이력이 없는데 has_error 인 채널이 있으면 그 채널(보수적 처리)
+    예외는 삼키지 않는다 — 호출부가 기존처럼 'error' 로 처리한다."""
+    finished: list[tuple[float, int]] = []
+    for ch in (1, 2):
+        ts = rs.last_finished("pc", ch)
+        if ts is not None:
+            finished.append((float(ts), ch))
+    if finished:
+        _, last_ch = max(finished, key=lambda t: t[0])
+        return last_ch if rs.has_error("pc", last_ch) else None
+    for ch in (1, 2):               # 종료 이력이 전혀 없는 상태 — 에러가 있으면 보수적으로 error
+        if rs.has_error("pc", ch):
+            return ch
+    return None
+
+
 # ✅ 호스트 요청 공정 공유 CSV 로그 (규약 v3.1). import 실패가 서버를 죽이지 않게 방어.
 try:
     from host.request_ctx import get_request_ctx as _get_request_ctx
@@ -597,7 +622,8 @@ class HostHandlers:
                 """
                 Loadlock(Plasma Cleaning) 상태 계산:
                 - runtime_state.is_running("pc", ch)가 1 또는 2 중 하나라도 True면 running
-                - 마지막 PC 실패 이력이 남아 있으면 error
+                - 로드락에서 '마지막으로 끝난' 플라즈마 클리닝이 실패였으면 error
+                  (채널 OR 아님 — 뒤에 성공한 런이 있으면 그게 최신 상태다. loadlock_error_channel 참조)
                 - ✅ CH1 공정이 IG 단계(IG_CMD)인 동안에는 Loadlock을 running으로 표시 유지
                 - (fallback) plasma cleaning 런타임의 is_running / _running 플래그 사용
                 - 조회 중 예외가 나면 error
@@ -612,12 +638,8 @@ class HostHandlers:
                                 continue
 
                         if getattr(rs, "has_error", None):
-                            for ch in (1, 2):
-                                try:
-                                    if rs.has_error("pc", ch):
-                                        return "error"
-                                except Exception:
-                                    return "error"
+                            if loadlock_error_channel(rs) is not None:
+                                return "error"
                 except Exception:
                     return "error"
 

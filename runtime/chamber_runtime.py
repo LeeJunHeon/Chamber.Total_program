@@ -7326,10 +7326,9 @@ class ChamberRuntime:
 
         if clear_status_to_idle:
             def _ack_to_idle(_res: int):
-                # OK 클릭 시만 idle로 (X로 닫으면 0인 경우가 많음)
-                if int(_res) == int(QMessageBox.Ok):
-                    with contextlib.suppress(Exception):
-                        runtime_state.clear_error("chamber", self.ch)
+                # 팝업이 닫히면 idle 로 (확인/X/ESC 무관 — X 로 닫아 플래그가 남던 문제)
+                with contextlib.suppress(Exception):
+                    runtime_state.clear_error("chamber", self.ch)
             box.finished.connect(_ack_to_idle)
 
         box.open()

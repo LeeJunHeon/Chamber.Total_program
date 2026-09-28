@@ -2698,7 +2698,7 @@ class PlasmaCleaningRuntime:
     ) -> None:
         """
         공정 실패/인터락 등 '에러 상태'를 사용자에게 확실히 알리고,
-        사용자가 OK를 눌렀을 때만 runtime_state error를 해제해서 idle로 복귀시키는 팝업.
+        팝업이 닫히면(확인/X/ESC 무관) runtime_state error를 해제해서 idle로 복귀시키는 팝업.
         - auto-close 없음 (계속 떠있음)
         - 비모달 + 참조 보관(_msg_boxes)으로 GC 방지
         """
@@ -2719,14 +2719,15 @@ class PlasmaCleaningRuntime:
             box.setStandardButtons(QMessageBox.Ok)
             box.setModal(False)
 
-            # ✅ OK 눌렀을 때만 idle로 복귀
+            # ✅ 팝업이 닫히면 idle 로 복귀 — 종료 결과 코드는 보지 않는다.
+            #    (X/ESC 로 닫으면 플래그가 남아 Loadlock 이 영구 error 가 되던 문제. 2026-09-23 사고)
             def _on_closed(result: int) -> None:
                 try:
                     self._msg_boxes.remove(box)
                 except ValueError:
                     pass
                 try:
-                    if clear_status_to_idle and result == int(QMessageBox.Ok):
+                    if clear_status_to_idle:
                         # ch 미지정이면 현재 선택 채널 사용
                         _ch = int(ch) if ch is not None else int(getattr(self, "_selected_ch", 1))
                         runtime_state.clear_error("pc", _ch)
