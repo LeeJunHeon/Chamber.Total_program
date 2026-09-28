@@ -113,6 +113,42 @@ def eta_row_min_seconds(row: dict) -> float:
     return (_eta_f(row.get("shutter_delay", 0)) + eta_row_process_time_min(row)) * 60.0
 
 
+def rf_power_stop_timeout_ms(cfg: Any, base_ms: int) -> int:
+    """종료 절차의 RF(연속) 전원 OFF 대기 한도(ms).
+
+    CH2 RF 연속 램프다운은 RF_RAMP_STEP(1W) x CHAMBER_RF_CONT_RAMPDOWN_INTERVAL_MS(1000ms) = 1W/s 라서
+    240W 를 넘으면 기본 240초 안에 못 끝나고 램프다운 도중에 다음 단계(가스 차단 등)로 넘어간다.
+    → 최대 출력에서 0 까지 내려갈 시간 + 0W 확인 여유를 더한 값으로 넓힌다.
+    (이벤트가 오면 즉시 다음 단계로 가므로 정상 소요 시간은 바뀌지 않는다)
+    """
+    try:
+        base = int(base_ms)
+    except Exception:
+        return int(base_ms)
+
+    def _g(name: str, default: float) -> float:
+        """채널 cfg → config_common 폴백. '있는' 첫 소스의 값을 쓴다(값 검증은 호출부에서)."""
+        for src in (cfg, _cfgc):
+            if src is not None and hasattr(src, name):
+                try:
+                    return float(getattr(src, name))
+                except Exception:
+                    return float(default)
+        return float(default)
+
+    try:
+        max_w = _g("RF_MAX_POWER", 0.0)
+        step_w = _g("RF_RAMP_STEP", 0.0)
+        interval_ms = _g("CHAMBER_RF_CONT_RAMPDOWN_INTERVAL_MS", 0.0)
+        zero_s = _g("POWER_OFF_ZERO_DEADLINE_S", 10.0)
+        if max_w <= 0 or step_w <= 0 or interval_ms <= 0:
+            return base                     # 0/음수/누락 → 기본값 유지
+        ramp_ms = (max_w / step_w) * interval_ms
+        return int(max(base, ramp_ms + (zero_s + 60.0) * 1000.0))
+    except Exception:
+        return base
+
+
 def eta_min_total_seconds(rows: list, tail_s: float = 90.0) -> float:
     """rows 전체의 하한(초) = Σ eta_row_min_seconds + tail_s. 조건 대기(IG/MFC/압력/램프업)는 0 으로 둔다."""
     total = 0.0
@@ -1031,6 +1067,9 @@ class ProcessController:
                 if self._shutdown_in_progress:
                     min_off_ms = int(getattr(self._cfg, "PC_POWER_OFF_TIMEOUT_MS", 240_000))
                     POWER_OFF_TIMEOUT_MS = max(min_off_ms, SHUTDOWN_STEP_TIMEOUT_MS)  # ✅ 전원 OFF는 더 길게
+                    if step.action == ActionType.RF_POWER_STOP:
+                        # RF 연속은 1W/s 램프다운이라 240초로는 모자란다(고출력에서 가스가 먼저 꺼짐)
+                        POWER_OFF_TIMEOUT_MS = rf_power_stop_timeout_ms(self._cfg, POWER_OFF_TIMEOUT_MS)
 
                     if step.action in hard_wait_actions:
                         try:

@@ -40,6 +40,7 @@ class FakeAEBus:
         self.csr_for: dict[int, int] = {}    # {cmd: CSR} — 기본 0
         self.status_on = True                # 162 응답의 rf_output_on 비트
         self.reject_until = 0.0              # 이 시각까지는 새 연결을 즉시 끊는다
+        self.silent = False                  # True 면 받기만 하고 응답하지 않는다(장비 무응답)
         self._conns: list[asyncio.StreamWriter] = []
 
     async def start(self):
@@ -113,6 +114,8 @@ class FakeAEBus:
     async def _reply(self, writer, pkt: bytes):
         cmd = pkt[1]
         self.cmds.append(cmd)
+        if self.silent:
+            return                                             # 무응답
         writer.write(b"\x06")                                  # ACK
         if cmd in self.QUERY_LEN:
             n = self.QUERY_LEN[cmd]
@@ -355,8 +358,11 @@ def test_g_cleanup_does_not_connect_when_worker_absent():
             await asyncio.wait_for(dev.cleanup(), timeout=5.0)
             assert srv.accepts == 0, f"연결 시도 {srv.accepts}회"
             assert srv.cmds == []
-            assert dev.cleanup_off_unconfirmed is True      # 확인 못 했음을 남긴다
-            print(f"  (g) accepts={srv.accepts} cleanup_off_unconfirmed={dev.cleanup_off_unconfirmed}")
+            # 2단계: 안 쓴 장치는 알리지 않는다(안 쓴 런마다 경고 반복 방지) — 내부 플래그만 남긴다
+            assert dev.cleanup_off_unconfirmed is False
+            assert dev.output_off_unconfirmed is True
+            print(f"  (g) accepts={srv.accepts} cleanup_off_unconfirmed={dev.cleanup_off_unconfirmed} "
+                  f"output_off_unconfirmed={dev.output_off_unconfirmed}")
         finally:
             await srv.stop()
     asyncio.run(_main())
@@ -405,6 +411,33 @@ def test_i_csr_reject_then_status_confirms_off():
             print(f"  (i) cmds={srv.cmds[:8]}")
         finally:
             await _shutdown(dev, ev); await srv.stop()
+    asyncio.run(_main())
+
+
+# ───────────────────────── (j) 워커 생존 + 장비 무응답 → 한도에서 끊고 알린다 ─────────────────────────
+def test_j_cleanup_cut_by_wait_limit_reports():
+    """서버가 받기만 하고 응답하지 않으면 cleanup 이 RFPULSE_CLEANUP_OFF_WAIT_S 에서 OFF 를 끊고 알린다."""
+    async def _main():
+        srv = FakeAEBus(); await srv.start()
+        dev = _mk(srv.port); ev = _Events(dev)
+        try:
+            await dev.start()
+            assert await _wait(lambda: dev.is_connected(), 3.0)
+            srv.silent = True                           # 이 시점부터 ACK/CSR 을 보내지 않는다
+            dev._output_maybe_on = True                 # 출력이 켜져 있을 수 있다
+            assert dev._worker_alive() is True
+            ev.stop()
+            t0 = time.perf_counter()
+            await asyncio.wait_for(dev.cleanup(), timeout=_Cfg.RFPULSE_CLEANUP_OFF_WAIT_S + 6.0)
+            dt = time.perf_counter() - t0
+            assert dev.cleanup_off_unconfirmed is True
+            assert dt < _Cfg.RFPULSE_CLEANUP_OFF_WAIT_S + 4.0, dt
+            assert CMD_RF_OFF in srv.cmds, srv.cmds     # 전송은 했다(응답이 없었을 뿐)
+            print(f"  (j) {dt:.2f}s (한도 {_Cfg.RFPULSE_CLEANUP_OFF_WAIT_S}s) cleanup_off_unconfirmed=True")
+        finally:
+            with contextlib.suppress(Exception):
+                ev.stop()
+            await srv.stop()
     asyncio.run(_main())
 
 

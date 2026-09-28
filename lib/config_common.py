@@ -466,6 +466,8 @@ PC_WORKING_PRESSURE_BOOST_TARGET = 10.0   # working_pressure가 이 값보다 �
 PC_RF_PULSE_POST_ON_DELAY_MS = 20_000     # RF Pulse ON 직후 안정화 대기(ms)
 PC_POWER_SELECT_SETTLE_MS = 7_000         # SW_RF_SELECT 전환 후 DCP 통신 안정화 대기(ms, 실측 NAK 3~6초)
 PC_POWER_OFF_TIMEOUT_MS = 240_000         # shutdown 중 power off 토큰 대기 최소(ms)
+POWER_OFF_ZERO_DEADLINE_S = 10.0   # PLC D/A 전원(DC1/DC2/RF 연속/PC RF) OFF 때 0W 쓰기 확인 최대 시간
+DCP_CLEANUP_OFF_WAIT_S = 8.0       # DC Pulse cleanup 전 OUTPUT_OFF 확인 대기(장치 cleanup 전체 15초 제한 안)
 
 
 # ======================================================================

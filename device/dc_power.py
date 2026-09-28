@@ -15,6 +15,8 @@ dc_power_async.py — asyncio 기반 DC Power 컨트롤러 (W 단위 직접 전�
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import time
 from dataclasses import dataclass
 from typing import Optional, Callable, Awaitable, AsyncGenerator, Literal, Any
 
@@ -29,6 +31,7 @@ EventKind = Literal[
     "target_reached",
     "target_failed",    # ★ 추가
     "power_off_finished",
+    "power_off_failed",   # ★ 0W 쓰기 미확인 — 출력 상태 미확인
 ]
 
 @dataclass
@@ -108,6 +111,11 @@ class DCPowerAsync:
         self._sent_target_reached = False
 
         self._enabled = False  # SET 래치
+
+        # ★ 출력 OFF 확인 상태: PLC D/A 는 "0W 쓰기 성공" 이 확인 기준이다.
+        #   (래더에서 DCV_SET_n 이 D/A 출력허용과 WRITE MOV 를 같이 켜고, 채널출력상태가 '이전값' 이라
+        #    0W 가 들어가지 않은 채 SET 을 끄면 마지막 출력값이 유지될 수 있다 → 0W 먼저)
+        self.output_off_unconfirmed: bool = False
 
         self._low_power_streak = 0
         self._low_current_streak = 0  # 저전류 감시용 카운터
@@ -391,33 +399,87 @@ class DCPowerAsync:
         except asyncio.CancelledError:
             pass
 
-    async def _rampdown_loop(self):
-        """스텝다운 없이 '0 한 번'만 기록하고 종료."""
-        try:
-            # 이미 0을 보냈었다면(캐시) 실제 I/O 스킵
-            if (self._last_sent_power or 0.0) != 0.0:
-                await self._set_dc_unverified(0.0)
+    def _used_this_run(self) -> bool:
+        """이번 런에서 이 전원을 실제로 썼는가(SET 래치 또는 0 이 아닌 쓰기 이력)."""
+        return bool(self._enabled) or (self._last_sent_power not in (None, 0.0))
 
-            self._last_sent_power = 0.0
+    async def _write_zero_confirmed(self) -> tuple[bool, float, int]:
+        """0W 를 '확인' 될 때까지 재시도한다. 반환 (성공, 경과초, 시도횟수).
+        PLC 응답이 정상일 때만 성공 — 실패면 _last_sent_power 를 덮지 않는다."""
+        _mod = self._cfg if self._cfg is not None else cfgc
+        deadline_s = float(getattr(_mod, "POWER_OFF_ZERO_DEADLINE_S",
+                                   getattr(cfgc, "POWER_OFF_ZERO_DEADLINE_S", 10.0)) or 10.0)
+        t0 = time.monotonic()
+        n = 0
+        while True:
+            n += 1
+            try:
+                await self._send_dc_power_unverified(0.0)
+                self._last_sent_power = 0.0
+                return True, time.monotonic() - t0, n
+            except Exception as e:
+                if (time.monotonic() - t0) >= deadline_s:
+                    await self._emit_status(f"DC 0W 쓰기 실패({n}회): {e}")
+                    return False, time.monotonic() - t0, n
+                await asyncio.sleep(0.5)
+
+    async def _set_off_after_zero(self) -> None:
+        """0W 가 확인된 뒤에만 호출. SET OFF 실패는 경고만(출력은 이미 0)."""
+        if not (self._toggle_enable and self._enabled):
+            return
+        for i in range(3):
+            try:
+                await self._toggle_enable(False)  # ← SET OFF (종료 시)
+                self._enabled = False
+                await self._emit_status("DCV SET OFF")
+                return
+            except Exception as e:
+                if i >= 2:
+                    await self._emit_status(f"DCV SET OFF 실패 — 0W 는 확인됨 ({e})")
+                    return
+                await asyncio.sleep(0.2)
+
+    async def _rampdown_loop(self):
+        """스텝다운 없이 '0 한 번'만 기록하고 종료.
+        ★ 0W 쓰기가 확인되기 전에는 SET OFF 하지 않는다(확인된 사실 1·2)."""
+        try:
+            used = self._used_this_run()
 
             # 폴링도 OFF
             self.set_process_status(False)
 
-            if self._toggle_enable and self._enabled:
-                try:
-                    await self._toggle_enable(False)  # ← SET OFF (종료 시)
-                    await self._emit_status("DCV SET OFF")
-                finally:
-                    self._enabled = False
+            if not used:
+                # 이번 런에서 쓰지 않은 전원 — 조용히 완료(오경보 방지)
+                await self._emit_status("DC 파워 ramp-down 완료 (snap-to-zero)")
+                self.output_off_unconfirmed = False
+                self._ev_nowait(DCPowerEvent(kind="power_off_finished"))
+                return
+
+            ok, el, n = await self._write_zero_confirmed()
+            if not ok:
+                self.output_off_unconfirmed = True
+                _msg = f"DC 0W 쓰기 실패 — 출력 상태 미확인 ({el:.1f}초, {n}회)"
+                await self._emit_status(_msg)
+                self._ev_nowait(DCPowerEvent(kind="power_off_failed", message=_msg))
+                return
+
+            await self._set_off_after_zero()
 
             # 표시/이벤트 정리
             await self._emit_status("DC 파워 ramp-down 완료 (snap-to-zero)")
+            self.output_off_unconfirmed = False
             self._ev_nowait(DCPowerEvent(kind="power_off_finished"))
 
         except asyncio.CancelledError:
             pass
         except Exception as e:
-            await self._emit_status(f"램프다운 오류: {e}")
+            # 예상 못 한 예외도 '완료' 또는 '실패' 중 하나로 끝낸다
+            with contextlib.suppress(Exception):
+                await self._emit_status(f"램프다운 오류: {e}")
+            self.output_off_unconfirmed = True
+            _msg = f"DC 0W 쓰기 실패 — 출력 상태 미확인 (예외: {e})"
+            with contextlib.suppress(Exception):
+                self._ev_nowait(DCPowerEvent(kind="power_off_failed", message=_msg))
 
     async def _adjust_once(self):
         try:
@@ -494,6 +556,8 @@ class DCPowerAsync:
             t.cancel()
             try:
                 await t
-            except Exception:
+            # ✅ CancelledError 는 BaseException — except Exception 으로는 잡히지 않아
+            #    cleanup() 밖으로 새고 램프다운(0W→SET OFF)이 시작조차 못 했다
+            except (Exception, asyncio.CancelledError):
                 pass
             setattr(self, name, None)

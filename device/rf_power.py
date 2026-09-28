@@ -16,6 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Optional, Callable, Awaitable, AsyncGenerator, Literal, Any
 import asyncio
+import contextlib
 import time
 
 from lib import config_common as _cfg_common  # ✅ "모듈"로 import (값 고정 방지)
@@ -28,6 +29,7 @@ EventKind = Literal[
     "target_reached",
     "target_failed",
     "power_off_finished",
+    "power_off_failed",     # ★ 0W 쓰기 미확인 — 출력 상태 미확인
 ]
 
 @dataclass
@@ -132,6 +134,9 @@ class RFPowerAsync:
         self._event_q: asyncio.Queue[RFPowerEvent] = asyncio.Queue(maxsize=512)
 
         self._power_off_evt = asyncio.Event()
+
+        # ★ 출력 OFF 확인 상태: PLC D/A 는 "0W 쓰기 성공" 이 확인 기준이다(0W → SET OFF 순서)
+        self.output_off_unconfirmed: bool = False
         self._polling_enabled = True
 
         self._init_direct_mode = bool(direct_mode)
@@ -422,20 +427,26 @@ class RFPowerAsync:
                 return
 
             # target ≤ 100W → 기존 방식: 즉시 OFF
+            #  ★ 0W 쓰기 전에 폴링/보정 태스크를 취소한다(진행 중 보정 쓰기가 0W 뒤에 들어가는 것 방지)
+            await self._cancel_task("_poll_task")
+            await self._cancel_task("_adjust_task")
+            _ok = False
             try:
-                await self._set_rf_unverified(0.0)
-                self._last_sent_w = 0.0
-            finally:
-                if self._toggle_enable and self._enabled:
-                    try:
-                        await self._toggle_enable(False)
-                        await self._emit_status("RF SET OFF")
-                    finally:
-                        self._enabled = False
+                _ok = await self._finish_power_off()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                with contextlib.suppress(Exception):
+                    await self._emit_status(f"RF 즉시 OFF 오류: {e}")
+                _ok = False
 
             self.state = "IDLE"
-            self._ev_nowait(RFPowerEvent(kind="power_off_finished"))
-            self._power_off_evt.set()
+            if _ok:
+                self._ev_nowait(RFPowerEvent(kind="power_off_finished"))
+                self._power_off_evt.set()
+            else:
+                # 0W 미확인 — 완료 신호를 주지 않는다(플라즈마 클리닝의 강제 OFF 경로가 동작하도록)
+                self._is_ramping_down = False
             return
         # ========= 기존 램프다운 경로(그대로 유지) =========
 
@@ -602,18 +613,12 @@ class RFPowerAsync:
                     # ★ 0W 전송 직전, 실제 전송값(보정 우회값)을 로그로 남김
                     scaled0 = self._xform_write(0.0)
                     await self._emit_status(f"Ramp-Down final: target=0.0W → write={scaled0:.3f}W")
-                    await self._set_rf_unverified(0.0)
-
-                    # ▼ RF 사용 종료 시 SET OFF (DCV_SET_1 = False)
-                    if self._toggle_enable and self._enabled:
-                        try:
-                            await self._toggle_enable(False)
-                            await self._emit_status("RF SET OFF")
-                        finally:
-                            self._enabled = False
-
-                    await self._emit_status("RF 파워 ramp-down 완료")
+                    # ▼ 0W 확인 후에만 SET OFF (확인된 사실 1·2)
+                    _ok = await self._finish_power_off()
                     self._is_ramping_down = False
+                    if not _ok:
+                        return          # finally 에서도 _power_off_evt 를 set 하지 않는다
+                    await self._emit_status("RF 파워 ramp-down 완료")
                     self._ev_nowait(RFPowerEvent(kind="power_off_finished"))
                     self._power_off_evt.set()   # ★ 추가: 완료 신호 설정
                     return
@@ -632,7 +637,8 @@ class RFPowerAsync:
             await self._emit_status(f"램프다운 오류: {e}")
         finally:
             # 혹시 위에서 return을 못타고 나온 예외 경로도 완료 신호 보증
-            if not self._is_ramping_down:
+            #  ★ 단, 0W 미확인(output_off_unconfirmed)일 때는 완료 신호를 주지 않는다
+            if not self._is_ramping_down and not self.output_off_unconfirmed:
                 self._power_off_evt.set()
 
     async def _rampdown_loop_kick(self):
@@ -651,17 +657,12 @@ class RFPowerAsync:
                     await self._emit_status(
                         f"Ramp-Down: {self._rampdown_w:.1f}W ≤ {cut_w:.1f}W → 즉시 OFF"
                     )
-                    await self._set_rf_unverified(0.0)
-                    self._last_sent_w = 0.0
+                    _ok = await self._finish_power_off()      # 0W 확인 후에만 SET OFF
                     self._ev_nowait(RFPowerEvent(kind="display", forward=0.0, reflected=0.0))
-                    if self._toggle_enable and self._enabled:
-                        try:
-                            await self._toggle_enable(False)
-                            await self._emit_status("RF SET OFF")
-                        finally:
-                            self._enabled = False
-                    await self._emit_status("RF 파워 ramp-down 완료")
                     self._is_ramping_down = False
+                    if not _ok:
+                        return
+                    await self._emit_status("RF 파워 ramp-down 완료")
                     self._ev_nowait(RFPowerEvent(kind="power_off_finished"))
                     self._power_off_evt.set()
                     return
@@ -679,7 +680,8 @@ class RFPowerAsync:
         finally:
             if self._is_ramping_down:
                 self._is_ramping_down = False
-                self._power_off_evt.set()
+                if not self.output_off_unconfirmed:
+                    self._power_off_evt.set()
 
     async def _adjust_once(self):
         """
@@ -835,6 +837,58 @@ class RFPowerAsync:
         except Exception as e:
             await self._emit_status(f"RF 설정 전송 실패(verified): {e}")
 
+    def _used_this_run(self) -> bool:
+        """이번 런에서 이 전원을 실제로 썼는가(SET 래치 또는 0 이 아닌 쓰기 이력)."""
+        return bool(self._enabled) or (self._last_sent_w not in (None, 0.0))
+
+    async def _finish_power_off(self) -> bool:
+        """OFF 마무리 공통 경로. 0W 를 확인한 뒤에만 SET OFF 한다.
+        반환 True=확인 완료(호출부가 완료 로그/이벤트), False=0W 미확인(호출부가 실패 처리)."""
+        if not self._used_this_run():
+            # 이번 런에서 쓰지 않은 전원 — best-effort 0W 1회, 실패해도 경고/실패 이벤트 없음
+            with contextlib.suppress(Exception):
+                await self._set_rf_unverified(0.0)
+            return True
+
+        _mod = self._cfg_mod if self._cfg_mod is not None else _cfg_common
+        deadline_s = float(getattr(_mod, "POWER_OFF_ZERO_DEADLINE_S",
+                                   getattr(_cfg_common, "POWER_OFF_ZERO_DEADLINE_S", 10.0)) or 10.0)
+        t0 = time.monotonic()
+        n = 0
+        while True:
+            n += 1
+            try:
+                await self._send_rf_power_unverified_cb(self._xform_write(0.0))
+                self._last_sent_w = 0.0
+                break
+            except Exception as e:
+                if (time.monotonic() - t0) >= deadline_s:
+                    self.output_off_unconfirmed = True
+                    _msg = (f"RF 0W 쓰기 실패 — 출력 상태 미확인 "
+                            f"({time.monotonic() - t0:.1f}초, {n}회, {e})")
+                    with contextlib.suppress(Exception):
+                        await self._emit_status(_msg)
+                    with contextlib.suppress(Exception):
+                        self._ev_nowait(RFPowerEvent(kind="power_off_failed", message=_msg))
+                    return False
+                await asyncio.sleep(0.5)
+
+        # 0W 확인됨 → SET OFF 실패는 경고만(출력은 이미 0)
+        if self._toggle_enable and self._enabled:
+            for i in range(3):
+                try:
+                    await self._toggle_enable(False)
+                    self._enabled = False
+                    await self._emit_status("RF SET OFF")
+                    break
+                except Exception as e:
+                    if i >= 2:
+                        await self._emit_status(f"RF SET OFF 실패 — 0W 는 확인됨 ({e})")
+                        break
+                    await asyncio.sleep(0.2)
+        self.output_off_unconfirmed = False
+        return True
+
     async def _set_rf_unverified(self, power_w: float):
         """
         no-reply 전송 경로(램프다운 등). 실패는 status로만 보고.
@@ -883,6 +937,7 @@ class RFPowerAsync:
                 await asyncio.wait_for(t, timeout=1.0)
             except asyncio.TimeoutError:
                 pass
-            except Exception:
+            # ✅ CancelledError 는 BaseException — cleanup() 밖으로 새면 OFF 경로가 시작되지 않는다
+            except (Exception, asyncio.CancelledError):
                 pass
             setattr(self, name, None)

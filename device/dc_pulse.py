@@ -324,6 +324,14 @@ class AsyncDCPulse:
 
         self._last_io_mono: float = 0.0
         self._out_on: bool = False
+
+        # ★ 출력 OFF 확인 상태 (2단계)
+        self._output_maybe_on: bool = False          # OUTPUT_ON 을 write 한 뒤 True, OFF 확인 시 False
+        self._off_in_flight: int = 0                 # output_off() 진행 중 카운터
+        self._off_idle_evt: asyncio.Event = asyncio.Event()
+        self._off_idle_evt.set()
+        self.output_off_unconfirmed: bool = False    # (public) OUTPUT_OFF 최종 실패
+        self.cleanup_off_unconfirmed: bool = False   # (public) 정리 중 OFF 가 한도로 끊겨 결과 이벤트 없음
         # ✅ [C] 마지막 실패 사유(runtime 이 읽어 구글챗까지 전달)
         self.last_failure: Optional[str] = None
         # prepare_and_start 실행 중인지 — 하위 실패에 phase="prepare" 자동 태깅용
@@ -480,6 +488,33 @@ class AsyncDCPulse:
 
     async def cleanup(self):
         await self._emit_status("DCP 종료 절차 시작")
+
+        # ✅ 안전망: 연결을 닫기 전에 '출력이 켜져 있을 수 있으면' OUTPUT_OFF 를 확인한다.
+        #    (러너 예외/취소처럼 종료 절차 없이 정리되는 경우 대비)
+        self.cleanup_off_unconfirmed = False
+        _wait_s = self._cfg_float("DCP_CLEANUP_OFF_WAIT_S", 8.0)
+        try:
+            if self._off_in_progress():
+                # 진행 중인 output_off() 를 취소하지 않고 끝나기를 기다린다
+                try:
+                    await asyncio.wait_for(self._off_tracker().wait(), timeout=max(0.0, _wait_s))
+                except asyncio.TimeoutError:
+                    self.cleanup_off_unconfirmed = True
+                    await self._emit_status("정리 대기 초과 — OUTPUT_OFF 확인 실패(출력 상태 미확인)")
+            elif (self._out_on or self._output_maybe_on) and self._worker_alive():
+                await self._emit_status("정리 전 DC Pulse 출력 OFF 확인")
+                try:
+                    await asyncio.wait_for(self.output_off(), timeout=max(0.0, _wait_s))
+                    # output_off() 가 False 를 돌려줬다면 이미 OUTPUT_OFF 실패 경고가 나갔다 → 중복 경고 금지
+                except asyncio.TimeoutError:
+                    self.cleanup_off_unconfirmed = True
+                    await self._emit_status("정리 대기 초과 — OUTPUT_OFF 확인 실패(출력 상태 미확인)")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            with contextlib.suppress(Exception):
+                await self._emit_status(f"정리 전 OUTPUT_OFF 확인 실패: {e!r}")
+
         self._want_connected = False
         await self._cancel_task("_poll_task")
         await self._cancel_task("_cmd_worker_task")
@@ -1130,7 +1165,38 @@ class AsyncDCPulse:
         self._low_curr_n = 0            # ★ 저전류 카운터도 초기화
         return await self._write_cmd_data(0x80, 0x0001, 2, label="OUTPUT_ON")
 
+    def _off_tracker(self) -> asyncio.Event:
+        """output_off() 진행 추적 상태를 지연 초기화한다(부분 생성 인스턴스에서도 안전)."""
+        if not hasattr(self, "_off_in_flight"):
+            self._off_in_flight = 0
+        ev = getattr(self, "_off_idle_evt", None)
+        if ev is None:
+            ev = self._off_idle_evt = asyncio.Event()
+            ev.set()
+        return ev
+
+    def _off_in_progress(self) -> bool:
+        self._off_tracker()
+        return self._off_in_flight > 0
+
+    def _worker_alive(self) -> bool:
+        """이번 런에서 이 장치가 동작 중인가(명령 워커 태스크 생존).
+        CH1 은 RF Pulse 와 192.168.1.50:4007 을 공유하므로, 안 쓴 런에서는 새로 연결하지 않는다."""
+        t = self._cmd_worker_task
+        return bool(t and not t.done())
+
     async def output_off(self) -> bool:
+        _ev = self._off_tracker()
+        self._off_in_flight += 1
+        _ev.clear()
+        try:
+            return await self._output_off_impl()
+        finally:
+            self._off_in_flight = max(0, self._off_in_flight - 1)
+            if self._off_in_flight == 0:
+                _ev.set()
+
+    async def _output_off_impl(self) -> bool:
         # ✅ 출력을 끄기 '직전' 에 0x96/0x99 를 읽어 런 종료값을 확정한다.
         #    (이전에는 폴링이 우연히 마지막으로 찍은 표본이 종료값이 됐다 — 문제 4)
         #    통신이 늦어도 OUTPUT_OFF 가 지연되면 안 되므로 짧은 타임아웃 + 전면 예외 억제.
@@ -1689,6 +1755,8 @@ class AsyncDCPulse:
                     # (1) ACK 성공이면 성공
                     if ack_ok:
                         self._out_on = False
+                        self._output_maybe_on = False
+                        self.output_off_unconfirmed = False
                         self._last_ref_power_w = None
                         await self._emit_confirmed(base_label)
                         self.set_process_status(False)
@@ -1699,6 +1767,8 @@ class AsyncDCPulse:
                         flags = await self.read_status_flags()
                         if flags is not None and (not self._hv_on_from_status(flags)):
                             self._out_on = False
+                            self._output_maybe_on = False
+                            self.output_off_unconfirmed = False
                             await self._emit_confirmed(base_label + "_VERIFIED")
                             self.set_process_status(False)
                             return True
@@ -1709,6 +1779,8 @@ class AsyncDCPulse:
                     ok_off, p, hv_on = await self._confirm_off_quick()
                     if ok_off:
                         self._out_on = False
+                        self._output_maybe_on = False
+                        self.output_off_unconfirmed = False
                         await self._emit_confirmed(base_label + "_VERIFIED")
                         self.set_process_status(False)
                         return True
@@ -1717,7 +1789,11 @@ class AsyncDCPulse:
                     if self._enable_fault_recover:
                         ok_retry = await self._recover_and_prepare_retry(base_label, resp)
                         if not ok_retry:
-                            await self._emit_failed(base_label, "FAULT_RESET 실패/복구 불가")
+                            self.output_off_unconfirmed = True
+                            await self._emit_failed(
+                                base_label,
+                                "OUTPUT_OFF 미확인 — 복구 불가(재연결 실패/정리 중 등) (출력 상태 미확인)"
+                            )
                             self.set_process_status(False)
                             return False
 
@@ -1741,6 +1817,7 @@ class AsyncDCPulse:
 
         # 여기까지 왔으면 총 시도 횟수 소진
         if base_label == "OUTPUT_OFF":
+            self.output_off_unconfirmed = True
             await self._emit_failed(
                 base_label,
                 f"OUTPUT_OFF 미확인 — 총 {self._recover_max_attempts}회 시도, last={last_resp!r} (출력 상태 미확인)"
@@ -2054,6 +2131,9 @@ class AsyncDCPulse:
             try:
                 self._last_io_mono = time.monotonic()   # ★ 송신 직전 IO 시각
                 self._last_send_mono = self._last_io_mono   # ✅ gap 기준 시각 갱신
+                # attempt_label 은 "OUTPUT_ON[1/5]" 형태 → base label 로 판정
+                if str(cmd.label or "").split("[", 1)[0].strip() == "OUTPUT_ON":
+                    self._output_maybe_on = True        # write 직전 — 이후 출력이 켜져 있을 수 있다
                 self._writer.write(cmd.payload)
                 await asyncio.wait_for(self._writer.drain(), timeout=self._drain_timeout_s)
             except Exception as e:

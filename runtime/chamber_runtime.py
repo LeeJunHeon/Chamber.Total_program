@@ -2088,6 +2088,15 @@ class ChamberRuntime:
                         "ch": self.ch,
                     },
                 )
+            elif k == "power_off_failed":
+                # ⚠ 0W 쓰기 미확인 — 출력이 켜져 있을 수 있다
+                self._warn_power_off_unconfirmed("DC1", ev)
+                self._dc_failed_flag = False                # 다음 종료 절차의 정상 OFF 를 삼키지 않게
+                self.process_controller.on_dc_target_failed(
+                    ev.message or "DC1 Power OFF 미확인",
+                    code=getattr(ev, "code", None) or getattr(ev, "error_code", None),
+                    meta={"kind": k, "ch": self.ch, "safety": "output_state_unconfirmed"},
+                )
             elif k == "power_off_finished":
                 if not self._dc_failed_flag:                # ★ 추가: 실패 시에는 OK 토큰(다음 스텝 진행) 차단
                     self.process_controller.on_dc_off_finished()
@@ -2138,6 +2147,14 @@ class ChamberRuntime:
                         "unit": 2,
                     },
                 )
+            elif k == "power_off_failed":
+                self._warn_power_off_unconfirmed("DC2", ev)
+                self._dc2_failed_flag = False
+                self.process_controller.on_dc2_target_failed(
+                    ev.message or "DC2 Power OFF 미확인",
+                    code=getattr(ev, "code", None) or getattr(ev, "error_code", None),
+                    meta={"kind": k, "ch": self.ch, "safety": "output_state_unconfirmed"},
+                )
             elif k == "power_off_finished":
                 if not self._dc2_failed_flag:
                     self.process_controller.on_dc2_off_finished()
@@ -2172,8 +2189,33 @@ class ChamberRuntime:
                         "ch": self.ch,
                     },
                 )
+            elif k == "power_off_failed":
+                self._warn_power_off_unconfirmed("RF", ev)
+                self.process_controller.on_rf_target_failed(
+                    ev.message or "RF Power OFF 미확인",
+                    code=getattr(ev, "code", None) or getattr(ev, "error_code", None),
+                    meta={"kind": k, "ch": self.ch, "safety": "output_state_unconfirmed"},
+                )
             elif k == "power_off_finished":
                 self.process_controller.on_rf_off_finished()
+
+    def _warn_power_off_unconfirmed(self, unit: str, ev) -> None:
+        """PLC D/A 전원의 0W 쓰기 미확인 경고(로그 + 런 경고 + 챗). 실패해도 조용히 넘어간다."""
+        alert = (f"⚠️ CH{self.ch} {unit} Power OFF 실패 - 출력 상태 미확인 "
+                 f"(켜져 있을 가능성 있음). 전원 장비 출력과 PLC D/A(SET/WRITE)를 즉시 확인하세요.")
+        with contextlib.suppress(Exception):
+            self.append_log(f"{unit}{self.ch}" if unit == "RF" else unit, alert)
+        try:
+            warns = getattr(self, "_run_warnings", None)
+            if isinstance(warns, list):
+                warns.append(f"{unit} Power OFF 실패(출력 상태 미확인)")
+        except Exception:
+            pass
+        if self.chat:
+            with contextlib.suppress(Exception):
+                self.chat.notify_error_with_src(unit, alert)
+                if hasattr(self.chat, "flush"):
+                    self.chat.flush()
 
     async def _pump_rfpulse_events(self) -> None:
         if not self.rf_pulse:
@@ -4992,8 +5034,9 @@ class ChamberRuntime:
                         pn2 = [getattr(t, "get_name", lambda: repr(t))() for t in pending]
                     self.append_log("MAIN", f"⚠ cleanup cancel timeout(2s): {pn2!r} (detached/leaked)")
 
-        # 2-C) ✅ 정리 중 출력 OFF 미확인 경고 — 이 시점엔 이벤트 펌프가 이미 취소돼
-        #      장치 이벤트(command_failed)가 전달되지 않으므로 여기서 직접 알린다.
+        # 2-C) ✅ 정리 중 출력 OFF 미확인 경고.
+        #      펌프(Pump.*)는 _keepalive_tasks 로 상주하므로 정리 이후에 장치가 낸 이벤트도 처리된다.
+        #      다만 '정리 중 대기 한도로 취소된 OFF' 는 결과 이벤트가 아예 없으므로 여기서 직접 알린다.
         for _dev, _nm in ((self.rf_pulse, "RF Pulse"), (self.dc_pulse, "DC Pulse"),
                           (self.dc_power, "DC Power"), (self.dc_power2, "DC Power2"),
                           (self.rf_power, "RF Power")):

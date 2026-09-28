@@ -352,6 +352,8 @@ class RFPulseAsync:
                 # ⚠ 기다림이 OFF 태스크를 취소해선 안 된다 → asyncio.wait 사용
                 done, pending = await asyncio.wait({t}, timeout=max(0.0, _wait_s))
                 if pending:
+                    # 취소되면 결과 이벤트가 없다 → 여기서만 cleanup_off_unconfirmed 로 알린다
+                    self.cleanup_off_unconfirmed = True
                     await self._emit_status("정리 대기 초과 — RF OFF 시퀀스 취소")
                     for _t in pending:
                         _t.cancel()
@@ -366,6 +368,7 @@ class RFPulseAsync:
                 if t is not None:
                     done, pending = await asyncio.wait({t}, timeout=max(0.0, _wait_s))
                     if pending:
+                        self.cleanup_off_unconfirmed = True
                         await self._emit_status("정리 대기 초과 — RF OFF 시퀀스 취소")
                         for _t in pending:
                             _t.cancel()
@@ -376,8 +379,9 @@ class RFPulseAsync:
         except Exception as e:
             self._dbg("RFP", f"cleanup OFF 확인 실패: {e!r}")
 
+        # ★ cleanup_off_unconfirmed 는 '정리 중 OFF 가 대기 한도로 취소돼 결과 이벤트가 없는 경우' 에만.
+        #   워커가 없는(이번 런에서 안 쓴) 장치는 알리지 않는다 — 안 쓴 런마다 경고가 반복되지 않게.
         if self._output_maybe_on:
-            self.cleanup_off_unconfirmed = True
             self.output_off_unconfirmed = True
 
         self._closing = True
@@ -773,7 +777,8 @@ class RFPulseAsync:
         (취소되면 이벤트 없이 종료)
         OFF 도중에는 재연결을 끊지 않는다 — _want_connected=False 는 cleanup 만 한다.
         """
-        deadline = time.monotonic() + self._cfg_float("RFPULSE_OFF_DEADLINE_S", 20.0)
+        _t_begin = time.monotonic()
+        deadline = _t_begin + self._cfg_float("RFPULSE_OFF_DEADLINE_S", 20.0)
         ack_ms = self._cfg_int("ACK_TIMEOUT_MS", 2000)
         attempts = 0
         confirmed = False
@@ -851,7 +856,7 @@ class RFPulseAsync:
             return
 
         self.output_off_unconfirmed = True
-        _el = self._cfg_float("RFPULSE_OFF_DEADLINE_S", 20.0)
+        _el = max(0.0, time.monotonic() - _t_begin)     # 실제 경과 시간
         with contextlib.suppress(Exception):
             await self._off_status(
                 f"RF OFF 확인 실패 — {_el:.0f}초 동안 {attempts}회 시도, 출력 상태 미확인 "
@@ -1206,6 +1211,7 @@ class RFPulseAsync:
             if ok:
                 if cmd.cmd == CMD_RF_OFF and cmd.kind == "exec":
                     self._output_maybe_on = False     # CSR=0 — PRE RF OFF / AUTO RF_OFF 포함
+                    self.output_off_unconfirmed = False
                 self._dbg("RFP OK", f"{cmd.tag} {self._cmd_label(cmd.cmd)}")
                 self._safe_callback(cmd.callback, result)
                 self._inflight = None
@@ -1883,9 +1889,9 @@ class RFPulseAsync:
                 purged += 1
                 self._safe_callback(c.callback, None)
 
-        # ✅ polling off + purged==0 은 로그 스팸이므로 생략
+        # ✅ purged==0 인 polling off / stop 은 로그 스팸이므로 생략
         if reason:
-            if (purged > 0) or (reason != "polling off"):
+            if (purged > 0) or (reason not in ("polling off", "stop")):
                 self._spawn(self._emit_status(f"대기 중 명령 {purged}개 폐기 ({reason})"))
         return purged
     
