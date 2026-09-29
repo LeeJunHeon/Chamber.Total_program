@@ -1167,8 +1167,8 @@ class AsyncMFC:
             if purged:
                 self._ev_nowait(MFCEvent(kind="status", message=f"[QUIESCE] Polling read {purged}건 제거 (polling off)"))
 
-    def on_process_finished(self, success: bool):
-        """공정 종료 시 내부 상태 리셋."""
+    def on_process_finished(self, success: bool, *, reason: Optional[str] = None):
+        """공정 종료 시 내부 상태 리셋. reason 이 있으면 폐기 로그 라벨만 그 값을 쓴다."""
         self.set_process_status(False)
         # 안정화 중지
         if self._stab_task:
@@ -1178,12 +1178,16 @@ class AsyncMFC:
         self._stab_target_hw = 0.0
         self._stab_pending_cmd = None
         # 큐 정리 및 카운터 리셋
-        self._purge_pending(f"process finished ({'ok' if success else 'fail'})")
+        self._purge_pending(reason or f"process finished ({'ok' if success else 'fail'})")
         self.last_setpoints = {1: 0.0, 2: 0.0, 3: 0.0}
         self.flow_error_counters = {1: 0, 2: 0, 3: 0}
         # ✅ 플래그도 초기화
         self._flow_on_flags = {1: False, 2: False, 3: False}
         self._poll_cycle_active = False
+
+    def on_process_cleanup(self):
+        """정리(cleanup) 경로에서의 상태 리셋 — 실패가 아니므로 폐기 로그를 'cleanup' 으로 남긴다."""
+        self.on_process_finished(False, reason="cleanup")
 
     def set_endpoint(self, host: str, port: int, *, reconnect: bool = True) -> None:
         """런타임 엔드포인트 변경. reconnect=True면 즉시 재연결 루틴 트리거."""

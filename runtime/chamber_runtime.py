@@ -162,6 +162,35 @@ except Exception:  # pragma: no cover
         return
 
 
+def _is_blank_recipe_row(row) -> bool:
+    """레시피 행이 '모든 칸이 빈 행'인가(쉼표만 있는 행 포함).
+
+    dict(csv.DictReader 행) / list·tuple(csv.reader 행) 모두 받는다.
+    None(모자란 칸)은 빈 칸으로 보고, 리스트 값(restkey)은 원소를 모두 확인한다.
+    한 칸이라도 값이 있으면 False — 'delay 5m' 만 있는 행이나 '0' 도 값이다."""
+    def _has_value(v) -> bool:
+        if v is None:
+            return False
+        if isinstance(v, (list, tuple)):
+            return any(_has_value(x) for x in v)
+        return str(v).strip() != ""
+
+    try:
+        if isinstance(row, dict):
+            vals = row.values()
+        elif isinstance(row, (list, tuple)):
+            vals = row
+        else:
+            return False
+        return not any(_has_value(v) for v in vals)
+    except Exception:
+        return False
+
+
+# 런 로그 마감(END) 전, 장치 cleanup 의 마지막 상태 줄이 큐에 들어올 시간
+_RUN_LOG_FOOTER_SETTLE_S = 0.3
+
+
 # UI 입력 파서가 "검증 실패"를 알리는 센티널 (None = 공란 = 유지 와 구분하기 위함)
 _DCP_OFF_INVALID = object()
 
@@ -3074,12 +3103,15 @@ class ChamberRuntime:
         loop = asyncio.get_running_loop()
         def _load_csv_rows():
             rows = []
+            row_nos: list[int] = []          # 각 행의 원래 행 번호(헤더=1행)
+            blank = 0
 
-            def _push(row: dict):
+            def _push(row: dict, lineno: int):
                 name = (str(row.get('Process_name') or row.get('#') or '').strip()
                         or f"공정 {len(rows)+1}")
                 row['Process_name'] = name
                 rows.append(row)
+                row_nos.append(int(lineno))
 
             if str(file_path).lower().endswith(".xlsx"):
                 # ── Excel 레시피: 1행=헤더, 이후 행=공정 (첫 번째 시트만 사용, '범례' 등 추가 시트 무시) ──
@@ -3089,7 +3121,7 @@ class ChamberRuntime:
                     ws = wb.worksheets[0]
                     it = ws.iter_rows(values_only=True)
                     header = [str(h).strip() if h is not None else "" for h in next(it, [])]
-                    for vals in it:
+                    for lineno, vals in enumerate(it, start=2):
                         row = {}
                         empty = True
                         for h, v in zip(header, vals):
@@ -3100,18 +3132,22 @@ class ChamberRuntime:
                                 empty = False
                             row[h] = s
                         if not empty:
-                            _push(row)
+                            _push(row, lineno)
                 finally:
                     wb.close()
             else:
                 with open(file_path, mode='r', encoding='utf-8-sig', newline='') as csvfile:
                     reader = csv.DictReader(csvfile)
-                    for row in reader:
-                        _push(row)
-            return rows
+                    for lineno, row in enumerate(reader, start=2):
+                        # ✅ 쉼표만 있는 행(모든 칸이 빈 행)은 공정이 아니다 — 큐에 넣지 않는다
+                        if _is_blank_recipe_row(row):
+                            blank += 1
+                            continue
+                        _push(row, lineno)
+            return rows, row_nos, blank
 
         try:
-            rows = await asyncio.wait_for(
+            rows, _row_nos, _blank = await asyncio.wait_for(
                 loop.run_in_executor(None, _load_csv_rows),
                 timeout=30.0
             )
@@ -3122,7 +3158,10 @@ class ChamberRuntime:
             self.append_log("File", f"파일 처리 오류: {e}")
             return
 
-        _raw_errs = self._validate_raw_rows(list(rows or []))
+        if _blank:
+            self.append_log("File", f"빈 행 {_blank}개 건너뜀 (모든 칸이 빈 행)")
+
+        _raw_errs = self._validate_raw_rows(list(rows or []), row_numbers=_row_nos)
         if _raw_errs:
             self.append_log("File", f"레시피 오류 {len(_raw_errs)}건:\n - " + "\n - ".join(_raw_errs))
             self._post_warning(
@@ -4926,6 +4965,8 @@ class ChamberRuntime:
         with contextlib.suppress(Exception):
             if self._skip_mfc_finalize_due_to_pc():
                 self.append_log("MFC", "PC 실행 중 → mfc 폴링/상태 리셋 생략(공유 자원 보호)")
+            elif self.mfc and hasattr(self.mfc, "on_process_cleanup"):
+                self.mfc.on_process_cleanup()          # 실패가 아니므로 라벨은 'cleanup'
             elif self.mfc and hasattr(self.mfc, "on_process_finished"):
                 self.mfc.on_process_finished(False)
             elif self.mfc and hasattr(self.mfc, "set_process_status"):
@@ -4967,7 +5008,7 @@ class ChamberRuntime:
         try:
             if self.ig and hasattr(self.ig, "cancel_wait"):
                 with contextlib.suppress(asyncio.TimeoutError):
-                    await asyncio.wait_for(self.ig.cancel_wait(), timeout=2.0)
+                    await asyncio.wait_for(self._ig_cancel_for_cleanup(), timeout=2.0)
         except Exception:
             pass
 
@@ -5065,6 +5106,9 @@ class ChamberRuntime:
                         self.chat.flush()
 
         # 3) footer 먼저
+        #    ⚠ 장치 cleanup 의 마지막 상태 줄은 이벤트 펌프 → append_log → call_soon 으로
+        #      몇 틱 늦게 큐에 들어온다. END 를 바로 넣으면 그 줄이 END 뒤로 밀리거나 유실된다.
+        await self._settle_run_log_before_footer()
         with contextlib.suppress(Exception):
             self._close_run_log()
 
@@ -6303,6 +6347,31 @@ class ChamberRuntime:
 
         self.append_log("Logger", f"새 로그 파일 시작: {base.name}")
 
+    async def _ig_cancel_for_cleanup(self):
+        """정리 경로의 IG cancel — reason 을 지원하면 'cleanup' 라벨을 쓴다(사용자 STOP 과 구분)."""
+        try:
+            return await self.ig.cancel_wait(reason="cleanup")
+        except TypeError:
+            return await self.ig.cancel_wait()
+
+    async def _settle_run_log_before_footer(self) -> None:
+        """END 를 넣기 전에 늦게 올라오는 장치 상태 줄이 큐에 들어올 시간을 준다.
+        런 로그가 없으면 즉시 반환. 취소되면 END 는 넣고(_close_run_log) 취소를 전파한다."""
+        if not getattr(self, "_log_file_path", None):
+            return
+        try:
+            for _ in range(3):
+                await asyncio.sleep(0)
+            await asyncio.sleep(_RUN_LOG_FOOTER_SETTLE_S)
+            for _ in range(3):
+                await asyncio.sleep(0)
+        except asyncio.CancelledError:
+            with contextlib.suppress(Exception):
+                self._close_run_log()
+            raise
+        except Exception:
+            pass
+
     def _close_run_log(self) -> None:
         """종료 마커만 큐에 넣고, 실제 flush/close는 _shutdown_log_writer()에서 처리."""
         # ★ 이미 정리되어 path가 없으면 END 마커 중복 enqueue 금지
@@ -6358,15 +6427,22 @@ class ChamberRuntime:
                     # 1) NAS 기록
                     # 2) 실패 시 self._local_log_dir 로 자동 폴백
                     # 을 처리하므로, 여기서는 "직접 로컬 파일 쓰기"를 하지 않는다.
-                    await asyncio.wait_for(
-                        loop.run_in_executor(
-                            self._log_io_exec,
-                            self._log_write_sync,
-                            self._log_file_path,
-                            text,
-                        ),
-                        timeout=5.0,
+                    # ✅ writer 가 cancel 돼도 '이미 꺼낸 묶음' 은 끝까지 기록한다.
+                    #    (기존엔 wait_for 취소가 executor 작업까지 취소해 END 가 버려졌다)
+                    fut = loop.run_in_executor(
+                        self._log_io_exec,
+                        self._log_write_sync,
+                        self._log_file_path,
+                        text,
                     )
+                    fut.add_done_callback(
+                        lambda f: None if f.cancelled() else f.exception()
+                    )
+                    try:
+                        await asyncio.wait_for(asyncio.shield(fut), timeout=5.0)
+                    except asyncio.TimeoutError:
+                        fut.cancel()
+                        raise
 
                     # ✅ SessionTextAppender가 이번 write에서 fallback으로 전환됐는지 1회 알림
                     try:
@@ -6892,12 +6968,15 @@ class ChamberRuntime:
                 if not os.path.exists(path):
                     raise RuntimeError(f"레시피 파일을 찾을 수 없습니다: {path}")
                 rows = []
+                row_nos: list[int] = []      # 각 행의 원래 행 번호(헤더=1행)
+                blank = 0
 
-                def _push(row: dict):
+                def _push(row: dict, lineno: int):
                     name = (str(row.get('Process_name') or row.get('#') or '').strip()
                             or f"공정 {len(rows)+1}")
                     row['Process_name'] = name
                     rows.append(row)
+                    row_nos.append(int(lineno))
 
                 if path.lower().endswith(".xlsx"):
                     # ✅ 로봇 경로 시작도 UI 로더와 동일하게 xlsx 지원
@@ -6907,7 +6986,7 @@ class ChamberRuntime:
                         ws = wb.worksheets[0]
                         it = ws.iter_rows(values_only=True)
                         header = [str(h).strip() if h is not None else "" for h in next(it, [])]
-                        for vals in it:
+                        for lineno, vals in enumerate(it, start=2):
                             row = {}
                             empty = True
                             for h, v in zip(header, vals):
@@ -6918,26 +6997,33 @@ class ChamberRuntime:
                                     empty = False
                                 row[h] = sv
                             if not empty:
-                                _push(row)
+                                _push(row, lineno)
                     finally:
                         wb.close()
                 else:
                     with open(path, mode='r', encoding='utf-8-sig', newline='') as csvfile:
                         reader = csv.DictReader(csvfile)
-                        for row in reader:
-                            _push(row)
-                return rows
+                        for lineno, row in enumerate(reader, start=2):
+                            # ✅ 쉼표만 있는 행(모든 칸이 빈 행)은 공정이 아니다
+                            if _is_blank_recipe_row(row):
+                                blank += 1
+                                continue
+                            _push(row, lineno)
+                return rows, row_nos, blank
             
             try:
                 # NAS open + read를 thread pool에서 실행, 30초 timeout
-                rows = await asyncio.wait_for(
+                rows, _row_nos, _blank = await asyncio.wait_for(
                     loop.run_in_executor(None, _load_csv_sync, s),
                     timeout=30.0
                 )
             except asyncio.TimeoutError:
                 raise RuntimeError(f"CSV 로드 30초 timeout (NAS 응답 지연): {s}")
             
-            _raw_errs = self._validate_raw_rows(list(rows or []))
+            if _blank:
+                self.append_log("File", f"빈 행 {_blank}개 건너뜀 (모든 칸이 빈 행)")
+
+            _raw_errs = self._validate_raw_rows(list(rows or []), row_numbers=_row_nos)
             if _raw_errs:
                 raise RuntimeError(
                     f"레시피 오류 {len(_raw_errs)}건:\n - " + "\n - ".join(_raw_errs)
@@ -7542,7 +7628,8 @@ class ChamberRuntime:
             + float(m.group(3) or 0.0)
         )
 
-    def _validate_raw_rows(self, rows: list[dict]) -> list[str]:
+    def _validate_raw_rows(self, rows: list[dict],
+                           *, row_numbers: Optional[Sequence[int]] = None) -> list[str]:
         """
         CSV/XLSX 로 읽은 원본 행을 파일 로드 시점에 전수 검증한다.
         - 빈 칸은 항상 합법(미지정)
@@ -7563,7 +7650,11 @@ class ChamberRuntime:
             if not isinstance(row, dict):
                 continue
             # 헤더를 1행으로 보는 사람 기준 행 번호
-            lineno = idx + 2
+            #  (로더가 빈 행을 건너뛴 경우 원래 행 번호를 받아 쓴다 — 번호가 어긋나지 않게)
+            if row_numbers is not None and idx < len(row_numbers):
+                lineno = int(row_numbers[idx])
+            else:
+                lineno = idx + 2
             name = str(row.get("Process_name", "") or "").strip()
             where = f"{lineno}행" + (f"('{name}')" if name else "")
 

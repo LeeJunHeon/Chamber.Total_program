@@ -1782,7 +1782,11 @@ class PlasmaCleaningRuntime:
             # ✅ (추가) base-wait 잔존 시 다음 run이 즉시 실패하므로 종료 시 항상 정리
             with contextlib.suppress(Exception):
                 if self.ig and hasattr(self.ig, "cancel_wait"):
-                    await asyncio.wait_for(self.ig.cancel_wait(), timeout=2.0)
+                    try:
+                        _ig_c = self.ig.cancel_wait(reason="cleanup")
+                    except TypeError:
+                        _ig_c = self.ig.cancel_wait()
+                    await asyncio.wait_for(_ig_c, timeout=2.0)
 
             # (B) MFC 소유권 해제 + 마지막 사용자였을 때만 마스크 원복/폴링 중단
             #     (정상/실패/취소 모두 이 경로를 지난다. release 는 멱등이라 재호출도 안전)
@@ -1936,7 +1940,9 @@ class PlasmaCleaningRuntime:
                     if hasattr(m, "set_poll_mask"):
                         m.set_poll_mask(gas=True, pressure=True)
                 with contextlib.suppress(Exception):
-                    if hasattr(m, "on_process_finished"):
+                    if hasattr(m, "on_process_cleanup"):
+                        m.on_process_cleanup()          # 실패가 아니므로 라벨은 'cleanup'
+                    elif hasattr(m, "on_process_finished"):
                         m.on_process_finished(False)
                     elif hasattr(m, "set_process_status"):
                         m.set_process_status(False)
@@ -3150,7 +3156,13 @@ class PlasmaCleaningRuntime:
                     _rows = 1
                     with contextlib.suppress(Exception):
                         with open(path, "r", encoding="utf-8-sig", newline="") as _f:
-                            _rows = max(1, sum(1 for _ in csv.reader(_f)) - 1)
+                            _rdr = csv.reader(_f)
+                            next(_rdr, None)                     # 헤더 제외
+                            # 쉼표만 있는 행·빈 줄은 데이터 행이 아니다
+                            _rows = max(1, sum(
+                                1 for _r in _rdr
+                                if any(str(_c).strip() for _c in (_r or []))
+                            ))
                     return self._read_first_row_from_csv(path), _rows
 
                 try:

@@ -396,7 +396,7 @@ class AsyncIG:
                     pass
 
 
-    async def cancel_wait(self):
+    async def cancel_wait(self, *, reason: str = "user cancel / stop"):
         self._waiting_active = False
         self._suspend_reignite = True
         self._total_reignite_attempts = 0
@@ -411,7 +411,7 @@ class AsyncIG:
             self._bg_poll_task = None
 
         # 대기/인플라이트 명령은 정리
-        self._purge_pending("user cancel / stop")
+        self._purge_pending(reason or "user cancel / stop")
 
         # 연결 상태와 무관하게 여기서 '직접' OFF 보장 경로를 기다림
         try:
