@@ -26,6 +26,7 @@ import os
 import sys
 import time
 import traceback
+import uuid
 from datetime import datetime
 from pathlib import Path
 from typing import Optional, Tuple
@@ -70,6 +71,21 @@ def _load_anomaly_config() -> None:
         _ANOMALY_THRESHOLD = float(cfg.get("threshold", _ANOMALY_THRESHOLD))
     except Exception:
         pass
+
+def _expected_serial_for(ch: int) -> str:
+    """oes_config.json 의 선택 키 expected_serial({"1": "...", "2": "..."})에서 이 챔버 값. 없거나 읽기 실패면 ""."""
+    cfg_path = _worker_base_dir() / "oes_config.json"
+    try:
+        if not cfg_path.exists():
+            return ""
+        with open(cfg_path, "r", encoding="utf-8") as fp:
+            cfg = json.loads(fp.read())
+        m = cfg.get("expected_serial") or {}
+        if not isinstance(m, dict):
+            return ""
+        return str(m.get(str(int(ch))) or "").strip()
+    except Exception:
+        return ""
 
 def _find_ar_index(x_list: list) -> Optional[int]:
     """x_list(파장 리스트)에서 818nm 대역(818.0~819.0) 파장 인덱스 반환."""
@@ -202,6 +218,77 @@ async def _copy_csv_to_nas(local_csv: Path, ch: int, *, timeout_s: float = 120.0
 # ✅ 워커는 메인/프로젝트 설정에 의존하지 않도록 고정값 사용
 OES_AVG_COUNT = 3
 DEBUG_PRINT = False
+
+# ── 분광기 연결 감시 / 읽기 실패 복구 ──
+# 새 DLL(CyUSB)은 호출마다 '지금 연결된 CyUSB 장치 목록의 N번째'를 연다.
+# 목록 앞쪽 분광기가 빠지면 번호가 밀려 다른 챔버 분광기를 오류 없이 읽으므로,
+# 측정 중 연결 목록이 초기화 때(기준)와 다르면 읽기를 멈추고, 돌아오면 재초기화한다.
+_CYUSB_IFACE_GUID = "{AE18AA60-7F6A-11D4-97DD-00010229B959}"  # spusb3.sys(CyUSB) 분광기 인터페이스 GUID
+_CM_LIST_RETRIES = 5              # CM_Get_Device_Interface_ListW 가 CR_BUFFER_SMALL 일 때 재시도 횟수
+_LINK_WAIT_AT_START_S = 10.0      # 측정 시작 시 목록이 기준과 다르면 기준으로 돌아오기를 기다리는 최대 시간(초)
+_LINK_SETTLE_S = 2.0              # 목록이 기준으로 돌아온 뒤 재초기화 전에 기다리는 시간(초)
+_LINK_STATUS_EVERY_S = 30.0       # 끊김이 이어질 때 '재연결 대기 중' 상태를 남기는 간격(초)
+_LINK_POLL_S = 0.5                # 시작 대기·재초기화 뮤텍스 대기 중 확인 간격(초)
+_REINIT_RETRY_S = 30.0            # 재초기화 실패 후 다음 시도까지, 연속 읽기 실패 재초기화의 최소 간격(초)
+_READ_FAIL_RESET_AT = 3           # 연속 읽기 실패 이 횟수째에 포트 리셋(spSetupGivenChannel) 1회
+_READ_FAIL_REINIT_AT = 10         # 연속 읽기 실패 이 횟수째에 재초기화
+_RESET_CALL_TIMEOUT_S = 4.0       # 포트 리셋 호출 타임아웃(초). 넘으면 읽기 타임아웃과 같은 hard_abort
+_REINIT_MUTEX_NAME = "Local\\VanaM_OES_REINIT"  # 두 워커가 동시에 재초기화하지 않도록 잡는 뮤텍스
+_REINIT_MUTEX_WAIT_S = 30.0       # 재초기화 뮤텍스 최대 대기(초). 못 잡으면 다음 기회에
+_DEV_INFO_BUF = 512               # spDevInfo 모델명/일련번호 버퍼 크기(바이트)
+
+_CM_FNS = None  # (size_fn, list_fn, guid) 지연 바인딩
+
+
+def _list_cyusb_interfaces() -> Optional[list]:
+    """
+    지금 연결된 CyUSB 분광기 인터페이스 경로 목록(cfgmgr32 조회, USB 통신 없음).
+    Windows 가 아니거나 조회 실패면 None.
+    """
+    global _CM_FNS
+    if os.name != "nt":
+        return None
+    try:
+        if _CM_FNS is None:
+            class _GUID(ctypes.Structure):
+                _fields_ = [
+                    ("Data1", ctypes.c_uint32),
+                    ("Data2", ctypes.c_uint16),
+                    ("Data3", ctypes.c_uint16),
+                    ("Data4", ctypes.c_ubyte * 8),
+                ]
+            guid = _GUID.from_buffer_copy(uuid.UUID(_CYUSB_IFACE_GUID).bytes_le)
+            cm = ctypes.WinDLL("cfgmgr32")
+            size_fn = cm.CM_Get_Device_Interface_List_SizeW
+            size_fn.argtypes = [ctypes.POINTER(ctypes.c_ulong), ctypes.POINTER(_GUID), ctypes.c_wchar_p, ctypes.c_ulong]
+            size_fn.restype = ctypes.c_ulong
+            list_fn = cm.CM_Get_Device_Interface_ListW
+            list_fn.argtypes = [ctypes.POINTER(_GUID), ctypes.c_wchar_p, ctypes.c_wchar_p, ctypes.c_ulong, ctypes.c_ulong]
+            list_fn.restype = ctypes.c_ulong
+            _CM_FNS = (size_fn, list_fn, guid)
+
+        size_fn, list_fn, guid = _CM_FNS
+        CR_SUCCESS = 0x0
+        CR_BUFFER_SMALL = 0x1A
+        CM_GET_DEVICE_INTERFACE_LIST_PRESENT = 0x0
+        for _ in range(_CM_LIST_RETRIES):
+            n = ctypes.c_ulong(0)
+            cr = size_fn(ctypes.byref(n), ctypes.byref(guid), None, CM_GET_DEVICE_INTERFACE_LIST_PRESENT)
+            if cr != CR_SUCCESS:
+                return None
+            if n.value <= 1:
+                return []
+            buf = ctypes.create_unicode_buffer(n.value)
+            cr = list_fn(ctypes.byref(guid), None, buf, n.value, CM_GET_DEVICE_INTERFACE_LIST_PRESENT)
+            if cr == CR_BUFFER_SMALL:
+                continue  # 조회 사이에 장치가 늘었음 → 크기부터 다시
+            if cr != CR_SUCCESS:
+                return None
+            raw = ctypes.wstring_at(ctypes.addressof(buf), n.value)
+            return [s for s in raw.split("\x00") if s]
+        return None
+    except Exception:
+        return None
 
 
 def _add_dll_search_dir(dll_path: str) -> None:
@@ -523,12 +610,17 @@ class OESAsync:
         self._roi_start = ROI_START_DEFAULT
         self._roi_end   = ROI_END_DEFAULT
 
-        self._set_baseline = None
         self._auto_dark = None
         self._set_trg = None
         self._set_tec = None
         self._set_dbl_int = None
         self._get_wl = None
+        self._dev_info = None
+
+        # 분광기 일련번호/모델명(spDevInfo), 연결 목록 기준(정렬). 기준이 None/빈 목록이면 감시 끔(옛 EZUSB 드라이버 등)
+        self._serial: str = ""
+        self._dev_model: str = ""
+        self._link_baseline: Optional[list] = None
 
         # __init__에 멤버 추가
         self._last_scan_code: int = 0
@@ -562,12 +654,6 @@ class OESAsync:
         L.spCloseGivenChannel.argtypes = [ctypes.c_int16]
         L.spCloseGivenChannel.restype  = ctypes.c_int16
 
-        self._set_baseline = getattr(L, "spSetBaseLineCorrection", None)
-        if self._set_baseline:
-            with contextlib.suppress(Exception):
-                self._set_baseline.argtypes = [ctypes.c_int16]
-                self._set_baseline.restype  = ctypes.c_int16
-
         self._auto_dark = getattr(L, "spAutoDark", None)
         if self._auto_dark:
             with contextlib.suppress(Exception):
@@ -597,6 +683,12 @@ class OESAsync:
             with contextlib.suppress(Exception):
                 self._get_wl.argtypes = [ctypes.POINTER(ctypes.c_double), ctypes.c_int16]
                 self._get_wl.restype  = ctypes.c_int16
+
+        self._dev_info = getattr(L, "spDevInfo", None)
+        if self._dev_info:
+            with contextlib.suppress(Exception):
+                self._dev_info.argtypes = [ctypes.c_char_p, ctypes.c_char_p, ctypes.c_int16]
+                self._dev_info.restype  = ctypes.c_int16
 
     def _pick_model_with_probe(self, ch: int) -> Optional[int]:
         # device/oes.py와 동일: PDA → G9212 → SONY → TOSHIBA → S10420
@@ -801,11 +893,29 @@ class OESAsync:
 
         return int(npix)
 
-    def _apply_device_settings_blocking(self, ch: int, integration_ms: int) -> None:
-        if self._set_baseline:
-            with contextlib.suppress(Exception):
-                self._set_baseline(ctypes.c_int16(ch))
+    def _read_dev_info_blocking(self, ch: int) -> Tuple[int, str, str]:
+        """spDevInfo 로 장치의 모델명·일련번호를 읽는다. return: (rc, model, serial)"""
+        if not self._dev_info:
+            return -1, "", ""
+        mb = ctypes.create_string_buffer(_DEV_INFO_BUF)
+        sb = ctypes.create_string_buffer(_DEV_INFO_BUF)
+        rc = int(self._dev_info(mb, sb, ctypes.c_int16(ch)))  # type: ignore
+        model = mb.value.decode("ascii", errors="replace").strip()
+        serial = sb.value.decode("ascii", errors="replace").strip()
+        _runlog(f"[init] spDevInfo rc={rc} ch={ch} model={model!r} serial={serial!r}")
+        return rc, model, serial
 
+    def link_ok(self) -> bool:
+        """연결 목록 판정: 감시가 꺼져 있으면 항상 정상, 켜져 있으면 현재 목록(정렬)이 기준과 같을 때만 정상."""
+        if not self._link_baseline:
+            return True
+        cur = _list_cyusb_interfaces()
+        if cur is None:
+            _runlog("[link] 연결 목록 조회 실패(일시) → 정상으로 간주")
+            return True
+        return sorted(cur) == self._link_baseline
+
+    def _apply_device_settings_blocking(self, ch: int, integration_ms: int) -> None:
         # ✅ 기본은 기존과 동일하게 AutoDark 실행
         #    단, 공정 중 시작되는 경우를 대비해서 env로 OFF 가능
         # do_autodark = os.environ.get("OES_AUTODARK", "1") == "1"
@@ -857,6 +967,20 @@ class OESAsync:
             info["detected_count"] = int(n)
             self._detected_channels = int(n)
 
+            # ✅ spTestAllChannels 직후 연결 목록을 기준으로 저장.
+            #    재초기화(같은 객체)에서는 최초 기준과 비교만 한다: 분광기가 빠진 상태로 번호를 다시 매기면
+            #    다른 챔버 분광기를 열 수 있으므로 그때는 실패시킨다(워커 재기동 시 새 기준).
+            link_snap = _list_cyusb_interfaces()
+            link_snap = sorted(link_snap) if link_snap else None
+            _runlog(f"[init] link list={link_snap} baseline={self._link_baseline}")
+            if self._link_baseline and link_snap is not None and link_snap != self._link_baseline:
+                msg = f"초기화 중 분광기 연결 변화 (기준 {len(self._link_baseline)}대, 현재 {len(link_snap)}대)"
+                self._last_scan = info
+                self._last_error = msg
+                return False
+            if not self._link_baseline:
+                self._link_baseline = link_snap
+
             if n <= 0:
                 msg = f"장치 스캔 실패: detected={n}"
                 self._last_scan = info
@@ -896,6 +1020,40 @@ class OESAsync:
                 self._last_error = msg
                 return False
 
+            # ✅ 분광기 모델명·일련번호 기록(읽기 실패는 초기화를 실패시키지 않음. 단계 타임아웃은 기존대로 실패)
+            dev_rc, dev_model, dev_serial = -1, "", ""
+            try:
+                dev_rc, dev_model, dev_serial = await _run_step("dev_info", 4.0, self._read_dev_info_blocking, usb)
+            except asyncio.TimeoutError:
+                raise
+            except Exception as e:
+                _runlog(f"[init] spDevInfo EXC usb={usb}: {type(e).__name__}: {e}")
+            if int(dev_rc) < 0:
+                _runlog(f"[init] spDevInfo 읽기 실패 rc={dev_rc} usb={usb}")
+                dev_model, dev_serial = "", ""
+            self._dev_model = str(dev_model)
+            self._serial = str(dev_serial)
+            info["serial"] = self._serial
+
+            link_now = _list_cyusb_interfaces()
+            _status(
+                f"[init] 분광기 확인 USB{usb}: 모델={self._dev_model or '?'}({self._model_name}), "
+                f"일련번호={self._serial or '(읽기 실패)'}, 연결 목록={link_now if link_now is not None else '(조회 불가)'}"
+            )
+
+            expected = _expected_serial_for(self._chamber)
+            if expected and self._serial.strip().lower() != expected.strip().lower():
+                msg = f"분광기 일련번호 불일치: CH{self._chamber} 기대={expected}, 실제={self._serial or '(읽기 실패)'}"
+                self._last_scan = info
+                self._last_error = msg
+                return False
+
+            if self._link_baseline and link_now is not None and sorted(link_now) != self._link_baseline:
+                msg = "초기화 중 분광기 연결 변화"
+                self._last_scan = info
+                self._last_error = msg
+                return False
+
             msg = (
                 f"open ok: USB{usb}, model={self._model_name}, pixels={self._npix}"
                 + (", wl=nm" if self._wl is not None else ", wl=pixel")
@@ -928,9 +1086,6 @@ class OESAsync:
 
         ch = int(self.sChannel)
         npix = int(self._npix)
-
-        with contextlib.suppress(Exception):
-            self.sp_dll.spSetupGivenChannel(ctypes.c_int16(ch))  # type: ignore
 
         intensity_sum = np.zeros(npix, dtype=float)
         valid = 0
@@ -1021,11 +1176,199 @@ def _stop_dir() -> Path:
     return base
 
 
-async def _acquire_first_frame(oes: OESAsync, retries: int = 20, delay_s: float = 0.2):
+class _ResetCallTimeout(TimeoutError):
+    """포트 리셋(spSetupGivenChannel) 호출 타임아웃 → 읽기 타임아웃과 같은 hard_abort 경로."""
+
+
+async def _acquire_named_mutex_async(mtx: _WinMutex, max_wait_s: float) -> bool:
+    # 뮤텍스는 잡은 스레드에서 풀어야 하므로 이벤트 루프 스레드에서 0ms 대기로 반복 확인한다
+    loop = asyncio.get_running_loop()
+    end = loop.time() + float(max_wait_s)
+    while True:
+        if mtx.acquire(timeout_ms=0):
+            return True
+        mtx.release()  # 소유하지 못한 핸들 닫기(ReleaseMutex 실패는 무시됨)
+        if loop.time() >= end:
+            return False
+        await asyncio.sleep(_LINK_POLL_S)
+
+
+class _LinkGuard:
+    """
+    측정 루프(daemon / one-shot) 공용: 분광기 연결 목록 감시 + 연속 읽기 실패 복구.
+    - 목록이 기준과 다르면 DLL 을 부르지 않고 '연결 끊김'(일시 중지) 상태로 둔다.
+    - 목록이 돌아오면 잠시 기다린 뒤 재초기화(뮤텍스)하고 측정을 재개한다.
+    - 목록은 정상인데 읽기가 연속 실패하면 N번째에 포트 리셋, M번째에 재초기화.
+    """
+
+    def __init__(self, oes: OESAsync, *, ch: int, usb: int, integration_ms: int):
+        self.oes = oes
+        self.ch = int(ch)
+        self.usb = int(usb)
+        self.integration_ms = int(integration_ms)
+
+        self.paused = False
+        self._pause_t0 = 0.0
+        self._last_wait_log = 0.0
+        self._next_reinit_try = 0.0
+        self._fail_streak = 0
+        self._last_fail_reinit: Optional[float] = None
+
+        # finished 페이로드용
+        self.link_pause_count = 0     # 일시 중지(연결 끊김) 진입 횟수
+        self.link_pause_s = 0.0       # 일시 중지 후 재개까지 걸린 시간 합(초)
+        self.reinit_count = 0         # 재초기화 수행 횟수(뮤텍스 획득 후 시도 기준)
+        self.reset_count = 0          # 포트 리셋(spSetupGivenChannel) 횟수
+
+    def payload(self) -> dict:
+        return {
+            "link_pause_count": int(self.link_pause_count),
+            "link_pause_s": round(float(self.link_pause_s), 1),
+            "reinit_count": int(self.reinit_count),
+            "reset_count": int(self.reset_count),
+        }
+
+    def _link_changed_msg(self) -> str:
+        cur = _list_cyusb_interfaces()
+        n = len(cur) if cur is not None else "?"
+        m = len(self.oes._link_baseline or [])
+        return f"[link] 분광기 연결 변화 감지(현재 {n}대/기준 {m}대) → 측정 일시 중지"
+
+    def _enter_pause(self, msg: str) -> None:
+        if self.paused:
+            return
+        now = time.time()
+        self.paused = True
+        self._pause_t0 = now
+        self._last_wait_log = now
+        self._next_reinit_try = 0.0
+        self.link_pause_count += 1
+        _status(msg)
+
+    def _resume(self) -> None:
+        dur = max(0.0, time.time() - self._pause_t0)
+        self.paused = False
+        self.link_pause_s += dur
+        self._fail_streak = 0
+        _status(f"[link] 분광기 재연결 → 재초기화 완료, 측정 재개(중단 {dur:.0f}초)")
+
+    async def _reinit(self) -> bool:
+        mtx = _WinMutex(_REINIT_MUTEX_NAME)
+        if not await _acquire_named_mutex_async(mtx, _REINIT_MUTEX_WAIT_S):
+            _status(f"[link] 재초기화 뮤텍스 대기 초과({_REINIT_MUTEX_WAIT_S:.0f}초) → 다음 기회에 재시도")
+            return False
+        try:
+            self.reinit_count += 1
+            ok = await _daemon_reset_device(self.oes, ch=self.ch, usb=self.usb)
+            if not ok:
+                _status(f"[link] 재초기화 실패: {self.oes._last_error or 'initialize_device failed'}")
+                return False
+            with contextlib.suppress(Exception):
+                await self.oes._call(self.oes._apply_device_settings_blocking, int(self.oes.sChannel), self.integration_ms)
+            return True
+        finally:
+            mtx.release()
+
+    async def reset_port(self, msg: str) -> None:
+        """spSetupGivenChannel 1회(포트 리셋). 호출 타임아웃이면 _ResetCallTimeout."""
+        self.reset_count += 1
+        _status(msg)
+        try:
+            await asyncio.wait_for(
+                self.oes._call(self.oes._setup_channel_blocking, int(self.oes.sChannel)),
+                timeout=_RESET_CALL_TIMEOUT_S,
+            )
+        except asyncio.TimeoutError as e:
+            raise _ResetCallTimeout(
+                f"OES reset(spSetupGivenChannel) timeout after {_RESET_CALL_TIMEOUT_S}s (ch={self.ch}, usb={self.usb})"
+            ) from e
+        except Exception as e:
+            _runlog(f"[read] 포트 리셋 예외: {type(e).__name__}: {e}")
+
+    async def ensure_at_start(self) -> None:
+        """측정 시작(첫 프레임 전): 목록이 기준과 다르면 복귀를 기다렸다가 재초기화. 안 되면 RuntimeError."""
+        if self.oes.link_ok():
+            if self.oes.sp_dll is not None and int(self.oes.sChannel) >= 0:
+                return
+            # 이전 재초기화 실패로 장치가 닫혀 있음 → 목록은 정상이므로 재초기화부터
+            if not await self._reinit():
+                raise RuntimeError("[link] 측정 시작 전 분광기 재초기화 실패")
+            return
+        self._enter_pause(self._link_changed_msg())
+        end = time.time() + _LINK_WAIT_AT_START_S
+        while not self.oes.link_ok():
+            if time.time() >= end:
+                raise RuntimeError(
+                    f"[link] 측정 시작 전 분광기 연결 목록이 기준과 다름({_LINK_WAIT_AT_START_S:.0f}초 대기 후에도 복귀 안 됨)"
+                )
+            await asyncio.sleep(_LINK_POLL_S)
+        await asyncio.sleep(_LINK_SETTLE_S)
+        if not self.oes.link_ok() or not await self._reinit():
+            raise RuntimeError("[link] 측정 시작 전 분광기 재초기화 실패")
+        self._resume()
+
+    async def _tick_paused(self) -> None:
+        now = time.time()
+        if not self.oes.link_ok():
+            if now - self._last_wait_log >= _LINK_STATUS_EVERY_S:
+                self._last_wait_log = now
+                _status(f"[link] 재연결 대기 중(경과 {now - self._pause_t0:.0f}초)")
+            return
+        if now < self._next_reinit_try:
+            return
+        await asyncio.sleep(_LINK_SETTLE_S)
+        if not self.oes.link_ok():
+            return
+        if await self._reinit():
+            self._resume()
+        else:
+            self._next_reinit_try = time.time() + _REINIT_RETRY_S
+            _status(f"[link] {_REINIT_RETRY_S:.0f}초 뒤 재초기화 재시도")
+
+    async def before_read(self) -> bool:
+        """샘플 읽기 직전. False 면 DLL 호출 없이 이번 샘플을 건너뛴다."""
+        if self.paused:
+            await self._tick_paused()
+            return not self.paused
+        if not self.oes.link_ok():
+            self._enter_pause(self._link_changed_msg())
+            return False
+        return True
+
+    async def after_read(self, got: bool) -> bool:
+        """샘플 읽기 직후. True 면 행을 기록한다(목록이 바뀌었으면 방금 샘플은 버린다)."""
+        if not self.oes.link_ok():
+            self._enter_pause(self._link_changed_msg())
+            return False
+        if got:
+            self._fail_streak = 0
+            return True
+
+        self._fail_streak += 1
+        n = self._fail_streak
+        if n == _READ_FAIL_RESET_AT:
+            await self.reset_port(f"[read] 연속 읽기 실패 {n}회 → 포트 리셋")
+        if n >= _READ_FAIL_REINIT_AT:
+            now = time.time()
+            if self._last_fail_reinit is None or now - self._last_fail_reinit >= _REINIT_RETRY_S:
+                self._last_fail_reinit = now
+                _status(f"[read] 연속 읽기 실패 {n}회 → 재초기화")
+                if await self._reinit():
+                    self._fail_streak = 0
+                    _status("[read] 재초기화 완료, 측정 계속")
+                else:
+                    # 장치가 닫힌 상태라 읽을 수 없음 → 일시 중지하고 끊김과 같은 규칙으로 재시도
+                    self._enter_pause(f"[read] 재초기화 실패 → 측정 일시 중지, {_REINIT_RETRY_S:.0f}초 뒤 재시도")
+                    self._next_reinit_try = time.time() + _REINIT_RETRY_S
+        return False
+
+
+async def _acquire_first_frame(oes: OESAsync, retries: int = 20, delay_s: float = 0.2, guard: Optional[_LinkGuard] = None):
     # ✅ 첫 프레임도 DLL hang 가능 → 타임아웃으로 끊기
     call_timeout_s = _env_float("OES_FIRST_FRAME_TIMEOUT_S", 2.0)
 
     last_err = None
+    empty = 0
     for _ in range(max(1, retries)):
         try:
             x, y = await asyncio.wait_for(
@@ -1039,6 +1382,11 @@ async def _acquire_first_frame(oes: OESAsync, retries: int = 20, delay_s: float 
             raise TimeoutError(f"first frame timeout after {call_timeout_s}s") from e
         except Exception as e:
             last_err = e
+        else:
+            # (None, None): 3번째 실패마다 포트 리셋 1회(타임아웃이면 TimeoutError 로 올라감)
+            empty += 1
+            if guard is not None and empty % _READ_FAIL_RESET_AT == 0:
+                await guard.reset_port(f"[read] 첫 프레임 읽기 실패 {empty}회 → 포트 리셋")
         await asyncio.sleep(delay_s)
 
     raise RuntimeError(f"first frame failed: {last_err}")
@@ -1095,6 +1443,7 @@ async def cmd_init(ch: int, usb: int, dll_path: Optional[str], out_dir: Optional
             "model": str(getattr(oes, "_model_name", "UNKNOWN")),   # ✅ 추가
             "dll_resolved": str(getattr(oes, "_dll_path", "")),
             "dll_exists": bool(Path(getattr(oes, "_dll_path", "")).is_file()),
+            "serial": str(getattr(oes, "_serial", "") or ""),
         }
 
         if not ok:
@@ -1288,11 +1637,15 @@ async def cmd_measure(
         with contextlib.suppress(Exception):
             await oes._call(oes._apply_device_settings_blocking, int(oes.sChannel), int(integration_ms))
 
+        # ✅ 분광기 연결 감시/읽기 실패 복구(daemon 과 같은 규칙)
+        guard = _LinkGuard(oes, ch=int(ch), usb=int(usb), integration_ms=int(integration_ms))
+        await guard.ensure_at_start()
+
         _print_json({"kind": "status", "message": f"[worker] open csv: {out_csv}"})
         f = open(str(out_csv), "w", newline="", encoding="utf-8")
         w = csv.writer(f)
 
-        x, y = await _acquire_first_frame(oes)
+        x, y = await _acquire_first_frame(oes, guard=guard)
         x_list = x.tolist() if hasattr(x, "tolist") else list(x)
         y_list = y.tolist() if hasattr(y, "tolist") else list(y)
 
@@ -1351,6 +1704,10 @@ async def cmd_measure(
                 )
                 break
 
+            # ✅ 연결 목록이 기준과 다르면(또는 끊김 중이면) DLL 호출 없이 이번 샘플 건너뜀
+            if not await guard.before_read():
+                continue
+
             read_timeout_s = _env_float("OES_READ_TIMEOUT_S", 2.0)
             try:
                 x2, y2 = await asyncio.wait_for(oes._call(oes._acquire_one_slice_avg), timeout=read_timeout_s)
@@ -1365,7 +1722,22 @@ async def cmd_measure(
                 stopped = True
                 stop_reason = "read_timeout"
                 break
-            
+
+            # ✅ 읽은 직후 목록 재확인(바뀌었으면 버림) + 연속 실패 복구(리셋/재초기화)
+            try:
+                keep = await guard.after_read(x2 is not None and y2 is not None)
+            except _ResetCallTimeout as e:
+                msg = str(e)
+                _errlog(msg)
+                hard_abort = True
+                hard_abort_error = msg
+                hard_abort_exit_code = 125
+                stopped = True
+                stop_reason = "reset_timeout"
+                break
+            if not keep:
+                continue
+
             if x2 is None or y2 is None:
                 continue
 
@@ -1460,6 +1832,7 @@ async def cmd_measure(
             "rows": int(rows),
             "elapsed_s": float(elapsed),
         }
+        payload.update(guard.payload())
 
         if not ok_final and hard_abort_error:
             payload["error"] = hard_abort_error
@@ -1674,12 +2047,16 @@ async def _daemon_measure_once(
     with contextlib.suppress(Exception):
         await oes._call(oes._apply_device_settings_blocking, int(oes.sChannel), int(integration_ms))
 
+    # ✅ 분광기 연결 감시/읽기 실패 복구: 시작 전 목록 확인(다르면 복귀 대기 → 재초기화, 안 되면 예외)
+    guard = _LinkGuard(oes, ch=int(ch), usb=int(usb), integration_ms=int(integration_ms))
+    await guard.ensure_at_start()
+
     # ✅ (5) CSV open + header + 첫 프레임
     _print_json({"kind": "status", "message": f"[daemon] open csv: {out_csv_final}"})
     f = open(str(out_csv_final), "w", newline="", encoding="utf-8")
     w = csv.writer(f)
 
-    x, y = await _acquire_first_frame(oes)
+    x, y = await _acquire_first_frame(oes, guard=guard)
     x_list = x.tolist() if hasattr(x, "tolist") else list(x)
     y_list = y.tolist() if hasattr(y, "tolist") else list(y)
 
@@ -1738,6 +2115,10 @@ async def _daemon_measure_once(
             )
             break
 
+        # ✅ 연결 목록이 기준과 다르면(또는 끊김 중이면) DLL 호출 없이 이번 샘플 건너뜀
+        if not await guard.before_read():
+            continue
+
         read_timeout_s = _env_float("OES_READ_TIMEOUT_S", 2.0)
         try:
             x2, y2 = await asyncio.wait_for(oes._call(oes._acquire_one_slice_avg), timeout=read_timeout_s)
@@ -1750,6 +2131,21 @@ async def _daemon_measure_once(
             stopped = True
             stop_reason = "read_timeout"
             break
+
+        # ✅ 읽은 직후 목록 재확인(바뀌었으면 버림) + 연속 실패 복구(리셋/재초기화)
+        try:
+            keep = await guard.after_read(x2 is not None and y2 is not None)
+        except _ResetCallTimeout as e:
+            msg = str(e)
+            _errlog(msg)
+            hard_abort = True
+            hard_abort_error = msg
+            hard_abort_exit_code = 125
+            stopped = True
+            stop_reason = "reset_timeout"
+            break
+        if not keep:
+            continue
 
         if x2 is None or y2 is None:
             continue
@@ -1825,6 +2221,7 @@ async def _daemon_measure_once(
         "rows": int(rows),
         "elapsed_s": float(elapsed),
     }
+    payload.update(guard.payload())
     if not ok_final and hard_abort_error:
         payload["error"] = hard_abort_error
 
@@ -1893,6 +2290,7 @@ async def cmd_daemon(ch: int, usb: int, dll_path: Optional[str], out_dir: Option
             "dll_resolved": str(getattr(oes, "_dll_path", "")),
             "dll_exists": bool(Path(getattr(oes, "_dll_path", "")).is_file()),
             "out_dir": str(base_dir),
+            "serial": str(getattr(oes, "_serial", "") or ""),
         }
         if not ok:
             payload["error"] = str(getattr(oes, "_last_error", "")) or "initialize_device failed"
@@ -1909,7 +2307,7 @@ async def cmd_daemon(ch: int, usb: int, dll_path: Optional[str], out_dir: Option
                 mtx.release()
             os._exit(2)
 
-        _status(f"[worker] daemon READY ch={ch} usb={usb} resolved={getattr(oes,'sChannel',-1)} pixels={getattr(oes,'_npix',0)}")
+        _status(f"[worker] daemon READY ch={ch} usb={usb} resolved={getattr(oes,'sChannel',-1)} pixels={getattr(oes,'_npix',0)} serial={getattr(oes,'_serial','') or '?'}")
 
         # ✅ daemon READY 직후: 이전 실행에서 남은 global stop 잔재만 1회 정리
         with contextlib.suppress(Exception):
