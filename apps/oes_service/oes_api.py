@@ -78,8 +78,12 @@ def _expected_serial_for(ch: int) -> str:
     try:
         if not cfg_path.exists():
             return ""
-        with open(cfg_path, "r", encoding="utf-8") as fp:
-            cfg = json.loads(fp.read())
+        try:
+            with open(cfg_path, "r", encoding="utf-8") as fp:
+                cfg = json.loads(fp.read())
+        except Exception:
+            _status("[init] oes_config.json 읽기 실패 → 일련번호 확인 꺼짐")
+            return ""
         m = cfg.get("expected_serial") or {}
         if not isinstance(m, dict):
             return ""
@@ -845,9 +849,8 @@ class OESAsync:
         lim = self._npix if self._wl is None else int(min(self._npix, self._wl.size))
         self._roi_end = min(ROI_END_DEFAULT, int(lim))
         self._roi_start = min(ROI_START_DEFAULT, max(0, self._roi_end - 1))
+        # ✅ sChannel 은 initialize_device 가 모든 확인을 통과한 뒤에만 넣는다(실패·타임아웃 시 '닫힘' 유지)
 
-        self.sChannel = int(usb)
-                
     def _read_pixels(self, ch: int, npix: int) -> Tuple[int, Optional[np.ndarray]]:
         assert self.sp_dll is not None
         buf = (ctypes.c_int32 * npix)()
@@ -960,6 +963,9 @@ class OESAsync:
 
             return await asyncio.wait_for(self._call(func, *args), timeout=timeout_s)
 
+        # ✅ 모든 확인을 통과하기 전까지는 '닫힘'(sChannel=-1)
+        self.sChannel = -1
+
         try:
             await _run_step("load_bind", 3.0, self._load_and_bind_blocking)
 
@@ -993,6 +999,29 @@ class OESAsync:
                 self._last_error = msg
                 return False
 
+            # ✅ 일련번호 사전 확인: 포트 리셋·probe 전에 spDevInfo 로 읽어, 다른 챔버 분광기면 명령 없이 실패.
+            #    읽기 실패(rc<0, 예외, 빈 값)면 기존 순서대로 진행하고 채널 설정 뒤에 다시 읽는다. 타임아웃은 실패.
+            expected = _expected_serial_for(self._chamber)
+            dev_rc, dev_model, dev_serial = -1, "", ""
+            try:
+                dev_rc, dev_model, dev_serial = await _run_step("dev_info_pre", 4.0, self._read_dev_info_blocking, usb)
+            except asyncio.TimeoutError:
+                raise
+            except Exception as e:
+                _runlog(f"[init] 사전 spDevInfo EXC usb={usb}: {type(e).__name__}: {e}")
+            dev_pre_ok = int(dev_rc) >= 0 and bool(str(dev_serial).strip())
+            if dev_pre_ok:
+                self._dev_model = str(dev_model)
+                self._serial = str(dev_serial)
+                info["serial"] = self._serial
+                if expected and self._serial.strip().lower() != expected.strip().lower():
+                    msg = f"분광기 일련번호 불일치: CH{self._chamber} 기대={expected}, 실제={self._serial}"
+                    self._last_scan = info
+                    self._last_error = msg
+                    return False
+            else:
+                _runlog(f"[init] 사전 spDevInfo 읽기 실패 rc={dev_rc} usb={usb} → 채널 설정 뒤 다시 읽음")
+
             rr = int(await _run_step("setup_channel", 4.0, self._setup_channel_blocking, usb))
             info["setup_target_rc"] = int(rr)
             info["opened"] = [usb] if rr >= 0 else []
@@ -1021,28 +1050,38 @@ class OESAsync:
                 return False
 
             # ✅ 분광기 모델명·일련번호 기록(읽기 실패는 초기화를 실패시키지 않음. 단계 타임아웃은 기존대로 실패)
-            dev_rc, dev_model, dev_serial = -1, "", ""
-            try:
-                dev_rc, dev_model, dev_serial = await _run_step("dev_info", 4.0, self._read_dev_info_blocking, usb)
-            except asyncio.TimeoutError:
-                raise
-            except Exception as e:
-                _runlog(f"[init] spDevInfo EXC usb={usb}: {type(e).__name__}: {e}")
-            if int(dev_rc) < 0:
-                _runlog(f"[init] spDevInfo 읽기 실패 rc={dev_rc} usb={usb}")
-                dev_model, dev_serial = "", ""
-            self._dev_model = str(dev_model)
-            self._serial = str(dev_serial)
-            info["serial"] = self._serial
+            #    사전 확인에서 이미 읽었으면 다시 읽지 않는다.
+            if not dev_pre_ok:
+                dev_rc, dev_model, dev_serial = -1, "", ""
+                try:
+                    dev_rc, dev_model, dev_serial = await _run_step("dev_info", 4.0, self._read_dev_info_blocking, usb)
+                except asyncio.TimeoutError:
+                    raise
+                except Exception as e:
+                    _runlog(f"[init] spDevInfo EXC usb={usb}: {type(e).__name__}: {e}")
+                if int(dev_rc) < 0:
+                    _runlog(f"[init] spDevInfo 읽기 실패 rc={dev_rc} usb={usb}")
+                    dev_model, dev_serial = "", ""
+                self._dev_model = str(dev_model)
+                self._serial = str(dev_serial)
+                info["serial"] = self._serial
+
+            serial_match = (not expected) or self._serial.strip().lower() == expected.strip().lower()
+            if not expected:
+                check_txt = "확인=꺼짐(expected_serial 없음)"
+            elif serial_match:
+                check_txt = f"확인=일치(기대 {expected})"
+            else:
+                check_txt = f"확인=불일치(기대 {expected})"
 
             link_now = _list_cyusb_interfaces()
             _status(
                 f"[init] 분광기 확인 USB{usb}: 모델={self._dev_model or '?'}({self._model_name}), "
-                f"일련번호={self._serial or '(읽기 실패)'}, 연결 목록={link_now if link_now is not None else '(조회 불가)'}"
+                f"일련번호={self._serial or '(읽기 실패)'}, 연결 목록={link_now if link_now is not None else '(조회 불가)'}, "
+                f"읽은 시점={'사전' if dev_pre_ok else '채널 설정 후'}, {check_txt}"
             )
 
-            expected = _expected_serial_for(self._chamber)
-            if expected and self._serial.strip().lower() != expected.strip().lower():
+            if not serial_match:
                 msg = f"분광기 일련번호 불일치: CH{self._chamber} 기대={expected}, 실제={self._serial or '(읽기 실패)'}"
                 self._last_scan = info
                 self._last_error = msg
@@ -1060,6 +1099,7 @@ class OESAsync:
             )
             self._last_scan = info
             self._last_error = ""
+            self.sChannel = int(usb)
             _runlog(f"[init] success usb={usb} msg={msg}")
             return True
 
@@ -1117,8 +1157,13 @@ class OESAsync:
         dll = self.sp_dll
         h = getattr(dll, "_handle", None)
 
-        with contextlib.suppress(Exception):
-            await self._call(self._safe_close_channel_blocking, ch)
+        # ✅ 목록이 기준과 다르면 같은 번호가 다른 챔버 분광기일 수 있으므로 닫기 명령을 보내지 않는다
+        #    (감시 꺼짐·조회 실패(None)·목록 같음이면 기존대로 닫는다)
+        if self._link_baseline and not self.link_ok():
+            _runlog("[cleanup] 연결 목록이 기준과 다름 → 닫기 명령 생략")
+        else:
+            with contextlib.suppress(Exception):
+                await self._call(self._safe_close_channel_blocking, ch)
 
         # ✅ DLL 언로드는 기본 OFF(크래시 리스크 줄임). 정말 필요할 때만 켜기.
         do_unload = os.environ.get("OES_DLL_UNLOAD", "0") == "1"
@@ -1634,12 +1679,13 @@ async def cmd_measure(
             init_err = str(getattr(oes, "_last_error", "")) or "OES initialize_device() failed"
             raise RuntimeError(init_err)
 
-        with contextlib.suppress(Exception):
-            await oes._call(oes._apply_device_settings_blocking, int(oes.sChannel), int(integration_ms))
-
         # ✅ 분광기 연결 감시/읽기 실패 복구(daemon 과 같은 규칙)
+        #    목록 확인을 먼저 해서, 기준과 다를 때 설정 명령이 다른 챔버 분광기로 나가지 않게 한다
         guard = _LinkGuard(oes, ch=int(ch), usb=int(usb), integration_ms=int(integration_ms))
         await guard.ensure_at_start()
+
+        with contextlib.suppress(Exception):
+            await oes._call(oes._apply_device_settings_blocking, int(oes.sChannel), int(integration_ms))
 
         _print_json({"kind": "status", "message": f"[worker] open csv: {out_csv}"})
         f = open(str(out_csv), "w", newline="", encoding="utf-8")
@@ -2044,12 +2090,13 @@ async def _daemon_measure_once(
     except Exception:
         pass
 
-    with contextlib.suppress(Exception):
-        await oes._call(oes._apply_device_settings_blocking, int(oes.sChannel), int(integration_ms))
-
     # ✅ 분광기 연결 감시/읽기 실패 복구: 시작 전 목록 확인(다르면 복귀 대기 → 재초기화, 안 되면 예외)
+    #    목록 확인을 먼저 해서, 기준과 다를 때 설정 명령이 다른 챔버 분광기로 나가지 않게 한다
     guard = _LinkGuard(oes, ch=int(ch), usb=int(usb), integration_ms=int(integration_ms))
     await guard.ensure_at_start()
+
+    with contextlib.suppress(Exception):
+        await oes._call(oes._apply_device_settings_blocking, int(oes.sChannel), int(integration_ms))
 
     # ✅ (5) CSV open + header + 첫 프레임
     _print_json({"kind": "status", "message": f"[daemon] open csv: {out_csv_final}"})
