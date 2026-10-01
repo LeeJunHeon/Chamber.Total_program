@@ -125,6 +125,9 @@ class PlasmaCleaningRuntime:
         self._ig_ensure_on_cb: Optional[Callable[[], Awaitable[None]]] = None
         self._ig_read_mTorr_cb: Optional[Callable[[], Awaitable[float]]] = None
 
+        # 같은 CH 챔버가 바쁜지 묻는 함수(main.py 가 set_chamber_busy_probe 로 주입) — probe(ch) -> bool
+        self._chamber_busy_probe: Optional[Callable[[int], bool]] = None
+
         # 상태/태스크
         self._bg_tasks: list[asyncio.Task] = []
         self._event_tasks: list[asyncio.Task] = []   # ★ 추가
@@ -600,6 +603,21 @@ class PlasmaCleaningRuntime:
     def set_ig_device(self, ig: Optional[AsyncIG]) -> None:
         """IG.wait_for_base_pressure에서 사용할 실제 IG 인스턴스 교체"""
         self.ig = ig
+
+    def set_chamber_busy_probe(self, probe: Optional[Callable[[int], bool]]) -> None:
+        """main.py 가 주입: probe(ch) → 그 CH 챔버 런타임이 바쁜지(ChamberRuntime.is_busy).
+        is_busy 는 Start 접수~리스트 완주·정리 끝까지 True(리스트 delay·행 사이 포함)."""
+        self._chamber_busy_probe = probe
+
+    def _chamber_busy(self, ch: int) -> bool:
+        """같은 CH 챔버가 바쁘면 True. probe 가 없거나 예외면 False(기존 동작)."""
+        probe = getattr(self, "_chamber_busy_probe", None)
+        if not callable(probe):
+            return False
+        try:
+            return bool(probe(int(ch)))
+        except Exception:
+            return False
 
     def set_ig_callbacks(
         self,
@@ -1216,6 +1234,14 @@ class PlasmaCleaningRuntime:
 
         # 2-2) 같은 CH의 Chamber 공정도 실행 중이면 금지
         if runtime_state.is_running("chamber", ch):
+            msg = f"CH{ch}는 이미 다른 공정이 실행 중입니다."
+            self._post_warning("실행 오류", msg)
+            self._host_report_start(False, msg)   # ★ Host 실패
+            return
+
+        # 2-3) 같은 CH 챔버가 '바쁨'이면 금지 — 리스트 delay 행·행 사이처럼 running 표시가 꺼진 구간 포함
+        #      (그때 PC 가 게이트를 열면 다음 공정이 게이트 체크에서 실패한다). 문구는 2-2 와 같게(로봇 응답 동일).
+        if self._chamber_busy(ch):
             msg = f"CH{ch}는 이미 다른 공정이 실행 중입니다."
             self._post_warning("실행 오류", msg)
             self._host_report_start(False, msg)   # ★ Host 실패

@@ -557,6 +557,16 @@ class MainWindow(QWidget):
             )
             self.pc.set_pc_done_callback(self._on_pc_done)
 
+            # ✅ PC 시작 가드: 같은 CH 챔버가 바쁜지(리스트 delay·행 사이·정리 포함) 묻는 함수 주입
+            #    (주입 실패가 PC 런타임 전체를 끄지 않도록 따로 감싼다)
+            def _chamber_busy(ch: int) -> bool:
+                rt = self.ch1 if int(ch) == 1 else self.ch2
+                return bool(getattr(rt, "is_busy", False))
+            try:
+                self.pc.set_chamber_busy_probe(_chamber_busy)
+            except Exception as e:
+                self._broadcast_log("PC", f"챔버 상태 확인 함수 주입 실패: {e!r}")
+
         except Exception as e:
             self.pc = None
             try:

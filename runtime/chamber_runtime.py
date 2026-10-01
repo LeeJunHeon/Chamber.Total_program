@@ -1997,6 +1997,12 @@ class ChamberRuntime:
     async def _pump_ig_events(self) -> None:
         async for ev in self.ig.events():
             k = ev.kind
+            # ✅ 같은 CH Plasma Cleaning 이 이 IG 를 쓰는 동안 상태·압력은 PC 쪽이 기록한다
+            #    (IG 이벤트는 모든 구독자에게 복사된다 → PC 펌프가 같은 줄을 받는다).
+            #    챔버가 기록하면 챔버 로그와 다음 런 로그 앞부분(프리버퍼)에 PC 구간 줄이 섞인다.
+            #    Base 도달/실패는 기존처럼 process_controller 로 넘긴다(챔버 공정이 안 돌면 원래 무시됨).
+            if k in ("status", "pressure") and self._ig_in_use_by_pc():
+                continue
             if k == "status":
                 self.append_log(f"IG{self.ch}", ev.message or "")
             elif k == "pressure":
@@ -3700,7 +3706,9 @@ class ChamberRuntime:
                     if not self._skip_mfc_finalize_due_to_pc():
                         self.mfc.set_process_status(False)
                 with contextlib.suppress(Exception):
-                    if hasattr(self.ig, "set_process_status"): self.ig.set_process_status(False)
+                    # ✅ 같은 CH Plasma Cleaning 이 IG 를 쓰는 중이면 리셋하지 않는다(진행 중인 Base 대기를 끊음)
+                    if hasattr(self.ig, "set_process_status") and not self._ig_in_use_by_pc():
+                        self.ig.set_process_status(False)
                 with contextlib.suppress(Exception):
                     if self.dc_pulse and hasattr(self.dc_pulse, "set_process_status"):
                         self.dc_pulse.set_process_status(False)
@@ -4109,6 +4117,15 @@ class ChamberRuntime:
             if runtime_state.is_running("chamber", self.ch):
                 self._host_report_start(False, "this chamber already running")
                 self._post_warning("실행 오류", f"CH{self.ch}는 이미 다른 공정이 실행 중입니다.")
+                return
+
+            # ✅ 같은 CH Plasma Cleaning 실행 중이면 장치를 건드리기 전에 거절(다른 CH 의 PC 는 막지 않는다)
+            #    그대로 진행하면 프리플라이트 후 게이트 체크(PC 가 게이트를 연다)에서 늦게 실패하고,
+            #    그 실패 정리가 PC 와 같이 쓰는 IG 의 Base 대기를 끊는다(+ 에러 기록/챗 E301).
+            #    호스트 START_SPUTTER 는 handlers 가 같은 이유로 먼저 거절한다(CSV 로드 중 PC 가 시작된 경우만 여기서 걸림).
+            if runtime_state.is_running("pc", self.ch):
+                self._host_report_start(False, f"CH{self.ch} Plasma Cleaning 실행 중")
+                self._post_warning("실행 오류", f"CH{self.ch} Plasma Cleaning이 실행 중입니다.\n끝난 뒤 시작하십시오.")
                 return
 
             if self.process_controller.is_running:
@@ -4978,6 +4995,25 @@ class ChamberRuntime:
             return
         await mfc.cleanup()
 
+    def _ig_in_use_by_pc(self) -> bool:
+        """
+        같은 CH 의 Plasma Cleaning 이 실행 중이면 True.
+        PC 는 항상 선택한 CH 의 IG(ig1/ig2 — 이 챔버와 같은 객체)를 쓰고, 시작 수락~종료 정리 끝까지 running 이다.
+        → 그동안 챔버는 이 IG 를 대기 취소/정리/상태 리셋/강제 종료하지 않는다(PC 의 Base 대기·연결 보호).
+        """
+        try:
+            return bool(runtime_state.is_running("pc", int(self.ch)))
+        except Exception:
+            return False
+
+    async def _ig_cleanup_if_unshared(self, ig) -> None:
+        """IG 연결 종료 직전 재확인: 그 사이 같은 CH Plasma Cleaning 이 시작했으면 끊지 않는다.
+        (재확인과 cleanup 시작 사이에 await 가 없다 — _mfc_cleanup_if_unshared 와 같은 형태)"""
+        if self._ig_in_use_by_pc():
+            self.append_log("IG", "연결 종료 직전 재확인: 같은 CH Plasma Cleaning 이 IG 사용 중 → ig cleanup 생략")
+            return
+        await ig.cleanup()
+
     async def _stop_device_watchdogs(self, *, light: bool = False) -> None:
         if light:
             with contextlib.suppress(Exception):
@@ -5048,8 +5084,12 @@ class ChamberRuntime:
             self._bg_tasks = []
 
         # 1) IG cancel (timeout 유지)
+        #    ✅ 같은 CH Plasma Cleaning 이 IG 를 쓰는 중이면 건드리지 않는다(PC 의 Base 대기를 끊지 않도록)
+        _skip_ig = self._ig_in_use_by_pc()
+        if _skip_ig:
+            self.append_log("IG", "같은 CH Plasma Cleaning 이 IG 사용 중 → IG 대기 취소/정리 생략 (공유 장치 보호)")
         try:
-            if self.ig and hasattr(self.ig, "cancel_wait"):
+            if (not _skip_ig) and self.ig and hasattr(self.ig, "cancel_wait"):
                 with contextlib.suppress(asyncio.TimeoutError):
                     await asyncio.wait_for(self._ig_cancel_for_cleanup(), timeout=2.0)
         except Exception:
@@ -5089,8 +5129,13 @@ class ChamberRuntime:
                 continue
             if dev and hasattr(dev, "cleanup"):
                 try:
-                    # MFC 는 연결 종료 직전에 다른 사용자를 한 번 더 확인한다
-                    coro = self._mfc_cleanup_if_unshared(dev) if dev is self.mfc else dev.cleanup()
+                    # MFC/IG 는 연결 종료 직전에 다른 사용자를 한 번 더 확인한다
+                    if dev is self.mfc:
+                        coro = self._mfc_cleanup_if_unshared(dev)
+                    elif dev is self.ig:
+                        coro = self._ig_cleanup_if_unshared(dev)
+                    else:
+                        coro = dev.cleanup()
                 except Exception:
                     continue
                 try:
@@ -5270,8 +5315,20 @@ class ChamberRuntime:
             ("RGA", self.rga),
             ("OES", self.oes),
         ]
+        # ✅ 다른 공정이 쓰는 공유 장치는 강제로 닫지 않는다
+        #    · IG  — 같은 CH Plasma Cleaning 실행 중(_ig_in_use_by_pc)
+        #    · MFC — 다른 런/폴링 사용자 있음(_skip_mfc_finalize_due_to_pc, 무거운 정리와 같은 판정)
+        _keep_shared: list[str] = []
+        with contextlib.suppress(Exception):
+            if self._ig_in_use_by_pc():
+                _keep_shared.append("IG")
+        with contextlib.suppress(Exception):
+            if self._skip_mfc_finalize_due_to_pc():
+                _keep_shared.append("MFC")
+        if _keep_shared:
+            self.append_log("MAIN", f"🧯 강제 복구: 다른 공정이 사용 중인 공유 장치는 닫지 않음 → {', '.join(_keep_shared)}")
         for name, dev in dev_list:
-            if dev is None:
+            if dev is None or name in _keep_shared:
                 continue
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(self._hard_close_device_transport(dev, name), timeout=3.0)

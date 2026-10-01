@@ -83,8 +83,15 @@ class AsyncIG:
         # 응답 라인 큐(프로토콜 → 워커)
         self._line_q: asyncio.Queue[str] = asyncio.Queue(maxsize=1024)
 
-        # 이벤트 큐(상위/UI 소비용)
+        # 이벤트 큐(상위/UI 소비용) — 발생한 이벤트는 모두 여기로 들어온다(중앙 큐)
         self._event_q: asyncio.Queue[IGEvent] = asyncio.Queue(maxsize=1024)
+
+        # ✅ 이벤트 구독자(받는 쪽마다 자기 큐) + 중앙 큐 → 구독자 큐 복사 태스크
+        #    챔버(상주 펌프)와 Plasma Cleaning(런 동안 펌프)이 같은 IG 를 볼 때
+        #    한 큐에서 나눠 꺼내 가면 이벤트 하나가 한쪽에만 간다(Base 도달/압력이 PC 로그에서 빠짐).
+        #    MFC 와 같은 방식으로 모든 구독자에게 복사한다. cleanup() 은 이 둘을 건드리지 않는다(상주 펌프 유지).
+        self._event_subscribers: list[asyncio.Queue[IGEvent]] = []
+        self._event_broadcast_task: Optional[asyncio.Task] = None
 
         # 태스크들
         self._want_connected: bool = False
@@ -225,21 +232,15 @@ class AsyncIG:
                 self._bg_poll_task = None
 
             # 3) 커맨드 워커 중지
+            #    ✅ 취소한 자식 태스크를 기다릴 때 올라오는 CancelledError 는 _cancel_and_wait 가 받는다
+            #       (기존: except Exception 만 있어 여기서 cleanup 전체가 끊겨 4)~6) 미실행 → 연결이 열린 채 워커만 죽음)
             if self._cmd_worker_task:
-                self._cmd_worker_task.cancel()
-                try:
-                    await self._cmd_worker_task
-                except Exception:
-                    pass
+                await self._cancel_and_wait(self._cmd_worker_task)
                 self._cmd_worker_task = None
 
             # 4) 워치독 중지
             if self._watchdog_task:
-                self._watchdog_task.cancel()
-                try:
-                    await self._watchdog_task
-                except Exception:
-                    pass
+                await self._cancel_and_wait(self._watchdog_task)
                 self._watchdog_task = None
 
             # 5) 큐/라인 비우기
@@ -426,10 +427,74 @@ class AsyncIG:
     async def events(self) -> AsyncGenerator[IGEvent, None]:
         """
         상태/압력/성공/실패 이벤트를 비동기 제너레이터로 전달.
+        여러 소비자(챔버 상주 펌프 + Plasma Cleaning 펌프)가 동시에 호출해도 '모두' 같은 이벤트를 받는다(브로드캐스트).
         """
-        while True:
-            ev = await self._event_q.get()
-            yield ev
+        # 브로드캐스트 루프 기동 보장(첫 구독 전에 쌓인 이벤트는 첫 구독자가 받는다 — 기존과 같음)
+        self._ensure_event_broadcast_task()
+
+        q: asyncio.Queue[IGEvent] = asyncio.Queue(maxsize=1024)
+        self._event_subscribers.append(q)
+        try:
+            while True:
+                ev = await q.get()
+                yield ev
+        finally:
+            # 구독 해제 (펌프 태스크 취소/종료 시)
+            with contextlib.suppress(ValueError):
+                self._event_subscribers.remove(q)
+
+    def _ensure_event_broadcast_task(self) -> None:
+        """중앙 이벤트 큐(_event_q) → 구독자 큐로 복사하는 태스크 보장."""
+        t = self._event_broadcast_task
+        if t and not t.done():
+            return
+        loop = asyncio.get_running_loop()
+        self._event_broadcast_task = loop.create_task(
+            self._event_broadcast_loop(), name="IGEventBroadcast"
+        )
+
+    async def _event_broadcast_loop(self) -> None:
+        """_event_q 에서 꺼낸 이벤트를 모든 구독자 큐에 복사(구독자 큐가 가득 차면 그 큐의 가장 오래된 것을 버림)."""
+        try:
+            while True:
+                ev = await self._event_q.get()
+                # 구독자 리스트 스냅샷을 떠서 순회 중 변경에 안전하게 처리
+                for q in list(self._event_subscribers):
+                    try:
+                        q.put_nowait(ev)
+                    except asyncio.QueueFull:
+                        with contextlib.suppress(Exception):
+                            q.get_nowait()
+                        with contextlib.suppress(Exception):
+                            q.put_nowait(ev)
+                    except Exception:
+                        pass
+        except asyncio.CancelledError:
+            return
+
+    async def _cancel_and_wait(self, t: Optional[asyncio.Task]) -> None:
+        """
+        자식 태스크를 취소하고 끝날 때까지 기다린다.
+        - 취소된 자식을 await 하면 CancelledError(BaseException)가 올라온다 → except Exception 으로는 못 잡아
+          cleanup()/pause_watchdog() 가 중간에 끊겼다(MFC _cancel_task 와 같은 문제).
+        - 자식 취소로 올라온 것은 삼키고, 기다리는 동안 '이 코루틴'에 새 취소 요청이 오면(바깥 취소·타임아웃) 다시 올린다.
+          (이전에 받은 취소를 이미 처리한 태스크에서도 잘못 다시 올리지 않도록 '기다리기 전 대비 늘었는지'로 판단)
+        """
+        if t is None:
+            return
+        cur = asyncio.current_task()
+        if t is cur:
+            return
+        _cnt = getattr(cur, "cancelling", None)
+        before = _cnt() if callable(_cnt) else 0
+        t.cancel()
+        try:
+            await t
+        except asyncio.CancelledError:
+            if callable(_cnt) and _cnt() > before:
+                raise
+        except Exception:
+            pass
 
     def _resolve_endpoint(self) -> tuple[str, int]:
         """최종 접속 host/port 결정: override > config 기본값."""
@@ -1169,11 +1234,9 @@ class AsyncIG:
         self._want_connected = False
         t = self._watchdog_task
         if t and not t.done():
-            t.cancel()
-            try:
-                await t
-            except Exception:
-                pass
+            # ✅ 취소한 워치독을 기다릴 때의 CancelledError 를 받는다
+            #    (기존: 여기서 끊겨 _bounce_connection 의 연결 끊기/워치독 재개 미실행 → 주소 변경 후 예전 주소에 붙은 채 남음)
+            await self._cancel_and_wait(t)
         self._watchdog_task = None
 
     async def resume_watchdog(self) -> None:
