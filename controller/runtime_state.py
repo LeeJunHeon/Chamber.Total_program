@@ -72,6 +72,11 @@ class RuntimeState:
     )
     # 공유 펄스 장비 엔드포인트 클레임: {"host:port": {"ch": int, "kind": str}}
     _pulse_claims: Dict[str, Dict[str, object]] = field(default_factory=dict)
+    # 런(공정) 단위 MFC 사용자: owner -> {자원 키, ...}
+    #  · _shared_users(폴링 사용자)는 '폴링이 필요한 구간'만 잡는다(챔버는 메인 공정 시간 동안만).
+    #  · 이 집합은 런 전체(시작 수락 ~ 자기 MFC 정리 완료)를 잡는다.
+    #    → 대기열 전체 폐기/전체 초기화/연결 종료는 여기에 다른 owner 가 없을 때만 한다.
+    _run_users: Dict[str, set] = field(default_factory=dict)
 
     # ---------- 기본 마킹 API ----------
     def mark_started(self, kind: str, channel: Optional[int] = None) -> None:
@@ -165,6 +170,41 @@ class RuntimeState:
     def shared_snapshot(self) -> Dict[str, list]:
         with self._lock:
             return {k: sorted(v) for k, v in self._shared_users.items() if v}
+
+    # ---------- 런 단위 사용자(폴링 사용자와 별개) ----------
+    def begin_run_use(self, owner: str, resources: Iterable[str]) -> None:
+        """owner 의 런 자원 집합을 등록(같은 owner 재호출은 집합 교체 — 멱등). 빈 집합이면 해제."""
+        o = str(owner)
+        rs = {str(r) for r in (resources or []) if str(r)}
+        with self._lock:
+            if rs:
+                self._run_users[o] = rs
+            else:
+                self._run_users.pop(o, None)
+
+    def end_run_use(self, owner: str) -> None:
+        """owner 의 런 등록 해제. 없던 owner 면 아무 일도 없다."""
+        with self._lock:
+            self._run_users.pop(str(owner), None)
+
+    def run_users(self, resource: str) -> set:
+        """resource 를 런 단위로 쓰고 있는 owner 집합."""
+        r = str(resource)
+        with self._lock:
+            return {o for o, rs in self._run_users.items() if r in rs}
+
+    def run_snapshot(self) -> Dict[str, list]:
+        with self._lock:
+            return {o: sorted(rs) for o, rs in self._run_users.items() if rs}
+
+    def other_users(self, resource: str, owner: str) -> set:
+        """resource 를 owner 말고 쓰는 주체 = 폴링 사용자 ∪ 런 사용자 − {owner}."""
+        r, me = str(resource), str(owner)
+        with self._lock:
+            users = set(self._shared_users.get(r, set()))
+            users |= {o for o, rs in self._run_users.items() if r in rs}
+        users.discard(me)
+        return users
 
     # ---------- 조회/스냅샷 ----------
     def is_running(self, kind: str, channel: Optional[int] = None) -> bool:
@@ -312,6 +352,7 @@ class RuntimeState:
                 "last_finish_mono": {k: dict(v) for k, v in self._last_finish_mono.items()},
                 "last_error": {k: dict(v) for k, v in self._last_error.items()},
                 "shared": {k: sorted(v) for k, v in self._shared_users.items() if v},
+                "run_users": {o: sorted(rs) for o, rs in self._run_users.items() if rs},
             }
 
 

@@ -39,9 +39,11 @@ class MFCEvent:
     gas: Optional[str] = None                     # flow
     value: Optional[float] = None                 # flow/pressure numeric(UI 단위)
     text: Optional[str] = None                    # pressure 문자열 표시값
+    owner: Optional[str] = None                   # 명령을 낸 주체("chamber1"/"pc2"). None = 공용 → 모든 소비자
+    channel: Optional[int] = None                 # 관련 가스 채널(있을 때만)
 
 # =============== 명령 레코드 ===============
-@dataclass
+@dataclass(eq=False)
 class Command:
     cmd_str: str
     callback: Optional[Callable[[Optional[str]], None]]
@@ -51,6 +53,25 @@ class Command:
     retries_left: int
     allow_no_reply: bool
     expect_prefixes: tuple[str, ...] = ()
+    owner: Optional[str] = None                   # 명령 주체(공유 MFC 에서 결과를 그 주체에게만 돌려주기 위함)
+    done: Optional["asyncio.Future[bool]"] = None # no-reply 전송 결과: True=실제 전송됨, False=전송 전 폐기/실패
+    enq_mono: float = 0.0
+    sent_mono: float = 0.0
+
+
+# no-reply 명령(가스 ON/OFF·설정·밸브·Zeroing)의 '실제 전송' 확인 최대 대기(초).
+# 공유 사용 중 대기열이 밀려도 충분한 값. 넘으면 켜는 계열은 대기열에서 철회 후 실패, 끄는 계열은 남겨 두고 실패 보고.
+SEND_CONFIRM_TIMEOUT_S = 30.0
+
+
+@dataclass(eq=False)
+class _StabJob:
+    """채널별 FLOW_ON 안정화 작업(공유 MFC 에서 채널마다 따로 관리)."""
+    channel: int
+    target_hw: float
+    owner: Optional[str]
+    created_mono: float
+    attempts: int = 0
 
 # =============== Async 컨트롤러 ===============
 def mfc_resource_key(mfc) -> str:
@@ -150,9 +171,15 @@ class AsyncMFC:
 
         # ⬇ PlasmaCleaning 전용: 선택된 가스 채널 기억
         self._selected_ch: Optional[int] = None
+        self._selected_owner: Optional[str] = None
 
         # ⬇ 채널별 ON 상태(마스크 미사용 시 모니터 필터 기준)
         self._flow_on_flags = {1: False, 2: False, 3: False}
+        # ⬇ 채널별 마지막 사용 주체(공유 MFC 에서 '그 주체 몫'만 정리할 때 기준)
+        self._ch_owner: dict[int, Optional[str]] = {1: None, 2: None, 3: None}
+        # ⬇ 연결 수명주기(start/cleanup 직렬화) + 종료 진행 중 표시(진행 중엔 is_connected()=False)
+        self._lifecycle_lock: Optional[asyncio.Lock] = None
+        self._closing: bool = False
 
         # 폴링 사이클 중첩 방지 플래그
         self._poll_cycle_active: bool = False
@@ -160,11 +187,8 @@ class AsyncMFC:
         # ★ 과거 no-reply 명령의 에코를 1회성으로 버리기 위한 대기열
         self._skip_echos: deque[str] = deque()
 
-        # 안정화 상태
-        self._stab_ch: Optional[int] = None
-        self._stab_target_hw: float = 0.0
-        self._stab_attempts: int = 0
-        self._stab_pending_cmd: Optional[str] = None  # FLOW_ON 확정 시점 관리
+        # 안정화 상태: 채널별 작업(하나의 감시 태스크 _stab_task 가 R60 한 번으로 모두 판정)
+        self._stab_jobs: dict[int, _StabJob] = {}
 
         # Qt의 clear+soft-drain 타이밍을 모사하기 위한 플래그
         self._last_connect_mono: float = 0.0
@@ -232,12 +256,23 @@ class AsyncMFC:
         self._reconnect_backoff_ms = self._cfg_int("MFC_RECONNECT_BACKOFF_START_MS", 1000)
 
     def is_connected(self) -> bool:
-        """프리플라이트/상태 체크용: 현재 TCP 연결 여부를 반환."""
-        return bool(self._connected)
+        """프리플라이트/상태 체크용: 현재 TCP 연결 여부를 반환. 종료(cleanup) 진행 중이면 False."""
+        return bool(self._connected) and not self._closing
+
+    def _lifecycle(self) -> asyncio.Lock:
+        """start()/cleanup() 직렬화용 락(루프 안에서 처음 쓸 때 생성)."""
+        if self._lifecycle_lock is None:
+            self._lifecycle_lock = asyncio.Lock()
+        return self._lifecycle_lock
 
     # ---------- 공용 API ----------
     async def start(self):
-        """워치독/커맨드 워커 시작(연결은 워치독이 관리). 재호출/죽은 태스크 회복 안전."""
+        """워치독/커맨드 워커 시작(연결은 워치독이 관리). 재호출/죽은 태스크 회복 안전.
+        cleanup() 이 진행 중이면 끝날 때까지 기다렸다가 다시 올린다(공유 MFC: 한쪽 종료 ↔ 다른 쪽 시작 경합)."""
+        async with self._lifecycle():
+            await self._start_locked()
+
+    async def _start_locked(self):
         # 1) 죽은 태스크 정리
         if self._watchdog_task and self._watchdog_task.done():
             self._watchdog_task = None
@@ -265,18 +300,30 @@ class AsyncMFC:
         await self.start()
 
     async def cleanup(self):
+        # 진행 중에는 is_connected()=False → 다른 런타임이 '이미 연결됨'으로 보고 start 를 건너뛰지 않는다.
+        # start() 는 같은 락을 기다리므로 종료가 끝난 뒤 다시 올린다.
+        async with self._lifecycle():
+            self._closing = True
+            try:
+                await self._cleanup_locked()
+            finally:
+                self._closing = False
+
+    async def _cleanup_locked(self):
         await self._emit_status("MFC 종료 절차 시작")
         self._want_connected = False
 
         # 폴링/안정화 태스크 중지
         await self._cancel_task("_poll_task")
+        self._cancel_all_stab_jobs(reason="MFC 연결 종료", notify=True)
         await self._cancel_task("_stab_task")
 
-        # 명령 워커/워치독/이벤트 브로드캐스트 중지
+        # 명령 워커/워치독 중지
         await self._cancel_task("_cmd_worker_task")
         await self._cancel_task("_watchdog_task")
-        await self._cancel_task("_event_broadcast_task")
-        self._event_subscribers.clear()
+        # ⚠ 이벤트 브로드캐스트 태스크와 구독자 목록은 유지한다: 챔버의 MFC 이벤트 펌프는 상주(keep-alive) 태스크라
+        #   구독자를 비우면 펌프가 살아 있는 채로 이벤트를 영영 못 받는다(재생성도 안 됨).
+        #   (_cancel_task 가 CancelledError 를 못 잡아 이 아래가 그동안 실행되지 않았던 것 — 함께 수정)
 
         # 큐/인플라이트 정리
         self._purge_pending("shutdown")
@@ -284,7 +331,7 @@ class AsyncMFC:
         # TCP 종료 (결정적 종료: wait_closed 대기 + 라인큐/에코큐 비움)
         if self._reader_task:
             self._reader_task.cancel()
-            with contextlib.suppress(Exception):
+            with contextlib.suppress(Exception, asyncio.CancelledError):
                 await self._reader_task
             self._reader_task = None
 
@@ -369,84 +416,81 @@ class AsyncMFC:
                 self._event_subscribers.remove(q)
 
     # ---- 고수준 제어 API (기존 handle_command 세분화) ----
-    async def set_flow(self, channel: int, ui_value: float):
-        """FLOW_SET + (옵션) READ_FLOW_SET 검증."""
+    async def set_flow(self, channel: int, ui_value: float, *, owner: Optional[str] = None) -> bool:
+        """FLOW_SET + (옵션) READ_FLOW_SET 검증. 실제 전송(또는 검증)된 뒤에만 확정, 아니면 실패. 결과를 bool 로도 돌려준다."""
         scaled = self._ui_to_hw(channel, float(ui_value))  # %FS
         await self._emit_status(f"Ch{channel} GAS 스케일: {ui_value:.2f}sccm → 장비 {scaled:.2f}%FS")
+        if channel in self._ch_owner:
+            self._ch_owner[channel] = owner
 
         # SET (no-reply)
         set_cmd = self._mk_cmd("FLOW_SET", channel=channel, value=scaled)
-        self._enqueue(set_cmd, None, allow_no_reply=True, tag=f"[SET ch{channel}]")
+        cmd = self._enqueue(set_cmd, None, allow_no_reply=True, tag=f"[SET ch{channel}]",
+                            owner=owner, track=True)
 
-        # ▼ 검증 비활성화면 즉시 확정
+        # ▼ 검증 비활성화: 실제로 전송된 뒤 확정(전송 전 폐기/대기 초과면 실패)
         if not self._verify_enabled:
-            self.last_setpoints[channel] = scaled
-            await self._emit_confirmed("FLOW_SET")
-            return
+            ok, why = await self._await_sent(cmd)
+            if ok:
+                self.last_setpoints[channel] = scaled
+                await self._emit_confirmed("FLOW_SET", owner=owner, channel=channel)
+            else:
+                await self._emit_failed("FLOW_SET", f"Ch{channel} FLOW_SET {why}", owner=owner, channel=channel)
+            return ok
 
         # 검증
-        ok = await self._verify_flow_set(channel, scaled)
+        ok = await self._verify_flow_set(channel, scaled, owner=owner)
         if ok:
             self.last_setpoints[channel] = scaled
-            await self._emit_confirmed("FLOW_SET")
+            await self._emit_confirmed("FLOW_SET", owner=owner, channel=channel)
         else:
-            await self._emit_failed("FLOW_SET", f"Ch{channel} FLOW_SET 확인 실패")
+            await self._emit_failed("FLOW_SET", f"Ch{channel} FLOW_SET 확인 실패", owner=owner, channel=channel)
+        return ok
 
-    async def flow_on(self, channel: int):
-        """R69를 읽지 않고 내부 섀도우 마스크만 갱신하여 L0 적용."""
-        # 안정화 상태 초기화
-        await self._cancel_task("_stab_task")
-        self._stab_ch = None
-        self._stab_target_hw = 0.0
-        self._stab_pending_cmd = None
-
-        '''
-        비트 마스크 사용 -> 단일 채널로(Plasma Cleaning 때문)
-        # 섀도우 마스크에서 해당 채널만 1로 켜기
-        target = self._mask_set(channel, True)
-
-        # L0 전송(no-reply) → 섀도우 갱신
-        self._enqueue(self._mk_cmd("SET_ONOFF_MASK", target), None,
-                      allow_no_reply=True, tag=f"[L0 {target}]", gap_ms=4000) # flow 검증을 안하니 여유있게
-        self._mask_shadow = target
-        '''
+    async def flow_on(self, channel: int, *, owner: Optional[str] = None) -> None:
+        """개별 채널 ON(L{ch}1). 실제 전송 + 기존 최소 대기 뒤 (옵션) 채널별 안정화 → 확정."""
+        # 같은 채널의 이전 안정화만 정리(다른 채널·다른 주체의 안정화는 건드리지 않는다)
+        prev_owner = self._stab_owner(channel)
+        self._cancel_stab_job(channel, reason="같은 채널 FLOW_ON 재요청",
+                              notify=(prev_owner is not None and prev_owner != owner))
 
         # 섀도우 마스크 갱신(내부 상태 유지용)
         target = self._mask_set(channel, True)
+        if channel in self._ch_owner:
+            self._ch_owner[channel] = owner
 
         # ▶ 개별 채널 ON (L{ch}1) — 마스크(L0) 금지
-        self._enqueue(self._mk_cmd("FLOW_ON", channel=channel), None,
-                    allow_no_reply=True, tag=f"[FLOW_ON ch{channel}]")
+        cmd = self._enqueue(self._mk_cmd("FLOW_ON", channel=channel), None,
+                            allow_no_reply=True, tag=f"[FLOW_ON ch{channel}]",
+                            owner=owner, track=True)
         self._mask_shadow = target
 
-        # ✅ 플래그
+        # 실제 전송 + 장비 반영 최소 대기(기존과 같은 MFC_DELAY_MS, 최소 200ms)
+        ok, why = await self._await_sent(
+            cmd, min_delay_s=max(self._cfg_int("MFC_DELAY_MS", 1000), 200) / 1000.0)
+        if not ok:
+            await self._emit_failed("FLOW_ON", f"ch{channel} FLOW_ON {why}", owner=owner, channel=channel)
+            return
+
+        # ✅ 플래그(유량 감시 기준)
         self._flow_on_flags[channel] = True
 
-        # 장비 반영 대기(예전 코드와 동일한 최소 대기 보장)
-        await asyncio.sleep(max(self._cfg_int("MFC_DELAY_MS", 1000), 200) / 1000.0)
-
-        # (옵션) 안정화 루프 유지 — R69 없이도 R60 기반 안정화는 가능
+        # (옵션) 채널별 안정화 — R60 기반
         if self._stab_enabled:
             tgt = float(self.last_setpoints.get(channel, 0.0))
             if tgt > 0:
-                self._stab_ch = channel
-                self._stab_target_hw = tgt
-                self._stab_attempts = 0
-                self._stab_pending_cmd = "FLOW_ON"
-                self._stab_task = asyncio.create_task(self._stabilization_loop())
+                self._start_stab_job(channel, tgt, owner)
                 await self._emit_status(f"FLOW_ON: ch{channel} 안정화 시작 (목표 HW {tgt:.2f})")
                 return
 
-        await self._emit_confirmed("FLOW_ON")
+        await self._emit_confirmed("FLOW_ON", owner=owner, channel=channel)
 
-    async def flow_off(self, channel: int):
-        """R69를 읽지 않고 내부 섀도우 마스크만 갱신하여 L0 적용."""
-        # 해당 채널 안정화 중이면 중단
-        if self._stab_ch == channel:
-            await self._cancel_task("_stab_task")
-            self._stab_ch = None
-            self._stab_target_hw = 0.0
-            self._stab_pending_cmd = None
+    async def flow_off(self, channel: int, *, owner: Optional[str] = None) -> None:
+        """개별 채널 OFF(L{ch}0). OFF 는 대기열에서 철회하지 않는다(늦더라도 반드시 전송)."""
+        # 해당 채널 안정화 중이면 중단(다른 주체의 안정화였으면 그 주체에게 실패로 알림)
+        prev_owner = self._stab_owner(channel)
+        if self._cancel_stab_job(channel, reason="FLOW_OFF 요청",
+                                 notify=(prev_owner is not None and prev_owner != owner)):
             await self._emit_status(f"FLOW_OFF 요청: ch{channel} 안정화 취소")
 
         # 목표 GAS/모니터링 카운터 리셋
@@ -454,41 +498,38 @@ class AsyncMFC:
         self.flow_error_counters[channel] = 0
         self._flow_on_flags[channel] = False
 
-        '''
-        비트 마스크 사용 -> 단일 채널로(Plasma Cleaning 때문)
-        # 섀도우 마스크에서 해당 채널만 0으로 끄기
-        target = self._mask_set(channel, False)
-
-        # L0 전송(no-reply) → 섀도우 갱신
-        self._enqueue(self._mk_cmd("SET_ONOFF_MASK", target), None,
-                      allow_no_reply=True, tag=f"[L0 {target}]")
-        self._mask_shadow = target
-        '''
-
         # 섀도우 마스크 갱신(내부 상태 유지용)
         target = self._mask_set(channel, False)
 
         # ★ 보호: shutdown 진행 중이면 송신 불가 → 가짜 OK 방지
         #   (일시 TCP 끊김은 cmd_worker가 reconnect 후 자동 처리하도록 enqueue 허용)
         if not self._want_connected:
-            await self._emit_failed("FLOW_OFF", "MFC not ready (shutdown)")
+            await self._emit_failed("FLOW_OFF", "MFC not ready (shutdown)", owner=owner, channel=channel)
             return
 
         # ▶ 개별 채널 OFF (L{ch}0) — 마스크(L0) 금지
-        self._enqueue(self._mk_cmd("FLOW_OFF", channel=channel), None,
-                    allow_no_reply=True, tag=f"[FLOW_OFF ch{channel}]")
+        cmd = self._enqueue(self._mk_cmd("FLOW_OFF", channel=channel), None,
+                            allow_no_reply=True, tag=f"[FLOW_OFF ch{channel}]",
+                            owner=owner, track=True)
         self._mask_shadow = target
 
-        # 장비 반영 대기 후 확정
-        await asyncio.sleep(max(self._cfg_int("MFC_DELAY_MS", 1000), 200) / 1000.0)
-        await self._emit_confirmed("FLOW_OFF")
+        # 실제 전송 + 장비 반영 대기 후 확정
+        ok, why = await self._await_sent(
+            cmd, min_delay_s=max(self._cfg_int("MFC_DELAY_MS", 1000), 200) / 1000.0,
+            withdraw_on_timeout=False)
+        if ok:
+            await self._emit_confirmed("FLOW_OFF", owner=owner, channel=channel)
+        else:
+            await self._emit_failed("FLOW_OFF", f"ch{channel} FLOW_OFF {why}", owner=owner, channel=channel)
 
     # === PlasmaCleaning: 선택 가스 전용 API (L{ch}{1/0} 개별 명령 사용) ===
-    async def gas_select(self, gas_idx: int) -> None:
+    async def gas_select(self, gas_idx: int, *, owner: Optional[str] = None) -> None:
         gi = int(gas_idx)
         if gi not in self.gas_map:
             raise ValueError(f"지원하지 않는 가스 채널: {gas_idx}")
         self._selected_ch = gi
+        self._selected_owner = owner
+        self._ch_owner[gi] = owner
         await self._emit_status(f"가스 선택: ch{gi} ({self.gas_map.get(gi, '-')})")
 
     def _require_selected_ch(self) -> int:
@@ -497,56 +538,18 @@ class AsyncMFC:
             raise RuntimeError("선택된 가스가 없습니다. gas_select()를 먼저 호출하세요.")
         return gi
 
-    async def flow_set_on(self, ui_value: float) -> None:
-        """선택 채널에 FLOW_SET → FLOW_ON(개별 명령)"""
+    async def flow_set_on(self, ui_value: float, *, owner: Optional[str] = None) -> None:
+        """선택 채널에 FLOW_SET → FLOW_ON(개별 명령). FLOW_SET 이 실패하면 FLOW_ON 도 실패로 알린다."""
         ch = self._require_selected_ch()
-        await self.set_flow(ch, float(ui_value))
-        # 개별 ON (마스크 L0 금지)
-        self._enqueue(self._mk_cmd("FLOW_ON", channel=ch), None,
-                    allow_no_reply=True, tag=f"[FLOW_ON ch{ch}]")
-        
-        # ✅ 실제 모니터 기준: 이 채널을 ON으로 표시
-        self._flow_on_flags[ch] = True
+        if not await self.set_flow(ch, float(ui_value), owner=owner):
+            await self._emit_failed("FLOW_ON", f"ch{ch} FLOW_SET 실패로 FLOW_ON 생략", owner=owner, channel=ch)
+            return
+        await self.flow_on(ch, owner=owner)
 
-        # (옵션) 기존 안정화 루프 재사용
-        if self._stab_enabled:
-            tgt = float(self.last_setpoints.get(ch, 0.0))
-            if tgt > 0:
-                await self._cancel_task("_stab_task")
-                self._stab_ch = ch
-                self._stab_target_hw = tgt
-                self._stab_attempts = 0
-                self._stab_pending_cmd = "FLOW_ON"
-                self._stab_task = asyncio.create_task(self._stabilization_loop())
-                await self._emit_status(f"FLOW_ON: ch{ch} 안정화 시작 (목표 HW {tgt:.2f})")
-                return
-        await asyncio.sleep(max(self._cfg_int("MFC_DELAY_MS", 1000), 200) / 1000.0)
-        await self._emit_confirmed("FLOW_ON")
-
-    async def flow_off_selected(self) -> None:
+    async def flow_off_selected(self, *, owner: Optional[str] = None) -> None:
         """선택 채널만 FLOW_OFF(개별 명령)"""
         ch = self._require_selected_ch()
-        if self._stab_ch == ch:
-            await self._cancel_task("_stab_task")
-            self._stab_ch = None
-            self._stab_target_hw = 0.0
-            self._stab_pending_cmd = None
-            await self._emit_status(f"FLOW_OFF: ch{ch} 안정화 취소")
-        self.last_setpoints[ch] = 0.0
-        self.flow_error_counters[ch] = 0
-
-        # ✅ OFF 플래그
-        self._flow_on_flags[ch] = False
-
-        # ★ 보호: shutdown 진행 중이면 송신 불가 → 가짜 OK 방지
-        if not self._want_connected:
-            await self._emit_failed("FLOW_OFF", "MFC not ready (shutdown)")
-            return
-
-        self._enqueue(self._mk_cmd("FLOW_OFF", channel=ch), None,
-                    allow_no_reply=True, tag=f"[FLOW_OFF ch{ch}]")
-        await asyncio.sleep(max(self._cfg_int("MFC_DELAY_MS", 1000), 200) / 1000.0)
-        await self._emit_confirmed("FLOW_OFF")
+        await self.flow_off(ch, owner=owner)
 
     # async def flow_on(self, channel: int):
     #     """R69 → L0 적용, (옵션) 검증, (옵션) 안정화 → 확정."""
@@ -633,29 +636,31 @@ class AsyncMFC:
     #     else:
     #         await self._emit_failed("FLOW_OFF", "L0 적용 불일치")
 
-    async def valve_open(self):
+    async def valve_open(self, *, owner: Optional[str] = None):
         # ★ 보호: shutdown 진행 중이면 송신 불가 → 가짜 OK 방지
         if not self._want_connected:
-            await self._emit_failed("VALVE_OPEN", "MFC not ready (shutdown)")
+            await self._emit_failed("VALVE_OPEN", "MFC not ready (shutdown)", owner=owner)
             return
         if not self._verify_enabled:
-            self._enqueue(self._mk_cmd("VALVE_OPEN"), None, allow_no_reply=True, tag="[VALVE_OPEN]")
-            await asyncio.sleep(self._cfg_int("MFC_DELAY_MS_VALVE", 5000) / 1000.0)
-            await self._emit_confirmed("VALVE_OPEN")
+            # 실제 전송된 뒤 확정(VALVE_OPEN 은 안전 방향이라 대기 초과여도 철회하지 않는다)
+            await self._send_noreply_confirmed("VALVE_OPEN", self._mk_cmd("VALVE_OPEN"), tag="[VALVE_OPEN]", owner=owner,
+                                               min_delay_s=self._cfg_int("MFC_DELAY_MS_VALVE", 5000) / 1000.0,
+                                               withdraw_on_timeout=False)
             return
-        await self._valve_move_and_verify("VALVE_OPEN")
+        await self._valve_move_and_verify("VALVE_OPEN", owner=owner)
 
-    async def valve_close(self):
+    async def valve_close(self, *, owner: Optional[str] = None):
         # ★ 보호: shutdown 진행 중이면 송신 불가 → 가짜 OK 방지
         if not self._want_connected:
-            await self._emit_failed("VALVE_CLOSE", "MFC not ready (shutdown)")
+            await self._emit_failed("VALVE_CLOSE", "MFC not ready (shutdown)", owner=owner)
             return
         if not self._verify_enabled:
-            self._enqueue(self._mk_cmd("VALVE_CLOSE"), None, allow_no_reply=True, tag="[VALVE_CLOSE]")
-            await asyncio.sleep(self._cfg_int("MFC_DELAY_MS_VALVE", 5000) / 1000.0)
-            await self._emit_confirmed("VALVE_CLOSE")
+            # 실제 전송된 뒤 확정
+            await self._send_noreply_confirmed("VALVE_CLOSE", self._mk_cmd("VALVE_CLOSE"), tag="[VALVE_CLOSE]", owner=owner,
+                                               min_delay_s=self._cfg_int("MFC_DELAY_MS_VALVE", 5000) / 1000.0,
+                                               withdraw_on_timeout=True)
             return
-        await self._valve_move_and_verify("VALVE_CLOSE")
+        await self._valve_move_and_verify("VALVE_CLOSE", owner=owner)
 
     def set_poll_mask(self, *, gas: bool = True, pressure: bool = True) -> None:
         """
@@ -667,7 +672,7 @@ class AsyncMFC:
         self._poll_gas_enabled = bool(gas)
         self._poll_pressure_enabled = bool(pressure)
 
-    async def sp1_set(self, ui_value: float):
+    async def sp1_set(self, ui_value: float, *, owner: Optional[str] = None):
         """SP1_SET (UI→HW 변환) + (옵션) READ_SP1_VALUE 검증."""
         scale = self._cfg_float("MFC_PRESSURE_SCALE", 0.1)
         dec = self._cfg_int("MFC_PRESSURE_DECIMALS", 3)
@@ -675,18 +680,18 @@ class AsyncMFC:
         hw_val = round(float(ui_value) * float(scale), int(dec))
         await self._emit_status(f"SP1 스케일: UI {ui_value:.2f} → 장비 {hw_val:.{dec}f}")
 
-        self._enqueue(self._mk_cmd("SP1_SET", value=hw_val), None, allow_no_reply=True, tag="[SP1_SET]")
+        cmd = self._enqueue(self._mk_cmd("SP1_SET", value=hw_val), None, allow_no_reply=True, tag="[SP1_SET]",
+                            owner=owner, track=True)
 
         if not self._verify_enabled:
-            await asyncio.sleep(self._cfg_int("MFC_GAP_MS", 1000) / 1000.0)
-            await self._emit_confirmed("SP1_SET")
+            await self._confirm_sent_or_fail("SP1_SET", cmd, owner=owner)
             return
 
         ok = await self._verify_sp1_set(hw_val, ui_value)
-        if ok: await self._emit_confirmed("SP1_SET")
-        else:  await self._emit_failed("SP1_SET", "SP1 설정 확인 실패")
+        if ok: await self._emit_confirmed("SP1_SET", owner=owner)
+        else:  await self._emit_failed("SP1_SET", "SP1 설정 확인 실패", owner=owner)
 
-    async def sp2_set(self, ui_value: float):
+    async def sp2_set(self, ui_value: float, *, owner: Optional[str] = None):
         """SP2_SET (UI→HW 변환) + (옵션) READ_SP2_VALUE 검증."""
         scale = self._cfg_float("MFC_PRESSURE_SCALE", 0.1)
         dec = self._cfg_int("MFC_PRESSURE_DECIMALS", 3)
@@ -695,23 +700,22 @@ class AsyncMFC:
         await self._emit_status(f"SP2 스케일: UI {ui_value:.2f} → 장비 {hw_val:.{dec}f}")
 
         # 설정 전송 (no-reply)
-        self._enqueue(self._mk_cmd("SP2_SET", value=hw_val), None,
-                    allow_no_reply=True, tag="[SP2_SET]")
+        cmd = self._enqueue(self._mk_cmd("SP2_SET", value=hw_val), None,
+                            allow_no_reply=True, tag="[SP2_SET]", owner=owner, track=True)
 
-        # 검증 비활성화면 즉시 확정
+        # 검증 비활성화면 실제 전송된 뒤 확정(전송 전 폐기/대기 초과면 실패)
         if not self._verify_enabled:
-            await asyncio.sleep(self._cfg_int("MFC_GAP_MS", 1000) / 1000.0)
-            await self._emit_confirmed("SP2_SET")
+            await self._confirm_sent_or_fail("SP2_SET", cmd, owner=owner)
             return
 
         # READ_SP2_VALUE가 정의되어 있지 않으면 _verify_sp_set 내부에서 스킵/통과
         ok = await self._verify_sp_set(2, hw_val, ui_value)
         if ok:
-            await self._emit_confirmed("SP2_SET")
+            await self._emit_confirmed("SP2_SET", owner=owner)
         else:
-            await self._emit_failed("SP2_SET", "SP2 설정 확인 실패")
+            await self._emit_failed("SP2_SET", "SP2 설정 확인 실패", owner=owner)
 
-    async def sp4_set(self, ui_value: float):
+    async def sp4_set(self, ui_value: float, *, owner: Optional[str] = None):
         """SP4_SET (UI→HW 변환) + (옵션) READ_SP4_VALUE 검증."""
         scale = self._cfg_float("MFC_PRESSURE_SCALE", 0.1)
         dec = self._cfg_int("MFC_PRESSURE_DECIMALS", 3)
@@ -720,19 +724,27 @@ class AsyncMFC:
         await self._emit_status(f"SP4 스케일: UI {ui_value:.2f} → 장비 {hw_val:.{dec}f}")
 
         # 설정 전송 (no-reply)
-        self._enqueue(self._mk_cmd("SP4_SET", value=hw_val), None,
-                      allow_no_reply=True, tag="[SP4_SET]")
+        cmd = self._enqueue(self._mk_cmd("SP4_SET", value=hw_val), None,
+                            allow_no_reply=True, tag="[SP4_SET]", owner=owner, track=True)
 
-        # 검증 비활성화면 즉시 확정
+        # 검증 비활성화면 실제 전송된 뒤 확정(전송 전 폐기/대기 초과면 실패)
         if not self._verify_enabled:
-            await asyncio.sleep(self._cfg_int("MFC_GAP_MS", 1000) / 1000.0)
-            await self._emit_confirmed("SP4_SET")
+            await self._confirm_sent_or_fail("SP4_SET", cmd, owner=owner)
             return
 
         # 검증 (READ_SP4_VALUE가 정의되어 있지 않으면 스킵하고 통과)
         ok = await self._verify_sp_set(4, hw_val, ui_value)
-        if ok: await self._emit_confirmed("SP4_SET")
-        else:  await self._emit_failed("SP4_SET", "SP4 설정 확인 실패")
+        if ok: await self._emit_confirmed("SP4_SET", owner=owner)
+        else:  await self._emit_failed("SP4_SET", "SP4 설정 확인 실패", owner=owner)
+
+    async def _confirm_sent_or_fail(self, key: str, cmd: Command, *, owner: Optional[str] = None) -> bool:
+        """SPn_SET(검증 꺼짐) 공통: 실제 전송 + MFC_GAP_MS 뒤 확정, 아니면 실패."""
+        ok, why = await self._await_sent(cmd, min_delay_s=self._cfg_int("MFC_GAP_MS", 1000) / 1000.0)
+        if ok:
+            await self._emit_confirmed(key, owner=owner)
+        else:
+            await self._emit_failed(key, f"[{key}] {why}", owner=owner)
+        return ok
 
     # 🔹 추가: 장비에 현재 설정된 SP1~4 setpoint를 UI 단위로 읽기
     async def _read_sp_setpoint_ui(self, sp_idx: int) -> Optional[float]:
@@ -809,60 +821,51 @@ class AsyncMFC:
             return True
         return False
 
-    async def sp1_on(self):
+    async def sp1_on(self, *, owner: Optional[str] = None):
         if not self._verify_enabled:
-            self._enqueue(self._mk_cmd("SP1_ON"), None, allow_no_reply=True, tag="[SP1_ON]")
-            await asyncio.sleep(self._cfg_int("MFC_GAP_MS", 1000) / 1000.0)
-            await self._emit_confirmed("SP1_ON")
+            await self._send_noreply_confirmed("SP1_ON", self._mk_cmd("SP1_ON"), tag="[SP1_ON]",
+                                               owner=owner, min_delay_s=self._cfg_int("MFC_GAP_MS", 1000) / 1000.0)
             return
-        ok = await self._verify_simple_flag("SP1_ON", expect_mask='1')
-        if ok: await self._emit_confirmed("SP1_ON")
-        else:  await self._emit_failed("SP1_ON", "SP1 상태 확인 실패")
+        ok = await self._verify_simple_flag("SP1_ON", expect_mask='1', owner=owner)
+        if ok: await self._emit_confirmed("SP1_ON", owner=owner)
+        else:  await self._emit_failed("SP1_ON", "SP1 상태 확인 실패", owner=owner)
 
-    async def sp2_on(self):
+    async def sp2_on(self, *, owner: Optional[str] = None):
         """SP2_ON: SP2 Set-Point 활성화."""
         if not self._verify_enabled:
-            self._enqueue(
-                self._mk_cmd("SP2_ON"),
-                None,
-                allow_no_reply=True,
-                tag="[SP2_ON]",
-            )
-            await asyncio.sleep(self._cfg_int("MFC_GAP_MS", 1000) / 1000.0)
-            await self._emit_confirmed("SP2_ON")
+            await self._send_noreply_confirmed("SP2_ON", self._mk_cmd("SP2_ON"), tag="[SP2_ON]",
+                                               owner=owner, min_delay_s=self._cfg_int("MFC_GAP_MS", 1000) / 1000.0)
             return
 
-        ok = await self._verify_simple_flag("SP2_ON", expect_mask='2')
+        ok = await self._verify_simple_flag("SP2_ON", expect_mask='2', owner=owner)
         if ok:
-            await self._emit_confirmed("SP2_ON")
+            await self._emit_confirmed("SP2_ON", owner=owner)
         else:
-            await self._emit_failed("SP2_ON", "SP2 상태 확인 실패")
+            await self._emit_failed("SP2_ON", "SP2 상태 확인 실패", owner=owner)
 
-    async def sp3_on(self):
+    async def sp3_on(self, *, owner: Optional[str] = None):
         if not self._verify_enabled:
-            self._enqueue(self._mk_cmd("SP3_ON"), None, allow_no_reply=True, tag="[SP3_ON]")
-            await asyncio.sleep(self._cfg_int("MFC_GAP_MS", 1000) / 1000.0)
-            await self._emit_confirmed("SP3_ON")
+            await self._send_noreply_confirmed("SP3_ON", self._mk_cmd("SP3_ON"), tag="[SP3_ON]",
+                                               owner=owner, min_delay_s=self._cfg_int("MFC_GAP_MS", 1000) / 1000.0)
             return
-        ok = await self._verify_simple_flag("SP3_ON", expect_mask='3')
-        if ok: await self._emit_confirmed("SP3_ON")
-        else:  await self._emit_failed("SP3_ON", "SP3 상태 확인 실패")
+        ok = await self._verify_simple_flag("SP3_ON", expect_mask='3', owner=owner)
+        if ok: await self._emit_confirmed("SP3_ON", owner=owner)
+        else:  await self._emit_failed("SP3_ON", "SP3 상태 확인 실패", owner=owner)
 
-    async def sp4_on(self):
+    async def sp4_on(self, *, owner: Optional[str] = None):
         if not self._verify_enabled:
-            self._enqueue(self._mk_cmd("SP4_ON"), None, allow_no_reply=True, tag="[SP4_ON]")
-            await asyncio.sleep(self._cfg_int("MFC_GAP_MS", 1000) / 1000.0)
-            await self._emit_confirmed("SP4_ON")
+            await self._send_noreply_confirmed("SP4_ON", self._mk_cmd("SP4_ON"), tag="[SP4_ON]",
+                                               owner=owner, min_delay_s=self._cfg_int("MFC_GAP_MS", 1000) / 1000.0)
             return
-        ok = await self._verify_simple_flag("SP4_ON", expect_mask='4')
-        if ok: await self._emit_confirmed("SP4_ON")
-        else:  await self._emit_failed("SP4_ON", "SP4 상태 확인 실패")
+        ok = await self._verify_simple_flag("SP4_ON", expect_mask='4', owner=owner)
+        if ok: await self._emit_confirmed("SP4_ON", owner=owner)
+        else:  await self._emit_failed("SP4_ON", "SP4 상태 확인 실패", owner=owner)
 
-    async def read_flow_all(self):
+    async def read_flow_all(self, *, owner: Optional[str] = None):
         """R60 한 번 읽고 이벤트로 각 채널 흐름을 방출."""
         vals = await self._read_r60_values()
         if not vals:
-            await self._emit_failed("READ_FLOW", "R60 파싱 실패")
+            await self._emit_failed("READ_FLOW", "R60 파싱 실패", owner=owner)
             return
         for ch, name in self.gas_map.items():
             idx = ch - 1
@@ -872,7 +875,8 @@ class AsyncMFC:
                 await self._emit_flow(name, v_ui)        # UI(sccm) 이벤트
                 self._monitor_flow(ch, v_hw)             # 비교는 HW(%FS)
 
-    async def read_pressure(self, *, emit_fail: bool = True, tag: str = "[READ_PRESSURE]") -> Optional[float]:
+    async def read_pressure(self, *, emit_fail: bool = True, tag: str = "[READ_PRESSURE]",
+                            owner: Optional[str] = None) -> Optional[float]:
         """R5(예: READ_PRESSURE) 읽고 UI 문자열/숫자로 이벤트 + 현재 압력값 반환."""
         line = await self._send_and_wait_line(
             self._mk_cmd("READ_PRESSURE"),
@@ -881,7 +885,7 @@ class AsyncMFC:
         )
         if not (line and line.strip()):
             if emit_fail:
-                await self._emit_failed("READ_PRESSURE", "응답 없음")
+                await self._emit_failed("READ_PRESSURE", "응답 없음", owner=owner)
             else:
                 await self._emit_status("[READ_PRESSURE] 응답 없음 (non-fatal, will retry)")
             return None
@@ -977,7 +981,7 @@ class AsyncMFC:
         )
         return False, last_value
 
-    async def handle_command(self, cmd: str, args: dict | None = None) -> None:
+    async def handle_command(self, cmd: str, args: dict | None = None, *, owner: Optional[str] = None) -> None:
         """
         main/process에서 넘어오는 문자열 명령을 고수준 메서드로 라우팅한다.
         - cmd: 'FLOW_SET', 'FLOW_ON', 'FLOW_OFF', 'VALVE_OPEN', 'VALVE_CLOSE',
@@ -1003,66 +1007,60 @@ class AsyncMFC:
             if key == "FLOW_SET":
                 ch = _req("channel", int)
                 val_ui = _req("value", float)
-                await self.set_flow(ch, val_ui)
+                await self.set_flow(ch, val_ui, owner=owner)
 
             elif key == "FLOW_ON":
                 ch = _req("channel", int)
-                await self.flow_on(ch)
+                await self.flow_on(ch, owner=owner)
 
             elif key == "FLOW_OFF":
                 ch = _req("channel", int)
-                await self.flow_off(ch)
+                await self.flow_off(ch, owner=owner)
 
             elif key == "VALVE_OPEN":
-                await self.valve_open()
+                await self.valve_open(owner=owner)
 
             elif key == "VALVE_CLOSE":
-                await self.valve_close()
+                await self.valve_close(owner=owner)
 
             elif key == "PS_ZEROING":
-                # 워커가 gap_ms 만큼 쉬고 나서 호출 → 그 시점에 확인 이벤트 방출
-                def _ok_cb(_):
-                    asyncio.create_task(self._emit_confirmed("PS_ZEROING"))
-
-                self._enqueue(self._mk_cmd("PS_ZEROING"), _ok_cb,
-                              allow_no_reply=True, tag="[PS_ZEROING]",
-                              gap_ms=self._cfg_int("MFC_ZEROING_GAP_MS", self._cfg_int("MFC_GAP_MS", 1000)))
+                # 실제 전송 + gap 뒤 확인(전송 전 폐기되면 실패 — 가짜 확인 금지)
+                zgap = self._cfg_int("MFC_ZEROING_GAP_MS", self._cfg_int("MFC_GAP_MS", 1000))
                 await self._emit_status("압력 센서 Zeroing 명령 전송")
+                await self._send_noreply_confirmed("PS_ZEROING", self._mk_cmd("PS_ZEROING"), tag="[PS_ZEROING]",
+                                                   owner=owner, gap_ms=zgap, after_send_s=zgap / 1000.0)
 
             elif key == "MFC_ZEROING":
                 ch = _req("channel", int)
-
-                def _ok_cb(_):
-                    asyncio.create_task(self._emit_confirmed("MFC_ZEROING"))
-
-                self._enqueue(self._mk_cmd("MFC_ZEROING", channel=ch), _ok_cb,
-                              allow_no_reply=True, tag=f"[MFC_ZEROING ch{ch}]",
-                              gap_ms=self._cfg_int("MFC_ZEROING_GAP_MS", self._cfg_int("MFC_GAP_MS", 1000)))
+                zgap = self._cfg_int("MFC_ZEROING_GAP_MS", self._cfg_int("MFC_GAP_MS", 1000))
                 await self._emit_status(f"Ch{ch} MFC Zeroing 명령 전송")
+                await self._send_noreply_confirmed("MFC_ZEROING", self._mk_cmd("MFC_ZEROING", channel=ch),
+                                                   tag=f"[MFC_ZEROING ch{ch}]", owner=owner, channel=ch,
+                                                   gap_ms=zgap, after_send_s=zgap / 1000.0)
 
             elif key == "SP1_ON":
-                await self.sp1_on()
+                await self.sp1_on(owner=owner)
 
             elif key == "SP2_ON":
-                await self.sp2_on()
+                await self.sp2_on(owner=owner)
 
             elif key == "SP3_ON":
-                await self.sp3_on()
+                await self.sp3_on(owner=owner)
 
             elif key == "SP4_ON":
-                await self.sp4_on()
+                await self.sp4_on(owner=owner)
 
             elif key == "SP1_SET":
                 val_ui = _req("value", float)
-                await self.sp1_set(val_ui)
+                await self.sp1_set(val_ui, owner=owner)
 
             elif key == "SP2_SET":
                 val_ui = _req("value", float)
-                await self.sp2_set(val_ui)
+                await self.sp2_set(val_ui, owner=owner)
 
             elif key == "SP4_SET":
                 val_ui = _req("value", float)
-                await self.sp4_set(val_ui)
+                await self.sp4_set(val_ui, owner=owner)
 
             # 🔹 압력 도달까지 대기 (옵션으로 SP setpoint 기준 사용 가능)
             elif key == "WAIT_PRESSURE":
@@ -1102,7 +1100,8 @@ class AsyncMFC:
                         if sp_target is None or sp_target <= 0:
                             await self._emit_failed(
                                 "WAIT_PRESSURE",
-                                f"SP{sp_idx} setpoint를 5회 시도 후에도 읽지 못함 → 압력 대기 불가"
+                                f"SP{sp_idx} setpoint를 5회 시도 후에도 읽지 못함 → 압력 대기 불가",
+                                owner=owner,
                             )
                             # 여기서 바로 리턴해서 wait_for_pressure_reached() 진입 자체를 막음
                             return
@@ -1126,23 +1125,24 @@ class AsyncMFC:
                 )
                 if ok:
                     # → ProcessController 쪽에서 ExpectToken("MFC", "WAIT_PRESSURE") 를 기다리게 할 것
-                    await self._emit_confirmed("WAIT_PRESSURE")
+                    await self._emit_confirmed("WAIT_PRESSURE", owner=owner)
                 else:
                     await self._emit_failed(
                         "WAIT_PRESSURE",
                         f"압력 안정화 실패: target={target:.3g}, last={last:.3g}",
+                        owner=owner,
                     )
 
             elif key in ("READ_FLOW_ALL", "READ_FLOW"):  # 호환용
-                await self.read_flow_all()
+                await self.read_flow_all(owner=owner)
 
             elif key in ("READ_PRESSURE",):
-                await self.read_pressure()
+                await self.read_pressure(owner=owner)
 
             else:
-                await self._emit_failed(key, "지원되지 않는 MFC 명령")
+                await self._emit_failed(key, "지원되지 않는 MFC 명령", owner=owner)
         except Exception as e:
-            await self._emit_failed(key, f"예외: {e}")
+            await self._emit_failed(key, f"예외: {e}", owner=owner)
 
     # ---- 폴링 on/off (Process와 연동) ----
     def _get_loop_safe(self) -> asyncio.AbstractEventLoop:
@@ -1168,22 +1168,52 @@ class AsyncMFC:
                 self._ev_nowait(MFCEvent(kind="status", message=f"[QUIESCE] Polling read {purged}건 제거 (polling off)"))
 
     def on_process_finished(self, success: bool, *, reason: Optional[str] = None):
-        """공정 종료 시 내부 상태 리셋. reason 이 있으면 폐기 로그 라벨만 그 값을 쓴다."""
+        """공정 종료 시 내부 상태 '전체' 리셋(대기열 전체 폐기 포함). reason 이 있으면 폐기 로그 라벨만 그 값을 쓴다.
+        ⚠ 공유 MFC 에서는 다른 사용자가 없을 때만 부른다 — 남아 있으면 release_owner() 를 쓴다."""
+        label = reason or f"process finished ({'ok' if success else 'fail'})"
         self.set_process_status(False)
-        # 안정화 중지
+        # 안정화 중지 — 기다리던 주체가 멈춰 있지 않도록 실패로 알린다
+        self._cancel_all_stab_jobs(reason=f"정리({label})로 안정화 중단", notify=True)
         if self._stab_task:
             self._stab_task.cancel()
             self._stab_task = None
-        self._stab_ch = None
-        self._stab_target_hw = 0.0
-        self._stab_pending_cmd = None
         # 큐 정리 및 카운터 리셋
-        self._purge_pending(reason or f"process finished ({'ok' if success else 'fail'})")
+        self._purge_pending(label)
         self.last_setpoints = {1: 0.0, 2: 0.0, 3: 0.0}
         self.flow_error_counters = {1: 0, 2: 0, 3: 0}
         # ✅ 플래그도 초기화
         self._flow_on_flags = {1: False, 2: False, 3: False}
+        self._ch_owner = {1: None, 2: None, 3: None}
+        self._selected_ch = None
+        self._selected_owner = None
         self._poll_cycle_active = False
+
+    def release_owner(self, owner: Optional[str], *, reason: str = "") -> None:
+        """공유 MFC 에 다른 사용자가 남아 있을 때 owner '몫만' 정리한다(대기열 전체 폐기·전체 초기화 없음).
+        - owner 의 채널별 안정화 취소(본인이 떠나는 중이라 실패 통지 없음)
+        - owner 가 쓰던 채널의 목표/ON 플래그/오차 카운터 초기화, 선택 채널 해제
+        - 대기열의 owner 명령은 남겨 둔다(뒤에 실린 OFF 같은 안전 명령이 순서대로 전송되도록)"""
+        if not owner:
+            return
+        n_stab = 0
+        for ch, job in list(self._stab_jobs.items()):
+            if job.owner == owner:
+                if self._cancel_stab_job(ch, reason=f"{owner} 사용 종료", notify=False):
+                    n_stab += 1
+        chs = [ch for ch, o in self._ch_owner.items() if o == owner]
+        for ch in chs:
+            self.last_setpoints[ch] = 0.0
+            self._flow_on_flags[ch] = False
+            self.flow_error_counters[ch] = 0
+            self._ch_owner[ch] = None
+        if self._selected_owner == owner:
+            self._selected_ch = None
+            self._selected_owner = None
+        tail = f", {reason}" if reason else ""
+        self._ev_nowait(MFCEvent(
+            kind="status", owner=owner,
+            message=(f"[{owner}] 사용 종료 — 다른 사용자가 있어 대기열 유지, 이 주체 몫만 정리 "
+                     f"(채널 {chs or '-'}, 안정화 취소 {n_stab}건{tail})")))
 
     def on_process_cleanup(self):
         """정리(cleanup) 경로에서의 상태 리셋 — 실패가 아니므로 폐기 로그를 'cleanup' 으로 남긴다."""
@@ -1309,6 +1339,7 @@ class AsyncMFC:
                 cmd.retries_left -= 1
                 self._cmd_q.appendleft(cmd)
             else:
+                self._resolve(cmd, False)
                 self._safe_callback(cmd.callback, None)
 
     # ---------- 내부: 명령 워커 ----------
@@ -1360,6 +1391,7 @@ class AsyncMFC:
                     cmd.retries_left -= 1
                     self._cmd_q.appendleft(cmd)
                 else:
+                    self._resolve(cmd, False)
                     self._safe_callback(cmd.callback, None)
                 self._on_tcp_disconnected()
                 continue
@@ -1367,6 +1399,8 @@ class AsyncMFC:
             # no-reply
             if cmd.allow_no_reply:
                 self._inflight = None
+                cmd.sent_mono = time.monotonic()
+                self._resolve(cmd, True)          # ★ 실제 전송 완료(확정은 여기 이후에만)
                 await asyncio.sleep(cmd.gap_ms / 1000.0)
 
                 drain_ms = self._cfg_int("MFC_ALLOW_NO_REPLY_DRAIN_MS", 80)
@@ -1552,48 +1586,90 @@ class AsyncMFC:
         except asyncio.CancelledError:
             self._poll_cycle_active = False
 
-    # ---------- 내부: 안정화 ----------
+    # ---------- 내부: 안정화(채널별 작업, 감시 태스크 1개) ----------
+    def _stab_owner(self, ch: int) -> Optional[str]:
+        job = self._stab_jobs.get(ch)
+        return job.owner if job is not None else None
+
+    def _start_stab_job(self, ch: int, target_hw: float, owner: Optional[str]) -> None:
+        """채널 ch 의 안정화 작업 등록(같은 채널 이전 작업은 교체). 감시 태스크가 없으면 올린다."""
+        prev = self._stab_jobs.get(ch)
+        if prev is not None and prev.owner != owner:
+            self._ev_nowait(MFCEvent(
+                kind="command_failed", cmd="FLOW_ON", owner=prev.owner, channel=ch,
+                reason=f"ch{ch} 안정화 중단 — 다른 주체({owner or '-'})가 같은 채널을 다시 켬"))
+        self._stab_jobs[ch] = _StabJob(channel=ch, target_hw=float(target_hw), owner=owner,
+                                       created_mono=time.monotonic())
+        if self._stab_task is None or self._stab_task.done():
+            self._stab_task = asyncio.create_task(self._stabilization_loop(), name="MFCStabilization")
+
+    def _cancel_stab_job(self, ch: int, *, reason: str, notify: bool) -> bool:
+        """채널 ch 의 안정화 작업만 취소. notify=True 면 그 작업의 주체에게 FLOW_ON 실패로 알린다."""
+        job = self._stab_jobs.pop(ch, None)
+        if job is None:
+            return False
+        if notify:
+            self._ev_nowait(MFCEvent(kind="command_failed", cmd="FLOW_ON", owner=job.owner, channel=ch,
+                                     reason=f"ch{ch} 안정화 중단 ({reason})"))
+        if not self._stab_jobs:
+            t = self._stab_task
+            if t is not None and t is not asyncio.current_task():
+                t.cancel()
+                self._stab_task = None
+        return True
+
+    def _cancel_all_stab_jobs(self, *, reason: str, notify: bool) -> int:
+        n = 0
+        for ch in list(self._stab_jobs.keys()):
+            if self._cancel_stab_job(ch, reason=reason, notify=notify):
+                n += 1
+        return n
+
     async def _stabilization_loop(self):
+        """등록된 채널별 안정화 작업을 R60 한 번 읽기로 함께 판정한다(채널마다 목표/주체/시도 횟수 별도)."""
+        me = asyncio.current_task()
         try:
-            while True:
-                ch = self._stab_ch
-                target = float(self._stab_target_hw)
-                if ch is None or target <= 0:
-                    await self._emit_failed("FLOW_ON", "안정화 대상 없음")
-                    return
-
-                vals = await self._read_r60_values(tag=f"[STAB R60 ch{ch}]")
-                actual_hw = None
-                if vals and (ch - 1) < len(vals):
-                    actual_hw = float(vals[ch - 1])              # %FS(HW)
-                actual_ui = None if actual_hw is None else self._hw_to_ui(ch, actual_hw)  # sccm
-                tol = target * self._cfg_float("FLOW_ERROR_TOLERANCE", 0.05)
-                await self._emit_status(
-                f"GAS 확인... (목표: {self._hw_to_ui(ch, target):.2f}sccm, 현재: {(-1 if actual_ui is None else actual_ui):.2f}sccm)"
-                )
-                if (actual_hw is not None) and (abs(actual_hw - target) <= tol):
-                    await self._emit_confirmed("FLOW_ON")
-                    self._stab_ch = None
-                    self._stab_target_hw = 0.0
-                    self._stab_pending_cmd = None
-                    return
-                
-                # 목표 미도달이면 시도 횟수 증가
-                self._stab_attempts += 1
-
-                if self._stab_attempts >= 180: # 가스 안정화 최대 3분 대기
-                    await self._emit_failed("FLOW_ON", "GAS 안정화 시간 초과")
-                    self._stab_ch = None
-                    self._stab_target_hw = 0.0
-                    self._stab_pending_cmd = None
-                    return
-
+            while self._stab_jobs:
+                chs = sorted(self._stab_jobs.keys())
+                t_read = time.monotonic()
+                vals = await self._read_r60_values(tag=f"[STAB R60 ch{','.join(str(c) for c in chs)}]")
+                tol_ratio = self._cfg_float("FLOW_ERROR_TOLERANCE", 0.05)
+                for ch in chs:
+                    job = self._stab_jobs.get(ch)
+                    # 읽는 동안 취소됐거나, 읽기 요청 뒤에 새로 등록된 작업이면 이번 값으로 판정하지 않는다
+                    if job is None or job.created_mono > t_read:
+                        continue
+                    actual_hw = None
+                    if vals and (ch - 1) < len(vals):
+                        actual_hw = float(vals[ch - 1])              # %FS(HW)
+                    actual_ui = None if actual_hw is None else self._hw_to_ui(ch, actual_hw)  # sccm
+                    tol = job.target_hw * tol_ratio
+                    await self._emit_status(
+                        f"GAS 확인... ch{ch} (목표: {self._hw_to_ui(ch, job.target_hw):.2f}sccm, "
+                        f"현재: {(-1 if actual_ui is None else actual_ui):.2f}sccm)",
+                        owner=job.owner, channel=ch)
+                    if self._stab_jobs.get(ch) is not job:
+                        continue
+                    if (actual_hw is not None) and (abs(actual_hw - job.target_hw) <= tol):
+                        self._stab_jobs.pop(ch, None)
+                        await self._emit_confirmed("FLOW_ON", owner=job.owner, channel=ch)
+                        continue
+                    # 목표 미도달이면 시도 횟수 증가
+                    job.attempts += 1
+                    if job.attempts >= 180:  # 가스 안정화 최대 3분 대기(채널별)
+                        self._stab_jobs.pop(ch, None)
+                        await self._emit_failed("FLOW_ON", "GAS 안정화 시간 초과", owner=job.owner, channel=ch)
+                if not self._stab_jobs:
+                    break
                 await asyncio.sleep(self._cfg_int("MFC_STABILIZATION_INTERVAL_MS", 1000) / 1000.0)
         except asyncio.CancelledError:
             pass
+        finally:
+            if self._stab_task is me:
+                self._stab_task = None
 
     # ---------- 내부: 고수준 시퀀스/검증 ----------
-    async def _verify_flow_set(self, ch: int, scaled_value: float) -> bool:
+    async def _verify_flow_set(self, ch: int, scaled_value: float, *, owner: Optional[str] = None) -> bool:
         """READ_FLOW_SET(ch)으로 확인; 불일치면 재설정 후 재확인(최대 5회)."""
         for attempt in range(1, 6):
             line = await self._send_and_wait_line(
@@ -1610,7 +1686,7 @@ class AsyncMFC:
 
             # 재전송 후 지연 → 재확인
             self._enqueue(self._mk_cmd("FLOW_SET", channel=ch, value=scaled_value), None,
-                          allow_no_reply=True, tag=f"[RE-SET ch{ch}]")
+                          allow_no_reply=True, tag=f"[RE-SET ch{ch}]", owner=owner)
             await self._emit_status(f"[FLOW_SET 검증 재시도] ch{ch}: 기대={scaled_value:.2f}, 응답={repr(line)} (시도 {attempt}/5)")
             await asyncio.sleep(self._cfg_int("MFC_DELAY_MS", 1000) / 1000.0)
         return False
@@ -1646,10 +1722,10 @@ class AsyncMFC:
             await asyncio.sleep(self._cfg_int("MFC_DELAY_MS", 1000) / 1000.0)
         return False
 
-    async def _valve_move_and_verify(self, origin_cmd: str):
+    async def _valve_move_and_verify(self, origin_cmd: str, *, owner: Optional[str] = None):
         """VALVE_OPEN/CLOSE → READ_VALVE_POSITION 확인(재시도 시 재전송 포함)."""
         # 명령 전송 (no-reply)
-        self._enqueue(self._mk_cmd(origin_cmd), None, allow_no_reply=True, tag=f"[{origin_cmd}]")
+        self._enqueue(self._mk_cmd(origin_cmd), None, allow_no_reply=True, tag=f"[{origin_cmd}]", owner=owner)
         delay_valve_ms = self._cfg_int("MFC_DELAY_MS_VALVE", 5000)
         delay_cmd_ms = self._cfg_int("MFC_DELAY_MS", 1000)
 
@@ -1666,18 +1742,19 @@ class AsyncMFC:
             pos_ok = self._parse_valve_ok(origin_cmd, line or "")
             if pos_ok:
                 await self._emit_status(f"{origin_cmd} 완료")
-                await self._emit_confirmed(origin_cmd)
+                await self._emit_confirmed(origin_cmd, owner=owner)
                 return
             # 일부 시점에서 재전송
             if attempt in (2, 4):
-                self._enqueue(self._mk_cmd(origin_cmd), None, allow_no_reply=True, tag=f"[RE-{origin_cmd}]")
+                self._enqueue(self._mk_cmd(origin_cmd), None, allow_no_reply=True, tag=f"[RE-{origin_cmd}]",
+                              owner=owner)
                 await self._emit_status(f"{origin_cmd} 재전송 (시도 {attempt}/5)")
                 await asyncio.sleep(max(delay_cmd_ms, delay_valve_ms) / 1000.0)
             else:
                 await self._emit_status(f"[{origin_cmd} 검증 재시도] 응답={repr(line)} (시도 {attempt}/5)")
                 await asyncio.sleep(self._cfg_int("MFC_DELAY_MS", 1000) / 1000.0)
 
-        await self._emit_failed(origin_cmd, "밸브 위치 확인 실패")
+        await self._emit_failed(origin_cmd, "밸브 위치 확인 실패", owner=owner)
 
     async def _verify_sp1_set(self, hw_val: float, ui_val: float) -> bool:
         """READ_SP1_VALUE 로 HW값 비교(허용오차 MFC_SP1_VERIFY_TOL)."""
@@ -1748,10 +1825,10 @@ class AsyncMFC:
 
         return False
 
-    async def _verify_simple_flag(self, cmd_key: str, expect_mask: str) -> bool:
+    async def _verify_simple_flag(self, cmd_key: str, expect_mask: str, *, owner: Optional[str] = None) -> bool:
         """SP1_ON/SP4_ON → READ_SYSTEM_STATUS 확인(Mn...)"""
         # 전송(no-reply)
-        self._enqueue(self._mk_cmd(cmd_key), None, allow_no_reply=True, tag=f"[{cmd_key}]")
+        self._enqueue(self._mk_cmd(cmd_key), None, allow_no_reply=True, tag=f"[{cmd_key}]", owner=owner)
         for attempt in range(1, 6):
             line = await self._send_and_wait_line(
                 self._mk_cmd("READ_SYSTEM_STATUS"),
@@ -1865,19 +1942,13 @@ class AsyncMFC:
 
     def _monitor_flow(self, channel: int, actual_flow_hw: float):
         """
-        - Plasma Cleaning(선택 채널 모드): self._selected_ch 만 감시
-        - 일반 공정: 실제 ON 된 채널(self._flow_on_flags)만 감시
+        - 실제 ON 된 채널(self._flow_on_flags)만 감시 — 챔버 공정/PC 구분 없이 채널 기준
+          (공유 MFC 동시 사용 시 양쪽 채널을 모두 감시. 선택 채널(_selected_ch)로 거르지 않는다)
         - setpoint(장비 단위)가 사실상 0이면 무시
         """
-        sel = int(self._selected_ch or 0)
-        if sel in self.gas_map:
-            if channel != sel:
-                self.flow_error_counters[channel] = 0
-                return
-        else:
-            if not self._flow_on_flags.get(channel, False):
-                self.flow_error_counters[channel] = 0
-                return
+        if not self._flow_on_flags.get(channel, False):
+            self.flow_error_counters[channel] = 0
+            return
 
         target_flow = float(self.last_setpoints.get(channel, 0.0))
         if target_flow < 0.1:
@@ -1901,7 +1972,8 @@ class AsyncMFC:
     def _enqueue(self, cmd_str: str, on_reply: Optional[Callable[[Optional[str]], None]],
                 *, timeout_ms: Optional[int] = None, gap_ms: Optional[int] = None,
                 tag: str = "", retries_left: int = 5, allow_no_reply: bool = False,
-                expect_prefixes: tuple[str, ...] = ()):
+                expect_prefixes: tuple[str, ...] = (), owner: Optional[str] = None,
+                track: bool = False) -> Command:
 
         if timeout_ms is None:
             timeout_ms = self._cfg_int("MFC_TIMEOUT", 2000)
@@ -1910,10 +1982,15 @@ class AsyncMFC:
 
         if not cmd_str.endswith(self._tx_eol_str):
             cmd_str += self._tx_eol_str
-        self._cmd_q.append(Command(
+        cmd = Command(
             cmd_str, on_reply, timeout_ms, gap_ms, tag, retries_left, allow_no_reply,
-            expect_prefixes=expect_prefixes
-        ))
+            expect_prefixes=expect_prefixes, owner=owner
+        )
+        cmd.enq_mono = time.monotonic()
+        if track:
+            with contextlib.suppress(RuntimeError):
+                cmd.done = asyncio.get_running_loop().create_future()
+        self._cmd_q.append(cmd)
 
         # ★ no-reply 명령의 '에코 라인'은 나중에 도착해도 스킵하도록 등록
         if allow_no_reply:
@@ -1923,6 +2000,83 @@ class AsyncMFC:
                 self._skip_echos.popleft()
             # 추적 로그를 UI/챗으로도 올림
             self._dbg("MFC", f"[ECHO] no-reply 등록: {no_eol}")
+        return cmd
+
+    # ---------- 내부: no-reply 실제 전송 확인 ----------
+    @staticmethod
+    def _resolve(cmd: Optional[Command], ok: bool) -> None:
+        f = getattr(cmd, "done", None)
+        if f is not None and not f.done():
+            with contextlib.suppress(Exception):
+                f.set_result(bool(ok))
+
+    def _withdraw(self, cmd: Command, *, reason: str) -> bool:
+        """아직 보내지 않은(대기열에 있는) cmd 만 철회. 철회했으면 True."""
+        for i, c in enumerate(self._cmd_q):
+            if c is cmd:
+                del self._cmd_q[i]
+                break
+        else:
+            return False
+        if cmd.allow_no_reply:
+            no_eol = cmd.cmd_str
+            if self._tx_eol_str and no_eol.endswith(self._tx_eol_str):
+                no_eol = no_eol[:-len(self._tx_eol_str)]
+            with contextlib.suppress(ValueError):
+                self._skip_echos.remove(no_eol)
+        self._resolve(cmd, False)
+        self._safe_callback(cmd.callback, None)
+        self._ev_nowait(MFCEvent(kind="status", owner=cmd.owner,
+                                 message=f"[WITHDRAW] {cmd.tag} 대기열에서 철회 ({reason})"))
+        return True
+
+    async def _await_sent(self, cmd: Command, *, min_delay_s: float = 0.0, after_send_s: float = 0.0,
+                          withdraw_on_timeout: bool = True) -> tuple[bool, str]:
+        """cmd 가 '실제로 전송'될 때까지 기다린다(최대 SEND_CONFIRM_TIMEOUT_S).
+        확정 시점 = max(등록 + min_delay_s, 전송 + after_send_s) — 대기열이 비어 있으면 기존 고정 대기와 같다.
+        (ok, 사유) 반환. 전송 전 폐기·전송 실패·시간 초과면 ok=False."""
+        fut = cmd.done
+        if fut is None:
+            # 추적 불가(루프 밖 등록) → 기존 방식(고정 대기)
+            await asyncio.sleep(max(min_delay_s, after_send_s, 0.0))
+            return True, ""
+        bound = float(SEND_CONFIRM_TIMEOUT_S)
+        try:
+            ok = await asyncio.wait_for(asyncio.shield(fut), timeout=bound)
+        except asyncio.TimeoutError:
+            if not withdraw_on_timeout:
+                return False, f"{bound:.0f}초 안에 전송 확인 못 함(명령은 대기열에 남아 순서대로 전송)"
+            if self._withdraw(cmd, reason=f"{bound:.0f}초 전송 대기 초과"):
+                return False, f"{bound:.0f}초 안에 전송되지 못해 대기열에서 철회"
+            # 대기열에 없음 = 지금 전송 중 → 전송 결과만 짧게 더 기다린다
+            try:
+                ok = await asyncio.wait_for(asyncio.shield(fut),
+                                            timeout=self._cfg_float("MFC_DRAIN_TIMEOUT_S", 2.0) + 1.0)
+            except asyncio.TimeoutError:
+                return False, "전송 결과 확인 실패"
+        if not ok:
+            return False, "전송 전에 대기열에서 폐기됨(또는 전송 실패)"
+        wait_until = max(cmd.enq_mono + max(0.0, float(min_delay_s)),
+                         cmd.sent_mono + max(0.0, float(after_send_s)))
+        remain = wait_until - time.monotonic()
+        if remain > 0:
+            await asyncio.sleep(remain)
+        return True, ""
+
+    async def _send_noreply_confirmed(self, key: str, cmd_str: str, *, tag: str, owner: Optional[str],
+                                      channel: Optional[int] = None, gap_ms: Optional[int] = None,
+                                      min_delay_s: float = 0.0, after_send_s: float = 0.0,
+                                      withdraw_on_timeout: bool = True) -> bool:
+        """no-reply 명령 1개: 등록 → 실제 전송 확인 → confirmed / failed(owner·channel 포함)."""
+        cmd = self._enqueue(cmd_str, None, allow_no_reply=True, tag=tag, gap_ms=gap_ms,
+                            owner=owner, track=True)
+        ok, why = await self._await_sent(cmd, min_delay_s=min_delay_s, after_send_s=after_send_s,
+                                         withdraw_on_timeout=withdraw_on_timeout)
+        if ok:
+            await self._emit_confirmed(key, owner=owner, channel=channel)
+        else:
+            await self._emit_failed(key, f"{tag} {why}", owner=owner, channel=channel)
+        return ok
 
     async def _send_and_wait_line(
         self,
@@ -1981,6 +2135,7 @@ class AsyncMFC:
             purged += 1
             if cmd.tag:
                 purged_tags.append(cmd.tag)
+            self._resolve(cmd, False)
             self._safe_callback(cmd.callback, None)
 
         while self._cmd_q:
@@ -1988,6 +2143,7 @@ class AsyncMFC:
             purged += 1
             if c.tag:
                 purged_tags.append(c.tag)
+            self._resolve(c, False)
             self._safe_callback(c.callback, None)
 
         # 2) ✅ 라인 큐 비우기 (이전 응답/에코가 다음 명령과 섞이는 문제 방지)
@@ -2016,21 +2172,21 @@ class AsyncMFC:
         return purged
 
     # ---------- 내부: 이벤트/로그 ----------
-    async def _emit_status(self, msg: str):
+    async def _emit_status(self, msg: str, *, owner: Optional[str] = None, channel: Optional[int] = None):
         if self.debug_print:
             print(f"[MFC][status] {msg}")
-        await self._event_q.put(MFCEvent(kind="status", message=msg))
+        await self._event_q.put(MFCEvent(kind="status", message=msg, owner=owner, channel=channel))
 
     async def _emit_flow(self, gas: str, value_ui: float):
         if self.debug_print:
             print(f"[MFC][flow] {gas}: {value_ui:.2f} sccm")
         await self._event_q.put(MFCEvent(kind="flow", gas=gas, value=value_ui))
 
-    async def _emit_confirmed(self, cmd: str):
-        await self._event_q.put(MFCEvent(kind="command_confirmed", cmd=cmd))
+    async def _emit_confirmed(self, cmd: str, *, owner: Optional[str] = None, channel: Optional[int] = None):
+        await self._event_q.put(MFCEvent(kind="command_confirmed", cmd=cmd, owner=owner, channel=channel))
 
-    async def _emit_failed(self, cmd: str, why: str):
-        await self._event_q.put(MFCEvent(kind="command_failed", cmd=cmd, reason=why))
+    async def _emit_failed(self, cmd: str, why: str, *, owner: Optional[str] = None, channel: Optional[int] = None):
+        await self._event_q.put(MFCEvent(kind="command_failed", cmd=cmd, reason=why, owner=owner, channel=channel))
 
     def _ev_nowait(self, ev: MFCEvent):
         try:
@@ -2052,6 +2208,11 @@ class AsyncMFC:
             t.cancel()
             try:
                 await t
+            except asyncio.CancelledError:
+                # ★ 취소된 자식 태스크를 기다리면 CancelledError(BaseException)가 올라온다.
+                #   except Exception 만 있으면 여기서 cleanup() 이 중간에 끊긴다(워커 취소 뒤 TCP 종료/폐기 미실행).
+                #   rf_pulse/dc_pulse 의 _cancel_task 와 같은 형태.
+                pass
             except Exception:
                 pass
             setattr(self, name, None)
@@ -2103,6 +2264,7 @@ class AsyncMFC:
     def _purge_poll_reads_only(self, cancel_inflight: bool = True, reason: str = "") -> int:
         purged = 0
         if cancel_inflight and self._inflight and self._is_poll_read_cmd(self._inflight.cmd_str, self._inflight.tag):
+            self._resolve(self._inflight, False)
             self._safe_callback(self._inflight.callback, None)
             self._inflight = None
             purged += 1
@@ -2111,6 +2273,7 @@ class AsyncMFC:
         while self._cmd_q:
             c = self._cmd_q.popleft()
             if self._is_poll_read_cmd(c.cmd_str, c.tag):
+                self._resolve(c, False)
                 purged += 1
                 continue
             kept.append(c)

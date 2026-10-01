@@ -251,6 +251,12 @@ class PlasmaCleaningRuntime:
             return
         async for ev in mfc.events():
             k = getattr(ev, "kind", None)
+            if k in ("command_confirmed", "command_failed"):
+                # ★ 공유 MFC: 다른 주체(챔버 공정 등)의 확인/실패는 PC 와 무관 → 컨트롤러에 넘기지 않는다
+                #   (owner 가 없는 이벤트는 공용 → 기존처럼 넘긴다)
+                _ow = getattr(ev, "owner", None)
+                if _ow is not None and _ow != self._mfc_owner():
+                    continue
             if k == "status":
                 self.append_log(label, ev.message or "")
             elif k == "command_confirmed":
@@ -523,14 +529,14 @@ class PlasmaCleaningRuntime:
             if (self.mfc_gas is not None
                 and self.mfc_pressure is not None
                 and self.mfc_gas is not self.mfc_pressure):
-                ch1_chamber_running = False
+                gas_others: set = set()
                 try:
-                    ch1_chamber_running = bool(runtime_state.is_running("chamber", 1))
+                    gas_others = runtime_state.other_users(mfc_resource_key(self.mfc_gas), self._mfc_owner())
                 except Exception:
                     pass
-
-                if ch1_chamber_running:
-                    self.append_log("PC", "CH1 챔버 실행 중 → MFC 폴링 마스크 분리 생략")
+                if gas_others:
+                    self.append_log("PC", f"{mfc_resource_key(self.mfc_gas)} 다른 공정 사용 중"
+                                          f"({', '.join(sorted(gas_others))}) → MFC 폴링 마스크 분리 생략")
                 else:
                     if hasattr(self.mfc_gas, "set_poll_mask"):
                         self.mfc_gas.set_poll_mask(gas=True, pressure=False)
@@ -584,6 +590,11 @@ class PlasmaCleaningRuntime:
         self.mfc_pressure = mfc_pressure
         if had:
             self._acquire_mfcs()
+        # 런 진행 중이면 런 사용 등록도 새 장치 기준으로 갱신
+        if getattr(self, "_run_mfc_owner", None):
+            with contextlib.suppress(Exception):
+                runtime_state.begin_run_use(self._run_mfc_owner,
+                                            [mfc_resource_key(m) for m in self._mfc_targets()])
         self.append_log("PC", f"Bind MFC: GAS={_mfc_name(mfc_gas)}, SP4={_mfc_name(mfc_pressure)}")
 
     def set_ig_device(self, ig: Optional[AsyncIG]) -> None:
@@ -658,7 +669,7 @@ class PlasmaCleaningRuntime:
             gi = int(gas_idx)
             self._pc_gas_idx = gi  # ← 런타임에 보관해서 이후 스케일에 사용
             self.append_log("PC", f"GasFlow → {_mfc_name(self.mfc_gas)} ch{gi}")
-            await self.mfc_gas.gas_select(gi)  # MFC 내부 '선택 채널' 갱신
+            await self.mfc_gas.gas_select(gi, owner=self._mfc_owner())  # MFC 내부 '선택 채널' 갱신
 
         async def _mfc_flow_set_on(flow_sccm: float) -> None:
             mfc = self.mfc_gas
@@ -669,34 +680,34 @@ class PlasmaCleaningRuntime:
             ui   = float(max(0.0, flow_sccm))   # 이중 스케일 제거
 
             self.append_log("MFC", f"FLOW_SET_ON(sel ch={ch}) -> {ui:.1f} sccm")
-            await mfc.flow_set_on(ui)  # 선택 채널 기준의 개별 ON/안정화
+            await mfc.flow_set_on(ui, owner=self._mfc_owner())  # 선택 채널 기준의 개별 ON/안정화
 
         async def _mfc_flow_off() -> None:
             mfc = self.mfc_gas
             if not mfc:
                 return
             self.append_log("MFC", "FLOW_OFF(sel)")
-            await mfc.flow_off_selected()   # ✔ 선택 채널만 OFF(개별 L{ch}0)
+            await mfc.flow_off_selected(owner=self._mfc_owner())   # ✔ 선택 채널만 OFF(개별 L{ch}0)
             self.append_log("MFC", "FLOW_OFF OK")
 
         async def _mfc_sp4_set(mTorr: float) -> None:
             mfc = self.mfc_pressure
             if not mfc:
                 raise RuntimeError("mfc_pressure not bound")
-            await mfc.sp4_set(float(mTorr))      # ✔ 정식 API
+            await mfc.sp4_set(float(mTorr), owner=self._mfc_owner())      # ✔ 정식 API
 
         async def _mfc_sp4_on() -> None:
             mfc = self.mfc_pressure
             if not mfc:
                 raise RuntimeError("mfc_pressure not bound")
             #await mfc.valve_open()               # ✔ 밸브는 pressure MFC에서만
-            await mfc.sp4_on()                   # ✔ 정식 API
+            await mfc.sp4_on(owner=self._mfc_owner())                   # ✔ 정식 API
 
         async def _mfc_sp4_off() -> None:
             mfc = self.mfc_pressure
             if not mfc:
                 return
-            await mfc.valve_open()              # ✔ 정식 API
+            await mfc.valve_open(owner=self._mfc_owner())              # ✔ 정식 API
 
         async def _mfc_wait_sp4_pressure(target_mTorr: float, timeout_s: float) -> bool:
             """
@@ -1350,6 +1361,12 @@ class PlasmaCleaningRuntime:
             self._host_run_begin_pc(origin, origin_meta)
         with contextlib.suppress(Exception):
             runtime_state.set_running("pc", True, ch)
+        # ✅ 런 단위 MFC 사용 등록(시작 수락 ~ 자기 MFC 정리 끝). 이 등록이 있는 동안 챔버는 공유 MFC 를
+        #    전체 정리(대기열 폐기/초기화/연결 종료)하지 않는다. 해제는 _release_mfcs_and_finalize()/프리플라이트 실패 경로.
+        self._run_mfc_owner = f"pc{ch}"
+        self._mfc_release_done = False
+        with contextlib.suppress(Exception):
+            runtime_state.begin_run_use(self._run_mfc_owner, [mfc_resource_key(m) for m in self._mfc_targets()])
         with contextlib.suppress(Exception):
             self._set_running_ui_state()
             self._set_state_text("프리플라이트 중…")
@@ -1371,6 +1388,9 @@ class PlasmaCleaningRuntime:
             with contextlib.suppress(Exception):
                 runtime_state.set_error("pc", ch, msg)
                 runtime_state.mark_finished("pc", ch)
+
+            # ✅ 장치 명령 전 단계 실패 → 런 사용 등록만 해제(MFC 에는 손대지 않음)
+            self._end_mfc_run_use(clear_owner=True)
 
             with contextlib.suppress(Exception):
                 await self._cleanup_tasks_only("preflight_connect failed")
@@ -1788,14 +1808,19 @@ class PlasmaCleaningRuntime:
                         _ig_c = self.ig.cancel_wait()
                     await asyncio.wait_for(_ig_c, timeout=2.0)
 
-            # (B) MFC 소유권 해제 + 마지막 사용자였을 때만 마스크 원복/폴링 중단
-            #     (정상/실패/취소 모두 이 경로를 지난다. release 는 멱등이라 재호출도 안전)
-            with contextlib.suppress(Exception):
-                self._release_mfcs_and_finalize()
-
-            # (C) RF/가스/SP4 안전 정지
+            # (C) RF/가스/SP4 안전 정지 — 끝에서 MFC 소유권/런 사용을 해제한다(_shutdown_rest_devices).
+            #     ⚠ 해제를 가스 OFF '뒤'로: 먼저 해제하면 내 N2 OFF 가 나가기 전에 공유 MFC 가 정리될 수 있다.
             with contextlib.suppress(Exception):
                 await self._safe_rf_stop()
+
+            # (C2) 안전망: (C) 가 중간에 끝나 해제를 못 탔으면 여기서 해제(정상/실패/취소 모두 이 경로를 지난다)
+            if not getattr(self, "_mfc_release_done", False):
+                with contextlib.suppress(Exception):
+                    self._release_mfcs_and_finalize()
+
+            # (C3) 방금 낸 MFC 정리/해제 이벤트가 이벤트 펌프를 거쳐 전달되도록 잠깐 양보한 뒤 펌프를 내린다
+            #      (Python 3.12+ 의 wait_for 는 코루틴을 바로 실행해 양보가 없다 → 펌프 취소로 마지막 로그 유실 방지)
+            await asyncio.sleep(0.05)
 
             # (D) 내부 태스크 취소/대기 (유한 시간)
             try:
@@ -1815,6 +1840,7 @@ class PlasmaCleaningRuntime:
         finally:
             # ★★★ 가장 중요: 플래그 복구(예외 발생해도 다음 런에서 cleanup 동작)
             #self._cleanup_started = False
+            self._end_mfc_run_use(clear_owner=True)   # 어떤 경로든 런 사용 등록이 남지 않게(멱등)
             self.append_log("MAIN", "[CLEANUP] end")  # (선택)
 
     def _apply_button_state(self, *, start_enabled: bool, stop_enabled: bool) -> None:
@@ -1894,7 +1920,18 @@ class PlasmaCleaningRuntime:
         return getattr(self, "_cam_owner_active", "") or f"pc{int(getattr(self, '_selected_ch', 1))}"
 
     def _mfc_owner(self) -> str:
-        return f"pc{int(getattr(self, '_selected_ch', 1))}"
+        """공유 MFC 에서 이 PC 를 가리키는 주체 이름. 런 중에는 시작 때 고정한 값(라디오 전환과 무관)."""
+        run_owner = getattr(self, "_run_mfc_owner", None)
+        return run_owner or f"pc{int(getattr(self, '_selected_ch', 1))}"
+
+    def _end_mfc_run_use(self, *, clear_owner: bool = False) -> None:
+        """런 사용 등록 해제(멱등). clear_owner=True 면 고정 owner 도 지운다(런 종료)."""
+        owner = getattr(self, "_run_mfc_owner", None)
+        if owner:
+            with contextlib.suppress(Exception):
+                runtime_state.end_run_use(owner)
+        if clear_owner:
+            self._run_mfc_owner = None
 
     def _mfc_targets(self) -> list:
         """gas/pressure MFC (같은 객체면 1개)."""
@@ -1925,17 +1962,23 @@ class PlasmaCleaningRuntime:
         return had
 
     def _release_mfcs_and_finalize(self) -> None:
-        """각 MFC 에 대해 소유권을 해제하고, 마지막 사용자였을 때만
-        마스크 원복(gas/pressure 둘 다 True) + on_process_finished/set_process_status(False).
-        다른 주체가 아직 쓰고 있으면 손대지 않고 로그 1줄만 남긴다."""
+        """각 MFC 에 대해 소유권을 해제한다.
+        - 폴링 사용자도 런 사용자도 더 없으면(마지막) → 마스크 원복 + on_process_cleanup(전체 정리, 기존과 동일)
+        - 폴링하는 사용자는 없지만 다른 런(공정 준비/종료 중인 챔버 등)이 쓰는 중 → 폴링만 멈추고 PC 몫만 정리
+        - 다른 주체가 아직 폴링 중 → 손대지 않고 PC 몫만 정리 + 로그 1줄
+        ⚠ 런 사용 해제를 '판단 전에' 먼저 한다: 챔버와 동시에 끝나도 둘 중 나중 쪽이 반드시 전체 정리를 한다."""
         claims = getattr(self, "_mfc_claims", None)
         if claims is None:
             claims = self._mfc_claims = {}
+        self._end_mfc_run_use()
         for m in self._mfc_targets():
             key = mfc_resource_key(m)
             owner = claims.pop(key, self._mfc_owner())
             left = runtime_state.release_shared(key, owner)
-            if left == 0:
+            others_run: set = set()
+            with contextlib.suppress(Exception):
+                others_run = set(runtime_state.run_users(key)) - {owner}
+            if left == 0 and not others_run:
                 with contextlib.suppress(Exception):
                     if hasattr(m, "set_poll_mask"):
                         m.set_poll_mask(gas=True, pressure=True)
@@ -1946,9 +1989,27 @@ class PlasmaCleaningRuntime:
                         m.on_process_finished(False)
                     elif hasattr(m, "set_process_status"):
                         m.set_process_status(False)
+            elif left == 0:
+                with contextlib.suppress(Exception):
+                    if hasattr(m, "set_poll_mask"):
+                        m.set_poll_mask(gas=True, pressure=True)
+                with contextlib.suppress(Exception):
+                    if hasattr(m, "set_process_status"):
+                        m.set_process_status(False)
+                self._mfc_release_owner_on(m, owner)
+                self.append_log("MFC", f"{key} 대기열/상태 유지 — 다른 공정 진행 중: "
+                                       f"{', '.join(sorted(others_run))} (폴링만 중지, PC 몫만 정리)")
             else:
+                self._mfc_release_owner_on(m, owner)
                 self.append_log("MFC", f"{key} 폴링 유지 — 사용 중: "
                                        f"{', '.join(sorted(runtime_state.shared_users(key)))}")
+        self._mfc_release_done = True
+
+    def _mfc_release_owner_on(self, m, owner: str) -> None:
+        fn = getattr(m, "release_owner", None)
+        if callable(fn):
+            with contextlib.suppress(Exception):
+                fn(owner, reason="plasma cleaning finished")
 
 
     async def _shutdown_rest_devices(self) -> None:
@@ -1964,14 +2025,14 @@ class PlasmaCleaningRuntime:
         with contextlib.suppress(Exception):
             if self.mfc_gas:
                 self.append_log("STEP", "종료: MFC GAS OFF(sel)")
-                await self.mfc_gas.flow_off_selected()
+                await self.mfc_gas.flow_off_selected(owner=self._mfc_owner())
                 self.append_log("STEP", "종료: MFC GAS OFF OK")
 
         # 2) SP4 밸브 open(네 런타임 주석 기준 종료 시엔 open)
         with contextlib.suppress(Exception):
             if self.mfc_pressure:
                 self.append_log("STEP", "종료: MFC(SP4) VALVE OPEN")
-                await self.mfc_pressure.valve_open()
+                await self.mfc_pressure.valve_open(owner=self._mfc_owner())
                 self.append_log("STEP", "종료: MFC(SP4) VALVE OPEN OK")
 
         # 3) 소유권 해제 + 마지막 사용자였을 때만 폴링 완전 종료/내부 상태 리셋 (gas/pressure MFC)

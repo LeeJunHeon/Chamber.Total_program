@@ -1070,7 +1070,8 @@ class ChamberRuntime:
                 self.process_controller.on_mfc_confirmed(cmd)
                 return
             
-            self._spawn_detached(self.mfc.handle_command(cmd, args))
+            # ★ 명령 주체(owner)를 실어 보낸다 → 확인/실패가 이 챔버에게만 돌아온다(공유 MFC 교차 방지)
+            self._spawn_detached(self.mfc.handle_command(cmd, args, owner=self._mfc_run_owner()))
 
         def cb_dc_power(value: float):
             if not self.dc_power:
@@ -1771,7 +1772,9 @@ class ChamberRuntime:
 
                         try:
                             if self._skip_mfc_finalize_due_to_pc():
-                                self.append_log("MFC", "PC 실행 중 → mfc on_process_finished 생략(공유 자원 보호)")
+                                self.append_log("MFC", f"다른 공정이 MFC 사용 중({self._mfc_users_text()}) "
+                                                       f"→ mfc on_process_finished 생략(공유 자원 보호), 이 챔버 몫만 정리")
+                                self._mfc_release_own("finished")
                             else:
                                 self.mfc.on_process_finished(ok)
                         except Exception:
@@ -1936,6 +1939,12 @@ class ChamberRuntime:
     async def _pump_mfc_events(self) -> None:
         async for ev in self.mfc.events():
             k = ev.kind
+            if k in ("command_confirmed", "command_failed"):
+                # ★ 공유 MFC: 다른 주체(PC 등)의 확인/실패는 이 챔버 공정 토큰과 무관 → 넘기지 않는다
+                #   (owner 가 없는 이벤트는 공용 → 기존처럼 넘긴다)
+                _ow = getattr(ev, "owner", None)
+                if _ow is not None and _ow != self._mfc_run_owner():
+                    continue
             if k == "status":
                 self.append_log(f"MFC{self.ch}", ev.message or "")
             elif k == "command_confirmed":
@@ -2961,6 +2970,14 @@ class ChamberRuntime:
         return None
 
     def _on_process_status_changed(self, running: bool) -> None:
+        # ✅ 런 단위 MFC 사용 등록/해제(시작 클릭 직후 ~ 종료 절차 끝). 공유 MFC 의 전체 정리
+        #    (대기열 폐기/상태 초기화/연결 종료)는 다른 주체가 이 등록을 보고 미룬다.
+        with contextlib.suppress(Exception):
+            if running:
+                runtime_state.begin_run_use(self._mfc_run_owner(), [mfc_resource_key(self.mfc)])
+            else:
+                runtime_state.end_run_use(self._mfc_run_owner())
+
         # ✅ 공정 종료 시 이 챔버가 점유한 펄스 엔드포인트 클레임을 일괄 해제
         #    (정상/실패/중단/preflight 실패 모두 이 함수를 지나므로 해제 누락 불가)
         if not running:
@@ -4920,22 +4937,46 @@ class ChamberRuntime:
     # ======================= runner 메서드 =======================
 
     
+    def _mfc_run_owner(self) -> str:
+        """공유 MFC 에서 이 챔버를 가리키는 주체 이름(명령 owner / 런·폴링 사용자 이름)."""
+        return f"chamber{self.ch}"
+
+    def _mfc_other_users(self) -> set:
+        """이 챔버의 MFC 를 지금 쓰는 '다른' 주체 = 폴링 사용자 ∪ 런 사용자 − 나."""
+        return runtime_state.other_users(mfc_resource_key(self.mfc), self._mfc_run_owner())
+
+    def _mfc_users_text(self) -> str:
+        with contextlib.suppress(Exception):
+            return ", ".join(sorted(self._mfc_other_users())) or "-"
+        return "-"
+
+    def _mfc_release_own(self, reason: str) -> None:
+        """공유 중일 때 이 챔버 몫만 정리(대기열 전체 폐기/전체 초기화 없음)."""
+        fn = getattr(self.mfc, "release_owner", None)
+        if callable(fn):
+            with contextlib.suppress(Exception):
+                fn(self._mfc_run_owner(), reason=reason)
+
     def _skip_mfc_finalize_due_to_pc(self) -> bool:
         """
-        CH1 chamber 종료 시, PC가 mfc1(gas)을 공유 사용 중이면
-        mfc 폴링/상태 리셋/cleanup을 모두 생략한다.
-        (PC.mfc_gas는 main.py에서 항상 self.mfc1 = self.ch1.mfc 로 주입됨)
-        CH2 chamber의 self.mfc는 mfc2이므로 공유 이슈 없음 → 항상 False.
+        이 챔버의 MFC 를 다른 주체(PC 또는 다른 챔버)가 아직 쓰고 있으면 True
+        → 전체 정리(폴링 중단/대기열 폐기/상태 초기화/연결 종료)를 생략한다.
+        장치 기준: 폴링 사용자 ∪ 런 사용자(시작 수락 ~ 자기 정리 끝) − 나. 채널 조합 하드코딩 없음.
+        (예: CH2 PC 는 MFC1(가스)·MFC2(SP4) 를 런 동안 등록 → CH1 은 MFC1, CH2 는 MFC2 가 보호된다)
         """
         try:
-            if int(self.ch) != 1:
-                return False
-            # PC가 어느 챔버를 선택했든 mfc_gas는 mfc1을 쓰므로 둘 다 체크
-            return bool(runtime_state.is_running("pc", 1)) or \
-                   bool(runtime_state.is_running("pc", 2))
+            return bool(self._mfc_other_users())
         except Exception:
             return False
 
+
+    async def _mfc_cleanup_if_unshared(self, mfc) -> None:
+        """MFC 연결 종료 직전 재확인: 그 사이 다른 공정(PC 등)이 사용을 시작했으면 끊지 않는다.
+        (재확인과 cleanup 시작 사이에 await 가 없어서, 반대편 시작과 엇갈리지 않는다)"""
+        if self._skip_mfc_finalize_due_to_pc():
+            self.append_log("MFC", f"연결 종료 직전 재확인: 다른 공정이 사용 중({self._mfc_users_text()}) → mfc cleanup 생략")
+            return
+        await mfc.cleanup()
 
     async def _stop_device_watchdogs(self, *, light: bool = False) -> None:
         if light:
@@ -4964,7 +5005,9 @@ class ChamberRuntime:
         # ✅ heavy 시작 직후도 한 번 더 OFF
         with contextlib.suppress(Exception):
             if self._skip_mfc_finalize_due_to_pc():
-                self.append_log("MFC", "PC 실행 중 → mfc 폴링/상태 리셋 생략(공유 자원 보호)")
+                self.append_log("MFC", f"다른 공정이 MFC 사용 중({self._mfc_users_text()}) "
+                                       f"→ mfc 폴링/상태 리셋 생략(공유 자원 보호), 이 챔버 몫만 정리")
+                self._mfc_release_own("cleanup")
             elif self.mfc and hasattr(self.mfc, "on_process_cleanup"):
                 self.mfc.on_process_cleanup()          # 실패가 아니므로 라벨은 'cleanup'
             elif self.mfc and hasattr(self.mfc, "on_process_finished"):
@@ -5039,14 +5082,15 @@ class ChamberRuntime:
         # ✅ PC가 mfc1(gas)을 공유 사용 중이면 self.mfc.cleanup()을 생략 (공유 자원 보호)
         _skip_mfc = self._skip_mfc_finalize_due_to_pc()
         if _skip_mfc:
-            self.append_log("MFC", "PC 실행 중 → mfc cleanup 생략 (공유 자원 보호)")
+            self.append_log("MFC", f"다른 공정이 MFC 사용 중({self._mfc_users_text()}) → mfc cleanup 생략 (공유 자원 보호)")
         cleanup_tasks: list[asyncio.Task] = []
         for dev in (self.ig, self.mfc, self.dc_pulse, self.rf_pulse, self.dc_power, self.dc_power2, self.rf_power, self.rga):
             if dev is self.mfc and _skip_mfc:
                 continue
             if dev and hasattr(dev, "cleanup"):
                 try:
-                    coro = dev.cleanup()
+                    # MFC 는 연결 종료 직전에 다른 사용자를 한 번 더 확인한다
+                    coro = self._mfc_cleanup_if_unshared(dev) if dev is self.mfc else dev.cleanup()
                 except Exception:
                     continue
                 try:
