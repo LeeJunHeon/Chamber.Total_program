@@ -5,10 +5,12 @@ from PySide6.QtCore import QObject, Slot
 import asyncio
 import contextlib
 import json
+import os
 import ssl
 import threading
 import time
 import urllib.request
+from datetime import datetime
 from typing import Optional, List, Dict, Any, Set, Tuple
 
 # ── 단일 웹훅: lib/config_local.py 의 CHAT_WEBHOOK_URL 사용 ───────────────
@@ -59,6 +61,8 @@ class ChatNotifier(QObject):
         # notify_error_event 중복 억제: (src, code, cause[:120]) -> {"first": 첫 발생, "n": 억제 횟수}
         self._err_dedup: Dict[Tuple[str, str, str], Dict[str, float]] = {}
         self._err_dedup_lock = threading.Lock()
+        # notify_client_process 에러 카드 중복 억제: (대상, 결과, 사유[:120]) -> {"first", "n"}
+        self._client_err_dedup: Dict[Tuple[str, str, str], Dict[str, float]] = {}
         self._error_seen: Set[str] = set()    # 종료 리포트 중복 방지
         self._finished_sent: bool = False
 
@@ -269,7 +273,7 @@ class ChatNotifier(QObject):
     def _post_card(self, title: str, subtitle: str = "", status: str = "INFO",
                    fields: Optional[Dict[str, Any]] = None, urgent: bool = False,
                    route_params: Optional[dict] = None):
-        icon = {"INFO": "ℹ️", "SUCCESS": "✅", "FAIL": "❌"}.get(status, "ℹ️")
+        icon = {"INFO": "ℹ️", "SUCCESS": "✅", "FAIL": "❌", "WARN": "⚠️"}.get(status, "ℹ️")
         widgets = [{"textParagraph": {"text": f"<b>{icon} {title}</b>"}}]
         if subtitle:
             widgets.append({"textParagraph": {"text": subtitle}})
@@ -789,4 +793,151 @@ class ChatNotifier(QObject):
         for sub in expired_cards:
             self._post_card("장비 오류", subtitle=sub, status="FAIL", urgent=True)
         return send, suffix
+
+    # ------------------------------------------------------------------
+    # ✅ 클라이언트(로봇) 요청 공정 전용 방 — 시작 / 종료 / 에러 3종만
+    #    util/host_process_log 의 기록 이벤트(started / finished)를 받아 카드 1장으로 보낸다.
+    #    요청 1건 = "시작 → 종료" 또는 "시작 → 에러". 시작 전에 끝나면 "에러" 1장.
+    #    성공·STOP → 종료 카드, 그 밖의 결과(거절·실패·중단(재시작)·미확인) → 에러 카드.
+    # ------------------------------------------------------------------
+    _CLIENT_ERROR_LABELS = {
+        "거절": "요청 거절 (시작 전)",
+        "실패": "공정 실패",
+        "중단(재시작)": "프로그램 재시작으로 중단",
+        "미확인": "종료 미확인",
+    }
+
+    def notify_client_process(self, kind: str, info: dict) -> None:
+        """호스트 요청 공정 기록 이벤트 → 카드 1장. 예외를 밖으로 내지 않는다."""
+        try:
+            self._notify_client_process(str(kind or ""), dict(info or {}))
+        except Exception:
+            pass
+
+    @staticmethod
+    def _cp_dt(v) -> Optional[datetime]:
+        if isinstance(v, datetime):
+            return v
+        try:
+            return datetime.fromisoformat(str(v)) if v else None
+        except Exception:
+            return None
+
+    @staticmethod
+    def _cp_time(dt: Optional[datetime]) -> str:
+        """오늘이면 HH:MM:SS, 다른 날이면 MM/DD HH:MM:SS."""
+        if not isinstance(dt, datetime):
+            return "—"
+        if dt.date() != datetime.now().date():
+            return dt.strftime("%m/%d %H:%M:%S")
+        return dt.strftime("%H:%M:%S")
+
+    @staticmethod
+    def _cp_name(info: dict) -> str:
+        """공정명: 1개면 그대로, 여러 개면 '첫 공정 외 n개', 없으면 레시피 파일명(확장자 제외)."""
+        names = [x.strip() for x in str(info.get("process_names") or "").split(" / ") if x.strip()]
+        if len(names) == 1:
+            return names[0]
+        if len(names) > 1:
+            return f"{names[0]} 외 {len(names) - 1}개"
+        rn = str(info.get("recipe_name") or "").strip()
+        return os.path.splitext(rn)[0] if rn else "—"
+
+    def _notify_client_process(self, kind: str, info: dict) -> None:
+        target = str(info.get("target") or "").strip() or "—"
+        subtitle = f"{target} · {self._cp_name(info)}"
+        rx = self._cp_dt(info.get("received_at"))
+        st = self._cp_dt(info.get("started_at"))
+        fin = self._cp_dt(info.get("finished_at"))
+        rn = str(info.get("recipe_name") or "").strip()
+        rc = str(info.get("row_count") or "").strip()
+        if rn and rc:
+            recipe = f"{rn} (공정 {rc}개)"
+        else:
+            recipe = rn or (f"공정 {rc}개" if rc else "—")
+        rid = str(info.get("request_id") or "").strip()
+
+        if kind == "started":
+            fields: Dict[str, Any] = {
+                "대상": target,
+                "레시피": recipe,
+                "요청 시각": self._cp_time(rx),
+                "시작 시각": self._cp_time(st),
+            }
+            if rid:
+                fields["request_id"] = rid
+            self._post_card("공정 시작", subtitle, "INFO", fields, urgent=True)
+            return
+
+        if kind != "finished":
+            return
+
+        result = str(info.get("result") or "").strip()
+        reason = str(info.get("reason") or "").strip()
+
+        if result in ("성공", "STOP"):
+            if result == "성공":
+                status = "SUCCESS"
+                res_txt = "정상 완료" + (f" · {reason}" if reason else "")
+            else:
+                status = "WARN"
+                res_txt = "STOP" + (f" · {reason}" if reason else "")
+            fields = {"대상": target, "결과": res_txt, "레시피": recipe}
+            end = fin or datetime.now()
+            if st is not None:
+                fields["시작 ~ 종료"] = f"{self._cp_time(st)} ~ {self._cp_time(end)}"
+                fields["소요"] = f"{max(0.0, (end - st).total_seconds()) / 60.0:.1f}분"
+            else:
+                fields["종료 시각"] = self._cp_time(end)
+            if rid:
+                fields["request_id"] = rid
+            self._post_card("공정 종료", subtitle, status, fields, urgent=True)
+            return
+
+        # 에러: 거절 / 실패 / 중단(재시작) / 미확인 / 그 밖의 결과
+        label = self._CLIENT_ERROR_LABELS.get(result, result or "알 수 없음")
+        if result == "실패" and st is None:
+            label = "공정 실패 (시작 전)"
+        send, rep = self._client_err_dedup_decide((target, result, reason[:120]),
+                                                  now=time.monotonic())
+        if not send:
+            return
+        fields = {
+            "구분": label,
+            "사유": reason[:300] if reason else "—",
+            "대상": target,
+            "레시피": recipe,
+            "요청 시각": self._cp_time(rx),
+        }
+        if st is not None:
+            fields["시작 시각"] = self._cp_time(st)
+        fields["시각"] = self._cp_time(fin or datetime.now())
+        if rep:
+            fields["반복"] = rep
+        if rid:
+            fields["request_id"] = rid
+        self._post_card("공정 에러", subtitle, "FAIL", fields, urgent=True)
+
+    def _client_err_dedup_decide(self, key: Tuple[str, str, str], *, now: float) -> Tuple[bool, str]:
+        """같은 (대상, 결과, 사유) 에러 카드는 CHAT_ERR_DEDUP_S 안에서 1장만(로봇 재시도 폭주 방지).
+        창이 지난 뒤 같은 에러가 다시 나면 그동안 생략한 횟수를 '반복' 칸으로 붙인다. 창=0 이면 항상 보낸다."""
+        win = self._err_dedup_window_s()
+        if win <= 0.0:
+            return True, ""
+        with self._err_dedup_lock:
+            st = self._client_err_dedup.get(key)
+            if st is not None and (now - st["first"]) < win:
+                st["n"] += 1
+                return False, ""
+            rep = ""
+            if st is not None and st["n"] > 0:
+                rep = f"직전 {now - st['first']:.0f}초 동안 같은 에러 {int(st['n'])}회 더 (생략)"
+            self._client_err_dedup[key] = {"first": now, "n": 0}
+            for k in [k for k, v in self._client_err_dedup.items()
+                      if k != key and v["n"] == 0 and (now - v["first"]) >= win]:
+                del self._client_err_dedup[k]
+            while len(self._client_err_dedup) > 256:
+                oldest = min(self._client_err_dedup, key=lambda k: self._client_err_dedup[k]["first"])
+                del self._client_err_dedup[oldest]
+            return True, rep
 

@@ -27,9 +27,10 @@ import os
 import re
 import threading
 import time
+from collections import OrderedDict
 from datetime import datetime
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 # ─────────────────────────────────────────────────────────────
 # 규약 상수 (ALD 와 공통 — 변경 금지)
@@ -128,6 +129,10 @@ class HostProcessLog:
         self._mem_queue_drop_warned: bool = False
         # NAS 전송은 프로세스 안에서 한 번에 하나만 (워커 스레드 ↔ 명시 호출 경쟁 방지)
         self._flush_lk = threading.Lock()
+        # 기록 이벤트 통지(클라이언트 공정 구글챗 방). CSV 규약·기록 순서는 그대로 두고,
+        # 기록이 생긴 '뒤' 락 밖에서만 알린다. 종료 통지는 기록키당 1회.
+        self._event_sink: Optional[Callable[[str, Dict[str, Any]], None]] = None
+        self._final_emitted: "OrderedDict[str, None]" = OrderedDict()
 
     # ── 설정 (DEC-033: 호출 시점에 읽는다) ───────────────────
     @staticmethod
@@ -198,6 +203,59 @@ class HostProcessLog:
         except Exception as e:
             _dbg(f"open 저장 실패: {e!r}")
 
+    # ── 기록 이벤트 통지 ─────────────────────────────────────
+    #  kind="started"  : 실제 시작 시각이 처음 기록될 때(mark_started) 1회
+    #  kind="finished" : 결과 줄이 기록될 때(finalize·reject·startup_recover) 기록키당 1회
+    #  sink(kind, info) 는 호출한 스레드(이벤트 루프 또는 워커)에서 락 밖에서 불린다.
+    #  sink 는 바로 돌아와야 하고(예: loop.call_soon_threadsafe 로 넘기기만), 예외는 여기서 삼킨다.
+    def set_event_sink(self, fn: Optional[Callable[[str, Dict[str, Any]], None]]) -> None:
+        """기록 이벤트 수신자 등록(None 이면 해제). CSV 기록 동작에는 영향이 없다."""
+        with self._lk:
+            self._event_sink = fn
+
+    @staticmethod
+    def _event_info(it: dict, **extra) -> Dict[str, Any]:
+        """통지용 사본 — open 항목을 그대로 넘기지 않는다(시각은 datetime 또는 None)."""
+        info: Dict[str, Any] = {
+            "key": str(it.get("key", "") or ""),
+            "target": str(it.get("target", "") or ""),
+            "request_id": str(it.get("request_id", "") or ""),
+            "peer": str(it.get("peer", "") or ""),
+            "received_at": _parse_iso(it.get("received_at")),
+            "started_at": _parse_iso(it.get("started_at")),
+            "recipe_name": str(it.get("recipe_name", "") or ""),
+            "row_count": str(it.get("row_count", "") or ""),
+            "process_names": str(it.get("process_names", "") or ""),
+            "log_files": [str(x) for x in (it.get("log_files") or [])],
+        }
+        info.update(extra)
+        return info
+
+    def _final_event_once(self, it: dict, *, result: str, reason: str,
+                          finished_at: Optional[datetime]) -> Optional[Dict[str, Any]]:
+        """종료 통지 내용. 수신자가 없거나 이미 알린 기록키면 None. (self._lk 안에서 호출)"""
+        if self._event_sink is None:
+            return None
+        key = str(it.get("key", "") or "")
+        if not key or key in self._final_emitted:
+            return None
+        self._final_emitted[key] = None
+        while len(self._final_emitted) > 512:
+            self._final_emitted.popitem(last=False)
+        return self._event_info(
+            it, result=str(result or ""), reason=_one_line(reason),
+            finished_at=finished_at if isinstance(finished_at, datetime) else None)
+
+    def _emit(self, kind: str, info: Optional[Dict[str, Any]]) -> None:
+        """락 밖에서만 호출한다. 수신자 예외는 삼킨다(기록·공정에 영향 금지)."""
+        fn = self._event_sink
+        if fn is None or not info:
+            return
+        try:
+            fn(kind, info)
+        except Exception as e:
+            _dbg(f"이벤트 통지 실패({kind}): {e!r}")
+
     # ── 공개 API ─────────────────────────────────────────────
     def request(self, *, target: str, request_id: Any, peer: str,
                 received_at: Optional[datetime] = None,
@@ -261,14 +319,17 @@ class HostProcessLog:
         """시작일시(최초 1회만) + 로그파일명 추가."""
         if not self.enabled() or not key:
             return
+        ev: Optional[Dict[str, Any]] = None
         try:
             with self._lk:
                 cur = self._load_open()
                 it = cur.get(key)
                 if not it:
                     return
+                first = False
                 if not it.get("started_at"):
                     it["started_at"] = _iso(started_at if isinstance(started_at, datetime) else datetime.now())
+                    first = True
                 if log_file:
                     lf = list(it.get("log_files") or [])
                     if log_file not in lf:
@@ -276,8 +337,12 @@ class HostProcessLog:
                     it["log_files"] = lf
                 cur[key] = it
                 self._save_open(cur)
+                if first and self._event_sink is not None:
+                    ev = self._event_info(it)
         except Exception as e:
             _dbg(f"mark_started 실패: {e!r}")
+        # 실제 시작이 처음 기록됐을 때만 1회 통지(락 밖)
+        self._emit("started", ev)
 
     def mark_owned(self, key: str) -> None:
         """러너/컨트롤러가 요청을 수락했다는 표시(메모리)."""
@@ -297,6 +362,7 @@ class HostProcessLog:
         """종료 줄 1개를 기록한다. 멱등 — open 에 key 가 없으면 False."""
         if not self.enabled() or not key:
             return False
+        ev: Optional[Dict[str, Any]] = None
         try:
             with self._lk:
                 cur = self._load_open()
@@ -312,6 +378,9 @@ class HostProcessLog:
                 row = self._build_row(it, result=result, reason=reason,
                                       started=st, finished=fin)
                 line = _csv_line(row)
+
+                # 종료 통지 내용(기록키당 1회) — 아래 기록 경로(pending / 메모리 큐)와 무관하게 요청은 끝났다
+                ev = self._final_event_once(it, result=result, reason=reason, finished_at=fin)
 
                 # ① pending 에 먼저 (요청날짜 + 15칸)
                 if not self._append_pending(ymd, row):
@@ -340,6 +409,9 @@ class HostProcessLog:
         except Exception as e:
             _dbg(f"finalize 실패: {e!r}")
             return False
+        finally:
+            # 락을 빠져나온 뒤 통지(수신자 예외는 _emit 이 삼킨다)
+            self._emit("finished", ev)
 
     def reject(self, key: str, reason: str) -> bool:
         return self.finalize(key, RESULT_REJECT, reason)
@@ -425,6 +497,7 @@ class HostProcessLog:
         로컬 파일만 본다 — NAS 를 기다리지 않는다."""
         if not self.enabled():
             return
+        evs: List[Dict[str, Any]] = []
         try:
             with self._lk:
                 P = self._pending_keys()
@@ -446,9 +519,16 @@ class HostProcessLog:
                             except Exception:
                                 pass
                             cur.pop(key, None)
+                            _ev = self._final_event_once(it, result=RESULT_RESTART,
+                                                         reason=reason, finished_at=None)
+                            if _ev is not None:
+                                evs.append(_ev)
                     self._save_open(cur)
         except Exception as e:
             _dbg(f"startup_recover 실패: {e!r}")
+        # 재시작으로 끝난 요청 통지(락 밖)
+        for _ev in evs:
+            self._emit("finished", _ev)
 
         self._ensure_worker()
         self._kick.set()

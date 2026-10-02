@@ -240,6 +240,39 @@ class MainWindow(QWidget):
             self.chat_plc.set_defer(False)   # 끊김/재연결은 항상 즉시 전송
             self.chat_plc.start()
 
+        # ★ 클라이언트(로봇) 요청 공정 전용 ChatNotifier (별도 웹훅 URL, 비어 있으면 기능 꺼짐)
+        #   호스트 요청 공정 로그(util/host_process_log)에 기록이 생길 때만 시작/종료/에러 카드를 보낸다
+        #   (공유 CSV 와 같은 기준 — UI·파일·Pre-Sputter 시작은 대상 아님). 기존 방 알림은 그대로.
+        _cp_url = (getattr(cfgl, "CHAT_WEBHOOK_CLIENT_PROCESS_URL", "") or "").strip()
+        self.chat_client = ChatNotifier(_cp_url) if _cp_url else None
+        if self.chat_client is not None:
+            try:
+                self.chat_client.setObjectName("ChatNotifier_CLIENT_PROCESS")
+            except Exception:
+                pass
+            self.chat_client.set_defer(False)   # 시작/종료/에러는 항상 즉시 전송
+            self.chat_client.start()
+
+            # 기록 이벤트는 워커 스레드(재시작 복구)에서도 온다 → 전송은 반드시 이벤트 루프 스레드로 넘긴다
+            def _emit_client_process_card(kind: str, info: dict) -> None:
+                notifier = getattr(self, "chat_client", None)
+                if notifier is None:
+                    return
+
+                def _send():
+                    with contextlib.suppress(Exception):
+                        notifier.notify_client_process(kind, info)
+
+                try:
+                    self._loop.call_soon_threadsafe(_send)
+                except Exception:
+                    with contextlib.suppress(Exception):
+                        _send()
+
+            with contextlib.suppress(Exception):
+                from util.host_process_log import get_host_log as _ghl_cp
+                _ghl_cp().set_event_sink(_emit_client_process_card)
+
         # ── 현재 PLC 로그의 소유 챔버 (1/2). 없으면 None → 방송 모드
         self._plc_owner: Optional[int] = None
         self.pc = None  # Plasma Cleaning 런타임 핸들
@@ -1279,6 +1312,7 @@ class MainWindow(QWidget):
             getattr(self, "chat_ch2", None),
             getattr(self, "chat_pc", None),
             getattr(self, "chat_tsp", None),
+            getattr(self, "chat_client", None),
         ):
             with contextlib.suppress(Exception):
                 if c:
