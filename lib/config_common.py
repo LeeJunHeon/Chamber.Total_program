@@ -420,6 +420,7 @@ RFPULSE_CONNECT_TIMEOUT_S = 1.5
 RFPULSE_DRAIN_TIMEOUT_S = 2.0
 RFPULSE_OFF_DEADLINE_S = 20.0      # RF Pulse OFF 확인 최대 시간(재연결 포함). 넘기면 '출력 상태 미확인' 실패
 RFPULSE_CLEANUP_OFF_WAIT_S = 8.0   # cleanup 전 OFF 확인 대기(장치 cleanup 전체 15초 제한 안)
+RFPULSE_UNUSED_OFF_WAIT_S = 3.0    # 이번 런에서 RF 출력을 켠 적 없을 때 정지 단계 RF_OFF 1회의 응답 대기(초). 응답이 없어도 경고 없이 정지 단계 완료
 RFPULSE_RAW_LOG = False   # RF Pulse 원시 프레임 로그. False 면 정주기 폴링 프레임([POLL …])만 생략하고, 설정/제어 명령과 NAK·체크섬 오류는 항상 남는다
 RFPULSE_WATCHDOG_INTERVAL_MS = 3000
 RFPULSE_RECONNECT_BACKOFF_START_MS = 2000
@@ -470,6 +471,7 @@ PC_POWER_SELECT_SETTLE_MS = 7_000         # SW_RF_SELECT 전환 후 DCP 통신 �
 PC_POWER_OFF_TIMEOUT_MS = 240_000         # shutdown 중 power off 토큰 대기 최소(ms)
 POWER_OFF_ZERO_DEADLINE_S = 10.0   # PLC D/A 전원(DC1/DC2/RF 연속/PC RF) OFF 때 0W 쓰기 확인 최대 시간
 DCP_CLEANUP_OFF_WAIT_S = 8.0       # DC Pulse cleanup 전 OUTPUT_OFF 확인 대기(장치 cleanup 전체 15초 제한 안)
+DCP_UNUSED_OFF_WAIT_S = 3.0        # 이번 런에서 DC Pulse 출력을 켠 적 없을 때 정지 단계 OUTPUT_OFF 1회의 응답 대기(초). 응답이 없어도 경고 없이 정지 단계 완료
 
 
 # ======================================================================

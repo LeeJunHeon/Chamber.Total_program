@@ -1212,7 +1212,13 @@ class ChamberRuntime:
             async def run():
                 if self.dc_pulse:
                     try:
-                        await self.dc_pulse.output_off()
+                        # ✅ 이번 런에서 출력을 켠 적 없으면 확인형 OFF(재시도·세션 복구 — 장비 무응답이면 수 분) 대신
+                        #    OUTPUT_OFF 1회로 정지 단계를 바로 끝낸다. 켠 적 있거나 이전 OFF 미확인이면 기존 확인형 그대로.
+                        _need = getattr(self.dc_pulse, "off_needs_confirm", None)
+                        if callable(_need) and not _need():
+                            await self.dc_pulse.output_off_unused()
+                        else:
+                            await self.dc_pulse.output_off()
                     except Exception as e:
                         self.append_log("DCPulse", f"output_off failed: {e!r}")
                         self.process_controller.on_dc_pulse_failed(
@@ -1293,7 +1299,13 @@ class ChamberRuntime:
                 if not self.rf_pulse:
                     return
                 try:
-                    self.rf_pulse.stop_process()
+                    # ✅ 이번 런에서 RF 출력을 켠 적 없으면 확인형 OFF(최대 RFPULSE_OFF_DEADLINE_S) 대신 RF_OFF 1회로
+                    #    정지 단계를 바로 끝낸다. 켠 적 있거나 이전 OFF 미확인이면 기존 확인형 그대로.
+                    _need = getattr(self.rf_pulse, "off_needs_confirm", None)
+                    if callable(_need) and not _need():
+                        self.rf_pulse.stop_unused()
+                    else:
+                        self.rf_pulse.stop_process()
                 except Exception as e:
                     self.append_log("RFPulse", f"stop_process failed: {e!r}")
                     self.process_controller.on_rf_pulse_failed(

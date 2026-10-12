@@ -901,6 +901,80 @@ class RFPulseAsync:
                 return
             self._off_task = self._spawn(self._power_off_sequence())
 
+    def off_needs_confirm(self) -> bool:
+        """출력이 켜져 있을 수 있는가(= 확인형 RF OFF 가 필요한가).
+
+        True : 이 프로그램이 RF_ON 을 보냈거나(_output_maybe_on — 전송 직전 표시, RF_OFF 확인 전까지 유지),
+               이전 OFF 가 확인되지 않은 채 끝났다(output_off_unconfirmed).
+        False: 프로그램이 시작된 뒤 이 장치에 RF 출력을 켠 적이 없다 → stop_unused() 로 충분하다.
+        """
+        return bool(getattr(self, "_output_maybe_on", False)
+                    or getattr(self, "output_off_unconfirmed", False))
+
+    def stop_unused(self):
+        """켠 적 없는 출력의 정지: RF_OFF 1회(확인·재시도 없음) → power_off_finished 정확히 1회(경고 없음).
+
+        배경(2026-10-11 17:07 CH2): HOST 확인 실패로 RF 를 한 번도 켜지 않은 런인데 확인형 OFF 가 20초를 쓰고
+        '켜져 있을 가능성 있음' 경고를 냈다. 기다리는 사이 RF_ON 이 나가면 확인형 OFF(_power_off_sequence)로 넘긴다.
+        """
+        self._stop_requested = True
+        self.set_process_status(False)
+        self._purge_pending("stop", keep_rf_off=True)
+        # OFF 시퀀스는 런당 1개만 — stop_process() 와 같은 _off_task 를 쓴다
+        if self._off_in_progress():
+            return
+        self._off_task = self._spawn(self._power_off_unused())
+
+    async def _power_off_unused(self) -> None:
+        """stop_unused() 의 본체. 대기는 RFPULSE_UNUSED_OFF_WAIT_S(기본 3초)까지."""
+        wait_s = max(0.5, self._cfg_float("RFPULSE_UNUSED_OFF_WAIT_S", 3.0))
+        ack_ms = self._cfg_int("ACK_TIMEOUT_MS", 2000)
+        res: Optional[bytes] = None
+        try:
+            # 연결 보장 — _power_off_sequence 와 같다(OFF 도중 재연결은 끊지 않는다)
+            self._want_connected = True
+            await self.start()
+            if not self._connected:
+                with contextlib.suppress(Exception):
+                    await self.pause_watchdog()
+                self._reconnect_backoff_ms = self._cfg_int("RFPULSE_RECONNECT_BACKOFF_START_MS", 2000)
+                with contextlib.suppress(Exception):
+                    await self.resume_watchdog()
+
+            fut: asyncio.Future = asyncio.get_running_loop().create_future()
+            self._enqueue_exec(
+                CMD_RF_OFF, b"",
+                tag="[RF OFF 1회]",
+                timeout_ms=max(ack_ms, 2500),
+                retries=0,
+                allow_no_reply=False,
+                allow_when_closing=True,
+                callback=lambda b: (not fut.done()) and fut.set_result(b),
+            )
+            with contextlib.suppress(asyncio.TimeoutError):
+                res = await asyncio.wait_for(fut, timeout=wait_s)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            with contextlib.suppress(Exception):
+                await self._off_status(f"RF OFF 1회 예외: {e!r}")
+
+        if self.off_needs_confirm():
+            # 경합: 기다리는 사이 RF_ON 이 나갔다 → 기존 확인형 OFF(실패 시 기존 안전 경고 그대로)
+            await self._off_status("RF OFF 1회 대기 중 RF ON 이 나감 → 확인형 RF OFF 로 전환")
+            await self._power_off_sequence()
+            return
+
+        if res and len(res) >= 1:
+            csr = res[0]
+            how = "CSR 0" if csr == 0 else f"CSR {csr}: {CSR_CODES.get(csr, 'Unknown')}"
+        else:
+            how = "응답 없음"
+        await self._off_status(
+            f"이번 런에서 RF 출력을 켠 적 없음 → RF OFF 1회만 보냄({how}) — 확인 대기 없이 정지 단계 완료"
+        )
+        self._put_event_drop_oldest(RFPulseEvent(kind="power_off_finished"))
+
     async def poll_once(self):
         """원샷 WAKE→FWD→REF 읽기 및 이벤트 방출."""
         st = await self._read_status()

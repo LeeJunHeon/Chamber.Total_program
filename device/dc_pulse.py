@@ -1224,6 +1224,76 @@ class AsyncDCPulse:
             if self._off_in_flight == 0:
                 _ev.set()
 
+    def off_needs_confirm(self) -> bool:
+        """출력이 켜져 있을 수 있는가(= 확인형 OUTPUT_OFF 가 필요한가).
+
+        True : 이 프로그램이 OUTPUT_ON 을 보냈거나(_output_maybe_on — 전송 직전 표시, OFF 확인 전까지 유지),
+               켜짐을 확인했거나(_out_on), 이전 OFF 가 확인되지 않은 채 끝났다(output_off_unconfirmed).
+        False: 프로그램이 시작된 뒤 이 장치에 출력을 켠 적이 없다 → output_off_unused() 로 충분하다.
+        (DC 전원의 '이번 런에서 안 쓴 전원은 0W 1회' 규칙[DEC-105]과 같은 기준)
+        """
+        return bool(getattr(self, "_out_on", False)
+                    or getattr(self, "_output_maybe_on", False)
+                    or getattr(self, "output_off_unconfirmed", False))
+
+    async def output_off_unused(self) -> bool:
+        """켠 적 없는 출력의 정지 — OUTPUT_OFF 를 1회만 보내고 확인·재시도·세션 복구 없이 끝낸다.
+
+        배경(2026-10-08 밤 CH2): 장비가 응답하지 않아 PRECHECK 에서 멈춘 런(출력은 한 번도 안 켬)인데도
+        종료 절차가 확인형 OUTPUT_OFF(5회 × 재연결)로 240초를 다 쓰는 동안 가스가 흘렀고 'OFF 미확인' 경고가 났다.
+        - 결과는 command_confirmed(cmd="OUTPUT_OFF_UNUSED") 1회 → 정지 단계 완료(경고 없음)
+        - 응답이 없어도 실패로 보지 않는다(켠 적이 없다). 대기는 DCP_UNUSED_OFF_WAIT_S(기본 3초)까지
+        - 기다리는 사이 OUTPUT_ON 이 나가 '켜졌을 수 있음' 이 되면 기존 확인형 output_off() 로 넘긴다
+        """
+        _ev = self._off_tracker()
+        self._off_in_flight += 1
+        _ev.clear()
+        resp: Optional[bytes] = None
+        try:
+            # ✅ 확인형 OFF 와 같은 가드: 정지 중에는 켜는/세팅하는 write 를 막는다
+            self._stop_guard = True
+            with contextlib.suppress(Exception):
+                self.set_process_status(False)
+            self._drain_rx_frames()
+            self._purge_rx_frames()
+
+            wait_s = max(0.5, self._cfg_float("DCP_UNUSED_OFF_WAIT_S", 3.0))
+            fut: asyncio.Future = asyncio.get_running_loop().create_future()
+
+            def _cb(b: Optional[bytes]) -> None:
+                if not fut.done():
+                    fut.set_result(b)
+
+            # 워커 재시도 0(1회 전송). 연결이 끊겨 있으면 큐에서 기다리다 대기 한도에서 넘어간다
+            # (큐에 남은 OUTPUT_OFF 는 나중에 나가도 무해하고, cleanup 이 폐기한다)
+            payload = self._proto.pack_write(0x80, 0x0002, width=2)
+            self._enqueue(Command(payload, "OUTPUT_OFF[1회]", self._timeout_ms, self._gap_ms, 0, _cb))
+            with contextlib.suppress(asyncio.TimeoutError):
+                resp = await asyncio.wait_for(fut, timeout=wait_s)
+        finally:
+            self._off_in_flight = max(0, self._off_in_flight - 1)
+            if self._off_in_flight == 0:
+                _ev.set()
+
+        if self.off_needs_confirm():
+            # 경합: 기다리는 사이 OUTPUT_ON 이 나갔다 → 기존 확인형 OFF(실패 시 기존 안전 경고 그대로)
+            await self._emit_status("OUTPUT_OFF 1회 대기 중 OUTPUT_ON 이 나감 → 확인형 OUTPUT_OFF 로 전환")
+            return await self.output_off()
+
+        if not resp:
+            how = "응답 없음"
+        elif len(resp) == 1 and resp[0] == 0x06:
+            how = "ACK"
+        elif len(resp) == 1 and resp[0] == 0x04:
+            how = "ERR(04)"
+        else:
+            how = "응답 " + resp.hex(" ")
+        await self._emit_status(
+            f"이번 런에서 출력을 켠 적 없음 → OUTPUT_OFF 1회만 보냄({how}) — 확인 대기 없이 정지 단계 완료"
+        )
+        await self._emit_confirmed("OUTPUT_OFF_UNUSED")
+        return True
+
     async def _output_off_impl(self) -> bool:
         # ✅ 출력을 끄기 '직전' 에 0x96/0x99 를 읽어 런 종료값을 확정한다.
         #    (이전에는 폴링이 우연히 마지막으로 찍은 표본이 종료값이 됐다 — 문제 4)
