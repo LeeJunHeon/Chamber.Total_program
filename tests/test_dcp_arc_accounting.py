@@ -76,7 +76,7 @@ def test_2_reset_verification_log():
     """0x8C 동작 여부 판정 규칙: post==0 이거나 post<pre 면 '예'."""
     import device.dc_pulse as M
     src = open(M.__file__, encoding="utf-8").read()
-    assert "[arc] reset 확인:" in src
+    assert "[arc] 0x8C 리셋:" in src
     assert "0x8C 동작=" in src
     assert "self._arc_reset_ok" in src
 
@@ -270,7 +270,7 @@ def test_6_arc_split():
 def test_7_device_self_reset_guard():
     import device.dc_pulse as M
     src = open(M.__file__, encoding="utf-8").read()
-    assert "[arc] 장비 자체 리셋 감지" in src
+    assert "[arc] 장비 카운터 감소" in src
     assert "_arc_zero_reset_logged" in src
 
     # 런 시작 시 플래그가 초기화된다(런당 1회 보장)
@@ -278,7 +278,7 @@ def test_7_device_self_reset_guard():
     assert "self._arc_zero_reset_logged = False" in src[i_on:i_on + 900]
 
     # 로그는 플래그가 꺼져 있을 때만 (런당 1회)
-    i_log = src.index("[arc] 장비 자체 리셋 감지")
+    i_log = src.index("[arc] 장비 카운터 감소")
     guard = src[i_log - 400:i_log]
     assert 'not getattr(self, "_arc_zero_reset_logged", False)' in guard
 
