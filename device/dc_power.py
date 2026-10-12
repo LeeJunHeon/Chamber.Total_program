@@ -171,6 +171,8 @@ class DCPowerAsync:
         self._low_power_streak = 0    # ★ 저전력 카운터 리셋
         self._low_current_streak = 0  # ★ 저전류 카운터 리셋
         self._overcurrent_streak = 0  # ★ 과전류 카운터 리셋
+        # 런 시작 시 과전류 인터락 상태(ON/OFF·한계값) 1줄 — 목표 전력 확정 직후
+        await self._emit_overcurrent_arm_status()
 
         if not self._toggle_enable:
             await self._emit_status("DCV SET ON 실패: toggle_enable 콜백이 없습니다.")
@@ -275,11 +277,38 @@ class DCPowerAsync:
         except Exception:
             pass
 
+    @staticmethod
+    def _oc_cfg(key: str, default):
+        """DC 과전류 인터락 설정(DC_OVERCURRENT_*) 전용 — config_common(settings.json common) 단일 출처.
+        매 호출 때 읽어 런타임 변경을 반영하고, 형 변환은 default 의 형(bool/int/float)을 따른다(실패 시 default)."""
+        try:
+            return type(default)(getattr(cfgc, key, default))
+        except Exception:
+            return default
+
+    async def _emit_overcurrent_arm_status(self) -> None:
+        """런 시작(목표 전력 확정 직후) 과전류 인터락 상태 1줄. 로그 실패가 공정을 막지 않는다."""
+        try:
+            if not self._oc_cfg("DC_OVERCURRENT_ENABLE_CONT", True):
+                await self._emit_status(
+                    "[overcurrent] ⚠ 인터락 OFF (settings.json common.DC_OVERCURRENT_ENABLE_CONT=false) — 과전류로 정지하지 않음"
+                )
+                return
+            tp = float(self.target_power or 0.0)
+            limit = dc_overcurrent_limit_a(tp if tp > 0.0 else None)
+            streak_n = max(1, self._oc_cfg("DC_OVERCURRENT_STREAK_N", 1))
+            await self._emit_status(
+                f"[overcurrent] 인터락 ON — 한계 {limit:.2f}A (설정 {tp:.0f}W, 연속 {streak_n}회)"
+            )
+        except Exception:
+            pass
+
     async def _check_overcurrent(self) -> bool:
         """세트포인트(target_power) 기준 전류 상한 초과 판정. 차단이면 status + target_failed 를 내고 True.
         (호출부가 cleanup() 을 띄우고 루프를 끝낸다 — 저전류 감시와 같은 경로)"""
         mod = self._cfg if self._cfg is not None else cfgc
-        if not bool(getattr(mod, "DC_OVERCURRENT_ENABLE_CONT", getattr(cfgc, "DC_OVERCURRENT_ENABLE_CONT", True))):
+        # DC_OVERCURRENT_* 는 config_common(settings.json common) 단일 출처 — 채널 모듈(import 시점 복사본)은 보지 않는다
+        if not self._oc_cfg("DC_OVERCURRENT_ENABLE_CONT", True):
             return False
         try:
             ia = float(self.current_a or 0.0)
@@ -295,7 +324,7 @@ class DCPowerAsync:
             if self._overcurrent_streak:
                 self._overcurrent_streak = 0
             return False
-        streak_n = max(1, int(getattr(mod, "DC_OVERCURRENT_STREAK_N", getattr(cfgc, "DC_OVERCURRENT_STREAK_N", 1))))
+        streak_n = max(1, self._oc_cfg("DC_OVERCURRENT_STREAK_N", 1))
         if self._overcurrent_streak < streak_n:
             await self._emit_status(
                 f"과전류 감시: {self._overcurrent_streak}/{streak_n} (meas={ia:.3f}A > {limit:.3f}A)"

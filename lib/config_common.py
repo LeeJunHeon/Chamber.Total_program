@@ -219,6 +219,8 @@ DC_WATT_DEADBAND = 0.5              # 연속 전송 억제 데드밴드(W) (init
 #  ON 직후 2.71A(정상 대비 약 5배) → 타겟 파손이 근거.
 #  ENABLE 과 ENABLE_CONT 를 나눈 이유: DC Power/DC2 의 전류는 PLC_DC_I_SCALE(미검증) 을
 #  거치므로 별도로 끌 수 있게 분리.
+#  ★ settings.json common 단일 출처 — 드라이버(dc_pulse/dc_power)가 config_common 에서 직접 읽음
+#    (config_ch1/ch2 는 import 시점 복사본이라 common 변경이 전파되지 않으므로 채널 값은 쓰지 않는다)
 DC_OVERCURRENT_ENABLE       = True    # DC Pulse 쪽 인터락 사용
 DC_OVERCURRENT_ENABLE_CONT  = True    # DC Power/DC2(PLC 경유) 쪽 인터락 사용
 DC_OVERCURRENT_P1_W         = 300.0   # 이 전력 이하는 I1 고정

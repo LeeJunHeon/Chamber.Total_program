@@ -27,6 +27,9 @@ import asyncio, time, contextlib, socket
 from lib import config_common as cfgc   # 공통 config(런타임 reload용)
 from lib.power_limits import dc_overcurrent_limit_a   # DC 과전류 인터락 상한(세트포인트 기준)
 
+# DC 과전류 인터락 설정 키 접두어 — 이 키들은 채널 모듈이 아니라 config_common 에서만 읽는다(_cfg_get)
+_OC_KEY_PREFIX = "DC_OVERCURRENT_"
+
 # ========= 이벤트 모델 =========
 EventKind = Literal["status", "telemetry", "command_confirmed", "command_failed", "arc_threshold_reached"]
 
@@ -372,6 +375,11 @@ class AsyncDCPulse:
 
     def _cfg_get(self, key: str, default):
         # cfg(ch1/ch2) 우선 → 없으면 config_common → 없으면 default
+        # ★ 예외: DC 과전류 인터락(DC_OVERCURRENT_*)은 config_common(settings.json common) 단일 출처.
+        #   config_ch1/ch2 는 import 시점 복사본이라 common 변경(on/off·연속횟수·점화감시)이 전파되지 않는다.
+        #   매 판정 때 읽으므로 런타임 변경도 그대로 반영된다.
+        if key.startswith(_OC_KEY_PREFIX):
+            return getattr(cfgc, key, default)
         if self._cfg is not None and hasattr(self._cfg, key):
             return getattr(self._cfg, key)
         if hasattr(cfgc, key):
@@ -395,6 +403,24 @@ class AsyncDCPulse:
             return bool(self._cfg_get(key, default))
         except Exception:
             return bool(default)
+
+    async def _emit_overcurrent_arm_status(self) -> None:
+        """런 시작(OUTPUT_ON 직전, 세트포인트 확정 뒤) 과전류 인터락 상태 1줄. 로그 실패가 공정을 막지 않는다."""
+        try:
+            if not self._cfg_bool("DC_OVERCURRENT_ENABLE", True):
+                await self._emit_status(
+                    "[overcurrent] ⚠ 인터락 OFF (settings.json common.DC_OVERCURRENT_ENABLE=false) — 과전류로 정지하지 않음"
+                )
+                return
+            ref_w = float(self._last_ref_power_w or 0.0)
+            limit = dc_overcurrent_limit_a(ref_w if ref_w > 0.0 else None)
+            streak_n = max(1, self._cfg_int("DC_OVERCURRENT_STREAK_N", 1))
+            armed = "ON" if self._cfg_bool("DC_OVERCURRENT_ARM_ON_START", True) else "OFF"
+            await self._emit_status(
+                f"[overcurrent] 인터락 ON — 한계 {limit:.2f}A (설정 {ref_w:.0f}W, 연속 {streak_n}회, 점화 감시 {armed})"
+            )
+        except Exception:
+            pass
 
     def reload_runtime_cfg(self) -> None:
         """
@@ -981,6 +1007,8 @@ class AsyncDCPulse:
         #    과전류 카운터는 여기서(=런 시작) 초기화한다. output_on() 안의 활성화 대기 감시(5초)가
         #    _overcurr_n 을 올리므로, 그 뒤에서 0 으로 밀면 STREAK_N>=2 일 때 부분 카운트가 유실된다.
         self._overcurr_n = 0
+        # 런 시작 시 과전류 인터락 상태(ON/OFF·한계값) 1줄 — 세트포인트 확정 뒤, OUTPUT_ON 직전
+        await self._emit_overcurrent_arm_status()
         ok2 = await self.output_on()
         if not ok2:
             return False

@@ -117,6 +117,7 @@
     "DC_LOW_CURRENT_STREAK_N": 3,          // 연속 이 횟수만큼 저전류이면 경고
     // --- DC 과전류 인터락 (DC Pulse / DC Power 공용) — 세트포인트 전력 기준 전류 상한 ---
     // ENABLE 과 ENABLE_CONT 를 나눈 이유: DC Power/DC2 의 전류는 PLC_DC_I_SCALE(미검증) 을 거치므로 별도로 끌 수 있게 분리.
+    // DC 과전류 인터락은 common 에서만 설정 (ch1/ch2 에 넣어도 무시). 값 변경 후 프로그램 재시작
     "DC_OVERCURRENT_ENABLE": true,         // DC Pulse 쪽 과전류 인터락 사용
     "DC_OVERCURRENT_ENABLE_CONT": true,    // DC Power/DC2(PLC 경유) 쪽 과전류 인터락 사용
     "DC_OVERCURRENT_P1_W": 300.0,          // 이 전력 이하는 I1 고정 (W)
