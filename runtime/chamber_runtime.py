@@ -1658,7 +1658,7 @@ class ChamberRuntime:
                                                 f"(soft={_as['ign_soft']} hard={_as['ign_hard']}) | "
                                                 f"증착={_as['depo_total']} "
                                                 f"(soft={_as['depo_soft']} hard={_as['depo_hard']}) | "
-                                                f"0x8C 동작={'예' if _as['reset_ok'] else '아니오'}, "
+                                                f"0x8C 동작={({'yes': '예', 'no': '아니오', 'unknown': '확인불가'}.get(_as.get('reset_state')) or ('예' if _as.get('reset_ok') else '아니오'))}, "
                                                 f"종료값 확정={'예' if _as['final_read'] else '아니오'}"
                                             )
 
