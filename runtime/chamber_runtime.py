@@ -25,6 +25,7 @@ except Exception:
 
 # 팝업 자동 닫기(5초) 유틸
 from util.timed_popup import attach_autoclose
+from util.file_pick import pick_open_file  # 공용 비동기 파일 열기(드래그 앤 드롭 끔·ReadOnly·삭제 경로 1개)
 
 # 장비
 from device.ig import AsyncIG
@@ -7475,49 +7476,9 @@ class ChamberRuntime:
         if not self._has_ui():
             self.append_log("File", "headless: 파일 선택 UI 생략"); return ""
 
-        dlg = QFileDialog(self._parent_widget() or None, caption, "", name_filter)
-        dlg.setFileMode(QFileDialog.ExistingFile)
-
-        # ✅ Windows 쉘/COM(네이티브 파일 다이얼로그) 우회
-        with contextlib.suppress(Exception):
-            dlg.setOption(QFileDialog.Option.DontUseNativeDialog, True)
-        with contextlib.suppress(Exception):
-            dlg.setOption(QFileDialog.DontUseNativeDialog, True)
-        with contextlib.suppress(Exception):
-            dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-            dlg.setWindowModality(Qt.WindowModality.WindowModal)
-
-        loop = asyncio.get_running_loop()
-        fut: asyncio.Future[str] = loop.create_future()
-
-        def _done(result: int):
-            # ✅ finished가 중복으로 들어와도 Future를 두 번 set_result하지 않게
-            if fut.done():
-                return
-            try:
-                if result == QDialog.Accepted and dlg.selectedFiles():
-                    fut.set_result(dlg.selectedFiles()[0])
-                else:
-                    fut.set_result("")  # 취소
-            finally:
-                with contextlib.suppress(Exception):
-                    dlg.finished.disconnect(_done)
-                dlg.deleteLater()
-
-        dlg.finished.connect(_done)
-        dlg.open()
-        if start_dir:
-            QTimer.singleShot(50, lambda: dlg.setDirectory(start_dir) if _qt_is_valid(dlg) else None)
-
-        try:
-            return await fut
-        finally:
-            # await 중 취소/예외에도 다이얼로그 정리
-            if _qt_is_valid(dlg):
-                with contextlib.suppress(Exception):
-                    dlg.close()
-                with contextlib.suppress(Exception):
-                    dlg.deleteLater()
+        # ✅ 공용 비동기 파일 다이얼로그(util/file_pick.py): 네이티브 우회·WindowModal 은 그대로,
+        #    드래그 앤 드롭 끔·ReadOnly·삭제 경로 1개(마우스 버튼이 떨어진 뒤 deleteLater) — 10/12 크래시 대책
+        return await pick_open_file(self._parent_widget() or None, caption, start_dir, name_filter)
 
     def _ensure_msgbox_store(self):
         if not hasattr(self, "_msg_boxes"):

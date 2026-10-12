@@ -19,6 +19,7 @@ except Exception:
         return obj is not None
 
 from util.timed_popup import attach_autoclose
+from util.file_pick import pick_open_file  # 공용 비동기 파일 열기(드래그 앤 드롭 끔·ReadOnly·삭제 경로 1개)
 
 # 장비/컨트롤러
 from device.mfc import AsyncMFC, mfc_resource_key
@@ -3135,53 +3136,9 @@ class PlasmaCleaningRuntime:
         if not self._has_ui():
             return ""
 
-        from PySide6.QtWidgets import QFileDialog, QDialog
-
-        dlg = QFileDialog(self._parent_widget() or None, caption, "", name_filter)
-        dlg.setFileMode(QFileDialog.ExistingFile)
-
-        # ✅ Windows 네이티브 파일 다이얼로그 우회
-        with contextlib.suppress(Exception):
-            dlg.setOption(QFileDialog.Option.DontUseNativeDialog, True)
-        with contextlib.suppress(Exception):
-            dlg.setOption(QFileDialog.DontUseNativeDialog, True)
-
-        # ✅ 챔버 런타임과 동일하게 수명/모달리티 고정
-        with contextlib.suppress(Exception):
-            dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-            dlg.setWindowModality(Qt.WindowModality.WindowModal)
-
-        loop = asyncio.get_running_loop()
-        fut: asyncio.Future[str] = loop.create_future()
-
-        def _done(result: int):
-            # ✅ finished 중복 호출 방지
-            if fut.done():
-                return
-            try:
-                if result == QDialog.Accepted and dlg.selectedFiles():
-                    fut.set_result(dlg.selectedFiles()[0])
-                else:
-                    fut.set_result("")
-            finally:
-                with contextlib.suppress(Exception):
-                    dlg.finished.disconnect(_done)
-                with contextlib.suppress(Exception):
-                    dlg.deleteLater()
-
-        dlg.finished.connect(_done)
-        dlg.open()
-        if start_dir:
-            QTimer.singleShot(50, lambda: dlg.setDirectory(start_dir) if _qt_is_valid(dlg) else None)
-
-        try:
-            return await fut
-        finally:
-            if _qt_is_valid(dlg):
-                with contextlib.suppress(Exception):
-                    dlg.close()
-                with contextlib.suppress(Exception):
-                    dlg.deleteLater()
+        # ✅ 공용 비동기 파일 다이얼로그(util/file_pick.py) — 챔버 런타임과 같은 함수.
+        #    네이티브 우회·WindowModal 은 그대로, 드래그 앤 드롭 끔·ReadOnly·삭제 경로 1개 — 10/12 크래시 대책
+        return await pick_open_file(self._parent_widget() or None, caption, start_dir, name_filter)
     
     def reload_runtime_cfg(self) -> None:
         """

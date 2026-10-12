@@ -67,6 +67,7 @@ from lib import config_local as cfgl  # CHAT_WEBHOOK_URL 로드
 # 에러코드 팝업
 from PySide6.QtWidgets import QMessageBox
 from util.timed_popup import attach_autoclose
+from util.file_pick import pick_open_file  # 공용 비동기 파일 열기(드래그 앤 드롭 끔·ReadOnly·삭제 경로 1개)
 
 # ✅ Runtime Dump(수동 상태 스냅샷) - PyInstaller 누락 방지용(없어도 크래시 안 나게)
 try:
@@ -1600,52 +1601,14 @@ class MainWindow(QWidget):
         task.add_done_callback(_done)
 
     async def _pick_presputter_recipe(self, ch: int, rt) -> None:
-        """레시피 파일 선택(네이티브 다이얼로그 우회 — UI 멈춤 방지)."""
+        """레시피 파일 선택(공용 비동기 다이얼로그 util/file_pick.py — 네이티브 우회·드래그 앤 드롭 끔·ReadOnly)."""
         cur = getattr(rt, "recipe_path", None) or ""
         start_dir = os.path.dirname(cur) if cur else ""
 
-        dlg = QFileDialog(
-            self, f"CH{ch} Pre-Sputter 레시피 선택", "",
+        path = await pick_open_file(
+            self, f"CH{ch} Pre-Sputter 레시피 선택", start_dir,
             "Recipe Files (*.csv *.xlsx);;CSV Files (*.csv);;Excel Files (*.xlsx);;All Files (*.*)",
         )
-        dlg.setFileMode(QFileDialog.ExistingFile)
-        with contextlib.suppress(Exception):
-            dlg.setOption(QFileDialog.Option.DontUseNativeDialog, True)
-        with contextlib.suppress(Exception):
-            dlg.setOption(QFileDialog.DontUseNativeDialog, True)
-        with contextlib.suppress(Exception):
-            dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
-            dlg.setWindowModality(Qt.WindowModality.WindowModal)
-
-        loop = asyncio.get_running_loop()
-        fut: asyncio.Future[str] = loop.create_future()
-
-        def _done(result: int):
-            if fut.done():
-                return
-            try:
-                if result == QDialog.Accepted and dlg.selectedFiles():
-                    fut.set_result(dlg.selectedFiles()[0])
-                else:
-                    fut.set_result("")  # 취소 → 기존 값 유지
-            finally:
-                with contextlib.suppress(Exception):
-                    dlg.finished.disconnect(_done)
-                dlg.deleteLater()
-
-        dlg.finished.connect(_done)
-        dlg.open()
-        if start_dir:
-            QTimer.singleShot(50, lambda: dlg.setDirectory(start_dir) if _qt_is_valid(dlg) else None)
-
-        try:
-            path = await fut
-        finally:
-            if _qt_is_valid(dlg):
-                with contextlib.suppress(Exception):
-                    dlg.close()
-                with contextlib.suppress(Exception):
-                    dlg.deleteLater()
 
         if not path:
             return  # ★ 취소 = 변경 없음
