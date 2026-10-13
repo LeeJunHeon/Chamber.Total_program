@@ -1000,6 +1000,9 @@ class AsyncDCPulse:
             _pre_h = await self.read_hard_arc_total()
 
         # 4-b) Hard/Soft Arc Count Reset (매뉴얼 p.53, 0x8C=2)
+        #      ※ 출력 OFF 상태에서는 효과 없음(2026-10-12~13 실측 7회: ACK 만 되고 카운터 그대로).
+        #        장비 기록용으로 전송·전후 읽기·로그는 남기고, 런 기준값은 ON 직후 값으로 결정한다
+        #        (_log_arc_after_on → _decide_arc_baseline_after_on).
         with contextlib.suppress(Exception):
             if not await self.reset_arc_counters_device():
                 await self._emit_status("[WARN] Arc Count Reset(0x8C=2) ACK 실패 → baseline 차감으로 대체")
@@ -2611,6 +2614,50 @@ class AsyncDCPulse:
             return str(int(x)) if x is not None else "-"
         await self._emit_status(
             f"[arc] ON 직후 장비 SAT={_f(s_now)} ANT={_f(h_now)} (ON 전 기준 SAT={_f(a)} ANT={_f(b)})"
+        )
+        await self._decide_arc_baseline_after_on(s_now, h_now)
+
+    async def _decide_arc_baseline_after_on(self, s_now: Optional[int], h_now: Optional[int]) -> None:
+        """ON 직후 장비값으로 런 기준값(baseline)을 정한다(카운터별).
+
+        장비는 OUTPUT_ON 시점에 SAT/ANT 를 0 부터 다시 센다(매뉴얼 0x96/0x99 'Arc per On',
+        2026-10-12~13 실측 7/7: ON 전 2·1·3·10/2 → ON 직후 0/0). 예전에는 ON 전 값을 기준으로 두고
+        첫 폴링(ON 후 약 5초)에서 '감소'를 봐야 0 으로 바꿨는데, 그 사이 아크가 기준 이상 쌓이면
+        감소가 안 보여 그만큼 런 아크 수가 빠졌다.
+          - 읽기 성공 && (ON 전 기준 == 0 또는 ON 직후 < ON 전 기준) → 다시 셈 → 기준 0
+          - 읽기 성공 && ON 전 기준 >= 1 && ON 직후 >= ON 전 기준   → 다시 세지 않음 → 기준 유지 + 경고
+          - 읽기 실패 → 기준 유지(기존 방식 — 폴링의 감소 감지가 보정)
+        이 함수가 불리지 않는 경로(첫 PIV 에서 과전류 차단)는 기존 동작 그대로다.
+        """
+        base_s = int(getattr(self, "_arc_baseline_soft", 0) or 0)
+        base_h = int(getattr(self, "_arc_baseline_hard", 0) or 0)
+        res = {}
+        for key, now, base in (("s", s_now, base_s), ("h", h_now, base_h)):
+            if now is None:
+                res[key] = "fail"
+            elif base == 0 or int(now) < base:
+                res[key] = "reset"
+            else:
+                res[key] = "kept"
+        if res["s"] == "reset":
+            self._arc_baseline_soft = 0
+        if res["h"] == "reset":
+            self._arc_baseline_hard = 0
+
+        def _f(x) -> str:
+            return str(int(x)) if x is not None else "-"
+        if "kept" in res.values():
+            await self._emit_status(
+                f"[arc] ⚠ ON 직후 카운터가 초기화되지 않음 SAT {base_s}→{_f(s_now)}, ANT {base_h}→{_f(h_now)} "
+                f"— 기준값 유지(기존 방식)"
+            )
+            how = "초기화 안 됨"
+        elif "fail" in res.values():
+            how = "확인 실패 → 기존 방식"
+        else:
+            how = "ON 직후 초기화 확인"
+        await self._emit_status(
+            f"[arc] 런 기준값: SAT={int(self._arc_baseline_soft)} ANT={int(self._arc_baseline_hard)} ({how})"
         )
 
     # ====== Poll 루프(필요 시 항목 확장) ======

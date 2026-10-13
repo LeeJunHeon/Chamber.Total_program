@@ -259,7 +259,8 @@ def test_d2_arm_off_still_logs_counters_within_delay(monkeypatch):
     assert asyncio.run(d._watch_overcurrent_during_activation()) is False
     msgs = _status(_events(d))
     assert d.piv_reads == []                                                      # 감시(PIV)는 안 함
-    assert msgs == ["[arc] ON 직후 장비 SAT=3 ANT=0 (ON 전 기준 SAT=2 ANT=0)"], msgs
+    assert msgs == ["[arc] ON 직후 장비 SAT=3 ANT=0 (ON 전 기준 SAT=2 ANT=0)",
+                    "[arc] 런 기준값: SAT=0 ANT=0 (ON 직후 초기화 확인)"], msgs
     assert abs((clk.t - t0) - 1.5) < 1e-9
 
 
