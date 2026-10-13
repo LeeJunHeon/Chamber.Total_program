@@ -118,7 +118,9 @@ class HeaterPanel(QFrame):
         self.onoff_button.setCheckable(True)
         self.onoff_button.setStyleSheet(
             "QPushButton {background: #ebebe9; color: black; font-weight: bold; border-radius: 4px; border: 1px solid #cccccc;}"
-            "QPushButton:checked {background: #32FF32;}")
+            "QPushButton:checked {background: #32FF32;}"
+            "QPushButton:disabled {background: #f3f4f6; color: #9aa3ab; border: 1px solid #e0e3e7;}"
+            "QPushButton:checked:disabled {background: #c8e6c9; color: #6b7280;}")
 
         # ── 상태 문구 + 리셋 ──
         self.status_label = QLabel("PLC 응답 대기", self)
@@ -191,6 +193,8 @@ class HeaterPanel(QFrame):
             tol = float(getattr(self._cfg, "soak_tol", 2.0))
             self.dev_label.setText(f"Δ{dev:+.1f}")
             dcol = "#2e7d32" if abs(dev) <= tol else "#6b7280"
+            if stale:
+                dcol = "#9aa3ab"                      # 마지막으로 읽은 값
         else:
             self.dev_label.setText("")
             dcol = "#6b7280"
@@ -208,6 +212,8 @@ class HeaterPanel(QFrame):
             badge, bd, bg, fg = "RUN", "#2e7d32", "#e8f5e9", "#2e7d32"
         else:
             badge, bd, bg, fg = "STOP", "#c8cdd3", "#eef1f4", "#5f6b76"
+        if stale:
+            bd, bg, fg = "#c8cdd3", "#eef1f4", "#9aa3ab"   # 글자는 그대로, 색만 회색(마지막으로 읽은 값)
         self.badge.setText(badge)
         self._style(self.badge, f"QLabel {{border: 1px solid {bd}; background: {bg}; color: {fg}; font-size: 8pt; font-weight: bold; border-radius: 3px;}}")
 

@@ -423,5 +423,79 @@ def test_run_edges_csv_and_chat(tmp_path=None):
     assert len(lines) >= 3 and "운전 종료" in lines[-1]
 
 
+
+# ───────────────────────── 1단계 보완 ─────────────────────────
+def test_push_stops_on_first_failure_backoff_and_recovery():
+    svc, plc, chat, clk, logs = _mk()
+    plc.fail_writes = True
+    _poll(svc, clk)
+    assert [c for c in plc.writes()] == [("wr", 113, 5000)]       # 첫 실패에서 멈춤(쓰기 1건)
+    ok, why = asyncio.run(svc.turn_on(100.0))
+    assert not ok and "설정" in why                               # 설정 전 ON 거부
+    for _ in range(28):                                           # 30초 안 재시도 없음
+        _poll(svc, clk)
+    assert len(plc.writes()) == 1
+    assert sum("히터 설정 쓰기 실패" in m for m in logs) == 1
+    plc.fail_writes = False
+    _poll(svc, clk)
+    _poll(svc, clk)
+    assert any(c[:2] == ("wr", 160) for c in plc.writes())
+    assert any("히터 설정 쓰기 복구 (1회 실패 뒤)" in m for m in logs)
+    ok, why = asyncio.run(svc.turn_on(100.0))
+    assert ok, why
+
+
+def test_marker_mismatch_run_fall_reason_restart():
+    svc, plc, chat, clk, logs = _mk()
+    _poll(svc, clk)
+    plc.bits[640] = True
+    _poll(svc, clk)
+    plc.bits[640] = False
+    plc.regs[160] = 0                                             # 메모리 초기화
+    _poll(svc, clk)
+    ends = [c for c in chat.cards if c[0] == "[CH2] 히터 종료"]
+    assert len(ends) == 1 and "재기동" in ends[0][1], ends
+
+
+def test_quiet_before_first_success_then_logged():
+    svc, plc, chat, clk, logs = _mk()
+    plc.connected = False
+    for _ in range(3):
+        _poll(svc, clk)
+    plc.connected = True
+    _poll(svc, clk)
+    assert not any("읽기 실패" in m or "읽기 복구" in m for m in logs)
+    plc.connected = False
+    _poll(svc, clk)
+    assert any("히터 상태 읽기 실패" in m for m in logs)
+    plc.connected = True
+    _poll(svc, clk)
+    assert any("히터 상태 읽기 복구" in m for m in logs)
+
+
+def test_rst_stuck_cleared_after_two_polls():
+    svc, plc, chat, clk, logs = _mk()
+    _poll(svc, clk)
+    plc.bits[643] = True                                          # 래더가 RST 를 0 으로 되돌리지 않음
+    _poll(svc, clk)
+    assert ("wc", 643, False) not in plc.calls
+    _poll(svc, clk)
+    assert ("wc", 643, False) in plc.calls
+    assert any("M00403" in m for m in logs)
+
+
+def test_reset_with_cause_remaining_logged():
+    svc, plc, chat, clk, logs = _mk()
+    plc.bits[642] = plc.bits[645] = True
+    plc.bits[641] = False
+    _poll(svc, clk)
+    ok, why = asyncio.run(svc.reset_fault())
+    assert ok, why
+    _poll(svc, clk)
+    assert sum("리셋 후에도" in m for m in logs) == 1
+    _poll(svc, clk)
+    assert sum("리셋 후에도" in m for m in logs) == 1
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

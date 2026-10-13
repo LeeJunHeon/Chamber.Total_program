@@ -116,5 +116,23 @@ def test_click_toggle_restored_to_run_view():
     assert not p.onoff_button.isChecked() and p.onoff_button.text() == "ON"
 
 
+
+def test_disabled_button_style():
+    p, _ = _mk()
+    css = p.onoff_button.styleSheet()
+    assert "QPushButton:disabled {background: #f3f4f6; color: #9aa3ab; border: 1px solid #e0e3e7;}" in css
+    assert "QPushButton:checked:disabled {background: #c8e6c9; color: #6b7280;}" in css
+
+
+def test_stale_badge_and_delta_grey():
+    p, _ = _mk()
+    p.update_status(_st(run=True, stale=True, age_s=15.0))
+    assert p.badge.text() == "RUN"                                # 글자는 그대로
+    assert "color: #9aa3ab" in p.badge.styleSheet() and "background: #eef1f4" in p.badge.styleSheet()
+    assert "color: #9aa3ab" in p.dev_label.styleSheet()
+    p.update_status(_st(run=True))
+    assert "color: #2e7d32" in p.badge.styleSheet()
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

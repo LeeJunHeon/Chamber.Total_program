@@ -8,8 +8,12 @@ write_coil). 접속·재접속은 기존 하트비트 몫이다 — 여기서는
 (REG_MAP 에 넣으면 snapshot_regs_fast 범위가 FC3 한도 125 를 넘고, COIL_MAP 에 넣으면 코일 CSV 열이 바뀐다).
 
 폴링 루프(성공한 폴링 한 번의 처리 순서):
-  (1) 잔존 RUN 정리 → (2) 보류 OFF → (3) 세션 마커·설정 push/되읽기 → (4) FAULT 엣지 → (5) 출력 죽음
-  → (6) RUN 엣지(CSV·챗) → (7) 램프 tick → 포화 감시 → 유지 모드 + D118 요청 실행 → (8) CSV 행 → (9) 리스너
+  (1) 잔존 RUN 정리 → (2) 보류 OFF → (3) 세션 마커·설정 push/되읽기(실패는 첫 쓰기에서 멈추고 30초 백오프)
+  → (4) FAULT 엣지 → RST 코일 고착 확인 → 리셋 결과 확인 → (5) 출력 죽음
+  → (6) RUN 엣지(CSV·챗, 종료 사유) → (7) 램프 tick → 포화 감시(도달 후 새 포화만 클램프, 도달 전은 승온 정체만)
+  → 유지 모드 + D118 요청 실행 → (8) CSV 행 → (9) 리스너
+첫 성공 폴링 전의 '미연결'은 로그를 남기지 않는다(프로그램 시작 직후 PLC 접속 전).
+설정·세션 마커가 PLC 에 들어가기 전에는 ON 을 거부한다(is_ready).
 워치독 루프: WD_PERIOD 마다 RUN 이고 링크가 살아 있을 때만 D114 = (이전+1) & 0x7FFF.
 명령(turn_on/turn_off/apply_target/reset_fault)과 폴링 쓰기는 같은 asyncio.Lock 으로 섞이지 않게 한다.
 """
@@ -58,6 +62,9 @@ SV_LOG_MIN_DELTA_C = 1.0
 SV_LOG_MIN_INTERVAL_S = 30.0
 WD_FAIL_LOG_INTERVAL_S = 60.0
 RESIDUAL_FAIL_LOG_INTERVAL_S = 10.0
+PUSH_RETRY_SEC = 30.0           # 설정·마커 쓰기 실패 뒤 다음 시도까지
+PUSH_FAIL_LOG_INTERVAL_S = 60.0 # 설정 쓰기 실패 로그 간격
+RST_STUCK_POLLS = 2             # RST 코일이 이 횟수 연속 1 이면 0 으로 되돌린다
 
 OWNER_LABEL = {"manual": "수동", "process": "공정", "external": "외부"}
 
@@ -112,6 +119,11 @@ class HeaterService:
         self._sv_log_t = -1e9
         self._csv_last_t = -1e9
         self._mv_requests: List[int] = []
+        self._push_retry_at = 0.0
+        self._push_fail_n = 0
+        self._push_fail_log_t = -1e9
+        self._rst_n = 0
+        self._reset_pending = False
 
         self.profiler = RampProfiler(self.status_raw, self._write_sv, self._write_ramp_counts,
                                      lambda m: self._log(m), cfg, clock=clock)
@@ -122,9 +134,10 @@ class HeaterService:
             clock=clock, request_mv_limit=self._mv_requests.append,
             message=self._on_hold_msg, engaged=self._on_hold_engaged, give_up=self._on_hold_give_up)
         self.sat = HeaterSaturationGuard(
-            mv_limit=cfg.mv_limit, mv_min=cfg.mv_min, sat_sec=cfg.sat_sec, clock=clock,
+            mv_limit=cfg.mv_limit, mv_min=cfg.mv_min, sat_sec=cfg.sat_sec,
+            arrive_tol_c=cfg.hold_arrive_tol, clock=clock,
             request_mv_limit=self._mv_requests.append, message=self._on_hold_msg,
-            saturated=self._on_saturated)
+            saturated=self._on_saturated, stalled=self._on_stalled)
         self.csv = HeaterCsvLogger(cfg.log_dir, warn=lambda m: self._log(f"⚠ {m}"), clock=clock)
 
     # ═══════════════════════ 공개 API ═══════════════════════
@@ -172,6 +185,8 @@ class HeaterService:
             return False, f"히터 이상: {self._fault_text(st)}"
         if not st.get("itl"):
             return False, f"인터락 미충족: {self._itl_missing(st)}"
+        if self._need_push:
+            return False, "히터 설정·세션 마커 적용 전(PLC 쓰기 대기/실패) — 잠시 후 다시 시도하십시오"
         return True, ""
 
     def final_target(self) -> Optional[float]:
@@ -295,6 +310,7 @@ class HeaterService:
             except Exception as e:
                 return False, f"PLC 쓰기 실패: {e}"
             self._log("사용자가 히터 이상 리셋을 요청했습니다(RST)")
+            self._reset_pending = True
             return True, ""
 
     async def shutdown(self, timeout: float = 2.0) -> None:
@@ -413,9 +429,19 @@ class HeaterService:
     def _on_saturated(self, info: dict) -> None:
         clamp = info.get("clamp")
         self._episode_notes.append(f"DAC 포화{'(클램프 ' + str(clamp) + ')' if clamp is not None else ''}")
-        self._card("DAC 포화", f"{float(info.get('sec') or 0):.0f}초째 상한({info.get('limit')})에 물림", "WARN",
-                   {"PV": self._fmt(info.get("pv")), "MV": str(info.get("mv")),
-                    "클램프": "-" if clamp is None else str(clamp)})
+        self._card("DAC 포화", f"도달 후 {float(info.get('sec') or 0):.0f}초째 상한({info.get('limit')})에 물림 → D118 {clamp}",
+                   "WARN", {"PV": self._fmt(info.get("pv")), "MV": str(info.get("mv")),
+                            "클램프": "-" if clamp is None else str(clamp)})
+
+    def _on_stalled(self, info: dict) -> None:
+        self._episode_notes.append("승온 정체")
+        eta = info.get("eta_min")
+        self._card("승온 정체",
+                   f"목표 {float(info.get('target') or 0):.1f}°C · 출력 상한 {info.get('limit')} 에서 상승 "
+                   f"{float(info.get('rate') or 0):.2f}°C/min", "WARN",
+                   {"PV": self._fmt(info.get("pv")), "MV": f"{info.get('mv'):.0f}/{info.get('limit')}",
+                    "현재 속도로": "도달 안 됨" if eta is None else f"약 {float(eta):.0f}분",
+                    "확인": "HEATER_MV_LIMIT(출력 상한)"})
 
     @staticmethod
     def _fmt(v) -> str:
@@ -462,7 +488,7 @@ class HeaterService:
                 "holdback": None, "ot_limit": None, "slow_zone": None, "slow_rate": None,
                 "kp_act": None, "ti_act": None, "marker": None,
                 "run": False, "itl": False, "fault": False, "ot": False, "tc_err": False, "wd_err": False,
-                "pid_run": False, "dac_en": False, "tc_ok": False, "da_ok": False,
+                "pid_run": False, "dac_en": False, "tc_ok": False, "da_ok": False, "rst": False,
                 "output_dead": False, "stale": True, "age_s": None, "t": None}
 
     def _decode(self, regs: list, bits: list, now: float) -> dict:
@@ -503,6 +529,7 @@ class HeaterService:
             "run": b(COIL_RUN), "itl": b(COIL_ITL), "fault": b(COIL_FAULT),
             "ot": b(COIL_OT), "tc_err": b(COIL_TC_ERR), "wd_err": b(COIL_WD_ERR),
             "pid_run": b(COIL_PID_RUN), "dac_en": b(COIL_DAC_EN), "tc_ok": b(COIL_TC_OK), "da_ok": b(COIL_DA_OK),
+            "rst": b(COIL_RST),
             "stale": False, "age_s": 0.0, "t": now,
             "_raw_pv": raw_pv, "_regs": regs,
         }
@@ -519,7 +546,7 @@ class HeaterService:
     def _next_interval(self) -> float:
         st = self._st
         busy = (st.get("run") or self.profiler.is_active() or self._pending_off
-                or (self._need_push and not st.get("stale")))
+                or (self._need_push and not st.get("stale") and self._now() >= self._push_retry_at))
         return float(self.cfg.poll_interval_s if busy else self.cfg.poll_idle_s)
 
     # ═══════════════════════ 루프 ═══════════════════════
@@ -544,9 +571,10 @@ class HeaterService:
             except Exception:
                 pass
 
-    def _on_fail(self, why: str) -> None:
+    def _on_fail(self, why: str, quiet: bool = False) -> None:
+        """quiet: 첫 성공 폴링 전의 미연결 — 로그·실패 시각 없이 stale·발행만."""
         now = self._now()
-        if self._fail_since is None:
+        if self._fail_since is None and not quiet:
             self._fail_since = now
             self._log(f"⚠ 히터 상태 읽기 실패: {why}")
         st = self._st
@@ -557,7 +585,7 @@ class HeaterService:
 
     async def _poll_once(self) -> None:
         if not self._link_up():
-            self._on_fail("PLC 미연결")
+            self._on_fail("PLC 미연결", quiet=self._last_ok_t is None)
             return
         try:
             regs = await asyncio.wait_for(
@@ -603,6 +631,11 @@ class HeaterService:
         self._check_program(st)
         # (4) FAULT 엣지
         await self._fault_edges(st, first)
+        await self._rst_check(st)
+        if self._reset_pending:
+            self._reset_pending = False
+            if st["fault"]:
+                self._log(f"⚠ 리셋 후에도 히터 이상 유지 — {self._fault_text(st)}: 원인이 남아 있습니다")
         # (5) 출력 죽음 (RUN 상승 시각은 여기서 잡는다)
         rise = bool(st["run"]) and not self._run_prev
         fall = (not st["run"]) and self._run_prev
@@ -621,7 +654,8 @@ class HeaterService:
         if self.profiler.is_active():
             await self.profiler.tick()
         self._mv_requests.clear()
-        self.sat.tick(st, self.hold.is_holding(), "dac")
+        self.sat.tick(st, self.hold.is_holding(), "dac", final_target=self.final_target(),
+                      ramp_active=self.profiler.is_active())
         self.hold.tick(st, self.final_target())
         for v in list(self._mv_requests):
             try:
@@ -672,6 +706,8 @@ class HeaterService:
         if self._verify is not None:
             self._check_verify(st)
         if self._need_push or (mreg and self._marker is None):
+            if self._now() < self._push_retry_at:
+                return                       # 실패 백오프 중
             await self._push_and_mark(st)
             return
         if mreg and self._marker is not None:
@@ -690,9 +726,11 @@ class HeaterService:
             self._marker_mismatch = 0
             if self.profiler.is_active():
                 await self.profiler.stop(restore_rate=False)
-            self._end_reason = "PLC 재기동"
+            if self._run_prev:
+                self._end_reason = "PLC 재기동"
             self.owner = None
             self._need_push = True
+            self._push_retry_at = 0.0            # 재기동 감지 — 백오프 무시하고 바로 push
             await self._push_and_mark(st)
 
     async def _push_and_mark(self, st: dict) -> None:
@@ -701,7 +739,7 @@ class HeaterService:
         if c.push_config:
             ok = await self._push_config(st)
         if not ok:
-            return                           # 실패 → 다음 폴링에 재시도(마커도 쓰지 않음)
+            return                           # 실패 → _push_failed 가 백오프(마커도 쓰지 않음)
         mreg = int(c.session_mark_reg)
         if mreg:
             m = random.randint(0x1000, 0xFFFE)
@@ -710,11 +748,24 @@ class HeaterService:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                self._log(f"⚠ 세션 마커 D{mreg} 쓰기 실패 — 재시도: {e!r}")
+                self._push_failed(f"세션 마커 D{mreg}: {e!r}")
                 return
             self._marker = m
             self._marker_mismatch = 0
         self._need_push = False
+        if self._push_fail_n:
+            self._log(f"히터 설정 쓰기 복구 ({self._push_fail_n}회 실패 뒤)")
+        self._push_fail_n = 0
+        self._push_retry_at = 0.0
+
+    def _push_failed(self, what: str) -> None:
+        """설정·마커 쓰기 실패 — 30초 백오프, 로그는 60초에 1줄."""
+        now = self._now()
+        self._push_fail_n += 1
+        self._push_retry_at = now + PUSH_RETRY_SEC
+        if (now - self._push_fail_log_t) >= PUSH_FAIL_LOG_INTERVAL_S:
+            self._push_fail_log_t = now
+            self._log(f"⚠ 히터 설정 쓰기 실패({self._push_fail_n}회째) — {PUSH_RETRY_SEC:.0f}초 뒤 재시도: {what}")
 
     async def _push_config(self, st: dict) -> bool:
         """D113 → D126 → D118 → D120 → D121 → D127 → D128 → Kp(D143→D142) → Ti(D145→D144). 2워드는 상위 먼저."""
@@ -729,7 +780,6 @@ class HeaterService:
             (REG_SLOW_RATE, c.rate_counts(c.slow_rate), "감속램프"),
         ]
         expect: Dict[int, int] = {}
-        failed = []
         for addr, raw, name in items:
             try:
                 await self._w_reg(addr, raw)
@@ -737,7 +787,9 @@ class HeaterService:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                failed.append(f"{name}(D{addr}: {e!r})")
+                # 첫 실패에서 멈춘다 — 링크가 반쯤 죽었을 때 6초×11 동안 잠금을 잡지 않게
+                self._push_failed(f"{name}(D{addr}): {e!r}")
+                return False
         pid = {}
         for valid, val, lo, hi, act_key, name in ((c.kp_valid, c.kp, REG_KP_LO, REG_KP_HI, "kp_act", "Kp"),
                                                    (c.ti_valid, c.ti_s, REG_TI_LO, REG_TI_HI, "ti_act", "Ti")):
@@ -754,10 +806,8 @@ class HeaterService:
             except asyncio.CancelledError:
                 raise
             except Exception as e:
-                failed.append(f"{name}(D{lo}/D{hi}: {e!r})")
-        if failed:
-            self._log("⚠ 히터 설정 쓰기 실패: " + ", ".join(failed))
-            return False
+                self._push_failed(f"{name}(D{lo}/D{hi}): {e!r}")
+                return False
         self._verify = {"regs": expect, "pid": pid}
         self._verify_warned = False
         self._pid_warned = False
@@ -830,6 +880,24 @@ class HeaterService:
             self._fault_off_sent = False
         self._fault_prev = bool(st["fault"])
 
+    async def _rst_check(self, st: dict) -> None:
+        """RST(M00403)가 RST_STUCK_POLLS 회 연속 1 이면 0 으로 되돌린다 — 래더가 스스로 0 으로 되돌리지 않으면
+        래치가 매 스캔 풀려 이상이 잡히지 않는다."""
+        if not st.get("rst"):
+            self._rst_n = 0
+            return
+        self._rst_n += 1
+        if self._rst_n < RST_STUCK_POLLS:
+            return
+        try:
+            await self._w_coil(COIL_RST, False)
+            self._rst_n = 0
+            self._log("⚠ 히터 리셋 코일(M00403)이 1 로 남아 있어 0 으로 되돌림 — 래더의 RST 자기 리셋 확인 필요")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self._log(f"⚠ 히터 리셋 코일(M00403) 0 쓰기 실패 — 다음 폴링에 재시도: {e!r}")
+
     def _output_dead(self, st: dict, now: float) -> None:
         cond = bool(st["run"] and st["itl"] and not st["fault"] and st.get("mv") is not None
                     and int(st["mv"]) < int(self.cfg.mv_min))
@@ -887,7 +955,12 @@ class HeaterService:
             except Exception as e:
                 self._log(f"⚠ 래더 램프 속도 원복 실패: {e!r}")
         dur = (now - self._run_since) if self._run_since > 0 else 0.0
-        reason = self._end_reason or "외부(이 프로그램 밖에서 꺼짐)"
+        if self._end_reason:
+            reason = self._end_reason
+        elif self._marker_mismatch > 0:
+            reason = "PLC 재기동 의심(세션 마커 불일치)"
+        else:
+            reason = "외부(이 프로그램 밖에서 꺼짐)"
         notes = ", ".join(self._episode_notes) or "-"
         owner = OWNER_LABEL.get(self.owner, self.owner or "-")
         self._log(f"운전 종료 — 사유 {reason} · 마지막 PV {self._fmt(st.get('pv'))} · 운전 {dur / 60:.1f}분 · 특이사항 {notes}")
