@@ -142,11 +142,20 @@ def test_dc2_widgets_locked():
     assert c2.ui.ch2_dcPower2_checkbox.enabled is True
 
 
-def test_settings_json_ch2_dc2_off():
+def test_settings_json_ch2_flags_load():
+    """값은 배포 상황마다 바뀌므로 고정하지 않는다 — 로더가 bool 로 읽는지만 본다."""
     from lib import _config_loader, config_ch2
     _config_loader.load_settings()
-    assert config_ch2.SUPPORTS_DC2 is False
-    assert config_ch2.SUPPORTS_HEATER is False
+    assert isinstance(config_ch2.SUPPORTS_DC2, bool)
+    assert isinstance(config_ch2.SUPPORTS_HEATER, bool)
+
+
+def test_dc2_and_heater_exclusive():
+    from runtime.chamber_runtime import _dc2_allowed
+    assert _dc2_allowed(2, True, False) is True
+    assert _dc2_allowed(2, True, True) is False      # 히터 켜면 DC2 끔(D/A CH3 공유)
+    assert _dc2_allowed(2, False, False) is False
+    assert _dc2_allowed(1, True, False) is False     # DC2 는 CH2 전용
 
 
 if __name__ == "__main__":

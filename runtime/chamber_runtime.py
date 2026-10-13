@@ -360,6 +360,13 @@ class _CfgAdapter:
 
         return None
     
+
+def _dc2_allowed(ch: int, want_dc2: bool, heater_on: bool) -> bool:
+    """DC2(DC 연속 2호기) 사용 가능 여부. CH2 전용이고, CH2 히터를 켜면 쓸 수 없다 —
+    D/A CH3 하나를 DC2 와 히터가 같이 쓸 수 없으므로(배선 변경 후 CH3 = 히터 출력)."""
+    return bool(want_dc2) and int(ch) == 2 and not bool(heater_on)
+
+
 class ChamberRuntime:
     """
     한 챔버 실행 단위(장치/이벤트펌프/그래프/로그/버튼 바인딩).
@@ -498,7 +505,7 @@ class ChamberRuntime:
             supports_rf_pulse = v if v is not None else (self.ch == 2)
 
         self.supports_dc_cont  = bool(supports_dc_cont)
-        self.supports_dc_cont2 = bool(supports_dc_cont2) and (self.ch == 2)   # DC2는 CH2 전용
+        self.supports_dc_cont2 = _dc2_allowed(self.ch, supports_dc_cont2, _cfg_bool("SUPPORTS_HEATER") is True)   # DC2는 CH2 전용, 히터와 배타
         self.supports_rf_cont  = bool(supports_rf_cont)
         self.supports_dc_pulse = bool(supports_dc_pulse)
         self.supports_rf_pulse = bool(supports_rf_pulse)
@@ -847,6 +854,7 @@ class ChamberRuntime:
             v = _cfg_bool("SUPPORTS_DC_CONT2", "SUPPORTS_DC2")
             if v is not None:
                 desired_dc_cont2 = bool(v)
+            desired_dc_cont2 = _dc2_allowed(self.ch, desired_dc_cont2, _cfg_bool("SUPPORTS_HEATER") is True)
 
             desired_rf_cont = self.supports_rf_cont
             v = _cfg_bool("SUPPORTS_RF_CONT")

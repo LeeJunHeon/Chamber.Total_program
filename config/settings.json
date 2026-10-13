@@ -558,8 +558,8 @@
 
     // ── 장비 지원 플래그 (CH2 전용) ──
     "SUPPORTS_RF_CONT": true,              // CH2는 RF Continuous 사용
-    "SUPPORTS_DC2": false,                 // DC2 폐지 — D/A CH3 는 CH2 히터 출력으로 바뀜
-    "SUPPORTS_HEATER": false,              // CH2 히터(PLC 내장 PID). PLC HEATER 프로그램 다운로드 후 장비에서 true
+    "SUPPORTS_DC2": true,                  // 히터 배선·PLC 업로드 전까지 기존과 같게 둔다. SUPPORTS_HEATER=true 면 코드가 DC2 를 끈다(D/A CH3 = 히터 출력)
+    "SUPPORTS_HEATER": false,              // CH2 히터(PLC 내장 PID). PLC 에 HEATER 프로그램을 올린 뒤 true — 그 전에 켜면 히터 프로그램이 없는 PLC 의 D113~D160 에 설정값을 쓴다
 
     // ── CH2 히터 (PLC 내장 PID, D110~D160 / M00400~) ──
     "HEATER_TEMP_SCALE": 0.1,              // 레지스터 1카운트 = 0.1°C
