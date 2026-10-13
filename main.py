@@ -482,6 +482,9 @@ class MainWindow(QWidget):
             on_plc_owner=self._set_plc_owner,
         )
 
+        # ✅ CH2 히터(PLC 내장 PID) — SUPPORTS_HEATER=false 면 아무것도 만들지 않는다(창 크기·태스크·PLC I/O 그대로)
+        self._init_ch2_heater()
+
         # ✅ PC ↔ Main Process 로그 연동 콜백 등록
         self.ch1.set_main_done_callback(self._on_main_done)
         self.ch2.set_main_done_callback(self._on_main_done)
@@ -1257,6 +1260,42 @@ class MainWindow(QWidget):
                 except Exception:
                     pass
 
+    def _init_ch2_heater(self) -> None:
+        """CH2 히터 서비스·상태 패널 생성. 설정이 꺼져 있으면 아무것도 하지 않고 반환한다.
+        패널은 스택 위젯 밖(MainWindow 직속)이라 CH1·PC·Server 페이지에서도 보인다.
+        self.heater_service / self.heater_panel 은 2단계에서 CH2 런타임에 넘긴다."""
+        self.heater_service = None
+        self.heater_panel = None
+        try:
+            from lib.heater_config import load_heater_config
+            hcfg, warns = load_heater_config(config_ch2)
+        except Exception as e:
+            with contextlib.suppress(Exception):
+                self._broadcast_log("HEATER", f"히터 설정 읽기 실패 — 히터 기능 끔: {e!r}")
+            return
+        if not hcfg.enabled:
+            return
+        try:
+            from controller.heater_service import HeaterService
+            from ui.heater_panel import HeaterPanel, PANEL_W, PANEL_H
+            svc = HeaterService(self._plc_ch2, hcfg,
+                                log=lambda s, m: self.ch2.append_log(s, m),
+                                chat=self.chat_ch2)
+            panel = HeaterPanel(svc, hcfg, parent=self)
+            panel.setGeometry(QRect(1086, 10, PANEL_W, PANEL_H))
+            panel.show()
+            self.resize(1086 + PANEL_W + 12, 1010)
+            svc.add_listener(panel.update_status)
+            for w in warns:
+                self.ch2.append_log("HEATER", f"⚠ 히터 설정: {w}")
+            svc.start(self._loop)
+            self.heater_service = svc
+            self.heater_panel = panel
+            self.ch2.append_log("HEATER", "CH2 히터 서비스 시작")
+        except Exception as e:
+            with contextlib.suppress(Exception):
+                self._broadcast_log("HEATER", f"CH2 히터 초기화 실패: {e!r}")
+
     async def _shutdown_app_async(self) -> None:
         with contextlib.suppress(Exception):
             self._logger.warning(
@@ -1301,6 +1340,16 @@ class MainWindow(QWidget):
                 if callable(fn):
                     with contextlib.suppress(Exception):
                         fn()
+
+        # 4-1) CH2 히터 정리(루프 정지 → RUN 이면 RUN=0 1회 → CSV 닫기) — PLC 를 닫기 전에
+        _hs = getattr(self, "heater_service", None)
+        if _hs is not None:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await asyncio.wait_for(_hs.shutdown(timeout=2.0), timeout=4.0)
+        with contextlib.suppress(Exception):
+            _hp = getattr(self, "heater_panel", None)
+            if _hp is not None:
+                _hp.shutdown()
 
         # 5) 공유 PLC 종료 (heartbeat / socket / to_thread 정리)
         with contextlib.suppress(asyncio.CancelledError, Exception):
@@ -1401,11 +1450,19 @@ class MainWindow(QWidget):
             return
 
         self._close_confirm_popup_open = True
+        _close_msg = "프로그램을 종료하시겠습니까?"
+        with contextlib.suppress(Exception):
+            _hst = self.heater_service.status() if getattr(self, "heater_service", None) is not None else {}
+            if _hst.get("run"):
+                _pv = _hst.get("pv")
+                _close_msg += ("\n\nCH2 히터가 운전 중입니다(PV "
+                               + ("--.-" if _pv is None else f"{float(_pv):.1f}")
+                               + "°C). 종료하면 히터가 꺼집니다.")
         try:
             reply = QMessageBox.question(
                 self,
                 "프로그램 종료 확인",
-                "프로그램을 종료하시겠습니까?",
+                _close_msg,
                 QMessageBox.Yes | QMessageBox.No,
                 QMessageBox.No,
             )

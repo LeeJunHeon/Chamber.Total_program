@@ -1,0 +1,900 @@
+# controller/heater_service.py
+# -*- coding: utf-8 -*-
+"""CH2 히터(PLC 내장 PID) 서비스 — asyncio 단일 루프, Qt 없음.
+
+PLC I/O 는 AsyncPLC 의 공개 메서드만 쓴다(is_connected / read_regs_block / read_coils_block / write_reg /
+write_coil). 접속·재접속은 기존 하트비트 몫이다 — 여기서는 접속을 시도하지 않는다.
+주소는 PLC_REG_MAP·PLC_COIL_MAP 에 넣지 않고 이 모듈의 상수로만 둔다
+(REG_MAP 에 넣으면 snapshot_regs_fast 범위가 FC3 한도 125 를 넘고, COIL_MAP 에 넣으면 코일 CSV 열이 바뀐다).
+
+폴링 루프(성공한 폴링 한 번의 처리 순서):
+  (1) 잔존 RUN 정리 → (2) 보류 OFF → (3) 세션 마커·설정 push/되읽기 → (4) FAULT 엣지 → (5) 출력 죽음
+  → (6) RUN 엣지(CSV·챗) → (7) 램프 tick → 포화 감시 → 유지 모드 + D118 요청 실행 → (8) CSV 행 → (9) 리스너
+워치독 루프: WD_PERIOD 마다 RUN 이고 링크가 살아 있을 때만 D114 = (이전+1) & 0x7FFF.
+명령(turn_on/turn_off/apply_target/reset_fault)과 폴링 쓰기는 같은 asyncio.Lock 으로 섞이지 않게 한다.
+"""
+from __future__ import annotations
+
+import asyncio
+import random
+import time
+from typing import Any, Callable, Dict, List, Optional, Tuple
+
+from controller.heater_hold import HeaterHold
+from controller.heater_ramp import RampProfiler
+from controller.heater_saturation import HeaterSaturationGuard
+from lib.heater_config import HeaterConfig, float_to_words, words_to_float
+from lib.heater_logger import HeaterCsvLogger
+from lib.heater_profile import ramp_minutes
+
+# ── 주소(XBL-EMTA: 레지스터 = D 번호, 코일 = M 워드×16 + 비트) ──
+REG_BLOCK_START = 110
+REG_BLOCK_COUNT = 51          # D110~D160
+REG_PV, REG_SV, REG_SV_LIMIT, REG_WD = 110, 112, 113, 114
+REG_CUR_SV, REG_PID_ERR, REG_MV_LIMIT, REG_SV_RAMP = 116, 117, 118, 119
+REG_RAMP_RATE, REG_HOLDBACK = 120, 121
+REG_OT_LIMIT, REG_SLOW_ZONE, REG_SLOW_RATE = 126, 127, 128
+REG_MV = 141
+REG_KP_LO, REG_KP_HI, REG_TI_LO, REG_TI_HI = 142, 143, 144, 145
+REG_KP_ACT_LO, REG_KP_ACT_HI, REG_TI_ACT_LO, REG_TI_ACT_HI = 146, 147, 148, 149
+
+COIL_BASE = 640
+COIL_COUNT = 19               # 640~658
+COIL_RUN, COIL_ITL, COIL_FAULT, COIL_RST = 640, 641, 642, 643
+COIL_OT, COIL_TC_ERR, COIL_WD_ERR = 644, 645, 646
+COIL_PID_RUN, COIL_DAC_EN, COIL_TC_OK, COIL_DA_OK = 649, 652, 653, 656
+
+# 쓰기 허용 주소(이 밖으로는 절대 쓰지 않는다)
+WRITE_REGS = frozenset({REG_SV, REG_SV_LIMIT, REG_WD, REG_MV_LIMIT, REG_RAMP_RATE, REG_HOLDBACK,
+                        REG_OT_LIMIT, REG_SLOW_ZONE, REG_SLOW_RATE,
+                        REG_KP_LO, REG_KP_HI, REG_TI_LO, REG_TI_HI})
+WRITE_COILS = frozenset({COIL_RUN, COIL_RST})
+
+IO_TIMEOUT_S = 6.0            # 모든 PLC 호출 상한
+OUT_DEAD_GRACE_SEC = 5.0      # RUN 상승 뒤 출력 죽음 판정 유예
+OUT_DEAD_COUNT = 3            # 연속 횟수
+MARKER_MISMATCH_N = 2         # 세션 마커 연속 불일치 횟수
+SV_LOG_MIN_DELTA_C = 1.0
+SV_LOG_MIN_INTERVAL_S = 30.0
+WD_FAIL_LOG_INTERVAL_S = 60.0
+RESIDUAL_FAIL_LOG_INTERVAL_S = 10.0
+
+OWNER_LABEL = {"manual": "수동", "process": "공정", "external": "외부"}
+
+
+def _s16(v: int) -> int:
+    v = int(v) & 0xFFFF
+    return v - 65536 if v >= 32768 else v
+
+
+class HeaterService:
+    def __init__(self, plc: Any, cfg: HeaterConfig, *,
+                 log: Callable[[str, str], None],
+                 chat: Any = None,
+                 clock: Callable[[], float] = time.monotonic):
+        self._plc = plc
+        self.cfg = cfg
+        self._log_cb = log
+        self._chat = chat
+        self._now = clock
+        self._lock = asyncio.Lock()
+        self._listeners: List[Callable[[dict], None]] = []
+        self._poll_task: Optional[asyncio.Task] = None
+        self._wd_task: Optional[asyncio.Task] = None
+        self._stopping = False
+
+        self.owner: Optional[str] = None
+        self._st: Dict[str, Any] = self._blank_status()
+        self._last_ok_t: Optional[float] = None
+        self._first_poll = True              # 잔존 RUN/기존 래치 판정용(첫 '성공' 폴링)
+        self._pending_off = False
+        self._need_push = True
+        self._marker: Optional[int] = None
+        self._marker_mismatch = 0
+        self._verify: Optional[dict] = None  # push 직후 다음 블록에서 확인할 값
+        self._verify_warned = False
+        self._pid_warned = False
+        self._noprog_warned = False
+        self._fault_prev = False
+        self._fault_off_sent = False
+        self._fault_why = ""
+        self._out_dead_cnt = 0
+        self._out_dead_notified = False
+        self._run_prev = False
+        self._run_since = 0.0
+        self._end_reason: Optional[str] = None
+        self._episode_notes: List[str] = []
+        self._fail_since: Optional[float] = None
+        self._wd = 0
+        self._wd_fail_log_t = -1e9
+        self._residual_fail_log_t = -1e9
+        self._sv_log_c: Optional[float] = None
+        self._sv_log_t = -1e9
+        self._csv_last_t = -1e9
+        self._mv_requests: List[int] = []
+
+        self.profiler = RampProfiler(self.status_raw, self._write_sv, self._write_ramp_counts,
+                                     lambda m: self._log(m), cfg, clock=clock)
+        self.hold = HeaterHold(
+            cfg.hold_mode, mv_limit=cfg.mv_limit, mv_min=cfg.mv_min,
+            enter_tol_c=cfg.hold_enter_tol, enter_sec=cfg.hold_enter_sec,
+            arrive_tol_c=cfg.hold_arrive_tol, drift_pv_c=cfg.hold_drift_pv, drift_mv=cfg.hold_drift_mv,
+            clock=clock, request_mv_limit=self._mv_requests.append,
+            message=self._on_hold_msg, engaged=self._on_hold_engaged, give_up=self._on_hold_give_up)
+        self.sat = HeaterSaturationGuard(
+            mv_limit=cfg.mv_limit, mv_min=cfg.mv_min, sat_sec=cfg.sat_sec, clock=clock,
+            request_mv_limit=self._mv_requests.append, message=self._on_hold_msg,
+            saturated=self._on_saturated)
+        self.csv = HeaterCsvLogger(cfg.log_dir, warn=lambda m: self._log(f"⚠ {m}"), clock=clock)
+
+    # ═══════════════════════ 공개 API ═══════════════════════
+    def start(self, loop: Optional[asyncio.AbstractEventLoop] = None) -> None:
+        """폴링·워치독 태스크를 띄운다. loop 를 주면 그 루프에(MainWindow 는 루프가 돌기 전에 생성된다)."""
+        lp = loop
+        if lp is None:
+            try:
+                lp = asyncio.get_running_loop()
+            except RuntimeError:
+                lp = asyncio.get_event_loop()
+        if self._poll_task is None or self._poll_task.done():
+            self._poll_task = lp.create_task(self._poll_loop(), name="CH2HeaterPoll")
+        if self._wd_task is None or self._wd_task.done():
+            self._wd_task = lp.create_task(self._wd_loop(), name="CH2HeaterWD")
+
+    def status(self) -> dict:
+        return {k: v for k, v in self._st.items() if not k.startswith("_")}
+
+    def status_raw(self) -> dict:
+        """복사 없이 마지막 상태(내부·램프용)."""
+        return self._st
+
+    def add_listener(self, cb: Callable[[dict], None]) -> None:
+        if cb not in self._listeners:
+            self._listeners.append(cb)
+
+    def claim(self, owner: str) -> bool:
+        if self.owner in (None, owner):
+            self.owner = owner
+            return True
+        return False
+
+    def release(self, owner: str) -> None:
+        if self.owner == owner:
+            self.owner = None
+
+    def is_ready(self) -> Tuple[bool, str]:
+        st = self._st
+        if not self._link_up():
+            return False, "PLC 링크 없음"
+        if st.get("stale"):
+            return False, f"PLC 응답 없음 ({float(st.get('age_s') or 0):.0f}초 전 값)"
+        if st.get("fault"):
+            return False, f"히터 이상: {self._fault_text(st)}"
+        if not st.get("itl"):
+            return False, f"인터락 미충족: {self._itl_missing(st)}"
+        return True, ""
+
+    def final_target(self) -> Optional[float]:
+        t = self.profiler.target()
+        if t is not None:
+            return t
+        return self._st.get("sv")
+
+    def ramp_info(self) -> Tuple[bool, Optional[float], float, Optional[float]]:
+        """(활성, 목표, 속도 °C/min, 남은 분)."""
+        if not self.profiler.is_active():
+            return False, None, 0.0, None
+        return True, self.profiler.target(), self.profiler.rate(), self.profiler.remaining_minutes()
+
+    def hold_snapshot(self) -> dict:
+        h = self.hold
+        return {"mode": h.mode, "state": h.state, "holding": h.is_holding(), "value": h.value,
+                "arrived": h.arrived, "gave_up": h.gave_up}
+
+    # ═══════════════════════ 명령 ═══════════════════════
+    async def turn_on(self, target_c: float, rate: Optional[float] = None,
+                      owner: str = "manual") -> Tuple[bool, str]:
+        async with self._lock:
+            ok, why = self.is_ready()
+            if not ok:
+                return False, why
+            st = self._st
+            if st.get("run"):
+                return False, "이미 운전 중입니다 — 목표를 바꾸려면 [적용]을 쓰십시오"
+            ok, why = self._target_ok(target_c)
+            if not ok:
+                return False, why
+            if self.owner not in (None, owner):
+                return False, f"제어 주체 충돌 — 현재 {OWNER_LABEL.get(self.owner, self.owner)}"
+            target = float(target_c)
+            r = float(rate) if rate else float(self.cfg.ramp_rate)
+            try:
+                started = await self.profiler.start(target, r, OWNER_LABEL.get(owner, owner))
+                if not started:
+                    await self._write_sv(target, force_log=True)
+                await self._w_coil(COIL_RUN, True)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                await self.profiler.stop(restore_rate=True)
+                self._log(f"⚠ 히터 ON 실패: {e!r}")
+                return False, f"PLC 쓰기 실패: {e}"
+            self.owner = owner
+            self._end_reason = None
+            self._episode_notes = []
+            self._log(f"운전 ON 요청 — 목표 {target:.1f}°C ({OWNER_LABEL.get(owner, owner)})")
+        await self._kick_wd()
+        return True, ""
+
+    async def turn_off(self, reason: str = "정지", owner: Optional[str] = None) -> Tuple[bool, str]:
+        async with self._lock:
+            return await self._turn_off_locked(reason)
+
+    async def _turn_off_locked(self, reason: str) -> Tuple[bool, str]:
+        self._end_reason = reason
+        if self.profiler.is_active():
+            await self.profiler.stop(restore_rate=True)
+        elif self._st.get("ok") is not None and self._st.get("ramp_rate") not in (None, self._ramp_c_per_min()):
+            if self._link_up():
+                try:
+                    await self._write_ramp_counts(self.cfg.rate_counts(self.cfg.ramp_rate))
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    pass
+        if not self._link_up():
+            self._pending_off = True
+            self._log("링크 다운 — 히터 OFF 를 보류(복구 시 1회 적용)")
+            return True, "링크 다운 — OFF 보류(복구 시 적용)"
+        try:
+            await self._w_coil(COIL_RUN, False)
+            self._pending_off = False
+            self._log(f"운전 OFF ({reason})")
+            return True, ""
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self._pending_off = True
+            self._log(f"⚠ 히터 OFF 쓰기 실패 → 보류(다음 폴링에 재시도): {e!r}")
+            return True, "쓰기 실패 — OFF 보류(다음 폴링에 재시도)"
+
+    async def apply_target(self, target_c: float) -> Tuple[bool, str]:
+        async with self._lock:
+            if not self._link_up():
+                return False, "PLC 링크 없음"
+            if self._st.get("stale"):
+                return False, "PLC 응답 없음"
+            ok, why = self._target_ok(target_c)
+            if not ok:
+                return False, why
+            target = float(target_c)
+            try:
+                if self._st.get("run"):
+                    rate = self.profiler.rate() if self.profiler.is_active() else float(self.cfg.ramp_rate)
+                    await self.profiler.stop(restore_rate=False)
+                    if not await self.profiler.start(target, rate, "적용"):
+                        await self._write_sv(target, force_log=True)
+                else:
+                    await self._write_sv(target, force_log=True)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                return False, f"PLC 쓰기 실패: {e}"
+            return True, ""
+
+    async def reset_fault(self) -> Tuple[bool, str]:
+        async with self._lock:
+            if self._st.get("run"):
+                return False, "히터 RUN 이 켜져 있습니다 — 먼저 OFF 한 뒤 리셋하십시오"
+            if not self._link_up():
+                return False, "PLC 링크 없음"
+            try:
+                await self._w_coil(COIL_RST, True)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                return False, f"PLC 쓰기 실패: {e}"
+            self._log("사용자가 히터 이상 리셋을 요청했습니다(RST)")
+            return True, ""
+
+    async def shutdown(self, timeout: float = 2.0) -> None:
+        """루프 정지 → 링크가 살아 있고 RUN 이면 RUN=0 1회 → CSV 닫기."""
+        self._stopping = True
+        for t in (self._poll_task, self._wd_task):
+            if t is not None and not t.done():
+                t.cancel()
+        for t in (self._poll_task, self._wd_task):
+            if t is not None:
+                try:
+                    await asyncio.wait_for(asyncio.gather(t, return_exceptions=True), timeout=1.0)
+                except asyncio.CancelledError:
+                    raise
+                except Exception:
+                    pass
+        self._poll_task = self._wd_task = None
+        if self._st.get("run"):
+            done = False
+            if self._link_up():
+                try:
+                    await asyncio.wait_for(self._plc.write_coil(COIL_RUN, False), timeout=float(timeout))
+                    done = True
+                    self._log("프로그램 종료 — 히터 RUN OFF")
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    self._log(f"⚠ 종료 시 히터 OFF 실패: {e!r}")
+            if not done:
+                self._log("⚠ 종료 시 히터 OFF 를 보내지 못함 — PLC 워치독이 30초 뒤 차단")
+        try:
+            if self.csv.is_open():
+                self.csv.write_row(self._st, owner=self.owner or "", note="프로그램 종료")
+            self.csv.stop()
+        except Exception:
+            pass
+
+    # ═══════════════════════ 내부: I/O ═══════════════════════
+    def _link_up(self) -> bool:
+        try:
+            return bool(self._plc.is_connected())
+        except Exception:
+            return False
+
+    async def _w_reg(self, addr: int, value: int) -> None:
+        if addr not in WRITE_REGS:
+            raise ValueError(f"히터 쓰기 허용 밖 레지스터 D{addr}")
+        await asyncio.wait_for(self._plc.write_reg(int(addr), int(value) & 0xFFFF), timeout=IO_TIMEOUT_S)
+
+    async def _w_coil(self, addr: int, on: bool) -> None:
+        if addr not in WRITE_COILS:
+            raise ValueError(f"히터 쓰기 허용 밖 코일 {addr}")
+        await asyncio.wait_for(self._plc.write_coil(int(addr), bool(on)), timeout=IO_TIMEOUT_S)
+
+    async def _write_sv(self, temp_c: float, force_log: bool = False) -> None:
+        raw = self.cfg.c_to_raw(temp_c)
+        await self._w_reg(REG_SV, raw)
+        now = self._now()
+        if (force_log or self._sv_log_c is None or abs(float(temp_c) - self._sv_log_c) >= SV_LOG_MIN_DELTA_C
+                or (now - self._sv_log_t) >= SV_LOG_MIN_INTERVAL_S):
+            self._sv_log_c = float(temp_c)
+            self._sv_log_t = now
+            self._log(f"목표(SV) {float(temp_c):.1f}°C 기록 (D112={raw})")
+
+    async def _write_ramp_counts(self, counts: int) -> None:
+        v = max(1, min(100, int(counts)))
+        await self._w_reg(REG_RAMP_RATE, v)
+
+    async def _write_mv_limit(self, v: int) -> None:
+        v = max(self.cfg.mv_min + 20, min(self.cfg.mv_limit, int(v)))
+        await self._w_reg(REG_MV_LIMIT, v)
+
+    def _ramp_c_per_min(self) -> float:
+        return float(self.cfg.rate_counts(self.cfg.ramp_rate) * 6)
+
+    async def _kick_wd(self) -> None:
+        if not self._link_up():
+            return
+        self._wd = (self._wd + 1) & 0x7FFF
+        try:
+            await self._w_reg(REG_WD, self._wd)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            now = self._now()
+            if (now - self._wd_fail_log_t) >= WD_FAIL_LOG_INTERVAL_S:
+                self._wd_fail_log_t = now
+                self._log(f"워치독(D114) 쓰기 실패 — 다음 주기에 재시도: {e!r}")
+
+    # ═══════════════════════ 내부: 로그·챗 ═══════════════════════
+    def _log(self, msg: str) -> None:
+        try:
+            self._log_cb("HEATER", msg)
+        except Exception:
+            pass
+
+    def _card(self, title: str, subtitle: str, status: str, fields: Optional[dict] = None) -> None:
+        if self._chat is None:
+            return
+        try:
+            self._chat._post_card(f"[CH2] 히터 {title}", subtitle, status, fields or {}, urgent=True)
+        except Exception:
+            pass
+
+    def _on_hold_msg(self, level: str, text: str) -> None:
+        self._log(("⚠ " if level == "경고" else "") + text)
+
+    def _on_hold_engaged(self, kind: str) -> None:
+        v = self.hold.value
+        self._episode_notes.append(f"유지 진입 DAC 상한 {v}")
+
+    def _on_hold_give_up(self, why: str) -> None:
+        self._episode_notes.append("유지 모드 포기")
+        self._card("유지 모드 포기", why, "WARN", {"PV": self._fmt(self._st.get("pv"))})
+
+    def _on_saturated(self, info: dict) -> None:
+        clamp = info.get("clamp")
+        self._episode_notes.append(f"DAC 포화{'(클램프 ' + str(clamp) + ')' if clamp is not None else ''}")
+        self._card("DAC 포화", f"{float(info.get('sec') or 0):.0f}초째 상한({info.get('limit')})에 물림", "WARN",
+                   {"PV": self._fmt(info.get("pv")), "MV": str(info.get("mv")),
+                    "클램프": "-" if clamp is None else str(clamp)})
+
+    @staticmethod
+    def _fmt(v) -> str:
+        return "--.-" if v is None else f"{float(v):.1f}°C"
+
+    @staticmethod
+    def _fault_text(st: dict) -> str:
+        if st.get("ot"):
+            return "과온 트립"
+        if st.get("tc_err"):
+            return "온도센서 이상(단선/모듈)"
+        if st.get("wd_err"):
+            return "통신 워치독 타임아웃"
+        return f"히터 이상 (PID err={st.get('pid_err')})"
+
+    @staticmethod
+    def _itl_missing(st: dict) -> str:
+        names = []
+        if not st.get("tc_ok"):
+            names.append("TC")
+        if not st.get("da_ok"):
+            names.append("D/A")
+        if st.get("fault"):
+            names.append("FAULT")
+        return ", ".join(names) or "원인 미상"
+
+    def _target_ok(self, target_c) -> Tuple[bool, str]:
+        try:
+            t = float(target_c)
+        except Exception:
+            return False, "목표 온도가 숫자가 아닙니다"
+        lim = float(self.cfg.max_temp)
+        svl = self._st.get("sv_limit")
+        if svl is not None and float(svl) > 0:
+            lim = min(lim, float(svl))
+        if not (0.0 < t <= lim):
+            return False, f"목표 범위 밖 — 0 초과 {lim:.1f}°C 이하"
+        return True, ""
+
+    # ═══════════════════════ 내부: 상태 ═══════════════════════
+    def _blank_status(self) -> dict:
+        return {"ok": None, "pv": None, "sv": None, "sv_limit": None, "cur_sv": None, "pid_err": None,
+                "mv": None, "mv_pct": 0.0, "mv_limit": None, "sv_ramp": None, "ramp_rate": None,
+                "holdback": None, "ot_limit": None, "slow_zone": None, "slow_rate": None,
+                "kp_act": None, "ti_act": None, "marker": None,
+                "run": False, "itl": False, "fault": False, "ot": False, "tc_err": False, "wd_err": False,
+                "pid_run": False, "dac_en": False, "tc_ok": False, "da_ok": False,
+                "output_dead": False, "stale": True, "age_s": None, "t": None}
+
+    def _decode(self, regs: list, bits: list, now: float) -> dict:
+        c = self.cfg
+        sc = float(c.temp_scale)
+
+        def r(addr):
+            return int(regs[addr - REG_BLOCK_START])
+
+        def b(addr):
+            return bool(bits[addr - COIL_BASE])
+
+        raw_pv = _s16(r(REG_PV))
+        tc_bad = raw_pv == -1
+        mv = r(REG_MV)
+        span = c.mv_abs_max - c.mv_min
+        mv_pct = 0.0 if (mv < c.mv_min or span <= 0) else max(0.0, min(100.0, (mv - c.mv_min) / span * 100.0))
+        mreg = int(c.session_mark_reg)
+        st = {
+            "ok": not tc_bad,
+            "pv": None if tc_bad else raw_pv * sc,
+            "sv": r(REG_SV) * sc,
+            "sv_limit": r(REG_SV_LIMIT) * sc,
+            "cur_sv": _s16(r(REG_CUR_SV)) * sc,
+            "pid_err": r(REG_PID_ERR),
+            "mv": mv,
+            "mv_pct": mv_pct,
+            "mv_limit": r(REG_MV_LIMIT),
+            "sv_ramp": _s16(r(REG_SV_RAMP)) * sc,
+            "ramp_rate": r(REG_RAMP_RATE) * 6,
+            "holdback": r(REG_HOLDBACK) * sc,
+            "ot_limit": r(REG_OT_LIMIT) * sc,
+            "slow_zone": r(REG_SLOW_ZONE) * sc,
+            "slow_rate": r(REG_SLOW_RATE) * 6,
+            "kp_act": words_to_float(r(REG_KP_ACT_LO), r(REG_KP_ACT_HI)),
+            "ti_act": words_to_float(r(REG_TI_ACT_LO), r(REG_TI_ACT_HI)),
+            "marker": r(mreg) if (REG_BLOCK_START <= mreg < REG_BLOCK_START + REG_BLOCK_COUNT) else None,
+            "run": b(COIL_RUN), "itl": b(COIL_ITL), "fault": b(COIL_FAULT),
+            "ot": b(COIL_OT), "tc_err": b(COIL_TC_ERR), "wd_err": b(COIL_WD_ERR),
+            "pid_run": b(COIL_PID_RUN), "dac_en": b(COIL_DAC_EN), "tc_ok": b(COIL_TC_OK), "da_ok": b(COIL_DA_OK),
+            "stale": False, "age_s": 0.0, "t": now,
+            "_raw_pv": raw_pv, "_regs": regs,
+        }
+        return st
+
+    def _publish(self) -> None:
+        snap = {k: v for k, v in self._st.items() if not k.startswith("_")}
+        for cb in list(self._listeners):
+            try:
+                cb(dict(snap))
+            except Exception as e:
+                self._log(f"상태 리스너 예외: {e!r}")
+
+    def _next_interval(self) -> float:
+        st = self._st
+        busy = (st.get("run") or self.profiler.is_active() or self._pending_off
+                or (self._need_push and not st.get("stale")))
+        return float(self.cfg.poll_interval_s if busy else self.cfg.poll_idle_s)
+
+    # ═══════════════════════ 루프 ═══════════════════════
+    async def _poll_loop(self) -> None:
+        while not self._stopping:
+            try:
+                await self._poll_once()
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self._log(f"⚠ 히터 폴링 처리 예외: {e!r}")
+            await asyncio.sleep(self._next_interval())
+
+    async def _wd_loop(self) -> None:
+        while not self._stopping:
+            await asyncio.sleep(float(self.cfg.wd_period_s))
+            try:
+                if self._st.get("run") and self._link_up():
+                    await self._kick_wd()
+            except asyncio.CancelledError:
+                raise
+            except Exception:
+                pass
+
+    def _on_fail(self, why: str) -> None:
+        now = self._now()
+        if self._fail_since is None:
+            self._fail_since = now
+            self._log(f"⚠ 히터 상태 읽기 실패: {why}")
+        st = self._st
+        age = None if self._last_ok_t is None else now - self._last_ok_t
+        st["age_s"] = age
+        st["stale"] = age is None or age > float(self.cfg.stale_sec)
+        self._publish()
+
+    async def _poll_once(self) -> None:
+        if not self._link_up():
+            self._on_fail("PLC 미연결")
+            return
+        try:
+            regs = await asyncio.wait_for(
+                self._plc.read_regs_block(REG_BLOCK_START, REG_BLOCK_COUNT, priority="low"), timeout=IO_TIMEOUT_S)
+            bits = await asyncio.wait_for(
+                self._plc.read_coils_block(COIL_BASE, COIL_COUNT, priority="low"), timeout=IO_TIMEOUT_S)
+            if len(regs) < REG_BLOCK_COUNT or len(bits) < COIL_COUNT:
+                raise ValueError(f"응답 길이 부족 regs={len(regs)} bits={len(bits)}")
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            self._on_fail(repr(e))
+            return
+        now = self._now()
+        if self._fail_since is not None:
+            self._log(f"히터 상태 읽기 복구 (끊긴 {now - self._fail_since:.0f}초)")
+            self._fail_since = None
+        st = self._decode(regs, bits, now)
+        async with self._lock:
+            if not await self._process(st, now):
+                return                       # 잔존 RUN 정리 실패 — 발행하지 않고 다음 폴링에 재시도
+        self._last_ok_t = now
+        self._publish()
+
+    async def _process(self, st: dict, now: float) -> bool:
+        first = self._first_poll
+        # (1) 잔존 RUN
+        if first and st["run"]:
+            if not await self._clear_residual_run(st):
+                return False
+        # (2) 보류된 OFF
+        if self._pending_off:
+            try:
+                await self._w_coil(COIL_RUN, False)
+                self._pending_off = False
+                self._log("보류했던 히터 OFF 적용")
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self._log(f"⚠ 보류 OFF 적용 실패 — 다음 폴링에 재시도: {e!r}")
+        # (3) 세션 마커·설정
+        await self._marker_and_push(st)
+        self._check_program(st)
+        # (4) FAULT 엣지
+        await self._fault_edges(st, first)
+        # (5) 출력 죽음 (RUN 상승 시각은 여기서 잡는다)
+        rise = bool(st["run"]) and not self._run_prev
+        fall = (not st["run"]) and self._run_prev
+        if rise:
+            self._run_since = now
+        self._output_dead(st, now)
+        # 상태 확정(램프·유지가 읽는다)
+        self._st = st
+        # (6) RUN 엣지
+        if rise:
+            self._on_run_rise(st)
+        elif fall:
+            await self._on_run_fall(st, now)
+        self._run_prev = bool(st["run"])
+        # (7) 램프 → 포화 → 유지 + D118 요청
+        if self.profiler.is_active():
+            await self.profiler.tick()
+        self._mv_requests.clear()
+        self.sat.tick(st, self.hold.is_holding(), "dac")
+        self.hold.tick(st, self.final_target())
+        for v in list(self._mv_requests):
+            try:
+                await self._write_mv_limit(v)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self._log(f"⚠ DAC 상한(D118) 쓰기 실패: {e!r}")
+        self._mv_requests.clear()
+        # (8) CSV
+        if st["run"] and self.cfg.log_enabled and (now - self._csv_last_t) >= float(self.cfg.log_period_s):
+            self._csv_last_t = now
+            self.csv.write_row(st, owner=OWNER_LABEL.get(self.owner, self.owner or ""),
+                               hold=self.hold.log_tuple(), sat_clamp=self.sat.clamped,
+                               ramp_target=self.profiler.target())
+        self._first_poll = False
+        return True
+
+    async def _clear_residual_run(self, st: dict) -> bool:
+        """이전 세션 잔존 RUN: RUN=0 → (TC 정상이면) SV=PV. 실패하면 False(발행하지 않고 재시도)."""
+        try:
+            await self._w_coil(COIL_RUN, False)
+            if st["pv"] is not None:
+                await self._w_reg(REG_SV, max(0, min(32767, int(st["_raw_pv"]))))
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            now = self._now()
+            if (now - self._residual_fail_log_t) >= RESIDUAL_FAIL_LOG_INTERVAL_S:
+                self._residual_fail_log_t = now
+                self._log(f"⚠ 이전 세션 히터 RUN 정리 실패 — 재시도: {e!r}")
+            return False
+        sv_old = float(st.get("sv") or 0.0)
+        pv = st.get("pv")
+        st["run"] = False
+        st["residual_run"] = True
+        if pv is not None:
+            st["sv"] = float(pv)
+        txt = (f"이전 세션 히터 RUN 잔존 → OFF, SV {sv_old:.1f}°C → "
+               f"{('현재 온도 %.1f°C' % pv) if pv is not None else 'PV 무효(SV 유지)'}")
+        self._log(txt)
+        self._card("잔존 RUN 정리", txt, "WARN", {"PV": self._fmt(pv), "이전 SV": f"{sv_old:.1f}°C"})
+        return True
+
+    async def _marker_and_push(self, st: dict) -> None:
+        mreg = int(self.cfg.session_mark_reg)
+        # 직전 push 의 되읽기 확인(이번 블록에 반영돼 있어야 한다)
+        if self._verify is not None:
+            self._check_verify(st)
+        if self._need_push or (mreg and self._marker is None):
+            await self._push_and_mark(st)
+            return
+        if mreg and self._marker is not None:
+            v = st.get("marker")
+            if v == self._marker:
+                self._marker_mismatch = 0
+                return
+            self._marker_mismatch += 1
+            if self._marker_mismatch < MARKER_MISMATCH_N:
+                return
+            why = (f"PLC 재기동/메모리 초기화 감지 — 세션 마커 D{mreg} 기대 0x{self._marker:04X}, "
+                   f"읽은 값 0x{int(v or 0):04X} ({MARKER_MISMATCH_N}회 연속)")
+            self._log(f"⚠ {why} → 설정 재적용, 램프 정지")
+            self._card("PLC 재기동 감지", why, "WARN", {"PV": self._fmt(st.get("pv"))})
+            self._marker = None
+            self._marker_mismatch = 0
+            if self.profiler.is_active():
+                await self.profiler.stop(restore_rate=False)
+            self._end_reason = "PLC 재기동"
+            self.owner = None
+            self._need_push = True
+            await self._push_and_mark(st)
+
+    async def _push_and_mark(self, st: dict) -> None:
+        c = self.cfg
+        ok = True
+        if c.push_config:
+            ok = await self._push_config(st)
+        if not ok:
+            return                           # 실패 → 다음 폴링에 재시도(마커도 쓰지 않음)
+        mreg = int(c.session_mark_reg)
+        if mreg:
+            m = random.randint(0x1000, 0xFFFE)
+            try:
+                await asyncio.wait_for(self._plc.write_reg(mreg, m), timeout=IO_TIMEOUT_S)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self._log(f"⚠ 세션 마커 D{mreg} 쓰기 실패 — 재시도: {e!r}")
+                return
+            self._marker = m
+            self._marker_mismatch = 0
+        self._need_push = False
+
+    async def _push_config(self, st: dict) -> bool:
+        """D113 → D126 → D118 → D120 → D121 → D127 → D128 → Kp(D143→D142) → Ti(D145→D144). 2워드는 상위 먼저."""
+        c = self.cfg
+        items = [
+            (REG_SV_LIMIT, c.c_to_raw(c.sv_limit_c), "SV상한"),
+            (REG_OT_LIMIT, c.c_to_raw(c.ot_limit_c), "OT"),
+            (REG_MV_LIMIT, int(c.mv_limit), "DAC상한"),
+            (REG_RAMP_RATE, c.rate_counts(c.ramp_rate), "램프"),
+            (REG_HOLDBACK, c.c_to_raw(c.holdback_c), "홀드백"),
+            (REG_SLOW_ZONE, c.c_to_raw(c.slow_zone_c), "감속구간"),
+            (REG_SLOW_RATE, c.rate_counts(c.slow_rate), "감속램프"),
+        ]
+        expect: Dict[int, int] = {}
+        failed = []
+        for addr, raw, name in items:
+            try:
+                await self._w_reg(addr, raw)
+                expect[addr] = raw
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                failed.append(f"{name}(D{addr}: {e!r})")
+        pid = {}
+        for valid, val, lo, hi, act_key, name in ((c.kp_valid, c.kp, REG_KP_LO, REG_KP_HI, "kp_act", "Kp"),
+                                                   (c.ti_valid, c.ti_s, REG_TI_LO, REG_TI_HI, "ti_act", "Ti")):
+            if not valid:
+                continue
+            pid[act_key] = float(val)
+            act = st.get(act_key)
+            if act is not None and abs(float(act) - float(val)) <= max(1e-6, abs(float(val)) * 1e-5):
+                continue                     # 이미 같은 값 — 다시 쓰지 않는다
+            w_lo, w_hi = float_to_words(val)
+            try:
+                await self._w_reg(hi, w_hi)  # 상위 워드 먼저 — 중간 상태가 새 값의 ±1% 안
+                await self._w_reg(lo, w_lo)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                failed.append(f"{name}(D{lo}/D{hi}: {e!r})")
+        if failed:
+            self._log("⚠ 히터 설정 쓰기 실패: " + ", ".join(failed))
+            return False
+        self._verify = {"regs": expect, "pid": pid}
+        self._verify_warned = False
+        self._pid_warned = False
+        self._log(
+            f"히터 설정 적용: SV상한 {c.sv_limit_c:.1f}°C · OT {c.ot_limit_c:.1f}°C · DAC상한 {c.mv_limit}"
+            f" · 램프 {c.rate_counts(c.ramp_rate) * 6}°C/min · 홀드백 {c.holdback_c:.1f}°C"
+            f" · 감속 {c.slow_zone_c:.1f}°C/{c.rate_counts(c.slow_rate) * 6}°C/min"
+            f" · Kp {c.kp:g}{'' if c.kp_valid else '(미적용)'} · Ti {c.ti_s:g}s{'' if c.ti_valid else '(미적용)'}")
+        return True
+
+    def _check_verify(self, st: dict) -> None:
+        v = self._verify or {}
+        self._verify = None
+        regs = st.get("_regs") or []
+        mism = []
+        for addr, raw in (v.get("regs") or {}).items():
+            try:
+                got = int(regs[addr - REG_BLOCK_START])
+            except Exception:
+                continue
+            if got != int(raw):
+                mism.append(f"D{addr} 요청 {raw} → 실제 {got}")
+        if mism and not self._verify_warned:
+            self._verify_warned = True
+            txt = "설정값이 되읽기와 다릅니다 (래더가 강제 중일 수 있음): " + ", ".join(mism)
+            self._log("⚠ " + txt)
+            self._card("설정 되읽기 불일치", txt, "WARN")
+        pmism = []
+        for key, want in (v.get("pid") or {}).items():
+            act = st.get(key)
+            if act is None or abs(float(act) - float(want)) > max(1e-6, abs(float(want)) * 1e-3):
+                pmism.append(f"{'Kp' if key == 'kp_act' else 'Ti'} 요청 {want:g} → 적용 {act if act is None else round(float(act), 4)}")
+        if pmism and not self._pid_warned:
+            self._pid_warned = True
+            txt = "PID 값이 적용되지 않음(범위·워드 순서 확인, 래더 기본값 사용 중): " + ", ".join(pmism)
+            self._log("⚠ " + txt)
+            self._card("설정 되읽기 불일치", txt, "WARN")
+
+    def _check_program(self, st: dict) -> None:
+        if self._noprog_warned:
+            return
+        kp = st.get("kp_act")
+        if not st.get("tc_ok") and not st.get("da_ok") and (kp is None or float(kp) == 0.0):
+            self._noprog_warned = True
+            self._log("⚠ PLC 에 HEATER 프로그램이 없는 것 같음 (TC1_OK·DA_OK 꺼짐, KP_ACT=0)")
+
+    async def _fault_edges(self, st: dict, first: bool) -> None:
+        if st["fault"] and not self._fault_prev:
+            why = self._fault_text(st)
+            if first:
+                why = f"{why} — 기존 래치(프로그램 시작 시 확인)"
+            self._fault_why = why
+            if st["run"] and not self._fault_off_sent:
+                self._fault_off_sent = True
+                try:
+                    await self._w_coil(COIL_RUN, False)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    self._pending_off = True
+                    self._log(f"⚠ 이상 시 RUN OFF 쓰기 실패 → 보류: {e!r}")
+            if self.profiler.is_active():
+                await self.profiler.stop(restore_rate=False)
+            self._end_reason = why
+            self.owner = None
+            self._log(f"⚠ 히터 이상: {why}")
+            self._card("이상", why, "FAIL", {"PV": self._fmt(st.get("pv")), "PID err": str(st.get("pid_err"))})
+        elif (not st["fault"]) and self._fault_prev:
+            self._log("히터 이상 해제됨 (정상 복귀)")
+            self._fault_off_sent = False
+        self._fault_prev = bool(st["fault"])
+
+    def _output_dead(self, st: dict, now: float) -> None:
+        cond = bool(st["run"] and st["itl"] and not st["fault"] and st.get("mv") is not None
+                    and int(st["mv"]) < int(self.cfg.mv_min))
+        st["output_dead"] = cond
+        if cond:
+            self._out_dead_cnt += 1
+            grace = self._run_since > 0.0 and (now - self._run_since) >= OUT_DEAD_GRACE_SEC
+            if self._out_dead_cnt >= OUT_DEAD_COUNT and grace and not self._out_dead_notified:
+                self._out_dead_notified = True
+                self._episode_notes.append("출력 죽음")
+                txt = f"운전 중인데 DAC 출력이 최소치 미만입니다 (MV {st['mv']} < {self.cfg.mv_min}, PID 에러 D117={st['pid_err']})"
+                self._log("⚠ " + txt)
+                self._card("출력 죽음", txt, "FAIL", {"PV": self._fmt(st.get("pv"))})
+        else:
+            self._out_dead_cnt = 0
+            self._out_dead_notified = False
+
+    def _on_run_rise(self, st: dict) -> None:
+        if self.owner is None:
+            self.owner = "external"
+        c = self.cfg
+        path = self.csv.start() if c.log_enabled else None
+        self._csv_last_t = -1e9
+        tgt = self.profiler.target()
+        tgt_txt = f"{tgt:.1f}°C(램프)" if tgt is not None else self._fmt(st.get("sv"))
+        ramp_txt = f"{self.profiler.rate():g}°C/min" if self.profiler.is_active() else "없음(래더 램프만)"
+        txt = (f"운전 시작 ({OWNER_LABEL.get(self.owner, self.owner)}) — 목표 {tgt_txt} · 램프 {ramp_txt}"
+               f" · 래더 램프 {st.get('ramp_rate')}°C/min · 홀드백 {self._fmt(st.get('holdback'))}"
+               f" · SV상한 {self._fmt(st.get('sv_limit'))} · OT {self._fmt(st.get('ot_limit'))}"
+               f" · DAC상한 {st.get('mv_limit')} · Kp/Ti 적용 {self._num(st.get('kp_act'))}/{self._num(st.get('ti_act'))}"
+               f" · 유지 모드 {c.hold_mode} · CSV {path if path else '없음'}")
+        self._log(txt)
+        self._card("시작", f"{OWNER_LABEL.get(self.owner, self.owner)} · 목표 {tgt_txt}", "INFO",
+                   {"PV": self._fmt(st.get("pv")), "램프": ramp_txt, "유지 모드": c.hold_mode})
+
+    @staticmethod
+    def _num(v) -> str:
+        return "-" if v is None else f"{float(v):g}"
+
+    async def _on_run_fall(self, st: dict, now: float) -> None:
+        try:
+            if self.csv.is_open():
+                self.csv.write_row(st, owner=OWNER_LABEL.get(self.owner, self.owner or ""),
+                                   hold=self.hold.log_tuple(), sat_clamp=self.sat.clamped, note="운전 종료")
+            self.csv.stop()
+        except Exception:
+            pass
+        if self.profiler.is_active():
+            await self.profiler.stop(restore_rate=True)
+        elif st.get("ramp_rate") is not None and float(st["ramp_rate"]) != self._ramp_c_per_min():
+            try:
+                await self._write_ramp_counts(self.cfg.rate_counts(self.cfg.ramp_rate))
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self._log(f"⚠ 래더 램프 속도 원복 실패: {e!r}")
+        dur = (now - self._run_since) if self._run_since > 0 else 0.0
+        reason = self._end_reason or "외부(이 프로그램 밖에서 꺼짐)"
+        notes = ", ".join(self._episode_notes) or "-"
+        owner = OWNER_LABEL.get(self.owner, self.owner or "-")
+        self._log(f"운전 종료 — 사유 {reason} · 마지막 PV {self._fmt(st.get('pv'))} · 운전 {dur / 60:.1f}분 · 특이사항 {notes}")
+        self._card("종료", f"{owner} · {reason}", "INFO" if not st.get("fault") else "FAIL",
+                   {"마지막 PV": self._fmt(st.get("pv")), "운전 시간": f"{dur / 60:.1f}분", "사유": reason,
+                    "특이사항": notes})
+        self.owner = None
+        self._end_reason = None
+        self._episode_notes = []
+        self._run_since = 0.0

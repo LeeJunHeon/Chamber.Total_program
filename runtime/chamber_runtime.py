@@ -6960,6 +6960,14 @@ class ChamberRuntime:
                     _disable(leaf)
         if (self.ch == 2) and (not self.supports_dc_pulse):
             _disable("dcPulsePower_radio")
+        # ✅ DC2 폐지 — D/A CH3 는 CH2 히터 출력으로 바뀌었다. DC2 미지원이면 체크박스·입력칸을 막는다
+        if (self.ch == 2) and (not self.supports_dc_cont2):
+            for leaf in ("dcPower2_checkbox", "dcPower2_edit"):
+                _disable(leaf)
+                w = _raw(leaf)
+                if w is not None:
+                    with contextlib.suppress(Exception):
+                        w.setToolTip("DC2 미사용 — D/A CH3 는 CH2 히터 출력")
 
     def _reset_ui_after_process(self):
         self._set_default_ui_values()
@@ -7936,6 +7944,9 @@ class ChamberRuntime:
                 errs.append("DC Target Power(W)는 0 이상이어야 합니다.")
             if p.get("use_dc_power2") and p.get("dc_power2", 0) < 0:
                 errs.append("DC2 Target Power(W)는 0 이상이어야 합니다.")
+            # ✅ DC2 폐지(D/A CH3 = CH2 히터 출력) — 파일 레시피·로봇 경로 모두 여기서 막힌다
+            if p.get("use_dc_power2") and not self.supports_dc_cont2:
+                errs.append("DC2 Power 는 사용할 수 없습니다(DC2 폐지)")
 
         return errs
     # ============================= 입력값 검증 헬퍼 =============================  
