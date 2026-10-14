@@ -124,6 +124,8 @@ class HeaterService:
         self._push_fail_log_t = -1e9
         self._rst_n = 0
         self._reset_pending = False
+        self._give_up_seq = 0                # 유지 모드 포기 횟수(공정 대기가 '시작 뒤 포기'를 놓치지 않게)
+        self._give_up_text = ""
 
         self.profiler = RampProfiler(self.status_raw, self._write_sv, self._write_ramp_counts,
                                      lambda m: self._log(m), cfg, clock=clock)
@@ -153,6 +155,11 @@ class HeaterService:
             self._poll_task = lp.create_task(self._poll_loop(), name="CH2HeaterPoll")
         if self._wd_task is None or self._wd_task.done():
             self._wd_task = lp.create_task(self._wd_loop(), name="CH2HeaterWD")
+
+    @property
+    def clock(self) -> Callable[[], float]:
+        """서비스가 쓰는 단조 시계(공정 대기 판정도 같은 시계를 쓴다 — 에뮬레이터 시험에서 가상 시계)."""
+        return self._now
 
     def status(self) -> dict:
         return {k: v for k, v in self._st.items() if not k.startswith("_")}
@@ -204,7 +211,8 @@ class HeaterService:
     def hold_snapshot(self) -> dict:
         h = self.hold
         return {"mode": h.mode, "state": h.state, "holding": h.is_holding(), "value": h.value,
-                "arrived": h.arrived, "gave_up": h.gave_up}
+                "arrived": h.arrived, "gave_up": h.gave_up,
+                "give_up_seq": self._give_up_seq, "give_up_text": self._give_up_text}
 
     # ═══════════════════════ 명령 ═══════════════════════
     async def turn_on(self, target_c: float, rate: Optional[float] = None,
@@ -241,9 +249,66 @@ class HeaterService:
         await self._kick_wd()
         return True, ""
 
+    def _process_locked_out(self, owner: Optional[str]) -> bool:
+        """공정이 운전 중인 히터를 공정 밖(수동 등)이 바꾸려 하는가. 수동↔외부 사이는 막지 않는다(패널로 외부 운전을 끌 수 있어야 함)."""
+        return (owner is not None and owner != "process" and self.owner == "process"
+                and bool(self._st.get("run")))
+
     async def turn_off(self, reason: str = "정지", owner: Optional[str] = None) -> Tuple[bool, str]:
         async with self._lock:
+            if self._process_locked_out(owner):
+                return False, "공정이 히터를 제어 중입니다"
             return await self._turn_off_locked(reason)
+
+    def take_over(self, owner: str) -> None:
+        """공정이 수동·외부 운전 중인 히터를 넘겨받는다(챔버K 와 같음)."""
+        if self.owner not in (None, owner):
+            self._log(f"{OWNER_LABEL.get(self.owner, self.owner)} 운전 중인 히터를 {OWNER_LABEL.get(owner, owner)}이(가) 넘겨받음")
+        self.owner = owner
+
+    async def set_hold_armable(self, on: bool, why: str = "") -> None:
+        """유지 진입·포화 클램프 허용/금지(공정 전용). 금지: holding·클램프를 풀고 D118 을 MV_LIMIT 로 바로 되돌린다.
+        허용: 유지 모드가 지금 조건(작업 압력·플라즈마)에서 새로 측정하고, 포화 감시는 지금부터의 이력으로 다시 무장한다."""
+        async with self._lock:
+            self._mv_requests.clear()
+            if not on and self.hold.is_holding():
+                self.hold.release(why or "공정이 유지 재측정 요청")
+            self.sat.set_clamp_enabled(on, why)
+            self.hold.set_armable(on)
+            for v in list(self._mv_requests):
+                try:
+                    await self._write_mv_limit(v)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    self._log(f"⚠ DAC 상한(D118) 원복 실패: {e!r}")
+            self._mv_requests.clear()
+
+    async def force_hold(self, why: str) -> Tuple[bool, str]:
+        """공정 유지 진입 대기가 시간 초과일 때 dac 유지를 강제로 건다(챔버K 2단계 강제 진입).
+        값: 이번 측정 창 평균(set_armable 뒤 측정분) → 최근 60초 MV 평균 → 현재 MV."""
+        async with self._lock:
+            st = self._st
+            if not st.get("run") or st.get("stale"):
+                return False, "히터가 꺼져 있거나 PLC 응답 없음"
+            if self.hold.is_holding():
+                return True, f"이미 유지 중(DAC 상한 {self.hold.value})"
+            recent = self.sat.recent_mv_avg()
+            self._mv_requests.clear()
+            if not self.hold.force_dac_hold(recent if recent is not None else st.get("mv"), prefer_current=False):
+                return False, self.hold.last_force_reason or "강제 진입 실패"
+            for v in list(self._mv_requests):
+                try:
+                    await self._write_mv_limit(v)
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    self._log(f"⚠ DAC 상한(D118) 쓰기 실패: {e!r}")
+            self._mv_requests.clear()
+            src = self.hold.last_force_source
+            self._card("유지 모드 강제 진입", f"{why} — DAC 상한 {self.hold.value} 고정({src})", "WARN",
+                       {"PV": self._fmt(st.get("pv")), "MV": str(st.get("mv"))})
+            return True, f"DAC 상한 {self.hold.value} 고정({src})"
 
     async def _turn_off_locked(self, reason: str) -> Tuple[bool, str]:
         self._end_reason = reason
@@ -273,8 +338,11 @@ class HeaterService:
             self._log(f"⚠ 히터 OFF 쓰기 실패 → 보류(다음 폴링에 재시도): {e!r}")
             return True, "쓰기 실패 — OFF 보류(다음 폴링에 재시도)"
 
-    async def apply_target(self, target_c: float) -> Tuple[bool, str]:
+    async def apply_target(self, target_c: float, rate: Optional[float] = None,
+                           owner: Optional[str] = None) -> Tuple[bool, str]:
         async with self._lock:
+            if self._process_locked_out(owner):
+                return False, "공정이 히터를 제어 중입니다"
             if not self._link_up():
                 return False, "PLC 링크 없음"
             if self._st.get("stale"):
@@ -285,9 +353,10 @@ class HeaterService:
             target = float(target_c)
             try:
                 if self._st.get("run"):
-                    rate = self.profiler.rate() if self.profiler.is_active() else float(self.cfg.ramp_rate)
+                    if not rate:
+                        rate = self.profiler.rate() if self.profiler.is_active() else float(self.cfg.ramp_rate)
                     await self.profiler.stop(restore_rate=False)
-                    if not await self.profiler.start(target, rate, "적용"):
+                    if not await self.profiler.start(target, rate, "공정" if owner == "process" else "적용"):
                         await self._write_sv(target, force_log=True)
                 else:
                     await self._write_sv(target, force_log=True)
@@ -423,6 +492,8 @@ class HeaterService:
         self._episode_notes.append(f"유지 진입 DAC 상한 {v}")
 
     def _on_hold_give_up(self, why: str) -> None:
+        self._give_up_seq += 1
+        self._give_up_text = str(why)
         self._episode_notes.append("유지 모드 포기")
         self._card("유지 모드 포기", why, "WARN", {"PV": self._fmt(self._st.get("pv"))})
 
@@ -971,3 +1042,5 @@ class HeaterService:
         self._end_reason = None
         self._episode_notes = []
         self._run_since = 0.0
+        self.hold.set_armable(True)
+        self.sat.set_clamp_enabled(True)

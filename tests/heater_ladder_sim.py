@@ -4,7 +4,8 @@
 AsyncPLC 공개 메서드(is_connected / read_regs_block / read_coils_block / write_reg / write_coil)만 흉내낸다.
 주소는 래더 주소표 그대로 쓴다(D = 레지스터 번호, M 코일 = 워드×16 + 비트) — 래더 화면과 한 줄씩 대조하기 위해서다.
 쓰기마다 dt=0 스캔을 한 번 돌린다(실제 PLC 는 쓰기와 다음 읽기 사이에 수십 번 스캔한다).
-열 모델: dT/dt = (GAIN·f − (T − AMBIENT)) / TAU, f = (출력 − 400) / 1200, 출력 = DAC_EN 이면 min(D141, D118).
+열 모델: dT/dt = (GAIN·f + plasma_heat − (T − AMBIENT)·(1 + gas_loss)) / TAU, f = (출력 − 400) / 1200,
+  출력 = DAC_EN 이면 min(D141, D118). gas_loss·plasma_heat 는 기본 0(진공) — 공정 조건 시나리오에서만 바꾼다.
   GAIN 2250, TAU 900초 → MV 520 정상상태 ≈ 250°C (300°C 목표는 도달 불가, 248°C 는 간신히 도달).
   실제 CH2 히터의 값이 아니다 — '상한이 모자라는 경우'를 재현하려고 고른 모델 값이다.
 """
@@ -63,6 +64,8 @@ class Ladder:
         self.T = AMBIENT_C
         self.gain, self.tau = gain, tau
         self.tc_offset = 0.0          # TC 가 실제보다 이만큼 다르게 읽힘(셔터 개방 등 흉내)
+        self.gas_loss = 0.0           # 공정 가스로 늘어나는 열손실 비율(0.25 = 25% 더 잃음)
+        self.plasma_heat = 0.0        # 플라즈마가 더하는 열(°C 환산 정상상태 기여분)
         self.rst_self_reset = True    # False 면 래더가 RST 를 0 으로 되돌리지 않음
         self.connected = True
         self.reject_regs: set = set() # 이 주소 쓰기는 예외(PLC 쓰기 거부 흉내)
@@ -177,7 +180,7 @@ class Ladder:
             M[640] = False
         out = min(D[141], D[118]) if M[652] else 0
         f = max(0.0, (out - LADDER_MV_MIN) / DAC_SPAN)
-        self.T += (self.gain * f - (self.T - AMBIENT_C)) / self.tau * dt
+        self.T += (self.gain * f + self.plasma_heat - (self.T - AMBIENT_C) * (1.0 + self.gas_loss)) / self.tau * dt
 
     # ── AsyncPLC 흉내 ──
     def is_connected(self) -> bool:

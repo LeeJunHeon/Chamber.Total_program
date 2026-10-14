@@ -74,6 +74,7 @@ class HeaterSaturationGuard:
         self._stall_done = False
         self._low_since = 0.0
         self._low_done = False
+        self.clamp_enabled = True            # False: 공정이 작업 조건에서 유지 모드를 다시 잡기 전 — 포화는 경고만
 
     # ───────── 조회 ─────────
     @property
@@ -83,6 +84,12 @@ class HeaterSaturationGuard:
     @property
     def arrived(self) -> bool:
         return bool(self._arrived)
+
+    def recent_mv_avg(self, window_s: float = PRE_WINDOW_SEC) -> Optional[float]:
+        """최근 window_s 초 MV 평균(유지 중이 아닐 때 쌓인 이력). 없으면 None."""
+        now = self._now()
+        xs = [m for t, m in self._hist if t >= now - float(window_s)]
+        return (sum(xs) / len(xs)) if xs else None
 
     def _msg(self, level: str, text: str) -> None:
         try:
@@ -110,6 +117,20 @@ class HeaterSaturationGuard:
         self._armed = False
         self._stall_win.clear()
         self._stall_done = False
+
+    def set_clamp_enabled(self, on: bool, why: str = "") -> None:
+        """공정이 유지 모드를 작업 조건(작업 압력·플라즈마)에서 다시 잡게 할 때 쓴다(HeaterService.set_hold_armable).
+        끌 때: 클램프 중이면 MV_LIMIT 원복. 켤 때: 꺼져 있던 동안의 포화 진행·이력·무장을 버린다 —
+        가스로 늘어난 부하에 MV 가 올라간 것은 '새 포화'가 아니므로, 켠 뒤 상한 아래로 한 번 내려와야 다시 무장된다."""
+        on = bool(on)
+        if not on and self._clamped is not None:
+            self._release(why or "공정이 유지 재측정 요청")
+        if on and not self.clamp_enabled:
+            self._hist.clear()
+            self._armed = False
+            self._sat_since = 0.0
+            self._sat_noted = False
+        self.clamp_enabled = on
 
     def _reset_all(self) -> None:
         self._hist.clear()
@@ -265,6 +286,11 @@ class HeaterSaturationGuard:
         avg = (sum(m for _t, m in pre) / len(pre)) if pre else None
         pv = st.get('pv'); mv = st.get('mv')
         t = "--.-" if pv is None else f"{float(pv):.1f}"
+        if not self.clamp_enabled:
+            self._sat_noted = True
+            self._msg("경고", f"도달 후 {sec:.0f}초째 DAC 출력 상한({int(limit)})에 물려 있음: PV {t} / MV {mv} — "
+                              f"공정이 작업 조건에서 유지 모드를 잡기 전(가스·압력·전원 변화 구간)이라 클램프하지 않음 — 출력 상한 여유 확인")
+            return
         if avg is not None and cover >= PRE_MIN_COVER_SEC and avg < MV_SAT_REL * limit:
             value = max(self.mv_min + 20, min(self.mv_limit, int(round(avg))))
             self._clamped = value

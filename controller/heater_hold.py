@@ -52,6 +52,7 @@ class HeaterHold:
         self._engaged = engaged
         self._give_up = give_up
         self._h = self._fresh()
+        self.armable = True          # False 면 도달·진입 판정을 하지 않는다(공정이 작업 압력·플라즈마 조건에서 잡기 전까지 막아 둠)
         self.engaged_relaxed = False
         self.last_force_reason = ""
         self.last_force_source = ""
@@ -87,6 +88,14 @@ class HeaterHold:
 
     def is_holding(self) -> bool:
         return self._h['state'] == 'holding'
+
+    def set_armable(self, on: bool) -> None:
+        """유지 진입 허용/금지(공정 전용). holding 이면 호출부가 release() 로 먼저 푼다.
+        바꿀 때마다 측정 상태와 '마지막 측정 창 평균'을 버린다 — 이후 측정·강제 진입은 새 조건의 값만 쓴다."""
+        self.armable = bool(on)
+        if self._h['state'] != 'holding':
+            self._reset(keep_arrived=False)
+            self._h['last_window_mv'] = None
 
     def effective_gates(self):
         """(eff_pv, eff_mv) — config 하한과 비율 허용치 중 큰 쪽."""
@@ -204,6 +213,10 @@ class HeaterHold:
 
         if h['state'] == 'holding':
             self._tick_holding(st, now, sv)
+            return
+        if not self.armable:
+            if h['samples'] or h['state'] != 'idle' or h['arrived']:
+                self._reset(keep_arrived=False)
             return
 
         base_ok = (bool(st.get('ok')) and pv is not None and sv is not None and svr is not None

@@ -58,6 +58,11 @@ class HeaterConfig:
     hold_drift_pv: float = 0.5
     hold_drift_mv: float = 15.0
     sat_sec: float = 120.0
+    # ── 공정 연동(2단계) ──
+    soak_time_s: float = 60.0            # 승온 대기: 목표 ±soak_tol 안에 이만큼 머물면 준비 완료
+    wait_timeout_s: float = 3600.0       # 승온 대기 기본 한도(예상 시간 + 30분이 더 길면 그 값, 최대 12시간)
+    hold_wait_s: float = 300.0           # 작업 조건 유지 모드 측정 최대 대기
+    hold_fail_action: str = "force"      # "force"(시간 초과 → 강제 고정 후 진행) / "abort"(E833 중단)
     log_enabled: bool = True
     log_period_s: float = 3.0
     log_dir: str = ""
@@ -198,6 +203,14 @@ def load_heater_config(cfg_module: Any) -> Tuple[HeaterConfig, List[str]]:
     if sat < 10:
         warns.append(f"HEATER_MV_SAT_SEC={sat:g} < 10 → 10"); sat = 10.0
 
+    # ── 공정 연동(2단계) ──
+    soak_t = _clamp("HEATER_SOAK_TIME_SEC", _get("HEATER_SOAK_TIME_SEC", d.soak_time_s, float), 0.0, 3600.0)
+    wait_to = _clamp("HEATER_WAIT_TIMEOUT_SEC", _get("HEATER_WAIT_TIMEOUT_SEC", d.wait_timeout_s, float), 600.0, 43200.0)
+    hold_w = _clamp("HEATER_HOLD_WAIT_SEC", _get("HEATER_HOLD_WAIT_SEC", d.hold_wait_s, float), 60.0, 1800.0)
+    fail_act = str(_get("HEATER_HOLD_FAIL_ACTION", d.hold_fail_action, str)).strip().lower()
+    if fail_act not in ("force", "abort"):
+        warns.append(f"HEATER_HOLD_FAIL_ACTION={fail_act!r} 미지원 → 'force'"); fail_act = "force"
+
     # ── 주기 ──
     poll = _clamp("HEATER_POLL_INTERVAL_S", _get("HEATER_POLL_INTERVAL_S", d.poll_interval_s, float), 0.5, 5.0)
     idle = _clamp("HEATER_POLL_IDLE_S", _get("HEATER_POLL_IDLE_S", d.poll_idle_s, float), poll, 10.0)
@@ -228,6 +241,7 @@ def load_heater_config(cfg_module: Any) -> Tuple[HeaterConfig, List[str]]:
         approach_zone=float(zone), approach_min_rate=float(rmin), approach_lead=float(lead), soak_tol=float(soak),
         hold_mode=mode, hold_enter_tol=float(enter_tol), hold_enter_sec=float(enter_sec),
         hold_arrive_tol=float(arrive), hold_drift_pv=float(dpv), hold_drift_mv=float(dmv), sat_sec=float(sat),
+        soak_time_s=float(soak_t), wait_timeout_s=float(wait_to), hold_wait_s=float(hold_w), hold_fail_action=fail_act,
         log_enabled=bool(_get("HEATER_LOG_ENABLED", d.log_enabled, bool)), log_period_s=float(log_period),
         log_dir=str(_get("HEATER_LOG_DIR", d.log_dir, str) or ""),
     )
