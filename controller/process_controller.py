@@ -279,6 +279,10 @@ class ActionType(str, Enum):
     RF_PULSE_START = "RF_PULSE_START"
     RF_PULSE_SET   = "RF_PULSE_SET"   # ✅ 추가: 출력 ON 유지 + setpoint 변경
     RF_PULSE_STOP  = "RF_PULSE_STOP"
+    # CH2 히터(PLC 내장 PID) — 레시피 use_heater=T 일 때만 들어간다
+    HEATER_SET  = "HEATER_SET"    # 목표·램프 설정(공정 소유로 운전 시작 또는 목표 변경)
+    HEATER_WAIT = "HEATER_WAIT"   # 목표 도달 + 안정(soak) 대기
+    HEATER_HOLD = "HEATER_HOLD"   # 작업 압력·플라즈마 조건에서 유지 모드(dac) 측정 대기
 
 
 @dataclass
@@ -307,6 +311,8 @@ class ProcessStep:
             ActionType.IG_CMD,
             ActionType.DC_PULSE_SET,
             ActionType.RF_PULSE_SET,
+            ActionType.HEATER_SET,
+            ActionType.HEATER_WAIT,
         ):
             if self.value is None:
                 # 이 부분은 현재 전용 코드가 명확히 준비된 게 아니므로
@@ -393,6 +399,12 @@ class ProcessController:
         rga_scan: Callable[[], None],
         oes_run: Callable[[float, int], None],
 
+        # CH2 히터 — 런타임이 주입(히터가 없으면 콜백이 E830 으로 실패를 알린다)
+        heater_set: Optional[Callable[[float, Optional[float]], None]] = None,
+        heater_wait: Optional[Callable[[float], None]] = None,
+        heater_hold: Optional[Callable[[], None]] = None,
+        cancel_heater: Optional[Callable[[], None]] = None,
+
         ch: int,
         supports_dc_cont: bool,
         supports_rf_cont: bool,
@@ -419,6 +431,10 @@ class ProcessController:
         self._cancel_ig = cancel_ig
         self._rga_scan = rga_scan
         self._oes_run = oes_run
+        self._heater_set = heater_set
+        self._heater_wait = heater_wait
+        self._heater_hold = heater_hold
+        self._cancel_heater_cb = cancel_heater
 
         # ⬇️ 추가: 챔버/지원능력
         self._ch = int(ch)
@@ -694,6 +710,7 @@ class ProcessController:
             self._cancel_ig()
         except Exception:
             pass
+        self._cancel_heater()
 
         # 시퀀스 교체
         self.process_sequence = self._create_emergency_shutdown_sequence()
@@ -702,6 +719,7 @@ class ProcessController:
     def reset_controller(self) -> None:
         self._cancel_countdown()
         self._cancel_elapsed()
+        self._cancel_heater()
         if self._expect_group:
             self._expect_group.cancel("reset")
             self._expect_group = None
@@ -925,6 +943,33 @@ class ProcessController:
         meta: Dict[str, Any] | None = None,
     ) -> None:
         self._step_failed("RFPulse", why, code=code, meta=meta)
+
+    def on_heater_set_ok(self) -> None:
+        self._match_token(ExpectToken("HEATER_SET"))
+
+    def on_heater_ready(self) -> None:
+        self._match_token(ExpectToken("HEATER_READY"))
+
+    def on_heater_hold_ok(self) -> None:
+        self._match_token(ExpectToken("HEATER_HOLD"))
+
+    def on_heater_failed(
+        self,
+        why: str | BaseException,
+        *,
+        code: str | None = None,
+        meta: Dict[str, Any] | None = None,
+    ) -> None:
+        """히터 단계 실패 또는 공정 중 히터 이상 — 공정을 중단(종료 절차)한다."""
+        self._step_failed("HEATER", why, code=code, meta=meta)
+
+    def _cancel_heater(self) -> None:
+        if self._cancel_heater_cb is None:
+            return
+        try:
+            self._cancel_heater_cb()
+        except Exception:
+            pass
 
     def on_device_step_ok(self) -> None:
         # 일반 OK는 해당 스텝이 실제로 GENERIC_OK를 요구할 때만 인정
@@ -1254,6 +1299,28 @@ class ProcessController:
             cmd, args = step.params
             self._send_mfc(cmd, dict(args))
             tokens.append(ExpectToken("MFC", cmd))
+
+        elif a == ActionType.HEATER_SET:
+            if not self._heater_set:
+                raise AppError(code="E830", detail="HEATER_SET 콜백이 주입되지 않았습니다.",
+                               meta={"action": "HEATER_SET", "ch": self._ch})
+            rate = step.params[0] if step.params else None
+            self._heater_set(float(step.value), rate)
+            tokens.append(ExpectToken("HEATER_SET"))
+
+        elif a == ActionType.HEATER_WAIT:
+            if not self._heater_wait:
+                raise AppError(code="E830", detail="HEATER_WAIT 콜백이 주입되지 않았습니다.",
+                               meta={"action": "HEATER_WAIT", "ch": self._ch})
+            self._heater_wait(float(step.value))
+            tokens.append(ExpectToken("HEATER_READY"))
+
+        elif a == ActionType.HEATER_HOLD:
+            if not self._heater_hold:
+                raise AppError(code="E830", detail="HEATER_HOLD 콜백이 주입되지 않았습니다.",
+                               meta={"action": "HEATER_HOLD", "ch": self._ch})
+            self._heater_hold()
+            tokens.append(ExpectToken("HEATER_HOLD"))
 
         elif a == ActionType.OES_RUN:
             dur_sec, integ_ms = step.params
@@ -1602,6 +1669,7 @@ class ProcessController:
             self._cancel_ig()
         except Exception:
             pass
+        self._cancel_heater()      # 히터 대기·감시 중단(히터 OFF 여부는 런타임이 공정 종료 후 정한다)
 
         self._cancel_countdown()
         if self._expect_group:
@@ -1725,6 +1793,7 @@ class ProcessController:
         self.is_running = False
         self._cancel_countdown()
         self._cancel_elapsed()
+        self._cancel_heater()
         if self._expect_group:
             self._expect_group.cancel("finish")
             self._expect_group = None
@@ -1922,6 +1991,24 @@ class ProcessController:
 
         # --- 초기화 ---
         self._emit_log("Process", "공정 시작")
+
+        # --- (CH2 히터) 승온 먼저: 목표 도달·안정 뒤 베이스 압력 대기로 간다 ---
+        use_heater = bool(params.get("use_heater", False))
+        if use_heater:
+            heater_temp = float(params.get("heater_temp") or 0.0)
+            _hr = params.get("heater_ramp")
+            heater_ramp = float(_hr) if _hr not in (None, "") else None
+            _r_txt = f"{heater_ramp:g}°C/min" if heater_ramp else "기본 램프 속도"
+            self._emit_log("Process", f"히터 사용 — 목표 {heater_temp:g}°C ({_r_txt})")
+            steps.append(ProcessStep(
+                action=ActionType.HEATER_SET, value=heater_temp, params=(heater_ramp,),
+                message=f'히터 {heater_temp:g}°C 설정 ({_r_txt})',
+            ))
+            steps.append(ProcessStep(
+                action=ActionType.HEATER_WAIT, value=heater_temp,
+                message=f'히터 {heater_temp:g}°C 도달·안정 대기',
+            ))
+
         steps.append(ProcessStep(
             action=ActionType.IG_CMD,
             value=base_pressure,
@@ -2203,6 +2290,14 @@ class ProcessController:
             message='압력 제어(SP1) 시작',
             polling=False,                         
         ))
+
+        # --- (CH2 히터) 작업 압력·플라즈마 조건에서 유지 모드를 잡고 나서 셔터 딜레이 ---
+        if use_heater:
+            steps.append(ProcessStep(
+                action=ActionType.HEATER_HOLD,
+                message='히터 유지 모드 측정 대기 (작업 압력·플라즈마 조건)',
+                polling=False,
+            ))
 
         # =========================
         # Shutter Delay / Main Process
@@ -2607,6 +2702,7 @@ class ProcessController:
             "PLC":       ("PLC",),
             "IG":        ("IG_OK",),
             "RGA":       ("RGA_OK",),
+            "HEATER":    ("HEATER_SET", "HEATER_READY", "HEATER_HOLD"),
             # 필요 시 OES 등 추가 가능
         }
         # 장치명이 조금 다르게 들어와도 대소문자/공백 차이 방어(선택)
