@@ -96,6 +96,15 @@ def test_hold_and_period_clamps():
     assert cfg.poll_idle_s == 2.0                             # [POLL_INTERVAL, 10]
 
 
+@pytest.mark.parametrize("val,expect,warned", [(None, 10.0, False), (0, 0.0, False), (1, 2.0, True),
+                                                (30, 30.0, False), (1000, 600.0, True), (-5, 0.0, True)])
+def test_run_log_period(val, expect, warned):
+    """공정 로그 히터 상태 줄 간격 — 기본 10초, 0 = 끔, 2~600초로 클램프, 음수는 끔."""
+    cfg, warns = _load() if val is None else _load(HEATER_RUN_LOG_PERIOD_S=val)
+    assert cfg.run_log_period_s == expect
+    assert bool([w for w in warns if "HEATER_RUN_LOG_PERIOD_S" in w]) is warned
+
+
 @pytest.mark.parametrize("reg,expect", [(120, 0), (149, 0), (110, 0), (160, 160), (155, 155), (0, 0), (300, 0)])
 def test_marker_register_overlap(reg, expect):
     cfg, w = _load(HEATER_SESSION_MARK_REG=reg)

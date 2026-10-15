@@ -66,6 +66,7 @@ class HeaterConfig:
     log_enabled: bool = True
     log_period_s: float = 3.0
     log_dir: str = ""
+    run_log_period_s: float = 10.0       # 공정 로그(.txt) 히터 상태 줄 간격(초, 0 = 끔)
 
     # ── 환산 ──
     def c_to_raw(self, c: float) -> int:
@@ -219,6 +220,11 @@ def load_heater_config(cfg_module: Any) -> Tuple[HeaterConfig, List[str]]:
     if stale < 2 * idle:
         warns.append(f"HEATER_STALE_SEC={stale:g} < 2×정지 폴링 {idle:g} → {2 * idle:g}"); stale = 2 * idle
     log_period = _clamp("HEATER_LOG_PERIOD_S", _get("HEATER_LOG_PERIOD_S", d.log_period_s, float), 1.0, 60.0)
+    run_log = _get("HEATER_RUN_LOG_PERIOD_S", d.run_log_period_s, float)
+    if run_log < 0:
+        warns.append(f"HEATER_RUN_LOG_PERIOD_S={run_log:g} < 0 → 0(끔)"); run_log = 0.0
+    elif run_log > 0:
+        run_log = _clamp("HEATER_RUN_LOG_PERIOD_S", run_log, 2.0, 600.0)   # 0 = 끔, 그 밖은 2~600초
 
     # ── 세션 마커 ──
     mreg = int(_get("HEATER_SESSION_MARK_REG", d.session_mark_reg, float))
@@ -244,5 +250,6 @@ def load_heater_config(cfg_module: Any) -> Tuple[HeaterConfig, List[str]]:
         soak_time_s=float(soak_t), wait_timeout_s=float(wait_to), hold_wait_s=float(hold_w), hold_fail_action=fail_act,
         log_enabled=bool(_get("HEATER_LOG_ENABLED", d.log_enabled, bool)), log_period_s=float(log_period),
         log_dir=str(_get("HEATER_LOG_DIR", d.log_dir, str) or ""),
+        run_log_period_s=float(run_log),
     )
     return cfg, warns

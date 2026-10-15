@@ -500,6 +500,7 @@ HEATER_HOLD_FAIL_ACTION = "force"       # 유지 측정 실패 시 "force"(강�
 HEATER_LOG_ENABLED = True               # 운전 구간 CSV 기록
 HEATER_LOG_PERIOD_S = 3.0               # CSV 기록 주기(초)
 HEATER_LOG_DIR = ""                     # 비우면 LOG_ROOT_DIR\CH2_Heater
+HEATER_RUN_LOG_PERIOD_S = 10.0          # 공정 로그(.txt)에 히터 상태 한 줄을 남기는 간격(초, 0 = 끔)
 
 
 # ======================================================================

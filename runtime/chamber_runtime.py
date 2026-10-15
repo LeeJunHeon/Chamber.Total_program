@@ -780,6 +780,8 @@ class ChamberRuntime:
         self._heater_job = None          # ("wait", HeaterSoakWaiter) / ("hold", HeaterHoldWaiter) / None
         self._heater_watch = False       # HEATER_SET 성공 ~ 종료 절차 시작: 이상·RUN 꺼짐 감시
         self._heater_rate = None         # 이번 공정 램프 속도(°C/min)
+        self._heater_line_t = -1e9       # 공정 로그 히터 상태 줄 — 마지막으로 남긴 시각(히터 서비스 시계)
+        self._proc_polling_active = False  # 메인 공정 폴링 중(= Calib CSV·엑셀 히터 표본 수집 구간)
 
         # === ProcessController 바인딩 ===
         self._bind_process_controller()
@@ -1642,6 +1644,7 @@ class ChamberRuntime:
 
                     self.data_logger.start_new_log_session(params)
                     self._runtime_arc_notified = False  # ✅ 추가: 런타임 레벨 arc 알림 중복 방지 플래그
+                    self._proc_polling_active = False  # 새 공정 — 메인 공정 폴링 전
 
                     try:
                         # ✅ Arc 카운터 초기화
@@ -1753,6 +1756,8 @@ class ChamberRuntime:
                         # - data_logger가 'ok=False면 return'인 현재 버전이면, 아래 인자를 ok로 두면 실패/stop이 기록되지 않습니다.
                         # - data_logger를 실패/stop도 기록하도록 수정한 뒤에는 ok를 그대로 넘겨도 됩니다.
                         self.data_logger.finalize_and_write_log(ok)
+                        # CH2 히터: 메인 공정 구간 요약 한 줄(Calib CSV·엑셀 히터 열과 같은 값)
+                        self._heater_log_summary()
 
                         # ✅ Google Drive 엑셀 로그 (메인 공정과 완전 독립)
                         if _GDRIVE_OK and ok:
@@ -2017,6 +2022,7 @@ class ChamberRuntime:
 
                 elif kind == "polling":
                     active = bool(payload.get("active", False))
+                    self._proc_polling_active = active   # 메인 공정 구간 — 히터 표본 수집 창
 
                     # ✅ 공정이 실제 실행 중일 때만 자동 기동
                     if active and self._auto_connect_enabled and self.process_controller.is_running:
@@ -6443,10 +6449,11 @@ class ChamberRuntime:
         self.append_log("HEATER", "CH2 히터 공정 연동 준비(레시피 use_heater)")
 
     def _on_heater_status(self, st: dict) -> None:
-        """히터 폴링마다 불린다 — 공정 대기 판정과 공정 중 이상 감시."""
+        """히터 폴링마다 불린다 — 공정 기록(표본·상태 줄), 공정 대기 판정, 공정 중 이상 감시."""
         svc = self._heater
         if svc is None:
             return
+        self._heater_record(st)
         pc = self.process_controller
         job = self._heater_job
         if job is not None:
@@ -6475,6 +6482,64 @@ class ChamberRuntime:
             else:
                 why = "히터가 꺼짐(외부 OFF 또는 순간 인터락 해제)"
             pc.on_heater_failed(f"공정 중 {why} — 공정을 중단합니다", code="E832")
+
+    def _heater_record(self, st: dict) -> None:
+        """히터 상태를 공정 기록에 남긴다(공정 진행 중에만).
+        - 메인 공정 구간(폴링 중): Calib CSV·엑셀 히터 열 표본 → DataLogger.log_heater
+        - 공정 로그(.txt)가 열려 있고 히터가 운전 중: HEATER_RUN_LOG_PERIOD_S 마다 상태 한 줄"""
+        try:
+            if st.get("stale") or not bool(getattr(self.process_controller, "is_running", False)):
+                return
+            svc = self._heater
+            run = bool(st.get("run"))
+            if getattr(self, "_proc_polling_active", False):
+                dl = getattr(self, "data_logger", None)
+                if dl is not None:
+                    pv = st.get("pv") if st.get("tc_ok") else None   # TC 이상·모듈 없음이면 PV 표본에서 뺀다
+                    dl.log_heater(pv, svc.final_target(), st.get("mv"), run)   # SV = 최종 목표(램프 중간값이 아님)
+            period = float(getattr(svc.cfg, "run_log_period_s", 0.0) or 0.0)
+            if run and period > 0 and getattr(self, "_log_file_path", None):
+                now = svc.clock()
+                if now - float(getattr(self, "_heater_line_t", -1e9)) >= period:
+                    self._heater_line_t = now
+                    self.append_log("HEATER", self._heater_status_line(st))
+        except Exception as e:
+            if not getattr(self, "_heater_record_warned", False):
+                self._heater_record_warned = True
+                self.append_log("HEATER", f"⚠ 히터 공정 기록 실패(이후 생략): {e!r}")
+
+    def _heater_status_line(self, st: dict) -> str:
+        """공정 로그용 히터 상태 한 줄 — PV · SV(래더 램프) · 최종 목표 · 출력(패널 MV 막대와 같은 표기) · 모드 · 제어 주체."""
+        from controller.heater_service import OWNER_LABEL    # 히터가 붙은 경우에만 불린다(패널·히터 로그와 같은 이름)
+        svc = self._heater
+
+        def f1(v) -> str:
+            """소수 1자리(없으면 --.-)."""
+            return "--.-" if v is None else f"{float(v):.1f}"
+
+        def i0(v) -> str:
+            """정수(없으면 -)."""
+            return "-" if v is None else f"{int(v)}"
+        pv = st.get("pv") if st.get("tc_ok") else None
+        hs = svc.hold_snapshot()
+        if hs.get("holding"):
+            mode = f"유지(DAC 상한 {i0(hs.get('value'))})"
+        elif svc.profiler.is_active():
+            mode = "램프"
+        else:
+            mode = "제어"
+        owner = OWNER_LABEL.get(str(svc.owner or ""), "-")
+        return (f"히터 상태 — PV {f1(pv)}°C · SV {f1(st.get('sv_ramp'))}°C · 목표 {f1(svc.final_target())}°C · "
+                f"MV {i0(st.get('mv'))}/{i0(st.get('mv_limit'))} · {mode} · {owner}")
+
+    def _heater_log_summary(self) -> None:
+        """공정이 끝날 때 히터 요약 한 줄(메인 공정 구간) — 히터가 붙어 있고(CH2·SUPPORTS_HEATER) 표본이 있을 때만."""
+        if getattr(self, "_heater", None) is None:
+            return
+        with contextlib.suppress(Exception):
+            txt = self.data_logger.heater_summary_text()
+            if txt:
+                self.append_log("HEATER", txt)
 
     async def _heater_hold_failed(self, kind: str, msg: str) -> None:
         """유지 모드 측정 실패 처리 — abort: E833 / 포기(출력 상한에 붙음): 경고 후 진행 / 시간 초과: 강제 진입 후 진행."""

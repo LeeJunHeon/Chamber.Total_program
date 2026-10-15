@@ -38,6 +38,7 @@ _T = {
     "기본 정보"       : ("1C2833", "2C3E50", "ABB2B9"),
     "Plasma Cleaning" : ("2E4057", "4A6278", "BDC3C7"),
     "Main Process"    : ("2E4057", "4A6278", "BDC3C7"),  # ← 엑셀 포맷과 동일하게 변경
+    "Heater"          : ("4E342E", "6D4C41", "D7CCC8"),  # CH2 히터(맨 뒤 그룹)
 }
 _WHITE    = "FFFFFF"
 _ROW_ODD  = "FFFFFF"
@@ -111,11 +112,41 @@ _COLS_PC: List[Tuple] = [
     ("Avg Tune",       "a.u.",          8,  "Plasma Cleaning", "pc_avg_tune"),
 ]
 
+# ── CH2 히터 열 (Main Process 시트 맨 뒤, CH2 파일에만) ───────────
+#   값은 메인 공정 구간(폴링 중) 표본 — DataLogger.heater_stats(). 히터를 안 쓴 공정은 공란.
+#   엑셀은 열 번호로 쓰므로 반드시 맨 뒤에 붙인다(중간에 넣으면 기존 행과 어긋남).
+_COLS_HEATER: List[Tuple] = [
+    ("SP Temp",        "°C",            8,  "Heater",       "heater_sv"),
+    ("Avg Temp",       "°C",            8,  "Heater",       "heater_pv_avg"),
+    ("Min Temp",       "°C",            8,  "Heater",       "heater_pv_min"),
+    ("Max Temp",       "°C",            8,  "Heater",       "heater_pv_max"),
+    ("Avg DAC",        "count",         8,  "Heater",       "heater_mv_avg"),
+]
+_COLS_MAIN_CH2: List[Tuple] = _COLS_MAIN + _COLS_HEATER
+
+
+def _group_index(cols: List[Tuple]) -> Tuple[Dict[str, List[int]], set]:
+    """열 정의 → (그룹별 열 번호, 그룹 시작 열 번호 집합)."""
+    grp_cols: Dict[str, List[int]] = {}
+    for ci, (*_, grp, _key) in enumerate(cols, 1):
+        grp_cols.setdefault(grp, []).append(ci)
+    return grp_cols, {c[0] for c in grp_cols.values()}
+
+
 # 시트별 그룹 인덱스 계산
 _GRP_COLS_MAIN: Dict[str, List[int]] = {}
 for _ci, (*_, _grp, _key) in enumerate(_COLS_MAIN, 1):
     _GRP_COLS_MAIN.setdefault(_grp, []).append(_ci)
 _GRP_STARTS_MAIN = {cols[0] for cols in _GRP_COLS_MAIN.values()}
+_GRP_COLS_MAIN_CH2, _GRP_STARTS_MAIN_CH2 = _group_index(_COLS_MAIN_CH2)
+
+
+def _main_cols(ch: int) -> Tuple[List[Tuple], Dict[str, List[int]], set]:
+    """Main Process 시트 열 정의 — CH2 는 히터 열 포함, CH1 은 그대로."""
+    if int(ch) == 2:
+        return _COLS_MAIN_CH2, _GRP_COLS_MAIN_CH2, _GRP_STARTS_MAIN_CH2
+    return _COLS_MAIN, _GRP_COLS_MAIN, _GRP_STARTS_MAIN
+
 
 _GRP_COLS_PC: Dict[str, List[int]] = {}
 for _ci, (*_, _grp, _key) in enumerate(_COLS_PC, 1):
@@ -218,6 +249,53 @@ def _build_headers(ws, cols: List[Tuple], grp_cols: Dict, grp_starts: set) -> No
                 left=left, right=thin, top=thin, bottom=thin)
 
 
+def _extend_headers(ws, cols: List[Tuple], grp_cols: Dict, grp_starts: set) -> int:
+    """기존 시트에 새로 생긴 뒤쪽 열의 머리글(1~3행)을 채운다. 채운 열 수를 돌려준다.
+    2행 머리글이 cols 의 앞부분과 똑같고 그 뒤가 비어 있을 때만 — 앞부분이 다르면(옛 배치·손으로 고친 파일)
+    새 열을 엉뚱한 자리에 만들지 않도록 건드리지 않는다. 데이터 행은 손대지 않는다."""
+    names = [c[0] for c in cols]
+    have: List[str] = []
+    for ci in range(1, len(names) + 1):
+        v = ws.cell(row=2, column=ci).value
+        if v is None or str(v).strip() == "":
+            break
+        have.append(str(v).strip())
+    n = len(have)
+    if n == 0 or n >= len(names) or have != names[:n]:
+        return 0
+    if any(ws.cell(row=2, column=ci).value not in (None, "") for ci in range(n + 1, len(names) + 1)):
+        return 0
+
+    thin = Side(style="thin", color="E0E0E0")
+    thick = Side(style="medium", color="FFFFFF")
+    new_cols = range(n + 1, len(names) + 1)
+    for grp, gcols in grp_cols.items():
+        part = [c for c in gcols if c > n]
+        if not part:
+            continue
+        bg = _T[grp][0]
+        if part == gcols and len(gcols) > 1:          # 새 열로만 된 그룹 → 1행 병합
+            ws.merge_cells(f"{get_column_letter(gcols[0])}1:{get_column_letter(gcols[-1])}1")
+        if part[0] == gcols[0]:
+            cell = ws.cell(row=1, column=gcols[0])
+            cell.value = grp
+            cell.font = Font(name="Arial", bold=True, size=9, color=_WHITE)
+            cell.alignment = Alignment(horizontal="center", vertical="center")
+        for c in part:
+            with contextlib.suppress(AttributeError):
+                ws.cell(row=1, column=c).fill = PatternFill("solid", fgColor=bg)
+    for ci in new_cols:
+        name, unit, width, grp, _ = cols[ci - 1]
+        ws.column_dimensions[get_column_letter(ci)].width = width
+        _cs(ws, 2, ci, name, bg=_T[grp][1], fg=_WHITE, bold=True, size=9, wrap=True)
+        _cs(ws, 3, ci, unit or "", bg=_T[grp][2], fg="4A4A4A", size=8, italic=True)
+        for r in range(1, 4):
+            left = thick if ci in grp_starts else thin
+            with contextlib.suppress(AttributeError):
+                ws.cell(row=r, column=ci).border = Border(left=left, right=thin, top=thin, bottom=thin)
+    return len(new_cols)
+
+
 def _get_or_create_wb(path: Path, sheet_name: str,
                        cols: List[Tuple], grp_cols: Dict, grp_starts: set):
     """파일 열기(기존) 또는 신규 생성. 시트명 기준으로 시트 선택. (wb, ws) 반환."""
@@ -226,6 +304,7 @@ def _get_or_create_wb(path: Path, sheet_name: str,
             wb = load_workbook(str(path))
             if sheet_name in wb.sheetnames:
                 ws = wb[sheet_name]
+                _extend_headers(ws, cols, grp_cols, grp_starts)   # 새 열(예: CH2 히터)이 생겼으면 머리글만 채움
             else:
                 # 파일은 있는데 해당 시트가 없으면 새로 추가
                 ws = wb.create_sheet(sheet_name)
@@ -511,6 +590,23 @@ def _build_data(
         "hard_arc"       : None,
     }
 
+    # CH2 히터(메인 공정 구간 표본) — CH1 열 목록에는 이 키가 없어서 쓰이지 않는다
+    hs: Dict[str, Any] = {}
+    with contextlib.suppress(Exception):
+        hs = dl.heater_stats() or {}
+
+    def _r(key: str, nd: int):
+        """요약 값 반올림(없으면 None → 빈 칸)."""
+        v = hs.get(key)
+        return None if v is None else round(float(v), nd)
+    base_data.update({
+        "heater_sv"      : _r("sv", 1),
+        "heater_pv_avg"  : _r("pv_avg", 1),
+        "heater_pv_min"  : _r("pv_min", 1),
+        "heater_pv_max"  : _r("pv_max", 1),
+        "heater_mv_avg"  : _r("mv_avg", 0),
+    })
+
     # ── [수정 4] 파워 소스별 행 분리 ────────────────────────────
     power_rows = []
 
@@ -724,7 +820,7 @@ async def save_process_log(
                 arc_thresh, refp_warn,
                 arc_alert_sent, webhook_url,
                 fb_dir,
-                "Main Process", _COLS_MAIN, _GRP_COLS_MAIN, _GRP_STARTS_MAIN,
+                "Main Process", *_main_cols(ch),
             ),
         )
         return sent

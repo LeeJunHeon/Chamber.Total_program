@@ -12,6 +12,9 @@ from PySide6.QtCore import QObject, Slot
 from util.log_hub import FixedCsvDictAppender
 from lib import config_common as cfgc
 
+# CH2 히터 열 — 메인 공정 구간(폴링 중)의 표본으로 채운다. CH1 파일에는 넣지 않는다(맨 뒤에 붙임).
+HEATER_COLUMNS: List[str] = ["Heater: SV", "Heater: PV Avg", "Heater: PV Min", "Heater: PV Max", "Heater: MV Avg"]
+
 
 def _fallback_log_root() -> Path:
     """로그 폴백 뿌리. 호출 시점에 config_common 을 읽는다(DEC-033).
@@ -102,6 +105,11 @@ class DataLogger(QObject):
         self.mfc_flow_readings: Dict[str, List[float]] = {"Ar": [], "O2": [], "N2": []}
         self.mfc_pressure_readings: List[float] = []
 
+        # CH2 히터 표본(메인 공정 구간) — PV 는 TC 정상일 때, SV·MV 는 히터 운전 중일 때만
+        self.heater_pv_readings: List[float] = []
+        self.heater_mv_readings: List[float] = []
+        self.heater_sv: Optional[float] = None
+
         # ✅ Main Shutter 기준 수집 제어
         self._shutter_open: bool = False
 
@@ -123,12 +131,16 @@ class DataLogger(QObject):
             "DC Pulse: Off Time",
             "RF Pulse: For.P", "RF Pulse: Ref.P", "Chuck Position",
         ]
+        if self._ch == 2:
+            self.header.extend(HEATER_COLUMNS)
 
         # 기존 파일이 있으면 헤더 업그레이드(있던 행 보존, 새 컬럼은 공란)
         self._ensure_header()
+        # 업그레이드가 안 됐으면(다른 프로그램이 파일을 잡고 있는 등) 기존 머리글 순서로 기록 — 열이 어긋나지 않게
+        self._fields: List[str] = self._file_fields()
 
         # ✅ keep-handle writer (NAS 본파일 + pending 파일)
-        self._nas_app = FixedCsvDictAppender(self.log_file, self.header, encoding="utf-8-sig")
+        self._nas_app = FixedCsvDictAppender(self.log_file, self._fields, encoding="utf-8-sig")
         self._pending_app: Optional[FixedCsvDictAppender] = None
 
         # ✅ “프로그램이 먼저 잡기” (기존 파일이 존재하면 지금 열어둬서 Excel이 먼저 잡는 상황을 줄임)
@@ -161,6 +173,22 @@ class DataLogger(QObject):
             return f"{float(raw):.1f}"
         except Exception:
             return ""
+
+    def _file_fields(self) -> List[str]:
+        """기록에 쓸 열 순서 = 실제 파일 머리글. 파일이 없거나 머리글을 못 읽으면 self.header.
+        머리글 업그레이드가 실패해 파일이 옛 머리글이면 그 순서를 쓴다(새 열 값은 버려지고 다음 시작 때 다시 업그레이드)."""
+        try:
+            if self.log_file.exists() and self.log_file.stat().st_size > 0:
+                with open(self.log_file, "r", encoding="utf-8-sig", newline="") as rf:
+                    existing = next(csv.reader(rf), [])
+                if existing and existing != self.header:
+                    if self._log_func:
+                        self._log_func(f"Sputter Calib CSV 머리글 갱신 실패 — 기존 열 순서로 기록합니다"
+                                       f"(새 열은 다음 시작 때 추가): {self.log_file}")
+                    return list(existing)
+        except Exception:
+            pass
+        return list(self.header)
 
     def _ensure_header(self) -> None:
         """기존 CSV가 구헤더면 새 헤더로 업그레이드(기존 행 보존, 새 컬럼 공란)."""
@@ -251,6 +279,7 @@ class DataLogger(QObject):
 
         self.rf_pulse_for_p_readings.clear()
         self.rf_pulse_ref_p_readings.clear()
+        self._clear_heater()
 
         for gas in self.mfc_flow_readings:
             self.mfc_flow_readings[gas].clear()
@@ -290,6 +319,7 @@ class DataLogger(QObject):
         for gas in self.mfc_flow_readings:
             self.mfc_flow_readings[gas].clear()
         self.mfc_pressure_readings.clear()
+        self._clear_heater()
         self._shutter_open = True
 
     def notify_shutter_close(self) -> None:
@@ -368,6 +398,56 @@ class DataLogger(QObject):
                 self.mfc_pressure_readings.append(float(m.group(1)))
         except Exception:
             pass
+
+    # ── CH2 히터 ──
+    def _clear_heater(self) -> None:
+        """히터 표본 비우기(세션 시작·셔터 열림 때 — 다른 값들과 같은 구간)."""
+        self.heater_pv_readings.clear()
+        self.heater_mv_readings.clear()
+        self.heater_sv = None
+
+    def log_heater(self, pv: Optional[float], sv: Optional[float], mv: Optional[float], running: bool) -> None:
+        """히터 표본 1개. 런타임이 메인 공정 폴링 중에만 부른다(셔터 닫힘이면 버림).
+        pv 는 TC 정상일 때만 값(아니면 None), sv·mv 는 히터가 운전 중일 때만 모은다."""
+        if not self._shutter_open:
+            return
+        try:
+            if pv is not None:
+                self.heater_pv_readings.append(float(pv))
+            if running:
+                if mv is not None:
+                    self.heater_mv_readings.append(float(mv))
+                if sv is not None:
+                    self.heater_sv = float(sv)
+        except (TypeError, ValueError):
+            pass
+
+    def heater_stats(self) -> Optional[Dict[str, Optional[float]]]:
+        """메인 공정 구간 히터 요약 {sv, pv_avg, pv_min, pv_max, mv_avg, n}. 표본이 없으면 None."""
+        pv, mv = self.heater_pv_readings, self.heater_mv_readings
+        if not pv and not mv:
+            return None
+        return {
+            "sv": self.heater_sv,
+            "pv_avg": (sum(pv) / len(pv)) if pv else None,
+            "pv_min": min(pv) if pv else None,
+            "pv_max": max(pv) if pv else None,
+            "mv_avg": (sum(mv) / len(mv)) if mv else None,
+            "n": float(len(pv)),
+        }
+
+    def heater_summary_text(self) -> str:
+        """공정 로그용 한 줄 — Calib CSV·엑셀 히터 열과 같은 값. 표본이 없으면 빈 문자열."""
+        s = self.heater_stats()
+        if not s:
+            return ""
+        parts = [f"목표 {s['sv']:.1f}°C" if s["sv"] is not None else "히터 꺼짐"]
+        if s["pv_avg"] is not None:
+            parts.append(f"PV 평균 {s['pv_avg']:.1f}°C (최소 {s['pv_min']:.1f} · 최대 {s['pv_max']:.1f})")
+        if s["mv_avg"] is not None:
+            parts.append(f"MV 평균 {s['mv_avg']:.0f}")
+        parts.append(f"표본 {int(s['n'] or 0)}개")
+        return "히터 요약(메인 공정 구간) — " + " · ".join(parts)
 
     # ──────────────────────────────────────────────────────────────
     # 종료/기록
@@ -489,6 +569,22 @@ class DataLogger(QObject):
             # ★ 맨 뒤 컬럼에 기록 (레시피에 없으면 빈 문자열)
             "Chuck Position": str(self.process_params.get("chuck_position") or ""),
         }
+
+        # CH2 히터(메인 공정 구간 표본) — 표본이 없으면 공란
+        if self._ch == 2:
+            hs = self.heater_stats() or {}
+
+            def _hf(key: str, fmt: str) -> str:
+                """요약 값 문자열(없으면 공란)."""
+                v = hs.get(key)
+                return fmt.format(v) if v is not None else ""
+            log_data.update({
+                "Heater: SV": _hf("sv", "{:.1f}"),
+                "Heater: PV Avg": _hf("pv_avg", "{:.1f}"),
+                "Heater: PV Min": _hf("pv_min", "{:.1f}"),
+                "Heater: PV Max": _hf("pv_max", "{:.1f}"),
+                "Heater: MV Avg": _hf("mv_avg", "{:.0f}"),
+            })
 
         # 비동기 백그라운드 파일쓰기로 프리징 최소화
         try:
