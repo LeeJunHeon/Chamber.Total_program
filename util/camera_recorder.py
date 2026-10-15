@@ -677,6 +677,8 @@ class CameraRecorder:
         self._log_cb = None
         # ✅ 디스크 여유 부족 등 외부 알림(구글챗) 콜백 (선택)
         self._notify_cb = notify_cb
+        # 외부 알림은 한 공정에 한 번만 — 새 공정(참여자)이 start 하면 다시 한 번 허용한다
+        self._notified = False
 
         self._load_config()
 
@@ -731,10 +733,12 @@ class CameraRecorder:
                 pass
 
     def _notify(self, msg: str) -> None:
-        """알림 콜백이 있으면 호출한다. 예외는 삼킨다(촬영/공정에 전파 금지)."""
+        """알림 콜백이 있으면 호출한다 — 한 공정에 한 번만(새 공정이 start 하면 다시 허용).
+        예외는 삼킨다(촬영/공정에 전파 금지)."""
         cb = self._notify_cb
-        if cb is None:
+        if cb is None or self._notified:
             return
+        self._notified = True
         try:
             cb(msg)
         except Exception:
@@ -775,6 +779,8 @@ class CameraRecorder:
         with self._lock:
             want = mode.upper()
             promote_from = ""
+            if not owner or owner not in self._users:
+                self._notified = False      # 새 공정 → 외부 알림 1회 다시 허용
             if owner:
                 self._users.add(owner)
                 want = self._desired_mode() or "ALL"

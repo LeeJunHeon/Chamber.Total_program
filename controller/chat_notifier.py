@@ -57,7 +57,8 @@ class ChatNotifier(QObject):
 
         # 실행 컨텍스트
         self._last_started_params: Optional[dict] = None
-        self._errors: List[str] = []          # 누적 오류(집계용)
+        self._errors: List[str] = []          # 아직 보내지 않은 오류(집계 카드 내용) — 카드를 내보내면 비운다
+        self._run_errors: List[str] = []      # 이번 공정의 오류 전체(종료 카드 '원인' 대체값)
         # notify_error_event 중복 억제: (src, code, cause[:120]) -> {"first": 첫 발생, "n": 억제 횟수}
         self._err_dedup: Dict[Tuple[str, str, str], Dict[str, float]] = {}
         self._err_dedup_lock = threading.Lock()
@@ -257,6 +258,9 @@ class ChatNotifier(QObject):
         self._buffer.clear()
         for pl, wh in pending:
             self._schedule_post(pl, wh)
+        # 집계 카드를 내보냈으면 그 오류들은 보낸 것 — 공정 종료 때 같은 카드를 다시 보내지 않게 비운다
+        if any(self._is_error_card(pl) for pl, _ in pending):
+            self._errors.clear()
 
     def _post_json(self, payload: dict, urgent: bool = False, route_params: Optional[dict] = None):
         webhook = self._resolve_webhook(route_params)
@@ -295,6 +299,14 @@ class ChatNotifier(QObject):
         self._post_json(payload, urgent=urgent, route_params=route_params)
 
     # ----- 오류 집계 카드 전용 -----
+    @staticmethod
+    def _is_error_card(payload: dict) -> bool:
+        """오류 집계 카드('장비 오류')인가."""
+        try:
+            return payload["cardsV2"][0].get("cardId") == "error-aggregate"
+        except Exception:
+            return False
+
     def _remove_error_card_from_buffer(self):
         """버퍼에서 기존 오류 집계 카드 제거."""
         kept: List[Tuple[dict, Optional[str]]] = []
@@ -335,6 +347,7 @@ class ChatNotifier(QObject):
             self._buffer.append((payload, webhook))
         else:
             self._schedule_post(payload, webhook)
+            self._errors.clear()              # 바로 보냈으니 비운다(다음 카드에 다시 싣지 않게)
 
     # ---------- 내용 포맷 ----------
     def _guns_and_targets(self, p: dict) -> str:
@@ -433,6 +446,7 @@ class ChatNotifier(QObject):
         # 실행 컨텍스트 초기화
         self._last_started_params = dict(params) if params else None
         self._errors.clear()
+        self._run_errors.clear()
         self._error_seen.clear()
         self._finished_sent = False
         self._buffer.clear()  # 이전 집계 카드 등 모두 제거
@@ -509,8 +523,8 @@ class ChatNotifier(QObject):
         aborting = bool(merged.get("aborting"))
 
         errs: List[str] = list(merged.get("errors") or [])
-        if not errs and self._errors:
-            errs = list(self._errors)
+        if not errs and self._run_errors:
+            errs = list(self._run_errors)
 
         # ✅ 챔버 정보 추출 (ch 또는 prefix에서)
         ch_txt = ""
@@ -589,6 +603,7 @@ class ChatNotifier(QObject):
         self.flush()
         self._finished_sent = True
         self._errors.clear()
+        self._run_errors.clear()
         self._error_seen.clear()
 
     @Slot(bool)
@@ -642,6 +657,7 @@ class ChatNotifier(QObject):
         self.flush()
         self._finished_sent = True
         self._errors.clear()
+        self._run_errors.clear()
         self._error_seen.clear()
 
     @Slot(str)
@@ -652,6 +668,7 @@ class ChatNotifier(QObject):
     def notify_error(self, reason: str):
         pretty = (reason or "unknown").strip()
         self._errors.append(pretty)
+        self._run_errors.append(pretty)
         self._error_seen.add(pretty)
         self._upsert_error_card()
 
@@ -660,6 +677,7 @@ class ChatNotifier(QObject):
         base = (reason or "unknown").strip()
         pretty = f"[{src}] {base}" if src else base
         self._errors.append(pretty)
+        self._run_errors.append(pretty)
         self._error_seen.add(pretty)
         self._upsert_error_card()
 

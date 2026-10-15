@@ -572,9 +572,11 @@ class MainWindow(QWidget):
                     try:
                         # 카메라 데몬 스레드에서 호출됨 → ChatNotifier 는 이벤트 루프에서 실행되어야
                         # _schedule_post() 의 get_running_loop() 가 성공한다. 루프로 마샬링.
+                        # 바로 보낸다(flush) — 한 공정에 한 번만 보내는 것은 CameraRecorder._notify 가 지킨다.
                         chat = getattr(self, "chat_host", None)
                         if chat is not None:
                             self._loop.call_soon_threadsafe(chat.notify_error_with_src, "CAM", msg)
+                            self._loop.call_soon_threadsafe(chat.flush)
                     except Exception:
                         pass
 
