@@ -6,6 +6,8 @@ heater_wait_timeout_s : 승온(냉각) 대기 한도 — 예상 시간 + 여유�
 HeaterSoakWaiter      : 램프 끝 + |PV−목표| ≤ tol 이 soak_sec 연속이면 통과.
 HeaterHoldWaiter      : 작업 압력·플라즈마 조건에서 유지 모드(dac)가 새로 잡힐 때까지.
                         잡히면 통과 / 포기·시간 초과면 실패 결과(처리는 호출부 — 강제 진입 또는 중단).
+itl_missing_text      : 히터 인터락(ITL)이 꺼진 원인 문구 — 서비스·패널·런타임이 같이 쓴다.
+heater_off_text       : 운전 중 RUN 이 꺼졌을 때의 사유 문구(인터락 해제면 빠진 조건을 붙인다).
 tick 반환: None = 계속 / (True, 문구, None) = 통과 / (False, 문구, 오류코드) = 실패.
 """
 from __future__ import annotations
@@ -28,6 +30,25 @@ E_FAULT = "E832"       # 공정 중 히터 이상
 E_HOLD = "E833"        # 유지 모드 진입 실패(HEATER_HOLD_FAIL_ACTION=abort)
 
 Result = Optional[Tuple[bool, str, Optional[str]]]
+
+# 히터 인터락(ITL, M00401) 조건 — 래더 H4: TC1_OK · DA_OK · WATER_OK · VAC_OK · ¬FAULT
+# (WATER_OK = WATER_2_SGN, VAC_OK = M_V_2_인터락 — 메인밸브 인터락에 공압·게이지A 진공·러핑·포라인·터보·벤트 닫힘이 들어 있다)
+ITL_PARTS = (("tc_ok", "TC"), ("da_ok", "D/A"), ("water_ok", "냉각수"), ("vac_ok", "진공(메인밸브 인터락)"))
+
+
+def itl_missing_text(st: dict) -> str:
+    """히터 인터락이 꺼진 원인 문구 — 상태 dict 의 조건 비트 중 꺼진 것('TC, 진공(메인밸브 인터락)' 형식)."""
+    names = [label for key, label in ITL_PARTS if not st.get(key)]
+    if st.get("fault"):
+        names.append("FAULT")
+    return ", ".join(names) or "원인 미상"
+
+
+def heater_off_text(st: dict) -> str:
+    """운전 중 RUN 이 꺼졌을 때의 사유 — 인터락이 꺼져 있으면 래더가 끈 것(H9: ¬ITL → RUN 리셋)."""
+    if st.get("ok") is not None and not st.get("stale") and not st.get("fault") and not st.get("itl"):
+        return f"히터 인터락 해제({itl_missing_text(st)}) — PLC 가 히터를 끔"
+    return "히터가 꺼짐(공정 밖에서 OFF 또는 PLC 가 RUN 해제)"
 
 
 def _fmt(v) -> str:
@@ -77,7 +98,7 @@ class _Base:
             return None
         self._stale_since = 0.0
         if not st.get("run"):
-            return False, "히터가 꺼짐(공정 밖에서 OFF 또는 PLC 가 RUN 해제)", E_NOT_READY
+            return False, heater_off_text(st), E_NOT_READY
         return None
 
 

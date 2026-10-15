@@ -1597,8 +1597,10 @@ ERROR_REGISTRY: Dict[str, ErrorDefinition] = {
         client_action=ACTION_STOP,
         severity=SEV_ERROR,
         cause="레시피가 히터를 쓰는데(use_heater=T) 히터를 켜거나 유지할 수 없습니다 — 히터 기능 꺼짐(SUPPORTS_HEATER=false), "
-              "PLC 링크 없음·응답 없음, 히터 이상, 인터락 미충족, 설정 쓰기 전, 또는 대기 중 히터가 꺼졌습니다.",
-        fix="히터 패널의 상태(이상·인터락·응답)와 settings.json ch2 의 SUPPORTS_HEATER 를 확인한 뒤 다시 시작하십시오.",
+              "PLC 링크 없음·응답 없음, 히터 이상, 인터락 미충족(TC·D/A·냉각수·진공(메인밸브 인터락)), 설정 쓰기 전, "
+              "또는 대기 중 히터가 꺼졌습니다(인터락이 풀리면 PLC 가 히터를 끕니다).",
+        fix="히터 패널의 상태 문구·램프(이상·인터락 조건·응답)와 settings.json ch2 의 SUPPORTS_HEATER 를 확인한 뒤 "
+            "다시 시작하십시오. 진공 조건은 CH2 메인밸브 인터락(터보 배기 중)이 켜져 있어야 합니다.",
     ),
     "E831": ErrorDefinition(
         code="E831",
@@ -1615,8 +1617,10 @@ ERROR_REGISTRY: Dict[str, ErrorDefinition] = {
         category="HEATER",
         client_action=ACTION_STOP,
         severity=SEV_ERROR,
-        cause="히터를 쓰는 공정 중에 히터 이상(과온·TC·워치독)이 생기거나 히터가 꺼졌습니다.",
-        fix="히터 패널의 이상 내용을 확인하고 원인을 없앤 뒤 리셋하십시오.",
+        cause="히터를 쓰는 공정 중에 히터 이상(과온·TC·워치독)이 생겼거나, 인터락(냉각수·진공(메인밸브 인터락) 등)이 풀려 "
+              "PLC 가 히터를 껐거나, 히터가 꺼졌습니다.",
+        fix="로그·히터 패널에서 원인(이상 내용 또는 꺼진 인터락 조건)을 확인해 없앤 뒤 다시 시작하십시오. "
+            "이상은 리셋이 필요하고, 인터락이 돌아와도 히터는 저절로 다시 켜지지 않습니다.",
     ),
     "E833": ErrorDefinition(
         code="E833",

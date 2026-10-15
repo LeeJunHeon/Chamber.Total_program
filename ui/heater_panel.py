@@ -16,6 +16,8 @@ from PySide6.QtCore import QRect, Qt
 from PySide6.QtWidgets import (QFrame, QLabel, QLineEdit, QMessageBox, QProgressBar,
                                QPushButton, QWidget)
 
+from controller.heater_process import itl_missing_text
+
 PANEL_W = 240
 PANEL_H = 340
 
@@ -23,15 +25,22 @@ _OK_BG, _OK_FG = "#e8f5e9", "#2e7d32"
 _OFF_BG, _OFF_FG = "#eef1f4", "#9aa3ab"
 _ERR_BG, _ERR_FG = "#ffebee", "#c62828"
 
-# (키, 글자, 종류 'ok'|'err', 툴팁)
+# (키, 글자, 종류 'ok'|'err', 툴팁) — 4열 × 2줄: 윗줄 인터락 조건, 아랫줄 결과·이상
 _LAMPS = [
     ("tc_ok", "TC", "ok", "TC1_OK (M0040D) — 열전대 입력 정상"),
     ("da_ok", "D/A", "ok", "DA_OK (M00410) — D/A 출력 모듈 정상"),
-    ("itl", "인터락", "ok", "ITL (M00401) — TC1_OK · DA_OK · ¬FAULT"),
+    ("water_ok", "냉각수", "ok", "WATER_OK (M00411) — CH2 냉각수 신호(WATER_2_SGN)"),
+    ("vac_ok", "진공", "ok", "VAC_OK (M00412) — CH2 메인밸브 인터락(M_V_2_인터락): "
+                             "공압 · 게이지A 진공 · 러핑 · 포라인 · 터보 · 벤트 닫힘"),
+    ("itl", "인터락", "ok", "ITL (M00401) — TC1_OK · DA_OK · 냉각수 · 진공 · ¬FAULT. "
+                         "운전 중 꺼지면 PLC 가 RUN 을 끈다(복귀해도 다시 켜지 않음)"),
     ("ot", "과온", "err", "OT (M00404) — 과온 트립(래치, 리셋 필요)"),
     ("tc_err", "TC 이상", "err", "TC_ERR (M00405) — 운전 중 센서 이상(래치, 리셋 필요)"),
     ("wd_err", "워치독", "err", "WD_ERR (M00406) — 파이썬 워치독 30초 무변화(래치, 리셋 필요)"),
 ]
+LAMP_COLS = 4          # 한 줄 램프 수
+LAMP_W, LAMP_H = 52, 20
+LAMP_STEP_X, LAMP_STEP_Y = 55, 24
 
 _OWNER_TEXT = {"manual": "수동", "process": "공정", "external": "외부"}
 
@@ -97,11 +106,12 @@ class HeaterPanel(QFrame):
             "QProgressBar {background: #eceff1; border: 1px solid #dfe3e8; border-radius: 3px; color: #37474f; font-size: 8pt;}"
             "QProgressBar::chunk {background: #90a4ae; border-radius: 2px;}")
 
-        # ── 램프 6개 ──
+        # ── 램프 8개(4열 × 2줄) ──
         self.lamps = {}
         for i, (key, text, kind, tip) in enumerate(_LAMPS):
             w = QLabel(text, self)
-            w.setGeometry(QRect(10 + (i % 3) * 74, 170 + (i // 3) * 24, 70, 20))
+            w.setGeometry(QRect(10 + (i % LAMP_COLS) * LAMP_STEP_X, 170 + (i // LAMP_COLS) * LAMP_STEP_Y,
+                                LAMP_W, LAMP_H))
             w.setAlignment(Qt.AlignmentFlag.AlignCenter)
             w.setToolTip(tip)
             self.lamps[key] = (w, kind)
@@ -278,8 +288,7 @@ class HeaterPanel(QFrame):
         if st.get("fault"):
             return self._fault_text(st), "#c62828"
         if st.get("ok") is not None and not st.get("itl") and not st.get("stale"):
-            miss = [n for k, n in (("tc_ok", "TC"), ("da_ok", "D/A")) if not st.get(k)]
-            return f"인터락 — {', '.join(miss) or '조건'} 꺼짐", "#ef6c00"
+            return f"인터락 — {itl_missing_text(st)} 꺼짐", "#ef6c00"
         if st.get("stale"):
             age = st.get("age_s")
             return ("PLC 응답 없음" + (f" · {float(age):.0f}초 전 값" if age is not None else "")), "#c62828"

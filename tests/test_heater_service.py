@@ -31,6 +31,8 @@ class FakePLC:
         self.events = events if events is not None else self.calls
         self.bits[653] = True          # TC1_OK
         self.bits[656] = True          # DA_OK
+        self.bits[657] = True          # WATER_OK
+        self.bits[658] = True          # VAC_OK
         self.bits[641] = True          # ITL
         self.regs[110] = 1000          # PV 100.0
 

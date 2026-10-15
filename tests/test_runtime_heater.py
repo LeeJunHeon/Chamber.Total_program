@@ -240,6 +240,59 @@ def test_set_wait_hold_then_fault_in_process():
     asyncio.run(go())
 
 
+@pytest.mark.parametrize("attr,label", [("water_ok", "냉각수"), ("vac_ok", "진공(메인밸브 인터락)")])
+def test_interlock_loss_in_process_e832_names_cause(attr, label):
+    """공정 중 냉각수·진공(메인밸브 인터락)이 끊기면 래더가 RUN 을 끄고, 공정은 원인을 담은 E832 로 멈춘다."""
+    async def go():
+        rt, pc, rec = _rt()
+        svc, plc, clk = await _process_owned_running(rt, pc)
+        assert rt._heater_watch
+        setattr(plc, attr, False)
+        await sim.run(svc, plc, clk, 3)
+        fails = [c for c in rec.calls if c[0] == "on_heater_failed"]
+        assert rec.codes() == ["E832"] and not rt._heater_watch
+        assert fails[0][1][0] == f"공정 중 히터 인터락 해제({label}) — 공정을 중단합니다"
+    asyncio.run(go())
+
+
+def test_interlock_loss_during_wait_e830_names_cause():
+    """승온 대기 중 진공(메인밸브 인터락)이 끊기면 대기가 E830 으로 끝나고 문구에 원인이 나온다."""
+    async def go():
+        rt, pc, rec = _rt()
+        svc, plc, clk, logs, chat = sim.make(mv_limit=700)
+        rt.attach_heater(svc)
+        await sim.run(svc, plc, clk, 5)
+        pc._heater_set(200.0, None)
+        await _tick()
+        await sim.run(svc, plc, clk, 2)
+        pc._heater_wait(200.0)
+        await sim.run(svc, plc, clk, 60)
+        assert rec.names() == ["on_heater_set_ok"]
+        plc.vac_ok = False
+        await sim.run(svc, plc, clk, 3)
+        fails = [c for c in rec.calls if c[0] == "on_heater_failed"]
+        assert rec.codes() == ["E830"]
+        assert fails[0][1][0] == "히터 인터락 해제(진공(메인밸브 인터락)) — PLC 가 히터를 끔"
+    asyncio.run(go())
+
+
+def test_set_rejected_when_interlock_off():
+    """진공(메인밸브 인터락)이 없을 때 HEATER_SET — E830, 문구에 빠진 조건."""
+    async def go():
+        rt, pc, rec = _rt()
+        svc, plc, clk, logs, chat = sim.make()
+        rt.attach_heater(svc)
+        plc.vac_ok = False
+        await sim.run(svc, plc, clk, 5)
+        pc._heater_set(200.0, None)
+        await _tick()
+        fails = [c for c in rec.calls if c[0] == "on_heater_failed"]
+        assert rec.codes() == ["E830"]
+        assert fails[0][1][0] == "히터 사용 불가 — 인터락 미충족: 진공(메인밸브 인터락)"
+        assert svc.owner is None and not plc.M[640]
+    asyncio.run(go())
+
+
 def test_take_over_manual_run_uses_apply_target():
     async def go():
         rt, pc, rec = _rt()

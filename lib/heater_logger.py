@@ -19,7 +19,7 @@ COLUMNS = [
     "pv_c", "sv_c", "ramp_sv_c", "cur_sv_c",
     "mv", "mv_limit", "mv_pct", "pid_err",
     "ramp_rate_c_per_min", "holdback_c", "ot_limit_c",
-    "run", "itl", "fault", "ot", "tc_err", "wd_err", "tc_ok", "da_ok", "pid_run", "output_dead",
+    "run", "itl", "fault", "ot", "tc_err", "wd_err", "tc_ok", "da_ok", "water_ok", "vac_ok", "pid_run", "output_dead",
     "hold", "hold_mv", "sat_clamp", "ramp_target_c", "note",
 ]
 
@@ -128,7 +128,7 @@ class HeaterCsvLogger:
                 _n("mv", "{:.0f}"), _n("mv_limit", "{:.0f}"), _n("mv_pct"), _n("pid_err", "{:.0f}"),
                 _n("ramp_rate", "{:.0f}"), _n("holdback"), _n("ot_limit"),
                 _b("run"), _b("itl"), _b("fault"), _b("ot"), _b("tc_err"), _b("wd_err"),
-                _b("tc_ok"), _b("da_ok"), _b("pid_run"), _b("output_dead"),
+                _b("tc_ok"), _b("da_ok"), _b("water_ok"), _b("vac_ok"), _b("pid_run"), _b("output_dead"),
                 (1 if (hold and hold[0]) else 0),
                 ("" if (not hold or hold[1] is None) else int(hold[1])),
                 ("" if sat_clamp is None else int(sat_clamp)),

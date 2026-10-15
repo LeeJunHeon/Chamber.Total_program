@@ -34,7 +34,8 @@ class FakeSvc:
 def _st(**kw):
     d = {"ok": True, "stale": False, "age_s": 0.0, "pv": 250.0, "sv": 300.0, "cur_sv": 260.0,
          "mv": 470, "mv_limit": 520, "run": False, "itl": True, "fault": False,
-         "ot": False, "tc_err": False, "wd_err": False, "tc_ok": True, "da_ok": True, "sv_limit": 500.0}
+         "ot": False, "tc_err": False, "wd_err": False, "tc_ok": True, "da_ok": True,
+         "water_ok": True, "vac_ok": True, "sv_limit": 500.0}
     d.update(kw)
     return d
 
@@ -106,6 +107,26 @@ def test_interlock_text():
     p, _ = _mk()
     p.update_status(_st(itl=False, tc_ok=False))
     assert p.status_label.text() == "인터락 — TC 꺼짐" and p.badge.text() == "ITL"
+
+
+def test_lamps_two_rows_inside_panel():
+    """램프 8개(4열 × 2줄) — 윗줄 인터락 조건(TC·D/A·냉각수·진공), 아랫줄 결과·이상. 패널 안, 서로 겹치지 않음."""
+    p, _ = _mk()
+    assert list(p.lamps) == ["tc_ok", "da_ok", "water_ok", "vac_ok", "itl", "ot", "tc_err", "wd_err"]
+    rects = [w.geometry() for w, _kind in p.lamps.values()]
+    assert {r.top() for r in rects[:4]} == {170} and {r.top() for r in rects[4:]} == {194}
+    assert all(r.left() >= 10 and r.right() <= 230 and r.bottom() < p.target_edit.geometry().top() for r in rects)
+    assert all(not a.intersects(b) for i, a in enumerate(rects) for b in rects[i + 1:])
+
+
+def test_interlock_water_vacuum_view():
+    p, _ = _mk()
+    p.update_status(_st(itl=False, vac_ok=False))
+    assert p.status_label.text() == "인터락 — 진공(메인밸브 인터락) 꺼짐" and p.badge.text() == "ITL"
+    assert "color: #2e7d32" in p.lamps["water_ok"][0].styleSheet()      # 켜진 조건: 초록
+    assert "color: #9aa3ab" in p.lamps["vac_ok"][0].styleSheet()        # 빠진 조건: 회색
+    p.update_status(_st(itl=False, water_ok=False, vac_ok=False))
+    assert p.status_label.text() == "인터락 — 냉각수, 진공(메인밸브 인터락) 꺼짐"
 
 
 def test_click_toggle_restored_to_run_view():

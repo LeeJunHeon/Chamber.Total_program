@@ -2,6 +2,7 @@
 """HeaterService + 램프 + 유지 + 포화 감시 통합 — 래더·열 모델 에뮬레이터(tests/heater_ladder_sim.py) 시나리오."""
 import os
 import sys
+import csv
 import asyncio
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
@@ -132,6 +133,89 @@ def test_plc_restart_end_reason():
         ends = _cards(chat, "히터 종료")
         assert len(ends) == 1 and "재기동" in ends[0][2]
         assert plc.D[160] == svc._marker and plc.D[113] == 5000
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize("attr,label", [("water_ok", "냉각수"), ("vac_ok", "진공(메인밸브 인터락)")])
+def test_interlock_loss_stops_run_with_cause(attr, label):
+    """운전 중 냉각수·진공(메인밸브 인터락)이 끊기면 래더가 RUN 을 끈다(H9) — 종료 사유·카드·준비 판정에 원인이 나오고,
+    조건이 돌아와도 저절로 다시 켜지지 않는다."""
+    async def go():
+        svc, plc, clk, logs, chat = sim.make()
+        await sim.run(svc, plc, clk, 5)
+        st = svc.status()
+        assert st["water_ok"] and st["vac_ok"] and st["itl"]
+        ok, why = await svc.turn_on(150.0)
+        assert ok, why
+        await sim.run(svc, plc, clk, 60)
+        assert plc.M[640] and svc.status()["run"]
+        setattr(plc, attr, False)
+        await sim.run(svc, plc, clk, 3)
+        st = svc.status()
+        assert not plc.M[640] and not st["run"] and not st["itl"] and not st[attr]
+        assert plc.D[141] == 0 and not plc.M[652]                          # 출력 차단
+        ends = _cards(chat, "히터 종료")
+        assert len(ends) == 1 and ends[0][2] == f"수동 · 인터락 해제({label}) — PLC 가 RUN 을 끔" and ends[0][3] == "WARN"
+        assert _logs(logs, f"운전 종료 — 사유 인터락 해제({label}) — PLC 가 RUN 을 끔")
+        assert svc.owner is None
+        assert svc.is_ready() == (False, f"인터락 미충족: {label}")
+        setattr(plc, attr, True)
+        await sim.run(svc, plc, clk, 10)
+        assert svc.status()["itl"] and not plc.M[640] and not svc.status()["run"]   # 다시 켜지지 않음
+        assert svc.is_ready()[0] and len(_cards(chat, "히터 종료")) == 1
+    asyncio.run(go())
+
+
+def test_interlock_loss_recorded_in_csv(tmp_path):
+    """히터 CSV 에 냉각수·진공 조건 열 — 운전 종료 행에 어떤 조건이 끊겼는지 남는다."""
+    async def go():
+        svc, plc, clk, logs, chat = sim.make(log_enabled=True, log_dir=str(tmp_path))
+        await sim.run(svc, plc, clk, 5)
+        ok, why = await svc.turn_on(150.0)
+        assert ok, why
+        await sim.run(svc, plc, clk, 30)
+        plc.vac_ok = False
+        await sim.run(svc, plc, clk, 3)
+    asyncio.run(go())
+    files = sorted(tmp_path.glob("CH2_HEATER_*"))
+    assert len(files) == 1
+    with open(files[0], encoding="utf-8-sig", newline="") as fp:
+        rows = list(csv.DictReader(fp))
+    assert rows[0]["water_ok"] == "1" and rows[0]["vac_ok"] == "1"
+    last = rows[-1]
+    assert last["note"] == "운전 종료" and last["itl"] == "0" and last["water_ok"] == "1" and last["vac_ok"] == "0"
+
+
+def test_brief_interlock_drop_between_polls():
+    """폴링 사이에 한 스캔만 풀렸다 돌아온 인터락 — RUN 은 꺼진 채이고, 사유는 '외부 OFF 또는 순간 인터락 해제'."""
+    async def go():
+        svc, plc, clk, logs, chat = sim.make()
+        await sim.run(svc, plc, clk, 5)
+        ok, why = await svc.turn_on(150.0)
+        assert ok, why
+        await sim.run(svc, plc, clk, 30)
+        plc.vac_ok = False
+        plc.scan(0.0, pulse=False)
+        plc.vac_ok = True
+        await sim.run(svc, plc, clk, 3)
+        st = svc.status()
+        assert not st["run"] and st["itl"]
+        ends = _cards(chat, "히터 종료")
+        assert len(ends) == 1 and ends[0][2] == "수동 · 외부 OFF 또는 순간 인터락 해제(이 프로그램이 끄지 않음)"
+        assert ends[0][3] == "INFO"
+    asyncio.run(go())
+
+
+def test_interlock_off_before_start_blocks_turn_on():
+    """진공(메인밸브 인터락)이 없으면 켜지 않는다 — 거절 사유에 빠진 조건이 나온다."""
+    async def go():
+        svc, plc, clk, logs, chat = sim.make()
+        plc.vac_ok = False
+        plc.water_ok = False
+        await sim.run(svc, plc, clk, 5)
+        ok, why = await svc.turn_on(150.0)
+        assert not ok and "냉각수, 진공(메인밸브 인터락)" in why
+        assert not plc.M[640]
     asyncio.run(go())
 
 

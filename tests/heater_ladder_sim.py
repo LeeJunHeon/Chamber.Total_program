@@ -8,6 +8,8 @@ AsyncPLC 공개 메서드(is_connected / read_regs_block / read_coils_block / wr
   출력 = DAC_EN 이면 min(D141, D118). gas_loss·plasma_heat 는 기본 0(진공) — 공정 조건 시나리오에서만 바꾼다.
   GAIN 2250, TAU 900초 → MV 520 정상상태 ≈ 250°C (300°C 목표는 도달 불가, 248°C 는 간신히 도달).
   실제 CH2 히터의 값이 아니다 — '상한이 모자라는 경우'를 재현하려고 고른 모델 값이다.
+인터락(2026-10-15 래더): H4 ITL = TC1_OK · DA_OK · WATER_OK(M00411 ← WATER_2_SGN) · VAC_OK(M00412 ← M_V_2_인터락) · ¬FAULT,
+  H9 새 렁 ¬ITL → RUN 리셋(인터락이 돌아와도 RUN 은 다시 켜지지 않는다). water_ok / vac_ok 로 입력을 바꾼다.
 """
 from __future__ import annotations
 
@@ -67,6 +69,8 @@ class Ladder:
         self.gas_loss = 0.0           # 공정 가스로 늘어나는 열손실 비율(0.25 = 25% 더 잃음)
         self.plasma_heat = 0.0        # 플라즈마가 더하는 열(°C 환산 정상상태 기여분)
         self.rst_self_reset = True    # False 면 래더가 RST 를 0 으로 되돌리지 않음
+        self.water_ok = True          # WATER_2_SGN(P00017) → M00411
+        self.vac_ok = True            # M_V_2_인터락(M00043) → M00412
         self.connected = True
         self.reject_regs: set = set() # 이 주소 쓰기는 예외(PLC 쓰기 거부 흉내)
         self._wd_timer = 0.0
@@ -109,7 +113,7 @@ class Ladder:
         if self._wd_timer >= WD_TIMEOUT_S:
             M[646] = True
         M[642] = M[644] or M[645] or M[646]
-        M[641] = M[653] and M[656] and not M[642]
+        M[641] = M[653] and M[656] and M[657] and M[658] and not M[642]
         if M[643]:
             M[644] = M[645] = M[646] = False
             if self.rst_self_reset:
@@ -159,6 +163,8 @@ class Ladder:
         D, M = self.D, self.M
         M[653] = True                                    # TC1_OK
         M[656] = True                                    # DA_OK
+        M[657] = bool(self.water_ok)                     # WATER_OK(H4)
+        M[658] = bool(self.vac_ok)                       # VAC_OK(H4)
         D[110] = int(round((self.T + self.tc_offset) * 10)) & 0xFFFF
         self._h0_defaults()
         kp, ti = self._kp_ti()
@@ -177,6 +183,8 @@ class Ladder:
                 self._integ = 0.0
                 M[649] = False
         if M[642]:
+            M[640] = False
+        if not M[641]:                                   # H9 새 렁: 인터락이 풀리면 RUN 리셋
             M[640] = False
         out = min(D[141], D[118]) if M[652] else 0
         f = max(0.0, (out - LADDER_MV_MIN) / DAC_SPAN)

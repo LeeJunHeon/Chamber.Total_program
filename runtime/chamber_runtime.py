@@ -56,7 +56,7 @@ from controller.runtime_state import runtime_state
 
 # 공정 컨트롤러(기존 CH2) + CH1은 별도 모듈이 있으면 사용, 없으면 CH2를 공용으로
 from controller.process_controller import ProcessController, eta_delay_seconds
-from controller.heater_process import HeaterSoakWaiter, HeaterHoldWaiter, heater_wait_timeout_s
+from controller.heater_process import HeaterSoakWaiter, HeaterHoldWaiter, heater_wait_timeout_s, itl_missing_text
 
 # ---- 타입 (main.py의 정의를 최소 필요만 가져와 복제) -------------------------
 RawParams = TypedDict('RawParams', {
@@ -6296,6 +6296,17 @@ class ChamberRuntime:
             res["use_n2"] = False
             res["n2_flow"] = 0.0
 
+        # TEST MODE 행(# = test): 러너가 붙인 표시·시간을 그대로 넘긴다.
+        # 공정 컨트롤러는 test_mode 가 있으면 장비 제어 없이 DELAY 한 단계만 만든다(_create_process_sequence).
+        # 이 키가 빠지면 TEST 행이 실제 공정으로 취급된다(2026-03-04 러너 재구성 때 생긴 문제).
+        if bool(raw.get("test_mode", False)):
+            res["test_mode"] = True
+            try:
+                res["test_duration_sec"] = float(raw.get("test_duration_sec") or 0.0)
+            except (TypeError, ValueError):
+                res["test_duration_sec"] = 0.0
+            res["time"] = str(raw.get("time", "") or "").strip()
+
         return res
 
     # --- delay 단계 ---
@@ -6457,7 +6468,12 @@ class ChamberRuntime:
             return
         if self._heater_watch and (st.get("fault") or (not st.get("stale") and not st.get("run"))):
             self._heater_watch = False
-            why = "히터 이상(FAULT)" if st.get("fault") else "히터가 꺼짐"
+            if st.get("fault"):
+                why = "히터 이상(FAULT)"
+            elif not st.get("itl"):
+                why = f"히터 인터락 해제({itl_missing_text(st)})"
+            else:
+                why = "히터가 꺼짐(외부 OFF 또는 순간 인터락 해제)"
             pc.on_heater_failed(f"공정 중 {why} — 공정을 중단합니다", code="E832")
 
     async def _heater_hold_failed(self, kind: str, msg: str) -> None:
@@ -8111,6 +8127,10 @@ class ChamberRuntime:
 
     def _validate_norm_params(self, p: NormParams) -> list[str]:
         errs: list[str] = []
+
+        # TEST MODE 행은 장비를 쓰지 않으므로(DELAY 만) 가스·건·파워·히터 검사를 하지 않는다
+        if bool(p.get("test_mode", False)):
+            return errs
 
         # 공통: 가스/유량
         if not (p.get("use_ar") or p.get("use_o2") or p.get("use_n2")):

@@ -25,6 +25,7 @@ import time
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from controller.heater_hold import HeaterHold
+from controller.heater_process import itl_missing_text
 from controller.heater_ramp import RampProfiler
 from controller.heater_saturation import HeaterSaturationGuard
 from lib.heater_config import HeaterConfig, float_to_words, words_to_float
@@ -47,6 +48,7 @@ COIL_COUNT = 19               # 640~658
 COIL_RUN, COIL_ITL, COIL_FAULT, COIL_RST = 640, 641, 642, 643
 COIL_OT, COIL_TC_ERR, COIL_WD_ERR = 644, 645, 646
 COIL_PID_RUN, COIL_DAC_EN, COIL_TC_OK, COIL_DA_OK = 649, 652, 653, 656
+COIL_WATER_OK, COIL_VAC_OK = 657, 658   # M00411 냉각수(WATER_2_SGN) · M00412 진공(M_V_2_인터락) — 인터락(ITL) 조건
 
 # 쓰기 허용 주소(이 밖으로는 절대 쓰지 않는다)
 WRITE_REGS = frozenset({REG_SV, REG_SV_LIMIT, REG_WD, REG_MV_LIMIT, REG_RAMP_RATE, REG_HOLDBACK,
@@ -530,14 +532,8 @@ class HeaterService:
 
     @staticmethod
     def _itl_missing(st: dict) -> str:
-        names = []
-        if not st.get("tc_ok"):
-            names.append("TC")
-        if not st.get("da_ok"):
-            names.append("D/A")
-        if st.get("fault"):
-            names.append("FAULT")
-        return ", ".join(names) or "원인 미상"
+        """인터락이 꺼진 원인 — TC · D/A · 냉각수 · 진공(메인밸브 인터락) · FAULT 중 꺼진 것."""
+        return itl_missing_text(st)
 
     def _target_ok(self, target_c) -> Tuple[bool, str]:
         try:
@@ -559,7 +555,8 @@ class HeaterService:
                 "holdback": None, "ot_limit": None, "slow_zone": None, "slow_rate": None,
                 "kp_act": None, "ti_act": None, "marker": None,
                 "run": False, "itl": False, "fault": False, "ot": False, "tc_err": False, "wd_err": False,
-                "pid_run": False, "dac_en": False, "tc_ok": False, "da_ok": False, "rst": False,
+                "pid_run": False, "dac_en": False, "tc_ok": False, "da_ok": False,
+                "water_ok": False, "vac_ok": False, "rst": False,
                 "output_dead": False, "stale": True, "age_s": None, "t": None}
 
     def _decode(self, regs: list, bits: list, now: float) -> dict:
@@ -600,6 +597,7 @@ class HeaterService:
             "run": b(COIL_RUN), "itl": b(COIL_ITL), "fault": b(COIL_FAULT),
             "ot": b(COIL_OT), "tc_err": b(COIL_TC_ERR), "wd_err": b(COIL_WD_ERR),
             "pid_run": b(COIL_PID_RUN), "dac_en": b(COIL_DAC_EN), "tc_ok": b(COIL_TC_OK), "da_ok": b(COIL_DA_OK),
+            "water_ok": b(COIL_WATER_OK), "vac_ok": b(COIL_VAC_OK),
             "rst": b(COIL_RST),
             "stale": False, "age_s": 0.0, "t": now,
             "_raw_pv": raw_pv, "_regs": regs,
@@ -1026,16 +1024,22 @@ class HeaterService:
             except Exception as e:
                 self._log(f"⚠ 래더 램프 속도 원복 실패: {e!r}")
         dur = (now - self._run_since) if self._run_since > 0 else 0.0
+        level = "FAIL" if st.get("fault") else "INFO"
         if self._end_reason:
             reason = self._end_reason
         elif self._marker_mismatch > 0:
             reason = "PLC 재기동 의심(세션 마커 불일치)"
+        elif not st.get("itl") and not st.get("fault"):
+            # 래더 H9: 운전 중 인터락(ITL)이 풀리면 PLC 가 RUN 을 리셋한다 — 인터락이 돌아와도 저절로 다시 켜지지 않는다
+            reason = f"인터락 해제({itl_missing_text(st)}) — PLC 가 RUN 을 끔"
+            level = "WARN"
         else:
-            reason = "외부(이 프로그램 밖에서 꺼짐)"
+            # 인터락이 폴링 사이에 잠깐 풀렸다 돌아와도 RUN 은 꺼진 채로 남는다(H9) — 그 경우도 여기로 온다
+            reason = "외부 OFF 또는 순간 인터락 해제(이 프로그램이 끄지 않음)"
         notes = ", ".join(self._episode_notes) or "-"
         owner = OWNER_LABEL.get(self.owner, self.owner or "-")
         self._log(f"운전 종료 — 사유 {reason} · 마지막 PV {self._fmt(st.get('pv'))} · 운전 {dur / 60:.1f}분 · 특이사항 {notes}")
-        self._card("종료", f"{owner} · {reason}", "INFO" if not st.get("fault") else "FAIL",
+        self._card("종료", f"{owner} · {reason}", level,
                    {"마지막 PV": self._fmt(st.get("pv")), "운전 시간": f"{dur / 60:.1f}분", "사유": reason,
                     "특이사항": notes})
         self.owner = None

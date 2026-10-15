@@ -1774,6 +1774,8 @@ class ProcessController:
             "process_name": proc_name,
             "result": result,
             "stopped": stopped,
+            # TEST MODE 행 여부 — 러너가 TEST 행 정지 때 장비 정리를 건너뛰는 판단에 쓴다(_runner_stage_after_finish)
+            "test_mode": bool((self.current_params or {}).get("test_mode", False)),
             "aborting": (self._aborting or self._in_emergency),
             "errors": list(self._shutdown_failures),
 
