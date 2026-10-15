@@ -4,6 +4,7 @@ import os
 import re
 import asyncio
 import threading
+import contextlib
 from datetime import datetime
 from pathlib import Path
 from typing import Dict, List, Optional, Callable
@@ -139,17 +140,14 @@ class DataLogger(QObject):
         # 업그레이드가 안 됐으면(다른 프로그램이 파일을 잡고 있는 등) 기존 머리글 순서로 기록 — 열이 어긋나지 않게
         self._fields: List[str] = self._file_fields()
 
-        # ✅ keep-handle writer (NAS 본파일 + pending 파일)
+        # CSV writer (NAS 본파일 + pending 파일)
         self._nas_app = FixedCsvDictAppender(self.log_file, self._fields, encoding="utf-8-sig")
         self._pending_app: Optional[FixedCsvDictAppender] = None
 
-        # ✅ “프로그램이 먼저 잡기” (기존 파일이 존재하면 지금 열어둬서 Excel이 먼저 잡는 상황을 줄임)
-        try:
-            if self.log_file.exists():
-                self._nas_app.open()
-        except Exception as e:
-            if self._log_func:
-                self._log_func(f"Sputter Calib CSV NAS open 실패 → pending으로 기록 후 NAS 복구 시 재시도: {e!r}")
+        # 파일은 기록할 때만 열고 쓴 뒤 바로 닫는다(_release_after_write). 시작부터 열어 두면 구글 드라이브(G:)가
+        # 프로그램을 끌 때까지 이 파일을 올리지 않아 NAS·다른 PC 에 새 행이 보이지 않는다
+        # (2026-10 확인 — 6월 NAS→G: 경로 변경 뒤로는 재시작 때만 올라감).
+        # 엑셀 등이 파일을 잡고 있어 쓰기가 실패하면 로컬 pending 에 쌓았다가 다음 기록 때 합친다.
 
     # ──────────────────────────────────────────────────────────────
     # 초기 헤더 정리
@@ -623,7 +621,7 @@ class DataLogger(QObject):
             # NAS가 아직 잠겨있으면 다음 기회로
             return
 
-        # pending -> NAS 병합 (NAS는 keep-handle append)
+        # pending -> NAS 병합
         with open(pending_file, "r", encoding="utf-8-sig", newline="") as rf:
             reader = csv.DictReader(rf)
             for row in reader:
@@ -640,8 +638,9 @@ class DataLogger(QObject):
         1) pending이 있으면 NAS로 먼저 병합
         2) 이번 최신 행을 NAS에 기록 시도
         3) NAS가 잠겨 있으면 이번 행을 pending에 적재(유실 방지)
+        4) 끝나면(성공·실패 모두) 파일을 닫는다 — 열어 두면 G: 가 올리지 않는다
         """
-        with self._csv_write_lock:
+        with self._csv_write_lock, self._release_after_write():
             nas_file = self.log_file
 
             # ✅ 여기서 로컬 mkdir 하지 않음 (NAS 정상일 때 빈 폴더 생성 방지)
@@ -655,13 +654,13 @@ class DataLogger(QObject):
                 if self._log_func:
                     self._log_func(f"Sputter Calib CSV pending 병합 실패(다음에 재시도): {e!r}")
 
-            # 2) 이번 최신 행 NAS 기록 (keep-handle)
+            # 2) 이번 최신 행 NAS 기록
             try:
                 self._nas_app.open()
                 self._nas_app.append_row(log_data)
                 self._session_started_at = None
                 if self._log_func:
-                    self._log_func(f"Sputter Calib CSV 1행 기록 완료 (NAS, keep-handle) → {nas_file}")
+                    self._log_func(f"Sputter Calib CSV 1행 기록 완료 (NAS) → {nas_file}")
                 return
             except Exception as e:
                 self._nas_app.close()
@@ -678,13 +677,13 @@ class DataLogger(QObject):
                 if self._log_func:
                     self._log_func(f"Sputter Calib CSV NAS 기록 실패 → pending 적재: {e!r}")
 
-            # 3) NAS 실패면 pending에 적재 (keep-handle)
+            # 3) NAS 실패면 pending에 적재
             try:
                 p = self._get_pending_app()
                 p.append_row(log_data)
                 self._session_started_at = None
                 if self._log_func:
-                    self._log_func(f"Sputter Calib CSV pending 적재 완료(keep-handle) → {pending_file}")
+                    self._log_func(f"Sputter Calib CSV pending 적재 완료 → {pending_file}")
             except Exception as e2:
                 if self._log_func:
                     self._log_func(f"Sputter Calib CSV pending 적재마저 실패: {e2!r}")
@@ -695,3 +694,15 @@ class DataLogger(QObject):
             self._pending_app = FixedCsvDictAppender(pending_path, self.header, encoding="utf-8-sig")
             self._pending_app.open()  # NAS 실패한 “그 순간”에만 로컬 폴더/파일 생성
         return self._pending_app
+
+    @contextlib.contextmanager
+    def _release_after_write(self):
+        """기록 한 번이 끝나면(성공·실패 모두) 본파일·pending 파일을 닫는다.
+        구글 드라이브(G:)는 열려 있는 파일을 닫힐 때까지 올리지 않으므로, 열어 두면 NAS·다른 PC 에 새 행이 안 보인다."""
+        try:
+            yield
+        finally:
+            self._nas_app.close()
+            if self._pending_app is not None:
+                self._pending_app.close()
+                self._pending_app = None
