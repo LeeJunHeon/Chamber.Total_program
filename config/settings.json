@@ -118,7 +118,7 @@
     // --- DC 과전류 인터락 (DC Pulse / DC Power 공용) — 세트포인트 전력 기준 전류 상한 ---
     // ENABLE 과 ENABLE_CONT 를 나눈 이유: DC Power/DC2 의 전류는 PLC_DC_I_SCALE(미검증) 을 거치므로 별도로 끌 수 있게 분리.
     // DC 과전류 인터락은 common 에서만 설정 (ch1/ch2 에 넣어도 무시). 값 변경 후 프로그램 재시작
-    "DC_OVERCURRENT_ENABLE": true,         // DC Pulse 쪽 과전류 인터락 사용
+    "DC_OVERCURRENT_ENABLE": false,        // DC Pulse 쪽 과전류 인터락 사용 (장비 배포값 false 에 맞춤, 2026-10-15)
     "DC_OVERCURRENT_ENABLE_CONT": true,    // DC Power/DC2(PLC 경유) 쪽 과전류 인터락 사용
     "DC_OVERCURRENT_P1_W": 300.0,          // 이 전력 이하는 I1 고정 (W)
     "DC_OVERCURRENT_I1_A": 1.0,            // P1 이하 전류 상한 (A)
@@ -558,8 +558,8 @@
 
     // ── 장비 지원 플래그 (CH2 전용) ──
     "SUPPORTS_RF_CONT": true,              // CH2는 RF Continuous 사용
-    "SUPPORTS_DC2": true,                  // 히터 배선·PLC 업로드 전까지 기존과 같게 둔다. SUPPORTS_HEATER=true 면 코드가 DC2 를 끈다(D/A CH3 = 히터 출력)
-    "SUPPORTS_HEATER": false,              // CH2 히터(PLC 내장 PID). PLC 에 HEATER 프로그램을 올린 뒤 true — 그 전에 켜면 히터 프로그램이 없는 PLC 의 D113~D160 에 설정값을 쓴다
+    "SUPPORTS_DC2": true,                  // DC2 는 실제로 연결돼 있지 않음. SUPPORTS_HEATER=true 면 코드가 DC2 를 끈다(D/A CH3 = 히터 출력)
+    "SUPPORTS_HEATER": true,               // CH2 히터(PLC 내장 PID). 2026-10-16 PLC HEATER 프로그램과 함께 켬 — 히터 프로그램이 없는 PLC 면 히터 영역(D110~D160·M00400~)만 읽고 쓰며(다른 곳에서 안 씀) 인터락이 꺼져 있어 히터는 켜지지 않는다
 
     // ── CH2 히터 (PLC 내장 PID, D110~D160 / M00400~) ──
     "HEATER_TEMP_SCALE": 0.1,              // 레지스터 1카운트 = 0.1°C
