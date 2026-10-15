@@ -1588,6 +1588,47 @@ ERROR_REGISTRY: Dict[str, ErrorDefinition] = {
     ),
 
     # -----------------------------------------------------------------
+    # E83x : CH2 HEATER (레시피 use_heater 공정 연동)
+    # -----------------------------------------------------------------
+    "E830": ErrorDefinition(
+        code="E830",
+        title="히터 사용 불가",
+        category="HEATER",
+        client_action=ACTION_STOP,
+        severity=SEV_ERROR,
+        cause="레시피가 히터를 쓰는데(use_heater=T) 히터를 켜거나 유지할 수 없습니다 — 히터 기능 꺼짐(SUPPORTS_HEATER=false), "
+              "PLC 링크 없음·응답 없음, 히터 이상, 인터락 미충족, 설정 쓰기 전, 또는 대기 중 히터가 꺼졌습니다.",
+        fix="히터 패널의 상태(이상·인터락·응답)와 settings.json ch2 의 SUPPORTS_HEATER 를 확인한 뒤 다시 시작하십시오.",
+    ),
+    "E831": ErrorDefinition(
+        code="E831",
+        title="히터 승온 시간 초과",
+        category="HEATER",
+        client_action=ACTION_STOP,
+        severity=SEV_ERROR,
+        cause="대기 한도 안에 목표 ±HEATER_SOAK_TOLERANCE 를 HEATER_SOAK_TIME_SEC 동안 유지하지 못했습니다.",
+        fix="'승온 정체' 경고가 있었으면 출력 상한(HEATER_MV_LIMIT)이 모자란 것입니다. 목표·램프 속도·HEATER_WAIT_TIMEOUT_SEC 를 확인하십시오.",
+    ),
+    "E832": ErrorDefinition(
+        code="E832",
+        title="공정 중 히터 이상",
+        category="HEATER",
+        client_action=ACTION_STOP,
+        severity=SEV_ERROR,
+        cause="히터를 쓰는 공정 중에 히터 이상(과온·TC·워치독)이 생기거나 히터가 꺼졌습니다.",
+        fix="히터 패널의 이상 내용을 확인하고 원인을 없앤 뒤 리셋하십시오.",
+    ),
+    "E833": ErrorDefinition(
+        code="E833",
+        title="히터 유지 모드 진입 실패",
+        category="HEATER",
+        client_action=ACTION_STOP,
+        severity=SEV_ERROR,
+        cause="작업 압력·플라즈마 조건에서 유지 모드(DAC 상한 고정)가 시간 안에 잡히지 않았거나 출력 상한에 붙어 포기했습니다"
+              "(HEATER_HOLD_FAIL_ACTION=abort 일 때만 공정을 멈춥니다).",
+        fix="HEATER_MV_LIMIT 여유와 HEATER_HOLD_WAIT_SEC 를 확인하십시오. 강제 고정으로 계속하려면 HEATER_HOLD_FAIL_ACTION=force.",
+    ),
+    # -----------------------------------------------------------------
     # E9xx : LOGGING / UI / INTERNAL / FALLBACK
     # -----------------------------------------------------------------
     "E901": ErrorDefinition(

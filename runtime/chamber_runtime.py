@@ -55,7 +55,8 @@ from util.log_hub import SessionTextAppender
 from controller.runtime_state import runtime_state
 
 # 공정 컨트롤러(기존 CH2) + CH1은 별도 모듈이 있으면 사용, 없으면 CH2를 공용으로
-from controller.process_controller import ProcessController
+from controller.process_controller import ProcessController, eta_delay_seconds
+from controller.heater_process import HeaterSoakWaiter, HeaterHoldWaiter, heater_wait_timeout_s
 
 # ---- 타입 (main.py의 정의를 최소 필요만 가져와 복제) -------------------------
 RawParams = TypedDict('RawParams', {
@@ -101,6 +102,11 @@ RawParams = TypedDict('RawParams', {
     'G2 Target': str,
     'G3 Target': str,
     'power_select': Literal['T','F'] | bool,
+
+    # CH2 히터(2단계) — 공란이면 사용 안 함
+    'use_heater': Literal['T','F'] | bool,
+    'heater_temp': float | str,
+    'heater_ramp': float | str,
 }, total=False)
 
 NormParams = TypedDict('NormParams', {
@@ -134,6 +140,9 @@ NormParams = TypedDict('NormParams', {
     'G1 Target': str, 'G2 Target': str, 'G3 Target': str,
     'use_power_select': bool,
     'chuck_position': str, # ★ CSV의 up/mid/down (또는 "")
+    'use_heater': bool,               # CH2 히터: 승온 먼저 → 공정
+    'heater_temp': float | None,      # °C
+    'heater_ramp': float | None,      # °C/min (None = HEATER_RAMP_RATE_C_PER_MIN)
 }, total=False)
 
 # 폴링 타깃도 명확히 분리
@@ -360,6 +369,9 @@ class _CfgAdapter:
 
         return None
     
+
+HEATER_RAMP_MAX_C_PER_MIN = 60.0   # 레시피 heater_ramp 상한(°C/min)
+
 
 def _dc2_allowed(ch: int, want_dc2: bool, heater_on: bool) -> bool:
     """DC2(DC 연속 2호기) 사용 가능 여부. CH2 전용이고, CH2 히터를 켜면 쓸 수 없다 —
@@ -761,6 +773,13 @@ class ChamberRuntime:
 
         # Gun Target 자동 불러오기 (재고 DB 연동)
         asyncio.ensure_future(self._load_gun_targets())
+
+        # === CH2 히터(2단계) — main.py 가 attach_heater() 로 붙인다(CH2·SUPPORTS_HEATER=true·초기화 성공일 때만) ===
+        self._heater = None              # HeaterService
+        self._heater_gen = 0             # 공정 히터 작업 세대(취소하면 +1 → 늦게 끝난 비동기 작업은 공정을 건드리지 않음)
+        self._heater_job = None          # ("wait", HeaterSoakWaiter) / ("hold", HeaterHoldWaiter) / None
+        self._heater_watch = False       # HEATER_SET 성공 ~ 종료 절차 시작: 이상·RUN 꺼짐 감시
+        self._heater_rate = None         # 이번 공정 램프 속도(°C/min)
 
         # === ProcessController 바인딩 ===
         self._bind_process_controller()
@@ -1415,6 +1434,93 @@ class ChamberRuntime:
 
             self._spawn_detached(_run())
 
+        # === CH2 히터(2단계) ===
+        def cb_heater_set(target: float, rate: Optional[float]) -> None:
+            gen = self._heater_gen
+
+            async def run():
+                pc = self.process_controller
+                svc = self._heater
+                if svc is None:
+                    pc.on_heater_failed("히터 기능이 꺼져 있습니다(SUPPORTS_HEATER=false 또는 히터 초기화 실패)", code="E830")
+                    return
+                ok, why = svc.is_ready()
+                if not ok:
+                    pc.on_heater_failed(f"히터 사용 불가 — {why}", code="E830")
+                    return
+                r = float(rate) if rate else float(svc.cfg.ramp_rate)
+                running = bool(svc.status().get("run"))
+                svc.take_over("process")
+                try:
+                    await svc.set_hold_armable(False, "공정이 작업 조건에서 유지값을 다시 잰다")
+                    if running:
+                        ok, why = await svc.apply_target(float(target), r, owner="process")
+                    else:
+                        ok, why = await svc.turn_on(float(target), rate=r, owner="process")
+                except asyncio.CancelledError:
+                    raise
+                except Exception as e:
+                    ok, why = False, repr(e)
+                if gen != self._heater_gen:
+                    return                       # 그 사이 정지·취소 — 히터 정리는 공정 종료 후 러너가 한다
+                if not ok:
+                    if not svc.status().get("run"):
+                        svc.release("process")
+                    pc.on_heater_failed(f"히터 설정 실패 — {why}", code="E830")
+                    return
+                self._heater_rate = r
+                self._heater_watch = True
+                self.append_log("HEATER", f"공정 히터 설정 — 목표 {float(target):.1f}°C · {r:g}°C/min "
+                                          f"({'운전 중 목표 변경' if running else '운전 시작'})")
+                pc.on_heater_set_ok()
+            self._spawn_detached(run(), name="HeaterSet")
+
+        def cb_heater_wait(target: float) -> None:
+            svc = self._heater
+            if svc is None:
+                self.process_controller.on_heater_failed("히터 서비스 없음", code="E830")
+                return
+            c = svc.cfg
+            rate = float(self._heater_rate or c.ramp_rate)
+            to, why = heater_wait_timeout_s(svc.status().get("pv"), float(target), rate,
+                                            base_timeout_s=c.wait_timeout_s, approach_zone=c.approach_zone,
+                                            approach_min_rate=c.approach_min_rate, soak_sec=c.soak_time_s)
+            self.append_log("HEATER", f"히터 승온 대기 — 목표 {float(target):.1f}°C ±{c.soak_tol:g}°C 를 "
+                                      f"{c.soak_time_s:.0f}초 유지하면 진행, 한도 {to / 60:.0f}분({why})")
+            self._heater_job = ("wait", HeaterSoakWaiter(float(target), tol=c.soak_tol, soak_sec=c.soak_time_s,
+                                                         timeout_s=to, clock=svc.clock,
+                                                         log=lambda m: self.append_log("HEATER", m)))
+
+        def cb_heater_hold() -> None:
+            gen = self._heater_gen
+
+            async def run():
+                pc = self.process_controller
+                svc = self._heater
+                if svc is None:
+                    pc.on_heater_failed("히터 서비스 없음", code="E830")
+                    return
+                await svc.set_hold_armable(True, "")
+                if gen != self._heater_gen:
+                    return
+                snap = svc.hold_snapshot()
+                if snap.get("mode") == "off":
+                    self.append_log("HEATER", "유지 모드 꺼짐(HEATER_HOLD_MODE=off) — 포화 감시만 다시 켜고 진행")
+                    pc.on_heater_hold_ok()
+                    return
+                c = svc.cfg
+                self.append_log("HEATER", f"히터 유지 모드 측정 시작(작업 압력·플라즈마 조건) — 최대 {c.hold_wait_s:.0f}초")
+                self._heater_job = ("hold", HeaterHoldWaiter(timeout_s=c.hold_wait_s,
+                                                             give_up_seq0=int(snap.get("give_up_seq") or 0),
+                                                             clock=svc.clock,
+                                                             log=lambda m: self.append_log("HEATER", m)))
+            self._spawn_detached(run(), name="HeaterHold")
+
+        def cb_heater_cancel() -> None:
+            self._heater_gen += 1
+            self._heater_job = None
+            self._heater_watch = False
+
         # 컨트롤러 생성
         self.process_controller = ProcessController(
             send_plc=cb_plc,
@@ -1441,6 +1547,11 @@ class ChamberRuntime:
             cancel_ig=cb_ig_cancel,
             rga_scan=cb_rga_scan, 
             oes_run=cb_oes_run,
+
+            heater_set=cb_heater_set,
+            heater_wait=cb_heater_wait,
+            heater_hold=cb_heater_hold,
+            cancel_heater=cb_heater_cancel,
 
             ch=self.ch,
             supports_dc_cont=self.supports_dc_cont,
@@ -3828,6 +3939,12 @@ class ChamberRuntime:
             with contextlib.suppress(Exception):
                 runtime_state.mark_started("chamber", self.ch)
 
+            # CH2 히터: 이 공정은 히터를 안 쓰는데 히터가 운전 중이면 1줄 남긴다(공정은 히터를 건드리지 않는다)
+            with contextlib.suppress(Exception):
+                _hs = getattr(self, "_heater", None)
+                if _hs is not None and not params.get("use_heater") and _hs.status().get("run"):
+                    self.append_log("HEATER", "히터가 운전 중이지만 이 공정은 히터를 쓰지 않습니다(use_heater=F) — 히터는 그대로 둡니다")
+
             self.process_controller.start_process(params)
 
             # ✅ 호스트 요청 공정 로그: 실제 시작 시각 + per-run 로그 파일명
@@ -4722,6 +4839,14 @@ class ChamberRuntime:
             stopped = bool(detail.get("stopped", False))
             is_test = bool(detail.get("test_mode", False))
             is_test_cancel = bool(is_test and stopped)
+
+            # 0) CH2 히터: 다음 공정도 히터를 쓰면 유지, 아니면 끈다(실패·정지·마지막 행 포함)
+            try:
+                await self._heater_after_row(ok=bool(ok), stopped=stopped)
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self.append_log("HEATER", f"⚠ 공정 종료 후 히터 처리 예외: {e!r}")
 
             # 1) 자동연결 차단 후 정리
             self._auto_connect_enabled = False
@@ -6091,7 +6216,17 @@ class ChamberRuntime:
 
             # ★ 추가
             "chuck_position":    _pos,
+
+            # CH2 히터(2단계)
+            "use_heater":        tf(raw.get("use_heater", "F")),
+            "heater_temp":       _opt_float_from_keys("heater_temp"),
+            "heater_ramp":       _opt_float_from_keys("heater_ramp"),
         }
+        if not res["use_heater"] and (res["heater_temp"] is not None or res["heater_ramp"] is not None):
+            self.append_log("Params", f"use_heater=F 이므로 히터를 쓰지 않습니다 "
+                                      f"(heater_temp={res['heater_temp']}, heater_ramp={res['heater_ramp']} 은 무시)")
+            res["heater_temp"] = None
+            res["heater_ramp"] = None
 
         # ✅ (옵션) DC Pulse 중간 power 변경용 컬럼 전달
         # - 비어있으면 ProcessController가 기존처럼 무시함
@@ -6285,6 +6420,106 @@ class ChamberRuntime:
         """CameraRecorder(백그라운드 스레드) 메시지를 공정 로그 + 화면으로 보낸다.
         append_log가 내부 _soon으로 이미 스레드 마샬링하므로 직접 호출해도 안전하다."""
         self.append_log("CAM", msg)
+
+    # ============================= CH2 히터(2단계) =============================
+    def attach_heater(self, svc) -> None:
+        """main.py 가 CH2 히터 서비스를 붙인다. 상태 리스너로 공정 대기·감시를 돌린다."""
+        if self.ch != 2:
+            self.append_log("HEATER", f"CH{self.ch} 에는 히터를 붙이지 않습니다")
+            return
+        self._heater = svc
+        svc.add_listener(self._on_heater_status)
+        self.append_log("HEATER", "CH2 히터 공정 연동 준비(레시피 use_heater)")
+
+    def _on_heater_status(self, st: dict) -> None:
+        """히터 폴링마다 불린다 — 공정 대기 판정과 공정 중 이상 감시."""
+        svc = self._heater
+        if svc is None:
+            return
+        pc = self.process_controller
+        job = self._heater_job
+        if job is not None:
+            kind, w = job
+            r = w.tick(st, svc.profiler.is_active()) if kind == "wait" else w.tick(st, svc.hold_snapshot())
+            if r is None:
+                return
+            self._heater_job = None
+            ok, msg, code = r
+            if ok:
+                self.append_log("HEATER", msg)
+                (pc.on_heater_ready if kind == "wait" else pc.on_heater_hold_ok)()
+                return
+            if kind == "hold" and code == "E833":
+                self._spawn_detached(self._heater_hold_failed(getattr(w, "fail_kind", ""), msg), name="HeaterHoldFail")
+                return
+            self._heater_watch = False
+            pc.on_heater_failed(msg, code=code)
+            return
+        if self._heater_watch and (st.get("fault") or (not st.get("stale") and not st.get("run"))):
+            self._heater_watch = False
+            why = "히터 이상(FAULT)" if st.get("fault") else "히터가 꺼짐"
+            pc.on_heater_failed(f"공정 중 {why} — 공정을 중단합니다", code="E832")
+
+    async def _heater_hold_failed(self, kind: str, msg: str) -> None:
+        """유지 모드 측정 실패 처리 — abort: E833 / 포기(출력 상한에 붙음): 경고 후 진행 / 시간 초과: 강제 진입 후 진행."""
+        gen = self._heater_gen
+        svc = self._heater
+        pc = self.process_controller
+        if svc is None:
+            pc.on_heater_failed(msg, code="E833")
+            return
+        if svc.cfg.hold_fail_action == "abort":
+            self._heater_watch = False
+            pc.on_heater_failed(f"{msg} (HEATER_HOLD_FAIL_ACTION=abort)", code="E833")
+            return
+        if kind == "give_up":
+            self.append_log("HEATER", f"⚠ {msg} — 출력이 이미 상한(D118={svc.status().get('mv_limit')})이라 "
+                                      f"상한이 곧 출력 제한 역할을 합니다. 공정을 계속합니다(HEATER_MV_LIMIT 여유 확인)")
+            pc.on_heater_hold_ok()
+            return
+        ok, why = await svc.force_hold(msg)
+        if gen != self._heater_gen:
+            return
+        if ok:
+            self.append_log("HEATER", f"⚠ {msg} → 유지 모드 강제 진입: {why}")
+            pc.on_heater_hold_ok()
+        else:
+            self._heater_watch = False
+            pc.on_heater_failed(f"{msg} — 강제 진입 실패: {why}", code="E833")
+
+    def _next_queue_row_uses_heater(self) -> bool:
+        """큐에서 다음 '공정' 행이 히터를 쓰는가 — delay 행은 건너뛰고, TEST 행은 안 쓰는 것으로 본다."""
+        q = list(getattr(self, "process_queue", []) or [])
+        i = int(getattr(self, "current_process_index", -1)) + 1
+        while i < len(q):
+            row = q[i] or {}
+            if eta_delay_seconds(row) > 0:
+                i += 1
+                continue
+            if str(row.get("#") or "").strip().lower() == "test":
+                return False
+            return str(row.get("use_heater", "") or "").strip().upper() in self._TF_TRUE_TOKENS
+        return False
+
+    async def _heater_after_row(self, *, ok: bool, stopped: bool) -> None:
+        """공정 1행이 끝난 뒤: 다음 공정도 히터를 쓰면 유지, 아니면 끈다."""
+        svc = getattr(self, "_heater", None)
+        if svc is None or svc.owner != "process":
+            return
+        if getattr(self, "_runner_queue_mode", False) and ok and not stopped and self._next_queue_row_uses_heater():
+            self.append_log("HEATER", "다음 공정도 히터를 씀 → 히터 유지(다음 공정이 목표를 다시 설정)")
+            return
+        await self._heater_off_by_process("공정 종료" if ok else ("공정 정지" if stopped else "공정 실패"))
+
+    async def _heater_off_by_process(self, reason: str) -> None:
+        svc = getattr(self, "_heater", None)
+        if svc is None or svc.owner != "process":
+            return
+        if svc.status().get("run"):
+            ok, why = await svc.turn_off(f"{reason}(공정)", owner="process")
+            self.append_log("HEATER", f"공정이 히터를 끕니다 — {reason}" + ("" if ok else f" (실패: {why})"))
+        else:
+            svc.release("process")
 
     def append_log(self, source: str, msg: str) -> None:
         now_ui = datetime.now().strftime("%H:%M:%S")
@@ -6833,6 +7068,12 @@ class ChamberRuntime:
         # ✅ 호스트 요청 공정이면 여기서 1줄 확정 (멱등)
         with contextlib.suppress(Exception):
             self._host_run_finalize()
+
+        # ✅ CH2 히터 안전망: 큐가 끝났는데 공정이 히터를 쥐고 있으면 끈다(실패·정지·검증 실패·시작 실패 경로 공통)
+        with contextlib.suppress(Exception):
+            _hs = getattr(self, "_heater", None)
+            if _hs is not None and getattr(_hs, "owner", None) == "process":
+                self._spawn_detached(self._heater_off_by_process("공정 큐 종료"), name="HeaterQueueEnd")
 
         # 전역 runtime_state로 종료 시각을 기록하므로 로컬 타임스탬프는 불필요
         # ★ 추가: 남아 있을 수 있는 카운트다운 태스크 정리
@@ -7674,6 +7915,8 @@ class ChamberRuntime:
         "change_power_value",
         # RF(CESAR)는 kHz 실수 허용(0.5kHz=500Hz) — 사양 3-5
         "rf_pulse_freq",
+        # CH2 히터(2단계)
+        "heater_temp", "heater_ramp",
     )
     _RAW_INT_KEYS = (
         "integration_time",
@@ -7688,6 +7931,7 @@ class ChamberRuntime:
         "use_rf_power", "use_dc_power", "use_dc_power2",
         "Ar", "O2", "N2",
         "main_shutter", "power_select",
+        "use_heater",
     )
     # tf() 가 True 로 인정하는 값 + 명시적 False 값 (그 외는 오탈자로 간주)
     _TF_TRUE_TOKENS = ("T", "TRUE", "1", "Y", "YES")
@@ -7955,6 +8199,24 @@ class ChamberRuntime:
             # ✅ DC2 폐지(D/A CH3 = CH2 히터 출력) — 파일 레시피·로봇 경로 모두 여기서 막힌다
             if p.get("use_dc_power2") and not self.supports_dc_cont2:
                 errs.append("DC2 Power 는 사용할 수 없습니다(DC2 폐지)")
+
+        # ✅ CH2 히터(2단계)
+        if p.get("use_heater"):
+            svc = getattr(self, "_heater", None)
+            if self.ch != 2:
+                errs.append("CH1 에는 히터가 없습니다 (use_heater=T)")
+            elif svc is None:
+                errs.append("히터 기능이 꺼져 있어 use_heater=T 공정을 실행할 수 없습니다 "
+                            "(settings.json ch2 SUPPORTS_HEATER=false 또는 히터 초기화 실패)")
+            else:
+                c = svc.cfg
+                lim = min(float(c.max_temp), float(c.sv_limit_c))
+                t = p.get("heater_temp")
+                if t is None or not (0.0 < float(t) <= lim):
+                    errs.append(f"heater_temp 는 0 초과 {lim:g}°C 이하여야 합니다 (현재 {t})")
+                r = p.get("heater_ramp")
+                if r is not None and not (0.0 < float(r) <= HEATER_RAMP_MAX_C_PER_MIN):
+                    errs.append(f"heater_ramp 는 0 초과 {HEATER_RAMP_MAX_C_PER_MIN:g}°C/min 이하여야 합니다 (현재 {r})")
 
         return errs
     # ============================= 입력값 검증 헬퍼 =============================  

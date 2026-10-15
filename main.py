@@ -1263,7 +1263,7 @@ class MainWindow(QWidget):
     def _init_ch2_heater(self) -> None:
         """CH2 히터 서비스·상태 패널 생성. 설정이 꺼져 있으면 아무것도 하지 않고 반환한다.
         패널은 스택 위젯 밖(MainWindow 직속)이라 CH1·PC·Server 페이지에서도 보인다.
-        self.heater_service / self.heater_panel 은 2단계에서 CH2 런타임에 넘긴다."""
+        서비스는 CH2 런타임에 붙인다(attach_heater — 레시피 use_heater 공정 연동)."""
         self.heater_service = None
         self.heater_panel = None
         try:
@@ -1291,6 +1291,7 @@ class MainWindow(QWidget):
             svc.start(self._loop)
             self.heater_service = svc
             self.heater_panel = panel
+            self.ch2.attach_heater(svc)          # 2단계: 레시피 use_heater 공정 연동
             self.ch2.append_log("HEATER", "CH2 히터 서비스 시작")
         except Exception as e:
             with contextlib.suppress(Exception):
