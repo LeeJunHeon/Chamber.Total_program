@@ -25,6 +25,7 @@ REG_HEATER_LOW, REG_HEATER_HIGH = 110, 149   # 히터 데이터 영역(마커와
 
 @dataclass(frozen=True)
 class HeaterConfig:
+    """실제 운전값은 config/settings.json ch2 와 lib/config_common.py 에서 온다. 여기 기본값은 테스트·에뮬레이터 기준값이다."""
     enabled: bool = False
     temp_scale: float = 0.1
     poll_interval_s: float = 1.0
