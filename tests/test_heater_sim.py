@@ -219,5 +219,15 @@ def test_interlock_off_before_start_blocks_turn_on():
     asyncio.run(go())
 
 
+def test_ladder_h0_accepts_900_950_limits():
+    """래더 H0 클램프(D113 9000·D126 9500) — 상한 그대로 쓰면 클램프되지 않는다."""
+    async def go():
+        plc = sim.Ladder()
+        await plc.write_reg(113, 9000)
+        await plc.write_reg(126, 9500)
+        assert (plc.D[113], plc.D[126]) == (9000, 9500)
+    asyncio.run(go())
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

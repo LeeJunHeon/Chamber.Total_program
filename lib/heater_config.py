@@ -16,6 +16,8 @@ from typing import Any, List, Tuple
 # 래더 고정값/경계(주소표 A 기준)
 LADDER_MV_MIN = 400           # PID MV_min 고정
 LADDER_MV_ABS_MAX = 1600      # D118 상한 클램프
+LADDER_SV_MAX_C = 900.0       # D113 목표 상한 클램프 — HEATER 프로그램 H0 의 D113 클램프(9000, 0.1°C 단위)와 같아야 한다(2026-10-21 7000 에서 변경)
+LADDER_OT_MAX_C = 950.0       # D126 과온 상한 클램프 — HEATER 프로그램 H0 의 D126 클램프(9500, 0.1°C 단위)와 같아야 한다(2026-10-21 7500 에서 변경)
 KP_MIN, KP_MAX = 0.1, 50.0    # 래더가 D142/D143 을 적용하는 범위(밖이면 기본 3.0)
 TI_MIN, TI_MAX = 10.0, 3000.0  # 래더가 D144/D145 를 적용하는 범위(밖이면 기본 300)
 COUNTS_C_PER_MIN = 6.0        # 래더 램프 1카운트/초 = 6°C/min
@@ -126,13 +128,13 @@ def load_heater_config(cfg_module: Any) -> Tuple[HeaterConfig, List[str]]:
     sv_lim = _get("HEATER_SV_LIMIT_C", d.sv_limit_c, float)
     if sv_lim <= 0:
         warns.append(f"HEATER_SV_LIMIT_C={sv_lim:g} ≤ 0 → 500"); sv_lim = 500.0
-    elif sv_lim > 700:
-        warns.append(f"HEATER_SV_LIMIT_C={sv_lim:g} > 700 → 700"); sv_lim = 700.0
+    elif sv_lim > LADDER_SV_MAX_C:
+        warns.append(f"HEATER_SV_LIMIT_C={sv_lim:g} > {LADDER_SV_MAX_C:g} → {LADDER_SV_MAX_C:g}"); sv_lim = LADDER_SV_MAX_C
     ot = _get("HEATER_OT_LIMIT_C", d.ot_limit_c, float)
     if ot <= 0:
         warns.append(f"HEATER_OT_LIMIT_C={ot:g} ≤ 0 → 550"); ot = 550.0
-    elif ot > 750:
-        warns.append(f"HEATER_OT_LIMIT_C={ot:g} > 750 → 750"); ot = 750.0
+    elif ot > LADDER_OT_MAX_C:
+        warns.append(f"HEATER_OT_LIMIT_C={ot:g} > {LADDER_OT_MAX_C:g} → {LADDER_OT_MAX_C:g}"); ot = LADDER_OT_MAX_C
     if ot <= sv_lim:
         warns.append(f"HEATER_OT_LIMIT_C={ot:g} ≤ SV 상한 {sv_lim:g} → {sv_lim + 30:g} (래더와 같은 규칙)")
         ot = sv_lim + 30.0

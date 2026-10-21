@@ -567,9 +567,9 @@
     "HEATER_POLL_IDLE_S": 3.0,             // 상태 폴링 주기 (정지 중, 초)
     "HEATER_WD_PERIOD_S": 5.0,             // 워치독(D114) 갱신 주기 (초). 래더는 30초 무변화면 트립
     "HEATER_STALE_SEC": 10.0,              // 이 시간 넘게 못 읽으면 'PLC 응답 없음' (초)
-    "HEATER_MAX_TEMP": 700.0,              // 화면 목표 입력 상한 (°C, 챔버K와 동일)
-    "HEATER_SV_LIMIT_C": 700.0,            // D113 목표 상한 (°C, 래더 최대 700 — 챔버K와 동일)
-    "HEATER_OT_LIMIT_C": 750.0,            // D126 과온 트립 (°C, 래더 최대 750 — 챔버K와 동일)
+    "HEATER_MAX_TEMP": 900.0,              // 화면 목표 입력 상한 (°C). CH2 TC 는 기판보다 높게 읽혀 목표가 실제 기판 온도보다 높다(챔버K TC2 와 같은 이유)
+    "HEATER_SV_LIMIT_C": 900.0,            // D113 목표 상한 (°C, 래더 최대 900). CH2 TC 는 기판보다 높게 읽혀 목표가 실제 기판 온도보다 높다
+    "HEATER_OT_LIMIT_C": 950.0,            // D126 과온 트립 (°C, 래더 최대 950). TC 기준값이라 실제 기판 온도보다 높다
     "HEATER_RAMP_RATE_C_PER_MIN": 6.0,     // 기본 램프 속도 (°C/min, 래더 최소 6 — 챔버K와 동일)
     "HEATER_HOLDBACK_C": 10.0,             // D121 홀드백 (°C)
     "HEATER_SLOW_ZONE_C": 0.0,             // D127 래더 감속 구간 (°C, 0 = 끔)

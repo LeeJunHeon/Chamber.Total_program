@@ -29,9 +29,9 @@ def test_enabled_flag():
 
 @pytest.mark.parametrize("sv,ot,exp_sv,exp_ot", [
     (0, 550, 500.0, 550.0),          # SV ≤0 → 500
-    (900, 750, 700.0, 750.0),        # SV >700 → 700
+    (1000, 950, 900.0, 950.0),       # SV >900 → 900
     (500, 0, 500.0, 550.0),          # OT ≤0 → 550
-    (500, 900, 500.0, 750.0),        # OT >750 → 750
+    (500, 1000, 500.0, 950.0),       # OT >950 → 950
     (600, 550, 600.0, 630.0),        # OT ≤ SV → SV+30
     (500, 500, 500.0, 530.0),
 ])
@@ -39,6 +39,13 @@ def test_temp_limits(sv, ot, exp_sv, exp_ot):
     cfg, warns = _load(HEATER_SV_LIMIT_C=sv, HEATER_OT_LIMIT_C=ot)
     assert (cfg.sv_limit_c, cfg.ot_limit_c) == (exp_sv, exp_ot)
     assert warns
+
+
+def test_temp_limits_at_ladder_max_no_warning():
+    """래더 H0 클램프(D113 9000·D126 9500)와 같은 상한은 경고 없이 그대로."""
+    cfg, warns = _load(HEATER_SV_LIMIT_C=900, HEATER_OT_LIMIT_C=950, HEATER_MAX_TEMP=900)
+    assert warns == []
+    assert (cfg.sv_limit_c, cfg.ot_limit_c, cfg.max_temp) == (900.0, 950.0, 900.0)
 
 
 def test_mv_rules():
