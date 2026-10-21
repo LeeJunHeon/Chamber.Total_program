@@ -69,6 +69,9 @@ PUSH_FAIL_LOG_INTERVAL_S = 60.0 # 설정 쓰기 실패 로그 간격
 RST_STUCK_POLLS = 2             # RST 코일이 이 횟수 연속 1 이면 0 으로 되돌린다
 
 OWNER_LABEL = {"manual": "수동", "process": "공정", "external": "외부"}
+# 종료 카드 ✅ 사유(이 밖의 사유·이상 사건·PLC 이상 플래그가 있으면 ❌)
+NORMAL_END_REASONS = frozenset({"정지(패널)", "공정 종료", "공정 중단 — 사용자 STOP", "공정 중단 — 원격 STOP"})
+EVENTS_SHOWN_MAX = 4          # 특이사항에 보이는 이상 사건 수(넘으면 " 외 N건")
 
 
 def _s16(v: int) -> int:
@@ -112,7 +115,9 @@ class HeaterService:
         self._run_prev = False
         self._run_since = 0.0
         self._end_reason: Optional[str] = None
-        self._episode_notes: List[str] = []
+        self._episode_notes: List[str] = []   # 이번 운전(RUN 상승~하강)의 이상 사건 — 같은 라벨은 한 번
+        self._proc_ctx: Optional[str] = None  # 공정이 넣은 카드 맥락(공정 "이름" (현재/전체))
+        self._run_ctx: Optional[str] = None   # 이번 운전의 카드 맥락(시작 때 정하고 공정이 바꾸면 따라감)
         self._fail_since: Optional[float] = None
         self._wd = 0
         self._wd_fail_log_t = -1e9
@@ -183,6 +188,33 @@ class HeaterService:
     def release(self, owner: str) -> None:
         if self.owner == owner:
             self.owner = None
+            if owner == "process":
+                self._proc_ctx = None
+
+    def set_context(self, text: Optional[str]) -> None:
+        """구글챗 카드 부제 맥락(공정 "이름" (현재/전체)). None 이면 수동/외부 기본값으로 되돌린다.
+        운전 중에 바뀌면(연속 실행에서 다음 공정이 넘겨받음) 이번 운전의 맥락도 따라간다."""
+        self._proc_ctx = str(text) if text else None
+        if self._proc_ctx and self._run_prev:
+            self._run_ctx = self._proc_ctx
+
+    def context(self) -> str:
+        """카드 부제 맥락 — 운전 중이면 이번 운전의 맥락, 아니면 공정 맥락 → 제어 주체(수동/외부)."""
+        if self._run_prev and self._run_ctx:
+            return self._run_ctx
+        if self.owner == "process" and self._proc_ctx:
+            return self._proc_ctx
+        return OWNER_LABEL.get(self.owner or "manual", self.owner or "수동")
+
+    def notify_reached(self, target, pv, took_sec: float, next_step: str = "") -> None:
+        """공정 소유 히터의 승온 대기 통과 카드 1장 — 이상 사건이 없으면 ✅, 있으면 ❌."""
+        took = int(max(0.0, float(took_sec or 0.0)))
+        fields = {"목표": self._fmt(target), "도달 PV": self._fmt(pv), "승온 소요": f"{took // 60}분 {took % 60}초"}
+        if next_step:
+            fields["다음 단계"] = str(next_step)
+        if self._episode_notes:
+            fields["특이사항"] = self._events_text()
+        self._card("도달", self.context(), "FAIL" if self._episode_notes else "SUCCESS", fields)
 
     def is_ready(self) -> Tuple[bool, str]:
         st = self._st
@@ -246,7 +278,6 @@ class HeaterService:
                 return False, f"PLC 쓰기 실패: {e}"
             self.owner = owner
             self._end_reason = None
-            self._episode_notes = []
             self._log(f"운전 ON 요청 — 목표 {target:.1f}°C ({OWNER_LABEL.get(owner, owner)})")
         await self._kick_wd()
         return True, ""
@@ -308,7 +339,8 @@ class HeaterService:
                     self._log(f"⚠ DAC 상한(D118) 쓰기 실패: {e!r}")
             self._mv_requests.clear()
             src = self.hold.last_force_source
-            self._card("유지 모드 강제 진입", f"{why} — DAC 상한 {self.hold.value} 고정({src})", "WARN",
+            self._event("유지 모드 강제 진입")
+            self._card("유지 모드 강제 진입", f"{self.context()} · {why} — DAC 상한 {self.hold.value} 고정({src})", "FAIL",
                        {"PV": self._fmt(st.get("pv")), "MV": str(st.get("mv"))})
             return True, f"DAC 상한 {self.hold.value} 고정({src})"
 
@@ -491,27 +523,27 @@ class HeaterService:
 
     def _on_hold_engaged(self, kind: str) -> None:
         v = self.hold.value
-        self._episode_notes.append(f"유지 진입 DAC 상한 {v}")
+        self._log(f"유지 진입 DAC 상한 {v}")     # 정상 기록 — 특이사항에 넣지 않는다
 
     def _on_hold_give_up(self, why: str) -> None:
         self._give_up_seq += 1
         self._give_up_text = str(why)
-        self._episode_notes.append("유지 모드 포기")
-        self._card("유지 모드 포기", why, "WARN", {"PV": self._fmt(self._st.get("pv"))})
+        self._event("유지 모드 포기")
+        self._card("유지 모드 포기", f"{self.context()} · {why}", "FAIL", {"PV": self._fmt(self._st.get("pv"))})
 
     def _on_saturated(self, info: dict) -> None:
         clamp = info.get("clamp")
-        self._episode_notes.append(f"DAC 포화{'(클램프 ' + str(clamp) + ')' if clamp is not None else ''}")
-        self._card("DAC 포화", f"도달 후 {float(info.get('sec') or 0):.0f}초째 상한({info.get('limit')})에 물림 → D118 {clamp}",
-                   "WARN", {"PV": self._fmt(info.get("pv")), "MV": str(info.get("mv")),
+        self._event(f"DAC 포화{'(클램프 ' + str(clamp) + ')' if clamp is not None else ''}")
+        self._card("DAC 포화", f"{self.context()} · 도달 후 {float(info.get('sec') or 0):.0f}초째 상한({info.get('limit')})에 물림 → D118 {clamp}",
+                   "FAIL", {"PV": self._fmt(info.get("pv")), "MV": str(info.get("mv")),
                             "클램프": "-" if clamp is None else str(clamp)})
 
     def _on_stalled(self, info: dict) -> None:
-        self._episode_notes.append("승온 정체")
+        self._event("승온 정체")
         eta = info.get("eta_min")
         self._card("승온 정체",
-                   f"목표 {float(info.get('target') or 0):.1f}°C · 출력 상한 {info.get('limit')} 에서 상승 "
-                   f"{float(info.get('rate') or 0):.2f}°C/min", "WARN",
+                   f"{self.context()} · 목표 {float(info.get('target') or 0):.1f}°C · 출력 상한 {info.get('limit')} 에서 상승 "
+                   f"{float(info.get('rate') or 0):.2f}°C/min", "FAIL",
                    {"PV": self._fmt(info.get("pv")), "MV": f"{info.get('mv'):.0f}/{info.get('limit')}",
                     "현재 속도로": "도달 안 됨" if eta is None else f"약 {float(eta):.0f}분",
                     "확인": "HEATER_MV_LIMIT(출력 상한)"})
@@ -519,6 +551,35 @@ class HeaterService:
     @staticmethod
     def _fmt(v) -> str:
         return "--.-" if v is None else f"{float(v):.1f}°C"
+
+    @staticmethod
+    def _fault_label(st: dict) -> str:
+        """카드 사유·특이사항 라벨 — 종료 카드와 이상 카드가 같은 문구를 쓴다."""
+        if st.get("ot"):
+            return "이상 — 과온"
+        if st.get("tc_err"):
+            return "이상 — 온도센서"
+        if st.get("wd_err"):
+            return "이상 — 통신 워치독"
+        return "이상"
+
+    def _event(self, label: str) -> None:
+        """이번 운전의 이상 사건(같은 라벨은 한 번) — 종료·도달 카드의 특이사항."""
+        if label and label not in self._episode_notes:
+            self._episode_notes.append(label)
+
+    def _events_text(self) -> str:
+        ev = list(self._episode_notes)
+        if not ev:
+            return "없음"
+        if len(ev) > EVENTS_SHOWN_MAX:
+            return " · ".join(ev[:EVENTS_SHOWN_MAX]) + f" 외 {len(ev) - EVENTS_SHOWN_MAX}건"
+        return " · ".join(ev)
+
+    @staticmethod
+    def _fmt_duration(sec: float) -> str:
+        m = int(max(0.0, float(sec)) // 60)
+        return f"{m // 60}시간 {m % 60}분" if m >= 60 else f"{m}분"
 
     @staticmethod
     def _fault_text(st: dict) -> str:
@@ -766,6 +827,8 @@ class HeaterService:
         txt = (f"이전 세션 히터 RUN 잔존 → OFF, SV {sv_old:.1f}°C → "
                f"{('현재 온도 %.1f°C' % pv) if pv is not None else 'PV 무효(SV 유지)'}")
         self._log(txt)
+        if self._run_prev:
+            self._event("잔존 RUN 정리")
         self._card("잔존 RUN 정리", txt, "WARN", {"PV": self._fmt(pv), "이전 SV": f"{sv_old:.1f}°C"})
         return True
 
@@ -790,6 +853,8 @@ class HeaterService:
             why = (f"PLC 재기동/메모리 초기화 감지 — 세션 마커 D{mreg} 기대 0x{self._marker:04X}, "
                    f"읽은 값 0x{int(v or 0):04X} ({MARKER_MISMATCH_N}회 연속)")
             self._log(f"⚠ {why} → 설정 재적용, 램프 정지")
+            if self._run_prev:
+                self._event("PLC 재기동")
             self._card("PLC 재기동 감지", why, "WARN", {"PV": self._fmt(st.get("pv"))})
             self._marker = None
             self._marker_mismatch = 0
@@ -903,6 +968,8 @@ class HeaterService:
             self._verify_warned = True
             txt = "설정값이 되읽기와 다릅니다 (래더가 강제 중일 수 있음): " + ", ".join(mism)
             self._log("⚠ " + txt)
+            if self._run_prev:
+                self._event("설정 되읽기 불일치")
             self._card("설정 되읽기 불일치", txt, "WARN")
         pmism = []
         for key, want in (v.get("pid") or {}).items():
@@ -913,6 +980,8 @@ class HeaterService:
             self._pid_warned = True
             txt = "PID 값이 적용되지 않음(범위·워드 순서 확인, 래더 기본값 사용 중): " + ", ".join(pmism)
             self._log("⚠ " + txt)
+            if self._run_prev:
+                self._event("설정 되읽기 불일치")
             self._card("설정 되읽기 불일치", txt, "WARN")
 
     def _check_program(self, st: dict) -> None:
@@ -940,10 +1009,15 @@ class HeaterService:
                     self._log(f"⚠ 이상 시 RUN OFF 쓰기 실패 → 보류: {e!r}")
             if self.profiler.is_active():
                 await self.profiler.stop(restore_rate=False)
-            self._end_reason = why
+            label = self._fault_label(st)
+            ctx = self.context()
+            if self._run_prev or st["run"]:
+                self._event(label)
+            self._end_reason = label
             self.owner = None
             self._log(f"⚠ 히터 이상: {why}")
-            self._card("이상", why, "FAIL", {"PV": self._fmt(st.get("pv")), "PID err": str(st.get("pid_err"))})
+            self._card("이상", f"{ctx} · {label}", "FAIL",
+                       {"상세": why, "PV": self._fmt(st.get("pv")), "PID err": str(st.get("pid_err"))})
         elif (not st["fault"]) and self._fault_prev:
             self._log("히터 이상 해제됨 (정상 복귀)")
             self._fault_off_sent = False
@@ -976,10 +1050,10 @@ class HeaterService:
             grace = self._run_since > 0.0 and (now - self._run_since) >= OUT_DEAD_GRACE_SEC
             if self._out_dead_cnt >= OUT_DEAD_COUNT and grace and not self._out_dead_notified:
                 self._out_dead_notified = True
-                self._episode_notes.append("출력 죽음")
+                self._event("출력 죽음")
                 txt = f"운전 중인데 DAC 출력이 최소치 미만입니다 (MV {st['mv']} < {self.cfg.mv_min}, PID 에러 D117={st['pid_err']})"
                 self._log("⚠ " + txt)
-                self._card("출력 죽음", txt, "FAIL", {"PV": self._fmt(st.get("pv"))})
+                self._card("출력 죽음", f"{self.context()} · {txt}", "FAIL", {"PV": self._fmt(st.get("pv"))})
         else:
             self._out_dead_cnt = 0
             self._out_dead_notified = False
@@ -999,8 +1073,14 @@ class HeaterService:
                f" · DAC상한 {st.get('mv_limit')} · Kp/Ti 적용 {self._num(st.get('kp_act'))}/{self._num(st.get('ti_act'))}"
                f" · 유지 모드 {c.hold_mode} · CSV {path if path else '없음'}")
         self._log(txt)
-        self._card("시작", f"{OWNER_LABEL.get(self.owner, self.owner)} · 목표 {tgt_txt}", "INFO",
-                   {"PV": self._fmt(st.get("pv")), "램프": ramp_txt, "유지 모드": c.hold_mode})
+        # 이번 운전의 맥락·이상 사건을 새로 시작한다
+        self._episode_notes = []
+        self._run_ctx = (self._proc_ctx if (self.owner == "process" and self._proc_ctx)
+                         else OWNER_LABEL.get(self.owner, self.owner))
+        fields = {"목표": self._fmt(self.final_target()), "램프": ramp_txt, "현재 PV": self._fmt(st.get("pv"))}
+        if c.hold_mode == "dac":
+            fields["유지 모드"] = "dac"
+        self._card("시작", self._run_ctx, "INFO", fields)
 
     @staticmethod
     def _num(v) -> str:
@@ -1024,27 +1104,33 @@ class HeaterService:
             except Exception as e:
                 self._log(f"⚠ 래더 램프 속도 원복 실패: {e!r}")
         dur = (now - self._run_since) if self._run_since > 0 else 0.0
-        level = "FAIL" if st.get("fault") else "INFO"
-        if self._end_reason:
+        plc_bad = any(st.get(k) for k in ("fault", "ot", "tc_err", "wd_err"))
+        if plc_bad:
+            reason = self._fault_label(st)
+        elif self._end_reason:
             reason = self._end_reason
         elif self._marker_mismatch > 0:
             reason = "PLC 재기동 의심(세션 마커 불일치)"
         elif not st.get("itl") and not st.get("fault"):
             # 래더 H9: 운전 중 인터락(ITL)이 풀리면 PLC 가 RUN 을 리셋한다 — 인터락이 돌아와도 저절로 다시 켜지지 않는다
             reason = f"인터락 해제({itl_missing_text(st)}) — PLC 가 RUN 을 끔"
-            level = "WARN"
         else:
             # 인터락이 폴링 사이에 잠깐 풀렸다 돌아와도 RUN 은 꺼진 채로 남는다(H9) — 그 경우도 여기로 온다
             reason = "외부 OFF 또는 순간 인터락 해제(이 프로그램이 끄지 않음)"
-        notes = ", ".join(self._episode_notes) or "-"
-        owner = OWNER_LABEL.get(self.owner, self.owner or "-")
+        if reason not in NORMAL_END_REASONS:
+            self._event(reason)              # 비정상 종료 사유는 특이사항에도 같은 라벨로
+        ok = (not plc_bad) and (not self._episode_notes) and reason in NORMAL_END_REASONS
+        notes = self._events_text()
+        ctx = self._run_ctx or OWNER_LABEL.get(self.owner, self.owner or "-")
         self._log(f"운전 종료 — 사유 {reason} · 마지막 PV {self._fmt(st.get('pv'))} · 운전 {dur / 60:.1f}분 · 특이사항 {notes}")
-        self._card("종료", f"{owner} · {reason}", level,
-                   {"마지막 PV": self._fmt(st.get("pv")), "운전 시간": f"{dur / 60:.1f}분", "사유": reason,
+        self._card("종료", f"{ctx} · {reason}", "SUCCESS" if ok else "FAIL",
+                   {"마지막 PV": self._fmt(st.get("pv")), "운전 시간": self._fmt_duration(dur), "사유": reason,
                     "특이사항": notes})
         self.owner = None
         self._end_reason = None
         self._episode_notes = []
+        self._run_ctx = None
+        self._proc_ctx = None
         self._run_since = 0.0
         self.hold.set_armable(True)
         self.sat.set_clamp_enabled(True)

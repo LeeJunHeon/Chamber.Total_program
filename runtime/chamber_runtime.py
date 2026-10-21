@@ -1453,6 +1453,7 @@ class ChamberRuntime:
                 r = float(rate) if rate else float(svc.cfg.ramp_rate)
                 running = bool(svc.status().get("run"))
                 svc.take_over("process")
+                svc.set_context(self._heater_process_context())
                 try:
                     await svc.set_hold_armable(False, "공정이 작업 조건에서 유지값을 다시 잰다")
                     if running:
@@ -4648,6 +4649,7 @@ class ChamberRuntime:
            "정지 처리의 주체"만 Runner로 모으는 구조 변경이다.
         """
         self.append_log("MAIN", f"[Runner] STOP 요청(user={user_initiated}) state={getattr(self, '_runner_state', '')}")
+        self._heater_stop_user = bool(user_initiated)   # 히터 종료 카드 사유(사용자/원격 STOP)
 
         # 리스트 자동 진행은 여기서 끊는다(완료/실패/STOP 후 다음 공정으로 넘어가지 않게)
         self._runner_queue_mode = False
@@ -4848,7 +4850,7 @@ class ChamberRuntime:
 
             # 0) CH2 히터: 다음 공정도 히터를 쓰면 유지, 아니면 끈다(실패·정지·마지막 행 포함)
             try:
-                await self._heater_after_row(ok=bool(ok), stopped=stopped)
+                await self._heater_after_row(ok=bool(ok), stopped=stopped, detail=detail)
             except asyncio.CancelledError:
                 raise
             except Exception as e:
@@ -6465,6 +6467,8 @@ class ChamberRuntime:
             ok, msg, code = r
             if ok:
                 self.append_log("HEATER", msg)
+                if kind == "wait":
+                    self._heater_reached_card(w, st)
                 (pc.on_heater_ready if kind == "wait" else pc.on_heater_hold_ok)()
                 return
             if kind == "hold" and code == "E833":
@@ -6582,7 +6586,48 @@ class ChamberRuntime:
             return str(row.get("use_heater", "") or "").strip().upper() in self._TF_TRUE_TOKENS
         return False
 
-    async def _heater_after_row(self, *, ok: bool, stopped: bool) -> None:
+    def _heater_process_context(self) -> str:
+        """히터 카드 부제 맥락 — 공정 "이름", 연속 실행이면 뒤에 " (현재/전체)"."""
+        params = getattr(self.process_controller, "current_params", None) or {}
+        name = str(params.get("process_note") or params.get("Process_name") or "").strip()
+        ctx = f'공정 "{name}"'
+        total = len(getattr(self, "process_queue", []) or [])
+        if total > 1:
+            ctx += f" ({int(getattr(self, 'current_process_index', -1)) + 1}/{total})"
+        return ctx
+
+    def _heater_reached_card(self, w, st: dict) -> None:
+        """공정 소유 히터의 승온 대기 통과 → 히터 도달 카드 1장(수동 운전은 이 경로가 없다)."""
+        svc = self._heater
+        try:
+            if svc is None or svc.owner != "process":
+                return
+            nxt = ""
+            f = getattr(self.process_controller, "next_step_message", None)
+            if callable(f):
+                with contextlib.suppress(Exception):
+                    nxt = str(f() or "")
+            took = float(svc.clock()) - float(getattr(w, "t0", svc.clock()))
+            svc.notify_reached(getattr(w, "target", svc.final_target()), st.get("pv"), took, nxt)
+        except Exception as e:
+            self.append_log("HEATER", f"⚠ 히터 도달 카드 실패: {e!r}")
+
+    def _heater_process_end_reason(self, ok: bool, stopped: bool, detail: Optional[dict]) -> str:
+        """공정 소유 히터를 공정이 끌 때의 종료 카드 사유 — 공정 결과(detail) 기준."""
+        d = detail or {}
+        result = str(d.get("result") or ("SUCCESS" if ok else ("STOP" if stopped else "FAIL"))).upper()
+        if result == "SUCCESS":
+            return "공정 종료"
+        if result == "STOP":
+            return "공정 중단 — 사용자 STOP" if getattr(self, "_heater_stop_user", True) else "공정 중단 — 원격 STOP"
+        code = str(d.get("error_code") or "").strip().upper()
+        if code:
+            from errors.error_registry import get_error_title   # 히터 카드 사유에서만 쓴다
+            return f"공정 중단 — 오류 ({code} {get_error_title(code)})"
+        txt = " ".join(str(d.get("error_detail") or "").split())
+        return "공정 중단 — 오류" + (f" ({txt[:40]})" if txt else "")
+
+    async def _heater_after_row(self, *, ok: bool, stopped: bool, detail: Optional[dict] = None) -> None:
         """공정 1행이 끝난 뒤: 다음 공정도 히터를 쓰면 유지, 아니면 끈다."""
         svc = getattr(self, "_heater", None)
         if svc is None or svc.owner != "process":
@@ -6590,14 +6635,14 @@ class ChamberRuntime:
         if getattr(self, "_runner_queue_mode", False) and ok and not stopped and self._next_queue_row_uses_heater():
             self.append_log("HEATER", "다음 공정도 히터를 씀 → 히터 유지(다음 공정이 목표를 다시 설정)")
             return
-        await self._heater_off_by_process("공정 종료" if ok else ("공정 정지" if stopped else "공정 실패"))
+        await self._heater_off_by_process(self._heater_process_end_reason(ok, stopped, detail))
 
     async def _heater_off_by_process(self, reason: str) -> None:
         svc = getattr(self, "_heater", None)
         if svc is None or svc.owner != "process":
             return
         if svc.status().get("run"):
-            ok, why = await svc.turn_off(f"{reason}(공정)", owner="process")
+            ok, why = await svc.turn_off(reason, owner="process")
             self.append_log("HEATER", f"공정이 히터를 끕니다 — {reason}" + ("" if ok else f" (실패: {why})"))
         else:
             svc.release("process")

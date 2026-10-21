@@ -155,7 +155,7 @@ def test_interlock_loss_stops_run_with_cause(attr, label):
         assert not plc.M[640] and not st["run"] and not st["itl"] and not st[attr]
         assert plc.D[141] == 0 and not plc.M[652]                          # 출력 차단
         ends = _cards(chat, "히터 종료")
-        assert len(ends) == 1 and ends[0][2] == f"수동 · 인터락 해제({label}) — PLC 가 RUN 을 끔" and ends[0][3] == "WARN"
+        assert len(ends) == 1 and ends[0][2] == f"수동 · 인터락 해제({label}) — PLC 가 RUN 을 끔" and ends[0][3] == "FAIL"
         assert _logs(logs, f"운전 종료 — 사유 인터락 해제({label}) — PLC 가 RUN 을 끔")
         assert svc.owner is None
         assert svc.is_ready() == (False, f"인터락 미충족: {label}")
@@ -202,7 +202,7 @@ def test_brief_interlock_drop_between_polls():
         assert not st["run"] and st["itl"]
         ends = _cards(chat, "히터 종료")
         assert len(ends) == 1 and ends[0][2] == "수동 · 외부 OFF 또는 순간 인터락 해제(이 프로그램이 끄지 않음)"
-        assert ends[0][3] == "INFO"
+        assert ends[0][3] == "FAIL"
     asyncio.run(go())
 
 

@@ -2610,6 +2610,13 @@ class ProcessController:
             return 0.0
         return (self._current_step_idx + 1) / len(self.process_sequence)
 
+    def next_step_message(self) -> str:
+        """다음 스텝의 메시지(읽기 전용, 없으면 "") — 히터 도달 카드의 '다음 단계'."""
+        i = self._current_step_idx + 1
+        if 0 <= i < len(self.process_sequence):
+            return str(self.process_sequence[i].message or "")
+        return ""
+
     def get_remaining_steps(self) -> List[ProcessStep]:
         if self._current_step_idx < 0:
             return self.process_sequence.copy()
