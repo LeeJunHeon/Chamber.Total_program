@@ -197,6 +197,40 @@ PLC_COIL_MAP: Dict[str, int] = {
     "GAUGE_2_B_INTERLOCK": 3040,  # M01900
 }
 
+# === P 영역 미러 (읽기 전용) ===
+# XBL-EMTA Modbus 창은 비트 M0000·워드 D0000 기준이라 P 영역은 직접 못 읽는다.
+# PLC UTILITY 프로그램 끝 '미러링' 블록(2026-10-16)이 매 스캔 MOV P0000→M0050 … P0004→M0054 를 해서
+# P000wb 가 M005wb = 코일 (50+w)*16+b 로 읽힌다(M0050~M0054 = 코일 800~879).
+# 래더가 매 스캔 덮어쓰는 영역이므로 쓰기는 거절한다(write_coil). 미러가 없는 PLC 에서는 0 으로 읽힌다.
+# PLC_COIL_MAP 과 따로 둔다 — 코일 로그(기본 키 = PLC_COIL_MAP 전체)의 열·블록 계획이 바뀌지 않게.
+P_MIRROR_WORDS = range(0, 5)          # P0000~P0004
+P_MIRROR_M_BASE_WORD = 50             # → M0050~M0054
+P_MIRROR_COIL_MIN = P_MIRROR_M_BASE_WORD * 16                          # 800
+P_MIRROR_COIL_MAX = (P_MIRROR_M_BASE_WORD + len(P_MIRROR_WORDS)) * 16 - 1   # 879
+
+
+def p_mirror_coil(p_addr: str) -> int:
+    """P 주소 → 미러 코일 번호. 예: "P00003" → 803, "P00030" → 848. 미러 범위(P0000~P0004) 밖이면 KeyError."""
+    s = str(p_addr).strip().upper()
+    if not s.startswith("P") or len(s) < 3:
+        raise KeyError(f"P 주소 형식 아님: {p_addr}")
+    try:
+        word, bit = int(s[1:-1], 10), int(s[-1], 16)
+    except ValueError:
+        raise KeyError(f"P 주소 형식 아님: {p_addr}") from None
+    if word not in P_MIRROR_WORDS:
+        raise KeyError(f"미러 범위(P0000~P0004) 밖: {p_addr}")
+    return (P_MIRROR_M_BASE_WORD + word) * 16 + bit
+
+
+PLC_P_MIRROR_MAP: Dict[str, int] = {
+    "L_GAUGE_A":    p_mirror_coil("P00003"),   # 803 (M00503)
+    "L_ATM_SENSOR": p_mirror_coil("P00009"),   # 809 (M00509)
+    "L_R_P_OUT":    p_mirror_coil("P00030"),   # 848 (M00530)
+    "L_R_V_OUT":    p_mirror_coil("P00031"),   # 849 (M00531)
+    "L_VENT_OUT":   p_mirror_coil("P00034"),   # 852 (M00534)
+}
+
 # === D (Holding Registers) — FC3/FC6 ===
 PLC_REG_MAP: Dict[str, int] = {
     "DCV_READ_0": 0,
@@ -1289,6 +1323,10 @@ class AsyncPLC:
 
     async def write_coil(self, addr: int, state: bool) -> None:
         op = "write_coil"
+        if P_MIRROR_COIL_MIN <= int(addr) <= P_MIRROR_COIL_MAX:
+            # P 영역 미러(M0050~M0054) — 래더가 매 스캔 덮어쓰므로 쓰지 않는다
+            raise PLCError("E403", f"P 미러 코일({addr}, M0050~M0054)은 읽기 전용 — 쓰기 거절",
+                           op=op, addr=int(addr))
         async with self._io_lock(op, addr=addr):
             try:
                 # 같은 값의 재기록이므로 재시도는 안전하다(기존도 재접속 후 재시도했다)
@@ -1556,6 +1594,8 @@ class AsyncPLC:
             return PLC_COIL_MAP[key]
         if key in PLC_REG_MAP:
             return PLC_REG_MAP[key]
+        if key in PLC_P_MIRROR_MAP:   # P 영역 미러(읽기 전용)
+            return PLC_P_MIRROR_MAP[key]
         raise KeyError(f"알 수 없는 주소/이름: {name_or_addr}")
 
     # ---------- 공통 고수준 ----------
@@ -2282,6 +2322,6 @@ class AsyncPLC:
     # =============== chamber_runtime.py 호환용 함수 ===============
 
 __all__ = [
-    "PLC_COIL_MAP", "PLC_REG_MAP", "PLC_TIMER_MAP",
+    "PLC_COIL_MAP", "PLC_REG_MAP", "PLC_TIMER_MAP", "PLC_P_MIRROR_MAP", "p_mirror_coil",
     "PLCConfig", "AsyncPLC", "PLCError",
 ]

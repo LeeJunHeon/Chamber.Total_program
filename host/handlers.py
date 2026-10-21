@@ -1139,24 +1139,24 @@ class HostHandlers:
         - 폴링 루프에서는 호출되지 않으므로 race 윈도우에 영향 없음.
         - 값은 셋 중 하나다:
             bool       : 정상적으로 읽은 값
-            "미매핑"   : 주소맵에 없어 '영원히' 읽을 수 없는 이름 (아래 참조)
+            "미매핑"   : 주소맵에 없어 읽을 수 없는 이름 (read 를 시도하지 않는다)
             "읽기실패" : 주소는 있으나 이번 read 가 예외로 실패
 
-        ⚠ 아래 P 영역 5개(L_GAUGE_A / L_R_P_OUT / L_R_V_OUT / L_VENT_OUT /
-          L_ATM_SENSOR)는 현재 Modbus 로 접근할 수 없다.
-          이 PLC 의 Modbus 서버는 비트 base=M0000, 워드 base=D0000 으로 설정되어
-          있어 모드버스 창문이 M 영역(비트)과 D 영역(워드)에만 열려 있다.
-          P 영역은 그 창문 밖이라 주소맵에 항목을 추가해도 읽히지 않는다.
-          (래더에서 이 P 비트들을 미사용 M 비트로 미러링하는 작업이 별도 예정)
-          → 이 이름들은 read 를 시도하지 않고 "미매핑" 으로 채운다.
+        ⓘ 아래 P 영역 5개(L_GAUGE_A / L_R_P_OUT / L_R_V_OUT / L_VENT_OUT /
+          L_ATM_SENSOR)는 PLC 미러로 읽는다.
+          이 PLC 의 Modbus 서버는 비트 base=M0000, 워드 base=D0000 이라 P 영역을
+          직접 못 읽지만, 2026-10-16 래더(UTILITY '미러링' 블록)가 매 스캔
+          P000w → M005w 를 복사하므로 P000wb 를 코일 (50+w)*16+b 로 읽는다
+          (device/plc.py PLC_P_MIRROR_MAP, 예: P00030 → M00530 → 코일 848).
+          미러가 없는 PLC 에서는 이 5개가 0(False)으로 읽힌다.
 
         수집 대상 (PLC 변수표 기준):
-        - L_GAUGE_A           (P00003) : 로드락 진공게이지 setpoint A raw 신호
+        - L_GAUGE_A           (P00003 → 코일 803) : 로드락 진공게이지 setpoint A raw 신호
         - L_GAUGE_A_INTERLOCK (M01700) : 30 스캔 안정 후 SET. LP_STEP1 SET 조건
-        - L_R_P_OUT           (P00030) : 러핑펌프 실제 출력 코일
-        - L_R_V_OUT           (P00031) : 러핑밸브 실제 출력 코일
-        - L_VENT_OUT          (P00034) : 벤트밸브 출력 (배기-벤트 충돌 진단용)
-        - L_ATM_SENSOR        (P00009) : 로드락 ATM 센서
+        - L_R_P_OUT           (P00030 → 코일 848) : 러핑펌프 실제 출력 코일
+        - L_R_V_OUT           (P00031 → 코일 849) : 러핑밸브 실제 출력 코일
+        - L_VENT_OUT          (P00034 → 코일 852) : 벤트밸브 출력 (배기-벤트 충돌 진단용)
+        - L_ATM_SENSOR        (P00009 → 코일 809) : 로드락 ATM 센서
         - L_R_P_OFF_TIMER     (M00003) : 에어압 알람 → 러핑펌프 출력 차단(인터락 하강 원인 구분용)
         - L_R_V_인터락        (M00031) : 러핑밸브 인터락 현재값
         - G_V_1_OPEN_LAMP     (M00228) : CH1 게이트 열림 램프
@@ -1179,7 +1179,7 @@ class HostHandlers:
             "G_V_2_CLOSE_LAMP",
         ]
         def _is_mapped(nm: str) -> bool:
-            """PLC 이름 해석 경로(_addr: 별칭 → COIL_MAP → REG_MAP)를 그대로 재사용한다."""
+            """PLC 이름 해석 경로(_addr: 별칭 → COIL_MAP → REG_MAP → P 미러)를 그대로 재사용한다."""
             try:
                 self.ctx.plc._addr(nm)
                 return True
