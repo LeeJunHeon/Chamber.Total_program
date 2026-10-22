@@ -120,12 +120,10 @@ def _post_anomaly_webhook(msg: str) -> None:
 # ── OES Anomaly Detection END ──────────────────────────────
 
 
-# 저장 경로 (Google Drive 동기화 폴더 → NAS 자동 반영)
-_NAS_OES_ROOT = Path(r"G:\공유 드라이브\VanaM_Sputter\OES")
-_NAS_CH_DIR = {
-    1: _NAS_OES_ROOT / "CH1",
-    2: _NAS_OES_ROOT / "CH2",
-}
+# 저장 경로: 측정 CSV 는 로컬(out_dir — 메인이 넘김, 기본 C:\VanaM_Logs\OES\CH{n})에만 남긴다.
+#   예전에는 측정 뒤 G:(구글 공유 드라이브 → NAS 자동 반영)로 robocopy 한 뒤 로컬을 지웠는데,
+#   공유 드라이브 항목 한도(500,000)에 걸리면 G: 새 파일이 조용히 사라져(2026-09) 그만둔다.
+#   NAS 복사는 메인 프로그램 쪽 log_sync 워커가 LOG_SYNC_PAIRS(C:\VanaM_Logs\OES → \\VanaM_NAS\VanaM_Sputter\OES)로 한다.
 
 
 def _mutex_timeout_ms() -> int:
@@ -133,90 +131,10 @@ def _mutex_timeout_ms() -> int:
     return int(os.environ.get("OES_MUTEX_TIMEOUT_MS", "5000"))
 
 
-def _nas_dir_for_ch(ch: int) -> Path:
-    try:
-        return _NAS_CH_DIR[int(ch)]
-    except Exception:
-        raise ValueError(f"Invalid chamber: {ch} (expected 1 or 2)")
-
-
 async def _copy_csv_to_nas(local_csv: Path, ch: int, *, timeout_s: float = 120.0):
-    """
-    로컬 CSV -> NAS(CH별 고정 폴더)로 복사(검증 포함)
-    return: (nas_ok:bool, nas_csv:Path|None, nas_error:str|None, local_deleted:bool)
-    """
-    try:
-        dest_dir = _nas_dir_for_ch(int(ch))
-    except Exception as e:
-        return False, None, f"nas_dir error: {e}", False
-
-    try:
-        dest_dir.mkdir(parents=True, exist_ok=True)
-    except Exception as e:
-        return False, None, f"nas mkdir failed: {e}", False
-
-    dest_csv = dest_dir / local_csv.name
-
-    # Windows: robocopy가 네트워크에서 가장 안정적
-    if os.name == "nt":
-        CREATE_NO_WINDOW = 0x08000000
-        cmd = [
-            "robocopy",
-            str(local_csv.parent),
-            str(dest_dir),
-            local_csv.name,
-            "/R:2", "/W:1",
-            "/NFL", "/NDL", "/NJH", "/NJS", "/NP",
-        ]
-        try:
-            p = await asyncio.create_subprocess_exec(
-                *cmd,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-                creationflags=CREATE_NO_WINDOW,
-            )
-            try:
-                out_b, err_b = await asyncio.wait_for(p.communicate(), timeout=timeout_s)
-            except asyncio.TimeoutError:
-                with contextlib.suppress(Exception):
-                    p.kill()
-                return False, None, "robocopy timeout", False
-
-            rc = p.returncode if p.returncode is not None else 999
-            # robocopy: 0~7 = 성공 범주, 8 이상 = 실패
-            if rc >= 8:
-                out = (out_b or b"").decode(errors="ignore")[-2000:]
-                err = (err_b or b"").decode(errors="ignore")[-2000:]
-                return False, None, f"robocopy failed rc={rc} out={out} err={err}", False
-        except Exception as e:
-            return False, None, f"robocopy exception: {e}", False
-
-    else:
-        # 비-Windows: shutil.copy2 사용(필요시)
-        try:
-            import shutil
-            shutil.copy2(local_csv, dest_csv)
-        except Exception as e:
-            return False, None, f"copy2 failed: {e}", False
-
-    # 검증: 파일 존재 + 크기 동일
-    try:
-        if not dest_csv.exists():
-            return False, None, f"nas file not found: {dest_csv}", False
-        if dest_csv.stat().st_size != local_csv.stat().st_size:
-            return False, None, "size mismatch after copy", False
-    except Exception as e:
-        return False, None, f"verify failed: {e}", False
-
-    # 로컬 삭제 시도(※ oes.py tail이 열고 있으면 Windows에서 실패할 수 있음)
-    local_deleted = False
-    try:
-        local_csv.unlink()
-        local_deleted = True
-    except Exception:
-        local_deleted = False
-
-    return True, dest_csv, None, local_deleted
+    """NAS(G:) 복사는 하지 않는다 — 로컬 CSV 를 그대로 둔다. 반환 형식만 예전과 같다.
+    return: (nas_ok=False, nas_csv=None, nas_error=None, local_deleted=False)"""
+    return False, None, None, False
 
 
 # ✅ 워커는 메인/프로젝트 설정에 의존하지 않도록 고정값 사용
@@ -1192,7 +1110,8 @@ class OESAsync:
 # ====== 워커 측정 로직(append+flush CSV) ======
 
 def _default_out_dir(ch: int) -> Path:
-    base = Path(os.environ.get("OES_LOCAL_BASE", str(Path.home() / "Desktop" / "OES")))
+    # 메인이 out_dir/out_csv 를 넘기지 않았을 때만 쓴다. 메인 기본값(OES_LOCAL_DIR)과 같은 곳
+    base = Path(os.environ.get("OES_LOCAL_BASE", r"C:\VanaM_Logs\OES"))
     return base / f"CH{int(ch)}"
 
 

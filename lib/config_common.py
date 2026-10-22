@@ -246,6 +246,7 @@ DC_OFFSET_ADC_TO_AMP = -0.003118
 # ======================================================================
 OES_AVG_COUNT = 3
 OES_PLOT_MIN_INTERVAL_S = 0.5   # OES 그래프 최소 갱신 간격(초). 이내 연속 수신은 건너뛴다(루프 부하 방지)
+OES_LOCAL_DIR = r"C:\VanaM_Logs\OES"   # OES 측정 CSV 저장 폴더(아래 CH1·CH2). NAS 복사는 LOG_SYNC_PAIRS 의 OES 쌍(log_sync)
 
 
 # ======================================================================
@@ -850,6 +851,7 @@ RF_READER_UPLOAD_ALERT_DAYS = 2       # 미전송 CSV 가 이 일수 이상 밀�
 LOG_SYNC_ENABLED = True
 LOG_SYNC_PAIRS = [                                  # [src(로컬), dst(NAS)] — 단방향 증분 복사, dst 삭제 없음
     [r"C:\VanaM_Logs\CH1&2", r"\\VanaM_NAS\VanaM_Sputter\Sputter\Logs\CH1&2"],
+    [r"C:\VanaM_Logs\OES", r"\\VanaM_NAS\VanaM_Sputter\OES"],     # OES 측정 CSV(OES_LOCAL_DIR) — 예전 G: 복사 대상과 같은 NAS 폴더
 ]
 LOG_SYNC_STATE_DIR = r"C:\VanaM_Logs\_sync_state"   # state.json / run.log
 LOG_SYNC_ALERT_AFTER_FAILS = 6                       # 연속 실패 이 횟수 이상이면 알림(10분 주기 기준 1시간)

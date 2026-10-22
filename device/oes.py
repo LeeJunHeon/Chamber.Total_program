@@ -33,9 +33,20 @@ import numpy as np
 from lib import config_common   # ✅ DEC-033: 호출 시점 getattr 로 읽는다
 
 # ====== OES 로컬 저장 경로 ======
-# 1) 환경변수 OES_LOCAL_BASE가 있으면 그 값을 사용
-# 2) 없으면 "현재 로그인 사용자" Desktop\OES 를 기본값으로 사용
-_LOCAL_BASE = Path(os.environ.get("OES_LOCAL_BASE", str(Path.home() / "Desktop" / "OES")))
+# 1) 환경변수 OES_LOCAL_BASE 가 있으면 그 값(개발·시험용)
+# 2) 없으면 settings.json common 의 OES_LOCAL_DIR(기본 C:\VanaM_Logs\OES) — OESAsync 를 만들 때 읽는다(DEC-033)
+#    측정 CSV 는 여기(CH1·CH2 하위 폴더)에 남는다. 예전에는 로그인 사용자 Desktop\OES 에 쓰고 워커가 G:(구글 공유
+#    드라이브)로 복사한 뒤 로컬을 지웠는데, 공유 드라이브 항목 한도로 G: 새 파일이 조용히 사라질 수 있어 그만뒀다.
+#    NAS 복사는 log_sync 워커가 LOG_SYNC_PAIRS(C:\VanaM_Logs\OES → \\VanaM_NAS\VanaM_Sputter\OES)로 한다.
+_DEFAULT_LOCAL_BASE = r"C:\VanaM_Logs\OES"
+
+
+def _local_base() -> Path:
+    env = (os.environ.get("OES_LOCAL_BASE") or "").strip()
+    if env:
+        return Path(env)
+    v = str(getattr(config_common, "OES_LOCAL_DIR", "") or "").strip()
+    return Path(v or _DEFAULT_LOCAL_BASE)
 # ====================================
 
 EventKind = Literal["status", "data", "finished"]
@@ -157,11 +168,11 @@ class OESAsync:
         self._avg_count = int(max(1, avg_count))
         self._debug = bool(debug_print)
 
-        self._local_dir = _LOCAL_BASE / f"CH{self._ch}"
+        self._local_dir = _local_base() / f"CH{self._ch}"
         try:
             self._local_dir.mkdir(parents=True, exist_ok=True)
         except PermissionError:
-            # Desktop 접근/권한 문제 시 LocalAppData로 폴백 (프로그램이 죽지 않게)
+            # 저장 폴더 접근/권한 문제 시 LocalAppData로 폴백 (프로그램이 죽지 않게)
             base = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "VanaM" / "OES"
             self._local_dir = base / f"CH{self._ch}"
             self._local_dir.mkdir(parents=True, exist_ok=True)
@@ -717,7 +728,8 @@ class OESAsync:
                 final_path = Path(str(nas_csv))
                 msg = "OES 측정 완료(NAS 저장)"
             else:
-                msg = f"OES 측정 완료(로컬 저장, NAS 실패: {nas_error})" if nas_error else "OES 측정 완료(로컬 저장, NAS 미확인)"
+                # 지금 워커는 NAS 복사를 하지 않는다(로컬 유지, NAS 는 log_sync) — nas_error 는 예전 워커가 복사에 실패했을 때만
+                msg = f"OES 측정 완료(로컬 저장, NAS 실패: {nas_error})" if nas_error else "OES 측정 완료(로컬 저장)"
 
             # tail 종료 후 로컬삭제 보조(워커가 못 지운 경우)
             await self._stop_tail()
@@ -1036,11 +1048,11 @@ class OESAsync:
                 final_path = Path(nas_csv)
                 msg = "OES 측정 완료(NAS 저장)"
             elif ok and (not nas_ok):
-                # 워커가 NAS 복사를 시도했는데 실패한 경우(또는 워커가 구버전이라 필드 없음)
+                # 지금 워커는 NAS 복사를 하지 않는다(로컬 유지, NAS 는 log_sync) — nas_error 는 예전 워커가 복사에 실패했을 때만
                 if nas_error:
                     msg = f"OES 측정 완료(로컬 저장, NAS 실패: {nas_error})"
                 else:
-                    msg = "OES 측정 완료(로컬 저장, NAS 미확인)"
+                    msg = "OES 측정 완료(로컬 저장)"
 
             # 워커가 로컬 삭제를 못했으면(메인이 열고 있었을 가능성) tail 종료 후 여기서 삭제 시도
             if ok and nas_ok and out_csv.exists() and (not local_deleted):
