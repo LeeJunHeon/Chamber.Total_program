@@ -21,6 +21,7 @@ import subprocess
 import threading
 import time
 import os
+import weakref
 from datetime import datetime
 from pathlib import Path
 from dataclasses import dataclass
@@ -361,6 +362,10 @@ class PLCConfig:
 # 단일 클래스: AsyncPLC (저수준+고수준)
 # ======================================================
 
+def _noop_log(*_a, **_k) -> None:
+    return None
+
+
 class AsyncPLC:
     """
     Modbus 저수준 + 고수준 제어를 하나로 제공.
@@ -439,7 +444,7 @@ class AsyncPLC:
         # "끊김" 알림을 이미 보냈는지 (중복 방지)
         self._disconnect_alerted: bool = False
 
-        self.log = logger or (lambda *a, **k: None)
+        self.log = logger or _noop_log   # 기본 로거(_log_base). 작업별 경로는 log_route()
 
         # 혼합 대/소문자/논리명 별칭
         self._ALIASES: Dict[str, str] = {}
@@ -456,6 +461,57 @@ class AsyncPLC:
             "G2": "SHUTTER_2_SW",
             "G3": "SHUTTER_3_SW",
         }
+
+    # ============== 로그 경로 (작업별) ==============
+    # plc.log 는 여러 작업(CH1/CH2 공정·히터·프리스퍼터·코일 로거·호스트 요청)이 함께 쓰는 공유 객체의 속성이다.
+    # 예전에는 호스트 요청이 plc.log 를 통째로 바꿔 끼웠다가 되돌렸는데, 그 사이 다른 작업의 PLC 로그도 따라가고,
+    # 요청 두 개가 겹치면 바뀐 값이 원래 값으로 기억돼 재시작 전까지 굳었다([EL-072]).
+    # 그래서 기본 로거(_log_base)는 그대로 두고, 특정 asyncio 작업에서 나오는 로그만 다른 곳으로 보내는 경로를 둔다.
+    # - log_route(fn) 안에서 '그 작업'이 남기는 로그만 fn 으로 간다.
+    # - 다른 작업, 그 안에서 새로 만든 자식 작업, 스레드(진단 스레드·to_thread 안)는 기본 로거를 쓴다.
+    @property
+    def log(self):
+        routes = self.__dict__.get("_log_routes")
+        if routes:
+            try:
+                task = asyncio.current_task()
+            except RuntimeError:          # 이벤트 루프가 없는 스레드
+                task = None
+            if task is not None:
+                fn = routes.get(task)
+                if fn is not None:
+                    return fn
+        return self.__dict__.get("_log_base") or _noop_log
+
+    @log.setter
+    def log(self, fn) -> None:
+        # 기본 로거 교체(생성자 등). 작업별 경로에는 영향 없음.
+        self._log_base = fn or _noop_log
+
+    @contextlib.contextmanager
+    def log_route(self, fn):
+        """현재 asyncio 작업에서 나오는 PLC 로그만 fn 으로 보낸다(블록을 나가면 원래대로).
+        이벤트 루프 밖이거나 fn 이 없으면 아무것도 바꾸지 않는다."""
+        try:
+            task = asyncio.current_task()
+        except RuntimeError:
+            task = None
+        if task is None or fn is None:
+            yield
+            return
+        routes = self.__dict__.get("_log_routes")
+        if routes is None:
+            routes = weakref.WeakKeyDictionary()
+            self._log_routes = routes
+        prev = routes.get(task)
+        routes[task] = fn
+        try:
+            yield
+        finally:
+            if prev is None:
+                routes.pop(task, None)
+            else:
+                routes[task] = prev
 
     # ============== UI로 파라미터 수정 ==============
     def _apply_cfg_from_config(self) -> None:

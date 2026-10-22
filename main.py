@@ -85,6 +85,7 @@ from util.app_logging import (
     uninstall_qt_message_logging,
     install_signal_logging,
     get_app_logger,
+    classify_log_level,
 )
 
 # ───────────────────────────────────────────────────────────
@@ -783,26 +784,10 @@ class MainWindow(QWidget):
 
     def _log_global(self, source: str, msg: str) -> None:
         try:
-            src = (source or "")
-            src_u = src.upper()
             # ✅ 출처뿐 아니라 메시지 본문 접두어로도 레벨을 판정한다
             #    (예: PLC 의 "WARN lock-wait ..." 가 INFO 로 묻히던 문제)
-            msg_s = (msg or "").strip()
-            msg_u = msg_s.upper()
-            level = logging.INFO
-
-            if (
-                src_u.startswith("ERROR") or src_u.startswith("ERR") or
-                "ERROR" in src_u or msg_s.startswith("❌") or
-                msg_u.startswith("ERROR")
-            ):
-                level = logging.ERROR
-            elif (
-                src_u.startswith("WARN") or "WARN" in src_u or
-                msg_s.startswith("⚠") or
-                msg_u.startswith("WARN")
-            ):
-                level = logging.WARNING
+            #    호스트 요청 PLC 로그의 "시각 [명령] WARN ..." 도 본문으로 판정한다([EL-043]) — util.app_logging
+            level = classify_log_level(source, msg)
 
             # ✅ 시스템 로그는 "중복 최소화"가 목적이므로 WARNING+만 저장
             if level < logging.WARNING:

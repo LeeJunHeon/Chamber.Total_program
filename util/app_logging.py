@@ -10,6 +10,7 @@ r"""
 from __future__ import annotations
 
 import os
+import re
 import signal
 import atexit
 import asyncio
@@ -386,6 +387,34 @@ def install_global_exception_hooks(logger: logging.Logger) -> None:
         sys.unraisablehook = _unraisable_hook
     except Exception:
         logger.exception("sys.unraisablehook install failed")
+
+
+# ── 공용 로그 레벨 판정 (main.py _log_global 이 쓴다) ─────────────────────────────
+# 호스트 요청 중 PLC 로그(host/handlers.py _plc_file_logger)는 "YYYY-MM-DD HH:MM:SS [명령] 본문" 형태라
+# 앞의 시각·명령 태그 때문에 본문의 "WARN ..." 이 INFO 로 판정돼 ERROR 일자 로그에 남지 않았다([EL-043]).
+# 시각(+바로 뒤 [태그] 하나)으로 시작하는 줄만 그 접두를 떼고 본문으로 판정한다. 다른 줄은 판정이 그대로다.
+_TS_TAG_PREFIX_RE = re.compile(r"^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\s+(?:\[[^\]]{0,80}\]\s*)?")
+
+
+def classify_log_level(source: str, msg: str) -> int:
+    """출처·본문으로 로그 레벨(logging.ERROR/WARNING/INFO)을 정한다 — 순수 함수."""
+    src_u = (source or "").upper()
+    msg_s = (msg or "").strip()
+    body = _TS_TAG_PREFIX_RE.sub("", msg_s, count=1)
+    body_u = body.upper()
+    if (
+        src_u.startswith("ERROR") or src_u.startswith("ERR") or
+        "ERROR" in src_u or body.startswith("❌") or
+        body_u.startswith("ERROR")
+    ):
+        return logging.ERROR
+    if (
+        src_u.startswith("WARN") or "WARN" in src_u or
+        body.startswith("⚠") or
+        body_u.startswith("WARN")
+    ):
+        return logging.WARNING
+    return logging.INFO
 
 
 # 이 접두사가 붙은 태스크는 생성한 쪽이 반드시 await 해서 예외를 처리한다.

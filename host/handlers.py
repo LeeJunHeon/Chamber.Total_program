@@ -263,35 +263,34 @@ class HostHandlers:
         """
         '한 번의 PLC I/O 구간'만 아주 짧게 보호:
         - lock_plc 획득 (handlers 차원에서 PLC 호출 직렬화)
-        - plc.log 를 파일 로거로 임시 교체
+        - 이 요청(현재 asyncio 작업)에서 나오는 PLC 로그만 _plc_file_logger 로 보낸다(plc.log_route).
+          plc.log 공유 속성은 바꾸지 않는다 — 예전처럼 통째로 바꿔 끼우면 그 사이 다른 작업
+          (CH1/CH2 공정·히터·프리스퍼터·코일 로거)의 PLC 로그까지 server_page 로 가고,
+          요청 두 개가 겹치면 바뀐 값이 원래 값으로 기억돼 재시작 전까지 굳었다([EL-072]).
         - ✅ PLC watchdog(heartbeat) 잠시 pause (락 경합/불필요 reconnect 방지)
         - I/O 수행
-        - 원복
         """
         plc = self.ctx.plc
-        prev = getattr(plc, "log", None)
+        route = getattr(plc, "log_route", None)
 
         async with self.ctx.lock_plc:
-            plc.log = self._plc_file_logger
+            with (route(self._plc_file_logger) if callable(route) else contextlib.nullcontext()):
+                # ✅ watchdog가 있으면 잠시 멈춤 (pause/resume 메서드 이름은 plc.py에 맞춰 조정)
+                paused = False
+                try:
+                    if hasattr(plc, "pause_watchdog") and hasattr(plc, "resume_watchdog"):
+                        await plc.pause_watchdog()
+                        paused = True
 
-            # ✅ watchdog가 있으면 잠시 멈춤 (pause/resume 메서드 이름은 plc.py에 맞춰 조정)
-            paused = False
-            try:
-                if hasattr(plc, "pause_watchdog") and hasattr(plc, "resume_watchdog"):
-                    await plc.pause_watchdog()
-                    paused = True
+                    yield
 
-                yield
-
-            finally:
-                # ✅ 반드시 resume (예외 발생해도)
-                if paused:
-                    try:
-                        await plc.resume_watchdog()
-                    except Exception:
-                        pass
-
-                plc.log = prev
+                finally:
+                    # ✅ 반드시 resume (예외 발생해도)
+                    if paused:
+                        try:
+                            await plc.resume_watchdog()
+                        except Exception:
+                            pass
 
     # ================== 공통 응답 헬퍼 ==================
     def _ok(self, msg: str = "OK", **extra) -> Json:
