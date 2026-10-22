@@ -28,6 +28,7 @@ from device.ig import AsyncIG  # IG 직접 주입 지원
 from controller.plasma_cleaning_controller import PlasmaCleaningController, PCParams
 from device.rf_power import RFPowerAsync, RFPowerEvent
 from controller.runtime_state import runtime_state  # ★ 추가: 전역 쿨다운/이력
+from errors.app_error import CodedRuntimeError       # 호스트 START 거절·레시피 파일 오류에 응답 코드를 싣는다
 
 from lib import config_common as cfgc
 
@@ -160,6 +161,7 @@ class PlasmaCleaningRuntime:
 
         # 호스트에게 프리플라이트 결과를 전달하기 위한 Future 추가
         self._host_start_future: Optional[asyncio.Future] = None
+        self._host_start_code: Optional[str] = None   # _host_reject 가 남기는 거절 응답 코드(E205 등)
         
         # ✅ 마지막으로 열었던 CSV 폴더 기억
         self._last_process_list_dir: str = ""
@@ -1184,6 +1186,12 @@ class PlasmaCleaningRuntime:
             # 여기서 예외 터져도 공정은 그대로 진행되게 조용히 무시
             pass
 
+    def _host_reject(self, msg: str, code: str) -> None:
+        """Host 시작 거절 + 로봇 응답 코드. 코드는 start_with_recipe_string 이 거절 예외(.code)에 싣는다
+        (_host_report_start 의 인자·Future 형식은 그대로 — 코드가 없는 거절은 핸들러 기본 코드 E511)."""
+        self._host_start_code = str(code)
+        self._host_report_start(False, msg)
+
     async def _on_click_start(self, *, origin: str = "ui",
                               origin_meta: Optional[dict] = None) -> None:
         # ------------------------------------------------------------
@@ -1209,7 +1217,7 @@ class PlasmaCleaningRuntime:
         if getattr(self, "_running", False):
             msg = "이미 Plasma Cleaning이 실행 중입니다."
             self._post_warning("실행 중", msg)
-            self._host_report_start(False, msg) # ★ Host에도 실패 사유 전달
+            self._host_reject(msg, "E205") # ★ Host에도 실패 사유 전달(공정 실행 중)
             return
 
         ch = int(getattr(self, "_selected_ch", 1))
@@ -1230,14 +1238,14 @@ class PlasmaCleaningRuntime:
         if runtime_state.is_running("pc", ch):
             msg = f"CH{ch} Plasma Cleaning이 이미 실행 중입니다."
             self._post_warning("실행 오류", msg)
-            self._host_report_start(False, msg)   # ★ Host 실패
+            self._host_reject(msg, "E205")   # ★ Host 실패(공정 실행 중)
             return
 
         # 2-2) 같은 CH의 Chamber 공정도 실행 중이면 금지
         if runtime_state.is_running("chamber", ch):
             msg = f"CH{ch}는 이미 다른 공정이 실행 중입니다."
             self._post_warning("실행 오류", msg)
-            self._host_report_start(False, msg)   # ★ Host 실패
+            self._host_reject(msg, "E205")   # ★ Host 실패(공정 실행 중)
             return
 
         # 2-3) 같은 CH 챔버가 '바쁨'이면 금지 — 리스트 delay 행·행 사이처럼 running 표시가 꺼진 구간 포함
@@ -1245,7 +1253,7 @@ class PlasmaCleaningRuntime:
         if self._chamber_busy(ch):
             msg = f"CH{ch}는 이미 다른 공정이 실행 중입니다."
             self._post_warning("실행 오류", msg)
-            self._host_report_start(False, msg)   # ★ Host 실패
+            self._host_reject(msg, "E205")   # ★ Host 실패(공정 실행 중)
             return
         
         # ✅ 결과 플래그 초기화는 '시작이 수락된 뒤'에만 한다.
@@ -3177,10 +3185,11 @@ class PlasmaCleaningRuntime:
         # 이미 다른 Host start가 대기 중이면 차단(동시 중복 호출 방지)
         old_fut = getattr(self, "_host_start_future", None)
         if old_fut is not None and not old_fut.done():
-            raise RuntimeError("다른 Plasma Cleaning start 요청이 이미 처리 중입니다.")
+            raise CodedRuntimeError("다른 Plasma Cleaning start 요청이 이미 처리 중입니다.", "E206")
 
         # 새 프리플라이트 Future 준비
         self._host_start_future = loop.create_future()
+        self._host_start_code = None     # _host_reject 가 채우는 거절 코드(이번 요청 것만)
 
         try:
             s = (recipe or "").strip()
@@ -3195,7 +3204,11 @@ class PlasmaCleaningRuntime:
 
                 def _load_csv_sync(path: str):
                     if not os.path.exists(path):
-                        raise RuntimeError(f"CSV 파일을 찾을 수 없습니다: {path}")
+                        raise CodedRuntimeError(f"CSV 파일을 찾을 수 없습니다: {path}", "E207")
+                    # 읽기 확인(인코딩·잠김) — _read_first_row_from_csv 는 읽기 실패를 None(=데이터 없음)으로 돌려주므로
+                    # 여기서 먼저 열어 본다. 실패는 아래에서 E209 로 바꾼다.
+                    with open(path, "r", encoding="utf-8-sig", newline="") as _chk:
+                        _chk.read()
                     # ✅ 호스트 요청 공정 로그용 데이터 행 수도 여기서(=executor 안에서) 센다
                     _rows = 1
                     with contextlib.suppress(Exception):
@@ -3215,10 +3228,17 @@ class PlasmaCleaningRuntime:
                         timeout=30.0
                     )
                 except asyncio.TimeoutError:
-                    raise RuntimeError(f"CSV 로드 30초 timeout (NAS 응답 지연): {s}")
+                    raise CodedRuntimeError(f"CSV 로드 30초 timeout (NAS 응답 지연): {s}", "E227")
+                except RuntimeError:
+                    raise
+                except Exception as e:
+                    # 인코딩(엑셀 기본 'CSV' 저장은 CP949)·파일 잠김·손상 등 — 예전에는 '데이터 없음'(응답 E999)으로 나갔다
+                    raise CodedRuntimeError(
+                        f"레시피 파일을 읽지 못했습니다({type(e).__name__}: {e}) — 엑셀에서 'CSV UTF-8(쉼표로 분리)' 로 "
+                        f"저장했는지, 다른 프로그램에서 열려 있지 않은지 확인하십시오: {s}", "E209") from e
 
                 if not row:
-                    raise RuntimeError("CSV에 데이터 행이 없습니다.")
+                    raise CodedRuntimeError("CSV에 데이터 행이 없습니다.", "E208")
 
                 self._loaded_recipe_row = dict(row)
                 self._apply_recipe_row_to_ui(row)
@@ -3228,7 +3248,7 @@ class PlasmaCleaningRuntime:
                 self._host_recipe_rows = int(_n_rows or 1)
                 asyncio.create_task(self._on_click_start(origin=origin, origin_meta=origin_meta))
             else:
-                raise RuntimeError("지원하지 않는 레시피 형식입니다. CSV/XLSX 파일 경로만 허용됩니다.")
+                raise CodedRuntimeError("지원하지 않는 레시피 형식입니다. CSV 파일 경로만 허용됩니다.", "E209")
 
             # 🔎 여기서 프리플라이트 결과 신호만 대기 (예: 최대 10초)
             host_start_wait_timeout_s = float(
@@ -3244,12 +3264,16 @@ class PlasmaCleaningRuntime:
                 )
 
             if not ok:
-                # 실패 사유를 그대로 Host에 전달
+                # 실패 사유를 그대로 Host에 전달(_host_reject 로 거절했으면 그 코드도)
+                _code = getattr(self, "_host_start_code", None)
+                if _code:
+                    raise CodedRuntimeError(reason or "Plasma Cleaning start failed", _code)
                 raise RuntimeError(reason or "Plasma Cleaning start failed")
             # ok=True면 그대로 리턴 → handlers.start_plasma_cleaning에서 OK 응답
         finally:
             # 어떤 경우에도 Future는 정리해서 다음 런에 영향이 없게
             self._host_start_future = None
+            self._host_start_code = None
 
 # ─────────────────────────────────────────────────────────────
 # 유틸

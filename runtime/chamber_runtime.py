@@ -57,6 +57,7 @@ from controller.runtime_state import runtime_state
 # 공정 컨트롤러(기존 CH2) + CH1은 별도 모듈이 있으면 사용, 없으면 CH2를 공용으로
 from controller.process_controller import ProcessController, eta_delay_seconds
 from controller.heater_process import HeaterSoakWaiter, HeaterHoldWaiter, heater_wait_timeout_s, itl_missing_text
+from errors.app_error import CodedRuntimeError   # 호스트 START 레시피 파일 오류에 응답 코드(E207/E208/E209/E227)를 싣는다
 
 # ---- 타입 (main.py의 정의를 최소 필요만 가져와 복제) -------------------------
 RawParams = TypedDict('RawParams', {
@@ -7471,7 +7472,7 @@ class ChamberRuntime:
             
             def _load_csv_sync(path: str):
                 if not os.path.exists(path):
-                    raise RuntimeError(f"레시피 파일을 찾을 수 없습니다: {path}")
+                    raise CodedRuntimeError(f"레시피 파일을 찾을 수 없습니다: {path}", "E207")
                 rows = []
                 row_nos: list[int] = []      # 각 행의 원래 행 번호(헤더=1행)
                 blank = 0
@@ -7523,7 +7524,14 @@ class ChamberRuntime:
                     timeout=30.0
                 )
             except asyncio.TimeoutError:
-                raise RuntimeError(f"CSV 로드 30초 timeout (NAS 응답 지연): {s}")
+                raise CodedRuntimeError(f"CSV 로드 30초 timeout (NAS 응답 지연): {s}", "E227")
+            except RuntimeError:
+                raise
+            except Exception as e:
+                # 인코딩(엑셀 기본 'CSV' 저장은 CP949)·파일 잠김·손상 등 — 예전에는 분류 없이 E110(핸들러 내부 예외)으로 나갔다
+                raise CodedRuntimeError(
+                    f"레시피 파일을 읽지 못했습니다({type(e).__name__}: {e}) — 엑셀에서 'CSV UTF-8(쉼표로 분리)' 로 "
+                    f"저장했는지, 다른 프로그램에서 열려 있지 않은지 확인하십시오: {s}", "E209") from e
             
             if _blank:
                 self.append_log("File", f"빈 행 {_blank}개 건너뜀 (모든 칸이 빈 행)")
@@ -7552,13 +7560,13 @@ class ChamberRuntime:
             self.process_queue = [cast(RawParams, r) for r in rows]
             self.current_process_index = -1
             if not self.process_queue:
-                raise RuntimeError("CSV에 공정 데이터가 없습니다.")
+                raise CodedRuntimeError("CSV에 공정 데이터가 없습니다.", "E208")
             self._update_ui_from_params(self.process_queue[0])
             self.append_log("File", f"CSV 로드 완료: {s} (총 {len(self.process_queue)}개)")
 
             self._handle_start_clicked(False, origin=origin, origin_meta=origin_meta)
         else:
-            raise RuntimeError("지원하지 않는 레시피 형식입니다. CSV/XLSX 파일 경로만 허용됩니다.")
+            raise CodedRuntimeError("지원하지 않는 레시피 형식입니다. CSV/XLSX 파일 경로만 허용됩니다.", "E209")
 
         # ✅ 시작 가드(=프리플라이트 진입/거절) 결과만 짧게 대기
         host_start_wait_timeout_s = float(

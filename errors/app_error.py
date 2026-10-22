@@ -143,3 +143,15 @@ def ensure_app_error(
         meta=dict(meta or {}),
         cause=exc,
     )
+
+
+class CodedRuntimeError(RuntimeError):
+    """RuntimeError + 오류 코드(.code).
+
+    호스트 핸들러(host/handlers.py)는 RuntimeError 의 getattr(e, "code") 를 먼저 응답 코드로 쓴다.
+    RuntimeError 를 잡는 기존 경로(문구 기반 분류·기본 코드)는 코드가 없을 때만 탄다.
+    """
+
+    def __init__(self, message: str, code: str):
+        super().__init__(message)
+        self.code = str(code).strip().upper()

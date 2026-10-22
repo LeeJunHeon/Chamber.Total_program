@@ -998,7 +998,7 @@ class HostHandlers:
                 ):
                     # ✅ 쿨다운은 BUSY 상태 — STOP이 아닌 RETRY_LATER로 분류
                     _code = "E700"
-                return self._fail(_msg, code=_code or "E420")
+                return self._fail(_msg, code=_code or "E511")   # 예전 기본값 E420 은 없는 코드라 응답이 E999 였다
             except Exception as e:
                 return self._fail(e)
 

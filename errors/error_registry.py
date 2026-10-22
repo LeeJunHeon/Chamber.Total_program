@@ -254,8 +254,9 @@ ERROR_REGISTRY: Dict[str, ErrorDefinition] = {
         category="RECIPE",
         client_action=ACTION_STOP,
         severity=SEV_ERROR,
-        cause="현재 지원하지 않는 레시피 형식입니다.",
-        fix="지원되는 CSV 형식으로 레시피를 준비하십시오.",
+        cause="현재 지원하지 않는 레시피 형식이거나 레시피 파일을 읽을 수 없습니다(인코딩·잠김·손상).",
+        fix="지원되는 CSV 형식으로 레시피를 준비하십시오. 엑셀에서는 'CSV UTF-8(쉼표로 분리)'로 저장하고, "
+            "파일이 다른 프로그램에서 열려 있지 않은지 확인하십시오.",
     ),
     "E230": ErrorDefinition(
         code="E230",
@@ -425,7 +426,7 @@ ERROR_REGISTRY: Dict[str, ErrorDefinition] = {
         category="RUNTIME",
         client_action=ACTION_RETRY,
         severity=SEV_WARN,
-        cause="GET_RECIPE 처리 중 제한 시간을 초과했습니다.",
+        cause="GET_RECIPE 처리 또는 공정 시작(START) 때 레시피 파일 읽기가 제한 시간을 초과했습니다.",
         fix="폴더 접근 상태와 저장소 응답 상태를 확인한 뒤 다시 시도하십시오.",
     ),
     "E228": ErrorDefinition(
