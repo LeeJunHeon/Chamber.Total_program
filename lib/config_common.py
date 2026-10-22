@@ -799,6 +799,9 @@ GDRIVE_REF_P_WARN_W     = 20.0  # Reflected Power 경고 기준 (W)
 # ======================================================================
 PROCESS_MONITOR_TOLERANCE_FLOW_SCCM     = 0.3   # 가스 유량 ±sccm
 PROCESS_MONITOR_TOLERANCE_PRESSURE_MTORR = 0.3  # 작업압 ±mTorr
+# 편차 알림은 항목별 '사건' 단위 — 처음 벗어날 때 즉시 1건, 아래 간격으로만 추가 알림
+PROCESS_MONITOR_REPEAT_S  = 300.0   # 벗어난 채로 계속이면 이 간격(초)마다 요약 1건 (0 = 요약 없음)
+PROCESS_MONITOR_RECOVER_S = 30.0    # 범위 안으로 이 시간(초) 이상 계속 들어와 있으면 '정상 복귀' 1건
 
 
 # ======================================================================
