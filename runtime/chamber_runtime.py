@@ -6457,6 +6457,14 @@ class ChamberRuntime:
             return
         self._heater_record(st)
         pc = self.process_controller
+        trip = st.get("noresp")
+        if trip and (self._heater_job is not None or self._heater_watch):
+            # 히터 서비스가 출력 무응답·끊김으로 히터를 껐다 — 다음 폴링의 'RUN 꺼짐'(E830/E832 일반 문구)보다 먼저
+            # 원인 문구로 공정을 멈춘다(EL-092). 대기·감시는 여기서 끝낸다(같은 사건으로 두 번 실패시키지 않음).
+            self._heater_job = None
+            self._heater_watch = False
+            pc.on_heater_failed(f"공정 중 히터 {trip} — 공정을 중단합니다", code="E832")
+            return
         job = self._heater_job
         if job is not None:
             kind, w = job

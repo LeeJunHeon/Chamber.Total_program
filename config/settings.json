@@ -602,6 +602,14 @@
     "HEATER_LOG_PERIOD_S": 3.0,            // CSV 기록 주기 (초)
     "HEATER_LOG_DIR": "",                  // 비우면 LOG_ROOT_DIR\CH2_Heater
     "HEATER_RUN_LOG_PERIOD_S": 10.0,       // 공정 로그(.txt)에 히터 상태 한 줄을 남기는 간격 (초, 0 = 끔)
+    // 출력 무응답 감시(EL-092) — MV 를 올려도 온도가 반응하지 않으면 히터 OFF(공정 중이면 E832 로 중단)
+    "HEATER_NORESP_ENABLE": true,          // 감시 켜기
+    "HEATER_NORESP_MV": 600,               // A '출력 무응답': MV 가 이 값 이상(데드존 약 450 위)·목표보다 5°C 이상 낮은데 (450~1600)
+    "HEATER_NORESP_SEC": 300,              //   이 시간(초) 동안 PV 가 평탄하고 운전 시작 뒤 한 번도 데워지지 않으면 (60~1800)
+    "HEATER_NORESP_RISE_C": 5.0,           //   '데워짐'(운전 시작 뒤 최저 PV 보다 이만큼 오름)·'평탄' 기준 (°C, 1~50)
+    "HEATER_NORESP_LOSS_SEC": 180,         // B '출력 끊김': 출력 상한(D118)에서 목표보다 LOSS_BELOW_C 이상 낮은 채 이 시간(초) 동안 (60~1800)
+    "HEATER_NORESP_LOSS_BELOW_C": 10.0,    //   목표보다 낮은 정도 (°C, 2~200)
+    "HEATER_NORESP_LOSS_FALL_C": 10.0,     //   PV 가 이만큼 이상 떨어지면 (°C, 0.5~100)
 
     // ── 공정 파라미터 (CH2 전용) ──
     "PROCESS_GUN_SHUTTERS": ["G1", "G2", "G3"],      // 사용하는 건 셔터 목록

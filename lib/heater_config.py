@@ -70,6 +70,14 @@ class HeaterConfig:
     log_period_s: float = 3.0
     log_dir: str = ""
     run_log_period_s: float = 10.0       # 공정 로그(.txt) 히터 상태 줄 간격(초, 0 = 끔)
+    # ── 출력 무응답 감시(EL-092, controller/heater_response.py) ──
+    noresp_enable: bool = True           # MV 를 올려도 온도가 반응하지 않으면 히터 OFF(공정 중이면 E832 중단)
+    noresp_mv: int = 600                 # A: '출력 높음' MV(데드존 약 450 위). 실제 상한×0.98 이 더 낮으면 그 값
+    noresp_sec: float = 300.0            # A: 한 번도 데워지지 않은 채 MV 높음·가열 필요가 이만큼 연속이면 '출력 무응답'
+    noresp_rise_c: float = 5.0           # A: 운전 시작 뒤 최저 PV 보다 이만큼 오른 적이 없으면 '데워지지 않음'(평탄 기준도 같은 값)
+    noresp_loss_sec: float = 180.0       # B: 출력 상한·목표보다 낮음이 이만큼 연속이고
+    noresp_loss_below_c: float = 10.0    # B: PV 가 목표보다 이만큼 이상 낮고
+    noresp_loss_fall_c: float = 10.0     # B: 그 사이 PV 가 이만큼 이상 떨어지면 '출력 끊김'
 
     # ── 환산 ──
     def c_to_raw(self, c: float) -> int:
@@ -229,6 +237,17 @@ def load_heater_config(cfg_module: Any) -> Tuple[HeaterConfig, List[str]]:
     elif run_log > 0:
         run_log = _clamp("HEATER_RUN_LOG_PERIOD_S", run_log, 2.0, 600.0)   # 0 = 끔, 그 밖은 2~600초
 
+    # ── 출력 무응답 감시(EL-092) ──
+    nr_mv = int(_clamp("HEATER_NORESP_MV", float(_get("HEATER_NORESP_MV", d.noresp_mv, float)),
+                       LADDER_MV_MIN + 50, LADDER_MV_ABS_MAX))
+    nr_sec = _clamp("HEATER_NORESP_SEC", _get("HEATER_NORESP_SEC", d.noresp_sec, float), 60.0, 1800.0)
+    nr_rise = _clamp("HEATER_NORESP_RISE_C", _get("HEATER_NORESP_RISE_C", d.noresp_rise_c, float), 1.0, 50.0)
+    nr_lsec = _clamp("HEATER_NORESP_LOSS_SEC", _get("HEATER_NORESP_LOSS_SEC", d.noresp_loss_sec, float), 60.0, 1800.0)
+    nr_below = _clamp("HEATER_NORESP_LOSS_BELOW_C",
+                      _get("HEATER_NORESP_LOSS_BELOW_C", d.noresp_loss_below_c, float), 2.0, 200.0)
+    nr_fall = _clamp("HEATER_NORESP_LOSS_FALL_C",
+                     _get("HEATER_NORESP_LOSS_FALL_C", d.noresp_loss_fall_c, float), 0.5, 100.0)
+
     # ── 세션 마커 ──
     mreg = int(_get("HEATER_SESSION_MARK_REG", d.session_mark_reg, float))
     if mreg and REG_HEATER_LOW <= mreg <= REG_HEATER_HIGH:
@@ -254,5 +273,8 @@ def load_heater_config(cfg_module: Any) -> Tuple[HeaterConfig, List[str]]:
         log_enabled=bool(_get("HEATER_LOG_ENABLED", d.log_enabled, bool)), log_period_s=float(log_period),
         log_dir=str(_get("HEATER_LOG_DIR", d.log_dir, str) or ""),
         run_log_period_s=float(run_log),
+        noresp_enable=bool(_get("HEATER_NORESP_ENABLE", d.noresp_enable, bool)),
+        noresp_mv=int(nr_mv), noresp_sec=float(nr_sec), noresp_rise_c=float(nr_rise),
+        noresp_loss_sec=float(nr_lsec), noresp_loss_below_c=float(nr_below), noresp_loss_fall_c=float(nr_fall),
     )
     return cfg, warns

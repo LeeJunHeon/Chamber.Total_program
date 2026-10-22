@@ -11,7 +11,7 @@ write_coil). 접속·재접속은 기존 하트비트 몫이다 — 여기서는
   (1) 잔존 RUN 정리 → (2) 보류 OFF → (3) 세션 마커·설정 push/되읽기(실패는 첫 쓰기에서 멈추고 30초 백오프)
   → (4) FAULT 엣지 → RST 코일 고착 확인 → 리셋 결과 확인 → (5) 출력 죽음
   → (6) RUN 엣지(CSV·챗, 종료 사유) → (7) 램프 tick → 포화 감시(도달 후 새 포화만 클램프, 도달 전은 승온 정체만)
-  → 유지 모드 + D118 요청 실행 → (8) CSV 행 → (9) 리스너
+  → 유지 모드 + D118 요청 실행 → 출력 무응답 감시(판정되면 OFF·카드, 상태 noresp) → (8) CSV 행 → (9) 리스너
 첫 성공 폴링 전의 '미연결'은 로그를 남기지 않는다(프로그램 시작 직후 PLC 접속 전).
 설정·세션 마커가 PLC 에 들어가기 전에는 ON 을 거부한다(is_ready).
 워치독 루프: WD_PERIOD 마다 RUN 이고 링크가 살아 있을 때만 D114 = (이전+1) & 0x7FFF.
@@ -27,6 +27,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from controller.heater_hold import HeaterHold
 from controller.heater_process import itl_missing_text
 from controller.heater_ramp import RampProfiler
+from controller.heater_response import HeaterResponseGuard
 from controller.heater_saturation import HeaterSaturationGuard
 from lib.heater_config import HeaterConfig, float_to_words, words_to_float
 from lib.heater_logger import HeaterCsvLogger
@@ -147,6 +148,10 @@ class HeaterService:
             arrive_tol_c=cfg.hold_arrive_tol, clock=clock,
             request_mv_limit=self._mv_requests.append, message=self._on_hold_msg,
             saturated=self._on_saturated, stalled=self._on_stalled)
+        self.resp = HeaterResponseGuard(
+            enabled=cfg.noresp_enable, mv_high=cfg.noresp_mv, sec=cfg.noresp_sec, rise_c=cfg.noresp_rise_c,
+            loss_sec=cfg.noresp_loss_sec, loss_below_c=cfg.noresp_loss_below_c,
+            loss_fall_c=cfg.noresp_loss_fall_c, mv_limit=cfg.mv_limit, clock=clock)
         self.csv = HeaterCsvLogger(cfg.log_dir, warn=lambda m: self._log(f"⚠ {m}"), clock=clock)
 
     # ═══════════════════════ 공개 API ═══════════════════════
@@ -538,6 +543,22 @@ class HeaterService:
                    "FAIL", {"PV": self._fmt(info.get("pv")), "MV": str(info.get("mv")),
                             "클램프": "-" if clamp is None else str(clamp)})
 
+    async def _on_no_response(self, st: dict, info: dict) -> None:
+        """출력 무응답·끊김 판정(HeaterResponseGuard) — ❌ 카드 → 히터 OFF(종료 사유 = 라벨).
+        이번 폴링의 발행 상태 st['noresp'] 에 원인 문구를 실어 공정(ChamberRuntime)이 E832 로 멈추게 한다
+        (다음 폴링의 'RUN 꺼짐'으로 일반 문구가 나가기 전에). 수동·외부 운전은 히터만 끈다."""
+        label = str(info.get("label") or "출력 무응답")
+        detail = str(info.get("text") or "")
+        hint = str(info.get("hint") or "")
+        st["noresp"] = f"{label} — {detail}"
+        self._event(label)
+        self._log(f"⚠ 히터 {label}: {detail} → 히터를 끕니다 ({hint})")
+        self._card(label, f"{self.context()} · {label} — 배선·VARITAP·차단기 확인", "FAIL",
+                   {"판정": detail, "PV": self._fmt(info.get("pv")),
+                    "MV": f"{float(info.get('mv') or 0):.0f}/{float(info.get('limit') or 0):.0f}",
+                    "확인": hint})
+        await self._turn_off_locked(label)
+
     def _on_stalled(self, info: dict) -> None:
         self._event("승온 정체")
         eta = info.get("eta_min")
@@ -618,7 +639,7 @@ class HeaterService:
                 "run": False, "itl": False, "fault": False, "ot": False, "tc_err": False, "wd_err": False,
                 "pid_run": False, "dac_en": False, "tc_ok": False, "da_ok": False,
                 "water_ok": False, "vac_ok": False, "rst": False,
-                "output_dead": False, "stale": True, "age_s": None, "t": None}
+                "output_dead": False, "noresp": None, "stale": True, "age_s": None, "t": None}
 
     def _decode(self, regs: list, bits: list, now: float) -> dict:
         c = self.cfg
@@ -660,6 +681,7 @@ class HeaterService:
             "pid_run": b(COIL_PID_RUN), "dac_en": b(COIL_DAC_EN), "tc_ok": b(COIL_TC_OK), "da_ok": b(COIL_DA_OK),
             "water_ok": b(COIL_WATER_OK), "vac_ok": b(COIL_VAC_OK),
             "rst": b(COIL_RST),
+            "noresp": None,                  # 출력 무응답·끊김으로 이번 폴링에 히터를 껐으면 원인 문구(그 폴링에만)
             "stale": False, "age_s": 0.0, "t": now,
             "_raw_pv": raw_pv, "_regs": regs,
         }
@@ -795,6 +817,10 @@ class HeaterService:
             except Exception as e:
                 self._log(f"⚠ DAC 상한(D118) 쓰기 실패: {e!r}")
         self._mv_requests.clear()
+        # 출력 무응답 감시 — MV 를 올려도 온도가 반응하지 않으면 끈다(EL-092)
+        trip = self.resp.tick(st, self.final_target(), holding=self.hold.is_holding())
+        if trip is not None:
+            await self._on_no_response(st, trip)
         # (8) CSV
         if st["run"] and self.cfg.log_enabled and (now - self._csv_last_t) >= float(self.cfg.log_period_s):
             self._csv_last_t = now
