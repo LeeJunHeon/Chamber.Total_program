@@ -16,6 +16,38 @@ from lib.config_common import SHUTDOWN_STEP_TIMEOUT_MS, SHUTDOWN_STEP_GAP_MS
 from lib import config_common as _cfgc   # ✅ RGA 스텝 예산은 호출 시점에 계산한다
 from lib import config_ch1, config_ch2
 
+# 종료 단계 대기값 — 실행 시점에 읽는다.
+#   위 값 단위 import 는 main.py 의 load_settings() 보다 먼저 실행돼 settings.json 값이 반영되지 않는다.
+#   모듈 이름(SHUTDOWN_STEP_*)은 남겨 둔다: 테스트가 이 이름을 0 으로 바꿔 속도를 올린다.
+#   이름이 import 때 값에서 바뀌어 있으면(테스트 덮어쓰기) 그 값을, 아니면 config_common 의 현재 값을 쓴다.
+_SHUTDOWN_STEP_DEFAULTS = {"SHUTDOWN_STEP_TIMEOUT_MS": 2500, "SHUTDOWN_STEP_GAP_MS": 500}
+_SHUTDOWN_STEP_AT_IMPORT = {"SHUTDOWN_STEP_TIMEOUT_MS": SHUTDOWN_STEP_TIMEOUT_MS,
+                            "SHUTDOWN_STEP_GAP_MS": SHUTDOWN_STEP_GAP_MS}
+
+
+def _shutdown_step_ms(name: str) -> float:
+    """SHUTDOWN_STEP_TIMEOUT_MS / SHUTDOWN_STEP_GAP_MS 의 실행 시점 값(ms). 숫자가 아니거나 음수면 기본값."""
+    default = _SHUTDOWN_STEP_DEFAULTS[name]
+    mod = globals().get(name, default)
+    v = mod if mod != _SHUTDOWN_STEP_AT_IMPORT[name] else getattr(_cfgc, name, default)
+    try:
+        if isinstance(v, bool):
+            return default
+        f = float(v)
+    except Exception:
+        return default
+    if f != f or f in (float("inf"), float("-inf")) or f < 0:
+        return default
+    return f
+
+
+def _shutdown_timeout_ms() -> float:
+    return _shutdown_step_ms("SHUTDOWN_STEP_TIMEOUT_MS")
+
+
+def _shutdown_gap_ms() -> float:
+    return _shutdown_step_ms("SHUTDOWN_STEP_GAP_MS")
+
 
 # =========================
 # START_SPUTTER ETA(min_total_s) 하한 계산 — 순수 함수 (Qt/asyncio/self 비의존)
@@ -1073,12 +1105,13 @@ class ProcessController:
                             if self._shutdown_in_progress:
                                 # ✅ 종료 시퀀스: abort 무시 + 타임아웃
                                 try:
-                                    await asyncio.wait_for(fut, timeout=max(0.001, SHUTDOWN_STEP_TIMEOUT_MS) / 1000.0)
+                                    await asyncio.wait_for(fut, timeout=max(0.001, _shutdown_timeout_ms()) / 1000.0)
                                 except asyncio.TimeoutError:
                                     self._emit_log("Process", "종료(병렬) 스텝 확인 시간 초과 → 다음으로")
                                 # 병렬 블록 이후도 간격 보장
-                                if SHUTDOWN_STEP_GAP_MS > 0:
-                                    await asyncio.sleep(SHUTDOWN_STEP_GAP_MS / 1000.0)
+                                gap_ms = _shutdown_gap_ms()
+                                if gap_ms > 0:
+                                    await asyncio.sleep(gap_ms / 1000.0)
                             else:
                                 # 평시: abort와 경쟁
                                 aborted = await self._wait_or_abort(fut, allow_abort=not self._in_emergency)
@@ -1133,7 +1166,7 @@ class ProcessController:
 
                 if self._shutdown_in_progress:
                     min_off_ms = int(getattr(self._cfg, "PC_POWER_OFF_TIMEOUT_MS", 240_000))
-                    POWER_OFF_TIMEOUT_MS = max(min_off_ms, SHUTDOWN_STEP_TIMEOUT_MS)  # ✅ 전원 OFF는 더 길게
+                    POWER_OFF_TIMEOUT_MS = max(min_off_ms, _shutdown_timeout_ms())  # ✅ 전원 OFF는 더 길게
                     if step.action == ActionType.RF_POWER_STOP:
                         # RF 연속은 1W/s 램프다운이라 240초로는 모자란다(고출력에서 가스가 먼저 꺼짐)
                         POWER_OFF_TIMEOUT_MS = rf_power_stop_timeout_ms(self._cfg, POWER_OFF_TIMEOUT_MS)
@@ -1146,7 +1179,7 @@ class ProcessController:
                             self._step_failed("Shutdown", f"{step.action.name} timeout ({POWER_OFF_TIMEOUT_MS/1000:.0f}s)")
                     else:
                         try:
-                            await asyncio.wait_for(fut, timeout=max(0.001, SHUTDOWN_STEP_TIMEOUT_MS) / 1000.0)
+                            await asyncio.wait_for(fut, timeout=max(0.001, _shutdown_timeout_ms()) / 1000.0)
                         except asyncio.TimeoutError:
                             self._emit_log("Process", "종료 스텝 확인 시간 초과 → 다음 스텝 진행")
 
@@ -1185,8 +1218,10 @@ class ProcessController:
                 return
 
         # ✅ 종료 시퀀스일 때는 스텝 간 최소 간격 보장
-        if self._shutdown_in_progress and SHUTDOWN_STEP_GAP_MS > 0:
-            await asyncio.sleep(SHUTDOWN_STEP_GAP_MS / 1000.0)
+        if self._shutdown_in_progress:
+            gap_ms = _shutdown_gap_ms()
+            if gap_ms > 0:
+                await asyncio.sleep(gap_ms / 1000.0)
 
     def _send_and_collect_tokens(self, step: ProcessStep) -> List[ExpectToken]:
         a = step.action
