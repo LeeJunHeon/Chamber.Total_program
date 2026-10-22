@@ -256,39 +256,47 @@ class PreSputterRuntime:
     async def _loop(self, when: datetime) -> None:
         try:
             while True:
-                # 1) 지정 시각까지 대기
-                # 교체:
-                while True:
-                    remain_s = (when - datetime.now()).total_seconds()
-                    if remain_s <= 0:
-                        break
-                    self._left_text = self._fmt_hms(remain_s)
+                # 1)~3) 한 회차 — 예외가 나도 루프는 살려 다음 예약을 유지한다
+                #        (CancelledError 는 Exception 이 아니라 아래 바깥 except 로 간다)
+                try:
+                    # 1) 지정 시각까지 대기
+                    # 교체:
+                    while True:
+                        remain_s = (when - datetime.now()).total_seconds()
+                        if remain_s <= 0:
+                            break
+                        self._left_text = self._fmt_hms(remain_s)
+                        self._push_ui()
+                        await asyncio.sleep(self.tick_s)
+                    self._left_text = "00:00:00"
                     self._push_ui()
-                    await asyncio.sleep(self.tick_s)
-                self._left_text = "00:00:00"
-                self._push_ui()
 
-                # 2) 내 챔버가 바쁘면 이번 예약은 PASS (대기하지 않음)
-                def _my_ch_busy() -> bool:
-                    # ★ 프리플라이트/Chuck 이동 중인 챔버에 START를 걸면
-                    #   Runner가 "runner busy"로 거절하므로 is_busy로 판정한다.
-                    return self._ch_busy(self.ch1) or self._ch_busy(self.ch2)
+                    # 2) 내 챔버가 바쁘면 이번 예약은 PASS (대기하지 않음)
+                    def _my_ch_busy() -> bool:
+                        # ★ 프리플라이트/Chuck 이동 중인 챔버에 START를 걸면
+                        #   Runner가 "runner busy"로 거절하므로 is_busy로 판정한다.
+                        return self._ch_busy(self.ch1) or self._ch_busy(self.ch2)
 
-                if _my_ch_busy():
-                    self._log("[PreSputter] 해당 챔버가 이미 공정 중 → 이번 예약 PASS")
-                    if not self._repeat_daily:
-                        self._log("[PreSputter] 1회 예약 실행 완료(반복 없음).")
-                        break
-                    # 다음날 재예약
-                    when = when + timedelta(days=1)
-                    self._status_text = f"PASS(공정 중) · 다음 {self._hhmm()}"
-                    self._left_text = self._fmt_hms((when - datetime.now()).total_seconds())
+                    if _my_ch_busy():
+                        self._log("[PreSputter] 해당 챔버가 이미 공정 중 → 이번 예약 PASS")
+                        if not self._repeat_daily:
+                            self._log("[PreSputter] 1회 예약 실행 완료(반복 없음).")
+                            break
+                        # 다음날 재예약
+                        when = when + timedelta(days=1)
+                        self._status_text = f"PASS(공정 중) · 다음 {self._hhmm()}"
+                        self._left_text = self._fmt_hms((when - datetime.now()).total_seconds())
+                        self._push_ui()
+                        self._log(f"[PreSputter] 다음 반복 예약: {when.strftime('%Y-%m-%d %H:%M:%S')}")
+                        continue
+
+                    # 3) 실행(병렬 or 순차)
+                    await self._run(parallel=self.parallel)
+                except Exception as e:
+                    self._log(f"[PreSputter] 실행 중 예외: {e!r} — 이번 회차 실패, 다음 예약 유지")
+                    self._status_text = (f"실행 오류 · 다음 {self._hhmm()}" if self._repeat_daily
+                                         else "실행 오류")
                     self._push_ui()
-                    self._log(f"[PreSputter] 다음 반복 예약: {when.strftime('%Y-%m-%d %H:%M:%S')}")
-                    continue
-
-                # 3) 실행(병렬 or 순차)
-                await self._run(parallel=self.parallel)
 
                 # 4) 다음날 재예약
                 if not self._repeat_daily:
