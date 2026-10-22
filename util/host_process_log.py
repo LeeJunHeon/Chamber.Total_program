@@ -113,6 +113,31 @@ def _csv_line(fields: List[str]) -> str:
     return buf.getvalue()
 
 
+def _ensure_line_end(path: Path) -> None:
+    """이어쓰기 직전 보정: 파일 끝이 줄바꿈이 아니면(전원 차단 등으로 줄 중간에서 끊김) "\r\n" 을 먼저 쓴다.
+    그대로 이어 쓰면 새 행이 끊긴 행 뒤에 붙어 두 행이 한 줄로 깨진다(ALD.External 과 같은 보정).
+    없는 파일·빈 파일·BOM 만 있는 파일은 손대지 않는다. 실패해도 예외를 내지 않는다(이어쓰기는 그대로 진행)."""
+    try:
+        p = Path(path)
+        if not p.exists():
+            return
+        size = p.stat().st_size
+        if size <= 0:
+            return
+        with open(p, "rb") as f:
+            if size <= 3 and f.read() == b"\xef\xbb\xbf"[:size]:
+                return
+            f.seek(size - 1)
+            last = f.read(1)
+        if last != b"\n":
+            with open(p, "ab") as f:
+                f.write(b"\r\n")
+                f.flush()
+            _dbg(f"끊긴 줄 보정: {p.name}")
+    except Exception as e:
+        _dbg(f"끊긴 줄 보정 실패({path}): {e!r}")
+
+
 class HostProcessLog:
     """v3.1 규약 구현체. 모듈 싱글턴은 get_host_log() 로 얻는다."""
 
@@ -449,6 +474,7 @@ class HostProcessLog:
     def _append_pending(self, ymd: str, row: List[str]) -> bool:
         try:
             self._local_dir().mkdir(parents=True, exist_ok=True)
+            _ensure_line_end(self._p_pending())
             with open(self._p_pending(), "a", encoding="utf-8", newline="") as f:
                 f.write(_csv_line([ymd] + row))
                 f.flush()
@@ -462,6 +488,8 @@ class HostProcessLog:
         p = self._p_mine(ymd)
         self._local_dir().mkdir(parents=True, exist_ok=True)
         new = not p.exists()
+        if not new:
+            _ensure_line_end(p)
         with open(p, "a", encoding="utf-8-sig" if new else "utf-8", newline="") as f:
             if new:
                 f.write(_csv_line(HEADER))
@@ -591,6 +619,7 @@ class HostProcessLog:
                 for ln in list(self._mem_queue):
                     try:
                         self._local_dir().mkdir(parents=True, exist_ok=True)
+                        _ensure_line_end(self._p_pending())
                         with open(self._p_pending(), "a", encoding="utf-8", newline="") as f:
                             f.write(ln)
                             f.flush()
@@ -683,6 +712,8 @@ class HostProcessLog:
 
             try:
                 new = not target.exists()
+                if not new:
+                    _ensure_line_end(target)     # 잠금 안 — ALD.External 과 같은 공용 파일
                 with open(target, "a", encoding="utf-8-sig" if new else "utf-8", newline="") as f:
                     if new:
                         f.write(_csv_line(HEADER))
