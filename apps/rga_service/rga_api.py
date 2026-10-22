@@ -211,7 +211,9 @@ def main() -> int:
             "mass_axis": mass_axis,
             "pressures": pressures,
         }
-        print(json.dumps(payload, ensure_ascii=False), flush=True)
+        # ASCII 로만 내보낸다(한글은 \uXXXX). 워커 stdout 은 파이프 기본 인코딩(한국어 Windows = cp949)인데
+        # 메인(device/rga.py)은 UTF-8 로 읽어서, 한글(G: 경로·Windows 오류 문구)이 깨졌다. json.loads 하면 원래 글자로 돌아온다.
+        print(json.dumps(payload, ensure_ascii=True), flush=True)
         return 0
 
     except Exception as e:
@@ -225,7 +227,7 @@ def main() -> int:
             "error": f"{type(e).__name__}: {e}",
             "traceback": traceback.format_exc(limit=50),
         }
-        print(json.dumps(payload, ensure_ascii=False), flush=True)
+        print(json.dumps(payload, ensure_ascii=True), flush=True)   # ASCII 로만(위와 같은 이유)
         return 30
 
 

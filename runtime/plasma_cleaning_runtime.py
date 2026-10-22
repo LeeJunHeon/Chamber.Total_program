@@ -1472,7 +1472,8 @@ class PlasmaCleaningRuntime:
             msg = f"게이트밸브 인터락 FALSE (G_V_{ch}_인터락=FALSE) → LoadLock의 압력을 확인하십시오."
             self.append_log("PLC", msg)
             self._post_critical("게이트밸브 인터락", msg, clear_status_to_idle=True, ch=ch)
-            self._host_report_start(False, msg)
+            # 로봇 GATE_OPEN 과 같은 PLC 비트(G_V_n_인터락)·같은 원인(LoadLock 진공) → 같은 응답 코드 E302
+            self._host_reject(msg, "E302")
 
             # ✅ 추가: 이벤트펌프/태스크 정리
             with contextlib.suppress(Exception):

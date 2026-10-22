@@ -6959,12 +6959,14 @@ class ChamberRuntime:
                         local_dir.mkdir(parents=True, exist_ok=True)
                         emergency_path = local_dir / f"CH{self.ch}_{datetime.now():%Y%m%d_%H%M%S}_writer_pending.txt"
 
-                        def _write_emergency() -> None:
+                        # 사유는 정의할 때 값으로 잡는다 — except 블록이 먼저 끝나면(취소 등) e 가 지워져
+                        # 이미 실행 중인 스레드가 이 줄에서 NameError 로 멈추고 묶음 로그가 빠진다.
+                        def _write_emergency(reason: str = repr(e)) -> None:
                             with open(emergency_path, "a", encoding="utf-8", newline="") as fp:
                                 fp.write("# [log-writer pending]\n")
                                 if self._log_file_path:
                                     fp.write(f"# source_path = {self._log_file_path}\n")
-                                fp.write(f"# reason = {e!r}\n")
+                                fp.write(f"# reason = {reason}\n")
                                 fp.write(text)
 
                         await loop.run_in_executor(self._log_io_exec, _write_emergency)
@@ -7027,7 +7029,9 @@ class ChamberRuntime:
                                 timeout=6.0
                             )
                         except Exception as e:
-                            def _write_local_same_name() -> None:
+                            # 사유는 정의할 때 값으로 잡는다 — 아래 2초 대기가 먼저 끝나면 e 가 지워져
+                            # 실행 중인 스레드가 마지막 줄에서 NameError 로 멈춘다.
+                            def _write_local_same_name(reason: str = repr(e)) -> None:
                                 local_dir = self._local_log_dir
                                 local_dir.mkdir(parents=True, exist_ok=True)
 
@@ -7035,7 +7039,7 @@ class ChamberRuntime:
                                 with open(target, "a", encoding="utf-8", newline="") as fp:
                                     fp.write(text)
                                 with open(target, "a", encoding="utf-8", newline="") as fp:
-                                    fp.write(f"# [shutdown] final flush failed: {e!r}\n")
+                                    fp.write(f"# [shutdown] final flush failed: {reason}\n")
 
                             with contextlib.suppress(Exception):
                                 await asyncio.wait_for(

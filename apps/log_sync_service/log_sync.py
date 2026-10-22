@@ -14,6 +14,7 @@ NAS 로 복사하므로, SMB 가 느리거나 멈춰도 메인 프로그램(qasy
 - ★ dst 에서 파일을 지우지 않는다(미러 아님). ★ src 는 읽기 전용.
 - 쓰는 중인 파일도 복사 대상 — 복사 중 src 가 바뀌면 copystat 을 생략해 다음 실행에서 갱신된다.
   잠겨서 읽기 실패하면 그 파일만 건너뜀.
+- 제어 파일(이름이 .stop / .flag 로 끝남 — OES 측정 중지 신호 등)은 복사하지 않는다.
 - dst 루트 접근 불가면 그 쌍을 통째로 실패 집계. 예외로 프로세스를 죽이지 않는다.
 
 상태/알림
@@ -165,6 +166,16 @@ def save_state(path, st):
 
 
 # ===================== 동기화 =====================
+# 복사하지 않는 제어 파일 — OES 측정 중지 신호(.stop_usbN.flag, OES_Data_….csv.stop)처럼 메인·워커가
+# 잠깐 만들었다 지우는 파일. NAS 에 남기지 않고(log_sync 는 NAS 쪽을 지우지 않는다), 목록을 만든 뒤
+# 지워져도 stat 실패로 세지 않는다.
+_SKIP_SUFFIXES = (".stop", ".flag")
+
+
+def _is_control_file(name: str) -> bool:
+    return name.lower().endswith(_SKIP_SUFFIXES)
+
+
 def _same(src_st, dst_path):
     """크기와 mtime(정수 초) 이 모두 같으면 True."""
     try:
@@ -227,6 +238,8 @@ def sync_pair(src_root, dst_root, dry_run, log):
     for dirpath, dirnames, filenames in os.walk(src_root):
         rel_dir = os.path.relpath(dirpath, src_root)
         for fn in filenames:
+            if _is_control_file(fn):
+                continue
             src = os.path.join(dirpath, fn)
             dst = os.path.join(dst_root, rel_dir, fn) if rel_dir != "." else os.path.join(dst_root, fn)
             r["checked"] += 1
