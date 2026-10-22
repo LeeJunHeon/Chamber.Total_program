@@ -10,9 +10,10 @@ NAS 로 복사하므로, SMB 가 느리거나 멈춰도 메인 프로그램(qasy
 ----
 - LOG_SYNC_PAIRS 의 각 [src, dst] 에 대해 src 를 재귀 순회.
 - dst 의 같은 상대경로 파일과 크기·mtime 이 모두 같으면 건너뜀.
-- 다르면 dst 에 "{이름}.tmp" 로 복사 → os.replace → 크기 검증 → copystat(mtime 맞춤).
+- 다르면 dst 에 "{이름}.tmp" 로 복사 → os.replace → 크기 검증(복사한 크기 기준) → copystat(mtime 맞춤).
 - ★ dst 에서 파일을 지우지 않는다(미러 아님). ★ src 는 읽기 전용.
-- 쓰는 중인 파일도 복사 대상(다음 실행에서 갱신됨). 잠겨서 읽기 실패하면 그 파일만 건너뜀.
+- 쓰는 중인 파일도 복사 대상 — 복사 중 src 가 바뀌면 copystat 을 생략해 다음 실행에서 갱신된다.
+  잠겨서 읽기 실패하면 그 파일만 건너뜀.
 - dst 루트 접근 불가면 그 쌍을 통째로 실패 집계. 예외로 프로세스를 죽이지 않는다.
 
 상태/알림
@@ -174,18 +175,27 @@ def _same(src_st, dst_path):
 
 
 def _copy_one(src, dst, log):
-    """tmp 복사 → os.replace → 크기 검증 → copystat. 실패 시 tmp 정리 후 False."""
+    """src stat → tmp 복사 → os.replace → 복사한 크기로 검증 → (src 가 그대로면) copystat.
+    실패 시 tmp 정리 후 False.
+    ★ 크기 검증은 '복사한 tmp 크기' 기준이다(복사 뒤 src 크기와 비교하면 쓰는 중인 파일이 실패로 집계됨, EL-052).
+    ★ 복사 중 src 가 바뀌었으면(쓰는 중) 성공으로 세되 copystat 하지 않아 다음 실행에서 다시 복사된다."""
     tmp = dst + ".tmp"
     try:
         os.makedirs(os.path.dirname(dst), exist_ok=True)
+        before = os.stat(src)
         shutil.copyfile(src, tmp)           # src 는 읽기만
+        n = os.path.getsize(tmp)
         os.replace(tmp, dst)
-        if os.path.getsize(dst) != os.path.getsize(src):
-            raise RuntimeError(f"크기 불일치 dst={os.path.getsize(dst)} src={os.path.getsize(src)}")
-        try:
-            shutil.copystat(src, dst)       # mtime 맞춤 → 다음 실행에서 건너뜀
-        except Exception:
-            pass
+        if os.path.getsize(dst) != n:
+            raise RuntimeError(f"크기 불일치 dst={os.path.getsize(dst)} 복사={n}")
+        after = os.stat(src)
+        if after.st_size == before.st_size and after.st_mtime == before.st_mtime:
+            try:
+                shutil.copystat(src, dst)   # mtime 맞춤 → 다음 실행에서 건너뜀
+            except Exception:
+                pass
+        else:
+            log(f"    쓰는 중 — 다음 실행에서 갱신: {src} (복사 {n}B, 현재 {after.st_size}B)")
         return True
     except Exception as e:
         log(f"    실패 {src} → {dst}: {e}")
