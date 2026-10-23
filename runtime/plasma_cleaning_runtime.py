@@ -581,8 +581,16 @@ class PlasmaCleaningRuntime:
     # 퍼블릭: 바인딩/설정 갱신
     # =========================
     def set_selected_ch(self, ch: int) -> None:
-        """main.py 라디오 토글 시 호출 (로그 편의/PLC용)"""
-        self._selected_ch = 1 if int(ch) != 2 else 2
+        """main.py 라디오 토글 시 호출 (로그 편의/PLC용)
+
+        실행 중(프리플라이트 포함)에는 바꾸지 않는다 — 런의 GV·IG 키와 종료 정리가 이 값을 쓴다.
+        (라디오는 main.py 가 실행 중이면 되돌리는데, 레시피 불러오기의 use_ch 는 여기로 바로 들어와
+        실행 중인 CH1 런이 CH2 로 바뀌고 끝날 때 pc[1] 실행 표시가 남았다)"""
+        new_ch = 1 if int(ch) != 2 else 2
+        if getattr(self, "_running", False) and new_ch != self._selected_ch:
+            self.append_log("PC", f"실행 중 → 챔버 선택 변경 무시 (요청 CH{new_ch}, 현재 CH{self._selected_ch})")
+            return
+        self._selected_ch = new_ch
         self.append_log("PC", f"Selected Chamber → CH{self._selected_ch}")
 
     def set_mfcs(self, *, mfc_gas: Optional[AsyncMFC], mfc_pressure: Optional[AsyncMFC]) -> None:
@@ -1192,6 +1200,16 @@ class PlasmaCleaningRuntime:
         self._host_start_code = str(code)
         self._host_report_start(False, msg)
 
+    def _reject_host_start_if_running(self) -> None:
+        """호스트 START — PC 실행 중이면 레시피를 화면·선택 채널에 넣기 '전에' 거절한다.
+        문구·코드(E205)·경고창은 _on_click_start 의 첫 검사와 같다(로봇 응답 그대로).
+        예전: 레시피 적용(use_ch → 선택 채널, 화면 값)이 먼저 돌고 _on_click_start 에서 거절돼, 실행 중인
+        런이 바뀐 채널로 끝나며 pc[원래 채널] 실행 표시가 남았다(CH1 스퍼터·PC·TSP 시작 거절, 재시작 전까지)."""
+        if getattr(self, "_running", False):
+            msg = "이미 Plasma Cleaning이 실행 중입니다."
+            self._post_warning("실행 중", msg)
+            raise CodedRuntimeError(msg, "E205")
+
     async def _on_click_start(self, *, origin: str = "ui",
                               origin_meta: Optional[dict] = None) -> None:
         # ------------------------------------------------------------
@@ -1377,7 +1395,7 @@ class PlasmaCleaningRuntime:
 
                 # 종료 통지 + runtime_state 해제(구글챗/상태 반영)
                 with contextlib.suppress(Exception):
-                    await self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final)
+                    await self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final, ch=ch)
 
             return
         # =============================================================
@@ -1614,7 +1632,7 @@ class PlasmaCleaningRuntime:
 
             # [C] 마지막에 종료 통지 + runtime_state 해제
             try:
-                await self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final)
+                await self._notify_finish_once(ok=ok_final, reason=final_reason, stopped=stopped_final, ch=ch)
             except Exception as e:
                 self.append_log("PC", f"notify_finish_once error: {e!r}")
 
@@ -1625,7 +1643,7 @@ class PlasmaCleaningRuntime:
                     from util import gdrive_logger as _gl
                     from functools import partial as _partial
                     _pc_params = self._build_pc_params_dict(p)
-                    _ch        = int(getattr(self, "_selected_ch", 1))
+                    _ch        = int(ch)                     # 시작 때 채널(종료 직후 다른 요청이 선택 채널을 바꿔도)
                     _dir       = self._gdrive_log_dir or _gl._DEFAULT_GDRIVE_DIR
                     asyncio.get_event_loop().run_in_executor(
                         None, _partial(_gl.save_pc_only, _ch, _pc_params, _dir)
@@ -1635,7 +1653,7 @@ class PlasmaCleaningRuntime:
             with contextlib.suppress(Exception):
                 cb = getattr(self, "_pc_done_callback", None)
                 if callable(cb):
-                    cb(int(getattr(self, "_selected_ch", 1)),
+                    cb(int(ch),
                        self._current_process_name)
 
     async def _on_click_stop(self) -> None:
@@ -2709,11 +2727,14 @@ class PlasmaCleaningRuntime:
             hl.mark_started(key, datetime.now(), log_file=lf or None)
         self._pc_host_key = key
 
-    async def _notify_finish_once(self, *, ok: bool, reason: str | None = None, stopped: bool = False) -> None:
+    async def _notify_finish_once(self, *, ok: bool, reason: str | None = None, stopped: bool = False,
+                                  ch: Optional[int] = None) -> None:
         # 0) 재진입 차단
         if self._final_notified:
             return
         self._final_notified = True
+        # 시작 때 실행 표시한 채널(_on_click_start 의 ch). 없으면 예전처럼 현재 선택 채널
+        run_ch = int(ch) if ch is not None else int(getattr(self, "_selected_ch", 1))
 
         # ✅ 호스트 요청 공정 로그: 결과 1줄 확정 (멱등)
         with contextlib.suppress(Exception):
@@ -2732,7 +2753,7 @@ class PlasmaCleaningRuntime:
 
         # 1) 전역 종료/해제 — 챗이 실패해도 반드시 풀림
         try:
-            ch = int(getattr(self, "_selected_ch", 1))
+            ch = run_ch
 
             if ok or stopped:
                 runtime_state.clear_error("pc", ch)
@@ -2764,8 +2785,8 @@ class PlasmaCleaningRuntime:
         status = "stopped" if stopped else ("success" if ok else "failed")
         payload = {
             "process_name": "Plasma Cleaning",
-            "prefix": f"CH{getattr(self, '_selected_ch', '?')} Plasma Cleaning",
-            "ch": int(getattr(self, "_selected_ch", 0) or 0),
+            "prefix": f"CH{run_ch} Plasma Cleaning",
+            "ch": run_ch,
             "status": status,
             "stopped": bool(stopped),
         }
@@ -3196,6 +3217,7 @@ class PlasmaCleaningRuntime:
             s = (recipe or "").strip()
             if not s:
                 # UI 현재값 단발 실행 — 레시피 파일이 없다
+                self._reject_host_start_if_running()
                 self._host_recipe_path = ""
                 self._host_recipe_rows = 1
                 asyncio.create_task(self._on_click_start(origin=origin, origin_meta=origin_meta))
@@ -3241,6 +3263,8 @@ class PlasmaCleaningRuntime:
                 if not row:
                     raise CodedRuntimeError("CSV에 데이터 행이 없습니다.", "E208")
 
+                # 실행 중이면 화면·선택 채널에 넣기 전에 거절(레시피 파일 오류 코드가 먼저인 순서는 그대로)
+                self._reject_host_start_if_running()
                 self._loaded_recipe_row = dict(row)
                 self._apply_recipe_row_to_ui(row)
                 self.append_log("File", f"CSV 로드 완료: {s} → UI에 값 세팅")
