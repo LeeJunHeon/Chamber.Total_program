@@ -574,8 +574,10 @@ class RFPowerAsync:
                     fwd = float(res[0])   # P
                 ref = 0.0                 # V/I를 Ref.p로 간주하지 않음
             elif isinstance(res, dict):
-                fwd = res.get("forward") or res.get("fwd") or res.get("power") or res.get("P")
-                ref = res.get("reflected") or res.get("ref") or 0.0
+                # 0.0 도 측정값이다 — `or` 로 이으면 0.0 을 '값 없음'으로 보고 측정을 통째로 버려,
+                # RF 가 꺼지거나 안 켜져 FWD 가 정확히 0.0 일 때 저출력 인터락·blind ramp 도달 감시가 돌지 않았다.
+                fwd = next((res[k] for k in ("forward", "fwd", "power", "P") if res.get(k) is not None), None)
+                ref = next((res[k] for k in ("reflected", "ref") if res.get(k) is not None), 0.0)
                 fwd = None if fwd is None else float(fwd)
                 ref = None if ref is None else float(ref)
             if fwd is not None:
