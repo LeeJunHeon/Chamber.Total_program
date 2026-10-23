@@ -1,8 +1,9 @@
 # -*- coding: utf-8 -*-
-"""레시피 heater_soak(분) — 공정 행이 히터 RAMP → 목표 도달 → SOAK N분(히터 유지) → 베이스 압력 … 순서로 돈다.
+"""레시피 heater_soak(분) — 공정 행이 히터 RAMP → 도달 확인 → SOAK N분(히터 유지) → 베이스 압력 … 순서로 돈다.
 
-공란·열 없음이면 예전처럼 설정 HEATER_SOAK_TIME_SEC(60초). 목표 ±HEATER_SOAK_TOLERANCE 를 벗어나면 SOAK 을 처음부터 센다.
-대기 한도 = 예상 RAMP + SOAK + 30분(기본값보다 짧으면 기본값). 상한 12시간은 RAMP 쪽 — SOAK 은 그 위에 더한다.
+도달 확인은 예전 그대로(목표 ±HEATER_SOAK_TOLERANCE 에 HEATER_SOAK_TIME_SEC 연속, 시간 초과 E831).
+SOAK 은 그 뒤 시간만 센다 — 온도는 래더 PID 가 계속 맞추고, 흔들려도 다시 세지 않고 로그·카드에 기록만.
+히터 꺼짐·이상·출력 무응답/끊김은 SOAK 중에도 공정을 멈춘다. 공란·열 없음이면 SOAK 없음(예전과 같음).
 템플릿(CSV·엑셀)에 heater_soak 열, 히터 설명은 현재 설정값(목표 상한 900·램프 기본 6°C/min).
 실제 HeaterService + 래더·열 에뮬레이터(tests/heater_ladder_sim.py, 가상 시계). 장치·네트워크 접근 없음.
 """
@@ -24,12 +25,9 @@ import pytest                                                          # noqa: E
 from openpyxl import load_workbook                                     # noqa: E402
 import heater_ladder_sim as sim                                        # noqa: E402
 from lib import config_common as cfgc                                  # noqa: E402
-from lib.heater_profile import ramp_minutes                            # noqa: E402
 import runtime.chamber_runtime as cr                                   # noqa: E402
 from controller.process_controller import ProcessController, ActionType             # noqa: E402
-from controller.heater_process import (                                # noqa: E402
-    HeaterSoakWaiter, heater_wait_timeout_s, WAIT_TIMEOUT_MAX_SEC, WAIT_TIMEOUT_MARGIN_SEC,
-)
+from controller.heater_process import HeaterSoakWaiter                 # noqa: E402
 
 CSV_PATH = os.path.join(_ROOT, "recipes", "Recipe_Template.csv")
 XLSX_PATH = os.path.join(_ROOT, "recipes", "Recipe_Template.xlsx")
@@ -187,13 +185,13 @@ def test_wait_step_carries_soak_and_blank_keeps_one_arg_call():
         assert pc._send_and_collect_tokens(seq[1])[0].kind == "HEATER_READY"
         assert pc._send_and_collect_tokens(old[1])[0].kind == "HEATER_READY"
         assert calls == [(400.0, 3600.0), (400.0,)]                       # 공란이면 인자 1개(예전 호출 그대로)
-        zero = pc._create_process_sequence(dict(p, heater_soak=0.0))[1]   # 0분 = 도달 즉시(공란과 다름)
+        zero = pc._create_process_sequence(dict(p, heater_soak=0.0))[1]   # 0분 = 도달 확인 뒤 바로(공란과 같은 동작)
         assert zero.params == (0.0,)
     asyncio.run(go())
 
 
 # ───────────────────────── 400°C · SOAK 60분 (에뮬레이터) ─────────────────────────
-def test_400c_soak_60min_waits_after_arrival_with_heater_on():
+def test_400c_soak_60min_counts_time_after_arrival_with_heater_on():
     async def go():
         rt, rec, svc, plc, clk, chat, t0 = await _heat(400.0, 3600.0, **REAL)
         runs = []
@@ -204,23 +202,23 @@ def test_400c_soak_60min_waits_after_arrival_with_heater_on():
         st = svc.status()
         assert st["run"] and svc.owner == "process" and abs(st["pv"] - 400.0) <= 2.0
 
-        (t_in, m_in), = _logs(rt, "목표 도달 — SOAK 60분 시작")
+        (t_band, _m), = _logs(rt, "히터 목표 도달 —")                        # 도달 확인(설정 60초)은 예전 그대로
+        (t_hold, _m2), = _logs(rt, "SOAK 60분 시작")
         (t_ok, m_ok), = _logs(rt, "히터 준비 완료")
-        assert 3600 <= t_ok - t_in <= 3601                                  # 도달 뒤 60분
-        assert 50 * 60 <= t_in - t0 <= 80 * 60                              # 25→400°C RAMP(6°C/min, 감속 접근)
-        assert "(SOAK 60분 포함)" in m_ok
-        (_t, m_start), = _logs(rt, "를 SOAK 60분(레시피 heater_soak) 유지하면 진행")
-        assert "한도 156분" in m_start and "+ SOAK 60분 + 여유 30분" in m_start
+        assert 60 <= t_hold - t_band <= 61 and 3600 <= t_ok - t_hold <= 3601   # 도달 확인 뒤 60분
+        assert 50 * 60 <= t_band - t0 <= 80 * 60                            # 25→400°C RAMP(6°C/min, 감속 접근)
+        assert "SOAK 60분 끝" in m_ok and "SOAK 중 " in m_ok
+        (_t, m_start), = _logs(rt, "그 뒤 SOAK 60분(레시피 heater_soak")
+        assert "도달 한도" in m_start
         prog = _logs(rt, "히터 SOAK — ")
-        assert len(prog) >= 55 and all(t_in <= t <= t_ok for t, _m in prog)
-        assert not _logs(rt, "SOAK 중단")
+        assert len(prog) >= 55 and all(t_hold <= t <= t_ok for t, _m3 in prog) and "남은" in prog[0][1]
 
         reach = [c for c in chat.full if c[0] == "[CH2] 히터 도달"]
         assert len(reach) == 1 and reach[0][1] == "SUCCESS"
         f = reach[0][2]
-        assert list(f) == ["목표", "도달 PV", "승온 소요", "SOAK"]
-        assert f["SOAK"] == "60분 0초"
-        ramp = int(t_in - t0)
+        assert list(f) == ["목표", "도달 PV", "승온 소요", "SOAK", "SOAK 중 PV"]
+        assert f["SOAK"] == "60분 0초" and f["SOAK 중 PV"].endswith("°C")
+        ramp = int(t_hold - t0)
         assert f["승온 소요"] == f"{ramp // 60}분 {ramp % 60}초"             # SOAK 을 뺀 시간
     asyncio.run(go())
 
@@ -240,10 +238,17 @@ def test_blank_soak_uses_setting_and_card_unchanged():
     asyncio.run(go())
 
 
-def test_soak_restarts_when_pv_leaves_band():
+async def _into_soak(soak_s):
+    rt, rec, svc, plc, clk, chat, t0 = await _heat(200.0, soak_s, mv_limit=700)
+    word = f"SOAK {soak_s / 60:g}분 시작"
+    await _run_until(svc, plc, clk, lambda: bool(_logs(rt, word)), 3 * 3600)
+    (t_hold, _m), = _logs(rt, word)
+    return rt, rec, svc, plc, clk, t_hold
+
+
+def test_wobble_during_soak_is_recorded_not_restarted():
     async def go():
-        rt, rec, svc, plc, clk, chat, t0 = await _heat(200.0, 600.0, mv_limit=700)
-        await _run_until(svc, plc, clk, lambda: bool(_logs(rt, "SOAK 10분 시작")), 3 * 3600)
+        rt, rec, svc, plc, clk, t_hold = await _into_soak(600.0)
         await sim.run(svc, plc, clk, 300)
         await _tick()
         plc.tc_offset = 5.0                                                 # TC 가 5°C 높게 읽힘 → ±2°C 밖
@@ -252,15 +257,33 @@ def test_soak_restarts_when_pv_leaves_band():
         plc.tc_offset = 0.0
         await _run_until(svc, plc, clk, _done(rec), 3600)
         assert rec.names() == ["on_heater_set_ok", "on_heater_ready"], rec.calls
-        (t_out, m_out), = _logs(rt, "SOAK 중단")
-        assert "목표 ±2°C 밖" in m_out and "처음부터" in m_out
-        (t_re, _m), = _logs(rt, "SOAK 다시 시작(2번째)")
-        (t_ok, _m2), = _logs(rt, "히터 준비 완료")
-        assert t_re > t_out and 600 <= t_ok - t_re <= 601                   # 다시 들어온 뒤 10분 전부
+        (t_ok, m_ok), = _logs(rt, "히터 준비 완료")
+        assert 600 <= t_ok - t_hold <= 601                                  # 흔들려도 처음부터 다시 세지 않음
+        (_t, m_out), = _logs(rt, "목표 ±2°C 밖(SOAK 시간은 계속 셈")
+        (_t2, m_back), = _logs(rt, "히터 PV 범위 복귀")
+        assert "벗어났었음" in m_back and "±2°C 밖" in m_ok
     asyncio.run(go())
 
 
-# ───────────────────────── 판정기·한도 (순수 함수) ─────────────────────────
+@pytest.mark.parametrize("fault,code", [("interlock", "E830"), ("output_loss", "E832")])
+def test_heater_trouble_during_soak_still_stops(fault, code):
+    """SOAK 은 시간만 세지만 안전장치는 그대로 — 인터락 해제(RUN 꺼짐) E830, 출력 끊김(DAC 상한에서 식음) E832."""
+    async def go():
+        rt, rec, svc, plc, clk, t_hold = await _into_soak(3600.0)
+        await sim.run(svc, plc, clk, 60)
+        await _tick()
+        if fault == "interlock":
+            plc.vac_ok = False
+        else:
+            plc.gain = 0.0                                                  # 히터 출력이 열로 안 감(차단기·단선 흉내)
+        await _run_until(svc, plc, clk, _done(rec), 1800)
+        fails = [c for c in rec.calls if c[0] == "on_heater_failed"]
+        assert len(fails) == 1 and fails[0][2].get("code") == code, rec.calls
+        assert not _logs(rt, "히터 준비 완료") and clk.t - t_hold < 1800
+    asyncio.run(go())
+
+
+# ───────────────────────── 판정기 (순수) ─────────────────────────
 class _Clk:
     def __init__(self):
         self.t = 1000.0                     # 실제 시계(monotonic)처럼 0 이 아닌 값에서 시작
@@ -269,40 +292,28 @@ class _Clk:
         return self.t
 
 
-def test_waiter_restart_logs_and_timeout_message():
+def test_waiter_hold_counts_time_and_ignores_arrival_timeout():
     clk, logs = _Clk(), []
-    w = HeaterSoakWaiter(200.0, tol=2.0, soak_sec=600, timeout_s=900, clock=clk, log=logs.append)
+    w = HeaterSoakWaiter(200.0, tol=2.0, soak_sec=60, timeout_s=300, hold_sec=600, clock=clk, log=logs.append)
     st = {"run": True, "fault": False, "stale": False, "pv": 200.3, "sv": 200.0, "sv_ramp": 200.0}
+    assert w.tick(st, False) is None and logs[-1].startswith("히터 목표 도달 — 60초 안정 확인 중")
+    clk.t = 1060
+    assert w.tick(st, False) is None and "SOAK 10분 시작" in logs[-1] and w.hold_t0 == 1060
+    clk.t = 1200
+    assert w.tick(st, False) is None and logs[-1].startswith("히터 SOAK — 2.3분 / 10분, 남은 7.7분")
+    clk.t = 1201
+    assert w.tick({**st, "pv": 203.0}, False) is None and "목표 ±2°C 밖(SOAK 시간은 계속 셈" in logs[-1]
+    clk.t = 1210
+    assert w.tick(st, False) is None and logs[-1] == "히터 PV 범위 복귀 — 200.3°C (9초 벗어났었음)"
+    clk.t = 1659                                                     # 도달 한도(300초)는 지났지만 SOAK 중이라 E831 아님
     assert w.tick(st, False) is None
-    assert logs[-1].startswith("히터 목표 도달 — SOAK 10분 시작 (PV 200.3°C")
-    clk.t = 1300
-    assert w.tick(st, False) is None
-    assert any(m.startswith("히터 SOAK — 5분 / 10분") for m in logs)
-    clk.t = 1301
-    assert w.tick({**st, "pv": 203.0}, False) is None
-    assert logs[-1] == "히터 SOAK 중단 — PV 203.0°C 가 목표 ±2°C 밖, 5분 유지 후 → 다시 들어오면 처음부터"
-    clk.t = 1310
-    assert w.tick(st, False) is None and logs[-1] == "히터 SOAK 다시 시작(2번째) — PV 200.3°C"
-    clk.t = 1900
+    assert w.tick({**st, "run": False}, False)[2] == "E830"          # 히터 꺼짐은 SOAK 중에도 실패
+    clk.t = 1660
     ok, msg, code = w.tick(st, False)
-    assert ok is False and code == "E831" and "(SOAK 2번 시작했으나 10분 유지 못 함)" in msg
-
-
-def test_timeout_adds_soak_and_cap_applies_to_ramp_only():
-    kw = dict(base_timeout_s=5400, approach_zone=20.0, approach_min_rate=1.0)
-    ramp = ramp_minutes(375.0, 6.0, 20.0, 1.0) * 60.0
-    t, why = heater_wait_timeout_s(25.0, 400.0, 6.0, soak_sec=3600, **kw)
-    assert t == pytest.approx(ramp + 3600 + WAIT_TIMEOUT_MARGIN_SEC) and round(t / 60) == 156
-    assert "예상 승온 66분" in why and "+ SOAK 60분" in why
-    t60, _w = heater_wait_timeout_s(25.0, 400.0, 6.0, soak_sec=60, **kw)       # 설정값 60초 — 예전과 같은 값
-    assert t60 == pytest.approx(ramp + 60 + WAIT_TIMEOUT_MARGIN_SEC)
-    slow = ramp_minutes(875.0, 2.0, 20.0, 1.0) * 60.0                          # 900°C · 2°C/min · SOAK 8시간
-    t, why = heater_wait_timeout_s(25.0, 900.0, 2.0, soak_sec=28800, **kw)
-    assert t == pytest.approx(slow + 28800 + WAIT_TIMEOUT_MARGIN_SEC) and t > WAIT_TIMEOUT_MAX_SEC   # 예전: 12시간에 잘림
-    t, why = heater_wait_timeout_s(25.0, 900.0, 0.1, soak_sec=600, **kw)        # RAMP 만으로 12시간 넘음
-    assert t == WAIT_TIMEOUT_MAX_SEC + 600 and "상한 12시간 + SOAK" in why
-    t, why = heater_wait_timeout_s(None, 400.0, 6.0, soak_sec=3600, **kw)       # 현재 온도 미상 — 예전 그대로
-    assert t == 5400 and "기본값" in why
+    assert ok is True and code is None and "SOAK 10분 끝" in msg and "200.3~203.0°C, ±2°C 밖 9초" in msg
+    w2 = HeaterSoakWaiter(200.0, tol=2.0, soak_sec=60, timeout_s=300, hold_sec=600, clock=clk, log=logs.append)
+    clk.t += 301                                                     # 도달 못 하면 예전처럼 E831
+    assert w2.tick({**st, "pv": 150.0}, False)[2] == "E831"
 
 
 # ───────────────────────── 템플릿 ─────────────────────────
@@ -322,16 +333,16 @@ def test_template_has_soak_column_and_current_heater_values():
     assert dv.promptTitle == "heater_soak [min]"
     assert [desc.cell(45, c).value for c in (1, 2)] == ["heater_soak", "min"]
 
-    # 설명 문구가 코드·설정 기본값과 맞는지(예전: 목표 1~500, 램프 기본 12, '60초 머물면')
+    # 설명 문구가 코드·설정 기본값과 맞는지(예전: 목표 1~500, 램프 기본 12, '60초 머물면 준비 완료')
     lim = min(cfgc.HEATER_MAX_TEMP, cfgc.HEATER_SV_LIMIT_C)
     assert float(dvs["AM2:AM61"].formula2) == lim and f"1~{lim:g}" in dvs["AM2:AM61"].prompt
     assert f"HEATER_RAMP_RATE_C_PER_MIN, {cfgc.HEATER_RAMP_RATE_C_PER_MIN:g})" in dvs["AN2:AN61"].prompt
-    assert f"HEATER_SOAK_TIME_SEC, {cfgc.HEATER_SOAK_TIME_SEC:g}초)" in dv.prompt
-    assert f"±{cfgc.HEATER_SOAK_TOLERANCE:g}°C" in dv.prompt
+    assert f"±{cfgc.HEATER_SOAK_TOLERANCE:g}°C 안에 {cfgc.HEATER_SOAK_TIME_SEC:g}초 머물면 도달" in desc["D43"].value
+    assert "다시 세지 않음" in dv.prompt
     texts = [ws.cell(1, c).comment.text for c in range(1, ws.max_column + 1)]
     texts += [str(d.prompt) for d in dvs.values()] + [str(d.error) for d in dvs.values()]
     texts += [str(desc.cell(r, c).value) for r in range(1, desc.max_row + 1) for c in range(1, 5)]
-    for old in ("1~500", "RATE_C_PER_MIN, 12)", "60초 머물면", "'예열 대기'"):
+    for old in ("1~500", "RATE_C_PER_MIN, 12)", "준비 완료로 보고", "'예열 대기'"):
         assert not [t for t in texts if old in t], old
 
 

@@ -145,7 +145,7 @@ NormParams = TypedDict('NormParams', {
     'use_heater': bool,               # CH2 히터: 승온 먼저 → 공정
     'heater_temp': float | None,      # °C
     'heater_ramp': float | None,      # °C/min (None = HEATER_RAMP_RATE_C_PER_MIN)
-    'heater_soak': float | None,      # 분 — 도달 후 SOAK (None = HEATER_SOAK_TIME_SEC)
+    'heater_soak': float | None,      # 분 — 도달 확인 뒤 SOAK(시간만 셈). None = 없음
 }, total=False)
 
 # 폴링 타깃도 명확히 분리
@@ -374,7 +374,7 @@ class _CfgAdapter:
     
 
 HEATER_RAMP_MAX_C_PER_MIN = 60.0   # 레시피 heater_ramp 상한(°C/min)
-HEATER_SOAK_MAX_MIN = 480.0        # 레시피 heater_soak 상한(분) — 도달 후 SOAK 최대 8시간
+HEATER_SOAK_MAX_MIN = 480.0        # 레시피 heater_soak 상한(분) — 도달 뒤 SOAK 최대 8시간
 
 
 def _dc2_allowed(ch: int, want_dc2: bool, heater_on: bool) -> bool:
@@ -784,7 +784,6 @@ class ChamberRuntime:
         self._heater_job = None          # ("wait", HeaterSoakWaiter) / ("hold", HeaterHoldWaiter) / None
         self._heater_watch = False       # HEATER_SET 성공 ~ 종료 절차 시작: 이상·RUN 꺼짐 감시
         self._heater_rate = None         # 이번 공정 램프 속도(°C/min)
-        self._heater_soak_recipe_s = None  # 이번 승온 대기의 레시피 heater_soak(초) — 도달 카드 SOAK 칸(없으면 None)
         self._heater_line_t = -1e9       # 공정 로그 히터 상태 줄 — 마지막으로 남긴 시각(히터 서비스 시계)
         self._proc_polling_active = False  # 메인 공정 폴링 중(= Calib CSV·엑셀 히터 표본 수집 구간)
 
@@ -1484,23 +1483,26 @@ class ChamberRuntime:
             self._spawn_detached(run(), name="HeaterSet")
 
         def cb_heater_wait(target: float, soak_s: Optional[float] = None) -> None:
-            """승온 대기 시작. soak_s = 레시피 heater_soak(초) — None 이면 설정 HEATER_SOAK_TIME_SEC."""
+            """승온 대기 시작. soak_s = 레시피 heater_soak(초) — 도달 확인 뒤 시간만 세는 SOAK(None = 없음)."""
             svc = self._heater
             if svc is None:
                 self.process_controller.on_heater_failed("히터 서비스 없음", code="E830")
                 return
             c = svc.cfg
             rate = float(self._heater_rate or c.ramp_rate)
-            soak = float(c.soak_time_s) if soak_s is None else float(soak_s)
-            self._heater_soak_recipe_s = None if soak_s is None else soak
+            hold = 0.0 if soak_s is None else float(soak_s)
             to, why = heater_wait_timeout_s(svc.status().get("pv"), float(target), rate,
                                             base_timeout_s=c.wait_timeout_s, approach_zone=c.approach_zone,
-                                            approach_min_rate=c.approach_min_rate, soak_sec=soak)
-            soak_txt = f"{soak:.0f}초" if soak_s is None else f"SOAK {soak / 60:g}분(레시피 heater_soak)"
-            self.append_log("HEATER", f"히터 승온 대기 — 목표 {float(target):.1f}°C ±{c.soak_tol:g}°C 를 "
-                                      f"{soak_txt} 유지하면 진행, 한도 {to / 60:.0f}분({why})")
-            self._heater_job = ("wait", HeaterSoakWaiter(float(target), tol=c.soak_tol, soak_sec=soak,
-                                                         timeout_s=to, clock=svc.clock,
+                                            approach_min_rate=c.approach_min_rate, soak_sec=c.soak_time_s)
+            if soak_s is None:
+                self.append_log("HEATER", f"히터 승온 대기 — 목표 {float(target):.1f}°C ±{c.soak_tol:g}°C 를 "
+                                          f"{c.soak_time_s:.0f}초 유지하면 진행, 한도 {to / 60:.0f}분({why})")
+            else:
+                self.append_log("HEATER", f"히터 승온 대기 — 목표 {float(target):.1f}°C ±{c.soak_tol:g}°C 를 "
+                                          f"{c.soak_time_s:.0f}초 유지하면 도달, 그 뒤 SOAK {hold / 60:g}분(레시피 heater_soak, "
+                                          f"시간만 셈) 후 진행. 도달 한도 {to / 60:.0f}분({why})")
+            self._heater_job = ("wait", HeaterSoakWaiter(float(target), tol=c.soak_tol, soak_sec=c.soak_time_s,
+                                                         timeout_s=to, hold_sec=hold, clock=svc.clock,
                                                          log=lambda m: self.append_log("HEATER", m)))
 
         def cb_heater_hold() -> None:
@@ -6629,8 +6631,9 @@ class ChamberRuntime:
                 with contextlib.suppress(Exception):
                     nxt = str(f() or "")
             took = float(svc.clock()) - float(getattr(w, "t0", svc.clock()))
+            hold = float(getattr(w, "hold_sec", 0.0) or 0.0)
             svc.notify_reached(getattr(w, "target", svc.final_target()), st.get("pv"), took, nxt,
-                               soak_sec=getattr(self, "_heater_soak_recipe_s", None))
+                               soak_sec=hold, soak_pv=w.pv_range_text() if hold > 0 else "")
         except Exception as e:
             self.append_log("HEATER", f"⚠ 히터 도달 카드 실패: {e!r}")
 

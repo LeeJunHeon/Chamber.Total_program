@@ -212,15 +212,16 @@ class HeaterService:
         return OWNER_LABEL.get(self.owner or "manual", self.owner or "수동")
 
     def notify_reached(self, target, pv, took_sec: float, next_step: str = "",
-                       soak_sec: Optional[float] = None) -> None:
+                       soak_sec: float = 0.0, soak_pv: str = "") -> None:
         """공정 소유 히터의 승온 대기 통과 카드 1장 — 이상 사건이 없으면 ✅, 있으면 ❌.
-        soak_sec: 레시피 heater_soak(초)이 있을 때만 — '승온 소요'는 SOAK 을 뺀 시간, 'SOAK' 칸을 따로 단다."""
+        soak_sec > 0(레시피 heater_soak): '승온 소요'는 SOAK 을 뺀 시간, 'SOAK'·'SOAK 중 PV' 칸을 단다."""
         took = int(max(0.0, float(took_sec or 0.0)))
-        soak = None if soak_sec is None else int(round(max(0.0, float(soak_sec))))
-        ramp = took if soak is None else max(0, took - soak)
+        soak = int(round(max(0.0, float(soak_sec or 0.0))))
+        ramp = max(0, took - soak)
         fields = {"목표": self._fmt(target), "도달 PV": self._fmt(pv), "승온 소요": f"{ramp // 60}분 {ramp % 60}초"}
-        if soak is not None:
+        if soak > 0:
             fields["SOAK"] = f"{soak // 60}분 {soak % 60}초"
+            fields["SOAK 중 PV"] = str(soak_pv)
         if next_step:
             fields["다음 단계"] = str(next_step)
         if self._episode_notes:

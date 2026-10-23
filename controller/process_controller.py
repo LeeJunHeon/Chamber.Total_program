@@ -1349,9 +1349,9 @@ class ProcessController:
                                meta={"action": "HEATER_WAIT", "ch": self._ch})
             soak_s = step.params[0] if step.params else None
             if soak_s is None:
-                self._heater_wait(float(step.value))                  # SOAK = 설정 HEATER_SOAK_TIME_SEC
+                self._heater_wait(float(step.value))                  # 레시피 SOAK 없음(예전 그대로)
             else:
-                self._heater_wait(float(step.value), float(soak_s))   # SOAK = 레시피 heater_soak
+                self._heater_wait(float(step.value), float(soak_s))   # 도달 뒤 SOAK(초) = 레시피 heater_soak
             tokens.append(ExpectToken("HEATER_READY"))
 
         elif a == ActionType.HEATER_HOLD:
@@ -2040,7 +2040,7 @@ class ProcessController:
             _hr = params.get("heater_ramp")
             heater_ramp = float(_hr) if _hr not in (None, "") else None
             _r_txt = f"{heater_ramp:g}°C/min" if heater_ramp else "기본 램프 속도"
-            # 도달 후 SOAK(분) — 공란이면 None(런타임이 설정 HEATER_SOAK_TIME_SEC 를 쓴다)
+            # 도달 확인 뒤 SOAK(분, 시간만 셈) — 공란이면 None(SOAK 없음, 예전 그대로)
             _hs = params.get("heater_soak")
             heater_soak = float(_hs) if _hs not in (None, "") else None
             _s_txt = f", SOAK {heater_soak:g}분" if heater_soak is not None else ""
