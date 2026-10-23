@@ -313,7 +313,7 @@ class ActionType(str, Enum):
     RF_PULSE_STOP  = "RF_PULSE_STOP"
     # CH2 히터(PLC 내장 PID) — 레시피 use_heater=T 일 때만 들어간다
     HEATER_SET  = "HEATER_SET"    # 목표·램프 설정(공정 소유로 운전 시작 또는 목표 변경)
-    HEATER_WAIT = "HEATER_WAIT"   # 목표 도달 + 안정(soak) 대기
+    HEATER_WAIT = "HEATER_WAIT"   # 목표 도달 + 안정(SOAK) 대기 — params=(SOAK 초,) 는 레시피 heater_soak 이 있을 때만
     HEATER_HOLD = "HEATER_HOLD"   # 작업 압력·플라즈마 조건에서 유지 모드(dac) 측정 대기
 
 
@@ -433,7 +433,7 @@ class ProcessController:
 
         # CH2 히터 — 런타임이 주입(히터가 없으면 콜백이 E830 으로 실패를 알린다)
         heater_set: Optional[Callable[[float, Optional[float]], None]] = None,
-        heater_wait: Optional[Callable[[float], None]] = None,
+        heater_wait: Optional[Callable[..., None]] = None,   # (목표 °C[, 레시피 SOAK 초])
         heater_hold: Optional[Callable[[], None]] = None,
         cancel_heater: Optional[Callable[[], None]] = None,
 
@@ -1347,7 +1347,11 @@ class ProcessController:
             if not self._heater_wait:
                 raise AppError(code="E830", detail="HEATER_WAIT 콜백이 주입되지 않았습니다.",
                                meta={"action": "HEATER_WAIT", "ch": self._ch})
-            self._heater_wait(float(step.value))
+            soak_s = step.params[0] if step.params else None
+            if soak_s is None:
+                self._heater_wait(float(step.value))                  # SOAK = 설정 HEATER_SOAK_TIME_SEC
+            else:
+                self._heater_wait(float(step.value), float(soak_s))   # SOAK = 레시피 heater_soak
             tokens.append(ExpectToken("HEATER_READY"))
 
         elif a == ActionType.HEATER_HOLD:
@@ -2036,14 +2040,19 @@ class ProcessController:
             _hr = params.get("heater_ramp")
             heater_ramp = float(_hr) if _hr not in (None, "") else None
             _r_txt = f"{heater_ramp:g}°C/min" if heater_ramp else "기본 램프 속도"
-            self._emit_log("Process", f"히터 사용 — 목표 {heater_temp:g}°C ({_r_txt})")
+            # 도달 후 SOAK(분) — 공란이면 None(런타임이 설정 HEATER_SOAK_TIME_SEC 를 쓴다)
+            _hs = params.get("heater_soak")
+            heater_soak = float(_hs) if _hs not in (None, "") else None
+            _s_txt = f", SOAK {heater_soak:g}분" if heater_soak is not None else ""
+            self._emit_log("Process", f"히터 사용 — 목표 {heater_temp:g}°C ({_r_txt}{_s_txt})")
             steps.append(ProcessStep(
                 action=ActionType.HEATER_SET, value=heater_temp, params=(heater_ramp,),
                 message=f'히터 {heater_temp:g}°C 설정 ({_r_txt})',
             ))
             steps.append(ProcessStep(
                 action=ActionType.HEATER_WAIT, value=heater_temp,
-                message=f'히터 {heater_temp:g}°C 도달·안정 대기',
+                params=(heater_soak * 60.0,) if heater_soak is not None else None,
+                message=f'히터 {heater_temp:g}°C 도달·안정 대기' + (f' (SOAK {heater_soak:g}분)' if heater_soak is not None else ''),
             ))
 
         steps.append(ProcessStep(

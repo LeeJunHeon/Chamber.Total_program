@@ -34,7 +34,7 @@ def test_csv_and_xlsx_columns_match(wb):
     ws = wb["Recipe"]
     xlsx = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
     assert xlsx == _csv_header()
-    assert xlsx[-3:] == ["use_heater", "heater_temp", "heater_ramp"]
+    assert xlsx[-4:] == ["use_heater", "heater_temp", "heater_ramp", "heater_soak"]
 
 
 def test_every_column_has_comment_and_validation(wb):
@@ -49,7 +49,7 @@ def test_every_column_has_comment_and_validation(wb):
 def test_heater_and_special_validations(wb):
     dvs = _dvs(wb["Recipe"])
     assert (dvs["AL2:AL61"].type, dvs["AL2:AL61"].formula1) == ("list", '"T,F"')
-    assert (dvs["AM2:AM61"].type, dvs["AM2:AM61"].formula1, dvs["AM2:AM61"].formula2) == ("decimal", "1", "500")
+    assert (dvs["AM2:AM61"].type, dvs["AM2:AM61"].formula1, dvs["AM2:AM61"].formula2) == ("decimal", "1", "900")
     assert (dvs["AN2:AN61"].type, dvs["AN2:AN61"].formula1, dvs["AN2:AN61"].formula2) == ("decimal", "0.1", "60")
     assert dvs["A2:A61"].type == "custom" and 'LOWER(A2)="test"' in dvs["A2:A61"].formula1    # TEST 행 허용
     assert dvs["Z2:Z61"].formula1 == '"F"'                                                      # DC2 폐지
