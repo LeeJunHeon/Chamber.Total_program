@@ -1263,11 +1263,14 @@ class HostHandlers:
 
                 cleanup_done = True
 
-            try:
-                busy = self._fail_if_loadlock_transition_busy("VACUUM_ON")
-                if busy is not None:
-                    return busy
+            # 다른 VACUUM_ON/VACUUM_OFF 진행 중이면 거절 — try 밖(VACUUM_OFF 와 같게).
+            # try 안에 두면 아래 finally 의 실패 원복(_stop_roughing)이 돌아 진행 중인 펌프다운의
+            # 러핑밸브·펌프를 끄고(첫 요청 E312), 거절 응답도 5초 늦었다.
+            busy = self._fail_if_loadlock_transition_busy("VACUUM_ON")
+            if busy is not None:
+                return busy
 
+            try:
                 async with self._loadlock_transition_lock:
                     self._loadlock_transition_tag = "VACUUM_ON"
                     try:
