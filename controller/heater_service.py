@@ -122,6 +122,7 @@ class HeaterService:
         self._fail_since: Optional[float] = None
         self._wd = 0
         self._wd_fail_log_t = -1e9
+        self._write_seq = 0                  # 상태를 바꾸는 PLC 쓰기 횟수(워치독 제외) — 읽는 사이 쓰기가 끼면 그 폴링을 버린다
         self._residual_fail_log_t = -1e9
         self._sv_log_c: Optional[float] = None
         self._sv_log_t = -1e9
@@ -473,11 +474,14 @@ class HeaterService:
     async def _w_reg(self, addr: int, value: int) -> None:
         if addr not in WRITE_REGS:
             raise ValueError(f"히터 쓰기 허용 밖 레지스터 D{addr}")
+        if addr != REG_WD:                   # 워치독 갱신은 상태를 바꾸지 않는다
+            self._write_seq += 1
         await asyncio.wait_for(self._plc.write_reg(int(addr), int(value) & 0xFFFF), timeout=IO_TIMEOUT_S)
 
     async def _w_coil(self, addr: int, on: bool) -> None:
         if addr not in WRITE_COILS:
             raise ValueError(f"히터 쓰기 허용 밖 코일 {addr}")
+        self._write_seq += 1
         await asyncio.wait_for(self._plc.write_coil(int(addr), bool(on)), timeout=IO_TIMEOUT_S)
 
     async def _write_sv(self, temp_c: float, force_log: bool = False) -> None:
@@ -746,6 +750,7 @@ class HeaterService:
         if not self._link_up():
             self._on_fail("PLC 미연결", quiet=self._last_ok_t is None)
             return
+        seq0 = self._write_seq               # 읽기 시작 시점의 쓰기 횟수(잠금을 잡은 뒤 비교)
         try:
             regs = await asyncio.wait_for(
                 self._plc.read_regs_block(REG_BLOCK_START, REG_BLOCK_COUNT, priority="low"), timeout=IO_TIMEOUT_S)
@@ -764,6 +769,10 @@ class HeaterService:
             self._fail_since = None
         st = self._decode(regs, bits, now)
         async with self._lock:
+            if self._write_seq != seq0:
+                # 읽는 동안(잠금 밖) 켜기·끄기·목표 변경 같은 쓰기가 끼었다 — 이 값은 쓰기 전 상태라 확정·발행하지 않는다.
+                # (예: 공정이 히터를 켠 직후 옛 RUN=0 이 발행돼 '공정 중 히터 꺼짐' E832 로 잘못 멈추던 경합) 다음 폴링이 새로 읽는다.
+                return
             if not await self._process(st, now):
                 return                       # 잔존 RUN 정리 실패 — 발행하지 않고 다음 폴링에 재시도
         self._last_ok_t = now
