@@ -180,19 +180,36 @@ def _find_settings_json() -> Path | None:
     return None
 
 
+def _settings_fail(res, log) -> None:
+    """settings.json 에 고칠 곳 → 콘솔·run_error.log(exe 옆)·구글챗에 남기고 종료(코드 2). 값은 하나도 적용되지 않았다."""
+    from lib._config_loader import format_problems
+    n = len(res.problems)
+    msg = f"settings.json 고칠 곳 {n}건 → 워커를 실행하지 않음 ({res.path})\n{format_problems(res)}"
+    log(f"  ! {msg}")
+    try:
+        with open(_worker_base_dir() / "run_error.log", "a", encoding="utf-8") as f:
+            f.write(f"{_now()} [rf-worker] ! {msg}\n")
+    except Exception:
+        pass
+    _load_notify_config()
+    first = res.problems[0].splitlines()[0]
+    notify(f"settings.json 오류로 RF 워커 중지: {first}" + (f" 외 {n - 1}건" if n > 1 else ""))
+    sys.exit(2)
+
+
 def _load_config(log):
     """settings.json 을 config_common 에 적용하고, 경로 3종 + STALE_MIN 을 getattr 로 읽는다.
     반환: (camera_root, state_dir, csv_dir, stale_min, settings_path)"""
     settings = _find_settings_json()
-    try:
-        from lib import _config_loader
-        if settings is not None and settings.is_file():
-            _config_loader.load_settings(path=settings)
-        else:
-            log(f"  ! settings.json 없음 → config_common 기본값 사용 (탐색 시작: {settings})")
-            settings = None
-    except Exception as e:
-        log(f"  ! settings.json 적용 실패({e}) → config_common 기본값 사용")
+    # settings.json 이 있는데 고칠 곳(문법 오류·오타 키·타입 불일치 등)이 있으면 값을 하나도 적용하지 않고 종료(코드 2).
+    # 파일이 없을 때만 예전처럼 config_common 기본값으로 진행한다.
+    from lib import _config_loader
+    if settings is not None and settings.is_file():
+        res = _config_loader.check_and_load_settings(settings)
+        if res.problems:
+            _settings_fail(res, log)
+    else:
+        log(f"  ! settings.json 없음 → config_common 기본값 사용 (탐색 시작: {settings})")
         settings = None
     from lib import config_common as cfgc
     camera_root = getattr(cfgc, "CAMERA_LOG_ROOT",     r"C:\VanaM_Logs\Camera_Logs")

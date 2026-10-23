@@ -1952,16 +1952,16 @@ class MainWindow(QWidget):
                 pass
 
 def main() -> int:
-    # ✅ settings.json 을 먼저 적용해야 setup_app_logging 이 LOG_ROOT_DIR override 를 반영한다.
-    #    (MainWindow.__init__ 의 load_settings() 는 그대로 둔다 — 두 번 호출돼도 무해)
+    # ✅ settings.json 을 먼저 검사·적용해야 setup_app_logging 이 LOG_ROOT_DIR override 를 반영한다.
+    #    고칠 곳(파일 없음·문법 오류·오타 키·타입 불일치 등)이 하나라도 있으면 값을 하나도 적용하지 않고,
+    #    아래 QApplication 생성 뒤 알림창으로 고칠 곳을 보여 주고 시작하지 않는다(장비 연결 전).
+    #    (MainWindow.__init__ 의 load_settings() 는 그대로 둔다 — 같은 파일을 다시 적용할 뿐)
+    from lib._config_loader import SettingsResult, check_and_load_settings, format_problems, _settings_path
     try:
-        from lib._config_loader import load_settings
-        load_settings()
+        cfg_res = check_and_load_settings()
     except Exception as e:
-        try:
-            print(f"[Config] early apply failed: {e!r}", file=sys.stderr)
-        except Exception:
-            pass
+        cfg_res = SettingsResult(path=_settings_path(),
+                                 problems=[f"설정 파일 검사 중 예외({e!r}) — 이 내용을 개발 담당에게 알려 주세요"])
 
     _logger = setup_app_logging(
         app_name="CH_1_2_program",
@@ -1975,6 +1975,14 @@ def main() -> int:
     app = QApplication(sys.argv)
 
     install_qt_message_logging(_logger)
+
+    if cfg_res.problems:
+        _logger.error("settings.json 고칠 곳 %d건 → 프로그램을 시작하지 않음 (%s)\n%s",
+                      len(cfg_res.problems), cfg_res.path, format_problems(cfg_res))
+        from util.settings_error_box import settings_error_box
+        settings_error_box(cfg_res).exec()
+        return 1
+    _logger.info("settings.json 적용: %s (%d개 값)", cfg_res.path, cfg_res.applied)
 
     try:
         app.aboutToQuit.connect(lambda: _logger.warning("QApplication.aboutToQuit emitted"))
