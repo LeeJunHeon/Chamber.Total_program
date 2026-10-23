@@ -2058,8 +2058,12 @@ class AsyncDCPulse:
             hv_on = self._hv_on_from_status(flags)
             if hv_on is False:
                 return True, None, False
+            # STATUS 가 HV On 이라고 답했으면 전력과 상관없이 '아직 켜짐'. P==0 은 아크 처리 대기·무방전처럼
+            # 출력이 켜진 채 전력만 0 인 경우일 수 있다 — 예전에는 여기서 P==0 으로 OFF 확인을 내줘
+            # OFF 를 거절당하고도 재시도·'출력 상태 미확인' 경보 없이 끝났다.
+            return False, None, True
 
-        # 2) STATUS 확인이 안 되거나 아직 HV On이면, 보조로 실제 전력(P) 확인
+        # 2) STATUS 확인이 안 될 때만 보조로 실제 전력(P) 확인
         piv = await self.read_output_piv()
         p = None
         if piv and "eng" in piv:
