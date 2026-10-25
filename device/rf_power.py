@@ -580,10 +580,31 @@ class RFPowerAsync:
                 ref = next((res[k] for k in ("reflected", "ref") if res.get(k) is not None), 0.0)
                 fwd = None if fwd is None else float(fwd)
                 ref = None if ref is None else float(ref)
+            if fwd == 0.0 and self.state in ("RAMPING_UP", "BLIND_SETTLE"):
+                # 시작 구간의 0.0 W 는 램프·저출력 판정에 넣지 않는다(예전처럼 기다림) — 장비가 SET ON 뒤 수십 초
+                # 0.0 을 읽다가 출력이 나오는 경우가 있다(2026-10-18 PC 런: 44초 0.0 뒤 50 W 정상 도달).
+                # 대신 끝없이 기다리지 않게 시작 뒤 RF_BLIND_RAMP_REACH_TIMEOUT_S(150초) 동안 계속 0.0 이면 실패.
+                self._zero_start_timeout_check()
+                return
             if fwd is not None:
                 self.update_measurements(fwd, float(ref or 0.0))
         except Exception:
             pass
+
+    def _zero_start_timeout_check(self) -> None:
+        """시작 구간(도달 전) FWD 0.0 W 가 RF_BLIND_RAMP_REACH_TIMEOUT_S 를 넘으면 실패 처리(0 이면 끔)."""
+        if not self._is_running:
+            return
+        to = float(self._rf_blind_ramp_reach_timeout_s)
+        if to <= 0.0 or self._blind_ramp_start_ts is None:
+            return
+        el = time.monotonic() - self._blind_ramp_start_ts
+        if el > to:
+            self._ev_nowait(RFPowerEvent(kind="status", message="RF 출력이 나오지 않아 RF 공정을 중단합니다."))
+            self._ev_nowait(RFPowerEvent(
+                kind="target_failed",
+                message=f"Blind ramp 도달 시간({int(to)}s) 초과: 시작 뒤 FWD 0.0 W(출력 없음)"))
+            asyncio.create_task(self.cleanup())
 
     async def _poll_loop(self):
         try:

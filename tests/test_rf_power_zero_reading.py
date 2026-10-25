@@ -136,6 +136,7 @@ def test_rf_never_lights_fails_instead_of_waiting_forever():
     async def go():
         plant = {"dac": 0.0, "dead": True, "enabled": False}      # 처음부터 출력 없음
         rf = _rf(plant)
+        rf._rf_blind_ramp_reach_timeout_s = 0.2                    # 실제 150초 — 시작 구간 0.0 은 이 시간 동안 기다린다
         await rf.start_process(30.0)
         got = await _collect_until_failed(rf)
         await _stop(rf)
@@ -159,3 +160,20 @@ def test_blind_ramp_reach_timeout_now_fires_on_zero():
     got = asyncio.run(go())
     failed = [m for k, m in got if k == "target_failed"]
     assert failed and "Blind ramp" in failed[0], got[-6:]
+
+
+def test_late_output_after_set_on_waits_like_before():
+    """SET ON 뒤 한동안 0.0 W 를 읽다가 출력이 나오면 기다렸다 정상 도달(2026-10-18 PC 런: 44초 0.0 뒤 50 W) — 저출력 3회로 끊지 않는다."""
+    async def go():
+        plant = {"dac": 0.0, "dead": True, "enabled": False}      # 처음엔 출력 없음
+        rf = _rf(plant)
+        await rf.start_process(30.0)
+        await asyncio.sleep(1.0)                                   # 저출력 3회보다 훨씬 긴 0.0 구간
+        plant["dead"] = False
+        ok = await _until(lambda: rf.state == "MAINTAINING", 15.0)
+        ev = _kinds(rf)
+        await _stop(rf)
+        return ok, ev
+    ok, ev = asyncio.run(go())
+    assert ok, ev[-5:]
+    assert not any(k == "target_failed" for k, _ in ev), ev
