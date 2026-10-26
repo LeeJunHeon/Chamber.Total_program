@@ -6471,6 +6471,14 @@ class ChamberRuntime:
         if svc is None:
             return
         self._heater_record(st)
+        job, watch = self._heater_job, self._heater_watch      # 판정 전 상태(판정 코드가 지우고 나서 예외가 날 수 있다)
+        try:
+            self._heater_judge(svc, st)
+        except Exception as e:
+            self._heater_judge_error(e, job, watch)
+
+    def _heater_judge(self, svc, st: dict) -> None:
+        """공정 대기 판정(도달·유지)과 공정 중 이상 감시 — _on_heater_status 가 폴링마다 부른다."""
         pc = self.process_controller
         trip = st.get("noresp")
         if trip and (self._heater_job is not None or self._heater_watch):
@@ -6509,6 +6517,22 @@ class ChamberRuntime:
             else:
                 why = "히터가 꺼짐(외부 OFF 또는 순간 인터락 해제)"
             pc.on_heater_failed(f"공정 중 {why} — 공정을 중단합니다", code="E832")
+
+    def _heater_judge_error(self, e: Exception, job, watch: bool) -> None:
+        """대기 판정·감시 코드의 예상 못 한 예외 — 그대로 두면 상태 리스너가 예외를 삼켜 폴링마다 같은 예외만 로그에 남고
+        공정은 그 단계를 끝없이 기다린다(히터는 켜진 채 — 2026-10-26 검토: SOAK 중 넣은 예외로 4시간 대기·로그 14,400줄).
+        대기·감시를 끝내고 공정을 실패시킨다 — 판정 전에 대기(도달·유지) 중이었으면 E830, 공정 중 감시였으면 E832.
+        히터 정리는 공정 종료 후 러너가 한다."""
+        self._heater_job = None
+        self._heater_watch = False
+        tb = "".join(traceback.format_exception(type(e), e, e.__traceback__)).rstrip()
+        self.append_log("HEATER", f"⚠ 히터 공정 판정 예외{' — 공정을 중단합니다' if (job is not None or watch) else ''}: {tb}")
+        if job is not None:
+            self.process_controller.on_heater_failed(
+                f"히터 {'도달' if job[0] == 'wait' else '유지'} 대기 판정 중 프로그램 오류({e!r}) — 공정을 중단합니다", code="E830")
+        elif watch:
+            self.process_controller.on_heater_failed(
+                f"공정 중 히터 감시 중 프로그램 오류({e!r}) — 공정을 중단합니다", code="E832")
 
     def _heater_record(self, st: dict) -> None:
         """히터 상태를 공정 기록에 남긴다(공정 진행 중에만).
