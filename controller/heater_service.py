@@ -823,7 +823,7 @@ class HeaterService:
             await self.profiler.tick()
         self._mv_requests.clear()
         self.sat.tick(st, self.hold.is_holding(), "dac", final_target=self.final_target(),
-                      ramp_active=self.profiler.is_active())
+                      ramp_active=self.profiler.is_active(), defer_clamp=self.resp.loss_wait())
         self.hold.tick(st, self.final_target())
         for v in list(self._mv_requests):
             try:
@@ -833,8 +833,10 @@ class HeaterService:
             except Exception as e:
                 self._log(f"⚠ DAC 상한(D118) 쓰기 실패: {e!r}")
         self._mv_requests.clear()
-        # 출력 무응답 감시 — MV 를 올려도 온도가 반응하지 않으면 끈다(EL-092)
-        trip = self.resp.tick(st, self.final_target(), holding=self.hold.is_holding())
+        # 출력 무응답 감시 — MV 를 올려도 온도가 반응하지 않으면 끈다(EL-092).
+        # 포화 클램프 중의 출력 끊김 판정은 클램프가 걸릴 때의 PV 하강 추세로 정한다(heater_response 모듈 설명)
+        trip = self.resp.tick(st, self.final_target(), holding=self.hold.is_holding(),
+                              clamped=self.sat.clamped is not None)
         if trip is not None:
             await self._on_no_response(st, trip)
         # (8) CSV

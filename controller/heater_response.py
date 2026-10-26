@@ -17,6 +17,13 @@ DV04A 는 출력을 되읽지 못해 'D/A 정상'(DA_OK)은 계속 1 이고, '�
      loss_sec 초 연속이며, 그 사이 PV 가 loss_fall_c 이상 떨어짐(창 앞·뒤 EDGE_SEC 평균). 운전 중 차단기·배선 끊김 등.
      (출력이 모자란 채 부하가 늘어 상한에서 빠르게 식는 경우도 같은 증상이다 — 문구에 함께 적는다)
      dac 유지 중(D118 = 유지값)에는 보지 않는다 — 유지 모드가 따로 다룬다.
+     DAC 포화 클램프 중(포화 감시가 D118 을 포화 직전 평균으로 낮춤)에는 클램프가 걸릴 때의 PV 추세로 정한다:
+       · 그때 이미 PV 가 B 기준 속도(loss_fall_c / (loss_sec − EDGE_SEC))로 떨어지고 있었으면(출력 끊김 의심)
+         클램프 중에도 그대로 본다 — 도달 뒤 출력이 끊기면 포화 감시(sat_sec 120초)가 B(180초)보다 먼저 클램프한다.
+       · 아니면(부하 증가·TC 이상으로 상한에 붙음) 그 클램프 동안은 보지 않는다 — 클램프로 줄인 출력 때문에 내려가는
+         것을 끊김으로 보고 히터를 끄던 문제(2026-10-26 검토: 850°C 에서 부하 +20% → 클램프 → 3분 뒤 OFF, 에뮬레이터).
+       · B 구간이 막 시작돼(2×EDGE_SEC 미만) 속도를 아직 못 재면 포화 감시가 잴 때까지 클램프를 미룬다(loss_wait).
+       남는 한계: 출력 끊김 의심 없이 걸린 클램프 '뒤에' 새로 생긴 출력 끊김은 여기서 끄지 않는다(클램프 ❌ 카드가 먼저 감).
   상한에서 PV 가 느리게라도 오르거나 멈춘 '승온 정체'(출력 부족)는 여기서 잡지 않는다(기존 경고 그대로).
 표본 사이가 GAP_RESET_SEC 넘게 벌어지거나(응답 없음) TC 이상·FAULT 면 연속 판정을 처음부터 다시 센다.
 PLC 에 쓰지 않는다 — 끄기·카드·공정 중단은 HeaterService·ChamberRuntime 몫.
@@ -57,6 +64,8 @@ class HeaterResponseGuard:
         self._pv_min: Optional[float] = None  # 이번 운전 최저 PV
         self._heated = False                  # 최저 PV 보다 rise_c 이상 오른 적이 있음(= 히터가 데운다)
         self._tripped = False
+        self._clamp_prev = False              # 직전 tick 의 포화 클램프 여부(클램프 시작 감지)
+        self._clamp_watch = False             # 이번 클램프가 출력 끊김 의심(B 하강 추세) 중에 걸렸음 → 클램프 중에도 B
         self._reset_streaks()
 
     def _reset_streaks(self) -> None:
@@ -70,6 +79,24 @@ class HeaterResponseGuard:
     def tripped(self) -> bool:
         return self._tripped
 
+    def _trend(self) -> Optional[str]:
+        """B 구간의 PV 하강 추세 — None: 구간 없음 / "wait": 2×EDGE_SEC 미만이라 아직 못 잼 /
+        "fall": B 기준 속도(창이 다 차면 히터를 끄는 그 기준) 이상으로 떨어지는 중 / "slow": 그보다 느림."""
+        if not self._b_since or not self._b_win:
+            return None
+        t0, t1 = self._b_win[0][0], self._b_win[-1][0]
+        span = t1 - t0
+        if span < 2.0 * EDGE_SEC:
+            return "wait"
+        head = [p for t, p in self._b_win if t <= t0 + EDGE_SEC]
+        tail = [p for t, p in self._b_win if t >= t1 - EDGE_SEC]
+        fall = sum(head) / len(head) - sum(tail) / len(tail)
+        return "fall" if fall >= self.loss_fall_c * (span - EDGE_SEC) / (self.loss_sec - EDGE_SEC) else "slow"
+
+    def loss_wait(self) -> bool:
+        """B 구간이 막 시작돼 PV 하강 속도를 아직 못 잼 — 포화 감시가 클램프를 미룬다(B 구간 시작 뒤 최대 2×EDGE_SEC)."""
+        return self.enabled and not self._tripped and self._trend() == "wait"
+
     def _limit(self, st: dict) -> float:
         try:
             v = st.get("mv_limit")
@@ -78,19 +105,24 @@ class HeaterResponseGuard:
             return self.mv_limit
 
     # ───────── tick ─────────
-    def tick(self, st: dict, final_target, holding: bool = False) -> Optional[dict]:
-        """폴링마다 부른다. 판정되면 사유 dict 를 1번 돌려준다(같은 운전에서 다시 내지 않음). 예외를 던지지 않는다."""
+    def tick(self, st: dict, final_target, holding: bool = False, clamped: bool = False) -> Optional[dict]:
+        """폴링마다 부른다. 판정되면 사유 dict 를 1번 돌려준다(같은 운전에서 다시 내지 않음). 예외를 던지지 않는다.
+        holding: dac 유지 중(B 를 보지 않음). clamped: DAC 포화 클램프 중(B 는 클램프가 걸릴 때의 추세로 — 모듈 설명)."""
         try:
-            return self._tick(st, final_target, bool(holding))
+            return self._tick(st, final_target, bool(holding), bool(clamped))
         except Exception:
             return None
 
-    def _tick(self, st: dict, final_target, holding: bool) -> Optional[dict]:
+    def _tick(self, st: dict, final_target, holding: bool, clamped: bool = False) -> Optional[dict]:
         if not st.get("run"):
             self._reset_run()
             return None
         if not self.enabled or self._tripped:
             return None
+        if clamped and not self._clamp_prev:
+            # 클램프가 막 걸림 — 그때 PV 가 이미 B 기준 속도로 떨어지고 있었으면(출력 끊김 의심) 이 클램프 동안에도 B 를 본다
+            self._clamp_watch = (self._trend() == "fall")
+        self._clamp_prev = clamped
         if st.get("stale") or st.get("fault") or not st.get("ok"):
             self._reset_streaks()
             return None
@@ -127,9 +159,11 @@ class HeaterResponseGuard:
         else:
             self._a_since, self._a_pv = 0.0, None
 
-        # B) 출력 끊김 — 상한에서 목표보다 크게 낮은 채 빠르게 떨어짐 (dac 유지 중 제외)
+        # B) 출력 끊김 — 상한에서 목표보다 크게 낮은 채 빠르게 떨어짐
+        #    (dac 유지 중, 출력 끊김 의심 없이 걸린 포화 클램프 중 제외)
         at_lim = mv >= MV_SAT_REL * limit
-        if (not holding) and at_lim and below >= self.loss_below_c:
+        rest = holding or (clamped and not self._clamp_watch)
+        if (not rest) and at_lim and below >= self.loss_below_c:
             if not self._b_since:
                 self._b_since = now
             self._b_win.append((now, pv))

@@ -22,6 +22,9 @@ CH2 이식 후 에뮬레이터로 확인한 문제(2026-10): '도달' 개념 없
      출력 여유 없음은 유지 모드 포기 경고가 이미 알린다). 무장 뒤 상한에 sat_sec 연속이면 포화 1회:
      직전 60초 이력이 PRE_MIN_COVER_SEC 이상이고 평균 < 상한×0.98 이면 D118 ← 평균(클램프, 챔버K 보호),
      아니면 줄일 근거가 없으므로 경고만(MV 가 상한 아래로 내려올 때까지 다시 알리지 않음).
+     단, 그 순간 출력 끊김 판정(heater_response B)이 막 시작돼 PV 하강 속도를 아직 못 쟀으면(defer_clamp) 잴 때까지
+     클램프를 미룬다(이력은 그대로 — 같은 '포화 직전 평균'). B 가 클램프가 걸릴 때의 하강 추세로 그 클램프 동안
+     출력 끊김을 볼지 정하기 때문이다(2026-10-26 검토).
   g) 해제 조건(RUN OFF / FAULT / SV 0.05°C 초과 변경)과 '유지 모드 진입' 처리는 챔버K 와 같다.
 '상한' = 실제 상한(st['mv_limit'] = D118 되읽기). PLC 를 직접 쓰지 않는다 — request_mv_limit 콜백으로 요청만 한다.
 """
@@ -66,6 +69,7 @@ class HeaterSaturationGuard:
         self._sat_since = 0.0
         self._clamped: Optional[int] = None
         self._sat_noted = False              # 이번 에피소드에 '클램프 없는 포화' 경고를 냈는가
+        self._defer_noted = False            # 이번 에피소드에 '출력 끊김 판정 대기로 클램프 미룸' 로그를 냈는가
         self._sv: Optional[float] = None     # SV 변경 감지(해제 조건)
         self._final: Optional[float] = None  # 목표 변경 감지(도달·정체 초기화)
         self._arrived = False
@@ -141,13 +145,16 @@ class HeaterSaturationGuard:
         self._low_done = False
 
     # ───────── tick ─────────
-    def tick(self, st: dict, hold_active: bool, hold_kind=None, final_target=None, ramp_active: bool = False) -> None:
+    def tick(self, st: dict, hold_active: bool, hold_kind=None, final_target=None, ramp_active: bool = False,
+             defer_clamp: bool = False) -> None:
+        """defer_clamp: 출력 끊김 판정이 PV 하강 속도를 아직 못 잼 — 포화가 확정돼도 클램프를 미룬다(f 참고)."""
         try:
-            self._tick(st, bool(hold_active), hold_kind, final_target, bool(ramp_active))
+            self._tick(st, bool(hold_active), hold_kind, final_target, bool(ramp_active), bool(defer_clamp))
         except Exception as e:
             self._msg("경고", f"DAC 포화 감시 예외: {e!r}")
 
-    def _tick(self, st: dict, hold_active: bool, hold_kind, final_target, ramp_active: bool) -> None:
+    def _tick(self, st: dict, hold_active: bool, hold_kind, final_target, ramp_active: bool,
+              defer_clamp: bool = False) -> None:
         now = self._now()
         # a) RUN OFF / FAULT
         if not st.get('run'):
@@ -236,8 +243,16 @@ class HeaterSaturationGuard:
             return
         if not self._sat_since:
             self._sat_since = now
+            self._defer_noted = False
             return
         if (now - self._sat_since) >= self.sat_sec and not self._sat_noted:
+            if defer_clamp and self.clamp_enabled:
+                if not self._defer_noted:
+                    self._defer_noted = True
+                    t = "--.-" if pv is None else f"{float(pv):.1f}"
+                    self._msg("정보", f"도달 후 {now - self._sat_since:.0f}초째 DAC 출력 상한({int(limit)})에 물려 있음: "
+                                      f"PV {t} — 출력 끊김 판정이 막 시작돼 PV 하강 속도를 재는 중이라 클램프를 잠시 미룸")
+                return
             self._saturate(st, now, limit)
 
     def _stall_tick(self, now: float, pv, final, mv: float, limit: float, at_lim: bool) -> None:
