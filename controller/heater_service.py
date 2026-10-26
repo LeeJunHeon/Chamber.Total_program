@@ -123,6 +123,7 @@ class HeaterService:
         self._wd = 0
         self._wd_fail_log_t = -1e9
         self._write_seq = 0                  # 상태를 바꾸는 PLC 쓰기 횟수(워치독 제외) — 읽는 사이 쓰기가 끼면 그 폴링을 버린다
+        self._st_seq = 0                     # 확정된 상태(_st)가 반영한 쓰기 횟수 — 이보다 크면 _st 는 그 뒤 쓰기 전의 값
         self._residual_fail_log_t = -1e9
         self._sv_log_c: Optional[float] = None
         self._sv_log_t = -1e9
@@ -735,7 +736,11 @@ class HeaterService:
                 pass
 
     def _on_fail(self, why: str, quiet: bool = False) -> None:
-        """quiet: 첫 성공 폴링 전의 미연결 — 로그·실패 시각 없이 stale·발행만."""
+        """quiet: 첫 성공 폴링 전의 미연결 — 로그·실패 시각 없이 stale·발행만.
+        마지막 확정 상태 뒤에 켜기·끄기·목표 변경 같은 쓰기가 있었으면 그 상태는 '쓰기 전' 값이다 — stale 이 되기 전
+        (age ≤ HEATER_STALE_SEC)에는 다시 발행하지 않는다(_poll_once 가 쓰기와 겹친 읽기를 버리는 것과 같은 원칙).
+        예전: 공정이 히터를 켠 직후 읽기가 한 번 실패하면 켜기 전 상태(RUN=0)가 stale 아님으로 다시 발행돼
+        도달 대기(HEATER_WAIT) E830·공정 중 감시 E832 로 멈췄다(2026-10-26 검토, 에뮬레이터 재현)."""
         now = self._now()
         if self._fail_since is None and not quiet:
             self._fail_since = now
@@ -744,6 +749,8 @@ class HeaterService:
         age = None if self._last_ok_t is None else now - self._last_ok_t
         st["age_s"] = age
         st["stale"] = age is None or age > float(self.cfg.stale_sec)
+        if not st["stale"] and self._write_seq != self._st_seq:
+            return                           # 쓰기 전 상태 — 새 정보가 없고 공정이 옛 RUN 으로 판정할 수 있다
         self._publish()
 
     async def _poll_once(self) -> None:
@@ -775,6 +782,7 @@ class HeaterService:
                 return
             if not await self._process(st, now):
                 return                       # 잔존 RUN 정리 실패 — 발행하지 않고 다음 폴링에 재시도
+            self._st_seq = self._write_seq   # _process 안의 쓰기(잔존 RUN 정리·램프 SV·D118 등)까지 반영한 상태
         self._last_ok_t = now
         self._publish()
 
