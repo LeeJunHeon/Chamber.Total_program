@@ -6714,6 +6714,13 @@ class ChamberRuntime:
             return
         self._soon(self._log_enqueue_nowait, line_file)
 
+    def append_side_log(self, source: str, msg: str) -> None:
+        """화면 로그와 SYSTEM 일자 로그에만 남긴다 — 공정 로그 파일·프리스타트 버퍼에는 넣지 않는다.
+        공정과 무관한 상시 장치(두께 모니터 1단계)의 연결·오류 문구가 공정 로그를 바꾸지 않게 할 때 쓴다."""
+        now_ui = datetime.now().strftime("%H:%M:%S")
+        self._soon(self._enqueue_ui_log, f"[{now_ui}] [CH{self.ch}:{source}] {msg}")
+        _system_log_append(f"CH{self.ch}:{source}", msg)
+
     def _dl_fire_and_forget(self, fn, *args, **kwargs) -> None:
         """
         DataLogger처럼 NAS/파일 I/O 가능성이 있는 동기 함수를

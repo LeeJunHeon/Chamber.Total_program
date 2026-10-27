@@ -486,6 +486,13 @@ class MainWindow(QWidget):
         # ✅ CH2 히터(PLC 내장 PID) — SUPPORTS_HEATER=false 면 아무것도 만들지 않는다(창 크기·태스크·PLC I/O 그대로)
         self._init_ch2_heater()
 
+        # ✅ 두께 모니터(STM-100) — SUPPORTS_THICKNESS 가 true 인 채널만 서비스·패널 생성(연결 실패가 다른 장비·시작을 막지 않음)
+        self.thickness_services = {}
+        self.thickness_panels = {}
+        self._init_thickness(1)
+        self._init_thickness(2)
+        self._layout_side_panels()
+
         # ✅ PC ↔ Main Process 로그 연동 콜백 등록
         self.ch1.set_main_done_callback(self._on_main_done)
         self.ch2.set_main_done_callback(self._on_main_done)
@@ -1284,6 +1291,74 @@ class MainWindow(QWidget):
             with contextlib.suppress(Exception):
                 self._broadcast_log("HEATER", f"CH2 히터 초기화 실패: {e!r}")
 
+    def _init_thickness(self, ch: int) -> None:
+        """두께 모니터(STM-100) 상시 읽기 서비스 생성. SUPPORTS_THICKNESS 가 꺼진 채널은 아무것도 하지 않는다.
+        패널은 CH2 만(히터 패널 밑 — 위치는 _layout_side_panels). CH1 은 서비스만 켤 수 있는 구조로 둔다.
+        공정 로직(process_controller·레시피)은 건드리지 않는다 — 공정 연동은 2단계."""
+        cfg_mod = config_ch1 if ch == 1 else config_ch2
+        rt = self.ch1 if ch == 1 else self.ch2
+        try:
+            from lib.thickness_config import load_thickness_config
+            tcfg, warns = load_thickness_config(cfg_mod, ch)
+        except Exception as e:
+            with contextlib.suppress(Exception):
+                self._broadcast_log("THICKNESS", f"CH{ch} 두께 모니터 설정 읽기 실패 — 기능 끔: {e!r}")
+            return
+        for w in warns:
+            with contextlib.suppress(Exception):
+                rt.append_side_log("THICKNESS", f"⚠ 두께 모니터 설정: {w}")
+        if not tcfg.enabled:
+            return
+        try:
+            from controller.thickness_service import ThicknessService
+
+            def _proc_info(_rt=rt):
+                running = bool(_rt.is_running or _rt.is_busy)
+                name = ""
+                if running:
+                    with contextlib.suppress(Exception):
+                        p = _rt.process_controller.current_params or {}
+                        name = str(p.get("process_name") or p.get("Process_name") or "").strip()
+                return running, name
+
+            # 로그는 화면·SYSTEM 일자 로그에만(append_side_log) — 1단계는 공정 로그를 바꾸지 않는다
+            svc = ThicknessService(tcfg, log=lambda s, m, _rt=rt: _rt.append_side_log(s, m), process_info=_proc_info)
+            if ch == 2:
+                from ui.thickness_panel import ThicknessPanel
+                panel = ThicknessPanel(svc, tcfg, parent=self)
+                panel.show()
+                svc.add_listener(panel.update_status)
+                self.thickness_panels[ch] = panel
+            svc.start(self._loop)
+            self.thickness_services[ch] = svc
+            rt.append_side_log("THICKNESS", f"CH{ch} 두께 모니터 서비스 시작 ({tcfg.host}:{tcfg.port})")
+        except Exception as e:
+            self.thickness_panels.pop(ch, None)
+            with contextlib.suppress(Exception):
+                self._broadcast_log("THICKNESS", f"CH{ch} 두께 모니터 초기화 실패: {e!r}")
+
+    def _layout_side_panels(self) -> None:
+        """MainWindow 오른쪽 패널(CH2 히터·두께) 위치와 창 크기를 한 곳에서 정한다.
+        히터 패널이 있으면 (1086, 10), 두께 패널은 그 밑(1086, 10+히터 높이+10) — 히터가 없으면 (1086, 10).
+        두께 패널이 없으면 창 크기를 건드리지 않는다(히터만이면 _init_ch2_heater 가 정한 크기 그대로)."""
+        try:
+            x, y, w = 1086, 10, 0
+            hp = getattr(self, "heater_panel", None)
+            if hp is not None:
+                y = hp.geometry().bottom() + 1 + 10
+                w = max(w, hp.width())
+            tp = (getattr(self, "thickness_panels", None) or {}).get(2)
+            if tp is not None:
+                from ui.thickness_panel import PANEL_W as T_W, PANEL_H as T_H
+                tp.setGeometry(QRect(x, y, T_W, T_H))
+                y += T_H + 10
+                w = max(w, T_W)
+            if tp is not None:                       # 히터만 있으면 _init_ch2_heater 의 창 크기 그대로
+                self.resize(x + w + 12, max(1010, y))
+        except Exception as e:
+            with contextlib.suppress(Exception):
+                self._broadcast_log("THICKNESS", f"오른쪽 패널 배치 실패: {e!r}")
+
     async def _shutdown_app_async(self) -> None:
         with contextlib.suppress(Exception):
             self._logger.warning(
@@ -1338,6 +1413,18 @@ class MainWindow(QWidget):
             _hp = getattr(self, "heater_panel", None)
             if _hp is not None:
                 _hp.shutdown()
+
+        # 4-2) 두께 모니터 정리(폴링 정지 → 연결 닫기 → CSV 닫기). suppress(Exception) 은 CancelledError 를 못 잡는다
+        for _ts in list((getattr(self, "thickness_services", None) or {}).values()):
+            try:
+                await asyncio.wait_for(_ts.shutdown(timeout=2.0), timeout=4.0)
+            except (Exception, asyncio.CancelledError):
+                pass
+        for _tp in list((getattr(self, "thickness_panels", None) or {}).values()):
+            try:
+                _tp.shutdown()
+            except Exception:
+                pass
 
         # 5) 공유 PLC 종료 (heartbeat / socket / to_thread 정리)
         with contextlib.suppress(asyncio.CancelledError, Exception):

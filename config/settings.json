@@ -509,6 +509,17 @@
     "PROCESS_PRESSURE_CONTROL_SP_LABEL": "SP3",        // 압력 제어 Set-Point 표시 이름
     "PROCESS_PRESSURE_CONTROL_SP_INDEX": 3,             // 압력 제어 Set-Point 번호
 
+    // ── 두께 모니터 (CH1) ── CH1 에는 두께 모니터가 없다
+    "SUPPORTS_THICKNESS": false,           // true 로 바꾸면 서비스만 켜진다(CH1 화면 패널 자리는 아직 없음)
+    "THICKNESS_TCP_HOST": "192.168.1.50",  // MOXA IP
+    "THICKNESS_TCP_PORT": 0,               // 0 = 미설정
+    "THICKNESS_POLL_INTERVAL_S": 0.5,      // 두께·증착률 읽기 주기 (초, 0.25~5)
+    "THICKNESS_SLOW_POLL_S": 5.0,          // 주파수·수명·크리스탈 상태 읽기 주기 (초)
+    "THICKNESS_STALE_S": 10.0,             // 마지막 정상 두께 뒤 이 시간을 넘으면 '응답 없음' (초)
+    "THICKNESS_CMD_TIMEOUT_S": 1.0,        // 명령 1회 응답 대기 (초, 0.3~5)
+    "THICKNESS_LOG_DIR": "C:\\VanaM_Logs\\CH1&2\\Thickness",  // 연속 기록 폴더(그 아래 CH1\Thickness_YYYYMMDD.csv). G: 는 쓰지 않음
+    "THICKNESS_FACTOR_FILE": "config/thickness_factors_ch1.json",  // tooling·재료값 파일 (exe 옆 config 폴더 기준)
+
     // ── 로봇 ETA (CH1 전용) ──
     "ETA_ENABLED": true,                   // ETA 기능 사용 여부 (CH1)
     "ETA_TAIL_S": 120.0,                   // 메인 공정 종료 → idle 까지 (초)
@@ -622,6 +633,17 @@
 
     "PC_RF_PULSE_POST_ON_DELAY_MS": 30000,           // RF Pulse ON 후 안정화 대기 (ms). CH1과 달리 30초로 설정
     "RFPULSE_REFP_WARN_WATTS": 5.0,                  // REFP가 이 값 이상이면 즉시 챗 경고 알림 (공정은 계속 진행)
+
+    // ── 두께 모니터 (CH2, Sycon STM-100/MF) ── MOXA NPort TCP Server 경유 RS-232 9600-8-N-1
+    "SUPPORTS_THICKNESS": true,            // 연결 안 돼도 다른 장비·공정에 영향 없음(백오프로 계속 재연결)
+    "THICKNESS_TCP_HOST": "192.168.1.50",  // MOXA IP
+    "THICKNESS_TCP_PORT": 4008,            // ⚠ 임시값 — 4001~4007 사용 중이라 4008 로 둠. 실제 MOXA 포트 확인 후 고칠 것
+    "THICKNESS_POLL_INTERVAL_S": 0.5,      // 두께(S)·증착률(T) 읽기 주기 (초, 0.25~5)
+    "THICKNESS_SLOW_POLL_S": 5.0,          // 주파수(U)·수명(V)·크리스탈 상태(M) 읽기 주기 (초)
+    "THICKNESS_STALE_S": 10.0,             // 마지막 정상 두께 뒤 이 시간을 넘으면 '응답 없음' (초)
+    "THICKNESS_CMD_TIMEOUT_S": 1.0,        // 명령 1회 응답 대기 (초, 0.3~5). 응답이 없으면 2번 더 보냄
+    "THICKNESS_LOG_DIR": "C:\\VanaM_Logs\\CH1&2\\Thickness",  // 연속 기록 폴더(그 아래 CH2\Thickness_YYYYMMDD.csv, 1초 1행). G: 는 쓰지 않음
+    "THICKNESS_FACTOR_FILE": "config/thickness_factors_ch2.json",  // tooling·재료값 파일 (exe 옆 config 폴더 기준, 화면 [Factor 설정]에서 수정)
 
     // ── 로봇 ETA (CH2 전용) ──
     "ETA_ENABLED": true,                   // ETA 기능 사용 여부 (CH2)

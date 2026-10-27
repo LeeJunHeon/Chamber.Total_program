@@ -1,0 +1,37 @@
+{
+  "version": 1,
+  "tooling": {
+    "up": {
+      "G1": null,
+      "G2": null,
+      "G3": null
+    },
+    "mid": {
+      "G1": null,
+      "G2": null,
+      "G3": null
+    },
+    "down": {
+      "G1": null,
+      "G2": null,
+      "G3": null
+    }
+  },
+  "material": {
+    "G1": {
+      "density": null,
+      "z_factor": null,
+      "memo": ""
+    },
+    "G2": {
+      "density": null,
+      "z_factor": null,
+      "memo": ""
+    },
+    "G3": {
+      "density": null,
+      "z_factor": null,
+      "memo": ""
+    }
+  }
+}

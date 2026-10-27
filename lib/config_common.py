@@ -459,6 +459,7 @@ SUPPORTS_RF_CONT = False
 SUPPORTS_RFPULSE = True
 SUPPORTS_DCPULSE = True         # DC Pulse (CH1/CH2 공용, 채널별로 끄려면 settings ch 섹션에서 false)
 SUPPORTS_HEATER = False         # CH2 히터(PLC 내장 PID). PLC HEATER 프로그램 다운로드 후 settings ch2 에서 true
+SUPPORTS_THICKNESS = False      # 두께 모니터(Sycon STM-100). settings ch1/ch2 에서 채널별로 켠다(현재 CH2 만)
 
 # ======================================================================
 #  CH2 히터(PLC 내장 PID) — 값은 settings.json 의 "ch2" 섹션에 둔다(config_ch2 가 import 시점에 복사).
@@ -510,6 +511,20 @@ HEATER_NORESP_RISE_C = 5.0              #   '데워짐'(운전 시작 뒤 최저
 HEATER_NORESP_LOSS_SEC = 180            # B '출력 끊김': 출력 상한(D118)에서 목표보다 LOSS_BELOW_C 이상 낮은 채 이 시간(초) 동안
 HEATER_NORESP_LOSS_BELOW_C = 10.0       #   목표보다 낮은 정도(°C)
 HEATER_NORESP_LOSS_FALL_C = 10.0        #   PV 가 이만큼(°C) 이상 떨어지면
+
+# ======================================================================
+#  두께 모니터(Sycon STM-100/MF, QCM) — MOXA NPort TCP Server 경유 RS-232 9600-8-N-1.
+#  값은 settings.json 의 "ch1"/"ch2" 섹션에 둔다(config_chN 이 import 시점에 복사 — common 에만 두면 채널로 안 넘어감).
+#  코드(lib/thickness_config.load_thickness_config)는 호출 시점에 읽고 범위를 클램프한다.
+# ======================================================================
+THICKNESS_TCP_HOST = "192.168.1.50"     # MOXA IP
+THICKNESS_TCP_PORT = 0                  # 채널별 포트(0 = 미설정 — settings ch2 에서 지정)
+THICKNESS_POLL_INTERVAL_S = 0.5         # 두께(S)·증착률(T) 읽기 주기(초, 0.25~5)
+THICKNESS_SLOW_POLL_S = 5.0             # 주파수(U)·수명(V)·크리스탈 상태(M) 읽기 주기(초)
+THICKNESS_STALE_S = 10.0                # 마지막 정상 두께 뒤 이 시간을 넘으면 '응답 없음'(초)
+THICKNESS_CMD_TIMEOUT_S = 1.0           # 명령 1회 응답 대기(초, 0.3~5). 응답이 없으면 2번 더 보낸다
+THICKNESS_LOG_DIR = r"C:\VanaM_Logs\CH1&2\Thickness"   # 연속 기록(그 아래 CH{n}\Thickness_YYYYMMDD.csv). G: 는 쓰지 않는다
+THICKNESS_FACTOR_FILE = ""              # tooling·재료값 파일. 비우면 config/thickness_factors_ch{N}.json(exe 옆 config 폴더)
 
 
 # ======================================================================
