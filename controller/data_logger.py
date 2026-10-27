@@ -15,6 +15,12 @@ from lib import config_common as cfgc
 
 # CH2 히터 열 — 메인 공정 구간(폴링 중)의 표본으로 채운다. CH1 파일에는 넣지 않는다(맨 뒤에 붙임).
 HEATER_COLUMNS: List[str] = ["Heater: SV", "Heater: PV Avg", "Heater: PV Min", "Heater: PV Max", "Heater: MV Avg"]
+# 두께 모니터 열 — SUPPORTS_THICKNESS=true 채널 파일에만(맨 뒤에 붙임). Time 모드도 두께 모니터 값이 있으면 최종 두께·평균 증착률을 채운다.
+THICKNESS_COLUMNS: List[str] = [
+    "Thickness: End Mode", "Thickness: Target nm", "Thickness: Final nm", "Thickness: Avg Rate nm/s",
+    "Thickness: Tooling %", "Thickness: Density", "Thickness: Z", "Thickness: Chuck", "Thickness: Gun",
+    "Thickness: Step Suspect", "Thickness: Fallback Reason",
+]
 
 
 def _fallback_log_root() -> Path:
@@ -46,6 +52,7 @@ class DataLogger(QObject):
         ch: int,
         csv_dir: Optional[Path] = None,
         log_func: Optional[Callable[[str], None]] = None,  # ← 로그 콜백 추가
+        thickness_columns: bool = False,                    # 두께 모니터 열(SUPPORTS_THICKNESS=true 채널)
     ):
         super().__init__(parent)
         self._ch = int(ch)  # ← 추가: 폴백 경로명/파일명에 사용
@@ -111,6 +118,10 @@ class DataLogger(QObject):
         self.heater_mv_readings: List[float] = []
         self.heater_sv: Optional[float] = None
 
+        # 두께 모니터 기록(런타임이 공정 종료 때 넣는다)
+        self._thk_cols = bool(thickness_columns)
+        self.thickness_record: Dict = {}
+
         # ✅ Main Shutter 기준 수집 제어
         self._shutter_open: bool = False
 
@@ -134,6 +145,8 @@ class DataLogger(QObject):
         ]
         if self._ch == 2:
             self.header.extend(HEATER_COLUMNS)
+        if self._thk_cols:
+            self.header.extend(THICKNESS_COLUMNS)
 
         # 기존 파일이 있으면 헤더 업그레이드(있던 행 보존, 새 컬럼은 공란)
         self._ensure_header()
@@ -278,6 +291,7 @@ class DataLogger(QObject):
         self.rf_pulse_for_p_readings.clear()
         self.rf_pulse_ref_p_readings.clear()
         self._clear_heater()
+        self.thickness_record = {}
 
         for gas in self.mfc_flow_readings:
             self.mfc_flow_readings[gas].clear()
@@ -419,6 +433,10 @@ class DataLogger(QObject):
                     self.heater_sv = float(sv)
         except (TypeError, ValueError):
             pass
+
+    def set_thickness_record(self, rec: Optional[Dict]) -> None:
+        """두께 기록 — end(종료 방식), target, final_nm, avg_rate, tooling, density, z_factor, chuck, gun, suspect, fallback_reason."""
+        self.thickness_record = dict(rec or {})
 
     def heater_stats(self) -> Optional[Dict[str, Optional[float]]]:
         """메인 공정 구간 히터 요약 {sv, pv_avg, pv_min, pv_max, mv_avg, n}. 표본이 없으면 None."""
@@ -582,6 +600,32 @@ class DataLogger(QObject):
                 "Heater: PV Min": _hf("pv_min", "{:.1f}"),
                 "Heater: PV Max": _hf("pv_max", "{:.1f}"),
                 "Heater: MV Avg": _hf("mv_avg", "{:.0f}"),
+            })
+
+        # 두께 모니터 — 기록이 없으면 공란
+        if self._thk_cols:
+            tr = self.thickness_record or {}
+
+            def _tf(key: str, fmt: str) -> str:
+                v = tr.get(key)
+                if v in (None, ""):
+                    return ""
+                try:
+                    return fmt.format(float(v))
+                except Exception:
+                    return ""
+            log_data.update({
+                "Thickness: End Mode": str(tr.get("end") or ""),
+                "Thickness: Target nm": _tf("target", "{:g}"),
+                "Thickness: Final nm": _tf("final_nm", "{:.2f}"),
+                "Thickness: Avg Rate nm/s": _tf("avg_rate", "{:.4f}"),
+                "Thickness: Tooling %": _tf("tooling", "{:g}"),
+                "Thickness: Density": _tf("density", "{:g}"),
+                "Thickness: Z": _tf("z_factor", "{:g}"),
+                "Thickness: Chuck": str(tr.get("chuck") or ""),
+                "Thickness: Gun": str(tr.get("gun") or ""),
+                "Thickness: Step Suspect": str(int(tr["suspect"])) if tr.get("suspect") is not None else "",
+                "Thickness: Fallback Reason": str(tr.get("fallback_reason") or ""),
             })
 
         # 비동기 백그라운드 파일쓰기로 프리징 최소화

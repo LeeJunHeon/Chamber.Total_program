@@ -57,6 +57,9 @@ from controller.runtime_state import runtime_state
 # 공정 컨트롤러(기존 CH2) + CH1은 별도 모듈이 있으면 사용, 없으면 CH2를 공용으로
 from controller.process_controller import ProcessController, eta_delay_seconds
 from controller.heater_process import HeaterSoakWaiter, HeaterHoldWaiter, heater_wait_timeout_s, itl_missing_text
+from controller.thickness_process import (END_FALLBACK, END_LIMIT, END_THICKNESS, END_TIME, ThicknessEndJudge,
+                                          thickness_mode_of)
+from lib.thickness_config import load_judge_params
 from errors.app_error import CodedRuntimeError   # 호스트 START 레시피 파일 오류에 응답 코드(E207/E208/E209/E227)를 싣는다
 
 # ---- 타입 (main.py의 정의를 최소 필요만 가져와 복제) -------------------------
@@ -596,6 +599,7 @@ class ChamberRuntime:
                 r"G:\공유 드라이브\VanaM_Sputter\Sputter\Calib\Database",
             ))),
             log_func=lambda msg: self.append_log("CSV", msg),
+            thickness_columns=bool(self.cfg._get("SUPPORTS_THICKNESS", False)),
         )
 
         # 장치 인스턴스(각 챔버 독립)
@@ -786,6 +790,15 @@ class ChamberRuntime:
         self._heater_rate = None         # 이번 공정 램프 속도(°C/min)
         self._heater_line_t = -1e9       # 공정 로그 히터 상태 줄 — 마지막으로 남긴 시각(히터 서비스 시계)
         self._proc_polling_active = False  # 메인 공정 폴링 중(= Calib CSV·엑셀 히터 표본 수집 구간)
+
+        # === 두께 모니터(2단계) — main.py 가 attach_thickness() 로 붙인다(SUPPORTS_THICKNESS=true·서비스 시작 성공일 때만) ===
+        self._thickness = None           # ThicknessService
+        self._thk_gen = 0                # 판정 작업 세대(취소·종료하면 +1 → 늦게 끝난 영점은 판정을 시작하지 않음)
+        self._thk_judge = None           # ThicknessEndJudge — THICKNESS_WAIT 중에만
+        self._thk_last_judge = None      # 이번 런 마지막 판정기(기록용)
+        self._thk_pre = None             # 시작 전 점검에서 정한 값(tooling·density·Z·chuck·건)
+        self._thk_rec = {}               # 이번 런 두께 기록(종료 방식·최종 두께·평균 증착률 ...)
+        self._thk_view = None            # 패널 진행 영역 갱신 콜백(main.py)
 
         # === ProcessController 바인딩 ===
         self._bind_process_controller()
@@ -1535,6 +1548,45 @@ class ChamberRuntime:
             self._heater_job = None
             self._heater_watch = False
 
+        # === 두께 모니터(2단계) ===
+        def cb_thickness_start(target: float, expected_s: float, limit_s: float) -> None:
+            """THICKNESS_WAIT 시작 — 영점(B) 뒤 판정기를 만든다. 영점이 실패해도 '영점 뒤 첫 값 = 기준점' 이라 판정은 한다."""
+            self._thk_gen = getattr(self, "_thk_gen", 0) + 1
+            gen = self._thk_gen
+
+            async def run():
+                pc = self.process_controller
+                svc = getattr(self, "_thickness", None)
+                if svc is None:
+                    pc.on_thickness_fallback(expected_s, "두께 서비스 없음 — 예상시간으로 시간 대체")
+                    return
+                ok, why = await svc.zero("B", why="공정 시작 영점")
+                if gen != self._thk_gen:
+                    return
+                if not ok:
+                    self.append_log("THICKNESS", f"⚠ 영점 실패({why}) — 영점 뒤 첫 값을 기준점으로 판정은 계속합니다")
+                st = svc.status()
+                dep = float((pc.current_params or {}).get("dep_rate") or 0.0) or (float(target) / max(1.0, float(expected_s)))
+                jp, _w = load_judge_params(self.cfg.mod)
+                j = ThicknessEndJudge(float(target), dep, jp, start_t=svc.clock(), seq0=st.get("seq"),
+                                      reset0=int(st.get("reset_seen") or 0),
+                                      log=lambda m: self.append_log("THICKNESS", m))
+                self._thk_judge = j
+                self._thk_last_judge = j
+                self.append_log("THICKNESS", f"두께 판정 시작 — 목표 {float(target):g} nm · 레시피 증착률 {dep:g} nm/s · "
+                                             f"예상 {float(expected_s):.0f}초 · 상한 {float(limit_s):.0f}초")
+                self._thk_view_set("Thickness", f"{float(target):.1f} nm", 0.0, "영점 확인 중")
+            self._spawn_detached(run(), name="ThicknessStart")
+
+        def cb_thickness_end(kind: str) -> None:
+            self._thk_gen = getattr(self, "_thk_gen", 0) + 1
+            self._thk_judge = None
+            self._thk_on_end(str(kind))
+
+        def cb_thickness_cancel() -> None:
+            self._thk_gen = getattr(self, "_thk_gen", 0) + 1
+            self._thk_judge = None
+
         # 컨트롤러 생성
         self.process_controller = ProcessController(
             send_plc=cb_plc,
@@ -1566,6 +1618,11 @@ class ChamberRuntime:
             heater_wait=cb_heater_wait,
             heater_hold=cb_heater_hold,
             cancel_heater=cb_heater_cancel,
+
+            thickness_start=cb_thickness_start,
+            thickness_end=cb_thickness_end,
+            cancel_thickness=cb_thickness_cancel,
+            thickness_supported=self._thickness_supported,
 
             ch=self.ch,
             supports_dc_cont=self.supports_dc_cont,
@@ -1657,6 +1714,7 @@ class ChamberRuntime:
                     self.data_logger.start_new_log_session(params)
                     self._runtime_arc_notified = False  # ✅ 추가: 런타임 레벨 arc 알림 중복 방지 플래그
                     self._proc_polling_active = False  # 새 공정 — 메인 공정 폴링 전
+                    self._thk_run_started(params)      # 두께 기록 초기화(두께 모니터가 붙은 채널만)
 
                     try:
                         # ✅ Arc 카운터 초기화
@@ -1767,6 +1825,7 @@ class ChamberRuntime:
                         
                         # - data_logger가 'ok=False면 return'인 현재 버전이면, 아래 인자를 ok로 두면 실패/stop이 기록되지 않습니다.
                         # - data_logger를 실패/stop도 기록하도록 수정한 뒤에는 ok를 그대로 넘겨도 됩니다.
+                        self._thk_finalize_record()   # 두께 열(두께 모니터가 붙은 채널만)
                         self.data_logger.finalize_and_write_log(ok)
                         # CH2 히터: 메인 공정 구간 요약 한 줄(Calib CSV·엑셀 히터 열과 같은 값)
                         self._heater_log_summary()
@@ -1889,6 +1948,7 @@ class ChamberRuntime:
                                 if warns:
                                     payload.setdefault("warnings", warns)
 
+                                self._thk_card_fields(payload)   # 종료 방식·최종 두께(기록이 있을 때만)
                                 ret = self.chat.notify_process_finished_detail(ok, payload)
                                 if inspect.iscoroutine(ret):
                                     await ret
@@ -3933,6 +3993,14 @@ class ChamberRuntime:
 
                 raise RuntimeError(f"main valve check failed: {_mv_reason}")
             
+            # 두께 모니터 Thickness 모드 — 장비 동작(Chuck 이동) 전에 거부할 수 있는 것부터 본다. Time 모드는 아무것도 하지 않는다.
+            self._thk_pre = None
+            _thk_mode = thickness_mode_of(params.get("thickness"), self._thickness_supported())
+            if _thk_mode:
+                _code, _msg = self._thickness_check_basic(params)
+                if _code:
+                    await self._thickness_reject(params, _code, _msg)
+
             # ★ 추가: 공정 시작 직전 Chuck 위치 선행 설정
             self._run_chuck_position = str(params.get("chuck_position") or "").strip().lower()
             self._run_warnings = []
@@ -3950,6 +4018,13 @@ class ChamberRuntime:
                     actual = await self._read_chuck_pos(self.ch)
                     if actual != "unknown":
                         params["chuck_position"] = actual
+
+            # 두께 모니터 Thickness 모드 — Chuck 위치가 정해진 뒤 Factor 확인·장비에 재료값 쓰기(되읽기 확인)
+            if _thk_mode:
+                _code, _msg = await self._thickness_apply_material(params, bool(ok_chuck))
+                if _code:
+                    await self._thickness_reject(params, _code, _msg)
+                params["thickness_mode"] = True
 
             self._last_polling_targets = None
             self.append_log("MAIN", "장비 연결 확인 완료 → 공정 시작")
@@ -6454,6 +6529,289 @@ class ChamberRuntime:
         """CameraRecorder(백그라운드 스레드) 메시지를 공정 로그 + 화면으로 보낸다.
         append_log가 내부 _soon으로 이미 스레드 마샬링하므로 직접 호출해도 안전하다."""
         self.append_log("CAM", msg)
+
+    # ============================= 두께 모니터(2단계: 공정 연동) =============================
+    _THK_GUNS = ("G1", "G2", "G3")
+
+    def attach_thickness(self, svc) -> None:
+        """main.py 가 두께 모니터 서비스를 붙인다. 상태 리스너로 공정 기록·Thickness 모드 종료 판정을 한다."""
+        self._thickness = svc
+        svc.add_listener(self._on_thickness_status)
+        _p, warns = load_judge_params(self.cfg.mod)
+        for w in warns:
+            self.append_side_log("THICKNESS", f"⚠ 두께 판정 설정: {w}")
+
+    def set_thickness_view(self, cb) -> None:
+        """패널 진행 영역(종료 방식·목표·진행률·문구) 갱신 콜백 — cb(mode, target, pct, text)."""
+        self._thk_view = cb
+
+    def _thk_view_set(self, mode: str, target: str, pct, text: str) -> None:
+        cb = getattr(self, "_thk_view", None)
+        if cb is None:
+            return
+        try:
+            cb(mode, target, pct, text)
+        except Exception:
+            pass
+
+    def _thickness_supported(self) -> bool:
+        """이 채널이 두께 모니터를 공정에 쓰는가 — SUPPORTS_THICKNESS=true 이고 서비스가 붙어 있음(모드 판정·ETA 하한 공용)."""
+        if getattr(self, "_thickness", None) is None:
+            return False
+        try:
+            return bool(self.cfg._get("SUPPORTS_THICKNESS", False))
+        except Exception:
+            return False
+
+    def _thickness_check_basic(self, params) -> tuple[str, str]:
+        """Chuck 이동 전 점검 — (코드, 문구), 통과면 ("", "")."""
+        svc = self._thickness
+        jp, _w = load_judge_params(self.cfg.mod)
+        st = svc.status() if svc is not None else {}
+        ok_ts = st.get("ok_ts")
+        if svc is None or not st.get("connected") or ok_ts is None or (svc.clock() - float(ok_ts)) > jp.ready_fresh_s:
+            age = "" if (svc is None or ok_ts is None) else f" (마지막 정상 값 {svc.clock() - float(ok_ts):.0f}초 전)"
+            return "E840", f"두께 모니터 응답 없음 — 연결·최근 {jp.ready_fresh_s:g}초 안 정상 두께 값이 필요합니다{age}"
+        if st.get("crystal_ok") is False:
+            return "E841", "두께 모니터 XTAL FAIL(크리스탈 이상) — 크리스탈을 확인하십시오"
+        dep, thk = params.get("dep_rate"), params.get("thickness")
+        try:
+            dep_v, thk_v = float(dep or 0), float(thk or 0)
+        except Exception:
+            dep_v, thk_v = 0.0, 0.0
+        if dep_v <= 0 or thk_v <= 0:
+            return "E842", f"Thickness 모드에는 dep_rate·thickness 가 0 보다 커야 합니다(dep_rate={dep}, thickness={thk})"
+        guns = [g for g in self._THK_GUNS if params.get(f"use_{g.lower()}")]
+        if len(guns) != 1:
+            what = "co-sputter(" + "+".join(guns) + ")" if guns else "사용 건 없음"
+            return "E843", f"Thickness 모드는 건 1개만 쓸 수 있습니다 — {what}"
+        conflict = self.process_controller.thickness_mid_change_conflict(params)
+        if conflict:
+            return "E844", conflict
+        return "", ""
+
+    async def _thickness_apply_material(self, params, chuck_ok: bool) -> tuple[str, str]:
+        """Chuck 위치 확정 뒤 Factor 확인 → 장비에 density/Z/tooling 쓰기(되읽기 확인, 1회 재시도). (코드, 문구)."""
+        svc = self._thickness
+        chuck = str(params.get("chuck_position") or "").strip().lower()
+        if not chuck_ok and self.plc:
+            actual = await self._read_chuck_pos(self.ch)          # 이동 실패 — 레시피 값 대신 실제 위치
+            if actual != chuck:
+                self.append_log("THICKNESS", f"Chuck 이동 실패 — Factor 는 실제 위치 '{actual}' 기준")
+            chuck = actual
+        if chuck not in ("up", "mid", "down"):
+            return "E845", f"Chuck 위치를 알 수 없어(값 '{chuck or '-'}') tooling 을 정할 수 없습니다"
+        gun = [g for g in self._THK_GUNS if params.get(f"use_{g.lower()}")][0]
+        fac = svc.factors
+        tooling = fac.tooling_for(chuck, gun)
+        mat = fac.material_for(gun)
+        missing = [n for n, v in (("tooling", tooling), ("density", mat.get("density")), ("Z-factor", mat.get("z_factor")))
+                   if v is None]
+        if missing:
+            return "E845", (f"Factor 미설정 — chuck {chuck} × {gun}: {', '.join(missing)} "
+                            f"(화면 [Factor 설정] 또는 {svc.cfg.factor_file})")
+        try:
+            got = await svc.set_material(float(mat["density"]), float(mat["z_factor"]), float(tooling))
+        except Exception as e:
+            return "E846", f"두께 모니터에 재료값을 쓰지 못함(되읽기 확인 실패 포함): {e}"
+        self._thk_pre = {"chuck": chuck, "gun": gun, "tooling": got.get("tooling"), "density": got.get("density"),
+                         "z_factor": got.get("z_factor"), "memo": mat.get("memo") or ""}
+        jp, _w = load_judge_params(self.cfg.mod)
+        life = svc.status().get("life_pct")
+        if life is not None and float(life) < jp.life_warn_pct:
+            warn = f"크리스탈 수명 {float(life):.1f}% (경고 기준 {jp.life_warn_pct:g}% 미만) — 교체 준비"
+            self.append_log("THICKNESS", f"⚠ {warn}")
+            with contextlib.suppress(Exception):
+                self._run_warnings.append(warn)
+        self.append_log("THICKNESS", f"Thickness 모드 — 목표 {float(params.get('thickness')):g} nm · {gun}"
+                                     f"{(' ' + mat.get('memo')) if mat.get('memo') else ''} · chuck {chuck} · "
+                                     f"tooling {got.get('tooling')}% · density {got.get('density')} · Z {got.get('z_factor')}")
+        return "", ""
+
+    async def _thickness_reject(self, params, code: str, msg: str) -> None:
+        """Thickness 모드 시작 전 점검 실패 — Gate/Main Valve 점검과 같은 거부 흐름(장비 정리 → 오류 상태 → 예외)."""
+        self.append_log("MAIN", f"[CH{self.ch}] 두께 모니터 점검 실패 [{code}] {msg} → 공정 시작 차단")
+        if self.chat:
+            with contextlib.suppress(Exception):
+                _note = params.get("process_note") or params.get("Process_name") or "알 수 없음"
+                self.chat.notify_error_event(f"CH{self.ch}", code, f"두께 모니터 점검 실패: {msg} → 공정 시작 차단 (공정: {_note})")
+                self.chat.flush()
+        self._auto_connect_enabled = False
+        with contextlib.suppress(Exception):
+            await self._stop_device_watchdogs(light=False)
+        self._on_process_status_changed(False)
+        with contextlib.suppress(Exception):
+            runtime_state.set_error("chamber", self.ch, f"thickness check failed [{code}]: {msg}")
+            runtime_state.mark_finished("chamber", self.ch)
+        raise CodedRuntimeError(f"thickness check failed [{code}]: {msg}", code)
+
+    def _thk_run_started(self, params) -> None:
+        """공정 시작 이벤트 — 이번 런 두께 기록 초기화(두께 모니터가 붙은 채널만)."""
+        if getattr(self, "_thickness", None) is None:
+            self._thk_rec = {}
+            return
+        thk_mode = bool((params or {}).get("thickness_mode"))
+        rec = {"end": END_THICKNESS if thk_mode else END_TIME, "mode": "Thickness" if thk_mode else "Time",
+               "target": (params or {}).get("thickness") if thk_mode else None,
+               "first": None, "last": None, "seq": None}
+        if thk_mode and isinstance(getattr(self, "_thk_pre", None), dict):
+            rec.update(self._thk_pre)
+        self._thk_rec = rec
+        self._thk_last_judge = None
+        if thk_mode:
+            self._thk_view_set("Thickness", f"{float(rec['target']):.1f} nm", 0.0, "공정 시작 — 메인 공정 대기")
+        else:
+            self._thk_view_set("Time", "—", None, "Time 모드 공정(두께는 기록만)")
+
+    def _on_thickness_status(self, st: dict) -> None:
+        """두께 서비스 폴링마다 — 공정 기록(메인 공정 구간 두께 변화)과 Thickness 모드 종료 판정."""
+        svc = getattr(self, "_thickness", None)
+        if svc is None:
+            return
+        self._thk_record(st)
+        j = getattr(self, "_thk_judge", None)
+        if j is None:
+            return
+        try:
+            ev = j.tick(st, svc.clock())
+            if ev is not None:
+                self._thk_apply_event(ev, j)
+            if self._thk_judge is j or (ev is not None and ev.kind == "fallback"):
+                text, pct = j.view(st, svc.clock())
+                self.process_controller.set_thickness_state(text)
+                self._thk_view_set("시간 대체" if j.mode == "fallback" else "Thickness",
+                                   f"{j.target:.1f} nm", pct, text)
+        except Exception as e:
+            self._thk_judge_error(e, j)
+
+    def _thk_record(self, st: dict) -> None:
+        """메인 공정 구간(폴링 중) 새 두께 값의 처음·마지막 — Time 모드 기록(최종 두께·평균 증착률)용."""
+        try:
+            rec = getattr(self, "_thk_rec", None)
+            if not rec or st.get("stale") or not getattr(self, "_proc_polling_active", False):
+                return
+            if not bool(getattr(self.process_controller, "is_running", False)):
+                return
+            seq, s = st.get("seq"), st.get("thickness_nm")
+            if s is None or seq == rec.get("seq"):
+                return
+            rec["seq"] = seq
+            pt = (float(s), float(self._thickness.clock()))
+            if rec.get("first") is None:
+                rec["first"] = pt
+            rec["last"] = pt
+        except Exception:
+            pass
+
+    def _thk_notify(self, text: str) -> None:
+        if not self.chat:
+            return
+        with contextlib.suppress(Exception):
+            self.chat.notify_text(f"[CH{self.ch} 두께] {text}")
+            if hasattr(self.chat, "flush"):
+                self.chat.flush()
+
+    def _thk_apply_event(self, ev, j) -> None:
+        pc = self.process_controller
+        if ev.kind == "done":
+            self._thk_judge = None
+            pc.on_thickness_done()
+        elif ev.kind == "fallback":
+            if ev.detail:
+                self.append_log("THICKNESS", f"⚠ 두께 판정 예외 traceback:\n{ev.detail.rstrip()}")
+            self._thk_notify(f"시간 대체로 전환 — {ev.reason}. 남은 {float(ev.remaining_s or 0):.0f}초 뒤 종료"
+                             + ("(두께 판정으로 복귀하지 않음)" if ev.permanent else "(통신이 돌아오면 복귀)") + " · 공정은 계속")
+            pc.on_thickness_fallback(float(ev.remaining_s or 0.0), ev.reason)
+        elif ev.kind == "resume":
+            self._thk_notify(f"두께 판정으로 복귀 — 유효 {float(ev.eff_nm or 0):.1f} / {j.target:.1f} nm")
+            pc.on_thickness_resume()
+
+    def _thk_judge_error(self, e: Exception, j) -> None:
+        """판정 호출부 예외 — 삼켜서 끝없이 기다리지 않게(_heater_judge_error 교훈) 곧바로 시간 대체로 전환한다. traceback 은 1번."""
+        self._thk_judge = None
+        tb = "".join(traceback.format_exception(type(e), e, e.__traceback__)).rstrip()
+        self.append_log("THICKNESS", f"⚠ 두께 판정 예외 — 시간 대체로 전환: {tb}")
+        try:
+            rem = float(j.fallback_remaining_s())
+        except Exception:
+            rem = 0.0
+        with contextlib.suppress(Exception):
+            j.mode, j.permanent, j.fallback_reason = "fallback", True, f"판정 예외({e!r})"
+        self._thk_notify(f"시간 대체로 전환 — 판정 예외({e!r}). 남은 {rem:.0f}초 뒤 종료 · 공정은 계속")
+        self.process_controller.on_thickness_fallback(rem, f"판정 예외({e!r})")
+
+    def _thk_on_end(self, kind: str) -> None:
+        """THICKNESS_WAIT 끝 — 종료 방식 기록, 상한이면 '목표 미도달' 경고·구글챗(실패로 처리하지 않음)."""
+        rec = getattr(self, "_thk_rec", None)
+        if rec is None:
+            return
+        j = getattr(self, "_thk_last_judge", None)
+        rec["end"] = kind
+        target = float(rec.get("target") or 0.0)
+        eff = None
+        if j is not None:
+            eff = float(j.eff)
+            rec["final_nm"] = eff
+            rec["avg_rate"] = j.avg_rate()
+            rec["suspect"] = int(j.suspect_count)
+            rec["fallback_reason"] = j.fallback_reason
+        eff_txt = "--" if eff is None else f"{eff:.1f}"
+        if kind == END_LIMIT:
+            warn = f"목표 미도달 — 최대 시간 상한 도달(유효 {eff_txt} / {target:.1f} nm), 정상 종료 절차로 끝냄"
+            self.append_log("THICKNESS", f"⚠ {warn}")
+            with contextlib.suppress(Exception):
+                self._run_warnings.append(warn)
+            self._thk_notify(warn)
+        elif kind == END_FALLBACK:
+            warn = f"시간 대체로 종료({rec.get('fallback_reason') or '-'}) — 마지막 확인 유효 {eff_txt} / {target:.1f} nm"
+            self.append_log("THICKNESS", warn)
+            with contextlib.suppress(Exception):
+                self._run_warnings.append(warn)
+        else:
+            self.append_log("THICKNESS", f"메인 공정 종료 — 종료 방식 {kind}, 유효 {eff_txt} / {target:.1f} nm")
+        pct = (eff / target * 100.0) if (eff is not None and target > 0) else None
+        self._thk_view_set(kind, f"{target:.1f} nm", pct, f"종료({kind}) — {eff_txt} nm")
+
+    def _thk_values(self) -> dict:
+        """기록용 값 — 종료 방식·목표·최종 유효두께·평균 증착률·적용값·의심 횟수·전환 사유(없으면 None)."""
+        rec = dict(getattr(self, "_thk_rec", None) or {})
+        if not rec:
+            return {}
+        if rec.get("mode") == "Time":
+            f, l = rec.get("first"), rec.get("last")
+            if f is None or l is None:
+                return {"end": END_TIME}
+            final = l[0] - f[0]
+            span = l[1] - f[1]
+            rec["final_nm"] = final
+            rec["avg_rate"] = (final / span) if span > 0 else None
+        return rec
+
+    def _thk_finalize_record(self) -> None:
+        if getattr(self, "_thickness", None) is None:
+            return
+        try:
+            v = self._thk_values()
+            self.data_logger.set_thickness_record(v)
+            if v.get("final_nm") is not None:
+                ar = v.get("avg_rate")
+                self.append_log("THICKNESS", f"두께 요약 — 종료 방식 {v.get('end')} · 최종 {float(v['final_nm']):.2f} nm"
+                                             + (f" / 목표 {float(v['target']):g} nm" if v.get("target") else "")
+                                             + (f" · 평균 {float(ar):.4f} nm/s" if ar is not None else "")
+                                             + (f" · 계단 튐 의심 {v.get('suspect')}회" if v.get("suspect") else ""))
+        except Exception as e:
+            self.append_log("THICKNESS", f"⚠ 두께 기록 실패(무시): {e!r}")
+
+    def _thk_card_fields(self, payload: dict) -> None:
+        if getattr(self, "_thickness", None) is None:
+            return
+        with contextlib.suppress(Exception):
+            v = self._thk_values()
+            if v.get("final_nm") is None and v.get("mode") != "Thickness":
+                return
+            payload.setdefault("thickness_end", str(v.get("end") or ""))
+            fin = "--" if v.get("final_nm") is None else f"{float(v['final_nm']):.1f}"
+            payload.setdefault("thickness_final", f"{fin} / {float(v['target']):g} nm" if v.get("target") else f"{fin} nm")
 
     # ============================= CH2 히터(2단계) =============================
     def attach_heater(self, svc) -> None:

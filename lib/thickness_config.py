@@ -40,9 +40,68 @@ class ThicknessConfig:
     log_dir: str = DEFAULT_LOG_DIR       # 연속 기록 CSV 뿌리(그 아래 CH{n}\Thickness_YYYYMMDD.csv)
     factor_file: str = ""                # tooling·재료값 JSON(절대 경로로 정규화)
 
-    # ── 공정 연동(2단계) 판정 상수 자리 ──
-    # Thickness 모드 종료 판정(영점 확인·계단 튐·시간 대체·최대 시간 상한)의 상수는 2단계에서
-    # 증착률 배수·시간 기준의 이름 붙은 값으로 여기에 추가하고 settings 로 덮어쓸 수 있게 한다.
+
+@dataclass(frozen=True)
+class ThicknessJudgeParams:
+    """Thickness 모드(2단계) 시작 전 점검·종료 판정 상수. 증착률 배수·시간 기준이라 재료·증착률이 바뀌어도 같은 값으로 동작한다.
+    값은 settings.json ch1/ch2 의 THICKNESS_* 로 덮어쓴다(load_judge_params). 기본값은 Evaporator 실제 로그(2026-03~10)로 정한 값."""
+    stale_s: float = 10.0                # 새 정상 두께 값이 이만큼 없으면 '시간 대체'(THICKNESS_STALE_S)
+    ready_fresh_s: float = 5.0           # 시작 전: 최근 이 시간 안에 정상 두께 값이 있어야 시작
+    life_warn_pct: float = 10.0          # 시작 전: 크리스탈 수명이 이보다 낮으면 경고만
+    max_time_ratio: float = 2.0          # 최대 시간 상한 = max(예상 × ratio, 예상 + margin)
+    max_time_margin_s: float = 300.0
+    zero_late_window_s: float = 10.0     # 기준점 뒤 이 시간 안에
+    zero_late_drop_nm: float = 2.0       #   이만큼 떨어지면 영점 지연 반영 → 기준점 재설정
+    step_skip_s: float = 3.0             # 기준점 뒤 이 시간은 계단 튐 판정에서 뺀다
+    done_consecutive: int = 2            # 유효두께 ≥ 목표 인 새 값이 연속 이만큼이면 종료
+    step_rate_k: float = 4.0             # 계단 튐: 증가량 > max(기준 증착률 × k × Δt, step_min_nm)
+    step_min_nm: float = 0.3
+    ref_rate_n: int = 15                 # 기준 증착률 = 최근 정상 증가율 n 개의 중앙값(5개 미만이면 레시피 dep_rate)
+    step_normal_n: int = 3               # 의심 뒤 정상 증가가 이만큼 이어지면 의심 해제
+    measured_rate_min_s: float = 30.0    # 시간 대체 증착률: 측정이 이만큼 이상이면 실측 평균, 아니면 레시피 dep_rate
+    rate_zero_warn_s: float = 60.0       # 두께가 이만큼 늘지 않으면 경고(기록만)
+    rate_spike_k: float = 5.0            # 장비 증착률 > 레시피 dep_rate × k 이면 경고(기록만)
+
+
+def load_judge_params(cfg_module: Any) -> Tuple[ThicknessJudgeParams, List[str]]:
+    """config 모듈에서 THICKNESS_* 판정 상수를 읽어 범위를 클램프한다. (값, 경고) — 예외를 던지지 않는다."""
+    warns: List[str] = []
+    d = ThicknessJudgeParams()
+
+    def _num(key: str, default: float, lo: float, hi: float) -> float:
+        raw = getattr(cfg_module, key, default)
+        try:
+            if isinstance(raw, bool):
+                raise TypeError
+            v = float(raw)
+        except Exception:
+            warns.append(f"{key}={raw!r} 형식 오류 → 기본값 {default!r}")
+            return float(default)
+        if not (lo <= v <= hi):
+            nv = min(max(v, lo), hi)
+            warns.append(f"{key}={v:g} 범위({lo:g}~{hi:g}) 밖 → {nv:g}")
+            return nv
+        return v
+
+    p = ThicknessJudgeParams(
+        stale_s=_num("THICKNESS_STALE_S", d.stale_s, 2.0, 120.0),
+        ready_fresh_s=_num("THICKNESS_READY_FRESH_S", d.ready_fresh_s, 1.0, 60.0),
+        life_warn_pct=_num("THICKNESS_LIFE_WARN_PCT", d.life_warn_pct, 0.0, 100.0),
+        max_time_ratio=_num("THICKNESS_MAX_TIME_RATIO", d.max_time_ratio, 1.0, 10.0),
+        max_time_margin_s=_num("THICKNESS_MAX_TIME_MARGIN_S", d.max_time_margin_s, 0.0, 7200.0),
+        zero_late_window_s=_num("THICKNESS_ZERO_LATE_WINDOW_S", d.zero_late_window_s, 0.0, 60.0),
+        zero_late_drop_nm=_num("THICKNESS_ZERO_LATE_DROP_NM", d.zero_late_drop_nm, 0.1, 100.0),
+        step_skip_s=_num("THICKNESS_STEP_SKIP_S", d.step_skip_s, 0.0, 60.0),
+        done_consecutive=int(_num("THICKNESS_DONE_CONSECUTIVE", d.done_consecutive, 1, 10)),
+        step_rate_k=_num("THICKNESS_STEP_RATE_K", d.step_rate_k, 1.5, 50.0),
+        step_min_nm=_num("THICKNESS_STEP_MIN_NM", d.step_min_nm, 0.01, 50.0),
+        ref_rate_n=int(_num("THICKNESS_REF_RATE_N", d.ref_rate_n, 5, 200)),
+        step_normal_n=int(_num("THICKNESS_STEP_NORMAL_N", d.step_normal_n, 1, 20)),
+        measured_rate_min_s=_num("THICKNESS_MEASURED_RATE_MIN_S", d.measured_rate_min_s, 5.0, 3600.0),
+        rate_zero_warn_s=_num("THICKNESS_RATE_ZERO_WARN_S", d.rate_zero_warn_s, 5.0, 3600.0),
+        rate_spike_k=_num("THICKNESS_RATE_SPIKE_K", d.rate_spike_k, 1.5, 100.0),
+    )
+    return p, warns
 
 
 def load_thickness_config(cfg_module: Any, ch: int) -> Tuple[ThicknessConfig, List[str]]:

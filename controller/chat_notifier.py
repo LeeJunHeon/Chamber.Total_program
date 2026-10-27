@@ -580,6 +580,12 @@ class ChatNotifier(QObject):
         if pos:
             fields.setdefault("Chuck Position", str(pos))
 
+        # ✅ 두께 모니터 — 종료 방식·최종 두께(런타임이 기록을 넣었을 때만)
+        if merged.get("thickness_end"):
+            fields.setdefault("종료 방식", str(merged.get("thickness_end")))
+        if merged.get("thickness_final"):
+            fields.setdefault("최종 두께", str(merged.get("thickness_final")))
+
         warns: List[str] = list(merged.get("warnings") or [])
         if warns:
             preview = " • " + "\n • ".join(warns[:3])

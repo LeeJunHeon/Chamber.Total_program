@@ -188,6 +188,12 @@ def test_init_thickness_channels_and_unreachable_monitor(monkeypatch):
             def append_log(self, src, msg):
                 self.proc.append(msg)
 
+            def attach_thickness(self, svc):
+                self.attached = svc
+
+            def set_thickness_view(self, cb):
+                self.view = cb
+
         loop = asyncio.new_event_loop()
         win = types.SimpleNamespace(ch1=RT(), ch2=RT(), _loop=loop, heater_panel=None,
                                     thickness_services={}, thickness_panels={}, sizes=[], root=QWidget())
@@ -201,6 +207,8 @@ def test_init_thickness_channels_and_unreachable_monitor(monkeypatch):
         main.MainWindow._layout_side_panels(win)
         assert list(win.thickness_services) == [2] and list(win.thickness_panels) == [2]
         assert win.ch1.side == [] and win.ch1.proc == []
+        assert getattr(win.ch2, "attached", None) is win.thickness_services[2] and not hasattr(win.ch1, "attached")
+        assert win.ch2.view == win.thickness_panels[2].set_process_view
         assert win.sizes == [(1086 + PANEL_W + 12, 1010)]
         svc = win.thickness_services[2]
 

@@ -525,6 +525,22 @@ THICKNESS_STALE_S = 10.0                # 마지막 정상 두께 뒤 이 시간
 THICKNESS_CMD_TIMEOUT_S = 1.0           # 명령 1회 응답 대기(초, 0.3~5). 응답이 없으면 2번 더 보낸다
 THICKNESS_LOG_DIR = r"C:\VanaM_Logs\CH1&2\Thickness"   # 연속 기록(그 아래 CH{n}\Thickness_YYYYMMDD.csv). G: 는 쓰지 않는다
 THICKNESS_FACTOR_FILE = ""              # tooling·재료값 파일. 비우면 config/thickness_factors_ch{N}.json(exe 옆 config 폴더)
+# ── 공정 연동(2단계: Thickness 모드 = 레시피 thickness>0 + SUPPORTS_THICKNESS) — 판정 상수(lib/thickness_config.load_judge_params) ──
+THICKNESS_READY_FRESH_S = 5.0           # 시작 전: 최근 이 시간(초) 안에 정상 두께 값이 있어야 시작
+THICKNESS_LIFE_WARN_PCT = 10.0          # 시작 전: 크리스탈 수명(%)이 이보다 낮으면 경고만
+THICKNESS_MAX_TIME_RATIO = 2.0          # 최대 시간 상한 = max(예상 × 이 배수, 예상 + MARGIN). 예상 = thickness ÷ dep_rate
+THICKNESS_MAX_TIME_MARGIN_S = 300.0     #   (초)
+THICKNESS_ZERO_LATE_WINDOW_S = 10.0     # 영점 기준점 뒤 이 시간(초) 안에
+THICKNESS_ZERO_LATE_DROP_NM = 2.0       #   이만큼(nm) 떨어지면 영점 지연 반영으로 보고 기준점 재설정
+THICKNESS_STEP_SKIP_S = 3.0             # 기준점 뒤 이 시간(초)은 계단 튐 판정에서 뺀다
+THICKNESS_DONE_CONSECUTIVE = 2          # 유효두께 ≥ 목표 인 새 값이 연속 이만큼이면 종료
+THICKNESS_STEP_RATE_K = 4.0             # 계단 튐 의심: 증가량 > max(기준 증착률 × 이 배수 × Δt, STEP_MIN_NM)
+THICKNESS_STEP_MIN_NM = 0.3             #   (nm)
+THICKNESS_REF_RATE_N = 15               # 기준 증착률 = 최근 정상 증가율 이만큼의 중앙값(5개 미만이면 레시피 dep_rate)
+THICKNESS_STEP_NORMAL_N = 3             # 의심 뒤 정상 증가가 이만큼 이어지면 의심 해제(목표 이상이면 종료)
+THICKNESS_MEASURED_RATE_MIN_S = 30.0    # 시간 대체 증착률: 측정이 이 시간(초) 이상이면 실측 평균, 아니면 레시피 dep_rate
+THICKNESS_RATE_ZERO_WARN_S = 60.0       # 두께가 이 시간(초) 동안 늘지 않으면 경고(기록만)
+THICKNESS_RATE_SPIKE_K = 5.0            # 장비 증착률 > 레시피 dep_rate × 이 배수면 경고(기록만)
 
 
 # ======================================================================

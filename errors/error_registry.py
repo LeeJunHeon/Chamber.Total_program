@@ -1636,6 +1636,83 @@ ERROR_REGISTRY: Dict[str, ErrorDefinition] = {
         fix="HEATER_MV_LIMIT 여유와 HEATER_HOLD_WAIT_SEC 를 확인하십시오. 강제 고정으로 계속하려면 HEATER_HOLD_FAIL_ACTION=force.",
     ),
     # -----------------------------------------------------------------
+    # E84x : 두께 모니터(STM-100) Thickness 모드 — 시작 전 점검(장비 동작 전 거부, Gate·Main Valve 점검과 같은 정책)
+    # -----------------------------------------------------------------
+    "E840": ErrorDefinition(
+        code="E840",
+        title="두께 모니터 응답 없음",
+        category="THICKNESS",
+        client_action=ACTION_STOP,
+        severity=SEV_ERROR,
+        cause="Thickness 모드 레시피(thickness>0)인데 두께 모니터가 연결돼 있지 않거나 최근 THICKNESS_READY_FRESH_S(기본 5초) "
+              "안에 정상 두께 값을 받지 못했습니다.",
+        fix="두께 모니터 패널의 연결·응답 램프와 마지막 오류를 확인하십시오(MOXA 포트 THICKNESS_TCP_PORT, 케이블, 장비 전원). "
+            "시간으로 끝내려면 레시피 thickness 를 비우고 process_time 을 쓰십시오.",
+    ),
+    "E841": ErrorDefinition(
+        code="E841",
+        title="두께 모니터 XTAL FAIL",
+        category="THICKNESS",
+        client_action=ACTION_STOP,
+        severity=SEV_ERROR,
+        cause="두께 모니터가 크리스탈 이상(XTAL FAIL)을 알려 두께로 종료를 판정할 수 없습니다.",
+        fix="크리스탈을 교체하거나 장착 상태를 확인한 뒤 다시 시작하십시오.",
+    ),
+    "E842": ErrorDefinition(
+        code="E842",
+        title="Thickness 모드 레시피 값 오류",
+        category="THICKNESS",
+        client_action=ACTION_STOP,
+        severity=SEV_ERROR,
+        cause="Thickness 모드에는 dep_rate 와 thickness 가 모두 0 보다 커야 합니다(예상시간·상한·시간 대체 계산에 씁니다).",
+        fix="레시피 dep_rate·thickness 값을 확인하십시오.",
+    ),
+    "E843": ErrorDefinition(
+        code="E843",
+        title="Thickness 모드 건 선택 오류",
+        category="THICKNESS",
+        client_action=ACTION_STOP,
+        severity=SEV_ERROR,
+        cause="Thickness 모드는 건 1개만 쓸 수 있습니다 — 2개 이상(co-sputter)이거나 사용 건이 없습니다(tooling 을 건별로 적용).",
+        fix="건을 1개만 선택하거나, co-sputter 는 thickness 를 비우고 시간(process_time)으로 진행하십시오.",
+    ),
+    "E844": ErrorDefinition(
+        code="E844",
+        title="Thickness 모드와 중간 펄스 전력 변경 충돌",
+        category="THICKNESS",
+        client_action=ACTION_STOP,
+        severity=SEV_ERROR,
+        cause="중간 펄스 전력 변경 시점(power_change_time)이 메인 공정 구간에 있습니다. Thickness 모드는 메인 구간 길이가 정해지지 않아 함께 쓸 수 없습니다.",
+        fix="변경 시점을 Shutter Delay 안으로 옮기거나, 중간 변경을 쓰려면 thickness 를 비우고 시간으로 진행하십시오.",
+    ),
+    "E845": ErrorDefinition(
+        code="E845",
+        title="두께 모니터 Factor 미설정",
+        category="THICKNESS",
+        client_action=ACTION_STOP,
+        severity=SEV_ERROR,
+        cause="확정된 chuck 위치 × 사용 건의 tooling, 또는 그 건의 density·Z-factor 가 Factor 파일에 없거나 chuck 위치를 알 수 없습니다.",
+        fix="두께 모니터 패널 [Factor 설정](config/thickness_factors_ch{N}.json)에서 값을 넣고 chuck 위치 램프를 확인하십시오.",
+    ),
+    "E846": ErrorDefinition(
+        code="E846",
+        title="두께 모니터 재료값 적용 실패",
+        category="THICKNESS",
+        client_action=ACTION_STOP,
+        severity=SEV_ERROR,
+        cause="두께 모니터에 density/Z-factor/tooling 을 쓰고 되읽어 확인하지 못했습니다(1회 재시도 뒤에도 불일치·통신 실패·범위 밖).",
+        fix="두께 모니터 통신 상태와 Factor 값 범위(density 0.5~99.99, Z 0.1~9.999, tooling 10~399)를 확인하고 다시 시작하십시오.",
+    ),
+    "E847": ErrorDefinition(
+        code="E847",
+        title="두께 대기 단계 구성 오류",
+        category="THICKNESS",
+        client_action=ACTION_STOP,
+        severity=SEV_ERROR,
+        cause="THICKNESS_WAIT 단계의 값(목표·예상·상한)이 올바르지 않습니다(프로그램 내부 오류).",
+        fix="로그를 개발 담당에게 전달하십시오.",
+    ),
+    # -----------------------------------------------------------------
     # E9xx : LOGGING / UI / INTERNAL / FALLBACK
     # -----------------------------------------------------------------
     "E901": ErrorDefinition(

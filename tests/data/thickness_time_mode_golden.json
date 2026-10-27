@@ -1,0 +1,1301 @@
+{
+ "ch2_thk_dcp": [
+  [
+   "IG_CMD",
+   "베이스 압력(7.0e-06) 도달 대기",
+   7e-06,
+   "None",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "RGA_SCAN",
+   "RGA 스캔 및 그래프 출력 대기",
+   null,
+   "None",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "Ch1(AR) Flow Off",
+   null,
+   "('FLOW_OFF', {'channel': 1})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "MFC Valve Open",
+   null,
+   "('VALVE_OPEN', {})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "압력 센서 Zeroing",
+   null,
+   "('PS_ZEROING', {})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "Ch1(AR) Zeroing",
+   null,
+   "('MFC_ZEROING', {'channel': 1})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "메인 밸브 열기",
+   null,
+   "('MV', True, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "AR 밸브 열기",
+   null,
+   "('AR', True, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "Ch1(AR) GAS 20.0sccm 설정",
+   null,
+   "('FLOW_SET', {'channel': 1, 'value': 20.0})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "Ch1(AR) GAS 공급 시작",
+   null,
+   "('FLOW_ON', {'channel': 1})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "압력 제어(SP4) 시작",
+   null,
+   "('SP4_ON', {})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "압력 도달 대기 (SP4 setpoint 기준, timeout=180s)",
+   null,
+   "('WAIT_PRESSURE', {'target': 5.0, 'timeout_sec': 180.0, 'source': 'ps', 'use_sp_target': True, 'sp_index': 4})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "Gun Shutter G1 열기",
+   null,
+   "('G1', True, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "DC_PULSE_START",
+   "DC Pulse 설정 및 ON (P=80.0W, f=20kHz, off=10.0us(듀티 80%))",
+   80.0,
+   "(20, 10.0)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "목표 압력(SP2) 10.00 설정",
+   null,
+   "('SP2_SET', {'value': 10.0})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "압력 제어(SP2) 시작",
+   null,
+   "('SP2_ON', {})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "압력 도달 대기 (SP2, target=10.00, timeout=180s)",
+   null,
+   "('WAIT_PRESSURE', {'target': 10.0, 'timeout_sec': 180.0, 'source': 'ps'})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "목표 압력(SP1) 5.00 설정",
+   null,
+   "('SP1_SET', {'value': 5.0})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "압력 제어(SP1) 시작",
+   null,
+   "('SP1_ON', {})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "DELAY",
+   "Shutter Delay 5.0분",
+   null,
+   "None",
+   300000,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "Main Shutter 열기",
+   null,
+   "('MS', True, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "OES_RUN",
+   "OES 측정 시작 (33.333333333333336분, 60ms)",
+   null,
+   "(2000.0000000000002, 60)",
+   null,
+   false,
+   false,
+   true
+  ],
+  [
+   "DELAY",
+   "메인 공정 진행 (33.333333333333336분)",
+   null,
+   "None",
+   2000000,
+   false,
+   true,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "Main Shutter 닫기 (항상)",
+   null,
+   "('MS', False, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "DC_PULSE_STOP",
+   "DC Pulse Off",
+   null,
+   "None",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "Ch1(AR) Flow Off",
+   null,
+   "('FLOW_OFF', {'channel': 1})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "전체 MFC Valve Open",
+   null,
+   "('VALVE_OPEN', {})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "Gun Shutter G1 닫기",
+   null,
+   "('G1', False, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "PLC AR 밸브 닫기",
+   null,
+   "('AR', False, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "PLC O2 밸브 닫기",
+   null,
+   "('O2', False, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "PLC N2 밸브 닫기",
+   null,
+   "('N2', False, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "메인 밸브 닫기",
+   null,
+   "('MV', False, 2)",
+   null,
+   false,
+   false,
+   false
+  ]
+ ],
+ "ch2_thk_change_main": [
+  [
+   "IG_CMD",
+   "베이스 압력(7.0e-06) 도달 대기",
+   7e-06,
+   "None",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "RGA_SCAN",
+   "RGA 스캔 및 그래프 출력 대기",
+   null,
+   "None",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "Ch1(AR) Flow Off",
+   null,
+   "('FLOW_OFF', {'channel': 1})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "MFC Valve Open",
+   null,
+   "('VALVE_OPEN', {})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "압력 센서 Zeroing",
+   null,
+   "('PS_ZEROING', {})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "Ch1(AR) Zeroing",
+   null,
+   "('MFC_ZEROING', {'channel': 1})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "메인 밸브 열기",
+   null,
+   "('MV', True, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "AR 밸브 열기",
+   null,
+   "('AR', True, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "Ch1(AR) GAS 50.0sccm 설정",
+   null,
+   "('FLOW_SET', {'channel': 1, 'value': 50.0})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "Ch1(AR) GAS 공급 시작",
+   null,
+   "('FLOW_ON', {'channel': 1})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "압력 제어(SP4) 시작",
+   null,
+   "('SP4_ON', {})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "압력 도달 대기 (SP4 setpoint 기준, timeout=180s)",
+   null,
+   "('WAIT_PRESSURE', {'target': 60.0, 'timeout_sec': 180.0, 'source': 'ps', 'use_sp_target': True, 'sp_index': 4})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "Gun Shutter G1 열기",
+   null,
+   "('G1', True, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "DC_PULSE_START",
+   "DC Pulse 설정 및 ON (P=80.0W, f=20kHz, off=10.0us(듀티 80%))",
+   80.0,
+   "(20, 10.0)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "목표 압력(SP1) 60.00 설정",
+   null,
+   "('SP1_SET', {'value': 60.0})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "압력 제어(SP1) 시작",
+   null,
+   "('SP1_ON', {})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "DELAY",
+   "Shutter Delay 5.0분",
+   null,
+   "None",
+   300000,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "Main Shutter 열기",
+   null,
+   "('MS', True, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "OES_RUN",
+   "OES 측정 시작 (20.0분, 60ms)",
+   null,
+   "(1200.0, 60)",
+   null,
+   false,
+   false,
+   true
+  ],
+  [
+   "DELAY",
+   "메인 공정 진행 (변경 전) 5.00분",
+   null,
+   "None",
+   300000,
+   false,
+   true,
+   false
+  ],
+  [
+   "DC_PULSE_SET",
+   "DC Pulse Power 변경 → 100.0W (t=600.0s, Main)",
+   100.0,
+   "None",
+   null,
+   false,
+   true,
+   false
+  ],
+  [
+   "DELAY",
+   "메인 공정 진행 (변경 후) 15.00분",
+   null,
+   "None",
+   900000,
+   false,
+   true,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "Main Shutter 닫기 (항상)",
+   null,
+   "('MS', False, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "DC_PULSE_STOP",
+   "DC Pulse Off",
+   null,
+   "None",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "Ch1(AR) Flow Off",
+   null,
+   "('FLOW_OFF', {'channel': 1})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "전체 MFC Valve Open",
+   null,
+   "('VALVE_OPEN', {})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "Gun Shutter G1 닫기",
+   null,
+   "('G1', False, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "PLC AR 밸브 닫기",
+   null,
+   "('AR', False, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "PLC O2 밸브 닫기",
+   null,
+   "('O2', False, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "PLC N2 밸브 닫기",
+   null,
+   "('N2', False, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "메인 밸브 닫기",
+   null,
+   "('MV', False, 2)",
+   null,
+   false,
+   false,
+   false
+  ]
+ ],
+ "ch1_thk_rfp": [
+  [
+   "IG_CMD",
+   "베이스 압력(1.0e-05) 도달 대기",
+   1e-05,
+   "None",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "RGA_SCAN",
+   "RGA 스캔 및 그래프 출력 대기",
+   null,
+   "None",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "Ch1(AR) Flow Off",
+   null,
+   "('FLOW_OFF', {'channel': 1})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "MFC Valve Open",
+   null,
+   "('VALVE_OPEN', {})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "압력 센서 Zeroing",
+   null,
+   "('PS_ZEROING', {})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "Ch1(AR) Zeroing",
+   null,
+   "('MFC_ZEROING', {'channel': 1})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "메인 밸브 열기",
+   null,
+   "('MV', True, 1)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "AR 밸브 열기",
+   null,
+   "('AR', True, 1)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "Ch1(AR) GAS 20.0sccm 설정",
+   null,
+   "('FLOW_SET', {'channel': 1, 'value': 20.0})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "Ch1(AR) GAS 공급 시작",
+   null,
+   "('FLOW_ON', {'channel': 1})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "압력 제어(SP3) 시작",
+   null,
+   "('SP3_ON', {})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "압력 도달 대기 (SP3 setpoint 기준, timeout=180s)",
+   null,
+   "('WAIT_PRESSURE', {'target': 3.0, 'timeout_sec': 180.0, 'source': 'ps', 'use_sp_target': True, 'sp_index': 3})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "RF_PULSE_START",
+   "RF Pulse 설정 및 ON (P=120.0W, f=0.500kHz, duty=40%)",
+   120.0,
+   "(500, 40)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "DELAY",
+   "Power Delay 20초",
+   null,
+   "None",
+   20000,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "목표 압력(SP2) 10.00 설정",
+   null,
+   "('SP2_SET', {'value': 10.0})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "압력 제어(SP2) 시작",
+   null,
+   "('SP2_ON', {})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "압력 도달 대기 (SP2, target=10.00, timeout=180s)",
+   null,
+   "('WAIT_PRESSURE', {'target': 10.0, 'timeout_sec': 180.0, 'source': 'ps'})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "목표 압력(SP1) 3.00 설정",
+   null,
+   "('SP1_SET', {'value': 3.0})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "압력 제어(SP1) 시작",
+   null,
+   "('SP1_ON', {})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "DELAY",
+   "Shutter Delay 2.0분",
+   null,
+   "None",
+   120000,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "Main Shutter 열기",
+   null,
+   "('MS', True, 1)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "OES_RUN",
+   "OES 측정 시작 (58.1771173014977분, 60ms)",
+   null,
+   "(3490.6270380898623, 60)",
+   null,
+   false,
+   false,
+   true
+  ],
+  [
+   "DELAY",
+   "메인 공정 진행 (58.1771173014977분)",
+   null,
+   "None",
+   3490627,
+   false,
+   true,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "Main Shutter 닫기 (항상)",
+   null,
+   "('MS', False, 1)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "RF_PULSE_STOP",
+   "RF Pulse Off",
+   null,
+   "None",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "Ch1(AR) Flow Off",
+   null,
+   "('FLOW_OFF', {'channel': 1})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "전체 MFC Valve Open",
+   null,
+   "('VALVE_OPEN', {})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "PLC AR 밸브 닫기",
+   null,
+   "('AR', False, 1)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "PLC O2 밸브 닫기",
+   null,
+   "('O2', False, 1)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "PLC N2 밸브 닫기",
+   null,
+   "('N2', False, 1)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "메인 밸브 닫기",
+   null,
+   "('MV', False, 1)",
+   null,
+   false,
+   false,
+   false
+  ]
+ ],
+ "ch2_thk_heater_rf": [
+  [
+   "HEATER_SET",
+   "히터 300°C 설정 (기본 램프 속도)",
+   300.0,
+   "(None,)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "HEATER_WAIT",
+   "히터 300°C 도달·안정 대기",
+   300.0,
+   "None",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "IG_CMD",
+   "베이스 압력(7.0e-06) 도달 대기",
+   7e-06,
+   "None",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "RGA_SCAN",
+   "RGA 스캔 및 그래프 출력 대기",
+   null,
+   "None",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "Ch1(AR) Flow Off",
+   null,
+   "('FLOW_OFF', {'channel': 1})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "MFC Valve Open",
+   null,
+   "('VALVE_OPEN', {})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "압력 센서 Zeroing",
+   null,
+   "('PS_ZEROING', {})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "Ch1(AR) Zeroing",
+   null,
+   "('MFC_ZEROING', {'channel': 1})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "메인 밸브 열기",
+   null,
+   "('MV', True, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "AR 밸브 열기",
+   null,
+   "('AR', True, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "Ch1(AR) GAS 20.0sccm 설정",
+   null,
+   "('FLOW_SET', {'channel': 1, 'value': 20.0})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "Ch1(AR) GAS 공급 시작",
+   null,
+   "('FLOW_ON', {'channel': 1})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "압력 제어(SP4) 시작",
+   null,
+   "('SP4_ON', {})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "압력 도달 대기 (SP4 setpoint 기준, timeout=180s)",
+   null,
+   "('WAIT_PRESSURE', {'target': 2.0, 'timeout_sec': 180.0, 'source': 'ps', 'use_sp_target': True, 'sp_index': 4})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "Gun Shutter G2 열기",
+   null,
+   "('G2', True, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "Power Select OFF (SW_POWER_SELECT)",
+   null,
+   "('SW_POWER_SELECT', False)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "RF_POWER_SET",
+   "RF Power 150.0W 설정",
+   150.0,
+   "None",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "목표 압력(SP2) 10.00 설정",
+   null,
+   "('SP2_SET', {'value': 10.0})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "압력 제어(SP2) 시작",
+   null,
+   "('SP2_ON', {})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "압력 도달 대기 (SP2, target=10.00, timeout=180s)",
+   null,
+   "('WAIT_PRESSURE', {'target': 10.0, 'timeout_sec': 180.0, 'source': 'ps'})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "목표 압력(SP1) 2.00 설정",
+   null,
+   "('SP1_SET', {'value': 2.0})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "압력 제어(SP1) 시작",
+   null,
+   "('SP1_ON', {})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "HEATER_HOLD",
+   "히터 유지 모드 측정 대기 (작업 압력·플라즈마 조건)",
+   null,
+   "None",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "Main Shutter 열기",
+   null,
+   "('MS', True, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "OES_RUN",
+   "OES 측정 시작 (10.0분, 60ms)",
+   null,
+   "(600.0, 60)",
+   null,
+   false,
+   false,
+   true
+  ],
+  [
+   "DELAY",
+   "메인 공정 진행 (10.0분)",
+   null,
+   "None",
+   600000,
+   false,
+   true,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "Main Shutter 닫기 (항상)",
+   null,
+   "('MS', False, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "RF_POWER_STOP",
+   "RF Power Off",
+   null,
+   "None",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "Ch1(AR) Flow Off",
+   null,
+   "('FLOW_OFF', {'channel': 1})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "MFC_CMD",
+   "전체 MFC Valve Open",
+   null,
+   "('VALVE_OPEN', {})",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "Gun Shutter G2 닫기",
+   null,
+   "('G2', False, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "PLC AR 밸브 닫기",
+   null,
+   "('AR', False, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "PLC O2 밸브 닫기",
+   null,
+   "('O2', False, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "PLC N2 밸브 닫기",
+   null,
+   "('N2', False, 2)",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "PLC_CMD",
+   "메인 밸브 닫기",
+   null,
+   "('MV', False, 2)",
+   null,
+   false,
+   false,
+   false
+  ]
+ ],
+ "eta_rows": 4790
+}

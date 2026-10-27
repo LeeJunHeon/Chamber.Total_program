@@ -15,6 +15,8 @@ from errors.app_error import AppError
 from lib.config_common import SHUTDOWN_STEP_TIMEOUT_MS, SHUTDOWN_STEP_GAP_MS
 from lib import config_common as _cfgc   # ✅ RGA 스텝 예산은 호출 시점에 계산한다
 from lib import config_ch1, config_ch2
+from controller.thickness_process import (END_FALLBACK, END_LIMIT, END_THICKNESS, expected_seconds,
+                                          max_time_s, thickness_mode_of)
 
 # 종료 단계 대기값 — 실행 시점에 읽는다.
 #   위 값 단위 import 는 main.py 의 load_settings() 보다 먼저 실행돼 settings.json 값이 반영되지 않는다.
@@ -136,12 +138,16 @@ def eta_row_process_time_min(row: dict) -> float:
     return pt
 
 
-def eta_row_min_seconds(row: dict) -> float:
-    """행 1개의 최소 소요 초. delay 행이면 대기 초만, 아니면 (shutter_delay + process_time) x 60."""
+def eta_row_min_seconds(row: dict, thickness_supported: bool = False) -> float:
+    """행 1개의 최소 소요 초. delay 행이면 대기 초만, 아니면 (shutter_delay + process_time) x 60.
+    thickness_supported(그 채널 SUPPORTS_THICKNESS + 두께 서비스)이고 행이 Thickness 모드면(thickness_mode_of — 런타임과 같은 규칙)
+    메인 공정은 목표 두께에 닿는 순간 끝나 예상보다 빠를 수 있다 → 하한에는 shutter_delay 만 넣는다(확정값처럼 보내지 않음)."""
     row = row or {}
     d = eta_delay_seconds(row)
     if d > 0:
         return d
+    if thickness_mode_of(row.get("thickness"), thickness_supported):
+        return _eta_f(row.get("shutter_delay", 0)) * 60.0
     return (_eta_f(row.get("shutter_delay", 0)) + eta_row_process_time_min(row)) * 60.0
 
 
@@ -181,11 +187,11 @@ def rf_power_stop_timeout_ms(cfg: Any, base_ms: int) -> int:
         return base
 
 
-def eta_min_total_seconds(rows: list, tail_s: float = 90.0) -> float:
+def eta_min_total_seconds(rows: list, tail_s: float = 90.0, thickness_supported: bool = False) -> float:
     """rows 전체의 하한(초) = Σ eta_row_min_seconds + tail_s. 조건 대기(IG/MFC/압력/램프업)는 0 으로 둔다."""
     total = 0.0
     for row in (rows or []):
-        total += eta_row_min_seconds(row or {})
+        total += eta_row_min_seconds(row or {}, thickness_supported)
     return total + float(tail_s)
 
 
@@ -315,6 +321,8 @@ class ActionType(str, Enum):
     HEATER_SET  = "HEATER_SET"    # 목표·램프 설정(공정 소유로 운전 시작 또는 목표 변경)
     HEATER_WAIT = "HEATER_WAIT"   # 목표 도달 + 안정(SOAK) 대기 — params=(SOAK 초,) 는 레시피 heater_soak 이 있을 때만
     HEATER_HOLD = "HEATER_HOLD"   # 작업 압력·플라즈마 조건에서 유지 모드(dac) 측정 대기
+    # 두께 모니터 — Thickness 모드(params thickness_mode=True)에서 메인 공정 DELAY 대신 들어간다
+    THICKNESS_WAIT = "THICKNESS_WAIT"   # 영점(B) → 목표 두께 도달 대기. value=목표 nm, params=(예상 초, 상한 초)
 
 
 @dataclass
@@ -345,6 +353,7 @@ class ProcessStep:
             ActionType.RF_PULSE_SET,
             ActionType.HEATER_SET,
             ActionType.HEATER_WAIT,
+            ActionType.THICKNESS_WAIT,
         ):
             if self.value is None:
                 # 이 부분은 현재 전용 코드가 명확히 준비된 게 아니므로
@@ -358,6 +367,10 @@ class ProcessStep:
         if self.action == ActionType.MFC_CMD:
             if not self.params or len(self.params) != 2 or not isinstance(self.params[1], dict):
                 raise AppError(code="E217", detail="MFC_CMD params는 (cmd:str, args:dict) 형태여야 합니다.")
+
+        if self.action == ActionType.THICKNESS_WAIT:
+            if not self.params or len(self.params) != 2:
+                raise AppError(code="E847", detail="THICKNESS_WAIT params는 (예상 초, 상한 초) 형태여야 합니다.")
 
         if self.action == ActionType.OES_RUN:
             if not self.params or len(self.params) != 2:
@@ -437,6 +450,12 @@ class ProcessController:
         heater_hold: Optional[Callable[[], None]] = None,
         cancel_heater: Optional[Callable[[], None]] = None,
 
+        # 두께 모니터 — 런타임이 주입(Thickness 모드에서만 쓰인다)
+        thickness_start: Optional[Callable[[float, float, float], None]] = None,   # (목표 nm, 예상 초, 상한 초) — 영점 → 판정 시작
+        thickness_end: Optional[Callable[[str], None]] = None,                     # 종료 방식(Thickness/시간대체/상한/중단)
+        cancel_thickness: Optional[Callable[[], None]] = None,
+        thickness_supported: Optional[Callable[[], bool]] = None,                   # 이 채널이 두께 모니터를 쓰는가(ETA 하한)
+
         ch: int,
         supports_dc_cont: bool,
         supports_rf_cont: bool,
@@ -467,6 +486,10 @@ class ProcessController:
         self._heater_wait = heater_wait
         self._heater_hold = heater_hold
         self._cancel_heater_cb = cancel_heater
+        self._thickness_start = thickness_start
+        self._thickness_end = thickness_end
+        self._cancel_thickness_cb = cancel_thickness
+        self._thickness_supported = thickness_supported
 
         # ⬇️ 추가: 챔버/지원능력
         self._ch = int(ch)
@@ -524,6 +547,10 @@ class ProcessController:
         # - Main Process 구간에서 실제로 흐른 시간
         self._actual_shutter_delay_ms: int = 0
         self._actual_process_time_ms: int = 0
+
+        # 두께 모니터 THICKNESS_WAIT — 상한·시간 대체 타이머는 이 단계가 가진다(리스너가 멈춰도 반드시 끝난다)
+        self._thk_wait_active: bool = False
+        self._thk_fallback_deadline_ns: int = 0
 
         # 기대 토큰
         self._expect_group: Optional[ExpectGroup] = None
@@ -743,6 +770,7 @@ class ProcessController:
         except Exception:
             pass
         self._cancel_heater()
+        self._cancel_thickness()
 
         # 시퀀스 교체
         self.process_sequence = self._create_emergency_shutdown_sequence()
@@ -752,6 +780,7 @@ class ProcessController:
         self._cancel_countdown()
         self._cancel_elapsed()
         self._cancel_heater()
+        self._cancel_thickness()
         if self._expect_group:
             self._expect_group.cancel("reset")
             self._expect_group = None
@@ -1003,6 +1032,67 @@ class ProcessController:
         except Exception:
             pass
 
+    # ── 두께 모니터(THICKNESS_WAIT) — 판정은 런타임이 두께 서비스 리스너에서 한다 ──
+    def on_thickness_done(self) -> None:
+        """목표 도달(정상 종료) — THICKNESS_WAIT 를 끝낸다."""
+        self._match_token(ExpectToken("THICKNESS_DONE"))
+
+    def on_thickness_fallback(self, remaining_s: float, reason: str = "") -> None:
+        """시간 대체로 전환 — remaining_s 뒤 THICKNESS_WAIT 를 끝낸다(타이머는 이 단계가 가진다)."""
+        if not (self.is_running and self._thk_wait_active):
+            return
+        rem = max(0.0, float(remaining_s))
+        self._thk_fallback_deadline_ns = monotonic_ns() + int(rem * 1_000_000_000)
+        self._emit_log("Process", f"두께 → 시간 대체: {rem:.0f}초 뒤 메인 공정 종료" + (f" ({reason})" if reason else ""))
+
+    def on_thickness_resume(self) -> None:
+        """두께 판정으로 복귀 — 시간 대체 타이머를 지운다(상한 타이머는 그대로)."""
+        if self._thk_fallback_deadline_ns:
+            self._thk_fallback_deadline_ns = 0
+            self._emit_log("Process", "두께 판정 복귀 — 시간 대체 타이머 해제")
+
+    def set_thickness_state(self, text: str) -> None:
+        """THICKNESS_WAIT 중 상태창 문구(두께 x.x / y.y nm ...)."""
+        if self.is_running and self._thk_wait_active and not self._shutdown_in_progress:
+            self._emit_state(str(text))
+
+    def _cancel_thickness(self) -> None:
+        self._thk_wait_active = False
+        self._thk_fallback_deadline_ns = 0
+        if self._cancel_thickness_cb is None:
+            return
+        try:
+            self._cancel_thickness_cb()
+        except Exception:
+            pass
+
+    def thickness_mid_change_conflict(self, params: Dict[str, Any]) -> str:
+        """Thickness 모드에서 쓸 수 없는 중간 펄스 전력 변경(메인 구간 안 시점)이면 사유 문구, 아니면 "".
+        메인 구간 길이가 정해지지 않으므로 변경 시점 ≥ shutter_delay 이면 모두 메인 구간이다(Shutter Delay 안 변경은 허용).
+        _create_process_sequence 의 중간 변경 조건(사용 펄스·두 칸 모두 값·전력 > 0·콜백)과 같은 기준."""
+        try:
+            info = self._get_common_process_info(params or {})
+            use_dcp = bool(info.get("use_dc_pulse")) and self._set_dc_pulse_power is not None
+            use_rfp = bool(info.get("use_rf_pulse")) and self._set_rf_pulse_power is not None
+            if not (use_dcp or use_rfp):
+                return ""
+            raw_t = str(params.get("power_change_time", "") or "").strip()
+            raw_p = str(params.get("change_power_value", "") or "").strip()
+            if not raw_t or not raw_p:
+                return ""
+            try:
+                pw = float(raw_p)
+            except Exception:
+                return ""
+            t = self._parse_duration_seconds(raw_t)
+            sd = float(params.get("shutter_delay", 0) or 0) * 60.0
+            if pw <= 0.0 or t <= 0.0 or t < sd:
+                return ""
+            return (f"중간 펄스 전력 변경(power_change_time={raw_t}, {pw:g}W)이 메인 공정 구간에 있습니다 — "
+                    f"Thickness 모드는 메인 구간 길이가 정해지지 않아 함께 쓸 수 없습니다")
+        except Exception as e:
+            return f"중간 펄스 전력 변경 확인 실패({e!r})"
+
     def on_device_step_ok(self) -> None:
         # 일반 OK는 해당 스텝이 실제로 GENERIC_OK를 요구할 때만 인정
         self._match_token(ExpectToken("GENERIC_OK"))
@@ -1133,6 +1223,9 @@ class ProcessController:
             self._finish(False)
 
     async def _execute_step(self, step: ProcessStep) -> None:
+        if step.action == ActionType.THICKNESS_WAIT:
+            await self._thickness_wait(step)
+            return
         if step.action == ActionType.DELAY:
             # ✅ 메인 공정 DELAY처럼 polling=True인 경우, 스텝 진입 순간 다시 한 번 확실히 ON 적용
             if step.polling:
@@ -1375,6 +1468,93 @@ class ProcessController:
 
         return tokens
 
+    async def _thickness_wait(self, step: ProcessStep) -> None:
+        """THICKNESS_WAIT — 영점·판정 시작(런타임 콜백) 뒤 THICKNESS_DONE 토큰·시간 대체 타이머·상한 타이머·abort 중 먼저 오는 것.
+        polling=True 동작은 메인 공정 DELAY 와 같다(장비 폴링, _actual_process_time_ms 누적은 _cancel_countdown 이 한다).
+        상한·시간 대체로 끝나도 실패가 아니다 — 다음 단계(정상 종료 절차: 셔터 닫기 → 전원 OFF)로 그대로 간다."""
+        target = float(step.value)
+        expected_s, limit_s = (float(x) for x in step.params)
+        if step.polling:
+            self._apply_polling(True)
+        # 실제 진행 시간 누적용 카운트다운 상태(문구 "메인 공정 진행" — 상태창 문구는 런타임이 set_thickness_state 로 넣는다)
+        t = self._countdown_task
+        if t and not t.done():
+            t.cancel()
+        self._countdown_task = None
+        start_ns = monotonic_ns()
+        self._countdown_total_ms = int(limit_s * 1000.0)
+        self._countdown_start_ns = start_ns
+        self._countdown_base_msg = step.message
+        self._thk_fallback_deadline_ns = 0
+        self._thk_wait_active = True
+
+        tokens = [ExpectToken("THICKNESS_DONE")]
+        self._register_token_owners({self._tokey(tk): self._current_step_idx for tk in tokens})
+        fut = self._set_expect(tokens)
+        self._emit_log("Process", f"{step.message} 시작 — 목표 {target:g} nm, 예상 {expected_s:.0f}초, 최대 {limit_s:.0f}초 "
+                                  "(목표 도달 시 종료, 이상 시 시간 대체, 상한 도달 시 정상 종료 절차)")
+        self._emit_log("Process", "[ETA] Thickness 모드 — 메인 공정 종료 시각이 정해지지 않아 남은 시간을 확정하지 않습니다(remaining_s=null)")
+        end = END_THICKNESS
+        try:
+            started = False
+            if self._thickness_start is not None:
+                try:
+                    self._thickness_start(target, expected_s, limit_s)
+                    started = True
+                except Exception as e:
+                    self._emit_log("Process", f"⚠ 두께 판정 시작 실패({e!r}) → 예상시간으로 시간 대체")
+            else:
+                self._emit_log("Process", "⚠ 두께 판정 콜백 없음 → 예상시간으로 시간 대체")
+            if not started:
+                self._thk_fallback_deadline_ns = start_ns + int(expected_s * 1_000_000_000)
+            limit_ns = start_ns + int(limit_s * 1_000_000_000)
+            abort_evt = self._abort_evt              # 정지 때 _start_normal_shutdown 이 set 한 뒤 새 이벤트로 바꾼다 — 시작 때 것을 본다
+            abort_task = asyncio.create_task(abort_evt.wait())
+            try:
+                while True:
+                    if abort_evt.is_set() or self._shutdown_in_progress or self._aborting:
+                        end = "중단"
+                        break
+                    if fut is not None and fut.done():
+                        # 정상 도달은 토큰 매칭(결과 True). 정지·실패로 기대가 취소되면 예외로 끝난다.
+                        good = (not fut.cancelled()) and fut.exception() is None
+                        end = END_THICKNESS if good else "중단"
+                        break
+                    now = monotonic_ns()
+                    fb = self._thk_fallback_deadline_ns
+                    if fb and now >= fb:
+                        end = END_FALLBACK
+                        break
+                    if now >= limit_ns:
+                        end = END_LIMIT
+                        break
+                    nxt = min(limit_ns, fb) if fb else limit_ns
+                    wait_s = max(0.01, min(1.0, (nxt - now) / 1e9))
+                    waiters = {abort_task} | ({fut} if fut is not None else set())
+                    await asyncio.wait(waiters, timeout=wait_s, return_when=asyncio.FIRST_COMPLETED)
+            finally:
+                abort_task.cancel()
+        except asyncio.CancelledError:
+            end = "중단"
+            raise
+        finally:
+            self._thk_wait_active = False
+            self._thk_fallback_deadline_ns = 0
+            if self._expect_group is not None and (fut is None or self._expect_group.future is fut):
+                self._expect_group.cancel("thickness-end")
+                self._expect_group = None
+            elapsed = (monotonic_ns() - start_ns) / 1e9
+            if end == "중단":
+                self._emit_log("Process", f"{step.message} 중단됨 ({elapsed:.0f}초)")
+            else:
+                self._emit_log("Process", f"{step.message} 완료 — 종료 방식 {end} ({elapsed:.0f}초)")
+            self._cancel_countdown()                 # _actual_process_time_ms 누적
+            if self._thickness_end is not None:
+                try:
+                    self._thickness_end(end)
+                except Exception as e:
+                    self._emit_log("Process", f"⚠ 두께 종료 처리 예외(무시): {e!r}")
+
     def _set_expect(self, tokens: List[ExpectToken]) -> Optional[asyncio.Future[bool]]:
         # 기존 대기 취소
         if self._expect_group:
@@ -1496,6 +1676,9 @@ class ProcessController:
             return
         if step.action is not ActionType.DELAY:
             return
+        # Thickness 모드: 메인 공정이 목표 두께에 닿는 순간 끝나 종료 시각이 정해지지 않는다 → 확정하지 않는다(remaining_s=null)
+        if any(st.action is ActionType.THICKNESS_WAIT for st in self.process_sequence):
+            return
 
         msg = (step.message or "").strip()
         if not msg.startswith(self._ETA_CONFIRM_PREFIXES):
@@ -1555,7 +1738,14 @@ class ProcessController:
 
             # ✅ 런타임 규칙(delay 행 대기, thickness÷dep_rate 역산)과 동일한 순수 함수로 합산
             tail_s = float(getattr(cfg_mod, "ETA_TAIL_MIN_S", 90.0))
-            return max(0, round(eta_min_total_seconds(rows, tail_s)))
+            supported = False
+            _sup = getattr(self, "_thickness_supported", None)
+            if _sup is not None:
+                try:
+                    supported = bool(_sup())
+                except Exception:
+                    supported = False
+            return max(0, round(eta_min_total_seconds(rows, tail_s, supported)))
         except Exception:
             return None
 
@@ -1709,6 +1899,7 @@ class ProcessController:
         except Exception:
             pass
         self._cancel_heater()      # 히터 대기·감시 중단(히터 OFF 여부는 런타임이 공정 종료 후 정한다)
+        self._cancel_thickness()   # 두께 판정 중단(THICKNESS_WAIT 는 abort 로 끝난다)
 
         self._cancel_countdown()
         if self._expect_group:
@@ -1835,6 +2026,7 @@ class ProcessController:
         self._cancel_countdown()
         self._cancel_elapsed()
         self._cancel_heater()
+        self._cancel_thickness()
         if self._expect_group:
             self._expect_group.cancel("finish")
             self._expect_group = None
@@ -1954,6 +2146,13 @@ class ProcessController:
         dc_power = float(params.get("dc_power", 0))
         dc_power2 = float(params.get("dc_power2", 0))
         rf_power = float(params.get("rf_power", 0))
+
+        # 두께 모니터 Thickness 모드 — 런타임이 시작 전 점검을 통과했을 때만 params["thickness_mode"]=True 를 넣는다
+        thickness_mode = bool(params.get("thickness_mode", False))
+        if thickness_mode:
+            _thk_conflict = self.thickness_mid_change_conflict(params)
+            if _thk_conflict:
+                raise AppError(code="E844", detail=_thk_conflict, meta={"ch": self._ch})
 
         default_integration_ms = int(getattr(self._cfg, "PROCESS_DEFAULT_OES_INTEGRATION_MS", 60))
         try:
@@ -2397,7 +2596,27 @@ class ProcessController:
             ))
 
         # --- Main Process Time ---
-        if process_time_sec > 0:
+        if thickness_mode:
+            # 메인 공정 DELAY 대신 THICKNESS_WAIT(영점 → 목표 두께 도달 대기). OES 는 지금처럼 예상시간으로 넘긴다.
+            from lib.thickness_config import load_judge_params
+            _jp, _ = load_judge_params(self._cfg)
+            target_nm = float(params.get("thickness") or 0.0)
+            exp_s = expected_seconds(target_nm, float(params.get("dep_rate") or 0.0))
+            lim_s = max_time_s(exp_s, _jp)
+            steps.append(ProcessStep(
+                action=ActionType.OES_RUN,
+                params=(exp_s, integration_ms),
+                message=f'OES 측정 시작 (예상 {exp_s / 60.0:.2f}분, {integration_ms}ms)',
+                no_wait=True
+            ))
+            steps.append(ProcessStep(
+                action=ActionType.THICKNESS_WAIT,
+                value=target_nm,
+                params=(exp_s, lim_s),
+                message=f'메인 공정 진행 (두께 {target_nm:g}nm, 예상 {exp_s / 60.0:.2f}분)',
+                polling=True,
+            ))
+        elif process_time_sec > 0:
             steps.append(ProcessStep(
                 action=ActionType.OES_RUN,
                 params=(process_time_sec, integration_ms),
@@ -2756,6 +2975,7 @@ class ProcessController:
             "IG":        ("IG_OK",),
             "RGA":       ("RGA_OK",),
             "HEATER":    ("HEATER_SET", "HEATER_READY", "HEATER_HOLD"),
+            "THICKNESS": ("THICKNESS_DONE",),
             # 필요 시 OES 등 추가 가능
         }
         # 장치명이 조금 다르게 들어와도 대소문자/공백 차이 방어(선택)

@@ -1294,7 +1294,7 @@ class MainWindow(QWidget):
     def _init_thickness(self, ch: int) -> None:
         """두께 모니터(STM-100) 상시 읽기 서비스 생성. SUPPORTS_THICKNESS 가 꺼진 채널은 아무것도 하지 않는다.
         패널은 CH2 만(히터 패널 밑 — 위치는 _layout_side_panels). CH1 은 서비스만 켤 수 있는 구조로 둔다.
-        공정 로직(process_controller·레시피)은 건드리지 않는다 — 공정 연동은 2단계."""
+        서비스는 그 채널 런타임에 붙인다(attach_thickness — 레시피 thickness>0 이면 Thickness 모드)."""
         cfg_mod = config_ch1 if ch == 1 else config_ch2
         rt = self.ch1 if ch == 1 else self.ch2
         try:
@@ -1331,6 +1331,12 @@ class MainWindow(QWidget):
                 self.thickness_panels[ch] = panel
             svc.start(self._loop)
             self.thickness_services[ch] = svc
+            try:                                 # 2단계: 레시피 thickness>0 → Thickness 모드(목표 두께 도달 시 종료)
+                rt.attach_thickness(svc)
+                if ch in self.thickness_panels:
+                    rt.set_thickness_view(self.thickness_panels[ch].set_process_view)
+            except Exception as e:
+                rt.append_side_log("THICKNESS", f"⚠ 두께 모니터 공정 연동 실패 — Thickness 모드 끔(Time 모드만): {e!r}")
             rt.append_side_log("THICKNESS", f"CH{ch} 두께 모니터 서비스 시작 ({tcfg.host}:{tcfg.port})")
         except Exception as e:
             self.thickness_panels.pop(ch, None)
