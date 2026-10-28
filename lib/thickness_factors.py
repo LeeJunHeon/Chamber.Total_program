@@ -4,8 +4,10 @@
 
 구조:
   tooling[chuck][gun]  — chuck ∈ up/mid/down, gun ∈ G1/G2/G3, 단위 %(10.0~399). 비어 있으면(null) 미설정.
-  material[gun]        — density(g/cm3, 0.500~99.99), z_factor(0.100~9.999), memo(타깃 이름). 재료값이라 건별.
+  material[gun]        — {"material": 재료 이름} — 재료 목록(lib/thickness_materials, config/thickness_materials.json)의 name.
+                         density·Z 는 공정 시작 때 이 이름으로 재료 목록에서 찾는다. 비어 있으면 미선택.
 exe 옆 config 폴더에 두어 재빌드 없이 고친다. 파일이 없으면 빈 표. 잘못된 값은 경고 후 그 칸만 미설정.
+이전 형식(건별 density·z_factor 숫자)은 경고 후 무시한다(재료를 다시 고른다).
 저장은 같은 폴더의 임시 파일에 쓴 뒤 os.replace(원자적 교체). 경로는 pathlib 그대로(한글 경로 안전).
 """
 from __future__ import annotations
@@ -17,58 +19,52 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Dict, List, Optional, Tuple
 
-from device.thickness_monitor import (DENSITY_MAX, DENSITY_MIN, TOOLING_MAX, TOOLING_MIN,
-                                      Z_MAX, Z_MIN)
+from device.thickness_monitor import TOOLING_MAX, TOOLING_MIN
 
 CHUCKS = ("up", "mid", "down")
 GUNS = ("G1", "G2", "G3")
-MEMO_MAX = 40
-FILE_VERSION = 1
+FILE_VERSION = 2
 
 
 def _blank_tooling() -> Dict[str, Dict[str, Optional[float]]]:
     return {c: {g: None for g in GUNS} for c in CHUCKS}
 
 
-def _blank_material() -> Dict[str, dict]:
-    return {g: {"density": None, "z_factor": None, "memo": ""} for g in GUNS}
+def _blank_material() -> Dict[str, Optional[str]]:
+    return {g: None for g in GUNS}
 
 
 @dataclass
 class ThicknessFactors:
     tooling: Dict[str, Dict[str, Optional[float]]] = field(default_factory=_blank_tooling)
-    material: Dict[str, dict] = field(default_factory=_blank_material)
+    material: Dict[str, Optional[str]] = field(default_factory=_blank_material)   # 건 → 재료 이름(None = 미선택)
 
     def tooling_for(self, chuck: str, gun: str) -> Optional[float]:
         return (self.tooling.get(str(chuck).lower()) or {}).get(str(gun).upper())
 
-    def material_for(self, gun: str) -> dict:
-        return dict(self.material.get(str(gun).upper()) or {"density": None, "z_factor": None, "memo": ""})
+    def material_name(self, gun: str) -> Optional[str]:
+        return self.material.get(str(gun).upper())
 
     def to_json(self) -> dict:
         return {
             "version": FILE_VERSION,
             "tooling": {c: {g: self.tooling[c][g] for g in GUNS} for c in CHUCKS},
-            "material": {g: {"density": self.material[g]["density"], "z_factor": self.material[g]["z_factor"],
-                             "memo": self.material[g].get("memo") or ""} for g in GUNS},
+            "material": {g: {"material": self.material[g] or ""} for g in GUNS},
         }
 
 
-def check_value(kind: str, v) -> Tuple[Optional[float], str]:
-    """kind ∈ tooling/density/z_factor. (값, 오류문구) — 빈값/None 은 (None, '')."""
+def check_tooling(v) -> Tuple[Optional[float], str]:
+    """tooling 한 칸 — (값, 오류문구). 빈값/None 은 (None, '')."""
     if v is None or (isinstance(v, str) and not v.strip()):
         return None, ""
-    lo, hi, unit = {"tooling": (TOOLING_MIN, TOOLING_MAX, "%"),
-                    "density": (DENSITY_MIN, DENSITY_MAX, " g/cm3"),
-                    "z_factor": (Z_MIN, Z_MAX, "")}[kind]
     if isinstance(v, bool):
         return None, f"{v!r} 숫자가 아님"
     try:
         f = float(v)
     except Exception:
         return None, f"{v!r} 숫자가 아님"
-    if f != f or not (lo <= f <= hi):
-        return None, f"{f:g} 범위({lo:g}~{hi:g}{unit}) 밖"
+    if f != f or not (TOOLING_MIN <= f <= TOOLING_MAX):
+        return None, f"{f:g} 범위({TOOLING_MIN:g}~{TOOLING_MAX:g}%) 밖"
     return f, ""
 
 
@@ -98,27 +94,24 @@ def load_factors(path) -> Tuple[ThicknessFactors, List[str]]:
             warns.append(f"tooling.{c} 가 표(객체)가 아님 — 그 줄 미설정")
             continue
         for g in GUNS:
-            v, err = check_value("tooling", row.get(g))
+            v, err = check_tooling(row.get(g))
             if err:
                 warns.append(f"tooling[{c}][{g}] {err} — 미설정")
             fac.tooling[c][g] = v
 
     mat = data.get("material") or {}
     if not isinstance(mat, dict):
-        warns.append("material 이 표(객체)가 아님 — 전부 미설정")
+        warns.append("material 이 표(객체)가 아님 — 전부 미선택")
         mat = {}
     for g in GUNS:
         m = mat.get(g) or {}
         if not isinstance(m, dict):
-            warns.append(f"material.{g} 가 표(객체)가 아님 — 미설정")
+            warns.append(f"material.{g} 가 표(객체)가 아님 — 미선택")
             continue
-        for k in ("density", "z_factor"):
-            v, err = check_value(k, m.get(k))
-            if err:
-                warns.append(f"material[{g}].{k} {err} — 미설정")
-            fac.material[g][k] = v
-        memo = m.get("memo")
-        fac.material[g]["memo"] = (str(memo).strip()[:MEMO_MAX] if memo is not None else "")
+        if any(m.get(k) not in (None, "") for k in ("density", "z_factor")) and not m.get("material"):
+            warns.append(f"material.{g}: 이전 형식(density·Z 숫자)은 쓰지 않음 — [Factor 설정]에서 재료를 다시 고르십시오")
+        name = m.get("material")
+        fac.material[g] = str(name).strip() if isinstance(name, str) and name.strip() else None
     return fac, warns
 
 

@@ -1,0 +1,617 @@
+{
+  "version": 1,
+  "materials": [
+    {
+      "name": "Aluminum",
+      "symbol": "Al",
+      "density": 2.73,
+      "z_factor": 1.08
+    },
+    {
+      "name": "Aluminum Oxide",
+      "symbol": "Al2O3",
+      "density": 3.97,
+      "z_factor": 1.0,
+      "note": "매뉴얼 Z 미기재 — 1.000 사용"
+    },
+    {
+      "name": "Antimony",
+      "symbol": "Sb",
+      "density": 6.62,
+      "z_factor": 0.768
+    },
+    {
+      "name": "Arsenic",
+      "symbol": "As",
+      "density": 5.73,
+      "z_factor": 0.966
+    },
+    {
+      "name": "Barium",
+      "symbol": "Ba",
+      "density": 3.5,
+      "z_factor": 2.1
+    },
+    {
+      "name": "Beryllium",
+      "symbol": "Be",
+      "density": 1.85,
+      "z_factor": 0.543
+    },
+    {
+      "name": "Bismuth",
+      "symbol": "Bi",
+      "density": 9.8,
+      "z_factor": 0.79
+    },
+    {
+      "name": "Bismuth Oxide",
+      "symbol": "Bi2O3",
+      "density": 8.9,
+      "z_factor": 1.0,
+      "note": "매뉴얼 Z 미기재 — 1.000 사용"
+    },
+    {
+      "name": "Boron",
+      "symbol": "B",
+      "density": 2.54,
+      "z_factor": 0.389
+    },
+    {
+      "name": "Cadmium",
+      "symbol": "Cd",
+      "density": 8.64,
+      "z_factor": 0.682
+    },
+    {
+      "name": "Cadmium Selenide",
+      "symbol": "CdSe",
+      "density": 5.81,
+      "z_factor": 1.0,
+      "note": "매뉴얼 Z 미기재 — 1.000 사용"
+    },
+    {
+      "name": "Cadmium Sulfide",
+      "symbol": "CdS",
+      "density": 4.83,
+      "z_factor": 1.02
+    },
+    {
+      "name": "Cadmium Telluride",
+      "symbol": "CdTe",
+      "density": 5.85,
+      "z_factor": 0.98
+    },
+    {
+      "name": "Calcium",
+      "symbol": "Ca",
+      "density": 1.55,
+      "z_factor": 2.62
+    },
+    {
+      "name": "Calcium Fluoride",
+      "symbol": "CaF2",
+      "density": 3.18,
+      "z_factor": 0.775
+    },
+    {
+      "name": "Carbon (Diamond)",
+      "symbol": "C",
+      "density": 3.52,
+      "z_factor": 0.22
+    },
+    {
+      "name": "Carbon (Graphite)",
+      "symbol": "C",
+      "density": 2.25,
+      "z_factor": 3.26
+    },
+    {
+      "name": "Cerium (III) Fluoride",
+      "symbol": "CeF3",
+      "density": 6.16,
+      "z_factor": 1.0,
+      "note": "매뉴얼 Z 미기재 — 1.000 사용"
+    },
+    {
+      "name": "Cerium (IV) Oxide",
+      "symbol": "CeO2",
+      "density": 7.13,
+      "z_factor": 1.0,
+      "note": "매뉴얼 Z 미기재 — 1.000 사용"
+    },
+    {
+      "name": "Chromium",
+      "symbol": "Cr",
+      "density": 7.2,
+      "z_factor": 0.305
+    },
+    {
+      "name": "Chromium (III) Oxide",
+      "symbol": "Cr2O3",
+      "density": 5.21,
+      "z_factor": 1.0,
+      "note": "매뉴얼 Z 미기재 — 1.000 사용"
+    },
+    {
+      "name": "Cobalt",
+      "symbol": "Co",
+      "density": 8.71,
+      "z_factor": 0.343
+    },
+    {
+      "name": "Copper",
+      "symbol": "Cu",
+      "density": 8.93,
+      "z_factor": 0.437
+    },
+    {
+      "name": "Copper (I) Sulfide (A)",
+      "symbol": "Cu2S (A)",
+      "density": 5.6,
+      "z_factor": 0.69
+    },
+    {
+      "name": "Copper (I) Sulfide (B)",
+      "symbol": "Cu2S (B)",
+      "density": 5.8,
+      "z_factor": 0.67
+    },
+    {
+      "name": "Copper (III) Sulfide",
+      "symbol": "CuS",
+      "density": 4.6,
+      "z_factor": 0.82
+    },
+    {
+      "name": "Dysprosium",
+      "symbol": "Dy",
+      "density": 8.54,
+      "z_factor": 0.6
+    },
+    {
+      "name": "Erbium",
+      "symbol": "Er",
+      "density": 9.05,
+      "z_factor": 0.74
+    },
+    {
+      "name": "Gadolinium",
+      "symbol": "Gd",
+      "density": 7.89,
+      "z_factor": 0.67
+    },
+    {
+      "name": "Gallium",
+      "symbol": "Ga",
+      "density": 5.93,
+      "z_factor": 0.593
+    },
+    {
+      "name": "Gallium Arsenide",
+      "symbol": "GaAs",
+      "density": 5.31,
+      "z_factor": 1.59
+    },
+    {
+      "name": "Germanium",
+      "symbol": "Ge",
+      "density": 5.35,
+      "z_factor": 0.516
+    },
+    {
+      "name": "Gold",
+      "symbol": "Au",
+      "density": 19.3,
+      "z_factor": 0.381
+    },
+    {
+      "name": "Hafnium",
+      "symbol": "Hf",
+      "density": 13.1,
+      "z_factor": 0.36
+    },
+    {
+      "name": "Hafnium Oxide",
+      "symbol": "HfO2",
+      "density": 9.63,
+      "z_factor": 1.0,
+      "note": "매뉴얼 Z 미기재 — 1.000 사용"
+    },
+    {
+      "name": "Holmium",
+      "symbol": "Ho",
+      "density": 8.8,
+      "z_factor": 0.58
+    },
+    {
+      "name": "Indium",
+      "symbol": "In",
+      "density": 7.3,
+      "z_factor": 0.841
+    },
+    {
+      "name": "Indium Antimonide",
+      "symbol": "InSb",
+      "density": 5.76,
+      "z_factor": 0.769
+    },
+    {
+      "name": "Indium Oxide",
+      "symbol": "In2O3",
+      "density": 7.18,
+      "z_factor": 1.0,
+      "note": "매뉴얼 Z 미기재 — 1.000 사용"
+    },
+    {
+      "name": "Iridium",
+      "symbol": "Ir",
+      "density": 22.4,
+      "z_factor": 0.129
+    },
+    {
+      "name": "Iron",
+      "symbol": "Fe",
+      "density": 7.86,
+      "z_factor": 0.349
+    },
+    {
+      "name": "Lanthanum",
+      "symbol": "La",
+      "density": 6.17,
+      "z_factor": 0.92
+    },
+    {
+      "name": "Lanthanum Fluoride",
+      "symbol": "LaF3",
+      "density": 5.94,
+      "z_factor": 1.0,
+      "note": "매뉴얼 Z 미기재 — 1.000 사용"
+    },
+    {
+      "name": "Lanthanum Oxide",
+      "symbol": "LaO3",
+      "density": 6.51,
+      "z_factor": 1.0,
+      "note": "매뉴얼 Z 미기재 — 1.000 사용"
+    },
+    {
+      "name": "Lead",
+      "symbol": "Pb",
+      "density": 11.3,
+      "z_factor": 1.13
+    },
+    {
+      "name": "Lead Sulfide",
+      "symbol": "PbS",
+      "density": 7.5,
+      "z_factor": 0.566
+    },
+    {
+      "name": "Lithium",
+      "symbol": "Li",
+      "density": 0.53,
+      "z_factor": 5.9
+    },
+    {
+      "name": "Lithium Fluoride",
+      "symbol": "LiF",
+      "density": 2.64,
+      "z_factor": 0.774
+    },
+    {
+      "name": "Magnesium",
+      "symbol": "Mg",
+      "density": 1.74,
+      "z_factor": 1.61
+    },
+    {
+      "name": "Magnesium Fluoride",
+      "symbol": "MgF2",
+      "density": 3.0,
+      "z_factor": 1.0,
+      "note": "매뉴얼 Z 미기재 — 1.000 사용"
+    },
+    {
+      "name": "Magnesium Oxide",
+      "symbol": "MgO",
+      "density": 3.58,
+      "z_factor": 0.411
+    },
+    {
+      "name": "Manganese",
+      "symbol": "Mn",
+      "density": 7.2,
+      "z_factor": 0.377
+    },
+    {
+      "name": "Molybdenum",
+      "symbol": "Mo",
+      "density": 10.2,
+      "z_factor": 0.257
+    },
+    {
+      "name": "Neodymium Fluoride",
+      "symbol": "NdF3",
+      "density": 6.506,
+      "z_factor": 1.0,
+      "note": "매뉴얼 Z 미기재 — 1.000 사용"
+    },
+    {
+      "name": "Neodymium Oxide",
+      "symbol": "Nd2O3",
+      "density": 7.24,
+      "z_factor": 1.0,
+      "note": "매뉴얼 Z 미기재 — 1.000 사용"
+    },
+    {
+      "name": "Nickel",
+      "symbol": "Ni",
+      "density": 8.91,
+      "z_factor": 0.331
+    },
+    {
+      "name": "Niobium",
+      "symbol": "Nb",
+      "density": 8.57,
+      "z_factor": 0.493
+    },
+    {
+      "name": "Niobium (V) Oxide",
+      "symbol": "Nb2O5",
+      "density": 4.47,
+      "z_factor": 1.0,
+      "note": "매뉴얼 Z 미기재 — 1.000 사용"
+    },
+    {
+      "name": "Palladium",
+      "symbol": "Pd",
+      "density": 12.0,
+      "z_factor": 0.357
+    },
+    {
+      "name": "Platinum",
+      "symbol": "Pt",
+      "density": 21.4,
+      "z_factor": 0.245
+    },
+    {
+      "name": "Potassium Chloride",
+      "symbol": "KCl",
+      "density": 1.98,
+      "z_factor": 2.05
+    },
+    {
+      "name": "Rhenium",
+      "symbol": "Re",
+      "density": 21.04,
+      "z_factor": 0.15
+    },
+    {
+      "name": "Rhodium",
+      "symbol": "Rh",
+      "density": 12.41,
+      "z_factor": 0.21
+    },
+    {
+      "name": "Rubidium",
+      "symbol": "Rb",
+      "density": 1.53,
+      "z_factor": 2.54
+    },
+    {
+      "name": "Samarium",
+      "symbol": "Sm",
+      "density": 7.54,
+      "z_factor": 0.89
+    },
+    {
+      "name": "Scandium",
+      "symbol": "Sc",
+      "density": 3.0,
+      "z_factor": 0.91
+    },
+    {
+      "name": "Selenium",
+      "symbol": "Se",
+      "density": 4.82,
+      "z_factor": 0.864
+    },
+    {
+      "name": "Silicon",
+      "symbol": "Si",
+      "density": 2.32,
+      "z_factor": 0.712
+    },
+    {
+      "name": "Silicon (II) Oxide",
+      "symbol": "SiO",
+      "density": 2.13,
+      "z_factor": 0.87
+    },
+    {
+      "name": "Silicon Dioxide",
+      "symbol": "SiO2",
+      "density": 2.2,
+      "z_factor": 1.07
+    },
+    {
+      "name": "Silver",
+      "symbol": "Ag",
+      "density": 10.5,
+      "z_factor": 0.529
+    },
+    {
+      "name": "Silver Bromide",
+      "symbol": "AgBr",
+      "density": 6.47,
+      "z_factor": 1.18
+    },
+    {
+      "name": "Silver Chloride",
+      "symbol": "AgCl",
+      "density": 5.56,
+      "z_factor": 1.32
+    },
+    {
+      "name": "Sodium",
+      "symbol": "Na",
+      "density": 0.97,
+      "z_factor": 4.8
+    },
+    {
+      "name": "Sodium Chloride",
+      "symbol": "NaCl",
+      "density": 2.17,
+      "z_factor": 1.57
+    },
+    {
+      "name": "Sulfur",
+      "symbol": "S",
+      "density": 2.07,
+      "z_factor": 2.29
+    },
+    {
+      "name": "Tantalum",
+      "symbol": "Ta",
+      "density": 16.6,
+      "z_factor": 0.262
+    },
+    {
+      "name": "Tantalum (V) Oxide",
+      "symbol": "Ta2O5",
+      "density": 8.2,
+      "z_factor": 0.3
+    },
+    {
+      "name": "Tellurium",
+      "symbol": "Te",
+      "density": 6.25,
+      "z_factor": 0.9
+    },
+    {
+      "name": "Terbium",
+      "symbol": "Tb",
+      "density": 8.27,
+      "z_factor": 0.66
+    },
+    {
+      "name": "Thallium",
+      "symbol": "Tl",
+      "density": 11.85,
+      "z_factor": 1.55
+    },
+    {
+      "name": "Thorium (IV) Fluoride",
+      "symbol": "ThF4",
+      "density": 6.32,
+      "z_factor": 1.0,
+      "note": "매뉴얼 Z 미기재 — 1.000 사용"
+    },
+    {
+      "name": "Tin",
+      "symbol": "Sn",
+      "density": 7.3,
+      "z_factor": 0.724
+    },
+    {
+      "name": "Titanium",
+      "symbol": "Ti",
+      "density": 4.5,
+      "z_factor": 0.628
+    },
+    {
+      "name": "Titanium (IV) Oxide",
+      "symbol": "TiO2",
+      "density": 4.26,
+      "z_factor": 0.4
+    },
+    {
+      "name": "Titanium Oxide",
+      "symbol": "TiO",
+      "density": 4.9,
+      "z_factor": 1.0,
+      "note": "매뉴얼 Z 미기재 — 1.000 사용"
+    },
+    {
+      "name": "Tungsten",
+      "symbol": "W",
+      "density": 19.3,
+      "z_factor": 0.163
+    },
+    {
+      "name": "Tungsten Carbide",
+      "symbol": "WC",
+      "density": 15.6,
+      "z_factor": 0.151
+    },
+    {
+      "name": "Uranium",
+      "symbol": "U",
+      "density": 18.7,
+      "z_factor": 0.238
+    },
+    {
+      "name": "Vanadium",
+      "symbol": "V",
+      "density": 5.96,
+      "z_factor": 0.53
+    },
+    {
+      "name": "Ytterbium",
+      "symbol": "Yb",
+      "density": 6.98,
+      "z_factor": 1.13
+    },
+    {
+      "name": "Yttrium",
+      "symbol": "Y",
+      "density": 4.34,
+      "z_factor": 0.835
+    },
+    {
+      "name": "Yttrium Oxide",
+      "symbol": "Y2O3",
+      "density": 5.01,
+      "z_factor": 1.0,
+      "note": "매뉴얼 Z 미기재 — 1.000 사용"
+    },
+    {
+      "name": "Zinc",
+      "symbol": "Zn",
+      "density": 7.04,
+      "z_factor": 0.514
+    },
+    {
+      "name": "Zinc Oxide",
+      "symbol": "ZnO",
+      "density": 5.61,
+      "z_factor": 0.556
+    },
+    {
+      "name": "Zinc Selenide",
+      "symbol": "ZnSe",
+      "density": 5.26,
+      "z_factor": 0.722
+    },
+    {
+      "name": "Zinc Sulfide",
+      "symbol": "ZnS",
+      "density": 4.09,
+      "z_factor": 0.775
+    },
+    {
+      "name": "Zirconium",
+      "symbol": "Zr",
+      "density": 6.51,
+      "z_factor": 0.6
+    },
+    {
+      "name": "Zirconium Oxide",
+      "symbol": "ZrO2",
+      "density": 5.6,
+      "z_factor": 1.0,
+      "note": "매뉴얼 Z 미기재 — 1.000 사용"
+    }
+  ]
+}

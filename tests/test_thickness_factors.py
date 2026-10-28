@@ -25,7 +25,7 @@ def test_missing_file_is_blank_table():
     fac, warns = load_factors(Path(tempfile.gettempdir()) / "없는_파일_thickness.json")
     assert warns == []
     assert all(fac.tooling[c][g] is None for c in CHUCKS for g in GUNS)
-    assert all(fac.material[g]["density"] is None for g in GUNS)
+    assert all(fac.material[g] is None for g in GUNS)
 
 
 def test_shipped_ch2_file_is_blank_and_valid():
@@ -39,19 +39,18 @@ def test_invalid_values_only_that_cell_unset():
         p = Path(tmp) / "f.json"
         p.write_text(json.dumps({
             "tooling": {"up": {"G1": 120.5, "G2": 5, "G3": "abc"}, "mid": {"G1": 400}, "down": "x"},
-            "material": {"G1": {"density": 2.7, "z_factor": 1.08, "memo": "Al"},
-                         "G2": {"density": 0.1, "z_factor": 1.0, "memo": "Ti"},
-                         "G3": {"density": True, "z_factor": 99}},
+            "material": {"G1": {"material": "Aluminum Oxide"},
+                         "G2": {"density": 2.7, "z_factor": 1.08, "memo": "Al"},     # 이전 형식 — 경고 후 무시
+                         "G3": "x"},
         }), encoding="utf-8")
         fac, warns = load_factors(p)
         assert fac.tooling["up"]["G1"] == 120.5
         assert fac.tooling["up"]["G2"] is None and fac.tooling["up"]["G3"] is None
         assert fac.tooling["mid"]["G1"] is None and fac.tooling["mid"]["G2"] is None
-        assert fac.material["G1"] == {"density": 2.7, "z_factor": 1.08, "memo": "Al"}
-        assert fac.material["G2"]["density"] is None and fac.material["G2"]["z_factor"] == 1.0
-        assert fac.material["G3"]["density"] is None and fac.material["G3"]["z_factor"] is None
-        assert len(warns) == 7, warns
-        assert fac.tooling_for("UP", "g1") == 120.5 and fac.material_for("g1")["memo"] == "Al"
+        assert fac.material == {"G1": "Aluminum Oxide", "G2": None, "G3": None}
+        assert any("이전 형식" in w for w in warns)
+        assert len(warns) == 6, warns
+        assert fac.tooling_for("UP", "g1") == 120.5 and fac.material_name("g1") == "Aluminum Oxide"
 
         p.write_text("{ broken", encoding="utf-8")
         fac, warns = load_factors(p)
@@ -63,10 +62,11 @@ def test_atomic_save_roundtrip_korean_path():
         p = Path(tmp) / "한글 폴더 & 설정" / "thickness_factors_ch2.json"
         fac = ThicknessFactors()
         fac.tooling["mid"]["G2"] = 98.5
-        fac.material["G2"] = {"density": 4.5, "z_factor": 0.628, "memo": "티타늄"}
+        fac.material["G2"] = "Titanium"
         save_factors(p, fac)
         back, warns = load_factors(p)
-        assert warns == [] and back.tooling["mid"]["G2"] == 98.5 and back.material["G2"]["memo"] == "티타늄"
+        assert warns == [] and back.tooling["mid"]["G2"] == 98.5 and back.material == {"G1": None, "G2": "Titanium", "G3": None}
+        assert json.loads(p.read_text(encoding="utf-8"))["material"]["G2"] == {"material": "Titanium"}   # 이름만 저장
         assert [x.name for x in p.parent.iterdir()] == [p.name]           # 임시 파일이 남지 않는다
 
 

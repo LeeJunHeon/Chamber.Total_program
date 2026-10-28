@@ -6647,18 +6647,21 @@ class ChamberRuntime:
         gun = [g for g in self._THK_GUNS if params.get(f"use_{g.lower()}")][0]
         fac = svc.factors
         tooling = fac.tooling_for(chuck, gun)
-        mat = fac.material_for(gun)
-        missing = [n for n, v in (("tooling", tooling), ("density", mat.get("density")), ("Z-factor", mat.get("z_factor")))
-                   if v is None]
-        if missing:
-            return "E845", (f"Factor 미설정 — chuck {chuck} × {gun}: {', '.join(missing)} "
-                            f"(화면 [Factor 설정] 또는 {svc.cfg.factor_file})")
+        where = f"(화면 [Factor 설정] 또는 {svc.cfg.factor_file})"
+        if tooling is None:
+            return "E845", f"Factor 미설정 — chuck {chuck} × {gun}: tooling {where}"
+        name = fac.material_name(gun)                              # 재료는 이름으로 — density·Z 는 재료 목록에서
+        if not name:
+            return "E845", f"Factor 미설정 — {gun} 재료 미선택 {where}"
+        mat = svc.find_material(name)
+        if mat is None:
+            return "E845", f"Factor 미설정 — {gun} 재료 '{name}' 가 재료 목록에 없음(화면 [Factor 설정] → [재료 목록 편집])"
         try:
-            got = await svc.set_material(float(mat["density"]), float(mat["z_factor"]), float(tooling))
+            got = await svc.set_material(float(mat.density), float(mat.z_factor), float(tooling), material=mat.name)
         except Exception as e:
             return "E846", f"두께 모니터에 재료값을 쓰지 못함(되읽기 확인 실패 포함): {e}"
         self._thk_pre = {"chuck": chuck, "gun": gun, "tooling": got.get("tooling"), "density": got.get("density"),
-                         "z_factor": got.get("z_factor"), "memo": mat.get("memo") or ""}
+                         "z_factor": got.get("z_factor"), "material": mat.name}
         jp, _w = load_judge_params(self.cfg.mod)
         life = svc.status().get("life_pct")
         if life is not None and float(life) < jp.life_warn_pct:
@@ -6666,9 +6669,9 @@ class ChamberRuntime:
             self.append_log("THICKNESS", f"⚠ {warn}")
             with contextlib.suppress(Exception):
                 self._run_warnings.append(warn)
-        self.append_log("THICKNESS", f"Thickness 모드 — 목표 {float(params.get('thickness')):g} nm · {gun}"
-                                     f"{(' ' + mat.get('memo')) if mat.get('memo') else ''} · chuck {chuck} · "
-                                     f"tooling {got.get('tooling')}% · density {got.get('density')} · Z {got.get('z_factor')}")
+        self.append_log("THICKNESS", f"Thickness 모드 — 목표 {float(params.get('thickness')):g} nm · {gun} · "
+                                     f"재료 {mat.label} · chuck {chuck} · tooling {got.get('tooling')}% · "
+                                     f"density {got.get('density')} · Z {got.get('z_factor')}")
         return "", ""
 
     async def _thickness_reject(self, params, code: str, msg: str) -> None:

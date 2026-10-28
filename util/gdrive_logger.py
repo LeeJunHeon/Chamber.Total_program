@@ -138,6 +138,7 @@ _COLS_THICKNESS: List[Tuple] = [
     ("Z",              "",              7,  "Thickness",    "thk_z"),
     ("Fallback Reason", "",            18,  "Thickness",    "thk_fallback_reason"),
     ("Jump Count",     "회",            8,  "Thickness",    "thk_jump_count"),
+    ("Material",       "",             16,  "Thickness",    "thk_material"),
 ]
 
 
@@ -644,6 +645,7 @@ def _build_data(
         "thk_z"              : _t("z_factor", 3),
         "thk_fallback_reason": _t("fallback_reason", None),
         "thk_jump_count"     : (int(tr["jumps"]) if tr.get("jumps") is not None else None),
+        "thk_material"       : _t("material", None),
     })
     base_data.update({
         "heater_sv"      : _r("sv", 1),

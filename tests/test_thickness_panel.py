@@ -100,28 +100,89 @@ def test_process_view_placeholder():
     assert p.progress.format() == "대기" and p.proc_text.text() == "대기"
 
 
-def test_factor_dialog_validate_and_save():
+def _materials(tmp):
+    from lib.thickness_materials import Material, save_materials
+    mp = Path(tmp) / "materials.json"
+    save_materials(mp, [Material("Aluminum", "Al", 2.73, 1.08), Material("Aluminum Oxide", "Al2O3", 3.97, 1.0, "매뉴얼 Z 미기재"),
+                        Material("Titanium", "Ti", 4.5, 0.628)])
+    return mp
+
+
+def test_factor_dialog_material_dropdown_and_save():
     with tempfile.TemporaryDirectory() as tmp:
+        mp = _materials(tmp)
         path = Path(tmp) / "한글" / "thickness_factors_ch2.json"
         saved = []
-        dlg = ThicknessFactorDialog(str(path), ch=2, on_saved=lambda: saved.append(1))
+        dlg = ThicknessFactorDialog(str(path), ch=2, on_saved=lambda: saved.append(1), materials_path=str(mp))
+        cb = dlg.combos["G1"]
+        assert cb.itemText(0) == "(선택 안 함)" and cb.count() == 4 and cb.itemText(2) == "Al2O3 — Aluminum Oxide"
+        assert cb.isEditable() and dlg.values["G1"].text() == "—"
+        cb.setCurrentIndex(cb.findData("Aluminum Oxide"))
+        assert dlg.values["G1"].text() == "ρ 3.97 · Z 1.000"                    # 고른 재료의 density·Z(읽기 전용)
+        dlg.combos["G2"].setEditText("ti — titanium")                          # 입력해서 찾기(대소문자 무시)
+        dlg.combos["G2"].setEditText("Titanium")
+        assert dlg.values["G2"].text() == "ρ 4.5 · Z 0.628"
+        dlg.combos["G3"].setEditText("Unobtainium")                            # 목록에 없는 재료
         dlg.tool_table.setItem(0, 0, QTableWidgetItem("120"))
-        dlg.tool_table.setItem(1, 1, QTableWidgetItem("5"))           # 범위 밖
-        dlg.mat_table.setItem(0, 0, QTableWidgetItem("2.7"))
-        dlg.mat_table.setItem(0, 1, QTableWidgetItem("x"))            # 숫자 아님
-        dlg.mat_table.setItem(0, 2, QTableWidgetItem("Al"))
+        dlg.tool_table.setItem(1, 1, QTableWidgetItem("5"))                    # 범위 밖
         fac, errs = dlg.collect()
-        assert len(errs) == 2 and fac.tooling["up"]["G1"] == 120.0 and fac.tooling["mid"]["G2"] is None
+        assert len(errs) == 2 and any("Unobtainium" in e for e in errs)
         assert dlg.tool_table.item(1, 1).background().color().name() == "#ffcdd2"
         dlg.tool_table.setItem(1, 1, QTableWidgetItem(""))
-        dlg.mat_table.setItem(0, 1, QTableWidgetItem("1.08"))
+        dlg.combos["G3"].setCurrentIndex(0)
         dlg._on_save()
         assert saved == [1] and path.exists()
         data = json.loads(path.read_text(encoding="utf-8"))
         assert data["tooling"]["up"]["G1"] == 120.0 and data["tooling"]["mid"]["G2"] is None
-        assert data["material"]["G1"] == {"density": 2.7, "z_factor": 1.08, "memo": "Al"}
-        dlg2 = ThicknessFactorDialog(str(path), ch=2)                # 다시 열면 저장한 값
-        assert dlg2.tool_table.item(0, 0).text() == "120" and dlg2.mat_table.item(0, 2).text() == "Al"
+        assert data["material"] == {"G1": {"material": "Aluminum Oxide"}, "G2": {"material": "Titanium"},
+                                    "G3": {"material": ""}}
+        dlg2 = ThicknessFactorDialog(str(path), ch=2, materials_path=str(mp))  # 다시 열면 저장한 값
+        assert dlg2.tool_table.item(0, 0).text() == "120"
+        assert dlg2.combos["G1"].currentData() == "Aluminum Oxide" and dlg2.values["G2"].text() == "ρ 4.5 · Z 0.628"
+        assert "다음 공정 시작 때 적용" in dlg2.info.text()
+
+
+def test_material_dialog_edit_validate_and_refresh_factor_dialog():
+    from ui.thickness_material_dialog import ThicknessMaterialDialog
+    from lib.thickness_materials import load_materials
+    with tempfile.TemporaryDirectory() as tmp:
+        mp = _materials(tmp)
+        fpath = Path(tmp) / "f.json"
+        saved = []
+        fdlg = ThicknessFactorDialog(str(fpath), ch=2, on_saved=lambda: saved.append(1), materials_path=str(mp))
+        fdlg.combos["G1"].setCurrentIndex(fdlg.combos["G1"].findData("Titanium"))
+        mdlg = ThicknessMaterialDialog(str(mp), used_names=["Titanium"], on_saved=fdlg._materials_saved)
+        assert mdlg.table.rowCount() == 3
+        r = mdlg._append_row()
+        for c, v in enumerate(("Copper", "Cu", "8.93", "0.437", "새 재료")):
+            mdlg.table.setItem(r, c, QTableWidgetItem(v))
+        mdlg.table.setItem(0, 2, QTableWidgetItem("200"))                     # density 범위 밖
+        r2 = mdlg._append_row()
+        for c, v in enumerate(("titanium", "Ti2", "4.5", "0.6", "")):        # 이름 중복(대소문자 무시)
+            mdlg.table.setItem(r2, c, QTableWidgetItem(v))
+        mats, errs = mdlg.collect()
+        assert len(errs) == 2 and mdlg.table.item(0, 2).background().color().name() == "#ffcdd2"
+        assert mdlg.table.item(r2, 0).background().color().name() == "#ffcdd2"
+        mdlg.table.setItem(0, 2, QTableWidgetItem("2.70"))
+        mdlg.table.removeRow(r2)
+        asked = []
+        mdlg.confirm = lambda text: (asked.append(text), False)[1]           # 사용 중 재료 삭제 — 확인창에서 '아니오'
+        assert mdlg.delete_rows([2]) is False and asked and "Titanium" in asked[0] and mdlg.table.rowCount() == 4
+        assert mdlg.delete_rows([1]) is True and mdlg.table.rowCount() == 3  # 안 쓰는 재료는 바로 삭제(확인 없음)
+        assert len(asked) == 1
+        mdlg._on_save()
+        back, w = load_materials(mp)
+        assert w == [] and [m.name for m in back] == ["Aluminum", "Titanium", "Copper"] and back[0].density == 2.7
+        # Factor 설정창 드롭다운·표시값이 바로 갱신되고 고른 재료는 그대로
+        assert fdlg.combos["G1"].count() == 4 and fdlg.combos["G1"].findData("Copper") > 0
+        assert fdlg.combos["G1"].currentData() == "Titanium" and saved == [1]
+
+
+def test_panel_shows_applied_material_name():
+    p = _panel()
+    p.update_status(dict(_OK, material="Aluminum Oxide"))
+    assert p.material_label.text().startswith("적용 Al") and p.material_label.text().endswith("100.0%")
+    assert p.material_label.toolTip().startswith("적용 Aluminum Oxide · ρ 2.7 · Z 1.080 · T 100.0%")
 
 
 def test_layout_side_panels():

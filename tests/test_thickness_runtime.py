@@ -58,7 +58,9 @@ class FakeSvc:
                    "life_pct": 50.0, "thickness_nm": 3.0, "stale": False}
         self.factors = ThicknessFactors()
         self.factors.tooling["mid"]["G1"] = 110.0
-        self.factors.material["G1"] = {"density": 2.7, "z_factor": 1.08, "memo": "Al"}
+        self.factors.material["G1"] = "Aluminum"
+        from lib.thickness_materials import Material
+        self.materials = [Material("Aluminum", "Al", 2.73, 1.08), Material("Titanium", "Ti", 4.5, 0.628)]
         self.cfg = types.SimpleNamespace(factor_file="config/thickness_factors_ch2.json")
         self.mat_calls = []
         self.zero_calls = []
@@ -69,6 +71,10 @@ class FakeSvc:
     def status(self):
         return dict(self.st)
 
+    def find_material(self, name):
+        from lib.thickness_materials import find_material
+        return find_material(self.materials, name)
+
     def clock(self):
         return self.t
 
@@ -78,8 +84,9 @@ class FakeSvc:
     def add_listener(self, cb):
         self.listeners.append(cb)
 
-    async def set_material(self, d, z, t):
+    async def set_material(self, d, z, t, material=""):
         self.mat_calls.append((d, z, t))
+        self.mat_names = getattr(self, "mat_names", []) + [material]
         if self.mat_error:
             raise self.mat_error
         return {"density": d, "z_factor": z, "tooling": t}
@@ -175,10 +182,13 @@ def test_apply_material_factor_and_errors():
         rt, _pc, _ = _rt(svc)
         c, msg = await rt._thickness_apply_material(_params(chuck_position="up"), True)
         assert c == "E845" and "tooling" in msg and svc.mat_calls == []           # up × G1 tooling 없음
-        svc.factors.material["G1"]["z_factor"] = None
+        svc.factors.material["G1"] = None
         c, msg = await rt._thickness_apply_material(_params(), True)
-        assert c == "E845" and "Z-factor" in msg
-        svc.factors.material["G1"]["z_factor"] = 1.08
+        assert c == "E845" and "G1 재료 미선택" in msg and svc.mat_calls == []
+        svc.factors.material["G1"] = "Unobtainium"
+        c, msg = await rt._thickness_apply_material(_params(), True)
+        assert c == "E845" and "G1 재료 'Unobtainium' 가 재료 목록에 없음" in msg and svc.mat_calls == []
+        svc.factors.material["G1"] = "aluminum"                                      # 이름은 대소문자 무시
         c, _m = await rt._thickness_apply_material(_params(chuck_position=""), True)
         assert c == "E845"                                                          # chuck 위치 모름
         svc.mat_error = RuntimeError("되읽기 불일치")
@@ -187,8 +197,10 @@ def test_apply_material_factor_and_errors():
         svc.mat_error = None
         svc.st["life_pct"] = 4.0
         assert await rt._thickness_apply_material(_params(), True) == ("", "")
-        assert svc.mat_calls[-1] == (2.7, 1.08, 110.0)
+        assert svc.mat_calls[-1] == (2.73, 1.08, 110.0) and svc.mat_names[-1] == "Aluminum"   # 재료 목록 값
         assert rt._thk_pre["tooling"] == 110.0 and rt._thk_pre["chuck"] == "mid" and rt._thk_pre["gun"] == "G1"
+        assert rt._thk_pre["material"] == "Aluminum"
+        assert any("재료 Al — Aluminum" in m for _s, m in rt.logs)                      # 시작 전 점검 로그
         assert any("크리스탈 수명" in w for w in rt._run_warnings)
     asyncio.run(go())
 
@@ -228,12 +240,15 @@ def test_set_material_readback_retry_with_real_service():
             from lib.thickness_factors import save_factors
             f = ThicknessFactors()
             f.tooling["mid"]["G1"] = 110.0
-            f.material["G1"] = {"density": 2.7, "z_factor": 1.08, "memo": "Al"}
+            f.material["G1"] = "Aluminum"
             save_factors(fac, f)
+            from lib.thickness_materials import Material, save_materials
+            mfile = Path(tmp) / "materials.json"
+            save_materials(mfile, [Material("Aluminum", "Al", 2.7, 1.08)])
             dev = AsyncThicknessMonitor("127.0.0.1", srv.port, cmd_timeout_s=0.2, backoff_start_s=0.05, settle_s=0.0)
             cfg = ThicknessConfig(enabled=True, ch=2, port=srv.port, poll_interval_s=0.25, slow_poll_s=0.25,
                                   log_dir=str(Path(tmp) / "logs"), factor_file=str(fac))
-            svc = ThicknessService(cfg, log=lambda s, m: None, device=dev)
+            svc = ThicknessService(cfg, log=lambda s, m: None, device=dev, materials_file=str(mfile))
             svc.start()
             try:
                 for _ in range(100):
@@ -245,7 +260,7 @@ def test_set_material_readback_retry_with_real_service():
                 srv.script["J?"] = deque([("raw", "A105.0")])                       # 첫 되읽기만 틀림
                 assert await rt._thickness_apply_material(_params(), True) == ("", "")
                 assert srv.rx.count("J=110") == 2 and srv.rx.count("E=2.7") == 2
-                assert svc.status()["tooling"] == 110.0
+                assert svc.status()["tooling"] == 110.0 and svc.status()["material"] == "Aluminum"
                 srv.script["J?"] = deque([("raw", "A105.0"), ("raw", "A105.0")])   # 두 번 다 틀림 → E846
                 c, _m = await rt._thickness_apply_material(_params(), True)
                 assert c == "E846"

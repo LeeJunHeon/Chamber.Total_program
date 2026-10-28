@@ -16,7 +16,7 @@
 status():
   connected, ok_ts(마지막 정상 S 단조시간), age_s, stale, thickness_nm, rate_nm_s, freq_hz, life_pct,
   crystal_ok, reset_seen(전원 리셋 플래그 누적), seq(새 S 값마다 +1 — 같은 값 중복 판정 방지),
-  density, z_factor, tooling(장비에 적용된 값), last_error, process_running, process_name, t
+  density, z_factor, tooling(장비에 적용된 값), material(마지막으로 적용한 재료 이름), last_error, process_running, process_name, t
 """
 from __future__ import annotations
 
@@ -32,6 +32,7 @@ from device.thickness_monitor import (AsyncThicknessMonitor, ThicknessChecksumEr
                                       ThicknessValueUnavailable, ThicknessVerifyError)
 from lib.thickness_config import ThicknessConfig
 from lib.thickness_factors import ThicknessFactors, load_factors
+from lib.thickness_materials import Material, default_materials_file, find_material, load_materials
 from lib.thickness_logger import ThicknessCsvLogger
 
 _A_TO_NM = 0.1                    # 1 Å = 0.1 nm
@@ -60,12 +61,14 @@ class ThicknessService:
                  log: Callable[[str, str], None],
                  device: Any = None,
                  process_info: Optional[Callable[[], Tuple[bool, str]]] = None,
+                 materials_file=None,
                  clock: Callable[[], float] = time.monotonic):
         self.cfg = cfg
         self.ch = int(cfg.ch)
         self._log_cb = log
         self._now = clock
         self._process_info = process_info
+        self.materials_file = str(materials_file or default_materials_file())   # 재료 목록(채널 공용)
         self.dev = device if device is not None else AsyncThicknessMonitor(
             cfg.host, cfg.port, cmd_timeout_s=cfg.cmd_timeout_s, log=self._log, clock=clock)
         self._listeners: List[Callable[[dict], None]] = []
@@ -90,6 +93,8 @@ class ThicknessService:
         self.factors, warns = load_factors(cfg.factor_file)
         for w in warns:
             self._log(f"⚠ Factor 파일: {w}")
+        self.materials: List[Material] = []
+        self._load_materials()
         self.csv = ThicknessCsvLogger(cfg.log_dir, self.ch, warn=lambda m: self._log(f"⚠ {m}"), clock=clock)
 
     # ═══════════════════════ 공개 API ═══════════════════════
@@ -157,11 +162,23 @@ class ThicknessService:
     def recording(self) -> bool:
         return self._recording
 
+    def _load_materials(self) -> List[str]:
+        mats, warns = load_materials(self.materials_file)
+        self.materials = mats
+        for w in warns:
+            self._log(f"⚠ 재료 목록: {w}")
+        return warns
+
+    def find_material(self, name: str) -> Optional[Material]:
+        """재료 목록에서 이름(대소문자 무시)으로 찾는다."""
+        return find_material(self.materials, name)
+
     def reload_factors(self) -> List[str]:
-        """Factor 파일을 다시 읽는다(설정창 저장 뒤). 경고 목록을 돌려준다."""
+        """Factor 파일·재료 목록을 다시 읽는다(설정창 저장 뒤 — 진행 중인 공정에는 영향 없고 다음 공정 시작 때 적용). 경고 목록."""
         fac, warns = load_factors(self.cfg.factor_file)
         self.factors = fac
-        self._log("Factor 파일 다시 읽음" + (f" — 경고 {len(warns)}건" if warns else ""))
+        warns = list(warns) + self._load_materials()
+        self._log("Factor 파일·재료 목록 다시 읽음" + (f" — 경고 {len(warns)}건" if warns else ""))
         for w in warns:
             self._log(f"⚠ Factor 파일: {w}")
         return warns
@@ -179,12 +196,13 @@ class ThicknessService:
         self._log(f"두께 영점({m}){(' — ' + why) if why else ''}")
         return True, ""
 
-    async def set_material(self, density: float, z_factor: float, tooling: float) -> dict:
-        """장비에 density/Z/tooling 을 쓰고 되읽어 확인한다(드라이버 set_material). 실패하면 예외."""
+    async def set_material(self, density: float, z_factor: float, tooling: float, material: str = "") -> dict:
+        """장비에 density/Z/tooling 을 쓰고 되읽어 확인한다(드라이버 set_material). 실패하면 예외. material = 재료 이름(표시용)."""
         res = await self._submit(lambda: self.dev.set_material(density, z_factor, tooling), "재료값 적용")
-        self._st.update(density=res.get("density"), z_factor=res.get("z_factor"), tooling=res.get("tooling"))
-        self._log(f"두께 모니터 재료값 적용 density {res.get('density')} · Z {res.get('z_factor')} · "
-                  f"tooling {res.get('tooling')}%")
+        self._st.update(density=res.get("density"), z_factor=res.get("z_factor"), tooling=res.get("tooling"),
+                        material=str(material or ""))
+        self._log(f"두께 모니터 재료값 적용{(' ' + material) if material else ''} density {res.get('density')} · "
+                  f"Z {res.get('z_factor')} · tooling {res.get('tooling')}%")
         self._publish()
         return res
 
@@ -360,7 +378,7 @@ class ThicknessService:
             "thickness_nm": None, "rate_nm_s": None,
             "freq_hz": None, "life_pct": None, "crystal_ok": None,
             "reset_seen": 0, "seq": 0,
-            "density": None, "z_factor": None, "tooling": None,
+            "density": None, "z_factor": None, "tooling": None, "material": "",
             "last_error": "", "process_running": False, "process_name": "", "t": None,
         }
 

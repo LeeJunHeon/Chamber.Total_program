@@ -199,9 +199,17 @@ class ThicknessPanel(QFrame):
         self.reset_label.setText(f"리셋 {rs}회" if rs else "")
         self._style(self.reset_label, "QLabel {border: none; color: #ef6c00; font-size: 8pt;}")
 
-        self.material_label.setText(
-            f"적용 ρ {_fmt(st.get('density'), '{:.3g}')} · Z {_fmt(st.get('z_factor'), '{:.3f}')} · "
-            f"T {_fmt(st.get('tooling'), '{:.1f}')}%")
+        vals = (f"ρ {_fmt(st.get('density'), '{:.3g}')} · Z {_fmt(st.get('z_factor'), '{:.3f}')} · "
+                f"T {_fmt(st.get('tooling'), '{:.1f}')}%")
+        name = str(st.get("material") or "")
+        text = f"적용 {name} · {vals}" if name else f"적용 {vals}"
+        if name:                                        # 재료 이름이 길면 가운데를 줄인다(전체는 툴팁)
+            self.material_label.ensurePolished()        # 스타일시트 글꼴(8pt)로 폭을 잰다
+            self.material_label.setText(self.material_label.fontMetrics().elidedText(text, Qt.TextElideMode.ElideMiddle, 218))
+        else:
+            self.material_label.setText(text)
+        self.material_label.setToolTip(text + " — 장비에서 되읽은 density(g/cm3)·Z-factor·tooling(%)"
+                                       + (", 재료 이름은 마지막으로 적용한 재료" if name else ""))
 
         err = str(st.get("last_error") or "")
         if not conn and not err:
@@ -285,7 +293,8 @@ class ThicknessPanel(QFrame):
                 return
             from ui.thickness_factor_dialog import ThicknessFactorDialog
             dlg = ThicknessFactorDialog(self._cfg.factor_file, ch=int(getattr(self._cfg, "ch", 2) or 2),
-                                        on_saved=self._svc.reload_factors, parent=self.window())
+                                        on_saved=self._svc.reload_factors,
+                                        materials_path=getattr(self._svc, "materials_file", None), parent=self.window())
             dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
             dlg.destroyed.connect(lambda *_a: setattr(self, "_dialog", None))
             self._dialog = dlg
