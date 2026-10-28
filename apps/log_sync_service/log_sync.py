@@ -25,8 +25,10 @@ NAS 로 복사하므로, SMB 가 느리거나 멈춰도 메인 프로그램(qasy
   (exe 옆 log_sync_config.json 의 webhook_url / enabled — 번들하지 않음)
 
 설정(settings.json common → lib.config_common; getattr 로 호출 시점 조회)
-  LOG_SYNC_ENABLED, LOG_SYNC_PAIRS, LOG_SYNC_STATE_DIR, LOG_SYNC_ALERT_AFTER_FAILS
+  LOG_SYNC_ENABLED, LOG_SYNC_PAIRS, LOG_SYNC_STATE_DIR, LOG_SYNC_ALERT_AFTER_FAILS (= SETTINGS_KEYS)
   환경변수 LOG_SYNC_SETTINGS 로 settings.json 경로 직접 지정 가능
+  settings.json 은 워커 모드로 검사한다 — SETTINGS_KEYS 만 엄격(문법·중복·타입·오타 의심이면 중지),
+  메인에만 있는 새 키·ch1/ch2 구역은 무시(run.log 한 줄). 메인보다 오래된 워커 exe 가 새 키 때문에 멈추지 않게.
 """
 from __future__ import annotations
 
@@ -47,6 +49,10 @@ if not getattr(sys, "frozen", False):
     _ROOT = Path(__file__).resolve().parents[2]
     if str(_ROOT) not in sys.path:
         sys.path.insert(0, str(_ROOT))
+
+
+# settings.json common 에서 이 워커가 읽는 키 전부(_load_config 의 getattr 과 같아야 한다 — 테스트가 확인)
+SETTINGS_KEYS = ("LOG_SYNC_ENABLED", "LOG_SYNC_PAIRS", "LOG_SYNC_STATE_DIR", "LOG_SYNC_ALERT_AFTER_FAILS")
 
 
 # ===================== 경로 헬퍼 =====================
@@ -97,13 +103,16 @@ def _settings_fail(res, log) -> None:
 def _load_config(log):
     """settings.json → config_common 적용 후 getattr 로 조회. 반환 dict."""
     settings = _find_settings_json()
-    # settings.json 이 있는데 고칠 곳(문법 오류·오타 키·타입 불일치 등)이 있으면 값을 하나도 적용하지 않고 종료(코드 2).
-    # 파일이 없을 때만 예전처럼 config_common 기본값으로 진행한다.
+    # settings.json 이 있는데 고칠 곳(문법 오류·중복 키·이 워커 키의 오타·타입 불일치 등)이 있으면 값을 하나도 적용하지 않고
+    # 종료(코드 2). 이 워커가 모르는 키는 무시. 파일이 없을 때만 예전처럼 config_common 기본값으로 진행한다.
     from lib import _config_loader
     if settings is not None and settings.is_file():
-        res = _config_loader.check_and_load_settings(settings)
+        res = _config_loader.check_and_load_settings(settings, worker_keys=SETTINGS_KEYS)
         if res.problems:
             _settings_fail(res, log)
+        if res.ignored:                  # 메인이 더 새 버전이라 이 워커가 모르는 키 — 멈추지 않고 run.log 에 한 줄
+            ex = ", ".join(res.ignored[:5]) + (" …" if len(res.ignored) > 5 else "")
+            log(f"  settings.json 모르는 키 {len(res.ignored)}개 무시 — 메인 프로그램이 더 새 버전일 수 있음 ({ex})")
     else:
         log(f"  ! settings.json 없음 → config_common 기본값 사용 (탐색 결과: {settings})")
         settings = None

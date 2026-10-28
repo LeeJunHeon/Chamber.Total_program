@@ -26,6 +26,8 @@ torch 불필요. onnxruntime + opencv + numpy 만 필요.
   RF_READER_MIN_FREE_GB       사진 루트 여유 임계(GB) — 미만이면 완료 세션을 오래된 순으로 정리
   RF_READER_UPLOAD_ALERT_DAYS 미전송 CSV 가 이 일수 이상 밀리면 알림
   RF_SETTINGS          settings.json 경로 직접 지정
+  settings.json 은 워커 모드로 검사 — 위 common 키(SETTINGS_KEYS)만 엄격(문법·중복·타입·오타 의심이면 중지),
+  메인에만 있는 새 키·ch1/ch2 구역은 무시(run.log 한 줄).
   rf_worker_config.json       (exe 옆) {"webhook_url": "...", "enabled": true} — 구글챗 알림
   RF_MODEL             onnx 경로(기본 models/cnn.onnx)
   RF_SINCE             "YYYYMMDD_HHMMSS" 이상 세션만
@@ -197,17 +199,25 @@ def _settings_fail(res, log) -> None:
     sys.exit(2)
 
 
+# settings.json common 에서 이 워커가 읽는 키 전부(_load_config 의 getattr 과 같아야 한다 — 테스트가 확인)
+SETTINGS_KEYS = ("CAMERA_LOG_ROOT", "RF_READER_STATE_DIR", "RF_READER_CSV_DIR", "RF_READER_STALE_MIN",
+                 "RF_READER_NAS_DIR", "RF_READER_RETENTION_DAYS", "RF_READER_MIN_FREE_GB", "RF_READER_UPLOAD_ALERT_DAYS")
+
+
 def _load_config(log):
     """settings.json 을 config_common 에 적용하고, 경로 3종 + STALE_MIN 을 getattr 로 읽는다.
     반환: (camera_root, state_dir, csv_dir, stale_min, settings_path)"""
     settings = _find_settings_json()
-    # settings.json 이 있는데 고칠 곳(문법 오류·오타 키·타입 불일치 등)이 있으면 값을 하나도 적용하지 않고 종료(코드 2).
-    # 파일이 없을 때만 예전처럼 config_common 기본값으로 진행한다.
+    # settings.json 이 있는데 고칠 곳(문법 오류·중복 키·이 워커 키의 오타·타입 불일치 등)이 있으면 값을 하나도 적용하지 않고
+    # 종료(코드 2). 이 워커가 모르는 키는 무시. 파일이 없을 때만 예전처럼 config_common 기본값으로 진행한다.
     from lib import _config_loader
     if settings is not None and settings.is_file():
-        res = _config_loader.check_and_load_settings(settings)
+        res = _config_loader.check_and_load_settings(settings, worker_keys=SETTINGS_KEYS)
         if res.problems:
             _settings_fail(res, log)
+        if res.ignored:                  # 메인이 더 새 버전이라 이 워커가 모르는 키 — 멈추지 않고 run.log 에 한 줄
+            ex = ", ".join(res.ignored[:5]) + (" …" if len(res.ignored) > 5 else "")
+            log(f"  settings.json 모르는 키 {len(res.ignored)}개 무시 — 메인 프로그램이 더 새 버전일 수 있음 ({ex})")
     else:
         log(f"  ! settings.json 없음 → config_common 기본값 사용 (탐색 시작: {settings})")
         settings = None

@@ -16,6 +16,17 @@ config/settings.json을 읽어서 기존 config_common / config_ch1 / config_ch2
 - UTF-8 BOM(메모장 저장)은 그대로 읽는다.
 - 섹션(common/ch1/ch2)을 통째로 빼면 그 섹션은 .py 값을 쓴다(오타 구역 이름은 오류).
 
+워커 모드(worker_keys=자기가 쓰는 common 키 목록 — log_sync·rf_worker)
+----------------------------------------------------------------------
+워커 exe 는 메인과 따로 빌드되므로 메인에 새 키가 생기면 워커의 config_common 에는 그 이름이 없다.
+메인 검사(모든 키 엄격)를 그대로 쓰면 '모르는 이름' 으로 워커가 멈추므로, 워커는 자기 키만 엄격하게 본다.
+  - 중지: 파일 없음(require_file) · 문법 오류 · { } 아님 · 같은 구역/같은 키 두 번(어느 구역이든 — 파일이 깨진 것) ·
+          common 이 { } 아님 · 자기 키의 타입 불일치·바꿀 수 없는 항목 · 자기 키 오타 의심
+          (모르는 common 키가 자기 키와 거의 같은 이름 — 유사도 WORKER_TYPO_CUTOFF 이상).
+  - 무시: ch1/ch2 구역 전체, 모르는 구역, 자기 키가 아닌 common 키. 모르는 이름은 res.ignored 에 담는다
+          (워커가 run.log 에 한 줄 — 구글챗은 보내지 않는다).
+  - 적용: 자기 키만 config_common 에 덮어쓴다.
+
 사용법
 ------
     # main.py: 고칠 곳이 있으면 알림창으로 목록을 보여 주고 시작하지 않는다.
@@ -36,7 +47,7 @@ import logging
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Iterable, List, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -129,6 +140,7 @@ def _convert_dict_keys(old_val: Any, new_val: Any) -> Any:
 # ──────────────────────────────────────────────────────────
 
 _SECTIONS = ("common", "ch1", "ch2")
+WORKER_TYPO_CUTOFF = 0.9   # 워커 모드: 모르는 키가 자기 키와 이만큼 비슷하면 오타로 본다(글자 1~2개 차이)
 
 
 @dataclass
@@ -138,6 +150,7 @@ class SettingsResult:
     problems: List[str] = field(default_factory=list)    # 사람이 읽는 "어디: 무엇 — 어떻게 고칠지"
     applied: int = 0                                      # 적용한 값 개수
     missing: bool = False                                 # 파일 없음
+    ignored: List[str] = field(default_factory=list)      # 워커 모드: 모르는 이름이라 무시한 "구역.키"
 
     @property
     def ok(self) -> bool:
@@ -324,7 +337,50 @@ def _strip_jsonc_comments(text: str) -> str:
     return "".join(out)
 
 
-def check_and_load_settings(path: Optional[Path] = None, *, require_file: bool = True) -> SettingsResult:
+def _dup_key_problem(sec: str, k: str) -> str:
+    return f'{sec}.{k}: 같은 이름이 두 번 있습니다 — 하나를 지우세요(지금은 뒤의 값만 쓰입니다)'
+
+
+def _check_worker(data: Dict[str, Any], keys: set, mods: Dict[str, Any], res: SettingsResult) -> Dict[str, Dict[str, Any]]:
+    """워커 모드 검사 → {"common": 적용할 자기 키}. 고칠 곳은 res.problems, 무시한 모르는 이름은 res.ignored."""
+    common = mods["common"]
+    plan: Dict[str, Any] = {}
+    for sec, sec_data in data.items():
+        if sec.startswith("__"):
+            continue
+        if sec != "common":
+            # 워커가 쓰지 않는 구역(ch1/ch2·모르는 구역) — 같은 키 두 번(파일이 깨짐)만 본다
+            for k in getattr(sec_data, "dups", []):
+                res.problems.append(_dup_key_problem(sec, k))
+            if sec not in mods:
+                res.ignored.append(sec)
+            elif isinstance(sec_data, dict):
+                res.ignored.extend(f"{sec}.{k}" for k in sec_data
+                                   if not k.startswith("__") and not hasattr(mods[sec], k))
+            continue
+        if not isinstance(sec_data, dict):
+            res.problems.append(f'"{sec}": {{ ... }} 묶음이어야 하는데 {_kind(sec_data)} 입니다 — {{ }} 로 감싸세요')
+            continue
+        for k in getattr(sec_data, "dups", []):
+            res.problems.append(_dup_key_problem(sec, k))
+        own: Dict[str, Any] = {}
+        for k, v in sec_data.items():
+            if k.startswith("__"):
+                continue
+            if k in keys:
+                own[k] = v
+            elif not hasattr(common, k):
+                near = difflib.get_close_matches(k, sorted(keys), n=1, cutoff=WORKER_TYPO_CUTOFF)
+                if near:
+                    res.problems.append(f"common.{k}: 프로그램에 없는 설정 이름입니다 — 이름 오타를 확인하세요 (혹시 {near[0]} ?)")
+                else:
+                    res.ignored.append(f"common.{k}")
+        plan = _check_section(common, "common", own, res.problems)
+    return {"common": plan}
+
+
+def check_and_load_settings(path: Optional[Path] = None, *, require_file: bool = True,
+                            worker_keys: Optional[Iterable[str]] = None) -> SettingsResult:
     """
     settings.json 을 검사하고, 고칠 곳이 없을 때만 config 모듈들에 적용한다.
 
@@ -333,6 +389,7 @@ def check_and_load_settings(path: Optional[Path] = None, *, require_file: bool =
     - config_ch2    ← JSON["ch2"]
 
     require_file=False 이면 파일이 없을 때 오류 대신 .py 값으로 진행한다(missing=True).
+    worker_keys 가 있으면 워커 모드(모듈 설명 참고) — 그 common 키만 검사·적용하고 나머지는 무시.
     """
     json_path = Path(path) if path is not None else _settings_path()
     res = SettingsResult(path=json_path)
@@ -373,20 +430,23 @@ def check_and_load_settings(path: Optional[Path] = None, *, require_file: bool =
 
     mods = _section_modules()
     plans: Dict[str, Dict[str, Any]] = {}
-    for sec, sec_data in data.items():
-        if sec.startswith("__"):
-            continue
-        if sec not in mods:
-            near = difflib.get_close_matches(sec, _SECTIONS, n=1, cutoff=0.6)
-            tip = f" (혹시 {near[0]} ?)" if near else ""
-            res.problems.append(
-                f'"{sec}": 알 수 없는 구역입니다 — "common", "ch1", "ch2" 중 하나여야 합니다{tip}'
-            )
-            continue
-        if not isinstance(sec_data, dict):
-            res.problems.append(f'"{sec}": {{ ... }} 묶음이어야 하는데 {_kind(sec_data)} 입니다 — {{ }} 로 감싸세요')
-            continue
-        plans[sec] = _check_section(mods[sec], sec, sec_data, res.problems)
+    if worker_keys is not None:                                   # 워커 모드 — 자기 키만
+        plans = _check_worker(data, set(worker_keys), mods, res)
+    else:
+        for sec, sec_data in data.items():
+            if sec.startswith("__"):
+                continue
+            if sec not in mods:
+                near = difflib.get_close_matches(sec, _SECTIONS, n=1, cutoff=0.6)
+                tip = f" (혹시 {near[0]} ?)" if near else ""
+                res.problems.append(
+                    f'"{sec}": 알 수 없는 구역입니다 — "common", "ch1", "ch2" 중 하나여야 합니다{tip}'
+                )
+                continue
+            if not isinstance(sec_data, dict):
+                res.problems.append(f'"{sec}": {{ ... }} 묶음이어야 하는데 {_kind(sec_data)} 입니다 — {{ }} 로 감싸세요')
+                continue
+            plans[sec] = _check_section(mods[sec], sec, sec_data, res.problems)
 
     if res.problems:
         return res                                                # 하나라도 있으면 아무것도 적용하지 않음

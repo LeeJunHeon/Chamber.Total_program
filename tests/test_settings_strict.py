@@ -301,7 +301,7 @@ def test_rf_worker_uses_same_strict_path():
     """rf_worker 는 import 가 무겁다(onnx·cv2) — 같은 구조인지 텍스트로 확인."""
     src = (Path(ROOT) / "apps" / "rf_service" / "rf_worker.py").read_text(encoding="utf-8")
     body = src[src.index("def _load_config(log):"):src.index("from lib import config_common as cfgc", src.index("def _load_config(log):"))]
-    assert "check_and_load_settings(settings)" in body and "_settings_fail(res, log)" in body
+    assert "check_and_load_settings(settings, worker_keys=SETTINGS_KEYS)" in body and "_settings_fail(res, log)" in body
     assert "load_settings(path=settings)" not in body and "except Exception" not in body
     fail = src[src.index("def _settings_fail(res, log)"):src.index("def _load_config(log):")]
     assert "sys.exit(2)" in fail and "run_error.log" in fail and "RF 워커 중지" in fail
