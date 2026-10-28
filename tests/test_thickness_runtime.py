@@ -151,6 +151,9 @@ def test_supported_requires_service_and_flag():
     (lambda s, p: s.st.update(ok_ts=90.0), "E840"),                # 최근 5초 안 정상 S 없음
     (lambda s, p: s.st.update(ok_ts=None), "E840"),
     (lambda s, p: s.st.update(crystal_ok=False), "E841"),
+    (lambda s, p: s.st.update(link_ok=False), "E840"),                          # 통신 안 됨
+    (lambda s, p: s.st.update(link_ok=True, ok_ts=None, stale=True, crystal_ok=False), "E841"),  # XTAL FAIL(값 없음)
+    (lambda s, p: s.st.update(link_ok=True, ok_ts=90.0, stale=True), "E840"),   # 통신 정상·두께 값 없음
     (lambda s, p: p.update(dep_rate=None), "E842"),
     (lambda s, p: p.update(thickness=0), "E842"),
     (lambda s, p: p.update(use_g2=True), "E843"),                  # co-sputter
@@ -165,6 +168,20 @@ def test_basic_check_rejects(mut, code):
         mut(svc, p)
         c, msg = rt._thickness_check_basic(p)
         assert c == code and msg
+    asyncio.run(go())
+
+
+def test_basic_check_messages_distinguish_link_and_value():
+    async def go():
+        svc = FakeSvc()
+        rt, _pc, _ = _rt(svc)
+        svc.st.update(link_ok=False, ok_ts=None)
+        assert rt._thickness_check_basic(_params())[1].startswith("두께 모니터 응답 없음")
+        svc.st.update(link_ok=True, ok_ts=90.0)
+        c, msg = rt._thickness_check_basic(_params())
+        assert c == "E840" and msg.startswith("두께 값 없음(통신은 정상)")
+        svc.st.update(link_ok=True, ok_ts=None, crystal_ok=False)
+        assert rt._thickness_check_basic(_params()) == ("E841", "두께 모니터 XTAL FAIL(크리스탈 이상) — 크리스탈을 확인하십시오")
     asyncio.run(go())
 
 

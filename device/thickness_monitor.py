@@ -9,7 +9,8 @@ Sycon protocol(매뉴얼 5장):
   응답 첫 글자 = 결과 코드: A 정상 / B 정상+전원리셋 플래그 / F,G 잘못된 명령 / H,I 잘못된 값 / J,K 잘못된 수식자
   (뒤쪽 글자가 리셋 플래그가 있는 쪽). 리셋 플래그가 보이면 'L' 로 확인하고 reset_seen 을 1 올린다.
   값 앞에 명령 글자가 다시 붙어 올 수 있다("M !", "U 5319234") → 떼고 해석한다.
-  값 대신 빈값/"--------" 가 올 수 있다 → 통신 실패와 구분되는 '값 없음'(ThicknessValueUnavailable).
+  값 대신 빈값/"--------"/"    . " 가 올 수 있다(XTAL FAIL 중 S·T·U·V 등) → 통신 실패와 구분되는 '값 없음'
+  (ThicknessValueUnavailable). 본문이 공백·'-'·'.' 만이면 값 없음, 숫자 일부만 빈칸('12 .4')이면 형식 오류.
   N/O/P(릴레이 상태)는 매뉴얼 표와 상세 설명이 서로 달라 쓰지 않는다.
 
 연결: 워치독이 끊기면 지수 백오프로 다시 연결한다. 수신은 전용 태스크가 버퍼에 쌓고(EOF 를 바로 알아챈다),
@@ -17,8 +18,10 @@ Sycon protocol(매뉴얼 5장):
 
 예외 구분(서비스가 다르게 센다):
   ThicknessCommError        — 통신 실패(미연결·송신 실패·응답 없음). ThicknessTimeout 이 하위.
-  ThicknessProtocolError    — 체크섬·길이·형식·모르는 코드. ThicknessChecksumError, ThicknessCommandRejected(F~K) 가 하위.
-  ThicknessValueUnavailable — 응답은 정상인데 값이 없음(빈값/"--------").
+  ThicknessProtocolError    — 체크섬·길이·형식·모르는 코드. ThicknessFrameError(체크섬·길이·모르는 코드 — 프레임 자체가
+                              틀림, ThicknessChecksumError 가 하위), ThicknessCommandRejected(F~K) 가 하위.
+                              그 밖의 ThicknessProtocolError 는 프레임은 정상인데 내용 형식이 틀린 것.
+  ThicknessValueUnavailable — 응답은 정상인데 값이 없음(빈값/"--------"/"    . ").
   ThicknessVerifyError      — set_material 되읽기 불일치(1회 재시도 뒤).
   범위 밖 값은 보내기 전에 ValueError.
 """
@@ -73,7 +76,11 @@ class ThicknessProtocolError(ThicknessError):
     """프레임·체크섬·형식·코드 오류."""
 
 
-class ThicknessChecksumError(ThicknessProtocolError):
+class ThicknessFrameError(ThicknessProtocolError):
+    """응답 프레임 자체가 틀림(체크섬·길이·모르는 결과 코드) — 통신 이상으로 센다."""
+
+
+class ThicknessChecksumError(ThicknessFrameError):
     """수신 프레임 체크섬/길이 불일치 — 재시도 가능."""
 
 
@@ -87,7 +94,7 @@ class ThicknessCommandRejected(ThicknessProtocolError):
 
 
 class ThicknessValueUnavailable(ThicknessError):
-    """응답은 정상인데 값이 없음(빈값/'--------')."""
+    """응답은 정상인데 값이 없음(빈값/'--------'/'    . ')."""
 
 
 class ThicknessVerifyError(ThicknessError):
@@ -149,7 +156,7 @@ def strip_echo(body: str, token: str) -> str:
 
 def _value_text(body: str, token: str) -> str:
     s = strip_echo(body, token)
-    if not s or set(s) <= {"-"} or s.upper() in ("N/A", "NA"):
+    if set(s) <= {" ", "-", "."} or s.upper() in ("N/A", "NA"):     # 빈칸·'-'·'.' 만 = 값 없음(XTAL FAIL 등)
         raise ThicknessValueUnavailable(f"{token}: 값 없음({body!r})")
     return s
 
@@ -447,7 +454,7 @@ class AsyncThicknessMonitor:
                 continue
             code = payload[:1]
             if code not in CODE_MEANING:
-                last = ThicknessProtocolError(f"모르는 응답 코드 {payload!r} (명령 {cmd!r})")
+                last = ThicknessFrameError(f"모르는 응답 코드 {payload!r} (명령 {cmd!r})")
                 continue
             return Reply(code=code, body=payload[1:], raw=payload)
         assert last is not None

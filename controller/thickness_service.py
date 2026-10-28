@@ -9,12 +9,16 @@
 장비 Å → nm 변환은 여기 한 곳(_A_TO_NM)에서만 한다.
 
 실패 정책(Evaporator stm_service 와 같은 방향): 한두 번 실패로 끊김을 만들지 않는다.
-  통신·프로토콜 실패가 MAX_FAIL_BEFORE_RECONNECT 회 연속이면 재연결, '값 없음'은 MAX_UNAVAILABLE 회를 넘을 때부터 실패로 센다.
-  stale 은 시간 기준(마지막 정상 S 뒤 THICKNESS_STALE_S 초과).
+  재연결은 통신이 안 될 때만 — 통신 실패(응답 없음·송신 실패)·프레임 오류(체크섬·길이·모르는 코드)가
+  MAX_FAIL_BEFORE_RECONNECT 회 연속이면. 프레임은 정상인데 내용이 이상한 '형식 오류'·'값 없음'(XTAL FAIL 중 빈칸 응답)은
+  재연결 사유가 아니다(오류 줄 기록, 형식 오류 로그는 같은 문구 60초에 1번).
+  stale 은 정상 두께 값 기준(마지막 정상 S 뒤 THICKNESS_STALE_S 초과),
+  link_ok 는 통신 기준(최근 THICKNESS_STALE_S 안에 정상 프레임 응답 — 값 유무와 무관).
+  S 가 값 없음이 되면 M(크리스탈 상태)을 바로 읽는다(XTAL FAIL 을 곧바로 반영).
 리스너 예외는 잡아서 로그만(같은 문구는 60초에 1번) 남기고 폴링은 계속한다.
 
 status():
-  connected, ok_ts(마지막 정상 S 단조시간), age_s, stale, thickness_nm, rate_nm_s, freq_hz, life_pct,
+  connected, ok_ts(마지막 정상 S 단조시간), age_s, stale, link_ok, link_age_s(마지막 정상 프레임 뒤 초), thickness_nm, rate_nm_s, freq_hz, life_pct,
   crystal_ok, reset_seen(전원 리셋 플래그 누적), seq(새 S 값마다 +1 — 같은 값 중복 판정 방지),
   density, z_factor, tooling(장비에 적용된 값), material(마지막으로 적용한 재료 이름), last_error, process_running, process_name, t
 """
@@ -28,7 +32,7 @@ from collections import deque
 from typing import Any, Awaitable, Callable, Deque, Dict, List, Optional, Tuple
 
 from device.thickness_monitor import (AsyncThicknessMonitor, ThicknessChecksumError, ThicknessCommandRejected,
-                                      ThicknessCommError, ThicknessError, ThicknessTimeout,
+                                      ThicknessCommError, ThicknessError, ThicknessFrameError, ThicknessTimeout,
                                       ThicknessValueUnavailable, ThicknessVerifyError)
 from lib.thickness_config import ThicknessConfig
 from lib.thickness_factors import ThicknessFactors, load_factors
@@ -36,8 +40,8 @@ from lib.thickness_materials import Material, default_materials_file, find_mater
 from lib.thickness_logger import ThicknessCsvLogger
 
 _A_TO_NM = 0.1                    # 1 Å = 0.1 nm
-MAX_FAIL_BEFORE_RECONNECT = 6     # 통신·프로토콜 실패 연속 횟수
-MAX_UNAVAILABLE = 10              # '값 없음' 연속 허용 횟수(넘으면 실패로 센다)
+MAX_FAIL_BEFORE_RECONNECT = 6     # 통신 실패·프레임 오류 연속 횟수
+FORMAT_LOG_INTERVAL_S = 60.0      # 같은 형식 오류 로그 간격
 MATERIAL_READ_S = 60.0            # 적용값(E?/F?/J?) 다시 읽는 간격
 CSV_PERIOD_S = 1.0                # 연속 기록 1초 1행
 LISTENER_LOG_INTERVAL_S = 60.0
@@ -48,7 +52,8 @@ JOB_TIMEOUT_S = 15.0              # 요청 1건 상한(set_material 은 명령 6
 def error_text(e: Exception) -> str:
     """화면·로그용 한 줄 — 종류(응답 없음/통신 실패/체크섬/거부/형식/값 없음) + 내용."""
     for cls, label in ((ThicknessTimeout, "응답 없음"), (ThicknessCommError, "통신 실패"),
-                       (ThicknessChecksumError, "체크섬 오류"), (ThicknessCommandRejected, "명령 거부"),
+                       (ThicknessChecksumError, "체크섬 오류"), (ThicknessFrameError, "프레임 오류"),
+                       (ThicknessCommandRejected, "명령 거부"),
                        (ThicknessValueUnavailable, "값 없음"), (ThicknessVerifyError, "되읽기 불일치"),
                        (ThicknessError, "응답 형식 오류")):
         if isinstance(e, cls):
@@ -79,6 +84,7 @@ class ThicknessService:
 
         self._seq = 0
         self._ok_ts: Optional[float] = None
+        self._link_ts: Optional[float] = None    # 마지막 정상 프레임 응답(값 없음·형식 오류 포함)
         self._fail_n = 0
         self._unavail_n = 0
         self._was_connected = False
@@ -296,12 +302,15 @@ class ThicknessService:
         except asyncio.CancelledError:
             raise
         except ThicknessValueUnavailable as e:
-            await self._on_unavailable(e)
+            self._on_unavailable(e)
+            if self._unavail_n == 1 and self._st.get("crystal_ok") is not False:
+                self._next_slow = 0.0        # 값이 막 없어졌다 — 이번 폴링에서 M 을 바로 읽는다(XTAL FAIL 확인)
         except ThicknessError as e:
-            await self._on_fail(e)
-            return                           # 통신 실패면 T 는 건너뛴다
+            if await self._on_error(e):
+                return                       # 통신 실패면 T 는 건너뛴다
         else:
-            self._fail_n = self._unavail_n = 0
+            self._link_seen()
+            self._unavail_n = 0
             self._seq += 1
             self._ok_ts = self._now()
             self._st["thickness_nm"] = a * _A_TO_NM
@@ -311,10 +320,12 @@ class ThicknessService:
         except asyncio.CancelledError:
             raise
         except ThicknessValueUnavailable:
+            self._link_seen()
             self._st["rate_nm_s"] = None
         except ThicknessError as e:
-            await self._on_fail(e)
+            await self._on_error(e)
         else:
+            self._link_seen()
             self._st["rate_nm_s"] = r * _A_TO_NM
 
     async def _poll_slow(self) -> None:
@@ -328,9 +339,12 @@ class ThicknessService:
             except asyncio.CancelledError:
                 raise
             except ThicknessValueUnavailable:
+                self._link_seen()
                 self._st[key] = None         # XTAL FAIL 이면 U/V 가 빈값으로 온다 — 실패로 세지 않는다
             except ThicknessError as e:
-                await self._on_fail(e)
+                await self._on_error(e)
+            else:
+                self._link_seen()
 
     async def _read_material(self) -> None:
         for key, fn in (("density", self.dev.read_density),
@@ -343,15 +357,35 @@ class ThicknessService:
             except asyncio.CancelledError:
                 raise
             except ThicknessValueUnavailable:
+                self._link_seen()
                 self._st[key] = None
             except ThicknessError as e:
-                await self._on_fail(e)
+                await self._on_error(e)
+            else:
+                self._link_seen()
 
-    async def _on_unavailable(self, e: Exception) -> None:
+    def _link_seen(self) -> None:
+        """정상 프레임 응답을 받았다 — 통신은 된다(값 유무와 무관). 통신 실패 연속 횟수 초기화."""
+        self._link_ts = self._now()
+        self._fail_n = 0
+
+    def _on_unavailable(self, e: Exception) -> None:
+        """S 값 없음 — 통신은 정상(재연결 사유 아님)."""
+        self._link_seen()
         self._unavail_n += 1
         self._set_error(f"값 없음 {self._unavail_n}회 연속")
-        if self._unavail_n > MAX_UNAVAILABLE:
+
+    async def _on_error(self, e: Exception) -> bool:
+        """읽기 오류 분류 — 통신 실패·프레임 오류면 실패로 세고(재연결 정책) True, 프레임은 정상인데 내용이 틀린
+        형식 오류·명령 거부면 기록만 하고 False."""
+        if isinstance(e, (ThicknessCommError, ThicknessFrameError)):
             await self._on_fail(e)
+            return True
+        self._link_seen()
+        txt = error_text(e)
+        self._set_error(txt)
+        self._log_throttled(f"fmt:{txt}", f"⚠ 두께 모니터 {txt}", FORMAT_LOG_INTERVAL_S)
+        return False
 
     def _set_error(self, text: str) -> None:
         """마지막 오류 한 줄(벽시계 시각 포함 — 복구 뒤에도 남아 언제 난 오류인지 보이게)."""
@@ -374,7 +408,7 @@ class ThicknessService:
     @staticmethod
     def _blank_status() -> dict:
         return {
-            "connected": False, "ok_ts": None, "age_s": None, "stale": True,
+            "connected": False, "ok_ts": None, "age_s": None, "stale": True, "link_ok": False, "link_age_s": None,
             "thickness_nm": None, "rate_nm_s": None,
             "freq_hz": None, "life_pct": None, "crystal_ok": None,
             "reset_seen": 0, "seq": 0,
@@ -390,6 +424,9 @@ class ThicknessService:
         st["ok_ts"] = self._ok_ts
         st["age_s"] = None if self._ok_ts is None else now - self._ok_ts
         st["stale"] = self._ok_ts is None or (now - self._ok_ts) > float(self.cfg.stale_s)
+        st["link_age_s"] = None if self._link_ts is None else now - self._link_ts
+        st["link_ok"] = (st["connected"] and self._link_ts is not None
+                         and (now - self._link_ts) <= float(self.cfg.stale_s))
         st["reset_seen"] = int(getattr(self.dev, "reset_seen", 0) or 0)   # 드라이버가 감지·L 확인·로그를 맡는다
         running, name = False, ""
         if self._process_info is not None:

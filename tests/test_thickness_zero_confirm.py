@@ -30,6 +30,15 @@ TARGET = 100.0
 
 
 # ═══════════════════════ ZeroConfirm(순수) ═══════════════════════
+def test_zero_confirm_xtal_fail_is_immediate():
+    """XTAL FAIL(통신 정상) — 5초 기다리지 않고 바로 '기준점 없음 — XTAL FAIL'."""
+    zc = ZeroConfirm(P, start_t=0.0, seq0=0, zero_ok=True)
+    r = zc.tick({"seq": 0, "thickness_nm": None, "crystal_ok": False, "link_ok": True, "stale": True}, 0.1)
+    assert r is not None and r.base is None and "XTAL FAIL" in r.log and "XTAL FAIL" in r.warning
+    zc = ZeroConfirm(P, start_t=0.0, seq0=0, zero_ok=True)                # 통신이 안 되면 기다린다
+    assert zc.tick({"seq": 0, "crystal_ok": False, "link_ok": False, "stale": True}, 0.1) is None
+
+
 def _confirm(values, *, zero_ok=True, dt=0.5, gap_after=None):
     """영점 뒤 dt 초마다 새 값. values 를 다 쓰면 마지막 값 반복(gap_after 면 그 뒤 새 값 없음). (결과, 시각)."""
     zc = ZeroConfirm(P, start_t=0.0, seq0=0, zero_ok=zero_ok)

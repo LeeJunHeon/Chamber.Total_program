@@ -100,6 +100,7 @@ class FakeSTM:
         self.freq = 5912345
         self.life = 12.4
         self.xtal = "@"
+        self.blank = None                   # 문자열이면 S·T·U·V 에 그 빈칸 본문으로 답한다(XTAL FAIL 흉내)
         self.density, self.z, self.tooling = 1.0, 1.0, 100.0
         self.echo = False
         self.reset_flag = False
@@ -131,6 +132,8 @@ class FakeSTM:
     def _answer(self, cmd: str) -> str:
         code = "B" if self.reset_flag else "A"
         e = (lambda t: t + " ") if self.echo else (lambda t: "")
+        if self.blank is not None and cmd in ("S", "T", "U", "V"):
+            return code + e(cmd) + self.blank
         if cmd == "S":
             return code + e("S") + f"{self.thk:+08d}"
         if cmd == "T":
@@ -251,6 +254,25 @@ def test_normal_reads_and_echo():
         finally:
             await _teardown(srv, dev)
     _run(go())
+
+
+@pytest.mark.parametrize("body", ["    . ", "-------", " ---.-", "", "   ", "T    . ", "T -----"])
+def test_blank_reply_is_value_unavailable_for_all_values(body):
+    """XTAL FAIL 중 빈칸 응답 — S/T/U/V/E?/F?/J? 공통으로 '값 없음'(형식 오류 아님)."""
+    from device.thickness_monitor import (parse_frequency_hz, parse_life_pct, parse_number, parse_rate_a_s,
+                                          parse_thickness_a)
+    for fn in (parse_thickness_a, parse_rate_a_s, parse_frequency_hz, parse_life_pct,
+               lambda b: parse_number(b, "E"), lambda b: parse_number(b, "J")):
+        with pytest.raises(ThicknessValueUnavailable):
+            fn(body.replace("T", "", 1) if fn is not parse_rate_a_s else body)
+
+
+def test_partly_blank_number_is_still_format_error():
+    from device.thickness_monitor import parse_rate_a_s, parse_thickness_a
+    for fn, body in ((parse_rate_a_s, "12 .4"), (parse_thickness_a, "+00 1234")):
+        with pytest.raises(ThicknessProtocolError) as ei:
+            fn(body)
+        assert not isinstance(ei.value, ThicknessValueUnavailable)
 
 
 def test_dashes_is_value_unavailable_not_comm_error():

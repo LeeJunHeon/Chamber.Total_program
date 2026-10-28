@@ -50,6 +50,13 @@ def _f(v) -> float:
         return 0.0
 
 
+def xtal_fail(st: dict) -> bool:
+    """크리스탈 FAIL 이 확인됨 — 통신은 정상(link_ok)인데 M 이 '!'. 값 없음(stale)이어도 본다.
+    link_ok 가 없는 상태 dict(이전 형식)는 'not stale' 로 대신한다."""
+    link = st.get("link_ok") if "link_ok" in st else not st.get("stale")
+    return st.get("crystal_ok") is False and bool(link)
+
+
 def thickness_mode_of(thickness: Any, supported: bool) -> bool:
     """Thickness 모드 판정 — thickness > 0 이고 그 채널이 두께 모니터를 쓴다(SUPPORTS_THICKNESS=true + 서비스 붙음).
     아니면 Time 모드(지금 그대로: thickness 가 있으면 process_time 역산 → 시간 종료).
@@ -93,6 +100,9 @@ class ZeroConfirm:
 
     def tick(self, st: dict, now: float) -> Optional[ZeroResult]:
         p = self.p
+        if xtal_fail(st):                    # 기다려도 값이 오지 않는다 — 바로 기준점 없음
+            w = "기준점 없음 — XTAL FAIL(크리스탈 이상), 시간으로 진행"
+            return ZeroResult(None, f"⚠ {w}", w)
         seq, s = st.get("seq"), st.get("thickness_nm")
         if seq is not None and seq != self._seq_last and s is not None:
             self._seq_last = seq
@@ -247,7 +257,7 @@ class ThicknessEndJudge:
         rs = int(st.get("reset_seen") or 0)
         if rs > self._reset0:
             return self._to_fallback(now, f"공정 중 두께 모니터 전원 리셋({rs - self._reset0}회)", permanent=True)
-        if st.get("crystal_ok") is False and not st.get("stale"):
+        if xtal_fail(st):
             return self._to_fallback(now, "XTAL FAIL(크리스탈 이상)", permanent=True)
 
         seq, s = st.get("seq"), st.get("thickness_nm")

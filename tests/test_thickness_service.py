@@ -17,9 +17,9 @@ with contextlib.suppress(Exception):
 
 import pytest                                                    # noqa: E402
 
-from controller.thickness_service import (MAX_FAIL_BEFORE_RECONNECT, MAX_UNAVAILABLE,  # noqa: E402
-                                          ThicknessService)
-from device.thickness_monitor import ThicknessTimeout, ThicknessValueUnavailable  # noqa: E402
+from controller.thickness_service import MAX_FAIL_BEFORE_RECONNECT, ThicknessService  # noqa: E402
+from device.thickness_monitor import (ThicknessChecksumError, ThicknessProtocolError, ThicknessTimeout,  # noqa: E402
+                                      ThicknessValueUnavailable)
 from lib.thickness_config import ThicknessConfig                 # noqa: E402
 from lib.thickness_logger import COLUMNS, ThicknessCsvLogger     # noqa: E402
 
@@ -38,6 +38,9 @@ class FakeDev:
         self.reset_seen = 0
         self.calls = []
         self.s_seq = []                     # read_thickness_a 결과(값 또는 예외) 차례
+        self.t_seq = []                     # read_rate_a_s 결과 차례
+        self.xtal = True                    # read_crystal_ok 결과
+        self.blank = False                  # True = XTAL FAIL 흉내(S·T·U·V 값 없음)
         self.thk = 1234.0
         self.rate = 12.3
         self.reconnects = 0
@@ -54,6 +57,8 @@ class FakeDev:
 
     async def read_thickness_a(self):
         self.calls.append("S")
+        if self.blank:
+            raise ThicknessValueUnavailable("S: 값 없음('    . ')")
         if self.s_seq:
             v = self.s_seq.pop(0)
             if isinstance(v, Exception):
@@ -63,19 +68,30 @@ class FakeDev:
 
     async def read_rate_a_s(self):
         self.calls.append("T")
+        if self.blank:
+            raise ThicknessValueUnavailable("T: 값 없음('    . ')")
+        if self.t_seq:
+            v = self.t_seq.pop(0)
+            if isinstance(v, Exception):
+                raise v
+            return v
         return self.rate
 
     async def read_frequency_hz(self):
         self.calls.append("U")
+        if self.blank:
+            raise ThicknessValueUnavailable("U: 값 없음")
         return 5900000
 
     async def read_crystal_life(self):
         self.calls.append("V")
+        if self.blank:
+            raise ThicknessValueUnavailable("V: 값 없음")
         return 12.4
 
     async def read_crystal_ok(self):
         self.calls.append("M")
-        return True
+        return self.xtal
 
     async def read_density(self):
         return 2.7
@@ -173,28 +189,82 @@ def test_stale_is_time_based_and_failures_do_not_disconnect():
         asyncio.run(go())
 
 
-def test_unavailable_counts_then_reconnect_policy():
+def test_value_unavailable_and_format_errors_never_reconnect():
+    """프레임은 정상인데 값이 없거나(XTAL FAIL 빈칸) 형식이 틀린 응답 — 재연결 사유가 아니다. link_ok 는 유지."""
     with tempfile.TemporaryDirectory() as tmp:
         async def go():
+            clk = Clock()
             dev = FakeDev()
-            svc, logs = _svc(tmp, dev)
-            dev.s_seq = [ThicknessValueUnavailable("--------")] * MAX_UNAVAILABLE
-            for _ in range(MAX_UNAVAILABLE):
+            svc, logs = _svc(tmp, dev, clk, stale_s=10.0)
+            await svc.poll_once()
+            dev.s_seq = [ThicknessValueUnavailable("S: 값 없음")] * 60
+            dev.t_seq = [ThicknessProtocolError("T: 증착률 형식 오류 '12 .4'")] * 60
+            for _ in range(60):
+                clk.t += 0.5
                 await svc.poll_once()
-            assert dev.reconnects == 0 and "값 없음" in svc.status()["last_error"]
-            await svc.poll_once()                                       # 정상 → 카운터 초기화
-            dev.s_seq = [ThicknessTimeout("x")] * (MAX_FAIL_BEFORE_RECONNECT - 1)
-            for _ in range(MAX_FAIL_BEFORE_RECONNECT - 1):
+            st = svc.status()
+            assert dev.reconnects == 0 and st["link_ok"] and st["stale"]         # 통신 정상 · 두께 값은 오래됨
+            assert "값 없음" in st["last_error"] or "형식 오류" in st["last_error"]
+            fmt_logs = [m for m in logs if "형식 오류" in m]
+            assert 1 <= len(fmt_logs) <= 1                                        # 같은 문구는 60초에 1번(30초 동안 1번)
+            assert not any("재연결" in m for m in logs)
+            svc.csv.close()
+        asyncio.run(go())
+
+
+@pytest.mark.parametrize("err", [ThicknessTimeout("응답 없음 'S' (3회)"), ThicknessChecksumError("체크섬 불일치")])
+def test_comm_and_frame_errors_reconnect_after_max(err):
+    """진짜 통신 실패(무응답·체크섬) — 지금처럼 MAX 회 연속이면 재연결. 중간에 정상 프레임(값 없음 포함)이 오면 다시 센다."""
+    with tempfile.TemporaryDirectory() as tmp:
+        async def go():
+            clk = Clock()
+            dev = FakeDev()
+            svc, logs = _svc(tmp, dev, clk, stale_s=10.0)
+            dev.s_seq = [err] * (MAX_FAIL_BEFORE_RECONNECT - 1) + [ThicknessValueUnavailable("-")] + \
+                [err] * (MAX_FAIL_BEFORE_RECONNECT - 1)
+            for _ in range(2 * MAX_FAIL_BEFORE_RECONNECT - 1):
                 await svc.poll_once()
             assert dev.reconnects == 0
-            dev.s_seq = [ThicknessTimeout("x")]
+            dev.is_connected = True
+            dev.s_seq = [err]
             await svc.poll_once()
             assert dev.reconnects == 1 and any("재연결" in m for m in logs)
-            # '값 없음' 이 MAX_UNAVAILABLE 을 넘으면 실패로 센다
-            dev.s_seq = [ThicknessValueUnavailable("-")] * (MAX_UNAVAILABLE + MAX_FAIL_BEFORE_RECONNECT)
-            for _ in range(MAX_UNAVAILABLE + MAX_FAIL_BEFORE_RECONNECT):
+            assert svc.status()["link_ok"]                                       # 조금 전까지 정상 프레임
+            clk.t += 11.0                                                        # 정상 프레임 없이 stale_s 지나면 꺼진다
+            dev.s_seq = [err]
+            dev.is_connected = False
+            await svc.poll_once()
+            assert not svc.status()["link_ok"]
+            svc.csv.close()
+        asyncio.run(go())
+
+
+def test_xtal_fail_blank_replies_keep_link_and_read_crystal_at_once():
+    """XTAL FAIL 흉내(S·T·U·V 빈칸, M='!') — 재연결 0회, link_ok, crystal_ok=False 를 곧바로(느린 폴링 주기 기다리지 않고)."""
+    with tempfile.TemporaryDirectory() as tmp:
+        async def go():
+            clk = Clock()
+            dev = FakeDev()
+            svc, logs = _svc(tmp, dev, clk, stale_s=10.0)
+            await svc.poll_once()                                                # 정상 — M 한 번 읽음
+            assert svc.status()["crystal_ok"] is True and dev.calls.count("M") == 1
+            dev.blank, dev.xtal = True, False
+            clk.t += 0.5
+            await svc.poll_once()                                                # 값이 막 없어짐 → 이번 폴링에서 M
+            st = svc.status()
+            assert dev.calls.count("M") == 2 and st["crystal_ok"] is False and st["link_ok"]
+            assert st["freq_hz"] is None and st["life_pct"] is None and st["rate_nm_s"] is None
+            for _ in range(40):                                                  # 20초 — 느린 폴링(U·V·M)은 계속
+                clk.t += 0.5
                 await svc.poll_once()
-            assert dev.reconnects == 2
+            st = svc.status()
+            assert dev.reconnects == 0 and st["link_ok"] and st["stale"] and st["crystal_ok"] is False
+            assert dev.calls.count("M") >= 5
+            dev.blank, dev.xtal = False, True                                    # 정상 복귀
+            clk.t += 5.0
+            await svc.poll_once()
+            st = svc.status()
+            assert not st["stale"] and st["crystal_ok"] is True and st["thickness_nm"] == pytest.approx(123.4)
             svc.csv.close()
         asyncio.run(go())
 
@@ -343,6 +413,53 @@ def test_end_to_end_with_fake_stm_server():
                 await srv.close()
             assert not dev.is_connected
         asyncio.run(asyncio.wait_for(go(), 20.0))
+
+
+def test_xtal_fail_with_fake_stm_server_no_reconnect_then_recover():
+    """실제 드라이버 + 가짜 STM: XTAL FAIL(S·T·U·V '    . '/'-------', M='!') → 재연결 0회, link_ok, crystal_ok=False.
+    정상 복귀(M='@', 숫자) → 값 표시. 진짜 무응답은 지금처럼 재연결."""
+    from tests.test_thickness_monitor import FakeSTM
+    from device.thickness_monitor import AsyncThicknessMonitor
+
+    with tempfile.TemporaryDirectory() as tmp:
+        async def go():
+            srv = FakeSTM()
+            await srv.start()
+            logs = []
+            dev = AsyncThicknessMonitor("127.0.0.1", srv.port, cmd_timeout_s=0.2, backoff_start_s=0.05,
+                                        backoff_max_s=0.2, settle_s=0.0, log=logs.append)
+            cfg = ThicknessConfig(enabled=True, ch=2, port=srv.port, poll_interval_s=0.1, slow_poll_s=0.3,
+                                  stale_s=1.0, log_dir=str(Path(tmp) / "logs"), factor_file=str(Path(tmp) / "f.json"))
+            svc = ThicknessService(cfg, log=lambda s, m: logs.append(m), device=dev)
+            svc.start()
+
+            async def until(pred, t=5.0):
+                for _ in range(int(t / 0.05)):
+                    if pred():
+                        return True
+                    await asyncio.sleep(0.05)
+                return False
+            try:
+                assert await until(lambda: svc.status()["seq"] >= 2 and svc.status()["crystal_ok"] is True)
+                for blank in ("    . ", "-------"):
+                    srv.blank, srv.xtal = blank, "!"
+                    assert await until(lambda: svc.status()["crystal_ok"] is False and svc.status()["stale"])
+                    await asyncio.sleep(1.5)                               # 실패가 쌓일 시간(예전엔 ~1초마다 재연결)
+                    st = svc.status()
+                    assert st["link_ok"] and st["connected"] and st["crystal_ok"] is False and srv.conns == 1
+                    assert st["freq_hz"] is None and st["rate_nm_s"] is None
+                    srv.blank, srv.xtal = None, "@"
+                    assert await until(lambda: not svc.status()["stale"] and svc.status()["crystal_ok"] is True)
+                assert srv.conns == 1 and not any("재연결" in m for m in logs)
+                assert svc.status()["thickness_nm"] == pytest.approx(123.4)
+                for c in ("S", "T", "U", "V", "M", "E?", "F?", "J?", "L"):            # 진짜 무응답(모든 명령) → 재연결
+                    srv.script[c] = __import__("collections").deque([("silent",)] * 40)
+                assert await until(lambda: srv.conns >= 2, t=10.0)
+                assert any("재연결" in m for m in logs)
+            finally:
+                await svc.shutdown(timeout=1.0)
+                await srv.close()
+        asyncio.run(asyncio.wait_for(go(), 30.0))
 
 
 def test_csv_only_while_process_recording():

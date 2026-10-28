@@ -88,6 +88,22 @@ def test_error_line_only_when_connected_without_response():
     assert p.error_label.text() == "" and p.lamps["conn"].text() == "끊김"   # 미연결은 램프로만
 
 
+def test_panel_xtal_fail_with_link_ok():
+    """XTAL FAIL(통신 정상, 값 없음) — XTAL 램프 빨강, 응답 램프 정상색, 'XTAL FAIL' 표시, 오류 줄 비움."""
+    p = _panel()
+    p.update_status(dict(_OK, stale=True, link_ok=True, crystal_ok=False, thickness_nm=None, rate_nm_s=None,
+                         last_error="16:42:26 값 없음 12회 연속"))
+    assert p.lamps["xtal"].text() == "XTAL FAIL" and "#c62828" in p.lamps["xtal"].styleSheet()
+    assert p.lamps["resp"].text() == "응답" and "#2e7d32" in p.lamps["resp"].styleSheet()
+    assert not p.xtal_tag.isHidden() and p.xtal_tag.text() == "XTAL FAIL"
+    assert p.error_label.text() == "" and p.thk_label.text() == "---" and p.rate_label.text() == "--- nm/s"
+    p.update_status(dict(_OK, link_ok=True))                                       # 정상 복귀
+    assert p.xtal_tag.isHidden() and p.lamps["xtal"].text() == "XTAL"
+    p.update_status(dict(_OK, stale=True, link_ok=False, link_age_s=7.0, crystal_ok=False))   # 통신 안 됨
+    assert p.xtal_tag.isHidden() and p.lamps["xtal"].text() == "XTAL" and p.lamps["resp"].text() == "응답 없음"
+    assert p.error_label.toolTip().startswith("응답 없음 7초")
+
+
 def test_zero_button_enable_rules_and_disabled_style():
     p = _panel()
     p.update_status(_OK)

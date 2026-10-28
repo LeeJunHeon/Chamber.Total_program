@@ -30,7 +30,7 @@ _ERR_BG, _ERR_FG = "#ffebee", "#c62828"
 _LAMPS = [
     ("conn", "연결", "MOXA TCP 연결"),
     ("xtal", "XTAL", "크리스탈 상태(M) — 빨강 = XTAL FAIL"),
-    ("resp", "응답", "최근 THICKNESS_STALE_S 안에 정상 두께(S) 응답"),
+    ("resp", "응답", "최근 THICKNESS_STALE_S 안에 장비 정상 응답(통신) — 값 유무와 무관"),
 ]
 
 
@@ -85,6 +85,13 @@ class ThicknessPanel(QFrame):
         self.lcd.setStyleSheet("QFrame#thickness_lcd {background: #f7f8fa; border: 1px solid #dfe3e8; border-radius: 6px;}")
         _small = "QLabel {border: none; background: transparent; color: #6b7280; font-size: 8pt;}"
         lab = QLabel("두께", self.lcd); lab.setGeometry(QRect(8, 8, 30, 14)); lab.setStyleSheet(_small)
+        self.xtal_tag = QLabel("XTAL FAIL", self.lcd)      # 통신 정상 + 크리스탈 FAIL 일 때만(두께·증착률 값 대신 빈칸 응답)
+        self.xtal_tag.setGeometry(QRect(8, 24, 62, 15))
+        self.xtal_tag.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.xtal_tag.setToolTip("크리스탈 이상(M='!') — 장비가 두께·증착률 대신 빈칸을 보냄. 크리스탈을 확인하십시오")
+        self.xtal_tag.setStyleSheet(f"QLabel {{border: 1px solid {_ERR_FG}; background: {_ERR_BG}; color: {_ERR_FG};"
+                                    " font-size: 7.5pt; font-weight: bold; border-radius: 3px;}")
+        self.xtal_tag.hide()
         self.thk_label = QLabel("---", self.lcd)
         self.thk_label.setGeometry(QRect(36, 2, 146, 34))
         self.thk_label.setAlignment(Qt.AlignmentFlag.AlignRight | Qt.AlignmentFlag.AlignVCenter)
@@ -169,6 +176,9 @@ class ThicknessPanel(QFrame):
         st = self._st
         stale = bool(st.get("stale"))
         conn = bool(st.get("connected"))
+        link = bool(st.get("link_ok")) if "link_ok" in st else (conn and not stale)   # 통신 정상(값 유무와 무관)
+        xo = st.get("crystal_ok")
+        xfail = link and xo is False
 
         val_col = "#9aa3ab" if stale else "#1f2937"
         self.thk_label.setText(_fmt(st.get("thickness_nm"), "{:.1f}"))
@@ -183,7 +193,9 @@ class ThicknessPanel(QFrame):
         for w in (self.freq_label, self.life_label):
             self._style(w, f"QLabel {{border: none; background: transparent; color: {sub_col}; font-size: 8.5pt;}}")
 
-        # 램프 — 연결은 소켓 상태, XTAL·응답은 stale 이면 회색(마지막으로 읽은 값)
+        self.xtal_tag.setVisible(xfail)
+
+        # 램프 — 연결은 소켓 상태, 응답은 통신(link_ok), XTAL 은 통신이 안 되면 회색(마지막으로 읽은 값)
         def _lamp(key: str, state: Optional[bool], text: Optional[str] = None) -> None:
             w = self.lamps[key]
             if text is not None:
@@ -192,15 +204,14 @@ class ThicknessPanel(QFrame):
             self._style(w, f"QLabel {{border: 1px solid {fg}; background: {bg}; color: {fg}; font-size: 8pt; border-radius: 3px;}}")
 
         _lamp("conn", conn, "연결" if conn else "끊김")
-        xo = st.get("crystal_ok")
-        if stale or xo is None:
+        if not link or xo is None:
             _lamp("xtal", None, "XTAL")
         else:
             _lamp("xtal", bool(xo), "XTAL" if xo else "XTAL FAIL")
-        if stale:
-            age = st.get("age_s")
+        if not link:
+            age = st.get("link_age_s", st.get("age_s"))
             _lamp("resp", None, "응답 없음")
-            self.lamps["resp"].setToolTip("최근 정상 두께 응답 없음" + (f" · {float(age):.0f}초 전 값" if age is not None else ""))
+            self.lamps["resp"].setToolTip("최근 장비 정상 응답 없음" + (f" · {float(age):.0f}초 전" if age is not None else ""))
         else:
             _lamp("resp", True, "응답")
             self.lamps["resp"].setToolTip(_LAMPS[2][2])
@@ -223,8 +234,8 @@ class ThicknessPanel(QFrame):
                                        + (", 재료는 마지막으로 적용한 재료" if name else ""))
 
         err = ""
-        if conn and stale:                              # 연결 상태는 램프로 — 이 줄은 연결된 채 응답이 없을 때만
-            age = st.get("age_s")
+        if conn and not link:                           # 연결 상태는 램프로 — 이 줄은 연결된 채 응답이 없을 때만
+            age = st.get("link_age_s", st.get("age_s"))
             err = "응답 없음" + (f" {float(age):.0f}초" if age is not None else "")
             last = str(st.get("last_error") or "")
             if last:

@@ -6612,11 +6612,15 @@ class ChamberRuntime:
         jp, _w = load_judge_params(self.cfg.mod)
         st = svc.status() if svc is not None else {}
         ok_ts = st.get("ok_ts")
-        if svc is None or not st.get("connected") or ok_ts is None or (svc.clock() - float(ok_ts)) > jp.ready_fresh_s:
-            age = "" if (svc is None or ok_ts is None) else f" (마지막 정상 값 {svc.clock() - float(ok_ts):.0f}초 전)"
+        fresh = ok_ts is not None and svc is not None and (svc.clock() - float(ok_ts)) <= jp.ready_fresh_s
+        link = st.get("link_ok") if "link_ok" in st else fresh     # 통신(정상 프레임) — 값 유무와 무관
+        age = "" if (svc is None or ok_ts is None) else f" (마지막 정상 값 {svc.clock() - float(ok_ts):.0f}초 전)"
+        if svc is None or not st.get("connected") or not link:
             return "E840", f"두께 모니터 응답 없음 — 연결·최근 {jp.ready_fresh_s:g}초 안 정상 두께 값이 필요합니다{age}"
         if st.get("crystal_ok") is False:
             return "E841", "두께 모니터 XTAL FAIL(크리스탈 이상) — 크리스탈을 확인하십시오"
+        if not fresh:
+            return "E840", f"두께 값 없음(통신은 정상) — 최근 {jp.ready_fresh_s:g}초 안 정상 두께 값이 필요합니다{age}"
         dep, thk = params.get("dep_rate"), params.get("thickness")
         try:
             dep_v, thk_v = float(dep or 0), float(thk or 0)

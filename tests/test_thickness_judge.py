@@ -182,6 +182,17 @@ def test_xtal_fail_or_reset_is_permanent(kw, word):
     assert f.j.mode == "fallback" and f.j.permanent
 
 
+def test_xtal_fail_seen_while_values_missing_if_link_ok():
+    """XTAL FAIL 이면 장비가 두께 대신 빈칸 — stale 이어도 통신(link_ok)이 되면 XTAL FAIL 영구 시간 대체."""
+    f = Feed(target=2.0)
+    f.new(0.0)
+    ev = f.same(stale=True, link_ok=True, crystal_ok=False)
+    assert ev.kind == "fallback" and ev.permanent and "XTAL" in ev.reason
+    g = Feed(target=2.0)                                # 통신이 안 되면 마지막 M 값은 믿지 않는다
+    g.new(0.0)
+    assert g.same(stale=True, link_ok=False, crystal_ok=False) is None and not g.j.permanent
+
+
 def test_stale_then_xtal_fail_becomes_permanent_without_new_event():
     f = Feed(target=2.0)
     f.new(0.0)
