@@ -101,6 +101,7 @@ class FakeSTM:
         self.life = 12.4
         self.xtal = "@"
         self.blank = None                   # 문자열이면 S·T·U·V 에 그 빈칸 본문으로 답한다(XTAL FAIL 흉내)
+        self.mute = False                   # True = TCP 는 받지만 어떤 명령에도 답하지 않음(장비 전원 끔·MOXA 켬)
         self.density, self.z, self.tooling = 1.0, 1.0, 100.0
         self.echo = False
         self.reset_flag = False
@@ -190,6 +191,8 @@ class FakeSTM:
                     if cmd is None:
                         break
                     self.rx.append(cmd)
+                    if self.mute:
+                        continue
                     q = self.script.get(cmd)
                     act = q.popleft() if q else None
                     if act and act[0] == "silent":

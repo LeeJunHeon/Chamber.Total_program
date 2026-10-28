@@ -15,6 +15,8 @@
   stale 은 정상 두께 값 기준(마지막 정상 S 뒤 THICKNESS_STALE_S 초과),
   link_ok 는 통신 기준(최근 THICKNESS_STALE_S 안에 정상 프레임 응답 — 값 유무와 무관).
   S 가 값 없음이 되면 M(크리스탈 상태)을 바로 읽는다(XTAL FAIL 을 곧바로 반영).
+  로그는 상태가 바뀔 때만: 처음으로 통신 실패가 쌓여 재연결하게 되면 '응답 없음' 1줄(이후 재연결·연결·끊김 줄은
+  드라이버 quiet 로 생략), 다시 정상 프레임을 받으면 '응답 복귀' 1줄. 재연결 동작·주기·백오프는 같다.
 리스너 예외는 잡아서 로그만(같은 문구는 60초에 1번) 남기고 폴링은 계속한다.
 
 status():
@@ -87,6 +89,7 @@ class ThicknessService:
         self._link_ts: Optional[float] = None    # 마지막 정상 프레임 응답(값 없음·형식 오류 포함)
         self._fail_n = 0
         self._unavail_n = 0
+        self._unresponsive = False            # 장비 무응답으로 본 상태(로그 1회·드라이버 quiet)
         self._was_connected = False
         self._next_slow = 0.0
         self._next_material = 0.0
@@ -368,6 +371,8 @@ class ThicknessService:
         """정상 프레임 응답을 받았다 — 통신은 된다(값 유무와 무관). 통신 실패 연속 횟수 초기화."""
         self._link_ts = self._now()
         self._fail_n = 0
+        if self._unresponsive:
+            self._set_unresponsive(False)
 
     def _on_unavailable(self, e: Exception) -> None:
         """S 값 없음 — 통신은 정상(재연결 사유 아님)."""
@@ -396,13 +401,25 @@ class ThicknessService:
         self._set_error(error_text(e))
         if self._fail_n >= MAX_FAIL_BEFORE_RECONNECT:
             self._fail_n = self._unavail_n = 0
-            self._log(f"⚠ 두께 모니터 연속 실패 {MAX_FAIL_BEFORE_RECONNECT}회 — 재연결: {e}")
+            if not self._unresponsive:       # 정상 → 무응답 1회만(반복되는 재연결 줄은 남기지 않는다)
+                self._set_unresponsive(True, e)
             try:
                 await self.dev.reconnect(f"연속 실패: {e}")
             except asyncio.CancelledError:
                 raise
             except Exception:
                 pass
+
+    def _set_unresponsive(self, on: bool, e: Optional[Exception] = None) -> None:
+        """무응답 상태 전환 — 로그 1줄, 무응답 동안 드라이버 연결·재연결·끊김 로그 생략."""
+        self._unresponsive = bool(on)
+        with contextlib.suppress(Exception):
+            self.dev.quiet = bool(on)
+        if on:
+            self._log("⚠ 두께 모니터 응답 없음 — 전원·케이블·MOXA 포트 확인 (재연결 계속 시도)"
+                      + (f" [{e}]" if e is not None else ""))
+        else:
+            self._log("두께 모니터 응답 복귀")
 
     # ═══════════════════════ 내부: 상태·발행 ═══════════════════════
     @staticmethod

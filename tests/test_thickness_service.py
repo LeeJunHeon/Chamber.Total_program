@@ -45,6 +45,8 @@ class FakeDev:
         self.rate = 12.3
         self.reconnects = 0
         self.started = False
+        self.log = None                     # 드라이버 로그 흉내(quiet 이면 생략)
+        self.dead = False                   # True = 모든 읽기가 응답 없음
 
     async def start(self):
         self.started = True
@@ -54,8 +56,12 @@ class FakeDev:
 
     async def reconnect(self, why=""):
         self.reconnects += 1
+        if self.log is not None and not getattr(self, "quiet", False):     # 드라이버 재연결 로그 흉내
+            self.log(f"두께 모니터 재연결: {why}")
 
     async def read_thickness_a(self):
+        if self.dead:
+            raise ThicknessTimeout("응답 없음")
         self.calls.append("S")
         if self.blank:
             raise ThicknessValueUnavailable("S: 값 없음('    . ')")
@@ -67,6 +73,8 @@ class FakeDev:
         return self.thk
 
     async def read_rate_a_s(self):
+        if self.dead:
+            raise ThicknessTimeout("응답 없음")
         self.calls.append("T")
         if self.blank:
             raise ThicknessValueUnavailable("T: 값 없음('    . ')")
@@ -78,28 +86,40 @@ class FakeDev:
         return self.rate
 
     async def read_frequency_hz(self):
+        if self.dead:
+            raise ThicknessTimeout("응답 없음")
         self.calls.append("U")
         if self.blank:
             raise ThicknessValueUnavailable("U: 값 없음")
         return 5900000
 
     async def read_crystal_life(self):
+        if self.dead:
+            raise ThicknessTimeout("응답 없음")
         self.calls.append("V")
         if self.blank:
             raise ThicknessValueUnavailable("V: 값 없음")
         return 12.4
 
     async def read_crystal_ok(self):
+        if self.dead:
+            raise ThicknessTimeout("응답 없음")
         self.calls.append("M")
         return self.xtal
 
     async def read_density(self):
+        if self.dead:
+            raise ThicknessTimeout("응답 없음")
         return 2.7
 
     async def read_z_factor(self):
+        if self.dead:
+            raise ThicknessTimeout("응답 없음")
         return 1.08
 
     async def read_tooling(self):
+        if self.dead:
+            raise ThicknessTimeout("응답 없음")
         return 100.0
 
     async def zero(self, mode="B"):
@@ -228,7 +248,7 @@ def test_comm_and_frame_errors_reconnect_after_max(err):
             dev.is_connected = True
             dev.s_seq = [err]
             await svc.poll_once()
-            assert dev.reconnects == 1 and any("재연결" in m for m in logs)
+            assert dev.reconnects == 1 and sum("응답 없음 — 전원" in m for m in logs) == 1
             assert svc.status()["link_ok"]                                       # 조금 전까지 정상 프레임
             clk.t += 11.0                                                        # 정상 프레임 없이 stale_s 지나면 꺼진다
             dev.s_seq = [err]
@@ -455,7 +475,77 @@ def test_xtal_fail_with_fake_stm_server_no_reconnect_then_recover():
                 for c in ("S", "T", "U", "V", "M", "E?", "F?", "J?", "L"):            # 진짜 무응답(모든 명령) → 재연결
                     srv.script[c] = __import__("collections").deque([("silent",)] * 40)
                 assert await until(lambda: srv.conns >= 2, t=10.0)
-                assert any("재연결" in m for m in logs)
+                assert sum("응답 없음 — 전원" in m for m in logs) == 1
+            finally:
+                await svc.shutdown(timeout=1.0)
+                await srv.close()
+        asyncio.run(asyncio.wait_for(go(), 30.0))
+
+
+def test_unresponsive_10min_logs_once_and_recovery_once():
+    """장비 무응답 10분(가상 시계) — 재연결은 지금처럼 계속(실패 6회마다), 로그는 '응답 없음' 1줄. 응답 시작 → '응답 복귀' 1줄."""
+    with tempfile.TemporaryDirectory() as tmp:
+        async def go():
+            clk = Clock()
+            dev = FakeDev()
+            svc, logs = _svc(tmp, dev, clk)
+            dev.log = logs.append
+            await svc.poll_once()                                       # 정상
+            n0 = len(logs)
+            dev.dead = True
+            polls = 1200                                                # 0.5초 × 1200 = 10분
+            for _ in range(polls):
+                clk.t += 0.5
+                await svc.poll_once()
+            new = logs[n0:]
+            assert [m for m in new if "응답 없음" in m] == new and len(new) == 1
+            assert new[0].startswith("⚠ 두께 모니터 응답 없음 — 전원·케이블·MOXA 포트 확인 (재연결 계속 시도)")
+            assert dev.reconnects >= polls // MAX_FAIL_BEFORE_RECONNECT // 2 and dev.quiet   # 재연결은 계속
+            assert not svc.status()["link_ok"]
+            dev.dead = False
+            clk.t += 0.5
+            await svc.poll_once()
+            clk.t += 0.5
+            await svc.poll_once()
+            assert logs[n0 + 1:] == ["두께 모니터 응답 복귀"] and not dev.quiet
+            assert svc.status()["link_ok"] and not svc.status()["stale"]
+            svc.csv.close()
+        asyncio.run(go())
+
+
+def test_unresponsive_with_fake_tcp_server_driver_logs_quiet():
+    """TCP 는 받지만 답이 없는 가짜 서버 + 실제 드라이버 — 재연결은 반복(conns 증가), '재연결'·'연결' 줄은 반복되지 않는다.
+    처음부터 무응답이면 첫 연결 1줄 + '응답 없음' 1줄. 응답 시작 → '응답 복귀' 1줄."""
+    from tests.test_thickness_monitor import FakeSTM
+    from device.thickness_monitor import AsyncThicknessMonitor
+
+    with tempfile.TemporaryDirectory() as tmp:
+        async def go():
+            srv = FakeSTM()
+            srv.mute = True
+            await srv.start()
+            logs = []
+            dev = AsyncThicknessMonitor("127.0.0.1", srv.port, cmd_timeout_s=0.1, retries=0, backoff_start_s=0.05,
+                                        backoff_max_s=0.1, settle_s=0.0, log=logs.append)
+            cfg = ThicknessConfig(enabled=True, ch=2, port=srv.port, poll_interval_s=0.25, slow_poll_s=0.25,
+                                  stale_s=2.0, log_dir=str(Path(tmp) / "logs"), factor_file=str(Path(tmp) / "f.json"))
+            svc = ThicknessService(cfg, log=lambda s, m: logs.append(m), device=dev)
+            svc.start()
+
+            async def until(pred, t=10.0):
+                for _ in range(int(t / 0.05)):
+                    if pred():
+                        return True
+                    await asyncio.sleep(0.05)
+                return False
+            try:
+                assert await until(lambda: srv.conns >= 4)                # 재연결은 계속된다
+                assert sum("응답 없음 — 전원" in m for m in logs) == 1
+                assert sum("두께 모니터 연결 " in m for m in logs) == 1   # 처음 연결 1줄만
+                assert len(logs) == 2, logs                                # 연결 1줄 + 응답 없음 1줄 — 그 밖의 반복 없음
+                srv.mute = False
+                assert await until(lambda: svc.status()["seq"] >= 2)
+                assert sum(m == "두께 모니터 응답 복귀" for m in logs) == 1
             finally:
                 await svc.shutdown(timeout=1.0)
                 await srv.close()

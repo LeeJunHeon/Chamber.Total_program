@@ -13,7 +13,8 @@ Sycon protocol(매뉴얼 5장):
   (ThicknessValueUnavailable). 본문이 공백·'-'·'.' 만이면 값 없음, 숫자 일부만 빈칸('12 .4')이면 형식 오류.
   N/O/P(릴레이 상태)는 매뉴얼 표와 상세 설명이 서로 달라 쓰지 않는다.
 
-연결: 워치독이 끊기면 지수 백오프로 다시 연결한다. 수신은 전용 태스크가 버퍼에 쌓고(EOF 를 바로 알아챈다),
+연결: 워치독이 끊기면 지수 백오프로 다시 연결한다. quiet=True(서비스가 '장비 무응답' 으로 본 동안)면
+연결·재연결·끊김 로그를 남기지 않는다(동작은 같음 — 몇 초마다 같은 줄이 쌓이지 않게). 수신은 전용 태스크가 버퍼에 쌓고(EOF 를 바로 알아챈다),
 명령은 잠금 하나로 한 번에 하나만(FIFO) 주고받는다. 링크 유지(MOXA 60초 무통신 끊김)는 서비스의 상시 폴링이 맡는다.
 
 예외 구분(서비스가 다르게 센다):
@@ -270,6 +271,7 @@ class AsyncThicknessMonitor:
         self._next_try = 0.0
         self._conn_fail_logged = False
         self._ever_connected = False
+        self.quiet = False                   # True 면 연결·재연결·끊김 로그 생략(서비스가 무응답 동안 켠다)
 
         self.reset_seen = 0                  # 전원 리셋 플래그를 새로 본 횟수(2단계: 공정 중 리셋 판정)
         self._reset_active = False
@@ -351,11 +353,12 @@ class AsyncThicknessMonitor:
         self._ever_connected = True
         self.last_rx_t = None
         self._rx_task = asyncio.get_running_loop().create_task(self._rx_loop(reader), name="ThicknessRx")
-        self._log(f"두께 모니터 연결 {self.host}:{self.port}")
+        if not self.quiet:
+            self._log(f"두께 모니터 연결 {self.host}:{self.port}")
 
     async def reconnect(self, why: str = "") -> None:
         """소켓을 닫는다 — 워치독이 백오프 뒤 다시 연결한다."""
-        if self._connected:
+        if self._connected and not self.quiet:
             self._log(f"두께 모니터 재연결: {why}" if why else "두께 모니터 재연결")
         await self._disconnect()
         self._next_try = self._now() + self._backoff
@@ -374,7 +377,8 @@ class AsyncThicknessMonitor:
         self._evt().set()                    # 기다리던 명령을 깨운다
         if was and self._want:
             self._next_try = self._now() + self._backoff
-            self._log("두께 모니터 연결 끊김 — 재연결 대기")
+            if not self.quiet:
+                self._log("두께 모니터 연결 끊김 — 재연결 대기")
 
     async def _disconnect(self) -> None:
         self._connected = False
