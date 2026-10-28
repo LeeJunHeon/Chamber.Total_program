@@ -2,7 +2,8 @@
 # -*- coding: utf-8 -*-
 """두께 모니터(STM-100) 채널별 상시 읽기 서비스 — asyncio 단일 루프, Qt 없음(HeaterService 패턴).
 
-프로그램이 켜져 있는 동안 공정 여부·레시피 사용 여부와 무관하게 항상 읽는다.
+프로그램이 켜져 있는 동안 공정 여부·레시피 사용 여부와 무관하게 항상 읽는다(패널 표시). 연속 기록 CSV 는 공정 중에만 —
+런타임이 공정 시작·종료 때 set_recording(on, 공정명) 으로 알린다(서비스는 런타임 상태를 읽지 않는다).
   S·T 는 THICKNESS_POLL_INTERVAL_S, U·V·M 은 THICKNESS_SLOW_POLL_S, 적용값 E?/F?/J? 는 연결 직후와 MATERIAL_READ_S 마다.
 명령 요청(zero, set_material)은 폴링과 같은 루프에서 순서대로 실행한다(요청이 들어오면 다음 폴링 전에 먼저).
 장비 Å → nm 변환은 여기 한 곳(_A_TO_NM)에서만 한다.
@@ -81,6 +82,8 @@ class ThicknessService:
         self._next_slow = 0.0
         self._next_material = 0.0
         self._csv_last = -1e9
+        self._recording = False              # 연속 기록 CSV — 공정 중에만(set_recording)
+        self._rec_name = ""
         self._throttle: Dict[str, float] = {}
         self._st: Dict[str, Any] = self._blank_status()
 
@@ -137,6 +140,22 @@ class ThicknessService:
     @property
     def clock(self) -> Callable[[], float]:
         return self._now
+
+    def set_recording(self, on: bool, process_name: str = "") -> None:
+        """공정 시작(on=True, 공정명)·종료(on=False) — 켜져 있는 동안만 연속 기록 CSV 에 1초 1행, 끄면 파일을 닫는다."""
+        if on:
+            self._rec_name = str(process_name or "")
+            self._csv_last = -1e9            # 시작 즉시 1행
+            self._recording = True
+            return
+        self._recording = False
+        self._rec_name = ""
+        with contextlib.suppress(Exception):
+            self.csv.close()
+
+    @property
+    def recording(self) -> bool:
+        return self._recording
 
     def reload_factors(self) -> List[str]:
         """Factor 파일을 다시 읽는다(설정창 저장 뒤). 경고 목록을 돌려준다."""
@@ -230,7 +249,7 @@ class ThicknessService:
                     pass
 
     async def poll_once(self) -> None:
-        """요청 실행 → (연결돼 있으면) S·T, 때가 되면 U·V·M·적용값 → 상태 갱신·발행·CSV."""
+        """요청 실행 → (연결돼 있으면) S·T, 때가 되면 U·V·M·적용값 → 상태 갱신·발행 → (공정 중이면) CSV."""
         await self._run_jobs()
         conn = bool(self.dev.is_connected)
         if conn and not self._was_connected:
@@ -249,9 +268,9 @@ class ThicknessService:
         self._refresh()
         self._publish()
         now = self._now()
-        if now - self._csv_last >= CSV_PERIOD_S:
+        if self._recording and now - self._csv_last >= CSV_PERIOD_S:
             self._csv_last = now
-            self.csv.write_row(self._st)
+            self.csv.write_row(dict(self._st, process_running=True, process_name=self._rec_name))
 
     async def _poll_fast(self) -> None:
         try:

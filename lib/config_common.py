@@ -521,17 +521,17 @@ THICKNESS_TCP_HOST = "192.168.1.50"     # MOXA IP
 THICKNESS_TCP_PORT = 0                  # 채널별 포트(0 = 미설정 — settings ch2 에서 지정)
 THICKNESS_POLL_INTERVAL_S = 0.5         # 두께(S)·증착률(T) 읽기 주기(초, 0.25~5)
 THICKNESS_SLOW_POLL_S = 5.0             # 주파수(U)·수명(V)·크리스탈 상태(M) 읽기 주기(초)
-THICKNESS_STALE_S = 10.0                # 마지막 정상 두께 뒤 이 시간을 넘으면 '응답 없음'(초)
+THICKNESS_STALE_S = 10.0                # 마지막 정상 두께 뒤 이 시간(초)을 넘으면 '응답 없음', Thickness 모드 공정 중이면 시간 대체
 THICKNESS_CMD_TIMEOUT_S = 1.0           # 명령 1회 응답 대기(초, 0.3~5). 응답이 없으면 2번 더 보낸다
-THICKNESS_LOG_DIR = r"C:\VanaM_Logs\CH1&2\Thickness"   # 연속 기록(그 아래 CH{n}\Thickness_YYYYMMDD.csv). G: 는 쓰지 않는다
+THICKNESS_LOG_DIR = r"C:\VanaM_Logs\CH1&2\Thickness"   # 연속 기록(그 아래 CH{n}\Thickness_YYYYMMDD.csv) — 공정 중에만 1초 1행. G: 는 쓰지 않는다
 THICKNESS_FACTOR_FILE = ""              # tooling·재료값 파일. 비우면 config/thickness_factors_ch{N}.json(exe 옆 config 폴더)
 # ── 공정 연동(2단계: Thickness 모드 = 레시피 thickness>0 + SUPPORTS_THICKNESS) — 판정 상수(lib/thickness_config.load_judge_params) ──
 THICKNESS_READY_FRESH_S = 5.0           # 시작 전: 최근 이 시간(초) 안에 정상 두께 값이 있어야 시작
 THICKNESS_LIFE_WARN_PCT = 10.0          # 시작 전: 크리스탈 수명(%)이 이보다 낮으면 경고만
-THICKNESS_MAX_TIME_RATIO = 2.0          # 최대 시간 상한 = max(예상 × 이 배수, 예상 + MARGIN). 예상 = thickness ÷ dep_rate
+THICKNESS_MAX_TIME_RATIO = 2.0          # 최대 시간 상한 = max(예상 × 이 배수, 예상 + MARGIN). 예상 = thickness ÷ dep_rate. 도달하면 공정 실패(E848)
 THICKNESS_MAX_TIME_MARGIN_S = 300.0     #   (초)
-THICKNESS_ZERO_CONFIRM_NM = 2.0         # 영점 확인: 영점 뒤 새 값 ≤ 이 값(nm, 음수 포함)을 한 번 보면 영점 반영 확인 → 기준점 0(영점 시각)
-THICKNESS_ZERO_CONFIRM_S = 5.0          #   이 시간(초) 안에 확인 안 되면 그때 값을 기준점으로(경고)
+THICKNESS_ZERO_CONFIRM_NM = 2.0         # 영점 확인(Shutter Delay 뒤·Main Shutter 열기 전 영점 B): 새 값 ≤ 이 값(nm, 음수 포함)을 한 번 보면 기준점 0
+THICKNESS_ZERO_CONFIRM_S = 5.0          #   이 시간(초) 안에 확인 안 되면 그때 값을 기준점으로(경고). 값이 하나도 없으면 기준점 없이 시간 대체
 THICKNESS_NEG_WARN_NM = 2.0             # 기록만: 유효두께가 −이 값(nm)보다 낮으면 '두께 음수' 경고
 THICKNESS_DONE_CONSECUTIVE = 1          # 유효두께(장비 두께 − 기준점) ≥ 목표 인 새 값이 연속 이만큼이면 종료(1 = 도달 즉시, 하나라도 미만이면 다시 셈)
 THICKNESS_JUMP_MIN_NM = 1.0             # 기록만: 증가량 > max(이 값 nm, 레시피 dep_rate × JUMP_RATE_K × Δt) 면 '큰 튐'(판정에 영향 없음)

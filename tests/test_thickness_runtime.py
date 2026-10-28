@@ -62,6 +62,7 @@ class FakeSvc:
         self.cfg = types.SimpleNamespace(factor_file="config/thickness_factors_ch2.json")
         self.mat_calls = []
         self.zero_calls = []
+        self.recording = []                 # set_recording 호출 기록
         self.mat_error = None
         self.listeners = []
 
@@ -70,6 +71,9 @@ class FakeSvc:
 
     def clock(self):
         return self.t
+
+    def set_recording(self, on, process_name=""):
+        self.recording.append((bool(on), process_name))
 
     def add_listener(self, cb):
         self.listeners.append(cb)
@@ -430,6 +434,22 @@ def test_end_card_shows_mode_and_final():
     c.notify_process_finished_detail(True, {"process_name": "b", "ch": 1})
     assert "종료 방식" not in c.cards[-1] and "최종 두께" not in c.cards[-1]
 
+
+@pytest.mark.parametrize("thk_mode", [False, True])
+def test_recording_follows_process_start_and_end(thk_mode):
+    """연속 기록 CSV — 런타임이 공정 시작 이벤트에 켜고(공정명) 종료 처리에서 끈다. Time·Thickness 모드 모두."""
+    async def go():
+        svc = FakeSvc()
+        rt, _pc, _rec = _rt(svc)
+        p = {"process_name": "Run A", "thickness_mode": thk_mode, "thickness": 100.0}
+        rt._thk_run_started(p)
+        assert svc.recording == [(True, "Run A")]
+        rt._thk_stop_recording()
+        assert svc.recording[-1] == (False, "")
+        rt2, _pc2, _ = _rt(None)                 # 두께 모니터 없음 — 아무것도 하지 않음
+        rt2._thk_run_started(p)
+        rt2._thk_stop_recording()
+    asyncio.run(go())
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))

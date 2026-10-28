@@ -1863,6 +1863,7 @@ class ChamberRuntime:
                         # - data_logger가 'ok=False면 return'인 현재 버전이면, 아래 인자를 ok로 두면 실패/stop이 기록되지 않습니다.
                         # - data_logger를 실패/stop도 기록하도록 수정한 뒤에는 ok를 그대로 넘겨도 됩니다.
                         self._thk_finalize_record()   # 두께 열(두께 모니터가 붙은 채널만)
+                        self._thk_stop_recording()    # 연속 기록 CSV 멈춤·파일 닫기(공정 중에만 기록)
                         self.data_logger.finalize_and_write_log(ok)
                         # CH2 히터: 메인 공정 구간 요약 한 줄(Calib CSV·엑셀 히터 열과 같은 값)
                         self._heater_log_summary()
@@ -6699,6 +6700,10 @@ class ChamberRuntime:
         if thk_mode and isinstance(getattr(self, "_thk_pre", None), dict):
             rec.update(self._thk_pre)
         self._thk_rec = rec
+        with contextlib.suppress(Exception):     # 연속 기록 CSV — 공정 중에만(Time·Thickness 모드 모두)
+            p = params or {}
+            self._thickness.set_recording(True, str(p.get("process_name") or p.get("Process_name")
+                                                    or p.get("process_note") or "").strip())
         self._thk_last_judge = None
         if thk_mode:
             self._thk_view_set("Thickness", f"{float(rec['target']):.1f} nm", 0.0, "공정 시작 — 메인 공정 대기")
@@ -6835,6 +6840,13 @@ class ChamberRuntime:
                                              + (f" · 큰 튐 {v.get('jumps')}회(기록만)" if v.get("jumps") else ""))
         except Exception as e:
             self.append_log("THICKNESS", f"⚠ 두께 기록 실패(무시): {e!r}")
+
+    def _thk_stop_recording(self) -> None:
+        svc = getattr(self, "_thickness", None)
+        if svc is None:
+            return
+        with contextlib.suppress(Exception):
+            svc.set_recording(False)
 
     def _thk_card_fields(self, payload: dict) -> None:
         if getattr(self, "_thickness", None) is None:

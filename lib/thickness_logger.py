@@ -1,6 +1,7 @@
 # lib/thickness_logger.py
 # -*- coding: utf-8 -*-
-"""두께 모니터 연속 기록 — 공정과 무관하게 THICKNESS_LOG_DIR\\CH{n}\\Thickness_YYYYMMDD.csv 에 1초 1행.
+"""두께 모니터 연속 기록 — 그 채널 공정 중에만(ThicknessService.set_recording) THICKNESS_LOG_DIR\\CH{n}\\Thickness_YYYYMMDD.csv 에 1초 1행.
+공정이 끝나면 파일을 닫고, 다음 공정에서 다시 연다(같은 날이면 같은 파일에 이어 씀).
 
 날짜가 바뀌면 새 파일. 같은 날 파일이 이미 있으면 이어 쓴다(머리글은 새 파일에만).
 로컬 디스크라 동기 쓰기(매 행 flush). 실패는 경고 1회 후 60초 뒤 다시 연다 — 폴링을 멈추게 하지 않는다.

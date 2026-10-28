@@ -510,17 +510,17 @@
     "PROCESS_PRESSURE_CONTROL_SP_INDEX": 3,             // 압력 제어 Set-Point 번호
 
     // ── 두께 모니터 (CH1) ── CH1 에는 두께 모니터가 없다
-    "SUPPORTS_THICKNESS": false,           // true 로 바꾸면 서비스만 켜진다(CH1 화면 패널 자리는 아직 없음)
+    "SUPPORTS_THICKNESS": false,           // true 로 바꾸면 상시 읽기 서비스와 공정 연동(Thickness 모드)이 켜진다(CH1 화면 패널 자리는 아직 없음)
     "THICKNESS_TCP_HOST": "192.168.1.50",  // MOXA IP
     "THICKNESS_TCP_PORT": 0,               // 0 = 미설정
     "THICKNESS_POLL_INTERVAL_S": 0.5,      // 두께·증착률 읽기 주기 (초, 0.25~5)
     "THICKNESS_SLOW_POLL_S": 5.0,          // 주파수·수명·크리스탈 상태 읽기 주기 (초)
-    "THICKNESS_STALE_S": 10.0,             // 마지막 정상 두께 뒤 이 시간을 넘으면 '응답 없음' (초)
+    "THICKNESS_STALE_S": 10.0,             // 마지막 정상 두께 뒤 이 시간(초)을 넘으면 '응답 없음', Thickness 모드 공정 중이면 시간 대체
     "THICKNESS_CMD_TIMEOUT_S": 1.0,        // 명령 1회 응답 대기 (초, 0.3~5)
-    "THICKNESS_LOG_DIR": "C:\\VanaM_Logs\\CH1&2\\Thickness",  // 연속 기록 폴더(그 아래 CH1\Thickness_YYYYMMDD.csv). G: 는 쓰지 않음
+    "THICKNESS_LOG_DIR": "C:\\VanaM_Logs\\CH1&2\\Thickness",  // 연속 기록 폴더(그 아래 CH1\Thickness_YYYYMMDD.csv) — 공정 중에만 1초 1행. G: 는 쓰지 않음
     "THICKNESS_FACTOR_FILE": "config/thickness_factors_ch1.json",  // tooling·재료값 파일 (exe 옆 config 폴더 기준)
-    "THICKNESS_ZERO_CONFIRM_NM": 2.0,      // 영점 확인: 영점 뒤 새 값 ≤ 이 값(nm, 음수 포함)을 한 번 보면 영점 반영 확인 → 기준점 0
-    "THICKNESS_ZERO_CONFIRM_S": 5.0,       //   이 시간(초) 안에 확인 안 되면 그때 값을 기준점으로(경고)
+    "THICKNESS_ZERO_CONFIRM_NM": 2.0,      // 영점 확인(Shutter Delay 뒤·Main Shutter 열기 전 영점 B): 새 값 ≤ 이 값(nm, 음수 포함)을 한 번 보면 기준점 0
+    "THICKNESS_ZERO_CONFIRM_S": 5.0,       //   이 시간(초) 안에 확인 안 되면 그때 값을 기준점으로(경고, 종료 카드). 값이 하나도 없으면 기준점 없이 시간 대체
     "THICKNESS_NEG_WARN_NM": 2.0,          // 기록만: 유효두께가 −이 값(nm)보다 낮으면 '두께 음수' 경고
     "THICKNESS_JUMP_MIN_NM": 1.0,          // 기록만: 증가량 > max(이 값 nm, 레시피 dep_rate × JUMP_RATE_K × Δt) 면 '큰 튐'(판정에 영향 없음)
     "THICKNESS_JUMP_RATE_K": 10.0,         //   (배수)
@@ -645,23 +645,23 @@
     "THICKNESS_TCP_PORT": 4008,            // ⚠ 임시값 — 4001~4007 사용 중이라 4008 로 둠. 실제 MOXA 포트 확인 후 고칠 것
     "THICKNESS_POLL_INTERVAL_S": 0.5,      // 두께(S)·증착률(T) 읽기 주기 (초, 0.25~5)
     "THICKNESS_SLOW_POLL_S": 5.0,          // 주파수(U)·수명(V)·크리스탈 상태(M) 읽기 주기 (초)
-    "THICKNESS_STALE_S": 10.0,             // 마지막 정상 두께 뒤 이 시간을 넘으면 '응답 없음' (초)
+    "THICKNESS_STALE_S": 10.0,             // 마지막 정상 두께 뒤 이 시간(초)을 넘으면 패널 '응답 없음', Thickness 모드 공정 중이면 시간 대체(값이 돌아오면 두께 판정으로 복귀)
     "THICKNESS_CMD_TIMEOUT_S": 1.0,        // 명령 1회 응답 대기 (초, 0.3~5). 응답이 없으면 2번 더 보냄
-    "THICKNESS_LOG_DIR": "C:\\VanaM_Logs\\CH1&2\\Thickness",  // 연속 기록 폴더(그 아래 CH2\Thickness_YYYYMMDD.csv, 1초 1행). G: 는 쓰지 않음
+    "THICKNESS_LOG_DIR": "C:\\VanaM_Logs\\CH1&2\\Thickness",  // 연속 기록 폴더(그 아래 CH2\Thickness_YYYYMMDD.csv) — 공정 중에만 1초 1행(Time·Thickness 모드 모두). G: 는 쓰지 않음
     "THICKNESS_FACTOR_FILE": "config/thickness_factors_ch2.json",  // tooling·재료값 파일 (exe 옆 config 폴더 기준, 화면 [Factor 설정]에서 수정)
-    // 공정 연동 — 레시피 thickness > 0 이면 Thickness 모드(목표 두께 도달 시 종료), 아니면 지금처럼 시간 종료
+    // 공정 연동 — 레시피 thickness > 0 이면 Thickness 모드(메인 셔터 열기 전 영점·확인 → 목표 두께 도달 즉시 종료), 아니면 지금처럼 시간 종료
     "THICKNESS_READY_FRESH_S": 5.0,        // 시작 전: 최근 이 시간(초) 안에 정상 두께 값이 있어야 시작 (아니면 E840)
-    "THICKNESS_LIFE_WARN_PCT": 10.0,       // 시작 전: 크리스탈 수명(%)이 이보다 낮으면 경고만
-    "THICKNESS_MAX_TIME_RATIO": 2.0,       // 최대 시간 상한 = max(예상 × 이 배수, 예상 + MARGIN) — 도달하면 '목표 미도달' 경고 후 정상 종료 절차
+    "THICKNESS_LIFE_WARN_PCT": 10.0,       // 시작 전: 크리스탈 수명(%)이 이보다 낮으면 경고만(종료 카드)
+    "THICKNESS_MAX_TIME_RATIO": 2.0,       // 최대 시간 상한 = max(예상 × 이 배수, 예상 + MARGIN), 예상 = thickness ÷ dep_rate — 도달하면 공정 실패(E848 두께 목표 미도달), 종료 절차 첫 단계 Main Shutter 닫기
     "THICKNESS_MAX_TIME_MARGIN_S": 300.0,  //   (초)
     // 종료 판정 상수(보통 고치지 않음)
-    "THICKNESS_ZERO_CONFIRM_NM": 2.0,      // 영점 확인: 영점 뒤 새 값 ≤ 이 값(nm, 음수 포함)을 한 번 보면 영점 반영 확인 → 기준점 0
-    "THICKNESS_ZERO_CONFIRM_S": 5.0,       //   이 시간(초) 안에 확인 안 되면 그때 값을 기준점으로(경고)
+    "THICKNESS_ZERO_CONFIRM_NM": 2.0,      // 영점 확인(Shutter Delay 뒤·Main Shutter 열기 전 영점 B): 새 값 ≤ 이 값(nm, 음수 포함)을 한 번 보면 기준점 0
+    "THICKNESS_ZERO_CONFIRM_S": 5.0,       //   이 시간(초) 안에 확인 안 되면 그때 값을 기준점으로(경고, 종료 카드). 값이 하나도 없으면 기준점 없이 시간 대체
     "THICKNESS_NEG_WARN_NM": 2.0,          // 기록만: 유효두께가 −이 값(nm)보다 낮으면 '두께 음수' 경고
     "THICKNESS_DONE_CONSECUTIVE": 1,       // 유효두께(장비 두께 − 기준점) ≥ 목표 인 새 값이 연속 이만큼이면 종료(1 = 도달 즉시)
     "THICKNESS_JUMP_MIN_NM": 1.0,          // 기록만: 증가량 > max(이 값 nm, 레시피 dep_rate × JUMP_RATE_K × Δt) 면 '큰 튐'(판정에 영향 없음)
     "THICKNESS_JUMP_RATE_K": 10.0,         //   (배수)
-    "THICKNESS_MEASURED_RATE_MIN_S": 30.0, // 시간 대체 증착률: 측정이 이 시간(초) 이상이면 실측 평균, 아니면 레시피 dep_rate
+    "THICKNESS_MEASURED_RATE_MIN_S": 30.0, // 시간 대체 증착률: 셔터 연 뒤 측정이 이 시간(초) 이상이면 실측 평균, 아니면 레시피 dep_rate
     "THICKNESS_RATE_ZERO_WARN_S": 60.0,    // 두께가 이 시간(초) 동안 늘지 않으면 경고(기록만)
     "THICKNESS_RATE_SPIKE_K": 5.0,         // 장비 증착률 > 레시피 dep_rate × 배수면 경고(기록만)
 

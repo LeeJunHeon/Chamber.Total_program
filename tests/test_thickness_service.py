@@ -262,6 +262,7 @@ def test_csv_one_row_per_second_and_day_rollover():
         async def go():
             clk = Clock()
             svc, _ = _svc(tmp, clock=clk)
+            svc.set_recording(True, "Run A")                             # 공정 중에만 기록
             for _ in range(10):                                          # 0.5초 × 10 = 5초 → 5행
                 await svc.poll_once()
                 clk.t += 0.5
@@ -271,6 +272,7 @@ def test_csv_one_row_per_second_and_day_rollover():
             rows = list(csv.reader(open(files[0], encoding="utf-8-sig")))
             assert rows[0] == COLUMNS and len(rows) == 1 + 5
             assert rows[1][1] == "1" and rows[1][2] == "123.40" and rows[1][7] == "0"
+            assert rows[1][8] == "1" and rows[1][9] == "Run A"           # 공정중·공정명
         asyncio.run(go())
 
         lg = ThicknessCsvLogger(str(Path(tmp) / "roll"), 2)
@@ -342,6 +344,38 @@ def test_end_to_end_with_fake_stm_server():
             assert not dev.is_connected
         asyncio.run(asyncio.wait_for(go(), 20.0))
 
+
+def test_csv_only_while_process_recording():
+    """공정 없음 → 파일·행 없음(패널 갱신은 계속). 공정 시작 → 1초 1행, 종료 → 멈춤·파일 닫힘, 다음 공정 → 같은 날 같은 파일 이어쓰기."""
+    with tempfile.TemporaryDirectory() as tmp:
+        async def go():
+            clk = Clock()
+            svc, _ = _svc(tmp, clock=clk)
+            seen = []
+            svc.add_listener(seen.append)
+            d = Path(tmp) / "logs" / "CH2"
+
+            async def run(n):
+                for _ in range(n):
+                    await svc.poll_once()
+                    clk.t += 0.5
+            await run(6)
+            assert not svc.recording and len(seen) == 6 and not d.exists()       # 공정 없음 — 파일 없음, 패널은 갱신
+            svc.set_recording(True, "Run A")
+            await run(6)                                                          # 3초 → 3행
+            assert svc.csv.is_open()
+            svc.set_recording(False)
+            assert not svc.recording and not svc.csv.is_open()                   # 종료 — 파일 닫힘
+            await run(6)
+            svc.set_recording(True, "Run B (Time 모드)")
+            await run(4)                                                          # 2초 → 2행
+            svc.set_recording(False)
+            files = list(d.glob("Thickness_*.csv"))
+            assert len(files) == 1
+            rows = list(csv.reader(open(files[0], encoding="utf-8-sig")))
+            assert rows[0] == COLUMNS and [r[9] for r in rows[1:]] == ["Run A"] * 3 + ["Run B (Time 모드)"] * 2
+            assert len(seen) == 22
+        asyncio.run(go())
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
