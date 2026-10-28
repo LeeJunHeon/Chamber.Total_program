@@ -122,6 +122,17 @@ def test_description_sheet_lists_every_column(wb):
     assert listed == cols
 
 
+def test_freeze_panes_keep_horizontal_scroll(wb):
+    """Recipe 시트 틀 고정 = C2(1행 + #·Process_name). 고정 열이 많으면(예: AE2 = 30열) 화면보다 넓어 좌우 스크롤이 안 된다."""
+    ws = wb["Recipe"]
+    assert ws.freeze_panes == "C2"
+    pane = ws.sheet_view.pane
+    assert pane.state == "frozen" and (pane.xSplit or 0) <= 2 and pane.ySplit == 1
+    panes = [s.pane for s in ws.sheet_view.selection]
+    assert len(panes) == len(set(panes)), panes                      # 같은 pane 의 selection 이 겹쳐 쌓이지 않게
+    assert ws.max_column == 45 and all(ws.cell(1, c).comment is not None for c in range(1, 46))
+
+
 def test_comment_boxes_not_shrunk():
     """머리글 메모 상자가 openpyxl 기본 크기(144×79)로 줄지 않았는지 — 줄면 설명 글이 잘린다.
     openpyxl 은 기존 메모 상자 크기를 읽지 못해 다시 저장하면 기본값으로 바꾸므로, 템플릿을 고치는 스크립트가 크기를 다시 넣어야 한다."""
