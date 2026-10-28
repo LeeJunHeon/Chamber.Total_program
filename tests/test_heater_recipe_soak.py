@@ -317,6 +317,14 @@ def test_waiter_hold_counts_time_and_ignores_arrival_timeout():
 
 
 # ───────────────────────── 템플릿 ─────────────────────────
+def _tpl_cols(ws):
+    """머리글 이름 → 열 번호, 데이터 마지막 행(# 열 입력 제한 범위)."""
+    cols = {ws.cell(1, c).value: c for c in range(1, ws.max_column + 1)}
+    last = max(int(str(dv.sqref).split(":")[1][1:]) for dv in ws.data_validations.dataValidation
+               if str(dv.sqref).startswith("A2:"))
+    return cols, last
+
+
 def test_template_has_soak_column_and_current_heater_values():
     with open(CSV_PATH, encoding="utf-8-sig", newline="") as fp:
         rows = list(csv.reader(fp))
@@ -324,20 +332,28 @@ def test_template_has_soak_column_and_current_heater_values():
 
     wb = load_workbook(XLSX_PATH)
     ws, desc = wb["Recipe"], wb["설명"]
-    assert ws["AO1"].value == "heater_soak" and ws["AO1"].comment.text.startswith("단위: min\n")
-    for r in (1, 2, 61):                                                        # 서식은 옆 열(heater_ramp)과 같게
-        assert tuple(ws.cell(r, 41)._style) == tuple(ws.cell(r, 40)._style)
+    cols, last = _tpl_cols(ws)
+    c_soak, c_ramp = cols["heater_soak"], cols["heater_ramp"]
+    assert c_soak == ws.max_column and ws.cell(1, c_soak).comment.text.startswith("단위: min\n")
+    for r in (1, 2, last):                                                      # 서식은 옆 열(heater_ramp)과 같게
+        assert tuple(ws.cell(r, c_soak)._style) == tuple(ws.cell(r, c_ramp)._style)
     dvs = {str(dv.sqref): dv for dv in ws.data_validations.dataValidation}
-    dv = dvs["AO2:AO61"]
+
+    def _dv(name):
+        L = ws.cell(1, cols[name]).column_letter
+        return dvs[f"{L}2:{L}{last}"]
+    dv = _dv("heater_soak")
     assert (dv.type, dv.formula1, float(dv.formula2)) == ("decimal", "0", cr.HEATER_SOAK_MAX_MIN)
     assert dv.promptTitle == "heater_soak [min]"
-    assert [desc.cell(45, c).value for c in (1, 2)] == ["heater_soak", "min"]
+    drow = {desc.cell(r, 1).value: r for r in range(5, desc.max_row + 1)}
+    assert [desc.cell(drow["heater_soak"], c).value for c in (1, 2)] == ["heater_soak", "min"]
 
     # 설명 문구가 코드·설정 기본값과 맞는지(예전: 목표 1~500, 램프 기본 12, '60초 머물면 준비 완료')
     lim = min(cfgc.HEATER_MAX_TEMP, cfgc.HEATER_SV_LIMIT_C)
-    assert float(dvs["AM2:AM61"].formula2) == lim and f"1~{lim:g}" in dvs["AM2:AM61"].prompt
-    assert f"HEATER_RAMP_RATE_C_PER_MIN, {cfgc.HEATER_RAMP_RATE_C_PER_MIN:g})" in dvs["AN2:AN61"].prompt
-    assert f"±{cfgc.HEATER_SOAK_TOLERANCE:g}°C 안에 {cfgc.HEATER_SOAK_TIME_SEC:g}초 머물면 도달" in desc["D43"].value
+    assert float(_dv("heater_temp").formula2) == lim and f"1~{lim:g}" in _dv("heater_temp").prompt
+    assert f"HEATER_RAMP_RATE_C_PER_MIN, {cfgc.HEATER_RAMP_RATE_C_PER_MIN:g})" in _dv("heater_ramp").prompt
+    assert (f"±{cfgc.HEATER_SOAK_TOLERANCE:g}°C 안에 {cfgc.HEATER_SOAK_TIME_SEC:g}초 머물면 도달"
+            in desc.cell(drow["heater_temp"], 4).value)
     assert "다시 세지 않음" in dv.prompt
     texts = [ws.cell(1, c).comment.text for c in range(1, ws.max_column + 1)]
     texts += [str(d.prompt) for d in dvs.values()] + [str(d.error) for d in dvs.values()]
@@ -347,7 +363,7 @@ def test_template_has_soak_column_and_current_heater_values():
 
 
 def test_template_rows_load_and_normalize():
-    """엑셀 템플릿을 로더처럼 읽어(첫 시트, 1행 머리글) 전수 검증·정규화 — heater_soak 열이 있어도 그대로 통과."""
+    """엑셀 템플릿을 로더처럼 읽어(첫 시트, 1행 머리글) 전수 검증·정규화 — 히터 열 값이 정규화 결과와 같다(예시 행은 사용자가 고칠 수 있음)."""
     async def go():
         rt, _pc, _rec = _rt()
         wb = load_workbook(XLSX_PATH, read_only=True, data_only=True)
@@ -361,10 +377,16 @@ def test_template_rows_load_and_normalize():
                     rows.append(row)
         finally:
             wb.close()
-        assert "heater_soak" in head and len(rows) == 2
+        assert "heater_soak" in head and rows
         assert rt._validate_raw_rows(rows) == []
-        n = rt._normalize_params_for_process(rows[1])
-        assert n["use_heater"] is False and n["heater_soak"] is None
+        for row in rows:
+            if cr.eta_delay_seconds(row) > 0:
+                continue
+            n = rt._normalize_params_for_process(row)
+            on = row.get("use_heater", "").upper() in ("T", "TRUE", "1")
+            assert n["use_heater"] is on
+            want = float(row["heater_soak"]) if (on and row.get("heater_soak")) else None
+            assert n["heater_soak"] == want
     asyncio.run(go())
 
 

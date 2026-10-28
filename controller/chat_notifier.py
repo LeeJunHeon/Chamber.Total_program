@@ -493,6 +493,14 @@ class ChatNotifier(QObject):
             "Shutter Delay": sh_delay,
             "Process Time": proc_time,
         }
+        # 두께 모니터 Thickness 모드 — 메인 공정은 목표 두께 도달 시 종료(Time 모드 카드는 그대로)
+        if p.get("thickness_mode"):
+            with contextlib.suppress(Exception):
+                def _m(sec):
+                    return "—" if sec in (None, "") else f"{float(sec) / 60.0:.1f}분"
+                fields["Process Time"] = (f"목표 두께 {float(p.get('thickness')):g} nm "
+                                          f"(예상 {_m(p.get('thickness_expected_s'))}, 상한 {_m(p.get('thickness_limit_s'))})")
+                fields["종료 방식"] = "Thickness"
         if ch_txt:
             # 맨 위에 Chamber를 보이게 하고 싶으면 이렇게 앞에 넣어도 됨
             fields = {"Chamber": ch_txt, **fields}
@@ -585,6 +593,8 @@ class ChatNotifier(QObject):
             fields.setdefault("종료 방식", str(merged.get("thickness_end")))
         if merged.get("thickness_final"):
             fields.setdefault("최종 두께", str(merged.get("thickness_final")))
+        if merged.get("thickness_excluded"):
+            fields.setdefault("계단 튐 제외", str(merged.get("thickness_excluded")))
 
         warns: List[str] = list(merged.get("warnings") or [])
         if warns:

@@ -57,7 +57,9 @@ class ThicknessJudgeParams:
     step_rate_k: float = 4.0             # 계단 튐: 증가량 > max(기준 증착률 × k × Δt, step_min_nm)
     step_min_nm: float = 0.3
     ref_rate_n: int = 15                 # 기준 증착률 = 최근 정상 증가율 n 개의 중앙값(5개 미만이면 레시피 dep_rate)
-    step_normal_n: int = 3               # 의심 뒤 정상 증가가 이만큼 이어지면 의심 해제
+    step_normal_n: int = 3               # 의심 뒤 정상 증가가 이만큼 이어지면 한 번 튄 측정 오류 → 초과분 제외
+    step_elev_s: float = 6.0             # 의심 뒤 한계 초과 증가가 이만큼(초) 쌓이면 계단 튐이 아니라 증착률 변화
+    step_exclude_warn_frac: float = 0.05 # 계단 튐 제외 합계가 목표 × 이 비율을 넘으면 경고·구글챗 1회
     measured_rate_min_s: float = 30.0    # 시간 대체 증착률: 측정이 이만큼 이상이면 실측 평균, 아니면 레시피 dep_rate
     rate_zero_warn_s: float = 60.0       # 두께가 이만큼 늘지 않으면 경고(기록만)
     rate_spike_k: float = 5.0            # 장비 증착률 > 레시피 dep_rate × k 이면 경고(기록만)
@@ -97,6 +99,8 @@ def load_judge_params(cfg_module: Any) -> Tuple[ThicknessJudgeParams, List[str]]
         step_min_nm=_num("THICKNESS_STEP_MIN_NM", d.step_min_nm, 0.01, 50.0),
         ref_rate_n=int(_num("THICKNESS_REF_RATE_N", d.ref_rate_n, 5, 200)),
         step_normal_n=int(_num("THICKNESS_STEP_NORMAL_N", d.step_normal_n, 1, 20)),
+        step_elev_s=_num("THICKNESS_STEP_ELEV_S", d.step_elev_s, 1.0, 120.0),
+        step_exclude_warn_frac=_num("THICKNESS_STEP_EXCLUDE_WARN_FRAC", d.step_exclude_warn_frac, 0.0, 1.0),
         measured_rate_min_s=_num("THICKNESS_MEASURED_RATE_MIN_S", d.measured_rate_min_s, 5.0, 3600.0),
         rate_zero_warn_s=_num("THICKNESS_RATE_ZERO_WARN_S", d.rate_zero_warn_s, 5.0, 3600.0),
         rate_spike_k=_num("THICKNESS_RATE_SPIKE_K", d.rate_spike_k, 1.5, 100.0),

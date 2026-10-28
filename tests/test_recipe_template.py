@@ -1,6 +1,8 @@
 # -*- coding: utf-8 -*-
 """레시피 템플릿(recipes/Recipe_Template.csv·.xlsx) — 두 파일의 열이 같고, 엑셀 입력 제한·설명 시트가 열과 맞는지,
-머리글 메모 상자가 줄지 않았는지. 열을 하나 추가할 때 한쪽만 고치는 실수를 막는다."""
+머리글 메모 상자가 줄지 않았는지. 열을 하나 추가할 때 한쪽만 고치는 실수를 막는다.
+열은 머리글 이름으로, 데이터 범위는 # 열 입력 제한의 마지막 행으로 찾는다(예시 행을 사용자가 지우거나 늘려도 그대로 동작)."""
+import asyncio
 import os
 import sys
 import csv
@@ -8,6 +10,7 @@ import zipfile
 
 _ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, _ROOT)
+os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
 import pytest                                                     # noqa: E402
 from openpyxl import load_workbook                                # noqa: E402
@@ -16,9 +19,9 @@ CSV_PATH = os.path.join(_ROOT, "recipes", "Recipe_Template.csv")
 XLSX_PATH = os.path.join(_ROOT, "recipes", "Recipe_Template.xlsx")
 
 
-def _csv_header():
+def _csv_rows():
     with open(CSV_PATH, encoding="utf-8-sig", newline="") as fp:
-        return next(csv.reader(fp))
+        return list(csv.reader(fp))
 
 
 @pytest.fixture(scope="module")
@@ -30,29 +33,86 @@ def _dvs(ws):
     return {str(dv.sqref): dv for dv in ws.data_validations.dataValidation}
 
 
+def _cols(ws):
+    return {ws.cell(1, c).value: c for c in range(1, ws.max_column + 1)}
+
+
+def _last_row(ws):
+    return max(int(str(dv.sqref).split(":")[1][1:]) for dv in ws.data_validations.dataValidation
+               if str(dv.sqref).startswith("A2:"))
+
+
+def _dv(ws, name):
+    L = ws.cell(1, _cols(ws)[name]).column_letter
+    return _dvs(ws)[f"{L}2:{L}{_last_row(ws)}"]
+
+
 def test_csv_and_xlsx_columns_match(wb):
     ws = wb["Recipe"]
     xlsx = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
-    assert xlsx == _csv_header()
+    rows = _csv_rows()
+    assert xlsx == rows[0] and all(len(r) == len(rows[0]) for r in rows)
     assert xlsx[-4:] == ["use_heater", "heater_temp", "heater_ramp", "heater_soak"]
+    i = xlsx.index("process_time")
+    assert xlsx[i + 1:i + 3] == ["dep_rate", "thickness"]
+    j = xlsx.index("rf_pulse_duty_cycle")
+    assert xlsx[j + 1:j + 3] == ["power_change_time", "change_power_value"]
 
 
 def test_every_column_has_comment_and_validation(wb):
     ws = wb["Recipe"]
     dvs = _dvs(ws)
+    last = _last_row(ws)
+    assert last >= 60
     for c in range(1, ws.max_column + 1):
         col = ws.cell(1, c).column_letter
         assert ws.cell(1, c).comment is not None, ws.cell(1, c).value
-        assert f"{col}2:{col}61" in dvs, ws.cell(1, c).value
+        assert f"{col}2:{col}{last}" in dvs, ws.cell(1, c).value
 
 
 def test_heater_and_special_validations(wb):
-    dvs = _dvs(wb["Recipe"])
-    assert (dvs["AL2:AL61"].type, dvs["AL2:AL61"].formula1) == ("list", '"T,F"')
-    assert (dvs["AM2:AM61"].type, dvs["AM2:AM61"].formula1, dvs["AM2:AM61"].formula2) == ("decimal", "1", "900")
-    assert (dvs["AN2:AN61"].type, dvs["AN2:AN61"].formula1, dvs["AN2:AN61"].formula2) == ("decimal", "0.1", "60")
-    assert dvs["A2:A61"].type == "custom" and 'LOWER(A2)="test"' in dvs["A2:A61"].formula1    # TEST 행 허용
-    assert dvs["Z2:Z61"].formula1 == '"F"'                                                      # DC2 폐지
+    ws = wb["Recipe"]
+    assert (_dv(ws, "use_heater").type, _dv(ws, "use_heater").formula1) == ("list", '"T,F"')
+    t = _dv(ws, "heater_temp")
+    assert (t.type, t.formula1, t.formula2) == ("decimal", "1", "900")
+    r = _dv(ws, "heater_ramp")
+    assert (r.type, r.formula1, r.formula2) == ("decimal", "0.1", "60")
+    a = _dv(ws, "#")
+    assert a.type == "custom" and 'LOWER(A2)="test"' in a.formula1                              # TEST 행 허용
+    assert _dv(ws, "use_dc_power2").formula1 == '"F"'                                          # DC2 폐지
+    # 열을 끼워 넣어도 수식 입력 제한·조건부 서식이 자기 열을 가리키는지(Off Time·RF duty)
+    cols = _cols(ws)
+    off, freq = ws.cell(1, cols["dc_pulse_off_time"]).column_letter, ws.cell(1, cols["dc_pulse_freq"]).column_letter
+    assert f"UPPER({off}2)" in _dv(ws, "dc_pulse_off_time").formula1 and f"400/{freq}2" in _dv(ws, "dc_pulse_off_time").formula1
+    cf = {str(c.sqref): [f for rr in c.rules for f in rr.formula] for c in ws.conditional_formatting}
+    duty, rfq = ws.cell(1, cols["rf_pulse_duty_cycle"]).column_letter, ws.cell(1, cols["rf_pulse_freq"]).column_letter
+    assert any(f"1.6*{rfq}2" in f and f"ISNUMBER({duty}2)" in f for f in cf.get(f"{duty}2:{duty}{_last_row(ws)}", []))
+    assert any(f"UPPER({off}2)" in f for f in cf.get(f"{off}2:{off}{_last_row(ws)}", []))
+
+
+def test_thickness_and_power_change_columns(wb):
+    ws, desc = wb["Recipe"], wb["설명"]
+    cols = _cols(ws)
+    for name, unit in (("dep_rate", "nm/s"), ("thickness", "nm")):
+        d = _dv(ws, name)
+        assert (d.type, d.formula1) == ("decimal", "0") and d.promptTitle == f"{name} [{unit}]"
+        assert ws.cell(1, cols[name]).comment.text.startswith(f"단위: {unit}\n")
+    assert "Thickness 모드" in _dv(ws, "thickness").prompt and "Factor" in _dv(ws, "thickness").prompt
+    p = _dv(ws, "power_change_time")
+    assert p.type == "textLength" and "E844" in p.prompt and "'초'" in p.prompt
+    v = _dv(ws, "change_power_value")
+    assert (v.type, v.operator, v.formula1) == ("decimal", "greaterThan", "0")
+    last = _last_row(ws)
+    for name in ("dep_rate", "thickness", "power_change_time", "change_power_value"):
+        assert all(ws.cell(r, cols[name]).value is None for r in range(2, last + 1)), name   # 예시 행은 비움
+    drow = {desc.cell(r, 1).value: r for r in range(5, desc.max_row + 1)}
+    assert "Thickness 모드" in desc.cell(drow["thickness"], 3).value
+    assert "E844" in desc.cell(drow["power_change_time"], 3).value + str(desc.cell(drow["power_change_time"], 4).value)
+    # CSV 예시 행도 새 칸은 비어 있다(기존 예시 공정이 Thickness 모드로 바뀌지 않게)
+    rows = _csv_rows()
+    for name in ("dep_rate", "thickness", "power_change_time", "change_power_value"):
+        k = rows[0].index(name)
+        assert all(r[k] == "" for r in rows[1:]), name
 
 
 def test_description_sheet_lists_every_column(wb):
@@ -68,6 +128,33 @@ def test_comment_boxes_not_shrunk():
     with zipfile.ZipFile(XLSX_PATH) as z:
         vml = "".join(z.read(n).decode("utf-8", "replace") for n in z.namelist() if n.endswith(".vml"))
     assert vml and "width:144px;height:79px" not in vml
+
+
+def test_loader_reads_new_columns():
+    """템플릿 머리글 그대로 쓴 행 — 로더가 dep_rate·thickness·power_change_time·change_power_value 를 읽는다(이미 지원하는 이름)."""
+    from runtime.chamber_runtime import ChamberRuntime
+
+    async def go():
+        rt = ChamberRuntime.__new__(ChamberRuntime)
+        rt.ch = 2
+        rt.append_log = lambda *a: None
+        rt._get_text = lambda name: ""
+        rt.supports_rf_pulse = rt.supports_dc_pulse = rt.supports_dc_cont = rt.supports_rf_cont = True
+        rt.supports_dc_cont2 = False
+        head = _csv_rows()[0]
+        row = {h: "" for h in head}
+        row.update({"#": "1", "Process_name": "t", "base_pressure": "7e-6", "working_pressure": "5",
+                    "shutter_delay": "5", "dep_rate": "0.05", "thickness": "100", "gun1": "T", "Ar": "T",
+                    "Ar_flow": "20", "use_dc_pulse": "T", "dc_pulse_power": "80",
+                    "power_change_time": "2m", "change_power_value": "100"})
+        assert rt._validate_raw_rows([row]) == []
+        n = rt._normalize_params_for_process(row)
+        assert n["dep_rate"] == 0.05 and n["thickness"] == 100.0
+        assert n["process_time"] == pytest.approx(100 / 0.05 / 60)        # process_time 공란 → 역산(예상시간)
+        assert n["power_change_time"] == "2m" and n["change_power_value"] == "100"
+        bad = dict(row, change_power_value="")
+        assert rt._validate_raw_rows([bad])                                 # 두 칸은 함께 입력
+    asyncio.run(go())
 
 
 if __name__ == "__main__":

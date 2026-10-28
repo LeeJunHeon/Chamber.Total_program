@@ -11,14 +11,20 @@ ThicknessEndJudge.tick(status, now) → None | ThicknessEvent
   resume   : 통신이 돌아와(리셋 없음) 두께 판정으로 복귀 — 공정 단계가 시간 대체 타이머를 지운다.
 판정 규칙:
   - 영점 뒤 처음 받은 새 S 를 기준점으로(유효두께 = S − 기준점). 기준점 뒤 zero_late_window_s 안에 zero_late_drop_nm 이상
-    떨어지면 영점 지연 반영으로 보고 기준점 재설정. 기준점 뒤 step_skip_s 는 계단 튐 판정에서 뺀다.
+    떨어지면 영점 지연 반영으로 보고 기준점 재설정. 기준점 뒤 step_skip_s 는 계단 튐 판정에서 뺀다(기준 증착률 표본은 모은다).
   - status.seq 가 바뀐 값만 판정한다(같은 값 중복 금지).
   - 정상 종료: 유효두께 ≥ 목표 인 새 값이 done_consecutive 번 연속.
   - 계단 튐: 증가량 > max(기준 증착률 × step_rate_k × Δt, step_min_nm) 이면 의심(기준 = 최근 정상 증가율 ref_rate_n 개의 중앙값,
-    5개 미만이면 레시피 dep_rate). 의심 중에는 끝내지 않고, 정상 증가가 step_normal_n 번 이어지면 의심 해제 —
-    그때도 목표 이상이면 종료, 값이 다시 떨어지면 의심 취소하고 계속.
+    5개 미만이면 레시피 dep_rate — 의심 중에는 기준을 그 시작 값으로 고정). 의심 동안 한계 초과 증가의 초과분
+    (d − 기준×Δt)을 모은다. 의심 중에는 끝내지 않는다. 끝나는 방법은 셋(Evaporator stm_shadow 실제 로그 재생 규칙):
+      (a) 한계 초과 증가가 step_elev_s 이상 쌓임(값이 떨어지지 않고) → 실제 증착률 변화. 제외 없음, 기준 표본을 그 구간의
+          증가율로 다시 채움. 그 순간 목표 이상이면 바로 종료.
+      (b) 정상 증가 step_normal_n 번 → 한 번 튄 측정 오류. 모은 초과분을 유효두께에서 뺀다(기준점 += 초과분),
+          그 뒤 종료는 done_consecutive 규칙 그대로. 제외 합계가 목표 × step_exclude_warn_frac 를 넘으면 경고 1회.
+      (c) 값이 다시 떨어짐 → 의심 취소, 제외 없이 계속.
   - stale_s 동안 새 값이 없으면 시간 대체. 남은 시간 = (목표 − 마지막 정상 유효두께) ÷ 사용 증착률
-    (측정 measured_rate_min_s 이상이면 실측 평균, 아니면 레시피 dep_rate).
+    (측정 measured_rate_min_s 이상이면 실측 평균, 아니면 레시피 dep_rate). 기준점을 잡기 전에 끊겼다가 돌아오면
+    영점이 성공했으면 기준점 0(영점 시각), 아니면 기준을 알 수 없으므로 영구 시간 대체.
   - 증착률 0 지속·급등·두께 음수는 경고 기록만.
   - 판정 코드 예외는 삼키지 않고 곧바로 영구 시간 대체(traceback 은 event.detail).
 """
@@ -83,7 +89,7 @@ class ThicknessEvent:
 
 class ThicknessEndJudge:
     def __init__(self, target_nm: float, dep_rate_nm_s: float, p: ThicknessJudgeParams, *,
-                 start_t: float, seq0: int = 0, reset0: int = 0,
+                 start_t: float, seq0: int = 0, reset0: int = 0, zero_ok: bool = True,
                  log: Optional[Callable[[str], None]] = None):
         self.target = float(target_nm)
         self.dep_rate = float(dep_rate_nm_s)
@@ -91,6 +97,7 @@ class ThicknessEndJudge:
         self.t0 = float(start_t)
         self._seq_last = seq0
         self._reset0 = int(reset0 or 0)
+        self.zero_ok = bool(zero_ok)         # 공정 시작 영점(B) 성공 — 기준점 없는 복귀 때 기준 0 을 쓸 수 있는가
         self._log_cb = log
         self.events: List[str] = []          # 로그 문구(테스트·기록)
 
@@ -107,6 +114,9 @@ class ThicknessEndJudge:
         self.done_n = 0
         self.suspect: Optional[dict] = None
         self.suspect_count = 0
+        self.step_excluded_nm = 0.0          # (b) 로 뺀 계단 튐 합계
+        self._exclude_warned = False
+        self._notices: List[str] = []        # 구글챗으로 알릴 문구(런타임이 pop_notices 로 가져간다)
         self.eff = 0.0                       # 마지막 유효두께(의심 값 포함)
         self.good_eff = 0.0                  # 마지막 '정상' 유효두께(시간 대체 계산 기준)
         self.good_t: Optional[float] = None
@@ -122,6 +132,10 @@ class ThicknessEndJudge:
         except Exception as e:
             tb = traceback.format_exc()
             return self._to_fallback(now, f"판정 코드 예외({e!r})", permanent=True, detail=tb)
+
+    def pop_notices(self) -> List[str]:
+        out, self._notices = self._notices, []
+        return out
 
     def use_rate(self) -> Tuple[float, str]:
         """시간 대체 증착률 — (nm/s, '실측'|'레시피')."""
@@ -218,9 +232,16 @@ class ThicknessEndJudge:
         s = float(s)
 
         if self.mode == "fallback":          # 통신 복귀(리셋 없음) — 장비는 끊긴 동안에도 두께를 누적했다
-            self.mode = "thickness"
             if self.base is None:
-                self.base, self.base_t = s, now
+                # 영점 뒤 첫 값 전에 끊겼다 — 지금 값을 기준점으로 잡으면 끊긴 동안 쌓인 두께를 다시 센다
+                if not self.zero_ok:
+                    self.permanent = True
+                    self.fallback_reason = "영점 뒤 기준점을 잡지 못함(영점 실패 + 첫 값 전 통신 끊김)"
+                    self._log(f"시간 대체 유지 — 두께 판정으로 돌아가지 않음: {self.fallback_reason}")
+                    return None
+                self.base, self.base_t = 0.0, self.t0
+                self._log(f"기준점 없이 복귀 — 영점 성공이므로 기준점 0 nm(영점 시각), 읽은 값 {s:.2f} nm 를 유효두께로")
+            self.mode = "thickness"
             eff = s - self.base
             self.eff = eff
             self.prev_s, self.prev_t = s, now
@@ -263,38 +284,21 @@ class ThicknessEndJudge:
         self._warnings(st, eff, d, now)
 
         if self.suspect is not None:
-            sp = self.suspect
-            if d > thr:
-                sp["normal"] = 0
-                return None
-            if d < -thr:
-                self.suspect = None
-                self.done_n = 0
-                self._log(f"계단 튐 의심 취소 — 값이 다시 떨어짐({d:+.2f} nm, 유효 {eff:.1f} nm) → 계속 진행")
-                self._good(eff, now)
-                return None
-            sp["normal"] += 1
-            if d >= 0:
-                self.inc.append(d / dt)
-            if sp["normal"] < int(p.step_normal_n):
-                return None
-            self.suspect = None
-            self._good(eff, now)
-            if eff >= self.target - _EPS_NM:
-                self._log(f"계단 튐 뒤 정상 증가 {p.step_normal_n}회 — 여전히 목표 이상(유효 {eff:.1f} / {self.target:.1f} nm) → 종료")
-                return ThicknessEvent("done", reason="계단 튐 뒤 정상 증가 확인", eff_nm=eff)
-            self._log(f"계단 튐 의심 해제 — 정상 증가 {p.step_normal_n}회(유효 {eff:.1f} nm)")
-            return None
+            return self._suspect_step(eff, d, dt, now)
 
         if not in_skip and d > thr:
-            self.suspect = {"normal": 0, "s0": s - d, "t": now}
+            ref = self.ref_rate()
+            self.suspect = {"normal": 0, "ref": ref, "excess": d - ref * dt, "elev_s": dt, "rates": [d / dt],
+                            "t": now}
             self.suspect_count += 1
             self.done_n = 0
-            self._log(f"⚠ 계단 튐 의심 +{d:.2f} nm / {dt:.1f}초 (한계 {thr:.2f} nm = max(기준 {self.ref_rate():.4f} nm/s × "
+            self._log(f"⚠ 계단 튐 의심 +{d:.2f} nm / {dt:.1f}초 (한계 {thr:.2f} nm = max(기준 {ref:.4f} nm/s × "
                       f"{p.step_rate_k:g} × Δt, {p.step_min_nm:g} nm)) — 유효 {eff:.1f} nm, 끝내지 않고 확인")
             return None
 
-        if not in_skip and d >= 0:
+        if d >= 0:
+            # 기준 증착률 표본은 처음 step_skip_s 동안에도 모은다(튐 판정만 뺀다) — 실제가 레시피보다 훨씬 빠를 때
+            # 분해능(0.1 nm) 흔들림 한 번이 레시피 기준으로 '튐'이 되어 실제 증착이 제외되던 문제
             self.inc.append(d / dt)
         self._good(eff, now)
         if eff >= self.target - _EPS_NM:
@@ -304,6 +308,67 @@ class ThicknessEndJudge:
                 return ThicknessEvent("done", reason="목표 도달", eff_nm=eff)
         else:
             self.done_n = 0
+        return None
+
+    def _suspect_step(self, eff: float, d: float, dt: float, now: float) -> Optional[ThicknessEvent]:
+        """계단 튐 의심 중 새 값 — (a) 지속 = 증착률 변화 / (b) 정상 증가 n 회 = 측정 오류 제외 / (c) 다시 떨어짐 = 취소."""
+        p = self.p
+        sp = self.suspect
+        ref = float(sp["ref"])                                   # 의심 동안 기준 고정(경계 증착률에서 한계가 흔들리지 않게)
+        thr = max(ref * float(p.step_rate_k) * dt, float(p.step_min_nm))
+        if d < -thr:                                             # (c)
+            self.suspect = None
+            self.done_n = 0
+            self._log(f"계단 튐 의심 취소 — 값이 다시 떨어짐({d:+.2f} nm, 유효 {eff:.1f} nm) → 제외 없이 계속")
+            self._good(eff, now)
+            return None
+        if d >= 0:
+            sp["rates"].append(d / dt)
+        if d > thr:
+            sp["excess"] += d - ref * dt
+            sp["elev_s"] += dt
+            sp["normal"] = 0
+            if sp["elev_s"] < float(p.step_elev_s):
+                return None
+            # (a) 실제 증착률 변화 — 제외 없음, 기준 표본을 이 구간의 증가율로 다시 채운다
+            self.suspect = None
+            self.inc.clear()
+            self.inc.extend(sp["rates"][-self.inc.maxlen:])
+            self._good(eff, now)
+            self._log(f"증착률 변화로 판정(계단 튐 아님) — 한계 초과 {sp['elev_s']:.1f}초 지속, "
+                      f"새 기준 {self.ref_rate():.4f} nm/s, 유효 {eff:.1f} nm")
+            if eff >= self.target - _EPS_NM:
+                self._log(f"목표 도달 — 유효 {eff:.2f} / {self.target:.1f} nm (증착률 변화 확인 시점)")
+                return ThicknessEvent("done", reason="증착률 변화 확인 — 목표 이상", eff_nm=eff)
+            self.done_n = 0
+            return None
+        sp["normal"] += 1
+        if sp["normal"] < int(p.step_normal_n):
+            return None
+        # (b) 한 번 튄 측정 오류 — 모은 초과분을 뺀다(기준점 += 초과분)
+        self.suspect = None
+        ex = max(0.0, float(sp["excess"]))
+        if ex > 0:
+            self.base += ex
+            eff -= ex
+            self.eff = eff
+            self.step_excluded_nm += ex
+            self._log(f"계단 튐 제외 {ex:.2f} nm — 정상 증가 {p.step_normal_n}회 확인, 유효 {eff:.1f} / {self.target:.1f} nm "
+                      f"(제외 합계 {self.step_excluded_nm:.2f} nm)")
+            lim = self.target * float(p.step_exclude_warn_frac)
+            if not self._exclude_warned and self.step_excluded_nm > lim:
+                self._exclude_warned = True
+                msg = (f"계단 튐 제외 합계 {self.step_excluded_nm:.2f} nm — 목표 {self.target:g} nm 의 "
+                       f"{p.step_exclude_warn_frac * 100:g}% 초과, 확인 필요")
+                self._log(f"⚠ {msg}")
+                self._notices.append(msg)
+        else:
+            self._log(f"계단 튐 의심 해제 — 정상 증가 {p.step_normal_n}회(유효 {eff:.1f} nm, 제외 없음)")
+        self._good(eff, now)
+        self.done_n = 1 if eff >= self.target - _EPS_NM else 0
+        if self.done_n >= int(p.done_consecutive):
+            self._log(f"목표 도달 — 유효 {eff:.2f} / {self.target:.1f} nm")
+            return ThicknessEvent("done", reason="목표 도달", eff_nm=eff)
         return None
 
     def _warnings(self, st: dict, eff: float, d: float, now: float) -> None:

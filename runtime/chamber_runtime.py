@@ -58,7 +58,7 @@ from controller.runtime_state import runtime_state
 from controller.process_controller import ProcessController, eta_delay_seconds
 from controller.heater_process import HeaterSoakWaiter, HeaterHoldWaiter, heater_wait_timeout_s, itl_missing_text
 from controller.thickness_process import (END_FALLBACK, END_LIMIT, END_THICKNESS, END_TIME, ThicknessEndJudge,
-                                          thickness_mode_of)
+                                          expected_seconds, max_time_s, thickness_mode_of)
 from lib.thickness_config import load_judge_params
 from errors.app_error import CodedRuntimeError   # 호스트 START 레시피 파일 오류에 응답 코드(E207/E208/E209/E227)를 싣는다
 
@@ -1569,7 +1569,7 @@ class ChamberRuntime:
                 dep = float((pc.current_params or {}).get("dep_rate") or 0.0) or (float(target) / max(1.0, float(expected_s)))
                 jp, _w = load_judge_params(self.cfg.mod)
                 j = ThicknessEndJudge(float(target), dep, jp, start_t=svc.clock(), seq0=st.get("seq"),
-                                      reset0=int(st.get("reset_seen") or 0),
+                                      reset0=int(st.get("reset_seen") or 0), zero_ok=bool(ok),
                                       log=lambda m: self.append_log("THICKNESS", m))
                 self._thk_judge = j
                 self._thk_last_judge = j
@@ -4025,6 +4025,11 @@ class ChamberRuntime:
                 if _code:
                     await self._thickness_reject(params, _code, _msg)
                 params["thickness_mode"] = True
+                # 시작 카드용 예상·상한(초) — 컨트롤러의 THICKNESS_WAIT 와 같은 계산
+                with contextlib.suppress(Exception):
+                    _exp = expected_seconds(float(params["thickness"]), float(params["dep_rate"]))
+                    params["thickness_expected_s"] = _exp
+                    params["thickness_limit_s"] = max_time_s(_exp, load_judge_params(self.cfg.mod)[0])
 
             self._last_polling_targets = None
             self.append_log("MAIN", "장비 연결 확인 완료 → 공정 시작")
@@ -6674,6 +6679,8 @@ class ChamberRuntime:
             return
         try:
             ev = j.tick(st, svc.clock())
+            for _n in j.pop_notices():          # 계단 튐 제외 합계 경고 등(구글챗 1회)
+                self._thk_notify(_n)
             if ev is not None:
                 self._thk_apply_event(ev, j)
             if self._thk_judge is j or (ev is not None and ev.kind == "fallback"):
@@ -6754,6 +6761,7 @@ class ChamberRuntime:
             rec["final_nm"] = eff
             rec["avg_rate"] = j.avg_rate()
             rec["suspect"] = int(j.suspect_count)
+            rec["step_excluded"] = float(j.step_excluded_nm)
             rec["fallback_reason"] = j.fallback_reason
         eff_txt = "--" if eff is None else f"{eff:.1f}"
         if kind == END_LIMIT:
@@ -6798,7 +6806,9 @@ class ChamberRuntime:
                 self.append_log("THICKNESS", f"두께 요약 — 종료 방식 {v.get('end')} · 최종 {float(v['final_nm']):.2f} nm"
                                              + (f" / 목표 {float(v['target']):g} nm" if v.get("target") else "")
                                              + (f" · 평균 {float(ar):.4f} nm/s" if ar is not None else "")
-                                             + (f" · 계단 튐 의심 {v.get('suspect')}회" if v.get("suspect") else ""))
+                                             + (f" · 계단 튐 의심 {v.get('suspect')}회" if v.get("suspect") else "")
+                                             + (f" · 계단 튐 제외 {float(v['step_excluded']):.2f} nm"
+                                                if v.get("step_excluded") else ""))
         except Exception as e:
             self.append_log("THICKNESS", f"⚠ 두께 기록 실패(무시): {e!r}")
 
@@ -6812,6 +6822,8 @@ class ChamberRuntime:
             payload.setdefault("thickness_end", str(v.get("end") or ""))
             fin = "--" if v.get("final_nm") is None else f"{float(v['final_nm']):.1f}"
             payload.setdefault("thickness_final", f"{fin} / {float(v['target']):g} nm" if v.get("target") else f"{fin} nm")
+            if v.get("step_excluded"):
+                payload.setdefault("thickness_excluded", f"{float(v['step_excluded']):.2f} nm")
 
     # ============================= CH2 히터(2단계) =============================
     def attach_heater(self, svc) -> None:

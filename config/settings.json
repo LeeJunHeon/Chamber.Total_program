@@ -519,6 +519,8 @@
     "THICKNESS_CMD_TIMEOUT_S": 1.0,        // 명령 1회 응답 대기 (초, 0.3~5)
     "THICKNESS_LOG_DIR": "C:\\VanaM_Logs\\CH1&2\\Thickness",  // 연속 기록 폴더(그 아래 CH1\Thickness_YYYYMMDD.csv). G: 는 쓰지 않음
     "THICKNESS_FACTOR_FILE": "config/thickness_factors_ch1.json",  // tooling·재료값 파일 (exe 옆 config 폴더 기준)
+    "THICKNESS_STEP_ELEV_S": 6.0,          // 계단 튐 의심 뒤 한계 초과 증가가 이 시간(초) 쌓이면 증착률 변화로 판정(제외 없음)
+    "THICKNESS_STEP_EXCLUDE_WARN_FRAC": 0.05, // 계단 튐 제외 합계가 목표 × 이 비율을 넘으면 경고·구글챗 1회
 
     // ── 로봇 ETA (CH1 전용) ──
     "ETA_ENABLED": true,                   // ETA 기능 사용 여부 (CH1)
@@ -657,7 +659,9 @@
     "THICKNESS_STEP_RATE_K": 4.0,          // 계단 튐 의심: 증가량 > max(기준 증착률 × 배수 × Δt, STEP_MIN_NM)
     "THICKNESS_STEP_MIN_NM": 0.3,          //   (nm)
     "THICKNESS_REF_RATE_N": 15,            // 기준 증착률 = 최근 정상 증가율 이만큼의 중앙값
-    "THICKNESS_STEP_NORMAL_N": 3,          // 의심 뒤 정상 증가가 이만큼 이어지면 의심 해제
+    "THICKNESS_STEP_NORMAL_N": 3,          // 의심 뒤 정상 증가가 이만큼 이어지면 한 번 튄 측정 오류 → 초과분 제외
+    "THICKNESS_STEP_ELEV_S": 6.0,          // 의심 뒤 한계 초과 증가가 이 시간(초) 쌓이면 증착률 변화로 판정(제외 없음)
+    "THICKNESS_STEP_EXCLUDE_WARN_FRAC": 0.05, // 계단 튐 제외 합계가 목표 × 이 비율을 넘으면 경고·구글챗 1회
     "THICKNESS_MEASURED_RATE_MIN_S": 30.0, // 시간 대체 증착률: 측정이 이 시간(초) 이상이면 실측 평균, 아니면 레시피 dep_rate
     "THICKNESS_RATE_ZERO_WARN_S": 60.0,    // 두께가 이 시간(초) 동안 늘지 않으면 경고(기록만)
     "THICKNESS_RATE_SPIKE_K": 5.0,         // 장비 증착률 > 레시피 dep_rate × 배수면 경고(기록만)

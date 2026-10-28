@@ -39,6 +39,7 @@ _T = {
     "Plasma Cleaning" : ("2E4057", "4A6278", "BDC3C7"),
     "Main Process"    : ("2E4057", "4A6278", "BDC3C7"),  # ← 엑셀 포맷과 동일하게 변경
     "Heater"          : ("4E342E", "6D4C41", "D7CCC8"),  # CH2 히터(맨 뒤 그룹)
+    "Thickness"       : ("004D40", "00695C", "B2DFDB"),  # 두께 모니터(히터 그룹 다음, SUPPORTS_THICKNESS 채널만)
 }
 _WHITE    = "FFFFFF"
 _ROW_ODD  = "FFFFFF"
@@ -124,6 +125,21 @@ _COLS_HEATER: List[Tuple] = [
 ]
 _COLS_MAIN_CH2: List[Tuple] = _COLS_MAIN + _COLS_HEATER
 
+# ── 두께 모니터 열 (Main Process 시트 맨 뒤 — 히터 그룹 다음, SUPPORTS_THICKNESS=true 채널 파일에만) ──
+#   값은 DataLogger.thickness_record(공정 종료 때 런타임이 넣음). 열 번호로 쓰므로 반드시 맨 뒤에 붙인다.
+#   "Dep.rate"/"Thickness"(기본 정보)는 레시피 값, "Process Time" 은 실제 진행 시간 그대로.
+_COLS_THICKNESS: List[Tuple] = [
+    ("End Mode",       "",              9,  "Thickness",    "thk_end"),
+    ("Target",         "nm",            8,  "Thickness",    "thk_target"),
+    ("Final",          "nm",            8,  "Thickness",    "thk_final"),
+    ("Avg Rate",       "nm/s",          9,  "Thickness",    "thk_avg_rate"),
+    ("Tooling",        "%",             8,  "Thickness",    "thk_tooling"),
+    ("Density",        "g/cm3",         8,  "Thickness",    "thk_density"),
+    ("Z",              "",              7,  "Thickness",    "thk_z"),
+    ("Step Excluded",  "nm",            9,  "Thickness",    "thk_step_excluded"),
+    ("Fallback Reason", "",            18,  "Thickness",    "thk_fallback_reason"),
+]
+
 
 def _group_index(cols: List[Tuple]) -> Tuple[Dict[str, List[int]], set]:
     """열 정의 → (그룹별 열 번호, 그룹 시작 열 번호 집합)."""
@@ -141,11 +157,17 @@ _GRP_STARTS_MAIN = {cols[0] for cols in _GRP_COLS_MAIN.values()}
 _GRP_COLS_MAIN_CH2, _GRP_STARTS_MAIN_CH2 = _group_index(_COLS_MAIN_CH2)
 
 
-def _main_cols(ch: int) -> Tuple[List[Tuple], Dict[str, List[int]], set]:
-    """Main Process 시트 열 정의 — CH2 는 히터 열 포함, CH1 은 그대로."""
+def _main_cols(ch: int, thickness: bool = False) -> Tuple[List[Tuple], Dict[str, List[int]], set]:
+    """Main Process 시트 열 정의 — CH2 는 히터 열 포함, CH1 은 그대로. thickness(SUPPORTS_THICKNESS 채널)면 맨 뒤에 두께 열."""
     if int(ch) == 2:
-        return _COLS_MAIN_CH2, _GRP_COLS_MAIN_CH2, _GRP_STARTS_MAIN_CH2
-    return _COLS_MAIN, _GRP_COLS_MAIN, _GRP_STARTS_MAIN
+        base = (_COLS_MAIN_CH2, _GRP_COLS_MAIN_CH2, _GRP_STARTS_MAIN_CH2)
+    else:
+        base = (_COLS_MAIN, _GRP_COLS_MAIN, _GRP_STARTS_MAIN)
+    if not thickness:
+        return base
+    cols = base[0] + _COLS_THICKNESS
+    grp_cols, grp_starts = _group_index(cols)
+    return cols, grp_cols, grp_starts
 
 
 _GRP_COLS_PC: Dict[str, List[int]] = {}
@@ -599,6 +621,30 @@ def _build_data(
         """요약 값 반올림(없으면 None → 빈 칸)."""
         v = hs.get(key)
         return None if v is None else round(float(v), nd)
+    # 두께 모니터(공정 종료 때 런타임이 넣은 기록) — 두께 열이 없는 파일에는 쓰이지 않는다
+    tr: Dict[str, Any] = dict(getattr(dl, "thickness_record", None) or {})
+
+    def _t(key: str, nd: Optional[int]):
+        v = tr.get(key)
+        if v in (None, ""):
+            return None
+        if nd is None:
+            return str(v)
+        try:
+            return round(float(v), nd)
+        except Exception:
+            return None
+    base_data.update({
+        "thk_end"            : _t("end", None),
+        "thk_target"         : _t("target", 2),
+        "thk_final"          : _t("final_nm", 2),
+        "thk_avg_rate"       : _t("avg_rate", 4),
+        "thk_tooling"        : _t("tooling", 1),
+        "thk_density"        : _t("density", 3),
+        "thk_z"              : _t("z_factor", 3),
+        "thk_step_excluded"  : _t("step_excluded", 2),
+        "thk_fallback_reason": _t("fallback_reason", None),
+    })
     base_data.update({
         "heater_sv"      : _r("sv", 1),
         "heater_pv_avg"  : _r("pv_avg", 1),
@@ -820,7 +866,7 @@ async def save_process_log(
                 arc_thresh, refp_warn,
                 arc_alert_sent, webhook_url,
                 fb_dir,
-                "Main Process", *_main_cols(ch),
+                "Main Process", *_main_cols(ch, bool(getattr(data_logger, "_thk_cols", False))),
             ),
         )
         return sent

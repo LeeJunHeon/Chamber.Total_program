@@ -19,7 +19,7 @@ HEATER_COLUMNS: List[str] = ["Heater: SV", "Heater: PV Avg", "Heater: PV Min", "
 THICKNESS_COLUMNS: List[str] = [
     "Thickness: End Mode", "Thickness: Target nm", "Thickness: Final nm", "Thickness: Avg Rate nm/s",
     "Thickness: Tooling %", "Thickness: Density", "Thickness: Z", "Thickness: Chuck", "Thickness: Gun",
-    "Thickness: Step Suspect", "Thickness: Fallback Reason",
+    "Thickness: Step Suspect", "Thickness: Fallback Reason", "Thickness: Step Excluded nm",
 ]
 
 
@@ -626,6 +626,7 @@ class DataLogger(QObject):
                 "Thickness: Gun": str(tr.get("gun") or ""),
                 "Thickness: Step Suspect": str(int(tr["suspect"])) if tr.get("suspect") is not None else "",
                 "Thickness: Fallback Reason": str(tr.get("fallback_reason") or ""),
+                "Thickness: Step Excluded nm": _tf("step_excluded", "{:.2f}"),
             })
 
         # 비동기 백그라운드 파일쓰기로 프리징 최소화

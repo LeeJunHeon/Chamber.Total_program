@@ -101,15 +101,22 @@ def test_step_jump_over_target_then_falls_back_continues():
     assert ev.kind == "done" and f.j.eff >= 3.0
 
 
-def test_step_jump_then_three_normals_ends():
+def test_step_jump_then_three_normals_is_excluded_not_ended():
+    """한 번 튀고 그대로 유지되는 측정 오류(오프셋) — 예전엔 정상 증가 3회 뒤 바로 종료(일찍 끝남). 지금은 초과분을 뺀다."""
     f = Feed(target=3.0)
     f.new(0.0)
     for _ in range(20):
-        f.new(0.05)
-    assert f.new(5.0) is None
+        f.new(0.05)                                     # 유효 1.0
+    assert f.new(5.0) is None                           # 튐 — 표시상 목표 초과
     assert f.new(0.05) is None and f.new(0.05) is None
-    ev = f.new(0.05)                                    # 정상 증가 3회 뒤에도 목표 이상 → 종료
-    assert ev.kind == "done" and ev.reason.startswith("계단 튐 뒤")
+    assert f.new(0.05) is None                          # 정상 3회 → 제외, 종료하지 않음
+    assert f.j.suspect is None and f.j.step_excluded_nm == pytest.approx(5.0 - 0.1 * 0.5)
+    assert f.j.eff == pytest.approx(1.0 + 0.05 + 0.15) and any("계단 튐 제외" in e for e in f.j.events)
+    ev = None
+    while ev is None:
+        ev = f.new(0.05)
+    true_nm = f.s - 5.0 - 5.0                           # 표시값 − 기준점 − 튐
+    assert ev.kind == "done" and f.j.eff >= 3.0 and f.j.eff == pytest.approx(true_nm + 0.05)   # 튄 구간 0.5초 증착 0.05 만 남김
 
 
 def test_step_detection_skipped_in_first_seconds():
@@ -227,6 +234,123 @@ def test_view_text():
         f.new(0.05)
     text, pct = f.j.view({"rate_nm_s": 0.1}, f.t)
     assert text == "두께 0.5 / 10.0 nm (5%) · 증착률 0.100 nm/s · 예상 남은 시간 01:35" and pct == pytest.approx(5.0)
+
+
+# ═══════════════════════ 3차: 증착률 비율·계단 튐 제외·기준점 없는 복귀·분해능 ═══════════════════════
+def simulate(target, recipe, actual, *, dt=0.5, res=None, jumps=None, p=P, stop_after_s=None):
+    """장비 시뮬레이션 — 영점(0) 뒤 actual nm/s 로 쌓이고, jumps={시각(s): +nm} 로 측정값이 튐(그대로 유지).
+    res 면 장비 분해능(0.1 nm 등)으로 반올림. (종료 이벤트, 종료 시각, 실제 증착 두께, 판정기)."""
+    j = ThicknessEndJudge(target, recipe, p, start_t=0.0, seq0=0)
+    limit = max_time_s(expected_seconds(target, recipe), p)
+    offset, t, seq = 0.0, 0.0, 0
+    jumps = dict(jumps or {})
+    while t < limit:
+        t = round(t + dt, 6)
+        seq += 1
+        for jt in [k for k in jumps if k <= t]:
+            offset += jumps.pop(jt)
+        true_nm = actual * t
+        s = true_nm + offset
+        if res:
+            s = round(round(s / res) * res, 6)
+        ev = j.tick({"seq": seq, "thickness_nm": s, "rate_nm_s": actual, "crystal_ok": True,
+                     "reset_seen": 0, "stale": False}, t)
+        if ev is not None and ev.kind == "done":
+            return ev, t, true_nm, j
+        if stop_after_s and t >= stop_after_s:
+            break
+    return None, t, actual * t, j
+
+
+@pytest.mark.parametrize("recipe", [0.05, 0.2, 0.5])
+@pytest.mark.parametrize("ratio", [1, 3, 5, 10, 15])
+@pytest.mark.parametrize("res", [None, 0.1])
+def test_rate_ratio_ends_near_target(recipe, ratio, res):
+    """실제/레시피 증착률 비 1~15× — 예전엔 5× 이상에서 의심 상태를 못 빠져나와 상한까지 갔다(목표 100 nm → ~1000 nm)."""
+    target = 100.0
+    actual = recipe * ratio
+    ev, t, true_nm, j = simulate(target, recipe, actual, res=res)
+    assert ev is not None, (recipe, ratio, j.events[-3:])
+    assert target - 0.2 <= true_nm <= target + 2.0 * actual + 0.2, (true_nm, j.events[-3:])
+    assert j.step_excluded_nm == 0.0                      # 실제 증착률 변화는 제외하지 않는다
+
+
+def test_reproduced_cases_1_0_and_3_0():
+    for recipe, actual in ((0.2, 1.0), (0.5, 3.0)):
+        ev, t, true_nm, j = simulate(100.0, recipe, actual)
+        assert ev.kind == "done" and true_nm <= 100.0 + 2 * actual
+
+
+@pytest.mark.parametrize("recipe,before,after", [(0.2, 0.2, 1.0), (0.5, 0.5, 3.0), (0.05, 0.05, 0.75)])
+def test_mid_run_rate_increase_is_rate_change_not_glitch(recipe, before, after):
+    """공정 중 실제 증착률이 갑자기 4배 넘게 오름 — 의심 → 한계 초과가 6초 지속 → 증착률 변화(제외 없음), 목표에서 종료."""
+    j = ThicknessEndJudge(100.0, recipe, P, start_t=0.0, seq0=0)
+    t, s, seq, ev = 0.0, 0.0, 0, None
+    while ev is None and t < 2000:
+        t += 0.5
+        seq += 1
+        s += (before if s < 30.0 else after) * 0.5
+        ev = j.tick({"seq": seq, "thickness_nm": round(s, 1), "crystal_ok": True, "reset_seen": 0}, t)
+    assert ev is not None and ev.kind == "done" and s <= 100.0 + 2 * after + 0.2
+    assert any("증착률 변화로 판정" in e for e in j.events) and j.step_excluded_nm == 0.0
+
+
+def test_single_glitch_is_excluded_and_ends_at_real_target():
+    ev, t, true_nm, j = simulate(100.0, 0.2, 0.2, jumps={200.0: 5.0})
+    assert ev.kind == "done" and 99.8 <= true_nm <= 100.0 + 0.4 + 0.2
+    assert j.step_excluded_nm == pytest.approx(5.0, abs=0.05) and j.suspect_count == 1   # 초과분 = d − 기준×Δt = 튐 크기
+
+
+def test_glitch_over_target_does_not_end_early():
+    """97 nm 근처에서 +5 nm 튀어 표시가 목표를 넘고 그대로 유지 — 실제 두께가 목표에 닿을 때 끝난다."""
+    ev, t, true_nm, j = simulate(100.0, 0.2, 0.2, jumps={485.0: 5.0})
+    assert ev.kind == "done" and true_nm >= 99.8 and j.step_excluded_nm > 4.8
+
+
+def test_glitch_that_falls_back_is_not_excluded():
+    ev, t, true_nm, j = simulate(100.0, 0.2, 0.2, jumps={200.0: 5.0, 201.0: -5.0})
+    assert ev.kind == "done" and j.step_excluded_nm == 0.0 and 99.8 <= true_nm <= 100.6
+    assert any("다시 떨어짐" in e for e in j.events)
+
+
+def test_exclusion_over_5pct_warns_once():
+    ev, t, true_nm, j = simulate(100.0, 0.2, 0.2, jumps={100.0: 3.0, 200.0: 3.0, 300.0: 3.0})
+    assert ev.kind == "done" and j.step_excluded_nm > 5.0
+    notes = j.pop_notices()
+    assert len(notes) == 1 and "확인 필요" in notes[0] and j.pop_notices() == []
+
+
+def test_resolution_and_slow_rate():
+    """0.1 nm 분해능 + 0.04 nm/s 저속 — 계단 튐 오판정 없이 목표에서 끝난다."""
+    ev, t, true_nm, j = simulate(10.0, 0.04, 0.04, res=0.1)
+    assert ev.kind == "done" and 9.9 <= true_nm <= 10.0 + 2 * 0.04 + 0.1
+    assert j.suspect_count == 0 and j.step_excluded_nm == 0.0
+
+
+@pytest.mark.parametrize("zero_ok", [True, False])
+def test_resume_without_base(zero_ok):
+    """영점 직후 첫 값 전에 끊김 → 30 nm 쌓인 뒤 복귀. 예전: 기준점 30 nm → 목표 + 30 nm 증착."""
+    j = ThicknessEndJudge(100.0, 1.0, P, start_t=0.0, seq0=0, zero_ok=zero_ok)
+    t = 0.0
+    ev = None
+    while ev is None:                                   # 새 값 없음 → 시간 대체
+        t += 1.0
+        ev = j.tick({"seq": 0, "thickness_nm": None, "crystal_ok": True, "reset_seen": 0}, t)
+    assert ev.kind == "fallback" and not ev.permanent
+    ev = j.tick({"seq": 1, "thickness_nm": 30.0, "crystal_ok": True, "reset_seen": 0}, 30.0)
+    if zero_ok:
+        assert ev.kind == "resume" and j.base == 0.0 and j.eff == pytest.approx(30.0)
+        assert j.use_rate()[0] == pytest.approx(1.0)     # 기준점 시각 = 영점 시각(30 nm / 30 s)
+        # 끊긴 동안 이미 목표를 넘었으면 복귀 순간 종료
+        k = ThicknessEndJudge(100.0, 1.0, P, start_t=0.0, seq0=0, zero_ok=True)
+        for tt in range(1, 13):
+            k.tick({"seq": 0, "thickness_nm": None, "crystal_ok": True, "reset_seen": 0}, float(tt))
+        assert k.mode == "fallback"
+        ev = k.tick({"seq": 1, "thickness_nm": 100.2, "crystal_ok": True, "reset_seen": 0}, 101.0)
+        assert ev.kind == "done"
+    else:
+        assert ev is None and j.permanent and j.mode == "fallback" and "기준점" in j.fallback_reason
+        assert j.tick({"seq": 2, "thickness_nm": 31.0, "crystal_ok": True, "reset_seen": 0}, 31.0) is None
 
 
 if __name__ == "__main__":
