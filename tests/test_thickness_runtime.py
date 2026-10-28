@@ -252,19 +252,20 @@ def test_set_material_readback_retry_with_real_service():
 
 
 # ═══════════════════════ THICKNESS_WAIT 콜백·리스너 ═══════════════════════
-def test_start_callback_zeroes_then_creates_judge():
+def test_start_callback_creates_judge_with_zero_step_base():
+    """THICKNESS_WAIT 시작(셔터 연 뒤) — 영점은 보내지 않고 THICKNESS_ZERO 에서 정한 기준점으로 판정기를 만든다."""
     async def go():
         svc = FakeSvc()
         rt, pc, rec = _rt(svc)
         rec.current_params = {"dep_rate": 0.05}
         views = []
         rt.set_thickness_view(lambda *a: views.append(a))
+        rt._thk_zero = {"base": 0.0, "reset0": 0}
         pc._thickness_start(100.0, 2000.0, 4000.0)
-        for _ in range(5):
-            await asyncio.sleep(0)
         j = rt._thk_judge
-        assert svc.zero_calls == ["B"] and isinstance(j, ThicknessEndJudge)
+        assert svc.zero_calls == [] and isinstance(j, ThicknessEndJudge) and j.base == 0.0
         assert j.target == 100.0 and j.dep_rate == 0.05 and j._seq_last == 7
+        assert "on_thickness_fallback" not in rec.names()
         assert views and views[-1][0] == "Thickness"
         pc._cancel_thickness_cb()                       # 취소 → 판정기 해제
         assert rt._thk_judge is None
@@ -283,8 +284,7 @@ def test_listener_done_fallback_resume():
         svc = FakeSvc()
         rt, _pc, rec = _rt(svc)
         rt._thk_rec = {"mode": "Thickness", "end": "Thickness", "target": 1.0}
-        j = ThicknessEndJudge(1.0, 0.1, ThicknessJudgeParams(), start_t=svc.t, seq0=7,
-                              zero_ok=False)            # 첫 값(3.0)을 기준점으로 — 이 테스트는 리스너 흐름만 본다
+        j = ThicknessEndJudge(1.0, 0.1, ThicknessJudgeParams(), start_t=svc.t, base=3.0, seq0=7)
         rt._thk_judge = rt._thk_last_judge = j
         _drive(rt, svc, [(8, 3.0)] + [(9 + i, 3.0 + 0.05 * (i + 1)) for i in range(10)])
         assert "set_thickness_state" in rec.names() and "on_thickness_done" not in rec.names()
@@ -294,7 +294,7 @@ def test_listener_done_fallback_resume():
         assert rec.names().count("on_thickness_fallback") == 1
         _drive(rt, svc, [(30, 3.95)])
         assert "on_thickness_resume" in rec.names()
-        _drive(rt, svc, [(31, 4.0), (32, 4.05), (33, 4.1)])           # 목표 이상 3회 연속
+        _drive(rt, svc, [(31, 4.0)])                                   # 목표 도달 즉시
         assert rec.names()[-1] == "on_thickness_done" and rt._thk_judge is None
         n = len(rec.calls)
         _drive(rt, svc, [(34, 5.0)])                     # 끝난 뒤에는 판정하지 않음
@@ -306,7 +306,7 @@ def test_listener_exception_falls_back_once_with_traceback():
     async def go():
         svc = FakeSvc()
         rt, _pc, rec = _rt(svc)
-        j = ThicknessEndJudge(10.0, 0.1, ThicknessJudgeParams(), start_t=svc.t, seq0=7)
+        j = ThicknessEndJudge(10.0, 0.1, ThicknessJudgeParams(), start_t=svc.t, base=0.0, seq0=7)
 
         def boom(*a):
             raise RuntimeError("주입 예외")
@@ -325,7 +325,7 @@ def test_judge_internal_exception_event_logs_traceback():
     async def go():
         svc = FakeSvc()
         rt, _pc, rec = _rt(svc)
-        rt._thk_judge = ThicknessEndJudge(10.0, 0.1, ThicknessJudgeParams(), start_t=svc.t, seq0=7)
+        rt._thk_judge = ThicknessEndJudge(10.0, 0.1, ThicknessJudgeParams(), start_t=svc.t, base=0.0, seq0=7)
         svc.st.update(seq=8, thickness_nm="bad")
         rt._on_thickness_status(svc.status())
         assert rec.names()[0] == "on_thickness_fallback"
@@ -356,7 +356,8 @@ def test_time_mode_record_uses_main_window_values():
     asyncio.run(go())
 
 
-def test_thickness_end_limit_warns_and_records():
+def test_thickness_end_limit_returns_text_and_records():
+    """상한 — 경고 목록·구글챗에 넣지 않고(E848 실패 문구가 된다) '유효 x / 목표 y nm' 를 돌려준다. 기록은 종료 방식 '상한'."""
     async def go():
         svc = FakeSvc()
         rt, pc, _ = _rt(svc)
@@ -364,14 +365,14 @@ def test_thickness_end_limit_warns_and_records():
         rt.chat = types.SimpleNamespace(notify_text=lambda t: sent.append(t), flush=lambda: None)
         rt._thk_pre = {"chuck": "mid", "gun": "G1", "tooling": 110.0, "density": 2.7, "z_factor": 1.08}
         rt._thk_run_started({"thickness_mode": True, "thickness": 100.0})
-        j = ThicknessEndJudge(100.0, 0.05, ThicknessJudgeParams(), start_t=0, seq0=0)
-        j.eff, j.base_t, j.eff_t, j.jump_count = 80.0, 0.0, 1600.0, 2
+        j = ThicknessEndJudge(100.0, 0.05, ThicknessJudgeParams(), start_t=0, base=0.0, seq0=0)
+        j.eff, j.eff_t, j.jump_count = 80.0, 1600.0, 2
         rt._thk_last_judge = j
-        pc._thickness_end("상한")
+        assert pc._thickness_end("상한") == "유효 80.0 / 목표 100.0 nm"
         v = rt._thk_values()
         assert v["end"] == "상한" and v["final_nm"] == 80.0 and v["avg_rate"] == pytest.approx(0.05)
         assert v["tooling"] == 110.0 and v["jumps"] == 2
-        assert any("목표 미도달" in w for w in rt._run_warnings) and any("목표 미도달" in t for t in sent)
+        assert rt._run_warnings == [] and sent == []                     # 공정 중 구글챗 없음
         p = {}
         rt._thk_card_fields(p)
         assert p == {"thickness_end": "상한", "thickness_final": "80.0 / 100 nm", "thickness_jumps": "2회(기록만)"}

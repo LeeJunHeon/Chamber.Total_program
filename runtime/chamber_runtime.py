@@ -58,7 +58,7 @@ from controller.runtime_state import runtime_state
 from controller.process_controller import ProcessController, eta_delay_seconds
 from controller.heater_process import HeaterSoakWaiter, HeaterHoldWaiter, heater_wait_timeout_s, itl_missing_text
 from controller.thickness_process import (END_FALLBACK, END_LIMIT, END_THICKNESS, END_TIME, ThicknessEndJudge,
-                                          expected_seconds, max_time_s, thickness_mode_of)
+                                          ZeroConfirm, expected_seconds, max_time_s, thickness_mode_of)
 from lib.thickness_config import load_judge_params
 from errors.app_error import CodedRuntimeError   # 호스트 START 레시피 파일 오류에 응답 코드(E207/E208/E209/E227)를 싣는다
 
@@ -796,6 +796,7 @@ class ChamberRuntime:
         self._thk_gen = 0                # 판정 작업 세대(취소·종료하면 +1 → 늦게 끝난 영점은 판정을 시작하지 않음)
         self._thk_judge = None           # ThicknessEndJudge — THICKNESS_WAIT 중에만
         self._thk_last_judge = None      # 이번 런 마지막 판정기(기록용)
+        self._thk_zero = None            # THICKNESS_ZERO 결과 {"base": 기준점 nm | None, "reset0": 영점 전 리셋 횟수}
         self._thk_pre = None             # 시작 전 점검에서 정한 값(tooling·density·Z·chuck·건)
         self._thk_rec = {}               # 이번 런 두께 기록(종료 방식·최종 두께·평균 증착률 ...)
         self._thk_view = None            # 패널 진행 영역 갱신 콜백(main.py)
@@ -1549,39 +1550,74 @@ class ChamberRuntime:
             self._heater_watch = False
 
         # === 두께 모니터(2단계) ===
-        def cb_thickness_start(target: float, expected_s: float, limit_s: float) -> None:
-            """THICKNESS_WAIT 시작 — 영점(B) 뒤 판정기를 만든다. 영점이 실패해도 '영점 뒤 첫 값 = 기준점' 이라 판정은 한다."""
+        def cb_thickness_zero(confirm_s: float) -> None:
+            """THICKNESS_ZERO — 메인 셔터를 열기 전에 영점(B) → 영점 확인(ZeroConfirm, 최대 confirm_s 초) → 기준점을 정해 두고
+            on_thickness_zero_done. 확인이 안 되거나 영점이 실패해도 그때 값을 기준점으로 진행(경고 → 이번 런 경고 목록)."""
             self._thk_gen = getattr(self, "_thk_gen", 0) + 1
             gen = self._thk_gen
+            self._thk_zero = None
 
             async def run():
                 pc = self.process_controller
                 svc = getattr(self, "_thickness", None)
                 if svc is None:
-                    pc.on_thickness_fallback(expected_s, "두께 서비스 없음 — 예상시간으로 시간 대체")
+                    self._thk_zero = {"base": None, "reset0": 0}
+                    pc.on_thickness_zero_done()
                     return
-                ok, why = await svc.zero("B", why="공정 시작 영점")
+                reset0 = int(svc.status().get("reset_seen") or 0)
+                ok, why = await svc.zero("B", why="메인 셔터 열기 전 영점")
                 if gen != self._thk_gen:
                     return
                 if not ok:
-                    self.append_log("THICKNESS", f"⚠ 영점 실패({why}) — 영점 뒤 첫 값을 기준점으로 판정은 계속합니다")
-                st = svc.status()
-                dep = float((pc.current_params or {}).get("dep_rate") or 0.0) or (float(target) / max(1.0, float(expected_s)))
+                    self.append_log("THICKNESS", f"⚠ 영점 명령 실패({why})")
                 jp, _w = load_judge_params(self.cfg.mod)
-                j = ThicknessEndJudge(float(target), dep, jp, start_t=svc.clock(), seq0=st.get("seq"),
-                                      reset0=int(st.get("reset_seen") or 0), zero_ok=bool(ok),
-                                      log=lambda m: self.append_log("THICKNESS", m))
-                self._thk_judge = j
-                self._thk_last_judge = j
-                self.append_log("THICKNESS", f"두께 판정 시작 — 목표 {float(target):g} nm · 레시피 증착률 {dep:g} nm/s · "
-                                             f"예상 {float(expected_s):.0f}초 · 상한 {float(limit_s):.0f}초")
-                self._thk_view_set("Thickness", f"{float(target):.1f} nm", 0.0, "영점 확인 중")
-            self._spawn_detached(run(), name="ThicknessStart")
+                zc = ZeroConfirm(jp, start_t=time.monotonic(), seq0=svc.status().get("seq"), zero_ok=bool(ok))
+                self._thk_view_set("Thickness", "—", 0.0, "영점 확인 중")
+                while True:
+                    r = zc.tick(svc.status(), time.monotonic())
+                    if r is not None:
+                        break
+                    await asyncio.sleep(0.1)
+                    if gen != self._thk_gen:
+                        return
+                self.append_log("THICKNESS", r.log)
+                if r.warning:
+                    with contextlib.suppress(Exception):
+                        self._run_warnings.append(r.warning)
+                self._thk_zero = {"base": r.base, "reset0": reset0}
+                pc.on_thickness_zero_done()
+            self._spawn_detached(run(), name="ThicknessZero")
 
-        def cb_thickness_end(kind: str) -> None:
+        def cb_thickness_start(target: float, expected_s: float, limit_s: float) -> None:
+            """THICKNESS_WAIT 시작(메인 셔터를 연 뒤) — THICKNESS_ZERO 에서 정한 기준점으로 판정기를 만든다.
+            기준점이 없으면(영점 확인 중 두께 값 없음·영점 단계 없음) 처음부터 영구 시간 대체."""
+            pc = self.process_controller
+            svc = getattr(self, "_thickness", None)
+            if svc is None:
+                pc.on_thickness_fallback(expected_s, "두께 서비스 없음 — 예상시간으로 시간 대체")
+                return
+            st = svc.status()
+            zinfo = getattr(self, "_thk_zero", None) or {"base": None, "reset0": int(st.get("reset_seen") or 0)}
+            dep = float((pc.current_params or {}).get("dep_rate") or 0.0) or (float(target) / max(1.0, float(expected_s)))
+            jp, _w = load_judge_params(self.cfg.mod)
+            j = ThicknessEndJudge(float(target), dep, jp, start_t=svc.clock(), base=zinfo.get("base"),
+                                  seq0=st.get("seq"), reset0=int(zinfo.get("reset0") or 0),
+                                  log=lambda m: self.append_log("THICKNESS", m))
+            self._thk_judge = j
+            self._thk_last_judge = j
+            base = zinfo.get("base")
+            self.append_log("THICKNESS", f"두께 판정 시작 — 목표 {float(target):g} nm · 기준점 "
+                                         f"{'없음' if base is None else f'{float(base):.2f} nm'} · 레시피 증착률 {dep:g} nm/s · "
+                                         f"예상 {float(expected_s):.0f}초 · 상한 {float(limit_s):.0f}초")
+            self._thk_view_set("Thickness", f"{float(target):.1f} nm", 0.0, "메인 공정 진행")
+            ev = j.start_event()
+            if ev is not None:
+                self._thk_apply_event(ev, j)
+
+        def cb_thickness_end(kind: str) -> Optional[str]:
             self._thk_gen = getattr(self, "_thk_gen", 0) + 1
             self._thk_judge = None
-            self._thk_on_end(str(kind))
+            return self._thk_on_end(str(kind))
 
         def cb_thickness_cancel() -> None:
             self._thk_gen = getattr(self, "_thk_gen", 0) + 1
@@ -1619,6 +1655,7 @@ class ChamberRuntime:
             heater_hold=cb_heater_hold,
             cancel_heater=cb_heater_cancel,
 
+            thickness_zero=cb_thickness_zero,
             thickness_start=cb_thickness_start,
             thickness_end=cb_thickness_end,
             cancel_thickness=cb_thickness_cancel,
@@ -6708,14 +6745,6 @@ class ChamberRuntime:
         except Exception:
             pass
 
-    def _thk_notify(self, text: str) -> None:
-        if not self.chat:
-            return
-        with contextlib.suppress(Exception):
-            self.chat.notify_text(f"[CH{self.ch} 두께] {text}")
-            if hasattr(self.chat, "flush"):
-                self.chat.flush()
-
     def _thk_apply_event(self, ev, j) -> None:
         pc = self.process_controller
         if ev.kind == "done":
@@ -6724,11 +6753,8 @@ class ChamberRuntime:
         elif ev.kind == "fallback":
             if ev.detail:
                 self.append_log("THICKNESS", f"⚠ 두께 판정 예외 traceback:\n{ev.detail.rstrip()}")
-            self._thk_notify(f"시간 대체로 전환 — {ev.reason}. 남은 {float(ev.remaining_s or 0):.0f}초 뒤 종료"
-                             + ("(두께 판정으로 복귀하지 않음)" if ev.permanent else "(통신이 돌아오면 복귀)") + " · 공정은 계속")
             pc.on_thickness_fallback(float(ev.remaining_s or 0.0), ev.reason)
         elif ev.kind == "resume":
-            self._thk_notify(f"두께 판정으로 복귀 — 유효 {float(ev.eff_nm or 0):.1f} / {j.target:.1f} nm")
             pc.on_thickness_resume()
 
     def _thk_judge_error(self, e: Exception, j) -> None:
@@ -6742,14 +6768,15 @@ class ChamberRuntime:
             rem = 0.0
         with contextlib.suppress(Exception):
             j.mode, j.permanent, j.fallback_reason = "fallback", True, f"판정 예외({e!r})"
-        self._thk_notify(f"시간 대체로 전환 — 판정 예외({e!r}). 남은 {rem:.0f}초 뒤 종료 · 공정은 계속")
+            j.fallback_count += 1
         self.process_controller.on_thickness_fallback(rem, f"판정 예외({e!r})")
 
-    def _thk_on_end(self, kind: str) -> None:
-        """THICKNESS_WAIT 끝 — 종료 방식 기록, 상한이면 '목표 미도달' 경고·구글챗(실패로 처리하지 않음)."""
+    def _thk_on_end(self, kind: str) -> Optional[str]:
+        """THICKNESS_WAIT 끝 — 종료 방식 기록·경고 목록. 상한이면 '유효 x / 목표 y nm' 문구를 돌려준다
+        (컨트롤러가 E848 실패 문구에 넣는다 — 경고 목록에는 넣지 않음)."""
         rec = getattr(self, "_thk_rec", None)
         if rec is None:
-            return
+            return None
         j = getattr(self, "_thk_last_judge", None)
         rec["end"] = kind
         target = float(rec.get("target") or 0.0)
@@ -6761,21 +6788,23 @@ class ChamberRuntime:
             rec["jumps"] = int(j.jump_count)          # 큰 튐 횟수(기록만 — 판정에 쓰지 않음)
             rec["fallback_reason"] = j.fallback_reason
         eff_txt = "--" if eff is None else f"{eff:.1f}"
+        what = f"유효 {eff_txt} / 목표 {target:.1f} nm"
+        warn = None
         if kind == END_LIMIT:
-            warn = f"목표 미도달 — 최대 시간 상한 도달(유효 {eff_txt} / {target:.1f} nm), 정상 종료 절차로 끝냄"
-            self.append_log("THICKNESS", f"⚠ {warn}")
-            with contextlib.suppress(Exception):
-                self._run_warnings.append(warn)
-            self._thk_notify(warn)
+            self.append_log("THICKNESS", f"⚠ 최대 시간 상한 도달 — {what} → 공정 실패(E848)")
         elif kind == END_FALLBACK:
-            warn = f"시간 대체로 종료({rec.get('fallback_reason') or '-'}) — 마지막 확인 유효 {eff_txt} / {target:.1f} nm"
+            warn = f"시간 대체로 종료({rec.get('fallback_reason') or '-'}) — 마지막 확인 {what}"
             self.append_log("THICKNESS", warn)
+        else:
+            self.append_log("THICKNESS", f"메인 공정 종료 — 종료 방식 {kind}, {what}")
+            if kind == END_THICKNESS and j is not None and j.fallback_count:
+                warn = f"공정 중 시간 대체 {j.fallback_count}회({j.fallback_reason}) — 복귀 뒤 두께로 종료"
+        if warn:
             with contextlib.suppress(Exception):
                 self._run_warnings.append(warn)
-        else:
-            self.append_log("THICKNESS", f"메인 공정 종료 — 종료 방식 {kind}, 유효 {eff_txt} / {target:.1f} nm")
         pct = (eff / target * 100.0) if (eff is not None and target > 0) else None
         self._thk_view_set(kind, f"{target:.1f} nm", pct, f"종료({kind}) — {eff_txt} nm")
+        return what if kind == END_LIMIT else None
 
     def _thk_values(self) -> dict:
         """기록용 값 — 종료 방식·목표·최종 유효두께·평균 증착률·적용값·의심 횟수·전환 사유(없으면 None)."""

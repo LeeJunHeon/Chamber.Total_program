@@ -1703,6 +1703,18 @@ ERROR_REGISTRY: Dict[str, ErrorDefinition] = {
         cause="두께 모니터에 density/Z-factor/tooling 을 쓰고 되읽어 확인하지 못했습니다(1회 재시도 뒤에도 불일치·통신 실패·범위 밖).",
         fix="두께 모니터 통신 상태와 Factor 값 범위(density 0.5~99.99, Z 0.1~9.999, tooling 10~399)를 확인하고 다시 시작하십시오.",
     ),
+    "E848": ErrorDefinition(
+        code="E848",
+        title="두께 목표 미도달 — 최대 시간 초과",
+        category="THICKNESS",
+        client_action=ACTION_STOP,
+        severity=SEV_ERROR,
+        cause="두께 모니터 통신은 정상인데 최대 시간 상한(max(예상 × THICKNESS_MAX_TIME_RATIO, 예상 + THICKNESS_MAX_TIME_MARGIN_S),"
+              " 예상 = thickness ÷ dep_rate) 안에 목표 두께에 닿지 않았습니다 — 센서(크리스탈) 가림, tooling·density 오입력,"
+              " 플라즈마 이상(출력·압력) 등.",
+        fix="두께 센서 위치·가림, [Factor 설정]의 tooling·density·Z, 공정 중 전원 출력·압력 기록을 확인하고, 레시피 dep_rate 가"
+            " 실제보다 너무 크지 않은지 확인하십시오.",
+    ),
     "E847": ErrorDefinition(
         code="E847",
         title="두께 대기 단계 구성 오류",

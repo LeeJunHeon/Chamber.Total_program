@@ -4,23 +4,26 @@
 
 모드 판정(thickness_mode_of)은 이 한 곳에 둔다 — 런타임(시작·시퀀스)과 ETA 계산이 같은 규칙을 쓴다.
 
-ThicknessEndJudge.tick(status, now) → None | ThicknessEvent
+순서(Thickness 모드): Shutter Delay → THICKNESS_ZERO(영점 B + ZeroConfirm) → Main Shutter 열기 → THICKNESS_WAIT(ThicknessEndJudge)
+
+ZeroConfirm.tick(status, now) → None | ZeroResult — 메인 셔터를 열기 전에 기준점을 정한다.
+  - 영점 성공이면 영점 뒤 새 값 ≤ zero_confirm_nm(음수 포함)을 한 번 보면 영점 확인 → 기준점 0.
+  - 영점 실패면 영점 뒤 첫 새 값을 기준점으로 + 경고.
+  - zero_confirm_s 안에 확인이 안 되면 마지막 새 값을 기준점으로 + 경고(영점이 안 먹음). 새 값이 하나도 없으면 기준점 없음
+    (통신 끊김 — 판정기는 처음부터 영구 시간 대체).
+  확인 전 값(영점 반영 전 남은 이전 두께)은 판정에 쓰이지 않는다 — 셔터가 열리기 전에 끝나기 때문.
+
+ThicknessEndJudge.tick(status, now) → None | ThicknessEvent  (셔터를 연 뒤 첫 새 값부터)
   done     : 목표 도달(정상 종료). 복귀 순간 이미 목표 이상이어도 done.
   fallback : '시간 대체' 로 전환 — remaining_s 만큼 더 증착하고 끝낸다(타이머는 공정 단계가 가진다).
-             permanent=True(XTAL FAIL·공정 중 리셋·판정 예외)면 두께 판정으로 돌아오지 않는다.
+             permanent=True(기준점 없음·XTAL FAIL·공정 중 리셋·판정 예외)면 두께 판정으로 돌아오지 않는다.
   resume   : 통신이 돌아와(리셋 없음) 두께 판정으로 복귀 — 공정 단계가 시간 대체 타이머를 지운다.
 판정 규칙(STM-100 이 초당 4회 두께를 계산해 주므로 그 값으로 끊는다 — Evaporator 실제 공정과 같은 방식):
-  - 기준점(유효두께 = S − 기준점)은 영점(B)이 반영된 것을 확인하고 잡는다. 영점 성공(zero_ok)이면 영점 뒤 새 값이
-    zero_confirm_nm + 영점 뒤 증착 분량(max(레시피·장비 증착률) × 경과 × 1.5) 이하일 때(음수 = 셔터 열 충격 하락도 포함) 영점 반영 확인
-    → 기준점 0(영점 시각). zero_confirm_s 안에 확인 안 되면(영점이 안 먹었거나 늦음) 그때 값을 기준점으로 잡고 경고.
-    영점 실패면 영점 뒤 첫 새 값을 기준점으로. 기준점 전 값은 판정에 쓰지 않는다(늦게 반영된 영점 전 두께로 끝나지 않게).
-    기준점 뒤 하락은 재설정하지 않는다 — 열 충격 하락·회복은 장비 두께 그대로(유효두께가 잠깐 음수였다 돌아옴).
+  - 유효두께 = 장비 두께 − 기준점(ZeroConfirm 결과). 셔터 열림 뒤 하락(열 충격)·회복은 장비 두께 그대로(잠깐 음수였다 돌아옴).
   - status.seq 가 바뀐 값만 판정한다(같은 값 중복 금지).
-  - 종료: 유효두께 ≥ 목표 인 새 값이 done_consecutive 번 연속. 하나라도 목표 미만이면 다시 센다.
-    (목표 근처 한 표본 스파이크로 일찍 끝나지 않고, 잡음 σ 0.3 nm 까지 초과는 몇 표본 이내 — tests/test_thickness_judge_noise.py)
+  - 종료: 유효두께 ≥ 목표 인 새 값이 done_consecutive 번 연속(기본 1 = 도달 즉시). 하나라도 목표 미만이면 다시 센다.
   - stale_s 동안 새 값이 없으면 시간 대체. 남은 시간 = (목표 − 마지막 유효두께) ÷ 사용 증착률
-    (측정 measured_rate_min_s 이상이면 실측 평균, 아니면 레시피 dep_rate). 기준점을 잡기 전에 끊겼다가 돌아오면
-    영점이 성공했으면 기준점 0(영점 시각), 아니면 기준을 알 수 없으므로 영구 시간 대체.
+    (셔터 연 뒤 측정 measured_rate_min_s 이상이면 실측 평균, 아니면 레시피 dep_rate).
   - 기록만(판정에 영향 없음): 한 번에 크게 뛴 값(증가량 > max(jump_min_nm, 레시피 dep_rate × jump_rate_k × Δt)) 횟수,
     증착률 급등, 두께 음수, 증착률 0 지속.
   - 판정 코드 예외는 삼키지 않고 곧바로 영구 시간 대체(traceback 은 event.detail).
@@ -72,6 +75,48 @@ def fmt_mmss(sec: Optional[float]) -> str:
     return f"{s // 60:02d}:{s % 60:02d}"
 
 
+# ═══════════════════════ 영점 확인(메인 셔터 열기 전) ═══════════════════════
+@dataclass
+class ZeroResult:
+    base: Optional[float]                # 기준점(nm). None = 새 값을 하나도 못 받음(기준점 없음)
+    log: str                             # 공정 로그 한 줄
+    warning: str = ""                    # 이번 런 경고 목록(종료 카드)으로 갈 문구
+
+
+class ZeroConfirm:
+    def __init__(self, p: ThicknessJudgeParams, *, start_t: float, seq0: Any, zero_ok: bool):
+        self.p = p
+        self.t0 = float(start_t)
+        self._seq_last = seq0
+        self.zero_ok = bool(zero_ok)
+        self.last: Optional[float] = None    # 영점 뒤 마지막 새 값
+
+    def tick(self, st: dict, now: float) -> Optional[ZeroResult]:
+        p = self.p
+        seq, s = st.get("seq"), st.get("thickness_nm")
+        if seq is not None and seq != self._seq_last and s is not None:
+            self._seq_last = seq
+            s = float(s)
+            self.last = s
+            if not self.zero_ok:
+                return ZeroResult(s, f"⚠ 영점 명령 실패 — 첫 값 {s:.2f} nm 를 기준점으로",
+                                  f"영점 명령 실패 — 첫 값 {s:.2f} nm 를 기준점으로")
+            if s <= float(p.zero_confirm_nm):
+                return ZeroResult(0.0, f"영점 확인 — 영점 뒤 {now - self.t0:.1f}초 값 {s:.2f} nm "
+                                       f"(≤ {p.zero_confirm_nm:g}) → 기준점 0 nm")
+        if now - self.t0 < float(p.zero_confirm_s):
+            return None
+        if self.last is None:
+            w = f"영점 확인 중 두께 값 없음({p.zero_confirm_s:g}초) — 기준점 없음, 시간으로 진행"
+            return ZeroResult(None, f"⚠ {w}", w)
+        if self.zero_ok:
+            w = f"영점 확인 안 됨 — {self.last:.2f} nm 를 기준점으로({p.zero_confirm_s:g}초 동안 ≤ {p.zero_confirm_nm:g} nm 값 없음)"
+        else:
+            w = f"영점 명령 실패 — {self.last:.2f} nm 를 기준점으로"
+        return ZeroResult(self.last, f"⚠ {w}", w)
+
+
+# ═══════════════════════ 종료 판정(메인 셔터 연 뒤) ═══════════════════════
 @dataclass
 class ThicknessEvent:
     kind: str                            # "done" | "fallback" | "resume"
@@ -84,15 +129,14 @@ class ThicknessEvent:
 
 class ThicknessEndJudge:
     def __init__(self, target_nm: float, dep_rate_nm_s: float, p: ThicknessJudgeParams, *,
-                 start_t: float, seq0: int = 0, reset0: int = 0, zero_ok: bool = True,
+                 start_t: float, base: Optional[float], seq0: Any = 0, reset0: int = 0,
                  log: Optional[Callable[[str], None]] = None):
         self.target = float(target_nm)
         self.dep_rate = float(dep_rate_nm_s)
         self.p = p
-        self.t0 = float(start_t)
+        self.t0 = float(start_t)             # 메인 셔터를 연 시각(실측 평균 증착률의 기준)
         self._seq_last = seq0
         self._reset0 = int(reset0 or 0)
-        self.zero_ok = bool(zero_ok)         # 공정 시작 영점(B) 성공 — 기준점 없는 복귀 때 기준 0 을 쓸 수 있는가
         self._log_cb = log
         self.events: List[str] = []          # 로그 문구(테스트·기록)
 
@@ -100,8 +144,7 @@ class ThicknessEndJudge:
         self.permanent = False
         self.fallback_reason = ""            # 마지막 시간 대체 전환 사유
         self.fallback_count = 0
-        self.base: Optional[float] = None
-        self.base_t: Optional[float] = None
+        self.base: Optional[float] = None if base is None else float(base)
         self.prev_s: Optional[float] = None
         self.prev_t: Optional[float] = None
         self.last_new_t = float(start_t)
@@ -115,6 +158,12 @@ class ThicknessEndJudge:
         self._neg_warned = False
 
     # ── 공개 ──
+    def start_event(self) -> Optional[ThicknessEvent]:
+        """기준점이 없으면(영점 확인 중 통신 끊김) 처음부터 영구 시간 대체 — 런타임이 판정기를 만든 직후 부른다."""
+        if self.base is not None:
+            return None
+        return self._to_fallback(self.t0, "영점 확인 중 두께 값 없음 — 기준점 없음", permanent=True)
+
     def tick(self, st: dict, now: float) -> Optional[ThicknessEvent]:
         try:
             return self._tick(st or {}, float(now))
@@ -123,9 +172,9 @@ class ThicknessEndJudge:
             return self._to_fallback(now, f"판정 코드 예외({e!r})", permanent=True, detail=tb)
 
     def use_rate(self) -> Tuple[float, str]:
-        """시간 대체 증착률 — (nm/s, '실측'|'레시피')."""
-        if self.eff_t is not None and self.base_t is not None:
-            span = self.eff_t - self.base_t
+        """시간 대체 증착률 — (nm/s, '실측'|'레시피'). 실측 = 유효두께 ÷ 셔터 연 뒤 경과."""
+        if self.eff_t is not None:
+            span = self.eff_t - self.t0
             if span >= float(self.p.measured_rate_min_s) and self.eff > 0:
                 return self.eff / span, "실측"
         return self.dep_rate, "레시피"
@@ -136,10 +185,10 @@ class ThicknessEndJudge:
         return left / rate if rate > 0 else left / max(self.dep_rate, 1e-9)
 
     def avg_rate(self) -> Optional[float]:
-        """평균 증착률(유효두께 ÷ 기준점 뒤 경과) — 기록용."""
-        if self.eff_t is None or self.base_t is None or self.eff_t <= self.base_t:
+        """평균 증착률(유효두께 ÷ 셔터 연 뒤 경과) — 기록용."""
+        if self.eff_t is None or self.eff_t <= self.t0:
             return None
-        return self.eff / (self.eff_t - self.base_t)
+        return self.eff / (self.eff_t - self.t0)
 
     def view(self, st: dict, now: float) -> Tuple[str, float]:
         """상태 문구·진행률(%) — "두께 x.x / y.y nm (nn%) · 증착률 r nm/s · 예상 남은 시간 mm:ss"."""
@@ -209,19 +258,10 @@ class ThicknessEndJudge:
         self._seq_last = seq
         self.last_new_t = now
         s = float(s)
+        eff = s - self.base
 
         if self.mode == "fallback":          # 통신 복귀(리셋 없음) — 장비는 끊긴 동안에도 두께를 누적했다
-            if self.base is None:
-                # 영점 뒤 첫 값 전에 끊겼다 — 지금 값을 기준점으로 잡으면 끊긴 동안 쌓인 두께를 다시 센다
-                if not self.zero_ok:
-                    self.permanent = True
-                    self.fallback_reason = "영점 뒤 기준점을 잡지 못함(영점 실패 + 첫 값 전 통신 끊김)"
-                    self._log(f"시간 대체 유지 — 두께 판정으로 돌아가지 않음: {self.fallback_reason}")
-                    return None
-                self.base, self.base_t = 0.0, self.t0
-                self._log(f"기준점 없이 복귀 — 영점 성공이므로 기준점 0 nm(영점 시각), 읽은 값 {s:.2f} nm 를 유효두께로")
             self.mode = "thickness"
-            eff = s - self.base
             self._set_eff(eff, now)
             self.prev_s, self.prev_t = s, now
             self.done_n = 0
@@ -231,16 +271,13 @@ class ThicknessEndJudge:
             self._log(f"두께 판정 복귀 — 유효 {eff:.1f} / {self.target:.1f} nm")
             return ThicknessEvent("resume", reason="통신 복귀", eff_nm=eff)
 
-        if self.base is None:
-            if not self._take_base(s, st, now):
-                return None                  # 영점 확인 대기 — 이 값은 판정에 쓰지 않는다
-
-        eff = s - self.base
-        dt = max(1e-3, now - float(self.prev_t))
-        d = s - float(self.prev_s)
+        if self.prev_s is not None:
+            dt = max(1e-3, now - float(self.prev_t))
+            self._warnings(st, eff, s - float(self.prev_s), dt, now)
+        else:
+            self._last_inc_t = now
         self.prev_s, self.prev_t = s, now
         self._set_eff(eff, now)
-        self._warnings(st, eff, d, dt, now)
 
         if eff >= self.target - _EPS_NM:
             self.done_n += 1
@@ -250,30 +287,6 @@ class ThicknessEndJudge:
         else:
             self.done_n = 0
         return None
-
-    def _take_base(self, s: float, st: dict, now: float) -> bool:
-        """기준점을 잡는다(잡았으면 True — 이 값부터 판정). 영점 실패면 첫 값, 성공이면 영점 반영 확인 뒤 0."""
-        p = self.p
-        if not self.zero_ok:
-            self.base, self.base_t = s, now
-            self._log(f"두께 기준점 {s:.2f} nm (영점 실패 — 영점 뒤 첫 값)")
-        else:
-            el = max(0.0, now - self.t0)
-            r = st.get("rate_nm_s")
-            rate = max(self.dep_rate, float(r) if isinstance(r, (int, float)) and r > 0 else 0.0)
-            lim = float(p.zero_confirm_nm) + rate * el * 1.5
-            if s <= lim:
-                self.base, self.base_t = 0.0, self.t0
-                self._log(f"영점 확인 — 영점 뒤 {el:.1f}초 값 {s:.2f} nm (≤ {lim:.2f}) → 기준점 0 nm(영점 시각)")
-            elif el >= float(p.zero_confirm_s):
-                self.base, self.base_t = s, now
-                self._log(f"⚠ 영점 확인 안 됨 — {p.zero_confirm_s:g}초 동안 영점 반영 값이 없음, 현재 값 {s:.2f} nm 를 기준점으로")
-            else:
-                return False
-        self.prev_s, self.prev_t = s, now
-        self._set_eff(s - self.base, now)
-        self._last_inc_t = now
-        return True
 
     def _warnings(self, st: dict, eff: float, d: float, dt: float, now: float) -> None:
         """기록만 — 판정에 쓰지 않는다."""

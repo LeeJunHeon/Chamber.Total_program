@@ -162,15 +162,15 @@ def test_end_card_shows_jumps():
 
 
 # ───────────────────────── 런타임 기록 ─────────────────────────
-def test_runtime_record_and_card_include_jumps_and_zero_ok():
+def test_runtime_record_and_card_include_jumps():
     from test_thickness_runtime import FakeSvc, _rt
 
     async def go():
         svc = FakeSvc()
         rt, pc, rec = _rt(svc)
         rt._thk_run_started({"thickness_mode": True, "thickness": 100.0})
-        j = ThicknessEndJudge(100.0, 0.05, ThicknessJudgeParams(), start_t=0, seq0=0)
-        j.eff, j.base_t, j.eff_t, j.jump_count = 100.1, 0.0, 2000.0, 2
+        j = ThicknessEndJudge(100.0, 0.05, ThicknessJudgeParams(), start_t=0, base=0.0, seq0=0)
+        j.eff, j.eff_t, j.jump_count = 100.1, 2000.0, 2
         rt._thk_last_judge = j
         pc._thickness_end("Thickness")
         assert rt._thk_values()["jumps"] == 2
@@ -182,17 +182,66 @@ def test_runtime_record_and_card_include_jumps_and_zero_ok():
         rt.data_logger = DataLogger(ch=2, csv_dir=Path(os.environ.get("TEMP", ".")) / "thk_logs_test", thickness_columns=True)
         rt._thk_finalize_record()
         assert any("큰 튐 2회(기록만)" in m for m in logs)
-        # 영점 실패가 판정기에 전달된다
-        rec.current_params = {"dep_rate": 0.05}
-
-        async def zero_fail(mode="B", why=""):
-            return False, "응답 없음"
-        svc.zero = zero_fail
-        pc._thickness_start(100.0, 2000.0, 4000.0)
-        for _ in range(5):
-            await asyncio.sleep(0)
-        assert rt._thk_judge is not None and rt._thk_judge.zero_ok is False
     asyncio.run(go())
+
+
+# ───────────────────────── 6차: 구글챗 정리·상한 실패 ─────────────────────────
+def test_no_chat_text_during_process():
+    """공정 중 시간 대체 전환·복귀·판정 예외·상한 도달은 구글챗 별도 메시지를 보내지 않는다(공정 로그·종료 카드에만)."""
+    from test_thickness_runtime import FakeSvc, _rt
+    import types
+    async def go():
+        svc = FakeSvc()
+        rt, pc, rec = _rt(svc)
+        sent = []
+        rt.chat = types.SimpleNamespace(notify_text=sent.append, flush=lambda: None)
+        assert not hasattr(rt, "_thk_notify")
+        rt._thk_run_started({"thickness_mode": True, "thickness": 1.0})
+        j = ThicknessEndJudge(1.0, 0.1, ThicknessJudgeParams(), start_t=svc.t, base=0.0, seq0=7)
+        rt._thk_judge = rt._thk_last_judge = j
+        for _ in range(12):                                            # 새 값 없음 → 시간 대체
+            svc.t += 1.0
+            rt._on_thickness_status(svc.status())
+        svc.t += 0.5
+        svc.st.update(seq=8, thickness_nm=0.5)                         # 복귀
+        rt._on_thickness_status(svc.status())
+
+        def boom(*a):
+            raise RuntimeError("x")
+        j.tick = boom                                                  # 판정 예외
+        rt._on_thickness_status(svc.status())
+        assert pc._thickness_end("상한") is not None
+        assert sent == []
+        assert {"on_thickness_fallback", "on_thickness_resume"} <= set(rec.names())
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize("ok", [True, False])
+def test_end_card_has_thickness_and_warnings_on_success_and_failure(ok):
+    """종료 카드(성공)·에러 카드(실패) 모두 같은 경로 — 종료 방식·최종 두께·경고 목록이 들어간다."""
+    c = _Chat()
+    detail = {"process_name": "a", "ch": 2, "thickness_end": "Thickness" if ok else "상한",
+              "thickness_final": "100.0 / 100 nm" if ok else "62.3 / 100 nm",
+              "warnings": ["영점 확인 안 됨 — 50.20 nm 를 기준점으로(5초 동안 ≤ 2 nm 값 없음)", "크리스탈 수명 4.0%"]}
+    if not ok:
+        detail["errors"] = ["Step 30 THICKNESS_WAIT: [THICKNESS - E848: 두께 목표 미도달 — 최대 시간 초과: 유효 62.3 / 목표 100.0 nm, "
+                            "경과 66.7분(상한 66.7분)]"]
+    c.notify_process_finished_detail(ok, detail)
+    f = c.cards[-1][1]
+    assert f["종료 방식"] == detail["thickness_end"] and f["최종 두께"] == detail["thickness_final"]
+    assert "영점 확인 안 됨" in f["주의"] and "크리스탈 수명" in f["주의"]
+    if not ok:
+        assert "E848" in f["원인"] and "두께 목표 미도달" in f["원인"]
+
+
+def test_limit_failure_still_writes_calib_csv(tmp_path):
+    """상한 실패도 Calib CSV 에 기록(Result FAIL, 종료 방식 상한). 엑셀 공정 로그는 기존 규칙대로 성공만(런타임 _GDRIVE_OK and ok)."""
+    dl = _dl(2, tmp_path, True)
+    dl.set_thickness_record(dict(REC, end="상한", final_nm=62.3))
+    dl.finalize_and_write_log(False)
+    with open(tmp_path / "Ch2_log.csv", encoding="utf-8-sig", newline="") as fp:
+        r = list(csv.DictReader(fp))[-1]
+    assert r["Result"] == "FAIL" and r["Thickness: End Mode"] == "상한" and r["Thickness: Final nm"] == "62.30"
 
 
 if __name__ == "__main__":

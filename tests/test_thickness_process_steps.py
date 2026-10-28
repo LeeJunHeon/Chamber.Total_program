@@ -113,14 +113,76 @@ def test_thickness_mode_replaces_main_delay():
         i = names.index("THICKNESS_WAIT")
         st = seq[i]
         assert names[i - 1] == "OES_RUN" and names[i - 2] == "PLC_CMD" and seq[i - 2].params[0] == "MS"
+        # 순서: Shutter Delay → THICKNESS_ZERO(영점·확인) → Main Shutter 열기 → OES → THICKNESS_WAIT
+        z = names.index("THICKNESS_ZERO")
+        assert z == i - 3 and rows[z - 1][1].startswith("Shutter Delay") and seq[z].params == (5.0,)
+        assert not seq[z].polling and not seq[z].message.startswith(("Shutter Delay", "메인 공정"))   # 실제 시간 누적 제외
         assert st.value == 100.0 and st.polling and st.message.startswith("메인 공정 진행")
         assert st.params == (pytest.approx(2000.0), pytest.approx(4000.0))       # 예상 thickness/dep_rate, 상한 ×2
         assert seq[i - 1].params[0] == pytest.approx(2000.0) and seq[i - 1].no_wait   # OES 는 예상시간
         assert "DELAY" not in [r[0] for r in rows[i:]] or all(not r[1].startswith("메인 공정") for r in rows[i:] if r[0] == "DELAY")
-        # 메인 DELAY 한 줄 → OES 문구·THICKNESS_WAIT 로 바뀐 것 말고는 같다
+        # THICKNESS_ZERO 한 줄 추가 + 메인 DELAY 한 줄 → OES 문구·THICKNESS_WAIT 로 바뀐 것 말고는 같다
         j = [r[0] for r in base].index("OES_RUN")
-        assert rows[:j] == base[:j] and rows[i + 1:] == base[j + 2:]
+        assert rows[:z] == base[:z] and rows[z + 1:j + 1] == base[z:j] and rows[i + 1:] == base[j + 2:]
+        # use_ms=F 면 같은 자리(메인 공정 직전)
+        seq2 = _pc_of(ProcessController, 2)._create_process_sequence(_thk_params(use_ms=False))
+        n2 = [x.action.name for x in seq2]
+        assert n2[n2.index("THICKNESS_ZERO") + 1:n2.index("THICKNESS_ZERO") + 3] == ["OES_RUN", "THICKNESS_WAIT"]
+        assert not [x for x in seq2 if x.action.name == "PLC_CMD" and x.params[:2] == ("MS", True)]
     asyncio.run(go())
+
+
+def test_time_mode_has_no_zero_step():
+    async def go():
+        for name, (ch, p) in TIME_CASES.items():
+            seq = _pc_of(ProcessController, ch)._create_process_sequence(dict(p))
+            assert not [x for x in seq if x.action.name.startswith("THICKNESS")], name
+    asyncio.run(go())
+
+
+def _zero_case(on_zero, slack=None):
+    async def go():
+        import controller.process_controller as m
+        old = m.ZERO_STEP_SLACK_S
+        if slack is not None:
+            m.ZERO_STEP_SLACK_S = slack
+        calls = []
+        box = {}
+        try:
+            def zero(confirm_s):
+                calls.append(("zero", confirm_s))
+                if on_zero:
+                    on_zero(box["pc"], asyncio.get_running_loop())
+            pc = _pc_of(ProcessController, 2, thickness_zero=zero)
+            box["pc"] = pc
+            step = ProcessStep(action=ActionType.THICKNESS_ZERO, params=(0.2,), message="두께 영점·확인")
+            pc.process_sequence = [step]
+            pc._current_step_idx = 0
+            pc.is_running = True
+            t0 = time.monotonic()
+            await asyncio.wait_for(pc._execute_step(step), timeout=10)
+            return calls, time.monotonic() - t0, pc
+        finally:
+            m.ZERO_STEP_SLACK_S = old
+    return asyncio.run(go())
+
+
+def test_zero_step_waits_for_done_token():
+    calls, el, pc = _zero_case(lambda pc, lp: lp.call_later(0.1, pc.on_thickness_zero_done))
+    assert calls == [("zero", 0.2)] and 0.08 <= el < 1.0
+    assert pc._actual_shutter_delay_ms == 0 and pc._actual_process_time_ms == 0
+
+
+def test_zero_step_hard_timeout_never_hangs():
+    calls, el, pc = _zero_case(None, slack=0.3)                          # 끝 알림이 안 와도
+    assert calls and 0.45 <= el < 2.0 and pc._expect_group is None
+
+
+def test_zero_step_callback_error_continues():
+    def boom(pc, lp):
+        raise RuntimeError("x")
+    calls, el, _pc = _zero_case(boom)
+    assert el < 0.5
 
 
 def test_thickness_mode_rejects_mid_pulse_change_in_main_allows_in_shutter_delay():
@@ -253,6 +315,10 @@ def _flow(mode):
             calls.append(("dcp_off",))
             later(box["pc"].on_dc_pulse_off_finished)
 
+        def tzero(confirm_s):
+            calls.append(("thk_zero", confirm_s))
+            later(box["pc"].on_thickness_zero_done)
+
         def tstart(t, e, l):
             calls.append(("thk_start", round(e, 3), round(l, 3)))
             if mode == "done":
@@ -265,7 +331,8 @@ def _flow(mode):
         pc = _pc_of(ProcessController, 2, send_plc=plc, send_mfc=mfc, start_dc_pulse=dcp, stop_dc_pulse=dcp_stop,
                     ig_wait=lambda bp: later(box["pc"].on_ig_ok), rga_scan=lambda: later(box["pc"].on_rga_finished),
                     oes_run=lambda d, i: calls.append(("oes", round(d, 3))),
-                    thickness_start=tstart, thickness_end=lambda k: calls.append(("thk_end", k)),
+                    thickness_zero=tzero, thickness_start=tstart,
+                    thickness_end=lambda k: (calls.append(("thk_end", k)), "유효 0.1 / 목표 0.3 nm")[1],
                     cancel_thickness=lambda: calls.append(("thk_cancel",)))
         pc._cfg.THICKNESS_MAX_TIME_RATIO = 1.0
         pc._cfg.THICKNESS_MAX_TIME_MARGIN_S = 0.0
@@ -288,16 +355,32 @@ def _flow(mode):
     return asyncio.run(go())
 
 
-@pytest.mark.parametrize("mode,end", [("done", "Thickness"), ("limit", "상한"), ("fallback", "시간대체")])
+@pytest.mark.parametrize("mode,end", [("done", "Thickness"), ("fallback", "시간대체")])
 def test_flow_ends_normally(mode, end):
     fin, calls = _flow(mode)
-    assert fin["ok"] and fin["detail"]["result"] == "SUCCESS"            # 상한·시간 대체도 실패가 아니다
+    assert fin["ok"] and fin["detail"]["result"] == "SUCCESS"            # 시간 대체는 실패가 아니다
     assert ("thk_start", 0.3, 0.3) in calls and ("oes", 0.3) in calls
+    zi = calls.index(("thk_zero", 5.0))
+    ms_open = calls.index(("plc", "MS", True))
+    assert zi < ms_open < calls.index(("thk_start", 0.3, 0.3))           # 영점·확인 → 셔터 열기 → 판정
     assert ("thk_end", end) in calls
     i = calls.index(("thk_end", end))
     ms_close = [k for k, c in enumerate(calls) if c[:3] == ("plc", "MS", False)]
     assert ms_close and ms_close[0] > i and calls.index(("dcp_off",)) > ms_close[0]   # 셔터 닫기 → 전원 OFF
     assert fin["detail"]["actual_process_time_min"] > 0
+
+
+def test_flow_limit_is_failure_e848_and_closes_shutter_first():
+    """상한 도달 = 공정 실패(E848 두께 목표 미도달) — 공정 중 장비 이상과 같은 경로: 종료 절차 첫 단계 Main Shutter 닫기 → 전원 OFF."""
+    fin, calls = _flow("limit")
+    d = fin["detail"]
+    assert not fin["ok"] and d["result"] == "FAIL" and d["error_code"] == "E848" and d["error_source"] == "THICKNESS"
+    assert "두께 목표 미도달 — 최대 시간 초과: 유효 0.1 / 목표 0.3 nm" in d["error_detail"] and "상한" in d["error_detail"]
+    assert d["errors"] and "THICKNESS_WAIT" in d["errors"][0] and "E848" in d["errors"][0]
+    i = calls.index(("thk_end", "상한"))
+    ms_close = [k for k, c in enumerate(calls) if c[:3] == ("plc", "MS", False)]
+    first_after = [c for c in calls[i + 1:] if c[0] == "plc"][0]
+    assert first_after == ("plc", "MS", False) and calls.index(("dcp_off",)) > ms_close[0]
 
 
 def test_flow_stop_uses_existing_path():

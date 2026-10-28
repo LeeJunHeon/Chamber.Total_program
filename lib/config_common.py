@@ -530,10 +530,10 @@ THICKNESS_READY_FRESH_S = 5.0           # 시작 전: 최근 이 시간(초) 안
 THICKNESS_LIFE_WARN_PCT = 10.0          # 시작 전: 크리스탈 수명(%)이 이보다 낮으면 경고만
 THICKNESS_MAX_TIME_RATIO = 2.0          # 최대 시간 상한 = max(예상 × 이 배수, 예상 + MARGIN). 예상 = thickness ÷ dep_rate
 THICKNESS_MAX_TIME_MARGIN_S = 300.0     #   (초)
-THICKNESS_ZERO_CONFIRM_NM = 1.0         # 영점 확인: 영점 뒤 새 값 ≤ 이 값(nm, + 영점 뒤 증착 분량)이면 영점 반영 확인 → 기준점 0(영점 시각)
+THICKNESS_ZERO_CONFIRM_NM = 2.0         # 영점 확인: 영점 뒤 새 값 ≤ 이 값(nm, 음수 포함)을 한 번 보면 영점 반영 확인 → 기준점 0(영점 시각)
 THICKNESS_ZERO_CONFIRM_S = 5.0          #   이 시간(초) 안에 확인 안 되면 그때 값을 기준점으로(경고)
 THICKNESS_NEG_WARN_NM = 2.0             # 기록만: 유효두께가 −이 값(nm)보다 낮으면 '두께 음수' 경고
-THICKNESS_DONE_CONSECUTIVE = 3          # 유효두께(장비 두께 − 기준점) ≥ 목표 인 새 값이 연속 이만큼이면 종료(하나라도 미만이면 다시 셈)
+THICKNESS_DONE_CONSECUTIVE = 1          # 유효두께(장비 두께 − 기준점) ≥ 목표 인 새 값이 연속 이만큼이면 종료(1 = 도달 즉시, 하나라도 미만이면 다시 셈)
 THICKNESS_JUMP_MIN_NM = 1.0             # 기록만: 증가량 > max(이 값 nm, 레시피 dep_rate × JUMP_RATE_K × Δt) 면 '큰 튐'(판정에 영향 없음)
 THICKNESS_JUMP_RATE_K = 10.0            #   (배수)
 THICKNESS_MEASURED_RATE_MIN_S = 30.0    # 시간 대체 증착률: 측정이 이 시간(초) 이상이면 실측 평균, 아니면 레시피 dep_rate

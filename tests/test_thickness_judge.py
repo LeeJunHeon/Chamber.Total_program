@@ -1,6 +1,7 @@
 # -*- coding: utf-8 -*-
 """controller/thickness_process.py — ThicknessEndJudge 순수 판정(장비·Qt·asyncio 없음) + 모드 판정·상한 계산.
-종료 규칙: 유효두께(장비 두께 − 기준점) ≥ 목표 인 새 값이 THICKNESS_DONE_CONSECUTIVE(3) 번 연속. 큰 튐은 기록만.
+종료 규칙: 유효두께(장비 두께 − 기준점) ≥ 목표 인 새 값이 THICKNESS_DONE_CONSECUTIVE(기본 1 = 도달 즉시) 번 연속. 큰 튐은 기록만.
+기준점은 메인 셔터 열기 전 THICKNESS_ZERO 에서 정해 판정기에 넘긴다(ZeroConfirm — tests/test_thickness_zero_confirm.py).
 잡음 시뮬레이션은 tests/test_thickness_judge_noise.py. pytest / 직접 실행 모두 가능."""
 import contextlib
 import os
@@ -15,19 +16,22 @@ import pytest                                                    # noqa: E402
 
 from controller.thickness_process import (ThicknessEndJudge, expected_seconds, fmt_mmss,  # noqa: E402
                                           max_time_s, thickness_mode_of)
+import dataclasses                                               # noqa: E402
+
 from lib.thickness_config import ThicknessJudgeParams            # noqa: E402
 
 P = ThicknessJudgeParams()
+P3 = dataclasses.replace(P, done_consecutive=3)                  # 연속 N 회 구조(설정으로 되돌릴 수 있게 남긴 것) 시험용
 
 
 class Feed:
-    """0.5초마다 새 S 값을 넣는 도우미. s = 장비 두께(nm). 첫 값 0 = 영점 확인 → 기준점 0."""
+    """0.5초마다 새 S 값을 넣는 도우미. s = 장비 두께(nm), 기준점 0(영점 확인됨)."""
 
-    def __init__(self, target=1.0, dep=0.1, p=P, base=0.0, zero_ok=True):
-        self.j = ThicknessEndJudge(target, dep, p, start_t=0.0, seq0=0, zero_ok=zero_ok)
+    def __init__(self, target=1.0, dep=0.1, p=P, s0=0.0):
+        self.j = ThicknessEndJudge(target, dep, p, start_t=0.0, base=0.0, seq0=0)
         self.t = 0.0
         self.seq = 0
-        self.s = base
+        self.s = s0
         self.evs = []
 
     def st(self, **kw):
@@ -53,7 +57,8 @@ class Feed:
 
 
 def test_defaults():
-    assert P.done_consecutive == 3 and P.jump_min_nm == 1.0 and P.jump_rate_k == 10.0
+    assert P.done_consecutive == 1 and P.jump_min_nm == 1.0 and P.jump_rate_k == 10.0
+    assert P.zero_confirm_nm == 2.0 and P.zero_confirm_s == 5.0
     for gone in ("step_skip_s", "step_rate_k", "step_min_nm", "ref_rate_n", "step_normal_n", "step_elev_s",
                  "step_exclude_warn_frac"):
         assert not hasattr(P, gone)
@@ -70,8 +75,17 @@ def test_mode_and_limits():
     assert fmt_mmss(65.4) == "01:05" and fmt_mmss(None) == "--:--"
 
 
-def test_done_needs_three_consecutive():
+def test_default_ends_at_first_value_at_target():
     f = Feed(target=1.0)
+    f.new(0.0)
+    for _ in range(19):
+        assert f.new(0.05) is None
+    ev = f.new(0.05)                                    # 1.00 — 목표 도달 즉시
+    assert ev.kind == "done" and ev.eff_nm == pytest.approx(1.0)
+
+
+def test_done_needs_three_consecutive():
+    f = Feed(target=1.0, p=P3)
     assert f.new(0.0) is None                           # 기준점
     for _ in range(19):                                 # 0.05 nm × 19 = 0.95
         assert f.new(0.05) is None
@@ -82,7 +96,7 @@ def test_done_needs_three_consecutive():
 
 
 def test_below_target_resets_count():
-    f = Feed(target=1.0)
+    f = Feed(target=1.0, p=P3)
     f.new(0.0)
     f.new(1.0)
     f.new(0.0)
@@ -94,7 +108,7 @@ def test_below_target_resets_count():
 
 
 def test_same_seq_is_ignored():
-    f = Feed(target=0.2)
+    f = Feed(target=0.2, p=P3)
     f.new(0.0)
     f.new(0.25)                                         # 목표 이상 1회
     assert f.j.done_n == 1
@@ -107,8 +121,9 @@ def test_same_seq_is_ignored():
 
 
 def test_single_spike_near_target_does_not_end_early():
-    """목표 95 nm 근처에서 한 표본만 +5 nm — 다음 값이 목표 미만이면 다시 세어 일찍 끝나지 않는다. 큰 튐은 기록만."""
-    f = Feed(target=100.0, dep=0.2)
+    """(연속 3회 설정) 목표 근처 한 표본만 +5 nm — 다음 값이 목표 미만이면 다시 세어 일찍 끝나지 않는다. 큰 튐은 기록만.
+    기본(1회)은 도달 즉시 끝나는 쪽을 택했다(사용자 결정) — 스파이크 대비가 필요하면 THICKNESS_DONE_CONSECUTIVE 를 올린다."""
+    f = Feed(target=100.0, dep=0.2, p=P3)
     f.new(0.0)
     while f.j.eff < 99.0:
         assert f.new(0.1) is None
@@ -123,7 +138,7 @@ def test_single_spike_near_target_does_not_end_early():
 
 def test_step_offset_that_stays_ends_on_device_value():
     """튄 값이 그대로 유지되면 장비 두께 기준으로 그대로 끝낸다(프로그램은 장비 계산 두께를 믿는다) — 큰 튐은 기록."""
-    f = Feed(target=100.0, dep=0.2)
+    f = Feed(target=100.0, dep=0.2, p=P3)
     f.new(0.0)
     while f.j.eff < 97.0:
         f.new(0.1)
@@ -206,28 +221,21 @@ def test_judge_exception_falls_back():
     assert f.new(5.0) is None
 
 
-@pytest.mark.parametrize("zero_ok", [True, False])
-def test_resume_without_base(zero_ok):
-    """영점 직후 첫 값 전에 끊김 → 30 nm 쌓인 뒤 복귀. 기준점을 30 nm 로 잡으면 목표 + 30 nm 증착."""
-    j = ThicknessEndJudge(100.0, 1.0, P, start_t=0.0, seq0=0, zero_ok=zero_ok)
-    t = 0.0
-    ev = None
-    while ev is None:
-        t += 1.0
-        ev = j.tick({"seq": 0, "thickness_nm": None, "crystal_ok": True, "reset_seen": 0}, t)
-    assert ev.kind == "fallback" and not ev.permanent
-    ev = j.tick({"seq": 1, "thickness_nm": 30.0, "crystal_ok": True, "reset_seen": 0}, 30.0)
-    if zero_ok:
-        assert ev.kind == "resume" and j.base == 0.0 and j.eff == pytest.approx(30.0)
-        assert j.use_rate()[0] == pytest.approx(1.0)     # 기준점 시각 = 영점 시각(30 nm / 30 s)
-        k = ThicknessEndJudge(100.0, 1.0, P, start_t=0.0, seq0=0, zero_ok=True)
-        for tt in range(1, 13):
-            k.tick({"seq": 0, "thickness_nm": None, "crystal_ok": True, "reset_seen": 0}, float(tt))
-        assert k.mode == "fallback"
-        assert k.tick({"seq": 1, "thickness_nm": 100.2, "crystal_ok": True, "reset_seen": 0}, 101.0).kind == "done"
-    else:
-        assert ev is None and j.permanent and j.mode == "fallback" and "기준점" in j.fallback_reason
-        assert j.tick({"seq": 2, "thickness_nm": 31.0, "crystal_ok": True, "reset_seen": 0}, 31.0) is None
+def test_no_base_is_permanent_fallback_from_start():
+    """영점 확인 중 두께 값이 없어 기준점이 없으면 처음부터 영구 시간 대체(예상시간) — 셔터 연 뒤 값이 와도 판정하지 않는다."""
+    j = ThicknessEndJudge(100.0, 0.5, P, start_t=0.0, base=None, seq0=0)
+    ev = j.start_event()
+    assert ev.kind == "fallback" and ev.permanent and ev.remaining_s == pytest.approx(200.0) and "기준점" in ev.reason
+    assert j.tick({"seq": 1, "thickness_nm": 500.0, "crystal_ok": True, "reset_seen": 0}, 1.0) is None
+    assert ThicknessEndJudge(100.0, 0.5, P, start_t=0.0, base=0.0).start_event() is None
+
+
+def test_base_from_zero_step_is_subtracted():
+    """영점 확인 안 됨(그때 값 50 nm 가 기준점) — 늘어난 양으로 판정."""
+    j = ThicknessEndJudge(10.0, 0.5, P, start_t=0.0, base=50.0, seq0=0)
+    assert j.tick({"seq": 1, "thickness_nm": 55.0, "crystal_ok": True, "reset_seen": 0}, 10.0) is None
+    assert j.eff == pytest.approx(5.0)
+    assert j.tick({"seq": 2, "thickness_nm": 60.0, "crystal_ok": True, "reset_seen": 0}, 20.0).kind == "done"
 
 
 def test_warnings_only_do_not_change_judgement():
@@ -241,11 +249,11 @@ def test_warnings_only_do_not_change_judgement():
     assert f.new(2.0) is None and f.j.jump_count == 1   # 큰 튐: > max(1.0, 0.1 × 10 × 0.5)
     assert f.new(0.9) is None and f.j.jump_count == 1   # 1.0 이하는 큰 튐 아님
     assert f.j.eff == pytest.approx(2.95)               # 판정 값은 장비 두께 그대로
-    g = Feed(target=100.0, dep=0.1, base=10.0)
+    g = Feed(target=100.0, dep=0.1)
     g.new(0.0)
-    for _ in range(25):
-        g.new(0.0)
-    g.new(-5.0)
+    g.new(-1.5)
+    assert not any("음수" in e for e in g.j.events)    # −THICKNESS_NEG_WARN_NM(2.0) 까지는 경고 없음
+    g.new(-1.0)
     assert any("음수" in e for e in g.j.events)
 
 
@@ -253,7 +261,7 @@ def test_warnings_only_do_not_change_judgement():
 def test_recipe_rate_does_not_affect_end(recipe, actual):
     """판정은 dep_rate 를 쓰지 않는다 — 실제가 레시피의 1/20~20배여도 목표에서 끝난다(상한 안)."""
     target = 100.0
-    j = ThicknessEndJudge(target, recipe, P, start_t=0.0, seq0=0)
+    j = ThicknessEndJudge(target, recipe, P, start_t=0.0, base=0.0, seq0=0)
     limit = max_time_s(expected_seconds(target, recipe), P)
     t, seq, ev = 0.0, 0, None
     while ev is None and t < limit:
@@ -265,7 +273,7 @@ def test_recipe_rate_does_not_affect_end(recipe, actual):
         assert ev is None
         return
     assert ev is not None and ev.kind == "done"
-    assert target <= actual * t <= target + actual * 0.5 * 3 + actual * 0.5 + 0.1
+    assert target - 0.05 <= actual * t <= target + actual * 0.5 + 0.1     # 0.1 nm 반올림 + 도달 즉시 종료
 
 
 def test_view_text():

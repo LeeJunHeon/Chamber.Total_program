@@ -50,10 +50,10 @@ class ThicknessJudgeParams:
     life_warn_pct: float = 10.0          # 시작 전: 크리스탈 수명이 이보다 낮으면 경고만
     max_time_ratio: float = 2.0          # 최대 시간 상한 = max(예상 × ratio, 예상 + margin)
     max_time_margin_s: float = 300.0
-    zero_confirm_nm: float = 1.0         # 영점 확인: 영점 뒤 새 값 ≤ 이 값(+ 영점 뒤 증착 분량)이면 영점이 반영된 것 → 기준점 0
+    zero_confirm_nm: float = 2.0         # 영점 확인: 영점 뒤 새 값 ≤ 이 값(음수 포함)을 한 번 보면 영점 반영 → 기준점 0
     zero_confirm_s: float = 5.0          #   이 시간 안에 확인 안 되면 그때 값을 기준점으로(경고)
     neg_warn_nm: float = 2.0             # 기록만: 유효두께가 −이 값보다 낮으면 '두께 음수' 경고
-    done_consecutive: int = 3            # 유효두께(장비 두께 − 기준점) ≥ 목표 인 새 값이 연속 이만큼이면 종료
+    done_consecutive: int = 1            # 유효두께(장비 두께 − 기준점) ≥ 목표 인 새 값이 연속 이만큼이면 종료(1 = 목표 도달 즉시)
     jump_min_nm: float = 1.0             # 기록만: 증가량 > max(jump_min_nm, 레시피 dep_rate × jump_rate_k × Δt) 면 '큰 튐'
     jump_rate_k: float = 10.0
     measured_rate_min_s: float = 30.0    # 시간 대체 증착률: 측정이 이만큼 이상이면 실측 평균, 아니면 레시피 dep_rate
