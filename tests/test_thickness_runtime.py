@@ -283,7 +283,8 @@ def test_listener_done_fallback_resume():
         svc = FakeSvc()
         rt, _pc, rec = _rt(svc)
         rt._thk_rec = {"mode": "Thickness", "end": "Thickness", "target": 1.0}
-        j = ThicknessEndJudge(1.0, 0.1, ThicknessJudgeParams(), start_t=svc.t, seq0=7)
+        j = ThicknessEndJudge(1.0, 0.1, ThicknessJudgeParams(), start_t=svc.t, seq0=7,
+                              zero_ok=False)            # 첫 값(3.0)을 기준점으로 — 이 테스트는 리스너 흐름만 본다
         rt._thk_judge = rt._thk_last_judge = j
         _drive(rt, svc, [(8, 3.0)] + [(9 + i, 3.0 + 0.05 * (i + 1)) for i in range(10)])
         assert "set_thickness_state" in rec.names() and "on_thickness_done" not in rec.names()

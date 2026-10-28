@@ -10,8 +10,11 @@ ThicknessEndJudge.tick(status, now) → None | ThicknessEvent
              permanent=True(XTAL FAIL·공정 중 리셋·판정 예외)면 두께 판정으로 돌아오지 않는다.
   resume   : 통신이 돌아와(리셋 없음) 두께 판정으로 복귀 — 공정 단계가 시간 대체 타이머를 지운다.
 판정 규칙(STM-100 이 초당 4회 두께를 계산해 주므로 그 값으로 끊는다 — Evaporator 실제 공정과 같은 방식):
-  - 영점 뒤 처음 받은 새 S 를 기준점으로(유효두께 = S − 기준점). 기준점 뒤 zero_late_window_s 안에 zero_late_drop_nm 이상
-    떨어지면 영점 지연 반영으로 보고 기준점 재설정.
+  - 기준점(유효두께 = S − 기준점)은 영점(B)이 반영된 것을 확인하고 잡는다. 영점 성공(zero_ok)이면 영점 뒤 새 값이
+    zero_confirm_nm + 영점 뒤 증착 분량(max(레시피·장비 증착률) × 경과 × 1.5) 이하일 때(음수 = 셔터 열 충격 하락도 포함) 영점 반영 확인
+    → 기준점 0(영점 시각). zero_confirm_s 안에 확인 안 되면(영점이 안 먹었거나 늦음) 그때 값을 기준점으로 잡고 경고.
+    영점 실패면 영점 뒤 첫 새 값을 기준점으로. 기준점 전 값은 판정에 쓰지 않는다(늦게 반영된 영점 전 두께로 끝나지 않게).
+    기준점 뒤 하락은 재설정하지 않는다 — 열 충격 하락·회복은 장비 두께 그대로(유효두께가 잠깐 음수였다 돌아옴).
   - status.seq 가 바뀐 값만 판정한다(같은 값 중복 금지).
   - 종료: 유효두께 ≥ 목표 인 새 값이 done_consecutive 번 연속. 하나라도 목표 미만이면 다시 센다.
     (목표 근처 한 표본 스파이크로 일찍 끝나지 않고, 잡음 σ 0.3 nm 까지 초과는 몇 표본 이내 — tests/test_thickness_judge_noise.py)
@@ -229,20 +232,8 @@ class ThicknessEndJudge:
             return ThicknessEvent("resume", reason="통신 복귀", eff_nm=eff)
 
         if self.base is None:
-            self.base, self.base_t = s, now
-            self.prev_s, self.prev_t = s, now
-            self._set_eff(0.0, now)
-            self._last_inc_t = now
-            self._log(f"두께 기준점 {s:.2f} nm (영점 뒤 첫 값)")
-            return None
-
-        if (now - self.base_t) <= float(p.zero_late_window_s) and (self.base - s) >= float(p.zero_late_drop_nm):
-            self._log(f"영점 지연 반영 감지({s - self.base:+.2f} nm, 기준점 뒤 {now - self.base_t:.1f}초) → 기준점 재설정 {s:.2f} nm")
-            self.base, self.base_t = s, now
-            self.prev_s, self.prev_t = s, now
-            self.done_n = 0
-            self._set_eff(0.0, now)
-            return None
+            if not self._take_base(s, st, now):
+                return None                  # 영점 확인 대기 — 이 값은 판정에 쓰지 않는다
 
         eff = s - self.base
         dt = max(1e-3, now - float(self.prev_t))
@@ -259,6 +250,30 @@ class ThicknessEndJudge:
         else:
             self.done_n = 0
         return None
+
+    def _take_base(self, s: float, st: dict, now: float) -> bool:
+        """기준점을 잡는다(잡았으면 True — 이 값부터 판정). 영점 실패면 첫 값, 성공이면 영점 반영 확인 뒤 0."""
+        p = self.p
+        if not self.zero_ok:
+            self.base, self.base_t = s, now
+            self._log(f"두께 기준점 {s:.2f} nm (영점 실패 — 영점 뒤 첫 값)")
+        else:
+            el = max(0.0, now - self.t0)
+            r = st.get("rate_nm_s")
+            rate = max(self.dep_rate, float(r) if isinstance(r, (int, float)) and r > 0 else 0.0)
+            lim = float(p.zero_confirm_nm) + rate * el * 1.5
+            if s <= lim:
+                self.base, self.base_t = 0.0, self.t0
+                self._log(f"영점 확인 — 영점 뒤 {el:.1f}초 값 {s:.2f} nm (≤ {lim:.2f}) → 기준점 0 nm(영점 시각)")
+            elif el >= float(p.zero_confirm_s):
+                self.base, self.base_t = s, now
+                self._log(f"⚠ 영점 확인 안 됨 — {p.zero_confirm_s:g}초 동안 영점 반영 값이 없음, 현재 값 {s:.2f} nm 를 기준점으로")
+            else:
+                return False
+        self.prev_s, self.prev_t = s, now
+        self._set_eff(s - self.base, now)
+        self._last_inc_t = now
+        return True
 
     def _warnings(self, st: dict, eff: float, d: float, dt: float, now: float) -> None:
         """기록만 — 판정에 쓰지 않는다."""
@@ -282,6 +297,6 @@ class ThicknessEndJudge:
                     self._log(f"⚠ 증착률 급등 {r:.3f} nm/s (레시피 {self.dep_rate:g} × {p.rate_spike_k:g} 초과) — 기록만")
             elif r < self.dep_rate * float(p.rate_spike_k) * 0.5:
                 self._spike_on = False
-        if eff < -float(p.zero_late_drop_nm) and not self._neg_warned:
+        if eff < -float(p.neg_warn_nm) and not self._neg_warned:
             self._neg_warned = True
             self._log(f"⚠ 유효두께 음수 {eff:.2f} nm — 기록만")

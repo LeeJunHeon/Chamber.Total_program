@@ -21,9 +21,9 @@ P = ThicknessJudgeParams()
 
 
 class Feed:
-    """0.5초마다 새 S 값을 넣는 도우미. s = 장비 두께(nm), 기준점 = 첫 값."""
+    """0.5초마다 새 S 값을 넣는 도우미. s = 장비 두께(nm). 첫 값 0 = 영점 확인 → 기준점 0."""
 
-    def __init__(self, target=1.0, dep=0.1, p=P, base=5.0, zero_ok=True):
+    def __init__(self, target=1.0, dep=0.1, p=P, base=0.0, zero_ok=True):
         self.j = ThicknessEndJudge(target, dep, p, start_t=0.0, seq0=0, zero_ok=zero_ok)
         self.t = 0.0
         self.seq = 0
@@ -133,23 +133,6 @@ def test_step_offset_that_stays_ends_on_device_value():
     assert ev.kind == "done" and f.j.jump_count == 1
 
 
-def test_late_zero_resets_base():
-    f = Feed(target=1.0, base=50.0)                     # 영점이 아직 반영 안 된 값이 기준점이 됨
-    f.new(0.0)
-    f.new(0.05)
-    assert f.new(-49.0) is None                         # 10초 안 2 nm 이상 하락 → 기준점 재설정
-    assert f.j.base == pytest.approx(1.05) and f.j.eff == 0.0
-    assert any("영점 지연" in e for e in f.j.events)
-    f.new(0.05)
-    assert f.j.eff == pytest.approx(0.05)
-    g = Feed(target=100.0, base=10.0)                   # 10초가 지난 뒤의 하락은 재설정하지 않는다
-    g.new(0.0)
-    for _ in range(25):
-        g.new(0.0)
-    g.new(-5.0)
-    assert g.j.base == 10.0
-
-
 def test_stale_fallback_then_resume_and_done_on_resume():
     f = Feed(target=2.0, dep=0.1)
     f.new(0.0)
@@ -202,8 +185,9 @@ def test_fallback_rate_measured_after_30s():
     ev = None
     while ev is None:
         ev = f.same(dt=1.0)
-    assert f.j.use_rate()[1] == "실측" and f.j.use_rate()[0] == pytest.approx(0.2)
-    assert ev.remaining_s == pytest.approx((20.0 - 8.0) / 0.2)
+    rate = 8.0 / 40.5                                   # 기준점 시각 = 영점 시각(0) — 영점 뒤 40.5초에 8.0 nm
+    assert f.j.use_rate()[1] == "실측" and f.j.use_rate()[0] == pytest.approx(rate)
+    assert ev.remaining_s == pytest.approx((20.0 - 8.0) / rate)
     g = Feed(target=20.0, dep=0.1)                      # 20초만 측정 → 레시피 값
     g.new(0.0)
     for _ in range(40):
@@ -291,7 +275,7 @@ def test_view_text():
         f.new(0.05)
     text, pct = f.j.view({"rate_nm_s": 0.1}, f.t)
     assert text == "두께 0.5 / 10.0 nm (5%) · 증착률 0.100 nm/s · 예상 남은 시간 01:35" and pct == pytest.approx(5.0)
-    assert "증착률 0.100 nm/s" in f.j.view({"rate_nm_s": None}, f.t)[0]           # 장비 값 없으면 실측 평균
+    assert "증착률 0.091 nm/s" in f.j.view({"rate_nm_s": None}, f.t)[0]           # 장비 값 없으면 실측 평균(0.5 nm / 영점 뒤 5.5초)
 
 
 if __name__ == "__main__":
