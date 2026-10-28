@@ -38,7 +38,7 @@ class ThicknessFactorDialog(QDialog):
         self._on_saved = on_saved
         self._materials: List[Material] = []
         self._mat_dialog = None
-        self.setWindowTitle(f"CH{int(ch)} 두께 모니터 Factor 설정")
+        self.setWindowTitle(f"CH{int(ch)} Thickness Monitor — Factor 설정")
         self.setModal(True)
         self.resize(500, 440)
 

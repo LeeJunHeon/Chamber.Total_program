@@ -29,6 +29,10 @@ class FakeSvc:
     def __init__(self):
         self.reloaded = 0
 
+    def find_material(self, name):
+        from lib.thickness_materials import Material, find_material
+        return find_material([Material("Aluminum Oxide", "Al2O3", 3.97, 1.0)], name)
+
     def reload_factors(self):
         self.reloaded += 1
         return []
@@ -42,6 +46,11 @@ _OK = {"connected": True, "stale": False, "thickness_nm": 123.44, "rate_nm_s": 0
        "tooling": 100.0, "reset_seen": 0, "last_error": "", "process_running": False}
 
 
+def _one_line(t):
+    """적용값 줄 — 폭에 따라 두 줄로 나뉜 것을 한 줄로 되돌려 비교(글꼴 폭은 플랫폼마다 다름)."""
+    return t.replace("\nTooling", " · Tooling").replace("\n", " · ")
+
+
 def _panel():
     cfg = ThicknessConfig(enabled=True, ch=2, port=4008)
     return ThicknessPanel(FakeSvc(), cfg)
@@ -50,31 +59,55 @@ def _panel():
 def test_panel_initial_and_values():
     p = _panel()
     assert p.width() == PANEL_W and p.height() == PANEL_H
-    assert p.title.text() == "CH2 두께 모니터"
-    assert p.thk_label.text() == "---" and not p.zero_button.isEnabled()
-    assert p.lamps["conn"].text() == "끊김" and p.error_label.text() == "연결 대기"
-    assert p.progress.format() == "대기" and p.mode_label.text() == "종료 방식 대기"
+    assert p.title.text() == "CH2 Thickness Monitor"
+    assert p.thk_label.text() == "---" and p.rate_label.text() == "--- nm/s"   # 값 없음도 단위 표시
+    assert not p.zero_button.isEnabled() and p.factor_button.isEnabled()
+    assert p.lamps["conn"].text() == "끊김" and p.error_label.text() == ""     # 연결 상태는 램프로만
+    # 공정 없음 — 한 번만, 막대는 비우고 글자 없음
+    texts = [p.mode_label.text(), p.target_label.text(), p.proc_text.text()]
+    assert texts.count("공정 없음") == 1 and texts == ["공정 없음", "", ""]
+    assert p.progress.value() == 0 and not p.progress.isTextVisible()
+    assert _one_line(p.material_label.text()) == "Density --- · Z --- · Tooling --- %" and p.material_label.wordWrap()
     p.update_status(_OK)
     assert p.thk_label.text() == "123.4"
     assert p.rate_label.text() == "0.123 nm/s"                          # nm 만(Å/s 병기 없음)
     assert p.freq_label.text() == "주파수 5,912,345 Hz" and p.life_label.text() == "수명 12.4 %"
-    assert p.material_label.text() == "적용 ρ 2.7 · Z 1.080 · T 100.0%"
+    assert _one_line(p.material_label.text()) == "Density 2.7 · Z 1.080 · Tooling 100 %"
     assert p.lamps["conn"].text() == "연결" and p.lamps["xtal"].text() == "XTAL" and p.lamps["resp"].text() == "응답"
     assert "#2e7d32" in p.lamps["resp"].styleSheet()
+    assert p.zero_button.isEnabled() and p.error_label.text() == ""
+
+
+def test_error_line_only_when_connected_without_response():
+    p = _panel()
+    p.update_status(dict(_OK, last_error="10:00:01 체크섬 오류 — x"))
+    assert p.error_label.text() == ""                                   # 연결·정상이면 비움(지나간 오류는 표시 안 함)
+    p.update_status(dict(_OK, stale=True, age_s=12.0, last_error="10:00:01 응답 없음 — S"))
+    assert p.error_label.toolTip() == "응답 없음 12초 · 10:00:01 응답 없음 — S"
+    p.update_status(dict(_OK, connected=False, stale=True, age_s=30.0, last_error="x"))
+    assert p.error_label.text() == "" and p.lamps["conn"].text() == "끊김"   # 미연결은 램프로만
+
+
+def test_zero_button_enable_rules_and_disabled_style():
+    p = _panel()
+    p.update_status(_OK)
     assert p.zero_button.isEnabled()
+    for st in (dict(_OK, connected=False), dict(_OK, stale=True), dict(_OK, process_running=True)):
+        p.update_status(st)
+        assert not p.zero_button.isEnabled() and p.factor_button.isEnabled()
+    assert "QPushButton:disabled" in p.zero_button.styleSheet() and "#b0b7be" in p.zero_button.styleSheet()
+    p.update_status(dict(_OK, process_running=True))
+    assert "공정 중" in p.zero_button.toolTip()
 
 
 def test_panel_stale_xtal_fail_process_and_reset():
     p = _panel()
     p.update_status(dict(_OK, crystal_ok=False))
     assert p.lamps["xtal"].text() == "XTAL FAIL" and "#c62828" in p.lamps["xtal"].styleSheet()
-    p.update_status(dict(_OK, stale=True, age_s=12.0, crystal_ok=False, last_error="응답 없음 — 응답 없음 'S' (3회)"))
+    p.update_status(dict(_OK, stale=True, age_s=12.0, crystal_ok=False))
     assert p.lamps["xtal"].text() == "XTAL" and "#9aa3ab" in p.lamps["xtal"].styleSheet()   # stale → 회색
     assert p.lamps["resp"].text() == "응답 없음" and "#9aa3ab" in p.lamps["resp"].styleSheet()
     assert "#9aa3ab" in p.thk_label.styleSheet() and p.thk_label.text() == "123.4"          # 마지막 값, 회색
-    assert not p.zero_button.isEnabled() and p.error_label.toolTip() == "응답 없음 — 응답 없음 'S' (3회)"
-    p.update_status(dict(_OK, process_running=True))
-    assert not p.zero_button.isEnabled() and "공정 중" in p.zero_button.toolTip()
     p.update_status(dict(_OK, reset_seen=2))
     assert p.reset_label.text() == "리셋 2회"
 
@@ -92,12 +125,17 @@ def test_panel_style_only_on_change():
     assert len(calls) == 1
 
 
-def test_process_view_placeholder():
+def test_process_view_running_end_and_idle():
     p = _panel()
     p.set_process_view("Thickness", "100.0 nm", 42.4, "두께 42.4 / 100.0 nm")
-    assert p.progress.value() == 42 and p.mode_label.text() == "종료 방식 Thickness"
-    p.set_process_view()
-    assert p.progress.format() == "대기" and p.proc_text.text() == "대기"
+    assert p.progress.value() == 42 and p.progress.isTextVisible() and p.progress.format() == "42%"
+    assert p.mode_label.text() == "종료 방식 Thickness" and p.target_label.text() == "목표 100.0 nm"
+    p.set_process_view("Time", "—", None, "Time 모드 공정(두께는 기록만)")
+    assert p.target_label.text() == "" and p.progress.value() == 0 and not p.progress.isTextVisible()
+    p.set_process_view("Thickness", "100.0 nm", 100.1, "종료(Thickness) — 100.1 nm")      # 종료 뒤 결과 유지
+    assert p.mode_label.text() == "종료 방식 Thickness" and p.proc_text.toolTip() == "종료(Thickness) — 100.1 nm"
+    p.set_idle()
+    assert [p.mode_label.text(), p.target_label.text(), p.proc_text.text()] == ["공정 없음", "", ""]
 
 
 def _materials(tmp):
@@ -180,9 +218,14 @@ def test_material_dialog_edit_validate_and_refresh_factor_dialog():
 
 def test_panel_shows_applied_material_name():
     p = _panel()
-    p.update_status(dict(_OK, material="Aluminum Oxide"))
-    assert p.material_label.text().startswith("적용 Al") and p.material_label.text().endswith("100.0%")
-    assert p.material_label.toolTip().startswith("적용 Aluminum Oxide · ρ 2.7 · Z 1.080 · T 100.0%")
+    p.update_status(dict(_OK, material="Aluminum Oxide", density=3.97, z_factor=1.0, tooling=100.0))
+    assert _one_line(p.material_label.text()) == "Al2O3 · Density 3.97 · Z 1.000 · Tooling 100 %"      # 목록에 있으면 기호
+    assert p.material_label.toolTip().startswith("Aluminum Oxide · Density 3.97")
+    p.update_status(dict(_OK, material="Unknown Stuff"))
+    assert _one_line(p.material_label.text()).startswith("Unknown Stuff · Density 2.7")            # 목록에 없으면 이름
+    long = dict(_OK, material="Very Long Material Name For Wrapping", density=19.3, z_factor=0.381, tooling=399.0)
+    p.update_status(long)
+    assert p.material_label.text() == "Very Long Material Name For Wrapping\nDensity 19.3 · Z 0.381 · Tooling 399 %"  # 재료 / 값 두 줄
 
 
 def test_layout_side_panels():
@@ -211,6 +254,10 @@ def test_layout_side_panels():
     w = Win(True, False)                                           # 히터만 — _init_ch2_heater 의 크기 그대로(다시 안 바꿈)
     main.MainWindow._layout_side_panels(w)
     assert w.sizes == []
+    w = Win(True, True)                                            # 히터 패널을 숨기면 두께 패널이 그 자리로
+    w.heater_panel.hide()
+    main.MainWindow._layout_side_panels(w)
+    assert w.thickness_panels[2].geometry().topLeft().y() == 10
     w = Win(False, True)                                           # 두께만
     main.MainWindow._layout_side_panels(w)
     assert w.thickness_panels[2].geometry().topLeft().y() == 10 and w.sizes == [(1086 + PANEL_W + 12, 1010)]

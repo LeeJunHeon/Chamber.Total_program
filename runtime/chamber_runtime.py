@@ -6835,6 +6835,9 @@ class ChamberRuntime:
         try:
             v = self._thk_values()
             self.data_logger.set_thickness_record(v)
+            if v.get("end") == END_TIME:                 # 패널: 다음 공정 전까지 마지막 결과(Thickness 모드는 _thk_on_end 가 넣음)
+                fin = v.get("final_nm")
+                self._thk_view_set(END_TIME, "—", None, "종료(Time)" + (f" — {float(fin):.1f} nm" if fin is not None else ""))
             if v.get("final_nm") is not None:
                 ar = v.get("avg_rate")
                 self.append_log("THICKNESS", f"두께 요약 — 종료 방식 {v.get('end')} · 최종 {float(v['final_nm']):.2f} nm"

@@ -1350,7 +1350,7 @@ class MainWindow(QWidget):
         try:
             x, y, w = 1086, 10, 0
             hp = getattr(self, "heater_panel", None)
-            if hp is not None:
+            if hp is not None and not hp.isHidden():        # 히터 패널 실제 높이 바로 아래(숨기면 두께 패널이 그 자리로)
                 y = hp.geometry().bottom() + 1 + 10
                 w = max(w, hp.width())
             tp = (getattr(self, "thickness_panels", None) or {}).get(2)

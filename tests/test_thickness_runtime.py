@@ -368,6 +368,11 @@ def test_time_mode_record_uses_main_window_values():
         p = {}
         rt._thk_card_fields(p)
         assert p == {"thickness_end": "Time", "thickness_final": "2.0 nm"}
+        views = []                                       # 패널: 다음 공정 전까지 마지막 결과(종료 방식·최종 두께)
+        rt.set_thickness_view(lambda *a: views.append(a))
+        rt.data_logger = types.SimpleNamespace(set_thickness_record=lambda v: None)
+        rt._thk_finalize_record()
+        assert views[-1] == ("Time", "—", None, "종료(Time) — 2.0 nm")
         rt2, _pc2, _ = _rt(None)                          # 두께 모니터 없음 → 카드·기록 그대로
         p = {}
         rt2._thk_card_fields(p)

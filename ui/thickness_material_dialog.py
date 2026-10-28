@@ -34,7 +34,7 @@ class ThicknessMaterialDialog(QDialog):
         self._used = {str(n).casefold(): str(n) for n in used_names if n}
         self._on_saved = on_saved
         self.confirm: Callable[[str], bool] = self._ask           # 테스트에서 바꿔 끼운다
-        self.setWindowTitle("두께 모니터 재료 목록")
+        self.setWindowTitle("Thickness Monitor — 재료 목록")
         self.setModal(True)
         self.resize(640, 560)
 
