@@ -13,7 +13,7 @@
 리스너 예외는 잡아서 로그만(같은 문구는 60초에 1번) 남기고 폴링은 계속한다.
 
 status():
-  connected, ok_ts(마지막 정상 S 단조시간), age_s, stale, thickness_nm, rate_nm_s, rate_a_s, freq_hz, life_pct,
+  connected, ok_ts(마지막 정상 S 단조시간), age_s, stale, thickness_nm, rate_nm_s, freq_hz, life_pct,
   crystal_ok, reset_seen(전원 리셋 플래그 누적), seq(새 S 값마다 +1 — 같은 값 중복 판정 방지),
   density, z_factor, tooling(장비에 적용된 값), last_error, process_running, process_name, t
 """
@@ -274,11 +274,10 @@ class ThicknessService:
         except asyncio.CancelledError:
             raise
         except ThicknessValueUnavailable:
-            self._st["rate_a_s"] = self._st["rate_nm_s"] = None
+            self._st["rate_nm_s"] = None
         except ThicknessError as e:
             await self._on_fail(e)
         else:
-            self._st["rate_a_s"] = r
             self._st["rate_nm_s"] = r * _A_TO_NM
 
     async def _poll_slow(self) -> None:
@@ -339,7 +338,7 @@ class ThicknessService:
     def _blank_status() -> dict:
         return {
             "connected": False, "ok_ts": None, "age_s": None, "stale": True,
-            "thickness_nm": None, "rate_nm_s": None, "rate_a_s": None,
+            "thickness_nm": None, "rate_nm_s": None,
             "freq_hz": None, "life_pct": None, "crystal_ok": None,
             "reset_seen": 0, "seq": 0,
             "density": None, "z_factor": None, "tooling": None,

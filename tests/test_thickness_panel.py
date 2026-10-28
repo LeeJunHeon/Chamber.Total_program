@@ -37,7 +37,7 @@ class FakeSvc:
         return True, ""
 
 
-_OK = {"connected": True, "stale": False, "thickness_nm": 123.44, "rate_nm_s": 0.123, "rate_a_s": 1.23,
+_OK = {"connected": True, "stale": False, "thickness_nm": 123.44, "rate_nm_s": 0.123,
        "freq_hz": 5912345, "life_pct": 12.4, "crystal_ok": True, "density": 2.7, "z_factor": 1.08,
        "tooling": 100.0, "reset_seen": 0, "last_error": "", "process_running": False}
 
@@ -56,7 +56,7 @@ def test_panel_initial_and_values():
     assert p.progress.format() == "대기" and p.mode_label.text() == "종료 방식 대기"
     p.update_status(_OK)
     assert p.thk_label.text() == "123.4"
-    assert p.rate_label.text() == "0.123 nm/s (1.2 Å/s)"
+    assert p.rate_label.text() == "0.123 nm/s"                          # nm 만(Å/s 병기 없음)
     assert p.freq_label.text() == "주파수 5,912,345 Hz" and p.life_label.text() == "수명 12.4 %"
     assert p.material_label.text() == "적용 ρ 2.7 · Z 1.080 · T 100.0%"
     assert p.lamps["conn"].text() == "연결" and p.lamps["xtal"].text() == "XTAL" and p.lamps["resp"].text() == "응답"

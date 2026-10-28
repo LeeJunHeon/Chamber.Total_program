@@ -6679,8 +6679,6 @@ class ChamberRuntime:
             return
         try:
             ev = j.tick(st, svc.clock())
-            for _n in j.pop_notices():          # 계단 튐 제외 합계 경고 등(구글챗 1회)
-                self._thk_notify(_n)
             if ev is not None:
                 self._thk_apply_event(ev, j)
             if self._thk_judge is j or (ev is not None and ev.kind == "fallback"):
@@ -6760,8 +6758,7 @@ class ChamberRuntime:
             eff = float(j.eff)
             rec["final_nm"] = eff
             rec["avg_rate"] = j.avg_rate()
-            rec["suspect"] = int(j.suspect_count)
-            rec["step_excluded"] = float(j.step_excluded_nm)
+            rec["jumps"] = int(j.jump_count)          # 큰 튐 횟수(기록만 — 판정에 쓰지 않음)
             rec["fallback_reason"] = j.fallback_reason
         eff_txt = "--" if eff is None else f"{eff:.1f}"
         if kind == END_LIMIT:
@@ -6806,9 +6803,7 @@ class ChamberRuntime:
                 self.append_log("THICKNESS", f"두께 요약 — 종료 방식 {v.get('end')} · 최종 {float(v['final_nm']):.2f} nm"
                                              + (f" / 목표 {float(v['target']):g} nm" if v.get("target") else "")
                                              + (f" · 평균 {float(ar):.4f} nm/s" if ar is not None else "")
-                                             + (f" · 계단 튐 의심 {v.get('suspect')}회" if v.get("suspect") else "")
-                                             + (f" · 계단 튐 제외 {float(v['step_excluded']):.2f} nm"
-                                                if v.get("step_excluded") else ""))
+                                             + (f" · 큰 튐 {v.get('jumps')}회(기록만)" if v.get("jumps") else ""))
         except Exception as e:
             self.append_log("THICKNESS", f"⚠ 두께 기록 실패(무시): {e!r}")
 
@@ -6822,8 +6817,8 @@ class ChamberRuntime:
             payload.setdefault("thickness_end", str(v.get("end") or ""))
             fin = "--" if v.get("final_nm") is None else f"{float(v['final_nm']):.1f}"
             payload.setdefault("thickness_final", f"{fin} / {float(v['target']):g} nm" if v.get("target") else f"{fin} nm")
-            if v.get("step_excluded"):
-                payload.setdefault("thickness_excluded", f"{float(v['step_excluded']):.2f} nm")
+            if v.get("jumps"):
+                payload.setdefault("thickness_jumps", f"{int(v['jumps'])}회(기록만)")
 
     # ============================= CH2 히터(2단계) =============================
     def attach_heater(self, svc) -> None:

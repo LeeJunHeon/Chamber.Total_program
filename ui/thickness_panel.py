@@ -163,8 +163,8 @@ class ThicknessPanel(QFrame):
         val_col = "#9aa3ab" if stale else "#1f2937"
         self.thk_label.setText(_fmt(st.get("thickness_nm"), "{:.1f}"))
         self._style(self.thk_label, f"QLabel {{border: none; background: transparent; color: {val_col}; font-size: 20pt; font-weight: bold;}}")
-        r_nm, r_a = st.get("rate_nm_s"), st.get("rate_a_s")
-        self.rate_label.setText("---" if r_nm is None else f"{float(r_nm):.3f} nm/s ({_fmt(r_a, '{:.1f}')} Å/s)")
+        r_nm = st.get("rate_nm_s")
+        self.rate_label.setText("---" if r_nm is None else f"{float(r_nm):.3f} nm/s")
         self._style(self.rate_label, f"QLabel {{border: none; background: transparent; color: {val_col}; font-size: 10pt; font-weight: bold;}}")
         sub_col = "#9aa3ab" if stale else "#546e7a"
         fq = st.get("freq_hz")

@@ -593,8 +593,8 @@ class ChatNotifier(QObject):
             fields.setdefault("종료 방식", str(merged.get("thickness_end")))
         if merged.get("thickness_final"):
             fields.setdefault("최종 두께", str(merged.get("thickness_final")))
-        if merged.get("thickness_excluded"):
-            fields.setdefault("계단 튐 제외", str(merged.get("thickness_excluded")))
+        if merged.get("thickness_jumps"):
+            fields.setdefault("큰 튐", str(merged.get("thickness_jumps")))
 
         warns: List[str] = list(merged.get("warnings") or [])
         if warns:

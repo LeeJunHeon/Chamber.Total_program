@@ -114,7 +114,7 @@ def test_status_values_and_units_and_seq():
             st = svc.status()
             assert st["connected"] and not st["stale"]
             assert st["thickness_nm"] == pytest.approx(123.4)          # Å → nm 한 곳
-            assert st["rate_nm_s"] == pytest.approx(1.23) and st["rate_a_s"] == 12.3
+            assert st["rate_nm_s"] == pytest.approx(1.23) and "rate_a_s" not in st      # 밖으로는 nm 만
             assert st["freq_hz"] == 5900000 and st["life_pct"] == 12.4 and st["crystal_ok"] is True
             assert (st["density"], st["z_factor"], st["tooling"]) == (2.7, 1.08, 100.0)
             assert st["seq"] == 1 and seen and seen[-1]["seq"] == 1

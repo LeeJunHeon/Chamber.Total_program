@@ -293,10 +293,10 @@ def test_listener_done_fallback_resume():
         assert rec.names().count("on_thickness_fallback") == 1
         _drive(rt, svc, [(30, 3.95)])
         assert "on_thickness_resume" in rec.names()
-        _drive(rt, svc, [(31, 4.0), (32, 4.05)])
+        _drive(rt, svc, [(31, 4.0), (32, 4.05), (33, 4.1)])           # 목표 이상 3회 연속
         assert rec.names()[-1] == "on_thickness_done" and rt._thk_judge is None
         n = len(rec.calls)
-        _drive(rt, svc, [(33, 5.0)])                     # 끝난 뒤에는 판정하지 않음
+        _drive(rt, svc, [(34, 5.0)])                     # 끝난 뒤에는 판정하지 않음
         assert len(rec.calls) == n
     asyncio.run(go())
 
@@ -364,16 +364,16 @@ def test_thickness_end_limit_warns_and_records():
         rt._thk_pre = {"chuck": "mid", "gun": "G1", "tooling": 110.0, "density": 2.7, "z_factor": 1.08}
         rt._thk_run_started({"thickness_mode": True, "thickness": 100.0})
         j = ThicknessEndJudge(100.0, 0.05, ThicknessJudgeParams(), start_t=0, seq0=0)
-        j.eff, j.good_eff, j.base_t, j.good_t, j.suspect_count = 80.0, 80.0, 0.0, 1600.0, 2
+        j.eff, j.base_t, j.eff_t, j.jump_count = 80.0, 0.0, 1600.0, 2
         rt._thk_last_judge = j
         pc._thickness_end("상한")
         v = rt._thk_values()
         assert v["end"] == "상한" and v["final_nm"] == 80.0 and v["avg_rate"] == pytest.approx(0.05)
-        assert v["tooling"] == 110.0 and v["suspect"] == 2
+        assert v["tooling"] == 110.0 and v["jumps"] == 2
         assert any("목표 미도달" in w for w in rt._run_warnings) and any("목표 미도달" in t for t in sent)
         p = {}
         rt._thk_card_fields(p)
-        assert p == {"thickness_end": "상한", "thickness_final": "80.0 / 100 nm"}
+        assert p == {"thickness_end": "상한", "thickness_final": "80.0 / 100 nm", "thickness_jumps": "2회(기록만)"}
     asyncio.run(go())
 
 
@@ -393,12 +393,12 @@ def test_data_logger_columns_and_header_migration():
         dl.start_new_log_session({"process_note": "run", "use_ms": False})
         dl.set_thickness_record({"end": "Thickness", "target": 100.0, "final_nm": 100.04, "avg_rate": 0.0512,
                                  "tooling": 110.0, "density": 2.7, "z_factor": 1.08, "chuck": "mid", "gun": "G1",
-                                 "suspect": 1, "fallback_reason": ""})
+                                 "jumps": 1, "fallback_reason": ""})
         dl.finalize_and_write_log(True)
         rows = list(csv.DictReader(open(f, encoding="utf-8-sig")))
         r = rows[-1]
         assert (r["Thickness: End Mode"], r["Thickness: Final nm"], r["Thickness: Avg Rate nm/s"]) == ("Thickness", "100.04", "0.0512")
-        assert (r["Thickness: Tooling %"], r["Thickness: Chuck"], r["Thickness: Gun"], r["Thickness: Step Suspect"]) == ("110", "mid", "G1", "1")
+        assert (r["Thickness: Tooling %"], r["Thickness: Chuck"], r["Thickness: Gun"], r["Thickness: Jump Count"]) == ("110", "mid", "G1", "1")
         dl.start_new_log_session({"process_note": "run2", "use_ms": False})        # 새 세션은 비움
         dl.finalize_and_write_log(True)
         r = list(csv.DictReader(open(f, encoding="utf-8-sig")))[-1]

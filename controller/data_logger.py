@@ -19,7 +19,7 @@ HEATER_COLUMNS: List[str] = ["Heater: SV", "Heater: PV Avg", "Heater: PV Min", "
 THICKNESS_COLUMNS: List[str] = [
     "Thickness: End Mode", "Thickness: Target nm", "Thickness: Final nm", "Thickness: Avg Rate nm/s",
     "Thickness: Tooling %", "Thickness: Density", "Thickness: Z", "Thickness: Chuck", "Thickness: Gun",
-    "Thickness: Step Suspect", "Thickness: Fallback Reason", "Thickness: Step Excluded nm",
+    "Thickness: Fallback Reason", "Thickness: Jump Count",
 ]
 
 
@@ -435,7 +435,7 @@ class DataLogger(QObject):
             pass
 
     def set_thickness_record(self, rec: Optional[Dict]) -> None:
-        """두께 기록 — end(종료 방식), target, final_nm, avg_rate, tooling, density, z_factor, chuck, gun, suspect, fallback_reason."""
+        """두께 기록 — end(종료 방식), target, final_nm, avg_rate, tooling, density, z_factor, chuck, gun, fallback_reason, jumps(큰 튐 횟수, 기록만)."""
         self.thickness_record = dict(rec or {})
 
     def heater_stats(self) -> Optional[Dict[str, Optional[float]]]:
@@ -624,9 +624,8 @@ class DataLogger(QObject):
                 "Thickness: Z": _tf("z_factor", "{:g}"),
                 "Thickness: Chuck": str(tr.get("chuck") or ""),
                 "Thickness: Gun": str(tr.get("gun") or ""),
-                "Thickness: Step Suspect": str(int(tr["suspect"])) if tr.get("suspect") is not None else "",
                 "Thickness: Fallback Reason": str(tr.get("fallback_reason") or ""),
-                "Thickness: Step Excluded nm": _tf("step_excluded", "{:.2f}"),
+                "Thickness: Jump Count": str(int(tr["jumps"])) if tr.get("jumps") is not None else "",
             })
 
         # 비동기 백그라운드 파일쓰기로 프리징 최소화
