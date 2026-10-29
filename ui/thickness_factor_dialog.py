@@ -5,10 +5,14 @@
 재료는 재료 목록(config/thickness_materials.json)에서 고른다 — 맨 위 '(선택 안 함)', 항목 표시 "기호 — 이름", 입력해서 찾기 가능.
 옆에 고른 재료의 density·Z 를 읽기 전용으로 보여 준다. [재료 목록 편집] 으로 목록을 고치면 드롭다운·표시값이 바로 갱신된다.
 빈 칸 = 미설정. 저장 때 tooling 범위·재료 이름을 검사하고(틀린 칸은 빨갛게, 저장하지 않음), 맞으면 파일을 원자적으로 바꾼 뒤
-on_saved() 로 서비스에 다시 읽기를 알린다. 장비에 값을 쓰지는 않는다(공정 시작 때 쓴다) — 진행 중인 공정에는 영향 없음.
+on_saved() 로 서비스에 다시 읽기를 알린다. 저장은 장비에 값을 쓰지 않는다(공정 시작 때 쓴다) — 진행 중인 공정에는 영향 없음.
+[장비에 쓰기](service 가 있을 때만): 고른 chuck×건의 tooling 칸 + 그 건 재료 density·Z 를 지금 창의 값(저장 여부 무관)으로
+장비에 바로 쓰고 되읽어 확인한다. 공정 중·미연결·응답 없음이면 쓰지 않는다(누르는 시점에 검사). 저장 파일은 건드리지 않는다.
 """
 from __future__ import annotations
 
+import asyncio
+import contextlib
 from typing import Callable, Dict, List, Optional
 
 from PySide6.QtCore import Qt
@@ -23,6 +27,7 @@ from ui.thickness_material_dialog import NEXT_RUN_NOTE, ThicknessMaterialDialog
 _CHUCK_TEXT = {"up": "Up", "mid": "Mid", "down": "Down"}
 _BAD_BG = QColor("#ffcdd2")
 NONE_TEXT = "(선택 안 함)"
+WRITE_NOTE = "장비에 쓰기 = 지금 창의 값을 장비에 바로 적용(저장과 별개). Thickness 공정은 시작 때 그 공정 값으로 다시 씀."
 
 
 def _cell_text(v) -> str:
@@ -31,8 +36,15 @@ def _cell_text(v) -> str:
 
 class ThicknessFactorDialog(QDialog):
     def __init__(self, path: str, *, ch: int = 2, on_saved: Optional[Callable[[], object]] = None,
-                 materials_path: Optional[str] = None, parent: Optional[QWidget] = None):
+                 materials_path: Optional[str] = None, parent: Optional[QWidget] = None,
+                 service=None, process_running: Optional[Callable[[], bool]] = None):
         super().__init__(parent)
+        self._svc = service
+        self._process_running = process_running
+        self._tasks: set = set()
+        self._msg_boxes: list = []
+        self._writing = False
+        self.last_message = ("", "")            # (제목, 문구) — 마지막 알림(테스트·로그용)
         self._path = path
         self._materials_path = str(materials_path or default_materials_file())
         self._on_saved = on_saved
@@ -92,6 +104,31 @@ class ThicknessFactorDialog(QDialog):
             w.setWordWrap(True)
             w.setStyleSheet("color: #ef6c00; font-size: 8pt;")
             lay.addWidget(w)
+
+        # ── 장비에 바로 쓰기(service 가 있을 때만) ──
+        wrow = QHBoxLayout()
+        self.write_label = QLabel("장비에 바로 쓰기", self)
+        self.write_chuck = QComboBox(self)
+        for c in CHUCKS:
+            self.write_chuck.addItem(_CHUCK_TEXT[c], c)
+        self.write_gun = QComboBox(self)
+        for g in GUNS:
+            self.write_gun.addItem(g, g)
+        self.write_button = QPushButton("장비에 쓰기", self)
+        self.write_button.setToolTip("고른 chuck×건의 tooling 과 그 건 재료의 density·Z 를 지금 창의 값으로 장비에 바로 씀")
+        for w in (self.write_label, self.write_chuck, self.write_gun, self.write_button):
+            wrow.addWidget(w)
+        wrow.addStretch(1)
+        lay.addLayout(wrow)
+        self.write_note = QLabel(WRITE_NOTE, self)
+        self.write_note.setWordWrap(True)
+        self.write_note.setStyleSheet("color: #6b7280; font-size: 8pt;")
+        lay.addWidget(self.write_note)
+        has_svc = service is not None
+        for w in (self.write_label, self.write_chuck, self.write_gun, self.write_button, self.write_note):
+            w.setVisible(has_svc)
+        self.write_button.setEnabled(has_svc)
+        self.write_button.clicked.connect(self._on_write_clicked)
 
         row = QHBoxLayout()
         self.edit_materials_button = QPushButton("재료 목록 편집", self)
@@ -180,6 +217,91 @@ class ThicknessFactorDialog(QDialog):
                 self._on_saved()
             except Exception:
                 pass
+
+    # ── 장비에 바로 쓰기 ──
+    def _notify(self, icon, title: str, text: str) -> None:
+        """비모달 알림(창 흐름을 막지 않는다)."""
+        self.last_message = (title, text)
+        with contextlib.suppress(Exception):
+            box = QMessageBox(icon, title, text, QMessageBox.StandardButton.Ok, self)
+            box.setWindowModality(Qt.WindowModality.NonModal)
+            box.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
+            self._msg_boxes.append(box)
+            box.finished.connect(lambda *_a, b=box: self._msg_boxes.remove(b) if b in self._msg_boxes else None)
+            box.show()
+
+    def _write_values(self):
+        """(tooling, 재료, 오류 목록) — 고른 chuck×건 칸과 그 건 재료. 틀린 칸은 빨갛게(저장 검사와 같은 방식)."""
+        chuck, gun = self.write_chuck.currentData(), self.write_gun.currentData()
+        errs: List[str] = []
+        r, k = CHUCKS.index(chuck), GUNS.index(gun)
+        it = self.tool_table.item(r, k)
+        if it is None:
+            it = QTableWidgetItem("")
+            self.tool_table.setItem(r, k, it)
+        tooling, err = check_tooling(it.text().strip())
+        if tooling is None:
+            errs.append(f"tooling {_CHUCK_TEXT[chuck]}/{gun}: {err or '빈 칸'}")
+        it.setBackground(_BAD_BG if tooling is None else QColor(Qt.GlobalColor.white))
+        mat, merr = self._chosen(gun)
+        if mat is None:
+            errs.append(merr or f"{gun}: 재료 미선택")
+        self.combos[gun].setStyleSheet("QComboBox {background: #ffcdd2;}" if mat is None else "")
+        return tooling, mat, errs
+
+    def _on_write_clicked(self, *_a) -> None:
+        if self._svc is None or self._writing:
+            return
+        tooling, mat, errs = self._write_values()
+        if errs:
+            self._notify(QMessageBox.Icon.Warning, "장비에 쓰기", "고칠 칸이 있어 장비에 쓰지 않았습니다:\n\n" + "\n".join(errs))
+            return
+        from ui.thickness_panel import device_write_block
+        try:
+            st = dict(self._svc.status() or {})
+        except Exception:
+            st = {}
+        if self._process_running is not None:
+            with contextlib.suppress(Exception):
+                st["process_running"] = bool(st.get("process_running")) or bool(self._process_running())
+        why = device_write_block(st)
+        if why:
+            self._notify(QMessageBox.Icon.Warning, "장비에 쓰기", f"{why} — 장비에 쓰지 않았습니다.")
+            return
+        self._writing = True
+        self.write_button.setEnabled(False)
+
+        async def _go():
+            try:
+                got = await self._svc.set_material(float(mat.density), float(mat.z_factor), float(tooling),
+                                                   material=mat.name, why="Factor 창 수동")
+            except asyncio.CancelledError:
+                raise
+            except Exception as e:
+                self._notify(QMessageBox.Icon.Warning, "장비에 쓰기", f"장비에 쓰지 못했습니다(되읽기 확인 포함): {e}")
+            else:
+                d, z, t = got.get("density"), got.get("z_factor"), got.get("tooling")
+                self._notify(QMessageBox.Icon.Information, "장비에 쓰기",
+                             f"장비에 적용됨 — {mat.name} · density {float(d):g} · Z {float(z):.3f} · tooling {float(t):g}%")
+            finally:
+                self._writing = False
+                with contextlib.suppress(Exception):
+                    self.write_button.setEnabled(True)
+
+        try:
+            t = asyncio.get_event_loop().create_task(_go())
+            self._tasks.add(t)
+            t.add_done_callback(self._tasks.discard)
+        except Exception as e:
+            self._writing = False
+            self.write_button.setEnabled(True)
+            self._notify(QMessageBox.Icon.Warning, "장비에 쓰기", f"명령을 실행할 수 없습니다: {e!r}")
+
+    def done(self, r: int) -> None:
+        for t in list(self._tasks):                 # 창이 닫히면 진행 중인 쓰기 요청을 취소
+            with contextlib.suppress(Exception):
+                t.cancel()
+        super().done(r)
 
     # ── 검증 ──
     def collect(self):

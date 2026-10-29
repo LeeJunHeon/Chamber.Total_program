@@ -552,6 +552,22 @@ def test_unresponsive_with_fake_tcp_server_driver_logs_quiet():
         asyncio.run(asyncio.wait_for(go(), 30.0))
 
 
+def test_set_material_log_shows_source():
+    """Factor 창 수동 쓰기는 로그에 출처, 공정 쪽 호출(why 없음)은 기존 문구."""
+    with tempfile.TemporaryDirectory() as tmp:
+        async def go():
+            svc, logs = _svc(tmp, FakeDev(), clock=__import__("time").monotonic, poll_interval_s=0.25)
+            svc.start()
+            await asyncio.sleep(0.1)
+            await svc.set_material(4.5, 0.628, 120.0, material="Titanium", why="Factor 창 수동")
+            await svc.set_material(2.7, 1.08, 110.0, material="Aluminum")
+            assert logs[-2] == "두께 모니터 재료값 적용(Factor 창 수동) Titanium density 4.5 · Z 0.628 · tooling 120.0%"
+            assert logs[-1] == "두께 모니터 재료값 적용 Aluminum density 2.7 · Z 1.08 · tooling 110.0%"
+            assert svc.status()["material"] == "Aluminum"
+            await svc.shutdown(timeout=1.0)
+        asyncio.run(go())
+
+
 def test_csv_only_while_process_recording():
     """공정 없음 → 파일·행 없음(패널 갱신은 계속). 공정 시작 → 1초 1행, 종료 → 멈춤·파일 닫힘, 다음 공정 → 같은 날 같은 파일 이어쓰기."""
     with tempfile.TemporaryDirectory() as tmp:

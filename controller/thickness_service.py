@@ -205,12 +205,15 @@ class ThicknessService:
         self._log(f"두께 영점({m}){(' — ' + why) if why else ''}")
         return True, ""
 
-    async def set_material(self, density: float, z_factor: float, tooling: float, material: str = "") -> dict:
-        """장비에 density/Z/tooling 을 쓰고 되읽어 확인한다(드라이버 set_material). 실패하면 예외. material = 재료 이름(표시용)."""
+    async def set_material(self, density: float, z_factor: float, tooling: float, material: str = "",
+                           why: str = "") -> dict:
+        """장비에 density/Z/tooling 을 쓰고 되읽어 확인한다(드라이버 set_material). 실패하면 예외. material = 재료 이름(표시용).
+        why = 로그 출처(예 'Factor 창 수동'). 공정 쪽은 넘기지 않는다(기존 문구)."""
         res = await self._submit(lambda: self.dev.set_material(density, z_factor, tooling), "재료값 적용")
         self._st.update(density=res.get("density"), z_factor=res.get("z_factor"), tooling=res.get("tooling"),
                         material=str(material or ""))
-        self._log(f"두께 모니터 재료값 적용{(' ' + material) if material else ''} density {res.get('density')} · "
+        self._log(f"두께 모니터 재료값 적용{f'({why})' if why else ''}{(' ' + material) if material else ''} "
+                  f"density {res.get('density')} · "
                   f"Z {res.get('z_factor')} · tooling {res.get('tooling')}%")
         self._publish()
         return res

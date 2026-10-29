@@ -34,6 +34,19 @@ _LAMPS = [
 ]
 
 
+def device_write_block(st: dict) -> str:
+    """장비에 명령(영점·재료값 쓰기)을 보낼 수 없는 사유 — 공정 중·미연결·응답 없음(stale). 보낼 수 있으면 ''.
+    [영점] 버튼 활성 조건과 Factor 창 [장비에 쓰기] 가 같이 쓴다."""
+    st = st or {}
+    if st.get("process_running"):
+        return "공정 중"
+    if not st.get("connected"):
+        return "두께 모니터 미연결"
+    if st.get("stale"):
+        return "두께 모니터 응답 없음"
+    return ""
+
+
 def _fmt(v, fmt: str, none: str = "---") -> str:
     if v is None:
         return none
@@ -244,7 +257,7 @@ class ThicknessPanel(QFrame):
         self.error_label.setToolTip(err)
 
         process = bool(st.get("process_running"))
-        can_zero = conn and (not stale) and (not process) and not self._busy
+        can_zero = not device_write_block(st) and not self._busy
         self.zero_button.setEnabled(can_zero)
         self.zero_button.setToolTip("공정 중에는 쓸 수 없음" if process else "두께·타이머 영점(B). 공정 중에는 쓸 수 없음")
 
@@ -347,7 +360,9 @@ class ThicknessPanel(QFrame):
             from ui.thickness_factor_dialog import ThicknessFactorDialog
             dlg = ThicknessFactorDialog(self._cfg.factor_file, ch=int(getattr(self._cfg, "ch", 2) or 2),
                                         on_saved=self._svc.reload_factors,
-                                        materials_path=getattr(self._svc, "materials_file", None), parent=self.window())
+                                        materials_path=getattr(self._svc, "materials_file", None), parent=self.window(),
+                                        service=self._svc,
+                                        process_running=lambda: bool(self._st.get("process_running")))
             dlg.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
             dlg.destroyed.connect(lambda *_a: setattr(self, "_dialog", None))
             self._dialog = dlg

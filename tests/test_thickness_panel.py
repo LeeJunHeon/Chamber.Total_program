@@ -2,6 +2,7 @@
 """ui/thickness_panel.py · ui/thickness_factor_dialog.py · main._layout_side_panels — 오프스크린.
 pytest / 직접 실행 모두 가능."""
 import contextlib
+import asyncio
 import json
 import os
 import sys
@@ -230,6 +231,130 @@ def test_material_dialog_edit_validate_and_refresh_factor_dialog():
         # Factor 설정창 드롭다운·표시값이 바로 갱신되고 고른 재료는 그대로
         assert fdlg.combos["G1"].count() == 4 and fdlg.combos["G1"].findData("Copper") > 0
         assert fdlg.combos["G1"].currentData() == "Titanium" and saved == [1]
+
+
+# ═══════════════ Factor 창 [장비에 쓰기] ═══════════════
+class WriteSvc:
+    """Factor 창이 쓰는 서비스 부분 — status·set_material."""
+
+    def __init__(self, st=None, error=None):
+        self.st = dict(_OK) if st is None else st
+        self.error = error
+        self.calls = []
+
+    def status(self):
+        return dict(self.st)
+
+    async def set_material(self, d, z, t, material="", why=""):
+        self.calls.append((d, z, t, material, why))
+        if self.error is not None:
+            raise self.error
+        return {"density": d, "z_factor": z, "tooling": t}
+
+
+def _write_dialog(tmp, svc, *, running=False, tooling="120", material="Titanium"):
+    mp = _materials(tmp)
+    path = Path(tmp) / "f.json"
+    path.write_text('{"version": 2}', encoding="utf-8")                 # 저장 파일 — 장비 쓰기로 바뀌면 안 된다
+    dlg = ThicknessFactorDialog(str(path), ch=2, materials_path=str(mp), service=svc,
+                                process_running=lambda: running)
+    dlg.tool_table.setItem(1, 1, QTableWidgetItem(tooling))              # Mid × G2
+    cb = dlg.combos["G2"]
+    cb.setCurrentIndex(cb.findData(material) if material else 0)
+    dlg.write_chuck.setCurrentIndex(dlg.write_chuck.findData("mid"))
+    dlg.write_gun.setCurrentIndex(dlg.write_gun.findData("G2"))
+    return dlg, path
+
+
+def _click(dlg):
+    async def go():
+        dlg._on_write_clicked()
+        for _ in range(5):
+            await asyncio.sleep(0)
+    asyncio.run(go())
+
+
+def test_write_to_device_uses_window_values_without_saving():
+    with tempfile.TemporaryDirectory() as tmp:
+        svc = WriteSvc()
+        dlg, path = _write_dialog(tmp, svc)
+        assert not dlg.write_button.isHidden() and dlg.write_button.isEnabled() and "저장과 별개" in dlg.write_note.text()
+        _click(dlg)
+        assert svc.calls == [(4.5, 0.628, 120.0, "Titanium", "Factor 창 수동")]            # Mid×G2 tooling + G2 재료
+        assert path.read_text(encoding="utf-8") == '{"version": 2}'                        # 저장 파일 그대로
+        assert dlg.last_message == ("장비에 쓰기", "장비에 적용됨 — Titanium · density 4.5 · Z 0.628 · tooling 120%")
+        assert dlg.write_button.isEnabled()
+
+
+@pytest.mark.parametrize("tooling,material,red", [("", "Titanium", "tool"), ("5", "Titanium", "tool"), ("120", "", "combo")])
+def test_write_to_device_rejects_bad_cells(tooling, material, red):
+    with tempfile.TemporaryDirectory() as tmp:
+        svc = WriteSvc()
+        dlg, _p = _write_dialog(tmp, svc, tooling=tooling, material=material)
+        _click(dlg)
+        assert svc.calls == [] and "장비에 쓰지 않았습니다" in dlg.last_message[1]
+        if red == "tool":
+            assert dlg.tool_table.item(1, 1).background().color().name() == "#ffcdd2"
+        else:
+            assert "#ffcdd2" in dlg.combos["G2"].styleSheet()
+
+
+@pytest.mark.parametrize("st,running,word", [
+    (dict(_OK), True, "공정 중"),
+    (dict(_OK, process_running=True), False, "공정 중"),
+    (dict(_OK, connected=False), False, "미연결"),
+    (dict(_OK, stale=True), False, "응답 없음"),
+])
+def test_write_to_device_blocked_when_running_or_not_ready(st, running, word):
+    with tempfile.TemporaryDirectory() as tmp:
+        svc = WriteSvc(st)
+        dlg, _p = _write_dialog(tmp, svc, running=running)
+        _click(dlg)
+        assert svc.calls == [] and word in dlg.last_message[1]
+
+
+def test_write_to_device_failure_warns_and_keeps_window():
+    with tempfile.TemporaryDirectory() as tmp:
+        svc = WriteSvc(error=RuntimeError("J 되읽기 불일치 120 ≠ 121"))
+        dlg, _p = _write_dialog(tmp, svc)
+        dlg.show()
+        _click(dlg)
+        assert len(svc.calls) == 1 and "장비에 쓰지 못했습니다" in dlg.last_message[1] and "되읽기 불일치" in dlg.last_message[1]
+        assert dlg.isVisible() and dlg.write_button.isEnabled()
+        dlg.close()
+
+
+def test_write_row_hidden_without_service_and_save_unchanged():
+    with tempfile.TemporaryDirectory() as tmp:
+        mp = _materials(tmp)
+        path = Path(tmp) / "f.json"
+        saved = []
+        dlg = ThicknessFactorDialog(str(path), ch=2, on_saved=lambda: saved.append(1), materials_path=str(mp))
+        assert dlg.write_button.isHidden() and not dlg.write_button.isEnabled() and dlg.write_note.isHidden()
+        dlg._on_write_clicked()                                            # 눌려도 아무것도 하지 않는다
+        dlg.combos["G1"].setCurrentIndex(dlg.combos["G1"].findData("Aluminum"))
+        dlg._on_save()
+        assert saved == [1] and json.loads(path.read_text(encoding="utf-8"))["material"]["G1"] == {"material": "Aluminum"}
+
+
+def test_panel_passes_service_and_shares_zero_condition():
+    from ui.thickness_panel import device_write_block
+    assert device_write_block(_OK) == ""
+    assert device_write_block(dict(_OK, process_running=True)) == "공정 중"
+    assert device_write_block(dict(_OK, connected=False)) == "두께 모니터 미연결"
+    assert device_write_block(dict(_OK, stale=True)) == "두께 모니터 응답 없음"
+    with tempfile.TemporaryDirectory() as tmp:
+        cfg = ThicknessConfig(enabled=True, ch=2, port=4008, factor_file=str(Path(tmp) / "f.json"))
+        svc = FakeSvc()
+        svc.materials_file = str(_materials(tmp))
+        p = ThicknessPanel(svc, cfg)
+        p.update_status(dict(_OK, process_running=True))
+        p._on_factor_clicked()
+        dlg = p._dialog
+        assert dlg._svc is svc and dlg._process_running() is True and not dlg.write_button.isHidden()
+        p.update_status(_OK)
+        assert dlg._process_running() is False
+        dlg.close()
 
 
 def test_panel_shows_applied_material_name():
