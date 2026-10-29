@@ -501,6 +501,8 @@ class ChatNotifier(QObject):
                 fields["Process Time"] = (f"목표 두께 {float(p.get('thickness')):g} nm "
                                           f"(예상 {_m(p.get('thickness_expected_s'))}, 상한 {_m(p.get('thickness_limit_s'))})")
                 fields["종료 방식"] = "Thickness"
+                if p.get("thickness_factor_note"):          # 레시피 tooling·density·z_factor 를 하나라도 썼으면
+                    fields["Factor"] = str(p.get("thickness_factor_note"))
         if ch_txt:
             # 맨 위에 Chamber를 보이게 하고 싶으면 이렇게 앞에 넣어도 됨
             fields = {"Chamber": ch_txt, **fields}

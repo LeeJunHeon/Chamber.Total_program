@@ -25,9 +25,10 @@ from lib.thickness_config import ThicknessJudgeParams             # noqa: E402
 from util import gdrive_logger as G                               # noqa: E402
 
 REC = {"end": "Thickness", "target": 100.0, "final_nm": 100.04, "avg_rate": 0.0512, "tooling": 110.0,
-       "density": 2.7, "z_factor": 1.08, "chuck": "mid", "gun": "G1", "jumps": 2, "material": "Aluminum Oxide",
+       "density": 2.7, "z_factor": 1.08, "chuck": "mid", "gun": "G1", "jumps": 2, "material": "Aluminum Oxide", "factor_source": "T:recipe D:factor Z:factor",
        "fallback_reason": ""}
-THK_NAMES = ["End Mode", "Target", "Final", "Avg Rate", "Tooling", "Density", "Z", "Fallback Reason", "Jump Count", "Material"]
+THK_NAMES = ["End Mode", "Target", "Final", "Avg Rate", "Tooling", "Density", "Z", "Fallback Reason", "Jump Count", "Material",
+             "Factor Source"]
 
 
 def _dl(ch, tmp_path, thk):
@@ -44,7 +45,7 @@ def _save(ch, dl, tmp_path, thk):
 
 # ───────────────────────── Calib CSV ─────────────────────────
 def test_calib_csv_jump_count_is_last(tmp_path):
-    assert THICKNESS_COLUMNS[-2:] == ["Thickness: Jump Count", "Thickness: Material"]
+    assert THICKNESS_COLUMNS[-3:] == ["Thickness: Jump Count", "Thickness: Material", "Thickness: Factor Source"]
     assert not [c for c in THICKNESS_COLUMNS if "Step" in c]          # 계단 튐 의심·제외 열 삭제
     dl = _dl(2, tmp_path, True)
     dl.set_thickness_record(REC)
@@ -52,6 +53,7 @@ def test_calib_csv_jump_count_is_last(tmp_path):
     with open(tmp_path / "Ch2_log.csv", encoding="utf-8-sig", newline="") as fp:
         rows = list(csv.DictReader(fp))
     assert rows[-1]["Thickness: Jump Count"] == "2" and rows[-1]["Thickness: Material"] == "Aluminum Oxide"
+    assert rows[-1]["Thickness: Factor Source"] == "T:recipe D:factor Z:factor"
 
 
 def test_calib_csv_header_extends_from_phase2_header(tmp_path):
@@ -64,8 +66,8 @@ def test_calib_csv_header_extends_from_phase2_header(tmp_path):
         w.writerow(["2026-10-27 10:00:00", "old"] + [""] * (len(old_hdr) - 2))
     dl = DataLogger(ch=2, csv_dir=tmp_path, thickness_columns=True)
     rows = list(csv.DictReader(open(f, encoding="utf-8-sig")))
-    assert dl.header[-1] == "Thickness: Material" and rows[0]["Process Name"] == "old"
-    assert rows[0]["Thickness: Material"] == ""
+    assert dl.header[-1] == "Thickness: Factor Source" and rows[0]["Process Name"] == "old"
+    assert rows[0]["Thickness: Factor Source"] == ""
 
 
 # ───────────────────────── 공정 엑셀 ─────────────────────────
@@ -76,9 +78,9 @@ def test_excel_new_ch2_file_has_thickness_group_after_heater(tmp_path):
     ws = load_workbook(tmp_path / "CH2.xlsx")["Main Process"]
     names = [ws.cell(2, c).value for c in range(1, ws.max_column + 1)]
     assert names[:43] == [c[0] for c in G._COLS_MAIN_CH2] and names[43:] == THK_NAMES
-    assert ws.cell(1, 44).value == "Thickness" and "AR1:BA1" in {str(r) for r in ws.merged_cells.ranges}
-    vals = [ws.cell(4, c).value for c in range(44, 54)]
-    assert vals == ["Thickness", 100.0, 100.04, 0.0512, 110.0, 2.7, 1.08, None, 2, "Aluminum Oxide"]
+    assert ws.cell(1, 44).value == "Thickness" and "AR1:BB1" in {str(r) for r in ws.merged_cells.ranges}
+    vals = [ws.cell(4, c).value for c in range(44, 55)]
+    assert vals == ["Thickness", 100.0, 100.04, 0.0512, 110.0, 2.7, 1.08, None, 2, "Aluminum Oxide", "T:recipe D:factor Z:factor"]
     # 기본 정보의 Dep.rate·Thickness 는 레시피 값, Process Time 은 그대로(실제 진행 시간이 들어간 값)
     col = {c[0]: i for i, c in enumerate(G._COLS_MAIN_CH2, 1)}
     assert ws.cell(4, col["Dep.rate"]).value == 0.05 and ws.cell(4, col["Thickness"]).value == 100.0
@@ -94,9 +96,9 @@ def test_excel_existing_ch2_heater_file_gets_thickness_headers(tmp_path):
     dl.set_thickness_record(dict(REC, end="Time", target=None, jumps=None))
     _save(2, dl, tmp_path, True)
     ws = load_workbook(tmp_path / "CH2.xlsx")["Main Process"]
-    assert [ws.cell(2, c).value for c in range(44, 54)] == THK_NAMES and ws.cell(3, 45).value == "nm"
+    assert [ws.cell(2, c).value for c in range(44, 55)] == THK_NAMES and ws.cell(3, 45).value == "nm"
     assert ws.cell(1, 44).value == "Thickness" and ws.cell(1, 39).value == "Heater"
-    assert ws["C4"].value == "T1" and [ws.cell(4, c).value for c in range(44, 54)] == [None] * 10
+    assert ws["C4"].value == "T1" and [ws.cell(4, c).value for c in range(44, 55)] == [None] * 11
     assert ws.cell(5, 44).value == "Time" and ws.cell(5, 45).value is None and ws.cell(5, 46).value == 100.04
 
 
@@ -117,7 +119,8 @@ def test_save_process_log_picks_columns_from_data_logger(tmp_path, monkeypatch):
     dl.set_thickness_record(REC)
     asyncio.run(G.save_process_log(2, dl, log_dir=tmp_path, local_fallback=tmp_path / "fb"))
     ws = load_workbook(tmp_path / "CH2.xlsx")["Main Process"]
-    assert ws.max_column == 53 and ws.cell(4, 52).value == 2 and ws.cell(4, 53).value == "Aluminum Oxide"
+    assert ws.max_column == 54 and ws.cell(4, 52).value == 2 and ws.cell(4, 53).value == "Aluminum Oxide"
+    assert ws.cell(4, 54).value == "T:recipe D:factor Z:factor"
 
 
 # ───────────────────────── 구글챗 시작 카드 ─────────────────────────
@@ -152,6 +155,16 @@ def test_start_card_thickness_and_time():
     thk = c.cards[-1][1]
     assert thk["Process Time"] == "목표 두께 100 nm (예상 33.3분, 상한 66.7분)" and thk["종료 방식"] == "Thickness"
     assert list(thk)[:5] == list(time_card)[:5]                    # 칸 순서는 그대로, '종료 방식' 만 뒤에
+
+
+def test_start_card_factor_line_only_when_recipe_values_used():
+    base = {"process_name": "a", "ch": 2, "shutter_delay": 5, "thickness": 100.0, "dep_rate": 0.05, "use_g1": True,
+            "thickness_mode": True, "thickness_expected_s": 2000.0, "thickness_limit_s": 4000.0}
+    c = _Chat()
+    c.notify_process_started(dict(base, thickness_factor_note=""))
+    assert "Factor" not in c.cards[-1][1]
+    c.notify_process_started(dict(base, thickness_factor_note="레시피 지정(tooling)"))
+    assert c.cards[-1][1]["Factor"] == "레시피 지정(tooling)"
 
 
 def test_end_card_shows_jumps():
@@ -245,10 +258,26 @@ def test_limit_failure_still_writes_calib_csv(tmp_path):
 
 
 
+def test_excel_thickness_group_without_factor_source_gets_header(tmp_path):
+    """Factor Source 열이 없던(11차까지) Thickness 그룹 파일 — 머리글만 뒤로 늘리고 기존 행은 그대로."""
+    cols, grp, starts = G._main_cols(2, True)
+    old = (cols[:-1], *G._group_index(cols[:-1]))
+    path = tmp_path / "CH2.xlsx"
+    wb, ws = G._get_or_create_wb(path, "Main Process", *old)
+    G._write_data_row(ws, 4, {"process_name": "OLD", "thk_end": "Time", "thk_material": "Al"}, 5, 20.0, old[0])
+    wb.save(path)
+    dl = _dl(2, tmp_path, True)
+    dl.set_thickness_record(REC)
+    _save(2, dl, tmp_path, True)
+    ws = load_workbook(path)["Main Process"]
+    assert ws.cell(2, 54).value == "Factor Source" and ws["C4"].value == "OLD" and ws.cell(4, 53).value == "Al"
+    assert ws.cell(4, 54).value is None and ws.cell(5, 54).value == "T:recipe D:factor Z:factor"
+
+
 def test_excel_thickness_group_without_material_gets_material_header(tmp_path):
     """Material 열이 없던(7차까지) Thickness 그룹 파일 — 머리글만 뒤로 늘리고 기존 행은 그대로."""
     cols, grp, starts = G._main_cols(2, True)
-    old = (cols[:-1], *G._group_index(cols[:-1]))
+    old = (cols[:-2], *G._group_index(cols[:-2]))
     path = tmp_path / "CH2.xlsx"
     wb, ws = G._get_or_create_wb(path, "Main Process", *old)
     G._write_data_row(ws, 4, {"process_name": "OLD", "thk_end": "Time"}, 5, 20.0, old[0])

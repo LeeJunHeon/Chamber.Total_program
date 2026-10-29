@@ -155,6 +155,17 @@ def test_chamber_value_error_still_e230_path(tmp_path):
     assert type(e) is RuntimeError and str(e).startswith("레시피 오류") and getattr(e, "code", None) is None
 
 
+@pytest.mark.parametrize("val", ["500", "abc"])
+def test_chamber_factor_value_out_of_range_is_e230_path(tmp_path, val):
+    """tooling 범위 밖·숫자 아님 — 다른 레시피 값 오류와 같은 '레시피 오류'(핸들러 E230)."""
+    path = _write(tmp_path / "f.csv", CH_HEADER + ",thickness,tooling\r\n" + CH_ROW + f",100,{val}\r\n")
+
+    async def go():
+        return await _raises(_mk_ch().start_with_recipe_string(path, origin="host"))
+    e = asyncio.run(go())
+    assert type(e) is RuntimeError and str(e).startswith("레시피 오류") and "tooling" in str(e)
+
+
 def test_chamber_ok_path_unchanged(tmp_path):
     path = _write(tmp_path / "ok.csv", CH_HEADER + "\r\n" + CH_ROW + "\r\n")
 
@@ -311,6 +322,7 @@ def test_pc_handler_recipe_codes(tmp_path, kind, code):
 @pytest.mark.parametrize("kind,code,action", [
     ("missing", "E207", "STOP"), ("header_only", "E208", "STOP"), ("txt", "E209", "STOP"),
     ("cp949", "E209", "STOP"), ("timeout", "E227", "RETRY"), ("value", "E230", "STOP"),
+    ("tooling", "E230", "STOP"),
 ])
 def test_sputter_handler_recipe_codes(tmp_path, kind, code, action):
     if kind == "missing":
@@ -323,6 +335,8 @@ def test_sputter_handler_recipe_codes(tmp_path, kind, code, action):
         path = _write(tmp_path / "k.csv", CH_HEADER + "\r\n" + CH_ROW + "\r\n", encoding="cp949")
     elif kind == "value":
         path = _write(tmp_path / "v.csv", CH_HEADER + "\r\n" + "공정A,,0,30,T,abc,5e-6,3,20\r\n")
+    elif kind == "tooling":
+        path = _write(tmp_path / "t.csv", CH_HEADER + ",tooling\r\n" + CH_ROW + ",5\r\n")
     else:
         path = _write(tmp_path / "ok.csv", CH_HEADER + "\r\n" + CH_ROW + "\r\n")
 

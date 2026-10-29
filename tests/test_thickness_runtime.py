@@ -22,7 +22,7 @@ with contextlib.suppress(Exception):
 import pytest                                                    # noqa: E402
 
 from controller.data_logger import THICKNESS_COLUMNS, DataLogger  # noqa: E402
-from controller.thickness_process import ThicknessEndJudge       # noqa: E402
+from controller.thickness_process import ThicknessEndJudge, thickness_mode_of  # noqa: E402
 from controller.runtime_state import runtime_state               # noqa: E402
 from errors.app_error import CodedRuntimeError                   # noqa: E402
 from lib.thickness_config import ThicknessJudgeParams            # noqa: E402
@@ -217,8 +217,78 @@ def test_apply_material_factor_and_errors():
         assert svc.mat_calls[-1] == (2.73, 1.08, 110.0) and svc.mat_names[-1] == "Aluminum"   # 재료 목록 값
         assert rt._thk_pre["tooling"] == 110.0 and rt._thk_pre["chuck"] == "mid" and rt._thk_pre["gun"] == "G1"
         assert rt._thk_pre["material"] == "Aluminum"
-        assert any("재료 Al — Aluminum" in m for _s, m in rt.logs)                      # 시작 전 점검 로그
+        assert any("tooling 110 % (Factor mid×G1) · density 2.73 (Factor G1 Al) · Z 1.080 (Factor G1 Al)" in m
+                   for _s, m in rt.logs)                                              # 시작 전 점검 로그(값마다 출처)
+        assert rt._thk_pre["factor_source"] == "T:factor D:factor Z:factor"
         assert any("크리스탈 수명" in w for w in rt._run_warnings)
+    asyncio.run(go())
+
+
+_ALL_FAC = "all"      # Factor: mid×G1 tooling 110 · G1 재료 Aluminum(2.73/1.08)
+_NO_FAC = "none"      # Factor: tooling 없음 · 재료 미선택
+
+
+@pytest.mark.parametrize("recipe,fac,call,source", [
+    ({"tooling": 120.0, "density": 3.0, "z_factor": 0.5}, _NO_FAC, (3.0, 0.5, 120.0), "T:recipe D:recipe Z:recipe"),
+    ({"tooling": 120.0, "density": 3.0, "z_factor": 0.5}, _ALL_FAC, (3.0, 0.5, 120.0), "T:recipe D:recipe Z:recipe"),
+    ({"tooling": 120.0}, _ALL_FAC, (2.73, 1.08, 120.0), "T:recipe D:factor Z:factor"),
+    ({"density": 3.0}, _ALL_FAC, (3.0, 1.08, 110.0), "T:factor D:recipe Z:factor"),   # density 만 — Z 는 재료 값
+    ({"z_factor": 0.5}, _ALL_FAC, (2.73, 0.5, 110.0), "T:factor D:factor Z:recipe"),
+    ({}, _ALL_FAC, (2.73, 1.08, 110.0), "T:factor D:factor Z:factor"),
+    ({"density": 3.0, "z_factor": 0.5}, "tool_only", (3.0, 0.5, 110.0), "T:factor D:recipe Z:recipe"),  # 재료 미선택이어도 통과
+])
+def test_apply_recipe_values_take_priority_per_value(recipe, fac, call, source):
+    async def go():
+        svc = FakeSvc()
+        if fac in (_NO_FAC, "tool_only"):
+            svc.factors.material["G1"] = None
+        if fac == _NO_FAC:
+            svc.factors.tooling["mid"]["G1"] = None
+        rt, _pc, _ = _rt(svc)
+        p = _params(**recipe)
+        assert await rt._thickness_apply_material(p, True) == ("", "")
+        assert svc.mat_calls[-1] == call and rt._thk_pre["factor_source"] == source
+        used = [n for n in ("tooling", "density", "z_factor") if n in recipe]
+        assert p["thickness_factor_note"] == (f"레시피 지정({', '.join(used)})" if used else "")
+        both_recipe = "density" in recipe and "z_factor" in recipe
+        assert rt._thk_pre["material"] == ("" if both_recipe else "Aluminum") and svc.mat_names[-1] == rt._thk_pre["material"]
+        line = [m for _s, m in rt.logs if m.startswith("Thickness 모드 — ")][-1]
+        assert ("tooling 120 % (레시피)" in line) == ("tooling" in recipe)
+        assert ("(Factor G1 Al)" in line) == (not both_recipe)
+    asyncio.run(go())
+
+
+@pytest.mark.parametrize("recipe,fac,parts,absent", [
+    ({}, _NO_FAC, ["tooling — 레시피 없음, Factor mid×G1 미설정", "density·Z — 레시피 없음, Factor G1 재료 미선택"], []),
+    ({"tooling": 120.0}, _NO_FAC, ["density·Z — 레시피 없음, Factor G1 재료 미선택"], ["tooling —"]),
+    ({"tooling": 120.0, "density": 3.0}, _NO_FAC, ["Z — 레시피 없음, Factor G1 재료 미선택"], ["tooling —", "density"]),
+    ({"density": 3.0, "z_factor": 0.5}, _NO_FAC, ["tooling — 레시피 없음, Factor mid×G1 미설정"], ["재료"]),
+])
+def test_apply_e845_only_when_value_missing_in_both(recipe, fac, parts, absent):
+    async def go():
+        svc = FakeSvc()
+        svc.factors.material["G1"] = None
+        svc.factors.tooling["mid"]["G1"] = None
+        rt, _pc, _ = _rt(svc)
+        c, msg = await rt._thickness_apply_material(_params(**recipe), True)
+        assert c == "E845" and svc.mat_calls == []
+        for s in parts:
+            assert s in msg, msg
+        for s in absent:
+            assert s not in msg, msg
+    asyncio.run(go())
+
+
+def test_time_mode_ignores_recipe_factor_columns():
+    """Time 모드(thickness 비움) — 세 열이 있어도 모드·기록에 영향 없음(재료값 쓰기 없음)."""
+    async def go():
+        svc = FakeSvc()
+        rt, _pc, _ = _rt(svc)
+        p = _params(thickness=None, tooling=120.0, density=3.0, z_factor=0.5)
+        assert not thickness_mode_of(p.get("thickness"), rt._thickness_supported())
+        rt._thk_pre = None
+        rt._thk_run_started(p)
+        assert rt._thk_rec["mode"] == "Time" and "factor_source" not in rt._thk_rec and svc.mat_calls == []
     asyncio.run(go())
 
 

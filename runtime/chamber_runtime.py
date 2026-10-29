@@ -72,6 +72,9 @@ RawParams = TypedDict('RawParams', {
     'shutter_delay': float | str,
     'dep_rate': float | str | None,
     'thickness': float | str | None,
+    'tooling': float | str | None,      # 두께 모니터(Thickness 모드) — 값별로 레시피 우선, 비우면 Factor 팝업
+    'density': float | str | None,
+    'z_factor': float | str | None,
     'integration_time': int | str,
     'Ar': Literal['T','F'] | bool,
     'O2': Literal['T','F'] | bool,
@@ -121,6 +124,9 @@ NormParams = TypedDict('NormParams', {
     'shutter_delay': float,
     'dep_rate': float | None,
     'thickness': float | None,
+    'tooling': float | None,            # 비어 있으면 None(Factor 팝업 값)
+    'density': float | None,
+    'z_factor': float | None,
     'integration_time': int,
     'use_ar': bool, 'use_o2': bool, 'use_n2': bool,
     'ar_flow': float, 'o2_flow': float, 'n2_flow': float,
@@ -6359,6 +6365,10 @@ class ChamberRuntime:
             "heater_temp":       _opt_float_from_keys("heater_temp"),
             "heater_ramp":       _opt_float_from_keys("heater_ramp"),
             "heater_soak":       _opt_float_from_keys("heater_soak"),
+            # 두께 모니터 Thickness 모드 — 값별로 레시피 우선, 비우면 Factor 팝업 값(Time 모드는 쓰지 않음)
+            "tooling":           _opt_float_from_keys("tooling"),
+            "density":           _opt_float_from_keys("density"),
+            "z_factor":          _opt_float_from_keys("z_factor"),
         }
         if not res["use_heater"] and (res["heater_temp"] is not None or res["heater_ramp"] is not None
                                       or res["heater_soak"] is not None):
@@ -6650,22 +6660,55 @@ class ChamberRuntime:
             return "E845", f"Chuck 위치를 알 수 없어(값 '{chuck or '-'}') tooling 을 정할 수 없습니다"
         gun = [g for g in self._THK_GUNS if params.get(f"use_{g.lower()}")][0]
         fac = svc.factors
-        tooling = fac.tooling_for(chuck, gun)
         where = f"(화면 [Factor 설정] 또는 {svc.cfg.factor_file})"
+
+        def _rv(key):
+            v = params.get(key)
+            try:
+                return None if v in (None, "") else float(v)
+            except Exception:
+                return None
+        # 값별로 레시피 우선, 비우면 Factor 팝업(tooling = chuck×건, density·Z = 건 재료) — 각각 따로
+        r_tool, r_dens, r_z = _rv("tooling"), _rv("density"), _rv("z_factor")
+        missing: list[str] = []
+        tooling = r_tool if r_tool is not None else fac.tooling_for(chuck, gun)
         if tooling is None:
-            return "E845", f"Factor 미설정 — chuck {chuck} × {gun}: tooling {where}"
-        name = fac.material_name(gun)                              # 재료는 이름으로 — density·Z 는 재료 목록에서
-        if not name:
-            return "E845", f"Factor 미설정 — {gun} 재료 미선택 {where}"
-        mat = svc.find_material(name)
-        if mat is None:
-            return "E845", f"Factor 미설정 — {gun} 재료 '{name}' 가 재료 목록에 없음(화면 [Factor 설정] → [재료 목록 편집])"
+            missing.append(f"tooling — 레시피 없음, Factor {chuck}×{gun} 미설정")
+        mat, mat_err = None, ""
+        if r_dens is None or r_z is None:                          # 재료는 레시피에 없는 값이 있을 때만 본다
+            name = fac.material_name(gun)
+            if not name:
+                mat_err = f"Factor {gun} 재료 미선택"
+            else:
+                mat = svc.find_material(name)
+                if mat is None:
+                    mat_err = f"Factor {gun} 재료 '{name}' 가 재료 목록에 없음(화면 [Factor 설정] → [재료 목록 편집])"
+        density = r_dens if r_dens is not None else (float(mat.density) if mat is not None else None)
+        z_factor = r_z if r_z is not None else (float(mat.z_factor) if mat is not None else None)
+        lack = [n for n, v in (("density", density), ("Z", z_factor)) if v is None]
+        if lack:
+            missing.append(f"{'·'.join(lack)} — 레시피 없음, {mat_err}")
+        if missing:
+            return "E845", f"Factor 미설정 — {' / '.join(missing)} {where}"
+        src_t = "recipe" if r_tool is not None else "factor"
+        src_d = "recipe" if r_dens is not None else "factor"
+        src_z = "recipe" if r_z is not None else "factor"
+        used_mat = mat if (src_d == "factor" or src_z == "factor") else None
         try:
-            got = await svc.set_material(float(mat.density), float(mat.z_factor), float(tooling), material=mat.name)
+            got = await svc.set_material(float(density), float(z_factor), float(tooling),
+                                         material=used_mat.name if used_mat is not None else "")
         except Exception as e:
             return "E846", f"두께 모니터에 재료값을 쓰지 못함(되읽기 확인 실패 포함): {e}"
+        factor_source = f"T:{src_t} D:{src_d} Z:{src_z}"
+        recipe_used = [n for n, s in (("tooling", src_t), ("density", src_d), ("z_factor", src_z)) if s == "recipe"]
+        params["thickness_factor_note"] = f"레시피 지정({', '.join(recipe_used)})" if recipe_used else ""
         self._thk_pre = {"chuck": chuck, "gun": gun, "tooling": got.get("tooling"), "density": got.get("density"),
-                         "z_factor": got.get("z_factor"), "material": mat.name}
+                         "z_factor": got.get("z_factor"), "material": used_mat.name if used_mat is not None else "",
+                         "factor_source": factor_source}
+
+        def _src(s, factor_txt):
+            return "(레시피)" if s == "recipe" else f"({factor_txt})"
+        mat_txt = f"Factor {gun} {used_mat.symbol or used_mat.name}" if used_mat is not None else ""
         jp, _w = load_judge_params(self.cfg.mod)
         life = svc.status().get("life_pct")
         if life is not None and float(life) < jp.life_warn_pct:
@@ -6673,9 +6716,10 @@ class ChamberRuntime:
             self.append_log("THICKNESS", f"⚠ {warn}")
             with contextlib.suppress(Exception):
                 self._run_warnings.append(warn)
-        self.append_log("THICKNESS", f"Thickness 모드 — 목표 {float(params.get('thickness')):g} nm · {gun} · "
-                                     f"재료 {mat.label} · chuck {chuck} · tooling {got.get('tooling')}% · "
-                                     f"density {got.get('density')} · Z {got.get('z_factor')}")
+        self.append_log("THICKNESS", f"Thickness 모드 — 목표 {float(params.get('thickness')):g} nm · {gun} · chuck {chuck} · "
+                                     f"tooling {float(got.get('tooling')):g} % {_src(src_t, f'Factor {chuck}×{gun}')} · "
+                                     f"density {float(got.get('density')):g} {_src(src_d, mat_txt)} · "
+                                     f"Z {float(got.get('z_factor')):.3f} {_src(src_z, mat_txt)}")
         return "", ""
 
     async def _thickness_reject(self, params, code: str, msg: str) -> None:
@@ -8526,7 +8570,15 @@ class ChamberRuntime:
         "rf_pulse_freq",
         # CH2 히터(2단계)
         "heater_temp", "heater_ramp", "heater_soak",
+        # 두께 모니터 재료값(Thickness 모드) — 범위는 _RAW_RANGE_KEYS
+        "tooling", "density", "z_factor",
     )
+    # 숫자 범위 검사(빈 칸은 합법) — 이름: (최소, 최대, 단위). 두께 모니터가 받는 범위(STM-100)
+    _RAW_RANGE_KEYS = {
+        "tooling":  (10.0, 399.0, "%"),
+        "density":  (0.5, 99.99, "g/cm3"),
+        "z_factor": (0.1, 9.999, ""),
+    }
     _RAW_INT_KEYS = (
         "integration_time",
         "dc_pulse_freq", "dc_pulse_duty_cycle",
@@ -8606,9 +8658,14 @@ class ChamberRuntime:
                 if v == "":
                     continue
                 try:
-                    float(v)
+                    fv = float(v)
                 except Exception:
                     _add(f"{where} {key}='{v}' → 숫자가 아닙니다")
+                    continue
+                rng = self._RAW_RANGE_KEYS.get(key)
+                if rng is not None and not (rng[0] <= fv <= rng[1]):
+                    unit = f" {rng[2]}" if rng[2] else ""
+                    _add(f"{where} {key}='{v}' → 범위 {rng[0]:g}~{rng[1]:g}{unit} 밖입니다")
 
             for key in self._RAW_INT_KEYS:
                 v = str(row.get(key, "") or "").strip()

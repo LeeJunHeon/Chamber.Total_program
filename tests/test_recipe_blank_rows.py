@@ -137,6 +137,23 @@ def test_c_ui_path_skips_blank_rows(tmp_path):
     asyncio.run(_main())
 
 
+def test_c_ui_path_rejects_out_of_range_factor_value(tmp_path):
+    """UI 파일 선택 경로 — tooling·density·z_factor 범위 밖은 다른 레시피 오류처럼 경고하고 불러오지 않는다."""
+    p = tmp_path / "recipe.csv"
+    _write_csv(p, [list(r) + ["150"] for r in _presputter_rows()], header=list(HEADER) + ["density"])
+
+    async def _main():
+        c = _mk_ch(tmp_path)
+        c._last_process_list_dir = str(tmp_path)
+
+        async def _aopen_file(*a, **k):
+            return str(p)
+        c._aopen_file = _aopen_file
+        await c._handle_process_list_clicked_async()
+        assert c.process_queue == [] and c.warns and "density='150' → 범위 0.5~99.99 g/cm3 밖" in str(c.warns)
+    asyncio.run(_main())
+
+
 # ───────────────────────── (d) 행 번호 보존 ─────────────────────────
 def test_d_row_number_preserved_after_skipping_blank(tmp_path):
     """헤더 / 정상 / 쉼표만 / 잘못된 행 → 오류 메시지의 행 번호는 원래 4행."""

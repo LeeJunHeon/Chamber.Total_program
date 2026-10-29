@@ -54,7 +54,7 @@ def test_csv_and_xlsx_columns_match(wb):
     assert xlsx == rows[0] and all(len(r) == len(rows[0]) for r in rows)
     assert xlsx[-4:] == ["use_heater", "heater_temp", "heater_ramp", "heater_soak"]
     i = xlsx.index("process_time")
-    assert xlsx[i + 1:i + 3] == ["dep_rate", "thickness"]
+    assert xlsx[i + 1:i + 6] == ["dep_rate", "thickness", "tooling", "density", "z_factor"]
     j = xlsx.index("rf_pulse_duty_cycle")
     assert xlsx[j + 1:j + 3] == ["power_change_time", "change_power_value"]
 
@@ -115,6 +115,35 @@ def test_thickness_and_power_change_columns(wb):
         assert all(r[k] == "" for r in rows[1:]), name
 
 
+def test_recipe_factor_columns(wb):
+    """tooling·density·z_factor — thickness 바로 뒤, 범위 입력 제한, 메모·설명(Thickness 모드에서만·레시피 우선·비우면 Factor), 예시 행 비움."""
+    ws, desc = wb["Recipe"], wb["설명"]
+    cols = _cols(ws)
+    last = _last_row(ws)
+    drow = {desc.cell(r, 1).value: r for r in range(5, desc.max_row + 1)}
+    rows = _csv_rows()
+    for name, lo, hi in (("tooling", "10", "399"), ("density", "0.5", "99.99"), ("z_factor", "0.1", "9.999")):
+        d = _dv(ws, name)
+        assert (d.type, d.operator, d.formula1, d.formula2) == ("decimal", "between", lo, hi), name
+        txt = ws.cell(1, cols[name]).comment.text
+        assert "Thickness 모드에서만" in txt and "레시피" in txt and "Factor" in txt and f"{lo}" in d.prompt.replace("0.500", "0.5")
+        assert all(ws.cell(r, cols[name]).value is None for r in range(2, last + 1)), name
+        assert "Thickness 모드에서만" in desc.cell(drow[name], 3).value and "Factor" in desc.cell(drow[name], 4).value
+        k = rows[0].index(name)
+        assert all(r[k] == "" for r in rows[1:]), name
+
+
+def test_validate_rejects_out_of_range_factor_values():
+    from runtime.chamber_runtime import ChamberRuntime
+    rt = ChamberRuntime.__new__(ChamberRuntime)
+    ok = {"Process_name": "t", "thickness": "100", "tooling": "10", "density": "99.99", "z_factor": "0.1"}
+    assert rt._validate_raw_rows([ok]) == []
+    assert rt._validate_raw_rows([dict(ok, tooling="", density="", z_factor="")]) == []        # 비우면 Factor 값
+    errs = rt._validate_raw_rows([dict(ok, tooling="5", density="abc", z_factor="10")])
+    assert len(errs) == 3 and "tooling='5' → 범위 10~399 % 밖" in errs[0]
+    assert "density='abc' → 숫자가 아닙니다" in errs[1] and "z_factor='10' → 범위 0.1~9.999 밖" in errs[2]
+
+
 def test_description_sheet_lists_every_column(wb):
     ws, desc = wb["Recipe"], wb["설명"]
     cols = [ws.cell(1, c).value for c in range(1, ws.max_column + 1)]
@@ -130,7 +159,7 @@ def test_freeze_panes_keep_horizontal_scroll(wb):
     assert pane.state == "frozen" and (pane.xSplit or 0) <= 2 and pane.ySplit == 1
     panes = [s.pane for s in ws.sheet_view.selection]
     assert len(panes) == len(set(panes)), panes                      # 같은 pane 의 selection 이 겹쳐 쌓이지 않게
-    assert ws.max_column == 45 and all(ws.cell(1, c).comment is not None for c in range(1, 46))
+    assert ws.max_column == 48 and all(ws.cell(1, c).comment is not None for c in range(1, 49))
 
 
 def test_comment_boxes_not_shrunk():
@@ -163,6 +192,9 @@ def test_loader_reads_new_columns():
         assert n["dep_rate"] == 0.05 and n["thickness"] == 100.0
         assert n["process_time"] == pytest.approx(100 / 0.05 / 60)        # process_time 공란 → 역산(예상시간)
         assert n["power_change_time"] == "2m" and n["change_power_value"] == "100"
+        assert (n["tooling"], n["density"], n["z_factor"]) == (None, None, None)          # 비우면 None(Factor 팝업 값)
+        n = rt._normalize_params_for_process(dict(row, tooling="120", density="2.73", z_factor="1.08"))
+        assert (n["tooling"], n["density"], n["z_factor"]) == (120.0, 2.73, 1.08)
         bad = dict(row, change_power_value="")
         assert rt._validate_raw_rows([bad])                                 # 두 칸은 함께 입력
     asyncio.run(go())
