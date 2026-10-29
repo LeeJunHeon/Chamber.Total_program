@@ -57,7 +57,7 @@ from controller.runtime_state import runtime_state
 # 공정 컨트롤러(기존 CH2) + CH1은 별도 모듈이 있으면 사용, 없으면 CH2를 공용으로
 from controller.process_controller import ProcessController, eta_delay_seconds
 from controller.heater_process import HeaterSoakWaiter, HeaterHoldWaiter, heater_wait_timeout_s, itl_missing_text
-from controller.thickness_process import (END_FALLBACK, END_LIMIT, END_THICKNESS, END_TIME, ThicknessEndJudge,
+from controller.thickness_process import (END_ABORT, END_FALLBACK, END_LIMIT, END_THICKNESS, END_TIME, ThicknessEndJudge,
                                           ZeroConfirm, expected_seconds, max_time_s, thickness_mode_of)
 from lib.thickness_config import load_judge_params
 from errors.app_error import CodedRuntimeError   # 호스트 START 레시피 파일 오류에 응답 코드(E207/E208/E209/E227)를 싣는다
@@ -1623,6 +1623,8 @@ class ChamberRuntime:
         def cb_thickness_end(kind: str) -> Optional[str]:
             self._thk_gen = getattr(self, "_thk_gen", 0) + 1
             self._thk_judge = None
+            with contextlib.suppress(Exception):
+                self._thk_stop_oes()
             return self._thk_on_end(str(kind))
 
         def cb_thickness_cancel() -> None:
@@ -6827,6 +6829,19 @@ class ChamberRuntime:
             j.fallback_count += 1
         self.process_controller.on_thickness_fallback(rem, f"판정 예외({e!r})")
 
+    def _thk_stop_oes(self) -> None:
+        """Thickness 모드 메인 공정 끝(THICKNESS_WAIT 가 어떻게 끝나든) — 이번 런 OES 가 측정 중이면 멈춘다.
+        정리 코드(_stop_device_watchdogs)와 같은 방식(stop flag 만 걸고 기다리지 않음). 워커는 CSV 저장 뒤 finished ok 를 보낸다."""
+        oes = getattr(self, "oes", None)
+        if not getattr(self, "_oes_active", False) or not oes or not hasattr(oes, "stop_measurement"):
+            return
+        self.append_log("OES", "OES 측정 종료 요청 — 메인 공정 끝(Thickness 모드)")
+        self._spawn_detached(
+            oes.stop_measurement(wait=False),
+            store=False,
+            name=f"Thickness.OESStop.CH{self.ch}.DETACHED",
+        )
+
     def _thk_on_end(self, kind: str) -> Optional[str]:
         """THICKNESS_WAIT 끝 — 종료 방식 기록·경고 목록. 상한이면 '유효 x / 목표 y nm' 문구를 돌려준다
         (컨트롤러가 E848 실패 문구에 넣는다 — 경고 목록에는 넣지 않음)."""
@@ -6835,6 +6850,7 @@ class ChamberRuntime:
             return None
         j = getattr(self, "_thk_last_judge", None)
         rec["end"] = kind
+        rec["wait_ended"] = True                     # 메인 공정(THICKNESS_WAIT)까지 갔다 — _thk_values 가 본다
         target = float(rec.get("target") or 0.0)
         eff = None
         if j is not None:
@@ -6867,6 +6883,13 @@ class ChamberRuntime:
         rec = dict(getattr(self, "_thk_rec", None) or {})
         if not rec:
             return {}
+        if rec.get("mode") == "Thickness" and not rec.get("wait_ended"):
+            # 메인 공정 전에 끝남(Shutter Delay·영점 중 정지, IG 타임아웃 등) — 카드·Calib CSV 가 같은 값을 쓴다
+            rec["end"] = END_ABORT
+            rec["final_nm"] = None
+            rec["avg_rate"] = None
+            rec["before_main"] = True
+            return rec
         if rec.get("mode") == "Time":
             f, l = rec.get("first"), rec.get("last")
             if f is None or l is None:
@@ -6886,6 +6909,10 @@ class ChamberRuntime:
             if v.get("end") == END_TIME:                 # 패널: 다음 공정 전까지 마지막 결과(Thickness 모드는 _thk_on_end 가 넣음)
                 fin = v.get("final_nm")
                 self._thk_view_set(END_TIME, "—", None, "종료(Time)" + (f" — {float(fin):.1f} nm" if fin is not None else ""))
+            elif v.get("before_main"):                   # Thickness 모드인데 메인 공정 전에 끝남
+                tgt = v.get("target")
+                self._thk_view_set(END_ABORT, f"{float(tgt):.1f} nm" if tgt else "—", None,
+                                   f"종료({END_ABORT}) — 메인 공정 전")
             if v.get("final_nm") is not None:
                 ar = v.get("avg_rate")
                 self.append_log("THICKNESS", f"두께 요약 — 종료 방식 {v.get('end')} · 최종 {float(v['final_nm']):.2f} nm"

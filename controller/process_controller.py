@@ -2664,7 +2664,8 @@ class ProcessController:
 
         # --- Main Process Time ---
         if thickness_mode:
-            # 메인 공정 DELAY 대신 THICKNESS_WAIT(목표 두께 도달 대기 — 기준점은 앞의 THICKNESS_ZERO). OES 는 지금처럼 예상시간으로 넘긴다.
+            # 메인 공정 DELAY 대신 THICKNESS_WAIT(목표 두께 도달 대기 — 기준점은 앞의 THICKNESS_ZERO).
+            # OES 는 상한(lim_s)으로 넘기고 THICKNESS_WAIT 가 끝나면(어떻게 끝나든) 런타임 thickness_end 가 멈춘다 — 메인 공정 구간과 맞춤.
             from lib.thickness_config import load_judge_params
             _jp, _ = load_judge_params(self._cfg)
             target_nm = float(params.get("thickness") or 0.0)
@@ -2672,8 +2673,8 @@ class ProcessController:
             lim_s = max_time_s(exp_s, _jp)
             steps.append(ProcessStep(
                 action=ActionType.OES_RUN,
-                params=(exp_s, integration_ms),
-                message=f'OES 측정 시작 (예상 {exp_s / 60.0:.2f}분, {integration_ms}ms)',
+                params=(lim_s, integration_ms),
+                message=f'OES 측정 시작 (메인 공정 끝까지, 최대 {lim_s / 60.0:.2f}분)',
                 no_wait=True
             ))
             steps.append(ProcessStep(

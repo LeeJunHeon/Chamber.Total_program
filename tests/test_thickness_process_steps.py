@@ -119,7 +119,8 @@ def test_thickness_mode_replaces_main_delay():
         assert not seq[z].polling and not seq[z].message.startswith(("Shutter Delay", "메인 공정"))   # 실제 시간 누적 제외
         assert st.value == 100.0 and st.polling and st.message.startswith("메인 공정 진행")
         assert st.params == (pytest.approx(2000.0), pytest.approx(4000.0))       # 예상 thickness/dep_rate, 상한 ×2
-        assert seq[i - 1].params[0] == pytest.approx(2000.0) and seq[i - 1].no_wait   # OES 는 예상시간
+        assert seq[i - 1].params[0] == pytest.approx(4000.0) and seq[i - 1].no_wait   # OES 는 상한(메인 공정 끝에 런타임이 멈춤)
+        assert seq[i - 1].message.startswith("OES 측정 시작 (메인 공정 끝까지, 최대 66.67분")
         assert "DELAY" not in [r[0] for r in rows[i:]] or all(not r[1].startswith("메인 공정") for r in rows[i:] if r[0] == "DELAY")
         # THICKNESS_ZERO 한 줄 추가 + 메인 DELAY 한 줄 → OES 문구·THICKNESS_WAIT 로 바뀐 것 말고는 같다
         j = [r[0] for r in base].index("OES_RUN")

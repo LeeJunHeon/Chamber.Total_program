@@ -22,8 +22,8 @@ ThicknessEndJudge.tick(status, now) → None | ThicknessEvent  (셔터를 연 �
   - 유효두께 = 장비 두께 − 기준점(ZeroConfirm 결과). 셔터 열림 뒤 하락(열 충격)·회복은 장비 두께 그대로(잠깐 음수였다 돌아옴).
   - status.seq 가 바뀐 값만 판정한다(같은 값 중복 금지).
   - 종료: 유효두께 ≥ 목표 인 새 값이 done_consecutive 번 연속(기본 1 = 도달 즉시). 하나라도 목표 미만이면 다시 센다.
-  - stale_s 동안 새 값이 없으면 시간 대체. 남은 시간 = (목표 − 마지막 유효두께) ÷ 사용 증착률
-    (셔터 연 뒤 측정 measured_rate_min_s 이상이면 실측 평균, 아니면 레시피 dep_rate).
+  - stale_s 동안 새 값이 없으면 시간 대체. 남은 시간 = (목표 − 마지막 유효두께) ÷ 사용 증착률 − (지금 − 마지막 값 받은 시각)
+    (셔터 연 뒤 측정 measured_rate_min_s 이상이고 실측 평균이 레시피 dep_rate 의 RATE_SANE_MIN~MAX 배 안이면 실측, 아니면 레시피).
   - 기록만(판정에 영향 없음): 한 번에 크게 뛴 값(증가량 > max(jump_min_nm, 레시피 dep_rate × jump_rate_k × Δt)) 횟수,
     증착률 급등, 두께 음수, 증착률 0 지속.
   - 판정 코드 예외는 삼키지 않고 곧바로 영구 시간 대체(traceback 은 event.detail).
@@ -40,7 +40,10 @@ END_THICKNESS = "Thickness"      # 종료 방식(공정 기록·카드 표기)
 END_FALLBACK = "시간대체"
 END_LIMIT = "상한"
 END_TIME = "Time"
+END_ABORT = "중단"                # 컨트롤러가 정지 때 쓰는 말과 같게(THICKNESS_WAIT 중단 · 메인 공정 전 종료)
 _EPS_NM = 1e-6                   # Å→nm 환산(×0.1)·기준점 뺄셈의 부동소수점 오차 — 100.0 nm 가 99.9999999 로 읽혀 한 번 늦게 끝나지 않게
+RATE_SANE_MIN = 0.5              # 시간 대체 실측 증착률 상식 범위(레시피 dep_rate 의 배수) — 밖이면 레시피 값
+RATE_SANE_MAX = 2.0
 
 
 def _f(v) -> float:
@@ -181,18 +184,29 @@ class ThicknessEndJudge:
             tb = traceback.format_exc()
             return self._to_fallback(now, f"판정 코드 예외({e!r})", permanent=True, detail=tb)
 
-    def use_rate(self) -> Tuple[float, str]:
-        """시간 대체 증착률 — (nm/s, '실측'|'레시피'). 실측 = 유효두께 ÷ 셔터 연 뒤 경과."""
+    def measured_rate(self) -> Optional[float]:
+        """실측 평균 증착률(유효두께 ÷ 셔터 연 뒤 경과) — 측정 measured_rate_min_s 미만·두께 0 이하면 None."""
         if self.eff_t is not None:
             span = self.eff_t - self.t0
             if span >= float(self.p.measured_rate_min_s) and self.eff > 0:
-                return self.eff / span, "실측"
+                return self.eff / span
+        return None
+
+    def use_rate(self) -> Tuple[float, str]:
+        """시간 대체 증착률 — (nm/s, '실측'|'레시피'). 실측이 레시피 dep_rate 의 RATE_SANE_MIN~MAX 배 밖이면 레시피."""
+        m = self.measured_rate()
+        if m is not None and (self.dep_rate <= 0 or RATE_SANE_MIN * self.dep_rate <= m <= RATE_SANE_MAX * self.dep_rate):
+            return m, "실측"
         return self.dep_rate, "레시피"
 
-    def fallback_remaining_s(self) -> float:
+    def fallback_remaining_s(self, now: Optional[float] = None) -> float:
+        """시간 대체 남은 시간. now 를 주면 마지막 유효두께를 받은 뒤 이미 지난 시간을 뺀다(eff_t 가 없으면 빼지 않음)."""
         rate, _src = self.use_rate()
         left = max(0.0, self.target - self.eff)
-        return left / rate if rate > 0 else left / max(self.dep_rate, 1e-9)
+        rem = left / rate if rate > 0 else left / max(self.dep_rate, 1e-9)
+        if now is not None and self.eff_t is not None:
+            rem = max(0.0, rem - max(0.0, float(now) - self.eff_t))
+        return rem
 
     def avg_rate(self) -> Optional[float]:
         """평균 증착률(유효두께 ÷ 셔터 연 뒤 경과) — 기록용."""
@@ -240,9 +254,14 @@ class ThicknessEndJudge:
         self.fallback_count += 1
         self.done_n = 0
         try:
-            rem = self.fallback_remaining_s()
+            rem = self.fallback_remaining_s(now)
             rate, src = self.use_rate()
             how = f"(목표 {self.target:.1f} − 유효두께 {self.eff:.1f} nm) ÷ {src} {rate:.4f} nm/s"
+            m = self.measured_rate()
+            if src == "레시피" and m is not None:
+                how += (f" (실측 {m:.4f} nm/s 가 레시피의 {RATE_SANE_MIN:g}~{RATE_SANE_MAX:g}배 밖 → 레시피 사용)")
+            if self.eff_t is not None:
+                how += f" − 마지막 값 뒤 {max(0.0, float(now) - self.eff_t):.0f}초 반영"
         except Exception:
             rem, how = self.target / max(self.dep_rate, 1e-9), "레시피 예상시간"
         self._log(f"⚠ 시간 대체로 전환 — {reason}. 남은 시간 {rem:.0f}초 = {how}"

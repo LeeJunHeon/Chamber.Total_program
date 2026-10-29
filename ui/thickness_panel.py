@@ -326,6 +326,11 @@ class ThicknessPanel(QFrame):
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No, QMessageBox.StandardButton.No)
         if reply != QMessageBox.StandardButton.Yes:
             return
+        block = device_write_block(self._st)        # 확인창이 떠 있는 동안 공정 시작·끊김이 생겼을 수 있다 — 다시 본다
+        if block or self._busy:
+            if block:
+                self._warn("두께 영점", f"{block} — 영점을 보내지 않았습니다.")
+            return
         self._busy = True
         self._render()
 

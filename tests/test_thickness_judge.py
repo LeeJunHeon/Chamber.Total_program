@@ -159,7 +159,7 @@ def test_stale_fallback_then_resume_and_done_on_resume():
         ev = f.same(dt=1.0)
         n += 1
     assert ev.kind == "fallback" and not ev.permanent and n == 11      # 10초 넘게 새 값 없음
-    assert ev.remaining_s == pytest.approx((2.0 - 0.5) / 0.1)            # 30초 전 → 레시피 dep_rate
+    assert ev.remaining_s == pytest.approx((2.0 - 0.5) / 0.1 - 11.0)     # 30초 전 → 레시피 dep_rate, 마지막 값 뒤 11초 뺌
     assert f.same() is None                             # 이미 시간 대체
     ev = f.new(0.3)                                     # 통신 복귀(리셋 없음)
     assert ev.kind == "resume" and f.j.mode == "thickness" and ev.eff_nm == pytest.approx(0.8)
@@ -213,7 +213,7 @@ def test_fallback_rate_measured_after_30s():
         ev = f.same(dt=1.0)
     rate = 8.0 / 40.5                                   # 기준점 시각 = 영점 시각(0) — 영점 뒤 40.5초에 8.0 nm
     assert f.j.use_rate()[1] == "실측" and f.j.use_rate()[0] == pytest.approx(rate)
-    assert ev.remaining_s == pytest.approx((20.0 - 8.0) / rate)
+    assert ev.remaining_s == pytest.approx((20.0 - 8.0) / rate - (f.t - 40.5))    # 마지막 값 뒤 경과를 뺀다
     g = Feed(target=20.0, dep=0.1)                      # 20초만 측정 → 레시피 값
     g.new(0.0)
     for _ in range(40):
