@@ -98,7 +98,7 @@ EVENT_KINDS: tuple = (
     ("rfpulse", "status", "상태", _D),
     ("tsp", "command_result", "TSP 명령 결과", _M), ("tsp", "link_closed", "TSP 연결 닫음", _D),
     ("stm100", "zero", "두께 0 맞춤", _M), ("stm100", "material_applied", "재료 적용", _M),
-    ("stm100", "unresponsive", "두께 모니터 무응답", _M), ("stm100", "recovered", "두께 모니터 복구", _M),
+    ("stm100", "unresponsive", "두께 모니터 무응답", _M),
     ("stm100", "job_failed", "두께 작업 실패", _M), ("stm100", "config_warning", "두께 설정 경고", _M),
     ("stm100", "unavailable", "두께 모니터 없음", _M), ("stm100", "reset_flag", "리셋 표시", _D),
     ("stm100", "reset_ack_failed", "리셋 확인 실패", _D),
@@ -114,7 +114,8 @@ EVENT_KINDS: tuple = (
     ("uplink", "uplink_bad_command", "웹 명령 형식 오류", _M), ("uplink", "uplink_spool_error", "보관함 쓰기 실패", _M),
 ) + tuple(x for w in _WORKERS for x in (
     (w, "connected", "장비 연결됨", _D), (w, "connect_failed", "연결 실패", _D), (w, "disconnected", "장비 연결 끊김", _M),
-    (w, "long_outage", "장비 연결 오래 끊김", _M), (w, "timeout", "응답 없음", _D), (w, "recovered", "다시 응답", _D),
+    (w, "long_outage", "장비 연결 오래 끊김", _M), (w, "timeout", "응답 없음", _D),
+    (w, "recovered", "다시 응답", _M if w == "stm100" else _D),
     (w, "COMMAND_BLOCKED", "명령 막힘", _M),
 ))
 

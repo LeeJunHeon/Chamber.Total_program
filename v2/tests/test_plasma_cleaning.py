@@ -6,7 +6,6 @@
 - RF 미도달(시간 초과 분류·'timeout 60s' 문구·목표 실패 이벤트), RF 0 W 미확인(tests/test_pc_rf_stop.py:126-274 — 알림 1회·SET OFF 안 함·실패)
 - STOP(PC-052·067·100), 호스트 응답 코드(E205~E209·E227·E302·E700·E511 — host/handlers.py:950-1001), TEST 모드(PC-014~017·093·094)
 """
-import time
 from pathlib import Path
 
 import pytest
@@ -14,6 +13,7 @@ import pytest
 from v2.common.clock import VirtualClock
 from v2.ch12 import plasma_cleaning as PCM
 from v2.ch12.drivers import plc_map as PM
+from v2.ch12.pc_recipe import HostStartError
 from v2.ch12.sim.rig import Ch12Rig
 
 C = PM.COIL_MAP
@@ -85,12 +85,11 @@ def test_normal_flow_ch1(tmp_path):
         res = eng.start(params=UI, source="web", by="op", on_preflight=lambda *a: pre.append(a))
         assert res.accepted and r.run_state.is_running("pc", 1)
         ticks(r, lambda: eng.pc.step == "process")
-        seen = [x for x in r.rows[-1:]]
         r.loop.run(2)
         row = r.rows[-1]
         assert row["pc.proc.state"] == "run" and row["pc.proc.block_type"] == "process" and row["pc.proc.owner"] == "web"
         assert row["pc.set.rf_w"] == 100.0 and row["pc.set.n2_sccm"] == 10.0 and row["pc.set.pressure_mtorr"] == 2.0
-        assert row["pc.set.time_s"] == 6.0 and row["pc.proc.remain_s"] is not None and seen
+        assert row["pc.set.time_s"] == 6.0 and row["pc.proc.remain_s"] is not None and row["pc.proc.block_no"] == 10
         assert r.shared.camera.users == {"pc1"}                         # RF SET ON 때 참여(1049-1065)
         assert r.sims["plc"].coils[C["DCV_SET_1"]] is True
         run_to_end(r, eng)
@@ -148,7 +147,7 @@ def test_normal_flow_ch1(tmp_path):
 
 
 def test_excel_plasma_cleaning_sheet_values(tmp_path):
-    import openpyxl
+    from v2.ch12.outputs import excel_style as X                    # openpyxl 은 outputs 에서만 import(test_isolation)
     r, eng = make(tmp_path)
     try:
         eng.start(params=dict(UI, process_name="PC-A"))
@@ -164,7 +163,7 @@ def test_excel_plasma_cleaning_sheet_values(tmp_path):
         assert abs(pp["avg_forp"] - 100.0) < 1.0 and abs(pp["avg_ar"] - 10.0) < 0.5 and abs(pp["avg_pressure"] - 2.0) < 0.2
         for f in (Path(r.cfg["GDRIVE_LOG_DIR"]) / "CH1.xlsx",
                   Path(r.cfg["OUTPUT_LOCAL_FIRST_DIR"]) / "Process_log_PC" / "CH1.xlsx"):
-            ws = openpyxl.load_workbook(f)["Plasma Cleaning"]
+            ws = X.load_workbook(str(f))["Plasma Cleaning"]
             vals = [c.value for c in list(ws.iter_rows(min_row=4, max_row=4))[0]]
             assert vals[2:] == [pp["process_name"], None, None, pp["time"], pp["base_pressure"], pp["sp_ar"],
                                 pp["avg_ar"], pp["sp_pressure"], pp["avg_pressure"], pp["sp_power"], pp["avg_forp"],
@@ -314,8 +313,6 @@ def test_rf_not_reached_timeout_message_and_forced_fail(tmp_path):
         L = logs(eng)
         why = next(ln for ln in L if ln.startswith("RF: RF Power 도달 실패"))
         assert "목표(100.0W) 미도달, timeout 60s (FWD=50.0W" in why                         # [이상] 문구 60s, 실제 120 s(PC-095)
-        t_fail = [e for e in eng.events if e.kind == "log" and e.data.get("msg", "").startswith("RF Power 도달 실패")]
-        assert t_fail
         assert "STEP: STOP during RF START → cancel rf_start & shutdown" in L
         reason = why.split(": ", 1)[1]
         assert eng.last_final == {"ok": False, "stopped": False, "reason": reason, "ch": 1, "status": "failed"}
@@ -570,7 +567,7 @@ def test_test_mode_unitless_time_is_60s_and_stop(tmp_path):
         eng.load_recipe_rows([{"#": "TEST", "Time": "5"}])
         eng.start()
         r.loop.run(3)
-        assert logs(eng)[-1].startswith("PC: 파일 로그 시작 (TEST MODE)") or True
+        assert "PC: 파일 로그 시작 (TEST MODE)" in logs(eng)
         assert any("[TEST MODE] 60.0s" in ln for ln in logs(eng))                            # PC-093
         eng.stop()
         run_to_end(r, eng)
@@ -596,5 +593,27 @@ def test_journal_and_resume_checks(tmp_path):
         assert chk == {"resumable_step": True, "power_output": True, "gas": True, "pressure": True}, eng.resume_checks(st)
         eng.stop()
         run_to_end(r, eng)
+    finally:
+        r.stop()
+
+
+def test_robot_adapter_shape_start_for_robot(tmp_path):
+    """robot_engines.RobotEngines.start_pc 모양 — 적재 실패는 예외(.code), 가드 결과는 on_preflight(ok, code, detail)."""
+    r, eng = make(tmp_path)
+    try:
+        with pytest.raises(HostStartError) as ei:
+            eng.start_for_robot(str(tmp_path / "none.csv"), {"key": ""})
+        assert ei.value.code == "E207"
+        got = []
+        r.sims["plc"].coils[C["G_V_1_인터락"]] = False
+        eng.start_for_robot("", {"key": "", "request_id": "r1"}, lambda ok, code, detail: got.append((ok, code, detail)))
+        ticks(r, lambda: bool(got) and not eng.running)
+        assert got == [(False, "E302", "게이트밸브 인터락 FALSE (G_V_1_인터락=FALSE) → LoadLock의 압력을 확인하십시오.")]
+        st, last = eng.pc_state_for_robot(), eng.last_pc_result()
+        assert st == {"ready": True, "running": {1: False, 2: False}, "cleaning": False, "selected_ch": 1}
+        assert last["error"] == {1: True, 2: False} and last["finished"][1] is not None and last["finished"][2] is None
+        got.clear()
+        eng.start_for_robot("", {}, lambda ok, code, detail: got.append((ok, code, detail)))
+        assert got and got[0][0] is False and got[0][1] is None and "1분 대기" in got[0][2]      # 쿨다운 — 코드 없음
     finally:
         r.stop()

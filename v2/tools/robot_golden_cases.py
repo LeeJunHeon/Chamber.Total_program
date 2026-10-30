@@ -191,6 +191,9 @@ def _vacuum(out: List[dict]) -> None:
     _c(out, "von_both_drop_lp", "VACUUM_ON", eng=E,
        events=[[40.0, {"forced": {"L_R_P_SW": False, "L_R_V_SW": False, "LP_STEP1": True}}]])
     _c(out, "von_timeout_abc", "VACUUM_ON", {"timeout_s": "abc"}, eng=E)
+    _c(out, "von_vent_write_fail", "VACUUM_ON", state={"mute_write": ["L_VENT_SW"]}, eng=E)
+    _c(out, "von_valve_write_fail", "VACUUM_ON", state={"mute_write": ["L_R_V_SW"]}, eng=E)
+    _c(out, "voff_write_fail", "VACUUM_OFF", state={"ll": "vacuum", "mute_write": ["L_R_P_SW"]}, eng=E)
     _c(out, "voff_already_atm", "VACUUM_OFF", eng=E)
     _c(out, "voff_vent", "VACUUM_OFF", state=VAC, eng=E)
     _c(out, "voff_vent_interlock_off", "VACUUM_OFF", state={"ll": "vacuum", "coils": {"L_VENT_인터락": False}}, eng=E)
@@ -212,6 +215,7 @@ def _pins(out: List[dict]) -> None:
            state={"forced": {"L_PIN_UP_LAMP" if up else "L_PIN_DOWN_LAMP": False}}, eng=E)
         _c(out, f"{k}_lamp_no_response", nm, state={"mute": ["L_PIN_UP_LAMP" if up else "L_PIN_DOWN_LAMP"]}, eng=E)
         _c(out, f"{k}_bad_arg", nm, {"wait_s": "x"}, eng=E)
+        _c(out, f"{k}_pulse_fail", nm, state={"mute_write": ["L_PIN_UP_SW" if up else "L_PIN_DOWN_SW"]}, eng=E)
     _c(out, "4pin_up_busy_ignored", "4PIN_UP", eng=eng(rs={"running": [["chamber", 1]]}))
 
 
@@ -247,6 +251,14 @@ def _gates(out: List[dict]) -> None:
     _c(out, "g2open_ms_interlock_off_after", "CH2_GATE_OPEN", state={"ll": "vacuum"}, eng=eng(),
        events=[[1.0, {"coils": {"MAIN_SHUTTER_2_인터락": False}}]])
     _c(out, "g1open_no_engine", "CH1_GATE_OPEN", state=VAC, eng=None)
+    O2L = {"gate": {"2": "open"}, "loading": {"2": True}}
+    _c(out, "g2close_shutter_fail", "CH2_GATE_CLOSE", state=dict(O2L, mute_write=["MAIN_SHUTTER_2_SW"]), eng=eng())
+    _c(out, "g2close_shutter_fail_lamp", "CH2_GATE_CLOSE", {"wait_s": 1},
+       state=dict(O2L, mute_write=["MAIN_SHUTTER_2_SW"]), eng=eng())
+    _c(out, "g2close_already_shutter_fail", "CH2_GATE_CLOSE", state={"mute_write": ["MAIN_SHUTTER_2_SW"]}, eng=eng())
+    _c(out, "g2open_already_shutter_fail", "CH2_GATE_OPEN", state={"gate": {"2": "open"},
+                                                                   "mute_write": ["MAIN_SHUTTER_2_SW"]}, eng=eng())
+    _c(out, "g1open_pulse_fail", "CH1_GATE_OPEN", state={"ll": "vacuum", "mute_write": ["G_V_1_OPEN_SW"]}, eng=eng())
     _c(out, "g_open_both_channels", "CH1_GATE_OPEN", state=VAC, eng=eng(),
        jobs=[[0.0, "CH1_GATE_OPEN", {}], [0.5, "CH2_GATE_OPEN", {}]])
     _c(out, "g_open_while_close", "CH1_GATE_CLOSE", state={"ll": "vacuum", "gate": {"1": "open"}, "loading": {"1": True}},
@@ -273,6 +285,8 @@ def _chuck(out: List[dict]) -> None:
         _c(out, f"c{ch}down_lamp_no_response", D, state={"chuck": {s: "up"}}, eng=eng(),
            events=[[1.0, {"mute": [f"Z{ch}_DOWN_LOCATION"]}]])
         _c(out, f"c{ch}down_bad_arg", D, {"wait_s": None}, eng=eng())
+        _c(out, f"c{ch}down_power_write_fail", D, state={"chuck": {s: "mid"}, "mute_write": [f"Z_M_P_{ch}_SW"]},
+           eng=eng())
     _c(out, "chuck_two_on_same_ch", "CH1_CHUCK_UP", eng=eng(),
        jobs=[[0.0, "CH1_CHUCK_UP", {}], [1.0, "CH1_CHUCK_DOWN", {}]])
 

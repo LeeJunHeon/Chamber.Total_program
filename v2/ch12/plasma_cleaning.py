@@ -28,7 +28,6 @@ STOP(stop — 1659-1688): 실행 중 아님/이미 종료 통지/이미 정지 �
 from __future__ import annotations
 
 import collections
-import os
 import threading
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -36,25 +35,18 @@ from typing import Any, Callable, Deque, Dict, List, Mapping, Optional, Tuple
 
 from v2.ch12 import pc_recipe as R
 from v2.ch12.drivers import mfc as M
-from v2.ch12.drivers import mfc_ops
+from v2.ch12.pc_events import EventIO
+from v2.ch12.pc_host import HostIO
 from v2.ch12.pc_log import PcRunLog, hidden
 from v2.ch12.pc_preflight import PreflightIO
-from v2.ch12.pc_recipe import HostStartError, HostStartResult, PcParams
+from v2.ch12.pc_recipe import PcParams
 from v2.ch12.pc_steps import Box, PcController, StepIO
 from v2.ch12.pc_stop import StopIO, apply_rf_off_unconfirmed
+from v2.ch12.pc_view import COOLDOWN_S, ViewIO
 from v2.ch12.run_state import RunState
 
-COOLDOWN_S = 60.0                     # runtime_state.pc_block_reason(ch, cooldown_s=60.0) — 1244
 UI_LOG_MAX = 5000                     # 196-210
 EVENTS_KEEP = 20000
-STEPS = (("preflight", "프리플라이트"), ("gv_interlock", "GV 인터락"), ("gv_open", "GV 열기"), ("ig_base", "IG base 대기"),
-         ("gas_select", "가스 선택"), ("gas_flow", "가스 유량"), ("sp4_set", "SP4 설정"), ("sp4_wait", "SP4 압력 대기"),
-         ("rf_start", "RF 시작"), ("process", "클리닝"), ("cleanup", "종료 정리"))
-STEP_NO = {k: i + 1 for i, (k, _) in enumerate(STEPS)}
-STEP_LABEL = dict(STEPS)
-RESUMABLE_STEPS = frozenset({"process"})            # 상태를 유지하는 블록 = 메인 클리닝 시간 대기뿐
-
-
 @dataclass(frozen=True)
 class PcEvent:
     kind: str                       # log / card / popup / state / host
@@ -90,7 +82,7 @@ class PcDevices:
         self.ig = self.igs.get("ch1" if ch == 1 else "ch2")
 
 
-class PlasmaCleaning(StepIO, StopIO, PreflightIO):
+class PlasmaCleaning(StepIO, StopIO, PreflightIO, HostIO, EventIO, ViewIO):
     def __init__(self, clock, cfg: Mapping[str, Any], dev: PcDevices, *, run_state: Optional[RunState] = None,
                  chamber_busy: Optional[Callable[[int], bool]] = None, host_log=None, excel: Optional[dict] = None,
                  run_log: Optional[PcRunLog] = None, on_event: Optional[Callable[[PcEvent], None]] = None,
@@ -156,6 +148,7 @@ class PlasmaCleaning(StepIO, StopIO, PreflightIO):
         self._thread = None
         self.last_view = None
         self.last_final: Optional[Dict[str, Any]] = None
+        self.internal_error: Optional[str] = None
         self._n_runs = 0
 
     # ───────── 공통 ─────────
@@ -345,9 +338,21 @@ class PlasmaCleaning(StepIO, StopIO, PreflightIO):
         self.final_notified = False
         self.phase = "test" if test_mode else "preflight"
         self._set_step("preflight")
-        target = (lambda: self._run_test(ch, test_dur)) if test_mode else (lambda: self._run_real(ch))
-        self._thread = self.clock.start_thread(target, f"pc-run-ch{ch}")
+        body = (lambda: self._run_test(ch, test_dur)) if test_mode else (lambda: self._run_real(ch))
+        self._thread = self.clock.start_thread(lambda: self._thread_main(body, ch), f"pc-run-ch{ch}")
         return StartResult(True, "TEST MODE" if test_mode else "", None)
+
+    def _thread_main(self, body, ch: int) -> None:
+        """실행 스레드 — 예상 못 한 예외로 '실행 중'이 남지 않게(v1 은 asyncio 태스크 예외가 조용히 사라졌다)."""
+        try:
+            body()
+        except Exception as e:
+            self.internal_error = repr(e)
+            self.log("PC", f"오류: {e!r}")
+            if self.running:
+                self.running = False
+                self.run_state.mark_finished("pc", ch)
+                self._idle()
 
     # ───────── TEST 모드(1297-1400) ─────────
     def _run_test(self, ch: int, dur: float) -> None:
@@ -556,26 +561,6 @@ class PlasmaCleaning(StepIO, StopIO, PreflightIO):
         except Exception:
             pass
 
-    # ───────── 호스트 공정 로그(2688-2728) ─────────
-    def _host_run_begin(self) -> None:
-        self.host_key = None
-        if str(self.origin or "ui") != "host":
-            return
-        key = str(self.origin_meta.get("key") or "")
-        hl = self.host_log
-        if hl is None or not key:
-            return
-        try:
-            hl.mark_owned(key)
-            pname = str((self.loaded_row or {}).get("Process_name") or (self.loaded_row or {}).get("process_name")
-                        or "").strip()
-            hl.update(key, recipe_name=os.path.basename(self.host_recipe_path) if self.host_recipe_path else "",
-                      row_count=int(self.host_recipe_rows or 1), process_names=pname)
-            hl.mark_started(key, self._now_dt(), log_file=None)         # [이상] log_file 늘 빈칸(PC-098)
-        except Exception:
-            pass
-        self.host_key = key
-
     # ───────── 종료 통지(2730-2852) ─────────
     def _notify_finish_once(self, ok: bool, reason: Optional[str], stopped: bool, ch: int) -> None:
         if self.final_notified:
@@ -667,345 +652,6 @@ class PlasmaCleaning(StepIO, StopIO, PreflightIO):
             self.stop_requested = True
         self.clock.notify()
         return True
-
-    # ───────── 호스트 START(3190-3301) ─────────
-    def host_start(self, recipe: str, origin_meta: Optional[Mapping[str, Any]] = None,
-                   on_result: Optional[Callable[[HostStartResult], None]] = None, source: str = "robot") -> Box:
-        """로봇 START_PLASMA_CLEANING — 바로 돌아오고 결과는 on_result(HostStartResult)(반환한 Box 에도). 빈 recipe 는 E202,
-        PC 없음 E204 는 핸들러(robot_ops) 몫. 여기서는 v1 start_with_recipe_string 그대로."""
-        out = Box(self.clock)
-
-        def finish(res: HostStartResult) -> None:
-            out.set(res)
-            if on_result is not None:
-                try:
-                    on_result(res)
-                except Exception:
-                    pass
-        hp = self._host_pending
-        if hp is not None and not hp.done:
-            finish(self._host_fail(HostStartError("다른 Plasma Cleaning start 요청이 이미 처리 중입니다.", "E206")))
-            return out
-        self._host_pending = Box(self.clock)
-        self._host_start_code = None
-        self.clock.start_thread(lambda: finish(self._host_start_body(recipe, dict(origin_meta or {}), source)),
-                                "pc-host-start")
-        return out
-
-    def _host_fail(self, e: BaseException) -> HostStartResult:
-        raw = getattr(e, "code", None)
-        return HostStartResult(False, str(e), R.host_error_code(str(e), raw), raw)
-
-    def _reject_host_if_running(self) -> None:
-        if self.running:
-            msg = "이미 Plasma Cleaning이 실행 중입니다."
-            self.popup("warning", "실행 중", msg)
-            raise HostStartError(msg, "E205")
-
-    def _host_start_body(self, recipe: str, meta: Dict[str, Any], source: str) -> HostStartResult:
-        hp = self._host_pending
-        try:
-            s = (recipe or "").strip()
-            if not s:
-                self._reject_host_if_running()
-                self.host_recipe_path, self.host_recipe_rows = "", 1
-            elif s.lower().endswith(".csv"):
-                row, n = self._load_csv_with_timeout(s)
-                if not row:
-                    raise HostStartError("CSV에 데이터 행이 없습니다.", "E208")
-                self._reject_host_if_running()
-                self.loaded_row = dict(row)
-                self._apply_row(row)
-                self.log("File", f"CSV 로드 완료: {s} → UI에 값 세팅")
-                self.host_recipe_path, self.host_recipe_rows = s, int(n or 1)
-            else:
-                raise HostStartError("지원하지 않는 레시피 형식입니다. CSV 파일 경로만 허용됩니다.", "E209")
-            self._on_preflight = None
-            self._click_start(source=source, by="", origin="host", origin_meta=meta)
-            wait_s = self._cfgf("PC_HOST_START_WAIT_TIMEOUT_S", 10.0)
-            self.clock.wait_until(self.clock.monotonic() + wait_s, lambda: hp.done)
-            if not hp.done:
-                raise RuntimeError(f"preflight timeout({wait_s:.1f}s) (쿨다운/가드 등으로 프리플라이트에 도달하지 못했습니다)")
-            ok, reason = hp.value
-            if not ok:
-                code = self._host_start_code
-                raise HostStartError(reason or "Plasma Cleaning start failed", code or None)
-            return HostStartResult(True, reason, None, None)
-        except Exception as e:
-            return self._host_fail(e)
-        finally:
-            self._host_pending = None
-            self._host_start_code = None
-
-    def _load_csv_with_timeout(self, path: str):
-        box = Box(self.clock)
-
-        def work():
-            try:
-                box.set(("ok", R.load_host_csv(path, self.log)))
-            except HostStartError as e:
-                box.set(("coded", e))
-            except RuntimeError as e:
-                box.set(("rt", e))
-            except Exception as e:
-                box.set(("exc", e))
-        self.clock.start_thread(work, "pc-csv-load")
-        self.clock.wait_until(self.clock.monotonic() + R.CSV_LOAD_TIMEOUT_S, lambda: box.done)
-        if not box.done:
-            raise HostStartError(f"CSV 로드 30초 timeout (NAS 응답 지연): {path}", "E227")
-        kind, v = box.value
-        if kind == "ok":
-            return v
-        if kind in ("coded", "rt"):
-            raise v
-        raise R.e209_read_failed(path, v)
-
-    # ───────── 이벤트(펌프 — 268-431) ─────────
-    def pumps_on_now(self) -> None:
-        g, pr = self.dev.mfc_gas, self.dev.mfc_pressure
-        sel = f"CH{self.ch}"
-        self.pumps = {}
-        if g is not None and g is pr:
-            self.pumps[g.block] = f"MFC(SP4/GAS-{sel})"
-        else:
-            if g is not None:
-                self.pumps[g.block] = "MFC(GAS)"
-            if pr is not None:
-                self.pumps[pr.block] = f"MFC(SP4-{sel})"
-        self.ig_pump = (self.dev.ig.block, f"IG-{sel}") if self.dev.ig is not None else None
-        self.rf_pump = self.dev.rf is not None
-
-    def pumps_off(self) -> None:
-        self.pumps = {}
-        self.ig_pump = None
-        self.rf_pump = False
-
-    rf_pump = False
-
-    def on_system_event(self, e) -> None:
-        """system.event_listeners 에 건다 — 드라이버 이벤트(Logged.event)."""
-        src, ev = getattr(e, "source", ""), getattr(e, "event", None)
-        if ev is None or src == "pc":
-            return
-        try:
-            if src == "pc.rf":
-                self._on_rf(ev)
-            elif src in self.pumps:
-                self._on_mfc(src, ev)
-            elif self.ig_pump is not None and src == self.ig_pump[0]:
-                self._on_ig(ev)
-        except Exception as ex:
-            self.log("PC", f"이벤트 펌프 오류: {ex!r}")
-
-    def _on_mfc(self, src: str, ev) -> None:
-        label = self.pumps.get(src)
-        if label is None:
-            return
-        k = getattr(ev, "kind", None)
-        if k in ("command_confirmed", "command_failed"):
-            ow = getattr(ev, "owner", None)
-            if ow is not None and ow != self.mfc_owner():
-                return
-        if k == "status":
-            self.log(label, ev.detail or "")
-        elif k == "command_confirmed":
-            self.log(label, f"OK: {ev.cmd or ''}")
-            self.pc.on_mfc_confirmed(ev.cmd or "")
-        elif k == "command_failed":
-            self.log(label, f"FAIL: {ev.cmd or ''} ({ev.detail or 'unknown'})")
-            self.pc.on_mfc_failed(ev.cmd or "", ev.detail or "unknown", code=ev.code,
-                                  meta={"kind": k, "gas": ev.gas, "label": label, "ch": self.ch})
-        elif k == "flow":
-            gas, flow = ev.gas or "", float(ev.value or 0.0)
-            self.log(label, f"[poll] {gas}: {flow:.2f} sccm")
-            g = self.dev.mfc_gas
-            if self.process_timer_active and g is not None and src == g.block:
-                sel = M.GAS_MAP.get(int(self.gas_idx or 3), "N2")
-                if not sel or gas == sel:
-                    self.readings["flow"].append(flow)
-        elif k == "pressure":
-            txt = ev.text or (f"{ev.value:.3g}" if ev.value is not None else "")
-            self.log(label, f"[poll] ChamberP: {txt}")
-            pr = self.dev.mfc_pressure
-            if self.process_timer_active and isinstance(ev.value, (int, float)) and pr is not None and src == pr.block:
-                self.readings["pressure"].append(float(ev.value))
-
-    def _on_ig(self, ev) -> None:
-        label = self.ig_pump[1]
-        k = getattr(ev, "kind", None)
-        if k == "status":
-            self.log(label, ev.detail or "")
-        elif k == "pressure":
-            pv = ev.pressure
-            self.log(label, f"[poll] {pv:.3e} Torr" if isinstance(pv, (int, float)) else f"[poll] {ev.detail or ''}")
-            if isinstance(pv, (int, float)) and self.running:
-                self.readings["ig"].append(float(pv))
-        elif k == "base_reached":
-            self.log(label, "Base pressure reached")
-        elif k == "base_failed":
-            self.log(label, f"Base pressure failed: {ev.detail or ''}")
-
-    def _on_rf(self, ev) -> None:
-        k = getattr(ev, "kind", None)
-        data = getattr(ev, "data", {}) or {}
-        if k == "state_changed" and data.get("running") is True:
-            self._camera_join()
-        if k == "status" and ev.detail == "RF SET OFF":
-            self._camera_leave()
-        if not self.rf_pump:
-            return
-        if k == "display":
-            fwd, ref = float(data.get("forward") or 0.0), float(data.get("reflected") or 0.0)
-            self.ui_fwd, self.ui_ref = f"{fwd:.1f}", f"{ref:.1f}"
-            self.log("RF", f"FWD={fwd:.1f}, REF={ref:.1f} (W)")
-            if self.process_timer_active:
-                self.readings["forp"].append(fwd)
-                self.readings["refp"].append(ref)
-        elif k == "status":
-            self.log("RF", ev.detail or "")
-        elif k == "log":
-            self.log("PLC", ev.detail or "")
-        elif k == "target_reached":
-            self.log("RF", "목표 파워 도달")
-            with self.clock.cond:
-                self.rf_target_ok, self.rf_target_reason, self.rf_target_evt = True, "", True
-                self.clock.cond.notify_all()
-        elif k == "target_failed":
-            reason = ev.detail or "RF 목표 파워 실패 (REF.P 과다 또는 저출력)"
-            with self.clock.cond:                    # 기다리는 RF 시작이 '목표 실패'를 보고 깨도록 한 묶음으로(v1 이벤트 순서)
-                self.log("RF", f"목표 파워 실패: {reason}")
-                self.rf_target_ok, self.rf_target_reason = False, reason
-                self.forced_fail, self.forced_fail_reason = True, reason
-                self.pc.on_rf_failed(reason, code=ev.code, meta={"kind": k, "forward": self.dev.rf.forward_w,
-                                                                  "reflected": self.dev.rf.reflected_w, "ch": self.ch})
-                self.log("PC", "RF 실패 감지 → PC 컨트롤러에 FAIL 전달")
-                self.rf_target_evt = True
-                self.clock.cond.notify_all()
-        elif k == "power_off_finished":
-            self.log("RF", "Power OFF finished")
-
-    # ───────── 카메라(1049-1065) ─────────
-    def _camera_join(self) -> None:
-        share, cam = self.dev.camera_share, self.dev.camera
-        if share is None:
-            return
-        owner = self.cam_owner_active = f"pc{int(self.ch)}"
-
-        def work():
-            try:
-                if cam is not None:
-                    cam.set_log_callback(lambda m: self.log("CAM", m), owner=owner)
-                share.join(owner)
-                self.log("CAM", f"카메라 녹화 시작 (mode={cam.current_mode if cam is not None else '-'})")
-            except Exception:
-                pass
-        self.clock.start_thread(work, "pc-camera-join")
-
-    def _camera_leave(self) -> None:
-        share = self.dev.camera_share
-        if share is None:
-            return
-        owner = self.cam_owner_active or f"pc{int(self.ch)}"
-        try:
-            ok = share.leave(owner)
-            self.cam_owner_active = ""
-            if not ok:
-                self.log("CAM", "카메라 사용 종료 — 다른 공정이 계속 촬영 중")
-        except Exception:
-            pass
-
-    # ───────── 엔진 계약(system.register_engine) ─────────
-    @property
-    def busy(self) -> bool:
-        return bool(self.running)
-
-    def _set_step(self, step: str) -> None:
-        self._last_step = step
-        self._step_t0 = self.clock.monotonic() if step else None
-
-    def _current_step(self) -> str:
-        if self.phase in ("run",) and self.pc.step:
-            return self.pc.step
-        return self._last_step
-
-    def on_tick_start(self, tick=None) -> None:
-        st = self._current_step()
-        if st != getattr(self, "_seen_step", None):
-            self._seen_step = st
-            self._seen_t0 = self.clock.monotonic()
-
-    def on_row(self, view) -> None:
-        self.last_view = view
-
-    def snapshot_fields(self) -> Dict[str, Any]:
-        out: Dict[str, Any] = {"pc.proc.state": self.phase, "pc.proc.paused": False if self.running else None}
-        if not self.running:
-            return out
-        st = self._current_step()
-        t0 = getattr(self, "_seen_t0", None)
-        out.update({"pc.proc.run_id": self.run_id, "pc.proc.owner": self.owner_src, "pc.proc.block_type": st or None,
-                    "pc.proc.block_label": STEP_LABEL.get(st), "pc.proc.block_no": STEP_NO.get(st),
-                    "pc.proc.block_count": len(STEPS),
-                    "pc.proc.block_elapsed_s": None if t0 is None else round(self.clock.monotonic() - t0, 1),
-                    "pc.proc.remain_s": float(self.countdown_left) if (st == "process" and self.countdown_left is not None)
-                    else None})
-        p = self.params
-        if p is not None and not self.test_mode_active and self.phase == "run":
-            gas = {1: "ar", 2: "o2", 3: "n2"}.get(int(p.gas_idx), "n2")
-            out.update({"pc.set.rf_w": float(p.rf_power_w), f"pc.set.{gas}_sccm": float(p.gas_flow_sccm),
-                        "pc.set.pressure_mtorr": float(p.sp4_setpoint_mTorr),
-                        "pc.set.time_s": float(p.process_time_min) * 60.0})
-        return out
-
-    def state(self) -> Dict[str, Any]:
-        return {"running": self.running, "phase": self.phase, "ch": self.ch, "step": self._current_step() or None,
-                "test_mode": self.test_mode_active, "state_text": self.state_text, "ui": dict(self.ui),
-                "fwd": self.ui_fwd, "ref": self.ui_ref, "countdown_left": self.countdown_left,
-                "run_id": self.run_id if self.running else None, "owner": self.owner_src if self.running else None,
-                "stop_requested": self.stop_requested, "last_final": self.last_final,
-                "cooldown_s": self.run_state.pc_block_reason(self.ch, COOLDOWN_S)[1],
-                "error": self.run_state.last_error("pc", self.ch), "loaded_row": self.loaded_row,
-                "test_loaded": R.test_mode_of(self.loaded_row)[0]}
-
-    def state_for_journal(self) -> Dict[str, Any]:
-        return {"running": self.running, "phase": self.phase, "ch": self.ch, "run_id": self.run_id,
-                "owner": self.owner_src, "by": self.by, "origin": self.origin, "test_mode": self.test_mode_active,
-                "step": self._current_step(), "params": self.params.as_dict() if self.params else None,
-                "ui": dict(self.ui), "loaded_row": self.loaded_row, "countdown_left": self.countdown_left,
-                "process_timer_active": self.process_timer_active, "gas_idx": self.gas_idx,
-                "last_process_time_min": self.last_process_time_min, "process_name": self.process_name,
-                "readings_n": {k: len(v) for k, v in self.readings.items()}}
-
-    def resume_checks(self, state: Optional[Mapping[str, Any]]) -> List[Tuple[str, bool, str]]:
-        """이어가기 전 확인 — [(id, 맞음, 문구)]. 메인 클리닝 시간 대기(step 'process', TEST 아님)만 이어가기 가능."""
-        want = dict(state or {})
-        step = str(want.get("step") or "")
-        out = [("resumable_step", step in RESUMABLE_STEPS and not want.get("test_mode"),
-                f"단계 {step or '-'}({STEP_LABEL.get(step, '-')}) — 이어가기 가능 단계는 클리닝 시간 대기뿐")]
-        if not out[0][1]:
-            return out
-        p = dict(want.get("params") or {})
-        v = self.last_view
-        ch = 2 if int(want.get("ch") or 1) == 2 else 1
-
-        def val(col):
-            return None if v is None else v.value(col)
-        tgt = float(p.get("rf_power_w") or 0.0)
-        fwd, en = val("pc.rf.fwd_w"), val("pc.rf.enable")
-        ok = en is True and fwd is not None and tgt > 0 and abs(float(fwd) - tgt) <= max(1.0, 0.1 * tgt)
-        out.append(("power_output", ok, f"RF SET {en} · FWD {fwd} W (목표 {tgt:.1f} W ±10%)"))
-        flow = float(p.get("gas_flow_sccm") or 0.0)
-        if flow > 0:
-            gas = {1: "ar", 2: "o2", 3: "n2"}.get(int(p.get("gas_idx") or 3), "n2")
-            on = val(f"ch1.mfc.{gas}_on")
-            out.append(("gas", on is True, f"MFC1 {gas.upper()} ON {on}"))
-        else:
-            out.append(("gas", True, "유량 0 — 가스 확인 없음"))
-        sp, pm = float(p.get("sp4_setpoint_mTorr") or 0.0), val(f"ch{ch}.mfc.pressure_mtorr")
-        m = self.dev.mfc.get(f"ch{ch}")
-        p_ok = pm is not None and m is not None and mfc_ops.within(m, sp, float(pm))
-        out.append(("pressure", bool(p_ok), f"SP4 {sp:.2f} mTorr · 압력 {pm} mTorr"))
-        return out
 
     def close(self) -> None:
         try:

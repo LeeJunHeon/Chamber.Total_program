@@ -1,6 +1,6 @@
 """로봇 명령 시험대 — PLC 시뮬레이터(상태 주입)·가짜 공정 어댑터·RobotOps 를 가상 시계로 묶는다(시험·골든 공용).
 
-- RobotPlcSim(PlcSim): 코일 강제값(forced — 래더 출력 뒤에 덮음: 램프 둘 다 TRUE 같은 이상 상태), 읽기 무응답 주소(mute),
+- RobotPlcSim(PlcSim): 코일 강제값(forced — 래더 출력 뒤에 덮음: 램프 둘 다 TRUE 같은 이상 상태), 읽기·쓰기 무응답 주소(mute·mute_write),
   진공이 안 잡히는 로드락(no_vacuum — 러핑해도 게이지가 안 올라 T0052 600 s 뒤 L_VAC_NOT_READY).
 - apply_state(sim, state): 사례 상태(게이트·로딩 센서·척·핀·로드락·코일·강제·무응답)를 시뮬레이터에 넣는다. v1 골든 도구
   (v2/tools/v1golden_robot_handlers.py)도 같은 함수로 같은 상태를 만든다 — 두 쪽이 같은 래더에서 돈다.
@@ -11,6 +11,8 @@
 """
 from __future__ import annotations
 
+import json
+import re
 import struct
 import tempfile
 from datetime import datetime
@@ -29,12 +31,16 @@ from v2.ch12.sim.plc_sim import CHUCK_LAMP_HOLD_S, PlcSim
 START_T = 1.0                 # 사례 시작 시각(시뮬레이터·시계)
 PEER = "127.0.0.1:50123"      # 로봇 서버가 넘기는 peer(v1 str(peername) = "('127.0.0.1', 50123)")
 RECIPE_NAME = "recipe_a.csv"
+PLC_ERR = "<PLC_ERR>"         # PLC 통신 오류 문구 자리표(v1 pymodbus 문구 ↔ v2 드라이버 문구)
+TS_RE = re.compile(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d ")
+KEY_RE = re.compile(r"^sputter-\d{17}-")
 
 
 class RobotPlcSim(PlcSim):
     def __init__(self, *a, **k) -> None:
         self.forced: Dict[int, bool] = {}
         self.mute: set = set()
+        self.mute_write: set = set()
         self.no_vacuum = False
         super().__init__(*a, **k)
 
@@ -52,6 +58,9 @@ class RobotPlcSim(PlcSim):
         if pdu and pdu[0] == READ_COILS and self.mute:
             addr, n = struct.unpack(">HH", pdu[1:5])
             if any(addr <= a < addr + n for a in self.mute):
+                return None
+        if pdu and pdu[0] == WRITE_COIL and self.mute_write:
+            if struct.unpack(">H", pdu[1:3])[0] in self.mute_write:
                 return None
         return super()._pdu(pdu, now)
 
@@ -101,6 +110,8 @@ def apply_state(sim: RobotPlcSim, state: Optional[Dict[str, Any]]) -> None:
         sim.forced[PM.resolve(name)] = bool(v)
     for name in (st.get("mute") or ()):
         sim.mute.add(PM.resolve(name))
+    for name in (st.get("mute_write") or ()):
+        sim.mute_write.add(PM.resolve(name))
     for name, v in (st.get("coils") or {}).items():          # 스위치 코일을 상승 에지로 보지 않게
         sim._edge_prev[PM.resolve(name)] = bool(v)
     sim._outputs()
@@ -111,9 +122,13 @@ def prepare_files(root: Path, case: Dict[str, Any]) -> str:
     Process_name P1..Pn)를 root 아래에 만든다. 레시피 경로(없으면 '')."""
     import shutil
     root = Path(root)
+    marker = root / ".robot_rig"
     if root.exists():
+        if not marker.exists():
+            raise RuntimeError(f"시험대가 만든 폴더가 아님 — 지우지 않음: {root}")
         shutil.rmtree(root)
     root.mkdir(parents=True)
+    marker.write_text("robot_rig", encoding="utf-8")
     for folder, names in (case.get("files") or {}).items():
         if folder == "ALD_file":
             (root / names).write_text("x", encoding="utf-8")
@@ -145,6 +160,37 @@ def subst(v: Any, recipe: str) -> Any:
     if isinstance(v, list):
         return [subst(x, recipe) for x in v]
     return v
+
+
+def norm_text(s: str, roots: List[tuple]) -> str:
+    for r, ph in roots:
+        if r:
+            s = s.replace(r, ph).replace(json.dumps(r, ensure_ascii=False)[1:-1], ph)
+    return s
+
+
+def normalize(out: Dict[str, Any], roots: List[tuple]) -> Dict[str, Any]:
+    """비교 모양 — body 는 JSON 직렬화 문자열(로봇 서버가 그대로 보낸다), 로그 시각·핸들러 예외 traceback·Robot CSV 시각 칸·
+    기록키 시각은 가림, 경로는 자리표(roots = [(문자열, 자리표)]), 응답까지 가상 초는 소수 3자리."""
+    res = []
+    for r in out["results"]:
+        log = []
+        for tag, text in r["log"]:
+            text = TS_RE.sub("<TS> ", text)
+            if tag == "NET" and text.startswith("Handler error for "):
+                text = text.split("\n", 1)[0]
+            log.append([tag, norm_text(text, roots)])
+        res.append({"reply_cmd": r["reply_cmd"],
+                    "body": norm_text(json.dumps(r["body"], ensure_ascii=False, default=str), roots),
+                    "log": log, "elapsed": round(float(r["elapsed"]), 3)})
+    rows = []
+    for row in out["robot_csv"]:
+        row = list(row)
+        for i in (1, 2, 3, 4):
+            row[i] = "<T>" if row[i] else ""
+        row[14] = KEY_RE.sub("sputter-<TS>-", row[14])
+        rows.append([norm_text(x, roots) for x in row])
+    return {"results": res, "writes": [list(w) for w in out["writes"]], "robot_csv": rows}
 
 
 # ───────────────────────── 가짜 공정 어댑터 ─────────────────────────
@@ -257,18 +303,20 @@ class FakeEngines:
 
 # ───────────────────────── 시험대 ─────────────────────────
 class RobotRig:
-    def __init__(self, cfg: Optional[dict] = None, out_dir: Optional[Path] = None, robot_csv: bool = False) -> None:
+    def __init__(self, cfg: Optional[dict] = None, out_dir: Optional[Path] = None, robot_csv: bool = False,
+                 clock=None) -> None:
+        """clock 을 주면 그 시계(실제 시계 — HTTP·로봇 서버 끝-끝 시험), 없으면 가상 시계."""
         from v2.ch12.params import PARAMS
         from v2.common.paramdef import defaults
         from v2.ch12.robot_ops import RobotOps
         from v2.ch12.shared import PlcLink
-        self.c = VirtualClock(start_wall=1_793_318_400.0)
+        self.c = clock if clock is not None else VirtualClock(start_wall=1_793_318_400.0)
         self.c.register()
         self.out = Path(out_dir) if out_dir else Path(tempfile.mkdtemp(prefix="robot_rig_"))
         self.cfg = dict(defaults(PARAMS), **(cfg or {}))
         if "ROBOT_RECIPE_ROOT_DIR" not in (cfg or {}):
             self.cfg["ROBOT_RECIPE_ROOT_DIR"] = str(self.out / "recipes")
-        self.sim = RobotPlcSim(start=0.0)
+        self.sim = RobotPlcSim(start=0.0 if clock is None else self.c.monotonic())
         self.tr = P.make_transport(self.c, self.cfg, SimTransport(self.c, self.sim))
         self.w = P.make_worker(self.tr, self.cfg, True)
         self.plc = P.PlcDriver(self.c, self.w, self.cfg, True)
@@ -282,7 +330,10 @@ class RobotRig:
         self.ops = RobotOps(self.c, self.link, self.cfg, robot_csv=self.csv,
                             on_report=lambda p, src: self.reports.append((src, p)))
         self.w.start()
-        self.c.wait_until(START_T)
+        if clock is None:
+            self.c.wait_until(START_T)
+        else:
+            self.c.wait_until(self.c.monotonic() + 5.0, lambda: self.w.ready)
         self.sim.advance_to(self.c.monotonic())
 
     def set_engines(self, eng: Optional[Dict[str, Any]]) -> Optional[FakeEngines]:

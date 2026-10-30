@@ -109,6 +109,36 @@ def test_run_start_and_run_end_per_chamber(rig):
     assert not _events(rig)                                   # run_* 는 event 로 나가지 않는다
 
 
+@dataclass
+class EngProcEvent:                                           # process_engine.ProcEvent 모양(kind·detail·code·data·level)
+    kind: str
+    detail: str = ""
+    code: str = None
+    data: dict = field(default_factory=dict)
+    level: str = "info"
+
+
+def test_engine_proc_event_shape_and_run_end_only_after_start(rig):
+    """엔진(process_engine)이 system.emit("engine:ch1", kind, …, event=ProcEvent) 로 내는 모양 — run_end 는 run_start 뒤에만."""
+    pre = EngProcEvent("run_end", "레시피 값 오류", "RECIPE_PARAM_ERROR", {"result": "error"}, "error")
+    rig.emit("engine:ch1", "run_end", pre.detail, level="error", code=pre.code, event=pre)
+    assert not [x for x in rig.hub.recent if x["type"] == "run_end"]
+    ev = _events(rig)[-1]["data"]
+    assert (ev["code"], ev["level"], ev["context"]["chamber"], ev["context"]["source"]) == (
+        "RECIPE_PARAM_ERROR", "error", "ch1", "process")
+    st = EngProcEvent("run_start", "Run CH1", None, {"run_id": "R1", "owner": "web", "params": {"process_time": 5},
+                                                   "recipe_rev": 2, "process_index": 2})
+    rig.emit("engine:ch1", "run_start", st.detail, event=st)
+    end = EngProcEvent("run_end", "Run CH1", "USER_STOP", {"result": "aborted", "run_id": "R1"}, "warn")
+    rig.emit("engine:ch1", "run_end", end.detail, level="warn", code=end.code, event=end)
+    rs = [x["data"] for x in rig.hub.recent if x["type"] == "run_start"][-1]
+    re_ = [x["data"] for x in rig.hub.recent if x["type"] == "run_end"][-1]
+    assert (rs["runId"], rs["chamber"], rs["by"], rs["name"], rs["stepNo"], rs["recipeRev"]) == ("R1", "ch1", "web", "Run CH1", 2, 2)
+    assert (re_["runId"], re_["result"], re_["reasonCode"], re_["summary"]) == ("R1", "aborted", "USER_STOP", {"name": "Run CH1"})
+    rig.emit("engine:ch1", "run_end", "두 번째", event=end)                # 이미 닫힘 → event
+    assert len([x for x in rig.hub.recent if x["type"] == "run_end"]) == 1
+
+
 def test_safety_alarm_codes_and_rule_id(rig):
     rig.emit("safety:ch1", "fired", "게이트 열림", level="error", code="GATE_OPEN", event=SafetyEvent("fired", "S12"))
     rig.emit("safety", "seq_start", "정지", event=SafetyEvent("seq_start", "stop"))

@@ -36,7 +36,7 @@ STOP·전체 상한(PC-150 — v1 은 Python 버전마다 다름. v2 는 3.11 �
 나눔: 사이클(컨트롤러)·기다림·v1 예외 모양·단계 표는 tsp_cycle(TspCycle — 섞어 씀), 로그 파일은 outputs/tsp_txt(TspTxtLog).
 v2 에서 더한 것: abort(reason)(안전 규칙 — 결과는 '[ERROR] 실행 실패: RuntimeError('abort: …')' 와 같은 예외 경로), 저널
   (state_for_journal — TSP 는 이어가기 안 함: 어느 단계도 상태 유지 블록이 아니다, PHASES), 1초 행 tsp.proc.*·tsp.set.base_torr.
-  판정은 v1 주기의 자기 RDI 로(1초 행 값은 판정에 쓰지 않는다). 매일 예약(PC-143~146)은 여기 없다.
+  판정은 v1 주기의 자기 RDI 로(1초 행 값은 판정에 쓰지 않는다). 매일 예약(PC-143~146)은 tsp_schedule(engine.schedule).
 """
 from __future__ import annotations
 
@@ -89,6 +89,7 @@ class TspEngine(TspCycle):
         self._s: Dict[str, Any] = {}
         self._last_code: Optional[str] = None
         self.started_ctrl: Optional[float] = None
+        self.schedule = None                 # tsp_schedule.TspSchedule(매일 예약 — attach 가 붙인다)
         self._refresh_from_config()
 
     # ═══════════════════════ 설정(시작·실행마다 다시 읽음 — tsp_runtime.py:138-160) ═══════════════════════
@@ -244,6 +245,8 @@ class TspEngine(TspCycle):
                 self.clock.wait_until(self.clock.monotonic() + CLOSE_WAIT_S, lambda: not t.is_alive())
             except RuntimeError:
                 t.join(5.0)
+        if self.schedule is not None:
+            self.schedule.close()
         self.txt.stop_writer()
 
     def state(self) -> Dict[str, Any]:
@@ -256,7 +259,8 @@ class TspEngine(TspCycle):
                     "remain_s": None if self.phase_end is None else max(0.0, self.phase_end - now),
                     "deadline_left_s": None if self._deadline is None else max(0.0, self._deadline - now),
                     "start_block_reason": self.start_block_reason, "result": self.last_result,
-                    "log_file": self.log_file, "gauge_owner": getattr(self.gauge, "owner", None)}
+                    "log_file": self.log_file, "gauge_owner": getattr(self.gauge, "owner", None),
+                    "schedule": None if self.schedule is None else self.schedule.state()}
 
     # ═══════════════════════ 1초 행·조립 훅 ═══════════════════════
     def on_tick_start(self, tick=None) -> None:
@@ -416,9 +420,19 @@ class TspEngine(TspCycle):
         self._set_phase("idle")
 
 
-def attach(system, run_state, name: str = "tsp") -> TspEngine:
-    """조립(Ch12System)에 TSP 엔진을 꽂는다 — 이벤트는 조립 이벤트 길(출처 tsp_engine), 로그 파일은 v1 기록 출력 쓰기 스레드."""
+def attach(system, run_state, name: str = "tsp", settings_dir=None, schedule: bool = True) -> TspEngine:
+    """조립(Ch12System)에 TSP 엔진을 꽂는다 — 이벤트는 조립 이벤트 길(출처 tsp_engine), 로그 파일은 v1 기록 출력 쓰기 스레드.
+    schedule=True 면 매일 예약(tsp_schedule)을 붙이고 바로 복원한다(v1 은 TSP 페이지 생성 때 예약 등록) — 저장 폴더는
+    settings_dir, 없으면 조립 설정 저장소 폴더(system.store.dir)."""
+    from v2.ch12.tsp_schedule import TspSchedule
     eng = TspEngine(system.clock, system.cfg, system.tsp, system.shared.tsp_ig, run_state,
                     on_event=system._ev_for("tsp_engine"), writer=system.outputs.writer)
     system.register_engine(name, eng)
+    if schedule:
+        store = getattr(system, "store", None)
+        d = settings_dir if settings_dir is not None else (store.dir if store is not None else None)
+        eng.schedule = TspSchedule(eng, d)
+        msg = eng.schedule.restore()
+        if msg:
+            system.emit("tsp_engine", "schedule_restore", msg)
     return eng

@@ -533,3 +533,30 @@ ITEMS = [
        "apps/robot_server/state_api.py:13-171", _S, status="na",
        note="na 근거: run_state_api·STORE 를 import·호출하는 곳 없음(grep — 자기 파일만)"),
 ]
+
+# ───────────────────────── 6단계 로봇 명령 처리(제어 프로그램 쪽)에서 끝낸 항목 ─────────────────────────
+# v1 handlers 를 실제로 돌린 골든(v2/tools/v1golden_robot_handlers.py → v2/tests/golden/robot_handlers.json, 213 사례)과
+# 명령 × 상태 비교(test_robot_ops::test_matches_v1 — 응답 명령·body 바이트·로그 줄·코일 쓰기 순서·Robot CSV 행·응답 시점).
+_T_CMP = "v2/tests/test_robot_ops.py::test_matches_v1"
+_B, _ST, _VAC, _MOT = ("v2/ch12/robot_base.py", "v2/ch12/robot_status.py", "v2/ch12/robot_vacuum.py",
+                       "v2/ch12/robot_motion.py")
+_DONE = {
+    31: (_B, _T_CMP), 32: (_B, "v2/tests/test_robot_ops.py::test_heartbeat_paused_during_plc_calls"),
+    33: (_B, f"{_T_CMP}; v2/tests/test_robot_ops.py::test_clock_lock_waits_on_virtual_clock"),
+    35: (f"{_B}; v2/ch12/robot_api.py", f"{_T_CMP}; v2/tests/test_robot_api.py::test_event_endpoint_emits"),
+    37: (_B, _T_CMP), 38: (_B, _T_CMP), 39: (_B, _T_CMP), 40: (_B, _T_CMP),
+    42: ("v2/ch12/robot_ops.py", f"v2/tests/test_robot_ops.py::test_golden_shape; {_T_CMP}"),
+    43: ("v2/ch12/robot_ops.py", _T_CMP), 44: (f"{_B}; {_MOT}", _T_CMP), 45: (_B, _T_CMP), 46: (_B, _T_CMP),
+    58: ("v2/ch12/robot_ops.py", _T_CMP), 138: (_ST, _T_CMP), 139: (_ST, _T_CMP),
+}
+for _n in (47, 48, 49, 50, 51, 53, 54, 55, 56, 57, 59, 60, 61, 62, 67, 68):
+    _DONE[_n] = (_ST, _T_CMP)
+for _n in range(70, 89):
+    _DONE[_n] = (_VAC, _T_CMP)
+for _n in range(89, 109):
+    _DONE[_n] = (_MOT, _T_CMP)
+for _it in ITEMS:
+    _k = int(_it["id"].split("-")[1])
+    if _k in _DONE and _it["status"] == "todo":
+        _it["v2"], _it["test"] = _DONE[_k]
+        _it["status"] = "done"

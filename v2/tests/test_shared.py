@@ -3,7 +3,7 @@
 - PLC 링크: 출처 태그 proxy(요청 이름 plc:<출처>:…), 로봇 명령 구간 동안 하트비트 쉼(두 챔버 겹침 = 참여 수).
 - 카메라: 참여자 chamber1·chamber2·pc1·pc2 — 둘이면 ALL, 하나 남으면 계속 촬영.
 - 펄스 포트: CH1(4007)·CH2(4005) 동시 점유, 같은 주소 다른 종류는 v1 문구로 거부, 놓으면 1초 행 off.
-- OES·RGA 단독 소유·MFC 폴링 사용자·TSP 게이지(잡을 때만 worker).
+- OES·RGA 단독 소유·MFC 폴링 사용자·TSP 게이지(잡는 동안 CH1 IG worker 공유 — D67).
 - 두 스레드가 자기 챔버 자원을 동시에 잡고 놓아도 서로 막지 않는다.
 """
 import threading
@@ -131,7 +131,7 @@ def test_oes_rga_exclusive_mfc_poll_and_tsp_gauge(rig):
     assert rig.rows[-1]["tsp.ig.q"] == "off"
     snap = sh.snapshot()
     assert snap["ch1.oes"] == "chamber1" and snap["ch2.oes"] == "chamber2" and snap["tsp.ig"] is None
-    assert sh.tsp_ig.acquire("tsp")[0] and sh.tsp_ig.release()                  # 다시 잡으면 새 worker
+    assert sh.tsp_ig.acquire("tsp")[0] and sh.tsp_ig.release()                  # 다시 잡기·놓기(D67 — CH1 IG worker 공유, 새 worker 없음)
 
 
 def test_two_chambers_claim_release_concurrently_without_blocking(rig):

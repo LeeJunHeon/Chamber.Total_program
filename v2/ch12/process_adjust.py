@@ -18,7 +18,7 @@
 from __future__ import annotations
 
 import copy
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional
 
 from v2.ch12 import blocks as BK
 from v2.ch12.process_list import USE_KEYS, derive_params, plan_runs

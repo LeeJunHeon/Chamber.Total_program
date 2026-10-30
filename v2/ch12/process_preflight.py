@@ -20,15 +20,20 @@ class StageCancelled(Exception):
     """STOP·새 시작으로 단계가 취소됨(v1 asyncio CancelledError)."""
 
 
+PLC_QUEUE_ALLOW_S = 2.0      # v2: PLC worker 줄 서기(1초 묶음 읽기·명령 간격 150 ms·다른 챔버 요청) 여유 — 결정 후보
+
+
 def plc_call(eng, submit: Callable[[Callable], Any], timeout_s: float):
-    """PLC 요청 하나를 보내고 결과(Result)를 기다린다. 시간 초과 → TimeoutError, 취소 → StageCancelled."""
+    """PLC 요청 하나를 보내고 결과(Result)를 기다린다. 시간 초과 → TimeoutError, 취소 → StageCancelled.
+    v1 읽기 한도(Gate·Main Valve 0.6 s)는 v1 이 PLC 를 거의 비워 두던 때의 값이라, v2 는 줄 서기 여유(PLC_QUEUE_ALLOW_S)를 더한다."""
     box: dict = {}
 
     def done(res) -> None:
         box["r"] = res
         eng.clock.notify()
     submit(done)
-    ok = eng.clock.wait_until(eng.clock.monotonic() + timeout_s, lambda: "r" in box or eng.stage_cancelled())
+    ok = eng.clock.wait_until(eng.clock.monotonic() + timeout_s + PLC_QUEUE_ALLOW_S,
+                              lambda: "r" in box or eng.stage_cancelled())
     if eng.stage_cancelled():
         raise StageCancelled()
     if not ok:

@@ -15,7 +15,7 @@ StepIO(엔진이 섞어 씀 — 런타임 _bind_pc_controller 의 콜백들, PC-
   실패 문구(REF 과다·0 W·'timeout 60s' — [이상] 실제 120 s, PC-095·D103)는 v1 그대로.
   RF 실패(목표 실패·시간 초과·예외)는 on_rf_failed(중단 신호) → v1 은 그 신호로 컨트롤러가 RF 시작 태스크를 취소해 안쪽 안전 정지가
   첫 대기에서 끊긴다(로그 'STOP during RF START → cancel rf_start & shutdown'). v2 는 안쪽 정지를 'RF cleanup 요청'까지만 하고 같은
-  로그를 남긴 뒤 취소 — 실제 정지 순서는 종료 정리(_final_cleanup)가 한다(결정 D?? 후보: v1 의 asyncio 취소 경합을 단순화).
+  로그를 남긴 뒤 취소 — 실제 정지 순서는 종료 정리(_final_cleanup)가 한다(v1 asyncio 취소 경합을 단순화 — 결정 후보).
 """
 from __future__ import annotations
 

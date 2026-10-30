@@ -11,7 +11,7 @@ from pathlib import Path
 from typing import Callable, Dict, List, Optional
 
 from v2.common.clock import VirtualClock
-from v2.ch12.drivers import plc_map as PM
+from v2.ch12.drivers import plc_map as PM  # noqa: F401 — 시험이 R.PM 으로 씀
 from v2.ch12.process_engine import ProcessEngine
 from v2.ch12.process_steps import norm_plc_name
 from v2.ch12.sim.rig import Ch12Rig

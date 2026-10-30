@@ -17,7 +17,8 @@ type
   출처: ProcEvent·process·engine·proc → process, SafetyEvent·safety → safety, HeaterEvent·heater → heater, 그 밖은 장비 이름
   (챔버 조각을 뺀 나머지 — ch1.mfc → mfc, tsp.ig → ig, 챔버 이름만이면 process, 단 tsp 만이면 TSP 드라이버 tsp).
   엔진이 낼 때의 약속: system.emit(source="process:<ch1|ch2|pc|tsp>", kind, …, event=dict 또는 .data 가 dict 인 객체).
-  run_start·run_end 는 kind 로 알아본다 — data 키 run_id·recipe_name·by·name·step_no·params·blocks / run_id·status·reason·summary.
+  run_start·run_end 는 kind 로 알아본다 — data 키 run_id·recipe_name·by(owner)·name·step_no(process_index)·params·blocks /
+  run_id·status(result)·reason(이벤트 code)·summary. run_end 는 run_start 를 보낸 공정에만(아니면 event — 시작 전 거부 등).
 
 명령: run_command(kind, args, source, cid, by) — system.command(...) 를 부르고 그 결과로 cmd_result 를 낸다(로컬 서버·웹 연결·
   로봇 API 가 같이 쓴다). 챔버K 는 core 가 on_result 로 냈지만 챔버12 는 여기서 낸다 — core 는 cmd_result 를 내지 않는다.
@@ -171,6 +172,7 @@ class MessageHub:
         self.alarm_codes: Dict[str, dict] = {}       # 규칙 id → 마지막 발동(code·since·chamber)
         self.errors = 0                              # 메시지 만들기 실패(제어는 막지 않음)
         self._web_hash: Optional[str] = None
+        self._open_runs: Dict[str, Any] = {}         # 챔버 → run_start 를 보낸 공정 id(run_end 는 이것만)
 
     # ── 조립에 붙기 ──
     def attach(self) -> "MessageHub":
@@ -328,8 +330,8 @@ class MessageHub:
         ch = chamber_of(src, ev)
         org = origin_of(src, ev)
         data = _event_data(ev)
-        if org == "process" and kind in ("run_start", "run_end"):
-            return self._run(kind, ch, dict(data or {}), ev)
+        if org == "process" and kind in ("run_start", "run_end") and self._run(kind, ch, dict(data or {}), e):
+            return
         code = getattr(e, "code", None) or getattr(e, "reason", None) or kind.upper()
         level = getattr(e, "level", None) or "info"
         rule = None
@@ -352,15 +354,29 @@ class MessageHub:
         self.publish("event", {"level": level, "code": code, "ruleId": rule, "message": (message or "")[:500],
                                "context": context})
 
-    def _run(self, kind: str, ch: str, d: dict, ev: Any) -> None:
+    def _run(self, kind: str, ch: str, d: dict, e: Any) -> bool:
+        """run_start·run_end 메시지(챔버별). run_end 는 run_start 를 보낸 공정에만(그 챔버에 열린 공정이 없으면 False —
+        시작 전 거부 등은 event 로). 엔진 data 키: run_id·recipe_name·by(없으면 owner)·name(없으면 문구)·step_no(없으면
+        process_index)·params·blocks·recipe_rev / run_id·status(또는 result)·reason(없으면 이벤트 code)·summary."""
+        name = d.get("name") or getattr(e, "detail", None) or None
         if kind == "run_start":
-            self.publish("run_start", {"runId": d.get("run_id"), "chamber": ch, "recipeName": d.get("recipe_name"),
-                                       "by": d.get("by"), "name": d.get("name"), "stepNo": d.get("step_no") or 1,
+            rid = d.get("run_id")
+            self._open_runs[ch] = rid
+            self.publish("run_start", {"runId": rid, "chamber": ch, "recipeName": d.get("recipe_name"),
+                                       "by": d.get("by") or d.get("owner"), "name": name,
+                                       "stepNo": d.get("step_no") or d.get("process_index") or 1,
                                        "params": d.get("params") or {}, "blocks": d.get("blocks"),
-                                       "configVersion": config_version(self.sys)})
-        else:
-            self.publish("run_end", {"runId": d.get("run_id"), "chamber": ch, "result": d.get("status") or d.get("result"),
-                                     "reasonCode": d.get("reason"), "summary": d.get("summary") or {"name": d.get("name")}})
+                                       "configVersion": config_version(self.sys), "owner": d.get("owner"),
+                                       "recipeRev": d.get("recipe_rev")})
+            return True
+        if ch not in self._open_runs:
+            return False
+        rid = d.get("run_id") or self._open_runs.pop(ch)
+        self._open_runs.pop(ch, None)
+        self.publish("run_end", {"runId": rid, "chamber": ch, "result": d.get("status") or d.get("result"),
+                                 "reasonCode": d.get("reason") or getattr(e, "code", None) or getattr(e, "reason", None),
+                                 "summary": d.get("summary") or {"name": name}})
+        return True
 
     # ── state(1초 행마다) ──
     def on_row(self, row: Dict[str, Any]) -> None:

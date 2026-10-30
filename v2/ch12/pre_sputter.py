@@ -41,6 +41,11 @@ def fmt_hms(seconds: float) -> str:
     return f"{s // 3600:02d}:{(s % 3600) // 60:02d}:{s % 60:02d}"
 
 
+def basename(p: str) -> str:
+    """os.path.basename 과 같되 윈도우 경로(\\NAS\\…)도 — 리눅스 시험에서도 같은 표시."""
+    return re.split(r"[\\/]", str(p))[-1]
+
+
 def parse_hhmm(raw: str):
     """preSputter_SetTime_edit — 'HH:MM' 또는 '8시30분'. 잘못되면 (None, None)."""
     m = re.match(r"^\s*(\d{1,2})\s*(?::|시)\s*(\d{1,2})", str(raw or ""))
@@ -137,7 +142,7 @@ class PreSputter:
         p = self.recipe_path
         if not p:
             return "UI 현재값 사용"
-        return os.path.basename(p) if os.path.exists(p) else f"{os.path.basename(p)} (파일 없음)"
+        return basename(p) if os.path.exists(p) else f"{basename(p)} (파일 없음)"
 
     # ───────── 저장·복원(v1 QSettings 키 이름) ─────────
     def _read(self) -> Dict[str, Any]:
@@ -227,9 +232,9 @@ class PreSputter:
     def _start(self) -> bool:
         if self.recipe_path:
             from v2.ch12.recipe import load_recipe_file
-            self._log(f"[PreSputter] {self.label} 레시피 실행: {os.path.basename(self.recipe_path)}")
+            self._log(f"[PreSputter] {self.label} 레시피 실행: {basename(self.recipe_path)}")
             r = load_recipe_file(self.recipe_path, origin="host")
-            why = r.message if not r.ok else (self.e.load(r.rows, source="local", name=os.path.basename(self.recipe_path))
+            why = r.message if not r.ok else (self.e.load(r.rows, source="local", name=basename(self.recipe_path))
                                               or self.e.start(source="local", owner="local", origin="presputter"))
             if why:
                 self._log(f"[PreSputter] {self.label} 레시피 시작 실패: {why!r}")

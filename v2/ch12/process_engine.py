@@ -38,15 +38,15 @@ from v2.ch12.outputs.process_txt import ProcessTxtLog
 from v2.ch12.outputs.run_stats import RunStats
 from v2.ch12.process_actions import ProcessActions
 from v2.ch12.process_adjust import AdjustMixin
-from v2.ch12.process_list import (RunPlan, USE_KEYS, derive_params, next_process_uses_heater, plan_runs,
-                                  raw_rows_from, stop_uses)
+from v2.ch12.process_records import ProcessRecordsMixin
+from v2.ch12.process_view import ProcessViewMixin
+from v2.ch12.process_list import RunPlan, derive_params, plan_runs, raw_rows_from, stop_uses
 from v2.ch12.process_runner import StepRunner, delay_countdown, fmt_hms
 from v2.ch12.process_steps import caps_from_cfg, shutdown_steps, step_cfg
 from v2.ch12.recipe_check import check_norm_params
 
 EVENTS_KEEP = 20000
 COOLDOWN_S = 60.0                     # runtime_state.remaining_cooldown(…, 60.0)
-FOOTER_SETTLE_S = 0.3                 # _RUN_LOG_FOOTER_SETTLE_S
 OWNERS = ("robot", "web", "local")
 
 
@@ -59,7 +59,7 @@ class ProcEvent:
     level: str = "info"
 
 
-class ProcessEngine(AdjustMixin):
+class ProcessEngine(AdjustMixin, ProcessRecordsMixin, ProcessViewMixin):
     def __init__(self, system, chamber: str, *, heater=None, thickness=None, excel_main_dir=None,
                  outputs: bool = True) -> None:
         self.sys, self.clock, self.lk = system, system.clock, system.clock.cond
@@ -141,8 +141,9 @@ class ProcessEngine(AdjustMixin):
     def state(self, text: str) -> None:
         self.state_text = str(text)
 
-    def emit(self, kind: str, detail: str = "", code: Optional[str] = None, level: str = "info", **data) -> ProcEvent:
-        e = ProcEvent(kind, detail, code, data, level)
+    def emit(self, kind: str, detail: str = "", code: Optional[str] = None, level: str = "info",
+             data: Optional[dict] = None, **kw) -> ProcEvent:
+        e = ProcEvent(kind, detail, code, dict(data or {}, **kw), level)
         self.events.append(e)
         self.sys.emit(f"engine:{self.ch}", kind, detail, level=level, code=code, event=e)
         return e
@@ -286,7 +287,7 @@ class ProcessEngine(AdjustMixin):
             self.origin, self.origin_meta = origin, origin_meta
             self.error = None
             self._cancel = False
-            if params is not None:
+            if params is not None and self.rows is None:   # v1: 파일 큐가 있으면 화면 값은 쓰지 않는다(START_QUEUE)
                 self._single(params)
             self._cmd = ("START_QUEUE" if self.rows is not None else "START", by)
             self.lk.notify_all()
@@ -298,7 +299,10 @@ class ProcessEngine(AdjustMixin):
     def _single(self, params: dict) -> None:
         """단일 공정(v1 화면 값) — 행 하나를 템플릿 블록으로."""
         from v2.ch12.blocks_expand import template_blocks
+        from v2.ch12.recipe import thickness_mode_of
         p = dict(params)
+        if not p.get("test_mode") and thickness_mode_of(p.get("thickness"), self.caps.thickness):
+            p["thickness_mode"] = True                     # v1: 시작 전 점검 뒤 params thickness_mode → 컨트롤러가 두께 메인
         bl, logs = template_blocks(p, self.n, self.cfg, caps=self.caps)
         self.blocks, self.rows, self.rts = bl, None, None
         self.seq = BK.SequenceState.start(bl)
@@ -389,6 +393,16 @@ class ProcessEngine(AdjustMixin):
             self._after_finish(run, False, detail)
             return False, False
         errs = check_norm_params(params, self.n, self.caps, self.cfg, heater_available=self.heater is not None)
+        if errs and not self.queue_mode:                   # 단일(화면) 시작 — 로그 파일을 먼저 열고 검사(v1 4472-4480)
+            if self.txt.path is None:
+                self.txt.open_run(params, origin=self.origin, origin_meta=self.origin_meta)
+            self._host(False, "; ".join(errs))
+            self.popup("입력값 확인", "\n".join(f"- {x}" for x in errs))
+            self.error = "RECIPE_PARAM_ERROR"
+            self.emit("run_end", "; ".join(errs), "RECIPE_PARAM_ERROR", level="error", result="error")
+            return False, False
+        if not self.queue_mode:
+            self.log("MAIN", "입력 검증 통과 → Runner START")
         if errs:
             if self.txt.path is None:
                 self.txt.open_run(params, origin=self.origin, origin_meta=self.origin_meta)
@@ -509,112 +523,6 @@ class ProcessEngine(AdjustMixin):
         self.queue_mode = False
         return False
 
-    # ───────── 런 시작·끝 기록(v1 'started'·'finished' 1701-2101) ─────────
-    def _run_started(self, params: dict) -> None:
-        pname = str(params.get("process_name") or params.get("Process_name") or params.get("process_note") or "").strip() \
-            or f"Run CH{self.n}"
-        for k in ("process_name", "Process_name", "process_note"):
-            params[k] = pname
-        t0 = params.get("t0_pressed_wall") or datetime.fromtimestamp(self.clock.wall()).isoformat(timespec="seconds")
-        params["t0_wall"] = params["started_at"] = t0
-        self.stats.start(params)
-        if self.thickness is not None:
-            self.thickness.new_run()
-            self.thickness.run_started(params)
-            th = self.sys.outputs.thickness.get(self.ch)
-            if th is not None and self.thickness.supported:
-                th.set_recording(True, pname, self.thickness.status(), datetime.fromtimestamp(self.clock.wall()))
-        if self.actions.dcp is not None:
-            self.actions.dcp.reset_arc_counts()
-        self.log("CSV", "Sputter Calib 로그 세션 시작")
-        self.log("MAIN", f"▶️ CH{self.n} '{pname}' 시작 (t={float(params.get('process_time', 0) or 0):.1f}s)")
-        self.executed = []
-        self.main_t0 = self.clock.monotonic()
-        data = {"run_id": self.run_id, "owner": self.owner, "params": dict(params), "recipe_rev": self.seq.rev if self.seq else 0}
-        if self.queue_mode:
-            data.update(process_index=self.run_idx + 1, process_total=len(self.runs))
-        self.emit("run_start", pname, data=data)
-
-    def _after_finish(self, run: RunPlan, ok: bool, d: dict) -> None:
-        stopped = bool(d.get("stopped"))
-        raw = str(d.get("result") or "").upper()
-        result = "성공" if raw == "SUCCESS" else "stop" if raw == "STOP" else "실패" if raw == "FAIL" else \
-            ("stop" if stopped else "성공" if ok else "실패")
-        self.stats.end_update(process_name=d.get("process_name", ""), result=result, stopped=stopped,
-                              actual_shutter_delay_min=d.get("actual_shutter_delay_min"),
-                              actual_process_time_min=d.get("actual_process_time_min"))
-        self.log("CSV", f"Sputter Calib CSV 기록 요청 (ok={ok}, result={result})")
-        if self.thickness is not None and self.thickness.supported:
-            self.stats.set_thickness(self.thickness.run_finished())
-            th = self.sys.outputs.thickness.get(self.ch)
-            if th is not None:
-                th.set_recording(False)
-        if self.calib is not None:
-            self.calib.record(self.stats, ok)
-        if ok and self.excel is not None:
-            if self.actions.dcp is not None:
-                s, h = self.actions.dcp.arc_counts
-                self.stats.params["soft_arc_count"], self.stats.params["hard_arc_count"] = s, h
-            pp = self.stats.params
-            self.excel.save_main(self.stats, operator=pp.get("operator", ""), substrate=pp.get("substrate", ""),
-                                 note=pp.get("note", ""))
-        if self.run_warnings:
-            d.setdefault("warnings", list(self.run_warnings))
-        if params_chuck := str(self.params.get("chuck_position") or "").strip():
-            d.setdefault("chuck_position", params_chuck)
-        if not ok and not stopped:
-            reason = str(d.get("reason") or (d.get("errors") or [""])[0] or "")
-            if reason:
-                self.chat(f"❌ CH{self.n} 공정 실패 이유: {reason}")
-        self.actions.apply_polling(False, {})
-        self.last_end_t = self.clock.monotonic()
-        kind = "done" if ok else ("aborted" if stopped else "error")
-        code = None if ok else ("USER_STOP" if stopped else (self._abort_code or d.get("error_code") or "PROCESS_FAILED"))
-        self.error = None if (ok or stopped) else code
-        if not (ok or stopped):
-            name = d.get("process_name") or "(process)"
-            reason = str(d.get("reason") or (d.get("errors") or ["process failed"])[0])
-            self.popup(f"CH{self.n} 공정 실패", f"{name}\n\n사유: {reason}\n\n확인을 누르면 상태 표시가 Idle로 변경됩니다.", "error")
-        self.last_result = dict(d, end=kind, code=code)
-        self.emit("run_end", d.get("process_name", ""), code, level="info" if ok else "warn", result=kind,
-                  run_id=self.run_id, result_detail=dict(d), executed=list(self.executed),
-                  recipe=self.seq.record() if self.seq else None)
-        self._abort_code = None
-        # AFTER_FINISH — 히터 → 장비 정리(TEST STOP 은 생략) → END
-        self.state_name = "CLEANUP"
-        if self.heater is not None:
-            done = {"v": False}
-            self.heater.stop_user = self._stop_user
-            self.heater.after_row(ok, stopped, d, queue_mode=self.queue_mode,
-                                  next_uses_heater=next_process_uses_heater(self.runs, self.run_idx),
-                                  on_done=lambda: (done.update(v=True), self.clock.notify()))
-            self.clock.wait_until(self.clock.monotonic() + 30.0, lambda: done["v"])
-        if bool(d.get("test_mode")) and stopped:
-            self.log("MAIN", "[Runner] [TEST] STOP finished → cleanup skip")
-        else:
-            self.log("MAIN", "[Runner] finished → device cleanup")
-            self.actions.cleanup_devices()
-            self._close_log()
-        self.cur_block, self.cur_inst, self.block_t0 = -1, None, None
-        self.paused = False
-
-    def _close_log(self) -> None:
-        if self.txt.path is not None:
-            self.clock.wait_until(self.clock.monotonic() + FOOTER_SETTLE_S, None)
-            self.txt.close_run()
-
-    def _reset_after_list(self) -> None:
-        """_clear_queue_and_reset_ui(7740-7788)."""
-        if self.heater is not None and getattr(self.heater, "owner", None) == "process":
-            self.heater.queue_end()
-        self.queue_mode = False
-        self.run_idx = -1
-        if self.rows is not None:
-            self.blocks, self.rows, self.rts, self.runs, self.seq = [], None, None, [], None
-        self._close_log()
-        self.state("대기 중")
-        self.params = {}
-
     def _host(self, ok: bool, msg: str) -> None:
         f = self.on_host_start
         if f is not None:
@@ -710,128 +618,3 @@ class ProcessEngine(AdjustMixin):
             return None
         sup = bool(self.thickness is not None and self.thickness.supported)
         return estimate_min_total_s(raw_rows_from(self.runs, max(0, self.run_idx)), self.cfg, self.n, sup)
-
-    # ───────── 블록 추적(StepRunner.on_step) ─────────
-    def on_step(self, idx: int, step, shutdown: bool) -> None:
-        if shutdown:
-            return
-        run = self.runs[self.run_idx]
-        inst = self.cur_insts[step.block] if 0 <= step.block < len(self.cur_insts) else None
-        if inst is None or inst is self.cur_inst:
-            return
-        if self.cur_inst is not None:
-            self._block_end("done")
-        self.cur_inst = inst
-        gi = None if inst.auto else run.first + inst.index
-        self._block_begin(gi, inst)
-
-    def _block_begin(self, gi: Optional[int], inst=None) -> None:
-        self.cur_block = gi
-        self.block_t0 = self.clock.monotonic()
-        b = self.blocks[gi] if gi is not None and 0 <= gi < len(self.blocks) else None
-        rec = {"no": self.block_no(), "type": (inst.type if inst else b["type"] if b else None),
-               "label": (inst.label if inst else (b or {}).get("label", "")), "auto": bool(inst and inst.auto),
-               "start_t": self.clock.wall(), "result": None}
-        self.executed.append(rec)
-        self.emit("block", f"{rec['no']} {rec['type']} 시작", data=dict(rec, phase="start", run_id=self.run_id))
-
-    def _block_end(self, result: str) -> None:
-        if self.executed and self.executed[-1]["result"] is None:
-            rec = self.executed[-1]
-            rec["result"], rec["end_t"] = result, self.clock.wall()
-            self.emit("block", f"{rec['no']} {rec['type']} {result}", data=dict(rec, phase="end", run_id=self.run_id))
-
-    def block_no(self) -> Optional[int]:
-        if self.cur_block is None:
-            return len(self.blocks) + 1 if self.cur_inst is not None else None
-        return self.cur_block + 1 if self.cur_block >= 0 else None
-
-    # ═══════════════════════ 1초 행 열 ═══════════════════════
-    def snapshot_fields(self) -> Dict[str, Any]:
-        c = f"{self.ch}."
-        out: Dict[str, Any] = {c + "proc.state": self.state_name, c + "proc.paused": bool(self.paused)}
-        if self.state_name == "IDLE" and not self.runner.is_running:
-            return out
-        inst = self.cur_inst
-        btype = inst.type if inst else (self.blocks[self.cur_block]["type"]
-                                        if isinstance(self.cur_block, int) and 0 <= self.cur_block < len(self.blocks) else None)
-        out.update({c + "proc.run_id": self.run_id, c + "proc.owner": self.owner,
-                    c + "proc.recipe_rev": self.seq.rev if self.seq else 0, c + "proc.block_no": self.block_no(),
-                    c + "proc.block_count": len(self.blocks), c + "proc.block_type": btype,
-                    c + "proc.block_label": inst.label if inst else None,
-                    c + "proc.block_elapsed_s": None if self.block_t0 is None else round(self.clock.monotonic() - self.block_t0, 1),
-                    c + "proc.remain_s": self.runner.remaining_s(), c + "proc.eta_remaining_s": self.eta_remaining_s(),
-                    c + "proc.min_total_s": self.min_total_s()})
-        out.update(self._targets(c))
-        return out
-
-    def _targets(self, c: str) -> Dict[str, Any]:
-        p = self.params or {}
-        t: Dict[str, Any] = {}
-
-        def put(name, v):
-            if v is not None:
-                t[c + "set." + name] = v
-        ov = self.overrides
-        if p.get("use_dc_pulse"):
-            put("dcpulse_w", ov.get("dcp.power", p.get("dc_pulse_power")))
-            put("dcpulse_freq_khz", p.get("dc_pulse_freq"))
-        if p.get("use_rf_pulse"):
-            put("rfpulse_w", ov.get("rfp.power", p.get("rf_pulse_power")))
-            f = p.get("rf_pulse_freq")
-            put("rfpulse_freq_hz", int(round(float(f) * 1000)) if f not in (None, "") else None)
-            put("rfpulse_duty_pct", p.get("rf_pulse_duty_cycle"))
-        if self.n == 2:
-            if p.get("use_dc_power"):
-                put("dc_w", ov.get("dc.power", p.get("dc_power")))
-            if p.get("use_dc_power2"):
-                put("dc2_w", ov.get("dc2.power", p.get("dc_power2")))
-            if p.get("use_rf_power"):
-                put("rf_w", ov.get("rf.power", p.get("rf_power")))
-            if p.get("use_n2"):
-                put("n2_sccm", ov.get("mfc.n2_flow", p.get("n2_flow")))
-            if p.get("use_heater"):
-                put("heater_c", ov.get("heater.target", p.get("heater_temp")))
-        for g in ("ar", "o2"):
-            if p.get(f"use_{g}"):
-                put(f"{g}_sccm", ov.get(f"mfc.{g}_flow", p.get(f"{g}_flow")))
-        put("pressure_mtorr", ov.get("mfc.wp", p.get("working_pressure")))
-        put("base_torr", p.get("base_pressure"))
-        if p.get("thickness_mode"):
-            put("thickness_nm", p.get("thickness"))
-        pt = p.get("process_time")
-        put("time_s", float(pt) * 60.0 if pt not in (None, "") else None)
-        return {k: (float(v) if isinstance(v, (int, float)) and not isinstance(v, bool) and not k.endswith(("_hz", "_khz"))
-                    else v) for k, v in t.items() if not isinstance(v, str)}
-
-    # ═══════════════════════ 상태·저널(5단계 자리) ═══════════════════════
-    def state_dict(self) -> Dict[str, Any]:
-        return {"chamber": self.ch, "state": self.state_name, "text": self.state_text, "running": self.runner.is_running,
-                "run_id": self.run_id, "owner": self.owner, "paused": self.paused, "block_no": self.block_no(),
-                "block_count": len(self.blocks), "recipe_rev": self.seq.rev if self.seq else 0,
-                "queue": {"index": self.run_idx, "total": len(self.runs), "mode": self.queue_mode},
-                "eta_remaining_s": self.eta_remaining_s(), "min_total_s": self.min_total_s(), "error": self.error,
-                "adjust": self.adjust_state(), "last_result": self.last_result}
-
-    def state_for_journal(self) -> Dict[str, Any]:
-        """저널(5단계 journal.py)이 1초마다 싣는 값 — 레시피 전체·판·지금 블록·블록/메인 경과·수정값·실행 순서."""
-        now = self.clock.monotonic()
-        cur = self.runner.current
-        inst = self.cur_inst
-        return {"chamber": self.ch, "run_id": self.run_id, "owner": self.owner, "state": self.state_name,
-                "running": self.runner.is_running, "shutdown": self.runner.shutdown,
-                "recipe": self.seq.record() if self.seq else None, "rows": self.rows, "run_idx": self.run_idx,
-                "queue_mode": self.queue_mode, "block_index": self.cur_block,
-                "block_type": inst.type if inst else None,
-                "resumable": bool(inst is not None and not inst.auto and BK.by_type()[inst.type].resumable
-                                  and cur is not None and cur.holding),
-                "resume_checks": list(BK.by_type()[inst.type].resume_checks) if inst is not None else [],
-                "step_index": self.runner.idx, "step_action": cur.action if cur else None,
-                "block_elapsed_s": None if self.block_t0 is None else now - self.block_t0,
-                "main_elapsed_s": None if self.main_t0 is None else now - self.main_t0,
-                "remain_s": self.runner.remaining_s(), "overrides": dict(self.overrides), "paused": self.paused,
-                "params": dict(self.params), "executed": list(self.executed)}
-
-    def resume_from(self, journal: Dict[str, Any], gap_s: float) -> Optional[str]:
-        """재시작 뒤 이어가기(5단계 resume.py 가 판단한 뒤 부른다) — 아직 없음: 'RESUME_NOT_SUPPORTED'."""
-        return "RESUME_NOT_SUPPORTED"

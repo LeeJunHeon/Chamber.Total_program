@@ -19,7 +19,7 @@ from v2.ch12.run_state import RunState
 from v2.ch12.sim.rig import Ch12Rig
 
 FAST = {"CAMERA_MIN_FREE_GB": 0.0, "TSP_ON_SEC": 12.0, "TSP_OFF_SEC": 15.0, "TSP_POLL_SEC": 10.0,
-        "TSP_FIRST_CHECK_DELAY_SEC": 5.0}
+        "TSP_FIRST_CHECK_DELAY_SEC": 5.0, "TSP_DAILY_ENABLE": False}            # 매일 예약은 test_tsp_schedule
 ON_FRAME = T.build_frame("011", True, "1").hex()
 OFF_FRAME = T.build_frame("011", True, "0").hex()
 

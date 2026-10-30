@@ -138,6 +138,26 @@ class RobotBase:
         self._loadlock_transition_tag: Optional[str] = None
         self._loadlock_gate_lock = ClockLock(clock, "loadlock_gate")
         self._pc_start_pending = False            # v1 PlasmaCleaningRuntime._host_start_future 대기 중(E206)
+        self._req_scope: Dict[int, Tuple[Scope, Optional[str]]] = {}   # 진행 중 PLC 요청 → (요청 범위, 태그)
+        self._tap_driver_log(getattr(plc_link, "plc", None))
+
+    def _tap_driver_log(self, drv) -> None:
+        """PLC 드라이버 저수준 로그(소켓 재생성 'WARN PLC 소켓 재생성 #..' 등)가 이 요청의 PLC 연산 중에 나면 그 요청 로그에도
+        — v1 은 log_route 로 그 작업의 PLC 로그가 모두 PLC_REMOTE 로 갔다(device/plc.py:992-998). 드라이버 로그는 그대로 둔다."""
+        io = getattr(drv, "io", None)
+        worker = getattr(drv, "worker", None)
+        if io is None or worker is None or not callable(getattr(io, "log", None)):
+            return
+        orig = io.log
+
+        def tapped(msg: str) -> None:
+            orig(msg)
+            got = self._req_scope.get(id(getattr(worker, "inflight", None)))
+            if got is not None:
+                sc, tag = got
+                with contextlib.suppress(Exception):
+                    self._plc_log(str(msg), sc, tag)
+        io.log = tapped
 
     # ───────── 시간 ─────────
     def monotonic(self) -> float:
@@ -165,12 +185,18 @@ class RobotBase:
             with contextlib.suppress(Exception):
                 self.global_log(tag, text)
 
-    def _plc_log(self, msg: str) -> None:
-        """v1 _plc_file_logger — PLC 구간 안에서만(plc.log_route)."""
-        if self.scope().plc_route <= 0:
+    def _plc_log(self, msg: str, sc: Optional[Scope] = None, tag: Optional[str] = None) -> None:
+        """v1 _plc_file_logger — PLC 구간 안에서만(plc.log_route). sc·tag 를 주면 그 요청으로(다른 스레드에서)."""
+        if sc is None:
+            sc, tag = self.scope(), _tag_var.get()
+        if sc.plc_route <= 0:
             return
-        tag = (_tag_var.get() or "").strip()
-        self.log("PLC_REMOTE", f"{self.now_text()} [{tag}] {msg}" if tag else f"{self.now_text()} {msg}")
+        tag = (tag or "").strip()
+        line = f"{self.now_text()} [{tag}] {msg}" if tag else f"{self.now_text()} {msg}"
+        sc.lines.append(("PLC_REMOTE", line))
+        if self.global_log is not None:
+            with contextlib.suppress(Exception):
+                self.global_log("PLC_REMOTE", line)
 
     # ───────── 명령 태그·PLC 구간 ─────────
     @property
@@ -205,10 +231,29 @@ class RobotBase:
         def done(r) -> None:
             box.append(r)
             self.clock.notify()
-        submit(done)
-        if not self.clock.wait_until(self.clock.monotonic() + PLC_WAIT_LIMIT_S, lambda: bool(box)):
-            raise PLCError("E402", f"PLC 요청 결과 없음({PLC_WAIT_LIMIT_S:.0f}s) (op={op}, addr={addr})", op=op, addr=addr)
+        t_sub = self.clock.monotonic()
+        sc_tag = (self.scope(), _tag_var.get())
+        with self.clock.cond:                      # 요청이 바로 실행돼도 로그 범위를 먼저 알도록
+            req = submit(done)
+            if req is not None:
+                self._req_scope[id(req)] = sc_tag
+        try:
+            if not self.clock.wait_until(self.clock.monotonic() + PLC_WAIT_LIMIT_S, lambda: bool(box)):
+                raise PLCError("E402", f"PLC 요청 결과 없음({PLC_WAIT_LIMIT_S:.0f}s) (op={op}, addr={addr})",
+                               op=op, addr=addr)
+        finally:
+            if req is not None:
+                self._req_scope.pop(id(req), None)
         r = box[0]
+        # v1 AsyncPLC._io_lock 경고(device/plc.py:2257-2301) — 이 요청의 PLC 로그로(대기 = worker 큐, 실행 = 간격 + 입출력)
+        if r.started is not None:
+            waited = (r.started - t_sub) * 1000.0
+            if waited >= float(self.cfg.get("PLC_LOCK_WARN_MS", 2500.0)):
+                self._plc_log(f"WARN lock-wait {waited:.0f} ms (op={op}, addr={addr})")
+            if r.finished is not None:
+                io_ms = (r.finished - r.started) * 1000.0
+                if io_ms >= float(self.cfg.get("PLC_IO_WARN_MS", 2500.0)):
+                    self._plc_log(f"WARN in-lock IO {io_ms:.0f} ms (op={op}, addr={addr})")
         if r.status != Status.OK:
             code = plc_error_code(r)
             raise PLCError(code, plc_error_text(code, r, op, addr), op=op, addr=addr)
