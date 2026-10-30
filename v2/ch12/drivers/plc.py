@@ -143,7 +143,8 @@ class PlcDriver(PlcCommands):
         self.writes_allowed = writes_allowed
         self.on_event = on_event
         self.endpoint = f"{cfg['PLC_TCP_HOST']}:{cfg['PLC_TCP_PORT']}"
-        self.link = LinkState(clock, lambda k, d, data: self._emit(k, d, **data), self.endpoint)
+        self.link = LinkState(clock, lambda k, d, data: self.on_event and self.on_event(PlcEvent(k, d, None, None, data)),
+                              self.endpoint)
         self.io = PlcIo(clock, cfg, self.link, read_only=not writes_allowed, log=lambda m: self._emit("log", m))
         self.heater = bool(cfg.get("CH2_SUPPORTS_HEATER", False)) if heater is None else bool(heater)
         self.diag_probe = diag_probe

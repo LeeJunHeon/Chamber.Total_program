@@ -120,7 +120,7 @@ def test_short_block_response_padded_like_v1():
         half = a[1] // 2
         assert all(x in (False, 0) for x in v[half:]) and all(x in (False, 0) for x in g["value"][half:])
         if kind == "regs":
-            assert v[:5] == g["value"][:5]
+            assert v[:4] == g["value"][:4]                                   # D0..D3 같은 값, D4 는 메모리 차이
         r.after(0.5)
     r.done()
 
@@ -136,11 +136,12 @@ def test_timeout_policy_matches_v1():
         r.sim.drop_next = drop
         t = r.c.monotonic()
         res = fn()
-        return res, [p.hex() for p in r.pdus(t)], r.c.monotonic() - t
+        ts = [tt for tt, _ in r.frames(t)]
+        return res, [p.hex() for p in r.pdus(t)], (ts[1] - ts[0]) if len(ts) > 1 else None
     res, pd, el = run(1, lambda: r.call(r.d.read_reg, 8))
     g = gold["timeout_once_retry_same_socket"]
     assert res.status == Status.OK and res.value == 700 and pd == g["pdus"] and r.inner.opens == opens0
-    assert el == pytest.approx(2.0 + 0.15, abs=0.1)                          # 2.0 s 무응답 → 같은 소켓 재시도
+    assert el == pytest.approx(g["t"][1] - g["t"][0], abs=0.05)              # 2.0 s 무응답 → 같은 소켓 재시도
     res, pd, _ = run(2, lambda: r.call(r.d.read_reg, 8))
     g = gold["timeout_two_fail_same_socket"]
     assert res.status == Status.TIMEOUT and res.reason == "DEVICE_NO_RESPONSE" and pd == g["pdus"]
