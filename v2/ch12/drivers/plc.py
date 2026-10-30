@@ -31,6 +31,7 @@
 from __future__ import annotations
 
 import functools
+import threading
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Sequence as Seq, Tuple
 
@@ -155,7 +156,9 @@ class PlcDriver(PlcCommands):
         self.heater = bool(cfg.get("CH2_SUPPORTS_HEATER", False)) if heater is None else bool(heater)
         self.diag_probe = diag_probe
         self.diag = ""
-        self._diag_ts = None
+        self._diag_ts: Optional[float] = None
+        self._diag_started: Optional[float] = None
+        self._diag_running = False
         self.allowed_coils = set(PM.COIL_MAP.values())
         self.allowed_regs = {PM.REG_MAP[f"DCV_WRITE_{i}"] for i in range(4)}
         self.plan_idx = PM.default_plan_idx(cfg["PLC_COIL_LOG_BLOCK_PLAN"])
@@ -230,6 +233,8 @@ class PlcDriver(PlcCommands):
 
     def diag_text(self) -> str:
         """E401 문구 분류 — 값 없음·묵음(> PLC_DIAG_MIN_INTERVAL_S)은 '미확인'(device/plc.py:1000-1014)."""
+        if self._diag_running:
+            return "진단중"
         if not self.diag or self._diag_ts is None:
             return "미확인"
         if self.clock.monotonic() - self._diag_ts > float(self.cfg["PLC_DIAG_MIN_INTERVAL_S"]):
@@ -237,20 +242,25 @@ class PlcDriver(PlcCommands):
         return self.diag
 
     def _run_diag(self) -> None:
-        """접속 최종 실패 원인 진단(PLC_DIAG_PROBE, 최소 간격 PLC_DIAG_MIN_INTERVAL_S). 진단 함수는 조립이 넣는다
-        (sim·시험은 없음 → '미확인'). 실제 함수는 별도 스레드에서 connect_ex·ping(device/plc.py:1016-1094)."""
-        if not (self.cfg["PLC_DIAG_PROBE"] and self.diag_probe):
+        """접속 최종 실패 원인 진단(PLC_DIAG_PROBE, 최소 간격 PLC_DIAG_MIN_INTERVAL_S, device/plc.py:1016-1094).
+        진단 함수(diag_probe(host, port, timeout) → 분류 문자열, 예: plc_io.probe_connect)는 조립이 넣고 별도 스레드에서 돈다 —
+        진행 중이면 '진단중'. sim·시험은 넣지 않는다('미확인')."""
+        if not (self.cfg["PLC_DIAG_PROBE"] and self.diag_probe) or self._diag_running:
             return
         now = self.clock.monotonic()
-        if self._diag_ts is not None and now - self._diag_ts < float(self.cfg["PLC_DIAG_MIN_INTERVAL_S"]):
+        if self._diag_started is not None and now - self._diag_started < float(self.cfg["PLC_DIAG_MIN_INTERVAL_S"]):
             return
-        host, port = str(self.cfg["PLC_TCP_HOST"]), int(self.cfg["PLC_TCP_PORT"])
-        try:
-            self.diag = str(self.diag_probe(host, port, float(self.cfg["PLC_TIMEOUT_S"])))
-        except Exception as e:
-            self.diag = f"probe 실패: {type(e).__name__}"
-        self._diag_ts = now
-        self._emit("log", f"WARN PLC 진단: connect={self.diag}")
+        self._diag_started, self._diag_running = now, True
+        host, port, tmo = str(self.cfg["PLC_TCP_HOST"]), int(self.cfg["PLC_TCP_PORT"]), float(self.cfg["PLC_TIMEOUT_S"])
+
+        def work() -> None:
+            try:
+                cls = str(self.diag_probe(host, port, tmo))
+            except Exception as e:
+                cls = f"probe 실패: {type(e).__name__}"
+            self.diag, self._diag_ts, self._diag_running = cls, self.clock.monotonic(), False
+            self._emit("log", f"WARN PLC 진단: connect={cls}")
+        threading.Thread(target=work, name="PLCConnectDiag", daemon=True).start()
 
     # ───────── 하트비트(device/plc.py:1122-1214) ─────────
     @property

@@ -174,6 +174,7 @@ def test_reconnect_backoff_5s_and_link_cards():
     assert r.kinds().count("link_down") == 1 and r.kinds().count("link_up") == 1
     up = next(e for e in r.events if e.kind == "link_up")
     assert up.data["card"]["title"] == "PLC 재연결" and "끊김" in up.data["card"]["subtitle"]
+    assert "끊긴 동안 억제된 연결 알림" in up.data["card"]["subtitle"] and up.data["suppressed_total"] >= 1
     down = next(e for e in r.events if e.kind == "link_down")
     assert down.data["card"]["status"] == "FAIL" and "192.168.1.2:502" in down.data["card"]["subtitle"]
     assert any(e.kind == "connect_failed" and e.code == "E401" for e in r.events)
@@ -364,4 +365,22 @@ def test_sim_heater_ladder_watchdog_30s():
     assert r.sim.coils[646] and r.sim.coils[642] and not r.sim.coils[640]     # D114 30 s 무변화 → WD_ERR·RUN OFF
     v = r.read().value
     assert v is not None and r.d.last_poll.coils[646] is True and r.d.last_poll.coils[640] is False
+    r.done()
+
+
+def test_connect_failure_diag_classification():
+    import time
+    r = PlcRig()
+    r.d.diag_probe = lambda host, port, tmo: f"접속 거부(RST, errno=111) {host}:{port}"
+    t = r.c.monotonic()
+    r.sim.add_fault("disconnect", t, t + 30.0)
+    r.call(r.d.write_coil, 234, True)
+    r.after(7.0)
+    for _ in range(100):                                       # 진단은 별도 스레드(실제 시간)
+        if not r.d._diag_running:
+            break
+        time.sleep(0.01)
+    assert r.d.diag_text().startswith("접속 거부(RST, errno=111) 192.168.1.2:502")
+    r.after(7.0)
+    assert any(e.kind == "connect_failed" and "분류=접속 거부" in e.detail for e in r.events)
     r.done()

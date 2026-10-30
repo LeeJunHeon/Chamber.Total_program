@@ -385,4 +385,10 @@ DECISIONS = [
     dict(id='D51', title='펄스 쓰기 동작 중 다른 쓰기', decision='STATE_NOT_ALLOWED 로 거부(v1 은 큐에). OFF 는 맨 앞.', reason="1단계 DC Pulse·RF Pulse 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/dcpulse*.py; rfpulse*.py"),
     dict(id='D52', title='펄스 재연결 간격', decision='worker 지수 간격(1→10 s) — v1 DC 워치독은 한 번도 연결된 적이 없으면 지연 없이 반복, RF 확인형 OFF 시작 때 2 s 로 되돌림.', reason="1단계 DC Pulse·RF Pulse 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/dcpulse*.py; rfpulse*.py"),
     dict(id='D53', title='START 중 CSR 1/2 자동 복구가 호출자 한도를 넘어 START 실패', decision='v1 이상 동작 그대로(골든 start_csr1_setpoint·start_csr2_mode). DC HV-on 확인 실패 뒤 폴링이 켜진 채 남는 것도 v1 그대로.', reason="1단계 DC Pulse·RF Pulse 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/dcpulse*.py; rfpulse*.py"),
+    dict(id='D54', title='DC·RF(PLC 경유) 측정 읽기', decision='v1 자기 주기 FC3 단일 읽기 2회 대신 1초 묶음 FC3 D0..D11 값을 씀 — 판정 주기(RF 1 s·DC 5 s)·쓰기 바이트는 같음.', reason="1단계 PLC·DC·RF 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/plc*.py; dc.py; rf.py"),
+    dict(id='D55', title='PLC 1초 묶음 읽기', decision='v1 저우선 정책(재시도·재연결 없음), 응답 제한 tick 마감 900 ms(v1 2.0 s). 코일 800번 이상은 4 s 마다 번갈아(자기 품질).', reason="1단계 PLC·DC·RF 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/plc*.py; dc.py; rf.py"),
+    dict(id='D56', title='PLC 재연결 주체', decision='하트비트 대신 worker — 3회 시도(사이 0.5 s), 실패 뒤 5 s 백오프. 진단은 connect_ex 분류만(ping 뺌).', reason="1단계 PLC·DC·RF 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/plc*.py; dc.py; rf.py"),
+    dict(id='D57', title='PLC 쓰기 허용 목록', decision='코일 표·DCV_WRITE·allow_writes 밖은 COMMAND_BLOCKED(v1 은 P 미러만 E403).', reason="1단계 PLC·DC·RF 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/plc*.py; dc.py; rf.py"),
+    dict(id='D58', title='RF 정지 램프 간격', decision="v1 '앞 쓰기 뒤 1 s' 그대로, 1초 읽기 진행 중이면 최대 약 0.6 s 늦어질 수 있음. blind·Ref.p 시간 판정은 tick 시각.", reason="1단계 PLC·DC·RF 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/plc*.py; dc.py; rf.py"),
+    dict(id='D59', title='PLC 링크 상태', decision='v1 모듈 전역 대신 드라이버 인스턴스. 억제 건수 = 링크 down 중 실패한 E401·E402 요청 수.', reason="1단계 PLC·DC·RF 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/plc*.py; dc.py; rf.py"),
 ]

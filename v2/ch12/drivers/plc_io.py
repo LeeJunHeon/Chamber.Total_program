@@ -188,6 +188,27 @@ class LinkState:
         return sum(snap.values()), snap
 
 
+def probe_connect(host: str, port: int, timeout_s: float) -> str:
+    """raw socket 접속으로 errno 를 사람이 읽을 분류로(device/plc.py:1057-1081). 실제 장비 진단용 — 조립(prod)만 넣는다.
+    ping(Windows 만, device/plc.py:1083-1094)은 v1 로그 부가 정보라 넣지 않았다(분류 문구는 같다)."""
+    import socket
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sk:
+            sk.settimeout(max(0.5, float(timeout_s)))
+            rc = sk.connect_ex((host, int(port)))
+    except socket.timeout:
+        return "SYN 무응답(타임아웃)"
+    except Exception as e:
+        return f"probe 실패: {type(e).__name__}"
+    table = (((0,), "접속됨"), ((110, 10060), "SYN 무응답(타임아웃, errno={})"), ((111, 10061), "접속 거부(RST, errno={})"),
+             ((113, 101, 10065, 10051), "도달 불가(errno={})"), ((10035, 115, 36), "판정보류(접속 진행중, errno={})"),
+             ((10056, 106), "접속됨(이미 연결, errno={})"), ((10013, 13), "차단됨(방화벽/권한, errno={})"))
+    for codes, text in table:
+        if rc in codes:
+            return text.format(rc)
+    return f"미분류(errno={rc})"
+
+
 def format_suppressed(total: int, by_code: Dict[str, int]) -> str:
     """'E401 12건, E402 3건' (코드 정렬). total 0 이면 빈 문자열."""
     if not total:
