@@ -18,7 +18,7 @@ ui/thickness_factor_dialog.py:252-304([장비에 쓰기]). 판정은 thickness_j
   check_basic(params) -> (code, msg): Chuck 이동 전 점검 E840~E844(통과 ("", ""))
   apply_material(params, chuck_ok, on_done, actual_chuck=None) : Chuck 확정 뒤 재료값 쓰기 → on_done((code, msg)) E845·E846
   reject_texts(code, msg, params)   : 점검 실패 로그·챗 문구(거부 흐름 자체는 엔진 — v1 _thickness_reject)
-  run_started(params) / run_finished() -> 기록 값 / card_fields(payload) / set_main_polling(on)
+  new_run() / run_started(params) / run_finished() -> 기록 값 / card_fields(payload) / set_main_polling(on) / run_warnings
   zero_start(confirm_s, on_done(ZeroDone))           : THICKNESS_ZERO — 어떤 경우에도 공정을 멈추지 않는다
   wait_start(target, expected_s, limit_s, on_end(WaitEnd), message) : THICKNESS_WAIT — Thickness/시간대체/상한(E848)/중단
   abort()                           : STOP·실패·종료 절차(v1 _cancel_thickness + 대기 '중단')
@@ -38,7 +38,6 @@ from typing import Any, Callable, Dict, List, Mapping, Optional, Sequence, Tuple
 
 from v2.ch12 import thickness_factors as TF
 from v2.ch12 import thickness_materials as TM
-from v2.ch12.drivers.stm100_proto import error_text as _error_text  # noqa: F401  (문구 갈래 — _exc_text 가 되돌린다)
 from v2.ch12.thickness_judge import (END_ABORT, END_FALLBACK, END_LIMIT, END_THICKNESS, JudgeParams, ThicknessEndJudge,
                                      ThicknessEvent, ZeroConfirm, cfg_get, chamber_no, expected_seconds, judge_params,
                                      max_time_s, thickness_mode_of)
@@ -317,14 +316,20 @@ class ThicknessEngine:
                 f"두께 모니터 점검 실패: {msg} → 공정 시작 차단 (공정: {note})")
 
     # ═══════════════════════ 공정 시작·끝·기록 ═══════════════════════
+    def new_run(self) -> None:
+        """공정 시작 처리 맨 앞(점검 전) — 지난 런의 시작 전 값·이번 런 경고 목록을 비운다(v1 _thk_pre = None·_run_warnings = [],
+        runtime/chamber_runtime.py:4042·4052). 경고 목록(run_warnings)은 종료 카드 warnings 에 엔진이 합친다."""
+        with self._lock:
+            self._pre = None
+            self.record.warnings = []
+
     def run_started(self, params: Mapping[str, Any]) -> None:
         """공정 시작 이벤트 — 이번 런 기록 초기화(두께 모니터 붙은 채널만, _thk_run_started). 연속 CSV 는 outputs 몫."""
         with self._lock:
             self._params = dict(params or {})
             self._running = True
             self._main_polling = False
-            self.record.warnings = []
-            self.record.start(params, self._pre, self.driver is not None)
+            self.record.start(params, self._pre, self.supported)
             self._last_judge = None
 
     def set_main_polling(self, on: bool) -> None:
@@ -336,9 +341,7 @@ class ThicknessEngine:
         """공정 끝 — 기록 값(Calib CSV·엑셀 두께 열)·패널 마지막 결과·두께 요약 로그. 다음 공정 전 값(_pre)은 지운다."""
         with self._lock:
             self._running = self._main_polling = False
-            v = self.record.finalize()
-            self._pre = None
-            return v
+            return self.record.finalize()
 
     def record_values(self) -> dict:
         with self._lock:
@@ -433,8 +436,8 @@ class ThicknessEngine:
             return
         st = self.status()
         zinfo = self._zero_info or {"base": None, "reset0": int(st.get("reset_seen") or 0)}
-        dep = float(dep_rate if dep_rate is not None else (self._params.get("dep_rate") or 0.0) or 0.0) \
-            or (target / max(1.0, expected_s))
+        raw = dep_rate if dep_rate is not None else self._params.get("dep_rate")
+        dep = float(raw or 0.0) or (target / max(1.0, expected_s))     # 레시피 dep_rate, 없으면 목표 ÷ 예상
         j = ThicknessEndJudge(target, dep, self.params(), start_t=self.clock.monotonic(), base=zinfo.get("base"),
                               seq0=st.get("seq"), reset0=int(zinfo.get("reset0") or 0),
                               log=lambda m: self._log("THICKNESS", m))
@@ -705,8 +708,8 @@ class ThicknessEngine:
         self.driver.zero("B", on_done=done, why="패널")
 
     def factor_window(self) -> dict:
-        _f, mw = TM.load_materials(self.materials_path)
-        return TF.factor_window(self.factor_path, _f, mw, ch=self.n, materials_path=str(self.materials_path))
+        mats, mw = TM.load_materials(self.materials_path)
+        return TF.factor_window(self.factor_path, mats, mw, ch=self.n, materials_path=str(self.materials_path))
 
     def factor_save(self, tooling_cells, material_texts) -> Tuple[bool, str, List[str]]:
         mats, _w = TM.load_materials(self.materials_path)

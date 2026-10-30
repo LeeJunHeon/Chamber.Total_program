@@ -41,7 +41,7 @@ def _plc_forbidden_reg(addr: int) -> Optional[str]:
     if addr in (0, 1, 2, 3, 8, 9, 10, 11):
         return "DCV_READ(A/D 입력 — 읽기 전용, device/plc.py:237-244)"
     if 110 <= addr <= 160:
-        return "히터 측정·상태 레지스터(읽기 전용 — 쓰기는 heater_service WRITE_REGS 만)"
+        return "히터 영역 D110~D160 중 쓰기 허용 밖(측정·상태 읽기 전용, 또는 CH2_SUPPORTS_HEATER 꺼짐)"
     return None
 
 
@@ -49,7 +49,7 @@ def _plc_forbidden_coil(addr: int) -> Optional[str]:
     if PM.is_p_mirror(addr):
         return "P 미러 코일 800~879(래더가 매 스캔 덮어씀 — 읽기 전용, v1 E403 device/plc.py:1380-1385)"
     if 640 <= addr <= 658:
-        return "히터 상태 코일(읽기 전용 — 쓰기는 RUN·RST 만)"
+        return "히터 코일 640~658 중 쓰기 허용 밖(상태 읽기 전용 — 쓰기는 RUN·RST, CH2_SUPPORTS_HEATER 일 때만)"
     return None
 
 
@@ -311,9 +311,12 @@ STM_BENCH: tuple = ("S", "T", "U", "V", "M", "E?", "F?", "J?", "a", "@")
 # 10개 — 두께·증착률·주파수·수명·크리스탈·재료 3값 되읽기·리셋 상태·판(device/thickness_monitor.py:165-207·507-542)
 STM_PROD_FIXED = frozenset(set(STM_BENCH) | {"L", "B", "C"})     # L 리셋 플래그 확인(플래그를 지움 — bench 금지), B·C 영점
 STM_PROD_WRITES = (re.compile(r"[EFJ]=\d+(?:\.\d+)?"),)          # 재료값 E=/F=/J=(check_material 문자열, :552-571)
-STM_FORBIDDEN = (
+STM_BENCH_EXCLUDED = (   # v1 이 보내므로 금지는 아니지만 질의가 아니라 bench 에서는 막는 것
     (re.compile(r"L"), "L(전원 리셋 플래그 확인 — 장비 상태를 지움, 질의 아님)"),
+    (re.compile(r"[BC]"), "B·C(두께 영점 — 장비 누적값을 지움)"),
+    (re.compile(r"[EFJ]=.*"), "E=·F=·J=(재료값 쓰기)"),
 )
+STM_FORBIDDEN: tuple = ()   # 매뉴얼 없음 — 이름 붙일 근거 없음(목록 밖은 모두 막힘)
 
 
 def stm_check(data: bytes, mode: str) -> Optional[str]:
@@ -329,7 +332,7 @@ def stm_check(data: bytes, mode: str) -> Optional[str]:
     if mode == "bench":
         if s in STM_BENCH:
             return None
-        for rx, why in STM_FORBIDDEN:
+        for rx, why in STM_BENCH_EXCLUDED:
             if rx.fullmatch(s):
                 return f"bench 금지 — {why}"
         return f"bench 허용 질의 아님: {s!r}"
@@ -409,7 +412,7 @@ def allowed_counts() -> Dict[str, tuple]:
         "dcpulse": (len(DCP_BENCH), len(DCP_BENCH) + len(DCP_PROD_WRITES), len(DCP_FORBIDDEN)),
         "rfpulse": (len(RFP_BENCH), len(RFP_BENCH) + len(RFP_PROD_WRITES), len(RFP_FORBIDDEN)),
         "tsp": (len(TSP_BENCH_WINS), len(TSP_BENCH_WINS) + len(TSP_PROD_WRITES), 1),
-        "stm100": (len(STM_BENCH), len(STM_PROD_FIXED) + 3, len(STM_FORBIDDEN)),
+        "stm100": (len(STM_BENCH), len(STM_PROD_FIXED) + 3, len(STM_FORBIDDEN)),   # + E=·F=·J=
     }
 
 
