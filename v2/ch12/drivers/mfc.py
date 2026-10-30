@@ -226,9 +226,10 @@ class MfcDriver:
     def _read_reply(self, session, sent: str, prefixes: tuple, timeout_s: float) -> str:
         """v1 _read_one_line_skip_echo(device/mfc.py:1445-1475): 보낸 명령 에코·과거 no-reply 에코·접두사 불일치 줄은 건너뜀."""
         deadline = min(session.deadline, self.clock.monotonic() + timeout_s)
+        skip_echo = bool(self.c("MFC_SKIP_ECHO", True))
         while True:
             line = self.reader.read_line(session, deadline)
-            if line == sent.strip():
+            if skip_echo and line == sent.strip():
                 continue
             if self.echo and line == self.echo[0]:
                 self.echo.popleft()

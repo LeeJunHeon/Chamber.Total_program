@@ -9,7 +9,7 @@
 - 측정: DC_INTERVAL_MS(5 s)마다 1초 PLC 묶음 읽기의 D0/D1(D10/D11)으로 (P, V, I) = (V·I, raw×0.50316, raw×0.00097405).
   표시 → 과전류(목표 기준 한계, 연속 N) → 저전력(P ≤ 1 W 3회) → 목표 도달 뒤 저전류(I ≤ 0.05 A 3회) → 보정.
   보정: |목표 − P| ≤ 1 W 면 target_reached 1회, 아니면 마지막 전송값 ±1 W(0~최대), 데드밴드 0.5 W 이상 바뀔 때만 WRITE.
-  판정에 걸리면 target_failed + 정지(v1 처럼 그 측정의 보정 쓰기가 먼저 나간 뒤 0 W).
+  판정에 걸리면 target_failed + 정지(그 측정의 보정 쓰기 없이 0 W — v1 은 보정 태스크가 쓰기 전에 취소된다).
 - stop(): 폴링 중지 → 'ramp-down 시작' → 이번 런에 안 썼으면 바로 완료, 썼으면 0 W 확인 → SET OFF → 완료
   (실패면 power_off_failed, output_off_unconfirmed). 쓰기는 safety 요청.
 이벤트: on_event(PowerEvent(kind, detail, reason, data)) — kind 는 v1 DCPowerEvent 와 같다. 1초 행 블록 'ch2.dc'.
@@ -94,6 +94,7 @@ class DcPower:
         self.polling = True
         self._due: Optional[float] = None
         self._gen = 0
+        self.polls = 0                       # 판정에 쓴 측정 수(시험·진단)
         self._latest: Optional[PlcPoll] = None
         plc.register_decoder((self.block,), self._decode, self._read_failed)
 
@@ -198,6 +199,7 @@ class DcPower:
         out.update({f"{n}_p": round(p, 3), f"{n}_v": round(v, 3), f"{n}_i": round(i, 5)})
         if self.running and self.polling and self._due is not None and poll.t_mono >= self._due - 1e-6:
             self._due = poll.t_mono + max(50, int(self._c("DC_INTERVAL_MS"))) / 1000.0 - 0.5
+            self.polls += 1
             self._on_measure(p, v, i)
         return out
 
@@ -218,8 +220,7 @@ class DcPower:
         self.power_w, self.voltage_v, self.current_a = float(p), float(v), float(i)
         self._emit("display", power=self.power_w, voltage=self.voltage_v, current=self.current_a)
         if self._check_overcurrent() or self._check_low_power() or self._check_low_current():
-            self._adjust_once(committed=True)        # v1: 같은 측정의 보정 태스크가 정지보다 먼저 돈다
-            self.stop()
+            self.stop()          # v1: 그 측정의 보정 태스크는 쓰기 전에 정지가 취소한다(골든 dc_low_power_trip — 보정 쓰기 없음)
             return
         self._adjust_once()
 
@@ -280,8 +281,8 @@ class DcPower:
                    reason="DC_LOW_CURRENT")
         return True
 
-    def _adjust_once(self, committed: bool = False) -> None:
-        """유지 보정(device/dc_power.py:513-550). committed=True 면 실행 때 정지 여부를 다시 보지 않는다(이미 보낸 것)."""
+    def _adjust_once(self) -> None:
+        """유지 보정(device/dc_power.py:513-550). 쓰기는 실행 때 정지됐으면 건너뛴다(v1 cleanup 의 보정 취소)."""
         if not self.running:
             return
         error = float(self.target_power) - float(self.power_w)
@@ -305,8 +306,7 @@ class DcPower:
                 self._status(f"DC 설정 전송 실패: {err_text(res)}")
             if res.value is not None or res.status != Status.OK:
                 self._status(f"오차 보정: meas={meas:.1f}W, target={tgt:.1f}W → set {new:.1f}W")
-        self._write(new, sent, guard=None if committed else self._guard(self._gen),
-                    kind="safety" if committed else "write")
+        self._write(new, sent, guard=self._guard(self._gen))
 
     # ───────── 정지 ─────────
     def used_this_run(self) -> bool:

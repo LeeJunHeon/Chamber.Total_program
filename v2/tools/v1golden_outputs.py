@@ -306,7 +306,7 @@ def gen_excel() -> None:
         if scen.get("pre") == "phantom":       # 서식만 있는 행(max_row 함정)이 있는 기존 파일
             cols, gc, gs = gl._main_cols(scen["ch"], scen.get("thickness", False))
             wb, ws = gl._get_or_create_wb(main_dir / f"CH{scen['ch']}.xlsx", "Main Process", cols, gc, gs)
-            from openpyxl.styles import PatternFill
+            PatternFill = gl.PatternFill      # v1 모듈이 import 한 것(여기서 openpyxl 을 import 하지 않음)
             for r in range(4, 30):
                 ws.cell(row=r, column=2).fill = PatternFill("solid", fgColor="F2F3F4")
             main_dir.mkdir(parents=True, exist_ok=True)
@@ -493,7 +493,7 @@ def gen_thickness_heater() -> None:
 # ───────────────────────── 카메라·selfwatch·ERROR·덤프 ─────────────────────────
 def gen_camera() -> None:
     cam = v1("util.camera_recorder")
-    import numpy as np
+    np = importlib.import_module("numpy")
     scen = dict(SC.CAMERA)
     root = new_root()
     clock = Clock(scen["t0"])

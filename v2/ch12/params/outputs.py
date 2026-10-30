@@ -24,6 +24,8 @@ def _p(key, label, type_, default, src, *, unit="", lo=None, hi=None, apply=Appl
        scope=Scope.INSTALL, desc="", note="", v1_default=None, pattern=None) -> ParamDef:
     if type_ is S and pattern is None:
         pattern = r".*"
+    if apply is Apply.LIVE:
+        scope = Scope.PROCESS          # 즉시 반영 값은 운전 파라미터(설치값은 재시작 — test_params 등급 규칙)
     return ParamDef(key=key, group="outputs", label=label, desc=desc or label, unit=unit, type=type_,
                     default=default, min=lo, max=hi, pattern=pattern, safety=Safety.L, apply=apply,
                     scope=scope, role=Role.ADMIN, v1_default=v1_default, v1_source=src, note=note)

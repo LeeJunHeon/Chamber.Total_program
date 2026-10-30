@@ -85,8 +85,7 @@ def X_main():
 
 
 def test_excel_next_row_skips_phantom():
-    from openpyxl import Workbook
-    from openpyxl.styles import PatternFill
+    Workbook, PatternFill = X.Workbook, X.PatternFill        # openpyxl 은 outputs 에서만 import(test_isolation)
     wb = Workbook()
     ws = wb.active
     ws.cell(row=5, column=1).value = "x"

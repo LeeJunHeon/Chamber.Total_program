@@ -86,7 +86,9 @@ class RfPower:
         self.output_off_unconfirmed = False
         self.polling = True
         self._due: Optional[float] = None
+        self._now: Optional[float] = None          # 지금 판정 중인 측정의 시각(읽기 시작) — 경과 시간 기준
         self._gen = 0
+        self.polls = 0                       # 판정에 쓴 측정 수(시험·진단)
         self._stop_done: List[Callable] = []
         plc.register_decoder((self.block,), self._decode, self._read_failed)
 
@@ -271,8 +273,16 @@ class RfPower:
         out.update({f"{b}.fwd_w": meas["forward"], f"{b}.ref_w": meas["reflected"]})
         if self.running and self.polling and self._due is not None and poll.t_mono >= self._due - 1e-6:
             self._due = poll.t_mono + max(50.0, self.p("poll_ms")) / 1000.0 - 0.5
-            self._ingest(meas["forward"], meas["reflected"])
+            self._now = poll.t_mono
+            self.polls += 1
+            try:
+                self._ingest(meas["forward"], meas["reflected"])
+            finally:
+                self._now = None
         return out
+
+    def _mono(self) -> float:
+        return self.clock.monotonic() if self._now is None else self._now
 
     def _read_failed(self, why: str) -> None:
         if self.running and self.polling and self._due is not None and self.clock.monotonic() >= self._due - 1e-6:
@@ -289,7 +299,7 @@ class RfPower:
         to = self.c("RF_BLIND_RAMP_REACH_TIMEOUT_S")
         if not self.running or to <= 0.0 or self.blind_start_ts is None:
             return
-        if self.clock.monotonic() - self.blind_start_ts > to:
+        if self._mono() - self.blind_start_ts > to:
             self._status("RF 출력이 나오지 않아 RF 공정을 중단합니다.")
             self._emit("target_failed", f"Blind ramp 도달 시간({int(to)}s) 초과: 시작 뒤 FWD 0.0 W(출력 없음)",
                        reason="RF_NO_OUTPUT")
@@ -300,7 +310,7 @@ class RfPower:
             return
         self.forward_w, self.reflected_w = float(forward_w or 0.0), float(reflected_w or 0.0)
         self._emit("display", forward=self.forward_w, reflected=self.reflected_w)
-        now = self.clock.monotonic()
+        now = self._mono()
         to = self.c("RF_BLIND_RAMP_REACH_TIMEOUT_S")
         if not self.ref_armed and to > 0.0 and self.state == "RAMPING_UP" and self.blind_start_ts is not None:
             if now - self.blind_start_ts > to:
@@ -347,7 +357,7 @@ class RfPower:
         if self.state == "RAMPING_UP":
             th = self.c("RF_BLIND_RAMP_FWD_THRESHOLD_W")
             if not self.ref_armed and self.forward_w >= th:
-                self.state, self.blind_reach_ts = "BLIND_SETTLE", self.clock.monotonic()
+                self.state, self.blind_reach_ts = "BLIND_SETTLE", self._mono()
                 self._status(f"Blind ramp 완료: FWD={self.forward_w:.1f}W 도달 (임계 {th:.1f}W) → "
                              f"{int(self.c('RF_BLIND_RAMP_SETTLE_S'))}초 안정화 대기 (REF.p 감시 OFF)")
                 return
@@ -375,7 +385,7 @@ class RfPower:
                 self._send(new, after=lambda ok: self._status(f"Ramp-Up... 목표스텝:{new:.1f}W, 현재:{fwd:.1f}W"))
             return
         if self.state == "BLIND_SETTLE":
-            now = self.clock.monotonic()
+            now = self._mono()
             el = now - (self.blind_reach_ts or now)
             early = self.c("RF_BLIND_SETTLE_EARLY_EXIT_REF_W")
             if early > 0.0 and self.reflected_w <= early:
