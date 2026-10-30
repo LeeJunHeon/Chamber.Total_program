@@ -9,8 +9,8 @@
 - GET /robot/v1/health    → 200 {"ok": true, "inflight": n} (진단용).
 - 127.0.0.1 에만 묶는다(밖에서 못 부른다).
 
-명령 처리 한 곳(사용자 지시 3장 (4)): 모든 로봇 명령은 dispatch_robot(...) 하나를 지난다. 지금은 robot_ops.handle 을 바로
-부르는 얇은 함수이고, core 단계에서 core.command(kind=f"ROBOT_{cmd}", args=data, source=Source.ROBOT) 로 바꿀 자리다(표시: CORE).
+명령 처리 한 곳(사용자 지시 3장 (4)): 모든 로봇 명령은 dispatch_robot(...) 하나를 지난다 — 조립(assembly.build)이 ops.core 를
+붙이면 core.command(kind=f"ROBOT_{cmd}", source=Source.ROBOT) → RobotOps.handle(v1 handlers 그대로) 순서로 간다.
 
 같은 명령 id 두 번(로봇 서버 재전송·재시작 뒤 중복): 처리한 id 와 결과를 기억해(최근 DEDUP_KEEP 개) 다시 실행하지 않고 같은 결과
 (+ "duplicate": true)를 돌려준다. 처리 중인 id 가 또 오면 끝날 때까지 기다렸다가 같은 결과. to_state()/from_state() 로 5단계 저널이
@@ -40,9 +40,32 @@ EmitFn = Callable[..., None]      # emit(source, kind, detail="", level="info", 
 
 def dispatch_robot(ops, cmd: str, data: Any, raw: Any = None, peer: str = "", received_at: Any = None,
                    request_id: Optional[str] = None) -> Tuple[str, Any, List[List[str]]]:
-    """로봇 명령 처리 한 곳. CORE: core 단계에서 core.command(kind=f"ROBOT_{cmd}", args=data, source=Source.ROBOT, …) 로 바꾼다
-    — 그때도 결과 모양(reply_cmd, body, log)은 이대로."""
-    return ops.handle(cmd, data, raw, peer, received_at, request_id)
+    """로봇 명령 처리 한 곳 — 조립이 ops.core 를 붙였으면 core.command(kind=f"ROBOT_{cmd}", source=Source.ROBOT) 를 지나
+    RobotOps.handle 결과(reply_cmd, body, log)를 그대로 돌려준다(v1 응답 그대로). core 가 거부하면(출처·bench 등) v1 형식 실패
+    '{cmd}_RESULT' E205(로봇 서버가 제어 프로그램 응답 없음 때 쓰는 코드와 같음). 18개 밖 명령(빈·미등록)은 v1 router 처럼 ops 가
+    E105·E106 으로. core 가 없으면(robot 골든 시험대) ops.handle 바로."""
+    core = getattr(ops, "core", None)
+    c = str(cmd or "").upper().strip()
+    if core is None or c not in _ROBOT_KINDS:
+        return ops.handle(cmd, data, raw, peer, received_at, request_id)
+    from v2.common.commands import Source
+    rid = request_id if request_id is not None else (raw.get("request_id") if isinstance(raw, dict) else None)
+    res = core.command(f"ROBOT_{c}", {"data": data if isinstance(data, dict) else {}, "raw": raw, "peer": peer,
+                                      "received_at": received_at, "request_id": rid}, source=Source.ROBOT,
+                       cid=rid, by="robot")
+    if res.ok and isinstance(res.value, tuple) and len(res.value) == 3:
+        return res.value
+    body = ER.build_error_payload_from_code("E205", detail=f"{c} 불가 — {res.reason}" + (f": {res.detail}" if res.detail else ""),
+                                            meta={"command": c})
+    return f"{c}_RESULT", body, []
+
+
+def _robot_kinds() -> frozenset:
+    from v2.ch12.robot_ops import COMMANDS
+    return frozenset(COMMANDS)
+
+
+_ROBOT_KINDS = _robot_kinds()
 
 
 def report_to_emit(emit: EmitFn) -> Callable[[Json, str], None]:

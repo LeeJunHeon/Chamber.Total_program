@@ -17,8 +17,9 @@ v1 과 같게 하는 것(바이트·로그 줄·순서)
 - 연결 로그 NET 'Client connected/disconnected/closed: {peer}', 'Client error from {peer}: {e!r}'. peer = str(peername 튜플).
 
 v1 과 다른 것
-- 실패 보고(notify_*)는 서버 로그('ERROR/HOST' 줄)까지만 — 구글챗 카드·팝업은 로봇 서버가 보내지 않는다(구글챗은 포털 몫,
-  팝업은 노트북 화면 몫 — 결정 목록).
+- 실패 보고(notify_* — E102·E104·E105·E107·E110·E111, 서버 자체 예외 E999)는 서버 로그('ERROR/HOST' 줄) 뒤 제어 프로그램의
+  내부 명령 API POST /robot/v1/event 로 넘긴다(결정 D09 — 구글챗 카드는 포털, 팝업은 노트북 화면이 같은 문구로). 보내기는 별도
+  태스크라 응답 바이트·순서·로그 줄은 v1 그대로이고, 제어 프로그램이 꺼져 있으면 보내지 못한 채 로그만 남는다(다시 보내지 않음).
 - 제어 프로그램이 꺼져 있으면 cache.py 규칙대로 응답(연결 유지).
 """
 from __future__ import annotations
@@ -33,8 +34,8 @@ from typing import Any, Callable, Dict, Optional
 from v2.robot_server.cache import ReplyCache
 from v2.robot_server.forward import COMMANDS, Forwarder, ForwardDown
 from v2.robot_server.log import CommandCsv
-from v2.robot_server.protocol import HEADER_SIZE, PROTOCOL_VERSION, error_payload, pack_message, report_log_text, \
-    unpack_header
+from v2.robot_server.protocol import HEADER_SIZE, PROTOCOL_VERSION, error_payload, pack_message, report_event, \
+    report_log_text, unpack_header
 
 Json = Dict[str, Any]
 LogFn = Callable[[str, str], None]
@@ -65,6 +66,9 @@ class RobotServer:
         self._server: Optional[asyncio.AbstractServer] = None
         self.down_count = 0          # 제어 프로그램 꺼짐 응답 수(진단·시험용)
         self._writers: set = set()   # 열린 연결(종료 때 닫기)
+        self._event_tasks: set = set()   # 보내는 중인 실패 보고(D09)
+        self.events_sent = 0         # 제어 프로그램이 받은 실패 보고 수(진단·시험)
+        self.events_failed = 0       # 못 보낸 실패 보고 수(제어 프로그램 꺼짐 등 — 로그만 남음)
 
     # ── 시작·종료 ──
     async def start(self) -> None:
@@ -87,9 +91,17 @@ class RobotServer:
             with contextlib.suppress(Exception):
                 await asyncio.wait_for(self._server.wait_closed(), timeout=5.0)
             self.log("NET", "Host closed")
+        await self.drain_events()
         if self.csv is not None:
             with contextlib.suppress(Exception):
                 await self.csv.aclose()
+
+    async def drain_events(self, timeout_s: float = 5.0) -> None:
+        """보내는 중인 실패 보고를 기다린다(종료·시험)."""
+        tasks = [t for t in self._event_tasks if not t.done()]
+        if tasks:
+            with contextlib.suppress(Exception):
+                await asyncio.wait(tasks, timeout=timeout_s)
 
     # ── 보고·기록 ──
     def _notify(self, code: str, detail: str, meta: Json) -> Json:
@@ -97,7 +109,30 @@ class RobotServer:
         p = error_payload(code, detail=detail, meta=meta)
         with contextlib.suppress(Exception):
             self.log("ERROR/HOST", report_log_text(p))
+        self._send_event(p)
         return p
+
+    def _send_event(self, payload: Json) -> None:
+        """실패 보고를 제어 프로그램으로(D09) — 기다리지 않는다(응답·로그 순서를 바꾸지 않게)."""
+        try:
+            ev = report_event(payload, "HOST")
+            task = asyncio.get_running_loop().create_task(self._post_event(ev))
+        except Exception:
+            self.events_failed += 1
+            return
+        self._event_tasks.add(task)
+        task.add_done_callback(self._event_tasks.discard)
+
+    async def _post_event(self, ev: Json) -> None:
+        send = getattr(self.forwarder, "send_event", None)
+        ok = False
+        if send is not None:
+            with contextlib.suppress(Exception):
+                ok = bool(await send(ev))
+        if ok:
+            self.events_sent += 1
+        else:
+            self.events_failed += 1
 
     async def _csv(self, row: dict) -> None:
         if self.csv is not None:

@@ -7,7 +7,7 @@
 - DC·DC2(PLC D/A): target_failed 뒤 첫 power_off_finished 는 OFF 확인으로 넘기지 않음(1회 플래그), power_off_failed 는 OFF 실패
   경로(종료 절차 중이면 그 단계만)·경고('⚠️ CHn … Power OFF 실패 - 출력 상태 미확인 …'), 측정 줄 '측정: P W, V V, I A'.
 - RF 연속: '[poll] fwd=x.xW, ref=x.xW', target_reached → RF_TARGET.
-- DC Pulse: command_confirmed OUTPUT_ON → DC_PULSE_TARGET, REF_POWER → DC_PULSE_SET, OUTPUT_OFF → DCPULSE_OFF;
+- DC Pulse: arc_threshold_reached → 공정당 1회 v1 상세 문구(process_monitor.arc_log_text). command_confirmed OUTPUT_ON → DC_PULSE_TARGET, REF_POWER → DC_PULSE_SET, OUTPUT_OFF → DCPULSE_OFF;
   command_failed OUTPUT_OFF → OFF 실패 경로(phase 검사보다 먼저), phase=prepare·READ_*·FAULT_RESET 무시, AUTO_STOP 은 사유 문구.
   '[telemetry] P=… W, V=… V, I=… A (raw P/I/V=…)'(GAPB-006).
 - RF Pulse: command_failed RF_OFF → OFF 실패 경로, 그 밖은 실패, power_off_finished → RFPULSE_OFF.
@@ -188,7 +188,16 @@ class ProcessEventsMixin:
             raw_s = f" (raw P/I/V={raw.get('P')}/{raw.get('I')}/{raw.get('V')})" if raw else ""
             self.log(tag, f"[telemetry] P={p:.1f} W, V={v:.2f} V, I={i:.3f} A{raw_s}")
         elif k == "arc_threshold_reached":
-            self.log(tag, ev.detail or "")
+            # 공정당 1회(v1 _runtime_arc_notified — 공정 시작 때 초기화) + v1 상세 문구(chamber_runtime.py:2636-2672).
+            # 모니터 카드('DC Pulse Arc 경고')는 process_monitor 가 같은 규칙으로 낸다.
+            run = self.e.run_id
+            if getattr(self, "_arc_run", object()) == run:
+                return
+            self._arc_run = run
+            from v2.ch12.process_monitor import arc_counts, arc_log_text
+            soft, hard = arc_counts(ev)
+            pname = str((self.e.params or {}).get("process_name") or f"CH{self.n}")
+            self.log(tag, arc_log_text(self.n, getattr(ev, "data", None) or {}, pname, soft, hard))
         elif k == "command_confirmed":
             cmd = str(ev.cmd or "").upper()
             if cmd.startswith("OUTPUT_ON"):

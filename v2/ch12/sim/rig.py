@@ -102,3 +102,19 @@ class Ch12Rig(Ch12System):
         super().__init__(clock, full, Path(full["LOCAL_DATA_DIR"]), sim_transports(clock, self.sims), mode=mode,
                          store=new_store(out / "config"), retention=retention, links=links,
                          camera_backend=self.sim_camera, scenario_hook=scenario_hook)
+
+
+class Ch12FullRig(Ch12Rig):
+    """실행 프로그램과 같은 엔진 조립(assembly.build)까지 붙인 시험대 — 엔진 전부·안전·명령 처리(core)·로봇(RobotOps·RobotApi
+    127.0.0.1 임의 포트)·허브·설정 적용. 기록·설정 폴더는 out_dir 아래(엑셀 메인 사본도 — v1 G: 경로에 쓰지 않게).
+    robot_api=False 면 내부 명령 API 서버를 띄우지 않는다(로봇 명령은 robot_ops·dispatch_robot 으로)."""
+
+    def __init__(self, clock, out_dir: Path, cfg: Optional[Dict[str, Any]] = None, mode: str = "sim",
+                 retention: Retention = TEST_RETENTION, links: bool = False, scenario_hook=None,
+                 camera: Optional[SimCamera] = None, robot_api: bool = True, schedules: bool = True) -> None:
+        super().__init__(clock, out_dir, cfg=cfg, mode=mode, retention=retention, links=links,
+                         scenario_hook=scenario_hook, camera=camera)
+        from v2.ch12.assembly import build
+        out = Path(out_dir)
+        self.asm = build(self, settings_dir=out / "settings", excel_main_dir=out / "xl_main", robot_api=robot_api,
+                         robot_port=0, schedules=schedules)

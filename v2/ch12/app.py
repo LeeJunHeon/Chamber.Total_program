@@ -11,6 +11,7 @@
   3 로그(LOCAL_DATA_DIR\\logs\\ch12_v2.log 회전 로그 — 콘솔에는 시작 줄·경고·오류만).
   4 조립(system.Ch12System — sim: 시뮬레이터(sim.rig.make_sims·sim_transports, OES·RGA 워커는 --fake), bench·prod: TCP
     (system.tcp_transports)) → 장비 메시지 허브(hub.attach — 이벤트·1초 행 구독, 첫 메시지 hello)·설정 적용(config_apply.attach)
+    → 엔진 조립(assembly.build — 공정·PC·TSP·히터·두께·프리스퍼터·안전·명령 처리 core·로봇 RobotOps·내부 명령 API)
     → 웹 연결(start_uplink) → worker 시작 → tick 스레드 → 로컬 서버(attach_server — /api/v1·v2/hmi).
     bench·prod 에서 장비가 없으면 죽지 않고 worker 재연결로 계속(링크 끊김). 조립·시작 중 예외 = 종료 코드 4(감시 프로그램이 다시 켠다).
   5 웹 연결(uplink — 계약은 common.messages): 정책이 연결이면 UPLINK_URL·UPLINK_TOKEN(local_override.json 의 비밀값)으로.
@@ -24,8 +25,8 @@
 - Ctrl+C(SIGINT·SIGBREAK): 엔진이 busy(공정·정지 순서 등 — v1 main.py closeEvent 조건)면 거부하고 계속 실행(콘솔에 이유).
   아니면 정상 종료: tick 멈춤 → 포트 닫기 → 기록·출력 flush → 허브 닫기 → 웹 연결 정지(남은 메시지는 보관함 — 다음 시작 때
   올림) → 로컬 서버 정지.
-- 종료 신호(SIGTERM — 감시 프로그램·서비스 정지): 거부하지 않는다(정상 종료와 같은 순서). 공정 중 파워만 끄는 처리는
-  4·5단계(챔버K 결정 4 — force_exit 자리).
+- 종료 신호(SIGTERM — 감시 프로그램·서비스 정지): 거부하지 않는다(정상 종료와 같은 순서). 공정 중이면 먼저 파워 출력만 끈다
+  (safety.power_off_only — 챔버K 결정 4, S32). 콘솔 닫기·로그오프(winshell)도 같은 함수를 부를 자리(5단계).
 """
 from __future__ import annotations
 
@@ -103,6 +104,7 @@ class App:
         self.hub = None
         self.server: Optional[LocalServer] = None
         self.uplink = None
+        self.assembly = None
 
     # ───────── 1 설정 ─────────
     def load_config(self) -> bool:
@@ -204,8 +206,13 @@ class App:
                                  camera_backend=cam, program=PROGRAM, version=self.version)
         self.system.event_listeners.append(self._log_event)
         from v2.ch12 import config_apply, hub
+        from v2.ch12.assembly import build as build_engines
         self.hub = hub.attach(self.system)                 # 이벤트·1초 행 → 장비 메시지(로컬 화면·웹)
         config_apply.attach(self.system)                   # CONFIG_APPLY·CONFIG_ROLLBACK·idle 키 적용
+        # 엔진 전부·안전·명령 처리(core — system.command)·로봇(RobotOps·내부 명령 API 127.0.0.1:ROBOT_API_PORT) — 시험대
+        # (sim.rig.Ch12FullRig)와 같은 조립. sim 은 v1 엑셀 메인 사본(G: 공유 드라이브)을 기록 폴더 아래로.
+        xl = self.data_dir / "gdrive_main" if mode is RunMode.SIM else None
+        self.assembly = build_engines(self.system, excel_main_dir=xl)
         self.hub.hello()                                   # 첫 메시지(장비 연결 이벤트보다 먼저)
         return self.system
 
@@ -246,8 +253,25 @@ class App:
         return EXIT_OK
 
     # 다음 단계 자리 — 지금은 아무것도 하지 않는다
-    def start_journal(self, s: Ch12System) -> None:       # 5단계: 저널·이어가기(resume)
-        return None
+    def start_journal(self, s: Ch12System) -> None:
+        """5단계 저널·이어가기(journal.py·resume.py) — 조립 뒤·worker 시작 전: 옛 저널을 읽고(공정 중이었던 부분은 판단 전까지
+        덮어쓰지 않음·재시작 횟수 +1·히터 넘겨받기·명령 id 기억 되살림) 1초 저널을 켠다. 판단은 시작 뒤 별도 스레드
+        (1초 행 몇 개를 다시 읽은 뒤 — 이어가기 또는 PROGRAM_RESTART 안전 정지). 웹 연결을 만든 직후 명령 기억을 넣는다."""
+        from v2.ch12 import resume as RS
+        say = lambda m: (self.say(f"[재시작] {m}"), self.log.warning("재시작: %s", m))   # noqa: E731
+        self.journal, self.resumer = RS.attach(s, log=say)
+        for part, d in self.resumer.active.items():
+            say(f"지난 실행의 {part} 공정(run {d.get('run_id')})이 저널에 '공정 중' — 장비를 다시 읽고 이어가기/안전 정지 판단")
+        orig_uplink = self.start_uplink
+
+        def start_uplink(sys_) -> None:
+            orig_uplink(sys_)
+            self.journal.bind_commands()                   # 웹 명령 id 기억 — 연결이 명령을 받기 전에
+        self.start_uplink = start_uplink
+        th = threading.Thread(target=lambda: (s.clock.wait_until(None, lambda: s.started or self._done.is_set()),
+                                              None if self._done.is_set() else self.resumer.run()),
+                              name="resume", daemon=True)
+        th.start()
 
     def start_uplink(self, s: Ch12System) -> None:
         """웹 연결 — 정책이 연결일 때만(prod·bench, sim 은 UPLINK_IN_SIM). 실패해도 웹 없이 운전(공정·안전은 그대로)."""
@@ -275,8 +299,44 @@ class App:
         self.server.attach(s)
         self.server.start()
 
-    def install_console_handlers(self) -> None:           # winshell(윈도우 콘솔 닫기·로그오프) 자리
-        return None
+    def install_console_handlers(self) -> None:
+        """의도적 종료(5단계 — resume.intentional_exit: 저널 표시 먼저 → 공정 중단 PROGRAM_EXIT → 파워만 끔 → 저널 마지막).
+        - 정상 종료 경로(Ctrl+C 를 받아들였을 때·SIGTERM — 리눅스·윈도우 같음): shutdown 앞에 끼운다(종료 코드 0).
+        - 윈도우 콘솔 창 닫기·로그오프·윈도우 종료(winshell — SetConsoleCtrlHandler·숨은 창 WM_ENDSESSION): 처리기 스레드에서
+          같은 처리 → 기록 flush → os._exit(0)(감시 프로그램이 다시 켜지 않음 — 창 닫기는 약 5초 안에 끝나야 한다)."""
+        import os
+        from v2.ch12 import resume as RS
+        from v2.ch12 import winshell
+        say = lambda m: (self.say(m), self.log.warning("%s", m))                # noqa: E731
+
+        def exit_now(why: str):
+            s = self.system
+            if s is None:
+                return None
+            return RS.intentional_exit(s, getattr(self, "journal", None), why, log=say)
+        orig_shutdown = self.shutdown
+
+        def shutdown(why: str = "SIGINT") -> None:
+            exit_now(why)
+            orig_shutdown(why)
+            j = getattr(self, "journal", None)
+            if j is not None:
+                j.stop()
+            if getattr(self, "shell", None) is not None:
+                self.shell.stop()
+        self.shutdown = shutdown
+
+        def on_console(why: str) -> None:
+            exit_now(why)
+            s = self.system
+            try:
+                if s is not None and s.recorder is not None:
+                    s.recorder.flush(0.5)
+                for h in self._log_handlers:
+                    h.flush()
+            finally:
+                os._exit(EXIT_OK)
+        self.shell = winshell.install(on_console, say)
 
     # ───────── 실행 ─────────
     def run(self) -> int:
@@ -326,6 +386,10 @@ class App:
     def shutdown(self, why: str = "SIGINT") -> None:
         self.say(f"종료 중({why}) — 포트 닫기·기록 정리")
         self.log.info("정상 종료 시작(%s)", why)
+        s = self.system
+        if why == "SIGTERM" and s is not None and s.busy() and getattr(s, "safety", None) is not None:
+            res = s.safety.power_off_only("PROGRAM_EXIT")      # 의도적 종료 — 파워 출력만(챔버K 결정 4, safety S32)
+            self.log.warning("의도적 종료(%s) — 파워만 끔: %s", why, res)
         self._teardown()
         self.say("종료")
 

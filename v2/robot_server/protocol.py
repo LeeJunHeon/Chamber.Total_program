@@ -121,3 +121,20 @@ def report_log_text(payload: Json) -> str:
     if prefix:
         text = f"[{' / '.join(prefix)}] {text}"
     return text.strip()
+
+
+def user_text(payload: Json) -> str:
+    """실패 보고 챗·팝업 문구 '[코드] title | 상세: detail' (v1 errors/error_reporter.py:48-58 _build_user_text)."""
+    code = str(payload.get("error_code", "") or "").strip()
+    message = _one_line(_to_text(payload.get("message", "")))
+    detail = _one_line(_to_text(payload.get("detail", "")))
+    prefix = f"[{code}] " if code else ""
+    return f"{prefix}{message} | 상세: {detail}" if detail and detail != message else f"{prefix}{message}"
+
+
+def report_event(payload: Json, src: str = "HOST") -> Json:
+    """내부 명령 API POST /robot/v1/event 본문(결정 D09) — v1 report_payload 의 챗(notify_error_event(src, code, text))·
+    팝업(제목 '오류(src, code)') 자리를 제어 프로그램 → 포털로."""
+    code = str(payload.get("error_code", "") or "").strip()
+    return {"kind": "host_error", "code": code or None, "detail": user_text(payload), "level": "warn", "src": src,
+            "title": f"오류({src}, {code})" if code else f"오류({src})", "payload": dict(payload)}

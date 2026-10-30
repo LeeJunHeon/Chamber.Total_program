@@ -241,12 +241,12 @@ ITEMS = [
          desc="덤프 결과 로그: 성공 'Runtime dump saved({reason}): {path}'(WARN/DUMP), 이미 진행 중(RuntimeError) 'Runtime dump skipped({reason}): …'(WARN/DUMP), "
               "그 밖 'Runtime dump failed({reason}): {e!r}'(ERROR/DUMP), 모듈 없음 'util.runtime_dump import 실패(request_dump=None)'",
          v1="main.py:1187-1207",
-         v2=_CMD, test="", status="todo", note=""),
+         v2='v2/ch12/runtime_dump_hook.py', test='v2/tests/test_runtime_dump_hook.py::test_manual_dump_saved_with_v2_state; v2/tests/test_runtime_dump_hook.py::test_skipped_when_in_progress_and_failed_logged', status='done', note="로그는 내부 이벤트 source='dump' kind='log'(reason=WARN/DUMP·ERROR/DUMP)"),
     dict(id="UI-038", area="ui",
          desc="덤프에 넣는 객체: runtime_state 스냅샷, pc_use_ch, plc_owner, closing_started, close_ready, 그리고 plc·mfc1·mfc2·ig1·ig2·ch1·ch2·pc·tsp_ctrl·server_page "
               "요약(type, is_connected/connected/_running/running, vars 중 ui·_loop·loop·app·qapp·chat·plc·_plc·mfc·mfc_gas·mfc_pressure·ig 제외, repr 400자 자름)",
          v1="main.py:1170-1185; util/runtime_dump.py:41-44; util/runtime_dump.py:61-66; util/runtime_dump.py:146-177",
-         v2=_CMD, test="", status="todo", note=""),
+         v2='v2/ch12/runtime_dump_hook.py', test='v2/tests/test_runtime_dump_hook.py::test_manual_dump_saved_with_v2_state; v2/tests/test_runtime_dump_hook.py::test_real_rig_state', status='done', note='v2 는 Qt 객체 대신 상태 사전: runtime_state·엔진 state_dict/state/status·장비 표·tick 통계·기록 대기열·최근 이벤트'),
     dict(id="UI-039", area="ui",
          desc="덤프 파일: <LOG_ROOT>/RUNTIME_DUMP/runtime_dump_{YYYYmmdd_HHMMSS}_{reason}_pid{pid}.txt (mkdir 실패 시 LOCAL_FALLBACK_ROOT/RUNTIME_DUMP). "
               "내용 '=== SNAPSHOT(JSON) ===' + JSON(meta: timestamp·pid·python·executable·argv·platform·cwd / threads / ui 위젯 값(로그창은 끝 300줄) / "
@@ -257,7 +257,7 @@ ITEMS = [
     dict(id="UI-040", area="ui",
          desc="덤프 중복 방지: 진행 중이면 RuntimeError('runtime dump already in progress')",
          v1="util/runtime_dump.py:38-39; util/runtime_dump.py:212-217; util/runtime_dump.py:239-241",
-         v2=_CMD, test="", status="todo",
+         v2='v2/ch12/outputs/runtime_dump.py; v2/ch12/runtime_dump_hook.py', test='v2/tests/test_runtime_dump_hook.py::test_skipped_when_in_progress_and_failed_logged', status='done',
          note="오류 카탈로그에 E910 '런타임 덤프 중복 실행'(errors/error_registry.py:1812-1819)이 있으나 main 은 코드 없이 로그만 남김"),
 
     # ───────────────────────────── 종료(closeEvent) ─────────────────────────────

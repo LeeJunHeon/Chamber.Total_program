@@ -318,12 +318,12 @@ ITEMS = [
          v1="util/runtime_dump.py:20-243", v2="v2/ch12/outputs/runtime_dump.py", test="", status="todo", note=""),
     dict(id="LOG-090", area="log",
          desc="런타임 덤프 계기: RuntimeDump 버튼(사유 manual_button), 공정 중 종료 시도가 막혔을 때 1회(close_blocked_while_running). 대상 객체 runtime_state·plc·mfc1·mfc2·ig1·ig2·ch1·ch2·pc·tsp_ctrl·server_page",
-         v1="main.py:1170-1230,1502-1505", v2="v2/ch12/outputs/runtime_dump.py", test="", status="todo", note=""),
+         v1="main.py:1170-1230,1502-1505", v2='v2/ch12/runtime_dump_hook.py', test='v2/tests/test_runtime_dump_hook.py::test_manual_dump_saved_with_v2_state; v2/tests/test_runtime_dump_hook.py::test_close_blocked_dumps_once', status='done', note='명령 연결(화면 버튼·종료 차단)은 core 가 dump_runtime·dump_close_blocked 를 부른다'),
 
     # ───────────────────────── 그 밖의 util ─────────────────────────
     dict(id="LOG-091", area="log",
          desc="Gun Target 자동 채우기: INVENTORY_API_URL(기본 https://vanam.synology.me/inventory/api/chamber-slots) GET(Accept json, 인증서 검증 끔, 5 s, 전용 1워커), locationName 'Chamber N - Gun M' → 'G{M} Target' = 'itemName (targetUnitId)'(id 없으면 itemName), 실패면 빈 값. CH1 은 gunTarget_name 1칸, CH2 는 g1~g3 칸이 비어 있을 때만 채움",
-         v1="util/inventory_client.py:1-82; runtime/chamber_runtime.py:8924-8951,789,3582,3592,5088,7940; lib/config_common.py:42", v2="v2/ch12/system.py", test="", status="todo", note="담당 모듈 미정(MODULES 에 없음). 시험은 127.0.0.1 가짜 서버로"),
+         v1="util/inventory_client.py:1-82; runtime/chamber_runtime.py:8924-8951,789,3582,3592,5088,7940; lib/config_common.py:42", v2='v2/ch12/inventory_db.py', test='v2/tests/test_inventory_db.py::test_parse_slot_and_targets_rules; v2/tests/test_inventory_db.py::test_network_failure_is_empty_without_log; v2/tests/test_inventory_db.py::test_bad_shape_logs_load_failed; v2/tests/test_inventory_db.py::test_mode_policy_no_external_access_outside_prod', status='done', note="담당 모듈 미정(MODULES 에 없음). 시험은 127.0.0.1 가짜 서버로"),
     dict(id="LOG-092", area="log",
          desc="레시피 파일 고르기 창: 비네이티브 QFileDialog, 기존 파일 1개, ReadOnly(이름 바꾸기·삭제·새 폴더 금지), 드래그 앤 드롭 끔, WindowModal, 시작 폴더 50 ms 뒤 지정, 결과 뒤 숨기고 마우스 버튼이 다 떨어진 뒤 deleteLater 1회(200 ms 확인, 최대 10분) — 2026-10-12 QDrag 종료 대응",
          v1="util/file_pick.py:1-129; main.py:1741-1746; runtime/chamber_runtime.py:8428", v2="v2/hmi/", test="", status="todo", note="Qt 우회 부분은 v2(Qt 없음)에 해당 없음 — 파일 선택 동작만(결정 목록)"),

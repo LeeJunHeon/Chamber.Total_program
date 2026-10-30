@@ -84,6 +84,7 @@ class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, Process
         self.actions.runner = self.runner
         if heater is not None:
             heater.next_step_fn = self._next_step_message           # 히터 도달 카드의 '다음 단계'(v1 next_step_message)
+            heater.on_sample = self._heater_sample                 # Calib CSV·엑셀 히터 열 표본(v1 DataLogger.log_heater)
         if thickness is not None:
             thickness._log_cb = self.log
             thickness._on_state = self.state
@@ -122,9 +123,13 @@ class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, Process
         self._cancel = False
         self._cmd: Optional[tuple] = None
         self._closing = False
+        self._exiting = False                   # 의도적 종료(program_exit) — 끝 처리·정리 없이 멈춤
+        self._resume_plan: Optional[dict] = None   # 재시작 뒤 이어가기/안전 정지(resume_from·stop_from_journal)
+        self._restart_pending = False           # 재시작 판단(resume.py) 전 — 새 시작을 받지 않는다
         self._thread = None
         self.preflight_hooks = {"gate": PF.gate_check, "main_valve": PF.main_valve_check, "chuck": PF.chuck_move}
-        self.gun_targets = None                 # () -> {"G1 Target": ..} 재고 DB(core — v1 _load_gun_targets 3 s)
+        self.gun_targets = None                 # (run) -> None 재고 DB(inventory_db.attach — v1 5080-5098, 최대 3 s)
+        self.shutter_listeners: list = []       # (opened) — Main Shutter 확인 때(process_monitor.attach)
         self.on_host_start = None               # (ok, 문구) — 로봇 START_SPUTTER 응답 시점(v1 _host_report_start)
         self.last_result: Optional[dict] = None
         self.traces: "collections.deque[list]" = collections.deque(maxlen=50)   # 런마다 실행한 스텝(시험·기록)
@@ -158,8 +163,10 @@ class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, Process
 
     @property
     def busy(self) -> bool:
-        """is_busy(3279-3290) — 시작 명령 접수 ~ 큐 완주/정리 완료."""
-        return self._cmd is not None or self.state_name != "IDLE" or self.runner.is_running
+        """is_busy(3279-3290) — 시작 명령 접수 ~ 큐 완주/정리 완료. 재시작 뒤 이어가기 판단 전(_restart_pending)도 busy
+        (안전 규칙의 '시작 때 남은 파워' 정리가 이어갈 공정의 출력을 끄지 않게)."""
+        return bool(getattr(self, "_restart_pending", False)) or self._cmd is not None or self.state_name != "IDLE" \
+            or self.runner.is_running
 
     @property
     def is_running(self) -> bool:
@@ -192,6 +199,11 @@ class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, Process
 
     def on_main_shutter(self, opened: bool) -> None:
         (self.stats.shutter_open if opened else self.stats.shutter_close)()
+        for f in list(self.shutter_listeners):
+            try:
+                f(opened)
+            except Exception as e:
+                self.log("MAIN", f"셔터 연동 예외: {e!r}")
 
     # ═══════════════════════ 레시피 적재 ═══════════════════════
     def load(self, recipe, source: str = "web", by: Optional[str] = None, name: str = "") -> Optional[str]:
@@ -272,6 +284,9 @@ class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, Process
                 self.reject_detail = f"cooldown {remain:.0f}s remaining"
                 self.popup("대기 필요", f"이전 공정 종료 후 1분 대기 필요합니다.\n{int(remain + 0.999)}초 후에 시작하십시오.")
                 return "COOLDOWN"
+        if self._restart_pending:
+            self.reject_detail = "재시작 뒤 이어가기 판단 중"
+            return "RESTART_PENDING"
         if self.state_name != "IDLE" or self._cmd is not None:
             self.reject_detail = f"runner busy: {self.state_name}"
             return "RUNNER_BUSY"
@@ -331,6 +346,9 @@ class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, Process
             try:
                 if kind == "STOP_IDLE":
                     self._stop_before_start(idle=True)
+                elif kind == "RESUME":
+                    plan, self._resume_plan = self._resume_plan, None
+                    self._run_list(self.queue_mode, resume=plan)
                 else:
                     self._run_list(kind == "START_QUEUE")
             except Exception as e:                                     # v1 '[Runner] loop exception'
@@ -343,9 +361,10 @@ class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, Process
                     self.lk.notify_all()
 
     # ═══════════════════════ 리스트(v1 ADVANCE_QUEUE·AFTER_FINISH) ═══════════════════════
-    def _run_list(self, queue: bool) -> None:
+    def _run_list(self, queue: bool, resume: Optional[dict] = None) -> None:
+        """런을 차례로. resume = 재시작 뒤 되살린 런(process_view._resume_one) — 그 런부터 이어서."""
         self.queue_mode = queue
-        self.run_idx = -1
+        self.run_idx = -1 if resume is None else self.run_idx - 1
         while True:
             with self.lk:
                 self.run_idx += 1
@@ -358,8 +377,16 @@ class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, Process
             if queue:
                 self.log("UI", f"[CH{self.n}] 자동 공정 ({self.run_idx + 1}/{len(self.runs)}) 준비: "
                                f"'{(run.raw or {}).get('Process_name', run.params.get('Process_name', ''))}'")
+                if self.gun_targets is not None and resume is None:
+                    self.gun_targets(run)              # G1~G3 Target 이 모두 비면 재고 DB 최대 3 s(v1 5080-5098)
             try:
-                if run.kind == "delay":
+                if resume is not None:
+                    plan, resume = resume, None
+                    got = self._resume_one(run, plan)
+                    if got is None:
+                        continue
+                    ok, stopped = got
+                elif run.kind == "delay":
                     self.state_name = "COOLDOWN"
                     self._host(True, f"delay accepted: {run.label}")
                     self._block_begin(run.first)
@@ -371,7 +398,8 @@ class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, Process
                     self._block_end("done")
                     self.log("Process", f"[Runner] '{run.disp}' 지연 완료 → 다음 스텝")
                     continue
-                ok, stopped = self._run_one(run, first=(self.run_idx == 0))
+                else:
+                    ok, stopped = self._run_one(run, first=(self.run_idx == 0))
             except PF.StageCancelled:
                 self._stop_before_start()
                 return
@@ -446,6 +474,8 @@ class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, Process
         res = self.runner.run(params, steps)
         self.traces.append(list(self.runner.trace))
         detail = dict(res.detail)
+        if self._exiting:                                  # 의도적 종료 — run_end 는 program_exit 가 냈다
+            return False, True
         self._after_finish(run, res.ok, detail)
         return res.ok, bool(detail.get("stopped"))
 
@@ -497,6 +527,9 @@ class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, Process
 
     def _stop_before_start(self, idle: bool = False) -> None:
         """_runner_handle_stop 의 '공정 시작 전' 경로(4820-4839). idle = 아무 단계도 없을 때 받은 STOP(정리만, run_end 없음)."""
+        if self._exiting:                                  # 의도적 종료 — 장비 정리 없이(파워만 끄기는 부른 쪽)
+            self._reset_after_list()
+            return
         self.log("MAIN", "[Runner] STOP → 공정 시작 전 상태, 즉시 정리(cleanup)")
         self.actions.apply_polling(False, {})
         self.actions.cleanup_devices()

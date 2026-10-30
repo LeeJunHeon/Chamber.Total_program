@@ -2,6 +2,7 @@
 
 FakeApi(respond) — respond(req: dict) -> dict 가 {"reply_cmd", "body", "log"} 를 돌려준다(forward.py 계약).
 respond 가 예외를 내면 500. delay_s 만큼 늦게 답할 수 있다(시간 초과 시험). requests 에 받은 요청이 쌓인다.
+POST /robot/v1/event(실패 보고 — 결정 D09)는 events 에 쌓고 200 {"ok": true}.
 127.0.0.1 에만 묶는다.
 """
 from __future__ import annotations
@@ -12,7 +13,7 @@ import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Dict, List, Optional
 
-from v2.robot_server.forward import API_PATH
+from v2.robot_server.forward import API_PATH, EVENT_PATH
 
 Json = Dict[str, Any]
 
@@ -27,6 +28,7 @@ class FakeApi:
         self.respond = respond or default_respond
         self.delay_s = 0.0
         self.requests: List[Json] = []
+        self.events: List[Json] = []
         api = self
 
         class _H(BaseHTTPRequestHandler):
@@ -38,6 +40,13 @@ class FakeApi:
             def do_POST(self) -> None:
                 n = int(self.headers.get("Content-Length") or 0)
                 raw = self.rfile.read(n)
+                if self.path == EVENT_PATH:
+                    try:
+                        api.events.append(json.loads(raw.decode("utf-8")))
+                        self._send(200, b'{"ok": true}')
+                    except Exception as e:
+                        self._send(400, json.dumps({"error": repr(e)}).encode("utf-8"))
+                    return
                 if self.path != API_PATH:
                     self._send(404, b"{}")
                     return

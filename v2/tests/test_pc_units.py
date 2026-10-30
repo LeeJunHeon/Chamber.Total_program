@@ -17,6 +17,13 @@ from v2.ch12.run_state import RunState
 CFG = {"PC_RF_CLEANUP_TIMEOUT_S": 5.0, "PC_RF_WAIT_POWER_OFF_TIMEOUT_S": 15.0, "POWER_OFF_ZERO_DEADLINE_S": 10.0}
 
 
+@pytest.fixture(autouse=True)
+def _logs_in_tmp(tmp_path, monkeypatch):
+    """SYSTEM 일자 로그 등 기록은 임시 폴더에만(기본 LOG_ROOT_DIR 'C:\\VanaM_Logs\\CH1&2' 를 저장소에 만들지 않게)."""
+    monkeypatch.setitem(CFG, "LOG_ROOT_DIR", str(tmp_path / "logs"))
+    monkeypatch.setitem(CFG, "LOCAL_FALLBACK_ROOT", str(tmp_path / "fallback"))
+
+
 def _res(ok: bool, value=None):
     return Result(Request("write", lambda s: None), Status.OK if ok else Status.FAIL, value=value,
                   reason=None if ok else "DEVICE_NO_RESPONSE", error=None if ok else "PLCError E402: no response")

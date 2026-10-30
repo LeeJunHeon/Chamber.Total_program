@@ -12,6 +12,9 @@
     (본문에 줄바꿈 가능) 또는 [tag, 본문] 쌍. 태그 없는 문자열은 HOST 태그로 남긴다.
   · body 직렬화: 로봇 서버가 받은 객체를 다시 json.dumps(ensure_ascii=False, default=str) 하므로 키 순서만 지키면 된다.
 - 200 이 아니거나 본문이 위 모양이 아니면 '연결 안 됨'과 같게 다룬다(ForwardDown).
+- 실패 보고(결정 D09): POST /robot/v1/event 본문 {"kind": "host_error", "code": "E###", "detail": "[E###] 제목 | 상세: …"
+  (v1 챗·팝업 문구 _build_user_text), "level": "warn", "src": "HOST", "title": "오류(HOST, E###)"(v1 팝업 제목),
+  "payload": {실패 data}} → 200 {"ok": true}. send_event 는 실패해도 예외 없이 False(제어 프로그램이 꺼져 있으면 로그만).
 
 응답 한도(명령마다, v1 응답 시점 = robot_v1facts.COMMANDS[*]['reply_timing'] 근거, 여유 ROBOT_API_TIMEOUT_MARGIN_S 30 s)
 - GET_SPUTTER_STATUS·GET_LOADING_1/2_SENSOR: ROBOT_API_STATUS_TIMEOUT_S 5 s(즉시 응답 — 메모리 판정 + PLC 1비트)
@@ -48,6 +51,8 @@ COMMANDS = (
 )   # v1 host/setup.py:49-66 등록 순서
 STATUS_COMMANDS = ("GET_SPUTTER_STATUS", "GET_LOADING_1_SENSOR", "GET_LOADING_2_SENSOR", "GET_RECIPE")
 API_PATH = "/robot/v1/command"
+EVENT_PATH = "/robot/v1/event"
+EVENT_TIMEOUT_S = 3.0          # 실패 보고 한 건의 한도(응답·로그를 막지 않는 별도 태스크)
 API_HOST = "127.0.0.1"
 _PULSE_S = 0.18      # PLC_CMD_PULSE_MS 180 (lib/config_common.py:636)
 _LOG_RE = re.compile(r"^\[(?P<tag>[A-Za-z0-9_/]+)\] ?(?P<text>.*)$", re.DOTALL)
@@ -147,14 +152,23 @@ class Forwarder:
             raise ForwardDown("응답 형식 오류(reply_cmd·body 없음)")
         return obj["reply_cmd"], obj["body"], parse_log_entries(obj.get("log", []))
 
-    async def _post(self, body: bytes) -> Tuple[int, bytes]:
+    async def send_event(self, event: Json, timeout_s: float = EVENT_TIMEOUT_S) -> bool:
+        """실패 보고 이벤트 한 건(D09) — 받았으면 True. 연결 안 됨·시간 초과·200 아님은 False(예외 없음)."""
+        body = json.dumps(event, ensure_ascii=False, default=str).encode("utf-8")
+        try:
+            status, _ = await asyncio.wait_for(self._post(body, EVENT_PATH), timeout=float(timeout_s))
+        except (Exception, asyncio.TimeoutError):
+            return False
+        return status == 200
+
+    async def _post(self, body: bytes, path: str = API_PATH) -> Tuple[int, bytes]:
         try:
             reader, writer = await asyncio.wait_for(asyncio.open_connection(self.host, self.port),
                                                     timeout=self.connect_timeout_s)
         except asyncio.TimeoutError:
             raise ForwardDown(f"접속 시간 초과({self.connect_timeout_s:.1f}s)")
         try:
-            head = (f"POST {API_PATH} HTTP/1.1\r\nHost: {self.host}:{self.port}\r\n"
+            head = (f"POST {path} HTTP/1.1\r\nHost: {self.host}:{self.port}\r\n"
                     f"Content-Type: application/json; charset=utf-8\r\nContent-Length: {len(body)}\r\n"
                     f"Connection: close\r\n\r\n").encode("ascii")
             writer.write(head + body)

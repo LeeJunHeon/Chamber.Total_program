@@ -399,16 +399,16 @@ ITEMS = [
               "SLOW_ZONE 0, SLOW_RATE 60, MV_MIN 400, MV_ABS_MAX 1300, MV_LIMIT 1200, KP 3.0, TI 300, PUSH_CONFIG true, MARK_REG 160, APPROACH 20/1.0/1.0, SOAK_TOL 2.0, HOLD_MODE off, "
               "HOLD_MV 3.0/60/1.0/0.5/15, SAT 120, SOAK_TIME 60, WAIT_TIMEOUT 5400, HOLD_WAIT 300, FAIL force, LOG true/3.0/'', RUN_LOG 10, NORESP true/600/300/5/180/10/10. "
               "공통 기본값은 config_common(SUPPORTS_HEATER=False)",
-         v1="config/settings.json:584-632;lib/config_common.py:461;lib/config_common.py:468-513", v2="v2/ch12/params.py",
-         test="", status="todo", note="v1→v2 설정 변환 대상"),
+         v1="config/settings.json:584-632;lib/config_common.py:461;lib/config_common.py:468-513", v2='v2/ch12/params/core_heater.py; v2/tools/convert_v1_config.py',
+         test='v2/tests/test_heater_records.py::test_v1_ch2_heater_values_convert_and_load', status='done', note="v1→v2 설정 변환 대상"),
     dict(id="HEAT-084", area="heat",
          desc="히터 초기화: CH2 설정에서 읽고 SUPPORTS_HEATER=false 면 아무것도 만들지 않음(태스크·PLC I/O·창 크기 그대로), 읽기 실패면 '히터 설정 읽기 실패 — 히터 기능 끔', "
               "설정 경고는 CH2 로그 '⚠ 히터 설정: …', 성공 로그 'CH2 히터 서비스 시작', 실패 'CH2 히터 초기화 실패'. CH2 PLC 연결(_plc_ch2)과 CH2 챗을 씀",
-         v1="main.py:1257-1292", v2="v2/ch12/system.py", test="", status="todo", note=""),
+         v1="main.py:1257-1292", v2='v2/ch12/heater_setup.py', test='v2/tests/test_heater_records.py::test_init_ch2_heater_rules', status='done', note='조립(assembly)이 init_ch2_heater(cfg, build, log) 를 불러 CH2 엔진에 넘긴다'),
     dict(id="HEAT-085", area="heat",
          desc="DC2 와 히터 배타: DC2 는 CH2 전용이고 SUPPORTS_HEATER=true 면 쓸 수 없음(D/A CH3 = 히터 출력) — 레시피 use_dc_power2 는 'DC2 Power 는 사용할 수 없습니다(DC2 폐지)'",
          v1="runtime/chamber_runtime.py:389-392;runtime/chamber_runtime.py:533;runtime/chamber_runtime.py:902;runtime/chamber_runtime.py:8896-8898;config/settings.json:583",
-         v2="v2/ch12/recipe.py", test="", status="todo", note=""),
+         v2='v2/ch12/recipe_check.py; v2/ch12/system.py; v2/ch12/process_steps.py', test='v2/tests/test_heater_records.py::test_dc2_only_without_heater', status='done', note=""),
     dict(id="HEAT-086", area="heat",
          desc="프로그램 닫기 확인창: 히터 RUN 이면 문구에 'CH2 히터가 운전 중입니다(PV x.x°C). 종료하면 히터가 꺼집니다.' 추가",
          v1="main.py:1533-1541", v2="v2/ch12/winshell.py", test="", status="todo", note="v2 는 웹·로컬 화면 종료 확인에 같은 정보"),
@@ -436,33 +436,33 @@ ITEMS = [
          desc="Calib CSV·엑셀 히터 열(CH2 파일만, 맨 뒤): Heater: SV(.1f), PV Avg/Min/Max(.1f), MV Avg(.0f) — 메인 공정 폴링 중·셔터 열림 표본, PV 는 TC 정상일 때만, "
               "SV(최종 목표)·MV 는 RUN 일 때만, 세션 시작·셔터 열림 때 비움, 표본 없으면 공란",
          v1="controller/data_logger.py:16-17;controller/data_logger.py:146-147;controller/data_logger.py:415-435;controller/data_logger.py:441-453;controller/data_logger.py:589-603;runtime/chamber_runtime.py:7033-7037",
-         v2="v2/ch12/outputs/", test="", status="todo", note=""),
+         v2='v2/ch12/process_records.py; v2/ch12/outputs/calib_csv.py; v2/ch12/outputs/run_stats.py', test='v2/tests/test_heater_records.py::test_heater_columns_and_summary_from_main_polling', status='done', note=""),
     dict(id="HEAT-092", area="heat",
          desc="공정 끝 히터 요약 한 줄(히터 붙은 채널·표본 있을 때): '히터 요약(메인 공정 구간) — 목표 x°C|히터 꺼짐 · PV 평균 a°C (최소 b · 최대 c) · MV 평균 n · 표본 k개'",
          v1="controller/data_logger.py:455-466;runtime/chamber_runtime.py:1876-1877;runtime/chamber_runtime.py:7073-7080",
-         v2="v2/ch12/outputs/", test="", status="todo", note=""),
+         v2='v2/ch12/process_records.py; v2/ch12/outputs/run_stats.py', test='v2/tests/test_heater_records.py::test_heater_columns_and_summary_from_main_polling; v2/tests/test_heater_records.py::test_no_heater_no_summary', status='done', note=""),
 
     # ───────────────────────── 레시피·공정 스텝 ─────────────────────────
     dict(id="HEAT-093", area="heat",
          desc="레시피 열 use_heater(T/F)·heater_temp(°C)·heater_ramp(°C/min, 비면 기본)·heater_soak(분, 비면 SOAK 없음) 정규화. use_heater=F 인데 값이 있으면 "
               "'use_heater=F 이므로 히터를 쓰지 않습니다 (… 은 무시)' 로그 후 None",
          v1="runtime/chamber_runtime.py:114-117;runtime/chamber_runtime.py:154-157;runtime/chamber_runtime.py:6365-6382",
-         v2="v2/ch12/recipe.py", test="", status="todo", note=""),
+         v2='v2/ch12/recipe.py', test='v2/tests/test_heater_records.py::test_recipe_heater_columns_and_checks', status='done', note=""),
     dict(id="HEAT-094", area="heat",
          desc="레시피 값 검사(use_heater=T): CH1 이면 'CH1 에는 히터가 없습니다', 서비스 없으면 '히터 기능이 꺼져 있어 …', heater_temp 0 초과 min(MAX_TEMP, SV_LIMIT) 이하, "
               "heater_ramp 0 초과 60 이하, heater_soak 0~480분. 원시 행 검사(E230)에서 heater_* 는 숫자, use_heater 는 T/F 토큰",
          v1="runtime/chamber_runtime.py:385-386;runtime/chamber_runtime.py:8598-8599;runtime/chamber_runtime.py:8622;runtime/chamber_runtime.py:8900-8919",
-         v2="v2/ch12/recipe.py", test="", status="todo", note=""),
+         v2='v2/ch12/recipe_check.py', test='v2/tests/test_heater_records.py::test_recipe_heater_columns_and_checks', status='done', note=""),
     dict(id="HEAT-095", area="heat",
          desc="스텝: use_heater 면 공정 시작 직후(베이스 압력 대기 전) HEATER_SET('히터 T°C 설정 (r°C/min|기본 램프 속도)', params=(ramp,)) → "
               "HEATER_WAIT('히터 T°C 도달·안정 대기[ (SOAK s분)]', params=(soak×60,)|None), 작업 압력 SP1_ON 뒤·Shutter Delay 전 HEATER_HOLD('히터 유지 모드 측정 대기 (작업 압력·플라즈마 조건)', polling=False). "
               "로그 '히터 사용 — 목표 T°C (…)'",
          v1="controller/process_controller.py:2292-2312;controller/process_controller.py:2596-2602;tests/data/thickness_time_mode_golden.json:948-1299",
-         v2="v2/ch12/process_steps.py", test="", status="todo", note="골든 ch2_thk_heater_rf 시나리오"),
+         v2='v2/ch12/process_steps.py', test='v2/tests/test_process_steps_golden.py; v2/tests/test_blocks.py', status='done', note="골든 ch2_thk_heater_rf 시나리오"),
     dict(id="HEAT-096", area="heat",
          desc="HEATER_SET/WAIT 는 value 필수(없으면 ValueError), 콜백이 없으면 E830 AppError. 기대 토큰 HEATER_SET/HEATER_READY/HEATER_HOLD, on_heater_failed → _step_failed('HEATER')(종료 절차)",
          v1="controller/process_controller.py:323-326;controller/process_controller.py:351-365;controller/process_controller.py:1018-1035;controller/process_controller.py:1448-1472;controller/process_controller.py:3045",
-         v2="v2/ch12/process_engine.py", test="", status="todo", note=""),
+         v2='v2/ch12/process_steps.py; v2/ch12/process_actions.py', test='v2/tests/test_heater_records.py::test_heater_steps_value_required_and_message; v2/tests/test_process_list.py::test_heater_set_failure_aborts_before_ig', status='done', note=""),
     dict(id="HEAT-097", area="heat",
          desc="HEATER_SET 처리: 서비스 없으면 E830('히터 기능이 꺼져 있습니다…'), is_ready 실패 E830('히터 사용 불가 — …'), 공정이 넘겨받고 맥락 설정, 유지·포화 클램프 금지 → "
               "운전 중이면 apply_target(owner process), 아니면 turn_on. 실패면(RUN 아니면 release) E830 '히터 설정 실패 — …'. 성공이면 감시 시작, 로그 '공정 히터 설정 — 목표 … ({운전 중 목표 변경|운전 시작})'. "

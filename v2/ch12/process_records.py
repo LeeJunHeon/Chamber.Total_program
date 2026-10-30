@@ -4,7 +4,7 @@
 - 시작: 공정명 키 통일(비면 'Run CHn'), t0_wall·started_at, RunStats 세션(use_ms 면 셔터 열릴 때부터 평균), 두께 기록 시작·두께 CSV
   set_recording(공정 중에만), DC Pulse 아크 카운터 리셋, 'Sputter Calib 로그 세션 시작', '▶️ CHn '이름' 시작 (t=…s)'(값은 분 — v1 그대로).
 - 끝: 결과 문구(성공·stop·실패) → RunStats end_update(실제 Shutter Delay·메인 시간으로 덮어씀) → Calib CSV(성공·실패·STOP 모두)
-  → 엑셀(성공만, DC Pulse 아크 수) → 실패 이유 채팅 문구(진짜 실패만) → 폴링 OFF → run_end(done/aborted/error + 사유 코드,
+  → CH2 히터 요약 한 줄(히터 표본이 있을 때) → 엑셀(성공만, DC Pulse 아크 수) → 실패 이유 채팅 문구(진짜 실패만) → 폴링 OFF → run_end(done/aborted/error + 사유 코드,
   실행 순서·레시피 기록) → 히터(다음 공정 행도 히터면 유지) → 장비 정리(TEST 행 STOP 은 생략) → END(0.3 s 정착 뒤).
 """
 from __future__ import annotations
@@ -17,6 +17,20 @@ FOOTER_SETTLE_S = 0.3                 # _RUN_LOG_FOOTER_SETTLE_S
 
 
 class ProcessRecordsMixin:
+    # ───────── CH2 히터 공정 기록(v1 _heater_record 7024-7042·_heater_log_summary 7073-7080) ─────────
+    def _heater_sample(self, pv, sv, mv, running: bool) -> None:
+        """히터 상태 발행마다(메인 공정 폴링 중 — heater_link 가 거른다) Calib CSV·엑셀 히터 열 표본."""
+        self.stats.add_heater(pv, sv, mv, running)
+
+    def _heater_flags(self, running: bool) -> None:
+        """공정 진행 중 표시(v1 process_controller.is_running) — 공정 시작 ~ 끝 동안 히터 상태 줄·표본을 받는다."""
+        f = getattr(self.heater, "set_process_flags", None)
+        if f is not None:
+            try:
+                f(bool(running), bool(running and self.actions.mfc_polling), bool(running and self.txt.path is not None))
+            except Exception:
+                pass
+
     # ───────── 런 시작·끝 기록(v1 'started'·'finished' 1701-2101) ─────────
     def _run_started(self, params: dict) -> None:
         pname = str(params.get("process_name") or params.get("Process_name") or params.get("process_note") or "").strip() \
@@ -35,6 +49,7 @@ class ProcessRecordsMixin:
         if self.actions.dcp is not None:
             self.actions.dcp.reset_arc_counts()
         self.log("CSV", "Sputter Calib 로그 세션 시작")
+        self._heater_flags(True)
         self.log("MAIN", f"▶️ CH{self.n} '{pname}' 시작 (t={float(params.get('process_time', 0) or 0):.1f}s)")
         self.executed = []
         self.main_t0 = self.clock.monotonic()
@@ -59,6 +74,10 @@ class ProcessRecordsMixin:
                 th.set_recording(False)
         if self.calib is not None:
             self.calib.record(self.stats, ok)
+        if self.heater is not None:                     # v1 _heater_log_summary(7073-7080) — 표본이 있을 때만
+            txt = self.stats.heater_summary_text()
+            if txt:
+                self.log("HEATER", txt)
         if ok and self.excel is not None:
             if self.actions.dcp is not None:
                 s, h = self.actions.dcp.arc_counts
@@ -75,6 +94,7 @@ class ProcessRecordsMixin:
             if reason:
                 self.chat(f"❌ CH{self.n} 공정 실패 이유: {reason}")
         self.actions.apply_polling(False, {})
+        self._heater_flags(False)
         self.last_end_t = self.clock.monotonic()
         kind = "done" if ok else ("aborted" if stopped else "error")
         code = None if ok else ("USER_STOP" if stopped else (self._abort_code or d.get("error_code") or "PROCESS_FAILED"))
