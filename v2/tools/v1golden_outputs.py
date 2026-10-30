@@ -161,6 +161,7 @@ def gen_process_txt() -> None:
                 self._log_file_path = None
 
         rt = RT(scen["ch"])
+        scen["root"] = "@"
         for ev in scen["events"]:
             k = ev[0]
             if k == "t":
@@ -178,7 +179,7 @@ def gen_process_txt() -> None:
             elif k == "close":
                 rt._close_run_log()
                 rt.shutdown()
-        scen["ui"] = rt.ui_lines
+        scen["ui"] = [x.replace(str(root), "@") for x in rt.ui_lines]
         d = write_scen(name, scen)
         scen["files"] = save_tree(root, d / "files")
         write_scen(name, scen)
@@ -281,7 +282,7 @@ def gen_calib() -> None:
             dl.finalize_and_write_log(rec["ok"])
             if rec.get("stage"):
                 save_tree(root, d / f"files_{rec['stage']}")
-        scen["logs"] = logs
+        scen["logs"] = [x.replace(str(root), "@") for x in logs]
         scen["files"] = save_tree(root, d / "files")
         write_scen(name, scen)
 
@@ -409,12 +410,7 @@ def gen_plc_coil() -> None:
             return {k: v for k, v in st.get("regs", {}).items()}
 
     fake = Fake()
-    Fake._plc_coil_log_loop = plc.AsyncPLC._plc_coil_log_loop if hasattr(plc, "AsyncPLC") else None
-    cls = next(c for c in vars(plc).values() if isinstance(c, type) and hasattr(c, "_plc_coil_log_loop"))
-    Fake._plc_coil_log_loop = cls._plc_coil_log_loop
-
-    def _backoff_hook():
-        pass
+    Fake._plc_coil_log_loop = plc.AsyncPLC._plc_coil_log_loop
 
     async def run():
         fake._plc_coil_log_stop = asyncio.Event()
@@ -507,9 +503,12 @@ def gen_camera() -> None:
     logs = []
     rec = cam.CameraRecorder(camera_index=1, interval=1.0)
 
+    times = {"open": None, "frames": []}
+
     class FakeCap:
         def __init__(self, idx):
             self.n = 0
+            times["open"] = clock.t.isoformat()
 
         def isOpened(self):
             return True
@@ -522,6 +521,7 @@ def gen_camera() -> None:
             if self.n > n_frames:
                 rec._stop_event.set()
                 return False, None
+            times["frames"].append(clock.t.isoformat())
             img = np.zeros((6, 8, 3), dtype=np.uint8)
             img[:, :, 0] = self.n * 20
             img[2:4, 1:5, 1] = 200
@@ -550,7 +550,8 @@ def gen_camera() -> None:
     cam.cv2.VideoCapture = real_vc
     import time as _t
     cam.time = _t
-    scen["logs"] = logs
+    scen["logs"] = [x.replace(str(root), "@") for x in logs]
+    scen["times"] = times
     d = write_scen("camera", scen)
     scen["files"] = save_tree(root, d / "files")
     write_scen("camera", scen)
@@ -651,6 +652,7 @@ def gen_robot() -> None:
         for k in scen.get("del_cfg", []):
             setattr(cc, k, "not-a-number")
         patch_dt(hp, clock)
+        patch_dt(v1("util.system_log"), clock)
 
         class FakeTime:
             @staticmethod

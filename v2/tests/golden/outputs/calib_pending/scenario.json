@@ -1,0 +1,169 @@
+{
+ "ch": 1,
+ "cfg": {
+  "SPUTTER_CALIB_DB_DIR": "@/G/막힘/Database"
+ },
+ "pre_files": {
+  "G/막힘": "x"
+ },
+ "records": [
+  {
+   "ok": true,
+   "events": [
+    [
+     "start",
+     {
+      "t0_wall": "2026-10-30T11:00:00",
+      "Process_name": "Cu seed",
+      "use_ms": false,
+      "use_rf_power": true,
+      "rf_power": 120.0,
+      "G1 Target": "Cu",
+      "G2 Target": "무시",
+      "base_pressure": 7e-06,
+      "process_time": 5,
+      "shutter_delay": "",
+      "chuck_position": null,
+      "use_dc_pulse": true,
+      "dc_pulse_power": 80,
+      "dc_pulse_off_time": "DC",
+      "dc_pulse_freq": "",
+      "Ar_flow": 15.0
+     }
+    ],
+    [
+     "rf",
+     120.0,
+     3.0
+    ],
+    [
+     "flow",
+     "Ar",
+     15.2
+    ],
+    [
+     "pressure",
+     "bad"
+    ],
+    [
+     "end",
+     {
+      "process_name": "",
+      "result": "x"
+     }
+    ]
+   ]
+  },
+  {
+   "ok": false,
+   "events": [
+    [
+     "start",
+     {
+      "t0_wall": "2026-10-30T11:10:00",
+      "Process_name": "Cu seed",
+      "use_ms": false,
+      "use_rf_power": true,
+      "rf_power": 120.0,
+      "G1 Target": "Cu",
+      "G2 Target": "무시",
+      "base_pressure": 7e-06,
+      "process_time": 5,
+      "shutter_delay": "",
+      "chuck_position": null,
+      "use_dc_pulse": true,
+      "dc_pulse_power": 80,
+      "dc_pulse_off_time": "DC",
+      "dc_pulse_freq": "",
+      "Ar_flow": 15.0
+     }
+    ],
+    [
+     "rf",
+     120.0,
+     3.0
+    ],
+    [
+     "flow",
+     "Ar",
+     15.2
+    ],
+    [
+     "pressure",
+     "bad"
+    ],
+    [
+     "end",
+     {
+      "process_name": "",
+      "result": "x",
+      "stopped": true
+     }
+    ]
+   ],
+   "stage": "blocked"
+  },
+  {
+   "ok": true,
+   "events": [
+    [
+     "start",
+     {
+      "t0_wall": "2026-10-30T11:20:00",
+      "Process_name": "Cu seed",
+      "use_ms": false,
+      "use_rf_power": true,
+      "rf_power": 120.0,
+      "G1 Target": "Cu",
+      "G2 Target": "무시",
+      "base_pressure": 7e-06,
+      "process_time": 5,
+      "shutter_delay": "",
+      "chuck_position": null,
+      "use_dc_pulse": true,
+      "dc_pulse_power": 80,
+      "dc_pulse_off_time": "DC",
+      "dc_pulse_freq": "",
+      "Ar_flow": 15.0
+     }
+    ],
+    [
+     "rf",
+     120.0,
+     3.0
+    ],
+    [
+     "flow",
+     "Ar",
+     15.2
+    ],
+    [
+     "pressure",
+     "bad"
+    ],
+    [
+     "end",
+     {
+      "process_name": "",
+      "result": "x"
+     }
+    ]
+   ],
+   "unblock": [
+    "G/막힘"
+   ]
+  }
+ ],
+ "logs": [
+  "Sputter Calib CSV NAS 폴더 생성 실패(초기화) → 기록 시마다 NAS 재시도 예정: NotADirectoryError(20, 'Not a directory')",
+  "Sputter Calib CSV NAS 기록 실패 → pending 적재: NotADirectoryError(20, 'Not a directory')",
+  "Sputter Calib CSV pending 적재 완료 → @/exe 폴더/Logs_LocalFallback/CH1/Ch1_pending.csv",
+  "Sputter Calib CSV NAS 기록 실패 → pending 적재: NotADirectoryError(20, 'Not a directory')",
+  "Sputter Calib CSV pending 적재 완료 → @/exe 폴더/Logs_LocalFallback/CH1/Ch1_pending.csv",
+  "Sputter Calib CSV pending → NAS 병합 완료 → @/G/막힘/Database/Ch1_log.csv",
+  "Sputter Calib CSV 1행 기록 완료 (NAS) → @/G/막힘/Database/Ch1_log.csv"
+ ],
+ "files": [
+  "G/막힘/Database/Ch1_log.csv"
+ ]
+}

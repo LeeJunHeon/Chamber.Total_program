@@ -1,0 +1,845 @@
+{
+ "meta": {
+  "source": "v1 device/mfc.py AsyncMFC(enable_verify=False, enable_stabilization=True) — 실제 실행",
+  "generator": "v2/tools/v1golden_mfc.py",
+  "timing_overrides": {
+   "MFC_GAP_MS": 30,
+   "MFC_DELAY_MS": 30,
+   "MFC_DELAY_MS_VALVE": 30,
+   "MFC_ZEROING_GAP_MS": 30,
+   "MFC_POST_OPEN_QUIET_MS": 10,
+   "MFC_STABILIZATION_INTERVAL_MS": 30,
+   "MFC_PRESSURE_CHECK_INTERVAL_SEC": 0.03,
+   "MFC_POLLING_INTERVAL_MS": 200,
+   "MFC_ALLOW_NO_REPLY_DRAIN_MS": 10
+  },
+  "scale_ch1": {
+   "1": 1.0,
+   "2": 1.0,
+   "3": 1.0
+  },
+  "scale_ch2": {
+   "1": 1.0,
+   "2": 10.0,
+   "3": 2.0
+  },
+  "fake_device": "R60 'Q0+…'(켜진 채널 = 설정 %FS 즉시) · R5 'P+x.xx' · R1~R4 'S{n}+xxx.xx' · 설정 명령 무응답"
+ },
+ "cases": [
+  {
+   "name": "flow_set_ch1_10",
+   "chamber": "ch1",
+   "cmd": "FLOW_SET",
+   "args": {
+    "channel": 1,
+    "value": 10.0
+   },
+   "setup": {},
+   "sent": [
+    "51312031302e300d"
+   ],
+   "sent_text": [
+    "Q1 10.0"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "FLOW_SET",
+     "reason": null,
+     "channel": 1
+    }
+   ]
+  },
+  {
+   "name": "flow_on_ch1_stab",
+   "chamber": "ch1",
+   "cmd": "FLOW_ON",
+   "args": {
+    "channel": 1
+   },
+   "setup": {},
+   "sent": [
+    "4c31310d",
+    "5236300d"
+   ],
+   "sent_text": [
+    "L11",
+    "R60"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "FLOW_ON",
+     "reason": null,
+     "channel": 1
+    }
+   ]
+  },
+  {
+   "name": "flow_off_ch1",
+   "chamber": "ch1",
+   "cmd": "FLOW_OFF",
+   "args": {
+    "channel": 1
+   },
+   "setup": {},
+   "sent": [
+    "4c31300d"
+   ],
+   "sent_text": [
+    "L10"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "FLOW_OFF",
+     "reason": null,
+     "channel": 1
+    }
+   ]
+  },
+  {
+   "name": "flow_on_ch2_no_target",
+   "chamber": "ch1",
+   "cmd": "FLOW_ON",
+   "args": {
+    "channel": 2
+   },
+   "setup": {},
+   "sent": [
+    "4c32310d"
+   ],
+   "sent_text": [
+    "L21"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "FLOW_ON",
+     "reason": null,
+     "channel": 2
+    }
+   ]
+  },
+  {
+   "name": "flow_off_ch2",
+   "chamber": "ch1",
+   "cmd": "FLOW_OFF",
+   "args": {
+    "channel": 2
+   },
+   "setup": {},
+   "sent": [
+    "4c32300d"
+   ],
+   "sent_text": [
+    "L20"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "FLOW_OFF",
+     "reason": null,
+     "channel": 2
+    }
+   ]
+  },
+  {
+   "name": "flow_set_ch2_0_3",
+   "chamber": "ch1",
+   "cmd": "FLOW_SET",
+   "args": {
+    "channel": 2,
+    "value": 0.3
+   },
+   "setup": {},
+   "sent": [
+    "513220302e330d"
+   ],
+   "sent_text": [
+    "Q2 0.3"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "FLOW_SET",
+     "reason": null,
+     "channel": 2
+    }
+   ]
+  },
+  {
+   "name": "valve_open",
+   "chamber": "ch1",
+   "cmd": "VALVE_OPEN",
+   "args": {},
+   "setup": {},
+   "sent": [
+    "4f0d"
+   ],
+   "sent_text": [
+    "O"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "VALVE_OPEN",
+     "reason": null,
+     "channel": null
+    }
+   ]
+  },
+  {
+   "name": "valve_close",
+   "chamber": "ch1",
+   "cmd": "VALVE_CLOSE",
+   "args": {},
+   "setup": {},
+   "sent": [
+    "430d"
+   ],
+   "sent_text": [
+    "C"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "VALVE_CLOSE",
+     "reason": null,
+     "channel": null
+    }
+   ]
+  },
+  {
+   "name": "sp1_set_2_5",
+   "chamber": "ch1",
+   "cmd": "SP1_SET",
+   "args": {
+    "value": 2.5
+   },
+   "setup": {},
+   "sent": [
+    "533120302e32350d"
+   ],
+   "sent_text": [
+    "S1 0.25"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "SP1_SET",
+     "reason": null,
+     "channel": null
+    }
+   ]
+  },
+  {
+   "name": "sp2_set_30",
+   "chamber": "ch1",
+   "cmd": "SP2_SET",
+   "args": {
+    "value": 30.0
+   },
+   "setup": {},
+   "sent": [
+    "533220332e300d"
+   ],
+   "sent_text": [
+    "S2 3.0"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "SP2_SET",
+     "reason": null,
+     "channel": null
+    }
+   ]
+  },
+  {
+   "name": "sp4_set_1_234",
+   "chamber": "ch1",
+   "cmd": "SP4_SET",
+   "args": {
+    "value": 1.234
+   },
+   "setup": {},
+   "sent": [
+    "533420302e3132330d"
+   ],
+   "sent_text": [
+    "S4 0.123"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "SP4_SET",
+     "reason": null,
+     "channel": null
+    }
+   ]
+  },
+  {
+   "name": "sp1_on",
+   "chamber": "ch1",
+   "cmd": "SP1_ON",
+   "args": {},
+   "setup": {},
+   "sent": [
+    "44310d"
+   ],
+   "sent_text": [
+    "D1"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "SP1_ON",
+     "reason": null,
+     "channel": null
+    }
+   ]
+  },
+  {
+   "name": "sp2_on",
+   "chamber": "ch1",
+   "cmd": "SP2_ON",
+   "args": {},
+   "setup": {},
+   "sent": [
+    "44320d"
+   ],
+   "sent_text": [
+    "D2"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "SP2_ON",
+     "reason": null,
+     "channel": null
+    }
+   ]
+  },
+  {
+   "name": "sp3_on",
+   "chamber": "ch1",
+   "cmd": "SP3_ON",
+   "args": {},
+   "setup": {},
+   "sent": [
+    "44330d"
+   ],
+   "sent_text": [
+    "D3"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "SP3_ON",
+     "reason": null,
+     "channel": null
+    }
+   ]
+  },
+  {
+   "name": "sp4_on",
+   "chamber": "ch1",
+   "cmd": "SP4_ON",
+   "args": {},
+   "setup": {},
+   "sent": [
+    "44340d"
+   ],
+   "sent_text": [
+    "D4"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "SP4_ON",
+     "reason": null,
+     "channel": null
+    }
+   ]
+  },
+  {
+   "name": "ps_zeroing",
+   "chamber": "ch1",
+   "cmd": "PS_ZEROING",
+   "args": {},
+   "setup": {},
+   "sent": [
+    "5a310d"
+   ],
+   "sent_text": [
+    "Z1"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "PS_ZEROING",
+     "reason": null,
+     "channel": null
+    }
+   ]
+  },
+  {
+   "name": "mfc_zeroing_ch1",
+   "chamber": "ch1",
+   "cmd": "MFC_ZEROING",
+   "args": {
+    "channel": 1
+   },
+   "setup": {},
+   "sent": [
+    "4c35310d"
+   ],
+   "sent_text": [
+    "L51"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "MFC_ZEROING",
+     "reason": null,
+     "channel": 1
+    }
+   ]
+  },
+  {
+   "name": "mfc_zeroing_ch3",
+   "chamber": "ch1",
+   "cmd": "MFC_ZEROING",
+   "args": {
+    "channel": 3
+   },
+   "setup": {},
+   "sent": [
+    "4c37310d"
+   ],
+   "sent_text": [
+    "L71"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "MFC_ZEROING",
+     "reason": null,
+     "channel": 3
+    }
+   ]
+  },
+  {
+   "name": "wait_pressure_2",
+   "chamber": "ch1",
+   "cmd": "WAIT_PRESSURE",
+   "args": {
+    "target": 2.0
+   },
+   "setup": {
+    "pressure_hw": 0.2
+   },
+   "sent": [
+    "52350d",
+    "52350d",
+    "52350d"
+   ],
+   "sent_text": [
+    "R5",
+    "R5",
+    "R5"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "WAIT_PRESSURE",
+     "reason": null,
+     "channel": null
+    }
+   ]
+  },
+  {
+   "name": "wait_pressure_sp3",
+   "chamber": "ch1",
+   "cmd": "WAIT_PRESSURE",
+   "args": {
+    "target": 1.0,
+    "use_sp_target": true,
+    "sp_index": 3
+   },
+   "setup": {
+    "pressure_hw": 0.3,
+    "sp": {
+     "3": 0.3
+    }
+   },
+   "sent": [
+    "52330d",
+    "52350d",
+    "52350d",
+    "52350d"
+   ],
+   "sent_text": [
+    "R3",
+    "R5",
+    "R5",
+    "R5"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "WAIT_PRESSURE",
+     "reason": null,
+     "channel": null
+    }
+   ]
+  },
+  {
+   "name": "read_flow_all",
+   "chamber": "ch1",
+   "cmd": "READ_FLOW_ALL",
+   "args": {},
+   "setup": {},
+   "sent": [
+    "5236300d"
+   ],
+   "sent_text": [
+    "R60"
+   ],
+   "events": []
+  },
+  {
+   "name": "read_pressure",
+   "chamber": "ch1",
+   "cmd": "READ_PRESSURE",
+   "args": {},
+   "setup": {},
+   "sent": [
+    "52350d"
+   ],
+   "sent_text": [
+    "R5"
+   ],
+   "events": []
+  },
+  {
+   "name": "sp3_set_unsupported",
+   "chamber": "ch1",
+   "cmd": "SP3_SET",
+   "args": {
+    "value": 1.0
+   },
+   "setup": {},
+   "sent": [],
+   "sent_text": [],
+   "events": [
+    {
+     "kind": "command_failed",
+     "cmd": "SP3_SET",
+     "reason": "지원되지 않는 MFC 명령",
+     "channel": null
+    }
+   ]
+  },
+  {
+   "name": "flow_set_missing_arg",
+   "chamber": "ch1",
+   "cmd": "FLOW_SET",
+   "args": {
+    "channel": 1
+   },
+   "setup": {},
+   "sent": [],
+   "sent_text": [],
+   "events": [
+    {
+     "kind": "command_failed",
+     "cmd": "FLOW_SET",
+     "reason": "예외: \"'value' is required for FLOW_SET\"",
+     "channel": null
+    }
+   ]
+  },
+  {
+   "name": "poll_cycle",
+   "chamber": "ch1",
+   "cmd": "POLL_CYCLE",
+   "args": {},
+   "setup": {},
+   "sent": [
+    "5236300d",
+    "52350d"
+   ],
+   "sent_text": [
+    "R60",
+    "R5"
+   ],
+   "events": []
+  },
+  {
+   "name": "flow_set_ch2_o2_1_1",
+   "chamber": "ch2",
+   "cmd": "FLOW_SET",
+   "args": {
+    "channel": 2,
+    "value": 1.1
+   },
+   "setup": {},
+   "sent": [
+    "51322031312e300d"
+   ],
+   "sent_text": [
+    "Q2 11.0"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "FLOW_SET",
+     "reason": null,
+     "channel": 2
+    }
+   ]
+  },
+  {
+   "name": "flow_set_ch2_o2_0_07",
+   "chamber": "ch2",
+   "cmd": "FLOW_SET",
+   "args": {
+    "channel": 2,
+    "value": 0.07
+   },
+   "setup": {},
+   "sent": [
+    "513220302e373030303030303030303030303030310d"
+   ],
+   "sent_text": [
+    "Q2 0.7000000000000001"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "FLOW_SET",
+     "reason": null,
+     "channel": 2
+    }
+   ]
+  },
+  {
+   "name": "flow_set_ch2_o2_0_09",
+   "chamber": "ch2",
+   "cmd": "FLOW_SET",
+   "args": {
+    "channel": 2,
+    "value": 0.09
+   },
+   "setup": {},
+   "sent": [
+    "513220302e383939393939393939393939393939390d"
+   ],
+   "sent_text": [
+    "Q2 0.8999999999999999"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "FLOW_SET",
+     "reason": null,
+     "channel": 2
+    }
+   ]
+  },
+  {
+   "name": "flow_set_ch2_n2_1_15",
+   "chamber": "ch2",
+   "cmd": "FLOW_SET",
+   "args": {
+    "channel": 3,
+    "value": 1.15
+   },
+   "setup": {},
+   "sent": [
+    "513320322e330d"
+   ],
+   "sent_text": [
+    "Q3 2.3"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "FLOW_SET",
+     "reason": null,
+     "channel": 3
+    }
+   ]
+  },
+  {
+   "name": "flow_on_ch3_stab",
+   "chamber": "ch2",
+   "cmd": "FLOW_ON",
+   "args": {
+    "channel": 3
+   },
+   "setup": {},
+   "sent": [
+    "4c33310d",
+    "5236300d"
+   ],
+   "sent_text": [
+    "L31",
+    "R60"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "FLOW_ON",
+     "reason": null,
+     "channel": 3
+    }
+   ]
+  },
+  {
+   "name": "flow_off_ch3",
+   "chamber": "ch2",
+   "cmd": "FLOW_OFF",
+   "args": {
+    "channel": 3
+   },
+   "setup": {},
+   "sent": [
+    "4c33300d"
+   ],
+   "sent_text": [
+    "L30"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "FLOW_OFF",
+     "reason": null,
+     "channel": 3
+    }
+   ]
+  },
+  {
+   "name": "flow_set_ch1_ar_20",
+   "chamber": "ch2",
+   "cmd": "FLOW_SET",
+   "args": {
+    "channel": 1,
+    "value": 20
+   },
+   "setup": {},
+   "sent": [
+    "51312032302e300d"
+   ],
+   "sent_text": [
+    "Q1 20.0"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "FLOW_SET",
+     "reason": null,
+     "channel": 1
+    }
+   ]
+  },
+  {
+   "name": "sp4_set_4",
+   "chamber": "ch2",
+   "cmd": "SP4_SET",
+   "args": {
+    "value": 4.0
+   },
+   "setup": {},
+   "sent": [
+    "533420302e340d"
+   ],
+   "sent_text": [
+    "S4 0.4"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "SP4_SET",
+     "reason": null,
+     "channel": null
+    }
+   ]
+  },
+  {
+   "name": "sp4_on",
+   "chamber": "ch2",
+   "cmd": "SP4_ON",
+   "args": {},
+   "setup": {},
+   "sent": [
+    "44340d"
+   ],
+   "sent_text": [
+    "D4"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "SP4_ON",
+     "reason": null,
+     "channel": null
+    }
+   ]
+  },
+  {
+   "name": "wait_pressure_sp4",
+   "chamber": "ch2",
+   "cmd": "WAIT_PRESSURE",
+   "args": {
+    "target": 1.0,
+    "use_sp_target": true,
+    "sp_index": 4
+   },
+   "setup": {
+    "pressure_hw": 0.4
+   },
+   "sent": [
+    "52340d",
+    "52350d",
+    "52350d",
+    "52350d"
+   ],
+   "sent_text": [
+    "R4",
+    "R5",
+    "R5",
+    "R5"
+   ],
+   "events": [
+    {
+     "kind": "command_confirmed",
+     "cmd": "WAIT_PRESSURE",
+     "reason": null,
+     "channel": null
+    }
+   ]
+  },
+  {
+   "name": "wait_pressure_zero_target",
+   "chamber": "ch2",
+   "cmd": "WAIT_PRESSURE",
+   "args": {
+    "target": 0.0
+   },
+   "setup": {},
+   "sent": [],
+   "sent_text": [],
+   "events": [
+    {
+     "kind": "command_failed",
+     "cmd": "WAIT_PRESSURE",
+     "reason": "압력 안정화 실패: target=0, last=0",
+     "channel": null
+    }
+   ]
+  }
+ ]
+}

@@ -1,0 +1,2 @@
+﻿timestamp,elapsed_sec,owner,pv_c,sv_c,ramp_sv_c,cur_sv_c,mv,mv_limit,mv_pct,pid_err,ramp_rate_c_per_min,holdback_c,ot_limit_c,run,itl,fault,ot,tc_err,wd_err,tc_ok,da_ok,water_ok,vac_ok,pid_run,output_dead,hold,hold_mv,sat_clamp,ramp_target_c,note
+2026-10-30 10:00:06,0.0,외부,25.0,250.0,30.0,29.9,1200,1500,80.0,-13,5,10.0,300.0,1,0,0,0,0,0,1,1,1,1,1,0,0,,,,

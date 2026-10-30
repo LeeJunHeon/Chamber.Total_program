@@ -1,0 +1,173 @@
+{
+ "t0": "2026-10-30T10:00:00",
+ "cfg": {},
+ "events": [
+  [
+   "t",
+   "2026-10-30T10:00:00",
+   100.0
+  ],
+  [
+   "start"
+  ],
+  [
+   "row",
+   {
+    "pv": 25.04,
+    "sv": 250.0,
+    "sv_ramp": 30.0,
+    "cur_sv": 29.95,
+    "mv": 1200.4,
+    "mv_limit": 1500,
+    "mv_pct": 80.03,
+    "pid_err": -12.6,
+    "ramp_rate": 5,
+    "holdback": 10.0,
+    "ot_limit": 300.0,
+    "run": true,
+    "itl": false,
+    "fault": false,
+    "ot": false,
+    "tc_err": false,
+    "wd_err": false,
+    "tc_ok": true,
+    "da_ok": true,
+    "water_ok": true,
+    "vac_ok": true,
+    "pid_run": true,
+    "output_dead": false
+   },
+   {
+    "owner": "공정",
+    "hold": [
+     false,
+     null
+    ],
+    "sat_clamp": null,
+    "ramp_target": 250.0
+   }
+  ],
+  [
+   "t",
+   "2026-10-30T10:00:03",
+   103.04
+  ],
+  [
+   "row",
+   {
+    "pv": null,
+    "sv": 250.0,
+    "sv_ramp": 30.0,
+    "cur_sv": 29.95,
+    "mv": "x",
+    "mv_limit": 1500,
+    "mv_pct": 80.03,
+    "pid_err": -12.6,
+    "ramp_rate": 5,
+    "holdback": 10.0,
+    "ot_limit": 300.0,
+    "run": true,
+    "itl": false,
+    "fault": false,
+    "ot": false,
+    "tc_err": false,
+    "wd_err": false,
+    "tc_ok": true,
+    "da_ok": true,
+    "water_ok": true,
+    "vac_ok": true,
+    "pid_run": true,
+    "output_dead": false
+   },
+   {
+    "owner": "공정",
+    "hold": [
+     true,
+     1450
+    ],
+    "sat_clamp": 1400
+   }
+  ],
+  [
+   "t",
+   "2026-10-30T10:00:06",
+   106.0
+  ],
+  [
+   "row",
+   {
+    "pv": 25.04,
+    "sv": 250.0,
+    "sv_ramp": 30.0,
+    "cur_sv": 29.95,
+    "mv": 1200.4,
+    "mv_limit": 1500,
+    "mv_pct": 80.03,
+    "pid_err": -12.6,
+    "ramp_rate": 5,
+    "holdback": 10.0,
+    "ot_limit": 300.0,
+    "run": false,
+    "itl": false,
+    "fault": false,
+    "ot": false,
+    "tc_err": false,
+    "wd_err": false,
+    "tc_ok": true,
+    "da_ok": true,
+    "water_ok": true,
+    "vac_ok": true,
+    "pid_run": true,
+    "output_dead": false
+   },
+   {
+    "owner": "공정",
+    "note": "운전 종료"
+   }
+  ],
+  [
+   "stop"
+  ],
+  [
+   "start"
+  ],
+  [
+   "row",
+   {
+    "pv": 25.04,
+    "sv": 250.0,
+    "sv_ramp": 30.0,
+    "cur_sv": 29.95,
+    "mv": 1200.4,
+    "mv_limit": 1500,
+    "mv_pct": 80.03,
+    "pid_err": -12.6,
+    "ramp_rate": 5,
+    "holdback": 10.0,
+    "ot_limit": 300.0,
+    "run": true,
+    "itl": false,
+    "fault": false,
+    "ot": false,
+    "tc_err": false,
+    "wd_err": false,
+    "tc_ok": true,
+    "da_ok": true,
+    "water_ok": true,
+    "vac_ok": true,
+    "pid_run": true,
+    "output_dead": false
+   },
+   {
+    "owner": "외부"
+   }
+  ],
+  [
+   "stop"
+  ]
+ ],
+ "files": [
+  "로컬/VanaM_Logs/CH1&2/CH2_Heater/CH2_HEATER_20261030_100000.csv",
+  "로컬/VanaM_Logs/CH1&2/CH2_Heater/CH2_HEATER_20261030_100006.csv"
+ ]
+}

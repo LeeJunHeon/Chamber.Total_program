@@ -307,6 +307,24 @@ def test_six_failures_reconnect_with_backoff_and_recover():
     r.done()
 
 
+def test_reconnect_backoff_1_2_4_8_16_30():
+    c = VirtualClock()
+    c.register()
+    sim = Stm100Sim()
+    sim.add_fault("disconnect", 0.0, 200.0)
+    ev = []
+    w = Worker("stm100", SimTransport(c, sim), on_event=ev.append, **D.worker_kwargs())
+    d = D.Stm100Driver(c, w, CFG, True, chamber="ch2")
+    w.start()
+    d.start()
+    c.wait_until(150.0)
+    t = [e.t for e in ev if e.kind == "connect_failed"]
+    assert [round(b - a, 6) for a, b in zip(t, t[1:])][:8] == [1.0, 2.0, 4.0, 8.0, 16.0, 30.0, 30.0, 30.0]
+    assert not [e for e in ev if e.kind == "long_outage"]               # v1 은 장기 두절 구분 없음
+    d.stop()
+    w.stop()
+
+
 def test_reset_flag_counts_and_acks():
     r = Rig()
     r.c.wait_until(r.c.monotonic() + 1.0)

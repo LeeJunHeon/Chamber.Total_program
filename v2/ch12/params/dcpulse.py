@@ -8,7 +8,7 @@ config_common 의 .py 값을 json 적용 전에 복사해 갖고 있어 common �
 """
 from __future__ import annotations
 
-from ._base import B, F, H, I, L, M, S, Dropped, inst, p
+from ._base import B, F, H, I, L, S, Dropped, inst, p
 
 _G = "dcpulse"
 _CC = "lib/config_common.py"
@@ -94,5 +94,3 @@ DROPPED: tuple = (
     Dropped("common.DCP_V_SET_STEP_V", _DEAD + "(set_reference V·set_limits·set_arc_params)", "device/dc_pulse.py:1185-1194"),
     Dropped("common.DCP_I_SET_STEP_A", _DEAD + "(set_reference I·set_limits·set_arc_params)", "device/dc_pulse.py:1185-1194"),
 )
-
-_ = M        # (등급 이름을 쓰지 않는 조각에서도 import 모양을 같게)

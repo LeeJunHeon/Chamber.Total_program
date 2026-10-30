@@ -31,7 +31,7 @@ def _defs(ch: str, enabled: bool, port: int, port_note: str) -> tuple:
         src = f"{_S}:{_LINES[key][n]};{_C}:{_CODE[key]};{_TC}:110-159"
         return ParamDef(key=P + key, group="stm100", label=f"{ch.upper()} {label}", desc=desc or label, unit=unit,
                         type=type_, default=default, min=lo, max=hi, pattern=pattern, safety=safety,
-                        apply=Apply.RESTART, scope=scope, role=Role.ADMIN, v1_key=key, v1_source=src, note=note,
+                        apply=Apply.RESTART, scope=scope, role=Role.ADMIN, v1_source=src, note=note,
                         v1_default=v1_default)
 
     return (

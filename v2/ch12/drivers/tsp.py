@@ -12,6 +12,7 @@ v1 device/tsp.py(AsyncTSP)의 프레임·응답 해석·연결 방식을 다시 
 연결(v1 근거: device/tsp.py:212-233·339-378, 사실 표 devices_v1facts "tsp")
 - 필요할 때만 연결한다(ensure_open) — 상시 연결·keep-alive 질의 없음. 명령 하나가 통신 예외(무응답·NACK·CRC·
   창 오류 포함 — v1 read_win/write_win_logic 의 except Exception)로 끝나면 연결을 닫고, 다음 호출이 다시 연결한다.
+  on/off 상태 확인 시간초과(E808)는 v1 처럼 닫지 않는다(_wait_status 는 read_win 밖).
   그래서 worker 의 연결 상태 기계(백오프)는 쓰지 않는다: OnDemandTransport 가 worker 에는 늘 '열림'으로 보이고
   실제 소켓은 명령이 처음 보낼 때 연다. 드라이버는 통신 예외를 TspError 로 바꿔 worker 가 끊고 백오프하지 않게 한다.
 - SO_KEEPALIVE 는 TSP_TCP_KEEPALIVE(실효값 false — settings.json common, inv_cfg CFG-019)를 따른다.
@@ -122,10 +123,6 @@ class TspVerifyTimeout(TspError):
 class TspFrameError(TspError):
     """WIN 형식·쓰기 DATA 누락(v1 _build_frame 의 ValueError) — 보내기 전."""
     reason, code = "BAD_ARGS", "E818"
-
-
-class TspBenchRejected(TspError):
-    reason, code = "BENCH_READ_ONLY", None
 
 
 # ═══════════════════════ 프레임·해석(순수 함수) ═══════════════════════
@@ -515,7 +512,8 @@ class TspDriver:
         box: Dict[str, float] = {}
 
         def check(session) -> Any:
-            st = self._get_status(session)
+            # 205 읽기만 통신 예외 처리(닫음) — 시간초과 자체는 v1 _wait_status 처럼 연결을 닫지 않는다
+            st = self._guarded(session, lambda: self._get_status(session))
             if st in want:
                 return SEQ_DONE
             if session.clock.monotonic() >= box["end"]:
@@ -523,27 +521,21 @@ class TspDriver:
             return None
 
         def first(session):
-            def run():
-                self._write_win_logic(session, WIN_ONOFF, on)
-                if not verify:
-                    return SEQ_DONE
-                box["end"] = session.clock.monotonic() + max(0.0, float(wait_ok))
-                return check(session)
-            return self._guarded(session, run)
-
-        def again(session):
-            return self._guarded(session, lambda: check(session))
+            self._guarded(session, lambda: self._write_win_logic(session, WIN_ONOFF, on))
+            if not verify:
+                return SEQ_DONE
+            box["end"] = session.clock.monotonic() + max(0.0, float(wait_ok))
+            return check(session)
 
         def last(session):
-            r = self._guarded(session, lambda: check(session))
-            if r is SEQ_DONE:
-                return r
+            if check(session) is SEQ_DONE:
+                return SEQ_DONE
             raise TspVerifyTimeout(f"상태 확인 시간초과(target={target}, last={self.last_status})")
 
         if not verify:
             return [("send", first)]
         n = int(max(0.0, float(wait_ok)) / self._poll_s()) + 2
-        return [("send", first)] + [("verify", again)] * n + [("verify", last)]
+        return [("send", first)] + [("verify", check)] * n + [("verify", last)]
 
     def _switch(self, on: bool, on_done, wait_ok: float, safety: bool) -> None:
         action = "on" if on else "off"

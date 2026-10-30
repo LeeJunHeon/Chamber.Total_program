@@ -1,0 +1,24 @@
+# selfwatch dump 2026-10-30 09:01:00
+# 초과 항목: private_mb=2500.5>2000, handles=6000>5000
+
+[sample]
+ts=2026-10-30 09:01:00
+working_set_mb=2100.1
+private_mb=2500.5
+handles=6000
+gdi=100
+user=120
+threads=33
+tasks=-1
+gc0=1
+gc1=0
+gc2=3
+
+[asyncio tasks — 이름|코루틴 별 개수 상위 30]
+(loop 없음)
+
+[tracemalloc — lineno 상위 30]
+(tracemalloc 꺼짐)
+
+[threads — 이름별 개수]
+     1  MainThread

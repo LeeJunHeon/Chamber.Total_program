@@ -139,7 +139,7 @@ def _block_steps(t: str, p: Dict[str, Any], label: str, sc: ps.StepCfg, ctx: dic
     if t == "heater_hold":
         return ps.heater_hold_steps()
     if t == "test":
-        return ps.testmode_steps(float(p["sec"]))
+        return ps.row_test_steps(float(p["sec"]))
     if t == "row_delay":
         return [ProcessStep("ROW_DELAY", f"'{p['name']}' 단계: {p['label']} 대기", duration=int(float(p["sec"])) * 1000,
                             params=(p["label"], p["name"]), holding=True)]
@@ -187,8 +187,8 @@ def template_blocks(p: Mapping[str, Any], chamber: int, cfg: Mapping[str, Any], 
     sc = ps.step_cfg(cfg, chamber)
     log: list = []
     if bool(p.get("test_mode", False)):
-        from v2.ch12.process_sequence import testmode_duration_sec
-        dur = testmode_duration_sec(p)
+        from v2.ch12.process_sequence import row_test_duration_sec
+        dur = row_test_duration_sec(p)
         log.append(("Process", f"[TEST MODE] 장비제어 스킵 / 시뮬레이션 {dur:.1f}s 진행"))
         return [_B("test", sec=dur)], log
     from v2.ch12.process_sequence import mid_change_plan, thickness_conflict

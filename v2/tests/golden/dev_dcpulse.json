@@ -1,0 +1,1939 @@
+{
+ "source": "device/dc_pulse.py (v1, 실제 실행) + lib/power_limits.py",
+ "frames": [
+  {
+   "name": "MASTER_ONOFF",
+   "kind": "write",
+   "code": 123,
+   "value": 3,
+   "hex": "02 7b 00 03 03 83"
+  },
+  {
+   "name": "MASTER_REFER",
+   "kind": "write",
+   "code": 124,
+   "value": 3,
+   "hex": "02 7c 00 03 03 84"
+  },
+  {
+   "name": "MASTER_MODE",
+   "kind": "write",
+   "code": 125,
+   "value": 3,
+   "hex": "02 7d 00 03 03 85"
+  },
+  {
+   "name": "REG_POWER",
+   "kind": "write",
+   "code": 129,
+   "value": 3,
+   "hex": "02 81 00 03 03 89"
+  },
+  {
+   "name": "OUTPUT_ON",
+   "kind": "write",
+   "code": 128,
+   "value": 1,
+   "hex": "02 80 00 01 03 86"
+  },
+  {
+   "name": "OUTPUT_OFF",
+   "kind": "write",
+   "code": 128,
+   "value": 2,
+   "hex": "02 80 00 02 03 87"
+  },
+  {
+   "name": "PULSE_SYNC_INT",
+   "kind": "write",
+   "code": 101,
+   "value": 0,
+   "hex": "02 65 00 00 03 6a"
+  },
+  {
+   "name": "PULSE_SYNC_EXT",
+   "kind": "write",
+   "code": 101,
+   "value": 1,
+   "hex": "02 65 00 01 03 6b"
+  },
+  {
+   "name": "FAULT_RESET",
+   "kind": "write",
+   "code": 111,
+   "value": 1,
+   "hex": "02 6f 00 01 03 75"
+  },
+  {
+   "name": "ARC_COUNT_RESET",
+   "kind": "write",
+   "code": 140,
+   "value": 2,
+   "hex": "02 8c 00 02 03 93"
+  },
+  {
+   "name": "OFF_TIME_DC",
+   "kind": "write",
+   "code": 103,
+   "value": 9,
+   "hex": "02 67 00 09 03 75"
+  },
+  {
+   "name": "REF_POWER_RAW_0",
+   "kind": "write",
+   "code": 131,
+   "value": 0,
+   "hex": "02 83 00 00 03 88"
+  },
+  {
+   "name": "REF_POWER_RAW_1",
+   "kind": "write",
+   "code": 131,
+   "value": 1,
+   "hex": "02 83 00 01 03 89"
+  },
+  {
+   "name": "REF_POWER_RAW_10",
+   "kind": "write",
+   "code": 131,
+   "value": 10,
+   "hex": "02 83 00 0a 03 92"
+  },
+  {
+   "name": "REF_POWER_RAW_25",
+   "kind": "write",
+   "code": 131,
+   "value": 25,
+   "hex": "02 83 00 19 03 a1"
+  },
+  {
+   "name": "REF_POWER_RAW_50",
+   "kind": "write",
+   "code": 131,
+   "value": 50,
+   "hex": "02 83 00 32 03 ba"
+  },
+  {
+   "name": "REF_POWER_RAW_100",
+   "kind": "write",
+   "code": 131,
+   "value": 100,
+   "hex": "02 83 00 64 03 ec"
+  },
+  {
+   "name": "REF_POWER_RAW_255",
+   "kind": "write",
+   "code": 131,
+   "value": 255,
+   "hex": "02 83 00 ff 03 87"
+  },
+  {
+   "name": "REF_POWER_RAW_256",
+   "kind": "write",
+   "code": 131,
+   "value": 256,
+   "hex": "02 83 01 00 03 89"
+  },
+  {
+   "name": "REF_POWER_RAW_771",
+   "kind": "write",
+   "code": 131,
+   "value": 771,
+   "hex": "02 83 03 03 03 8e"
+  },
+  {
+   "name": "PULSE_FREQ_20",
+   "kind": "write",
+   "code": 102,
+   "value": 20,
+   "hex": "02 66 00 14 03 7f"
+  },
+  {
+   "name": "PULSE_FREQ_40",
+   "kind": "write",
+   "code": 102,
+   "value": 40,
+   "hex": "02 66 00 28 03 93"
+  },
+  {
+   "name": "PULSE_FREQ_50",
+   "kind": "write",
+   "code": 102,
+   "value": 50,
+   "hex": "02 66 00 32 03 9d"
+  },
+  {
+   "name": "PULSE_FREQ_100",
+   "kind": "write",
+   "code": 102,
+   "value": 100,
+   "hex": "02 66 00 64 03 cf"
+  },
+  {
+   "name": "PULSE_FREQ_150",
+   "kind": "write",
+   "code": 102,
+   "value": 150,
+   "hex": "02 66 00 96 03 01"
+  },
+  {
+   "name": "OFF_TIME_RAW_10",
+   "kind": "write",
+   "code": 103,
+   "value": 10,
+   "hex": "02 67 00 0a 03 76"
+  },
+  {
+   "name": "OFF_TIME_RAW_30",
+   "kind": "write",
+   "code": 103,
+   "value": 30,
+   "hex": "02 67 00 1e 03 8a"
+  },
+  {
+   "name": "OFF_TIME_RAW_32",
+   "kind": "write",
+   "code": 103,
+   "value": 32,
+   "hex": "02 67 00 20 03 8c"
+  },
+  {
+   "name": "OFF_TIME_RAW_50",
+   "kind": "write",
+   "code": 103,
+   "value": 50,
+   "hex": "02 67 00 32 03 9e"
+  },
+  {
+   "name": "OFF_TIME_RAW_100",
+   "kind": "write",
+   "code": 103,
+   "value": 100,
+   "hex": "02 67 00 64 03 d0"
+  },
+  {
+   "name": "READ_90",
+   "kind": "read",
+   "code": 144,
+   "hex": "02 90 03 95"
+  },
+  {
+   "name": "READ_91",
+   "kind": "read",
+   "code": 145,
+   "hex": "02 91 03 96"
+  },
+  {
+   "name": "READ_96",
+   "kind": "read",
+   "code": 150,
+   "hex": "02 96 03 9b"
+  },
+  {
+   "name": "READ_99",
+   "kind": "read",
+   "code": 153,
+   "hex": "02 99 03 9e"
+  },
+  {
+   "name": "READ_9A",
+   "kind": "read",
+   "code": 154,
+   "hex": "02 9a 03 9f"
+  },
+  {
+   "name": "READ_9C",
+   "kind": "read",
+   "code": 156,
+   "hex": "02 9c 03 a1"
+  },
+  {
+   "name": "READ_9E",
+   "kind": "read",
+   "code": 158,
+   "hex": "02 9e 03 a3"
+  },
+  {
+   "name": "READ_A5",
+   "kind": "read",
+   "code": 165,
+   "hex": "02 a5 03 aa"
+  },
+  {
+   "name": "READ_A6",
+   "kind": "read",
+   "code": 166,
+   "hex": "02 a6 03 ab"
+  },
+  {
+   "name": "READ_A7",
+   "kind": "read",
+   "code": 167,
+   "hex": "02 a7 03 ac"
+  },
+  {
+   "name": "READ_AE",
+   "kind": "read",
+   "code": 174,
+   "hex": "02 ae 03 b3"
+  },
+  {
+   "name": "READ_AF",
+   "kind": "read",
+   "code": 175,
+   "hex": "02 af 03 b4"
+  },
+  {
+   "name": "READ_BB",
+   "kind": "read",
+   "code": 187,
+   "hex": "02 bb 03 c0"
+  },
+  {
+   "name": "READ_BC",
+   "kind": "read",
+   "code": 188,
+   "hex": "02 bc 03 c1"
+  },
+  {
+   "name": "READ_BD",
+   "kind": "read",
+   "code": 189,
+   "hex": "02 bd 03 c2"
+  }
+ ],
+ "functions": {
+  "max_off_time_us": [
+   [
+    0,
+    10.0
+   ],
+   [
+    20,
+    10.0
+   ],
+   [
+    30,
+    10.0
+   ],
+   [
+    40,
+    10.0
+   ],
+   [
+    50,
+    8.0
+   ],
+   [
+    60,
+    6.7
+   ],
+   [
+    70,
+    5.7
+   ],
+   [
+    80,
+    5.0
+   ],
+   [
+    90,
+    4.4
+   ],
+   [
+    100,
+    4.0
+   ],
+   [
+    110,
+    3.6
+   ],
+   [
+    120,
+    3.3
+   ],
+   [
+    130,
+    3.1
+   ],
+   [
+    140,
+    2.9
+   ],
+   [
+    150,
+    2.7
+   ]
+  ],
+  "off_time_to_raw": [
+   [
+    1.0,
+    10
+   ],
+   [
+    2.5,
+    25
+   ],
+   [
+    3.0,
+    30
+   ],
+   [
+    4.04,
+    40
+   ],
+   [
+    5.0,
+    50
+   ],
+   [
+    9.99,
+    100
+   ],
+   [
+    10.0,
+    100
+   ]
+  ],
+  "raw_to_off_time": [
+   [
+    9,
+    null
+   ],
+   [
+    10,
+    1.0
+   ],
+   [
+    32,
+    3.2
+   ],
+   [
+    100,
+    10.0
+   ]
+  ],
+  "duty_to_off": [
+   [
+    20,
+    0,
+    50.0
+   ],
+   [
+    20,
+    50,
+    25.0
+   ],
+   [
+    20,
+    70,
+    15.0
+   ],
+   [
+    20,
+    90,
+    5.0
+   ],
+   [
+    20,
+    100,
+    0.0
+   ],
+   [
+    50,
+    0,
+    20.0
+   ],
+   [
+    50,
+    50,
+    10.0
+   ],
+   [
+    50,
+    70,
+    6.0
+   ],
+   [
+    50,
+    90,
+    2.0
+   ],
+   [
+    50,
+    100,
+    0.0
+   ],
+   [
+    100,
+    0,
+    10.0
+   ],
+   [
+    100,
+    50,
+    5.0
+   ],
+   [
+    100,
+    70,
+    3.0
+   ],
+   [
+    100,
+    90,
+    1.0
+   ],
+   [
+    100,
+    100,
+    0.0
+   ],
+   [
+    150,
+    0,
+    6.7
+   ],
+   [
+    150,
+    50,
+    3.3
+   ],
+   [
+    150,
+    70,
+    2.0
+   ],
+   [
+    150,
+    90,
+    0.7
+   ],
+   [
+    150,
+    100,
+    0.0
+   ]
+  ],
+  "off_to_duty": [
+   [
+    20,
+    1.0,
+    98.0
+   ],
+   [
+    20,
+    3.0,
+    94.0
+   ],
+   [
+    20,
+    5.0,
+    90.0
+   ],
+   [
+    50,
+    1.0,
+    95.0
+   ],
+   [
+    50,
+    3.0,
+    85.0
+   ],
+   [
+    50,
+    5.0,
+    75.0
+   ],
+   [
+    100,
+    1.0,
+    90.0
+   ],
+   [
+    100,
+    3.0,
+    70.0
+   ],
+   [
+    100,
+    5.0,
+    50.0
+   ]
+  ],
+  "arc_reset_state": [
+   [
+    null,
+    null,
+    null,
+    null,
+    "unknown"
+   ],
+   [
+    0,
+    0,
+    0,
+    0,
+    "unknown"
+   ],
+   [
+    2,
+    3,
+    2,
+    3,
+    "no"
+   ],
+   [
+    2,
+    3,
+    0,
+    3,
+    "yes"
+   ],
+   [
+    5,
+    null,
+    4,
+    null,
+    "yes"
+   ],
+   [
+    0,
+    7,
+    0,
+    9,
+    "no"
+   ]
+  ],
+  "arc_split": [
+   [
+    10,
+    5,
+    null,
+    null,
+    {
+     "run_soft": 10,
+     "run_hard": 5,
+     "run_total": 15,
+     "ign_soft": 10,
+     "ign_hard": 5,
+     "ign_total": 15,
+     "depo_soft": 0,
+     "depo_hard": 0,
+     "depo_total": 0,
+     "ign_closed": false
+    }
+   ],
+   [
+    10,
+    5,
+    3,
+    2,
+    {
+     "run_soft": 10,
+     "run_hard": 5,
+     "run_total": 15,
+     "ign_soft": 3,
+     "ign_hard": 2,
+     "ign_total": 5,
+     "depo_soft": 7,
+     "depo_hard": 3,
+     "depo_total": 10,
+     "ign_closed": true
+    }
+   ],
+   [
+    10,
+    5,
+    20,
+    20,
+    {
+     "run_soft": 10,
+     "run_hard": 5,
+     "run_total": 15,
+     "ign_soft": 10,
+     "ign_hard": 5,
+     "ign_total": 15,
+     "depo_soft": 0,
+     "depo_hard": 0,
+     "depo_total": 0,
+     "ign_closed": true
+    }
+   ],
+   [
+    -1,
+    0,
+    0,
+    0,
+    {
+     "run_soft": 0,
+     "run_hard": 0,
+     "run_total": 0,
+     "ign_soft": 0,
+     "ign_hard": 0,
+     "ign_total": 0,
+     "depo_soft": 0,
+     "depo_hard": 0,
+     "depo_total": 0,
+     "ign_closed": true
+    }
+   ]
+  ],
+  "piv_scale_check": [
+   [
+    0,
+    1,
+    1,
+    null
+   ],
+   [
+    100,
+    0,
+    400,
+    null
+   ],
+   [
+    100,
+    0.25,
+    400,
+    [
+     true,
+     0.0
+    ]
+   ],
+   [
+    100,
+    0.3,
+    400,
+    [
+     false,
+     20.0
+    ]
+   ],
+   [
+    500,
+    1.0,
+    600,
+    [
+     false,
+     20.0
+    ]
+   ]
+  ],
+  "overcurrent_limit": [
+   [
+    null,
+    1.0
+   ],
+   [
+    0,
+    1.0
+   ],
+   [
+    100,
+    1.0
+   ],
+   [
+    300,
+    1.0
+   ],
+   [
+    450,
+    1.5
+   ],
+   [
+    600,
+    2.0
+   ],
+   [
+    900,
+    3.0
+   ],
+   [
+    -5,
+    1.0
+   ]
+  ]
+ },
+ "parser": [
+  {
+   "raw": "06",
+   "tokens": [
+    "06"
+   ]
+  },
+  {
+   "raw": "04",
+   "tokens": [
+    "04"
+   ]
+  },
+  {
+   "raw": "06 04 02 9c 00 01 03 a2",
+   "tokens": [
+    "06",
+    "04",
+    "9c 00 01"
+   ]
+  },
+  {
+   "raw": "02 9a 00 0a 00 19 01 90 03 cc",
+   "tokens": []
+  },
+  {
+   "raw": "02 96 03 00 03 9e",
+   "tokens": [
+    "96 03 00"
+   ]
+  },
+  {
+   "raw": "ff 02 9e 00 00 03 a3",
+   "tokens": [
+    "9e 00 00"
+   ]
+  },
+  {
+   "raw": "02 9e 00 00 03 a4 02 9c 00 01 03 a2",
+   "tokens": [
+    "9c 00 01"
+   ]
+  },
+  {
+   "raw": "aa bb 06",
+   "tokens": [
+    "06"
+   ]
+  },
+  {
+   "raw": "02 a7 00 32 03 de",
+   "tokens": [
+    "a7 00 32"
+   ]
+  }
+ ],
+ "cases": [
+  {
+   "name": "start_normal",
+   "call": "prepare_and_start",
+   "args": {
+    "power_w": 100.0,
+    "freq": 50,
+    "off_time_us": 5.0
+   },
+   "sim": {},
+   "pre_on": false,
+   "sent": [
+    "02 7b 00 03 03 83",
+    "02 7c 00 03 03 84",
+    "02 7d 00 03 03 85",
+    "02 9c 03 a1",
+    "02 9e 03 a3",
+    "02 a5 03 aa",
+    "02 66 00 32 03 9d",
+    "02 67 00 32 03 9e",
+    "02 a6 03 ab",
+    "02 a7 03 ac",
+    "02 81 00 03 03 89",
+    "02 83 00 0a 03 92",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 8c 00 02 03 93",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 80 00 01 03 86",
+    "02 9a 03 9f",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 90 03 95"
+   ],
+   "result": true,
+   "last_failure": null,
+   "events": [
+    [
+     "command_confirmed",
+     "MASTER_ONOFF",
+     null
+    ],
+    [
+     "command_confirmed",
+     "MASTER_REFER",
+     null
+    ],
+    [
+     "command_confirmed",
+     "MASTER_MODE",
+     null
+    ],
+    [
+     "command_confirmed",
+     "PULSE_FREQ(50kHz)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "OFF_TIME(5.0us)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "REG_POWER",
+     null
+    ],
+    [
+     "command_confirmed",
+     "REF_POWER(100W)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "ARC_COUNT_RESET",
+     null
+    ],
+    [
+     "command_confirmed",
+     "OUTPUT_ON",
+     null
+    ]
+   ],
+   "duration_s": 8.81
+  },
+  {
+   "name": "start_dc_freq_keep",
+   "call": "prepare_and_start",
+   "args": {
+    "power_w": 200.0,
+    "freq": null,
+    "off_time_us": "DC"
+   },
+   "sim": {},
+   "pre_on": false,
+   "sent": [
+    "02 7b 00 03 03 83",
+    "02 7c 00 03 03 84",
+    "02 7d 00 03 03 85",
+    "02 9c 03 a1",
+    "02 9e 03 a3",
+    "02 a5 03 aa",
+    "02 67 00 09 03 75",
+    "02 a7 03 ac",
+    "02 81 00 03 03 89",
+    "02 83 00 14 03 9c",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 8c 00 02 03 93",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 80 00 01 03 86",
+    "02 9a 03 9f",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 90 03 95"
+   ],
+   "result": true,
+   "last_failure": null,
+   "events": [
+    [
+     "command_confirmed",
+     "MASTER_ONOFF",
+     null
+    ],
+    [
+     "command_confirmed",
+     "MASTER_REFER",
+     null
+    ],
+    [
+     "command_confirmed",
+     "MASTER_MODE",
+     null
+    ],
+    [
+     "command_confirmed",
+     "OFF_TIME(DC)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "REG_POWER",
+     null
+    ],
+    [
+     "command_confirmed",
+     "REF_POWER(200W)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "ARC_COUNT_RESET",
+     null
+    ],
+    [
+     "command_confirmed",
+     "OUTPUT_ON",
+     null
+    ]
+   ],
+   "duration_s": 8.15
+  },
+  {
+   "name": "start_duty_legacy",
+   "call": "prepare_and_start",
+   "args": {
+    "power_w": 100.0,
+    "freq": 100,
+    "duty": 70
+   },
+   "sim": {},
+   "pre_on": false,
+   "sent": [
+    "02 7b 00 03 03 83",
+    "02 7c 00 03 03 84",
+    "02 7d 00 03 03 85",
+    "02 9c 03 a1",
+    "02 9e 03 a3",
+    "02 a5 03 aa",
+    "02 66 00 64 03 cf",
+    "02 67 00 1e 03 8a",
+    "02 a6 03 ab",
+    "02 a7 03 ac",
+    "02 81 00 03 03 89",
+    "02 83 00 0a 03 92",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 8c 00 02 03 93",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 80 00 01 03 86",
+    "02 9a 03 9f",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 90 03 95"
+   ],
+   "result": true,
+   "last_failure": null,
+   "events": [
+    [
+     "command_confirmed",
+     "MASTER_ONOFF",
+     null
+    ],
+    [
+     "command_confirmed",
+     "MASTER_REFER",
+     null
+    ],
+    [
+     "command_confirmed",
+     "MASTER_MODE",
+     null
+    ],
+    [
+     "command_confirmed",
+     "PULSE_FREQ(100kHz)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "OFF_TIME(3.0us)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "REG_POWER",
+     null
+    ],
+    [
+     "command_confirmed",
+     "REF_POWER(100W)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "ARC_COUNT_RESET",
+     null
+    ],
+    [
+     "command_confirmed",
+     "OUTPUT_ON",
+     null
+    ]
+   ],
+   "duration_s": 8.82
+  },
+  {
+   "name": "start_freq_only",
+   "call": "prepare_and_start",
+   "args": {
+    "power_w": 150.0,
+    "freq": 80
+   },
+   "sim": {},
+   "pre_on": false,
+   "sent": [
+    "02 7b 00 03 03 83",
+    "02 7c 00 03 03 84",
+    "02 7d 00 03 03 85",
+    "02 9c 03 a1",
+    "02 9e 03 a3",
+    "02 a5 03 aa",
+    "02 66 00 50 03 bb",
+    "02 a6 03 ab",
+    "02 81 00 03 03 89",
+    "02 83 00 0f 03 97",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 8c 00 02 03 93",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 80 00 01 03 86",
+    "02 9a 03 9f",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 90 03 95"
+   ],
+   "result": true,
+   "last_failure": null,
+   "events": [
+    [
+     "command_confirmed",
+     "MASTER_ONOFF",
+     null
+    ],
+    [
+     "command_confirmed",
+     "MASTER_REFER",
+     null
+    ],
+    [
+     "command_confirmed",
+     "MASTER_MODE",
+     null
+    ],
+    [
+     "command_confirmed",
+     "PULSE_FREQ(80kHz)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "REG_POWER",
+     null
+    ],
+    [
+     "command_confirmed",
+     "REF_POWER(150W)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "ARC_COUNT_RESET",
+     null
+    ],
+    [
+     "command_confirmed",
+     "OUTPUT_ON",
+     null
+    ]
+   ],
+   "duration_s": 8.14
+  },
+  {
+   "name": "start_off_ignored_once",
+   "call": "prepare_and_start",
+   "args": {
+    "power_w": 100.0,
+    "freq": 50,
+    "off_time_us": 4.0
+   },
+   "sim": {
+    "ignore_off_once": true
+   },
+   "pre_on": false,
+   "sent": [
+    "02 7b 00 03 03 83",
+    "02 7c 00 03 03 84",
+    "02 7d 00 03 03 85",
+    "02 9c 03 a1",
+    "02 9e 03 a3",
+    "02 a5 03 aa",
+    "02 66 00 32 03 9d",
+    "02 67 00 28 03 94",
+    "02 a6 03 ab",
+    "02 a7 03 ac",
+    "02 67 00 28 03 94",
+    "02 a7 03 ac",
+    "02 81 00 03 03 89",
+    "02 83 00 0a 03 92",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 8c 00 02 03 93",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 80 00 01 03 86",
+    "02 9a 03 9f",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 90 03 95"
+   ],
+   "result": true,
+   "last_failure": null,
+   "events": [
+    [
+     "command_confirmed",
+     "MASTER_ONOFF",
+     null
+    ],
+    [
+     "command_confirmed",
+     "MASTER_REFER",
+     null
+    ],
+    [
+     "command_confirmed",
+     "MASTER_MODE",
+     null
+    ],
+    [
+     "command_confirmed",
+     "PULSE_FREQ(50kHz)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "OFF_TIME(4.0us)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "OFF_TIME(4.0us)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "REG_POWER",
+     null
+    ],
+    [
+     "command_confirmed",
+     "REF_POWER(100W)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "ARC_COUNT_RESET",
+     null
+    ],
+    [
+     "command_confirmed",
+     "OUTPUT_ON",
+     null
+    ]
+   ],
+   "duration_s": 9.86
+  },
+  {
+   "name": "start_freq_ignored_once",
+   "call": "prepare_and_start",
+   "args": {
+    "power_w": 100.0,
+    "freq": 60,
+    "off_time_us": 3.0
+   },
+   "sim": {
+    "ignore_freq_once": true
+   },
+   "pre_on": false,
+   "sent": [
+    "02 7b 00 03 03 83",
+    "02 7c 00 03 03 84",
+    "02 7d 00 03 03 85",
+    "02 9c 03 a1",
+    "02 9e 03 a3",
+    "02 a5 03 aa",
+    "02 66 00 3c 03 a7",
+    "02 67 00 1e 03 8a",
+    "02 a6 03 ab",
+    "02 66 00 3c 03 a7",
+    "02 a6 03 ab",
+    "02 a7 03 ac",
+    "02 81 00 03 03 89",
+    "02 83 00 0a 03 92",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 8c 00 02 03 93",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 80 00 01 03 86",
+    "02 9a 03 9f",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 90 03 95"
+   ],
+   "result": true,
+   "last_failure": null,
+   "events": [
+    [
+     "command_confirmed",
+     "MASTER_ONOFF",
+     null
+    ],
+    [
+     "command_confirmed",
+     "MASTER_REFER",
+     null
+    ],
+    [
+     "command_confirmed",
+     "MASTER_MODE",
+     null
+    ],
+    [
+     "command_confirmed",
+     "PULSE_FREQ(60kHz)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "OFF_TIME(3.0us)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "PULSE_FREQ(60kHz)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "REG_POWER",
+     null
+    ],
+    [
+     "command_confirmed",
+     "REF_POWER(100W)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "ARC_COUNT_RESET",
+     null
+    ],
+    [
+     "command_confirmed",
+     "OUTPUT_ON",
+     null
+    ]
+   ],
+   "duration_s": 9.86
+  },
+  {
+   "name": "start_remote_mode",
+   "call": "prepare_and_start",
+   "args": {
+    "power_w": 100.0,
+    "freq": 50,
+    "off_time_us": 5.0
+   },
+   "sim": {
+    "ctrl_mode": 2
+   },
+   "pre_on": false,
+   "sent": [
+    "02 7b 00 03 03 83",
+    "02 7c 00 03 03 84",
+    "02 7d 00 03 03 85",
+    "02 9c 03 a1",
+    "02 9c 03 a1"
+   ],
+   "result": false,
+   "last_failure": "PRECHECK: DC Pulse 패널 Operation Mode=REMOTE(0x9C=0x02) — 매뉴얼 p.18: 시리얼 제어 불가, 전면 패널에서 HOST로 전환 후 재시작",
+   "events": [
+    [
+     "command_confirmed",
+     "MASTER_ONOFF",
+     null
+    ],
+    [
+     "command_confirmed",
+     "MASTER_REFER",
+     null
+    ],
+    [
+     "command_confirmed",
+     "MASTER_MODE",
+     null
+    ],
+    [
+     "command_failed",
+     "PRECHECK",
+     "DC Pulse 패널 Operation Mode=REMOTE(0x9C=0x02) — 매뉴얼 p.18: 시리얼 제어 불가, 전면 패널에서 HOST로 전환 후 재시작"
+    ]
+   ],
+   "duration_s": 2.33
+  },
+  {
+   "name": "start_fault_reset",
+   "call": "prepare_and_start",
+   "args": {
+    "power_w": 100.0,
+    "freq": 50,
+    "off_time_us": 5.0
+   },
+   "sim": {
+    "fault": 16
+   },
+   "pre_on": false,
+   "sent": [
+    "02 7b 00 03 03 83",
+    "02 7c 00 03 03 84",
+    "02 7d 00 03 03 85",
+    "02 9c 03 a1",
+    "02 9e 03 a3",
+    "02 6f 00 01 03 75",
+    "02 9e 03 a3",
+    "02 a5 03 aa",
+    "02 66 00 32 03 9d",
+    "02 67 00 32 03 9e",
+    "02 a6 03 ab",
+    "02 a7 03 ac",
+    "02 81 00 03 03 89",
+    "02 83 00 0a 03 92",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 8c 00 02 03 93",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 80 00 01 03 86",
+    "02 9a 03 9f",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 90 03 95"
+   ],
+   "result": true,
+   "last_failure": null,
+   "events": [
+    [
+     "command_confirmed",
+     "MASTER_ONOFF",
+     null
+    ],
+    [
+     "command_confirmed",
+     "MASTER_REFER",
+     null
+    ],
+    [
+     "command_confirmed",
+     "MASTER_MODE",
+     null
+    ],
+    [
+     "command_confirmed",
+     "FAULT_RESET",
+     null
+    ],
+    [
+     "command_confirmed",
+     "PULSE_FREQ(50kHz)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "OFF_TIME(5.0us)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "REG_POWER",
+     null
+    ],
+    [
+     "command_confirmed",
+     "REF_POWER(100W)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "ARC_COUNT_RESET",
+     null
+    ],
+    [
+     "command_confirmed",
+     "OUTPUT_ON",
+     null
+    ]
+   ],
+   "duration_s": 9.11
+  },
+  {
+   "name": "start_freq_out_of_range",
+   "call": "prepare_and_start",
+   "args": {
+    "power_w": 100.0,
+    "freq": 151,
+    "off_time_us": 2.0
+   },
+   "sim": {},
+   "pre_on": false,
+   "sent": [
+    "02 7b 00 03 03 83",
+    "02 7c 00 03 03 84",
+    "02 7d 00 03 03 85",
+    "02 9c 03 a1",
+    "02 9e 03 a3"
+   ],
+   "result": false,
+   "last_failure": "PULSE_PARAM: Pulse Freq 151kHz는 허용 범위 20~150kHz 밖(매뉴얼 p.12/p.50) — 레시피 수정 필요",
+   "events": [
+    [
+     "command_confirmed",
+     "MASTER_ONOFF",
+     null
+    ],
+    [
+     "command_confirmed",
+     "MASTER_REFER",
+     null
+    ],
+    [
+     "command_confirmed",
+     "MASTER_MODE",
+     null
+    ],
+    [
+     "command_failed",
+     "PULSE_PARAM",
+     "Pulse Freq 151kHz는 허용 범위 20~150kHz 밖(매뉴얼 p.12/p.50) — 레시피 수정 필요"
+    ]
+   ],
+   "duration_s": 1.45
+  },
+  {
+   "name": "start_off_over_limit",
+   "call": "prepare_and_start",
+   "args": {
+    "power_w": 100.0,
+    "freq": 100,
+    "off_time_us": 5.0
+   },
+   "sim": {},
+   "pre_on": false,
+   "sent": [
+    "02 7b 00 03 03 83",
+    "02 7c 00 03 03 84",
+    "02 7d 00 03 03 85",
+    "02 9c 03 a1",
+    "02 9e 03 a3"
+   ],
+   "result": false,
+   "last_failure": "PULSE_PARAM: Off Time 5.0us는 100kHz 상한 4.0us 초과(매뉴얼 그림3) — 레시피 수정 필요",
+   "events": [
+    [
+     "command_confirmed",
+     "MASTER_ONOFF",
+     null
+    ],
+    [
+     "command_confirmed",
+     "MASTER_REFER",
+     null
+    ],
+    [
+     "command_confirmed",
+     "MASTER_MODE",
+     null
+    ],
+    [
+     "command_failed",
+     "PULSE_PARAM",
+     "Off Time 5.0us는 100kHz 상한 4.0us 초과(매뉴얼 그림3) — 레시피 수정 필요"
+    ]
+   ],
+   "duration_s": 1.45
+  },
+  {
+   "name": "start_hv_not_on",
+   "call": "prepare_and_start",
+   "args": {
+    "power_w": 100.0,
+    "freq": 50,
+    "off_time_us": 5.0
+   },
+   "sim": {
+    "on_ignored": true
+   },
+   "pre_on": false,
+   "sent": [
+    "02 7b 00 03 03 83",
+    "02 7c 00 03 03 84",
+    "02 7d 00 03 03 85",
+    "02 9c 03 a1",
+    "02 9e 03 a3",
+    "02 a5 03 aa",
+    "02 66 00 32 03 9d",
+    "02 67 00 32 03 9e",
+    "02 a6 03 ab",
+    "02 a7 03 ac",
+    "02 81 00 03 03 89",
+    "02 83 00 0a 03 92",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 8c 00 02 03 93",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 80 00 01 03 86",
+    "02 9a 03 9f",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 90 03 95",
+    "02 9a 03 9f",
+    "02 9e 03 a3",
+    "02 96 03 9b",
+    "02 bb 03 c0",
+    "02 99 03 9e",
+    "02 bc 03 c1",
+    "02 ae 03 b3",
+    "02 bd 03 c2"
+   ],
+   "result": false,
+   "last_failure": "OUTPUT_ON: ACK 수신했지만 HV Off 상태 — 장비가 ON을 무시함 (fault=0x0000, master ONOFF/REFER/MODE=bb0003/bc0003/bd0003)",
+   "events": [
+    [
+     "command_confirmed",
+     "MASTER_ONOFF",
+     null
+    ],
+    [
+     "command_confirmed",
+     "MASTER_REFER",
+     null
+    ],
+    [
+     "command_confirmed",
+     "MASTER_MODE",
+     null
+    ],
+    [
+     "command_confirmed",
+     "PULSE_FREQ(50kHz)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "OFF_TIME(5.0us)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "REG_POWER",
+     null
+    ],
+    [
+     "command_confirmed",
+     "REF_POWER(100W)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "ARC_COUNT_RESET",
+     null
+    ],
+    [
+     "command_confirmed",
+     "OUTPUT_ON",
+     null
+    ],
+    [
+     "telemetry",
+     null,
+     null
+    ],
+    [
+     "command_failed",
+     "OUTPUT_ON",
+     "ACK 수신했지만 HV Off 상태 — 장비가 ON을 무시함 (fault=0x0000, master ONOFF/REFER/MODE=bb0003/bc0003/bd0003)"
+    ]
+   ],
+   "duration_s": 10.02
+  },
+  {
+   "name": "start_sync_ext",
+   "call": "prepare_and_start",
+   "args": {
+    "power_w": 100.0,
+    "freq": 50,
+    "off_time_us": 5.0
+   },
+   "sim": {
+    "sync": 1
+   },
+   "pre_on": false,
+   "sent": [
+    "02 7b 00 03 03 83",
+    "02 7c 00 03 03 84",
+    "02 7d 00 03 03 85",
+    "02 9c 03 a1",
+    "02 9e 03 a3",
+    "02 a5 03 aa",
+    "02 65 00 00 03 6a",
+    "02 66 00 32 03 9d",
+    "02 67 00 32 03 9e",
+    "02 a6 03 ab",
+    "02 a7 03 ac",
+    "02 81 00 03 03 89",
+    "02 83 00 0a 03 92",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 8c 00 02 03 93",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 80 00 01 03 86",
+    "02 9a 03 9f",
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 9a 03 9f",
+    "02 90 03 95"
+   ],
+   "result": true,
+   "last_failure": null,
+   "events": [
+    [
+     "command_confirmed",
+     "MASTER_ONOFF",
+     null
+    ],
+    [
+     "command_confirmed",
+     "MASTER_REFER",
+     null
+    ],
+    [
+     "command_confirmed",
+     "MASTER_MODE",
+     null
+    ],
+    [
+     "command_confirmed",
+     "PULSE_SYNC(INT)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "PULSE_FREQ(50kHz)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "OFF_TIME(5.0us)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "REG_POWER",
+     null
+    ],
+    [
+     "command_confirmed",
+     "REF_POWER(100W)",
+     null
+    ],
+    [
+     "command_confirmed",
+     "ARC_COUNT_RESET",
+     null
+    ],
+    [
+     "command_confirmed",
+     "OUTPUT_ON",
+     null
+    ]
+   ],
+   "duration_s": 8.97
+  },
+  {
+   "name": "off_after_on",
+   "call": "output_off",
+   "args": {},
+   "sim": {},
+   "pre_on": true,
+   "sent": [
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 80 00 02 03 87"
+   ],
+   "result": true,
+   "last_failure": null,
+   "events": [
+    [
+     "command_confirmed",
+     "OUTPUT_OFF",
+     null
+    ]
+   ],
+   "duration_s": 0.33
+  },
+  {
+   "name": "off_err_reopen",
+   "call": "output_off",
+   "args": {},
+   "sim": {
+    "off_err_n": 1
+   },
+   "pre_on": true,
+   "sent": [
+    "02 96 03 9b",
+    "02 99 03 9e",
+    "02 80 00 02 03 87",
+    "02 90 03 95",
+    "02 90 03 95",
+    "02 9e 03 a3",
+    "02 80 00 02 03 87"
+   ],
+   "result": true,
+   "last_failure": null,
+   "events": [
+    [
+     "command_confirmed",
+     "OUTPUT_OFF",
+     null
+    ]
+   ],
+   "duration_s": 3.47
+  },
+  {
+   "name": "off_unused",
+   "call": "output_off_unused",
+   "args": {},
+   "sim": {},
+   "pre_on": false,
+   "sent": [
+    "02 80 00 02 03 87"
+   ],
+   "result": true,
+   "last_failure": null,
+   "events": [
+    [
+     "command_confirmed",
+     "OUTPUT_OFF_UNUSED",
+     null
+    ]
+   ],
+   "duration_s": 0.77
+  },
+  {
+   "name": "set_reference_power",
+   "call": "set_reference_power",
+   "args": {
+    "value_w": 250.0
+   },
+   "sim": {},
+   "pre_on": false,
+   "sent": [
+    "02 83 00 19 03 a1"
+   ],
+   "result": true,
+   "last_failure": null,
+   "events": [
+    [
+     "command_confirmed",
+     "REF_POWER(250W)",
+     null
+    ]
+   ],
+   "duration_s": 0.77
+  },
+  {
+   "name": "read_actual_pulse_params",
+   "call": "read_actual_pulse_params",
+   "args": {},
+   "sim": {
+    "freq_khz": 80,
+    "off_raw": 30
+   },
+   "pre_on": false,
+   "sent": [
+    "02 a6 03 ab",
+    "02 a7 03 ac"
+   ],
+   "result": {
+    "freq_khz": 80,
+    "off_time_us": 3.0,
+    "duty_pct": 76.0
+   },
+   "last_failure": null,
+   "events": [],
+   "duration_s": 0.92
+  }
+ ]
+}

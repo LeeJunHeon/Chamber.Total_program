@@ -15,7 +15,7 @@ V1_TOP = {"lib", "core", "device", "controller", "runtime", "host", "util", "ui"
           "config", "recipes", "tests", "integrations", "dll"}
 BASE_ALLOWED = set(sys.stdlib_module_names) | {"v2", "pytest", "__future__", "serial"}
 EXTRA = {"ch12/outputs": {"openpyxl", "cv2", "numpy"}, "ch12/drivers/camera.py": {"cv2", "numpy"},
-         "ch12/workers": {"cv2", "numpy", "pyvisa", "usb", "clr", "pythoncom", "win32com", "serial"}}
+         "ch12/workers": {"cv2", "numpy", "pyvisa", "usb", "clr", "pythoncom", "win32com", "serial", "srsinst"}}
 
 
 def _imports(path: Path):

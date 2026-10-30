@@ -16,12 +16,11 @@ v2 연결부: 명령 id(응답 매칭은 id — v1 은 out_csv 문자열), 하�
 from __future__ import annotations
 
 import contextlib
-import csv
 import itertools
 import os
 import subprocess
 import threading
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -29,6 +28,7 @@ from typing import Any, Callable, Dict, List, Optional
 from v2.common.snapshot import DeviceBlock, FieldDef, FType
 from v2.ch12.drivers import worker_proc as wp
 from v2.ch12.drivers.oes_oneshot import OneShotMixin
+from v2.ch12.drivers.oes_tail import TailMixin, _Tail
 
 MODULE = "v2.ch12.workers.oes_worker"
 SAMPLE_INTERVAL_S = 1.0       # v1 OESAsync 생성자 기본값(device/oes.py:155)
@@ -75,15 +75,6 @@ class _Waiter:
     result: Optional[dict] = None
 
 
-@dataclass
-class _Tail:
-    path: Path
-    stop: bool = False
-    thread: Optional[threading.Thread] = None
-    x: Optional[list] = None
-    extra: Dict[str, Any] = field(default_factory=dict)
-
-
 def _flag(v: Any) -> bool:
     return str(v).strip().lower() in {"1", "true", "yes", "y", "on"}
 
@@ -92,7 +83,7 @@ def make_filename(now: Optional[datetime] = None) -> str:
     return f"OES_Data_{(now or datetime.now()).strftime('%Y%m%d_%H%M%S')}.csv"
 
 
-class OesLink(OneShotMixin):
+class OesLink(OneShotMixin, TailMixin):
     NAME = "oes"
 
     def __init__(self, clock, worker, cfg: Dict[str, Any], writes_allowed: bool,
@@ -412,6 +403,8 @@ class OesLink(OneShotMixin):
             if not force and d is not None and d.alive() and self._daemon_ready:
                 return True
             self._shutdown_daemon(graceful=True)
+            if self._closing:                 # 프로그램 종료 중에는 새로 띄우지 않는다
+                return False
             base = self._worker_argv()
             if base is None:
                 self.init_error = "daemon 워커 exe 없음"
@@ -548,6 +541,8 @@ class OesLink(OneShotMixin):
         try:
             return self._run_daemon(duration_s, integration_ms)
         except Exception as e1:
+            if self._closing:
+                return OesResult(emitted=False, reason="CLOSING")
             if self._stop_requested:
                 self._status(f"[OES] stop 요청으로 종료됨 → fallback 재기동 skip ({type(e1).__name__})")
                 return OesResult(emitted=False, reason="STOPPED")
@@ -559,6 +554,8 @@ class OesLink(OneShotMixin):
                     return self._run_daemon(duration_s, integration_ms)
                 except Exception as e2:
                     self._status(f"[OES] daemon 재시도 실패 → one-shot fallback: {type(e2).__name__}: {e2}")
+            if self._closing:
+                return OesResult(emitted=False, reason="CLOSING")
             return self._run_oneshot(duration_s, integration_ms)
 
     def _stop_impl(self, wait: bool, timeout_s: float) -> None:
@@ -602,107 +599,3 @@ class OesLink(OneShotMixin):
         if csv_flag is not None:
             with contextlib.suppress(OSError):
                 csv_flag.write_text("stop\n", encoding="utf-8")
-
-    # ───────── CSV tail (v1 device/oes.py:1328-1458) ─────────
-    def _start_tail(self, path: Path) -> None:
-        tail = _Tail(path)
-        self._tail = tail
-        tail.thread = self.clock.start_thread(lambda: self._tail_run(tail), f"oes{self.ch}-tail")
-
-    def _stop_tail(self) -> None:
-        tail, self._tail = self._tail, None
-        if tail is None:
-            return
-        tail.stop = True
-        self.clock.notify()
-        if tail.thread is not None and tail.thread is not threading.current_thread():
-            tail.thread.join(2.0)
-
-    def _sleep(self, tail: _Tail, s: float) -> bool:
-        """s 초 쉼. 그 사이 멈추라면 False."""
-        self.clock.wait_until(self.clock.monotonic() + s, lambda: tail.stop)
-        return not tail.stop
-
-    def _tail_run(self, tail: _Tail) -> None:
-        poll = self._f("OES_CSV_TAIL_S", 0.1)
-        t0 = last_log = self.clock.monotonic()
-        path = tail.path
-        while not tail.stop:
-            try:
-                if path.exists() and path.stat().st_size > 0:
-                    break
-            except OSError:
-                pass
-            p = self._proc
-            if p is not None and p.exited:
-                self._status(f"[OES] CSV 미생성 상태로 워커 종료됨 rc={p.returncode} path={path}")
-                return
-            d = self._daemon
-            if d is not None and d.exited:
-                self._status(f"[OES] CSV 미생성 상태로 daemon 종료됨 rc={d.returncode} path={path}")
-                return
-            now = self.clock.monotonic()
-            if now - last_log > 5.0:
-                last_log = now
-                self._status(f"[OES] CSV 생성 대기중... {(last_log - t0):.1f}s path={path}")
-            if now - t0 > self._f("OES_CSV_CREATE_TIMEOUT_S", 60.0):
-                self._status(f"[OES] CSV 생성 대기 TIMEOUT({self._f('OES_CSV_CREATE_TIMEOUT_S', 60.0):g}s) path={path} → 워커/daemon kill")
-                if p is not None and p.alive():
-                    p.kill()
-                    p.wait(5.0)
-                    return
-                if d is not None and d.alive():
-                    with self._daemon_lock:
-                        self._shutdown_daemon(graceful=False)
-                return
-            if not self._sleep(tail, poll):
-                return
-        try:
-            with open(path, "r", encoding="utf-8", newline="") as f:
-                header: List[str] = []
-                while not tail.stop:
-                    line = f.readline()
-                    if not line:
-                        if not self._sleep(tail, poll):
-                            return
-                        continue
-                    try:
-                        header = [c.strip() for c in next(csv.reader([line]))]
-                    except Exception:
-                        continue
-                    break
-                if len(header) < 2:
-                    return
-                try:
-                    x = [float(c) for c in header[1:]]
-                except ValueError:
-                    x = [float(i) for i in range(len(header) - 1)]   # 하나라도 실패하면 인덱스(길이 보장)
-                tail.x = x
-                last_data = self.clock.monotonic()
-                while not tail.stop:
-                    line = f.readline()
-                    if not line:
-                        p = self._proc
-                        if p is not None and p.exited and self.clock.monotonic() - last_data > 3.0:
-                            return
-                        if not self._sleep(tail, poll):
-                            return
-                        continue
-                    last_data = self.clock.monotonic()
-                    try:
-                        parts = [c.strip() for c in next(csv.reader([line]))]
-                        ys = [float(c) for c in parts[1:]]
-                    except Exception:
-                        continue
-                    if len(parts) < 2:
-                        continue
-                    n = min(len(x), len(ys))
-                    self._rows_seen += 1
-                    self._last_sample = self.clock.monotonic()
-                    if self.on_data:
-                        try:
-                            self.on_data(x[:n], ys[:n])
-                        except Exception:
-                            pass
-        except OSError:
-            return

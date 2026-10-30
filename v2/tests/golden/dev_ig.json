@@ -1,0 +1,450 @@
+{
+ "meta": {
+  "source": "v1 device/ig.py AsyncIG — 실제 실행",
+  "generator": "v2/tools/v1golden_ig.py",
+  "timing_overrides": {
+   "IG_GAP_MS": 30,
+   "IG_FIRST_READ_DELAY_MS": 50,
+   "IG_WATCHDOG_INTERVAL_MS": 20,
+   "IG_RECONNECT_BACKOFF_START_MS": 20,
+   "IG_RECONNECT_BACKOFF_MAX_MS": 40,
+   "IG_REIGNITE_BACKOFF_MS": [
+    20,
+    20,
+    20
+   ]
+  },
+  "ch1_IG_WAIT_TIMEOUT": 900,
+  "ch2_IG_WAIT_TIMEOUT": 900,
+  "default_cfg_module": "lib.config_ch2",
+  "fake_device": "SIG 1 → 'OK'(또는 사례 값), SIG 0 → 'OK', RDI → 사례 목록 차례로(마지막 반복), 줄 끝 CR LF"
+ },
+ "cases": [
+  {
+   "name": "base_reached",
+   "chamber": "ch1",
+   "steps": [
+    "wait"
+   ],
+   "target": 1e-05,
+   "interval_ms": null,
+   "rdi": [
+    "1.5x10e-5",
+    "1.2x10e-5",
+    "8.1x10e-6"
+   ],
+   "sig1": "OK",
+   "cfg": {},
+   "default_cfg": false,
+   "cfg_used": "SimpleNamespace(채널 모듈 복사)",
+   "result": true,
+   "sent": [
+    "53494720310d",
+    "5244490d",
+    "5244490d",
+    "5244490d",
+    "53494720300d"
+   ],
+   "sent_text": [
+    "SIG 1",
+    "RDI",
+    "RDI",
+    "RDI",
+    "SIG 0"
+   ],
+   "events": [
+    {
+     "kind": "pressure",
+     "message": null,
+     "pressure": 1.5e-05
+    },
+    {
+     "kind": "pressure",
+     "message": null,
+     "pressure": 1.2e-05
+    },
+    {
+     "kind": "pressure",
+     "message": null,
+     "pressure": 8.1e-06
+    },
+    {
+     "kind": "base_reached",
+     "message": null,
+     "pressure": null
+    }
+   ]
+  },
+  {
+   "name": "ig_on_failed",
+   "chamber": "ch1",
+   "steps": [
+    "wait"
+   ],
+   "target": 1e-05,
+   "interval_ms": null,
+   "rdi": [
+    "1.0x10e-6"
+   ],
+   "sig1": "ERR",
+   "cfg": {},
+   "default_cfg": false,
+   "cfg_used": "SimpleNamespace(채널 모듈 복사)",
+   "result": false,
+   "sent": [
+    "53494720310d",
+    "53494720310d",
+    "53494720310d",
+    "53494720310d",
+    "53494720310d",
+    "53494720300d"
+   ],
+   "sent_text": [
+    "SIG 1",
+    "SIG 1",
+    "SIG 1",
+    "SIG 1",
+    "SIG 1",
+    "SIG 0"
+   ],
+   "events": [
+    {
+     "kind": "base_failed",
+     "message": "IG ON 실패",
+     "pressure": null
+    }
+   ]
+  },
+  {
+   "name": "reignite_then_reached",
+   "chamber": "ch2",
+   "steps": [
+    "wait"
+   ],
+   "target": 1e-05,
+   "interval_ms": null,
+   "rdi": [
+    "IG OFF",
+    "5.0x10e-6"
+   ],
+   "sig1": "OK",
+   "cfg": {},
+   "default_cfg": false,
+   "cfg_used": "SimpleNamespace(채널 모듈 복사)",
+   "result": true,
+   "sent": [
+    "53494720310d",
+    "5244490d",
+    "53494720310d",
+    "5244490d",
+    "53494720300d"
+   ],
+   "sent_text": [
+    "SIG 1",
+    "RDI",
+    "SIG 1",
+    "RDI",
+    "SIG 0"
+   ],
+   "events": [
+    {
+     "kind": "pressure",
+     "message": null,
+     "pressure": 5e-06
+    },
+    {
+     "kind": "base_reached",
+     "message": null,
+     "pressure": null
+    }
+   ]
+  },
+  {
+   "name": "reignite_limit",
+   "chamber": "ch2",
+   "steps": [
+    "wait"
+   ],
+   "target": 1e-05,
+   "interval_ms": null,
+   "rdi": [
+    "IG OFF"
+   ],
+   "sig1": "OK",
+   "cfg": {},
+   "default_cfg": false,
+   "cfg_used": "SimpleNamespace(채널 모듈 복사)",
+   "result": false,
+   "sent": [
+    "53494720310d",
+    "5244490d",
+    "53494720310d",
+    "5244490d",
+    "53494720310d",
+    "5244490d",
+    "53494720310d",
+    "5244490d",
+    "53494720300d"
+   ],
+   "sent_text": [
+    "SIG 1",
+    "RDI",
+    "SIG 1",
+    "RDI",
+    "SIG 1",
+    "RDI",
+    "SIG 1",
+    "RDI",
+    "SIG 0"
+   ],
+   "events": [
+    {
+     "kind": "base_failed",
+     "message": "ReigniteLimit",
+     "pressure": null
+    }
+   ]
+  },
+  {
+   "name": "wait_timeout_no_tail",
+   "chamber": "ch1",
+   "steps": [
+    "wait"
+   ],
+   "target": 1e-05,
+   "interval_ms": 100,
+   "rdi": [
+    "5.0x10e-5"
+   ],
+   "sig1": "OK",
+   "cfg": {
+    "IG_WAIT_TIMEOUT": 0.25
+   },
+   "default_cfg": false,
+   "cfg_used": "SimpleNamespace(채널 모듈 복사)",
+   "result": false,
+   "sent": [
+    "53494720310d",
+    "5244490d",
+    "5244490d",
+    "5244490d",
+    "53494720300d",
+    "53494720300d"
+   ],
+   "sent_text": [
+    "SIG 1",
+    "RDI",
+    "RDI",
+    "RDI",
+    "SIG 0",
+    "SIG 0"
+   ],
+   "events": [
+    {
+     "kind": "pressure",
+     "message": null,
+     "pressure": 5e-05
+    },
+    {
+     "kind": "pressure",
+     "message": null,
+     "pressure": 5e-05
+    },
+    {
+     "kind": "pressure",
+     "message": null,
+     "pressure": 5e-05
+    },
+    {
+     "kind": "base_failed",
+     "message": "목표 압력 도달 실패",
+     "pressure": null
+    }
+   ]
+  },
+  {
+   "name": "parse_fail_then_reached",
+   "chamber": "ch1",
+   "steps": [
+    "wait"
+   ],
+   "target": 1e-05,
+   "interval_ms": null,
+   "rdi": [
+    "abc",
+    "1.0x10e-6"
+   ],
+   "sig1": "OK",
+   "cfg": {},
+   "default_cfg": false,
+   "cfg_used": "SimpleNamespace(채널 모듈 복사)",
+   "result": true,
+   "sent": [
+    "53494720310d",
+    "5244490d",
+    "5244490d",
+    "53494720300d"
+   ],
+   "sent_text": [
+    "SIG 1",
+    "RDI",
+    "RDI",
+    "SIG 0"
+   ],
+   "events": [
+    {
+     "kind": "pressure",
+     "message": null,
+     "pressure": 1e-06
+    },
+    {
+     "kind": "base_reached",
+     "message": null,
+     "pressure": null
+    }
+   ]
+  },
+  {
+   "name": "cancel_wait",
+   "chamber": "ch2",
+   "steps": [
+    "wait_then_cancel"
+   ],
+   "target": 1e-05,
+   "interval_ms": 100,
+   "rdi": [
+    "5.0x10e-5"
+   ],
+   "sig1": "OK",
+   "cfg": {},
+   "default_cfg": false,
+   "cfg_used": "SimpleNamespace(채널 모듈 복사)",
+   "result": false,
+   "sent": [
+    "53494720310d",
+    "5244490d",
+    "5244490d",
+    "5244490d",
+    "53494720300d",
+    "53494720300d"
+   ],
+   "sent_text": [
+    "SIG 1",
+    "RDI",
+    "RDI",
+    "RDI",
+    "SIG 0",
+    "SIG 0"
+   ],
+   "events": [
+    {
+     "kind": "pressure",
+     "message": null,
+     "pressure": 5e-05
+    },
+    {
+     "kind": "pressure",
+     "message": null,
+     "pressure": 5e-05
+    },
+    {
+     "kind": "pressure",
+     "message": null,
+     "pressure": 5e-05
+    }
+   ]
+  },
+  {
+   "name": "ensure_read_off",
+   "chamber": "ch1",
+   "steps": [
+    "ensure_on",
+    "read_pressure",
+    "ensure_off"
+   ],
+   "target": null,
+   "interval_ms": null,
+   "rdi": [
+    "3.3x10e-6"
+   ],
+   "sig1": "OK",
+   "cfg": {},
+   "default_cfg": false,
+   "cfg_used": "SimpleNamespace(채널 모듈 복사)",
+   "result": 3.3e-06,
+   "sent": [
+    "53494720310d",
+    "5244490d",
+    "53494720300d"
+   ],
+   "sent_text": [
+    "SIG 1",
+    "RDI",
+    "SIG 0"
+   ],
+   "events": []
+  },
+  {
+   "name": "bg_poll",
+   "chamber": "ch2",
+   "steps": [
+    "bg_poll"
+   ],
+   "target": null,
+   "interval_ms": null,
+   "rdi": [
+    "2.0x10e-6"
+   ],
+   "sig1": "OK",
+   "cfg": {
+    "IG_POLLING_INTERVAL_MS": 50
+   },
+   "default_cfg": false,
+   "cfg_used": "SimpleNamespace(채널 모듈 복사)",
+   "result": null,
+   "sent": [
+    "5244490d"
+   ],
+   "sent_text": [
+    "RDI"
+   ],
+   "events": [
+    {
+     "kind": "pressure",
+     "message": null,
+     "pressure": 2e-06
+    }
+   ]
+  },
+  {
+   "name": "tsp_default_cfg",
+   "chamber": "tsp",
+   "steps": [
+    "ensure_on",
+    "read_pressure",
+    "ensure_off"
+   ],
+   "target": null,
+   "interval_ms": null,
+   "rdi": [
+    "4.0x10e-7"
+   ],
+   "sig1": "OK",
+   "cfg": {},
+   "default_cfg": true,
+   "cfg_used": "lib.config_ch2",
+   "result": 4e-07,
+   "sent": [
+    "53494720310d",
+    "5244490d",
+    "53494720300d"
+   ],
+   "sent_text": [
+    "SIG 1",
+    "RDI",
+    "SIG 0"
+   ],
+   "events": []
+  }
+ ]
+}

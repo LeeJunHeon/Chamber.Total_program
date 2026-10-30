@@ -546,7 +546,8 @@ def write(res: Result, out_dir: Path, *, table=None, force: bool = False) -> Res
     return res
 
 
-def _print(res: Result, out=sys.stdout) -> None:
+def _print(res: Result, out=None) -> None:
+    out = out or sys.stdout
     s = res.summary()
     print(f"변환 {s['converted']} · 버림 {s['dropped']} · 보류 {s['pending']} · 오류 {s['errors']} · "
           f"사용자 확인 {s['confirm']} · 데이터 파일 {s['files']} · 저장 {res.store_status or '-'}", file=out)

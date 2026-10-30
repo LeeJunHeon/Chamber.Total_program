@@ -1,0 +1,7 @@
+﻿#,Process_name,delay,chuck_position,main_shutter,integration_time,Ar,O2,N2,Ar_flow,O2_flow,N2_flow,base_pressure,working_pressure,shutter_delay,process_time,dep_rate,thickness,tooling,density,z_factor,gun1,gun2,gun3,G1 Target,G2 Target,G3 Target,power_select,use_dc_power,dc_power,use_dc_power2,dc_power2,use_rf_power,rf_power,use_dc_pulse,dc_pulse_power,dc_pulse_freq,dc_pulse_off_time,use_rf_pulse,rf_pulse_power,rf_pulse_freq,rf_pulse_duty_cycle,power_change_time,change_power_value,use_heater,heater_temp,heater_ramp,heater_soak
+1,a,,down,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,
+,,,
+,,20m
+test,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,,x,y
+,  ,,up

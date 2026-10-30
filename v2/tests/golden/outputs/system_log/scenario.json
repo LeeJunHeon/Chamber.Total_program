@@ -1,0 +1,23 @@
+{
+ "lines": [
+  [
+   "2026-10-30T23:59:59.900000",
+   "CH1:Process",
+   "자정 전 줄"
+  ],
+  [
+   "2026-10-31T00:00:00.100000",
+   "HOSTLOG",
+   "자정 뒤 줄 — 새 파일"
+  ],
+  [
+   "2026-10-31T00:00:01.000000",
+   "WARN/DUMP",
+   "Runtime dump skipped(manual_button): runtime dump already in progress"
+  ]
+ ],
+ "files": [
+  "로컬/VanaM_Logs/CH1&2/SYSTEM/20261030.log",
+  "로컬/VanaM_Logs/CH1&2/SYSTEM/20261031.log"
+ ]
+}

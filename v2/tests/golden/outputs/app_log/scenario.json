@@ -1,0 +1,125 @@
+{
+ "t0": "2026-10-30T09:00:00",
+ "logger": "CH_1_2_program",
+ "cfg": {},
+ "records": [
+  {
+   "t": "2026-10-30T09:00:00.001",
+   "level": "INFO",
+   "msg": "system logging ready. root=%s",
+   "args": [
+    "C:\\x"
+   ]
+  },
+  {
+   "t": "2026-10-30T09:00:01.999",
+   "level": "WARNING",
+   "msg": "[%s] %s",
+   "args": [
+    "WARN/DUMP",
+    "덤프 건너뜀"
+   ]
+  },
+  {
+   "t": "2026-10-30T09:00:02.500",
+   "level": "ERROR",
+   "msg": "TASK CRASHED",
+   "args": [],
+   "exc": "boom 한글"
+  },
+  {
+   "t": "2026-10-30T09:00:03.000",
+   "level": "CRITICAL",
+   "msg": "PROCESS SIGNAL RECEIVED: %s (%s)",
+   "args": [
+    "SIGINT",
+    2
+   ]
+  },
+  {
+   "t": "2026-10-30T09:00:04.000",
+   "level": "DEBUG",
+   "msg": "버려짐",
+   "args": []
+  }
+ ],
+ "classify": [
+  [
+   "ERROR/DUMP",
+   "x"
+  ],
+  [
+   "CH1:Process",
+   "❌ 실패"
+  ],
+  [
+   "PLC",
+   "2026-10-30 09:00:00 [CMD] WARN 늦음"
+  ],
+  [
+   "WARN",
+   "a"
+  ],
+  [
+   "CH2",
+   "⚠ 경고"
+  ],
+  [
+   "CH2",
+   "정상"
+  ],
+  [
+   "ERR",
+   "x"
+  ],
+  [
+   "x",
+   "error: lower"
+  ]
+ ],
+ "levels": [
+  [
+   "ERROR/DUMP",
+   "x",
+   40
+  ],
+  [
+   "CH1:Process",
+   "❌ 실패",
+   40
+  ],
+  [
+   "PLC",
+   "2026-10-30 09:00:00 [CMD] WARN 늦음",
+   30
+  ],
+  [
+   "WARN",
+   "a",
+   30
+  ],
+  [
+   "CH2",
+   "⚠ 경고",
+   30
+  ],
+  [
+   "CH2",
+   "정상",
+   20
+  ],
+  [
+   "ERR",
+   "x",
+   40
+  ],
+  [
+   "x",
+   "error: lower",
+   40
+  ]
+ ],
+ "files": [
+  "로컬/VanaM_Logs/CH1&2/ERROR/CH_1_2_program_20261030.log"
+ ]
+}

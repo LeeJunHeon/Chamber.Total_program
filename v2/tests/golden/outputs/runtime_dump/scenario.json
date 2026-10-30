@@ -1,0 +1,92 @@
+{
+ "reason": "manual_button",
+ "state": {
+  "runtime_state": {
+   "ch1": "running",
+   "ch2": "idle",
+   "pc": null
+  },
+  "pc_use_ch": 1,
+  "plc_owner": null,
+  "closing_started": false,
+  "close_ready": true,
+  "plc": {
+   "connected": true,
+   "host": "127.0.0.1",
+   "port": 502
+  },
+  "ch1": {
+   "state": "running",
+   "step": 3,
+   "name": "ITO 공정 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+  },
+  "server_page": null
+ },
+ "v1_name_pattern": "runtime_dump_20261030_082525_manual_button_pid<pid>.txt",
+ "v1_snapshot_keys": [
+  "meta",
+  "threads",
+  "ui",
+  "asyncio",
+  "objects"
+ ],
+ "v1_meta_keys": [
+  "timestamp",
+  "pid",
+  "python",
+  "executable",
+  "argv",
+  "platform",
+  "cwd"
+ ],
+ "v1_ui": {
+  "plain_text": {},
+  "text": {},
+  "line_edit": {},
+  "spin": {},
+  "combo": {},
+  "buttons": {},
+  "labels": {},
+  "misc": {}
+ },
+ "v1_asyncio": {
+  "available": false,
+  "reason": "loop is None"
+ },
+ "v1_objects": {
+  "runtime_state": {
+   "ch1": "'running'",
+   "ch2": "'idle'",
+   "pc": "None"
+  },
+  "pc_use_ch": {
+   "type": "builtins.int",
+   "repr": "1"
+  },
+  "plc_owner": null,
+  "closing_started": {
+   "type": "builtins.bool",
+   "repr": "False"
+  },
+  "close_ready": {
+   "type": "builtins.bool",
+   "repr": "True"
+  },
+  "plc": {
+   "connected": "True",
+   "host": "'127.0.0.1'",
+   "port": "502"
+  },
+  "ch1": {
+   "state": "'running'",
+   "step": "3",
+   "name": "'ITO 공정 xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx ...[truncated]"
+  },
+  "server_page": null
+ },
+ "v1_frame": [
+  "=== SNAPSHOT(JSON) ===",
+  true,
+  true
+ ]
+}

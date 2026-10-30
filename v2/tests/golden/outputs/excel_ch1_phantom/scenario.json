@@ -1,0 +1,57 @@
+{
+ "ch": 1,
+ "main_dir": "G/공유 드라이브/VanaM_Sputter/Process_log",
+ "pre": "phantom",
+ "records": [
+  {
+   "events": [
+    [
+     "start",
+     {
+      "t0_wall": "2026-10-30T13:00:00",
+      "Process_name": "RF only",
+      "use_ms": true,
+      "use_rf_power": true,
+      "rf_power": 100.0,
+      "G1 Target": "Al",
+      "G2 Target": "버림",
+      "G3 Target": "버림",
+      "process_time": 7.5,
+      "working_pressure": 2.0,
+      "Ar_flow": 10.0,
+      "chuck_position": "up"
+     }
+    ],
+    [
+     "ig",
+     2e-06
+    ],
+    [
+     "shutter_open"
+    ],
+    [
+     "rf",
+     100.0,
+     1.0
+    ],
+    [
+     "rf",
+     120.0,
+     3.0
+    ],
+    [
+     "flow",
+     "Ar",
+     12.0
+    ],
+    [
+     "pressure",
+     2.5
+    ]
+   ]
+  }
+ ],
+ "files": [
+  "G/공유 드라이브/VanaM_Sputter/Process_log/CH1.xlsx"
+ ]
+}

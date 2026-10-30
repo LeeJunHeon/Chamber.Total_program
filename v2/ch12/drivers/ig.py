@@ -252,7 +252,7 @@ class IgDriver:
         self._run("ENSURE_ON", ig_ops.ensure_on(self), on_done)
 
     def ensure_off(self, on_done=None) -> None:
-        self._run("ENSURE_OFF", ig_ops.off_best_effort(self, 300), on_done)
+        self._run("ENSURE_OFF", ig_ops.ensure_off(self), on_done)
 
     def read_pressure(self, on_done=None) -> None:
         """RDI 1회(재시도 0) — on_done(…, None, 'Torr 값') 또는 'RDI timeout'·'parse error: …'(device/ig.py:1162-1177)."""

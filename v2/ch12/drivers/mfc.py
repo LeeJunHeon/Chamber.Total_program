@@ -428,7 +428,8 @@ class MfcDriver:
     def is_connected(self) -> bool:
         return bool(self.worker.connected) and not self.shutdown
 
-    def _run(self, key: str, gen, on_done, owner=None, channel=None, kind: str = "write") -> None:
+    def _run(self, key: str, gen, on_done, owner=None, channel=None, kind: str = "write", quiet: bool = False) -> None:
+        """op 시작 — 끝나면 v1 처럼 command_confirmed/command_failed 이벤트(quiet 면 생성기가 직접 낸다) + on_done."""
         if kind == "write" and not self.writes_allowed:
             if on_done:
                 on_done(key, "BENCH_READ_ONLY", "bench — 장비 쓰기 금지")
@@ -437,11 +438,11 @@ class MfcDriver:
         def fin(op, reason, detail):
             if reason == mfc_ops.PENDING:
                 return
-            if reason is None:
-                if not op.meta.get("quiet"):
+            if not quiet:
+                if reason is None:
                     self.emit("command_confirmed", cmd=key, owner=owner, channel=channel)
-            elif not op.meta.get("quiet_fail"):
-                self.emit("command_failed", detail, reason=reason, cmd=key, owner=owner, channel=channel)
+                else:
+                    self.emit("command_failed", detail, reason=reason, cmd=key, owner=owner, channel=channel)
             if on_done:
                 on_done(key, reason, detail)
         self.runner.start(key, gen, fin, kind=kind)
@@ -508,10 +509,10 @@ class MfcDriver:
                   on_done, owner, kind="read")
 
     def read_flow_all(self, owner: Optional[str] = None, on_done=None) -> None:
-        self._run("READ_FLOW", mfc_ops.read_flow_all(self, owner), on_done, owner, kind="read")
+        self._run("READ_FLOW", mfc_ops.read_flow_all(self, owner), on_done, owner, kind="read", quiet=True)
 
     def read_pressure(self, owner: Optional[str] = None, on_done=None) -> None:
-        self._run("READ_PRESSURE", mfc_ops.read_pressure_cmd(self, owner), on_done, owner, kind="read")
+        self._run("READ_PRESSURE", mfc_ops.read_pressure_cmd(self, owner), on_done, owner, kind="read", quiet=True)
 
     def command(self, cmd: str, args: Optional[dict] = None, owner: Optional[str] = None, on_done=None) -> None:
         """v1 handle_command(device/mfc.py:984-1145) — 문자열 명령 라우터."""

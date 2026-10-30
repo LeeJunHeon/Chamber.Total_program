@@ -1,0 +1,885 @@
+{
+ "source": "device/rf_pulse.py (v1, 실제 실행)",
+ "frames": [
+  {
+   "name": "RF_OFF",
+   "addr": 1,
+   "cmd": 1,
+   "data": "",
+   "hex": "08 01 09"
+  },
+  {
+   "name": "RF_OFF",
+   "addr": 2,
+   "cmd": 1,
+   "data": "",
+   "hex": "10 01 11"
+  },
+  {
+   "name": "RF_OFF",
+   "addr": 31,
+   "cmd": 1,
+   "data": "",
+   "hex": "f8 01 f9"
+  },
+  {
+   "name": "RF_ON",
+   "addr": 1,
+   "cmd": 2,
+   "data": "",
+   "hex": "08 02 0a"
+  },
+  {
+   "name": "RF_ON",
+   "addr": 2,
+   "cmd": 2,
+   "data": "",
+   "hex": "10 02 12"
+  },
+  {
+   "name": "RF_ON",
+   "addr": 31,
+   "cmd": 2,
+   "data": "",
+   "hex": "f8 02 fa"
+  },
+  {
+   "name": "MODE_FWD",
+   "addr": 1,
+   "cmd": 3,
+   "data": "06",
+   "hex": "09 03 06 0c"
+  },
+  {
+   "name": "MODE_FWD",
+   "addr": 2,
+   "cmd": 3,
+   "data": "06",
+   "hex": "11 03 06 14"
+  },
+  {
+   "name": "MODE_FWD",
+   "addr": 31,
+   "cmd": 3,
+   "data": "06",
+   "hex": "f9 03 06 fc"
+  },
+  {
+   "name": "MODE_LOAD",
+   "addr": 1,
+   "cmd": 3,
+   "data": "07",
+   "hex": "09 03 07 0d"
+  },
+  {
+   "name": "MODE_LOAD",
+   "addr": 2,
+   "cmd": 3,
+   "data": "07",
+   "hex": "11 03 07 15"
+  },
+  {
+   "name": "MODE_LOAD",
+   "addr": 31,
+   "cmd": 3,
+   "data": "07",
+   "hex": "f9 03 07 fd"
+  },
+  {
+   "name": "SETPOINT_100",
+   "addr": 1,
+   "cmd": 8,
+   "data": "64 00",
+   "hex": "0a 08 64 00 66"
+  },
+  {
+   "name": "SETPOINT_100",
+   "addr": 2,
+   "cmd": 8,
+   "data": "64 00",
+   "hex": "12 08 64 00 7e"
+  },
+  {
+   "name": "SETPOINT_100",
+   "addr": 31,
+   "cmd": 8,
+   "data": "64 00",
+   "hex": "fa 08 64 00 96"
+  },
+  {
+   "name": "SETPOINT_300",
+   "addr": 1,
+   "cmd": 8,
+   "data": "2c 01",
+   "hex": "0a 08 2c 01 2f"
+  },
+  {
+   "name": "SETPOINT_300",
+   "addr": 2,
+   "cmd": 8,
+   "data": "2c 01",
+   "hex": "12 08 2c 01 37"
+  },
+  {
+   "name": "SETPOINT_300",
+   "addr": 31,
+   "cmd": 8,
+   "data": "2c 01",
+   "hex": "fa 08 2c 01 df"
+  },
+  {
+   "name": "HOST",
+   "addr": 1,
+   "cmd": 14,
+   "data": "02",
+   "hex": "09 0e 02 05"
+  },
+  {
+   "name": "HOST",
+   "addr": 2,
+   "cmd": 14,
+   "data": "02",
+   "hex": "11 0e 02 1d"
+  },
+  {
+   "name": "HOST",
+   "addr": 31,
+   "cmd": 14,
+   "data": "02",
+   "hex": "f9 0e 02 f5"
+  },
+  {
+   "name": "PULSING_1",
+   "addr": 1,
+   "cmd": 27,
+   "data": "01",
+   "hex": "09 1b 01 13"
+  },
+  {
+   "name": "PULSING_1",
+   "addr": 2,
+   "cmd": 27,
+   "data": "01",
+   "hex": "11 1b 01 0b"
+  },
+  {
+   "name": "PULSING_1",
+   "addr": 31,
+   "cmd": 27,
+   "data": "01",
+   "hex": "f9 1b 01 e3"
+  },
+  {
+   "name": "PULSING_0",
+   "addr": 1,
+   "cmd": 27,
+   "data": "00",
+   "hex": "09 1b 00 12"
+  },
+  {
+   "name": "PULSING_0",
+   "addr": 2,
+   "cmd": 27,
+   "data": "00",
+   "hex": "11 1b 00 0a"
+  },
+  {
+   "name": "PULSING_0",
+   "addr": 31,
+   "cmd": 27,
+   "data": "00",
+   "hex": "f9 1b 00 e2"
+  },
+  {
+   "name": "FREQ_1000",
+   "addr": 1,
+   "cmd": 93,
+   "data": "e8 03 00",
+   "hex": "0b 5d e8 03 00 bd"
+  },
+  {
+   "name": "FREQ_1000",
+   "addr": 2,
+   "cmd": 93,
+   "data": "e8 03 00",
+   "hex": "13 5d e8 03 00 a5"
+  },
+  {
+   "name": "FREQ_1000",
+   "addr": 31,
+   "cmd": 93,
+   "data": "e8 03 00",
+   "hex": "fb 5d e8 03 00 4d"
+  },
+  {
+   "name": "FREQ_30000",
+   "addr": 1,
+   "cmd": 93,
+   "data": "30 75 00",
+   "hex": "0b 5d 30 75 00 13"
+  },
+  {
+   "name": "FREQ_30000",
+   "addr": 2,
+   "cmd": 93,
+   "data": "30 75 00",
+   "hex": "13 5d 30 75 00 0b"
+  },
+  {
+   "name": "FREQ_30000",
+   "addr": 31,
+   "cmd": 93,
+   "data": "30 75 00",
+   "hex": "fb 5d 30 75 00 e3"
+  },
+  {
+   "name": "DUTY_50",
+   "addr": 1,
+   "cmd": 96,
+   "data": "32 00",
+   "hex": "0a 60 32 00 58"
+  },
+  {
+   "name": "DUTY_50",
+   "addr": 2,
+   "cmd": 96,
+   "data": "32 00",
+   "hex": "12 60 32 00 40"
+  },
+  {
+   "name": "DUTY_50",
+   "addr": 31,
+   "cmd": 96,
+   "data": "32 00",
+   "hex": "fa 60 32 00 a8"
+  },
+  {
+   "name": "Q155",
+   "addr": 1,
+   "cmd": 155,
+   "data": "",
+   "hex": "08 9b 93"
+  },
+  {
+   "name": "Q155",
+   "addr": 2,
+   "cmd": 155,
+   "data": "",
+   "hex": "10 9b 8b"
+  },
+  {
+   "name": "Q155",
+   "addr": 31,
+   "cmd": 155,
+   "data": "",
+   "hex": "f8 9b 63"
+  },
+  {
+   "name": "Q162",
+   "addr": 1,
+   "cmd": 162,
+   "data": "",
+   "hex": "08 a2 aa"
+  },
+  {
+   "name": "Q162",
+   "addr": 2,
+   "cmd": 162,
+   "data": "",
+   "hex": "10 a2 b2"
+  },
+  {
+   "name": "Q162",
+   "addr": 31,
+   "cmd": 162,
+   "data": "",
+   "hex": "f8 a2 5a"
+  },
+  {
+   "name": "Q165",
+   "addr": 1,
+   "cmd": 165,
+   "data": "",
+   "hex": "08 a5 ad"
+  },
+  {
+   "name": "Q165",
+   "addr": 2,
+   "cmd": 165,
+   "data": "",
+   "hex": "10 a5 b5"
+  },
+  {
+   "name": "Q165",
+   "addr": 31,
+   "cmd": 165,
+   "data": "",
+   "hex": "f8 a5 5d"
+  },
+  {
+   "name": "Q166",
+   "addr": 1,
+   "cmd": 166,
+   "data": "",
+   "hex": "08 a6 ae"
+  },
+  {
+   "name": "Q166",
+   "addr": 2,
+   "cmd": 166,
+   "data": "",
+   "hex": "10 a6 b6"
+  },
+  {
+   "name": "Q166",
+   "addr": 31,
+   "cmd": 166,
+   "data": "",
+   "hex": "f8 a6 5e"
+  },
+  {
+   "name": "Q193",
+   "addr": 1,
+   "cmd": 193,
+   "data": "",
+   "hex": "08 c1 c9"
+  },
+  {
+   "name": "Q193",
+   "addr": 2,
+   "cmd": 193,
+   "data": "",
+   "hex": "10 c1 d1"
+  },
+  {
+   "name": "Q193",
+   "addr": 31,
+   "cmd": 193,
+   "data": "",
+   "hex": "f8 c1 39"
+  },
+  {
+   "name": "Q196",
+   "addr": 1,
+   "cmd": 196,
+   "data": "",
+   "hex": "08 c4 cc"
+  },
+  {
+   "name": "Q196",
+   "addr": 2,
+   "cmd": 196,
+   "data": "",
+   "hex": "10 c4 d4"
+  },
+  {
+   "name": "Q196",
+   "addr": 31,
+   "cmd": 196,
+   "data": "",
+   "hex": "f8 c4 3c"
+  },
+  {
+   "name": "LONG7",
+   "addr": 1,
+   "cmd": 200,
+   "data": "00 01 02 03 04 05 06",
+   "hex": "0f c8 07 00 01 02 03 04 05 06 c7"
+  },
+  {
+   "name": "LONG7",
+   "addr": 2,
+   "cmd": 200,
+   "data": "00 01 02 03 04 05 06",
+   "hex": "17 c8 07 00 01 02 03 04 05 06 df"
+  },
+  {
+   "name": "LONG7",
+   "addr": 31,
+   "cmd": 200,
+   "data": "00 01 02 03 04 05 06",
+   "hex": "ff c8 07 00 01 02 03 04 05 06 37"
+  }
+ ],
+ "functions": {
+  "duty_limits": [
+   [
+    0.001,
+    [
+     0.0,
+     100.0
+    ]
+   ],
+   [
+    1,
+    [
+     1.6,
+     98.4
+    ]
+   ],
+   [
+    5,
+    [
+     8.0,
+     92.0
+    ]
+   ],
+   [
+    10,
+    [
+     16.0,
+     84.0
+    ]
+   ],
+   [
+    20,
+    [
+     32.0,
+     68.0
+    ]
+   ],
+   [
+    30,
+    [
+     48.0,
+     52.0
+    ]
+   ]
+  ],
+  "status": [
+   [
+    "20 00 00 00",
+    [
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   ],
+   [
+    "60 80 00 00",
+    [
+     true,
+     true,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false
+    ]
+   ],
+   [
+    "e0 08 00 a1",
+    [
+     true,
+     true,
+     true,
+     false,
+     true,
+     true,
+     true,
+     true
+    ]
+   ],
+   [
+    "00 00 00 00",
+    [
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false
+    ]
+   ],
+   [
+    "20 00 00",
+    null
+   ]
+  ]
+ },
+ "cases": [
+  {
+   "name": "start_not_host",
+   "call": "start_pulse_process",
+   "args": {
+    "target_w": 100.0,
+    "freq_hz": 1000,
+    "duty_percent": 50
+   },
+   "sim": {
+    "control": 6
+   },
+   "pre_on": false,
+   "sent": [
+    "08 9b 93",
+    "09 0e 02 05",
+    "08 01 09",
+    "09 03 06 0c",
+    "0a 08 64 00 66",
+    "0b 5d e8 03 00 bd",
+    "0a 60 32 00 58",
+    "08 c1 c9",
+    "08 c4 cc",
+    "09 1b 01 13",
+    "08 02 0a"
+   ],
+   "result": true,
+   "events": [
+    [
+     "target_reached",
+     null,
+     null
+    ]
+   ],
+   "duration_s": 16.17
+  },
+  {
+   "name": "start_host_plain",
+   "call": "start_pulse_process",
+   "args": {
+    "target_w": 150.0
+   },
+   "sim": {
+    "control": 2
+   },
+   "pre_on": false,
+   "sent": [
+    "08 9b 93",
+    "08 01 09",
+    "09 03 06 0c",
+    "0a 08 96 00 94",
+    "09 1b 01 13",
+    "08 02 0a"
+   ],
+   "result": true,
+   "events": [
+    [
+     "target_reached",
+     null,
+     null
+    ]
+   ],
+   "duration_s": 8.5
+  },
+  {
+   "name": "start_csr1_setpoint",
+   "call": "start_pulse_process",
+   "args": {
+    "target_w": 120.0
+   },
+   "sim": {
+    "control": 2,
+    "csr_once": [
+     [
+      8,
+      1
+     ]
+    ]
+   },
+   "pre_on": false,
+   "sent": [
+    "08 9b 93",
+    "08 01 09",
+    "09 03 06 0c",
+    "0a 08 78 00 7a",
+    "09 0e 02 05"
+   ],
+   "result": false,
+   "events": [
+    [
+     "command_failed",
+     "START_SEQUENCE",
+     "SETP 실패"
+    ]
+   ],
+   "duration_s": 7.1
+  },
+  {
+   "name": "start_csr2_mode",
+   "call": "start_pulse_process",
+   "args": {
+    "target_w": 120.0
+   },
+   "sim": {
+    "control": 2,
+    "csr_once": [
+     [
+      3,
+      2
+     ]
+    ]
+   },
+   "pre_on": false,
+   "sent": [
+    "08 9b 93",
+    "08 01 09",
+    "09 03 06 0c",
+    "08 01 09"
+   ],
+   "result": false,
+   "events": [
+    [
+     "command_failed",
+     "START_SEQUENCE",
+     "MODE=FWD 실패"
+    ]
+   ],
+   "duration_s": 5.76
+  },
+  {
+   "name": "start_freq_csr50_duty_first",
+   "call": "start_pulse_process",
+   "args": {
+    "target_w": 100.0,
+    "freq_hz": 20000,
+    "duty_percent": 50
+   },
+   "sim": {
+    "control": 2,
+    "csr_once": [
+     [
+      93,
+      50
+     ]
+    ]
+   },
+   "pre_on": false,
+   "sent": [
+    "08 9b 93",
+    "08 01 09",
+    "09 03 06 0c",
+    "0a 08 64 00 66",
+    "0b 5d 20 4e 00 38",
+    "0b 5d 20 4e 00 38",
+    "0a 60 32 00 58",
+    "08 c1 c9",
+    "08 c4 cc",
+    "09 1b 01 13",
+    "08 02 0a"
+   ],
+   "result": true,
+   "events": [
+    [
+     "target_reached",
+     null,
+     null
+    ]
+   ],
+   "duration_s": 16.92
+  },
+  {
+   "name": "start_freq_csr50_retry_ok",
+   "call": "start_pulse_process",
+   "args": {
+    "target_w": 100.0,
+    "freq_hz": 2000
+   },
+   "sim": {
+    "control": 2,
+    "csr_once": [
+     [
+      93,
+      50
+     ]
+    ]
+   },
+   "pre_on": false,
+   "sent": [
+    "08 9b 93",
+    "08 01 09",
+    "09 03 06 0c",
+    "0a 08 64 00 66",
+    "0b 5d d0 07 00 81",
+    "0b 5d d0 07 00 81",
+    "08 c1 c9",
+    "08 c4 cc",
+    "09 1b 01 13",
+    "08 02 0a"
+   ],
+   "result": true,
+   "events": [
+    [
+     "target_reached",
+     null,
+     null
+    ]
+   ],
+   "duration_s": 15.39
+  },
+  {
+   "name": "start_readback_mismatch",
+   "call": "start_pulse_process",
+   "args": {
+    "target_w": 100.0,
+    "freq_hz": 5000,
+    "duty_percent": 40
+   },
+   "sim": {
+    "control": 2,
+    "readback_offset": 7
+   },
+   "pre_on": false,
+   "sent": [
+    "08 9b 93",
+    "08 01 09",
+    "09 03 06 0c",
+    "0a 08 64 00 66",
+    "0b 5d 88 13 00 cd",
+    "0a 60 28 00 42",
+    "08 c1 c9",
+    "08 c4 cc",
+    "09 1b 01 13",
+    "08 02 0a"
+   ],
+   "result": true,
+   "events": [
+    [
+     "target_reached",
+     null,
+     null
+    ]
+   ],
+   "duration_s": 14.65
+  },
+  {
+   "name": "set_reference_power",
+   "call": "set_reference_power",
+   "args": {
+    "target_w": 200.0
+   },
+   "sim": {
+    "control": 2
+   },
+   "pre_on": false,
+   "sent": [
+    "0a 08 c8 00 ca"
+   ],
+   "result": true,
+   "events": [],
+   "duration_s": 0.03
+  },
+  {
+   "name": "set_reference_power_csr1",
+   "call": "set_reference_power",
+   "args": {
+    "target_w": 210.0
+   },
+   "sim": {
+    "control": 6
+   },
+   "pre_on": false,
+   "sent": [
+    "0a 08 d2 00 d0",
+    "09 0e 02 05",
+    "0a 08 d2 00 d0"
+   ],
+   "result": true,
+   "events": [],
+   "duration_s": 3.07
+  },
+  {
+   "name": "stop_after_on",
+   "call": "stop_process",
+   "args": {},
+   "sim": {},
+   "pre_on": true,
+   "sent": [
+    "08 01 09"
+   ],
+   "result": null,
+   "events": [
+    [
+     "power_off_finished",
+     null,
+     null
+    ]
+   ],
+   "duration_s": 0.04
+  },
+  {
+   "name": "stop_csr7_status",
+   "call": "stop_process",
+   "args": {},
+   "sim": {
+    "csr_once": [
+     [
+      1,
+      [
+       7,
+       7,
+       7
+      ]
+     ]
+    ]
+   },
+   "pre_on": true,
+   "sent": [
+    "08 01 09",
+    "08 01 09",
+    "08 01 09",
+    "08 a2 aa",
+    "08 01 09"
+   ],
+   "result": null,
+   "events": [
+    [
+     "power_off_finished",
+     null,
+     null
+    ]
+   ],
+   "duration_s": 6.17
+  },
+  {
+   "name": "stop_unused",
+   "call": "stop_unused",
+   "args": {},
+   "sim": {
+    "control": 2
+   },
+   "pre_on": false,
+   "sent": [
+    "08 01 09"
+   ],
+   "result": null,
+   "events": [
+    [
+     "power_off_finished",
+     null,
+     null
+    ]
+   ],
+   "duration_s": 0.03
+  },
+  {
+   "name": "read_actual_pulse_params",
+   "call": "read_actual_pulse_params",
+   "args": {},
+   "sim": {
+    "control": 2,
+    "freq": 2500,
+    "duty": 30
+   },
+   "pre_on": false,
+   "sent": [
+    "08 c1 c9",
+    "08 c4 cc"
+   ],
+   "result": {
+    "freq_khz": 2.5,
+    "duty_pct": 30,
+    "off_time_us": 280.0
+   },
+   "events": [],
+   "duration_s": 1.57
+  }
+ ]
+}

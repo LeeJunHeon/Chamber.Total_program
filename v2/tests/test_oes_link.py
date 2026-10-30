@@ -116,11 +116,21 @@ def test_daemon_start_measure_csv_tail_heartbeat(rigs):
     row = r.link.source_read(None, 0)
     assert row["ch1.oes.running"] is True and row["ch1.oes.measuring"] is False
     assert any(e.kind == "finished" for e in r.events)
-    pid = r.link.status()["daemon_pid"]
+    h = r.link._daemon
     r.close()
     assert r.link.sent[-1]["cmd"] == "close"                    # 정상 종료는 close 명령으로
-    with pytest.raises(OSError):
-        os.kill(pid, 0)
+    assert h.exited and h.returncode == 0                        # close → 정리 → os._exit(0)(kill 아님)
+
+
+def test_daemon_exits_by_itself_when_main_stdin_closes(rigs):
+    """메인이 죽어 stdin 이 닫히면 워커는 EOF 를 보고 정리·종료(v1 oes_api.py:2285-2290)."""
+    r = rigs()
+    assert r.init()[0]
+    h = r.link._daemon
+    h.close_stdin()
+    assert wait_for(lambda: h.exited, 10) and h.returncode == 0
+    assert any("stdin closed (EOF)" in s for s in r.statuses())
+    assert r.dll_calls()[-1]["fn"] == "spCloseGivenChannel"
 
 
 def test_dll_call_order_and_args_are_v1(rigs):
@@ -162,7 +172,7 @@ def test_stop_writes_two_local_flags_and_ends_early(rigs, monkeypatch):
     assert r.init()[0]
     t0 = time.monotonic()
     box, ev = r.measure_async(30.0, 50)
-    assert wait_for(lambda: r.link.status()["rows"] >= 1, 15)
+    assert wait_for(lambda: r.link.is_running and r.link.status()["rows"] >= 1, 15)
     r.link.stop(wait=False)
     assert ev.wait(20) and time.monotonic() - t0 < 15
     assert box["res"].success
@@ -173,6 +183,7 @@ def test_stop_writes_two_local_flags_and_ends_early(rigs, monkeypatch):
 
 
 # ───────── 죽음·시간 초과·실패 ─────────
+@pytest.mark.slow
 def test_daemon_death_restart_then_oneshot_fallback(rigs):
     r = rigs(fake="die_after=8")                     # 표본 2개째 읽기에서 워커 프로세스가 죽음
     assert r.init()[0]
@@ -193,6 +204,7 @@ def test_worker_read_hang_hard_abort_125(rigs, monkeypatch):
     assert res.message == "OES 측정 실패(rc=125)"
 
 
+@pytest.mark.slow
 def test_main_timeout_kills_hung_daemon(rigs, monkeypatch):
     monkeypatch.setenv("OES_READ_TIMEOUT_S", "100")              # 워커는 스스로 포기하지 않음 → 메인 시간 초과
     r = rigs(fake="hang_read_after=5", OES_MEASURE_TIMEOUT_MIN_S=1.0, OES_MEASURE_TIMEOUT_MARGIN_S=1.0, OES_CLOSE_STEP_S=0.5)
@@ -226,7 +238,7 @@ def test_restart_after_external_kill(rigs):
     r = rigs()
     assert r.init()[0]
     pid = r.link.status()["daemon_pid"]
-    os.kill(pid, signal.SIGKILL)
+    os.kill(pid, getattr(signal, "SIGKILL", signal.SIGTERM))      # 바깥에서 죽임(윈도우는 TerminateProcess)
     assert wait_for(lambda: any(e.kind == "worker_exit" for e in r.events), 10)
     assert r.link.source_read(None, 0)["ch1.oes.running"] is False
     res = r.measure(2.0, 50)                                         # 측정 전에 daemon 을 다시 띄운다
@@ -269,15 +281,15 @@ def _v1_args(argv: list) -> list:
     return out
 
 
+@pytest.mark.slow
 def test_golden_v1_messages_and_argv(rigs, monkeypatch):
-    base = None
     d = rigs()
     base = str(d.tmp)
     assert d.init()[0]
     assert d.measure(2.0, 50).message == GOLDEN["finished"][0]["message"]
     assert d.measure(2.0, 0).message == GOLDEN["finished"][1]["message"]
     box, ev = d.measure_async(30.0, 50)
-    assert wait_for(lambda: d.link.status()["rows"] >= 1, 15)
+    assert wait_for(lambda: d.link.is_running and d.link.status()["rows"] >= 1, 15)
     d.link.stop(wait=False)
     assert ev.wait(20) and box["res"].message == GOLDEN["finished"][2]["message"]
     d.close()
@@ -305,13 +317,14 @@ def test_one_second_row_status_only():
     blk = ol.blocks("ch2")
     assert [f.name for f in blk[0].fields] == ["running", "measuring", "sample_age_s"]
     w = status_worker(clock, "oes2")
-    w.start()
     rows = []
     bus = SnapshotBus(clock, blk, [Source("oes2", w, link.source_read, ("ch2.oes",))])
     loop = TickLoop(clock, bus, sinks=[rows.append])
-    t = clock.start_thread(lambda: loop.run(2), "tick")
-    t.join(10)
+    clock.register()                        # 시험 스레드가 tick 을 돌린다(챔버K test_ig 와 같은 방식)
+    w.start()
+    loop.run(2)
     w.stop()
+    clock.unregister()
     assert len(rows) == 2
     assert rows[-1]["ch2.oes.q"] == "ok" and rows[-1]["ch2.oes.running"] is False
     assert rows[-1]["ch2.oes.measuring"] is False and rows[-1]["ch2.oes.sample_age_s"] is None

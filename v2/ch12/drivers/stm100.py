@@ -32,9 +32,9 @@ from v2.common.worker import Request, Result, Status, Worker
 from v2.ch12.drivers.cache_source import CacheWorker
 from v2.ch12.drivers.stm100_proto import (
     CODE_MEANING, OK_CODES, Reply, StmChecksumError, StmCommandRejected, StmCommError, StmError, StmFrameError,
-    StmLinkLost, StmProtocolError, StmTimeout, StmValueUnavailable, StmVerifyError, build_frame, check_material,
+    StmLinkLost, StmTimeout, StmValueUnavailable, StmVerifyError, build_frame, check_material,
     error_text, extract_frame, material_matches, parse_crystal_ok, parse_frequency_hz, parse_life_pct, parse_number,
-    parse_rate_a_s, parse_thickness_a, strip_echo,
+    parse_rate_a_s, parse_thickness_a,
 )
 
 # ── v1 상수(파일:줄) ──
@@ -624,6 +624,3 @@ class Stm100Driver:
                 self._emit_throttled(f"listener:{e!r}", "listener_error", f"두께 상태 리스너 예외: {e!r}",
                                      LISTENER_LOG_INTERVAL_S)
 
-
-__all__ = ["Stm100Driver", "StmDone", "StmEvent", "blocks", "block_name", "settings", "worker_kwargs",
-           "make_transport", "BUDGET", "strip_echo", "CODE_MEANING", "StmProtocolError", "StmCommandRejected"]

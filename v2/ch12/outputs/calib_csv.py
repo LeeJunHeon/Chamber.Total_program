@@ -367,10 +367,11 @@ class CalibCsv(Owned):
                     else:
                         self._log(f"Sputter Calib CSV NAS 재시도 성공 → {self.nas_file}")
                     break
-            try:
-                self._rewrite_pending(rows[sent:])
-            except Exception:
-                pass
+            if sent:
+                try:
+                    self._rewrite_pending(rows[sent:])
+                except Exception:
+                    pass
             if err is not None:
                 if not self._failing:
                     self._log(f"Sputter Calib CSV NAS 기록 실패 → pending 적재: {err!r}")

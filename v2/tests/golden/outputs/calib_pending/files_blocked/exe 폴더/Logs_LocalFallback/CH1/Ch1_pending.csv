@@ -1,0 +1,3 @@
+﻿Timestamp,Process Name,Result,Base Pressure,Main Shutter,Shutter Delay,Integration Time,Power Select,G1 Target,G2 Target,G3 Target,Ar flow,O2 flow,N2 flow,Working Pressure,Process Time,RF: For.P,RF: Ref. P,DC: V,DC: I,DC: P,DC2: V,DC2: I,DC2: P,RF Pulse: P,RF Pulse: Freq,RF Pulse: Duty Cycle,DC Pulse: P,DC Pulse: V,DC Pulse: I,DC Pulse: Freq,DC Pulse: Duty Cycle,DC Pulse: Off Time,RF Pulse: For.P,RF Pulse: Ref.P,Chuck Position
+2026-10-30 11:00:00,Cu seed,SUCCESS,7.00e-06,F,,,F,Cu,무시,,15.20,0.00,0.00,0.0000,5,120.00,3.00,,,,,,,,,,80.00,,,,,DC,,,
+2026-10-30 11:10:00,Cu seed,STOP,7.00e-06,F,,,F,Cu,무시,,15.20,0.00,0.00,0.0000,5,120.00,3.00,,,,,,,,,,80.00,,,,,DC,,,

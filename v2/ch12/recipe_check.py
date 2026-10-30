@@ -153,10 +153,10 @@ def host_error_code(message: str, code: Optional[str] = None) -> str:
 
 # ───────────── 시작 전 값 검사 ─────────────
 def rfp_freq_max_khz(cfg: Mapping[str, Any], chamber: int) -> float:
-    """_rfp_freq_max_khz(3182-3188) — RFPULSE_FREQ_MAX_HZ(채널, 기본 30000) / 1000, 0 이하·오류면 30 kHz."""
+    """_rfp_freq_max_khz(3182-3188) — RFPULSE_FREQ_MAX_HZ(채널 → 공통, 기본 30000) / 1000, 0 이하·오류면 30 kHz."""
+    from v2.ch12.process_steps import _cget
     try:
-        v = cfg.get(f"CH{int(chamber)}_RFPULSE_FREQ_MAX_HZ")
-        hz = float(30000.0 if v is None else v)
+        hz = float(_cget(cfg, chamber, "RFPULSE_FREQ_MAX_HZ", 30000.0))
     except Exception:
         hz = 30000.0
     return (hz if hz > 0 else 30000.0) / 1000.0
@@ -208,12 +208,13 @@ def check_dc_pulse(p: Mapping[str, Any]) -> List[str]:
 
 
 def heater_limit_c(cfg: Mapping[str, Any]) -> float:
-    """히터 목표 상한 = min(max_temp, sv_limit_c) — lib/heater_config.py:136-152 의 클램프(SV ≤0 → 500, > 래더 상한 그대로 둠
-    — 래더 상한 LADDER_SV_MAX_C 는 히터 모듈 몫, 미확인). v2 키 CH2_HEATER_SV_LIMIT_C·CH2_HEATER_MAX_TEMP(기본 500·500)."""
-    sv = float(cfg.get("CH2_HEATER_SV_LIMIT_C", 500.0))
+    """히터 목표 상한 = min(max_temp, sv_limit_c) — lib/heater_config.py:136-152 의 클램프(SV ≤0 → 500, MAX_TEMP 가 0 이하거나
+    SV 상한보다 크면 SV 상한). 래더 상한(LADDER_SV_MAX_C) 클램프는 v2 파라미터 범위(params/core_heater.py ≤900)가 대신한다.
+    v2 키 CH2_HEATER_SV_LIMIT_C·CH2_HEATER_MAX_TEMP(기본 = 운영값 900·900, settings.json ch2)."""
+    sv = float(cfg.get("CH2_HEATER_SV_LIMIT_C", 900.0))
     if sv <= 0:
         sv = 500.0
-    mt = float(cfg.get("CH2_HEATER_MAX_TEMP", 500.0))
+    mt = float(cfg.get("CH2_HEATER_MAX_TEMP", 900.0))
     if mt <= 0 or mt > sv:
         mt = sv
     return min(mt, sv)

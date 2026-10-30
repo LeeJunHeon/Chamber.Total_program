@@ -1,0 +1,160 @@
+{
+ "t0": "2026-10-30T09:15:20.123000",
+ "events": [
+  [
+   "request",
+   "a",
+   {
+    "target": "CH1",
+    "request_id": "REQ 1/ä",
+    "peer": "192.168.1.30:51000",
+    "recipe_name": "r.csv"
+   }
+  ],
+  [
+   "update",
+   "a",
+   {
+    "row_count": 3,
+    "process_names": "A / B / C",
+    "recipe_name": null
+   }
+  ],
+  [
+   "t",
+   "2026-10-30T09:15:25.000000"
+  ],
+  [
+   "started",
+   "a",
+   "CH1_A_20261030_091525_000.txt"
+  ],
+  [
+   "t",
+   "2026-10-30T09:20:00.000000"
+  ],
+  [
+   "started",
+   "a",
+   "CH1_B_20261030_092000_000.txt"
+  ],
+  [
+   "t",
+   "2026-10-30T09:27:31.000000"
+  ],
+  [
+   "finalize",
+   "a",
+   "성공",
+   "무시되는 사유"
+  ],
+  [
+   "request",
+   "b",
+   {
+    "target": "PC(CH2)",
+    "request_id": "R2",
+    "peer": "p",
+    "recipe_name": "pc.csv"
+   }
+  ],
+  [
+   "reject",
+   "b",
+   "E205 busy\r\n두 번째 줄\r\r셋째"
+  ],
+  [
+   "request",
+   "d1",
+   {
+    "target": "CH2",
+    "request_id": "DUP",
+    "peer": "q",
+    "received_at": "2026-10-30T09:15:20.123000"
+   }
+  ],
+  [
+   "request",
+   "d2",
+   {
+    "target": "CH2",
+    "request_id": "DUP",
+    "peer": "q",
+    "received_at": "2026-10-30T09:15:20.123000"
+   }
+  ],
+  [
+   "request",
+   "d3",
+   {
+    "target": "CH2",
+    "request_id": "DUP",
+    "peer": "q",
+    "received_at": "2026-10-30T09:15:20.123000"
+   }
+  ],
+  [
+   "started",
+   "d1",
+   ""
+  ],
+  [
+   "t",
+   "2026-10-30T09:40:00.000000"
+  ],
+  [
+   "finalize",
+   "d1",
+   "STOP",
+   "사용자 STOP"
+  ],
+  [
+   "finalize",
+   "d1",
+   "STOP",
+   "두 번째(무시)"
+  ],
+  [
+   "flush"
+  ],
+  [
+   "request",
+   "e",
+   {
+    "target": "CH1",
+    "request_id": "E",
+    "peer": "r"
+   }
+  ],
+  [
+   "started",
+   "d3",
+   "d3.txt"
+  ],
+  [
+   "restart"
+  ],
+  [
+   "recover"
+  ],
+  [
+   "flush"
+  ]
+ ],
+ "keys": {
+  "a": "sputter-20261030091520123-REQ_1__",
+  "a_ret": true,
+  "b": "sputter-20261030092731000-R2",
+  "d1": "sputter-20261030091520123-DUP",
+  "d2": "sputter-20261030091520123-DUP-2",
+  "d3": "sputter-20261030091520123-DUP-3",
+  "d1_ret": false,
+  "e": "sputter-20261030094000000-E"
+ },
+ "files": [
+  "NAS/VanaM_toShare/JH_Lee/Logs/Robot/Robot_20261030.csv",
+  "로컬/VanaM_Logs/Robot/Robot_20261030_sputter.csv",
+  "로컬/VanaM_Logs/Robot/open_sputter.json",
+  "로컬/VanaM_Logs/Robot/pending_sputter.csv"
+ ]
+}

@@ -1,0 +1,3 @@
+﻿timestamp,connected,thickness_nm,rate_nm_s,freq_hz,life_pct,crystal_ok,stale,process_running,process_name
+2026-10-30 23:59:58,1,12.35,0.123,5987654,87.2,1,0,1,ITO 100nm
+2026-10-30 23:59:59,0,,,,,,1,1,ITO 100nm

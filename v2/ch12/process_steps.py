@@ -12,16 +12,20 @@ v1 근거(기준 커밋 66efc7b)
 
 구성
 - 스텝 조각 함수(gas_prep_steps·power_on_steps·shutdown_steps …)를 blocks.py 의 블록 펼치기가 그대로 쓴다.
-- build_sequence(params, chamber, cfg) 는 v1 _create_process_sequence 와 같은 순서로 조각을 잇는다(블록 없이 — 비교 기준).
+- build_sequence(params, chamber, cfg)(본체 process_sequence.py)는 v1 _create_process_sequence 와 같은 순서로 조각을 잇는다
+  (블록 없이 — 비교 기준).
   blocks.template_blocks → blocks.expand 가 같은 스텝을 내는지 골든 시험이 확인한다.
 - to_golden(): tests/data/process_sequences_golden.json 과 같은 8개 필드 [action, message, value, repr(params),
   duration, parallel, polling, no_wait] — v1 tests/test_process_heater_steps.py:_rows 와 같다.
 - 스텝을 만들 때 v1 이 남기던 로그(_emit_log("Process", …))는 log 목록에 (src, msg) 로 같은 순서로 넣는다.
 
-설정 키(cfg) — v1 은 채널 모듈(config_ch1/ch2)에서 읽는다 → v2 키는 "CH1_"/"CH2_" + v1 이름(params/process.py).
+설정 키(cfg) — v1 은 채널 모듈(config_ch1/ch2)에서 읽는다 → v2 는 채널 키 "CH1_"/"CH2_" + v1 이름, 없으면 같은 이름의 공통 키
+(정의는 params/core.py·core_heater.py·core_thickness.py·rfpulse.py·stm100.py — 다른 담당). PROCESS_GAS_INFO 는 v2 에서 코드 상수
+(params/core.py DROPPED) — 키가 없으면 GAS_INFO_DEFAULT.
 """
 from __future__ import annotations
 
+import json
 import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional
@@ -140,9 +144,16 @@ def _ck(chamber: int, key: str) -> str:
 
 
 def _cget(cfg: Mapping[str, Any], chamber: int, key: str, default: Any) -> Any:
-    """채널 키(CHn_KEY) → 없으면 v1 채널 모듈 기본값(default). v1 getattr(self._cfg, KEY, default) 자리."""
+    """채널 키(CHn_KEY) → 공통 키(KEY) → v1 코드 기본값(default) — v2 파라미터 규칙(params/core.py 머리: 채널 키가 없는
+    채널은 같은 이름의 공통 키). v1 getattr(self._cfg, KEY, default) 자리. 목록·사전 값은 JSON 글자로 와도 된다(JSON_LIST)."""
     v = cfg.get(_ck(chamber, key))
-    return default if v is None else v
+    if v is None:
+        v = cfg.get(key)
+    if v is None:
+        return default
+    if isinstance(default, (list, dict)) and isinstance(v, str):
+        v = json.loads(v)
+    return v
 
 
 @dataclass(frozen=True)
@@ -230,9 +241,9 @@ def caps_from_cfg(cfg: Mapping[str, Any], chamber: int) -> Caps:
     SUPPORTS_DC_PULSE→SUPPORTS_DCPULSE(없으면 ch==1), SUPPORTS_RFPULSE→SUPPORTS_RF_PULSE(없으면 ch==2)."""
     ch = int(chamber)
 
-    def first(*names):
+    def first(*names):                    # v1 _cfg_bool: 이름 순서대로, 채널 값(없으면 공통 값)이 있는 첫 이름
         for n in names:
-            v = _b(cfg.get(_ck(ch, n)))
+            v = _b(_cget(cfg, ch, n, None))
             if v is not None:
                 return v
         return None
@@ -312,7 +323,7 @@ def uses_from_params(params: Mapping[str, Any], caps: Caps, sc: StepCfg) -> Uses
 
 
 # ───────────── 스텝 조각(v1 순서 그대로) ─────────────
-def testmode_steps(sec: float) -> List[ProcessStep]:
+def row_test_steps(sec: float) -> List[ProcessStep]:
     """TEST MODE(2154-2175): DELAY int(초×1000) ms, 문구 int(초)."""
     return [S("DELAY", f"TEST MODE ({int(sec)}s)", duration=int(sec * 1000), polling=False, holding=True)]
 

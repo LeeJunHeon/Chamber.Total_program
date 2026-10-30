@@ -1,0 +1,78 @@
+{
+ "ch": 2,
+ "t0": "2026-10-30T23:59:58",
+ "process_name": "ITO 100nm",
+ "cfg": {
+  "THICKNESS_LOG_DIR": "@/로컬/VanaM_Logs/CH1&2/Thickness"
+ },
+ "events": [
+  [
+   "row",
+   {
+    "connected": true,
+    "thickness_nm": 12.3456,
+    "rate_nm_s": 0.12345,
+    "freq_hz": 5987654.7,
+    "life_pct": 87.25,
+    "crystal_ok": true,
+    "stale": false
+   }
+  ],
+  [
+   "t",
+   "2026-10-30T23:59:59"
+  ],
+  [
+   "row",
+   {
+    "connected": false,
+    "thickness_nm": null,
+    "rate_nm_s": null,
+    "freq_hz": null,
+    "life_pct": null,
+    "crystal_ok": null,
+    "stale": true
+   }
+  ],
+  [
+   "t",
+   "2026-10-31T00:00:00"
+  ],
+  [
+   "row",
+   {
+    "connected": true,
+    "thickness_nm": 12.3456,
+    "rate_nm_s": 0.12345,
+    "freq_hz": 5987654.7,
+    "life_pct": 87.25,
+    "crystal_ok": true,
+    "stale": false
+   }
+  ],
+  [
+   "close"
+  ],
+  [
+   "t",
+   "2026-10-31T00:05:00"
+  ],
+  [
+   "row",
+   {
+    "connected": true,
+    "thickness_nm": "bad",
+    "rate_nm_s": 0.12345,
+    "freq_hz": 0,
+    "life_pct": 87.25,
+    "crystal_ok": true,
+    "stale": false
+   }
+  ]
+ ],
+ "warns": [],
+ "files": [
+  "로컬/VanaM_Logs/CH1&2/Thickness/CH2/Thickness_20261030.csv",
+  "로컬/VanaM_Logs/CH1&2/Thickness/CH2/Thickness_20261031.csv"
+ ]
+}

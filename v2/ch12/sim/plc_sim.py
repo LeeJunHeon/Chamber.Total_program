@@ -4,7 +4,8 @@
   주소 창(coil_limit — 블록 계획 강등 시험) 밖이면 예외 2(→ 드라이버 E403), 모르는 함수 예외 1, 값 형식 예외 3.
   응답 지연 latency_s(가정 3 ms). 고장(SimDevice): no_response·delay·disconnect·garbage + 이 장비 고유:
   short(블록 읽기 응답을 반으로 — 짧은 응답), exception(모든 요청에 예외 4), stale(앞 트랜잭션 id 의 늦은 응답을 먼저 보냄),
-  truncate(응답 앞 절반만 — 무응답처럼 보임). restart() = 메모리 초기화(PLC 재기동).
+  truncate(응답 앞 절반만 — 무응답처럼 보임). drop_next = 다음 n 개 요청 무응답, forced_regs = 레지스터 값 고정(측정 대본),
+  coil_limit = 코일 주소 창. restart() = 메모리 초기화(PLC 재기동).
 래더 모델(0.1 s 단계, 요청이 올 때와 advance_to 때 — 값·시간은 가정값):
   - 밸브·펌프: CHn 의 R_P·R_V·F_V·M_V·VENT·TURBO·MAIN_SHUTTER·가스(Ar·O2·N2·MAIN)·건 셔터(G1~G3, CH2) 코일 = 출력.
     해당 '인터락' 코일이 False 면 출력 꺼짐. 공용 챔버 모델(v2/ch12/sim/chamber.py, 챔버마다 하나)에 밸브 상태를 넣는다.
@@ -65,6 +66,8 @@ class PlcSim(SimDevice):
         self.ref_inject_w = 0.0
         self.dc_fail = False                          # 주입: DC 출력이 나오지 않음(점화 실패와 별개)
         self.loading = {1: False, 2: False}
+        self.forced_regs: Dict[int, int] = {}         # 주입: 래더 출력보다 우선하는 레지스터 값(측정 대본)
+        self.drop_next = 0                            # 주입: 다음 n 개 요청 무응답(횟수 기준 — 타임아웃 정책 시험)
         self._buf = b""
         self._init_memory()
 
@@ -271,6 +274,8 @@ class PlcSim(SimDevice):
         r[2] = max(0, min(4000, int(round((pfwd + 4.0 - 3.0664228165) / 0.1503488383)))) if pfwd > 0 else 0
         r[3] = max(0, min(4000, int(round((pfwd * 0.01 + 14.0 - 12.2067054791) / 0.1565388751)))) if pfwd > 0 else 0
         ch2.heater_mv = self.heater.output
+        for k, v in self.forced_regs.items():
+            r[k] = v
 
     # ───────── Modbus TCP 슬레이브 ─────────
     def respond(self, data: bytes, now: float):
@@ -284,6 +289,9 @@ class PlcSim(SimDevice):
             tid, unit, pdu, self._buf = got
             frame = mbap(tid, unit, pdu)
             self.frames.append((now, frame))
+            if self.drop_next > 0:
+                self.drop_next -= 1
+                continue
             res = super().respond(frame, now)
             if not res:
                 continue

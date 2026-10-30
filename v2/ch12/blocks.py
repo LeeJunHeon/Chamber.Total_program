@@ -307,8 +307,8 @@ def _check_one(b: Any, path: str, chamber: int, caps: Caps, cfg: Mapping[str, An
             if p.required:
                 errs.append(f"{pre}: {p.name}: 값 필요")
                 bad.add(p.name)
-            out[p.name] = p.default
-            continue
+            out[p.name] = None if isinstance(p.default, str) and p.default.startswith("cfg:") else p.default
+            continue                                   # "cfg:키" 는 비운 채로 둔다 — 펼칠 때(공정 시작 때) 설정에서
         v = _as_type(p, v)
         e = _check_param(p, v)
         if e:

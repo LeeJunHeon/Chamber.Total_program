@@ -1,0 +1,40 @@
+{
+ "t0": "2026-10-30T09:15:20.123000",
+ "pre_files": {
+  "NAS/VanaM_toShare/JH_Lee/Logs/Robot/_lock/Robot.lock": {
+   "text": "ald 99 old",
+   "age_s": 500
+  }
+ },
+ "events": [
+  [
+   "request",
+   "a",
+   {
+    "target": "CH1",
+    "request_id": "S",
+    "peer": "x"
+   }
+  ],
+  [
+   "finalize",
+   "a",
+   "성공",
+   ""
+  ],
+  [
+   "flush"
+  ]
+ ],
+ "keys": {
+  "a": "sputter-20261030091520123-S",
+  "a_ret": true
+ },
+ "files": [
+  "NAS/VanaM_toShare/JH_Lee/Logs/Robot/Robot_20261030.csv",
+  "로컬/VanaM_Logs/CH1&2/SYSTEM/20261030.log",
+  "로컬/VanaM_Logs/Robot/Robot_20261030_sputter.csv",
+  "로컬/VanaM_Logs/Robot/open_sputter.json",
+  "로컬/VanaM_Logs/Robot/pending_sputter.csv"
+ ]
+}

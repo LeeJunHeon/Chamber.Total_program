@@ -13,7 +13,8 @@ from v2.common.snapshot_bus import SnapshotBus, TickLoop
 from v2.ch12.drivers import camera as C
 from v2.ch12.params import camera as P
 
-CFG = defaults(P.PARAMS)
+# CAMERA_LOG_ROOT·CAMERA_MIN_FREE_GB 는 outputs 조각 키(카메라 기록 경로) — 값은 v1 settings.json:304-305
+CFG = dict(defaults(P.PARAMS), CAMERA_LOG_ROOT=r"C:\VanaM_Logs\Camera_Logs", CAMERA_MIN_FREE_GB=20.0)
 
 
 class FakeBackend:
@@ -73,7 +74,13 @@ class Rig:
 def test_params_defaults():
     for p in P.PARAMS:
         assert check_value(p, CFG[p.key]) is None and p.group == "camera" and p.v1_source
-    assert CFG["CAMERA_MIN_FREE_GB"] == 20.0 and CFG["CAMERA_INDEX"] == 1 and CFG["CAMERA_INTERVAL_S"] == 1.0
+    assert CFG["CAMERA_INDEX"] == 1 and CFG["CAMERA_INTERVAL_S"] == 1.0
+
+
+def test_output_keys_from_outputs_fragment():
+    from v2.ch12.params import outputs as PO
+    d = defaults(PO.PARAMS)
+    assert d["CAMERA_MIN_FREE_GB"] == CFG["CAMERA_MIN_FREE_GB"] and d["CAMERA_LOG_ROOT"] == CFG["CAMERA_LOG_ROOT"]
 
 
 def test_single_owner_records_rotated_jpgs_to_mode_folder(tmp_path):

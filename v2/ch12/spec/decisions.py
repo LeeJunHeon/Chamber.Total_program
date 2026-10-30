@@ -331,4 +331,19 @@ DECISIONS = [
          decision="v1 은 ERROR/HOST 로그 + chat_host + 팝업. v2 는 로봇 서버가 로그를 남기고, 제어 프로그램 내부 API(POST /robot/v1/event)로 이벤트를 넘겨 "
                   "포털이 같은 카드를 보낸다(제어 프로그램이 꺼져 있으면 로그만). 서버 페이지 화면(숨김·접속 목록)은 포털·노트북 화면의 로봇 연결 상태로.",
          reason="기능 누락 금지 — 카드는 포털이 보낸다(지시 3장 (7)).", confirm=True, where="v2/robot_server; v2/ch12/robot_api.py"),
+    dict(id="D10", title="v1 공통 값이 채널에 안 닿던 키(⚠ 22개)",
+         decision="기본값은 v1 이 실제로 쓰던 값(.py 값 — 지금은 json 값과 모두 같다). v2 에서는 공통 값이 실제로 채널에 쓰인다(구조로 문제를 없앰). "
+                  "params 의 pending_confirm 으로 표시.", reason="지시 3장 (4) '채널 설정 import 시 복사' 문제를 구조로 없앤다.", confirm=True,
+         where="v2/ch12/params/core.py; inv_cfg.py"),
+    dict(id="D11", title="범위 밖 설정값", decision="v1 은 히터·두께 값이 범위를 벗어나면 고쳐 썼다(clamp). v2 는 같은 범위를 min/max 로 두고 거부한다(설정 적용 전체 거부 — 기본값으로 조용히 돌지 않음).",
+         reason="챔버K ConfigStore 규칙(부분 적용 없음).", confirm=True, where="v2/ch12/params"),
+    dict(id="D12", title="두께 Factor·재료 json", decision="v2 설정 폴더의 데이터 파일로(v1 형식 그대로), 없으면 v1 기본 99종 목록을 만든다.",
+         reason="척 × 건 표·재료 레코드는 스칼라 ParamDef 에 맞지 않고 v1 도 화면 창에서 이 파일을 원자적으로 저장했다.", confirm=False,
+         where="v2/tools/convert_v1_config.py; v2/ch12/thickness.py"),
+    dict(id="D13", title="독립 도구(rf_service·log_sync)의 settings.json",
+         decision="두 도구는 그대로 쓰고 v1 형식 config/settings.json 을 직접 읽는다 — v2 설정에서 그 도구가 읽는 키만 v1 형식으로 내보내는 도구(v2/tools/export_worker_settings.py)를 둔다.",
+         reason="지시 3장 (1) '그대로 쓰고 경로·형식만 맞는지 확인'.", confirm=True, where="v2/tools"),
+    dict(id="D14", title="LOCAL_HMI_PORT 8712·LOCAL_DATA_DIR C:\\CH12_v2\\data",
+         decision="챔버K(8710)와 같은 PC 에서 겹치지 않게 8712. 1초 기록(SQLite WAL)은 log_sync 가 통째로 복사하는 LOG_ROOT_DIR 밖에(쓰는 중 파일 복사 문제).",
+         reason="APP-067(log_sync 는 쓰는 중 파일도 복사).", confirm=True, where="v2/ch12/params/core.py"),
 ]

@@ -1,0 +1,75 @@
+{
+ "t0": "2026-10-30T09:15:20.123000",
+ "cfg": {
+  "HOST_LOG_NAS_DIR": "@/NAS막힘/blocker/Robot"
+ },
+ "pre_files": {
+  "NAS막힘/blocker": {
+   "text": "x"
+  }
+ },
+ "events": [
+  [
+   "request",
+   "a",
+   {
+    "target": "CH1",
+    "request_id": "P1",
+    "peer": "x",
+    "received_at": "2026-10-30T09:15:20.123000"
+   }
+  ],
+  [
+   "finalize",
+   "a",
+   "실패",
+   "시작 실패: E301"
+  ],
+  [
+   "flush"
+  ],
+  [
+   "request",
+   "b",
+   {
+    "target": "CH1",
+    "request_id": "P1",
+    "peer": "x",
+    "received_at": "2026-10-30T09:15:20.123000"
+   }
+  ],
+  [
+   "finalize",
+   "b",
+   "성공",
+   ""
+  ],
+  [
+   "flush"
+  ],
+  [
+   "stage",
+   "blocked"
+  ],
+  [
+   "unblock",
+   "NAS막힘/blocker"
+  ],
+  [
+   "flush"
+  ]
+ ],
+ "keys": {
+  "a": "sputter-20261030091520123-P1",
+  "a_ret": true,
+  "b": "sputter-20261030091520123-P1-2",
+  "b_ret": true
+ },
+ "files": [
+  "NAS막힘/blocker/Robot/Robot_20261030.csv",
+  "로컬/VanaM_Logs/CH1&2/SYSTEM/20261030.log",
+  "로컬/VanaM_Logs/Robot/Robot_20261030_sputter.csv",
+  "로컬/VanaM_Logs/Robot/open_sputter.json",
+  "로컬/VanaM_Logs/Robot/pending_sputter.csv"
+ ]
+}

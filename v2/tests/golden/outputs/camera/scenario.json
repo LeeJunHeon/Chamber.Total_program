@@ -1,0 +1,25 @@
+{
+ "t0": "2026-10-30T09:20:00.000000",
+ "mode": "CH2",
+ "frames": 3,
+ "cfg": {
+  "CAMERA_MIN_FREE_GB": 0.0
+ },
+ "logs": [
+  "카메라 시작 mode=CH2 → @/로컬/VanaM_Logs/Camera_Logs/CH2/20261030_092000",
+  "완료 — 촬영 3장 | 폴더: @/로컬/VanaM_Logs/Camera_Logs/CH2/20261030_092000"
+ ],
+ "times": {
+  "open": "2026-10-30T09:20:00",
+  "frames": [
+   "2026-10-30T09:20:00",
+   "2026-10-30T09:20:01.050000",
+   "2026-10-30T09:20:02.100000"
+  ]
+ },
+ "files": [
+  "로컬/VanaM_Logs/Camera_Logs/CH2/20261030_092000/092000_0001.jpg",
+  "로컬/VanaM_Logs/Camera_Logs/CH2/20261030_092000/092001_0002.jpg",
+  "로컬/VanaM_Logs/Camera_Logs/CH2/20261030_092000/092002_0003.jpg"
+ ]
+}

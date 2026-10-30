@@ -1,0 +1,51 @@
+{
+ "t0": "2026-10-30T09:00:00",
+ "cfg": {},
+ "samples": [
+  [
+   "2026-10-30T09:00:30",
+   {
+    "working_set_mb": 512.3,
+    "private_mb": 640.0,
+    "handles": 900,
+    "threads": 31,
+    "gc0": 10,
+    "gc1": 2,
+    "gc2": 1
+   }
+  ],
+  [
+   "2026-10-30T09:01:00",
+   {
+    "working_set_mb": 2100.1,
+    "private_mb": 2500.5,
+    "handles": 6000,
+    "gdi": 100,
+    "user": 120,
+    "threads": 33,
+    "gc0": 1,
+    "gc1": 0,
+    "gc2": 3
+   }
+  ],
+  [
+   "2026-10-31T00:00:10",
+   {
+    "working_set_mb": 500.0
+   }
+  ]
+ ],
+ "reasons": [
+  [],
+  [
+   "private_mb=2500.5>2000",
+   "handles=6000>5000"
+  ],
+  []
+ ],
+ "files": [
+  "로컬/VanaM_Logs/CH1&2/selfwatch/dump_20261030_090100.txt",
+  "로컬/VanaM_Logs/CH1&2/selfwatch/selfwatch_20261030.csv",
+  "로컬/VanaM_Logs/CH1&2/selfwatch/selfwatch_20261031.csv"
+ ]
+}

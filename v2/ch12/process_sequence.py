@@ -14,7 +14,7 @@ from v2.ch12.process_steps import (Caps, ProcessStep, S, StepError, SHUTDOWN_LOG
                                    heater_hold_steps, heater_set_steps, heater_text, heater_wait_steps, main_steps,
                                    parse_duration_pc, power_on_steps, power_select_steps, pressure_ctrl_steps,
                                    pulse_set_message, pulse_set_steps, rga_steps, shutdown_steps, shutter_steps,
-                                   sp1_steps, step_cfg, testmode_steps, thickness_main_steps, thickness_zero_steps,
+                                   sp1_steps, step_cfg, row_test_steps, thickness_main_steps, thickness_zero_steps,
                                    unsupported_logs, uses_from_params)
 
 
@@ -72,7 +72,7 @@ def thickness_conflict(params: Mapping[str, Any], caps: Caps) -> str:
         return f"중간 펄스 전력 변경 확인 실패({e!r})"
 
 
-def testmode_duration_sec(params: Mapping[str, Any]) -> float:
+def row_test_duration_sec(params: Mapping[str, Any]) -> float:
     """TEST 행 시간(2157-2172): test_duration_sec → time(컨트롤러 기간 규칙 — 숫자만 = 초) → process_time×60, 최소 1초."""
     try:
         dur = float(params.get("test_duration_sec") or 0.0)
@@ -95,9 +95,9 @@ def build_sequence(params: Mapping[str, Any], chamber: int, cfg: Mapping[str, An
     sc = step_cfg(cfg, chamber)
     log = log if log is not None else []
     if bool(params.get("test_mode", False)):
-        dur = testmode_duration_sec(params)
+        dur = row_test_duration_sec(params)
         log.append(("Process", f"[TEST MODE] 장비제어 스킵 / 시뮬레이션 {dur:.1f}s 진행"))
-        return testmode_steps(dur)
+        return row_test_steps(dur)
     info = common_info(params, caps)
     bp = float(params.get("base_pressure", sc.base_pressure))
     wp = float(params.get("working_pressure", 0))

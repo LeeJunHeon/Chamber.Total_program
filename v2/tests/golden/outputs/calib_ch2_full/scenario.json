@@ -1,0 +1,213 @@
+{
+ "ch": 2,
+ "thickness": true,
+ "records": [
+  {
+   "ok": true,
+   "events": [
+    [
+     "start",
+     {
+      "t0_wall": "2026-10-30T09:10:05",
+      "process_note": "ITO 100nm",
+      "Process_name": "ITO 100nm",
+      "use_ms": true,
+      "shutter_delay": 1.0,
+      "integration_time": 60,
+      "use_power_select": false,
+      "G1 Target": "ITO (T-12)",
+      "G2 Target": "",
+      "G3 Target": "Ti (T-3)",
+      "base_pressure": 5e-06,
+      "use_dc_pulse": true,
+      "dc_pulse_power": 150.0,
+      "dc_pulse_freq": 100,
+      "dc_pulse_duty": 80,
+      "dc_pulse_off_time": 2.5,
+      "use_rf_pulse": true,
+      "rf_pulse_power": 100,
+      "rf_pulse_freq": 50,
+      "rf_pulse_duty": 40,
+      "use_dc_power": true,
+      "dc_power": 200.0,
+      "use_rf_power": true,
+      "rf_power": 300.0,
+      "chuck_position": "mid",
+      "process_time": 10.0,
+      "Ar_flow": 20.0,
+      "O2_flow": 2.0,
+      "working_pressure": 3.0,
+      "operator": "홍길동",
+      "substrate": "Si wafer",
+      "note": "비고, 쉼표",
+      "dep_rate": 0.5,
+      "thickness": 100.0
+     }
+    ],
+    [
+     "ig",
+     4.2e-06
+    ],
+    [
+     "ig",
+     "1.5E-05 Torr"
+    ],
+    [
+     "ig",
+     3.3e-06
+    ],
+    [
+     "dc",
+     1.0,
+     1.0,
+     1.0
+    ],
+    [
+     "shutter_open"
+    ],
+    [
+     "dc",
+     200.1,
+     400.2,
+     0.5
+    ],
+    [
+     "dc",
+     199.9,
+     401.0,
+     0.49
+    ],
+    [
+     "dcpulse",
+     150.3,
+     310.0,
+     0.48
+    ],
+    [
+     "dcpulse",
+     149.1,
+     309.0,
+     0.47
+    ],
+    [
+     "rf",
+     300.0,
+     2.0
+    ],
+    [
+     "rf",
+     301.5,
+     1.5
+    ],
+    [
+     "rfpulse",
+     100.2,
+     0.3
+    ],
+    [
+     "rfpulse",
+     99.8,
+     0.5
+    ],
+    [
+     "flow",
+     "Ar",
+     20.1
+    ],
+    [
+     "flow",
+     "AR",
+     19.9
+    ],
+    [
+     "flow",
+     "o2",
+     2.05
+    ],
+    [
+     "flow",
+     "He",
+     9.0
+    ],
+    [
+     "pressure",
+     "V+3.01"
+    ],
+    [
+     "pressure",
+     2.99
+    ],
+    [
+     "pressure",
+     "P=3.05"
+    ],
+    [
+     "heater",
+     200.5,
+     250.0,
+     1200,
+     true
+    ],
+    [
+     "heater",
+     null,
+     250.0,
+     1250,
+     true
+    ],
+    [
+     "heater",
+     201.25,
+     250.0,
+     null,
+     false
+    ],
+    [
+     "shutter_close"
+    ],
+    [
+     "dc",
+     9.0,
+     9.0,
+     9.0
+    ],
+    [
+     "thickness",
+     {
+      "end": "thickness",
+      "target": 100.0,
+      "final_nm": 100.456,
+      "avg_rate": 0.16742,
+      "tooling": 102.5,
+      "density": 7.14,
+      "z_factor": 1.0,
+      "chuck": "mid",
+      "gun": "G1",
+      "fallback_reason": "",
+      "jumps": 2,
+      "material": "ITO",
+      "factor_source": "재료 표"
+     }
+    ],
+    [
+     "end",
+     {
+      "process_name": "ITO 100nm",
+      "result": "ok",
+      "stopped": false,
+      "actual_shutter_delay_min": 1.0,
+      "actual_process_time_min": 10.016666666666667,
+      "soft_arc_count": 3,
+      "hard_arc_count": 1
+     }
+    ]
+   ]
+  }
+ ],
+ "logs": [
+  "Sputter Calib CSV 1행 기록 완료 (NAS) → @/G/공유 드라이브/VanaM_Sputter/Sputter/Calib/Database/Ch2_log.csv"
+ ],
+ "files": [
+  "G/공유 드라이브/VanaM_Sputter/Sputter/Calib/Database/Ch2_log.csv"
+ ]
+}

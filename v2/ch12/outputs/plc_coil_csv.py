@@ -115,6 +115,7 @@ class PlcCoilCsv(Owned):
                 regs = {}
             row = build_row(ts, self.coil_keys, coils, self.reg_keys, regs or {})
             self.writer.put(self._append, ts, now, row)
+            self.stats["ok"] += 1           # v1 은 쓰기 뒤에 셌다 — 요약 줄이 쓰기 스레드를 기다리지 않게 넣을 때 센다
             self.rows_queued += 1
             wrote = True
         self._emit_summary(now, plan, blocks)
@@ -126,8 +127,8 @@ class PlcCoilCsv(Owned):
             self.appender.append_row(dt=ts, header=self.header, row=row)
             if self.appender.consume_switched_flag():
                 self._log("PLC COIL LOG: NAS write failed -> switched to LOCAL (keep-handle)")
-            self.stats["ok"] += 1
         except Exception as e:
+            self.stats["ok"] = max(0, self.stats["ok"] - 1)
             self.stats["write_failed"] += 1
             self._log(f"PLC COIL LOG: write failed (ignored): {e!r}")
 

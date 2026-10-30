@@ -1,0 +1,56 @@
+{
+ "t0": "2026-10-30T09:15:20.123000",
+ "pre_files": {
+  "NAS/VanaM_toShare/JH_Lee/Logs/Robot/Robot_20261030.csv": {
+   "text": "﻿대상,요청시각,시작시각,종료시각,소요(분),결과,사유,공정명,레시피,행개수,request_id,peer,로그파일,프로그램,기록키\r\nCH1,09:00:00,,,,성공,,,,,X,ald,,ald,sputter-20261030091520123-R9\r\nALD1,09:01:00,09:01:05,,,진행"
+  }
+ },
+ "events": [
+  [
+   "request",
+   "a",
+   {
+    "target": "CH1",
+    "request_id": "R9",
+    "peer": "x"
+   }
+  ],
+  [
+   "finalize",
+   "a",
+   "성공",
+   ""
+  ],
+  [
+   "request",
+   "b",
+   {
+    "target": "CH2",
+    "request_id": "R10",
+    "peer": "y"
+   }
+  ],
+  [
+   "finalize",
+   "b",
+   "미확인",
+   "종료 경로 미확인"
+  ],
+  [
+   "flush"
+  ]
+ ],
+ "keys": {
+  "a": "sputter-20261030091520123-R9",
+  "a_ret": true,
+  "b": "sputter-20261030091520123-R10",
+  "b_ret": true
+ },
+ "files": [
+  "NAS/VanaM_toShare/JH_Lee/Logs/Robot/Robot_20261030.csv",
+  "로컬/VanaM_Logs/CH1&2/SYSTEM/20261030.log",
+  "로컬/VanaM_Logs/Robot/Robot_20261030_sputter.csv",
+  "로컬/VanaM_Logs/Robot/open_sputter.json",
+  "로컬/VanaM_Logs/Robot/pending_sputter.csv"
+ ]
+}

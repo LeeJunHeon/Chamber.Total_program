@@ -1,0 +1,10 @@
+# ==== Sputter Run ====
+# started_at = 2026-10-30T09:30:00
+# chamber = CH2
+# process_name =   ..  
+# origin = ui
+# ============================
+[2026-10-30 09:28:59] [CH2:Process] 종료 뒤 줄(SYSTEM 으로)
+[2026-10-30 09:30:00] [CH2:Logger] 새 로그 파일 시작: CH2_Untitled_20261030_093000_000.txt
+[2026-10-30 09:30:00] [CH2:Process] 이름 없는 공정
+# ==== END ====

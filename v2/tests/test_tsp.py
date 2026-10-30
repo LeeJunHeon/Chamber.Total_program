@@ -112,7 +112,12 @@ def test_same_bytes_and_results_as_v1(case):
         r.c.wait_until(r.c.monotonic() + 0.05)
     # 보낸 바이트 — 연결 번호까지(통신 예외 뒤 다음 호출이 새 연결)
     want = [t["hex"] for t in case["tx"]]
-    assert r.frames() == want, case["name"]
+    if case["name"].startswith("verify_timeout"):
+        # 폴링 횟수는 v1 실제 시간(가짜 서버 지연)에 따라 ±1 — 앞(쓰기 + 205)과 횟수 범위만 비교
+        assert r.frames()[:2] == want[:2] and set(r.frames()[1:]) == set(want[1:])
+        assert abs(len(r.frames()) - len(want)) <= 1, (r.frames(), want)
+    else:
+        assert r.frames() == want, case["name"]
     conns = [t["conn"] for t in case["tx"]]
     assert r.tr.opens == max(conns), case["name"]
     for g, d in zip(case["results"], got):
@@ -156,18 +161,22 @@ def test_tick_reads_only_while_in_use():
 
 
 def test_tick_during_verify_uses_poll_value():
-    r = Rig()
+    """on 확인(1.5 s 창)이 tick 을 걸쳐도 tick 이 205 를 따로 보내지 않는다 — 확인 폴링의 마지막 값을 싣는다."""
+    sim = TspSim()
+    sim.interlock = True                                                # 2 에 머묾 → 창 1.5 s 끝까지 폴링
+    r = Rig(sim=sim)
     r.d.begin_use()
-    box = []
     r.run(1)
+    box = []
+    r.c.wait_until(r.c.monotonic() + 0.3)
+    t_on = r.c.monotonic()
     r.d.on(on_done=box.append)
     rows = r.run(3)
-    assert box and box[0].ok
-    kinds = [f[2:5] for f in r.sim.frames]
-    assert all(x["tsp.q"] in ("ok", "late", "stale") for x in rows)
-    i = kinds.index(b"011")
-    # 011 직후 프레임은 모두 확인 폴링(205) — 사이에 낀 tick 읽기가 따로 없다
-    assert set(kinds[i + 1:]) <= {b"205"}
+    assert box and box[0].code == "E808"
+    ts = [t for t, d in sim.rx_log if t > t_on and d[2:5] == b"205" and t < t_on + T.VERIFY_WINDOW_S + 0.1]
+    gaps = {round(b - a, 6) for a, b in zip(ts, ts[1:])}
+    assert gaps == {round(sim.latency_s + CFG["TSP_STATUS_POLL_INTERVAL_S"], 6)}   # 확인 폴링만 — 사이에 낀 tick 읽기 없음
+    assert all(x["tsp.q"] == "ok" and x["tsp.status"] == 2 for x in rows)          # tick 은 확인 폴링 값(WAIT_INTERLOCK)
     r.done()
 
 
@@ -180,8 +189,8 @@ def test_interlock_verify_timeout_reports_e808():
     n205 = sum(1 for f in r.sim.frames if f[2:5] == b"205")
     assert 10 <= n205 <= 32                                             # 1.5 s 창, 0.05 s 간격
     assert any(e.kind == "command_result" and e.code == "E808" for e in r.events)
-    assert not r.tr.link_open                                           # 예외 → 닫음
-    assert r.call("read_status").ok and r.tr.opens == 2                 # 다음 호출이 다시 연결
+    assert r.tr.link_open                                               # 확인 시간초과는 닫지 않는다(v1 _wait_status)
+    assert r.call("read_status").ok and r.tr.opens == 1
     r.done()
 
 
