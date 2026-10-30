@@ -109,7 +109,8 @@ class Recorder:
     def flush(self, timeout_s: float = 10.0) -> bool:
         """큐가 다 쓰이고 지난 날 CSV 내보내기가 끝날 때까지(시험·종료용)."""
         t0 = time.monotonic()
-        while self._q.unfinished_tasks and time.monotonic() - t0 < timeout_s:
+        while (self._q.unfinished_tasks and self._writer is not None and self._writer.is_alive()   # 시작 전(쓰기 스레드 없음)·
+               and time.monotonic() - t0 < timeout_s):                                              # 멈춘 뒤면 기다리지 않음
             time.sleep(0.005)
         for t in list(self._exports):
             t.join(max(0.0, timeout_s - (time.monotonic() - t0)))
