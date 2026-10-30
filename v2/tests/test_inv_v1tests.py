@@ -2007,3 +2007,33 @@ def test_t082_server_daily_log_buffer_cap_and_flag_reset(tmp_path, monkeypatch):
     assert lg._overflow_logged is False and lg._buf == []
     lg.close()
     assert lg.path_today().read_text(encoding="utf-8").endswith("[CLIENT] y\n")
+
+
+# ═════════════ TEST-156 종료 단계 대기값은 실행 시점 설정(v1 tests/test_shutdown_step_runtime_cfg.py:46) ═════════════
+@pytest.mark.parametrize("cfg,gap,timeout", [({"SHUTDOWN_STEP_GAP_MS": 777, "SHUTDOWN_STEP_TIMEOUT_MS": 3333}, 0.777, 3.333),
+                                             ({"SHUTDOWN_STEP_GAP_MS": "x", "SHUTDOWN_STEP_TIMEOUT_MS": -5}, 0.5, 2.5),
+                                             ({}, 0.5, 2.5)])
+def test_t156_shutdown_gap_and_timeout_read_at_runtime(cfg, gap, timeout):
+    """controller/process_controller.py:46-50 _shutdown_gap_ms/_shutdown_timeout_ms — 설정값(777/3333)을 그때 읽음, 잘못된 값은 기본 500/2500.
+    (v1 의 '모듈 이름 값이 import 때 값으로 남는' 이상은 v2 에 없음 — 늘 cfg 를 읽는다.) 확인 없는 단계는 timeout 뒤 다음, 사이 gap."""
+    from v2.ch12.process_tokens import _ms
+    from v2.tests.test_process_stop import Host, _go
+    assert _ms(cfg, "SHUTDOWN_STEP_GAP_MS", 500) / 1000.0 == pytest.approx(gap)
+    assert _ms(cfg, "SHUTDOWN_STEP_TIMEOUT_MS", 2500) / 1000.0 == pytest.approx(timeout)
+    h = Host(cfg=cfg)
+    r, res = _go(h, at=90.0, act=lambda r: r.request_stop())
+    sd = [x for x in r.trace if x[4]]
+    gaps = [round(b[0] - a[0], 3) for a, b in zip(sd, sd[1:])]
+    assert all(g == pytest.approx(0.1 + gap, abs=0.02) for g in gaps), gaps
+
+
+# ═════════════ TEST-159 TEST 공정 종료 기록(v1 tests/test_test_mode_row.py:77) ═════════════
+def test_t159_test_row_finished_detail_marks_test_mode(tmp_path):
+    """controller/process_controller.py:2065 — TEST 행이 끝나면 결과 detail 에 test_mode True(정상 끝 ok)."""
+    from v2.tests import proc_rig as R
+    rig = R.make(tmp_path, chambers=("ch1",))
+    e = rig.eng["ch1"]
+    e.load([{"#": "test", "Process_name": "T", "time": "3s"}], source="local")
+    R.run(rig, R.idle(e), max_ticks=120, hooks=[R.at(2, lambda: e.start(source="local"))])
+    assert R.ends(e) == [("done", None)]
+    assert e.last_result["test_mode"] is True and e.last_result["result"] == "SUCCESS" and e.last_result["stopped"] is False
