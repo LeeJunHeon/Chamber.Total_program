@@ -16,6 +16,7 @@ class Source(str, Enum):
     WEB = "web"            # vanam-process
     HMI = "hmi"            # 노트북 로컬 화면
     INTERNAL = "internal"  # 안전 엔진·공정 엔진
+    ROBOT = "robot"        # 로봇 서버(챔버12 — 내부 명령 API 127.0.0.1 로만 들어온다)
 
 
 class ResultStatus(str, Enum):
