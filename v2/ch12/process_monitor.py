@@ -28,8 +28,12 @@ v2 방식(전송만 다름)
   MONITOR 웹훅 카드로 보낸다(구글챗은 포털 몫 — 지시 3장 (7)). 엔진 로그('Monitor' 태그 — v1 append_log)는 그대로.
 - DEV_MODE 면 v1 처럼 카드는 내지 않고 로그만.
 
+- 엑셀 저장 Arc 경고(v1 gdrive_logger _send_arc_chat — 같은 MONITOR 웹훅, 텍스트 '⚠️ *CH{n} Arc 경고*…')도 monitor_card 로
+  (attach 가 engine.excel.on_arc_alert 에 꽂는다 — 엑셀은 DEV_MODE 면 저장 자체를 생략, v1 그대로).
+
 붙이는 법(조립 — 엔진을 만든 뒤): mon = attach(system, engine). system.event_listeners 에 on_event, engine.shutter_listeners 에
-  on_shutter 를 넣는다(엔진은 Main Shutter 명령이 확인될 때 shutter_listeners 를 부른다). detach() 로 뗀다.
+  on_shutter, engine.excel.on_arc_alert 에 excel_arc_alert 를 넣는다(엔진은 Main Shutter 명령이 확인될 때 shutter_listeners 를
+  부른다). detach() 로 뗀다.
 """
 from __future__ import annotations
 
@@ -400,6 +404,14 @@ class EngineMonitor:
             except Exception:
                 pass
 
+    def excel_arc_alert(self, ch: int, process_name: str, soft: int, hard: int) -> None:
+        """엑셀 저장 Arc 경고(util/gdrive_logger.py:467-488 _send_arc_chat — 같은 MONITOR 웹훅, 로그 없음) → monitor_card.
+        ExcelLog.on_arc_alert 자리(성공 공정·전 행 최대 soft+hard ≥ GDRIVE_ARC_ALERT_THRESH·런타임 Arc 경고 없었을 때만)."""
+        text = (f"⚠️ *CH{int(ch)} Arc 경고*\n"
+                f"공정: `{process_name}`\n"
+                f"Soft Arc: {soft}회 / Hard Arc: {hard}회 (합계 {soft + hard}회)")
+        self._card(text, {"item": "arc", "phase": "excel_arc"})
+
     def detach(self) -> None:
         for lst, f in ((self.sys.event_listeners, self.on_event),
                        (getattr(self.engine, "shutter_listeners", []), self.on_shutter)):
@@ -415,5 +427,8 @@ def attach(system, engine, **kw: Any) -> EngineMonitor:
     if lst is None:
         lst = engine.shutter_listeners = []
     lst.append(m.on_shutter)
+    ex = getattr(engine, "excel", None)
+    if ex is not None and getattr(ex, "on_arc_alert", None) is None:
+        ex.on_arc_alert = m.excel_arc_alert
     engine.monitor = m
     return m

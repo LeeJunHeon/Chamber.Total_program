@@ -11,15 +11,16 @@
   ② first_restart — 이 공정에서 첫 재시작(저널 restarts == 0).
   ③ 장비 상태가 저널의 기대 상태와 일치 — 블록 종류별 확인 목록(blocks.RESUME_CHECKS, 저널 state.resume_checks):
      shutter·gas·power_select = 저널 때 1초 행의 PLC 코일과 같음(gas 는 + FLOW ON 이던 가스의 잰 유량이 설정 ±10 %,
-     최소 1 sccm), pressure = 압력이 SP 목표의 MFC 허용 범위 안
-     (mfc_ops.within — D79), power_output = 켜져 있던 전원이 켜져 있고 목표 ±10 %(최소 1 W — D79 와 같은 폭), 끈 것은 꺼짐,
+     최소 1 sccm), pressure = 지금 압력이 저널 때 압력과 SP 목표 사이(압력 제어가
+     목표로 가는 중) 또는 둘 중 하나의 MFC 허용 범위 안(mfc_ops.within — D79 와 같은 폭; 압력 제어 전·압력 도달 대기 스텝 중이면 확인 없음), power_output = 켜져 있던 전원이 켜져 있고 목표 ±10 %(최소 1 W — D79 와 같은 폭), 끈 것은 꺼짐,
      heater_run·watchdog = 히터 엔진 resume_checks(RUN·목표·WD_ERR·FAULT), thickness = 두께 엔진 resume_checks.
   ④ resumable — 지금 블록이 상태 유지 블록(블록 정의 resumable ∧ 지금 스텝 holding — 대기·가스 안정화·프리스퍼터·메인 증착·
      히터 유지/도달 대기·TEST·delay 행). 진공·벤트·게이트·척·핀(로봇 — 블록 아님)·장비 설정 쓰기 도중·정지 순서·STOP 요청 중은 아님.
      의도적 종료 표시가 있으면 아님.
   ⑤ enabled — RESUME_ENABLED.
-  이어갈 때 엔진이: 설정값 다시 쓰기·되읽기 확인(실패면 안전 정지) → 'restart' 이벤트 '복구됨(공백 N s)'(공정 txt·웹 — 카드 1장은
-  포털) → 남은 만큼 이어감. 1초 기록의 빈 구간은 채우지 않는다.
+  이어갈 때 엔진이: 설정값 다시 쓰기·되읽기 확인(실패면 안전 정지) → 이벤트 source process·kind=resumed {run_id, gap_s, name,
+  block, checks} '복구됨(공백 N s)'(공정 txt·웹 — 카드 1장은 포털) → 남은 만큼 이어감. 1초 기록의 빈 구간은 채우지 않는다.
+  이어가지 않으면 따로 이벤트 없이 run_end error PROGRAM_RESTART 하나(포털 카드 1장 — '❌ 공정 실패 이유' chat 은 내지 않는다).
   플라즈마 클리닝·TSP 는 늘 안전 정지(PC: RF 0 W → SET OFF → 가스 OFF → MFC VALVE OPEN, TSP: TSP OFF → 연결 닫기 → CH1 IG OFF —
   CH1 공정을 이어가면 IG 는 둠) — 상태 유지 블록 목록(④)에 없다(결정 후보).
 - 드라이버 넘겨받기(adopt_outputs): 새 프로그램의 드라이버는 출력을 켠 적이 없다고 알아서 정지 순서의 끄기를 건너뛴다 — 저널·다시
@@ -380,9 +381,16 @@ class ResumeManager:
                 pm = now(f"{ch}.mfc.pressure_mtorr")
                 if sp is None:
                     out.append(("pressure", True, "압력 제어 전 — 확인 없음"))
+                elif str(st.get("step_message") or "").startswith("압력 도달 대기"):
+                    out.append(("pressure", True, f"압력 도달 대기 중(지금 {pm} mTorr) — 이어 가는 대기 스텝이 도달을 판정"))
                 else:
-                    ok = pm is not None and mfc_ops.within(self.sys.mfc[ch], float(sp), float(pm))
-                    out.append(("pressure", bool(ok), f"압력 {pm} mTorr · 목표 {sp} mTorr(MFC 허용 범위)"))
+                    was = (exp.get("pressure") or {}).get(f"{ch}.mfc.pressure_mtorr")
+                    ref = float(was) if was is not None else float(sp)
+                    m = self.sys.mfc[ch]
+                    lo, hi = min(ref, float(sp)), max(ref, float(sp))
+                    ok = pm is not None and (lo <= float(pm) <= hi or mfc_ops.within(m, ref, float(pm))
+                                             or mfc_ops.within(m, float(sp), float(pm)))
+                    out.append(("pressure", bool(ok), f"압력 {pm} mTorr · 저널 {was} mTorr(목표 {sp}, MFC 허용 범위)"))
             elif cid == "power_output":
                 out += power_checks(ch, exp.get("power_output") or {}, now)
             elif cid == "thickness":
@@ -447,11 +455,9 @@ class ResumeManager:
         hub = getattr(self.sys, "hub", None)
         if hub is not None and run_id:
             hub._open_runs[part] = run_id
-        src = f"engine:{part}"
-        self.sys.emit(src, "restart", text, level="error", code="PROGRAM_RESTART",
-                      event={"result": "stopped", "run_id": run_id, "gap_s": None if gap is None else round(gap, 1)})
-        self.sys.emit(src, "run_end", text, level="error", code="PROGRAM_RESTART",
-                      event={"run_id": run_id, "result": "error", "reason": "PROGRAM_RESTART"})
+        self.sys.emit(f"engine:{part}", "run_end", text, level="error", code="PROGRAM_RESTART",
+                      event={"run_id": run_id, "result": "error", "reason": "PROGRAM_RESTART",
+                             "gap_s": None if gap is None else round(gap, 1)})
 
     # ── 플라즈마 클리닝·TSP — 늘 안전 정지 ──
     def _stop_pc(self, doc: dict) -> None:
@@ -514,7 +520,7 @@ class ResumeManager:
         if idx:
             self.say(f"공정 없음 · 남은 파워 {[DCV_NAMES[k] for k in idx]} — 파워만 끔")
             self.residual = power_off_only(self.sys, "RESIDUAL_POWER", heater=False, plc_idx=idx, pulses=False, log=self.say)
-            self.sys.emit("restart", "residual_power", f"시작 때 남은 파워 출력 {[DCV_NAMES[k] for k in idx]} — 파워만 끔",
+            self.sys.emit("resume", "residual_power_off", f"시작 때 남은 파워 출력 {[DCV_NAMES[k] for k in idx]} — 파워만 끔",
                           level="warn", code="RESIDUAL_POWER_OFF", event={"sent": self.residual.get("sent")})
 
 

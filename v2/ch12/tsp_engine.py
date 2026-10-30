@@ -120,7 +120,20 @@ class TspEngine(TspCycle):
         self._emit(TspEngineEvent("popup", text, level="warn", data={"title": title, "text": text, "auto_close_ms": 5000}))
 
     def _card(self, name: str, data: Dict[str, Any], level: str = "info") -> None:
+        """TSP 시작·종료 카드(포털이 보낸다) + run_start·run_end(허브 → 포털 공정 이력 — 챔버 'tsp')."""
         self._emit(TspEngineEvent("card", name, level=level, code=data.get("code"), data=dict(data, card=name)))
+        if name == "started":
+            self._emit(TspEngineEvent("run_start", "TSP", data={
+                "run_id": data.get("run_id"), "name": "TSP", "params": dict(data.get("params") or {}),
+                "owner": self.owner, "by": getattr(self, "by", None) or self.owner, "chamber": "tsp"}))
+        elif name == "finished":
+            det = dict(data.get("detail") or {})
+            ok = bool(data.get("ok"))
+            result = "done" if ok else ("aborted" if det.get("stopped") else "error")
+            code = None if ok else ("USER_STOP" if result == "aborted" else str(data.get("code") or "PROCESS_FAILED"))
+            self._emit(TspEngineEvent("run_end", "TSP", level="info" if ok else "warn", code=code, data={
+                "run_id": data.get("run_id"), "result": result, "reason": code, "chamber": "tsp",
+                "summary": {"name": "TSP", "result_detail": det}}))
 
     def _state(self, s: str) -> None:
         """v1 state_cb — '[STATE] {s}'."""
@@ -421,12 +434,12 @@ class TspEngine(TspCycle):
 
 
 def attach(system, run_state, name: str = "tsp", settings_dir=None, schedule: bool = True) -> TspEngine:
-    """조립(Ch12System)에 TSP 엔진을 꽂는다 — 이벤트는 조립 이벤트 길(출처 tsp_engine), 로그 파일은 v1 기록 출력 쓰기 스레드.
+    """조립(Ch12System)에 TSP 엔진을 꽂는다 — 이벤트는 조립 이벤트 길(출처 engine:tsp — 허브 챔버 tsp), 로그 파일은 v1 기록 출력 쓰기 스레드.
     schedule=True 면 매일 예약(tsp_schedule)을 붙이고 바로 복원한다(v1 은 TSP 페이지 생성 때 예약 등록) — 저장 폴더는
     settings_dir, 없으면 조립 설정 저장소 폴더(system.store.dir)."""
     from v2.ch12.tsp_schedule import TspSchedule
     eng = TspEngine(system.clock, system.cfg, system.tsp, system.shared.tsp_ig, run_state,
-                    on_event=system._ev_for("tsp_engine"), writer=system.outputs.writer)
+                    on_event=system._ev_for("engine:tsp"), writer=system.outputs.writer)
     system.register_engine(name, eng)
     if schedule:
         store = getattr(system, "store", None)
@@ -434,5 +447,5 @@ def attach(system, run_state, name: str = "tsp", settings_dir=None, schedule: bo
         eng.schedule = TspSchedule(eng, d)
         msg = eng.schedule.restore()
         if msg:
-            system.emit("tsp_engine", "schedule_restore", msg)
+            system.emit("engine:tsp", "schedule_restore", msg)
     return eng

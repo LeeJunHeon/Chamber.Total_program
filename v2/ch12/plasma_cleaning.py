@@ -176,9 +176,30 @@ class PlasmaCleaning(StepIO, StopIO, PreflightIO, HostIO, EventIO, ViewIO):
         self.emit(PcEvent("log", line, data={"source": src, "msg": msg}))
 
     def card(self, api: str, level: str = "info", code: Optional[str] = None, **data) -> None:
-        """구글챗 카드 자리(v1 chat_pc 호출과 같은 이름·인자) — 포털이 보낸다."""
+        """구글챗 카드 자리(v1 chat_pc 호출과 같은 이름·인자) — 포털이 보낸다. 시작·종료 카드 때 run_start·run_end 도 낸다
+        (허브 → 포털 공정 이력 — 챔버 'pc')."""
         self.emit(PcEvent("card", str(data.get("text") or data.get("payload", {}).get("status", "") or api),
                           code=code, level=level, data=dict(data, api=api, chat="PC")))
+        if api == "notify_process_started":
+            self._run_event_start(dict(data.get("payload") or {}))
+        elif api == "notify_process_finished_detail":
+            self._run_event_end(dict(data.get("payload") or {}))
+
+    def _run_event_start(self, payload: Dict[str, Any]) -> None:
+        name = str(payload.get("prefix") or payload.get("process_note") or "Plasma Cleaning")
+        self.emit(PcEvent("run_start", name, data={"run_id": self.run_id, "name": name, "params": payload,
+                                                   "owner": self.owner_src, "by": self.by or self.owner_src,
+                                                   "chamber": "pc"}))
+
+    def _run_event_end(self, payload: Dict[str, Any]) -> None:
+        st = str(payload.get("status") or "")
+        result = "done" if st == "success" else ("aborted" if st == "stopped" else "error")
+        code = None if result == "done" else ("USER_STOP" if result == "aborted" else
+                                              str(payload.get("error_code") or "PROCESS_FAILED"))
+        name = str(payload.get("prefix") or payload.get("process_name") or "Plasma Cleaning")
+        self.emit(PcEvent("run_end", name, code=code, level="info" if result == "done" else "warn",
+                          data={"run_id": self.run_id, "result": result, "reason": code, "chamber": "pc",
+                                "summary": {"name": name, "result_detail": payload}}))
 
     def popup(self, kind: str, title: str, text: str, ch: Optional[int] = None, clear_on_close: bool = False) -> None:
         """경고(warning — 5 s 자동 닫힘)·치명(critical — 닫으면 clear_error) 창 자리(2854-2942)."""

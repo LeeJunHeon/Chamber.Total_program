@@ -12,7 +12,7 @@
     (본문에 줄바꿈 가능) 또는 [tag, 본문] 쌍. 태그 없는 문자열은 HOST 태그로 남긴다.
   · body 직렬화: 로봇 서버가 받은 객체를 다시 json.dumps(ensure_ascii=False, default=str) 하므로 키 순서만 지키면 된다.
 - 200 이 아니거나 본문이 위 모양이 아니면 '연결 안 됨'과 같게 다룬다(ForwardDown).
-- 실패 보고(결정 D09): POST /robot/v1/event 본문 {"kind": "host_error", "code": "E###", "detail": "[E###] 제목 | 상세: …"
+- 실패 보고(결정 D09): POST /robot/v1/event 본문 {"kind": "error_event", "code": "E###", "detail": "[E###] 제목 | 상세: …"
   (v1 챗·팝업 문구 _build_user_text), "level": "warn", "src": "HOST", "title": "오류(HOST, E###)"(v1 팝업 제목),
   "payload": {실패 data}} → 200 {"ok": true}. send_event 는 실패해도 예외 없이 False(제어 프로그램이 꺼져 있으면 로그만).
 

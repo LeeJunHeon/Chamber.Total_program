@@ -24,7 +24,8 @@ import threading
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
 from v2.common.snapshot import DeviceBlock, FieldDef, FType, Quality, row_columns
-from v2.ch12.drivers import camera, dc, dcpulse, ig, mfc, oes_link, plc, rf, rfpulse, rga_link, stm100, tsp
+from v2.ch12.drivers import camera, dc, dcpulse, heater, ig, mfc, oes_link, plc, rf, rfpulse, rga_link, stm100, tsp
+from v2.ch12 import thickness_record
 
 F, I, B, S = FType.FLOAT, FType.INT, FType.BOOL, FType.STR
 CHAMBERS = ("ch1", "ch2")
@@ -33,20 +34,22 @@ CHAMBERS = ("ch1", "ch2")
 BLOCK_ORDER: tuple = (
     "plc",
     "ch1.mfc", "ch1.ig", "ch1.dcpulse", "ch1.rfpulse", "ch1.stm100", "ch1.oes", "ch1.rga",
-    "ch2.mfc", "ch2.ig", "ch2.dcpulse", "ch2.rfpulse", "ch2.dc", "ch2.rf", "ch2.stm100", "ch2.oes", "ch2.rga",
-    "pc.rf", "tsp", "tsp.ig", "camera",
+    "ch2.mfc", "ch2.ig", "ch2.dcpulse", "ch2.rfpulse", "ch2.dc", "ch2.rf", "ch2.heater", "ch2.stm100", "ch2.thk", "ch2.oes",
+    "ch2.rga", "pc.rf", "tsp", "tsp.ig", "camera",
 )
 
 # 블록 → 그 블록을 채우는 1초 읽기 소스(worker) 이름. PLC 하나가 plc·ch2.dc·ch2.rf·pc.rf 를 한 번 읽기로 채운다(품질 공유).
 BLOCK_SOURCE: Dict[str, str] = {b: b for b in BLOCK_ORDER}
-BLOCK_SOURCE.update({"ch2.dc": "plc", "ch2.rf": "plc", "pc.rf": "plc"})
+BLOCK_SOURCE.update({"ch2.dc": "plc", "ch2.rf": "plc", "pc.rf": "plc", "ch2.heater": "plc", "ch2.thk": "engine"})
+# ch2.heater: PLC 1초 묶음의 히터 해독(drivers/heater.py — CH2_SUPPORTS_HEATER 일 때) + 엔진 열(owner·target·hold …).
+# ch2.thk: 두께 공정 판정(thickness_record.blocks — ThicknessEngine.snapshot_fields, 조립 assembly.ThicknessHost) — 장비 worker 없음.
 
 
 def device_blocks() -> List[DeviceBlock]:
     """드라이버 blocks() 를 BLOCK_ORDER 순서로."""
     found: Dict[str, DeviceBlock] = {}
     lists = [plc.blocks(), camera.blocks(), tsp.blocks(), ig.blocks("tsp"), rf.blocks("ch2"), rf.blocks("pc"),
-             dc.blocks("ch2")]
+             dc.blocks("ch2"), heater.blocks("ch2"), thickness_record.blocks("ch2")]
     for ch in CHAMBERS:
         lists += [mfc.blocks(ch), ig.blocks(ch), dcpulse.blocks(ch), rfpulse.blocks(ch), stm100.blocks(ch),
                   oes_link.blocks(ch), rga_link.blocks(ch)]
@@ -147,7 +150,9 @@ PROGRAM_FIELDS: tuple = (
 EXTRA_FIELDS: tuple = tuple(
     [f for c in CONTEXTS for f in _ctx_fields(c)] + [f for c in ("ch1", "ch2", "pc", "tsp") for f in _target_fields(c)]
     + list(PROGRAM_FIELDS))
-ENGINE_COLUMNS = frozenset(f.name for f in EXTRA_FIELDS if not f.name.startswith("prog."))
+ENGINE_COLUMNS = frozenset([f.name for f in EXTRA_FIELDS if not f.name.startswith("prog.")]
+                           + heater.engine_columns("ch2")
+                           + [f"ch2.thk.{n}" for n in thickness_record.BLOCK_FIELDS])   # 엔진이 채우는 장비 블록 열
 
 
 def columns() -> list:

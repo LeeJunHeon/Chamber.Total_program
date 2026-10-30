@@ -122,12 +122,18 @@ def test_event_endpoint_emits():
     got = []
     ops = FakeOps()
     with RobotApi(ops, port=0, emit=lambda *a, **k: got.append((a, k))) as api:
-        st, out = post(api.port, EVENT_PATH, {"kind": "host_error", "code": "E104", "detail": "[E104 / STOP] 잘못된 JSON 본문"})
+        st, out = post(api.port, EVENT_PATH, {"kind": "error_event", "code": "E104", "detail": "[E104 / STOP] 잘못된 JSON 본문"})
         assert st == 200 and out == {"ok": True}
-    assert got == [(("robot_server", "host_error", "[E104 / STOP] 잘못된 JSON 본문"), {"level": "warn", "code": "E104"})]
+    assert got == [(("robot_server", "error_event", "[E104 / STOP] 잘못된 JSON 본문"),
+                    {"level": "warn", "code": "E104",
+                     "event": {"src": "HOST", "code": "E104", "message": "[E104 / STOP] 잘못된 JSON 본문",
+                               "title": "오류(HOST, E104)"}})]
     assert ops.on_report is not None                     # 실패 보고도 같은 emit 로(D09)
     ops.on_report({"error_code": "E301", "message": "게이트 닫힘 미확인", "detail": "x"}, "HOST")
-    assert got[-1] == (("robot", "host_error", "[E301] 게이트 닫힘 미확인 | 상세: x"), {"level": "warn", "code": "E301"})
+    assert got[-1] == (("robot", "error_event", "[E301] 게이트 닫힘 미확인 | 상세: x"),
+                       {"level": "warn", "code": "E301",
+                        "event": {"src": "HOST", "code": "E301", "message": "[E301] 게이트 닫힘 미확인 | 상세: x",
+                                  "title": "오류(HOST, E301)"}})
 
 
 # ───────────────────────── 실제 robot_ops(실제 시계) ─────────────────────────

@@ -464,12 +464,18 @@ class Ch12Core:
             self.sys.shared.plc.proxy(w[src].upper()).write_switch(b.name, on)
         h["PLC_BUTTON"] = plc_button
 
+        def buzz_stop(a, src, by):
+            if not self._plc_up():
+                raise Rejected("LINK_DOWN", "PLC 연결 없음")
+            self.sys.shared.plc.proxy(w[src].upper()).buzzer_stop()
+        h["BUZZ_STOP"] = buzz_stop
+
         def runtime_dump(a, src, by):
-            from v2.ch12.outputs.runtime_dump import request_dump
-            try:
-                return request_dump(self.cfg, state=self.dump_state(), reason=str(a.get("reason") or "manual_button"))
-            except RuntimeError as e:
-                raise Rejected("DUMP_BUSY", str(e))
+            from v2.ch12.runtime_dump_hook import dump_runtime        # v1 _request_runtime_dump_internal 문구·상태 그대로
+            path = dump_runtime(self.sys, str(a.get("reason") or "manual_button"))
+            if path is None:
+                raise Rejected("DUMP_BUSY", "Runtime dump skipped/failed — 로그(DUMP) 확인")
+            return {"path": path}
         h["RUNTIME_DUMP"] = runtime_dump
         h["LOG_CLEAR"] = lambda a, src, by: self._emit("ui", "log_clear", str(a.get("target") or "all"), "info", "LOG_CLEAR")
 
@@ -510,18 +516,3 @@ class Ch12Core:
         if obj is None:
             raise Rejected("NOT_SUPPORTED", f"{what} 엔진 없음")
         return obj
-
-    def dump_state(self) -> dict:
-        """런타임 덤프 objects — v1 main._dump_state_objects 자리(엔진 상태 사전)."""
-        out: Dict[str, Any] = {"runtime_state": self.run_state.snapshot() if self.run_state is not None else None}
-        for ch, e in self.proc.items():
-            out[ch] = {"state": PS.chamber_state(e), "busy": e.busy, "run_id": e.run_id, "owner": e.owner}
-        if self.pc is not None:
-            out["pc"] = self.pc.state()
-        if self.tsp is not None:
-            out["tsp_ctrl"] = self.tsp.state()
-        try:
-            out["shared"] = self.sys.shared.snapshot()
-        except Exception:
-            pass
-        return out

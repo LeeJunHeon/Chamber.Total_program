@@ -17,8 +17,8 @@ from v2.common.clock import VirtualClock
 from v2.ch12 import snapshot_fields as SF
 from v2.ch12.sim.rig import Ch12Rig
 
-ON = {"plc", "ch1.mfc", "ch1.ig", "ch2.mfc", "ch2.ig", "ch2.dc", "ch2.rf", "ch2.stm100", "pc.rf", "camera"}
-OFF = set(SF.BLOCK_ORDER) - ON
+ON = {"plc", "ch1.mfc", "ch1.ig", "ch2.mfc", "ch2.ig", "ch2.dc", "ch2.rf", "ch2.heater", "ch2.stm100", "pc.rf", "camera"}
+OFF = set(SF.BLOCK_ORDER) - ON - {"ch2.thk"}     # ch2.thk = 엔진 열(두께 엔진이 붙어야 채움 — 4단계 조립 assembly)
 
 
 def make(tmp_path, cfg=None, **kw):

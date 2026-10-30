@@ -24,7 +24,7 @@ from typing import Optional
 from v2.ch12.workers import oes_common as C
 from v2.ch12.workers.oes_common import (
     OES_AVG_COUNT, _WinMutex, _copy_csv_to_nas, _default_out_dir, _errlog, _errlog_exc, _find_ar_index,
-    _make_default_filename, _mutex_timeout_ms, _post_anomaly_webhook, _print_json, _status, _stop_dir, _env_float,
+    _make_default_filename, _mutex_timeout_ms, _post_anomaly_webhook, _report_anomaly, _print_json, _status, _stop_dir, _env_float,
 )
 from v2.ch12.workers.oes_device import OESAsync
 from v2.ch12.workers.oes_guard import _LinkGuard, _ResetCallTimeout, _acquire_first_frame, _daemon_reset_device
@@ -248,7 +248,7 @@ async def _daemon_measure_once(
                                 f"측정 행: {rows}"
                             )
                             _status(f"[daemon] ANOMALY: {alert_msg}")
-                            await asyncio.to_thread(_post_anomaly_webhook, alert_msg)
+                            _report_anomaly(alert_msg)              # D28: 웹훅 대신 메인으로(포털이 카드)
                         else:
                             _ar_sum += ar_val
                             _ar_count += 1

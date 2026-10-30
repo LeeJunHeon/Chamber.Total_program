@@ -87,25 +87,24 @@ def kill(rig) -> float:
 
 
 def cleanup(rig) -> None:
-    """죽인(또는 끝난) 조립의 파일 쓰기 스레드 정리 — 장비로는 아무것도 보내지 않는다(시계가 닫혀 worker 는 이미 끝)."""
-    for f in (getattr(getattr(rig, "asm", None), "robot_api", None) and rig.asm.robot_api.stop,
-              rig.recorder.stop, rig.outputs.stop):
-        if f:
-            try:
-                f()
-            except BaseException:
-                pass
-    for e in rig.engines.values():
-        w = getattr(e, "writer", None)
-        if w is not None:
-            try:
-                w.stop(1.0)
-            except BaseException:
-                pass
+    """죽인(또는 끝난) 조립의 남은 스레드(파일 쓰기·로봇 API·재고 DB 가짜 서버 등) 정리 — 시계가 닫혀 worker 는 이미 끝났으므로
+    엔진 close 가 보내는 요청은 장비에 닿지 않는다(죽은 프로그램처럼)."""
     try:
         rig.journal.abandon()
     except BaseException:
         pass
+    for e in list(rig.engines.values()):
+        f = getattr(e, "close", None)
+        if f is not None:
+            try:
+                f()
+            except BaseException:
+                pass
+    for f in (rig.recorder.stop, rig.outputs.stop, rig.camera.stop):
+        try:
+            f()
+        except BaseException:
+            pass
 
 
 def finish(rig) -> None:
@@ -128,8 +127,8 @@ def ends(e) -> List[tuple]:
     return [(x.data.get("result"), x.code) for x in e.events if x.kind == "run_end"]
 
 
-def restarts(e) -> List[tuple]:
-    return [(x.data.get("result"), x.code) for x in e.events if x.kind == "restart"]
+def resumed(e) -> List[dict]:
+    return [dict(x.data, code=x.code, detail=x.detail) for x in e.events if x.kind == "resumed"]
 
 
 def block_hook(e, btype: str, fn: Callable[[], None], after_s: float = 0.0) -> Callable:

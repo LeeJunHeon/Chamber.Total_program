@@ -422,4 +422,6 @@ DECISIONS = [
     dict(id='D88', title='DC·RF 연속 파워 공정 중 수정', decision='드라이버 target_power 를 직접 씀(드라이버 API 없음).', reason="3·6단계 작성 중 판단", confirm=True, where="v2/ch12/process_adjust.py"),
     dict(id='D89', title='로봇 PLC 통신 오류 문구(X05)·시작 가드 대기 위치(X06)·peer 형식', decision='E401·E402·E403 detail 은 드라이버 문구(코드·제목·필드·시점은 같음). 시작 가드 대기를 robot_ops 로(문구·한도·E206 그대로). peer 는 v1 str(peername) 모양으로. 중복 id 응답에 duplicate:true.', reason="3·6단계 작성 중 판단", confirm=True, where="v2/ch12/robot_ops.py; robot_api.py"),
     dict(id='D90', title='TSP 예약 저장', decision='v1 은 저장하지 않아 재시작하면 늘 05:00 — v2 는 설정 폴더 tsp_schedule.json 에 저장·복원(끈 예약은 꺼진 채).', reason="3·6단계 작성 중 판단", confirm=True, where="v2/ch12/tsp_schedule.py"),
+    dict(id='D91', title='공정 모니터 판정 표본', decision="1초 행이 아니라 MFC 드라이버의 v1 주기(3 s) flow·pressure 이벤트로 판정 — 1초 행이면 '범위 밖 N회'가 v1 의 3배. 카드는 이벤트 monitor_card → 포털 MONITOR 웹훅(DEV_MODE 면 v1 처럼 로그만).", reason="3단계 공정 모니터·재고 DB 작성 중 판단", confirm=True, where="v2/ch12/process_monitor.py; inventory_db.py"),
+    dict(id='D92', title='재고 DB 대기', decision='socket.setdefaulttimeout 전역을 바꾸지 않고 3 s 한도로 끊음, 값은 화면 칸 대신 큐 행 params 에. 밖 URL 접속은 prod 만(sim 은 127.0.0.1 가짜 서버, bench 끔).', reason="3단계 공정 모니터·재고 DB 작성 중 판단", confirm=True, where="v2/ch12/process_monitor.py; inventory_db.py"),
 ]

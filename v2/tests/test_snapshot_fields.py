@@ -10,12 +10,13 @@ from v2.ch12 import snapshot_fields as SF
 def test_blocks_in_order_from_driver_blocks():
     bl = SF.device_blocks()
     assert [b.name for b in bl] == list(SF.BLOCK_ORDER)
-    assert len(bl) == 21
-    assert {"plc", "camera", "tsp", "tsp.ig", "pc.rf", "ch2.dc", "ch2.rf"} <= set(SF.BLOCK_ORDER)
+    assert len(bl) == 23
+    assert {"plc", "camera", "tsp", "tsp.ig", "pc.rf", "ch2.dc", "ch2.rf", "ch2.heater", "ch2.thk"} <= set(SF.BLOCK_ORDER)
     for ch in ("ch1", "ch2"):
         assert {f"{ch}.{d}" for d in ("mfc", "ig", "dcpulse", "rfpulse", "stm100", "oes", "rga")} <= set(SF.BLOCK_ORDER)
     # PLC 한 번 읽기가 채우는 블록(품질 공유)
-    assert {b for b, s in SF.BLOCK_SOURCE.items() if s == "plc"} == {"plc", "ch2.dc", "ch2.rf", "pc.rf"}
+    assert {b for b, s in SF.BLOCK_SOURCE.items() if s == "plc"} == {"plc", "ch2.dc", "ch2.rf", "pc.rf", "ch2.heater"}
+    assert SF.BLOCK_SOURCE["ch2.thk"] == "engine"                                # 두께 판정 열은 엔진이 채운다
 
 
 def test_columns_unique_tick_then_extra_then_blocks():
@@ -37,7 +38,10 @@ def test_context_and_target_fields():
             assert f"{c}.proc.{k}" in names
     assert "ch1.set.n2_sccm" not in names and "ch2.set.n2_sccm" in names          # CH1 가스는 Ar·O2 만
     assert {"ch2.set.heater_c", "ch2.set.dc_w", "ch1.set.dcpulse_w", "ch1.set.rfpulse_w", "pc.set.rf_w"} <= names
-    assert SF.ENGINE_COLUMNS == {n for n in names if not n.startswith("prog.")}
+    from v2.ch12.drivers import heater as HD
+    from v2.ch12 import thickness_record as TR
+    assert SF.ENGINE_COLUMNS == ({n for n in names if not n.startswith("prog.")} | set(HD.engine_columns("ch2"))
+                                 | {f"ch2.thk.{n}" for n in TR.BLOCK_FIELDS})
 
 
 def test_program_state_reads_this_process():

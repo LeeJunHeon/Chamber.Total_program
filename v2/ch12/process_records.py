@@ -84,7 +84,8 @@ class ProcessRecordsMixin:
                 self.stats.params["soft_arc_count"], self.stats.params["hard_arc_count"] = s, h
             pp = self.stats.params
             self.excel.save_main(self.stats, operator=pp.get("operator", ""), substrate=pp.get("substrate", ""),
-                                 note=pp.get("note", ""))
+                                 note=pp.get("note", ""),     # 런타임 Arc 경고를 이미 냈으면 엑셀 Arc 경고 생략(v1 1926-1930)
+                                 arc_alert_sent=getattr(self.actions, "_arc_run", None) == self.run_id)
         if self.run_warnings:
             d.setdefault("warnings", list(self.run_warnings))
         if params_chuck := str(self.params.get("chuck_position") or "").strip():

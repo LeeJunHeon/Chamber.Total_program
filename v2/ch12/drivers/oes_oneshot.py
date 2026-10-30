@@ -23,12 +23,14 @@ class OneShotMixin:
 
     # ───────── 메시지 ─────────
     def _on_oneshot_msg(self, obj: Dict[str, Any]) -> None:
-        """v1 _watch_worker_stdout — status·started·finished/fatal 만(그 밖은 버림)."""
+        """v1 _watch_worker_stdout — status·started·finished/fatal 만(그 밖은 버림) + anomaly(D28 — 이벤트로)."""
         k = obj.get("kind")
         if k == "status":
             msg = obj.get("message", "")
             if msg:
                 self._status(f"[OES] {msg}")
+        elif k == "anomaly":
+            self._anomaly(obj)
         elif k == "started":
             self._status(f"[OES] worker started out_csv={obj.get('out_csv')} cols={obj.get('cols')} usb={obj.get('resolved_usb')}")
         elif k in ("finished", "fatal"):

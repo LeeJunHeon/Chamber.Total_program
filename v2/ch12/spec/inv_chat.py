@@ -130,7 +130,7 @@ ITEMS = [
          v1="controller/chat_notifier.py:748-754,766-785; lib/link_state.py:8-13,108-112; lib/config_common.py:632-634", v2=_V2, test="", status="todo", note=""),
     dict(id="CHAT-033", area="chat",
          desc="호스트(로봇) 통신·핸들러 오류는 errors/error_reporter 가 표준 fail payload 를 만들어 chat_host.notify_error_event(src='HOST', code, '[CODE] 메시지 | 상세: ..') 로 보냄 — 서버: E102(버전), E104(JSON), E105(command 없음), E107(응답 직렬화), E110(fail 에 코드 없음), E111(dict 아님), E999(미처리 예외); 핸들러 _fail: 명시 코드·예외 code·KeyError→E411·그 밖 E110",
-         v1="errors/error_reporter.py:49-107,188-212; host/server.py:189,252,313,349,371,388,438; host/handlers.py:302-378; main.py:1863", v2=_V2, test="", status="todo", note="코드·문구는 err 영역 카탈로그"),
+         v1="errors/error_reporter.py:49-107,188-212; host/server.py:189,252,313,349,371,388,438; host/handlers.py:302-378; main.py:1863", v2='v2/ch12/robot_api.py; v2/robot_server/server.py', test='v2/tests/test_portal_events.py::test_error_event_from_robot_ops_and_robot_server; v2/tests/test_robot_server_events.py::test_parse_error_and_missing_command_send_events', status='done', note='코드·문구는 err 영역 카탈로그 / 장비는 error_event {src, code, message} 이벤트, 카드는 포털(lib/ops2/ch12/chatCards.ts)'),
 
     # ───────────────────────── PLC 링크 카드 ─────────────────────────
     dict(id="CHAT-034", area="chat",
@@ -146,7 +146,7 @@ ITEMS = [
     # ───────────────────────── 로봇 요청 공정 카드(클라이언트 방) ─────────────────────────
     dict(id="CHAT-037", area="chat",
          desc="클라이언트(로봇) 요청 공정 전용 방(CHAT_WEBHOOK_CLIENT_PROCESS_URL, 비면 꺼짐): host_process_log 의 기록 이벤트(started/finished)만 카드로 — UI·파일·Pre-Sputter 시작은 대상 아님. 워커 스레드 이벤트도 루프로 마샬링",
-         v1="main.py:245-276; controller/chat_notifier.py:833-851", v2=_V2, test="", status="todo", note=""),
+         v1="main.py:245-276; controller/chat_notifier.py:833-851", v2='v2/ch12/robot_api.py; v2/ch12/outputs/robot_csv.py', test='v2/tests/test_portal_events.py::test_client_process_event_kind_and_info; v2/tests/test_portal_events.py::test_robot_csv_sink_wiring', status='done', note='장비는 client_process {kind, info} 이벤트(robot_api.client_process_to_emit 를 RobotCsv.set_event_sink 에 — 조립), 카드·중복 억제는 포털'),
     dict(id="CHAT-038", area="chat",
          desc="클라이언트 '공정 시작' 카드(INFO, urgent): 부제 '{대상} · {공정명}'(공정명 = process_names ' / ' 분리 1개면 그대로, 여럿이면 '첫 공정 외 n개', 없으면 레시피 파일명(확장자 제외), 없으면 '—'), 필드 대상, 레시피('{파일} (공정 N개)'), 요청 시각, 시작 시각, request_id(있으면). 시각은 오늘이면 HH:MM:SS, 아니면 MM/DD HH:MM:SS",
          v1="controller/chat_notifier.py:853-906", v2=_V2, test="", status="todo", note=""),
@@ -209,7 +209,7 @@ ITEMS = [
          v1="runtime/chamber_runtime.py:1760,2636-2678; controller/process_monitor.py:290-297", v2='v2/ch12/process_monitor.py; v2/ch12/process_events.py', test='v2/tests/test_process_monitor.py::test_attach_arc_once_per_run_and_refp_each_time; v2/tests/test_process_monitor.py::test_helpers', status='done', note=""),
     dict(id="CHAT-056", area="chat",
          desc="엑셀 저장 Arc 경고(모니터 웹훅, 텍스트, timeout 5 s): 성공 공정 엑셀 저장 뒤 전 행 최대 soft+hard ≥ GDRIVE_ARC_ALERT_THRESH(5000)이고 런타임 Arc 경고·이전 엑셀 경고가 없었으면 '⚠️ *CH{n} Arc 경고*\\n공정: `{이름}`\\nSoft Arc: a회 / Hard Arc: b회 (합계 c회)'",
-         v1="util/gdrive_logger.py:467-488,531-543; runtime/chamber_runtime.py:1926-1938; lib/config_common.py:832", v2=_V2, test="", status="todo", note=""),
+         v1="util/gdrive_logger.py:467-488,531-543; runtime/chamber_runtime.py:1926-1938; lib/config_common.py:832", v2='v2/ch12/process_monitor.py; v2/ch12/outputs/excel_log.py; v2/ch12/process_records.py', test='v2/tests/test_portal_events.py::test_monitor_card_text_from_engine_monitor_and_excel_arc', status='done', note='monitor_card 이벤트(process_monitor.attach 가 ExcelLog.on_arc_alert 에 꽂음), 런타임 Arc 경고를 낸 공정은 생략'),
     dict(id="CHAT-057", area="chat",
          desc="카메라 디스크 여유 부족: 한 공정에 1번(새 참여자 start 때 다시 허용) chat_host.notify_error_with_src('CAM', '디스크 여유 부족(x GB < y GB) — 이번 공정 영상 미기록|— 촬영 중단') + flush → 집계 카드 '[CAM] ..'. 카메라 열기 실패는 카드 없음",
          v1="main.py:573-588; util/camera_recorder.py:735-746,845-853,896-903", v2=_V2, test="", status="todo", note=""),
@@ -218,5 +218,5 @@ ITEMS = [
          v1="util/self_watch.py:342-379; main.py:2116-2118", v2=_V2, test="", status="todo", note=""),
     dict(id="CHAT-059", area="chat",
          desc="OES 이상 감지(워커가 직접 웹훅, 워커 exe 옆 oes_config.json enabled·webhook_url): Ar 818.8 nm(818.0~819.0 중 가장 가까운 칸) 세기가 처음 10행·마지막 10샘플 구간을 뺀 누적 평균 대비 ≥10% 벗어나면 행마다 '⚠️ OES 이상 감지 (CH{n})\\nAr 818.8nm 급등|급락: v (평균 m, +p%)\\n측정 행: N' — 중복 억제 없음, 이상 값은 평균에 넣지 않음",
-         v1="apps/oes_service/oes_api.py:46-120,1640-1745,2052-2155", v2="v2/ch12/workers/oes_worker.py", test="", status="todo", note="알려진 이상 동작(이상 지속 시 행마다 알림) — 워커 안 동작 그대로, 결정 목록(웹훅을 포털로 넘길지)"),
+         v1="apps/oes_service/oes_api.py:46-120,1640-1745,2052-2155", v2='v2/ch12/workers/oes_common.py; v2/ch12/drivers/oes_link.py', test='v2/tests/test_portal_events.py::test_oes_anomaly_event', status='done', note='알려진 이상 동작(이상 지속 시 행마다 알림) — 워커 안 동작 그대로, 결정 목록(웹훅을 포털로 넘길지) / 결정 D28 — 워커는 웹훅 대신 JSONL anomaly → 이벤트 source <ch>.oes kind anomaly {text} → 포털'),
 ]

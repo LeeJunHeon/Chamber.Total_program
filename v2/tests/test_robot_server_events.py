@@ -1,10 +1,10 @@
 """로봇 서버 쪽 실패 보고 → 제어 프로그램 이벤트(결정 D09) — POST /robot/v1/event.
 
 - E102(버전)·E104(JSON)·E105(command 없음)·E110(fail 인데 코드 없음)·E111(dict 아님)·E107(직렬화 실패)마다 이벤트 1건
-  {kind host_error, code, detail = v1 챗·팝업 문구, title = v1 팝업 제목, payload}. 응답 바이트·로그 줄은 그대로(v1 골든 시험은
+  {kind error_event, code, detail = v1 챗·팝업 문구, title = v1 팝업 제목, payload}. 응답 바이트·로그 줄은 그대로(v1 골든 시험은
   test_robot_server 가 같은 서버로 계속 확인).
 - 제어 프로그램이 꺼져 있으면 보내지 못하고 로그만(예외·지연 없음, 연결 유지).
-- 실제 내부 명령 API(v2/ch12/robot_api.RobotApi) 까지: emit('robot_server', 'host_error', 문구, level='warn', code).
+- 실제 내부 명령 API(v2/ch12/robot_api.RobotApi) 까지: emit('robot_server', 'error_event', 문구, level='warn', code, event={src, code, message, title}).
 """
 from __future__ import annotations
 
@@ -78,7 +78,7 @@ def _free_port() -> int:
 
 
 def _check_event(ev: dict, code: str, payload: dict) -> None:
-    assert ev["kind"] == "host_error" and ev["code"] == code and ev["level"] == "warn" and ev["src"] == "HOST"
+    assert ev["kind"] == "error_event" and ev["code"] == code and ev["level"] == "warn" and ev["src"] == "HOST"
     assert ev["title"] == f"오류(HOST, {code})"                                   # v1 팝업 제목
     assert ev["detail"] == f"[{code}] {payload['message']} | 상세: {payload['detail']}"   # v1 _build_user_text
     assert ev["payload"] == payload
@@ -201,12 +201,15 @@ def test_forwarder_send_event_to_real_robot_api():
         ok = asyncio.run(fwd.send_event(protocol.report_event(p)))
         assert ok
         assert api.events[-1]["code"] == "E104"
-    assert got == [(("robot_server", "host_error", protocol.user_text(p)), {"level": "warn", "code": "E104"})]
+    t = protocol.user_text(p)
+    assert got == [(("robot_server", "error_event", t),
+                    {"level": "warn", "code": "E104",
+                     "event": {"src": "HOST", "code": "E104", "message": t, "title": "오류(HOST, E104)"}})]
 
 
 def test_send_event_unreachable_is_false_quickly():
     fwd = Forwarder({"ROBOT_API_PORT": _free_port(), "ROBOT_API_CONNECT_TIMEOUT_S": 0.5})
-    assert asyncio.run(fwd.send_event({"kind": "host_error"}, timeout_s=1.0)) is False
+    assert asyncio.run(fwd.send_event({"kind": "error_event"}, timeout_s=1.0)) is False
 
 
 @pytest.mark.parametrize("code", ["E102", "E104", "E105", "E107", "E110", "E111"])

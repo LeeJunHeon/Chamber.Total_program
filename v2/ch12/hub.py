@@ -17,8 +17,9 @@ type
   출처: ProcEvent·process·engine·proc → process, SafetyEvent·safety → safety, HeaterEvent·heater → heater, 그 밖은 장비 이름
   (챔버 조각을 뺀 나머지 — ch1.mfc → mfc, tsp.ig → ig, 챔버 이름만이면 process, 단 tsp 만이면 TSP 드라이버 tsp).
   엔진이 낼 때의 약속: system.emit(source="process:<ch1|ch2|pc|tsp>", kind, …, event=dict 또는 .data 가 dict 인 객체).
-  run_start·run_end 는 kind 로 알아본다 — data 키 run_id·recipe_name·by(owner)·name·step_no(process_index)·params·blocks /
-  run_id·status(result)·reason(이벤트 code)·summary. run_end 는 run_start 를 보낸 공정에만(아니면 event — 시작 전 거부 등).
+  run_start·run_end 는 kind 로 알아본다 — data 키 run_id·recipe_name·by(owner)·name·step_no(process_index)·process_total
+  (→ processTotal, 리스트 '(i/n)')·params·blocks / run_id·status(result)·reason(이벤트 code)·summary(없으면 {name} +
+  엔진 result_detail → summary.result_detail). 챔버 공정(ch1·ch2)·플라즈마 클리닝(pc)·TSP(tsp) 모두 같은 길. run_end 는 run_start 를 보낸 공정에만(아니면 event — 시작 전 거부 등).
 
 명령: run_command(kind, args, source, cid, by) — system.command(...) 를 부르고 그 결과로 cmd_result 를 낸다(로컬 서버·웹 연결·
   로봇 API 가 같이 쓴다). 챔버K 는 core 가 on_result 로 냈지만 챔버12 는 여기서 낸다 — core 는 cmd_result 를 내지 않는다.
@@ -367,15 +368,18 @@ class MessageHub:
                                        "stepNo": d.get("step_no") or d.get("process_index") or 1,
                                        "params": d.get("params") or {}, "blocks": d.get("blocks"),
                                        "configVersion": config_version(self.sys), "owner": d.get("owner"),
-                                       "recipeRev": d.get("recipe_rev")})
+                                       "recipeRev": d.get("recipe_rev"), "processTotal": d.get("process_total")})
             return True
         if ch not in self._open_runs:
             return False
         rid = d.get("run_id") or self._open_runs.pop(ch)
         self._open_runs.pop(ch, None)
+        summary = dict(d.get("summary") or {"name": name})
+        if "result_detail" not in summary and isinstance(d.get("result_detail"), dict):
+            summary["result_detail"] = d["result_detail"]          # 엔진 run_end 상세(errors·warnings·Arc·chuck·두께)
         self.publish("run_end", {"runId": rid, "chamber": ch, "result": d.get("status") or d.get("result"),
                                  "reasonCode": d.get("reason") or getattr(e, "code", None) or getattr(e, "reason", None),
-                                 "summary": d.get("summary") or {"name": name}})
+                                 "summary": summary})
         return True
 
     # ── state(1초 행마다) ──

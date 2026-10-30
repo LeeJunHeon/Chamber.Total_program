@@ -92,6 +92,80 @@ class HeaterHost:
         self.eng.shutdown()
 
 
+class ThicknessHost:
+    """두께 엔진의 1초 열(ch2.thk.* — thickness_record.blocks). poll·on_row 는 공정 엔진이 부른다(여기서 다시 부르지 않음)."""
+
+    def __init__(self, eng, ch: str) -> None:
+        self.eng, self.ch = eng, ch
+
+    def snapshot_fields(self) -> Dict[str, Any]:
+        from v2.ch12.thickness_record import BLOCK_FIELDS
+        got = self.eng.snapshot_fields()
+        return {f"{self.ch}.thk.{k}": got.get(k) for k in BLOCK_FIELDS}
+
+    def web_state(self) -> dict:
+        return dict(self.eng.status())
+
+
+def chamber_web_state(e) -> dict:
+    """챔버 엔진 화면 상태(허브 state.engines) — state_dict + 블록 목록·시작한 블록 수·일시정지 종류·명령 표 상태 이름."""
+    d = dict(e.state_dict()) if hasattr(e, "state_dict") else {}
+    d.pop("last_result", None)
+    blocks = [{"i": i, "type": b.get("type"), "label": b.get("label") or b.get("type"), "params": dict(b.get("params") or {})}
+              for i, b in enumerate(list(e.blocks or []))]
+    try:
+        upto = int(e.started_upto())
+    except Exception:
+        upto = 0
+    d.update(state=PS.chamber_state(e), engineState=e.state_name, blocks=blocks, started_upto=upto,
+             cur_block=e.cur_block, pause_kind=e.pause_kind, paused=bool(e.paused), recipe_name=e.recipe_name,
+             stopping=PS.chamber_state(e) == "STOPPING")
+    return d
+
+
+class RobotStatus:
+    """로봇 연결 상태(허브 state.engines["robot"]) — 내부 명령 API 의 마지막 요청 시각·peer·명령·처리 중 명령. 판단은 하지 않는다."""
+
+    def __init__(self, clock) -> None:
+        import threading
+        self.clock = clock
+        self.port: Optional[int] = None
+        self.count = 0
+        self.last: Optional[dict] = None
+        self.inflight: Dict[int, dict] = {}
+        self._lk = threading.Lock()
+        self._n = 0
+
+    def dispatch(self, ops, cmd, data, raw=None, peer: str = "", received_at=None, request_id=None):
+        from v2.ch12.robot_api import dispatch_robot
+        with self._lk:
+            self._n += 1
+            k = self._n
+            self.inflight[k] = {"cmd": str(cmd), "peer": str(peer), "since": self.clock.wall()}
+        out = None
+        try:
+            out = dispatch_robot(ops, cmd, data, raw, peer, received_at, request_id)
+            return out
+        finally:
+            body = out[1] if isinstance(out, tuple) and len(out) > 1 else None
+            with self._lk:
+                self.inflight.pop(k, None)
+                self.count += 1
+                self.last = {"cmd": str(cmd), "peer": str(peer), "at": self.clock.wall(),
+                             "result": body.get("result") if isinstance(body, dict) else None,
+                             "errorCode": body.get("error_code") if isinstance(body, dict) else None}
+
+    def web_state(self) -> dict:
+        from v2.ch12.hub import utc_iso
+        with self._lk:
+            last = dict(self.last) if self.last else None
+            infl = [dict(v, since=utc_iso(v["since"])) for v in self.inflight.values()]
+        if last:
+            last["at"] = utc_iso(last["at"])
+        return {"apiPort": self.port, "listening": self.port is not None, "count": self.count, "last": last,
+                "inflight": infl}
+
+
 class EngineAdapter:
     """robot_engines.RobotEngines — 실제 엔진 쪽 사실·시작."""
 
@@ -264,10 +338,18 @@ class Assembly:
     adapter: Any = None
     hub: Any = None
     config: Any = None
+    inventory: Any = None
+    robot_status: Any = None
 
     # 조립 엔진(system.stop 이 close 를 부른다) — 로봇 API·Robot CSV·프리스퍼터
     def close(self) -> None:
-        jobs = [getattr(self.robot_api, "stop", None), getattr(self.robot_csv, "close", None)]
+        csv = self.robot_csv
+        self.robot_csv = None                         # 닫은 뒤 늦은 기록(마감·거절)이 보내기 스레드를 다시 띄우지 않게 먼저 뗀다
+        for obj, attr in ((self.robot_ops, "robot_csv"), (self.pc, "host_log")):
+            if obj is not None and hasattr(obj, attr):
+                setattr(obj, attr, None)
+        jobs = [getattr(self.robot_api, "stop", None), getattr(csv, "close", None), getattr(csv, "close", None),
+                getattr(self.inventory, "close", None)]
         jobs += [p.close for p in self.presputter.values()]
         for fn in jobs:
             if fn is None:
@@ -311,24 +393,36 @@ def build(system, cfg: Optional[Dict[str, Any]] = None, *, settings_dir: Optiona
     system.event_listeners.append(rs.on_logged)
 
     # 2 히터·두께(CH2)
+    from v2.ch12.heater_setup import init_ch2_heater
+
+    def make_heater():
+        drv = getattr(system, "heater_drv", None) or HD.HeaterDriver(clock, system.plc, c, wr,
+                                                                      on_event=system._ev_for("ch2.heater"), chamber="ch2")
+        asm.heater_driver = drv
+        return HeaterEngine(clock, drv, c, on_event=system._ev_for("heater"), csv=system.outputs.heater, chamber="ch2")
     if bool(c.get("CH2_SUPPORTS_HEATER", False)):
-        asm.heater_driver = HD.HeaterDriver(clock, system.plc, c, wr, on_event=system._ev_for("ch2.heater"), chamber="ch2")
-        asm.heater = HeaterEngine(clock, asm.heater_driver, c, on_event=system._ev_for("heater"),
-                                  csv=system.outputs.heater, chamber="ch2")
-        system.register_engine("heater", HeaterHost(asm.heater))
-        asm.heater.start()
+        asm.heater = init_ch2_heater(c, make_heater, lambda src, msg: system.emit("heater", "log", msg, level="warn"))
+        if asm.heater is not None:
+            system.register_engine("heater", HeaterHost(asm.heater))
     for ch in CHAMBERS:
         drv = system.stm.get(ch)
         if drv is not None and drv.enabled:
             asm.thickness[ch] = ThicknessEngine(clock, c, ch, driver=drv, settings_dir=sdir)
+            system.register_engine(f"thk.{ch}", ThicknessHost(asm.thickness[ch], ch))
 
-    # 3 챔버 공정 엔진·프리스퍼터
+    # 3 챔버 공정 엔진(+ 공정 모니터·재고 DB)·프리스퍼터
+    from v2.ch12 import inventory_db as INV, process_monitor as PM
+    asm.inventory = INV.make_inventory(c, system.mode)
     for ch in CHAMBERS:
         e = ProcessEngine(system, ch, heater=asm.heater if ch == "ch2" else None, thickness=asm.thickness.get(ch),
                           excel_main_dir=excel_main_dir)
         system.register_engine(f"proc.{ch}", e)
         asm.proc[ch] = e
         rs.chambers[e.n] = e
+        e.web_state = (lambda e=e: chamber_web_state(e))          # 허브 state.engines["proc.chN"](포털 화면)
+        PM.attach(system, e)                                     # 공정 모니터(가스·압력 편차·Arc·REFP — v1 process_monitor)
+        if asm.inventory is not None:
+            INV.attach(e, asm.inventory)                         # 큐 행마다 Gun Target 재고 DB(최대 3 s — v1 5080-5098)
 
     # 4 플라즈마 클리닝·TSP(Robot CSV 는 로봇 쪽과 같이 쓴다)
     if robot_csv:
@@ -368,9 +462,13 @@ def build(system, cfg: Optional[Dict[str, Any]] = None, *, settings_dir: Optiona
                              on_report=report_to_emit(system.emit))
     asm.robot_ops.core = asm.core
     asm.core.robot_ops = asm.robot_ops
+    asm.robot_status = RobotStatus(clock)
+    system.register_engine("robot", asm.robot_status)
     if robot_api:
         try:
-            asm.robot_api = RobotApi(asm.robot_ops, clock, c, emit=system.emit, port=robot_port).start()
+            asm.robot_api = RobotApi(asm.robot_ops, clock, c, emit=system.emit, port=robot_port,
+                                     dispatch=asm.robot_status.dispatch).start()
+            asm.robot_status.port = asm.robot_api.port
         except OSError as ex:                       # 포트를 못 잡아도 공정·안전은 그대로(로봇 서버는 '응답 없음'으로 다룬다)
             system.emit("robot_api", "bind_failed", f"내부 명령 API 포트 열기 실패: {ex}", level="error", code="ROBOT_NOT_READY")
 

@@ -50,7 +50,7 @@ def blocks(chamber: str) -> List[DeviceBlock]:
 
 @dataclass(frozen=True)
 class OesEvent:
-    kind: str                     # status / finished / worker_exit / rejected
+    kind: str                     # status / finished / worker_exit / rejected / anomaly(Ar 이상 — data text)
     detail: str
     reason: Optional[str] = None
     data: Optional[dict] = None
@@ -206,6 +206,11 @@ class OesLink(OneShotMixin, TailMixin):
                 self.on_event(OesEvent(kind, detail, reason, data))
             except Exception:
                 pass
+
+    def _anomaly(self, obj: Dict[str, Any]) -> None:
+        """워커의 Ar 이상 감지(결정 D28) → 이벤트 kind='anomaly' {text, chamber} (포털이 v1 OES 이상 웹훅 카드로)."""
+        text = str(obj.get("text") or "")
+        self._emit("anomaly", text, data={"text": text, "chamber": self.ch})
 
     def _status(self, msg: str) -> None:
         self._emit("status", msg)
@@ -382,6 +387,9 @@ class OesLink(OneShotMixin, TailMixin):
                 self.clock.cond.notify_all()
             if not bool(obj.get("ok", False)):
                 self._status(f"[OES] daemon FAIL: {obj.get('error')}")
+            return
+        if k == "anomaly":
+            self._anomaly(obj)
             return
         if k == "started":
             self._status(f"[OES] daemon started out_csv={obj.get('out_csv')} cols={obj.get('cols')} usb={obj.get('resolved_usb')}")

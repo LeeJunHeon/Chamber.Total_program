@@ -269,6 +269,11 @@ class Ch12System:
         if supports(c, "ch2", "SUPPORTS_RF_CONT"):
             self.rf["ch2"] = RfPower(clock, self.plc, c, wr, self._ev_for("ch2.rf"), chamber="ch2", mode="ch2")
         self.rf["pc"] = RfPower(clock, self.plc, c, wr, self._ev_for("pc.rf"), chamber="pc", mode="pc")
+        # CH2 히터 PLC 해독기(CH2_SUPPORTS_HEATER) — PLC 1초 소스 블록(ch2.heater)에 들어가게 소스보다 먼저. 엔진은 조립(assembly)
+        self.heater_drv = None
+        if bool(c.get("CH2_SUPPORTS_HEATER", False)):
+            from v2.ch12.drivers.heater import HeaterDriver
+            self.heater_drv = HeaterDriver(clock, self.plc, c, wr, on_event=self._ev_for("ch2.heater"), chamber="ch2")
         sources: List[Source] = [Source("plc", self.workers["plc"], self.plc.source_read, self.plc.source_blocks(),
                                         int(c["TICK_DEADLINE_MS"]))]
 

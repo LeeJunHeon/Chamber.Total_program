@@ -32,6 +32,9 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
 
 버전 히스토리
   1  첫 판(7단계 — 챔버K 묶음 버전 12 의 필드 의미 그대로 + chambers, 챔버별 공정 맥락)
+  2  4단계 — commands(명령 표 58+·portalOnly·webOnly·target·PLC 버튼 51·사유 표)·stopSequence(safety_rules.public — 챔버 정지 순서·
+     끝 정지 금지 단계·PC/TSP 정지·allStopSequence·powerOffOnly·규칙 S1~S36)·states(process_states.STATES), 1초 행 블록
+     ch2.heater(PLC 히터 해독 + 엔진 열)·ch2.thk(두께 판정 — 엔진 열) 추가(chambers.ch2.blocks 에도)
 """
 from __future__ import annotations
 
@@ -46,7 +49,7 @@ from v2.ch12 import snapshot_fields as SF
 from v2.ch12 import web_blocks as WB
 from v2.ch12.hub import optional_module
 
-EXPORT_VERSION = 1
+EXPORT_VERSION = 2
 
 # 웹이 받는 공정 이벤트(엔진이 system.emit(source="process:<c>", kind, event=data) 로 내는 것 — hub 가 run_* 메시지로 바꾼다)
 EVENTS: tuple = (
@@ -129,7 +132,8 @@ CHAMBERS: tuple = (
          blocks=["ch1.mfc", "ch1.ig", "ch1.dcpulse", "ch1.rfpulse", "ch1.stm100", "ch1.oes", "ch1.rga"],
          shared=["plc", "camera"], heater=False, note="CH1 가스는 Ar·O2 만(N2 라인 없음)"),
     dict(id="ch2", label="CH2", kind="chamber", channel=2, gases=["ar", "o2", "n2"],
-         blocks=["ch2.mfc", "ch2.ig", "ch2.dcpulse", "ch2.rfpulse", "ch2.dc", "ch2.rf", "ch2.stm100", "ch2.oes", "ch2.rga"],
+         blocks=["ch2.mfc", "ch2.ig", "ch2.dcpulse", "ch2.rfpulse", "ch2.dc", "ch2.rf", "ch2.heater", "ch2.stm100", "ch2.thk",
+                 "ch2.oes", "ch2.rga"],
          shared=["plc", "camera"], heater=True,
          note="CH2 히터(VARITAP VSCD-30 + PLC PID, 래더 워치독) · DC·RF 연속은 PLC D/A(ch2.dc·ch2.rf) · DC2 는 히터 없을 때만"),
     dict(id="pc", label="플라즈마 클리닝", kind="pc", channel=None, gases=["ar", "o2", "n2"], blocks=["pc.rf"],

@@ -4,8 +4,9 @@
 - POST /robot/v1/command  본문 {"id", "cmd"(정규화된 명령), "data", "raw"(요청 JSON 전체), "peer"("ip:port"), "received_at"(ISO)}
   → 200 {"reply_cmd", "body", "log": [[태그, 본문], ...]}. 핸들러 예외의 원문 명령 + '_RESULT'·E999·'Handler error for ..' 줄도
   여기(robot_ops.handle)가 만든다. 본문이 JSON 객체가 아니면 400(로봇 서버는 '제어 프로그램 응답 없음'과 같게 다룬다).
-- POST /robot/v1/event    본문 {"kind", "code", "detail", "level"?} — 로봇 서버 쪽 실패 보고(E102·E104·E105·E107·E110·E111 —
-  결정 D09). emit(source='robot_server', kind, detail, level, code) 로 넘긴다(→ 기록·포털 카드). → 200 {"ok": true}.
+- POST /robot/v1/event    본문 {"kind"(error_event), "code", "detail", "level"?, "src"?, "title"?} — 로봇 서버 쪽 실패 보고
+  (E102·E104·E105·E107·E110·E111 — 결정 D09). emit(source='robot_server', kind, detail, level, code,
+  event={src, code, message, title}) 로 넘긴다(→ 기록·포털 error_event 카드 — v1 chat_host.notify_error_event). → 200 {"ok": true}.
 - GET /robot/v1/health    → 200 {"ok": true, "inflight": n} (진단용).
 - 127.0.0.1 에만 묶는다(밖에서 못 부른다).
 
@@ -15,7 +16,10 @@
 같은 명령 id 두 번(로봇 서버 재전송·재시작 뒤 중복): 처리한 id 와 결과를 기억해(최근 DEDUP_KEEP 개) 다시 실행하지 않고 같은 결과
 (+ "duplicate": true)를 돌려준다. 처리 중인 id 가 또 오면 끝날 때까지 기다렸다가 같은 결과. to_state()/from_state() 로 5단계 저널이
 이 기억을 저장·복원한다(재시작 뒤에도 같은 id 는 다시 실행하지 않는다).
-실패 보고(robot_ops on_report — v1 chat_host·팝업 자리): emit(source='robot', kind='host_error', 사용자 문구, level='warn', code).
+로봇 요청 공정 카드(v1 notify_client_process): client_process_to_emit(emit) 를 RobotCsv.set_event_sink 에 꽂으면 kind='client_process'
+{kind started|finished, info} 이벤트(조립이 꽂는다).
+실패 보고(robot_ops on_report — v1 chat_host·팝업 자리): emit(source='robot', kind='error_event', 사용자 문구, level='warn', code,
+event={src, code, message, title}) — 포털 계약(error_event {src, code, message}).
 가상 시계(시험)에서는 요청 스레드를 시계에 등록한다.
 """
 from __future__ import annotations
@@ -23,6 +27,8 @@ from __future__ import annotations
 import collections
 import json
 import threading
+from dataclasses import dataclass
+from datetime import datetime
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
@@ -71,9 +77,39 @@ _ROBOT_KINDS = _robot_kinds()
 def report_to_emit(emit: EmitFn) -> Callable[[Json, str], None]:
     """robot_ops on_report → 내부 이벤트(포털이 v1 chat_host 카드와 같은 계기로 보낸다 — D09)."""
     def on_report(payload: Json, src: str) -> None:
-        emit("robot", "host_error", ER.format_user_text(payload), level="warn",
-             code=str(payload.get("error_code") or "") or None)
+        code = str(payload.get("error_code") or "") or None
+        text = ER.format_user_text(payload)
+        emit("robot", "error_event", text, level="warn", code=code,
+             event={"src": src, "code": code, "message": text, "title": ER.popup_title(src, code or "")})
     return on_report
+
+
+@dataclass(frozen=True)
+class ClientProcessEvent:
+    """로봇 요청 공정 기록 이벤트(v1 notify_client_process) — data = {kind: started|finished, info}. 허브는 .data 를 context.data 로
+    싣는다(dict 이벤트로 내면 info 의 kind 가 context.kind 와 겹친다)."""
+    kind: str
+    data: Dict[str, Any]
+
+
+def _jsonable(v: Any) -> Any:
+    if isinstance(v, datetime):
+        return v.isoformat(timespec="seconds")          # 오프셋 없음 = 노트북 지역 시각(v1 과 같음 — 포털은 KST 로 읽는다)
+    if isinstance(v, dict):
+        return {str(k): _jsonable(x) for k, x in v.items()}
+    if isinstance(v, (list, tuple)):
+        return [_jsonable(x) for x in v]
+    return v
+
+
+def client_process_to_emit(emit: EmitFn) -> Callable[[str, Json], None]:
+    """Robot_YYYYMMDD.csv 기록 이벤트(outputs.robot_csv.RobotCsv.set_event_sink) → 내부 이벤트 kind='client_process'
+    {kind, info}(포털이 CLIENT 웹훅 카드로 — v1 main.py:259-276 _emit_client_process_card)."""
+    def sink(kind: str, info: Json) -> None:
+        inf = _jsonable(dict(info or {}))
+        emit("robot", "client_process", f"{kind} {inf.get('target', '')} {inf.get('request_id', '')}".strip(),
+             level="info", event=ClientProcessEvent("client_process", {"kind": str(kind or ""), "info": inf}))
+    return sink
 
 
 class RobotApi:
@@ -195,16 +231,20 @@ class RobotApi:
 
     # ───────── 로봇 서버 이벤트(D09) ─────────
     def _event(self, obj: Json) -> Tuple[int, Json]:
-        kind = str(obj.get("kind") or "robot_server_error")
+        kind = str(obj.get("kind") or "error_event")
         code = obj.get("code")
+        code = str(code) if code else None
         detail = str(obj.get("detail") or obj.get("text") or "")
         level = str(obj.get("level") or "warn")
+        src = str(obj.get("src") or "HOST")
         with self._lk:
             self.events.append(dict(obj))
             del self.events[:-200]
         if self.emit is not None:
             try:
-                self.emit("robot_server", kind, detail, level=level, code=str(code) if code else None)
+                self.emit("robot_server", kind, detail, level=level, code=code,
+                          event={"src": src, "code": code, "message": detail,
+                                 "title": str(obj.get("title") or ER.popup_title(src, code or ""))})
             except Exception:
                 pass
         return 200, {"ok": True}

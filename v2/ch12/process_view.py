@@ -5,7 +5,7 @@
   보낸 설정값(writes)·출력 상태(outputs)·실행 순서·공정 txt 경로. resumable = 블록 정의 resumable ∧ 지금 스텝 holding
   (정지 순서·STOP 요청 중이면 False) 또는 delay 행 대기 중.
 - resume_from(저널, 공백): 런을 되살려(같은 블록을 다시 펼쳐 스텝이 저널과 같은지 확인) 러너 스레드에서 설정값 다시 쓰기·되읽기
-  확인(실패면 안전 정지) → 'restart' 이벤트 '복구됨(공백 N s)' → 지금 스텝을 남은 만큼(대기 = 남은 시간, 압력 대기 = 남은 한도,
+  확인(실패면 안전 정지) → 이벤트 kind=resumed '복구됨(공백 N s)' → 지금 스텝을 남은 만큼(대기 = 남은 시간, 압력 대기 = 남은 한도,
   두께 = 두께 엔진 resume, 히터 SOAK = 남은 SOAK)으로 바꿔 이어간다. 꺼져 있던 시간도 경과에 넣는다(장비는 계속 켜져 있었음).
   공정 txt 는 같은 파일에 이어 쓴다. RunStats 평균·OES 측정은 이어가지 않는다(재시작 뒤 값만 — 기록의 빈 구간은 채우지 않음).
 - stop_from_journal(저널, 공백, 사유): 런을 되살려 STOP 과 같은 정지 순서(지금 구간 장비 — shutdown_steps)로 끄고
@@ -324,20 +324,25 @@ class ProcessViewMixin:
             self.txt._path = Path(p)                      # 같은 공정 txt 에 이어 쓴다(새 파일을 만들지 않음)
         return None
 
-    def _restart_event(self, result: str, plan: Dict[str, Any]) -> None:
-        """재시작 결과 — 공정 기록(txt)과 이벤트 하나(포털이 카드 1장)."""
+    def _restart_event(self, result: str, plan: Dict[str, Any]) -> str:
+        """재시작 결과 — 공정 기록(txt) 한 줄. 이어가면 이벤트 kind=resumed {run_id, gap_s, name, block, checks}(포털 카드 1장),
+        이어가지 않으면 이벤트를 따로 내지 않는다 — run_end error PROGRAM_RESTART 가 그 카드('❌ 공정 실패 이유' chat 도 없음)."""
         gap = float(plan.get("gap_s") or 0.0)
         reasons = [x for x in plan.get("reasons") or [] if not x[1]]
         if result == "resumed":
             text = f"복구됨(공백 {gap:.0f} s) — 블록 {self.block_no()} 에서 이어감"
-            code, level = "RESUMED", "warn"
-        else:
-            why = "; ".join(f"{x[0]}: {x[2]}" for x in reasons) or str(plan.get("detail") or "")
-            text = f"재시작(공백 {gap:.0f} s) — 이어가지 않고 안전 정지: {why}"[:480]
-            code, level = str(plan.get("reason") or "PROGRAM_RESTART"), "error"
+            self.log("MAIN", f"[RESTART] {text}")
+            inst = self.cur_inst
+            self.emit("resumed", text, "RESUMED", level="warn", run_id=self.run_id, gap_s=round(gap, 1),
+                      name=str(self.params.get("process_name") or self.recipe_name or ""),
+                      block={"no": self.block_no(), "type": inst.type if inst else None,
+                             "label": inst.label if inst else None},
+                      checks=[list(x) for x in plan.get("reasons") or []])
+            return text
+        why = "; ".join(f"{x[0]}: {x[2]}" for x in reasons) or str(plan.get("detail") or "")
+        text = f"재시작(공백 {gap:.0f} s) — 이어가지 않고 안전 정지: {why}"[:480]
         self.log("MAIN", f"[RESTART] {text}")
-        self.emit("restart", text, code, level=level, result=result, gap_s=round(gap, 1), run_id=self.run_id,
-                  block_no=self.block_no(), checks=[list(x) for x in plan.get("reasons") or []])
+        return text
 
     def _resume_one(self, run, plan: Dict[str, Any]):
         """러너 스레드 — 되살린 런 하나. (ok, stopped) 또는 None(delay 행을 이어 마침 — 다음 런으로)."""
@@ -358,7 +363,7 @@ class ProcessViewMixin:
                 return None
             self._abort_code = str(plan.get("reason") or "PROGRAM_RESTART")
             self._restart_event("stopped", plan)
-            raise PF.StageCancelled()                      # 시작 전 단계 — STOP 과 같은 정리 + run_end error
+            raise PF.StageCancelled()                      # → _stop_before_start: run_end error PROGRAM_RESTART                      # 시작 전 단계 — STOP 과 같은 정리 + run_end error
         if plan["mode"] == "resume":
             why = self._rewrite_setpoints(st)
             if why:
@@ -368,11 +373,12 @@ class ProcessViewMixin:
             self._restart_event("resumed", plan)
             self._prepare_continue(st, gap, plan)
         else:
-            self._restart_event("stopped", plan)
+            text = self._restart_event("stopped", plan)
             with self.lk:
                 self._abort_code = str(plan.get("reason") or "PROGRAM_RESTART")
-                r.failed = True
-                r.err = {"code": self._abort_code, "source": "RESTART", "detail": "재시작 — 이어가지 않음", "meta": {}}
+                r.failed = True                            # failures 는 비움 — '공정 실패 이유' chat 을 내지 않게
+                r.err = {"code": self._abort_code, "source": "RESTART", "detail": text,
+                         "meta": {"checks": [list(x) for x in plan.get("reasons") or []]}}
             r._start_shutdown()
         try:
             r._loop()
@@ -384,6 +390,9 @@ class ProcessViewMixin:
         detail = dict(res.detail)
         if self._exiting:
             return False, True
+        if plan["mode"] == "stop":                         # 카드는 run_end PROGRAM_RESTART 하나 — '공정 실패 이유' chat 을 내지 않게
+            detail["shutdown_errors"], detail["errors"] = list(detail.get("errors") or []), []
+            detail.pop("reason", None)
         self._after_finish(run, res.ok, detail)
         return res.ok, bool(detail.get("stopped"))
 

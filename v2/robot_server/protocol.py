@@ -136,5 +136,5 @@ def report_event(payload: Json, src: str = "HOST") -> Json:
     """내부 명령 API POST /robot/v1/event 본문(결정 D09) — v1 report_payload 의 챗(notify_error_event(src, code, text))·
     팝업(제목 '오류(src, code)') 자리를 제어 프로그램 → 포털로."""
     code = str(payload.get("error_code", "") or "").strip()
-    return {"kind": "host_error", "code": code or None, "detail": user_text(payload), "level": "warn", "src": src,
+    return {"kind": "error_event", "code": code or None, "detail": user_text(payload), "level": "warn", "src": src,
             "title": f"오류({src}, {code})" if code else f"오류({src})", "payload": dict(payload)}

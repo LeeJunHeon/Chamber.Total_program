@@ -116,6 +116,12 @@ def _find_ar_index(x_list: list) -> Optional[int]:
         return None
 
 
+def _report_anomaly(msg: str) -> None:
+    """Ar 이상 감지 알림(결정 D28) — 워커가 웹훅으로 직접 보내지 않고 메인으로 JSONL {"kind": "anomaly", "text"} 을 올린다
+    (메인 oes_link 가 내부 이벤트 source '<ch>.oes' kind 'anomaly' 로 → 포털이 v1 과 같은 문구의 카드를 보낸다). 중복 억제 없음."""
+    _print_json({"kind": "anomaly", "text": msg})
+
+
 def _post_anomaly_webhook(msg: str) -> None:
     """Google Chat webhook으로 이상 알림 전송 (blocking, 실패 무시)."""
     url = _ANOMALY_WEBHOOK_URL

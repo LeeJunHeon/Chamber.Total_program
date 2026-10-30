@@ -190,9 +190,15 @@ class Ch12Safety:
 
     # ───────── S32 의도적 종료 — 파워 출력만 ─────────
     def hold_process(self, e, reason: str) -> bool:
-        """챔버 엔진을 붙잡는다 — 새 장비 명령을 보내지 않게(정지 순서도 돌리지 않음), 대기 중인 단계는 끊는다. 공정 중이었으면 True."""
+        """챔버 엔진을 붙잡는다 — 정지 순서 없이 멈추고 run_end error PROGRAM_EXIT(엔진 program_exit — 5단계가 만든 길).
+        새 장비 명령도 보내지 않게 actions.send 를 막는다(끄기 명령 뒤 다음 블록이 다시 켜지 않게). 공정 중이었으면 True."""
         was = bool(e.busy)
-        running = bool(e.runner.is_running)
+        if hasattr(e, "program_exit"):
+            e.program_exit()
+        elif was:
+            e.emit("run_end", f"프로그램 종료 — 파워 출력만 끔({reason})", "PROGRAM_EXIT", level="error", result="error",
+                   run_id=e.run_id)
+            e.error = "PROGRAM_EXIT"
         e.actions.send = lambda step, runner: None
         with e.lk:
             e._closing = True
@@ -200,11 +206,7 @@ class Ch12Safety:
             e.queue_mode = False
             e.lk.notify_all()
         self._held.add(e.ch)
-        if was:
-            e.emit("run_end", f"프로그램 종료 — 파워 출력만 끔({reason})", "PROGRAM_EXIT", level="error", result="error",
-                   run_id=e.run_id)
-            e.error = "PROGRAM_EXIT"
-        return was or running
+        return was
 
     def power_off_only(self, reason: str = "PROGRAM_EXIT", deadline_s: float = FORCE_DEADLINE_S) -> Optional[dict]:
         """결정 4 — 파워 출력만 끈다(확인을 기다리지 않는 명령을 먼저 다 보냄). 두 번째 호출은 None."""
