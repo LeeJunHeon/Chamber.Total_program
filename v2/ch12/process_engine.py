@@ -40,7 +40,7 @@ from v2.ch12.process_actions import ProcessActions
 from v2.ch12.process_adjust import AdjustMixin
 from v2.ch12.process_records import ProcessRecordsMixin
 from v2.ch12.process_view import ProcessViewMixin
-from v2.ch12.process_list import RunPlan, derive_params, plan_runs, raw_rows_from, stop_uses
+from v2.ch12.process_list import USE_KEYS, RunPlan, derive_params, plan_runs, raw_rows_from, stop_uses
 from v2.ch12.process_runner import StepRunner, delay_countdown, fmt_hms
 from v2.ch12.process_steps import caps_from_cfg, shutdown_steps, step_cfg
 from v2.ch12.recipe_check import check_norm_params
@@ -59,7 +59,7 @@ class ProcEvent:
     level: str = "info"
 
 
-class ProcessEngine(AdjustMixin, ProcessRecordsMixin, ProcessViewMixin):
+class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, ProcessViewMixin):
     def __init__(self, system, chamber: str, *, heater=None, thickness=None, excel_main_dir=None,
                  outputs: bool = True) -> None:
         self.sys, self.clock, self.lk = system, system.clock, system.clock.cond
@@ -82,6 +82,8 @@ class ProcessEngine(AdjustMixin, ProcessRecordsMixin, ProcessViewMixin):
         system.event_listeners.append(self.actions.on_event)
         self.runner = StepRunner(self)
         self.actions.runner = self.runner
+        if heater is not None:
+            heater.next_step_fn = self._next_step_message           # 히터 도달 카드의 '다음 단계'(v1 next_step_message)
         if thickness is not None:
             thickness._log_cb = self.log
             thickness._on_state = self.state
@@ -182,6 +184,11 @@ class ProcessEngine(AdjustMixin, ProcessRecordsMixin, ProcessViewMixin):
         bl = run.blocks(self.blocks) if run is not None else []
         cur = (self.cur_block - run.first) if run is not None and self.cur_block is not None else len(bl)
         return shutdown_steps(self.sc, stop_uses(bl, cur, self.sc))
+
+    def _next_step_message(self) -> str:
+        r = self.runner
+        i = r.idx + 1
+        return str(r.steps[i].message or "") if 0 <= i < len(r.steps) else ""
 
     def on_main_shutter(self, opened: bool) -> None:
         (self.stats.shutter_open if opened else self.stats.shutter_close)()
@@ -323,7 +330,7 @@ class ProcessEngine(AdjustMixin, ProcessRecordsMixin, ProcessViewMixin):
             kind, _by = self._cmd
             try:
                 if kind == "STOP_IDLE":
-                    self._stop_before_start()
+                    self._stop_before_start(idle=True)
                 else:
                     self._run_list(kind == "START_QUEUE")
             except Exception as e:                                     # v1 '[Runner] loop exception'
@@ -378,6 +385,9 @@ class ProcessEngine(AdjustMixin, ProcessRecordsMixin, ProcessViewMixin):
         """런 하나 — (ok, stopped). 시작 전 실패는 (False, False)."""
         params = run.params
         params = dict(params) if params else derive_params(run.blocks(self.blocks), self.sc)
+        if run.params and self.seq is not None and self.seq.rev:          # 공정 중 편집이 있었으면 사용 플래그는 블록에서
+            d = derive_params(run.blocks(self.blocks), self.sc)
+            params.update({k: d[k] for k in USE_KEYS if k in d})
         if self.recipe_name and not params.get("Process_name") and not params.get("process_note"):
             params["Process_name"] = self.recipe_name
         self.params = params
@@ -439,90 +449,6 @@ class ProcessEngine(AdjustMixin, ProcessRecordsMixin, ProcessViewMixin):
         self._after_finish(run, res.ok, detail)
         return res.ok, bool(detail.get("stopped"))
 
-    def _preflight(self, run: RunPlan, params: dict) -> bool:
-        """_start_after_preflight(3799-4119). False = 시작 실패(정리까지 끝냄)."""
-        if run.kind == "test" or params.get("test_mode"):
-            dur = float(params.get("test_duration_sec", 0.0) or 0.0) or float(params.get("process_time", 0) or 0) * 60.0
-            dur = max(1.0, dur)
-            params.setdefault("process_note", params.get("Process_name") or "TEST")
-            self.log("MAIN", f"[TEST MODE] '{params.get('process_note') or 'TEST'}' 장비 제어 스킵 / {dur:.1f}s 시뮬레이션")
-            self._host(True, f"TEST MODE: {str(params.get('time', '')).strip() or f'{dur:.0f}s'}")
-            return True
-        sel = {"dcpulse": bool(params.get("use_dc_pulse")) and self.caps.dcp,
-               "rfpulse": bool(params.get("use_rf_pulse")) and self.caps.rfp}
-        why = PF.claim_pulses(self, sel)
-        if why:
-            self.log("MAIN", why)
-            self.popup("공유 장비 사용 중", why)
-            return self._start_fail(why, "PULSE_PORT_BUSY", cleanup=False)
-        PF.start_devices(self, sel)
-        t = float(self.cget("CHAMBER_PREFLIGHT_TIMEOUT_WITH_PULSE_S" if any(sel.values()) else "CHAMBER_PREFLIGHT_TIMEOUT_S",
-                            10.0 if any(sel.values()) else 8.0))
-        failed = PF.wait_connected(self, sel, t)
-        if failed:
-            fl = ", ".join(failed)
-            self._host(False, "장비 연결 실패: " + fl)
-            self.log("MAIN", f"필수 장비 연결 실패: {fl} → 시작 중단")
-            self.popup("장비 연결 실패", f"다음 장비 연결을 확인하지 못했습니다:\n - {fl}\n\n케이블/전원/포트 설정 확인 후 재시도",
-                       level="error")
-            return self._start_fail(f"preflight connect failed: {fl}", "PREFLIGHT_FAILED")
-        self._host(True, "preflight OK")
-        note = params.get("process_note") or params.get("Process_name") or "알 수 없음"
-        for key, label, code in (("gate", "Gate", "GATE_CHECK_FAILED"), ("main_valve", "Main Valve", "MAIN_VALVE_CHECK_FAILED")):
-            ok, why = self.preflight_hooks[key](self)
-            if not ok:
-                self.log("MAIN", f"[CH{self.n}] {label} 체크 실패 ({why}) → 공정 시작 차단")
-                self.emit("chat", f"{label} 체크 실패: {why} → 공정 시작 차단 (공정: {note})", "E301", level="error")
-                return self._start_fail(f"{label.lower().replace(' ', ' ')} check failed: {why}", code)
-        thk = self.thickness is not None and self.thickness.thickness_mode(params)
-        if thk:
-            code, msg = self.thickness.check_basic(params)
-            if code:
-                return self._thickness_reject(params, code, msg)
-        self.run_warnings = []
-        chuck = self.preflight_hooks["chuck"](self, params)
-        if not chuck:
-            pos = str(params.get("chuck_position") or "")
-            warn = f"Chuck 위치 이동 실패 (target='{pos}')" if pos else "Chuck 위치 이동 실패"
-            self.log("MAIN", f"⚠️ {warn} → 공정은 계속 진행")
-            self.run_warnings.append(warn)
-        if not params.get("chuck_position"):
-            actual = PF.read_chuck_pos(self)
-            if actual != "unknown":
-                params["chuck_position"] = actual
-        if thk:
-            box: dict = {}
-            self.thickness.apply_material(params, bool(chuck), lambda r: (box.setdefault("r", r), self.clock.notify()))
-            self.clock.wait_until(self.clock.monotonic() + 30.0, lambda: "r" in box or self.stage_cancelled())
-            if self.stage_cancelled():
-                raise PF.StageCancelled()
-            code, msg = box.get("r", ("E846", "재료값 쓰기 응답 없음"))
-            if code:
-                return self._thickness_reject(params, code, msg)
-            params["thickness_mode"] = True
-        self.log("MAIN", "장비 연결 확인 완료 → 공정 시작")
-        if self.heater is not None:
-            self.heater.process_started(bool(params.get("use_heater")))
-        return True
-
-    def _thickness_reject(self, params, code: str, msg: str) -> bool:
-        log_txt, chat_txt = self.thickness.reject_texts(code, msg, params)
-        self.log("MAIN", log_txt)
-        self.emit("chat", chat_txt, code, level="error")
-        return self._start_fail(msg, code)
-
-    def _start_fail(self, why: str, code: str, cleanup: bool = True) -> bool:
-        self._host(False, why)
-        if cleanup:
-            self.actions.cleanup_devices()
-        else:
-            self.sys.shared.pulse.release_chamber(self.ch)
-        self.error = code
-        self.last_end_t = self.clock.monotonic()
-        self.emit("run_end", why, code, level="error", result="error")
-        self.queue_mode = False
-        return False
-
     def _host(self, ok: bool, msg: str) -> None:
         f = self.on_host_start
         if f is not None:
@@ -569,12 +495,14 @@ class ProcessEngine(AdjustMixin, ProcessRecordsMixin, ProcessViewMixin):
                 self._cancel = True
                 self.lk.notify_all()
 
-    def _stop_before_start(self) -> None:
-        """_runner_handle_stop 의 '공정 시작 전' 경로(4820-4839)."""
+    def _stop_before_start(self, idle: bool = False) -> None:
+        """_runner_handle_stop 의 '공정 시작 전' 경로(4820-4839). idle = 아무 단계도 없을 때 받은 STOP(정리만, run_end 없음)."""
         self.log("MAIN", "[Runner] STOP → 공정 시작 전 상태, 즉시 정리(cleanup)")
         self.actions.apply_polling(False, {})
         self.actions.cleanup_devices()
-        if self._abort_code:
+        if idle:
+            pass
+        elif self._abort_code:
             self.emit("run_end", self._abort_code, self._abort_code, level="error", result="error")
             self.error, self._abort_code = self._abort_code, None
         else:

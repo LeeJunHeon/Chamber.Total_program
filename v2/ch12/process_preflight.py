@@ -268,3 +268,92 @@ def chuck_move(eng, params: dict) -> bool:
         eng.log("PLC", f"[CH{n}] Chuck '{pos}' 이동 중 예외: {e!r} — 실측 위치: {actual}")
         params["chuck_position"] = actual
         return False
+
+
+class PreflightMixin:
+    """ProcessEngine 의 시작 전 단계(_start_after_preflight 3799-4119) — 위 함수들을 v1 순서로 부른다."""
+
+    def _preflight(self, run, params: dict) -> bool:
+        """_start_after_preflight(3799-4119). False = 시작 실패(정리까지 끝냄)."""
+        if run.kind == "test" or params.get("test_mode"):
+            dur = float(params.get("test_duration_sec", 0.0) or 0.0) or float(params.get("process_time", 0) or 0) * 60.0
+            dur = max(1.0, dur)
+            params.setdefault("process_note", params.get("Process_name") or "TEST")
+            self.log("MAIN", f"[TEST MODE] '{params.get('process_note') or 'TEST'}' 장비 제어 스킵 / {dur:.1f}s 시뮬레이션")
+            self._host(True, f"TEST MODE: {str(params.get('time', '')).strip() or f'{dur:.0f}s'}")
+            return True
+        sel = {"dcpulse": bool(params.get("use_dc_pulse")) and self.caps.dcp,
+               "rfpulse": bool(params.get("use_rf_pulse")) and self.caps.rfp}
+        why = claim_pulses(self, sel)
+        if why:
+            self.log("MAIN", why)
+            self.popup("공유 장비 사용 중", why)
+            return self._start_fail(why, "PULSE_PORT_BUSY", cleanup=False)
+        start_devices(self, sel)
+        self.actions.oes_init_background()
+        t = float(self.cget("CHAMBER_PREFLIGHT_TIMEOUT_WITH_PULSE_S" if any(sel.values()) else "CHAMBER_PREFLIGHT_TIMEOUT_S",
+                            10.0 if any(sel.values()) else 8.0))
+        failed = wait_connected(self, sel, t)
+        if failed:
+            fl = ", ".join(failed)
+            self._host(False, "장비 연결 실패: " + fl)
+            self.log("MAIN", f"필수 장비 연결 실패: {fl} → 시작 중단")
+            self.popup("장비 연결 실패", f"다음 장비 연결을 확인하지 못했습니다:\n - {fl}\n\n케이블/전원/포트 설정 확인 후 재시도",
+                       level="error")
+            return self._start_fail(f"preflight connect failed: {fl}", "PREFLIGHT_FAILED")
+        self._host(True, "preflight OK")
+        note = params.get("process_note") or params.get("Process_name") or "알 수 없음"
+        for key, label, code in (("gate", "Gate", "GATE_CHECK_FAILED"), ("main_valve", "Main Valve", "MAIN_VALVE_CHECK_FAILED")):
+            ok, why = self.preflight_hooks[key](self)
+            if not ok:
+                self.log("MAIN", f"[CH{self.n}] {label} 체크 실패 ({why}) → 공정 시작 차단")
+                self.emit("chat", f"{label} 체크 실패: {why} → 공정 시작 차단 (공정: {note})", "E301", level="error")
+                return self._start_fail(f"{label.lower().replace(' ', ' ')} check failed: {why}", code)
+        thk = self.thickness is not None and self.thickness.thickness_mode(params)
+        if thk:
+            code, msg = self.thickness.check_basic(params)
+            if code:
+                return self._thickness_reject(params, code, msg)
+        self.run_warnings = []
+        chuck = self.preflight_hooks["chuck"](self, params)
+        if not chuck:
+            pos = str(params.get("chuck_position") or "")
+            warn = f"Chuck 위치 이동 실패 (target='{pos}')" if pos else "Chuck 위치 이동 실패"
+            self.log("MAIN", f"⚠️ {warn} → 공정은 계속 진행")
+            self.run_warnings.append(warn)
+        if not params.get("chuck_position"):
+            actual = read_chuck_pos(self)
+            if actual != "unknown":
+                params["chuck_position"] = actual
+        if thk:
+            box: dict = {}
+            self.thickness.apply_material(params, bool(chuck), lambda r: (box.setdefault("r", r), self.clock.notify()))
+            self.clock.wait_until(self.clock.monotonic() + 30.0, lambda: "r" in box or self.stage_cancelled())
+            if self.stage_cancelled():
+                raise StageCancelled()
+            code, msg = box.get("r", ("E846", "재료값 쓰기 응답 없음"))
+            if code:
+                return self._thickness_reject(params, code, msg)
+            params["thickness_mode"] = True
+        self.log("MAIN", "장비 연결 확인 완료 → 공정 시작")
+        if self.heater is not None:
+            self.heater.process_started(bool(params.get("use_heater")))
+        return True
+
+    def _thickness_reject(self, params, code: str, msg: str) -> bool:
+        log_txt, chat_txt = self.thickness.reject_texts(code, msg, params)
+        self.log("MAIN", log_txt)
+        self.emit("chat", chat_txt, code, level="error")
+        return self._start_fail(msg, code)
+
+    def _start_fail(self, why: str, code: str, cleanup: bool = True) -> bool:
+        self._host(False, why)
+        if cleanup:
+            self.actions.cleanup_devices()
+        else:
+            self.sys.shared.pulse.release_chamber(self.ch)
+        self.error = code
+        self.last_end_t = self.clock.monotonic()
+        self.emit("run_end", why, code, level="error", result="error")
+        self.queue_mode = False
+        return False

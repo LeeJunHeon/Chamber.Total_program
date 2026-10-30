@@ -150,6 +150,7 @@ def test_engine_queue_snapshot_restore_and_discard_when_busy(tmp_path):
     e._cmd = None
     assert e.rows is None and R.has_log(e, "보관분 2건은 파기됨")
     e.close()
+    rig.outputs.stop(1.0)
     rig.clock.close()
 
 

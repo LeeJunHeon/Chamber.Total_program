@@ -378,6 +378,25 @@ class ProcessActions(ProcessEventsMixin):
             start()
         o.initialize(timeout_s=t, force=False, on_done=inited)
 
+    def oes_init_background(self) -> None:
+        """_kick_oes_init_background(4121-4157) — Start 때 OES 초기화를 미리(기다리지 않음)."""
+        o = self.oes
+        if o is None or self.oes_initialized:
+            return
+        t = float(self.e.cget("CHAMBER_OES_INIT_TIMEOUT_S", 30.0))
+        tag = f"OES{self.n}"
+        self.log(tag, "[OES] init (background) begin")
+
+        def done(ok, err) -> None:
+            self.oes_initialized = bool(ok)
+            self.log(tag, f"[OES] init (background) OK (timeout={t:.1f}s)" if ok else
+                     f"[OES] init (background) FAIL: {err or 'unknown'} (timeout={t:.1f}s)")
+        try:
+            o.initialize(timeout_s=t, force=False, on_done=done)
+        except Exception as e:
+            self.oes_initialized = False
+            self.log(tag, f"[OES] init (background) EXC: {type(e).__name__}: {e}")
+
     def oes_stop(self) -> bool:
         if self.oes is not None and self.oes_active:
             self.oes.stop(wait=False)

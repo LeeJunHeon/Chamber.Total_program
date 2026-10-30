@@ -45,7 +45,10 @@ def _run_single(tmp_path, name):
     return rig, e, steps
 
 
-@pytest.mark.parametrize("name", list(SCEN))
+FAST = ("ch1_rfp", "ch2_test")      # 나머지 넷은 전체 공정 sim 이라 slow(conftest — 전체 시험에서 돈다)
+
+
+@pytest.mark.parametrize("name", [n if n in FAST else pytest.param(n, marks=pytest.mark.slow) for n in SCEN])
 def test_golden_scenario_runs_like_expand(tmp_path, name):
     rig, e, steps = _run_single(tmp_path, name)
     assert R.ends(e) == [("done", None)], R.logs(e)[-30:]
