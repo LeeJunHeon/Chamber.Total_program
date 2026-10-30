@@ -27,6 +27,7 @@ from __future__ import annotations
 
 import collections
 import datetime as _dt
+import threading
 import time
 from collections import ChainMap
 from dataclasses import dataclass, field
@@ -49,7 +50,7 @@ from v2.ch12.drivers.pulse_port import PulsePorts, chan_get, tcp_transport_facto
 from v2.ch12.drivers.rf import RfPower
 from v2.ch12.drivers.rga_link import RgaLink
 from v2.ch12.outputs.row_feed import RowFeed
-from v2.ch12.shared import OnDemand, SharedDevices, stop_worker
+from v2.ch12.shared import SharedDevices, stop_worker
 
 CHAMBERS = SF.CHAMBERS
 EVENTS_KEEP = 20000
@@ -90,7 +91,7 @@ class Logged:
 @dataclass
 class TransportSet:
     """장비별 전송. fixed: 상시 장비(plc 는 안쪽 전송 — RetryOpenTransport 는 조립이 씌움), pulse: (종류, 챔버) → 새 전송
-    (점유할 때마다), tsp_ig: () → 새 전송(TSP 게이지를 잡을 때마다)."""
+    (점유할 때마다), tsp_ig: () → 새 전송(쓰지 않음 — TSP 게이지는 CH1 IG worker 공유, D67. 시험대 호환으로 남김)."""
     fixed: Dict[str, Transport]
     pulse: Callable[[str, str], Transport]
     tsp_ig: Callable[[], Transport]
@@ -116,6 +117,96 @@ class SwapSource(Source):
             for req in left:
                 if req.on_done:
                     req.on_done(Result(req, Status.CANCELLED, reason="CANCELLED", started=now, finished=now))
+
+
+class SharedGauge:
+    """TSP 게이지(D67) — CH1 IG worker(4001)를 공유 소유권으로 잡는다(두 번째 연결을 열지 않음 — CH1 IG 는 상시 연결, D37).
+    shared.OnDemand 와 같은 모양(acquire·release·owner·driver·worker·source·source_read)이라 SharedDevices.tsp_ig 로 그대로 쓴다.
+    잡으면: 같은 worker 위에 chamber="tsp" IgDriver(설정은 CH2 값 — v1 TSP 런타임의 cfg 없는 AsyncIG, D189 이상 동작 그대로)를
+    만들고, tsp.ig 1초 소스를 그 worker 에 붙이고, ch1.ig 1초 읽기를 TSP 드라이버의 RDI 로 바꾼다(그동안 ch1.ig 열은 TSP 쪽 값 —
+    한 tick 에 RDI 하나, tsp.ig 는 같은 tick 의 그 값을 싣는다). IG 명령 간격(ready_at)은 두 드라이버 사이에 넘겨준다.
+    놓으면 되돌린다(worker 는 멈추지 않는다). 한 번에 한 소유자(같은 소유자 다시 잡기는 지금 것 유지)."""
+
+    name = "tsp.ig"
+
+    def __init__(self, clock, cfg, writes_allowed: bool, ig1, worker: Worker, ch1_source: Callable[[], Source],
+                 source: Source, on_event) -> None:
+        self.clock, self.cfg, self.writes_allowed = clock, cfg, writes_allowed
+        self.ig1, self._w, self._ch1_source, self.source, self.on_event = ig1, worker, ch1_source, source, on_event
+        self.owner: Optional[str] = None
+        self.driver: Optional[G.IgDriver] = None
+        self.worker: Optional[Worker] = None
+        self._prev_read = None
+        self._prev_connect = None
+        self._tick: Optional[tuple] = None          # (tick seq, 이번 tick ch1 쪽 RDI 예외 또는 None)
+        self._lock = threading.RLock()
+        source.worker = None
+        source.read = self.source_read
+
+    def acquire(self, owner: str):
+        with self._lock:
+            if self.owner is not None:
+                return (True, owner) if self.owner == owner else (False, self.owner)
+            w, ig1 = self._w, self.ig1
+            prev = w.on_connect
+            drv = G.IgDriver(self.clock, w, self.cfg, self.writes_allowed, on_event=self.on_event, chamber="tsp")
+            self._prev_connect = prev                                  # IgDriver 가 on_connect 를 자기 것으로 바꾼다 — 둘 다 부름
+
+            def on_connect(session, a=prev, b=drv._on_connect):
+                if a is not None:
+                    a(session)
+                b(session)
+            w.on_connect = on_connect
+            drv.connected_at = ig1.connected_at
+            drv.ready_at = max(drv.ready_at, ig1.ready_at)             # 직전 CH1 RDI 뒤 IG_GAP_MS 를 지킨다
+            src1 = self._ch1_source()
+            self._prev_read, src1.read = src1.read, self._read_ch1
+            self.driver, self.worker, self.owner = drv, w, owner
+            self._tick = None
+            self.source.worker = w
+            return True, owner
+
+    def release(self, owner: Optional[str] = None) -> bool:
+        with self._lock:
+            if self.owner is None or (owner is not None and self.owner != owner):
+                return False
+            drv, w = self.driver, self.worker
+            self.owner, self.worker, self.driver = None, None, None
+            self.source.worker = None
+            self._ch1_source().read = self._prev_read
+            w.on_connect = self._prev_connect
+            ig1 = self.ig1
+            ig1.ready_at = max(ig1.ready_at, drv.ready_at)
+            if drv.latest is not None and (ig1.latest is None or drv.latest[0] >= ig1.latest[0]):
+                ig1.latest = drv.latest
+        # 큐에 남은 tsp.ig 1초 읽기만 CANCELLED 로 끝낸다(ch1.ig 읽기는 그대로 — SwapSource 와 같은 이유)
+        left = w.queue.drain(lambda r: str(getattr(r, "name", "")) != "read:tsp.ig")
+        now = w.clock.monotonic()
+        for req in left:
+            if req.on_done:
+                req.on_done(Result(req, Status.CANCELLED, reason="CANCELLED", started=now, finished=now))
+        return True
+
+    def _read_ch1(self, session, seq: int) -> Dict[str, Any]:
+        drv = self.driver
+        if drv is None:                                                # 막 놓음
+            return self.ig1.source_read(session, seq)
+        try:
+            got = drv.source_read(session, seq)
+        except Exception as e:
+            self._tick = (seq, e)
+            raise
+        self._tick = (seq, None)
+        return {"ch1.ig." + k[len("tsp.ig."):]: v for k, v in got.items()}
+
+    def source_read(self, session, seq: int) -> Dict[str, Any]:
+        drv = self.driver
+        if drv is None:
+            raise RuntimeError(f"{self.name}: 잡지 않음")
+        t = self._tick
+        if t is not None and t[0] == seq and t[1] is not None:
+            raise t[1]
+        return drv._fields(self.clock.monotonic())
 
 
 def tcp_transports(clock, cfg: Dict[str, Any]) -> TransportSet:

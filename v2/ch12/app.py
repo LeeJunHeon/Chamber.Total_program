@@ -4,19 +4,26 @@
   1 설정 읽기(system.new_store = ConfigStore — config_active·config_prev·local_override·config_history 가 --config-dir 에).
     RUN_MODE 는 설정에서만(기본 sim, prod 는 local_override.json 에 명시). 설정을 쓸 수 없으면 시작 거부(종료 코드 2).
     파라미터 표를 만들 수 없을 때(params.ParamsError — 조각 import 실패·키 중복)도 2.
-  2 한 번만 실행: 127.0.0.1:LOCAL_HMI_PORT 를 바인드해 둔다 — 실패 = 이미 실행 중 → 알리고 끝(종료 코드 3). 장비 포트를 열기 전에.
-    (7단계 로컬 서버가 이 소켓을 이어받는다 — attach_server 자리.)
+    웹 연결 정책(uplink_wanted): prod·bench 는 연결, sim 은 UPLINK_IN_SIM 일 때만 — 이때 EQUIPMENT_ID 가 -SIM 으로 끝나야 한다
+    (CH12-SIM — 아니면 시작 거부, 종료 코드 2: 진짜 장비 기록과 섞이지 않게).
+  2 한 번만 실행: 127.0.0.1:LOCAL_HMI_PORT 를 바인드해 둔다(local_server.bind_socket) — 실패 = 이미 실행 중 → 알리고 끝(종료 코드 3).
+    장비 포트를 열기 전에. 로컬 서버(attach_server)가 이 소켓을 이어받는다(두 번 바인드하지 않음).
   3 로그(LOCAL_DATA_DIR\\logs\\ch12_v2.log 회전 로그 — 콘솔에는 시작 줄·경고·오류만).
   4 조립(system.Ch12System — sim: 시뮬레이터(sim.rig.make_sims·sim_transports, OES·RGA 워커는 --fake), bench·prod: TCP
-    (system.tcp_transports)) → worker 시작 → tick 스레드. bench·prod 에서 장비가 없으면 죽지 않고 worker 재연결로 계속(링크 끊김).
-    조립·시작 중 예외 = 종료 코드 4(감시 프로그램 v2/supervisor 가 다시 켠다).
-  다음 단계 자리(지금은 하지 않음): 저널·이어가기(5단계 — start_journal), 웹 연결(7단계 — start_uplink),
-  로컬 서버(7단계 — attach_server), 윈도우 콘솔 닫기·로그오프(winshell — install_console_handlers).
+    (system.tcp_transports)) → 장비 메시지 허브(hub.attach — 이벤트·1초 행 구독, 첫 메시지 hello)·설정 적용(config_apply.attach)
+    → 웹 연결(start_uplink) → worker 시작 → tick 스레드 → 로컬 서버(attach_server — /api/v1·v2/hmi).
+    bench·prod 에서 장비가 없으면 죽지 않고 worker 재연결로 계속(링크 끊김). 조립·시작 중 예외 = 종료 코드 4(감시 프로그램이 다시 켠다).
+  5 웹 연결(uplink — 계약은 common.messages): 정책이 연결이면 UPLINK_URL·UPLINK_TOKEN(local_override.json 의 비밀값)으로.
+    UPLINK_URL 이 비면 경고만(웹 연결 없이 운전). 주소는 호스트만 콘솔·로그에, 토큰은 어디에도. http 주소면 경고 한 번.
+    worker 시작 전에 붙는다(hello·장비 연결 이벤트부터 받게). 웹이 끊겨도 공정·안전은 노트북에서 그대로.
+  다음 단계 자리(지금은 하지 않음): 저널·이어가기(5단계 — start_journal, 웹 명령 id 기억은 uplink.to_state/from_state),
+  윈도우 콘솔 닫기·로그오프(winshell — install_console_handlers).
 버전은 .git 의 HEAD·ref 파일을 읽어서(git 명령을 실행하지 않음), 못 읽으면 unknown.
 
 종료(종료 코드 0)
 - Ctrl+C(SIGINT·SIGBREAK): 엔진이 busy(공정·정지 순서 등 — v1 main.py closeEvent 조건)면 거부하고 계속 실행(콘솔에 이유).
-  아니면 정상 종료: tick 멈춤 → 포트 닫기 → 기록·출력 flush.
+  아니면 정상 종료: tick 멈춤 → 포트 닫기 → 기록·출력 flush → 허브 닫기 → 웹 연결 정지(남은 메시지는 보관함 — 다음 시작 때
+  올림) → 로컬 서버 정지.
 - 종료 신호(SIGTERM — 감시 프로그램·서비스 정지): 거부하지 않는다(정상 종료와 같은 순서). 공정 중 파워만 끄는 처리는
   4·5단계(챔버K 결정 4 — force_exit 자리).
 """
@@ -32,10 +39,12 @@ import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
+from urllib.parse import urlsplit
 
 from v2.common.clock import RealClock
 from v2.common.config_store import ConfigError
 from v2.common.mode import RunMode, policy, resolve_mode
+from v2.ch12.local_server import LocalServer, bind_socket
 from v2.ch12.system import APP_RETENTION, Ch12System, new_store, tcp_transports
 
 PROGRAM = "ch12-v2"
@@ -45,6 +54,8 @@ LOG_BACKUPS = 10
 EXIT_OK, EXIT_CONFIG, EXIT_RUNNING, EXIT_START = 0, 2, 3, 4
 REFUSE_BUSY = "공정 중 — 로컬 화면·웹에서 STOP 먼저"
 RUNNING_LINE = "실행 중 — 멈추려면 Ctrl+C"
+SIM_ID_SUFFIX = "-SIM"               # UPLINK_IN_SIM 일 때 장비 ID 끝
+REPO_HMI_DIR = Path(__file__).resolve().parents[1] / "hmi"   # LOCAL_HMI_STATIC_DIR 이 비면 — 이 저장소의 v2/hmi
 
 
 def repo_root() -> Path:
@@ -89,6 +100,9 @@ class App:
         self._done = threading.Event()
         self._signals: List[str] = []
         self.version = git_version()
+        self.hub = None
+        self.server: Optional[LocalServer] = None
+        self.uplink = None
 
     # ───────── 1 설정 ─────────
     def load_config(self) -> bool:
@@ -100,19 +114,30 @@ class App:
         except (ConfigError, ValueError, ParamsError) as e:
             self.say(f"[중지] 설정을 쓸 수 없음 — 시작 거부: {e}")
             return False
+        if (self.uplink_wanted() and RunMode(self.cfg["RUN_MODE"]) is RunMode.SIM
+                and not str(self.cfg["EQUIPMENT_ID"]).endswith(SIM_ID_SUFFIX)):
+            self.say(f"[중지] UPLINK_IN_SIM(sim 웹 연결)인데 EQUIPMENT_ID {self.cfg['EQUIPMENT_ID']} 가 {SIM_ID_SUFFIX} 으로 끝나지 않음 "
+                     "— 진짜 장비 기록과 섞이지 않게 시작 거부")
+            return False
         return True
+
+    def uplink_wanted(self) -> bool:
+        """웹 연결 정책 — prod·bench 는 연결, sim 은 UPLINK_IN_SIM 일 때만."""
+        mode = RunMode(self.cfg["RUN_MODE"])
+        return bool(policy(mode).uplink or (mode is RunMode.SIM and self.cfg.get("UPLINK_IN_SIM")))
+
+    @property
+    def hmi_dir(self) -> Path:
+        """로컬 화면 파일 폴더 — LOCAL_HMI_STATIC_DIR, 비면 이 저장소의 v2/hmi."""
+        v = str(self.cfg.get("LOCAL_HMI_STATIC_DIR") or "")
+        return Path(v) if v else REPO_HMI_DIR
 
     # ───────── 2 한 번만 실행 ─────────
     def bind_instance(self) -> bool:
         port = int(self.cfg["LOCAL_HMI_PORT"])
-        s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        if sys.platform == "win32" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         try:
-            s.bind(("127.0.0.1", port))
-            s.listen(16)
+            s = bind_socket(port)
         except OSError as e:
-            s.close()
             self.say(f"[중지] 127.0.0.1:{port} 를 열 수 없음 — 이미 실행 중일 수 있습니다(장비 포트는 열지 않고 끝냅니다): {e}")
             return False
         self.instance_sock = s
@@ -149,7 +174,18 @@ class App:
         nas = c.get("NAS_COPY_DIR") if policy(mode).nas_copy and c.get("NAS_COPY_DIR") else "끔"
         return [f"챔버12 v2 — 모드 {mode.value} · 장비 {c['EQUIPMENT_ID']} · 버전 {self.version}",
                 f"설정 버전 {st.version}({st.source}) · 설정 폴더 {self.config_dir}",
-                f"1초 기록 {self.data_dir} · 로그 {self.data_dir / 'logs'} · v1 기록 {c['LOG_ROOT_DIR']} · NAS 사본 {nas}"]
+                f"1초 기록 {self.data_dir} · 로그 {self.data_dir / 'logs'} · v1 기록 {c['LOG_ROOT_DIR']} · NAS 사본 {nas}",
+                f"로컬 화면 http://127.0.0.1:{c['LOCAL_HMI_PORT']}/ · 화면 파일 {self.hmi_dir}",
+                f"웹 연결 {self._uplink_line()}"]
+
+    def _uplink_line(self) -> str:
+        if not self.uplink_wanted():
+            return "끔(sim)"
+        url = str(self.cfg.get("UPLINK_URL") or "")
+        if not url:
+            return "주소 없음 — 연결 안 함"
+        u = urlsplit(url)
+        return f"{u.hostname}({u.scheme})"                   # 호스트만 — 경로·토큰은 쓰지 않는다
 
     # ───────── 4 조립·시작 ─────────
     def build(self) -> Ch12System:
@@ -167,6 +203,10 @@ class App:
                                  retention=APP_RETENTION, nas_dir=self.cfg.get("NAS_COPY_DIR") or None, links=True,
                                  camera_backend=cam, program=PROGRAM, version=self.version)
         self.system.event_listeners.append(self._log_event)
+        from v2.ch12 import config_apply, hub
+        self.hub = hub.attach(self.system)                 # 이벤트·1초 행 → 장비 메시지(로컬 화면·웹)
+        config_apply.attach(self.system)                   # CONFIG_APPLY·CONFIG_ROLLBACK·idle 키 적용
+        self.hub.hello()                                   # 첫 메시지(장비 연결 이벤트보다 먼저)
         return self.system
 
     def _log_event(self, e) -> None:
@@ -209,11 +249,31 @@ class App:
     def start_journal(self, s: Ch12System) -> None:       # 5단계: 저널·이어가기(resume)
         return None
 
-    def start_uplink(self, s: Ch12System) -> None:        # 7단계: 웹 연결(uplink) — prod·bench 만
-        return None
+    def start_uplink(self, s: Ch12System) -> None:
+        """웹 연결 — 정책이 연결일 때만(prod·bench, sim 은 UPLINK_IN_SIM). 실패해도 웹 없이 운전(공정·안전은 그대로)."""
+        if not self.uplink_wanted():
+            return
+        url = str(self.cfg.get("UPLINK_URL") or "")
+        if not url:
+            self.log.warning("웹 연결: UPLINK_URL 이 비어 있음 — 웹 연결 없이 운전(local_override.json 에 넣고 다시 시작)")
+            return
+        if urlsplit(url).scheme != "https":
+            self.log.warning("웹 연결: 주소가 https 가 아님(%s) — 암호화·인증서 확인 없음, 시험용으로만", urlsplit(url).hostname)
+        from v2.ch12.uplink import Uplink
+        try:
+            up = Uplink(s, url, str(self.cfg.get("UPLINK_TOKEN") or ""), self.data_dir)
+        except Exception as e:                             # 보관함 폴더를 못 쓰는 등 — 웹 없이 운전
+            self.log.warning("웹 연결 준비 실패 — 웹 연결 없이 운전: %s", type(e).__name__)
+            return
+        self.uplink = s.uplink = up
+        up.start()
 
-    def attach_server(self, s: Ch12System) -> None:       # 7단계: 로컬 서버가 instance_sock 을 이어받는다
-        return None
+    def attach_server(self, s: Ch12System) -> None:
+        """로컬 서버 — 2단계에서 잡아 둔 소켓을 이어받아 /api/v1·v2/hmi 를 연다."""
+        sock, self.instance_sock = self.instance_sock, None
+        self.server = LocalServer(int(self.cfg["LOCAL_HMI_PORT"]), str(self.hmi_dir), sock=sock)
+        self.server.attach(s)
+        self.server.start()
 
     def install_console_handlers(self) -> None:           # winshell(윈도우 콘솔 닫기·로그오프) 자리
         return None
@@ -276,6 +336,12 @@ class App:
             s.stop()                                       # tick 멈춤 → worker 정지(포트 닫기) → 출력·기록 flush
         if self._tick_thread is not None:
             self._tick_thread.join(3.0)
+        if self.hub is not None:
+            self.hub.close()                               # 소비자(로컬 화면 SSE·웹 연결) 끝
+        if self.uplink is not None:
+            self.uplink.stop()                             # 남은 메시지는 보관함에(다음 시작 때 올림)
+        if self.server is not None:
+            self.server.stop()
         if self.instance_sock is not None:
             try:
                 self.instance_sock.close()

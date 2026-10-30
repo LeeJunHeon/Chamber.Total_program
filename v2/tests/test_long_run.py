@@ -58,6 +58,7 @@ def test_virtual_short_run_same_checks(tmp_path, monkeypatch):
     table = res["table"]
     assert [r["h"] for r in table] == [0] and res["rig"].loop.rows == 241 and res["rig"].loop.missed == 0
     ev = collections.Counter((e.source, e.kind) for e in res["rig"].events)
-    assert ev[("ch1.dcpulse", "connected")] == 4 and ev[("tsp.ig", "connected")] == 4 and ev[("camera", "started")] == 4
+    assert ev[("ch1.dcpulse", "connected")] == 4 and ev[("camera", "started")] == 4
+    assert ev[("tsp.ig", "connected")] == 0                  # D67 — TSP 게이지는 CH1 IG worker 공유(두 번째 연결 없음)
     assert all(res["rig"].sources[n].worker is None for n in ("ch1.dcpulse", "ch2.rfpulse", "tsp.ig"))   # 놓은 뒤 off
     assert res["stats"]["close_ms_max"] < 900 and res["rig"].internal_errors == 0
