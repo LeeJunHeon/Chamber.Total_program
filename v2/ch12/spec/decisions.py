@@ -346,4 +346,10 @@ DECISIONS = [
     dict(id="D14", title="LOCAL_HMI_PORT 8712·LOCAL_DATA_DIR C:\\CH12_v2\\data",
          decision="챔버K(8710)와 같은 PC 에서 겹치지 않게 8712. 1초 기록(SQLite WAL)은 log_sync 가 통째로 복사하는 LOG_ROOT_DIR 밖에(쓰는 중 파일 복사 문제).",
          reason="APP-067(log_sync 는 쓰는 중 파일도 복사).", confirm=True, where="v2/ch12/params/core.py"),
+    dict(id='D15', title='TSP 1초 읽기', decision='쓰는 동안(begin_use~end_use)만 tick 마다 205 상태 질의(v1 에 없던 질의 — 합의된 1초 읽기). 확인 폴링 중인 tick 은 그 값을 싣는다.', reason="1단계 드라이버(TSP·STM·카메라) 작성 중 판단", confirm=True, where='v2/ch12/drivers/tsp.py'),
+    dict(id='D16', title='TSP 안전 요청이 진행 중 읽기를 끊으면 연결을 닫음', decision='v1 은 CancelledError 에서 닫지 않음. 늦은 응답이 OFF 의 ACK 로 잘못 읽히지 않게 더 안전한 쪽.', reason="1단계 드라이버(TSP·STM·카메라) 작성 중 판단", confirm=True, where='v2/ch12/drivers/tsp.py'),
+    dict(id='D17', title='TSP 오류 코드 E804~E808', decision='v1 은 등록만 하고 예외에 붙이지 않음 — v2 는 결과·이벤트에 코드를 싣는다(로봇·화면 문구는 v1 그대로).', reason="1단계 드라이버(TSP·STM·카메라) 작성 중 판단", confirm=True, where='v2/ch12/drivers/tsp.py'),
+    dict(id='D18', title='STM-100 재연결 시각·백오프', decision='v1 감시 루프 0.2 s → v2 worker 즉시(최대 0.2 s 이름). 송신 실패·상대 닫음에도 v2 worker 는 백오프를 늘린다(v1 은 안 늘림).', reason="1단계 드라이버(TSP·STM·카메라) 작성 중 판단", confirm=True, where='v2/ch12/drivers/stm100.py'),
+    dict(id='D19', title='카메라 새 키 CAMERA_INDEX(1)·CAMERA_INTERVAL_S(1.0)', decision='v1 코드 상수를 설정으로 꺼냄. v1 rf_config.json camera_index 덮어쓰기는 구현 안 함. bench 에서도 촬영.', reason="1단계 드라이버(TSP·STM·카메라) 작성 중 판단", confirm=True, where='v2/ch12/drivers/camera.py'),
+    dict(id='D20', title='TSP SO_KEEPALIVE', decision='devices_v1facts 는 1 로 적었지만 v1 실제 값은 false(settings.json common 이 .py True 를 덮음, CFG-019) — v2 는 false.', reason="1단계 드라이버(TSP·STM·카메라) 작성 중 판단", confirm=True, where='v2/ch12/params/tsp.py'),
 ]

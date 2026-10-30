@@ -1,0 +1,5304 @@
+{
+ "source": "v1 device/plc.py·dc_power.py·rf_power.py 실제 실행(pymodbus ModbusTcpClient → 127.0.0.1 가짜 서버)",
+ "pymodbus": "3.16.1",
+ "plc": {
+  "plan_idx": 1,
+  "cases": [
+   {
+    "name": "read_coil",
+    "args": [
+     203
+    ],
+    "ok": true,
+    "value": true,
+    "pdus": [
+     "0100cb0001"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "write_coil",
+    "args": [
+     234,
+     true
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "0500eaff00"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.151
+    ]
+   },
+   {
+    "name": "write_coil",
+    "args": [
+     234,
+     false
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "0500ea0000"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "read_reg",
+    "args": [
+     8
+    ],
+    "ok": true,
+    "value": 700,
+    "pdus": [
+     "0300080001"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "write_reg",
+    "args": [
+     6,
+     17
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "0600060011"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "read_coils_block",
+    "args": [
+     1,
+     481
+    ],
+    "ok": true,
+    "value": [
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false
+    ],
+    "pdus": [
+     "01000101e1"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "read_coils_block",
+    "args": [
+     640,
+     19
+    ],
+    "ok": true,
+    "value": [
+     true,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false
+    ],
+    "pdus": [
+     "0102800013"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.151
+    ]
+   },
+   {
+    "name": "read_regs_block",
+    "args": [
+     0,
+     12
+    ],
+    "ok": true,
+    "value": [
+     1000,
+     500,
+     600,
+     100,
+     1200,
+     0,
+     17,
+     0,
+     700,
+     40,
+     2000,
+     1027
+    ],
+    "pdus": [
+     "030000000c"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "read_regs_block",
+    "args": [
+     110,
+     51
+    ],
+    "ok": true,
+    "value": [
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ],
+    "pdus": [
+     "03006e0033"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "read_coils_block_short",
+    "args": [
+     1,
+     481
+    ],
+    "ok": true,
+    "value": [
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     true,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false,
+     false
+    ],
+    "pdus": [
+     "01000101e1"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "read_regs_block_short",
+    "args": [
+     0,
+     12
+    ],
+    "ok": true,
+    "value": [
+     1000,
+     500,
+     600,
+     100,
+     1200,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0,
+     0
+    ],
+    "pdus": [
+     "030000000c"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "write_switch",
+    "args": [
+     "MAIN_SHUTTER_2_SW",
+     true
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "0500eaff00"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "write_switch",
+    "args": [
+     "AR_2_GAS_SW",
+     false
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "0500eb0000"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "press_switch",
+    "args": [
+     "G_V_2_OPEN_SW"
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "0500e8ff00",
+     "0500e80000"
+    ],
+    "conns": [
+     1,
+     1
+    ],
+    "t": [
+     0.153,
+     0.334
+    ]
+   },
+   {
+    "name": "pulse",
+    "args": [
+     210,
+     300
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "0500d2ff00",
+     "0500d20000"
+    ],
+    "conns": [
+     1,
+     1
+    ],
+    "t": [
+     0.152,
+     0.454
+    ]
+   },
+   {
+    "name": "read_bit",
+    "args": [
+     "L_ATM"
+    ],
+    "ok": true,
+    "value": false,
+    "pdus": [
+     "0100630001"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.151
+    ]
+   },
+   {
+    "name": "read_bit",
+    "args": [
+     "L_ATM_SENSOR"
+    ],
+    "ok": true,
+    "value": true,
+    "pdus": [
+     "0103290001"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.151
+    ]
+   },
+   {
+    "name": "write_coil_p_mirror",
+    "args": [
+     803,
+     true
+    ],
+    "ok": false,
+    "code": "E403",
+    "error": "P 미러 코일(803, M0050~M0054)은 읽기 전용 — 쓰기 거절",
+    "pdus": [],
+    "conns": [],
+    "t": []
+   },
+   {
+    "name": "gas",
+    "args": [
+     2,
+     "AR",
+     true
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "0500ebff00"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "gas",
+    "args": [
+     1,
+     "O2",
+     false
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "0500cc0000"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "gas",
+    "args": [
+     2,
+     "N2",
+     true
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "0500edff00"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.151
+    ]
+   },
+   {
+    "name": "gas",
+    "args": [
+     1,
+     "N2",
+     true
+    ],
+    "ok": false,
+    "code": "ValueError",
+    "error": "가스 'N2'는 CH1에 존재하지 않습니다 (키: N2_1_GAS_SW)",
+    "pdus": [],
+    "conns": [],
+    "t": []
+   },
+   {
+    "name": "gas",
+    "args": [
+     2,
+     "MAIN",
+     false
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "0500ee0000"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "main_shutter",
+    "args": [
+     1,
+     true
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "0500caff00"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.151
+    ]
+   },
+   {
+    "name": "gate_valve",
+    "args": [
+     2,
+     false,
+     true
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "0500e9ff00",
+     "0500e90000"
+    ],
+    "conns": [
+     1,
+     1
+    ],
+    "t": [
+     0.151,
+     0.332
+    ]
+   },
+   {
+    "name": "lift_pin",
+    "args": [
+     true,
+     true
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "0500d2ff00",
+     "0500d20000"
+    ],
+    "conns": [
+     1,
+     1
+    ],
+    "t": [
+     0.151,
+     0.332
+    ]
+   },
+   {
+    "name": "rf_select",
+    "args": [
+     true
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "0500d6ff00"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.157
+    ]
+   },
+   {
+    "name": "power_select",
+    "args": [
+     true
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "0500d7ff00"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.146
+    ]
+   },
+   {
+    "name": "power_select",
+    "args": [
+     false
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "0500d70000"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.151
+    ]
+   },
+   {
+    "name": "buzzer_stop",
+    "args": [
+     true
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "050640ff00",
+     "0506400000"
+    ],
+    "conns": [
+     1,
+     1
+    ],
+    "t": [
+     0.151,
+     0.333
+    ]
+   },
+   {
+    "name": "set",
+    "args": [
+     "MV",
+     true,
+     2
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "0500e3ff00"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "set",
+    "args": [
+     "MS",
+     false,
+     1
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "0500ca0000"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.151
+    ]
+   },
+   {
+    "name": "set",
+    "args": [
+     "G2",
+     true,
+     2
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "0500d8ff00"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "set",
+    "args": [
+     "SW_RF_SELECT",
+     false,
+     2
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "0500d60000"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "power_enable",
+    "args": [
+     true,
+     0
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "050050ff00"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "power_enable",
+    "args": [
+     false,
+     3
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "0500530000"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "power_write",
+    "args": [
+     0.0,
+     0
+    ],
+    "ok": true,
+    "value": 0,
+    "pdus": [
+     "0600040000"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.151
+    ]
+   },
+   {
+    "name": "power_write",
+    "args": [
+     0.1,
+     0
+    ],
+    "ok": true,
+    "value": 0,
+    "pdus": [
+     "0600040000"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.153
+    ]
+   },
+   {
+    "name": "power_write",
+    "args": [
+     0.13,
+     0
+    ],
+    "ok": true,
+    "value": 1,
+    "pdus": [
+     "0600040001"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.147
+    ]
+   },
+   {
+    "name": "power_write",
+    "args": [
+     1.0,
+     0
+    ],
+    "ok": true,
+    "value": 4,
+    "pdus": [
+     "0600040004"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "power_write",
+    "args": [
+     123.4,
+     0
+    ],
+    "ok": true,
+    "value": 494,
+    "pdus": [
+     "06000401ee"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "power_write",
+    "args": [
+     300.6,
+     0
+    ],
+    "ok": true,
+    "value": 1202,
+    "pdus": [
+     "06000404b2"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.151
+    ]
+   },
+   {
+    "name": "power_write",
+    "args": [
+     1000.0,
+     0
+    ],
+    "ok": true,
+    "value": 4000,
+    "pdus": [
+     "0600040fa0"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "power_write",
+    "args": [
+     1500.0,
+     0
+    ],
+    "ok": true,
+    "value": 4000,
+    "pdus": [
+     "0600040fa0"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "power_write",
+    "args": [
+     -5.0,
+     0
+    ],
+    "ok": true,
+    "value": 0,
+    "pdus": [
+     "0600040000"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "power_write",
+    "args": [
+     500.0,
+     3
+    ],
+    "ok": true,
+    "value": 2000,
+    "pdus": [
+     "06000707d0"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "power_read",
+    "args": [
+     0,
+     1
+    ],
+    "ok": true,
+    "value": [
+     245.051499,
+     503.16,
+     0.487025
+    ],
+    "pdus": [
+     "0300000001",
+     "0300010001"
+    ],
+    "conns": [
+     1,
+     1
+    ],
+    "t": [
+     0.15,
+     0.301
+    ]
+   },
+   {
+    "name": "power_read",
+    "args": [
+     6,
+     7
+    ],
+    "ok": true,
+    "value": [
+     1006.671558,
+     1006.32,
+     1.000349
+    ],
+    "pdus": [
+     "03000a0001",
+     "03000b0001"
+    ],
+    "conns": [
+     1,
+     1
+    ],
+    "t": [
+     0.15,
+     0.301
+    ]
+   },
+   {
+    "name": "rf_enable",
+    "args": [
+     true,
+     2
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "050052ff00"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "rf_enable",
+    "args": [
+     false,
+     1
+    ],
+    "ok": true,
+    "value": null,
+    "pdus": [
+     "0500510000"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "rf_write_w",
+    "args": [
+     4.2869,
+     2
+    ],
+    "ok": true,
+    "value": 17,
+    "pdus": [
+     "0600060011"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "rf_apply",
+    "args": [
+     100.0,
+     false,
+     2
+    ],
+    "ok": true,
+    "value": 400,
+    "pdus": [
+     "0600060190"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "rf_apply",
+    "args": [
+     50.0,
+     true,
+     2
+    ],
+    "ok": true,
+    "value": 200,
+    "pdus": [
+     "050052ff00",
+     "06000600c8"
+    ],
+    "conns": [
+     1,
+     1
+    ],
+    "t": [
+     0.15,
+     0.301
+    ]
+   },
+   {
+    "name": "rf_apply",
+    "args": [
+     10.0,
+     false,
+     1
+    ],
+    "ok": true,
+    "value": 40,
+    "pdus": [
+     "0600050028"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "rf_read_fwd_ref",
+    "args": [
+     2,
+     false
+    ],
+    "ok": true,
+    "value": {
+     "forward": 104.8,
+     "reflected": 4.9
+    },
+    "pdus": [
+     "0300080001",
+     "0300090001"
+    ],
+    "conns": [
+     1,
+     1
+    ],
+    "t": [
+     0.15,
+     0.301
+    ]
+   },
+   {
+    "name": "rf_read_fwd_ref",
+    "args": [
+     2,
+     null
+    ],
+    "ok": true,
+    "value": {
+     "forward": 104.8,
+     "reflected": 4.9
+    },
+    "pdus": [
+     "0300080001",
+     "0300090001"
+    ],
+    "conns": [
+     1,
+     1
+    ],
+    "t": [
+     0.154,
+     0.3
+    ]
+   },
+   {
+    "name": "rf_read_fwd_ref",
+    "args": [
+     1,
+     null
+    ],
+    "ok": true,
+    "value": {
+     "forward": 89.3,
+     "reflected": 13.9
+    },
+    "pdus": [
+     "0300020001",
+     "0300030001"
+    ],
+    "conns": [
+     1,
+     1
+    ],
+    "t": [
+     0.153,
+     0.301
+    ]
+   },
+   {
+    "name": "snapshot_all_coils_fast",
+    "args": [],
+    "ok": true,
+    "value": {
+     "R_P_1_OFF_TIMER": false,
+     "R_P_2_OFF_TIMER": false,
+     "L_R_P_OFF_TIMER": false,
+     "R_V_1_인터락": false,
+     "F_V_1_인터락": false,
+     "M_V_1_인터락": false,
+     "VENT_1_인터락": false,
+     "TURBO_1_인터락": false,
+     "DOOR_1_인터락": false,
+     "G_V_1_인터락": false,
+     "MAIN_SHUTTER_1_인터락": false,
+     "Ar_1_GAS_인터락": false,
+     "O2_1_GAS_인터락": false,
+     "MAIN_1_GAS_인터락": false,
+     "L_R_V_인터락": false,
+     "L_PIN_인터락": false,
+     "L_VENT_인터락": false,
+     "R_V_2_인터락": false,
+     "F_V_2_인터락": false,
+     "M_V_2_인터락": false,
+     "VENT_2_인터락": false,
+     "TURBO_2_인터락": false,
+     "DOOR_2_인터락": false,
+     "G_V_2_인터락": false,
+     "MAIN_SHUTTER_2_인터락": false,
+     "Ar_2_GAS_인터락": false,
+     "O2_2_GAS_인터락": false,
+     "N2_2_GAS_인터락": false,
+     "MAIN_2_GAS_인터락": false,
+     "DCV_SET_0": true,
+     "DCV_SET_1": false,
+     "DCV_SET_2": true,
+     "DCV_SET_3": false,
+     "LP_STEP1": false,
+     "LP_STEP2": false,
+     "L_VAC_READY_SW": false,
+     "L_ATM": false,
+     "L_VAC_NOT_READY": false,
+     "Z1_UP": false,
+     "Z1_MID": false,
+     "Z1_DOWN": false,
+     "Z2_UP": false,
+     "Z2_MID": false,
+     "Z2_DOWN": false,
+     "Z1_UP_LOCATION": false,
+     "Z1_MID_LOCATION": false,
+     "Z1_DOWN_LOCATION": false,
+     "Z2_UP_LOCATION": false,
+     "Z2_MID_LOCATION": false,
+     "Z2_DOWN_LOCATION": false,
+     "Z_M_P_1_STOP_SW": false,
+     "Z_M_P_1_MID_SW": false,
+     "Z_M_P_1_MID_CW": false,
+     "Z_M_P_1_MID_CCW": false,
+     "Z_M_P_2_MID_SW": false,
+     "Z_M_P_2_MID_CW": false,
+     "Z_M_P_2_MID_CCW": false,
+     "R_P_1_SW": false,
+     "R_V_1_SW": false,
+     "F_V_1_SW": false,
+     "M_V_1_SW": false,
+     "VENT_1_SW": false,
+     "TURBO_1_SW": false,
+     "DOOR_1_OPEN_SW": false,
+     "DOOR_1_CLOSE_SW": false,
+     "G_V_1_OPEN_SW": false,
+     "G_V_1_CLOSE_SW": false,
+     "MAIN_SHUTTER_1_SW": false,
+     "Ar_1_GAS_SW": true,
+     "O2_1_GAS_SW": false,
+     "MAIN_1_GAS_SW": false,
+     "L_R_P_SW": false,
+     "L_R_V_SW": false,
+     "L_PIN_UP_SW": false,
+     "L_PIN_DOWN_SW": false,
+     "L_VENT_SW": false,
+     "SW_RF_SELECT": false,
+     "SW_POWER_SELECT": false,
+     "SHUTTER_2_SW": true,
+     "SHUTTER_3_SW": false,
+     "Z_M_P_1_SW": false,
+     "Z_M_P_1_CW_SW": false,
+     "Z_M_P_1_CCW_SW": false,
+     "Z_M_P_2_SW": false,
+     "Z_M_P_2_CW_SW": false,
+     "Z_M_P_2_CCW_SW": false,
+     "R_P_2_SW": false,
+     "R_V_2_SW": false,
+     "F_V_2_SW": false,
+     "M_V_2_SW": true,
+     "VENT_2_SW": false,
+     "TURBO_2_SW": false,
+     "DOOR_2_OPEN_SW": false,
+     "DOOR_2_CLOSE_SW": false,
+     "G_V_2_OPEN_SW": false,
+     "G_V_2_CLOSE_SW": false,
+     "MAIN_SHUTTER_2_SW": true,
+     "Ar_2_GAS_SW": true,
+     "O2_2_GAS_SW": false,
+     "N2_2_GAS_SW": true,
+     "MAIN_2_GAS_SW": false,
+     "SHUTTER_1_SW": false,
+     "Z_M_P_2_STOP_SW": false,
+     "VENT_1_LAMP": false,
+     "DOOR_1_OPEN_LAMP": false,
+     "DOOR_1_CLOSE_LAMP": false,
+     "G_V_1_OPEN_LAMP": false,
+     "G_V_1_CLOSE_LAMP": false,
+     "L_PIN_UP_LAMP": false,
+     "L_PIN_DOWN_LAMP": false,
+     "L_VENT_LAMP": false,
+     "VENT_2_LAMP": false,
+     "DOOR_2_OPEN_LAMP": false,
+     "DOOR_2_CLOSE_LAMP": false,
+     "G_V_2_OPEN_LAMP": false,
+     "G_V_2_CLOSE_LAMP": false,
+     "LOADING_1_SENSOR_LAMP": false,
+     "LOADING_2_SENSOR_LAMP": false,
+     "BUZZER_STOP_SW": false,
+     "GAUGE_1_A_INTERLOCK": true,
+     "GAUGE_1_B_INTERLOCK": false,
+     "L_GAUGE_A_INTERLOCK": false,
+     "GAUGE_2_A_INTERLOCK": false,
+     "GAUGE_2_B_INTERLOCK": true
+    },
+    "pdus": [
+     "01000101e1",
+     "0106400001",
+     "01096001e1",
+     "010be00001"
+    ],
+    "conns": [
+     1,
+     1,
+     1,
+     1
+    ],
+    "t": [
+     0.15,
+     0.301,
+     0.451,
+     0.602
+    ]
+   },
+   {
+    "name": "snapshot_regs_fast",
+    "args": [],
+    "ok": true,
+    "value": {
+     "DCV_READ_0": 1000,
+     "DCV_READ_1": 500,
+     "DCV_READ_2": 600,
+     "DCV_READ_3": 100,
+     "DCV_READ_4": 700,
+     "DCV_READ_5": 40,
+     "DCV_READ_6": 2000,
+     "DCV_READ_7": 1027,
+     "DCV_WRITE_0": 0,
+     "DCV_WRITE_1": 40,
+     "DCV_WRITE_2": 200,
+     "DCV_WRITE_3": 2000
+    },
+    "pdus": [
+     "030000000c"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "heartbeat_ping",
+    "args": [],
+    "ok": true,
+    "value": true,
+    "pdus": [
+     "0100000001"
+    ],
+    "conns": [
+     1
+    ],
+    "t": [
+     0.15
+    ]
+   },
+   {
+    "name": "timeout_once_retry_same_socket",
+    "args": [
+     8
+    ],
+    "ok": true,
+    "value": 700,
+    "pdus": [
+     "0300080001",
+     "0300080001"
+    ],
+    "conns": [
+     1,
+     1
+    ],
+    "t": [
+     0.15,
+     2.157
+    ]
+   },
+   {
+    "name": "timeout_two_fail_same_socket",
+    "args": [
+     8
+    ],
+    "ok": false,
+    "code": "E402",
+    "error": "PLC 응답 없음/프레임 오류: ModbusIOException: Modbus Error: [Input/Output] No response received after 0 retries, continue with next request",
+    "pdus": [
+     "0300080001",
+     "0300080001"
+    ],
+    "conns": [
+     1,
+     1
+    ],
+    "t": [
+     0.15,
+     2.156
+    ]
+   },
+   {
+    "name": "timeout_third_recreates_socket",
+    "args": [
+     8
+    ],
+    "ok": true,
+    "value": 700,
+    "pdus": [
+     "0300080001",
+     "0300080001"
+    ],
+    "conns": [
+     1,
+     2
+    ],
+    "t": [
+     0.0,
+     2.153
+    ]
+   },
+   {
+    "name": "low_priority_no_retry",
+    "args": [
+     0,
+     12
+    ],
+    "ok": false,
+    "code": "E402",
+    "error": "PLC 응답 없음/프레임 오류: ModbusIOException: Modbus Error: [Input/Output] No response received after 0 retries, continue with next request",
+    "pdus": [
+     "030000000c"
+    ],
+    "conns": [
+     2
+    ],
+    "t": [
+     0.15
+    ]
+   }
+  ],
+  "logs": [
+   "TCP 연결 성공: 127.0.0.1:35963 (unit=1)",
+   "set MAIN_SHUTTER_2_SW <- True (addr=234)",
+   "set AR_2_GAS_SW <- False (addr=235)",
+   "pulse G_V_2_OPEN_SW (addr=232, 180ms)",
+   "read L_ATM (addr=99) -> False",
+   "read L_ATM_SENSOR (addr=809) -> True",
+   "set Ar_2_GAS_SW <- True (addr=235)",
+   "Gas AR@Ch2 ON",
+   "set O2_1_GAS_SW <- False (addr=204)",
+   "Gas O2@Ch1 OFF",
+   "set N2_2_GAS_SW <- True (addr=237)",
+   "Gas N2@Ch2 ON",
+   "set MAIN_2_GAS_SW <- False (addr=238)",
+   "Gas MAIN@Ch2 OFF",
+   "set MAIN_SHUTTER_1_SW <- True (addr=202)",
+   "MainShutter1 OPEN(ON)",
+   "pulse G_V_2_CLOSE_SW (addr=233, 180ms)",
+   "GV2 CLOSE",
+   "pulse L_PIN_UP_SW (addr=210, 180ms)",
+   "LiftPin UP",
+   "set SW_RF_SELECT <- True (addr=214)",
+   "RF_SELECT <- True",
+   "set SW_POWER_SELECT <- True (addr=215)",
+   "POWER_SELECT(SW) <- True",
+   "set SW_POWER_SELECT <- False (addr=215)",
+   "POWER_SELECT(SW) <- False",
+   "pulse BUZZER_STOP_SW (addr=1600, 180ms)",
+   "set M_V_2_SW <- True (addr=227)",
+   "set MAIN_SHUTTER_1_SW <- False (addr=202)",
+   "set SHUTTER_2_SW <- True (addr=216)",
+   "set SW_RF_SELECT <- False (addr=214)",
+   "POWER SET (DCV)[0] <- True",
+   "set DCV_SET_0 <- True (addr=80)",
+   "POWER SET (DCV)[3] <- False",
+   "set DCV_SET_3 <- False (addr=83)",
+   "write reg DCV_WRITE_0 (addr=4) <- 0",
+   "POWER WRITE (DCV) DCV_WRITE_0 <- W=0.000 (DAC=0)",
+   "write reg DCV_WRITE_0 (addr=4) <- 0",
+   "POWER WRITE (DCV) DCV_WRITE_0 <- W=0.100 (DAC=0)",
+   "write reg DCV_WRITE_0 (addr=4) <- 1",
+   "POWER WRITE (DCV) DCV_WRITE_0 <- W=0.130 (DAC=1)",
+   "write reg DCV_WRITE_0 (addr=4) <- 4",
+   "POWER WRITE (DCV) DCV_WRITE_0 <- W=1.000 (DAC=4)",
+   "write reg DCV_WRITE_0 (addr=4) <- 494",
+   "POWER WRITE (DCV) DCV_WRITE_0 <- W=123.400 (DAC=494)",
+   "write reg DCV_WRITE_0 (addr=4) <- 1202",
+   "POWER WRITE (DCV) DCV_WRITE_0 <- W=300.600 (DAC=1202)",
+   "write reg DCV_WRITE_0 (addr=4) <- 4000",
+   "POWER WRITE (DCV) DCV_WRITE_0 <- W=1000.000 (DAC=4000)",
+   "write reg DCV_WRITE_0 (addr=4) <- 4000",
+   "POWER WRITE (DCV) DCV_WRITE_0 <- W=1500.000 (DAC=4000)",
+   "write reg DCV_WRITE_0 (addr=4) <- 0",
+   "POWER WRITE (DCV) DCV_WRITE_0 <- W=-5.000 (DAC=0)",
+   "write reg DCV_WRITE_3 (addr=7) <- 2000",
+   "POWER WRITE (DCV) DCV_WRITE_3 <- W=500.000 (DAC=2000)",
+   "POWER SET (DCV)[2] <- True",
+   "set DCV_SET_2 <- True (addr=82)",
+   "POWER SET (DCV)[1] <- False",
+   "set DCV_SET_1 <- False (addr=81)",
+   "write reg DCV_WRITE_2 (addr=6) <- 17",
+   "POWER WRITE (DCV) DCV_WRITE_2 <- W=4.287 (DAC=17)",
+   "write reg DCV_WRITE_2 (addr=6) <- 400",
+   "POWER WRITE (DCV) DCV_WRITE_2 <- W=100.000 (DAC=400)",
+   "POWER SET (DCV)[2] <- True",
+   "set DCV_SET_2 <- True (addr=82)",
+   "write reg DCV_WRITE_2 (addr=6) <- 200",
+   "POWER WRITE (DCV) DCV_WRITE_2 <- W=50.000 (DAC=200)",
+   "write reg DCV_WRITE_1 (addr=5) <- 40",
+   "POWER WRITE (DCV) DCV_WRITE_1 <- W=10.000 (DAC=40)",
+   "WARN in-lock IO 4158 ms (op=read_reg, addr=8)",
+   "WARN PLC 소켓 재생성 #1 (사유=연속 타임아웃 3회, op=read_reg, 이전 연결 유지 19초)",
+   "TCP 연결 종료"
+  ],
+  "cfg": {
+   "PLC_COIL_LOG_BLOCK_PLAN": 1,
+   "PLC_CMD_GAP_MS": 150,
+   "PLC_CMD_PULSE_MS": 180
+  }
+ },
+ "dc": [
+  {
+   "name": "dc_reach_then_stop",
+   "target": 300.0,
+   "meas": [
+    [
+     0,
+     0
+    ],
+    [
+     1500,
+     400
+    ],
+    [
+     1720,
+     400
+    ],
+    [
+     1730,
+     400
+    ],
+    [
+     1731,
+     400
+    ],
+    [
+     1731,
+     400
+    ]
+   ],
+   "reads_used": 6,
+   "tripped": false,
+   "writes": [
+    "050050ff00",
+    "06000404b0",
+    "06000404b4",
+    "06000404b8",
+    "06000404bc",
+    "06000404b8",
+    "06000404b4",
+    "06000404b0",
+    "0600040000",
+    "0500500000"
+   ],
+   "events": [
+    [
+     "status",
+     "[overcurrent] 인터락 ON — 한계 1.00A (설정 300W, 연속 1회)"
+    ],
+    [
+     "status",
+     "DCV SET ON"
+    ],
+    [
+     "state_changed",
+     true
+    ],
+    [
+     "status",
+     "프로세스 시작. 목표: 300.0 W (직접 설정)"
+    ],
+    [
+     "status",
+     "목표 300.0 W 즉시 전송"
+    ],
+    [
+     "status",
+     "오차 보정: meas=0.0W, target=300.0W → set 301.0W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "저전력 감시: 1/3 (meas=0.0W ≤ 1.0W)"
+    ],
+    [
+     "status",
+     "오차 보정: meas=0.0W, target=300.0W → set 302.0W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "오차 보정: meas=294.1W, target=300.0W → set 303.0W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "오차 보정: meas=337.2W, target=300.0W → set 302.0W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "오차 보정: meas=339.2W, target=300.0W → set 301.0W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "오차 보정: meas=339.3W, target=300.0W → set 300.0W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "state_changed",
+     false
+    ],
+    [
+     "status",
+     "DC 파워 ramp-down 시작"
+    ],
+    [
+     "status",
+     "DCV SET OFF"
+    ],
+    [
+     "status",
+     "DC 파워 ramp-down 완료 (snap-to-zero)"
+    ],
+    [
+     "power_off_finished",
+     null
+    ]
+   ],
+   "sleeps": [
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0,
+    5.0
+   ]
+  },
+  {
+   "name": "dc_low_power_trip",
+   "target": 200.0,
+   "meas": [
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ]
+   ],
+   "reads_used": 3,
+   "tripped": true,
+   "writes": [
+    "050050ff00",
+    "0600040320",
+    "0600040324",
+    "0600040328",
+    "060004032c",
+    "0600040000",
+    "0500500000"
+   ],
+   "events": [
+    [
+     "status",
+     "[overcurrent] 인터락 ON — 한계 1.00A (설정 200W, 연속 1회)"
+    ],
+    [
+     "status",
+     "DCV SET ON"
+    ],
+    [
+     "state_changed",
+     true
+    ],
+    [
+     "status",
+     "프로세스 시작. 목표: 200.0 W (직접 설정)"
+    ],
+    [
+     "status",
+     "목표 200.0 W 즉시 전송"
+    ],
+    [
+     "status",
+     "오차 보정: meas=0.0W, target=200.0W → set 201.0W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "저전력 감시: 1/3 (meas=0.0W ≤ 1.0W)"
+    ],
+    [
+     "status",
+     "오차 보정: meas=0.0W, target=200.0W → set 202.0W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "저전력 감시: 2/3 (meas=0.0W ≤ 1.0W)"
+    ],
+    [
+     "status",
+     "오차 보정: meas=0.0W, target=200.0W → set 203.0W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "저전력 감시: 3/3 (meas=0.0W ≤ 1.0W)"
+    ],
+    [
+     "status",
+     "DC 파워가 3회 연속 ≤ 1.0W → 공정 중단"
+    ],
+    [
+     "target_failed",
+     "저전력 연속 3/3 (meas=0.0W ≤ 1.0W)"
+    ],
+    [
+     "state_changed",
+     false
+    ],
+    [
+     "status",
+     "DC 파워 ramp-down 시작"
+    ],
+    [
+     "status",
+     "DCV SET OFF"
+    ],
+    [
+     "status",
+     "DC 파워 ramp-down 완료 (snap-to-zero)"
+    ],
+    [
+     "power_off_finished",
+     null
+    ]
+   ],
+   "sleeps": [
+    5.0,
+    5.0
+   ]
+  },
+  {
+   "name": "dc_overcurrent_trip",
+   "target": 200.0,
+   "meas": [
+    [
+     900,
+     1200
+    ],
+    [
+     900,
+     1200
+    ]
+   ],
+   "reads_used": 1,
+   "tripped": true,
+   "writes": [
+    "050050ff00",
+    "0600040320",
+    "0600040324",
+    "0600040000",
+    "0500500000"
+   ],
+   "events": [
+    [
+     "status",
+     "[overcurrent] 인터락 ON — 한계 1.00A (설정 200W, 연속 1회)"
+    ],
+    [
+     "status",
+     "DCV SET ON"
+    ],
+    [
+     "state_changed",
+     true
+    ],
+    [
+     "status",
+     "프로세스 시작. 목표: 200.0 W (직접 설정)"
+    ],
+    [
+     "status",
+     "목표 200.0 W 즉시 전송"
+    ],
+    [
+     "status",
+     "오차 보정: meas=0.0W, target=200.0W → set 201.0W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "DC 과전류: meas=1.169A > 한계 1.000A (목표 200.0W 기준, 1회 연속) → 공정 중단 | I_scale=0.00097405 (raw≈1200)"
+    ],
+    [
+     "target_failed",
+     "DC 과전류: meas=1.169A > 한계 1.000A (목표 200.0W 기준, 1회 연속) → 공정 중단 | I_scale=0.00097405 (raw≈1200)"
+    ],
+    [
+     "state_changed",
+     false
+    ],
+    [
+     "status",
+     "DC 파워 ramp-down 시작"
+    ],
+    [
+     "status",
+     "DCV SET OFF"
+    ],
+    [
+     "status",
+     "DC 파워 ramp-down 완료 (snap-to-zero)"
+    ],
+    [
+     "power_off_finished",
+     null
+    ]
+   ],
+   "sleeps": []
+  },
+  {
+   "name": "dc_low_current_after_reach",
+   "target": 100.0,
+   "meas": [
+    [
+     1000,
+     205
+    ],
+    [
+     1000,
+     205
+    ],
+    [
+     1000,
+     40
+    ],
+    [
+     1000,
+     40
+    ],
+    [
+     1000,
+     40
+    ],
+    [
+     1000,
+     40
+    ]
+   ],
+   "reads_used": 5,
+   "tripped": true,
+   "writes": [
+    "050050ff00",
+    "0600040190",
+    "0600040194",
+    "0600040198",
+    "060004019c",
+    "0600040000",
+    "0500500000"
+   ],
+   "events": [
+    [
+     "status",
+     "[overcurrent] 인터락 ON — 한계 1.00A (설정 100W, 연속 1회)"
+    ],
+    [
+     "status",
+     "DCV SET ON"
+    ],
+    [
+     "state_changed",
+     true
+    ],
+    [
+     "status",
+     "프로세스 시작. 목표: 100.0 W (직접 설정)"
+    ],
+    [
+     "status",
+     "목표 100.0 W 즉시 전송"
+    ],
+    [
+     "status",
+     "오차 보정: meas=0.0W, target=100.0W → set 101.0W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "target_reached",
+     null
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "저전류 감시(목표 도달 후): 1/3 (meas=0.039A ≤ 0.050A)"
+    ],
+    [
+     "status",
+     "오차 보정: meas=19.6W, target=100.0W → set 102.0W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "저전류 감시(목표 도달 후): 2/3 (meas=0.039A ≤ 0.050A)"
+    ],
+    [
+     "status",
+     "오차 보정: meas=19.6W, target=100.0W → set 103.0W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "저전류 감시(목표 도달 후): 3/3 (meas=0.039A ≤ 0.050A)"
+    ],
+    [
+     "status",
+     "DC 전류가 목표 도달 후 3회 연속 ≤ 0.050A → 공정 중단"
+    ],
+    [
+     "target_failed",
+     "저전류 연속 3/3 (meas=0.039A ≤ 0.050A)"
+    ],
+    [
+     "state_changed",
+     false
+    ],
+    [
+     "status",
+     "DC 파워 ramp-down 시작"
+    ],
+    [
+     "status",
+     "DCV SET OFF"
+    ],
+    [
+     "status",
+     "DC 파워 ramp-down 완료 (snap-to-zero)"
+    ],
+    [
+     "power_off_finished",
+     null
+    ]
+   ],
+   "sleeps": [
+    5.0,
+    5.0,
+    5.0,
+    5.0
+   ]
+  }
+ ],
+ "rf": [
+  {
+   "name": "rf_ramp_5w",
+   "target": 5.0,
+   "meas": [
+    [
+     0,
+     0
+    ],
+    [
+     0,
+     0
+    ],
+    [
+     14,
+     3
+    ],
+    [
+     21,
+     3
+    ],
+    [
+     27,
+     3
+    ],
+    [
+     34,
+     3
+    ],
+    [
+     37,
+     3
+    ],
+    [
+     37,
+     3
+    ],
+    [
+     30,
+     3
+    ],
+    [
+     30,
+     3
+    ],
+    [
+     37,
+     3
+    ]
+   ],
+   "reads_used": 11,
+   "tripped": false,
+   "writes": [
+    "050052ff00",
+    "0600060011",
+    "0600060018",
+    "060006001e",
+    "0600060025",
+    "0600060026",
+    "060006001f",
+    "0600060018",
+    "0600060012",
+    "060006000b",
+    "0600060000",
+    "0600060000",
+    "0500520000"
+   ],
+   "events": [
+    [
+     "status",
+     "RF SET ON"
+    ],
+    [
+     "state_changed",
+     true
+    ],
+    [
+     "status",
+     "프로세스 시작. 목표: 5.0 W"
+    ],
+    [
+     "status",
+     "Ramp-Up 시작: 초기 1.0W 전송"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "Ramp-Up... 목표스텝:2.0W, 현재:1.5W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "Ramp-Up... 목표스텝:3.0W, 현재:2.6W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "Ramp-Up... 목표스텝:4.0W, 현재:3.5W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "5.0W 도달. 파워 유지 시작"
+    ],
+    [
+     "target_reached",
+     null
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "유지 보정: meas=3.9W, target=5.0W → set 4.1W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "정지 신호 수신됨."
+    ],
+    [
+     "state_changed",
+     false
+    ],
+    [
+     "status",
+     "RF 파워 ramp-down 시작"
+    ],
+    [
+     "status",
+     "Ramp-Down step: target=3.1W → write=7.762W"
+    ],
+    [
+     "status",
+     "Ramp-Down step: target=2.1W → write=6.107W"
+    ],
+    [
+     "status",
+     "Ramp-Down step: target=1.1W → write=4.452W"
+    ],
+    [
+     "status",
+     "Ramp-Down step: target=0.1W → write=2.798W"
+    ],
+    [
+     "status",
+     "Ramp-Down step: target=0.0W → write=0.000W"
+    ],
+    [
+     "status",
+     "Ramp-Down final: target=0.0W → write=0.000W"
+    ],
+    [
+     "status",
+     "RF SET OFF"
+    ],
+    [
+     "status",
+     "RF 파워 ramp-down 완료"
+    ],
+    [
+     "power_off_finished",
+     null
+    ]
+   ],
+   "sleeps": [
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  {
+   "name": "rf_low_power_trip",
+   "target": 20.0,
+   "meas": [
+    [
+     0,
+     0
+    ],
+    [
+     10,
+     2
+    ],
+    [
+     10,
+     2
+    ],
+    [
+     10,
+     2
+    ],
+    [
+     10,
+     2
+    ]
+   ],
+   "reads_used": 4,
+   "tripped": true,
+   "writes": [
+    "050052ff00",
+    "0600060011",
+    "0600060018",
+    "060006001e",
+    "0600060018",
+    "0600060011",
+    "0600060000",
+    "0600060000",
+    "0500520000"
+   ],
+   "events": [
+    [
+     "status",
+     "RF SET ON"
+    ],
+    [
+     "state_changed",
+     true
+    ],
+    [
+     "status",
+     "프로세스 시작. 목표: 20.0 W"
+    ],
+    [
+     "status",
+     "Ramp-Up 시작: 초기 1.0W 전송"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "저출력 감지: Forward=0.9W (1/3)"
+    ],
+    [
+     "status",
+     "Ramp-Up... 목표스텝:2.0W, 현재:0.9W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "저출력 감지: Forward=0.9W (2/3)"
+    ],
+    [
+     "status",
+     "Ramp-Up... 목표스텝:3.0W, 현재:0.9W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "저출력 감지: Forward=0.9W (3/3)"
+    ],
+    [
+     "status",
+     "Forward power가 너무 낮아 RF 공정을 중단합니다."
+    ],
+    [
+     "target_failed",
+     "Forward power <= 1.0W 3회 연속"
+    ],
+    [
+     "status",
+     "정지 신호 수신됨."
+    ],
+    [
+     "state_changed",
+     false
+    ],
+    [
+     "status",
+     "RF 파워 ramp-down 시작"
+    ],
+    [
+     "status",
+     "Ramp-Down step: target=2.0W → write=5.941W"
+    ],
+    [
+     "status",
+     "Ramp-Down step: target=1.0W → write=4.287W"
+    ],
+    [
+     "status",
+     "Ramp-Down step: target=0.0W → write=0.000W"
+    ],
+    [
+     "status",
+     "Ramp-Down final: target=0.0W → write=0.000W"
+    ],
+    [
+     "status",
+     "RF SET OFF"
+    ],
+    [
+     "status",
+     "RF 파워 ramp-down 완료"
+    ],
+    [
+     "power_off_finished",
+     null
+    ]
+   ],
+   "sleeps": [
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  {
+   "name": "rf_ref_wait_recover",
+   "target": 10.0,
+   "meas": [
+    [
+     14,
+     3
+    ],
+    [
+     21,
+     3
+    ],
+    [
+     27,
+     3
+    ],
+    [
+     34,
+     500
+    ],
+    [
+     34,
+     500
+    ],
+    [
+     40,
+     3
+    ],
+    [
+     47,
+     3
+    ],
+    [
+     60,
+     3
+    ],
+    [
+     70,
+     3
+    ],
+    [
+     70,
+     3
+    ]
+   ],
+   "reads_used": 10,
+   "tripped": false,
+   "writes": [
+    "050052ff00",
+    "0600060011",
+    "0600060018",
+    "060006001e",
+    "0600060025",
+    "060006002c",
+    "0600060032",
+    "0600060039",
+    "0600060032",
+    "060006002c",
+    "0600060025",
+    "060006001e",
+    "0600060018",
+    "0600060011",
+    "0600060000",
+    "0600060000",
+    "0500520000"
+   ],
+   "events": [
+    [
+     "status",
+     "RF SET ON"
+    ],
+    [
+     "state_changed",
+     true
+    ],
+    [
+     "status",
+     "프로세스 시작. 목표: 10.0 W"
+    ],
+    [
+     "status",
+     "Ramp-Up 시작: 초기 1.0W 전송"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "Ramp-Up... 목표스텝:2.0W, 현재:1.5W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "Ramp-Up... 목표스텝:3.0W, 현재:2.6W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "Ramp-Up... 목표스텝:4.0W, 현재:3.5W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "Ref.p(64.4W) 안정화 대기 시작 (최대 60초)"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "Ref.p 안정화 완료(0.1W). 공정 재개"
+    ],
+    [
+     "status",
+     "Ramp-Up... 목표스텝:5.0W, 현재:5.4W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "Ramp-Up... 목표스텝:6.0W, 현재:6.5W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "Ramp-Up... 목표스텝:7.0W, 현재:8.4W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "10.0W 도달. 파워 유지 시작"
+    ],
+    [
+     "target_reached",
+     null
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "정지 신호 수신됨."
+    ],
+    [
+     "state_changed",
+     false
+    ],
+    [
+     "status",
+     "RF 파워 ramp-down 시작"
+    ],
+    [
+     "status",
+     "Ramp-Down step: target=6.0W → write=12.560W"
+    ],
+    [
+     "status",
+     "Ramp-Down step: target=5.0W → write=10.905W"
+    ],
+    [
+     "status",
+     "Ramp-Down step: target=4.0W → write=9.251W"
+    ],
+    [
+     "status",
+     "Ramp-Down step: target=3.0W → write=7.596W"
+    ],
+    [
+     "status",
+     "Ramp-Down step: target=2.0W → write=5.941W"
+    ],
+    [
+     "status",
+     "Ramp-Down step: target=1.0W → write=4.287W"
+    ],
+    [
+     "status",
+     "Ramp-Down step: target=0.0W → write=0.000W"
+    ],
+    [
+     "status",
+     "Ramp-Down final: target=0.0W → write=0.000W"
+    ],
+    [
+     "status",
+     "RF SET OFF"
+    ],
+    [
+     "status",
+     "RF 파워 ramp-down 완료"
+    ],
+    [
+     "power_off_finished",
+     null
+    ]
+   ],
+   "sleeps": [
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0
+   ]
+  },
+  {
+   "name": "rf_blind_settle_early_exit",
+   "target": 80.0,
+   "meas": [
+    [
+     470,
+     200
+    ],
+    [
+     480,
+     200
+    ],
+    [
+     470,
+     5
+    ],
+    [
+     470,
+     5
+    ],
+    [
+     480,
+     5
+    ],
+    [
+     540,
+     5
+    ],
+    [
+     544,
+     5
+    ]
+   ],
+   "reads_used": 7,
+   "tripped": false,
+   "writes": [
+    "050052ff00",
+    "0600060011",
+    "0600060018",
+    "060006001e",
+    "0600060018",
+    "0600060011",
+    "0600060000",
+    "0600060000",
+    "0500520000"
+   ],
+   "events": [
+    [
+     "status",
+     "RF SET ON"
+    ],
+    [
+     "state_changed",
+     true
+    ],
+    [
+     "status",
+     "프로세스 시작. 목표: 80.0 W"
+    ],
+    [
+     "status",
+     "Ramp-Up 시작: 초기 1.0W 전송"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "Blind ramp 완료: FWD=70.2W 도달 (임계 70.0W) → 60초 안정화 대기 (REF.p 감시 OFF)"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "REF.p(0.4W) ≤ 1.0W → 안정화 대기 조기 종료 (2.0s 경과). REF.p 감시 ON → ramp-up 재개"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "Ramp-Up... 목표스텝:2.0W, 현재:70.2W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "Ramp-Up... 목표스텝:3.0W, 현재:71.7W"
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "80.0W 도달. 파워 유지 시작"
+    ],
+    [
+     "target_reached",
+     null
+    ],
+    [
+     "display",
+     null
+    ],
+    [
+     "status",
+     "정지 신호 수신됨."
+    ],
+    [
+     "state_changed",
+     false
+    ],
+    [
+     "status",
+     "RF 파워 ramp-down 시작"
+    ],
+    [
+     "status",
+     "Ramp-Down step: target=2.0W → write=5.941W"
+    ],
+    [
+     "status",
+     "Ramp-Down step: target=1.0W → write=4.287W"
+    ],
+    [
+     "status",
+     "Ramp-Down step: target=0.0W → write=0.000W"
+    ],
+    [
+     "status",
+     "Ramp-Down final: target=0.0W → write=0.000W"
+    ],
+    [
+     "status",
+     "RF SET OFF"
+    ],
+    [
+     "status",
+     "RF 파워 ramp-down 완료"
+    ],
+    [
+     "power_off_finished",
+     null
+    ]
+   ],
+   "sleeps": [
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0,
+    1.0
+   ]
+  }
+ ],
+ "rf_cfg": {
+  "RF_REFLECTED_THRESHOLD_W": 50.0,
+  "RF_BLIND_RAMP_REACH_TIMEOUT_S": 150.0,
+  "CHAMBER_RF_CONT_RAMPDOWN_INTERVAL_MS": 1000
+ }
+}
