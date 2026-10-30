@@ -294,10 +294,7 @@ V1_DEAD = {
 }
 
 # v2 키는 있지만 v2 코드가 아직/일부러 쓰지 않는 키 — 경로 → 이유(inv_cfg 항목 note 와 같은 뜻, 보고 대상)
-V2_UNUSED = {
-    "common.OES_PLOT_MIN_INTERVAL_S": "화면 OES 그래프 쓰로틀 — 그래프는 포털 몫(UI-098·PROC-232), 아직 포털에 OES 그래프 없음",
-    "common.PROCESS_LIST_START_DIR": "레시피 파일 열기 대화상자 시작 폴더 — v2 는 포털 레시피 적재로 대체(UI-080·PC-087)",
-}
+V2_UNUSED: dict = {}     # 지금은 없음 — OES_PLOT_MIN_INTERVAL_S(oes_link·oes_spectrum)·PROCESS_LIST_START_DIR(local_server 파일 목록)도 v2 가 쓴다
 
 
 def _v1_unread(path: str) -> bool:
