@@ -458,7 +458,9 @@ class OesLink(OneShotMixin):
         if h is None:
             return
         step = self._f("OES_CLOSE_STEP_S", 2.0)
-        h.shutdown(graceful, {"v": 2, "id": next(self._ids), "cmd": "close"}, step)
+        if graceful and h.alive() and self._send(h, {"id": next(self._ids), "cmd": "close"}):
+            h.wait(step)                     # v1: close → 2 s → terminate → 2 s → kill → 2 s
+        h.shutdown(False, None, step)
         h.join()
 
     def _local_stop_flags(self) -> tuple:

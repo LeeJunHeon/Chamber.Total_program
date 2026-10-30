@@ -115,6 +115,7 @@ class RfPulseDriver:
         self.block = f"{chamber}.rfpulse"
         self.worker = None
         self._ready_at = -1e9                     # 다음 명령을 보낼 수 있는 가장 이른 시각
+        self._last_send = -1e9
         self._op: Optional[OpRunner] = None
         self._off_op: Optional[OpRunner] = None
         self._off_waiters: list = []
@@ -198,6 +199,7 @@ class RfPulseDriver:
                                  f"data={' '.join(f'{x:02X}' for x in data)} raw={' '.join(f'{x:02X}' for x in pkt)} tag={tag}")
         if cmd == RF_ON:
             self._output_maybe_on = True
+        self._last_send = now
         s.write(pkt)
         dl = min(now + timeout_s, until)
         while True:
@@ -231,10 +233,7 @@ class RfPulseDriver:
     # ───────── 명령 단계(generator) ─────────
     def _io(self, cmd, data, timeout_s, until, tag, is_exec, kind):
         def fn(s):
-            try:
-                return self._transact(s, cmd, data, timeout_s, until, tag, is_exec)
-            finally:
-                self._last_io = self.clock.monotonic()
+            return self._transact(s, cmd, data, timeout_s, until, tag, is_exec)
         lim = max(0.05, until - self.clock.monotonic()) + 0.2
         return IO(fn, lim, kind=kind, name=tag or cmd_label(cmd))
 
@@ -251,7 +250,7 @@ class RfPulseDriver:
                 self._emit("status", f"[STOP_GUARD] {cmd_label(cmd)} 전송 차단")
                 return False, None
             r = yield self._io(cmd, data, eff, until, tag, True, kind)
-            t_send = getattr(self, "_last_io", self.clock.monotonic())
+            t_send = self._last_send
             csr_b = r.value if r.ok else None
             csr = csr_b[0] if csr_b else None
             if csr == 0:
@@ -601,7 +600,7 @@ class RfPulseDriver:
 
     def _state(self) -> Dict[str, Any]:
         b = self.block
-        return {f"{b}.set_w": self._target_w if (self.polling or self._target_w) else None, f"{b}.freq_hz": self.freq_hz,
+        return {f"{b}.set_w": self._target_w, f"{b}.freq_hz": self.freq_hz,
                 f"{b}.duty_pct": self.duty_pct, f"{b}.polling": self.polling}
 
     def source_read(self, session, seq: int) -> Dict[str, Any]:
@@ -619,11 +618,12 @@ class RfPulseDriver:
         b = self.block
         try:
             data = self._transact(session, cmd, b"", q_s, session.deadline, tag, False)
-        finally:
-            self._ready_at = self.clock.monotonic() + self._gap_s()
-            self._poll_step = (step + 1) % 3
+        except Exception:
+            self._poll_advance(step)
             if step == 2:
-                self._cycle_next = self.clock.monotonic() + self._ms("POLL_INTERVAL_MS", 1000)
+                self._judge()                                   # v1: 이번 바퀴가 실패해도 마지막 값으로 감시
+            raise
+        self._poll_advance(step)
         if step == 0:
             st = parse_status(data)
             if st is None:
@@ -647,6 +647,12 @@ class RfPulseDriver:
             out[f"{b}.ref_w"] = self.last_ref
             self._judge()
         return out
+
+    def _poll_advance(self, step: int) -> None:
+        self._ready_at = self.clock.monotonic() + self._gap_s()
+        self._poll_step = (step + 1) % 3
+        if step == 2:
+            self._cycle_next = self.clock.monotonic() + self._ms("POLL_INTERVAL_MS", 1000)
 
     def _judge(self) -> None:
         if self._target_w > 0.0 and self.last_fwd is not None and self.last_ref is not None and not self._stop_requested:

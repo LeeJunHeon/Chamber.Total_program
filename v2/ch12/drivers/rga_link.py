@@ -225,6 +225,12 @@ class RgaLink:
                 f"{b}.sample_age_s": age}
 
     # ───────── 스캔(v1 device/rga.py:158-405) ─────────
+    def scan_command(self, cid: int, timeout_s: float, pri: str, fb: str) -> Dict[str, Any]:
+        """워커로 보내는 줄 — v1 명령줄 '--ch N --timeout T --csv P --csv_fallback F' 와 같은 이름·값 + 계정(비밀값)."""
+        user, password = self._creds()
+        return {"v": 2, "id": cid, "cmd": "scan", "ch": self.ch, "timeout": timeout_s, "csv": pri, "csv_fallback": fb,
+                "user": user, "password": password}
+
     def _attempt(self, a: int, n: int, timeout_s: float, pri: str, fb: str) -> tuple:
         """한 번 시도 → (payload 또는 None, fail 또는 None)."""
         try:
@@ -242,9 +248,8 @@ class RgaLink:
         except Exception as e:
             return None, {"message": f"RGA worker exec failed: {e!r}", "attempt": a, "attempts": n, "cmd": cmd}
         cid = next(self._ids)
-        user, password = self._creds()
-        msg = {"v": 2, "id": cid, "cmd": "scan", "ch": self.ch, "timeout": timeout_s, "csv": pri, "csv_fallback": fb,
-               "user": user, "password": password}
+        msg = self.scan_command(cid, timeout_s, pri, fb)
+        password = msg["password"]
         self._raw = []
         if not h.send(msg):
             self._terminate_current(force_kill=True)
@@ -293,7 +298,7 @@ class RgaLink:
                         self._emit("status", f"[RGA] CSV 정본 저장 실패 → 로컬 폴백에 저장: {payload.get('csv_path')}")
                     mass, pres = payload.get("mass_axis") or [], payload.get("pressures") or []
                     meta = {k: v for k, v in payload.items() if k not in ("v", "id", "kind")}
-                    self._emit("data", "RGA data", data={"mass_axis": mass, "pressures": pres, "meta": meta})
+                    self._emit("data", "", data={"mass_axis": mass, "pressures": pres, "meta": meta})
                     if on_data:
                         on_data(mass, pres)
                     self._last_ok = self.clock.monotonic()
