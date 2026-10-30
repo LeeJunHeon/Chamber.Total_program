@@ -37,7 +37,7 @@ from v2.common.mode import RunMode, policy
 from v2.common.recorder import Recorder
 from v2.common.snapshot_bus import SnapshotBus, Source, TickLoop, iso_local
 from v2.common.transport import TcpTransport, Transport
-from v2.common.worker import Worker
+from v2.common.worker import Result, Status, Worker
 from v2.ch12 import snapshot_fields as SF
 from v2.ch12.drivers import dcpulse as DCP, ig as G, mfc as M, plc as P, rfpulse as RFP, stm100 as STM, tsp as T
 from v2.ch12.drivers.cache_source import CacheWorker
@@ -53,6 +53,8 @@ from v2.ch12.shared import OnDemand, SharedDevices
 CHAMBERS = SF.CHAMBERS
 EVENTS_KEEP = 20000
 PULSE_KINDS = (("dcpulse", DCP.DcPulseDriver, "SUPPORTS_DCPULSE"), ("rfpulse", RFP.RfPulseDriver, "SUPPORTS_RFPULSE"))
+WARN_KINDS = frozenset({"disconnected", "connect_failed", "long_outage", "timeout", "link_down", "heartbeat_fail",
+                        "command_failed", "target_failed", "power_off_failed"})   # 사유 코드가 없어도 warn 으로 기록
 SIM_LINK_CFG = {"OES_WORKER_FAKE": True, "RGA_WORKER_FAKE": True}     # sim: 워커는 가짜 DLL·가짜 RGA 로(실제 프로세스)
 
 
@@ -92,6 +94,27 @@ class TransportSet:
     pulse: Callable[[str, str], Transport]
     tsp_ig: Callable[[], Transport]
     extra: Dict[str, Any] = field(default_factory=dict)
+
+
+class SwapSource(Source):
+    """worker 를 바꿔 끼우는 1초 소스(펄스 점유·TSP 게이지 — 잡을 때 붙이고 놓을 때 None). 떼어 낼 때 그 worker 큐에 남은
+    1초 읽기 요청을 CANCELLED 로 끝낸다 — Worker.stop 은 큐에 남은 요청의 on_done 을 부르지 않아서, 놓는 순간 줄 서 있던 읽기가
+    묶기(snapshot_bus)에 '진행 중'으로 남으면 그 뒤 모든 행이 마감까지 기다리고(행 닫힘 950 ms) 다시 잡아도 그 소스를 읽지 않는다."""
+
+    @property
+    def worker(self):
+        return self.__dict__.get("_w")
+
+    @worker.setter
+    def worker(self, w) -> None:
+        old = self.__dict__.get("_w")
+        self.__dict__["_w"] = w
+        if old is not None and old is not w:
+            left = old.queue.drain(lambda r: not str(getattr(r, "name", "")).startswith("read:"))
+            now = old.clock.monotonic()
+            for req in left:
+                if req.on_done:
+                    req.on_done(Result(req, Status.CANCELLED, reason="CANCELLED", started=now, finished=now))
 
 
 def tcp_transports(clock, cfg: Dict[str, Any]) -> TransportSet:
@@ -186,7 +209,7 @@ class Ch12System:
         for ch in CHAMBERS:
             for kind, cls, key in PULSE_KINDS:
                 name = f"{ch}.{kind}"
-                src = Source(name, None, lambda s, n: {}, (name,), int(c["TICK_DEADLINE_MS"]))
+                src = SwapSource(name, None, lambda s, n: {}, (name,), int(c["TICK_DEADLINE_MS"]))
                 drv = None
                 if supports(c, ch, key):
                     drv = cls(clock, None, c, wr, on_event=self._ev_for(name), chamber=ch)
@@ -202,7 +225,7 @@ class Ch12System:
         self.enabled["tsp"] = True
         self.tsp = T.TspDriver(clock, w, c, wr, on_event=self._ev_for("tsp"))
         sources.append(self.tsp.source())
-        ig_src = Source("tsp.ig", None, lambda s, n: {}, ("tsp.ig",), G.source_deadline_ms(c))
+        ig_src = SwapSource("tsp.ig", None, lambda s, n: {}, ("tsp.ig",), G.source_deadline_ms(c))
 
         def make_tsp_ig():
             tw = G.make_worker(clock, g("tsp.ig", transports.tsp_ig()), c, "tsp", wr, on_event=self._ev_for("tsp.ig"))
@@ -330,7 +353,7 @@ class Ch12System:
             kind = str(getattr(e, "kind", type(e).__name__))
             reason = getattr(e, "reason", None)
             code = getattr(e, "code", None)
-            level = getattr(e, "level", None) or ("warn" if (reason or code) else "info")
+            level = getattr(e, "level", None) or ("warn" if (reason or code or kind in WARN_KINDS) else "info")
             src = getattr(e, "device", None) or source
             self._log(Logged(self.clock.wall(), str(src), kind, str(getattr(e, "detail", "") or ""), reason, code,
                              str(level), e))
@@ -369,7 +392,10 @@ class Ch12System:
         return self.clock.wait_until(self.clock.monotonic() + ready_timeout_s,
                                      lambda: all(self.workers[k].ready for k in need))
 
-    def stop(self) -> None:
+    def stop(self, drain_s: float = 2.0) -> None:
+        """tick 멈춤 → 엔진 close → 펄스·TSP 게이지 놓기 → 카메라·두께 멈춤 → worker 정지(포트 닫기) → 출력·기록 flush.
+        PLC 는 하트비트를 먼저 쉬고 남은 요청이 끝나기를 잠깐(drain_s) 기다린다 — 정지가 취소한 하트비트를 드라이버가
+        링크 끊김으로 세어 종료 때 'PLC 연결 끊김' 알림이 나가지 않게."""
         self.loop.stop()
         for n, e in list(self.engines.items()):
             f = getattr(e, "close", None)
@@ -382,6 +408,10 @@ class Ch12System:
         self.camera.join(3.0)
         for d in self.stm.values():
             d.stop()
+        pw = self.workers["plc"]
+        self.plc.pause_watchdog()
+        if self.started and pw.connected:
+            self.clock.wait_until(self.clock.monotonic() + drain_s, lambda: not pw.busy and len(pw.queue) == 0)
         for k, w in self.workers.items():
             if self.enabled[k]:
                 w.stop()
@@ -398,10 +428,10 @@ class Ch12System:
         out = {}
         for b in SF.BLOCK_ORDER:
             src = next(s for s in self.sources.values() if b in s.blocks)
-            if not src.enabled:
-                out[b] = "off"
-            elif src.worker is None or b in ("tsp", "tsp.ig") or b.endswith(("pulse",)):
+            if b in ("tsp", "tsp.ig") or (b.endswith("pulse") and src.enabled):
                 out[b] = "on-demand"
+            elif not src.enabled:
+                out[b] = "off"
             else:
                 out[b] = "on"
         return out

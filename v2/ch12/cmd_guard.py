@@ -193,6 +193,11 @@ DCP_FORBIDDEN: Dict[int, str] = {                # v1 이 쓰는 코드라도 v1
     0x7D: "마스터를 HOST(3) 가 아닌 값으로 — 제어권 이동(v1 은 HOST 만)",
     0x81: "Regulation 을 Power(3) 가 아닌 V·I 모드로(v1 은 REG_POWER 만, device/dc_pulse.py:1175-1182)",
 }
+# v1 에 정의만 있고 부르는 곳이 없는 설정 API(device/dc_pulse.py:1417-1441 — v2 dcpulse.py 도 같은 바이트로 두었지만 v1 은 보내지 않음)
+for _c, _n in ((0x05, "ARC_DET_US"), (0x06, "ARC_PAUSE_US"), (0x07, "ARC_VOLT_V"), (0x08, "ARC_CURR_A"), (0x09, "SOFT_ARC_LV"),
+               (0x0A, "SHDN_DELAY_MS"), (0x0B, "SHDN_PAUSE_MS"), (0x0C, "LIM_P_W"), (0x0D, "LIM_I_A"), (0x0E, "LIM_V_V"),
+               (0x0F, "RAMP_MS"), (0x10, "IGN_V")):
+    DCP_FORBIDDEN[_c] = f"{_n}(아크·셧다운·한계·램프·점화 장비 설정 — v1 정의만, 부르는 곳 없음 device/dc_pulse.py:1417-1441)"
 
 
 def _dcp_chk(items: bytes) -> int:
@@ -229,6 +234,7 @@ def dcp_check(data: bytes, mode: str) -> Optional[str]:
 
 # ═════════════ RF Pulse(AE CESAR 1310, AE Bus — device/rf_pulse.py) ═════════════
 RFP_BENCH = frozenset({155, 162, 165, 166, 193, 196,    # v1 이 읽는 것(제어 모드·상태·순방향·반사·주파수·듀티)
+                       164, 167, 177,                   # v1 상수만 있는 읽기(셋포인트·전달 전력·펄싱 — device/rf_pulse.py:44·47·65)
                        128, 130, 152, 198})             # 챔버K RFP_BENCH(CESAR 매뉴얼: 기종·용량·반사 자동 차단 시간·SW 판) — v1 미사용
 RFP_PROD_WRITES: Dict[int, tuple] = {            # 명령 → (데이터 검사, 이름, v1 근거)
     1: (lambda d: d == b"", "RF_OFF", "device/rf_pulse.py:36"),

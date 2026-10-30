@@ -319,3 +319,30 @@ def load_heater_cfg(cfg: Mapping[str, Any], prefix: str = "CH2_") -> Tuple[Heate
         noresp_loss_sec=float(nr_lsec), noresp_loss_below_c=float(nr_below), noresp_loss_fall_c=float(nr_fall),
     )
     return out, warns
+
+
+# HeaterCfg 필드 → v2 설정 키(접두어 뒤) — 시험대·변환이 HeaterCfg 를 cfg 사전으로 바꿀 때
+CFG_KEYS = {
+    "enabled": "SUPPORTS_HEATER", "temp_scale": "HEATER_TEMP_SCALE", "poll_interval_s": "HEATER_POLL_INTERVAL_S",
+    "poll_idle_s": "HEATER_POLL_IDLE_S", "wd_period_s": "HEATER_WD_PERIOD_S", "stale_sec": "HEATER_STALE_SEC",
+    "max_temp": "HEATER_MAX_TEMP", "sv_limit_c": "HEATER_SV_LIMIT_C", "ot_limit_c": "HEATER_OT_LIMIT_C",
+    "ramp_rate": "HEATER_RAMP_RATE_C_PER_MIN", "holdback_c": "HEATER_HOLDBACK_C", "slow_zone_c": "HEATER_SLOW_ZONE_C",
+    "slow_rate": "HEATER_SLOW_RATE_C_PER_MIN", "mv_min": "HEATER_MV_MIN", "mv_abs_max": "HEATER_MV_ABS_MAX",
+    "mv_limit": "HEATER_MV_LIMIT", "kp": "HEATER_KP", "ti_s": "HEATER_TI_S", "push_config": "HEATER_PUSH_CONFIG",
+    "session_mark_reg": "HEATER_SESSION_MARK_REG", "approach_zone": "HEATER_APPROACH_ZONE_C",
+    "approach_min_rate": "HEATER_APPROACH_MIN_RATE_C_PER_MIN", "approach_lead": "HEATER_APPROACH_LEAD_C",
+    "soak_tol": "HEATER_SOAK_TOLERANCE", "hold_mode": "HEATER_HOLD_MODE", "hold_enter_tol": "HEATER_HOLD_MV_ENTER_TOL_C",
+    "hold_enter_sec": "HEATER_HOLD_MV_ENTER_SEC", "hold_arrive_tol": "HEATER_HOLD_MV_ARRIVE_TOL_C",
+    "hold_drift_pv": "HEATER_HOLD_MV_DRIFT_PV_C", "hold_drift_mv": "HEATER_HOLD_MV_DRIFT_MV", "sat_sec": "HEATER_MV_SAT_SEC",
+    "soak_time_s": "HEATER_SOAK_TIME_SEC", "wait_timeout_s": "HEATER_WAIT_TIMEOUT_SEC", "hold_wait_s": "HEATER_HOLD_WAIT_SEC",
+    "hold_fail_action": "HEATER_HOLD_FAIL_ACTION", "log_enabled": "HEATER_LOG_ENABLED", "log_period_s": "HEATER_LOG_PERIOD_S",
+    "log_dir": "HEATER_LOG_DIR", "run_log_period_s": "HEATER_RUN_LOG_PERIOD_S", "noresp_enable": "HEATER_NORESP_ENABLE",
+    "noresp_mv": "HEATER_NORESP_MV", "noresp_sec": "HEATER_NORESP_SEC", "noresp_rise_c": "HEATER_NORESP_RISE_C",
+    "noresp_loss_sec": "HEATER_NORESP_LOSS_SEC", "noresp_loss_below_c": "HEATER_NORESP_LOSS_BELOW_C",
+    "noresp_loss_fall_c": "HEATER_NORESP_LOSS_FALL_C",
+}
+
+
+def cfg_to_dict(c: HeaterCfg, prefix: str = "CH2_") -> dict:
+    """HeaterCfg → v2 설정 사전(kp_valid·ti_valid 는 값 범위로 다시 정해진다)."""
+    return {prefix + k: getattr(c, f) for f, k in CFG_KEYS.items()}

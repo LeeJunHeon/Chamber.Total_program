@@ -42,6 +42,11 @@ ROOT = Path(__file__).resolve().parents[2]
 GOLD = ROOT / "v2" / "tests" / "golden"
 FILES = ("web_ch12_blocks.json", "web_ch12_template.json", "web_ch12_recipe_check.json")
 PORTAL_DIR = Path("lib") / "ops2" / "ch12" / "golden"
+# 골든 결과를 정하는 파일(포털 사본 머리 dirty 판단)
+SOURCES: tuple = ("v2/ch12/blocks.py", "v2/ch12/blocks_expand.py", "v2/ch12/recipe.py", "v2/ch12/recipe_check.py",
+                  "v2/ch12/process_steps.py", "v2/ch12/process_sequence.py", "v2/ch12/web_blocks.py", "v2/ch12/params",
+                  "v2/tools/make_web_golden_ch12.py", "v2/tests/golden/process_combos.json",
+                  "v2/tests/golden/recipe_check.json", *(f"v2/tests/golden/{f}" for f in FILES))
 
 
 class _Track(dict):
@@ -645,7 +650,7 @@ def source_head(name: str) -> Dict[str, Any]:
     """포털 사본 머리 — 이 저장소 커밋·작업 트리 상태·정의 해시."""
     full = _git("rev-parse", "HEAD")
     branch = _git("rev-parse", "--abbrev-ref", "HEAD")
-    dirty = bool(_git("status", "--porcelain", "--", "v2/ch12", "v2/tools/make_web_golden_ch12.py", "v2/tests/golden"))
+    dirty = bool(_git("status", "--porcelain", "--", *SOURCES))
     return {"Chamber.Total_program": f"{branch} {full[:7]} ({full})", "dirty": dirty, "file": f"v2/tests/golden/{name}",
             "defsVersion": WB.WEB_BLOCKS_VERSION, "defsHash": WB.content_hash(),
             "설명": "_출처 밖은 장비 파일 그대로(손으로 고치지 않음). dirty=true 면 커밋 전 작업 트리에서 만든 것 — 커밋 뒤 "
