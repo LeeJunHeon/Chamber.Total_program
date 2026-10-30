@@ -336,8 +336,10 @@ class PlcIo:
         try:
             (tr.open_once if hasattr(tr, "open_once") else tr.open)()
         except TransportError as e:
+            self.link.note_down(f"접속 실패(시도 1회, 분류=미확인)", "connect")
             raise PlcLinkError(f"Modbus TCP 연결 실패 ({self.link.endpoint}) - {e!r}") from e
         self.on_connected()
+        self.link.note_up(f"[CH1&2] PLC 재연결 성공 ({self.link.endpoint})", "미확인")   # 접속 성공 = 링크 up
 
     def on_connected(self) -> None:
         self.connected_since = self.clock.monotonic()

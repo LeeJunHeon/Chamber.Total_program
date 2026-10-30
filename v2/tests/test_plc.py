@@ -166,9 +166,11 @@ def test_reconnect_backoff_5s_and_link_cards():
     res = r.call(r.d.write_coil, "MAIN_SHUTTER_1_SW", True, source="CH1")
     assert res.status in (Status.FAIL, Status.LINK_DOWN)
     r.after(25.0)
-    conn = [e.t for e in r.wevents if e.kind in ("connect_failed", "connected")]
-    gaps = [b - a for a, b in zip(conn, conn[1:])]
-    assert gaps and all(g == pytest.approx(5.0 + 1.0, abs=0.2) for g in gaps[:-1])  # 백오프 5 s + 시도 3회(0.5 s 사이)
+    fails = [e.t for e in r.wevents if e.kind == "connect_failed"]
+    gaps = [b - a for a, b in zip(fails, fails[1:])]
+    assert len(gaps) >= 2 and all(g == pytest.approx(5.0 + 1.0, abs=0.05) for g in gaps)  # 시도 3회(사이 0.5 s) + 백오프 5 s
+    ok_t = next(e.t for e in r.wevents if e.kind == "connected" and e.t > t + 1.0)
+    assert t + 21.0 <= ok_t <= t + 21.0 + 6.1
     assert r.kinds().count("link_down") == 1 and r.kinds().count("link_up") == 1
     up = next(e for e in r.events if e.kind == "link_up")
     assert up.data["card"]["title"] == "PLC 재연결" and "끊김" in up.data["card"]["subtitle"]
@@ -361,5 +363,5 @@ def test_sim_heater_ladder_watchdog_30s():
     r.after(31.0)
     assert r.sim.coils[646] and r.sim.coils[642] and not r.sim.coils[640]     # D114 30 s 무변화 → WD_ERR·RUN OFF
     v = r.read().value
-    assert v is not None and r.d.last_poll.coils[646] is True and r.d.last_poll.regs[110] > 250
+    assert v is not None and r.d.last_poll.coils[646] is True and r.d.last_poll.coils[640] is False
     r.done()

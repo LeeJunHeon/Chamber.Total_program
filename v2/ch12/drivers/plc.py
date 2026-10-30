@@ -327,6 +327,7 @@ class PlcDriver(PlcCommands):
 
     def source_read(self, session, seq: int = 0) -> Dict[str, Any]:
         t_wall, t_mono = self.clock.wall(), self.clock.monotonic()
+        skip_coils = self.coil_log_backoff()          # v1 코일 로거처럼 이번 tick 시작 때 판단(device/plc.py:1976-1985)
         regs: Dict[int, int] = {}
         coils: Dict[int, bool] = {}
         try:
@@ -339,7 +340,7 @@ class PlcDriver(PlcCommands):
             raise
         vals: Dict[str, Any] = {f"plc.{PM.field_name(n)}": regs.get(a) for n, a in PM.REG_MAP.items()}
         err: Optional[Exception] = None
-        if self.coil_log_backoff():
+        if skip_coils:
             self.plan_ok_streak = 0
             vals.update({f"plc.{PM.field_name(n)}": None for n, a in PM.COIL_MAP.items() if a < ROTATE_MIN_ADDR})
         else:
