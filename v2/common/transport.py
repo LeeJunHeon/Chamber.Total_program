@@ -5,6 +5,7 @@ open·close·reset_input 은 worker 의 연결 관리만 쓴다.
 
 - SerialTransport : pyserial. 포트 열기·닫기는 PortGuard 로 — 제한 시간이 있는 별도 스레드에서
                     (2026-09-16 사고: USB-시리얼이 사라진 뒤 close/open 이 30초씩 막혀 워커가 멈춤).
+- TcpTransport    : 소켓(MOXA NPort TCP 서버 모드·Modbus TCP 직결 PLC). 열기는 PortGuard, 읽기는 짧은 recv 폴링.
 - SimTransport    : 가짜 장비 모델(v2.common.simdev). 응답 지연·무응답·끊김을 가상 시각으로 재현.
 - ReplayTransport : 녹화(RecordingTransport)를 재생. 보낸 바이트가 녹화와 다르면 ReplayMismatch.
 
@@ -244,6 +245,108 @@ def _pyserial_factory(s: SerialSettings) -> Any:
     import serial  # pyserial — 실제 포트는 bench 단계부터 연다
     return serial.Serial(port=s.port, baudrate=s.baudrate, bytesize=s.bytesize, parity=s.parity,
                          stopbits=s.stopbits, timeout=0, write_timeout=s.write_timeout)
+
+
+# ───────────── TCP(MOXA NPort TCP 서버 모드·Modbus TCP 직결) ─────────────
+@dataclass(frozen=True)
+class TcpSettings:
+    host: str
+    port: int
+    connect_timeout_s: float = 2.0
+
+
+class TcpTransport(Transport):
+    """소켓 하나. 열기는 PortGuard(제한 시간 별도 스레드), 읽기는 짧은 recv 폴링(SerialTransport 와 같은 모양).
+
+    MOXA NPort 는 60 s 동안 통신이 없으면 연결을 끊는다(사용자 지시 4장) — 1초 동기 읽기가 늘 질의하므로
+    따로 keep-alive 를 보내지 않는다. 끊기면 worker 가 재연결한다(SO_KEEPALIVE 는 켠다)."""
+    POLL_S = 0.005
+
+    def __init__(self, clock, settings: TcpSettings, socket_factory: Optional[Callable[[TcpSettings], Any]] = None,
+                 guard: Optional[PortGuard] = None) -> None:
+        super().__init__(clock)
+        self.settings = settings
+        self._factory = socket_factory or _socket_factory
+        self._guard = guard or PortGuard()
+        self._sock = None
+
+    @property
+    def is_open(self) -> bool:
+        return self._sock is not None
+
+    def open(self) -> None:
+        if self._sock is not None:
+            return
+        self._sock = self._guard.open(lambda: self._factory(self.settings), self.settings.connect_timeout_s + 0.5)
+        self._rx = b""
+
+    def close(self) -> None:
+        s, self._sock = self._sock, None
+        self._rx = b""
+        PortGuard.close(s)
+
+    def reset_input(self) -> None:
+        self._rx = b""
+        if self._sock is None:
+            return
+        try:
+            while True:
+                b = self._sock.recv(4096)
+                if not b:
+                    raise TransportError("연결 끊김")
+        except (BlockingIOError, InterruptedError):
+            pass
+        except OSError as e:
+            if getattr(e, "errno", None) in (11, 35, 10035):
+                return
+            raise TransportError(f"reset_input: {e!r}") from e
+
+    def write(self, data: bytes) -> None:
+        if self._sock is None:
+            raise TransportError("연결 안 됨")
+        try:
+            self._sock.sendall(data)
+        except Exception as e:
+            raise TransportError(f"write: {e!r}") from e
+
+    def read_until(self, deadline: float, terminator: Optional[bytes] = None, size: Optional[int] = None,
+                   cancel: Optional[CancelToken] = None) -> bytes:
+        if self._sock is None:
+            raise TransportError("연결 안 됨")
+        while True:
+            got = _split(self._rx, terminator, size)
+            if got is not None:
+                out, self._rx = got
+                return out
+            try:
+                b = self._sock.recv(4096)
+                if not b:
+                    raise TransportError("상대가 연결을 닫음")
+                self._rx += b
+                continue
+            except (BlockingIOError, InterruptedError):
+                pass
+            except TransportError:
+                raise
+            except OSError as e:
+                if getattr(e, "errno", None) not in (11, 35, 10035):
+                    raise TransportError(f"read: {e!r}") from e
+            now = self.clock.monotonic()
+            if cancel is not None and cancel.is_set():
+                raise Cancelled()
+            if now >= deadline:
+                partial, self._rx = self._rx, b""
+                raise ReadTimeout(partial)
+            self.clock.sleep_until(min(deadline, now + self.POLL_S))
+
+
+def _socket_factory(s: TcpSettings) -> Any:
+    import socket
+    sock = socket.create_connection((s.host, s.port), timeout=s.connect_timeout_s)
+    sock.setsockopt(socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1)
+    sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+    sock.setblocking(False)
+    return sock
 
 
 # ───────────── 예정된 수신이 있는 전송(가짜 장비·재생 공통) ─────────────
