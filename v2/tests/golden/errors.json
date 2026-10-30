@@ -1,0 +1,8206 @@
+{
+ "_source": "v1 errors/ (error_registry·error_catalog·app_error·error_payload·error_reporter) 를 importlib 로 실행",
+ "exceptions": {
+  "value": {
+   "type": "ValueError",
+   "msg": "bad value 3"
+  },
+  "value_blank": {
+   "type": "ValueError",
+   "msg": "   "
+  },
+  "runtime_empty": {
+   "type": "RuntimeError",
+   "msg": ""
+  },
+  "timeout": {
+   "type": "TimeoutError",
+   "msg": "PLC read timeout"
+  },
+  "key": {
+   "type": "KeyError",
+   "msg": "G_V_1"
+  },
+  "coded": {
+   "type": "CodedRuntimeError",
+   "msg": "레시피 파일 없음",
+   "code": " e207 "
+  },
+  "app": {
+   "type": "AppError",
+   "code": "E302",
+   "detail": "G_V_1_인터락=FALSE",
+   "meta": {
+    "ch": 1,
+    "signal": "G_V_1"
+   }
+  },
+  "app_lower": {
+   "type": "AppError",
+   "code": " e711 ",
+   "detail": "  공백 detail  "
+  },
+  "app_nodetail": {
+   "type": "AppError",
+   "code": "E401"
+  },
+  "app_unknown": {
+   "type": "AppError",
+   "code": "E000",
+   "detail": "없는 코드"
+  },
+  "app_cause": {
+   "type": "AppError",
+   "code": "E610",
+   "cause": {
+    "type": "TimeoutError",
+    "msg": "MFC 응답 없음"
+   }
+  },
+  "app_cause_detail": {
+   "type": "AppError",
+   "code": "E610",
+   "detail": "R5 무응답",
+   "cause": {
+    "type": "OSError",
+    "msg": "socket closed"
+   }
+  },
+  "app_none_detail": {
+   "type": "AppError",
+   "code": "E999",
+   "detail": null,
+   "meta": {
+    "b": 2,
+    "a": 1
+   }
+  }
+ },
+ "registry": [
+  {
+   "code": "E101",
+   "title": "요청 수신 중 연결 종료",
+   "category": "TRANSPORT",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "요청 수신 중 EOF가 발생했습니다. 클라이언트가 전송 도중 연결을 종료했습니다.",
+   "fix": "클라이언트의 소켓 종료 시점, 네트워크 안정성, 요청 전송 흐름을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E102",
+   "title": "지원하지 않는 프로토콜 버전",
+   "category": "TRANSPORT",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "서버가 지원하지 않는 프로토콜 버전으로 요청이 들어왔습니다.",
+   "fix": "클라이언트와 서버의 프로토콜 버전을 일치시키십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E103",
+   "title": "잘못된 헤더",
+   "category": "TRANSPORT",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "요청 헤더 형식 또는 길이가 올바르지 않습니다.",
+   "fix": "패킷 헤더 생성 로직과 길이 계산 로직을 점검하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E104",
+   "title": "잘못된 JSON 본문",
+   "category": "TRANSPORT",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "요청 본문 JSON 디코딩에 실패했습니다.",
+   "fix": "클라이언트가 전송한 JSON 형식과 인코딩을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E105",
+   "title": "명령 누락",
+   "category": "REQUEST",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "요청 본문에 command 필드가 없습니다.",
+   "fix": "클라이언트가 command를 포함하도록 수정하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E106",
+   "title": "알 수 없는 명령",
+   "category": "REQUEST",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "등록되지 않은 command가 요청되었습니다.",
+   "fix": "클라이언트 명령명을 서버 라우터 등록값과 일치시키십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E107",
+   "title": "응답 직렬화 실패",
+   "category": "TRANSPORT",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "응답 객체를 JSON으로 직렬화하는 중 실패했습니다.",
+   "fix": "응답 payload 안에 직렬화 불가능한 객체가 포함되었는지 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E108",
+   "title": "요청 크기 초과",
+   "category": "TRANSPORT",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "허용된 크기를 초과한 요청이 들어왔습니다.",
+   "fix": "클라이언트 요청 크기를 줄이거나 서버의 제한 정책을 조정하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E109",
+   "title": "응답 전송 중 연결 종료",
+   "category": "TRANSPORT",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "응답 전송 중 broken pipe 또는 connection reset이 발생했습니다.",
+   "fix": "클라이언트와 서버 간 연결 안정성을 확인한 뒤 재시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E110",
+   "title": "핸들러 내부 예외",
+   "category": "INTERNAL",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "핸들러 내부에서 예외가 발생했지만, 명시적인 에러코드로 정규화되지 않았습니다.",
+   "fix": "해당 핸들러 내부 예외를 AppError로 명시적으로 변환하십시오.",
+   "is_fallback": true
+  },
+  {
+   "code": "E111",
+   "title": "핸들러 반환 형식 오류",
+   "category": "INTERNAL",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "핸들러가 dict가 아닌 응답을 반환했습니다.",
+   "fix": "모든 핸들러가 dict 형태의 응답을 반환하도록 수정하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E112",
+   "title": "응답 패킷 구성 실패",
+   "category": "INTERNAL",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "응답 패킷 생성 또는 pack 과정에서 실패했습니다.",
+   "fix": "응답 포맷 생성 로직과 protocol pack 로직을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E201",
+   "title": "챔버 값 오류",
+   "category": "REQUEST",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "허용되지 않은 챔버 번호가 전달되었습니다.",
+   "fix": "ch 값은 1 또는 2만 사용하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E202",
+   "title": "레시피 누락",
+   "category": "REQUEST",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "레시피 경로 또는 레시피 데이터가 비어 있습니다.",
+   "fix": "레시피 값이 비어 있지 않은지 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E203",
+   "title": "챔버 런타임 미준비",
+   "category": "RUNTIME",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "챔버 런타임이 아직 준비되지 않았습니다.",
+   "fix": "런타임 초기화 완료 후 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E204",
+   "title": "플라즈마 클리닝 런타임 미준비",
+   "category": "RUNTIME",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "플라즈마 클리닝 런타임이 아직 준비되지 않았습니다.",
+   "fix": "플라즈마 클리닝 런타임 초기화 완료 후 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E205",
+   "title": "공정 실행 중",
+   "category": "STATE",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "이미 다른 공정이 실행 중이어서 현재 명령을 처리할 수 없습니다.",
+   "fix": "현재 공정 종료 후 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E206",
+   "title": "중복 시작 요청",
+   "category": "STATE",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "다른 시작 요청이 이미 처리 중입니다.",
+   "fix": "기존 시작 요청 처리 완료 후 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E207",
+   "title": "CSV 파일 없음",
+   "category": "RECIPE",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "지정한 CSV 파일이 존재하지 않습니다.",
+   "fix": "레시피 파일 경로와 파일 존재 여부를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E208",
+   "title": "CSV 데이터 없음",
+   "category": "RECIPE",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "CSV 파일에 데이터 행이 없거나 공정 데이터가 비어 있습니다.",
+   "fix": "CSV 헤더와 데이터 행을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E209",
+   "title": "지원하지 않는 레시피 형식",
+   "category": "RECIPE",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "현재 지원하지 않는 레시피 형식이거나 레시피 파일을 읽을 수 없습니다(인코딩·잠김·손상).",
+   "fix": "지원되는 CSV 형식으로 레시피를 준비하십시오. 엑셀에서는 'CSV UTF-8(쉼표로 분리)'로 저장하고, 파일이 다른 프로그램에서 열려 있지 않은지 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E230",
+   "title": "레시피 값 오류",
+   "category": "RECIPE",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "레시피의 일부 칸에 해당 컬럼 형식과 맞지 않는 값이 있습니다.",
+   "fix": "오류 메시지에 표시된 행과 컬럼의 값을 확인한 뒤 레시피를 수정하여 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E210",
+   "title": "사전점검 시간 초과",
+   "category": "RUNTIME",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "preflight 또는 시작 전 점검 과정이 제한 시간 내 완료되지 않았습니다.",
+   "fix": "장비 준비 상태를 확인한 뒤 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E211",
+   "title": "시퀀스 검증 실패",
+   "category": "RECIPE",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "공정 시퀀스 유효성 검사에 실패했습니다.",
+   "fix": "레시피 순서와 액션 구성 규칙을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E212",
+   "title": "알 수 없는 런타임 종류",
+   "category": "REQUEST",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "지원하지 않는 runtime kind가 전달되었습니다.",
+   "fix": "런타임 종류 문자열을 서버가 허용하는 값으로 맞추십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E213",
+   "title": "알 수 없는 액션",
+   "category": "REQUEST",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "지원하지 않는 공정 액션이 포함되어 있습니다.",
+   "fix": "레시피 액션명을 서버가 지원하는 값으로 수정하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E214",
+   "title": "DELAY 시간 누락",
+   "category": "REQUEST",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "DELAY 액션에 duration 값이 없습니다.",
+   "fix": "DELAY 액션에 duration 값을 추가하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E215",
+   "title": "병렬 블록 내 DELAY 사용 불가",
+   "category": "REQUEST",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "병렬 블록 안에 DELAY 액션이 포함되었습니다.",
+   "fix": "DELAY는 병렬 블록이 아닌 순차 블록에서만 사용하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E216",
+   "title": "PLC 명령 파라미터 오류",
+   "category": "REQUEST",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "PLC_CMD 파라미터 형식이 올바르지 않습니다.",
+   "fix": "PLC_CMD 파라미터 구조를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E217",
+   "title": "MFC 명령 파라미터 오류",
+   "category": "REQUEST",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "MFC_CMD 파라미터 형식이 올바르지 않습니다.",
+   "fix": "MFC_CMD 파라미터 구조를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E218",
+   "title": "OES 실행 파라미터 오류",
+   "category": "REQUEST",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "OES_RUN 파라미터 형식이 올바르지 않습니다.",
+   "fix": "OES_RUN 파라미터 구조를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E219",
+   "title": "DC Pulse 시작 값 누락",
+   "category": "REQUEST",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "DC_PULSE_START에 필요한 value가 없습니다.",
+   "fix": "DC_PULSE_START에 value를 포함하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E220",
+   "title": "RF Pulse 시작 값 누락",
+   "category": "REQUEST",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "RF_PULSE_START에 필요한 value가 없습니다.",
+   "fix": "RF_PULSE_START에 value를 포함하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E221",
+   "title": "DC Pulse 시작 파라미터 오류",
+   "category": "REQUEST",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "DC_PULSE_START 파라미터 형식이 올바르지 않습니다.",
+   "fix": "DC_PULSE_START 파라미터 구조를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E222",
+   "title": "RF Pulse 시작 파라미터 오류",
+   "category": "REQUEST",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "RF_PULSE_START 파라미터 형식이 올바르지 않습니다.",
+   "fix": "RF_PULSE_START 파라미터 구조를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E223",
+   "title": "TSP 목표 압력 누락",
+   "category": "REQUEST",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "TSP 목표 압력 입력값이 없습니다.",
+   "fix": "TSP 목표 압력 값을 입력하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E224",
+   "title": "TSP 반복 횟수 누락",
+   "category": "REQUEST",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "TSP 반복 횟수 입력값이 없습니다.",
+   "fix": "TSP 반복 횟수를 입력하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E225",
+   "title": "TSP 반복 횟수 오류",
+   "category": "REQUEST",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "TSP 반복 횟수가 1보다 작습니다.",
+   "fix": "TSP 반복 횟수를 1 이상으로 설정하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E226",
+   "title": "레시피 폴더 값 오류",
+   "category": "REQUEST",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "GET_RECIPE 요청의 folder 값이 허용 범위를 벗어났습니다.",
+   "fix": "folder 값은 서버가 허용하는 폴더명만 사용하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E227",
+   "title": "레시피 조회 시간 초과",
+   "category": "RUNTIME",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "GET_RECIPE 처리 또는 공정 시작(START) 때 레시피 파일 읽기가 제한 시간을 초과했습니다.",
+   "fix": "폴더 접근 상태와 저장소 응답 상태를 확인한 뒤 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E228",
+   "title": "상태 API 요청 형식 오류",
+   "category": "REQUEST",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "state API 또는 recovery 요청의 payload 형식이 올바르지 않습니다.",
+   "fix": "상태 API payload 구조를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E229",
+   "title": "상태 API 필수값 누락",
+   "category": "REQUEST",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "상태 API 요청에서 필수 필드가 누락되었습니다.",
+   "fix": "필수 필드를 모두 포함하도록 클라이언트를 수정하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E301",
+   "title": "게이트 닫힘 미확인",
+   "category": "SAFETY_GATE",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "게이트가 닫힌 상태가 아니므로 공정을 시작할 수 없습니다.",
+   "fix": "게이트 닫힘 상태와 램프를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E302",
+   "title": "게이트 인터락 불일치",
+   "category": "SAFETY_GATE",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "게이트 OPEN 조건의 인터락이 FALSE입니다.",
+   "fix": "PLC 게이트 인터락 조건, 센서, 배선, 기구 상태를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E303",
+   "title": "반대쪽 게이트 닫힘 미확인",
+   "category": "SAFETY_GATE",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "다른 챔버의 게이트가 닫혀 있는 것이 확인되지 않았습니다.",
+   "fix": "반대편 게이트 close 램프와 인터락을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E304",
+   "title": "게이트 열림 램프 시간 초과",
+   "category": "SAFETY_GATE",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "게이트 열림 명령 후 OPEN_LAMP가 제한 시간 내 켜지지 않았습니다.",
+   "fix": "게이트 구동부, 센서, PLC 출력, 공압 상태를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E305",
+   "title": "게이트 닫힘 램프 시간 초과",
+   "category": "SAFETY_GATE",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "게이트 닫힘 명령 후 CLOSE_LAMP가 제한 시간 내 켜지지 않았습니다.",
+   "fix": "게이트 구동부, 센서, PLC 출력, 공압 상태를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E306",
+   "title": "게이트 센서 모순",
+   "category": "SAFETY_GATE",
+   "client_action": "STOP",
+   "severity": "FATAL",
+   "cause": "게이트 OPEN/CLOSE 센서 상태가 논리적으로 모순됩니다.",
+   "fix": "센서 배선, PLC 주소맵, 기구부 위치 검출 상태를 점검하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E307",
+   "title": "진공 시작 전 게이트 닫힘 미확인",
+   "category": "SAFETY_VACUUM",
+   "client_action": "STOP",
+   "severity": "FATAL",
+   "cause": "게이트가 닫힌 상태가 아닌데 진공 ON을 시도했습니다.",
+   "fix": "게이트 close 램프와 인터락을 먼저 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E308",
+   "title": "진공 해제 전 게이트 닫힘 미확인",
+   "category": "SAFETY_VACUUM",
+   "client_action": "STOP",
+   "severity": "FATAL",
+   "cause": "게이트 닫힘 확인 없이 진공 해제 또는 대기압 전환을 시도했습니다.",
+   "fix": "게이트 close 램프를 먼저 확인한 뒤 진공 해제 동작을 수행하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E309",
+   "title": "러핑펌프 오프 타이머 진행 중",
+   "category": "SAFETY_VACUUM",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "러핑펌프 오프 타이머가 아직 진행 중입니다.",
+   "fix": "타이머 만료 후 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E310",
+   "title": "러핑 밸브 인터락 불일치",
+   "category": "SAFETY_VACUUM",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "러핑 밸브 인터락이 FALSE입니다.",
+   "fix": "L_R_V 관련 인터락 조건과 밸브 상태를 점검하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E311",
+   "title": "벤트 인터락 불일치",
+   "category": "SAFETY_VACUUM",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "벤트 인터락이 FALSE입니다.",
+   "fix": "벤트 동작 조건과 관련 밸브, 센서 상태를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E312",
+   "title": "진공 형성 시간 초과",
+   "category": "SAFETY_VACUUM",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "제한 시간 내 진공 ready 상태에 도달하지 못했습니다.",
+   "fix": "누설, 밸브 상태, 펌프 상태, 진공 게이지 상태를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E313",
+   "title": "대기압 복귀 시간 초과",
+   "category": "SAFETY_VACUUM",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "제한 시간 내 대기압 상태에 도달하지 못했습니다.",
+   "fix": "벤트 밸브, 게이지, 배관 상태를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E314",
+   "title": "핀 상승 인터락 불일치",
+   "category": "SAFETY_PIN_CHUCK",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "핀 상승 인터락이 FALSE입니다.",
+   "fix": "핀 상승 조건과 관련 센서, 인터락을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E315",
+   "title": "핀 하강 인터락 불일치",
+   "category": "SAFETY_PIN_CHUCK",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "핀 하강 인터락이 FALSE입니다.",
+   "fix": "핀 하강 조건과 관련 센서, 인터락을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E316",
+   "title": "핀 상승 램프 시간 초과",
+   "category": "SAFETY_PIN_CHUCK",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "핀 상승 명령 후 UP_LAMP가 제한 시간 내 켜지지 않았습니다.",
+   "fix": "핀 구동부, 공압, 센서, PLC 출력을 점검하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E317",
+   "title": "핀 하강 램프 시간 초과",
+   "category": "SAFETY_PIN_CHUCK",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "핀 하강 명령 후 DOWN_LAMP가 제한 시간 내 켜지지 않았습니다.",
+   "fix": "핀 구동부, 공압, 센서, PLC 출력을 점검하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E318",
+   "title": "척 위치 이동 시간 초과",
+   "category": "SAFETY_PIN_CHUCK",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "척이 목표 위치로 제한 시간 내 이동하지 못했습니다.",
+   "fix": "척 구동부, 위치센서, PLC 출력 상태를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E319",
+   "title": "게이트 열린 상태에서 진공 출력 감지",
+   "category": "SAFETY_VACUUM",
+   "client_action": "STOP",
+   "severity": "FATAL",
+   "cause": "게이트가 열린 상태인데 진공 관련 출력이 활성화되었습니다.",
+   "fix": "PLC 시퀀스와 인터락 로직을 즉시 점검하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E320",
+   "title": "게이트 상태 조회 챔버 오류",
+   "category": "REQUEST",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "게이트 상태 조회에 잘못된 챔버 번호가 사용되었습니다.",
+   "fix": "게이트 상태 조회 시 ch 값은 1 또는 2만 사용하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E321",
+   "title": "로드락 상태상 게이트 열기 불가",
+   "category": "SAFETY_GATE",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "현재 로드락 상태에서는 게이트를 열 수 없습니다.",
+   "fix": "로드락 진공 상태, 벤트 상태, 인터락 조건을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E322",
+   "title": "진공 상태 신호 모순",
+   "category": "SAFETY_VACUUM",
+   "client_action": "STOP",
+   "severity": "FATAL",
+   "cause": "VAC_READY와 VAC_NOT_READY 신호가 논리적으로 모순됩니다.",
+   "fix": "PLC 상태비트 정의와 진공 상태 신호를 점검하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E323",
+   "title": "아날로그 입력 모듈 오류",
+   "category": "PLC_COMM",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "아날로그 입력 모듈 에러 비트가 감지되었습니다.",
+   "fix": "PLC 아날로그 입력 모듈 상태, 배선, 모듈 자체를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E324",
+   "title": "아날로그 출력 모듈 오류",
+   "category": "PLC_COMM",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "아날로그 출력 모듈 채널 에러 비트가 감지되었습니다.",
+   "fix": "PLC 아날로그 출력 모듈 상태, 배선, 채널 상태를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E325",
+   "title": "아날로그 입력 모듈 미준비",
+   "category": "PLC_COMM",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "아날로그 입력 모듈 ready 비트가 FALSE입니다.",
+   "fix": "모듈 초기화 상태와 ready 신호를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E326",
+   "title": "아날로그 출력 모듈 미준비",
+   "category": "PLC_COMM",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "아날로그 출력 모듈 ready 비트가 FALSE입니다.",
+   "fix": "모듈 초기화 상태와 ready 신호를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E330",
+   "title": "메인 셔터 인터락 불일치",
+   "category": "SAFETY_GATE",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "메인 셔터를 열기 위한 인터락 조건이 충족되지 않았습니다.",
+   "fix": "CH2 메인 셔터 인터락 조건, 램프, 관련 PLC 신호를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E331",
+   "title": "메인 셔터 닫힘 실패",
+   "category": "SAFETY_GATE",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "CH2 게이트 close 후 메인 셔터 닫힘이 완료되지 않았습니다.",
+   "fix": "메인 셔터 close 신호와 램프, 기구부 상태를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E401",
+   "title": "PLC 연결 실패",
+   "category": "PLC_COMM",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "PLC(Modbus) 연결에 실패했습니다.",
+   "fix": "PLC 전원, IP, 포트, 네트워크 상태를 확인한 뒤 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E402",
+   "title": "PLC 응답 없음",
+   "category": "PLC_COMM",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "PLC가 요청에 응답하지 않았습니다.",
+   "fix": "통신 상태를 확인하고 상태 조회 후 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E403",
+   "title": "PLC 예외 응답",
+   "category": "PLC_COMM",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "PLC가 예외 응답을 반환했습니다.",
+   "fix": "요청 주소, 데이터 길이, PLC 상태를 점검하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E404",
+   "title": "알 수 없는 PLC 주소명",
+   "category": "PLC_MAP",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "정의되지 않은 PLC 이름 또는 주소명이 사용되었습니다.",
+   "fix": "PLC 주소 맵 정의와 실제 참조 이름을 일치시키십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E405",
+   "title": "PLC 코일 맵 키 누락",
+   "category": "PLC_MAP",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "PLC_COIL_MAP에서 필요한 키를 찾지 못했습니다.",
+   "fix": "PLC_COIL_MAP 정의를 점검하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E406",
+   "title": "PLC 레지스터 맵 키 누락",
+   "category": "PLC_MAP",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "PLC_REG_MAP에서 필요한 키를 찾지 못했습니다.",
+   "fix": "PLC_REG_MAP 정의를 점검하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E407",
+   "title": "PLC 이름 누락",
+   "category": "PLC_MAP",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "PLC 접근 시 필수 name 인자가 없습니다.",
+   "fix": "PLC 접근 함수 호출부에 name을 정확히 전달하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E408",
+   "title": "지원하지 않는 PLC 논리키",
+   "category": "PLC_MAP",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "지원하지 않는 PLC 논리키가 사용되었습니다.",
+   "fix": "허용된 PLC 키만 사용하도록 코드를 수정하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E409",
+   "title": "잘못된 가스 종류",
+   "category": "REQUEST",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "허용되지 않은 가스 enum 또는 이름이 전달되었습니다.",
+   "fix": "가스 종류는 서버가 허용하는 값만 사용하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E410",
+   "title": "챔버에 없는 가스 요청",
+   "category": "PLC_MAP",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "해당 챔버에 정의되지 않은 가스 채널이 요청되었습니다.",
+   "fix": "챔버별 가스 채널 정의를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E411",
+   "title": "필수 PLC 키 누락",
+   "category": "PLC_MAP",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "필수 PLC 키(센서, 램프, 로딩 신호 등)가 정의되어 있지 않습니다.",
+   "fix": "주소맵과 키 정의를 보완하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E412",
+   "title": "PLC 비트 읽기 실패",
+   "category": "PLC_COMM",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "PLC 비트 읽기 과정에서 예외가 발생했습니다.",
+   "fix": "PLC 통신 상태를 확인한 뒤 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E413",
+   "title": "특정 비트 조회 시간 초과",
+   "category": "PLC_COMM",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "특정 PLC 비트를 제한 시간 내 읽지 못했습니다.",
+   "fix": "일시적인 통신 지연 여부를 확인하고 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E414",
+   "title": "워치독 일시중지 실패",
+   "category": "PLC_COMM",
+   "client_action": "IGNORE",
+   "severity": "WARN",
+   "cause": "워치독 pause 호출에 실패했습니다.",
+   "fix": "워치독 상태를 로그로 남기고 필요 시 후속 점검하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E415",
+   "title": "워치독 재개 실패",
+   "category": "PLC_COMM",
+   "client_action": "IGNORE",
+   "severity": "WARN",
+   "cause": "워치독 resume 호출에 실패했습니다.",
+   "fix": "워치독 상태를 로그로 남기고 필요 시 후속 점검하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E416",
+   "title": "PLC 쓰기 실패",
+   "category": "PLC_COMM",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "PLC 코일 또는 레지스터 쓰기에 실패했습니다.",
+   "fix": "PLC 통신, 주소, 권한, 대상 장비 상태를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E417",
+   "title": "PLC 별칭 해석 실패",
+   "category": "PLC_MAP",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "논리명에서 실제 PLC 주소로 변환하지 못했습니다.",
+   "fix": "별칭 정의와 주소 맵을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E501",
+   "title": "장비 연결 시간 초과",
+   "category": "RUNTIME",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "장비 연결이 제한 시간 내 완료되지 않았습니다.",
+   "fix": "장비 전원과 통신 상태를 확인한 뒤 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E502",
+   "title": "장비 연결 실패",
+   "category": "RUNTIME",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "장비 연결에 실패했습니다.",
+   "fix": "장비 상태를 확인하고 재연결 후 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E503",
+   "title": "장비 상태 대기 시간 초과",
+   "category": "RUNTIME",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "장비 상태가 기대값으로 바뀌기를 기다리다 시간 초과되었습니다.",
+   "fix": "장비 상태를 확인한 뒤 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E504",
+   "title": "안정화 목표 없음",
+   "category": "RUNTIME",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "안정화 대상 값이 정의되지 않았습니다.",
+   "fix": "안정화에 필요한 목표값을 설정하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E505",
+   "title": "가스 안정화 시간 초과",
+   "category": "RUNTIME",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "가스 유량 또는 압력이 안정화되지 못했습니다.",
+   "fix": "MFC 상태를 확인한 뒤 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E506",
+   "title": "TSP 실행 시간 초과",
+   "category": "RUNTIME",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "TSP 실행이 제한 시간 내 완료되지 않았습니다.",
+   "fix": "TSP 장비 상태와 응답을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E507",
+   "title": "램프 대기 시간 초과",
+   "category": "RUNTIME",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "목표 램프 상태가 제한 시간 내 도달하지 않았습니다.",
+   "fix": "해당 구동부와 센서 상태를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E508",
+   "title": "재연결 시간 초과",
+   "category": "RUNTIME",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "재연결 시도가 제한 시간 내 완료되지 않았습니다.",
+   "fix": "장비 연결 상태를 점검한 뒤 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E509",
+   "title": "재연결 작업 비정상 종료",
+   "category": "RUNTIME",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "재연결 작업이 예상치 않게 취소되거나 종료되었습니다.",
+   "fix": "재연결 작업 흐름과 취소 조건을 점검하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E510",
+   "title": "재연결 실패",
+   "category": "RUNTIME",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "재연결 시도가 실패했습니다.",
+   "fix": "장비 상태를 확인하고 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E511",
+   "title": "사전 연결 점검 실패",
+   "category": "RUNTIME",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "공정 시작 전 필수 장비 연결 점검에 실패했습니다.",
+   "fix": "시작 전 필수 장비 연결 상태를 모두 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E512",
+   "title": "시작 가드 시간 초과",
+   "category": "RUNTIME",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "시작 가드 또는 사전 조건 대기가 제한 시간 내 끝나지 않았습니다.",
+   "fix": "상태가 정리된 후 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E513",
+   "title": "게이트 열린 상태로 시작 차단",
+   "category": "STATE",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "게이트가 열린 상태여서 공정 시작이 차단되었습니다.",
+   "fix": "게이트를 닫고 close 램프를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E514",
+   "title": "필수 콜백 누락",
+   "category": "RUNTIME",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "필수 콜백 또는 필수 주입 객체가 설정되지 않았습니다.",
+   "fix": "초기화 및 의존성 주입 로직을 점검하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E515",
+   "title": "이전 시작 작업 대기 중",
+   "category": "STATE",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "이전 start 작업이 아직 완료되지 않았습니다.",
+   "fix": "이전 작업이 끝난 뒤 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E601",
+   "title": "IG 읽기 콜백 미설정",
+   "category": "IG",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "IG pressure read callback이 바인딩되지 않았습니다.",
+   "fix": "IG read callback 주입 로직을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E602",
+   "title": "IG 객체 미설정",
+   "category": "IG",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "IG 객체가 주입되지 않았습니다.",
+   "fix": "IG 초기화 및 주입 로직을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E603",
+   "title": "IG API 누락",
+   "category": "IG",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "IG 객체에 필요한 read API가 없습니다.",
+   "fix": "IG 클래스 구현과 사용 API를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E604",
+   "title": "IG 읽기 API 탐색 실패",
+   "category": "IG",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "main 또는 runtime에서 IG 읽기 API를 찾지 못했습니다.",
+   "fix": "IG 객체 참조 경로와 메서드명을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E605",
+   "title": "IG 활성화 실패",
+   "category": "IG",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "IG ensure_on 또는 활성화 과정에 실패했습니다.",
+   "fix": "게이지 전원과 통신 상태를 확인한 뒤 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E606",
+   "title": "IG 응답 시간 초과",
+   "category": "IG",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "IG에서 제한 시간 내 응답이 오지 않았습니다.",
+   "fix": "IG 통신 상태를 확인하고 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E607",
+   "title": "IG 파싱 오류",
+   "category": "IG",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "IG 응답값 파싱에 실패했습니다.",
+   "fix": "IG 응답 형식과 파싱 로직을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E608",
+   "title": "기저압 미도달",
+   "category": "IG",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "기저압이 목표값 이하로 내려가지 않았습니다.",
+   "fix": "누설, 펌프 상태, 배관 상태, 진공 게이지 값을 점검하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E609",
+   "title": "MFC 가스 객체 미설정",
+   "category": "MFC",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "mfc_gas 객체가 바인딩되지 않았습니다.",
+   "fix": "MFC gas 객체 주입 로직을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E610",
+   "title": "MFC 압력 객체 미설정",
+   "category": "MFC",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "mfc_pressure 객체가 바인딩되지 않았습니다.",
+   "fix": "MFC pressure 객체 주입 로직을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E611",
+   "title": "가스 선택 누락",
+   "category": "MFC",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "MFC 동작 전에 가스 선택이 완료되지 않았습니다.",
+   "fix": "gas_select 호출 흐름을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E612",
+   "title": "지원하지 않는 가스 채널",
+   "category": "MFC",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "지원하지 않는 가스 채널이 요청되었습니다.",
+   "fix": "허용된 가스 채널만 사용하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E613",
+   "title": "압력 읽기 응답 없음",
+   "category": "MFC",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "MFC pressure read 요청에 응답이 없습니다.",
+   "fix": "MFC 통신 상태를 확인한 뒤 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E614",
+   "title": "유량 읽기 파싱 실패",
+   "category": "MFC",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "MFC flow read 응답 파싱에 실패했습니다.",
+   "fix": "MFC 응답 형식과 통신 상태를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E615",
+   "title": "SP1 검증 실패",
+   "category": "MFC",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "SP1 readback 값이 기대값과 일치하지 않습니다.",
+   "fix": "SP1 설정 및 readback 로직을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E616",
+   "title": "SP2 검증 실패",
+   "category": "MFC",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "SP2 readback 값이 기대값과 일치하지 않습니다.",
+   "fix": "SP2 설정 및 readback 로직을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E617",
+   "title": "SP4 검증 실패",
+   "category": "MFC",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "SP4 readback 값이 기대값과 일치하지 않습니다.",
+   "fix": "SP4 설정 및 readback 로직을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E618",
+   "title": "SP1 상태 적용 실패",
+   "category": "MFC",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "SP1 상태 변경이 반영되지 않았습니다.",
+   "fix": "SP1 on/off 제어 로직과 readback을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E619",
+   "title": "SP2 상태 적용 실패",
+   "category": "MFC",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "SP2 상태 변경이 반영되지 않았습니다.",
+   "fix": "SP2 on/off 제어 로직과 readback을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E620",
+   "title": "SP3 상태 적용 실패",
+   "category": "MFC",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "SP3 상태 변경이 반영되지 않았습니다.",
+   "fix": "SP3 on/off 제어 로직과 readback을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E621",
+   "title": "SP4 상태 적용 실패",
+   "category": "MFC",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "SP4 상태 변경이 반영되지 않았습니다.",
+   "fix": "SP4 on/off 제어 로직과 readback을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E622",
+   "title": "FLOW_ON 검증 실패",
+   "category": "MFC",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "FLOW_ON 상태가 기대값과 일치하지 않습니다.",
+   "fix": "유량 ON/OFF 제어와 readback 값을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E623",
+   "title": "MFC 필수 인자 누락",
+   "category": "REQUEST",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "MFC 명령에 필요한 필수 인자가 없습니다.",
+   "fix": "해당 MFC 명령의 필수 인자를 모두 전달하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E624",
+   "title": "MFC 인자 값 오류",
+   "category": "REQUEST",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "MFC 명령 인자 값이 허용 범위를 벗어났습니다.",
+   "fix": "MFC 명령 인자 형식과 범위를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E625",
+   "title": "가스 상태 불일치",
+   "category": "MFC",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "선택된 가스 상태와 실제 MFC 상태가 일치하지 않습니다.",
+   "fix": "가스 선택 로직과 채널 상태를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E626",
+   "title": "압력 콜백 시간 초과",
+   "category": "IG",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "실행 중 pressure callback 응답이 제한 시간 내 오지 않았습니다.",
+   "fix": "압력 읽기 경로와 통신 상태를 확인한 뒤 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E701",
+   "title": "DC 목표 도달 실패",
+   "category": "POWER_DC",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "DC 파워가 목표 출력에 도달하지 못했습니다.",
+   "fix": "DC 전원장치 상태, 부하 상태, 배선 상태를 점검하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E702",
+   "title": "DC 저전류 감지",
+   "category": "POWER_DC",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "DC 전류가 허용치보다 낮아 비정상으로 판단되었습니다.",
+   "fix": "플라즈마 형성 상태, 타깃 상태, 배선 상태를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E703",
+   "title": "DC Pulse 연결 준비 실패",
+   "category": "POWER_DC",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "DC Pulse 장비 연결 준비가 완료되지 않았습니다.",
+   "fix": "장비 연결 상태를 확인한 뒤 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E704",
+   "title": "DC Pulse 저전류 자동정지",
+   "category": "POWER_DC",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "DC Pulse가 저전류 조건으로 자동 정지되었습니다.",
+   "fix": "전원장치 상태, 플라즈마 상태, 부하 상태를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E705",
+   "title": "DC Pulse 설정값 편차 과다",
+   "category": "POWER_DC",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "DC Pulse 실제 출력이 설정값에서 크게 벗어났습니다.",
+   "fix": "설정값, readback, 장비 상태를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E706",
+   "title": "RF 반사파 안정화 실패",
+   "category": "POWER_RF",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "RF reflected power가 제한 시간 내 안정화되지 않았습니다.",
+   "fix": "매칭 상태, 반사파 상태, 케이블, 부하 상태를 점검하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E707",
+   "title": "RF 순방향 출력 부족",
+   "category": "POWER_RF",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "RF forward power가 허용치보다 낮습니다.",
+   "fix": "RF 출력, 매칭, 부하 상태를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E708",
+   "title": "RF Pulse 순방향 감시 실패",
+   "category": "POWER_RF",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "RF Pulse forward power 감시 조건을 만족하지 못했습니다.",
+   "fix": "RF Pulse 장비 설정과 출력 상태를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E709",
+   "title": "RF Pulse 반사파 한계 초과",
+   "category": "POWER_RF",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "RF Pulse reflected power가 허용 한계를 초과했습니다.",
+   "fix": "매칭 상태와 부하 상태를 즉시 점검하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E710",
+   "title": "DC Pulse 폭 설정 오류",
+   "category": "POWER_DC",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "DC Pulse width 값이 허용 범위를 벗어났습니다.",
+   "fix": "width 값은 장비가 허용하는 값만 사용하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E711",
+   "title": "플라즈마 클리닝 게이트 인터락 불일치",
+   "category": "PLASMA_CLEANING",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "플라즈마 클리닝 시작 시 게이트 인터락이 FALSE입니다.",
+   "fix": "게이트 인터락과 로드락 상태를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E712",
+   "title": "플라즈마 클리닝 게이트 열림 실패",
+   "category": "PLASMA_CLEANING",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "플라즈마 클리닝 시작 시 게이트 OPEN_LAMP가 켜지지 않았습니다.",
+   "fix": "게이트 구동부, 센서, PLC 신호를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E713",
+   "title": "플라즈마 클리닝 IG 콜백 미설정",
+   "category": "PLASMA_CLEANING",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "플라즈마 클리닝에 필요한 IG callback이 바인딩되지 않았습니다.",
+   "fix": "플라즈마 클리닝 런타임 초기화와 IG 주입을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E714",
+   "title": "플라즈마 클리닝 기저압 미도달",
+   "category": "PLASMA_CLEANING",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "플라즈마 클리닝 시작 전 기저압에 도달하지 못했습니다.",
+   "fix": "진공 상태를 확인한 뒤 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E715",
+   "title": "DC Pulse 설정 콜백 미설정",
+   "category": "POWER_DC",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "set_dc_pulse_power 콜백이 주입되지 않았습니다.",
+   "fix": "process_controller 초기화 시 DC Pulse 콜백을 연결하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E716",
+   "title": "RF Pulse 설정 콜백 미설정",
+   "category": "POWER_RF",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "set_rf_pulse_power 콜백이 주입되지 않았습니다.",
+   "fix": "process_controller 초기화 시 RF Pulse 콜백을 연결하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E717",
+   "title": "RF Pulse 설정값 누락",
+   "category": "POWER_RF",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "RF Pulse TCP 설정(host/port)이 누락되었습니다.",
+   "fix": "RF Pulse 설정 파일과 초기화 로직을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E718",
+   "title": "RF Pulse 주소값 오류",
+   "category": "POWER_RF",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "RF Pulse 레지스터 주소가 허용 범위를 벗어났습니다.",
+   "fix": "RF Pulse 주소 계산 로직을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E719",
+   "title": "플라즈마 클리닝 쿨다운 대기",
+   "category": "PLASMA_CLEANING",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "이전 공정 종료 후 필요한 쿨다운 시간이 지나지 않았습니다.",
+   "fix": "쿨다운 시간이 지난 후 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E720",
+   "title": "파워 설정 후 검증 불일치",
+   "category": "POWER_DC",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "파워 write 이후 readback 값이 기대값과 일치하지 않습니다.",
+   "fix": "전원장치 제어와 readback 검증 로직을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E801",
+   "title": "OES 초기화 실패",
+   "category": "OES",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "OES 초기화에 실패했습니다.",
+   "fix": "OES 장비 연결과 서비스 초기화 상태를 확인한 뒤 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E802",
+   "title": "OES 설정값 오류",
+   "category": "OES",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "OES 장치 번호 또는 픽셀 설정값이 올바르지 않습니다.",
+   "fix": "OES 설정 파일과 장치 선택값을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E803",
+   "title": "RGA 어댑터 없음",
+   "category": "RGA",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "RGA adapter 또는 필수 객체를 찾지 못했습니다.",
+   "fix": "RGA 초기화와 의존성 로직을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E804",
+   "title": "TSP 연결 안 됨",
+   "category": "TSP",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "TSP 장비가 연결되지 않았습니다.",
+   "fix": "TSP 통신 연결 상태를 확인한 뒤 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E805",
+   "title": "TSP 프로토콜 응답 오류",
+   "category": "TSP",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "TSP 응답이 비어 있거나 STX/CRC 검증에 실패했습니다.",
+   "fix": "TSP 통신 상태와 응답 프레임을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E806",
+   "title": "TSP 명령 거부",
+   "category": "TSP",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "TSP 장비가 명령을 NACK로 거부했습니다.",
+   "fix": "TSP 명령 형식과 장비 상태를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E807",
+   "title": "TSP 예상 외 응답",
+   "category": "TSP",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "TSP가 예상하지 않은 응답을 반환했습니다.",
+   "fix": "TSP 프로토콜 처리 로직과 장비 상태를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E808",
+   "title": "TSP 상태 대기 시간 초과",
+   "category": "TSP",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "TSP 상태가 기대값으로 바뀌기를 기다리다 시간 초과되었습니다.",
+   "fix": "TSP 상태를 확인한 뒤 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E809",
+   "title": "OES 데몬 미준비",
+   "category": "OES",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "OES daemon이 아직 측정 가능한 상태가 아닙니다.",
+   "fix": "OES service 기동 완료 후 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E810",
+   "title": "OES 데몬 전송 실패",
+   "category": "OES",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "OES daemon으로 측정 명령 전송에 실패했습니다.",
+   "fix": "OES service 통신 상태를 확인한 뒤 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E811",
+   "title": "OES 데몬 측정 실패",
+   "category": "OES",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "OES daemon이 측정 실패를 반환했습니다.",
+   "fix": "OES service 로그와 장비 상태를 점검하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E812",
+   "title": "OES 첫 프레임 수신 실패",
+   "category": "OES",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "OES 첫 측정 프레임 수신에 실패했습니다.",
+   "fix": "장비 준비 상태와 service 초기화 상태를 확인한 뒤 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E813",
+   "title": "OES 장비 준비 안 됨",
+   "category": "OES",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "OES 장비가 측정 준비 상태가 아닙니다.",
+   "fix": "OES 장비 상태와 초기화 절차를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E814",
+   "title": "RGA 의존성 로드 실패",
+   "category": "RGA",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "RGA 필수 모듈 import 또는 worker 준비에 실패했습니다.",
+   "fix": "RGA 설치 상태와 실행 환경을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E815",
+   "title": "OES 챔버 인자 오류",
+   "category": "OES",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "OES에 잘못된 챔버 값이 전달되었습니다.",
+   "fix": "OES 호출 시 챔버 값은 1 또는 2만 사용하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E816",
+   "title": "TSP WIN 형식 오류",
+   "category": "TSP",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "TSP WIN 값 형식이 장비 규격과 맞지 않습니다.",
+   "fix": "WIN 값 형식을 장비 규격에 맞게 수정하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E817",
+   "title": "TSP 데이터 누락",
+   "category": "TSP",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "TSP write 명령에 필요한 DATA가 없습니다.",
+   "fix": "TSP write 명령에 DATA를 포함하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E818",
+   "title": "TSP 프레임 구성 오류",
+   "category": "TSP",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "TSP 명령 프레임 생성값이 올바르지 않습니다.",
+   "fix": "TSP 프레임 생성 로직을 점검하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E830",
+   "title": "히터 사용 불가",
+   "category": "HEATER",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "레시피가 히터를 쓰는데(use_heater=T) 히터를 켜거나 유지할 수 없습니다 — 히터 기능 꺼짐(SUPPORTS_HEATER=false), PLC 링크 없음·응답 없음, 히터 이상, 인터락 미충족(TC·D/A·냉각수·진공(메인밸브 인터락)), 설정 쓰기 전, 또는 대기 중 히터가 꺼졌습니다(인터락이 풀리면 PLC 가 히터를 끕니다).",
+   "fix": "히터 패널의 상태 문구·램프(이상·인터락 조건·응답)와 settings.json ch2 의 SUPPORTS_HEATER 를 확인한 뒤 다시 시작하십시오. 진공 조건은 CH2 메인밸브 인터락(터보 배기 중)이 켜져 있어야 합니다.",
+   "is_fallback": false
+  },
+  {
+   "code": "E831",
+   "title": "히터 승온 시간 초과",
+   "category": "HEATER",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "대기 한도 안에 목표 ±HEATER_SOAK_TOLERANCE 를 HEATER_SOAK_TIME_SEC 동안 유지하지 못했습니다.",
+   "fix": "'승온 정체' 경고가 있었으면 출력 상한(HEATER_MV_LIMIT)이 모자란 것입니다. 목표·램프 속도·HEATER_WAIT_TIMEOUT_SEC 를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E832",
+   "title": "공정 중 히터 이상",
+   "category": "HEATER",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "히터를 쓰는 공정 중에 히터 이상(과온·TC·워치독)이 생겼거나, 인터락(냉각수·진공(메인밸브 인터락) 등)이 풀려 PLC 가 히터를 껐거나, 히터가 꺼졌거나, 출력 무응답·끊김(MV 를 올려도 온도가 오르지 않거나 출력 상한에서 온도가 떨어짐)으로 프로그램이 히터를 껐습니다.",
+   "fix": "로그·히터 패널에서 원인(이상 내용 또는 꺼진 인터락 조건)을 확인해 없앤 뒤 다시 시작하십시오. 이상은 리셋이 필요하고, 인터락이 돌아와도 히터는 저절로 다시 켜지지 않습니다. 출력 무응답·끊김이면 D/A 출력 배선(DV04A CH3 → VARITAP)·VARITAP 전원/차단기·히터 단선·TC 위치를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E833",
+   "title": "히터 유지 모드 진입 실패",
+   "category": "HEATER",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "작업 압력·플라즈마 조건에서 유지 모드(DAC 상한 고정)가 시간 안에 잡히지 않았거나 출력 상한에 붙어 포기했습니다(HEATER_HOLD_FAIL_ACTION=abort 일 때만 공정을 멈춥니다).",
+   "fix": "HEATER_MV_LIMIT 여유와 HEATER_HOLD_WAIT_SEC 를 확인하십시오. 강제 고정으로 계속하려면 HEATER_HOLD_FAIL_ACTION=force.",
+   "is_fallback": false
+  },
+  {
+   "code": "E840",
+   "title": "두께 모니터 응답 없음",
+   "category": "THICKNESS",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "Thickness 모드 레시피(thickness>0)인데 두께 모니터가 연결돼 있지 않거나 최근 THICKNESS_READY_FRESH_S(기본 5초) 안에 정상 두께 값을 받지 못했습니다.",
+   "fix": "두께 모니터 패널의 연결·응답 램프와 마지막 오류를 확인하십시오(MOXA 포트 THICKNESS_TCP_PORT, 케이블, 장비 전원). 시간으로 끝내려면 레시피 thickness 를 비우고 process_time 을 쓰십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E841",
+   "title": "두께 모니터 XTAL FAIL",
+   "category": "THICKNESS",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "두께 모니터가 크리스탈 이상(XTAL FAIL)을 알려 두께로 종료를 판정할 수 없습니다.",
+   "fix": "크리스탈을 교체하거나 장착 상태를 확인한 뒤 다시 시작하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E842",
+   "title": "Thickness 모드 레시피 값 오류",
+   "category": "THICKNESS",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "Thickness 모드에는 dep_rate 와 thickness 가 모두 0 보다 커야 합니다(예상시간·상한·시간 대체 계산에 씁니다).",
+   "fix": "레시피 dep_rate·thickness 값을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E843",
+   "title": "Thickness 모드 건 선택 오류",
+   "category": "THICKNESS",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "Thickness 모드는 건 1개만 쓸 수 있습니다 — 2개 이상(co-sputter)이거나 사용 건이 없습니다(tooling 을 건별로 적용).",
+   "fix": "건을 1개만 선택하거나, co-sputter 는 thickness 를 비우고 시간(process_time)으로 진행하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E844",
+   "title": "Thickness 모드와 중간 펄스 전력 변경 충돌",
+   "category": "THICKNESS",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "중간 펄스 전력 변경 시점(power_change_time)이 메인 공정 구간에 있습니다. Thickness 모드는 메인 구간 길이가 정해지지 않아 함께 쓸 수 없습니다.",
+   "fix": "변경 시점을 Shutter Delay 안으로 옮기거나, 중간 변경을 쓰려면 thickness 를 비우고 시간으로 진행하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E845",
+   "title": "두께 모니터 Factor 미설정",
+   "category": "THICKNESS",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "확정된 chuck 위치 × 사용 건의 tooling, 또는 그 건의 density·Z-factor 가 Factor 파일에 없거나 chuck 위치를 알 수 없습니다.",
+   "fix": "두께 모니터 패널 [Factor 설정](config/thickness_factors_ch{N}.json)에서 값을 넣고 chuck 위치 램프를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E846",
+   "title": "두께 모니터 재료값 적용 실패",
+   "category": "THICKNESS",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "두께 모니터에 density/Z-factor/tooling 을 쓰고 되읽어 확인하지 못했습니다(1회 재시도 뒤에도 불일치·통신 실패·범위 밖).",
+   "fix": "두께 모니터 통신 상태와 Factor 값 범위(density 0.5~99.99, Z 0.1~9.999, tooling 10~399)를 확인하고 다시 시작하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E848",
+   "title": "두께 목표 미도달 — 최대 시간 초과",
+   "category": "THICKNESS",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "두께 모니터 통신은 정상인데 최대 시간 상한(max(예상 × THICKNESS_MAX_TIME_RATIO, 예상 + THICKNESS_MAX_TIME_MARGIN_S), 예상 = thickness ÷ dep_rate) 안에 목표 두께에 닿지 않았습니다 — 센서(크리스탈) 가림, tooling·density 오입력, 플라즈마 이상(출력·압력) 등.",
+   "fix": "두께 센서 위치·가림, [Factor 설정]의 tooling·density·Z, 공정 중 전원 출력·압력 기록을 확인하고, 레시피 dep_rate 가 실제보다 너무 크지 않은지 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E847",
+   "title": "두께 대기 단계 구성 오류",
+   "category": "THICKNESS",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "THICKNESS_WAIT 단계의 값(목표·예상·상한)이 올바르지 않습니다(프로그램 내부 오류).",
+   "fix": "로그를 개발 담당에게 전달하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E901",
+   "title": "로그 저장 실패",
+   "category": "LOGGING",
+   "client_action": "IGNORE",
+   "severity": "WARN",
+   "cause": "로그 파일 저장 또는 append 처리에 실패했습니다.",
+   "fix": "경로, 권한, 파일 잠금, 디스크 상태를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E902",
+   "title": "로그 폴더 생성 실패",
+   "category": "LOGGING",
+   "client_action": "IGNORE",
+   "severity": "WARN",
+   "cause": "로그 폴더 생성에 실패했습니다.",
+   "fix": "폴더 권한과 경로 유효성을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E903",
+   "title": "UI 미준비",
+   "category": "UI",
+   "client_action": "IGNORE",
+   "severity": "WARN",
+   "cause": "UI 또는 parent가 아직 준비되지 않았습니다.",
+   "fix": "UI 연결 상태를 점검하되 공정 본체에는 영향이 없는지 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E904",
+   "title": "부모 위젯 없음",
+   "category": "UI",
+   "client_action": "IGNORE",
+   "severity": "WARN",
+   "cause": "필요한 parent widget을 찾지 못했습니다.",
+   "fix": "UI 참조 경로를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E905",
+   "title": "미처리 예외",
+   "category": "INTERNAL",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "예상하지 못한 예외가 처리되지 않은 채 발생했습니다.",
+   "fix": "traceback을 확인하고 해당 예외를 AppError로 정규화하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E906",
+   "title": "폴링 작업 종료",
+   "category": "RUNTIME",
+   "client_action": "RETRY",
+   "severity": "WARN",
+   "cause": "장비 polling task가 비정상 종료되었습니다.",
+   "fix": "폴링 재시작 또는 장비 재연결 후 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E907",
+   "title": "CSV 파일 열기 실패",
+   "category": "LOGGING",
+   "client_action": "IGNORE",
+   "severity": "WARN",
+   "cause": "CSV 파일 열기 또는 append에 실패했습니다.",
+   "fix": "파일 잠금 여부와 경로 권한을 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E908",
+   "title": "디스크 쓰기 실패",
+   "category": "LOGGING",
+   "client_action": "IGNORE",
+   "severity": "WARN",
+   "cause": "디스크 공간 부족 또는 쓰기 실패가 발생했습니다.",
+   "fix": "디스크 공간과 저장 경로 상태를 확인하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E909",
+   "title": "공유 저장소 불안정",
+   "category": "LOGGING",
+   "client_action": "IGNORE",
+   "severity": "WARN",
+   "cause": "NAS 또는 UNC 경로 접근이 불안정합니다.",
+   "fix": "네트워크 저장소 상태를 확인하고 필요 시 로컬 폴백을 사용하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E910",
+   "title": "런타임 덤프 중복 실행",
+   "category": "INTERNAL",
+   "client_action": "IGNORE",
+   "severity": "WARN",
+   "cause": "runtime dump 작업이 이미 실행 중입니다.",
+   "fix": "중복 덤프 요청을 막고 현재 작업 완료를 기다리십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E911",
+   "title": "기본 로그 경로 미설정",
+   "category": "LOGGING",
+   "client_action": "IGNORE",
+   "severity": "WARN",
+   "cause": "기본 로그 저장 경로가 설정되지 않았습니다.",
+   "fix": "로그 초기화 시 primary_path를 설정하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E700",
+   "title": "공정 쿨다운 대기 중",
+   "category": "BUSY",
+   "client_action": "RETRY_LATER",
+   "severity": "WARN",
+   "cause": "이전 공정 종료 후 쿨다운 시간(60초)이 필요합니다.",
+   "fix": "안내된 시간 이후 다시 시도하십시오.",
+   "is_fallback": false
+  },
+  {
+   "code": "E999",
+   "title": "정의되지 않은 내부 예외",
+   "category": "INTERNAL",
+   "client_action": "STOP",
+   "severity": "ERROR",
+   "cause": "명시적으로 분류되지 않은 내부 예외가 발생했습니다.",
+   "fix": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+   "is_fallback": true
+  }
+ ],
+ "cases": [
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E101"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E101",
+    "client_action": "RETRY",
+    "category": "TRANSPORT",
+    "severity": "WARN",
+    "message": "요청 수신 중 연결 종료",
+    "detail": "요청 수신 중 EOF가 발생했습니다. 클라이언트가 전송 도중 연결을 종료했습니다.",
+    "guide": "클라이언트의 소켓 종료 시점, 네트워크 안정성, 요청 전송 흐름을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E102"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E102",
+    "client_action": "STOP",
+    "category": "TRANSPORT",
+    "severity": "ERROR",
+    "message": "지원하지 않는 프로토콜 버전",
+    "detail": "서버가 지원하지 않는 프로토콜 버전으로 요청이 들어왔습니다.",
+    "guide": "클라이언트와 서버의 프로토콜 버전을 일치시키십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E103"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E103",
+    "client_action": "STOP",
+    "category": "TRANSPORT",
+    "severity": "ERROR",
+    "message": "잘못된 헤더",
+    "detail": "요청 헤더 형식 또는 길이가 올바르지 않습니다.",
+    "guide": "패킷 헤더 생성 로직과 길이 계산 로직을 점검하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E104"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E104",
+    "client_action": "STOP",
+    "category": "TRANSPORT",
+    "severity": "ERROR",
+    "message": "잘못된 JSON 본문",
+    "detail": "요청 본문 JSON 디코딩에 실패했습니다.",
+    "guide": "클라이언트가 전송한 JSON 형식과 인코딩을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E105"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E105",
+    "client_action": "STOP",
+    "category": "REQUEST",
+    "severity": "ERROR",
+    "message": "명령 누락",
+    "detail": "요청 본문에 command 필드가 없습니다.",
+    "guide": "클라이언트가 command를 포함하도록 수정하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E106"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E106",
+    "client_action": "STOP",
+    "category": "REQUEST",
+    "severity": "ERROR",
+    "message": "알 수 없는 명령",
+    "detail": "등록되지 않은 command가 요청되었습니다.",
+    "guide": "클라이언트 명령명을 서버 라우터 등록값과 일치시키십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E107"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E107",
+    "client_action": "STOP",
+    "category": "TRANSPORT",
+    "severity": "ERROR",
+    "message": "응답 직렬화 실패",
+    "detail": "응답 객체를 JSON으로 직렬화하는 중 실패했습니다.",
+    "guide": "응답 payload 안에 직렬화 불가능한 객체가 포함되었는지 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E108"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E108",
+    "client_action": "STOP",
+    "category": "TRANSPORT",
+    "severity": "ERROR",
+    "message": "요청 크기 초과",
+    "detail": "허용된 크기를 초과한 요청이 들어왔습니다.",
+    "guide": "클라이언트 요청 크기를 줄이거나 서버의 제한 정책을 조정하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E109"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E109",
+    "client_action": "RETRY",
+    "category": "TRANSPORT",
+    "severity": "WARN",
+    "message": "응답 전송 중 연결 종료",
+    "detail": "응답 전송 중 broken pipe 또는 connection reset이 발생했습니다.",
+    "guide": "클라이언트와 서버 간 연결 안정성을 확인한 뒤 재시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E110"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E110",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "핸들러 내부 예외",
+    "detail": "핸들러 내부에서 예외가 발생했지만, 명시적인 에러코드로 정규화되지 않았습니다.",
+    "guide": "해당 핸들러 내부 예외를 AppError로 명시적으로 변환하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E111"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E111",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "핸들러 반환 형식 오류",
+    "detail": "핸들러가 dict가 아닌 응답을 반환했습니다.",
+    "guide": "모든 핸들러가 dict 형태의 응답을 반환하도록 수정하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E112"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E112",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "응답 패킷 구성 실패",
+    "detail": "응답 패킷 생성 또는 pack 과정에서 실패했습니다.",
+    "guide": "응답 포맷 생성 로직과 protocol pack 로직을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E201"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E201",
+    "client_action": "STOP",
+    "category": "REQUEST",
+    "severity": "ERROR",
+    "message": "챔버 값 오류",
+    "detail": "허용되지 않은 챔버 번호가 전달되었습니다.",
+    "guide": "ch 값은 1 또는 2만 사용하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E202"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E202",
+    "client_action": "STOP",
+    "category": "REQUEST",
+    "severity": "ERROR",
+    "message": "레시피 누락",
+    "detail": "레시피 경로 또는 레시피 데이터가 비어 있습니다.",
+    "guide": "레시피 값이 비어 있지 않은지 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E203"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E203",
+    "client_action": "RETRY",
+    "category": "RUNTIME",
+    "severity": "WARN",
+    "message": "챔버 런타임 미준비",
+    "detail": "챔버 런타임이 아직 준비되지 않았습니다.",
+    "guide": "런타임 초기화 완료 후 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E204"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E204",
+    "client_action": "RETRY",
+    "category": "RUNTIME",
+    "severity": "WARN",
+    "message": "플라즈마 클리닝 런타임 미준비",
+    "detail": "플라즈마 클리닝 런타임이 아직 준비되지 않았습니다.",
+    "guide": "플라즈마 클리닝 런타임 초기화 완료 후 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E205"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E205",
+    "client_action": "RETRY",
+    "category": "STATE",
+    "severity": "WARN",
+    "message": "공정 실행 중",
+    "detail": "이미 다른 공정이 실행 중이어서 현재 명령을 처리할 수 없습니다.",
+    "guide": "현재 공정 종료 후 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E206"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E206",
+    "client_action": "RETRY",
+    "category": "STATE",
+    "severity": "WARN",
+    "message": "중복 시작 요청",
+    "detail": "다른 시작 요청이 이미 처리 중입니다.",
+    "guide": "기존 시작 요청 처리 완료 후 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E207"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E207",
+    "client_action": "STOP",
+    "category": "RECIPE",
+    "severity": "ERROR",
+    "message": "CSV 파일 없음",
+    "detail": "지정한 CSV 파일이 존재하지 않습니다.",
+    "guide": "레시피 파일 경로와 파일 존재 여부를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E208"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E208",
+    "client_action": "STOP",
+    "category": "RECIPE",
+    "severity": "ERROR",
+    "message": "CSV 데이터 없음",
+    "detail": "CSV 파일에 데이터 행이 없거나 공정 데이터가 비어 있습니다.",
+    "guide": "CSV 헤더와 데이터 행을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E209"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E209",
+    "client_action": "STOP",
+    "category": "RECIPE",
+    "severity": "ERROR",
+    "message": "지원하지 않는 레시피 형식",
+    "detail": "현재 지원하지 않는 레시피 형식이거나 레시피 파일을 읽을 수 없습니다(인코딩·잠김·손상).",
+    "guide": "지원되는 CSV 형식으로 레시피를 준비하십시오. 엑셀에서는 'CSV UTF-8(쉼표로 분리)'로 저장하고, 파일이 다른 프로그램에서 열려 있지 않은지 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E230"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E230",
+    "client_action": "STOP",
+    "category": "RECIPE",
+    "severity": "ERROR",
+    "message": "레시피 값 오류",
+    "detail": "레시피의 일부 칸에 해당 컬럼 형식과 맞지 않는 값이 있습니다.",
+    "guide": "오류 메시지에 표시된 행과 컬럼의 값을 확인한 뒤 레시피를 수정하여 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E210"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E210",
+    "client_action": "RETRY",
+    "category": "RUNTIME",
+    "severity": "WARN",
+    "message": "사전점검 시간 초과",
+    "detail": "preflight 또는 시작 전 점검 과정이 제한 시간 내 완료되지 않았습니다.",
+    "guide": "장비 준비 상태를 확인한 뒤 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E211"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E211",
+    "client_action": "STOP",
+    "category": "RECIPE",
+    "severity": "ERROR",
+    "message": "시퀀스 검증 실패",
+    "detail": "공정 시퀀스 유효성 검사에 실패했습니다.",
+    "guide": "레시피 순서와 액션 구성 규칙을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E212"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E212",
+    "client_action": "STOP",
+    "category": "REQUEST",
+    "severity": "ERROR",
+    "message": "알 수 없는 런타임 종류",
+    "detail": "지원하지 않는 runtime kind가 전달되었습니다.",
+    "guide": "런타임 종류 문자열을 서버가 허용하는 값으로 맞추십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E213"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E213",
+    "client_action": "STOP",
+    "category": "REQUEST",
+    "severity": "ERROR",
+    "message": "알 수 없는 액션",
+    "detail": "지원하지 않는 공정 액션이 포함되어 있습니다.",
+    "guide": "레시피 액션명을 서버가 지원하는 값으로 수정하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E214"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E214",
+    "client_action": "STOP",
+    "category": "REQUEST",
+    "severity": "ERROR",
+    "message": "DELAY 시간 누락",
+    "detail": "DELAY 액션에 duration 값이 없습니다.",
+    "guide": "DELAY 액션에 duration 값을 추가하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E215"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E215",
+    "client_action": "STOP",
+    "category": "REQUEST",
+    "severity": "ERROR",
+    "message": "병렬 블록 내 DELAY 사용 불가",
+    "detail": "병렬 블록 안에 DELAY 액션이 포함되었습니다.",
+    "guide": "DELAY는 병렬 블록이 아닌 순차 블록에서만 사용하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E216"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E216",
+    "client_action": "STOP",
+    "category": "REQUEST",
+    "severity": "ERROR",
+    "message": "PLC 명령 파라미터 오류",
+    "detail": "PLC_CMD 파라미터 형식이 올바르지 않습니다.",
+    "guide": "PLC_CMD 파라미터 구조를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E217"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E217",
+    "client_action": "STOP",
+    "category": "REQUEST",
+    "severity": "ERROR",
+    "message": "MFC 명령 파라미터 오류",
+    "detail": "MFC_CMD 파라미터 형식이 올바르지 않습니다.",
+    "guide": "MFC_CMD 파라미터 구조를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E218"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E218",
+    "client_action": "STOP",
+    "category": "REQUEST",
+    "severity": "ERROR",
+    "message": "OES 실행 파라미터 오류",
+    "detail": "OES_RUN 파라미터 형식이 올바르지 않습니다.",
+    "guide": "OES_RUN 파라미터 구조를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E219"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E219",
+    "client_action": "STOP",
+    "category": "REQUEST",
+    "severity": "ERROR",
+    "message": "DC Pulse 시작 값 누락",
+    "detail": "DC_PULSE_START에 필요한 value가 없습니다.",
+    "guide": "DC_PULSE_START에 value를 포함하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E220"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E220",
+    "client_action": "STOP",
+    "category": "REQUEST",
+    "severity": "ERROR",
+    "message": "RF Pulse 시작 값 누락",
+    "detail": "RF_PULSE_START에 필요한 value가 없습니다.",
+    "guide": "RF_PULSE_START에 value를 포함하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E221"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E221",
+    "client_action": "STOP",
+    "category": "REQUEST",
+    "severity": "ERROR",
+    "message": "DC Pulse 시작 파라미터 오류",
+    "detail": "DC_PULSE_START 파라미터 형식이 올바르지 않습니다.",
+    "guide": "DC_PULSE_START 파라미터 구조를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E222"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E222",
+    "client_action": "STOP",
+    "category": "REQUEST",
+    "severity": "ERROR",
+    "message": "RF Pulse 시작 파라미터 오류",
+    "detail": "RF_PULSE_START 파라미터 형식이 올바르지 않습니다.",
+    "guide": "RF_PULSE_START 파라미터 구조를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E223"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E223",
+    "client_action": "STOP",
+    "category": "REQUEST",
+    "severity": "ERROR",
+    "message": "TSP 목표 압력 누락",
+    "detail": "TSP 목표 압력 입력값이 없습니다.",
+    "guide": "TSP 목표 압력 값을 입력하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E224"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E224",
+    "client_action": "STOP",
+    "category": "REQUEST",
+    "severity": "ERROR",
+    "message": "TSP 반복 횟수 누락",
+    "detail": "TSP 반복 횟수 입력값이 없습니다.",
+    "guide": "TSP 반복 횟수를 입력하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E225"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E225",
+    "client_action": "STOP",
+    "category": "REQUEST",
+    "severity": "ERROR",
+    "message": "TSP 반복 횟수 오류",
+    "detail": "TSP 반복 횟수가 1보다 작습니다.",
+    "guide": "TSP 반복 횟수를 1 이상으로 설정하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E226"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E226",
+    "client_action": "STOP",
+    "category": "REQUEST",
+    "severity": "ERROR",
+    "message": "레시피 폴더 값 오류",
+    "detail": "GET_RECIPE 요청의 folder 값이 허용 범위를 벗어났습니다.",
+    "guide": "folder 값은 서버가 허용하는 폴더명만 사용하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E227"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E227",
+    "client_action": "RETRY",
+    "category": "RUNTIME",
+    "severity": "WARN",
+    "message": "레시피 조회 시간 초과",
+    "detail": "GET_RECIPE 처리 또는 공정 시작(START) 때 레시피 파일 읽기가 제한 시간을 초과했습니다.",
+    "guide": "폴더 접근 상태와 저장소 응답 상태를 확인한 뒤 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E228"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E228",
+    "client_action": "STOP",
+    "category": "REQUEST",
+    "severity": "ERROR",
+    "message": "상태 API 요청 형식 오류",
+    "detail": "state API 또는 recovery 요청의 payload 형식이 올바르지 않습니다.",
+    "guide": "상태 API payload 구조를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E229"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E229",
+    "client_action": "STOP",
+    "category": "REQUEST",
+    "severity": "ERROR",
+    "message": "상태 API 필수값 누락",
+    "detail": "상태 API 요청에서 필수 필드가 누락되었습니다.",
+    "guide": "필수 필드를 모두 포함하도록 클라이언트를 수정하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E301"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E301",
+    "client_action": "STOP",
+    "category": "SAFETY_GATE",
+    "severity": "ERROR",
+    "message": "게이트 닫힘 미확인",
+    "detail": "게이트가 닫힌 상태가 아니므로 공정을 시작할 수 없습니다.",
+    "guide": "게이트 닫힘 상태와 램프를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E302"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E302",
+    "client_action": "STOP",
+    "category": "SAFETY_GATE",
+    "severity": "ERROR",
+    "message": "게이트 인터락 불일치",
+    "detail": "게이트 OPEN 조건의 인터락이 FALSE입니다.",
+    "guide": "PLC 게이트 인터락 조건, 센서, 배선, 기구 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E303"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E303",
+    "client_action": "STOP",
+    "category": "SAFETY_GATE",
+    "severity": "ERROR",
+    "message": "반대쪽 게이트 닫힘 미확인",
+    "detail": "다른 챔버의 게이트가 닫혀 있는 것이 확인되지 않았습니다.",
+    "guide": "반대편 게이트 close 램프와 인터락을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E304"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E304",
+    "client_action": "STOP",
+    "category": "SAFETY_GATE",
+    "severity": "ERROR",
+    "message": "게이트 열림 램프 시간 초과",
+    "detail": "게이트 열림 명령 후 OPEN_LAMP가 제한 시간 내 켜지지 않았습니다.",
+    "guide": "게이트 구동부, 센서, PLC 출력, 공압 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E305"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E305",
+    "client_action": "STOP",
+    "category": "SAFETY_GATE",
+    "severity": "ERROR",
+    "message": "게이트 닫힘 램프 시간 초과",
+    "detail": "게이트 닫힘 명령 후 CLOSE_LAMP가 제한 시간 내 켜지지 않았습니다.",
+    "guide": "게이트 구동부, 센서, PLC 출력, 공압 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E306"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E306",
+    "client_action": "STOP",
+    "category": "SAFETY_GATE",
+    "severity": "FATAL",
+    "message": "게이트 센서 모순",
+    "detail": "게이트 OPEN/CLOSE 센서 상태가 논리적으로 모순됩니다.",
+    "guide": "센서 배선, PLC 주소맵, 기구부 위치 검출 상태를 점검하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E307"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E307",
+    "client_action": "STOP",
+    "category": "SAFETY_VACUUM",
+    "severity": "FATAL",
+    "message": "진공 시작 전 게이트 닫힘 미확인",
+    "detail": "게이트가 닫힌 상태가 아닌데 진공 ON을 시도했습니다.",
+    "guide": "게이트 close 램프와 인터락을 먼저 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E308"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E308",
+    "client_action": "STOP",
+    "category": "SAFETY_VACUUM",
+    "severity": "FATAL",
+    "message": "진공 해제 전 게이트 닫힘 미확인",
+    "detail": "게이트 닫힘 확인 없이 진공 해제 또는 대기압 전환을 시도했습니다.",
+    "guide": "게이트 close 램프를 먼저 확인한 뒤 진공 해제 동작을 수행하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E309"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E309",
+    "client_action": "RETRY",
+    "category": "SAFETY_VACUUM",
+    "severity": "WARN",
+    "message": "러핑펌프 오프 타이머 진행 중",
+    "detail": "러핑펌프 오프 타이머가 아직 진행 중입니다.",
+    "guide": "타이머 만료 후 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E310"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E310",
+    "client_action": "STOP",
+    "category": "SAFETY_VACUUM",
+    "severity": "ERROR",
+    "message": "러핑 밸브 인터락 불일치",
+    "detail": "러핑 밸브 인터락이 FALSE입니다.",
+    "guide": "L_R_V 관련 인터락 조건과 밸브 상태를 점검하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E311"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E311",
+    "client_action": "STOP",
+    "category": "SAFETY_VACUUM",
+    "severity": "ERROR",
+    "message": "벤트 인터락 불일치",
+    "detail": "벤트 인터락이 FALSE입니다.",
+    "guide": "벤트 동작 조건과 관련 밸브, 센서 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E312"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E312",
+    "client_action": "STOP",
+    "category": "SAFETY_VACUUM",
+    "severity": "ERROR",
+    "message": "진공 형성 시간 초과",
+    "detail": "제한 시간 내 진공 ready 상태에 도달하지 못했습니다.",
+    "guide": "누설, 밸브 상태, 펌프 상태, 진공 게이지 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E313"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E313",
+    "client_action": "STOP",
+    "category": "SAFETY_VACUUM",
+    "severity": "ERROR",
+    "message": "대기압 복귀 시간 초과",
+    "detail": "제한 시간 내 대기압 상태에 도달하지 못했습니다.",
+    "guide": "벤트 밸브, 게이지, 배관 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E314"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E314",
+    "client_action": "STOP",
+    "category": "SAFETY_PIN_CHUCK",
+    "severity": "ERROR",
+    "message": "핀 상승 인터락 불일치",
+    "detail": "핀 상승 인터락이 FALSE입니다.",
+    "guide": "핀 상승 조건과 관련 센서, 인터락을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E315"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E315",
+    "client_action": "STOP",
+    "category": "SAFETY_PIN_CHUCK",
+    "severity": "ERROR",
+    "message": "핀 하강 인터락 불일치",
+    "detail": "핀 하강 인터락이 FALSE입니다.",
+    "guide": "핀 하강 조건과 관련 센서, 인터락을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E316"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E316",
+    "client_action": "STOP",
+    "category": "SAFETY_PIN_CHUCK",
+    "severity": "ERROR",
+    "message": "핀 상승 램프 시간 초과",
+    "detail": "핀 상승 명령 후 UP_LAMP가 제한 시간 내 켜지지 않았습니다.",
+    "guide": "핀 구동부, 공압, 센서, PLC 출력을 점검하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E317"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E317",
+    "client_action": "STOP",
+    "category": "SAFETY_PIN_CHUCK",
+    "severity": "ERROR",
+    "message": "핀 하강 램프 시간 초과",
+    "detail": "핀 하강 명령 후 DOWN_LAMP가 제한 시간 내 켜지지 않았습니다.",
+    "guide": "핀 구동부, 공압, 센서, PLC 출력을 점검하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E318"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E318",
+    "client_action": "STOP",
+    "category": "SAFETY_PIN_CHUCK",
+    "severity": "ERROR",
+    "message": "척 위치 이동 시간 초과",
+    "detail": "척이 목표 위치로 제한 시간 내 이동하지 못했습니다.",
+    "guide": "척 구동부, 위치센서, PLC 출력 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E319"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E319",
+    "client_action": "STOP",
+    "category": "SAFETY_VACUUM",
+    "severity": "FATAL",
+    "message": "게이트 열린 상태에서 진공 출력 감지",
+    "detail": "게이트가 열린 상태인데 진공 관련 출력이 활성화되었습니다.",
+    "guide": "PLC 시퀀스와 인터락 로직을 즉시 점검하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E320"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E320",
+    "client_action": "STOP",
+    "category": "REQUEST",
+    "severity": "ERROR",
+    "message": "게이트 상태 조회 챔버 오류",
+    "detail": "게이트 상태 조회에 잘못된 챔버 번호가 사용되었습니다.",
+    "guide": "게이트 상태 조회 시 ch 값은 1 또는 2만 사용하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E321"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E321",
+    "client_action": "STOP",
+    "category": "SAFETY_GATE",
+    "severity": "ERROR",
+    "message": "로드락 상태상 게이트 열기 불가",
+    "detail": "현재 로드락 상태에서는 게이트를 열 수 없습니다.",
+    "guide": "로드락 진공 상태, 벤트 상태, 인터락 조건을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E322"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E322",
+    "client_action": "STOP",
+    "category": "SAFETY_VACUUM",
+    "severity": "FATAL",
+    "message": "진공 상태 신호 모순",
+    "detail": "VAC_READY와 VAC_NOT_READY 신호가 논리적으로 모순됩니다.",
+    "guide": "PLC 상태비트 정의와 진공 상태 신호를 점검하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E323"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E323",
+    "client_action": "STOP",
+    "category": "PLC_COMM",
+    "severity": "ERROR",
+    "message": "아날로그 입력 모듈 오류",
+    "detail": "아날로그 입력 모듈 에러 비트가 감지되었습니다.",
+    "guide": "PLC 아날로그 입력 모듈 상태, 배선, 모듈 자체를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E324"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E324",
+    "client_action": "STOP",
+    "category": "PLC_COMM",
+    "severity": "ERROR",
+    "message": "아날로그 출력 모듈 오류",
+    "detail": "아날로그 출력 모듈 채널 에러 비트가 감지되었습니다.",
+    "guide": "PLC 아날로그 출력 모듈 상태, 배선, 채널 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E325"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E325",
+    "client_action": "STOP",
+    "category": "PLC_COMM",
+    "severity": "ERROR",
+    "message": "아날로그 입력 모듈 미준비",
+    "detail": "아날로그 입력 모듈 ready 비트가 FALSE입니다.",
+    "guide": "모듈 초기화 상태와 ready 신호를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E326"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E326",
+    "client_action": "STOP",
+    "category": "PLC_COMM",
+    "severity": "ERROR",
+    "message": "아날로그 출력 모듈 미준비",
+    "detail": "아날로그 출력 모듈 ready 비트가 FALSE입니다.",
+    "guide": "모듈 초기화 상태와 ready 신호를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E330"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E330",
+    "client_action": "STOP",
+    "category": "SAFETY_GATE",
+    "severity": "ERROR",
+    "message": "메인 셔터 인터락 불일치",
+    "detail": "메인 셔터를 열기 위한 인터락 조건이 충족되지 않았습니다.",
+    "guide": "CH2 메인 셔터 인터락 조건, 램프, 관련 PLC 신호를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E331"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E331",
+    "client_action": "STOP",
+    "category": "SAFETY_GATE",
+    "severity": "ERROR",
+    "message": "메인 셔터 닫힘 실패",
+    "detail": "CH2 게이트 close 후 메인 셔터 닫힘이 완료되지 않았습니다.",
+    "guide": "메인 셔터 close 신호와 램프, 기구부 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E401"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E401",
+    "client_action": "RETRY",
+    "category": "PLC_COMM",
+    "severity": "WARN",
+    "message": "PLC 연결 실패",
+    "detail": "PLC(Modbus) 연결에 실패했습니다.",
+    "guide": "PLC 전원, IP, 포트, 네트워크 상태를 확인한 뒤 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E402"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E402",
+    "client_action": "RETRY",
+    "category": "PLC_COMM",
+    "severity": "WARN",
+    "message": "PLC 응답 없음",
+    "detail": "PLC가 요청에 응답하지 않았습니다.",
+    "guide": "통신 상태를 확인하고 상태 조회 후 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E403"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E403",
+    "client_action": "RETRY",
+    "category": "PLC_COMM",
+    "severity": "WARN",
+    "message": "PLC 예외 응답",
+    "detail": "PLC가 예외 응답을 반환했습니다.",
+    "guide": "요청 주소, 데이터 길이, PLC 상태를 점검하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E404"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E404",
+    "client_action": "STOP",
+    "category": "PLC_MAP",
+    "severity": "ERROR",
+    "message": "알 수 없는 PLC 주소명",
+    "detail": "정의되지 않은 PLC 이름 또는 주소명이 사용되었습니다.",
+    "guide": "PLC 주소 맵 정의와 실제 참조 이름을 일치시키십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E405"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E405",
+    "client_action": "STOP",
+    "category": "PLC_MAP",
+    "severity": "ERROR",
+    "message": "PLC 코일 맵 키 누락",
+    "detail": "PLC_COIL_MAP에서 필요한 키를 찾지 못했습니다.",
+    "guide": "PLC_COIL_MAP 정의를 점검하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E406"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E406",
+    "client_action": "STOP",
+    "category": "PLC_MAP",
+    "severity": "ERROR",
+    "message": "PLC 레지스터 맵 키 누락",
+    "detail": "PLC_REG_MAP에서 필요한 키를 찾지 못했습니다.",
+    "guide": "PLC_REG_MAP 정의를 점검하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E407"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E407",
+    "client_action": "STOP",
+    "category": "PLC_MAP",
+    "severity": "ERROR",
+    "message": "PLC 이름 누락",
+    "detail": "PLC 접근 시 필수 name 인자가 없습니다.",
+    "guide": "PLC 접근 함수 호출부에 name을 정확히 전달하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E408"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E408",
+    "client_action": "STOP",
+    "category": "PLC_MAP",
+    "severity": "ERROR",
+    "message": "지원하지 않는 PLC 논리키",
+    "detail": "지원하지 않는 PLC 논리키가 사용되었습니다.",
+    "guide": "허용된 PLC 키만 사용하도록 코드를 수정하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E409"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E409",
+    "client_action": "STOP",
+    "category": "REQUEST",
+    "severity": "ERROR",
+    "message": "잘못된 가스 종류",
+    "detail": "허용되지 않은 가스 enum 또는 이름이 전달되었습니다.",
+    "guide": "가스 종류는 서버가 허용하는 값만 사용하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E410"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E410",
+    "client_action": "STOP",
+    "category": "PLC_MAP",
+    "severity": "ERROR",
+    "message": "챔버에 없는 가스 요청",
+    "detail": "해당 챔버에 정의되지 않은 가스 채널이 요청되었습니다.",
+    "guide": "챔버별 가스 채널 정의를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E411"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E411",
+    "client_action": "STOP",
+    "category": "PLC_MAP",
+    "severity": "ERROR",
+    "message": "필수 PLC 키 누락",
+    "detail": "필수 PLC 키(센서, 램프, 로딩 신호 등)가 정의되어 있지 않습니다.",
+    "guide": "주소맵과 키 정의를 보완하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E412"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E412",
+    "client_action": "RETRY",
+    "category": "PLC_COMM",
+    "severity": "WARN",
+    "message": "PLC 비트 읽기 실패",
+    "detail": "PLC 비트 읽기 과정에서 예외가 발생했습니다.",
+    "guide": "PLC 통신 상태를 확인한 뒤 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E413"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E413",
+    "client_action": "RETRY",
+    "category": "PLC_COMM",
+    "severity": "WARN",
+    "message": "특정 비트 조회 시간 초과",
+    "detail": "특정 PLC 비트를 제한 시간 내 읽지 못했습니다.",
+    "guide": "일시적인 통신 지연 여부를 확인하고 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E414"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E414",
+    "client_action": "IGNORE",
+    "category": "PLC_COMM",
+    "severity": "WARN",
+    "message": "워치독 일시중지 실패",
+    "detail": "워치독 pause 호출에 실패했습니다.",
+    "guide": "워치독 상태를 로그로 남기고 필요 시 후속 점검하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E415"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E415",
+    "client_action": "IGNORE",
+    "category": "PLC_COMM",
+    "severity": "WARN",
+    "message": "워치독 재개 실패",
+    "detail": "워치독 resume 호출에 실패했습니다.",
+    "guide": "워치독 상태를 로그로 남기고 필요 시 후속 점검하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E416"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E416",
+    "client_action": "STOP",
+    "category": "PLC_COMM",
+    "severity": "ERROR",
+    "message": "PLC 쓰기 실패",
+    "detail": "PLC 코일 또는 레지스터 쓰기에 실패했습니다.",
+    "guide": "PLC 통신, 주소, 권한, 대상 장비 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E417"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E417",
+    "client_action": "STOP",
+    "category": "PLC_MAP",
+    "severity": "ERROR",
+    "message": "PLC 별칭 해석 실패",
+    "detail": "논리명에서 실제 PLC 주소로 변환하지 못했습니다.",
+    "guide": "별칭 정의와 주소 맵을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E501"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E501",
+    "client_action": "RETRY",
+    "category": "RUNTIME",
+    "severity": "WARN",
+    "message": "장비 연결 시간 초과",
+    "detail": "장비 연결이 제한 시간 내 완료되지 않았습니다.",
+    "guide": "장비 전원과 통신 상태를 확인한 뒤 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E502"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E502",
+    "client_action": "RETRY",
+    "category": "RUNTIME",
+    "severity": "WARN",
+    "message": "장비 연결 실패",
+    "detail": "장비 연결에 실패했습니다.",
+    "guide": "장비 상태를 확인하고 재연결 후 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E503"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E503",
+    "client_action": "RETRY",
+    "category": "RUNTIME",
+    "severity": "WARN",
+    "message": "장비 상태 대기 시간 초과",
+    "detail": "장비 상태가 기대값으로 바뀌기를 기다리다 시간 초과되었습니다.",
+    "guide": "장비 상태를 확인한 뒤 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E504"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E504",
+    "client_action": "STOP",
+    "category": "RUNTIME",
+    "severity": "ERROR",
+    "message": "안정화 목표 없음",
+    "detail": "안정화 대상 값이 정의되지 않았습니다.",
+    "guide": "안정화에 필요한 목표값을 설정하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E505"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E505",
+    "client_action": "RETRY",
+    "category": "RUNTIME",
+    "severity": "WARN",
+    "message": "가스 안정화 시간 초과",
+    "detail": "가스 유량 또는 압력이 안정화되지 못했습니다.",
+    "guide": "MFC 상태를 확인한 뒤 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E506"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E506",
+    "client_action": "STOP",
+    "category": "RUNTIME",
+    "severity": "ERROR",
+    "message": "TSP 실행 시간 초과",
+    "detail": "TSP 실행이 제한 시간 내 완료되지 않았습니다.",
+    "guide": "TSP 장비 상태와 응답을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E507"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E507",
+    "client_action": "STOP",
+    "category": "RUNTIME",
+    "severity": "ERROR",
+    "message": "램프 대기 시간 초과",
+    "detail": "목표 램프 상태가 제한 시간 내 도달하지 않았습니다.",
+    "guide": "해당 구동부와 센서 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E508"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E508",
+    "client_action": "RETRY",
+    "category": "RUNTIME",
+    "severity": "WARN",
+    "message": "재연결 시간 초과",
+    "detail": "재연결 시도가 제한 시간 내 완료되지 않았습니다.",
+    "guide": "장비 연결 상태를 점검한 뒤 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E509"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E509",
+    "client_action": "RETRY",
+    "category": "RUNTIME",
+    "severity": "WARN",
+    "message": "재연결 작업 비정상 종료",
+    "detail": "재연결 작업이 예상치 않게 취소되거나 종료되었습니다.",
+    "guide": "재연결 작업 흐름과 취소 조건을 점검하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E510"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E510",
+    "client_action": "RETRY",
+    "category": "RUNTIME",
+    "severity": "WARN",
+    "message": "재연결 실패",
+    "detail": "재연결 시도가 실패했습니다.",
+    "guide": "장비 상태를 확인하고 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E511"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E511",
+    "client_action": "STOP",
+    "category": "RUNTIME",
+    "severity": "ERROR",
+    "message": "사전 연결 점검 실패",
+    "detail": "공정 시작 전 필수 장비 연결 점검에 실패했습니다.",
+    "guide": "시작 전 필수 장비 연결 상태를 모두 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E512"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E512",
+    "client_action": "RETRY",
+    "category": "RUNTIME",
+    "severity": "WARN",
+    "message": "시작 가드 시간 초과",
+    "detail": "시작 가드 또는 사전 조건 대기가 제한 시간 내 끝나지 않았습니다.",
+    "guide": "상태가 정리된 후 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E513"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E513",
+    "client_action": "STOP",
+    "category": "STATE",
+    "severity": "ERROR",
+    "message": "게이트 열린 상태로 시작 차단",
+    "detail": "게이트가 열린 상태여서 공정 시작이 차단되었습니다.",
+    "guide": "게이트를 닫고 close 램프를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E514"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E514",
+    "client_action": "STOP",
+    "category": "RUNTIME",
+    "severity": "ERROR",
+    "message": "필수 콜백 누락",
+    "detail": "필수 콜백 또는 필수 주입 객체가 설정되지 않았습니다.",
+    "guide": "초기화 및 의존성 주입 로직을 점검하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E515"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E515",
+    "client_action": "RETRY",
+    "category": "STATE",
+    "severity": "WARN",
+    "message": "이전 시작 작업 대기 중",
+    "detail": "이전 start 작업이 아직 완료되지 않았습니다.",
+    "guide": "이전 작업이 끝난 뒤 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E601"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E601",
+    "client_action": "STOP",
+    "category": "IG",
+    "severity": "ERROR",
+    "message": "IG 읽기 콜백 미설정",
+    "detail": "IG pressure read callback이 바인딩되지 않았습니다.",
+    "guide": "IG read callback 주입 로직을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E602"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E602",
+    "client_action": "STOP",
+    "category": "IG",
+    "severity": "ERROR",
+    "message": "IG 객체 미설정",
+    "detail": "IG 객체가 주입되지 않았습니다.",
+    "guide": "IG 초기화 및 주입 로직을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E603"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E603",
+    "client_action": "STOP",
+    "category": "IG",
+    "severity": "ERROR",
+    "message": "IG API 누락",
+    "detail": "IG 객체에 필요한 read API가 없습니다.",
+    "guide": "IG 클래스 구현과 사용 API를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E604"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E604",
+    "client_action": "STOP",
+    "category": "IG",
+    "severity": "ERROR",
+    "message": "IG 읽기 API 탐색 실패",
+    "detail": "main 또는 runtime에서 IG 읽기 API를 찾지 못했습니다.",
+    "guide": "IG 객체 참조 경로와 메서드명을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E605"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E605",
+    "client_action": "RETRY",
+    "category": "IG",
+    "severity": "WARN",
+    "message": "IG 활성화 실패",
+    "detail": "IG ensure_on 또는 활성화 과정에 실패했습니다.",
+    "guide": "게이지 전원과 통신 상태를 확인한 뒤 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E606"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E606",
+    "client_action": "RETRY",
+    "category": "IG",
+    "severity": "WARN",
+    "message": "IG 응답 시간 초과",
+    "detail": "IG에서 제한 시간 내 응답이 오지 않았습니다.",
+    "guide": "IG 통신 상태를 확인하고 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E607"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E607",
+    "client_action": "STOP",
+    "category": "IG",
+    "severity": "ERROR",
+    "message": "IG 파싱 오류",
+    "detail": "IG 응답값 파싱에 실패했습니다.",
+    "guide": "IG 응답 형식과 파싱 로직을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E608"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E608",
+    "client_action": "STOP",
+    "category": "IG",
+    "severity": "ERROR",
+    "message": "기저압 미도달",
+    "detail": "기저압이 목표값 이하로 내려가지 않았습니다.",
+    "guide": "누설, 펌프 상태, 배관 상태, 진공 게이지 값을 점검하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E609"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E609",
+    "client_action": "STOP",
+    "category": "MFC",
+    "severity": "ERROR",
+    "message": "MFC 가스 객체 미설정",
+    "detail": "mfc_gas 객체가 바인딩되지 않았습니다.",
+    "guide": "MFC gas 객체 주입 로직을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E610"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E610",
+    "client_action": "STOP",
+    "category": "MFC",
+    "severity": "ERROR",
+    "message": "MFC 압력 객체 미설정",
+    "detail": "mfc_pressure 객체가 바인딩되지 않았습니다.",
+    "guide": "MFC pressure 객체 주입 로직을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E611"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E611",
+    "client_action": "STOP",
+    "category": "MFC",
+    "severity": "ERROR",
+    "message": "가스 선택 누락",
+    "detail": "MFC 동작 전에 가스 선택이 완료되지 않았습니다.",
+    "guide": "gas_select 호출 흐름을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E612"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E612",
+    "client_action": "STOP",
+    "category": "MFC",
+    "severity": "ERROR",
+    "message": "지원하지 않는 가스 채널",
+    "detail": "지원하지 않는 가스 채널이 요청되었습니다.",
+    "guide": "허용된 가스 채널만 사용하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E613"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E613",
+    "client_action": "RETRY",
+    "category": "MFC",
+    "severity": "WARN",
+    "message": "압력 읽기 응답 없음",
+    "detail": "MFC pressure read 요청에 응답이 없습니다.",
+    "guide": "MFC 통신 상태를 확인한 뒤 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E614"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E614",
+    "client_action": "RETRY",
+    "category": "MFC",
+    "severity": "WARN",
+    "message": "유량 읽기 파싱 실패",
+    "detail": "MFC flow read 응답 파싱에 실패했습니다.",
+    "guide": "MFC 응답 형식과 통신 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E615"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E615",
+    "client_action": "STOP",
+    "category": "MFC",
+    "severity": "ERROR",
+    "message": "SP1 검증 실패",
+    "detail": "SP1 readback 값이 기대값과 일치하지 않습니다.",
+    "guide": "SP1 설정 및 readback 로직을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E616"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E616",
+    "client_action": "STOP",
+    "category": "MFC",
+    "severity": "ERROR",
+    "message": "SP2 검증 실패",
+    "detail": "SP2 readback 값이 기대값과 일치하지 않습니다.",
+    "guide": "SP2 설정 및 readback 로직을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E617"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E617",
+    "client_action": "STOP",
+    "category": "MFC",
+    "severity": "ERROR",
+    "message": "SP4 검증 실패",
+    "detail": "SP4 readback 값이 기대값과 일치하지 않습니다.",
+    "guide": "SP4 설정 및 readback 로직을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E618"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E618",
+    "client_action": "STOP",
+    "category": "MFC",
+    "severity": "ERROR",
+    "message": "SP1 상태 적용 실패",
+    "detail": "SP1 상태 변경이 반영되지 않았습니다.",
+    "guide": "SP1 on/off 제어 로직과 readback을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E619"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E619",
+    "client_action": "STOP",
+    "category": "MFC",
+    "severity": "ERROR",
+    "message": "SP2 상태 적용 실패",
+    "detail": "SP2 상태 변경이 반영되지 않았습니다.",
+    "guide": "SP2 on/off 제어 로직과 readback을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E620"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E620",
+    "client_action": "STOP",
+    "category": "MFC",
+    "severity": "ERROR",
+    "message": "SP3 상태 적용 실패",
+    "detail": "SP3 상태 변경이 반영되지 않았습니다.",
+    "guide": "SP3 on/off 제어 로직과 readback을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E621"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E621",
+    "client_action": "STOP",
+    "category": "MFC",
+    "severity": "ERROR",
+    "message": "SP4 상태 적용 실패",
+    "detail": "SP4 상태 변경이 반영되지 않았습니다.",
+    "guide": "SP4 on/off 제어 로직과 readback을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E622"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E622",
+    "client_action": "STOP",
+    "category": "MFC",
+    "severity": "ERROR",
+    "message": "FLOW_ON 검증 실패",
+    "detail": "FLOW_ON 상태가 기대값과 일치하지 않습니다.",
+    "guide": "유량 ON/OFF 제어와 readback 값을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E623"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E623",
+    "client_action": "STOP",
+    "category": "REQUEST",
+    "severity": "ERROR",
+    "message": "MFC 필수 인자 누락",
+    "detail": "MFC 명령에 필요한 필수 인자가 없습니다.",
+    "guide": "해당 MFC 명령의 필수 인자를 모두 전달하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E624"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E624",
+    "client_action": "STOP",
+    "category": "REQUEST",
+    "severity": "ERROR",
+    "message": "MFC 인자 값 오류",
+    "detail": "MFC 명령 인자 값이 허용 범위를 벗어났습니다.",
+    "guide": "MFC 명령 인자 형식과 범위를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E625"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E625",
+    "client_action": "STOP",
+    "category": "MFC",
+    "severity": "ERROR",
+    "message": "가스 상태 불일치",
+    "detail": "선택된 가스 상태와 실제 MFC 상태가 일치하지 않습니다.",
+    "guide": "가스 선택 로직과 채널 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E626"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E626",
+    "client_action": "RETRY",
+    "category": "IG",
+    "severity": "WARN",
+    "message": "압력 콜백 시간 초과",
+    "detail": "실행 중 pressure callback 응답이 제한 시간 내 오지 않았습니다.",
+    "guide": "압력 읽기 경로와 통신 상태를 확인한 뒤 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E701"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E701",
+    "client_action": "STOP",
+    "category": "POWER_DC",
+    "severity": "ERROR",
+    "message": "DC 목표 도달 실패",
+    "detail": "DC 파워가 목표 출력에 도달하지 못했습니다.",
+    "guide": "DC 전원장치 상태, 부하 상태, 배선 상태를 점검하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E702"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E702",
+    "client_action": "STOP",
+    "category": "POWER_DC",
+    "severity": "ERROR",
+    "message": "DC 저전류 감지",
+    "detail": "DC 전류가 허용치보다 낮아 비정상으로 판단되었습니다.",
+    "guide": "플라즈마 형성 상태, 타깃 상태, 배선 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E703"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E703",
+    "client_action": "RETRY",
+    "category": "POWER_DC",
+    "severity": "WARN",
+    "message": "DC Pulse 연결 준비 실패",
+    "detail": "DC Pulse 장비 연결 준비가 완료되지 않았습니다.",
+    "guide": "장비 연결 상태를 확인한 뒤 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E704"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E704",
+    "client_action": "STOP",
+    "category": "POWER_DC",
+    "severity": "ERROR",
+    "message": "DC Pulse 저전류 자동정지",
+    "detail": "DC Pulse가 저전류 조건으로 자동 정지되었습니다.",
+    "guide": "전원장치 상태, 플라즈마 상태, 부하 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E705"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E705",
+    "client_action": "STOP",
+    "category": "POWER_DC",
+    "severity": "ERROR",
+    "message": "DC Pulse 설정값 편차 과다",
+    "detail": "DC Pulse 실제 출력이 설정값에서 크게 벗어났습니다.",
+    "guide": "설정값, readback, 장비 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E706"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E706",
+    "client_action": "STOP",
+    "category": "POWER_RF",
+    "severity": "ERROR",
+    "message": "RF 반사파 안정화 실패",
+    "detail": "RF reflected power가 제한 시간 내 안정화되지 않았습니다.",
+    "guide": "매칭 상태, 반사파 상태, 케이블, 부하 상태를 점검하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E707"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E707",
+    "client_action": "STOP",
+    "category": "POWER_RF",
+    "severity": "ERROR",
+    "message": "RF 순방향 출력 부족",
+    "detail": "RF forward power가 허용치보다 낮습니다.",
+    "guide": "RF 출력, 매칭, 부하 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E708"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E708",
+    "client_action": "STOP",
+    "category": "POWER_RF",
+    "severity": "ERROR",
+    "message": "RF Pulse 순방향 감시 실패",
+    "detail": "RF Pulse forward power 감시 조건을 만족하지 못했습니다.",
+    "guide": "RF Pulse 장비 설정과 출력 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E709"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E709",
+    "client_action": "STOP",
+    "category": "POWER_RF",
+    "severity": "ERROR",
+    "message": "RF Pulse 반사파 한계 초과",
+    "detail": "RF Pulse reflected power가 허용 한계를 초과했습니다.",
+    "guide": "매칭 상태와 부하 상태를 즉시 점검하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E710"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E710",
+    "client_action": "STOP",
+    "category": "POWER_DC",
+    "severity": "ERROR",
+    "message": "DC Pulse 폭 설정 오류",
+    "detail": "DC Pulse width 값이 허용 범위를 벗어났습니다.",
+    "guide": "width 값은 장비가 허용하는 값만 사용하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E711"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E711",
+    "client_action": "STOP",
+    "category": "PLASMA_CLEANING",
+    "severity": "ERROR",
+    "message": "플라즈마 클리닝 게이트 인터락 불일치",
+    "detail": "플라즈마 클리닝 시작 시 게이트 인터락이 FALSE입니다.",
+    "guide": "게이트 인터락과 로드락 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E712"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E712",
+    "client_action": "STOP",
+    "category": "PLASMA_CLEANING",
+    "severity": "ERROR",
+    "message": "플라즈마 클리닝 게이트 열림 실패",
+    "detail": "플라즈마 클리닝 시작 시 게이트 OPEN_LAMP가 켜지지 않았습니다.",
+    "guide": "게이트 구동부, 센서, PLC 신호를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E713"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E713",
+    "client_action": "STOP",
+    "category": "PLASMA_CLEANING",
+    "severity": "ERROR",
+    "message": "플라즈마 클리닝 IG 콜백 미설정",
+    "detail": "플라즈마 클리닝에 필요한 IG callback이 바인딩되지 않았습니다.",
+    "guide": "플라즈마 클리닝 런타임 초기화와 IG 주입을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E714"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E714",
+    "client_action": "STOP",
+    "category": "PLASMA_CLEANING",
+    "severity": "ERROR",
+    "message": "플라즈마 클리닝 기저압 미도달",
+    "detail": "플라즈마 클리닝 시작 전 기저압에 도달하지 못했습니다.",
+    "guide": "진공 상태를 확인한 뒤 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E715"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E715",
+    "client_action": "STOP",
+    "category": "POWER_DC",
+    "severity": "ERROR",
+    "message": "DC Pulse 설정 콜백 미설정",
+    "detail": "set_dc_pulse_power 콜백이 주입되지 않았습니다.",
+    "guide": "process_controller 초기화 시 DC Pulse 콜백을 연결하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E716"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E716",
+    "client_action": "STOP",
+    "category": "POWER_RF",
+    "severity": "ERROR",
+    "message": "RF Pulse 설정 콜백 미설정",
+    "detail": "set_rf_pulse_power 콜백이 주입되지 않았습니다.",
+    "guide": "process_controller 초기화 시 RF Pulse 콜백을 연결하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E717"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E717",
+    "client_action": "STOP",
+    "category": "POWER_RF",
+    "severity": "ERROR",
+    "message": "RF Pulse 설정값 누락",
+    "detail": "RF Pulse TCP 설정(host/port)이 누락되었습니다.",
+    "guide": "RF Pulse 설정 파일과 초기화 로직을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E718"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E718",
+    "client_action": "STOP",
+    "category": "POWER_RF",
+    "severity": "ERROR",
+    "message": "RF Pulse 주소값 오류",
+    "detail": "RF Pulse 레지스터 주소가 허용 범위를 벗어났습니다.",
+    "guide": "RF Pulse 주소 계산 로직을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E719"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E719",
+    "client_action": "RETRY",
+    "category": "PLASMA_CLEANING",
+    "severity": "WARN",
+    "message": "플라즈마 클리닝 쿨다운 대기",
+    "detail": "이전 공정 종료 후 필요한 쿨다운 시간이 지나지 않았습니다.",
+    "guide": "쿨다운 시간이 지난 후 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E720"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E720",
+    "client_action": "STOP",
+    "category": "POWER_DC",
+    "severity": "ERROR",
+    "message": "파워 설정 후 검증 불일치",
+    "detail": "파워 write 이후 readback 값이 기대값과 일치하지 않습니다.",
+    "guide": "전원장치 제어와 readback 검증 로직을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E801"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E801",
+    "client_action": "RETRY",
+    "category": "OES",
+    "severity": "WARN",
+    "message": "OES 초기화 실패",
+    "detail": "OES 초기화에 실패했습니다.",
+    "guide": "OES 장비 연결과 서비스 초기화 상태를 확인한 뒤 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E802"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E802",
+    "client_action": "STOP",
+    "category": "OES",
+    "severity": "ERROR",
+    "message": "OES 설정값 오류",
+    "detail": "OES 장치 번호 또는 픽셀 설정값이 올바르지 않습니다.",
+    "guide": "OES 설정 파일과 장치 선택값을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E803"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E803",
+    "client_action": "STOP",
+    "category": "RGA",
+    "severity": "ERROR",
+    "message": "RGA 어댑터 없음",
+    "detail": "RGA adapter 또는 필수 객체를 찾지 못했습니다.",
+    "guide": "RGA 초기화와 의존성 로직을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E804"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E804",
+    "client_action": "RETRY",
+    "category": "TSP",
+    "severity": "WARN",
+    "message": "TSP 연결 안 됨",
+    "detail": "TSP 장비가 연결되지 않았습니다.",
+    "guide": "TSP 통신 연결 상태를 확인한 뒤 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E805"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E805",
+    "client_action": "RETRY",
+    "category": "TSP",
+    "severity": "WARN",
+    "message": "TSP 프로토콜 응답 오류",
+    "detail": "TSP 응답이 비어 있거나 STX/CRC 검증에 실패했습니다.",
+    "guide": "TSP 통신 상태와 응답 프레임을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E806"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E806",
+    "client_action": "STOP",
+    "category": "TSP",
+    "severity": "ERROR",
+    "message": "TSP 명령 거부",
+    "detail": "TSP 장비가 명령을 NACK로 거부했습니다.",
+    "guide": "TSP 명령 형식과 장비 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E807"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E807",
+    "client_action": "STOP",
+    "category": "TSP",
+    "severity": "ERROR",
+    "message": "TSP 예상 외 응답",
+    "detail": "TSP가 예상하지 않은 응답을 반환했습니다.",
+    "guide": "TSP 프로토콜 처리 로직과 장비 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E808"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E808",
+    "client_action": "RETRY",
+    "category": "TSP",
+    "severity": "WARN",
+    "message": "TSP 상태 대기 시간 초과",
+    "detail": "TSP 상태가 기대값으로 바뀌기를 기다리다 시간 초과되었습니다.",
+    "guide": "TSP 상태를 확인한 뒤 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E809"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E809",
+    "client_action": "RETRY",
+    "category": "OES",
+    "severity": "WARN",
+    "message": "OES 데몬 미준비",
+    "detail": "OES daemon이 아직 측정 가능한 상태가 아닙니다.",
+    "guide": "OES service 기동 완료 후 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E810"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E810",
+    "client_action": "RETRY",
+    "category": "OES",
+    "severity": "WARN",
+    "message": "OES 데몬 전송 실패",
+    "detail": "OES daemon으로 측정 명령 전송에 실패했습니다.",
+    "guide": "OES service 통신 상태를 확인한 뒤 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E811"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E811",
+    "client_action": "STOP",
+    "category": "OES",
+    "severity": "ERROR",
+    "message": "OES 데몬 측정 실패",
+    "detail": "OES daemon이 측정 실패를 반환했습니다.",
+    "guide": "OES service 로그와 장비 상태를 점검하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E812"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E812",
+    "client_action": "RETRY",
+    "category": "OES",
+    "severity": "WARN",
+    "message": "OES 첫 프레임 수신 실패",
+    "detail": "OES 첫 측정 프레임 수신에 실패했습니다.",
+    "guide": "장비 준비 상태와 service 초기화 상태를 확인한 뒤 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E813"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E813",
+    "client_action": "STOP",
+    "category": "OES",
+    "severity": "ERROR",
+    "message": "OES 장비 준비 안 됨",
+    "detail": "OES 장비가 측정 준비 상태가 아닙니다.",
+    "guide": "OES 장비 상태와 초기화 절차를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E814"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E814",
+    "client_action": "STOP",
+    "category": "RGA",
+    "severity": "ERROR",
+    "message": "RGA 의존성 로드 실패",
+    "detail": "RGA 필수 모듈 import 또는 worker 준비에 실패했습니다.",
+    "guide": "RGA 설치 상태와 실행 환경을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E815"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E815",
+    "client_action": "STOP",
+    "category": "OES",
+    "severity": "ERROR",
+    "message": "OES 챔버 인자 오류",
+    "detail": "OES에 잘못된 챔버 값이 전달되었습니다.",
+    "guide": "OES 호출 시 챔버 값은 1 또는 2만 사용하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E816"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E816",
+    "client_action": "STOP",
+    "category": "TSP",
+    "severity": "ERROR",
+    "message": "TSP WIN 형식 오류",
+    "detail": "TSP WIN 값 형식이 장비 규격과 맞지 않습니다.",
+    "guide": "WIN 값 형식을 장비 규격에 맞게 수정하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E817"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E817",
+    "client_action": "STOP",
+    "category": "TSP",
+    "severity": "ERROR",
+    "message": "TSP 데이터 누락",
+    "detail": "TSP write 명령에 필요한 DATA가 없습니다.",
+    "guide": "TSP write 명령에 DATA를 포함하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E818"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E818",
+    "client_action": "STOP",
+    "category": "TSP",
+    "severity": "ERROR",
+    "message": "TSP 프레임 구성 오류",
+    "detail": "TSP 명령 프레임 생성값이 올바르지 않습니다.",
+    "guide": "TSP 프레임 생성 로직을 점검하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E830"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E830",
+    "client_action": "STOP",
+    "category": "HEATER",
+    "severity": "ERROR",
+    "message": "히터 사용 불가",
+    "detail": "레시피가 히터를 쓰는데(use_heater=T) 히터를 켜거나 유지할 수 없습니다 — 히터 기능 꺼짐(SUPPORTS_HEATER=false), PLC 링크 없음·응답 없음, 히터 이상, 인터락 미충족(TC·D/A·냉각수·진공(메인밸브 인터락)), 설정 쓰기 전, 또는 대기 중 히터가 꺼졌습니다(인터락이 풀리면 PLC 가 히터를 끕니다).",
+    "guide": "히터 패널의 상태 문구·램프(이상·인터락 조건·응답)와 settings.json ch2 의 SUPPORTS_HEATER 를 확인한 뒤 다시 시작하십시오. 진공 조건은 CH2 메인밸브 인터락(터보 배기 중)이 켜져 있어야 합니다."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E831"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E831",
+    "client_action": "STOP",
+    "category": "HEATER",
+    "severity": "ERROR",
+    "message": "히터 승온 시간 초과",
+    "detail": "대기 한도 안에 목표 ±HEATER_SOAK_TOLERANCE 를 HEATER_SOAK_TIME_SEC 동안 유지하지 못했습니다.",
+    "guide": "'승온 정체' 경고가 있었으면 출력 상한(HEATER_MV_LIMIT)이 모자란 것입니다. 목표·램프 속도·HEATER_WAIT_TIMEOUT_SEC 를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E832"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E832",
+    "client_action": "STOP",
+    "category": "HEATER",
+    "severity": "ERROR",
+    "message": "공정 중 히터 이상",
+    "detail": "히터를 쓰는 공정 중에 히터 이상(과온·TC·워치독)이 생겼거나, 인터락(냉각수·진공(메인밸브 인터락) 등)이 풀려 PLC 가 히터를 껐거나, 히터가 꺼졌거나, 출력 무응답·끊김(MV 를 올려도 온도가 오르지 않거나 출력 상한에서 온도가 떨어짐)으로 프로그램이 히터를 껐습니다.",
+    "guide": "로그·히터 패널에서 원인(이상 내용 또는 꺼진 인터락 조건)을 확인해 없앤 뒤 다시 시작하십시오. 이상은 리셋이 필요하고, 인터락이 돌아와도 히터는 저절로 다시 켜지지 않습니다. 출력 무응답·끊김이면 D/A 출력 배선(DV04A CH3 → VARITAP)·VARITAP 전원/차단기·히터 단선·TC 위치를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E833"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E833",
+    "client_action": "STOP",
+    "category": "HEATER",
+    "severity": "ERROR",
+    "message": "히터 유지 모드 진입 실패",
+    "detail": "작업 압력·플라즈마 조건에서 유지 모드(DAC 상한 고정)가 시간 안에 잡히지 않았거나 출력 상한에 붙어 포기했습니다(HEATER_HOLD_FAIL_ACTION=abort 일 때만 공정을 멈춥니다).",
+    "guide": "HEATER_MV_LIMIT 여유와 HEATER_HOLD_WAIT_SEC 를 확인하십시오. 강제 고정으로 계속하려면 HEATER_HOLD_FAIL_ACTION=force."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E840"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E840",
+    "client_action": "STOP",
+    "category": "THICKNESS",
+    "severity": "ERROR",
+    "message": "두께 모니터 응답 없음",
+    "detail": "Thickness 모드 레시피(thickness>0)인데 두께 모니터가 연결돼 있지 않거나 최근 THICKNESS_READY_FRESH_S(기본 5초) 안에 정상 두께 값을 받지 못했습니다.",
+    "guide": "두께 모니터 패널의 연결·응답 램프와 마지막 오류를 확인하십시오(MOXA 포트 THICKNESS_TCP_PORT, 케이블, 장비 전원). 시간으로 끝내려면 레시피 thickness 를 비우고 process_time 을 쓰십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E841"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E841",
+    "client_action": "STOP",
+    "category": "THICKNESS",
+    "severity": "ERROR",
+    "message": "두께 모니터 XTAL FAIL",
+    "detail": "두께 모니터가 크리스탈 이상(XTAL FAIL)을 알려 두께로 종료를 판정할 수 없습니다.",
+    "guide": "크리스탈을 교체하거나 장착 상태를 확인한 뒤 다시 시작하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E842"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E842",
+    "client_action": "STOP",
+    "category": "THICKNESS",
+    "severity": "ERROR",
+    "message": "Thickness 모드 레시피 값 오류",
+    "detail": "Thickness 모드에는 dep_rate 와 thickness 가 모두 0 보다 커야 합니다(예상시간·상한·시간 대체 계산에 씁니다).",
+    "guide": "레시피 dep_rate·thickness 값을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E843"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E843",
+    "client_action": "STOP",
+    "category": "THICKNESS",
+    "severity": "ERROR",
+    "message": "Thickness 모드 건 선택 오류",
+    "detail": "Thickness 모드는 건 1개만 쓸 수 있습니다 — 2개 이상(co-sputter)이거나 사용 건이 없습니다(tooling 을 건별로 적용).",
+    "guide": "건을 1개만 선택하거나, co-sputter 는 thickness 를 비우고 시간(process_time)으로 진행하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E844"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E844",
+    "client_action": "STOP",
+    "category": "THICKNESS",
+    "severity": "ERROR",
+    "message": "Thickness 모드와 중간 펄스 전력 변경 충돌",
+    "detail": "중간 펄스 전력 변경 시점(power_change_time)이 메인 공정 구간에 있습니다. Thickness 모드는 메인 구간 길이가 정해지지 않아 함께 쓸 수 없습니다.",
+    "guide": "변경 시점을 Shutter Delay 안으로 옮기거나, 중간 변경을 쓰려면 thickness 를 비우고 시간으로 진행하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E845"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E845",
+    "client_action": "STOP",
+    "category": "THICKNESS",
+    "severity": "ERROR",
+    "message": "두께 모니터 Factor 미설정",
+    "detail": "확정된 chuck 위치 × 사용 건의 tooling, 또는 그 건의 density·Z-factor 가 Factor 파일에 없거나 chuck 위치를 알 수 없습니다.",
+    "guide": "두께 모니터 패널 [Factor 설정](config/thickness_factors_ch{N}.json)에서 값을 넣고 chuck 위치 램프를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E846"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E846",
+    "client_action": "STOP",
+    "category": "THICKNESS",
+    "severity": "ERROR",
+    "message": "두께 모니터 재료값 적용 실패",
+    "detail": "두께 모니터에 density/Z-factor/tooling 을 쓰고 되읽어 확인하지 못했습니다(1회 재시도 뒤에도 불일치·통신 실패·범위 밖).",
+    "guide": "두께 모니터 통신 상태와 Factor 값 범위(density 0.5~99.99, Z 0.1~9.999, tooling 10~399)를 확인하고 다시 시작하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E848"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E848",
+    "client_action": "STOP",
+    "category": "THICKNESS",
+    "severity": "ERROR",
+    "message": "두께 목표 미도달 — 최대 시간 초과",
+    "detail": "두께 모니터 통신은 정상인데 최대 시간 상한(max(예상 × THICKNESS_MAX_TIME_RATIO, 예상 + THICKNESS_MAX_TIME_MARGIN_S), 예상 = thickness ÷ dep_rate) 안에 목표 두께에 닿지 않았습니다 — 센서(크리스탈) 가림, tooling·density 오입력, 플라즈마 이상(출력·압력) 등.",
+    "guide": "두께 센서 위치·가림, [Factor 설정]의 tooling·density·Z, 공정 중 전원 출력·압력 기록을 확인하고, 레시피 dep_rate 가 실제보다 너무 크지 않은지 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E847"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E847",
+    "client_action": "STOP",
+    "category": "THICKNESS",
+    "severity": "ERROR",
+    "message": "두께 대기 단계 구성 오류",
+    "detail": "THICKNESS_WAIT 단계의 값(목표·예상·상한)이 올바르지 않습니다(프로그램 내부 오류).",
+    "guide": "로그를 개발 담당에게 전달하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E901"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E901",
+    "client_action": "IGNORE",
+    "category": "LOGGING",
+    "severity": "WARN",
+    "message": "로그 저장 실패",
+    "detail": "로그 파일 저장 또는 append 처리에 실패했습니다.",
+    "guide": "경로, 권한, 파일 잠금, 디스크 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E902"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E902",
+    "client_action": "IGNORE",
+    "category": "LOGGING",
+    "severity": "WARN",
+    "message": "로그 폴더 생성 실패",
+    "detail": "로그 폴더 생성에 실패했습니다.",
+    "guide": "폴더 권한과 경로 유효성을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E903"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E903",
+    "client_action": "IGNORE",
+    "category": "UI",
+    "severity": "WARN",
+    "message": "UI 미준비",
+    "detail": "UI 또는 parent가 아직 준비되지 않았습니다.",
+    "guide": "UI 연결 상태를 점검하되 공정 본체에는 영향이 없는지 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E904"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E904",
+    "client_action": "IGNORE",
+    "category": "UI",
+    "severity": "WARN",
+    "message": "부모 위젯 없음",
+    "detail": "필요한 parent widget을 찾지 못했습니다.",
+    "guide": "UI 참조 경로를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E905"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E905",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "미처리 예외",
+    "detail": "예상하지 못한 예외가 처리되지 않은 채 발생했습니다.",
+    "guide": "traceback을 확인하고 해당 예외를 AppError로 정규화하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E906"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E906",
+    "client_action": "RETRY",
+    "category": "RUNTIME",
+    "severity": "WARN",
+    "message": "폴링 작업 종료",
+    "detail": "장비 polling task가 비정상 종료되었습니다.",
+    "guide": "폴링 재시작 또는 장비 재연결 후 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E907"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E907",
+    "client_action": "IGNORE",
+    "category": "LOGGING",
+    "severity": "WARN",
+    "message": "CSV 파일 열기 실패",
+    "detail": "CSV 파일 열기 또는 append에 실패했습니다.",
+    "guide": "파일 잠금 여부와 경로 권한을 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E908"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E908",
+    "client_action": "IGNORE",
+    "category": "LOGGING",
+    "severity": "WARN",
+    "message": "디스크 쓰기 실패",
+    "detail": "디스크 공간 부족 또는 쓰기 실패가 발생했습니다.",
+    "guide": "디스크 공간과 저장 경로 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E909"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E909",
+    "client_action": "IGNORE",
+    "category": "LOGGING",
+    "severity": "WARN",
+    "message": "공유 저장소 불안정",
+    "detail": "NAS 또는 UNC 경로 접근이 불안정합니다.",
+    "guide": "네트워크 저장소 상태를 확인하고 필요 시 로컬 폴백을 사용하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E910"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E910",
+    "client_action": "IGNORE",
+    "category": "INTERNAL",
+    "severity": "WARN",
+    "message": "런타임 덤프 중복 실행",
+    "detail": "runtime dump 작업이 이미 실행 중입니다.",
+    "guide": "중복 덤프 요청을 막고 현재 작업 완료를 기다리십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E911"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E911",
+    "client_action": "IGNORE",
+    "category": "LOGGING",
+    "severity": "WARN",
+    "message": "기본 로그 경로 미설정",
+    "detail": "기본 로그 저장 경로가 설정되지 않았습니다.",
+    "guide": "로그 초기화 시 primary_path를 설정하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E700"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E700",
+    "client_action": "RETRY_LATER",
+    "category": "BUSY",
+    "severity": "WARN",
+    "message": "공정 쿨다운 대기 중",
+    "detail": "이전 공정 종료 후 쿨다운 시간(60초)이 필요합니다.",
+    "guide": "안내된 시간 이후 다시 시도하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E999"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "명시적으로 분류되지 않은 내부 예외가 발생했습니다.",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E302",
+    "detail": "G_V_1_인터락=FALSE",
+    "meta": {
+     "ch": 1
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E302",
+    "client_action": "STOP",
+    "category": "SAFETY_GATE",
+    "severity": "ERROR",
+    "message": "게이트 인터락 불일치",
+    "detail": "G_V_1_인터락=FALSE",
+    "guide": "PLC 게이트 인터락 조건, 센서, 배선, 기구 상태를 확인하십시오.",
+    "meta": {
+     "ch": 1
+    }
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "e302",
+    "detail": "  "
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E302",
+    "client_action": "STOP",
+    "category": "SAFETY_GATE",
+    "severity": "ERROR",
+    "message": "게이트 인터락 불일치",
+    "detail": "게이트 OPEN 조건의 인터락이 FALSE입니다.",
+    "guide": "PLC 게이트 인터락 조건, 센서, 배선, 기구 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": " E302 ",
+    "meta": {}
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E302",
+    "client_action": "STOP",
+    "category": "SAFETY_GATE",
+    "severity": "ERROR",
+    "message": "게이트 인터락 불일치",
+    "detail": "게이트 OPEN 조건의 인터락이 FALSE입니다.",
+    "guide": "PLC 게이트 인터락 조건, 센서, 배선, 기구 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E000",
+    "detail": ""
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "명시적으로 분류되지 않은 내부 예외가 발생했습니다.",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "",
+    "detail": "x"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "x",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "302",
+    "detail": "",
+    "meta": {
+     "z": 1,
+     "a": 2
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "명시적으로 분류되지 않은 내부 예외가 발생했습니다.",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "meta": {
+     "z": 1,
+     "a": 2
+    }
+   }
+  },
+  {
+   "fn": "build_error_payload_from_code",
+   "args": {
+    "code": "E999",
+    "detail": "d"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "d",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오."
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "value"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "bad value 3",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "cause_type": "ValueError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "value",
+    "default_code": "E110",
+    "detail": "인자 detail",
+    "meta": {
+     "m": 1
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E110",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "핸들러 내부 예외",
+    "detail": "인자 detail",
+    "guide": "해당 핸들러 내부 예외를 AppError로 명시적으로 변환하십시오.",
+    "meta": {
+     "m": 1
+    },
+    "cause_type": "ValueError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "value",
+    "detail": "   "
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "bad value 3",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "cause_type": "ValueError"
+   }
+  },
+  {
+   "fn": "build_unknown_error_payload",
+   "args": {
+    "exc": "value"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "bad value 3",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "cause_type": "ValueError"
+   }
+  },
+  {
+   "fn": "build_handler_error_payload",
+   "args": {
+    "exc": "value",
+    "meta": {
+     "cmd": "VACUUM_ON"
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E110",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "핸들러 내부 예외",
+    "detail": "bad value 3",
+    "guide": "해당 핸들러 내부 예외를 AppError로 명시적으로 변환하십시오.",
+    "meta": {
+     "cmd": "VACUUM_ON"
+    },
+    "cause_type": "ValueError"
+   }
+  },
+  {
+   "fn": "ensure_app_error",
+   "args": {
+    "exc": "value",
+    "default_code": "E205",
+    "meta": {
+     "k": "v"
+    }
+   },
+   "out": {
+    "code": "E205",
+    "detail": "bad value 3",
+    "meta": {
+     "k": "v"
+    },
+    "cause_type": "ValueError",
+    "str": "E205: bad value 3"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "value_blank"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "명시적으로 분류되지 않은 내부 예외가 발생했습니다.",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "cause_type": "ValueError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "value_blank",
+    "default_code": "E110",
+    "detail": "인자 detail",
+    "meta": {
+     "m": 1
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E110",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "핸들러 내부 예외",
+    "detail": "인자 detail",
+    "guide": "해당 핸들러 내부 예외를 AppError로 명시적으로 변환하십시오.",
+    "meta": {
+     "m": 1
+    },
+    "cause_type": "ValueError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "value_blank",
+    "detail": "   "
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "명시적으로 분류되지 않은 내부 예외가 발생했습니다.",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "cause_type": "ValueError"
+   }
+  },
+  {
+   "fn": "build_unknown_error_payload",
+   "args": {
+    "exc": "value_blank"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "명시적으로 분류되지 않은 내부 예외가 발생했습니다.",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "cause_type": "ValueError"
+   }
+  },
+  {
+   "fn": "build_handler_error_payload",
+   "args": {
+    "exc": "value_blank",
+    "meta": {
+     "cmd": "VACUUM_ON"
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E110",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "핸들러 내부 예외",
+    "detail": "핸들러 내부에서 예외가 발생했지만, 명시적인 에러코드로 정규화되지 않았습니다.",
+    "guide": "해당 핸들러 내부 예외를 AppError로 명시적으로 변환하십시오.",
+    "meta": {
+     "cmd": "VACUUM_ON"
+    },
+    "cause_type": "ValueError"
+   }
+  },
+  {
+   "fn": "ensure_app_error",
+   "args": {
+    "exc": "value_blank",
+    "default_code": "E205",
+    "meta": {
+     "k": "v"
+    }
+   },
+   "out": {
+    "code": "E205",
+    "detail": "",
+    "meta": {
+     "k": "v"
+    },
+    "cause_type": "ValueError",
+    "str": "E205"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "runtime_empty"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "명시적으로 분류되지 않은 내부 예외가 발생했습니다.",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "cause_type": "RuntimeError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "runtime_empty",
+    "default_code": "E110",
+    "detail": "인자 detail",
+    "meta": {
+     "m": 1
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E110",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "핸들러 내부 예외",
+    "detail": "인자 detail",
+    "guide": "해당 핸들러 내부 예외를 AppError로 명시적으로 변환하십시오.",
+    "meta": {
+     "m": 1
+    },
+    "cause_type": "RuntimeError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "runtime_empty",
+    "detail": "   "
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "명시적으로 분류되지 않은 내부 예외가 발생했습니다.",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "cause_type": "RuntimeError"
+   }
+  },
+  {
+   "fn": "build_unknown_error_payload",
+   "args": {
+    "exc": "runtime_empty"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "명시적으로 분류되지 않은 내부 예외가 발생했습니다.",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "cause_type": "RuntimeError"
+   }
+  },
+  {
+   "fn": "build_handler_error_payload",
+   "args": {
+    "exc": "runtime_empty",
+    "meta": {
+     "cmd": "VACUUM_ON"
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E110",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "핸들러 내부 예외",
+    "detail": "핸들러 내부에서 예외가 발생했지만, 명시적인 에러코드로 정규화되지 않았습니다.",
+    "guide": "해당 핸들러 내부 예외를 AppError로 명시적으로 변환하십시오.",
+    "meta": {
+     "cmd": "VACUUM_ON"
+    },
+    "cause_type": "RuntimeError"
+   }
+  },
+  {
+   "fn": "ensure_app_error",
+   "args": {
+    "exc": "runtime_empty",
+    "default_code": "E205",
+    "meta": {
+     "k": "v"
+    }
+   },
+   "out": {
+    "code": "E205",
+    "detail": "",
+    "meta": {
+     "k": "v"
+    },
+    "cause_type": "RuntimeError",
+    "str": "E205"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "timeout"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "PLC read timeout",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "cause_type": "TimeoutError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "timeout",
+    "default_code": "E110",
+    "detail": "인자 detail",
+    "meta": {
+     "m": 1
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E110",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "핸들러 내부 예외",
+    "detail": "인자 detail",
+    "guide": "해당 핸들러 내부 예외를 AppError로 명시적으로 변환하십시오.",
+    "meta": {
+     "m": 1
+    },
+    "cause_type": "TimeoutError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "timeout",
+    "detail": "   "
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "PLC read timeout",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "cause_type": "TimeoutError"
+   }
+  },
+  {
+   "fn": "build_unknown_error_payload",
+   "args": {
+    "exc": "timeout"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "PLC read timeout",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "cause_type": "TimeoutError"
+   }
+  },
+  {
+   "fn": "build_handler_error_payload",
+   "args": {
+    "exc": "timeout",
+    "meta": {
+     "cmd": "VACUUM_ON"
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E110",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "핸들러 내부 예외",
+    "detail": "PLC read timeout",
+    "guide": "해당 핸들러 내부 예외를 AppError로 명시적으로 변환하십시오.",
+    "meta": {
+     "cmd": "VACUUM_ON"
+    },
+    "cause_type": "TimeoutError"
+   }
+  },
+  {
+   "fn": "ensure_app_error",
+   "args": {
+    "exc": "timeout",
+    "default_code": "E205",
+    "meta": {
+     "k": "v"
+    }
+   },
+   "out": {
+    "code": "E205",
+    "detail": "PLC read timeout",
+    "meta": {
+     "k": "v"
+    },
+    "cause_type": "TimeoutError",
+    "str": "E205: PLC read timeout"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "key"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "'G_V_1'",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "cause_type": "KeyError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "key",
+    "default_code": "E110",
+    "detail": "인자 detail",
+    "meta": {
+     "m": 1
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E110",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "핸들러 내부 예외",
+    "detail": "인자 detail",
+    "guide": "해당 핸들러 내부 예외를 AppError로 명시적으로 변환하십시오.",
+    "meta": {
+     "m": 1
+    },
+    "cause_type": "KeyError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "key",
+    "detail": "   "
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "'G_V_1'",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "cause_type": "KeyError"
+   }
+  },
+  {
+   "fn": "build_unknown_error_payload",
+   "args": {
+    "exc": "key"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "'G_V_1'",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "cause_type": "KeyError"
+   }
+  },
+  {
+   "fn": "build_handler_error_payload",
+   "args": {
+    "exc": "key",
+    "meta": {
+     "cmd": "VACUUM_ON"
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E110",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "핸들러 내부 예외",
+    "detail": "'G_V_1'",
+    "guide": "해당 핸들러 내부 예외를 AppError로 명시적으로 변환하십시오.",
+    "meta": {
+     "cmd": "VACUUM_ON"
+    },
+    "cause_type": "KeyError"
+   }
+  },
+  {
+   "fn": "ensure_app_error",
+   "args": {
+    "exc": "key",
+    "default_code": "E205",
+    "meta": {
+     "k": "v"
+    }
+   },
+   "out": {
+    "code": "E205",
+    "detail": "'G_V_1'",
+    "meta": {
+     "k": "v"
+    },
+    "cause_type": "KeyError",
+    "str": "E205: 'G_V_1'"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "coded"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "레시피 파일 없음",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "cause_type": "CodedRuntimeError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "coded",
+    "default_code": "E110",
+    "detail": "인자 detail",
+    "meta": {
+     "m": 1
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E110",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "핸들러 내부 예외",
+    "detail": "인자 detail",
+    "guide": "해당 핸들러 내부 예외를 AppError로 명시적으로 변환하십시오.",
+    "meta": {
+     "m": 1
+    },
+    "cause_type": "CodedRuntimeError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "coded",
+    "detail": "   "
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "레시피 파일 없음",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "cause_type": "CodedRuntimeError"
+   }
+  },
+  {
+   "fn": "build_unknown_error_payload",
+   "args": {
+    "exc": "coded"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "레시피 파일 없음",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "cause_type": "CodedRuntimeError"
+   }
+  },
+  {
+   "fn": "build_handler_error_payload",
+   "args": {
+    "exc": "coded",
+    "meta": {
+     "cmd": "VACUUM_ON"
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E110",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "핸들러 내부 예외",
+    "detail": "레시피 파일 없음",
+    "guide": "해당 핸들러 내부 예외를 AppError로 명시적으로 변환하십시오.",
+    "meta": {
+     "cmd": "VACUUM_ON"
+    },
+    "cause_type": "CodedRuntimeError"
+   }
+  },
+  {
+   "fn": "ensure_app_error",
+   "args": {
+    "exc": "coded",
+    "default_code": "E205",
+    "meta": {
+     "k": "v"
+    }
+   },
+   "out": {
+    "code": "E205",
+    "detail": "레시피 파일 없음",
+    "meta": {
+     "k": "v"
+    },
+    "cause_type": "CodedRuntimeError",
+    "str": "E205: 레시피 파일 없음"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "app"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E302",
+    "client_action": "STOP",
+    "category": "SAFETY_GATE",
+    "severity": "ERROR",
+    "message": "게이트 인터락 불일치",
+    "detail": "G_V_1_인터락=FALSE",
+    "guide": "PLC 게이트 인터락 조건, 센서, 배선, 기구 상태를 확인하십시오.",
+    "meta": {
+     "ch": 1,
+     "signal": "G_V_1"
+    },
+    "cause_type": "AppError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "app",
+    "default_code": "E110",
+    "detail": "인자 detail",
+    "meta": {
+     "m": 1
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E302",
+    "client_action": "STOP",
+    "category": "SAFETY_GATE",
+    "severity": "ERROR",
+    "message": "게이트 인터락 불일치",
+    "detail": "인자 detail",
+    "guide": "PLC 게이트 인터락 조건, 센서, 배선, 기구 상태를 확인하십시오.",
+    "meta": {
+     "ch": 1,
+     "signal": "G_V_1",
+     "m": 1
+    },
+    "cause_type": "AppError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "app",
+    "detail": "   "
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E302",
+    "client_action": "STOP",
+    "category": "SAFETY_GATE",
+    "severity": "ERROR",
+    "message": "게이트 인터락 불일치",
+    "detail": "G_V_1_인터락=FALSE",
+    "guide": "PLC 게이트 인터락 조건, 센서, 배선, 기구 상태를 확인하십시오.",
+    "meta": {
+     "ch": 1,
+     "signal": "G_V_1"
+    },
+    "cause_type": "AppError"
+   }
+  },
+  {
+   "fn": "build_unknown_error_payload",
+   "args": {
+    "exc": "app"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E302",
+    "client_action": "STOP",
+    "category": "SAFETY_GATE",
+    "severity": "ERROR",
+    "message": "게이트 인터락 불일치",
+    "detail": "G_V_1_인터락=FALSE",
+    "guide": "PLC 게이트 인터락 조건, 센서, 배선, 기구 상태를 확인하십시오.",
+    "meta": {
+     "ch": 1,
+     "signal": "G_V_1"
+    },
+    "cause_type": "AppError"
+   }
+  },
+  {
+   "fn": "build_handler_error_payload",
+   "args": {
+    "exc": "app",
+    "meta": {
+     "cmd": "VACUUM_ON"
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E302",
+    "client_action": "STOP",
+    "category": "SAFETY_GATE",
+    "severity": "ERROR",
+    "message": "게이트 인터락 불일치",
+    "detail": "G_V_1_인터락=FALSE",
+    "guide": "PLC 게이트 인터락 조건, 센서, 배선, 기구 상태를 확인하십시오.",
+    "meta": {
+     "ch": 1,
+     "signal": "G_V_1",
+     "cmd": "VACUUM_ON"
+    },
+    "cause_type": "AppError"
+   }
+  },
+  {
+   "fn": "ensure_app_error",
+   "args": {
+    "exc": "app",
+    "default_code": "E205",
+    "meta": {
+     "k": "v"
+    }
+   },
+   "out": {
+    "code": "E302",
+    "detail": "G_V_1_인터락=FALSE",
+    "meta": {
+     "ch": 1,
+     "signal": "G_V_1",
+     "k": "v"
+    },
+    "cause_type": "AppError",
+    "str": "E302: G_V_1_인터락=FALSE"
+   }
+  },
+  {
+   "fn": "AppError",
+   "args": {
+    "exc": "app"
+   },
+   "out": {
+    "code": "E302",
+    "error_code": "E302",
+    "detail": "G_V_1_인터락=FALSE",
+    "meta": {
+     "ch": 1,
+     "signal": "G_V_1"
+    },
+    "str": "E302: G_V_1_인터락=FALSE",
+    "repr": "AppError(code='E302', detail='G_V_1_인터락=FALSE', meta={'ch': 1, 'signal': 'G_V_1'}, cause=None)",
+    "to_dict": {
+     "error_code": "E302",
+     "detail": "G_V_1_인터락=FALSE",
+     "meta": {
+      "ch": 1,
+      "signal": "G_V_1"
+     }
+    }
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "app_lower"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E711",
+    "client_action": "STOP",
+    "category": "PLASMA_CLEANING",
+    "severity": "ERROR",
+    "message": "플라즈마 클리닝 게이트 인터락 불일치",
+    "detail": "공백 detail",
+    "guide": "게이트 인터락과 로드락 상태를 확인하십시오.",
+    "cause_type": "AppError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "app_lower",
+    "default_code": "E110",
+    "detail": "인자 detail",
+    "meta": {
+     "m": 1
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E711",
+    "client_action": "STOP",
+    "category": "PLASMA_CLEANING",
+    "severity": "ERROR",
+    "message": "플라즈마 클리닝 게이트 인터락 불일치",
+    "detail": "인자 detail",
+    "guide": "게이트 인터락과 로드락 상태를 확인하십시오.",
+    "meta": {
+     "m": 1
+    },
+    "cause_type": "AppError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "app_lower",
+    "detail": "   "
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E711",
+    "client_action": "STOP",
+    "category": "PLASMA_CLEANING",
+    "severity": "ERROR",
+    "message": "플라즈마 클리닝 게이트 인터락 불일치",
+    "detail": "공백 detail",
+    "guide": "게이트 인터락과 로드락 상태를 확인하십시오.",
+    "cause_type": "AppError"
+   }
+  },
+  {
+   "fn": "build_unknown_error_payload",
+   "args": {
+    "exc": "app_lower"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E711",
+    "client_action": "STOP",
+    "category": "PLASMA_CLEANING",
+    "severity": "ERROR",
+    "message": "플라즈마 클리닝 게이트 인터락 불일치",
+    "detail": "공백 detail",
+    "guide": "게이트 인터락과 로드락 상태를 확인하십시오.",
+    "cause_type": "AppError"
+   }
+  },
+  {
+   "fn": "build_handler_error_payload",
+   "args": {
+    "exc": "app_lower",
+    "meta": {
+     "cmd": "VACUUM_ON"
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E711",
+    "client_action": "STOP",
+    "category": "PLASMA_CLEANING",
+    "severity": "ERROR",
+    "message": "플라즈마 클리닝 게이트 인터락 불일치",
+    "detail": "공백 detail",
+    "guide": "게이트 인터락과 로드락 상태를 확인하십시오.",
+    "meta": {
+     "cmd": "VACUUM_ON"
+    },
+    "cause_type": "AppError"
+   }
+  },
+  {
+   "fn": "ensure_app_error",
+   "args": {
+    "exc": "app_lower",
+    "default_code": "E205",
+    "meta": {
+     "k": "v"
+    }
+   },
+   "out": {
+    "code": "E711",
+    "detail": "공백 detail",
+    "meta": {
+     "k": "v"
+    },
+    "cause_type": "AppError",
+    "str": "E711: 공백 detail"
+   }
+  },
+  {
+   "fn": "AppError",
+   "args": {
+    "exc": "app_lower"
+   },
+   "out": {
+    "code": "E711",
+    "error_code": "E711",
+    "detail": "공백 detail",
+    "meta": {},
+    "str": "E711: 공백 detail",
+    "repr": "AppError(code='E711', detail='공백 detail', meta={}, cause=None)",
+    "to_dict": {
+     "error_code": "E711",
+     "detail": "공백 detail",
+     "meta": {}
+    }
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "app_nodetail"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E401",
+    "client_action": "RETRY",
+    "category": "PLC_COMM",
+    "severity": "WARN",
+    "message": "PLC 연결 실패",
+    "detail": "E401",
+    "guide": "PLC 전원, IP, 포트, 네트워크 상태를 확인한 뒤 다시 시도하십시오.",
+    "cause_type": "AppError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "app_nodetail",
+    "default_code": "E110",
+    "detail": "인자 detail",
+    "meta": {
+     "m": 1
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E401",
+    "client_action": "RETRY",
+    "category": "PLC_COMM",
+    "severity": "WARN",
+    "message": "PLC 연결 실패",
+    "detail": "인자 detail",
+    "guide": "PLC 전원, IP, 포트, 네트워크 상태를 확인한 뒤 다시 시도하십시오.",
+    "meta": {
+     "m": 1
+    },
+    "cause_type": "AppError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "app_nodetail",
+    "detail": "   "
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E401",
+    "client_action": "RETRY",
+    "category": "PLC_COMM",
+    "severity": "WARN",
+    "message": "PLC 연결 실패",
+    "detail": "E401",
+    "guide": "PLC 전원, IP, 포트, 네트워크 상태를 확인한 뒤 다시 시도하십시오.",
+    "cause_type": "AppError"
+   }
+  },
+  {
+   "fn": "build_unknown_error_payload",
+   "args": {
+    "exc": "app_nodetail"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E401",
+    "client_action": "RETRY",
+    "category": "PLC_COMM",
+    "severity": "WARN",
+    "message": "PLC 연결 실패",
+    "detail": "E401",
+    "guide": "PLC 전원, IP, 포트, 네트워크 상태를 확인한 뒤 다시 시도하십시오.",
+    "cause_type": "AppError"
+   }
+  },
+  {
+   "fn": "build_handler_error_payload",
+   "args": {
+    "exc": "app_nodetail",
+    "meta": {
+     "cmd": "VACUUM_ON"
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E401",
+    "client_action": "RETRY",
+    "category": "PLC_COMM",
+    "severity": "WARN",
+    "message": "PLC 연결 실패",
+    "detail": "E401",
+    "guide": "PLC 전원, IP, 포트, 네트워크 상태를 확인한 뒤 다시 시도하십시오.",
+    "meta": {
+     "cmd": "VACUUM_ON"
+    },
+    "cause_type": "AppError"
+   }
+  },
+  {
+   "fn": "ensure_app_error",
+   "args": {
+    "exc": "app_nodetail",
+    "default_code": "E205",
+    "meta": {
+     "k": "v"
+    }
+   },
+   "out": {
+    "code": "E401",
+    "detail": "",
+    "meta": {
+     "k": "v"
+    },
+    "cause_type": "AppError",
+    "str": "E401"
+   }
+  },
+  {
+   "fn": "AppError",
+   "args": {
+    "exc": "app_nodetail"
+   },
+   "out": {
+    "code": "E401",
+    "error_code": "E401",
+    "detail": "",
+    "meta": {},
+    "str": "E401",
+    "repr": "AppError(code='E401', detail='', meta={}, cause=None)",
+    "to_dict": {
+     "error_code": "E401",
+     "detail": "",
+     "meta": {}
+    }
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "app_unknown"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "없는 코드",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "cause_type": "AppError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "app_unknown",
+    "default_code": "E110",
+    "detail": "인자 detail",
+    "meta": {
+     "m": 1
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "인자 detail",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "meta": {
+     "m": 1
+    },
+    "cause_type": "AppError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "app_unknown",
+    "detail": "   "
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "없는 코드",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "cause_type": "AppError"
+   }
+  },
+  {
+   "fn": "build_unknown_error_payload",
+   "args": {
+    "exc": "app_unknown"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "없는 코드",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "cause_type": "AppError"
+   }
+  },
+  {
+   "fn": "build_handler_error_payload",
+   "args": {
+    "exc": "app_unknown",
+    "meta": {
+     "cmd": "VACUUM_ON"
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "없는 코드",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "meta": {
+     "cmd": "VACUUM_ON"
+    },
+    "cause_type": "AppError"
+   }
+  },
+  {
+   "fn": "ensure_app_error",
+   "args": {
+    "exc": "app_unknown",
+    "default_code": "E205",
+    "meta": {
+     "k": "v"
+    }
+   },
+   "out": {
+    "code": "E000",
+    "detail": "없는 코드",
+    "meta": {
+     "k": "v"
+    },
+    "cause_type": "AppError",
+    "str": "E000: 없는 코드"
+   }
+  },
+  {
+   "fn": "AppError",
+   "args": {
+    "exc": "app_unknown"
+   },
+   "out": {
+    "code": "E000",
+    "error_code": "E000",
+    "detail": "없는 코드",
+    "meta": {},
+    "str": "E000: 없는 코드",
+    "repr": "AppError(code='E000', detail='없는 코드', meta={}, cause=None)",
+    "to_dict": {
+     "error_code": "E000",
+     "detail": "없는 코드",
+     "meta": {}
+    }
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "app_cause"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E610",
+    "client_action": "STOP",
+    "category": "MFC",
+    "severity": "ERROR",
+    "message": "MFC 압력 객체 미설정",
+    "detail": "MFC 응답 없음",
+    "guide": "MFC pressure 객체 주입 로직을 확인하십시오.",
+    "cause_type": "TimeoutError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "app_cause",
+    "default_code": "E110",
+    "detail": "인자 detail",
+    "meta": {
+     "m": 1
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E610",
+    "client_action": "STOP",
+    "category": "MFC",
+    "severity": "ERROR",
+    "message": "MFC 압력 객체 미설정",
+    "detail": "인자 detail",
+    "guide": "MFC pressure 객체 주입 로직을 확인하십시오.",
+    "meta": {
+     "m": 1
+    },
+    "cause_type": "TimeoutError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "app_cause",
+    "detail": "   "
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E610",
+    "client_action": "STOP",
+    "category": "MFC",
+    "severity": "ERROR",
+    "message": "MFC 압력 객체 미설정",
+    "detail": "MFC 응답 없음",
+    "guide": "MFC pressure 객체 주입 로직을 확인하십시오.",
+    "cause_type": "TimeoutError"
+   }
+  },
+  {
+   "fn": "build_unknown_error_payload",
+   "args": {
+    "exc": "app_cause"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E610",
+    "client_action": "STOP",
+    "category": "MFC",
+    "severity": "ERROR",
+    "message": "MFC 압력 객체 미설정",
+    "detail": "MFC 응답 없음",
+    "guide": "MFC pressure 객체 주입 로직을 확인하십시오.",
+    "cause_type": "TimeoutError"
+   }
+  },
+  {
+   "fn": "build_handler_error_payload",
+   "args": {
+    "exc": "app_cause",
+    "meta": {
+     "cmd": "VACUUM_ON"
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E610",
+    "client_action": "STOP",
+    "category": "MFC",
+    "severity": "ERROR",
+    "message": "MFC 압력 객체 미설정",
+    "detail": "MFC 응답 없음",
+    "guide": "MFC pressure 객체 주입 로직을 확인하십시오.",
+    "meta": {
+     "cmd": "VACUUM_ON"
+    },
+    "cause_type": "TimeoutError"
+   }
+  },
+  {
+   "fn": "ensure_app_error",
+   "args": {
+    "exc": "app_cause",
+    "default_code": "E205",
+    "meta": {
+     "k": "v"
+    }
+   },
+   "out": {
+    "code": "E610",
+    "detail": "",
+    "meta": {
+     "k": "v"
+    },
+    "cause_type": "TimeoutError",
+    "str": "E610"
+   }
+  },
+  {
+   "fn": "AppError",
+   "args": {
+    "exc": "app_cause"
+   },
+   "out": {
+    "code": "E610",
+    "error_code": "E610",
+    "detail": "",
+    "meta": {},
+    "str": "E610",
+    "repr": "AppError(code='E610', detail='', meta={}, cause=TimeoutError('MFC 응답 없음'))",
+    "to_dict": {
+     "error_code": "E610",
+     "detail": "",
+     "meta": {},
+     "cause_type": "TimeoutError",
+     "cause": "MFC 응답 없음"
+    }
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "app_cause_detail"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E610",
+    "client_action": "STOP",
+    "category": "MFC",
+    "severity": "ERROR",
+    "message": "MFC 압력 객체 미설정",
+    "detail": "R5 무응답",
+    "guide": "MFC pressure 객체 주입 로직을 확인하십시오.",
+    "cause_type": "OSError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "app_cause_detail",
+    "default_code": "E110",
+    "detail": "인자 detail",
+    "meta": {
+     "m": 1
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E610",
+    "client_action": "STOP",
+    "category": "MFC",
+    "severity": "ERROR",
+    "message": "MFC 압력 객체 미설정",
+    "detail": "인자 detail",
+    "guide": "MFC pressure 객체 주입 로직을 확인하십시오.",
+    "meta": {
+     "m": 1
+    },
+    "cause_type": "OSError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "app_cause_detail",
+    "detail": "   "
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E610",
+    "client_action": "STOP",
+    "category": "MFC",
+    "severity": "ERROR",
+    "message": "MFC 압력 객체 미설정",
+    "detail": "R5 무응답",
+    "guide": "MFC pressure 객체 주입 로직을 확인하십시오.",
+    "cause_type": "OSError"
+   }
+  },
+  {
+   "fn": "build_unknown_error_payload",
+   "args": {
+    "exc": "app_cause_detail"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E610",
+    "client_action": "STOP",
+    "category": "MFC",
+    "severity": "ERROR",
+    "message": "MFC 압력 객체 미설정",
+    "detail": "R5 무응답",
+    "guide": "MFC pressure 객체 주입 로직을 확인하십시오.",
+    "cause_type": "OSError"
+   }
+  },
+  {
+   "fn": "build_handler_error_payload",
+   "args": {
+    "exc": "app_cause_detail",
+    "meta": {
+     "cmd": "VACUUM_ON"
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E610",
+    "client_action": "STOP",
+    "category": "MFC",
+    "severity": "ERROR",
+    "message": "MFC 압력 객체 미설정",
+    "detail": "R5 무응답",
+    "guide": "MFC pressure 객체 주입 로직을 확인하십시오.",
+    "meta": {
+     "cmd": "VACUUM_ON"
+    },
+    "cause_type": "OSError"
+   }
+  },
+  {
+   "fn": "ensure_app_error",
+   "args": {
+    "exc": "app_cause_detail",
+    "default_code": "E205",
+    "meta": {
+     "k": "v"
+    }
+   },
+   "out": {
+    "code": "E610",
+    "detail": "R5 무응답",
+    "meta": {
+     "k": "v"
+    },
+    "cause_type": "OSError",
+    "str": "E610: R5 무응답"
+   }
+  },
+  {
+   "fn": "AppError",
+   "args": {
+    "exc": "app_cause_detail"
+   },
+   "out": {
+    "code": "E610",
+    "error_code": "E610",
+    "detail": "R5 무응답",
+    "meta": {},
+    "str": "E610: R5 무응답",
+    "repr": "AppError(code='E610', detail='R5 무응답', meta={}, cause=OSError('socket closed'))",
+    "to_dict": {
+     "error_code": "E610",
+     "detail": "R5 무응답",
+     "meta": {},
+     "cause_type": "OSError",
+     "cause": "socket closed"
+    }
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "app_none_detail"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "E999",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "meta": {
+     "b": 2,
+     "a": 1
+    },
+    "cause_type": "AppError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "app_none_detail",
+    "default_code": "E110",
+    "detail": "인자 detail",
+    "meta": {
+     "m": 1
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "인자 detail",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "meta": {
+     "b": 2,
+     "a": 1,
+     "m": 1
+    },
+    "cause_type": "AppError"
+   }
+  },
+  {
+   "fn": "build_error_payload",
+   "args": {
+    "exc": "app_none_detail",
+    "detail": "   "
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "E999",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "meta": {
+     "b": 2,
+     "a": 1
+    },
+    "cause_type": "AppError"
+   }
+  },
+  {
+   "fn": "build_unknown_error_payload",
+   "args": {
+    "exc": "app_none_detail"
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "E999",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "meta": {
+     "b": 2,
+     "a": 1
+    },
+    "cause_type": "AppError"
+   }
+  },
+  {
+   "fn": "build_handler_error_payload",
+   "args": {
+    "exc": "app_none_detail",
+    "meta": {
+     "cmd": "VACUUM_ON"
+    }
+   },
+   "out": {
+    "result": "fail",
+    "error_code": "E999",
+    "client_action": "STOP",
+    "category": "INTERNAL",
+    "severity": "ERROR",
+    "message": "정의되지 않은 내부 예외",
+    "detail": "E999",
+    "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "meta": {
+     "b": 2,
+     "a": 1,
+     "cmd": "VACUUM_ON"
+    },
+    "cause_type": "AppError"
+   }
+  },
+  {
+   "fn": "ensure_app_error",
+   "args": {
+    "exc": "app_none_detail",
+    "default_code": "E205",
+    "meta": {
+     "k": "v"
+    }
+   },
+   "out": {
+    "code": "E999",
+    "detail": "",
+    "meta": {
+     "b": 2,
+     "a": 1,
+     "k": "v"
+    },
+    "cause_type": "AppError",
+    "str": "E999"
+   }
+  },
+  {
+   "fn": "AppError",
+   "args": {
+    "exc": "app_none_detail"
+   },
+   "out": {
+    "code": "E999",
+    "error_code": "E999",
+    "detail": "",
+    "meta": {
+     "b": 2,
+     "a": 1
+    },
+    "str": "E999",
+    "repr": "AppError(code='E999', detail='', meta={'b': 2, 'a': 1}, cause=None)",
+    "to_dict": {
+     "error_code": "E999",
+     "detail": "",
+     "meta": {
+      "b": 2,
+      "a": 1
+     }
+    }
+   }
+  },
+  {
+   "fn": "AppError_invalid",
+   "args": {
+    "code": ""
+   },
+   "out": {
+    "raised": "ValueError",
+    "msg": "AppError.code must be a non-empty string"
+   }
+  },
+  {
+   "fn": "AppError_invalid",
+   "args": {
+    "code": "   "
+   },
+   "out": {
+    "raised": "ValueError",
+    "msg": "AppError.code must be a non-empty string"
+   }
+  },
+  {
+   "fn": "AppError_invalid",
+   "args": {
+    "code": null
+   },
+   "out": {
+    "raised": "ValueError",
+    "msg": "AppError.code must be a non-empty string"
+   }
+  },
+  {
+   "fn": "AppError_invalid",
+   "args": {
+    "code": 302
+   },
+   "out": {
+    "raised": "ValueError",
+    "msg": "AppError.code must be a non-empty string"
+   }
+  },
+  {
+   "fn": "normalize_error_code",
+   "args": {
+    "code": "E302"
+   },
+   "out": "E302"
+  },
+  {
+   "fn": "normalize_error_code",
+   "args": {
+    "code": "E302",
+    "fallback": "E110"
+   },
+   "out": "E302"
+  },
+  {
+   "fn": "has_error_code",
+   "args": {
+    "code": "E302"
+   },
+   "out": true
+  },
+  {
+   "fn": "catalog_is_fallback",
+   "args": {
+    "code": "E302"
+   },
+   "out": false
+  },
+  {
+   "fn": "is_fallback_error",
+   "args": {
+    "code": "E302"
+   },
+   "out": false
+  },
+  {
+   "fn": "get_error_definition",
+   "args": {
+    "code": "E302"
+   },
+   "out": {
+    "code": "E302",
+    "title": "게이트 인터락 불일치",
+    "category": "SAFETY_GATE",
+    "client_action": "STOP",
+    "severity": "ERROR",
+    "cause": "게이트 OPEN 조건의 인터락이 FALSE입니다.",
+    "fix": "PLC 게이트 인터락 조건, 센서, 배선, 기구 상태를 확인하십시오.",
+    "is_fallback": false
+   }
+  },
+  {
+   "fn": "get_error_info",
+   "args": {
+    "code": "E302"
+   },
+   "out": {
+    "code": "E302",
+    "title": "게이트 인터락 불일치",
+    "category": "SAFETY_GATE",
+    "client_action": "STOP",
+    "severity": "ERROR",
+    "cause": "게이트 OPEN 조건의 인터락이 FALSE입니다.",
+    "fix": "PLC 게이트 인터락 조건, 센서, 배선, 기구 상태를 확인하십시오.",
+    "is_fallback": false
+   }
+  },
+  {
+   "fn": "normalize_error_code",
+   "args": {
+    "code": "e302"
+   },
+   "out": "E302"
+  },
+  {
+   "fn": "normalize_error_code",
+   "args": {
+    "code": "e302",
+    "fallback": "E110"
+   },
+   "out": "E302"
+  },
+  {
+   "fn": "has_error_code",
+   "args": {
+    "code": "e302"
+   },
+   "out": true
+  },
+  {
+   "fn": "catalog_is_fallback",
+   "args": {
+    "code": "e302"
+   },
+   "out": false
+  },
+  {
+   "fn": "is_fallback_error",
+   "args": {
+    "code": "e302"
+   },
+   "out": false
+  },
+  {
+   "fn": "get_error_definition",
+   "args": {
+    "code": "e302"
+   },
+   "out": {
+    "code": "E302",
+    "title": "게이트 인터락 불일치",
+    "category": "SAFETY_GATE",
+    "client_action": "STOP",
+    "severity": "ERROR",
+    "cause": "게이트 OPEN 조건의 인터락이 FALSE입니다.",
+    "fix": "PLC 게이트 인터락 조건, 센서, 배선, 기구 상태를 확인하십시오.",
+    "is_fallback": false
+   }
+  },
+  {
+   "fn": "get_error_info",
+   "args": {
+    "code": "e302"
+   },
+   "out": {
+    "code": "E302",
+    "title": "게이트 인터락 불일치",
+    "category": "SAFETY_GATE",
+    "client_action": "STOP",
+    "severity": "ERROR",
+    "cause": "게이트 OPEN 조건의 인터락이 FALSE입니다.",
+    "fix": "PLC 게이트 인터락 조건, 센서, 배선, 기구 상태를 확인하십시오.",
+    "is_fallback": false
+   }
+  },
+  {
+   "fn": "normalize_error_code",
+   "args": {
+    "code": " e302 "
+   },
+   "out": "E302"
+  },
+  {
+   "fn": "normalize_error_code",
+   "args": {
+    "code": " e302 ",
+    "fallback": "E110"
+   },
+   "out": "E302"
+  },
+  {
+   "fn": "has_error_code",
+   "args": {
+    "code": " e302 "
+   },
+   "out": true
+  },
+  {
+   "fn": "catalog_is_fallback",
+   "args": {
+    "code": " e302 "
+   },
+   "out": false
+  },
+  {
+   "fn": "is_fallback_error",
+   "args": {
+    "code": " e302 "
+   },
+   "out": false
+  },
+  {
+   "fn": "get_error_definition",
+   "args": {
+    "code": " e302 "
+   },
+   "out": {
+    "code": "E302",
+    "title": "게이트 인터락 불일치",
+    "category": "SAFETY_GATE",
+    "client_action": "STOP",
+    "severity": "ERROR",
+    "cause": "게이트 OPEN 조건의 인터락이 FALSE입니다.",
+    "fix": "PLC 게이트 인터락 조건, 센서, 배선, 기구 상태를 확인하십시오.",
+    "is_fallback": false
+   }
+  },
+  {
+   "fn": "get_error_info",
+   "args": {
+    "code": " e302 "
+   },
+   "out": {
+    "code": "E302",
+    "title": "게이트 인터락 불일치",
+    "category": "SAFETY_GATE",
+    "client_action": "STOP",
+    "severity": "ERROR",
+    "cause": "게이트 OPEN 조건의 인터락이 FALSE입니다.",
+    "fix": "PLC 게이트 인터락 조건, 센서, 배선, 기구 상태를 확인하십시오.",
+    "is_fallback": false
+   }
+  },
+  {
+   "fn": "normalize_error_code",
+   "args": {
+    "code": "302"
+   },
+   "out": "E302"
+  },
+  {
+   "fn": "normalize_error_code",
+   "args": {
+    "code": "302",
+    "fallback": "E110"
+   },
+   "out": "E302"
+  },
+  {
+   "fn": "has_error_code",
+   "args": {
+    "code": "302"
+   },
+   "out": false
+  },
+  {
+   "fn": "catalog_is_fallback",
+   "args": {
+    "code": "302"
+   },
+   "out": false
+  },
+  {
+   "fn": "is_fallback_error",
+   "args": {
+    "code": "302"
+   },
+   "out": true
+  },
+  {
+   "fn": "get_error_definition",
+   "args": {
+    "code": "302"
+   },
+   "out": {
+    "code": "E999",
+    "title": "정의되지 않은 내부 예외",
+    "category": "INTERNAL",
+    "client_action": "STOP",
+    "severity": "ERROR",
+    "cause": "명시적으로 분류되지 않은 내부 예외가 발생했습니다.",
+    "fix": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "is_fallback": true
+   }
+  },
+  {
+   "fn": "get_error_info",
+   "args": {
+    "code": "302"
+   },
+   "out": {
+    "code": "E302",
+    "title": "게이트 인터락 불일치",
+    "category": "SAFETY_GATE",
+    "client_action": "STOP",
+    "severity": "ERROR",
+    "cause": "게이트 OPEN 조건의 인터락이 FALSE입니다.",
+    "fix": "PLC 게이트 인터락 조건, 센서, 배선, 기구 상태를 확인하십시오.",
+    "is_fallback": false
+   }
+  },
+  {
+   "fn": "normalize_error_code",
+   "args": {
+    "code": "E000"
+   },
+   "out": "E999"
+  },
+  {
+   "fn": "normalize_error_code",
+   "args": {
+    "code": "E000",
+    "fallback": "E110"
+   },
+   "out": "E110"
+  },
+  {
+   "fn": "has_error_code",
+   "args": {
+    "code": "E000"
+   },
+   "out": false
+  },
+  {
+   "fn": "catalog_is_fallback",
+   "args": {
+    "code": "E000"
+   },
+   "out": true
+  },
+  {
+   "fn": "is_fallback_error",
+   "args": {
+    "code": "E000"
+   },
+   "out": true
+  },
+  {
+   "fn": "get_error_definition",
+   "args": {
+    "code": "E000"
+   },
+   "out": {
+    "code": "E999",
+    "title": "정의되지 않은 내부 예외",
+    "category": "INTERNAL",
+    "client_action": "STOP",
+    "severity": "ERROR",
+    "cause": "명시적으로 분류되지 않은 내부 예외가 발생했습니다.",
+    "fix": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "is_fallback": true
+   }
+  },
+  {
+   "fn": "get_error_info",
+   "args": {
+    "code": "E000"
+   },
+   "out": {
+    "code": "E999",
+    "title": "정의되지 않은 내부 예외",
+    "category": "INTERNAL",
+    "client_action": "STOP",
+    "severity": "ERROR",
+    "cause": "명시적으로 분류되지 않은 내부 예외가 발생했습니다.",
+    "fix": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "is_fallback": true
+   }
+  },
+  {
+   "fn": "normalize_error_code",
+   "args": {
+    "code": ""
+   },
+   "out": "E999"
+  },
+  {
+   "fn": "normalize_error_code",
+   "args": {
+    "code": "",
+    "fallback": "E110"
+   },
+   "out": "E110"
+  },
+  {
+   "fn": "has_error_code",
+   "args": {
+    "code": ""
+   },
+   "out": false
+  },
+  {
+   "fn": "catalog_is_fallback",
+   "args": {
+    "code": ""
+   },
+   "out": true
+  },
+  {
+   "fn": "is_fallback_error",
+   "args": {
+    "code": ""
+   },
+   "out": true
+  },
+  {
+   "fn": "get_error_definition",
+   "args": {
+    "code": ""
+   },
+   "out": {
+    "code": "E999",
+    "title": "정의되지 않은 내부 예외",
+    "category": "INTERNAL",
+    "client_action": "STOP",
+    "severity": "ERROR",
+    "cause": "명시적으로 분류되지 않은 내부 예외가 발생했습니다.",
+    "fix": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "is_fallback": true
+   }
+  },
+  {
+   "fn": "get_error_info",
+   "args": {
+    "code": ""
+   },
+   "out": {
+    "code": "E999",
+    "title": "정의되지 않은 내부 예외",
+    "category": "INTERNAL",
+    "client_action": "STOP",
+    "severity": "ERROR",
+    "cause": "명시적으로 분류되지 않은 내부 예외가 발생했습니다.",
+    "fix": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "is_fallback": true
+   }
+  },
+  {
+   "fn": "normalize_error_code",
+   "args": {
+    "code": null
+   },
+   "out": "E999"
+  },
+  {
+   "fn": "normalize_error_code",
+   "args": {
+    "code": null,
+    "fallback": "E110"
+   },
+   "out": "E110"
+  },
+  {
+   "fn": "has_error_code",
+   "args": {
+    "code": null
+   },
+   "out": false
+  },
+  {
+   "fn": "catalog_is_fallback",
+   "args": {
+    "code": null
+   },
+   "out": true
+  },
+  {
+   "fn": "is_fallback_error",
+   "args": {
+    "code": null
+   },
+   "out": true
+  },
+  {
+   "fn": "get_error_definition",
+   "args": {
+    "code": null
+   },
+   "out": {
+    "code": "E999",
+    "title": "정의되지 않은 내부 예외",
+    "category": "INTERNAL",
+    "client_action": "STOP",
+    "severity": "ERROR",
+    "cause": "명시적으로 분류되지 않은 내부 예외가 발생했습니다.",
+    "fix": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "is_fallback": true
+   }
+  },
+  {
+   "fn": "get_error_info",
+   "args": {
+    "code": null
+   },
+   "out": {
+    "code": "E999",
+    "title": "정의되지 않은 내부 예외",
+    "category": "INTERNAL",
+    "client_action": "STOP",
+    "severity": "ERROR",
+    "cause": "명시적으로 분류되지 않은 내부 예외가 발생했습니다.",
+    "fix": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "is_fallback": true
+   }
+  },
+  {
+   "fn": "normalize_error_code",
+   "args": {
+    "code": "999"
+   },
+   "out": "E999"
+  },
+  {
+   "fn": "normalize_error_code",
+   "args": {
+    "code": "999",
+    "fallback": "E110"
+   },
+   "out": "E999"
+  },
+  {
+   "fn": "has_error_code",
+   "args": {
+    "code": "999"
+   },
+   "out": false
+  },
+  {
+   "fn": "catalog_is_fallback",
+   "args": {
+    "code": "999"
+   },
+   "out": true
+  },
+  {
+   "fn": "is_fallback_error",
+   "args": {
+    "code": "999"
+   },
+   "out": true
+  },
+  {
+   "fn": "get_error_definition",
+   "args": {
+    "code": "999"
+   },
+   "out": {
+    "code": "E999",
+    "title": "정의되지 않은 내부 예외",
+    "category": "INTERNAL",
+    "client_action": "STOP",
+    "severity": "ERROR",
+    "cause": "명시적으로 분류되지 않은 내부 예외가 발생했습니다.",
+    "fix": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "is_fallback": true
+   }
+  },
+  {
+   "fn": "get_error_info",
+   "args": {
+    "code": "999"
+   },
+   "out": {
+    "code": "E999",
+    "title": "정의되지 않은 내부 예외",
+    "category": "INTERNAL",
+    "client_action": "STOP",
+    "severity": "ERROR",
+    "cause": "명시적으로 분류되지 않은 내부 예외가 발생했습니다.",
+    "fix": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "is_fallback": true
+   }
+  },
+  {
+   "fn": "normalize_error_code",
+   "args": {
+    "code": "1234"
+   },
+   "out": "E999"
+  },
+  {
+   "fn": "normalize_error_code",
+   "args": {
+    "code": "1234",
+    "fallback": "E110"
+   },
+   "out": "E110"
+  },
+  {
+   "fn": "has_error_code",
+   "args": {
+    "code": "1234"
+   },
+   "out": false
+  },
+  {
+   "fn": "catalog_is_fallback",
+   "args": {
+    "code": "1234"
+   },
+   "out": true
+  },
+  {
+   "fn": "is_fallback_error",
+   "args": {
+    "code": "1234"
+   },
+   "out": true
+  },
+  {
+   "fn": "get_error_definition",
+   "args": {
+    "code": "1234"
+   },
+   "out": {
+    "code": "E999",
+    "title": "정의되지 않은 내부 예외",
+    "category": "INTERNAL",
+    "client_action": "STOP",
+    "severity": "ERROR",
+    "cause": "명시적으로 분류되지 않은 내부 예외가 발생했습니다.",
+    "fix": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "is_fallback": true
+   }
+  },
+  {
+   "fn": "get_error_info",
+   "args": {
+    "code": "1234"
+   },
+   "out": {
+    "code": "E999",
+    "title": "정의되지 않은 내부 예외",
+    "category": "INTERNAL",
+    "client_action": "STOP",
+    "severity": "ERROR",
+    "cause": "명시적으로 분류되지 않은 내부 예외가 발생했습니다.",
+    "fix": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "is_fallback": true
+   }
+  },
+  {
+   "fn": "normalize_error_code",
+   "args": {
+    "code": "E3021"
+   },
+   "out": "E999"
+  },
+  {
+   "fn": "normalize_error_code",
+   "args": {
+    "code": "E3021",
+    "fallback": "E110"
+   },
+   "out": "E110"
+  },
+  {
+   "fn": "has_error_code",
+   "args": {
+    "code": "E3021"
+   },
+   "out": false
+  },
+  {
+   "fn": "catalog_is_fallback",
+   "args": {
+    "code": "E3021"
+   },
+   "out": true
+  },
+  {
+   "fn": "is_fallback_error",
+   "args": {
+    "code": "E3021"
+   },
+   "out": true
+  },
+  {
+   "fn": "get_error_definition",
+   "args": {
+    "code": "E3021"
+   },
+   "out": {
+    "code": "E999",
+    "title": "정의되지 않은 내부 예외",
+    "category": "INTERNAL",
+    "client_action": "STOP",
+    "severity": "ERROR",
+    "cause": "명시적으로 분류되지 않은 내부 예외가 발생했습니다.",
+    "fix": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "is_fallback": true
+   }
+  },
+  {
+   "fn": "get_error_info",
+   "args": {
+    "code": "E3021"
+   },
+   "out": {
+    "code": "E999",
+    "title": "정의되지 않은 내부 예외",
+    "category": "INTERNAL",
+    "client_action": "STOP",
+    "severity": "ERROR",
+    "cause": "명시적으로 분류되지 않은 내부 예외가 발생했습니다.",
+    "fix": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+    "is_fallback": true
+   }
+  },
+  {
+   "fn": "extract_error_code",
+   "args": {
+    "text": "[E302] 인터락"
+   },
+   "out": "E302"
+  },
+  {
+   "fn": "extract_error_code",
+   "args": {
+    "text": "응답 e711 오류"
+   },
+   "out": "E711"
+  },
+  {
+   "fn": "extract_error_code",
+   "args": {
+    "text": "E000 없음"
+   },
+   "out": null
+  },
+  {
+   "fn": "extract_error_code",
+   "args": {
+    "text": "코드 없음"
+   },
+   "out": null
+  },
+  {
+   "fn": "extract_error_code",
+   "args": {
+    "text": ""
+   },
+   "out": null
+  },
+  {
+   "fn": "extract_error_code",
+   "args": {
+    "text": null
+   },
+   "out": null
+  },
+  {
+   "fn": "extract_error_code",
+   "args": {
+    "text": "AE3021 E401 E402"
+   },
+   "out": "E401"
+  },
+  {
+   "fn": "extract_error_code",
+   "args": {
+    "text": "xE302"
+   },
+   "out": null
+  },
+  {
+   "fn": "get_error_title",
+   "args": {
+    "code": "E302"
+   },
+   "out": "게이트 인터락 불일치"
+  },
+  {
+   "fn": "get_error_title",
+   "args": {
+    "code": "e999"
+   },
+   "out": "정의되지 않은 내부 예외"
+  },
+  {
+   "fn": "get_error_title",
+   "args": {
+    "code": "E000"
+   },
+   "out": "정의되지 않은 내부 예외"
+  },
+  {
+   "fn": "get_error_category",
+   "args": {
+    "code": "E302"
+   },
+   "out": "SAFETY_GATE"
+  },
+  {
+   "fn": "get_error_category",
+   "args": {
+    "code": "e999"
+   },
+   "out": "INTERNAL"
+  },
+  {
+   "fn": "get_error_category",
+   "args": {
+    "code": "E000"
+   },
+   "out": "INTERNAL"
+  },
+  {
+   "fn": "get_client_action",
+   "args": {
+    "code": "E302"
+   },
+   "out": "STOP"
+  },
+  {
+   "fn": "get_client_action",
+   "args": {
+    "code": "e999"
+   },
+   "out": "STOP"
+  },
+  {
+   "fn": "get_client_action",
+   "args": {
+    "code": "E000"
+   },
+   "out": "STOP"
+  },
+  {
+   "fn": "get_error_severity",
+   "args": {
+    "code": "E302"
+   },
+   "out": "ERROR"
+  },
+  {
+   "fn": "get_error_severity",
+   "args": {
+    "code": "e999"
+   },
+   "out": "ERROR"
+  },
+  {
+   "fn": "get_error_severity",
+   "args": {
+    "code": "E000"
+   },
+   "out": "ERROR"
+  },
+  {
+   "fn": "get_error_cause",
+   "args": {
+    "code": "E302"
+   },
+   "out": "게이트 OPEN 조건의 인터락이 FALSE입니다."
+  },
+  {
+   "fn": "get_error_cause",
+   "args": {
+    "code": "e999"
+   },
+   "out": "명시적으로 분류되지 않은 내부 예외가 발생했습니다."
+  },
+  {
+   "fn": "get_error_cause",
+   "args": {
+    "code": "E000"
+   },
+   "out": "명시적으로 분류되지 않은 내부 예외가 발생했습니다."
+  },
+  {
+   "fn": "get_error_fix",
+   "args": {
+    "code": "E302"
+   },
+   "out": "PLC 게이트 인터락 조건, 센서, 배선, 기구 상태를 확인하십시오."
+  },
+  {
+   "fn": "get_error_fix",
+   "args": {
+    "code": "e999"
+   },
+   "out": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오."
+  },
+  {
+   "fn": "get_error_fix",
+   "args": {
+    "code": "E000"
+   },
+   "out": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오."
+  },
+  {
+   "fn": "get_legacy_error_dict",
+   "args": {
+    "code": "E302"
+   },
+   "out": {
+    "cause": "게이트 OPEN 조건의 인터락이 FALSE입니다.",
+    "fix": "PLC 게이트 인터락 조건, 센서, 배선, 기구 상태를 확인하십시오."
+   }
+  },
+  {
+   "fn": "list_error_codes",
+   "args": {},
+   "out": [
+    "E101",
+    "E102",
+    "E103",
+    "E104",
+    "E105",
+    "E106",
+    "E107",
+    "E108",
+    "E109",
+    "E110",
+    "E111",
+    "E112",
+    "E201",
+    "E202",
+    "E203",
+    "E204",
+    "E205",
+    "E206",
+    "E207",
+    "E208",
+    "E209",
+    "E230",
+    "E210",
+    "E211",
+    "E212",
+    "E213",
+    "E214",
+    "E215",
+    "E216",
+    "E217",
+    "E218",
+    "E219",
+    "E220",
+    "E221",
+    "E222",
+    "E223",
+    "E224",
+    "E225",
+    "E226",
+    "E227",
+    "E228",
+    "E229",
+    "E301",
+    "E302",
+    "E303",
+    "E304",
+    "E305",
+    "E306",
+    "E307",
+    "E308",
+    "E309",
+    "E310",
+    "E311",
+    "E312",
+    "E313",
+    "E314",
+    "E315",
+    "E316",
+    "E317",
+    "E318",
+    "E319",
+    "E320",
+    "E321",
+    "E322",
+    "E323",
+    "E324",
+    "E325",
+    "E326",
+    "E330",
+    "E331",
+    "E401",
+    "E402",
+    "E403",
+    "E404",
+    "E405",
+    "E406",
+    "E407",
+    "E408",
+    "E409",
+    "E410",
+    "E411",
+    "E412",
+    "E413",
+    "E414",
+    "E415",
+    "E416",
+    "E417",
+    "E501",
+    "E502",
+    "E503",
+    "E504",
+    "E505",
+    "E506",
+    "E507",
+    "E508",
+    "E509",
+    "E510",
+    "E511",
+    "E512",
+    "E513",
+    "E514",
+    "E515",
+    "E601",
+    "E602",
+    "E603",
+    "E604",
+    "E605",
+    "E606",
+    "E607",
+    "E608",
+    "E609",
+    "E610",
+    "E611",
+    "E612",
+    "E613",
+    "E614",
+    "E615",
+    "E616",
+    "E617",
+    "E618",
+    "E619",
+    "E620",
+    "E621",
+    "E622",
+    "E623",
+    "E624",
+    "E625",
+    "E626",
+    "E701",
+    "E702",
+    "E703",
+    "E704",
+    "E705",
+    "E706",
+    "E707",
+    "E708",
+    "E709",
+    "E710",
+    "E711",
+    "E712",
+    "E713",
+    "E714",
+    "E715",
+    "E716",
+    "E717",
+    "E718",
+    "E719",
+    "E720",
+    "E801",
+    "E802",
+    "E803",
+    "E804",
+    "E805",
+    "E806",
+    "E807",
+    "E808",
+    "E809",
+    "E810",
+    "E811",
+    "E812",
+    "E813",
+    "E814",
+    "E815",
+    "E816",
+    "E817",
+    "E818",
+    "E830",
+    "E831",
+    "E832",
+    "E833",
+    "E840",
+    "E841",
+    "E842",
+    "E843",
+    "E844",
+    "E845",
+    "E846",
+    "E848",
+    "E847",
+    "E901",
+    "E902",
+    "E903",
+    "E904",
+    "E905",
+    "E906",
+    "E907",
+    "E908",
+    "E909",
+    "E910",
+    "E911",
+    "E700",
+    "E999"
+   ]
+  },
+  {
+   "fn": "format_log_text",
+   "args": {
+    "payload": {
+     "result": "fail",
+     "error_code": "E302",
+     "client_action": "STOP",
+     "category": "SAFETY_GATE",
+     "severity": "ERROR",
+     "message": "게이트 인터락 불일치",
+     "detail": "G_V_1_인터락=FALSE",
+     "guide": "PLC 게이트 인터락 조건, 센서, 배선, 기구 상태를 확인하십시오."
+    }
+   },
+   "out": "[E302 / STOP] 게이트 인터락 불일치 | 상세: G_V_1_인터락=FALSE"
+  },
+  {
+   "fn": "format_user_text",
+   "args": {
+    "payload": {
+     "result": "fail",
+     "error_code": "E302",
+     "client_action": "STOP",
+     "category": "SAFETY_GATE",
+     "severity": "ERROR",
+     "message": "게이트 인터락 불일치",
+     "detail": "G_V_1_인터락=FALSE",
+     "guide": "PLC 게이트 인터락 조건, 센서, 배선, 기구 상태를 확인하십시오."
+    }
+   },
+   "out": "[E302] 게이트 인터락 불일치 | 상세: G_V_1_인터락=FALSE"
+  },
+  {
+   "fn": "format_log_text",
+   "args": {
+    "payload": {
+     "result": "fail",
+     "error_code": "E302",
+     "client_action": "STOP",
+     "category": "SAFETY_GATE",
+     "severity": "ERROR",
+     "message": "게이트 인터락 불일치",
+     "detail": "게이트 OPEN 조건의 인터락이 FALSE입니다.",
+     "guide": "PLC 게이트 인터락 조건, 센서, 배선, 기구 상태를 확인하십시오."
+    }
+   },
+   "out": "[E302 / STOP] 게이트 인터락 불일치 | 상세: 게이트 OPEN 조건의 인터락이 FALSE입니다."
+  },
+  {
+   "fn": "format_user_text",
+   "args": {
+    "payload": {
+     "result": "fail",
+     "error_code": "E302",
+     "client_action": "STOP",
+     "category": "SAFETY_GATE",
+     "severity": "ERROR",
+     "message": "게이트 인터락 불일치",
+     "detail": "게이트 OPEN 조건의 인터락이 FALSE입니다.",
+     "guide": "PLC 게이트 인터락 조건, 센서, 배선, 기구 상태를 확인하십시오."
+    }
+   },
+   "out": "[E302] 게이트 인터락 불일치 | 상세: 게이트 OPEN 조건의 인터락이 FALSE입니다."
+  },
+  {
+   "fn": "format_log_text",
+   "args": {
+    "payload": {
+     "error_code": "",
+     "client_action": "",
+     "message": "제목",
+     "detail": "제목"
+    }
+   },
+   "out": "제목"
+  },
+  {
+   "fn": "format_user_text",
+   "args": {
+    "payload": {
+     "error_code": "",
+     "client_action": "",
+     "message": "제목",
+     "detail": "제목"
+    }
+   },
+   "out": "제목"
+  },
+  {
+   "fn": "format_log_text",
+   "args": {
+    "payload": {
+     "error_code": "E1",
+     "message": "줄\r\n바꿈",
+     "detail": "a\nbxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    }
+   },
+   "out": "[E1] 줄  바꿈 | 상세: a bxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…"
+  },
+  {
+   "fn": "format_user_text",
+   "args": {
+    "payload": {
+     "error_code": "E1",
+     "message": "줄\r\n바꿈",
+     "detail": "a\nbxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+    }
+   },
+   "out": "[E1] 줄  바꿈 | 상세: a bxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx…"
+  },
+  {
+   "fn": "format_log_text",
+   "args": {
+    "payload": {}
+   },
+   "out": ""
+  },
+  {
+   "fn": "format_user_text",
+   "args": {
+    "payload": {}
+   },
+   "out": ""
+  },
+  {
+   "fn": "is_fail_payload",
+   "args": {
+    "payload": {
+     "result": "fail",
+     "error_code": "E302",
+     "client_action": "STOP",
+     "category": "SAFETY_GATE",
+     "severity": "ERROR",
+     "message": "게이트 인터락 불일치",
+     "detail": "G_V_1_인터락=FALSE",
+     "guide": "PLC 게이트 인터락 조건, 센서, 배선, 기구 상태를 확인하십시오."
+    }
+   },
+   "out": true
+  },
+  {
+   "fn": "is_fail_payload",
+   "args": {
+    "payload": {
+     "result": "ok"
+    }
+   },
+   "out": false
+  },
+  {
+   "fn": "is_fail_payload",
+   "args": {
+    "payload": null
+   },
+   "out": false
+  }
+ ]
+}

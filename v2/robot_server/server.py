@@ -64,6 +64,7 @@ class RobotServer:
         self.now = now
         self._server: Optional[asyncio.AbstractServer] = None
         self.down_count = 0          # 제어 프로그램 꺼짐 응답 수(진단·시험용)
+        self._writers: set = set()   # 열린 연결(종료 때 닫기)
 
     # ── 시작·종료 ──
     async def start(self) -> None:
@@ -79,7 +80,12 @@ class RobotServer:
     async def aclose(self) -> None:
         if self._server:
             self._server.close()
-            await self._server.wait_closed()
+            # 열린 로봇 연결도 닫는다 — Python 3.12+ 의 wait_closed 는 연결이 모두 끝날 때까지 기다린다
+            for w in list(self._writers):
+                with contextlib.suppress(Exception):
+                    w.close()
+            with contextlib.suppress(Exception):
+                await asyncio.wait_for(self._server.wait_closed(), timeout=5.0)
             self.log("NET", "Host closed")
         if self.csv is not None:
             with contextlib.suppress(Exception):
@@ -142,6 +148,7 @@ class RobotServer:
     # ── 연결 ──
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         peer = writer.get_extra_info("peername")
+        self._writers.add(writer)
         self.log("NET", f"Client connected: {peer}")
         try:
             while True:
@@ -270,6 +277,7 @@ class RobotServer:
             else:
                 self.log("NET", f"Client error from {peer}: {e!r}")
         finally:
+            self._writers.discard(writer)
             with contextlib.suppress(Exception):
                 writer.close()
                 await writer.wait_closed()

@@ -268,7 +268,11 @@ def make_transport(clock, cfg: Dict[str, Any]) -> OnDemandTransport:
 
 def make_sim_transport(clock, sim) -> OnDemandTransport:
     from v2.common.transport import SimTransport
-    return OnDemandTransport(clock, lambda _k: SimTransport(clock, sim))
+
+    def mk(_k):
+        f = getattr(sim, "make_transport", None)
+        return f(clock) if f is not None else SimTransport(clock, sim)
+    return OnDemandTransport(clock, mk)
 
 
 # ═══════════════════════ 1초 행 블록 ═══════════════════════

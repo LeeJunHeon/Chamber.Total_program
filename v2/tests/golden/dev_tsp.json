@@ -1,0 +1,4327 @@
+{
+ "source": "v1 device/tsp.py 를 실제로 실행(v2/tools/v1golden_tsp.py) — 127.0.0.1 가짜 TCP 서버",
+ "v1_files": [
+  "device/tsp.py"
+ ],
+ "frames": [
+  {
+   "win": "011",
+   "write": false,
+   "data": null,
+   "addr": 128,
+   "hex": "028030313130033833"
+  },
+  {
+   "win": "011",
+   "write": false,
+   "data": null,
+   "addr": 129,
+   "hex": "028130313130033832"
+  },
+  {
+   "win": "011",
+   "write": false,
+   "data": null,
+   "addr": 0,
+   "hex": "020030313130033033"
+  },
+  {
+   "win": "011",
+   "write": false,
+   "data": null,
+   "addr": 255,
+   "hex": "02ff30313130034643"
+  },
+  {
+   "win": "011",
+   "write": false,
+   "data": null,
+   "addr": 384,
+   "hex": "028030313130033833"
+  },
+  {
+   "win": "011",
+   "write": false,
+   "data": "",
+   "addr": 128,
+   "hex": "028030313130033833"
+  },
+  {
+   "win": "011",
+   "write": false,
+   "data": "",
+   "addr": 129,
+   "hex": "028130313130033832"
+  },
+  {
+   "win": "011",
+   "write": false,
+   "data": "",
+   "addr": 0,
+   "hex": "020030313130033033"
+  },
+  {
+   "win": "011",
+   "write": false,
+   "data": "",
+   "addr": 255,
+   "hex": "02ff30313130034643"
+  },
+  {
+   "win": "011",
+   "write": false,
+   "data": "",
+   "addr": 384,
+   "hex": "028030313130033833"
+  },
+  {
+   "win": "011",
+   "write": false,
+   "data": "0",
+   "addr": 128,
+   "hex": "02803031313030034233"
+  },
+  {
+   "win": "011",
+   "write": false,
+   "data": "0",
+   "addr": 129,
+   "hex": "02813031313030034232"
+  },
+  {
+   "win": "011",
+   "write": false,
+   "data": "0",
+   "addr": 0,
+   "hex": "02003031313030033333"
+  },
+  {
+   "win": "011",
+   "write": false,
+   "data": "0",
+   "addr": 255,
+   "hex": "02ff3031313030034343"
+  },
+  {
+   "win": "011",
+   "write": false,
+   "data": "0",
+   "addr": 384,
+   "hex": "02803031313030034233"
+  },
+  {
+   "win": "011",
+   "write": false,
+   "data": "1",
+   "addr": 128,
+   "hex": "02803031313031034232"
+  },
+  {
+   "win": "011",
+   "write": false,
+   "data": "1",
+   "addr": 129,
+   "hex": "02813031313031034233"
+  },
+  {
+   "win": "011",
+   "write": false,
+   "data": "1",
+   "addr": 0,
+   "hex": "02003031313031033332"
+  },
+  {
+   "win": "011",
+   "write": false,
+   "data": "1",
+   "addr": 255,
+   "hex": "02ff3031313031034344"
+  },
+  {
+   "win": "011",
+   "write": false,
+   "data": "1",
+   "addr": 384,
+   "hex": "02803031313031034232"
+  },
+  {
+   "win": "011",
+   "write": false,
+   "data": "12",
+   "addr": 128,
+   "hex": "0280303131303132033830"
+  },
+  {
+   "win": "011",
+   "write": false,
+   "data": "12",
+   "addr": 129,
+   "hex": "0281303131303132033831"
+  },
+  {
+   "win": "011",
+   "write": false,
+   "data": "12",
+   "addr": 0,
+   "hex": "0200303131303132033030"
+  },
+  {
+   "win": "011",
+   "write": false,
+   "data": "12",
+   "addr": 255,
+   "hex": "02ff303131303132034646"
+  },
+  {
+   "win": "011",
+   "write": false,
+   "data": "12",
+   "addr": 384,
+   "hex": "0280303131303132033830"
+  },
+  {
+   "win": "011",
+   "write": true,
+   "data": null,
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "write에는 DATA가 필요합니다."
+  },
+  {
+   "win": "011",
+   "write": true,
+   "data": null,
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "write에는 DATA가 필요합니다."
+  },
+  {
+   "win": "011",
+   "write": true,
+   "data": null,
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "write에는 DATA가 필요합니다."
+  },
+  {
+   "win": "011",
+   "write": true,
+   "data": null,
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "write에는 DATA가 필요합니다."
+  },
+  {
+   "win": "011",
+   "write": true,
+   "data": null,
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "write에는 DATA가 필요합니다."
+  },
+  {
+   "win": "011",
+   "write": true,
+   "data": "",
+   "addr": 128,
+   "hex": "028030313131033832"
+  },
+  {
+   "win": "011",
+   "write": true,
+   "data": "",
+   "addr": 129,
+   "hex": "028130313131033833"
+  },
+  {
+   "win": "011",
+   "write": true,
+   "data": "",
+   "addr": 0,
+   "hex": "020030313131033032"
+  },
+  {
+   "win": "011",
+   "write": true,
+   "data": "",
+   "addr": 255,
+   "hex": "02ff30313131034644"
+  },
+  {
+   "win": "011",
+   "write": true,
+   "data": "",
+   "addr": 384,
+   "hex": "028030313131033832"
+  },
+  {
+   "win": "011",
+   "write": true,
+   "data": "0",
+   "addr": 128,
+   "hex": "02803031313130034232"
+  },
+  {
+   "win": "011",
+   "write": true,
+   "data": "0",
+   "addr": 129,
+   "hex": "02813031313130034233"
+  },
+  {
+   "win": "011",
+   "write": true,
+   "data": "0",
+   "addr": 0,
+   "hex": "02003031313130033332"
+  },
+  {
+   "win": "011",
+   "write": true,
+   "data": "0",
+   "addr": 255,
+   "hex": "02ff3031313130034344"
+  },
+  {
+   "win": "011",
+   "write": true,
+   "data": "0",
+   "addr": 384,
+   "hex": "02803031313130034232"
+  },
+  {
+   "win": "011",
+   "write": true,
+   "data": "1",
+   "addr": 128,
+   "hex": "02803031313131034233"
+  },
+  {
+   "win": "011",
+   "write": true,
+   "data": "1",
+   "addr": 129,
+   "hex": "02813031313131034232"
+  },
+  {
+   "win": "011",
+   "write": true,
+   "data": "1",
+   "addr": 0,
+   "hex": "02003031313131033333"
+  },
+  {
+   "win": "011",
+   "write": true,
+   "data": "1",
+   "addr": 255,
+   "hex": "02ff3031313131034343"
+  },
+  {
+   "win": "011",
+   "write": true,
+   "data": "1",
+   "addr": 384,
+   "hex": "02803031313131034233"
+  },
+  {
+   "win": "011",
+   "write": true,
+   "data": "12",
+   "addr": 128,
+   "hex": "0280303131313132033831"
+  },
+  {
+   "win": "011",
+   "write": true,
+   "data": "12",
+   "addr": 129,
+   "hex": "0281303131313132033830"
+  },
+  {
+   "win": "011",
+   "write": true,
+   "data": "12",
+   "addr": 0,
+   "hex": "0200303131313132033031"
+  },
+  {
+   "win": "011",
+   "write": true,
+   "data": "12",
+   "addr": 255,
+   "hex": "02ff303131313132034645"
+  },
+  {
+   "win": "011",
+   "write": true,
+   "data": "12",
+   "addr": 384,
+   "hex": "0280303131313132033831"
+  },
+  {
+   "win": "205",
+   "write": false,
+   "data": null,
+   "addr": 128,
+   "hex": "028032303530033834"
+  },
+  {
+   "win": "205",
+   "write": false,
+   "data": null,
+   "addr": 129,
+   "hex": "028132303530033835"
+  },
+  {
+   "win": "205",
+   "write": false,
+   "data": null,
+   "addr": 0,
+   "hex": "020032303530033034"
+  },
+  {
+   "win": "205",
+   "write": false,
+   "data": null,
+   "addr": 255,
+   "hex": "02ff32303530034642"
+  },
+  {
+   "win": "205",
+   "write": false,
+   "data": null,
+   "addr": 384,
+   "hex": "028032303530033834"
+  },
+  {
+   "win": "205",
+   "write": false,
+   "data": "",
+   "addr": 128,
+   "hex": "028032303530033834"
+  },
+  {
+   "win": "205",
+   "write": false,
+   "data": "",
+   "addr": 129,
+   "hex": "028132303530033835"
+  },
+  {
+   "win": "205",
+   "write": false,
+   "data": "",
+   "addr": 0,
+   "hex": "020032303530033034"
+  },
+  {
+   "win": "205",
+   "write": false,
+   "data": "",
+   "addr": 255,
+   "hex": "02ff32303530034642"
+  },
+  {
+   "win": "205",
+   "write": false,
+   "data": "",
+   "addr": 384,
+   "hex": "028032303530033834"
+  },
+  {
+   "win": "205",
+   "write": false,
+   "data": "0",
+   "addr": 128,
+   "hex": "02803230353030034234"
+  },
+  {
+   "win": "205",
+   "write": false,
+   "data": "0",
+   "addr": 129,
+   "hex": "02813230353030034235"
+  },
+  {
+   "win": "205",
+   "write": false,
+   "data": "0",
+   "addr": 0,
+   "hex": "02003230353030033334"
+  },
+  {
+   "win": "205",
+   "write": false,
+   "data": "0",
+   "addr": 255,
+   "hex": "02ff3230353030034342"
+  },
+  {
+   "win": "205",
+   "write": false,
+   "data": "0",
+   "addr": 384,
+   "hex": "02803230353030034234"
+  },
+  {
+   "win": "205",
+   "write": false,
+   "data": "1",
+   "addr": 128,
+   "hex": "02803230353031034235"
+  },
+  {
+   "win": "205",
+   "write": false,
+   "data": "1",
+   "addr": 129,
+   "hex": "02813230353031034234"
+  },
+  {
+   "win": "205",
+   "write": false,
+   "data": "1",
+   "addr": 0,
+   "hex": "02003230353031033335"
+  },
+  {
+   "win": "205",
+   "write": false,
+   "data": "1",
+   "addr": 255,
+   "hex": "02ff3230353031034341"
+  },
+  {
+   "win": "205",
+   "write": false,
+   "data": "1",
+   "addr": 384,
+   "hex": "02803230353031034235"
+  },
+  {
+   "win": "205",
+   "write": false,
+   "data": "12",
+   "addr": 128,
+   "hex": "0280323035303132033837"
+  },
+  {
+   "win": "205",
+   "write": false,
+   "data": "12",
+   "addr": 129,
+   "hex": "0281323035303132033836"
+  },
+  {
+   "win": "205",
+   "write": false,
+   "data": "12",
+   "addr": 0,
+   "hex": "0200323035303132033037"
+  },
+  {
+   "win": "205",
+   "write": false,
+   "data": "12",
+   "addr": 255,
+   "hex": "02ff323035303132034638"
+  },
+  {
+   "win": "205",
+   "write": false,
+   "data": "12",
+   "addr": 384,
+   "hex": "0280323035303132033837"
+  },
+  {
+   "win": "205",
+   "write": true,
+   "data": null,
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "write에는 DATA가 필요합니다."
+  },
+  {
+   "win": "205",
+   "write": true,
+   "data": null,
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "write에는 DATA가 필요합니다."
+  },
+  {
+   "win": "205",
+   "write": true,
+   "data": null,
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "write에는 DATA가 필요합니다."
+  },
+  {
+   "win": "205",
+   "write": true,
+   "data": null,
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "write에는 DATA가 필요합니다."
+  },
+  {
+   "win": "205",
+   "write": true,
+   "data": null,
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "write에는 DATA가 필요합니다."
+  },
+  {
+   "win": "205",
+   "write": true,
+   "data": "",
+   "addr": 128,
+   "hex": "028032303531033835"
+  },
+  {
+   "win": "205",
+   "write": true,
+   "data": "",
+   "addr": 129,
+   "hex": "028132303531033834"
+  },
+  {
+   "win": "205",
+   "write": true,
+   "data": "",
+   "addr": 0,
+   "hex": "020032303531033035"
+  },
+  {
+   "win": "205",
+   "write": true,
+   "data": "",
+   "addr": 255,
+   "hex": "02ff32303531034641"
+  },
+  {
+   "win": "205",
+   "write": true,
+   "data": "",
+   "addr": 384,
+   "hex": "028032303531033835"
+  },
+  {
+   "win": "205",
+   "write": true,
+   "data": "0",
+   "addr": 128,
+   "hex": "02803230353130034235"
+  },
+  {
+   "win": "205",
+   "write": true,
+   "data": "0",
+   "addr": 129,
+   "hex": "02813230353130034234"
+  },
+  {
+   "win": "205",
+   "write": true,
+   "data": "0",
+   "addr": 0,
+   "hex": "02003230353130033335"
+  },
+  {
+   "win": "205",
+   "write": true,
+   "data": "0",
+   "addr": 255,
+   "hex": "02ff3230353130034341"
+  },
+  {
+   "win": "205",
+   "write": true,
+   "data": "0",
+   "addr": 384,
+   "hex": "02803230353130034235"
+  },
+  {
+   "win": "205",
+   "write": true,
+   "data": "1",
+   "addr": 128,
+   "hex": "02803230353131034234"
+  },
+  {
+   "win": "205",
+   "write": true,
+   "data": "1",
+   "addr": 129,
+   "hex": "02813230353131034235"
+  },
+  {
+   "win": "205",
+   "write": true,
+   "data": "1",
+   "addr": 0,
+   "hex": "02003230353131033334"
+  },
+  {
+   "win": "205",
+   "write": true,
+   "data": "1",
+   "addr": 255,
+   "hex": "02ff3230353131034342"
+  },
+  {
+   "win": "205",
+   "write": true,
+   "data": "1",
+   "addr": 384,
+   "hex": "02803230353131034234"
+  },
+  {
+   "win": "205",
+   "write": true,
+   "data": "12",
+   "addr": 128,
+   "hex": "0280323035313132033836"
+  },
+  {
+   "win": "205",
+   "write": true,
+   "data": "12",
+   "addr": 129,
+   "hex": "0281323035313132033837"
+  },
+  {
+   "win": "205",
+   "write": true,
+   "data": "12",
+   "addr": 0,
+   "hex": "0200323035313132033036"
+  },
+  {
+   "win": "205",
+   "write": true,
+   "data": "12",
+   "addr": 255,
+   "hex": "02ff323035313132034639"
+  },
+  {
+   "win": "205",
+   "write": true,
+   "data": "12",
+   "addr": 384,
+   "hex": "0280323035313132033836"
+  },
+  {
+   "win": "000",
+   "write": false,
+   "data": null,
+   "addr": 128,
+   "hex": "028030303030033833"
+  },
+  {
+   "win": "000",
+   "write": false,
+   "data": null,
+   "addr": 129,
+   "hex": "028130303030033832"
+  },
+  {
+   "win": "000",
+   "write": false,
+   "data": null,
+   "addr": 0,
+   "hex": "020030303030033033"
+  },
+  {
+   "win": "000",
+   "write": false,
+   "data": null,
+   "addr": 255,
+   "hex": "02ff30303030034643"
+  },
+  {
+   "win": "000",
+   "write": false,
+   "data": null,
+   "addr": 384,
+   "hex": "028030303030033833"
+  },
+  {
+   "win": "000",
+   "write": false,
+   "data": "",
+   "addr": 128,
+   "hex": "028030303030033833"
+  },
+  {
+   "win": "000",
+   "write": false,
+   "data": "",
+   "addr": 129,
+   "hex": "028130303030033832"
+  },
+  {
+   "win": "000",
+   "write": false,
+   "data": "",
+   "addr": 0,
+   "hex": "020030303030033033"
+  },
+  {
+   "win": "000",
+   "write": false,
+   "data": "",
+   "addr": 255,
+   "hex": "02ff30303030034643"
+  },
+  {
+   "win": "000",
+   "write": false,
+   "data": "",
+   "addr": 384,
+   "hex": "028030303030033833"
+  },
+  {
+   "win": "000",
+   "write": false,
+   "data": "0",
+   "addr": 128,
+   "hex": "02803030303030034233"
+  },
+  {
+   "win": "000",
+   "write": false,
+   "data": "0",
+   "addr": 129,
+   "hex": "02813030303030034232"
+  },
+  {
+   "win": "000",
+   "write": false,
+   "data": "0",
+   "addr": 0,
+   "hex": "02003030303030033333"
+  },
+  {
+   "win": "000",
+   "write": false,
+   "data": "0",
+   "addr": 255,
+   "hex": "02ff3030303030034343"
+  },
+  {
+   "win": "000",
+   "write": false,
+   "data": "0",
+   "addr": 384,
+   "hex": "02803030303030034233"
+  },
+  {
+   "win": "000",
+   "write": false,
+   "data": "1",
+   "addr": 128,
+   "hex": "02803030303031034232"
+  },
+  {
+   "win": "000",
+   "write": false,
+   "data": "1",
+   "addr": 129,
+   "hex": "02813030303031034233"
+  },
+  {
+   "win": "000",
+   "write": false,
+   "data": "1",
+   "addr": 0,
+   "hex": "02003030303031033332"
+  },
+  {
+   "win": "000",
+   "write": false,
+   "data": "1",
+   "addr": 255,
+   "hex": "02ff3030303031034344"
+  },
+  {
+   "win": "000",
+   "write": false,
+   "data": "1",
+   "addr": 384,
+   "hex": "02803030303031034232"
+  },
+  {
+   "win": "000",
+   "write": false,
+   "data": "12",
+   "addr": 128,
+   "hex": "0280303030303132033830"
+  },
+  {
+   "win": "000",
+   "write": false,
+   "data": "12",
+   "addr": 129,
+   "hex": "0281303030303132033831"
+  },
+  {
+   "win": "000",
+   "write": false,
+   "data": "12",
+   "addr": 0,
+   "hex": "0200303030303132033030"
+  },
+  {
+   "win": "000",
+   "write": false,
+   "data": "12",
+   "addr": 255,
+   "hex": "02ff303030303132034646"
+  },
+  {
+   "win": "000",
+   "write": false,
+   "data": "12",
+   "addr": 384,
+   "hex": "0280303030303132033830"
+  },
+  {
+   "win": "000",
+   "write": true,
+   "data": null,
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "write에는 DATA가 필요합니다."
+  },
+  {
+   "win": "000",
+   "write": true,
+   "data": null,
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "write에는 DATA가 필요합니다."
+  },
+  {
+   "win": "000",
+   "write": true,
+   "data": null,
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "write에는 DATA가 필요합니다."
+  },
+  {
+   "win": "000",
+   "write": true,
+   "data": null,
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "write에는 DATA가 필요합니다."
+  },
+  {
+   "win": "000",
+   "write": true,
+   "data": null,
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "write에는 DATA가 필요합니다."
+  },
+  {
+   "win": "000",
+   "write": true,
+   "data": "",
+   "addr": 128,
+   "hex": "028030303031033832"
+  },
+  {
+   "win": "000",
+   "write": true,
+   "data": "",
+   "addr": 129,
+   "hex": "028130303031033833"
+  },
+  {
+   "win": "000",
+   "write": true,
+   "data": "",
+   "addr": 0,
+   "hex": "020030303031033032"
+  },
+  {
+   "win": "000",
+   "write": true,
+   "data": "",
+   "addr": 255,
+   "hex": "02ff30303031034644"
+  },
+  {
+   "win": "000",
+   "write": true,
+   "data": "",
+   "addr": 384,
+   "hex": "028030303031033832"
+  },
+  {
+   "win": "000",
+   "write": true,
+   "data": "0",
+   "addr": 128,
+   "hex": "02803030303130034232"
+  },
+  {
+   "win": "000",
+   "write": true,
+   "data": "0",
+   "addr": 129,
+   "hex": "02813030303130034233"
+  },
+  {
+   "win": "000",
+   "write": true,
+   "data": "0",
+   "addr": 0,
+   "hex": "02003030303130033332"
+  },
+  {
+   "win": "000",
+   "write": true,
+   "data": "0",
+   "addr": 255,
+   "hex": "02ff3030303130034344"
+  },
+  {
+   "win": "000",
+   "write": true,
+   "data": "0",
+   "addr": 384,
+   "hex": "02803030303130034232"
+  },
+  {
+   "win": "000",
+   "write": true,
+   "data": "1",
+   "addr": 128,
+   "hex": "02803030303131034233"
+  },
+  {
+   "win": "000",
+   "write": true,
+   "data": "1",
+   "addr": 129,
+   "hex": "02813030303131034232"
+  },
+  {
+   "win": "000",
+   "write": true,
+   "data": "1",
+   "addr": 0,
+   "hex": "02003030303131033333"
+  },
+  {
+   "win": "000",
+   "write": true,
+   "data": "1",
+   "addr": 255,
+   "hex": "02ff3030303131034343"
+  },
+  {
+   "win": "000",
+   "write": true,
+   "data": "1",
+   "addr": 384,
+   "hex": "02803030303131034233"
+  },
+  {
+   "win": "000",
+   "write": true,
+   "data": "12",
+   "addr": 128,
+   "hex": "0280303030313132033831"
+  },
+  {
+   "win": "000",
+   "write": true,
+   "data": "12",
+   "addr": 129,
+   "hex": "0281303030313132033830"
+  },
+  {
+   "win": "000",
+   "write": true,
+   "data": "12",
+   "addr": 0,
+   "hex": "0200303030313132033031"
+  },
+  {
+   "win": "000",
+   "write": true,
+   "data": "12",
+   "addr": 255,
+   "hex": "02ff303030313132034645"
+  },
+  {
+   "win": "000",
+   "write": true,
+   "data": "12",
+   "addr": 384,
+   "hex": "0280303030313132033831"
+  },
+  {
+   "win": "999",
+   "write": false,
+   "data": null,
+   "addr": 128,
+   "hex": "028039393930033841"
+  },
+  {
+   "win": "999",
+   "write": false,
+   "data": null,
+   "addr": 129,
+   "hex": "028139393930033842"
+  },
+  {
+   "win": "999",
+   "write": false,
+   "data": null,
+   "addr": 0,
+   "hex": "020039393930033041"
+  },
+  {
+   "win": "999",
+   "write": false,
+   "data": null,
+   "addr": 255,
+   "hex": "02ff39393930034635"
+  },
+  {
+   "win": "999",
+   "write": false,
+   "data": null,
+   "addr": 384,
+   "hex": "028039393930033841"
+  },
+  {
+   "win": "999",
+   "write": false,
+   "data": "",
+   "addr": 128,
+   "hex": "028039393930033841"
+  },
+  {
+   "win": "999",
+   "write": false,
+   "data": "",
+   "addr": 129,
+   "hex": "028139393930033842"
+  },
+  {
+   "win": "999",
+   "write": false,
+   "data": "",
+   "addr": 0,
+   "hex": "020039393930033041"
+  },
+  {
+   "win": "999",
+   "write": false,
+   "data": "",
+   "addr": 255,
+   "hex": "02ff39393930034635"
+  },
+  {
+   "win": "999",
+   "write": false,
+   "data": "",
+   "addr": 384,
+   "hex": "028039393930033841"
+  },
+  {
+   "win": "999",
+   "write": false,
+   "data": "0",
+   "addr": 128,
+   "hex": "02803939393030034241"
+  },
+  {
+   "win": "999",
+   "write": false,
+   "data": "0",
+   "addr": 129,
+   "hex": "02813939393030034242"
+  },
+  {
+   "win": "999",
+   "write": false,
+   "data": "0",
+   "addr": 0,
+   "hex": "02003939393030033341"
+  },
+  {
+   "win": "999",
+   "write": false,
+   "data": "0",
+   "addr": 255,
+   "hex": "02ff3939393030034335"
+  },
+  {
+   "win": "999",
+   "write": false,
+   "data": "0",
+   "addr": 384,
+   "hex": "02803939393030034241"
+  },
+  {
+   "win": "999",
+   "write": false,
+   "data": "1",
+   "addr": 128,
+   "hex": "02803939393031034242"
+  },
+  {
+   "win": "999",
+   "write": false,
+   "data": "1",
+   "addr": 129,
+   "hex": "02813939393031034241"
+  },
+  {
+   "win": "999",
+   "write": false,
+   "data": "1",
+   "addr": 0,
+   "hex": "02003939393031033342"
+  },
+  {
+   "win": "999",
+   "write": false,
+   "data": "1",
+   "addr": 255,
+   "hex": "02ff3939393031034334"
+  },
+  {
+   "win": "999",
+   "write": false,
+   "data": "1",
+   "addr": 384,
+   "hex": "02803939393031034242"
+  },
+  {
+   "win": "999",
+   "write": false,
+   "data": "12",
+   "addr": 128,
+   "hex": "0280393939303132033839"
+  },
+  {
+   "win": "999",
+   "write": false,
+   "data": "12",
+   "addr": 129,
+   "hex": "0281393939303132033838"
+  },
+  {
+   "win": "999",
+   "write": false,
+   "data": "12",
+   "addr": 0,
+   "hex": "0200393939303132033039"
+  },
+  {
+   "win": "999",
+   "write": false,
+   "data": "12",
+   "addr": 255,
+   "hex": "02ff393939303132034636"
+  },
+  {
+   "win": "999",
+   "write": false,
+   "data": "12",
+   "addr": 384,
+   "hex": "0280393939303132033839"
+  },
+  {
+   "win": "999",
+   "write": true,
+   "data": null,
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "write에는 DATA가 필요합니다."
+  },
+  {
+   "win": "999",
+   "write": true,
+   "data": null,
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "write에는 DATA가 필요합니다."
+  },
+  {
+   "win": "999",
+   "write": true,
+   "data": null,
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "write에는 DATA가 필요합니다."
+  },
+  {
+   "win": "999",
+   "write": true,
+   "data": null,
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "write에는 DATA가 필요합니다."
+  },
+  {
+   "win": "999",
+   "write": true,
+   "data": null,
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "write에는 DATA가 필요합니다."
+  },
+  {
+   "win": "999",
+   "write": true,
+   "data": "",
+   "addr": 128,
+   "hex": "028039393931033842"
+  },
+  {
+   "win": "999",
+   "write": true,
+   "data": "",
+   "addr": 129,
+   "hex": "028139393931033841"
+  },
+  {
+   "win": "999",
+   "write": true,
+   "data": "",
+   "addr": 0,
+   "hex": "020039393931033042"
+  },
+  {
+   "win": "999",
+   "write": true,
+   "data": "",
+   "addr": 255,
+   "hex": "02ff39393931034634"
+  },
+  {
+   "win": "999",
+   "write": true,
+   "data": "",
+   "addr": 384,
+   "hex": "028039393931033842"
+  },
+  {
+   "win": "999",
+   "write": true,
+   "data": "0",
+   "addr": 128,
+   "hex": "02803939393130034242"
+  },
+  {
+   "win": "999",
+   "write": true,
+   "data": "0",
+   "addr": 129,
+   "hex": "02813939393130034241"
+  },
+  {
+   "win": "999",
+   "write": true,
+   "data": "0",
+   "addr": 0,
+   "hex": "02003939393130033342"
+  },
+  {
+   "win": "999",
+   "write": true,
+   "data": "0",
+   "addr": 255,
+   "hex": "02ff3939393130034334"
+  },
+  {
+   "win": "999",
+   "write": true,
+   "data": "0",
+   "addr": 384,
+   "hex": "02803939393130034242"
+  },
+  {
+   "win": "999",
+   "write": true,
+   "data": "1",
+   "addr": 128,
+   "hex": "02803939393131034241"
+  },
+  {
+   "win": "999",
+   "write": true,
+   "data": "1",
+   "addr": 129,
+   "hex": "02813939393131034242"
+  },
+  {
+   "win": "999",
+   "write": true,
+   "data": "1",
+   "addr": 0,
+   "hex": "02003939393131033341"
+  },
+  {
+   "win": "999",
+   "write": true,
+   "data": "1",
+   "addr": 255,
+   "hex": "02ff3939393131034335"
+  },
+  {
+   "win": "999",
+   "write": true,
+   "data": "1",
+   "addr": 384,
+   "hex": "02803939393131034241"
+  },
+  {
+   "win": "999",
+   "write": true,
+   "data": "12",
+   "addr": 128,
+   "hex": "0280393939313132033838"
+  },
+  {
+   "win": "999",
+   "write": true,
+   "data": "12",
+   "addr": 129,
+   "hex": "0281393939313132033839"
+  },
+  {
+   "win": "999",
+   "write": true,
+   "data": "12",
+   "addr": 0,
+   "hex": "0200393939313132033038"
+  },
+  {
+   "win": "999",
+   "write": true,
+   "data": "12",
+   "addr": 255,
+   "hex": "02ff393939313132034637"
+  },
+  {
+   "win": "999",
+   "write": true,
+   "data": "12",
+   "addr": 384,
+   "hex": "0280393939313132033838"
+  },
+  {
+   "win": "01",
+   "write": false,
+   "data": null,
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": false,
+   "data": null,
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": false,
+   "data": null,
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": false,
+   "data": null,
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": false,
+   "data": null,
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": false,
+   "data": "",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": false,
+   "data": "",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": false,
+   "data": "",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": false,
+   "data": "",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": false,
+   "data": "",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": false,
+   "data": "0",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": false,
+   "data": "0",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": false,
+   "data": "0",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": false,
+   "data": "0",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": false,
+   "data": "0",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": false,
+   "data": "1",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": false,
+   "data": "1",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": false,
+   "data": "1",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": false,
+   "data": "1",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": false,
+   "data": "1",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": false,
+   "data": "12",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": false,
+   "data": "12",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": false,
+   "data": "12",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": false,
+   "data": "12",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": false,
+   "data": "12",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": true,
+   "data": null,
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": true,
+   "data": null,
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": true,
+   "data": null,
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": true,
+   "data": null,
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": true,
+   "data": null,
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": true,
+   "data": "",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": true,
+   "data": "",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": true,
+   "data": "",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": true,
+   "data": "",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": true,
+   "data": "",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": true,
+   "data": "0",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": true,
+   "data": "0",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": true,
+   "data": "0",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": true,
+   "data": "0",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": true,
+   "data": "0",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": true,
+   "data": "1",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": true,
+   "data": "1",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": true,
+   "data": "1",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": true,
+   "data": "1",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": true,
+   "data": "1",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": true,
+   "data": "12",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": true,
+   "data": "12",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": true,
+   "data": "12",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": true,
+   "data": "12",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "01",
+   "write": true,
+   "data": "12",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '01'"
+  },
+  {
+   "win": "0111",
+   "write": false,
+   "data": null,
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": false,
+   "data": null,
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": false,
+   "data": null,
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": false,
+   "data": null,
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": false,
+   "data": null,
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": false,
+   "data": "",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": false,
+   "data": "",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": false,
+   "data": "",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": false,
+   "data": "",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": false,
+   "data": "",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": false,
+   "data": "0",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": false,
+   "data": "0",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": false,
+   "data": "0",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": false,
+   "data": "0",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": false,
+   "data": "0",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": false,
+   "data": "1",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": false,
+   "data": "1",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": false,
+   "data": "1",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": false,
+   "data": "1",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": false,
+   "data": "1",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": false,
+   "data": "12",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": false,
+   "data": "12",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": false,
+   "data": "12",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": false,
+   "data": "12",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": false,
+   "data": "12",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": true,
+   "data": null,
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": true,
+   "data": null,
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": true,
+   "data": null,
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": true,
+   "data": null,
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": true,
+   "data": null,
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": true,
+   "data": "",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": true,
+   "data": "",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": true,
+   "data": "",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": true,
+   "data": "",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": true,
+   "data": "",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": true,
+   "data": "0",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": true,
+   "data": "0",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": true,
+   "data": "0",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": true,
+   "data": "0",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": true,
+   "data": "0",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": true,
+   "data": "1",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": true,
+   "data": "1",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": true,
+   "data": "1",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": true,
+   "data": "1",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": true,
+   "data": "1",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": true,
+   "data": "12",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": true,
+   "data": "12",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": true,
+   "data": "12",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": true,
+   "data": "12",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "0111",
+   "write": true,
+   "data": "12",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '0111'"
+  },
+  {
+   "win": "abc",
+   "write": false,
+   "data": null,
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": false,
+   "data": null,
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": false,
+   "data": null,
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": false,
+   "data": null,
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": false,
+   "data": null,
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": false,
+   "data": "",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": false,
+   "data": "",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": false,
+   "data": "",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": false,
+   "data": "",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": false,
+   "data": "",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": false,
+   "data": "0",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": false,
+   "data": "0",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": false,
+   "data": "0",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": false,
+   "data": "0",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": false,
+   "data": "0",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": false,
+   "data": "1",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": false,
+   "data": "1",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": false,
+   "data": "1",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": false,
+   "data": "1",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": false,
+   "data": "1",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": false,
+   "data": "12",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": false,
+   "data": "12",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": false,
+   "data": "12",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": false,
+   "data": "12",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": false,
+   "data": "12",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": true,
+   "data": null,
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": true,
+   "data": null,
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": true,
+   "data": null,
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": true,
+   "data": null,
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": true,
+   "data": null,
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": true,
+   "data": "",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": true,
+   "data": "",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": true,
+   "data": "",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": true,
+   "data": "",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": true,
+   "data": "",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": true,
+   "data": "0",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": true,
+   "data": "0",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": true,
+   "data": "0",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": true,
+   "data": "0",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": true,
+   "data": "0",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": true,
+   "data": "1",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": true,
+   "data": "1",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": true,
+   "data": "1",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": true,
+   "data": "1",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": true,
+   "data": "1",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": true,
+   "data": "12",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": true,
+   "data": "12",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": true,
+   "data": "12",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": true,
+   "data": "12",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "abc",
+   "write": true,
+   "data": "12",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: 'abc'"
+  },
+  {
+   "win": "2O5",
+   "write": false,
+   "data": null,
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": false,
+   "data": null,
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": false,
+   "data": null,
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": false,
+   "data": null,
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": false,
+   "data": null,
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": false,
+   "data": "",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": false,
+   "data": "",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": false,
+   "data": "",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": false,
+   "data": "",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": false,
+   "data": "",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": false,
+   "data": "0",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": false,
+   "data": "0",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": false,
+   "data": "0",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": false,
+   "data": "0",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": false,
+   "data": "0",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": false,
+   "data": "1",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": false,
+   "data": "1",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": false,
+   "data": "1",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": false,
+   "data": "1",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": false,
+   "data": "1",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": false,
+   "data": "12",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": false,
+   "data": "12",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": false,
+   "data": "12",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": false,
+   "data": "12",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": false,
+   "data": "12",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": true,
+   "data": null,
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": true,
+   "data": null,
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": true,
+   "data": null,
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": true,
+   "data": null,
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": true,
+   "data": null,
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": true,
+   "data": "",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": true,
+   "data": "",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": true,
+   "data": "",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": true,
+   "data": "",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": true,
+   "data": "",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": true,
+   "data": "0",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": true,
+   "data": "0",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": true,
+   "data": "0",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": true,
+   "data": "0",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": true,
+   "data": "0",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": true,
+   "data": "1",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": true,
+   "data": "1",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": true,
+   "data": "1",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": true,
+   "data": "1",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": true,
+   "data": "1",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": true,
+   "data": "12",
+   "addr": 128,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": true,
+   "data": "12",
+   "addr": 129,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": true,
+   "data": "12",
+   "addr": 0,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": true,
+   "data": "12",
+   "addr": 255,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  },
+  {
+   "win": "2O5",
+   "write": true,
+   "data": "12",
+   "addr": 384,
+   "exc": "ValueError",
+   "msg": "WIN은 3자리 숫자여야 합니다: '2O5'"
+  }
+ ],
+ "parse": [
+  {
+   "raw": "06",
+   "kind": "ACK",
+   "data": null
+  },
+  {
+   "raw": "15",
+   "kind": "NACK",
+   "data": null
+  },
+  {
+   "raw": "32",
+   "kind": "ERR",
+   "data": "32"
+  },
+  {
+   "raw": "33",
+   "kind": "ERR",
+   "data": "33"
+  },
+  {
+   "raw": "34",
+   "kind": "ERR",
+   "data": "34"
+  },
+  {
+   "raw": "35",
+   "kind": "ERR",
+   "data": "35"
+  },
+  {
+   "raw": "07",
+   "kind": "RAW",
+   "data": "07"
+  },
+  {
+   "raw": "028006033835",
+   "kind": "ACK",
+   "data": null
+  },
+  {
+   "raw": "028015033936",
+   "kind": "NACK",
+   "data": null
+  },
+  {
+   "raw": "028032034231",
+   "kind": "ERR",
+   "data": "32"
+  },
+  {
+   "raw": "028035034236",
+   "kind": "ERR",
+   "data": "35"
+  },
+  {
+   "raw": "028106033834",
+   "kind": "ACK",
+   "data": null
+  },
+  {
+   "raw": "028032303530303030303030033834",
+   "kind": "DATA",
+   "data": "000000"
+  },
+  {
+   "raw": "028032303530303030303033033837",
+   "kind": "DATA",
+   "data": "000003"
+  },
+  {
+   "raw": "028032303530303030303035033831",
+   "kind": "DATA",
+   "data": "000005"
+  },
+  {
+   "raw": "028032303533033837",
+   "kind": "DATA",
+   "data": "3"
+  },
+  {
+   "raw": "02803230353133034236",
+   "kind": "DATA",
+   "data": "3"
+  },
+  {
+   "raw": "02803230353037034233",
+   "kind": "DATA",
+   "data": "7"
+  },
+  {
+   "raw": "02803031313031034232",
+   "kind": "DATA",
+   "data": "1"
+  },
+  {
+   "raw": "0280323035034234",
+   "kind": "DATA",
+   "data": ""
+  },
+  {
+   "raw": "0280033833",
+   "kind": "RAW",
+   "data": "0280033833"
+  },
+  {
+   "raw": "028006033030",
+   "exc": "TSPProtocolError",
+   "msg": "CRC 불일치"
+  },
+  {
+   "raw": "010203",
+   "kind": "RAW",
+   "data": "010203"
+  },
+  {
+   "raw": "028032303503",
+   "kind": "RAW",
+   "data": "028032303503"
+  },
+  {
+   "raw": "",
+   "kind": "RAW",
+   "data": ""
+  },
+  {
+   "raw": "02804142033830",
+   "kind": "RAW",
+   "data": "02804142033830"
+  }
+ ],
+ "cases": [
+  {
+   "cfg": {},
+   "script": [
+    "028006033835",
+    "028032303530303030303033033837"
+   ],
+   "ops": [
+    {
+     "op": "on",
+     "kw": {}
+    }
+   ],
+   "tx": [
+    {
+     "conn": 1,
+     "hex": "02803031313131034233"
+    },
+    {
+     "conn": 1,
+     "hex": "028032303530033834"
+    }
+   ],
+   "results": [
+    {
+     "op": "on",
+     "ok": true,
+     "value": null
+    }
+   ],
+   "name": "on_ok"
+  },
+  {
+   "cfg": {},
+   "script": [
+    "028006033835",
+    "028032303530303030303030033834",
+    "028032303530303030303032033836",
+    "028032303530303030303035033831"
+   ],
+   "ops": [
+    {
+     "op": "on",
+     "kw": {}
+    }
+   ],
+   "tx": [
+    {
+     "conn": 1,
+     "hex": "02803031313131034233"
+    },
+    {
+     "conn": 1,
+     "hex": "028032303530033834"
+    },
+    {
+     "conn": 1,
+     "hex": "028032303530033834"
+    },
+    {
+     "conn": 1,
+     "hex": "028032303530033834"
+    }
+   ],
+   "results": [
+    {
+     "op": "on",
+     "ok": true,
+     "value": null
+    }
+   ],
+   "name": "on_after_polls"
+  },
+  {
+   "cfg": {},
+   "script": [
+    "028006033835",
+    "028032303530303030303030033834"
+   ],
+   "ops": [
+    {
+     "op": "off",
+     "kw": {}
+    }
+   ],
+   "tx": [
+    {
+     "conn": 1,
+     "hex": "02803031313130034232"
+    },
+    {
+     "conn": 1,
+     "hex": "028032303530033834"
+    }
+   ],
+   "results": [
+    {
+     "op": "off",
+     "ok": true,
+     "value": null
+    }
+   ],
+   "name": "off_ok"
+  },
+  {
+   "cfg": {},
+   "script": [
+    "028006033835",
+    "028032303530303030303035033831",
+    "028032303530303030303033033837",
+    "028032303530303030303030033834"
+   ],
+   "ops": [
+    {
+     "op": "off",
+     "kw": {}
+    }
+   ],
+   "tx": [
+    {
+     "conn": 1,
+     "hex": "02803031313130034232"
+    },
+    {
+     "conn": 1,
+     "hex": "028032303530033834"
+    },
+    {
+     "conn": 1,
+     "hex": "028032303530033834"
+    },
+    {
+     "conn": 1,
+     "hex": "028032303530033834"
+    }
+   ],
+   "results": [
+    {
+     "op": "off",
+     "ok": true,
+     "value": null
+    }
+   ],
+   "name": "off_after_polls"
+  },
+  {
+   "cfg": {},
+   "script": [
+    "028032303530303030303034033830",
+    "028032303530303030303030033834",
+    "028032303533033837",
+    "028006033835"
+   ],
+   "ops": [
+    {
+     "op": "get_status",
+     "kw": {}
+    },
+    {
+     "op": "get_status",
+     "kw": {}
+    },
+    {
+     "op": "get_status",
+     "kw": {}
+    },
+    {
+     "op": "get_status",
+     "kw": {}
+    }
+   ],
+   "tx": [
+    {
+     "conn": 1,
+     "hex": "028032303530033834"
+    },
+    {
+     "conn": 1,
+     "hex": "028032303530033834"
+    },
+    {
+     "conn": 1,
+     "hex": "028032303530033834"
+    },
+    {
+     "conn": 1,
+     "hex": "028032303530033834"
+    }
+   ],
+   "results": [
+    {
+     "op": "get_status",
+     "ok": true,
+     "value": 4
+    },
+    {
+     "op": "get_status",
+     "ok": true,
+     "value": 0
+    },
+    {
+     "op": "get_status",
+     "ok": true,
+     "value": 3
+    },
+    {
+     "op": "get_status",
+     "ok": true,
+     "value": null
+    }
+   ],
+   "name": "status_values"
+  },
+  {
+   "cfg": {},
+   "script": [
+    "06",
+    "028032303530303030303034033830"
+   ],
+   "ops": [
+    {
+     "op": "on",
+     "kw": {}
+    }
+   ],
+   "tx": [
+    {
+     "conn": 1,
+     "hex": "02803031313131034233"
+    },
+    {
+     "conn": 1,
+     "hex": "028032303530033834"
+    }
+   ],
+   "results": [
+    {
+     "op": "on",
+     "ok": true,
+     "value": null
+    }
+   ],
+   "name": "on_short_ack"
+  },
+  {
+   "cfg": {},
+   "script": [
+    "028015033936",
+    "028032303530303030303030033834"
+   ],
+   "ops": [
+    {
+     "op": "on",
+     "kw": {}
+    },
+    {
+     "op": "get_status",
+     "kw": {}
+    }
+   ],
+   "tx": [
+    {
+     "conn": 1,
+     "hex": "02803031313131034233"
+    },
+    {
+     "conn": 2,
+     "hex": "028032303530033834"
+    }
+   ],
+   "results": [
+    {
+     "op": "on",
+     "ok": false,
+     "exc": "TSPNackError",
+     "msg": "NACK"
+    },
+    {
+     "op": "get_status",
+     "ok": true,
+     "value": 0
+    }
+   ],
+   "name": "on_nack_then_reconnect"
+  },
+  {
+   "cfg": {},
+   "script": [
+    "15",
+    "028032303530303030303030033834"
+   ],
+   "ops": [
+    {
+     "op": "on",
+     "kw": {}
+    },
+    {
+     "op": "get_status",
+     "kw": {}
+    }
+   ],
+   "tx": [
+    {
+     "conn": 1,
+     "hex": "02803031313131034233"
+    },
+    {
+     "conn": 2,
+     "hex": "028032303530033834"
+    }
+   ],
+   "results": [
+    {
+     "op": "on",
+     "ok": false,
+     "exc": "TSPNackError",
+     "msg": "NACK"
+    },
+    {
+     "op": "get_status",
+     "ok": true,
+     "value": 0
+    }
+   ],
+   "name": "on_short_nack"
+  },
+  {
+   "cfg": {},
+   "script": [
+    "028032034231",
+    "028032303530303030303030033834"
+   ],
+   "ops": [
+    {
+     "op": "get_status",
+     "kw": {}
+    },
+    {
+     "op": "get_status",
+     "kw": {}
+    }
+   ],
+   "tx": [
+    {
+     "conn": 1,
+     "hex": "028032303530033834"
+    },
+    {
+     "conn": 2,
+     "hex": "028032303530033834"
+    }
+   ],
+   "results": [
+    {
+     "op": "get_status",
+     "ok": false,
+     "exc": "TSPWindowError",
+     "msg": "Unknown Window"
+    },
+    {
+     "op": "get_status",
+     "ok": true,
+     "value": 0
+    }
+   ],
+   "name": "window_error"
+  },
+  {
+   "cfg": {},
+   "script": [
+    "028032303530303030303033033030",
+    "028032303530303030303033033837"
+   ],
+   "ops": [
+    {
+     "op": "get_status",
+     "kw": {}
+    },
+    {
+     "op": "get_status",
+     "kw": {}
+    }
+   ],
+   "tx": [
+    {
+     "conn": 1,
+     "hex": "028032303530033834"
+    },
+    {
+     "conn": 2,
+     "hex": "028032303530033834"
+    }
+   ],
+   "results": [
+    {
+     "op": "get_status",
+     "ok": false,
+     "exc": "TSPProtocolError",
+     "msg": "CRC 불일치"
+    },
+    {
+     "op": "get_status",
+     "ok": true,
+     "value": 3
+    }
+   ],
+   "name": "crc_bad_then_reconnect"
+  },
+  {
+   "cfg": {},
+   "script": [
+    "028032303530303030303033033837",
+    "028032303530303030303033033837"
+   ],
+   "ops": [
+    {
+     "op": "off",
+     "kw": {}
+    },
+    {
+     "op": "get_status",
+     "kw": {}
+    }
+   ],
+   "tx": [
+    {
+     "conn": 1,
+     "hex": "02803031313130034232"
+    },
+    {
+     "conn": 2,
+     "hex": "028032303530033834"
+    }
+   ],
+   "results": [
+    {
+     "op": "off",
+     "ok": false,
+     "exc": "TSPProtocolError",
+     "msg": "예상치 못한 응답: DATA 000003"
+    },
+    {
+     "op": "get_status",
+     "ok": true,
+     "value": 3
+    }
+   ],
+   "name": "write_gets_data"
+  },
+  {
+   "cfg": {
+    "TSP_VERIFY_WITH_STATUS": false
+   },
+   "script": [
+    "028006033835",
+    "028006033835"
+   ],
+   "ops": [
+    {
+     "op": "on",
+     "kw": {}
+    },
+    {
+     "op": "off",
+     "kw": {}
+    }
+   ],
+   "tx": [
+    {
+     "conn": 1,
+     "hex": "02803031313131034233"
+    },
+    {
+     "conn": 1,
+     "hex": "02803031313130034232"
+    }
+   ],
+   "results": [
+    {
+     "op": "on",
+     "ok": true,
+     "value": null
+    },
+    {
+     "op": "off",
+     "ok": true,
+     "value": null
+    }
+   ],
+   "name": "no_verify"
+  },
+  {
+   "cfg": {
+    "TSP_RS232_ADDR": 129
+   },
+   "script": [
+    "028106033834",
+    "028032303530303030303033033837"
+   ],
+   "ops": [
+    {
+     "op": "on",
+     "kw": {}
+    }
+   ],
+   "tx": [
+    {
+     "conn": 1,
+     "hex": "02813031313131034232"
+    },
+    {
+     "conn": 1,
+     "hex": "028132303530033835"
+    }
+   ],
+   "results": [
+    {
+     "op": "on",
+     "ok": true,
+     "value": null
+    }
+   ],
+   "name": "addr_0x81"
+  },
+  {
+   "cfg": {
+    "TSP_RS232_ADDR": null,
+    "TSP_ADDR": 130
+   },
+   "script": [
+    "028032303530303030303030033834"
+   ],
+   "ops": [
+    {
+     "op": "get_status",
+     "kw": {}
+    }
+   ],
+   "tx": [
+    {
+     "conn": 1,
+     "hex": "028232303530033836"
+    }
+   ],
+   "results": [
+    {
+     "op": "get_status",
+     "ok": true,
+     "value": 0
+    }
+   ],
+   "name": "legacy_addr_key"
+  },
+  {
+   "cfg": {
+    "TSP_WRITE_TIMEOUT_S": 0.3
+   },
+   "script": [
+    null,
+    "028032303530303030303030033834"
+   ],
+   "ops": [
+    {
+     "op": "get_status",
+     "kw": {}
+    },
+    {
+     "op": "get_status",
+     "kw": {}
+    }
+   ],
+   "tx": [
+    {
+     "conn": 1,
+     "hex": "028032303530033834"
+    },
+    {
+     "conn": 2,
+     "hex": "028032303530033834"
+    }
+   ],
+   "results": [
+    {
+     "op": "get_status",
+     "ok": false,
+     "exc": "TimeoutError",
+     "msg": ""
+    },
+    {
+     "op": "get_status",
+     "ok": true,
+     "value": 0
+    }
+   ],
+   "name": "no_response_then_reconnect"
+  },
+  {
+   "cfg": {},
+   "script": [
+    "close",
+    "028032303530303030303030033834"
+   ],
+   "ops": [
+    {
+     "op": "get_status",
+     "kw": {}
+    },
+    {
+     "op": "get_status",
+     "kw": {}
+    }
+   ],
+   "tx": [
+    {
+     "conn": 1,
+     "hex": "028032303530033834"
+    },
+    {
+     "conn": 2,
+     "hex": "028032303530033834"
+    }
+   ],
+   "results": [
+    {
+     "op": "get_status",
+     "ok": false,
+     "exc": "IncompleteReadError",
+     "msg": "0 bytes read on a total of 1 expected bytes"
+    },
+    {
+     "op": "get_status",
+     "ok": true,
+     "value": 0
+    }
+   ],
+   "name": "server_closes_then_reconnect"
+  },
+  {
+   "cfg": {},
+   "script": [
+    "41",
+    "028032303530303030303030033834"
+   ],
+   "ops": [
+    {
+     "op": "get_status",
+     "kw": {}
+    },
+    {
+     "op": "get_status",
+     "kw": {}
+    }
+   ],
+   "tx": [
+    {
+     "conn": 1,
+     "hex": "028032303530033834"
+    },
+    {
+     "conn": 2,
+     "hex": "028032303530033834"
+    }
+   ],
+   "results": [
+    {
+     "op": "get_status",
+     "ok": false,
+     "exc": "TSPProtocolError",
+     "msg": "STX 아님: 0x41"
+    },
+    {
+     "op": "get_status",
+     "ok": true,
+     "value": 0
+    }
+   ],
+   "name": "not_stx"
+  },
+  {
+   "cfg": {
+    "TSP_TOLERATE_SHORT_RESP": false
+   },
+   "script": [
+    "06",
+    "028032303530303030303030033834"
+   ],
+   "ops": [
+    {
+     "op": "get_status",
+     "kw": {}
+    },
+    {
+     "op": "get_status",
+     "kw": {}
+    }
+   ],
+   "tx": [
+    {
+     "conn": 1,
+     "hex": "028032303530033834"
+    },
+    {
+     "conn": 2,
+     "hex": "028032303530033834"
+    }
+   ],
+   "results": [
+    {
+     "op": "get_status",
+     "ok": false,
+     "exc": "TSPProtocolError",
+     "msg": "STX 아님: 0x06"
+    },
+    {
+     "op": "get_status",
+     "ok": true,
+     "value": 0
+    }
+   ],
+   "name": "short_not_tolerated"
+  },
+  {
+   "cfg": {},
+   "script": [
+    "028006033835",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836",
+    "028032303530303030303032033836"
+   ],
+   "ops": [
+    {
+     "op": "on",
+     "kw": {
+      "wait_ok": 0.2
+     }
+    }
+   ],
+   "tx": [
+    {
+     "conn": 1,
+     "hex": "02803031313131034233"
+    },
+    {
+     "conn": 1,
+     "hex": "028032303530033834"
+    },
+    {
+     "conn": 1,
+     "hex": "028032303530033834"
+    },
+    {
+     "conn": 1,
+     "hex": "028032303530033834"
+    },
+    {
+     "conn": 1,
+     "hex": "028032303530033834"
+    }
+   ],
+   "results": [
+    {
+     "op": "on",
+     "ok": false,
+     "exc": "TSPError",
+     "msg": "상태 확인 시간초과(target=on, last=2)"
+    }
+   ],
+   "name": "verify_timeout_short_window"
+  }
+ ]
+}

@@ -74,11 +74,12 @@ class FakeApi:
         return self
 
     def stop(self) -> None:
-        self._httpd.shutdown()
-        self._httpd.server_close()
+        """멈춤(여러 번 불러도 됨 — 돌고 있을 때만 shutdown: 안 돌 때 부르면 영원히 기다린다)."""
         if self._thread is not None:
+            self._httpd.shutdown()
             self._thread.join(timeout=5.0)
             self._thread = None
+        self._httpd.server_close()
 
     def __enter__(self) -> "FakeApi":
         return self.start()

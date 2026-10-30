@@ -1,0 +1,123 @@
+{
+ "generated_by": "v2/tools/v1golden_oes.py — v1 device/oes.py OESAsync 를 가짜 워커 프로세스에 붙여 실제로 보낸 것",
+ "v1_commit": "66efc7b1d079dfb137dd487c4b444160744fc9cb",
+ "worker_exe": "<BASE>/apps/oes_service/oes_worker.exe",
+ "local_dir": {
+  "ch1": "<BASE>/oes/CH1",
+  "ch2": "<BASE>/oes/CH2"
+ },
+ "spawns": [
+  {
+   "argv": [
+    "--cmd",
+    "daemon",
+    "--ch",
+    "1",
+    "--usb",
+    "0",
+    "--out_dir",
+    "<BASE>/oes/CH1"
+   ],
+   "env": {
+    "OES_INIT_TIMEOUT_S": "18.0",
+    "PYTHONUNBUFFERED": "1"
+   }
+  },
+  {
+   "argv": [
+    "--cmd",
+    "init",
+    "--ch",
+    "2",
+    "--usb",
+    "1"
+   ],
+   "env": {
+    "OES_INIT_TIMEOUT_S": "18.0",
+    "PYTHONUNBUFFERED": "1"
+   }
+  },
+  {
+   "argv": [
+    "--cmd",
+    "measure",
+    "--ch",
+    "2",
+    "--usb",
+    "1",
+    "--duration",
+    "2.0",
+    "--integration_ms",
+    "60",
+    "--sample_interval_s",
+    "1.0",
+    "--avg_count",
+    "3",
+    "--out_csv",
+    "<BASE>/oes/CH2/OES_Data_<TS>.csv"
+   ],
+   "env": {
+    "OES_INIT_TIMEOUT_S": "12.0",
+    "PYTHONUNBUFFERED": "1"
+   }
+  }
+ ],
+ "stdin": [
+  {
+   "cmd": "measure",
+   "duration_s": 2.0,
+   "integration_ms": 50,
+   "sample_interval_s": 1.0,
+   "avg_count": 3,
+   "out_csv": "<BASE>/oes/CH1/OES_Data_<TS>.csv",
+   "out_dir": "<BASE>/oes/CH1"
+  },
+  {
+   "cmd": "measure",
+   "duration_s": 2.0,
+   "integration_ms": 50,
+   "sample_interval_s": 1.0,
+   "avg_count": 3,
+   "out_csv": "<BASE>/oes/CH1/OES_Data_<TS>.csv",
+   "out_dir": "<BASE>/oes/CH1"
+  },
+  {
+   "cmd": "measure",
+   "duration_s": 30.0,
+   "integration_ms": 50,
+   "sample_interval_s": 1.0,
+   "avg_count": 3,
+   "out_csv": "<BASE>/oes/CH1/OES_Data_<TS>.csv",
+   "out_dir": "<BASE>/oes/CH1"
+  },
+  {
+   "cmd": "close"
+  }
+ ],
+ "stop_flags": [
+  {
+   ".stop_usb0.flag": "stop\n",
+   "OES_Data_<TS>.csv.stop": "stop\n"
+  }
+ ],
+ "finished": [
+  {
+   "scenario": "daemon",
+   "success": true,
+   "message": "OES 측정 완료(로컬 저장)",
+   "rows": 2
+  },
+  {
+   "scenario": "daemon",
+   "success": true,
+   "message": "OES 측정 완료(로컬 저장)",
+   "rows": 2
+  },
+  {
+   "scenario": "oneshot",
+   "success": true,
+   "message": "OES 측정 완료(로컬 저장)",
+   "rows": 2
+  }
+ ]
+}

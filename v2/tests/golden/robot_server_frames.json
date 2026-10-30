@@ -1,0 +1,2253 @@
+{
+ "meta": {
+  "tool": "v2/tools/v1golden_robot_server.py",
+  "fixed_ts": 1793318400,
+  "python": "3.13.17",
+  "v1": [
+   "host/protocol.py",
+   "host/server.py",
+   "host/router.py",
+   "errors/error_payload.py",
+   "errors/error_reporter.py",
+   "errors/error_registry.py",
+   "util/log_hub.py"
+  ],
+  "note": "v1 HostServer 를 127.0.0.1 임의 포트로 실제 실행. 핸들러만 가짜(v1 Router 에 등록)."
+ },
+ "error_defs": {
+  "E102": [
+   "지원하지 않는 프로토콜 버전",
+   "TRANSPORT",
+   "STOP",
+   "ERROR",
+   "서버가 지원하지 않는 프로토콜 버전으로 요청이 들어왔습니다.",
+   "클라이언트와 서버의 프로토콜 버전을 일치시키십시오."
+  ],
+  "E104": [
+   "잘못된 JSON 본문",
+   "TRANSPORT",
+   "STOP",
+   "ERROR",
+   "요청 본문 JSON 디코딩에 실패했습니다.",
+   "클라이언트가 전송한 JSON 형식과 인코딩을 확인하십시오."
+  ],
+  "E105": [
+   "명령 누락",
+   "REQUEST",
+   "STOP",
+   "ERROR",
+   "요청 본문에 command 필드가 없습니다.",
+   "클라이언트가 command를 포함하도록 수정하십시오."
+  ],
+  "E106": [
+   "알 수 없는 명령",
+   "REQUEST",
+   "STOP",
+   "ERROR",
+   "등록되지 않은 command가 요청되었습니다.",
+   "클라이언트 명령명을 서버 라우터 등록값과 일치시키십시오."
+  ],
+  "E107": [
+   "응답 직렬화 실패",
+   "TRANSPORT",
+   "STOP",
+   "ERROR",
+   "응답 객체를 JSON으로 직렬화하는 중 실패했습니다.",
+   "응답 payload 안에 직렬화 불가능한 객체가 포함되었는지 확인하십시오."
+  ],
+  "E110": [
+   "핸들러 내부 예외",
+   "INTERNAL",
+   "STOP",
+   "ERROR",
+   "핸들러 내부에서 예외가 발생했지만, 명시적인 에러코드로 정규화되지 않았습니다.",
+   "해당 핸들러 내부 예외를 AppError로 명시적으로 변환하십시오."
+  ],
+  "E111": [
+   "핸들러 반환 형식 오류",
+   "INTERNAL",
+   "STOP",
+   "ERROR",
+   "핸들러가 dict가 아닌 응답을 반환했습니다.",
+   "모든 핸들러가 dict 형태의 응답을 반환하도록 수정하십시오."
+  ],
+  "E203": [
+   "챔버 런타임 미준비",
+   "RUNTIME",
+   "RETRY",
+   "WARN",
+   "챔버 런타임이 아직 준비되지 않았습니다.",
+   "런타임 초기화 완료 후 다시 시도하십시오."
+  ],
+  "E205": [
+   "공정 실행 중",
+   "STATE",
+   "RETRY",
+   "WARN",
+   "이미 다른 공정이 실행 중이어서 현재 명령을 처리할 수 없습니다.",
+   "현재 공정 종료 후 다시 시도하십시오."
+  ],
+  "E227": [
+   "레시피 조회 시간 초과",
+   "RUNTIME",
+   "RETRY",
+   "WARN",
+   "GET_RECIPE 처리 또는 공정 시작(START) 때 레시피 파일 읽기가 제한 시간을 초과했습니다.",
+   "폴더 접근 상태와 저장소 응답 상태를 확인한 뒤 다시 시도하십시오."
+  ],
+  "E412": [
+   "PLC 비트 읽기 실패",
+   "PLC_COMM",
+   "RETRY",
+   "WARN",
+   "PLC 비트 읽기 과정에서 예외가 발생했습니다.",
+   "PLC 통신 상태를 확인한 뒤 다시 시도하십시오."
+  ],
+  "E999": [
+   "정의되지 않은 내부 예외",
+   "INTERNAL",
+   "STOP",
+   "ERROR",
+   "명시적으로 분류되지 않은 내부 예외가 발생했습니다.",
+   "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오."
+  ]
+ },
+ "down_payloads": {
+  "GET_SPUTTER_STATUS": {
+   "result": "fail",
+   "error_code": "E203",
+   "client_action": "RETRY",
+   "category": "RUNTIME",
+   "severity": "WARN",
+   "message": "챔버 런타임 미준비",
+   "detail": "GET_SPUTTER_STATUS 불가 — 제어 프로그램 응답 없음(재시작 중)",
+   "guide": "런타임 초기화 완료 후 다시 시도하십시오."
+  },
+  "GET_LOADING_1_SENSOR": {
+   "result": "fail",
+   "error_code": "E412",
+   "client_action": "RETRY",
+   "category": "PLC_COMM",
+   "severity": "WARN",
+   "message": "PLC 비트 읽기 실패",
+   "detail": "GET_LOADING_1_SENSOR 불가 — 제어 프로그램 응답 없음(재시작 중)",
+   "guide": "PLC 통신 상태를 확인한 뒤 다시 시도하십시오."
+  },
+  "GET_LOADING_2_SENSOR": {
+   "result": "fail",
+   "error_code": "E412",
+   "client_action": "RETRY",
+   "category": "PLC_COMM",
+   "severity": "WARN",
+   "message": "PLC 비트 읽기 실패",
+   "detail": "GET_LOADING_2_SENSOR 불가 — 제어 프로그램 응답 없음(재시작 중)",
+   "guide": "PLC 통신 상태를 확인한 뒤 다시 시도하십시오."
+  },
+  "GET_RECIPE": {
+   "result": "fail",
+   "error_code": "E227",
+   "client_action": "RETRY",
+   "category": "RUNTIME",
+   "severity": "WARN",
+   "message": "레시피 조회 시간 초과",
+   "detail": "GET_RECIPE 불가 — 제어 프로그램 응답 없음(재시작 중)",
+   "guide": "폴더 접근 상태와 저장소 응답 상태를 확인한 뒤 다시 시도하십시오."
+  },
+  "START_SPUTTER": {
+   "result": "fail",
+   "error_code": "E205",
+   "client_action": "RETRY",
+   "category": "STATE",
+   "severity": "WARN",
+   "message": "공정 실행 중",
+   "detail": "START_SPUTTER 불가 — 제어 프로그램 응답 없음(재시작 중)",
+   "guide": "현재 공정 종료 후 다시 시도하십시오."
+  },
+  "VACUUM_ON": {
+   "result": "fail",
+   "error_code": "E205",
+   "client_action": "RETRY",
+   "category": "STATE",
+   "severity": "WARN",
+   "message": "공정 실행 중",
+   "detail": "VACUUM_ON 불가 — 제어 프로그램 응답 없음(재시작 중)",
+   "guide": "현재 공정 종료 후 다시 시도하십시오."
+  }
+ },
+ "cases": [
+  {
+   "name": "status_ok",
+   "desc": "정상 — GET_SPUTTER_STATUS(핸들러 PLC_REMOTE 로그 1줄)",
+   "sends": [
+    {
+     "hex": "010000120000004200000000000000007b22726571756573745f6964223a2022732d31222c2022636f6d6d616e64223a20224745545f535055545445525f535441545553222c202264617461223a207b7d7d",
+     "delay_s": 0
+    }
+   ],
+   "expect": 1,
+   "half_close": false,
+   "peer": "('127.0.0.1', 34072)",
+   "rx_hex": "010000190000010b000000006ae3de007b22726571756573745f6964223a2022732d31222c2022636f6d6d616e64223a20224745545f535055545445525f5354415455535f524553554c54222c202264617461223a207b22726573756c74223a202273756363657373222c20226d657373616765223a20224f4b222c20224368616d6265725f31223a202269646c65222c20224368616d6265725f32223a202272756e6e696e67222c20224c6f61646c6f636b5f4368616d626572223a202269646c65222c202276616375756d223a20747275652c2022657461223a207b22434831223a207b2272656d61696e696e675f73223a206e756c6c7d2c2022434832223a207b2272656d61696e696e675f73223a20313233347d7d7d7d",
+   "server_closed": false,
+   "log": [
+    [
+     "NET",
+     "Client connected: ('127.0.0.1', 34072)"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 34072) id=s-1 cmd=GET_SPUTTER_STATUS data={}"
+    ],
+    [
+     "PLC_REMOTE",
+     "2026-10-30 12:00:00 [GET_SPUTTER_STATUS] read L_ATM (addr=99) -> False"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 34072) id=s-1 cmd=GET_SPUTTER_STATUS_RESULT data={'result': 'success', 'message': 'OK', 'Chamber_1': 'idle', 'Chamber_2': 'running', 'Loadlock_Chamber': 'idle', 'vacuum': True, 'eta': {'CH1': {'remaining_s': None}, 'CH2': {'remaining_s': 1234}}}"
+    ],
+    [
+     "NET",
+     "Client disconnected: ('127.0.0.1', 34072)"
+    ],
+    [
+     "NET",
+     "Client closed: ('127.0.0.1', 34072)"
+    ]
+   ],
+   "api": [
+    {
+     "cmd": "GET_SPUTTER_STATUS",
+     "data": {},
+     "reply_cmd": "GET_SPUTTER_STATUS_RESULT",
+     "body": {
+      "result": "success",
+      "message": "OK",
+      "Chamber_1": "idle",
+      "Chamber_2": "running",
+      "Loadlock_Chamber": "idle",
+      "vacuum": true,
+      "eta": {
+       "CH1": {
+        "remaining_s": null
+       },
+       "CH2": {
+        "remaining_s": 1234
+       }
+      }
+     },
+     "log": [
+      [
+       "PLC_REMOTE",
+       "2026-10-30 12:00:00 [GET_SPUTTER_STATUS] read L_ATM (addr=99) -> False"
+      ]
+     ]
+    }
+   ],
+   "csv": [
+    {
+     "peer": "('127.0.0.1', 34072)",
+     "request_id": "s-1",
+     "req_command": "GET_SPUTTER_STATUS",
+     "req_data_json": "{}",
+     "res_command": "GET_SPUTTER_STATUS_RESULT",
+     "res_result": "success",
+     "res_message": "OK",
+     "res_data_json": "{\"result\": \"success\", \"message\": \"OK\", \"Chamber_1\": \"idle\", \"Chamber_2\": \"running\", \"Loadlock_Chamber\": \"idle\", \"vacuum\": true, \"eta\": {\"CH1\": {\"remaining_s\": null}, \"CH2\": {\"remaining_s\": 1234}}}"
+    }
+   ]
+  },
+  {
+   "name": "lowercase_spaces",
+   "desc": "명령 정규화 ' get_loading_1_sensor ' → GET_LOADING_1_SENSOR_RESULT",
+   "sends": [
+    {
+     "hex": "010000160000004500000000000000007b22726571756573745f6964223a20226c63222c2022636f6d6d616e64223a2022206765745f6c6f6164696e675f315f73656e736f7220222c202264617461223a207b7d7d",
+     "delay_s": 0
+    }
+   ],
+   "expect": 1,
+   "half_close": false,
+   "peer": "('127.0.0.1', 34074)",
+   "rx_hex": "0100001b0000007d000000006ae3de007b22726571756573745f6964223a20226c63222c2022636f6d6d616e64223a20224745545f4c4f4144494e475f315f53454e534f525f524553554c54222c202264617461223a207b22726573756c74223a202273756363657373222c20226d657373616765223a20224f4b222c202276616c7565223a20747275657d7d",
+   "server_closed": false,
+   "log": [
+    [
+     "NET",
+     "Client connected: ('127.0.0.1', 34074)"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 34074) id=lc cmd= get_loading_1_sensor  data={}"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 34074) id=lc cmd=GET_LOADING_1_SENSOR_RESULT data={'result': 'success', 'message': 'OK', 'value': True}"
+    ],
+    [
+     "NET",
+     "Client disconnected: ('127.0.0.1', 34074)"
+    ],
+    [
+     "NET",
+     "Client closed: ('127.0.0.1', 34074)"
+    ]
+   ],
+   "api": [
+    {
+     "cmd": "GET_LOADING_1_SENSOR",
+     "data": {},
+     "reply_cmd": "GET_LOADING_1_SENSOR_RESULT",
+     "body": {
+      "result": "success",
+      "message": "OK",
+      "value": true
+     },
+     "log": []
+    }
+   ],
+   "csv": [
+    {
+     "peer": "('127.0.0.1', 34074)",
+     "request_id": "lc",
+     "req_command": " get_loading_1_sensor ",
+     "req_data_json": "{}",
+     "res_command": "GET_LOADING_1_SENSOR_RESULT",
+     "res_result": "success",
+     "res_message": "OK",
+     "res_data_json": "{\"result\": \"success\", \"message\": \"OK\", \"value\": true}"
+    }
+   ]
+  },
+  {
+   "name": "korean_fail",
+   "desc": "START_SPUTTER 한글 인자 — 핸들러가 E205 fail(ERROR/HOST 보고 + meta)",
+   "sends": [
+    {
+     "hex": "0100000d0000006700000000000000007b22726571756573745f6964223a20226b6f2d31222c2022636f6d6d616e64223a202253544152545f53505554544552222c202264617461223a207b226368223a20322c2022726563697065223a2022433a5c5ceba088ec8b9ced94bc5c5c622e637376227d7d",
+     "delay_s": 0
+    }
+   ],
+   "expect": 1,
+   "half_close": false,
+   "peer": "('127.0.0.1', 34078)",
+   "rx_hex": "0100001400000170000000006ae3de007b22726571756573745f6964223a20226b6f2d31222c2022636f6d6d616e64223a202253544152545f535055545445525f524553554c54222c202264617461223a207b22726573756c74223a20226661696c222c20226572726f725f636f6465223a202245323035222c2022636c69656e745f616374696f6e223a20225245545259222c202263617465676f7279223a20225354415445222c20227365766572697479223a20225741524e222c20226d657373616765223a2022eab3b5eca09520ec8ba4ed968920eca491222c202264657461696c223a202253544152545f535055545445525f43483220ebb688eab08020e2809420eab3b5eca09520ec8ba4ed968920eca491222c20226775696465223a2022ed9884ec9eac20eab3b5eca09520eca285eba38c20ed9b8420eb8ba4ec8b9c20ec8b9ceb8f84ed9598ec8badec8b9cec98a42e222c20226d657461223a207b22636d64223a202253544152545f535055545445525f434832227d7d7d",
+   "server_closed": false,
+   "log": [
+    [
+     "NET",
+     "Client connected: ('127.0.0.1', 34078)"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 34078) id=ko-1 cmd=START_SPUTTER data={'ch': 2, 'recipe': 'C:\\\\레시피\\\\b.csv'}"
+    ],
+    [
+     "ERROR/HOST",
+     "[E205 / RETRY] 공정 실행 중 | 상세: START_SPUTTER_CH2 불가 — 공정 실행 중"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 34078) id=ko-1 cmd=START_SPUTTER_RESULT data={'result': 'fail', 'error_code': 'E205', 'client_action': 'RETRY', 'category': 'STATE', 'severity': 'WARN', 'message': '공정 실행 중', 'detail': 'START_SPUTTER_CH2 불가 — 공정 실행 중', 'guide': '현재 공정 종료 후 다시 시도하십시오.', 'meta': {'cmd': 'START_SPUTTER_CH2'}}"
+    ],
+    [
+     "NET",
+     "Client disconnected: ('127.0.0.1', 34078)"
+    ],
+    [
+     "NET",
+     "Client closed: ('127.0.0.1', 34078)"
+    ]
+   ],
+   "api": [
+    {
+     "cmd": "START_SPUTTER",
+     "data": {
+      "ch": 2,
+      "recipe": "C:\\레시피\\b.csv"
+     },
+     "reply_cmd": "START_SPUTTER_RESULT",
+     "body": {
+      "result": "fail",
+      "error_code": "E205",
+      "client_action": "RETRY",
+      "category": "STATE",
+      "severity": "WARN",
+      "message": "공정 실행 중",
+      "detail": "START_SPUTTER_CH2 불가 — 공정 실행 중",
+      "guide": "현재 공정 종료 후 다시 시도하십시오.",
+      "meta": {
+       "cmd": "START_SPUTTER_CH2"
+      }
+     },
+     "log": [
+      [
+       "ERROR/HOST",
+       "[E205 / RETRY] 공정 실행 중 | 상세: START_SPUTTER_CH2 불가 — 공정 실행 중"
+      ]
+     ]
+    }
+   ],
+   "csv": [
+    {
+     "peer": "('127.0.0.1', 34078)",
+     "request_id": "ko-1",
+     "req_command": "START_SPUTTER",
+     "req_data_json": "{\"ch\": 2, \"recipe\": \"C:\\\\레시피\\\\b.csv\"}",
+     "res_command": "START_SPUTTER_RESULT",
+     "res_result": "fail",
+     "res_message": "공정 실행 중",
+     "res_data_json": "{\"result\": \"fail\", \"error_code\": \"E205\", \"client_action\": \"RETRY\", \"category\": \"STATE\", \"severity\": \"WARN\", \"message\": \"공정 실행 중\", \"detail\": \"START_SPUTTER_CH2 불가 — 공정 실행 중\", \"guide\": \"현재 공정 종료 후 다시 시도하십시오.\", \"meta\": {\"cmd\": \"START_SPUTTER_CH2\"}}"
+    }
+   ]
+  },
+  {
+   "name": "data_not_dict",
+   "desc": "data 가 목록 → {} 로, request_id 없음 → ''",
+   "sends": [
+    {
+     "hex": "0100000a0000002900000000000000007b22636f6d6d616e64223a20224745545f524543495045222c202264617461223a205b312c20325d7d",
+     "delay_s": 0
+    }
+   ],
+   "expect": 1,
+   "half_close": false,
+   "peer": "('127.0.0.1', 34086)",
+   "rx_hex": "01000011000000cb000000006ae3de007b22726571756573745f6964223a2022222c2022636f6d6d616e64223a20224745545f5245434950455f524553554c54222c202264617461223a207b22726573756c74223a202273756363657373222c20226d657373616765223a20224f4b222c2022626173655f646972223a2022433a5c5c52656369706573222c2022666f6c646572223a2022434831222c202266696c6573223a205b22612e637376222c2022eba088ec8b9ced94bc20412e637376222c2022622e786c7378225d2c2022636f756e74223a20337d7d",
+   "server_closed": false,
+   "log": [
+    [
+     "NET",
+     "Client connected: ('127.0.0.1', 34086)"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 34086) id= cmd=GET_RECIPE data={}"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 34086) id= cmd=GET_RECIPE_RESULT data={'result': 'success', 'message': 'OK', 'base_dir': 'C:\\\\Recipes', 'folder': 'CH1', 'files': ['a.csv', '레시피 A.csv', 'b.xlsx'], 'count': 3}"
+    ],
+    [
+     "NET",
+     "Client disconnected: ('127.0.0.1', 34086)"
+    ],
+    [
+     "NET",
+     "Client closed: ('127.0.0.1', 34086)"
+    ]
+   ],
+   "api": [
+    {
+     "cmd": "GET_RECIPE",
+     "data": {},
+     "reply_cmd": "GET_RECIPE_RESULT",
+     "body": {
+      "result": "success",
+      "message": "OK",
+      "base_dir": "C:\\Recipes",
+      "folder": "CH1",
+      "files": [
+       "a.csv",
+       "레시피 A.csv",
+       "b.xlsx"
+      ],
+      "count": 3
+     },
+     "log": []
+    }
+   ],
+   "csv": [
+    {
+     "peer": "('127.0.0.1', 34086)",
+     "request_id": "",
+     "req_command": "GET_RECIPE",
+     "req_data_json": "{}",
+     "res_command": "GET_RECIPE_RESULT",
+     "res_result": "success",
+     "res_message": "OK",
+     "res_data_json": "{\"result\": \"success\", \"message\": \"OK\", \"base_dir\": \"C:\\\\Recipes\", \"folder\": \"CH1\", \"files\": [\"a.csv\", \"레시피 A.csv\", \"b.xlsx\"], \"count\": 3}"
+    }
+   ]
+  },
+  {
+   "name": "numeric_ids",
+   "desc": "request_id·command 가 숫자 → str() (command 123 → 미등록 E106 '123_RESULT')",
+   "sends": [
+    {
+     "hex": "010000030000002100000000000000007b22726571756573745f6964223a20372c2022636f6d6d616e64223a203132337d",
+     "delay_s": 0
+    }
+   ],
+   "expect": 1,
+   "half_close": false,
+   "peer": "('127.0.0.1', 34098)",
+   "rx_hex": "0100000a00000163000000006ae3de007b22726571756573745f6964223a202237222c2022636f6d6d616e64223a20223132335f524553554c54222c202264617461223a207b22726573756c74223a20226661696c222c20226572726f725f636f6465223a202245313036222c2022636c69656e745f616374696f6e223a202253544f50222c202263617465676f7279223a202252455155455354222c20227365766572697479223a20224552524f52222c20226d657373616765223a2022ec958c20ec889820ec9786eb8a9420ebaa85eba0b9222c202264657461696c223a2022556e6b6e6f776e20636f6d6d616e643a20313233222c20226775696465223a2022ed81b4eb9dbcec9db4ec96b8ed8ab820ebaa85eba0b9ebaa85ec9d8420ec849cebb28420eb9dbcec9ab0ed84b020eb93b1eba19deab092eab3bc20ec9dbcecb998ec8b9ced82a4ec8badec8b9cec98a42e222c20226d657461223a207b22636f6d6d616e64223a2022313233227d7d7d",
+   "server_closed": false,
+   "log": [
+    [
+     "NET",
+     "Client connected: ('127.0.0.1', 34098)"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 34098) id=7 cmd=123 data={}"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 34098) id=7 cmd=123_RESULT data={'result': 'fail', 'error_code': 'E106', 'client_action': 'STOP', 'category': 'REQUEST', 'severity': 'ERROR', 'message': '알 수 없는 명령', 'detail': 'Unknown command: 123', 'guide': '클라이언트 명령명을 서버 라우터 등록값과 일치시키십시오.', 'meta': {'command': '123'}}"
+    ],
+    [
+     "NET",
+     "Client disconnected: ('127.0.0.1', 34098)"
+    ],
+    [
+     "NET",
+     "Client closed: ('127.0.0.1', 34098)"
+    ]
+   ],
+   "api": [],
+   "csv": [
+    {
+     "peer": "('127.0.0.1', 34098)",
+     "request_id": "7",
+     "req_command": "123",
+     "req_data_json": "{}",
+     "res_command": "123_RESULT",
+     "res_result": "fail",
+     "res_message": "알 수 없는 명령",
+     "res_data_json": "{\"result\": \"fail\", \"error_code\": \"E106\", \"client_action\": \"STOP\", \"category\": \"REQUEST\", \"severity\": \"ERROR\", \"message\": \"알 수 없는 명령\", \"detail\": \"Unknown command: 123\", \"guide\": \"클라이언트 명령명을 서버 라우터 등록값과 일치시키십시오.\", \"meta\": {\"command\": \"123\"}}"
+    }
+   ]
+  },
+  {
+   "name": "bad_version",
+   "desc": "version 2 → E102 'VERSION_ERROR_RESULT' 후 서버가 끊음(뒤 요청은 처리 안 함)",
+   "sends": [
+    {
+     "hex": "020000120000004100000000000000007b22726571756573745f6964223a20227632222c2022636f6d6d616e64223a20224745545f535055545445525f535441545553222c202264617461223a207b7d7d010000120000004200000000000000007b22726571756573745f6964223a2022732d31222c2022636f6d6d616e64223a20224745545f535055545445525f535441545553222c202264617461223a207b7d7d",
+     "delay_s": 0
+    }
+   ],
+   "expect": 1,
+   "half_close": false,
+   "peer": "('127.0.0.1', 34102)",
+   "rx_hex": "0100001400000192000000006ae3de007b22726571756573745f6964223a2022222c2022636f6d6d616e64223a202256455253494f4e5f4552524f525f524553554c54222c202264617461223a207b22726573756c74223a20226661696c222c20226572726f725f636f6465223a202245313032222c2022636c69656e745f616374696f6e223a202253544f50222c202263617465676f7279223a20225452414e53504f5254222c20227365766572697479223a20224552524f52222c20226d657373616765223a2022eca780ec9b90ed9598eca78020ec958aeb8a9420ed9484eba19ced86a0ecbd9c20ebb284eca084222c202264657461696c223a2022556e737570706f727465642070726f746f636f6c2076657273696f6e3a2032222c20226775696465223a2022ed81b4eb9dbcec9db4ec96b8ed8ab8ec998020ec849cebb284ec9d9820ed9484eba19ced86a0ecbd9c20ebb284eca084ec9d8420ec9dbcecb998ec8b9ced82a4ec8badec8b9cec98a42e222c20226d657461223a207b2270656572223a202228273132372e302e302e31272c20333431303229227d7d7d",
+   "server_closed": true,
+   "log": [
+    [
+     "NET",
+     "Client connected: ('127.0.0.1', 34102)"
+    ],
+    [
+     "ERROR/HOST",
+     "[E102 / STOP] 지원하지 않는 프로토콜 버전 | 상세: Unsupported protocol version: 2"
+    ],
+    [
+     "NET",
+     "Client closed: ('127.0.0.1', 34102)"
+    ]
+   ],
+   "api": [],
+   "csv": []
+  },
+  {
+   "name": "header_junk_ignored",
+   "desc": "flags·cmd_len·timestamp 엉뚱한 값 — 무시하고 처리",
+   "sends": [
+    {
+     "hex": "01ab03e70000004500000000075bcd157b22726571756573745f6964223a20226a756e6b222c2022636f6d6d616e64223a20224745545f4c4f4144494e475f325f53454e534f52222c202264617461223a207b7d7d",
+     "delay_s": 0
+    }
+   ],
+   "expect": 1,
+   "half_close": false,
+   "peer": "('127.0.0.1', 34104)",
+   "rx_hex": "0100001b00000080000000006ae3de007b22726571756573745f6964223a20226a756e6b222c2022636f6d6d616e64223a20224745545f4c4f4144494e475f325f53454e534f525f524553554c54222c202264617461223a207b22726573756c74223a202273756363657373222c20226d657373616765223a20224f4b222c202276616c7565223a2066616c73657d7d",
+   "server_closed": false,
+   "log": [
+    [
+     "NET",
+     "Client connected: ('127.0.0.1', 34104)"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 34104) id=junk cmd=GET_LOADING_2_SENSOR data={}"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 34104) id=junk cmd=GET_LOADING_2_SENSOR_RESULT data={'result': 'success', 'message': 'OK', 'value': False}"
+    ],
+    [
+     "NET",
+     "Client disconnected: ('127.0.0.1', 34104)"
+    ],
+    [
+     "NET",
+     "Client closed: ('127.0.0.1', 34104)"
+    ]
+   ],
+   "api": [
+    {
+     "cmd": "GET_LOADING_2_SENSOR",
+     "data": {},
+     "reply_cmd": "GET_LOADING_2_SENSOR_RESULT",
+     "body": {
+      "result": "success",
+      "message": "OK",
+      "value": false
+     },
+     "log": []
+    }
+   ],
+   "csv": [
+    {
+     "peer": "('127.0.0.1', 34104)",
+     "request_id": "junk",
+     "req_command": "GET_LOADING_2_SENSOR",
+     "req_data_json": "{}",
+     "res_command": "GET_LOADING_2_SENSOR_RESULT",
+     "res_result": "success",
+     "res_message": "OK",
+     "res_data_json": "{\"result\": \"success\", \"message\": \"OK\", \"value\": false}"
+    }
+   ]
+  },
+  {
+   "name": "partial",
+   "desc": "부분 수신 — 헤더·바디를 1~7바이트 조각으로 30 ms 간격",
+   "sends": [
+    {
+     "hex": "01000012000000",
+     "delay_s": 0.03
+    },
+    {
+     "hex": "42000000000000",
+     "delay_s": 0.03
+    },
+    {
+     "hex": "00007b22726571",
+     "delay_s": 0.03
+    },
+    {
+     "hex": "756573745f6964",
+     "delay_s": 0.03
+    },
+    {
+     "hex": "223a2022732d31",
+     "delay_s": 0.03
+    },
+    {
+     "hex": "222c2022636f6d",
+     "delay_s": 0.03
+    },
+    {
+     "hex": "6d616e64223a20",
+     "delay_s": 0.03
+    },
+    {
+     "hex": "224745545f5350",
+     "delay_s": 0.03
+    },
+    {
+     "hex": "55545445525f53",
+     "delay_s": 0.03
+    },
+    {
+     "hex": "5441545553222c",
+     "delay_s": 0.03
+    },
+    {
+     "hex": "20226461746122",
+     "delay_s": 0.03
+    },
+    {
+     "hex": "3a207b7d7d",
+     "delay_s": 0.03
+    }
+   ],
+   "expect": 1,
+   "half_close": false,
+   "peer": "('127.0.0.1', 34120)",
+   "rx_hex": "010000190000010b000000006ae3de007b22726571756573745f6964223a2022732d31222c2022636f6d6d616e64223a20224745545f535055545445525f5354415455535f524553554c54222c202264617461223a207b22726573756c74223a202273756363657373222c20226d657373616765223a20224f4b222c20224368616d6265725f31223a202269646c65222c20224368616d6265725f32223a202272756e6e696e67222c20224c6f61646c6f636b5f4368616d626572223a202269646c65222c202276616375756d223a20747275652c2022657461223a207b22434831223a207b2272656d61696e696e675f73223a206e756c6c7d2c2022434832223a207b2272656d61696e696e675f73223a20313233347d7d7d7d",
+   "server_closed": false,
+   "log": [
+    [
+     "NET",
+     "Client connected: ('127.0.0.1', 34120)"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 34120) id=s-1 cmd=GET_SPUTTER_STATUS data={}"
+    ],
+    [
+     "PLC_REMOTE",
+     "2026-10-30 12:00:00 [GET_SPUTTER_STATUS] read L_ATM (addr=99) -> False"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 34120) id=s-1 cmd=GET_SPUTTER_STATUS_RESULT data={'result': 'success', 'message': 'OK', 'Chamber_1': 'idle', 'Chamber_2': 'running', 'Loadlock_Chamber': 'idle', 'vacuum': True, 'eta': {'CH1': {'remaining_s': None}, 'CH2': {'remaining_s': 1234}}}"
+    ],
+    [
+     "NET",
+     "Client disconnected: ('127.0.0.1', 34120)"
+    ],
+    [
+     "NET",
+     "Client closed: ('127.0.0.1', 34120)"
+    ]
+   ],
+   "api": [
+    {
+     "cmd": "GET_SPUTTER_STATUS",
+     "data": {},
+     "reply_cmd": "GET_SPUTTER_STATUS_RESULT",
+     "body": {
+      "result": "success",
+      "message": "OK",
+      "Chamber_1": "idle",
+      "Chamber_2": "running",
+      "Loadlock_Chamber": "idle",
+      "vacuum": true,
+      "eta": {
+       "CH1": {
+        "remaining_s": null
+       },
+       "CH2": {
+        "remaining_s": 1234
+       }
+      }
+     },
+     "log": [
+      [
+       "PLC_REMOTE",
+       "2026-10-30 12:00:00 [GET_SPUTTER_STATUS] read L_ATM (addr=99) -> False"
+      ]
+     ]
+    }
+   ],
+   "csv": [
+    {
+     "peer": "('127.0.0.1', 34120)",
+     "request_id": "s-1",
+     "req_command": "GET_SPUTTER_STATUS",
+     "req_data_json": "{}",
+     "res_command": "GET_SPUTTER_STATUS_RESULT",
+     "res_result": "success",
+     "res_message": "OK",
+     "res_data_json": "{\"result\": \"success\", \"message\": \"OK\", \"Chamber_1\": \"idle\", \"Chamber_2\": \"running\", \"Loadlock_Chamber\": \"idle\", \"vacuum\": true, \"eta\": {\"CH1\": {\"remaining_s\": null}, \"CH2\": {\"remaining_s\": 1234}}}"
+    }
+   ]
+  },
+  {
+   "name": "two_in_one",
+   "desc": "두 요청을 한 번에 — 순서대로 두 응답",
+   "sends": [
+    {
+     "hex": "010000140000004200000000000000007b22726571756573745f6964223a202261222c2022636f6d6d616e64223a20224745545f4c4f4144494e475f315f53454e534f52222c202264617461223a207b7d7d010000140000004200000000000000007b22726571756573745f6964223a202262222c2022636f6d6d616e64223a20224745545f4c4f4144494e475f325f53454e534f52222c202264617461223a207b7d7d",
+     "delay_s": 0
+    }
+   ],
+   "expect": 2,
+   "half_close": false,
+   "peer": "('127.0.0.1', 34136)",
+   "rx_hex": "0100001b0000007c000000006ae3de007b22726571756573745f6964223a202261222c2022636f6d6d616e64223a20224745545f4c4f4144494e475f315f53454e534f525f524553554c54222c202264617461223a207b22726573756c74223a202273756363657373222c20226d657373616765223a20224f4b222c202276616c7565223a20747275657d7d0100001b0000007d000000006ae3de007b22726571756573745f6964223a202262222c2022636f6d6d616e64223a20224745545f4c4f4144494e475f325f53454e534f525f524553554c54222c202264617461223a207b22726573756c74223a202273756363657373222c20226d657373616765223a20224f4b222c202276616c7565223a2066616c73657d7d",
+   "server_closed": false,
+   "log": [
+    [
+     "NET",
+     "Client connected: ('127.0.0.1', 34136)"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 34136) id=a cmd=GET_LOADING_1_SENSOR data={}"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 34136) id=a cmd=GET_LOADING_1_SENSOR_RESULT data={'result': 'success', 'message': 'OK', 'value': True}"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 34136) id=b cmd=GET_LOADING_2_SENSOR data={}"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 34136) id=b cmd=GET_LOADING_2_SENSOR_RESULT data={'result': 'success', 'message': 'OK', 'value': False}"
+    ],
+    [
+     "NET",
+     "Client disconnected: ('127.0.0.1', 34136)"
+    ],
+    [
+     "NET",
+     "Client closed: ('127.0.0.1', 34136)"
+    ]
+   ],
+   "api": [
+    {
+     "cmd": "GET_LOADING_1_SENSOR",
+     "data": {},
+     "reply_cmd": "GET_LOADING_1_SENSOR_RESULT",
+     "body": {
+      "result": "success",
+      "message": "OK",
+      "value": true
+     },
+     "log": []
+    },
+    {
+     "cmd": "GET_LOADING_2_SENSOR",
+     "data": {},
+     "reply_cmd": "GET_LOADING_2_SENSOR_RESULT",
+     "body": {
+      "result": "success",
+      "message": "OK",
+      "value": false
+     },
+     "log": []
+    }
+   ],
+   "csv": [
+    {
+     "peer": "('127.0.0.1', 34136)",
+     "request_id": "a",
+     "req_command": "GET_LOADING_1_SENSOR",
+     "req_data_json": "{}",
+     "res_command": "GET_LOADING_1_SENSOR_RESULT",
+     "res_result": "success",
+     "res_message": "OK",
+     "res_data_json": "{\"result\": \"success\", \"message\": \"OK\", \"value\": true}"
+    },
+    {
+     "peer": "('127.0.0.1', 34136)",
+     "request_id": "b",
+     "req_command": "GET_LOADING_2_SENSOR",
+     "req_data_json": "{}",
+     "res_command": "GET_LOADING_2_SENSOR_RESULT",
+     "res_result": "success",
+     "res_message": "OK",
+     "res_data_json": "{\"result\": \"success\", \"message\": \"OK\", \"value\": false}"
+    }
+   ]
+  },
+  {
+   "name": "invalid_json_then_ok",
+   "desc": "JSON 아님 → E104 'PARSE_ERROR_RESULT', 연결 유지 → 다음 요청 정상",
+   "sends": [
+    {
+     "hex": "010000010000000900000000000000007b626164206a736f6e",
+     "delay_s": 0
+    },
+    {
+     "hex": "010000120000004200000000000000007b22726571756573745f6964223a2022732d31222c2022636f6d6d616e64223a20224745545f535055545445525f535441545553222c202264617461223a207b7d7d",
+     "delay_s": 0.05
+    }
+   ],
+   "expect": 2,
+   "half_close": false,
+   "peer": "('127.0.0.1', 34150)",
+   "rx_hex": "01000012000001ba000000006ae3de007b22726571756573745f6964223a2022222c2022636f6d6d616e64223a202250415253455f4552524f525f524553554c54222c202264617461223a207b22726573756c74223a20226661696c222c20226572726f725f636f6465223a202245313034222c2022636c69656e745f616374696f6e223a202253544f50222c202263617465676f7279223a20225452414e53504f5254222c20227365766572697479223a20224552524f52222c20226d657373616765223a2022ec9e98ebaabbeb909c204a534f4e20ebb3b8ebacb8222c202264657461696c223a2022496e76616c6964204a534f4e3a20457870656374696e672070726f7065727479206e616d6520656e636c6f73656420696e20646f75626c652071756f7465733a206c696e65203120636f6c756d6e2032202863686172203129222c20226775696465223a2022ed81b4eb9dbcec9db4ec96b8ed8ab8eab08020eca084ec86a1ed959c204a534f4e20ed9895ec8b9deab3bc20ec9db8ecbd94eb94a9ec9d8420ed9995ec9db8ed9598ec8badec8b9cec98a42e222c20226d657461223a207b2270656572223a202228273132372e302e302e31272c20333431353029227d7d7d010000190000010b000000006ae3de007b22726571756573745f6964223a2022732d31222c2022636f6d6d616e64223a20224745545f535055545445525f5354415455535f524553554c54222c202264617461223a207b22726573756c74223a202273756363657373222c20226d657373616765223a20224f4b222c20224368616d6265725f31223a202269646c65222c20224368616d6265725f32223a202272756e6e696e67222c20224c6f61646c6f636b5f4368616d626572223a202269646c65222c202276616375756d223a20747275652c2022657461223a207b22434831223a207b2272656d61696e696e675f73223a206e756c6c7d2c2022434832223a207b2272656d61696e696e675f73223a20313233347d7d7d7d",
+   "server_closed": false,
+   "log": [
+    [
+     "NET",
+     "Client connected: ('127.0.0.1', 34150)"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 34150) INVALID_JSON body=b'{bad json' error=Expecting property name enclosed in double quotes: line 1 column 2 (char 1)"
+    ],
+    [
+     "ERROR/HOST",
+     "[E104 / STOP] 잘못된 JSON 본문 | 상세: Invalid JSON: Expecting property name enclosed in double quotes: line 1 column 2 (char 1)"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 34150) id=s-1 cmd=GET_SPUTTER_STATUS data={}"
+    ],
+    [
+     "PLC_REMOTE",
+     "2026-10-30 12:00:00 [GET_SPUTTER_STATUS] read L_ATM (addr=99) -> False"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 34150) id=s-1 cmd=GET_SPUTTER_STATUS_RESULT data={'result': 'success', 'message': 'OK', 'Chamber_1': 'idle', 'Chamber_2': 'running', 'Loadlock_Chamber': 'idle', 'vacuum': True, 'eta': {'CH1': {'remaining_s': None}, 'CH2': {'remaining_s': 1234}}}"
+    ],
+    [
+     "NET",
+     "Client disconnected: ('127.0.0.1', 34150)"
+    ],
+    [
+     "NET",
+     "Client closed: ('127.0.0.1', 34150)"
+    ]
+   ],
+   "api": [
+    {
+     "cmd": "GET_SPUTTER_STATUS",
+     "data": {},
+     "reply_cmd": "GET_SPUTTER_STATUS_RESULT",
+     "body": {
+      "result": "success",
+      "message": "OK",
+      "Chamber_1": "idle",
+      "Chamber_2": "running",
+      "Loadlock_Chamber": "idle",
+      "vacuum": true,
+      "eta": {
+       "CH1": {
+        "remaining_s": null
+       },
+       "CH2": {
+        "remaining_s": 1234
+       }
+      }
+     },
+     "log": [
+      [
+       "PLC_REMOTE",
+       "2026-10-30 12:00:00 [GET_SPUTTER_STATUS] read L_ATM (addr=99) -> False"
+      ]
+     ]
+    }
+   ],
+   "csv": [
+    {
+     "peer": "('127.0.0.1', 34150)",
+     "request_id": "",
+     "req_command": "__INVALID_JSON__",
+     "req_data_json": "{bad json",
+     "res_command": "PARSE_ERROR_RESULT",
+     "res_result": "fail",
+     "res_message": "Invalid JSON: JSONDecodeError('Expecting property name enclosed in double quotes: line 1 column 2 (char 1)')",
+     "res_data_json": ""
+    },
+    {
+     "peer": "('127.0.0.1', 34150)",
+     "request_id": "s-1",
+     "req_command": "GET_SPUTTER_STATUS",
+     "req_data_json": "{}",
+     "res_command": "GET_SPUTTER_STATUS_RESULT",
+     "res_result": "success",
+     "res_message": "OK",
+     "res_data_json": "{\"result\": \"success\", \"message\": \"OK\", \"Chamber_1\": \"idle\", \"Chamber_2\": \"running\", \"Loadlock_Chamber\": \"idle\", \"vacuum\": true, \"eta\": {\"CH1\": {\"remaining_s\": null}, \"CH2\": {\"remaining_s\": 1234}}}"
+    }
+   ]
+  },
+  {
+   "name": "invalid_utf8",
+   "desc": "UTF-8 아님 → E104",
+   "sends": [
+    {
+     "hex": "01000001000000030000000000000000fffe00",
+     "delay_s": 0
+    }
+   ],
+   "expect": 1,
+   "half_close": false,
+   "peer": "('127.0.0.1', 34162)",
+   "rx_hex": "01000012000001b5000000006ae3de007b22726571756573745f6964223a2022222c2022636f6d6d616e64223a202250415253455f4552524f525f524553554c54222c202264617461223a207b22726573756c74223a20226661696c222c20226572726f725f636f6465223a202245313034222c2022636c69656e745f616374696f6e223a202253544f50222c202263617465676f7279223a20225452414e53504f5254222c20227365766572697479223a20224552524f52222c20226d657373616765223a2022ec9e98ebaabbeb909c204a534f4e20ebb3b8ebacb8222c202264657461696c223a2022496e76616c6964204a534f4e3a20277574662d382720636f6465632063616e2774206465636f64652062797465203078666620696e20706f736974696f6e20303a20696e76616c69642073746172742062797465222c20226775696465223a2022ed81b4eb9dbcec9db4ec96b8ed8ab8eab08020eca084ec86a1ed959c204a534f4e20ed9895ec8b9deab3bc20ec9db8ecbd94eb94a9ec9d8420ed9995ec9db8ed9598ec8badec8b9cec98a42e222c20226d657461223a207b2270656572223a202228273132372e302e302e31272c20333431363229227d7d7d",
+   "server_closed": false,
+   "log": [
+    [
+     "NET",
+     "Client connected: ('127.0.0.1', 34162)"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 34162) INVALID_JSON body=b'\\xff\\xfe\\x00' error='utf-8' codec can't decode byte 0xff in position 0: invalid start byte"
+    ],
+    [
+     "ERROR/HOST",
+     "[E104 / STOP] 잘못된 JSON 본문 | 상세: Invalid JSON: 'utf-8' codec can't decode byte 0xff in position 0: invalid start byte"
+    ],
+    [
+     "NET",
+     "Client disconnected: ('127.0.0.1', 34162)"
+    ],
+    [
+     "NET",
+     "Client closed: ('127.0.0.1', 34162)"
+    ]
+   ],
+   "api": [],
+   "csv": [
+    {
+     "peer": "('127.0.0.1', 34162)",
+     "request_id": "",
+     "req_command": "__INVALID_JSON__",
+     "req_data_json": "��\u0000",
+     "res_command": "PARSE_ERROR_RESULT",
+     "res_result": "fail",
+     "res_message": "Invalid JSON: UnicodeDecodeError('utf-8', b'\\xff\\xfe\\x00', 0, 1, 'invalid start byte')",
+     "res_data_json": ""
+    }
+   ]
+  },
+  {
+   "name": "empty_body",
+   "desc": "body_len 0 → E104",
+   "sends": [
+    {
+     "hex": "01000001000000000000000000000000",
+     "delay_s": 0
+    }
+   ],
+   "expect": 1,
+   "half_close": false,
+   "peer": "('127.0.0.1', 47316)",
+   "rx_hex": "0100001200000198000000006ae3de007b22726571756573745f6964223a2022222c2022636f6d6d616e64223a202250415253455f4552524f525f524553554c54222c202264617461223a207b22726573756c74223a20226661696c222c20226572726f725f636f6465223a202245313034222c2022636c69656e745f616374696f6e223a202253544f50222c202263617465676f7279223a20225452414e53504f5254222c20227365766572697479223a20224552524f52222c20226d657373616765223a2022ec9e98ebaabbeb909c204a534f4e20ebb3b8ebacb8222c202264657461696c223a2022496e76616c6964204a534f4e3a20457870656374696e672076616c75653a206c696e65203120636f6c756d6e2031202863686172203029222c20226775696465223a2022ed81b4eb9dbcec9db4ec96b8ed8ab8eab08020eca084ec86a1ed959c204a534f4e20ed9895ec8b9deab3bc20ec9db8ecbd94eb94a9ec9d8420ed9995ec9db8ed9598ec8badec8b9cec98a42e222c20226d657461223a207b2270656572223a202228273132372e302e302e31272c20343733313629227d7d7d",
+   "server_closed": false,
+   "log": [
+    [
+     "NET",
+     "Client connected: ('127.0.0.1', 47316)"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47316) INVALID_JSON body=b'' error=Expecting value: line 1 column 1 (char 0)"
+    ],
+    [
+     "ERROR/HOST",
+     "[E104 / STOP] 잘못된 JSON 본문 | 상세: Invalid JSON: Expecting value: line 1 column 1 (char 0)"
+    ],
+    [
+     "NET",
+     "Client disconnected: ('127.0.0.1', 47316)"
+    ],
+    [
+     "NET",
+     "Client closed: ('127.0.0.1', 47316)"
+    ]
+   ],
+   "api": [],
+   "csv": [
+    {
+     "peer": "('127.0.0.1', 47316)",
+     "request_id": "",
+     "req_command": "__INVALID_JSON__",
+     "req_data_json": "",
+     "res_command": "PARSE_ERROR_RESULT",
+     "res_result": "fail",
+     "res_message": "Invalid JSON: JSONDecodeError('Expecting value: line 1 column 1 (char 0)')",
+     "res_data_json": ""
+    }
+   ]
+  },
+  {
+   "name": "not_object",
+   "desc": "JSON 이지만 객체 아님([1,2]) → 응답 없이 서버가 끊음(v1 이상 동작)",
+   "sends": [
+    {
+     "hex": "010000010000000600000000000000005b312c20325d",
+     "delay_s": 0
+    }
+   ],
+   "expect": 0,
+   "half_close": false,
+   "peer": "('127.0.0.1', 47332)",
+   "rx_hex": "",
+   "server_closed": true,
+   "log": [
+    [
+     "NET",
+     "Client connected: ('127.0.0.1', 47332)"
+    ],
+    [
+     "NET",
+     "Client error from ('127.0.0.1', 47332): AttributeError(\"'list' object has no attribute 'get'\")"
+    ],
+    [
+     "NET",
+     "Client closed: ('127.0.0.1', 47332)"
+    ]
+   ],
+   "api": [],
+   "csv": []
+  },
+  {
+   "name": "not_object_string",
+   "desc": "JSON 문자열 → 응답 없이 끊김",
+   "sends": [
+    {
+     "hex": "01000001000000140000000000000000224745545f535055545445525f53544154555322",
+     "delay_s": 0
+    }
+   ],
+   "expect": 0,
+   "half_close": false,
+   "peer": "('127.0.0.1', 47336)",
+   "rx_hex": "",
+   "server_closed": true,
+   "log": [
+    [
+     "NET",
+     "Client connected: ('127.0.0.1', 47336)"
+    ],
+    [
+     "NET",
+     "Client error from ('127.0.0.1', 47336): AttributeError(\"'str' object has no attribute 'get'\")"
+    ],
+    [
+     "NET",
+     "Client closed: ('127.0.0.1', 47336)"
+    ]
+   ],
+   "api": [],
+   "csv": []
+  },
+  {
+   "name": "unknown_cmd",
+   "desc": "미등록 명령 → E106 'FOO_BAR_RESULT'(보고 없음)",
+   "sends": [
+    {
+     "hex": "010000070000003c00000000000000007b22726571756573745f6964223a20227531222c2022636f6d6d616e64223a2022666f6f5f626172222c202264617461223a207b2278223a20317d7d",
+     "delay_s": 0
+    }
+   ],
+   "expect": 1,
+   "half_close": false,
+   "peer": "('127.0.0.1', 47340)",
+   "rx_hex": "0100000e00000170000000006ae3de007b22726571756573745f6964223a20227531222c2022636f6d6d616e64223a2022464f4f5f4241525f524553554c54222c202264617461223a207b22726573756c74223a20226661696c222c20226572726f725f636f6465223a202245313036222c2022636c69656e745f616374696f6e223a202253544f50222c202263617465676f7279223a202252455155455354222c20227365766572697479223a20224552524f52222c20226d657373616765223a2022ec958c20ec889820ec9786eb8a9420ebaa85eba0b9222c202264657461696c223a2022556e6b6e6f776e20636f6d6d616e643a20666f6f5f626172222c20226775696465223a2022ed81b4eb9dbcec9db4ec96b8ed8ab820ebaa85eba0b9ebaa85ec9d8420ec849cebb28420eb9dbcec9ab0ed84b020eb93b1eba19deab092eab3bc20ec9dbcecb998ec8b9ced82a4ec8badec8b9cec98a42e222c20226d657461223a207b22636f6d6d616e64223a2022666f6f5f626172227d7d7d",
+   "server_closed": false,
+   "log": [
+    [
+     "NET",
+     "Client connected: ('127.0.0.1', 47340)"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47340) id=u1 cmd=foo_bar data={'x': 1}"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 47340) id=u1 cmd=FOO_BAR_RESULT data={'result': 'fail', 'error_code': 'E106', 'client_action': 'STOP', 'category': 'REQUEST', 'severity': 'ERROR', 'message': '알 수 없는 명령', 'detail': 'Unknown command: foo_bar', 'guide': '클라이언트 명령명을 서버 라우터 등록값과 일치시키십시오.', 'meta': {'command': 'foo_bar'}}"
+    ],
+    [
+     "NET",
+     "Client disconnected: ('127.0.0.1', 47340)"
+    ],
+    [
+     "NET",
+     "Client closed: ('127.0.0.1', 47340)"
+    ]
+   ],
+   "api": [],
+   "csv": [
+    {
+     "peer": "('127.0.0.1', 47340)",
+     "request_id": "u1",
+     "req_command": "foo_bar",
+     "req_data_json": "{\"x\": 1}",
+     "res_command": "FOO_BAR_RESULT",
+     "res_result": "fail",
+     "res_message": "알 수 없는 명령",
+     "res_data_json": "{\"result\": \"fail\", \"error_code\": \"E106\", \"client_action\": \"STOP\", \"category\": \"REQUEST\", \"severity\": \"ERROR\", \"message\": \"알 수 없는 명령\", \"detail\": \"Unknown command: foo_bar\", \"guide\": \"클라이언트 명령명을 서버 라우터 등록값과 일치시키십시오.\", \"meta\": {\"command\": \"foo_bar\"}}"
+    }
+   ]
+  },
+  {
+   "name": "empty_cmd",
+   "desc": "command '' → 서버 E105 'UNKNOWN_RESULT'(보고 있음)",
+   "sends": [
+    {
+     "hex": "010000000000002f00000000000000007b22726571756573745f6964223a20226531222c2022636f6d6d616e64223a2022222c202264617461223a207b7d7d",
+     "delay_s": 0
+    }
+   ],
+   "expect": 1,
+   "half_close": false,
+   "peer": "('127.0.0.1', 47352)",
+   "rx_hex": "0100000e0000017a000000006ae3de007b22726571756573745f6964223a20226531222c2022636f6d6d616e64223a2022554e4b4e4f574e5f524553554c54222c202264617461223a207b22726573756c74223a20226661696c222c20226572726f725f636f6465223a202245313035222c2022636c69656e745f616374696f6e223a202253544f50222c202263617465676f7279223a202252455155455354222c20227365766572697479223a20224552524f52222c20226d657373616765223a2022ebaa85eba0b920eb8884eb9dbd222c202264657461696c223a20224d697373696e672027636f6d6d616e642720696e2072657175657374222c20226775696465223a2022ed81b4eb9dbcec9db4ec96b8ed8ab8eab08020636f6d6d616e64eba5bc20ed8faced95a8ed9598eb8f84eba19d20ec8898eca095ed9598ec8badec8b9cec98a42e222c20226d657461223a207b2270656572223a202228273132372e302e302e31272c20343733353229222c2022726571756573745f6964223a20226531227d7d7d",
+   "server_closed": false,
+   "log": [
+    [
+     "NET",
+     "Client connected: ('127.0.0.1', 47352)"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47352) id=e1 cmd= data={}"
+    ],
+    [
+     "ERROR/HOST",
+     "[E105 / STOP] 명령 누락 | 상세: Missing 'command' in request"
+    ],
+    [
+     "NET",
+     "Client disconnected: ('127.0.0.1', 47352)"
+    ],
+    [
+     "NET",
+     "Client closed: ('127.0.0.1', 47352)"
+    ]
+   ],
+   "api": [],
+   "csv": [
+    {
+     "peer": "('127.0.0.1', 47352)",
+     "request_id": "e1",
+     "req_command": "__MISSING_COMMAND__",
+     "req_data_json": "{\"request_id\": \"e1\", \"command\": \"\", \"data\": {}}",
+     "res_command": "UNKNOWN_RESULT",
+     "res_result": "fail",
+     "res_message": "Missing 'command' in request",
+     "res_data_json": ""
+    }
+   ]
+  },
+  {
+   "name": "missing_cmd",
+   "desc": "command 키 없음 → 서버 E105",
+   "sends": [
+    {
+     "hex": "010000000000002000000000000000007b22726571756573745f6964223a20226d31222c202264617461223a207b7d7d",
+     "delay_s": 0
+    }
+   ],
+   "expect": 1,
+   "half_close": false,
+   "peer": "('127.0.0.1', 47358)",
+   "rx_hex": "0100000e0000017a000000006ae3de007b22726571756573745f6964223a20226d31222c2022636f6d6d616e64223a2022554e4b4e4f574e5f524553554c54222c202264617461223a207b22726573756c74223a20226661696c222c20226572726f725f636f6465223a202245313035222c2022636c69656e745f616374696f6e223a202253544f50222c202263617465676f7279223a202252455155455354222c20227365766572697479223a20224552524f52222c20226d657373616765223a2022ebaa85eba0b920eb8884eb9dbd222c202264657461696c223a20224d697373696e672027636f6d6d616e642720696e2072657175657374222c20226775696465223a2022ed81b4eb9dbcec9db4ec96b8ed8ab8eab08020636f6d6d616e64eba5bc20ed8faced95a8ed9598eb8f84eba19d20ec8898eca095ed9598ec8badec8b9cec98a42e222c20226d657461223a207b2270656572223a202228273132372e302e302e31272c20343733353829222c2022726571756573745f6964223a20226d31227d7d7d",
+   "server_closed": false,
+   "log": [
+    [
+     "NET",
+     "Client connected: ('127.0.0.1', 47358)"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47358) id=m1 cmd= data={}"
+    ],
+    [
+     "ERROR/HOST",
+     "[E105 / STOP] 명령 누락 | 상세: Missing 'command' in request"
+    ],
+    [
+     "NET",
+     "Client disconnected: ('127.0.0.1', 47358)"
+    ],
+    [
+     "NET",
+     "Client closed: ('127.0.0.1', 47358)"
+    ]
+   ],
+   "api": [],
+   "csv": [
+    {
+     "peer": "('127.0.0.1', 47358)",
+     "request_id": "m1",
+     "req_command": "__MISSING_COMMAND__",
+     "req_data_json": "{\"request_id\": \"m1\", \"data\": {}}",
+     "res_command": "UNKNOWN_RESULT",
+     "res_result": "fail",
+     "res_message": "Missing 'command' in request",
+     "res_data_json": ""
+    }
+   ]
+  },
+  {
+   "name": "blank_cmd",
+   "desc": "공백만 → 라우터 E105 'UNKNOWN_RESULT'(보고 없음)",
+   "sends": [
+    {
+     "hex": "010000030000003200000000000000007b22726571756573745f6964223a20226231222c2022636f6d6d616e64223a2022202020222c202264617461223a207b7d7d",
+     "delay_s": 0
+    }
+   ],
+   "expect": 1,
+   "half_close": false,
+   "peer": "('127.0.0.1', 47362)",
+   "rx_hex": "0100000e0000014b000000006ae3de007b22726571756573745f6964223a20226231222c2022636f6d6d616e64223a2022554e4b4e4f574e5f524553554c54222c202264617461223a207b22726573756c74223a20226661696c222c20226572726f725f636f6465223a202245313035222c2022636c69656e745f616374696f6e223a202253544f50222c202263617465676f7279223a202252455155455354222c20227365766572697479223a20224552524f52222c20226d657373616765223a2022ebaa85eba0b920eb8884eb9dbd222c202264657461696c223a20224d697373696e6720636f6d6d616e64222c20226775696465223a2022ed81b4eb9dbcec9db4ec96b8ed8ab8eab08020636f6d6d616e64eba5bc20ed8faced95a8ed9598eb8f84eba19d20ec8898eca095ed9598ec8badec8b9cec98a42e222c20226d657461223a207b22636f6d6d616e64223a2022202020227d7d7d",
+   "server_closed": false,
+   "log": [
+    [
+     "NET",
+     "Client connected: ('127.0.0.1', 47362)"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47362) id=b1 cmd=    data={}"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 47362) id=b1 cmd=UNKNOWN_RESULT data={'result': 'fail', 'error_code': 'E105', 'client_action': 'STOP', 'category': 'REQUEST', 'severity': 'ERROR', 'message': '명령 누락', 'detail': 'Missing command', 'guide': '클라이언트가 command를 포함하도록 수정하십시오.', 'meta': {'command': '   '}}"
+    ],
+    [
+     "NET",
+     "Client disconnected: ('127.0.0.1', 47362)"
+    ],
+    [
+     "NET",
+     "Client closed: ('127.0.0.1', 47362)"
+    ]
+   ],
+   "api": [],
+   "csv": [
+    {
+     "peer": "('127.0.0.1', 47362)",
+     "request_id": "b1",
+     "req_command": "   ",
+     "req_data_json": "{}",
+     "res_command": "UNKNOWN_RESULT",
+     "res_result": "fail",
+     "res_message": "명령 누락",
+     "res_data_json": "{\"result\": \"fail\", \"error_code\": \"E105\", \"client_action\": \"STOP\", \"category\": \"REQUEST\", \"severity\": \"ERROR\", \"message\": \"명령 누락\", \"detail\": \"Missing command\", \"guide\": \"클라이언트가 command를 포함하도록 수정하십시오.\", \"meta\": {\"command\": \"   \"}}"
+    }
+   ]
+  },
+  {
+   "name": "handler_exception",
+   "desc": "핸들러 예외(소문자 명령) → 'vacuum_on_RESULT' E999(v1 이상 동작)",
+   "sends": [
+    {
+     "hex": "010000090000004600000000000000007b22726571756573745f6964223a20227831222c2022636f6d6d616e64223a202276616375756d5f6f6e222c202264617461223a207b2274696d656f75745f73223a20357d7d",
+     "delay_s": 0
+    }
+   ],
+   "expect": 1,
+   "half_close": false,
+   "peer": "('127.0.0.1', 47368)",
+   "rx_hex": "01000010000001d3000000006ae3de007b22726571756573745f6964223a20227831222c2022636f6d6d616e64223a202276616375756d5f6f6e5f524553554c54222c202264617461223a207b22726573756c74223a20226661696c222c20226572726f725f636f6465223a202245393939222c2022636c69656e745f616374696f6e223a202253544f50222c202263617465676f7279223a2022494e5445524e414c222c20227365766572697479223a20224552524f52222c20226d657373616765223a2022eca095ec9d98eb9098eca78020ec958aec9d8020eb82b4ebb68020ec9888ec99b8222c202264657461696c223a2022eab080eca79c20ed95b8eb93a4eb9fac20ec9888ec99b820626f6f6d222c20226775696465223a2022ec9b90ebb3b820ec9888ec99b8eba5bc20ed9995ec9db8ed9598eab3a020eca081eca088ed959c204170704572726f7220ecbd94eb939ceba19c20eca095eab79ced9994ed9598ec8badec8b9cec98a42e222c20226d657461223a207b2270656572223a202228273132372e302e302e31272c20343733363829222c2022726571756573745f6964223a20227831222c2022636d64223a202276616375756d5f6f6e227d2c202263617573655f74797065223a202252756e74696d654572726f72227d7d",
+   "server_closed": false,
+   "log": [
+    [
+     "NET",
+     "Client connected: ('127.0.0.1', 47368)"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47368) id=x1 cmd=vacuum_on data={'timeout_s': 5}"
+    ],
+    [
+     "NET",
+     "Handler error for vacuum_on: 가짜 핸들러 예외 boom\nTraceback (most recent call last):\n  File \"<v1>/host/server.py\", line 344, in _handle\n    res_cmd, res_data = await self.router.dispatch(cmd, data)\n                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<v1>/v2/tools/v1golden_robot_server.py\", line 199, in rec_dispatch\n    res = await orig_dispatch(command, data)\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<v1>/host/router.py\", line 54, in dispatch\n    res = await h(payload)\n          ^^^^^^^^^^^^^^^^\n  File \"<v1>/v2/tools/v1golden_robot_server.py\", line 180, in h\n    raise RuntimeError(\"가짜 핸들러 예외 boom\")\nRuntimeError: 가짜 핸들러 예외 boom\n"
+    ],
+    [
+     "ERROR/HOST",
+     "[E999 / STOP] 정의되지 않은 내부 예외 | 상세: 가짜 핸들러 예외 boom"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 47368) id=x1 cmd=vacuum_on_RESULT data={'result': 'fail', 'error_code': 'E999', 'client_action': 'STOP', 'category': 'INTERNAL', 'severity': 'ERROR', 'message': '정의되지 않은 내부 예외', 'detail': '가짜 핸들러 예외 boom', 'guide': '원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.', 'meta': {'peer': \"('127.0.0.1', 47368)\", 'request_id': 'x1', 'cmd': 'vacuum_on'}, 'cause_type': 'RuntimeError'}"
+    ],
+    [
+     "NET",
+     "Client disconnected: ('127.0.0.1', 47368)"
+    ],
+    [
+     "NET",
+     "Client closed: ('127.0.0.1', 47368)"
+    ]
+   ],
+   "api": [
+    {
+     "cmd": "VACUUM_ON",
+     "data": {
+      "timeout_s": 5
+     },
+     "reply_cmd": "vacuum_on_RESULT",
+     "body": {
+      "result": "fail",
+      "error_code": "E999",
+      "client_action": "STOP",
+      "category": "INTERNAL",
+      "severity": "ERROR",
+      "message": "정의되지 않은 내부 예외",
+      "detail": "가짜 핸들러 예외 boom",
+      "guide": "원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.",
+      "meta": {
+       "peer": "('127.0.0.1', 47368)",
+       "request_id": "x1",
+       "cmd": "vacuum_on"
+      },
+      "cause_type": "RuntimeError"
+     },
+     "log": [
+      [
+       "NET",
+       "Handler error for vacuum_on: 가짜 핸들러 예외 boom\nTraceback (most recent call last):\n  File \"<v1>/host/server.py\", line 344, in _handle\n    res_cmd, res_data = await self.router.dispatch(cmd, data)\n                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<v1>/v2/tools/v1golden_robot_server.py\", line 199, in rec_dispatch\n    res = await orig_dispatch(command, data)\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<v1>/host/router.py\", line 54, in dispatch\n    res = await h(payload)\n          ^^^^^^^^^^^^^^^^\n  File \"<v1>/v2/tools/v1golden_robot_server.py\", line 180, in h\n    raise RuntimeError(\"가짜 핸들러 예외 boom\")\nRuntimeError: 가짜 핸들러 예외 boom\n"
+      ],
+      [
+       "ERROR/HOST",
+       "[E999 / STOP] 정의되지 않은 내부 예외 | 상세: 가짜 핸들러 예외 boom"
+      ]
+     ]
+    }
+   ],
+   "csv": [
+    {
+     "peer": "('127.0.0.1', 47368)",
+     "request_id": "x1",
+     "req_command": "vacuum_on",
+     "req_data_json": "{\"timeout_s\": 5}",
+     "res_command": "vacuum_on_RESULT",
+     "res_result": "fail",
+     "res_message": "정의되지 않은 내부 예외",
+     "res_data_json": "{\"result\": \"fail\", \"error_code\": \"E999\", \"client_action\": \"STOP\", \"category\": \"INTERNAL\", \"severity\": \"ERROR\", \"message\": \"정의되지 않은 내부 예외\", \"detail\": \"가짜 핸들러 예외 boom\", \"guide\": \"원본 예외를 확인하고 적절한 AppError 코드로 정규화하십시오.\", \"meta\": {\"peer\": \"('127.0.0.1', 47368)\", \"request_id\": \"x1\", \"cmd\": \"vacuum_on\"}, \"cause_type\": \"RuntimeError\"}"
+    }
+   ]
+  },
+  {
+   "name": "fail_without_code",
+   "desc": "핸들러가 error_code 없는 fail → NET 경고 + E110 으로 교체",
+   "sends": [
+    {
+     "hex": "010000070000003600000000000000007b22726571756573745f6964223a20226631222c2022636f6d6d616e64223a20223450494e5f5550222c202264617461223a207b7d7d",
+     "delay_s": 0
+    }
+   ],
+   "expect": 1,
+   "half_close": false,
+   "peer": "('127.0.0.1', 47380)",
+   "rx_hex": "0100000e000001ea000000006ae3de007b22726571756573745f6964223a20226631222c2022636f6d6d616e64223a20223450494e5f55505f524553554c54222c202264617461223a207b22726573756c74223a20226661696c222c20226572726f725f636f6465223a202245313130222c2022636c69656e745f616374696f6e223a202253544f50222c202263617465676f7279223a2022494e5445524e414c222c20227365766572697479223a20224552524f52222c20226d657373616765223a2022ed95b8eb93a4eb9fac20eb82b4ebb68020ec9888ec99b8222c202264657461696c223a20224661696c207061796c6f6164206d697373696e67206572726f725f636f64653a207b27726573756c74273a20276661696c272c20276d657373616765273a20273450494e5f555020ec8ba4ed8ca828ecbd94eb939c20ec9786ec9d8c29277d222c20226775696465223a2022ed95b4eb8bb920ed95b8eb93a4eb9fac20eb82b4ebb68020ec9888ec99b8eba5bc204170704572726f72eba19c20ebaa85ec8b9ceca081ec9cbceba19c20ebb380ed9998ed9598ec8badec8b9cec98a42e222c20226d657461223a207b2270656572223a202228273132372e302e302e31272c20343733383029222c2022726571756573745f6964223a20226631222c2022636d64223a20223450494e5f5550227d7d7d",
+   "server_closed": false,
+   "log": [
+    [
+     "NET",
+     "Client connected: ('127.0.0.1', 47380)"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47380) id=f1 cmd=4PIN_UP data={}"
+    ],
+    [
+     "NET",
+     "[WARN] fail without error_code: cmd=4PIN_UP id=f1 res={'result': 'fail', 'message': '4PIN_UP 실패(코드 없음)'}"
+    ],
+    [
+     "ERROR/HOST",
+     "[E110 / STOP] 핸들러 내부 예외 | 상세: Fail payload missing error_code: {'result': 'fail', 'message': '4PIN_UP 실패(코드 없음)'}"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 47380) id=f1 cmd=4PIN_UP_RESULT data={'result': 'fail', 'error_code': 'E110', 'client_action': 'STOP', 'category': 'INTERNAL', 'severity': 'ERROR', 'message': '핸들러 내부 예외', 'detail': \"Fail payload missing error_code: {'result': 'fail', 'message': '4PIN_UP 실패(코드 없음)'}\", 'guide': '해당 핸들러 내부 예외를 AppError로 명시적으로 변환하십시오.', 'meta': {'peer': \"('127.0.0.1', 47380)\", 'request_id': 'f1', 'cmd': '4PIN_UP'}}"
+    ],
+    [
+     "NET",
+     "Client disconnected: ('127.0.0.1', 47380)"
+    ],
+    [
+     "NET",
+     "Client closed: ('127.0.0.1', 47380)"
+    ]
+   ],
+   "api": [
+    {
+     "cmd": "4PIN_UP",
+     "data": {},
+     "reply_cmd": "4PIN_UP_RESULT",
+     "body": {
+      "result": "fail",
+      "message": "4PIN_UP 실패(코드 없음)"
+     },
+     "log": []
+    }
+   ],
+   "csv": [
+    {
+     "peer": "('127.0.0.1', 47380)",
+     "request_id": "f1",
+     "req_command": "4PIN_UP",
+     "req_data_json": "{}",
+     "res_command": "4PIN_UP_RESULT",
+     "res_result": "fail",
+     "res_message": "핸들러 내부 예외",
+     "res_data_json": "{\"result\": \"fail\", \"error_code\": \"E110\", \"client_action\": \"STOP\", \"category\": \"INTERNAL\", \"severity\": \"ERROR\", \"message\": \"핸들러 내부 예외\", \"detail\": \"Fail payload missing error_code: {'result': 'fail', 'message': '4PIN_UP 실패(코드 없음)'}\", \"guide\": \"해당 핸들러 내부 예외를 AppError로 명시적으로 변환하십시오.\", \"meta\": {\"peer\": \"('127.0.0.1', 47380)\", \"request_id\": \"f1\", \"cmd\": \"4PIN_UP\"}}"
+    }
+   ]
+  },
+  {
+   "name": "non_dict_return",
+   "desc": "핸들러가 dict 아닌 값 → 라우터 AppError E111 → server except 경로",
+   "sends": [
+    {
+     "hex": "0100000d0000003c00000000000000007b22726571756573745f6964223a20226e31222c2022636f6d6d616e64223a20224368315f476174655f4f70656e222c202264617461223a207b7d7d",
+     "delay_s": 0
+    }
+   ],
+   "expect": 1,
+   "half_close": false,
+   "peer": "('127.0.0.1', 47382)",
+   "rx_hex": "010000140000020b000000006ae3de007b22726571756573745f6964223a20226e31222c2022636f6d6d616e64223a20224368315f476174655f4f70656e5f524553554c54222c202264617461223a207b22726573756c74223a20226661696c222c20226572726f725f636f6465223a202245313131222c2022636c69656e745f616374696f6e223a202253544f50222c202263617465676f7279223a2022494e5445524e414c222c20227365766572697479223a20224552524f52222c20226d657373616765223a2022ed95b8eb93a4eb9fac20ebb098ed999820ed9895ec8b9d20ec98a4eba598222c202264657461696c223a202248616e646c65722072657475726e6564206e6f6e2d646963743a206c697374207261773d5b276e6f74272c202761272c202764696374275d222c20226775696465223a2022ebaaa8eb93a020ed95b8eb93a4eb9faceab080206469637420ed9895ed839cec9d9820ec9d91eb8bb5ec9d8420ebb098ed9998ed9598eb8f84eba19d20ec8898eca095ed9598ec8badec8b9cec98a42e222c20226d657461223a207b22636f6d6d616e64223a20224348315f474154455f4f50454e222c202270656572223a202228273132372e302e302e31272c20343733383229222c2022726571756573745f6964223a20226e31222c2022636d64223a20224368315f476174655f4f70656e227d2c202263617573655f74797065223a20224170704572726f72227d7d",
+   "server_closed": false,
+   "log": [
+    [
+     "NET",
+     "Client connected: ('127.0.0.1', 47382)"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47382) id=n1 cmd=Ch1_Gate_Open data={}"
+    ],
+    [
+     "NET",
+     "Handler error for Ch1_Gate_Open: E111: Handler returned non-dict: list raw=['not', 'a', 'dict']\nTraceback (most recent call last):\n  File \"<v1>/host/server.py\", line 344, in _handle\n    res_cmd, res_data = await self.router.dispatch(cmd, data)\n                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<v1>/v2/tools/v1golden_robot_server.py\", line 199, in rec_dispatch\n    res = await orig_dispatch(command, data)\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<v1>/host/router.py\", line 57, in dispatch\n    raise AppError(\n    ...<3 lines>...\n    )\nerrors.app_error.AppError: E111: Handler returned non-dict: list raw=['not', 'a', 'dict']\n"
+    ],
+    [
+     "ERROR/HOST",
+     "[E111 / STOP] 핸들러 반환 형식 오류 | 상세: Handler returned non-dict: list raw=['not', 'a', 'dict']"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 47382) id=n1 cmd=Ch1_Gate_Open_RESULT data={'result': 'fail', 'error_code': 'E111', 'client_action': 'STOP', 'category': 'INTERNAL', 'severity': 'ERROR', 'message': '핸들러 반환 형식 오류', 'detail': \"Handler returned non-dict: list raw=['not', 'a', 'dict']\", 'guide': '모든 핸들러가 dict 형태의 응답을 반환하도록 수정하십시오.', 'meta': {'command': 'CH1_GATE_OPEN', 'peer': \"('127.0.0.1', 47382)\", 'request_id': 'n1', 'cmd': 'Ch1_Gate_Open'}, 'cause_type': 'AppError'}"
+    ],
+    [
+     "NET",
+     "Client disconnected: ('127.0.0.1', 47382)"
+    ],
+    [
+     "NET",
+     "Client closed: ('127.0.0.1', 47382)"
+    ]
+   ],
+   "api": [
+    {
+     "cmd": "CH1_GATE_OPEN",
+     "data": {},
+     "reply_cmd": "Ch1_Gate_Open_RESULT",
+     "body": {
+      "result": "fail",
+      "error_code": "E111",
+      "client_action": "STOP",
+      "category": "INTERNAL",
+      "severity": "ERROR",
+      "message": "핸들러 반환 형식 오류",
+      "detail": "Handler returned non-dict: list raw=['not', 'a', 'dict']",
+      "guide": "모든 핸들러가 dict 형태의 응답을 반환하도록 수정하십시오.",
+      "meta": {
+       "command": "CH1_GATE_OPEN",
+       "peer": "('127.0.0.1', 47382)",
+       "request_id": "n1",
+       "cmd": "Ch1_Gate_Open"
+      },
+      "cause_type": "AppError"
+     },
+     "log": [
+      [
+       "NET",
+       "Handler error for Ch1_Gate_Open: E111: Handler returned non-dict: list raw=['not', 'a', 'dict']\nTraceback (most recent call last):\n  File \"<v1>/host/server.py\", line 344, in _handle\n    res_cmd, res_data = await self.router.dispatch(cmd, data)\n                        ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<v1>/v2/tools/v1golden_robot_server.py\", line 199, in rec_dispatch\n    res = await orig_dispatch(command, data)\n          ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\n  File \"<v1>/host/router.py\", line 57, in dispatch\n    raise AppError(\n    ...<3 lines>...\n    )\nerrors.app_error.AppError: E111: Handler returned non-dict: list raw=['not', 'a', 'dict']\n"
+      ],
+      [
+       "ERROR/HOST",
+       "[E111 / STOP] 핸들러 반환 형식 오류 | 상세: Handler returned non-dict: list raw=['not', 'a', 'dict']"
+      ]
+     ]
+    }
+   ],
+   "csv": [
+    {
+     "peer": "('127.0.0.1', 47382)",
+     "request_id": "n1",
+     "req_command": "Ch1_Gate_Open",
+     "req_data_json": "{}",
+     "res_command": "Ch1_Gate_Open_RESULT",
+     "res_result": "fail",
+     "res_message": "핸들러 반환 형식 오류",
+     "res_data_json": "{\"result\": \"fail\", \"error_code\": \"E111\", \"client_action\": \"STOP\", \"category\": \"INTERNAL\", \"severity\": \"ERROR\", \"message\": \"핸들러 반환 형식 오류\", \"detail\": \"Handler returned non-dict: list raw=['not', 'a', 'dict']\", \"guide\": \"모든 핸들러가 dict 형태의 응답을 반환하도록 수정하십시오.\", \"meta\": {\"command\": \"CH1_GATE_OPEN\", \"peer\": \"('127.0.0.1', 47382)\", \"request_id\": \"n1\", \"cmd\": \"Ch1_Gate_Open\"}, \"cause_type\": \"AppError\"}"
+    }
+   ]
+  },
+  {
+   "name": "eof_mid_body",
+   "desc": "바디 중간에 클라이언트가 보내기를 끝냄 → 응답 없이 'Client disconnected'",
+   "sends": [
+    {
+     "hex": "010000120000004200000000000000007b227265",
+     "delay_s": 0
+    }
+   ],
+   "expect": 0,
+   "half_close": true,
+   "peer": "('127.0.0.1', 47396)",
+   "rx_hex": "",
+   "server_closed": true,
+   "log": [
+    [
+     "NET",
+     "Client connected: ('127.0.0.1', 47396)"
+    ],
+    [
+     "NET",
+     "Client disconnected: ('127.0.0.1', 47396)"
+    ],
+    [
+     "NET",
+     "Client closed: ('127.0.0.1', 47396)"
+    ]
+   ],
+   "api": [],
+   "csv": []
+  },
+  {
+   "name": "eof_mid_header",
+   "desc": "헤더 중간에 끝냄",
+   "sends": [
+    {
+     "hex": "0100001200",
+     "delay_s": 0
+    }
+   ],
+   "expect": 0,
+   "half_close": true,
+   "peer": "('127.0.0.1', 47412)",
+   "rx_hex": "",
+   "server_closed": true,
+   "log": [
+    [
+     "NET",
+     "Client connected: ('127.0.0.1', 47412)"
+    ],
+    [
+     "NET",
+     "Client disconnected: ('127.0.0.1', 47412)"
+    ],
+    [
+     "NET",
+     "Client closed: ('127.0.0.1', 47412)"
+    ]
+   ],
+   "api": [],
+   "csv": []
+  },
+  {
+   "name": "all18",
+   "desc": "등록 명령 18개를 한 번에 붙여 보냄 — 순서대로 18 응답",
+   "sends": [
+    {
+     "hex": "010000120000004400000000000000007b22726571756573745f6964223a2022616c6c2d30222c2022636f6d6d616e64223a20224745545f535055545445525f535441545553222c202264617461223a207b7d7d010000140000004600000000000000007b22726571756573745f6964223a2022616c6c2d31222c2022636f6d6d616e64223a20224745545f4c4f4144494e475f315f53454e534f52222c202264617461223a207b7d7d010000140000004600000000000000007b22726571756573745f6964223a2022616c6c2d32222c2022636f6d6d616e64223a20224745545f4c4f4144494e475f325f53454e534f52222c202264617461223a207b7d7d0100000a0000004b00000000000000007b22726571756573745f6964223a2022616c6c2d33222c2022636f6d6d616e64223a20224745545f524543495045222c202264617461223a207b22666f6c646572223a2022636831227d7d0100000d0000007500000000000000007b22726571756573745f6964223a2022616c6c2d34222c2022636f6d6d616e64223a202253544152545f53505554544552222c202264617461223a207b226368223a20312c2022726563697065223a2022433a5c5c526563697065735c5c4348315c5ceba088ec8b9ced94bc20412e637376227d7d010000150000006a00000000000000007b22726571756573745f6964223a2022616c6c2d35222c2022636f6d6d616e64223a202253544152545f504c41534d415f434c45414e494e47222c202264617461223a207b22726563697065223a2022433a5c5c526563697065735c5c50435c5c70632e637376227d7d010000090000004b00000000000000007b22726571756573745f6964223a2022616c6c2d36222c2022636f6d6d616e64223a202256414355554d5f4f4e222c202264617461223a207b2274696d656f75745f73223a203636307d7d0100000a0000003c00000000000000007b22726571756573745f6964223a2022616c6c2d37222c2022636f6d6d616e64223a202256414355554d5f4f4646222c202264617461223a207b7d7d010000070000003900000000000000007b22726571756573745f6964223a2022616c6c2d38222c2022636f6d6d616e64223a20223450494e5f5550222c202264617461223a207b7d7d010000090000006300000000000000007b22726571756573745f6964223a2022616c6c2d39222c2022636f6d6d616e64223a20223450494e5f444f574e222c202264617461223a207b22776169745f73223a2032302c2022706f6c6c5f73223a20312c2022736574746c655f73223a20357d7d0100000d0000004000000000000000007b22726571756573745f6964223a2022616c6c2d3130222c2022636f6d6d616e64223a20224348315f474154455f4f50454e222c202264617461223a207b7d7d0100000d0000004700000000000000007b22726571756573745f6964223a2022616c6c2d3131222c2022636f6d6d616e64223a20224348325f474154455f4f50454e222c202264617461223a207b226368223a20317d7d0100000e0000004100000000000000007b22726571756573745f6964223a2022616c6c2d3132222c2022636f6d6d616e64223a20224348315f474154455f434c4f5345222c202264617461223a207b7d7d0100000e0000004100000000000000007b22726571756573745f6964223a2022616c6c2d3133222c2022636f6d6d616e64223a20224348325f474154455f434c4f5345222c202264617461223a207b7d7d0100000c0000003f00000000000000007b22726571756573745f6964223a2022616c6c2d3134222c2022636f6d6d616e64223a20224348315f434855434b5f5550222c202264617461223a207b7d7d0100000c0000004b00000000000000007b22726571756573745f6964223a2022616c6c2d3135222c2022636f6d6d616e64223a20224348325f434855434b5f5550222c202264617461223a207b22776169745f73223a2039307d7d0100000e0000004100000000000000007b22726571756573745f6964223a2022616c6c2d3136222c2022636f6d6d616e64223a20224348315f434855434b5f444f574e222c202264617461223a207b7d7d0100000e0000004100000000000000007b22726571756573745f6964223a2022616c6c2d3137222c2022636f6d6d616e64223a20224348325f434855434b5f444f574e222c202264617461223a207b7d7d",
+     "delay_s": 0
+    }
+   ],
+   "expect": 18,
+   "half_close": false,
+   "peer": "('127.0.0.1', 47420)",
+   "rx_hex": "010000190000010d000000006ae3de007b22726571756573745f6964223a2022616c6c2d30222c2022636f6d6d616e64223a20224745545f535055545445525f5354415455535f524553554c54222c202264617461223a207b22726573756c74223a202273756363657373222c20226d657373616765223a20224f4b222c20224368616d6265725f31223a202269646c65222c20224368616d6265725f32223a202272756e6e696e67222c20224c6f61646c6f636b5f4368616d626572223a202269646c65222c202276616375756d223a20747275652c2022657461223a207b22434831223a207b2272656d61696e696e675f73223a206e756c6c7d2c2022434832223a207b2272656d61696e696e675f73223a20313233347d7d7d7d0100001b00000080000000006ae3de007b22726571756573745f6964223a2022616c6c2d31222c2022636f6d6d616e64223a20224745545f4c4f4144494e475f315f53454e534f525f524553554c54222c202264617461223a207b22726573756c74223a202273756363657373222c20226d657373616765223a20224f4b222c202276616c7565223a20747275657d7d0100001b00000081000000006ae3de007b22726571756573745f6964223a2022616c6c2d32222c2022636f6d6d616e64223a20224745545f4c4f4144494e475f325f53454e534f525f524553554c54222c202264617461223a207b22726573756c74223a202273756363657373222c20226d657373616765223a20224f4b222c202276616c7565223a2066616c73657d7d01000011000000d0000000006ae3de007b22726571756573745f6964223a2022616c6c2d33222c2022636f6d6d616e64223a20224745545f5245434950455f524553554c54222c202264617461223a207b22726573756c74223a202273756363657373222c20226d657373616765223a20224f4b222c2022626173655f646972223a2022433a5c5c52656369706573222c2022666f6c646572223a2022434831222c202266696c6573223a205b22612e637376222c2022eba088ec8b9ced94bc20412e637376222c2022622e786c7378225d2c2022636f756e74223a20337d7d0100001400000096000000006ae3de007b22726571756573745f6964223a2022616c6c2d34222c2022636f6d6d616e64223a202253544152545f535055545445525f524553554c54222c202264617461223a207b22726573756c74223a202273756363657373222c20226d657373616765223a202253505554544552205354415254204f4b222c20226368223a20312c20226d696e5f746f74616c5f73223a20313839307d7d0100001c00000088000000006ae3de007b22726571756573745f6964223a2022616c6c2d35222c2022636f6d6d616e64223a202253544152545f504c41534d415f434c45414e494e475f524553554c54222c202264617461223a207b22726573756c74223a202273756363657373222c20226d657373616765223a2022504c41534d4120434c45414e494e47205354415254204f4b227d7d0100001000000089000000006ae3de007b22726571756573745f6964223a2022616c6c2d36222c2022636f6d6d616e64223a202256414355554d5f4f4e5f524553554c54222c202264617461223a207b22726573756c74223a202273756363657373222c20226d657373616765223a202256414355554d5f4f4e20ec9984eba38c284c5f5641435f52454144595f53573d5452554529227d7d0100001100000089000000006ae3de007b22726571756573745f6964223a2022616c6c2d37222c2022636f6d6d616e64223a202256414355554d5f4f46465f524553554c54222c202264617461223a207b22726573756c74223a202273756363657373222c20226d657373616765223a202256414355554d5f4f464620ec9984eba38c222c2022656c61707365645f73223a2031322e357d7d0100000e00000070000000006ae3de007b22726571756573745f6964223a2022616c6c2d38222c2022636f6d6d616e64223a20223450494e5f55505f524553554c54222c202264617461223a207b22726573756c74223a202273756363657373222c20226d657373616765223a20223450494e5f555020ec9984eba38c227d7d0100001000000074000000006ae3de007b22726571756573745f6964223a2022616c6c2d39222c2022636f6d6d616e64223a20223450494e5f444f574e5f524553554c54222c202264617461223a207b22726573756c74223a202273756363657373222c20226d657373616765223a20223450494e5f444f574e20ec9984eba38c227d7d010000140000007d000000006ae3de007b22726571756573745f6964223a2022616c6c2d3130222c2022636f6d6d616e64223a20224348315f474154455f4f50454e5f524553554c54222c202264617461223a207b22726573756c74223a202273756363657373222c20226d657373616765223a20224348312047415445204f50454e20ec9984eba38c227d7d010000140000007d000000006ae3de007b22726571756573745f6964223a2022616c6c2d3131222c2022636f6d6d616e64223a20224348325f474154455f4f50454e5f524553554c54222c202264617461223a207b22726573756c74223a202273756363657373222c20226d657373616765223a20224348322047415445204f50454e20ec9984eba38c227d7d010000150000008c000000006ae3de007b22726571756573745f6964223a2022616c6c2d3132222c2022636f6d6d616e64223a20224348315f474154455f434c4f53455f524553554c54222c202264617461223a207b22726573756c74223a202273756363657373222c20226d657373616765223a2022ec9db4ebafb820434c4f534544222c202263757272656e74223a2022636c6f736564227d7d010000150000019f000000006ae3de007b22726571756573745f6964223a2022616c6c2d3133222c2022636f6d6d616e64223a20224348325f474154455f434c4f53455f524553554c54222c202264617461223a207b22726573756c74223a20226661696c222c20226572726f725f636f6465223a202245333035222c2022636c69656e745f616374696f6e223a202253544f50222c202263617465676f7279223a20225341464554595f47415445222c20227365766572697479223a20224552524f52222c20226d657373616765223a2022eab28cec9db4ed8ab820eb8babed9e9820eb9ea8ed948420ec8b9ceab08420ecb488eab3bc222c202264657461696c223a202243483220eab28cec9db4ed8ab820eb8babed9e9820eb9ea8ed948420ed9995ec9db820ec8ba4ed8ca8222c20226775696465223a2022eab28cec9db4ed8ab820eab5aceb8f99ebb6802c20ec84bcec849c2c20504c4320ecb69ceba0a52c20eab3b5ec959520ec8381ed839ceba5bc20ed9995ec9db8ed9598ec8badec8b9cec98a42e222c20226d657461223a207b22636d64223a2022474154455f434c4f53455f434832227d7d7d01000013000000cf000000006ae3de007b22726571756573745f6964223a2022616c6c2d3134222c2022636f6d6d616e64223a20224348315f434855434b5f55505f524553554c54222c202264617461223a207b22726573756c74223a202273756363657373222c20226d657373616765223a202243483120434855434b204d494420ec9984eba38c222c202263757272656e74223a207b22706f736974696f6e223a20224d4944222c20226c616d70223a207b227570223a2066616c73652c20226d6964223a20747275652c2022646f776e223a2066616c73657d7d7d7d01000013000000cf000000006ae3de007b22726571756573745f6964223a2022616c6c2d3135222c2022636f6d6d616e64223a20224348325f434855434b5f55505f524553554c54222c202264617461223a207b22726573756c74223a202273756363657373222c20226d657373616765223a202243483220434855434b204d494420ec9984eba38c222c202263757272656e74223a207b22706f736974696f6e223a20224d4944222c20226c616d70223a207b227570223a2066616c73652c20226d6964223a20747275652c2022646f776e223a2066616c73657d7d7d7d01000015000000d3000000006ae3de007b22726571756573745f6964223a2022616c6c2d3136222c2022636f6d6d616e64223a20224348315f434855434b5f444f574e5f524553554c54222c202264617461223a207b22726573756c74223a202273756363657373222c20226d657373616765223a202243483120434855434b20444f574e20ec9984eba38c222c202263757272656e74223a207b22706f736974696f6e223a2022444f574e222c20226c616d70223a207b227570223a2066616c73652c20226d6964223a2066616c73652c2022646f776e223a20747275657d7d7d7d01000015000000d3000000006ae3de007b22726571756573745f6964223a2022616c6c2d3137222c2022636f6d6d616e64223a20224348325f434855434b5f444f574e5f524553554c54222c202264617461223a207b22726573756c74223a202273756363657373222c20226d657373616765223a202243483220434855434b20444f574e20ec9984eba38c222c202263757272656e74223a207b22706f736974696f6e223a2022444f574e222c20226c616d70223a207b227570223a2066616c73652c20226d6964223a2066616c73652c2022646f776e223a20747275657d7d7d7d",
+   "server_closed": false,
+   "log": [
+    [
+     "NET",
+     "Client connected: ('127.0.0.1', 47420)"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47420) id=all-0 cmd=GET_SPUTTER_STATUS data={}"
+    ],
+    [
+     "PLC_REMOTE",
+     "2026-10-30 12:00:00 [GET_SPUTTER_STATUS] read L_ATM (addr=99) -> False"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 47420) id=all-0 cmd=GET_SPUTTER_STATUS_RESULT data={'result': 'success', 'message': 'OK', 'Chamber_1': 'idle', 'Chamber_2': 'running', 'Loadlock_Chamber': 'idle', 'vacuum': True, 'eta': {'CH1': {'remaining_s': None}, 'CH2': {'remaining_s': 1234}}}"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47420) id=all-1 cmd=GET_LOADING_1_SENSOR data={}"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 47420) id=all-1 cmd=GET_LOADING_1_SENSOR_RESULT data={'result': 'success', 'message': 'OK', 'value': True}"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47420) id=all-2 cmd=GET_LOADING_2_SENSOR data={}"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 47420) id=all-2 cmd=GET_LOADING_2_SENSOR_RESULT data={'result': 'success', 'message': 'OK', 'value': False}"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47420) id=all-3 cmd=GET_RECIPE data={'folder': 'ch1'}"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 47420) id=all-3 cmd=GET_RECIPE_RESULT data={'result': 'success', 'message': 'OK', 'base_dir': 'C:\\\\Recipes', 'folder': 'CH1', 'files': ['a.csv', '레시피 A.csv', 'b.xlsx'], 'count': 3}"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47420) id=all-4 cmd=START_SPUTTER data={'ch': 1, 'recipe': 'C:\\\\Recipes\\\\CH1\\\\레시피 A.csv'}"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 47420) id=all-4 cmd=START_SPUTTER_RESULT data={'result': 'success', 'message': 'SPUTTER START OK', 'ch': 1, 'min_total_s': 1890}"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47420) id=all-5 cmd=START_PLASMA_CLEANING data={'recipe': 'C:\\\\Recipes\\\\PC\\\\pc.csv'}"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 47420) id=all-5 cmd=START_PLASMA_CLEANING_RESULT data={'result': 'success', 'message': 'PLASMA CLEANING START OK'}"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47420) id=all-6 cmd=VACUUM_ON data={'timeout_s': 660}"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 47420) id=all-6 cmd=VACUUM_ON_RESULT data={'result': 'success', 'message': 'VACUUM_ON 완료(L_VAC_READY_SW=TRUE)'}"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47420) id=all-7 cmd=VACUUM_OFF data={}"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 47420) id=all-7 cmd=VACUUM_OFF_RESULT data={'result': 'success', 'message': 'VACUUM_OFF 완료', 'elapsed_s': 12.5}"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47420) id=all-8 cmd=4PIN_UP data={}"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 47420) id=all-8 cmd=4PIN_UP_RESULT data={'result': 'success', 'message': '4PIN_UP 완료'}"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47420) id=all-9 cmd=4PIN_DOWN data={'wait_s': 20, 'poll_s': 1, 'settle_s': 5}"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 47420) id=all-9 cmd=4PIN_DOWN_RESULT data={'result': 'success', 'message': '4PIN_DOWN 완료'}"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47420) id=all-10 cmd=CH1_GATE_OPEN data={}"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 47420) id=all-10 cmd=CH1_GATE_OPEN_RESULT data={'result': 'success', 'message': 'CH1 GATE OPEN 완료'}"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47420) id=all-11 cmd=CH2_GATE_OPEN data={'ch': 1}"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 47420) id=all-11 cmd=CH2_GATE_OPEN_RESULT data={'result': 'success', 'message': 'CH2 GATE OPEN 완료'}"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47420) id=all-12 cmd=CH1_GATE_CLOSE data={}"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 47420) id=all-12 cmd=CH1_GATE_CLOSE_RESULT data={'result': 'success', 'message': '이미 CLOSED', 'current': 'closed'}"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47420) id=all-13 cmd=CH2_GATE_CLOSE data={}"
+    ],
+    [
+     "ERROR/HOST",
+     "[E305 / STOP] 게이트 닫힘 램프 시간 초과 | 상세: CH2 게이트 닫힘 램프 확인 실패"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 47420) id=all-13 cmd=CH2_GATE_CLOSE_RESULT data={'result': 'fail', 'error_code': 'E305', 'client_action': 'STOP', 'category': 'SAFETY_GATE', 'severity': 'ERROR', 'message': '게이트 닫힘 램프 시간 초과', 'detail': 'CH2 게이트 닫힘 램프 확인 실패', 'guide': '게이트 구동부, 센서, PLC 출력, 공압 상태를 확인하십시오.', 'meta': {'cmd': 'GATE_CLOSE_CH2'}}"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47420) id=all-14 cmd=CH1_CHUCK_UP data={}"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 47420) id=all-14 cmd=CH1_CHUCK_UP_RESULT data={'result': 'success', 'message': 'CH1 CHUCK MID 완료', 'current': {'position': 'MID', 'lamp': {'up': False, 'mid': True, 'down': False}}}"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47420) id=all-15 cmd=CH2_CHUCK_UP data={'wait_s': 90}"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 47420) id=all-15 cmd=CH2_CHUCK_UP_RESULT data={'result': 'success', 'message': 'CH2 CHUCK MID 완료', 'current': {'position': 'MID', 'lamp': {'up': False, 'mid': True, 'down': False}}}"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47420) id=all-16 cmd=CH1_CHUCK_DOWN data={}"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 47420) id=all-16 cmd=CH1_CHUCK_DOWN_RESULT data={'result': 'success', 'message': 'CH1 CHUCK DOWN 완료', 'current': {'position': 'DOWN', 'lamp': {'up': False, 'mid': False, 'down': True}}}"
+    ],
+    [
+     "PLC_HOST",
+     "[REQ] peer=('127.0.0.1', 47420) id=all-17 cmd=CH2_CHUCK_DOWN data={}"
+    ],
+    [
+     "PLC_HOST",
+     "[RES] peer=('127.0.0.1', 47420) id=all-17 cmd=CH2_CHUCK_DOWN_RESULT data={'result': 'success', 'message': 'CH2 CHUCK DOWN 완료', 'current': {'position': 'DOWN', 'lamp': {'up': False, 'mid': False, 'down': True}}}"
+    ],
+    [
+     "NET",
+     "Client disconnected: ('127.0.0.1', 47420)"
+    ],
+    [
+     "NET",
+     "Client closed: ('127.0.0.1', 47420)"
+    ]
+   ],
+   "api": [
+    {
+     "cmd": "GET_SPUTTER_STATUS",
+     "data": {},
+     "reply_cmd": "GET_SPUTTER_STATUS_RESULT",
+     "body": {
+      "result": "success",
+      "message": "OK",
+      "Chamber_1": "idle",
+      "Chamber_2": "running",
+      "Loadlock_Chamber": "idle",
+      "vacuum": true,
+      "eta": {
+       "CH1": {
+        "remaining_s": null
+       },
+       "CH2": {
+        "remaining_s": 1234
+       }
+      }
+     },
+     "log": [
+      [
+       "PLC_REMOTE",
+       "2026-10-30 12:00:00 [GET_SPUTTER_STATUS] read L_ATM (addr=99) -> False"
+      ]
+     ]
+    },
+    {
+     "cmd": "GET_LOADING_1_SENSOR",
+     "data": {},
+     "reply_cmd": "GET_LOADING_1_SENSOR_RESULT",
+     "body": {
+      "result": "success",
+      "message": "OK",
+      "value": true
+     },
+     "log": []
+    },
+    {
+     "cmd": "GET_LOADING_2_SENSOR",
+     "data": {},
+     "reply_cmd": "GET_LOADING_2_SENSOR_RESULT",
+     "body": {
+      "result": "success",
+      "message": "OK",
+      "value": false
+     },
+     "log": []
+    },
+    {
+     "cmd": "GET_RECIPE",
+     "data": {
+      "folder": "ch1"
+     },
+     "reply_cmd": "GET_RECIPE_RESULT",
+     "body": {
+      "result": "success",
+      "message": "OK",
+      "base_dir": "C:\\Recipes",
+      "folder": "CH1",
+      "files": [
+       "a.csv",
+       "레시피 A.csv",
+       "b.xlsx"
+      ],
+      "count": 3
+     },
+     "log": []
+    },
+    {
+     "cmd": "START_SPUTTER",
+     "data": {
+      "ch": 1,
+      "recipe": "C:\\Recipes\\CH1\\레시피 A.csv"
+     },
+     "reply_cmd": "START_SPUTTER_RESULT",
+     "body": {
+      "result": "success",
+      "message": "SPUTTER START OK",
+      "ch": 1,
+      "min_total_s": 1890
+     },
+     "log": []
+    },
+    {
+     "cmd": "START_PLASMA_CLEANING",
+     "data": {
+      "recipe": "C:\\Recipes\\PC\\pc.csv"
+     },
+     "reply_cmd": "START_PLASMA_CLEANING_RESULT",
+     "body": {
+      "result": "success",
+      "message": "PLASMA CLEANING START OK"
+     },
+     "log": []
+    },
+    {
+     "cmd": "VACUUM_ON",
+     "data": {
+      "timeout_s": 660
+     },
+     "reply_cmd": "VACUUM_ON_RESULT",
+     "body": {
+      "result": "success",
+      "message": "VACUUM_ON 완료(L_VAC_READY_SW=TRUE)"
+     },
+     "log": []
+    },
+    {
+     "cmd": "VACUUM_OFF",
+     "data": {},
+     "reply_cmd": "VACUUM_OFF_RESULT",
+     "body": {
+      "result": "success",
+      "message": "VACUUM_OFF 완료",
+      "elapsed_s": 12.5
+     },
+     "log": []
+    },
+    {
+     "cmd": "4PIN_UP",
+     "data": {},
+     "reply_cmd": "4PIN_UP_RESULT",
+     "body": {
+      "result": "success",
+      "message": "4PIN_UP 완료"
+     },
+     "log": []
+    },
+    {
+     "cmd": "4PIN_DOWN",
+     "data": {
+      "wait_s": 20,
+      "poll_s": 1,
+      "settle_s": 5
+     },
+     "reply_cmd": "4PIN_DOWN_RESULT",
+     "body": {
+      "result": "success",
+      "message": "4PIN_DOWN 완료"
+     },
+     "log": []
+    },
+    {
+     "cmd": "CH1_GATE_OPEN",
+     "data": {},
+     "reply_cmd": "CH1_GATE_OPEN_RESULT",
+     "body": {
+      "result": "success",
+      "message": "CH1 GATE OPEN 완료"
+     },
+     "log": []
+    },
+    {
+     "cmd": "CH2_GATE_OPEN",
+     "data": {
+      "ch": 1
+     },
+     "reply_cmd": "CH2_GATE_OPEN_RESULT",
+     "body": {
+      "result": "success",
+      "message": "CH2 GATE OPEN 완료"
+     },
+     "log": []
+    },
+    {
+     "cmd": "CH1_GATE_CLOSE",
+     "data": {},
+     "reply_cmd": "CH1_GATE_CLOSE_RESULT",
+     "body": {
+      "result": "success",
+      "message": "이미 CLOSED",
+      "current": "closed"
+     },
+     "log": []
+    },
+    {
+     "cmd": "CH2_GATE_CLOSE",
+     "data": {},
+     "reply_cmd": "CH2_GATE_CLOSE_RESULT",
+     "body": {
+      "result": "fail",
+      "error_code": "E305",
+      "client_action": "STOP",
+      "category": "SAFETY_GATE",
+      "severity": "ERROR",
+      "message": "게이트 닫힘 램프 시간 초과",
+      "detail": "CH2 게이트 닫힘 램프 확인 실패",
+      "guide": "게이트 구동부, 센서, PLC 출력, 공압 상태를 확인하십시오.",
+      "meta": {
+       "cmd": "GATE_CLOSE_CH2"
+      }
+     },
+     "log": [
+      [
+       "ERROR/HOST",
+       "[E305 / STOP] 게이트 닫힘 램프 시간 초과 | 상세: CH2 게이트 닫힘 램프 확인 실패"
+      ]
+     ]
+    },
+    {
+     "cmd": "CH1_CHUCK_UP",
+     "data": {},
+     "reply_cmd": "CH1_CHUCK_UP_RESULT",
+     "body": {
+      "result": "success",
+      "message": "CH1 CHUCK MID 완료",
+      "current": {
+       "position": "MID",
+       "lamp": {
+        "up": false,
+        "mid": true,
+        "down": false
+       }
+      }
+     },
+     "log": []
+    },
+    {
+     "cmd": "CH2_CHUCK_UP",
+     "data": {
+      "wait_s": 90
+     },
+     "reply_cmd": "CH2_CHUCK_UP_RESULT",
+     "body": {
+      "result": "success",
+      "message": "CH2 CHUCK MID 완료",
+      "current": {
+       "position": "MID",
+       "lamp": {
+        "up": false,
+        "mid": true,
+        "down": false
+       }
+      }
+     },
+     "log": []
+    },
+    {
+     "cmd": "CH1_CHUCK_DOWN",
+     "data": {},
+     "reply_cmd": "CH1_CHUCK_DOWN_RESULT",
+     "body": {
+      "result": "success",
+      "message": "CH1 CHUCK DOWN 완료",
+      "current": {
+       "position": "DOWN",
+       "lamp": {
+        "up": false,
+        "mid": false,
+        "down": true
+       }
+      }
+     },
+     "log": []
+    },
+    {
+     "cmd": "CH2_CHUCK_DOWN",
+     "data": {},
+     "reply_cmd": "CH2_CHUCK_DOWN_RESULT",
+     "body": {
+      "result": "success",
+      "message": "CH2 CHUCK DOWN 완료",
+      "current": {
+       "position": "DOWN",
+       "lamp": {
+        "up": false,
+        "mid": false,
+        "down": true
+       }
+      }
+     },
+     "log": []
+    }
+   ],
+   "csv": [
+    {
+     "peer": "('127.0.0.1', 47420)",
+     "request_id": "all-0",
+     "req_command": "GET_SPUTTER_STATUS",
+     "req_data_json": "{}",
+     "res_command": "GET_SPUTTER_STATUS_RESULT",
+     "res_result": "success",
+     "res_message": "OK",
+     "res_data_json": "{\"result\": \"success\", \"message\": \"OK\", \"Chamber_1\": \"idle\", \"Chamber_2\": \"running\", \"Loadlock_Chamber\": \"idle\", \"vacuum\": true, \"eta\": {\"CH1\": {\"remaining_s\": null}, \"CH2\": {\"remaining_s\": 1234}}}"
+    },
+    {
+     "peer": "('127.0.0.1', 47420)",
+     "request_id": "all-1",
+     "req_command": "GET_LOADING_1_SENSOR",
+     "req_data_json": "{}",
+     "res_command": "GET_LOADING_1_SENSOR_RESULT",
+     "res_result": "success",
+     "res_message": "OK",
+     "res_data_json": "{\"result\": \"success\", \"message\": \"OK\", \"value\": true}"
+    },
+    {
+     "peer": "('127.0.0.1', 47420)",
+     "request_id": "all-2",
+     "req_command": "GET_LOADING_2_SENSOR",
+     "req_data_json": "{}",
+     "res_command": "GET_LOADING_2_SENSOR_RESULT",
+     "res_result": "success",
+     "res_message": "OK",
+     "res_data_json": "{\"result\": \"success\", \"message\": \"OK\", \"value\": false}"
+    },
+    {
+     "peer": "('127.0.0.1', 47420)",
+     "request_id": "all-3",
+     "req_command": "GET_RECIPE",
+     "req_data_json": "{\"folder\": \"ch1\"}",
+     "res_command": "GET_RECIPE_RESULT",
+     "res_result": "success",
+     "res_message": "OK",
+     "res_data_json": "{\"result\": \"success\", \"message\": \"OK\", \"base_dir\": \"C:\\\\Recipes\", \"folder\": \"CH1\", \"files\": [\"a.csv\", \"레시피 A.csv\", \"b.xlsx\"], \"count\": 3}"
+    },
+    {
+     "peer": "('127.0.0.1', 47420)",
+     "request_id": "all-4",
+     "req_command": "START_SPUTTER",
+     "req_data_json": "{\"ch\": 1, \"recipe\": \"C:\\\\Recipes\\\\CH1\\\\레시피 A.csv\"}",
+     "res_command": "START_SPUTTER_RESULT",
+     "res_result": "success",
+     "res_message": "SPUTTER START OK",
+     "res_data_json": "{\"result\": \"success\", \"message\": \"SPUTTER START OK\", \"ch\": 1, \"min_total_s\": 1890}"
+    },
+    {
+     "peer": "('127.0.0.1', 47420)",
+     "request_id": "all-5",
+     "req_command": "START_PLASMA_CLEANING",
+     "req_data_json": "{\"recipe\": \"C:\\\\Recipes\\\\PC\\\\pc.csv\"}",
+     "res_command": "START_PLASMA_CLEANING_RESULT",
+     "res_result": "success",
+     "res_message": "PLASMA CLEANING START OK",
+     "res_data_json": "{\"result\": \"success\", \"message\": \"PLASMA CLEANING START OK\"}"
+    },
+    {
+     "peer": "('127.0.0.1', 47420)",
+     "request_id": "all-6",
+     "req_command": "VACUUM_ON",
+     "req_data_json": "{\"timeout_s\": 660}",
+     "res_command": "VACUUM_ON_RESULT",
+     "res_result": "success",
+     "res_message": "VACUUM_ON 완료(L_VAC_READY_SW=TRUE)",
+     "res_data_json": "{\"result\": \"success\", \"message\": \"VACUUM_ON 완료(L_VAC_READY_SW=TRUE)\"}"
+    },
+    {
+     "peer": "('127.0.0.1', 47420)",
+     "request_id": "all-7",
+     "req_command": "VACUUM_OFF",
+     "req_data_json": "{}",
+     "res_command": "VACUUM_OFF_RESULT",
+     "res_result": "success",
+     "res_message": "VACUUM_OFF 완료",
+     "res_data_json": "{\"result\": \"success\", \"message\": \"VACUUM_OFF 완료\", \"elapsed_s\": 12.5}"
+    },
+    {
+     "peer": "('127.0.0.1', 47420)",
+     "request_id": "all-8",
+     "req_command": "4PIN_UP",
+     "req_data_json": "{}",
+     "res_command": "4PIN_UP_RESULT",
+     "res_result": "success",
+     "res_message": "4PIN_UP 완료",
+     "res_data_json": "{\"result\": \"success\", \"message\": \"4PIN_UP 완료\"}"
+    },
+    {
+     "peer": "('127.0.0.1', 47420)",
+     "request_id": "all-9",
+     "req_command": "4PIN_DOWN",
+     "req_data_json": "{\"wait_s\": 20, \"poll_s\": 1, \"settle_s\": 5}",
+     "res_command": "4PIN_DOWN_RESULT",
+     "res_result": "success",
+     "res_message": "4PIN_DOWN 완료",
+     "res_data_json": "{\"result\": \"success\", \"message\": \"4PIN_DOWN 완료\"}"
+    },
+    {
+     "peer": "('127.0.0.1', 47420)",
+     "request_id": "all-10",
+     "req_command": "CH1_GATE_OPEN",
+     "req_data_json": "{}",
+     "res_command": "CH1_GATE_OPEN_RESULT",
+     "res_result": "success",
+     "res_message": "CH1 GATE OPEN 완료",
+     "res_data_json": "{\"result\": \"success\", \"message\": \"CH1 GATE OPEN 완료\"}"
+    },
+    {
+     "peer": "('127.0.0.1', 47420)",
+     "request_id": "all-11",
+     "req_command": "CH2_GATE_OPEN",
+     "req_data_json": "{\"ch\": 1}",
+     "res_command": "CH2_GATE_OPEN_RESULT",
+     "res_result": "success",
+     "res_message": "CH2 GATE OPEN 완료",
+     "res_data_json": "{\"result\": \"success\", \"message\": \"CH2 GATE OPEN 완료\"}"
+    },
+    {
+     "peer": "('127.0.0.1', 47420)",
+     "request_id": "all-12",
+     "req_command": "CH1_GATE_CLOSE",
+     "req_data_json": "{}",
+     "res_command": "CH1_GATE_CLOSE_RESULT",
+     "res_result": "success",
+     "res_message": "이미 CLOSED",
+     "res_data_json": "{\"result\": \"success\", \"message\": \"이미 CLOSED\", \"current\": \"closed\"}"
+    },
+    {
+     "peer": "('127.0.0.1', 47420)",
+     "request_id": "all-13",
+     "req_command": "CH2_GATE_CLOSE",
+     "req_data_json": "{}",
+     "res_command": "CH2_GATE_CLOSE_RESULT",
+     "res_result": "fail",
+     "res_message": "게이트 닫힘 램프 시간 초과",
+     "res_data_json": "{\"result\": \"fail\", \"error_code\": \"E305\", \"client_action\": \"STOP\", \"category\": \"SAFETY_GATE\", \"severity\": \"ERROR\", \"message\": \"게이트 닫힘 램프 시간 초과\", \"detail\": \"CH2 게이트 닫힘 램프 확인 실패\", \"guide\": \"게이트 구동부, 센서, PLC 출력, 공압 상태를 확인하십시오.\", \"meta\": {\"cmd\": \"GATE_CLOSE_CH2\"}}"
+    },
+    {
+     "peer": "('127.0.0.1', 47420)",
+     "request_id": "all-14",
+     "req_command": "CH1_CHUCK_UP",
+     "req_data_json": "{}",
+     "res_command": "CH1_CHUCK_UP_RESULT",
+     "res_result": "success",
+     "res_message": "CH1 CHUCK MID 완료",
+     "res_data_json": "{\"result\": \"success\", \"message\": \"CH1 CHUCK MID 완료\", \"current\": {\"position\": \"MID\", \"lamp\": {\"up\": false, \"mid\": true, \"down\": false}}}"
+    },
+    {
+     "peer": "('127.0.0.1', 47420)",
+     "request_id": "all-15",
+     "req_command": "CH2_CHUCK_UP",
+     "req_data_json": "{\"wait_s\": 90}",
+     "res_command": "CH2_CHUCK_UP_RESULT",
+     "res_result": "success",
+     "res_message": "CH2 CHUCK MID 완료",
+     "res_data_json": "{\"result\": \"success\", \"message\": \"CH2 CHUCK MID 완료\", \"current\": {\"position\": \"MID\", \"lamp\": {\"up\": false, \"mid\": true, \"down\": false}}}"
+    },
+    {
+     "peer": "('127.0.0.1', 47420)",
+     "request_id": "all-16",
+     "req_command": "CH1_CHUCK_DOWN",
+     "req_data_json": "{}",
+     "res_command": "CH1_CHUCK_DOWN_RESULT",
+     "res_result": "success",
+     "res_message": "CH1 CHUCK DOWN 완료",
+     "res_data_json": "{\"result\": \"success\", \"message\": \"CH1 CHUCK DOWN 완료\", \"current\": {\"position\": \"DOWN\", \"lamp\": {\"up\": false, \"mid\": false, \"down\": true}}}"
+    },
+    {
+     "peer": "('127.0.0.1', 47420)",
+     "request_id": "all-17",
+     "req_command": "CH2_CHUCK_DOWN",
+     "req_data_json": "{}",
+     "res_command": "CH2_CHUCK_DOWN_RESULT",
+     "res_result": "success",
+     "res_message": "CH2 CHUCK DOWN 완료",
+     "res_data_json": "{\"result\": \"success\", \"message\": \"CH2 CHUCK DOWN 완료\", \"current\": {\"position\": \"DOWN\", \"lamp\": {\"up\": false, \"mid\": false, \"down\": true}}}"
+    }
+   ]
+  }
+ ]
+}

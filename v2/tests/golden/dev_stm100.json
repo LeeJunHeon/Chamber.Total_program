@@ -1,0 +1,3251 @@
+{
+ "source": "v1 device/thickness_monitor.py·controller/thickness_service.py 를 실제로 실행(v2/tools/v1golden_stm100.py) — 127.0.0.1 가짜 TCP 서버",
+ "v1_files": [
+  "device/thickness_monitor.py",
+  "controller/thickness_service.py",
+  "lib/thickness_config.py"
+ ],
+ "pure": {
+  "build": [
+   {
+    "cmd": "S",
+    "hex": "02015353"
+   },
+   {
+    "cmd": "T",
+    "hex": "02015454"
+   },
+   {
+    "cmd": "U",
+    "hex": "02015555"
+   },
+   {
+    "cmd": "V",
+    "hex": "02015656"
+   },
+   {
+    "cmd": "M",
+    "hex": "02014d4d"
+   },
+   {
+    "cmd": "L",
+    "hex": "02014c4c"
+   },
+   {
+    "cmd": "B",
+    "hex": "02014242"
+   },
+   {
+    "cmd": "C",
+    "hex": "02014343"
+   },
+   {
+    "cmd": "@",
+    "hex": "02014040"
+   },
+   {
+    "cmd": "a",
+    "hex": "02016161"
+   },
+   {
+    "cmd": "E?",
+    "hex": "0202453f84"
+   },
+   {
+    "cmd": "F?",
+    "hex": "0202463f85"
+   },
+   {
+    "cmd": "J?",
+    "hex": "02024a3f89"
+   },
+   {
+    "cmd": "E=8.9",
+    "hex": "0205453d382e3921"
+   },
+   {
+    "cmd": "F=1",
+    "hex": "0203463d31b4"
+   },
+   {
+    "cmd": "J=100",
+    "hex": "02054a3d31303018"
+   },
+   {
+    "cmd": "E=19.3",
+    "hex": "0206453d31392e334d"
+   },
+   {
+    "cmd": "J=399",
+    "hex": "02054a3d3339392c"
+   },
+   {
+    "cmd": "",
+    "exc": "ValueError",
+    "msg": "명령 데이터는 1~10바이트여야 합니다: '' (0바이트)"
+   },
+   {
+    "cmd": "12345678901",
+    "exc": "ValueError",
+    "msg": "명령 데이터는 1~10바이트여야 합니다: '12345678901' (11바이트)"
+   },
+   {
+    "cmd": "1234567890",
+    "hex": "020a313233343536373839300d"
+   }
+  ],
+  "extract": [
+   {
+    "value": "A1234",
+    "buf": "020541313233340b",
+    "rest": ""
+   },
+   {
+    "value": "A1234",
+    "buf": "ff00020541313233340b",
+    "rest": ""
+   },
+   {
+    "value": null,
+    "buf": "0203413132",
+    "rest": "0203413132"
+   },
+   {
+    "exc": "ThicknessChecksumError",
+    "msg": "수신 LEN=0 범위 밖",
+    "buf": "0200",
+    "rest": "00"
+   },
+   {
+    "exc": "ThicknessChecksumError",
+    "msg": "수신 LEN=48 범위 밖",
+    "buf": "0230787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878",
+    "rest": "30787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878"
+   },
+   {
+    "exc": "ThicknessChecksumError",
+    "msg": "체크섬 불일치 rx=b'A12' chk=0x00 계산=0xa4",
+    "buf": "020341313200",
+    "rest": ""
+   },
+   {
+    "value": null,
+    "buf": "616263",
+    "rest": ""
+   },
+   {
+    "value": null,
+    "buf": "",
+    "rest": ""
+   },
+   {
+    "value": "A1",
+    "buf": "02024131720202423274",
+    "rest": "0202423274"
+   },
+   {
+    "value": null,
+    "buf": "02",
+    "rest": "02"
+   },
+   {
+    "value": "A9999999999999999999999999999999",
+    "buf": "0220413939393939393939393939393939393939393939393939393939393939393928",
+    "rest": ""
+   }
+  ],
+  "parse": [
+   {
+    "fn": "parse_thickness_a",
+    "body": "1234",
+    "value": 1234.0
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "-12",
+    "value": -12.0
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "+5",
+    "value": 5.0
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": " 1234 ",
+    "value": 1234.0
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "S 1234",
+    "value": 1234.0
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "s 77",
+    "value": 77.0
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "--------",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "S: 값 없음('--------')"
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "    . ",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "S: 값 없음('    . ')"
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "S: 값 없음('')"
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "N/A",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "S: 값 없음('N/A')"
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "12 .4",
+    "exc": "ThicknessProtocolError",
+    "msg": "S: 두께 형식 오류 '12 .4'"
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "12.5",
+    "exc": "ThicknessProtocolError",
+    "msg": "S: 두께 형식 오류 '12.5'"
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "x",
+    "exc": "ThicknessProtocolError",
+    "msg": "S: 두께 형식 오류 'x'"
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "+001.2",
+    "exc": "ThicknessProtocolError",
+    "msg": "S: 두께 형식 오류 '+001.2'"
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "-000.5",
+    "exc": "ThicknessProtocolError",
+    "msg": "S: 두께 형식 오류 '-000.5'"
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": ".5",
+    "exc": "ThicknessProtocolError",
+    "msg": "S: 두께 형식 오류 '.5'"
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "5.",
+    "exc": "ThicknessProtocolError",
+    "msg": "S: 두께 형식 오류 '5.'"
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "T +001.2",
+    "exc": "ThicknessProtocolError",
+    "msg": "S: 두께 형식 오류 'T +001.2'"
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "5319234",
+    "value": 5319234.0
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "U 5319234",
+    "exc": "ThicknessProtocolError",
+    "msg": "S: 두께 형식 오류 'U 5319234'"
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "0",
+    "value": 0.0
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "-5",
+    "value": -5.0
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "100.0",
+    "exc": "ThicknessProtocolError",
+    "msg": "S: 두께 형식 오류 '100.0'"
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "100.1",
+    "exc": "ThicknessProtocolError",
+    "msg": "S: 두께 형식 오류 '100.1'"
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "@",
+    "exc": "ThicknessProtocolError",
+    "msg": "S: 두께 형식 오류 '@'"
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "!",
+    "exc": "ThicknessProtocolError",
+    "msg": "S: 두께 형식 오류 '!'"
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "M !",
+    "exc": "ThicknessProtocolError",
+    "msg": "S: 두께 형식 오류 'M !'"
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "M @",
+    "exc": "ThicknessProtocolError",
+    "msg": "S: 두께 형식 오류 'M @'"
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "#",
+    "exc": "ThicknessProtocolError",
+    "msg": "S: 두께 형식 오류 '#'"
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "8.900",
+    "exc": "ThicknessProtocolError",
+    "msg": "S: 두께 형식 오류 '8.900'"
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "E 8.90",
+    "exc": "ThicknessProtocolError",
+    "msg": "S: 두께 형식 오류 'E 8.90'"
+   },
+   {
+    "fn": "parse_thickness_a",
+    "body": "1e3",
+    "exc": "ThicknessProtocolError",
+    "msg": "S: 두께 형식 오류 '1e3'"
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "1234",
+    "value": 1234.0
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "-12",
+    "value": -12.0
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "+5",
+    "value": 5.0
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": " 1234 ",
+    "value": 1234.0
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "S 1234",
+    "exc": "ThicknessProtocolError",
+    "msg": "T: 증착률 형식 오류 'S 1234'"
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "s 77",
+    "exc": "ThicknessProtocolError",
+    "msg": "T: 증착률 형식 오류 's 77'"
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "--------",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "T: 값 없음('--------')"
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "    . ",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "T: 값 없음('    . ')"
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "T: 값 없음('')"
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "N/A",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "T: 값 없음('N/A')"
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "12 .4",
+    "exc": "ThicknessProtocolError",
+    "msg": "T: 증착률 형식 오류 '12 .4'"
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "12.5",
+    "value": 12.5
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "x",
+    "exc": "ThicknessProtocolError",
+    "msg": "T: 증착률 형식 오류 'x'"
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "+001.2",
+    "value": 1.2
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "-000.5",
+    "value": -0.5
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": ".5",
+    "value": 0.5
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "5.",
+    "value": 5.0
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "T +001.2",
+    "value": 1.2
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "5319234",
+    "value": 5319234.0
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "U 5319234",
+    "exc": "ThicknessProtocolError",
+    "msg": "T: 증착률 형식 오류 'U 5319234'"
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "0",
+    "value": 0.0
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "-5",
+    "value": -5.0
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "100.0",
+    "value": 100.0
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "100.1",
+    "value": 100.1
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "@",
+    "exc": "ThicknessProtocolError",
+    "msg": "T: 증착률 형식 오류 '@'"
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "!",
+    "exc": "ThicknessProtocolError",
+    "msg": "T: 증착률 형식 오류 '!'"
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "M !",
+    "exc": "ThicknessProtocolError",
+    "msg": "T: 증착률 형식 오류 'M !'"
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "M @",
+    "exc": "ThicknessProtocolError",
+    "msg": "T: 증착률 형식 오류 'M @'"
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "#",
+    "exc": "ThicknessProtocolError",
+    "msg": "T: 증착률 형식 오류 '#'"
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "8.900",
+    "value": 8.9
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "E 8.90",
+    "exc": "ThicknessProtocolError",
+    "msg": "T: 증착률 형식 오류 'E 8.90'"
+   },
+   {
+    "fn": "parse_rate_a_s",
+    "body": "1e3",
+    "exc": "ThicknessProtocolError",
+    "msg": "T: 증착률 형식 오류 '1e3'"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "1234",
+    "value": 1234
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "-12",
+    "exc": "ThicknessProtocolError",
+    "msg": "U: 주파수 형식 오류 '-12'"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "+5",
+    "value": 5
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": " 1234 ",
+    "value": 1234
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "S 1234",
+    "exc": "ThicknessProtocolError",
+    "msg": "U: 주파수 형식 오류 'S 1234'"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "s 77",
+    "exc": "ThicknessProtocolError",
+    "msg": "U: 주파수 형식 오류 's 77'"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "--------",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "U: 값 없음('--------')"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "    . ",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "U: 값 없음('    . ')"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "U: 값 없음('')"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "N/A",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "U: 값 없음('N/A')"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "12 .4",
+    "exc": "ThicknessProtocolError",
+    "msg": "U: 주파수 형식 오류 '12 .4'"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "12.5",
+    "exc": "ThicknessProtocolError",
+    "msg": "U: 주파수 형식 오류 '12.5'"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "x",
+    "exc": "ThicknessProtocolError",
+    "msg": "U: 주파수 형식 오류 'x'"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "+001.2",
+    "exc": "ThicknessProtocolError",
+    "msg": "U: 주파수 형식 오류 '+001.2'"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "-000.5",
+    "exc": "ThicknessProtocolError",
+    "msg": "U: 주파수 형식 오류 '-000.5'"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": ".5",
+    "exc": "ThicknessProtocolError",
+    "msg": "U: 주파수 형식 오류 '.5'"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "5.",
+    "exc": "ThicknessProtocolError",
+    "msg": "U: 주파수 형식 오류 '5.'"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "T +001.2",
+    "exc": "ThicknessProtocolError",
+    "msg": "U: 주파수 형식 오류 'T +001.2'"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "5319234",
+    "value": 5319234
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "U 5319234",
+    "value": 5319234
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "0",
+    "exc": "ThicknessProtocolError",
+    "msg": "U: 주파수 형식 오류 '0'"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "-5",
+    "exc": "ThicknessProtocolError",
+    "msg": "U: 주파수 형식 오류 '-5'"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "100.0",
+    "exc": "ThicknessProtocolError",
+    "msg": "U: 주파수 형식 오류 '100.0'"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "100.1",
+    "exc": "ThicknessProtocolError",
+    "msg": "U: 주파수 형식 오류 '100.1'"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "@",
+    "exc": "ThicknessProtocolError",
+    "msg": "U: 주파수 형식 오류 '@'"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "!",
+    "exc": "ThicknessProtocolError",
+    "msg": "U: 주파수 형식 오류 '!'"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "M !",
+    "exc": "ThicknessProtocolError",
+    "msg": "U: 주파수 형식 오류 'M !'"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "M @",
+    "exc": "ThicknessProtocolError",
+    "msg": "U: 주파수 형식 오류 'M @'"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "#",
+    "exc": "ThicknessProtocolError",
+    "msg": "U: 주파수 형식 오류 '#'"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "8.900",
+    "exc": "ThicknessProtocolError",
+    "msg": "U: 주파수 형식 오류 '8.900'"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "E 8.90",
+    "exc": "ThicknessProtocolError",
+    "msg": "U: 주파수 형식 오류 'E 8.90'"
+   },
+   {
+    "fn": "parse_frequency_hz",
+    "body": "1e3",
+    "exc": "ThicknessProtocolError",
+    "msg": "U: 주파수 형식 오류 '1e3'"
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "1234",
+    "exc": "ThicknessProtocolError",
+    "msg": "V: 수명 범위 밖 '1234'"
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "-12",
+    "exc": "ThicknessProtocolError",
+    "msg": "V: 수명 범위 밖 '-12'"
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "+5",
+    "value": 5.0
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": " 1234 ",
+    "exc": "ThicknessProtocolError",
+    "msg": "V: 수명 범위 밖 ' 1234 '"
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "S 1234",
+    "exc": "ThicknessProtocolError",
+    "msg": "V: 수명 형식 오류 'S 1234'"
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "s 77",
+    "exc": "ThicknessProtocolError",
+    "msg": "V: 수명 형식 오류 's 77'"
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "--------",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "V: 값 없음('--------')"
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "    . ",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "V: 값 없음('    . ')"
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "V: 값 없음('')"
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "N/A",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "V: 값 없음('N/A')"
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "12 .4",
+    "exc": "ThicknessProtocolError",
+    "msg": "V: 수명 형식 오류 '12 .4'"
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "12.5",
+    "value": 12.5
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "x",
+    "exc": "ThicknessProtocolError",
+    "msg": "V: 수명 형식 오류 'x'"
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "+001.2",
+    "value": 1.2
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "-000.5",
+    "exc": "ThicknessProtocolError",
+    "msg": "V: 수명 범위 밖 '-000.5'"
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": ".5",
+    "value": 0.5
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "5.",
+    "value": 5.0
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "T +001.2",
+    "exc": "ThicknessProtocolError",
+    "msg": "V: 수명 형식 오류 'T +001.2'"
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "5319234",
+    "exc": "ThicknessProtocolError",
+    "msg": "V: 수명 범위 밖 '5319234'"
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "U 5319234",
+    "exc": "ThicknessProtocolError",
+    "msg": "V: 수명 형식 오류 'U 5319234'"
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "0",
+    "value": 0.0
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "-5",
+    "exc": "ThicknessProtocolError",
+    "msg": "V: 수명 범위 밖 '-5'"
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "100.0",
+    "value": 100.0
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "100.1",
+    "exc": "ThicknessProtocolError",
+    "msg": "V: 수명 범위 밖 '100.1'"
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "@",
+    "exc": "ThicknessProtocolError",
+    "msg": "V: 수명 형식 오류 '@'"
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "!",
+    "exc": "ThicknessProtocolError",
+    "msg": "V: 수명 형식 오류 '!'"
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "M !",
+    "exc": "ThicknessProtocolError",
+    "msg": "V: 수명 형식 오류 'M !'"
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "M @",
+    "exc": "ThicknessProtocolError",
+    "msg": "V: 수명 형식 오류 'M @'"
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "#",
+    "exc": "ThicknessProtocolError",
+    "msg": "V: 수명 형식 오류 '#'"
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "8.900",
+    "value": 8.9
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "E 8.90",
+    "exc": "ThicknessProtocolError",
+    "msg": "V: 수명 형식 오류 'E 8.90'"
+   },
+   {
+    "fn": "parse_life_pct",
+    "body": "1e3",
+    "exc": "ThicknessProtocolError",
+    "msg": "V: 수명 형식 오류 '1e3'"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "1234",
+    "exc": "ThicknessProtocolError",
+    "msg": "M: 크리스탈 상태 형식 오류 '1234'"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "-12",
+    "exc": "ThicknessProtocolError",
+    "msg": "M: 크리스탈 상태 형식 오류 '-12'"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "+5",
+    "exc": "ThicknessProtocolError",
+    "msg": "M: 크리스탈 상태 형식 오류 '+5'"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": " 1234 ",
+    "exc": "ThicknessProtocolError",
+    "msg": "M: 크리스탈 상태 형식 오류 ' 1234 '"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "S 1234",
+    "exc": "ThicknessProtocolError",
+    "msg": "M: 크리스탈 상태 형식 오류 'S 1234'"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "s 77",
+    "exc": "ThicknessProtocolError",
+    "msg": "M: 크리스탈 상태 형식 오류 's 77'"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "--------",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "M: 값 없음('--------')"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "    . ",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "M: 값 없음('    . ')"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "M: 값 없음('')"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "N/A",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "M: 값 없음('N/A')"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "12 .4",
+    "exc": "ThicknessProtocolError",
+    "msg": "M: 크리스탈 상태 형식 오류 '12 .4'"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "12.5",
+    "exc": "ThicknessProtocolError",
+    "msg": "M: 크리스탈 상태 형식 오류 '12.5'"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "x",
+    "exc": "ThicknessProtocolError",
+    "msg": "M: 크리스탈 상태 형식 오류 'x'"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "+001.2",
+    "exc": "ThicknessProtocolError",
+    "msg": "M: 크리스탈 상태 형식 오류 '+001.2'"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "-000.5",
+    "exc": "ThicknessProtocolError",
+    "msg": "M: 크리스탈 상태 형식 오류 '-000.5'"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": ".5",
+    "exc": "ThicknessProtocolError",
+    "msg": "M: 크리스탈 상태 형식 오류 '.5'"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "5.",
+    "exc": "ThicknessProtocolError",
+    "msg": "M: 크리스탈 상태 형식 오류 '5.'"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "T +001.2",
+    "exc": "ThicknessProtocolError",
+    "msg": "M: 크리스탈 상태 형식 오류 'T +001.2'"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "5319234",
+    "exc": "ThicknessProtocolError",
+    "msg": "M: 크리스탈 상태 형식 오류 '5319234'"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "U 5319234",
+    "exc": "ThicknessProtocolError",
+    "msg": "M: 크리스탈 상태 형식 오류 'U 5319234'"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "0",
+    "exc": "ThicknessProtocolError",
+    "msg": "M: 크리스탈 상태 형식 오류 '0'"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "-5",
+    "exc": "ThicknessProtocolError",
+    "msg": "M: 크리스탈 상태 형식 오류 '-5'"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "100.0",
+    "exc": "ThicknessProtocolError",
+    "msg": "M: 크리스탈 상태 형식 오류 '100.0'"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "100.1",
+    "exc": "ThicknessProtocolError",
+    "msg": "M: 크리스탈 상태 형식 오류 '100.1'"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "@",
+    "value": true
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "!",
+    "value": false
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "M !",
+    "value": false
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "M @",
+    "value": true
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "#",
+    "exc": "ThicknessProtocolError",
+    "msg": "M: 크리스탈 상태 형식 오류 '#'"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "8.900",
+    "exc": "ThicknessProtocolError",
+    "msg": "M: 크리스탈 상태 형식 오류 '8.900'"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "E 8.90",
+    "exc": "ThicknessProtocolError",
+    "msg": "M: 크리스탈 상태 형식 오류 'E 8.90'"
+   },
+   {
+    "fn": "parse_crystal_ok",
+    "body": "1e3",
+    "exc": "ThicknessProtocolError",
+    "msg": "M: 크리스탈 상태 형식 오류 '1e3'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "1234",
+    "value": 1234.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "-12",
+    "value": -12.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "+5",
+    "value": 5.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": " 1234 ",
+    "value": 1234.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "S 1234",
+    "exc": "ThicknessProtocolError",
+    "msg": "E?: 숫자 형식 오류 'S 1234'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "s 77",
+    "exc": "ThicknessProtocolError",
+    "msg": "E?: 숫자 형식 오류 's 77'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "--------",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "E: 값 없음('--------')"
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "    . ",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "E: 값 없음('    . ')"
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "E: 값 없음('')"
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "N/A",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "E: 값 없음('N/A')"
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "12 .4",
+    "exc": "ThicknessProtocolError",
+    "msg": "E?: 숫자 형식 오류 '12 .4'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "12.5",
+    "value": 12.5
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "x",
+    "exc": "ThicknessProtocolError",
+    "msg": "E?: 숫자 형식 오류 'x'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "+001.2",
+    "value": 1.2
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "-000.5",
+    "value": -0.5
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": ".5",
+    "value": 0.5
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "5.",
+    "value": 5.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "T +001.2",
+    "exc": "ThicknessProtocolError",
+    "msg": "E?: 숫자 형식 오류 'T +001.2'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "5319234",
+    "value": 5319234.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "U 5319234",
+    "exc": "ThicknessProtocolError",
+    "msg": "E?: 숫자 형식 오류 'U 5319234'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "0",
+    "value": 0.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "-5",
+    "value": -5.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "100.0",
+    "value": 100.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "100.1",
+    "value": 100.1
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "@",
+    "exc": "ThicknessProtocolError",
+    "msg": "E?: 숫자 형식 오류 '@'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "!",
+    "exc": "ThicknessProtocolError",
+    "msg": "E?: 숫자 형식 오류 '!'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "M !",
+    "exc": "ThicknessProtocolError",
+    "msg": "E?: 숫자 형식 오류 'M !'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "M @",
+    "exc": "ThicknessProtocolError",
+    "msg": "E?: 숫자 형식 오류 'M @'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "#",
+    "exc": "ThicknessProtocolError",
+    "msg": "E?: 숫자 형식 오류 '#'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "8.900",
+    "value": 8.9
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "E 8.90",
+    "value": 8.9
+   },
+   {
+    "fn": "parse_number",
+    "token": "E",
+    "body": "1e3",
+    "exc": "ThicknessProtocolError",
+    "msg": "E?: 숫자 형식 오류 '1e3'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "1234",
+    "value": 1234.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "-12",
+    "value": -12.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "+5",
+    "value": 5.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": " 1234 ",
+    "value": 1234.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "S 1234",
+    "exc": "ThicknessProtocolError",
+    "msg": "F?: 숫자 형식 오류 'S 1234'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "s 77",
+    "exc": "ThicknessProtocolError",
+    "msg": "F?: 숫자 형식 오류 's 77'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "--------",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "F: 값 없음('--------')"
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "    . ",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "F: 값 없음('    . ')"
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "F: 값 없음('')"
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "N/A",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "F: 값 없음('N/A')"
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "12 .4",
+    "exc": "ThicknessProtocolError",
+    "msg": "F?: 숫자 형식 오류 '12 .4'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "12.5",
+    "value": 12.5
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "x",
+    "exc": "ThicknessProtocolError",
+    "msg": "F?: 숫자 형식 오류 'x'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "+001.2",
+    "value": 1.2
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "-000.5",
+    "value": -0.5
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": ".5",
+    "value": 0.5
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "5.",
+    "value": 5.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "T +001.2",
+    "exc": "ThicknessProtocolError",
+    "msg": "F?: 숫자 형식 오류 'T +001.2'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "5319234",
+    "value": 5319234.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "U 5319234",
+    "exc": "ThicknessProtocolError",
+    "msg": "F?: 숫자 형식 오류 'U 5319234'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "0",
+    "value": 0.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "-5",
+    "value": -5.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "100.0",
+    "value": 100.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "100.1",
+    "value": 100.1
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "@",
+    "exc": "ThicknessProtocolError",
+    "msg": "F?: 숫자 형식 오류 '@'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "!",
+    "exc": "ThicknessProtocolError",
+    "msg": "F?: 숫자 형식 오류 '!'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "M !",
+    "exc": "ThicknessProtocolError",
+    "msg": "F?: 숫자 형식 오류 'M !'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "M @",
+    "exc": "ThicknessProtocolError",
+    "msg": "F?: 숫자 형식 오류 'M @'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "#",
+    "exc": "ThicknessProtocolError",
+    "msg": "F?: 숫자 형식 오류 '#'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "8.900",
+    "value": 8.9
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "E 8.90",
+    "exc": "ThicknessProtocolError",
+    "msg": "F?: 숫자 형식 오류 'E 8.90'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "F",
+    "body": "1e3",
+    "exc": "ThicknessProtocolError",
+    "msg": "F?: 숫자 형식 오류 '1e3'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "1234",
+    "value": 1234.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "-12",
+    "value": -12.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "+5",
+    "value": 5.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": " 1234 ",
+    "value": 1234.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "S 1234",
+    "exc": "ThicknessProtocolError",
+    "msg": "J?: 숫자 형식 오류 'S 1234'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "s 77",
+    "exc": "ThicknessProtocolError",
+    "msg": "J?: 숫자 형식 오류 's 77'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "--------",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "J: 값 없음('--------')"
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "    . ",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "J: 값 없음('    . ')"
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "J: 값 없음('')"
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "N/A",
+    "exc": "ThicknessValueUnavailable",
+    "msg": "J: 값 없음('N/A')"
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "12 .4",
+    "exc": "ThicknessProtocolError",
+    "msg": "J?: 숫자 형식 오류 '12 .4'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "12.5",
+    "value": 12.5
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "x",
+    "exc": "ThicknessProtocolError",
+    "msg": "J?: 숫자 형식 오류 'x'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "+001.2",
+    "value": 1.2
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "-000.5",
+    "value": -0.5
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": ".5",
+    "value": 0.5
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "5.",
+    "value": 5.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "T +001.2",
+    "exc": "ThicknessProtocolError",
+    "msg": "J?: 숫자 형식 오류 'T +001.2'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "5319234",
+    "value": 5319234.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "U 5319234",
+    "exc": "ThicknessProtocolError",
+    "msg": "J?: 숫자 형식 오류 'U 5319234'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "0",
+    "value": 0.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "-5",
+    "value": -5.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "100.0",
+    "value": 100.0
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "100.1",
+    "value": 100.1
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "@",
+    "exc": "ThicknessProtocolError",
+    "msg": "J?: 숫자 형식 오류 '@'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "!",
+    "exc": "ThicknessProtocolError",
+    "msg": "J?: 숫자 형식 오류 '!'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "M !",
+    "exc": "ThicknessProtocolError",
+    "msg": "J?: 숫자 형식 오류 'M !'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "M @",
+    "exc": "ThicknessProtocolError",
+    "msg": "J?: 숫자 형식 오류 'M @'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "#",
+    "exc": "ThicknessProtocolError",
+    "msg": "J?: 숫자 형식 오류 '#'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "8.900",
+    "value": 8.9
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "E 8.90",
+    "exc": "ThicknessProtocolError",
+    "msg": "J?: 숫자 형식 오류 'E 8.90'"
+   },
+   {
+    "fn": "parse_number",
+    "token": "J",
+    "body": "1e3",
+    "exc": "ThicknessProtocolError",
+    "msg": "J?: 숫자 형식 오류 '1e3'"
+   }
+  ],
+  "material": [
+   {
+    "args": [
+     8.9,
+     1.0,
+     100.0
+    ],
+    "value": [
+     "8.9",
+     "1",
+     "100"
+    ]
+   },
+   {
+    "args": [
+     8.96,
+     0.437,
+     112.5
+    ],
+    "value": [
+     "8.96",
+     "0.437",
+     "112.5"
+    ]
+   },
+   {
+    "args": [
+     1.23,
+     0.1,
+     10.0
+    ],
+    "value": [
+     "1.23",
+     "0.1",
+     "10"
+    ]
+   },
+   {
+    "args": [
+     99.99,
+     9.999,
+     399.0
+    ],
+    "value": [
+     "99.99",
+     "9.999",
+     "399"
+    ]
+   },
+   {
+    "args": [
+     0.5,
+     0.1,
+     10.0
+    ],
+    "value": [
+     "0.5",
+     "0.1",
+     "10"
+    ]
+   },
+   {
+    "args": [
+     0.4999,
+     1.0,
+     100.0
+    ],
+    "value": [
+     "0.5",
+     "1",
+     "100"
+    ]
+   },
+   {
+    "args": [
+     100.0,
+     1.0,
+     100.0
+    ],
+    "exc": "ValueError",
+    "msg": "density=100 범위(0.5~99.99) 밖 — 보내지 않음"
+   },
+   {
+    "args": [
+     8.9,
+     10.0,
+     100.0
+    ],
+    "exc": "ValueError",
+    "msg": "Z-factor=10 범위(0.1~9.999) 밖 — 보내지 않음"
+   },
+   {
+    "args": [
+     8.9,
+     1.0,
+     9.9
+    ],
+    "exc": "ValueError",
+    "msg": "tooling=9.9 범위(10~399) 밖 — 보내지 않음"
+   },
+   {
+    "args": [
+     8.9,
+     1.0,
+     399.06
+    ],
+    "exc": "ValueError",
+    "msg": "tooling=399.1 범위(10~399) 밖 — 보내지 않음"
+   },
+   {
+    "args": [
+     19.3001,
+     0.3815,
+     87.44
+    ],
+    "value": [
+     "19.3",
+     "0.382",
+     "87.4"
+    ]
+   },
+   {
+    "args": [
+     2.7,
+     1.08,
+     400.0
+    ],
+    "exc": "ValueError",
+    "msg": "tooling=400 범위(10~399) 밖 — 보내지 않음"
+   },
+   {
+    "args": [
+     0.0,
+     1.0,
+     100.0
+    ],
+    "exc": "ValueError",
+    "msg": "density=0 범위(0.5~99.99) 밖 — 보내지 않음"
+   },
+   {
+    "args": [
+     12.3456,
+     1.23456,
+     123.456
+    ],
+    "value": [
+     "12.346",
+     "1.235",
+     "123.5"
+    ]
+   }
+  ],
+  "compact": [
+   {
+    "x": 1.23,
+    "d": 3,
+    "value": "1.23"
+   },
+   {
+    "x": 1.0,
+    "d": 3,
+    "value": "1"
+   },
+   {
+    "x": 100.0,
+    "d": 1,
+    "value": "100"
+   },
+   {
+    "x": 0.0,
+    "d": 3,
+    "value": "0"
+   },
+   {
+    "x": -0.0001,
+    "d": 3,
+    "value": "0"
+   },
+   {
+    "x": 12.3456,
+    "d": 3,
+    "value": "12.346"
+   },
+   {
+    "x": 99.99,
+    "d": 2,
+    "value": "99.99"
+   },
+   {
+    "x": 0.1,
+    "d": 3,
+    "value": "0.1"
+   },
+   {
+    "x": 399.06,
+    "d": 1,
+    "value": "399.1"
+   },
+   {
+    "x": 8.9,
+    "d": 3,
+    "value": "8.9"
+   },
+   {
+    "x": -1.5,
+    "d": 1,
+    "value": "-1.5"
+   }
+  ],
+  "echo": [
+   {
+    "body": "U 5319234",
+    "token": "U",
+    "value": "5319234"
+   },
+   {
+    "body": "M !",
+    "token": "M",
+    "value": "!"
+   },
+   {
+    "body": "u 1",
+    "token": "U",
+    "value": "1"
+   },
+   {
+    "body": "1234",
+    "token": "S",
+    "value": "1234"
+   },
+   {
+    "body": "E 8.9",
+    "token": "E",
+    "value": "8.9"
+   },
+   {
+    "body": "",
+    "token": "S",
+    "value": ""
+   },
+   {
+    "body": "S",
+    "token": "S",
+    "value": ""
+   },
+   {
+    "body": "@x",
+    "token": "@",
+    "value": "@x"
+   },
+   {
+    "body": "  T +1.0",
+    "token": "T",
+    "value": "+1.0"
+   },
+   {
+    "body": "a1",
+    "token": "a",
+    "value": "1"
+   }
+  ],
+  "error_text_labels": {
+   "ThicknessTimeout": "응답 없음",
+   "ThicknessCommError": "통신 실패",
+   "ThicknessChecksumError": "체크섬 오류",
+   "ThicknessFrameError": "프레임 오류",
+   "ThicknessCommandRejected": "명령 거부",
+   "ThicknessValueUnavailable": "값 없음",
+   "ThicknessVerifyError": "되읽기 불일치",
+   "ThicknessError": "응답 형식 오류"
+  }
+ },
+ "device": [
+  {
+   "name": "reads",
+   "script": [
+    "020541313233340b",
+    "0207412b3030312e325d",
+    "02084135333139323334ac",
+    "02054138372e3513",
+    "0202414081",
+    "020641382e39303040",
+    "020641312e30303030",
+    "0206413130302e3030",
+    "02084153544d2d313030f3",
+    "0202413071"
+   ],
+   "timeout_s": 0.3,
+   "tx": [
+    {
+     "conn": 1,
+     "cmd": "S",
+     "hex": "02015353"
+    },
+    {
+     "conn": 1,
+     "cmd": "T",
+     "hex": "02015454"
+    },
+    {
+     "conn": 1,
+     "cmd": "U",
+     "hex": "02015555"
+    },
+    {
+     "conn": 1,
+     "cmd": "V",
+     "hex": "02015656"
+    },
+    {
+     "conn": 1,
+     "cmd": "M",
+     "hex": "02014d4d"
+    },
+    {
+     "conn": 1,
+     "cmd": "E?",
+     "hex": "0202453f84"
+    },
+    {
+     "conn": 1,
+     "cmd": "F?",
+     "hex": "0202463f85"
+    },
+    {
+     "conn": 1,
+     "cmd": "J?",
+     "hex": "02024a3f89"
+    },
+    {
+     "conn": 1,
+     "cmd": "@",
+     "hex": "02014040"
+    },
+    {
+     "conn": 1,
+     "cmd": "a",
+     "hex": "02016161"
+    }
+   ],
+   "results": [
+    {
+     "op": "read_thickness_a",
+     "args": [],
+     "ok": true,
+     "value": 1234.0
+    },
+    {
+     "op": "read_rate_a_s",
+     "args": [],
+     "ok": true,
+     "value": 1.2
+    },
+    {
+     "op": "read_frequency_hz",
+     "args": [],
+     "ok": true,
+     "value": 5319234
+    },
+    {
+     "op": "read_crystal_life",
+     "args": [],
+     "ok": true,
+     "value": 87.5
+    },
+    {
+     "op": "read_crystal_ok",
+     "args": [],
+     "ok": true,
+     "value": true
+    },
+    {
+     "op": "read_density",
+     "args": [],
+     "ok": true,
+     "value": 8.9
+    },
+    {
+     "op": "read_z_factor",
+     "args": [],
+     "ok": true,
+     "value": 1.0
+    },
+    {
+     "op": "read_tooling",
+     "args": [],
+     "ok": true,
+     "value": 100.0
+    },
+    {
+     "op": "read_version",
+     "args": [],
+     "ok": true,
+     "value": "STM-100"
+    },
+    {
+     "op": "read_reset_status",
+     "args": [],
+     "ok": true,
+     "value": "0"
+    }
+   ],
+   "reset_seen": 0
+  },
+  {
+   "name": "echo_and_unavailable",
+   "script": [
+    "020a4155203533313932333421",
+    "0204414d2021cf",
+    "0209412d2d2d2d2d2d2d2da9",
+    "020741202020202e200f",
+    "0206413132202e3426"
+   ],
+   "timeout_s": 0.3,
+   "tx": [
+    {
+     "conn": 1,
+     "cmd": "U",
+     "hex": "02015555"
+    },
+    {
+     "conn": 1,
+     "cmd": "M",
+     "hex": "02014d4d"
+    },
+    {
+     "conn": 1,
+     "cmd": "S",
+     "hex": "02015353"
+    },
+    {
+     "conn": 1,
+     "cmd": "V",
+     "hex": "02015656"
+    },
+    {
+     "conn": 1,
+     "cmd": "S",
+     "hex": "02015353"
+    }
+   ],
+   "results": [
+    {
+     "op": "read_frequency_hz",
+     "args": [],
+     "ok": true,
+     "value": 5319234
+    },
+    {
+     "op": "read_crystal_ok",
+     "args": [],
+     "ok": true,
+     "value": false
+    },
+    {
+     "op": "read_thickness_a",
+     "args": [],
+     "ok": false,
+     "exc": "ThicknessValueUnavailable",
+     "msg": "S: 값 없음('--------')"
+    },
+    {
+     "op": "read_crystal_life",
+     "args": [],
+     "ok": false,
+     "exc": "ThicknessValueUnavailable",
+     "msg": "V: 값 없음('    . ')"
+    },
+    {
+     "op": "read_thickness_a",
+     "args": [],
+     "ok": false,
+     "exc": "ThicknessProtocolError",
+     "msg": "S: 두께 형식 오류 '12 .4'"
+    }
+   ],
+   "reset_seen": 0
+  },
+  {
+   "name": "retry_no_reply_then_ok",
+   "script": [
+    null,
+    "0203413535ab"
+   ],
+   "timeout_s": 0.3,
+   "tx": [
+    {
+     "conn": 1,
+     "cmd": "S",
+     "hex": "02015353"
+    },
+    {
+     "conn": 1,
+     "cmd": "S",
+     "hex": "02015353"
+    }
+   ],
+   "results": [
+    {
+     "op": "read_thickness_a",
+     "args": [],
+     "ok": true,
+     "value": 55.0
+    }
+   ],
+   "reset_seen": 0
+  },
+  {
+   "name": "retry_bad_checksum_then_ok",
+   "script": [
+    "020341353500",
+    "0203413536ac"
+   ],
+   "timeout_s": 0.3,
+   "tx": [
+    {
+     "conn": 1,
+     "cmd": "S",
+     "hex": "02015353"
+    },
+    {
+     "conn": 1,
+     "cmd": "S",
+     "hex": "02015353"
+    }
+   ],
+   "results": [
+    {
+     "op": "read_thickness_a",
+     "args": [],
+     "ok": true,
+     "value": 56.0
+    }
+   ],
+   "reset_seen": 0
+  },
+  {
+   "name": "retry_bad_len_then_ok",
+   "script": [
+    "0200",
+    "0203413537ad"
+   ],
+   "timeout_s": 0.3,
+   "tx": [
+    {
+     "conn": 1,
+     "cmd": "S",
+     "hex": "02015353"
+    },
+    {
+     "conn": 1,
+     "cmd": "S",
+     "hex": "02015353"
+    }
+   ],
+   "results": [
+    {
+     "op": "read_thickness_a",
+     "args": [],
+     "ok": true,
+     "value": 57.0
+    }
+   ],
+   "reset_seen": 0
+  },
+  {
+   "name": "retry_unknown_code_then_ok",
+   "script": [
+    "0203583132bb",
+    "0203413538ae"
+   ],
+   "timeout_s": 0.3,
+   "tx": [
+    {
+     "conn": 1,
+     "cmd": "S",
+     "hex": "02015353"
+    },
+    {
+     "conn": 1,
+     "cmd": "S",
+     "hex": "02015353"
+    }
+   ],
+   "results": [
+    {
+     "op": "read_thickness_a",
+     "args": [],
+     "ok": true,
+     "value": 58.0
+    }
+   ],
+   "reset_seen": 0
+  },
+  {
+   "name": "timeout_all",
+   "script": [
+    null,
+    null,
+    null
+   ],
+   "timeout_s": 0.3,
+   "tx": [
+    {
+     "conn": 1,
+     "cmd": "S",
+     "hex": "02015353"
+    },
+    {
+     "conn": 1,
+     "cmd": "S",
+     "hex": "02015353"
+    },
+    {
+     "conn": 1,
+     "cmd": "S",
+     "hex": "02015353"
+    }
+   ],
+   "results": [
+    {
+     "op": "read_thickness_a",
+     "args": [],
+     "ok": false,
+     "exc": "ThicknessTimeout",
+     "msg": "응답 없음 'S' (3회)"
+    }
+   ],
+   "reset_seen": 0
+  },
+  {
+   "name": "frame_error_all",
+   "script": [
+    "0202583189",
+    "020258328a",
+    "020258338b"
+   ],
+   "timeout_s": 0.3,
+   "tx": [
+    {
+     "conn": 1,
+     "cmd": "S",
+     "hex": "02015353"
+    },
+    {
+     "conn": 1,
+     "cmd": "S",
+     "hex": "02015353"
+    },
+    {
+     "conn": 1,
+     "cmd": "S",
+     "hex": "02015353"
+    }
+   ],
+   "results": [
+    {
+     "op": "read_thickness_a",
+     "args": [],
+     "ok": false,
+     "exc": "ThicknessFrameError",
+     "msg": "모르는 응답 코드 'X3' (명령 'S')"
+    }
+   ],
+   "reset_seen": 0
+  },
+  {
+   "name": "rejected",
+   "script": [
+    "02014646",
+    "02014848",
+    "02014a4a"
+   ],
+   "timeout_s": 0.3,
+   "tx": [
+    {
+     "conn": 1,
+     "cmd": "S",
+     "hex": "02015353"
+    },
+    {
+     "conn": 1,
+     "cmd": "B",
+     "hex": "02014242"
+    },
+    {
+     "conn": 1,
+     "cmd": "T",
+     "hex": "02015454"
+    }
+   ],
+   "results": [
+    {
+     "op": "read_thickness_a",
+     "args": [],
+     "ok": false,
+     "exc": "ThicknessCommandRejected",
+     "msg": "잘못된 명령(F) — 보낸 명령 'S'"
+    },
+    {
+     "op": "zero",
+     "args": [
+      "B"
+     ],
+     "ok": false,
+     "exc": "ThicknessCommandRejected",
+     "msg": "잘못된 값(H) — 보낸 명령 'B'"
+    },
+    {
+     "op": "read_rate_a_s",
+     "args": [],
+     "ok": false,
+     "exc": "ThicknessCommandRejected",
+     "msg": "잘못된 수식자(J) — 보낸 명령 'T'"
+    }
+   ],
+   "reset_seen": 0
+  },
+  {
+   "name": "zero",
+   "script": [
+    "02014141",
+    "02014141"
+   ],
+   "timeout_s": 0.3,
+   "tx": [
+    {
+     "conn": 1,
+     "cmd": "B",
+     "hex": "02014242"
+    },
+    {
+     "conn": 1,
+     "cmd": "C",
+     "hex": "02014343"
+    }
+   ],
+   "results": [
+    {
+     "op": "zero",
+     "args": [
+      "B"
+     ],
+     "ok": true,
+     "value": null
+    },
+    {
+     "op": "zero",
+     "args": [
+      "c"
+     ],
+     "ok": true,
+     "value": null
+    },
+    {
+     "op": "zero",
+     "args": [
+      "D"
+     ],
+     "ok": false,
+     "exc": "ValueError",
+     "msg": "영점 방식은 'B' 또는 'C': 'D'"
+    }
+   ],
+   "reset_seen": 0
+  },
+  {
+   "name": "reset_flag_ack",
+   "script": [
+    "020542313233340c",
+    "02014141",
+    "020542313233350d",
+    "020541313233360d",
+    "020542313233370f",
+    "02014141"
+   ],
+   "timeout_s": 0.3,
+   "tx": [
+    {
+     "conn": 1,
+     "cmd": "S",
+     "hex": "02015353"
+    },
+    {
+     "conn": 1,
+     "cmd": "L",
+     "hex": "02014c4c"
+    },
+    {
+     "conn": 1,
+     "cmd": "S",
+     "hex": "02015353"
+    },
+    {
+     "conn": 1,
+     "cmd": "S",
+     "hex": "02015353"
+    },
+    {
+     "conn": 1,
+     "cmd": "S",
+     "hex": "02015353"
+    }
+   ],
+   "results": [
+    {
+     "op": "read_thickness_a",
+     "args": [],
+     "ok": true,
+     "value": 1234.0
+    },
+    {
+     "op": "read_thickness_a",
+     "args": [],
+     "ok": true,
+     "value": 1235.0
+    },
+    {
+     "op": "read_thickness_a",
+     "args": [],
+     "ok": true,
+     "value": 1236.0
+    },
+    {
+     "op": "read_thickness_a",
+     "args": [],
+     "ok": true,
+     "value": 1237.0
+    }
+   ],
+   "reset_seen": 2
+  },
+  {
+   "name": "set_material_ok",
+   "script": [
+    "02014141",
+    "02014141",
+    "02014141",
+    "020641382e39363046",
+    "020641302e3433373d",
+    "0206413131322e3538"
+   ],
+   "timeout_s": 0.3,
+   "tx": [
+    {
+     "conn": 1,
+     "cmd": "E=8.96",
+     "hex": "0206453d382e393657"
+    },
+    {
+     "conn": 1,
+     "cmd": "F=0.437",
+     "hex": "0207463d302e3433377f"
+    },
+    {
+     "conn": 1,
+     "cmd": "J=112.5",
+     "hex": "02074a3d3131322e357e"
+    },
+    {
+     "conn": 1,
+     "cmd": "E?",
+     "hex": "0202453f84"
+    },
+    {
+     "conn": 1,
+     "cmd": "F?",
+     "hex": "0202463f85"
+    },
+    {
+     "conn": 1,
+     "cmd": "J?",
+     "hex": "02024a3f89"
+    }
+   ],
+   "results": [
+    {
+     "op": "set_material",
+     "args": [
+      8.96,
+      0.437,
+      112.5
+     ],
+     "ok": true,
+     "value": {
+      "density": 8.96,
+      "z_factor": 0.437,
+      "tooling": 112.5
+     }
+    }
+   ],
+   "reset_seen": 0
+  },
+  {
+   "name": "set_material_retry_ok",
+   "script": [
+    "02014141",
+    "02014141",
+    "02014141",
+    "020641382e39363046",
+    "020641302e3433373d",
+    "0206413131332e3539",
+    "02014141",
+    "02014141",
+    "02014141",
+    "020641382e39363046",
+    "020641302e3433373d",
+    "0206413131322e3538"
+   ],
+   "timeout_s": 0.3,
+   "tx": [
+    {
+     "conn": 1,
+     "cmd": "E=8.96",
+     "hex": "0206453d382e393657"
+    },
+    {
+     "conn": 1,
+     "cmd": "F=0.437",
+     "hex": "0207463d302e3433377f"
+    },
+    {
+     "conn": 1,
+     "cmd": "J=112.5",
+     "hex": "02074a3d3131322e357e"
+    },
+    {
+     "conn": 1,
+     "cmd": "E?",
+     "hex": "0202453f84"
+    },
+    {
+     "conn": 1,
+     "cmd": "F?",
+     "hex": "0202463f85"
+    },
+    {
+     "conn": 1,
+     "cmd": "J?",
+     "hex": "02024a3f89"
+    },
+    {
+     "conn": 1,
+     "cmd": "E=8.96",
+     "hex": "0206453d382e393657"
+    },
+    {
+     "conn": 1,
+     "cmd": "F=0.437",
+     "hex": "0207463d302e3433377f"
+    },
+    {
+     "conn": 1,
+     "cmd": "J=112.5",
+     "hex": "02074a3d3131322e357e"
+    },
+    {
+     "conn": 1,
+     "cmd": "E?",
+     "hex": "0202453f84"
+    },
+    {
+     "conn": 1,
+     "cmd": "F?",
+     "hex": "0202463f85"
+    },
+    {
+     "conn": 1,
+     "cmd": "J?",
+     "hex": "02024a3f89"
+    }
+   ],
+   "results": [
+    {
+     "op": "set_material",
+     "args": [
+      8.96,
+      0.437,
+      112.5
+     ],
+     "ok": true,
+     "value": {
+      "density": 8.96,
+      "z_factor": 0.437,
+      "tooling": 112.5
+     }
+    }
+   ],
+   "reset_seen": 0
+  },
+  {
+   "name": "set_material_verify_fail",
+   "script": [
+    "02014141",
+    "02014141",
+    "02014141",
+    "020641382e39363046",
+    "020641302e3433373d",
+    "0206413131332e3539",
+    "02014141",
+    "02014141",
+    "02014141",
+    "020641382e39363046",
+    "020641302e3433373d",
+    "0206413131332e3539"
+   ],
+   "timeout_s": 0.3,
+   "tx": [
+    {
+     "conn": 1,
+     "cmd": "E=8.96",
+     "hex": "0206453d382e393657"
+    },
+    {
+     "conn": 1,
+     "cmd": "F=0.437",
+     "hex": "0207463d302e3433377f"
+    },
+    {
+     "conn": 1,
+     "cmd": "J=112.5",
+     "hex": "02074a3d3131322e357e"
+    },
+    {
+     "conn": 1,
+     "cmd": "E?",
+     "hex": "0202453f84"
+    },
+    {
+     "conn": 1,
+     "cmd": "F?",
+     "hex": "0202463f85"
+    },
+    {
+     "conn": 1,
+     "cmd": "J?",
+     "hex": "02024a3f89"
+    },
+    {
+     "conn": 1,
+     "cmd": "E=8.96",
+     "hex": "0206453d382e393657"
+    },
+    {
+     "conn": 1,
+     "cmd": "F=0.437",
+     "hex": "0207463d302e3433377f"
+    },
+    {
+     "conn": 1,
+     "cmd": "J=112.5",
+     "hex": "02074a3d3131322e357e"
+    },
+    {
+     "conn": 1,
+     "cmd": "E?",
+     "hex": "0202453f84"
+    },
+    {
+     "conn": 1,
+     "cmd": "F?",
+     "hex": "0202463f85"
+    },
+    {
+     "conn": 1,
+     "cmd": "J?",
+     "hex": "02024a3f89"
+    }
+   ],
+   "results": [
+    {
+     "op": "set_material",
+     "args": [
+      8.96,
+      0.437,
+      112.5
+     ],
+     "ok": false,
+     "exc": "ThicknessVerifyError",
+     "msg": "되읽기 불일치 — density 보냄 8.96/읽음 8.96, Z 보냄 0.437/읽음 0.437, tooling 보냄 112.5/읽음 113.5"
+    }
+   ],
+   "reset_seen": 0
+  },
+  {
+   "name": "set_material_out_of_range",
+   "script": [],
+   "timeout_s": 0.3,
+   "tx": [],
+   "results": [
+    {
+     "op": "set_material",
+     "args": [
+      0.4,
+      1.0,
+      100.0
+     ],
+     "ok": false,
+     "exc": "ValueError",
+     "msg": "density=0.4 범위(0.5~99.99) 밖 — 보내지 않음"
+    }
+   ],
+   "reset_seen": 0
+  },
+  {
+   "name": "set_material_rejected",
+   "script": [
+    "02014848"
+   ],
+   "timeout_s": 0.3,
+   "tx": [
+    {
+     "conn": 1,
+     "cmd": "E=8.9",
+     "hex": "0205453d382e3921"
+    }
+   ],
+   "results": [
+    {
+     "op": "set_material",
+     "args": [
+      8.9,
+      1.0,
+      100.0
+     ],
+     "ok": false,
+     "exc": "ThicknessCommandRejected",
+     "msg": "잘못된 값(H) — 보낸 명령 'E=8.9'"
+    }
+   ],
+   "reset_seen": 0
+  }
+ ],
+ "service": [
+  {
+   "name": "normal_cadence",
+   "timeout_s": 0.3,
+   "polls": [
+    {
+     "at": 0.0,
+     "cmds": [
+      "S",
+      "T",
+      "U",
+      "V",
+      "M",
+      "E?",
+      "F?",
+      "J?"
+     ],
+     "connected": true,
+     "seq": 1,
+     "thickness_nm": 123.4,
+     "rate_nm_s": 0.12,
+     "crystal_ok": true,
+     "freq_hz": 5319234,
+     "life_pct": 87.5,
+     "density": 8.9,
+     "tooling": 100.0
+    },
+    {
+     "at": 0.5,
+     "cmds": [
+      "S",
+      "T"
+     ],
+     "connected": true,
+     "seq": 2,
+     "thickness_nm": 123.4,
+     "rate_nm_s": 0.12,
+     "crystal_ok": true,
+     "freq_hz": 5319234,
+     "life_pct": 87.5,
+     "density": 8.9,
+     "tooling": 100.0
+    },
+    {
+     "at": 1.0,
+     "cmds": [
+      "S",
+      "T"
+     ],
+     "connected": true,
+     "seq": 3,
+     "thickness_nm": 123.4,
+     "rate_nm_s": 0.12,
+     "crystal_ok": true,
+     "freq_hz": 5319234,
+     "life_pct": 87.5,
+     "density": 8.9,
+     "tooling": 100.0
+    },
+    {
+     "at": 5.25,
+     "cmds": [
+      "S",
+      "T",
+      "U",
+      "V",
+      "M"
+     ],
+     "connected": true,
+     "seq": 4,
+     "thickness_nm": 123.4,
+     "rate_nm_s": 0.12,
+     "crystal_ok": true,
+     "freq_hz": 5319234,
+     "life_pct": 87.5,
+     "density": 8.9,
+     "tooling": 100.0
+    },
+    {
+     "at": 5.75,
+     "cmds": [
+      "S",
+      "T"
+     ],
+     "connected": true,
+     "seq": 5,
+     "thickness_nm": 123.4,
+     "rate_nm_s": 0.12,
+     "crystal_ok": true,
+     "freq_hz": 5319234,
+     "life_pct": 87.5,
+     "density": 8.9,
+     "tooling": 100.0
+    },
+    {
+     "at": 10.5,
+     "cmds": [
+      "S",
+      "T",
+      "U",
+      "V",
+      "M"
+     ],
+     "connected": true,
+     "seq": 6,
+     "thickness_nm": 123.4,
+     "rate_nm_s": 0.12,
+     "crystal_ok": true,
+     "freq_hz": 5319234,
+     "life_pct": 87.5,
+     "density": 8.9,
+     "tooling": 100.0
+    }
+   ],
+   "closed": [
+    1
+   ]
+  },
+  {
+   "name": "xtal_fail_reads_m_now",
+   "timeout_s": 0.3,
+   "polls": [
+    {
+     "at": 0.0,
+     "cmds": [
+      "S",
+      "T",
+      "U",
+      "V",
+      "M",
+      "E?",
+      "F?",
+      "J?"
+     ],
+     "connected": true,
+     "seq": 1,
+     "thickness_nm": 123.4,
+     "rate_nm_s": 0.12,
+     "crystal_ok": true,
+     "freq_hz": 5319234,
+     "life_pct": 87.5,
+     "density": 8.9,
+     "tooling": 100.0
+    },
+    {
+     "at": 0.5,
+     "cmds": [
+      "S",
+      "T",
+      "U",
+      "V",
+      "M"
+     ],
+     "connected": true,
+     "seq": 1,
+     "thickness_nm": 123.4,
+     "rate_nm_s": null,
+     "crystal_ok": false,
+     "freq_hz": null,
+     "life_pct": null,
+     "density": 8.9,
+     "tooling": 100.0
+    },
+    {
+     "at": 1.0,
+     "cmds": [
+      "S",
+      "T"
+     ],
+     "connected": true,
+     "seq": 1,
+     "thickness_nm": 123.4,
+     "rate_nm_s": null,
+     "crystal_ok": false,
+     "freq_hz": null,
+     "life_pct": null,
+     "density": 8.9,
+     "tooling": 100.0
+    },
+    {
+     "at": 1.5,
+     "cmds": [
+      "S",
+      "T"
+     ],
+     "connected": true,
+     "seq": 2,
+     "thickness_nm": 123.4,
+     "rate_nm_s": 0.12,
+     "crystal_ok": false,
+     "freq_hz": null,
+     "life_pct": null,
+     "density": 8.9,
+     "tooling": 100.0
+    }
+   ],
+   "closed": [
+    1
+   ]
+  },
+  {
+   "name": "format_error_no_reconnect",
+   "timeout_s": 0.3,
+   "polls": [
+    {
+     "at": 0.0,
+     "cmds": [
+      "S",
+      "T",
+      "U",
+      "V",
+      "M",
+      "E?",
+      "F?",
+      "J?"
+     ],
+     "connected": true,
+     "seq": 1,
+     "thickness_nm": 123.4,
+     "rate_nm_s": 0.12,
+     "crystal_ok": true,
+     "freq_hz": 5319234,
+     "life_pct": 87.5,
+     "density": 8.9,
+     "tooling": 100.0
+    },
+    {
+     "at": 0.5,
+     "cmds": [
+      "S",
+      "T"
+     ],
+     "connected": true,
+     "seq": 1,
+     "thickness_nm": 123.4,
+     "rate_nm_s": 0.12,
+     "crystal_ok": true,
+     "freq_hz": 5319234,
+     "life_pct": 87.5,
+     "density": 8.9,
+     "tooling": 100.0
+    },
+    {
+     "at": 1.0,
+     "cmds": [
+      "S",
+      "T"
+     ],
+     "connected": true,
+     "seq": 1,
+     "thickness_nm": 123.4,
+     "rate_nm_s": 0.12,
+     "crystal_ok": true,
+     "freq_hz": 5319234,
+     "life_pct": 87.5,
+     "density": 8.9,
+     "tooling": 100.0
+    },
+    {
+     "at": 1.5,
+     "cmds": [
+      "S",
+      "T"
+     ],
+     "connected": true,
+     "seq": 2,
+     "thickness_nm": 123.4,
+     "rate_nm_s": 0.12,
+     "crystal_ok": true,
+     "freq_hz": 5319234,
+     "life_pct": 87.5,
+     "density": 8.9,
+     "tooling": 100.0
+    }
+   ],
+   "closed": [
+    1
+   ]
+  },
+  {
+   "name": "dead_device_first_poll",
+   "timeout_s": 0.3,
+   "polls": [
+    {
+     "at": 0.0,
+     "cmds": [
+      "S",
+      "S",
+      "S",
+      "U",
+      "U",
+      "U",
+      "V",
+      "V",
+      "V",
+      "M",
+      "M",
+      "M",
+      "E?",
+      "E?",
+      "E?",
+      "F?",
+      "F?",
+      "F?"
+     ],
+     "connected": false,
+     "seq": 0,
+     "thickness_nm": null,
+     "rate_nm_s": null,
+     "crystal_ok": null,
+     "freq_hz": null,
+     "life_pct": null,
+     "density": null,
+     "tooling": null
+    },
+    {
+     "at": 0.5,
+     "cmds": [],
+     "connected": false,
+     "seq": 0,
+     "thickness_nm": null,
+     "rate_nm_s": null,
+     "crystal_ok": null,
+     "freq_hz": null,
+     "life_pct": null,
+     "density": null,
+     "tooling": null
+    }
+   ],
+   "closed": [
+    1
+   ]
+  },
+  {
+   "name": "dead_after_ok",
+   "timeout_s": 0.3,
+   "polls": [
+    {
+     "at": 0.0,
+     "cmds": [
+      "S",
+      "T",
+      "U",
+      "V",
+      "M",
+      "E?",
+      "F?",
+      "J?"
+     ],
+     "connected": true,
+     "seq": 1,
+     "thickness_nm": 123.4,
+     "rate_nm_s": 0.12,
+     "crystal_ok": true,
+     "freq_hz": 5319234,
+     "life_pct": 87.5,
+     "density": 8.9,
+     "tooling": 100.0
+    },
+    {
+     "at": 0.5,
+     "cmds": [
+      "S",
+      "S",
+      "S"
+     ],
+     "connected": true,
+     "seq": 1,
+     "thickness_nm": 123.4,
+     "rate_nm_s": 0.12,
+     "crystal_ok": true,
+     "freq_hz": 5319234,
+     "life_pct": 87.5,
+     "density": 8.9,
+     "tooling": 100.0
+    },
+    {
+     "at": 1.0,
+     "cmds": [
+      "S",
+      "S",
+      "S"
+     ],
+     "connected": true,
+     "seq": 1,
+     "thickness_nm": 123.4,
+     "rate_nm_s": 0.12,
+     "crystal_ok": true,
+     "freq_hz": 5319234,
+     "life_pct": 87.5,
+     "density": 8.9,
+     "tooling": 100.0
+    },
+    {
+     "at": 1.5,
+     "cmds": [
+      "S",
+      "T"
+     ],
+     "connected": true,
+     "seq": 2,
+     "thickness_nm": 123.4,
+     "rate_nm_s": 0.12,
+     "crystal_ok": true,
+     "freq_hz": 5319234,
+     "life_pct": 87.5,
+     "density": 8.9,
+     "tooling": 100.0
+    }
+   ],
+   "closed": [
+    1
+   ]
+  }
+ ]
+}

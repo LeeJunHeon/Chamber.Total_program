@@ -29,6 +29,7 @@ from v2.common.worker import Request, Result, Status, Worker
 SEND_CONFIRM_TIMEOUT_S = 30.0      # v1 device/mfc.py:64 — no-reply 실제 전송 확인 최대 대기
 LINK_RETRY_S = 0.2                 # 링크가 없을 때 다시 넣는 간격(v1 워커는 0.05 s 마다 연결을 봄 — 너무 잦지 않게)
 GHOST_MAX_S = 3600.0               # 끄는 명령(유령 전송)을 보내려고 버티는 최대 시간 — 그 뒤엔 포기하고 이벤트
+RETRY = object()                   # io_query 가 '연결 유지 재시도'(v1 연결 직후 무응답)를 알릴 때 돌려주는 값
 
 
 @dataclass
@@ -87,7 +88,8 @@ class OpFailed(Exception):
 
 
 class OpRunner:
-    """생성기 op 실행기. dev 는 io_send(session, Send) → 보낸 시각, io_query(session, Query) → 줄 을 가진 드라이버."""
+    """생성기 op 실행기. dev = io_send(session, Send) → 보낸 시각, io_query(session, Query, retries_left) → 줄(또는 RETRY),
+    exec_timeout_s(item) → 요청 하나의 실행 한도(간격 대기 + 응답 한도 + 여유), on_withdraw·on_ghost_sent·on_ghost_gave_up 를 가진 드라이버."""
 
     def __init__(self, dev, worker: Worker, clock) -> None:
         self.dev, self.worker, self.clock = dev, worker, clock
@@ -191,7 +193,7 @@ class OpRunner:
 
         self.worker.submit(Request("write", fn, on_done=lambda r: self._send_result(op, st, r),
                                    name=f"{getattr(op, 'name', 'ghost')}:{item.cmd}", not_before=not_before,
-                                   confirms_link=False))
+                                   exec_timeout_s=self.dev.exec_timeout_s(item), confirms_link=False))
 
     def _send_result(self, op: Optional[_Op], st: dict, r: Result) -> None:
         if st["cancel"]:
@@ -265,12 +267,12 @@ class OpRunner:
         def fn(session):
             if st["cancel"] or st["answered"]:
                 return None
-            return self.dev.io_query(session, item, first=(st["retries"] == item.retries))
+            return self.dev.io_query(session, item, retries_left=st["retries"])
 
         self.worker.submit(Request("write" if op.kind != "read" else "read", fn,
                                    on_done=lambda r: self._query_result(op, st, r),
                                    name=f"{op.name}:{item.cmd}", not_before=not_before,
-                                   confirms_link=True))
+                                   exec_timeout_s=self.dev.exec_timeout_s(item), confirms_link=True))
 
     def _answer(self, op: _Op, st: dict, line: Optional[str]) -> None:
         if st["answered"] or st["cancel"]:
@@ -283,6 +285,10 @@ class OpRunner:
         if st["answered"] or st["cancel"]:
             return
         now = self.clock.monotonic()
+        if r.status == Status.OK and r.value is RETRY:      # v1: 연결 직후 무응답 — 재시도 1회 쓰고 바로 다시
+            st["retries"] -= 1
+            self._issue_query(op, st, None)
+            return
         if r.status == Status.OK:
             self._answer(op, st, r.value)
             return
