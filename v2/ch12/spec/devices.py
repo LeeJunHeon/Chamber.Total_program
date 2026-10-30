@@ -21,7 +21,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Dict, Optional
 
-from v2.ch12.drivers import (camera, dc, dcpulse, ig, mfc, oes_link, plc, rf, rfpulse, rga_link, stm100, tsp)
+from v2.ch12.drivers import (camera, dc, dcpulse, heater, ig, mfc, oes_link, plc, rf, rfpulse, rga_link, stm100, tsp)
 
 _NP = "192.168.1.50"     # MOXA NPort(장비 시리얼 서버) — v1 lib/config_common.py:255·343·414·574, settings.json
 
@@ -209,6 +209,8 @@ TICK_PLAN: tuple = (
     TickPlan("plc", "v2.ch12.drivers.plc", plc.BUDGET, "PLC_CMD_GAP_MS 150(device/plc.py:838-844) — 블록 5개(D0..D11·히터 2·코일·번갈아 1)"),
     TickPlan("dc", "v2.ch12.drivers.dc", dc.BUDGET, "PLC 1초 묶음에 포함(D54)"),
     TickPlan("rf", "v2.ch12.drivers.rf", rf.BUDGET, "PLC 1초 묶음에 포함(D54)"),
+    TickPlan("heater", "v2.ch12.drivers.heater", heater.BUDGET,
+             "PLC 1초 묶음 D110..D160·코일 640..658 에 포함(controller/heater_service.py:37-48), 워치독 D114 5 s(lib/config_common.py:471)"),
     TickPlan("mfc", "v2.ch12.drivers.mfc", mfc.BUDGET, "MFC_GAP_MS 1000 = 응답 뒤 1 s(lib/config_common.py:266) → 1초에 질의 하나(D36)"),
     TickPlan("ig", "v2.ch12.drivers.ig", ig.BUDGET, "IG_GAP_MS 1000 + 흡수 30 ms(device/ig.py:687-760, D36)"),
     TickPlan("dcpulse", "v2.ch12.drivers.dcpulse", dcpulse.BUDGET, "DCP_GAP_MS 150(lib/config_common.py:383, 지시 4장) — 출력 ON 중만(D48)"),

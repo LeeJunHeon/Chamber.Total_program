@@ -187,7 +187,7 @@ class OnDemand:
             if threading.current_thread() is getattr(w, "_thread", None):
                 threading.Thread(target=w.stop, name=f"release-{self.name}", daemon=True).start()
             else:
-                w.stop()
+                stop_worker(w)
         return True
 
     def source_read(self, session, seq: int) -> Dict[str, Any]:
@@ -195,6 +195,17 @@ class OnDemand:
         if d is None:
             raise RuntimeError(f"{self.name}: 잡지 않음")
         return d.source_read(session, seq)
+
+
+def stop_worker(w, join_s: float = 5.0) -> None:
+    """worker 멈추기. 가상 시계에서는 시계를 기다리며 끝나기를 본다 — 그냥 join 하면 worker 가 가상 시각(간격 대기 등)을
+    기다리는 동안 시계가 가지 않아 join 이 실제 시간 join_s 를 다 쓴다."""
+    clk = w.clock
+    t = getattr(w, "_thread", None)
+    if getattr(clk, "virtual", False) and t is not None:
+        w.stop(join_s=0.0)
+        clk.wait_until(clk.monotonic() + join_s, lambda: not t.is_alive())
+    w.stop(join_s=join_s)
 
 
 class SharedDevices:

@@ -2,6 +2,7 @@
 시간마다 메모리·큐·링 버퍼·스레드를 잰다. 시험(v2/tests/test_long_run.py)은 10 시간, 최종 단계는 엔진을 꽂고 7일(168 시간).
 
 돌리는 동안(엔진 없이 공유 장비 잡기·놓기를 되풀이 — 잡을 때마다 worker 를 새로 만드는 곳에서 스레드·메모리가 새지 않는지):
+  시작은 로컬 19:00(5 시간 뒤 자정 — 일별 SQLite 바뀜·지난 날 CSV 내보내기·보관 정리가 도는 중에).
   PERIOD_S 마다 CH1 DC Pulse·CH2 RF Pulse 점유(HOLD_S 동안) → 해제, TSP 게이지 잡기 → 놓기, 카메라 chamber1 참여 → 떠남,
   TSP 205 읽기 켜기 → 끄기. engines 를 주면 register_engine 으로 꽂고 hook(rig, tick) 은 tick 마다 부른다.
 표(시간마다): h, private_mb·ws_mb(프로세스 전용·작업 집합 — gc 뒤), threads, rec_pending·rec_dropped, out_pending, events,
@@ -9,8 +10,10 @@
 """
 from __future__ import annotations
 
+import datetime as _dt
 import gc
 import tempfile
+import threading
 import time
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
@@ -19,9 +22,9 @@ from v2.common.clock import VirtualClock
 from v2.ch12.sim.rig import SIM_LOGS, Ch12Rig
 from v2.ch12.system import APP_RETENTION
 
-PERIOD_S = 600
-HOLD_S = 60
-START_WALL = 1_760_000_000.0
+PERIOD_S = 900
+HOLD_S = 30
+START_WALL = _dt.datetime(2025, 10, 9, 19, 0, 0, 250000).timestamp()   # 로컬 19:00 — 5 시간 뒤 자정(일별 파일·CSV 내보내기)
 
 
 def mem() -> Dict[str, Optional[float]]:
@@ -69,7 +72,7 @@ def run_virtual(hours: float, out_dir: Optional[Path] = None, engines: Optional[
             gc.collect()
             m = mem()
             logs = [len(getattr(x, k)) for x in rig.sims.values() for k in SIM_LOGS if hasattr(x, k)]
-            table.append({"h": t.seq // 3600, **m, "threads": __import__("threading").active_count(),
+            table.append({"h": t.seq // 3600, **m, "threads": threading.active_count(),
                           "rec_pending": rig.recorder._q.qsize(), "rec_dropped": rig.recorder.dropped,
                           "out_pending": rig.outputs.pending, "events": len(rig.events),
                           "sim_log_max": max(logs) if logs else 0, "rows": rig.loop.rows, "missed": rig.loop.missed,

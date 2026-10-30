@@ -48,7 +48,7 @@ from v2.ch12.drivers.pulse_port import PulsePorts, chan_get, tcp_transport_facto
 from v2.ch12.drivers.rf import RfPower
 from v2.ch12.drivers.rga_link import RgaLink
 from v2.ch12.outputs.row_feed import RowFeed
-from v2.ch12.shared import OnDemand, SharedDevices
+from v2.ch12.shared import OnDemand, SharedDevices, stop_worker
 
 CHAMBERS = SF.CHAMBERS
 EVENTS_KEEP = 20000
@@ -414,7 +414,7 @@ class Ch12System:
             self.clock.wait_until(self.clock.monotonic() + drain_s, lambda: not pw.busy and len(pw.queue) == 0)
         for k, w in self.workers.items():
             if self.enabled[k]:
-                w.stop()
+                stop_worker(w)
         for link in list(self.oes.values()) + list(self.rga.values()):
             if link is not None:
                 self._call("links", link.close)

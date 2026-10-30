@@ -569,3 +569,10 @@ def test_snapshot_fields_keep_thickness_when_stale(tmp_path):
 
 def test_dataclasses_exported():
     assert dataclasses.is_dataclass(WaitEnd) and dataclasses.is_dataclass(ZeroDone)
+
+
+def test_snapshot_block_fields_match_engine(tmp_path):
+    from v2.ch12.thickness_record import BLOCK_FIELDS, blocks
+    b = blocks("ch2")[0]
+    assert b.name == "ch2.thk" and tuple(f.name for f in b.fields) == BLOCK_FIELDS
+    assert set(BLOCK_FIELDS) <= set(Rig(tmp_path).e.snapshot_fields())

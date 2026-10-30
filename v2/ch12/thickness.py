@@ -154,7 +154,7 @@ class ThicknessEngine(ThicknessOpsMixin):
             fn(*a)
 
     # ═══════════════════════ Factor·재료 파일 ═══════════════════════
-    def _load_files(self, log: bool = True) -> List[str]:
+    def _load_files(self, log: bool = True) -> Tuple[List[str], List[str]]:
         fac, fw = TF.load_factors(self.factor_path)
         mats, mw = TM.load_materials(self.materials_path)
         self.factors, self.materials = fac, mats

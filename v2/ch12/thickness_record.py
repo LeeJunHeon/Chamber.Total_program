@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, List, Mapping, Optional
 
+from v2.common.snapshot import DeviceBlock, FieldDef, FType
 from v2.ch12.thickness_judge import END_ABORT, END_FALLBACK, END_LIMIT, END_THICKNESS, END_TIME
 
 IDLE_VIEW = {"mode": "", "target": "", "pct": None, "text": "공정 없음"}   # ui/thickness_panel.py:276-303
@@ -175,3 +176,26 @@ class RunRecord:
         self.rec = rec
         self.warnings = list(d.get("warnings") or [])
         self.view = dict(d.get("view") or IDLE_VIEW)
+
+
+# ═══════════════════════ 1초 행 블록(ThicknessEngine.snapshot_fields 의 키) ═══════════════════════
+def blocks(chamber: str = "ch2") -> List[DeviceBlock]:
+    """'<chamber>.thk' — 공정 쪽 두께 판정 값(장비 값 자체는 '<chamber>.stm100' 블록). 값이 없으면 None(채우지 않음)."""
+    return [DeviceBlock(f"{chamber}.thk", f"{chamber.upper()} 두께 판정", (
+        FieldDef("target_nm", FType.FLOAT, "nm", "목표 두께", "{:g}", source="recipe thickness"),
+        FieldDef("eff_nm", FType.FLOAT, "nm", "유효 두께", "{:.2f}", source="judge", desc="장비 두께 − 기준점(영점 확인)"),
+        FieldDef("remaining_nm", FType.FLOAT, "nm", "남은 두께", "{:.2f}", source="judge"),
+        FieldDef("mode", FType.STR, "", "종료 방식", source="engine", desc="Thickness / 시간 대체 / Time / 상한 / 시간대체 / 중단"),
+        FieldDef("phase", FType.STR, "", "단계", source="engine", detail=True, desc="idle / zero / wait"),
+        FieldDef("done_n", FType.INT, "", "목표 이상 연속 횟수", source="judge", desc="THICKNESS_DONE_CONSECUTIVE 에 닿으면 종료"),
+        FieldDef("done_need", FType.INT, "", "필요 연속 횟수", source="cfg", detail=True),
+        FieldDef("judge", FType.STR, "", "판정 상태", source="judge", detail=True, desc="thickness / fallback"),
+        FieldDef("permanent", FType.BOOL, "", "영구 시간 대체", source="judge", detail=True),
+        FieldDef("pct", FType.FLOAT, "%", "진행률", "{:.0f}", source="judge"),
+        FieldDef("text", FType.STR, "", "패널 문구", source="engine", detail=True),
+    ), desc="두께 모니터 공정 연동(ThicknessEngine) — thickness_nm·rate_nm_s 는 stm100 블록")]
+
+
+BLOCK_FIELDS = ("target_nm", "eff_nm", "remaining_nm", "mode", "phase", "done_n", "done_need", "judge", "permanent", "pct",
+                "text")
+

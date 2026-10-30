@@ -2,7 +2,8 @@
 
 FastHeaterRig : 프로세스 안 PLC 흉내(LadderPlc — plc_ladder.HeaterLadder 메모리 + 즉시 실행 worker)로 HeaterDriver·HeaterEngine 을
                 돌린다. v1 tests/heater_ladder_sim.py(make·run) 와 같은 쓰임 — 1초마다 래더 스캔(1 s) → 시계 +1 → 1초 묶음 읽기
-                (해독기) → on_tick_start(워치독) → on_row(폴링 주기). 쓰기마다 래더 dt=0 스캔(v1 하니스와 같음).
+                (해독기) → on_tick_start(워치독) → 폴링 1회(v1 하니스처럼 매초, every_second=False 면 엔진 주기 on_row).
+                쓰기마다 래더 dt=0 스캔(v1 하니스와 같음).
                 통신 바이트는 없다 — 판정·순서·문구 시험과 긴 열 시나리오(수천 초)용.
 HeaterRig     : 실제 PLC 스택(PlcSim Modbus TCP + SimTransport + v1 정책 worker + PlcDriver + SnapshotBus/TickLoop 스레드) 위에서
                 같은 드라이버·엔진을 돈다 — 1초 묶음 읽기·worker 요청·워치독·재기동을 바이트 경로까지 실제로.
@@ -180,7 +181,10 @@ def make_cfg(**over: Any) -> Dict[str, Any]:
 
 
 class FastHeaterRig:
-    def __init__(self, gain: float = 2250.0, writes: bool = True, csv=None, cfg: Optional[dict] = None, **over: Any) -> None:
+    def __init__(self, gain: float = 2250.0, writes: bool = True, csv=None, cfg: Optional[dict] = None,
+                 every_second: bool = True, **over: Any) -> None:
+        """every_second=True: v1 하니스처럼 1초마다 폴링 1회(poll_once). False: 엔진 주기(on_row — RUN 1 s·정지 3 s)."""
+        self.every_second = every_second
         self.clk = FakeClock()
         self.plc = LadderPlc(self.clk, gain=gain)
         self.cfg = cfg if cfg is not None else make_cfg(**over)
@@ -207,6 +211,11 @@ class FastHeaterRig:
         return [(t, e.data["title"], e.data["subtitle"], e.data["status"])
                 for t, e in zip(self.times, self.events) if e.kind == "card" and word in e.data["title"]]
 
+    def cards_full(self, word: str = "") -> List[tuple]:
+        """[(제목, 부제, 상태, 필드)]."""
+        return [(e.data["title"], e.data["subtitle"], e.data["status"], dict(e.data.get("fields") or {}))
+                for e in self.events if e.kind == "card" and word in e.data["title"]]
+
     def listen(self) -> List[dict]:
         self.eng.add_listener(self.pub.append)
         return self.pub
@@ -218,7 +227,11 @@ class FastHeaterRig:
         self.plc.read()
         self.eng.on_tick_start()
         if poll:
-            self.eng.on_row(None)
+            if self.every_second:
+                self.eng.poll_once()
+                self.eng._flush()
+            else:
+                self.eng.on_row(None)
 
     def run(self, secs: int, on_step: Optional[Callable[["FastHeaterRig"], None]] = None) -> None:
         for _ in range(int(secs)):
