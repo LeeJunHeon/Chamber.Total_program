@@ -250,9 +250,13 @@ def _pyserial_factory(s: SerialSettings) -> Any:
 # ───────────── TCP(MOXA NPort TCP 서버 모드·Modbus TCP 직결) ─────────────
 @dataclass(frozen=True)
 class TcpSettings:
+    """write_timeout_s: 쓰기 한 번(보낼 바이트 전부가 소켓 버퍼로 들어갈 때까지)의 한도 — v1 asyncio
+    `wait_for(writer.drain(), timeout=…_DRAIN_TIMEOUT_S)` 대응(IG·MFC·DC Pulse·RF Pulse). 넘으면 TransportError → worker 가 끊고
+    재연결(v1 도 drain 실패면 _on_tcp_disconnected). None 이면 한도 없이 sendall(버퍼가 꽉 차면 바로 오류 — 지금까지의 동작)."""
     host: str
     port: int
     connect_timeout_s: float = 2.0
+    write_timeout_s: Optional[float] = None
 
 
 class TcpTransport(Transport):
@@ -304,10 +308,30 @@ class TcpTransport(Transport):
     def write(self, data: bytes) -> None:
         if self._sock is None:
             raise TransportError("연결 안 됨")
-        try:
-            self._sock.sendall(data)
-        except Exception as e:
-            raise TransportError(f"write: {e!r}") from e
+        limit = self.settings.write_timeout_s
+        if limit is None:
+            try:
+                self._sock.sendall(data)
+            except Exception as e:
+                raise TransportError(f"write: {e!r}") from e
+            return
+        # 한도 있는 쓰기(v1 drain 한도): 소켓은 non-blocking — 버퍼가 차면 짧게 쉬며 남은 바이트를 넣는다
+        view = memoryview(bytes(data))
+        deadline = self.clock.monotonic() + max(0.0, float(limit))
+        while len(view):
+            try:
+                n = self._sock.send(view)
+                view = view[n:]
+                continue
+            except (BlockingIOError, InterruptedError):
+                pass
+            except OSError as e:
+                if getattr(e, "errno", None) not in (11, 35, 10035):
+                    raise TransportError(f"write: {e!r}") from e
+            now = self.clock.monotonic()
+            if now >= deadline:
+                raise TransportError(f"write timeout({float(limit):.1f}s) — {len(data) - len(view)}/{len(data)} B 보냄")
+            self.clock.sleep_until(min(deadline, now + self.POLL_S))
 
     def read_until(self, deadline: float, terminator: Optional[bytes] = None, size: Optional[int] = None,
                    cancel: Optional[CancelToken] = None) -> bytes:

@@ -1,7 +1,8 @@
 """챔버12 공정 시작 전 단계 — v1 runtime/chamber_runtime.py 의 _start_after_preflight(3799-4119) 중 장비 부분.
 
 순서(v1 그대로): 이번 런 펄스 선택(_run_select — use_*_pulse ∧ 지원만, 값으로 추정하지 않음) → 펄스 주소 점유(재연결·장비
-기동보다 먼저 — 같은 주소를 다른 챔버나 같은 챔버의 다른 종류가 쓰면 거부) → 장비 기동 순서 PLC → MFC → IG → DC Pulse → RF Pulse
+기동보다 먼저 — 같은 주소를 다른 챔버나 같은 챔버의 다른 종류가 쓰면 거부) → 펄스 재연결(reconnect_pulses — 옛 세션이 닫히고 새
+worker 가 돌 때까지 CHAMBER_PULSE_RECONNECT_TIMEOUT_S 2 s, 넘으면 시작 실패) → 장비 기동 순서 PLC → MFC → IG → DC Pulse → RF Pulse
 (GAPB-001 — v2 는 PLC·MFC·IG 가 상시 연결이라 '이미 연결' 이면 'already connected → skip', 펄스는 점유가 곧 연결) →
 연결 확인(PLC·MFC·IG + 고른 펄스, 0.2 s 간격, 8 s·펄스 10 s, 1초마다 '연결 대기 중: …') → Gate(닫힘일 때만) → Main Valve
 (SW ∧ 인터락) → [두께 기본 점검] → Chuck 위치(실패해도 계속 — 경고 목록) → [두께 재료값] → 시작.
@@ -76,6 +77,39 @@ def claim_pulses(eng, sel: dict) -> Optional[str]:
         if not ok:
             return msg
     return None
+
+
+def reconnect_pulses(eng, sel: dict) -> None:
+    """펄스 재연결(3896-3927 · _pulse_reconnect_safe 3760-3797) — 점유 뒤, 장비 기동 전. 고른 펄스마다(RF 는 RFPULSE_TCP 주소가
+    있을 때만 — v1 cfg.RFPULSE_TCP) '[Runner] {label} reconnect 시작: host:port' → 재연결이 끝날 때까지(옛 세션 Worker 가 멈추고
+    새 Worker 가 돈다 — PulsePorts.settled, v1 set_endpoint_reconnect = 감시 멈춤·끊기·새 워치독 시작) 최대
+    CHAMBER_PULSE_RECONNECT_TIMEOUT_S(2 s) → '[Runner] {label} reconnect 완료'. 넘으면 RuntimeError('{label} reconnect timeout(2.0s)')
+    — 부르는 쪽이 v1 과 같이 "오류: '{note}' 시작 실패. (…)"·PREFLIGHT_FAILED. 연결 성립은 v1 처럼 다음 연결 확인(8/10 s)에서 본다.
+    STOP 취소는 StageCancelled 그대로(v1 의도한 취소), 그 밖의 예외는 '{label} reconnect failed: {e!r}'."""
+    from v2.ch12.drivers.pulse_port import endpoint
+    timeout_s = float(eng.cget("CHAMBER_PULSE_RECONNECT_TIMEOUT_S", 2.0))
+    ports = eng.sys.shared.pulse
+    for kind in ("dcpulse", "rfpulse"):
+        if not sel.get(kind):
+            continue
+        label = KIND_LABEL[kind]
+        host, port = endpoint(eng.cfg, eng.ch, kind)
+        if not host or not port:
+            continue
+        eng.log("MAIN", f"[Runner] {label} reconnect 시작: {host}:{port}")
+        try:
+            t0 = eng.clock.monotonic()
+            while not ports.settled(kind, eng.ch):
+                if eng.clock.monotonic() - t0 >= timeout_s:
+                    raise TimeoutError()
+                sleep(eng, 0.05)
+        except StageCancelled:
+            raise
+        except TimeoutError:
+            raise RuntimeError(f"{label} reconnect timeout({timeout_s:.1f}s)")
+        except Exception as e:
+            raise RuntimeError(f"{label} reconnect failed: {e!r}")
+        eng.log("MAIN", f"[Runner] {label} reconnect 완료")
 
 
 def start_devices(eng, sel: dict) -> None:
@@ -289,6 +323,7 @@ class PreflightMixin:
             self.log("MAIN", why)
             self.popup("공유 장비 사용 중", why)
             return self._start_fail(why, "PULSE_PORT_BUSY", cleanup=False)
+        reconnect_pulses(self, sel)
         start_devices(self, sel)
         self.actions.oes_init_background()
         self.actions.run_use(True)                       # v1 _on_process_status_changed(True) — 공유 MFC 런 사용자

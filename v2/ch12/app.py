@@ -8,7 +8,8 @@
     (CH12-SIM — 아니면 시작 거부, 종료 코드 2: 진짜 장비 기록과 섞이지 않게).
   2 한 번만 실행: 127.0.0.1:LOCAL_HMI_PORT 를 바인드해 둔다(local_server.bind_socket) — 실패 = 이미 실행 중 → 알리고 끝(종료 코드 3).
     장비 포트를 열기 전에. 로컬 서버(attach_server)가 이 소켓을 이어받는다(두 번 바인드하지 않음).
-  3 로그(LOCAL_DATA_DIR\\logs\\ch12_v2.log 회전 로그 — 콘솔에는 시작 줄·경고·오류만).
+  3 로그(LOCAL_DATA_DIR\\logs\\ch12_v2.log 회전 로그 — 콘솔에는 시작 줄·경고·오류만. DEBUG_PRINT(v1 같은 이름, 운영값 false)를
+    켜면 장비 이벤트(info)도 콘솔에 '[출처][종류] 내용' — v1 드라이버 debug_print 줄 대응, _debug_event).
   4 조립(system.Ch12System — sim: 시뮬레이터(sim.rig.make_sims·sim_transports, OES·RGA 워커는 --fake), bench·prod: TCP
     (system.tcp_transports)) → 장비 메시지 허브(hub.attach — 이벤트·1초 행 구독, 첫 메시지 hello)·설정 적용(config_apply.attach)
     → 엔진 조립(assembly.build — 공정·PC·TSP·히터·두께·프리스퍼터·안전·명령 처리 core·로봇 RobotOps·내부 명령 API)
@@ -52,7 +53,7 @@ from v2.common.clock import RealClock
 from v2.common.config_store import ConfigError
 from v2.common.mode import RunMode, policy, resolve_mode
 from v2.ch12.local_server import LocalServer, bind_socket
-from v2.ch12.system import APP_RETENTION, Ch12System, new_store, tcp_transports
+from v2.ch12.system import APP_RETENTION, TRANSIENT_KINDS, Ch12System, new_store, tcp_transports
 
 PROGRAM = "ch12-v2"
 DEFAULT_CONFIG_DIR = r"C:\CH12_v2\config"
@@ -66,6 +67,12 @@ REPO_HMI_DIR = Path(__file__).resolve().parents[1] / "hmi"   # LOCAL_HMI_STATIC_
 
 
 EXIT_BLOCK_LOG = "프로그램 종료 차단: 실행 중 공정 = "     # v1 main.py:1497 WARN/EXIT 로그 머리
+
+
+def debug_line(e) -> str:
+    """DEBUG_PRINT 콘솔 한 줄 — v1 print(f"[MFC][status] {msg}") 모양: '[출처][종류] 내용'(사유·코드가 있으면 뒤에)."""
+    tail = " ".join(x for x in (e.code, e.reason) if x)
+    return f"[{e.source}][{e.kind}] {e.detail}" + (f" ({tail})" if tail else "")
 
 
 def active_run_labels(s) -> Optional[List[str]]:
@@ -245,6 +252,7 @@ class App:
                                  retention=APP_RETENTION, nas_dir=self.cfg.get("NAS_COPY_DIR") or None, links=True,
                                  camera_backend=cam, program=PROGRAM, version=self.version)
         self.system.event_listeners.append(self._log_event)
+        self.system.event_listeners.append(self._debug_event)
         from v2.ch12 import config_apply, hub
         from v2.ch12.assembly import build as build_engines
         self.hub = hub.attach(self.system)                 # 이벤트·1초 행 → 장비 메시지(로컬 화면·웹)
@@ -259,6 +267,22 @@ class App:
     def _log_event(self, e) -> None:
         lv = {"error": logging.ERROR, "warn": logging.WARNING}.get(e.level, logging.INFO)
         self.log.log(lv, "%s %s %s", e.source, (e.code or e.reason or e.kind), e.detail)
+
+    def _debug_event(self, e) -> None:
+        """DEBUG_PRINT(v1 common.DEBUG_PRINT, 운영값 false): 켜면 장비 이벤트를 콘솔에 한 줄씩 — v1 드라이버가 debug_print 일 때
+        _emit_status·_dbg 에서 찍던 print(f"[MFC][status] {msg}")·print(f"[{src}] {msg}") 대응(device/mfc.py:2175-2177·2219-2221,
+        dc_power.py:568-570, rf_power.py:941-943, dc_pulse.py:3037-3039·3130-3132, rf_pulse.py:763-766·1872-1874·1904-1906).
+        v2 는 장비 이벤트(조립이 장비를 만들 때 연 이벤트 길 — system.device_sources)를 '[출처][종류] 내용'으로. 경고·오류는 늘 콘솔에
+        나가므로(로그 처리기) 여기서는 info 만, 화면 전용(스펙트럼)은 빼고. 설정은 바로 반영(apply LIVE — 매번 읽는다)."""
+        s = self.system
+        if s is None or not s.cfg.get("DEBUG_PRINT") or e.source not in s.device_sources:
+            return
+        if e.level in ("warn", "error") or e.kind in TRANSIENT_KINDS:
+            return
+        try:
+            self.say(debug_line(e))
+        except Exception:
+            pass
 
     def start(self) -> int:
         """1~4 단계. 0 이면 실행 중(run 으로 기다림), 아니면 종료 코드."""

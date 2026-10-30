@@ -1,8 +1,8 @@
 """플라즈마 클리닝 프리플라이트 — v1 runtime/plasma_cleaning_runtime.py 의 _preflight_connect(447-578)·GV 인터락 확인(1456-1507).
 
 장비 연결(PC-021): 대상 PLC·MFC(GAS)·MFC(SP4)·IG(같은 MFC 면 두 번 나온다 — v1 그대로). 이미 연결이면 '{이름} 이미 연결됨'.
-  PLC 는 read_coil(0) 핸드셰이크 PC_PREFLIGHT_PLC_HANDSHAKE_TIMEOUT_S(1 s), 나머지는 connect()(v1 = 워치독 시작 — v2 worker 는 늘 돌고
-  있어 '호출' 로그만) → 전체 연결 대기 PC_PREFLIGHT_TIMEOUT_S(10 s)·PC_PREFLIGHT_CONNECT_POLL_INTERVAL_S(0.5 s) 간격, 넘으면
+  PLC 는 read_coil(0) 핸드셰이크 PC_PREFLIGHT_PLC_HANDSHAKE_TIMEOUT_S(1 s), 나머지는 connect()(v1 = 워치독 시작 — v2 는 그 장비 worker 가
+  돌고 있는지를 PC_PREFLIGHT_DEVICE_CONNECT_TIMEOUT_S(3 s) 안에 보고 '호출' 로그, 넘으면 '{이름} connect timeout(3.0s)') → 전체 연결 대기 PC_PREFLIGHT_TIMEOUT_S(10 s)·PC_PREFLIGHT_CONNECT_POLL_INTERVAL_S(0.5 s) 간격, 넘으면
   '장비 연결 타임아웃: a, b'. 실패는 RuntimeError('{이름} 연결 실패: {e!r}') — 부르는 쪽이 '장치 연결에 실패했습니다: …'.
 MFC 폴링 마스크 분리(PC-023, 529-551): gas MFC ≠ pressure MFC(CH2 PC)이고 gas MFC 를 다른 주체가 안 쓰면(폴링 ∪ 런 사용자) GAS→R60만·
   SP4→R5만, 쓰면 분리 생략 로그.
@@ -58,6 +58,14 @@ class PreflightIO:
                     raise RuntimeError(f"{name} 연결 실패: {RuntimeError(err_of(box.value))!r}")
                 self.log("PC", "PLC 핸드셰이크(read_coil 0)")
             else:
+                # v1 connect()(= start — 워치독·명령 워커가 없으면 띄움, 종료 정리 중이면 그 락을 기다림) 를
+                # PC_PREFLIGHT_DEVICE_CONNECT_TIMEOUT_S 로 감쌌다(470-485). v2 대응: 그 장비 worker 가 돌고 있는가(멈추는 중·멈춤이면
+                # 다시 돌 때까지) — 넘으면 v1 문구 '{이름} connect timeout(3.0s)'. 연결 성립은 아래 전체 대기(10 s)에서.
+                dct = self._cfgf("PC_PREFLIGHT_DEVICE_CONNECT_TIMEOUT_S", 3.0)
+                w = getattr(d, "worker", None)
+                if w is not None and hasattr(w, "running") and not self.clock.wait_until(
+                        self.clock.monotonic() + dct, lambda: bool(w.running) or self._connected(d)):
+                    raise RuntimeError(f"{name} 연결 실패: {RuntimeError(f'{name} connect timeout({dct:.1f}s)')!r}")
                 self.log("PC", f"{name} connect 호출")
         t0 = self.clock.monotonic()
         while True:

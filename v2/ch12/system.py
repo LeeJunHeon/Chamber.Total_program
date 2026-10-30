@@ -243,6 +243,8 @@ class Ch12System:
             store.load()
         self.events: "collections.deque[Logged]" = collections.deque(maxlen=rt.events)
         self.event_listeners: List[Callable[[Logged], None]] = []
+        self._ev_sources: set = set()                                       # _ev_for 로 만든 이벤트 길의 source 이름
+        self.device_sources: frozenset = frozenset()   # 그중 장비(드라이버·worker·링크) 것 — 장비를 다 만든 뒤 고정(DEBUG_PRINT 콘솔 줄, app)
         self.row_listeners: List[Callable[[Dict[str, Any]], None]] = []    # 허브(7단계)·시험 — 기록 출력 뒤
         self.engines: Dict[str, Any] = {}
         self.safety = None                                                   # 4단계(안전 규칙) — on_row(view)
@@ -343,6 +345,8 @@ class Ch12System:
                 store_[ch] = link
                 sources.append(Source(name, CacheWorker(clock, name=name) if link else None,
                                       link.source_read if link else (lambda s, n: {}), (name,), 900, enabled=bool(link)))
+
+        self.device_sources = frozenset(self._ev_sources)      # 여기까지가 장비 — 엔진(조립)의 _ev_for 는 들어가지 않는다
 
         # ── 블록을 채우는 소스가 없으면(설정에서 꺼진 PLC 해독 블록) off 소스 ──
         have = {b for s in sources for b in s.blocks}
@@ -445,6 +449,8 @@ class Ch12System:
 
     # ───────── 내부 이벤트 ─────────
     def _ev_for(self, source: str) -> Callable[[Any], None]:
+        self._ev_sources.add(source)
+
         def on(e) -> None:
             kind = str(getattr(e, "kind", type(e).__name__))
             reason = getattr(e, "reason", None)

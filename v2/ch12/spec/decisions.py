@@ -17,7 +17,8 @@ DECISIONS = [
          confirm=False, where="v2/common/modbus_tcp.py"),
     dict(id="D03", title="포털 lint 기준 상태",
          decision="chk2-web 기준 커밋에서 이미 41개 lint 오류(챔버12 와 무관한 기존 파일 — AppShell·ChkPage·DashboardPage·ops/ChkMimic 등)가 있다. "
-                  "챔버12 가 더한 파일은 lint 오류 0 이어야 하고, 기존 오류는 동작을 바꾸지 않는 범위에서만 고친다(못 고친 것은 목록으로 보고).",
+                  "챔버12 가 더한 파일은 lint 오류 0 이어야 하고, 기존 오류는 동작을 바꾸지 않는 범위에서만 고친다(못 고친 것은 목록으로 보고). "
+                  "결과: 41개 모두 구조만 바꿔 고침(W12-7 — disable 주석·규칙 끄기 없음), 같은 가짜 API 18 경우 HTML·주소 동일. 달라질 수 있는 점: CHK 명령 끝난 뒤 조회 1건에서 cmdIds 빠짐, CHK '응답 없음'(45 s) 판정이 조회가 끝날 때만.",
          reason="기존 화면을 깨뜨리지 않는다(지시 1장).", confirm=True, where="vanam-process"),
     dict(id="D04", title="지시의 '알려진 이상 동작'(use_*_pulse=F + freq·duty → 펄스 켜짐)이 기준 커밋에 없음",
          decision="기준 커밋 66efc7b 의 v1 동작(펄스 사용은 use_*_pulse 만으로, F 면 freq·duty 값을 지움 — runtime/chamber_runtime.py:3854-3862·6389-6443)을 따른다. "

@@ -584,7 +584,9 @@ def endpoint(cfg: Dict[str, Any], chamber: str) -> tuple:
 
 def tcp_settings(cfg: Dict[str, Any], chamber: str) -> TcpSettings:
     host, port = endpoint(cfg, chamber)
-    return TcpSettings(host, port, connect_timeout_s=max(0.5, float(cfg.get("MFC_CONNECT_TIMEOUT_S", 3.0))))
+    # 쓰기 한도 = MFC_DRAIN_TIMEOUT_S(v1 device/mfc.py:1385-1386 — writer.drain 한도, 넘으면 끊고 재연결)
+    return TcpSettings(host, port, connect_timeout_s=max(0.5, float(cfg.get("MFC_CONNECT_TIMEOUT_S", 3.0))),
+                       write_timeout_s=float(cfg.get("MFC_DRAIN_TIMEOUT_S", 2.0)))
 
 
 def make_worker(clock, transport, cfg: Dict[str, Any], chamber: str, writes_allowed: bool, on_event=None) -> Worker:

@@ -235,6 +235,18 @@ class Worker:
         return self.inflight is not None
 
     @property
+    def running(self) -> bool:
+        """스레드가 돌고 있고 멈추는 중이 아니다(start 뒤 stop 전) — 연결 여부와 별개."""
+        t = self._thread
+        return t is not None and t.is_alive() and not self._stop
+
+    @property
+    def stopped(self) -> bool:
+        """stop 을 불렀고 스레드가 끝났다(또는 시작한 적이 없다) — 포트를 놓았다."""
+        t = self._thread
+        return t is None or not t.is_alive()
+
+    @property
     def ready(self) -> bool:
         """연결됐고 연결 직후 초기화가 끝났다."""
         return self.connected and not self.initializing

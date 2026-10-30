@@ -38,6 +38,8 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
      monitor_card·anomaly·client_process·error_event·resumed·safety step/error·command·ui·패널 결과·robot_api
   3  화면 빠진 기능(UI-098·118~127) — 명령 THICKNESS_WINDOW(두께 Factor·재료 창 값 읽기 — 결과 value 를 사건 thickness/window 로,
      benchOk), eventKinds 에 thickness/window(상세). state.spectra(OES 스펙트럼 — 묶음 정의 밖)는 hub.py.
+  4  빠진 v1 설정(gap) — params 에 쓰기 한도 IG_DRAIN_TIMEOUT_S·MFC_DRAIN_TIMEOUT_S·DCP_DRAIN_TIMEOUT_S·RFPULSE_DRAIN_TIMEOUT_S
+     (v1 writer.drain 한도 — 이전에는 crossRules.dropped)
 """
 from __future__ import annotations
 
@@ -52,7 +54,7 @@ from v2.ch12 import snapshot_fields as SF
 from v2.ch12 import web_blocks as WB
 from v2.ch12.hub import optional_module
 
-EXPORT_VERSION = 3
+EXPORT_VERSION = 4
 
 # 웹이 받는 공정 이벤트(엔진이 system.emit(source="process:<c>", kind, event=data) 로 내는 것 — hub 가 run_* 메시지로 바꾼다)
 EVENTS: tuple = (

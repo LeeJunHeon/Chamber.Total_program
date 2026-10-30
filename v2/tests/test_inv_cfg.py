@@ -147,6 +147,8 @@ def _base(key: str) -> str:
 
 
 _CHAT = "vanam-process/lib/ops2/ch12/chatCards.ts"
+_LIM = "vanam-process/lib/ops2/ch12/chatLimits.ts"
+_OUTBOX = "vanam-process/lib/ops2/ch12/chat.ts"
 _EXPORT = "v2/tools/export_worker_settings.py"
 
 # 이름을 동적으로 만들거나 v2 코드 밖(포털·독립 도구 내보내기)에서 쓰는 키 — (파일, 그 파일에 있어야 하는 글자)
@@ -154,6 +156,10 @@ USE = {
     "common.CHAT_ERR_DEDUP_S": [(_CHAT, "v.CHAT_ERR_DEDUP_S")],             # 포털이 카드 중복 억제(v1 chat_notifier)
     "common.CHAT_PLC_LINK_SUPPRESS": [(_CHAT, "v.CHAT_PLC_LINK_SUPPRESS")],
     "common.CHAT_PLC_LINK_CODES": [(_CHAT, "v.CHAT_PLC_LINK_CODES")],
+    # 포털 전송 폭주 보호(v1 chat_notifier _schedule_post) — 설정값 읽기(chatCfgOf)·상한 판정(chatLimits)·outbox 넣기(chat.ts)
+    "common.CHAT_POST_CONCURRENCY": [(_CHAT, "v.CHAT_POST_CONCURRENCY"), (_LIM, "SENDER_CONCURRENCY = 1")],
+    "common.CHAT_PENDING_MAX": [(_CHAT, "v.CHAT_PENDING_MAX"), (_LIM, "cfg.pendingMax"), (_OUTBOX, "applyPendingCaps(")],
+    "common.CHAT_PENDING_HARD_MAX": [(_CHAT, "v.CHAT_PENDING_HARD_MAX"), (_LIM, "cfg.pendingHardMax"), (_OUTBOX, "applyPendingCaps(")],
     # 독립 도구(log_sync·rf_worker)가 v1 settings.json 으로 읽는 키 — v2 값에서 내보낸다(D13)
     **{f"common.{k}": [(_EXPORT, f'"{k}"')] for k in (
         "LOG_SYNC_ENABLED", "LOG_SYNC_PAIRS", "LOG_SYNC_STATE_DIR", "LOG_SYNC_ALERT_AFTER_FAILS", "CAMERA_LOG_ROOT",
@@ -289,16 +295,8 @@ V1_DEAD = {
 
 # v2 키는 있지만 v2 코드가 아직/일부러 쓰지 않는 키 — 경로 → 이유(inv_cfg 항목 note 와 같은 뜻, 보고 대상)
 V2_UNUSED = {
-    "common.DEBUG_PRINT": "v1 개발용 콘솔 디버그 출력 스위치(운영값 false — 출력 없음). v2 드라이버는 디버그 출력이 없다(false 와 같음)",
     "common.OES_PLOT_MIN_INTERVAL_S": "화면 OES 그래프 쓰로틀 — 그래프는 포털 몫(UI-098·PROC-232), 아직 포털에 OES 그래프 없음",
-    "common.CHAT_POST_CONCURRENCY": "v1 chat_notifier 전송 폭주 보호 — v2 는 포털이 카드를 보낸다(CHAT-005 담당)",
-    "common.CHAT_PENDING_MAX": "v1 chat_notifier 대기 상한 — v2 는 포털이 카드를 보낸다(CHAT-005 담당)",
-    "common.CHAT_PENDING_HARD_MAX": "v1 chat_notifier urgent 상한 — v2 는 포털이 카드를 보낸다(CHAT-005 담당)",
     "common.PROCESS_LIST_START_DIR": "레시피 파일 열기 대화상자 시작 폴더 — v2 는 포털 레시피 적재로 대체(UI-080·PC-087)",
-    "common.CHAMBER_PULSE_RECONNECT_TIMEOUT_S": "v1 시작 전 펄스 set_endpoint_reconnect 한도 — v2 펄스 포트는 점유(claim) 뒤 worker 연결 "
-                                                "대기(CHAMBER_PREFLIGHT_TIMEOUT_WITH_PULSE_S)로 대신(PROC-095 담당)",
-    "common.PC_PREFLIGHT_DEVICE_CONNECT_TIMEOUT_S": "v1 장비 connect() 호출 한도 — v2 worker 는 늘 연결을 유지해 connect 는 호출 로그만"
-                                                    "(D37, v2/ch12/pc_preflight.py) — 이 한도를 걸 호출이 없다",
 }
 
 

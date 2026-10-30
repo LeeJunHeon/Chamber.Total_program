@@ -21,6 +21,8 @@ PARAMS: tuple = (
     inst("CH2_RFPULSE_TCP_PORT", _G, "CH2 RF Pulse TCP 포트", I, 4005, 1, 65535, safety=H, src="config/settings.json:566"),
     inst("RFPULSE_ADDR", _G, "AE Bus 주소", I, 1, 1, 31, safety=H, src=f"{_CC}:417", desc="0 은 브로드캐스트(응답 없음)"),
     inst("RFPULSE_CONNECT_TIMEOUT_S", _G, "연결 제한", F, 1.5, 0.3, 30.0, unit="s", src=f"{_CC}:420 · device/rf_pulse.py:1046"),
+    inst("RFPULSE_DRAIN_TIMEOUT_S", _G, "쓰기(drain) 한도", F, 2.0, 0.1, 30.0, unit="s",
+         src=f"{_CC}:421 · device/rf_pulse.py:1189-1190", desc="보낼 바이트가 모두 소켓 버퍼로 들어갈 때까지의 한도(v1 writer.drain 한도) — 넘으면 끊고 재연결(v1 max(0.1, 값))"),
     p("CMD_GAP_MS", _G, "명령 간격(앞 명령 끝난 뒤 쉼)", "ms", I, 1500, 0, 10000, safety=H, src=f"{_CC}:84 · device/rf_pulse.py:1249"),
     p("ACK_TIMEOUT_MS", _G, "설정 명령 응답 한도", "ms", I, 2000, 100, 60000, src=f"{_CC}:81", desc="RF ON/OFF 는 max(이 값, 2500)"),
     p("QUERY_TIMEOUT_MS", _G, "질의 응답 한도", "ms", I, 4500, 100, 60000, src=f"{_CC}:82"),
@@ -58,6 +60,5 @@ DROPPED: tuple = (
     Dropped("common.RECV_FRAME_TIMEOUT_MS", _UNUSED, f"{_CC}:83"),
     Dropped("common.POST_WRITE_DELAY_MS", _UNUSED, f"{_CC}:85"),
     Dropped("common.ACK_FOLLOWUP_GRACE_MS", _UNUSED, f"{_CC}:86"),
-    Dropped("common.RFPULSE_DRAIN_TIMEOUT_S", "asyncio writer.drain 한도 — v2 TcpTransport 는 sendall", "device/rf_pulse.py:1209"),
     Dropped("common.RFPULSE_WATCHDOG_INTERVAL_MS", "v1 워치독 루프의 연결 확인 주기 — v2 는 worker 가 끊김을 즉시 안다", "device/rf_pulse.py:1033"),
 )

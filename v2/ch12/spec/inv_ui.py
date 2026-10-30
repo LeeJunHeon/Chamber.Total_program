@@ -539,8 +539,8 @@ ITEMS = [
          desc="'Select File': 시작 폴더 = 마지막으로 연 폴더, 없으면 PROCESS_LIST_START_DIR('\\\\VanaM_NAS\\VanaM_toShare'). 제목 'CH{n} 프로세스 리스트 파일 선택', 필터 "
               "'Recipe Files (*.csv *.xlsx);;CSV Files (*.csv);;Excel Files (*.xlsx);;All Files (*)'. 취소 '파일 선택 취소', 고르면 '선택된 파일: 경로' 로그",
          v1="runtime/chamber_runtime.py:3359-3380; lib/config_common.py:725",
-         v2="v2/ch12/core.py; v2/ch12/commands.py", test="v2/tests/test_inv_proc.py::test_proc_004_ui_recipe_load_30s_timeout_and_exception", status="done",
-         note="v2 는 포털 레시피 적재로 대체 / 파일 창 대신 RECIPE_LOAD path(포털은 웹 레시피 적재) — X12"),
+         v2="v2/ch12/local_server.py; v2/ch12/core.py; v2/ch12/commands.py; vanam-process components/ops2/ch12/Ch12LocalFiles.tsx", test="v2/tests/test_ui_web.py::test_files_list_under_start_dir; v2/tests/test_ui_web.py::test_files_timeout_504; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:local-files; v2/tests/test_inv_proc.py::test_proc_004_ui_recipe_load_30s_timeout_and_exception", status="done",
+         note="노트북 화면(local): 장비 폴더 목록 GET /api/v1/files?dir=(시작 폴더 PROCESS_LIST_START_DIR 아래만·127.0.0.1 만·폴더+*.csv/*.xlsx·응답 지연 3 s 504) → 고른 파일을 RECIPE_LOAD path(CH1·CH2)·PC_RECIPE_LOAD·PRESPUTTER_RECIPE 로. 마지막 연 폴더는 브라우저 기억(없어졌으면 시작 폴더). 웹 화면은 포털 레시피 목록 그대로"),
     dict(id="UI-081", area="ui",
          desc="레시피 파일 읽기(executor, 30 s 제한 — 넘으면 'CSV 로드 30초 timeout (NAS 응답 지연): 경로'): xlsx 는 첫 시트만·1행 헤더·빈 행 제외, csv 는 utf-8-sig·"
               "모든 칸 빈 행 건너뜀('빈 행 N개 건너뜀 (모든 칸이 빈 행)'). Process_name 없으면 '#' 열, 그것도 없으면 '공정 N'. 예외 '파일 처리 오류: …'",
@@ -570,22 +570,22 @@ ITEMS = [
          desc="공용 파일 열기 창(pick_open_file): Qt 자체 창(네이티브 아님), ExistingFile, ReadOnly(이름 바꾸기·삭제·새 폴더 막음), 모든 뷰 드래그 앤 드롭 끔(열기 전·후 2회), "
               "WindowModal, 시작 폴더는 50 ms 뒤 지정, 취소면 ''. 닫힌 뒤 숨기고 마우스 버튼이 다 떨어지면 deleteLater 1회(200 ms 간격, 최대 10분)",
          v1="util/file_pick.py:39-129; runtime/chamber_runtime.py:8423-8430",
-         v2="vanam-process components/ops2/ch12/Ch12Recipes.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:bundle-kinds", status="done",
-         note="2026-10-12 크래시 대책 — v2 는 브라우저 파일 선택으로 대체(differences) / Qt 파일 창 대신 웹 레시피 목록·경로 인자(2026-10-12 크래시 대책 대상 없음) — X12"),
+         v2="v2/ch12/local_server.py; vanam-process components/ops2/ch12/Ch12LocalFiles.tsx; vanam-process components/ops2/ch12/Ch12Recipes.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:local-files; v2/tests/test_ui_web.py::test_files_list_under_start_dir", status="done",
+         note="Qt 파일 창(2026-10-12 크래시 대책) 대신: 노트북 화면은 장비 폴더 목록(읽기 전용 — 이름 바꾸기·삭제·새 폴더 없음, 끌어 놓기 없음), 웹은 포털 레시피 목록 — X12"),
 
     # ───────────────────────────── 알림창 공통 ─────────────────────────────
     dict(id="UI-086", area="ui",
          desc="챔버 경고창(_post_warning): Warning 아이콘, OK, WindowModal, 기본 5000 ms 자동 닫힘, 같은 (제목, 본문)이 떠 있으면 'UI' 로그 '(중복 억제) 제목: 본문'만, "
               "동시에 5개 넘으면 '(팝업 상한 초과) …' 로그만. UI 없으면 'WARN' 로그",
          v1="runtime/chamber_runtime.py:8432-8485; util/timed_popup.py:9-56",
-         v2="v2/ch12/process_engine.py; vanam-process components/ops2/ch12/Ch12Chamber.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:popup-line", status="done",
-         note="경고창 대신 popup 사건(경고 로그 줄 — 제목은 data.title). 쌓이는 창이 없어 중복 억제·5개 상한 대상 없음(X12)"),
+         v2="v2/ch12/process_engine.py; vanam-process components/ops2/ch12/Ch12Popups.tsx; vanam-process components/ops2/ch12/Ch12Page.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:popups; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:popup-line; v2/tests/test_ui_web.py::test_process_failed_popup_clears_on_close", status="done",
+         note="popup 사건 → 화면 알림창(Ch12Popups — 경고 5 s(auto_close_ms) 자동 닫힘·같은 (제목, 본문) 떠 있으면 억제·동시 5개 상한, 화면을 연 뒤 온 사건만) + 로그 줄(경고)"),
     dict(id="UI-087", area="ui",
          desc="챔버 오류창(_post_critical): Critical, 자동 닫힘 없음, 중복·상한 규칙 같음. clear_status_to_idle=True 면 상한 무시, 창이 닫히면(확인/X/ESC) runtime_state 오류 해제(idle). "
               "UI 없으면 'ERROR' 로그",
          v1="runtime/chamber_runtime.py:8487-8525",
-         v2="v2/ch12/core.py; v2/ch12/commands.py; vanam-process components/ops2/ch12/Ch12Chamber.tsx", test="v2/tests/test_core.py::test_state_rejected_and_start_guard_interlocks; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-idle", status="done",
-         note="오류창 닫기 = CHAMBER_ERROR_CLEAR(오류 해제 버튼) → run_state 오류 해제"),
+         v2="v2/ch12/process_engine.py; v2/ch12/process_records.py; v2/ch12/core.py; vanam-process components/ops2/ch12/Ch12Popups.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:popups; v2/tests/test_ui_web.py::test_process_failed_popup_clears_on_close; v2/tests/test_core.py::test_state_rejected_and_start_guard_interlocks", status="done",
+         note="오류창 = popup 사건 level error(자동 닫힘 없음). '공정 실패' 창은 clear_on_close(v1 clear_status_to_idle) — 화면에서 닫으면(OK·X·ESC) CHAMBER_ERROR_CLEAR(PC 는 PC_ERROR_CLEAR) 를 보내 오류 표시 해제, 상한 무시·해제 책임 없는 같은 창이면 새로 띄움(v1 그대로)"),
     dict(id="UI-088", area="ui",
          desc="공정 실패 알림창: 제목 'CH{n} 공정 실패', 본문 '{공정명|(process)}\\n\\n사유: {사유|process failed}\\n\\n확인을 누르면 상태 표시가 Idle로 변경됩니다.'(닫으면 idle)",
          v1="runtime/chamber_runtime.py:2071-2093",
@@ -610,8 +610,8 @@ ITEMS = [
     dict(id="UI-092", area="ui",
          desc="호스트(로봇) 명령 알림창: Critical·OK·비모달 open, 같은 (제목, 본문) 떠 있으면 'HOST' 로그 '(중복 억제) …', 동시 5개 상한 '(팝업 상한 초과) …', 15000 ms 자동 닫힘",
          v1="main.py:1910-1955",
-         v2="v2/ch12/robot_api.py; v2/robot_server/server.py", test="v2/tests/test_portal_events.py::test_error_event_from_robot_ops_and_robot_server; v2/tests/test_robot_server_events.py::test_report_event_shape_for_d09_codes", status="done",
-         note="호스트 알림창 대신 error_event 사건 → 포털 카드·로그(D09)"),
+         v2="v2/ch12/robot_api.py; v2/robot_server/server.py; vanam-process components/ops2/ch12/Ch12Popups.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:popups; v2/tests/test_portal_events.py::test_error_event_from_robot_ops_and_robot_server; v2/tests/test_robot_server_events.py::test_report_event_shape_for_d09_codes", status="done",
+         note="error_event 사건(title·message) → 화면 알림창(15 s 자동 닫힘·중복 억제·5개 상한) + 포털 카드·로그(D09)"),
 
     # ───────────────────────────── 상태·값 표시 ─────────────────────────────
     dict(id="UI-093", area="ui",
@@ -651,18 +651,18 @@ ITEMS = [
          desc="OES 그래프: x 'Wavelength (nm)' 100~1200(100 간격 고정), y 'Intensity' 0~16000(눈금 9, '%d'), 빨간 선 굵기 1. OES_PLOT_MIN_INTERVAL_S(0.5 s) 안 연속 호출은 건너뜀, "
               "유효점 2개 미만이면 생략, x 정렬. 종료 중이면 그리지 않음, 실패는 'OES' 로그 '그래프 업데이트 실패(무시)'",
          v1="controller/graph_controller.py:57-58; controller/graph_controller.py:104-137; controller/graph_controller.py:260-346; runtime/chamber_runtime.py:6491-6515; lib/config_common.py:248",
-         v2="v2/ch12/drivers/oes_link.py; v2/ch12/params/oes.py; vanam-process components/ops2/ch12/Ch12Spectra.tsx", test="v2/tests/test_oes_link.py::test_daemon_start_measure_csv_tail_heartbeat", status="done",
-         note="!! 결정 후보(사용자 확인 필요): OES 스펙트럼은 링크 on_data(x, y)·OES CSV 까지만 — 웹으로 보내지 않아(1초마다 수천 점) 포털에 v1 OES 그래프 없음. 보내려면 장비 쪽 0.5 s 쓰로틀(OES_PLOT_MIN_INTERVAL_S)·솎기 규칙을 정해야 함"),
+         v2="v2/ch12/drivers/oes_spectrum.py; v2/ch12/drivers/oes_link.py; v2/ch12/drivers/oes_tail.py; v2/ch12/system.py; v2/ch12/hub.py; vanam-process components/ops2/ch12/Ch12Spectra.tsx", test="v2/tests/test_ui_web.py::test_clean_same_rules_as_v1_graph; v2/tests/test_ui_web.py::test_throttle_v1_interval_and_time_set_before_filter; v2/tests/test_ui_web.py::test_thin_keeps_peaks_and_cap; v2/tests/test_ui_web.py::test_oes_link_spectrum_events_throttled_thinned_cleared; v2/tests/test_ui_web.py::test_spectrum_goes_to_state_only_and_resets; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:oes-chart", status="done",
+         note="링크가 표본마다 v1 거르기(비유한·x 100~1200 밖 버림, 2점 미만 생략, x 정렬)·OES_PLOT_MIN_INTERVAL_S 쓰로틀(시각은 거르기 전에 — v1)·512점 솎기(구간 256 × 최소·최대 — 화면 폭 약 450~520 px 에 구간 약 2 px, 꼭대기 유지, 약 6 KB) 뒤 이벤트 spectrum → 허브 state.spectra[챔버](사건·기록·uplink 보관함에 넣지 않음 — system.TRANSIENT_KINDS) → 포털 OesChart(v1 축·빨간 선 1). on_data 는 그대로 모두"),
     dict(id="UI-099", area="ui",
          desc="그래프 초기화: 생성 직후·공정 후 리셋·OES/RGA 단계에서 clear/reset(축 범위 기본값으로). 헤드리스면 'Graph' 로그 'reset skipped (headless)' 등",
          v1="controller/graph_controller.py:348-395; runtime/chamber_runtime.py:542-547; runtime/chamber_runtime.py:6466-6489; runtime/chamber_runtime.py:7936-7937",
-         v2="vanam-process components/ops2/ch12/Ch12Spectra.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:rga-chart", status="done",
-         note="RGA 그래프는 마지막 rga data 사건을 그림(사건이 없으면 그리지 않음) — v1 리셋 시점(공정 뒤) 대신 다음 스캔이 덮어씀(결정 후보), OES 는 UI-098"),
+         v2="v2/ch12/hub.py; v2/ch12/drivers/oes_link.py; vanam-process components/ops2/ch12/Ch12Spectra.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:spectra-reset; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:rga-chart; v2/tests/test_ui_web.py::test_spectrum_goes_to_state_only_and_resets", status="done",
+         note="v1 그대로: 공정 시작·끝(graph.reset) — RGA 는 그 챔버 run_start·run_end 뒤 그림 없음, OES 는 허브가 state.spectra 비움; RGA 스캔 시작('[RGA] 스캔 시작' 상태 사건) 뒤 RGA 없음(clear_rga_plot); OES 측정 시작 때 링크가 clear(clear_oes_plot). 지운 뒤 빈 축(OES)"),
     dict(id="UI-100", area="ui",
          desc="그래프 모양: 축 글꼴 9 pt(제목·눈금 같음), 범례 숨김, 차트 여백 6, 플롯 영역 여백 좌 75·위 30·우 28·아래 60, 축선 검정·격자 회색, 컨테이너 최소 120×100",
          v1="controller/graph_controller.py:21-48; controller/graph_controller.py:101; controller/graph_controller.py:136; controller/graph_controller.py:409-445",
-         v2="vanam-process components/ops2/ch12/Ch12Spectra.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:rga-chart", status="done",
-         note="축 글꼴·여백·격자는 화면 그리기(SVG) — OES 는 UI-098"),
+         v2="vanam-process components/ops2/ch12/Ch12Spectra.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:rga-chart; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:oes-chart", status="done",
+         note="축 제목·눈금(같은 크기 9)·축선 검정·격자 회색·범례 없음은 SVG 로 같게. 글꼴 pt·플롯 여백 px 은 화면 그리기 몫"),
 
     # ───────────────────────────── CH2 히터 패널 ─────────────────────────────
     dict(id="UI-101", area="ui",
@@ -690,8 +690,8 @@ ITEMS = [
               "이상 '과온 트립'/'센서 이상'/'워치독 트립'/'이상 발생'(빨강) > '인터락 — {빠진 조건} 꺼짐'(주황) > 'PLC 응답 없음 · N초 전 값'(빨강) > '운전 중 · 램프'/'운전 중 · 유지'/"
               "'운전 중'(초록) > '정지'",
          v1="ui/heater_panel.py:166-174; ui/heater_panel.py:268-309",
-         v2="v2/ch12/heater_engine.py; vanam-process components/ops2/ch12/Ch12Aux.tsx", test="v2/tests/test_heater_process.py::test_runtime_status_lines_and_samples; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:heater-panel", status="done",
-         note="결정 후보: v1 패널 상태 문구(우선순위 글)는 화면에 그대로 없고 state.heater 값 표로"),
+         v2="v2/ch12/heater_panel_text.py; v2/ch12/assembly.py; vanam-process components/ops2/ch12/Ch12Aux.tsx", test="v2/tests/test_ui_web.py::test_heater_panel_texts_v1_priority; v2/tests/test_ui_web.py::test_heater_web_state_has_panel; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:heater-text; v2/tests/test_heater_process.py::test_runtime_status_lines_and_samples", status="done",
+         note="장비 heater_panel_text(v1 _fault_text·_state_line·_status_text·배지·소유자 글 그대로) → state.heater.panel → 화면 HeaterStatus(배지·소유·PV/SV·Δ·상태 줄·MV·상태 문구 색·램프 8개). 값 표는 상세에서만"),
     dict(id="UI-105", area="ui",
          desc="히터 버튼 활성: ON/OFF·적용은 stale 아님·소유자가 공정 아님·명령 진행 중 아님일 때만(공정 소유면 툴팁 '공정이 히터를 제어 중'). 리셋은 이상일 때만 보이고 "
               "stale·진행 중이면 비활성. ON/OFF 글자·눌림은 RUN 상태만 따름(클릭 토글은 되돌림)",
@@ -776,65 +776,65 @@ ITEMS = [
          desc="'Factor 설정': 창이 이미 떠 있으면 앞으로, 아니면 Factor 창 1개(파일=factor_file, ch, 저장 후 reload_factors, 재료 목록 파일, 서비스, 공정 중 확인 함수) 열기. 실패 "
               "'Factor 설정'/'설정창을 열 수 없습니다: …'. 앱 종료 때 패널 태스크 취소·창 닫기, 서비스 shutdown(2 s/대기 4 s)",
          v1="ui/thickness_panel.py:359-384; main.py:1423-1433",
-         v2="v2/ch12/core.py; v2/ch12/thickness.py; v2/ch12/commands.py", test="v2/tests/test_thickness_ops.py::test_factor_and_material_save_reload; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:bundle-kinds", status="done",
-         note="결정 후보: Factor 창 대신 명령(THICKNESS_FACTOR_SAVE·_WRITE·_MATERIALS_SAVE·_RELOAD) — 포털 전용 편집 화면은 아직 없음(명령 표에만)"),
+         v2="v2/ch12/core.py; v2/ch12/commands.py; v2/ch12/hub.py; v2/ch12/thickness_ops.py; v2/ch12/thickness_factors.py; vanam-process components/ops2/ch12/Ch12Thickness.tsx", test="v2/tests/test_ui_web.py::test_thickness_window_value_and_event; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:thickness-factor; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:thickness-factor-check; v2/tests/test_thickness_files.py::test_factor_window_dropdown_values_and_save", status="done",
+         note="패널 [Factor 설정] → 포털·노트북 화면 Ch12Thickness — 값은 THICKNESS_WINDOW(결과 value·사건 thickness/window, 창을 열 때마다 파일 읽기) → Factor 창(하나만). 열기 실패 'Factor 설정'/'설정창을 열 수 없습니다: …'"),
 
     # ───────────────────────────── Factor 창·재료 창 ─────────────────────────────
     dict(id="UI-119", area="ui",
          desc="Factor 창: 제목 'CH{n} Thickness Monitor — Factor 설정', 모달 500×440. tooling 표 3×3(행 Up/Mid/Down × 열 G1/G2/G3, 높이 126, 값 :g, 빈칸=미설정), "
               "안내 'Tooling (%, 10.0~399) — chuck 위치 × 건, 빈 칸 = 미설정'",
          v1="ui/thickness_factor_dialog.py:27-69; device/thickness_monitor.py:53; lib/thickness_factors.py:24-25",
-         v2="v2/ch12/thickness_factors.py", test="v2/tests/test_thickness_files.py::test_factor_window_dropdown_values_and_save; v2/tests/test_thickness_files.py::test_check_tooling_same_as_v1", status="done",
-         note="창 내용(표·안내 문구)은 thickness_factors.factor_window — UI-118 결정 후보"),
+         v2="v2/ch12/core.py; v2/ch12/commands.py; v2/ch12/hub.py; v2/ch12/thickness_ops.py; v2/ch12/thickness_factors.py; vanam-process components/ops2/ch12/Ch12Thickness.tsx", test="v2/tests/test_ui_web.py::test_thickness_window_value_and_event; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:thickness-factor; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:thickness-factor-check; v2/tests/test_thickness_files.py::test_factor_window_dropdown_values_and_save", status="done",
+         note="포털·노트북 화면 Ch12Thickness — 값은 THICKNESS_WINDOW(결과 value·사건 thickness/window, 창을 열 때마다 파일 읽기): 제목·tooling 3×3(Up/Mid/Down × G1~G3)·안내 문구 장비 factor_window 그대로"),
     dict(id="UI-120", area="ui",
          desc="건별 재료 드롭다운(G1~G3): 편집 가능(삽입 안 함), 맨 위 '(선택 안 함)', 항목 '기호 — 이름'(label), 입력 찾기(대소문자 무시·포함). 옆에 'ρ {density:g} · Z {z:.3f}'"
               "(툴팁 note), 목록에 없으면 '목록에 없음', 미선택 '—'. 목록에 없는 저장값은 입력칸에 그대로",
          v1="ui/thickness_factor_dialog.py:71-91; ui/thickness_factor_dialog.py:146-198",
-         v2="v2/ch12/thickness_factors.py", test="v2/tests/test_thickness_files.py::test_factor_window_dropdown_values_and_save", status="done",
-         note="UI-118 결정 후보"),
+         v2="v2/ch12/core.py; v2/ch12/commands.py; v2/ch12/hub.py; v2/ch12/thickness_ops.py; v2/ch12/thickness_factors.py; vanam-process components/ops2/ch12/Ch12Thickness.tsx", test="v2/tests/test_ui_web.py::test_thickness_window_value_and_event; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:thickness-factor; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:thickness-factor-check; v2/tests/test_thickness_files.py::test_factor_window_dropdown_values_and_save", status="done",
+         note="포털·노트북 화면 Ch12Thickness — 값은 THICKNESS_WINDOW(결과 value·사건 thickness/window, 창을 열 때마다 파일 읽기): 건별 재료 입력(편집 가능 — 목록 '(선택 안 함)'·'기호 — 이름', 브라우저 입력 찾기)·옆 'ρ · Z'/'목록에 없음'/'—'(valueText — 장비 value_text 와 같은 규칙)"),
     dict(id="UI-121", area="ui",
          desc="Factor 창 안내·경고: '파일: … \\n재료 목록: …\\n저장하면 다음 공정 시작 때 적용됩니다(진행 중인 공정에는 영향 없음).', 읽기 경고(+재료 목록 경고+'G 재료 'x' 가 "
               "재료 목록에 없음 — 다시 고르십시오') 처음 8건과 '… 외 N건'",
          v1="ui/thickness_factor_dialog.py:93-106; ui/thickness_material_dialog.py:22",
-         v2="v2/ch12/thickness_factors.py", test="v2/tests/test_thickness_files.py::test_factor_window_warns_material_not_in_list", status="done",
-         note="UI-118 결정 후보"),
+         v2="v2/ch12/core.py; v2/ch12/commands.py; v2/ch12/hub.py; v2/ch12/thickness_ops.py; v2/ch12/thickness_factors.py; vanam-process components/ops2/ch12/Ch12Thickness.tsx", test="v2/tests/test_ui_web.py::test_thickness_window_value_and_event; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:thickness-factor; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:thickness-factor-check; v2/tests/test_thickness_files.py::test_factor_window_dropdown_values_and_save", status="done",
+         note="포털·노트북 화면 Ch12Thickness — 값은 THICKNESS_WINDOW(결과 value·사건 thickness/window, 창을 열 때마다 파일 읽기): 안내(파일·재료 목록·다음 공정 적용)·읽기 경고(처음 8건+'… 외 N건') 장비 글 그대로"),
     dict(id="UI-122", area="ui",
          desc="Factor '저장': tooling 칸마다 10.0~399 검사('… 숫자가 아님'/'… 범위(10~399%) 밖', 틀린 칸 빨강 #ffcdd2), 재료는 목록에 있어야 함(틀린 콤보 빨강). 오류면 경고 "
               "'Factor 설정'/'고칠 칸이 있어 저장하지 않았습니다:\\n\\n…', 저장(원자적 교체) 실패 '저장 실패(파일은 바뀌지 않음):\\n…', 성공 → 서비스 다시 읽기 → 창 닫음. "
               "저장은 장비에 쓰지 않음(공정 시작 때 씀). '취소' = 닫기",
          v1="ui/thickness_factor_dialog.py:306-344; ui/thickness_factor_dialog.py:137-144; lib/thickness_factors.py:56-68",
-         v2="v2/ch12/core.py; v2/ch12/thickness.py; v2/ch12/thickness_factors.py", test="v2/tests/test_thickness_files.py::test_factor_window_dropdown_values_and_save; v2/tests/test_thickness_files.py::test_atomic_save_failure_keeps_original; v2/tests/test_thickness_ops.py::test_factor_and_material_save_reload", status="done",
-         note="THICKNESS_FACTOR_SAVE"),
+         v2="v2/ch12/core.py; v2/ch12/commands.py; v2/ch12/hub.py; v2/ch12/thickness_ops.py; v2/ch12/thickness_factors.py; vanam-process components/ops2/ch12/Ch12Thickness.tsx", test="v2/tests/test_ui_web.py::test_thickness_window_value_and_event; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:thickness-factor; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:thickness-factor-check; v2/tests/test_thickness_files.py::test_factor_window_dropdown_values_and_save", status="done",
+         note="화면 검사(factorCollect — 장비 collect 와 같은 문구, 틀린 칸 빨강 #ffcdd2) → THICKNESS_FACTOR_SAVE(장비가 다시 검사·원자적 저장·다시 읽기) → 창 닫음. 장비 거부 문구는 창 안 경고로"),
     dict(id="UI-123", area="ui",
          desc="Factor 창 '장비에 쓰기'(서비스 있을 때만 보임): chuck·건을 골라 그 tooling 칸 + 그 건 재료 density·Z 를 지금 창 값(저장 무관)으로 set_material(why='Factor 창 수동'), "
               "되읽어 확인. 칸 오류 '고칠 칸이 있어 장비에 쓰지 않았습니다:\\n\\n…', 차단 사유(공정 중 포함) '{사유} — 장비에 쓰지 않았습니다.', 실패 '장비에 쓰지 못했습니다(되읽기 확인 포함): …', "
               "성공 '장비에 적용됨 — {재료} · density {d:g} · Z {z:.3f} · tooling {t:g}%'(정보). 진행 중 버튼 잠금, 창 닫으면 취소. 안내 문구 WRITE_NOTE",
          v1="ui/thickness_factor_dialog.py:30; ui/thickness_factor_dialog.py:108-131; ui/thickness_factor_dialog.py:221-304",
-         v2="v2/ch12/core.py; v2/ch12/thickness_ops.py", test="v2/tests/test_thickness_ops.py::test_factor_write_uses_window_values_without_saving; v2/tests/test_thickness_files.py::test_write_values_rules", status="done",
-         note="THICKNESS_FACTOR_WRITE"),
+         v2="v2/ch12/core.py; v2/ch12/commands.py; v2/ch12/hub.py; v2/ch12/thickness_ops.py; v2/ch12/thickness_factors.py; vanam-process components/ops2/ch12/Ch12Thickness.tsx", test="v2/tests/test_ui_web.py::test_thickness_window_value_and_event; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:thickness-factor; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:thickness-factor-check; v2/tests/test_thickness_files.py::test_factor_window_dropdown_values_and_save; v2/tests/test_thickness_ops.py::test_factor_write_uses_window_values_without_saving", status="done",
+         note="chuck·건 고르기 + [장비에 쓰기] → THICKNESS_FACTOR_WRITE(창 값). 결과 문구(성공 '장비에 적용됨 — …' 포함)는 사건 thickness/panel_result → 창 안 알림. 진행 중 버튼 잠금"),
     dict(id="UI-124", area="ui",
          desc="Factor 창 '재료 목록 편집' → 재료 창(지금 고른 재료 이름을 '사용 중'으로 넘김). 재료 저장 뒤 드롭다운·표시값 다시 읽기(고른 이름 유지) + 서비스 다시 읽기",
          v1="ui/thickness_factor_dialog.py:200-219",
-         v2="v2/ch12/thickness.py; v2/ch12/thickness_materials.py", test="v2/tests/test_thickness_ops.py::test_factor_and_material_save_reload", status="done",
-         note="UI-118 결정 후보"),
+         v2="v2/ch12/core.py; v2/ch12/thickness_ops.py; v2/ch12/thickness_materials.py; vanam-process components/ops2/ch12/Ch12Thickness.tsx", test="v2/tests/test_ui_web.py::test_thickness_window_value_and_event; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:thickness-materials; v2/tests/test_thickness_files.py::test_material_window_validate_delete_confirm_and_save", status="done",
+         note="[재료 목록 편집] → 재료 창(지금 고른 재료 = 사용 중). 저장 뒤 창 값을 다시 읽고 고른 이름 유지(v1 reload_materials), 장비도 다시 읽음"),
     dict(id="UI-125", area="ui",
          desc="재료 창: 제목 'Thickness Monitor — 재료 목록', 모달 640×560, 열 '이름'·'기호'·'density (g/cm3)'·'Z-factor'·'note'(열 0·4 폭 170), 안내 '재료 목록 — 이름(재료를 구별하는 키, "
               "중복 불가)·기호·density 0.500~99.99·Z-factor 0.100~9.999', 읽기 경고 처음 6건, '파일: …' 와 다음 공정 적용 안내",
          v1="ui/thickness_material_dialog.py:20-61",
-         v2="v2/ch12/thickness_materials.py", test="v2/tests/test_thickness_files.py::test_material_window_validate_delete_confirm_and_save; v2/tests/test_thickness_files.py::test_load_materials_same_as_v1", status="done",
-         note="UI-118 결정 후보"),
+         v2="v2/ch12/core.py; v2/ch12/thickness_ops.py; v2/ch12/thickness_materials.py; vanam-process components/ops2/ch12/Ch12Thickness.tsx", test="v2/tests/test_ui_web.py::test_thickness_window_value_and_event; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:thickness-materials; v2/tests/test_thickness_files.py::test_material_window_validate_delete_confirm_and_save", status="done",
+         note="포털·노트북 화면 Ch12Thickness — 값은 THICKNESS_WINDOW(결과 value·사건 thickness/window, 창을 열 때마다 파일 읽기): 제목·열 5개·안내·읽기 경고(처음 6건)·파일/다음 공정 안내 장비 materials_window 그대로"),
     dict(id="UI-126", area="ui",
          desc="재료 창 '행 추가'(새 행 이름 칸 편집 시작)·'행 삭제'(선택 행들, 없으면 현재 행). Factor 에서 쓰는 재료를 지우면 확인창 '재료 삭제'/'Factor 설정에서 쓰는 재료입니다: …\\n"
               "지우면 그 건은 '재료 목록에 없음'이 되어 Thickness 모드 시작이 거부됩니다(E845).\\n지울까요?'(기본 No)",
          v1="ui/thickness_material_dialog.py:92-115",
-         v2="v2/ch12/thickness_materials.py", test="v2/tests/test_thickness_files.py::test_material_window_validate_delete_confirm_and_save", status="done",
-         note="삭제 확인은 저장 때(D62)"),
+         v2="v2/ch12/core.py; v2/ch12/thickness_ops.py; v2/ch12/thickness_materials.py; vanam-process components/ops2/ch12/Ch12Thickness.tsx", test="v2/tests/test_ui_web.py::test_thickness_window_value_and_event; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:thickness-materials; v2/tests/test_thickness_files.py::test_material_window_validate_delete_confirm_and_save", status="done",
+         note="[행 추가](새 행 이름 칸으로)·[행 삭제](고른 행) — Factor 에서 쓰는 재료면 v1 확인 문구 '재료 삭제'(기본 아니오, 삭제 때 — v1 그대로). 저장은 confirmed"),
     dict(id="UI-127", area="ui",
          desc="재료 창 '저장': 완전히 빈 행 무시, 칸마다 이름 빈칸·density 0.500~99.99·Z 0.100~9.999 검사(틀린 칸 빨강), 이름 중복(대소문자 무시) '이름 중복(n행)'. 오류 처음 15건 "
               "경고 '재료 목록'/'고칠 칸이 있어 저장하지 않았습니다', 원자적 저장 실패 '저장 실패(파일은 바뀌지 않음)', 성공 → on_saved → 닫음",
          v1="ui/thickness_material_dialog.py:117-163; device/thickness_monitor.py:51-52",
-         v2="v2/ch12/core.py; v2/ch12/thickness_materials.py", test="v2/tests/test_thickness_files.py::test_material_window_validate_delete_confirm_and_save; v2/tests/test_thickness_files.py::test_save_rejects_duplicates_and_is_atomic", status="done",
-         note="THICKNESS_MATERIALS_SAVE"),
+         v2="v2/ch12/core.py; v2/ch12/thickness_ops.py; v2/ch12/thickness_materials.py; vanam-process components/ops2/ch12/Ch12Thickness.tsx", test="v2/tests/test_ui_web.py::test_thickness_window_value_and_event; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:thickness-materials; v2/tests/test_thickness_files.py::test_material_window_validate_delete_confirm_and_save", status="done",
+         note="화면 검사(materialsCollect — 장비 collect_rows 와 같은 문구·빨간 칸, 처음 15건) → THICKNESS_MATERIALS_SAVE(장비 다시 검사·원자적 저장) → 닫고 Factor 창 다시 읽기"),
 
     # ───────────────────────────── 서버 페이지(메인) ─────────────────────────────
     dict(id="UI-128", area="ui",

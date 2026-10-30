@@ -207,6 +207,7 @@ class PulsePort:
         self.sources: Dict[Tuple[str, str], Any] = {}   # (chamber, kind) → snapshot_bus.Source
         self.owner: Optional[Tuple[str, str]] = None    # (chamber, kind)
         self.worker: Optional[Worker] = None
+        self._retired: list = []                        # 놓았지만 스레드가 아직 끝나지 않았을 수 있는 Worker(settled)
         self._lock = threading.RLock()
 
     def add(self, kind: str, chamber: str, driver, source=None) -> None:
@@ -251,6 +252,8 @@ class PulsePort:
                 return False
             key, w = self.owner, self.worker
             self.owner, self.worker = None, None
+            if w is not None:
+                self._retired.append(w)
             src = self.sources.get(key)
             if src is not None:
                 src.worker = None
@@ -263,6 +266,16 @@ class PulsePort:
             else:
                 w.stop()
         return True
+
+
+    def settled(self, kind: str, chamber: str) -> bool:
+        """재연결이 끝났나 — v1 set_endpoint_reconnect(옛 세션 감시 멈춤·끊기 → 새 워치독·명령 워커 시작, dc_pulse.py:628-637·
+        rf_pulse.py:1977-1985) 대응: 이 포트의 옛 Worker 가 모두 멈췄고(포트를 놓음) 지금 점유한 (chamber, kind) 의 Worker 가 돈다.
+        연결 성립은 따로(공정 시작 전 연결 확인 — v1 _preflight_connect)."""
+        with self._lock:
+            self._retired = [w for w in self._retired if not w.stopped]
+            w = self.worker
+            return not self._retired and self.owner == (chamber, kind) and w is not None and w.running
 
 
 class PulsePorts:
@@ -298,10 +311,13 @@ class PulsePorts:
     def owner(self, kind: str, chamber: str) -> Optional[Tuple[str, str]]:
         return self.port_of(kind, chamber).owner
 
+    def settled(self, kind: str, chamber: str) -> bool:
+        return self.port_of(kind, chamber).settled(kind, chamber)
+
 
 def tcp_transport_factory(clock, cfg: dict):
     """실제 MOXA NPort 전송(prod·bench). DC Pulse 는 SO_KEEPALIVE = DCP_TCP_KEEPALIVE(v1 기본 false → 0,
-    dc_pulse.py:2161-2169), RF Pulse 는 설정과 무관하게 늘 1(v1 rf_pulse.py:1057-1063). 연결 제한은 종류별 v1 값."""
+    dc_pulse.py:2161-2169), RF Pulse 는 설정과 무관하게 늘 1(v1 rf_pulse.py:1057-1063). 연결 제한·쓰기 한도(drain)는 종류별 v1 값."""
     import socket
 
     from v2.common.transport import TcpSettings, TcpTransport
@@ -310,6 +326,10 @@ def tcp_transport_factory(clock, cfg: dict):
         host, port = endpoint(cfg, chamber, kind)
         keep = 1 if kind == "rfpulse" else (1 if cfg.get("DCP_TCP_KEEPALIVE", False) else 0)
         tmo = float(cfg.get("RFPULSE_CONNECT_TIMEOUT_S", 1.5) if kind == "rfpulse" else cfg.get("DCP_CONNECT_TIMEOUT_S", 3.0))
+        # 쓰기 한도(v1 writer.drain 한도): RF Pulse max(0.1, RFPULSE_DRAIN_TIMEOUT_S)(rf_pulse.py:1189-1190),
+        # DC Pulse max(0.0, DCP_DRAIN_TIMEOUT_S)(dc_pulse.py:496·2274)
+        wto = (max(0.1, float(cfg.get("RFPULSE_DRAIN_TIMEOUT_S", 2.0))) if kind == "rfpulse"
+               else max(0.0, float(cfg.get("DCP_DRAIN_TIMEOUT_S", 1.0))))
 
         def sock_factory(s: TcpSettings):
             sk = socket.create_connection((s.host, s.port), timeout=s.connect_timeout_s)
@@ -317,7 +337,7 @@ def tcp_transport_factory(clock, cfg: dict):
             sk.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
             sk.setblocking(False)
             return sk
-        return TcpTransport(clock, TcpSettings(host, int(port), tmo), socket_factory=sock_factory)
+        return TcpTransport(clock, TcpSettings(host, int(port), tmo, write_timeout_s=wto), socket_factory=sock_factory)
     return make
 
 

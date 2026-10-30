@@ -26,6 +26,8 @@ PARAMS: tuple = (
     inst("CH1_IG_TCP_PORT", "ig", "CH1 IG 포트", I, 4001, lo=1, hi=65535, src=f"{_S}:493;lib/config_ch1.py:13;main.py:441"),
     inst("CH2_IG_TCP_PORT", "ig", "CH2 IG 포트", I, 4002, lo=1, hi=65535, src=f"{_S}:560;lib/config_ch2.py:13;main.py:447"),
     inst("IG_CONNECT_TIMEOUT_S", "ig", "IG 연결 제한", F, 3.0, lo=0.5, hi=30.0, unit="s", src=f"{_S}:72;{_C}:152;device/ig.py:521-524", note=_W),
+    inst("IG_DRAIN_TIMEOUT_S", "ig", "IG 쓰기(drain) 한도", F, 2.0, lo=0.0, hi=30.0, unit="s",
+         src=f"{_S}:82;{_C}:165;device/ig.py:144;device/ig.py:714", desc="보낼 바이트가 모두 소켓 버퍼로 들어갈 때까지의 한도(v1 writer.drain 한도) — 넘으면 끊고 재연결", note=_W),
     inst("IG_RECONNECT_BACKOFF_START_MS", "ig", "IG 재연결 첫 간격", I, 1000, lo=100, hi=60000, unit="ms",
          src=f"{_S}:77;{_C}:158;device/ig.py:509", note=_W),
     inst("IG_RECONNECT_BACKOFF_MAX_MS", "ig", "IG 재연결 최대 간격", I, 20000, lo=1000, hi=600000, unit="ms",
@@ -54,7 +56,6 @@ DROPPED: tuple = (
     Dropped("common.IG_INACTIVITY_REOPEN_S", "v1 값 0(끔) — 1초 읽기가 늘 통신", f"{_S}:31;{_C}:60;device/ig.py:1374-1386"),
     Dropped("common.IG_TCP_KEEPALIVE", "v2 TcpTransport 가 SO_KEEPALIVE 를 늘 켠다(v1 False → 0) — 사용자 확인 필요 후보",
             f"{_S}:40;{_C}:67;device/ig.py:533-541"),
-    Dropped("common.IG_DRAIN_TIMEOUT_S", "v2 TcpTransport 는 sendall(쓰기 오류는 연결 끊김)", f"{_S}:82;{_C}:165"),
     Dropped("common.IG_WATCHDOG_INTERVAL_MS", "v2 worker 가 끊김 즉시 백오프 재연결(감시 주기 없음)", f"{_S}:76;{_C}:157;device/ig.py:513"),
     Dropped("(code).IG_TX_EOL", "코드 상수 '\\r' — 드라이버에 고정", f"{_C}:149"),
 )

@@ -481,9 +481,8 @@ class Ch12Core:
             box: list = []
 
             def done(d):
-                box.append(d)
-                if not d.get("ok"):
-                    self._emit("thickness", "panel_result", str(d.get("text") or ""), "warn")
+                box.append(d)                   # 성공 문구도 사건으로(v1 정보 알림 '장비에 적용됨 — …' — 화면이 띄운다)
+                self._emit("thickness", "panel_result", str(d.get("text") or ""), "info" if d.get("ok") else "warn")
             t.factor_write(str(a["chuck"]), str(a["gun"]), a["tooling"], a["material"], bool(e is not None and e.busy),
                            on_done=done)
             if box and not box[0].get("ok"):

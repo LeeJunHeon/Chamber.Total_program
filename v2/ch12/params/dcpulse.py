@@ -37,6 +37,8 @@ PARAMS: tuple = (
     inst("CH2_DCPULSE_TCP_PORT", _G, "CH2 DC Pulse TCP 포트", I, 4005, 1, 65535, safety=H, src="config/settings.json:567",
          desc="MOXA Port 5 — RF Pulse 와 케이블을 바꿔 씀(Parity None + Null Modem)"),
     inst("DCP_CONNECT_TIMEOUT_S", _G, "연결 제한", F, 3.0, 0.5, 30.0, unit="s", src=f"{_CC}:380 · device/dc_pulse.py:484"),
+    inst("DCP_DRAIN_TIMEOUT_S", _G, "쓰기(drain) 한도", F, 1.0, 0.0, 30.0, unit="s",
+         src=f"{_CC}:392 · device/dc_pulse.py:496 · device/dc_pulse.py:2274", desc="보낼 바이트가 모두 소켓 버퍼로 들어갈 때까지의 한도(v1 writer.drain 한도) — 넘으면 끊고 재연결(v1 max(0, 값))"),
     inst("DCP_TCP_KEEPALIVE", _G, "SO_KEEPALIVE", B, False, src=f"{_CC}:70 · device/dc_pulse.py:2161-2169"),
     p("DCP_GAP_MS", _G, "명령 간격", "ms", I, 150, 0, 5000, safety=H, src=f"{_CC}:383",
       desc="보낸 시각 기준 최소 간격(매뉴얼 권장 100 ms 이상)"),
@@ -92,6 +94,5 @@ DROPPED: tuple = (
     Dropped("common.DCP_WRITE_WORKER_RETRIES", "v1 값 0(쓰기는 1회 전송 — 재시도는 DCP_RECOVER_MAX_ATTEMPTS) — v2 는 0 고정",
             "device/dc_pulse.py:478"),
     Dropped("common.DCP_WATCHDOG_INTERVAL_MS", "v1 워치독 루프의 연결 확인 주기 — v2 는 worker 가 끊김을 즉시 안다", "device/dc_pulse.py:2144"),
-    Dropped("common.DCP_DRAIN_TIMEOUT_S", "asyncio writer.drain 한도 — v2 TcpTransport 는 sendall", "device/dc_pulse.py:2269"),
     Dropped("common.DCP_INACTIVITY_REOPEN_S", "v1 값 0(무통신 재연결 끔) — v2 도 하지 않음", "device/dc_pulse.py:3164-3170"),
 )
