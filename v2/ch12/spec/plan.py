@@ -190,8 +190,8 @@ MODULES = {
 
 # 진행표 — (단계, 상태 todo/doing/done, 마지막 커밋 요약, 다음 할 일)
 PROGRESS = [
-    ("0", "doing", "0-1: 지시 원문·기준 커밋·v2/common 복사", "inventory.py 전수 목록·spec 표"),
-    ("1", "todo", "", "전송(Modbus TCP·NPort)·드라이버·시뮬레이터·명령 바이트 시험"),
+    ("0", "doing", "0-13: 전수 목록 2,306개(영역 13)·결정 99·차이 4", "빠진 항목 찾기 3개 결과 반영·spec 표(장비 사실·안전 규칙·명령·블록)·test_inventory_complete"),
+    ("1", "doing", "1-1: 공용 챔버 모델", "드라이버 5묶음(PLC·DC·RF / MFC·IG / DCP·RFP / TSP·STM·카메라 / OES·RGA) 서브에이전트 진행 중 → 통합·cmd_guard"),
     ("2", "todo", "", "1초 스냅샷·기록·v1 기록 출력"),
     ("3", "todo", "", "공정 엔진·블록·템플릿 골든·자유 제어·동시 운전"),
     ("4", "todo", "", "안전 규칙·STOP/ALL STOP·시작 정리"),
