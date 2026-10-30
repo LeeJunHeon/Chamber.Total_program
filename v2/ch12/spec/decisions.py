@@ -391,4 +391,8 @@ DECISIONS = [
     dict(id='D57', title='PLC 쓰기 허용 목록', decision='코일 표·DCV_WRITE·allow_writes 밖은 COMMAND_BLOCKED(v1 은 P 미러만 E403).', reason="1단계 PLC·DC·RF 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/plc*.py; dc.py; rf.py"),
     dict(id='D58', title='RF 정지 램프 간격', decision="v1 '앞 쓰기 뒤 1 s' 그대로, 1초 읽기 진행 중이면 최대 약 0.6 s 늦어질 수 있음. blind·Ref.p 시간 판정은 tick 시각.", reason="1단계 PLC·DC·RF 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/plc*.py; dc.py; rf.py"),
     dict(id='D59', title='PLC 링크 상태', decision='v1 모듈 전역 대신 드라이버 인스턴스. 억제 건수 = 링크 down 중 실패한 E401·E402 요청 수.', reason="1단계 PLC·DC·RF 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/plc*.py; dc.py; rf.py"),
+    dict(id='D60', title='두께 영점 확인 첫 값', decision='v2 드라이버가 명령 직후 바로 한 번 더 읽어 v1(약 0.5 s)보다 빨리 옴 — 판정 규칙은 같음.', reason="3단계 두께 판정 작성 중 판단(v1 실행 골든 판정 10·영점 8 시나리오)", confirm=True, where="v2/ch12/thickness*.py"),
+    dict(id='D61', title='두께 마감 시각(시간 대체·상한)', decision='리스너(0.5 s)·엔진 on_row(1 s)·next_deadline() 의 poll — v1 은 마감 시각에 정확히 깸(엔진이 next_deadline 시각에 poll 을 부름).', reason="3단계 두께 판정 작성 중 판단(v1 실행 골든 판정 10·영점 8 시나리오)", confirm=True, where="v2/ch12/thickness*.py"),
+    dict(id='D62', title='재료 삭제 확인 시점', decision='v1 은 [행 삭제] 때, v2 는 저장 때 같은 문구로 확인(화면 대화가 포털로 바뀜).', reason="3단계 두께 판정 작성 중 판단(v1 실행 골든 판정 10·영점 8 시나리오)", confirm=True, where="v2/ch12/thickness*.py"),
+    dict(id='D63', title='두께 이어가기', decision='THICKNESS_WAIT 중에만. 확인: 응답·XTAL·리셋 플래그 0·최근 값·장비 두께가 저널 값 − ZERO_CONFIRM_NM 아래로 줄지 않음. 영점 단계는 이어가지 않음.', reason="3단계 두께 판정 작성 중 판단(v1 실행 골든 판정 10·영점 8 시나리오)", confirm=True, where="v2/ch12/thickness*.py"),
 ]

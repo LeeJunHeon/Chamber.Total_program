@@ -15,7 +15,20 @@ from v2.ch12.drivers.heater import decode_block, float_to_words
 from v2.ch12.heater_profile import HeaterCfg
 from v2.ch12.sim.heater_rig import HeaterRig
 
-FAST = dict(CH2_HEATER_RAMP_RATE_C_PER_MIN=60.0)
+FAST = dict(CH2_HEATER_RAMP_RATE_C_PER_MIN=60.0, CH2_HEATER_KP=20.0)
+
+
+def _fast(r):
+    """시험 시간을 줄이는 열 모델(가정값 — 시정수 200 s, 이득 700 °C: MV 1200 정상상태 ≈ 492 °C)."""
+    r.sim.heater.tau = 200.0
+    r.sim.heater.gain = 700.0
+    return r
+
+
+def _quiet(r):
+    """1초 읽기가 끝난 시각(정각 + 0.95 s)으로 — 시험 코드가 장비 메모리를 바꿀 때 읽기 도중에 끼지 않게."""
+    import math
+    r.p.until(math.floor(r.c.monotonic()) + 0.95)
 
 
 def _fc6(pdus):
@@ -93,16 +106,16 @@ def rig():
 
 @pytest.mark.slow
 def test_stack_push_bytes_ramp_and_rows(rig):
-    r = rig(cfg=dict(FAST, CH2_HEATER_KP=2.5))
+    r = _fast(rig(cfg=FAST))
     r.after(5)
     w = _fc6(r.p.pdus())
-    # 래더 적용값(D146~D149)이 이미 Ti 300 이라 Ti 는 다시 쓰지 않음, Kp 2.5 는 상위 워드 먼저(heater_service.py:979-996)
+    # 래더 적용값(D146~D149)이 이미 Ti 300 이라 Ti 는 다시 쓰지 않음, Kp 20 은 상위 워드 먼저(heater_service.py:979-996)
     assert [a for a, _v in w[:10]] == [113, 126, 118, 120, 121, 127, 128, 143, 142, 160]
     vals = dict(w[:10])
-    kp_lo, kp_hi = float_to_words(2.5)
+    kp_lo, kp_hi = float_to_words(20.0)
     assert (vals[113], vals[126], vals[118], vals[120], vals[121], vals[127], vals[128]) == (9000, 9500, 1200, 10, 100, 0, 10)
     assert (vals[143], vals[142]) == (kp_hi, kp_lo) and vals[160] == r.eng._marker and r.sim.regs[160] == r.eng._marker
-    assert r.eng.status()["kp_act"] == 2.5
+    assert r.eng.status()["kp_act"] == 20.0
     assert r.eng.is_ready() == (True, "")
     t_on = r.c.monotonic()
     ok, why = r.call(r.eng.turn_on, 150.0)
@@ -116,7 +129,7 @@ def test_stack_push_bytes_ramp_and_rows(rig):
     sv0 = [v for a, v in _fc6([p for _t, p in after]) if a == 112][0]
     assert abs(sv0 / 10.0 - 25.0) <= 0.2                                  # RUN 전에 SV = 현재 PV
     assert r.wait(lambda: r.eng.status()["pv"] is not None and r.eng.status()["pv"] >= 148.0, 1200)
-    r.after(300)
+    r.after(200)
     st = r.eng.status()
     assert st["run"] and abs(st["pv"] - 150.0) <= 2.0 and not r.eng.profiler.is_active()
     row = r.rows[-1]
@@ -129,7 +142,7 @@ def test_stack_push_bytes_ramp_and_rows(rig):
 
 @pytest.mark.slow
 def test_stack_watchdog_heartbeat_and_ladder_wd_err(rig):
-    r = rig(cfg=FAST)
+    r = _fast(rig(cfg=FAST))
     r.after(5)
     assert r.call(r.eng.turn_on, 120.0)[0]
     t0 = r.c.monotonic()
@@ -149,10 +162,12 @@ def test_stack_watchdog_heartbeat_and_ladder_wd_err(rig):
 
 @pytest.mark.slow
 def test_stack_plc_restart_repush_marker(rig):
-    r = rig(cfg=FAST)
+    r = _fast(rig(cfg=FAST))
     r.after(5)
     assert r.call(r.eng.turn_on, 120.0)[0]
     r.after(60)
+    _quiet(r)
+    assert r.eng.status()["run"]
     m0 = r.eng._marker
     t = r.sim.heater.T
     r.sim.restart()
@@ -182,12 +197,13 @@ def test_stack_noresp_a_turns_off(rig):
 
 @pytest.mark.slow
 def test_stack_loss_b_turns_off_and_process_e832(rig):
-    r = rig(cfg=FAST)
+    r = _fast(rig(cfg=FAST))
     r.after(5)
-    r.eng.heater_set(120.0, None)
+    r.eng.heater_set(150.0, None)
     assert r.wait(lambda: any(k == "set_ok" for k, *_ in r.eng.process_results), 10)
-    assert r.wait(lambda: r.eng.status()["pv"] is not None and r.eng.status()["pv"] >= 119.0, 1200)
-    r.after(120)
+    assert r.wait(lambda: r.eng.sat.arrived, 1500)
+    r.after(60)
+    _quiet(r)
     r.sim.heater.gain = 0.0                                                    # 차단기·배선 끊김
     assert r.wait(lambda: bool(r.cards("출력 끊김")), 900)
     r.after(3)
@@ -198,15 +214,18 @@ def test_stack_loss_b_turns_off_and_process_e832(rig):
 
 @pytest.mark.slow
 def test_stack_saturation_clamp_after_arrival(rig):
-    r = rig(cfg=FAST)
+    r = _fast(rig(cfg=dict(FAST, CH2_HEATER_MV_LIMIT=600)))                  # 상한 600 = 정상상태 ≈ 142 °C
     r.after(5)
     assert r.call(r.eng.turn_on, 120.0)[0]
     assert r.wait(lambda: r.eng.sat.arrived, 1500)
     r.after(120)
-    r.sim.heater.tc_offset = -30.0                                             # TC 가 낮게 읽힘 → PID 와인드업 → 상한
+    _quiet(r)
+    r.sim.heater.tc_offset = -30.0                                             # TC 가 낮게 읽힘 → 상한에 물림(도달 후 새 포화)
+    t0 = r.c.monotonic()
     assert r.wait(lambda: r.eng.sat.clamped is not None, 900)
+    assert 115.0 <= r.c.monotonic() - t0 <= 135.0                             # HEATER_MV_SAT_SEC 120 s
     r.after(3)
-    assert r.sim.regs[118] == r.eng.sat.clamped < 1200 and r.cards("DAC 포화")[0][2] == "FAIL"
+    assert r.sim.regs[118] == r.eng.sat.clamped < 600 and r.cards("DAC 포화")[0][2] == "FAIL"
     assert r.sim.coils[640]
 
 
@@ -246,7 +265,7 @@ def test_stack_bench_reads_without_writes(rig):
 
 @pytest.mark.slow
 def test_stack_resume_checks_and_journal(rig):
-    r = rig(cfg=FAST)
+    r = _fast(rig(cfg=FAST))
     r.after(5)
     r.eng.heater_set(120.0, None)
     r.after(30)
