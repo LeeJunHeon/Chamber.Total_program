@@ -443,4 +443,5 @@ DECISIONS = [
     dict(id='D109', title='Robot CSV 행 사유 접두어', decision="v1 '시작 실패:'·'공정 시작 실패:'·'AFTER_FINISH 예외' 접두어 없이 사유만. startup_recover 는 쓰기 스레드에서(막지 않음).", reason="전수 목록(로봇·기록·앱) 완료 중 판단", confirm=True, where="v2/robot_server; v2/ch12/outputs; v2/ch12/drivers/oes_link.py"),
     dict(id='D110', title='기록 출력 일괄 처리', decision="v1 301줄·5.0 s 일괄 한도 없이 큐를 한 번에 비움, shutdown_drain·'final flush failed' 파일 없음.", reason="전수 목록(로봇·기록·앱) 완료 중 판단", confirm=True, where="v2/robot_server; v2/ch12/outputs; v2/ch12/drivers/oes_link.py"),
     dict(id='D111', title='워커 exe 고르기', decision='설정으로 고르거나 python -m(D01) — v1 의 oes_worker.exe → oes_api.exe 찾기 대신. rga_finished 는 한 번(v1 두 번).', reason="전수 목록(로봇·기록·앱) 완료 중 판단", confirm=True, where="v2/robot_server; v2/ch12/outputs; v2/ch12/drivers/oes_link.py"),
+    dict(id='D112', title='장비 로그 문구 중 v2 구조로 생기지 않는 것', decision="IG '이전 늦은 응답 N개 흡수'(30 ms 흡수는 같고 세지 않음), DC Pulse '[poll] 예외'(실패는 그 tick 만), STM '두께 모니터 시작 실패'(worker 가 연결), IG 라인 큐 포화·리더 루프 예외(동기 읽기). STM 요청 문구: 서비스 꺼짐 '두께 모니터가 꺼져 있음', 종료 때 CANCELLED. 저수준 PLC 읽기/쓰기마다 줄 하나 더.", reason="전수 목록(장비) 완료 중 판단", confirm=True, where="v2/ch12/drivers"),
 ]

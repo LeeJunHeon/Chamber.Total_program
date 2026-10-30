@@ -115,9 +115,8 @@ def test_t040_next_step_message_read_only():
 
 # ═════════════ TEST-053·167 엑셀 히터·두께 그룹 머리글(v1 tests/test_heater_process_logs.py:135, test_thickness_logs.py:74) ═════════════
 def _ws_with(cols, grp, starts):
-    from openpyxl import Workbook
     from v2.ch12.outputs import excel_style as XS
-    wb = Workbook()
+    wb = XS.Workbook()                                      # openpyxl 은 기록 출력 모듈을 거쳐서만(test_isolation)
     ws = wb.active
     XS._build_headers(ws, cols, grp, starts)
     return wb, ws
