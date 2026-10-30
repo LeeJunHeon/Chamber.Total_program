@@ -113,22 +113,37 @@ class TimeProxy:
 
 
 # ───────────────────────── v1 모듈 ─────────────────────────
-TMP = Path(tempfile.mkdtemp(prefix="v1golden_robot_"))
-cfgc = importlib.import_module("lib.config_common")
-for k, v in dict(HOST_LOG_ENABLED=True, HOST_LOG_LOCAL_DIR=str(TMP / "robot"), HOST_LOG_NAS_DIR=str(TMP / "robot_nas"),
-                 LOG_ROOT_DIR=str(TMP / "logs"), LOCAL_FALLBACK_ROOT=str(TMP / "fallback"),
-                 ROBOT_RECIPE_ROOT_DIR=str(TMP / "recipes"), RECIPE_SCAN_TIMEOUT_S=20.0,
-                 CHUCK_POSITION_RESOLVE_TIMEOUT_S=90.0).items():
-    setattr(cfgc, k, v)
-H = importlib.import_module("host.handlers")
-S = importlib.import_module("host.setup")
-RQ = importlib.import_module("host.request_ctx")
-P = importlib.import_module("device.plc")
-CR = importlib.import_module("runtime.chamber_runtime")
-PR = importlib.import_module("runtime.plasma_cleaning_runtime")
-HL = importlib.import_module("util.host_process_log")
-EREP = importlib.import_module("errors.error_reporter")
-AE = importlib.import_module("errors.app_error")
+# 실행할 때만 불러온다(load_v1 — main 첫머리). import 만으로는 v1(device.plc → pymodbus 등)이 필요 없게 — 다른 v1golden_* 도구와
+# 같게. 아래 이름들은 load_v1 이 채우는 모듈 전역(사례 실행 함수들이 부를 때 읽는다).
+TMP: Path = None                                          # type: ignore[assignment]  # 임시 폴더(Robot CSV·레시피)
+cfgc = H = S = RQ = P = CR = PR = HL = EREP = AE = None
+V1_PLC_ERR = ""                                           # v1 PLC 무응답 문구(load_v1 이 pymodbus 예외 문구로 채움)
+
+
+def load_v1() -> None:
+    """v1 모듈을 불러오고 설정(임시 폴더)·가짜 서버를 넣는다. 두 번 불러도 한 번만."""
+    global TMP, cfgc, H, S, RQ, P, CR, PR, HL, EREP, AE, V1_PLC_ERR
+    if H is not None:
+        return
+    TMP = Path(tempfile.mkdtemp(prefix="v1golden_robot_"))
+    cfgc = importlib.import_module("lib.config_common")
+    for k, v in dict(HOST_LOG_ENABLED=True, HOST_LOG_LOCAL_DIR=str(TMP / "robot"), HOST_LOG_NAS_DIR=str(TMP / "robot_nas"),
+                     LOG_ROOT_DIR=str(TMP / "logs"), LOCAL_FALLBACK_ROOT=str(TMP / "fallback"),
+                     ROBOT_RECIPE_ROOT_DIR=str(TMP / "recipes"), RECIPE_SCAN_TIMEOUT_S=20.0,
+                     CHUCK_POSITION_RESOLVE_TIMEOUT_S=90.0).items():
+        setattr(cfgc, k, v)
+    H = importlib.import_module("host.handlers")
+    S = importlib.import_module("host.setup")
+    RQ = importlib.import_module("host.request_ctx")
+    P = importlib.import_module("device.plc")
+    CR = importlib.import_module("runtime.chamber_runtime")
+    PR = importlib.import_module("runtime.plasma_cleaning_runtime")
+    HL = importlib.import_module("util.host_process_log")
+    EREP = importlib.import_module("errors.error_reporter")
+    AE = importlib.import_module("errors.app_error")
+    S.HostServer = _DummyServer
+    # v1 PLC 무응답 문구(pymodbus 예외 문구 — v2 드라이버 문구와 같을 수 없어 자리표로, differences)
+    V1_PLC_ERR = f"PLC 응답 없음/프레임 오류: ModbusIOException: {P.ModbusIOException('No response received after 0 retries')}"
 
 
 class _DummyServer:
@@ -140,9 +155,6 @@ class _DummyServer:
 
     async def aclose(self) -> None:
         pass
-
-
-S.HostServer = _DummyServer
 
 
 # ───────────────────────── 가짜 pymodbus 클라이언트 ─────────────────────────
@@ -420,14 +432,11 @@ def run_one(case: dict) -> dict:
     return RR.normalize(o, roots)
 
 
-# v1 PLC 무응답 문구(pymodbus 예외 문구 — v2 드라이버 문구와 같을 수 없어 자리표로, differences)
-V1_PLC_ERR = f"PLC 응답 없음/프레임 오류: ModbusIOException: {P.ModbusIOException('No response received after 0 retries')}"
-
-
 _REAL_TIME = importlib.import_module("time")
 
 
 def main() -> None:
+    load_v1()
     only = sys.argv[1:]
     out = []
     for case in cases():

@@ -457,4 +457,8 @@ DECISIONS = [
     dict(id='D320', title='PLC 1초 묶음 나눠 읽기(양보)', decision="블록 하나 = PLC worker 요청 하나(우선순위 'low' — safety·write·read 뒤), 다음 블록은 명령 간격(150 ms) 뒤 not_before — 기다리는 요청이 있으면 블록 사이에서 먼저 돈다(v1 priority='low' _yield_to_priority 와 같음). 1초 행 마감(900 ms) 안에 못 든 뒤 블록은 그 tick 빈 칸, 첫 블록이 시작도 못 하면 그 tick stale(장비 실패 아님 — 묶기에서 EXPIRED 는 fail 이 아님). v1 은 양보 예산 PLC_COIL_LOG_BUDGET_S 4 s·코일 로그 주기 따로 — v2 는 1초 행 마감.", reason="9단계 — tick 앞부분의 짧은 마감 요청(PC GV 인터락 0.6 s E511·게이트·메인밸브 0.6 s)이 1초 묶음 뒤에서 시간 초과(실제 시간 약 10~20 %)", confirm=True, where='v2/ch12/drivers/plc_poll.py; v2/common/worker.py; v2/common/snapshot_bus.py'),
     dict(id="D321", title="exe 묶음과 감시 프로그램", decision="PyInstaller onedir 묶음(v2/tools/build_exe.py)의 제어 프로그램 exe 는 감시 프로그램 없이 돈다(감시 프로그램은 python -m 으로 자식을 켬). 자동 재시작·이어가기를 쓰려면 소스 실행(v2/run_ch12_v2.cmd)을 기본으로 한다(D01).",
          reason="D01 결정의 세부 — 두 방식 중 소스 실행을 기본으로.", confirm=True, where="v2/tools/build_exe.py; v2/run_ch12_v2.cmd"),
+    dict(id="D322", title="리눅스·맥에서 윈도우 경로 기본값", decision="윈도우가 아닌 곳에서는 드라이브·UNC 경로를 ~/.ch12_v2/winpaths/<드라이브>/… 로 바꿔 쓴다(실행 값만, 저장 설정은 그대로, 시작 로그 한 줄). LOG_SYNC_PAIRS(JSON 글)와 실행 중 CONFIG_APPLY 로 온 경로는 바꾸지 않는다 — 개발·sim 용.",
+         reason="sim 을 기본 설정으로 띄우면 저장소 루트에 'C:\\…' 이름 폴더가 생기던 것(최종 검증).", confirm=False, where="v2/common/winpaths.py; v2/ch12/app.py"),
+    dict(id="D323", title="감시 프로그램 신호(리눅스·맥)", decision="SIGTERM·SIGINT·SIGHUP 을 받으면 자식에게 SIGTERM 을 넘기고 최대 30 s 기다린 뒤 kill, 자식 종료 코드로 끝나고 다시 켜지 않음. 리눅스에서는 터미널 Ctrl+C 와 kill -INT 를 구별할 수 없어 감시 프로그램 아래 Ctrl+C 는 공정 중에도 의도적 종료(파워만 끔)가 된다. 윈도우는 콘솔 그룹 신호를 자식도 받으므로 넘기지 않음.",
+         reason="SIGTERM 에 자식이 고아로 남던 것(최종 검증).", confirm=True, where="v2/supervisor/supervisor.py"),
 ]

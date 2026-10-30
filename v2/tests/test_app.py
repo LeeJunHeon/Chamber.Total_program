@@ -6,6 +6,7 @@
 기록 경로는 모두 tmp 아래(local_override.json — install 키). 윈도우 콘솔 Ctrl+C(CTRL_C_EVENT)는 리눅스에서 못 돌림 — 윈도우 확인 필요.
 """
 import json
+import os
 import signal
 import socket
 import sqlite3
@@ -41,8 +42,9 @@ def config(tmp: Path, **extra) -> Path:
 
 
 class Proc:
-    def __init__(self, cfg_dir: Path) -> None:
-        self.p = subprocess.Popen([sys.executable, "-m", "v2.ch12", "--config-dir", str(cfg_dir)], cwd=str(ROOT),
+    def __init__(self, cfg_dir, cwd=None, env=None) -> None:
+        args = ["--config-dir", str(cfg_dir)] if cfg_dir is not None else []      # None = 기본 --config-dir
+        self.p = subprocess.Popen([sys.executable, "-m", "v2.ch12"] + args, cwd=str(cwd or ROOT), env=env,
                                   stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8")
         self.lines = []
         self.running = threading.Event()
@@ -138,3 +140,30 @@ def test_ctrl_c_refused_while_engine_busy():
     app.system.busy_now = False
     assert app.on_ctrl_c() == "exit"
     assert A.git_version(Path("/nonexistent")) == "unknown"
+
+
+def test_default_windows_paths_not_created_in_cwd(tmp_path):
+    """리눅스에서 기본 설정(--config-dir 도 기본 'C:\\CH12_v2\\config')으로 실제로 띄워도 작업 폴더에 'C:…' 이름의 폴더가
+    생기지 않는다 — 윈도우 경로는 홈 아래 ~/.ch12_v2/winpaths/<드라이브>/… 로 바꿔 쓴다(v2.common.winpaths, 실행 값만).
+    HOME 은 임시 폴더로(격리). 포트만 local_override 로(시험이 동시에 돌아도 겹치지 않게) — 경로는 하나도 넣지 않는다."""
+    home, work = tmp_path / "home", tmp_path / "work"
+    work.mkdir()
+    base = home / ".ch12_v2" / "winpaths"
+    cfg = base / "C" / "CH12_v2" / "config"                                  # 기본 --config-dir 이 바뀐 곳
+    cfg.mkdir(parents=True)
+    vals = {"LOCAL_HMI_PORT": free_port(), "ROBOT_API_PORT": free_port()}
+    (cfg / "local_override.json").write_text(json.dumps({"values": vals}), encoding="utf-8")
+    env = dict(os.environ, HOME=str(home), PYTHONPATH=os.pathsep.join(p for p in (str(ROOT), os.environ.get("PYTHONPATH")) if p))
+    pr = Proc(None, cwd=work, env=env)
+    try:
+        assert pr.running.wait(60.0), pr.text
+        time.sleep(1.5)
+        pr.p.send_signal(signal.SIGTERM)
+        assert pr.wait(30.0) == A.EXIT_OK, pr.text
+    finally:
+        if pr.p.poll() is None:
+            pr.p.kill()
+    bad = [p.name for p in work.iterdir() if p.name[:2].endswith(":") or p.name.startswith("\\")]
+    assert not bad, (bad, pr.text)                                           # 작업 폴더에 'C:…'·'G:…'·'\\…' 없음
+    assert (base / "C" / "CH12_v2" / "data" / "logs" / "ch12_v2.log").is_file()   # LOCAL_DATA_DIR 'C:\\CH12_v2\\data'
+    assert "윈도우 경로" in pr.text and str(base) in pr.text                 # 시작 로그 한 줄

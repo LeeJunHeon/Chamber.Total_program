@@ -49,6 +49,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlsplit
 
+from v2.common import winpaths
 from v2.common.clock import RealClock
 from v2.common.config_store import ConfigError
 from v2.common.mode import RunMode, policy, resolve_mode
@@ -130,7 +131,10 @@ def git_version(root: Optional[Path] = None) -> str:
 
 class App:
     def __init__(self, config_dir: str = DEFAULT_CONFIG_DIR, print_fn: Callable[[str], None] = print, clock=None) -> None:
-        self.config_dir = Path(config_dir)
+        # 리눅스·맥에서 윈도우 경로(기본값 'C:\\CH12_v2\\config' 등)는 홈 아래로 바꿔 쓴다(winpaths — 윈도우에서는 그대로)
+        cd = winpaths.runtime_path(str(config_dir))
+        self._winpath_keys: List[str] = ["--config-dir"] if cd != str(config_dir) else []
+        self.config_dir = Path(cd)
         self.say = print_fn
         self.clock = clock or RealClock()
         self.store = None
@@ -163,6 +167,8 @@ class App:
         except (ConfigError, ValueError, ParamsError) as e:
             self.say(f"[중지] 설정을 쓸 수 없음 — 시작 거부: {e}")
             return False
+        # 실행 값만 바꾼다(self.cfg 는 복사본 — 저장된 설정·웹에 보이는 설정 값은 그대로). 윈도우에서는 아무것도 안 함
+        self._winpath_keys += winpaths.map_values(self.cfg)
         if (self.uplink_wanted() and RunMode(self.cfg["RUN_MODE"]) is RunMode.SIM
                 and not str(self.cfg["EQUIPMENT_ID"]).endswith(SIM_ID_SUFFIX)):
             self.say(f"[중지] UPLINK_IN_SIM(sim 웹 연결)인데 EQUIPMENT_ID {self.cfg['EQUIPMENT_ID']} 가 {SIM_ID_SUFFIX} 으로 끝나지 않음 "
@@ -293,6 +299,10 @@ class App:
         try:
             self.setup_logging()
             for line in self._start_lines():
+                self.say(line)
+                self.log.info(line)
+            if self._winpath_keys:                         # 윈도우가 아닌 곳에서 윈도우 경로를 바꿔 썼으면 한 줄
+                line = winpaths.note(self._winpath_keys)
                 self.say(line)
                 self.log.info(line)
             for n in self.store.notes:
