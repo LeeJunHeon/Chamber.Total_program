@@ -449,4 +449,7 @@ DECISIONS = [
     dict(id='D114', title='구글챗 폭주 보호', decision="v1 notifier 별(CH1·CH2·PC·TSP·HOST·PLC·CLIENT) 미전송 행 200 이상이면 보통 카드 skipped('대기 상한 초과 — 생략'), 급한 카드는 1000 까지, 다음 카드에 '(전송 실패로 생략된 알림 N건)'. 포털은 하나씩 보내 동시 4개 한도 안. 모니터·OES 는 제한 없음(v1 도 직접).", reason="빠진 기능 구현 중 판단", confirm=True, where='vanam-process lib/ops2/ch12/chatLimits.ts'),
     dict(id='D115', title='DEBUG_PRINT 줄 형식', decision='v2 출처 이름([ch1.mfc][status] — v1 [MFC][status]).', reason="빠진 기능 구현 중 판단", confirm=True, where='v2/ch12/app.py'),
     dict(id='D116', title='레시피 파일 고르기 범위', decision='노트북 화면 파일 고르기는 PROCESS_LIST_START_DIR 밖으로 나갈 수 없음(v1 대화상자는 어디든) — 127.0.0.1 서버가 정한 폴더 아래만 보이게 한 안전 쪽.', reason="빠진 기능 구현 중 판단", confirm=True, where='v2/ch12/local_server.py'),
+    dict(id='D117', title='의도적 종료 중 플라즈마 클리닝', decision='PC 를 붙잡고 PC RF 만 끔(rf_zero_off) — 가스·밸브 그대로(결정 4), 결과 실패 PROGRAM_EXIT(챔버와 같게). v1 은 공정 중 종료를 거부.', reason="종합 시나리오·7일 운전 중 판단", confirm=True, where='v2/ch12/plasma_cleaning.py; safety.py'),
+    dict(id='D118', title='PC 가 CH1 GV 를 연 채 끝냄(v1 PC-077)', decision='닫지 않으면 다음 CH1 공정이 GATE_CHECK_FAILED·VACUUM_OFF 가 E301(v1 과 같음) — 운전 절차 확인 필요.', reason="종합 시나리오·7일 운전 중 판단", confirm=True, where='v2/ch12/pc_steps.py'),
+    dict(id='D119', title='자정 CSV 내보내기 부하', decision='하루치 1초 기록 CSV(약 130 MB)를 자정에 내보내는 동안 수 분 CPU 사용 — 윈도우 노트북에서 tick 지연 확인 필요.', reason="종합 시나리오·7일 운전 중 판단", confirm=True, where='v2/common/recorder.py'),
 ]

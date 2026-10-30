@@ -703,8 +703,11 @@ def test_web_disconnect_reconnect(tmp_path):
 
 # ───────────── 가상 시계 7일 연속 운전 ─────────────
 DAYS = 7
-DAY7_GROWTH_MB = 4.0                   # 6~7 일 사이 전용 메모리 증가 상한(하루 공정 2·PC·TSP·프리스퍼터를 돌린 뒤 — 시간마다 gc)
-SCHED = {"22:00:00": "process", "23:30:00": "pc"}      # 매일(웹 명령) — TSP 03:00·프리스퍼터 05:00 은 엔진 예약이 스스로
+DAY7_GROWTH_MB = 2.0                   # 6~7 일 사이 전용 메모리 증가 상한(하루 공정 2·PC·TSP·프리스퍼터를 돌린 뒤 — 시간마다 gc;
+#   실측 2026-10-30: 날마다 +2.3·+1.6·+1.7·+0.7·+0.6·+0.6 MB — 링 버퍼가 아직 차는 중)
+SCHED = {"22:00:00": "process", "23:30:00": "pc", "23:50:00": "gate"}   # 매일(웹·로컬 명령) — TSP 03:00·프리스퍼터 05:00 은
+#   엔진 예약이 스스로. 'gate': PC 가 CH1 GV 를 연 채 끝내므로(v1 PC-077) 운전자가 로컬 PLC 버튼으로 닫는다(안 닫으면 다음 날 CH1 공정은
+#   v1 처럼 GATE_CHECK_FAILED).
 PRE_CSV = "#,Process_name,Ar,Ar_flow,base_pressure,working_pressure,shutter_delay,process_time,main_shutter,gun1,use_dc_pulse," \
           "dc_pulse_power,dc_pulse_freq\n1,PRE-CH2,T,20,1.00E-05,5,0.1,0.2,T,T,T,80,20\n"
 
@@ -753,11 +756,20 @@ def soak_full(tmp_path, hours: float) -> dict:
                     for ch, p in ((1, P1), (2, P2)):
                         r = rig.command("PROCESS_START", {"ch": ch, "params": p}, source=Source.WEB, by="soak")
                         counts[f"start{ch}:{r.ok}"] += 1
-                else:
+                elif what == "pc":
                     r = rig.command("PC_START", {"ch": 1, "params": PC_UI}, source=Source.WEB, by="soak")
                     counts[f"pcstart:{r.ok}"] += 1
+                else:
+                    for on in (True, False):
+                        r = rig.command("PLC_BUTTON", {"target": "g_v_1_close_sw", "on": on}, source=Source.HMI)
+                        counts[f"gate:{r.ok}"] += 1
+                        c.wait_until(c.monotonic() + 8.0)
             c.start_thread(go, f"soak-{what}")
         if t.seq % 3600 == 0:
+            for th in list(rig.recorder._exports):          # 지난 날 CSV 내보내기(하루치 약 130 MB)는 실제 시간이 걸린다 — 실제 운전은
+                while th.is_alive():                         # 하루(24 h) 안에 끝나지만 가상 하루는 실제 수십 분이라 겹쳐 쌓인다(끝날 때까지
+                    th.join(1.0)                             # 기다림 — 가상 시각은 멈춰 있고, 기다리는 참가자 스레드가 '진행 없음'으로
+                    c.notify()                               # 끝나지 않게 깨워 둔다)
             gc.collect()
             m = soak.mem()
             bufs = {"hub_recent": [rig.hub.recent], "eng_events": [x.events for x in (a.proc["ch1"], a.proc["ch2"], a.pc, a.tsp)],
@@ -812,18 +824,17 @@ def test_virtual_7_days(tmp_path):
     for r in hours:
         assert r["rec_pending"] < 100 and r["rec_dropped"] == 0 and r["out_pending"] < 100, r
         assert r["events"] <= APP_RETENTION.events and r["sim_log_max"] <= APP_RETENTION.sim_log, r
-    day_max = collections.defaultdict(int)
-    for r in hours:
-        if r["h"] >= 24:
-            day_max[(r["h"] - 1) // 24 + 1] = max(day_max[(r["h"] - 1) // 24 + 1], r["threads"])
+    at = {r["h"]: r["threads"] for r in hours}
+    for h in range(48, DAYS * 24 + 1):                                           # 같은 시각끼리(첫날은 worker 첫 생성 — 기준에서 뺌)
+        assert at[h] <= at[24 + h % 24], (h, at[h], at[24 + h % 24])             # 둘째 날 같은 시각보다 스레드가 늘지 않음
     for d in range(2, DAYS + 1):
-        assert day_max[d] <= day_max[1], dict(day_max)                           # 날마다 최대 스레드 수가 늘지 않음
-    assert by[DAYS]["threads"] <= by[1]["threads"] + 1, table                    # 같은 시각(19:00 — 모두 idle) 비교
+        assert by[d]["threads"] == by[1]["threads"], table                        # 19:00(모두 idle) — 날마다 같음
     for r in hours:
         for k, cap in r["caps"].items():
             assert cap is not None and r[k] <= cap, (k, r)                      # 링 버퍼 — 상한 있음·상한 안
     assert by[DAYS]["private_mb"] - by[DAYS - 1]["private_mb"] < DAY7_GROWTH_MB, table
     assert counts["start1:True"] == DAYS and counts["start2:True"] == DAYS and counts["pcstart:True"] == DAYS, counts
+    assert counts["gate:True"] == 2 * DAYS, counts
     assert counts["ch1:done:ui"] == DAYS and counts["ch2:done:ui"] == DAYS, counts                  # 매일 공정 2
     assert counts["ch2:done:presputter"] == DAYS and counts["pc:done"] == DAYS, counts              # 프리스퍼터·PC 매일
     assert counts["tsp:done"] == DAYS, counts                                                       # TSP 매일 예약
