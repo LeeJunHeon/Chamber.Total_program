@@ -373,4 +373,9 @@ DECISIONS = [
     dict(id='D39', title='MFC·IG 재연결 시점·SO_KEEPALIVE', decision='v1 감시 주기(1.5/2 s) 대신 끊기면 바로 백오프(1 s ×2, 최대 20 s). 공용 TcpTransport 는 SO_KEEPALIVE 를 늘 켬(v1 MFC·IG 0) — MFC/IG_TCP_KEEPALIVE 버림.', reason="1단계 MFC·IG 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/mfc.py; ig.py"),
     dict(id='D40', title='MFC 재전송·검증 경로', decision='호출 쪽이 기다리는 동안만 다시 보냄. enable_verify 경로(v1 운영에서 꺼짐 — DEV-096)는 만들지 않음, MFC_SP1_VERIFY_TOL 버림.', reason="1단계 MFC·IG 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/mfc.py; ig.py"),
     dict(id='D41', title='IG ON 실패 때 정리 없음(SIG 0 한 번)', decision='v1 return 이 try/finally 밖 — v1 과 같게(이상 동작).', reason="1단계 MFC·IG 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/mfc.py; ig.py"),
+    dict(id='D42', title='Calib CSV 로컬 먼저(D07) 세부', decision='로컬 정본(OUTPUT_LOCAL_FIRST_DIR) 뒤 사본 스레드가 v1 규칙으로 G: 에 — 실패면 30 s 마다·다음 기록 때 다시, 순서 지킴, 보낸 만큼만 pending 에서 지움. 엑셀은 G: 실패 시 v1 처럼 pending.xlsx(다시 보내지 않음).', reason="2단계 기록 출력 작성 중 판단(v1 실행 골든 바이트 동일)", confirm=True, where="v2/ch12/outputs"),
+    dict(id='D43', title='엑셀 날짜', decision='공정 시작 시각으로 고정(v1 경합 LOG-058 없앰). Arc 경고는 웹훅 대신 이벤트 → 포털.', reason="2단계 기록 출력 작성 중 판단(v1 실행 골든 바이트 동일)", confirm=True, where="v2/ch12/outputs"),
+    dict(id='D44', title='PLC 코일 CSV 레지스터 실패 한 줄', decision="v1 'WARN PLC REG LOG' 한 줄 대신 요약 줄 숫자에만 셈.", reason="2단계 기록 출력 작성 중 판단(v1 실행 골든 바이트 동일)", confirm=True, where="v2/ch12/outputs"),
+    dict(id='D45', title='asyncio·Qt 없음에 따른 기록 칸', decision="selfwatch tasks -1, 덤프 asyncio '(loop 없음)', ui 빈 분류. ERROR 로그에 asyncio·Qt 훅·태스크 크래시 억제 없음.", reason="2단계 기록 출력 작성 중 판단(v1 실행 골든 바이트 동일)", confirm=True, where="v2/ch12/outputs"),
+    dict(id='D46', title='Robot CSV started·finished 이벤트 시점', decision='파일 결과는 같고, 이벤트는 호출한 때(v1 은 파일 기록 뒤).', reason="2단계 기록 출력 작성 중 판단(v1 실행 골든 바이트 동일)", confirm=True, where="v2/ch12/outputs"),
 ]

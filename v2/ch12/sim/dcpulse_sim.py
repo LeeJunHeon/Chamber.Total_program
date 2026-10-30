@@ -51,6 +51,7 @@ class DcPulseSim(SimDevice):
         self.off_err_n = 0
         self.i_override_a: Optional[float] = None
         self.nak_reads: Dict[int, int] = {}
+        self.settings: Dict[int, int] = {}
         self.write_err: Dict[int, int] = {}
         self.t = self.chamber.t
         self.received = sim_log()
@@ -163,6 +164,9 @@ class DcPulseSim(SimDevice):
         if cmd == P.FAULT_RESET:
             if not self.fault_sticky:
                 self.fault = 0
+            return True
+        if 0x05 <= cmd <= 0x10:                  # 아크·차단·한계·램프 설정(v1 에서 부르는 곳 없음 — 값만 둔다)
+            self.settings[cmd] = v
             return True
         if cmd == P.ARC_COUNT_RESET:
             if self.out and v == 2:

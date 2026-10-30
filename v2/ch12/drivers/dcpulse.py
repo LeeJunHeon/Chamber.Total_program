@@ -22,7 +22,7 @@ from typing import Any, Callable, Deque, Dict, Optional
 from v2.ch12.drivers import dcpulse_proto as P
 from v2.ch12.drivers.dcpulse_monitor import DcpMonitorMixin
 from v2.ch12.drivers.dcpulse_ops import DcpOpsMixin
-from v2.ch12.drivers.pulse_port import IO, OpRunner, Sleep, WaitLink, chan_get, endpoint, norm_endpoint
+from v2.ch12.drivers.pulse_port import IO, OpRunner, WaitLink, chan_get, endpoint, norm_endpoint, wait_then
 from v2.common.snapshot import DeviceBlock, FieldDef, FType
 from v2.common.transport import ReadTimeout
 
@@ -260,6 +260,7 @@ class DcPulseDriver(DcpMonitorMixin, DcpOpsMixin):
                 self._op = None
             if name == "prepare":
                 self._prepare_active = False
+            self.clock.notify()
             if on_done:
                 on_done(r, ok)
         runner = OpRunner(self.clock, self.worker, f"dcp:{name}", gen, done, base_kind)
@@ -377,17 +378,14 @@ class DcPulseDriver(DcpMonitorMixin, DcpOpsMixin):
         if self._off_op is None or self.worker is None:
             finish()
             return
-        t_end = self.clock.monotonic() + wait_s
-
-        def gen():
-            while self._off_op is not None and self.clock.monotonic() < t_end:
-                yield Sleep(min(0.1, max(0.0, t_end - self.clock.monotonic())))
-            if self._off_op is not None:
+        def then(ok: bool) -> None:
+            op = self._off_op
+            if not ok and op is not None:
                 self.cleanup_off_unconfirmed = True
                 self._emit("status", "정리 대기 초과 — OUTPUT_OFF 확인 실패(출력 상태 미확인)")
-                self._off_op.abort("TIMEOUT")
-            return True
-        OpRunner(self.clock, self.worker, "dcp:cleanup", gen(), lambda r, v: finish(), "safety").start()
+                op.abort("TIMEOUT")
+            finish()
+        wait_then(self.clock, self.clock.monotonic() + wait_s, lambda: self._off_op is None, then, "dcp-cleanup")
 
     # ───────── v1 에서 부르는 곳이 없던 설정 API(바이트는 v1 그대로 — dc_pulse.py:1174-1441) ─────────
     def write_sequence(self, items, on_done: Optional[Callable[[Optional[str], bool], None]] = None) -> None:

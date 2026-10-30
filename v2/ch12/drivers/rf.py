@@ -271,9 +271,9 @@ class RfPower:
         zero = None if self.mode == "pc" else bool(self._g("CHAMBER_RF_CONT_ZEROING", False))
         meas = rf_scale(self.cfg, fr, rr, self.rf_ch, zero)
         out.update({f"{b}.fwd_w": meas["forward"], f"{b}.ref_w": meas["reflected"]})
-        if self.running and self.polling and self._due is not None and poll.t_mono >= self._due - 1e-6:
-            self._due = poll.t_mono + max(50.0, self.p("poll_ms")) / 1000.0 - 0.5
-            self._now = poll.t_mono
+        if self.running and self.polling and self._due is not None and poll.t_tick >= self._due - 1e-6:
+            self._due = poll.t_tick + max(50.0, self.p("poll_ms")) / 1000.0 - 0.5
+            self._now = poll.t_tick
             self.polls += 1
             try:
                 self._ingest(meas["forward"], meas["reflected"])

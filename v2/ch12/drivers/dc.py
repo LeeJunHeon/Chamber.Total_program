@@ -197,8 +197,8 @@ class DcPower:
             return out
         p, v, i = dc_scale(self.cfg, vr, ir)
         out.update({f"{n}_p": round(p, 3), f"{n}_v": round(v, 3), f"{n}_i": round(i, 5)})
-        if self.running and self.polling and self._due is not None and poll.t_mono >= self._due - 1e-6:
-            self._due = poll.t_mono + max(50, int(self._c("DC_INTERVAL_MS"))) / 1000.0 - 0.5
+        if self.running and self.polling and self._due is not None and poll.t_tick >= self._due - 1e-6:
+            self._due = poll.t_tick + max(50, int(self._c("DC_INTERVAL_MS"))) / 1000.0 - 0.5
             self.polls += 1
             self._on_measure(p, v, i)
         return out

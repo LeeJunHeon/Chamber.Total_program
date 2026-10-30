@@ -227,3 +227,22 @@ def test_reconnect_after_disconnect():
 
 def test_budget():
     assert R.BUDGET["min_gap_ms"] == 1500 and R.BUDGET["fits_1s"] is False and R.BUDGET["queries_per_tick"] == 1
+
+
+def test_cleanup_confirms_off_when_maybe_on():
+    r = Rig()
+    assert r.call(r.d.start_pulse_process, 100.0) == (None, True)
+    box = []
+    r.d.cleanup(on_done=lambda u: (box.append(u), r.c.notify()))
+    r.c.wait_until(None, lambda: bool(box))
+    assert box == [False] and not r.sim.out and r.ev("power_off_finished") and not r.d.output_off_unconfirmed
+    r.done()
+
+
+def test_poll_once_order():
+    r = Rig()
+    n0 = len(r.sim.received)
+    assert r.call(r.d.poll_once) == (None, True)
+    assert [bytes.fromhex(f)[1] for f in r.sent(n0)] == [162, 165, 166]
+    assert any(e.detail.startswith("[ONCE] STATUS") for e in r.ev("status")) and r.ev("power")
+    r.done()

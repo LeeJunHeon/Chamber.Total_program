@@ -71,11 +71,16 @@ class PlcEvent:
 
 @dataclass
 class PlcPoll:
-    t_wall: float
-    t_mono: float
+    t_wall: float                     # 읽기 시작(벽시계)
+    t_mono: float                     # 읽기 시작(monotonic)
     coils: Dict[int, bool]
     regs: Dict[int, int]
     values: Dict[str, Any]
+
+    @property
+    def t_tick(self) -> float:
+        """이 읽기가 속한 정각 초(monotonic 축) — 앞선 쓰기로 읽기 시작이 밀려도 판정 시각은 tick 기준."""
+        return self.t_mono - (self.t_wall % 1.0)
 
 
 def make_transport(clock, cfg: Dict[str, Any], inner=None) -> RetryOpenTransport:

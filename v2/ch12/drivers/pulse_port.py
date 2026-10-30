@@ -181,6 +181,14 @@ class OpRunner:
         self.on_done(reason, None)
 
 
+def wait_then(clock, until: float, done: Callable[[], bool], then: Callable[[bool], None], name: str) -> None:
+    """done() 이 참이 되거나 until 이 지나면 then(참이 됐는지) — worker 와 따로 도는 짧은 스레드(정리 한도처럼 worker 가
+    긴 I/O 중이어도 제시간에 끊어야 할 때. v1 asyncio.wait_for 대응). 상태를 바꾼 쪽은 clock.notify() 를 부른다."""
+    def run():
+        then(bool(clock.wait_until(until, done)))
+    clock.start_thread(run, name)
+
+
 # ───────────── 포트 소유 ─────────────
 def norm_endpoint(host: str, port: int) -> str:
     return f"{str(host).strip()}:{int(port)}".lower()

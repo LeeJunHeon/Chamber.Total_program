@@ -106,6 +106,7 @@ class RfPulseDriver(RfpStopPollMixin):
         self._stop_requested = False
         self._output_maybe_on = False
         self.output_off_unconfirmed = False
+        self.cleanup_off_unconfirmed = False
         self.polling = False
         self._poll_step = 0
         self._cycle_next = -1e9
@@ -308,6 +309,7 @@ class RfPulseDriver(RfpStopPollMixin):
                     w(r, ok)
             elif self._op is runner:
                 self._op = None
+            self.clock.notify()
             if on_done:
                 on_done(r, ok)
         runner = OpRunner(self.clock, self.worker, f"rfp:{name}", gen, done, "safety" if off else "write")

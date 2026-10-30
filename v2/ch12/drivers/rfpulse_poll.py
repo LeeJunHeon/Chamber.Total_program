@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from typing import Any, Callable, Dict, Optional
 
-from v2.ch12.drivers.pulse_port import IO, Sleep, WaitLink
+from v2.ch12.drivers.pulse_port import IO, Sleep, WaitLink, wait_then
 from v2.common import aebus
 
 RF_OFF, Q_STATUS, Q_FWD, Q_REF = 1, 162, 165, 166
@@ -77,6 +77,55 @@ class RfpStopPollMixin:
             self._emit("power_off_finished")
             return True
         self._run("off_unused", gen(), None, off=True)
+
+    def cleanup(self, on_done: Optional[Callable[[bool], None]] = None) -> None:
+        """v1 cleanup 의 OFF 안전망: OFF 진행 중이면 RFPULSE_CLEANUP_OFF_WAIT_S(8 s)까지 기다리고(취소하지 않음), 아니면
+        RF 를 켰을 수 있으면 확인형 OFF ≤ 8 s. 넘으면 cleanup_off_unconfirmed. 끝까지 켜졌을 수 있으면 output_off_unconfirmed.
+        on_done(cleanup_off_unconfirmed). 포트 해제는 부르는 쪽이 이 뒤에(pulse_port.release)."""
+        self.cleanup_off_unconfirmed = False
+        wait_s = max(0.0, float(self._c("RFPULSE_CLEANUP_OFF_WAIT_S", 8.0)))
+        if self._off_op is None and self._output_maybe_on and self.worker is not None and self.writes_allowed:
+            self._emit("status", "정리 전 RF 출력 OFF 확인")
+            self.stop_process()
+
+        def finish():
+            if self._output_maybe_on:
+                self.output_off_unconfirmed = True
+            self.polling = False
+            if on_done:
+                on_done(self.cleanup_off_unconfirmed)
+        if self._off_op is None or self.worker is None:
+            finish()
+            return
+        def then(ok: bool) -> None:
+            op = self._off_op
+            if not ok and op is not None:
+                self.cleanup_off_unconfirmed = True
+                self._emit("status", "정리 대기 초과 — RF OFF 시퀀스 취소")
+                op.abort("TIMEOUT")
+            finish()
+        wait_then(self.clock, self.clock.monotonic() + wait_s, lambda: self._off_op is None, then, "rfp-cleanup")
+
+    def poll_once(self, on_done: Optional[Callable[[Optional[str], bool], None]] = None) -> None:
+        """v1 poll_once: STATUS('[ONCE] STATUS …') → FWD → REF → power 이벤트(값은 마지막 값으로 남김)."""
+        def gen():
+            q = int(self._c("POLL_QUERY_TIMEOUT_MS", int(self._c("QUERY_TIMEOUT_MS", 4500))))
+            st = parse_status((yield from self._g_query(Q_STATUS, "[POLL WAKE]", q)))
+            if st:
+                self.last_status = st
+                self._emit("rf_status", status_str(st), data=dict(st))
+                self._emit("status", f"[ONCE] STATUS {status_str(st)}")
+            f = yield from self._g_query(Q_FWD, "[ONCE FWD]")
+            r = yield from self._g_query(Q_REF, "[ONCE REF]")
+            if f is not None:
+                self.last_fwd = float(aebus.u16(f) if len(f) >= 2 else 0.0)
+            if r is not None:
+                self.last_ref = float(aebus.u16(r) if len(r) >= 2 else 0.0)
+            if self.last_fwd is not None and self.last_ref is not None:
+                self._emit("power", f"fwd={self.last_fwd:.0f} W ref={self.last_ref:.0f} W",
+                           data={"forward": self.last_fwd, "reflected": self.last_ref})
+            return True
+        self._run("poll_once", gen(), on_done)
 
     def _g_off_sequence(self):
         t0 = self.clock.monotonic()

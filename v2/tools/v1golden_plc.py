@@ -344,6 +344,12 @@ async def _controller(P, mod, srv: FakePlc, kind: str, scen: dict):
         await asyncio.sleep(0.01)
     stopped_by_trip = not ctl._is_running
     if not stopped_by_trip:
+        # 마지막 측정의 보정 쓰기가 끝난 뒤 정지(대본 끝을 정지와 겹치지 않게 — 공정이 정지를 부르는 시각은 임의)
+        for _ in range(500):
+            t = ctl._adjust_task
+            if t is None or t.done():
+                break
+            await asyncio.sleep(0.01)
         await ctl.cleanup()
     for _ in range(4000):
         await asyncio.sleep(0.01)

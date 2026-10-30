@@ -161,8 +161,10 @@ def test_app_log_setup_files(tmp_path):
         lg.warning("[%s] %s", "WARN", "경고 한글")
     finally:
         app_log.shutdown_app_logging()
+        import faulthandler
+        faulthandler.enable()          # pytest 의 faulthandler 를 되돌림(shutdown 이 disable 함)
     d = root / "로컬" / "VanaM_Logs" / "CH1&2" / "ERROR"
-    log = next(d.glob("CH_1_2_program_test_*.log"))
+    log = next(d.glob("CH_1_2_program_test_????????.log"))
     assert re.fullmatch(r"CH_1_2_program_test_\d{8}\.log", log.name)
     text = log.read_text(encoding="utf-8")
     assert re.search(r"^\d{4}-\d\d-\d\d \d\d:\d\d:\d\d\.\d{3} \[WARNING\] \[CH_1_2_program_test\] "

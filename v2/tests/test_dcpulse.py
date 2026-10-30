@@ -312,3 +312,39 @@ def test_budget_and_blocks():
     assert D.BUDGET["min_gap_ms"] == 150 and D.BUDGET["fits_1s"]
     cols = D.blocks("ch2")[0].columns()
     assert "ch2.dcpulse.p_w.q" in cols and "ch2.dcpulse.set_w" in cols
+
+
+def test_cleanup_turns_off_and_keeps_final_arc():
+    r = Rig()
+    assert r.start(100.0, freq=50, off_time_us=5.0) == (None, True)
+    r.sim.arc_rate_hard = 10.0
+    r.rows(8)
+    box = []
+    r.d.cleanup(on_done=lambda u: (box.append(u), r.c.notify()))
+    r.c.wait_until(None, lambda: bool(box))
+    assert box == [False] and r.sim.out is False
+    assert r.d._hard_arc_total == 0 and r.d.arc_counts[1] > 0          # v1 도 정리 때 누적만 0 — OFF 직전 확정값은 남는다
+    assert any(e.cmd == "OUTPUT_OFF" for e in r.ev("command_confirmed"))
+    r.done()
+
+
+def test_cleanup_wait_limit_marks_unconfirmed():
+    r = Rig()
+    assert r.start(100.0, freq=50, off_time_us=5.0) == (None, True)
+    r.sim.add_fault("no_response", r.c.monotonic(), r.c.monotonic() + 1000.0)
+    t0 = r.c.monotonic()
+    box = []
+    r.d.cleanup(on_done=lambda u: (box.append(u), r.c.notify()))
+    r.c.wait_until(None, lambda: bool(box))
+    assert box == [True] and r.c.monotonic() - t0 == pytest.approx(8.0, abs=0.2)
+    r.done()
+
+
+def test_unused_v1_setting_apis_bytes():
+    r = Rig()
+    assert r.call(r.d.set_limits, 500.0, 2.0, 600.0) == (None, True)
+    assert r.call(r.d.set_ramp_and_ignition, 100, 800.0) == (None, True)
+    want = [P.pack_write(0x0C, 50, 2), P.pack_write(0x0D, 20, 2), P.pack_write(0x0E, 600, 2),
+            P.pack_write(0x0F, 100, 2), P.pack_write(0x10, 800, 2)]
+    assert r.sent() == [w.hex(" ") for w in want]
+    r.done()
