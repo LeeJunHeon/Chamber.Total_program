@@ -6,7 +6,6 @@ PLC 재기동(세션 마커 2회 불일치 → 재 push·마커), 출력 무응�
 """
 from __future__ import annotations
 
-import struct
 
 import pytest
 

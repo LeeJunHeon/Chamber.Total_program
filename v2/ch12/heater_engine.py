@@ -13,8 +13,10 @@
   읽기 실패 때 마지막 확정 상태 뒤에 쓰기가 있었으면 stale 전(age ≤ HEATER_STALE_SEC)에는 다시 발행하지 않는다
   (옛 RUN=0 으로 HEATER_WAIT E830·공정 중 감시 E832 오판 방지 — 2026-10-26 검토).
 첫 성공 폴링 전의 'PLC 미연결'은 로그를 남기지 않는다. 설정·세션 마커가 PLC 에 들어가기 전에는 ON 을 거부한다(is_ready).
-명령은 heater_commands(HeaterCommands), 공정 연동은 heater_link(HeaterProcessLink), 로그·카드 문구는 heater_notify.
-저널: state_for_journal()·resume_checks(state)·adopt_journal(state)(5단계 이어가기용 — 이어갈 때 잔존 RUN 정리를 하지 않는다).
+나눔: 설정 push·세션 마커는 heater_push(HeaterPush), 잔존 RUN·이상·RUN 엣지는 heater_edges(HeaterEdges), 명령은 heater_commands,
+공정 연동·저널(state_for_journal·resume_checks·adopt_journal — 이어갈 때 잔존 RUN 정리를 하지 않는다)은 heater_link,
+로그·카드 문구는 heater_notify. 판정 모듈은 heater_ramp·heater_hold·heater_saturation·heater_response·heater_process.
+잠금은 ClockLock(시계 대기로 기다림) — status()·snapshot_fields() 는 잠금 없이 읽는다(시계 대기 조건식 안에서도 부를 수 있게).
 """
 from __future__ import annotations
 
@@ -25,26 +27,21 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from v2.common.worker import Status
 from v2.ch12.drivers import heater as H
-from v2.ch12.drivers.heater import HeaterRead, HeaterReadFail, decode_block, float_to_words
+from v2.ch12.drivers.heater import HeaterRead, HeaterReadFail, decode_block
 from v2.ch12.heater_commands import HeaterCommands
+from v2.ch12.heater_edges import HeaterEdges
 from v2.ch12.heater_hold import HeaterHold
 from v2.ch12.heater_link import HeaterProcessLink
 from v2.ch12.heater_notify import OWNER_LABEL, HeaterNotify
 from v2.ch12.heater_profile import load_heater_cfg
+from v2.ch12.heater_push import HeaterPush
 from v2.ch12.heater_ramp import RampProfiler
 from v2.ch12.heater_response import HeaterResponseGuard
 from v2.ch12.heater_saturation import HeaterSaturationGuard
 
-OUT_DEAD_GRACE_SEC = 5.0
-OUT_DEAD_COUNT = 3
-MARKER_MISMATCH_N = 2
 SV_LOG_MIN_DELTA_C = 1.0
 SV_LOG_MIN_INTERVAL_S = 30.0
 WD_FAIL_LOG_INTERVAL_S = 60.0
-RESIDUAL_FAIL_LOG_INTERVAL_S = 10.0
-PUSH_RETRY_SEC = 30.0
-PUSH_FAIL_LOG_INTERVAL_S = 60.0
-RST_STUCK_POLLS = 2
 NO_READ_FAIL_S = 2.0          # 연결돼 있는데 새 읽기가 이만큼 없으면 읽기 실패로 본다(v1 은 폴링이 직접 읽었다)
 
 
@@ -90,7 +87,7 @@ class ClockLock:
         return False
 
 
-class HeaterEngine(HeaterNotify, HeaterCommands, HeaterProcessLink):
+class HeaterEngine(HeaterNotify, HeaterPush, HeaterEdges, HeaterCommands, HeaterProcessLink):
     def __init__(self, clock, drv, cfg: Dict[str, Any], on_event: Optional[Callable] = None, csv=None,
                  chamber: str = "ch2", rng: Optional[random.Random] = None) -> None:
         self.clock, self.drv, self.cfg_dict = clock, drv, cfg
@@ -483,381 +480,3 @@ class HeaterEngine(HeaterNotify, HeaterCommands, HeaterProcessLink):
                                ramp_target=self.profiler.target())
         self._first_poll = False
         return True
-
-    def _clear_residual_run(self, st: dict) -> bool:
-        try:
-            self._w_coil(H.COIL_RUN, False)
-            if st["pv"] is not None:
-                self._w_reg(H.REG_SV, max(0, min(32767, int(st["_raw_pv"]))))
-        except Exception as e:
-            now = self._now()
-            if (now - self._residual_fail_log_t) >= RESIDUAL_FAIL_LOG_INTERVAL_S:
-                self._residual_fail_log_t = now
-                self._log(f"⚠ 이전 세션 히터 RUN 정리 실패 — 재시도: {e!r}")
-            return False
-        sv_old = float(st.get("sv") or 0.0)
-        pv = st.get("pv")
-        st["run"] = False
-        st["residual_run"] = True
-        if pv is not None:
-            st["sv"] = float(pv)
-        txt = (f"이전 세션 히터 RUN 잔존 → OFF, SV {sv_old:.1f}°C → "
-               f"{('현재 온도 %.1f°C' % pv) if pv is not None else 'PV 무효(SV 유지)'}")
-        self._log(txt)
-        if self._run_prev:
-            self._event("잔존 RUN 정리")
-        self._card("잔존 RUN 정리", txt, "WARN", {"PV": self._fmt(pv), "이전 SV": f"{sv_old:.1f}°C"})
-        return True
-
-    def _marker_and_push(self, st: dict) -> None:
-        mreg = int(self.cfg.session_mark_reg)
-        if self._verify is not None:
-            self._check_verify(st)
-        if not self.writes_allowed:
-            return                           # bench — 설정·마커를 쓰지 않는다(ON 도 거부된 채)
-        if self._need_push or (mreg and self._marker is None):
-            if self._now() < self._push_retry_at:
-                return
-            self._push_and_mark(st)
-            return
-        if mreg and self._marker is not None:
-            v = st.get("marker")
-            if v == self._marker:
-                self._marker_mismatch = 0
-                return
-            self._marker_mismatch += 1
-            if self._marker_mismatch < MARKER_MISMATCH_N:
-                return
-            why = (f"PLC 재기동/메모리 초기화 감지 — 세션 마커 D{mreg} 기대 0x{self._marker:04X}, "
-                   f"읽은 값 0x{int(v or 0):04X} ({MARKER_MISMATCH_N}회 연속)")
-            self._log(f"⚠ {why} → 설정 재적용, 램프 정지")
-            if self._run_prev:
-                self._event("PLC 재기동")
-            self._card("PLC 재기동 감지", why, "WARN", {"PV": self._fmt(st.get("pv"))})
-            self._marker = None
-            self._marker_mismatch = 0
-            if self.profiler.is_active():
-                self.profiler.stop(restore_rate=False)
-            if self._run_prev:
-                self._end_reason = "PLC 재기동"
-            self.owner = None
-            self._need_push = True
-            self._push_retry_at = 0.0
-            self._push_and_mark(st)
-
-    def _push_and_mark(self, st: dict) -> None:
-        c = self.cfg
-        if c.push_config and not self._push_config(st):
-            return
-        mreg = int(c.session_mark_reg)
-        if mreg:
-            m = self.rng.randint(0x1000, 0xFFFE)
-            try:
-                self.drv.w_marker(self._s, mreg, m)
-            except Exception as e:
-                self._push_failed(f"세션 마커 D{mreg}: {e!r}")
-                return
-            self._marker = m
-            self._marker_mismatch = 0
-        self._need_push = False
-        if self._push_fail_n:
-            self._log(f"히터 설정 쓰기 복구 ({self._push_fail_n}회 실패 뒤)")
-        self._push_fail_n = 0
-        self._push_retry_at = 0.0
-
-    def _push_failed(self, what: str) -> None:
-        now = self._now()
-        self._push_fail_n += 1
-        self._push_retry_at = now + PUSH_RETRY_SEC
-        if (now - self._push_fail_log_t) >= PUSH_FAIL_LOG_INTERVAL_S:
-            self._push_fail_log_t = now
-            self._log(f"⚠ 히터 설정 쓰기 실패({self._push_fail_n}회째) — {PUSH_RETRY_SEC:.0f}초 뒤 재시도: {what}")
-
-    def _push_config(self, st: dict) -> bool:
-        """D113 → D126 → D118 → D120 → D121 → D127 → D128 → Kp(D143→D142) → Ti(D145→D144). 2워드는 상위 먼저."""
-        c = self.cfg
-        items = [(H.REG_SV_LIMIT, c.c_to_raw(c.sv_limit_c), "SV상한"), (H.REG_OT_LIMIT, c.c_to_raw(c.ot_limit_c), "OT"),
-                 (H.REG_MV_LIMIT, int(c.mv_limit), "DAC상한"), (H.REG_RAMP_RATE, c.rate_counts(c.ramp_rate), "램프"),
-                 (H.REG_HOLDBACK, c.c_to_raw(c.holdback_c), "홀드백"), (H.REG_SLOW_ZONE, c.c_to_raw(c.slow_zone_c), "감속구간"),
-                 (H.REG_SLOW_RATE, c.rate_counts(c.slow_rate), "감속램프")]
-        expect: Dict[int, int] = {}
-        for addr, raw, name in items:
-            try:
-                self._w_reg(addr, raw)
-                expect[addr] = raw
-            except Exception as e:
-                self._push_failed(f"{name}(D{addr}): {e!r}")
-                return False
-        pid = {}
-        for valid, val, lo, hi, act_key, name in ((c.kp_valid, c.kp, H.REG_KP_LO, H.REG_KP_HI, "kp_act", "Kp"),
-                                                   (c.ti_valid, c.ti_s, H.REG_TI_LO, H.REG_TI_HI, "ti_act", "Ti")):
-            if not valid:
-                continue
-            pid[act_key] = float(val)
-            act = st.get(act_key)
-            if act is not None and abs(float(act) - float(val)) <= max(1e-6, abs(float(val)) * 1e-5):
-                continue
-            w_lo, w_hi = float_to_words(val)
-            try:
-                self._w_reg(hi, w_hi)
-                self._w_reg(lo, w_lo)
-            except Exception as e:
-                self._push_failed(f"{name}(D{lo}/D{hi}): {e!r}")
-                return False
-        self._verify = {"regs": expect, "pid": pid}
-        self._verify_warned = False
-        self._pid_warned = False
-        self._log(
-            f"히터 설정 적용: SV상한 {c.sv_limit_c:.1f}°C · OT {c.ot_limit_c:.1f}°C · DAC상한 {c.mv_limit}"
-            f" · 램프 {c.rate_counts(c.ramp_rate) * 6}°C/min · 홀드백 {c.holdback_c:.1f}°C"
-            f" · 감속 {c.slow_zone_c:.1f}°C/{c.rate_counts(c.slow_rate) * 6}°C/min"
-            f" · Kp {c.kp:g}{'' if c.kp_valid else '(미적용)'} · Ti {c.ti_s:g}s{'' if c.ti_valid else '(미적용)'}")
-        return True
-
-    def _check_verify(self, st: dict) -> None:
-        v = self._verify or {}
-        self._verify = None
-        regs = st.get("_regs") or []
-        mism = []
-        for addr, raw in (v.get("regs") or {}).items():
-            try:
-                got = int(regs[addr - H.REG_BLOCK_START])
-            except Exception:
-                continue
-            if got != int(raw):
-                mism.append(f"D{addr} 요청 {raw} → 실제 {got}")
-        if mism and not self._verify_warned:
-            self._verify_warned = True
-            txt = "설정값이 되읽기와 다릅니다 (래더가 강제 중일 수 있음): " + ", ".join(mism)
-            self._log("⚠ " + txt)
-            if self._run_prev:
-                self._event("설정 되읽기 불일치")
-            self._card("설정 되읽기 불일치", txt, "WARN")
-        pmism = []
-        for key, want in (v.get("pid") or {}).items():
-            act = st.get(key)
-            if act is None or abs(float(act) - float(want)) > max(1e-6, abs(float(want)) * 1e-3):
-                pmism.append(f"{'Kp' if key == 'kp_act' else 'Ti'} 요청 {want:g} → 적용 {act if act is None else round(float(act), 4)}")
-        if pmism and not self._pid_warned:
-            self._pid_warned = True
-            txt = "PID 값이 적용되지 않음(범위·워드 순서 확인, 래더 기본값 사용 중): " + ", ".join(pmism)
-            self._log("⚠ " + txt)
-            if self._run_prev:
-                self._event("설정 되읽기 불일치")
-            self._card("설정 되읽기 불일치", txt, "WARN")
-
-    def _check_program(self, st: dict) -> None:
-        if self._noprog_warned:
-            return
-        kp = st.get("kp_act")
-        if not st.get("tc_ok") and not st.get("da_ok") and (kp is None or float(kp) == 0.0):
-            self._noprog_warned = True
-            self._log("⚠ PLC 에 HEATER 프로그램이 없는 것 같음 (TC1_OK·DA_OK 꺼짐, KP_ACT=0)")
-
-    def _fault_edges(self, st: dict, first: bool) -> None:
-        if st["fault"] and not self._fault_prev:
-            why = self._fault_text(st)
-            if first:
-                why = f"{why} — 기존 래치(프로그램 시작 시 확인)"
-            self._fault_why = why
-            if st["run"] and not self._fault_off_sent:
-                self._fault_off_sent = True
-                try:
-                    self._w_coil(H.COIL_RUN, False)
-                except Exception as e:
-                    self._pending_off = True
-                    self._log(f"⚠ 이상 시 RUN OFF 쓰기 실패 → 보류: {e!r}")
-            if self.profiler.is_active():
-                self.profiler.stop(restore_rate=False)
-            label = self._fault_label(st)
-            ctx = self.context()
-            if self._run_prev or st["run"]:
-                self._event(label)
-            self._end_reason = label
-            self.owner = None
-            self._log(f"⚠ 히터 이상: {why}")
-            self._card("이상", f"{ctx} · {label}", "FAIL",
-                       {"상세": why, "PV": self._fmt(st.get("pv")), "PID err": str(st.get("pid_err"))})
-        elif (not st["fault"]) and self._fault_prev:
-            self._log("히터 이상 해제됨 (정상 복귀)")
-            self._fault_off_sent = False
-        self._fault_prev = bool(st["fault"])
-
-    def _rst_check(self, st: dict) -> None:
-        if not st.get("rst"):
-            self._rst_n = 0
-            return
-        self._rst_n += 1
-        if self._rst_n < RST_STUCK_POLLS or not self.writes_allowed:
-            return
-        try:
-            self._w_coil(H.COIL_RST, False)
-            self._rst_n = 0
-            self._log("⚠ 히터 리셋 코일(M00403)이 1 로 남아 있어 0 으로 되돌림 — 래더의 RST 자기 리셋 확인 필요")
-        except Exception as e:
-            self._log(f"⚠ 히터 리셋 코일(M00403) 0 쓰기 실패 — 다음 폴링에 재시도: {e!r}")
-
-    def _output_dead(self, st: dict, now: float) -> None:
-        cond = bool(st["run"] and st["itl"] and not st["fault"] and st.get("mv") is not None
-                    and int(st["mv"]) < int(self.cfg.mv_min))
-        st["output_dead"] = cond
-        if cond:
-            self._out_dead_cnt += 1
-            grace = self._run_since > 0.0 and (now - self._run_since) >= OUT_DEAD_GRACE_SEC
-            if self._out_dead_cnt >= OUT_DEAD_COUNT and grace and not self._out_dead_notified:
-                self._out_dead_notified = True
-                self._event("출력 죽음")
-                txt = f"운전 중인데 DAC 출력이 최소치 미만입니다 (MV {st['mv']} < {self.cfg.mv_min}, PID 에러 D117={st['pid_err']})"
-                self._log("⚠ " + txt)
-                self._card("출력 죽음", f"{self.context()} · {txt}", "FAIL", {"PV": self._fmt(st.get("pv"))})
-        else:
-            self._out_dead_cnt = 0
-            self._out_dead_notified = False
-
-    def _on_no_response(self, st: dict, info: dict) -> None:
-        """출력 무응답·끊김 판정 — ❌ 카드 → 히터 OFF(종료 사유 = 라벨). 이번 발행 상태 noresp 에 원인 문구(공정 E832 용)."""
-        label = str(info.get("label") or "출력 무응답")
-        detail = str(info.get("text") or "")
-        hint = str(info.get("hint") or "")
-        st["noresp"] = f"{label} — {detail}"
-        self._event(label)
-        self._log(f"⚠ 히터 {label}: {detail} → 히터를 끕니다 ({hint})")
-        self._card(label, f"{self.context()} · {label} — 배선·VARITAP·차단기 확인", "FAIL",
-                   {"판정": detail, "PV": self._fmt(info.get("pv")),
-                    "MV": f"{float(info.get('mv') or 0):.0f}/{float(info.get('limit') or 0):.0f}", "확인": hint})
-        self._turn_off_locked(label)
-
-    def _on_run_rise(self, st: dict) -> None:
-        if self.owner is None:
-            self.owner = "external"
-        c = self.cfg
-        path = None
-        if c.log_enabled and self.csv is not None:
-            r = self.csv.start()
-            path = r or getattr(self.csv, "path", None) or "기록 시작"
-        self._csv_last_t = -1e9
-        tgt = self.profiler.target()
-        tgt_txt = f"{tgt:.1f}°C(램프)" if tgt is not None else self._fmt(st.get("sv"))
-        ramp_txt = f"{self.profiler.rate():g}°C/min" if self.profiler.is_active() else "없음(래더 램프만)"
-        self._log(f"운전 시작 ({OWNER_LABEL.get(self.owner, self.owner)}) — 목표 {tgt_txt} · 램프 {ramp_txt}"
-                  f" · 래더 램프 {st.get('ramp_rate')}°C/min · 홀드백 {self._fmt(st.get('holdback'))}"
-                  f" · SV상한 {self._fmt(st.get('sv_limit'))} · OT {self._fmt(st.get('ot_limit'))}"
-                  f" · DAC상한 {st.get('mv_limit')} · Kp/Ti 적용 {self._num(st.get('kp_act'))}/{self._num(st.get('ti_act'))}"
-                  f" · 유지 모드 {c.hold_mode} · CSV {path if path else '없음'}")
-        self._episode_notes = []
-        self._run_ctx = (self._proc_ctx if (self.owner == "process" and self._proc_ctx)
-                         else OWNER_LABEL.get(self.owner, self.owner))
-        fields = {"목표": self._fmt(self.final_target()), "램프": ramp_txt, "현재 PV": self._fmt(st.get("pv"))}
-        if c.hold_mode == "dac":
-            fields["유지 모드"] = "dac"
-        self._card("시작", self._run_ctx, "INFO", fields)
-
-    def _on_run_fall(self, st: dict, now: float) -> None:
-        try:
-            if self.csv is not None and self.csv.is_open():
-                self.csv.write_row(st, owner=OWNER_LABEL.get(self.owner, self.owner or ""),
-                                   hold=self.hold.log_tuple(), sat_clamp=self.sat.clamped, note="운전 종료")
-            if self.csv is not None:
-                self.csv.stop()
-        except Exception:
-            pass
-        if self.profiler.is_active():
-            self.profiler.stop(restore_rate=True)
-        elif st.get("ramp_rate") is not None and float(st["ramp_rate"]) != self._ramp_c_per_min() and self.writes_allowed:
-            try:
-                self._write_ramp_counts(self.cfg.rate_counts(self.cfg.ramp_rate))
-            except Exception as e:
-                self._log(f"⚠ 래더 램프 속도 원복 실패: {e!r}")
-        dur = (now - self._run_since) if self._run_since > 0 else 0.0
-        plc_bad = any(st.get(k) for k in ("fault", "ot", "tc_err", "wd_err"))
-        if plc_bad:
-            reason = self._fault_label(st)
-        elif self._end_reason:
-            reason = self._end_reason
-        elif self._marker_mismatch > 0:
-            reason = "PLC 재기동 의심(세션 마커 불일치)"
-        elif not st.get("itl") and not st.get("fault"):
-            reason = f"인터락 해제({self._itl_missing(st)}) — PLC 가 RUN 을 끔"
-        else:
-            reason = "외부 OFF 또는 순간 인터락 해제(이 프로그램이 끄지 않음)"
-        from v2.ch12.heater_notify import NORMAL_END_REASONS
-        if reason not in NORMAL_END_REASONS:
-            self._event(reason)
-        ok = (not plc_bad) and (not self._episode_notes) and reason in NORMAL_END_REASONS
-        notes = self._events_text()
-        ctx = self._run_ctx or OWNER_LABEL.get(self.owner, self.owner or "-")
-        self._log(f"운전 종료 — 사유 {reason} · 마지막 PV {self._fmt(st.get('pv'))} · 운전 {dur / 60:.1f}분 · 특이사항 {notes}")
-        self._card("종료", f"{ctx} · {reason}", "SUCCESS" if ok else "FAIL",
-                   {"마지막 PV": self._fmt(st.get("pv")), "운전 시간": self._fmt_duration(dur), "사유": reason,
-                    "특이사항": notes})
-        self.owner = None
-        self._end_reason = None
-        self._episode_notes = []
-        self._run_ctx = None
-        self._proc_ctx = None
-        self._run_since = 0.0
-        self.hold.set_armable(True)
-        self.sat.set_clamp_enabled(True)
-
-    # ═══════════════════════ 저널·이어가기 ═══════════════════════
-    def state_for_journal(self) -> Dict[str, Any]:
-        """1초 저널에 넣을 히터 상태(JSON 으로 바꿀 수 있는 값만)."""
-        with self._lock:
-            st = self._st
-            job = None
-            if self._job is not None:
-                kind, w = self._job
-                job = {"kind": kind, "elapsed_s": self._now() - float(getattr(w, "t0", self._now()))}
-                if kind == "wait":
-                    job.update(target=w.target, hold_sec=w.hold_sec, timeout_s=w.timeout_s,
-                               soak_elapsed_s=(self._now() - w.hold_t0) if w.hold_t0 else None)
-            return {"owner": self.owner, "run": bool(st.get("run")), "target": self.final_target(),
-                    "sv": st.get("sv"), "ramp": ({"target": self.profiler.target(), "rate": self.profiler.rate(),
-                                                  "sv_cmd": self.profiler.sv_cmd()} if self.profiler.is_active() else None),
-                    "hold": {"state": self.hold.state, "value": self.hold.value, "armable": self.hold.armable},
-                    "clamp_enabled": self.sat.clamp_enabled, "watch": bool(self._watch), "job": job,
-                    "context": self._proc_ctx, "rate": self._rate, "marker": self._marker, "wd": self._wd}
-
-    def resume_checks(self, state: Optional[Dict[str, Any]]) -> List[Tuple[str, bool, str]]:
-        """이어가기 전 확인(blocks.RESUME_CHECKS 의 heater_run·watchdog·heater_target) — [(id, 맞음, 문구)]."""
-        with self._lock:
-            st = self._st
-            want = state or {}
-            out: List[Tuple[str, bool, str]] = []
-            fresh = not st.get("stale") and st.get("ok") is not None
-            run_ok = fresh and bool(st.get("run")) == bool(want.get("run"))
-            out.append(("heater_run", run_ok, f"히터 RUN 기대 {bool(want.get('run'))} · 읽음 "
-                                              f"{'--' if not fresh else bool(st.get('run'))}"))
-            wd_ok = fresh and not st.get("wd_err") and not st.get("fault")
-            out.append(("watchdog", wd_ok, "워치독·이상 없음" if wd_ok else
-                        f"워치독/이상 — wd_err={st.get('wd_err')} fault={st.get('fault')} stale={st.get('stale')}"))
-            tgt, sv = want.get("target"), st.get("sv")
-            if not want.get("run"):
-                t_ok, txt = True, "히터 꺼짐 — 목표 확인 없음"
-            elif want.get("ramp"):
-                t_ok, txt = fresh and sv is not None, f"램프 중 — SV {sv} (목표 {tgt})"
-            else:
-                t_ok = fresh and sv is not None and tgt is not None and abs(float(sv) - float(tgt)) <= 0.05
-                txt = f"목표 {tgt} · SV {sv}"
-            out.append(("heater_target", bool(t_ok), txt))
-            return out
-
-    def adopt_journal(self, state: Dict[str, Any]) -> None:
-        """이어가기 — 첫 폴링의 잔존 RUN 정리를 하지 않고 저널의 주체·맥락·램프·감시를 다시 잡는다(장비 설정은 그대로)."""
-        with self._lock:
-            self._skip_residual = bool(state.get("run"))
-            self.owner = state.get("owner")
-            self._proc_ctx = state.get("context")
-            self._rate = state.get("rate")
-            self._watch = bool(state.get("watch"))
-            r = state.get("ramp")
-            if r and r.get("target") is not None:
-                self.profiler.adopt(float(r["target"]), float(r.get("rate") or self.cfg.ramp_rate),
-                                    float(r.get("sv_cmd") or 0.0), "이어가기")
-            if state.get("run"):
-                self._run_prev = True
-                self._run_since = self._now()
-                self._run_ctx = self._proc_ctx or OWNER_LABEL.get(self.owner or "", self.owner)
-            if state.get("hold") is not None:
-                self.hold.set_armable(bool(state["hold"].get("armable", True)))
-            self.sat.set_clamp_enabled(bool(state.get("clamp_enabled", True)))

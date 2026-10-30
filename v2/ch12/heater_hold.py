@@ -11,7 +11,7 @@ engaged_relaxed(강제 진입이면 True)는 v1 처럼 대입만 하고 읽는 �
 from __future__ import annotations
 
 import time
-from typing import Callable, Optional
+from typing import Callable
 
 # 진입 게이트의 유효 허용치 — config 값은 하한, 아래 비율이 실제 판정 폭(챔버K 2026-09-21/22 실측 근거)
 DRIFT_PV_REL = 0.5    # ENTER_TOL 의 절반이면 정착으로 본다

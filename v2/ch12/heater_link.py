@@ -16,7 +16,7 @@ from __future__ import annotations
 
 import traceback
 from collections import deque
-from typing import Any, Callable, Dict, List, Mapping, Optional
+from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
 from v2.ch12.heater_notify import OWNER_LABEL
 from v2.ch12.heater_process import HeaterHoldWaiter, HeaterSoakWaiter, heater_wait_timeout_s, itl_missing_text
@@ -189,7 +189,12 @@ class HeaterProcessLink:
             self._job = ("hold", HeaterHoldWaiter(timeout_s=c.hold_wait_s, give_up_seq0=int(snap.get("give_up_seq") or 0),
                                                   clock=self._now, log=self._log))
             return True, ""
-        self._cmd("heater_hold", locked, None, offline=locked)
+        def done(ok_: bool, why_: str) -> None:
+            if not ok_ and gen == self._gen:     # 요청이 실행되지 못함(bench·안전 요청에 취소 등) — 공정이 기다리지 않게
+                with self._lock:
+                    self._proc_result("failed", f"히터 유지 측정 시작 실패 — {why_}", "E830")
+                self._flush()
+        self._cmd("heater_hold", locked, done, offline=locked)
 
     def heater_cancel(self) -> None:
         with self._lock:
@@ -390,3 +395,66 @@ class HeaterProcessLink:
         """큐 종료 안전망 — 공정이 히터를 쥐고 있으면 끈다(실패·정지·검증 실패·시작 실패 경로 공통)."""
         if self.owner == "process":
             self.heater_off("공정 큐 종료")
+
+    # ═══════════════════════ 저널·이어가기(5단계) ═══════════════════════
+    def state_for_journal(self) -> Dict[str, Any]:
+        """1초 저널에 넣을 히터 상태(JSON 으로 바꿀 수 있는 값만)."""
+        with self._lock:
+            st = self._st
+            job = None
+            if self._job is not None:
+                kind, w = self._job
+                job = {"kind": kind, "elapsed_s": self._now() - float(getattr(w, "t0", self._now()))}
+                if kind == "wait":
+                    job.update(target=w.target, hold_sec=w.hold_sec, timeout_s=w.timeout_s,
+                               soak_elapsed_s=(self._now() - w.hold_t0) if w.hold_t0 else None)
+            return {"owner": self.owner, "run": bool(st.get("run")), "target": self.final_target(),
+                    "sv": st.get("sv"), "ramp": ({"target": self.profiler.target(), "rate": self.profiler.rate(),
+                                                  "sv_cmd": self.profiler.sv_cmd()} if self.profiler.is_active() else None),
+                    "hold": {"state": self.hold.state, "value": self.hold.value, "armable": self.hold.armable},
+                    "clamp_enabled": self.sat.clamp_enabled, "watch": bool(self._watch), "job": job,
+                    "context": self._proc_ctx, "rate": self._rate, "marker": self._marker, "wd": self._wd}
+
+    def resume_checks(self, state: Optional[Dict[str, Any]]) -> List[Tuple[str, bool, str]]:
+        """이어가기 전 확인(blocks.RESUME_CHECKS 의 heater_run·watchdog·heater_target) — [(id, 맞음, 문구)]."""
+        with self._lock:
+            st = self._st
+            want = state or {}
+            out: List[Tuple[str, bool, str]] = []
+            fresh = not st.get("stale") and st.get("ok") is not None
+            run_ok = fresh and bool(st.get("run")) == bool(want.get("run"))
+            out.append(("heater_run", run_ok, f"히터 RUN 기대 {bool(want.get('run'))} · 읽음 "
+                                              f"{'--' if not fresh else bool(st.get('run'))}"))
+            wd_ok = fresh and not st.get("wd_err") and not st.get("fault")
+            out.append(("watchdog", wd_ok, "워치독·이상 없음" if wd_ok else
+                        f"워치독/이상 — wd_err={st.get('wd_err')} fault={st.get('fault')} stale={st.get('stale')}"))
+            tgt, sv = want.get("target"), st.get("sv")
+            if not want.get("run"):
+                t_ok, txt = True, "히터 꺼짐 — 목표 확인 없음"
+            elif want.get("ramp"):
+                t_ok, txt = fresh and sv is not None, f"램프 중 — SV {sv} (목표 {tgt})"
+            else:
+                t_ok = fresh and sv is not None and tgt is not None and abs(float(sv) - float(tgt)) <= 0.05
+                txt = f"목표 {tgt} · SV {sv}"
+            out.append(("heater_target", bool(t_ok), txt))
+            return out
+
+    def adopt_journal(self, state: Dict[str, Any]) -> None:
+        """이어가기 — 첫 폴링의 잔존 RUN 정리를 하지 않고 저널의 주체·맥락·램프·감시를 다시 잡는다(장비 설정은 그대로)."""
+        with self._lock:
+            self._skip_residual = bool(state.get("run"))
+            self.owner = state.get("owner")
+            self._proc_ctx = state.get("context")
+            self._rate = state.get("rate")
+            self._watch = bool(state.get("watch"))
+            r = state.get("ramp")
+            if r and r.get("target") is not None:
+                self.profiler.adopt(float(r["target"]), float(r.get("rate") or self.cfg.ramp_rate),
+                                    float(r.get("sv_cmd") or 0.0), "이어가기")
+            if state.get("run"):
+                self._run_prev = True
+                self._run_since = self._now()
+                self._run_ctx = self._proc_ctx or OWNER_LABEL.get(self.owner or "", self.owner)
+            if state.get("hold") is not None:
+                self.hold.set_armable(bool(state["hold"].get("armable", True)))
+            self.sat.set_clamp_enabled(bool(state.get("clamp_enabled", True)))

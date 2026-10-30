@@ -121,7 +121,6 @@ def test_interlock_loss_stops_run_with_cause(attr, label):
 def test_interlock_loss_recorded_in_csv(tmp_path):
     from v2.ch12.heater_profile import HeaterCfg, cfg_to_dict
     from v2.ch12.outputs.heater_csv import HeaterCsv
-    from v2.ch12.sim.heater_rig import FakeClock
     cfg = cfg_to_dict(HeaterCfg(enabled=True, log_enabled=True, log_dir=str(tmp_path)))
     r = FastHeaterRig(cfg=cfg)
     sink = HeaterCsv(cfg, monotonic=r.clk.monotonic)
