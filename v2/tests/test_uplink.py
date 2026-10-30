@@ -287,6 +287,7 @@ def test_normal_flow_commands_schema_and_secrets(tmp_path, rigs):
     assert web.auth_seen and all(a == f"Bearer {web.token}" for a in web.auth_seen)
 
 
+@pytest.mark.slow                                  # 실제 시간 다시 시도 간격(1→2→4 s)·응답 지연을 그대로 재므로 약 25 s
 def test_http_errors(tmp_path, rigs, monkeypatch):
     monkeypatch.setattr(U, "AUTH_RETRY_S", 0.5)
     monkeypatch.setattr(U, "CONFLICT_RETRY_S", 0.3)

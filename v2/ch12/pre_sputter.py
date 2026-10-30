@@ -246,7 +246,7 @@ class PreSputter:
                 self._run_one(g)
             except Exception as e:
                 self._log(f"[PreSputter] 실행 중 예외: {e!r} — 이번 회차 실패, 다음 예약 유지")
-                self.status_text = f"실행 오류 · 다음 {self._hhmm()}"
+                self.status_text = f"실행 오류 · 다음 {self._hhmm()}" if self._repeat else "실행 오류"   # v1 296-298
             if not self._alive(g):
                 return
             if not self._repeat:

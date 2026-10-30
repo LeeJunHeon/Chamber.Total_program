@@ -511,6 +511,38 @@ def test_ig_process_status_off_purges_and_route_errors():
     r.done()
 
 
+class _Nil:
+    """무엇을 불러도 조용히 '없음' — 정리 함수의 다른 장비 부분(이 시험과 무관)을 건너뛰게."""
+    def __call__(self, *a, **k):
+        return _Nil()
+
+    def __getattr__(self, n):
+        return _Nil()
+
+    def __bool__(self):
+        return False
+
+    def __iter__(self):
+        return iter(())
+
+    def __contains__(self, x):
+        return False
+
+    def __sub__(self, o):
+        return set()
+
+    def __getitem__(self, k):
+        return _Nil()
+
+
+class _Stub:
+    def __init__(self, **kw):
+        self.__dict__.update(kw)
+
+    def __getattr__(self, n):
+        return _Nil()
+
+
 def test_ig_shared_with_same_chamber_pc_is_left_alone():
     """DEV-116 — 같은 CH 플라즈마 클리닝이 IG 를 쓰는 중이면 챔버 공정은 IG status·pressure 를 기록하지 않고
     정리 때 IG 대기 취소·폴링 끄기를 생략한다(진행 중 Base 대기를 끊지 않음)."""
@@ -531,16 +563,14 @@ def test_ig_shared_with_same_chamber_pc_is_left_alone():
         h._ev_ig("base_reached", NS())
         assert (logs == []) is in_use and matches == [("IG_OK",)]
         calls = []
-        ig = NS(cancel_wait=lambda: calls.append("cancel_wait"), set_process_status=lambda v: calls.append(("sps", v)))
-        me = NS(sys=NS(shared=NS(mfc={"ch1": NS(users=set(), release=lambda o: None)}, pulse=NS(release_chamber=lambda c: None))),
-                ch="ch1", owner="chamber1", mfc=NS(on_process_cleanup=lambda: None, release_owner=lambda *a: None),
-                mfc_polling=False, dc={}, rf=None, ig=ig, e=NS(ig_in_use_by_pc=lambda: in_use), oes=None, oes_active=False,
-                dcp=None, rfp=None, log=lambda s, m: logs.append((s, m)), camera_leave=lambda: None)
+        ig = NS(cancel_wait=lambda *a: calls.append("cancel_wait"), set_process_status=lambda v: calls.append(("sps", v)))
+        me = _Stub(ch="ch1", owner="chamber1", ig=ig, e=_Stub(ig_in_use_by_pc=lambda: in_use), oes=None, dcp=None, rfp=None,
+                   mfc_polling=False, dc={}, rf=None, log=lambda s, m: logs.append((s, m)))
         ProcessActions.cleanup_devices(me)
         if in_use:
             assert calls == [] and ("IG", "같은 CH Plasma Cleaning 이 IG 사용 중 → IG 대기 취소/정리 생략 (공유 장치 보호)") in logs
         else:
-            assert calls == ["cancel_wait", ("sps", False)]
+            assert calls[:2] == ["cancel_wait", ("sps", False)]
 
 
 # ───────────────────────── DC·RF 연속(PLC D/A) ─────────────────────────

@@ -91,7 +91,7 @@ def test_robot_tcp_end_to_end_start_sputter_ch1_ch2(tmp_path):
     rec = tmp_path / "recipes"
     rec.mkdir()
     for ch in (1, 2):
-        (rec / f"t{ch}.csv").write_text(f"#,Process_name,time\ntest,R{ch},6s\n", encoding="utf-8")
+        (rec / f"t{ch}.csv").write_text(f"#,Process_name,time\ntest,R{ch},2s\n", encoding="utf-8")   # 실제 시계 — 짧게
     tick = None
     srv = None
     try:

@@ -513,39 +513,6 @@ class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, Process
             raise _AfterFinishError() from ex
         return res.ok, bool(detail.get("stopped"))
 
-    def _preflight_exception(self, params: dict, ex: Exception) -> RuntimeError:
-        """_start_after_preflight 의 except(4097-4119): 문구 로그·'오류' 창·호스트 실패 응답·장비 정리 → RuntimeError(문구)."""
-        note = params.get("process_note", "알 수 없는")
-        msg = f"오류: '{note}' 시작 실패. ({ex})"
-        self.log("MAIN", msg)
-        self.popup("오류", msg, level="error")
-        self._host(False, msg)
-        try:
-            self.actions.cleanup_devices()
-        except Exception:
-            pass
-        return RuntimeError(msg)
-
-    def _start_exception(self, ex: Exception, queue: bool) -> None:
-        """_runner_stage_start_single / _runner_stage_advance_queue 의 except(4964-4976·5232-5244): 로그 → 호스트 실패 응답(큐) →
-        장비 정리 → 결과(run_end error PREFLIGHT_FAILED, 문구 '시작 실패: …' / '공정 시작 실패: …' — Robot CSV '실패' 사유) → 리셋."""
-        if queue:
-            self.log("MAIN", f"[Runner] ADVANCE_QUEUE failed: {ex!r}")
-            why = f"공정 시작 실패: {ex}"
-            self._host(False, why)
-        else:
-            self.log("MAIN", f"[Runner] START_SINGLE failed: {ex!r}")
-            why = f"시작 실패: {ex}"
-        self.queue_mode = False
-        try:
-            self.actions.cleanup_devices()
-        except Exception:
-            pass
-        self.error = "PREFLIGHT_FAILED"
-        self.last_end_t = self.clock.monotonic()
-        self.emit("run_end", why, "PREFLIGHT_FAILED", level="error", result="error")
-        self._reset_after_list()
-
     def _host(self, ok: bool, msg: str) -> None:
         f = self.on_host_start
         if f is not None:

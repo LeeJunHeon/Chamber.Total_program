@@ -1526,3 +1526,484 @@ def test_t155_shared_poll_users_counts():
     assert m.release("nobody") == 2 and m.users == {"chamber1", "pc2"}
     assert m.release("pc2") == 1 and m.release("chamber1") == 0 and m.users == set()
     r.done()
+
+
+# ═════════════ OES 워커 DLL 호출·일련번호·연결 감시(v1 tests/test_oes_worker_cyusb.py — 가짜 DLL 객체로) ═════════════
+_LIST_A = [r"\\?\usb#vid_0547&pid_1002#a#{ae18aa60-7f6a-11d4-97dd-00010229b959}",
+           r"\\?\usb#vid_0547&pid_1002#b#{ae18aa60-7f6a-11d4-97dd-00010229b959}"]
+
+
+class _OesFakeDll:
+    """호출을 (이름, 인자값) 으로 기록하는 가짜 SPdbUSBm.dll(v1 시험의 FakeDLL 과 같음)."""
+
+    def __init__(self, *, read_ok=lambda n: True, serial="SN-A1", tests=2):
+        self.calls, self.reads, self._read_ok, self._serial, self._tests = [], 0, read_ok, serial, tests
+
+    def _read(self, buf, ch):
+        self.reads += 1
+        if not self._read_ok(self.reads):
+            return -1
+        for i in range(len(buf)):
+            buf[i] = self.reads
+        return 0
+
+    def _dev_info(self, mb, sb, ch):
+        import ctypes
+        if self._serial is None:
+            return -1
+        ctypes.memmove(mb, b"SM303\x00", 6)
+        s = self._serial.encode() + b"\x00"
+        ctypes.memmove(sb, s, len(s))
+        return 0
+
+    def __getattr__(self, name):
+        if name.startswith("_"):
+            raise AttributeError(name)
+        impl = {"spReadDataEx": self._read, "spDevInfo": self._dev_info,
+                "spTestAllChannels": lambda *_a: self._tests, "spGetWLTable": lambda *_a: -1}.get(name)
+        dll = self
+
+        def fn(*args):
+            dll.calls.append((name, tuple(getattr(a, "value", a) for a in args)))
+            return impl(*args) if impl else 0
+        object.__setattr__(self, name, fn)
+        return fn
+
+    def names(self):
+        return [c[0] for c in self.calls]
+
+
+@pytest.fixture
+def oes_env(tmp_path, monkeypatch):
+    pytest.importorskip("numpy")
+    from v2.ch12.workers import oes_common as C
+    from v2.ch12.workers import oes_device as OD
+    out = []
+    monkeypatch.setattr(C, "_print_json", out.append)
+    monkeypatch.setattr(C, "_runlog", lambda m: None)
+    monkeypatch.setattr(OD, "_runlog", lambda m: None)
+    C.set_home(str(tmp_path))
+    monkeypatch.setattr(OD, "_DDL_LOCK", None)                 # asyncio.run 마다 새 루프(v1 시험도 W._DDL_LOCK = None)
+    env = SimpleNamespace(tmp=tmp_path, out=out, C=C, OD=OD, mp=monkeypatch,
+                          statuses=lambda: [o.get("message", "") for o in out if o.get("kind") == "status"])
+    yield env
+    C.set_home(None)
+
+
+def _oes_ready(env, dll, avg=1):
+    o = env.OD.OESAsync(chamber=1, usb_index=0, save_directory=str(env.tmp / "save"), avg_count=avg)
+    o.sp_dll = dll
+    o._bind_functions()
+    o.sChannel, o._npix = 0, 1056
+    o._roi_start, o._roi_end = env.OD.ROI_START_DEFAULT, env.OD.ROI_END_DEFAULT
+    dll.calls.clear()
+    return o
+
+
+def test_t104_slice_avg_reads_only_and_settings_without_baseline(oes_env):
+    """apps/oes_service/oes_api.py:165·560 — 슬라이스 평균은 spReadDataEx×3 만(spSetupGivenChannel 없음), 설정 적용은
+    spSetTrgEx(11)·spSetTEC(1)·spSetDblIntEx(50.0) 만(spSetBaseLineCorrection 없음)."""
+    dll = _OesFakeDll()
+    o = _oes_ready(oes_env, dll, avg=3)
+    x, y = o._acquire_one_slice_avg()
+    assert x is not None and y is not None and dll.names() == ["spReadDataEx"] * 3
+    dll.calls.clear()
+    o._apply_device_settings_blocking(0, 50)
+    assert dll.calls == [("spSetTrgEx", (11, 0)), ("spSetTEC", (1, 0)), ("spSetDblIntEx", (50.0, 0))]
+
+
+def test_t104_link_ok_rules(oes_env):
+    """oes_api.py:1940 link_ok — 기준 없으면(옛 드라이버) 늘 정상, 목록 조회 일시 실패(None)도 정상, 순서만 다르면 정상, 빠지면 비정상."""
+    o = _oes_ready(oes_env, _OesFakeDll())
+    o._link_baseline = None
+    assert o.link_ok() is True
+    o._link_baseline = sorted(_LIST_A)
+    for cur, want in ((None, True), (list(reversed(_LIST_A)), True), ([], False), (_LIST_A[:1], False)):
+        oes_env.mp.setattr(oes_env.OD, "_list_cyusb_interfaces", lambda c=cur: c)
+        assert o.link_ok() is want
+
+
+def _oes_init(env, dll, *, config=None, lists=None):
+    import asyncio
+    import json as _json
+    if config is not None:
+        (env.tmp / "oes_config.json").write_text(_json.dumps(config), encoding="utf-8")
+    seq = list(lists or [_LIST_A])
+
+    def _fake_list():
+        cur = seq.pop(0) if len(seq) > 1 else seq[0]
+        return None if cur is None else list(cur)
+    o = env.OD.OESAsync(chamber=1, usb_index=0, save_directory=str(env.tmp / "save"))
+
+    def _load():
+        o.sp_dll = dll
+        o._bind_functions()
+    o._load_and_bind_blocking = _load
+    env.mp.setattr(env.OD, "_list_cyusb_interfaces", _fake_list)
+    env.OD._DDL_LOCK = None
+    ok = asyncio.run(o.initialize_device())
+    return o, ok
+
+
+def test_t105_expected_serial_rules(oes_env):
+    """oes_api.py:857·1160 — 기대 일련번호 불일치 실패('분광기 일련번호 불일치: CH1 기대=sn-a1, 실제=SN-B2'), 대소문자·공백 무시 일치,
+    읽기 실패면 '실제=(읽기 실패)' 실패, 기대값 없으면 통과 + '[init] 분광기 확인 USB0: 모델=SM303(PDA), 일련번호=SN-A1, 연결 목록=…'
+    (기준 목록 저장), 초기화 중 연결 목록이 바뀌면 '초기화 중 분광기 연결 변화'."""
+    o, ok = _oes_init(oes_env, _OesFakeDll(serial="SN-B2"), config={"enabled": False, "expected_serial": {"1": " sn-a1 ", "2": "SN-B2"}})
+    assert ok is False and o._last_error == "분광기 일련번호 불일치: CH1 기대=sn-a1, 실제=SN-B2"
+    o, ok = _oes_init(oes_env, _OesFakeDll(serial="SN-A1"), config={"expected_serial": {"1": " sn-a1 "}})
+    assert ok is True and o._serial == "SN-A1"
+    o, ok = _oes_init(oes_env, _OesFakeDll(serial=None), config={"expected_serial": {"1": "SN-A1"}})
+    assert ok is False and "실제=(읽기 실패)" in o._last_error
+    oes_env.out.clear()
+    o, ok = _oes_init(oes_env, _OesFakeDll(serial="SN-A1"), config={"enabled": True})
+    assert ok is True and o._link_baseline == sorted(_LIST_A)
+    assert any(m.startswith("[init] 분광기 확인 USB0: 모델=SM303(PDA), 일련번호=SN-A1, 연결 목록=") for m in oes_env.statuses())
+    (oes_env.tmp / "oes_config.json").unlink()
+    o, ok = _oes_init(oes_env, _OesFakeDll(serial=None))
+    assert ok is True and o._serial == ""
+    o, ok = _oes_init(oes_env, _OesFakeDll(), lists=[_LIST_A, _LIST_A[:1]])
+    assert ok is False and o._last_error == "초기화 중 분광기 연결 변화"
+    o, ok = _oes_init(oes_env, _OesFakeDll(), lists=[None])                 # 옛 드라이버 — 감시 끔
+    assert ok is True and o._link_baseline is None and o.link_ok() is True
+
+
+def test_t106_config_read_failure_turns_serial_check_off(oes_env):
+    """oes_api.py:857 — oes_config.json 을 못 읽으면 '[init] oes_config.json 읽기 실패 → 일련번호 확인 꺼짐', 없으면 '확인=꺼짐(expected_serial 없음)'."""
+    (oes_env.tmp / "oes_config.json").write_text("{깨진", encoding="utf-8")
+    o, ok = _oes_init(oes_env, _OesFakeDll(serial="SN-A1"))
+    assert ok is True and "[init] oes_config.json 읽기 실패 → 일련번호 확인 꺼짐" in oes_env.statuses()
+    assert any("확인=꺼짐(expected_serial 없음)" in m for m in oes_env.statuses())
+
+
+def test_t107_cleanup_close_rules(oes_env):
+    """oes_api.py:1070 cleanup — 연결 목록이 기준과 다르면 '[cleanup] 연결 목록이 기준과 다름 → 닫기 명령 생략', 같거나 조회 실패(None)·
+    감시 꺼짐이면 spCloseGivenChannel(0) 1회; 끝나면 sChannel −1·sp_dll None."""
+    import asyncio
+    logs = []
+    oes_env.mp.setattr(oes_env.OD, "_runlog", logs.append)
+
+    def run(listing, baseline=True):
+        dll = _OesFakeDll()
+        o = _oes_ready(oes_env, dll)
+        o._link_baseline = sorted(_LIST_A) if baseline else None
+        oes_env.mp.setattr(oes_env.OD, "_list_cyusb_interfaces", listing)
+        oes_env.OD._DDL_LOCK = None
+        asyncio.run(o.cleanup())
+        assert o.sChannel == -1 and o.sp_dll is None
+        return dll
+    assert run(lambda: list(_LIST_A[:1])).names().count("spCloseGivenChannel") == 0
+    assert "[cleanup] 연결 목록이 기준과 다름 → 닫기 명령 생략" in logs
+    assert run(lambda: list(_LIST_A)).calls == [("spCloseGivenChannel", (0,))]
+    assert run(lambda: None).calls == [("spCloseGivenChannel", (0,))]
+    assert run(lambda: list(_LIST_A[:1]), baseline=False).calls == [("spCloseGivenChannel", (0,))]
+
+
+def test_t106_other_chamber_only_fails_before_reset_and_pre_read_once(oes_env):
+    """oes_api.py:857·1252 — 다른 챔버 분광기만 꽂혀 있으면(사전 읽기에서 불일치) 리셋·초기화 전에 실패(spDevInfo·spTestAllChannels 만),
+    사전 읽기가 맞으면 spDevInfo 1회(채널 설정 전)·'읽은 시점=사전, 확인=일치(기대 SN-A1)'."""
+    dll = _OesFakeDll(serial="SN-B2", tests=1)
+    o, ok = _oes_init(oes_env, dll, config={"expected_serial": {"1": "SN-A1"}}, lists=[_LIST_A[:1]])
+    assert ok is False and o.sChannel == -1 and o._last_error == "분광기 일련번호 불일치: CH1 기대=SN-A1, 실제=SN-B2"
+    assert sorted(set(dll.names())) == ["spDevInfo", "spTestAllChannels"]
+    oes_env.out.clear()
+    dll = _OesFakeDll(serial="SN-A1")
+    o, ok = _oes_init(oes_env, dll, config={"expected_serial": {"1": "SN-A1"}})
+    assert ok is True and o.sChannel == 0 and dll.names().count("spDevInfo") == 1
+    assert dll.names().index("spDevInfo") < dll.names().index("spSetupGivenChannel")
+    assert any("읽은 시점=사전, 확인=일치(기대 SN-A1)" in m for m in oes_env.statuses())
+
+
+def test_t106_measure_blocked_until_link_ok_sends_no_commands(oes_env):
+    """oes_api.py:1252 _LinkGuard.ensure_at_start — 측정 시작 때 목록이 기준과 다르면(대기 한도 안에 안 돌아옴) USB 명령 0건·CSV 없음·'[link]'."""
+    import asyncio
+    from v2.ch12.workers import oes_daemon as ODm, oes_guard as OG
+    dll = _OesFakeDll()
+    o = _oes_ready(oes_env, dll)
+    o._link_baseline = sorted(_LIST_A)
+    oes_env.mp.setattr(oes_env.OD, "_list_cyusb_interfaces", lambda: list(_LIST_A[:1]))
+    oes_env.mp.setattr(OG, "_list_cyusb_interfaces", lambda: list(_LIST_A[:1]))
+    for k, v in (("_LINK_WAIT_AT_START_S", 0.2), ("_LINK_POLL_S", 0.01), ("_LINK_SETTLE_S", 0.01)):
+        oes_env.mp.setattr(OG, k, v)
+    oes_env.OD._DDL_LOCK = None
+    out_csv = oes_env.tmp / "a" / "x.csv"
+    with pytest.raises(RuntimeError, match=r"\[link\]"):
+        asyncio.run(ODm._daemon_measure_once(oes=o, ch=1, usb=0, duration_s=1.0, integration_ms=50, sample_interval_s=0.05,
+                                             avg_count=1, out_dir=None, out_csv=out_csv))
+    assert dll.calls == [] and not out_csv.exists()
+
+
+# ═════════════ OES 저장 위치·완료 문구(v1 tests/test_oes_local_dir.py) ═════════════
+def test_t099_worker_never_copies_to_g_and_keeps_local():
+    """apps/oes_service/oes_api.py:134 _copy_csv_to_nas → (False, None, None, False) — G: 경로·robocopy 없음, 로컬 CSV 유지."""
+    import asyncio
+    from v2.ch12.workers import oes_common as C
+    assert asyncio.run(C._copy_csv_to_nas(Path("x.csv"), 1)) == (False, None, None, False)
+
+
+@pytest.mark.parametrize("obj,msg,nas", [
+    ({"ok": True, "nas_ok": False}, "OES 측정 완료(로컬 저장)", False),
+    ({"ok": True, "nas_ok": False, "nas_error": "robocopy failed rc=8"}, "OES 측정 완료(로컬 저장, NAS 실패: robocopy failed rc=8)", False),
+    ({"ok": True, "nas_ok": True, "nas_csv": r"G:\공유 드라이브\OES\CH1\a.csv", "local_deleted": False}, "OES 측정 완료(NAS 저장)", True),
+])
+def test_t100_daemon_finish_messages(tmp_path, obj, msg, nas):
+    """device/oes.py:648·1328 — 새 워커는 로컬 저장 문구·로컬 CSV 유지, 재빌드 전 옛 워커(G: 복사 성공·로컬 못 지움)면 'NAS 저장'·
+    out_csv = G: 경로·로컬 삭제, NAS 실패면 '(로컬 저장, NAS 실패: …)'."""
+    import itertools
+    from v2.common.clock import VirtualClock
+    from v2.ch12.drivers import oes_link as OL
+    out = tmp_path / "OES_Data_1.csv"
+    out.write_text("Time\n", encoding="utf-8")
+    c = VirtualClock()
+    c.register()
+    f = SimpleNamespace(clock=c, _ids=itertools.count(1), _daemon=object(), _rows_seen=3, is_running=False, _waiter=None)
+    f._ensure_daemon = lambda t, force: True
+    f._f = lambda k, d: d
+    f._c = lambda k, d=None: d
+    f._new_measure = lambda: out
+    f.local_dir = lambda: tmp_path
+    f._clear_local_flags = f._start_tail = f._stop_tail = lambda *a: None
+    f._status = lambda m: None
+    f._measure_timeout = lambda d: 60.0
+
+    def send(_d, m):
+        f._waiter.result = dict(obj, rows=5, elapsed_s=2.0)
+        return True
+    f._send = send
+    res = OL.OesLink._run_daemon(f, 2.0, 50)
+    c.close()
+    assert res.success and res.message == msg and res.rows == 5
+    assert (res.out_csv == obj["nas_csv"]) if nas else (res.out_csv == str(out))
+    assert out.exists() is (not nas)
+
+
+# ═════════════ RGA(v1 tests/test_oes_rga_fixes.py:87, test_rga_worker_ascii_json.py:43) ═════════════
+def test_t102_rga_step_timeout_follows_settings():
+    """lib/config_common.py:100-125 rga_step_timeout_ms = n×t×1000 + (n−1)×d×1000 + 5000 — 기본 187000, 설정 (2, 30, 0.5) → 65500
+    (실행기는 상수 대신 이 함수를 그때 부름)."""
+    import inspect
+    from v2.ch12 import process_runner
+    from v2.ch12.drivers import rga_link as rl
+    assert rl.step_timeout_ms({}) == 187000
+    assert rl.step_timeout_ms({"RGA_MAX_ATTEMPTS": 2, "RGA_WORKER_TIMEOUT_S": 30.0, "RGA_RETRY_DELAY_S": 0.5}) == 65500
+    assert "step_timeout_ms(self.cfg)" in inspect.getsource(process_runner) and "RGA_STEP_TIMEOUT_MS" not in inspect.getsource(process_runner)
+
+
+def test_t145_rga_worker_json_is_ascii_and_korean_survives(capsys):
+    """apps/rga_service/rga_api.py:94 — JSON 은 ASCII 만(한글은 \\uXXXX) → 메인(UTF-8)이 워커 인코딩과 무관하게 한글 경로·오류를 받음."""
+    import json as _json
+    from v2.ch12.workers import rga_worker as RW
+    path = r"C:\VanaM_Logs\RGA\한글 폴더\CH1.csv"
+    RW._emit({"kind": "result", "ok": False, "csv": path, "error": "RuntimeError: RGA 연결 실패: 응답 없음",
+              "csv_error": "primary(권한 없음)/fallback(디스크 가득)", "pressures": [0.5, 0.6]})
+    line = capsys.readouterr().out.strip()
+    assert line.isascii() and "\\u" in line
+    got = _json.loads(line.encode("cp949", errors="strict").decode("utf-8"))
+    assert got["csv"] == path and got["error"] == "RuntimeError: RGA 연결 실패: 응답 없음"
+    assert got["csv_error"] == "primary(권한 없음)/fallback(디스크 가득)" and got["pressures"] == [0.5, 0.6]
+
+
+# ═════════════ TEST-086 코일 로그 요약 low_fail(v1 tests/test_leak_guards.py:373) ═════════════
+def test_t086_coil_log_summary_low_fail_is_interval_counter():
+    """device/plc.py:1932-2003 — 코일 스냅샷 실패 N 회 뒤 요약 'plc_error=N … low_fail=N', 요약 뒤 0. v2 는 1초 행의 plc.q=fail 이 그 실패."""
+    from datetime import datetime, timedelta
+    from v2.ch12.outputs.base import QueueWriter
+    from v2.ch12.outputs.plc_coil_csv import PlcCoilCsv
+    from v2.ch12.outputs.row_feed import plc_coil_args
+    assert plc_coil_args({"plc.q": "fail"}, True) == {"connected": True, "coils": None, "plc_error": True}
+    assert plc_coil_args({"plc.q": "late"}, True) == {"connected": True, "coils": None}
+    logs = []
+    w = QueueWriter("t")
+    c = PlcCoilCsv({"PLC_COIL_LOG_INTERVAL_S": 1.0, "PLC_COIL_LOG_SUMMARY_S": 10.0}, writer=w, log=logs.append)
+    t0 = datetime(2026, 10, 30, 9, 0, 0)
+    try:
+        for k in range(4):                                     # 0~3 s 실패 4회
+            c.on_tick(t0 + timedelta(seconds=k), mono=float(k), **plc_coil_args({"plc.q": "fail"}, True))
+        c.on_tick(t0 + timedelta(seconds=10), mono=10.0, connected=False)          # 요약 1
+        c.on_tick(t0 + timedelta(seconds=20), mono=20.0, connected=False)          # 요약 2(리셋 뒤)
+    finally:
+        w.stop()
+    summ = [m for m in logs if "PLC COIL LOG summary" in m]
+    assert len(summ) == 2
+    assert "plc_error=4" in summ[0] and summ[0].endswith("low_fail=4") and "disconnected=1" in summ[0]
+    assert summ[1].endswith("low_fail=0") and "plc_error=0" in summ[1]
+
+
+# ═════════════ 펄스 로그 게이트·시작 순서(v1 tests/test_log_gates.py:105-180) ═════════════
+def test_t090_rf_pulse_raw_log_gate():
+    """device/rf_pulse.py:1100-1107 — RFPULSE_RAW_LOG=false 면 '[POLL …]' 태그만 원시 프레임 문구 생략(그 밖·None·'' 은 남김), true 면 전부."""
+    from v2.ch12.drivers import rfpulse as RP
+    from v2.ch12.params import rfpulse as PR
+    from v2.common.paramdef import defaults
+    d = RP.RfPulseDriver(_Clk(), None, defaults(PR.PARAMS), True, on_event=lambda e: None, chamber="ch1")
+    assert d._raw_on("[POLL FWD]") is False and d._raw_on("[POLL WAKE]") is False
+    assert d._raw_on("[RF ON]") is True and d._raw_on(None) is True and d._raw_on("") is True
+    d.cfg["RFPULSE_RAW_LOG"] = True
+    assert d._raw_on("[POLL FWD]") is True
+
+
+def test_t091_dc_pulse_start_order_counters():
+    """device/dc_pulse.py:1039-1065·678 — 과전류 카운터 0 은 OUTPUT_ON 보내기 전(이전 런 값이 남아 있어도), 점화 창 시작 시각·PIV 정합성
+    검사 플래그는 ON(HV 확인) 뒤; 활성화 감시가 센 과전류 수를 폴링이 0 으로 밀지 않음(STREAK 2 → 활성화 중 2회째에 차단)."""
+    from v2.tests.test_dcpulse import Rig
+    r = Rig(cfg={"DC_OVERCURRENT_ENABLE": True})
+    r.d._overcurr_n = 5
+    r.d._piv_scale_checked = True
+    t0 = r.c.monotonic()
+    assert r.start(100.0, freq=50, off_time_us=5.0) == (None, True)
+    assert r.d._overcurr_n == 0 and r.d._arc_run_start_ts > t0
+    on_sent = [ts for ts, f in list(r.sim.received) if f[1] == 0x80 and len(f) == 6 and f[3] == 1][0]
+    assert r.d._arc_run_start_ts >= on_sent
+    r.done()
+    r = Rig(cfg={"DC_OVERCURRENT_ENABLE": True, "DC_OVERCURRENT_STREAK_N": 2})
+    r.sim.i_override_a = 2.71
+    reason, ok = r.start(190.0, freq=50, off_time_us=5.0)
+    stop = [e for e in r.ev("command_failed") if e.cmd == "AUTO_STOP"]
+    assert ok is False and stop and "2회 연속" in stop[0].detail
+    assert any("(1/2)" in e.detail for e in r.ev("status") if e.detail.startswith("[WARN] 과전류 감지"))
+    r.done()
+
+
+# ═════════════ TEST-126 프리스퍼터 예약 루프(v1 tests/test_pre_sputter_loop_error.py:31) ═════════════
+def test_t126_once_exception_ends_normally_and_cancel_ends_loop(tmp_path):
+    """runtime/pre_sputter_runtime.py:256-312 — 1회 예약(반복 아님)은 회차 예외여도 '1회 예약 실행 완료(반복 없음)'·상태 '실행 오류'로
+    끝나고 루프 종료, 취소는 실행 0·예외 로그 없이 루프 종료(매일 반복 쪽은 test_pre_sputter.py::test_round_exception_keeps_daily_reservation)."""
+    from v2.ch12 import pre_sputter as PS
+    from v2.tests.test_pre_sputter import FakeEng, _clock
+    c = _clock()
+    e = FakeEng(c)
+    e.snapshot_recipe_queue = lambda: (_ for _ in ()).throw(RuntimeError("boom"))
+    p = PS.PreSputter(c, e, settings_dir=tmp_path, hh=6, mm=0)
+    p.start_daily()
+    p._repeat = False                                   # v1 시험처럼 반복 끔(1회 예약)
+    c.wait_until(c.monotonic() + 300, lambda: any("1회 예약 실행 완료(반복 없음)" in l for l in p.lines))
+    assert any("실행 중 예외: RuntimeError('boom')" in l for l in p.lines) and p.status_text == "실행 오류"
+    assert not any("다음 반복 예약" in l for l in p.lines)
+    p.close()
+    e2 = FakeEng(c)
+    p2 = PS.PreSputter(c, e2, settings_dir=tmp_path / "b", hh=7, mm=0)
+    p2.start_daily()
+    c.wait_until(c.monotonic() + 5)
+    p2.stop()
+    c.wait_until(c.monotonic() + 7200)
+    assert e2.calls == [] and not any("예외" in l for l in p2.lines) and not p2.is_reserved
+    p2.close()
+    c.close()
+
+
+# ═════════════ TEST-128 히터 공정 흐름(v1 tests/test_process_heater_steps.py:212-330 — 엔진 실제 실행 + 히터 대역) ═════════════
+def _heater_flow(tmp_path, heater, hooks=()):
+    from v2.tests import proc_rig as R
+    from v2.tests.test_process_list import H2
+    rig = R.make(tmp_path, chambers=("ch2",), ch2={"heater": heater})
+    e = rig.eng["ch2"]
+    assert e.load([dict(H2)]) is None
+    R.run(rig, R.idle(e), max_ticks=600, hooks=[R.at(2, lambda: e.start(source="local")), *hooks])
+    return R, e
+
+
+@pytest.mark.slow
+def test_t128_heater_flow_order_timeout_hold_abort_fault_and_stop(tmp_path):
+    """controller/process_controller.py:1018-1027 — 정상 heater_set → heater_wait → IG …, 전원 ON 뒤 유지 측정(hold), 끝에 정리;
+    대기 시간 초과 E831 실패; 유지 중단 E833 은 실패(종료 절차 — DC Pulse OFF 수행); 대기 중 STOP 은 결과 STOP·대기 취소(heater_cancel);
+    공정 중 히터 이상 E832 는 FAIL."""
+    from v2.tests.test_process_list import FakeHeater
+
+    h = FakeHeater()
+    R, e = _heater_flow(tmp_path / "ok", h)
+    names = [c[0] for c in h.calls]
+    assert R.ends(e) == [("done", None)] and names.index("set") < names.index("wait") < names.index("hold")
+    acts = [a for _t, _i, a, _m, sd in e.traces[-1] if not sd]
+    assert acts[:3] == ["HEATER_SET", "HEATER_WAIT", "IG_CMD"]
+    assert acts.index("HEATER_HOLD") > next(i for i, a in enumerate(acts) if a == "DC_PULSE_START")
+
+    class Timeout(FakeHeater):
+        def heater_wait(self, target, soak_s=None):
+            self.calls.append(("wait", target, soak_s))
+            self.on_process("failed", False, "히터 도달 시간 초과", "E831")
+    h = Timeout()
+    R, e = _heater_flow(tmp_path / "to", h)
+    assert R.ends(e) == [("error", "E831")] and ("cancel",) in h.calls
+
+    class HoldAbort(FakeHeater):
+        def heater_hold(self):
+            self.calls.append(("hold",))
+            self.on_process("failed", False, "유지 측정 실패 — 포기", "E833")
+    h = HoldAbort()
+    R, e = _heater_flow(tmp_path / "hold", h)
+    sd = [a for _t, _i, a, _m, s in e.traces[-1] if s]
+    assert R.ends(e) == [("error", "E833")] and "DC_PULSE_STOP" in sd
+
+    class Slow(FakeHeater):
+        def heater_wait(self, target, soak_s=None):
+            self.calls.append(("wait", target, soak_s))             # 끝나지 않는 대기
+    from v2.tests import proc_rig as R2
+    from v2.tests.test_process_list import H2
+    h = Slow()
+    rig = R2.make(tmp_path / "stop2", chambers=("ch2",), ch2={"heater": h})
+    e = rig.eng["ch2"]
+    e.load([dict(H2)])
+    R2.run(rig, R2.idle(e), max_ticks=600, hooks=[R2.at(2, lambda: e.start(source="local")),
+                                                  R2.when(lambda: any(c[0] == "wait" for c in h.calls), lambda: e.stop())])
+    assert R2.ends(e) == [("aborted", "USER_STOP")] and ("cancel",) in h.calls
+
+    class Fault(FakeHeater):
+        def heater_hold(self):
+            self.calls.append(("hold",))
+            self._ok("hold_ok")
+            self.on_process("failed", False, "공정 중 히터 이상", "E832")
+    h = Fault()
+    R, e = _heater_flow(tmp_path / "fault", h)
+    assert R.ends(e) == [("error", "E832")]
+
+
+# ═════════════ TEST-094 공정 로그 쓰기 실패 — 사유와 본문 보존(v1 tests/test_log_writer_reason.py:80) ═════════════
+def test_t094_writer_failure_emergency_file_keeps_reason_and_text(tmp_path):
+    """runtime/chamber_runtime.py:7428-7568 — 쓰기 실패면 로컬 폴더에 비상 파일 1개('CH{n}_…_writer_pending.txt'): 머리 '# [log-writer
+    pending]'·'# source_path = …'·'# reason = RuntimeError('boom')' + 본문 그대로, 화면 '세션 로그 긴급 보관 파일 생성'. 사유는 값으로
+    (예외 객체를 클로저로 잡지 않음 — 쓰기 스레드가 끝난 뒤에도 같은 문구)."""
+    from v2.ch12.outputs.base import QueueWriter
+    from v2.ch12.outputs.process_txt import ProcessTxtLog
+    from v2.tests.outputs_golden import Clock, make_root, v2_cfg
+    from v2.tools import v1golden_outputs_scen as SC
+    root = make_root(tmp_path)
+    ui = []
+    w = QueueWriter("t")
+    t = ProcessTxtLog(2, v2_cfg(root, SC.BASE_CFG), writer=w, now=Clock("2026-10-30T10:00:00").now, on_ui=ui.append)
+
+    def boom(text):
+        raise RuntimeError("boom")
+    t._appender.write = boom
+    p = t.open_run({"process_note": "x"})
+    t.log("P", "row-A")
+    w.flush()
+    t._appender.close()
+    files = list(t._local_dir.glob("CH2_*_writer_pending.txt"))
+    assert len(files) == 1
+    body = files[0].read_text(encoding="utf-8")
+    assert body.startswith(f"# [log-writer pending]\n# source_path = {p}\n# reason = RuntimeError('boom')\n")
+    assert "# ==== Sputter Run ====\n" in body and "[CH2:P] row-A\n" in body
+    assert any("세션 로그 긴급 보관 파일 생성" in m for m in ui)
+    w.stop()
+
+
+# ═════════════ TEST-082 서버 페이지 일별 로그 버퍼(v1 tests/test_leak_guards.py:66) ═════════════
+def test_t082_server_daily_log_buffer_cap_and_flag_reset(tmp_path, monkeypatch):
+    """runtime/server_page.py:392-432 — 상한의 2배를 넣어도 버퍼는 상한 이하(넘침 경고 1회), flush 성공 뒤 경고 플래그 리셋. v2 로봇 서버는
+    flush 스레드가 버퍼를 통째로 가져가 쓰므로 v1 의 'submit 실패 → inflight 복구'는 생기지 않는다."""
+    from v2.robot_server.log import ServerLog
+    monkeypatch.setattr(ServerLog, "HARD_MAX", 100)
+    lg = ServerLog(tmp_path / "logs", tmp_path / "fb", now=lambda: __import__("datetime").datetime(2026, 10, 30, 9, 0, 0))
+    for i in range(200):
+        lg.log("CLIENT", f"line {i}")
+    assert len(lg._buf) <= 101 and lg._overflow_logged is True
+    lg.log("CLIENT", "x")
+    lg._dir = lambda: (_ for _ in ()).throw(OSError("nas down"))         # 실패 경로 — 플래그 유지
+    lg.flush()
+    assert lg._overflow_logged is True
+    del lg._dir
+    lg.log("CLIENT", "y")
+    lg.flush()
+    assert lg._overflow_logged is False and lg._buf == []
+    lg.close()
+    assert lg.path_today().read_text(encoding="utf-8").endswith("[CLIENT] y\n")

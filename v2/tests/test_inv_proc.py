@@ -1530,5 +1530,10 @@ def test_proc_210_cleanup_off_unconfirmed_warning(tmp_path):
         w = "⚠ 정리 중 RF Pulse 출력 OFF 미확인 — 장비 출력 상태 확인 필요"
         assert R.has_log(e, w) and any(x.kind == "chat" and x.detail == w for x in e.events)
         assert not R.has_log(e, "정리 중 DC Pulse 출력 OFF 미확인") and stops == [False] and not a.oes_initialized
+        waits = []
+        a.ig.cancel_wait = lambda: waits.append(1)
+        e.ig_in_use_by_pc = lambda: True                                     # PROC-202: 같은 CH PC 가 IG 사용 중
+        a.cleanup_devices()
+        assert R.has_log(e, "같은 CH Plasma Cleaning 이 IG 사용 중 → IG 대기 취소/정리 생략 (공유 장치 보호)") and waits == []
     finally:
         _drop(rig)

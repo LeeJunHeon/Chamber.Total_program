@@ -93,8 +93,8 @@ class PlcCoilCsv(Owned):
     def on_tick(self, ts: datetime, *, connected: bool, backoff: bool = False,
                 coils: Optional[Mapping[str, Any]] = None, regs: Optional[Mapping[str, Any]] = None,
                 reg_failed: bool = False, mono: Optional[float] = None, budget_timeout: bool = False,
-                plan: int = -1, blocks: int = -1) -> bool:
-        """1초 tick. 이번에 행을 큐에 넣었으면 True."""
+                plan: int = -1, blocks: int = -1, plc_error: bool = False) -> bool:
+        """1초 tick. 이번에 행을 큐에 넣었으면 True. plc_error = 코일 스냅샷(저우선 읽기) 자체가 실패(v1 plc_error·low_fail +1)."""
         now = float(mono) if mono is not None else ts.timestamp()
         if self._last_summary is None:
             self._last_summary = now
@@ -106,6 +106,9 @@ class PlcCoilCsv(Owned):
             self.stats["disconnected"] += 1
         elif backoff:
             self.stats["backoff"] += 1
+        elif not coils and plc_error:                # v1 snapshot 예외(device/plc.py:1996-2003) — 구간 저우선 실패 수
+            self.stats["plc_error"] += 1
+            self.stats["low_fail"] += 1
         elif not coils:
             self.stats["budget_timeout" if budget_timeout else "empty_snapshot"] += 1
         else:

@@ -1,8 +1,8 @@
 """1초 행 → v1 기록 출력(조립이 부른다 — 사용자 지시 3장 (2) '1초 스냅샷에서 만들어도 됨').
 
 행이 닫힐 때마다 on_row(row) 하나로 아래에 값을 넘긴다(각 모듈이 자기 주기·엣지를 v1 그대로 가진다 — 여기는 값 옮기기만).
-- PLC 코일 CSV(plc_coil_csv.PlcCoilCsv, 5 s): 행의 plc.<코일>·plc.dcv_* → v1 PLC_COIL_MAP 이름. PLC 품질이 ok 가 아닌 행은
-  코일 스냅샷 없음(v1 '빈 스냅샷'), worker 가 끊겼으면 disconnected, 코일 값이 모두 비면(드라이버가 코일 로그를 쉰 tick) backoff,
+- PLC 코일 CSV(plc_coil_csv.PlcCoilCsv, 5 s): 행의 plc.<코일>·plc.dcv_* → v1 PLC_COIL_MAP 이름. PLC 품질이 fail 인 행은
+  스냅샷 실패(v1 plc_error·low_fail), 그 밖에 ok 가 아닌 행은 코일 스냅샷 없음(v1 '빈 스냅샷'), worker 가 끊겼으면 disconnected, 코일 값이 모두 비면(드라이버가 코일 로그를 쉰 tick) backoff,
   레지스터가 비면 reg_failed(행은 쓰고 칸만 빈칸). 요약 줄의 plan 은 행의 plc.coil_plan.
 - selfwatch(selfwatch.SelfWatchLog, 30 s): 행의 prog.*(snapshot_fields.program_state).
 - 두께 CSV(thickness_csv.ThicknessCsv, 챔버마다, 공정 중에만): 드라이버 status()(v1 thickness logger 와 같은 원천).
@@ -35,6 +35,8 @@ def plc_coil_args(row: Mapping[str, Any], connected: bool) -> Dict[str, Any]:
     """1초 행 → PlcCoilCsv.on_tick 인자."""
     if not connected:
         return dict(connected=False)
+    if row.get("plc.q") == "fail":                     # 이번 tick 읽기 실패(무응답·형식 오류) — v1 snapshot 예외 = plc_error·low_fail
+        return dict(connected=True, coils=None, plc_error=True)
     if row.get("plc.q") != "ok":
         return dict(connected=True, coils=None)
     coils = {k: row.get(c) for k, c in _COIL_COLS}

@@ -436,6 +436,7 @@ def _free_port() -> int:
     return p
 
 
+@pytest.mark.slow                                  # 실제 하위 프로세스 둘(감시 프로그램 + v2.ch12) — 약 25 s
 @pytest.mark.skipif(sys.platform == "win32", reason="POSIX 신호로 시험 — 윈도우는 콘솔 이벤트(윈도우 확인 필요)")
 def test_real_process_killed_and_resumed_under_supervisor(tmp_path):
     from v2.ch12.sim.rig import local_paths

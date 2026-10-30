@@ -20,6 +20,8 @@
   남김) 같은 시뮬레이터에 새 조립 → CH1 이어가기(resumed·공백 포함 경과·done), CH2 안전 정지(PROGRAM_RESTART·출력 꺼짐).
 - test_web_disconnect_reconnect: 가짜 웹 끊김 동안 공정은 계속(로컬 명령도), 보관함에 쌓임·UPLINK_DOWN → 다시 올라오면 끊긴 동안
   낸 메시지가 모두 도착·UPLINK_UP, 같은 웹 명령 id 를 다시 보내도 한 번만 실행.
+빠른 시험(-m "not slow")에는 동시 공정·PC·두께·자유 제어·재시작이 들고, 로봇 흐름(실제 TCP·HTTP)·히터(승온 수백 초)·웹 끊김(실제
+시간 6 s 끊김)·7일은 slow(최종 확인에서 함께 돌린다).
 - test_virtual_7_days(slow): 가상 시계 168 시간 연속 운전(APP_RETENTION) — 날마다 CH1·CH2 동시 공정, PC, TSP 매일 예약,
   CH2 프리스퍼터 매일 예약(전용 레시피). 매시 gc 뒤 메모리·스레드·큐·링 버퍼를 재고 날마다 표(환경 변수 CH12_7DAY_TABLE 이 있으면
   JSON 으로). 6~7 일 사이 전용 메모리 증가 상한 DAY7_GROWTH_MB, 스레드 수·큐·링 버퍼가 늘지 않음.
@@ -213,14 +215,22 @@ def test_robot_full_flow(tmp_path):
         kinds[kind] += 1
         return orig(kind, args, source=source, cid=cid, by=by)
     a.core.command = spy
+    real_dispatch = a.robot_api.dispatch
+
+    def aligned(*args, **kw):
+        """로봇 명령 처리를 가상 초의 PACE_AT(PLC 1초 읽기 세션이 끝난 뒤)에서 시작 — 실제 시간으로 오는 요청이 가상 시계에서는
+        늘 tick 경계(1초 읽기가 PLC 를 잡고 있는 0~0.75 s)에 떨어지는 것을 피한다(그 경계의 PC GV 인터락 0.6 s 마감은 결정 후보)."""
+        nxt = int(c.monotonic()) + PACE_AT
+        c.wait_until(nxt if nxt > c.monotonic() else nxt + 1.0)
+        return real_dispatch(*args, **kw)
+    a.robot_api.dispatch = aligned
     c.unregister()                                     # 시계는 tick 스레드·장비 worker·로봇 API 요청 스레드가 움직인다
 
     stop_pacer = threading.Event()
 
     def pacer():
-        """가상 시간 속도 조절 — 매 초 PACE_AT(PLC 1초 읽기 세션이 끝난 뒤) 에서 실제 시간을 조금 쉰다. 로봇 요청은 실제 시간으로
-        오므로 대개 이 자리(초의 뒷부분)에 도착한다 — 실제 운전처럼 tick 경계(1초 읽기가 PLC 를 잡고 있는 0~0.75 s)에 몰리지 않게.
-        (tick 경계에 도착한 요청의 짧은 v1 마감 — PC GV 인터락 읽기 0.6 s — 은 결정 후보로 보고)"""
+        """가상 시간 속도 조절 — 매 초 PACE_AT 에서 실제 시간을 조금 쉰다(요청 사이에 가상 시간이 너무 앞서 가지 않게 —
+        공정 중 상태 질의가 여러 번 들어가게)."""
         while not stop_pacer.is_set():
             nxt = int(c.monotonic()) + PACE_AT
             if nxt <= c.monotonic() + 1e-6:
@@ -387,6 +397,7 @@ HEAT = dict(base_pressure=7e-6, working_pressure=5, process_time=0.3, shutter_de
             heater_soak=0.5, process_note="heat")
 
 
+@pytest.mark.slow
 def test_ch2_heater_process(tmp_path):
     rig = full(tmp_path)
     try:
@@ -605,7 +616,7 @@ def test_restart_resume_and_safe_stop(tmp_path):
                 box["t"] = RR.kill(rig)
         rig.event_listeners.append(on_ev)
         RR.drive(rig, lambda: "t" in box, 400)
-        assert "t" in box and e1.busy
+        assert "t" in box and e1.busy and e2.busy
         j1 = json.loads((tmp_path / "data" / "journal" / "ch1.json").read_text(encoding="utf-8"))
         j2 = json.loads((tmp_path / "data" / "journal" / "ch2.json").read_text(encoding="utf-8"))
         assert j1["active"] and j2["active"] and j1["state"]["block_type"] == "main"
@@ -638,6 +649,7 @@ def test_restart_resume_and_safe_stop(tmp_path):
 
 
 # ───────────── 웹 끊김·재연결 ─────────────
+@pytest.mark.slow
 def test_web_disconnect_reconnect(tmp_path):
     rig = full(tmp_path / "rig", cfg={"UPLINK_INTERVAL_MS": 300, "UPLINK_TIMEOUT_SEC": 2.0, "UPLINK_DOWN_SEC": 5})
     wp = WebPaths(rig, tmp_path)
