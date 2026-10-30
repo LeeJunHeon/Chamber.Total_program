@@ -485,16 +485,27 @@ class PlcDriver:
 
     # ───────── 요청 ─────────
     def submit(self, name: str, fn: Callable, *, kind: str = "write", source: str = "",
-               on_done: Optional[Callable[[Result], None]] = None, purge: bool = False) -> Request:
+               on_done: Optional[Callable[[Result], None]] = None, purge: bool = False,
+               not_before: Optional[float] = None) -> Request:
+        """요청 하나. 큐 대기 ≥ PLC_LOCK_WARN_MS·실행 ≥ PLC_IO_WARN_MS 면 v1 처럼 WARN 로그(device/plc.py:2286-2301).
+        링크 down 중 연결계 실패(E401·E402)는 억제 건수로 센다(재연결 카드에 실림)."""
         g = cmd_grace_s(self.cfg)
+        t_sub = self.clock.monotonic() if not_before is None else max(self.clock.monotonic(), not_before)
+        rname = f"plc:{source or '-'}:{name}"
 
         def done(res: Result) -> None:
+            if res.started is not None:
+                waited = (res.started - t_sub) * 1000.0
+                if waited >= float(self.cfg["PLC_LOCK_WARN_MS"]):
+                    self._emit("log", f"WARN lock-wait {waited:.0f} ms (op={rname})")
+                if res.finished is not None and (res.finished - res.started) * 1000.0 >= float(self.cfg["PLC_IO_WARN_MS"]):
+                    self._emit("log", f"WARN in-lock IO {(res.finished - res.started) * 1000.0:.0f} ms (op={rname})")
             if res.status != Status.OK and self.link.down and res.reason in ("DEVICE_NO_RESPONSE", "LINK_DOWN"):
                 self.link.note_suppressed("E402" if res.reason == "DEVICE_NO_RESPONSE" else "E401")
             if on_done:
                 on_done(res)
-        req = Request(kind, fn, deadline=self.clock.monotonic() + g, exec_timeout_s=g, on_done=done,
-                      name=f"plc:{source or '-'}:{name}", purge=purge)
+        req = Request(kind, fn, deadline=t_sub + g, exec_timeout_s=g, on_done=done, name=rname, purge=purge,
+                      not_before=not_before)
         self.worker.submit(req)
         return req
 
@@ -629,7 +640,8 @@ class PlcDriver:
 
     # ───────── 전원(DC·RF) 공통(device/plc.py:2084-2218) ─────────
     def power_enable(self, on: bool = True, *, family: str = "DCV", set_idx: Optional[int] = None,
-                     set_key: Optional[str] = None, source: str = "", on_done=None, kind: str = "write"):
+                     set_key: Optional[str] = None, source: str = "", on_done=None, kind: str = "write",
+                     not_before: Optional[float] = None):
         idx = int(self.cfg["PLC_DC_WRITE_INDEX"]) if set_idx is None else int(set_idx)
         key = set_key or f"{family}_SET_{idx}"
         if key not in PM.COIL_MAP:
@@ -640,11 +652,11 @@ class PlcDriver:
             self._log(source, f"POWER SET ({family})[{idx}] <- {bool(on)}")
             self.io_write_coil(s, a, bool(on))
             self._log(source, f"set {key} <- {bool(on)} (addr={a})")
-        return self.submit(f"{key}={int(bool(on))}", fn, kind=kind, source=source, on_done=on_done)
+        return self.submit(f"{key}={int(bool(on))}", fn, kind=kind, source=source, on_done=on_done, not_before=not_before)
 
     def power_write(self, power_w: float, *, family: str = "DCV", write_idx: Optional[int] = None,
                     write_key: Optional[str] = None, source: str = "", on_done=None, kind: str = "write",
-                    guard: Optional[Callable[[], bool]] = None):
+                    guard: Optional[Callable[[], bool]] = None, not_before: Optional[float] = None):
         """W → DAC → WRITE 레지스터(D4+idx). value = DAC 코드. guard() 가 False 면 실행 때 건너뜀(value None)."""
         code = dac_code(self.cfg, power_w)
         if write_key is None:
@@ -661,7 +673,7 @@ class PlcDriver:
             self._log(source, f"write reg {write_key} (addr={a}) <- {code}")
             self._log(source, f"POWER WRITE ({family}) {write_key} <- W={float(power_w):.3f} (DAC={code})")
             return code
-        return self.submit(f"{write_key}={code}", fn, kind=kind, source=source, on_done=on_done)
+        return self.submit(f"{write_key}={code}", fn, kind=kind, source=source, on_done=on_done, not_before=not_before)
 
     def power_apply(self, power_w: float, *, family: str = "DCV", channel: Optional[int] = None, ensure_set: bool = True,
                     source: str = "", on_done=None):
@@ -686,13 +698,15 @@ class PlcDriver:
     def _rf_ch(rf_ch: int) -> int:
         return 1 if int(rf_ch) != 2 else 2
 
-    def rf_enable(self, on: bool = True, *, rf_ch: int = 1, source: str = "", on_done=None, kind: str = "write"):
-        return self.power_enable(on, family="DCV", set_idx=self._rf_ch(rf_ch), source=source, on_done=on_done, kind=kind)
+    def rf_enable(self, on: bool = True, *, rf_ch: int = 1, source: str = "", on_done=None, kind: str = "write",
+                  not_before: Optional[float] = None):
+        return self.power_enable(on, family="DCV", set_idx=self._rf_ch(rf_ch), source=source, on_done=on_done, kind=kind,
+                                 not_before=not_before)
 
     def rf_write_w(self, power_w: float, *, rf_ch: int = 1, source: str = "", on_done=None, kind: str = "write",
-                   guard=None):
+                   guard=None, not_before: Optional[float] = None):
         return self.power_write(power_w, family="DCV", write_idx=self._rf_ch(rf_ch), source=source, on_done=on_done,
-                                kind=kind, guard=guard)
+                                kind=kind, guard=guard, not_before=not_before)
 
     def rf_apply(self, power_w: float, *, ensure_set: bool = True, rf_ch: int = 1, source: str = "", on_done=None,
                  kind: str = "write", guard=None):

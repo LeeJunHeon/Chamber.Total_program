@@ -7,12 +7,13 @@ M = '@'(정상)·'!'(Chamber.xtal_fail). XTAL FAIL 중 S·T 는 '--------', U·V
 B/C = 영점(B 두께·타이머, C 두께 — 이 모델에서는 둘 다 두께 영점). E=/F=/J= 쓰기(범위 밖은 'H'), E?/F?/J? 되읽기,
 L = 리셋 플래그 확인, @ = 판, a = 리셋 상태. 모르는 명령 'F', '?'/'=' 가 아닌 수식자 'J'.
 장비 고유 이상: power_cycle()(리셋 플래그)·sticky_tooling(J= 를 받아도 되읽기가 1.0 다름 — 되읽기 불일치)·
-  echo(값 앞에 명령 글자를 붙임 "U 5319234")·script(받은 프레임마다 정해진 응답 바이트 — 골든 비교용, None = 무응답).
+  echo(값 앞에 명령 글자를 붙임 "U 5319234")·script(받은 프레임마다 정해진 응답 바이트 — 골든 비교용, None = 무응답,
+  비면 script_default(명령)).
 통신 이상은 SimDevice 고장(no_response·delay·disconnect·garbage).
 """
 from __future__ import annotations
 
-from typing import List, Optional
+from typing import Callable, List, Optional
 
 from v2.common.simdev import SimDevice
 from v2.ch12.sim.chamber import Chamber
@@ -43,6 +44,7 @@ class Stm100Sim(SimDevice):
         self.sticky_tooling = False
         self.echo = False
         self.script: Optional[List] = list(script) if script is not None else None
+        self.script_default: Optional[Callable[[str], Optional[bytes]]] = None   # 대본이 비었을 때 응답(명령 → 바이트)
         self.cmds: List[str] = []          # 받은 명령(시험용)
 
     def power_cycle(self) -> None:
@@ -63,9 +65,11 @@ class Stm100Sim(SimDevice):
     def respond(self, data: bytes, now: float):
         if self.script is not None:
             self.rx_log.append((now, data))
-            self.cmds.append(self._decode(data) or data.hex())
+            cmd = self._decode(data)
+            self.cmds.append(cmd or data.hex())
             if not self.script:
-                return []
+                r = self.script_default(cmd or "") if self.script_default else None
+                return [] if r is None else [(now + self.latency_s, r)]
             r = self.script.pop(0)
             return [] if r is None else [(now + self.latency_s, r)]
         return super().respond(data, now)

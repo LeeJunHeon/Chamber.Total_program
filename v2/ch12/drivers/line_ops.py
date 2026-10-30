@@ -30,6 +30,7 @@ SEND_CONFIRM_TIMEOUT_S = 30.0      # v1 device/mfc.py:64 — no-reply 실제 전
 LINK_RETRY_S = 0.2                 # 링크가 없을 때 다시 넣는 간격(v1 워커는 0.05 s 마다 연결을 봄 — 너무 잦지 않게)
 GHOST_MAX_S = 3600.0               # 끄는 명령(유령 전송)을 보내려고 버티는 최대 시간 — 그 뒤엔 포기하고 이벤트
 RETRY = object()                   # io_query 가 '연결 유지 재시도'(v1 연결 직후 무응답)를 알릴 때 돌려주는 값
+CALLER_TIMEOUT = object()          # 호출 쪽 wait_for 한도 초과(Query.mark_timeout 일 때만 — 아니면 None)
 
 
 @dataclass
@@ -50,6 +51,7 @@ class Query:
     prefixes: tuple = ()
     retries: int = 1               # v1 워커 재시도(_send_and_wait_line retries)
     tag: str = ""
+    mark_timeout: bool = False     # True 면 호출 쪽 한도 초과를 None 이 아닌 CALLER_TIMEOUT 으로 알린다(IG — v1 은 그때만 재시도)
 
 
 @dataclass
@@ -296,7 +298,7 @@ class OpRunner:
             self._answer(op, st, None)                  # v1: 폐기 → 콜백 None
             return
         if now >= st["deadline"]:
-            self._answer(op, st, None)
+            self._answer(op, st, CALLER_TIMEOUT if st["item"].mark_timeout else None)
             return
         if r.status == Status.TIMEOUT:
             if st["retries"] <= 0:
@@ -312,8 +314,9 @@ class OpRunner:
         """v1 호출 쪽 wait_for 한도 — 그때까지 답이 없으면 None(큐에 남은 질의는 그대로 둔다)."""
         def fn(session):
             return None
+        val = CALLER_TIMEOUT if st["item"].mark_timeout else None
         self.worker.submit(Request("write" if op.kind != "read" else "read", fn,
-                                   on_done=lambda r: (self._answer(op, st, None)
+                                   on_done=lambda r: (self._answer(op, st, val)
                                                       if self.clock.monotonic() >= st["deadline"] else None),
                                    name=f"{op.name}:caller_deadline", not_before=st["deadline"], confirms_link=False))
 

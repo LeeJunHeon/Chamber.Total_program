@@ -114,6 +114,12 @@
    "rows": 2
   },
   {
+   "scenario": "daemon",
+   "success": true,
+   "message": "OES 측정 완료(로컬 저장)",
+   "rows": 2
+  },
+  {
    "scenario": "oneshot",
    "success": true,
    "message": "OES 측정 완료(로컬 저장)",

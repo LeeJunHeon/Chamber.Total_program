@@ -320,4 +320,15 @@ DECISIONS = [
     dict(id="D206", title='RF 램프 첫 1.0 W 읽기를 저출력 1회로 셈', decision="v1 과 같게 둔다", reason="v1 시험 전수 조사(test)에서 발견", confirm=True, where='device/rf_power.py:565'),
     dict(id="D207", title='SHUTDOWN_STEP_GAP_MS 모듈 상수 500 고정(설정 반영 안 됨)', decision="v1 과 같게 둔다", reason="v1 시험 전수 조사(test)에서 발견", confirm=True, where='controller/process_controller.py:46-50'),
     dict(id="D208", title='v1 시험 수: 지시 92 파일·889 항목 → 실제 93 파일·904 함수·1188 수집(리눅스 1185 통과·2 실패 config_local 없음·1 건너뜀)', decision="v1 과 같게 둔다", reason="v1 시험 전수 조사(test)에서 발견", confirm=True, where='tests/'),
+    dict(id="D08", title="제어 프로그램이 꺼져 있을 때 로봇 서버 응답",
+         decision="연결 유지. GET_SPUTTER_STATUS 는 마지막 정상 응답에서 Chamber_1·Chamber_2·Loadlock_Chamber 를 'running', eta.remaining_s 는 null, "
+                  "나머지 그대로. GET_LOADING_1/2_SENSOR·GET_RECIPE 는 마지막 응답 그대로(GET_RECIPE 는 folder 별). 캐시가 없으면 GET_SPUTTER_STATUS E203·"
+                  "GET_LOADING E412·GET_RECIPE E227. 시작·이동 14개 명령은 E205 '공정 실행 중'(문구 '{CMD} 불가 — 제어 프로그램 응답 없음(재시작 중)'). "
+                  "캐시는 디스크(ROBOT_CACHE_PATH)에도 원자적으로.",
+         reason="지시 3장 (5) — v1 의 busy 표시 필드는 이것뿐(host/handlers.py:543-665), E205 는 v1 busy 거절 코드. 시간 초과면 실제 실행 중인데 E205 로 거부할 위험이 있다(명령별 한도를 v1 최대 시간 + 30 s 로 둠).",
+         confirm=True, where="v2/robot_server/cache.py; forward.py"),
+    dict(id="D09", title="로봇 서버 쪽 실패 보고(E102·E104·E105·E107·E110·E111)의 구글챗·팝업",
+         decision="v1 은 ERROR/HOST 로그 + chat_host + 팝업. v2 는 로봇 서버가 로그를 남기고, 제어 프로그램 내부 API(POST /robot/v1/event)로 이벤트를 넘겨 "
+                  "포털이 같은 카드를 보낸다(제어 프로그램이 꺼져 있으면 로그만). 서버 페이지 화면(숨김·접속 목록)은 포털·노트북 화면의 로봇 연결 상태로.",
+         reason="기능 누락 금지 — 카드는 포털이 보낸다(지시 3장 (7)).", confirm=True, where="v2/robot_server; v2/ch12/robot_api.py"),
 ]

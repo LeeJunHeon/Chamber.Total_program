@@ -101,7 +101,9 @@ async def _scenarios(oes_mod, events: list) -> None:
     t = asyncio.create_task(pump(d, "daemon"))
     assert await d.initialize_device(timeout_s=20.0)
     await d.run_measurement(2.0, 50)
+    await asyncio.sleep(0.2)          # pump 가 finished 를 꺼내기 전에 다음 측정의 drain_events 가 버리지 않게
     await d.run_measurement(2.0, 0)
+    await asyncio.sleep(0.2)
     m = asyncio.create_task(d.run_measurement(30.0, 50))
     for _ in range(200):
         await asyncio.sleep(0.05)
@@ -110,8 +112,7 @@ async def _scenarios(oes_mod, events: list) -> None:
     await asyncio.sleep(0.3)
     await d.stop_measurement(wait=False)
     await asyncio.wait_for(m, 20)
-    if os.environ.get("V1G_DEBUG"):
-        print("after stop", m.result(), d._ev_q.qsize(), d._stop_requested)
+    await asyncio.sleep(0.2)
     await d._shutdown_daemon(graceful=True)
     await asyncio.sleep(0.2)
     t.cancel()
