@@ -7,7 +7,7 @@ OWNERS: 조각 이름 → 그 조각이 정의(PARAMS)하거나 버려야(DROPPE
     GDRIVE_*·Calib·PLC 코일 CSV·카메라 기록·SELFWATCH_*·히터·두께 CSV)는 outputs, 로봇 서버 주소·포트는 robot(둘 다
     그 담당이 먼저 만들어 core 에서 뺐다), 그 밖(공정·챔버·ETA·쿨다운·플라즈마 클리닝·TSP 운전·챗·워커 앱)은 core,
     CH2 히터는 core_heater, 두께 판정·Factor 는 core_thickness(STM-100 통신값 THICKNESS_TCP_*·POLL·SLOW_POLL·
-    CMD_TIMEOUT 은 stm100).
+    CMD_TIMEOUT 과 SUPPORTS_THICKNESS·THICKNESS_STALE_S 는 stm100).
   - 장비 조각 작성자가 빠뜨린 키는 시험이 '아직 없는 키'로 출력만 한다(나중에 채운다).
 V1_CODE_ONLY_OWNER: settings.json 에도 KEYS 에도 없지만 v1 이 실제로 쓰는 채널 고정값 — 조각이 정의해야 한다
   (ch1.RFPULSE_TCP_PORT = 4007 은 lib/config_ch1.py:17 에만 있다 — common 의 4005 가 아님, inv_cfg CFG-555).
@@ -95,9 +95,8 @@ OWNERS: dict = {
         "ch2.HEATER_NORESP_LOSS_SEC", "ch2.HEATER_NORESP_LOSS_BELOW_C", "ch2.HEATER_NORESP_LOSS_FALL_C",
     ),
     "core_thickness": (
-        "ch1.SUPPORTS_THICKNESS", "ch1.THICKNESS_STALE_S", "ch1.THICKNESS_FACTOR_FILE",
-        "ch1.THICKNESS_ZERO_CONFIRM_NM", "ch1.THICKNESS_ZERO_CONFIRM_S", "ch1.THICKNESS_NEG_WARN_NM",
-        "ch1.THICKNESS_JUMP_MIN_NM", "ch1.THICKNESS_JUMP_RATE_K", "ch2.SUPPORTS_THICKNESS", "ch2.THICKNESS_STALE_S",
+        "ch1.THICKNESS_FACTOR_FILE", "ch1.THICKNESS_ZERO_CONFIRM_NM", "ch1.THICKNESS_ZERO_CONFIRM_S",
+        "ch1.THICKNESS_NEG_WARN_NM", "ch1.THICKNESS_JUMP_MIN_NM", "ch1.THICKNESS_JUMP_RATE_K",
         "ch2.THICKNESS_FACTOR_FILE", "ch2.THICKNESS_READY_FRESH_S", "ch2.THICKNESS_LIFE_WARN_PCT",
         "ch2.THICKNESS_MAX_TIME_RATIO", "ch2.THICKNESS_MAX_TIME_MARGIN_S", "ch2.THICKNESS_ZERO_CONFIRM_NM",
         "ch2.THICKNESS_ZERO_CONFIRM_S", "ch2.THICKNESS_NEG_WARN_NM", "ch2.THICKNESS_DONE_CONSECUTIVE",
@@ -223,10 +222,10 @@ OWNERS: dict = {
         "common.TSP_RS232_ADDR", "common.TSP_VERIFY_WITH_STATUS",
     ),
     "stm100": (
-        "ch1.THICKNESS_TCP_HOST", "ch1.THICKNESS_TCP_PORT", "ch1.THICKNESS_POLL_INTERVAL_S",
-        "ch1.THICKNESS_SLOW_POLL_S", "ch1.THICKNESS_CMD_TIMEOUT_S", "ch2.THICKNESS_TCP_HOST",
-        "ch2.THICKNESS_TCP_PORT", "ch2.THICKNESS_POLL_INTERVAL_S", "ch2.THICKNESS_SLOW_POLL_S",
-        "ch2.THICKNESS_CMD_TIMEOUT_S",
+        "ch1.SUPPORTS_THICKNESS", "ch1.THICKNESS_TCP_HOST", "ch1.THICKNESS_TCP_PORT", "ch1.THICKNESS_POLL_INTERVAL_S",
+        "ch1.THICKNESS_SLOW_POLL_S", "ch1.THICKNESS_STALE_S", "ch1.THICKNESS_CMD_TIMEOUT_S", "ch2.SUPPORTS_THICKNESS",
+        "ch2.THICKNESS_TCP_HOST", "ch2.THICKNESS_TCP_PORT", "ch2.THICKNESS_POLL_INTERVAL_S",
+        "ch2.THICKNESS_SLOW_POLL_S", "ch2.THICKNESS_STALE_S", "ch2.THICKNESS_CMD_TIMEOUT_S",
     ),
     "camera": (),
     "oes": (
@@ -417,7 +416,8 @@ def path_for_key(key: str) -> str:
 
 
 def v1_refs(key: str, v1_key: Optional[str] = None) -> tuple:
-    """v2 키(와 v1_key)가 가리키는 v1 경로 후보. v1_key 가 구역 없는 이름이면 v2 키의 구역을 따른다."""
+    """v2 키(와 v1_key)가 가리키는 v1 경로 후보. v1_key 가 구역 없는 이름이면 v2 키의 구역을 따른다.
+    Dropped.key(v1 경로 또는 v2 이름)는 v1_refs(d.key, d.key) 로 푼다."""
     if v1_key:
         ref = v1_key.strip()
         if ref.split(".", 1)[0] in SECTIONS + (CODE,) and "." in ref:

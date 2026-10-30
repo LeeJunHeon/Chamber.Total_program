@@ -8,7 +8,7 @@
 모으기(collect) — 조용히 넘어가지 않는다
 - 조각 import 가 실패하면(문법 오류·없는 이름 등) ParamsError 로 멈춘다 — 조각 하나를 빼고 나머지로 도는 일은 없다.
 - PARAMS 가 없거나 ParamDef 가 아닌 항목이 있으면 ParamsError.
-- 키 중복(조각 안·조각 사이), v1_key 중복, 키 사이 규칙 id 중복, DROPPED 중복, 같은 키가 PARAMS 와 DROPPED 에 함께,
+- 키 중복(조각 안·조각 사이), 두 키가 같은 v1 키(경로 — ownership.v1_refs)를 옮김, 키 사이 규칙 id 중복, DROPPED 중복, 같은 키가 PARAMS 와 DROPPED 에 함께,
   같은 v1 키(경로)를 한 조각은 옮기고 다른 조각은 버림 → ParamsError.
 
 쓰는 법
@@ -104,7 +104,7 @@ def collect(modules: Optional[Sequence[tuple]] = None) -> Table:
     """조각을 모아 Table. modules=[(이름, 모듈)] 를 주면 그것만(시험용), 없으면 이 폴더의 모든 조각."""
     mods = load_fragments() if modules is None else list(modules)
     params, rules, dropped, origin, errs = [], [], [], {}, []
-    v1keys: dict = {}
+    v1paths: dict = {}                                 # v1 경로 → "조각.키"(두 키가 같은 v1 키를 옮기면 오류)
     for name, mod in mods:
         for p in _seq(mod, name, "PARAMS", ParamDef, True):
             if p.key in origin:
@@ -112,10 +112,10 @@ def collect(modules: Optional[Sequence[tuple]] = None) -> Table:
                 continue
             origin[p.key] = name
             params.append(p)
-            if p.v1_key:
-                if p.v1_key in v1keys:
-                    errs.append(f"v1_key 중복 {p.v1_key}: {v1keys[p.v1_key]} / {name}.{p.key}")
-                v1keys[p.v1_key] = f"{name}.{p.key}"
+            for ref in v1_refs(p.key, p.v1_key):
+                if ref in v1paths:
+                    errs.append(f"같은 v1 키 {ref} 를 두 키가 옮김: {v1paths[ref]} / {name}.{p.key}")
+                v1paths[ref] = f"{name}.{p.key}"
         for r in _seq(mod, name, "CROSS_RULES", CrossRule, False):
             rid = f"rule:{r.id}"
             if rid in origin:
@@ -135,7 +135,7 @@ def collect(modules: Optional[Sequence[tuple]] = None) -> Table:
         errs.append(f"PARAMS 와 DROPPED 에 함께 있는 키: {both}")
     used = {ref: p.key for p in params for ref in v1_refs(p.key, p.v1_key)}
     clash = sorted(f"{ref}(PARAMS {used[ref]} · DROPPED {origin['dropped:' + d.key]})"
-                   for d in dropped for ref in v1_refs(d.key) if ref in used)
+                   for d in dropped for ref in v1_refs(d.key, d.key) if ref in used)
     if clash:
         errs.append(f"같은 v1 키를 옮기면서 버림: {clash}")
     if errs:

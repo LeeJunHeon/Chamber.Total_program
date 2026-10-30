@@ -1,6 +1,7 @@
 """챔버12 파라미터 조각 — core_thickness: 두께 모니터(STM-100) 판정·기록·Factor 파일(장비 통신값은 stm100 조각).
 
 v1 은 lib/thickness_config.py 가 채널 모듈(config_ch1/2)에서 SUPPORTS_THICKNESS·THICKNESS_* 를 읽었다.
+SUPPORTS_THICKNESS·THICKNESS_STALE_S(서비스·판정 함께 씀)와 통신값은 stm100 조각, 두께 CSV 폴더는 outputs 조각.
 v1 settings.json 의 ch1 구역에는 일부만 있다 — 나머지 CH1 키의 기본값은 v1 이 실제로 쓰던 값(채널 모듈이 복사한 config_common
 .py 값, 예: CH1_THICKNESS_DONE_CONSECUTIVE 1 · CH2 는 json 2). 판정 범위는 v1 load_judge_params 의 클램프 범위.
 Factor(tooling·재료 이름)·재료 목록은 파라미터가 아니라 설정 폴더의 데이터 파일(thickness_factors_ch{N}.json·thickness_materials.json,
@@ -19,15 +20,6 @@ _MIX = ('사용자 확인 필요: v1 은 읽는 곳마다 출처가 달랐다(�
 
 
 PARAMS: tuple = (
-    inst("CH1_SUPPORTS_THICKNESS", "thickness", "CH1 두께 모니터 사용", B, False, safety=H,
-       src="lib/config_common.py:462 · runtime/chamber_runtime.py:608",
-       desc="true 로 바꾸면 상시 읽기 서비스와 공정 연동(Thickness 모드)이 켜진다(CH1 화면 패널 자리는 아직 없음)"),
-    inst("CH2_SUPPORTS_THICKNESS", "thickness", "CH2 두께 모니터 사용", B, True, safety=H,
-       src="lib/config_common.py:462 · runtime/chamber_runtime.py:608",
-       desc="연결 안 돼도 다른 장비·공정에 영향 없음(백오프로 계속 재연결)"),
-    p("CH1_THICKNESS_STALE_S", "thickness", "CH1 두께 응답 없음 판정", "s", F, 10.0, 2.0, 120.0,
-       src="lib/config_common.py:524 · lib/thickness_config.py:85",
-       desc="마지막 정상 두께 뒤 이 시간(초)을 넘으면 '응답 없음', Thickness 모드 공정 중이면 시간 대체"),
     inst("CH1_THICKNESS_FACTOR_FILE", "thickness", "CH1 tooling·재료 파일(비우면 설정 폴더 thickness_factors_ch1.json)", S, "",
        pattern=ANY, src="lib/config_common.py:527 · lib/thickness_config.py:149",
        desc="tooling·재료값 파일 (exe 옆 config 폴더 기준)",
@@ -71,9 +63,6 @@ PARAMS: tuple = (
     p("CH1_THICKNESS_RATE_SPIKE_K", "thickness", "CH1 증착률 급등 경고 배수(기록만)", "배", F, 5.0, 1.5, 100.0, safety=L,
        src="lib/config_common.py:541 · lib/thickness_config.py:98 (ch1 구역에 없음 — 채널 모듈이 복사한 config_common .py 값)",
        desc="장비 증착률 > 레시피 dep_rate × 배수면 경고(기록만)"),
-    p("CH2_THICKNESS_STALE_S", "thickness", "CH2 두께 응답 없음 판정", "s", F, 10.0, 2.0, 120.0,
-       src="lib/config_common.py:524 · lib/thickness_config.py:85",
-       desc="마지막 정상 두께 뒤 이 시간(초)을 넘으면 패널 '응답 없음', Thickness 모드 공정 중이면 시간 대체(값이 돌아오면 두께 판정으로 복귀)"),
     inst("CH2_THICKNESS_FACTOR_FILE", "thickness", "CH2 tooling·재료 파일(비우면 설정 폴더 thickness_factors_ch2.json)", S, "",
        pattern=ANY, src="lib/config_common.py:527 · lib/thickness_config.py:149",
        desc="tooling·재료값 파일 (exe 옆 config 폴더 기준, 화면 [Factor 설정]에서 수정)",

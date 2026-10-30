@@ -259,7 +259,8 @@ class MfcDriver:
         self.ready_at = self.clock.monotonic() + self.ms("MFC_GAP_MS", 1000)
         if sent in ("R60", "R5"):
             self.latest[sent] = (self.clock.monotonic(), line)
-        self.emit("io", f"[RECV] {item.tag} ← {line}" if item.tag else f"[RECV] {sent} ← {line}")
+        if item.tag:                                                    # 1초 읽기(tag 없음)는 이벤트를 내지 않는다
+            self.emit("io", f"[RECV] {item.tag} ← {line}")
         return line
 
     def query(self, cmd: str, prefixes: tuple, tag: str = "", retries: int = 1) -> Query:

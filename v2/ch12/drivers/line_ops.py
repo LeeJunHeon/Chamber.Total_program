@@ -57,11 +57,13 @@ class Query:
 @dataclass
 class Sleep:
     seconds: float
+    io: bool = True                # False 면 깨어나도 바로 I/O 하지 않음(1초 읽기 양보 판단에서 빼고 본다)
 
 
 @dataclass
 class Until:
     t: float
+    io: bool = True
 
 
 @dataclass
@@ -154,9 +156,9 @@ class OpRunner:
             return
         now = self.clock.monotonic()
         if isinstance(item, Sleep):
-            self._wake(op, now + max(0.0, float(item.seconds)))
+            self._wake(op, now + max(0.0, float(item.seconds)), item.io)
         elif isinstance(item, Until):
-            self._wake(op, float(item.t))
+            self._wake(op, float(item.t), item.io)
         elif isinstance(item, Send):
             op.live = {"item": item, "t_enq": now, "tries": 0, "reported": False, "cancel": False}
             self._issue_send(op, op.live, None)
@@ -176,8 +178,8 @@ class OpRunner:
         else:
             self._finish(op, "INTERNAL_ERROR", f"예외: 알 수 없는 항목 {item!r}")
 
-    def _wake(self, op: _Op, t: float) -> None:
-        op.next_io = t
+    def _wake(self, op: _Op, t: float, io: bool = True) -> None:
+        op.next_io = t if io else None
         self.worker.submit(Request("write" if op.kind != "read" else "read", lambda s: None,
                                    on_done=lambda r: self._advance(op, None), name=f"{op.name}:wait",
                                    not_before=t, confirms_link=False))
