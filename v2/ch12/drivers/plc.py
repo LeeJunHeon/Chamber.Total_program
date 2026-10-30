@@ -273,6 +273,11 @@ class PlcDriver(PlcCommands):
     def resume_watchdog(self) -> None:
         self.hb_paused = False
 
+    def on_closed(self) -> None:
+        """프로그램 종료로 worker 를 멈춘 뒤(조립 system.stop) — v1 close() 의 하트비트 취소·'TCP 연결 종료' 로그(device/plc.py:653-667)."""
+        self.hb_paused = True
+        self._emit("log", "TCP 연결 종료")
+
     def on_tick(self, tick=None) -> None:
         """TickLoop 의 tick 훅 — 하트비트 주기가 됐으면 ping 1회."""
         now = self.clock.monotonic()

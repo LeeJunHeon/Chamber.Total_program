@@ -509,6 +509,8 @@ class Ch12System:
         for k, w in self.workers.items():
             if self.enabled[k]:
                 stop_worker(w)
+        if self.enabled.get("plc", True):
+            self.plc.on_closed()
         for link in list(self.oes.values()) + list(self.rga.values()):
             if link is not None:
                 self._call("links", link.close)

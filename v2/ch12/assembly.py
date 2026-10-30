@@ -259,7 +259,14 @@ class EngineAdapter:
 
         def pre(ok: bool, code, detail: str) -> None:
             if ok and hl is not None and key:
-                self.host_runs[int(ch)] = {"key": key, "started": False, "last": None}
+                prev = self.host_runs.get(int(ch))        # v1 _host_run_begin: 확정 없이 남은 직전 런은 먼저 닫는다(7655-7664)
+                if prev is not None and prev.get("key") and prev.get("key") != key:
+                    try:
+                        hl.finalize(prev["key"], "미확인", "다음 요청 수락 전 종료 미확인",
+                                    datetime.fromtimestamp(self.a.system.clock.wall()))
+                    except Exception:
+                        pass
+                self.host_runs[int(ch)] = {"key": key, "started": False, "last": None, "log_files": []}
                 hl.mark_owned(key)
             on_preflight(ok, code, detail)
         try:
@@ -289,7 +296,11 @@ class EngineAdapter:
             lf = os.path.basename(str(p)) if p else ""
             if not hr["started"]:
                 hr["started"] = True
+                hr["log_files"] = [lf] if lf else []
                 hl.mark_started(hr["key"], datetime.fromtimestamp(clk.wall()), log_file=lf or None)
+            elif lf and lf not in hr.setdefault("log_files", []):     # 둘째 행부터는 로그 파일만(v1 7678-7685)
+                hr["log_files"].append(lf)
+                hl.update(hr["key"], log_files=list(hr["log_files"]))
         elif kind == "run_end":
             hr["last"] = dict(getattr(getattr(ev, "event", None), "data", None) or {}, code=getattr(ev, "code", None),
                               detail=str(getattr(ev, "detail", "") or ""))
@@ -304,13 +315,20 @@ class EngineAdapter:
                 continue
             last = hr.get("last")
             if isinstance(last, dict):
+                # v1 last_row(1829-1839) — 사유 = detail.reason | error_detail | errors[0]; 명시 결과(7693-7700)는 run_end 코드로
                 res = last.get("result")
+                rd = last.get("result_detail") if isinstance(last.get("result_detail"), dict) else {}
+                errs = rd.get("errors") or []
+                row_reason = str(rd.get("reason") or rd.get("error_detail") or (errs[0] if errs else "") or "")
                 if res == "done":
                     result, reason = RESULT_SUCCESS, ""
                 elif res == "aborted":
-                    result, reason = RESULT_STOP, "사용자 STOP"
+                    explicit = str(last.get("detail") or "") if not rd else ""      # 시작 전 STOP — '사용자 STOP (시작 전)'
+                    result, reason = RESULT_STOP, (row_reason or explicit or "사용자 STOP")
+                elif last.get("code") == "RECIPE_PARAM_ERROR":
+                    result, reason = RESULT_FAIL, "레시피 파라미터 오류: " + str(last.get("detail") or "")
                 else:
-                    result, reason = RESULT_FAIL, str(last.get("detail") or last.get("code") or "")
+                    result, reason = RESULT_FAIL, (row_reason or str(last.get("detail") or last.get("code") or ""))
             elif not hr["started"]:
                 result, reason = RESULT_SUCCESS, "공정 행 없음(대기만)"
             else:

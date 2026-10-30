@@ -8,44 +8,62 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
+from v2.common.worker import Status
 from v2.ch12.drivers import plc_map as PM
 from v2.ch12.drivers.plc_conv import dac_code, dc_scale, rf_regs, rf_scale
 
 
 class PlcCommands:
     # 고수준(device/plc.py:1747-1830)
+    def _then_log(self, source: str, msg: str, on_done):
+        """v1 고수준 함수는 write_switch 가 끝난 뒤(성공했을 때만 — 실패면 예외) 한 줄 더 남긴다(device/plc.py:1749-1808)."""
+        def done(res) -> None:
+            if getattr(res, "status", None) == Status.OK:
+                self._log(source, msg)
+            if on_done:
+                on_done(res)
+        return done
+
     def door(self, chamber: int, *, open: bool, momentary: bool = False, source: str = "", on_done=None):
         return self.write_switch(f"DOOR_{chamber}_{'OPEN' if open else 'CLOSE'}_SW", True, momentary=momentary,
-                                 source=source, on_done=on_done)
+                                 source=source, on_done=self._then_log(
+                                     source, f"Door{int(chamber)} {'OPEN' if open else 'CLOSE'}", on_done))
 
     def gate_valve(self, chamber: int, *, open: bool, momentary: bool = False, source: str = "", on_done=None):
         return self.write_switch(f"G_V_{chamber}_{'OPEN' if open else 'CLOSE'}_SW", True, momentary=momentary,
-                                 source=source, on_done=on_done)
+                                 source=source, on_done=self._then_log(
+                                     source, f"GV{int(chamber)} {'OPEN' if open else 'CLOSE'}", on_done))
 
     def main_shutter(self, chamber: int, *, open: bool, momentary: bool = False, source: str = "", on_done=None):
         return self.write_switch(f"MAIN_SHUTTER_{chamber}_SW", bool(open), momentary=momentary, source=source,
-                                 on_done=on_done)
+                                 on_done=self._then_log(
+                                     source, f"MainShutter{int(chamber)} {'OPEN(ON)' if open else 'CLOSE(OFF)'}", on_done))
 
     def vent(self, chamber: int, *, on: bool, momentary: bool = False, source: str = "", on_done=None):
-        return self.write_switch(f"VENT_{chamber}_SW", bool(on), momentary=momentary, source=source, on_done=on_done)
+        return self.write_switch(f"VENT_{chamber}_SW", bool(on), momentary=momentary, source=source,
+                                 on_done=self._then_log(source, f"Vent{int(chamber)} {'ON' if on else 'OFF'}", on_done))
 
     def turbo(self, chamber: int, *, on: bool, momentary: bool = False, source: str = "", on_done=None):
-        return self.write_switch(f"TURBO_{chamber}_SW", bool(on), momentary=momentary, source=source, on_done=on_done)
+        return self.write_switch(f"TURBO_{chamber}_SW", bool(on), momentary=momentary, source=source,
+                                 on_done=self._then_log(source, f"Turbo{int(chamber)} {'ON' if on else 'OFF'}", on_done))
 
     def lift_pin(self, *, up: bool, momentary: bool = False, source: str = "", on_done=None):
         return self.write_switch("L_PIN_UP_SW" if up else "L_PIN_DOWN_SW", True, momentary=momentary, source=source,
-                                 on_done=on_done)
+                                 on_done=self._then_log(source, f"LiftPin {'UP' if up else 'DOWN'}", on_done))
 
     def lr_valve(self, *, on: bool, momentary: bool = False, source: str = "", on_done=None):
-        return self.write_switch("L_R_V_SW", bool(on), momentary=momentary, source=source, on_done=on_done)
+        return self.write_switch("L_R_V_SW", bool(on), momentary=momentary, source=source,
+                                 on_done=self._then_log(source, f"L_R_V {'ON' if on else 'OFF'}", on_done))
 
     def rf_select(self, *, rf_mode: bool, momentary: bool = False, source: str = "", on_done=None):
         """SW_RF_SELECT 214(M00136) — 공정 Power Select(use_power_select, CH2)·종료 시 OFF(controller/process_controller.py:2431-2435)."""
-        return self.write_switch("SW_RF_SELECT", bool(rf_mode), momentary=momentary, source=source, on_done=on_done)
+        return self.write_switch("SW_RF_SELECT", bool(rf_mode), momentary=momentary, source=source,
+                                 on_done=self._then_log(source, f"RF_SELECT <- {rf_mode}", on_done))
 
     def power_select(self, *, on: bool, momentary: bool = False, source: str = "", on_done=None):
         """SW_POWER_SELECT 215(M00137) — RF Pulse 경로(CH2 use_rf_pulse 때 ON, RF 연속 전 OFF)·화면 Power Select 버튼(main.py:1241)."""
-        return self.write_switch("SW_POWER_SELECT", bool(on), momentary=momentary, source=source, on_done=on_done)
+        return self.write_switch("SW_POWER_SELECT", bool(on), momentary=momentary, source=source,
+                                 on_done=self._then_log(source, f"POWER_SELECT(SW) <- {on}", on_done))
 
     def buzzer_stop(self, *, momentary: bool = False, source: str = "", on_done=None):
         return self.write_switch("BUZZER_STOP_SW", True, momentary=momentary, source=source, on_done=on_done)
@@ -57,7 +75,8 @@ class PlcCommands:
         key = f"Ar_{chamber}_GAS_SW" if g == "AR" else f"{g}_{chamber}_GAS_SW"
         if key not in PM.COIL_MAP:
             raise ValueError(f"가스 '{g}'는 CH{chamber}에 존재하지 않습니다 (키: {key})")
-        return self.write_switch(key, bool(on), momentary=momentary, source=source, on_done=on_done)
+        return self.write_switch(key, bool(on), momentary=momentary, source=source,
+                                 on_done=self._then_log(source, f"Gas {g}@Ch{int(chamber)} {'ON' if on else 'OFF'}", on_done))
 
     def set(self, name: str, on: bool, *, ch: int = 1, momentary: bool = False, source: str = "", on_done=None):
         """논리명 MV/MS/AR/O2/N2/MAIN/G1~G3 또는 맵 이름(device/plc.py:2221-2253)."""

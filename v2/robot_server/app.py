@@ -47,18 +47,29 @@ def build(cfg: dict, *, log: Optional[ServerLog] = None, now: Any = None) -> tup
     return srv, slog
 
 
-async def _run(cfg: dict, fake_api: bool) -> None:
+async def _run(cfg: dict, fake_api: bool) -> int:
+    """v1 main._boot_host(1841-1894): 성공이면 'Host started on {HOST}:{PORT}'(server.py 줄 뒤 한 줄 더), 바인드 실패면
+    'Host start failed: {e!r}'. v1 은 호스트 없이 메인이 계속 돌았다 — v2 로봇 서버는 따로 도는 프로그램이라 종료 코드 1 로 끝낸다."""
     srv, slog = build(cfg)
     slog.start()
     fake = None
     if fake_api:
         from v2.robot_server.fake_api import FakeApi
         fake = FakeApi(port=int(robot_cfg(cfg)["ROBOT_API_PORT"])).start()
+    started = False
     try:
-        await srv.start()
+        try:
+            await srv.start()
+        except Exception as e:
+            slog.log("NET", f"Host start failed: {e!r}")
+            return 1
+        started = True
+        slog.log("NET", f"Host started on {srv.host}:{srv.port}")
         await asyncio.Event().wait()
+        return 0
     finally:
-        await srv.aclose()
+        if started:
+            await srv.aclose()
         if fake is not None:
             fake.stop()
         slog.close()
@@ -79,7 +90,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if v is not None:
             cfg[k] = v
     try:
-        asyncio.run(_run(cfg, a.fake_api))
+        return asyncio.run(_run(cfg, a.fake_api))
     except KeyboardInterrupt:
         pass
     return 0
