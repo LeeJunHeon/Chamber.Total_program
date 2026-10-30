@@ -2,11 +2,11 @@
  "what": "챔버12(CH1&2) v2 노트북 로컬 화면(vanam-process hmi/ch12.tsx — 8단계)",
  "target": "ch12",
  "vanamProcess": {
-  "commit": "c51d1a7f11cea1232e31950f8189cee1631de56b",
+  "commit": "5832f6394be5be1c1f6dc843b4868af3c93c08ff",
   "branch": "ch12-web",
-  "clean": false
+  "clean": true
  },
- "builtAt": "2026-10-30T13:46:02.252Z",
+ "builtAt": "2026-10-30T23:37:47.345Z",
  "esbuild": "0.28.2",
  "tailwindcss": "4.3.3",
  "files": [
