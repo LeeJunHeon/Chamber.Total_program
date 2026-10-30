@@ -22,7 +22,7 @@ from typing import Any, Callable, Deque, Dict, Optional
 from v2.ch12.drivers import dcpulse_proto as P
 from v2.ch12.drivers.dcpulse_monitor import DcpMonitorMixin
 from v2.ch12.drivers.dcpulse_ops import DcpOpsMixin
-from v2.ch12.drivers.pulse_port import IO, OpRunner, WaitLink, chan_get, endpoint, norm_endpoint
+from v2.ch12.drivers.pulse_port import IO, OpRunner, Sleep, WaitLink, chan_get, endpoint, norm_endpoint
 from v2.common.snapshot import DeviceBlock, FieldDef, FType
 from v2.common.transport import ReadTimeout
 
@@ -90,6 +90,7 @@ class DcPulseDriver(DcpMonitorMixin, DcpOpsMixin):
         self._out_on = False
         self._output_maybe_on = False             # OUTPUT_ON 을 보내기 직전 True, OFF 확인 때 False
         self.output_off_unconfirmed = False
+        self.cleanup_off_unconfirmed = False
         self.last_failure: Optional[str] = None
         self._prepare_active = False
         self._last_ref_power_w: Optional[float] = None
@@ -355,6 +356,80 @@ class DcPulseDriver(DcpMonitorMixin, DcpOpsMixin):
         if on_done:
             self._off_waiters.append(on_done)
         self._run("off_unused", gen(), None, base_kind="safety", off=True)
+
+    def cleanup(self, on_done: Optional[Callable[[bool], None]] = None) -> None:
+        """v1 cleanup 의 OFF 안전망: OFF 가 진행 중이면 끝날 때까지, 아니면 켜졌을 수 있으면 확인형 OFF —
+        DCP_CLEANUP_OFF_WAIT_S(8 s) 까지. 넘으면 cleanup_off_unconfirmed. 끝나면 아크 누적을 0 으로(다음 런 오염 방지).
+        on_done(cleanup_off_unconfirmed). 포트 해제(pulse_port.release)는 부르는 쪽이 이 뒤에 한다."""
+        self.cleanup_off_unconfirmed = False
+        wait_s = max(0.0, float(self._c("DCP_CLEANUP_OFF_WAIT_S", 8.0)))
+        if self._off_op is None and self.off_needs_confirm() and self.worker is not None and self.writes_allowed:
+            self._emit("status", "정리 전 DC Pulse 출력 OFF 확인")
+            self.output_off()
+
+        def finish():
+            self.polling = False
+            self._out_on = False
+            self._soft_arc_total = self._hard_arc_total = 0
+            self._arc_alert_sent = False
+            if on_done:
+                on_done(self.cleanup_off_unconfirmed)
+        if self._off_op is None or self.worker is None:
+            finish()
+            return
+        t_end = self.clock.monotonic() + wait_s
+
+        def gen():
+            while self._off_op is not None and self.clock.monotonic() < t_end:
+                yield Sleep(min(0.1, max(0.0, t_end - self.clock.monotonic())))
+            if self._off_op is not None:
+                self.cleanup_off_unconfirmed = True
+                self._emit("status", "정리 대기 초과 — OUTPUT_OFF 확인 실패(출력 상태 미확인)")
+                self._off_op.abort("TIMEOUT")
+            return True
+        OpRunner(self.clock, self.worker, "dcp:cleanup", gen(), lambda r, v: finish(), "safety").start()
+
+    # ───────── v1 에서 부르는 곳이 없던 설정 API(바이트는 v1 그대로 — dc_pulse.py:1174-1441) ─────────
+    def write_sequence(self, items, on_done: Optional[Callable[[Optional[str], bool], None]] = None) -> None:
+        """[(cmd, value, label)] 를 차례로 v1 _write_cmd_data 방식으로 쓴다(결과와 상관없이 다음 — v1 은 결과를 보지 않음)."""
+        def gen():
+            ok_all = True
+            for cmd, value, label in items:
+                ok_all = (yield from self._g_write(cmd, int(value), label)) and ok_all
+            return ok_all
+        self._run("write_seq", gen(), on_done)
+
+    def set_regulation(self, mode: str, on_done=None) -> None:
+        self.write_sequence([(P.REGULATION, {"V": 1, "I": 2, "P": 3}[mode.upper()], f"REG_{mode.upper()}")], on_done)
+
+    def set_reference(self, mode: str, value: float, on_done=None) -> None:
+        m = mode.upper()
+        if m == "V":
+            raw = int(round(value / float(self._c("DCP_V_SET_STEP_V", 1.0))))
+        elif m == "I":
+            raw = int(round(value / float(self._c("DCP_I_SET_STEP_A", 0.1))))
+        else:
+            raw = max(0, min(int(self._max_power_w() // self._p_step()), int(round(float(value) / self._p_step()))))
+        self.write_sequence([(P.REF_LEVEL, raw, f"REF_{m}({value})")], on_done)
+
+    def set_arc_params(self, detection_us: float, pause_us: float, arc_voltage_v: float, arc_current_a: float,
+                       soft_level: int, on_done=None) -> None:
+        us, vs, ia = float(self._c("DCP_ARC_US_PER_LSB", 1.0)), float(self._c("DCP_V_SET_STEP_V", 1.0)), float(self._c("DCP_I_SET_STEP_A", 0.1))
+        self.write_sequence([(0x05, round(detection_us / us), "ARC_DET_US"), (0x06, round(pause_us / us), "ARC_PAUSE_US"),
+                             (0x07, round(float(arc_voltage_v) / vs), "ARC_VOLT_V"), (0x08, round(float(arc_current_a) / ia), "ARC_CURR_A"),
+                             (0x09, int(soft_level), "SOFT_ARC_LV")], on_done)
+
+    def set_shutdown(self, delay_ms: int, pause_ms: int, on_done=None) -> None:
+        self.write_sequence([(0x0A, int(delay_ms), "SHDN_DELAY_MS"), (0x0B, int(pause_ms), "SHDN_PAUSE_MS")], on_done)
+
+    def set_limits(self, p_w: float, i_a: float, v_v: float, on_done=None) -> None:
+        p_raw = max(0, min(int(self._max_power_w() // self._p_step()), int(round(float(p_w) / self._p_step()))))
+        self.write_sequence([(0x0C, p_raw, "LIM_P_W"), (0x0D, round(i_a / float(self._c("DCP_I_SET_STEP_A", 0.1))), "LIM_I_A"),
+                             (0x0E, round(v_v / float(self._c("DCP_V_SET_STEP_V", 1.0))), "LIM_V_V")], on_done)
+
+    def set_ramp_and_ignition(self, ramp_ms: int, ignition_v: float, on_done=None) -> None:
+        self.write_sequence([(0x0F, round(ramp_ms / float(self._c("DCP_RAMP_MS_PER_LSB", 1.0))), "RAMP_MS"),
+                             (0x10, round(ignition_v / float(self._c("DCP_V_SET_STEP_V", 1.0))), "IGN_V")], on_done)
 
     def _start_polling(self, keep_judge: bool = False) -> None:
         if not self.polling:

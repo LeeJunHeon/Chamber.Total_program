@@ -49,6 +49,7 @@ HEATER_REGS = (110, 51)            # D110..D160 (controller/heater_service.py:37
 HEATER_COILS = (640, 19)           # 640..658  (controller/heater_service.py:47-48)
 ROTATE_MIN_ADDR = 800              # 이 주소 이상 코일은 번갈아 읽기(P 미러·부저·게이지 인터락)
 ROTATE_PER_TICK = 1
+READ_MARGIN_S = 0.12               # 블록 하나 더 읽을지: 마감까지 남은 시간 ≥ 명령 간격 + 이 값(응답 여유)
 _ROT_COILS = tuple(n for n, a in PM.COIL_MAP.items() if a >= ROTATE_MIN_ADDR)
 
 BUDGET = dict(
@@ -349,6 +350,8 @@ class PlcDriver(PlcCommands):
             self._rot_i = (self._rot_i + len(pick)) % max(1, len(rot))
             try:
                 for st, n in always + pick:
+                    if session.deadline - self.clock.monotonic() < self.io.gap_s + READ_MARGIN_S:
+                        break                 # 이번 tick 마감 안에 못 든다(계획 강등 뒤 블록이 많을 때) — 남은 블록은 다음 tick
                     self._read_block(session, "coils", st, n, coils)
                 self._note_plan(True)
             except PlcModbusError as e:
@@ -360,6 +363,8 @@ class PlcDriver(PlcCommands):
             for n, a in list(PM.COIL_MAP.items()) + list(PM.P_MIRROR_MAP.items()):
                 if a in coils:
                     vals[f"plc.{PM.field_name(n)}"] = bool(coils[a])
+                elif a < ROTATE_MIN_ADDR:
+                    vals[f"plc.{PM.field_name(n)}"] = None          # 매 tick 필드는 못 읽었으면 빈 칸(묵은 값 아님)
         vals["plc.coil_plan"] = self.plan_idx
         poll = PlcPoll(t_wall, t_mono, coils, regs, vals)
         self.last_poll = poll
