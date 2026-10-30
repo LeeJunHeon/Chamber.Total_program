@@ -760,6 +760,11 @@ def soak_full(tmp_path, hours: float) -> dict:
         if t.seq % 3600 == 0:
             gc.collect()
             m = soak.mem()
+            bufs = {"hub_recent": [rig.hub.recent], "eng_events": [x.events for x in (a.proc["ch1"], a.proc["ch2"], a.pc, a.tsp)],
+                    "eng_logs": [x.log_lines for x in a.proc.values()] + [a.pc.ui_log],
+                    "ps_lines": [x.lines for x in a.presputter.values()]}
+            caps = {k: (sum(q.maxlen for q in v) if all(getattr(q, "maxlen", None) for q in v) else None)
+                    for k, v in bufs.items()}
             row = {"h": t.seq // 3600, **m, "threads": threading.active_count(),
                    "rec_pending": rig.recorder._q.qsize(), "rec_dropped": rig.recorder.dropped,
                    "out_pending": rig.outputs.pending, "events": len(rig.events), "hub_recent": len(rig.hub.recent),
@@ -768,7 +773,8 @@ def soak_full(tmp_path, hours: float) -> dict:
                    "ps_lines": sum(len(p.lines) for p in a.presputter.values()),
                    "sim_log_max": max(len(getattr(x, k)) for x in rig.sims.values()
                                       for k in ("received", "frames", "cmds", "rx_log") if hasattr(x, k)),
-                   "missed": rig.loop.missed, "wall_s": round(time.perf_counter() - w0, 1), "done": dict(counts)}
+                   "missed": rig.loop.missed, "wall_s": round(time.perf_counter() - w0, 1), "done": dict(counts),
+                   "caps": caps}
             per_hour.append(row)
             if t.seq % 86400 == 0:
                 days.append(dict(row, day=t.seq // 86400))
@@ -806,10 +812,16 @@ def test_virtual_7_days(tmp_path):
     for r in hours:
         assert r["rec_pending"] < 100 and r["rec_dropped"] == 0 and r["out_pending"] < 100, r
         assert r["events"] <= APP_RETENTION.events and r["sim_log_max"] <= APP_RETENTION.sim_log, r
+    day_max = collections.defaultdict(int)
+    for r in hours:
+        if r["h"] >= 24:
+            day_max[(r["h"] - 1) // 24 + 1] = max(day_max[(r["h"] - 1) // 24 + 1], r["threads"])
     for d in range(2, DAYS + 1):
-        assert by[d]["threads"] == by[1]["threads"], table                        # 스레드가 늘지 않음
-    for k in ("hub_recent", "eng_events", "eng_logs", "ps_lines"):
-        assert by[DAYS][k] <= max(by[d][k] for d in range(1, DAYS)) * 1.05 + 50, (k, table)   # 링 버퍼 상한 안(다 찬 뒤 그대로)
+        assert day_max[d] <= day_max[1], dict(day_max)                           # 날마다 최대 스레드 수가 늘지 않음
+    assert by[DAYS]["threads"] <= by[1]["threads"] + 1, table                    # 같은 시각(19:00 — 모두 idle) 비교
+    for r in hours:
+        for k, cap in r["caps"].items():
+            assert cap is not None and r[k] <= cap, (k, r)                      # 링 버퍼 — 상한 있음·상한 안
     assert by[DAYS]["private_mb"] - by[DAYS - 1]["private_mb"] < DAY7_GROWTH_MB, table
     assert counts["start1:True"] == DAYS and counts["start2:True"] == DAYS and counts["pcstart:True"] == DAYS, counts
     assert counts["ch1:done:ui"] == DAYS and counts["ch2:done:ui"] == DAYS, counts                  # 매일 공정 2

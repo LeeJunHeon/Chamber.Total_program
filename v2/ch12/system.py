@@ -22,6 +22,7 @@
   기록·출력은 큐에 넣기만 한다(tick 은 기다리지 않는다). 엔진·출력의 예외는 INTERNAL_ERROR 이벤트로 남기고 tick 은 계속.
 엔진(3단계): register_engine(name, obj) — obj 에 on_tick_start(t)·on_row(view)·snapshot_fields()·busy 가 있으면 부른다.
 내부 이벤트: 드라이버·worker·엔진(emit) → events(링 버퍼, Retention.events) → 기록(events 표) → 이벤트 구독자.
+  TRANSIENT_KINDS(OES 스펙트럼 — 화면 그래프 값)는 구독자에게만(링 버퍼·기록 없이).
 """
 from __future__ import annotations
 
@@ -58,6 +59,7 @@ PULSE_KINDS = (("dcpulse", DCP.DcPulseDriver, "SUPPORTS_DCPULSE"), ("rfpulse", R
 WARN_KINDS = frozenset({"disconnected", "connect_failed", "long_outage", "timeout", "link_down", "heartbeat_fail",
                         "command_failed", "target_failed", "power_off_failed"})   # 사유 코드가 없어도 warn 으로 기록
 SIM_LINK_CFG = {"OES_WORKER_FAKE": True, "RGA_WORKER_FAKE": True}     # sim: 워커는 가짜 DLL·가짜 RGA 로(실제 프로세스)
+TRANSIENT_KINDS = frozenset({"spectrum"})   # 화면 전용(OES 스펙트럼 0.5 s) — 링 버퍼·기록(events 표)에 넣지 않고 구독자(허브)에게만
 
 
 @dataclass(frozen=True)
@@ -459,6 +461,13 @@ class Ch12System:
         self._log(Logged(self.clock.wall(), source, kind, detail, reason, code, level, event))
 
     def _log(self, e: Logged) -> None:
+        if e.kind in TRANSIENT_KINDS:                 # 화면 그래프 값 — 허브가 state 에 마지막 것만 둔다
+            for f in list(self.event_listeners):
+                try:
+                    f(e)
+                except Exception:
+                    self.internal_errors += 1
+            return
         self.events.append(e)
         if self.recorder is not None:
             self.recorder.put_event(iso_local(e.t_wall), e.level, (e.code or e.reason or e.kind).upper(), e.source,

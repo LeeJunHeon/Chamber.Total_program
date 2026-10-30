@@ -300,6 +300,10 @@ COMMANDS: tuple = (
       "density 0.500~99.99·Z 0.100~9.999·이름 중복 검사 뒤 원자적 저장", "ui/thickness_material_dialog.py:117-163", portal_only=True),
     C("THICKNESS_RELOAD", "두께 Factor 다시 읽기", "thickness", BOTH, (ANY,), ("THICKNESS_SUPPORTED",), (CH2_ONLY,),
       "", "thickness_service.reload_factors"),
+    C("THICKNESS_WINDOW", "두께 Factor·재료 창 값 읽기", "thickness", BOTH, (ANY,), ("THICKNESS_SUPPORTED",),
+      (CH2_ONLY, _a("req", "str", False, desc="화면 요청 표시(결과 사건에 그대로)")),
+      "파일을 읽어 창에 보일 값(factor_window·materials_window)을 결과 value 와 사건 thickness/window 로(장비·파일 쓰기 없음)",
+      "ui/thickness_factor_dialog.py:33-106·ui/thickness_material_dialog.py:20-90(창을 열 때 파일 읽기)"),
     # ── 공유·프로그램 ──
     C("PLC_BUTTON", "PLC 버튼", "shared", BOTH, (ANY,), ("PLC_LINK_UP",),
       (_a("target", "enum", enum=tuple(b.target for b in PLC_BUTTONS)), _a("on", "bool")),
@@ -332,7 +336,7 @@ COMMANDS: tuple = (
 # bench 에서도 받는 명령(장비에 쓰지 않음) — 이 목록 한 곳만(core·묶음 benchOk 가 같은 값을 본다)
 _BENCH_OK = frozenset({"RECIPE_LOAD", "RECIPE_CLEAR", "SEQUENCE_EDIT", "CHAMBER_ERROR_CLEAR", "PRESPUTTER_RECIPE",
                        "PC_RECIPE_LOAD", "PC_ERROR_CLEAR", "THICKNESS_FACTOR_SAVE", "THICKNESS_MATERIALS_SAVE",
-                       "THICKNESS_RELOAD", "RUNTIME_DUMP", "LOG_CLEAR", "CONFIG_APPLY", "CONFIG_ROLLBACK", "NOTIFY"}
+                       "THICKNESS_RELOAD", "THICKNESS_WINDOW", "RUNTIME_DUMP", "LOG_CLEAR", "CONFIG_APPLY", "CONFIG_ROLLBACK", "NOTIFY"}
                       | {f"ROBOT_{c}" for c in ROBOT_READS})
 assert _BENCH_OK <= {c.kind for c in COMMANDS}
 COMMANDS = tuple(replace(c, bench_ok=c.kind in _BENCH_OK) for c in COMMANDS)

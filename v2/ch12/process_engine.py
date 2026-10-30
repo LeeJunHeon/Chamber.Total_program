@@ -162,8 +162,13 @@ class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, Process
     def chat(self, text: str) -> None:
         self.emit("chat", text, level="warn")
 
-    def popup(self, title: str, text: str, level: str = "warn") -> None:
-        self.emit("popup", text, level=level, title=title)
+    def popup(self, title: str, text: str, level: str = "warn", clear_on_close: bool = False) -> None:
+        """v1 _post_warning(level warn — 5 s 자동 닫힘)·_post_critical(level error). clear_on_close = v1 clear_status_to_idle
+        (창이 닫히면 오류 표시 해제 — 화면이 CHAMBER_ERROR_CLEAR 를 보낸다). 창 규칙(중복·5개 상한)은 화면 몫."""
+        if clear_on_close:
+            self.emit("popup", text, level=level, title=title, clear_on_close=True)
+        else:
+            self.emit("popup", text, level=level, title=title)
 
     @property
     def busy(self) -> bool:

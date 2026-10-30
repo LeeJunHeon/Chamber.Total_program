@@ -21,6 +21,11 @@ type
   (→ processTotal, 리스트 '(i/n)')·params·blocks / run_id·status(result)·reason(이벤트 code)·summary(없으면 {name} +
   엔진 result_detail → summary.result_detail). 챔버 공정(ch1·ch2)·플라즈마 클리닝(pc)·TSP(tsp) 모두 같은 길. run_end 는 run_start 를 보낸 공정에만(아니면 event — 시작 전 거부 등).
 
+OES 스펙트럼(링크 이벤트 kind='spectrum' — oes_spectrum.payload, 0.5 s 쓰로틀·512점 솎기)은 event 로 보내지 않고 state.spectra[챔버]
+  에 마지막 것만(1초 state 마다 같이 감 — 사건 링 버퍼·uplink 보관함·기록에 쌓이지 않게). data.clear(측정 시작)·그 챔버 run_start·
+  run_end 에 비운다(v1 graph.reset — 공정 시작·끝, clear_oes_plot — 측정 시작).
+명령 결과 값을 화면이 쓰는 명령(VALUE_EVENTS — THICKNESS_WINDOW: 두께 Factor·재료 창 값)은 받으면 cmd_result 뒤에 event 하나를 더 낸다
+  (context {source, chamber, kind, data: 결과 value, cmdId} — 웹 cmd_result 에는 value 칸이 없어서 웹·로컬 화면 모두 이 사건을 읽는다).
 명령: run_command(kind, args, source, cid, by) — system.command(...) 를 부르고 그 결과로 cmd_result 를 낸다(로컬 서버·웹 연결·
   로봇 API 가 같이 쓴다). 챔버K 는 core 가 on_result 로 냈지만 챔버12 는 여기서 낸다 — core 는 cmd_result 를 내지 않는다.
   system.command 가 없으면(명령 처리 4단계 전) CORE_NOT_READY, 예외면 INTERNAL_ERROR(로컬 서버·웹 연결 스레드가 죽지 않게).
@@ -52,6 +57,9 @@ SHARED = "shared"
 _RULE_ID = re.compile(r"S\d")
 _PROCESS_WORDS = ("process", "engine", "proc")
 _ORIGIN_CLASS = {"ProcEvent": "process", "SafetyEvent": "safety", "HeaterEvent": "heater"}
+SPECTRUM_KIND = "spectrum"
+# 결과 value 를 사건으로도 내는 명령 → (context.source, context.kind, 챔버 인자 기본값)
+VALUE_EVENTS = {"THICKNESS_WINDOW": ("thickness", "window", 2)}
 
 
 @dataclass(frozen=True)
@@ -174,6 +182,7 @@ class MessageHub:
         self.errors = 0                              # 메시지 만들기 실패(제어는 막지 않음)
         self._web_hash: Optional[str] = None
         self._open_runs: Dict[str, Any] = {}         # 챔버 → run_start 를 보낸 공정 id(run_end 는 이것만)
+        self.spectra: Dict[str, Optional[dict]] = {"ch1": None, "ch2": None}   # 챔버 → 마지막 OES 스펙트럼(state.spectra)
 
     # ── 조립에 붙기 ──
     def attach(self) -> "MessageHub":
@@ -305,6 +314,12 @@ class MessageHub:
                 res = CmdResult(False, "INTERNAL_ERROR", repr(e)[:300])
                 self._safe_emit("command", "internal_error", repr(e), "error", "INTERNAL_ERROR")
         self.cmd_result(cid, kind, res, source, by)
+        if res.ok and kind in VALUE_EVENTS and getattr(res, "value", None) is not None:
+            src_name, ev_kind, ch_default = VALUE_EVENTS[kind]
+            ch = f"ch{int((args or {}).get('ch') or ch_default)}"
+            self._event("info", kind, None, "", {"source": src_name, "chamber": ch, "kind": ev_kind,
+                                                  "origin": "command", "data": res.value,
+                                                  "cmdId": None if cid is None else str(cid)})
         return res
 
     def config_ack(self, d: dict) -> None:
@@ -331,7 +346,13 @@ class MessageHub:
         ch = chamber_of(src, ev)
         org = origin_of(src, ev)
         data = _event_data(ev)
+        if kind == SPECTRUM_KIND and org == "oes":
+            if ch in self.spectra:
+                self.spectra[ch] = None if not data or data.get("clear") else dict(data)
+            return
         if org == "process" and kind in ("run_start", "run_end") and self._run(kind, ch, dict(data or {}), e):
+            if ch in self.spectra:
+                self.spectra[ch] = None                   # v1 graph.reset(공정 시작·끝)
             return
         code = getattr(e, "code", None) or getattr(e, "reason", None) or kind.upper()
         level = getattr(e, "level", None) or "info"
@@ -432,6 +453,7 @@ class MessageHub:
                 "configPending": ({"idle": dict(st.pending_idle), "restart": dict(st.pending_restart)}
                                   if st is not None and (st.pending_idle or st.pending_restart) else None),
                 "snapshot": row, "left": {}, "stopping": getattr(safety, "stopping", None) or None,
+                "spectra": dict(self.spectra),
                 "uplink": up.status() if up is not None else {"enabled": False}}
 
 

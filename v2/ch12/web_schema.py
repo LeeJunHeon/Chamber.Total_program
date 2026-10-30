@@ -36,6 +36,8 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
      끝 정지 금지 단계·PC/TSP 정지·allStopSequence·powerOffOnly·규칙 S1~S36)·states(process_states.STATES), 1초 행 블록
      ch2.heater(PLC 히터 해독 + 엔진 열)·ch2.thk(두께 판정 — 엔진 열) 추가(chambers.ch2.blocks 에도), eventKinds 에
      monitor_card·anomaly·client_process·error_event·resumed·safety step/error·command·ui·패널 결과·robot_api
+  3  화면 빠진 기능(UI-098·118~127) — 명령 THICKNESS_WINDOW(두께 Factor·재료 창 값 읽기 — 결과 value 를 사건 thickness/window 로,
+     benchOk), eventKinds 에 thickness/window(상세). state.spectra(OES 스펙트럼 — 묶음 정의 밖)는 hub.py.
 """
 from __future__ import annotations
 
@@ -50,7 +52,7 @@ from v2.ch12 import snapshot_fields as SF
 from v2.ch12 import web_blocks as WB
 from v2.ch12.hub import optional_module
 
-EXPORT_VERSION = 2
+EXPORT_VERSION = 3
 
 # 웹이 받는 공정 이벤트(엔진이 system.emit(source="process:<c>", kind, event=data) 로 내는 것 — hub 가 run_* 메시지로 바꾼다)
 EVENTS: tuple = (
@@ -124,6 +126,7 @@ EVENT_KINDS: tuple = (
     ("command", "plc_manual", "공정 중 PLC 버튼", _M), ("command", "internal_error", "명령 처리 오류", _M),
     ("ui", "log_clear", "화면 로그 지우기", _D), ("heater", "panel_result", "히터 패널 결과", _M),
     ("thickness", "panel_result", "두께 패널 결과", _M), ("robot_api", "bind_failed", "내부 명령 API 포트 실패", _M),
+    ("thickness", "window", "두께 Factor·재료 창 값", _D),
 ) + tuple(x for w in _WORKERS for x in (
     (w, "connected", "장비 연결됨", _D), (w, "connect_failed", "연결 실패", _D), (w, "disconnected", "장비 연결 끊김", _M),
     (w, "long_outage", "장비 연결 오래 끊김", _M), (w, "timeout", "응답 없음", _D),

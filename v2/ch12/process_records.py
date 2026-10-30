@@ -135,7 +135,8 @@ class ProcessRecordsMixin:
         if not (ok or stopped):
             name = d.get("process_name") or "(process)"
             reason = str(d.get("reason") or (d.get("errors") or ["process failed"])[0])
-            self.popup(f"CH{self.n} 공정 실패", f"{name}\n\n사유: {reason}\n\n확인을 누르면 상태 표시가 Idle로 변경됩니다.", "error")
+            self.popup(f"CH{self.n} 공정 실패", f"{name}\n\n사유: {reason}\n\n확인을 누르면 상태 표시가 Idle로 변경됩니다.", "error",
+                       clear_on_close=True)                    # v1 clear_status_to_idle=True(chamber_runtime.py:2087-2091)
         self.last_result = dict(d, end=kind, code=code)
         self.emit("run_end", d.get("process_name", ""), code, level="info" if ok else "warn", result=kind,
                   run_id=self.run_id, result_detail=dict(d), executed=list(self.executed),

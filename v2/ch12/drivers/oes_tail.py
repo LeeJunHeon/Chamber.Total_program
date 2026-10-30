@@ -2,7 +2,8 @@ r"""OES 링크 — 워커가 쓰는 로컬 CSV 를 따라 읽기(tail). v1 devic
 
 - CSV 가 생기고 크기 > 0 일 때까지 OES_CSV_TAIL_S(0.1 s) 마다 확인. 워커/daemon 이 먼저 끝나면 원인 로그 후 끝.
   5 s 마다 '[OES] CSV 생성 대기중...', OES_CSV_CREATE_TIMEOUT_S(60 s) 넘으면 워커(kill)/daemon(강제 종료).
-- 첫 줄 머리글의 2번째 칸부터 x(파장 — 하나라도 숫자가 아니면 인덱스), 이후 줄마다 2번째 칸부터 y → on_data(x, y)(목록).
+- 첫 줄 머리글의 2번째 칸부터 x(파장 — 하나라도 숫자가 아니면 인덱스), 이후 줄마다 2번째 칸부터 y → on_data(x, y)(목록)
+  + 화면 스펙트럼 이벤트(oes_link._sample — oes_spectrum 쓰로틀·솎기).
   표본을 볼 때마다 행 수·마지막 표본 시각(1초 행 sample_age_s) 갱신. one-shot 워커가 끝나고 3 s 새 줄이 없으면 끝.
 """
 from __future__ import annotations
@@ -119,10 +120,6 @@ class TailMixin:
                     n = min(len(x), len(ys))
                     self._rows_seen += 1
                     self._last_sample = self.clock.monotonic()
-                    if self.on_data:
-                        try:
-                            self.on_data(x[:n], ys[:n])
-                        except Exception:
-                            pass
+                    self._sample(x[:n], ys[:n])          # on_data(모두) + 화면 스펙트럼(쓰로틀·솎기 — oes_link)
         except OSError:
             return

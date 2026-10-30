@@ -12,6 +12,12 @@
                         15 s 마다 keep-alive 주석. 동시 연결 상한 SSE_MAX(넘으면 503).
   POST /api/v1/command  {id?, kind, args} → hub.run_command → system.command(kind, args, source=HMI, cid=id, by="local")
                         → {id, ok, reason, detail(거부 이유 문구, 없으면 "")}. 결과는 cmd_result 메시지로도.
+  GET  /api/v1/files?dir=<상대 경로>   레시피 파일 고르기(v1 'Select File'·PC 'CSV 불러오기' 대화상자 자리 — UI-080·PC-087):
+                        시작 폴더 PROCESS_LIST_START_DIR 아래만(밖·'..'·절대 경로는 403), 127.0.0.1 에서 온 요청만(403).
+                        → {root, dir(시작 폴더 기준 상대 — '' = 시작 폴더), parent, abs, entries[{name, path(상대), full(절대),
+                        kind dir|file, size, mtime}]} — 폴더와 *.csv·*.xlsx 만(v1 필터 'Recipe Files (*.csv *.xlsx)'), 이름순(폴더 먼저),
+                        FILES_MAX 개까지(truncated). NAS 가 걸리면 FILES_TIMEOUT_S(3 s — v1 시작 폴더 확인 3 s) 뒤 504,
+                        시작 폴더가 없으면 404 {error: no_root}. 고른 파일은 화면이 RECIPE_LOAD·PC_RECIPE_LOAD·PRESPUTTER_RECIPE path 로.
   GET  / · 정적 파일    LOCAL_HMI_STATIC_DIR — 비면 이 저장소의 v2/hmi(폴더 밖 경로 404). 폴더가 비면(점 파일만) 안내 페이지
                         (화면 파일은 8단계에서 포털 hmi-build·hmi-copy 로 넣는다).
 bench 에서는 쓰기 명령이 BENCH_READ_ONLY — hello 의 runMode·writesAllowed 로 알 수 있다.
@@ -20,13 +26,14 @@ from __future__ import annotations
 
 import json
 import mimetypes
+import os
 import socket
 import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 from typing import Any, Optional
-from urllib.parse import unquote, urlsplit
+from urllib.parse import parse_qs, unquote, urlsplit
 
 from v2.common.commands import Source
 from v2.common.messages import dumps_json
@@ -37,6 +44,10 @@ SSE_MAX = 8                        # 동시 stream 연결 상한
 KEEPALIVE_S = 15.0
 BODY_MAX = 1_000_000               # POST 본문 상한(바이트)
 LOCAL_BY = "local"                 # 로컬 화면 명령의 요청자
+FILE_EXTS = (".csv", ".xlsx")      # v1 'Recipe Files (*.csv *.xlsx)'(chamber_runtime.py:3366)
+FILES_TIMEOUT_S = 3.0              # 폴더 읽기 제한(v1 plasma_cleaning_runtime 시작 폴더 확인 3 s — NAS 응답 지연)
+FILES_MAX = 2000                   # 한 폴더에서 돌려줄 항목 상한
+LOOPBACK = ("127.0.0.1", "::1", "::ffff:127.0.0.1")
 EMPTY_PAGE = """<!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>챔버12 v2</title></head>
@@ -142,6 +153,61 @@ class LocalServer:
         r = self.system.hub.run_command(kind, args, Source.HMI, cid=cid, by=LOCAL_BY)
         return {"id": cid, "ok": bool(r.ok), "reason": r.reason, "detail": getattr(r, "detail", "") or ""}
 
+    def files(self, rel: str, timeout_s: float = FILES_TIMEOUT_S) -> tuple:
+        """레시피 파일 고르기 — (HTTP 코드, 본문). 시작 폴더(PROCESS_LIST_START_DIR) 아래만."""
+        root_s = str((self.system.cfg.get("PROCESS_LIST_START_DIR") if self.system is not None else "") or "")
+        rel = str(rel or "").replace("\\", "/").strip("/")
+        if not root_s:
+            return 404, {"error": "no_root", "detail": "PROCESS_LIST_START_DIR 이 비었음"}
+        if rel and (Path(rel).is_absolute() or rel.startswith("//") or ":" in rel or ".." in rel.split("/")):
+            return 403, {"error": "outside", "detail": "시작 폴더 밖"}
+        box: dict = {}
+
+        def work() -> None:
+            try:
+                root = Path(root_s)
+                if not root.is_dir():
+                    box["r"] = (404, {"error": "no_root", "detail": f"시작 폴더 없음: {root_s}"})
+                    return
+                base = root.resolve()
+                d = (base / rel).resolve() if rel else base
+                try:
+                    d.relative_to(base)
+                except ValueError:
+                    box["r"] = (403, {"error": "outside", "detail": "시작 폴더 밖"})
+                    return
+                if not d.is_dir():
+                    box["r"] = (404, {"error": "not_found", "detail": f"폴더 없음: {rel}"})
+                    return
+                items = []
+                with os.scandir(d) as it:
+                    for e in it:
+                        try:
+                            is_dir = e.is_dir()
+                            if not is_dir and not e.name.lower().endswith(FILE_EXTS):
+                                continue
+                            stt = e.stat()
+                        except OSError:
+                            continue
+                        p = (d / e.name)
+                        r = p.relative_to(base).as_posix()
+                        items.append({"name": e.name, "path": r, "full": str(p), "kind": "dir" if is_dir else "file",
+                                      "size": None if is_dir else int(stt.st_size), "mtime": round(stt.st_mtime, 3)})
+                items.sort(key=lambda x: (x["kind"] != "dir", x["name"].lower()))
+                cur = d.relative_to(base).as_posix()
+                cur = "" if cur == "." else cur
+                parent = None if not cur else ("/".join(cur.split("/")[:-1]))
+                box["r"] = (200, {"root": root_s, "dir": cur, "parent": parent, "abs": str(d),
+                                  "entries": items[:FILES_MAX], "truncated": len(items) > FILES_MAX})
+            except OSError as e:
+                box["r"] = (404, {"error": "unreadable", "detail": f"{type(e).__name__}: {e}"})
+        t = threading.Thread(target=work, name="local-files", daemon=True)
+        t.start()
+        t.join(timeout_s)
+        if "r" not in box:
+            return 504, {"error": "timeout", "detail": f"시작 폴더 없음/응답지연({timeout_s:g}s)"}
+        return box["r"]
+
     def static_file(self, path: str) -> Optional[Path]:
         """요청 경로 → 폴더 안 파일(폴더 밖·없음 = None)."""
         root = self.static_dir
@@ -194,6 +260,12 @@ def _handler(srv: LocalServer):
                 return self._json(200, srv.schema())
             if path == "/api/v1/stream":
                 return self._stream()
+            if path == "/api/v1/files":
+                if str(self.client_address[0]) not in LOOPBACK:
+                    return self._json(403, {"error": "loopback_only"})
+                q = parse_qs(urlsplit(self.path).query)
+                code, body = srv.files((q.get("dir") or [""])[0])
+                return self._json(code, body)
             if path.startswith("/api/"):
                 return self._json(404, {"error": "not_found"})
             f = srv.static_file(path)

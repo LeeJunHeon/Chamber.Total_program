@@ -6,6 +6,8 @@ v1 device/oes.py(OESAsync 클라이언트)의 동작을 스레드로 다시 쓴 
 - one-shot: '--cmd measure ...' 프로세스 1개, 결과는 finished JSON 우선, 없으면 rc==0·CSV 크기 > 0.
 - STOP: 로컬 플래그 파일 2개('<CSV 폴더>\.stop_usb{U}.flag', '<CSV>.stop')에 'stop\n'. 공정은 wait=False(플래그만).
 - CSV tail 0.1 s(워커가 쓰는 로컬 CSV — 머리글 2번째 칸부터 파장, 각 줄 2번째 칸부터 세기) → on_data(x, y).
+  화면 그래프(v1 graph_controller.update_oes_plot): 같은 표본으로 이벤트 kind='spectrum'(data = oes_spectrum.payload — v1 거르기,
+  OES_PLOT_MIN_INTERVAL_S 쓰로틀, 512점 솎기). 측정 시작 때 data {chamber, clear: True}(v1 clear_oes_plot). 허브는 state.spectra 로만.
   60 s 안에 CSV 가 안 생기면 워커/daemon kill. 표본 간격 1 s·평균 3 회(v1 생성자 기본값 — OES_AVG_COUNT 는 v1 도 안 읽음, D177).
 - 저장 폴더: 환경변수 OES_LOCAL_BASE → 설정 OES_LOCAL_DIR(C:\VanaM_Logs\OES) \CH{n}. USB: CH1 0, CH2 1.
 v2 연결부: 명령 id(응답 매칭은 id — v1 은 out_csv 문자열), 하트비트(hb — 나이를 status() 에), 종료 순서는 v1 그대로
@@ -28,6 +30,7 @@ from typing import Any, Callable, Dict, List, Optional
 from v2.common.snapshot import DeviceBlock, FieldDef, FType
 from v2.ch12.drivers import worker_proc as wp
 from v2.ch12.drivers.oes_oneshot import OneShotMixin
+from v2.ch12.drivers.oes_spectrum import SpectrumThrottle
 from v2.ch12.drivers.oes_tail import TailMixin, _Tail
 
 MODULE = "v2.ch12.workers.oes_worker"
@@ -50,7 +53,7 @@ def blocks(chamber: str) -> List[DeviceBlock]:
 
 @dataclass(frozen=True)
 class OesEvent:
-    kind: str                     # status / finished / worker_exit / rejected / anomaly(Ar 이상 — data text)
+    kind: str                     # status / finished / worker_exit / rejected / anomaly(Ar 이상 — data text) / spectrum(화면 그래프)
     detail: str
     reason: Optional[str] = None
     data: Optional[dict] = None
@@ -107,6 +110,7 @@ class OesLink(OneShotMixin, TailMixin):
         self._last_sample: Optional[float] = None
         self._tail: Optional[_Tail] = None
         self._worker_finished: Optional[dict] = None
+        self.spectrum = SpectrumThrottle(self._f("OES_PLOT_MIN_INTERVAL_S", 0.5))   # 화면 그래프 쓰로틀·솎기
         # daemon
         self._daemon: Optional[wp.ProcHandle] = None
         self._daemon_ready = False
@@ -214,6 +218,18 @@ class OesLink(OneShotMixin, TailMixin):
 
     def _status(self, msg: str) -> None:
         self._emit("status", msg)
+
+    def _sample(self, x: list, y: list) -> None:
+        """tail 이 표본 한 줄마다 — on_data(모두) + 화면 스펙트럼(v1 쓰로틀·거르기 뒤 솎은 것, 아니면 내지 않음)."""
+        if self.on_data:
+            try:
+                self.on_data(x, y)
+            except Exception:
+                pass
+        d = self.spectrum.offer(self.clock.monotonic(), x, y, self.chamber, self.clock.wall(),
+                                self._f("OES_PLOT_MIN_INTERVAL_S", 0.5))
+        if d is not None:
+            self._emit("spectrum", "", data=d)
 
     def _spawn(self, argv: List[str], env_extra: Dict[str, str], on_message, tag: str) -> wp.ProcHandle:
         env = wp.worker_env(env_extra)
@@ -492,6 +508,8 @@ class OesLink(OneShotMixin, TailMixin):
         self._rows_seen = 0
         self._stop_requested = False
         self._worker_finished = None
+        self.spectrum.reset()
+        self._emit("spectrum", "", data={"chamber": self.chamber, "clear": True})   # v1 _safe_clear_oes_plot(측정 시작)
         return out_csv
 
     def _run_daemon(self, duration_s: float, integration_ms: int) -> OesResult:

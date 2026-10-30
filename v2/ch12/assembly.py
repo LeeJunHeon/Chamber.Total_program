@@ -86,7 +86,8 @@ class HeaterHost:
         return bool(self.eng.busy)
 
     def web_state(self) -> dict:
-        return self.eng.status()
+        from v2.ch12.heater_panel_text import engine_panel
+        return dict(self.eng.status(), panel=engine_panel(self.eng))    # panel = v1 히터 패널 글(UI-104)
 
     def close(self) -> None:
         self.eng.shutdown()

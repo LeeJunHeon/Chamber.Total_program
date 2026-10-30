@@ -501,6 +501,12 @@ class Ch12Core:
             th_of(a)[0].reload_factors()
         h["THICKNESS_RELOAD"] = th_reload
 
+        def th_window(a, src, by):
+            t, _e = th_of(a)                    # 창을 열 때 파일을 읽는다(v1 대화상자 생성자) — 결과 value(허브가 사건으로도)
+            return {"ch": int(a.get("ch") or 2), "req": a.get("req"), "factor": t.factor_window(),
+                    "materials": t.materials_window()}
+        h["THICKNESS_WINDOW"] = th_window
+
         # ── 공유 ──
         def plc_button(a, src, by):
             if not self._plc_up():
