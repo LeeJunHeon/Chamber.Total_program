@@ -241,6 +241,8 @@ class MfcDriver:
     def io_query(self, session, item: Query, retries_left: Optional[int] = None) -> Any:
         sent = item.cmd
         self._write(session, sent)
+        if item.tag:                                                    # v1 '[SEND] R60 ([STAB R60 ch1])'(device/mfc.py:1359)
+            self.emit("io", f"[SEND] {sent} ({item.tag})")
         try:
             line = self._read_reply(session, sent, item.prefixes, item.timeout_s)
         except ReadTimeout:

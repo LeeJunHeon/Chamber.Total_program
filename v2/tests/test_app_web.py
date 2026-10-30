@@ -172,3 +172,61 @@ def test_uplink_in_sim_requires_sim_id_and_empty_url_warns(tmp_path):
         assert any("UPLINK_URL 이 비어 있음" in s for s in lines)
     finally:
         app.shutdown()
+
+
+def test_journal_command_memory_bound_before_uplink_starts(tmp_path, monkeypatch):
+    """재시작 뒤 웹 명령 id 기억(저널 shared.commands.web)은 uplink.start(SSE·POST — 명령 받기) 전에 들어가 있다 — 그 틈에 같은
+    명령이 와도 다시 실행하지 않는다(journal.bind_commands 가 start 앞)."""
+    import time as _t
+    from v2.ch12 import uplink as U
+    web = FakeWeb(keepalive_s=0.5).up()
+    app, _lines = _in_process(tmp_path, web)
+    jdir = tmp_path / "root" / "data" / "journal"
+    jdir.mkdir(parents=True)
+    old = {"cmdId": "w-old", "kind": "PROCESS_STOP", "status": "accepted", "source": "web", "by": "op@web"}
+    doc = {"v": 1, "part": "shared", "seq": 1, "saved_wall": _t.time() - 5.0, "saved_mono": 0.0, "boot": 0.0,
+           "active": False, "commands": {"web": {"v": 1, "cmds": [["w-old", old]]}}}
+    (jdir / "shared.json").write_text(json.dumps(doc), encoding="utf-8")
+    seen = {}
+    orig = U.Uplink.start
+
+    def start(self):
+        seen["done_at_start"] = list(self.done_cmds)
+        return orig(self)
+    monkeypatch.setattr(U.Uplink, "start", start)
+    assert app.start() == A.EXIT_OK
+    try:
+        assert seen["done_at_start"] == ["w-old"]
+        calls = []
+        real = app.system.command
+        app.system.command = lambda kind, args, **kw: (calls.append(kind), real(kind, args, **kw))[1]
+        assert web.wait(lambda: web.sse_connects >= 1, 20)
+        assert web.push(_cmd("w-old", "PROCESS_STOP"))
+        assert web.wait(lambda: app.uplink.dup_cmds >= 1, 10)
+        assert calls == []                                                   # 같은 id — 실행하지 않음
+    finally:
+        app.shutdown()
+        web.down()
+
+
+def test_start_failure_after_journal_leaves_no_threads(tmp_path, monkeypatch):
+    """조립·저널 뒤 worker 시작에서 실패(종료 코드 4)해도 저널 쓰기·재시작 판단·로봇 API·출력 스레드가 남지 않는다
+    (conftest 가 실제 시계 시험의 남은 스레드를 검사)."""
+    from v2.ch12 import system as SYS
+
+    def boom(self, *a, **k):
+        raise RuntimeError("worker 시작 실패(시험)")
+    monkeypatch.setattr(SYS.Ch12System, "start", boom)
+    web = FakeWeb()
+    app, lines = _in_process(tmp_path, web, UPLINK_IN_SIM=False, EQUIPMENT_ID="CH12")
+    before = {t.name for t in threading.enumerate()}
+    assert app.start() == A.EXIT_START
+    assert any("시작 실패" in s for s in lines) and app.journal is not None
+    import time as _t
+    t_end = _t.monotonic() + 3.0
+    while _t.monotonic() < t_end:
+        left = {t.name for t in threading.enumerate()} - before
+        if not left:
+            break
+        _t.sleep(0.05)
+    assert not ({t.name for t in threading.enumerate()} - before)

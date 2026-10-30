@@ -312,3 +312,156 @@ def check_norm_params(p: dict, chamber: int, caps: Caps, cfg: Mapping[str, Any],
 def queue_param_error_log(errs: List[str]) -> str:
     """큐 행 시작 전 검사 실패 로그(5166) — 'Validate' 줄."""
     return "CSV 공정 파라미터 오류:\n - " + "\n - ".join(errs)
+
+
+# ───────────── 단일(화면) 시작 입력 검사 ─────────────
+def _txt(v: Any) -> str:
+    return "" if v is None else str(v).strip()
+
+
+def check_single_inputs(p: dict, chamber: int, caps: Caps, cfg: Mapping[str, Any]) -> Optional[tuple]:
+    """화면 값 단일 시작의 입력칸 검사(_validate_single_run_inputs 5817-6154) — v2 는 입력칸 대신 시작 params 값.
+    통과하면 None(그리고 v1 처럼 p 를 고친다 — 가스 유량·사용 플래그·CH1 연속 전원/건 미사용·dc_pulse_duty), 실패면 (제목, 본문)
+    — v1 _post_warning 그대로. TEST 행(test_mode)은 v1 화면 시작에 없으므로 검사하지 않는다."""
+    if bool(p.get("test_mode")):
+        return None
+    ch = int(chamber)
+    use_ar, use_o2, use_n2 = bool(p.get("use_ar")), bool(p.get("use_o2")), bool(p.get("use_n2"))
+    if not (use_ar or use_o2 or use_n2):
+        return ("선택 오류", "가스를 하나 이상 선택해야 합니다.")
+
+    def read_flow(k: str, used: bool) -> float:
+        if not used:
+            return 0.0
+        v = float(_txt(p.get(k)) or "0")
+        if v < 0:
+            raise ValueError()
+        return v
+    try:
+        flows = {k: read_flow(k, u) for k, u in (("ar_flow", use_ar), ("o2_flow", use_o2), ("n2_flow", use_n2))}
+    except Exception:
+        return ("입력값 확인", "가스 유량 입력을 확인하세요.")
+    use_rfp = bool(caps.rfp) and bool(p.get("use_rf_pulse"))
+    use_dcp = bool(caps.dcp) and bool(p.get("use_dc_pulse"))
+    if use_rfp and use_dcp:
+        return ("선택 오류", "RF Pulse와 DC Pulse는 동시에 사용할 수 없습니다 (같은 시리얼 포트, 입력칸 공유). 하나만 선택하세요.")
+    out: dict = dict(flows, use_ar=use_ar, use_o2=use_o2, use_n2=use_n2)
+    dash = "-" if ch == 2 else " "                         # CH2 문구는 'RF-Pulse', CH1 은 'RF Pulse'(v1 그대로)
+    if ch == 1:
+        if not (use_rfp or use_dcp):
+            if caps.rfp:
+                return ("선택 오류", "CH1은 RF-Pulse(또는 DC-Pulse) 중 하나를 선택해야 합니다.")
+            if caps.dcp:
+                return ("선택 오류", "CH1은 DC-Pulse를 선택해야 합니다.")
+            return ("선택 오류", "CH1에서 사용 가능한 파워 장치가 없습니다.")
+        out.update(use_g1=False, use_g2=False, use_g3=False, use_rf_power=False, use_dc_power=False, use_dc_power2=False)
+    else:
+        for use_k, val_k, label in (("use_dc_power", "dc_power", "DC Power(W)"), ("use_dc_power2", "dc_power2", "DC2 Power(W)"),
+                                    ("use_rf_power", "rf_power", "RF Power(W)")):
+            if bool(p.get(use_k)):
+                try:
+                    v = float(_txt(p.get(val_k)) or "0")
+                    if v <= 0:
+                        raise ValueError()
+                except Exception:
+                    return ("입력값 확인", f"{label}를 확인하세요.")
+                out[val_k] = v
+    fmax = rfp_freq_max_khz(cfg, ch)
+    if use_dcp:
+        try:
+            pw = float(_txt(p.get("dc_pulse_power")) or "0")
+            if pw <= 0:
+                raise ValueError()
+        except Exception:
+            return ("입력값 확인", "DC-Pulse Target Power(W)를 확인하세요.")
+        f = None
+        tf_ = _txt(p.get("dc_pulse_freq"))
+        if tf_:
+            try:
+                f = int(float(tf_))
+                if f < DCP_FREQ_MIN_KHZ or f > DCP_FREQ_MAX_KHZ:
+                    raise ValueError()
+            except Exception:
+                return ("입력값 확인", "DC-Pulse Freq(kHz)는 20..150 범위입니다.")
+        off: Any = None
+        sv = _txt(p.get("dc_pulse_off_time"))
+        if sv.upper() == "DC":
+            off = "DC"
+        elif sv:
+            try:
+                off = round(float(sv), 1)
+            except Exception:
+                return ("입력값 확인", "DC-Pulse Off Time 은 숫자(µs) 또는 'DC' 여야 합니다.\n공란이면 장비 현재값을 유지합니다.")
+            mx = dcp_max_off_us(float(f)) if f else DCP_OFF_ABS_MAX_US
+            if not (DCP_OFF_MIN_US <= off <= mx):
+                fx = f"{float(f):g}kHz 기준 " if f else "(주파수 공란 → 절대 상한) "
+                return ("입력값 확인", f"DC-Pulse Off Time {off:.1f}µs 는 허용 범위 밖입니다.\n"
+                                    f"{fx}1.0 ~ {mx:.1f}µs (매뉴얼 p.13 그림3: 상한 = min(10.0, 400/f))")
+        duty = 100.0 if isinstance(off, str) else (round((1000.0 / f - off) / (1000.0 / f) * 100.0, 1)
+                                                   if (off is not None and f) else None)
+        out.update(dc_pulse_power=pw, dc_pulse_freq=f, dc_pulse_off_time=off, dc_pulse_duty=duty)
+    if use_rfp:
+        try:
+            pw = float(_txt(p.get("rf_pulse_power")) or "0")
+            if pw <= 0:
+                raise ValueError()
+        except Exception:
+            return ("입력값 확인", f"RF{dash}Pulse Target Power(W)를 확인하세요.")
+        f = None
+        tf_ = _txt(p.get("rf_pulse_freq"))
+        if tf_:
+            try:
+                f = float(tf_)
+                if not (0.001 <= f <= fmax):
+                    raise ValueError()
+            except Exception:
+                return ("입력값 확인", f"RF{dash}Pulse Freq(kHz)는 0.001..{fmax:g} 범위입니다.\n"
+                                    "(CESAR 사양 3-5: 1Hz~30kHz — 초과 시 W40으로 출력 차단)")
+        d = None
+        td = _txt(p.get("rf_pulse_duty") if p.get("rf_pulse_duty") is not None else p.get("rf_pulse_duty_cycle"))
+        if td:
+            try:
+                d = int(float(td))
+                if d < 1 or d > 99:
+                    raise ValueError()
+            except Exception:
+                return ("입력값 확인", "RF Pulse Duty(%) 1..99" if ch == 1 else "RF-Pulse Duty(%)는 1..99 범위입니다.")
+        out.update(rf_pulse_power=pw, rf_pulse_freq=f, rf_pulse_duty=d)
+    if ch == 2 and not (p.get("use_dc_power") or p.get("use_dc_power2") or p.get("use_rf_power") or use_dcp or use_rfp):
+        return ("선택 오류", "DC1/DC2/RF Power 또는 DC/RF Pulse 중 하나 이상 선택해야 합니다.")
+    out.update(use_dc_pulse=use_dcp, use_rf_pulse=use_rfp)
+    if not use_dcp:
+        out.update(dc_pulse_power=0.0, dc_pulse_freq=None, dc_pulse_off_time=None, dc_pulse_duty=None)
+    if not use_rfp:
+        out.update(rf_pulse_power=0.0, rf_pulse_freq=None, rf_pulse_duty=None)
+    p.update(out)
+    return None
+
+
+def single_run_defaults(p: dict, chamber: int, wall_iso: str, mono_ns: int) -> dict:
+    """단일 시작 params 기본값(_handle_start_clicked 4432-4466): base_pressure 공란 1e-5, working_pressure·shutter_delay·
+    process_time 공란 0, integration_time 60 고정(그 입력칸은 공정 이름으로 재활용), 공정 이름 비면 'Single CH{n}',
+    Dep.Rate·Thickness 둘 다 > 0 이면 process_time = thickness/dep_rate/60(소수 3자리 — _recalc_process_time 3343-3356),
+    t0_pressed_wall(초 ISO)·t0_pressed_ns, 'G1 Target' ↔ G1_target_name 동기."""
+    def num(k: str, default: float) -> float:
+        s = _txt(p.get(k))
+        return float(s) if s else float(default)
+
+    def opt(k: str) -> Optional[float]:
+        s = _txt(p.get(k))
+        return float(s) if s else None
+    dep, thk = opt("dep_rate"), opt("thickness")
+    pt = num("process_time", 0.0)
+    try:
+        if dep and thk and dep > 0 and thk > 0:
+            pt = float(f"{thk / dep / 60.0:.3f}")
+    except Exception:
+        pass
+    name = _txt(p.get("process_note") or p.get("Process_name") or p.get("process_name"))
+    note = name if name else f"Single CH{int(chamber)}"
+    p.update(base_pressure=num("base_pressure", 1e-5), integration_time=60, working_pressure=num("working_pressure", 0.0),
+             shutter_delay=num("shutter_delay", 0.0), process_time=pt, dep_rate=dep, thickness=thk,
+             process_note=note, Process_name=note, t0_pressed_wall=wall_iso, t0_pressed_ns=int(mono_ns))
+    for i in (1, 2, 3):
+        p.setdefault(f"G{i} Target", p.get(f"G{i}_target_name", ""))
+    return p

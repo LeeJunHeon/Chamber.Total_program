@@ -432,4 +432,7 @@ DECISIONS = [
     dict(id='D98', title='시작 때 남은 파워 정리(S31)', decision='첫 정상 PLC 행에서 공정·운전이 없는데 CH2 DC1·DC2·CH2 RF·PC RF 의 SET 래치나 WRITE 값이 남아 있으면 그 전원만 끔(합의된 변경 — 챔버K S51). DC Pulse·RF Pulse 는 포트가 on-demand 라 확인 안 함(D96).', reason="4단계 명령 처리·안전 규칙 작성 중 판단", confirm=True, where="v2/ch12/core.py; safety.py; safety_rules.py"),
     dict(id='D99', title='로봇 쓰기 명령이 core 에서 거부될 때', decision="v1 형식 E205(로봇 서버의 '제어 프로그램 응답 없음'과 같은 코드).", reason="4단계 명령 처리·안전 규칙 작성 중 판단", confirm=True, where="v2/ch12/core.py; safety.py; safety_rules.py"),
     dict(id='D100', title='RECIPE_CLEAR 공정 중', decision='BUSY 로 거부.', reason="4단계 명령 처리·안전 규칙 작성 중 판단", confirm=True, where="v2/ch12/core.py; safety.py; safety_rules.py"),
+    dict(id='D101', title='설정 오류로 시작 거부', decision="v2 는 콘솔 문구 + 종료 코드 2(감시 프로그램이 다시 켜지 않음) — v1 은 경고창(UI-001·LOG-094). 변환 도구는 문제 전부를 나열(v1 format_problems 의 번호·'외 N건' 대신).", reason="전수 목록(설정·오류) 완료 중 판단", confirm=True, where="v2/ch12/params; v2/tools/convert_v1_config.py"),
+    dict(id='D102', title='E715~E718', decision='v1 은 콜백이 없을 때만 냈고 운영 배선에서는 나지 않음 — v2 는 콜백 주입이 없어 나지 않음(카탈로그에는 그대로).', reason="전수 목록(설정·오류) 완료 중 판단", confirm=True, where="v2/ch12/params; v2/tools/convert_v1_config.py"),
+    dict(id='D103', title='DEV_MODE', decision='v2 키는 없앴고(RUN_MODE) 엔진·모니터·엑셀이 읽는 DEV_MODE 는 늘 false(v1 운영값과 같음) — RUN_MODE=sim 과 묶지 않음.', reason="전수 목록(설정·오류) 완료 중 판단", confirm=True, where="v2/ch12/params; v2/tools/convert_v1_config.py"),
 ]

@@ -123,3 +123,52 @@ ITEMS = [
             "apps/oes_service/oes_api.py:2064-2082; apps/oes_service/oes_api.py:2215-2354",
          v2="v2/ch12/workers/", test="", status="todo", note=""),
 ]
+
+# ───────────────────────── 전수 목록 마감 ─────────────────────────
+_DONE = {
+    1: ("v2/robot_server/server.py", "v2/tests/test_inv_robot.py::test_logging_exception_row_and_json_dump_error_cell", ""),
+    2: ("v2/ch12/outputs/app_log.py", "v2/tests/test_inv_log.py::test_error_log_hook_messages; "
+                                      "v2/tests/test_outputs_text.py::test_app_log_setup_files; v2/tests/test_outputs_text.py::test_app_log_golden",
+        "D45 — 'ASYNCIO EXCEPTION'·'QT ..'·asyncio/Qt 설치·해제 문구는 v2 에 asyncio·Qt 가 없어 해당 없음"),
+    3: ("v2/ch12/outputs/runtime_dump.py; v2/ch12/runtime_dump_hook.py",
+        "v2/tests/test_outputs_text.py::test_runtime_dump_format; v2/tests/test_runtime_dump_hook.py::test_manual_dump_saved_with_v2_state",
+        "D45 — ui 는 화면이 준 값 사전, asyncio 는 '(loop is None)', objects 는 v2 상태 사전(repr 400자 규칙 그대로)"),
+    6: ("apps/rf_service/rf_worker.py; v2/ch12/outputs/camera_photos.py",
+        "v2/tests/test_inv_app.py::test_camera_photos_match_rf_worker_rules",
+        "독립 도구 그대로 — v1 rf_worker 를 v2 사진에 실제로 돌려 판독(모델 cnn.onnx)된 골든으로 확인"),
+    7: ("apps/rf_service/rf_worker.py", "v2/tests/test_inv_app.py::test_camera_photos_match_rf_worker_rules",
+        "독립 도구 그대로 — 골든은 env RF_SETTINGS(v2 가 내보낸 settings.json)로 실행, 종료 코드 0"),
+    8: ("apps/rf_service/rf_worker.py", "v2/tests/test_inv_app.py::test_camera_photos_match_rf_worker_rules",
+        "독립 도구 그대로 — 매니페스트·CSV·NAS 사본까지 확인"),
+    9: ("apps/log_sync_service/log_sync.py", "v2/tests/test_inv_app.py::test_log_sync_copies_v2_records",
+        "독립 도구 그대로 — v2 기록에 실제로 --once 실행, 실패 0·state 정상"),
+    11: ("v2/ch12/outputs/calib_csv.py", "v2/tests/test_outputs_csv.py::test_calib_golden[calib_upgrade_fail]; "
+                                         "v2/tests/test_outputs_csv.py::test_calib_pending_then_merge_d07",
+         "v2 는 모든 행이 pending(새 머리글)을 거쳐 본파일 실제 열로 보낸다(D07) — 옛 머리글이면 새 열 값 버림(v1 그대로)"),
+    12: ("v2/ch12/snapshot_fields.py; v2/ch12/outputs/selfwatch.py",
+         "v2/tests/test_snapshot_fields.py::test_program_state_reads_this_process; v2/tests/test_outputs_text.py::test_selfwatch_golden",
+         "D69 — psutil 없이: 윈도우 ctypes(GetProcessMemoryInfo PrivateUsage·핸들·GDI/USER), 리눅스 /proc. tasks 는 -1(asyncio 없음). "
+         "윈도우 확인 필요"),
+    13: ("v2/ch12/workers/oes_measure.py; v2/ch12/workers/oes_daemon.py; v2/ch12/workers/oes_guard.py",
+         "v2/tests/test_inv_app.py::test_oes_worker_init_json_logs_and_serial_check; "
+         "v2/tests/test_oes_link.py::test_daemon_exits_by_itself_when_main_stdin_closes; "
+         "v2/tests/test_oes_link.py::test_stop_writes_two_local_flags_and_ends_early", ""),
+}
+_NA = {
+    4: "na 근거: apps/robot_server 는 v1 에서 쓰이지 않는 프로그램(ROB-147 — main.py:1854-1856 이 같은 50070 에 직접 호스트를 띄움, "
+       "업스트림 키 주석 처리 lib/config_common.py:44-57, 빌드·다른 모듈 참조 없음)",
+    5: "na 근거: run_state_api·STORE 를 import·호출하는 곳 없음(grep — apps/robot_server/state_api.py 자기 파일만, ROB-149)",
+    10: "na 근거: 메인이 쓰지 않는 도구(APP-069 — apps/recovery_service 밖 참조 0건, CH12_RECOVERY_* 를 읽는 곳 없음). v2 는 "
+        "v2/supervisor 를 새로 설계(plan 3장(6))",
+}
+for _it in ITEMS:
+    _k = int(_it["id"].split("-")[1])
+    if _it["status"] != "todo":
+        continue
+    if _k in _DONE:
+        _it["v2"], _it["test"], _n2 = _DONE[_k]
+        if _n2:
+            _it["note"] = (_it["note"] + " / " if _it["note"] else "") + _n2
+        _it["status"] = "done"
+    elif _k in _NA:
+        _it["status"], _it["note"] = "na", (_it["note"] + " / " if _it["note"] else "") + _NA[_k]

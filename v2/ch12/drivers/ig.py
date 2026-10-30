@@ -25,7 +25,7 @@ from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional
 
 from v2.common.snapshot import DeviceBlock, FieldDef, FType
-from v2.common.transport import ReadTimeout, TcpSettings
+from v2.common.transport import ReadTimeout, TcpSettings, TransportError
 from v2.common.worker import Worker
 from v2.ch12.drivers.line_ops import LineReader, OpRunner, Query, Send
 from v2.ch12.drivers import ig_ops
@@ -96,6 +96,15 @@ class IgDriver:
         self.wait_cb = None
         self.bg_op = None
         worker.on_connect = self._on_connect
+        self._prev_worker_event = worker.on_event
+        worker.on_event = self._on_worker_event
+
+    def _on_worker_event(self, ev) -> None:
+        """끊김 문구 'IG TCP 연결 끊김'(device/ig.py:660-661 — 정리 중이 아닐 때)."""
+        if getattr(ev, "kind", "") == "disconnected" and not self.cleaning:
+            self.status("IG TCP 연결 끊김")
+        if self._prev_worker_event:
+            self._prev_worker_event(ev)
 
     # ───────── 설정 ─────────
     def c(self, key: str, default: Any = None) -> Any:
@@ -122,7 +131,7 @@ class IgDriver:
         host, port = endpoint(self.cfg, self.chamber)
         self.status(f"{host}:{port} 연결 성공 (TCP)")
 
-    def _write(self, session, cmd: str) -> float:
+    def _write(self, session, cmd: str, tag: str = "") -> float:
         if cmd != "RDI" and not self.writes_allowed:
             raise PermissionError(f"bench — 보내지 않음: {cmd}")
         if self.ready_at > self.clock.monotonic():
@@ -130,18 +139,22 @@ class IgDriver:
         self.clock.sleep_until(self.clock.monotonic() + PRE_SEND_ABSORB_S)       # 늦은 줄 흡수
         session.transport.reset_input()
         self.reader.clear()
-        session.write((cmd + "\r").encode("ascii", "ignore"))
+        try:
+            session.write((cmd + "\r").encode("ascii", "ignore"))
+        except TransportError as e:
+            self.status(f"[SEND-ERROR] {tag} {cmd} 전송 오류: {e!r}")             # device/ig.py:717
+            raise
         return self.clock.monotonic()
 
     def io_send(self, session, item: Send) -> float:
-        t = self._write(session, item.cmd)
+        t = self._write(session, item.cmd, item.tag)
         self.ready_at = t + item.gap_s
         self.emit("io", f"[SEND] {item.cmd} (tag={item.tag})")
         return t
 
     def io_query(self, session, item: Query, retries_left: Optional[int] = None) -> Any:
         sent = item.cmd
-        self._write(session, sent)
+        self._write(session, sent, item.tag)
         tick = item.tag == TICK_TAG
         if not tick:
             self.emit("io", f"[SEND] {sent} (tag={item.tag})")

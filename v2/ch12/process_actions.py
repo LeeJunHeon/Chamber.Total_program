@@ -348,7 +348,9 @@ class ProcessActions(ProcessEventsMixin):
             return
 
         def measured(res) -> None:
-            if not self.oes_active:
+            if not self.oes_active:                          # v1 _pump_oes_events(2801-2805): 이번 런(_oes_active)만
+                if res.emitted:
+                    self.log(f"OES{self.n}", "이전 런 잔여 'finished' 이벤트 무시")
                 return
             self.oes_active = False
             if res.success:
@@ -356,7 +358,13 @@ class ProcessActions(ProcessEventsMixin):
                 self.log("OES", "OES 측정 종료(정상).")
             elif res.emitted:
                 self.oes_initialized = False
-                self.log(f"OES{self.n}", f"측정 실패: {res.message} → 종료 절차로 전환")
+                msg = res.message or "measure failed"
+                self.log(f"OES{self.n}", f"측정 실패: {msg} (csv={res.out_csv}) → 종료 절차로 전환" if res.out_csv
+                         else f"측정 실패: {msg} → 종료 절차로 전환")
+                tail = getattr(res, "error", None)
+                if tail:                                     # 워커 stderr 끝(2000자 — 2826-2830)
+                    t = str(tail)
+                    self.log(f"OES{self.n}", f"워커 stderr tail:\n{t[:2000] + '...' if len(t) > 2000 else t}")
                 r = self.runner
                 if r is not None:
                     r.oes_failed("OES", res.message, meta={"success": False, "csv": res.out_csv, "ch": self.n})
@@ -496,7 +504,7 @@ class ProcessActions(ProcessEventsMixin):
         펄스 OFF 안전망(cleanup — 끝날 때까지 최대 DCP_CLEANUP_OFF_WAIT_S) → 펄스 포트 해제 → 카메라 떠남.
         v2 는 MFC·IG 연결을 끊지 않는다(1초 읽기 — 상시 연결 D37) — 대기열·상태만 정리."""
         mp = self.sys.shared.mfc[self.ch]
-        others = mp.users - {self.owner}
+        others = self.mfc_others()
         if others:
             self.log("MFC", f"다른 공정이 MFC 사용 중({', '.join(sorted(others))}) → mfc 폴링/상태 리셋 생략(공유 자원 보호), "
                             f"이 챔버 몫만 정리")
@@ -513,7 +521,7 @@ class ProcessActions(ProcessEventsMixin):
             self.log("IG", "같은 CH Plasma Cleaning 이 IG 사용 중 → IG 대기 취소/정리 생략 (공유 장치 보호)")
         else:
             try:
-                self.ig.cancel_wait()
+                self.ig.cancel_wait("cleanup")              # v1 _ig_cancel_for_cleanup(7376-7381) — 'cleanup' 라벨(사용자 STOP 과 구분)
                 self.ig.set_process_status(False)
             except Exception:
                 pass
@@ -545,4 +553,30 @@ class ProcessActions(ProcessEventsMixin):
                     self.log("MAIN", w)
                     self.e.chat(w)
         self.sys.shared.pulse.release_chamber(self.ch)
+        self.run_use(False)
         self.camera_leave()
+
+    # ═══════════════════════ 공유 MFC 사용자(v1 runtime_state run_users — _on_process_status_changed 3232-3247) ═══════════════════════
+    def mfc_others(self) -> set:
+        """이 챔버 MFC 를 지금 쓰는 '다른' 주체 = 폴링 사용자 ∪ 런 사용자 − 나(_mfc_other_users 5252-5254)."""
+        users = set(self.sys.shared.mfc[self.ch].users)
+        rs = getattr(self.sys, "run_state", None)
+        if rs is not None:
+            try:
+                users |= set(rs.run_users(self.mfc.resource_key))
+            except Exception:
+                pass
+        return users - {self.owner}
+
+    def run_use(self, on: bool) -> None:
+        """공정 상태 True → begin_run_use(chamber{n}, [MFC 자원 키]), False → end_run_use(PC 가 그동안 이 MFC 를 전체 정리하지 않게)."""
+        rs = getattr(self.sys, "run_state", None)
+        if rs is None:
+            return
+        try:
+            if on:
+                rs.begin_run_use(self.owner, [self.mfc.resource_key])
+            else:
+                rs.end_run_use(self.owner)
+        except Exception:
+            pass

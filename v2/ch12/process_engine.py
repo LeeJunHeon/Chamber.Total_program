@@ -50,6 +50,10 @@ COOLDOWN_S = 60.0                     # runtime_state.remaining_cooldown(…, 60
 OWNERS = ("robot", "web", "local")
 
 
+class _AfterFinishError(Exception):
+    """AFTER_FINISH(끝 처리) 예외 — 로그는 이미 남김, 리스트를 리셋하고 IDLE."""
+
+
 @dataclass
 class ProcEvent:
     kind: str
@@ -289,9 +293,11 @@ class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, Process
             return "RESTART_PENDING"
         if self.state_name != "IDLE" or self._cmd is not None:
             self.reject_detail = f"runner busy: {self.state_name}"
+            self.popup("대기 중", "이전 공정/정리가 아직 진행 중입니다. 잠시 후 다시 시도하세요.")
             return "RUNNER_BUSY"
         if self.runner.is_running:
             self.reject_detail = "process controller busy"
+            self.popup("실행 오류", "다른 공정이 실행 중입니다.")
             return "RUNNER_BUSY"
         return None
 
@@ -304,6 +310,18 @@ class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, Process
             return why
         if params is None and not self.runs:
             return "NO_RECIPE"
+        if params is not None and self.rows is None and not params.get("test_mode"):
+            # 화면 값 단일 시작 — 입력칸 검사·기본값(v1 _validate_single_run_inputs·_handle_start_clicked 4432-4466)
+            from v2.ch12.recipe_check import check_single_inputs, single_run_defaults
+            params = dict(params)
+            bad = check_single_inputs(params, self.n, self.caps, self.cfg)
+            if bad:
+                self.popup(*bad)
+                self.reject_detail = bad[1]
+                self._host(False, "invalid inputs")
+                return "RECIPE_PARAM_ERROR"
+            single_run_defaults(params, self.n, datetime.fromtimestamp(self.clock.wall()).isoformat(timespec="seconds"),
+                                int(self.clock.monotonic() * 1e9))
         with self.lk:
             self.owner = owner if owner in OWNERS else "local"
             self.origin, self.origin_meta = origin, origin_meta
@@ -403,6 +421,12 @@ class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, Process
             except PF.StageCancelled:
                 self._stop_before_start()
                 return
+            except _AfterFinishError:
+                self._reset_after_list()
+                return
+            except Exception as ex:                                    # v1 START_SINGLE / ADVANCE_QUEUE failed
+                self._start_exception(ex, queue)
+                return
             if not (queue and ok and not stopped and self.queue_mode):
                 self.log("MAIN", f"[Runner] queue end (ok={ok}, stopped={stopped}) → reset")
                 self._reset_after_list()
@@ -465,7 +489,13 @@ class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, Process
         self.state_name = "PREFLIGHT"
         steps, insts = BK.expand(run.blocks(self.blocks), self.cfg, self.n, caps=self.caps)
         self.cur_steps, self.cur_insts = steps, insts
-        if not self._preflight(run, params):
+        try:
+            pf_ok = self._preflight(run, params)
+        except PF.StageCancelled:
+            raise
+        except Exception as ex:
+            raise self._preflight_exception(params, ex)
+        if not pf_ok:
             return False, False
         self.run_id = uuid.uuid4().hex[:12]
         self.run_warnings = list(self.run_warnings)
@@ -476,8 +506,45 @@ class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, Process
         detail = dict(res.detail)
         if self._exiting:                                  # 의도적 종료 — run_end 는 program_exit 가 냈다
             return False, True
-        self._after_finish(run, res.ok, detail)
+        try:
+            self._after_finish(run, res.ok, detail)
+        except Exception as ex:                            # v1 '[Runner] AFTER_FINISH exception' → 큐·화면 리셋, IDLE
+            self.log("MAIN", f"[Runner] AFTER_FINISH exception: {ex!r}")
+            raise _AfterFinishError() from ex
         return res.ok, bool(detail.get("stopped"))
+
+    def _preflight_exception(self, params: dict, ex: Exception) -> RuntimeError:
+        """_start_after_preflight 의 except(4097-4119): 문구 로그·'오류' 창·호스트 실패 응답·장비 정리 → RuntimeError(문구)."""
+        note = params.get("process_note", "알 수 없는")
+        msg = f"오류: '{note}' 시작 실패. ({ex})"
+        self.log("MAIN", msg)
+        self.popup("오류", msg, level="error")
+        self._host(False, msg)
+        try:
+            self.actions.cleanup_devices()
+        except Exception:
+            pass
+        return RuntimeError(msg)
+
+    def _start_exception(self, ex: Exception, queue: bool) -> None:
+        """_runner_stage_start_single / _runner_stage_advance_queue 의 except(4964-4976·5232-5244): 로그 → 호스트 실패 응답(큐) →
+        장비 정리 → 결과(run_end error PREFLIGHT_FAILED, 문구 '시작 실패: …' / '공정 시작 실패: …' — Robot CSV '실패' 사유) → 리셋."""
+        if queue:
+            self.log("MAIN", f"[Runner] ADVANCE_QUEUE failed: {ex!r}")
+            why = f"공정 시작 실패: {ex}"
+            self._host(False, why)
+        else:
+            self.log("MAIN", f"[Runner] START_SINGLE failed: {ex!r}")
+            why = f"시작 실패: {ex}"
+        self.queue_mode = False
+        try:
+            self.actions.cleanup_devices()
+        except Exception:
+            pass
+        self.error = "PREFLIGHT_FAILED"
+        self.last_end_t = self.clock.monotonic()
+        self.emit("run_end", why, "PREFLIGHT_FAILED", level="error", result="error")
+        self._reset_after_list()
 
     def _host(self, ok: bool, msg: str) -> None:
         f = self.on_host_start

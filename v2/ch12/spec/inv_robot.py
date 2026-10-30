@@ -37,9 +37,9 @@ _OPS = "v2/ch12/robot_ops.py"
 _CSV = "v2/ch12/outputs/robot_csv.py"
 
 
-def _i(n: int, desc: str, v1: str, v2: str, note: str = "", status: str = "todo") -> dict:
+def _i(n: int, desc: str, v1: str, v2: str, note: str = "", status: str = "todo", test: str = "") -> dict:
     return dict(id=f"ROB-{n:03d}", area="robot", desc=desc, v1=v1, v2=v2,
-                test="", status=status, note=note)
+                test=test, status=status, note=note)
 
 
 ITEMS = [
@@ -559,4 +559,146 @@ for _it in ITEMS:
     _k = int(_it["id"].split("-")[1])
     if _k in _DONE and _it["status"] == "todo":
         _it["v2"], _it["test"] = _DONE[_k]
+        _it["status"] = "done"
+
+# ───────────────────────── 전수 목록 마감(로봇 서버·Robot CSV·런타임 기록 단계) ─────────────────────────
+# 로봇 서버 v1 골든(v2/tools/v1golden_robot_server.py 가 v1 HostServer 를 실제로 띄워 만든 robot_server_frames.json —
+# 받은 바이트·서버 로그·명령 CSV 행 비교)과 Robot CSV v1 골든(v2/tools/v1golden_outputs.py — v1 HostProcessLog 실제 실행),
+# 그리고 그 골든이 닿지 않는 부분은 v2/tests/test_inv_robot.py.
+_RS = "v2/tests/test_robot_server.py"
+_RSE = "v2/tests/test_robot_server_events.py"
+_G = _RS + "::test_v1_golden_case"
+_OR = "v2/tests/test_outputs_robot.py"
+_RG = _OR + "::test_robot_golden"
+_IR = "v2/tests/test_inv_robot.py"
+_LOG = "v2/robot_server/log.py"
+
+
+def _g(*names: str) -> str:
+    return "; ".join(f"{_G}[{n}]" for n in names)
+
+
+def _rg(*names: str) -> str:
+    return "; ".join(f"{_RG}[robot_{n}]" for n in names)
+
+
+_DONE2 = {
+    1: (_P, f"{_RS}::test_pack_message_bytes; {_g('status_ok', 'all18')}", ""),
+    2: (_P, f"{_RS}::test_pack_message_bytes; {_g('status_ok')}", ""),
+    3: (_P, f"{_RS}::test_pack_message_bytes; {_g('korean_fail')}", ""),
+    4: (_S, _g("partial", "header_junk_ignored", "two_in_one", "eof_mid_body", "eof_mid_header"), ""),
+    5: (_S, f"{_g('bad_version')}; {_RSE}::test_version_error_event_then_close", "보고는 D09(로그 + 제어 프로그램 이벤트)"),
+    6: (f"{_S}; {_LOG}", f"{_g('invalid_json_then_ok', 'invalid_utf8', 'empty_body')}; "
+                         f"{_RSE}::test_parse_error_and_missing_command_send_events", ""),
+    7: (_S, _g("data_not_dict", "numeric_ids"), ""),
+    8: (_S, _g("not_object", "not_object_string"), "v1 이상 동작 그대로 — D123"),
+    9: (_S, _g("status_ok", "korean_fail"), ""),
+    10: (f"{_S}; {_LOG}", f"{_g('empty_cmd', 'missing_cmd')}; {_RSE}::test_parse_error_and_missing_command_send_events", ""),
+    11: (f"{_S}; v2/robot_server/forward.py; v2/ch12/robot_api.py",
+         f"{_g('status_ok')}; v2/tests/test_robot_ops.py::test_matches_v1[start_ok]",
+         "received_at·peer 는 내부 API 요청 본문으로 넘긴다(forward.py 계약)"),
+    12: (_S, _g("lowercase_spaces", "all18"), ""),
+    13: (_S, _g("blank_cmd"), ""),
+    14: (_S, _g("unknown_cmd", "numeric_ids"), ""),
+    15: (f"{_S}; v2/ch12/robot_api.py", f"{_g('handler_exception')}; v2/tests/test_robot_ops.py::test_reports_and_adapter_protocol",
+         "v1 이상 동작 그대로 — D124(제어 프로그램 쪽이 원문+_RESULT 를 만든다)"),
+    16: (_S, f"{_g('non_dict_return')}; {_RS}::test_server_defense_non_dict_body; {_RSE}::test_server_defense_e110_e111_send_events", ""),
+    17: (_S, f"{_g('fail_without_code')}; {_RSE}::test_server_defense_e110_e111_send_events", ""),
+    18: (_S, f"{_RSE}::test_serialization_failure_e107_sends_event; {_IR}::test_logging_exception_row_and_json_dump_error_cell", ""),
+    19: (_S, f"{_RS}::test_connections_concurrent_requests_sequential", ""),
+    20: (_S, f"{_IR}::test_command_csv_written_after_reply_duration_ms", ""),
+    21: (_S, _g("status_ok", "two_in_one"), ""),
+    22: (_S, _g("eof_mid_body", "eof_mid_header", "not_object", "bad_version"), ""),
+    23: (f"{_S}; v2/robot_server/app.py", f"{_RS}::test_cli_runs_as_separate_program; {_IR}::test_bind_defaults_and_boot_logs", ""),
+    24: ("v2/ch12/params/robot.py; v2/robot_server/app.py", f"{_IR}::test_bind_defaults_and_boot_logs",
+         "v2 는 메인이 아니라 따로 도는 로봇 서버 프로그램(python -m v2.robot_server)이 이 포트를 듣는다(plan 3-(5))"),
+    25: (_LOG, f"{_RS}::test_command_csv_fallback_marker; {_IR}::test_command_csv_header_and_primary_retry", ""),
+    26: (_LOG, f"{_IR}::test_command_csv_header_and_primary_retry; {_g('status_ok', 'invalid_json_then_ok')}", ""),
+    27: (_S, _g("status_ok", "korean_fail", "data_not_dict"), ""),
+    28: (_S, f"{_IR}::test_logging_exception_row_and_json_dump_error_cell", ""),
+    29: (_LOG, f"{_RS}::test_command_csv_fallback_marker; {_IR}::test_command_csv_header_and_primary_retry", ""),
+    30: (f"{_S}; {_LOG}", f"{_IR}::test_command_csv_failure_never_affects_reply", ""),
+    34: (_LOG, f"{_g('status_ok')}; v2/tests/test_robot_api.py::test_end_to_end_robot_server; {_RS}::test_server_log_file_daily",
+         "v2 로봇 서버는 따로 도는 프로그램 — 이 태그들은 서버 로그(server_page_YYYYMMDD.log)에만 남고 다른 화면으로 가지 않는다"),
+    36: ("v2/ch12/robot_api.py; vanam-process lib/ops2/ch12/chat.ts",
+         "v2/tests/test_robot_api.py::test_event_endpoint_emits; "
+         "vanam-process/scripts/ops2-chat-ch12.mjs::CHAT_PLC_LINK_SUPPRESS",
+         "D09 — 팝업(QMessageBox·중복 억제·5개 상한·15 s 자동 닫힘)은 포털 오류 카드(같은 문구·중복 억제는 CHAT_ERR_DEDUP_S)로. "
+         "노트북 화면 팝업 상한·자동 닫힘은 v2 에 없음(결정 후보)"),
+    52: ("v2/ch12/eta.py", "v2/tests/test_eta.py::test_confirm_once_at_shutter_delay_and_invalidate; "
+                           "v2/tests/test_eta.py::test_no_confirm_with_thickness_wait_or_disabled", ""),
+    63: ("v2/ch12/process_engine.py; v2/ch12/core.py; v2/ch12/robot_status.py",
+         f"{_IR}::test_chamber_host_run_stop_and_reject_texts; v2/tests/test_recipe.py::test_raw_check_messages_and_overflow; "
+         "v2/tests/test_robot_ops.py::test_matches_v1[start_raise_cooldown]; v2/tests/test_robot_ops.py::test_matches_v1[start_preflight_reject]", ""),
+    64: ("v2/ch12/recipe.py; v2/ch12/assembly.py",
+         f"v2/tests/test_recipe.py::test_load_recipe_file_codes; v2/tests/test_recipe.py::test_xlsx_stdlib_reader_matches_openpyxl_rules; "
+         f"{_IR}::test_recipe_load_timeout_e227; v2/tests/test_robot_ops.py::test_matches_v1[start_raise_recipe_error]", ""),
+    65: ("v2/ch12/eta.py; v2/ch12/robot_status.py",
+         "v2/tests/test_eta.py::test_1_thickness_recipe_matches_runtime_inversion; v2/tests/test_eta.py::test_3_delay_rows; "
+         "v2/tests/test_eta.py::test_5_edge_cases; v2/tests/test_robot_ops.py::test_matches_v1[start_ok]", ""),
+    66: ("v2/ch12/robot_status.py; v2/ch12/assembly.py", "v2/tests/test_robot_ops.py::test_matches_v1[start_preflight_timeout]",
+         "v1 이상 동작 그대로 — D126"),
+    69: ("v2/ch12/pc_host.py; v2/ch12/robot_status.py",
+         "v2/tests/test_plasma_cleaning.py::test_host_recipe_file_codes; "
+         "v2/tests/test_plasma_cleaning.py::test_host_duplicate_start_is_e206_and_csv_applied; "
+         "v2/tests/test_plasma_cleaning.py::test_channel_switch_rejected_while_running_and_host_start_e205_before_recipe; "
+         "v2/tests/test_plasma_cleaning.py::test_gv_interlock_false_is_e302_and_cleanup_sends_device_commands; "
+         "v2/tests/test_plasma_cleaning.py::test_preflight_connect_failure_no_device_commands_and_preflight_timeout_e700; "
+         "v2/tests/test_robot_ops.py::test_matches_v1[pc_timeout]; v2/tests/test_robot_ops.py::test_matches_v1[pc_double_e206]", ""),
+    109: ("v2/robot_server/app.py; v2/robot_server/server.py",
+          f"{_IR}::test_bind_defaults_and_boot_logs; {_RS}::test_cli_runs_as_separate_program",
+          "v2 로봇 서버는 따로 도는 프로그램 — 'Host started on {HOST}:{PORT}'·'Host start failed: ..'(이때 종료 코드 1, v1 은 메인이 "
+          "호스트 없이 계속). 서버 페이지 Start/Stop/Restart 는 프로그램 시작·종료로(D09 — 결정 후보)"),
+    110: ("v2/robot_server/server.py; v2/robot_server/app.py",
+          f"{_IR}::test_shutdown_closes_open_connections_quickly; {_RS}::test_cli_runs_as_separate_program",
+          "v2 는 열린 연결을 먼저 닫고 wait_closed 최대 5 s(v1 은 메인 종료에서 3 s)"),
+    111: (_CSV, f"{_rg('basic', 'nas_blocked')}; v2/tests/test_outputs_paths.py::test_v1_default_paths", ""),
+    112: (_CSV, f"{_rg('basic')}; {_OR}::test_robot_concurrent_with_ald_process", ""),
+    113: (_CSV, _rg("basic", "nas_blocked", "nas_dup_truncated"), ""),
+    114: (_CSV, _rg("basic"), ""),
+    115: (_CSV, f"{_rg('basic')}; {_OR}::test_robot_calls_never_block", ""),
+    116: (_CSV, _rg("basic"), ""),
+    117: (_CSV, f"{_rg('basic')}; {_IR}::test_robot_csv_event_sink_started_finished_once", ""),
+    118: (_CSV, f"{_IR}::test_robot_csv_late_writes_after_reject_are_ignored; v2/tests/test_robot_ops.py::test_matches_v1[pc_timeout]", ""),
+    119: (_CSV, f"{_rg('basic', 'nas_blocked')}; {_OR}::test_robot_calls_never_block", "D201(메모리 큐 경로 멱등) 그대로"),
+    120: (_CSV, _rg("basic", "nas_blocked"), ""),
+    121: (_CSV, _rg("basic"), ""),
+    122: (_CSV, f"{_rg('basic')}; {_OR}::test_robot_disabled_noop", ""),
+    123: (_CSV, _rg("nas_dup_truncated"), ""),
+    124: (_CSV, _rg("basic"), ""),
+    125: (_CSV, f"{_rg('basic')}; {_OR}::test_robot_recover_skips_keys_already_pending", ""),
+    126: (_CSV, _rg("nas_blocked"), ""),
+    127: (_CSV, f"{_rg('basic')}; {_OR}::test_robot_recover_skips_keys_already_pending", ""),
+    128: (f"{_CSV}; v2/ch12/assembly.py", f"{_IR}::test_assembly_startup_recover_at_build",
+          "v2 는 조립 때 startup_recover 를 쓰기 스레드에 넣는다(v1 은 데몬 스레드 HostLogStartupRecover — 막지 않는 것은 같다)"),
+    129: (_CSV, f"{_IR}::test_robot_csv_worker_thread_retry_and_close", ""),
+    130: (_CSV, f"{_rg('nas_blocked')}; {_OR}::test_robot_concurrent_with_ald_process", ""),
+    131: (_CSV, f"{_IR}::test_robot_csv_mem_queue_cap_warns_once", ""),
+    132: (_CSV, f"{_rg('stale_lock', 'fresh_lock', 'stale_cfg_exc')}; {_OR}::test_robot_concurrent_with_ald_process",
+          "설정 읽기 예외면 30 s — D131"),
+    133: (_CSV, _rg("nas_dup_truncated"), ""),
+    134: (_CSV, f"{_rg('basic')}; {_OR}::test_robot_concurrent_with_ald_process", ""),
+    135: (_CSV, f"{_OR}::test_robot_disabled_noop", ""),
+    136: (f"{_CSV}; v2/ch12/robot_api.py", f"{_IR}::test_robot_csv_event_sink_started_finished_once",
+          "D46 — 이벤트는 호출한 때. 카드는 포털(client_process 이벤트)"),
+    137: (f"{_CSV}; v2/ch12/assembly.py", f"{_IR}::test_robot_csv_worker_thread_retry_and_close", ""),
+    140: ("v2/ch12/assembly.py", f"{_IR}::test_chamber_host_run_robot_csv_steps", ""),
+    141: ("v2/ch12/assembly.py", f"{_IR}::test_chamber_host_run_robot_csv_steps", ""),
+    142: ("v2/ch12/assembly.py", f"{_IR}::test_chamber_host_run_robot_csv_steps", ""),
+    143: ("v2/ch12/assembly.py; v2/ch12/process_engine.py; v2/ch12/process_records.py",
+          f"{_IR}::test_chamber_host_run_stop_and_reject_texts; {_IR}::test_chamber_host_run_robot_csv_steps",
+          "명시 결과는 run_end 로: 시작 전 STOP '사용자 STOP (시작 전)', RECIPE_PARAM_ERROR '레시피 파라미터 오류: ..', 행 사유 = "
+          "reason|error_detail|errors[0]. v1 '시작 실패: ..'·'공정 시작 실패: ..'·'AFTER_FINISH 예외' 접두는 v2 예외 경로가 "
+          "다르므로 행 사유 그대로(결정 후보)"),
+    144: ("v2/ch12/assembly.py", f"{_IR}::test_chamber_host_run_stop_and_reject_texts; {_IR}::test_chamber_host_run_robot_csv_steps", ""),
+    145: ("v2/ch12/pc_host.py; v2/ch12/plasma_cleaning.py", f"{_IR}::test_pc_host_run_robot_csv", "로그 파일 늘 빈칸 — PC-098(D106)"),
+    146: (_CSV, f"{_IR}::test_robot_csv_late_writes_after_reject_are_ignored; v2/tests/test_robot_ops.py::test_matches_v1[pc_timeout]",
+          "v1 이상 동작 그대로 — D127"),
+}
+for _it in ITEMS:
+    _k = int(_it["id"].split("-")[1])
+    if _k in _DONE2 and _it["status"] == "todo":
+        _it["v2"], _it["test"], _n2 = _DONE2[_k]
+        if _n2:
+            _it["note"] = (_it["note"] + " / " if _it["note"] else "") + _n2
         _it["status"] = "done"

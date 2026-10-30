@@ -244,3 +244,127 @@ ITEMS = [
          desc="recovery_service 상태 저장소: recovery_state\\state\\{chamber_ch1|chamber_ch2|pc_ch1|pc_ch2|tsp}.json 원자적 저장(tmp→replace)·patch·delete",
          v1="apps/recovery_service/store.py:1-53", v2="v2/ch12/journal.py", test="", status="na", note="메인이 import 하지 않음(grep 'recovery_service' — apps/ 밖 0건). v2 저널은 새로 설계(plan.py 3장(6))"),
 ]
+
+# ───────────────────────── 전수 목록 마감 ─────────────────────────
+# OES·RGA: 실제 하위 프로세스 워커(--fake 가짜 장비)와 v1 골든(dev_oes.json·dev_rga.json — v1 device/oes.py·rga.py 를 실제로 돌린
+# 명령줄·stdin·문구) 비교(test_oes_link·test_rga_link), 워커 명령줄 직접 실행·링크 규칙·엔진 결과 처리(test_inv_app).
+# rf_service·log_sync: '그대로 쓰는 독립 도구' — v2/tools/v1golden_independent.py 가 v1 도구를 v2 출력·v2 가 내보낸 settings.json
+# (D13)에 실제로 돌린 골든(independent_tools.json)으로 v2 경로·형식을 확인(test_inv_app). 도구 내부 동작은 v1 그대로(v2 칸 apps/...).
+_OL, _RL, _IA = "v2/tests/test_oes_link.py", "v2/tests/test_rga_link.py", "v2/tests/test_inv_app.py"
+_LINK, _OSH, _TAIL = "v2/ch12/drivers/oes_link.py", "v2/ch12/drivers/oes_oneshot.py", "v2/ch12/drivers/oes_tail.py"
+_W = "v2/ch12/workers/oes_worker.py"
+_WD, _WM, _WG, _WC = ("v2/ch12/workers/oes_device.py", "v2/ch12/workers/oes_measure.py", "v2/ch12/workers/oes_guard.py",
+                      "v2/ch12/workers/oes_common.py")
+_WDM = "v2/ch12/workers/oes_daemon.py"
+_RGA, _RGW = "v2/ch12/drivers/rga_link.py", "v2/ch12/workers/rga_worker.py"
+_RF, _LS = "apps/rf_service/rf_worker.py", "apps/log_sync_service/log_sync.py"
+
+
+def _t(*names: str) -> str:
+    out = []
+    for n in names:
+        f, _, fn = n.partition(":")
+        out.append(f"{ {'OL': _OL, 'RL': _RL, 'IA': _IA}[f] }::{fn}")
+    return "; ".join(out)
+
+
+_DONE = {
+    1: (f"{_LINK}; v2/ch12/drivers/worker_proc.py", _t("OL:test_golden_v1_messages_and_argv", "OL:test_oneshot_mode_init_and_measure"),
+        "D01 — v2 는 설정 OES_WORKER_EXE(onedir exe)가 있으면 그것, 없으면 python -m v2.ch12.workers.oes_worker. v1 의 "
+        "apps\\oes_service\\oes_worker.exe → oes_api.exe 탐색 순서는 설정 한 칸으로(결정 후보). 명령줄 인자는 v1 골든과 같다"),
+    2: (f"{_LINK}; v2/ch12/drivers/worker_proc.py", _t("IA:test_oes_link_usb_folder_and_console_options", "OL:test_golden_v1_messages_and_argv"),
+        "cwd 는 v2 에서 저장소 루트(-m 실행) — 워커 기준 폴더는 --home 으로 v1 배치(apps\\oes_service)를 준다"),
+    3: (f"{_LINK}; v2/ch12/outputs/paths.py", _t("IA:test_oes_link_usb_folder_and_console_options") +
+        "; v2/tests/test_outputs_paths.py::test_oes_env_override", ""),
+    4: (_LINK, _t("IA:test_oes_link_usb_folder_and_console_options", "OL:test_golden_v1_messages_and_argv"), "OES_AVG_COUNT 미사용 — D177"),
+    5: (f"{_LINK}; v2/ch12/process_actions.py", _t("IA:test_engine_oes_result_handling", "OL:test_daemon_start_measure_csv_tail_heartbeat"), ""),
+    6: (_LINK, _t("OL:test_daemon_start_measure_csv_tail_heartbeat", "OL:test_init_fail_reports_error", "OL:test_main_timeout_kills_hung_daemon"), ""),
+    7: (_LINK, _t("OL:test_daemon_start_measure_csv_tail_heartbeat", "OL:test_daemon_death_restart_then_oneshot_fallback"),
+        "응답 매칭은 명령 id — D21"),
+    8: (_LINK, _t("OL:test_golden_v1_messages_and_argv", "OL:test_stop_writes_two_local_flags_and_ends_early"), ""),
+    9: (_LINK, _t("OL:test_golden_v1_messages_and_argv", "OL:test_daemon_start_measure_csv_tail_heartbeat"), ""),
+    10: (_LINK, _t("OL:test_daemon_death_restart_then_oneshot_fallback"), ""),
+    11: (_OSH, _t("OL:test_oneshot_mode_init_and_measure", "OL:test_golden_v1_messages_and_argv", "OL:test_worker_read_hang_hard_abort_125"), ""),
+    12: (f"{_LINK}; {_OSH}", _t("IA:test_oes_link_oneshot_busy_and_cleanup"), ""),
+    13: (_OSH, _t("OL:test_worker_read_hang_hard_abort_125", "OL:test_oneshot_mode_init_and_measure"), ""),
+    14: (_OSH, _t("OL:test_oneshot_mode_init_and_measure", "OL:test_init_fail_reports_error"), ""),
+    15: (_TAIL, _t("OL:test_daemon_start_measure_csv_tail_heartbeat"), ""),
+    16: (f"{_LINK}; {_OSH}", _t("OL:test_stop_writes_two_local_flags_and_ends_early", "OL:test_golden_v1_messages_and_argv"), ""),
+    17: (f"{_LINK}; {_OSH}", _t("IA:test_oes_link_oneshot_busy_and_cleanup"), ""),
+    18: (f"{_LINK}; {_WDM}", _t("OL:test_daemon_exits_by_itself_when_main_stdin_closes", "OL:test_daemon_start_measure_csv_tail_heartbeat"), ""),
+    19: ("v2/ch12/process_actions.py", _t("IA:test_engine_oes_result_handling"), "D159(실패 문구 그대로)"),
+    20: (_W, _t("IA:test_oes_worker_init_json_logs_and_serial_check", "OL:test_golden_v1_messages_and_argv"),
+         "v2 가 더한 인자 --home·--id·--hb_s·--fake(테스트용)"),
+    21: (_WC, _t("IA:test_oes_worker_init_json_logs_and_serial_check", "IA:test_oes_worker_measure_json_csv_and_flags"),
+         "줄마다 v2 봉투 v·id 를 더함(v1 필드 그대로)"),
+    22: (_WC, _t("IA:test_oes_worker_init_json_logs_and_serial_check"), ""),
+    23: (f"{_WC}; {_WM}; {_WDM}", _t("IA:test_oes_worker_init_json_logs_and_serial_check"),
+         "이름 있는 뮤텍스 자체는 윈도우에서만(os.name != 'nt' 면 건너뜀) — 윈도우 확인 필요"),
+    24: (f"{_WD}; {_WC}", _t("IA:test_worker_dll_and_rga_fallback_paths", "OL:test_dll_call_order_and_args_are_v1"), ""),
+    25: (_WD, _t("OL:test_dll_call_order_and_args_are_v1"), ""),
+    26: (_WD, _t("OL:test_dll_call_order_and_args_are_v1"), ""),
+    27: (_WD, _t("OL:test_dll_call_order_and_args_are_v1", "OL:test_init_fail_reports_error"), ""),
+    28: (_WD, _t("OL:test_dll_call_order_and_args_are_v1"), ""),
+    29: (_WD, _t("OL:test_dll_call_order_and_args_are_v1", "OL:test_daemon_start_measure_csv_tail_heartbeat"), ""),
+    30: (f"{_WD}; {_WC}", _t("IA:test_oes_worker_init_json_logs_and_serial_check"), ""),
+    31: (_WD, _t("OL:test_dll_call_order_and_args_are_v1"), ""),
+    32: (_WD, _t("OL:test_dll_call_order_and_args_are_v1"), ""),
+    33: (_WG, _t("IA:test_oes_worker_first_frame_and_read_recovery"), ""),
+    34: (f"{_WM}; {_WG}", _t("OL:test_worker_read_hang_hard_abort_125", "OL:test_daemon_start_measure_csv_tail_heartbeat"), ""),
+    35: (f"{_WG}; {_WC}", _t("IA:test_oes_worker_measure_json_csv_and_flags", "IA:test_oes_worker_first_frame_and_read_recovery"),
+         "cfgmgr32 목록 조회는 윈도우에서만 — 리눅스 시험은 '조회 불가 = 정상' 경로와 finished 의 감시 필드만(윈도우 확인 필요)"),
+    36: (_WG, _t("IA:test_oes_worker_first_frame_and_read_recovery"), ""),
+    37: (_WM, _t("IA:test_oes_worker_measure_json_csv_and_flags", "OL:test_daemon_start_measure_csv_tail_heartbeat"), ""),
+    38: (f"{_WM}; {_WDM}", _t("IA:test_oes_worker_measure_json_csv_and_flags"), ""),
+    39: (f"{_WM}; {_WDM}", _t("IA:test_oes_worker_measure_json_csv_and_flags"), ""),
+    40: (f"{_WM}; {_WDM}", _t("IA:test_oes_worker_measure_json_csv_and_flags", "OL:test_stop_writes_two_local_flags_and_ends_early"), ""),
+    41: (f"{_WM}; {_W}", _t("OL:test_worker_read_hang_hard_abort_125", "OL:test_daemon_exits_by_itself_when_main_stdin_closes"), ""),
+    42: (f"{_W}; {_WM}", _t("IA:test_oes_worker_measure_json_csv_and_flags", "IA:test_oes_worker_first_frame_and_read_recovery",
+                          "OL:test_worker_read_hang_hard_abort_125"), ""),
+    43: (_WM, _t("IA:test_oes_worker_init_json_logs_and_serial_check"), ""),
+    44: (_WDM, _t("OL:test_daemon_exits_by_itself_when_main_stdin_closes", "OL:test_daemon_start_measure_csv_tail_heartbeat",
+                  "OL:test_golden_v1_messages_and_argv"), ""),
+    45: (_WDM, _t("OL:test_golden_v1_messages_and_argv", "OL:test_daemon_start_measure_csv_tail_heartbeat"), ""),
+    47: (_WD, _t("IA:test_oes_async_default_and_channel_folder"), ""),
+    48: (f"{_RGA}; v2/ch12/drivers/worker_proc.py", _t("RL:test_golden_scan_arguments_equal_v1_argv"),
+         "D01·D22 — 설정 RGA_WORKER_EXE 또는 python -m v2.ch12.workers.rga_worker(상주). 없으면 'rga_worker.exe not found: ..'"),
+    49: (_RGA, _t("RL:test_golden_scan_arguments_equal_v1_argv", "RL:test_timeout_kills_worker_and_next_attempt_restarts"),
+         "D22 — 상주 워커에 같은 인자 이름·값으로 명령"),
+    50: (f"{_RGA}; v2/ch12/outputs/paths.py", _t("RL:test_csv_fallback_and_csv_fail_keep_measurement", "RL:test_golden_scan_arguments_equal_v1_argv") +
+         "; v2/tests/test_outputs_paths.py::test_v1_default_paths", "D171·D27"),
+    51: (_RGA, _t("RL:test_fail_retries_three_times_like_v1"), ""),
+    52: (_RGA, _t("RL:test_worker_death_no_json_respawns", "RL:test_csv_fallback_and_csv_fail_keep_measurement",
+                  "RL:test_scan_ok_csv_and_srsinst_call_order"), ""),
+    53: (_RGA, _t("RL:test_timeout_kills_worker_and_next_attempt_restarts", "RL:test_bench_rejects_and_cancel"), ""),
+    54: ("v2/ch12/process_actions.py", _t("IA:test_engine_rga_result_handling"),
+         "D178 — v2 는 rga_finished 를 한 번 부른다(v1 두 번째 호출은 이미 끝난 대기라 효과 없음)"),
+    55: (_RGW, _t("RL:test_scan_ok_csv_and_srsinst_call_order", "RL:test_no_credentials_fails_without_touching_device"),
+         "D23 — 장비 IP 는 그대로, 계정은 코드 고정값 대신 비밀값 RGA_NET"),
+    56: (_RGW, _t("RL:test_scan_ok_csv_and_srsinst_call_order"), "필라멘트 OFF 두 번 그대로(D178)"),
+    57: (_RGW, _t("RL:test_scan_ok_csv_and_srsinst_call_order", "RL:test_csv_fallback_and_csv_fail_keep_measurement"), ""),
+    58: (_RGW, _t("IA:test_worker_dll_and_rga_fallback_paths", "RL:test_csv_fallback_and_csv_fail_keep_measurement"), ""),
+    59: (_RGW, _t("RL:test_scan_ok_csv_and_srsinst_call_order", "RL:test_worker_death_no_json_respawns"),
+         "응답에 v2 봉투(v·id·kind result)를 더함(v1 필드 그대로)"),
+    60: (f"v2/ch12/outputs/camera_photos.py; {_RF}",
+         _t("IA:test_camera_photos_match_rf_worker_rules", "IA:test_v2_outputs_are_what_v1_tools_consumed"),
+         "v1 rf_worker 를 v2 사진에 실제로 돌린 골든(independent_tools.json) — 자정 넘긴 세션의 CSV 행 순서는 파일명 정렬"
+         "(00:00:00 이 23:59:59 앞) — v1 도구·v1 사진 이름 그대로의 결과"),
+    61: (f"v2/ch12/drivers/camera.py; v2/ch12/outputs/camera_photos.py; {_RF}", _t("IA:test_camera_photos_match_rf_worker_rules"), ""),
+    62: (f"v2/ch12/outputs/camera_photos.py; {_RF}", _t("IA:test_camera_photos_match_rf_worker_rules"),
+         "v2 는 찍은 사진을 다시 읽지 않는다(판독 뒤 지워져도 무관)"),
+    63: (f"v2/ch12/params/core.py; {_RF}", _t("IA:test_v2_default_paths_fit_tools", "IA:test_camera_photos_match_rf_worker_rules"), ""),
+    64: ("v2/tools/export_worker_settings.py", _t("IA:test_export_worker_settings_matches_tools", "IA:test_camera_photos_match_rf_worker_rules",
+                                                 "IA:test_log_sync_copies_v2_records"), "D13"),
+    65: (_RF, _t("IA:test_camera_photos_match_rf_worker_rules"), "독립 도구 그대로(자체 rf_worker_config.json 챗) — 골든 실행은 알림 꺼짐"),
+    66: (f"v2/ch12/outputs/paths.py; {_LS}", _t("IA:test_log_sync_copies_v2_records", "IA:test_v2_default_paths_fit_tools"), ""),
+    67: (f"v2/ch12/params/core.py; {_LS}", _t("IA:test_log_sync_copies_v2_records", "IA:test_v2_default_paths_fit_tools"),
+         "D14·D29·D179 — 1초 기록 SQLite 는 LOG_ROOT_DIR 밖(LOCAL_DATA_DIR)"),
+    68: (_LS, _t("IA:test_log_sync_copies_v2_records"), "독립 도구 그대로(작업 스케줄러 주기 실행은 사람이 등록)"),
+}
+for _it in ITEMS:
+    _k = int(_it["id"].split("-")[1])
+    if _k in _DONE and _it["status"] == "todo":
+        _it["v2"], _it["test"], _n2 = _DONE[_k]
+        if _n2:
+            _it["note"] = (_it["note"] + " / " if _it["note"] else "") + _n2
+        _it["status"] = "done"

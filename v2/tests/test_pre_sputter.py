@@ -166,3 +166,46 @@ def test_round_exception_keeps_daily_reservation(tmp_path):
     assert p.status_text == "실행 오류 · 다음 06:00" and p.is_reserved
     p.close()
     c.close()
+
+
+def test_recipe_path_goes_through_core_start_guard(tmp_path):
+    """실제 조립(Ch12FullRig) — 전용 레시피 경로도 core.start_chamber 를 지난다(v1 start_with_recipe_string → _handle_start_clicked):
+    같은 CH 플라즈마 클리닝이 돌고 있으면 시작하지 않는다(PC_RUNNING), 없으면 origin presputter 로 시작해 끝까지."""
+    from v2.common.commands import Source
+    from v2.ch12.sim.rig import Ch12FullRig
+    c = VirtualClock(start_wall=datetime(2025, 10, 9, 5, 0, 0).timestamp())
+    c.register()
+    rig = Ch12FullRig(c, tmp_path, cfg={"CAMERA_MIN_FREE_GB": 0.0}, robot_api=False, schedules=False)
+    f = tmp_path / "pre.csv"
+    f.write_text("#,Process_name,time\ntest,warm,20s\n", encoding="utf-8")
+    try:
+        assert rig.start()
+        rig.loop.run(2)
+        a = rig.asm
+        seen = []
+        orig = a.core.start_chamber
+        a.core.start_chamber = lambda ch, **kw: (seen.append((ch, kw.get("origin"))), orig(ch, **kw))[1]
+        ui = {"gas_flow": "10", "rf_power": "100", "process_time": "1", "working_pressure": "2"}
+        assert rig.command("PC_START", {"ch": 1, "params": ui}, source=Source.WEB).ok
+        p = a.presputter["ch1"]
+        assert rig.command("PRESPUTTER_RECIPE", {"ch": 1, "path": str(f)}, source=Source.HMI).ok
+        rig.loop.run(1)
+        job = c.start_thread(p.run_once_now, "ps-once")
+        while job.is_alive():
+            rig.loop.run(1)
+        e = a.proc["ch1"]
+        assert seen == [(1, "presputter")] and not e.busy and not [x for x in e.events if x.kind == "run_start"]
+        assert any("레시피 시작 실패: 'PC_RUNNING'" in ln for ln in p.lines), list(p.lines)[-5:]
+        assert p.status_text.startswith("실행 실패")
+        while a.pc.running:
+            rig.loop.run(1)
+        rig.loop.run(65)                                                  # PC 끝 → 같은 CH 쿨다운(60 s) 지나서
+        job = c.start_thread(p.run_once_now, "ps-once")
+        while job.is_alive():
+            rig.loop.run(1)
+        assert seen[-1] == (1, "presputter") and e.origin == "presputter"
+        assert [x.data.get("result") for x in e.events if x.kind == "run_end"] == ["done"]
+        assert any(ln.endswith("CH1 [PreSputter] CH1 완료") for ln in p.lines), list(p.lines)[-5:]
+    finally:
+        rig.stop()
+        c.close()

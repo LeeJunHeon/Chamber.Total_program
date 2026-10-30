@@ -291,6 +291,7 @@ class PreflightMixin:
             return self._start_fail(why, "PULSE_PORT_BUSY", cleanup=False)
         start_devices(self, sel)
         self.actions.oes_init_background()
+        self.actions.run_use(True)                       # v1 _on_process_status_changed(True) — 공유 MFC 런 사용자
         t = float(self.cget("CHAMBER_PREFLIGHT_TIMEOUT_WITH_PULSE_S" if any(sel.values()) else "CHAMBER_PREFLIGHT_TIMEOUT_S",
                             10.0 if any(sel.values()) else 8.0))
         failed = wait_connected(self, sel, t)
@@ -315,9 +316,9 @@ class PreflightMixin:
             if code:
                 return self._thickness_reject(params, code, msg)
         self.run_warnings = []
+        pos = str(params.get("chuck_position") or "").strip().lower()     # v1 _run_chuck_position — 이동 전 레시피 값(4051)
         chuck = self.preflight_hooks["chuck"](self, params)
         if not chuck:
-            pos = str(params.get("chuck_position") or "")
             warn = f"Chuck 위치 이동 실패 (target='{pos}')" if pos else "Chuck 위치 이동 실패"
             self.log("MAIN", f"⚠️ {warn} → 공정은 계속 진행")
             self.run_warnings.append(warn)

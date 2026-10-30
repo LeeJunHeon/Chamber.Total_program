@@ -1,0 +1,164 @@
+{
+ "meta": {
+  "tool": "v2/tools/v1golden_independent.py",
+  "python": "3.13.17",
+  "v1": [
+   "apps/rf_service/rf_worker.py",
+   "apps/log_sync_service/log_sync.py",
+   "lib/_config_loader.py"
+  ],
+  "note": "v1 도구를 별도 프로세스로 실제 실행(settings.json = v2 export_worker_settings 출력)"
+ },
+ "v2": {
+  "camera": [
+   "CH1/20261030_100000/100000_0001.jpg",
+   "CH1/20261030_100000/100001_0002.jpg",
+   "CH1/20261030_100000/100002_0003.jpg",
+   "CH1/20261030_235959/000000_0002.jpg",
+   "CH1/20261030_235959/000001_0003.jpg",
+   "CH1/20261030_235959/235959_0001.jpg"
+  ],
+  "log_root": [
+   "CH1&2_PLC/20261030.csv",
+   "CH1/CH1_ITO_100nm_20261030_091520_000.txt",
+   "CH2_Heater/CH2_HEATER_20261030_091531.csv",
+   "RUNTIME_DUMP/runtime_dump_20261030_091520_manual_button_pid<pid>.txt",
+   "SYSTEM/20261030.log",
+   "Thickness/CH1/Thickness_20261030.csv",
+   "selfwatch/selfwatch_20261030.csv"
+  ],
+  "oes": [
+   "CH1/.stop_usb0.flag",
+   "CH1/OES_Data_20261030_091520.csv",
+   "CH1/OES_Data_20261030_091520.csv.stop"
+  ]
+ },
+ "settings_json": {
+  "common": {
+   "LOG_SYNC_ENABLED": true,
+   "LOG_SYNC_PAIRS": [
+    [
+     "@/VanaM_Logs/CH1&2",
+     "@/NAS/Sputter/Logs/CH1&2"
+    ],
+    [
+     "@/VanaM_Logs/OES",
+     "@/NAS/Sputter/OES"
+    ]
+   ],
+   "LOG_SYNC_STATE_DIR": "@/VanaM_Logs/_sync_state",
+   "LOG_SYNC_ALERT_AFTER_FAILS": 6,
+   "CAMERA_LOG_ROOT": "@/VanaM_Logs/Camera_Logs",
+   "RF_READER_STATE_DIR": "@/VanaM_Logs/Camera_Logs/_state",
+   "RF_READER_CSV_DIR": "@/VanaM_Logs/Camera_Logs/_csv",
+   "RF_READER_STALE_MIN": 0.0,
+   "RF_READER_NAS_DIR": "@/NAS/Sputter/Logs/CH1&2/Camera_Logs",
+   "RF_READER_RETENTION_DAYS": 14,
+   "RF_READER_MIN_FREE_GB": 20.0,
+   "RF_READER_UPLOAD_ALERT_DAYS": 2
+  }
+ },
+ "v1_settings_keys": {
+  "rf_worker": [
+   "CAMERA_LOG_ROOT",
+   "RF_READER_STATE_DIR",
+   "RF_READER_CSV_DIR",
+   "RF_READER_STALE_MIN",
+   "RF_READER_NAS_DIR",
+   "RF_READER_RETENTION_DAYS",
+   "RF_READER_MIN_FREE_GB",
+   "RF_READER_UPLOAD_ALERT_DAYS"
+  ],
+  "log_sync": [
+   "LOG_SYNC_ENABLED",
+   "LOG_SYNC_PAIRS",
+   "LOG_SYNC_STATE_DIR",
+   "LOG_SYNC_ALERT_AFTER_FAILS"
+  ]
+ },
+ "rf_worker": {
+  "exit": 0,
+  "manifest": {
+   "CH1/20261030_100000": {
+    "status": "done",
+    "frames": 3
+   },
+   "CH1/20261030_235959": {
+    "status": "done",
+    "frames": 3
+   }
+  },
+  "csv": {
+   "CH1/CH1_20261030_100000.csv": {
+    "header": [
+     "timestamp",
+     "CH1_FWD",
+     "CH1_REF",
+     "CH1_LOAD",
+     "CH1_TUNE",
+     "RF3_LOAD",
+     "RF3_TUNE",
+     "CH2_FWD",
+     "CH2_REF",
+     "CH2_LOAD",
+     "CH2_TUNE"
+    ],
+    "ts": [
+     "2026-10-30 10:00:00",
+     "2026-10-30 10:00:01",
+     "2026-10-30 10:00:02"
+    ]
+   },
+   "CH1/CH1_20261030_235959.csv": {
+    "header": [
+     "timestamp",
+     "CH1_FWD",
+     "CH1_REF",
+     "CH1_LOAD",
+     "CH1_TUNE",
+     "RF3_LOAD",
+     "RF3_TUNE",
+     "CH2_FWD",
+     "CH2_REF",
+     "CH2_LOAD",
+     "CH2_TUNE"
+    ],
+    "ts": [
+     "2026-10-31 00:00:00",
+     "2026-10-31 00:00:01",
+     "2026-10-30 23:59:59"
+    ]
+   }
+  },
+  "nas": [
+   "CH1/CH1_20261030_100000.csv",
+   "CH1/CH1_20261030_235959.csv"
+  ],
+  "settings_line": true,
+  "problems": []
+ },
+ "log_sync": {
+  "exit": 0,
+  "copied": {
+   "NAS/Sputter/Logs/CH1&2": [
+    "CH1&2_PLC/20261030.csv",
+    "CH1/CH1_ITO_100nm_20261030_091520_000.txt",
+    "CH2_Heater/CH2_HEATER_20261030_091531.csv",
+    "Camera_Logs/CH1/CH1_20261030_100000.csv",
+    "Camera_Logs/CH1/CH1_20261030_235959.csv",
+    "RUNTIME_DUMP/runtime_dump_20261030_091520_manual_button_pid<pid>.txt",
+    "SYSTEM/20261030.log",
+    "Thickness/CH1/Thickness_20261030.csv",
+    "selfwatch/selfwatch_20261030.csv"
+   ],
+   "NAS/Sputter/OES": [
+    "CH1/OES_Data_20261030_091520.csv"
+   ]
+  },
+  "state": {
+   "consecutive_fails": 0,
+   "alerted": false
+  },
+  "problems": []
+ }
+}

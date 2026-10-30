@@ -39,6 +39,7 @@
 from __future__ import annotations
 
 import argparse
+import difflib
 import json
 import math
 import sys
@@ -124,16 +125,62 @@ def _plain(v: Any) -> Any:
     return v
 
 
+# v1 lib/_config_loader.py:228-249 _JSON_HINTS — json 오류 문구 앞부분 → 사람이 고칠 말(같은 문구)
+_JSON_HINTS = (
+    ("Expecting ',' delimiter",
+     "쉼표(,)가 빠졌습니다 — 바로 앞 항목(보통 앞 줄) 끝에 쉼표를 넣으세요"),
+    ("Expecting property name enclosed in double quotes",
+     "이름이 와야 할 곳입니다 — 마지막 항목 뒤의 쉼표(,)를 지우거나, 이름을 큰따옴표(\"\")로 감싸세요"),
+    ("Illegal trailing comma",
+     "마지막 항목 뒤의 쉼표(,)를 지우세요"),
+    ("Expecting ':' delimiter",
+     "이름 뒤에 콜론(:)이 빠졌습니다 — \"이름\": 값 모양으로 쓰세요"),
+    ("Expecting value",
+     "값이 없거나 잘못됐습니다 — 글자는 큰따옴표로 감싸고(\"abc\"), true/false/null 은 소문자로, 마지막 쉼표는 지우세요"),
+    ("Unterminated string",
+     "큰따옴표(\")가 닫히지 않았습니다 — 글자 끝에 \" 를 넣으세요"),
+    ("Invalid \\escape",
+     "역슬래시(\\)는 두 번 써야 합니다 — 예: \"C:\\\\VanaM_Logs\" (경로에 자주 생김)"),
+    ("Invalid \\uXXXX escape",
+     "역슬래시(\\)는 두 번 써야 합니다 — 예: \"C:\\\\Users\" (경로에 자주 생김)"),
+    ("Invalid control character",
+     "글자(\"...\") 안에 줄바꿈·탭이 들어 있습니다 — 한 줄로 쓰세요"),
+    ("Extra data",
+     "파일 끝 } 뒤에 글자가 더 있습니다 — 중괄호 짝을 확인하세요"),
+)
+
+
+def json_problem(e: json.JSONDecodeError, lines: list) -> str:
+    """v1 _json_problem(lib/_config_loader.py:252-257): '줄 L 칸 C: 힌트' + 다음 줄에 '      L| 원본 줄'."""
+    hint = next((h for k, h in _JSON_HINTS if e.msg.startswith(k)), f"JSON 문법 오류({e.msg})")
+    msg = f"줄 {e.lineno} 칸 {e.colno}: {hint}"
+    if 1 <= e.lineno <= len(lines):
+        msg += f"\n      {e.lineno}| {lines[e.lineno - 1].rstrip()}"
+    return msg
+
+
+def _near(name: str, names, cutoff: float) -> str:
+    """v1 difflib 제안(lib/_config_loader.py:271-273·440-441) — ' (혹시 X ?)' 또는 ''."""
+    m = difflib.get_close_matches(name, list(names), n=1, cutoff=cutoff)
+    return f" (혹시 {m[0]} ?)" if m else ""
+
+
 def read_json_v1(path: Path) -> Any:
-    """v1 과 같은 방법으로 읽는다(utf-8-sig·JSONC·중복 키 기억). 실패하면 ValueError(사람이 읽는 문구)."""
+    """v1 과 같은 방법으로 읽는다(utf-8-sig·JSONC·중복 키 기억). 실패하면 ValueError(v1 lib/_config_loader.py:397-422 문구)."""
+    if not path.is_file():
+        raise ValueError(f"설정 파일이 없습니다: {path} — 프로그램 폴더의 config 폴더에 settings.json 을 넣으세요")
     try:
-        raw = path.read_text(encoding="utf-8-sig")
+        raw = path.read_text(encoding="utf-8-sig")       # BOM(메모장 저장) 허용
     except UnicodeDecodeError as e:
-        raise ValueError(f"{path}: UTF-8 로 저장된 파일이 아니다") from e
+        raise ValueError(f"{path}: UTF-8 로 저장된 파일이 아닙니다 — 메모장에서 '다른 이름으로 저장' → "
+                         f"인코딩 'UTF-8' 로 저장하세요") from e
+    except OSError as e:
+        raise ValueError(f"{path}: 파일을 읽을 수 없습니다({e}) — 파일이 다른 프로그램에 열려 있거나 권한이 없는지 "
+                         f"확인하세요") from e
     try:
         return json.loads(strip_jsonc_comments(raw), object_pairs_hook=_pairs_hook)
     except json.JSONDecodeError as e:
-        raise ValueError(f"{path}: 줄 {e.lineno} 칸 {e.colno}: JSON 문법 오류({e.msg})") from e
+        raise ValueError(f"{path}: {json_problem(e, raw.splitlines())}") from e
 
 
 # ───────────── v1 사실(형식·기본값·실효 출처) ─────────────
@@ -339,7 +386,8 @@ class Converter:
                 res.dropped.append({"path": sec, "reason": "주석용 구역(v1 도 무시)", "v1": _plain(sd), "replaced_by": None})
                 continue
             if sec not in own.SECTIONS:
-                res.errors.append(f'"{sec}": 알 수 없는 구역 — common·ch1·ch2 중 하나(v1 로더도 거부)')
+                res.errors.append(f'"{sec}": 알 수 없는 구역 — common·ch1·ch2 중 하나(v1 로더도 거부)'
+                                  f'{_near(sec, own.SECTIONS, 0.6)}')
                 continue
             if not isinstance(sd, dict):
                 res.errors.append(f'"{sec}": {{ }} 묶음이어야 한다(v1 로더도 거부)')
@@ -352,7 +400,9 @@ class Converter:
                     res.dropped.append({"path": path, "reason": "주석용 키(v1 도 무시)", "v1": _plain(v), "replaced_by": None})
                     continue
                 if not own.is_declared(sec, key):
-                    res.errors.append(f"{path}: 모르는 키 — v1 에도 없는 이름(v1 로더도 거부, 오타 확인)")
+                    names = set(own.V1_DECLARED["common"]) | (set(own.V1_DECLARED[sec]) if sec != "common" else set())
+                    res.errors.append(f"{path}: 모르는 키 — v1 에도 없는 이름(v1 로더도 거부, 오타 확인)"
+                                      f"{_near(key, sorted(names), 0.75)}")
                     continue
                 dups: list = []
                 _nested_dups(v, path, dups)

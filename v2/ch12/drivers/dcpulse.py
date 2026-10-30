@@ -147,6 +147,18 @@ class DcPulseDriver(DcpMonitorMixin, DcpOpsMixin):
     def endpoint_key(self) -> str:
         return norm_endpoint(*endpoint(self.cfg, self.chamber, KIND))
 
+    @property
+    def polling(self) -> bool:
+        return getattr(self, "_polling", False)
+
+    @polling.setter
+    def polling(self, on: bool) -> None:
+        """폴링 켜짐 표시. 켜져 있다가 끄면 v1 set_process_status(False) 처럼 'Polling read 중지'(device/dc_pulse.py:645-652)."""
+        was = getattr(self, "_polling", False)
+        self._polling = bool(on)
+        if was and not on:
+            self._emit("status", "Polling read 중지")
+
     def worker_params(self) -> dict:
         start = max(200, int(self._c("DCP_RECONNECT_BACKOFF_START_MS", 1000))) / 1000.0
         mx = max(start, int(self._c("DCP_RECONNECT_BACKOFF_MAX_MS", 10000)) / 1000.0)

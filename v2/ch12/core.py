@@ -29,6 +29,7 @@ from v2.ch12 import process_states as PS
 LOCK_FREE = frozenset({"PROCESS_STOP", "PC_STOP", "TSP_STOP", "ALL_STOP", "POWER_OFF_ONLY"})
 SRC_WORD = {Source.WEB: "web", Source.HMI: "local", Source.ROBOT: "robot", Source.INTERNAL: "internal"}
 DETAIL_MAX = 300
+UI_RECIPE_LOAD_TIMEOUT_S = 30.0          # chamber_runtime.py:3428-3433 asyncio.wait_for(…, 30.0)
 
 
 @dataclass
@@ -187,8 +188,40 @@ class Ch12Core:
                 raise Rejected("PC_RUNNING", msg)
             if params is not None:
                 self.last_ui_params[e.ch] = dict(params)
-            self.why(e, lambda: e.start(source=source, by=by, owner=owner, origin=origin, origin_meta=origin_meta,
-                                        params=params))
+            try:
+                self.why(e, lambda: e.start(source=source, by=by, owner=owner, origin=origin, origin_meta=origin_meta,
+                                            params=params))
+            except Rejected:
+                raise
+            except Exception as ex:                          # v1 _handle_start_clicked except(4483-4488)
+                import traceback
+                tb = "".join(traceback.format_exception(type(ex), ex, ex.__traceback__)).rstrip()
+                e.log("MAIN", f"_handle_start_clicked 예외:\n{tb}")
+                if host_cb is not None:
+                    host_cb(False, None, f"exception: {ex!r}")
+                e.popup("실행 오류", "공정 시작 준비 중 내부 오류가 발생했습니다.\n로그를 확인하세요.", level="error")
+                raise Rejected("INTERNAL_ERROR", f"exception: {ex!r}")
+
+    def _load_recipe_ui(self, e, path: str):
+        """화면 Process List 파일 열기(_handle_process_list_clicked_async 3395-3438) — NAS 지연 대비 30 s 제한(넘으면 로그
+        'CSV 로드 30초 timeout (NAS 응답 지연): …' 후 적재 안 함). 그 밖 예외 문구는 load_recipe_file('파일 처리 오류: …')."""
+        from v2.ch12.recipe import RecipeLoad, load_recipe_file
+        clk = self.clock
+        box: Dict[str, Any] = {}
+
+        def work() -> None:
+            try:
+                box["v"] = load_recipe_file(path, origin="ui")
+            except Exception as ex:                         # noqa: BLE001
+                box["v"] = RecipeLoad(path, logs=[("File", f"파일 처리 오류: {ex}")], code="E209", message=f"파일 처리 오류: {ex}")
+            clk.notify()
+        clk.start_thread(work, "recipe-load-ui")
+        clk.wait_until(clk.monotonic() + UI_RECIPE_LOAD_TIMEOUT_S, lambda: "v" in box)
+        if "v" not in box:
+            msg = f"CSV 로드 30초 timeout (NAS 응답 지연): {path}"
+            e.log("File", msg)
+            return RecipeLoad(path, code="E227", message=msg)
+        return box["v"]
 
     def presputter_start_ui(self, ch: str) -> bool:
         """프리스퍼터 'UI 현재값' 시작(v1 start_presputter_from_ui) — 공정 중이면 False, 아니면 시작 가드 결과와 무관하게 True(UI-143)."""
@@ -204,6 +237,22 @@ class Ch12Core:
             pass
         e.log("MAIN", f"[CH{e.n}] PreSputter 자동 시작 (UI 현재값)")
         return True
+
+    def presputter_start_recipe(self, ch: str, rows, name: str) -> Optional[str]:
+        """프리스퍼터 전용 레시피 시작 — v1 start_with_recipe_string(…, origin='presputter') 이 UI Start 와 같은 _handle_start_clicked
+        를 지나듯(chamber_runtime.py:7996-8006, pre_sputter_runtime.py:338) 적재 → start_chamber(쿨다운·러너 바쁨·같은 CH PC 실행 중).
+        거부 사유 코드, 시작했으면 None."""
+        e = self.proc.get(ch)
+        if e is None:
+            return "NOT_SUPPORTED"
+        why = e.load(rows, source="local", by="local", name=name)
+        if why:
+            return why
+        try:
+            self.start_chamber(e.n, source="local", by="local", owner="local", origin="presputter")
+        except Rejected as r:
+            return r.reason
+        return None
 
     # ═══════════════════════ 처리기 ═══════════════════════
     def _handlers(self) -> Dict[str, Callable]:
@@ -246,11 +295,12 @@ class Ch12Core:
             if isinstance(a.get("rows"), list):
                 return self.why(e, lambda: e.load(a["rows"], source=w[src], by=by, name=name))
             if a.get("path"):
-                from v2.ch12.recipe import load_recipe_file
-                r = load_recipe_file(str(a["path"]), origin="ui")
+                r = self._load_recipe_ui(e, str(a["path"]))
                 for s, m in r.logs:
                     e.log(s, m)
                 if not r.ok:
+                    if r.code == "E230":                       # v1 UI: 로그 + 경고 창 '레시피 오류'(3443-3450)
+                        e.popup("레시피 오류", r.message)
                     raise Rejected(r.code or "RECIPE_INVALID", r.message)
                 return self.why(e, lambda: e.load(r.rows, source=w[src], by=by,
                                                    name=name or os.path.basename(str(a["path"]))))

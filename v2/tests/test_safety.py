@@ -215,3 +215,40 @@ def test_power_off_only_keeps_relays_and_mfc(tmp_path):
         assert ("fired", "S32") in ev and ("released", "S32") in ev
     finally:
         done(rig)
+
+
+def test_power_off_only_pc_running_turns_off_pc_rf_only(tmp_path):
+    """S32 에 플라즈마 클리닝이 돌고 있으면 — PC 를 붙잡고(program_exit) PC RF 만 즉시 0 W·SET OFF. 가스 FLOW OFF('L30')·SP4 VALVE
+    OPEN('O') 은 보내지 않는다(챔버K 결정 4 'MFC 그대로'). 결과는 실패 PROGRAM_EXIT."""
+    rig = make(tmp_path)
+    try:
+        rig.loop.run(2)
+        ui = {"gas_flow": "10", "rf_power": "100", "process_time": "1", "working_pressure": "2"}
+        assert rig.command("PC_START", {"ch": 1, "params": ui}, source=Source.WEB).ok
+        pc = rig.asm.pc
+        n = 0
+        while n < 600 and not (pc.pc.step == "process" and pc.countdown_left is not None and pc.countdown_left < 55):
+            rig.loop.run(1)
+            n += 1
+        plc = rig.sims["plc"]
+        assert plc.coils[PM.COIL_MAP["DCV_SET_1"]] and plc.regs[PM.REG_MAP["DCV_WRITE_1"]] > 0
+        mfc = rig.sims["ch1.mfc"]
+        n_cmds = len(mfc.set_commands_seen())
+        flow = rig.chambers["ch1"].gas_sccm
+        flow_before = dict(flow)
+        res = rig.safety.power_off_only("PROGRAM_EXIT")
+        assert "pc" in res["process_was_running"] and "RF(pc) 0 W·SET OFF" in res["done"], res
+        n = 0
+        while n < 30 and pc.running:
+            rig.loop.run(1)
+            n += 1
+        assert not pc.running
+        assert plc.regs[PM.REG_MAP["DCV_WRITE_1"]] == 0 and plc.coils[PM.COIL_MAP["DCV_SET_1"]] is False   # PC RF 끔
+        after = mfc.set_commands_seen()[n_cmds:]
+        assert not any(c.startswith("L3") or c == "O" for c in after), after                            # 가스·밸브 그대로
+        assert dict(rig.chambers["ch1"].gas_sccm) == flow_before and any(v > 0 for v in flow_before.values())
+        assert pc.last_final["ok"] is False and pc.last_final["reason"] == "PROGRAM_EXIT"
+        logs = [ln.split("] ", 1)[1] for ln in pc.ui_log]
+        assert any("[CLEANUP] 의도적 종료" in ln for ln in logs) and not any("종료: MFC GAS OFF" in ln for ln in logs)
+    finally:
+        done(rig)

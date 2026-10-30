@@ -17,8 +17,13 @@
   5 웹 연결(uplink — 계약은 common.messages): 정책이 연결이면 UPLINK_URL·UPLINK_TOKEN(local_override.json 의 비밀값)으로.
     UPLINK_URL 이 비면 경고만(웹 연결 없이 운전). 주소는 호스트만 콘솔·로그에, 토큰은 어디에도. http 주소면 경고 한 번.
     worker 시작 전에 붙는다(hello·장비 연결 이벤트부터 받게). 웹이 끊겨도 공정·안전은 노트북에서 그대로.
-  다음 단계 자리(지금은 하지 않음): 저널·이어가기(5단계 — start_journal, 웹 명령 id 기억은 uplink.to_state/from_state),
-  윈도우 콘솔 닫기·로그오프(winshell — install_console_handlers).
+  저널·이어가기(start_journal — 조립 뒤·웹 연결 전): resume.attach 가 옛 저널을 읽고(공정 중이던 부분은 판단 전까지 덮어쓰지
+    않음·재시작 횟수 +1·히터 넘겨받기·로봇 명령 id 기억 되살림) 1초 저널을 켠다. 웹 명령 id 기억(uplink.from_state)은 웹 연결을
+    만든 뒤·uplink.start 전에 넣는다(journal.bind_commands — 그 사이에 온 같은 명령을 다시 실행하지 않게). 이어가기/PROGRAM_RESTART
+    판단은 시작 뒤 별도 스레드(resume — 1초 행 몇 개를 다시 읽은 뒤).
+  의도적 종료(install_console_handlers — run 이 신호 처리기와 함께 설치): 정상 종료(Ctrl+C 를 받아들였을 때·SIGTERM)와 윈도우 콘솔
+    창 닫기·로그오프·윈도우 종료(winshell — SetConsoleCtrlHandler·숨은 창 WM_ENDSESSION)에서 resume.intentional_exit(저널 '의도적
+    종료' 먼저 → 공정 붙잡기 → 파워 출력만 끔 — safety S32).
 버전은 .git 의 HEAD·ref 파일을 읽어서(git 명령을 실행하지 않음), 못 읽으면 unknown.
 
 종료(종료 코드 0)
@@ -26,7 +31,8 @@
   아니면 정상 종료: tick 멈춤 → 포트 닫기 → 기록·출력 flush → 허브 닫기 → 웹 연결 정지(남은 메시지는 보관함 — 다음 시작 때
   올림) → 로컬 서버 정지.
 - 종료 신호(SIGTERM — 감시 프로그램·서비스 정지): 거부하지 않는다(정상 종료와 같은 순서). 공정 중이면 먼저 파워 출력만 끈다
-  (safety.power_off_only — 챔버K 결정 4, S32). 콘솔 닫기·로그오프(winshell)도 같은 함수를 부를 자리(5단계).
+  (resume.intentional_exit → safety.power_off_only — 챔버K 결정 4, S32). 콘솔 닫기·로그오프(winshell)도 같은 함수.
+- 정리(_teardown): 시작 도중 실패해도 저널 쓰기 스레드·재시작 판단 스레드까지 멈춘다(남는 스레드 없음).
 """
 from __future__ import annotations
 
@@ -57,6 +63,36 @@ REFUSE_BUSY = "공정 중 — 로컬 화면·웹에서 STOP 먼저"
 RUNNING_LINE = "실행 중 — 멈추려면 Ctrl+C"
 SIM_ID_SUFFIX = "-SIM"               # UPLINK_IN_SIM 일 때 장비 ID 끝
 REPO_HMI_DIR = Path(__file__).resolve().parents[1] / "hmi"   # LOCAL_HMI_STATIC_DIR 이 비면 — 이 저장소의 v2/hmi
+
+
+EXIT_BLOCK_LOG = "프로그램 종료 차단: 실행 중 공정 = "     # v1 main.py:1497 WARN/EXIT 로그 머리
+
+
+def active_run_labels(s) -> Optional[List[str]]:
+    """v1 _active_run_labels(main.py:1137-1168) — 'CH1 Sputter'·'CH2 Sputter'(proc.chN.is_running)·'Plasma Cleaning (CHn)'·'TSP'
+    (run_state.is_running). 엔진 표가 없으면 None."""
+    engines = getattr(s, "engines", None)
+    if not isinstance(engines, dict):
+        return None
+    out: List[str] = []
+    for ch in ("ch1", "ch2"):
+        e = engines.get(f"proc.{ch}")
+        try:
+            if e is not None and bool(getattr(e, "is_running", False)):
+                out.append(f"{ch.upper()} Sputter")
+        except Exception:
+            pass
+    rs = getattr(s, "run_state", None)
+    if rs is not None:
+        try:
+            for n in (1, 2):
+                if rs.is_running("pc", n):
+                    out.append(f"Plasma Cleaning (CH{n})")
+            if rs.is_running("tsp"):
+                out.append("TSP")
+        except Exception:
+            pass
+    return list(dict.fromkeys(out))
 
 
 def repo_root() -> Path:
@@ -105,6 +141,10 @@ class App:
         self.server: Optional[LocalServer] = None
         self.uplink = None
         self.assembly = None
+        self.journal = None
+        self.resumer = None
+        self._resume_thread: Optional[threading.Thread] = None
+        self._before_uplink_start: List[Callable[[], None]] = []    # 웹 연결을 만든 뒤·시작하기 전(명령을 받기 전)에 부를 것
 
     # ───────── 1 설정 ─────────
     def load_config(self) -> bool:
@@ -252,25 +292,21 @@ class App:
             return EXIT_START
         return EXIT_OK
 
-    # 다음 단계 자리 — 지금은 아무것도 하지 않는다
     def start_journal(self, s: Ch12System) -> None:
         """5단계 저널·이어가기(journal.py·resume.py) — 조립 뒤·worker 시작 전: 옛 저널을 읽고(공정 중이었던 부분은 판단 전까지
         덮어쓰지 않음·재시작 횟수 +1·히터 넘겨받기·명령 id 기억 되살림) 1초 저널을 켠다. 판단은 시작 뒤 별도 스레드
-        (1초 행 몇 개를 다시 읽은 뒤 — 이어가기 또는 PROGRAM_RESTART 안전 정지). 웹 연결을 만든 직후 명령 기억을 넣는다."""
+        (1초 행 몇 개를 다시 읽은 뒤 — 이어가기 또는 PROGRAM_RESTART 안전 정지). 웹 명령 기억은 웹 연결을 만든 뒤·
+        uplink.start 전에 넣는다(_before_uplink_start)."""
         from v2.ch12 import resume as RS
         say = lambda m: (self.say(f"[재시작] {m}"), self.log.warning("재시작: %s", m))   # noqa: E731
         self.journal, self.resumer = RS.attach(s, log=say)
         for part, d in self.resumer.active.items():
             say(f"지난 실행의 {part} 공정(run {d.get('run_id')})이 저널에 '공정 중' — 장비를 다시 읽고 이어가기/안전 정지 판단")
-        orig_uplink = self.start_uplink
-
-        def start_uplink(sys_) -> None:
-            orig_uplink(sys_)
-            self.journal.bind_commands()                   # 웹 명령 id 기억 — 연결이 명령을 받기 전에
-        self.start_uplink = start_uplink
+        self._before_uplink_start.append(self.journal.bind_commands)   # 웹 명령 id 기억 — uplink.start(명령 받기) 전에
         th = threading.Thread(target=lambda: (s.clock.wait_until(None, lambda: s.started or self._done.is_set()),
                                               None if self._done.is_set() else self.resumer.run()),
                               name="resume", daemon=True)
+        self._resume_thread = th
         th.start()
 
     def start_uplink(self, s: Ch12System) -> None:
@@ -290,6 +326,11 @@ class App:
             self.log.warning("웹 연결 준비 실패 — 웹 연결 없이 운전: %s", type(e).__name__)
             return
         self.uplink = s.uplink = up
+        for f in list(self._before_uplink_start):         # 저널의 명령 id 기억을 먼저 넣는다(재시작 뒤 같은 명령이 SSE 로 바로 와도
+            try:                                           # 다시 실행하지 않게 — start 뒤에 넣으면 그 사이가 빈다)
+                f()
+            except Exception as e:
+                self.log.warning("웹 연결 시작 전 준비 실패: %r", e)
         up.start()
 
     def attach_server(self, s: Ch12System) -> None:
@@ -369,10 +410,18 @@ class App:
         self.install_console_handlers()
 
     def exit_check(self) -> tuple:
-        """("refuse", 이유) / ("ok", "")."""
+        """("refuse", 이유) / ("ok", ""). 조립된 시스템이면 v1 closeEvent 판단 그대로(main.py:1120-1168·1487-1526 — UI-042):
+        실행 중 목록 'CH1 Sputter'·'CH2 Sputter'(엔진 is_running — 프로세스 컨트롤러 기준)·'Plasma Cleaning (CHn)'·'TSP'(run_state)
+        가 있으면 거부. 프리플라이트·척 이동·큐 행 사이처럼 busy 만 참인 구간은 막지 않는다(알려진 이상 동작 UI-148 — D120 v1 그대로).
+        엔진 표(engines)가 없는 시스템은 busy() 로."""
         s = self.system
-        if s is not None and s.busy():
-            return "refuse", REFUSE_BUSY
+        if s is None:
+            return "ok", ""
+        labels = active_run_labels(s)
+        if labels is None:
+            return ("refuse", REFUSE_BUSY) if s.busy() else ("ok", "")
+        if labels:
+            return "refuse", f"{EXIT_BLOCK_LOG}{', '.join(labels)} — {REFUSE_BUSY}"
         return "ok", ""
 
     def on_ctrl_c(self) -> str:
@@ -400,10 +449,17 @@ class App:
     def _teardown(self) -> None:
         self._done.set()
         s = self.system
-        if s is not None and s.started:
-            s.stop()                                       # tick 멈춤 → worker 정지(포트 닫기) → 출력·기록 flush
+        if s is not None and (s.started or self.assembly is not None):
+            s.stop()                                       # tick 멈춤 → 엔진 close(로봇 API·저널 등) → worker 정지 → 출력·기록 flush
+                                                           # (시작 도중 실패해도 — 조립이 띄운 스레드가 남지 않게)
         if self._tick_thread is not None:
             self._tick_thread.join(3.0)
+        if self.journal is not None:                       # 시작 전에 실패했으면 조립 정지(엔진 close)가 저널을 멈추지 않는다
+            self.journal.stop()                            # (이미 멈췄으면 남은 것만 — 두 번 불러도 됨)
+        if self._resume_thread is not None:
+            if s is not None:
+                s.clock.notify()                           # 재시작 판단 스레드가 '시작됨 또는 끝냄'을 다시 보게
+            self._resume_thread.join(3.0)
         if self.hub is not None:
             self.hub.close()                               # 소비자(로컬 화면 SSE·웹 연결) 끝
         if self.uplink is not None:

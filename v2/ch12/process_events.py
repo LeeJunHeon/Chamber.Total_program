@@ -49,7 +49,7 @@ class ProcessEventsMixin:
             ow = getattr(ev, "owner", None)
             if ow is not None and ow != self.owner:
                 return
-        if k == "status":
+        if k in ("status", "io"):          # v1 은 [SEND]·[RECV] 도 status(device/mfc.py:1359·1440, ig.py:702·757)
             self.log(f"MFC{self.n}", ev.detail or "")
         elif k == "command_confirmed":
             self._match("MFC", ev.cmd or "")
@@ -69,9 +69,9 @@ class ProcessEventsMixin:
             self.log(f"MFC{self.n}", f"[poll] ChamberP: {txt}")
 
     def _ev_ig(self, k: str, ev) -> None:
-        if k in ("status", "pressure") and self.e.ig_in_use_by_pc():
+        if k in ("status", "io", "pressure") and self.e.ig_in_use_by_pc():
             return
-        if k == "status":
+        if k in ("status", "io"):          # v1 은 [SEND]·[RECV] 도 status(device/mfc.py:1359·1440, ig.py:702·757)
             self.log(f"IG{self.n}", ev.detail or "")
         elif k == "pressure":
             if ev.pressure is not None:

@@ -16,8 +16,9 @@ S31 시작 때 남은 파워(지시 3장 (6), 챔버K S51): 프로그램이 켜�
 S32 의도적 종료(챔버K 결정 4): power_off_only(reason) — 챔버 공정을 멈추고(새 장비 명령을 보내지 않게 붙잡음 — 정지 순서를 돌리지 않음:
   돌리면 MV·가스 밸브를 닫는다, run_end error PROGRAM_EXIT), 확인을 기다리지 않는 OFF 를 먼저 다 보낸 뒤 deadline_s 까지 결과를 기다린다:
   DC1·DC2 OFF · RF(CH2·PC) 0 W → SET OFF(램프다운 없음) · 연결된 DC Pulse OUTPUT OFF · RF Pulse RF OFF · 히터 RUN=0 ·
-  TSP 운전 중이면 이상 중단(TSP OFF). 플라즈마 클리닝이 돌고 있으면 그 엔진의 v1 RF 안전 정지(abort PROGRAM_EXIT)로 끈다
-  (PC RF 를 따로 0 W 로 쓰면 PC 램프다운 쓰기와 엇갈린다). PLC 릴레이·MFC·IG 는 그대로.
+  TSP 운전 중이면 이상 중단(TSP OFF). 플라즈마 클리닝이 돌고 있으면 챔버 공정처럼 먼저 붙잡고(PC 엔진 program_exit — 끝 정리의
+  RF 안전 정지·가스 FLOW OFF·SP4 VALVE OPEN 을 보내지 않음, 결과 실패 PROGRAM_EXIT) PC RF 도 다른 RF 처럼 0 W → SET OFF
+  (rf_zero_off — 붙잡은 뒤라 PC 램프다운 쓰기와 엇갈리지 않음). PLC 릴레이·MFC·IG 는 그대로('MFC 그대로' — 챔버K 결정 4).
 """
 from __future__ import annotations
 
@@ -230,15 +231,17 @@ class Ch12Safety:
         for ch, e in self.proc.items():
             if e is not None and self.hold_process(e, reason):
                 was.append(ch)
+        pc_held = self._hold_pc(reason)                   # PC 도 붙잡는다(정지 정리 없이) — 뒤의 PC RF 즉시 끄기와 엇갈리지 않게
+        if pc_held:
+            was.append("pc")
         if not self.bench:
             s = self.sys
             for unit, d in sorted((getattr(s, "dc", {}) or {}).items()):
                 if d is not None:
                     d.enabled = True
                     self._try(lambda d=d, u=unit: d.stop(on_done=cb(f"DC{u} OFF")))
-            pc_busy = bool(self.pc is not None and self.pc.busy)
             for mode, d in (getattr(s, "rf", {}) or {}).items():
-                if d is None or (mode == "pc" and pc_busy):
+                if d is None:
                     continue
                 self._try(lambda d=d, m=mode: rf_zero_off(d, cb(f"RF({m}) 0 W·SET OFF")))
             for ch in ("ch1", "ch2"):
@@ -250,10 +253,8 @@ class Ch12Safety:
                     self._try(lambda rp=rp, ch=ch: rp.stop_process(on_done=cb(f"{ch} RF Pulse OFF")))
             if self.heater is not None:
                 self._try(lambda: self.heater.shutdown(on_done=cb("히터 RUN=0")))
-            if pc_busy:
-                self._try(lambda: self.pc.abort("PROGRAM_EXIT"))
-                sent.append("플라즈마 클리닝 이상 중단(RF 안전 정지)")
-                was.append("pc")
+            if pc_held:
+                sent.append("플라즈마 클리닝 붙잡음(PC RF 만 끔 — 가스·밸브 그대로)")
             if self.tsp is not None and self.tsp.busy:
                 self._try(lambda: self.tsp.abort("PROGRAM_EXIT"))
                 sent.append("TSP 이상 중단(TSP OFF)")
@@ -267,6 +268,20 @@ class Ch12Safety:
         self._emit("released", "S32", "POWER_OFF_ONLY",
                    f"보낸 것 {len(sent)} · 끝난 것 {len(res['done'])} · {res['elapsed_s']:.2f} s", "info")
         return res
+
+    def _hold_pc(self, reason: str) -> bool:
+        """플라즈마 클리닝을 정지 순서 없이 붙잡는다(엔진 program_exit — 끝 정리에서 RF 안전 정지·가스 FLOW OFF·SP4 VALVE OPEN 을
+        보내지 않음, 결과 실패 PROGRAM_EXIT). 그런 길이 없는 엔진이면 v1 RF 안전 정지(abort). 돌고 있었으면 True."""
+        pc = self.pc
+        if pc is None or not bool(getattr(pc, "busy", False)):
+            return False
+        f = getattr(pc, "program_exit", None)
+        held = [False]
+
+        def go() -> None:
+            held[0] = bool(f(reason) if callable(f) else pc.abort(reason))
+        self._try(go)
+        return held[0]
 
     def _try(self, fn) -> None:
         try:

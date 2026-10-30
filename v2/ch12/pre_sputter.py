@@ -6,7 +6,8 @@ v1 그대로(챔버마다 하나 — main 이 ch1=…/ch2=None, parallel=False �
 - 그 시각: 챔버가 바쁘면(is_busy — 프리플라이트·Chuck·큐 행 사이 포함) 그날 PASS('해당 챔버가 이미 공정 중 → 이번 예약 PASS',
   상태 'PASS(공정 중) · 다음 HH:MM', 다음날 재예약). 아니면 1회 실행:
   · 사용자 레시피 큐를 비우고 보관(snapshot_recipe_queue) → 전용 레시피 경로가 있으면 그 파일로(start_with_recipe — origin
-    presputter), 없으면 화면 현재값으로(start_ui) → 시작 신호(엔진 busy)를 최대 START_CONFIRM_TIMEOUT_S(60 s) 기다림
+    presputter; 조립은 start_recipe = core.presputter_start_recipe — v1 start_with_recipe_string 이 _handle_start_clicked 를
+    지나듯 시작 가드(쿨다운·러너 바쁨·같은 CH PC 실행 중)를 core 한 곳에서), 없으면 화면 현재값으로(start_ui) → 시작 신호(엔진 busy)를 최대 START_CONFIRM_TIMEOUT_S(60 s) 기다림
     ('{라벨} 시작 신호 미확인 (timeout)') → 끝날 때까지 tick 마다 감시 → 큐 되돌림(아직 바쁘면 보관분 파기 — 엔진 쪽 문구).
   · 상태 '완료 · 다음 HH:MM' / '실행 실패 · 다음 HH:MM', 한 회차 예외는 '실행 중 예외: … — 이번 회차 실패, 다음 예약 유지'.
 - 알려진 이상 동작(UI-143) 그대로: 화면 현재값 시작은 시작 가드(쿨다운·입력 검사 등)가 거절해도 True(v1 start_presputter_from_ui 는
@@ -19,6 +20,7 @@ v1 그대로(챔버마다 하나 — main 이 ch1=…/ch2=None, parallel=False �
 """
 from __future__ import annotations
 
+import collections
 import json
 import os
 import re
@@ -28,6 +30,7 @@ from typing import Any, Callable, Dict, Optional
 
 START_CONFIRM_TIMEOUT_S = 60.0
 SETTINGS_FILE = "presputter.json"
+LINES_KEEP = 5000                  # PC 로그창에 보낸 줄 사본(오래 켜 두어도 늘지 않게 — PC 로그창 UI_LOG_MAX 와 같은 상한)
 
 
 def next_time_at(now: datetime, hh: int, mm: int) -> datetime:
@@ -59,14 +62,16 @@ class PreSputter:
     def __init__(self, clock, engine, *, settings_dir, start_ui: Optional[Callable[[], bool]] = None,
                  ui_params: Optional[Callable[[], dict]] = None, log_sink: Optional[Callable[[str], None]] = None,
                  hh: int = 6, mm: int = 0, tick_s: float = 1.0,
-                 start_confirm_timeout_s: float = START_CONFIRM_TIMEOUT_S) -> None:
+                 start_confirm_timeout_s: float = START_CONFIRM_TIMEOUT_S,
+                 start_recipe: Optional[Callable[[list, str], Optional[str]]] = None) -> None:
         self.clock, self.e = clock, engine
         self.label = engine.ch.upper()
         self.settings_path = Path(settings_dir) / SETTINGS_FILE
         self.ui_params = ui_params
         self._start_ui = start_ui
+        self._start_recipe = start_recipe          # (행, 이름) → 거부 사유 | None — 조립은 core(시작 가드 한 곳)를 지나게
         self.log_sink = log_sink
-        self.lines: list = []
+        self.lines: "collections.deque[str]" = collections.deque(maxlen=LINES_KEEP)
         self.hh, self.mm = int(hh), int(mm)
         self.tick_s = float(tick_s) if tick_s > 0 else 1.0
         self.start_confirm_timeout_s = float(start_confirm_timeout_s)
@@ -137,6 +142,29 @@ class PreSputter:
     def set_recipe_path(self, path: Optional[str]) -> None:
         self.recipe_path = path or None
         self.save()
+        self._disp = self.recipe_display()                # v1 _update_presputter_recipe_cache — exists() 1회
+        if self.recipe_path:
+            self._auto(f"PreSputter CH{self.e.n} 레시피 지정: {self.recipe_path}")
+
+    def _auto(self, msg: str) -> None:
+        """v1 main._broadcast_log("Auto", …) 자리(main.py:1690-1758) — PC 로그창 길(log_sink)로 '[HH:MM:SS] Auto: …'."""
+        line = f"[{self._now():%H:%M:%S}] Auto: {msg}"
+        self.lines.append(line)
+        if self.log_sink:
+            try:
+                self.log_sink(line)
+            except Exception:
+                pass
+
+    def state(self) -> Dict[str, Any]:
+        """화면 표시(v1 preSputter_remainigTime_edit·preSputter_LeftTime_edit·SetTime·레시피 표시칸 — main.py:1604-1627·1790-1826).
+        레시피 표시는 경로를 정할 때 한 번 본 값(NAS exists() 를 1초마다 부르지 않게)."""
+        disp = getattr(self, "_disp", None)
+        if disp is None:
+            disp = self._disp = self.recipe_display()
+        return {"reserved": self.is_reserved, "hhmm": self._hhmm(), "status_text": self.status_text,
+                "left_text": self.left_text, "when": None if self.when is None else f"{self.when:%Y-%m-%d %H:%M:%S}",
+                "recipe_path": self.recipe_path or "", "recipe_display": disp}
 
     def recipe_display(self) -> str:
         p = self.recipe_path
@@ -173,7 +201,10 @@ class PreSputter:
         d = self._read()
         path = d.get(f"presputter/recipe_ch{n}") or ""
         if path:
-            self.recipe_path = path
+            self.recipe_path = path                        # 파일이 없어도 경로는 유지(표시 '(파일 없음)')
+            self._disp = self.recipe_display()
+            if self._disp.endswith(" (파일 없음)"):
+                self._auto(f"PreSputter 레시피 파일 없음: {path}")
         if not d.get(f"presputter/reserved_ch{n}", False):
             return None
         hhmm = str(d.get(f"presputter/reserve_hhmm_ch{n}", "") or "")
@@ -234,8 +265,14 @@ class PreSputter:
             from v2.ch12.recipe import load_recipe_file
             self._log(f"[PreSputter] {self.label} 레시피 실행: {basename(self.recipe_path)}")
             r = load_recipe_file(self.recipe_path, origin="host")
-            why = r.message if not r.ok else (self.e.load(r.rows, source="local", name=basename(self.recipe_path))
-                                              or self.e.start(source="local", owner="local", origin="presputter"))
+            name = basename(self.recipe_path)
+            if not r.ok:
+                why = r.message
+            elif self._start_recipe is not None:           # v1 start_with_recipe_string → _handle_start_clicked(같은 가드)
+                why = self._start_recipe(r.rows, name)
+            else:
+                why = (self.e.load(r.rows, source="local", name=name)
+                       or self.e.start(source="local", owner="local", origin="presputter"))
             if why:
                 self._log(f"[PreSputter] {self.label} 레시피 시작 실패: {why!r}")
                 return False

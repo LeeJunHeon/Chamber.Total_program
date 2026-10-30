@@ -12,7 +12,8 @@ PcController(v1 컨트롤러 그대로 — PC-040~058·099)
 StepIO(엔진이 섞어 씀 — 런타임 _bind_pc_controller 의 콜백들, PC-041~050)
 - 장비 호출은 드라이버 동작(worker 요청) + on_done 을 시계 대기(Box)로 기다린다. v1 이 await 하던 곳에서 기다린다.
 - RF 시작 판정: rf.start → 목표 이벤트 대기 max(PC_RF_TARGET_WAIT_TIMEOUT_S 120, RF_REFLECTED_WAIT_TIMEOUT_S 60 + 5) = 120 s.
-  실패 문구(REF 과다·0 W·'timeout 60s' — [이상] 실제 120 s, PC-095·D103)는 v1 그대로.
+  실패 문구(REF 과다·0 W·'timeout 60s' — [이상] 실제 120 s, PC-095·D103)는 v1 그대로. 목표 대기 중 그 밖의 예외는
+  'RF Power 도달 실패: {형}: {문구}'(PC-051).
   RF 실패(목표 실패·시간 초과·예외)는 on_rf_failed(중단 신호) → v1 은 그 신호로 컨트롤러가 RF 시작 태스크를 취소해 안쪽 안전 정지가
   첫 대기에서 끊긴다(로그 'STOP during RF START → cancel rf_start & shutdown'). v2 는 안쪽 정지를 'RF cleanup 요청'까지만 하고 같은
   로그를 남긴 뒤 취소 — 실제 정지 순서는 종료 정리(_final_cleanup)가 한다(v1 asyncio 취소 경합을 단순화 — 결정 후보).
@@ -440,13 +441,21 @@ class StepIO:
         if stop_pred():
             raise PcCancelled()
         cfg = self.cfg
-        wait_s = float(cfg.get("PC_RF_TARGET_WAIT_TIMEOUT_S", 60.0))
-        extra = float(cfg.get("PC_RF_TARGET_WAIT_EXTRA_S", 5.0))
-        try:
-            wait_s = max(wait_s, float(rf.c("RF_REFLECTED_WAIT_TIMEOUT_S")) + extra)
-        except Exception:
-            pass
-        self.clock.wait_until(self.clock.monotonic() + wait_s, lambda: self.rf_target_evt or stop_pred())
+        try:                                           # v1 931-954 — 목표 대기 중 그 밖의 예외도 RF 실패로(사유 'RF Power 도달 실패: …')
+            wait_s = float(cfg.get("PC_RF_TARGET_WAIT_TIMEOUT_S", 60.0))
+            extra = float(cfg.get("PC_RF_TARGET_WAIT_EXTRA_S", 5.0))
+            try:
+                wait_s = max(wait_s, float(rf.c("RF_REFLECTED_WAIT_TIMEOUT_S")) + extra)
+            except Exception:
+                pass
+            self.clock.wait_until(self.clock.monotonic() + wait_s, lambda: self.rf_target_evt or stop_pred())
+        except Exception as e:
+            reason = f"RF Power 도달 실패: {type(e).__name__}: {e!s}"
+            self.log("RF", reason)
+            self.forced_fail, self.forced_fail_reason = True, reason
+            self.pc.on_rf_failed(reason, meta={"stage": "_rf_start", "power_w": float(power_w), "selected_ch": self.ch,
+                                               "last_fwd": last_fwd, "last_ref": last_ref})
+            self._rf_fail_cancel()
         if not self.rf_target_evt and stop_pred():
             raise PcCancelled()
         if self.rf_target_evt:

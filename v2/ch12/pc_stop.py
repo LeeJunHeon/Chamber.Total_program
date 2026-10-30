@@ -14,6 +14,8 @@ MFC 해제(2018-2066): 런 사용 해제 먼저 → MFC 마다 폴링 사용자�
   ② 폴링 0·다른 런 있음 → 마스크 원복·폴링 끔·release_owner·'대기열/상태 유지' ③ 다른 폴링 사용자 → release_owner·'폴링 유지'.
 _final_cleanup(1837-1898): 런당 1회. TEST 면 장비 정리 없이 로그만. IG cancel_wait 2 s → RF 안전 정지 → (못 탔으면) MFC 해제 →
   0.05 s → 이벤트 펌프 내림 3 s → (disconnect_on_finish — v1 main 이 넘기지 않아 늘 꺼짐, PC-079) → 공정 로그 닫기 → 런 사용 해제.
+의도적 종료(power_only — 엔진 program_exit, S32): IG·RF·MFC 장비 명령 없이 소유·폴링 표시·이벤트 펌프·공정 로그만 정리(PC RF 는
+  안전 규칙이 rf_zero_off 로 끄고, 가스 유량·SP4 밸브는 그대로 — 챔버K 결정 4 'MFC 그대로').
 [이상] 프리플라이트 GV 인터락 FALSE·읽기 실패도 이 정리를 탄다 — 켠 것이 없어도 RF 0 W·VALVE OPEN 등을 보냄(PC-096, D104 v1 그대로).
 """
 from __future__ import annotations
@@ -230,6 +232,17 @@ class StopIO:
         try:
             if self.test_mode_active:
                 self.log("MAIN", "[CLEANUP] TEST MODE: 장비 정리(RF/MFC/PLC) 스킵, 태스크/로그만 정리")
+                self.pumps_off()
+                self.run_log.close()
+                return
+            if getattr(self, "power_only", False):        # 의도적 종료(S32) — 장비 명령 없이 기록·소유만 정리
+                self.log("MAIN", "[CLEANUP] 의도적 종료 — RF 안전 정지·가스 OFF·VALVE OPEN 생략(PC RF 는 S32 가 즉시 끔, MFC 그대로)")
+                self.process_timer_active = False
+                if not self.mfc_release_done:
+                    try:
+                        self.release_mfcs_and_finalize()     # 소유·폴링 표시만(장비 쓰기 없음 — 유량은 그대로)
+                    except Exception:
+                        pass
                 self.pumps_off()
                 self.run_log.close()
                 return

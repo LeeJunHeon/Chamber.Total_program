@@ -19,6 +19,7 @@
   적용 전) → 시작 → 프리플라이트 신호를 PC_HOST_START_WAIT_TIMEOUT_S(20 s) 기다림(넘으면 'preflight timeout(20.0s) …' → E700). 결과는
   on_result(HostStartResult) — code 는 핸들러 분류까지 끝난 값(host/handlers.py:989-1001), raw_code 는 런타임이 실은 코드.
 STOP(stop — 1659-1688): 실행 중 아님/이미 종료 통지/이미 정지 요청이면 무시 로그, 아니면 '[STOP] 사용자 정지 요청 수신'·컨트롤러 정지.
+의도적 종료(program_exit — S32): 붙잡기만(끝 정리에서 장비 명령 없음 — RF 는 안전 규칙이 즉시 0 W·SET OFF, 가스·밸브·MFC 그대로).
   [이상] 사용자 STOP 도 ok=False 라 '❌ Plasma Cleaning 실패 이유: 사용자 STOP' 카드가 나간다(PC-100, D108).
 카드·팝업: 이벤트로 낸다(PcEvent kind 'card'·'popup' — 구글챗·창은 포털 몫, 같은 계기·같은 내용). 'log' 는 PC 로그창 한 줄.
 엔진 계약(system.register_engine): on_tick_start·on_row·snapshot_fields()(pc.proc.*·pc.set.*)·busy·close, 명령 start·stop·select_channel·
@@ -113,6 +114,7 @@ class PlasmaCleaning(StepIO, StopIO, PreflightIO, HostIO, EventIO, ViewIO):
         self.forced_fail_reason: Optional[str] = None
         self.rf_off_unconfirmed_reason: Optional[str] = None
         self.abort_reason: Optional[str] = None
+        self.power_only = False                   # 의도적 종료(program_exit) — 끝 정리에서 장비 명령을 보내지 않음
         self.process_timer_active = False
         self.rf_target_ok: Optional[bool] = None
         self.rf_target_reason = ""
@@ -202,9 +204,11 @@ class PlasmaCleaning(StepIO, StopIO, PreflightIO, HostIO, EventIO, ViewIO):
                                 "summary": {"name": name, "result_detail": payload}}))
 
     def popup(self, kind: str, title: str, text: str, ch: Optional[int] = None, clear_on_close: bool = False) -> None:
-        """경고(warning — 5 s 자동 닫힘)·치명(critical — 닫으면 clear_error) 창 자리(2854-2942)."""
+        """경고(warning — 5 s 자동 닫힘)·치명(critical — 자동 닫힘 없음, 닫으면 clear_error) 창 자리(2854-2942).
+        창 관리(같은 제목·본문 중복 억제·경고 동시 5개 상한)는 띄우는 화면 몫(PC-085·086)."""
         self.emit(PcEvent("popup", f"{title}: {text}", level="error" if kind == "critical" else "warn",
-                          data={"kind": kind, "title": title, "text": text, "ch": ch, "clear_on_close": clear_on_close}))
+                          data={"kind": kind, "title": title, "text": text, "ch": ch, "clear_on_close": clear_on_close,
+                                "auto_close_ms": 5000 if kind == "warning" else None}))
 
     def set_state_text(self, text: str) -> None:
         self.state_text = str(text)
@@ -347,6 +351,7 @@ class PlasmaCleaning(StepIO, StopIO, PreflightIO, HostIO, EventIO, ViewIO):
             return self._reject("실행 오류", f"CH{ch}는 이미 다른 공정이 실행 중입니다.", "E205")
         # 수락 — 결과 플래그 초기화는 여기서만(TEST-112)
         self.cleanup_started = False
+        self.power_only = False
         self.forced_fail, self.forced_fail_reason = False, None
         self.rf_off_unconfirmed_reason = None
         self.abort_reason = None
@@ -667,6 +672,24 @@ class PlasmaCleaning(StepIO, StopIO, PreflightIO, HostIO, EventIO, ViewIO):
             return False
         self.abort_reason = str(reason)
         self.log("MAIN", f"[ABORT] {reason}")
+        if self.pc.is_running:
+            self.pc.request_stop(str(reason))
+        else:
+            self.stop_requested = True
+        self.clock.notify()
+        return True
+
+    def program_exit(self, reason: str = "PROGRAM_EXIT") -> bool:
+        """의도적 종료(S32 — 챔버K 결정 4 '파워 출력만, MFC 그대로'): 정지 순서 없이 붙잡는다 — 컨트롤러 정지 신호 + 끝 정리에서
+        장비 명령(RF 안전 정지·가스 FLOW OFF·SP4 VALVE OPEN)을 보내지 않는다(pc_stop.final_cleanup 의 power_only). PC RF 출력은
+        부른 쪽(safety.power_off_only)이 다른 RF 처럼 즉시 끈다. 결과는 실패 PROGRAM_EXIT(챔버 run_end error PROGRAM_EXIT 와 같게).
+        v1 에는 없는 길(v1 종료는 공정 중이면 거부 — main.py closeEvent) — 챔버K 결정 4·S32 를 PC 에도. 실행 중이었으면 True."""
+        if not self.running:
+            return False
+        self.power_only = True
+        self.abort_reason = str(reason)
+        self.forced_fail, self.forced_fail_reason = True, str(reason)
+        self.log("MAIN", f"[EXIT] {reason} — 파워 출력만 끔(가스·밸브·MFC 그대로)")
         if self.pc.is_running:
             self.pc.request_stop(str(reason))
         else:

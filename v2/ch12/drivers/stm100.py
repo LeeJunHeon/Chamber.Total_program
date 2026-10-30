@@ -153,7 +153,7 @@ _ROW_KEYS = ("thickness_nm", "rate_nm_s", "seq", "crystal_ok", "life_pct", "freq
 @dataclass(frozen=True)
 class StmEvent:
     kind: str           # unresponsive / recovered / reset_flag / reset_ack_failed / format_error / unavailable /
-                        # zero / material_applied / job_failed / listener_error / config_warning
+                        # zero / material_applied / job_failed / listener_error / config_warning / link / loop_error
     detail: str
     reason: Optional[str] = None
     code: Optional[str] = None
@@ -196,6 +196,10 @@ class Stm100Driver:
         self.p = settings(cfg, chamber)          # v1 도 서비스 만들 때 한 번 읽는다(재시작 적용)
         self.enabled = self.p.enabled
         worker.on_connect = self._on_connect
+        self._prev_worker_event = worker.on_event
+        worker.on_event = self._on_worker_event
+        self._conn_fail_logged = False
+        self._reconnect_why: Optional[str] = None
         self._lock = threading.Lock()
         self._listeners: List[Callable[[dict], None]] = []
         self._st: Dict[str, Any] = self._blank_status()
@@ -219,7 +223,26 @@ class Stm100Driver:
         self._source = Source(self.block, CacheWorker(clock, lambda: self.worker.connected, self.block),
                               self.source_read, (self.block,), TICK_DEADLINE_MS, enabled=self.enabled)
         for w in self.p.warnings:
-            self._emit("config_warning", w)
+            self._emit("config_warning", f"⚠ 두께 모니터 설정: {w}")          # main.py:1307-1309
+
+    def _on_worker_event(self, ev) -> None:
+        """연결 로그(device/thickness_monitor.py:333-381) — 응답 없음(quiet) 동안은 연결·재연결·끊김 줄을 생략, 실패 줄은 연결될 때까지 1번."""
+        k = getattr(ev, "kind", "")
+        quiet = self._unresponsive
+        if k == "connected":
+            self._conn_fail_logged = False
+            if not quiet:
+                self._emit("link", f"두께 모니터 연결 {self.p.host}:{self.p.port}")
+        elif k == "connect_failed" and not self._conn_fail_logged:
+            self._conn_fail_logged = True
+            self._emit("link", f"두께 모니터 연결 실패 {self.p.host}:{self.p.port} — 계속 재시도: {getattr(ev, 'detail', '')}")
+        elif k == "disconnected":
+            why, self._reconnect_why = self._reconnect_why, None
+            if not quiet:
+                self._emit("link", (f"두께 모니터 재연결: {why}" if why else "두께 모니터 재연결") if why is not None
+                           else "두께 모니터 연결 끊김 — 재연결 대기")
+        if self._prev_worker_event:
+            self._prev_worker_event(ev)
 
     # ═══════════════════════ 공개 API ═══════════════════════
     def start(self) -> None:
@@ -276,7 +299,7 @@ class Stm100Driver:
 
         def ok(_v):
             self._emit("zero", f"두께 영점({m})" + (f" — {why}" if why else ""))
-        self._job("zero", f"영점({m})", fn, on_done, ok)
+        self._job("zero", f"영점({m})", fn, on_done, ok, why=why)
 
     def set_material(self, density: float, z_factor: float, tooling: float, material: str = "",
                      on_done: Optional[Callable[[StmDone], None]] = None, why: str = "") -> None:
@@ -326,12 +349,14 @@ class Stm100Driver:
         if g != self._gen or not self._running:
             return
         if res.status != Status.OK:
+            if res.reason == "DEVICE_REJECTED":               # 드라이버 처리 예외 — v1 '⚠ 두께 폴링 처리 예외'(60 s 1번), 계속
+                self._emit_throttled("loop", "loop_error", f"⚠ 두께 폴링 처리 예외: {res.error}", FORMAT_LOG_INTERVAL_S)
             self._publish()
         now = self.clock.monotonic()
         t0 = res.started if res.started is not None else now
         self._kick(max(t0 + self.p.poll_s, now + MIN_POLL_WAIT_S))
 
-    def _job(self, action: str, name: str, fn, on_done, on_ok, code: Optional[str] = None) -> None:
+    def _job(self, action: str, name: str, fn, on_done, on_ok, code: Optional[str] = None, why: str = "") -> None:
         if not self.enabled:
             self._job_done(action, False, "DEVICE_DISABLED", None, "두께 모니터가 꺼져 있음", None, on_done)
             return
@@ -364,7 +389,7 @@ class Stm100Driver:
                 else:
                     reason, detail = (res.reason or res.status), (res.error or str(res.reason or res.status))
                 c = code if reason not in ("BENCH_READ_ONLY", "BAD_ARGS") else None
-                self._emit("job_failed", f"⚠ 두께 {name} 실패: {detail}", reason, c)
+                self._emit("job_failed", f"⚠ 두께 {name} 실패{(' — ' + why) if why else ''}: {detail}", reason, c)
                 self._job_done(action, False, reason, c, detail, None, on_done)
             if self._running:                                    # 요청 뒤 바로 한 번 더 읽는다(v1 _run 대기 깨움)
                 self._gen += 1
@@ -500,6 +525,7 @@ class Stm100Driver:
             lost = e
         self._publish()
         if lost is not None:
+            self._reconnect_why = str(lost) if str(lost).startswith("연속 실패") else None   # 링크 끊김은 '연결 끊김' 줄
             raise TransportError(str(lost))
         return True
 

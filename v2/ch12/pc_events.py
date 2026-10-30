@@ -64,7 +64,7 @@ class EventIO:
             ow = getattr(ev, "owner", None)
             if ow is not None and ow != self.mfc_owner():
                 return
-        if k == "status":
+        if k in ("status", "io"):          # v1 은 [SEND]·[RECV] 도 status(device/mfc.py:1359·1440, ig.py:702·757)
             self.log(label, ev.detail or "")
         elif k == "command_confirmed":
             self.log(label, f"OK: {ev.cmd or ''}")
@@ -91,7 +91,7 @@ class EventIO:
     def _on_ig(self, ev) -> None:
         label = self.ig_pump[1]
         k = getattr(ev, "kind", None)
-        if k == "status":
+        if k in ("status", "io"):          # v1 은 [SEND]·[RECV] 도 status(device/mfc.py:1359·1440, ig.py:702·757)
             self.log(label, ev.detail or "")
         elif k == "pressure":
             pv = ev.pressure

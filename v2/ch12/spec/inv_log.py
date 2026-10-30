@@ -334,3 +334,154 @@ ITEMS = [
          desc="settings.json 고칠 곳이 있으면 장비 연결 전에 Critical 창 '설정 파일 오류 — 프로그램을 시작하지 않습니다', 본문 'settings.json 에 고칠 곳이 N건 있습니다…(장비에는 아직 연결하지 않았습니다)', 파일 경로 + 문제 15개까지(나머지는 자세히 보기), ERROR 로그에 'settings.json 고칠 곳 N건 → 프로그램을 시작하지 않음', 종료 코드 1",
          v1="util/settings_error_box.py:1-27; main.py:2048-2078", v2="v2/ch12/app.py", test="", status="todo", note=""),
 ]
+
+# ───────────────────────── 전수 목록 마감 ─────────────────────────
+# 기록 출력은 v1 코드를 실제로 돌린 골든(v2/tools/v1golden_outputs.py → v2/tests/golden/outputs/<이름>/ — 파일 바이트 비교,
+# test_outputs_*)으로, 골든이 닿지 않는 규칙·엔진 연결은 v2/tests/test_inv_log.py 로.
+_OT, _OC, _OX, _OM = ("v2/tests/test_outputs_text.py", "v2/tests/test_outputs_csv.py", "v2/tests/test_outputs_excel.py",
+                      "v2/tests/test_outputs_camera.py")
+_IL, _CAM, _OPA = "v2/tests/test_inv_log.py", "v2/tests/test_camera.py", "v2/tests/test_outputs_paths.py"
+_O = "v2/ch12/outputs/"
+
+
+def _x(prefix: str, *names: str) -> str:
+    return "; ".join(f"{prefix}::{n}" for n in names)
+
+
+_TXT = _x(_OT, "test_process_txt_golden[process_txt_host]", "test_process_txt_golden[process_txt_names]")
+_CAL = _x(_OC, "test_calib_golden[calib_ch2_full]", "test_calib_golden[calib_ch1_results]")
+_XL = _x(_OX, "test_excel_golden[excel_ch2_multi]", "test_excel_golden[excel_ch1_phantom]")
+_DONE = {
+    1: (_O + "paths.py", _x(_OPA, "test_v1_default_paths"), "설정값 C:\\VanaM_Logs\\CH1&2 가 기본(NAS 반영은 log_sync — inv_app APP-066)"),
+    2: (_O + "paths.py", _x(_OPA, "test_v1_default_paths", "test_exe_base_dir_is_repo_root"), ""),
+    3: (_O + "paths.py", _x(_IL, "test_paths_read_at_call_time_and_restart_apply"), ""),
+    4: (_O + "log_hub.py; " + _O + "plc_coil_csv.py", _x(_IL, "test_daily_csv_list_appender_rules") + "; " + _x(_OC, "test_plc_coil_golden"), ""),
+    5: (_O + "log_hub.py", _x(_IL, "test_daily_csv_list_appender_rules") + "; " + _x(_OC, "test_plc_coil_fallback_switch"), ""),
+    6: (_O + "log_hub.py; v2/robot_server/log.py", _x(_IL, "test_dict_appenders_and_session_text") +
+        "; v2/tests/test_robot_server.py::test_command_csv_fallback_marker", ""),
+    7: (_O + "log_hub.py", _x(_IL, "test_dict_appenders_and_session_text") + "; " + _x(_OT, "test_process_txt_fallback_and_rules"), ""),
+    8: (_O + "log_hub.py; " + _O + "calib_csv.py", _x(_IL, "test_dict_appenders_and_session_text") + "; " + _CAL, ""),
+    9: (_O + "process_txt.py", _TXT + "; " + _x(_OT, "test_process_txt_fallback_and_rules"), ""),
+    10: (_O + "process_txt.py", _TXT + "; " + _x(_OT, "test_process_txt_fallback_and_rules"), ""),
+    11: (_O + "process_txt.py", _TXT, ""),
+    12: (_O + "process_txt.py; " + _O + "system_log.py", _TXT + "; " + _x(_OT, "test_system_log_golden"), ""),
+    13: (_O + "process_txt.py; " + _O + "base.py", _x(_OT, "test_process_txt_never_blocks"),
+         "큐 4096·가장 오래된 줄 버림은 같다. 쓰기는 쓰기 스레드가 큐를 한 번에 비운다(v1 301줄·5.0 s 묶음 한도 없음 — 결정 후보)"),
+    14: (_O + "process_txt.py", _x(_OT, "test_process_txt_fallback_and_rules"), ""),
+    15: (_O + "process_txt.py", _x(_IL, "test_process_txt_writer_exception_goes_to_emergency_file"), ""),
+    16: (_O + "process_txt.py; v2/ch12/process_records.py", _TXT + "; " + _x(_OT, "test_process_txt_fallback_and_rules"),
+         "FOOTER_SETTLE_S 0.3 s 뒤 END. v2 는 경로 없는 줄을 큐에 넣지 않아 shutdown_drain 파일이 생기지 않는다"),
+    17: ("v2/ch12/process_engine.py; " + _O + "process_txt.py",
+         "v2/tests/test_process_engine.py::test_single_start_invalid_inputs_rejected_with_popup; "
+         "v2/tests/test_inv_robot.py::test_chamber_host_run_robot_csv_steps", "D166 그대로(큐는 행마다 새 txt — 두 행 = 로그 파일 둘)"),
+    18: ("v2/ch12/heater_link.py; " + _O + "process_txt.py",
+         "v2/tests/test_heater_process.py::test_runtime_status_lines_and_samples; "
+         "v2/tests/test_heater_process.py::test_runtime_status_lines_off_when_period_zero; " +
+         _x(_OT, "test_process_txt_fallback_and_rules"), ""),
+    19: ("v2/ch12/process_records.py; " + _O + "run_stats.py",
+         "v2/tests/test_heater_records.py::test_heater_columns_and_summary_from_main_polling; "
+         "v2/tests/test_heater_records.py::test_no_heater_no_summary", ""),
+    20: (_O + "process_txt.py; v2/ch12/params/outputs.py", _x(_IL, "test_paths_read_at_call_time_and_restart_apply"),
+         "v2 는 경로 키를 모두 재시작 적용으로(같은 결과) — D167"),
+    21: (_O + "system_log.py", _x(_OT, "test_system_log_golden"), "v2 는 쓰기 스레드에서(순서 같음)"),
+    22: (_O + "system_log.py; " + _O + "process_txt.py", _TXT + "; " + _x(_OT, "test_system_log_golden"), ""),
+    23: (_O + "calib_csv.py; " + _O + "paths.py", _CAL + "; " + _x(_OPA, "test_v1_default_paths"), "D07·D42 — 로컬 정본 먼저, G: 에는 사본"),
+    24: (_O + "calib_csv.py", _CAL, ""),
+    25: (_O + "calib_csv.py", _CAL, ""),
+    26: (_O + "calib_csv.py", _CAL + "; " + _x(_OC, "test_calib_record_does_not_block"), ""),
+    27: (_O + "calib_csv.py", _x(_OC, "test_calib_golden[calib_upgrade]"), ""),
+    28: (_O + "calib_csv.py", _x(_OC, "test_calib_golden[calib_upgrade_fail]"), ""),
+    29: (_O + "calib_csv.py; " + _O + "paths.py", _x(_OC, "test_calib_golden[calib_pending]", "test_calib_pending_then_merge_d07"), "D07·D42"),
+    30: (_O + "calib_csv.py; v2/ch12/process_records.py", _x(_IL, "test_engine_records_calib_always_excel_only_on_success") + "; " +
+         _x(_OC, "test_calib_record_does_not_block"), ""),
+    31: (_O + "calib_csv.py", _x(_OC, "test_calib_golden[calib_ch1_results]") + "; " +
+         _x(_IL, "test_engine_records_calib_always_excel_only_on_success"), ""),
+    32: (_O + "calib_csv.py; " + _O + "run_stats.py", _CAL + "; " + _x(_OC, "test_calib_build_row_formats"), ""),
+    33: (_O + "run_stats.py; " + _O + "calib_csv.py", _CAL, ""),
+    34: (_O + "run_stats.py", _x(_OC, "test_calib_golden[calib_ch2_full]"), "v2 표본은 1초 행·이벤트에서(규칙 같음)"),
+    35: (_O + "calib_csv.py; " + _O + "run_stats.py", _CAL, ""),
+    36: (_O + "calib_csv.py", _CAL + "; " + _x(_OC, "test_calib_build_row_formats"), ""),
+    37: (_O + "calib_csv.py", _CAL + "; " + _x(_OC, "test_calib_build_row_formats"), ""),
+    38: (_O + "calib_csv.py; v2/ch12/process_records.py", _CAL, ""),
+    39: (_O + "run_stats.py; " + _O + "calib_csv.py", _x(_OC, "test_calib_golden[calib_ch2_full]") +
+         "; v2/tests/test_heater_records.py::test_heater_columns_and_summary_from_main_polling", ""),
+    40: (_O + "calib_csv.py; v2/ch12/process_records.py", _x(_OC, "test_calib_golden[calib_ch2_full]"), ""),
+    41: (_O + "excel_log.py; " + _O + "paths.py", _XL + "; " + _x(_OX, "test_excel_dev_mode_and_rules"), "D168 그대로"),
+    42: (_O + "excel_log.py; v2/ch12/process_records.py", _x(_IL, "test_engine_records_calib_always_excel_only_on_success") + "; " +
+         _x(_OX, "test_excel_dev_mode_and_rules"), ""),
+    43: (_O + "excel_style.py", _XL, ""),
+    44: (_O + "excel_style.py", _x(_OX, "test_excel_golden[excel_ch2_multi]", "test_excel_golden[excel_ch2_extend]"), ""),
+    45: (_O + "excel_style.py", _x(_OX, "test_excel_golden[excel_pc]"), ""),
+    46: (_O + "excel_style.py", _XL, ""),
+    47: (_O + "excel_style.py", _x(_OX, "test_excel_golden[excel_ch2_extend]"), ""),
+    48: (_O + "excel_style.py", _x(_OX, "test_excel_golden[excel_ch1_phantom]", "test_excel_next_row_skips_phantom"), ""),
+    49: (_O + "excel_style.py", _XL, ""),
+    50: (_O + "excel_style.py; " + _O + "excel_log.py", _x(_OX, "test_excel_golden[excel_ch2_multi]", "test_excel_golden[excel_pc]"),
+         "Arc 경고 웹훅은 콜백(on_arc_alert — 포털 카드)"),
+    51: (_O + "excel_log.py", _x(_OX, "test_excel_golden[excel_ch2_multi]"), ""),
+    52: (_O + "excel_log.py", _XL + "; " + _x(_OX, "test_excel_dev_mode_and_rules"), ""),
+    53: (_O + "excel_log.py", _x(_OX, "test_excel_dev_mode_and_rules"), "D169 그대로"),
+    54: (_O + "excel_style.py; " + _O + "excel_log.py", _x(_OX, "test_excel_golden[excel_blocked]", "test_excel_golden[excel_broken]"), "D170 그대로"),
+    55: (_O + "excel_log.py; " + _O + "paths.py", _XL, "D07 — 로컬 정본(OUTPUT_LOCAL_FIRST_DIR) 먼저, G: 에는 사본(결과 파일 같음)"),
+    56: (_O + "excel_log.py; v2/ch12/plasma_cleaning.py", _x(_OX, "test_excel_golden[excel_pc]") +
+         "; v2/tests/test_plasma_cleaning.py::test_excel_plasma_cleaning_sheet_values", "v1 이상 동작 그대로(DEV_MODE 무시·폴백도 G:)"),
+    58: (_O + "excel_log.py; " + _O + "run_stats.py", _x(_OX, "test_excel_golden[excel_ch2_multi]"),
+         "v2 는 날짜를 RunStats.session_started_at(공정 시작)으로 고정 — v1 경합(저장 시각이 될 수 있음)은 없앰(결정 후보)"),
+    59: (_O + "plc_coil_csv.py; " + _O + "row_feed.py", _x(_OC, "test_plc_coil_golden", "test_plc_coil_fallback_switch"), ""),
+    60: (_O + "plc_coil_csv.py; " + _O + "row_feed.py", _x(_OC, "test_plc_coil_golden"), "1초 행에서 5 s 마다(D55)"),
+    61: (_O + "plc_coil_csv.py", _x(_OC, "test_plc_coil_golden"), "D44·D68"),
+    62: (_O + "plc_coil_csv.py; " + _O + "row_feed.py", _x(_OC, "test_plc_coil_golden"), ""),
+    63: (_O + "plc_coil_csv.py", _x(_OC, "test_plc_coil_golden", "test_plc_coil_fallback_switch"), ""),
+    64: (_O + "thickness_csv.py; v2/ch12/process_records.py", _x(_OC, "test_thickness_golden", "test_thickness_gdrive_dir_replaced_and_fallback") +
+         "; " + _x(_IL, "test_engine_thickness_csv_records_process_name"), ""),
+    65: (_O + "thickness_csv.py", _x(_OC, "test_thickness_golden"), ""),
+    66: (_O + "thickness_csv.py", _x(_OC, "test_thickness_golden", "test_thickness_gdrive_dir_replaced_and_fallback"), ""),
+    67: (_O + "thickness_csv.py; v2/ch12/process_records.py", _x(_OC, "test_thickness_golden") + "; " +
+         _x(_IL, "test_engine_thickness_csv_records_process_name"), ""),
+    68: (_O + "heater_csv.py", _x(_OC, "test_heater_golden", "test_heater_on_tick_edges_and_suffix"), ""),
+    69: (_O + "heater_csv.py", _x(_OC, "test_heater_golden"), ""),
+    70: (_O + "heater_csv.py", _x(_OC, "test_heater_golden", "test_heater_on_tick_edges_and_suffix"), ""),
+    71: (_O + "camera_photos.py", _x(_OM, "test_camera_golden_korean_path", "test_camera_root_fallback") +
+         "; v2/tests/test_inv_app.py::test_camera_photos_match_rf_worker_rules", ""),
+    72: ("v2/ch12/drivers/camera.py; " + _O + "camera_photos.py", _x(_CAM, "test_real_cv2_backend_encode_and_rotate_if_available",
+                                                                  "test_encode_failure_logged") + "; " + _x(_OM, "test_camera_golden_korean_path"), ""),
+    73: ("v2/ch12/drivers/camera.py; v2/ch12/params/outputs.py", _x(_CAM, "test_params_defaults", "test_single_owner_records_rotated_jpgs_to_mode_folder"),
+         "D19 — 새 키 CAMERA_INDEX(1)·CAMERA_INTERVAL_S(1.0) — v1 rf_config.json camera_index 덮어쓰기 대신(결정 후보)"),
+    74: ("v2/ch12/drivers/camera.py; " + _O + "camera_photos.py", _x(_CAM, "test_disk_low_before_open_and_notify_once_per_process",
+                                                                  "test_disk_recheck_every_300_frames_stops") + "; " +
+         _x(_OM, "test_camera_low_disk_zero_frames_and_modes"), ""),
+    75: ("v2/ch12/drivers/camera.py; " + _O + "camera_photos.py", _x(_CAM, "test_open_failure_no_folder",
+                                                                  "test_read_failures_end_session_and_remove_empty_folder",
+                                                                  "test_transient_read_failure_retries_after_pause"), ""),
+    76: ("v2/ch12/drivers/camera.py", _x(_CAM, "test_shared_ownership_promotes_to_all_never_demotes", "test_owner_modes",
+                                         "test_no_owner_start_always_restarts_like_v1"), ""),
+    77: ("v2/ch12/process_actions.py; v2/ch12/plasma_cleaning.py", _x(_IL, "test_camera_follows_main_shutter_only_for_rf") +
+         "; v2/tests/test_plasma_cleaning.py::test_normal_flow_ch1", ""),
+    78: ("v2/ch12/drivers/camera.py; v2/ch12/process_actions.py", _x(_CAM, "test_per_owner_log_callbacks_and_tick_rows",
+                                                                    "test_disk_low_before_open_and_notify_once_per_process"),
+         "외부 알림은 포털 카드"),
+    80: (_O + "selfwatch.py", _x(_OT, "test_selfwatch_golden"), "D69"),
+    81: (_O + "selfwatch.py", _x(_OT, "test_selfwatch_interval_and_purge"), ""),
+    82: (_O + "selfwatch.py", _x(_OT, "test_selfwatch_golden"), "챗은 포털(on_event)"),
+    83: (_O + "selfwatch.py", _x(_OT, "test_selfwatch_golden"), "D45 — asyncio 칸 '(loop 없음)'"),
+    84: (_O + "app_log.py", _x(_OT, "test_app_log_golden", "test_app_log_setup_files"), ""),
+    85: (_O + "app_log.py", _x(_OT, "test_app_log_golden", "test_app_log_setup_files"), ""),
+    86: (_O + "app_log.py", _x(_OT, "test_app_log_setup_files"), ""),
+    87: (_O + "app_log.py", _x(_OT, "test_app_log_golden"), "D45 — asyncio·Qt 훅·태스크 크래시 억제는 v2 에 해당 없음"),
+    88: (_O + "app_log.py", _x(_OT, "test_app_log_golden"), ""),
+    89: (_O + "runtime_dump.py", _x(_OT, "test_runtime_dump_format"), "D45"),
+    92: ("vanam-process components/ops2/ch12/Ch12Recipes.tsx; v2/ch12/recipe.py",
+         "vanam-process/scripts/ops2-golden.mjs::ch12TemplateCase; v2/tests/test_recipe.py::test_load_recipe_file_codes",
+         "v2 는 파일 고르기 창 대신 웹 레시피(저장·RECIPE_LOAD) — Qt 우회 부분 해당 없음(결정 후보)"),
+    93: ("v2/ch12/plasma_cleaning.py; v2/ch12/tsp_engine.py", _x(_IL, "test_popup_events_carry_auto_close"),
+         "창은 화면(포털·노트북)이 auto_close_ms 로 닫는다 — 화면 쪽 처리는 ui 영역"),
+    94: ("v2/ch12/app.py", "v2/tests/test_app.py::test_bad_config_exit_2",
+         "v2 는 장비 연결 전에 '시작 거부'(종료 코드 2 = 감시 프로그램이 다시 켜지 않음) — v1 Critical 창·종료 코드 1 과 다름(결정 후보)"),
+}
+for _it in ITEMS:
+    _k = int(_it["id"].split("-")[1])
+    if _k in _DONE and _it["status"] == "todo":
+        _it["v2"], _it["test"], _n2 = _DONE[_k]
+        if _n2:
+            _it["note"] = (_it["note"] + " / " if _it["note"] else "") + _n2
+        _it["status"] = "done"

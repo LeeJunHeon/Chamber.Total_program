@@ -125,7 +125,8 @@ def test_rejected(tmp_path, settings, msg):
     ('{"common": {"DEBUG_PRINT": true, "DEBUG_PRINT": false}}', "두 번"),
     ('{"common": {}, "common": {}}', "두 번"),
     ('[1, 2]', "{ } 로 감싸져"),
-    ('{"common": {"DEBUG_PRINT": true,}}', "JSON 문법 오류"),
+    ('{"common": {"DEBUG_PRINT": true,}}', "줄 1 칸 32: "),                  # v1 힌트 문구(_JSON_HINTS) + 원본 줄
+    ('{"common": {"LOG_ROOT_DIR": "C:\\x"}}', "역슬래시(\\)는 두 번 써야 합니다"),
 ])
 def test_rejected_raw(tmp_path, raw, msg):
     res = _conv(tmp_path, None, raw=raw)

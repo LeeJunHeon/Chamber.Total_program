@@ -199,7 +199,8 @@ class OneShotMixin:
             return OesResult(True, bool(ok), msg if ok else f"OES 측정 실패(rc={rc})", str(final_path),
                              final_rows, final_elapsed, err)
         except Exception as e:
-            self._status(f"[OES] 예외: {type(e).__name__}: {e}")
+            import traceback
+            self._status(f"[OES] 예외: {type(e).__name__}: {e}\n{traceback.format_exc()}")       # device/oes.py:1088
             return OesResult(True, False, "OES 예외", str(out_csv), self._rows_seen, self.clock.monotonic() - t0,
                              f"{type(e).__name__}: {e}")
         finally:

@@ -173,7 +173,7 @@ def test_single_start_invalid_inputs_rejected_with_popup(tmp_path):
     host = []
     e.on_host_start = lambda ok, msg: host.append((ok, msg))
     bad = dict(base_pressure=1e-5, working_pressure=3, process_time=0.1, use_rf_pulse=True, rf_pulse_power=120,
-               process_note="bad")                                              # 가스 없음
+               use_ar=True, ar_flow=20, use_heater=True, process_note="bad")    # CH1 히터(입력칸 검사는 통과, 값 검사에서 거부)
     R.run(rig, R.idle(e), max_ticks=30, hooks=[R.at(2, lambda: e.start(params=bad))])
     assert R.ends(e) == [("error", "RECIPE_PARAM_ERROR")] and host and host[0][0] is False
     assert any(x.kind == "popup" and x.data.get("title") == "입력값 확인" for x in e.events)

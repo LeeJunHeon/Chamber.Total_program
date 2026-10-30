@@ -1,7 +1,7 @@
 """챔버12 공정 엔진 — 런 시작·끝 기록(ProcessEngine 믹스인). v1 runtime/chamber_runtime.py 의 'started'(1701-1793)·
 'finished'(1795-2101) 처리와 AFTER_FINISH(4977-5041)·_clear_queue_and_reset_ui(7740-7788).
 
-- 시작: 공정명 키 통일(비면 'Run CHn'), t0_wall·started_at, RunStats 세션(use_ms 면 셔터 열릴 때부터 평균), 두께 기록 시작·두께 CSV
+- 시작: 공정명 키 통일(비면 'Untitled' — v1 컨트롤러가 먼저 채움), t0_wall·started_at, RunStats 세션(use_ms 면 셔터 열릴 때부터 평균), 두께 기록 시작·두께 CSV
   set_recording(공정 중에만), DC Pulse 아크 카운터 리셋, 'Sputter Calib 로그 세션 시작', '▶️ CHn '이름' 시작 (t=…s)'(값은 분 — v1 그대로).
 - 끝: 결과 문구(성공·stop·실패) → RunStats end_update(실제 Shutter Delay·메인 시간으로 덮어씀) → Calib CSV(성공·실패·STOP 모두)
   → CH2 히터 요약 한 줄(히터 표본이 있을 때) → 엑셀(성공만, DC Pulse 아크 수) → 실패 이유 채팅 문구(진짜 실패만) → 폴링 OFF → run_end(done/aborted/error + 사유 코드,
@@ -14,6 +14,19 @@ from datetime import datetime
 from v2.ch12.process_list import RunPlan, next_process_uses_heater
 
 FOOTER_SETTLE_S = 0.3                 # _RUN_LOG_FOOTER_SETTLE_S
+_RESET_LABEL = {"yes": "예", "no": "아니오", "unknown": "확인불가"}
+
+
+def arc_summary_line(s: dict):
+    """v1 '[arc] 런 요약' 한 줄(chamber_runtime.py:1886-1903) — DC Pulse 출력을 실제로 켠 런(ran)만, 아니면 None.
+    0x8C 동작은 reset_state 3값(모르는 값·없음이면 reset_ok 로 예/아니오)."""
+    if not s.get("ran"):
+        return None
+    lab = _RESET_LABEL.get(s.get("reset_state")) or ("예" if s.get("reset_ok") else "아니오")
+    return (f"[arc] 런 요약: 합계={s['run_total']} (soft={s['run_soft']} hard={s['run_hard']}) | "
+            f"점화={s['ign_total']} (soft={s['ign_soft']} hard={s['ign_hard']}) | "
+            f"증착={s['depo_total']} (soft={s['depo_soft']} hard={s['depo_hard']}) | "
+            f"0x8C 동작={lab}, 종료값 확정={'예' if s['final_read'] else '아니오'}")
 
 
 class ProcessRecordsMixin:
@@ -33,8 +46,10 @@ class ProcessRecordsMixin:
 
     # ───────── 런 시작·끝 기록(v1 'started'·'finished' 1701-2101) ─────────
     def _run_started(self, params: dict) -> None:
-        pname = str(params.get("process_name") or params.get("Process_name") or params.get("process_note") or "").strip() \
-            or f"Run CH{self.n}"
+        # v1 순서: 컨트롤러 start_process 가 먼저 이름을 정한다(비면 'Untitled' — process_controller.py:637-648) → 'started' 처리의
+        # 'Run CHn'(1704-1711)은 실제로 나오지 않는다. v2 는 시작 처리가 실행기보다 먼저라 같은 결과가 되게 'Untitled' 를 먼저.
+        pname = str(params.get("process_name") or params.get("process_note") or params.get("Process_name") or "").strip() \
+            or "Untitled"
         for k in ("process_name", "Process_name", "process_note"):
             params[k] = pname
         t0 = params.get("t0_pressed_wall") or datetime.fromtimestamp(self.clock.wall()).isoformat(timespec="seconds")
@@ -82,6 +97,12 @@ class ProcessRecordsMixin:
             if self.actions.dcp is not None:
                 s, h = self.actions.dcp.arc_counts
                 self.stats.params["soft_arc_count"], self.stats.params["hard_arc_count"] = s, h
+                try:                                     # v1 '[arc] 런 요약'(1886-1903 — 엑셀 열은 그대로, 로그만)
+                    line = arc_summary_line(self.actions.dcp.arc_summary)
+                    if line:
+                        self.log(f"DCPulse{self.n}", line)
+                except Exception:
+                    pass
             pp = self.stats.params
             self.excel.save_main(self.stats, operator=pp.get("operator", ""), substrate=pp.get("substrate", ""),
                                  note=pp.get("note", ""),     # 런타임 Arc 경고를 이미 냈으면 엑셀 Arc 경고 생략(v1 1926-1930)
@@ -94,7 +115,18 @@ class ProcessRecordsMixin:
             reason = str(d.get("reason") or (d.get("errors") or [""])[0] or "")
             if reason:
                 self.chat(f"❌ CH{self.n} 공정 실패 이유: {reason}")
+        try:                                            # v1 'finished' 처리(2028-2036) — 공유 MFC 면 이 챔버 몫만
+            others = self.actions.mfc_others()
+            if others:
+                self.log("MFC", f"다른 공정이 MFC 사용 중({', '.join(sorted(others))}) → mfc on_process_finished 생략"
+                                f"(공유 자원 보호), 이 챔버 몫만 정리")
+                self.actions.mfc.release_owner(self.actions.owner, "finished")
+            else:
+                self.actions.mfc.on_process_finished(bool(ok))
+        except Exception:
+            pass
         self.actions.apply_polling(False, {})
+        self.actions.run_use(False)
         self._heater_flags(False)
         self.last_end_t = self.clock.monotonic()
         kind = "done" if ok else ("aborted" if stopped else "error")

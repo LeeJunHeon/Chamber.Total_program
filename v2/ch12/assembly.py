@@ -5,7 +5,7 @@ Ch12System(장비·1초 행·기록) 위에 붙이는 것(순서)
     mark_finished 자리) → system.run_state
   2 CH2 히터(CH2_SUPPORTS_HEATER — HeaterDriver(PLC 해독기)·HeaterEngine, 엔진 이름 heater)·두께(CHn_SUPPORTS_THICKNESS 이고
     STM-100 이 켜진 챔버 — ThicknessEngine, 공정 엔진이 poll 한다)
-  3 챔버 공정 엔진 proc.ch1·proc.ch2(ProcessEngine — CH2 에 히터·두께) → 프리스퍼터 2개(PreSputter — 'UI 현재값' 시작은 core 를 지남)
+  3 챔버 공정 엔진 proc.ch1·proc.ch2(ProcessEngine — CH2 에 히터·두께) → 프리스퍼터 2개(PreSputter — 'UI 현재값'·전용 레시피 시작 모두 core 를 지남)
   4 플라즈마 클리닝(pc — chamber_busy = 그 CH 공정 엔진 busy, Robot CSV)·TSP(tsp — 매일 예약 복원)
   5 안전(Ch12Safety → system.safety)·명령 처리(Ch12Core → system.command)
   6 로봇: Robot CSV(RobotCsv — startup_recover) · RobotOps(v1 handlers — engines = EngineAdapter) · ops.core = core(로봇 명령도
@@ -434,6 +434,7 @@ def build(system, cfg: Optional[Dict[str, Any]] = None, *, settings_dir: Optiona
         if drv is not None and drv.enabled:
             asm.thickness[ch] = ThicknessEngine(clock, c, ch, driver=drv, settings_dir=sdir)
             system.register_engine(f"thk.{ch}", ThicknessHost(asm.thickness[ch], ch))
+            system.emit(f"{ch}.stm100", "log", f"{ch.upper()} 두께 모니터 서비스 시작 ({drv.p.host}:{drv.p.port})")   # main.py:1340
 
     # 3 챔버 공정 엔진(+ 공정 모니터·재고 DB)·프리스퍼터
     from v2.ch12 import inventory_db as INV, process_monitor as PM
@@ -472,8 +473,10 @@ def build(system, cfg: Optional[Dict[str, Any]] = None, *, settings_dir: Optiona
     system.command = asm.core.command
     for ch, e in asm.proc.items():
         p = PreSputter(clock, e, settings_dir=sdir, start_ui=lambda ch=ch: asm.core.presputter_start_ui(ch),
+                       start_recipe=lambda rows, name, ch=ch: asm.core.presputter_start_recipe(ch, rows, name),
                        log_sink=lambda line: system.emit("pc", "log", line))
         asm.presputter[ch] = p
+        e.web_state = (lambda e=e, p=p: dict(chamber_web_state(e), presputter=p.state()))   # 예약 표시(PC-115)
         if schedules:
             msg = p.restore()
             if msg:
