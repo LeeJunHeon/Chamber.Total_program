@@ -200,7 +200,8 @@ def test_normal_flow_ch2_mask_split_and_bindings(tmp_path):
             assert (r.mfc[ch].poll_gas, r.mfc[ch].poll_pressure) == (True, True) and r.mfc[ch].poll_users == set()
         eng.run_log.flush()
         assert eng.run_log.path.name.endswith("_CH2.log")
-        assert (Path(r.cfg["GDRIVE_LOG_DIR"]) / "CH2.xlsx").parent.exists()
+        x = eng.excel[2]
+        assert x.flush() and x.sender.flush() and (Path(r.cfg["GDRIVE_LOG_DIR"]) / "CH2.xlsx").exists()
     finally:
         r.stop()
 
