@@ -1,0 +1,2383 @@
+{
+ "_설명": "챔버12 웹 검사 골든 — 블록 검사·시퀀스 편집(v2.tools.make_web_golden_ch12 가 만든다 — 손으로 고치지 않음). 모양은 생성기 머리말",
+ "defsVersion": 1,
+ "defsHash": "9ff48c5cdbad15c1e3228d1198b87ff26927a18a0fb6557b48d95dfdaabddb6d",
+ "defs": {
+  "version": 1,
+  "blocks": {
+   "defs": [
+    {
+     "type": "heater_set",
+     "label": "히터 설정",
+     "params": [
+      {
+       "name": "target_c",
+       "type": "float",
+       "unit": "°C",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "목표 온도",
+       "desc": "상한 min(HEATER_MAX_TEMP, HEATER_SV_LIMIT_C)"
+      },
+      {
+       "name": "ramp_c_per_min",
+       "type": "float",
+       "unit": "°C/min",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": 60.0,
+       "minExclusive": true,
+       "enum": null,
+       "label": "램프",
+       "desc": "비우면 히터 기본 램프 속도"
+      }
+     ],
+     "steps": "HEATER_SET",
+     "v1": "pc:2289-2306",
+     "touches": true,
+     "chamber": 2,
+     "needs": "heater",
+     "skippable": false,
+     "skipCleanup": [],
+     "pausable": false,
+     "pause": "",
+     "resumable": false,
+     "resumeChecks": [],
+     "desc": "장비 설정 쓰기 — 재시작 뒤 이어가지 않음(안전 정지)"
+    },
+    {
+     "type": "heater_wait",
+     "label": "히터 도달·안정 대기",
+     "params": [
+      {
+       "name": "target_c",
+       "type": "float",
+       "unit": "°C",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "목표 온도",
+       "desc": "비우면 앞 히터 설정 블록의 목표"
+      },
+      {
+       "name": "soak_min",
+       "type": "float",
+       "unit": "분",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": 480.0,
+       "minExclusive": false,
+       "enum": null,
+       "label": "SOAK",
+       "desc": "도달 뒤 시간만 셈. 비우면 SOAK 없음"
+      }
+     ],
+     "steps": "HEATER_WAIT",
+     "v1": "pc:2307-2311",
+     "touches": true,
+     "chamber": 2,
+     "needs": "heater",
+     "skippable": true,
+     "skipCleanup": [
+      "히터 도달 대기 취소(cancel_heater) — 히터는 목표대로 계속 운전"
+     ],
+     "pausable": true,
+     "pause": "대기 타이머(SOAK 경과) 정지 — 히터는 목표 유지",
+     "resumable": true,
+     "resumeChecks": [
+      "heater_run",
+      "watchdog"
+     ],
+     "desc": ""
+    },
+    {
+     "type": "base_wait",
+     "label": "베이스 압력 대기(IG)",
+     "params": [
+      {
+       "name": "target_torr",
+       "type": "float",
+       "unit": "Torr",
+       "default": "cfg:PROCESS_DEFAULT_BASE_PRESSURE",
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "목표 압력",
+       "desc": ""
+      }
+     ],
+     "steps": "IG_CMD",
+     "v1": "pc:2314-2318",
+     "touches": true,
+     "chamber": null,
+     "needs": "",
+     "skippable": true,
+     "skipCleanup": [
+      "IG 대기·재점등 취소(cancel_ig)"
+     ],
+     "pausable": false,
+     "pause": "",
+     "resumable": false,
+     "resumeChecks": [],
+     "desc": "IG 점등·재점등·판정은 IG 드라이버가 돌린다 — 일시정지 없음, 재시작 뒤 이어가지 않음"
+    },
+    {
+     "type": "rga_scan",
+     "label": "RGA 스캔",
+     "params": [],
+     "steps": "RGA_SCAN",
+     "v1": "pc:2320-2324",
+     "touches": true,
+     "chamber": null,
+     "needs": "",
+     "skippable": true,
+     "skipCleanup": [
+      "RGA 스캔 결과를 기다리지 않음(늦게 온 완료는 무시 — _rga_is_stale)"
+     ],
+     "pausable": false,
+     "pause": "",
+     "resumable": false,
+     "resumeChecks": [],
+     "desc": ""
+    },
+    {
+     "type": "gas_prep",
+     "label": "가스 준비(Flow Off·밸브·영점)",
+     "params": [
+      {
+       "name": "ar",
+       "type": "bool",
+       "unit": "",
+       "default": false,
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "Ar",
+       "desc": ""
+      },
+      {
+       "name": "o2",
+       "type": "bool",
+       "unit": "",
+       "default": false,
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "O2",
+       "desc": ""
+      },
+      {
+       "name": "n2",
+       "type": "bool",
+       "unit": "",
+       "default": false,
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "N2",
+       "desc": "CH1 은 N2 라인 없음"
+      }
+     ],
+     "steps": "FLOW_OFF · VALVE_OPEN · PS_ZEROING · MFC_ZEROING — 고른 가스(하나도 안 고르면 전부, v1 use_any)",
+     "v1": "pc:2326-2350",
+     "touches": true,
+     "chamber": null,
+     "needs": "",
+     "skippable": false,
+     "skipCleanup": [],
+     "pausable": false,
+     "pause": "",
+     "resumable": false,
+     "resumeChecks": [],
+     "desc": "장비 설정 쓰기 — 재시작 뒤 이어가지 않음(안전 정지)"
+    },
+    {
+     "type": "gas_intro",
+     "label": "가스 주입",
+     "params": [
+      {
+       "name": "ar",
+       "type": "bool",
+       "unit": "",
+       "default": false,
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "Ar",
+       "desc": ""
+      },
+      {
+       "name": "ar_flow",
+       "type": "float",
+       "unit": "sccm",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "Ar 유량",
+       "desc": ""
+      },
+      {
+       "name": "o2",
+       "type": "bool",
+       "unit": "",
+       "default": false,
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "O2",
+       "desc": ""
+      },
+      {
+       "name": "o2_flow",
+       "type": "float",
+       "unit": "sccm",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "O2 유량",
+       "desc": ""
+      },
+      {
+       "name": "n2",
+       "type": "bool",
+       "unit": "",
+       "default": false,
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "N2",
+       "desc": ""
+      },
+      {
+       "name": "n2_flow",
+       "type": "float",
+       "unit": "sccm",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "N2 유량",
+       "desc": ""
+      }
+     ],
+     "steps": "PLC MV ON · 가스마다 PLC 밸브 ON · FLOW_SET · FLOW_ON",
+     "v1": "pc:2352-2373",
+     "touches": true,
+     "chamber": null,
+     "needs": "",
+     "skippable": false,
+     "skipCleanup": [],
+     "pausable": false,
+     "pause": "",
+     "resumable": false,
+     "resumeChecks": [],
+     "desc": "장비 설정 쓰기 — 재시작 뒤 이어가지 않음(안전 정지)"
+    },
+    {
+     "type": "pressure_ctrl",
+     "label": "압력 제어(채널 SP)",
+     "params": [
+      {
+       "name": "target",
+       "type": "float",
+       "unit": "mTorr",
+       "default": null,
+       "required": true,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "작업 압력",
+       "desc": "SP 읽기 실패 때 쓰는 목표(v1 working_pressure)"
+      },
+      {
+       "name": "timeout_sec",
+       "type": "float",
+       "unit": "s",
+       "default": "cfg:PC_PRESSURE_WAIT_TIMEOUT_S",
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "최대 대기",
+       "desc": ""
+      }
+     ],
+     "steps": "MFC SP3_ON(CH1)·SP4_ON(CH2) · WAIT_PRESSURE(그 SP setpoint 기준)",
+     "v1": "pc:2375-2412",
+     "touches": true,
+     "chamber": null,
+     "needs": "",
+     "skippable": true,
+     "skipCleanup": [
+      "압력 도달 대기만 끝냄 — SP 제어·가스는 그대로"
+     ],
+     "pausable": false,
+     "pause": "",
+     "resumable": true,
+     "resumeChecks": [
+      "gas",
+      "pressure"
+     ],
+     "desc": "이어가기는 WAIT_PRESSURE(가스 안정화) 중일 때만"
+    },
+    {
+     "type": "pressure_boost",
+     "label": "압력 부스트(SP2)",
+     "params": [
+      {
+       "name": "value",
+       "type": "float",
+       "unit": "mTorr",
+       "default": "cfg:PC_WORKING_PRESSURE_BOOST_TARGET",
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "SP2 목표",
+       "desc": ""
+      },
+      {
+       "name": "timeout_sec",
+       "type": "float",
+       "unit": "s",
+       "default": "cfg:PC_PRESSURE_WAIT_TIMEOUT_S",
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "최대 대기",
+       "desc": ""
+      }
+     ],
+     "steps": "SP2_SET · SP2_ON · WAIT_PRESSURE",
+     "v1": "pc:2559-2585",
+     "touches": true,
+     "chamber": null,
+     "needs": "",
+     "skippable": true,
+     "skipCleanup": [
+      "압력 도달 대기만 끝냄 — SP2 제어는 그대로"
+     ],
+     "pausable": false,
+     "pause": "",
+     "resumable": true,
+     "resumeChecks": [
+      "power_output",
+      "gas",
+      "pressure",
+      "power_select",
+      "heater_run",
+      "watchdog"
+     ],
+     "desc": "이어가기는 WAIT_PRESSURE 중일 때만"
+    },
+    {
+     "type": "pressure_set",
+     "label": "작업 압력(SP1)",
+     "params": [
+      {
+       "name": "value",
+       "type": "float",
+       "unit": "mTorr",
+       "default": null,
+       "required": true,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "SP1",
+       "desc": ""
+      }
+     ],
+     "steps": "SP1_SET · SP1_ON",
+     "v1": "pc:2586-2594",
+     "touches": true,
+     "chamber": null,
+     "needs": "",
+     "skippable": false,
+     "skipCleanup": [],
+     "pausable": false,
+     "pause": "",
+     "resumable": false,
+     "resumeChecks": [],
+     "desc": "장비 설정 쓰기 — 재시작 뒤 이어가지 않음(안전 정지)"
+    },
+    {
+     "type": "shutter",
+     "label": "셔터",
+     "params": [
+      {
+       "name": "action",
+       "type": "enum",
+       "unit": "",
+       "default": null,
+       "required": true,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": [
+        "open",
+        "close"
+       ],
+       "label": "동작",
+       "desc": ""
+      },
+      {
+       "name": "targets",
+       "type": "list",
+       "unit": "",
+       "default": null,
+       "required": true,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": [
+        "g1",
+        "g2",
+        "g3",
+        "ms"
+       ],
+       "label": "셔터",
+       "desc": "g1~g3(CH2 건 셔터)·ms(Main Shutter)"
+      }
+     ],
+     "steps": "PLC G1~G3·MS ON/OFF",
+     "v1": "pc:2420-2429·2657-2663",
+     "touches": true,
+     "chamber": null,
+     "needs": "",
+     "skippable": false,
+     "skipCleanup": [],
+     "pausable": false,
+     "pause": "",
+     "resumable": false,
+     "resumeChecks": [],
+     "desc": "장비 설정 쓰기 — 재시작 뒤 이어가지 않음(안전 정지)"
+    },
+    {
+     "type": "power_select",
+     "label": "Power Select(SW_RF_SELECT)",
+     "params": [],
+     "steps": "PLC SW_RF_SELECT ON(ch 인자 없음)",
+     "v1": "pc:2431-2436",
+     "touches": true,
+     "chamber": 2,
+     "needs": "",
+     "skippable": false,
+     "skipCleanup": [],
+     "pausable": false,
+     "pause": "",
+     "resumable": false,
+     "resumeChecks": [],
+     "desc": "안정화 대기는 뒤 대기 블록(기본 템플릿: PC_POWER_SELECT_SETTLE_MS)"
+    },
+    {
+     "type": "power_on",
+     "label": "파워 켜기",
+     "params": [
+      {
+       "name": "dc_power",
+       "type": "float",
+       "unit": "W",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "DC1",
+       "desc": ""
+      },
+      {
+       "name": "dc2_power",
+       "type": "float",
+       "unit": "W",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "DC2",
+       "desc": ""
+      },
+      {
+       "name": "dcp_power",
+       "type": "float",
+       "unit": "W",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "DC Pulse",
+       "desc": ""
+      },
+      {
+       "name": "dcp_freq_khz",
+       "type": "int",
+       "unit": "kHz",
+       "default": null,
+       "required": false,
+       "min": 20,
+       "max": 150,
+       "minExclusive": false,
+       "enum": null,
+       "label": "DC Pulse 주파수",
+       "desc": "비우면 장비값 유지"
+      },
+      {
+       "name": "dcp_off_us",
+       "type": "off",
+       "unit": "µs",
+       "default": null,
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "DC Pulse Off Time",
+       "desc": "숫자(1.0~min(10, 400/f)) 또는 DC, 비우면 유지"
+      },
+      {
+       "name": "rfp_power",
+       "type": "float",
+       "unit": "W",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "RF Pulse",
+       "desc": ""
+      },
+      {
+       "name": "rfp_freq_khz",
+       "type": "float",
+       "unit": "kHz",
+       "default": null,
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "RF Pulse 주파수",
+       "desc": "0.001~RFPULSE_FREQ_MAX_HZ/1000. 장비에는 Hz"
+      },
+      {
+       "name": "rfp_duty",
+       "type": "int",
+       "unit": "%",
+       "default": null,
+       "required": false,
+       "min": 1,
+       "max": 99,
+       "minExclusive": false,
+       "enum": null,
+       "label": "RF Pulse 듀티",
+       "desc": ""
+      },
+      {
+       "name": "rf_power",
+       "type": "float",
+       "unit": "W",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "RF 연속",
+       "desc": ""
+      }
+     ],
+     "steps": "DC_POWER_SET · DC2_POWER_SET · DC_PULSE_START · [CH2 SW_POWER_SELECT ON] RF_PULSE_START · [RF Pulse 없으면 SW_POWER_SELECT OFF] RF_POWER_SET — 병렬 = (DC∨DC2)∧(RF∨RF Pulse)",
+     "v1": "pc:2447-2550",
+     "touches": true,
+     "chamber": null,
+     "needs": "",
+     "skippable": false,
+     "skipCleanup": [],
+     "pausable": true,
+     "pause": "파워 램프 정지 — 지금 출력값 유지(목표 쓰기 멈춤), 재개하면 목표까지 램프 계속",
+     "resumable": false,
+     "resumeChecks": [],
+     "desc": "램프 도중 재시작은 이어가지 않음. RF Pulse 뒤 Power Delay 는 뒤 대기 블록(PC_RF_PULSE_POST_ON_DELAY_MS)"
+    },
+    {
+     "type": "wait",
+     "label": "대기",
+     "params": [
+      {
+       "name": "sec",
+       "type": "float",
+       "unit": "s",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "시간",
+       "desc": ""
+      }
+     ],
+     "steps": "DELAY int(round(초×1000)) ms(문구 = label, polling 없음)",
+     "v1": "pc:2437-2445·2552-2557·2609-2645",
+     "touches": false,
+     "chamber": null,
+     "needs": "",
+     "skippable": true,
+     "skipCleanup": [
+      "타이머만 끝냄"
+     ],
+     "pausable": true,
+     "pause": "타이머 정지 — 장비 상태 그대로",
+     "resumable": true,
+     "resumeChecks": [
+      "power_output",
+      "shutter",
+      "gas",
+      "pressure",
+      "power_select",
+      "heater_run",
+      "watchdog"
+     ],
+     "desc": "Shutter Delay·Power Select 안정화·Power Delay 도 이 블록"
+    },
+    {
+     "type": "pulse_set",
+     "label": "펄스 파워 변경",
+     "params": [
+      {
+       "name": "kind",
+       "type": "enum",
+       "unit": "",
+       "default": null,
+       "required": true,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": [
+        "dc",
+        "rf"
+       ],
+       "label": "장비",
+       "desc": ""
+      },
+      {
+       "name": "power",
+       "type": "float",
+       "unit": "W",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "파워",
+       "desc": ""
+      },
+      {
+       "name": "polling",
+       "type": "bool",
+       "unit": "",
+       "default": false,
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "폴링",
+       "desc": "메인 공정 중이면 true"
+      }
+     ],
+     "steps": "DC_PULSE_SET(REF_POWER 확인) · RF_PULSE_SET(no_wait)",
+     "v1": "pc:2609-2638",
+     "touches": true,
+     "chamber": null,
+     "needs": "",
+     "skippable": false,
+     "skipCleanup": [],
+     "pausable": false,
+     "pause": "",
+     "resumable": false,
+     "resumeChecks": [],
+     "desc": "장비 설정 쓰기 — 재시작 뒤 이어가지 않음(안전 정지)"
+    },
+    {
+     "type": "thickness_zero",
+     "label": "두께 영점·확인",
+     "params": [],
+     "steps": "THICKNESS_ZERO(THICKNESS_ZERO_CONFIRM_S)",
+     "v1": "pc:2647-2655",
+     "touches": true,
+     "chamber": null,
+     "needs": "thickness",
+     "skippable": false,
+     "skipCleanup": [],
+     "pausable": false,
+     "pause": "",
+     "resumable": false,
+     "resumeChecks": [],
+     "desc": "Main Shutter 열기 전(use_ms=F 여도 같은 자리)"
+    },
+    {
+     "type": "main",
+     "label": "메인 공정(시간)",
+     "params": [
+      {
+       "name": "min",
+       "type": "float",
+       "unit": "분",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "시간",
+       "desc": ""
+      },
+      {
+       "name": "integration_ms",
+       "type": "int",
+       "unit": "ms",
+       "default": "cfg:PROCESS_DEFAULT_OES_INTEGRATION_MS",
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "OES 적분",
+       "desc": ""
+      },
+      {
+       "name": "change_after_sec",
+       "type": "float",
+       "unit": "s",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "중간 변경 시점",
+       "desc": "메인 시작부터. 비우면 변경 없음"
+      },
+      {
+       "name": "change_kind",
+       "type": "enum",
+       "unit": "",
+       "default": null,
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": [
+        "dc",
+        "rf"
+       ],
+       "label": "변경 장비",
+       "desc": ""
+      },
+      {
+       "name": "change_power",
+       "type": "float",
+       "unit": "W",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "변경 파워",
+       "desc": ""
+      },
+      {
+       "name": "change_label",
+       "type": "str",
+       "unit": "",
+       "default": null,
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "변경 문구",
+       "desc": ""
+      }
+     ],
+     "steps": "OES_RUN(no_wait) · DELAY(polling) [· DC/RF_PULSE_SET · DELAY]",
+     "v1": "pc:2687-2731",
+     "touches": true,
+     "chamber": null,
+     "needs": "",
+     "skippable": true,
+     "skipCleanup": [
+      "메인 타이머 끝냄 → 다음 블록(끝 정지가 셔터·파워를 끔)",
+      "OES 측정 정지"
+     ],
+     "pausable": true,
+     "pause": "메인 타이머 정지 — 파워·가스·셔터 그대로(증착은 계속됨). OES 측정 시간은 늘지 않음(미확인)",
+     "resumable": true,
+     "resumeChecks": [
+      "power_output",
+      "shutter",
+      "gas",
+      "pressure",
+      "power_select",
+      "heater_run",
+      "watchdog"
+     ],
+     "desc": ""
+    },
+    {
+     "type": "thickness_main",
+     "label": "메인 공정(두께)",
+     "params": [
+      {
+       "name": "target_nm",
+       "type": "float",
+       "unit": "nm",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "목표 두께",
+       "desc": ""
+      },
+      {
+       "name": "dep_rate",
+       "type": "float",
+       "unit": "nm/s",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "증착률",
+       "desc": ""
+      },
+      {
+       "name": "integration_ms",
+       "type": "int",
+       "unit": "ms",
+       "default": "cfg:PROCESS_DEFAULT_OES_INTEGRATION_MS",
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "OES 적분",
+       "desc": ""
+      }
+     ],
+     "steps": "OES_RUN(상한 초, no_wait) · THICKNESS_WAIT(예상·상한)",
+     "v1": "pc:2665-2686",
+     "touches": true,
+     "chamber": null,
+     "needs": "thickness",
+     "skippable": true,
+     "skipCleanup": [
+      "두께 판정 중단(cancel_thickness)",
+      "OES 측정 정지"
+     ],
+     "pausable": false,
+     "pause": "",
+     "resumable": true,
+     "resumeChecks": [
+      "power_output",
+      "shutter",
+      "gas",
+      "pressure",
+      "power_select",
+      "heater_run",
+      "watchdog",
+      "thickness"
+     ],
+     "desc": "두께 도달은 장비 값으로 판정 — 일시정지 없음"
+    },
+    {
+     "type": "heater_hold",
+     "label": "히터 유지 측정 대기",
+     "params": [],
+     "steps": "HEATER_HOLD",
+     "v1": "pc:2596-2602",
+     "touches": true,
+     "chamber": 2,
+     "needs": "heater",
+     "skippable": true,
+     "skipCleanup": [
+      "유지 모드 측정 대기 취소(cancel_heater)"
+     ],
+     "pausable": false,
+     "pause": "",
+     "resumable": true,
+     "resumeChecks": [
+      "power_output",
+      "shutter",
+      "gas",
+      "pressure",
+      "power_select",
+      "heater_run",
+      "watchdog"
+     ],
+     "desc": ""
+    },
+    {
+     "type": "test",
+     "label": "TEST MODE",
+     "params": [
+      {
+       "name": "sec",
+       "type": "float",
+       "unit": "s",
+       "default": null,
+       "required": true,
+       "min": 1.0,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "시간",
+       "desc": ""
+      }
+     ],
+     "steps": "DELAY int(초×1000) ms 'TEST MODE (N s)'",
+     "v1": "pc:2154-2175",
+     "touches": false,
+     "chamber": null,
+     "needs": "",
+     "skippable": true,
+     "skipCleanup": [
+      "대기만 끊음 — 종료 절차 없음(v1 TEST STOP)"
+     ],
+     "pausable": true,
+     "pause": "타이머 정지",
+     "resumable": true,
+     "resumeChecks": [],
+     "desc": ""
+    },
+    {
+     "type": "row_delay",
+     "label": "대기 행(delay)",
+     "params": [
+      {
+       "name": "sec",
+       "type": "float",
+       "unit": "s",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "시간",
+       "desc": "1초씩 int(초) 번 센다"
+      },
+      {
+       "name": "label",
+       "type": "str",
+       "unit": "",
+       "default": null,
+       "required": true,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "표시",
+       "desc": ""
+      },
+      {
+       "name": "name",
+       "type": "str",
+       "unit": "",
+       "default": null,
+       "required": true,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "이름",
+       "desc": ""
+      }
+     ],
+     "steps": "ROW_DELAY(러너 대기 — 장비 명령·새 로그 없음)",
+     "v1": "rt:5127-5145",
+     "touches": false,
+     "chamber": null,
+     "needs": "",
+     "skippable": true,
+     "skipCleanup": [
+      "대기만 끝냄"
+     ],
+     "pausable": true,
+     "pause": "카운트다운 정지",
+     "resumable": true,
+     "resumeChecks": [],
+     "desc": ""
+    },
+    {
+     "type": "end_stop",
+     "label": "정상 끝 정지",
+     "params": [
+      {
+       "name": "skip",
+       "type": "parts",
+       "unit": "",
+       "default": null,
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": [
+        "ms_close",
+        "flow_off",
+        "valve_open",
+        "gun_close",
+        "gas_close",
+        "mv_close"
+       ],
+       "label": "뺄 단계",
+       "desc": "ms_close·flow_off·valve_open·gun_close·gas_close·mv_close 만. 파워 끄기(power)·릴레이(relay)는 뺄 수 없음"
+      }
+     ],
+     "steps": "v1 정상 종료 절차(구간 장비) — MS 닫기 · 파워 OFF · Flow Off · MFC Valve Open · 건 셔터 닫기 · SW_RF_SELECT OFF · PLC 가스 닫기 · MV 닫기",
+     "v1": "pc:2737-2832",
+     "touches": true,
+     "chamber": null,
+     "needs": "",
+     "skippable": false,
+     "skipCleanup": [],
+     "pausable": false,
+     "pause": "",
+     "resumable": false,
+     "resumeChecks": [],
+     "desc": "정지 순서 — 건너뛰기·일시정지·이어가기 없음"
+    }
+   ],
+   "blockKeys": [
+    "type",
+    "params",
+    "label",
+    "row"
+   ],
+   "limits": {
+    "labelMax": 120,
+    "maxBlocks": 500
+   },
+   "autoEndStopLabel": "자동 끝 정지",
+   "empty": "빈 값 = null 또는 공백뿐인 문자열(숫자 0 은 빈 값 아님). parts 형식은 [] 도 빈 값. params 가 없거나 거짓 값([]·\"\"·0·false)이면 {}. label 빈 값 = \"\"",
+   "rules": "값 범위·형식·장비 지원·같은 블록 안 값의 짝만 — 순서·조합 규칙 없음(v1 행 조합 검사는 v1 행에만)",
+   "valueRules": [
+    {
+     "id": "chamber_only",
+     "blocks": [
+      "*"
+     ],
+     "kind": "error",
+     "when": "정의 chamber 가 있고 지금 챔버와 다름",
+     "msg": "{pre}: CH{chamber} 에서는 쓸 수 없음(CH{def.chamber} 전용)"
+    },
+    {
+     "id": "needs_cap",
+     "blocks": [
+      "*"
+     ],
+     "kind": "error",
+     "when": "정의 needs(Caps 필드)가 꺼져 있음",
+     "msg": "{pre}: 이 챔버 설정에서 꺼져 있음(SUPPORTS_{NEEDS})"
+    },
+    {
+     "id": "gas_flow_blank",
+     "blocks": [
+      "gas_intro"
+     ],
+     "kind": "warn",
+     "when": "가스 true · 그 유량 값이 형식 오류 아님 · 유량 비움",
+     "msg": "{pre}: {g}_flow 비움 → 0 sccm(v1 공란 = 0)"
+    },
+    {
+     "id": "ch1_no_n2",
+     "blocks": [
+      "gas_prep",
+      "gas_intro"
+     ],
+     "kind": "error",
+     "when": "CH1 · n2 true",
+     "msg": "{pre}: n2: CH1 은 N2 라인 없음"
+    },
+    {
+     "id": "shutter_gun_exists",
+     "blocks": [
+      "shutter"
+     ],
+     "kind": "error",
+     "when": "targets 형식 오류 아님 · ms 가 아닌 대상이 설정 PROCESS_GUN_SHUTTERS(소문자)에 없음",
+     "msg": "{pre}: targets: 이 챔버에 없는 건 셔터 {miss}(PROCESS_GUN_SHUTTERS)"
+    },
+    {
+     "id": "power_cap",
+     "blocks": [
+      "power_on"
+     ],
+     "kind": "error",
+     "when": "dc_power·dc2_power·rf_power·dcp_power·rfp_power 순서로 — 숫자인데 Caps(dc·dc2·rf·dcp·rfp)가 꺼짐",
+     "msg": "{pre}: {k}: 이 챔버는 {lab} 미지원"
+    },
+    {
+     "id": "pulse_exclusive",
+     "blocks": [
+      "power_on"
+     ],
+     "kind": "error",
+     "when": "dcp_power·rfp_power 둘 다 숫자",
+     "msg": "{pre}: RF Pulse와 DC Pulse는 동시에 사용할 수 없습니다 (같은 시리얼 포트)"
+    },
+    {
+     "id": "rfp_freq_range",
+     "blocks": [
+      "power_on"
+     ],
+     "kind": "error",
+     "when": "rfp_freq_khz 숫자 · 0.001 ≤ 값 ≤ RFPULSE_FREQ_MAX_HZ/1000(0 이하·오류면 30) 아님",
+     "msg": "{pre}: rfp_freq_khz: 허용 범위 0.001~{fmax:g}kHz 밖"
+    },
+    {
+     "id": "dcp_off_range",
+     "blocks": [
+      "power_on"
+     ],
+     "kind": "error",
+     "when": "dcp_off_us 형식 오류 아님 · 비우지 않음 — recipe_check.check_dc_pulse(freq = dcp_freq_khz 숫자면, off = 'DC' 글 또는 round(값, 1)) 의 'DC Pulse Freq' 로 시작하지 않는 오류",
+     "msg": "{pre}: {check_dc_pulse 문구}"
+    },
+    {
+     "id": "heater_limit",
+     "blocks": [
+      "heater_set"
+     ],
+     "kind": "error",
+     "when": "target_c 숫자 · 값 > min(HEATER_MAX_TEMP, HEATER_SV_LIMIT_C)(recipe_check.heater_limit_c)",
+     "msg": "{pre}: target_c: {v:g} > {lim:g}°C"
+    },
+    {
+     "id": "main_change_together",
+     "blocks": [
+      "main"
+     ],
+     "kind": "error",
+     "when": "change_after_sec·change_kind·change_power 중 일부만 비우지 않음",
+     "msg": "{pre}: change_after_sec·change_kind·change_power 는 함께 넣어야 함"
+    },
+    {
+     "id": "heater_wait_target",
+     "blocks": [
+      "heater_wait"
+     ],
+     "kind": "error",
+     "when": "(오류 없을 때 펼치기) target_c 비움 · 목록에서 앞에 heater_set 이 없음 — 첫 번째 것만",
+     "msg": "펼치기 실패: 히터 도달 대기: 목표 없음(앞에 히터 설정 블록이 없고 target_c 도 비었다)"
+    }
+   ],
+   "shutdownParts": [
+    {
+     "id": "ms_close",
+     "label": "Main Shutter 닫기",
+     "skippable": true
+    },
+    {
+     "id": "power",
+     "label": "파워 끄기(DC1·DC2·RF·DC Pulse·RF Pulse, CH2 RF Pulse 뒤 SW_POWER_SELECT OFF)",
+     "skippable": false
+    },
+    {
+     "id": "flow_off",
+     "label": "MFC Flow Off(쓴 가스, 없으면 전부)",
+     "skippable": true
+    },
+    {
+     "id": "valve_open",
+     "label": "전체 MFC Valve Open",
+     "skippable": true
+    },
+    {
+     "id": "gun_close",
+     "label": "Gun Shutter 닫기",
+     "skippable": true
+    },
+    {
+     "id": "relay",
+     "label": "Power Select OFF (SW_RF_SELECT)",
+     "skippable": false
+    },
+    {
+     "id": "gas_close",
+     "label": "PLC 가스 밸브 닫기(전부)",
+     "skippable": true
+    },
+    {
+     "id": "mv_close",
+     "label": "메인 밸브 닫기",
+     "skippable": true
+    }
+   ],
+   "endStopMustKeep": [
+    "power",
+    "relay"
+   ],
+   "resumeChecks": {
+    "power_output": "파워 출력 — 이 구간에서 켠 DC·DC2·RF·DC Pulse·RF Pulse 가 켜져 있고 목표 근처(끈 것은 꺼져 있음)",
+    "shutter": "셔터 — Main Shutter·건 셔터 열림/닫힘이 저널과 같음(PLC 코일)",
+    "gas": "가스 — 메인 밸브·가스 밸브(PLC)·MFC 유량 설정과 FLOW ON",
+    "pressure": "압력 — 선택된 SP·설정값(SP1·SP2·채널 SP)과 지금 압력이 범위 안",
+    "power_select": "Power Select 릴레이 — SW_RF_SELECT·SW_POWER_SELECT 가 저널과 같음",
+    "heater_run": "CH2 히터 RUN·목표값이 저널과 같음",
+    "watchdog": "CH2 히터 래더 워치독 이상(WD_ERR) 없음",
+    "thickness": "두께 모니터 연결·크리스탈 정상·기준점(저널) 있음"
+   },
+   "edit": {
+    "ops": [
+     "insert",
+     "delete",
+     "move"
+    ],
+    "reasons": [
+     "EDIT_STARTED_BLOCK",
+     "EDIT_BAD_OP",
+     "EDIT_INVALID"
+    ],
+    "desc": "아직 시작 안 한 블록만 추가·삭제·순서 변경(started_upto = 시작한 맨 위 블록 수), 편집마다 전체 재검사 · 통과하면 판 번호 +1"
+   },
+   "adjust": {
+    "command": "PROCESS_ADJUST",
+    "items": [
+     {
+      "device": "mfc",
+      "item": "ar_flow",
+      "key": "mfc.ar_flow",
+      "param": {
+       "name": "value",
+       "type": "float",
+       "unit": "sccm",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "",
+       "desc": ""
+      },
+      "apply": "MFC FLOW_SET(ch 1) → 되읽기(v1 device/mfc.py FLOW_SET 확인)",
+      "whenLive": "Ar FLOW_SET 이 끝났으면",
+      "label": "Ar 유량"
+     },
+     {
+      "device": "mfc",
+      "item": "o2_flow",
+      "key": "mfc.o2_flow",
+      "param": {
+       "name": "value",
+       "type": "float",
+       "unit": "sccm",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "",
+       "desc": ""
+      },
+      "apply": "MFC FLOW_SET(ch 2) → 되읽기",
+      "whenLive": "O2 FLOW_SET 이 끝났으면",
+      "label": "O2 유량"
+     },
+     {
+      "device": "mfc",
+      "item": "n2_flow",
+      "key": "mfc.n2_flow",
+      "param": {
+       "name": "value",
+       "type": "float",
+       "unit": "sccm",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "",
+       "desc": ""
+      },
+      "apply": "MFC FLOW_SET(ch 3) → 되읽기(CH2 만)",
+      "whenLive": "N2 FLOW_SET 이 끝났으면",
+      "label": "N2 유량"
+     },
+     {
+      "device": "mfc",
+      "item": "wp",
+      "key": "mfc.wp",
+      "param": {
+       "name": "value",
+       "type": "float",
+       "unit": "mTorr",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "",
+       "desc": ""
+      },
+      "apply": "MFC SP1_SET → 되읽기",
+      "whenLive": "SP1_SET 이 끝났으면",
+      "label": "작업 압력(SP1)"
+     },
+     {
+      "device": "dc",
+      "item": "power",
+      "key": "dc.power",
+      "param": {
+       "name": "value",
+       "type": "float",
+       "unit": "W",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "",
+       "desc": ""
+      },
+      "apply": "DC 연속 새 목표(send_dc_power — 램프)",
+      "whenLive": "DC1 을 켰으면",
+      "label": "DC1 파워"
+     },
+     {
+      "device": "dc2",
+      "item": "power",
+      "key": "dc2.power",
+      "param": {
+       "name": "value",
+       "type": "float",
+       "unit": "W",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "",
+       "desc": ""
+      },
+      "apply": "DC2 새 목표(send_dc_power2)",
+      "whenLive": "DC2 를 켰으면",
+      "label": "DC2 파워"
+     },
+     {
+      "device": "rf",
+      "item": "power",
+      "key": "rf.power",
+      "param": {
+       "name": "value",
+       "type": "float",
+       "unit": "W",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "",
+       "desc": ""
+      },
+      "apply": "RF 연속 새 목표(send_rf_power — 램프)",
+      "whenLive": "RF 를 켰으면",
+      "label": "RF 파워"
+     },
+     {
+      "device": "dcp",
+      "item": "power",
+      "key": "dcp.power",
+      "param": {
+       "name": "value",
+       "type": "float",
+       "unit": "W",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "",
+       "desc": ""
+      },
+      "apply": "DC Pulse set_dc_pulse_power(출력 유지 + REF_POWER 확인 — v1 DC_PULSE_SET)",
+      "whenLive": "DC Pulse 를 켰으면",
+      "label": "DC Pulse 파워"
+     },
+     {
+      "device": "rfp",
+      "item": "power",
+      "key": "rfp.power",
+      "param": {
+       "name": "value",
+       "type": "float",
+       "unit": "W",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "",
+       "desc": ""
+      },
+      "apply": "RF Pulse set_rf_pulse_power(출력 유지 — v1 RF_PULSE_SET)",
+      "whenLive": "RF Pulse 를 켰으면",
+      "label": "RF Pulse 파워"
+     },
+     {
+      "device": "heater",
+      "item": "target",
+      "key": "heater.target",
+      "param": {
+       "name": "value",
+       "type": "float",
+       "unit": "°C",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "",
+       "desc": ""
+      },
+      "apply": "CH2 히터 목표 변경(heater_set 목표만 — 운전 유지)",
+      "whenLive": "히터 설정이 끝났으면",
+      "label": "히터 목표"
+     },
+     {
+      "device": "process",
+      "item": "main_remaining",
+      "key": "process.main_remaining",
+      "param": {
+       "name": "value",
+       "type": "float",
+       "unit": "s",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "",
+       "desc": ""
+      },
+      "apply": "지금 메인 블록 남은 시간 = 값(아직이면 다음 메인 블록 길이)",
+      "whenLive": "메인 블록이 돌고 있으면",
+      "label": "메인 남은 시간"
+     },
+     {
+      "device": "process",
+      "item": "skip_wait",
+      "key": "process.skip_wait",
+      "param": {
+       "name": "value",
+       "type": "bool",
+       "unit": "",
+       "default": null,
+       "required": true,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "",
+       "desc": ""
+      },
+      "apply": "지금 대기 블록을 바로 끝냄(value=true) — 건너뛰기와 같은 정리",
+      "whenLive": "대기 블록이 돌고 있을 때만",
+      "label": "지금 대기 끝내기"
+     }
+    ]
+   }
+  },
+  "cfg": {
+   "keys": [
+    {
+     "key": "PROCESS_GUN_SHUTTERS",
+     "field": "gun_shutters",
+     "type": "list",
+     "use": "셔터 블록 대상 검사·기본 템플릿 건 셔터 순서"
+    },
+    {
+     "key": "PROCESS_DEFAULT_BASE_PRESSURE",
+     "field": "base_pressure",
+     "type": "float",
+     "use": "base_wait target_torr 기본(cfg:)"
+    },
+    {
+     "key": "PROCESS_DEFAULT_OES_INTEGRATION_MS",
+     "field": "integration_ms",
+     "type": "int",
+     "use": "main·thickness_main 적분 기본(cfg:)"
+    },
+    {
+     "key": "PC_PRESSURE_WAIT_TIMEOUT_S",
+     "field": "pressure_wait_timeout_s",
+     "type": "float",
+     "use": "압력 대기 최대(cfg:)"
+    },
+    {
+     "key": "PC_RF_PULSE_POST_ON_DELAY_MS",
+     "field": "rf_pulse_post_on_delay_ms",
+     "type": "int",
+     "use": "기본 템플릿 Power Delay"
+    },
+    {
+     "key": "PC_WORKING_PRESSURE_BOOST_TARGET",
+     "field": "boost_target",
+     "type": "float",
+     "use": "SP2 부스트 목표(cfg:)·부스트 여부"
+    },
+    {
+     "key": "PC_POWER_SELECT_SETTLE_MS",
+     "field": "power_select_settle_ms",
+     "type": "int",
+     "use": "기본 템플릿 Power Select 안정화"
+    },
+    {
+     "key": "RFPULSE_FREQ_MAX_HZ",
+     "field": "",
+     "type": "float",
+     "use": "RF Pulse 주파수 상한(Hz, 0 이하·오류면 30000)"
+    },
+    {
+     "key": "SUPPORTS_DC_CONT",
+     "field": "",
+     "type": "bool",
+     "use": "caps.dc(없으면 SUPPORTS_DC, 그것도 없으면 CH2)"
+    },
+    {
+     "key": "SUPPORTS_DC",
+     "field": "",
+     "type": "bool",
+     "use": "caps.dc"
+    },
+    {
+     "key": "SUPPORTS_DC_CONT2",
+     "field": "",
+     "type": "bool",
+     "use": "caps.dc2(없으면 SUPPORTS_DC2, 없으면 false) — CH2 · 히터 꺼짐일 때만"
+    },
+    {
+     "key": "SUPPORTS_DC2",
+     "field": "",
+     "type": "bool",
+     "use": "caps.dc2"
+    },
+    {
+     "key": "SUPPORTS_RF_CONT",
+     "field": "",
+     "type": "bool",
+     "use": "caps.rf(CH2 는 늘 true, CH1 은 없으면 false)"
+    },
+    {
+     "key": "SUPPORTS_DC_PULSE",
+     "field": "",
+     "type": "bool",
+     "use": "caps.dcp(없으면 SUPPORTS_DCPULSE, 없으면 CH1)"
+    },
+    {
+     "key": "SUPPORTS_DCPULSE",
+     "field": "",
+     "type": "bool",
+     "use": "caps.dcp"
+    },
+    {
+     "key": "SUPPORTS_RFPULSE",
+     "field": "",
+     "type": "bool",
+     "use": "caps.rfp(없으면 SUPPORTS_RF_PULSE, 없으면 CH2)"
+    },
+    {
+     "key": "SUPPORTS_RF_PULSE",
+     "field": "",
+     "type": "bool",
+     "use": "caps.rfp"
+    },
+    {
+     "key": "SUPPORTS_HEATER",
+     "field": "",
+     "type": "bool",
+     "use": "caps.heater(CH2 만)"
+    },
+    {
+     "key": "SUPPORTS_THICKNESS",
+     "field": "",
+     "type": "bool",
+     "use": "caps.thickness"
+    }
+   ],
+   "plainKeys": [
+    {
+     "key": "CH2_HEATER_SV_LIMIT_C",
+     "default": 900.0,
+     "use": "히터 목표 상한"
+    },
+    {
+     "key": "CH2_HEATER_MAX_TEMP",
+     "default": 900.0,
+     "use": "히터 목표 상한"
+    }
+   ],
+   "channelRule": "CH{n}_키 값이 null 이 아니면 그것, 아니면 키 값, 둘 다 null 이면 기본값. 목록·사전 기본값인 키는 글이면 JSON",
+   "stepCfgDefaults": {
+    "1": {
+     "chamber": 1,
+     "gas_info": {
+      "AR": {
+       "channel": 1
+      },
+      "O2": {
+       "channel": 2
+      },
+      "N2": {
+       "channel": 3
+      }
+     },
+     "gun_shutters": [],
+     "sp_on_cmd": "SP3_ON",
+     "sp_label": "SP3",
+     "sp_index": 3,
+     "base_pressure": 1e-05,
+     "integration_ms": 60,
+     "pressure_wait_timeout_s": 180.0,
+     "rf_pulse_post_on_delay_ms": 20000,
+     "boost_target": 10.0,
+     "power_select_settle_ms": 7000,
+     "zero_confirm_s": 5.0,
+     "zero_confirm_nm": 2.0,
+     "max_time_ratio": 2.0,
+     "max_time_margin_s": 300.0
+    },
+    "2": {
+     "chamber": 2,
+     "gas_info": {
+      "AR": {
+       "channel": 1
+      },
+      "O2": {
+       "channel": 2
+      },
+      "N2": {
+       "channel": 3
+      }
+     },
+     "gun_shutters": [
+      "G1",
+      "G2",
+      "G3"
+     ],
+     "sp_on_cmd": "SP4_ON",
+     "sp_label": "SP4",
+     "sp_index": 4,
+     "base_pressure": 1e-05,
+     "integration_ms": 60,
+     "pressure_wait_timeout_s": 180.0,
+     "rf_pulse_post_on_delay_ms": 20000,
+     "boost_target": 10.0,
+     "power_select_settle_ms": 7000,
+     "zero_confirm_s": 5.0,
+     "zero_confirm_nm": 2.0,
+     "max_time_ratio": 2.0,
+     "max_time_margin_s": 300.0
+    }
+   },
+   "rfpFreqMaxHzDefault": 30000.0
+  },
+  "recipe": {
+   "templateColumns": [
+    "#",
+    "Process_name",
+    "delay",
+    "chuck_position",
+    "main_shutter",
+    "integration_time",
+    "Ar",
+    "O2",
+    "N2",
+    "Ar_flow",
+    "O2_flow",
+    "N2_flow",
+    "base_pressure",
+    "working_pressure",
+    "shutter_delay",
+    "process_time",
+    "dep_rate",
+    "thickness",
+    "tooling",
+    "density",
+    "z_factor",
+    "gun1",
+    "gun2",
+    "gun3",
+    "G1 Target",
+    "G2 Target",
+    "G3 Target",
+    "power_select",
+    "use_dc_power",
+    "dc_power",
+    "use_dc_power2",
+    "dc_power2",
+    "use_rf_power",
+    "rf_power",
+    "use_dc_pulse",
+    "dc_pulse_power",
+    "dc_pulse_freq",
+    "dc_pulse_off_time",
+    "use_rf_pulse",
+    "rf_pulse_power",
+    "rf_pulse_freq",
+    "rf_pulse_duty_cycle",
+    "power_change_time",
+    "change_power_value",
+    "use_heater",
+    "heater_temp",
+    "heater_ramp",
+    "heater_soak"
+   ],
+   "extraColumns": [
+    "dep.rate",
+    "dc_pulse_duty_cycle",
+    "time",
+    "G1_target_name",
+    "G2_target_name",
+    "G3_target_name",
+    "use_g1",
+    "use_g2",
+    "use_g3",
+    "process_note"
+   ],
+   "columnDoc": {
+    "#": {
+     "desc": "'test' 면 TEST 행(장비 제어 없이 time 만큼 대기), 그 밖은 번호(Process_name 이 비면 이름)",
+     "unit": "",
+     "blank": "",
+     "key": "test_mode"
+    },
+    "Process_name": {
+     "desc": "공정 이름(비면 '#' → '공정 N'). 'delay 10m' 꼴이면 대기 행",
+     "unit": "",
+     "blank": "",
+     "key": "process_note"
+    },
+    "delay": {
+     "desc": "대기 행 — 숫자만이면 분, 아니면 30s·5m·1h30m(단위 없는 숫자 문자열 해석 0 초)",
+     "unit": "분",
+     "blank": "대기 행 아님",
+     "key": ""
+    },
+    "chuck_position": {
+     "desc": "공정 전 Chuck 위치 up/mid/down",
+     "unit": "",
+     "blank": "이동 안 함",
+     "key": "chuck_position"
+    },
+    "main_shutter": {
+     "desc": "T 면 Main Shutter 열기(닫기는 항상)",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_ms"
+    },
+    "integration_time": {
+     "desc": "OES 적분 시간",
+     "unit": "ms",
+     "blank": "60",
+     "key": "integration_time"
+    },
+    "Ar": {
+     "desc": "Ar 사용",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_ar"
+    },
+    "O2": {
+     "desc": "O2 사용",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_o2"
+    },
+    "N2": {
+     "desc": "N2 사용(CH1 은 라인 없음 — 무시)",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_n2"
+    },
+    "Ar_flow": {
+     "desc": "Ar 유량",
+     "unit": "sccm",
+     "blank": "0",
+     "key": "ar_flow"
+    },
+    "O2_flow": {
+     "desc": "O2 유량",
+     "unit": "sccm",
+     "blank": "0",
+     "key": "o2_flow"
+    },
+    "N2_flow": {
+     "desc": "N2 유량",
+     "unit": "sccm",
+     "blank": "0",
+     "key": "n2_flow"
+    },
+    "base_pressure": {
+     "desc": "베이스 압력 목표(IG)",
+     "unit": "Torr",
+     "blank": "1e-5",
+     "key": "base_pressure"
+    },
+    "working_pressure": {
+     "desc": "작업 압력(SP1·채널 SP 대기 목표, < 부스트 목표면 SP2 먼저)",
+     "unit": "mTorr",
+     "blank": "0",
+     "key": "working_pressure"
+    },
+    "shutter_delay": {
+     "desc": "Shutter Delay",
+     "unit": "분",
+     "blank": "0(단계 없음)",
+     "key": "shutter_delay"
+    },
+    "process_time": {
+     "desc": "메인 공정 시간(비면 thickness÷dep_rate 역산)",
+     "unit": "분",
+     "blank": "0",
+     "key": "process_time"
+    },
+    "dep_rate": {
+     "desc": "증착률(헤더 dep.rate 도 됨, >0 만)",
+     "unit": "nm/s",
+     "blank": "없음",
+     "key": "dep_rate"
+    },
+    "thickness": {
+     "desc": "목표 두께(두께 모니터 채널이면 Thickness 모드)",
+     "unit": "nm",
+     "blank": "없음",
+     "key": "thickness"
+    },
+    "tooling": {
+     "desc": "Thickness 모드 재료값 tooling(10~399)",
+     "unit": "%",
+     "blank": "Factor 설정",
+     "key": "tooling"
+    },
+    "density": {
+     "desc": "재료 밀도(0.5~99.99)",
+     "unit": "g/cm3",
+     "blank": "Factor 설정",
+     "key": "density"
+    },
+    "z_factor": {
+     "desc": "Z-factor(0.1~9.999)",
+     "unit": "",
+     "blank": "Factor 설정",
+     "key": "z_factor"
+    },
+    "gun1": {
+     "desc": "Gun1 사용(CH2 건 셔터)",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_g1"
+    },
+    "gun2": {
+     "desc": "Gun2 사용",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_g2"
+    },
+    "gun3": {
+     "desc": "Gun3 사용",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_g3"
+    },
+    "G1 Target": {
+     "desc": "G1 타겟 이름(비면 재고 DB·화면값)",
+     "unit": "",
+     "blank": "",
+     "key": "G1 Target"
+    },
+    "G2 Target": {
+     "desc": "G2 타겟 이름",
+     "unit": "",
+     "blank": "",
+     "key": "G2 Target"
+    },
+    "G3 Target": {
+     "desc": "G3 타겟 이름",
+     "unit": "",
+     "blank": "",
+     "key": "G3 Target"
+    },
+    "power_select": {
+     "desc": "CH2 SW_RF_SELECT 켜기 + 안정화 대기",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_power_select"
+    },
+    "use_dc_power": {
+     "desc": "DC1 연속",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_dc_power"
+    },
+    "dc_power": {
+     "desc": "DC1 파워",
+     "unit": "W",
+     "blank": "0",
+     "key": "dc_power"
+    },
+    "use_dc_power2": {
+     "desc": "DC2 연속(폐지 — CH2 히터와 배타)",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_dc_power2"
+    },
+    "dc_power2": {
+     "desc": "DC2 파워",
+     "unit": "W",
+     "blank": "0",
+     "key": "dc_power2"
+    },
+    "use_rf_power": {
+     "desc": "RF 연속",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_rf_power"
+    },
+    "rf_power": {
+     "desc": "RF 파워",
+     "unit": "W",
+     "blank": "0",
+     "key": "rf_power"
+    },
+    "use_dc_pulse": {
+     "desc": "DC Pulse(이 열만으로 사용 여부 — D04)",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_dc_pulse"
+    },
+    "dc_pulse_power": {
+     "desc": "DC Pulse 파워",
+     "unit": "W",
+     "blank": "0",
+     "key": "dc_pulse_power"
+    },
+    "dc_pulse_freq": {
+     "desc": "DC Pulse 주파수(정수 20~150)",
+     "unit": "kHz",
+     "blank": "장비값 유지",
+     "key": "dc_pulse_freq"
+    },
+    "dc_pulse_off_time": {
+     "desc": "DC Pulse Off Time(숫자 µs 소수 1자리 | DC)",
+     "unit": "µs",
+     "blank": "장비값 유지",
+     "key": "dc_pulse_off_time"
+    },
+    "use_rf_pulse": {
+     "desc": "RF Pulse(이 열만으로 사용 여부 — D04)",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_rf_pulse"
+    },
+    "rf_pulse_power": {
+     "desc": "RF Pulse 파워",
+     "unit": "W",
+     "blank": "0",
+     "key": "rf_pulse_power"
+    },
+    "rf_pulse_freq": {
+     "desc": "RF Pulse 주파수(실수, 장비에는 Hz)",
+     "unit": "kHz",
+     "blank": "장비값 유지",
+     "key": "rf_pulse_freq"
+    },
+    "rf_pulse_duty_cycle": {
+     "desc": "RF Pulse 듀티(정수 1~99)",
+     "unit": "%",
+     "blank": "장비값 유지",
+     "key": "rf_pulse_duty"
+    },
+    "power_change_time": {
+     "desc": "중간 펄스 파워 변경 시점(숫자만 = 초, 30s·5m·1h30m) — Shutter Delay 시작부터",
+     "unit": "",
+     "blank": "변경 없음",
+     "key": "power_change_time"
+    },
+    "change_power_value": {
+     "desc": "중간 변경 파워(power_change_time 과 함께)",
+     "unit": "W",
+     "blank": "변경 없음",
+     "key": "change_power_value"
+    },
+    "use_heater": {
+     "desc": "CH2 히터 사용",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_heater"
+    },
+    "heater_temp": {
+     "desc": "히터 목표",
+     "unit": "°C",
+     "blank": "없음",
+     "key": "heater_temp"
+    },
+    "heater_ramp": {
+     "desc": "히터 램프",
+     "unit": "°C/min",
+     "blank": "기본 램프",
+     "key": "heater_ramp"
+    },
+    "heater_soak": {
+     "desc": "도달 뒤 SOAK",
+     "unit": "분",
+     "blank": "없음",
+     "key": "heater_soak"
+    }
+   },
+   "tfTrue": [
+    "T",
+    "TRUE",
+    "1",
+    "Y",
+    "YES"
+   ],
+   "tfFalse": [
+    "F",
+    "FALSE",
+    "0",
+    "N",
+    "NO"
+   ],
+   "raw": {
+    "code": "E230",
+    "prefix": "레시피 오류",
+    "maxShown": 20,
+    "floatKeys": [
+     "base_pressure",
+     "working_pressure",
+     "process_time",
+     "shutter_delay",
+     "thickness",
+     "dep_rate",
+     "dep.rate",
+     "dc_power",
+     "dc_power2",
+     "rf_power",
+     "dc_pulse_power",
+     "rf_pulse_power",
+     "Ar_flow",
+     "O2_flow",
+     "N2_flow",
+     "change_power_value",
+     "rf_pulse_freq",
+     "heater_temp",
+     "heater_ramp",
+     "heater_soak",
+     "tooling",
+     "density",
+     "z_factor"
+    ],
+    "rangeKeys": {
+     "tooling": [
+      10.0,
+      399.0,
+      "%"
+     ],
+     "density": [
+      0.5,
+      99.99,
+      "g/cm3"
+     ],
+     "z_factor": [
+      0.1,
+      9.999,
+      ""
+     ]
+    },
+    "intKeys": [
+     "integration_time",
+     "dc_pulse_freq",
+     "dc_pulse_duty_cycle",
+     "rf_pulse_duty_cycle"
+    ],
+    "offTimeKeys": [
+     "dc_pulse_off_time"
+    ],
+    "tfKeys": [
+     "gun1",
+     "gun2",
+     "gun3",
+     "use_dc_pulse",
+     "use_rf_pulse",
+     "use_rf_power",
+     "use_dc_power",
+     "use_dc_power2",
+     "Ar",
+     "O2",
+     "N2",
+     "main_shutter",
+     "power_select",
+     "use_heater"
+    ],
+    "tfTrue": [
+     "T",
+     "TRUE",
+     "1",
+     "Y",
+     "YES"
+    ],
+    "tfFalse": [
+     "F",
+     "FALSE",
+     "0",
+     "N",
+     "NO"
+    ],
+    "enumKeys": {
+     "chuck_position": [
+      "up",
+      "mid",
+      "down"
+     ]
+    },
+    "durationKeys": [
+     "power_change_time"
+    ],
+    "pair": [
+     "change_power_value",
+     "power_change_time"
+    ]
+   },
+   "norm": {
+    "heaterRampMax": 60.0,
+    "heaterSoakMax": 480.0,
+    "dcpFreq": [
+     20,
+     150
+    ],
+    "dcpOff": [
+     1.0,
+     10.0
+    ]
+   },
+   "durationPattern": "(?:(\\d+(?:\\.\\d+)?)h)?(?:(\\d+(?:\\.\\d+)?)m)?(?:(\\d+(?:\\.\\d+)?)s)?",
+   "delayNamePattern": "^\\s*delay\\s*(\\d+)\\s*([smhd]?)\\s*$"
+  }
+ },
+ "cfg": {
+  "CH1_PROCESS_GUN_SHUTTERS": "[]",
+  "CH1_PROCESS_PRESSURE_CONTROL_SP_INDEX": 3,
+  "CH1_PROCESS_PRESSURE_CONTROL_SP_LABEL": "SP3",
+  "CH1_PROCESS_PRESSURE_CONTROL_SP_ON_CMD": "SP3_ON",
+  "CH1_RFPULSE_FREQ_MAX_HZ": 30000,
+  "CH1_SUPPORTS_DC": false,
+  "CH1_SUPPORTS_THICKNESS": false,
+  "CH1_THICKNESS_MAX_TIME_MARGIN_S": 300.0,
+  "CH1_THICKNESS_MAX_TIME_RATIO": 2.0,
+  "CH1_THICKNESS_ZERO_CONFIRM_NM": 2.0,
+  "CH1_THICKNESS_ZERO_CONFIRM_S": 5.0,
+  "CH2_HEATER_MAX_TEMP": 900.0,
+  "CH2_HEATER_SV_LIMIT_C": 900.0,
+  "CH2_PC_RF_PULSE_POST_ON_DELAY_MS": 30000,
+  "CH2_PROCESS_GUN_SHUTTERS": "[\"G1\", \"G2\", \"G3\"]",
+  "CH2_PROCESS_PRESSURE_CONTROL_SP_INDEX": 4,
+  "CH2_PROCESS_PRESSURE_CONTROL_SP_LABEL": "SP4",
+  "CH2_PROCESS_PRESSURE_CONTROL_SP_ON_CMD": "SP4_ON",
+  "CH2_RFPULSE_FREQ_MAX_HZ": 30000,
+  "CH2_SUPPORTS_DC2": true,
+  "CH2_SUPPORTS_DCPULSE": true,
+  "CH2_SUPPORTS_HEATER": true,
+  "CH2_SUPPORTS_RFPULSE": true,
+  "CH2_SUPPORTS_THICKNESS": true,
+  "CH2_THICKNESS_MAX_TIME_MARGIN_S": 300.0,
+  "CH2_THICKNESS_MAX_TIME_RATIO": 2.0,
+  "CH2_THICKNESS_ZERO_CONFIRM_NM": 2.0,
+  "CH2_THICKNESS_ZERO_CONFIRM_S": 5.0,
+  "PC_POWER_SELECT_SETTLE_MS": 7000,
+  "PC_PRESSURE_WAIT_TIMEOUT_S": 180.0,
+  "PC_RF_PULSE_POST_ON_DELAY_MS": 20000,
+  "PC_WORKING_PRESSURE_BOOST_TARGET": 10.0,
+  "PROCESS_DEFAULT_BASE_PRESSURE": 1e-05,
+  "PROCESS_DEFAULT_OES_INTEGRATION_MS": 60,
+  "RFPULSE_FREQ_MAX_HZ": 30000,
+  "SUPPORTS_DC": true,
+  "SUPPORTS_DC2": false,
+  "SUPPORTS_DCPULSE": true,
+  "SUPPORTS_RFPULSE": true,
+  "SUPPORTS_RF_CONT": false
+ },
+ "blockCases": [
+  {"name": "ch2_full_all_types", "covers": ["auto.no", "ok"], "ch": 2, "blocks": [{"type": "heater_set", "params": {"target_c": 200.0, "ramp_c_per_min": 6.0}}, {"type": "heater_wait", "params": {"soak_min": 10}}, {"type": "base_wait", "params": {"target_torr": 5e-06}}, {"type": "rga_scan", "params": {}}, {"type": "gas_prep", "params": {"ar": true, "o2": true}}, {"type": "gas_intro", "params": {"ar": true, "ar_flow": 20.0, "o2": true, "o2_flow": 2.5}}, {"type": "pressure_ctrl", "params": {"target": 3.0}}, {"type": "shutter", "params": {"action": "open", "targets": ["g1", "g2"]}, "label": "Gun Shutter 열기"}, {"type": "power_select", "params": {}}, {"type": "wait", "params": {"sec": 7}, "label": "Power Select 안정화"}, {"type": "power_on", "params": {"dc_power": 100.0, "rfp_power": 50.0, "rfp_freq_khz": 10.0, "rfp_duty": 50}}, {"type": "wait", "params": {"sec": 30.0}}, {"type": "pressure_boost", "params": {}}, {"type": "pressure_set", "params": {"value": 3.0}}, {"type": "heater_hold", "params": {}}, {"type": "pulse_set", "params": {"kind": "rf", "power": 60.0}}, {"type": "thickness_zero", "params": {}}, {"type": "shutter", "params": {"action": "open", "targets": ["ms"]}}, {"type": "main", "params": {"min": 10, "change_after_sec": 60, "change_kind": "rf", "change_power": 80.0, "change_label": "중간 변경"}}, {"type": "thickness_main", "params": {"target_nm": 100.0, "dep_rate": 0.5}}, {"type": "test", "params": {"sec": 5}}, {"type": "row_delay", "params": {"sec": 60, "label": "1분", "name": "쉬기"}}, {"type": "end_stop", "params": {"skip": ["flow_off", "valve_open"]}}], "cfgOver": {}, "clean": [{"type": "heater_set", "params": {"target_c": 200.0, "ramp_c_per_min": 6.0}, "label": ""}, {"type": "heater_wait", "params": {"target_c": null, "soak_min": 10.0}, "label": ""}, {"type": "base_wait", "params": {"target_torr": 5e-06}, "label": ""}, {"type": "rga_scan", "params": {}, "label": ""}, {"type": "gas_prep", "params": {"ar": true, "o2": true, "n2": false}, "label": ""}, {"type": "gas_intro", "params": {"ar": true, "ar_flow": 20.0, "o2": true, "o2_flow": 2.5, "n2": false, "n2_flow": null}, "label": ""}, {"type": "pressure_ctrl", "params": {"target": 3.0, "timeout_sec": null}, "label": ""}, {"type": "shutter", "params": {"action": "open", "targets": ["g1", "g2"]}, "label": "Gun Shutter 열기"}, {"type": "power_select", "params": {}, "label": ""}, {"type": "wait", "params": {"sec": 7.0}, "label": "Power Select 안정화"}, {"type": "power_on", "params": {"dc_power": 100.0, "dc2_power": null, "dcp_power": null, "dcp_freq_khz": null, "dcp_off_us": null, "rfp_power": 50.0, "rfp_freq_khz": 10.0, "rfp_duty": 50, "rf_power": null}, "label": ""}, {"type": "wait", "params": {"sec": 30.0}, "label": ""}, {"type": "pressure_boost", "params": {"value": null, "timeout_sec": null}, "label": ""}, {"type": "pressure_set", "params": {"value": 3.0}, "label": ""}, {"type": "heater_hold", "params": {}, "label": ""}, {"type": "pulse_set", "params": {"kind": "rf", "power": 60.0, "polling": false}, "label": ""}, {"type": "thickness_zero", "params": {}, "label": ""}, {"type": "shutter", "params": {"action": "open", "targets": ["ms"]}, "label": ""}, {"type": "main", "params": {"min": 10.0, "integration_ms": null, "change_after_sec": 60.0, "change_kind": "rf", "change_power": 80.0, "change_label": "중간 변경"}, "label": ""}, {"type": "thickness_main", "params": {"target_nm": 100.0, "dep_rate": 0.5, "integration_ms": null}, "label": ""}, {"type": "test", "params": {"sec": 5.0}, "label": ""}, {"type": "row_delay", "params": {"sec": 60.0, "label": "1분", "name": "쉬기"}, "label": ""}, {"type": "end_stop", "params": {"skip": ["flow_off", "valve_open"]}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": false},
+  {"name": "ch1_full", "covers": ["auto.no", "ok"], "ch": 1, "blocks": [{"type": "base_wait", "params": {}}, {"type": "rga_scan", "params": {}}, {"type": "gas_prep", "params": {"ar": true}}, {"type": "gas_intro", "params": {"ar": true, "ar_flow": 20.0}}, {"type": "pressure_ctrl", "params": {"target": 2.0}}, {"type": "power_on", "params": {"dcp_power": 80.0, "dcp_freq_khz": 20, "dcp_off_us": 10.0}}, {"type": "pressure_boost", "params": {}}, {"type": "pressure_set", "params": {"value": 2.0}}, {"type": "wait", "params": {"sec": 300.0}}, {"type": "shutter", "params": {"action": "open", "targets": ["ms"]}}, {"type": "main", "params": {"min": 10.0}}, {"type": "end_stop", "params": {}}], "cfgOver": {}, "clean": [{"type": "base_wait", "params": {"target_torr": null}, "label": ""}, {"type": "rga_scan", "params": {}, "label": ""}, {"type": "gas_prep", "params": {"ar": true, "o2": false, "n2": false}, "label": ""}, {"type": "gas_intro", "params": {"ar": true, "ar_flow": 20.0, "o2": false, "o2_flow": null, "n2": false, "n2_flow": null}, "label": ""}, {"type": "pressure_ctrl", "params": {"target": 2.0, "timeout_sec": null}, "label": ""}, {"type": "power_on", "params": {"dc_power": null, "dc2_power": null, "dcp_power": 80.0, "dcp_freq_khz": 20, "dcp_off_us": 10.0, "rfp_power": null, "rfp_freq_khz": null, "rfp_duty": null, "rf_power": null}, "label": ""}, {"type": "pressure_boost", "params": {"value": null, "timeout_sec": null}, "label": ""}, {"type": "pressure_set", "params": {"value": 2.0}, "label": ""}, {"type": "wait", "params": {"sec": 300.0}, "label": ""}, {"type": "shutter", "params": {"action": "open", "targets": ["ms"]}, "label": ""}, {"type": "main", "params": {"min": 10.0, "integration_ms": null, "change_after_sec": null, "change_kind": null, "change_power": null, "change_label": null}, "label": ""}, {"type": "end_stop", "params": {"skip": null}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": false},
+  {"name": "auto_end_stop_added", "covers": ["auto.yes"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0}}], "cfgOver": {}, "clean": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0, "o2": false, "o2_flow": null, "n2": false, "n2_flow": null}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": true},
+  {"name": "auto_end_stop_after_end_stop", "covers": ["auto.yes"], "ch": 2, "blocks": [{"type": "end_stop", "params": {}}, {"type": "power_select", "params": {}}], "cfgOver": {}, "clean": [{"type": "end_stop", "params": {"skip": null}, "label": ""}, {"type": "power_select", "params": {}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": true},
+  {"name": "no_auto_only_waits", "covers": ["auto.no"], "ch": 2, "blocks": [{"type": "wait", "params": {"sec": 1}}, {"type": "test", "params": {"sec": 2}}, {"type": "row_delay", "params": {"sec": 1, "label": "a", "name": "b"}}], "cfgOver": {}, "clean": [{"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "test", "params": {"sec": 2.0}, "label": ""}, {"type": "row_delay", "params": {"sec": 1.0, "label": "a", "name": "b"}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": false},
+  {"name": "no_auto_waits_after_end_stop", "covers": ["auto.no"], "ch": 2, "blocks": [{"type": "power_select", "params": {}}, {"type": "end_stop", "params": {}}, {"type": "wait", "params": {"sec": 5}}], "cfgOver": {}, "clean": [{"type": "power_select", "params": {}, "label": ""}, {"type": "end_stop", "params": {"skip": null}, "label": ""}, {"type": "wait", "params": {"sec": 5.0}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": false},
+  {"name": "defaults_cfg_empty", "covers": ["defaults"], "ch": 2, "blocks": [{"type": "base_wait", "params": {}}, {"type": "pressure_ctrl", "params": {"target": 3}}, {"type": "pressure_boost", "params": {}}, {"type": "main", "params": {"min": 1}}], "cfgOver": {}, "clean": [{"type": "base_wait", "params": {"target_torr": null}, "label": ""}, {"type": "pressure_ctrl", "params": {"target": 3.0, "timeout_sec": null}, "label": ""}, {"type": "pressure_boost", "params": {"value": null, "timeout_sec": null}, "label": ""}, {"type": "main", "params": {"min": 1.0, "integration_ms": null, "change_after_sec": null, "change_kind": null, "change_power": null, "change_label": null}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": true},
+  {"name": "defaults_plain", "covers": ["defaults"], "ch": 2, "blocks": [{"type": "heater_set", "params": {"target_c": 100}}, {"type": "heater_wait", "params": {}}, {"type": "gas_prep", "params": {}}, {"type": "gas_intro", "params": {}}, {"type": "power_on", "params": {}}, {"type": "pulse_set", "params": {"kind": "dc", "power": 10}}, {"type": "end_stop", "params": {}}], "cfgOver": {}, "clean": [{"type": "heater_set", "params": {"target_c": 100.0, "ramp_c_per_min": null}, "label": ""}, {"type": "heater_wait", "params": {"target_c": null, "soak_min": null}, "label": ""}, {"type": "gas_prep", "params": {"ar": false, "o2": false, "n2": false}, "label": ""}, {"type": "gas_intro", "params": {"ar": false, "ar_flow": null, "o2": false, "o2_flow": null, "n2": false, "n2_flow": null}, "label": ""}, {"type": "power_on", "params": {"dc_power": null, "dc2_power": null, "dcp_power": null, "dcp_freq_khz": null, "dcp_off_us": null, "rfp_power": null, "rfp_freq_khz": null, "rfp_duty": null, "rf_power": null}, "label": ""}, {"type": "pulse_set", "params": {"kind": "dc", "power": 10.0, "polling": false}, "label": ""}, {"type": "end_stop", "params": {"skip": null}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": false},
+  {"name": "int_float_types", "covers": ["format.asType"], "ch": 2, "blocks": [{"type": "wait", "params": {"sec": 5}}, {"type": "power_on", "params": {"dcp_power": 100, "dcp_freq_khz": 50.0, "rfp_duty": null}}, {"type": "main", "params": {"min": 1, "integration_ms": 100.0}}], "cfgOver": {}, "clean": [{"type": "wait", "params": {"sec": 5.0}, "label": ""}, {"type": "power_on", "params": {"dc_power": null, "dc2_power": null, "dcp_power": 100.0, "dcp_freq_khz": 50, "dcp_off_us": null, "rfp_power": null, "rfp_freq_khz": null, "rfp_duty": null, "rf_power": null}, "label": ""}, {"type": "main", "params": {"min": 1.0, "integration_ms": 100, "change_after_sec": null, "change_kind": null, "change_power": null, "change_label": null}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": true},
+  {"name": "labels_rows", "covers": ["label", "limits.labelMax", "row"], "ch": 2, "blocks": [{"type": "wait", "params": {"sec": 1}, "label": ""}, {"type": "wait", "params": {"sec": 1}, "label": "   "}, {"type": "wait", "params": {"sec": 1}, "label": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL"}, {"type": "wait", "params": {"sec": 1}, "label": "x", "row": 3}, {"type": "end_stop", "params": {}, "row": 1}], "cfgOver": {}, "clean": [{"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL"}, {"type": "wait", "params": {"sec": 1.0}, "label": "x", "row": 3}, {"type": "end_stop", "params": {"skip": null}, "label": "", "row": 1}], "errors": [], "warnings": [], "autoEndStop": false},
+  {"name": "params_falsy_is_empty", "covers": ["format.params"], "ch": 2, "blocks": [{"type": "rga_scan", "params": []}, {"type": "power_select", "params": ""}, {"type": "thickness_zero", "params": 0}, {"type": "heater_hold", "params": null}, {"type": "rga_scan"}], "cfgOver": {}, "clean": [{"type": "rga_scan", "params": {}, "label": ""}, {"type": "power_select", "params": {}, "label": ""}, {"type": "thickness_zero", "params": {}, "label": ""}, {"type": "heater_hold", "params": {}, "label": ""}, {"type": "rga_scan", "params": {}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": true},
+  {"name": "end_stop_skip_all_allowed", "covers": ["stop.skip"], "ch": 2, "blocks": [{"type": "end_stop", "params": {"skip": ["ms_close", "flow_off", "valve_open", "gun_close", "gas_close", "mv_close"]}}], "cfgOver": {}, "clean": [{"type": "end_stop", "params": {"skip": ["ms_close", "flow_off", "valve_open", "gun_close", "gas_close", "mv_close"]}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": false},
+  {"name": "end_stop_skip_empty", "covers": ["defaults", "stop.skip"], "ch": 2, "blocks": [{"type": "end_stop", "params": {"skip": []}}], "cfgOver": {}, "clean": [{"type": "end_stop", "params": {"skip": null}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": false},
+  {"name": "off_dc_text", "covers": ["dcp_off_range"], "ch": 1, "blocks": [{"type": "power_on", "params": {"dcp_power": 10.0, "dcp_off_us": "dc"}}, {"type": "power_on", "params": {"dcp_power": 10.0, "dcp_off_us": " DC "}}], "cfgOver": {}, "clean": [{"type": "power_on", "params": {"dc_power": null, "dc2_power": null, "dcp_power": 10.0, "dcp_freq_khz": null, "dcp_off_us": "dc", "rfp_power": null, "rfp_freq_khz": null, "rfp_duty": null, "rf_power": null}, "label": ""}, {"type": "power_on", "params": {"dc_power": null, "dc2_power": null, "dcp_power": 10.0, "dcp_freq_khz": null, "dcp_off_us": " DC ", "rfp_power": null, "rfp_freq_khz": null, "rfp_duty": null, "rf_power": null}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": true},
+  {"name": "off_ok_ranges", "covers": ["dcp_off_range"], "ch": 1, "blocks": [{"type": "power_on", "params": {"dcp_power": 10.0, "dcp_freq_khz": 100, "dcp_off_us": 4.0}}, {"type": "power_on", "params": {"dcp_power": 10.0, "dcp_off_us": 10.04}}, {"type": "power_on", "params": {"dcp_power": 10.0, "dcp_off_us": 0.96}}], "cfgOver": {}, "clean": [{"type": "power_on", "params": {"dc_power": null, "dc2_power": null, "dcp_power": 10.0, "dcp_freq_khz": 100, "dcp_off_us": 4.0, "rfp_power": null, "rfp_freq_khz": null, "rfp_duty": null, "rf_power": null}, "label": ""}, {"type": "power_on", "params": {"dc_power": null, "dc2_power": null, "dcp_power": 10.0, "dcp_freq_khz": null, "dcp_off_us": 10.04, "rfp_power": null, "rfp_freq_khz": null, "rfp_duty": null, "rf_power": null}, "label": ""}, {"type": "power_on", "params": {"dc_power": null, "dc2_power": null, "dcp_power": 10.0, "dcp_freq_khz": null, "dcp_off_us": 0.96, "rfp_power": null, "rfp_freq_khz": null, "rfp_duty": null, "rf_power": null}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": true},
+  {"name": "rfp_freq_ok_edges", "covers": ["rfp_freq_range"], "ch": 2, "blocks": [{"type": "power_on", "params": {"rfp_power": 10.0, "rfp_freq_khz": 0.001}}, {"type": "power_on", "params": {"rfp_power": 10.0, "rfp_freq_khz": 30}}], "cfgOver": {}, "clean": [{"type": "power_on", "params": {"dc_power": null, "dc2_power": null, "dcp_power": null, "dcp_freq_khz": null, "dcp_off_us": null, "rfp_power": 10.0, "rfp_freq_khz": 0.001, "rfp_duty": null, "rf_power": null}, "label": ""}, {"type": "power_on", "params": {"dc_power": null, "dc2_power": null, "dcp_power": null, "dcp_freq_khz": null, "dcp_off_us": null, "rfp_power": 10.0, "rfp_freq_khz": 30.0, "rfp_duty": null, "rf_power": null}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": true},
+  {"name": "gun_shutters_cfg_text", "covers": ["shutter_gun_exists"], "ch": 2, "blocks": [{"type": "shutter", "params": {"action": "close", "targets": ["g3", "ms"]}}], "cfgOver": {"CH2_PROCESS_GUN_SHUTTERS": "[\"G1\", \"G3\"]"}, "clean": [{"type": "shutter", "params": {"action": "close", "targets": ["g3", "ms"]}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": true},
+  {"name": "gun_shutters_common_key", "covers": ["cfg.common", "shutter_gun_exists"], "ch": 2, "blocks": [{"type": "shutter", "params": {"action": "open", "targets": ["g2"]}}], "cfgOver": {"CH2_PROCESS_GUN_SHUTTERS": null, "PROCESS_GUN_SHUTTERS": ["G2"]}, "clean": [{"type": "shutter", "params": {"action": "open", "targets": ["g2"]}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": true},
+  {"name": "gun_shutters_code_default", "covers": ["cfg.default", "shutter_gun_exists"], "ch": 2, "blocks": [{"type": "shutter", "params": {"action": "open", "targets": ["g1", "g2", "g3"]}}], "cfgOver": {"CH2_PROCESS_GUN_SHUTTERS": null}, "clean": [{"type": "shutter", "params": {"action": "open", "targets": ["g1", "g2", "g3"]}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": true},
+  {"name": "heater_limit_ok", "covers": ["heater_limit"], "ch": 2, "blocks": [{"type": "heater_set", "params": {"target_c": 900.0}}], "cfgOver": {}, "clean": [{"type": "heater_set", "params": {"target_c": 900.0, "ramp_c_per_min": null}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": true},
+  {"name": "heater_wait_after_set_later_segment", "covers": ["heater_wait_target"], "ch": 2, "blocks": [{"type": "heater_set", "params": {"target_c": 100.0}}, {"type": "end_stop", "params": {}}, {"type": "heater_wait", "params": {}}], "cfgOver": {}, "clean": [{"type": "heater_set", "params": {"target_c": 100.0, "ramp_c_per_min": null}, "label": ""}, {"type": "end_stop", "params": {"skip": null}, "label": ""}, {"type": "heater_wait", "params": {"target_c": null, "soak_min": null}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": true},
+  {"name": "main_change_all", "covers": ["main_change_together"], "ch": 2, "blocks": [{"type": "main", "params": {"min": 1.5, "change_after_sec": 0, "change_kind": "dc", "change_power": 10}}], "cfgOver": {}, "clean": [{"type": "main", "params": {"min": 1.5, "integration_ms": null, "change_after_sec": 0.0, "change_kind": "dc", "change_power": 10.0, "change_label": null}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": true},
+  {"name": "gas_flow_blank_warn", "covers": ["gas_flow_blank"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "o2": true, "o2_flow": "  ", "n2": true, "n2_flow": null}}], "cfgOver": {}, "clean": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": null, "o2": true, "o2_flow": null, "n2": true, "n2_flow": null}, "label": ""}], "errors": [], "warnings": ["블록 1(gas_intro): ar_flow 비움 → 0 sccm(v1 공란 = 0)", "블록 1(gas_intro): o2_flow 비움 → 0 sccm(v1 공란 = 0)", "블록 1(gas_intro): n2_flow 비움 → 0 sccm(v1 공란 = 0)"], "autoEndStop": true},
+  {"name": "gas_flow_blank_warn_ch1", "covers": ["gas_flow_blank"], "ch": 1, "blocks": [{"type": "gas_intro", "params": {"ar": true, "o2": true, "o2_flow": 1.0}}], "cfgOver": {}, "clean": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": null, "o2": true, "o2_flow": 1.0, "n2": false, "n2_flow": null}, "label": ""}], "errors": [], "warnings": ["블록 1(gas_intro): ar_flow 비움 → 0 sccm(v1 공란 = 0)"], "autoEndStop": true},
+  {"name": "power_cap_dc2_on", "covers": ["caps", "power_cap"], "ch": 2, "blocks": [{"type": "power_on", "params": {"dc2_power": 10.0}}], "cfgOver": {"CH2_SUPPORTS_HEATER": false, "CH2_SUPPORTS_DC2": true}, "clean": [{"type": "power_on", "params": {"dc_power": null, "dc2_power": 10.0, "dcp_power": null, "dcp_freq_khz": null, "dcp_off_us": null, "rfp_power": null, "rfp_freq_khz": null, "rfp_duty": null, "rf_power": null}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": true},
+  {"name": "needs_thickness_on_ch1", "covers": ["caps", "needs_cap"], "ch": 1, "blocks": [{"type": "thickness_zero", "params": {}}, {"type": "thickness_main", "params": {"target_nm": 10, "dep_rate": 1}}], "cfgOver": {"CH1_SUPPORTS_THICKNESS": true}, "clean": [{"type": "thickness_zero", "params": {}, "label": ""}, {"type": "thickness_main", "params": {"target_nm": 10.0, "dep_rate": 1.0, "integration_ms": null}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": true},
+  {"name": "caps_common_keys", "covers": ["caps", "cfg.common", "power_cap"], "ch": 1, "blocks": [{"type": "power_on", "params": {"dc_power": 10.0, "rf_power": 10.0}}], "cfgOver": {"CH1_SUPPORTS_DC": null, "SUPPORTS_DC": true, "SUPPORTS_RF_CONT": true}, "clean": [{"type": "power_on", "params": {"dc_power": 10.0, "dc2_power": null, "dcp_power": null, "dcp_freq_khz": null, "dcp_off_us": null, "rfp_power": null, "rfp_freq_khz": null, "rfp_duty": null, "rf_power": 10.0}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": true},
+  {"name": "caps_dc_cont_first", "covers": ["caps", "power_cap"], "ch": 2, "blocks": [{"type": "power_on", "params": {"dc_power": 10.0}}], "cfgOver": {"SUPPORTS_DC_CONT": false}, "clean": null, "errors": ["블록 1(power_on): dc_power: 이 챔버는 DC 연속 미지원"], "warnings": [], "autoEndStop": null},
+  {"name": "caps_truthy_text", "covers": ["caps", "power_cap"], "ch": 1, "blocks": [{"type": "power_on", "params": {"dc_power": 10.0}}], "cfgOver": {"CH1_SUPPORTS_DC": "false"}, "clean": [{"type": "power_on", "params": {"dc_power": 10.0, "dc2_power": null, "dcp_power": null, "dcp_freq_khz": null, "dcp_off_us": null, "rfp_power": null, "rfp_freq_khz": null, "rfp_duty": null, "rf_power": null}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": true},
+  {"name": "int_big_value", "covers": ["format.asType"], "ch": 2, "blocks": [{"type": "main", "params": {"min": 1, "integration_ms": 1e+20}}], "cfgOver": {}, "clean": [{"type": "main", "params": {"min": 1.0, "integration_ms": 100000000000000000000, "change_after_sec": null, "change_kind": null, "change_power": null, "change_label": null}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": true},
+  {"name": "max_blocks_ok", "covers": ["limits.maxBlocks"], "ch": 2, "blocks": [{"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}], "cfgOver": {}, "clean": [{"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}, {"type": "wait", "params": {"sec": 1.0}, "label": ""}], "errors": [], "warnings": [], "autoEndStop": false},
+  {"name": "err_empty_list", "covers": ["list.empty"], "ch": 2, "blocks": [], "cfgOver": {}, "clean": null, "errors": ["블록 목록이 비었다"], "warnings": [], "autoEndStop": null},
+  {"name": "err_not_list", "covers": ["list.empty"], "ch": 2, "blocks": {"type": "wait"}, "cfgOver": {}, "clean": null, "errors": ["블록 목록이 비었다"], "warnings": [], "autoEndStop": null},
+  {"name": "err_null", "covers": ["list.empty"], "ch": 2, "blocks": null, "cfgOver": {}, "clean": null, "errors": ["블록 목록이 비었다"], "warnings": [], "autoEndStop": null},
+  {"name": "err_too_many", "covers": ["limits.maxBlocks"], "ch": 2, "blocks": [{"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}, {"type": "wait", "params": {"sec": 1}}], "cfgOver": {}, "clean": null, "errors": ["블록 501개 > 500"], "warnings": [], "autoEndStop": null},
+  {"name": "err_block_not_object", "covers": ["format.notObject"], "ch": 2, "blocks": [5, "wait", null, [{"type": "wait", "params": {"sec": 1}}], {"type": "wait", "params": {"sec": 1}}], "cfgOver": {}, "clean": null, "errors": ["블록 1: 객체여야 함", "블록 2: 객체여야 함", "블록 3: 객체여야 함", "블록 4: 객체여야 함"], "warnings": [], "autoEndStop": null},
+  {"name": "err_type", "covers": ["format.type"], "ch": 2, "blocks": [{"type": "nope", "params": {}}, {"params": {}}, {"type": " ", "params": {}}, {"type": "", "params": {}}, {"type": ["wait"]}, {"type": 5}, {"type": 2.5}, {"type": true}, {"type": {"a": 1}}, {"type": null}], "cfgOver": {}, "clean": null, "errors": ["블록 1: 모르는 종류 'nope'", "블록 2: type 필요", "블록 3: type 필요", "블록 4: type 필요", "블록 5: 모르는 종류 ['wait']", "블록 6: 모르는 종류 5", "블록 7: 모르는 종류 2.5", "블록 8: 모르는 종류 True", "블록 9: 모르는 종류 {'a': 1}", "블록 10: type 필요"], "warnings": [], "autoEndStop": null},
+  {"name": "err_unknown_block_key", "covers": ["format.unknownKey"], "ch": 2, "blocks": [{"type": "wait", "params": {"sec": 1}, "foo": 1, "bar": null}, {"type": "rga_scan", "params": {}, "stage": "X"}], "cfgOver": {}, "clean": null, "errors": ["블록 1(wait): 모르는 키 ['bar', 'foo']", "블록 2(rga_scan): 모르는 키 ['stage']"], "warnings": [], "autoEndStop": null},
+  {"name": "err_params_not_object", "covers": ["format.params"], "ch": 2, "blocks": [{"type": "wait", "params": "sec=1"}, {"type": "wait", "params": [1]}, {"type": "wait", "params": 5, "label": 7}], "cfgOver": {}, "clean": null, "errors": ["블록 1(wait): params 는 객체", "블록 2(wait): params 는 객체", "블록 3(wait): params 는 객체"], "warnings": [], "autoEndStop": null},
+  {"name": "err_unknown_param", "covers": ["format.unknownKey"], "ch": 2, "blocks": [{"type": "wait", "params": {"sec": 1, "secs": 2, "Sec": 3}}, {"type": "rga_scan", "params": {"x": null}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(wait): secs: 모르는 값", "블록 1(wait): Sec: 모르는 값", "블록 2(rga_scan): x: 모르는 값"], "warnings": [], "autoEndStop": null},
+  {"name": "err_required_missing", "covers": ["required"], "ch": 2, "blocks": [{"type": "heater_set", "params": {}}, {"type": "pressure_ctrl", "params": {}}, {"type": "pressure_set", "params": {}}, {"type": "shutter", "params": {}}, {"type": "power_select", "params": {}}, {"type": "wait", "params": {}}, {"type": "pulse_set", "params": {}}, {"type": "main", "params": {}}, {"type": "thickness_main", "params": {}}, {"type": "test", "params": {}}, {"type": "row_delay", "params": {}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(heater_set): target_c: 값 필요", "블록 2(pressure_ctrl): target: 값 필요", "블록 3(pressure_set): value: 값 필요", "블록 4(shutter): action: 값 필요", "블록 4(shutter): targets: 값 필요", "블록 6(wait): sec: 값 필요", "블록 7(pulse_set): kind: 값 필요", "블록 7(pulse_set): power: 값 필요", "블록 8(main): min: 값 필요", "블록 9(thickness_main): target_nm: 값 필요", "블록 9(thickness_main): dep_rate: 값 필요", "블록 10(test): sec: 값 필요", "블록 11(row_delay): sec: 값 필요", "블록 11(row_delay): label: 값 필요", "블록 11(row_delay): name: 값 필요"], "warnings": [], "autoEndStop": null},
+  {"name": "err_required_blank", "covers": ["format.list", "required"], "ch": 2, "blocks": [{"type": "wait", "params": {"sec": "  "}}, {"type": "row_delay", "params": {"sec": 1, "label": "", "name": "\t"}}, {"type": "shutter", "params": {"action": "open", "targets": []}}, {"type": "pulse_set", "params": {"kind": null, "power": 1.0}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(wait): sec: 값 필요", "블록 2(row_delay): label: 값 필요", "블록 2(row_delay): name: 값 필요", "블록 3(shutter): targets: 하나 이상", "블록 4(pulse_set): kind: 값 필요"], "warnings": [], "autoEndStop": null},
+  {"name": "err_str_number", "covers": ["format.number"], "ch": 2, "blocks": [{"type": "wait", "params": {"sec": "5"}}, {"type": "power_on", "params": {"dc_power": "100"}}, {"type": "main", "params": {"min": "1", "integration_ms": "60"}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(wait): sec: 숫자여야 함", "블록 2(power_on): dc_power: 숫자여야 함", "블록 3(main): min: 숫자여야 함", "블록 3(main): integration_ms: 숫자여야 함"], "warnings": [], "autoEndStop": null},
+  {"name": "err_bool_number", "covers": ["format.number"], "ch": 2, "blocks": [{"type": "wait", "params": {"sec": true}}, {"type": "power_on", "params": {"dcp_freq_khz": false, "dcp_power": 10.0}}, {"type": "test", "params": {"sec": false}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(wait): sec: 숫자여야 함", "블록 2(power_on): dcp_freq_khz: 숫자여야 함", "블록 3(test): sec: 숫자여야 함"], "warnings": [], "autoEndStop": null},
+  {"name": "err_not_bool", "covers": ["format.bool"], "ch": 2, "blocks": [{"type": "gas_prep", "params": {"ar": "true", "o2": 1, "n2": 0}}, {"type": "pulse_set", "params": {"kind": "dc", "power": 1.0, "polling": "F"}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(gas_prep): ar: true/false 여야 함", "블록 1(gas_prep): o2: true/false 여야 함", "블록 1(gas_prep): n2: true/false 여야 함", "블록 2(pulse_set): polling: true/false 여야 함"], "warnings": [], "autoEndStop": null},
+  {"name": "err_not_int", "covers": ["format.int"], "ch": 1, "blocks": [{"type": "power_on", "params": {"dcp_power": 10.0, "dcp_freq_khz": 20.5}}, {"type": "power_on", "params": {"rfp_power": 10.0, "rfp_duty": 33.3}}, {"type": "main", "params": {"min": 1, "integration_ms": 59.9}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(power_on): dcp_freq_khz: 정수여야 함", "블록 2(power_on): rfp_duty: 정수여야 함", "블록 3(main): integration_ms: 정수여야 함"], "warnings": [], "autoEndStop": null},
+  {"name": "err_not_str", "covers": ["format.str"], "ch": 2, "blocks": [{"type": "row_delay", "params": {"sec": 1, "label": 5, "name": ["x"]}}, {"type": "main", "params": {"min": 1, "change_after_sec": 1, "change_kind": "dc", "change_power": 1.0, "change_label": 3}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(row_delay): label: 문자열이어야 함", "블록 1(row_delay): name: 문자열이어야 함", "블록 2(main): change_label: 문자열이어야 함"], "warnings": [], "autoEndStop": null},
+  {"name": "err_enum", "covers": ["format.enum"], "ch": 2, "blocks": [{"type": "shutter", "params": {"action": "toggle", "targets": ["g1"]}}, {"type": "shutter", "params": {"action": 1, "targets": ["g1"]}}, {"type": "pulse_set", "params": {"kind": "DC", "power": 1.0}}, {"type": "main", "params": {"min": 1, "change_after_sec": 1, "change_kind": "x", "change_power": 1.0}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(shutter): action: ['open', 'close'] 중 하나", "블록 2(shutter): action: ['open', 'close'] 중 하나", "블록 3(pulse_set): kind: ['dc', 'rf'] 중 하나", "블록 4(main): change_kind: ['dc', 'rf'] 중 하나"], "warnings": [], "autoEndStop": null},
+  {"name": "err_list", "covers": ["format.list"], "ch": 2, "blocks": [{"type": "shutter", "params": {"action": "open", "targets": "g1"}}, {"type": "shutter", "params": {"action": "open", "targets": ["g4"]}}, {"type": "shutter", "params": {"action": "close", "targets": ["g1", "g1"]}}, {"type": "shutter", "params": {"action": "close", "targets": [1]}}, {"type": "shutter", "params": {"action": "close", "targets": [["g1"]]}}, {"type": "shutter", "params": {"action": "close", "targets": {"g1": 1}}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(shutter): targets: ['g1', 'g2', 'g3', 'ms'] 중 하나 이상(중복 없음)", "블록 2(shutter): targets: ['g1', 'g2', 'g3', 'ms'] 중 하나 이상(중복 없음)", "블록 3(shutter): targets: ['g1', 'g2', 'g3', 'ms'] 중 하나 이상(중복 없음)", "블록 4(shutter): targets: ['g1', 'g2', 'g3', 'ms'] 중 하나 이상(중복 없음)", "블록 5(shutter): targets: ['g1', 'g2', 'g3', 'ms'] 중 하나 이상(중복 없음)", "블록 6(shutter): targets: ['g1', 'g2', 'g3', 'ms'] 중 하나 이상(중복 없음)"], "warnings": [], "autoEndStop": null},
+  {"name": "err_off", "covers": ["format.off"], "ch": 1, "blocks": [{"type": "power_on", "params": {"dcp_power": 10.0, "dcp_off_us": "x"}}, {"type": "power_on", "params": {"dcp_power": 10.0, "dcp_off_us": true}}, {"type": "power_on", "params": {"dcp_power": 10.0, "dcp_off_us": [5]}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(power_on): dcp_off_us: 숫자(µs) 또는 DC", "블록 2(power_on): dcp_off_us: 숫자(µs) 또는 DC", "블록 3(power_on): dcp_off_us: 숫자(µs) 또는 DC"], "warnings": [], "autoEndStop": null},
+  {"name": "err_parts", "covers": ["format.parts", "stop.skip"], "ch": 2, "blocks": [{"type": "end_stop", "params": {"skip": ["power"]}}, {"type": "end_stop", "params": {"skip": ["relay", "ms_close", "zzz"]}}, {"type": "end_stop", "params": {"skip": ["ms_close", "ms_close"]}}, {"type": "end_stop", "params": {"skip": [1, "power"]}}, {"type": "end_stop", "params": {"skip": "ms_close"}}, {"type": "end_stop", "params": {"skip": [null]}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(end_stop): skip: 뺄 수 없는 단계 ['power'] — 뺄 수 있는 것 ['ms_close', 'flow_off', 'valve_open', 'gun_close', 'gas_close', 'mv_close']", "블록 2(end_stop): skip: 뺄 수 없는 단계 ['relay', 'zzz'] — 뺄 수 있는 것 ['ms_close', 'flow_off', 'valve_open', 'gun_close', 'gas_close', 'mv_close']", "블록 3(end_stop): skip: 뺄 수 없는 단계 [] — 뺄 수 있는 것 ['ms_close', 'flow_off', 'valve_open', 'gun_close', 'gas_close', 'mv_close']", "블록 4(end_stop): skip: 뺄 수 없는 단계 ['power'] — 뺄 수 있는 것 ['ms_close', 'flow_off', 'valve_open', 'gun_close', 'gas_close', 'mv_close']", "블록 5(end_stop): skip: ['ms_close', 'flow_off', 'valve_open', 'gun_close', 'gas_close', 'mv_close'] 중 하나 이상(중복 없음)", "블록 6(end_stop): skip: 뺄 수 없는 단계 [] — 뺄 수 있는 것 ['ms_close', 'flow_off', 'valve_open', 'gun_close', 'gas_close', 'mv_close']"], "warnings": [], "autoEndStop": null},
+  {"name": "err_label_row", "covers": ["label", "limits.labelMax", "row"], "ch": 2, "blocks": [{"type": "wait", "params": {"sec": 1}, "label": "LLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLLL"}, {"type": "wait", "params": {"sec": 1}, "label": 5}, {"type": "wait", "params": {"sec": 1}, "label": ["a"]}, {"type": "wait", "params": {"sec": 1}, "label": 0}, {"type": "wait", "params": {"sec": 1}, "label": false}, {"type": "wait", "params": {"sec": 1}, "row": 0}, {"type": "wait", "params": {"sec": 1}, "row": -1}, {"type": "wait", "params": {"sec": 1}, "row": true}, {"type": "wait", "params": {"sec": 1}, "row": "2"}], "cfgOver": {}, "clean": null, "errors": ["블록 1(wait): label 은 120자 이하 문자열", "블록 2(wait): label 은 120자 이하 문자열", "블록 3(wait): label 은 120자 이하 문자열", "블록 4(wait): label 은 120자 이하 문자열", "블록 5(wait): label 은 120자 이하 문자열", "블록 6(wait): row 는 1 이상 정수", "블록 7(wait): row 는 1 이상 정수", "블록 8(wait): row 는 1 이상 정수", "블록 9(wait): row 는 1 이상 정수"], "warnings": [], "autoEndStop": null},
+  {"name": "err_range_min", "covers": ["range.min"], "ch": 2, "blocks": [{"type": "wait", "params": {"sec": -1}}, {"type": "heater_wait", "params": {"target_c": 10, "soak_min": -0.5}}, {"type": "gas_intro", "params": {"ar": true, "ar_flow": -1}}, {"type": "test", "params": {"sec": 0.5}}, {"type": "power_on", "params": {"rfp_power": 1.0, "rfp_duty": 0}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(wait): sec: -1.0 < 0", "블록 2(heater_wait): soak_min: -0.5 < 0", "블록 3(gas_intro): ar_flow: -1.0 < 0", "블록 4(test): sec: 0.5 < 1", "블록 5(power_on): rfp_duty: 0 < 1"], "warnings": [], "autoEndStop": null},
+  {"name": "err_range_min_exclusive", "covers": ["range.minExclusive"], "ch": 2, "blocks": [{"type": "heater_set", "params": {"target_c": 0}}, {"type": "heater_set", "params": {"target_c": 1, "ramp_c_per_min": 0.0}}, {"type": "pressure_ctrl", "params": {"target": 1, "timeout_sec": 0}}, {"type": "power_on", "params": {"dc_power": 0.0}}, {"type": "main", "params": {"min": 0}}, {"type": "thickness_main", "params": {"target_nm": 0, "dep_rate": 0}}, {"type": "row_delay", "params": {"sec": 0, "label": "a", "name": "b"}}, {"type": "pulse_set", "params": {"kind": "dc", "power": -1}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(heater_set): target_c: 0.0 ≤ 0", "블록 2(heater_set): ramp_c_per_min: 0.0 ≤ 0", "블록 3(pressure_ctrl): timeout_sec: 0.0 ≤ 0", "블록 4(power_on): dc_power: 0.0 ≤ 0", "블록 5(main): min: 0.0 ≤ 0", "블록 6(thickness_main): target_nm: 0.0 ≤ 0", "블록 6(thickness_main): dep_rate: 0.0 ≤ 0", "블록 7(row_delay): sec: 0.0 ≤ 0", "블록 8(pulse_set): power: -1.0 ≤ 0"], "warnings": [], "autoEndStop": null},
+  {"name": "err_range_max", "covers": ["range.max"], "ch": 2, "blocks": [{"type": "heater_set", "params": {"target_c": 100, "ramp_c_per_min": 60.5}}, {"type": "heater_wait", "params": {"target_c": 1, "soak_min": 481}}, {"type": "power_on", "params": {"rfp_power": 1.0, "rfp_duty": 100}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(heater_set): ramp_c_per_min: 60.5 > 60", "블록 2(heater_wait): soak_min: 481.0 > 480", "블록 3(power_on): rfp_duty: 100 > 99"], "warnings": [], "autoEndStop": null},
+  {"name": "err_range_dcp_freq", "covers": ["range.max", "range.min"], "ch": 1, "blocks": [{"type": "power_on", "params": {"dcp_power": 10.0, "dcp_freq_khz": 19}}, {"type": "power_on", "params": {"dcp_power": 10.0, "dcp_freq_khz": 151}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(power_on): dcp_freq_khz: 19 < 20", "블록 2(power_on): dcp_freq_khz: 151 > 150"], "warnings": [], "autoEndStop": null},
+  {"name": "err_range_tiny_numbers", "covers": ["format.repr", "range.min"], "ch": 2, "blocks": [{"type": "wait", "params": {"sec": -1e-300}}, {"type": "heater_wait", "params": {"target_c": 1, "soak_min": 480.00000000000006}}, {"type": "pressure_ctrl", "params": {"target": 1, "timeout_sec": -0.0}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(wait): sec: -1e-300 < 0", "블록 2(heater_wait): soak_min: 480.00000000000006 > 480", "블록 3(pressure_ctrl): timeout_sec: -0.0 ≤ 0"], "warnings": [], "autoEndStop": null},
+  {"name": "err_chamber_only", "covers": ["chamber_only", "needs_cap"], "ch": 1, "blocks": [{"type": "heater_set", "params": {"target_c": 100}}, {"type": "heater_wait", "params": {"target_c": 100}}, {"type": "power_select", "params": {}}, {"type": "heater_hold", "params": {}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(heater_set): CH1 에서는 쓸 수 없음(CH2 전용)", "블록 1(heater_set): 이 챔버 설정에서 꺼져 있음(SUPPORTS_HEATER)", "블록 2(heater_wait): CH1 에서는 쓸 수 없음(CH2 전용)", "블록 2(heater_wait): 이 챔버 설정에서 꺼져 있음(SUPPORTS_HEATER)", "블록 3(power_select): CH1 에서는 쓸 수 없음(CH2 전용)", "블록 4(heater_hold): CH1 에서는 쓸 수 없음(CH2 전용)", "블록 4(heater_hold): 이 챔버 설정에서 꺼져 있음(SUPPORTS_HEATER)"], "warnings": [], "autoEndStop": null},
+  {"name": "err_needs_heater_off", "covers": ["needs_cap"], "ch": 2, "blocks": [{"type": "heater_set", "params": {"target_c": 100}}, {"type": "heater_wait", "params": {"target_c": 1}}, {"type": "heater_hold", "params": {}}], "cfgOver": {"CH2_SUPPORTS_HEATER": false}, "clean": null, "errors": ["블록 1(heater_set): 이 챔버 설정에서 꺼져 있음(SUPPORTS_HEATER)", "블록 2(heater_wait): 이 챔버 설정에서 꺼져 있음(SUPPORTS_HEATER)", "블록 3(heater_hold): 이 챔버 설정에서 꺼져 있음(SUPPORTS_HEATER)"], "warnings": [], "autoEndStop": null},
+  {"name": "err_needs_thickness_off", "covers": ["needs_cap"], "ch": 2, "blocks": [{"type": "thickness_zero", "params": {}}, {"type": "thickness_main", "params": {"target_nm": 10, "dep_rate": 1}}], "cfgOver": {"CH2_SUPPORTS_THICKNESS": false}, "clean": null, "errors": ["블록 1(thickness_zero): 이 챔버 설정에서 꺼져 있음(SUPPORTS_THICKNESS)", "블록 2(thickness_main): 이 챔버 설정에서 꺼져 있음(SUPPORTS_THICKNESS)"], "warnings": [], "autoEndStop": null},
+  {"name": "err_ch1_n2", "covers": ["ch1_no_n2"], "ch": 1, "blocks": [{"type": "gas_prep", "params": {"n2": true}}, {"type": "gas_intro", "params": {"n2": true, "n2_flow": 1.0}}, {"type": "gas_intro", "params": {"n2": false}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(gas_prep): n2: CH1 은 N2 라인 없음", "블록 2(gas_intro): n2: CH1 은 N2 라인 없음"], "warnings": [], "autoEndStop": null},
+  {"name": "err_shutter_gun_missing", "covers": ["shutter_gun_exists"], "ch": 1, "blocks": [{"type": "shutter", "params": {"action": "open", "targets": ["g1", "ms"]}}, {"type": "shutter", "params": {"action": "close", "targets": ["g2", "g3"]}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(shutter): targets: 이 챔버에 없는 건 셔터 ['g1'](PROCESS_GUN_SHUTTERS)", "블록 2(shutter): targets: 이 챔버에 없는 건 셔터 ['g2', 'g3'](PROCESS_GUN_SHUTTERS)"], "warnings": [], "autoEndStop": null},
+  {"name": "err_shutter_gun_missing_ch2", "covers": ["shutter_gun_exists"], "ch": 2, "blocks": [{"type": "shutter", "params": {"action": "open", "targets": ["g1", "g2", "g3"]}}], "cfgOver": {"CH2_PROCESS_GUN_SHUTTERS": "[\"G1\"]"}, "clean": null, "errors": ["블록 1(shutter): targets: 이 챔버에 없는 건 셔터 ['g2', 'g3'](PROCESS_GUN_SHUTTERS)"], "warnings": [], "autoEndStop": null},
+  {"name": "err_power_cap_ch1", "covers": ["power_cap"], "ch": 1, "blocks": [{"type": "power_on", "params": {"dc_power": 10.0, "dc2_power": 5.0, "rf_power": 1.0}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(power_on): dc_power: 이 챔버는 DC 연속 미지원", "블록 1(power_on): dc2_power: 이 챔버는 DC2(폐지 — 히터와 배타) 미지원", "블록 1(power_on): rf_power: 이 챔버는 RF 연속 미지원"], "warnings": [], "autoEndStop": null},
+  {"name": "err_power_cap_ch2", "covers": ["power_cap", "pulse_exclusive"], "ch": 2, "blocks": [{"type": "power_on", "params": {"dc2_power": 5.0}}, {"type": "power_on", "params": {"dcp_power": 1.0, "rfp_power": 2.0}}], "cfgOver": {"CH2_SUPPORTS_DCPULSE": false, "CH2_SUPPORTS_RFPULSE": false}, "clean": null, "errors": ["블록 1(power_on): dc2_power: 이 챔버는 DC2(폐지 — 히터와 배타) 미지원", "블록 2(power_on): dcp_power: 이 챔버는 DC Pulse 미지원", "블록 2(power_on): rfp_power: 이 챔버는 RF Pulse 미지원", "블록 2(power_on): RF Pulse와 DC Pulse는 동시에 사용할 수 없습니다 (같은 시리얼 포트)"], "warnings": [], "autoEndStop": null},
+  {"name": "err_pulse_exclusive", "covers": ["pulse_exclusive"], "ch": 2, "blocks": [{"type": "power_on", "params": {"dcp_power": 1.0, "rfp_power": 2.0}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(power_on): RF Pulse와 DC Pulse는 동시에 사용할 수 없습니다 (같은 시리얼 포트)"], "warnings": [], "autoEndStop": null},
+  {"name": "err_rfp_freq", "covers": ["rfp_freq_range"], "ch": 2, "blocks": [{"type": "power_on", "params": {"rfp_power": 1.0, "rfp_freq_khz": 0.0005}}, {"type": "power_on", "params": {"rfp_power": 1.0, "rfp_freq_khz": 30.5}}, {"type": "power_on", "params": {"rfp_freq_khz": -1}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(power_on): rfp_freq_khz: 허용 범위 0.001~30kHz 밖", "블록 2(power_on): rfp_freq_khz: 허용 범위 0.001~30kHz 밖", "블록 3(power_on): rfp_freq_khz: 허용 범위 0.001~30kHz 밖"], "warnings": [], "autoEndStop": null},
+  {"name": "err_rfp_freq_cfg", "covers": ["cfg", "rfp_freq_range"], "ch": 2, "blocks": [{"type": "power_on", "params": {"rfp_power": 1.0, "rfp_freq_khz": 25}}], "cfgOver": {"CH2_RFPULSE_FREQ_MAX_HZ": 20000.5}, "clean": null, "errors": ["블록 1(power_on): rfp_freq_khz: 허용 범위 0.001~20.0005kHz 밖"], "warnings": [], "autoEndStop": null},
+  {"name": "err_rfp_freq_cfg_bad", "covers": ["cfg", "rfp_freq_range"], "ch": 2, "blocks": [{"type": "power_on", "params": {"rfp_power": 1.0, "rfp_freq_khz": 31}}], "cfgOver": {"CH2_RFPULSE_FREQ_MAX_HZ": "abc"}, "clean": null, "errors": ["블록 1(power_on): rfp_freq_khz: 허용 범위 0.001~30kHz 밖"], "warnings": [], "autoEndStop": null},
+  {"name": "err_rfp_freq_cfg_zero", "covers": ["cfg", "cfg.common", "rfp_freq_range"], "ch": 2, "blocks": [{"type": "power_on", "params": {"rfp_power": 1.0, "rfp_freq_khz": 31}}], "cfgOver": {"CH2_RFPULSE_FREQ_MAX_HZ": null, "RFPULSE_FREQ_MAX_HZ": 0}, "clean": null, "errors": ["블록 1(power_on): rfp_freq_khz: 허용 범위 0.001~30kHz 밖"], "warnings": [], "autoEndStop": null},
+  {"name": "err_rfp_freq_cfg_common", "covers": ["cfg.common", "rfp_freq_range"], "ch": 2, "blocks": [{"type": "power_on", "params": {"rfp_power": 1.0, "rfp_freq_khz": 12.5}}], "cfgOver": {"CH2_RFPULSE_FREQ_MAX_HZ": null, "RFPULSE_FREQ_MAX_HZ": 12000}, "clean": null, "errors": ["블록 1(power_on): rfp_freq_khz: 허용 범위 0.001~12kHz 밖"], "warnings": [], "autoEndStop": null},
+  {"name": "err_dcp_off", "covers": ["dcp_off_range", "format.int", "range.max"], "ch": 1, "blocks": [{"type": "power_on", "params": {"dcp_power": 10.0, "dcp_freq_khz": 100, "dcp_off_us": 4.5}}, {"type": "power_on", "params": {"dcp_power": 10.0, "dcp_off_us": 0.5}}, {"type": "power_on", "params": {"dcp_power": 10.0, "dcp_off_us": 10.06}}, {"type": "power_on", "params": {"dcp_power": 10.0, "dcp_freq_khz": 150, "dcp_off_us": 2.7}}, {"type": "power_on", "params": {"dcp_power": 10.0, "dcp_freq_khz": 30, "dcp_off_us": 13.37}}, {"type": "power_on", "params": {"dcp_freq_khz": 200, "dcp_off_us": 9.0}}, {"type": "power_on", "params": {"dcp_freq_khz": 20.5, "dcp_off_us": 9.0}}, {"type": "power_on", "params": {"dcp_off_us": -3}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(power_on): DC Pulse Off Time 4.5µs 는 100kHz 상한 4.0µs 초과(매뉴얼 p.13 그림3)", "블록 2(power_on): DC Pulse Off Time 0.5µs 는 최소 1.0µs 미만입니다 (매뉴얼 p.12/13)", "블록 3(power_on): DC Pulse Off Time 10.1µs 는 (주파수 미지정 → 절대 상한) 상한 10.0µs 초과(매뉴얼 p.13 그림3)", "블록 5(power_on): DC Pulse Off Time 13.4µs 는 30kHz 상한 10.0µs 초과(매뉴얼 p.13 그림3)", "블록 6(power_on): dcp_freq_khz: 200 > 150", "블록 6(power_on): DC Pulse Off Time 9.0µs 는 200kHz 상한 2.0µs 초과(매뉴얼 p.13 그림3)", "블록 7(power_on): dcp_freq_khz: 정수여야 함", "블록 8(power_on): DC Pulse Off Time -3.0µs 는 최소 1.0µs 미만입니다 (매뉴얼 p.12/13)"], "warnings": [], "autoEndStop": null},
+  {"name": "err_dcp_off_bad_freq_skips", "covers": ["dcp_off_range"], "ch": 1, "blocks": [{"type": "power_on", "params": {"dcp_power": 10.0, "dcp_freq_khz": "x", "dcp_off_us": 12.0}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(power_on): dcp_freq_khz: 숫자여야 함", "블록 1(power_on): DC Pulse Off Time 12.0µs 는 (주파수 미지정 → 절대 상한) 상한 10.0µs 초과(매뉴얼 p.13 그림3)"], "warnings": [], "autoEndStop": null},
+  {"name": "err_heater_limit", "covers": ["cfg", "heater_limit"], "ch": 2, "blocks": [{"type": "heater_set", "params": {"target_c": 900.5}}, {"type": "heater_set", "params": {"target_c": 450.0}}], "cfgOver": {"CH2_HEATER_MAX_TEMP": 400.0}, "clean": null, "errors": ["블록 1(heater_set): target_c: 900.5 > 400°C", "블록 2(heater_set): target_c: 450 > 400°C"], "warnings": [], "autoEndStop": null},
+  {"name": "err_heater_limit_sv", "covers": ["cfg", "heater_limit"], "ch": 2, "blocks": [{"type": "heater_set", "params": {"target_c": 600.0}}], "cfgOver": {"CH2_HEATER_SV_LIMIT_C": 0, "CH2_HEATER_MAX_TEMP": 700}, "clean": null, "errors": ["블록 1(heater_set): target_c: 600 > 500°C"], "warnings": [], "autoEndStop": null},
+  {"name": "err_heater_limit_max_over_sv", "covers": ["cfg", "heater_limit"], "ch": 2, "blocks": [{"type": "heater_set", "params": {"target_c": 850.0}}], "cfgOver": {"CH2_HEATER_SV_LIMIT_C": 800.0, "CH2_HEATER_MAX_TEMP": 1000.0}, "clean": null, "errors": ["블록 1(heater_set): target_c: 850 > 800°C"], "warnings": [], "autoEndStop": null},
+  {"name": "err_main_change", "covers": ["main_change_together"], "ch": 2, "blocks": [{"type": "main", "params": {"min": 1, "change_after_sec": 10}}, {"type": "main", "params": {"min": 1, "change_kind": "dc"}}, {"type": "main", "params": {"min": 1, "change_after_sec": 1, "change_kind": "rf"}}, {"type": "main", "params": {"min": 1, "change_power": 5.0}}, {"type": "main", "params": {"min": 1, "change_after_sec": "", "change_kind": " ", "change_power": null}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(main): change_after_sec·change_kind·change_power 는 함께 넣어야 함", "블록 2(main): change_after_sec·change_kind·change_power 는 함께 넣어야 함", "블록 3(main): change_after_sec·change_kind·change_power 는 함께 넣어야 함", "블록 4(main): change_after_sec·change_kind·change_power 는 함께 넣어야 함"], "warnings": [], "autoEndStop": null},
+  {"name": "err_heater_wait_no_target", "covers": ["heater_wait_target"], "ch": 2, "blocks": [{"type": "heater_wait", "params": {}}, {"type": "heater_set", "params": {"target_c": 100}}, {"type": "heater_wait", "params": {}}], "cfgOver": {}, "clean": null, "errors": ["펼치기 실패: 히터 도달 대기: 목표 없음(앞에 히터 설정 블록이 없고 target_c 도 비었다)"], "warnings": [], "autoEndStop": null},
+  {"name": "err_heater_wait_twice", "covers": ["heater_wait_target"], "ch": 2, "blocks": [{"type": "heater_wait", "params": {}}, {"type": "heater_wait", "params": {}}], "cfgOver": {}, "clean": null, "errors": ["펼치기 실패: 히터 도달 대기: 목표 없음(앞에 히터 설정 블록이 없고 target_c 도 비었다)"], "warnings": [], "autoEndStop": null},
+  {"name": "err_heater_wait_hidden_by_other_error", "covers": ["heater_wait_target"], "ch": 2, "blocks": [{"type": "heater_wait", "params": {}}, {"type": "wait", "params": {"sec": -1}}], "cfgOver": {}, "clean": null, "errors": ["블록 2(wait): sec: -1.0 < 0"], "warnings": [], "autoEndStop": null},
+  {"name": "warn_with_error", "covers": ["gas_flow_blank", "warn"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true}}, {"type": "gas_intro", "params": {"o2": true, "o2_flow": "x"}}], "cfgOver": {}, "clean": null, "errors": ["블록 2(gas_intro): o2_flow: 숫자여야 함"], "warnings": ["블록 1(gas_intro): ar_flow 비움 → 0 sccm(v1 공란 = 0)"], "autoEndStop": null},
+  {"name": "err_mixed_order", "covers": ["ch1_no_n2", "chamber_only", "order", "power_cap"], "ch": 1, "blocks": [{"type": "gas_intro", "params": {"ar": true, "n2": true, "x": 1, "o2": "y"}, "zz": 1, "aa": 2}, {"type": "heater_set", "params": {"target_c": 1000}}, {"type": "power_on", "params": {"dc_power": -1, "rfp_power": 10.0, "dcp_power": 5.0, "rfp_freq_khz": 99}}], "cfgOver": {}, "clean": null, "errors": ["블록 1(gas_intro): 모르는 키 ['aa', 'zz']", "블록 1(gas_intro): x: 모르는 값", "블록 1(gas_intro): o2: true/false 여야 함", "블록 1(gas_intro): n2: CH1 은 N2 라인 없음", "블록 2(heater_set): CH1 에서는 쓸 수 없음(CH2 전용)", "블록 2(heater_set): 이 챔버 설정에서 꺼져 있음(SUPPORTS_HEATER)", "블록 2(heater_set): target_c: 1000 > 900°C", "블록 3(power_on): dc_power: -1.0 ≤ 0", "블록 3(power_on): dc_power: 이 챔버는 DC 연속 미지원", "블록 3(power_on): RF Pulse와 DC Pulse는 동시에 사용할 수 없습니다 (같은 시리얼 포트)", "블록 3(power_on): rfp_freq_khz: 허용 범위 0.001~30kHz 밖"], "warnings": ["블록 1(gas_intro): ar_flow 비움 → 0 sccm(v1 공란 = 0)", "블록 1(gas_intro): n2_flow 비움 → 0 sccm(v1 공란 = 0)"], "autoEndStop": null},
+  {"name": "err_unicode_type", "covers": ["format.repr", "format.type"], "ch": 2, "blocks": [{"type": "대기", "params": {}}, {"type": "wait​", "params": {}}, {"type": "it's", "params": {}}], "cfgOver": {}, "clean": null, "errors": ["블록 1: 모르는 종류 '대기'", "블록 2: 모르는 종류 'wait\\u200b'", "블록 3: 모르는 종류 \"it's\""], "warnings": [], "autoEndStop": null}
+ ],
+ "editCases": [
+  {"name": "insert_ok", "covers": ["edit.ok"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0}}, {"type": "wait", "params": {"sec": 10}}, {"type": "main", "params": {"min": 1}}, {"type": "end_stop", "params": {}}], "startedUpto": 1, "op": {"op": "insert", "at": 2, "block": {"type": "wait", "params": {"sec": 5}}}, "rev": 0, "cfgOver": {}, "ok": true, "result": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0, "o2": false, "o2_flow": null, "n2": false, "n2_flow": null}, "label": ""}, {"type": "wait", "params": {"sec": 10.0}, "label": ""}, {"type": "wait", "params": {"sec": 5.0}, "label": ""}, {"type": "main", "params": {"min": 1.0, "integration_ms": null, "change_after_sec": null, "change_kind": null, "change_power": null, "change_label": null}, "label": ""}, {"type": "end_stop", "params": {"skip": null}, "label": ""}], "rev2": 1, "reason": "", "errors": [], "warnings": [], "autoEndStop": false},
+  {"name": "insert_at_end", "covers": ["auto.yes", "edit.ok"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0}}, {"type": "wait", "params": {"sec": 10}}, {"type": "main", "params": {"min": 1}}, {"type": "end_stop", "params": {}}], "startedUpto": 0, "op": {"op": "insert", "at": 4, "block": {"type": "power_select", "params": {}}}, "rev": 3, "cfgOver": {}, "ok": true, "result": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0, "o2": false, "o2_flow": null, "n2": false, "n2_flow": null}, "label": ""}, {"type": "wait", "params": {"sec": 10.0}, "label": ""}, {"type": "main", "params": {"min": 1.0, "integration_ms": null, "change_after_sec": null, "change_kind": null, "change_power": null, "change_label": null}, "label": ""}, {"type": "end_stop", "params": {"skip": null}, "label": ""}, {"type": "power_select", "params": {}, "label": ""}], "rev2": 4, "reason": "", "errors": [], "warnings": [], "autoEndStop": true},
+  {"name": "insert_at_started", "covers": ["edit.ok"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0}}, {"type": "wait", "params": {"sec": 10}}, {"type": "main", "params": {"min": 1}}, {"type": "end_stop", "params": {}}], "startedUpto": 2, "op": {"op": "insert", "at": 2, "block": {"type": "wait", "params": {"sec": 5}}}, "rev": 0, "cfgOver": {}, "ok": true, "result": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0, "o2": false, "o2_flow": null, "n2": false, "n2_flow": null}, "label": ""}, {"type": "wait", "params": {"sec": 10.0}, "label": ""}, {"type": "wait", "params": {"sec": 5.0}, "label": ""}, {"type": "main", "params": {"min": 1.0, "integration_ms": null, "change_after_sec": null, "change_kind": null, "change_power": null, "change_label": null}, "label": ""}, {"type": "end_stop", "params": {"skip": null}, "label": ""}], "rev2": 1, "reason": "", "errors": [], "warnings": [], "autoEndStop": false},
+  {"name": "insert_before_started", "covers": ["edit.started"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0}}, {"type": "wait", "params": {"sec": 10}}, {"type": "main", "params": {"min": 1}}, {"type": "end_stop", "params": {}}], "startedUpto": 2, "op": {"op": "insert", "at": 1, "block": {"type": "wait", "params": {"sec": 5}}}, "rev": 4, "cfgOver": {}, "ok": false, "result": null, "rev2": 4, "reason": "EDIT_STARTED_BLOCK", "errors": ["시작한 블록 앞(1 < 2)에는 넣을 수 없음"], "warnings": [], "autoEndStop": null},
+  {"name": "insert_bad_at", "covers": ["edit.badOp"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0}}, {"type": "wait", "params": {"sec": 10}}, {"type": "main", "params": {"min": 1}}, {"type": "end_stop", "params": {}}], "startedUpto": 0, "op": {"op": "insert", "at": 5, "block": {"type": "wait", "params": {"sec": 5}}}, "rev": 0, "cfgOver": {}, "ok": false, "result": null, "rev2": 0, "reason": "EDIT_BAD_OP", "errors": ["insert: at(0~길이)·block 필요"], "warnings": [], "autoEndStop": null},
+  {"name": "insert_bool_at", "covers": ["edit.badOp"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0}}, {"type": "wait", "params": {"sec": 10}}, {"type": "main", "params": {"min": 1}}, {"type": "end_stop", "params": {}}], "startedUpto": 0, "op": {"op": "insert", "at": true, "block": {"type": "wait", "params": {"sec": 5}}}, "rev": 0, "cfgOver": {}, "ok": false, "result": null, "rev2": 0, "reason": "EDIT_BAD_OP", "errors": ["insert: at(0~길이)·block 필요"], "warnings": [], "autoEndStop": null},
+  {"name": "insert_no_block", "covers": ["edit.badOp"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0}}, {"type": "wait", "params": {"sec": 10}}, {"type": "main", "params": {"min": 1}}, {"type": "end_stop", "params": {}}], "startedUpto": 0, "op": {"op": "insert", "at": 1}, "rev": 0, "cfgOver": {}, "ok": false, "result": null, "rev2": 0, "reason": "EDIT_BAD_OP", "errors": ["insert: at(0~길이)·block 필요"], "warnings": [], "autoEndStop": null},
+  {"name": "insert_block_not_dict", "covers": ["edit.badOp"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0}}, {"type": "wait", "params": {"sec": 10}}, {"type": "main", "params": {"min": 1}}, {"type": "end_stop", "params": {}}], "startedUpto": 0, "op": {"op": "insert", "at": 1, "block": [1]}, "rev": 0, "cfgOver": {}, "ok": false, "result": null, "rev2": 0, "reason": "EDIT_BAD_OP", "errors": ["insert: at(0~길이)·block 필요"], "warnings": [], "autoEndStop": null},
+  {"name": "insert_invalid", "covers": ["edit.invalid"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0}}, {"type": "wait", "params": {"sec": 10}}, {"type": "main", "params": {"min": 1}}, {"type": "end_stop", "params": {}}], "startedUpto": 1, "op": {"op": "insert", "at": 3, "block": {"type": "wait", "params": {"sec": -5}}}, "rev": 2, "cfgOver": {}, "ok": false, "result": null, "rev2": 2, "reason": "EDIT_INVALID", "errors": ["블록 4(wait): sec: -5.0 < 0"], "warnings": [], "autoEndStop": null},
+  {"name": "insert_warn", "covers": ["edit.ok", "warn"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0}}, {"type": "wait", "params": {"sec": 10}}, {"type": "main", "params": {"min": 1}}, {"type": "end_stop", "params": {}}], "startedUpto": 1, "op": {"op": "insert", "at": 3, "block": {"type": "gas_intro", "params": {"o2": true}}}, "rev": 2, "cfgOver": {}, "ok": true, "result": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0, "o2": false, "o2_flow": null, "n2": false, "n2_flow": null}, "label": ""}, {"type": "wait", "params": {"sec": 10.0}, "label": ""}, {"type": "main", "params": {"min": 1.0, "integration_ms": null, "change_after_sec": null, "change_kind": null, "change_power": null, "change_label": null}, "label": ""}, {"type": "gas_intro", "params": {"ar": false, "ar_flow": null, "o2": true, "o2_flow": null, "n2": false, "n2_flow": null}, "label": ""}, {"type": "end_stop", "params": {"skip": null}, "label": ""}], "rev2": 3, "reason": "", "errors": [], "warnings": ["블록 4(gas_intro): o2_flow 비움 → 0 sccm(v1 공란 = 0)"], "autoEndStop": false},
+  {"name": "delete_ok", "covers": ["auto.yes", "edit.ok"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0}}, {"type": "wait", "params": {"sec": 10}}, {"type": "main", "params": {"min": 1}}, {"type": "end_stop", "params": {}}], "startedUpto": 1, "op": {"op": "delete", "at": 3}, "rev": 0, "cfgOver": {}, "ok": true, "result": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0, "o2": false, "o2_flow": null, "n2": false, "n2_flow": null}, "label": ""}, {"type": "wait", "params": {"sec": 10.0}, "label": ""}, {"type": "main", "params": {"min": 1.0, "integration_ms": null, "change_after_sec": null, "change_kind": null, "change_power": null, "change_label": null}, "label": ""}], "rev2": 1, "reason": "", "errors": [], "warnings": [], "autoEndStop": true},
+  {"name": "delete_started", "covers": ["edit.started"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0}}, {"type": "wait", "params": {"sec": 10}}, {"type": "main", "params": {"min": 1}}, {"type": "end_stop", "params": {}}], "startedUpto": 2, "op": {"op": "delete", "at": 1}, "rev": 0, "cfgOver": {}, "ok": false, "result": null, "rev2": 0, "reason": "EDIT_STARTED_BLOCK", "errors": ["시작한 블록(1)은 지울 수 없음"], "warnings": [], "autoEndStop": null},
+  {"name": "delete_bad_at", "covers": ["edit.badOp"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0}}, {"type": "wait", "params": {"sec": 10}}, {"type": "main", "params": {"min": 1}}, {"type": "end_stop", "params": {}}], "startedUpto": 0, "op": {"op": "delete", "at": 4}, "rev": 0, "cfgOver": {}, "ok": false, "result": null, "rev2": 0, "reason": "EDIT_BAD_OP", "errors": ["delete: at(0~길이-1) 필요"], "warnings": [], "autoEndStop": null},
+  {"name": "delete_neg_at", "covers": ["edit.badOp"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0}}, {"type": "wait", "params": {"sec": 10}}, {"type": "main", "params": {"min": 1}}, {"type": "end_stop", "params": {}}], "startedUpto": 0, "op": {"op": "delete", "at": -1}, "rev": 0, "cfgOver": {}, "ok": false, "result": null, "rev2": 0, "reason": "EDIT_BAD_OP", "errors": ["delete: at(0~길이-1) 필요"], "warnings": [], "autoEndStop": null},
+  {"name": "delete_float_at", "covers": ["edit.badOp"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0}}, {"type": "wait", "params": {"sec": 10}}, {"type": "main", "params": {"min": 1}}, {"type": "end_stop", "params": {}}], "startedUpto": 0, "op": {"op": "delete", "at": 1.5}, "rev": 0, "cfgOver": {}, "ok": false, "result": null, "rev2": 0, "reason": "EDIT_BAD_OP", "errors": ["delete: at(0~길이-1) 필요"], "warnings": [], "autoEndStop": null},
+  {"name": "move_ok", "covers": ["edit.ok"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0}}, {"type": "wait", "params": {"sec": 10}}, {"type": "main", "params": {"min": 1}}, {"type": "end_stop", "params": {}}], "startedUpto": 1, "op": {"op": "move", "from": 3, "to": 1}, "rev": 7, "cfgOver": {}, "ok": true, "result": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0, "o2": false, "o2_flow": null, "n2": false, "n2_flow": null}, "label": ""}, {"type": "end_stop", "params": {"skip": null}, "label": ""}, {"type": "wait", "params": {"sec": 10.0}, "label": ""}, {"type": "main", "params": {"min": 1.0, "integration_ms": null, "change_after_sec": null, "change_kind": null, "change_power": null, "change_label": null}, "label": ""}], "rev2": 8, "reason": "", "errors": [], "warnings": [], "autoEndStop": true},
+  {"name": "move_same", "covers": ["edit.ok"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0}}, {"type": "wait", "params": {"sec": 10}}, {"type": "main", "params": {"min": 1}}, {"type": "end_stop", "params": {}}], "startedUpto": 0, "op": {"op": "move", "from": 2, "to": 2}, "rev": 0, "cfgOver": {}, "ok": true, "result": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0, "o2": false, "o2_flow": null, "n2": false, "n2_flow": null}, "label": ""}, {"type": "wait", "params": {"sec": 10.0}, "label": ""}, {"type": "main", "params": {"min": 1.0, "integration_ms": null, "change_after_sec": null, "change_kind": null, "change_power": null, "change_label": null}, "label": ""}, {"type": "end_stop", "params": {"skip": null}, "label": ""}], "rev2": 1, "reason": "", "errors": [], "warnings": [], "autoEndStop": false},
+  {"name": "move_started_from", "covers": ["edit.started"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0}}, {"type": "wait", "params": {"sec": 10}}, {"type": "main", "params": {"min": 1}}, {"type": "end_stop", "params": {}}], "startedUpto": 2, "op": {"op": "move", "from": 1, "to": 3}, "rev": 0, "cfgOver": {}, "ok": false, "result": null, "rev2": 0, "reason": "EDIT_STARTED_BLOCK", "errors": ["시작한 블록 범위(0~1)는 옮길 수 없음"], "warnings": [], "autoEndStop": null},
+  {"name": "move_started_to", "covers": ["edit.started"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0}}, {"type": "wait", "params": {"sec": 10}}, {"type": "main", "params": {"min": 1}}, {"type": "end_stop", "params": {}}], "startedUpto": 2, "op": {"op": "move", "from": 3, "to": 0}, "rev": 0, "cfgOver": {}, "ok": false, "result": null, "rev2": 0, "reason": "EDIT_STARTED_BLOCK", "errors": ["시작한 블록 범위(0~1)는 옮길 수 없음"], "warnings": [], "autoEndStop": null},
+  {"name": "move_bad", "covers": ["edit.badOp"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0}}, {"type": "wait", "params": {"sec": 10}}, {"type": "main", "params": {"min": 1}}, {"type": "end_stop", "params": {}}], "startedUpto": 0, "op": {"op": "move", "from": 0}, "rev": 0, "cfgOver": {}, "ok": false, "result": null, "rev2": 0, "reason": "EDIT_BAD_OP", "errors": ["move: from·to(0~길이-1) 필요"], "warnings": [], "autoEndStop": null},
+  {"name": "move_makes_invalid", "covers": ["edit.invalid", "heater_wait_target"], "ch": 2, "blocks": [{"type": "heater_set", "params": {"target_c": 100}}, {"type": "heater_wait", "params": {}}, {"type": "end_stop", "params": {}}], "startedUpto": 0, "op": {"op": "move", "from": 1, "to": 0}, "rev": 0, "cfgOver": {}, "ok": false, "result": null, "rev2": 0, "reason": "EDIT_INVALID", "errors": ["펼치기 실패: 히터 도달 대기: 목표 없음(앞에 히터 설정 블록이 없고 target_c 도 비었다)"], "warnings": [], "autoEndStop": null},
+  {"name": "bad_op_name", "covers": ["edit.badOp"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0}}, {"type": "wait", "params": {"sec": 10}}, {"type": "main", "params": {"min": 1}}, {"type": "end_stop", "params": {}}], "startedUpto": 0, "op": {"op": "replace", "at": 1}, "rev": 0, "cfgOver": {}, "ok": false, "result": null, "rev2": 0, "reason": "EDIT_BAD_OP", "errors": ["op 는 ['insert', 'delete', 'move'] 중 하나, started_upto 0~4"], "warnings": [], "autoEndStop": null},
+  {"name": "bad_op_not_mapping", "covers": ["edit.badOp"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0}}, {"type": "wait", "params": {"sec": 10}}, {"type": "main", "params": {"min": 1}}, {"type": "end_stop", "params": {}}], "startedUpto": 0, "op": ["insert"], "rev": 0, "cfgOver": {}, "ok": false, "result": null, "rev2": 0, "reason": "EDIT_BAD_OP", "errors": ["op 는 ['insert', 'delete', 'move'] 중 하나, started_upto 0~4"], "warnings": [], "autoEndStop": null},
+  {"name": "bad_started_upto", "covers": ["edit.badOp"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0}}, {"type": "wait", "params": {"sec": 10}}, {"type": "main", "params": {"min": 1}}, {"type": "end_stop", "params": {}}], "startedUpto": 5, "op": {"op": "delete", "at": 3}, "rev": 0, "cfgOver": {}, "ok": false, "result": null, "rev2": 0, "reason": "EDIT_BAD_OP", "errors": ["op 는 ['insert', 'delete', 'move'] 중 하나, started_upto 0~4"], "warnings": [], "autoEndStop": null},
+  {"name": "bad_started_upto_neg", "covers": ["edit.badOp"], "ch": 2, "blocks": [{"type": "gas_intro", "params": {"ar": true, "ar_flow": 10.0}}, {"type": "wait", "params": {"sec": 10}}, {"type": "main", "params": {"min": 1}}, {"type": "end_stop", "params": {}}], "startedUpto": -1, "op": {"op": "delete", "at": 3}, "rev": 0, "cfgOver": {}, "ok": false, "result": null, "rev2": 0, "reason": "EDIT_BAD_OP", "errors": ["op 는 ['insert', 'delete', 'move'] 중 하나, started_upto 0~4"], "warnings": [], "autoEndStop": null},
+  {"name": "edit_ch1_device", "covers": ["chamber_only", "edit.invalid"], "ch": 1, "blocks": [{"type": "wait", "params": {"sec": 1}}], "startedUpto": 0, "op": {"op": "insert", "at": 1, "block": {"type": "heater_hold", "params": {}}}, "rev": 0, "cfgOver": {}, "ok": false, "result": null, "rev2": 0, "reason": "EDIT_INVALID", "errors": ["블록 2(heater_hold): CH1 에서는 쓸 수 없음(CH2 전용)", "블록 2(heater_hold): 이 챔버 설정에서 꺼져 있음(SUPPORTS_HEATER)"], "warnings": [], "autoEndStop": null},
+  {"name": "edit_empty_result", "covers": ["edit.invalid", "list.empty"], "ch": 2, "blocks": [{"type": "wait", "params": {"sec": 1}}], "startedUpto": 0, "op": {"op": "delete", "at": 0}, "rev": 0, "cfgOver": {}, "ok": false, "result": null, "rev2": 0, "reason": "EDIT_INVALID", "errors": ["블록 목록이 비었다"], "warnings": [], "autoEndStop": null}
+ ]
+}

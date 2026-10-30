@@ -1,0 +1,8 @@
+# 챔버12 v2 의존성 — 제어 프로그램 핵심은 표준 라이브러리 + pyserial. 나머지는 정해진 곳에서만(v2/tests/test_isolation.py).
+pyserial==3.5
+openpyxl==3.1.5        # v1 CH1/CH2 엑셀 기록 출력(v2/ch12/outputs)
+lxml>=5                # openpyxl 이 엑셀 xml 을 v1 운영과 같은 바이트로 쓰게(골든이 lxml 있는 openpyxl 로 만들어짐)
+numpy==2.2.6           # OES 워커(v1 apps/oes_service 와 같음 — v2/ch12/workers)
+# opencv-python==4.12.0.88   # 카메라(v2/ch12/drivers/camera.py) — 장비 노트북에서만, 시험은 없이도 돈다
+# srsinst==0.0.2 / srsinst.rga==0.3.8   # RGA 워커 — 장비 노트북에서만
+pytest>=8              # 시험

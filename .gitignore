@@ -238,3 +238,8 @@ cnn_digit/
 v2/**/__pycache__/
 v2/.pytest_cache/
 .pytest_cache/
+
+# v2 골든(시험 입력) — *.log·Camera_Logs/ 규칙에 걸리지 않게
+!v2/tests/golden/**/Camera_Logs/
+!v2/tests/golden/**/*.log
+!v2/tests/golden/**/*.jpg

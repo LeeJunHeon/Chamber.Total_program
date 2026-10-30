@@ -1,0 +1,2321 @@
+{
+ "_설명": "챔버12 웹 검사 골든 — E230 행 값 검사·시작 전 값 검사(v2.tools.make_web_golden_ch12 가 만든다 — 손으로 고치지 않음). 모양은 생성기 머리말",
+ "defsVersion": 1,
+ "defsHash": "9ff48c5cdbad15c1e3228d1198b87ff26927a18a0fb6557b48d95dfdaabddb6d",
+ "defs": {
+  "version": 1,
+  "blocks": {
+   "defs": [
+    {
+     "type": "heater_set",
+     "label": "히터 설정",
+     "params": [
+      {
+       "name": "target_c",
+       "type": "float",
+       "unit": "°C",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "목표 온도",
+       "desc": "상한 min(HEATER_MAX_TEMP, HEATER_SV_LIMIT_C)"
+      },
+      {
+       "name": "ramp_c_per_min",
+       "type": "float",
+       "unit": "°C/min",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": 60.0,
+       "minExclusive": true,
+       "enum": null,
+       "label": "램프",
+       "desc": "비우면 히터 기본 램프 속도"
+      }
+     ],
+     "steps": "HEATER_SET",
+     "v1": "pc:2289-2306",
+     "touches": true,
+     "chamber": 2,
+     "needs": "heater",
+     "skippable": false,
+     "skipCleanup": [],
+     "pausable": false,
+     "pause": "",
+     "resumable": false,
+     "resumeChecks": [],
+     "desc": "장비 설정 쓰기 — 재시작 뒤 이어가지 않음(안전 정지)"
+    },
+    {
+     "type": "heater_wait",
+     "label": "히터 도달·안정 대기",
+     "params": [
+      {
+       "name": "target_c",
+       "type": "float",
+       "unit": "°C",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "목표 온도",
+       "desc": "비우면 앞 히터 설정 블록의 목표"
+      },
+      {
+       "name": "soak_min",
+       "type": "float",
+       "unit": "분",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": 480.0,
+       "minExclusive": false,
+       "enum": null,
+       "label": "SOAK",
+       "desc": "도달 뒤 시간만 셈. 비우면 SOAK 없음"
+      }
+     ],
+     "steps": "HEATER_WAIT",
+     "v1": "pc:2307-2311",
+     "touches": true,
+     "chamber": 2,
+     "needs": "heater",
+     "skippable": true,
+     "skipCleanup": [
+      "히터 도달 대기 취소(cancel_heater) — 히터는 목표대로 계속 운전"
+     ],
+     "pausable": true,
+     "pause": "대기 타이머(SOAK 경과) 정지 — 히터는 목표 유지",
+     "resumable": true,
+     "resumeChecks": [
+      "heater_run",
+      "watchdog"
+     ],
+     "desc": ""
+    },
+    {
+     "type": "base_wait",
+     "label": "베이스 압력 대기(IG)",
+     "params": [
+      {
+       "name": "target_torr",
+       "type": "float",
+       "unit": "Torr",
+       "default": "cfg:PROCESS_DEFAULT_BASE_PRESSURE",
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "목표 압력",
+       "desc": ""
+      }
+     ],
+     "steps": "IG_CMD",
+     "v1": "pc:2314-2318",
+     "touches": true,
+     "chamber": null,
+     "needs": "",
+     "skippable": true,
+     "skipCleanup": [
+      "IG 대기·재점등 취소(cancel_ig)"
+     ],
+     "pausable": false,
+     "pause": "",
+     "resumable": false,
+     "resumeChecks": [],
+     "desc": "IG 점등·재점등·판정은 IG 드라이버가 돌린다 — 일시정지 없음, 재시작 뒤 이어가지 않음"
+    },
+    {
+     "type": "rga_scan",
+     "label": "RGA 스캔",
+     "params": [],
+     "steps": "RGA_SCAN",
+     "v1": "pc:2320-2324",
+     "touches": true,
+     "chamber": null,
+     "needs": "",
+     "skippable": true,
+     "skipCleanup": [
+      "RGA 스캔 결과를 기다리지 않음(늦게 온 완료는 무시 — _rga_is_stale)"
+     ],
+     "pausable": false,
+     "pause": "",
+     "resumable": false,
+     "resumeChecks": [],
+     "desc": ""
+    },
+    {
+     "type": "gas_prep",
+     "label": "가스 준비(Flow Off·밸브·영점)",
+     "params": [
+      {
+       "name": "ar",
+       "type": "bool",
+       "unit": "",
+       "default": false,
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "Ar",
+       "desc": ""
+      },
+      {
+       "name": "o2",
+       "type": "bool",
+       "unit": "",
+       "default": false,
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "O2",
+       "desc": ""
+      },
+      {
+       "name": "n2",
+       "type": "bool",
+       "unit": "",
+       "default": false,
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "N2",
+       "desc": "CH1 은 N2 라인 없음"
+      }
+     ],
+     "steps": "FLOW_OFF · VALVE_OPEN · PS_ZEROING · MFC_ZEROING — 고른 가스(하나도 안 고르면 전부, v1 use_any)",
+     "v1": "pc:2326-2350",
+     "touches": true,
+     "chamber": null,
+     "needs": "",
+     "skippable": false,
+     "skipCleanup": [],
+     "pausable": false,
+     "pause": "",
+     "resumable": false,
+     "resumeChecks": [],
+     "desc": "장비 설정 쓰기 — 재시작 뒤 이어가지 않음(안전 정지)"
+    },
+    {
+     "type": "gas_intro",
+     "label": "가스 주입",
+     "params": [
+      {
+       "name": "ar",
+       "type": "bool",
+       "unit": "",
+       "default": false,
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "Ar",
+       "desc": ""
+      },
+      {
+       "name": "ar_flow",
+       "type": "float",
+       "unit": "sccm",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "Ar 유량",
+       "desc": ""
+      },
+      {
+       "name": "o2",
+       "type": "bool",
+       "unit": "",
+       "default": false,
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "O2",
+       "desc": ""
+      },
+      {
+       "name": "o2_flow",
+       "type": "float",
+       "unit": "sccm",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "O2 유량",
+       "desc": ""
+      },
+      {
+       "name": "n2",
+       "type": "bool",
+       "unit": "",
+       "default": false,
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "N2",
+       "desc": ""
+      },
+      {
+       "name": "n2_flow",
+       "type": "float",
+       "unit": "sccm",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "N2 유량",
+       "desc": ""
+      }
+     ],
+     "steps": "PLC MV ON · 가스마다 PLC 밸브 ON · FLOW_SET · FLOW_ON",
+     "v1": "pc:2352-2373",
+     "touches": true,
+     "chamber": null,
+     "needs": "",
+     "skippable": false,
+     "skipCleanup": [],
+     "pausable": false,
+     "pause": "",
+     "resumable": false,
+     "resumeChecks": [],
+     "desc": "장비 설정 쓰기 — 재시작 뒤 이어가지 않음(안전 정지)"
+    },
+    {
+     "type": "pressure_ctrl",
+     "label": "압력 제어(채널 SP)",
+     "params": [
+      {
+       "name": "target",
+       "type": "float",
+       "unit": "mTorr",
+       "default": null,
+       "required": true,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "작업 압력",
+       "desc": "SP 읽기 실패 때 쓰는 목표(v1 working_pressure)"
+      },
+      {
+       "name": "timeout_sec",
+       "type": "float",
+       "unit": "s",
+       "default": "cfg:PC_PRESSURE_WAIT_TIMEOUT_S",
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "최대 대기",
+       "desc": ""
+      }
+     ],
+     "steps": "MFC SP3_ON(CH1)·SP4_ON(CH2) · WAIT_PRESSURE(그 SP setpoint 기준)",
+     "v1": "pc:2375-2412",
+     "touches": true,
+     "chamber": null,
+     "needs": "",
+     "skippable": true,
+     "skipCleanup": [
+      "압력 도달 대기만 끝냄 — SP 제어·가스는 그대로"
+     ],
+     "pausable": false,
+     "pause": "",
+     "resumable": true,
+     "resumeChecks": [
+      "gas",
+      "pressure"
+     ],
+     "desc": "이어가기는 WAIT_PRESSURE(가스 안정화) 중일 때만"
+    },
+    {
+     "type": "pressure_boost",
+     "label": "압력 부스트(SP2)",
+     "params": [
+      {
+       "name": "value",
+       "type": "float",
+       "unit": "mTorr",
+       "default": "cfg:PC_WORKING_PRESSURE_BOOST_TARGET",
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "SP2 목표",
+       "desc": ""
+      },
+      {
+       "name": "timeout_sec",
+       "type": "float",
+       "unit": "s",
+       "default": "cfg:PC_PRESSURE_WAIT_TIMEOUT_S",
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "최대 대기",
+       "desc": ""
+      }
+     ],
+     "steps": "SP2_SET · SP2_ON · WAIT_PRESSURE",
+     "v1": "pc:2559-2585",
+     "touches": true,
+     "chamber": null,
+     "needs": "",
+     "skippable": true,
+     "skipCleanup": [
+      "압력 도달 대기만 끝냄 — SP2 제어는 그대로"
+     ],
+     "pausable": false,
+     "pause": "",
+     "resumable": true,
+     "resumeChecks": [
+      "power_output",
+      "gas",
+      "pressure",
+      "power_select",
+      "heater_run",
+      "watchdog"
+     ],
+     "desc": "이어가기는 WAIT_PRESSURE 중일 때만"
+    },
+    {
+     "type": "pressure_set",
+     "label": "작업 압력(SP1)",
+     "params": [
+      {
+       "name": "value",
+       "type": "float",
+       "unit": "mTorr",
+       "default": null,
+       "required": true,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "SP1",
+       "desc": ""
+      }
+     ],
+     "steps": "SP1_SET · SP1_ON",
+     "v1": "pc:2586-2594",
+     "touches": true,
+     "chamber": null,
+     "needs": "",
+     "skippable": false,
+     "skipCleanup": [],
+     "pausable": false,
+     "pause": "",
+     "resumable": false,
+     "resumeChecks": [],
+     "desc": "장비 설정 쓰기 — 재시작 뒤 이어가지 않음(안전 정지)"
+    },
+    {
+     "type": "shutter",
+     "label": "셔터",
+     "params": [
+      {
+       "name": "action",
+       "type": "enum",
+       "unit": "",
+       "default": null,
+       "required": true,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": [
+        "open",
+        "close"
+       ],
+       "label": "동작",
+       "desc": ""
+      },
+      {
+       "name": "targets",
+       "type": "list",
+       "unit": "",
+       "default": null,
+       "required": true,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": [
+        "g1",
+        "g2",
+        "g3",
+        "ms"
+       ],
+       "label": "셔터",
+       "desc": "g1~g3(CH2 건 셔터)·ms(Main Shutter)"
+      }
+     ],
+     "steps": "PLC G1~G3·MS ON/OFF",
+     "v1": "pc:2420-2429·2657-2663",
+     "touches": true,
+     "chamber": null,
+     "needs": "",
+     "skippable": false,
+     "skipCleanup": [],
+     "pausable": false,
+     "pause": "",
+     "resumable": false,
+     "resumeChecks": [],
+     "desc": "장비 설정 쓰기 — 재시작 뒤 이어가지 않음(안전 정지)"
+    },
+    {
+     "type": "power_select",
+     "label": "Power Select(SW_RF_SELECT)",
+     "params": [],
+     "steps": "PLC SW_RF_SELECT ON(ch 인자 없음)",
+     "v1": "pc:2431-2436",
+     "touches": true,
+     "chamber": 2,
+     "needs": "",
+     "skippable": false,
+     "skipCleanup": [],
+     "pausable": false,
+     "pause": "",
+     "resumable": false,
+     "resumeChecks": [],
+     "desc": "안정화 대기는 뒤 대기 블록(기본 템플릿: PC_POWER_SELECT_SETTLE_MS)"
+    },
+    {
+     "type": "power_on",
+     "label": "파워 켜기",
+     "params": [
+      {
+       "name": "dc_power",
+       "type": "float",
+       "unit": "W",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "DC1",
+       "desc": ""
+      },
+      {
+       "name": "dc2_power",
+       "type": "float",
+       "unit": "W",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "DC2",
+       "desc": ""
+      },
+      {
+       "name": "dcp_power",
+       "type": "float",
+       "unit": "W",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "DC Pulse",
+       "desc": ""
+      },
+      {
+       "name": "dcp_freq_khz",
+       "type": "int",
+       "unit": "kHz",
+       "default": null,
+       "required": false,
+       "min": 20,
+       "max": 150,
+       "minExclusive": false,
+       "enum": null,
+       "label": "DC Pulse 주파수",
+       "desc": "비우면 장비값 유지"
+      },
+      {
+       "name": "dcp_off_us",
+       "type": "off",
+       "unit": "µs",
+       "default": null,
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "DC Pulse Off Time",
+       "desc": "숫자(1.0~min(10, 400/f)) 또는 DC, 비우면 유지"
+      },
+      {
+       "name": "rfp_power",
+       "type": "float",
+       "unit": "W",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "RF Pulse",
+       "desc": ""
+      },
+      {
+       "name": "rfp_freq_khz",
+       "type": "float",
+       "unit": "kHz",
+       "default": null,
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "RF Pulse 주파수",
+       "desc": "0.001~RFPULSE_FREQ_MAX_HZ/1000. 장비에는 Hz"
+      },
+      {
+       "name": "rfp_duty",
+       "type": "int",
+       "unit": "%",
+       "default": null,
+       "required": false,
+       "min": 1,
+       "max": 99,
+       "minExclusive": false,
+       "enum": null,
+       "label": "RF Pulse 듀티",
+       "desc": ""
+      },
+      {
+       "name": "rf_power",
+       "type": "float",
+       "unit": "W",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "RF 연속",
+       "desc": ""
+      }
+     ],
+     "steps": "DC_POWER_SET · DC2_POWER_SET · DC_PULSE_START · [CH2 SW_POWER_SELECT ON] RF_PULSE_START · [RF Pulse 없으면 SW_POWER_SELECT OFF] RF_POWER_SET — 병렬 = (DC∨DC2)∧(RF∨RF Pulse)",
+     "v1": "pc:2447-2550",
+     "touches": true,
+     "chamber": null,
+     "needs": "",
+     "skippable": false,
+     "skipCleanup": [],
+     "pausable": true,
+     "pause": "파워 램프 정지 — 지금 출력값 유지(목표 쓰기 멈춤), 재개하면 목표까지 램프 계속",
+     "resumable": false,
+     "resumeChecks": [],
+     "desc": "램프 도중 재시작은 이어가지 않음. RF Pulse 뒤 Power Delay 는 뒤 대기 블록(PC_RF_PULSE_POST_ON_DELAY_MS)"
+    },
+    {
+     "type": "wait",
+     "label": "대기",
+     "params": [
+      {
+       "name": "sec",
+       "type": "float",
+       "unit": "s",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "시간",
+       "desc": ""
+      }
+     ],
+     "steps": "DELAY int(round(초×1000)) ms(문구 = label, polling 없음)",
+     "v1": "pc:2437-2445·2552-2557·2609-2645",
+     "touches": false,
+     "chamber": null,
+     "needs": "",
+     "skippable": true,
+     "skipCleanup": [
+      "타이머만 끝냄"
+     ],
+     "pausable": true,
+     "pause": "타이머 정지 — 장비 상태 그대로",
+     "resumable": true,
+     "resumeChecks": [
+      "power_output",
+      "shutter",
+      "gas",
+      "pressure",
+      "power_select",
+      "heater_run",
+      "watchdog"
+     ],
+     "desc": "Shutter Delay·Power Select 안정화·Power Delay 도 이 블록"
+    },
+    {
+     "type": "pulse_set",
+     "label": "펄스 파워 변경",
+     "params": [
+      {
+       "name": "kind",
+       "type": "enum",
+       "unit": "",
+       "default": null,
+       "required": true,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": [
+        "dc",
+        "rf"
+       ],
+       "label": "장비",
+       "desc": ""
+      },
+      {
+       "name": "power",
+       "type": "float",
+       "unit": "W",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "파워",
+       "desc": ""
+      },
+      {
+       "name": "polling",
+       "type": "bool",
+       "unit": "",
+       "default": false,
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "폴링",
+       "desc": "메인 공정 중이면 true"
+      }
+     ],
+     "steps": "DC_PULSE_SET(REF_POWER 확인) · RF_PULSE_SET(no_wait)",
+     "v1": "pc:2609-2638",
+     "touches": true,
+     "chamber": null,
+     "needs": "",
+     "skippable": false,
+     "skipCleanup": [],
+     "pausable": false,
+     "pause": "",
+     "resumable": false,
+     "resumeChecks": [],
+     "desc": "장비 설정 쓰기 — 재시작 뒤 이어가지 않음(안전 정지)"
+    },
+    {
+     "type": "thickness_zero",
+     "label": "두께 영점·확인",
+     "params": [],
+     "steps": "THICKNESS_ZERO(THICKNESS_ZERO_CONFIRM_S)",
+     "v1": "pc:2647-2655",
+     "touches": true,
+     "chamber": null,
+     "needs": "thickness",
+     "skippable": false,
+     "skipCleanup": [],
+     "pausable": false,
+     "pause": "",
+     "resumable": false,
+     "resumeChecks": [],
+     "desc": "Main Shutter 열기 전(use_ms=F 여도 같은 자리)"
+    },
+    {
+     "type": "main",
+     "label": "메인 공정(시간)",
+     "params": [
+      {
+       "name": "min",
+       "type": "float",
+       "unit": "분",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "시간",
+       "desc": ""
+      },
+      {
+       "name": "integration_ms",
+       "type": "int",
+       "unit": "ms",
+       "default": "cfg:PROCESS_DEFAULT_OES_INTEGRATION_MS",
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "OES 적분",
+       "desc": ""
+      },
+      {
+       "name": "change_after_sec",
+       "type": "float",
+       "unit": "s",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "중간 변경 시점",
+       "desc": "메인 시작부터. 비우면 변경 없음"
+      },
+      {
+       "name": "change_kind",
+       "type": "enum",
+       "unit": "",
+       "default": null,
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": [
+        "dc",
+        "rf"
+       ],
+       "label": "변경 장비",
+       "desc": ""
+      },
+      {
+       "name": "change_power",
+       "type": "float",
+       "unit": "W",
+       "default": null,
+       "required": false,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "변경 파워",
+       "desc": ""
+      },
+      {
+       "name": "change_label",
+       "type": "str",
+       "unit": "",
+       "default": null,
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "변경 문구",
+       "desc": ""
+      }
+     ],
+     "steps": "OES_RUN(no_wait) · DELAY(polling) [· DC/RF_PULSE_SET · DELAY]",
+     "v1": "pc:2687-2731",
+     "touches": true,
+     "chamber": null,
+     "needs": "",
+     "skippable": true,
+     "skipCleanup": [
+      "메인 타이머 끝냄 → 다음 블록(끝 정지가 셔터·파워를 끔)",
+      "OES 측정 정지"
+     ],
+     "pausable": true,
+     "pause": "메인 타이머 정지 — 파워·가스·셔터 그대로(증착은 계속됨). OES 측정 시간은 늘지 않음(미확인)",
+     "resumable": true,
+     "resumeChecks": [
+      "power_output",
+      "shutter",
+      "gas",
+      "pressure",
+      "power_select",
+      "heater_run",
+      "watchdog"
+     ],
+     "desc": ""
+    },
+    {
+     "type": "thickness_main",
+     "label": "메인 공정(두께)",
+     "params": [
+      {
+       "name": "target_nm",
+       "type": "float",
+       "unit": "nm",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "목표 두께",
+       "desc": ""
+      },
+      {
+       "name": "dep_rate",
+       "type": "float",
+       "unit": "nm/s",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "증착률",
+       "desc": ""
+      },
+      {
+       "name": "integration_ms",
+       "type": "int",
+       "unit": "ms",
+       "default": "cfg:PROCESS_DEFAULT_OES_INTEGRATION_MS",
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "OES 적분",
+       "desc": ""
+      }
+     ],
+     "steps": "OES_RUN(상한 초, no_wait) · THICKNESS_WAIT(예상·상한)",
+     "v1": "pc:2665-2686",
+     "touches": true,
+     "chamber": null,
+     "needs": "thickness",
+     "skippable": true,
+     "skipCleanup": [
+      "두께 판정 중단(cancel_thickness)",
+      "OES 측정 정지"
+     ],
+     "pausable": false,
+     "pause": "",
+     "resumable": true,
+     "resumeChecks": [
+      "power_output",
+      "shutter",
+      "gas",
+      "pressure",
+      "power_select",
+      "heater_run",
+      "watchdog",
+      "thickness"
+     ],
+     "desc": "두께 도달은 장비 값으로 판정 — 일시정지 없음"
+    },
+    {
+     "type": "heater_hold",
+     "label": "히터 유지 측정 대기",
+     "params": [],
+     "steps": "HEATER_HOLD",
+     "v1": "pc:2596-2602",
+     "touches": true,
+     "chamber": 2,
+     "needs": "heater",
+     "skippable": true,
+     "skipCleanup": [
+      "유지 모드 측정 대기 취소(cancel_heater)"
+     ],
+     "pausable": false,
+     "pause": "",
+     "resumable": true,
+     "resumeChecks": [
+      "power_output",
+      "shutter",
+      "gas",
+      "pressure",
+      "power_select",
+      "heater_run",
+      "watchdog"
+     ],
+     "desc": ""
+    },
+    {
+     "type": "test",
+     "label": "TEST MODE",
+     "params": [
+      {
+       "name": "sec",
+       "type": "float",
+       "unit": "s",
+       "default": null,
+       "required": true,
+       "min": 1.0,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "시간",
+       "desc": ""
+      }
+     ],
+     "steps": "DELAY int(초×1000) ms 'TEST MODE (N s)'",
+     "v1": "pc:2154-2175",
+     "touches": false,
+     "chamber": null,
+     "needs": "",
+     "skippable": true,
+     "skipCleanup": [
+      "대기만 끊음 — 종료 절차 없음(v1 TEST STOP)"
+     ],
+     "pausable": true,
+     "pause": "타이머 정지",
+     "resumable": true,
+     "resumeChecks": [],
+     "desc": ""
+    },
+    {
+     "type": "row_delay",
+     "label": "대기 행(delay)",
+     "params": [
+      {
+       "name": "sec",
+       "type": "float",
+       "unit": "s",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "시간",
+       "desc": "1초씩 int(초) 번 센다"
+      },
+      {
+       "name": "label",
+       "type": "str",
+       "unit": "",
+       "default": null,
+       "required": true,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "표시",
+       "desc": ""
+      },
+      {
+       "name": "name",
+       "type": "str",
+       "unit": "",
+       "default": null,
+       "required": true,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "이름",
+       "desc": ""
+      }
+     ],
+     "steps": "ROW_DELAY(러너 대기 — 장비 명령·새 로그 없음)",
+     "v1": "rt:5127-5145",
+     "touches": false,
+     "chamber": null,
+     "needs": "",
+     "skippable": true,
+     "skipCleanup": [
+      "대기만 끝냄"
+     ],
+     "pausable": true,
+     "pause": "카운트다운 정지",
+     "resumable": true,
+     "resumeChecks": [],
+     "desc": ""
+    },
+    {
+     "type": "end_stop",
+     "label": "정상 끝 정지",
+     "params": [
+      {
+       "name": "skip",
+       "type": "parts",
+       "unit": "",
+       "default": null,
+       "required": false,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": [
+        "ms_close",
+        "flow_off",
+        "valve_open",
+        "gun_close",
+        "gas_close",
+        "mv_close"
+       ],
+       "label": "뺄 단계",
+       "desc": "ms_close·flow_off·valve_open·gun_close·gas_close·mv_close 만. 파워 끄기(power)·릴레이(relay)는 뺄 수 없음"
+      }
+     ],
+     "steps": "v1 정상 종료 절차(구간 장비) — MS 닫기 · 파워 OFF · Flow Off · MFC Valve Open · 건 셔터 닫기 · SW_RF_SELECT OFF · PLC 가스 닫기 · MV 닫기",
+     "v1": "pc:2737-2832",
+     "touches": true,
+     "chamber": null,
+     "needs": "",
+     "skippable": false,
+     "skipCleanup": [],
+     "pausable": false,
+     "pause": "",
+     "resumable": false,
+     "resumeChecks": [],
+     "desc": "정지 순서 — 건너뛰기·일시정지·이어가기 없음"
+    }
+   ],
+   "blockKeys": [
+    "type",
+    "params",
+    "label",
+    "row"
+   ],
+   "limits": {
+    "labelMax": 120,
+    "maxBlocks": 500
+   },
+   "autoEndStopLabel": "자동 끝 정지",
+   "empty": "빈 값 = null 또는 공백뿐인 문자열(숫자 0 은 빈 값 아님). parts 형식은 [] 도 빈 값. params 가 없거나 거짓 값([]·\"\"·0·false)이면 {}. label 빈 값 = \"\"",
+   "rules": "값 범위·형식·장비 지원·같은 블록 안 값의 짝만 — 순서·조합 규칙 없음(v1 행 조합 검사는 v1 행에만)",
+   "valueRules": [
+    {
+     "id": "chamber_only",
+     "blocks": [
+      "*"
+     ],
+     "kind": "error",
+     "when": "정의 chamber 가 있고 지금 챔버와 다름",
+     "msg": "{pre}: CH{chamber} 에서는 쓸 수 없음(CH{def.chamber} 전용)"
+    },
+    {
+     "id": "needs_cap",
+     "blocks": [
+      "*"
+     ],
+     "kind": "error",
+     "when": "정의 needs(Caps 필드)가 꺼져 있음",
+     "msg": "{pre}: 이 챔버 설정에서 꺼져 있음(SUPPORTS_{NEEDS})"
+    },
+    {
+     "id": "gas_flow_blank",
+     "blocks": [
+      "gas_intro"
+     ],
+     "kind": "warn",
+     "when": "가스 true · 그 유량 값이 형식 오류 아님 · 유량 비움",
+     "msg": "{pre}: {g}_flow 비움 → 0 sccm(v1 공란 = 0)"
+    },
+    {
+     "id": "ch1_no_n2",
+     "blocks": [
+      "gas_prep",
+      "gas_intro"
+     ],
+     "kind": "error",
+     "when": "CH1 · n2 true",
+     "msg": "{pre}: n2: CH1 은 N2 라인 없음"
+    },
+    {
+     "id": "shutter_gun_exists",
+     "blocks": [
+      "shutter"
+     ],
+     "kind": "error",
+     "when": "targets 형식 오류 아님 · ms 가 아닌 대상이 설정 PROCESS_GUN_SHUTTERS(소문자)에 없음",
+     "msg": "{pre}: targets: 이 챔버에 없는 건 셔터 {miss}(PROCESS_GUN_SHUTTERS)"
+    },
+    {
+     "id": "power_cap",
+     "blocks": [
+      "power_on"
+     ],
+     "kind": "error",
+     "when": "dc_power·dc2_power·rf_power·dcp_power·rfp_power 순서로 — 숫자인데 Caps(dc·dc2·rf·dcp·rfp)가 꺼짐",
+     "msg": "{pre}: {k}: 이 챔버는 {lab} 미지원"
+    },
+    {
+     "id": "pulse_exclusive",
+     "blocks": [
+      "power_on"
+     ],
+     "kind": "error",
+     "when": "dcp_power·rfp_power 둘 다 숫자",
+     "msg": "{pre}: RF Pulse와 DC Pulse는 동시에 사용할 수 없습니다 (같은 시리얼 포트)"
+    },
+    {
+     "id": "rfp_freq_range",
+     "blocks": [
+      "power_on"
+     ],
+     "kind": "error",
+     "when": "rfp_freq_khz 숫자 · 0.001 ≤ 값 ≤ RFPULSE_FREQ_MAX_HZ/1000(0 이하·오류면 30) 아님",
+     "msg": "{pre}: rfp_freq_khz: 허용 범위 0.001~{fmax:g}kHz 밖"
+    },
+    {
+     "id": "dcp_off_range",
+     "blocks": [
+      "power_on"
+     ],
+     "kind": "error",
+     "when": "dcp_off_us 형식 오류 아님 · 비우지 않음 — recipe_check.check_dc_pulse(freq = dcp_freq_khz 숫자면, off = 'DC' 글 또는 round(값, 1)) 의 'DC Pulse Freq' 로 시작하지 않는 오류",
+     "msg": "{pre}: {check_dc_pulse 문구}"
+    },
+    {
+     "id": "heater_limit",
+     "blocks": [
+      "heater_set"
+     ],
+     "kind": "error",
+     "when": "target_c 숫자 · 값 > min(HEATER_MAX_TEMP, HEATER_SV_LIMIT_C)(recipe_check.heater_limit_c)",
+     "msg": "{pre}: target_c: {v:g} > {lim:g}°C"
+    },
+    {
+     "id": "main_change_together",
+     "blocks": [
+      "main"
+     ],
+     "kind": "error",
+     "when": "change_after_sec·change_kind·change_power 중 일부만 비우지 않음",
+     "msg": "{pre}: change_after_sec·change_kind·change_power 는 함께 넣어야 함"
+    },
+    {
+     "id": "heater_wait_target",
+     "blocks": [
+      "heater_wait"
+     ],
+     "kind": "error",
+     "when": "(오류 없을 때 펼치기) target_c 비움 · 목록에서 앞에 heater_set 이 없음 — 첫 번째 것만",
+     "msg": "펼치기 실패: 히터 도달 대기: 목표 없음(앞에 히터 설정 블록이 없고 target_c 도 비었다)"
+    }
+   ],
+   "shutdownParts": [
+    {
+     "id": "ms_close",
+     "label": "Main Shutter 닫기",
+     "skippable": true
+    },
+    {
+     "id": "power",
+     "label": "파워 끄기(DC1·DC2·RF·DC Pulse·RF Pulse, CH2 RF Pulse 뒤 SW_POWER_SELECT OFF)",
+     "skippable": false
+    },
+    {
+     "id": "flow_off",
+     "label": "MFC Flow Off(쓴 가스, 없으면 전부)",
+     "skippable": true
+    },
+    {
+     "id": "valve_open",
+     "label": "전체 MFC Valve Open",
+     "skippable": true
+    },
+    {
+     "id": "gun_close",
+     "label": "Gun Shutter 닫기",
+     "skippable": true
+    },
+    {
+     "id": "relay",
+     "label": "Power Select OFF (SW_RF_SELECT)",
+     "skippable": false
+    },
+    {
+     "id": "gas_close",
+     "label": "PLC 가스 밸브 닫기(전부)",
+     "skippable": true
+    },
+    {
+     "id": "mv_close",
+     "label": "메인 밸브 닫기",
+     "skippable": true
+    }
+   ],
+   "endStopMustKeep": [
+    "power",
+    "relay"
+   ],
+   "resumeChecks": {
+    "power_output": "파워 출력 — 이 구간에서 켠 DC·DC2·RF·DC Pulse·RF Pulse 가 켜져 있고 목표 근처(끈 것은 꺼져 있음)",
+    "shutter": "셔터 — Main Shutter·건 셔터 열림/닫힘이 저널과 같음(PLC 코일)",
+    "gas": "가스 — 메인 밸브·가스 밸브(PLC)·MFC 유량 설정과 FLOW ON",
+    "pressure": "압력 — 선택된 SP·설정값(SP1·SP2·채널 SP)과 지금 압력이 범위 안",
+    "power_select": "Power Select 릴레이 — SW_RF_SELECT·SW_POWER_SELECT 가 저널과 같음",
+    "heater_run": "CH2 히터 RUN·목표값이 저널과 같음",
+    "watchdog": "CH2 히터 래더 워치독 이상(WD_ERR) 없음",
+    "thickness": "두께 모니터 연결·크리스탈 정상·기준점(저널) 있음"
+   },
+   "edit": {
+    "ops": [
+     "insert",
+     "delete",
+     "move"
+    ],
+    "reasons": [
+     "EDIT_STARTED_BLOCK",
+     "EDIT_BAD_OP",
+     "EDIT_INVALID"
+    ],
+    "desc": "아직 시작 안 한 블록만 추가·삭제·순서 변경(started_upto = 시작한 맨 위 블록 수), 편집마다 전체 재검사 · 통과하면 판 번호 +1"
+   },
+   "adjust": {
+    "command": "PROCESS_ADJUST",
+    "items": [
+     {
+      "device": "mfc",
+      "item": "ar_flow",
+      "key": "mfc.ar_flow",
+      "param": {
+       "name": "value",
+       "type": "float",
+       "unit": "sccm",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "",
+       "desc": ""
+      },
+      "apply": "MFC FLOW_SET(ch 1) → 되읽기(v1 device/mfc.py FLOW_SET 확인)",
+      "whenLive": "Ar FLOW_SET 이 끝났으면",
+      "label": "Ar 유량"
+     },
+     {
+      "device": "mfc",
+      "item": "o2_flow",
+      "key": "mfc.o2_flow",
+      "param": {
+       "name": "value",
+       "type": "float",
+       "unit": "sccm",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "",
+       "desc": ""
+      },
+      "apply": "MFC FLOW_SET(ch 2) → 되읽기",
+      "whenLive": "O2 FLOW_SET 이 끝났으면",
+      "label": "O2 유량"
+     },
+     {
+      "device": "mfc",
+      "item": "n2_flow",
+      "key": "mfc.n2_flow",
+      "param": {
+       "name": "value",
+       "type": "float",
+       "unit": "sccm",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "",
+       "desc": ""
+      },
+      "apply": "MFC FLOW_SET(ch 3) → 되읽기(CH2 만)",
+      "whenLive": "N2 FLOW_SET 이 끝났으면",
+      "label": "N2 유량"
+     },
+     {
+      "device": "mfc",
+      "item": "wp",
+      "key": "mfc.wp",
+      "param": {
+       "name": "value",
+       "type": "float",
+       "unit": "mTorr",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "",
+       "desc": ""
+      },
+      "apply": "MFC SP1_SET → 되읽기",
+      "whenLive": "SP1_SET 이 끝났으면",
+      "label": "작업 압력(SP1)"
+     },
+     {
+      "device": "dc",
+      "item": "power",
+      "key": "dc.power",
+      "param": {
+       "name": "value",
+       "type": "float",
+       "unit": "W",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "",
+       "desc": ""
+      },
+      "apply": "DC 연속 새 목표(send_dc_power — 램프)",
+      "whenLive": "DC1 을 켰으면",
+      "label": "DC1 파워"
+     },
+     {
+      "device": "dc2",
+      "item": "power",
+      "key": "dc2.power",
+      "param": {
+       "name": "value",
+       "type": "float",
+       "unit": "W",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "",
+       "desc": ""
+      },
+      "apply": "DC2 새 목표(send_dc_power2)",
+      "whenLive": "DC2 를 켰으면",
+      "label": "DC2 파워"
+     },
+     {
+      "device": "rf",
+      "item": "power",
+      "key": "rf.power",
+      "param": {
+       "name": "value",
+       "type": "float",
+       "unit": "W",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "",
+       "desc": ""
+      },
+      "apply": "RF 연속 새 목표(send_rf_power — 램프)",
+      "whenLive": "RF 를 켰으면",
+      "label": "RF 파워"
+     },
+     {
+      "device": "dcp",
+      "item": "power",
+      "key": "dcp.power",
+      "param": {
+       "name": "value",
+       "type": "float",
+       "unit": "W",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "",
+       "desc": ""
+      },
+      "apply": "DC Pulse set_dc_pulse_power(출력 유지 + REF_POWER 확인 — v1 DC_PULSE_SET)",
+      "whenLive": "DC Pulse 를 켰으면",
+      "label": "DC Pulse 파워"
+     },
+     {
+      "device": "rfp",
+      "item": "power",
+      "key": "rfp.power",
+      "param": {
+       "name": "value",
+       "type": "float",
+       "unit": "W",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "",
+       "desc": ""
+      },
+      "apply": "RF Pulse set_rf_pulse_power(출력 유지 — v1 RF_PULSE_SET)",
+      "whenLive": "RF Pulse 를 켰으면",
+      "label": "RF Pulse 파워"
+     },
+     {
+      "device": "heater",
+      "item": "target",
+      "key": "heater.target",
+      "param": {
+       "name": "value",
+       "type": "float",
+       "unit": "°C",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": true,
+       "enum": null,
+       "label": "",
+       "desc": ""
+      },
+      "apply": "CH2 히터 목표 변경(heater_set 목표만 — 운전 유지)",
+      "whenLive": "히터 설정이 끝났으면",
+      "label": "히터 목표"
+     },
+     {
+      "device": "process",
+      "item": "main_remaining",
+      "key": "process.main_remaining",
+      "param": {
+       "name": "value",
+       "type": "float",
+       "unit": "s",
+       "default": null,
+       "required": true,
+       "min": 0.0,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "",
+       "desc": ""
+      },
+      "apply": "지금 메인 블록 남은 시간 = 값(아직이면 다음 메인 블록 길이)",
+      "whenLive": "메인 블록이 돌고 있으면",
+      "label": "메인 남은 시간"
+     },
+     {
+      "device": "process",
+      "item": "skip_wait",
+      "key": "process.skip_wait",
+      "param": {
+       "name": "value",
+       "type": "bool",
+       "unit": "",
+       "default": null,
+       "required": true,
+       "min": null,
+       "max": null,
+       "minExclusive": false,
+       "enum": null,
+       "label": "",
+       "desc": ""
+      },
+      "apply": "지금 대기 블록을 바로 끝냄(value=true) — 건너뛰기와 같은 정리",
+      "whenLive": "대기 블록이 돌고 있을 때만",
+      "label": "지금 대기 끝내기"
+     }
+    ]
+   }
+  },
+  "cfg": {
+   "keys": [
+    {
+     "key": "PROCESS_GUN_SHUTTERS",
+     "field": "gun_shutters",
+     "type": "list",
+     "use": "셔터 블록 대상 검사·기본 템플릿 건 셔터 순서"
+    },
+    {
+     "key": "PROCESS_DEFAULT_BASE_PRESSURE",
+     "field": "base_pressure",
+     "type": "float",
+     "use": "base_wait target_torr 기본(cfg:)"
+    },
+    {
+     "key": "PROCESS_DEFAULT_OES_INTEGRATION_MS",
+     "field": "integration_ms",
+     "type": "int",
+     "use": "main·thickness_main 적분 기본(cfg:)"
+    },
+    {
+     "key": "PC_PRESSURE_WAIT_TIMEOUT_S",
+     "field": "pressure_wait_timeout_s",
+     "type": "float",
+     "use": "압력 대기 최대(cfg:)"
+    },
+    {
+     "key": "PC_RF_PULSE_POST_ON_DELAY_MS",
+     "field": "rf_pulse_post_on_delay_ms",
+     "type": "int",
+     "use": "기본 템플릿 Power Delay"
+    },
+    {
+     "key": "PC_WORKING_PRESSURE_BOOST_TARGET",
+     "field": "boost_target",
+     "type": "float",
+     "use": "SP2 부스트 목표(cfg:)·부스트 여부"
+    },
+    {
+     "key": "PC_POWER_SELECT_SETTLE_MS",
+     "field": "power_select_settle_ms",
+     "type": "int",
+     "use": "기본 템플릿 Power Select 안정화"
+    },
+    {
+     "key": "RFPULSE_FREQ_MAX_HZ",
+     "field": "",
+     "type": "float",
+     "use": "RF Pulse 주파수 상한(Hz, 0 이하·오류면 30000)"
+    },
+    {
+     "key": "SUPPORTS_DC_CONT",
+     "field": "",
+     "type": "bool",
+     "use": "caps.dc(없으면 SUPPORTS_DC, 그것도 없으면 CH2)"
+    },
+    {
+     "key": "SUPPORTS_DC",
+     "field": "",
+     "type": "bool",
+     "use": "caps.dc"
+    },
+    {
+     "key": "SUPPORTS_DC_CONT2",
+     "field": "",
+     "type": "bool",
+     "use": "caps.dc2(없으면 SUPPORTS_DC2, 없으면 false) — CH2 · 히터 꺼짐일 때만"
+    },
+    {
+     "key": "SUPPORTS_DC2",
+     "field": "",
+     "type": "bool",
+     "use": "caps.dc2"
+    },
+    {
+     "key": "SUPPORTS_RF_CONT",
+     "field": "",
+     "type": "bool",
+     "use": "caps.rf(CH2 는 늘 true, CH1 은 없으면 false)"
+    },
+    {
+     "key": "SUPPORTS_DC_PULSE",
+     "field": "",
+     "type": "bool",
+     "use": "caps.dcp(없으면 SUPPORTS_DCPULSE, 없으면 CH1)"
+    },
+    {
+     "key": "SUPPORTS_DCPULSE",
+     "field": "",
+     "type": "bool",
+     "use": "caps.dcp"
+    },
+    {
+     "key": "SUPPORTS_RFPULSE",
+     "field": "",
+     "type": "bool",
+     "use": "caps.rfp(없으면 SUPPORTS_RF_PULSE, 없으면 CH2)"
+    },
+    {
+     "key": "SUPPORTS_RF_PULSE",
+     "field": "",
+     "type": "bool",
+     "use": "caps.rfp"
+    },
+    {
+     "key": "SUPPORTS_HEATER",
+     "field": "",
+     "type": "bool",
+     "use": "caps.heater(CH2 만)"
+    },
+    {
+     "key": "SUPPORTS_THICKNESS",
+     "field": "",
+     "type": "bool",
+     "use": "caps.thickness"
+    }
+   ],
+   "plainKeys": [
+    {
+     "key": "CH2_HEATER_SV_LIMIT_C",
+     "default": 900.0,
+     "use": "히터 목표 상한"
+    },
+    {
+     "key": "CH2_HEATER_MAX_TEMP",
+     "default": 900.0,
+     "use": "히터 목표 상한"
+    }
+   ],
+   "channelRule": "CH{n}_키 값이 null 이 아니면 그것, 아니면 키 값, 둘 다 null 이면 기본값. 목록·사전 기본값인 키는 글이면 JSON",
+   "stepCfgDefaults": {
+    "1": {
+     "chamber": 1,
+     "gas_info": {
+      "AR": {
+       "channel": 1
+      },
+      "O2": {
+       "channel": 2
+      },
+      "N2": {
+       "channel": 3
+      }
+     },
+     "gun_shutters": [],
+     "sp_on_cmd": "SP3_ON",
+     "sp_label": "SP3",
+     "sp_index": 3,
+     "base_pressure": 1e-05,
+     "integration_ms": 60,
+     "pressure_wait_timeout_s": 180.0,
+     "rf_pulse_post_on_delay_ms": 20000,
+     "boost_target": 10.0,
+     "power_select_settle_ms": 7000,
+     "zero_confirm_s": 5.0,
+     "zero_confirm_nm": 2.0,
+     "max_time_ratio": 2.0,
+     "max_time_margin_s": 300.0
+    },
+    "2": {
+     "chamber": 2,
+     "gas_info": {
+      "AR": {
+       "channel": 1
+      },
+      "O2": {
+       "channel": 2
+      },
+      "N2": {
+       "channel": 3
+      }
+     },
+     "gun_shutters": [
+      "G1",
+      "G2",
+      "G3"
+     ],
+     "sp_on_cmd": "SP4_ON",
+     "sp_label": "SP4",
+     "sp_index": 4,
+     "base_pressure": 1e-05,
+     "integration_ms": 60,
+     "pressure_wait_timeout_s": 180.0,
+     "rf_pulse_post_on_delay_ms": 20000,
+     "boost_target": 10.0,
+     "power_select_settle_ms": 7000,
+     "zero_confirm_s": 5.0,
+     "zero_confirm_nm": 2.0,
+     "max_time_ratio": 2.0,
+     "max_time_margin_s": 300.0
+    }
+   },
+   "rfpFreqMaxHzDefault": 30000.0
+  },
+  "recipe": {
+   "templateColumns": [
+    "#",
+    "Process_name",
+    "delay",
+    "chuck_position",
+    "main_shutter",
+    "integration_time",
+    "Ar",
+    "O2",
+    "N2",
+    "Ar_flow",
+    "O2_flow",
+    "N2_flow",
+    "base_pressure",
+    "working_pressure",
+    "shutter_delay",
+    "process_time",
+    "dep_rate",
+    "thickness",
+    "tooling",
+    "density",
+    "z_factor",
+    "gun1",
+    "gun2",
+    "gun3",
+    "G1 Target",
+    "G2 Target",
+    "G3 Target",
+    "power_select",
+    "use_dc_power",
+    "dc_power",
+    "use_dc_power2",
+    "dc_power2",
+    "use_rf_power",
+    "rf_power",
+    "use_dc_pulse",
+    "dc_pulse_power",
+    "dc_pulse_freq",
+    "dc_pulse_off_time",
+    "use_rf_pulse",
+    "rf_pulse_power",
+    "rf_pulse_freq",
+    "rf_pulse_duty_cycle",
+    "power_change_time",
+    "change_power_value",
+    "use_heater",
+    "heater_temp",
+    "heater_ramp",
+    "heater_soak"
+   ],
+   "extraColumns": [
+    "dep.rate",
+    "dc_pulse_duty_cycle",
+    "time",
+    "G1_target_name",
+    "G2_target_name",
+    "G3_target_name",
+    "use_g1",
+    "use_g2",
+    "use_g3",
+    "process_note"
+   ],
+   "columnDoc": {
+    "#": {
+     "desc": "'test' 면 TEST 행(장비 제어 없이 time 만큼 대기), 그 밖은 번호(Process_name 이 비면 이름)",
+     "unit": "",
+     "blank": "",
+     "key": "test_mode"
+    },
+    "Process_name": {
+     "desc": "공정 이름(비면 '#' → '공정 N'). 'delay 10m' 꼴이면 대기 행",
+     "unit": "",
+     "blank": "",
+     "key": "process_note"
+    },
+    "delay": {
+     "desc": "대기 행 — 숫자만이면 분, 아니면 30s·5m·1h30m(단위 없는 숫자 문자열 해석 0 초)",
+     "unit": "분",
+     "blank": "대기 행 아님",
+     "key": ""
+    },
+    "chuck_position": {
+     "desc": "공정 전 Chuck 위치 up/mid/down",
+     "unit": "",
+     "blank": "이동 안 함",
+     "key": "chuck_position"
+    },
+    "main_shutter": {
+     "desc": "T 면 Main Shutter 열기(닫기는 항상)",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_ms"
+    },
+    "integration_time": {
+     "desc": "OES 적분 시간",
+     "unit": "ms",
+     "blank": "60",
+     "key": "integration_time"
+    },
+    "Ar": {
+     "desc": "Ar 사용",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_ar"
+    },
+    "O2": {
+     "desc": "O2 사용",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_o2"
+    },
+    "N2": {
+     "desc": "N2 사용(CH1 은 라인 없음 — 무시)",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_n2"
+    },
+    "Ar_flow": {
+     "desc": "Ar 유량",
+     "unit": "sccm",
+     "blank": "0",
+     "key": "ar_flow"
+    },
+    "O2_flow": {
+     "desc": "O2 유량",
+     "unit": "sccm",
+     "blank": "0",
+     "key": "o2_flow"
+    },
+    "N2_flow": {
+     "desc": "N2 유량",
+     "unit": "sccm",
+     "blank": "0",
+     "key": "n2_flow"
+    },
+    "base_pressure": {
+     "desc": "베이스 압력 목표(IG)",
+     "unit": "Torr",
+     "blank": "1e-5",
+     "key": "base_pressure"
+    },
+    "working_pressure": {
+     "desc": "작업 압력(SP1·채널 SP 대기 목표, < 부스트 목표면 SP2 먼저)",
+     "unit": "mTorr",
+     "blank": "0",
+     "key": "working_pressure"
+    },
+    "shutter_delay": {
+     "desc": "Shutter Delay",
+     "unit": "분",
+     "blank": "0(단계 없음)",
+     "key": "shutter_delay"
+    },
+    "process_time": {
+     "desc": "메인 공정 시간(비면 thickness÷dep_rate 역산)",
+     "unit": "분",
+     "blank": "0",
+     "key": "process_time"
+    },
+    "dep_rate": {
+     "desc": "증착률(헤더 dep.rate 도 됨, >0 만)",
+     "unit": "nm/s",
+     "blank": "없음",
+     "key": "dep_rate"
+    },
+    "thickness": {
+     "desc": "목표 두께(두께 모니터 채널이면 Thickness 모드)",
+     "unit": "nm",
+     "blank": "없음",
+     "key": "thickness"
+    },
+    "tooling": {
+     "desc": "Thickness 모드 재료값 tooling(10~399)",
+     "unit": "%",
+     "blank": "Factor 설정",
+     "key": "tooling"
+    },
+    "density": {
+     "desc": "재료 밀도(0.5~99.99)",
+     "unit": "g/cm3",
+     "blank": "Factor 설정",
+     "key": "density"
+    },
+    "z_factor": {
+     "desc": "Z-factor(0.1~9.999)",
+     "unit": "",
+     "blank": "Factor 설정",
+     "key": "z_factor"
+    },
+    "gun1": {
+     "desc": "Gun1 사용(CH2 건 셔터)",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_g1"
+    },
+    "gun2": {
+     "desc": "Gun2 사용",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_g2"
+    },
+    "gun3": {
+     "desc": "Gun3 사용",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_g3"
+    },
+    "G1 Target": {
+     "desc": "G1 타겟 이름(비면 재고 DB·화면값)",
+     "unit": "",
+     "blank": "",
+     "key": "G1 Target"
+    },
+    "G2 Target": {
+     "desc": "G2 타겟 이름",
+     "unit": "",
+     "blank": "",
+     "key": "G2 Target"
+    },
+    "G3 Target": {
+     "desc": "G3 타겟 이름",
+     "unit": "",
+     "blank": "",
+     "key": "G3 Target"
+    },
+    "power_select": {
+     "desc": "CH2 SW_RF_SELECT 켜기 + 안정화 대기",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_power_select"
+    },
+    "use_dc_power": {
+     "desc": "DC1 연속",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_dc_power"
+    },
+    "dc_power": {
+     "desc": "DC1 파워",
+     "unit": "W",
+     "blank": "0",
+     "key": "dc_power"
+    },
+    "use_dc_power2": {
+     "desc": "DC2 연속(폐지 — CH2 히터와 배타)",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_dc_power2"
+    },
+    "dc_power2": {
+     "desc": "DC2 파워",
+     "unit": "W",
+     "blank": "0",
+     "key": "dc_power2"
+    },
+    "use_rf_power": {
+     "desc": "RF 연속",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_rf_power"
+    },
+    "rf_power": {
+     "desc": "RF 파워",
+     "unit": "W",
+     "blank": "0",
+     "key": "rf_power"
+    },
+    "use_dc_pulse": {
+     "desc": "DC Pulse(이 열만으로 사용 여부 — D04)",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_dc_pulse"
+    },
+    "dc_pulse_power": {
+     "desc": "DC Pulse 파워",
+     "unit": "W",
+     "blank": "0",
+     "key": "dc_pulse_power"
+    },
+    "dc_pulse_freq": {
+     "desc": "DC Pulse 주파수(정수 20~150)",
+     "unit": "kHz",
+     "blank": "장비값 유지",
+     "key": "dc_pulse_freq"
+    },
+    "dc_pulse_off_time": {
+     "desc": "DC Pulse Off Time(숫자 µs 소수 1자리 | DC)",
+     "unit": "µs",
+     "blank": "장비값 유지",
+     "key": "dc_pulse_off_time"
+    },
+    "use_rf_pulse": {
+     "desc": "RF Pulse(이 열만으로 사용 여부 — D04)",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_rf_pulse"
+    },
+    "rf_pulse_power": {
+     "desc": "RF Pulse 파워",
+     "unit": "W",
+     "blank": "0",
+     "key": "rf_pulse_power"
+    },
+    "rf_pulse_freq": {
+     "desc": "RF Pulse 주파수(실수, 장비에는 Hz)",
+     "unit": "kHz",
+     "blank": "장비값 유지",
+     "key": "rf_pulse_freq"
+    },
+    "rf_pulse_duty_cycle": {
+     "desc": "RF Pulse 듀티(정수 1~99)",
+     "unit": "%",
+     "blank": "장비값 유지",
+     "key": "rf_pulse_duty"
+    },
+    "power_change_time": {
+     "desc": "중간 펄스 파워 변경 시점(숫자만 = 초, 30s·5m·1h30m) — Shutter Delay 시작부터",
+     "unit": "",
+     "blank": "변경 없음",
+     "key": "power_change_time"
+    },
+    "change_power_value": {
+     "desc": "중간 변경 파워(power_change_time 과 함께)",
+     "unit": "W",
+     "blank": "변경 없음",
+     "key": "change_power_value"
+    },
+    "use_heater": {
+     "desc": "CH2 히터 사용",
+     "unit": "T/F",
+     "blank": "F",
+     "key": "use_heater"
+    },
+    "heater_temp": {
+     "desc": "히터 목표",
+     "unit": "°C",
+     "blank": "없음",
+     "key": "heater_temp"
+    },
+    "heater_ramp": {
+     "desc": "히터 램프",
+     "unit": "°C/min",
+     "blank": "기본 램프",
+     "key": "heater_ramp"
+    },
+    "heater_soak": {
+     "desc": "도달 뒤 SOAK",
+     "unit": "분",
+     "blank": "없음",
+     "key": "heater_soak"
+    }
+   },
+   "tfTrue": [
+    "T",
+    "TRUE",
+    "1",
+    "Y",
+    "YES"
+   ],
+   "tfFalse": [
+    "F",
+    "FALSE",
+    "0",
+    "N",
+    "NO"
+   ],
+   "raw": {
+    "code": "E230",
+    "prefix": "레시피 오류",
+    "maxShown": 20,
+    "floatKeys": [
+     "base_pressure",
+     "working_pressure",
+     "process_time",
+     "shutter_delay",
+     "thickness",
+     "dep_rate",
+     "dep.rate",
+     "dc_power",
+     "dc_power2",
+     "rf_power",
+     "dc_pulse_power",
+     "rf_pulse_power",
+     "Ar_flow",
+     "O2_flow",
+     "N2_flow",
+     "change_power_value",
+     "rf_pulse_freq",
+     "heater_temp",
+     "heater_ramp",
+     "heater_soak",
+     "tooling",
+     "density",
+     "z_factor"
+    ],
+    "rangeKeys": {
+     "tooling": [
+      10.0,
+      399.0,
+      "%"
+     ],
+     "density": [
+      0.5,
+      99.99,
+      "g/cm3"
+     ],
+     "z_factor": [
+      0.1,
+      9.999,
+      ""
+     ]
+    },
+    "intKeys": [
+     "integration_time",
+     "dc_pulse_freq",
+     "dc_pulse_duty_cycle",
+     "rf_pulse_duty_cycle"
+    ],
+    "offTimeKeys": [
+     "dc_pulse_off_time"
+    ],
+    "tfKeys": [
+     "gun1",
+     "gun2",
+     "gun3",
+     "use_dc_pulse",
+     "use_rf_pulse",
+     "use_rf_power",
+     "use_dc_power",
+     "use_dc_power2",
+     "Ar",
+     "O2",
+     "N2",
+     "main_shutter",
+     "power_select",
+     "use_heater"
+    ],
+    "tfTrue": [
+     "T",
+     "TRUE",
+     "1",
+     "Y",
+     "YES"
+    ],
+    "tfFalse": [
+     "F",
+     "FALSE",
+     "0",
+     "N",
+     "NO"
+    ],
+    "enumKeys": {
+     "chuck_position": [
+      "up",
+      "mid",
+      "down"
+     ]
+    },
+    "durationKeys": [
+     "power_change_time"
+    ],
+    "pair": [
+     "change_power_value",
+     "power_change_time"
+    ]
+   },
+   "norm": {
+    "heaterRampMax": 60.0,
+    "heaterSoakMax": 480.0,
+    "dcpFreq": [
+     20,
+     150
+    ],
+    "dcpOff": [
+     1.0,
+     10.0
+    ]
+   },
+   "durationPattern": "(?:(\\d+(?:\\.\\d+)?)h)?(?:(\\d+(?:\\.\\d+)?)m)?(?:(\\d+(?:\\.\\d+)?)s)?",
+   "delayNamePattern": "^\\s*delay\\s*(\\d+)\\s*([smhd]?)\\s*$"
+  }
+ },
+ "cfg": {
+  "CH1_RFPULSE_FREQ_MAX_HZ": 30000,
+  "CH2_HEATER_MAX_TEMP": 900.0,
+  "CH2_HEATER_SV_LIMIT_C": 900.0,
+  "CH2_RFPULSE_FREQ_MAX_HZ": 30000
+ },
+ "rawCases": [
+  {"name": "durations", "rows": [{"#": "", "Process_name": "d1", "delay": "", "chuck_position": "", "main_shutter": "", "integration_time": "", "Ar": "", "O2": "", "N2": "", "Ar_flow": "", "O2_flow": "", "N2_flow": "", "base_pressure": "", "working_pressure": "", "shutter_delay": "", "process_time": "", "dep_rate": "", "thickness": "", "tooling": "", "density": "", "z_factor": "", "gun1": "", "gun2": "", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "", "dc_pulse_off_time": "", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": "30", "change_power_value": "1", "use_heater": "", "heater_temp": "", "heater_ramp": "", "heater_soak": ""}, {"#": "", "Process_name": "d2", "delay": "", "chuck_position": "", "main_shutter": "", "integration_time": "", "Ar": "", "O2": "", "N2": "", "Ar_flow": "", "O2_flow": "", "N2_flow": "", "base_pressure": "", "working_pressure": "", "shutter_delay": "", "process_time": "", "dep_rate": "", "thickness": "", "tooling": "", "density": "", "z_factor": "", "gun1": "", "gun2": "", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "", "dc_pulse_off_time": "", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": "1h30", "change_power_value": "1", "use_heater": "", "heater_temp": "", "heater_ramp": "", "heater_soak": ""}, {"#": "", "Process_name": "d3", "delay": "", "chuck_position": "", "main_shutter": "", "integration_time": "", "Ar": "", "O2": "", "N2": "", "Ar_flow": "", "O2_flow": "", "N2_flow": "", "base_pressure": "", "working_pressure": "", "shutter_delay": "", "process_time": "", "dep_rate": "", "thickness": "", "tooling": "", "density": "", "z_factor": "", "gun1": "", "gun2": "", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "", "dc_pulse_off_time": "", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": "0s", "change_power_value": "1", "use_heater": "", "heater_temp": "", "heater_ramp": "", "heater_soak": ""}, {"#": "", "Process_name": "d4", "delay": "", "chuck_position": "", "main_shutter": "", "integration_time": "", "Ar": "", "O2": "", "N2": "", "Ar_flow": "", "O2_flow": "", "N2_flow": "", "base_pressure": "", "working_pressure": "", "shutter_delay": "", "process_time": "", "dep_rate": "", "thickness": "", "tooling": "", "density": "", "z_factor": "", "gun1": "", "gun2": "", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "", "dc_pulse_off_time": "", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": " 5M ", "change_power_value": "", "use_heater": "", "heater_temp": "", "heater_ramp": "", "heater_soak": ""}, {"#": "", "Process_name": "d5", "delay": "", "chuck_position": "", "main_shutter": "", "integration_time": "", "Ar": "", "O2": "", "N2": "", "Ar_flow": "", "O2_flow": "", "N2_flow": "", "base_pressure": "", "working_pressure": "", "shutter_delay": "", "process_time": "", "dep_rate": "", "thickness": "", "tooling": "", "density": "", "z_factor": "", "gun1": "", "gun2": "", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "", "dc_pulse_off_time": "", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": "", "change_power_value": "10", "use_heater": "", "heater_temp": "", "heater_ramp": "", "heater_soak": ""}, {"#": "", "Process_name": "d6", "delay": "", "chuck_position": "", "main_shutter": "", "integration_time": "", "Ar": "", "O2": "", "N2": "", "Ar_flow": "", "O2_flow": "", "N2_flow": "", "base_pressure": "", "working_pressure": "", "shutter_delay": "", "process_time": "", "dep_rate": "", "thickness": "", "tooling": "", "density": "", "z_factor": "", "gun1": "", "gun2": "", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "", "dc_pulse_off_time": "3us", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": "1.5h", "change_power_value": "5", "use_heater": "", "heater_temp": "", "heater_ramp": "", "heater_soak": ""}], "rowNumbers": null, "errors": ["3행('d2') power_change_time='1h30' → 기간 형식이 아닙니다 (예: 30s, 5m, 1h30m)", "4행('d3') power_change_time='0s' → 기간 형식이 아닙니다 (예: 30s, 5m, 1h30m)", "5행('d4') change_power_value 와 power_change_time 은 함께 입력해야 합니다 (현재: change_power_value='', power_change_time='5M')", "6행('d5') change_power_value 와 power_change_time 은 함께 입력해야 합니다 (현재: change_power_value='10', power_change_time='')", "7행('d6') dc_pulse_off_time='3us' → 숫자(µs) 또는 DC 여야 합니다"], "message": "레시피 오류 5건:\n - 3행('d2') power_change_time='1h30' → 기간 형식이 아닙니다 (예: 30s, 5m, 1h30m)\n - 4행('d3') power_change_time='0s' → 기간 형식이 아닙니다 (예: 30s, 5m, 1h30m)\n - 5행('d4') change_power_value 와 power_change_time 은 함께 입력해야 합니다 (현재: change_power_value='', power_change_time='5M')\n - 6행('d5') change_power_value 와 power_change_time 은 함께 입력해야 합니다 (현재: change_power_value='10', power_change_time='')\n - 7행('d6') dc_pulse_off_time='3us' → 숫자(µs) 또는 DC 여야 합니다", "popup": "레시피 오류 5건:\n- 3행('d2') power_change_time='1h30' → 기간 형식이 아닙니다 (예: 30s, 5m, 1h30m)\n- 4행('d3') power_change_time='0s' → 기간 형식이 아닙니다 (예: 30s, 5m, 1h30m)\n- 5행('d4') change_power_value 와 power_change_time 은 함께 입력해야 합니다 (현재: change_power_value='', power_change_time='5M')\n- 6행('d5') change_power_value 와 power_change_time 은 함께 입력해야 합니다 (현재: change_power_value='10', power_change_time='')\n- 7행('d6') dc_pulse_off_time='3us' → 숫자(µs) 또는 DC 여야 합니다"},
+  {"name": "ints_tf_enum", "rows": [{"#": "", "Process_name": "", "delay": "", "chuck_position": "Middle", "main_shutter": "", "integration_time": "6.5", "Ar": "t", "O2": "True", "N2": "2", "Ar_flow": "", "O2_flow": "", "N2_flow": "", "base_pressure": "", "working_pressure": "", "shutter_delay": "", "process_time": "", "dep_rate": "", "thickness": "", "tooling": "", "density": "", "z_factor": "", "gun1": "yes", "gun2": "ON", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "20k", "dc_pulse_off_time": "dc", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": "", "change_power_value": "", "use_heater": "X", "heater_temp": "", "heater_ramp": "", "heater_soak": ""}], "rowNumbers": null, "errors": ["2행 dc_pulse_freq='20k' → 숫자가 아닙니다", "2행 gun2='ON' → T/F 값이 아닙니다", "2행 N2='2' → T/F 값이 아닙니다", "2행 use_heater='X' → T/F 값이 아닙니다", "2행 chuck_position='Middle' → up/mid/down 중 하나여야 합니다"], "message": "레시피 오류 5건:\n - 2행 dc_pulse_freq='20k' → 숫자가 아닙니다\n - 2행 gun2='ON' → T/F 값이 아닙니다\n - 2행 N2='2' → T/F 값이 아닙니다\n - 2행 use_heater='X' → T/F 값이 아닙니다\n - 2행 chuck_position='Middle' → up/mid/down 중 하나여야 합니다", "popup": "레시피 오류 5건:\n- 2행 dc_pulse_freq='20k' → 숫자가 아닙니다\n- 2행 gun2='ON' → T/F 값이 아닙니다\n- 2행 N2='2' → T/F 값이 아닙니다\n- 2행 use_heater='X' → T/F 값이 아닙니다\n- 2행 chuck_position='Middle' → up/mid/down 중 하나여야 합니다"},
+  {"name": "numbers", "rows": [{"#": "", "Process_name": "n", "delay": "", "chuck_position": "", "main_shutter": "", "integration_time": "", "Ar": "", "O2": "", "N2": "", "Ar_flow": "-", "O2_flow": "", "N2_flow": "", "base_pressure": "1e-5x", "working_pressure": "abc", "shutter_delay": "", "process_time": "5분", "dep_rate": "0,05", "thickness": "", "tooling": "5", "density": "100", "z_factor": "9.999", "gun1": "", "gun2": "", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "", "dc_pulse_off_time": "", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": "", "change_power_value": "", "use_heater": "", "heater_temp": "2OO", "heater_ramp": "", "heater_soak": "", "dep.rate": "x"}], "rowNumbers": null, "errors": ["2행('n') base_pressure='1e-5x' → 숫자가 아닙니다", "2행('n') working_pressure='abc' → 숫자가 아닙니다", "2행('n') process_time='5분' → 숫자가 아닙니다", "2행('n') dep_rate='0,05' → 숫자가 아닙니다", "2행('n') dep.rate='x' → 숫자가 아닙니다", "2행('n') Ar_flow='-' → 숫자가 아닙니다", "2행('n') heater_temp='2OO' → 숫자가 아닙니다", "2행('n') tooling='5' → 범위 10~399 % 밖입니다", "2행('n') density='100' → 범위 0.5~99.99 g/cm3 밖입니다"], "message": "레시피 오류 9건:\n - 2행('n') base_pressure='1e-5x' → 숫자가 아닙니다\n - 2행('n') working_pressure='abc' → 숫자가 아닙니다\n - 2행('n') process_time='5분' → 숫자가 아닙니다\n - 2행('n') dep_rate='0,05' → 숫자가 아닙니다\n - 2행('n') dep.rate='x' → 숫자가 아닙니다\n - 2행('n') Ar_flow='-' → 숫자가 아닙니다\n - 2행('n') heater_temp='2OO' → 숫자가 아닙니다\n - 2행('n') tooling='5' → 범위 10~399 % 밖입니다\n - 2행('n') density='100' → 범위 0.5~99.99 g/cm3 밖입니다", "popup": "레시피 오류 9건:\n- 2행('n') base_pressure='1e-5x' → 숫자가 아닙니다\n- 2행('n') working_pressure='abc' → 숫자가 아닙니다\n- 2행('n') process_time='5분' → 숫자가 아닙니다\n- 2행('n') dep_rate='0,05' → 숫자가 아닙니다\n- 2행('n') dep.rate='x' → 숫자가 아닙니다\n- 2행('n') Ar_flow='-' → 숫자가 아닙니다\n- 2행('n') heater_temp='2OO' → 숫자가 아닙니다\n- 2행('n') tooling='5' → 범위 10~399 % 밖입니다\n- 2행('n') density='100' → 범위 0.5~99.99 g/cm3 밖입니다"},
+  {"name": "ok_template", "rows": [{"#": "1", "Process_name": "a", "delay": "", "chuck_position": "", "main_shutter": "T", "integration_time": "", "Ar": "T", "O2": "", "N2": "", "Ar_flow": "50", "O2_flow": "", "N2_flow": "", "base_pressure": "7.00E-06", "working_pressure": "", "shutter_delay": "", "process_time": "", "dep_rate": "", "thickness": "", "tooling": "", "density": "", "z_factor": "", "gun1": "", "gun2": "", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "", "dc_pulse_off_time": "", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": "", "change_power_value": "", "use_heater": "", "heater_temp": "", "heater_ramp": "", "heater_soak": ""}], "rowNumbers": null, "errors": [], "message": "", "popup": ""},
+  {"name": "overflow", "rows": [{"#": "", "Process_name": "o0", "delay": "", "chuck_position": "", "main_shutter": "", "integration_time": "", "Ar": "Q", "O2": "", "N2": "", "Ar_flow": "", "O2_flow": "", "N2_flow": "", "base_pressure": "x", "working_pressure": "y", "shutter_delay": "", "process_time": "", "dep_rate": "", "thickness": "", "tooling": "", "density": "", "z_factor": "", "gun1": "", "gun2": "", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "", "dc_pulse_off_time": "", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": "", "change_power_value": "", "use_heater": "", "heater_temp": "", "heater_ramp": "", "heater_soak": ""}, {"#": "", "Process_name": "o1", "delay": "", "chuck_position": "", "main_shutter": "", "integration_time": "", "Ar": "Q", "O2": "", "N2": "", "Ar_flow": "", "O2_flow": "", "N2_flow": "", "base_pressure": "x", "working_pressure": "y", "shutter_delay": "", "process_time": "", "dep_rate": "", "thickness": "", "tooling": "", "density": "", "z_factor": "", "gun1": "", "gun2": "", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "", "dc_pulse_off_time": "", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": "", "change_power_value": "", "use_heater": "", "heater_temp": "", "heater_ramp": "", "heater_soak": ""}, {"#": "", "Process_name": "o2", "delay": "", "chuck_position": "", "main_shutter": "", "integration_time": "", "Ar": "Q", "O2": "", "N2": "", "Ar_flow": "", "O2_flow": "", "N2_flow": "", "base_pressure": "x", "working_pressure": "y", "shutter_delay": "", "process_time": "", "dep_rate": "", "thickness": "", "tooling": "", "density": "", "z_factor": "", "gun1": "", "gun2": "", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "", "dc_pulse_off_time": "", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": "", "change_power_value": "", "use_heater": "", "heater_temp": "", "heater_ramp": "", "heater_soak": ""}, {"#": "", "Process_name": "o3", "delay": "", "chuck_position": "", "main_shutter": "", "integration_time": "", "Ar": "Q", "O2": "", "N2": "", "Ar_flow": "", "O2_flow": "", "N2_flow": "", "base_pressure": "x", "working_pressure": "y", "shutter_delay": "", "process_time": "", "dep_rate": "", "thickness": "", "tooling": "", "density": "", "z_factor": "", "gun1": "", "gun2": "", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "", "dc_pulse_off_time": "", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": "", "change_power_value": "", "use_heater": "", "heater_temp": "", "heater_ramp": "", "heater_soak": ""}, {"#": "", "Process_name": "o4", "delay": "", "chuck_position": "", "main_shutter": "", "integration_time": "", "Ar": "Q", "O2": "", "N2": "", "Ar_flow": "", "O2_flow": "", "N2_flow": "", "base_pressure": "x", "working_pressure": "y", "shutter_delay": "", "process_time": "", "dep_rate": "", "thickness": "", "tooling": "", "density": "", "z_factor": "", "gun1": "", "gun2": "", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "", "dc_pulse_off_time": "", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": "", "change_power_value": "", "use_heater": "", "heater_temp": "", "heater_ramp": "", "heater_soak": ""}, {"#": "", "Process_name": "o5", "delay": "", "chuck_position": "", "main_shutter": "", "integration_time": "", "Ar": "Q", "O2": "", "N2": "", "Ar_flow": "", "O2_flow": "", "N2_flow": "", "base_pressure": "x", "working_pressure": "y", "shutter_delay": "", "process_time": "", "dep_rate": "", "thickness": "", "tooling": "", "density": "", "z_factor": "", "gun1": "", "gun2": "", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "", "dc_pulse_off_time": "", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": "", "change_power_value": "", "use_heater": "", "heater_temp": "", "heater_ramp": "", "heater_soak": ""}, {"#": "", "Process_name": "o6", "delay": "", "chuck_position": "", "main_shutter": "", "integration_time": "", "Ar": "Q", "O2": "", "N2": "", "Ar_flow": "", "O2_flow": "", "N2_flow": "", "base_pressure": "x", "working_pressure": "y", "shutter_delay": "", "process_time": "", "dep_rate": "", "thickness": "", "tooling": "", "density": "", "z_factor": "", "gun1": "", "gun2": "", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "", "dc_pulse_off_time": "", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": "", "change_power_value": "", "use_heater": "", "heater_temp": "", "heater_ramp": "", "heater_soak": ""}, {"#": "", "Process_name": "o7", "delay": "", "chuck_position": "", "main_shutter": "", "integration_time": "", "Ar": "Q", "O2": "", "N2": "", "Ar_flow": "", "O2_flow": "", "N2_flow": "", "base_pressure": "x", "working_pressure": "y", "shutter_delay": "", "process_time": "", "dep_rate": "", "thickness": "", "tooling": "", "density": "", "z_factor": "", "gun1": "", "gun2": "", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "", "dc_pulse_off_time": "", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": "", "change_power_value": "", "use_heater": "", "heater_temp": "", "heater_ramp": "", "heater_soak": ""}, {"#": "", "Process_name": "o8", "delay": "", "chuck_position": "", "main_shutter": "", "integration_time": "", "Ar": "Q", "O2": "", "N2": "", "Ar_flow": "", "O2_flow": "", "N2_flow": "", "base_pressure": "x", "working_pressure": "y", "shutter_delay": "", "process_time": "", "dep_rate": "", "thickness": "", "tooling": "", "density": "", "z_factor": "", "gun1": "", "gun2": "", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "", "dc_pulse_off_time": "", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": "", "change_power_value": "", "use_heater": "", "heater_temp": "", "heater_ramp": "", "heater_soak": ""}], "rowNumbers": [2, 5, 8, 11, 14, 17, 20, 23, 26], "errors": ["2행('o0') base_pressure='x' → 숫자가 아닙니다", "2행('o0') working_pressure='y' → 숫자가 아닙니다", "2행('o0') Ar='Q' → T/F 값이 아닙니다", "5행('o1') base_pressure='x' → 숫자가 아닙니다", "5행('o1') working_pressure='y' → 숫자가 아닙니다", "5행('o1') Ar='Q' → T/F 값이 아닙니다", "8행('o2') base_pressure='x' → 숫자가 아닙니다", "8행('o2') working_pressure='y' → 숫자가 아닙니다", "8행('o2') Ar='Q' → T/F 값이 아닙니다", "11행('o3') base_pressure='x' → 숫자가 아닙니다", "11행('o3') working_pressure='y' → 숫자가 아닙니다", "11행('o3') Ar='Q' → T/F 값이 아닙니다", "14행('o4') base_pressure='x' → 숫자가 아닙니다", "14행('o4') working_pressure='y' → 숫자가 아닙니다", "14행('o4') Ar='Q' → T/F 값이 아닙니다", "17행('o5') base_pressure='x' → 숫자가 아닙니다", "17행('o5') working_pressure='y' → 숫자가 아닙니다", "17행('o5') Ar='Q' → T/F 값이 아닙니다", "20행('o6') base_pressure='x' → 숫자가 아닙니다", "20행('o6') working_pressure='y' → 숫자가 아닙니다", "... 외 7건"], "message": "레시피 오류 21건:\n - 2행('o0') base_pressure='x' → 숫자가 아닙니다\n - 2행('o0') working_pressure='y' → 숫자가 아닙니다\n - 2행('o0') Ar='Q' → T/F 값이 아닙니다\n - 5행('o1') base_pressure='x' → 숫자가 아닙니다\n - 5행('o1') working_pressure='y' → 숫자가 아닙니다\n - 5행('o1') Ar='Q' → T/F 값이 아닙니다\n - 8행('o2') base_pressure='x' → 숫자가 아닙니다\n - 8행('o2') working_pressure='y' → 숫자가 아닙니다\n - 8행('o2') Ar='Q' → T/F 값이 아닙니다\n - 11행('o3') base_pressure='x' → 숫자가 아닙니다\n - 11행('o3') working_pressure='y' → 숫자가 아닙니다\n - 11행('o3') Ar='Q' → T/F 값이 아닙니다\n - 14행('o4') base_pressure='x' → 숫자가 아닙니다\n - 14행('o4') working_pressure='y' → 숫자가 아닙니다\n - 14행('o4') Ar='Q' → T/F 값이 아닙니다\n - 17행('o5') base_pressure='x' → 숫자가 아닙니다\n - 17행('o5') working_pressure='y' → 숫자가 아닙니다\n - 17행('o5') Ar='Q' → T/F 값이 아닙니다\n - 20행('o6') base_pressure='x' → 숫자가 아닙니다\n - 20행('o6') working_pressure='y' → 숫자가 아닙니다\n - ... 외 7건", "popup": "레시피 오류 21건:\n- 2행('o0') base_pressure='x' → 숫자가 아닙니다\n- 2행('o0') working_pressure='y' → 숫자가 아닙니다\n- 2행('o0') Ar='Q' → T/F 값이 아닙니다\n- 5행('o1') base_pressure='x' → 숫자가 아닙니다\n- 5행('o1') working_pressure='y' → 숫자가 아닙니다\n- 5행('o1') Ar='Q' → T/F 값이 아닙니다\n- 8행('o2') base_pressure='x' → 숫자가 아닙니다\n- 8행('o2') working_pressure='y' → 숫자가 아닙니다\n- 8행('o2') Ar='Q' → T/F 값이 아닙니다\n- 11행('o3') base_pressure='x' → 숫자가 아닙니다\n- 11행('o3') working_pressure='y' → 숫자가 아닙니다\n- 11행('o3') Ar='Q' → T/F 값이 아닙니다\n- 14행('o4') base_pressure='x' → 숫자가 아닙니다\n- 14행('o4') working_pressure='y' → 숫자가 아닙니다\n- 14행('o4') Ar='Q' → T/F 값이 아닙니다\n- 17행('o5') base_pressure='x' → 숫자가 아닙니다\n- 17행('o5') working_pressure='y' → 숫자가 아닙니다\n- 17행('o5') Ar='Q' → T/F 값이 아닙니다\n- 20행('o6') base_pressure='x' → 숫자가 아닙니다\n- 20행('o6') working_pressure='y' → 숫자가 아닙니다\n- ... 외 7건"},
+  {"name": "ranges", "rows": [{"#": "", "Process_name": "r1", "delay": "", "chuck_position": "", "main_shutter": "", "integration_time": "", "Ar": "", "O2": "", "N2": "", "Ar_flow": "", "O2_flow": "", "N2_flow": "", "base_pressure": "", "working_pressure": "", "shutter_delay": "", "process_time": "", "dep_rate": "", "thickness": "", "tooling": "10", "density": "0.5", "z_factor": "0.1", "gun1": "", "gun2": "", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "", "dc_pulse_off_time": "", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": "", "change_power_value": "", "use_heater": "", "heater_temp": "", "heater_ramp": "", "heater_soak": ""}, {"#": "", "Process_name": "r2", "delay": "", "chuck_position": "", "main_shutter": "", "integration_time": "", "Ar": "", "O2": "", "N2": "", "Ar_flow": "", "O2_flow": "", "N2_flow": "", "base_pressure": "", "working_pressure": "", "shutter_delay": "", "process_time": "", "dep_rate": "", "thickness": "", "tooling": "399.5", "density": "99.991", "z_factor": "10", "gun1": "", "gun2": "", "gun3": "", "G1 Target": "", "G2 Target": "", "G3 Target": "", "power_select": "", "use_dc_power": "", "dc_power": "", "use_dc_power2": "", "dc_power2": "", "use_rf_power": "", "rf_power": "", "use_dc_pulse": "", "dc_pulse_power": "", "dc_pulse_freq": "", "dc_pulse_off_time": "", "use_rf_pulse": "", "rf_pulse_power": "", "rf_pulse_freq": "", "rf_pulse_duty_cycle": "", "power_change_time": "", "change_power_value": "", "use_heater": "", "heater_temp": "", "heater_ramp": "", "heater_soak": ""}], "rowNumbers": null, "errors": ["3행('r2') tooling='399.5' → 범위 10~399 % 밖입니다", "3행('r2') density='99.991' → 범위 0.5~99.99 g/cm3 밖입니다", "3행('r2') z_factor='10' → 범위 0.1~9.999 밖입니다"], "message": "레시피 오류 3건:\n - 3행('r2') tooling='399.5' → 범위 10~399 % 밖입니다\n - 3행('r2') density='99.991' → 범위 0.5~99.99 g/cm3 밖입니다\n - 3행('r2') z_factor='10' → 범위 0.1~9.999 밖입니다", "popup": "레시피 오류 3건:\n- 3행('r2') tooling='399.5' → 범위 10~399 % 밖입니다\n- 3행('r2') density='99.991' → 범위 0.5~99.99 g/cm3 밖입니다\n- 3행('r2') z_factor='10' → 범위 0.1~9.999 밖입니다"},
+  {"name": "empty_rows", "rows": [], "rowNumbers": null, "errors": [], "message": "", "popup": ""},
+  {"name": "non_dict_rows", "rows": [5, null, {"Process_name": "a", "base_pressure": "x"}, ["base_pressure", "y"]], "rowNumbers": null, "errors": ["4행('a') base_pressure='x' → 숫자가 아닙니다"], "message": "레시피 오류 1건:\n - 4행('a') base_pressure='x' → 숫자가 아닙니다", "popup": "레시피 오류 1건:\n- 4행('a') base_pressure='x' → 숫자가 아닙니다"},
+  {"name": "row_numbers_short", "rows": [{"Process_name": "a", "base_pressure": "x"}, {"Process_name": "b", "base_pressure": "y"}, {"Process_name": "c", "base_pressure": "z"}], "rowNumbers": [10, 12], "errors": ["10행('a') base_pressure='x' → 숫자가 아닙니다", "12행('b') base_pressure='y' → 숫자가 아닙니다", "4행('c') base_pressure='z' → 숫자가 아닙니다"], "message": "레시피 오류 3건:\n - 10행('a') base_pressure='x' → 숫자가 아닙니다\n - 12행('b') base_pressure='y' → 숫자가 아닙니다\n - 4행('c') base_pressure='z' → 숫자가 아닙니다", "popup": "레시피 오류 3건:\n- 10행('a') base_pressure='x' → 숫자가 아닙니다\n- 12행('b') base_pressure='y' → 숫자가 아닙니다\n- 4행('c') base_pressure='z' → 숫자가 아닙니다"},
+  {"name": "float_shapes_ok", "rows": [{"Process_name": "f", "base_pressure": "1e-5", "working_pressure": " 2.5 ", "process_time": "1_000", "shutter_delay": "+.5", "thickness": "5.", "dep_rate": "inf", "dc_power": "-Infinity", "rf_power": "nan", "Ar_flow": "２０", "O2_flow": " 3　", "N2_flow": "1E+3"}], "rowNumbers": null, "errors": [], "message": "", "popup": ""},
+  {"name": "float_shapes_bad", "rows": [{"Process_name": "f", "base_pressure": "1e", "working_pressure": "1__0", "process_time": "_1", "shutter_delay": "1_", "thickness": "0x10", "dep_rate": "1,5", "dc_power": "5W", "rf_power": "infinit", "Ar_flow": "--1", "O2_flow": ".", "N2_flow": "1.2.3"}], "rowNumbers": null, "errors": ["2행('f') base_pressure='1e' → 숫자가 아닙니다", "2행('f') working_pressure='1__0' → 숫자가 아닙니다", "2행('f') process_time='_1' → 숫자가 아닙니다", "2행('f') shutter_delay='1_' → 숫자가 아닙니다", "2행('f') thickness='0x10' → 숫자가 아닙니다", "2행('f') dep_rate='1,5' → 숫자가 아닙니다", "2행('f') dc_power='5W' → 숫자가 아닙니다", "2행('f') rf_power='infinit' → 숫자가 아닙니다", "2행('f') Ar_flow='--1' → 숫자가 아닙니다", "2행('f') O2_flow='.' → 숫자가 아닙니다", "2행('f') N2_flow='1.2.3' → 숫자가 아닙니다"], "message": "레시피 오류 11건:\n - 2행('f') base_pressure='1e' → 숫자가 아닙니다\n - 2행('f') working_pressure='1__0' → 숫자가 아닙니다\n - 2행('f') process_time='_1' → 숫자가 아닙니다\n - 2행('f') shutter_delay='1_' → 숫자가 아닙니다\n - 2행('f') thickness='0x10' → 숫자가 아닙니다\n - 2행('f') dep_rate='1,5' → 숫자가 아닙니다\n - 2행('f') dc_power='5W' → 숫자가 아닙니다\n - 2행('f') rf_power='infinit' → 숫자가 아닙니다\n - 2행('f') Ar_flow='--1' → 숫자가 아닙니다\n - 2행('f') O2_flow='.' → 숫자가 아닙니다\n - 2행('f') N2_flow='1.2.3' → 숫자가 아닙니다", "popup": "레시피 오류 11건:\n- 2행('f') base_pressure='1e' → 숫자가 아닙니다\n- 2행('f') working_pressure='1__0' → 숫자가 아닙니다\n- 2행('f') process_time='_1' → 숫자가 아닙니다\n- 2행('f') shutter_delay='1_' → 숫자가 아닙니다\n- 2행('f') thickness='0x10' → 숫자가 아닙니다\n- 2행('f') dep_rate='1,5' → 숫자가 아닙니다\n- 2행('f') dc_power='5W' → 숫자가 아닙니다\n- 2행('f') rf_power='infinit' → 숫자가 아닙니다\n- 2행('f') Ar_flow='--1' → 숫자가 아닙니다\n- 2행('f') O2_flow='.' → 숫자가 아닙니다\n- 2행('f') N2_flow='1.2.3' → 숫자가 아닙니다"},
+  {"name": "float_whitespace_kinds", "rows": [{"Process_name": "w", "base_pressure": "\u001c5\u001f", "working_pressure": "﻿5", "process_time": "​5"}], "rowNumbers": null, "errors": ["2행('w') working_pressure='﻿5' → 숫자가 아닙니다", "2행('w') process_time='​5' → 숫자가 아닙니다"], "message": "레시피 오류 2건:\n - 2행('w') working_pressure='﻿5' → 숫자가 아닙니다\n - 2행('w') process_time='​5' → 숫자가 아닙니다", "popup": "레시피 오류 2건:\n- 2행('w') working_pressure='﻿5' → 숫자가 아닙니다\n- 2행('w') process_time='​5' → 숫자가 아닙니다"},
+  {"name": "ranges_edges", "rows": [{"Process_name": "r", "tooling": "10", "density": "0.5", "z_factor": "0.1"}, {"Process_name": "r2", "tooling": "9.999", "density": "100", "z_factor": "nan"}, {"Process_name": "r3", "tooling": "inf", "density": "-0", "z_factor": "9.9990001"}], "rowNumbers": [3, 4, 5], "errors": ["4행('r2') tooling='9.999' → 범위 10~399 % 밖입니다", "4행('r2') density='100' → 범위 0.5~99.99 g/cm3 밖입니다", "4행('r2') z_factor='nan' → 범위 0.1~9.999 밖입니다", "5행('r3') tooling='inf' → 범위 10~399 % 밖입니다", "5행('r3') density='-0' → 범위 0.5~99.99 g/cm3 밖입니다", "5행('r3') z_factor='9.9990001' → 범위 0.1~9.999 밖입니다"], "message": "레시피 오류 6건:\n - 4행('r2') tooling='9.999' → 범위 10~399 % 밖입니다\n - 4행('r2') density='100' → 범위 0.5~99.99 g/cm3 밖입니다\n - 4행('r2') z_factor='nan' → 범위 0.1~9.999 밖입니다\n - 5행('r3') tooling='inf' → 범위 10~399 % 밖입니다\n - 5행('r3') density='-0' → 범위 0.5~99.99 g/cm3 밖입니다\n - 5행('r3') z_factor='9.9990001' → 범위 0.1~9.999 밖입니다", "popup": "레시피 오류 6건:\n- 4행('r2') tooling='9.999' → 범위 10~399 % 밖입니다\n- 4행('r2') density='100' → 범위 0.5~99.99 g/cm3 밖입니다\n- 4행('r2') z_factor='nan' → 범위 0.1~9.999 밖입니다\n- 5행('r3') tooling='inf' → 범위 10~399 % 밖입니다\n- 5행('r3') density='-0' → 범위 0.5~99.99 g/cm3 밖입니다\n- 5행('r3') z_factor='9.9990001' → 범위 0.1~9.999 밖입니다"},
+  {"name": "int_keys", "rows": [{"Process_name": "i", "integration_time": "60.7", "dc_pulse_freq": "1e3", "dc_pulse_duty_cycle": "inf", "rf_pulse_duty_cycle": "nan"}, {"Process_name": "i2", "integration_time": "1e400", "dc_pulse_freq": "x", "rf_pulse_duty_cycle": " 5 "}], "rowNumbers": null, "errors": ["2행('i') dc_pulse_duty_cycle='inf' → 숫자가 아닙니다", "2행('i') rf_pulse_duty_cycle='nan' → 숫자가 아닙니다", "3행('i2') integration_time='1e400' → 숫자가 아닙니다", "3행('i2') dc_pulse_freq='x' → 숫자가 아닙니다"], "message": "레시피 오류 4건:\n - 2행('i') dc_pulse_duty_cycle='inf' → 숫자가 아닙니다\n - 2행('i') rf_pulse_duty_cycle='nan' → 숫자가 아닙니다\n - 3행('i2') integration_time='1e400' → 숫자가 아닙니다\n - 3행('i2') dc_pulse_freq='x' → 숫자가 아닙니다", "popup": "레시피 오류 4건:\n- 2행('i') dc_pulse_duty_cycle='inf' → 숫자가 아닙니다\n- 2행('i') rf_pulse_duty_cycle='nan' → 숫자가 아닙니다\n- 3행('i2') integration_time='1e400' → 숫자가 아닙니다\n- 3행('i2') dc_pulse_freq='x' → 숫자가 아닙니다"},
+  {"name": "tf_keys", "rows": [{"Process_name": "t", "gun1": "t", "gun2": "yes", "gun3": "On", "use_dc_pulse": "0", "use_rf_pulse": "no", "Ar": "TRUE ", "O2": " n", "N2": "2", "main_shutter": "Y", "power_select": "false", "use_heater": "ｔ"}], "rowNumbers": null, "errors": ["2행('t') gun3='On' → T/F 값이 아닙니다", "2행('t') N2='2' → T/F 값이 아닙니다", "2행('t') use_heater='ｔ' → T/F 값이 아닙니다"], "message": "레시피 오류 3건:\n - 2행('t') gun3='On' → T/F 값이 아닙니다\n - 2행('t') N2='2' → T/F 값이 아닙니다\n - 2행('t') use_heater='ｔ' → T/F 값이 아닙니다", "popup": "레시피 오류 3건:\n- 2행('t') gun3='On' → T/F 값이 아닙니다\n- 2행('t') N2='2' → T/F 값이 아닙니다\n- 2행('t') use_heater='ｔ' → T/F 값이 아닙니다"},
+  {"name": "tf_non_strings", "rows": [{"Process_name": "b", "gun1": true, "gun2": false, "gun3": 1, "Ar": 0, "O2": null, "N2": ["T"], "use_heater": 2}], "rowNumbers": null, "errors": ["2행('b') N2='['T']' → T/F 값이 아닙니다", "2행('b') use_heater='2' → T/F 값이 아닙니다"], "message": "레시피 오류 2건:\n - 2행('b') N2='['T']' → T/F 값이 아닙니다\n - 2행('b') use_heater='2' → T/F 값이 아닙니다", "popup": "레시피 오류 2건:\n- 2행('b') N2='['T']' → T/F 값이 아닙니다\n- 2행('b') use_heater='2' → T/F 값이 아닙니다"},
+  {"name": "enum_chuck", "rows": [{"Process_name": "c", "chuck_position": "UP"}, {"Process_name": "c2", "chuck_position": " Mid "}, {"Process_name": "c3", "chuck_position": "top"}, {"Process_name": "c4", "chuck_position": false}], "rowNumbers": null, "errors": ["4행('c3') chuck_position='top' → up/mid/down 중 하나여야 합니다"], "message": "레시피 오류 1건:\n - 4행('c3') chuck_position='top' → up/mid/down 중 하나여야 합니다", "popup": "레시피 오류 1건:\n- 4행('c3') chuck_position='top' → up/mid/down 중 하나여야 합니다"},
+  {"name": "off_time", "rows": [{"Process_name": "o", "dc_pulse_off_time": "dc"}, {"Process_name": "o2", "dc_pulse_off_time": " DC "}, {"Process_name": "o3", "dc_pulse_off_time": "1e1"}, {"Process_name": "o4", "dc_pulse_off_time": "DCX"}, {"Process_name": "o5", "dc_pulse_off_time": "inf"}], "rowNumbers": null, "errors": ["5행('o4') dc_pulse_off_time='DCX' → 숫자(µs) 또는 DC 여야 합니다"], "message": "레시피 오류 1건:\n - 5행('o4') dc_pulse_off_time='DCX' → 숫자(µs) 또는 DC 여야 합니다", "popup": "레시피 오류 1건:\n- 5행('o4') dc_pulse_off_time='DCX' → 숫자(µs) 또는 DC 여야 합니다"},
+  {"name": "durations", "rows": [{"Process_name": "d", "power_change_time": "30", "change_power_value": "5"}, {"Process_name": "d2", "power_change_time": "1.5h", "change_power_value": "5"}, {"Process_name": "d3", "power_change_time": "1h30m10.5s", "change_power_value": "5"}, {"Process_name": "d4", "power_change_time": "0", "change_power_value": "5"}, {"Process_name": "d5", "power_change_time": "h", "change_power_value": "5"}, {"Process_name": "d6", "power_change_time": "5 m", "change_power_value": "5"}, {"Process_name": "d7", "power_change_time": "５m", "change_power_value": "5"}, {"Process_name": "d8", "power_change_time": "0.0s1", "change_power_value": "5"}, {"Process_name": "d9", "power_change_time": "2M", "change_power_value": "x"}], "rowNumbers": null, "errors": ["5행('d4') power_change_time='0' → 기간 형식이 아닙니다 (예: 30s, 5m, 1h30m)", "6행('d5') power_change_time='h' → 기간 형식이 아닙니다 (예: 30s, 5m, 1h30m)", "7행('d6') power_change_time='5 m' → 기간 형식이 아닙니다 (예: 30s, 5m, 1h30m)", "9행('d8') power_change_time='0.0s1' → 기간 형식이 아닙니다 (예: 30s, 5m, 1h30m)", "10행('d9') change_power_value='x' → 숫자가 아닙니다"], "message": "레시피 오류 5건:\n - 5행('d4') power_change_time='0' → 기간 형식이 아닙니다 (예: 30s, 5m, 1h30m)\n - 6행('d5') power_change_time='h' → 기간 형식이 아닙니다 (예: 30s, 5m, 1h30m)\n - 7행('d6') power_change_time='5 m' → 기간 형식이 아닙니다 (예: 30s, 5m, 1h30m)\n - 9행('d8') power_change_time='0.0s1' → 기간 형식이 아닙니다 (예: 30s, 5m, 1h30m)\n - 10행('d9') change_power_value='x' → 숫자가 아닙니다", "popup": "레시피 오류 5건:\n- 5행('d4') power_change_time='0' → 기간 형식이 아닙니다 (예: 30s, 5m, 1h30m)\n- 6행('d5') power_change_time='h' → 기간 형식이 아닙니다 (예: 30s, 5m, 1h30m)\n- 7행('d6') power_change_time='5 m' → 기간 형식이 아닙니다 (예: 30s, 5m, 1h30m)\n- 9행('d8') power_change_time='0.0s1' → 기간 형식이 아닙니다 (예: 30s, 5m, 1h30m)\n- 10행('d9') change_power_value='x' → 숫자가 아닙니다"},
+  {"name": "pair_rule", "rows": [{"Process_name": "p", "change_power_value": "5"}, {"Process_name": "p2", "power_change_time": "5s"}, {"Process_name": "p3", "change_power_value": " ", "power_change_time": " "}], "rowNumbers": null, "errors": ["2행('p') change_power_value 와 power_change_time 은 함께 입력해야 합니다 (현재: change_power_value='5', power_change_time='')", "3행('p2') change_power_value 와 power_change_time 은 함께 입력해야 합니다 (현재: change_power_value='', power_change_time='5s')"], "message": "레시피 오류 2건:\n - 2행('p') change_power_value 와 power_change_time 은 함께 입력해야 합니다 (현재: change_power_value='5', power_change_time='')\n - 3행('p2') change_power_value 와 power_change_time 은 함께 입력해야 합니다 (현재: change_power_value='', power_change_time='5s')", "popup": "레시피 오류 2건:\n- 2행('p') change_power_value 와 power_change_time 은 함께 입력해야 합니다 (현재: change_power_value='5', power_change_time='')\n- 3행('p2') change_power_value 와 power_change_time 은 함께 입력해야 합니다 (현재: change_power_value='', power_change_time='5s')"},
+  {"name": "names", "rows": [{"Process_name": " 이름 ", "base_pressure": "x"}, {"Process_name": null, "base_pressure": "x"}, {"base_pressure": "x"}, {"Process_name": 0, "base_pressure": "x"}, {"Process_name": 5, "base_pressure": "x"}, {"Process_name": "it's", "base_pressure": "x"}], "rowNumbers": null, "errors": ["2행('이름') base_pressure='x' → 숫자가 아닙니다", "3행 base_pressure='x' → 숫자가 아닙니다", "4행 base_pressure='x' → 숫자가 아닙니다", "5행 base_pressure='x' → 숫자가 아닙니다", "6행('5') base_pressure='x' → 숫자가 아닙니다", "7행('it's') base_pressure='x' → 숫자가 아닙니다"], "message": "레시피 오류 6건:\n - 2행('이름') base_pressure='x' → 숫자가 아닙니다\n - 3행 base_pressure='x' → 숫자가 아닙니다\n - 4행 base_pressure='x' → 숫자가 아닙니다\n - 5행 base_pressure='x' → 숫자가 아닙니다\n - 6행('5') base_pressure='x' → 숫자가 아닙니다\n - 7행('it's') base_pressure='x' → 숫자가 아닙니다", "popup": "레시피 오류 6건:\n- 2행('이름') base_pressure='x' → 숫자가 아닙니다\n- 3행 base_pressure='x' → 숫자가 아닙니다\n- 4행 base_pressure='x' → 숫자가 아닙니다\n- 5행 base_pressure='x' → 숫자가 아닙니다\n- 6행('5') base_pressure='x' → 숫자가 아닙니다\n- 7행('it's') base_pressure='x' → 숫자가 아닙니다"},
+  {"name": "non_string_values", "rows": [{"Process_name": "v", "base_pressure": 5, "working_pressure": 0, "process_time": true, "shutter_delay": false, "integration_time": 2.5, "dc_pulse_off_time": 7, "tooling": 500, "density": [1]}], "rowNumbers": null, "errors": ["2행('v') process_time='True' → 숫자가 아닙니다", "2행('v') tooling='500' → 범위 10~399 % 밖입니다", "2행('v') density='[1]' → 숫자가 아닙니다"], "message": "레시피 오류 3건:\n - 2행('v') process_time='True' → 숫자가 아닙니다\n - 2행('v') tooling='500' → 범위 10~399 % 밖입니다\n - 2행('v') density='[1]' → 숫자가 아닙니다", "popup": "레시피 오류 3건:\n- 2행('v') process_time='True' → 숫자가 아닙니다\n- 2행('v') tooling='500' → 범위 10~399 % 밖입니다\n- 2행('v') density='[1]' → 숫자가 아닙니다"},
+  {"name": "overflow_exact_20", "rows": [{"Process_name": "x0", "base_pressure": "bad"}, {"Process_name": "x1", "base_pressure": "bad"}, {"Process_name": "x2", "base_pressure": "bad"}, {"Process_name": "x3", "base_pressure": "bad"}, {"Process_name": "x4", "base_pressure": "bad"}, {"Process_name": "x5", "base_pressure": "bad"}, {"Process_name": "x6", "base_pressure": "bad"}, {"Process_name": "x7", "base_pressure": "bad"}, {"Process_name": "x8", "base_pressure": "bad"}, {"Process_name": "x9", "base_pressure": "bad"}, {"Process_name": "x10", "base_pressure": "bad"}, {"Process_name": "x11", "base_pressure": "bad"}, {"Process_name": "x12", "base_pressure": "bad"}, {"Process_name": "x13", "base_pressure": "bad"}, {"Process_name": "x14", "base_pressure": "bad"}, {"Process_name": "x15", "base_pressure": "bad"}, {"Process_name": "x16", "base_pressure": "bad"}, {"Process_name": "x17", "base_pressure": "bad"}, {"Process_name": "x18", "base_pressure": "bad"}, {"Process_name": "x19", "base_pressure": "bad"}], "rowNumbers": null, "errors": ["2행('x0') base_pressure='bad' → 숫자가 아닙니다", "3행('x1') base_pressure='bad' → 숫자가 아닙니다", "4행('x2') base_pressure='bad' → 숫자가 아닙니다", "5행('x3') base_pressure='bad' → 숫자가 아닙니다", "6행('x4') base_pressure='bad' → 숫자가 아닙니다", "7행('x5') base_pressure='bad' → 숫자가 아닙니다", "8행('x6') base_pressure='bad' → 숫자가 아닙니다", "9행('x7') base_pressure='bad' → 숫자가 아닙니다", "10행('x8') base_pressure='bad' → 숫자가 아닙니다", "11행('x9') base_pressure='bad' → 숫자가 아닙니다", "12행('x10') base_pressure='bad' → 숫자가 아닙니다", "13행('x11') base_pressure='bad' → 숫자가 아닙니다", "14행('x12') base_pressure='bad' → 숫자가 아닙니다", "15행('x13') base_pressure='bad' → 숫자가 아닙니다", "16행('x14') base_pressure='bad' → 숫자가 아닙니다", "17행('x15') base_pressure='bad' → 숫자가 아닙니다", "18행('x16') base_pressure='bad' → 숫자가 아닙니다", "19행('x17') base_pressure='bad' → 숫자가 아닙니다", "20행('x18') base_pressure='bad' → 숫자가 아닙니다", "21행('x19') base_pressure='bad' → 숫자가 아닙니다"], "message": "레시피 오류 20건:\n - 2행('x0') base_pressure='bad' → 숫자가 아닙니다\n - 3행('x1') base_pressure='bad' → 숫자가 아닙니다\n - 4행('x2') base_pressure='bad' → 숫자가 아닙니다\n - 5행('x3') base_pressure='bad' → 숫자가 아닙니다\n - 6행('x4') base_pressure='bad' → 숫자가 아닙니다\n - 7행('x5') base_pressure='bad' → 숫자가 아닙니다\n - 8행('x6') base_pressure='bad' → 숫자가 아닙니다\n - 9행('x7') base_pressure='bad' → 숫자가 아닙니다\n - 10행('x8') base_pressure='bad' → 숫자가 아닙니다\n - 11행('x9') base_pressure='bad' → 숫자가 아닙니다\n - 12행('x10') base_pressure='bad' → 숫자가 아닙니다\n - 13행('x11') base_pressure='bad' → 숫자가 아닙니다\n - 14행('x12') base_pressure='bad' → 숫자가 아닙니다\n - 15행('x13') base_pressure='bad' → 숫자가 아닙니다\n - 16행('x14') base_pressure='bad' → 숫자가 아닙니다\n - 17행('x15') base_pressure='bad' → 숫자가 아닙니다\n - 18행('x16') base_pressure='bad' → 숫자가 아닙니다\n - 19행('x17') base_pressure='bad' → 숫자가 아닙니다\n - 20행('x18') base_pressure='bad' → 숫자가 아닙니다\n - 21행('x19') base_pressure='bad' → 숫자가 아닙니다", "popup": "레시피 오류 20건:\n- 2행('x0') base_pressure='bad' → 숫자가 아닙니다\n- 3행('x1') base_pressure='bad' → 숫자가 아닙니다\n- 4행('x2') base_pressure='bad' → 숫자가 아닙니다\n- 5행('x3') base_pressure='bad' → 숫자가 아닙니다\n- 6행('x4') base_pressure='bad' → 숫자가 아닙니다\n- 7행('x5') base_pressure='bad' → 숫자가 아닙니다\n- 8행('x6') base_pressure='bad' → 숫자가 아닙니다\n- 9행('x7') base_pressure='bad' → 숫자가 아닙니다\n- 10행('x8') base_pressure='bad' → 숫자가 아닙니다\n- 11행('x9') base_pressure='bad' → 숫자가 아닙니다\n- 12행('x10') base_pressure='bad' → 숫자가 아닙니다\n- 13행('x11') base_pressure='bad' → 숫자가 아닙니다\n- 14행('x12') base_pressure='bad' → 숫자가 아닙니다\n- 15행('x13') base_pressure='bad' → 숫자가 아닙니다\n- 16행('x14') base_pressure='bad' → 숫자가 아닙니다\n- 17행('x15') base_pressure='bad' → 숫자가 아닙니다\n- 18행('x16') base_pressure='bad' → 숫자가 아닙니다\n- 19행('x17') base_pressure='bad' → 숫자가 아닙니다\n- 20행('x18') base_pressure='bad' → 숫자가 아닙니다\n- 21행('x19') base_pressure='bad' → 숫자가 아닙니다"},
+  {"name": "overflow_21", "rows": [{"Process_name": "x0", "base_pressure": "bad"}, {"Process_name": "x1", "base_pressure": "bad"}, {"Process_name": "x2", "base_pressure": "bad"}, {"Process_name": "x3", "base_pressure": "bad"}, {"Process_name": "x4", "base_pressure": "bad"}, {"Process_name": "x5", "base_pressure": "bad"}, {"Process_name": "x6", "base_pressure": "bad"}, {"Process_name": "x7", "base_pressure": "bad"}, {"Process_name": "x8", "base_pressure": "bad"}, {"Process_name": "x9", "base_pressure": "bad"}, {"Process_name": "x10", "base_pressure": "bad"}, {"Process_name": "x11", "base_pressure": "bad"}, {"Process_name": "x12", "base_pressure": "bad"}, {"Process_name": "x13", "base_pressure": "bad"}, {"Process_name": "x14", "base_pressure": "bad"}, {"Process_name": "x15", "base_pressure": "bad"}, {"Process_name": "x16", "base_pressure": "bad"}, {"Process_name": "x17", "base_pressure": "bad"}, {"Process_name": "x18", "base_pressure": "bad"}, {"Process_name": "x19", "base_pressure": "bad"}, {"Process_name": "x20", "base_pressure": "bad"}], "rowNumbers": null, "errors": ["2행('x0') base_pressure='bad' → 숫자가 아닙니다", "3행('x1') base_pressure='bad' → 숫자가 아닙니다", "4행('x2') base_pressure='bad' → 숫자가 아닙니다", "5행('x3') base_pressure='bad' → 숫자가 아닙니다", "6행('x4') base_pressure='bad' → 숫자가 아닙니다", "7행('x5') base_pressure='bad' → 숫자가 아닙니다", "8행('x6') base_pressure='bad' → 숫자가 아닙니다", "9행('x7') base_pressure='bad' → 숫자가 아닙니다", "10행('x8') base_pressure='bad' → 숫자가 아닙니다", "11행('x9') base_pressure='bad' → 숫자가 아닙니다", "12행('x10') base_pressure='bad' → 숫자가 아닙니다", "13행('x11') base_pressure='bad' → 숫자가 아닙니다", "14행('x12') base_pressure='bad' → 숫자가 아닙니다", "15행('x13') base_pressure='bad' → 숫자가 아닙니다", "16행('x14') base_pressure='bad' → 숫자가 아닙니다", "17행('x15') base_pressure='bad' → 숫자가 아닙니다", "18행('x16') base_pressure='bad' → 숫자가 아닙니다", "19행('x17') base_pressure='bad' → 숫자가 아닙니다", "20행('x18') base_pressure='bad' → 숫자가 아닙니다", "21행('x19') base_pressure='bad' → 숫자가 아닙니다", "... 외 1건"], "message": "레시피 오류 21건:\n - 2행('x0') base_pressure='bad' → 숫자가 아닙니다\n - 3행('x1') base_pressure='bad' → 숫자가 아닙니다\n - 4행('x2') base_pressure='bad' → 숫자가 아닙니다\n - 5행('x3') base_pressure='bad' → 숫자가 아닙니다\n - 6행('x4') base_pressure='bad' → 숫자가 아닙니다\n - 7행('x5') base_pressure='bad' → 숫자가 아닙니다\n - 8행('x6') base_pressure='bad' → 숫자가 아닙니다\n - 9행('x7') base_pressure='bad' → 숫자가 아닙니다\n - 10행('x8') base_pressure='bad' → 숫자가 아닙니다\n - 11행('x9') base_pressure='bad' → 숫자가 아닙니다\n - 12행('x10') base_pressure='bad' → 숫자가 아닙니다\n - 13행('x11') base_pressure='bad' → 숫자가 아닙니다\n - 14행('x12') base_pressure='bad' → 숫자가 아닙니다\n - 15행('x13') base_pressure='bad' → 숫자가 아닙니다\n - 16행('x14') base_pressure='bad' → 숫자가 아닙니다\n - 17행('x15') base_pressure='bad' → 숫자가 아닙니다\n - 18행('x16') base_pressure='bad' → 숫자가 아닙니다\n - 19행('x17') base_pressure='bad' → 숫자가 아닙니다\n - 20행('x18') base_pressure='bad' → 숫자가 아닙니다\n - 21행('x19') base_pressure='bad' → 숫자가 아닙니다\n - ... 외 1건", "popup": "레시피 오류 21건:\n- 2행('x0') base_pressure='bad' → 숫자가 아닙니다\n- 3행('x1') base_pressure='bad' → 숫자가 아닙니다\n- 4행('x2') base_pressure='bad' → 숫자가 아닙니다\n- 5행('x3') base_pressure='bad' → 숫자가 아닙니다\n- 6행('x4') base_pressure='bad' → 숫자가 아닙니다\n- 7행('x5') base_pressure='bad' → 숫자가 아닙니다\n- 8행('x6') base_pressure='bad' → 숫자가 아닙니다\n- 9행('x7') base_pressure='bad' → 숫자가 아닙니다\n- 10행('x8') base_pressure='bad' → 숫자가 아닙니다\n- 11행('x9') base_pressure='bad' → 숫자가 아닙니다\n- 12행('x10') base_pressure='bad' → 숫자가 아닙니다\n- 13행('x11') base_pressure='bad' → 숫자가 아닙니다\n- 14행('x12') base_pressure='bad' → 숫자가 아닙니다\n- 15행('x13') base_pressure='bad' → 숫자가 아닙니다\n- 16행('x14') base_pressure='bad' → 숫자가 아닙니다\n- 17행('x15') base_pressure='bad' → 숫자가 아닙니다\n- 18행('x16') base_pressure='bad' → 숫자가 아닙니다\n- 19행('x17') base_pressure='bad' → 숫자가 아닙니다\n- 20행('x18') base_pressure='bad' → 숫자가 아닙니다\n- 21행('x19') base_pressure='bad' → 숫자가 아닙니다\n- ... 외 1건"},
+  {"name": "overflow_many", "rows": [{"Process_name": "y0", "base_pressure": "a", "working_pressure": "b", "gun1": "c"}, {"Process_name": "y1", "base_pressure": "a", "working_pressure": "b", "gun1": "c"}, {"Process_name": "y2", "base_pressure": "a", "working_pressure": "b", "gun1": "c"}, {"Process_name": "y3", "base_pressure": "a", "working_pressure": "b", "gun1": "c"}, {"Process_name": "y4", "base_pressure": "a", "working_pressure": "b", "gun1": "c"}, {"Process_name": "y5", "base_pressure": "a", "working_pressure": "b", "gun1": "c"}, {"Process_name": "y6", "base_pressure": "a", "working_pressure": "b", "gun1": "c"}, {"Process_name": "y7", "base_pressure": "a", "working_pressure": "b", "gun1": "c"}, {"Process_name": "y8", "base_pressure": "a", "working_pressure": "b", "gun1": "c"}, {"Process_name": "y9", "base_pressure": "a", "working_pressure": "b", "gun1": "c"}, {"Process_name": "y10", "base_pressure": "a", "working_pressure": "b", "gun1": "c"}, {"Process_name": "y11", "base_pressure": "a", "working_pressure": "b", "gun1": "c"}, {"Process_name": "y12", "base_pressure": "a", "working_pressure": "b", "gun1": "c"}, {"Process_name": "y13", "base_pressure": "a", "working_pressure": "b", "gun1": "c"}, {"Process_name": "y14", "base_pressure": "a", "working_pressure": "b", "gun1": "c"}], "rowNumbers": [100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114], "errors": ["100행('y0') base_pressure='a' → 숫자가 아닙니다", "100행('y0') working_pressure='b' → 숫자가 아닙니다", "100행('y0') gun1='c' → T/F 값이 아닙니다", "101행('y1') base_pressure='a' → 숫자가 아닙니다", "101행('y1') working_pressure='b' → 숫자가 아닙니다", "101행('y1') gun1='c' → T/F 값이 아닙니다", "102행('y2') base_pressure='a' → 숫자가 아닙니다", "102행('y2') working_pressure='b' → 숫자가 아닙니다", "102행('y2') gun1='c' → T/F 값이 아닙니다", "103행('y3') base_pressure='a' → 숫자가 아닙니다", "103행('y3') working_pressure='b' → 숫자가 아닙니다", "103행('y3') gun1='c' → T/F 값이 아닙니다", "104행('y4') base_pressure='a' → 숫자가 아닙니다", "104행('y4') working_pressure='b' → 숫자가 아닙니다", "104행('y4') gun1='c' → T/F 값이 아닙니다", "105행('y5') base_pressure='a' → 숫자가 아닙니다", "105행('y5') working_pressure='b' → 숫자가 아닙니다", "105행('y5') gun1='c' → T/F 값이 아닙니다", "106행('y6') base_pressure='a' → 숫자가 아닙니다", "106행('y6') working_pressure='b' → 숫자가 아닙니다", "... 외 25건"], "message": "레시피 오류 21건:\n - 100행('y0') base_pressure='a' → 숫자가 아닙니다\n - 100행('y0') working_pressure='b' → 숫자가 아닙니다\n - 100행('y0') gun1='c' → T/F 값이 아닙니다\n - 101행('y1') base_pressure='a' → 숫자가 아닙니다\n - 101행('y1') working_pressure='b' → 숫자가 아닙니다\n - 101행('y1') gun1='c' → T/F 값이 아닙니다\n - 102행('y2') base_pressure='a' → 숫자가 아닙니다\n - 102행('y2') working_pressure='b' → 숫자가 아닙니다\n - 102행('y2') gun1='c' → T/F 값이 아닙니다\n - 103행('y3') base_pressure='a' → 숫자가 아닙니다\n - 103행('y3') working_pressure='b' → 숫자가 아닙니다\n - 103행('y3') gun1='c' → T/F 값이 아닙니다\n - 104행('y4') base_pressure='a' → 숫자가 아닙니다\n - 104행('y4') working_pressure='b' → 숫자가 아닙니다\n - 104행('y4') gun1='c' → T/F 값이 아닙니다\n - 105행('y5') base_pressure='a' → 숫자가 아닙니다\n - 105행('y5') working_pressure='b' → 숫자가 아닙니다\n - 105행('y5') gun1='c' → T/F 값이 아닙니다\n - 106행('y6') base_pressure='a' → 숫자가 아닙니다\n - 106행('y6') working_pressure='b' → 숫자가 아닙니다\n - ... 외 25건", "popup": "레시피 오류 21건:\n- 100행('y0') base_pressure='a' → 숫자가 아닙니다\n- 100행('y0') working_pressure='b' → 숫자가 아닙니다\n- 100행('y0') gun1='c' → T/F 값이 아닙니다\n- 101행('y1') base_pressure='a' → 숫자가 아닙니다\n- 101행('y1') working_pressure='b' → 숫자가 아닙니다\n- 101행('y1') gun1='c' → T/F 값이 아닙니다\n- 102행('y2') base_pressure='a' → 숫자가 아닙니다\n- 102행('y2') working_pressure='b' → 숫자가 아닙니다\n- 102행('y2') gun1='c' → T/F 값이 아닙니다\n- 103행('y3') base_pressure='a' → 숫자가 아닙니다\n- 103행('y3') working_pressure='b' → 숫자가 아닙니다\n- 103행('y3') gun1='c' → T/F 값이 아닙니다\n- 104행('y4') base_pressure='a' → 숫자가 아닙니다\n- 104행('y4') working_pressure='b' → 숫자가 아닙니다\n- 104행('y4') gun1='c' → T/F 값이 아닙니다\n- 105행('y5') base_pressure='a' → 숫자가 아닙니다\n- 105행('y5') working_pressure='b' → 숫자가 아닙니다\n- 105행('y5') gun1='c' → T/F 값이 아닙니다\n- 106행('y6') base_pressure='a' → 숫자가 아닙니다\n- 106행('y6') working_pressure='b' → 숫자가 아닙니다\n- ... 외 25건"}
+ ],
+ "normCases": [
+  {"name": "v1_00", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": true, "rfp": true, "heater": false, "thickness": false}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true}, "errors": ["CH1은 RF Pulse 또는 DC Pulse 중 하나를 반드시 선택해야 합니다."]},
+  {"name": "v1_01", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": true, "rfp": true, "heater": false, "thickness": false}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true}, "errors": ["CH1은 RF Pulse 또는 DC Pulse 중 하나를 반드시 선택해야 합니다."]},
+  {"name": "v1_02", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": false, "rfp": false, "heater": false, "thickness": false}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true}, "errors": ["CH1은 RF Pulse 또는 DC Pulse 중 하나를 반드시 선택해야 합니다."]},
+  {"name": "v1_03", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": true, "rfp": true, "heater": false, "thickness": false}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_rf_pulse": true, "rf_pulse_power": 0.0, "rf_pulse_freq": 0.0005, "rf_pulse_duty": 0}, "errors": ["RF Pulse Target Power(W)는 0보다 커야 합니다.", "RF Pulse Freq 0.0005kHz 는 허용 범위 0.001~30kHz 밖입니다 (CESAR 사양 3-5: 1Hz~30kHz — 초과 시 W40으로 출력 차단)", "RF Pulse Duty(%)는 1..99"]},
+  {"name": "v1_04", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": true, "rfp": true, "heater": false, "thickness": false}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_rf_pulse": true, "rf_pulse_power": 0.0, "rf_pulse_freq": 0.0005, "rf_pulse_duty": 0}, "errors": ["RF Pulse Target Power(W)는 0보다 커야 합니다.", "RF Pulse Freq 0.0005kHz 는 허용 범위 0.001~30kHz 밖입니다 (CESAR 사양 3-5: 1Hz~30kHz — 초과 시 W40으로 출력 차단)", "RF Pulse Duty(%)는 1..99"]},
+  {"name": "v1_05", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": false, "rfp": false, "heater": false, "thickness": false}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_rf_pulse": true, "rf_pulse_power": 0.0, "rf_pulse_freq": 0.0005, "rf_pulse_duty": 0}, "errors": ["RF Pulse Target Power(W)는 0보다 커야 합니다.", "RF Pulse Freq 0.0005kHz 는 허용 범위 0.001~30kHz 밖입니다 (CESAR 사양 3-5: 1Hz~30kHz — 초과 시 W40으로 출력 차단)", "RF Pulse Duty(%)는 1..99"]},
+  {"name": "v1_06", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": true, "rfp": true, "heater": false, "thickness": false}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_dc_pulse": true, "dc_pulse_power": 50.0, "dc_pulse_freq": 10, "dc_pulse_off_time": 0.5}, "errors": ["DC Pulse Freq(kHz)는 20..150", "DC Pulse Off Time 0.5µs 는 최소 1.0µs 미만입니다 (매뉴얼 p.12/13)"]},
+  {"name": "v1_07", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": true, "rfp": true, "heater": false, "thickness": false}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_dc_pulse": true, "dc_pulse_power": 50.0, "dc_pulse_freq": 10, "dc_pulse_off_time": 0.5}, "errors": ["DC Pulse Freq(kHz)는 20..150", "DC Pulse Off Time 0.5µs 는 최소 1.0µs 미만입니다 (매뉴얼 p.12/13)"]},
+  {"name": "v1_08", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": false, "rfp": false, "heater": false, "thickness": false}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_dc_pulse": true, "dc_pulse_power": 50.0, "dc_pulse_freq": 10, "dc_pulse_off_time": 0.5}, "errors": ["DC Pulse Freq(kHz)는 20..150", "DC Pulse Off Time 0.5µs 는 최소 1.0µs 미만입니다 (매뉴얼 p.12/13)"]},
+  {"name": "v1_09", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": true, "rfp": true, "heater": false, "thickness": false}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_dc_pulse": true, "dc_pulse_power": 50.0, "dc_pulse_freq": 100, "dc_pulse_off_time": 4.5}, "errors": ["DC Pulse Off Time 4.5µs 는 100kHz 상한 4.0µs 초과(매뉴얼 p.13 그림3)"]},
+  {"name": "v1_10", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": true, "rfp": true, "heater": false, "thickness": false}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_dc_pulse": true, "dc_pulse_power": 50.0, "dc_pulse_freq": 100, "dc_pulse_off_time": 4.5}, "errors": ["DC Pulse Off Time 4.5µs 는 100kHz 상한 4.0µs 초과(매뉴얼 p.13 그림3)"]},
+  {"name": "v1_11", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": false, "rfp": false, "heater": false, "thickness": false}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_dc_pulse": true, "dc_pulse_power": 50.0, "dc_pulse_freq": 100, "dc_pulse_off_time": 4.5}, "errors": ["DC Pulse Off Time 4.5µs 는 100kHz 상한 4.0µs 초과(매뉴얼 p.13 그림3)"]},
+  {"name": "v1_12", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": true, "rfp": true, "heater": false, "thickness": false}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_dc_pulse": true, "dc_pulse_power": 50.0, "dc_pulse_freq": null, "dc_pulse_off_time": 10.5}, "errors": ["DC Pulse Off Time 10.5µs 는 (주파수 미지정 → 절대 상한) 상한 10.0µs 초과(매뉴얼 p.13 그림3)"]},
+  {"name": "v1_13", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": true, "rfp": true, "heater": false, "thickness": false}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_dc_pulse": true, "dc_pulse_power": 50.0, "dc_pulse_freq": null, "dc_pulse_off_time": 10.5}, "errors": ["DC Pulse Off Time 10.5µs 는 (주파수 미지정 → 절대 상한) 상한 10.0µs 초과(매뉴얼 p.13 그림3)"]},
+  {"name": "v1_14", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": false, "rfp": false, "heater": false, "thickness": false}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_dc_pulse": true, "dc_pulse_power": 50.0, "dc_pulse_freq": null, "dc_pulse_off_time": 10.5}, "errors": ["DC Pulse Off Time 10.5µs 는 (주파수 미지정 → 절대 상한) 상한 10.0µs 초과(매뉴얼 p.13 그림3)"]},
+  {"name": "v1_15", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": true, "rfp": true, "heater": false, "thickness": false}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_dc_pulse": true, "dc_pulse_power": 50.0, "dc_pulse_off_time": "DC", "use_rf_pulse": true, "rf_pulse_power": 10.0}, "errors": ["RF Pulse와 DC Pulse는 동시에 사용할 수 없습니다 (같은 시리얼 포트)"]},
+  {"name": "v1_16", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": true, "rfp": true, "heater": false, "thickness": false}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_dc_pulse": true, "dc_pulse_power": 50.0, "dc_pulse_off_time": "DC", "use_rf_pulse": true, "rf_pulse_power": 10.0}, "errors": ["RF Pulse와 DC Pulse는 동시에 사용할 수 없습니다 (같은 시리얼 포트)"]},
+  {"name": "v1_17", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": false, "rfp": false, "heater": false, "thickness": false}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_dc_pulse": true, "dc_pulse_power": 50.0, "dc_pulse_off_time": "DC", "use_rf_pulse": true, "rf_pulse_power": 10.0}, "errors": ["RF Pulse와 DC Pulse는 동시에 사용할 수 없습니다 (같은 시리얼 포트)"]},
+  {"name": "v1_18", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": true, "rfp": true, "heater": false, "thickness": false}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_rf_pulse": true, "rf_pulse_power": 10.0, "rf_pulse_freq": 30.0, "rf_pulse_duty": 99, "use_heater": true, "heater_temp": 100.0}, "errors": ["CH1 에는 히터가 없습니다 (use_heater=T)"]},
+  {"name": "v1_19", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": true, "rfp": true, "heater": false, "thickness": false}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_rf_pulse": true, "rf_pulse_power": 10.0, "rf_pulse_freq": 30.0, "rf_pulse_duty": 99, "use_heater": true, "heater_temp": 100.0}, "errors": ["CH1 에는 히터가 없습니다 (use_heater=T)"]},
+  {"name": "v1_20", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": false, "rfp": false, "heater": false, "thickness": false}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_rf_pulse": true, "rf_pulse_power": 10.0, "rf_pulse_freq": 30.0, "rf_pulse_duty": 99, "use_heater": true, "heater_temp": 100.0}, "errors": ["CH1 에는 히터가 없습니다 (use_heater=T)"]},
+  {"name": "v1_21", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": true, "rfp": true, "heater": false, "thickness": false}, "params": {"use_ar": false, "ar_flow": -1.0, "o2_flow": "abc", "n2_flow": null, "use_g1": true, "use_dc_pulse": true, "dc_pulse_power": 1.0}, "errors": ["가스를 하나 이상 선택해야 합니다.", "ar_flow는 음수 불가", "o2_flow 값이 숫자가 아니라 0으로 처리(raw='abc')."]},
+  {"name": "v1_22", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": true, "rfp": true, "heater": false, "thickness": false}, "params": {"use_ar": false, "ar_flow": -1.0, "o2_flow": "abc", "n2_flow": null, "use_g1": true, "use_dc_pulse": true, "dc_pulse_power": 1.0}, "errors": ["가스를 하나 이상 선택해야 합니다.", "ar_flow는 음수 불가", "o2_flow 값이 숫자가 아니라 0으로 처리(raw='abc')."]},
+  {"name": "v1_23", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": false, "rfp": false, "heater": false, "thickness": false}, "params": {"use_ar": false, "ar_flow": -1.0, "o2_flow": "abc", "n2_flow": null, "use_g1": true, "use_dc_pulse": true, "dc_pulse_power": 1.0}, "errors": ["가스를 하나 이상 선택해야 합니다.", "ar_flow는 음수 불가", "o2_flow 값이 숫자가 아니라 0으로 처리(raw='abc')."]},
+  {"name": "v1_24", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": true, "thickness": true}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true}, "errors": ["CH2는 DC1/DC2/RF Power 또는 DC/RF Pulse 중 하나 이상 선택 필요"]},
+  {"name": "v1_25", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": false, "thickness": true}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true}, "errors": ["CH2는 DC1/DC2/RF Power 또는 DC/RF Pulse 중 하나 이상 선택 필요"]},
+  {"name": "v1_26", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": false, "rfp": false, "heater": true, "thickness": true}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true}, "errors": ["CH2는 DC1/DC2/RF Power 또는 DC/RF Pulse 중 하나 이상 선택 필요"]},
+  {"name": "v1_27", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": true, "thickness": true}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_g2": true, "use_g3": true, "use_dc_power": true, "dc_power": -5.0}, "errors": ["G1~G3 중 1개 또는 2개만 선택", "DC Target Power(W)는 0 이상이어야 합니다."]},
+  {"name": "v1_28", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": false, "thickness": true}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_g2": true, "use_g3": true, "use_dc_power": true, "dc_power": -5.0}, "errors": ["G1~G3 중 1개 또는 2개만 선택", "DC Target Power(W)는 0 이상이어야 합니다."]},
+  {"name": "v1_29", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": false, "rfp": false, "heater": true, "thickness": true}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_g2": true, "use_g3": true, "use_dc_power": true, "dc_power": -5.0}, "errors": ["G1~G3 중 1개 또는 2개만 선택", "DC Target Power(W)는 0 이상이어야 합니다."]},
+  {"name": "v1_30", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": true, "thickness": true}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": false, "use_dc_power2": true, "dc_power2": 10.0}, "errors": ["G1~G3 중 1개 또는 2개만 선택", "DC2 Power 는 사용할 수 없습니다(DC2 폐지)"]},
+  {"name": "v1_31", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": false, "thickness": true}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": false, "use_dc_power2": true, "dc_power2": 10.0}, "errors": ["G1~G3 중 1개 또는 2개만 선택", "DC2 Power 는 사용할 수 없습니다(DC2 폐지)"]},
+  {"name": "v1_32", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": false, "rfp": false, "heater": true, "thickness": true}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": false, "use_dc_power2": true, "dc_power2": 10.0}, "errors": ["G1~G3 중 1개 또는 2개만 선택", "DC2 Power 는 사용할 수 없습니다(DC2 폐지)"]},
+  {"name": "v1_33", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": true, "thickness": true}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_rf_pulse": true, "rf_pulse_power": 100.0, "rf_pulse_freq": 31.0, "rf_pulse_duty": 100}, "errors": ["RF Pulse Freq 31kHz 는 허용 범위 0.001~30kHz 밖입니다 (CESAR 사양 3-5: 1Hz~30kHz — 초과 시 W40으로 출력 차단)", "RF Pulse Duty(%)는 1..99"]},
+  {"name": "v1_34", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": false, "thickness": true}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_rf_pulse": true, "rf_pulse_power": 100.0, "rf_pulse_freq": 31.0, "rf_pulse_duty": 100}, "errors": ["RF Pulse Freq 31kHz 는 허용 범위 0.001~30kHz 밖입니다 (CESAR 사양 3-5: 1Hz~30kHz — 초과 시 W40으로 출력 차단)", "RF Pulse Duty(%)는 1..99"]},
+  {"name": "v1_35", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": false, "rfp": false, "heater": true, "thickness": true}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_rf_pulse": true, "rf_pulse_power": 100.0, "rf_pulse_freq": 31.0, "rf_pulse_duty": 100}, "errors": ["이 챔버는 RF-Pulse를 지원하지 않습니다."]},
+  {"name": "v1_36", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": true, "thickness": true}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_dc_pulse": true, "dc_pulse_power": 0.0, "dc_pulse_freq": 151, "dc_pulse_off_time": "x"}, "errors": ["DC Pulse Target Power(W)는 0보다 커야 합니다.", "DC Pulse Freq(kHz)는 20..150", "DC Pulse Off Time 'x' 은 숫자(µs) 또는 DC 여야 합니다"]},
+  {"name": "v1_37", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": false, "thickness": true}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_dc_pulse": true, "dc_pulse_power": 0.0, "dc_pulse_freq": 151, "dc_pulse_off_time": "x"}, "errors": ["DC Pulse Target Power(W)는 0보다 커야 합니다.", "DC Pulse Freq(kHz)는 20..150", "DC Pulse Off Time 'x' 은 숫자(µs) 또는 DC 여야 합니다"]},
+  {"name": "v1_38", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": false, "rfp": false, "heater": true, "thickness": true}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_dc_pulse": true, "dc_pulse_power": 0.0, "dc_pulse_freq": 151, "dc_pulse_off_time": "x"}, "errors": ["이 챔버는 DC-Pulse를 지원하지 않습니다."]},
+  {"name": "v1_39", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": true, "thickness": true}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_rf_power": true, "rf_power": 100.0, "use_heater": true, "heater_temp": null, "heater_ramp": 0.0, "heater_soak": -1.0}, "errors": ["heater_temp 는 0 초과 900°C 이하여야 합니다 (현재 None)", "heater_ramp 는 0 초과 60°C/min 이하여야 합니다 (현재 0.0)", "heater_soak 는 0~480분이어야 합니다 (현재 -1.0)"]},
+  {"name": "v1_40", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": false, "thickness": true}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_rf_power": true, "rf_power": 100.0, "use_heater": true, "heater_temp": null, "heater_ramp": 0.0, "heater_soak": -1.0}, "errors": ["히터 기능이 꺼져 있어 use_heater=T 공정을 실행할 수 없습니다 (settings.json ch2 SUPPORTS_HEATER=false 또는 히터 초기화 실패)"]},
+  {"name": "v1_41", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": false, "rfp": false, "heater": true, "thickness": true}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_rf_power": true, "rf_power": 100.0, "use_heater": true, "heater_temp": null, "heater_ramp": 0.0, "heater_soak": -1.0}, "errors": ["heater_temp 는 0 초과 900°C 이하여야 합니다 (현재 None)", "heater_ramp 는 0 초과 60°C/min 이하여야 합니다 (현재 0.0)", "heater_soak 는 0~480분이어야 합니다 (현재 -1.0)"]},
+  {"name": "v1_42", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": true, "thickness": true}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_rf_power": true, "rf_power": 100.0, "use_heater": true, "heater_temp": 950.0, "heater_ramp": 61.0, "heater_soak": 481.0}, "errors": ["heater_temp 는 0 초과 900°C 이하여야 합니다 (현재 950.0)", "heater_ramp 는 0 초과 60°C/min 이하여야 합니다 (현재 61.0)", "heater_soak 는 0~480분이어야 합니다 (현재 481.0)"]},
+  {"name": "v1_43", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": false, "thickness": true}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_rf_power": true, "rf_power": 100.0, "use_heater": true, "heater_temp": 950.0, "heater_ramp": 61.0, "heater_soak": 481.0}, "errors": ["히터 기능이 꺼져 있어 use_heater=T 공정을 실행할 수 없습니다 (settings.json ch2 SUPPORTS_HEATER=false 또는 히터 초기화 실패)"]},
+  {"name": "v1_44", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": false, "rfp": false, "heater": true, "thickness": true}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_rf_power": true, "rf_power": 100.0, "use_heater": true, "heater_temp": 950.0, "heater_ramp": 61.0, "heater_soak": 481.0}, "errors": ["heater_temp 는 0 초과 900°C 이하여야 합니다 (현재 950.0)", "heater_ramp 는 0 초과 60°C/min 이하여야 합니다 (현재 61.0)", "heater_soak 는 0~480분이어야 합니다 (현재 481.0)"]},
+  {"name": "v1_45", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": true, "thickness": true}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_rf_power": true, "rf_power": 100.0, "use_heater": true, "heater_temp": 900.0, "heater_ramp": 60.0, "heater_soak": 480.0}, "errors": []},
+  {"name": "v1_46", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": false, "thickness": true}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_rf_power": true, "rf_power": 100.0, "use_heater": true, "heater_temp": 900.0, "heater_ramp": 60.0, "heater_soak": 480.0}, "errors": ["히터 기능이 꺼져 있어 use_heater=T 공정을 실행할 수 없습니다 (settings.json ch2 SUPPORTS_HEATER=false 또는 히터 초기화 실패)"]},
+  {"name": "v1_47", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": false, "rfp": false, "heater": true, "thickness": true}, "params": {"use_ar": true, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "use_rf_power": true, "rf_power": 100.0, "use_heater": true, "heater_temp": 900.0, "heater_ramp": 60.0, "heater_soak": 480.0}, "errors": []},
+  {"name": "v1_48", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": true, "thickness": true}, "params": {"use_ar": false, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "test_mode": true}, "errors": []},
+  {"name": "v1_49", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": false, "thickness": true}, "params": {"use_ar": false, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "test_mode": true}, "errors": []},
+  {"name": "v1_50", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": false, "rfp": false, "heater": true, "thickness": true}, "params": {"use_ar": false, "ar_flow": 20.0, "o2_flow": 0.0, "n2_flow": 0.0, "use_g1": true, "test_mode": true}, "errors": []},
+  {"name": "flow_text_numbers", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": true, "thickness": true}, "params": {"use_ar": true, "ar_flow": " 5 ", "o2_flow": "NONE", "n2_flow": "", "use_g1": true, "use_rf_power": true}, "errors": []},
+  {"name": "flow_bool_and_list", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": true, "thickness": true}, "params": {"use_o2": true, "ar_flow": true, "o2_flow": [1], "n2_flow": {"a": 1}, "use_g2": true, "use_dc_power": true, "dc_power": 1.0}, "errors": ["ar_flow 값이 숫자가 아니라 0으로 처리(raw=True).", "o2_flow 값이 숫자가 아니라 0으로 처리(raw=[1]).", "n2_flow 값이 숫자가 아니라 0으로 처리(raw={'a': 1})."]},
+  {"name": "flow_missing_keys", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": true, "rfp": true, "heater": false, "thickness": false}, "params": {"use_n2": true, "use_rf_pulse": true, "rf_pulse_power": 5.0, "rf_pulse_freq": 0.001, "rf_pulse_duty": 1}, "errors": []},
+  {"name": "dcp_freq_given_off_ok", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": true, "rfp": true, "heater": false, "thickness": false}, "params": {"use_ar": true, "use_dc_pulse": true, "dc_pulse_power": 5.0, "dc_pulse_freq": 150, "dc_pulse_off_time": 2.7}, "errors": []},
+  {"name": "dcp_freq_zero", "ch": 1, "caps": {"dc": false, "dc2": false, "rf": false, "dcp": true, "rfp": true, "heater": false, "thickness": false}, "params": {"use_ar": true, "use_dc_pulse": true, "dc_pulse_power": 5.0, "dc_pulse_freq": 0, "dc_pulse_off_time": 10.5}, "errors": ["DC Pulse Freq(kHz)는 20..150", "DC Pulse Off Time 10.5µs 는 (주파수 미지정 → 절대 상한) 상한 10.0µs 초과(매뉴얼 p.13 그림3)"]},
+  {"name": "dcp_off_dc_text", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": true, "thickness": true}, "params": {"use_ar": true, "use_g1": true, "use_dc_pulse": true, "dc_pulse_power": 5.0, "dc_pulse_off_time": " dc "}, "errors": []},
+  {"name": "heater_limits_edges", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": true, "thickness": true}, "params": {"use_ar": true, "use_g1": true, "use_g2": true, "use_rf_power": true, "rf_power": 1.0, "use_heater": true, "heater_temp": 0.5, "heater_ramp": null, "heater_soak": 0.0}, "errors": []},
+  {"name": "heater_ramp_zero", "ch": 2, "caps": {"dc": true, "dc2": false, "rf": true, "dcp": true, "rfp": true, "heater": true, "thickness": true}, "params": {"use_ar": true, "use_g1": true, "use_rf_power": true, "use_heater": true, "heater_temp": 1e-07, "heater_ramp": 0.0, "heater_soak": 480.1}, "errors": ["heater_ramp 는 0 초과 60°C/min 이하여야 합니다 (현재 0.0)", "heater_soak 는 0~480분이어야 합니다 (현재 480.1)"]}
+ ]
+}

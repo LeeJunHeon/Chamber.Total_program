@@ -1,0 +1,6 @@
+2026-10-30 09:00:00.000 [INFO] [CH_1_2_program] [pid=4242 tid=777] system logging ready. root=C:\x
+2026-10-30 09:00:01.999 [WARNING] [CH_1_2_program] [pid=4242 tid=777] [WARN/DUMP] 덤프 건너뜀
+2026-10-30 09:00:02.500 [ERROR] [CH_1_2_program] [pid=4242 tid=777] TASK CRASHED
+ValueError: boom 한글
+2026-10-30 09:00:03.000 [CRITICAL] [CH_1_2_program] [pid=4242 tid=777] PROCESS SIGNAL RECEIVED: SIGINT (2)
+2026-10-30 09:00:04.000 [DEBUG] [CH_1_2_program] [pid=4242 tid=777] 버려짐
