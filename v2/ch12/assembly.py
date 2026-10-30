@@ -399,7 +399,14 @@ def build(system, cfg: Optional[Dict[str, Any]] = None, *, settings_dir: Optiona
         drv = getattr(system, "heater_drv", None) or HD.HeaterDriver(clock, system.plc, c, wr,
                                                                       on_event=system._ev_for("ch2.heater"), chamber="ch2")
         asm.heater_driver = drv
-        return HeaterEngine(clock, drv, c, on_event=system._ev_for("heater"), csv=system.outputs.heater, chamber="ch2")
+        to_sys = system._ev_for("heater")
+
+        def on_heater(ev) -> None:                    # 히터 로그는 CH2 공정 txt 에도(공정 로그가 열려 있을 때 — HEAT-090 상태 줄 포함)
+            to_sys(ev)
+            e2 = asm.proc.get("ch2")
+            if getattr(ev, "kind", "") == "log" and e2 is not None and getattr(e2.txt, "path", None) is not None:
+                e2.log("HEATER", str(getattr(ev, "detail", "") or ""))
+        return HeaterEngine(clock, drv, c, on_event=on_heater, csv=system.outputs.heater, chamber="ch2")
     if bool(c.get("CH2_SUPPORTS_HEATER", False)):
         asm.heater = init_ch2_heater(c, make_heater, lambda src, msg: system.emit("heater", "log", msg, level="warn"))
         if asm.heater is not None:
@@ -427,7 +434,9 @@ def build(system, cfg: Optional[Dict[str, Any]] = None, *, settings_dir: Optiona
     # 4 플라즈마 클리닝·TSP(Robot CSV 는 로봇 쪽과 같이 쓴다)
     if robot_csv:
         from v2.ch12.outputs.robot_csv import RobotCsv
+        from v2.ch12.robot_api import client_process_to_emit
         asm.robot_csv = RobotCsv(c, writer=system.outputs.writer, start_worker=True)
+        asm.robot_csv.set_event_sink(client_process_to_emit(system.emit))     # v1 _emit_client_process_card 자리(포털 카드)
         try:
             asm.robot_csv.startup_recover()
         except Exception:

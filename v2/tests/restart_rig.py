@@ -15,7 +15,6 @@ from typing import Any, Callable, Dict, Iterable, List, Optional
 from v2.common.clock import ClockClosed, VirtualClock
 from v2.ch12 import resume as RS
 from v2.ch12.sim.camera_sim import SimCamera
-from v2.ch12.sim.chamber import Chamber  # noqa: F401
 from v2.ch12.sim.rig import base_cfg, local_paths, make_sims, sim_transports
 from v2.ch12.system import TEST_RETENTION, Ch12System, new_store
 

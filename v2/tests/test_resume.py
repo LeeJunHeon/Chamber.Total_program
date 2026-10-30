@@ -15,7 +15,6 @@
 import json
 import random
 import signal
-import subprocess
 import sys
 import threading
 import time

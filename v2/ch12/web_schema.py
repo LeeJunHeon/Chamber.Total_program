@@ -34,7 +34,8 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
   1  첫 판(7단계 — 챔버K 묶음 버전 12 의 필드 의미 그대로 + chambers, 챔버별 공정 맥락)
   2  4단계 — commands(명령 표 58+·portalOnly·webOnly·target·PLC 버튼 51·사유 표)·stopSequence(safety_rules.public — 챔버 정지 순서·
      끝 정지 금지 단계·PC/TSP 정지·allStopSequence·powerOffOnly·규칙 S1~S36)·states(process_states.STATES), 1초 행 블록
-     ch2.heater(PLC 히터 해독 + 엔진 열)·ch2.thk(두께 판정 — 엔진 열) 추가(chambers.ch2.blocks 에도)
+     ch2.heater(PLC 히터 해독 + 엔진 열)·ch2.thk(두께 판정 — 엔진 열) 추가(chambers.ch2.blocks 에도), eventKinds 에
+     monitor_card·anomaly·client_process·error_event·resumed·safety step/error·command·ui·패널 결과·robot_api
 """
 from __future__ import annotations
 
@@ -115,6 +116,14 @@ EVENT_KINDS: tuple = (
     ("uplink", "uplink_too_large", "웹이 받지 않는 큰 메시지", _M), ("uplink", "uplink_spool_full", "웹 보관함 가득", _M),
     ("uplink", "uplink_gap", "웹으로 올릴 메시지 놓침", _M), ("uplink", "uplink_spool_loaded", "지난 실행 메시지 이어 올림", _D),
     ("uplink", "uplink_bad_command", "웹 명령 형식 오류", _M), ("uplink", "uplink_spool_error", "보관함 쓰기 실패", _M),
+    # 4단계 — 조립에 붙은 모듈이 내는 것(공정 모니터·OES 이상·로봇 요청 공정 기록·로봇 오류 보고·재시작 이어감·안전·명령)
+    ("process", "monitor_card", "공정 모니터 알림(유량·압력 편차·Arc·REFP)", _M), ("oes", "anomaly", "OES 이상", _M),
+    ("robot", "client_process", "로봇 요청 공정 기록", _M), ("robot", "error_event", "로봇 명령 오류", _M),
+    ("robot_server", "error_event", "로봇 서버 오류", _M), ("process", "resumed", "재시작 뒤 공정 이어감", _M),
+    ("safety", "step", "안전 조치 단계", _D), ("safety", "error", "안전 조치 오류", _M),
+    ("command", "plc_manual", "공정 중 PLC 버튼", _M), ("command", "internal_error", "명령 처리 오류", _M),
+    ("ui", "log_clear", "화면 로그 지우기", _D), ("heater", "panel_result", "히터 패널 결과", _M),
+    ("thickness", "panel_result", "두께 패널 결과", _M), ("robot_api", "bind_failed", "내부 명령 API 포트 실패", _M),
 ) + tuple(x for w in _WORKERS for x in (
     (w, "connected", "장비 연결됨", _D), (w, "connect_failed", "연결 실패", _D), (w, "disconnected", "장비 연결 끊김", _M),
     (w, "long_outage", "장비 연결 오래 끊김", _M), (w, "timeout", "응답 없음", _D),

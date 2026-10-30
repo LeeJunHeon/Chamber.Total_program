@@ -244,6 +244,21 @@ def power_off_only(system, why: str = "PROGRAM_EXIT", wait_s: float = FORCE_DEAD
 
 
 # ───────────── 재시작 판단 ─────────────
+class _Closed(Exception):
+    pass
+
+
+class _Closer:
+    """조립 정지(system.stop → 엔진 close) 때 저널 쓰기 스레드·재시작 판단을 끝낸다(엔진 이름 journal)."""
+
+    def __init__(self, journal, manager) -> None:
+        self.j, self.m = journal, manager
+
+    def close(self) -> None:
+        self.m.close()
+        self.j.stop()
+
+
 class ResumeManager:
     def __init__(self, system, journal: J.Journal, log: Optional[Callable[[str], None]] = None) -> None:
         self.sys, self.j, self.clock, self.cfg = system, journal, system.clock, system.cfg
@@ -254,6 +269,7 @@ class ResumeManager:
         self.residual: Optional[Dict[str, Any]] = None
         self.rows = 0
         self.done = False
+        self.closed = False
         self.error: Optional[str] = None
         self._thread = None
 
@@ -302,15 +318,25 @@ class ResumeManager:
             return x[0]
         return now
 
+    def close(self) -> None:
+        """조립 정지 — 판단을 기다리던 중이면 그만둔다(공정이 있던 부분은 다음 시작이 다시 판단 — 저널을 덮어쓰지 않았다)."""
+        self.closed = True
+        self.clock.notify()
+
     def _wait_rows(self, n: int, extra: Callable[[], bool] = lambda: True) -> bool:
         goal = self.rows + n
-        return self.clock.wait_until(self.clock.monotonic() + RESUME_WAIT_S,
-                                     lambda: self.sys.started and self.rows >= goal and extra())
+        self.clock.wait_until(self.clock.monotonic() + RESUME_WAIT_S,
+                              lambda: self.closed or (self.sys.started and self.rows >= goal and extra()))
+        if self.closed:
+            raise _Closed()
+        return True
 
     # ── 판단·실행(별도 스레드) ──
     def run(self) -> None:
         try:
             self._run()
+        except _Closed:
+            self.say("조립 정지 — 재시작 판단 그만둠")
         except Exception as e:                              # 판단 오류 — 공정이 있던 챔버는 안전 정지 쪽으로
             self.error = repr(e)
             self.say(f"재시작 판단 오류: {e!r}")
@@ -319,7 +345,8 @@ class ResumeManager:
                     self._fallback(part, f"판단 오류: {e!r}")
         finally:
             for part in list(self.active):
-                self.j.release(part)
+                if part in self.decisions:                 # 판단하지 못한 부분은 옛 저널 그대로(다음 시작이 다시 판단)
+                    self.j.release(part)
                 eng = self.sys.engine(J.ENGINE_OF[part])
                 if eng is not None:
                     eng._restart_pending = False
@@ -531,6 +558,7 @@ def attach(system, directory=None, log: Optional[Callable[[str], None]] = None) 
     m = ResumeManager(system, j, log=log).prepare()
     j.start()
     system.journal, system.resumer = j, m
+    system.register_engine("journal", _Closer(j, m))
     return j, m
 
 

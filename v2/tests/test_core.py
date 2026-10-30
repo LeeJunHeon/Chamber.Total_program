@@ -187,8 +187,9 @@ def test_panel_and_plc_commands_reach_engines(rig):
     sim = rig.sims["plc"]
     assert rig.command("PLC_BUTTON", {"target": "vent_1_sw", "on": True}, source=HMI).ok
     assert rig.command("POWER_SELECT", {"on": True}, source=HMI).ok
+    assert rig.command("BUZZ_STOP", {}, source=HMI).ok                                   # v1 device/plc.py:1810 buzzer_stop
     rig.loop.run(2)
-    assert sim.coil("VENT_1_SW") and sim.coil("SW_POWER_SELECT")
+    assert sim.coil("VENT_1_SW") and sim.coil("SW_POWER_SELECT") and sim.coil("BUZZER_STOP_SW")
     assert rig.command("PC_SELECT_CH", {"ch": 2}, source=HMI).ok and rig.asm.pc.ch == 2
     assert rig.command("TSP_SCHEDULE", {"on": True, "time": "05:10"}, source=WEB).ok
     st = rig.asm.tsp.schedule.state()

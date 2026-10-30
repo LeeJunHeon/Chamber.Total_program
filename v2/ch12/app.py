@@ -380,6 +380,10 @@ class App:
         if kind == "refuse":
             self.say(f"[종료 거부] {msg}")
             self.log.warning("종료 거부: %s", msg)
+            if self.system is not None and (getattr(self.system, "cfg", None) or {}).get("LOG_ROOT_DIR"):
+                # v1 종료 차단 때 덤프 1회(close_blocked_while_running — main.py:1500-1505). 기록 폴더가 정해진 조립에서만
+                from v2.ch12.runtime_dump_hook import dump_close_blocked
+                dump_close_blocked(self.system)
             return "refused"
         return "exit"
 

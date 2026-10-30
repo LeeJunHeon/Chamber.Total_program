@@ -464,7 +464,7 @@ class ProcessViewMixin:
         """지금 스텝을 남은 만큼으로 바꿔 러너가 그 스텝부터 다시 돌게 한다(꺼져 있던 시간도 경과)."""
         import dataclasses
         from datetime import datetime
-        r, now = self.runner, self.clock.monotonic()
+        r = self.runner
         idx = r.idx
         step = r.steps[idx]
         cdj = st.get("countdown") or {}
