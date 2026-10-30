@@ -47,7 +47,8 @@ class Rig:
         self.c = VirtualClock(start_wall=1_760_000_000.0)
         self.c.register()
         self.root = tmp_path / "카메라_로그"                               # 한글 경로(v1: cv2.imwrite 조용한 실패 회피)
-        self.cfg = dict(CFG, CAMERA_LOG_ROOT=str(self.root), **(cfg or {}))
+        self.cfg = dict(CFG, CAMERA_LOG_ROOT=str(self.root))
+        self.cfg.update(cfg or {})
         self.be = backend or FakeBackend()
         self.events, self.notes, self.logs = [], [], []
         self.d = C.CameraDriver(self.c, self.cfg, on_event=self.events.append, backend=self.be,

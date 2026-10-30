@@ -22,7 +22,6 @@ v1 이 실제로 쓰던 값: RFPowerAsync 는 cfg 없이 생성 → config_commo
 """
 from __future__ import annotations
 
-import time as _time
 from typing import Any, Callable, Dict, List, Optional
 
 from v2.common.snapshot import DeviceBlock, FieldDef, FType
@@ -220,10 +219,12 @@ class RfPower:
             self._status(f"프로세스 시작. 목표: {self.target_power:.1f} W")
             self.polling = True
             self._due = self.clock.monotonic()
-            if not self._send(self.current_step, after=lambda ok: None):
-                pass
-            self._status(f"Ramp-Up 시작: 초기 {self.current_step:.1f}W 전송")
-            done(None)
+            step = self.current_step
+
+            def first(ok: bool) -> None:
+                self._status(f"Ramp-Up 시작: 초기 {step:.1f}W 전송")
+                done(None)
+            self._send(step, after=first)
         self.plc.rf_enable(True, rf_ch=self.rf_ch, source=self.source, on_done=set_done)
 
     def _start_direct(self, done) -> None:
@@ -232,11 +233,7 @@ class RfPower:
             self._status(f"Kick+Ramp 시작: {kick:.1f}W kick → {self.target_power:.1f}W까지 "
                          f"↑{self.p('ramp_step'):.1f}W/s, ↓{self.p('ramp_down'):.1f}W/s")
 
-            def kicked(ok: bool) -> None:
-                if not ok:
-                    self._status("Kick 전송 실패")
-                    done("DEVICE_REJECTED")
-                    return
+            def kicked(ok: bool) -> None:          # v1 _send_rf_power 는 실패를 삼켜 '전송 완료'로 이어간다
                 self.current_step = kick
                 self._status(f"Kick {kick:.1f}W 전송 완료 — ramp 시작 대기")
                 self.polling, self._due = True, self.clock.monotonic()
@@ -246,11 +243,8 @@ class RfPower:
             self._status(f"Direct set: {self.target_power:.1f} W")
 
             def direct(ok: bool) -> None:
-                if not ok:
-                    self._status("Direct set 실패")
-                    done("DEVICE_REJECTED")
-                    return
                 self.current_step = float(self.target_power)
+                self.last_sent = float(self.target_power)
                 self._status(f"Direct set {self.target_power:.1f}W 전송 — 도달 판정 대기")
                 self.polling, self._due = True, self.clock.monotonic()
                 done(None)

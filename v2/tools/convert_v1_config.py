@@ -239,6 +239,10 @@ class Converter:
         for p in self.t.params:
             for ref in own.v1_refs(p.key, p.v1_key):
                 self.param_of.setdefault(ref, p)
+        for path in _FACTS:                # 이름 규칙(묶음 하위 키 "구역.X.k" → X_K 처럼 거꾸로 풀 수 없는 것 포함)
+            k = own.v2_key_for(path)
+            if k in self.by_key:
+                self.param_of.setdefault(path, self.by_key[k])
         self.dropped_of: dict = {}
         for d in self.t.dropped:
             for ref in own.v1_refs(d.key, d.key):
