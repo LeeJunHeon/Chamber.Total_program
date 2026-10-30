@@ -2,6 +2,7 @@
 
 done 항목: v2 칸의 파일이 실제로 있고(여러 개면 ; 로 — 하나 이상), test 칸의 시험이 실제로 있다
   ("v2/tests/test_x.py::test_y" — 파일이 있고 그 이름의 시험 함수(또는 클래스 안 메서드)가 있다; 여러 개면 ; 로 — 모두).
+  포털 쪽 시험은 "vanam-process/scripts/ops2-golden.mjs::<그 파일 안의 이름>" 처럼(파일이 있고 이름이 파일 안에 있음).
 na 항목: note 에 이유가 있다.
 포털 쪽 담당(v2 칸이 "vanam-process ..." 로 시작)은 vanam-process 저장소 경로가 있는지(같은 상위 폴더에 있으면) 본다.
 """
@@ -42,6 +43,13 @@ def _test_ok(test: str, cache: dict) -> bool:
         return False
     for t in parts:
         f, _, name = t.partition("::")
+        if f.startswith("vanam-process/"):          # 포털 쪽 시험(스크립트) — 파일이 있고 이름이 그 안에 있음
+            if not PORTAL.exists():
+                continue
+            p = PORTAL / f[len("vanam-process/"):]
+            if not p.is_file() or (name and name not in p.read_text(encoding="utf-8", errors="replace")):
+                return False
+            continue
         p = ROOT / f
         if not p.is_file():
             return False
