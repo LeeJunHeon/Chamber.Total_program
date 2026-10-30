@@ -265,7 +265,7 @@ class HeaterRig:
 
     def __init__(self, cfg: Optional[dict] = None, writes: bool = True, sim=None) -> None:
         from v2.common.paramdef import defaults
-        from v2.common.snapshot_bus import SnapshotBus, Source, TickLoop
+        from v2.common.snapshot_bus import SnapshotBus, TickLoop
         from v2.ch12.drivers import plc as P
         from v2.ch12.params import core_heater as PH
         from v2.ch12.sim.plc_rig import PlcRig
@@ -280,7 +280,7 @@ class HeaterRig:
         self.eng = HeaterEngine(self.c, self.drv, self.p.cfg, on_event=self.events.append)
         self.pre_row: List[Callable[[dict], None]] = []
         bl = P.blocks() + H.blocks()
-        self.bus = SnapshotBus(self.c, bl, [Source("plc", self.p.w, self.p.d.source_read, self.p.d.source_blocks())])
+        self.bus = SnapshotBus(self.c, bl, [self.p.d.source()])
         self.loop = TickLoop(self.c, self.bus, sinks=[self._pre, self.rows.append, self.eng.on_row],
                              tick_hooks=[self.p.d.on_tick, self.eng.on_tick_start],
                              extra_fn=lambda t: self.eng.snapshot_fields())

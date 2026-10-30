@@ -9,7 +9,8 @@ Ch12System(장비·1초 행·기록) 위에 붙이는 것(순서)
   4 플라즈마 클리닝(pc — chamber_busy = 그 CH 공정 엔진 busy, Robot CSV)·TSP(tsp — 매일 예약 복원)
   5 안전(Ch12Safety → system.safety)·명령 처리(Ch12Core → system.command)
   6 로봇: Robot CSV(RobotCsv — startup_recover) · RobotOps(v1 handlers — engines = EngineAdapter) · ops.core = core(로봇 명령도
-    core.command 를 지난다 — robot_api.dispatch_robot) · RobotApi(127.0.0.1:ROBOT_API_PORT)
+    core.command 를 지난다 — robot_api.dispatch_robot) · RobotApi(127.0.0.1:ROBOT_API_PORT — 포트는 여기서 잡고 받기 시작은
+    system.start 때: 저널이 옛 로봇 명령 id 기억을 넣은 뒤)
   7 허브(hub.attach)·설정 적용(config_apply.attach) — 이미 붙어 있으면 그대로
   닫기: 'assembly' 엔진의 close(system.stop 이 엔진 close 를 부른다) — 로봇 API·Robot CSV·프리스퍼터·히터 종료(RUN=0 — S24).
 EngineAdapter = robot_engines.RobotEngines Protocol 의 실제 엔진 쪽(v1 handlers 가 runtime_state·ChamberRuntime·PlasmaCleaningRuntime 에서
@@ -498,8 +499,14 @@ def build(system, cfg: Optional[Dict[str, Any]] = None, *, settings_dir: Optiona
     if robot_api:
         try:
             asm.robot_api = RobotApi(asm.robot_ops, clock, c, emit=system.emit, port=robot_port,
-                                     dispatch=asm.robot_status.dispatch).start()
-            asm.robot_status.port = asm.robot_api.port
+                                     dispatch=asm.robot_status.dispatch)
+            asm.robot_status.port = asm.robot_api.port      # 포트는 지금 잡는다(바인드) — 요청 처리는 시작 때부터
+            # 받기 시작은 system 시작 때(worker 시작 뒤) — 저널이 옛 로봇 명령 id 기억을 넣은 뒤(resume.attach → journal.
+            # bind_commands, 웹 uplink 를 시작하기 전에 넣는 것과 같게). 그 사이 온 연결은 소켓 대기열에서 기다린다
+            if getattr(system, "started", False):
+                asm.robot_api.start()
+            else:
+                system.start_hooks.append(asm.robot_api.start)
         except OSError as ex:                       # 포트를 못 잡아도 공정·안전은 그대로(로봇 서버는 '응답 없음'으로 다룬다)
             system.emit("robot_api", "bind_failed", f"내부 명령 API 포트 열기 실패: {ex}", level="error", code="ROBOT_NOT_READY")
 

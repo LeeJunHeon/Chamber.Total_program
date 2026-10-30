@@ -10,7 +10,7 @@ from typing import Any, Dict, List, Optional
 
 from v2.common.clock import VirtualClock
 from v2.common.paramdef import defaults
-from v2.common.snapshot_bus import SnapshotBus, Source, TickLoop
+from v2.common.snapshot_bus import SnapshotBus, TickLoop
 from v2.common.transport import SimTransport
 from v2.common.worker import Request
 from v2.ch12.drivers import plc as P
@@ -65,7 +65,7 @@ class PlcRig:
         if tick:
             from v2.ch12.drivers import dc as DCM, rf as RFM
             bl = P.blocks() + (DCM.blocks() if dc else []) + (RFM.blocks() if rf else [])
-            self.bus = SnapshotBus(self.c, bl, [Source("plc", self.w, self.d.source_read, self.d.source_blocks())])
+            self.bus = SnapshotBus(self.c, bl, [self.d.source()])
             self.loop = TickLoop(self.c, self.bus, sinks=[self.rows.append], tick_hooks=[self.d.on_tick])
             self.c.start_thread(self.loop.run, "tick")
         self.c.wait_until(start_s)
@@ -92,10 +92,15 @@ class PlcRig:
         self.c.wait_until(None, lambda: bool(box))
         return box[0]
 
-    def read(self, deadline_s: float = 0.9):
+    def read(self, deadline_s: float = 0.9, split: bool = True):
+        """1초 읽기 한 번 — 실행 프로그램과 같은 나눠 읽기(split, source_start) 또는 요청 하나(source_read)."""
         box = []
-        self.w.submit(Request("read", lambda s: self.d.source_read(s, 0), deadline=self.c.monotonic() + deadline_s,
-                              on_done=lambda r: (box.append(r), self.c.notify()), name="read:plc"))
+        cb = lambda r: (box.append(r), self.c.notify())
+        if split:
+            self.d.source_start(0, self.c.monotonic() + deadline_s, cb)
+        else:
+            self.w.submit(Request("read", lambda s: self.d.source_read(s, 0), deadline=self.c.monotonic() + deadline_s,
+                                  on_done=cb, name="read:plc"))
         self.c.wait_until(None, lambda: bool(box))
         return box[0]
 

@@ -449,18 +449,24 @@ class RobotCsv:
         self._kick.set()
 
     def startup_recover(self) -> None:
-        """시작 때(쓰기 스레드에서): pending 에 이미 있는 open 은 버리고, 나머지는 '중단(재시작)' 줄."""
+        """시작 때(쓰기 스레드에서): pending 에 이미 있는 open 은 버리고, 나머지는 '중단(재시작)' 줄.
+        대상은 부른 순간 open 에 있던 것(지난 실행이 남긴 것)만 — 쓰기 스레드가 늦게 돌 때(부하·앞선 기록) 그 사이 새로 받은 요청을
+        '재시작' 으로 닫지 않게(v1 은 시작 때 바로 처리)."""
         if not self.enabled():
             return
-        self.writer.put(self._recover)
+        with self._lk:
+            keys = set(self._open)
+        self.writer.put(self._recover, keys)
 
-    def _recover(self) -> None:
+    def _recover(self, keys: Optional[set] = None) -> None:
         evs: List[Dict[str, Any]] = []
         try:
             with self._lk:
                 pend = {r[-1] for r in self._read_pending() if r}
                 self._pend_keys |= pend
                 for key, it in list(self._open.items()):
+                    if keys is not None and key not in keys:
+                        continue                 # 시작 뒤 새로 받은 요청 — 지난 실행 것이 아님
                     if key in pend:
                         self._open.pop(key, None)
                         continue

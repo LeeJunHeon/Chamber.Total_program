@@ -174,6 +174,33 @@ for i in range(n):
 '''
 
 
+def test_robot_recover_only_keys_open_at_startup(tmp_path):
+    """startup_recover 는 쓰기 스레드에서 늦게 돌 수 있다(부하·앞선 기록) — 그 사이 새로 받은 요청은 '중단(재시작)' 으로 닫지
+    않는다(대상 = 부른 순간 open 에 있던 지난 실행 것). 쓰기 스레드를 막아 두고 확인."""
+    import json
+    root = make_root(tmp_path)
+    cfg = v2_cfg(root, SC.BASE_CFG)
+    clock = Clock(SC.T0)
+    local = Path(cfg["HOST_LOG_LOCAL_DIR"])
+    local.mkdir(parents=True, exist_ok=True)
+    (local / "open_sputter.json").write_text(json.dumps({"old-1": {"key": "old-1", "target": "CH1", "request_id": "O",
+                                                                    "received_at": "2026-10-30T09:00:00.000"}}),
+                                             encoding="utf-8")
+    gate = threading.Event()
+    w = QueueWriter("t")
+    w.put(gate.wait)                                         # 쓰기 스레드가 바쁨
+    r = _mk(cfg, w, clock)
+    r.startup_recover()
+    k = r.request(target="CH1", request_id="NEW", peer="p", received_at=clock.now())   # 시작 직후 온 새 요청
+    gate.set()
+    assert w.flush(10)
+    rows = (local / "pending_sputter.csv").read_text(encoding="utf-8-sig")
+    assert "old-1" in rows and k not in rows                  # 지난 실행 것만 '중단(재시작)'
+    assert set(json.loads((local / "open_sputter.json").read_text(encoding="utf-8"))) == {k}
+    r.close()
+    w.stop()
+
+
 def test_robot_concurrent_with_ald_process(tmp_path):
     """다른 프로세스(ALD 흉내)와 같은 NAS 파일에 번갈아 쓴다 — 줄이 섞이거나 빠지거나 머리글이 두 번 생기지 않는다."""
     root = make_root(tmp_path)

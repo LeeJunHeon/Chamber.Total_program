@@ -3,6 +3,8 @@
 
 - test_ch1_ch2_concurrent_process: 웹 명령으로 CH1(RF Pulse)·CH2(DC Pulse) 공정을 겹쳐 시작 — 둘 다 done, 서로 막지 않음
   (CH1 이 RUNNING 인 동안 CH2 시작이 받아들여지고, 겹친 구간에 두 챔버 블록이 모두 진행), 펄스 포트·MFC 는 챔버마다.
+- test_plc_short_deadlines_at_tick_start: tick 경계·앞부분 여러 시점의 PC GV 인터락(0.6 s)·게이트·메인밸브 확인이 마감 안,
+  1초 행 PLC 품질 ok, CH1·CH2 를 tick 경계에서 동시에 시작해도 둘 다 RUNNING(PLC 1초 묶음 나눠 읽기 — 결정 D120·D84).
 - test_robot_full_flow: 로봇 TCP 클라이언트 → v2/robot_server(16바이트 헤더+JSON) → 내부 명령 API(127.0.0.1) → core.command(ROBOT_*)
   → RobotOps(v1 handlers) → 엔진. GET_SPUTTER_STATUS → VACUUM_ON → CH1_GATE_OPEN → CH1_CHUCK_UP/DOWN → 4PIN_UP/DOWN →
   CH1_GATE_CLOSE → START_SPUTTER(시작 가드 통과 시점의 응답) → 상태 질의로 공정 끝까지 → START_PLASMA_CLEANING(쿨다운 뒤)
@@ -58,7 +60,7 @@ P2 = dict(base_pressure=1e-5, working_pressure=5, process_time=0.3, shutter_dela
           use_dc_pulse=True, dc_pulse_power=80, dc_pulse_freq=20, use_ms=True, use_g1=True, process_note="c2")
 PC_UI = {"gas_flow": "10", "rf_power": "100", "process_time": "0.1", "working_pressure": "2"}
 HDR = "!BBHIQ"
-PACE_AT = 0.85                         # 로봇 흐름 — 가상 초의 이 자리에서 실제 시간을 쉰다(test_robot_full_flow pacer)
+PACE_STEP = 0.1                        # 로봇 흐름 — 가상 0.1 s 마다(tick 경계 포함) 실제 시간을 조금 쉰다(test_robot_full_flow pacer)
 
 
 # ───────────── 도우미 ─────────────
@@ -174,6 +176,71 @@ def test_ch1_ch2_concurrent_process(tmp_path):
         finish(rig)
 
 
+# ───────────── PLC 짧은 마감 요청 — tick 경계·앞부분(결정 D120·D84) ─────────────
+def test_plc_short_deadlines_at_tick_start(tmp_path):
+    """실제 조립·PLC 시뮬레이터에서 tick 시작 + 여러 오프셋에 v1 짧은 마감 PLC 요청 — PC 프리플라이트 GV 인터락(0.6 s, 넘으면
+    E511 'GV 인터락 read timeout(0.6s)')·CH1/CH2 게이트·메인밸브 확인(읽기 0.6 s, 줄 서기 여유 없음). 모두 마감 안·결과 정상이고
+    1초 행의 PLC 품질은 ok(수정 전: 1초 묶음이 PLC 를 0.75 s 잡아 tick 앞 0.2 s 안의 요청이 시간 초과). 마지막으로 CH1·CH2 를 tick
+    경계에서 동시에 시작 — 둘 다 게이트·메인밸브 확인을 지나 RUNNING."""
+    from v2.ch12 import process_preflight as PF
+    rig = full(tmp_path)
+    try:
+        a = rig.asm
+        e1, e2 = a.proc["ch1"], a.proc["ch2"]
+        res = []
+        offs = (0.0, 0.001, 0.01, 0.05, 0.1, 0.149, 0.15, 0.3, 0.45, 0.6, 0.75, 0.99)
+        it = iter(offs)
+
+        def hook(t):
+            if t.seq % 2:
+                return                                   # 2 tick 마다 하나(읽기 5개를 차례로 — 앞 것과 겹치지 않게)
+            off = next(it, None)
+            if off is None:
+                return
+
+            def go():
+                c = rig.clock
+                c.wait_until(t.t_mono + off)
+                t0 = c.monotonic()
+                gv = a.pc.preflight_gv_interlock()
+                t1 = c.monotonic()
+                gate = PF.gate_check(e1 if int(off * 1000) % 2 == 0 else e2)
+                t2 = c.monotonic()
+                mv = PF.main_valve_check(e2)
+                res.append((off, gv, round(t1 - t0, 3), gate, round(t2 - t1, 3), mv, round(c.monotonic() - t2, 3)))
+            rig.clock.start_thread(go, "plc-probe")
+        rig.loop.tick_hooks.append(hook)
+        n0 = len(rig.rows)
+        rig.loop.run(2 * len(offs) + 3)
+        rig.loop.tick_hooks.remove(hook)
+        assert len(res) == len(offs)
+        for off, gv, t_gv, gate, t_gate, mv, t_mv in res:
+            assert gv == (True, None) and t_gv <= 0.31, res                  # GV 인터락(시뮬레이터 기본 True) — 0.6 s 안
+            assert gate == (True, "") and mv == (True, ""), res               # 읽기마다 0.6 s 안(넘으면 재시도·실패)
+            assert t_gate <= 0.62 and t_mv <= 0.62, res                       # 첫 시도 성공(읽기 2개 — 재시도 간격 0.2 s 없음)
+        rows = list(rig.rows)[n0:]
+        assert rows and all(r["plc.q"] == "ok" for r in rows), [r["plc.q"] for r in rows]
+
+        def at_boundary(t, done=[]):
+            if done:
+                return
+            done.append(1)
+
+            def go():
+                for ch, p in ((1, P1), (2, P2)):
+                    assert web(rig, "PROCESS_START", {"ch": ch, "params": p}).ok
+            rig.clock.start_thread(go, "start-both")
+        rig.loop.tick_hooks.append(at_boundary)
+        drive(rig, lambda: all(PS.chamber_state(e) == "RUNNING" and e.cur_inst is not None for e in (e1, e2))
+              or bool(ends(e1) or ends(e2)), 200)
+        assert not ends(e1) and not ends(e2), (ends(e1), ends(e2))
+        for e in (e1, e2):
+            e.stop(Source.HMI, "test")
+        drive(rig, lambda: not e1.busy and not e2.busy, 300)
+    finally:
+        finish(rig)
+
+
 # ───────────── 로봇 명령 전체 흐름 ─────────────
 def _pack(command, data, rid):
     body = json.dumps({"request_id": rid, "command": command, "data": data}, ensure_ascii=False).encode("utf-8")
@@ -215,28 +282,19 @@ def test_robot_full_flow(tmp_path):
         kinds[kind] += 1
         return orig(kind, args, source=source, cid=cid, by=by)
     a.core.command = spy
-    real_dispatch = a.robot_api.dispatch
-
-    def aligned(*args, **kw):
-        """로봇 명령 처리를 가상 초의 PACE_AT(PLC 1초 읽기 세션이 끝난 뒤)에서 시작 — 실제 시간으로 오는 요청이 가상 시계에서는
-        늘 tick 경계(1초 읽기가 PLC 를 잡고 있는 0~0.75 s)에 떨어지는 것을 피한다(그 경계의 PC GV 인터락 0.6 s 마감은 결정 후보)."""
-        nxt = int(c.monotonic()) + PACE_AT
-        c.wait_until(nxt if nxt > c.monotonic() else nxt + 1.0)
-        return real_dispatch(*args, **kw)
-    a.robot_api.dispatch = aligned
     c.unregister()                                     # 시계는 tick 스레드·장비 worker·로봇 API 요청 스레드가 움직인다
 
     stop_pacer = threading.Event()
 
     def pacer():
-        """가상 시간 속도 조절 — 매 초 PACE_AT 에서 실제 시간을 조금 쉰다(요청 사이에 가상 시간이 너무 앞서 가지 않게 —
-        공정 중 상태 질의가 여러 번 들어가게)."""
+        """가상 시간 속도 조절 — 가상 PACE_STEP 마다 실제 시간을 조금 쉰다(요청 사이에 가상 시간이 너무 앞서 가지 않게 — 공정 중
+        상태 질의가 여러 번 들어가게). 쉬는 자리는 초 안에 고르게(tick 경계 포함) — 실제 시간으로 오는 로봇 명령이 tick 앞부분
+        (PLC 1초 묶음 읽기 중)에도 떨어진다(그 자리의 짧은 마감 PLC 요청 — PC GV 인터락 0.6 s 등 — 도 통과해야 한다, 결정 D120)."""
         while not stop_pacer.is_set():
-            nxt = int(c.monotonic()) + PACE_AT
-            if nxt <= c.monotonic() + 1e-6:
-                nxt += 1.0
+            now = c.monotonic()
+            nxt = (int(now / PACE_STEP + 1e-6) + 1) * PACE_STEP
             c.wait_until(nxt)
-            time.sleep(0.002)
+            time.sleep(0.0002)
     tick = c.start_thread(rig.loop.run, "tick")
     pace = c.start_thread(pacer, "pacer")
     slog = ServerLog(tmp_path / "srvlog", tmp_path / "fb")
@@ -750,8 +808,7 @@ def soak_full(tmp_path, hours: float) -> dict:
         if what and (now.date(), what) not in fired:
             fired.add((now.date(), what))
 
-            def go(what=what):                               # 명령은 초의 뒷부분에(사람·웹 명령처럼 — PLC 1초 읽기 구간 밖)
-                c.wait_until(c.monotonic() + PACE_AT)
+            def go(what=what):                               # 명령은 tick 시작 그 자리(PLC 1초 읽기 첫 블록과 같은 순간)
                 if what == "process":
                     for ch, p in ((1, P1), (2, P2)):
                         r = rig.command("PROCESS_START", {"ch": ch, "params": p}, source=Source.WEB, by="soak")

@@ -123,9 +123,10 @@ class _Session:
         self.thread: Optional[threading.Thread] = None
         self.frames = 0
         self.save_dir: Optional[Path] = None
+        self.ended = False      # 촬영 함수가 끝남(스레드가 아직 정리 중이어도) — 시계 참여 해제보다 먼저 세운다
 
     def alive(self) -> bool:
-        return self.thread is not None and self.thread.is_alive()
+        return self.thread is not None and self.thread.is_alive() and not self.ended
 
 
 class CameraDriver:
@@ -251,7 +252,7 @@ class CameraDriver:
             self._mode = want if want in MODES else "ALL"
             sess = _Session(self._mode)
             self._sess = sess
-            sess.thread = self.clock.start_thread(lambda: self._record_loop(sess), f"camera-{self._mode}")
+            sess.thread = self.clock.start_thread(lambda: self._run_session(sess), f"camera-{self._mode}")
             users_now = sorted(self._users)
         if promote_from:
             self._log(f"카메라 모드 승격 {promote_from}→{want} (참여: {users_now})", "promoted")
@@ -306,6 +307,14 @@ class CameraDriver:
 
     def _now_str(self, fmt: str) -> str:
         return _dt.datetime.fromtimestamp(self.clock.wall()).strftime(fmt)
+
+    def _run_session(self, sess: _Session) -> None:
+        """촬영 스레드 본체 — 끝나면(어느 길로든) ended 를 먼저 세운다: 가상 시계는 스레드가 참여를 풀 때 시각을 옮기므로,
+        OS 스레드가 아직 살아 있는 짧은 사이에 is_running 이 참으로 보이지 않게."""
+        try:
+            self._record_loop(sess)
+        finally:
+            sess.ended = True
 
     def _record_loop(self, sess: _Session) -> None:
         # 0) 디스크 여유 — 카메라를 열기 전에

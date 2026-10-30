@@ -92,11 +92,22 @@ def test_deadlock_detected():
 
 
 def test_real_clock_ticks_short_period():
+    """실제 시계 + TickScheduler — 정각 격자(anchor + seq × 주기)에서, 일찍 깨지 않고, 늦으면 그 늦음이 jitter·skipped 로 정확히
+    나온다(그 계산 자체는 위 가상 시계 시험들). 늦는 정도는 부하(다른 프로세스·스레드 스케줄링)에 달려 상한을 두지 않는다 —
+    대신 jitter 가 돌아온 뒤 읽은 실제 시각의 늦음을 넘지 않는지(한쪽만 — 그 사이 선점돼도 참)와 주기 한 번 이상 늦은 tick 은
+    건너뛰어 jitter 가 늘 주기보다 작은지를 본다."""
     c = RealClock()
     s = TickScheduler(c, period=0.05)
-    ts = list(s.ticks(10))
-    assert [t.seq for t in ts] == list(range(10))
-    assert max(t.jitter_ms for t in ts) < 30.0
+    out = []
+    for _ in range(10):
+        t = s.next_tick()
+        out.append((t, c.wall()))
+    ts = [t for t, _w in out]
+    assert len(ts) == 10 and ts[0].seq == ts[0].skipped
+    assert all(b.seq == a.seq + 1 + b.skipped for a, b in zip(ts, ts[1:]))                # 건너뛴 만큼만 seq 가 뛴다
+    assert all(abs(t.t_wall - (s.anchor + t.seq * 0.05)) < 1e-6 for t in ts)                 # 정각 격자(밀림 없음)
+    assert all(-2.0 <= t.jitter_ms < 50.0 for t in ts)                                       # 일찍 깨지 않음·늦음 < 주기
+    assert all(t.jitter_ms <= (w - t.t_wall) * 1000.0 + 1.0 for t, w in out)               # jitter = 깨어난 시각 − 정각(그 뒤 읽기 ≥)
 
 
 def test_anchor_fixed_at_first_tick_not_construction():

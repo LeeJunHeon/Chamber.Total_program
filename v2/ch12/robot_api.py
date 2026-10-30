@@ -274,6 +274,9 @@ class RobotApi:
 
     # ───────── 시작·종료 ─────────
     def start(self) -> "RobotApi":
+        """요청 처리 시작(포트는 생성 때 이미 잡음 — 그 사이 온 연결은 대기열에서 기다림). 두 번 불러도 한 번."""
+        if self._thread is not None:
+            return self
         self._thread = threading.Thread(target=self._httpd.serve_forever, kwargs={"poll_interval": 0.05},
                                         name="RobotApi", daemon=True)
         self._thread.start()

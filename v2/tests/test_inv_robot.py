@@ -446,7 +446,8 @@ def test_chamber_host_run_robot_csv_steps(full, tmp_path):
     _until(rig, lambda: bool(got))
     assert got[0][0] is True and hl.is_owned(k)
     e = a.proc["ch1"]
-    _until(rig, lambda: not e.busy and k not in hl._open)
+    _until(rig, lambda: not e.busy and (k in hl._finalizing or k not in hl._open))   # 마감 요청까지(쓰기는 아래 flush)
+    assert hl.flush(30.0) and k not in hl._open
     rows = _mine_rows(rig)
     by_key = {r[-1]: r for r in rows}
     assert by_key[k0][5] == "미확인" and by_key[k0][6] == "다음 요청 수락 전 종료 미확인"
@@ -474,7 +475,10 @@ def test_chamber_host_run_stop_and_reject_texts(full, tmp_path):
     with pytest.raises(RuntimeError, match="^runner busy: "):
         a.adapter.start_sputter(1, rec, {"key": "x"}, lambda *x: None)
     e.stop(source="web")
-    _until(rig, lambda: not e.busy and k not in hl._open)
+    # 마감 줄은 기록 쓰기 스레드(실제 시간 — 다른 v1 기록과 같은 큐)가 open 에서 뺀다: tick 수로 기다리지 않고, 마감이 요청된
+    # 것(finalize — 메모리)까지 tick 으로, 그 뒤 쓰기 큐를 비우고(flush) 확인
+    _until(rig, lambda: not e.busy and (k in hl._finalizing or k not in hl._open))
+    assert hl.flush(30.0) and k not in hl._open
     r = {x[-1]: x for x in _mine_rows(rig)}[k]
     assert r[5] == "STOP" and r[6]
     k2 = hl.request(target="CH1", request_id="s2", peer="p")

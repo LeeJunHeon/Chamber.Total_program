@@ -1,6 +1,7 @@
 """PLC 드라이버 + 시뮬레이터 시험(가상 시계·SimTransport). 바이트는 v1 골든(v2/tools/v1golden_plc.py — v1 AsyncPLC 를
 pymodbus 로 실제 실행해 받은 MBAP 뒤 PDU)과 비교한다(트랜잭션 id 는 비교에서 뺀다 — 결정 D02)."""
 import json
+import threading
 from pathlib import Path
 
 import pytest
@@ -240,6 +241,99 @@ def test_coil_plan_demote_on_e403_and_promote():
         r.after(1.0)
     assert r.d.plan_idx == 1                     # 연속 성공 12회 → 기본 계획으로 승격
     assert any("promote after 12" in e.detail for e in r.events if e.kind == "coil_plan")
+    r.done()
+
+
+# ───────── 나눠 읽기 — 블록 사이 양보(결정 D120) ─────────
+def _at_ticks(r, plan):
+    """tick 마다 plan 의 다음 (오프셋, 요청 만들기 fn(on_done) 목록)을 tick 시작 + 오프셋에 한꺼번에 낸다.
+    돌려주는 목록에 (오프셋, 번호, 지연 s, 결과 상태)."""
+    out = []
+    it = iter(plan)
+
+    def hook(t):
+        item = next(it, None)
+        if item is None:
+            return
+        off, makers = item
+
+        def go():
+            r.c.wait_until(t.t_mono + off)
+            boxes = []
+            t0 = r.c.monotonic()
+            for i, mk in enumerate(makers):
+                box = []
+                boxes.append(box)
+                mk(lambda res, box=box: (box.append((res, r.c.monotonic())), r.c.notify()))
+            r.c.wait_until(None, lambda: all(boxes))
+            out.extend((off, i, b[0][1] - t0, b[0][0].status) for i, b in enumerate(boxes))
+        r.c.start_thread(go, "probe")
+    r.loop.tick_hooks.append(hook)
+    return out
+
+
+OFFSETS = (0.0, 0.001, 0.01, 0.05, 0.1, 0.149, 0.15, 0.2, 0.3, 0.45, 0.6, 0.75, 0.9, 0.99)
+
+
+def test_split_read_yields_to_short_deadline_requests():
+    """tick 경계·앞부분 어디에 온 짧은 마감 요청(PC GV 인터락·게이트 램프 읽기 0.6 s, 코일 쓰기)도 1초 묶음 블록 하나 + 자기 명령
+    간격 안에 끝난다(수정 전: 묶음 5블록이 PLC 를 0.75 s 잡아 tick 앞 0.2 s 안에 온 요청이 0.6 s 를 넘김). 행은 그대로 ok."""
+    r = PlcRig(tick=True)
+    keys = ("G_V_1_인터락", "G_V_1_OPEN_LAMP", "G_V_2_CLOSE_LAMP")
+    plan = [(off, [lambda cb, k=keys[i % 3]: r.d.read_bit(k, on_done=cb)]) for i, off in enumerate(OFFSETS)]
+    plan += [(off, [lambda cb: r.d.write_coil(234, True, on_done=cb)]) for off in (0.0, 0.001, 0.1)]
+    out = _at_ticks(r, plan)
+    r.after(len(plan) + 3.0)
+    assert len(out) == len(plan) and all(st == Status.OK for *_x, st in out), out
+    worst = max(lat for _o, _i, lat, _s in out)
+    assert worst <= 0.31, sorted(out, key=lambda x: -x[2])[:3]     # 진행 중 블록·하트비트 하나 + 자기 간격(150 ms 둘) — v1 마감 0.6 s 안
+    rows = r.rows[1:]
+    assert rows and all(x["plc.q"] == "ok" and x["plc.m_v_1_sw"] is not None for x in rows), [x["plc.q"] for x in rows]
+    r.done()
+
+
+def test_split_read_cut_blocks_blank_and_busy_worker_stale():
+    """끼어든 요청이 많아 마감(900 ms) 안에 못 든 뒤 블록은 그 tick 빈 칸(실패 아님 — q ok, 코일 표 None, DCV 는 값), 1초 묶음이
+    시작도 못 하고 마감을 넘기면 그 행은 stale(장비 실패 아님), 다음 tick 은 다시 ok. 한 요청 읽기(source_read)도 같은 값."""
+    r = PlcRig(tick=True)
+    r.after(2.0)
+    many = [lambda cb, k=k: r.d.read_bit(k, on_done=cb) for k in ("G_V_1_인터락", "G_V_1_OPEN_LAMP", "G_V_1_CLOSE_LAMP",
+                                                                 "G_V_2_인터락")]
+    out = _at_ticks(r, [(0.0, many)])
+    n0 = len(r.rows)
+    r.after(2.0)
+    cut = [x for x in r.rows[n0:] if x["plc.m_v_1_sw"] is None]
+    assert len(cut) == 1 and all(x["plc.q"] == "ok" for x in r.rows[n0:]), [x["plc.q"] for x in r.rows[n0:]]
+    assert cut[0]["plc.dcv_read_0"] is not None                                  # 앞 블록(DCV)은 값, 코일 표만 그 tick 빈 칸
+    assert len(out) == 4 and max(lat for *_x, lat, _s in out) <= 0.61
+    hold = threading.Event()
+
+    def blocker(cb):                                   # PLC 를 1.2 s 잡는 요청(장비 무응답 쓰기 같은) — 묶음이 시작 못 함
+        def fn(s):
+            r.c.wait_until(r.c.monotonic() + 1.2)
+            hold.set()
+        r.d.submit("hold", fn, kind="write", on_done=cb)
+    _at_ticks(r, [(0.0, [blocker])])
+    n1 = len(r.rows)
+    r.after(4.0)
+    qs = [x["plc.q"] for x in r.rows[n1:]]
+    assert hold.is_set() and "stale" in qs and "fail" not in qs and qs[-1] == "ok", qs
+    a, b = r.read(split=False), r.read()
+    assert a.status == b.status == Status.OK
+    assert all(a.value[k] == b.value[k] for k in ("plc.dcv_read_0", "plc.m_v_1_sw", "plc.g_v_1_open_lamp", "plc.coil_plan"))
+    r.done()
+
+
+def test_split_read_safety_purge_cancels_rest():
+    """나눠 읽기 중 안전 요청(purge) — 남은 블록은 버려지고 묶음 결과 CANCELLED(묶기 suppressed), 안전 쓰기는 바로."""
+    r = PlcRig()
+    box = []
+    r.d.source_start(0, r.c.monotonic() + 0.9, lambda res: (box.append(res), r.c.notify()))
+    r.after(0.2)
+    got = r.call(r.d.submit, "stop", lambda s: r.d.io_write_coil(s, 234, False), kind="safety", purge=True)
+    r.wait(lambda: bool(box), 2.0)
+    assert got.status == Status.OK and box and box[0].status == Status.CANCELLED
+    assert r.read().status == Status.OK
     r.done()
 
 

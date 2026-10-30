@@ -379,9 +379,16 @@ def test_commands_not_repeated_after_restart(tmp_path):
     assert calls == ["CH1_STOP"] and api.executed == 1 and not r1.get("duplicate")
     RR.drive(rig, lambda: False, 2)
     RR.kill(rig)
-    rig2 = RR.reboot(tmp_path, rig, 2.0, robot_api=True)
+    before = {}
+
+    def before_start(r):
+        """조립·저널 뒤·시작 전 — 로봇 API 는 포트만 잡고 아직 받지 않으며, 옛 id 기억은 이미 들어 있다(받기 시작 전에 넣음)."""
+        a = r.asm.robot_api
+        before.update(serving=a._thread is not None, remembered="rob-1" in a._done)
+    rig2 = RR.reboot(tmp_path, rig, 2.0, robot_api=True, before_start=before_start)
     rig_now[0] = rig2
     try:
+        assert before == {"serving": False, "remembered": True} and rig2.asm.robot_api._thread is not None
         RR.drive(rig2, lambda: rig2.resumer.done, 30)
         calls2 = []
         real2 = rig2.command

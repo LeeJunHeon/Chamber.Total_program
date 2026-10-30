@@ -2,6 +2,7 @@
 
 한 tick(정각 t)
 1) begin: 켜진 소스마다 read(t) 요청(마감 = 보낸 시각 + 소스 마감 ms). 앞 tick 요청이 아직 진행 중이면 보내지 않는다.
+   소스에 start 가 있으면 요청 대신 그것을 부른다(나눠 읽기 — 소스가 요청 여러 개로 읽고 결과는 한 번).
 2) close: t + TICK_DEADLINE 까지(또는 진행 중인 요청이 하나도 없으면 바로) 기다린 뒤 행을 닫는다. 행 시각은 t.
    그때 마감이 지난 요청의 결과는 넣고(무응답이면 그 행은 fail), 마감이 남은 요청은 다음 행으로 넘긴다.
 
@@ -10,6 +11,7 @@
 - ok         : 이번 tick 요청이 마감 안에 성공
 - suppressed : worker 가 억제 구간(예정된 무응답)이고 이번 tick 에 새 값 없음, 또는 안전 요청(STOP·OFF)이 이 tick 읽기를 취소함
 - fail       : 이번 tick 요청이 실패(무응답·형식 오류·링크 끊김)
+- (이번 tick 요청이 시작도 못 하고 마감이 지남(EXPIRED — worker 가 다른 요청으로 바빴음)은 장비 실패가 아니라 stale/late)
 - late       : 이번 행에 쓰는 값이 앞 tick 요청의 '마감 뒤 도착'한 값(그 값이 처음 쓰이는 행)
 - stale      : 새 값 없음 — 마지막 값과 나이
 나이(age_s) = 행 시각 − 그 값을 만든 요청의 tick 시각. ok 는 0.
@@ -37,6 +39,9 @@ class Source:
     blocks: tuple                                 # 이 소스가 채우는 블록 이름(품질 공유)
     deadline_ms: int = 900
     enabled: bool = True
+    # 나눠 읽기(선택): start(tick_seq, 마감, on_done) — 소스가 worker 요청을 여러 개로 나눠 넣고 끝나면 on_done(Result) 한 번.
+    # 요청 사이에 기다리던 다른 요청이 낀다(챔버12 PLC — 1초 묶음이 PLC 를 통째로 잡지 않게). 없으면 read 를 요청 하나로.
+    start: Optional[Callable[[int, float, Callable[[Result], None]], None]] = None
 
 
 @dataclass
@@ -97,6 +102,9 @@ class SnapshotBus:
             dl = self.clock.monotonic() + s.deadline_ms / 1000.0
             with self.clock.cond:
                 st.inflight_deadline = dl
+            if s.start is not None:
+                s.start(tick.seq, dl, self._done_cb(s.name, tick))
+                continue
             req = Request("read", (lambda sess, s=s, n=tick.seq: s.read(sess, n)),
                           deadline=dl, tick_seq=tick.seq,
                           on_done=self._done_cb(s.name, tick), name=f"read:{s.name}")
@@ -118,7 +126,7 @@ class SnapshotBus:
                         st.newest_late_unused = not on_time
                 if on_time:
                     st.result = res
-                elif res.status not in (Status.OK, Status.CANCELLED):
+                elif res.status not in (Status.OK, Status.CANCELLED, Status.EXPIRED):
                     st.late_fail = True
                 self.clock.cond.notify_all()
         return cb
@@ -159,6 +167,9 @@ class SnapshotBus:
                 q = Quality.OK
             elif s.worker.suppressed(now) or (st.result is not None and st.result.status == Status.CANCELLED):
                 q = Quality.SUPPRESSED            # 예정된 무응답, 또는 안전 요청이 앞질러 취소한 읽기(장비 실패 아님)
+            elif st.result is not None and st.result.status == Status.EXPIRED and not st.late_fail:
+                q = Quality.LATE if st.newest_late_unused else Quality.STALE   # 시작도 못 하고 마감 지남(worker 가 다른 요청으로
+                #   바빴음) — 장비 실패가 아니라 '새 값 없음'
             elif (st.result is not None or st.late_fail
                   or (not s.worker.connected and not st.sent_this_tick)):
                 q = Quality.FAIL

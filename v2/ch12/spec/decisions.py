@@ -1,6 +1,8 @@
 """결정 목록(사용자 지시 6장 — 사람에게 묻지 않고 v1 과 같은 쪽·더 안전한 쪽으로 정한 것).
 
 항목 = dict(id, title, decision, reason, confirm(사용자 확인 필요 여부), where(관련 v2 파일·v1 근거))
+id 정리(2026-10-30): 처음 붙인 D101~D2xx(전수 조사의 v1 이상 동작)와 뒤에 붙인 결정이 같은 번호를 썼던 것을 뒤의 것만 D301~D320 으로 바꿨다
+(9단계 전에 적힌 코드 주석·전수 목록 비고의 D101~D120 은 앞의 뜻(v1 이상 동작)일 수도, 뒤의 뜻일 수도 있다 — 내용으로 찾을 것).
 confirm=True 인 항목은 최종 보고의 '사용자 확인 필요'에 모두 나온다.
 """
 from __future__ import annotations
@@ -416,7 +418,7 @@ DECISIONS = [
     dict(id='D81', title='cmd_result 를 내는 곳', decision='core 가 아니라 hub.run_command — 로컬 서버·웹 연결·로봇 API 가 같이 쓰는 길 하나. 사유 코드 CORE_NOT_READY·INTERNAL_ERROR 추가.', reason="7단계 웹 연결 작성 중 판단(챔버K 계약 호환)", confirm=False, where="v2/ch12/hub.py; uplink.py; web_schema.py"),
     dict(id='D82', title='챔버12 메시지 선택 필드', decision='hello.chambers, run_*.chamber·owner·recipeRev, event context.chamber·origin, state.chambers{ch1,ch2,pc,tsp}·state.engines, snapshot_summary.runIds — common/messages.py 계약은 그대로(모두 선택 필드). state 최상위 procState 는 BUSY/IDLE·runId null.', reason="7단계 웹 연결 작성 중 판단(챔버K 계약 호환)", confirm=False, where="v2/ch12/hub.py; uplink.py; web_schema.py"),
     dict(id='D83', title='공정 엔진 기대 토큰 시점', decision='장비 명령을 보내기 전에 기대 토큰을 건다(스레드에서 빠른 응답을 놓치지 않게) — 판정은 v1 과 같다.', reason="3·6단계 작성 중 판단", confirm=True, where="v2/ch12/process_runner.py"),
-    dict(id='D84', title='Gate·Main Valve PLC 읽기 한도', decision='v1 0.6 s 에 줄 서기 여유 2.0 s(PLC_QUEUE_ALLOW_S) — v2 PLC worker 는 1초 묶음·명령 간격 150 ms 라 동시 시작 때 0.6 s 로는 늘 실패.', reason="3·6단계 작성 중 판단", confirm=True, where="v2/ch12/process_preflight.py"),
+    dict(id='D84', title='Gate·Main Valve PLC 읽기 한도', decision='v1 0.6 s 그대로(되돌림). 처음에는 줄 서기 여유 2.0 s(PLC_QUEUE_ALLOW_S)를 더했으나 — v2 PLC 1초 묶음이 한 요청으로 PLC 를 0.6~0.75 s 잡아 동시 시작 때 0.6 s 로는 늘 실패 — 묶음을 나눠 읽어(D120) 필요 없어짐(CH1·CH2 동시 시작을 tick 의 20 시점에서: 수정 전 여유 없이 20/20 GATE·MAIN_VALVE_CHECK_FAILED, 수정 뒤 0/20·최대 0.30 s).', reason="3·6단계 작성 중 판단 → 9단계 PLC 양보 수정 뒤 되돌림", confirm=False, where="v2/ch12/process_preflight.py"),
     dict(id='D85', title='공정 중 레시피 적재', decision='BUSY 로 거부(v1 은 실행 중인 큐를 덮어쓸 수 있었다).', reason="3·6단계 작성 중 판단", confirm=True, where="v2/ch12/process_engine.py"),
     dict(id='D86', title='정리 강제 복구 없음', decision='v1 25 s 강제 닫기·pending cleanup 없음 — worker 가 스스로 재연결, MFC·IG 연결 유지(D37). PROC-210·211.', reason="3·6단계 작성 중 판단", confirm=True, where="v2/ch12/process_records.py"),
     dict(id='D87', title='일시정지 세부', decision='파워 켜기 블록은 아직 안 보낸 명령만 보류(이미 시작한 CH2 RF 연속 램프는 계속), 히터 SOAK 일시정지는 PAUSE_NOT_AVAILABLE, delay 행·쿨다운 표시에도 일시정지(v2 확장).', reason="3·6단계 작성 중 판단", confirm=True, where="v2/ch12/process_adjust.py"),
@@ -452,4 +454,5 @@ DECISIONS = [
     dict(id='D117', title='의도적 종료 중 플라즈마 클리닝', decision='PC 를 붙잡고 PC RF 만 끔(rf_zero_off) — 가스·밸브 그대로(결정 4), 결과 실패 PROGRAM_EXIT(챔버와 같게). v1 은 공정 중 종료를 거부.', reason="종합 시나리오·7일 운전 중 판단", confirm=True, where='v2/ch12/plasma_cleaning.py; safety.py'),
     dict(id='D118', title='PC 가 CH1 GV 를 연 채 끝냄(v1 PC-077)', decision='닫지 않으면 다음 CH1 공정이 GATE_CHECK_FAILED·VACUUM_OFF 가 E301(v1 과 같음) — 운전 절차 확인 필요.', reason="종합 시나리오·7일 운전 중 판단", confirm=True, where='v2/ch12/pc_steps.py'),
     dict(id='D119', title='자정 CSV 내보내기 부하', decision='하루치 1초 기록 CSV(약 130 MB)를 자정에 내보내는 동안 수 분 CPU 사용 — 윈도우 노트북에서 tick 지연 확인 필요.', reason="종합 시나리오·7일 운전 중 판단", confirm=True, where='v2/common/recorder.py'),
+    dict(id='D120', title='PLC 1초 묶음 나눠 읽기(양보)', decision="블록 하나 = PLC worker 요청 하나(우선순위 'low' — safety·write·read 뒤), 다음 블록은 명령 간격(150 ms) 뒤 not_before — 기다리는 요청이 있으면 블록 사이에서 먼저 돈다(v1 priority='low' _yield_to_priority 와 같음). 1초 행 마감(900 ms) 안에 못 든 뒤 블록은 그 tick 빈 칸, 첫 블록이 시작도 못 하면 그 tick stale(장비 실패 아님 — 묶기에서 EXPIRED 는 fail 이 아님). v1 은 양보 예산 PLC_COIL_LOG_BUDGET_S 4 s·코일 로그 주기 따로 — v2 는 1초 행 마감.", reason="9단계 — tick 앞부분의 짧은 마감 요청(PC GV 인터락 0.6 s E511·게이트·메인밸브 0.6 s)이 1초 묶음 뒤에서 시간 초과(실제 시간 약 10~20 %)", confirm=True, where='v2/ch12/drivers/plc_poll.py; v2/common/worker.py; v2/common/snapshot_bus.py'),
 ]

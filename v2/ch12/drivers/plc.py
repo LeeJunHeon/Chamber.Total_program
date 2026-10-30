@@ -13,6 +13,9 @@
   코일 로그 몫(③④)은 v1 코일 로거처럼 high 연속 타임아웃 > 0 이거나 low 연속 실패 ≥ PLC_COIL_LOG_BACKOFF_AFTER 면
   이번 tick 건너뜀(값 None). 블록 E403 이면 계획 한 단계 강등, 연속 완전 성공 PLC_COIL_LOG_PROMOTE_AFTER 회면 한 단계 승격.
   블록 짧은 응답은 v1 처럼 False/0 으로 채운다. 해독기(register_decoder)·DC/RF 제어는 이 읽기 값을 받는다.
+  실행 프로그램은 나눠 읽기(source_start — 블록 하나 = worker 'low' 요청 하나, 블록 사이에서 기다리는 명령·읽기에 양보 —
+  v1 priority='low'·_yield_to_priority, 결정 D120). 블록 규칙·마감(900 ms 안에 못 든 뒤 블록은 그 tick 빈 칸)은 plc_poll.py.
+  source_read(session, seq) 는 같은 규칙을 한 요청 안에서(시험·bench 도구).
 하트비트: on_tick 에서 max(1, PLC_WATCHDOG_INTERVAL_S×0.75) = 6 s 마다 FC1(0,1) 1회(high). pause_watchdog 중(로봇 PLC 명령)·
   worker 가 다른 요청 중이면 건너뜀(연결돼 있으면 정상으로 셈). 결과로 링크 끊김 감지·복구 로그와 conn_change 이벤트(v1 문구).
 쓰기: 모두 worker 요청(write, 정지는 safety). 허용 목록 밖 주소는 CommandBlocked(보내지 않음), P 미러 코일은 E403 거절.
@@ -43,7 +46,8 @@ from v2.common.worker import Request, Result, Sequence, Status, Worker, WorkerEv
 from v2.ch12.drivers import plc_map as PM
 from v2.ch12.drivers.plc_cmds import PlcCommands
 from v2.ch12.drivers.plc_conv import cmd_grace_s, dac_code, dc_scale, linear_to_dac, rf_regs, rf_scale  # noqa: F401 (다시 내보냄)
-from v2.ch12.drivers.plc_io import LinkState, PlcIo, PlcModbusError, RetryOpenTransport, code_of
+from v2.ch12.drivers.plc_io import LinkState, PlcIo, PlcModbusError, RetryOpenTransport
+from v2.ch12.drivers.plc_poll import PollRun, start_split
 
 DCV_REGS = (0, 12)                 # D0..D11
 HEATER_REGS = (110, 51)            # D110..D160 (controller/heater_service.py:37-38)
@@ -57,7 +61,8 @@ BUDGET = dict(
     queries_per_tick=5, bytes_tx=60, bytes_rx=253, min_gap_ms=150, fits_1s=True,
     alternate="번갈아 읽는 블록 4개(P 미러 800..879·M01000·M01500..M01800·M01900) 매 tick 1개 → 각 4 s 마다",
     note="DCV(33 B)·히터 레지스터(111 B)·히터 코일(12 B)·코일 1..481(70 B)·번갈아 1개(평균 27 B). 시작 간격 150 ms × 4 = 600 ms "
-         "+ 응답 5회 — 한 tick 에 쓰기·하트비트 1~2개가 끼어도 900 ms 마감 안. 히터 미사용이면 3개. 실측은 bench(tools/bench_probe)",
+         "+ 응답 5회 — 블록 사이에 다른 요청이 끼면(나눠 읽기) 한 tick 에 1개까지는 다 들고, 2개면 번갈아 블록, 3개 이상이면 "
+         "코일 표 블록도 그 tick 빈 칸. 히터 미사용이면 3개. 실측은 bench(tools/bench_probe)",
 )
 
 
@@ -347,55 +352,17 @@ class PlcDriver(PlcCommands):
             out[start + i] = v
 
     def source_read(self, session, seq: int = 0) -> Dict[str, Any]:
-        t_wall, t_mono = self.clock.wall(), self.clock.monotonic()
-        skip_coils = self.coil_log_backoff()          # v1 코일 로거처럼 이번 tick 시작 때 판단(device/plc.py:1976-1985)
-        regs: Dict[int, int] = {}
-        coils: Dict[int, bool] = {}
-        try:
-            self._read_block(session, "regs", *DCV_REGS, regs)
-            if self.heater:
-                self._read_block(session, "regs", *HEATER_REGS, regs)
-                self._read_block(session, "coils", *HEATER_COILS, coils)
-        except Exception as e:
-            self._fail_decoders(f"{code_of(e)} {e}")
-            raise
-        vals: Dict[str, Any] = {f"plc.{PM.field_name(n)}": regs.get(a) for n, a in PM.REG_MAP.items()}
-        err: Optional[Exception] = None
-        if skip_coils:
-            self.plan_ok_streak = 0
-            vals.update({f"plc.{PM.field_name(n)}": None for n, a in PM.COIL_MAP.items() if a < ROTATE_MIN_ADDR})
-        else:
-            always, rot = self._coil_ranges()
-            pick = [rot[(self._rot_i + k) % len(rot)] for k in range(min(ROTATE_PER_TICK, len(rot)))]
-            self._rot_i = (self._rot_i + len(pick)) % max(1, len(rot))
-            try:
-                for st, n in always + pick:
-                    if session.deadline - self.clock.monotonic() < self.io.gap_s + READ_MARGIN_S:
-                        break                 # 이번 tick 마감 안에 못 든다(계획 강등 뒤 블록이 많을 때) — 남은 블록은 다음 tick
-                    self._read_block(session, "coils", st, n, coils)
-                self._note_plan(True)
-            except PlcModbusError as e:
-                self._demote(str(e))
-                err = e
-            except Exception as e:
-                self.plan_ok_streak = 0
-                err = e
-            for n, a in list(PM.COIL_MAP.items()) + list(PM.P_MIRROR_MAP.items()):
-                if a in coils:
-                    vals[f"plc.{PM.field_name(n)}"] = bool(coils[a])
-                elif a < ROTATE_MIN_ADDR:
-                    vals[f"plc.{PM.field_name(n)}"] = None          # 매 tick 필드는 못 읽었으면 빈 칸(묵은 값 아님)
-        vals["plc.coil_plan"] = self.plan_idx
-        poll = PlcPoll(t_wall, t_mono, coils, regs, vals)
-        self.last_poll = poll
-        for blocks_, decode, on_fail in self.decoders:
-            try:
-                vals.update(decode(poll) or {})
-            except Exception as e:                     # 해독 오류가 읽기를 깨지 않게
-                self._emit("log", f"WARN 해독 오류 {blocks_}: {e!r}")
-        if err is not None:
-            raise err
-        return vals
+        """한 tick 읽기를 한 세션 안에서 끝까지(시험·bench 도구가 요청 하나로 부르는 길). 블록 규칙은 plc_poll.PollRun."""
+        return PollRun(self).run_session(session)
+
+    def source_start(self, seq: int, deadline: float, on_done: Callable[[Result], None]) -> None:
+        """SnapshotBus Source.start — 나눠 읽기(블록 하나 = worker 요청 하나, 사이에 기다리던 요청이 낀다. plc_poll 독스트링)."""
+        start_split(self, seq, deadline, on_done)
+
+    def source(self, deadline_ms: int = 900):
+        """조립용 1초 소스(나눠 읽기)."""
+        from v2.common.snapshot_bus import Source
+        return Source("plc", self.worker, self.source_read, self.source_blocks(), int(deadline_ms), start=self.source_start)
 
     def _fail_decoders(self, why: str) -> None:
         for _b, _d, on_fail in self.decoders:

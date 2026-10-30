@@ -278,8 +278,7 @@ class Ch12System:
         if bool(c.get("CH2_SUPPORTS_HEATER", False)):
             from v2.ch12.drivers.heater import HeaterDriver
             self.heater_drv = HeaterDriver(clock, self.plc, c, wr, on_event=self._ev_for("ch2.heater"), chamber="ch2")
-        sources: List[Source] = [Source("plc", self.workers["plc"], self.plc.source_read, self.plc.source_blocks(),
-                                        int(c["TICK_DEADLINE_MS"]))]
+        sources: List[Source] = [self.plc.source(int(c["TICK_DEADLINE_MS"]))]   # 나눠 읽기(plc_poll — 블록 사이에 명령이 낀다)
 
         # ── 챔버마다 MFC·IG(상시), 두께(켜진 것만) ──
         self.mfc: Dict[str, M.MfcDriver] = {}
@@ -374,6 +373,9 @@ class Ch12System:
         for name in ("jitters", "close_lags"):
             setattr(self.loop, name, collections.deque(maxlen=rt.tick_stats))
         self.started = False
+        # 시작 때 부를 것(worker 시작 뒤) — 조립 뒤·시작 전에 넣어야 할 상태(저널의 명령 id 기억 등)가 들어간 뒤에 받기 시작하는
+        # 것(로봇 내부 명령 API — assembly). 시작한 뒤에 붙는 것은 붙는 쪽이 바로 시작한다
+        self.start_hooks: List[Callable[[], None]] = []
 
     # ───────── 엔진 꽂는 자리 ─────────
     def register_engine(self, name: str, obj: Any) -> None:
@@ -497,6 +499,8 @@ class Ch12System:
         for d in self.stm.values():
             d.start()
         self.started = True
+        for h in list(self.start_hooks):
+            self._call("start_hook", h)
         need = [k for k in self.workers if self.enabled[k] and not k.endswith(".stm100")]
         return self.clock.wait_until(self.clock.monotonic() + ready_timeout_s,
                                      lambda: all(self.workers[k].ready for k in need))

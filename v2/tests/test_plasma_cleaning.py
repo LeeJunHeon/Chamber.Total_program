@@ -160,7 +160,9 @@ def test_excel_plasma_cleaning_sheet_values(tmp_path):
         assert pp["avg_forp"] == round(sum(eng.readings["forp"]) / len(eng.readings["forp"]), 4)
         assert pp["avg_load"] is None and pp["avg_tune"] is None
         assert len(eng.readings["forp"]) >= 6 and eng.readings["flow"] and eng.readings["pressure"]
-        assert abs(pp["avg_forp"] - 100.0) < 1.0 and abs(pp["avg_ar"] - 10.0) < 0.5 and abs(pp["avg_pressure"] - 2.0) < 0.2
+        # FWD 평균: 공정 6 s 동안 v1 RF 제어(모자라면 +3 W fine-up, 유지 중 ±0.1 W/2회)가 목표 둘레 +3 W 안에서 움직인다 —
+        # 어느 쪽에 머무는지는 1초 읽기 표본 시점(쓰기 뒤 몇 ms)에 달려 3.5 W 폭(PLC 나눠 읽기 뒤 102.8 W, 전 100.0 W)
+        assert abs(pp["avg_forp"] - 100.0) < 3.5 and abs(pp["avg_ar"] - 10.0) < 0.5 and abs(pp["avg_pressure"] - 2.0) < 0.2
         for f in (Path(r.cfg["GDRIVE_LOG_DIR"]) / "CH1.xlsx",
                   Path(r.cfg["OUTPUT_LOCAL_FIRST_DIR"]) / "Process_log_PC" / "CH1.xlsx"):
             ws = X.load_workbook(str(f))["Plasma Cleaning"]

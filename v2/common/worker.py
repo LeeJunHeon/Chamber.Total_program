@@ -1,6 +1,8 @@
 """장비 worker (장비 공통) — 포트 하나당 스레드 하나가 포트를 독점한다.
 
-- 요청은 우선순위 큐로: safety(0) > write(1) > read(2), 같은 우선순위는 넣은 순서. 모든 요청에 deadline.
+- 요청은 우선순위 큐로: safety(0) > write(1) > read(2) > low(3), 같은 우선순위는 넣은 순서. 모든 요청에 deadline.
+  low = 양보하는 백그라운드 읽기(챔버12 PLC 1초 묶음을 블록마다 나눈 요청 — v1 PLC priority='low' 가 블록 사이에서 기다리는
+  요청에 양보하던 것, device/plc.py:1485-1494·2257-2310). 기다리는 다른 요청이 모두 먼저 돈다.
 - safety 요청(purge=True)은 큐의 읽기·쓰기를 버리고(CANCELLED) 진행 중인 읽기를 취소한 뒤 맨 앞에서 실행.
 - 연결 상태 기계: disconnected → (보호된 열기) → connected. 실패하면 지수 백오프(시작·최대·장기 두절은 파라미터).
   연속 무응답 fail_streak 회 또는 포트 오류면 끊고 재연결. 장기 두절은 알림 1회, 기록은 log_every_s 마다.
@@ -25,9 +27,11 @@ class Priority(IntEnum):
     SAFETY = 0
     WRITE = 1
     READ = 2
+    LOW = 3
 
 
-_KIND_PRIO = {"safety": Priority.SAFETY, "write": Priority.WRITE, "read": Priority.READ}
+_KIND_PRIO = {"safety": Priority.SAFETY, "write": Priority.WRITE, "read": Priority.READ, "low": Priority.LOW}
+_READ_KINDS = ("read", "low")
 
 
 class Status:
@@ -42,7 +46,7 @@ class Status:
 
 @dataclass
 class Request:
-    kind: str                                   # read / write / safety
+    kind: str                                   # read / write / safety / low(양보하는 백그라운드 읽기)
     fn: Callable[["Session"], Any]
     deadline: Optional[float] = None            # 이 시각까지 끝나야 함(시작 전 지나면 EXPIRED)
     on_done: Optional[Callable[["Result"], None]] = None
@@ -262,7 +266,7 @@ class Worker:
         with self.clock.cond:
             if req.kind == "safety" and req.purge:
                 dropped = self.queue.drain(keep=lambda r: r.kind == "safety")
-                if self.inflight is not None and self.inflight.kind == "read" and self._cancel is not None:
+                if self.inflight is not None and self.inflight.kind in _READ_KINDS and self._cancel is not None:
                     self._cancel.set()
                 for s in self._seqs:
                     s.finished = True

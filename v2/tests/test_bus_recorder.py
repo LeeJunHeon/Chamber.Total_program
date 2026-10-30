@@ -7,7 +7,7 @@ import time
 
 import pytest
 
-from v2.common.clock import RealClock, VirtualClock
+from v2.common.clock import VirtualClock
 from v2.common.recorder import Recorder
 from v2.common.simdev import LineDevice, line_read_many
 from v2.common.snapshot import DeviceBlock, FieldDef, FType
@@ -223,28 +223,27 @@ def test_nas_copy_retries(tmp_path):
 
 
 def test_nas_hang_does_not_affect_ticks(tmp_path):
-    """NAS 복사가 멈춰 있어도 실제 시계 tick 은 놓치지 않고 행이 모두 기록된다."""
+    """NAS 복사가 멈춰 있어도 tick 은 놓치지 않고 행이 모두 기록된다. NAS 복사 스레드가 실제로 멈춘 것을 확인한 뒤 tick 을 돌린다.
+    tick·묶기는 가상 시계(부하 아래 실제 시계 지터와 무관하게 '기록·NAS 가 tick 을 막지 않는다'만 본다) — 막으면 loop.run 이
+    멈춘 복사(30 s)가 풀릴 때까지 끝나지 않는다(실제 시간 10 s 한도로 잡는다 — 정상은 수십 ms)."""
     gate, entered = threading.Event(), threading.Event()
 
     def hang(src, dst):
         entered.set()
         gate.wait(30)
 
-    clock = RealClock()
-    a = LineDevice("a", {"x": 1, "y": 2}, 0.01)
-    b = LineDevice("b", {"p": 3, "r": 4}, 0.01)
-    wa, wb = Worker("a", SimTransport(clock, a)), Worker("b", SimTransport(clock, b))
-    wa.start(), wb.start()
-    bus = SnapshotBus(clock, BLOCKS, [Source("a", wa, _read_a, ("a",), 50), Source("b", wb, _read_b, ("b",), 50),
-                                      Source("c", None, lambda s, n: {}, ("c",), 50, enabled=False)], 60)
+    c = vclock()
+    bus, wa, wb = setup(c, LineDevice("a", {"x": 1, "y": 2}, 0.01), LineDevice("b", {"p": 3, "r": 4}, 0.01))
     rec = Recorder(tmp_path / "local", bus.columns, nas_dir=tmp_path / "nas", nas_period_s=0.05, copy_fn=hang)
     rec.start()
     rec.put_row({"ts": "2026-01-01T00:00:00", "seq": -1})       # 지난 날 파일 → NAS 스레드가 복사하다 멈춤
-    loop = TickLoop(clock, bus, [rec.put_row], period=0.1)
-    loop.run(20)
     try:
-        assert entered.is_set()                                  # NAS 복사가 실제로 멈춰 있었다
-        assert loop.missed == 0 and max(loop.jitters) < 50.0
+        assert entered.wait(10)                                  # NAS 복사가 실제로 멈춰 있다(그 뒤에 tick)
+        w0 = time.monotonic()
+        rows, loop = run(c, bus, 20, sinks=[rec.put_row])
+        assert time.monotonic() - w0 < 10.0 and not gate.is_set() and rec.nas_copied == 0   # 복사가 멈춘 채로 tick 이 끝까지
+        assert loop.missed == 0 and max(loop.jitters) == 0 and len(rows) == 20
+        assert all(r["a.q"] == "ok" and r["b.q"] == "ok" for r in rows)
         assert rec.flush(5) and rec.written == 21
     finally:
         gate.set()

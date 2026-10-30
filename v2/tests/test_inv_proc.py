@@ -1220,13 +1220,17 @@ def test_proc_074_075_076_080_one_runner(tmp_path):
     세대 경쟁이 생기지 않는다. STOP 은 어느 상태에서나 받는다. PROC-076: 상태 전이 PREFLIGHT → RUNNING → CLEANUP → IDLE(큐 행 사이 COOLDOWN)."""
     rig = R.make(tmp_path, chambers=("ch1",))
     e = rig.eng["ch1"]
-    seen, got = [], {}
+    seen, got = [e.state_name], {}
 
-    def watch(t):
-        if not seen or seen[-1] != e.state_name:
-            seen.append(e.state_name)
+    class Watched(type(e)):
+        """상태 전이를 바뀌는 그 순간에 남긴다(tick 표본이면 1 s 보다 짧은 CLEANUP 을 놓친다)."""
+        def __setattr__(self, k, v):
+            if k == "state_name" and seen[-1] != v:
+                seen.append(v)
+            super().__setattr__(k, v)
+    e.__class__ = Watched
     R.run(rig, R.idle(e), max_ticks=900,
-          hooks=[R.at(2, lambda: e.start(params=dict(RFP), owner="local")), watch,
+          hooks=[R.at(2, lambda: e.start(params=dict(RFP), owner="local")),
                  R.at(4, lambda: got.setdefault("second", e.start(params=dict(RFP), owner="local"))),
                  R.at(5, lambda: got.setdefault("thr", [t.name for t in threading.enumerate() if t.name.startswith("Runner.")]))])
     assert got["second"] == "RUNNER_BUSY" and got["thr"] == ["Runner.CH1"]
