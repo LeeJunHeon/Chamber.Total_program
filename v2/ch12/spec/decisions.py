@@ -312,4 +312,12 @@ DECISIONS = [
     dict(id="D192", title='CH1 RF Pulse·DC Pulse 둘 다 4007 공유',
          decision="v1 과 같게 둔다(알려진 이상 동작·v1 사실)", reason='전수 목록 조사(dev)에서 발견: CH1 RF Pulse·DC Pulse 둘 다 4007 공유',
          confirm=True, where="v2/ch12/spec/inv_dev.py"),
+    dict(id="D201", title='finalize 멱등 깨짐: pending 실패 → 메모리 큐 경로면 Robot CSV finalize 가 두 번 다 True', decision="v1 과 같게 둔다", reason="v1 시험 전수 조사(test)에서 발견", confirm=True, where='util/host_process_log.py:385'),
+    dict(id="D202", title='RF Pulse cleanup: 연결 안 했는데 output_off_unconfirmed True 남음', decision="v1 과 같게 둔다", reason="v1 시험 전수 조사(test)에서 발견", confirm=True, where='device/rf_pulse.py:344'),
+    dict(id="D203", title='SUPPORTS_HEATER 기본 False·settings ch2 true, 연결 안 된 SUPPORTS_DC2 true(히터 켜면 DC2 끔)', decision="v1 과 같게 둔다", reason="v1 시험 전수 조사(test)에서 발견", confirm=True, where='config/settings.json:583-584'),
+    dict(id="D204", title='Loadlock 에러만 있으면 error 판정', decision="v1 과 같게 둔다", reason="v1 시험 전수 조사(test)에서 발견", confirm=True, where='host/handlers.py:45'),
+    dict(id="D205", title='force_dac_hold(1000) 알림 없이 520 으로', decision="v1 과 같게 둔다", reason="v1 시험 전수 조사(test)에서 발견", confirm=True, where='controller/heater_hold.py:134'),
+    dict(id="D206", title='RF 램프 첫 1.0 W 읽기를 저출력 1회로 셈', decision="v1 과 같게 둔다", reason="v1 시험 전수 조사(test)에서 발견", confirm=True, where='device/rf_power.py:565'),
+    dict(id="D207", title='SHUTDOWN_STEP_GAP_MS 모듈 상수 500 고정(설정 반영 안 됨)', decision="v1 과 같게 둔다", reason="v1 시험 전수 조사(test)에서 발견", confirm=True, where='controller/process_controller.py:46-50'),
+    dict(id="D208", title='v1 시험 수: 지시 92 파일·889 항목 → 실제 93 파일·904 함수·1188 수집(리눅스 1185 통과·2 실패 config_local 없음·1 건너뜀)', decision="v1 과 같게 둔다", reason="v1 시험 전수 조사(test)에서 발견", confirm=True, where='tests/'),
 ]
