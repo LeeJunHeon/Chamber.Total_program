@@ -305,3 +305,15 @@ def test_rf_worker_uses_same_strict_path():
     assert "load_settings(path=settings)" not in body and "except Exception" not in body
     fail = src[src.index("def _settings_fail(res, log)"):src.index("def _load_config(log):")]
     assert "sys.exit(2)" in fail and "run_error.log" in fail and "RF 워커 중지" in fail
+
+
+def test_recipe_scan_timeout_20s_in_settings_json():
+    """16차 — 레시피 조회 폴더 스캔 최대 대기 8 → 20초(NAS 가 오래 쉬다 깨어날 때). 기본값과 실제 settings.json 모두."""
+    from lib import _config_loader, config_common
+    old = config_common.RECIPE_SCAN_TIMEOUT_S
+    try:
+        assert old == 20.0
+        _config_loader.load_settings()
+        assert config_common.RECIPE_SCAN_TIMEOUT_S == 20.0
+    finally:
+        config_common.RECIPE_SCAN_TIMEOUT_S = old

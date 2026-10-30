@@ -564,8 +564,8 @@ ROBOT_RECIPE_ROOT_DIR = r"\\VanaM_NAS\VanaM_toShare\JH_Lee\Recipe"
 # 허용 폴더(클라이언트가 이 중 하나만 요청 가능)
 ROBOT_RECIPE_FOLDERS = ("CH1", "CH2", "ALD")
 
-# NAS가 순간 느릴 때 무한 대기 방지
-RECIPE_SCAN_TIMEOUT_S = 8.0
+# 레시피 폴더 스캔 최대 대기(초) — 무한 대기 방지. 평소에는 바로 끝나고, NAS 가 오래 쉬다 깨어날 때만 더 기다림
+RECIPE_SCAN_TIMEOUT_S = 20.0
 
 
 # =========================
