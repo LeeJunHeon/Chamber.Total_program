@@ -214,6 +214,12 @@ class Worker:
             self.clock.cond.notify_all()
         if self._thread is not None:
             self._thread.join(join_s)
+        # 큐에 남은 요청도 결과를 돌려준다(CANCELLED) — 기다리는 쪽(스냅샷 묶기의 '진행 중' 등)이 영영 기다리지 않게(챔버12 2단계에서 찾음)
+        with self.clock.cond:
+            left = self.queue.drain(keep=lambda r: False)
+        now = self.clock.monotonic()
+        for r in left:
+            self._finish(Result(r, Status.CANCELLED, reason="CANCELLED", started=now, finished=now))
 
     # ───────── 상태 ─────────
     def suppress(self, until: float, reason: str) -> None:
