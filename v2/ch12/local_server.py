@@ -156,10 +156,10 @@ class LocalServer:
     def files(self, rel: str, timeout_s: float = FILES_TIMEOUT_S) -> tuple:
         """레시피 파일 고르기 — (HTTP 코드, 본문). 시작 폴더(PROCESS_LIST_START_DIR) 아래만."""
         root_s = str((self.system.cfg.get("PROCESS_LIST_START_DIR") if self.system is not None else "") or "")
-        rel = str(rel or "").replace("\\", "/").strip("/")
+        rel = str(rel or "").replace("\\", "/").rstrip("/")
         if not root_s:
             return 404, {"error": "no_root", "detail": "PROCESS_LIST_START_DIR 이 비었음"}
-        if rel and (Path(rel).is_absolute() or rel.startswith("//") or ":" in rel or ".." in rel.split("/")):
+        if rel and (rel.startswith("/") or ":" in rel or ".." in rel.split("/")):
             return 403, {"error": "outside", "detail": "시작 폴더 밖"}
         box: dict = {}
 
