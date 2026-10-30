@@ -183,8 +183,8 @@ class HeaterEngine(HeaterNotify, HeaterCommands, HeaterProcessLink):
         return bool(self.drv.writes_allowed)
 
     def status(self) -> dict:
-        with self._lock:
-            return {k: v for k, v in self._st.items() if not k.startswith("_")}
+        """마지막 확정 상태(잠금 없이 — 어느 스레드·시계 대기 조건식에서도 부를 수 있다. 키 집합은 바뀌지 않는다)."""
+        return {k: v for k, v in dict(self._st).items() if not k.startswith("_")}
 
     def status_raw(self) -> dict:
         return self._st
@@ -234,14 +234,13 @@ class HeaterEngine(HeaterNotify, HeaterCommands, HeaterProcessLink):
     def snapshot_fields(self) -> Dict[str, Any]:
         """1초 행 엔진 열(drivers/heater.py _ENGINE)."""
         b = f"{self.chamber}.heater"
-        with self._lock:
-            ok, _why = self.is_ready()
-            return {f"{b}.owner": self.owner, f"{b}.target": self.final_target(),
-                    f"{b}.ramp_active": self.profiler.is_active(),
-                    f"{b}.ramp_set_rate": self.profiler.rate() if self.profiler.is_active() else None,
-                    f"{b}.hold": self.hold.state, f"{b}.hold_value": self.hold.value if self.hold.is_holding() else None,
-                    f"{b}.sat_clamp": self.sat.clamped, f"{b}.phase": self.phase(), f"{b}.ready": ok,
-                    f"{b}.stale": bool(self._st.get("stale"))}
+        ok, _why = self.is_ready()                 # 읽기만(잠금 없이 — tick 스레드가 worker 쓰기를 기다리지 않게)
+        return {f"{b}.owner": self.owner, f"{b}.target": self.final_target(),
+                f"{b}.ramp_active": self.profiler.is_active(),
+                f"{b}.ramp_set_rate": self.profiler.rate() if self.profiler.is_active() else None,
+                f"{b}.hold": self.hold.state, f"{b}.hold_value": self.hold.value if self.hold.is_holding() else None,
+                f"{b}.sat_clamp": self.sat.clamped, f"{b}.phase": self.phase(), f"{b}.ready": ok,
+                f"{b}.stale": bool(self._st.get("stale"))}
 
     # ═══════════════════════ 내부: I/O ═══════════════════════
     def _link_up(self) -> bool:

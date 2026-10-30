@@ -395,4 +395,7 @@ DECISIONS = [
     dict(id='D61', title='두께 마감 시각(시간 대체·상한)', decision='리스너(0.5 s)·엔진 on_row(1 s)·next_deadline() 의 poll — v1 은 마감 시각에 정확히 깸(엔진이 next_deadline 시각에 poll 을 부름).', reason="3단계 두께 판정 작성 중 판단(v1 실행 골든 판정 10·영점 8 시나리오)", confirm=True, where="v2/ch12/thickness*.py"),
     dict(id='D62', title='재료 삭제 확인 시점', decision='v1 은 [행 삭제] 때, v2 는 저장 때 같은 문구로 확인(화면 대화가 포털로 바뀜).', reason="3단계 두께 판정 작성 중 판단(v1 실행 골든 판정 10·영점 8 시나리오)", confirm=True, where="v2/ch12/thickness*.py"),
     dict(id='D63', title='두께 이어가기', decision='THICKNESS_WAIT 중에만. 확인: 응답·XTAL·리셋 플래그 0·최근 값·장비 두께가 저널 값 − ZERO_CONFIRM_NM 아래로 줄지 않음. 영점 단계는 이어가지 않음.', reason="3단계 두께 판정 작성 중 판단(v1 실행 골든 판정 10·영점 8 시나리오)", confirm=True, where="v2/ch12/thickness*.py"),
+    dict(id='D64', title='bench 도구의 펄스 장비', decision='4007·4005 에 어느 장비가 꽂혔는지 코드로 알 수 없어 기본으로 연결하지 않음(--ch1-pulse/--ch2-pulse 로 고름).', reason="1단계 통신층 가드·bench 도구 작성 중 판단", confirm=True, where="v2/ch12/cmd_guard.py; v2/tools/bench_probe.py"),
+    dict(id='D65', title='통신층 가드 bench 목록', decision='두께 모니터 L(리셋 플래그 확인)은 질의가 아니라 bench 에서 막음(prod 허용). RF Pulse bench 목록에 v1 이 보내지 않는 질의(128·130·152·198·164·167·177) 포함. MFC 금지 이름은 챔버K GPC3000 표를 빌림(기종 미확인 — 더 막는 쪽).', reason="1단계 통신층 가드·bench 도구 작성 중 판단", confirm=True, where="v2/ch12/cmd_guard.py; v2/tools/bench_probe.py"),
+    dict(id='D66', title='v1 이 정의만 하고 부르지 않던 DC Pulse 설정 API', decision='드라이버에는 같은 바이트로 옮겼지만 통신층 가드가 어느 모드에서도 막는다.', reason="1단계 통신층 가드·bench 도구 작성 중 판단", confirm=True, where="v2/ch12/cmd_guard.py; v2/tools/bench_probe.py"),
 ]
