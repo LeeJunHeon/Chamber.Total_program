@@ -10,7 +10,8 @@
 - 챔버마다 MFC·IG(상시 연결 — D37), DC Pulse·RF Pulse(PulsePorts — CH1 4007·CH2 4005, 공정이 고를 때만 연결),
   두께 STM-100(CHn_SUPPORTS_THICKNESS 일 때만 포트를 연다), OES·RGA 링크(별도 프로세스 워커 — links=False 면 만들지 않고 off,
   sim 은 *_WORKER_FAKE 를 켠 설정으로).
-- TSP(tsp — 쓰는 동안만 205 읽기, 소켓은 명령 때만)·TSP 게이지(tsp.ig — shared.tsp_ig 를 잡을 때만 worker), 카메라(camera).
+- TSP(tsp — 쓰는 동안만 205 읽기, 소켓은 명령 때만)·TSP 게이지(tsp.ig — D67: shared.tsp_ig 를 잡는 동안 CH1 IG worker 를
+  공유, 설정값은 CH2 값 — SharedGauge), 카메라(camera).
 - 설정에서 꺼진 장비(SUPPORTS_* 등)는 worker 를 띄우지 않는다(포트를 열지 않음) — 1초 행에서 off.
 
 1초 행(TickLoop, 정각 1초)
@@ -225,13 +226,10 @@ class Ch12System:
         self.enabled["tsp"] = True
         self.tsp = T.TspDriver(clock, w, c, wr, on_event=self._ev_for("tsp"))
         sources.append(self.tsp.source())
-        ig_src = SwapSource("tsp.ig", None, lambda s, n: {}, ("tsp.ig",), G.source_deadline_ms(c))
-
-        def make_tsp_ig():
-            tw = G.make_worker(clock, g("tsp.ig", transports.tsp_ig()), c, "tsp", wr, on_event=self._ev_for("tsp.ig"))
-            return G.IgDriver(clock, tw, c, wr, on_event=self._ev_for("tsp.ig"), chamber="tsp"), tw
-        self.tsp_ig = OnDemand("tsp.ig", make_tsp_ig, ig_src)
-        ig_src.read = self.tsp_ig.source_read
+        # TSP 게이지(D67): 두 번째 연결을 열지 않고 CH1 IG worker(4001)를 공유 소유권으로 잡는다 — transports.tsp_ig 는 쓰지 않음
+        ig_src = Source("tsp.ig", None, lambda s, n: {}, ("tsp.ig",), G.source_deadline_ms(c))
+        self.tsp_ig = SharedGauge(clock, c, wr, self.ig["ch1"], self.workers["ch1.ig"],
+                                  lambda: self.sources["ch1.ig"], ig_src, self._ev_for("tsp.ig"))
         sources.append(ig_src)
         self.camera = CameraDriver(clock, c, on_event=self._ev_for("camera"), backend=camera_backend, writes_allowed=wr)
         sources.append(self.camera.source())
