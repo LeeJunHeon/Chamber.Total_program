@@ -435,4 +435,8 @@ DECISIONS = [
     dict(id='D101', title='설정 오류로 시작 거부', decision="v2 는 콘솔 문구 + 종료 코드 2(감시 프로그램이 다시 켜지 않음) — v1 은 경고창(UI-001·LOG-094). 변환 도구는 문제 전부를 나열(v1 format_problems 의 번호·'외 N건' 대신).", reason="전수 목록(설정·오류) 완료 중 판단", confirm=True, where="v2/ch12/params; v2/tools/convert_v1_config.py"),
     dict(id='D102', title='E715~E718', decision='v1 은 콜백이 없을 때만 냈고 운영 배선에서는 나지 않음 — v2 는 콜백 주입이 없어 나지 않음(카탈로그에는 그대로).', reason="전수 목록(설정·오류) 완료 중 판단", confirm=True, where="v2/ch12/params; v2/tools/convert_v1_config.py"),
     dict(id='D103', title='DEV_MODE', decision='v2 키는 없앴고(RUN_MODE) 엔진·모니터·엑셀이 읽는 DEV_MODE 는 늘 false(v1 운영값과 같음) — RUN_MODE=sim 과 묶지 않음.', reason="전수 목록(설정·오류) 완료 중 판단", confirm=True, where="v2/ch12/params; v2/tools/convert_v1_config.py"),
+    dict(id='D104', title='SUPPORTS_* 설정 적용 시점(GAPB-002)', decision='v2 는 설치 값(재시작 뒤 적용). v1 은 IDLE 일 때 OFF 를 바로 적용하고 로그를 남겼다 — v2 는 둘 다 하지 않음.', reason="전수 목록(공정) 완료 중 판단", confirm=True, where="v2/ch12/process_engine.py; core.py"),
+    dict(id='D105', title='공정 러너 명령 슬롯', decision="러너 스레드 하나·명령 슬롯 하나 — 바쁠 때 START 는 RUNNER_BUSY(200칸 큐·중복·큐 가득 로그 없음, PC_FINISHED 명령 없음, 이벤트 2000칸 큐 없음). '이미 실행 중' 별도 '실행 오류' 팝업 문구는 안 나옴(같은 가드).", reason="전수 목록(공정) 완료 중 판단", confirm=True, where="v2/ch12/process_engine.py; core.py"),
+    dict(id='D106', title='시작 예외 run_end 코드', decision='PREFLIGHT_FAILED(START_FAILED 사유 코드를 새로 만들지 않음).', reason="전수 목록(공정) 완료 중 판단", confirm=True, where="v2/ch12/process_engine.py; core.py"),
+    dict(id='D107', title='펄스 포트 재연결', decision="포트를 잡을 때 연결 — v1 의 2 s 한도 별도 재연결 없음(PROC-095). 20 s 시작 호출 한도·'메서드 없음' 경우 없음(GAPB-001 — worker 가 연결 유지).", reason="전수 목록(공정) 완료 중 판단", confirm=True, where="v2/ch12/process_engine.py; core.py"),
 ]
