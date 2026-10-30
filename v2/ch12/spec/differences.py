@@ -14,3 +14,11 @@ DIFFERENCES = [
          v1="pymodbus ModbusTcpClient", v2="직접 MBAP 프레임(v2/common/modbus_tcp.py) — PDU 동일, 트랜잭션 id 시작 값만 다를 수 있음",
          why="의존성 최소", agreed="D02"),
 ]
+
+DIFFERENCES += [
+    dict(id="X03", what="G: 드라이브 기록 방식",
+         v1="Calib CSV·엑셀·RGA CSV 정본을 G: 에 직접 씀", v2="같은 경로·이름·형식, 로컬에 먼저 쓰고 사본만 G:/NAS 로",
+         why="G: 스트리밍에 새 파일이 사라지는 문제(지시 4장)", agreed="D07"),
+    dict(id="X04", what="ALL STOP", v1="없음(챔버별 Stop 만)", v2="CH1·CH2·플라즈마 클리닝·TSP STOP 을 한꺼번에",
+         why="지시 3장 (7)·5장 4단계", agreed="D05"),
+]
