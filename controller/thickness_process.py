@@ -295,8 +295,12 @@ class ThicknessEndJudge:
             self.prev_s, self.prev_t = s, now
             self.done_n = 0
             if eff >= self.target - _EPS_NM:
-                self._log(f"두께 판정 복귀 — 이미 목표 이상(유효 {eff:.1f} / {self.target:.1f} nm) → 종료")
-                return ThicknessEvent("done", reason="복귀 시 이미 목표 이상", eff_nm=eff)
+                self.done_n = 1                  # 복귀 첫 값도 같은 연속 횟수 규칙(값 하나가 튀어도 바로 끝내지 않게)
+                if self.done_n >= int(p.done_consecutive):
+                    self._log(f"두께 판정 복귀 — 이미 목표 이상(유효 {eff:.1f} / {self.target:.1f} nm) → 종료")
+                    return ThicknessEvent("done", reason="복귀 시 이미 목표 이상", eff_nm=eff)
+                self._log(f"두께 판정 복귀 — 첫 값이 목표 이상(유효 {eff:.1f} / 목표 {self.target:.1f} nm), 다음 값으로 확인")
+                return ThicknessEvent("resume", reason="통신 복귀(목표 이상 — 다음 값으로 확인)", eff_nm=eff)
             self._log(f"두께 판정 복귀 — 유효 {eff:.1f} / {self.target:.1f} nm")
             return ThicknessEvent("resume", reason="통신 복귀", eff_nm=eff)
 

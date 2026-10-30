@@ -297,5 +297,64 @@ def test_view_text():
     assert "증착률 0.091 nm/s" in f.j.view({"rate_nm_s": None}, f.t)[0]           # 장비 값 없으면 실측 평균(0.5 nm / 영점 뒤 5.5초)
 
 
+
+# ═══════════════ 15차 — 목표 도달 2번 연속 확인(늦은 응답이 두께로 읽혀 튄 값 대비) ═══════════════
+P2 = dataclasses.replace(P, done_consecutive=2)
+
+
+def test_consecutive2_single_spike_then_two_in_a_row():
+    f = Feed(target=100.0, dep=0.2, p=P2)
+    f.new(0.0)
+    f.new(50.0)
+    assert f.new(592207.9 - 50.0) is None and f.j.done_n == 1          # 주파수 응답이 두께로 읽힘 — 종료 안 함
+    assert f.new(50.5 - 592207.9) is None and f.j.done_n == 0          # 다음 값 목표 미만 → 다시 센다
+    while f.j.eff < 99.0 - 1e-9:
+        assert f.new(0.5) is None
+    assert f.new(1.2) is None and f.j.done_n == 1                       # 목표 이상 1번째(100.2)
+    ev = f.new(0.2)
+    assert ev.kind == "done" and f.j.done_n == 2                        # 2번째에서 종료
+
+
+def _fallback_feed(p):
+    f = Feed(target=2.0, dep=0.1, p=p)
+    f.new(0.0)
+    f.new(0.5)
+    for _ in range(11):
+        f.same(dt=1.0)
+    assert f.j.mode == "fallback"
+    return f
+
+
+@pytest.mark.parametrize("nxt,end", [(0.0, True), (-3.0, False)])
+def test_consecutive2_resume_first_value_over_target_needs_next(nxt, end):
+    f = _fallback_feed(P2)
+    ev = f.new(2.0)                                                     # 복귀 첫 값 2.5 nm ≥ 목표
+    assert ev.kind == "resume" and f.j.mode == "thickness" and f.j.done_n == 1
+    assert "첫 값이 목표 이상" in f.j.events[-1] and "다음 값으로 확인" in f.j.events[-1]
+    ev2 = f.new(nxt)
+    if end:
+        assert ev2.kind == "done"
+    else:
+        assert ev2 is None and f.j.done_n == 0 and f.j.mode == "thickness"
+
+
+def test_consecutive1_resume_over_target_ends_at_once():
+    f = _fallback_feed(P)
+    ev = f.new(2.0)
+    assert ev.kind == "done" and ev.reason == "복귀 시 이미 목표 이상"
+
+
+def test_settings_json_ch2_done_consecutive_is_2():
+    from lib import _config_loader, config_ch2
+    from lib.thickness_config import load_judge_params
+    old = getattr(config_ch2, "THICKNESS_DONE_CONSECUTIVE", None)
+    try:
+        _config_loader.load_settings()
+        assert load_judge_params(config_ch2)[0].done_consecutive == 2
+    finally:
+        if old is not None:
+            config_ch2.THICKNESS_DONE_CONSECUTIVE = old
+
+
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
