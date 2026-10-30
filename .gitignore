@@ -234,3 +234,7 @@ rf_logs/
 digit_dataset/
 *_report.txt
 cnn_digit/
+### v2 ###
+v2/**/__pycache__/
+v2/.pytest_cache/
+.pytest_cache/
