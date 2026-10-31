@@ -54,7 +54,8 @@ def test_boot_daily_crosses_midnight_and_repeats(tmp_path):
         assert sch.text == "Daily 00:01 / Next 10-10"
         wait_wall(c, eng, datetime(2025, 10, 10, 0, 0, 59))
         assert not eng.busy
-        assert c.wait_until(c.monotonic() + 5.0, lambda: eng.busy)
+        # busy 는 '자리 잡기' 순간 먼저 참이 된다(start: 자리 잡기 → 검사 → by·cycles 채움 → 실행 스레드) — 값은 스레드가 생긴 뒤 본다
+        assert c.wait_until(c.monotonic() + 5.0, lambda: eng.busy and eng._thread is not None)
         assert eng.by == "schedule" and eng.cycles == 10 and eng.target == 2.5e-07       # 화면 기본값(TSP_UI_DEFAULT_*)
         wait_idle(c, eng)
         lg = logs(eng)
