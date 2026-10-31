@@ -863,6 +863,24 @@ def soak_full(tmp_path, hours: float) -> dict:
 
 @pytest.mark.slow
 def test_virtual_7_days(tmp_path):
+    """7일 시험은 메모리를 '이 프로세스 전체'로 잰다 — 전체 시험을 한 번에 돌리면 앞 시험 4천여 개가 남긴 힙·스레드(시작부터
+    약 250 MB·56 스레드)가 섞여 날마다 증가폭이 들쭉날쭉해진다(2026-10-31 한 번에 돌린 실행: 6→7일 +2.0 MB, 단독 +0.2·+0.4 MB).
+    그래서 본문은 새 파이썬 프로세스에서 같은 단언 그대로 돌리고(CH12_7DAY_CHILD), 여기서는 그 종료 코드와 출력을 본다."""
+    if os.environ.get("CH12_7DAY_CHILD") == "1":
+        _virtual_7_days_body(tmp_path)
+        return
+    import subprocess
+    import sys
+    env = dict(os.environ, CH12_7DAY_CHILD="1")
+    root = Path(__file__).resolve().parents[2]
+    r = subprocess.run([sys.executable, "-m", "pytest", f"{Path(__file__).resolve()}::test_virtual_7_days", "-q", "-s",
+                        "-p", "no:cacheprovider", "--basetemp", str(tmp_path / "child")],
+                       cwd=str(root), env=env, capture_output=True, text=True, encoding="utf-8", errors="replace")
+    print(r.stdout[-6000:])
+    assert r.returncode == 0, r.stdout[-6000:] + r.stderr[-3000:]
+
+
+def _virtual_7_days_body(tmp_path):
     from v2.ch12.system import APP_RETENTION
     res = soak_full(tmp_path, DAYS * 24)
     table, hours, counts, rig, wall = res["days"], res["hours"], res["counts"], res["rig"], res["wall_s"]
