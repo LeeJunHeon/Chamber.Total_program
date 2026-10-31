@@ -69,6 +69,13 @@ def run_virtual(hours: float, out_dir: Optional[Path] = None, engines: Optional[
         if hook is not None:
             hook(rig, t)
         if t.seq % 3600 == 0:
+            # 지난 날 CSV 내보내기(recorder-csv)는 실제 시간으로 수 분 걸린다 — 실제 운전은 하루 안에 끝나지만 가상 시계는
+            # 몇 시간을 실제 수 분에 돌므로 표본 때 아직 살아 있어 스레드 수·메모리가 늘어 보인다(종합 7일 시험과 같은 처리:
+            # 끝날 때까지 기다림 — 가상 시각은 멈춰 있고, 기다리는 참가자가 '진행 없음'으로 끝나지 않게 깨워 둔다)
+            for th in list(rig.recorder._exports):
+                while th.is_alive():
+                    th.join(1.0)
+                    rig.clock.notify()
             gc.collect()
             m = mem()
             logs = [len(getattr(x, k)) for x in rig.sims.values() for k in SIM_LOGS if hasattr(x, k)]
