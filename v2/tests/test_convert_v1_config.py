@@ -164,6 +164,17 @@ def test_dead_common_value_becomes_v1_effective_value(tmp_path):
     assert "common.ETA_ENABLED" in {d["path"] for d in res.dropped}            # 두 채널 모두 자기 키 — 버림
 
 
+def test_intervals_use_new_defaults_not_v1_values(tmp_path):
+    """사용자 결정 2026-11-02(D36·D50) — v1 의 큰 통신 간격(1000·1500 ms)은 옮기지 않고 v2 새 기본값(50·200·0·8000 ms)을 쓴다."""
+    res = _conv(tmp_path, {"common": {"MFC_GAP_MS": 1000, "IG_GAP_MS": 1000, "CMD_GAP_MS": 1500, "POLL_INTERVAL_MS": 5000,
+                                      "DCP_GAP_MS": 150}})
+    assert res.ok, res.errors
+    assert (res.values["MFC_GAP_MS"], res.values["IG_GAP_MS"], res.values["CMD_GAP_MS"], res.values["POLL_INTERVAL_MS"]) == (50, 200, 0, 8000)
+    assert res.values["DCP_GAP_MS"] == 150                                    # DC Pulse 는 v1 150 ms 유지
+    notes = {c["key"]: c["note"] for c in res.converted}
+    assert "사용자 결정 2026-11-02" in notes["MFC_GAP_MS"] and "사용자 결정" not in notes["DCP_GAP_MS"]
+
+
 def test_list_value_to_json_text(tmp_path):
     res = _conv(tmp_path, {"common": {"ROBOT_RECIPE_FOLDERS": ["CH1", "ALD"]}, "ch2": {"PROCESS_GUN_SHUTTERS": ["G1"]}})
     assert res.ok, res.errors

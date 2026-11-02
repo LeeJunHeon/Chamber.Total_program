@@ -226,7 +226,9 @@ def _dcp_tick(pr: Probe) -> Callable:
         if raw is not None:
             e = d._scale(raw)
             out.update({f"{b}.p_w": e["P_W"], f"{b}.v_v": e["V_V"], f"{b}.i_a": e["I_A"]})
-        for code, key in ((DP.R_ARC_SOFT, "arc_soft"), (DP.R_ARC_HARD, "arc_hard")):
+        # 드라이버와 같은 매 tick 전부(사용자 결정 2026-11-02 D36): PIV → SAT → ANT → AE → AF → 상태, 간격은 DCP_GAP_MS
+        for code, key in ((DP.R_ARC_SOFT, "arc_soft"), (DP.R_ARC_HARD, "arc_hard"),
+                          (DP.R_ARC_SOFT_RATE, "arc_soft_rate"), (DP.R_ARC_HARD_RATE, "arc_hard_rate")):
             if d._room(s):
                 v = DP.u16_tail(d._q(s, code))
                 if v is not None:
@@ -239,25 +241,28 @@ def _dcp_tick(pr: Probe) -> Callable:
 
 
 def _rfp_tick(pr: Probe, cfg: Dict[str, Any]) -> Callable:
+    """매 tick 162 → 165 → 166 전부, 응답을 받는 대로 다음 질의(CMD_GAP_MS 설정 간격 — 사용자 결정 2026-11-02 D50)."""
     order = (RFP.Q_STATUS, RFP.Q_FWD, RFP.Q_REF)
 
     def read(s, seq):
         d, b = pr.driver, pr.driver.block
-        if d._ready_at > s.deadline - 0.15:
-            return {}                                     # 간격(1.5 s)을 못 맞춤 — 이번 tick 은 안 읽음(stale)
-        i = pr.state.get("rfp_i", 0)
-        cmd = order[i % len(order)]
-        h = q_rfp(pr, cmd, "[POLL BENCH]")(s)
-        pr.state["rfp_i"] = i + 1
-        if h is None:
-            raise ReadTimeout()
-        data = bytes.fromhex(h)
-        if cmd == RFP.Q_STATUS:
-            st = parse_status(data)
-            if st is None:
-                return {}
-            return {f"{b}.out_on": st["on"], f"{b}.itl_open": st["ilock"], f"{b}.status_raw": st["raw"].hex(" ")}
-        if len(data) < 2:
-            return {}
-        return {f"{b}.{'fwd_w' if cmd == RFP.Q_FWD else 'ref_w'}": float(aebus.u16(data))}
+        out: Dict[str, Any] = {}
+        got = 0
+        for cmd in order:
+            if d._ready_at > s.deadline - 0.15:
+                break                                     # 설정 간격이 커서 이번 tick 마감 안에 못 넣음(stale)
+            h = q_rfp(pr, cmd, "[POLL BENCH]")(s)
+            if h is None:
+                if got == 0:
+                    raise ReadTimeout()
+                break
+            got += 1
+            data = bytes.fromhex(h)
+            if cmd == RFP.Q_STATUS:
+                st = parse_status(data)
+                if st is not None:
+                    out.update({f"{b}.out_on": st["on"], f"{b}.itl_open": st["ilock"], f"{b}.status_raw": st["raw"].hex(" ")})
+            elif len(data) >= 2:
+                out[f"{b}.{'fwd_w' if cmd == RFP.Q_FWD else 'ref_w'}"] = float(aebus.u16(data))
+        return out
     return read

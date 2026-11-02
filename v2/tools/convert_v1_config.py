@@ -56,6 +56,10 @@ from v2.common.paramdef import PType, check_value
 ROOT = Path(__file__).resolve().parents[2]
 REPORT = "convert_report.json"
 
+# 사용자 결정 2026-11-02(D36·D50): 통신 간격은 v1 값(RS-232 안정화용 큰 값)을 옮기지 않고 v2 새 기본값을 쓴다.
+# 장비 매뉴얼에 최소 간격 규정이 없어 모든 장비를 1초마다 전부 읽기 위해서다(DCP_GAP_MS 150 은 v1 과 같아 해당 없음).
+INTERVAL_DECIDED = frozenset({"MFC_GAP_MS", "IG_GAP_MS", "CMD_GAP_MS", "POLL_INTERVAL_MS"})
+
 # ───────────── v1 읽기(lib/_config_loader.py 와 같게) ─────────────
 
 
@@ -358,6 +362,10 @@ class Converter:
                 note = "v1 에서 읽히지 않던 채널 값 — v1 실효값(common)"
             if name == "THICKNESS_FACTOR_FILE":
                 val, note = "", "설정 폴더의 thickness_factors_chN.json(두께 파일 변환 참고)"
+            if p.key in INTERVAL_DECIDED:
+                if not _same(v, p.default):
+                    note = f"사용자 결정 2026-11-02 — v1 값 {v!r} 대신 v2 새 통신 간격 기본값 {p.default!r}(장비 매뉴얼에 최소 간격 규정 없음)"
+                val = p.default
             out, err = self._to_v2(p, val)
             if err:
                 res.errors.append(f"{path} → {err}")
