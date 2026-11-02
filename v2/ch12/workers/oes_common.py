@@ -144,7 +144,7 @@ def _mutex_timeout_ms() -> int:
 
 
 async def _copy_csv_to_nas(local_csv: Path, ch: int, *, timeout_s: float = 120.0):
-    """NAS(G:) 복사는 하지 않는다 — 로컬 CSV 를 그대로 둔다. 반환 형식만 예전과 같다.
+    """NAS 복사는 하지 않는다 — 로컬 CSV 를 그대로 둔다. 반환 형식만 예전과 같다.
     return: (nas_ok=False, nas_csv=None, nas_error=None, local_deleted=False)"""
     return False, None, None, False
 

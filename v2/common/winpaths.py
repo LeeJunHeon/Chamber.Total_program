@@ -1,6 +1,6 @@
 """윈도우 경로 기본값을 리눅스·맥에서 쓸 수 있는 곳으로 바꿔 쓰기(실행 값만 — 설정 값 자체는 그대로).
 
-왜: 설정 기본값(LOCAL_DATA_DIR 'C:\\CH12_v2\\data'·v1 기록 'C:\\VanaM_Logs\\…'·NAS·G: 공유 드라이브·감시 프로그램
+왜: 설정 기본값(LOCAL_DATA_DIR 'C:\\CH12_v2\\data'·v1 기록 'C:\\VanaM_Logs\\…'·NAS(UNC)·감시 프로그램
 --log-dir 'C:\\Ch12_v2\\logs' 등)은 장비 노트북(윈도우) 값이다. 리눅스·맥에서 그대로 쓰면 'C:\\CH12_v2\\data' 가 '이름에
 역슬래시가 든 폴더 하나'로 현재 폴더 아래에 생긴다(저장소 안이 더러워지고 실행 위치마다 기록이 흩어진다).
 
@@ -21,6 +21,30 @@ from pathlib import Path
 from typing import Any, List, Optional, Tuple
 
 BASE_PARTS = (".ch12_v2", "winpaths")        # 홈 아래
+
+# v1 의 구글 공유 드라이브 경로 → NAS 경로(사용자 결정 2026-11-02, D07). NAS /volume1/VanaM_Sputter 가 구글 공유 드라이브와
+# 동기화되어 있어 같은 경로를 NAS 로 읽고 쓴다. v1 설정 변환 도구와 v1 골든 비교 시험만 쓴다(v2 실행 코드는 이 글자를 쓰지 않는다).
+NAS_PREFIX = "\\\\VanaM_NAS\\VanaM_Sputter"
+_V1_DRIVE = re.compile("^" + "G" + r":[\\/]공유 드라이브[\\/]VanaM_Sputter(?=[\\/]|$)", re.IGNORECASE)
+
+
+def v1_gdrive_to_nas(v: Any) -> Any:
+    """v1 구글 공유 드라이브 경로(구분자 \\ 또는 /) → '\\\\VanaM_NAS\\VanaM_Sputter\\<같은 경로>'. 글자가 아니거나
+    그 모양이 아니면 그대로. 파일명·형식은 그대로 두고 구분자만 \\ 로 맞춘다."""
+    if not isinstance(v, str) or not _V1_DRIVE.match(v):
+        return v
+    return NAS_PREFIX + _V1_DRIVE.sub("", v).replace("/", "\\")
+
+
+def v1_gdrive_to_nas_deep(v: Any) -> Any:
+    """사전·목록 안의 글자까지 v1_gdrive_to_nas."""
+    if isinstance(v, dict):
+        return {k: v1_gdrive_to_nas_deep(x) for k, x in v.items()}
+    if isinstance(v, list):
+        return [v1_gdrive_to_nas_deep(x) for x in v]
+    if isinstance(v, tuple):
+        return tuple(v1_gdrive_to_nas_deep(x) for x in v)
+    return v1_gdrive_to_nas(v)
 _DRIVE = re.compile(r"^([A-Za-z]):[\\/]")
 _UNC = re.compile(r"^\\\\[^\\/]")
 

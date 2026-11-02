@@ -630,7 +630,7 @@ FACTS = {
                         note="장비 계정은 v1 설정값(RGA_NET) — 비밀값으로 취급",
                         v1="device/rga.py:64-95;lib/config_common.py:139-142"),
         commands=[
-            ("scan", "argv: --ch N --timeout 60.0 [--csv G:\\공유 드라이브\\VanaM_Sputter\\RGA\\Ch.N\\RGA_spectrums.csv] [--csv_fallback <exe>\\Logs_LocalFallback\\RGA\\Ch.N\\RGA_spectrums.csv]",
+            ("scan", "argv: --ch N --timeout 60.0 [--csv <구글 공유 드라이브>\\VanaM_Sputter\\RGA\\Ch.N\\RGA_spectrums.csv] [--csv_fallback <exe>\\Logs_LocalFallback\\RGA\\Ch.N\\RGA_spectrums.csv]",
              "stdout 첫 JSON 줄 {'ok','mass_axis','pressures','worker_version','csv_ok','csv_error','csv_path','csv_fallback_used',…}", "device/rga.py:158-363"),
         ],
         poll_period_s=None,

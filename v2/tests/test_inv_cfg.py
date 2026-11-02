@@ -25,6 +25,7 @@ from v2.ch12.params import ownership as own
 from v2.ch12.params import table as params_table
 from v2.ch12.spec import inv_cfg
 from v2.ch12.spec import settings_v1facts as facts
+from v2.common.winpaths import v1_gdrive_to_nas_deep
 from v2.tools import convert_v1_config as conv
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -173,7 +174,6 @@ DEFAULT = {
     "ch2.THICKNESS_FACTOR_FILE": ("", "빈 값 = 설정 폴더의 thickness_factors_ch2.json(v1 config/ 의 같은 이름 — D12)"),
     "(code).LOCAL_FALLBACK_ROOT": ("", "빈 값 = exe(소스 실행이면 저장소) 옆 Logs_LocalFallback — v1 과 같은 자리"),
     "(code).PLC_COIL_LOG_LOCAL_DIR": ("", "빈 값 = LOCAL_FALLBACK_ROOT\\PLC_Coil — v1 과 같은 자리"),
-    "(code).RGA_NET": ("", "장비 계정은 비밀값(장비 로컬 파일) — 코드에 두지 않음(D23)"),
 }
 
 
@@ -206,8 +206,12 @@ def _fixed_rga_dir():
 
 
 def _fixed_rga_net():
+    """D23(사용자 결정 2026-11-02) — v1 코드 고정 admin/admin 은 설정 키 RGA_USER·RGA_PASSWORD 기본값, 비밀값 아님."""
     from v2.common.paramdef import Scope
-    assert T.by_key()["RGA_NET"].scope is Scope.SECRET
+    by = T.by_key()
+    assert "RGA_NET" not in by
+    for k in ("RGA_USER", "RGA_PASSWORD"):
+        assert by[k].default == "admin" and by[k].scope is not Scope.SECRET
 
 
 def _fixed_thickness_factor_file(ch: int):
@@ -226,7 +230,7 @@ def _fixed_gas_info():
 
 def _fixed_rga_xlsx():
     by = T.by_key()
-    v1 = FACT["(code).RGA_XLSX_PATH"][2]
+    v1 = v1_gdrive_to_nas_deep(FACT["(code).RGA_XLSX_PATH"][2])            # D07: NAS 같은 경로
     assert by["CH1_RGA_CSV_PATH"].default == v1["ch1"] and by["CH2_RGA_CSV_PATH"].default == v1["ch2"]
 
 
@@ -328,6 +332,7 @@ def test_key(path):
     p, d = CONV.param_of.get(path), CONV.dropped_of.get(path)
     eff = conv._effect(path)
     want = v1_effective(path) if (path in FACT or path.startswith(("ch1.", "ch2."))) else None
+    want = v1_gdrive_to_nas_deep(want)               # D07(사용자 결정 2026-11-02): v1 구글 공유 드라이브 경로 = v2 NAS 같은 경로
     assert p is not None or d is not None, f"{path}: v2 키도 버림 근거도 없다"
     if p is not None:
         # 1) 이름 규칙(또는 v1_key)
@@ -471,8 +476,8 @@ def test_channel_fixed_values():
     want = {"CH1_IG_TCP_PORT": 4001, "CH1_MFC_TCP_PORT": 4003, "CH1_RFPULSE_TCP_PORT": 4007,
             "CH2_IG_TCP_PORT": 4002, "CH2_MFC_TCP_PORT": 4006, "CH2_DCPULSE_TCP_PORT": 4005,
             "CH2_RFPULSE_TCP_PORT": FACT["ch2.RFPULSE_TCP_PORT"][1],
-            "CH1_RGA_CSV_PATH": r"G:\공유 드라이브\VanaM_Sputter\RGA\Ch.1\RGA_spectrums.csv",
-            "CH2_RGA_CSV_PATH": r"G:\공유 드라이브\VanaM_Sputter\RGA\Ch.2\RGA_spectrums.csv",
+            "CH1_RGA_CSV_PATH": r"\\VanaM_NAS\VanaM_Sputter\RGA\Ch.1\RGA_spectrums.csv",
+            "CH2_RGA_CSV_PATH": r"\\VanaM_NAS\VanaM_Sputter\RGA\Ch.2\RGA_spectrums.csv",
             "CH2_MFC_SCALE_FACTORS_2": 10.0}
     for k, v in want.items():
         assert by[k].default == v, (k, by[k].default)

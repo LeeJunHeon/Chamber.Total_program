@@ -6,7 +6,7 @@ sim_transports 를 같이 쓴다 — 배선이 두 벌이 되지 않게).
   넣고, 챔버마다 MFC·IG·DC Pulse·RF Pulse·STM-100 시뮬레이터가 자기 챔버 모델을 읽고 쓴다. TSP 게이지(4001 — CH1 게이지와
   같은 포트)는 CH1 모델을 읽는 IG 시뮬레이터 하나 더. 카메라는 sim.camera_sim.SimCamera.
 - MFC 시뮬레이터의 스케일은 설정(CHn_MFC_SCALE_FACTORS_1..3)과 같게.
-- 기록 경로(local_paths): v1 기록 출력·1초 기록·폴백이 모두 out_dir 아래로(시험이 C:\\·G:\\·NAS 에 쓰지 않게).
+- 기록 경로(local_paths): v1 기록 출력·1초 기록·폴백이 모두 out_dir 아래로(시험이 C:\\·NAS 에 쓰지 않게).
 - OES·RGA 링크: 시험 하니스는 기본으로 만들지 않는다(links=False → 1초 행 off — 실제 하위 프로세스는 실행 프로그램만).
 - 시뮬레이터가 받은 요청 기록은 길이 제한(retention.sim_log, 없으면 simdev.SIM_LOG_KEEP) — 오래 돌려도 늘지 않게.
 """
@@ -106,7 +106,7 @@ class Ch12Rig(Ch12System):
 
 class Ch12FullRig(Ch12Rig):
     """실행 프로그램과 같은 엔진 조립(assembly.build)까지 붙인 시험대 — 엔진 전부·안전·명령 처리(core)·로봇(RobotOps·RobotApi
-    127.0.0.1 임의 포트)·허브·설정 적용. 기록·설정 폴더는 out_dir 아래(엑셀 메인 사본도 — v1 G: 경로에 쓰지 않게).
+    127.0.0.1 임의 포트)·허브·설정 적용. 기록·설정 폴더는 out_dir 아래(엑셀 메인 사본도 — NAS 경로에 쓰지 않게).
     robot_api=False 면 내부 명령 API 서버를 띄우지 않는다(로봇 명령은 robot_ops·dispatch_robot 으로)."""
 
     def __init__(self, clock, out_dir: Path, cfg: Optional[Dict[str, Any]] = None, mode: str = "sim",

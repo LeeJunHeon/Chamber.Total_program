@@ -319,7 +319,7 @@ def gen_excel() -> None:
         elif scen.get("pre") == "broken":
             main_dir.mkdir(parents=True, exist_ok=True)
             (main_dir / f"CH{scen['ch']}.xlsx").write_bytes(b"not a zip file")
-        elif scen.get("pre") == "blocked":     # G: 폴더 자리에 파일 → 저장 실패 → pending.xlsx
+        elif scen.get("pre") == "blocked":     # 구글 공유 드라이브(NAS) 폴더 자리에 파일 → 저장 실패 → pending.xlsx
             main_dir.parent.mkdir(parents=True, exist_ok=True)
             main_dir.write_bytes(b"blocker")
         if scen.get("pre") in ("phantom", "base_only", "broken"):

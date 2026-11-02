@@ -23,7 +23,7 @@ def test_v1_default_paths():
     assert [_w(x) for x in p.system_dirs()][0] == r"C:\VanaM_Logs\CH1&2\SYSTEM"
     assert _w(p.error_dirs()[0]) == r"C:\VanaM_Logs\CH1&2\ERROR" and _w(p.dump_dirs()[0]).endswith("RUNTIME_DUMP")
     assert _w(p.selfwatch_dir()) == r"C:\VanaM_Logs\CH1&2\selfwatch"
-    assert _w(p.calib_file(1)) == r"G:\공유 드라이브\VanaM_Sputter\Sputter\Calib\Database\Ch1_log.csv"
+    assert _w(p.calib_file(1)) == r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database\Ch1_log.csv"      # D07: NAS 같은 경로
     assert p.calib_pending(2) == p.fallback_root() / "CH2" / "Ch2_pending.csv"
     assert p.fallback_root() == Path(__file__).resolve().parents[2] / "Logs_LocalFallback"    # 저장소 루트(v1 과 같은 자리)
     assert _w(p.plc_coil_dirs()[0]) == r"C:\VanaM_Logs\CH1&2\CH1&2_PLC" and p.plc_coil_dirs()[1].name == "PLC_Coil"
@@ -34,7 +34,7 @@ def test_v1_default_paths():
     assert _w(p.oes_dir(2)) == r"C:\VanaM_Logs\OES\CH2"
     assert Paths.oes_filename(datetime(2026, 10, 30, 1, 2, 3)) == "OES_Data_20261030_010203.csv"
     prim, fb = p.rga_csv(1)
-    assert prim == r"G:\공유 드라이브\VanaM_Sputter\RGA\Ch.1\RGA_spectrums.csv"
+    assert prim == r"\\VanaM_NAS\VanaM_Sputter\RGA\Ch.1\RGA_spectrums.csv"
     assert Path(fb).parts[-3:] == ("RGA", "Ch.1", "RGA_spectrums.csv")
     assert _w(p.excel_local_first(1)) == r"C:\VanaM_Logs\CH1&2\LocalFirst\Process_log\CH1.xlsx"
 
@@ -73,9 +73,9 @@ def test_copy_sender_retries_until_ok(tmp_path):
         assert s.flush(2) and (tmp_path / "사본" / "a.txt").read_text(encoding="utf-8") == "a"
 
         def boom():
-            raise OSError("G: 없음")
+            raise OSError("NAS 없음")
         s.submit("boom", boom)
-        assert not s.flush(1) and "G: 없음" in s.last_error
+        assert not s.flush(1) and "NAS 없음" in s.last_error
     finally:
         s.stop()
 

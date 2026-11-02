@@ -1173,7 +1173,7 @@ ITEMS = [
          v2='v2/ch12/drivers/rga_link.py', test='v2/tests/test_rga_link.py::test_golden_scan_arguments_equal_v1_argv; v2/tests/test_inv_dev.py::test_rga_missing_worker_exe_fails_scan_without_device; v2/tests/test_rga_link.py::test_no_credentials_fails_without_touching_device', status='done',
          note='계정 값은 비밀값 취급 — v2 저장소에는 넣지 않고 설정 변환으로 옮김 / 워커 상주(D22)·계정 코드에서 뺌(D23)'),
     dict(id='DEV-231', area='dev',
-         desc="RGA CSV 경로: 정본 = config_common.RGA_CSV_PATH(채널 dict) 'ch{n}' → 'G:\\공유 드라이브\\VanaM_Sputter\\RGA\\Ch.{n}\\RGA_spectrums.csv', 폴백 = LOCAL_FALLBACK_RGA_DIR\\Ch.{n}\\RGA_spectrums.csv(<exe>\\Logs_LocalFallback\\RGA). CSV 저장은 워커 책임",
+         desc="RGA CSV 경로: 정본 = config_common.RGA_CSV_PATH(채널 dict) 'ch{n}' → '<구글 공유 드라이브>\\VanaM_Sputter\\RGA\\Ch.{n}\\RGA_spectrums.csv', 폴백 = LOCAL_FALLBACK_RGA_DIR\\Ch.{n}\\RGA_spectrums.csv(<exe>\\Logs_LocalFallback\\RGA). CSV 저장은 워커 책임",
          v1='device/rga.py:134-156;lib/config_common.py:127-136;lib/config_common.py:30',
          v2='v2/ch12/drivers/rga_link.py; v2/ch12/outputs/paths.py', test='v2/tests/test_rga_link.py::test_golden_scan_arguments_equal_v1_argv; v2/tests/test_rga_link.py::test_csv_fallback_and_csv_fail_keep_measurement; v2/tests/test_inv_app.py::test_worker_dll_and_rga_fallback_paths', status='done',
          note='D27·D171'),

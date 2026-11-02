@@ -21,7 +21,7 @@ r"""챔버12 bench 실측 도구 — 장비 노트북에서 v1 을 끈 상태로
   다음) + PLC 첫 읽기의 코일·레지스터 전부 → 요약 표 + inventory.json(원문 그대로 — 해석은 드라이버 파서로 '뜻'에만).
 - N 분 1초 수집(SnapshotBus·TickLoop — 실행 프로그램과 같은 읽기) → 응답 시간(p50·p99·최대)·보낸 간격(최소·p50)·무응답·품질 통계.
 - 기록: 바탕화면\v2_bench_YYYYMMDD_HHMMSS — events.jsonl(처음부터), inventory.json, 스냅샷(SQLite·CSV), 통신 녹화 rec_<장비>.jsonl,
-  summary.txt. NAS·G:·운영 폴더(LOG_ROOT_DIR·LOCAL_DATA_DIR 등)에는 쓰지 않는다(그 아래를 --out 으로 주면 거부 — 종료 4).
+  summary.txt. NAS·운영 폴더(LOG_ROOT_DIR·LOCAL_DATA_DIR 등)에는 쓰지 않는다(그 아래를 --out 으로 주면 거부 — 종료 4).
   Ctrl+C 로 언제든 멈출 수 있고, 멈춰도 요약은 남긴다.
 종료 코드: 0 정상, 2 안전 확인에서 멈춤, 3 연결 실패, 4 기록 폴더 거부.
 """
@@ -83,12 +83,10 @@ def _norm(p: str) -> str:
 
 
 def out_refused(out: Path, cfg: Dict[str, Any]) -> Optional[str]:
-    """기록 폴더가 NAS·G:·운영 폴더 아래면 사유. bench 기록은 따로 둔다(운영 기록·동기화와 섞이지 않게)."""
+    """기록 폴더가 NAS·운영 폴더 아래면 사유. bench 기록은 따로 둔다(운영 기록·동기화와 섞이지 않게)."""
     s = _norm(str(out))
     if s.startswith("\\\\"):
         return f"NAS(UNC) 경로: {out}"
-    if s.startswith("g:"):
-        return f"G: 드라이브: {out}"
     for k in FORBIDDEN_OUT_KEYS:
         root = _norm(str(cfg.get(k) or ""))
         if root and (s == root or s.startswith(root + "\\")):

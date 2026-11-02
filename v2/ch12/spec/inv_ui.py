@@ -116,7 +116,7 @@ ITEMS = [
          v2="v2/ch12/drivers/camera.py; v2/ch12/shared.py", test="v2/tests/test_shared.py::test_camera_participants_all_mode_and_leave; v2/tests/test_camera.py::test_disk_low_before_open_and_notify_once_per_process", status="done",
          note="dev 영역과 겹침 / 알림은 camera disk_low 이벤트 → 포털 집계 카드 '[CAM] …'(CHAT-057)"),
     dict(id="UI-013", area="ui",
-         desc="PC 런타임 조립: gas MFC 는 항상 MFC1, 압력·IG 는 처음엔 CH1. GDRIVE_LOG_DIR(기본 'G:/공유 드라이브/VanaM_Sputter/Process_log') 주입, "
+         desc="PC 런타임 조립: gas MFC 는 항상 MFC1, 압력·IG 는 처음엔 CH1. GDRIVE_LOG_DIR(기본 '<구글 공유 드라이브>/VanaM_Sputter/Process_log') 주입, "
               "PC 완료 콜백, '같은 CH 챔버가 바쁜지(is_busy)' 확인 함수 주입(실패 로그 '챔버 상태 확인 함수 주입 실패'). 초기화 실패 시 pc=None·"
               "'Failed to initialize PlasmaCleaningRuntime' 로그",
          v1="main.py:556-622; lib/config_common.py:831",
@@ -886,7 +886,7 @@ ITEMS = [
          v2="v2/robot_server/", test="", status="na",
          note="빌드·실행 스크립트에서 참조를 찾지 못함(grep main_server/robot_server) — 사용 여부 사용자 확인 필요 / apps/robot_server 는 v1 에서 쓰지 않음(메인이 50070 직접 — main.py:1854, D132) — v2 로봇 서버가 그 자리"),
     dict(id="UI-136", area="ui",
-         desc="로봇 서버 페이지 기록: <log_root>/CH1&2_Server/RobotServer/robot_server_page_YYYYMMDD.log(log_root 고정 'G:\\공유 드라이브\\VanaM_Sputter\\Sputter\\Logs', 실패 시 "
+         desc="로봇 서버 페이지 기록: <log_root>/CH1&2_Server/RobotServer/robot_server_page_YYYYMMDD.log(log_root 고정 '<구글 공유 드라이브>\\VanaM_Sputter\\Sputter\\Logs', 실패 시 "
               "cwd/Logs/CH1&2_Server/RobotServer), 1 s 타이머로 UI 스레드에서 동기 쓰기, 2000줄이면 즉시, 실패 'Auto-save failed: …' 표시. 숨김은 cmd=GET_SPUTTER_STATUS 줄만. "
               "5000줄 넘으면 끝 4000줄만 남김, 자동 스크롤은 커서 끝 이동. 'Save to file' → robot_server_comm_YYYYmmdd_HHMMSS.log",
          v1="apps/robot_server/runtime/server_page.py:47-66; apps/robot_server/runtime/server_page.py:186-308; apps/robot_server/main_server.py:218",

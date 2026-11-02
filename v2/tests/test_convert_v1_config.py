@@ -232,3 +232,21 @@ def test_cli(tmp_path, capsys):
     bad = _v1(tmp_path / "b", {"common": {"OOPS": 1}})
     assert C.main(["--v1-root", str(bad), "--out", str(tmp_path / "o2")]) == 1
     assert not (tmp_path / "o2").exists()
+
+
+def test_gdrive_paths_become_nas_paths(tmp_path):
+    """D07(사용자 결정 2026-11-02): v1 의 구글 공유 드라이브 경로는 NAS 의 같은 경로로 — 파일명·형식 그대로, 나머지 경로 값은 그대로."""
+    from v2.common.winpaths import v1_gdrive_to_nas, NAS_PREFIX
+    g = "G" + ":"
+    res = _conv(tmp_path, {"common": {"SPUTTER_CALIB_DB_DIR": g + r"\공유 드라이브\VanaM_Sputter\Sputter\Calib\Database",
+                                     "GDRIVE_LOG_DIR": g + "/공유 드라이브/VanaM_Sputter/Process_log",
+                                     "CAMERA_LOG_ROOT": r"D:\Cam"},
+                           "ch1": {"RGA_CSV_PATH": g + r"\공유 드라이브\VanaM_Sputter\RGA\Ch.1\RGA_spectrums.csv"}})
+    assert res.ok, res.errors
+    assert res.values["SPUTTER_CALIB_DB_DIR"] == NAS_PREFIX + r"\Sputter\Calib\Database"
+    assert res.values["GDRIVE_LOG_DIR"] == NAS_PREFIX + r"\Process_log"
+    assert res.values["CH1_RGA_CSV_PATH"] == NAS_PREFIX + r"\RGA\Ch.1\RGA_spectrums.csv"
+    assert res.values["CAMERA_LOG_ROOT"] == r"D:\Cam"
+    assert not any(g in str(v) for v in res.values.values())                   # 변환 결과에 G 드라이브가 남지 않음
+    assert v1_gdrive_to_nas(g + "/공유 드라이브/다른폴더/x") == g + "/공유 드라이브/다른폴더/x"   # VanaM_Sputter 밖은 그대로
+    assert v1_gdrive_to_nas(r"\\NAS\x") == r"\\NAS\x"

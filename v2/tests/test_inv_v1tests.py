@@ -176,8 +176,8 @@ def _open_paths():
 
 @pytest.mark.skipif(not Path("/proc/self/fd").is_dir(), reason="리눅스 /proc 필요")
 def test_t004_calib_csv_not_held_open(tmp_path):
-    """controller/data_logger.py:156-163·472 — 시작·기록 뒤 파일 손잡이가 열려 있지 않다(G: 가 열린 파일을 올리지 않음).
-    v2 는 D07(로컬 정본 먼저 → 사본 스레드가 G: 로) — 두 파일 모두 기록 뒤 닫혀 있다. 로그 '1행 기록 완료 (NAS)'."""
+    """controller/data_logger.py:156-163·472 — 시작·기록 뒤 파일 손잡이가 열려 있지 않다(구글 공유 드라이브 동기화가 열린 파일을 올리지 않음).
+    v2 는 D07(로컬 정본 먼저 → 사본 스레드가 NAS 로) — 두 파일 모두 기록 뒤 닫혀 있다. 로그 '1행 기록 완료 (NAS)'."""
     from v2.ch12.outputs.base import QueueWriter
     from v2.ch12.outputs.calib_csv import CalibCsv
     from v2.ch12.outputs.paths import CopySender
@@ -1734,7 +1734,7 @@ def test_t106_measure_blocked_until_link_ok_sends_no_commands(oes_env):
 
 # ═════════════ OES 저장 위치·완료 문구(v1 tests/test_oes_local_dir.py) ═════════════
 def test_t099_worker_never_copies_to_g_and_keeps_local():
-    """apps/oes_service/oes_api.py:134 _copy_csv_to_nas → (False, None, None, False) — G: 경로·robocopy 없음, 로컬 CSV 유지."""
+    """apps/oes_service/oes_api.py:134 _copy_csv_to_nas → (False, None, None, False) — 구글 공유 드라이브 경로·robocopy 없음, 로컬 CSV 유지."""
     import asyncio
     from v2.ch12.workers import oes_common as C
     assert asyncio.run(C._copy_csv_to_nas(Path("x.csv"), 1)) == (False, None, None, False)
@@ -1743,11 +1743,11 @@ def test_t099_worker_never_copies_to_g_and_keeps_local():
 @pytest.mark.parametrize("obj,msg,nas", [
     ({"ok": True, "nas_ok": False}, "OES 측정 완료(로컬 저장)", False),
     ({"ok": True, "nas_ok": False, "nas_error": "robocopy failed rc=8"}, "OES 측정 완료(로컬 저장, NAS 실패: robocopy failed rc=8)", False),
-    ({"ok": True, "nas_ok": True, "nas_csv": r"G:\공유 드라이브\OES\CH1\a.csv", "local_deleted": False}, "OES 측정 완료(NAS 저장)", True),
+    ({"ok": True, "nas_ok": True, "nas_csv": r"\\VanaM_NAS\VanaM_Sputter\OES\CH1\a.csv", "local_deleted": False}, "OES 측정 완료(NAS 저장)", True),
 ])
 def test_t100_daemon_finish_messages(tmp_path, obj, msg, nas):
-    """device/oes.py:648·1328 — 새 워커는 로컬 저장 문구·로컬 CSV 유지, 재빌드 전 옛 워커(G: 복사 성공·로컬 못 지움)면 'NAS 저장'·
-    out_csv = G: 경로·로컬 삭제, NAS 실패면 '(로컬 저장, NAS 실패: …)'."""
+    """device/oes.py:648·1328 — 새 워커는 로컬 저장 문구·로컬 CSV 유지, 재빌드 전 옛 워커(NAS 복사 성공·로컬 못 지움)면 'NAS 저장'·
+    out_csv = NAS 경로·로컬 삭제, NAS 실패면 '(로컬 저장, NAS 실패: …)'."""
     import itertools
     from v2.common.clock import VirtualClock
     from v2.ch12.drivers import oes_link as OL

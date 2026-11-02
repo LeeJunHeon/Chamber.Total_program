@@ -34,6 +34,8 @@
 - v2/common/config_store.py ConfigStore(같은 정의·규칙·스키마 해시)로 버전 1 을 적용 — 전체 검사(형식·범위·키 사이 규칙) 통과해야 한다.
   출력 폴더에 이미 config_active.json 이 있으면 멈춘다(--force 가 아니면).
 - 변환 기록 convert_report.json(키마다 결과·근거) — 화면 출력과 같은 내용.
+경로 변환(D07, 사용자 결정 2026-11-02): v1 값이 구글 공유 드라이브 경로(드라이브 문자 G 의 '공유 드라이브\\VanaM_Sputter\\<경로>')이면
+  NAS 의 같은 경로(\\\\VanaM_NAS\\VanaM_Sputter\\<경로>)로 바꿔 옮긴다(NAS /volume1/VanaM_Sputter 가 그 드라이브와 동기화됨). 파일명·형식은 그대로.
 비밀값(웹 토큰·챗 웹훅 — v1 lib/config_local.py)은 settings.json 에 없다. 노트북의 local_override.json 에 손으로 넣는다(커밋 금지).
 """
 from __future__ import annotations
@@ -52,6 +54,7 @@ from v2.ch12.params import table as params_table
 from v2.ch12.spec import settings_v1facts as facts
 from v2.common.config_store import ConfigStore
 from v2.common.paramdef import PType, check_value
+from v2.common.winpaths import v1_gdrive_to_nas_deep
 
 ROOT = Path(__file__).resolve().parents[2]
 REPORT = "convert_report.json"
@@ -358,6 +361,9 @@ class Converter:
                 note = "v1 에서 읽히지 않던 채널 값 — v1 실효값(common)"
             if name == "THICKNESS_FACTOR_FILE":
                 val, note = "", "설정 폴더의 thickness_factors_chN.json(두께 파일 변환 참고)"
+            nas = v1_gdrive_to_nas_deep(val)          # D07(사용자 결정 2026-11-02): 구글 공유 드라이브 경로 → NAS 의 같은 경로
+            if nas != val:
+                val, note = nas, (note + "; " if note else "") + "구글 공유 드라이브 경로를 NAS(\\\\VanaM_NAS\\VanaM_Sputter) 의 같은 경로로 바꿈"
             out, err = self._to_v2(p, val)
             if err:
                 res.errors.append(f"{path} → {err}")

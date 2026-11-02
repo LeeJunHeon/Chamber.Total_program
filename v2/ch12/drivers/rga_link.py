@@ -8,11 +8,12 @@ v1 device/rga.py(RGAWorkerClient) 동작을 스레드로 다시 쓴 것(v1 impor
   worker_version 없음 → '구버전' status, csv_ok=False → 'CSV 저장 실패(primary=..): .. → fallback=..', csv_fallback_used →
   '정본 저장 실패 → 로컬 폴백에 저장'(측정 성공 유지 — CSV 실패는 공정 실패가 아니다).
 - 시간 초과·통신 예외·취소면 워커를 바로 kill(2 s), cleanup 은 terminate → 2 s → kill → 2 s.
-- CSV 인자: 정본 CHn_RGA_CSV_PATH(G:\공유 드라이브\VanaM_Sputter\RGA\Ch.n\RGA_spectrums.csv — v1 그대로, D171·D07 확인 필요),
+- CSV 인자: 정본 CHn_RGA_CSV_PATH(\\VanaM_NAS\VanaM_Sputter\RGA\Ch.n\RGA_spectrums.csv — v1 과 같은 순서로 NAS 에 직접, 실패면 로컬 폴백, D171·D350),
   폴백 LOCAL_FALLBACK_RGA_DIR\Ch.n\RGA_spectrums.csv.
 v2 연결부: 워커는 상주(JSONL) — v1 은 시도마다 '--ch --timeout --csv --csv_fallback' 로 새로 띄웠다. v2 는 같은 이름의 인자를
   scan 명령 줄로 보내고(id 로 응답 매칭), 시간 초과·죽음이면 kill 하고 다음 시도에 새로 띄운다(v1 과 같은 결과).
-  장비 계정은 설정의 비밀값 RGA_NET({"ch1": {"user", "password"}, ...})에서 명령 줄로만 넘긴다(명령줄·로그에 남기지 않음).
+  장비 계정은 설정 키 RGA_USER·RGA_PASSWORD(기본 admin/admin — 장비 공장 기본 계정, D23)를 스캔 명령 줄(stdin)로 넘긴다
+  (프로세스 명령줄 인자에는 넣지 않고, 보낸 줄 기록에는 암호를 가린다).
 1초 행(블록 "<ch>.rga")에는 상태만: running(워커 살아 있음)·measuring(스캔 중)·sample_age_s(마지막 성공 스캔 나이).
 """
 from __future__ import annotations
@@ -30,7 +31,7 @@ from v2.common.snapshot import DeviceBlock, FieldDef, FType
 from v2.ch12.drivers import worker_proc as wp
 
 MODULE = "v2.ch12.workers.rga_worker"
-DEFAULT_CSV = r"G:\공유 드라이브\VanaM_Sputter\RGA\Ch.{n}\RGA_spectrums.csv"
+DEFAULT_CSV = r"\\VanaM_NAS\VanaM_Sputter\RGA\Ch.{n}\RGA_spectrums.csv"
 
 BUDGET = dict(queries_per_tick=0, bytes_tx=0, bytes_rx=0, min_gap_ms=0, fits_1s=True, alternate=None,
               note="장비 통신 없음 — 1초 행은 링크 상태만 메모리에서. RGA 스캔은 공정 스텝(RGA_SCAN)에서만 워커가 수행(최대 60 s × 3)")
@@ -110,16 +111,7 @@ class RgaLink:
         return primary, fallback
 
     def _creds(self) -> tuple:
-        net = self._c("RGA_NET", {}) or {}
-        if isinstance(net, str):         # 비밀값은 JSON 글자로 저장(params/rga.py)
-            try:
-                net = json.loads(net)
-            except ValueError:
-                net = {}
-        ent = net.get(f"ch{self.ch}", net) if isinstance(net, dict) else {}
-        if not isinstance(ent, dict):
-            ent = {}
-        return str(ent.get("user", "") or ""), str(ent.get("password", "") or "")
+        return str(self._c("RGA_USER", "admin") or ""), str(self._c("RGA_PASSWORD", "admin") or "")
 
     def _base_argv(self) -> List[str]:
         exe = str(self._c("RGA_WORKER_EXE", "") or "")

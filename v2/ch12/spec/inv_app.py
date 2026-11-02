@@ -132,7 +132,7 @@ ITEMS = [
          desc="연속 읽기 실패 복구: 3번째에 포트 리셋(spSetupGivenChannel, 4 s — 넘으면 hard_abort 125 'reset_timeout'), 10번째부터 재초기화(최소 30 s 간격, 실패면 일시 중지). 읽은 직후 목록이 바뀌었으면 그 샘플 버림. finished 에 link_pause_count·link_pause_s·reinit_count·reset_count",
          v1="apps/oes_service/oes_api.py:155-157,1187-1193,1236-1250,1302-1327", v2="v2/ch12/workers/oes_worker.py", test="", status="todo", note=""),
     dict(id="APP-037", area="app",
-         desc="OES 측정 CSV(워커가 씀): <out_dir>\\OES_Data_YYYYmmdd_HHMMSS.csv(메인이 이름 지정), utf-8(BOM 없음), 1행 'Time' + 파장(또는 픽셀 번호) float, 이후 행 'HH:MM:SS'(날짜 없음) + 세기 float, 첫 프레임 즉시 1행, 매 행 flush, 끝에 fsync·close. 로컬에만 남김(NAS·G: 복사 안 함 — _copy_csv_to_nas 는 형식만 남은 빈 함수)",
+         desc="OES 측정 CSV(워커가 씀): <out_dir>\\OES_Data_YYYYmmdd_HHMMSS.csv(메인이 이름 지정), utf-8(BOM 없음), 1행 'Time' + 파장(또는 픽셀 번호) float, 이후 행 'HH:MM:SS'(날짜 없음) + 세기 float, 첫 프레임 즉시 1행, 매 행 flush, 끝에 fsync·close. 로컬에만 남김(NAS·구글 공유 드라이브(NAS) 복사 안 함 — _copy_csv_to_nas 는 형식만 남은 빈 함수)",
          v1="apps/oes_service/oes_api.py:121-138,1112-1120,1608-1637,1713-1726,2020-2049,2123-2141", v2="v2/ch12/workers/oes_worker.py", test="", status="todo", note=""),
     dict(id="APP-038", area="app",
          desc="OES started JSON: kind started, ok, ch, usb, resolved_usb, out_csv, cols, model, sample_interval_s, avg_count, integration_ms(첫 프레임·머리글 뒤)",
@@ -173,8 +173,8 @@ ITEMS = [
          desc="RGA 실행: '<exe> --ch N --timeout <RGA_WORKER_TIMEOUT_S 60.0> [--csv <정본>] [--csv_fallback <폴백>]', stdin DEVNULL, stdout·stderr PIPE, Windows 는 CREATE_NO_WINDOW, communicate 를 timeout 동안 기다림",
          v1="device/rga.py:180-262; runtime/chamber_runtime.py:641-648,1436-1447; lib/config_common.py:93", v2="v2/ch12/drivers/rga_link.py", test="", status="todo", note=""),
     dict(id="APP-050", area="app",
-         desc="RGA CSV 경로 인자: 정본 = RGA_CSV_PATH(없으면 RGA_XLSX_PATH)['ch{n}'] = G:\\공유 드라이브\\VanaM_Sputter\\RGA\\Ch.{n}\\RGA_spectrums.csv, 폴백 = LOCAL_FALLBACK_RGA_DIR\\Ch.{n}\\RGA_spectrums.csv",
-         v1="device/rga.py:134-156; lib/config_common.py:30,128-136", v2="v2/ch12/drivers/rga_link.py", test="", status="todo", note="정본이 G: 직접 기록(로컬 먼저 원칙과 다름) — 결정 목록"),
+         desc="RGA CSV 경로 인자: 정본 = RGA_CSV_PATH(없으면 RGA_XLSX_PATH)['ch{n}'] = <구글 공유 드라이브>\\VanaM_Sputter\\RGA\\Ch.{n}\\RGA_spectrums.csv, 폴백 = LOCAL_FALLBACK_RGA_DIR\\Ch.{n}\\RGA_spectrums.csv",
+         v1="device/rga.py:134-156; lib/config_common.py:30,128-136", v2="v2/ch12/drivers/rga_link.py", test="", status="todo", note="정본이 구글 공유 드라이브(NAS) 직접 기록(로컬 먼저 원칙과 다름) — 결정 목록"),
     dict(id="APP-051", area="app",
          desc="RGA 재시도: RGA_MAX_ATTEMPTS(3)회, 실패 사이 RGA_RETRY_DELAY_S(1.0 s) — 1~2번째 실패는 status '[RGA] attempt i/n 실패 → 재시도(1.0s): ..' 만, 마지막 실패에만 failed + finished. 시작 때 status '[RGA] 스캔 시작 — 예산 3회 x 60s(+대기 1s) = 총 182s'. 공정 스텝 예산 rga_step_timeout_ms = n×t×1000 + (n-1)×d×1000 + 5000",
          v1="device/rga.py:158-196,365-405; lib/config_common.py:95-125", v2="v2/ch12/drivers/rga_link.py", test="", status="todo", note=""),
@@ -190,7 +190,7 @@ ITEMS = [
 
     # ───────────────────────── RGA: 워커 안(apps/rga_service/rga_api.py) ─────────────────────────
     dict(id="APP-055", area="app",
-         desc="RGA 워커 장비 표: CH1 192.168.1.20, CH2 192.168.1.21, 사용자 admin/admin(코드 고정), 기본 CSV G:\\공유 드라이브\\VanaM_Sputter\\RGA\\Ch.{n}\\RGA_spectrums.csv. 인자 --ch {1,2}(필수) --timeout(기본 30) --csv --csv_fallback, 모르는 인자 무시",
+         desc="RGA 워커 장비 표: CH1 192.168.1.20, CH2 192.168.1.21, 사용자 admin/admin(코드 고정), 기본 CSV <구글 공유 드라이브>\\VanaM_Sputter\\RGA\\Ch.{n}\\RGA_spectrums.csv. 인자 --ch {1,2}(필수) --timeout(기본 30) --csv --csv_fallback, 모르는 인자 무시",
          v1="apps/rga_service/rga_api.py:30-44,149-156", v2="v2/ch12/workers/rga_worker.py", test="", status="todo", note="자격 정보는 v1 코드 그대로(장비 기본값)"),
     dict(id="APP-056", area="app",
          desc="RGA 측정 순서(srsinst.rga RGA100): RGA100('tcpip', ip, user, password) → filament.turn_on() → scan.get_histogram_scan() → filament.turn_off() → scan.get_partial_pressure_corrected_spectrum(histogram) → scan.get_mass_axis(for_analog_scan=False), finally 에서 filament.turn_off() 한 번 더·disconnect(). 소켓 기본 타임아웃 max(5, --timeout)",
