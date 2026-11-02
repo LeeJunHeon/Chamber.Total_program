@@ -41,6 +41,7 @@ except Exception:      # pragma: no cover - 구버전/설치 이상 시 문자�
     ModbusIOException = ()     # type: ignore[assignment,misc]
 
 from lib import config_common as cfgc   # ✅ 추가: Config 팝업에서 바뀐 값 소스
+from lib import turbo_watch             # 터보 꺼짐 지속 알림(판정·발송기 — chat 은 main 이 등록)
 from util.log_hub import DailyCsvListAppender
 from util.app_logging import AWAITED_TASK_PREFIX   # await 되는 내부 태스크 표식(TASK CRASHED 오탐 방지)
 from lib import link_state                          # PLC 링크 다운 플래그(채팅 억제용, controller 와 공유)
@@ -1915,6 +1916,27 @@ class AsyncPLC:
                 pass
         self._plc_coil_csv_writer = None
 
+    def _turbo_watch_feed(self, snap: Dict[str, bool]) -> None:
+        """코일 로거 한 행 — CH1/CH2 터보 켜짐(TURBO_n_SW and TURBO_n_인터락 = 래더 START_OUT 식)을 판정기에 넘기고,
+        이벤트가 나면 PLC 로그 한 줄 + 발송기(turbo_watch.emit). 어떤 예외도 로거 루프로 올리지 않는다."""
+        try:
+            w = getattr(self, "_turbo_watch", None)
+            if w is None:
+                w = turbo_watch.TurboOffWatch(lambda: float(getattr(cfgc, "TURBO_OFF_ALERT_S", 0.0) or 0.0))
+                self._turbo_watch = w
+            now = time.monotonic()
+            for ch in (1, 2):
+                sw, il = snap.get(f"TURBO_{ch}_SW"), snap.get(f"TURBO_{ch}_인터락")
+                on = None if (sw is None or il is None) else bool(sw and il)
+                ev = w.update(ch, on, now)
+                if ev:
+                    title, sub, _status = turbo_watch.card_text(ev)
+                    with contextlib.suppress(Exception):
+                        self.log("TURBO WATCH: %s — %s", title, sub)
+                    turbo_watch.emit(ev)
+        except Exception:
+            pass
+
     async def _plc_coil_log_loop(self) -> None:
         evt: asyncio.Event = self._plc_coil_log_stop
         interval = float(self._plc_coil_log_interval)
@@ -2013,6 +2035,9 @@ class AsyncPLC:
                 _emit_summary()
                 await asyncio.sleep(interval)
                 continue
+
+            # ✅ 터보 꺼짐 지속 판정 — 스냅샷이 성공한 행에서만(건너뛴 행 = 판정값 없음). 예외는 안에서 삼킨다.
+            self._turbo_watch_feed(snap)
 
             reg_snap: Dict[str, int] = {}
             if reg_keys:

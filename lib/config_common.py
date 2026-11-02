@@ -667,6 +667,7 @@ PLC_COIL_LOG_BUDGET_S   = 4.0   # 한 tick 스냅샷 총 예산(초). INTERVAL_S
 PLC_COIL_LOG_SUMMARY_S  = 60.0  # 스킵 사유 요약 로그 주기(초)
 PLC_COIL_LOG_BACKOFF_AFTER = 2  # 저우선 연속 실패 이 횟수부터 로거가 스스로 쉰다 (0=사용 안 함)
 PLC_COIL_LOG_PROMOTE_AFTER = 12 # 연속 성공 이 횟수마다 블록 계획 한 단계 승격 (0이면 승격 안 함)
+TURBO_OFF_ALERT_S = 3600.0      # CH1/CH2 터보가 이만큼(초) 계속 꺼져 있으면 PLC 끊김 방으로 알림(코일 로거 기준). 0 이하 = 끔
 PLC_RECONNECT_BACKOFF_S = 5.0   # 연결 실패 후 이 시간 동안은 재연결을 재시도하지 않는다(0이면 사용 안 함)
 PLC_TIMEOUT_CLOSE_AFTER = 3     # 연속 타임아웃이 이 횟수에 도달해야 소켓을 재생성한다(1회로는 유지)
 PLC_FG_CONNECT_ATTEMPTS = 1     # 공정/명령 앞단에서의 접속 시도 횟수(백그라운드는 connect_retry+1)

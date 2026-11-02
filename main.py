@@ -62,6 +62,7 @@ from runtime.server_page import ServerPage  # ✅ NEW (server_page.py 위치에 
 from lib import config_ch1, config_ch2
 from lib import config_common as cfgc
 from lib import link_state  # PLC 링크 다운 중 억제된 알림 건수(재연결 카드에 합산)
+from lib import turbo_watch  # 터보 꺼짐 지속 알림 발송기(PLC 끊김 전용 방)
 from lib import config_local as cfgl  # CHAT_WEBHOOK_URL 로드
 
 # 에러코드 팝업
@@ -326,6 +327,27 @@ class MainWindow(QWidget):
 
         with contextlib.suppress(Exception):
             link_state.set_emitter(_emit_link_card)
+
+        # ★ 터보 꺼짐 지속/다시 켜짐 → PLC 끊김 전용 방(chat_plc 가 있을 때만). 판정은 PLC 코일 로거(lib/turbo_watch).
+        def _emit_turbo_card(kind: str, info: dict) -> None:
+            def _send():
+                try:
+                    notifier = self.chat_plc
+                    if notifier is None:
+                        return
+                    title, sub, status = turbo_watch.card_text(info)
+                    notifier._post_card(title, subtitle=sub, status=status, urgent=True)
+                except Exception:
+                    pass
+            try:
+                self._loop.call_soon_threadsafe(_send)
+            except Exception:
+                with contextlib.suppress(Exception):
+                    _send()
+
+        if self.chat_plc is not None:
+            with contextlib.suppress(Exception):
+                turbo_watch.set_emitter(_emit_turbo_card)
 
         # ★ 챔버/플라즈마별 PLC Proxy 생성 (로그 출처 구분용)
         self._plc_ch1 = _PLCProxy(self.plc, "CH1")
