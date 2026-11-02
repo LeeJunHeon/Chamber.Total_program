@@ -29,6 +29,18 @@ ADDR_RS232 = 0x80         # RS-232 고정 주소
 
 WIN_ONOFF  = "011"        # Start/Stop: write '1'/'0'
 WIN_STATUS = "205"        # Status: read numeric
+WIN_ACTIVE_FILAMENT = "671"   # Active filament: 0 = Mini Ti-Ball, 1/2/3 = TSP filament 1/2/3 (읽기만 씀)
+WIN_ERROR_CODE = "206"        # Error code: 0 없음 … 5 단락(ERROR_LABELS)
+
+# 매뉴얼 Tab.10 — 206 Error code
+ERROR_LABELS = {
+    0: "없음",
+    1: "과열",
+    2: "Mini Ti-Ball 끊김",
+    3: "TSP 필라멘트 끊김",
+    4: "TSP 필라멘트 전체 소진",
+    5: "단락",
+}
 
 # 단문/프레임 모두에서 쓰이는 코드
 ACK = 0x06
@@ -88,6 +100,30 @@ def _build_frame(win3: str, write: bool, data_ascii: Optional[str], *, addr: int
 
 def _decode_ascii_numeric(s: str) -> int:
     return int(s.strip() or "0")
+
+
+def _decode_ascii_strict(s: Optional[str]) -> Optional[int]:
+    """숫자 칸만 정수로(빈 값·숫자 아님 → None). 필라멘트·에러 코드처럼 0 이 뜻을 가진 칸에 쓴다."""
+    t = (s or "").strip()
+    return int(t) if t.isdigit() else None
+
+
+def filament_label(n: Optional[int]) -> str:
+    """671 Active filament 표시 — 0 Mini Ti-Ball, 1~3 필라멘트 n."""
+    if n is None:
+        return "읽기 실패"
+    if n == 0:
+        return "Mini Ti-Ball"
+    if n in (1, 2, 3):
+        return f"필라멘트 {n}"
+    return f"알 수 없음({n})"
+
+
+def error_label(code: Optional[int]) -> str:
+    """206 Error code 표시(매뉴얼 Tab.10)."""
+    if code is None:
+        return "읽기 실패"
+    return ERROR_LABELS.get(int(code), f"알 수 없음({code})")
 
 # ── 본체 ─────────────────────────────────────────────────────
 @dataclass
@@ -386,6 +422,15 @@ class AsyncTSP:
             return _decode_ascii_numeric(resp)
         except Exception:
             return None
+
+    # ── 필라멘트(671)·에러 코드(206) 읽기 — 읽기만(장비에 쓰지 않음) ─────────
+    async def get_active_filament(self) -> Optional[int]:
+        """사용 중 필라멘트 번호(0 = Mini Ti-Ball, 1~3). 응답 없음·숫자 아님이면 None."""
+        return _decode_ascii_strict(await self.read_win(WIN_ACTIVE_FILAMENT))
+
+    async def get_error_code(self) -> Optional[int]:
+        """에러 코드(0 없음 … 5 단락). 응답 없음·숫자 아님이면 None."""
+        return _decode_ascii_strict(await self.read_win(WIN_ERROR_CODE))
 
     # ── 공개 API: ON/OFF ────────────────────────────────────
     async def on(self, *, wait_ok: float = 1.5) -> None:

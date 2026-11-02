@@ -10,7 +10,7 @@ from datetime import datetime, timedelta
 
 # 장비/컨트롤러
 from device.ig import AsyncIG
-from device.tsp import AsyncTSP
+from device.tsp import AsyncTSP, error_label, filament_label
 from controller.tsp_controller import TSPProcessController, TSPRunConfig
 from controller.chat_notifier import ChatNotifier
 from controller.runtime_state import runtime_state # CH 상태 조회용
@@ -503,9 +503,77 @@ class TSPPageController:
 
 
     # ── 내부 실행 루틴 ─────────────────────────────────────
+    # ─────────────────────────────────────────────────────
+    # 사용 중 필라멘트(671)·에러 코드(206) — 시작·종료 때 1번씩 읽어 로그에만 남긴다(장비에 쓰지 않음)
+    # ─────────────────────────────────────────────────────
+    _FIL_READ_TIMEOUT_S = 3.0
+
+    @staticmethod
+    def _fil_txt(n: Optional[int]) -> str:
+        return f"{n}번" if n in (1, 2, 3) else filament_label(n)
+
+    async def _fil_read(self, getter) -> tuple[Optional[int], str]:
+        """(값, 실패 사유) — 짧은 타임아웃·예외 삼킴(CancelledError 는 그대로 올린다)."""
+        try:
+            v = await asyncio.wait_for(getter(), timeout=self._FIL_READ_TIMEOUT_S)
+        except asyncio.TimeoutError:
+            with contextlib.suppress(Exception):          # 늦은 응답이 다음 명령에 섞이지 않게 세션을 끊는다(다음 호출이 재연결)
+                if self.tsp:
+                    await self.tsp.aclose()
+            return None, f"{self._FIL_READ_TIMEOUT_S:g}초 응답 없음"
+        except Exception as e:
+            return None, f"{e!r}"
+        if v is None:
+            return None, "응답 없음 또는 숫자 아님"
+        return int(v), ""
+
+    async def _log_filament_start(self) -> Optional[int]:
+        try:
+            n, why = await self._fil_read(self.tsp.get_active_filament)
+        except asyncio.CancelledError:
+            raise
+        except Exception as e:
+            n, why = None, f"{e!r}"
+        if n is None:
+            self._log(f"[FILAMENT] 시작 시 필라멘트 번호 읽기 실패({why})")
+        else:
+            self._log(f"[FILAMENT] 시작 시 사용 중 필라멘트: {self._fil_txt(n)}")
+        return n
+
+    async def _log_filament_end(self, start: Optional[int]) -> None:
+        n, why = await self._fil_read(self.tsp.get_active_filament)
+        code, cwhy = await self._fil_read(self.tsp.get_error_code)
+        err = f"에러 코드 {code} = {error_label(code)}" if code is not None else f"에러 코드 읽기 실패({cwhy})"
+        if n is None:
+            self._log(f"[FILAMENT] 종료 시 필라멘트 번호 읽기 실패({why}) ({err})")
+        else:
+            self._log(f"[FILAMENT] 종료 시 사용 중 필라멘트: {self._fil_txt(n)} ({err})")
+        if start is not None and n is not None:
+            if start != n:
+                self._log(f"[FILAMENT] 실행 중 필라멘트 변경: {self._fil_txt(start)} → {self._fil_txt(n)} "
+                          f"(컨트롤러 자동 전환 추정, {err})")
+            else:
+                self._log("[FILAMENT] 실행 중 필라멘트 변경 없음")
+        if code == 4:
+            self._log("[FILAMENT] ⚠ TSP 카트리지 필라멘트 전체 소진 — 카트리지 교체 필요")
+
+    async def _drain_log_queue(self, timeout_s: float = 2.0) -> None:
+        """라이터를 멈추기 전에 큐에 남은 줄이 파일에 쓰이도록 잠깐 기다린다(시간 초과면 그대로 진행)."""
+        t = self._log_writer_task
+        if t is None or t.done():
+            return
+        deadline = asyncio.get_running_loop().time() + max(0.0, float(timeout_s))
+        while not self._log_q.empty() and not t.done():
+            if asyncio.get_running_loop().time() >= deadline:
+                return
+            await asyncio.sleep(0.02)
+        await asyncio.sleep(0)                           # 마지막으로 꺼낸 줄의 쓰기까지
+
     async def _run(self, target: float, cycles: int) -> None:
         self._refresh_from_config()
-        
+        fil_logged = False                               # 시작 필라멘트를 읽었으면(로그 파일·장비 준비 뒤) 종료 때도 읽는다
+        fil_start: Optional[int] = None
+
         try:
             # 시작 직전 레이스 가드(Chamber/PC/TSP 전체 확인)
             if (runtime_state.is_running("chamber", 1) or runtime_state.is_running("pc", 1)):
@@ -576,6 +644,10 @@ class TSPPageController:
                 f"target={target} cycles={cycles} "
                 f"on={cfg.on_sec}s off={cfg.off_sec}s poll={cfg.poll_sec}s first_wait={cfg.first_check_delay_sec}s"
             )
+
+            # ★ 사용 중 필라멘트(671) — 시작 시 1번. 실패해도 시작을 막지 않는다
+            fil_logged = True
+            fil_start = await self._log_filament_start()
 
             # ← 추가: Google Chat 시작 카드
             if self.chat:
@@ -673,10 +745,16 @@ class TSPPageController:
             with contextlib.suppress(Exception):
                 if self.tsp:
                     await self.tsp.off()
+            # ★ 사용 중 필라멘트·에러 코드 — 종료 시 1번(정상·중단·오류 모두, 시작 읽기를 한 런만)
+            with contextlib.suppress(Exception):
+                if fil_logged and self.tsp:
+                    await self._log_filament_end(fil_start)
             with contextlib.suppress(Exception):
                 if self.tsp:
                     await self.tsp.aclose()
-            # 라이터 종료
+            # 라이터 종료 — 큐에 남은 줄(종료 필라멘트 줄 포함)을 먼저 쓴다
+            with contextlib.suppress(Exception):
+                await self._drain_log_queue(2.0)
             with contextlib.suppress(Exception):
                 if self._log_writer_task:
                     self._log_writer_task.cancel()
