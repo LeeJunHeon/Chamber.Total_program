@@ -50,11 +50,10 @@ def test_60_ticks_all_blocks_quality_and_age(tmp_path):
             assert (x[f"{b}.q"], x[f"{b}.age_s"]) == ("off", None), (seq, b)
             blk = next(bl for bl in SF.device_blocks() if bl.name == b)
             assert all(x[f"{b}.{f.name}"] is None for f in blk.fields)        # 꺼진 장비 값은 채우지 않음
-    # MFC: 명령 간격 1 s 라 R60·R5 번갈아(자기 품질·나이)
+    # MFC: 사용자 결정 2026-11-02 D36 — 매 tick R60·R5 를 둘 다 읽는다(번갈아 읽기·stale 없음)
     q = collections.Counter((x["ch1.mfc.ar_sccm.q"], x["ch1.mfc.pressure_mtorr.q"]) for x in rows.values())
-    assert q[("ok", "stale")] > 10 and q[("stale", "ok")] > 10
-    ages = collections.Counter(x["ch1.mfc.pressure_mtorr.age_s"] for x in rows.values() if x["ch1.mfc.pressure_mtorr.q"] == "stale")
-    assert set(ages) <= {None, 1.0, 2.0} and ages[1.0] > 20 and ages[None] <= 1   # 2 = 간격을 못 맞춘 tick(약 10 tick 에 1번)
+    assert q[("ok", "ok")] >= 58 and q[("ok", "stale")] == q[("stale", "ok")] == 0
+    assert all(x["ch1.mfc.pressure_mtorr.age_s"] in (None, 0.0) for x in rows.values())
     # PLC 한 번 읽기 → plc·ch2.dc·ch2.rf·pc.rf, 시뮬레이터 초기 상태(펌핑 중)
     x = rows[30]
     assert x["plc.m_v_1_sw"] is True and x["plc.turbo_2_sw"] is True and x["plc.g_v_1_close_lamp"] is True
