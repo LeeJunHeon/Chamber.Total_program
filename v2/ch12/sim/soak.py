@@ -73,7 +73,7 @@ def run_virtual(hours: float, out_dir: Optional[Path] = None, engines: Optional[
             # 몇 시간을 실제 수 분에 돌므로 표본 때 아직 살아 있어 스레드 수·메모리가 늘어 보인다(종합 7일 시험과 같은 처리:
             # 끝날 때까지 기다림 — 가상 시각은 멈춰 있고, 기다리는 참가자가 '진행 없음'으로 끝나지 않게 깨워 둔다)
             for th in list(rig.recorder._exports):
-                while th.is_alive():
+                while th.is_alive() and not rig.recorder.export_deferred():      # 공정·운전 중이라 미뤄진 내보내기는 기다리지 않음(D319)
                     th.join(1.0)
                     rig.clock.notify()
             gc.collect()

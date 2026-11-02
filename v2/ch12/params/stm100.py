@@ -2,12 +2,14 @@
 
 v1 은 settings.json 의 ch1/ch2 구역(config_ch1/config_ch2)에서 읽는다(lib/thickness_config.load_thickness_config —
 common 에만 두면 채널 모듈로 넘어가지 않는다). v2 키 = "CH1_"/"CH2_" + v1 이름. 범위·클램프는 v1 load_thickness_config 그대로
-(드라이버 settings() 가 같은 클램프를 한다 — 범위 밖 값은 v1 처럼 고쳐 쓰고 경고 이벤트).
+(사용자 결정 2026-11-02, D11: v1 은 범위 밖 값을 고쳐 쓰고 경고했지만 v2 는 표(범위 + 키 사이 규칙)가 설정 적용 때 거부한다 —
+드라이버 settings() 는 같은 범위를 두 번째 문으로 다시 보고 ConfigRangeError 로 거부, 고쳐 쓰지 않는다).
 판정 상수(THICKNESS_READY_FRESH_S·DONE_CONSECUTIVE·ZERO_CONFIRM 등)·로그 폴더·Factor 파일은 2·3단계(기록·thickness.py) 몫.
 """
 from __future__ import annotations
 
 from v2.common.paramdef import Apply, ParamDef, PType, Role, Safety, Scope
+from v2.ch12.params._base import need, rule
 
 _S = "config/settings.json"
 _C = "lib/config_common.py"
@@ -43,9 +45,9 @@ def _defs(ch: str, enabled: bool, port: int, port_note: str) -> tuple:
         p("THICKNESS_POLL_INTERVAL_S", "두께·증착률 읽기 주기", PType.FLOAT, 0.5, unit="s", lo=0.25, hi=5.0,
           desc="S·T 읽기 주기. 1초 행보다 빠르다 — worker 안 자기 루프"),
         p("THICKNESS_SLOW_POLL_S", "주파수·수명·크리스탈 읽기 주기", PType.FLOAT, 5.0, unit="s", lo=0.25, hi=60.0,
-          desc="U·V·M 읽기 주기(v1: 두께 주기보다 작으면 두께 주기로)"),
-        p("THICKNESS_STALE_S", "두께 값 오래됨 기준", PType.FLOAT, 10.0, unit="s", lo=0.0, hi=600.0,
-          desc="마지막 정상 S 뒤 이 시간을 넘으면 stale·응답 없음(v1: 최소 max(2, 4×읽기 주기))"),
+          desc="U·V·M 읽기 주기(두께·증착률 읽기 주기 이상 — v1 은 작으면 두께 주기로 고쳐 썼다, v2 는 CHn 키 사이 규칙이 거부)"),
+        p("THICKNESS_STALE_S", "두께 값 오래됨 기준", PType.FLOAT, 10.0, unit="s", lo=2.0, hi=120.0,
+          desc="마지막 정상 S 뒤 이 시간을 넘으면 stale·응답 없음(2~120 s, 그리고 4×읽기 주기 이상 — v1 은 부족하면 올려 썼다, v2 는 거부)"),
         p("THICKNESS_CMD_TIMEOUT_S", "명령 응답 대기", PType.FLOAT, 1.0, unit="s", lo=0.3, hi=5.0,
           desc="명령 1회 응답 대기 — 응답이 없으면 2번 더 보낸다"),
     )
@@ -55,3 +57,20 @@ PARAMS: tuple = (
     _defs("ch1", False, 0, "CH1 은 미설정(SUPPORTS_THICKNESS false)")
     + _defs("ch2", True, 4008, "⚠ 임시값 — 4001~4007 사용 중이라 4008 로 둠(settings.json:646). 실제 MOXA 포트 미확인")
 )
+
+
+def _rules() -> tuple:
+    out = []
+    for P in ("CH1_", "CH2_"):
+        out.append(rule(f"{P}STM1", (P + "THICKNESS_SLOW_POLL_S", P + "THICKNESS_POLL_INTERVAL_S"),
+                        "주파수·수명 읽기 주기 ≥ 두께 읽기 주기(v1: 작으면 두께 주기로 고침 — v2 는 거부, D11)",
+                        lambda v, P=P: need(v[P + "THICKNESS_SLOW_POLL_S"] >= v[P + "THICKNESS_POLL_INTERVAL_S"],
+                                            f"{P}THICKNESS_SLOW_POLL_S < {P}THICKNESS_POLL_INTERVAL_S")))
+        out.append(rule(f"{P}STM2", (P + "THICKNESS_STALE_S", P + "THICKNESS_POLL_INTERVAL_S"),
+                        "두께 값 오래됨 기준 ≥ max(2, 4×읽기 주기)(v1: 부족하면 올려 씀 — v2 는 거부, D11)",
+                        lambda v, P=P: need(v[P + "THICKNESS_STALE_S"] >= max(2.0, 4.0 * v[P + "THICKNESS_POLL_INTERVAL_S"]),
+                                            f"{P}THICKNESS_STALE_S < max(2, 4×{P}THICKNESS_POLL_INTERVAL_S)")))
+    return tuple(out)
+
+
+CROSS_RULES: tuple = _rules()

@@ -361,7 +361,8 @@ class Ch12System:
         self.recorder = Recorder(Path(data_dir), self.bus.columns, retention_days=int(c["SNAPSHOT_RETENTION_DAYS"]),
                                  nas_dir=Path(nas) if nas else None, nas_period_s=float(c["NAS_SYNC_PERIOD_SEC"]),
                                  nas_today_period_s=float(c["NAS_TODAY_COPY_SEC"]),
-                                 today_fn=lambda: _dt.date.fromtimestamp(clock.wall()), wall_fn=clock.wall)
+                                 today_fn=lambda: _dt.date.fromtimestamp(clock.wall()), wall_fn=clock.wall,
+                                 busy_fn=self.busy)      # 공정·운전 중이면 지난 날 CSV 내보내기를 미룸(D319)
         self.outputs = RowFeed(c, clock, plc_connected=lambda: self.workers["plc"].connected,
                                thickness={ch: d for ch, d in self.stm.items() if d.enabled},
                                log=lambda src, msg: self.emit(src, "log", msg),

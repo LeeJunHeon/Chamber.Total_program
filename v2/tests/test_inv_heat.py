@@ -102,11 +102,13 @@ def test_heat036_shutdown_turns_run_off_and_closes_csv(tmp_path):
 
 
 def test_heat111_start_logs():
-    r = FastHeaterRig(ramp_rate=3.0)
+    r = FastHeaterRig(mv_min=350)
     r.eng.start()
     lg = r.log_texts()
     assert lg[-2:] == ["CH2 히터 공정 연동 준비(레시피 use_heater)", "CH2 히터 서비스 시작"]
-    assert any(m.startswith("⚠ 히터 설정: ") for m in lg[:-2])                 # 설정 경고(램프 < 6 → 6)
+    assert any(m.startswith("⚠ 히터 설정: ") for m in lg[:-2])                 # 설정 경고(MV_MIN ≠ 래더 400 — 값은 안 바꾸는 경고만 남음)
+    with pytest.raises(Exception):                                             # 램프 < 6 은 v1 처럼 6 으로 고쳐 쓰지 않고 거부(D11)
+        FastHeaterRig(ramp_rate=3.0)
 
 
 def test_heat115_panel_reset_refused_while_run():

@@ -13,6 +13,7 @@ from __future__ import annotations
 import re
 from typing import Any, List, Mapping, Optional, Sequence
 
+from v2.common.paramdef import ConfigRangeError
 from v2.ch12.process_steps import Caps
 
 E230 = "E230"
@@ -208,15 +209,16 @@ def check_dc_pulse(p: Mapping[str, Any]) -> List[str]:
 
 
 def heater_limit_c(cfg: Mapping[str, Any]) -> float:
-    """히터 목표 상한 = min(max_temp, sv_limit_c) — lib/heater_config.py:136-152 의 클램프(SV ≤0 → 500, MAX_TEMP 가 0 이하거나
-    SV 상한보다 크면 SV 상한). 래더 상한(LADDER_SV_MAX_C) 클램프는 v2 파라미터 범위(params/core_heater.py ≤900)가 대신한다.
+    """히터 목표 상한 = min(max_temp, sv_limit_c) — lib/heater_config.py:136-152. v1 은 SV ≤0 → 500, MAX_TEMP 가 0 이하거나 SV 상한보다 크면
+    SV 상한으로 고쳐 썼다. 사용자 결정 2026-11-02(D11): 고쳐 쓰지 않고 ConfigRangeError 로 거부한다(표 범위 1~900 과 키 사이 규칙
+    CH01 이 설정 적용 때 먼저 거부 — 이것은 두 번째 문). 래더 상한(LADDER_SV_MAX_C)은 v2 파라미터 범위(params/core_heater.py ≤900)가 맡는다.
     v2 키 CH2_HEATER_SV_LIMIT_C·CH2_HEATER_MAX_TEMP(기본 = 운영값 900·900, settings.json ch2)."""
     sv = float(cfg.get("CH2_HEATER_SV_LIMIT_C", 900.0))
     if sv <= 0:
-        sv = 500.0
+        raise ConfigRangeError(f"CH2_HEATER_SV_LIMIT_C={sv:g} ≤ 0 — 고쳐 쓰지 않고 거부")
     mt = float(cfg.get("CH2_HEATER_MAX_TEMP", 900.0))
     if mt <= 0 or mt > sv:
-        mt = sv
+        raise ConfigRangeError(f"CH2_HEATER_MAX_TEMP={mt:g} 이(가) 0 초과 SV 상한 {sv:g} 이하가 아님 — 고쳐 쓰지 않고 거부")
     return min(mt, sv)
 
 

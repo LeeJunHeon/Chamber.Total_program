@@ -824,7 +824,7 @@ def soak_full(tmp_path, hours: float) -> dict:
             c.start_thread(go, f"soak-{what}")
         if t.seq % 3600 == 0:
             for th in list(rig.recorder._exports):          # 지난 날 CSV 내보내기(하루치 약 130 MB)는 실제 시간이 걸린다 — 실제 운전은
-                while th.is_alive():                         # 하루(24 h) 안에 끝나지만 가상 하루는 실제 수십 분이라 겹쳐 쌓인다(끝날 때까지
+                while th.is_alive() and not rig.recorder.export_deferred():   # 하루(24 h) 안에 끝나지만(공정 중이라 미뤄진 것은 기다리지 않음 — D319) 가상 하루는 실제 수십 분이라 겹쳐 쌓인다(끝날 때까지
                     th.join(1.0)                             # 기다림 — 가상 시각은 멈춰 있고, 기다리는 참가자 스레드가 '진행 없음'으로
                     c.notify()                               # 끝나지 않게 깨워 둔다)
             gc.collect()

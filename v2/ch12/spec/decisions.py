@@ -342,8 +342,17 @@ DECISIONS = [
          decision="기본값은 v1 이 실제로 쓰던 값(.py 값 — 지금은 json 값과 모두 같다). v2 에서는 공통 값이 실제로 채널에 쓰인다(구조로 문제를 없앰). "
                   "params 의 pending_confirm 으로 표시.", reason="지시 3장 (4) '채널 설정 import 시 복사' 문제를 구조로 없앤다.", confirm=True,
          where="v2/ch12/params/core.py; inv_cfg.py"),
-    dict(id="D11", title="범위 밖 설정값", decision="v1 은 히터·두께 값이 범위를 벗어나면 고쳐 썼다(clamp). v2 는 같은 범위를 min/max 로 두고 거부한다(설정 적용 전체 거부 — 기본값으로 조용히 돌지 않음).",
-         reason="챔버K ConfigStore 규칙(부분 적용 없음).", confirm=True, where="v2/ch12/params"),
+    dict(id="D11", title="범위 밖 설정값은 적용 자체를 거부 — 조용히 고쳐 쓰는(clamp) 길이 없다",
+         decision="사용자 결정 2026-11-02: 그대로(거부). v1 은 히터·두께 값이 범위를 벗어나면 래더 규칙으로 고쳐 쓰고 경고했다. v2 는 ① 파라미터 표의 min/max·열거·형식과 "
+                  "키 사이 규칙이 설정 적용(ConfigStore/ConfigApply/변환 도구) 때 버전 전체를 거부하고(부분 적용 없음), ② 읽는 쪽도 두 번째 문으로 "
+                  "ConfigRangeError 로 거부한다 — 히터 설정 읽기(heater_profile.load_heater_cfg)·히터 목표 상한(recipe_check.heater_limit_c)·"
+                  "두께 판정(thickness_judge.judge_params·process_steps)·두께 모니터(drivers/stm100.settings). "
+                  "점검에서 찾아 고친 어긋남: 두께 STALE_S 표 범위(0~600)가 읽기 범위(2~120)·4×읽기 주기보다 넓어 조용히 올려 쓰이던 것, "
+                  "두께 SLOW_POLL_S < POLL_INTERVAL_S, 히터 RUN_LOG_PERIOD_S 0 초과 2 미만, MFC_DELAY_MS 200 ms 미만(표 하한 0 → 200). "
+                  "코드 안의 max/min(상수, 설정값) 모양 전부는 상수가 표 범위 밖이 아님을 시험(test_config_ranges)이 AST 로 확인하고, "
+                  "예외 3곳은 명령 하나의 최소 대기·재시도 쉼(MFC 재시도 쉼 0.15 s, RF Pulse ON/OFF 응답 대기 2500 ms)이라 설정 값을 바꾸지 않는다.",
+         reason="사용자 결정 2026-11-02. 챔버K ConfigStore 규칙(부분 적용 없음) + '기본값으로 조용히 돌지 않음'.",
+         confirm=False, where="v2/ch12/params; v2/ch12/heater_profile.py; v2/ch12/thickness_judge.py; v2/ch12/drivers/stm100.py; v2/tests/test_config_ranges.py"),
     dict(id="D12", title="두께 Factor·재료 json", decision="v2 설정 폴더의 데이터 파일로(v1 형식 그대로), 없으면 v1 기본 99종 목록을 만든다.",
          reason="척 × 건 표·재료 레코드는 스칼라 ParamDef 에 맞지 않고 v1 도 화면 창에서 이 파일을 원자적으로 저장했다.", confirm=False,
          where="v2/tools/convert_v1_config.py; v2/ch12/thickness.py"),
@@ -470,7 +479,15 @@ DECISIONS = [
     dict(id='D316', title='레시피 파일 고르기 범위', decision='노트북 화면 파일 고르기는 PROCESS_LIST_START_DIR 밖으로 나갈 수 없음(v1 대화상자는 어디든) — 127.0.0.1 서버가 정한 폴더 아래만 보이게 한 안전 쪽.', reason="빠진 기능 구현 중 판단", confirm=True, where='v2/ch12/local_server.py'),
     dict(id='D317', title='의도적 종료 중 플라즈마 클리닝', decision='PC 를 붙잡고 PC RF 만 끔(rf_zero_off) — 가스·밸브 그대로(결정 4), 결과 실패 PROGRAM_EXIT(챔버와 같게). v1 은 공정 중 종료를 거부.', reason="종합 시나리오·7일 운전 중 판단", confirm=True, where='v2/ch12/plasma_cleaning.py; safety.py'),
     dict(id='D318', title='PC 가 CH1 GV 를 연 채 끝냄(v1 PC-077)', decision='닫지 않으면 다음 CH1 공정이 GATE_CHECK_FAILED·VACUUM_OFF 가 E301(v1 과 같음) — 운전 절차 확인 필요.', reason="종합 시나리오·7일 운전 중 판단", confirm=True, where='v2/ch12/pc_steps.py'),
-    dict(id='D319', title='자정 CSV 내보내기 부하', decision='하루치 1초 기록 CSV(약 130 MB)를 자정에 내보내는 동안 수 분 CPU 사용 — 윈도우 노트북에서 tick 지연 확인 필요.', reason="종합 시나리오·7일 운전 중 판단", confirm=True, where='v2/common/recorder.py'),
+    dict(id='D319', title='하루치 1초 기록 CSV 내보내기 — 공정·운전 중이 아닐 때만, 낮은 우선순위로 나눠서',
+         decision="사용자 결정 2026-11-02: 하루치 1초 기록 CSV(약 130 MB)는 공정·운전(CH1·CH2·플라즈마 클리닝·TSP — system.busy)이 없을 때만, 낮은 우선순위 스레드로 "
+                  "500행씩 나눠 쓰고 조각 사이에 50 ms 쉰다(tick 이 CPU 를 기다리지 않게). 공정 중이면 시작도 미루고 조각 사이에 공정이 시작돼도 멈춰 "
+                  "끝난 뒤 멈춘 자리에서 이어서 한다(1초 간격으로 확인). 프로그램이 꺼졌다 켜지면 CSV 가 없는 지난 날 DB 를 start() 가 다시 찾아 내보낸다. "
+                  "조각 크기·쉼은 설정으로 두지 않는 상수(recorder.EXPORT_CHUNK_ROWS·EXPORT_PAUSE_S). 시험: 공정 중 미룸·조각 사이 멈춤과 이어서·재시작 뒤 이어서·"
+                  "tick 모양 스레드 지연(< 0.25 s)·가상 시계 실제 조립으로 자정을 공정 중에 넘겨도 tick 을 하나도 놓치지 않음.",
+         reason="사용자 결정 2026-11-02. 이전에는 자정에 수 분 CPU 를 쓰는 내보내기가 공정 중에도 돌아 윈도우 노트북에서 tick 지연 위험이 있었다. 낮은 우선순위는 윈도우·리눅스에서 "
+                "스레드 우선순위를 낮추는 최선 노력(못 하는 OS 는 조각 쉼만)이라 장비 노트북 실측(bench·운전)에서 tick 지연을 확인한다.",
+         confirm=True, where="v2/common/recorder.py; v2/ch12/system.py; v2/tests/test_bus_recorder.py"),
     dict(id='D320', title='PLC 1초 묶음 나눠 읽기(양보)', decision="블록 하나 = PLC worker 요청 하나(우선순위 'low' — safety·write·read 뒤), 다음 블록은 명령 간격(150 ms) 뒤 not_before — 기다리는 요청이 있으면 블록 사이에서 먼저 돈다(v1 priority='low' _yield_to_priority 와 같음). 1초 행 마감(900 ms) 안에 못 든 뒤 블록은 그 tick 빈 칸, 첫 블록이 시작도 못 하면 그 tick stale(장비 실패 아님 — 묶기에서 EXPIRED 는 fail 이 아님). v1 은 양보 예산 PLC_COIL_LOG_BUDGET_S 4 s·코일 로그 주기 따로 — v2 는 1초 행 마감.", reason="9단계 — tick 앞부분의 짧은 마감 요청(PC GV 인터락 0.6 s E511·게이트·메인밸브 0.6 s)이 1초 묶음 뒤에서 시간 초과(실제 시간 약 10~20 %)", confirm=True, where='v2/ch12/drivers/plc_poll.py; v2/common/worker.py; v2/common/snapshot_bus.py'),
     dict(id="D321", title="exe 묶음과 감시 프로그램", decision="PyInstaller onedir 묶음(v2/tools/build_exe.py)의 제어 프로그램 exe 는 감시 프로그램 없이 돈다(감시 프로그램은 python -m 으로 자식을 켬). 자동 재시작·이어가기를 쓰려면 소스 실행(v2/run_ch12_v2.cmd)을 기본으로 한다(D01).",
          reason="D01 결정의 세부 — 두 방식 중 소스 실행을 기본으로.", confirm=True, where="v2/tools/build_exe.py; v2/run_ch12_v2.cmd"),

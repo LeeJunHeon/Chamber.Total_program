@@ -95,7 +95,7 @@ PARAMS: tuple = (
        desc="화면 Δ 녹색 기준 (°C)"),
     p("CH2_HEATER_HOLD_MODE", "heater_hold", "목표 도달 뒤 유지 모드", "", E, "off", safety=H, enum=('off', 'dac'),
        src="lib/config_common.py:491 · lib/heater_config.py:206",
-       desc="v1 은 공백 제거·소문자로 고치고 off/dac 외에는 dac 로 두었다 — v2 는 정확한 값만 받는다"),
+       desc="v1 은 공백 제거·소문자로 고치고 off/dac 외에는 dac 로 두었다 — v2 는 정확한 값만 받는다(고쳐 쓰지 않음, D11)"),
     p("CH2_HEATER_HOLD_MV_ENTER_TOL_C", "heater_hold", "유지 진입 PV−SV 차 허용", "°C", F, 3.0, 0.5, 20.0,
        src="lib/config_common.py:492 · lib/heater_config.py:209",
        desc="유지 진입: |PV−SV| 허용 (°C) (HOLD_MODE=off 면 쓰지 않음)"),
@@ -169,6 +169,9 @@ CROSS_RULES: tuple = (
          lambda v: need(v["CH2_HEATER_STALE_SEC"] >= 2 * v["CH2_HEATER_POLL_IDLE_S"], "STALE_SEC < 2 × POLL_IDLE_S")),
     rule("CH06", ("CH2_HEATER_SESSION_MARK_REG",), "세션 마커는 0(끔) 또는 D150~D160(v1: 그 밖이면 0)",
          lambda v: need(_mark_ok(v["CH2_HEATER_SESSION_MARK_REG"]), "SESSION_MARK_REG 가 0·150~160 밖")),
+    rule("CH07", ("CH2_HEATER_RUN_LOG_PERIOD_S",), "공정 txt 히터 상태 줄 간격은 0(끔) 또는 2~600 s(v1: 0 초과 2 미만은 2 로 고쳐 씀 — v2 는 거부, D11)",
+         lambda v: need(v["CH2_HEATER_RUN_LOG_PERIOD_S"] == 0 or 2.0 <= v["CH2_HEATER_RUN_LOG_PERIOD_S"] <= 600.0,
+                        "HEATER_RUN_LOG_PERIOD_S 가 0·2~600 밖")),
 )
 
 DROPPED: tuple = ()

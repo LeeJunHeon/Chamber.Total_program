@@ -31,6 +31,8 @@ import traceback
 from dataclasses import asdict, dataclass, fields
 from typing import Any, Callable, Dict, List, Mapping, Optional, Tuple
 
+from v2.common.paramdef import ConfigRangeError
+
 END_THICKNESS = "Thickness"      # 종료 방식(공정 기록·카드 표기) — controller/thickness_process.py:39-43
 END_FALLBACK = "시간대체"
 END_LIMIT = "상한"
@@ -86,8 +88,9 @@ def cfg_get(cfg: Mapping[str, Any], chamber: Any, key: str, default: Any = None)
 
 
 def judge_params(cfg: Mapping[str, Any], chamber: Any) -> Tuple[JudgeParams, List[str]]:
-    """v1 load_judge_params — 형식 오류(bool 포함) → 기본값 + 경고, 범위 밖 → 클램프 + 경고. 예외를 던지지 않는다.
-    부르는 때마다 읽는다(v1 도 쓰는 때 load_judge_params 를 다시 불렀다)."""
+    """v1 load_judge_params — v1 은 형식 오류(bool 포함)를 기본값으로, 범위 밖을 클램프하며 경고했다. 사용자 결정 2026-11-02(D11):
+    고쳐 쓰지 않고 ConfigRangeError 로 거부한다(파라미터 표가 설정 적용 때 먼저 같은 범위를 거부 — 이것은 두 번째 문).
+    경고 목록은 호환을 위해 남기지만 지금은 늘 빈 목록. 부르는 때마다 읽는다(v1 도 쓰는 때 load_judge_params 를 다시 불렀다)."""
     d = JudgeParams()
     warns: List[str] = []
     out: Dict[str, Any] = {}
@@ -99,13 +102,9 @@ def judge_params(cfg: Mapping[str, Any], chamber: Any) -> Tuple[JudgeParams, Lis
                 raise TypeError
             v = float(raw)
         except Exception:
-            warns.append(f"{key}={raw!r} 형식 오류 → 기본값 {default!r}")
-            v = float(default)
-        else:
-            if not (lo <= v <= hi):
-                nv = min(max(v, lo), hi)
-                warns.append(f"{key}={v:g} 범위({lo:g}~{hi:g}) 밖 → {nv:g}")
-                v = nv
+            raise ConfigRangeError(f"{key}={raw!r}: 형식 오류 — 고쳐 쓰지 않고 거부") from None
+        if not (lo <= v <= hi):
+            raise ConfigRangeError(f"{key}={v:g}: 범위({lo:g}~{hi:g}) 밖 — 고쳐 쓰지 않고 거부")
         out[attr] = int(v) if attr == "done_consecutive" else v
     return JudgeParams(**out), warns
 

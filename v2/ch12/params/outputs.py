@@ -79,7 +79,7 @@ PARAMS = (
     _p("CH2_HEATER_LOG_DIR", "히터 운전 CSV 폴더", S, "", f"{_J}:623; lib/heater_config.py:274",
        note="비우면 LOG_ROOT_DIR\\CH2_Heater"),
     _p("CH2_HEATER_RUN_LOG_PERIOD_S", "공정 txt 히터 상태 줄 간격", F, 10.0, f"{_J}:624; lib/heater_config.py:234-238",
-       unit="s", lo=0.0, hi=600.0, apply=_LIVE, scope=_PROC, note="0 = 끔, 0 초과는 2~600 으로 맞춤(v1 그대로)"),
+       unit="s", lo=0.0, hi=600.0, apply=_LIVE, scope=_PROC, note="0 = 끔, 그 밖은 2~600 s (v1 은 0 초과 2 미만·600 초과를 2~600 으로 고쳐 썼다 — v2 는 키 사이 규칙 CH07 이 거부, D11)"),
     # ── 카메라 사진 ──
     _p("CAMERA_LOG_ROOT", "카메라 사진 루트", S, r"C:\VanaM_Logs\Camera_Logs", f"{_J}:304; {_CC}:865"),
     _p("CAMERA_MIN_FREE_GB", "카메라 디스크 여유 하한", F, 20.0, f"{_J}:305; {_CC}:866", unit="GB", lo=0.0,

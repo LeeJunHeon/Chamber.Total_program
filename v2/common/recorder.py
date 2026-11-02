@@ -5,6 +5,10 @@
   날이 바뀌면 지난 날을 CSV(snap_YYYYMMDD.csv, utf-8-sig)로 내보내고 보관 기간이 지난 로컬 파일을 지운다 — 따로 스레드에서
   (recorder-csv). 쓰기 스레드가 내보내기를 기다리면 하루치(8만 행)를 내보내는 동안 새 행이 큐에 쌓인다(5-7 오래 켜 두기에서 찾음 —
   가상 시계 10 시간 시험에서 자정 뒤 쓰기가 멈추고 큐가 시간당 수천 행씩 늘었다).
+  D319(사용자 결정 2026-11-02): 하루치 CSV(약 130 MB) 내보내기는 공정·운전(CH1·CH2·플라즈마 클리닝·TSP — busy_fn)이 없을 때만, 낮은
+  우선순위(스레드 우선순위를 낮춤)로 EXPORT_CHUNK_ROWS 행씩 나눠 쓰고 조각 사이에 EXPORT_PAUSE_S 쉰다(tick 이 CPU 를 기다리지 않게).
+  공정 중이면 시작도 미루고(조각 사이에 공정이 시작돼도 멈춤), 끝난 뒤 멈춘 자리에서 이어서 한다. 프로그램이 꺼졌다 켜지면 CSV 가
+  없는 지난 날 DB 를 start() 가 다시 찾아 내보낸다(.tmp 는 처음부터).
 - NAS 사본 스레드: nas_period_s 마다 지난 날 파일(.sqlite·.csv)을 복사하고, nas_today_period_s 마다 오늘 DB 를 SQLite backup 으로
   만든 일관된 사본(staging)을 복사한다. 실패하면 다음 회차에 다시. 복사가 멈춰도 쓰기·tick 과 무관.
   NAS 쪽은 지우지 않는다(사본 전체 보관).
@@ -29,6 +33,27 @@ PREFIX = "snap_"
 COMMIT_EVERY_S = 1.0     # SQLite commit 간격 — 정전 때 잃는 양(≤1 s)과 디스크 쓰기 횟수의 균형. 운영자가 바꿀 일 없음
 MAX_QUEUE = 20000        # 기록 큐 — 1초 1행 기준 5시간 이상 디스크가 멈춰도 버리지 않는 양(메모리 수십 MB 이하)
 ERRORS_KEEP = 200        # 오류 목록은 최근 이만큼만(무한히 늘지 않게)
+EXPORT_CHUNK_ROWS = 500  # CSV 내보내기 한 조각의 행 수 — 한 조각이 GIL 을 쥐는 시간을 수십 ms 안으로(1초 tick 에 지연을 주지 않게, D319)
+EXPORT_PAUSE_S = 0.05    # 조각 사이 쉬는 시간 — tick·기록 스레드에 CPU 를 양보
+EXPORT_BUSY_POLL_S = 1.0  # 공정·운전 중이라 미룰 때 끝났는지 보는 간격
+
+
+class ExportStopped(Exception):
+    """프로그램이 끝나는 중이라 CSV 내보내기를 멈춤(.tmp 는 남고 다음 시작 때 처음부터)."""
+
+
+def _lower_thread_priority() -> None:
+    """이 스레드의 우선순위를 낮춘다(할 수 있는 OS 에서만 — 못 해도 조용히 지나감: 조각 쉼이 주된 양보)."""
+    try:
+        if os.name == "nt":
+            import ctypes
+            k = ctypes.WinDLL("kernel32")
+            k.GetCurrentThread.restype = ctypes.c_void_p
+            k.SetThreadPriority(ctypes.c_void_p(k.GetCurrentThread()), -2)       # THREAD_PRIORITY_LOWEST
+        elif hasattr(os, "setpriority") and hasattr(threading, "get_native_id") and os.uname().sysname == "Linux":
+            os.setpriority(os.PRIO_PROCESS, threading.get_native_id(), 10)       # 리눅스는 스레드마다 nice 를 가진다
+    except Exception:
+        pass
 
 
 def _day_of(ts_iso: str) -> str:
@@ -45,7 +70,10 @@ class Recorder:
                  nas_dir: Optional[Path] = None, nas_period_s: float = 60.0, nas_today_period_s: float = 600.0,
                  copy_fn: Callable[[str, str], Any] = shutil.copy2,
                  today_fn: Callable[[], _dt.date] = _dt.date.today,
-                 wall_fn: Callable[[], float] = time.time) -> None:
+                 wall_fn: Callable[[], float] = time.time,
+                 busy_fn: Optional[Callable[[], bool]] = None,
+                 export_chunk_rows: int = EXPORT_CHUNK_ROWS, export_pause_s: float = EXPORT_PAUSE_S,
+                 export_busy_poll_s: float = EXPORT_BUSY_POLL_S) -> None:
         self.dir = Path(directory)
         self.dir.mkdir(parents=True, exist_ok=True)
         self.columns = list(columns)
@@ -60,6 +88,13 @@ class Recorder:
         self.copy_fn = copy_fn
         self.today_fn = today_fn
         self.wall_fn = wall_fn
+        self.busy_fn = busy_fn or (lambda: False)         # 공정·운전 중이면 True(CSV 내보내기를 미룬다 — D319)
+        self.export_chunk_rows = max(1, int(export_chunk_rows))
+        self.export_pause_s = max(0.0, float(export_pause_s))
+        self.export_busy_poll_s = max(0.01, float(export_busy_poll_s))
+        self._deferred = threading.Event()                # 공정·운전 중이라 내보내기가 기다리는 중
+        self.export_deferrals = 0                         # 미룬 횟수(진단·시험)
+        self.exported_days: "collections.deque[str]" = collections.deque(maxlen=ERRORS_KEEP)
         self.blackbox_files: "collections.deque[Path]" = collections.deque(maxlen=100)
         self._q: "queue.Queue" = queue.Queue(maxsize=max_queue)
         self.dropped = 0
@@ -100,6 +135,8 @@ class Recorder:
     # ───────── 생명주기 ─────────
     def start(self) -> None:
         self.prune()
+        for day in self._undone_days():                    # 꺼지기 전에 못 끝낸 지난 날 CSV 를 이어서
+            self._spawn_export(day)
         self._writer = threading.Thread(target=self._write_loop, name="recorder", daemon=True)
         self._writer.start()
         if self.nas_dir is not None:
@@ -112,10 +149,15 @@ class Recorder:
         while (self._q.unfinished_tasks and self._writer is not None and self._writer.is_alive()   # 시작 전(쓰기 스레드 없음)·
                and time.monotonic() - t0 < timeout_s):                                              # 멈춘 뒤면 기다리지 않음
             time.sleep(0.005)
-        for t in list(self._exports):
-            t.join(max(0.0, timeout_s - (time.monotonic() - t0)))
+        for t in list(self._exports):                      # 공정·운전 중이라 미뤄진 내보내기는 기다리지 않는다(끝난 뒤에 이어서)
+            while t.is_alive() and not self.export_deferred() and time.monotonic() - t0 < timeout_s:
+                t.join(0.02)
         self._exports = [t for t in self._exports if t.is_alive()]
         return not self._q.unfinished_tasks and not self._exports
+
+    def export_deferred(self) -> bool:
+        """지난 날 CSV 내보내기가 공정·운전 중이라 기다리는 중인가(시험·소크가 '끝날 때까지 기다리기'에서 뺄 때)."""
+        return self._deferred.is_set() and bool(self.busy_fn())     # 공정이 끝났으면 곧 이어서 하므로 더는 미뤄진 것이 아니다
 
     def stop(self, timeout_s: float = 10.0) -> None:
         self.flush(timeout_s)
@@ -153,14 +195,30 @@ class Recorder:
             db.commit()
             self._db, self._day = db, day
         if old is not None:                # 지난 날 CSV·정리는 따로 스레드(쓰기는 새 날 DB 로 계속)
-            self._exports = [t for t in self._exports if t.is_alive()]
-            t = threading.Thread(target=self._export_old, args=(old,), name="recorder-csv", daemon=True)
-            t.start()
-            self._exports.append(t)
+            self._spawn_export(old)
+
+    def _spawn_export(self, day: str) -> None:
+        self._exports = [t for t in self._exports if t.is_alive()]
+        t = threading.Thread(target=self._export_old, args=(day,), name="recorder-csv", daemon=True)
+        t.start()
+        self._exports.append(t)
+
+    def _undone_days(self) -> List[str]:
+        """오늘 이전 날 DB 는 있는데 CSV 가 없는 날(꺼지기 전에 내보내기를 못 끝냄)."""
+        today = self.today_fn().strftime("%Y%m%d")
+        out = []
+        for p in sorted(self.dir.glob(f"{PREFIX}*.sqlite")):
+            d = p.name[len(PREFIX):len(PREFIX) + 8]
+            if len(d) == 8 and d.isdigit() and d < today and not self.csv_path(d).exists():
+                out.append(d)
+        return out
 
     def _export_old(self, day: str) -> None:
+        _lower_thread_priority()                           # 낮은 우선순위(D319)
         try:
             self.export_csv(day)
+        except ExportStopped:
+            return                                         # 끝나는 중 — 다음 시작 때 처음부터
         except Exception as e:
             self.errors.append(f"CSV 내보내기 {day}: {e!r}")
         self.prune()
@@ -217,18 +275,52 @@ class Recorder:
         self.blackbox_files.append(out)
 
     # ───────── CSV·보관 ─────────
+    def _wait_idle(self) -> None:
+        """공정·운전(busy_fn)이 없을 때까지 기다린다 — 끝나는 중이면 ExportStopped. 기다린 만큼 export_deferrals 에 센다."""
+        first = True
+        while self.busy_fn():
+            if first:
+                self.export_deferrals += 1
+                first = False
+            self._deferred.set()
+            if self._stop.wait(self.export_busy_poll_s):
+                self._deferred.clear()
+                raise ExportStopped()
+        self._deferred.clear()
+        if self._stop.is_set():
+            raise ExportStopped()
+
     def export_csv(self, day: str) -> Path:
+        """하루치 CSV — EXPORT_CHUNK_ROWS 행씩(ts 순서, ts 는 기본 키라 색인으로 이어 읽는다). 조각마다 공정·운전 중이 아닌지 보고
+        (맞으면 끝날 때까지 기다린 뒤 멈춘 자리에서 이어서), 조각 사이에 쉰다. 다 쓰면 .tmp 를 바꿔치기."""
+        cols = ", ".join(_q(c) for c in self.columns)
+        out = self.csv_path(day)
+        tmp = out.with_name(out.name + ".tmp")
+        n = self.export_chunk_rows
+        self._wait_idle()                                  # 공정·운전 중이면 시작도 미룬다
         src = sqlite3.connect(self.db_path(day))
         try:
-            cur = src.execute(f"SELECT {', '.join(_q(c) for c in self.columns)} FROM snapshot ORDER BY ts")
-            out = self.csv_path(day)
-            tmp = out.with_name(out.name + ".tmp")
+            last = None
             with open(tmp, "w", encoding="utf-8-sig", newline="") as f:
                 w = csv.writer(f)
                 w.writerow(self.columns)
-                for r in cur:
-                    w.writerow(["" if v is None else v for v in r])
+                while True:
+                    if last is None:
+                        rows = src.execute(f"SELECT {cols} FROM snapshot ORDER BY ts LIMIT ?", (n,)).fetchall()
+                    else:
+                        rows = src.execute(f"SELECT {cols} FROM snapshot WHERE ts > ? ORDER BY ts LIMIT ?", (last, n)).fetchall()
+                    for r in rows:
+                        w.writerow(["" if v is None else v for v in r])
+                    if len(rows) < n:
+                        break
+                    f.flush()                                                 # 미뤄진 동안 .tmp 에 지금까지가 보이게
+                    last = rows[-1][0]
+                    if self.export_pause_s:
+                        if self._stop.wait(self.export_pause_s):          # 조각 사이 양보(끝나는 중이면 바로 깨어남)
+                            raise ExportStopped()
+                    self._wait_idle()                                      # 다음 조각 전에 공정·운전이 시작됐으면 끝날 때까지 기다림
             os.replace(tmp, out)
+            self.exported_days.append(day)
             return out
         finally:
             src.close()

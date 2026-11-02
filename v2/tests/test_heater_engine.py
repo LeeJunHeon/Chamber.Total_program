@@ -174,11 +174,17 @@ def test_push_order_values_high_word_first_and_marker():
 
 
 def test_pid_not_rewritten_when_act_matches_and_invalid_not_written():
-    eng, plc, evs, clk = _mk(cfg=HeaterCfg(enabled=True, log_enabled=False, kp=60.0))
+    """Ti 가 이미 래더 값과 같으면 다시 쓰지 않는다. 범위 밖 Kp(60)는 v1 처럼 '쓰지 않음'이 아니라 설정 읽기에서 거부된다
+    (사용자 결정 2026-11-02, D11 — 고쳐 쓰지 않고 거부)."""
+    from v2.common.paramdef import ConfigRangeError
+    with pytest.raises(ConfigRangeError):
+        _mk(cfg=HeaterCfg(enabled=True, log_enabled=False, kp=60.0))
+    eng, plc, evs, clk = _mk(cfg=HeaterCfg(enabled=True, log_enabled=False))
     lo, hi = float_to_words(300.0)
-    plc.regs[148], plc.regs[149] = lo, hi
+    plc.regs[148], plc.regs[149] = lo, hi                          # Ti 실제값 = 설정값 → Ti 는 쓰지 않음
     _poll(eng, plc, clk)
-    assert not ({142, 143, 144, 145} & {c[1] for c in plc.writes() if c[0] == "wr"})
+    wrote = {c[1] for c in plc.writes() if c[0] == "wr"}
+    assert not ({144, 145} & wrote) and {142, 143} & wrote
 
 
 def test_readback_mismatch_warns_once():

@@ -139,9 +139,14 @@ def test_fact_table_bytes_and_params():
 
 
 def test_settings_clamps_like_v1():
-    c = dict(CFG, CH2_THICKNESS_POLL_INTERVAL_S=0.1, CH2_THICKNESS_STALE_S=0.5, CH2_THICKNESS_CMD_TIMEOUT_S=9.0)
-    s = D.settings(c, "ch2")
-    assert (s.poll_s, s.stale_s, s.cmd_timeout_s) == (0.25, 2.0, 5.0) and s.warnings
+    """v1 은 읽기 주기·stale·명령 대기가 범위 밖이면 0.25·2.0·5.0 으로 고쳐 썼다 → v2 는 거부(사용자 결정 2026-11-02, D11)."""
+    from v2.common.paramdef import ConfigRangeError
+    for k, v in (("POLL_INTERVAL_S", 0.1), ("STALE_S", 0.5), ("CMD_TIMEOUT_S", 9.0), ("SLOW_POLL_S", 0.3)):
+        with pytest.raises(ConfigRangeError):
+            D.settings(dict(CFG, **{"CH2_THICKNESS_" + k: v}), "ch2")
+    s = D.settings(dict(CFG, CH2_THICKNESS_POLL_INTERVAL_S=0.25, CH2_THICKNESS_SLOW_POLL_S=0.25, CH2_THICKNESS_STALE_S=2.0,
+                        CH2_THICKNESS_CMD_TIMEOUT_S=5.0), "ch2")
+    assert (s.poll_s, s.stale_s, s.cmd_timeout_s) == (0.25, 2.0, 5.0) and not s.warnings
     s = D.settings(dict(CFG, CH1_SUPPORTS_THICKNESS=True), "ch1")
     assert not s.enabled and "끔" in s.warnings[0]                     # 포트 0 이면 사용으로 켜도 끈다
 

@@ -30,6 +30,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Mapping, Optional
 
+from v2.common.paramdef import ConfigRangeError
+
 # ───────────── 스텝 동작(엔진이 알아야 할 것) ─────────────
 # action → (장비 호출 — v1 _send_and_collect_tokens 1336-1487 이 부르던 콜백, 완료 판정)
 ACTIONS: Dict[str, str] = {
@@ -177,19 +179,17 @@ class StepCfg:
 
 
 def _judge(cfg: Mapping[str, Any], chamber: int, key: str, default: float, lo: float, hi: float, warns: list) -> float:
-    """lib/thickness_config.py:load_judge_params 의 _num(형식 오류 → 기본값, 범위 밖 → 클램프)."""
+    """lib/thickness_config.py:load_judge_params 의 _num — v1 은 형식 오류를 기본값으로, 범위 밖을 클램프했다.
+    사용자 결정 2026-11-02(D11): 고쳐 쓰지 않고 ConfigRangeError 로 거부한다."""
     raw = _cget(cfg, chamber, key, default)
     try:
         if isinstance(raw, bool):
             raise TypeError
         v = float(raw)
     except Exception:
-        warns.append(f"{key}={raw!r} 형식 오류 → 기본값 {default!r}")
-        return float(default)
+        raise ConfigRangeError(f"{key}={raw!r}: 형식 오류 — 고쳐 쓰지 않고 거부") from None
     if not (lo <= v <= hi):
-        nv = min(max(v, lo), hi)
-        warns.append(f"{key}={v:g} 범위({lo:g}~{hi:g}) 밖 → {nv:g}")
-        return nv
+        raise ConfigRangeError(f"{key}={v:g}: 범위({lo:g}~{hi:g}) 밖 — 고쳐 쓰지 않고 거부")
     return v
 
 
