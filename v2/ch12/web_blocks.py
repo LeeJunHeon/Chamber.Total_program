@@ -87,7 +87,7 @@ CFG_KEYS: tuple = (
     dict(key="SUPPORTS_HEATER", field="", type="bool", use="caps.heater(CH2 만)"),
     dict(key="SUPPORTS_THICKNESS", field="", type="bool", use="caps.thickness"),
 )
-# 채널 키 규칙 없이 그대로 읽는 키(heater_limit_c — 기본 900·900. v1 의 고쳐 쓰기는 없앰 — 범위 밖은 거부, D11)
+# 채널 키 규칙 없이 그대로 읽는 키(heater_limit_c — 기본 900·900, SV ≤ 0 → 500, MAX ≤ 0 또는 > SV → SV)
 CFG_PLAIN_KEYS: tuple = (
     dict(key="CH2_HEATER_SV_LIMIT_C", default=900.0, use="히터 목표 상한"),
     dict(key="CH2_HEATER_MAX_TEMP", default=900.0, use="히터 목표 상한"),

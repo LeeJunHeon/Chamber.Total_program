@@ -345,12 +345,14 @@ DECISIONS = [
     dict(id="D11", title="범위 밖 설정값은 적용 자체를 거부 — 조용히 고쳐 쓰는(clamp) 길이 없다",
          decision="사용자 결정 2026-11-02: 그대로(거부). v1 은 히터·두께 값이 범위를 벗어나면 래더 규칙으로 고쳐 쓰고 경고했다. v2 는 ① 파라미터 표의 min/max·열거·형식과 "
                   "키 사이 규칙이 설정 적용(ConfigStore/ConfigApply/변환 도구) 때 버전 전체를 거부하고(부분 적용 없음), ② 읽는 쪽도 두 번째 문으로 "
-                  "ConfigRangeError 로 거부한다 — 히터 설정 읽기(heater_profile.load_heater_cfg)·히터 목표 상한(recipe_check.heater_limit_c)·"
+                  "ConfigRangeError 로 거부한다 — 히터 설정 읽기(heater_profile.load_heater_cfg)·"
                   "두께 판정(thickness_judge.judge_params·process_steps)·두께 모니터(drivers/stm100.settings). "
                   "점검에서 찾아 고친 어긋남: 두께 STALE_S 표 범위(0~600)가 읽기 범위(2~120)·4×읽기 주기보다 넓어 조용히 올려 쓰이던 것, "
                   "두께 SLOW_POLL_S < POLL_INTERVAL_S, 히터 RUN_LOG_PERIOD_S 0 초과 2 미만, MFC_DELAY_MS 200 ms 미만(표 하한 0 → 200). "
                   "코드 안의 max/min(상수, 설정값) 모양 전부는 상수가 표 범위 밖이 아님을 시험(test_config_ranges)이 AST 로 확인하고, "
-                  "예외 3곳은 명령 하나의 최소 대기·재시도 쉼(MFC 재시도 쉼 0.15 s, RF Pulse ON/OFF 응답 대기 2500 ms)이라 설정 값을 바꾸지 않는다.",
+                  "예외 3곳은 명령 하나의 최소 대기·재시도 쉼(MFC 재시도 쉼 0.15 s, RF Pulse ON/OFF 응답 대기 2500 ms)이라 설정 값을 바꾸지 않는다. "
+                  "남긴 고쳐 쓰기 한 곳: 히터 목표 상한 recipe_check.heater_limit_c(SV ≤ 0 → 500, MAX_TEMP 가 0 이하거나 SV 보다 크면 SV) — 포털 TS 검사·골든과 맞춘 v1 규칙이라 두었고, "
+                  "표(SV·MAX 1~900, 규칙 CH01)가 그 값들을 먼저 거부해 정상 경로에서는 닿지 않는다(시험 확인). 지우려면 포털 TS·골든 사본을 함께 바꿔야 한다.",
          reason="사용자 결정 2026-11-02. 챔버K ConfigStore 규칙(부분 적용 없음) + '기본값으로 조용히 돌지 않음'.",
          confirm=False, where="v2/ch12/params; v2/ch12/heater_profile.py; v2/ch12/thickness_judge.py; v2/ch12/drivers/stm100.py; v2/tests/test_config_ranges.py"),
     dict(id="D12", title="두께 Factor·재료 json", decision="v2 설정 폴더의 데이터 파일로(v1 형식 그대로), 없으면 v1 기본 99종 목록을 만든다.",

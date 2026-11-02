@@ -295,11 +295,17 @@ def test_thickness_readers_accept_everything_the_table_accepts_and_reject_the_re
                 assert math.isclose(got, float(bad)), (p.key, bad, got)
 
 
-def test_heater_limit_rejects_instead_of_fixing():
-    """히터 목표 상한: v1 은 SV ≤ 0 → 500, MAX_TEMP 가 0 이하거나 SV 보다 크면 SV 로 고쳤다 → v2 는 거부."""
+def test_heater_limit_clamp_is_unreachable_through_the_table():
+    """히터 목표 상한 heater_limit_c 의 고쳐 쓰기(SV ≤ 0 → 500, MAX_TEMP 가 0 이하거나 SV 보다 크면 SV)는 포털 TS 검사·골든과 맞춘 v1 규칙이라 남겼다 —
+    표(SV·MAX 1~900 + 규칙 CH01)가 그 값들을 거부하므로, 표가 받은 값으로는 결과가 min(MAX, SV) 그대로다(문서화된 D11 예외)."""
     from v2.ch12.recipe_check import heater_limit_c
-    assert heater_limit_c({}) == 900.0 and heater_limit_c({"CH2_HEATER_SV_LIMIT_C": 600.0, "CH2_HEATER_MAX_TEMP": 550.0}) == 550.0
-    for cfg in ({"CH2_HEATER_SV_LIMIT_C": 0.0}, {"CH2_HEATER_MAX_TEMP": 0.0},
-                {"CH2_HEATER_SV_LIMIT_C": 500.0, "CH2_HEATER_MAX_TEMP": 900.0}):
-        with pytest.raises(ConfigRangeError):
-            heater_limit_c(cfg)
+    for p in T.params:
+        if p.key not in ("CH2_HEATER_SV_LIMIT_C", "CH2_HEATER_MAX_TEMP"):
+            continue
+        for bad in _out_of_range(p):
+            if bad is not None:
+                assert not _gate_ok({**DEF, p.key: bad})
+    for sv, mt in ((900.0, 900.0), (1.0, 1.0), (600.0, 550.0), (900.0, 1.0)):
+        cfg = {**DEF, "CH2_HEATER_SV_LIMIT_C": sv, "CH2_HEATER_MAX_TEMP": mt}
+        assert _gate_ok(cfg) and heater_limit_c(cfg) == min(sv, mt)
+    assert not _gate_ok({**DEF, "CH2_HEATER_SV_LIMIT_C": 500.0, "CH2_HEATER_MAX_TEMP": 900.0})      # MAX > SV 는 표가 거부
