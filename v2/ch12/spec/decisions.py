@@ -11,8 +11,8 @@ DECISIONS = [
     dict(id="D01", title="실행·배포 방식",
          decision="기본은 챔버K 처럼 소스 실행(run_ch12_v2.cmd → python -m v2.supervisor → python -m v2.ch12). "
                   "PyInstaller onedir 묶음 도구(v2/tools/build_exe.py)도 둔다.",
-         reason="챔버K 와 같은 운영 방식, 소스 실행은 고치기·되돌리기가 쉽다. v1 의 onedir 경험(워커 kill)도 살린다.",
-         confirm=True, where="v2/tools/build_exe.py; run_ch12_v2.cmd"),
+         reason="챔버K 와 같은 운영 방식, 소스 실행은 고치기·되돌리기가 쉽다. v1 의 onedir 경험(워커 kill)도 살린다. 사용자 결정 2026-11-02: 이 결정 그대로 확정.",
+         confirm=False, where="v2/tools/build_exe.py; run_ch12_v2.cmd"),
     dict(id="D02", title="Modbus TCP 트랜잭션 id",
          decision="PDU 바이트는 v1(pymodbus)과 같고, MBAP 트랜잭션 id 는 1 부터 하나씩 늘린다.",
          reason="pymodbus 의 시작 값은 판에 따라 다르고 PLC 는 트랜잭션 id 를 되돌려 줄 뿐 해석하지 않는다.",
@@ -335,8 +335,8 @@ DECISIONS = [
                   "나머지 그대로. GET_LOADING_1/2_SENSOR·GET_RECIPE 는 마지막 응답 그대로(GET_RECIPE 는 folder 별). 캐시가 없으면 GET_SPUTTER_STATUS E203·"
                   "GET_LOADING E412·GET_RECIPE E227. 시작·이동 14개 명령은 E205 '공정 실행 중'(문구 '{CMD} 불가 — 제어 프로그램 응답 없음(재시작 중)'). "
                   "캐시는 디스크(ROBOT_CACHE_PATH)에도 원자적으로.",
-         reason="지시 3장 (5) — v1 의 busy 표시 필드는 이것뿐(host/handlers.py:543-665), E205 는 v1 busy 거절 코드. 시간 초과면 실제 실행 중인데 E205 로 거부할 위험이 있다(명령별 한도를 v1 최대 시간 + 30 s 로 둠).",
-         confirm=True, where="v2/robot_server/cache.py; forward.py"),
+         reason="지시 3장 (5) — v1 의 busy 표시 필드는 이것뿐(host/handlers.py:543-665), E205 는 v1 busy 거절 코드. 시간 초과면 실제 실행 중인데 E205 로 거부할 위험이 있다(명령별 한도를 v1 최대 시간 + 30 s 로 둠). 사용자 결정 2026-11-02: 이 결정 그대로 확정.",
+         confirm=False, where="v2/robot_server/cache.py; forward.py"),
     dict(id="D09", title="로봇 서버 쪽 실패 보고(E102·E104·E105·E107·E110·E111)의 구글챗·팝업",
          decision="v1 은 ERROR/HOST 로그 + chat_host + 팝업. v2 는 로봇 서버가 로그를 남기고, 제어 프로그램 내부 API(POST /robot/v1/event)로 이벤트를 넘겨 "
                   "포털이 같은 카드를 보낸다(제어 프로그램이 꺼져 있으면 로그만). 서버 페이지 화면(숨김·접속 목록)은 포털·노트북 화면의 로봇 연결 상태로.",
