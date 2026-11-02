@@ -13,7 +13,11 @@ v1 device/ig.py(AsyncIG)를 끝까지 읽고 다시 쓴 것(import 하지 않음
   한도 + 첫 지연 + 5 s. 실패 문구는 v1 그대로 — 'IG ON 실패'·'목표 압력 도달 실패'·'ReigniteLimit'·'HardTimeout'·'InternalError'.
   '목표 도달 실패' 일 때만 붙이는 꼬리(최종·목표 Torr)는 실제 문구가 '목표 압력 도달 실패'라 붙지 않는다(device/ig.py:813 vs 1100 — D181,
   v1 과 같게 둠).
-1초 읽기(합의된 변경): v1 은 공정 중·베이스 대기 중에만 10 s 마다 RDI. v2 는 tick 마다 RDI 하나(간격 1 s 때문에 한 tick 에 하나).
+1초 읽기(합의된 변경): v1 은 공정 중·베이스 대기 중에만 10 s 마다 RDI. v2 는 매 tick RDI 하나 — 간격 IG_GAP_MS 기본 200 ms
+  (사용자 결정 2026-11-02 D36: IG 기종·매뉴얼 미확인이라 v1 의 1000 ms 대신 매 tick 읽히는 값으로, bench 에서 확인 — stale 없음).
+쓰기 되읽기(D36): SIG 1 은 장비의 'OK' 응답이 확인이고, SIG 0(IG_OFF 명령) 은 쓴 뒤 IG_REWRITE_GAP_MS 뒤 RDI 가 'IG OFF' 인지 되읽어
+  확인한다(다르면 IG_REWRITE_MAX 회까지 SIG 0 을 다시, 그래도 다르면 VERIFY_MISMATCH). 정리(cleanup)·베이스 대기 정리의 SIG 0 은
+  최선 전송이라 v1 과 같게 되읽지 않는다.
   v1 판정(베이스 도달·재점등·시간 초과)과 pressure 이벤트는 v1 주기의 자기 RDI 로(worker 안 op). 상태를 바꾸는 명령(SIG 1·SIG 0)은
   v1 과 같은 계기에서만. 점등 뒤 첫 RDI 지연 동안은 1초 읽기도 보내지 않는다(품질 suppressed).
 bench(writes_allowed=False): RDI 만 — SIG 1·SIG 0 은 BENCH_READ_ONLY.
@@ -159,7 +163,7 @@ class IgDriver:
         if not tick:
             self.emit("io", f"[SEND] {sent} (tag={item.tag})")
         deadline = min(session.deadline, self.clock.monotonic() + item.timeout_s)
-        gap = self.ms("IG_GAP_MS", 1000)
+        gap = self.ms("IG_GAP_MS", 200)
         try:
             while True:
                 line = self.reader.read_line(session, deadline)
@@ -179,7 +183,7 @@ class IgDriver:
         return line
 
     def exec_timeout_s(self, item) -> float:
-        return self.ms("IG_GAP_MS", 1000) + 0.2 + PRE_SEND_ABSORB_S + self.ms("IG_TIMEOUT_MS", 3000) + 1.0
+        return self.ms("IG_GAP_MS", 200) + 0.2 + PRE_SEND_ABSORB_S + self.ms("IG_TIMEOUT_MS", 3000) + 1.0
 
     def query(self, cmd: str, tag: str) -> Query:
         """v1 _send_and_wait_line 한 시도 — 워커 재시도 0, 호출 쪽 대기 = 한도 + 0.5 s."""
@@ -188,7 +192,7 @@ class IgDriver:
 
     def send_off(self, wait_gap_ms: int) -> Send:
         """SIG 0 — gap max(wait_gap, IG_GAP_MS), 응답 없음, 워커 재시도 0(device/ig.py:976-994)."""
-        gap_ms = max(int(wait_gap_ms), int(self.c("IG_GAP_MS", 1000)))
+        gap_ms = max(int(wait_gap_ms), int(self.c("IG_GAP_MS", 200)))
         bound = max(600, int(wait_gap_ms) + 300) / 1000.0
         return Send("SIG 0", (gap_ms + min(150, gap_ms)) / 1000.0, bound_s=bound, withdraw=False, retries=0, tag="[IG OFF]")
 
@@ -205,7 +209,7 @@ class IgDriver:
     # ───────── 1초 읽기 ─────────
     def _idle(self, now: float) -> bool:
         bu = self.runner.busy_until()
-        return bu is None or bu >= now + self.ms("IG_GAP_MS", 1000) + TICK_GAP_WAIT_S + 0.2
+        return bu is None or bu >= now + self.ms("IG_GAP_MS", 200) + TICK_GAP_WAIT_S + 0.2
 
     def source_read(self, session, seq: int) -> Dict[str, Any]:
         now = self.clock.monotonic()
@@ -297,10 +301,10 @@ def blocks(chamber: str) -> List[DeviceBlock]:
 
 
 BUDGET = dict(
-    queries_per_tick=1, bytes_tx=4, bytes_rx=12, min_gap_ms=1030, fits_1s=False, alternate=None,
-    note="RDI(4 B → '1.2x10e-5\\r\\n' 약 11 B) 하나. 응답 뒤 IG_GAP_MS 1 s + 보내기 전 흡수 30 ms 라 한 주기 ≈ 1.03 s + 응답 시간 — "
-         "약 10 tick 에 한 번은 간격을 못 맞춰 그 tick 은 안 읽음(stale). 점등 뒤 첫 RDI 지연 5 s 는 안 읽음(suppressed). "
-         "v1 판정용 RDI(베이스 대기·공정 중 10 s)는 제어 요청으로 먼저. 마감 = 대기 0.5 s + IG_TIMEOUT_MS 3 s",
+    queries_per_tick=1, bytes_tx=4, bytes_rx=12, min_gap_ms=230, fits_1s=True, alternate=None,
+    note="RDI(4 B → '1.2x10e-5\\r\\n' 약 11 B) 하나를 매 tick. 응답 뒤 IG_GAP_MS(기본 200 ms) + 보내기 전 흡수 30 ms 라 한 주기 ≈ 0.23 s + 응답 시간 — "
+         "1초 안에 들어간다(사용자 결정 2026-11-02 D36). 기종·매뉴얼 미확인 — 근거 문서 없음, bench 에서 응답 시간·오류율 확인. "
+         "점등 뒤 첫 RDI 지연 5 s 는 안 읽음(suppressed). v1 판정용 RDI(베이스 대기·공정 중 10 s)는 제어 요청으로 먼저. 마감 = 대기 0.5 s + IG_TIMEOUT_MS 3 s",
 )
 
 

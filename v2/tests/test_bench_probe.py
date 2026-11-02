@@ -128,6 +128,10 @@ def test_normal_run_reads_only_and_writes_summary(tmp_path):
                  "간격 최소", "[미확인]", "연결 기록", "'Q0+0.0+0.0+0.0+0.0'", "'IG OFF'"):
         assert want in s, want
     assert all(m == "0" for m in re.findall(r"무응답 (\d+)", s)), s
+    # 사용자 결정 2026-11-02 D36·D50 — 장비별 설정 간격으로 응답 시간·오류율을 잰다(요약에 설정 간격과 오류율)
+    assert re.search(r"응답 ch1\.mfc .*오류율 0\.00 %.*\[설정 간격 MFC_GAP_MS=100 ms\]", s), s
+    assert re.search(r"응답 ch1\.ig .*\[설정 간격 IG_GAP_MS=100 ms\]", s) and "[설정 간격 CMD_GAP_MS=100 ms]" in s
+    assert "[설정 간격 DCP_GAP_MS=150 ms]" in s
     inv = json.loads((folder / "inventory.json").read_text(encoding="utf-8"))["items"]
     assert any(i["device"] == "plc" and i["meaning"] == "SW_RF_SELECT" for i in inv)
     assert any(i["device"] == "ch2.dcpulse" and i["query"] == "0x9C" and i["raw"] == "9c 00 01" for i in inv)

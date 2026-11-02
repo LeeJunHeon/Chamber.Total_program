@@ -71,8 +71,12 @@ def test_alternate_for_devices_not_fitting_1s():
     for t in D.TICK_PLAN:
         if not t.budget["fits_1s"]:
             assert D.ALTERNATE.get(t.device), t.device
-    assert {"mfc", "ig", "rfpulse"} <= set(D.ALTERNATE)
-    assert "R60/R5" in D.ALTERNATE["mfc"] and "162" in D.ALTERNATE["rfpulse"]
+    # 사용자 결정 2026-11-02 D36·D50 — MFC·IG·RF Pulse·DC Pulse 는 모두 매 tick 전부 읽어 번갈아 읽기·1초 밖 목록에 없다
+    assert not ({"mfc", "ig", "rfpulse", "dcpulse"} & set(D.ALTERNATE))
+    by = {t.device: t for t in D.TICK_PLAN}
+    assert all(by[d].budget["fits_1s"] and not by[d].budget.get("alternate") for d in ("mfc", "ig", "rfpulse", "dcpulse"))
+    assert (by["mfc"].budget["queries_per_tick"], by["rfpulse"].budget["queries_per_tick"],
+            by["dcpulse"].budget["queries_per_tick"]) == (2, 3, 5)
     assert all(len(r) == 7 for r in D.budget_table())
 
 
@@ -105,3 +109,29 @@ def test_unverified_list():
     for u in D.UNVERIFIED:
         assert u.device and u.item and u.v1 and u.how
     assert any("4008" in u.item for u in D.UNVERIFIED) and any("4007" in u.item for u in D.UNVERIFIED)
+
+
+def test_intervals_match_params_and_have_manual_basis():
+    """사용자 결정 2026-11-02 D36·D50 — 장비마다 간격 설정 키·기본값(params 와 같음)·매뉴얼 근거(문서·쪽)·매 tick 읽는 질의."""
+    by = {i.device: i for i in D.INTERVALS}
+    assert set(by) == {"mfc", "ig", "rfpulse", "dcpulse"}
+    for i in D.INTERVALS:
+        assert CFG[i.key] == i.default_ms, i.key
+        assert i.basis and i.reads
+    assert (by["mfc"].default_ms, by["ig"].default_ms, by["rfpulse"].default_ms, by["dcpulse"].default_ms) == (50, 200, 0, 150)
+    assert "p.72" in by["mfc"].basis and "4-48" in by["rfpulse"].basis and "근거 문서 없음" in by["ig"].basis
+    for d in D.DEVICES:                                            # 장비 사실 표의 간격 문구에도 새 값
+        if d.key in by:
+            assert str(by[d.key].default_ms) in d.gaps, d.key
+
+
+def test_readback_table_matches_params_and_lists_commands_without_readback():
+    """값을 바꾸는 명령 통일 — 되읽기 질의가 있는 명령은 설정 키(READBACK_ENABLED·REWRITE_MAX·REWRITE_GAP_MS)가 params 에 있고,
+    없는 명령은 이유와 함께 READBACK_NONE 에 있다."""
+    assert {r.device for r in D.READBACK} == {"mfc", "ig", "dcpulse", "rfpulse", "plc"}
+    for r in D.READBACK:
+        for k in re.split(r"[·,]", r.keys):
+            assert k.strip() in CFG, (r.device, k)
+        assert r.command and r.query and r.compare and r.source
+    assert {n[0] for n in D.READBACK_NONE} >= {"mfc", "ig", "dcpulse", "rfpulse", "plc"}
+    assert all(len(n) == 3 and n[2] for n in D.READBACK_NONE)

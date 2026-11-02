@@ -9,7 +9,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Callable, Optional
 
+import re
+
 from v2.ch12.drivers.line_ops import OpFailed, Sleep, Until
+
+VERIFY_MISMATCH = "VERIFY_MISMATCH"      # 사유 코드 — 되읽기가 끝내 기대와 다름(사용자 결정 2026-11-02 D36)
 
 PENDING = "_PENDING"                 # FLOW_ON: 결과는 안정화 작업이 낸다
 STAB_MAX_ATTEMPTS = 180              # device/mfc.py:1659 — 가스 안정화 최대 3분(채널별, 코드 고정값)
@@ -36,9 +40,123 @@ def _min_delay(d) -> float:
     return max(float(d.c("MFC_DELAY_MS", 1000)), 200.0) / 1000.0       # device/mfc.py:470·515
 
 
+@dataclass
+class Verify:
+    """쓰기 뒤 되읽기 — read_cmd 를 보내 line 이 기대와 같은지(ok(line))."""
+    label: str
+    read_cmd: str
+    prefixes: tuple
+    ok: Callable[[str], bool]
+    want: str                    # 사람이 읽는 기대값(로그·실패 문구)
+
+
+def readback_on(d) -> bool:
+    return bool(d.c("MFC_READBACK_ENABLED", True)) and d.writes_allowed
+
+
+def write_verified(d, cmd: str, tag: str, fail_prefix: str, verify: Optional[Verify], *, gap_ms=None,
+                   min_confirm_s: float = 0.0, withdraw: bool = True, before_send: Optional[Callable[[], None]] = None):
+    """값을 바꾸는 명령 공통(사용자 결정 2026-11-02 D36): 쓰기 → (확정 대기) → 되읽기 확인 → 다르면 다시 쓰기
+    (MFC_REWRITE_MAX 회, 쓴 뒤 MFC_REWRITE_GAP_MS 기다려 되읽기) → 그래도 다르면 OpFailed(VERIFY_MISMATCH).
+    되읽기 질의가 없는 명령은 verify=None — v1 과 같게 '실제로 보냈다'가 확정(devices.py READBACK_NONE)."""
+    t_enq = d.clock.monotonic()
+    if before_send:
+        before_send()
+    res = yield d.send(cmd, tag, gap_ms, withdraw)
+    if res[0] != "sent":
+        raise OpFailed(res[2], f"{fail_prefix} {res[1]}".strip())
+    yield Until(max(t_enq + max(0.0, min_confirm_s), res[1]))
+    if verify is None or not readback_on(d):
+        return res
+    rewrites = max(0, int(d.c("MFC_REWRITE_MAX", 3)))
+    wait = float(d.c("MFC_REWRITE_GAP_MS", 300)) / 1000.0
+    last = None
+    for n in range(rewrites + 1):
+        if wait > 0:
+            yield Sleep(wait)
+        line = yield d.query(verify.read_cmd, verify.prefixes, f"[VERIFY {verify.label}]")
+        last = line
+        if line and verify.ok(line):
+            d.status(f"{verify.label} 되읽기 확인: {verify.want}")
+            return res
+        d.status(f"[{verify.label} 되읽기 불일치] 기대={verify.want}, 응답={line!r} (시도 {n + 1}/{rewrites + 1})")
+        if n < rewrites:
+            r2 = yield d.send(cmd, f"[RE-{verify.label}]", gap_ms, withdraw)
+            if r2[0] != "sent":
+                raise OpFailed(r2[2], f"{fail_prefix} {r2[1]}".strip())
+    raise OpFailed(VERIFY_MISMATCH, f"{verify.label} 되읽기 확인 실패 — 기대 {verify.want}, 응답 {last!r} (다시 쓰기 {rewrites}회)")
+
+
+_NUM = r"([+\-]?\d+(?:\.\d+)?)"
+
+
+def _q_value(line: str, prefix: str):
+    """v1 _parse_q_value_with_prefixes — 'Q5+010.00' → 10.0."""
+    m = re.match(r"^" + re.escape(prefix) + r"\s*" + _NUM + r"$", (line or "").strip())
+    return float(m.group(1)) if m else None
+
+
+def _r69_bits(line: str) -> str:
+    """v1 _parse_r69_bits — 'L0 1000' → '1000'."""
+    s = (line or "").strip()
+    payload = s[2:] if s.startswith("L0") else (s[1:] if s.startswith("L") else s)
+    return "".join(c for c in payload if c in "01")[:4]
+
+
+def verify_flow_set(ch: int, scaled: float) -> Verify:
+    pfx = f"Q{4 + int(ch)}"
+
+    def ok(line: str) -> bool:
+        v = _q_value(line, pfx)
+        return v is not None and abs(v - scaled) < 0.1                   # v1 _verify_flow_set 허용
+    return Verify(f"FLOW_SET ch{ch}", f"R6{4 + int(ch)}", (pfx,), ok, f"{scaled:.2f} %FS")
+
+
+def verify_onoff(ch: int, on: bool) -> Verify:
+    def ok(line: str) -> bool:
+        bits = _r69_bits(line)
+        return len(bits) >= ch and bits[ch - 1] == ("1" if on else "0")
+    return Verify(f"FLOW_{'ON' if on else 'OFF'} ch{ch}", "R69", ("L",), ok, f"ch{ch} {'ON' if on else 'OFF'}")
+
+
+def verify_off(ch: int) -> Verify:
+    return verify_onoff(ch, False)
+
+
+def verify_valve(key: str) -> Verify:
+    def ok(line: str) -> bool:                                           # v1 _parse_valve_ok
+        m = re.match(r"^(?:V\s*)?\+?([+\-]?\d+(?:\.\d+)?)$", (line or "").strip())
+        if not m:
+            return False
+        pos = float(m.group(1))
+        return (key == "VALVE_CLOSE" and pos < 1.0) or (key == "VALVE_OPEN" and pos > 99.0)
+    return Verify(key, "R6", ("V",), ok, "닫힘(<1 %)" if key == "VALVE_CLOSE" else "열림(>99 %)")
+
+
+def verify_sp_value(d, n: int, hw: float) -> Verify:
+    from v2.ch12.drivers.mfc import parse_pressure
+    tol = max(float(d.c("MFC_SP1_VERIFY_TOL", 0.02)), 1e-9)
+    dec = int(d.c("MFC_PRESSURE_DECIMALS", 3))
+
+    def ok(line: str) -> bool:
+        cur = parse_pressure(line)
+        return cur is not None and abs(round(cur, dec) - hw) <= tol
+    return Verify(f"SP{n}_SET", f"R{n}", (f"S{n}",), ok, f"{hw:.{dec}f}(장비값)")
+
+
+def verify_sp_on(n: int) -> Verify:
+    def ok(line: str) -> bool:
+        s = (line or "").strip().upper()
+        return bool(s.startswith("M") and s[1:2] == str(n))
+    return Verify(f"SP{n}_ON", "R7", ("M",), ok, f"M{n}…")
+
+
 def noreply(d, key: str, cmd: str, tag: str, owner, channel, gap_ms=None, min_delay_s: float = 0.0,
-            after_send_s: float = 0.0, withdraw: bool = True):
+            after_send_s: float = 0.0, withdraw: bool = True, verify: Optional[Verify] = None):
     """v1 _send_noreply_confirmed / _confirm_sent_or_fail — 등록 → 실제 전송 확인 → 확정(실패 문구 '{tag} {사유}')."""
+    if verify is not None:
+        yield from write_verified(d, cmd, tag, tag, verify, gap_ms=gap_ms, min_confirm_s=min_delay_s, withdraw=withdraw)
+        return
     t_enq = d.clock.monotonic()
     res = yield d.send(cmd, tag, gap_ms, withdraw)
     if res[0] != "sent":
@@ -53,9 +171,8 @@ def set_flow(d, ch: int, ui: float, owner):
     d.status(f"Ch{ch} GAS 스케일: {ui:.2f}sccm → 장비 {scaled:.2f}%FS")
     if ch in d.ch_owner:
         d.ch_owner[ch] = owner
-    res = yield d.send(_mk(d, "FLOW_SET", channel=ch, value=scaled), f"[SET ch{ch}]")
-    if res[0] != "sent":
-        raise OpFailed(res[2], f"Ch{ch} FLOW_SET {res[1]}")
+    yield from write_verified(d, _mk(d, "FLOW_SET", channel=ch, value=scaled), f"[SET ch{ch}]", f"Ch{ch} FLOW_SET",
+                              verify_flow_set(ch, scaled))
     d.last_setpoints[ch] = scaled
 
 
@@ -67,13 +184,10 @@ def flow_on(d, ch: int, owner, on_done):
     target = mask_set(d, ch, True)
     if ch in d.ch_owner:
         d.ch_owner[ch] = owner
-    t_enq = d.clock.monotonic()
-    item = d.send(_mk(d, "FLOW_ON", channel=ch), f"[FLOW_ON ch{ch}]")
-    d.mask_shadow = target
-    res = yield item
-    if res[0] != "sent":
-        raise OpFailed(res[2], f"ch{ch} FLOW_ON {res[1]}")
-    yield Until(max(t_enq + _min_delay(d), res[1]))
+    def shadow():
+        d.mask_shadow = target
+    yield from write_verified(d, _mk(d, "FLOW_ON", channel=ch), f"[FLOW_ON ch{ch}]", f"ch{ch} FLOW_ON",
+                              verify_onoff(ch, True), min_confirm_s=_min_delay(d), before_send=shadow)
     d.flow_on_flags[ch] = True
     if d.stab_enabled:
         tgt = float(d.last_setpoints.get(ch, 0.0))
@@ -94,13 +208,10 @@ def flow_off(d, ch: int, owner):
     target = mask_set(d, ch, False)
     if d.shutdown:
         raise OpFailed("SHUTDOWN", "MFC not ready (shutdown)")
-    t_enq = d.clock.monotonic()
-    item = d.send(_mk(d, "FLOW_OFF", channel=ch), f"[FLOW_OFF ch{ch}]", withdraw=False)
-    d.mask_shadow = target
-    res = yield item
-    if res[0] != "sent":
-        raise OpFailed(res[2], f"ch{ch} FLOW_OFF {res[1]}")
-    yield Until(max(t_enq + _min_delay(d), res[1]))
+    def shadow():
+        d.mask_shadow = target
+    yield from write_verified(d, _mk(d, "FLOW_OFF", channel=ch), f"[FLOW_OFF ch{ch}]", f"ch{ch} FLOW_OFF",
+                              verify_off(ch), min_confirm_s=_min_delay(d), withdraw=False, before_send=shadow)
 
 
 def flow_set_on(d, ch: int, ui: float, owner, on_done):
@@ -130,7 +241,8 @@ def valve(d, key: str, owner):
     if d.shutdown:
         raise OpFailed("SHUTDOWN", "MFC not ready (shutdown)")
     yield from noreply(d, key, _mk(d, key), f"[{key}]", owner, None,
-                       min_delay_s=float(d.c("MFC_DELAY_MS_VALVE", 5000)) / 1000.0, withdraw=(key == "VALVE_CLOSE"))
+                       min_delay_s=float(d.c("MFC_DELAY_MS_VALVE", 5000)) / 1000.0, withdraw=(key == "VALVE_CLOSE"),
+                       verify=verify_valve(key))
 
 
 def sp_set(d, n: int, ui: float, owner):
@@ -141,12 +253,12 @@ def sp_set(d, n: int, ui: float, owner):
     d.status(f"SP{n} 스케일: UI {ui:.2f} → 장비 {hw:.{dec}f}")
     key = f"SP{n}_SET"
     yield from noreply(d, key, _mk(d, key, value=hw), f"[{key}]", owner, None,
-                       min_delay_s=float(d.c("MFC_GAP_MS", 1000)) / 1000.0)
+                       min_delay_s=float(d.c("MFC_GAP_MS", 50)) / 1000.0, verify=verify_sp_value(d, n, hw))
 
 
 def zeroing(d, ch: Optional[int], owner):
     """PS_ZEROING 'Z1' / MFC_ZEROING(ch) 'L{4+ch}1'(device/mfc.py:1026-1039) — gap·확정 = MFC_ZEROING_GAP_MS."""
-    zgap = float(d.c("MFC_ZEROING_GAP_MS", d.c("MFC_GAP_MS", 1000)))
+    zgap = float(d.c("MFC_ZEROING_GAP_MS", d.c("MFC_GAP_MS", 50)))
     if ch is None:
         d.status("압력 센서 Zeroing 명령 전송")
         cmd, tag = _mk(d, "PS_ZEROING"), "[PS_ZEROING]"

@@ -8,8 +8,11 @@ from __future__ import annotations
 DIFFERENCES = [
     dict(id="X01", what="장비 읽기 주기",
          v1="장비마다 다름(IG 10 s, DC·DC Pulse·RF Pulse 5 s, MFC 3 s, PLC 코일 로그 5 s, TSP 10 s 등)",
-         v2="정각 1초마다 모든 장비를 한 번 읽어 한 행(1초에 못 들면 번갈아 읽기). 빠른 제어·판정은 v1 속도 유지",
-         why="1초 동기 읽기·기록", agreed="지시 3장 (2)"),
+         v2="정각 1초마다 모든 장비를 전부 읽어 한 행 — MFC R60·R5, IG RDI, RF Pulse 162·165·166, DC Pulse PIV·SAT·ANT·AE·AF 를 매 tick 둘 다/전부"
+            "(번갈아 읽기·stale 없음). 장비마다 '응답 뒤 다음 명령까지' 간격 설정 키(MFC_GAP_MS 50·IG_GAP_MS 200·CMD_GAP_MS 0·DCP_GAP_MS 150). "
+            "빠른 제어·판정은 v1 속도 유지(FORP/REFP 판정은 v1 한 바퀴 주기 POLL_INTERVAL_MS)",
+         why="1초 동기 읽기·기록 — v1 의 큰 간격(MFC·IG 1000 ms, RF Pulse 1500 ms)은 RS-232 안정화용이었고 매뉴얼에 근거가 없다",
+         agreed="지시 3장 (2) · 사용자 결정 2026-11-02(D36·D50)"),
     dict(id="X02", what="PLC Modbus TCP 라이브러리",
          v1="pymodbus ModbusTcpClient", v2="직접 MBAP 프레임(v2/common/modbus_tcp.py) — PDU 동일, 트랜잭션 id 시작 값만 다를 수 있음",
          why="의존성 최소", agreed="D02"),
@@ -51,4 +54,12 @@ DIFFERENCES += [
          why="지시 3장 (5)", agreed="지시 3장 (5); D08; D09"),
     dict(id="X12", what="화면·구글챗", v1="PySide6 화면, 프로그램이 웹훅으로 직접 보냄", v2="포털 화면 + 같은 화면의 노트북 local 빌드, 카드는 포털이 보냄(재시작·이어가기 카드 1장 추가)",
          why="지시 3장 (7)", agreed="지시 3장 (7)"),
+]
+
+DIFFERENCES += [
+    dict(id="X30", what="값을 바꾸는 명령의 되읽기 확인",
+         v1="장비마다 달랐다(MFC·IG·RF Pulse 는 확인 없이 확정하거나 경고만, DC Pulse 는 1회 재기록, PLC 는 에코만)",
+         v2="쓰기 → 되읽기 확인 → 다르면 다시 쓰기(장비별 *_REWRITE_MAX·*_REWRITE_GAP_MS) → 그래도 다르면 사유 코드 VERIFY_MISMATCH 로 오류. "
+            "되읽기 질의가 없는 명령은 장비 사실 표 READBACK_NONE 에 적고 v1 과 같게",
+         why="값을 바꾸는 모든 명령을 같은 방식으로 통일", agreed="사용자 결정 2026-11-02(D36)"),
 ]

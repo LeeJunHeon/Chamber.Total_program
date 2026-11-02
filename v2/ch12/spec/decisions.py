@@ -370,7 +370,7 @@ DECISIONS = [
     dict(id='D33', title='블록 검사는 블록 값·장비 지원만', decision="지원하지 않는 전원·CH1 건 셔터·N2·히터 블록은 오류(v1 은 '주의' 로그 후 건너뜀 — 템플릿은 이런 블록을 만들지 않음). v1 행 조합 검사는 v1 행에만.", reason="3단계 레시피·블록 작성 중 판단(골든 435/435·10/10 같음)", confirm=True, where="v2/ch12/blocks.py; blocks_expand.py; recipe.py"),
     dict(id='D34', title='XLSX 레시피 읽기', decision='openpyxl 대신 zipfile+xml 표준 라이브러리(openpyxl 3.1 읽기 전용 동작 그대로 옮김 — 템플릿 xlsx 에서 같은 결과).', reason="3단계 레시피·블록 작성 중 판단(골든 435/435·10/10 같음)", confirm=True, where="v2/ch12/blocks.py; blocks_expand.py; recipe.py"),
     dict(id='D35', title='main 블록 일시정지 중 OES', decision='OES 측정 시간은 늘리지 않는다(측정은 그대로 끝남) — 미확인 항목.', reason="3단계 레시피·블록 작성 중 판단(골든 435/435·10/10 같음)", confirm=True, where="v2/ch12/blocks.py; blocks_expand.py; recipe.py"),
-    dict(id='D36', title='MFC·IG 1초 읽기와 v1 명령 간격 1 s', decision='v1 명령 간격이 응답 뒤 1 s 라 1초에 질의 하나 — MFC 는 R60/R5 번갈아, IG 는 RDI(약 10 tick 에 한 번 stale). 제어 동작 중·뒤 1.5 s 는 읽기 양보(제어가 읽은 값을 행에). v1 폴링 판정(유량 이탈 경고 등)은 1초 읽기 값으로 v1 주기 3 s 에.', reason="1단계 MFC·IG 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/mfc.py; ig.py"),
+    dict(id='D36', title='MFC·IG·RF Pulse·DC Pulse 통신 간격 — 모든 장비를 매 tick 전부 읽기(사용자 결정 2026-11-02)', decision='사용자 결정 2026-11-02: v1 의 큰 간격(MFC·IG 응답 뒤 1000 ms, RF Pulse 1500 ms)은 RS-232 안정화용이었고 매뉴얼 근거가 없다. MFC(GPC3000 매뉴얼 p.72: 9600 8N1·CR 끝, 최소 간격 규정 없음)는 R60·R5 를 매 tick 둘 다, IG(RDI·SIG 명령, 기종 미확인·매뉴얼 없음)는 기본 200 ms 로 매 tick RDI, DC Pulse(EnerPulse, 명령 사이 100 ms 이상)는 v1 150 ms 유지하고 PIV·SAT·ANT·AE·AF 매 tick 전부. 간격은 장비마다 설정 키(응답 뒤 다음 명령까지 ms): MFC_GAP_MS 50·IG_GAP_MS 200·CMD_GAP_MS(RF Pulse) 0·DCP_GAP_MS 150. 번갈아 읽기·stale 없음. 제어 동작이 곧 나갈 때만 읽기를 양보하고 제어가 0.4 s 안에 읽은 질의는 다시 보내지 않는다. v1 폴링 판정(유량 이탈 경고 등)은 v1 주기 3 s 그대로. 변환 도구는 v1 settings.json 의 큰 간격 값을 옮기지 않고 새 기본값을 쓴다(변환 기록에 사유). bench 도구(v2/tools/bench_probe.py)가 이 간격으로 응답 시간·오류율을 재고 --set 으로 바꿔 비교한다.', reason='사용자 결정 2026-11-02', confirm=False, where='v2/ch12/drivers/mfc.py; ig.py; dcpulse.py; rfpulse*.py; spec/devices.py(INTERVALS)'),
     dict(id='D37', title='MFC·IG 연결 유지', decision='v1 cleanup 은 TCP 를 닫음 — v2 는 1초 읽기 때문에 유지(NPort 60 s 무통신 끊김도 없어짐).', reason="1단계 MFC·IG 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/mfc.py; ig.py"),
     dict(id='D38', title='IG SIG 0 이 못 나갈 때', decision='v1 은 임시 TCP 를 한 번 열어 보냄 — v2 는 남겨 두었다가 링크가 돌아오면(최대 1시간).', reason="1단계 MFC·IG 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/mfc.py; ig.py"),
     dict(id='D39', title='MFC·IG 재연결 시점·SO_KEEPALIVE', decision='v1 감시 주기(1.5/2 s) 대신 끊기면 바로 백오프(1 s ×2, 최대 20 s). 공용 TcpTransport 는 SO_KEEPALIVE 를 늘 켬(v1 MFC·IG 0) — MFC/IG_TCP_KEEPALIVE 버림.', reason="1단계 MFC·IG 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/mfc.py; ig.py"),
@@ -384,7 +384,7 @@ DECISIONS = [
     dict(id='D47', title='RF Pulse 재시도는 호출자 한도 안에서만', decision='v1 은 호출자가 포기한 뒤에도 늦은 재시도를 보내 큐가 약 40 s 막힐 수 있었다.', reason="1단계 DC Pulse·RF Pulse 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/dcpulse*.py; rfpulse*.py"),
     dict(id='D48', title='DC Pulse 1초 읽기', decision='출력 ON 중 매 tick PIV·SAT·ANT(점화 창 밖 AE/AF 번갈아). v1 은 5 s(점화 창 1 s) — 연속 N회 판정은 v1 주기 표본으로만 세서 AUTO-STOP 시점은 v1 과 같다. NAK 증가 여부는 bench 확인.', reason="1단계 DC Pulse·RF Pulse 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/dcpulse*.py; rfpulse*.py"),
     dict(id='D49', title='펄스 tick 읽기 응답 한도', decision='tick 마감(약 0.9 s) — v1 DC 4.5 s·RF 폴링 9 s. DC 는 v1 처럼 무응답 1회면 세션 재개.', reason="1단계 DC Pulse·RF Pulse 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/dcpulse*.py; rfpulse*.py"),
-    dict(id='D50', title='RF Pulse 1초 읽기는 v1 폴링 일정 그대로(약 8 s 한 바퀴)', decision='1500 ms 간격 때문에 대부분 행이 stale(필드별 자기 품질).', reason="1단계 DC Pulse·RF Pulse 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/dcpulse*.py; rfpulse*.py"),
+    dict(id='D50', title='RF Pulse 1초 읽기 — 응답을 받는 대로 다음 질의, 162·165·166 매 tick 전부(사용자 결정 2026-11-02)', decision="사용자 결정 2026-11-02: CESAR 1310 매뉴얼 4-48~49(AE Bus: 호스트 명령 → ACK → 응답 프레임 → 호스트 ACK 주고받기, 응답 100 ms 이내)에 최소 간격 규정이 없어 CMD_GAP_MS 기본 0(v1 1500) — 응답을 받는 대로 다음 질의하고 필요한 질의(162 상태·165 순방향·166 반사)를 매 tick 전부 읽는다. FORP/REFP 3회 연속 판정·rf_status/power 이벤트는 v1 한 바퀴(≈8 s) 주기 POLL_INTERVAL_MS(기본 8000, v1 5000 은 '쉼' 값)마다만 — 판정이 3 s 로 당겨지지 않게.", reason='사용자 결정 2026-11-02', confirm=False, where='v2/ch12/drivers/mfc.py; ig.py; dcpulse.py; rfpulse*.py; spec/devices.py(INTERVALS)'),
     dict(id='D51', title='펄스 쓰기 동작 중 다른 쓰기', decision='STATE_NOT_ALLOWED 로 거부(v1 은 큐에). OFF 는 맨 앞.', reason="1단계 DC Pulse·RF Pulse 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/dcpulse*.py; rfpulse*.py"),
     dict(id='D52', title='펄스 재연결 간격', decision='worker 지수 간격(1→10 s) — v1 DC 워치독은 한 번도 연결된 적이 없으면 지연 없이 반복, RF 확인형 OFF 시작 때 2 s 로 되돌림.', reason="1단계 DC Pulse·RF Pulse 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/dcpulse*.py; rfpulse*.py"),
     dict(id='D53', title='START 중 CSR 1/2 자동 복구가 호출자 한도를 넘어 START 실패', decision='v1 이상 동작 그대로(골든 start_csr1_setpoint·start_csr2_mode). DC HV-on 확인 실패 뒤 폴링이 켜진 채 남는 것도 v1 그대로.', reason="1단계 DC Pulse·RF Pulse 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/dcpulse*.py; rfpulse*.py"),
@@ -461,4 +461,19 @@ DECISIONS = [
          reason="sim 을 기본 설정으로 띄우면 저장소 루트에 'C:\\…' 이름 폴더가 생기던 것(최종 검증).", confirm=False, where="v2/common/winpaths.py; v2/ch12/app.py"),
     dict(id="D323", title="감시 프로그램 신호(리눅스·맥)", decision="SIGTERM·SIGINT·SIGHUP 을 받으면 자식에게 SIGTERM 을 넘기고 최대 30 s 기다린 뒤 kill, 자식 종료 코드로 끝나고 다시 켜지 않음. 리눅스에서는 터미널 Ctrl+C 와 kill -INT 를 구별할 수 없어 감시 프로그램 아래 Ctrl+C 는 공정 중에도 의도적 종료(파워만 끔)가 된다. 윈도우는 콘솔 그룹 신호를 자식도 받으므로 넘기지 않음.",
          reason="SIGTERM 에 자식이 고아로 남던 것(최종 검증).", confirm=True, where="v2/supervisor/supervisor.py"),
+]
+
+DECISIONS += [
+    dict(id="D330", title="값을 바꾸는 명령의 쓰기 → 되읽기 확인 → 다시 쓰기 → 오류 통일(사용자 결정 2026-11-02)",
+         decision="MFC(FLOW_SET R6{4+ch}·FLOW_ON/OFF R69·VALVE R6·SPn_SET R{n}·SPn_ON R7)·IG(SIG 0 → RDI 'IG OFF')·DC Pulse(0x66→0xA6·0x67→0xA7)·"
+                  "RF Pulse(주파수 93→193·듀티 96→196)·PLC(DAC 레지스터 D4~D7 FC6→FC3, 래치 DCV_SET 코일 FC5→FC1)는 쓴 뒤 *_REWRITE_GAP_MS 뒤 되읽어 확인하고, "
+                  "다르면 같은 값을 다시 쓰며(*_REWRITE_MAX 회), 그래도 다르면 사유 코드 VERIFY_MISMATCH 로 오류(로그 '[… 되읽기 불일치]'). "
+                  "장비마다 *_READBACK_ENABLED 로 끌 수 있다(현장 응답 형식이 다르면 bench 에서 끄고 보고). 되읽기 질의가 없는 명령(MFC 영점·SIG 1 'OK' 응답형·"
+                  "DC Pulse ACK 형·RF Pulse CSR 형·PLC 스위치 코일·히터·TSP·두께 모니터)은 장비 사실 표 READBACK_NONE 에 이유와 함께 적고 v1 과 같게 둔다.",
+         reason="사용자 결정 2026-11-02 — 값을 바꾸는 모든 명령을 같은 방식으로 통일", confirm=False,
+         where="v2/ch12/spec/devices.py(READBACK·READBACK_NONE); drivers/mfc_ops.py; ig_ops.py; dcpulse_ops.py; rfpulse.py; plc_cmds.py"),
+    dict(id="D331", title="되읽기 응답 형식·RF Pulse 설정값 되읽기 질의 번호는 현장 확인 대기",
+         decision="MFC R65~R67·R69·R6·R7·R1~R4 응답 형식은 v1 의 꺼져 있던 검증 경로 파서 그대로(sim 가정), RF Pulse Setpoint/Regulation/Pulsing 되읽기 질의는 "
+                  "번호·쪽수를 확인하지 못해 두지 않았다(CSR 로만 확인). 둘 다 UNVERIFIED 에 올렸고 bench 에서 확인한다.",
+         reason="매뉴얼이 이 저장소에 없다", confirm=True, where="v2/ch12/spec/devices.py(UNVERIFIED)"),
 ]

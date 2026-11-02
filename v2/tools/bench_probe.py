@@ -19,7 +19,10 @@ r"""챔버12 bench 실측 도구 — 장비 노트북에서 v1 을 끈 상태로
   · DCV_SET 래치·RF 릴레이·가스 밸브·IG 점등만 켜진 것은 [참고] 로 남기고 계속(출력 없음)
 - 설정 전부 읽기(안전 확인 뒤): 장비별 bench 질의를 한 번씩(장비마다 동시에, 장비 안에서는 드라이버 간격대로, 무응답이면 0.3 s 쉬고
   다음) + PLC 첫 읽기의 코일·레지스터 전부 → 요약 표 + inventory.json(원문 그대로 — 해석은 드라이버 파서로 '뜻'에만).
-- N 분 1초 수집(SnapshotBus·TickLoop — 실행 프로그램과 같은 읽기) → 응답 시간(p50·p99·최대)·보낸 간격(최소·p50)·무응답·품질 통계.
+- N 분 1초 수집(SnapshotBus·TickLoop — 실행 프로그램과 같은 읽기) → 응답 시간(p50·p99·최대)·보낸 간격(최소·p50)·무응답·오류율·품질 통계.
+  장비 간격은 설정 키 그대로(사용자 결정 2026-11-02 D36·D50): MFC_GAP_MS 50·IG_GAP_MS 200·CMD_GAP_MS(RF Pulse) 0·DCP_GAP_MS 150 —
+  --set MFC_GAP_MS=100 처럼 바꿔 가며 응답 시간·오류율을 비교한다. MFC 는 R60·R5, IG 는 RDI, RF Pulse 는 162·165·166, DC Pulse 는
+  PIV·SAT·ANT·AE·AF 를 매 tick 전부 읽는다(번갈아 읽기 없음 — 품질 stale 이 나오면 간격이 너무 큰 것).
 - 기록: 바탕화면\v2_bench_YYYYMMDD_HHMMSS — events.jsonl(처음부터), inventory.json, 스냅샷(SQLite·CSV), 통신 녹화 rec_<장비>.jsonl,
   summary.txt. NAS·G:·운영 폴더(LOG_ROOT_DIR·LOCAL_DATA_DIR 등)에는 쓰지 않는다(그 아래를 --out 으로 주면 거부 — 종료 4).
   Ctrl+C 로 언제든 멈출 수 있고, 멈춰도 요약은 남긴다.
@@ -49,6 +52,8 @@ from v2.ch12.params import PARAMS
 from v2.tools import bench_probe_dev as BD
 
 NO_REPLY_PAUSE_S = 0.3
+# 장비 종류 → 응답 뒤 다음 명령까지의 간격 설정 키(사용자 결정 2026-11-02 D36·D50) — 요약에 설정값과 실측 간격을 나란히 적는다
+GAP_KEYS = {"mfc": "MFC_GAP_MS", "ig": "IG_GAP_MS", "rfpulse": "CMD_GAP_MS", "dcpulse": "DCP_GAP_MS"}
 POWER_TRACE_W = 5.0
 FLOW_TRACE_SCCM = 0.1
 FORBIDDEN_OUT_KEYS = ("LOG_ROOT_DIR", "LOCAL_DATA_DIR", "OUTPUT_LOCAL_FIRST_DIR", "CAMERA_LOG_ROOT", "HOST_LOG_LOCAL_DIR",
@@ -404,9 +409,13 @@ class BenchProbe:
             if none > 0 or not pr.worker.ready:
                 problem.append(pr)
             if d:
+                sent_n = len(ex) - cut
+                err = f"{100.0 * max(0, none) / sent_n:.2f} %" if sent_n > 0 else "-"
+                gk = GAP_KEYS.get(pr.kind)
+                gap_txt = f"  [설정 간격 {gk}={self.cfg.get(gk)} ms]" if gk else ""
                 self.say(f"응답 {pr.name:12s}: {len(d)}회  p50 {_pct(d, 50):.1f} ms  p99 {_pct(d, 99):.1f} ms  최대 {max(d):.1f} ms  "
-                         f"무응답 {none}  간격 최소 {min(gaps, default=0):.0f}·p50 {_pct(gaps, 50) if gaps else 0:.0f} ms"
-                         + (f"  (종료 때 끊김 {cut} — 무응답 아님)" if cut else ""))
+                         f"무응답 {none}  오류율 {err}  간격 최소 {min(gaps, default=0):.0f}·p50 {_pct(gaps, 50) if gaps else 0:.0f} ms"
+                         + gap_txt + (f"  (종료 때 끊김 {cut} — 무응답 아님)" if cut else ""))
             else:
                 self.say(f"응답 {pr.name:12s}: 응답 없음(보낸 {len(ex)}회)")
         blocked = [e for e in self.events if type(e).__name__ == "GuardEvent"]

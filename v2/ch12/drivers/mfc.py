@@ -11,13 +11,16 @@ main 이 끈 경로라 v1 운영에서 보내지 않는다 — DEV-096).
   질의 R60(전체 유량, 'Q0…') · R5(압력, 'P…') · R1~R4(SP 값, 'S{n}…')
 응답 없는 명령(no-reply)은 v1 _await_sent 처럼 '실제로 보낸 것'을 최대 30 s 기다려 확정한다. 넘으면 켜는 계열은 철회 후 실패,
   끄는 계열(FLOW_OFF·VALVE_OPEN)은 실패를 알리되 명령은 남겨 순서대로 보낸다(device/mfc.py:2032-2064).
-간격: 응답을 받은 뒤 MFC_GAP_MS(1000) — no-reply 는 보낸 뒤 gap + 늦은 줄 흡수 MFC_ALLOW_NO_REPLY_DRAIN_MS(80).
+간격: 응답을 받은 뒤 MFC_GAP_MS(기본 50 — 사용자 결정 2026-11-02 D36, v1 은 1000) — no-reply 는 보낸 뒤 gap + 늦은 줄 흡수 MFC_ALLOW_NO_REPLY_DRAIN_MS(80).
   연결 직후 첫 명령 전 MFC_POST_OPEN_QUIET_MS(800). 질의 응답 한도 MFC_TIMEOUT(2000).
 무응답: 연결 뒤 2 s 안이면 재시도(연결 유지), 그 밖은 응답 1회 늦어도 연결을 끊고 재연결(v1 device/mfc.py:1419-1437 — D182,
   worker fail_streak=1). 끊기면 재연결 간격 MFC_RECONNECT_BACKOFF_START_MS 1000 ×2, 최대 20000.
-1초 읽기(합의된 변경): v1 은 공정 중(set_process_status True)에만 3 s 마다 R60 → R5 를 읽었다. v2 는 tick 마다 하나씩 읽는다 —
-  명령 간격 1 s 때문에 1초에 질의 하나라 R60·R5 를 번갈아(자기 품질·나이). 제어 동작(op)이 진행 중이거나 막 끝났으면(1.5 s)
-  읽지 않고 양보한다(v1 폴링도 비-폴링 명령에 양보 — device/mfc.py:1554-1557) — 그때 행에는 제어가 읽은 R60·R5 가 1 s 안의 값이면 들어간다.
+1초 읽기(합의된 변경): v1 은 공정 중(set_process_status True)에만 3 s 마다 R60 → R5 를 읽었다. v2 는 매 tick R60·R5 를 모두 읽는다
+  (사용자 결정 2026-11-02 D36 — 번갈아 읽기·stale 없음). 제어 동작(op)의 다음 입출력이 곧이거나 막 끝났으면(0.3 s) 양보한다
+  (v1 폴링도 비-폴링 명령에 양보 — device/mfc.py:1554-1557) — 그때 행에는 제어가 읽은 R60·R5 가 1 s 안의 값이면 들어간다.
+쓰기 되읽기(D36): FLOW_SET(R6{4+ch})·FLOW_ON/OFF(R69 비트)·VALVE(R6 위치)·SPn_SET(R{n})·SPn_ON(R7) 은 쓴 뒤 MFC_REWRITE_GAP_MS 뒤 되읽어
+  확인하고, 다르면 MFC_REWRITE_MAX 회까지 다시 쓰며, 그래도 다르면 OpFailed(VERIFY_MISMATCH). ZEROING(Z1·L{4+ch}1)은 되읽을 질의가 없어
+  v1 과 같게 보낸 것으로 확정. MFC_READBACK_ENABLED=false 면 v1 과 같게 확인 없이 확정.
   v1 의 '폴링' 판정(유량 이탈 경고·flow/pressure 이벤트 → 공정 기록·모니터)은 v1 주기(MFC_POLLING_INTERVAL_MS 3 s, 폴링 사용자가
   있을 때만, 가스/압력 마스크대로) 그대로 — 1초 읽기 값 중 그 주기에 처음 온 값을 쓴다.
 판정(안정화 R60 1 s × 최대 180 · WAIT_PRESSURE R5 1 s)은 v1 타이밍 그대로 worker 안에서(op 생성기).
@@ -41,8 +44,9 @@ from v2.ch12.drivers import mfc_ops
 GAS_MAP = {1: "Ar", 2: "O2", 3: "N2"}            # device/mfc.py:166
 CONNECT_RETRY_WINDOW_S = 2.0                     # device/mfc.py:1425 — 연결 뒤 이 안의 무응답은 연결 유지 재시도
 TICK_GAP_WAIT_S = 0.5                            # 1초 읽기가 명령 간격을 기다려 주는 최대(넘으면 이번 tick 은 안 읽음)
-IDLE_HOLD_S = 1.5                                # 제어 동작이 끝난 뒤 1초 읽기를 쉬는 시간(공정 엔진의 다음 명령 몫)
+IDLE_HOLD_S = 0.3                                # 제어 동작이 끝난 뒤 1초 읽기를 쉬는 시간(공정 엔진의 다음 명령 몫) — 간격 50 ms 라 짧게
 CACHE_FRESH_S = 1.0                              # 제어가 읽은 값을 1초 행에 쓰는 최대 나이
+SKIP_IF_READ_WITHIN_S = 0.4                      # 제어(안정화 등)가 이만큼 안에 읽은 질의는 이번 tick 에 다시 보내지 않음
 
 # v1 lib/config_common.py:300-330 MFC_COMMANDS — 같은 글자(함수/문자열)
 MFC_COMMANDS: Dict[str, Any] = {
@@ -253,13 +257,13 @@ class MfcDriver:
                 self.clock.sleep_until(self.clock.monotonic() + 0.1)
                 session.transport.reset_input()
                 self.reader.clear()
-                self.ready_at = self.clock.monotonic() + max(0.15, self.ms("MFC_GAP_MS", 1000))
+                self.ready_at = self.clock.monotonic() + max(0.15, self.ms("MFC_GAP_MS", 50))
                 self.status(f"[TIMEOUT] {item.tag} {sent}".replace("  ", " "))
                 return RETRY
             self.status(f"[TIMEOUT] {item.tag} {sent}".replace("  ", " "))
             self.reader.clear()
             raise                                                       # worker: 1회 → 연결 끊고 재연결(D182)
-        self.ready_at = self.clock.monotonic() + self.ms("MFC_GAP_MS", 1000)
+        self.ready_at = self.clock.monotonic() + self.ms("MFC_GAP_MS", 50)
         if sent in ("R60", "R5"):
             self.latest[sent] = (self.clock.monotonic(), line)
         if item.tag:                                                    # 1초 읽기(tag 없음)는 이벤트를 내지 않는다
@@ -275,13 +279,13 @@ class MfcDriver:
         return Query(cmd, t, t + 2.0 + extra, prefixes, retries, tag)
 
     def send(self, cmd: str, tag: str, gap_ms: Optional[float] = None, withdraw: bool = True) -> Send:
-        gap = self.ms("MFC_GAP_MS", 1000) if gap_ms is None else float(gap_ms) / 1000.0
+        gap = self.ms("MFC_GAP_MS", 50) if gap_ms is None else float(gap_ms) / 1000.0
         return Send(cmd, gap, withdraw=withdraw, tag=tag)
 
     # OpRunner 콜백
     def exec_timeout_s(self, item) -> float:
         """요청 하나의 실행 한도 — 간격 대기(연결 직후 쉼 포함) + 응답 한도 + 여유."""
-        return (self.ms("MFC_GAP_MS", 1000) + self.ms("MFC_ALLOW_NO_REPLY_DRAIN_MS", 80)
+        return (self.ms("MFC_GAP_MS", 50) + self.ms("MFC_ALLOW_NO_REPLY_DRAIN_MS", 80)
                 + self.ms("MFC_POST_OPEN_QUIET_MS", 800) + self.ms("MFC_TIMEOUT", 2000) + 1.0)
 
     def on_withdraw(self, item: Send, why: str) -> None:
@@ -296,19 +300,20 @@ class MfcDriver:
     # ───────── 1초 읽기(스냅샷 묶기 소스) ─────────
     def _idle(self, now: float) -> bool:
         bu = self.runner.busy_until()
-        gap = self.ms("MFC_GAP_MS", 1000)
-        return ((bu is None or bu >= now + gap + TICK_GAP_WAIT_S + 0.2)
+        gap = self.ms("MFC_GAP_MS", 50)
+        return ((bu is None or bu >= now + 2 * gap + 0.35)
                 and now - self.runner.last_end >= IDLE_HOLD_S and not self.runner.ghosts)
 
     def source_read(self, session, seq: int) -> Dict[str, Any]:
+        """매 tick R60(유량)과 R5(압력)를 모두 읽는다(사용자 결정 2026-11-02 D36 — 번갈아 읽기·stale 없음).
+        두 질의 사이는 MFC_GAP_MS(응답 뒤 다음 명령까지). 제어가 방금(0.4 s 안) 읽은 질의는 다시 보내지 않는다."""
         now = self.clock.monotonic()
         if self._idle(now) and self.ready_at <= now + TICK_GAP_WAIT_S:
-            want = {"gas": "R60", "pressure": "R5"}.get(self._poll_stage or "")
-            if want is None:
-                ages = {k: (self.latest[k][0] if k in self.latest else -1e9) for k in ("R60", "R5")}
-                want = min(("R60", "R5"), key=lambda k: ages[k])
-            pre = ("Q0",) if want == "R60" else ("P",)
-            self.io_query(session, Query(want, self.ms("MFC_TIMEOUT", 2000), 0.0, pre, 1, ""))
+            for cmd, pre in (("R60", ("Q0",)), ("R5", ("P",))):
+                last = self.latest.get(cmd)
+                if last is not None and self.clock.monotonic() - last[0] < SKIP_IF_READ_WITHIN_S:
+                    continue
+                self.io_query(session, Query(cmd, self.ms("MFC_TIMEOUT", 2000), 0.0, pre, 1, ""))
             self._v1_poll(self.clock.monotonic())
         return self._fields(self.clock.monotonic())
 
@@ -498,7 +503,8 @@ class MfcDriver:
             raise ValueError(n)
         key = f"SP{int(n)}_ON"
         self._run(key, mfc_ops.noreply(self, key, mk_cmd(key), f"[{key}]", owner, None,
-                                       min_delay_s=self.ms("MFC_GAP_MS", 1000)), on_done, owner)
+                                       min_delay_s=self.ms("MFC_GAP_MS", 50), verify=mfc_ops.verify_sp_on(int(n))),
+                  on_done, owner)
 
     def ps_zeroing(self, owner: Optional[str] = None, on_done=None) -> None:
         self._run("PS_ZEROING", mfc_ops.zeroing(self, None, owner), on_done, owner)
@@ -565,10 +571,11 @@ def blocks(chamber: str) -> List[DeviceBlock]:
 
 # 1초 예산 — v1 근거 간격(MFC_GAP_MS 1000: 응답 뒤 1 s)으로 계산. 실측은 bench.
 BUDGET = dict(
-    queries_per_tick=1, bytes_tx=4, bytes_rx=26, min_gap_ms=1000, fits_1s=False, alternate="R60/R5 격초(자기 품질·나이)",
-    note="R60(4 B → 'Q0+aa.a+bb.b+cc.c+dd.d\\r\\n' 약 26 B)과 R5(3 B → 'P+x.xx\\r\\n' 약 9 B)를 번갈아 한 tick 에 하나. "
-         "명령 간격이 응답 뒤 1 s 라 한 주기 = 1 s + 응답 시간 — 응답 50 ms 면 약 10 tick 에 한 번은 간격을 못 맞춰 그 tick 은 안 읽음(stale). "
-         "제어 동작 중·직후 1.5 s 는 읽지 않음(그동안 제어가 읽은 값이 1 s 안이면 씀). 마감은 MFC_TIMEOUT + 대기 0.5 s",
+    queries_per_tick=2, bytes_tx=7, bytes_rx=35, min_gap_ms=50, fits_1s=True, alternate=None,
+    note="R60(4 B → 'Q0+aa.a+bb.b+cc.c+dd.d\\r\\n' 약 26 B)과 R5(3 B → 'P+x.xx\\r\\n' 약 9 B)를 매 tick 둘 다. 9600 bps 에서 전송 약 "
+         "7+35 B ≈ 44 ms + 장비 응답 시간 + 명령 간격 MFC_GAP_MS(기본 50 ms, 응답 뒤 다음 명령까지) ≈ 0.2 s. 근거: GPC3000 매뉴얼 p.72"
+         "(9600 8N1·CR 끝·최소 명령 간격 규정 없음 — 사용자 결정 2026-11-02 D36). 제어가 0.4 s 안에 읽은 질의는 다시 보내지 않고, "
+         "제어 명령이 곧 나갈 때는 양보. 마감은 MFC_TIMEOUT + 대기 0.5 s. 실측(응답 시간·오류율)은 bench",
 )
 
 

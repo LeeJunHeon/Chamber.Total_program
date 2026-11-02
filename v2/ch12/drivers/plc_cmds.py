@@ -8,12 +8,52 @@ from __future__ import annotations
 
 from typing import Callable, Optional
 
+from v2.common.transport import VerifyMismatch
 from v2.common.worker import Status
 from v2.ch12.drivers import plc_map as PM
 from v2.ch12.drivers.plc_conv import dac_code, dc_scale, rf_regs, rf_scale
 
 
 class PlcCommands:
+    def _write_reg_verified(self, s, addr: int, value: int, label: str) -> None:
+        """레지스터 쓰기 → 되읽기(FC3) → 다르면 다시 쓰기(PLC_REWRITE_MAX 회, 쓴 뒤 PLC_REWRITE_GAP_MS) → 그래도 다르면 VerifyMismatch
+        (사용자 결정 2026-11-02 D36). PLC_READBACK_ENABLED=false 면 v1 처럼 FC6 에코만."""
+        self.io_write_reg(s, addr, value)
+        if not self.cfg.get("PLC_READBACK_ENABLED", True) or self.io.read_only:
+            return
+        rew = max(0, int(self.cfg.get("PLC_REWRITE_MAX", 3)))
+        gap = float(self.cfg.get("PLC_REWRITE_GAP_MS", 50)) / 1000.0
+        got = None
+        for n in range(rew + 1):
+            if gap > 0:
+                self.clock.sleep_until(self.clock.monotonic() + gap)
+            got = self.io_read_reg(s, addr)
+            if int(got) == int(value):
+                return
+            self._log("", f"[VERIFY] {label} D{addr} 되읽기 불일치: 기대 {value}, 읽음 {got} (시도 {n + 1}/{rew + 1})")
+            if n < rew:
+                self.io_write_reg(s, addr, value)
+        raise VerifyMismatch(f"{label} D{addr} 되읽기 불일치: 기대 {value}, 읽음 {got} (다시 쓰기 {rew}회)")
+
+    def _write_coil_verified(self, s, addr: int, on: bool, label: str) -> None:
+        """래치 코일(DCV_SET 등) 쓰기 → 되읽기(FC1) 확인 — _write_reg_verified 와 같은 규칙."""
+        self.io_write_coil(s, addr, on)
+        if not self.cfg.get("PLC_READBACK_ENABLED", True) or self.io.read_only:
+            return
+        rew = max(0, int(self.cfg.get("PLC_REWRITE_MAX", 3)))
+        gap = float(self.cfg.get("PLC_REWRITE_GAP_MS", 50)) / 1000.0
+        got = None
+        for n in range(rew + 1):
+            if gap > 0:
+                self.clock.sleep_until(self.clock.monotonic() + gap)
+            got = self.io_read_coils(s, addr, 1)[0]
+            if bool(got) == bool(on):
+                return
+            self._log("", f"[VERIFY] {label} 코일 {addr} 되읽기 불일치: 기대 {bool(on)}, 읽음 {got} (시도 {n + 1}/{rew + 1})")
+            if n < rew:
+                self.io_write_coil(s, addr, on)
+        raise VerifyMismatch(f"{label} 코일 {addr} 되읽기 불일치: 기대 {bool(on)}, 읽음 {got} (다시 쓰기 {rew}회)")
+
     # 고수준(device/plc.py:1747-1830)
     def _then_log(self, source: str, msg: str, on_done):
         """v1 고수준 함수는 write_switch 가 끝난 뒤(성공했을 때만 — 실패면 예외) 한 줄 더 남긴다(device/plc.py:1749-1808)."""
@@ -105,7 +145,7 @@ class PlcCommands:
 
         def fn(s):
             self._log(source, f"POWER SET ({family})[{idx}] <- {bool(on)}")
-            self.io_write_coil(s, a, bool(on))
+            self._write_coil_verified(s, a, bool(on), key)
             self._log(source, f"set {key} <- {bool(on)} (addr={a})")
         return self.submit(f"{key}={int(bool(on))}", fn, kind=kind, source=source, on_done=on_done, not_before=not_before)
 
@@ -124,7 +164,7 @@ class PlcCommands:
         def fn(s):
             if guard is not None and not guard():
                 return None
-            self.io_write_reg(s, a, code)
+            self._write_reg_verified(s, a, code, write_key)
             self._log(source, f"write reg {write_key} (addr={a}) <- {code}")
             self._log(source, f"POWER WRITE ({family}) {write_key} <- W={float(power_w):.3f} (DAC={code})")
             return code

@@ -174,6 +174,11 @@ DEFAULT = {
     "(code).LOCAL_FALLBACK_ROOT": ("", "빈 값 = exe(소스 실행이면 저장소) 옆 Logs_LocalFallback — v1 과 같은 자리"),
     "(code).PLC_COIL_LOG_LOCAL_DIR": ("", "빈 값 = LOCAL_FALLBACK_ROOT\\PLC_Coil — v1 과 같은 자리"),
     "(code).RGA_NET": ("", "장비 계정은 비밀값(장비 로컬 파일) — 코드에 두지 않음(D23)"),
+    # 사용자 결정 2026-11-02(D36·D50) — 통신 간격은 v1 의 큰 값(RS-232 안정화용) 대신 매 tick 전부 읽는 새 기본값
+    "common.MFC_GAP_MS": (50, "사용자 결정 2026-11-02 D36 — v1 1000 ms, GPC3000 매뉴얼 p.72 최소 간격 규정 없음"),
+    "common.IG_GAP_MS": (200, "사용자 결정 2026-11-02 D36 — v1 1000 ms, IG 매뉴얼 없음(bench 확인)"),
+    "common.CMD_GAP_MS": (0, "사용자 결정 2026-11-02 D50 — v1 1500 ms, CESAR 1310 매뉴얼 4-48~49 최소 간격 규정 없음"),
+    "common.POLL_INTERVAL_MS": (8000, "사용자 결정 2026-11-02 D50 — v1 5000 ms 는 '쉼', 판정 주기(한 바퀴 ≈ 8 s)로 뜻을 바꿈"),
 }
 
 

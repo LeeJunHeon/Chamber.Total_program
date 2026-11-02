@@ -35,8 +35,17 @@ PARAMS: tuple = (
     # ───────── 통신 간격·응답 ─────────
     _m("MFC_TIMEOUT", "MFC 질의 응답 제한", "ms", I, 2000, 200, 10000, src=f"{_S}:164;{_C}:278;device/mfc.py:1414-1437",
        desc="질의 한 줄을 기다리는 시간. 넘으면(연결 뒤 2 s 밖) 연결을 끊고 재연결(v1 — D182)", note=_W),
-    _m("MFC_GAP_MS", "MFC 명령 간격", "ms", I, 1000, 0, 5000, src=f"{_S}:165;{_C}:279;device/mfc.py:1407;device/mfc.py:1443",
-       desc="응답을 받은 뒤(응답 없는 명령은 보낸 뒤) 다음 명령까지. SPn_SET·SPn_ON 확정 대기에도 쓴다", note=_W),
+    _m("MFC_GAP_MS", "MFC 명령 간격", "ms", I, 50, 0, 5000, src=f"{_S}:165;{_C}:279;device/mfc.py:1407;device/mfc.py:1443",
+       desc="응답을 받은 뒤(응답 없는 명령은 보낸 뒤) 다음 명령까지. SPn_SET·SPn_ON 확정 대기에도 쓴다. "
+            "사용자 결정 2026-11-02(D36): v1 의 1000 ms 는 RS-232 안정화용이었고 GPC3000 매뉴얼(p.72: 9600 8N1·CR 끝)에 최소 간격 규정이 없어 "
+            "R60·R5 를 매 tick 읽을 수 있는 50 ms 로 — 현장 bench 에서 응답 시간·오류율로 확인", note=_W),
+    _m("MFC_READBACK_ENABLED", "MFC 쓰기 되읽기 확인", "", B, True, src="v2(사용자 결정 2026-11-02 D36)",
+       desc="값을 바꾸는 명령(FLOW_SET·FLOW_ON/OFF·밸브·SPn_SET·SPn_ON) 뒤 되읽기 질의로 확인(꺼면 v1 과 같게 확인 없이 확정). "
+            "R64~R69·R1~R4·R6·R7 응답 형식이 현장에서 다르면 bench 에서 끄고 보고"),
+    _m("MFC_REWRITE_MAX", "MFC 다시 쓰기 횟수", "회", I, 3, 0, 10, src="v2(사용자 결정 2026-11-02 D36)",
+       desc="되읽기가 기대와 다르면 같은 명령을 다시 쓰는 최대 횟수. 그래도 다르면 사유 코드 VERIFY_MISMATCH 로 실패"),
+    _m("MFC_REWRITE_GAP_MS", "MFC 쓴 뒤 되읽기까지 간격", "ms", I, 300, 0, 5000, src="v2(사용자 결정 2026-11-02 D36)",
+       desc="명령을 쓴 뒤 되읽기 질의까지(그리고 다시 쓰기 사이) 기다리는 시간 — 장비가 값을 반영할 시간"),
     _m("MFC_ALLOW_NO_REPLY_DRAIN_MS", "MFC 응답 없는 명령 뒤 흡수", "ms", I, 80, 0, 1000,
        src=f"{_S}:156;{_C}:267;device/mfc.py:1409-1410", desc="응답 없는 명령 뒤 간격에 더하는 늦은 줄 흡수 시간", note=_W),
     _m("MFC_POST_OPEN_QUIET_MS", "MFC 연결 직후 쉼", "ms", I, 800, 0, 5000, src=f"{_S}:155;{_C}:266;device/mfc.py:1370-1377",

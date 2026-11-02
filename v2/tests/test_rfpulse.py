@@ -79,7 +79,8 @@ def test_status_and_duty_limits_match_v1():
 
 @pytest.mark.parametrize("case", GOLD["cases"], ids=[c["name"] for c in GOLD["cases"]])
 def test_case_bytes_match_v1(case):
-    r = Rig()
+    # v1 값으로 비교: 명령 간격 1500 ms·되읽기 불일치는 경고만(새 기본값은 아래 전용 시험 — 사용자 결정 2026-11-02 D50)
+    r = Rig(cfg={"CMD_GAP_MS": 1500, "RFPULSE_READBACK_ENABLED": False})
     if case["pre_on"]:
         assert r.call(r.d.start_pulse_process, 100.0) == (None, True)
         r.d.polling = False
@@ -108,26 +109,44 @@ def test_case_bytes_match_v1(case):
 
 
 def test_command_gap_is_v1_1500ms():
-    r = Rig(control=6)
+    """설정 키 CMD_GAP_MS 를 v1 값(1500)으로 두면 명령 사이가 v1 처럼 벌어진다(기본값은 0 — 아래 시험)."""
+    r = Rig(control=6, cfg={"CMD_GAP_MS": 1500})
     assert r.call(r.d.start_pulse_process, 100.0, 1000, 50) == (None, True)
     ts = r.times()
     assert all(b - a >= 1.5 for a, b in zip(ts, ts[1:]))
     r.done()
 
 
-def test_poll_cycle_v1_order_and_quality():
+def test_poll_reads_all_three_every_tick_no_stale():
+    """사용자 결정 2026-11-02 D50 — 매 tick 162 → 165 → 166 전부, 응답을 받는 대로 다음 질의(CMD_GAP_MS 기본 0), stale 없음."""
+    assert CFG["CMD_GAP_MS"] == 0 and R.BUDGET["fits_1s"] is True and R.BUDGET["queries_per_tick"] == 3
     r = Rig()
     assert r.call(r.d.start_pulse_process, 100.0) == (None, True)
     n0 = len(r.sim.received)
     rows = r.rows(20)
     cmds = [bytes.fromhex(f)[1] for f in r.sent(n0)]
-    assert cmds[:6] == [162, 165, 166, 162, 165, 166]                               # v1 순서 162 → 165 → 166
+    assert cmds[:6] == [162, 165, 166, 162, 165, 166]                               # 순서는 v1 과 같다
+    assert len(cmds) >= 3 * 19
     ts = r.times(n0)
-    assert ts[1] - ts[0] >= 1.5 and ts[3] - ts[2] >= 5.0                            # 간격 1.5 s, 바퀴 사이 5 s
+    assert ts[1] - ts[0] < 0.2 and ts[2] - ts[1] < 0.2                              # 응답 받는 대로 다음 질의
     assert all(x["ch1.rfpulse.q"] == "ok" for x in rows)
-    assert {x["ch1.rfpulse.fwd_w.q"] for x in rows} == {"ok", "stale"}
+    for k in ("fwd_w", "ref_w", "out_on"):
+        assert all(x[f"ch1.rfpulse.{k}.q"] == "ok" for x in rows[1:]), k
     assert rows[-1]["ch1.rfpulse.fwd_w"] == pytest.approx(100.0, abs=1) and rows[-1]["ch1.rfpulse.set_w"] == 100.0
     assert rows[-1]["ch1.rfpulse.ref_w"] == pytest.approx(60.0, abs=2)              # 점화 전(가스 없음) 반사 큼
+    r.done()
+
+
+def test_readback_of_freq_duty_rewrites_then_fails_with_reason():
+    r = Rig(control=6, cfg={"RFPULSE_REWRITE_MAX": 2})
+    r.sim.readback_offset = 5                                                     # 장비가 값을 못 바꾼 것처럼 틀리게 되읽힘
+    reason, ok = r.call(r.d.start_pulse_process, 100.0, 1000, 50)
+    assert ok is False
+    fails = [e for e in r.ev("command_failed") if e.cmd == "START_SEQUENCE"]
+    assert fails and fails[-1].reason == "VERIFY_MISMATCH" and "다시 쓰기 2회" in fails[-1].detail
+    cmds = [bytes.fromhex(f)[1] for f in r.sent()]
+    assert cmds.count(96) == 3 and cmds.count(93) == 3                            # DUTY·FREQ: 쓰기 1 + 다시 쓰기 2
+    assert 2 not in cmds                                                          # RF ON 은 나가지 않음
     r.done()
 
 
@@ -157,7 +176,7 @@ def test_forp_monitor_and_ch2_refp_warn():
 
 
 def test_stop_guard_blocks_settings_after_stop():
-    r = Rig(control=6)
+    r = Rig(control=6, cfg={"CMD_GAP_MS": 1500})                                  # v1 간격 — 시작 순서가 5 s 보다 오래 걸려야 중간에 멈춘다
     box = []
     r.d.start_pulse_process(100.0, 1000, 50, on_done=lambda *x: box.append(x))
     r.c.wait_until(r.c.monotonic() + 5.0)
@@ -226,7 +245,7 @@ def test_reconnect_after_disconnect():
 
 
 def test_budget():
-    assert R.BUDGET["min_gap_ms"] == 1500 and R.BUDGET["fits_1s"] is False and R.BUDGET["queries_per_tick"] == 1
+    assert R.BUDGET["min_gap_ms"] == 0 and R.BUDGET["fits_1s"] is True and R.BUDGET["queries_per_tick"] == 3
 
 
 def test_cleanup_confirms_off_when_maybe_on():

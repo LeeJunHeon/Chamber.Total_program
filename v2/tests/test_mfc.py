@@ -23,12 +23,13 @@ SCALE = {"ch1": (1.0, 1.0, 1.0), "ch2": (1.0, 10.0, 2.0)}
 
 
 class Rig:
-    def __init__(self, chamber="ch1", writes=True, cfg=None, flow_tau_s=0.0, start=1.5):
+    def __init__(self, chamber="ch1", writes=True, cfg=None, flow_tau_s=0.0, start=1.5, readback=False):
         self.c = VirtualClock(start_wall=1_760_000_000.0)
         self.c.register()
         self.ch = Chamber(chamber)
         self.sim = MfcSim(self.ch, scale=SCALE[chamber], flow_tau_s=flow_tau_s)
-        self.cfg = dict(CFG, **(cfg or {}))
+        # 되읽기는 기본 끔 — v1 바이트·순서 비교 시험은 v1 그대로 보내는 명령만 본다(되읽기는 아래 전용 시험)
+        self.cfg = dict(CFG, MFC_READBACK_ENABLED=readback, **(cfg or {}))
         self.events, self.wev = [], []
         self.w = M.make_worker(self.c, SimTransport(self.c, self.sim), self.cfg, chamber, writes, on_event=self.wev.append)
         self.d = M.MfcDriver(self.c, self.w, self.cfg, writes, on_event=self.events.append, chamber=chamber)
@@ -103,8 +104,9 @@ def test_golden_bytes_and_events_match_v1(chamber):
 
 
 def test_timing_matches_v1_gaps():
-    """FLOW_SET 확정은 보낸 즉시, FLOW_ON 은 등록 + max(MFC_DELAY_MS,200) 와 보낸 시각 중 늦은 쪽, 명령 사이는 gap 1 s + 흡수 80 ms."""
-    r = Rig("ch1")
+    """v1 값(MFC_GAP_MS 1000)으로 둔 경우: FLOW_SET 확정은 보낸 즉시, FLOW_ON 은 등록 + max(MFC_DELAY_MS,200) 와 보낸 시각 중 늦은 쪽,
+    명령 사이는 gap 1 s + 흡수 80 ms. (기본 간격은 50 ms — 사용자 결정 2026-11-02 D36, 아래 기본 간격 시험)"""
+    r = Rig("ch1", cfg={"MFC_GAP_MS": 1000})
     t0 = r.c.monotonic()
     r.call(r.d.set_flow, 1, 10.0)
     t1 = r.c.monotonic()
@@ -119,26 +121,41 @@ def test_timing_matches_v1_gaps():
     r.done()
 
 
-def test_one_second_reads_alternate_with_quality():
+def test_default_gap_is_50ms_and_commands_follow_it():
+    r = Rig("ch1")
+    assert CFG["MFC_GAP_MS"] == 50
+    t0 = r.c.monotonic()
+    r.call(r.d.set_flow, 1, 10.0)
+    r.call(r.d.flow_on, 1)
+    times = [t for t, d in r.sim.received if t >= t0]
+    assert times[1] - times[0] == pytest.approx(0.13, abs=0.01)           # Q1 → L11: gap 50 + drain 80
+    r.done()
+
+
+def test_one_second_reads_both_every_tick_no_stale():
+    """사용자 결정 2026-11-02 D36 — 매 tick R60·R5 를 모두 읽는다(번갈아 읽기·stale 없음)."""
     r = Rig("ch2")
     r.call(r.d.set_flow, 2, 1.0)
     r.call(r.d.flow_on, 2)
     r.c.wait_until(r.c.monotonic() + 2.0)
+    t0 = r.c.monotonic()
     rows = r.run(14)
     q = [(x["ch2.mfc.o2_sccm.q"], x["ch2.mfc.pressure_mtorr.q"]) for x in rows[2:]]
     assert all(row["ch2.mfc.q"] == "ok" for row in rows[2:])
-    assert ("ok", "stale") in q and ("stale", "ok") in q                    # 질의 하나씩 번갈아
-    flows = [x["ch2.mfc.o2_sccm"] for x in rows if x["ch2.mfc.o2_sccm.q"] == "ok"]
+    assert all(x == ("ok", "ok") for x in q)                                # 둘 다 매 tick 새 값
+    flows = [x["ch2.mfc.o2_sccm"] for x in rows[2:]]
     assert flows and all(v == pytest.approx(1.0) for v in flows)            # %FS 10 ÷ 스케일 10
     assert rows[-1]["ch2.mfc.o2_set_sccm"] == pytest.approx(1.0) and rows[-1]["ch2.mfc.o2_on"] is True
+    seq = r.sent(t0)
+    assert seq.count("R60") >= 13 and seq.count("R5") >= 13
     gaps = [b - a for (a, x), (b, y) in zip(r.sim.received, list(r.sim.received)[1:])]
-    assert min(gaps) >= 1.0 - 1e-9                                          # v1 명령 간격 1 s 를 지킴
+    assert min(gaps) >= 0.05 - 1e-9                                         # 명령 간격 MFC_GAP_MS(50 ms)를 지킴
     r.done()
 
 
 def test_tick_reads_yield_while_control_runs():
-    """제어 동작 중·직후 1.5 s 에는 1초 읽기가 끼어들지 않는다 — FLOW_SET → FLOW_ON → 안정화 R60 순서가 v1 과 같다."""
-    r = Rig("ch1")
+    """v1 간격(1000 ms)에서는 제어 동작 중·직후 1초 읽기가 끼어들지 않는다 — FLOW_SET → FLOW_ON → 안정화 R60 순서가 v1 과 같다."""
+    r = Rig("ch1", cfg={"MFC_GAP_MS": 1000})
     bus = r.bus()
     out = []
     loop = TickLoop(r.c, bus, [out.append])
@@ -151,6 +168,69 @@ def test_tick_reads_yield_while_control_runs():
     i = seq.index("Q1 10.0")
     assert seq[i:i + 3] == ["Q1 10.0", "L11", "R60"]
     r.c.wait_until(None, lambda: len(out) >= 30)
+    r.done()
+
+
+def test_readback_confirms_each_write_kind():
+    """쓰기 → 되읽기 확인(FLOW_SET R65·FLOW_ON/OFF R69·VALVE R6·SPn_SET R{n}·SPn_ON R7) — 한 번에 맞으면 다시 쓰지 않는다."""
+    r = Rig("ch1", readback=True)
+    t0 = r.c.monotonic()
+    assert r.call(r.d.set_flow, 1, 10.0)[1] is None
+    assert r.sent(t0) == ["Q1 10.0", "R65"]
+    t1 = r.c.monotonic()
+    assert r.call(r.d.flow_on, 1)[0] == "FLOW_ON"
+    assert r.sent(t1)[:2] == ["L11", "R69"]
+    t2 = r.c.monotonic()
+    assert r.call(r.d.flow_off, 1)[1] is None
+    assert r.sent(t2) == ["L10", "R69"]
+    t3 = r.c.monotonic()
+    assert r.call(r.d.valve_close)[1] is None
+    assert r.sent(t3) == ["C", "R6"]
+    t4 = r.c.monotonic()
+    assert r.call(r.d.sp_set, 1, 2.5)[1] is None
+    assert r.sent(t4) == ["S1 0.25", "R1"]
+    t5 = r.c.monotonic()
+    assert r.call(r.d.sp_on, 1)[1] is None
+    assert r.sent(t5) == ["D1", "R7"]
+    t6 = r.c.monotonic()
+    assert r.call(r.d.ps_zeroing)[1] is None
+    assert r.sent(t6) == ["Z1"]                                             # 되읽을 질의 없음 — v1 과 같게
+    assert any("되읽기 확인" in e.detail for e in r.kinds("status"))
+    r.done()
+
+
+def test_readback_mismatch_rewrites_then_fails_with_reason_code():
+    r = Rig("ch1", readback=True, cfg={"MFC_REWRITE_MAX": 2, "MFC_REWRITE_GAP_MS": 100})
+    r.sim.ignore_writes = {"Q1"}                                            # 장비가 값을 받지 않음
+    t0 = r.c.monotonic()
+    res = r.call(r.d.set_flow, 1, 10.0)
+    assert res[0] == "FLOW_SET" and res[1] == "VERIFY_MISMATCH"
+    assert res[2].startswith("FLOW_SET ch1 되읽기 확인 실패 — 기대 10.00 %FS")
+    assert r.sent(t0) == ["Q1 10.0", "R65", "Q1 10.0", "R65", "Q1 10.0", "R65"]   # 쓰기 1 + 다시 쓰기 2
+    assert r.kinds("command_failed")[-1].reason == "VERIFY_MISMATCH"
+    assert sum("되읽기 불일치" in e.detail for e in r.kinds("status")) == 3
+    assert r.d.last_setpoints[1] == 0.0                                     # 확정하지 않음
+    r.done()
+
+
+def test_readback_recovers_when_first_write_is_lost():
+    r = Rig("ch1", readback=True)
+    r.sim.ignore_writes = {"Q1"}
+    box = []
+    r.d.set_flow(1, 10.0, on_done=lambda *a: (box.append(a), r.c.notify()))
+    r.c.wait_until(r.c.monotonic() + 0.2)
+    r.sim.ignore_writes = set()                                             # 두 번째 쓰기부터 받음
+    r.c.wait_until(None, lambda: bool(box))
+    assert box[0][1] is None and r.sent().count("Q1 10.0") == 2
+    assert r.d.last_setpoints[1] == 10.0
+    r.done()
+
+
+def test_readback_disabled_confirms_without_query():
+    r = Rig("ch1")
+    t0 = r.c.monotonic()
+    assert r.call(r.d.set_flow, 1, 10.0)[1] is None
+    assert r.sent(t0) == ["Q1 10.0"]
     r.done()
 
 
@@ -316,5 +396,5 @@ def test_params_and_budget():
     assert CFG["CH1_MFC_TCP_PORT"] == 4003 and CFG["CH2_MFC_TCP_PORT"] == 4006
     assert (CFG["CH2_MFC_SCALE_FACTORS_2"], CFG["CH2_MFC_SCALE_FACTORS_3"]) == (10.0, 2.0)
     assert M.endpoint(CFG, "ch2") == ("192.168.1.50", 4006)
-    assert M.BUDGET["queries_per_tick"] == 1 and M.BUDGET["min_gap_ms"] == CFG["MFC_GAP_MS"]
+    assert M.BUDGET["queries_per_tick"] == 2 and M.BUDGET["min_gap_ms"] == CFG["MFC_GAP_MS"] and M.BUDGET["fits_1s"]
     assert M.source_deadline_ms(CFG) == 2600

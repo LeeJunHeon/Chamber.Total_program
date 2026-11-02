@@ -65,10 +65,11 @@ def blocks(chamber: str = "ch1") -> list:
     ), desc="EnerPulse EP5 — MOXA NPort TCP")]
 
 
-BUDGET = dict(queries_per_tick=4, bytes_tx=16, bytes_rx=28, min_gap_ms=150, fits_1s=True,
-              alternate="점화 창 밖: AE(0xAE)/AF(0xAF) 번갈아(판정 tick 은 둘 다), 점화 창 안: PIV·SAT·ANT 만",
-              note="읽기 프레임 4 B(02 CMD 03 CHK), 응답 PIV 10 B·그 밖 6 B. 4질의 × (150 ms 간격 + 왕복) ≈ 0.65 s. "
-                   "v1 폴링 조건(출력 ON)일 때만 읽음. 판정은 v1 주기(1 s/5 s). 실측(응답 지연·NAK)은 bench")
+BUDGET = dict(queries_per_tick=5, bytes_tx=20, bytes_rx=34, min_gap_ms=150, fits_1s=True,
+              alternate=None,
+              note="읽기 프레임 4 B(02 CMD 03 CHK), 응답 PIV 10 B·그 밖 6 B. 매 tick PIV·SAT·ANT·AE·AF 5질의 × (150 ms 간격 + 왕복) ≈ 0.8 s "
+                   "(사용자 결정 2026-11-02 D36 — AE/AF 번갈아 읽기 없앰, 점화 창 안에서는 PIV·SAT·ANT 만). 간격 DCP_GAP_MS 150 은 v1 값 "
+                   "그대로(EnerPulse 매뉴얼 100 ms 이상). v1 폴링 조건(출력 ON)일 때만 읽음. 판정은 v1 주기(1 s/5 s). 실측(응답 지연·NAK)은 bench")
 
 
 class DcPulseDriver(DcpMonitorMixin, DcpOpsMixin):
@@ -173,12 +174,12 @@ class DcPulseDriver(DcpMonitorMixin, DcpOpsMixin):
     def _confirmed(self, label: str) -> None:
         self._emit("command_confirmed", label, cmd=label)
 
-    def _failed(self, label: str, why: str, phase: Optional[str] = None) -> None:
+    def _failed(self, label: str, why: str, phase: Optional[str] = None, reason: Optional[str] = None) -> None:
         """v1 _emit_failed — 시작 순서 중이면 phase="prepare"(OUTPUT_OFF·AUTO_STOP 은 붙이지 않음)."""
         if phase is None and self._prepare_active and not str(label).upper().startswith(("OUTPUT_OFF", "AUTO_STOP")):
             phase = "prepare"
         self.last_failure = f"{label}: {why}"
-        reason = "DCP_OFF_UNCONFIRMED" if str(label).upper().startswith("OUTPUT_OFF") else "DCP_COMMAND_FAILED"
+        reason = reason or ("DCP_OFF_UNCONFIRMED" if str(label).upper().startswith("OUTPUT_OFF") else "DCP_COMMAND_FAILED")
         self._emit("command_failed", why, reason=reason, cmd=label, data={"phase": phase} if phase else None)
 
     # ───────── 포트 붙이기(pulse_port) ─────────
@@ -481,8 +482,7 @@ class DcPulseDriver(DcpMonitorMixin, DcpOpsMixin):
         out[f"{b}.arc_soft"], out[f"{b}.arc_hard"] = soft, hard
         s_rate = h_rate = None
         if not fast:
-            want = (P.R_ARC_SOFT_RATE, P.R_ARC_HARD_RATE) if judge else ((P.R_ARC_SOFT_RATE,) if seq % 2 == 0 else (P.R_ARC_HARD_RATE,))
-            for code in want:
+            for code in (P.R_ARC_SOFT_RATE, P.R_ARC_HARD_RATE):         # 매 tick 둘 다(D36 — 번갈아 읽기 없음)
                 if self._room(session):
                     v = P.u16_tail(self._q(session, code))
                     if code == P.R_ARC_SOFT_RATE:
