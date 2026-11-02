@@ -164,6 +164,6 @@ def test_default_windows_paths_not_created_in_cwd(tmp_path):
         if pr.p.poll() is None:
             pr.p.kill()
     bad = [p.name for p in work.iterdir() if p.name[:2].endswith(":") or p.name.startswith("\\")]
-    assert not bad, (bad, pr.text)                                           # 작업 폴더에 'C:…'·'G:…'·'\\…' 없음
+    assert not bad, (bad, pr.text)                                           # 작업 폴더에 'C:…'·'\\…' 없음
     assert (base / "C" / "CH12_v2" / "data" / "logs" / "ch12_v2.log").is_file()   # LOCAL_DATA_DIR 'C:\\CH12_v2\\data'
     assert "윈도우 경로" in pr.text and str(base) in pr.text                 # 시작 로그 한 줄

@@ -4,6 +4,8 @@
 """
 from types import SimpleNamespace as NS
 
+import pytest
+
 from v2.common.clock import VirtualClock
 from v2.ch12.process_events import ProcessEventsMixin
 from v2.ch12.sim.rig import Ch12Rig
@@ -28,9 +30,11 @@ def test_thickness_config_warning_prefix_and_stop_with_system(tmp_path):
     두께 CSV 를 닫는다(system.stop → stm.stop·outputs.stop)."""
     c = VirtualClock(start_wall=1_760_000_000.0)
     c.register()
-    r = Ch12Rig(c, tmp_path, cfg={"CH2_THICKNESS_STALE_S": 0.5})
-    warns = [e.detail for e in r.events if e.source == "ch2.stm100" and e.kind == "config_warning"]
-    assert warns and all(w.startswith("⚠ 두께 모니터 설정: THICKNESS_STALE_S=0.5") for w in warns)
+    with pytest.raises(ValueError):                    # 범위 밖 STALE 은 v1 처럼 올려 쓰지 않고 거부(D11)
+        Ch12Rig(c, tmp_path / "bad", cfg={"CH2_THICKNESS_STALE_S": 0.5})
+    r = Ch12Rig(c, tmp_path, cfg={"CH1_SUPPORTS_THICKNESS": True})        # 켰는데 포트 0 → 끔 + 경고(값을 고쳐 쓰지 않음)
+    warns = [e.detail for e in r.events if e.source == "ch1.stm100" and e.kind == "config_warning"]
+    assert warns and all(w.startswith("⚠ 두께 모니터 설정: THICKNESS_TCP_HOST/PORT=") for w in warns)
     assert r.start()
     r.loop.run(2)
     stm = r.stm["ch2"]

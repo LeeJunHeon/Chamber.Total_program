@@ -3,6 +3,7 @@ import csv
 import datetime as dt
 import sqlite3
 import threading
+from pathlib import Path
 import time
 
 import pytest
@@ -271,3 +272,149 @@ def test_nas_round_without_today(tmp_path):
     names = {p.name for p in nas.iterdir()}
     assert "snap_20261015.sqlite" in names and "snap_20261016.sqlite" not in names
     r.stop()
+
+
+# ───────────── D319: 하루치 CSV 내보내기는 공정·운전이 없을 때만, 낮은 우선순위로 나눠서 ─────────────
+def _fill_two_days(r, n_prev=260, n_today=20):
+    for k in range(n_prev):
+        r.put_row(_row(f"2026-10-15T{k // 3600 + 12:02d}:{(k // 60) % 60:02d}:{k % 60:02d}", k, x=k * 0.5))
+    for k in range(n_today):
+        r.put_row(_row(f"2026-10-16T00:00:{k:02d}", n_prev + k))
+
+
+def _wait(cond, timeout=5.0):
+    t0 = time.monotonic()
+    while not cond() and time.monotonic() - t0 < timeout:
+        time.sleep(0.01)
+    return cond()
+
+
+def test_csv_export_waits_for_process_then_finishes_in_chunks(tmp_path):
+    """공정·운전 중이면 내보내기는 시작도 미루고(쓰기는 계속), 끝나면 이어서 한다. 조각(50행)마다 공정 여부를 다시 본다."""
+    busy = [True]
+    calls = [0]
+
+    def busy_fn():
+        calls[0] += 1
+        return busy[0]
+    r = Recorder(tmp_path, COLS, today_fn=lambda: dt.date(2026, 10, 16), busy_fn=busy_fn,
+                 export_chunk_rows=50, export_pause_s=0.0, export_busy_poll_s=0.02)
+    r.start()
+    _fill_two_days(r)
+    assert _wait(lambda: r.written == 280)                                       # 쓰기·큐는 막히지 않음
+    assert _wait(r.export_deferred) and not (tmp_path / "snap_20261015.csv").exists()
+    assert not (tmp_path / "snap_20261015.csv.tmp").exists()                    # 시작도 안 함 — 읽지도 열지도 않음
+    assert r.flush(0.5) is False and r.export_deferrals == 1                    # flush 도 미뤄진 내보내기는 기다리지 않음
+    busy[0] = False
+    assert r.flush(5) and (tmp_path / "snap_20261015.csv").exists()
+    rows = list(csv.reader(open(tmp_path / "snap_20261015.csv", encoding="utf-8-sig", newline="")))
+    assert rows[0] == COLS and len(rows) == 261 and [x[0] for x in rows[1:]] == sorted(x[0] for x in rows[1:])
+    assert not (tmp_path / "snap_20261015.csv.tmp").exists() and "20261015" in r.exported_days
+    assert calls[0] >= 6                                                         # 260행 / 50 = 조각마다 공정 여부 확인
+    r.stop()
+    assert list(r.errors) == []
+
+
+def test_csv_export_pauses_mid_file_when_process_starts_and_resumes(tmp_path):
+    """조각 사이에 공정이 시작되면 멈추고(.tmp 는 그대로), 끝난 뒤 멈춘 자리에서 이어서 — 결과 CSV 는 처음부터 한 번에 쓴 것과 같다."""
+    state = {"busy": False, "n": 0}
+
+    def busy_fn():
+        state["n"] += 1
+        return state["busy"] or (state["n"] == 3 and not state.update(busy=True))        # 세 번째 확인에서 공정 시작
+    r = Recorder(tmp_path, COLS, today_fn=lambda: dt.date(2026, 10, 16), busy_fn=busy_fn,
+                 export_chunk_rows=50, export_pause_s=0.0, export_busy_poll_s=0.02)
+    r.start()
+    _fill_two_days(r)
+    assert _wait(r.export_deferred)
+    part = tmp_path / "snap_20261015.csv.tmp"
+    assert part.exists() and not (tmp_path / "snap_20261015.csv").exists()
+    n_part = len(part.read_text(encoding="utf-8-sig").splitlines())
+    assert 1 < n_part < 261                                                      # 헤더 + 일부 조각만
+    time.sleep(0.1)
+    assert len(part.read_text(encoding="utf-8-sig").splitlines()) == n_part     # 미루는 동안 더 쓰지 않음
+    state["busy"] = False                                                        # 공정 끝
+    assert r.flush(5) and (tmp_path / "snap_20261015.csv").exists()
+    ref = Recorder(tmp_path / "ref", COLS)
+    src = tmp_path / "snap_20261015.sqlite"
+    (tmp_path / "ref").mkdir(exist_ok=True)
+    (tmp_path / "ref" / src.name).write_bytes(src.read_bytes())
+    ref.export_csv("20261015")
+    assert (tmp_path / "ref" / "snap_20261015.csv").read_bytes() == (tmp_path / "snap_20261015.csv").read_bytes()
+    r.stop()
+
+
+def test_csv_export_is_picked_up_again_after_restart(tmp_path):
+    """미뤄진 채 프로그램이 꺼지면(.csv 없음) 다음 start() 가 지난 날 DB 를 찾아 내보낸다."""
+    busy = [True]
+    r = Recorder(tmp_path, COLS, today_fn=lambda: dt.date(2026, 10, 16), busy_fn=lambda: busy[0],
+                 export_chunk_rows=50, export_pause_s=0.0, export_busy_poll_s=0.02)
+    r.start()
+    _fill_two_days(r)
+    assert _wait(r.export_deferred)
+    r.stop()                                                                     # 끝나는 중 — 미뤄진 내보내기는 멈춤
+    assert not (tmp_path / "snap_20261015.csv").exists()
+    r2 = Recorder(tmp_path, COLS, today_fn=lambda: dt.date(2026, 10, 16), export_chunk_rows=50, export_pause_s=0.0)
+    r2.start()
+    assert r2.flush(5) and (tmp_path / "snap_20261015.csv").exists()
+    assert not (tmp_path / "snap_20261016.csv").exists()                         # 오늘 파일은 내보내지 않음
+    r2.stop()
+
+
+def test_csv_export_does_not_delay_a_one_second_tick(tmp_path):
+    """하루치(약 3만 행 × 열 40개)를 기본 조각·쉼으로 내보내는 동안 tick 모양 스레드(2 ms 잠)의 지연이 작다(GIL 을 오래 쥐지 않음)."""
+    cols = ["ts"] + [f"c{i}" for i in range(39)]
+    r = Recorder(tmp_path, cols, today_fn=lambda: dt.date(2026, 10, 16))
+    day_rows = [{"ts": f"2026-10-15T{k // 3600:02d}:{(k // 60) % 60:02d}:{k % 60:02d}.{k % 7}", **{c: k * 1.25 for c in cols[1:]}}
+                for k in range(30000)]
+    db = sqlite3.connect(tmp_path / "snap_20261015.sqlite")
+    db.execute("CREATE TABLE snapshot (" + ", ".join(f'"{c}"' + (" TEXT PRIMARY KEY" if c == "ts" else "") for c in cols) + ")")
+    db.executemany("INSERT INTO snapshot VALUES (" + ",".join("?" for _ in cols) + ")", [[x[c] for c in cols] for x in day_rows])
+    db.commit()
+    db.close()
+    lat, stop = [], threading.Event()
+
+    def ticker():
+        while not stop.is_set():
+            t0 = time.perf_counter()
+            time.sleep(0.002)
+            lat.append(time.perf_counter() - t0 - 0.002)
+    th = threading.Thread(target=ticker, daemon=True)
+    th.start()
+    t0 = time.monotonic()
+    r.start()                                                                    # 오늘 이전 날 DB 를 찾아 내보내기를 시작
+    assert r.flush(60) and (tmp_path / "snap_20261015.csv").exists()
+    stop.set()
+    th.join(2)
+    r.stop()
+    assert len(lat) > 50 and max(lat) < 0.25, (max(lat), len(lat), time.monotonic() - t0)       # 내보내는 동안 가장 늦은 깨어남
+
+
+def test_csv_export_deferred_while_process_across_midnight_in_the_full_rig(tmp_path):
+    """가상 시계 + 실제 조립(Ch12Rig): 공정이 도는 채로 자정을 넘기면 지난 날 CSV 는 만들어지지 않고 tick 은 하나도 놓치지 않는다.
+    공정이 끝나면 이어서 내보낸다."""
+    from v2.ch12.sim.rig import Ch12Rig
+
+    class Eng:
+        busy = True
+    c = VirtualClock(start_wall=dt.datetime(2026, 10, 15, 23, 59, 40).timestamp())
+    c.register()
+    r = Ch12Rig(c, tmp_path)
+    eng = Eng()
+    r.register_engine("ch1", eng)
+    assert r.start()
+    try:
+        r.loop.run(40)                                                           # 23:59:40 → 00:00:20, 자정을 넘김
+        day1 = Path(r.recorder.dir) / "snap_20261015.csv"
+        assert r.recorder.flush(1.0) is False and r.recorder.export_deferred() and not day1.exists()
+        assert r.loop.missed == 0 and r.loop.rows == 40
+        eng.busy = False                                                         # 공정 끝
+        th = list(r.recorder._exports)[0]
+        t0 = time.monotonic()
+        while th.is_alive() and time.monotonic() - t0 < 10:
+            th.join(0.2)
+            c.notify()
+        assert day1.exists() and r.recorder.export_deferrals == 1
+        assert r.loop.missed == 0 and list(r.recorder.errors) == []
+    finally:
+        r.stop()

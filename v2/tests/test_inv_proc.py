@@ -76,10 +76,10 @@ def test_proc_004_ui_recipe_load_30s_timeout_and_exception():
     try:
         RC.load_recipe_file = lambda path, origin="ui": c.wait_until(None, lambda: False)       # NAS 무응답
         t0 = c.monotonic()
-        r = CORE.Ch12Core._load_recipe_ui(SimpleNamespace(clock=c), eng, r"G:\NAS\a.csv")
+        r = CORE.Ch12Core._load_recipe_ui(SimpleNamespace(clock=c), eng, r"\\NAS\a.csv")
         assert c.monotonic() - t0 == pytest.approx(30.0)
         assert not r.ok and r.code == "E227" and not r.rows
-        assert logs == [("File", r"CSV 로드 30초 timeout (NAS 응답 지연): G:\NAS\a.csv")]
+        assert logs == [("File", r"CSV 로드 30초 timeout (NAS 응답 지연): \\NAS\a.csv")]
 
         def boom(path, origin="ui"):
             raise OSError("잠김")

@@ -1,7 +1,7 @@
 """두께 연속 CSV — v1 lib/thickness_logger.py(ThicknessCsvLogger) 의 파일 출력(LOG-064~067).
 
 v1 그대로
-- CHn_THICKNESS_LOG_DIR(기본 C:\\VanaM_Logs\\CH1&2\\Thickness, G: 면 기본값)\\CH{n}\\Thickness_YYYYMMDD.csv. 그 채널 공정 중에만
+- CHn_THICKNESS_LOG_DIR(기본 C:\\VanaM_Logs\\CH1&2\\Thickness, NAS 경로면 기본값)\\CH{n}\\Thickness_YYYYMMDD.csv. 그 채널 공정 중에만
   (set_recording) 1초 1행, 시작 즉시 1행. 열 timestamp, connected(1/0/빈), thickness_nm '%.2f', rate_nm_s '%.3f', freq_hz 정수,
   life_pct '%.1f', crystal_ok, stale, process_running(1/0), process_name.
 - 새 파일(없거나 0바이트)만 utf-8-sig + 머리글, 이어 쓸 때는 utf-8, 매 행 flush, 날짜가 바뀌면 새 파일, 공정 끝나면 닫음.

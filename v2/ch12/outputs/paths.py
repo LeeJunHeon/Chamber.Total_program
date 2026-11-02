@@ -1,4 +1,4 @@
-"""v1 기록 출력의 경로 규칙(한 곳) + 로컬 먼저 → 사본(G:·NAS) 보내기 스레드(D07).
+"""v1 기록 출력의 경로 규칙(한 곳) + 로컬 먼저 → NAS 사본 보내기 스레드(D07).
 
 경로 규칙(v1 근거 — 위치·파일명은 v1 과 같다)
 - 로그 뿌리 LOG_ROOT_DIR(C:\\VanaM_Logs\\CH1&2): 공정 txt CH{n}\\, SYSTEM\\, ERROR\\, RUNTIME_DUMP\\, selfwatch\\, CH2_Heater\\
@@ -7,22 +7,23 @@
 - 로컬 폴백 뿌리 LOCAL_FALLBACK_ROOT = exe(소스 실행이면 저장소) 폴더\\Logs_LocalFallback, 하위 CH1·CH2·Server·PLC_Coil·
   Plasma_Cleaning·TSP·ERROR·RUNTIME_DUMP·RGA·SYSTEM(lib/config_common.py:8-31). cwd 는 쓰지 않는다.
 - Sputter Calib CSV: SPUTTER_CALIB_DB_DIR\\Ch{n}_log.csv, pending LOCAL_FALLBACK_CH{n}_DIR\\Ch{n}_pending.csv
-- 엑셀: G:/공유 드라이브/VanaM_Sputter/Process_log/CH{n}.xlsx(Main — GDRIVE_LOG_DIR 무시, v1 그대로),
-  PC 시트는 GDRIVE_LOG_DIR. 실패 pending: LOCAL_FALLBACK_ROOT\\CH{n}_pending.xlsx / PC 는 <G: 폴더>\\LocalFallback
+- 엑셀: \\\\VanaM_NAS\\VanaM_Sputter\\Process_log\\CH{n}.xlsx(Main — GDRIVE_LOG_DIR 무시, v1 그대로),
+  PC 시트는 GDRIVE_LOG_DIR. 실패 pending: LOCAL_FALLBACK_ROOT\\CH{n}_pending.xlsx / PC 는 <NAS 폴더>\\LocalFallback
+  (v1 은 구글 공유 드라이브 같은 경로였다 — NAS 가 그 드라이브와 동기화되어 있어 NAS 의 같은 경로로, 사용자 결정 2026-11-02)
 - PLC 코일 CSV: PLC_COIL_LOG_NAS_DIR\\YYYYMMDD.csv, 폴백 PLC_COIL_LOG_LOCAL_DIR(비면 LOCAL_FALLBACK_ROOT\\PLC_Coil)
-- 두께: CHn_THICKNESS_LOG_DIR\\CH{n}\\Thickness_YYYYMMDD.csv(G: 면 기본값), 폴백 LOCAL_FALLBACK_ROOT\\Thickness\\CH{n}
+- 두께: CHn_THICKNESS_LOG_DIR\\CH{n}\\Thickness_YYYYMMDD.csv(NAS 경로면 기본값), 폴백 LOCAL_FALLBACK_ROOT\\Thickness\\CH{n}
 - 히터: CH2_HEATER_LOG_DIR(비면 LOG_ROOT_DIR\\CH2_Heater)\\CH2_HEATER_*.csv, 폴백 LOCAL_FALLBACK_ROOT\\CH2_Heater
 - 카메라: CAMERA_LOG_ROOT\\{CH1|CH2|CLEANING|ALL}\\{세션}\\{HHMMSS}_{NNNN}.jpg, 폴백 exe\\Logs_LocalFallback\\Camera_Logs
 - Robot CSV: HOST_LOG_NAS_DIR\\Robot_YYYYMMDD.csv(+_lock\\Robot.lock), HOST_LOG_LOCAL_DIR\\(Robot_YYYYMMDD_sputter.csv·
   pending_sputter.csv·open_sputter.json)
 - OES CSV(워커가 씀): OES_LOCAL_DIR(C:\\VanaM_Logs\\OES)\\CH{n}\\OES_Data_YYYYmmdd_HHMMSS.csv(device/oes.py:37-49,93,171)
   — 환경변수 OES_LOCAL_BASE 가 있으면 그 값(v1 그대로)
-- RGA CSV(워커가 씀): CHn_RGA_CSV_PATH(G:\\공유 드라이브\\VanaM_Sputter\\RGA\\Ch.{n}\\RGA_spectrums.csv),
+- RGA CSV(워커가 씀): CHn_RGA_CSV_PATH(\\\\VanaM_NAS\\VanaM_Sputter\\RGA\\Ch.{n}\\RGA_spectrums.csv),
   폴백 LOCAL_FALLBACK_ROOT\\RGA\\Ch.{n}\\RGA_spectrums.csv(device/rga.py:133-153, lib/config_common.py:128-136)
 
 D07 — 로컬 먼저, 사본만
-- v1 이 G: 에 정본을 직접 쓰던 출력(Calib CSV·Main/PC 엑셀)은 OUTPUT_LOCAL_FIRST_DIR(로컬)에 같은 이름·형식의 정본을
-  먼저 쓰고, G: 의 v1 파일에는 CopySender 가 사본(새 행)을 보낸다. G: 쪽 파일 결과는 v1 과 같다.
+- v1 이 구글 공유 드라이브에 정본을 직접 쓰던 출력(Calib CSV·Main/PC 엑셀)은 OUTPUT_LOCAL_FIRST_DIR(로컬)에 같은 이름·형식의
+  정본을 먼저 쓰고, NAS 의 파일에는 CopySender 가 사본(새 행)을 보낸다. NAS 쪽 파일 결과는 v1 과 같다.
 - CopySender: 이름 붙은 작업(돌려주는 값 True=끝, False=다음에 다시)을 스레드 하나에서 돌린다. 실패한 작업은
   OUTPUT_COPY_RETRY_S 마다 다시. 같은 이름 작업은 하나로 합친다(마지막 것). 정본은 로컬이라 사본이 밀려도 잃지 않는다.
 - v1 이 이미 로컬에 쓰던 출력(공정 txt·PLC 코일·두께·히터·카메라·selfwatch·ERROR·SYSTEM·덤프)은 그대로 로컬에 쓰고
@@ -40,10 +41,10 @@ from typing import Any, Callable, Dict, Mapping, Optional
 
 from v2.ch12.params import outputs as P
 
-V1_GDRIVE_MAIN_DIR = Path("G:/공유 드라이브/VanaM_Sputter/Process_log")    # util/gdrive_logger.py:30 (하드코딩)
+NAS_MAIN_DIR = Path(r"\\VanaM_NAS\VanaM_Sputter\Process_log")    # util/gdrive_logger.py:30 (v1 하드코딩, 구글 공유 드라이브 → NAS 같은 경로)
 V1_THICKNESS_DEFAULT_DIR = r"C:\VanaM_Logs\CH1&2\Thickness"               # lib/thickness_config.py DEFAULT_LOG_DIR
 V1_OES_DEFAULT_DIR = r"C:\VanaM_Logs\OES"                                 # device/oes.py:39
-V1_RGA_DEFAULT = r"G:\공유 드라이브\VanaM_Sputter\RGA\Ch.{n}\RGA_spectrums.csv"   # lib/config_common.py:128-131
+V1_RGA_DEFAULT = r"\\VanaM_NAS\VanaM_Sputter\RGA\Ch.{n}\RGA_spectrums.csv"   # lib/config_common.py:128-131 (NAS 같은 경로)
 
 
 def exe_base_dir() -> Path:
@@ -105,7 +106,7 @@ class Paths:
 
     # ── 엑셀 ──
     def excel_main_dir(self) -> Path:
-        return V1_GDRIVE_MAIN_DIR
+        return NAS_MAIN_DIR
 
     def excel_pc_dir(self) -> Path:
         return Path(str(self._g("GDRIVE_LOG_DIR")))
@@ -122,7 +123,7 @@ class Paths:
     # ── 두께·히터 ──
     def thickness_root(self, ch: int) -> str:
         d = str(self._g(f"CH{int(ch)}_THICKNESS_LOG_DIR") or "").strip() or V1_THICKNESS_DEFAULT_DIR
-        if d[:2].upper() == "G:":
+        if d.startswith("\\\\"):           # NAS(UNC) 경로는 쓰지 않는다(v1 은 구글 공유 드라이브 경로를 이렇게 거름)
             d = V1_THICKNESS_DEFAULT_DIR
         return d
 
@@ -170,7 +171,7 @@ class Paths:
 
 # ───────────────────────── 사본 보내기 스레드 ─────────────────────────
 class CopySender:
-    """로컬 정본 → G:·NAS 사본. 작업 = 돌려주는 값 True(끝)/False(다음에 다시). 예외도 '다음에 다시'."""
+    """로컬 정본 → NAS 사본. 작업 = 돌려주는 값 True(끝)/False(다음에 다시). 예외도 '다음에 다시'."""
 
     def __init__(self, cfg: Optional[Mapping[str, Any]] = None, name: str = "copy-sender",
                  retry_s: Optional[float] = None) -> None:

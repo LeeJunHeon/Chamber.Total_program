@@ -523,7 +523,7 @@ ITEMS = [
        note="na 근거: 메인이 같은 50070 에 직접 호스트를 띄움(main.py:1854-1856), 업스트림 키 PROCESS_HOST_HOST/PORT 는 주석 처리"
             "(lib/config_common.py:44-57) 라 50071 을 듣는 곳이 없음, 빌드 스크립트·다른 모듈에서 참조 없음(grep). v2 robot_server 는 plan 3-(5) 새 설계"),
     _i(148, "apps/robot_server 화면(ServerPage): Bind Host/Port·Running, Start/Stop/Restart, 'Client connected/..' 로그 기반 접속 목록, "
-            "Auto-scroll·Pause·Hide GET_SPUTTER_STATUS 필터, 5000줄 넘으면 4000줄로, 1 s 마다 <G:\\..\\Logs>\\CH1&2_Server\\RobotServer\\robot_server_page_YYYYMMDD.log "
+            "Auto-scroll·Pause·Hide GET_SPUTTER_STATUS 필터, 5000줄 넘으면 4000줄로, 1 s 마다 <구글 공유 드라이브(NAS)\\..\\Logs>\\CH1&2_Server\\RobotServer\\robot_server_page_YYYYMMDD.log "
             "(실패 시 cwd\\Logs\\..) 저장, Save → robot_server_comm_YYYYMMDD_HHMMSS.log",
        "apps/robot_server/runtime/server_page.py:29-308; apps/robot_server/main_server.py:209-284", _S, status="na",
        note="na 근거: ROB-147 과 같음(프로그램 자체 미사용). 또 프록시 로그는 '[CONN_OPEN] cid=..' 라 _PEER_RE('Client connected') "

@@ -25,6 +25,7 @@ import threading
 from dataclasses import dataclass
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
+from v2.common.paramdef import ConfigRangeError
 from v2.common.snapshot import DeviceBlock, FieldDef, FType
 from v2.common.snapshot_bus import Source
 from v2.common.transport import Cancelled, ReadTimeout, TcpSettings, TcpTransport, TransportError
@@ -62,13 +63,18 @@ BUDGET = dict(
 )
 
 
-def _clamp(v: float, lo: float, hi: float) -> float:
-    return min(max(float(v), lo), hi)
+def _in_range(key: str, v: Any, lo: float, hi: float) -> float:
+    """범위 안이면 그대로, 밖이면 ConfigRangeError — v1 은 클램프했다(lib/thickness_config.py:110-159).
+    사용자 결정 2026-11-02(D11): 고쳐 쓰지 않고 거부한다(파라미터 표가 설정 적용 때 먼저 같은 범위를 거부)."""
+    f = float(v)
+    if not (lo <= f <= hi):
+        raise ConfigRangeError(f"{key}={f:g}: 범위({lo:g}~{hi:g}) 밖 — 고쳐 쓰지 않고 거부")
+    return f
 
 
 @dataclass(frozen=True)
 class StmSettings:
-    """v1 lib/thickness_config.load_thickness_config 와 같은 검증·클램프(lib/thickness_config.py:110-159)."""
+    """v1 lib/thickness_config.load_thickness_config 와 같은 범위 검사(lib/thickness_config.py:110-159) — 클램프 대신 거부(D11)."""
     enabled: bool
     host: str
     port: int
@@ -88,15 +94,14 @@ def settings(cfg: Dict[str, Any], chamber: str) -> StmSettings:
     if enabled and (not host or not (1 <= port <= 65535)):
         warns.append(f"THICKNESS_TCP_HOST/PORT={host!r}:{port} 가 올바르지 않음 → 두께 모니터 끔")
         enabled = False
-    poll = _clamp(cfg[p + "THICKNESS_POLL_INTERVAL_S"], 0.25, 5.0)
-    slow = _clamp(cfg[p + "THICKNESS_SLOW_POLL_S"], poll, 60.0)
-    tmo = _clamp(cfg[p + "THICKNESS_CMD_TIMEOUT_S"], 0.3, 5.0)
+    poll = _in_range(p + "THICKNESS_POLL_INTERVAL_S", cfg[p + "THICKNESS_POLL_INTERVAL_S"], 0.25, 5.0)
+    slow = _in_range(p + "THICKNESS_SLOW_POLL_S", cfg[p + "THICKNESS_SLOW_POLL_S"], poll, 60.0)
+    tmo = _in_range(p + "THICKNESS_CMD_TIMEOUT_S", cfg[p + "THICKNESS_CMD_TIMEOUT_S"], 0.3, 5.0)
     stale = float(cfg[p + "THICKNESS_STALE_S"])
     stale_min = max(2.0, 4.0 * poll)
     if stale < stale_min:
-        warns.append(f"THICKNESS_STALE_S={stale:g} < {stale_min:g}(폴링 4회) → {stale_min:g}")
-        stale = stale_min
-    return StmSettings(enabled, host or "192.168.1.50", port, poll, slow, stale, max(0.1, tmo), tuple(warns))
+        raise ConfigRangeError(f"{p}THICKNESS_STALE_S={stale:g} < {stale_min:g}(폴링 4회) — 고쳐 쓰지 않고 거부")
+    return StmSettings(enabled, host or "192.168.1.50", port, poll, slow, stale, tmo, tuple(warns))
 
 
 def worker_kwargs() -> Dict[str, Any]:

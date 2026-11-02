@@ -14,7 +14,7 @@ from v2.ch12 import web_schema as W
 from v2.ch12.params import PARAMS, table
 from v2.ch12.sim.rig import Ch12Rig
 
-PINNED = (6, "TBD")
+PINNED = (7, "cf8645e1fd65f1350d5bb595905f33adb264d7f80a6e6f4dde58bce1e1137553")
 TOP = ["version", "hash", "paramSchemaHash", "configVersion", "overriddenKeys", "params", "crossRules", "dropped", "commands",
        "preconditions", "reasons", "plcButtons", "recipe", "blocks", "adjust", "stopSequence", "states", "events",
        "eventKinds", "paramGroups", "snapshot", "chambers"]

@@ -19,9 +19,9 @@ DIFFERENCES = [
 ]
 
 DIFFERENCES += [
-    dict(id="X03", what="G: 드라이브 기록 방식",
-         v1="Calib CSV·엑셀·RGA CSV 정본을 G: 에 직접 씀", v2="같은 경로·이름·형식, 로컬에 먼저 쓰고 사본만 G:/NAS 로",
-         why="G: 스트리밍에 새 파일이 사라지는 문제(지시 4장)", agreed="D07"),
+    dict(id="X03", what="구글 공유 드라이브 → NAS, 로컬 먼저 기록",
+         v1="Calib CSV·엑셀·RGA CSV 정본을 구글 공유 드라이브에 직접 씀", v2="G 드라이브는 쓰지 않고 NAS(\\\\VanaM_NAS\\VanaM_Sputter)의 같은 경로·이름·형식. Calib CSV·엑셀은 로컬에 먼저 쓰고 사본만 NAS 로, RGA CSV 는 v1 처럼 NAS 직접 + 실패 시 로컬 폴백",
+         why="구글 드라이브 스트리밍에 새 파일이 사라지는 문제(지시 4장) + NAS 가 그 드라이브와 동기화됨(사용자 결정 2026-11-02)", agreed="D07"),
     dict(id="X04", what="ALL STOP", v1="없음(챔버별 Stop 만)", v2="CH1·CH2·플라즈마 클리닝·TSP STOP 을 한꺼번에",
          why="지시 3장 (7)·5장 4단계", agreed="D05"),
 ]

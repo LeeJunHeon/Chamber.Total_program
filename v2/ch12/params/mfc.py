@@ -53,7 +53,7 @@ PARAMS: tuple = (
     _m("MFC_FIRST_CMD_EXTRA_TIMEOUT_MS", "MFC 연결 직후 질의 추가 대기", "ms", I, 2000, 0, 10000,
        src=f"{_S}:157;{_C}:268;device/mfc.py:2107-2110", desc="연결 뒤 2 s 안에 낸 질의는 호출 쪽 대기에 이만큼 더", note=_W),
     _m("MFC_SKIP_ECHO", "MFC 에코 줄 버림", "", B, True, src=f"{_S}:150;{_C}:259;device/mfc.py:1456-1458", note=_W),
-    _m("MFC_DELAY_MS", "MFC FLOW ON/OFF 확정 대기", "ms", I, 1000, 0, 10000, src=f"{_S}:166;{_C}:280;device/mfc.py:469-470;device/mfc.py:514-515",
+    _m("MFC_DELAY_MS", "MFC FLOW ON/OFF 확정 대기", "ms", I, 1000, 200, 10000, src=f"{_S}:166;{_C}:280;device/mfc.py:469-470;device/mfc.py:514-515",
        desc="FLOW_ON·FLOW_OFF 확정 = 등록 + max(이 값, 200 ms)", note=_W),
     _m("MFC_DELAY_MS_VALVE", "MFC 밸브 확정 대기", "ms", I, 5000, 0, 60000, src=f"{_S}:167;{_C}:281;device/mfc.py:645-660",
        desc="VALVE_OPEN·VALVE_CLOSE 확정 = 등록 + 이 값", note=_W),

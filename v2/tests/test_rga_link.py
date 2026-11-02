@@ -19,7 +19,7 @@ from v2.ch12.drivers import rga_link as rl
 from v2.ch12.drivers import worker_proc as wp
 
 GOLDEN = json.loads((Path(__file__).parent / "golden" / "dev_rga.json").read_text(encoding="utf-8"))
-NET = json.dumps({"ch1": {"user": "tester", "password": "pw-not-real"}, "ch2": {"user": "tester", "password": "pw-not-real"}})
+NET = {"RGA_USER": "tester", "RGA_PASSWORD": "pw-not-real"}      # 설정 키(D23 — 기본은 admin/admin)
 
 
 class Rig:
@@ -30,7 +30,7 @@ class Rig:
         self.tmp = tmp
         n = 1 if chamber == "ch1" else 2
         self.cfg = {"RGA_WORKER_FAKE": True, f"CH{n}_RGA_CSV_PATH": str(tmp / "G" / f"Ch.{n}" / "RGA_spectrums.csv"),
-                    "LOCAL_FALLBACK_RGA_DIR": str(tmp / "fallback"), "RGA_NET": NET, **cfg}
+                    "LOCAL_FALLBACK_RGA_DIR": str(tmp / "fallback"), **NET, **cfg}
         self.events = []
         self.link = rl.RgaLink(RealClock(), None, self.cfg, writes_allowed, on_event=self.events.append, chamber=chamber)
 
@@ -152,9 +152,9 @@ def test_csv_fallback_and_csv_fail_keep_measurement(rigs, tmp_path):
 
 
 def test_no_credentials_fails_without_touching_device(rigs):
-    r = rigs(RGA_NET="", RGA_MAX_ATTEMPTS=1)
+    r = rigs(RGA_USER="", RGA_MAX_ATTEMPTS=1)
     res = r.scan()
-    assert not res.ok and "RGA 계정 설정 없음" in res.message
+    assert not res.ok and "RGA 계정 없음" in res.message
     assert r.calls_list() == []
 
 
@@ -192,8 +192,22 @@ def test_golden_scan_arguments_equal_v1_argv():
         v1d = dict(zip(v1[0::2], v1[1::2]))
         v2d = {"--ch": str(cmd["ch"]), "--timeout": str(cmd["timeout"]), "--csv": cmd["csv"],
                "--csv_fallback": cmd["csv_fallback"].replace(str(wp.REPO_ROOT), "<ROOT>")}
-        assert v2d == v1d
-        assert cmd["user"] == "" and cmd["password"] == ""                             # 비밀값은 설정에만(기본 없음)
+        from v2.common.winpaths import v1_gdrive_to_nas
+        assert v2d == {k: v1_gdrive_to_nas(v) for k, v in v1d.items()}      # D07: v1 의 구글 공유 드라이브 --csv = NAS 같은 경로
+        assert cmd["user"] == "admin" and cmd["password"] == "admin"           # D23: 설정이 없으면 장비 공장 기본 계정
     assert rl.step_timeout_ms({}) == GOLDEN["step_timeout_ms"] == 187000
     assert rl.blocks("ch1")[0].columns() == ["ch1.rga.q", "ch1.rga.age_s", "ch1.rga.running", "ch1.rga.measuring",
                                              "ch1.rga.sample_age_s"]
+
+
+def test_default_account_is_factory_admin_and_not_secret():
+    """D23(사용자 결정 2026-11-02): RGA100 tcpip 로그인은 공장 기본 계정 admin/admin 이 기본값인 설정 키 — 비밀값이 아니다."""
+    from v2.ch12.params import table
+    from v2.common.paramdef import Scope
+    by = table().by_key()
+    assert "RGA_NET" not in by
+    for k in ("RGA_USER", "RGA_PASSWORD"):
+        assert by[k].default == "admin" and by[k].scope is not Scope.SECRET
+    link = rl.RgaLink(RealClock(), None, {}, True, chamber="ch2")
+    assert link._creds() == ("admin", "admin")                                  # 설정이 없어도 공장 기본 계정
+    assert rl.RgaLink(RealClock(), None, {"RGA_USER": "u2", "RGA_PASSWORD": "p2"}, True)._creds() == ("u2", "p2")   # 바꿀 수 있다

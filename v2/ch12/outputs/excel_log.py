@@ -1,17 +1,17 @@
 """CH1/CH2 공정 엑셀(CH{n}.xlsx) — v1 util/gdrive_logger.py 의 파일 출력(LOG-041~056).
 
 v1 그대로
-- Main Process 시트: G:/공유 드라이브/VanaM_Sputter/Process_log/CH{n}.xlsx(하드코딩 — GDRIVE_LOG_DIR 무시, LOG-041),
+- Main Process 시트: \\\\VanaM_NAS\\VanaM_Sputter\\Process_log\\CH{n}.xlsx(하드코딩 — GDRIVE_LOG_DIR 무시, LOG-041),
   성공(ok) 공정만(STOP·실패는 Calib CSV 에만 — 부르는 쪽 몫), DEV_MODE 면 생략, 사용한 전원 소스마다 1행(DC Pulse → DC →
   DC2 → RF Pulse → RF, 없으면 1행), DC Pulse 행만 Soft/Hard Arc, RF/RF Pulse 행의 Avg Load/Tune 은 늘 빈칸(v1 이상 동작 —
   DataLogger 에 rf_load/tune 버퍼가 없었다, LOG-053), CH1 은 G2/G3 Target 공백, CH2 는 Heater 열, 두께 채널은 Thickness 열.
-- Plasma Cleaning 시트: GDRIVE_LOG_DIR\\CH{n}.xlsx, PC 성공 때만 1행(날짜 = 저장 시각), 폴백 <G: 폴더>\\LocalFallback\\
+- Plasma Cleaning 시트: GDRIVE_LOG_DIR\\CH{n}.xlsx, PC 성공 때만 1행(날짜 = 저장 시각), 폴백 <NAS 폴더>\\LocalFallback\\
   CH{n}_pending.xlsx(DEV_MODE 검사 없음 — v1 그대로).
 - 서식·다음 행 찾기·broken·pending 은 excel_style.py(v1 코드 그대로). 저장 실패면 LOCAL_FALLBACK_ROOT\\CH{n}_pending.xlsx
   에 같은 행(나중에 합치는 코드 없음 — v1 그대로).
 
-D07(로컬 먼저): 같은 행을 OUTPUT_LOCAL_FIRST_DIR\\Process_log\\CH{n}.xlsx(로컬 정본)에 먼저 쓰고, G: 의 v1 파일에는 사본
-스레드(CopySender)가 v1 _save_sync 그대로 보낸다(G: 실패면 v1 처럼 pending.xlsx — 그 행은 다시 보내지 않는다).
+D07(로컬 먼저): 같은 행을 OUTPUT_LOCAL_FIRST_DIR\\Process_log\\CH{n}.xlsx(로컬 정본)에 먼저 쓰고, NAS 의 v1 파일에는 사본
+스레드(CopySender)가 v1 _save_sync 그대로 보낸다(NAS 실패면 v1 처럼 pending.xlsx — 그 행은 다시 보내지 않는다).
 v2 차이: 날짜는 RunStats.session_started_at(공정 시작)으로 고정 — v1 은 Calib CSV 기록 스레드가 시작 시각을 먼저 지우면
 저장 시각이 될 수 있었다(LOG-058 경합). Arc 경고는 웹훅 대신 on_arc_alert(ch, 공정명, soft, hard) 콜백(챗은 포털 몫).
 

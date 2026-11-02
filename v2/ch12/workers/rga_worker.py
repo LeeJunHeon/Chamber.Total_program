@@ -13,8 +13,8 @@ v2 연결부(바뀐 것):
   stdout {"v":2, "id":n, "kind":"result", ...v1 응답 필드...}. v1 은 스캔마다 '--ch --timeout --csv --csv_fallback' 로 새로 실행했다
   (같은 인자 이름 — 메인 rga_link 가 v1 재시도·kill 규칙대로 부른다). ping → pong, close·EOF → 끝(os._exit).
 - 하트비트 {"kind":"hb", "state": idle|scanning} 를 --hb_s 마다(별도 스레드).
-- 장비 계정: v1 은 코드에 고정(admin/admin, rga_api.py:30-44). v2 는 메인 설정(비밀값 RGA_NET)에서 명령으로 받는다 —
-  코드·명령줄·로그에 남기지 않는다. 계정이 없으면 측정하지 않고 실패 응답('RGA 계정 설정 없음').
+- 장비 계정: v1 은 코드에 고정(admin/admin, rga_api.py:30-44). v2 는 메인 설정 RGA_USER·RGA_PASSWORD(기본 admin/admin —
+  장비 공장 기본 계정, D23)를 명령으로 받는다 — 프로세스 명령줄 인자에는 넣지 않는다. 계정 이름이 비면 측정하지 않고 실패 응답('RGA 계정 없음').
 - 출력 JSON 은 v1 처럼 ensure_ascii=True(한국어 Windows 파이프 cp949 에서 한글이 깨지지 않게).
 - --fake: srsinst 없이 가짜 RGA100(rga_fake) — 시험용.
 """
@@ -33,10 +33,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List
 
-# ====== 장비 표(v1 rga_api.py:30-44 — 계정은 v2 에서 뺌: 메인 설정에서 받는다) ======
+# ====== 장비 표(v1 rga_api.py:30-44 — 계정은 v2 에서 뺌: 메인 설정 RGA_USER·RGA_PASSWORD 에서 받는다) ======
 CH_CONFIG: Dict[int, Dict[str, str]] = {
-    1: {"ip": "192.168.1.20", "csv": r"G:\공유 드라이브\VanaM_Sputter\RGA\Ch.1\RGA_spectrums.csv"},
-    2: {"ip": "192.168.1.21", "csv": r"G:\공유 드라이브\VanaM_Sputter\RGA\Ch.2\RGA_spectrums.csv"},
+    1: {"ip": "192.168.1.20", "csv": r"\\VanaM_NAS\VanaM_Sputter\RGA\Ch.1\RGA_spectrums.csv"},
+    2: {"ip": "192.168.1.21", "csv": r"\\VanaM_NAS\VanaM_Sputter\RGA\Ch.2\RGA_spectrums.csv"},
 }
 
 RGA100_FACTORY = None      # --fake 일 때 가짜 RGA100 클래스
@@ -151,7 +151,7 @@ def scan_once(cmd: Dict[str, Any]) -> Dict[str, Any]:
         user = str(cmd.get("user") or "")
         password = str(cmd.get("password") or "")
         if not user:
-            raise RuntimeError("RGA 계정 설정 없음(RGA_NET) — 측정하지 않음")
+            raise RuntimeError("RGA 계정 없음(RGA_USER 가 비어 있음) — 측정하지 않음")
         timeout = float(cmd.get("timeout", 30.0) or 30.0)
 
         primary = Path(cmd["csv"]) if cmd.get("csv") else Path(cfg["csv"])

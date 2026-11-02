@@ -38,10 +38,13 @@ DECISIONS = [
          decision="v1 화면 Power Select 버튼은 SW_POWER_SELECT(코일 215 = M00137)를 쓴다(main.py:1241-1243, device/plc.py:145). 공정 스텝은 v1 대로. "
                   "지시의 'Power Select(SW_RF_SELECT)'와 이름이 다르다 — v1 코드를 따른다.",
          reason="정답은 v1 코드.", confirm=True, where="v2/ch12/drivers/plc.py"),
-    dict(id="D07", title="G: 드라이브 기록 — v1 은 정본을 G: 에 직접 씀",
-         decision="v2 는 같은 최종 경로·파일명·형식을 유지하되 항상 로컬에 먼저 쓰고 G:(NAS) 에는 사본만 보낸다.",
-         reason="지시 4장 장비 사실(G: 스트리밍에 새 파일을 쓰면 사라질 수 있음 — 로컬 먼저). 결과 파일은 같다.", confirm=True,
-         where="v2/ch12/outputs"),
+    dict(id="D07", title="구글 공유 드라이브(G 드라이브) 폐지 — NAS 만, 로컬 먼저 쓰고 NAS 로 복사",
+         decision="사용자 결정 2026-11-02: G 드라이브는 쓰지 않는다. NAS /volume1/VanaM_Sputter 가 구글 공유 드라이브와 동기화되어 있으므로 v1 의 구글 공유 드라이브 경로 "
+                  "'<드라이브>\\공유 드라이브\\VanaM_Sputter\\<경로>' 는 '\\\\VanaM_NAS\\VanaM_Sputter\\<경로>' 의 같은 경로(파일명·형식 그대로)로 바꾼다 — 기본값·v1 settings.json 변환 도구"
+                  "(convert_v1_config)·시험·장비 사실 표 모두. v1 이 정본을 직접 쓰던 출력(Calib CSV·엑셀)은 로컬(OUTPUT_LOCAL_FIRST_DIR)에 먼저 쓰고 "
+                  "NAS 에는 사본만 보낸다(NAS 가 꺼져 있어도 기록을 잃지 않는다). 두께 CSV 의 NAS 경로는 v1 규칙(구글 공유 드라이브 경로면 기본값)을 NAS 로 옮겨 기본값(로컬)으로 둔다(D350).",
+         reason="사용자 결정 2026-11-02. 구글 드라이브 스트리밍에 새 파일을 쓰면 사라질 수 있다는 문제는 NAS 직접 쓰기에 없지만, NAS 가 꺼진 때를 위해 로컬 먼저 방식은 유지.",
+         confirm=False, where="v2/ch12/outputs; v2/ch12/params/outputs.py; v2/common/winpaths.py; v2/tools/convert_v1_config.py"),
     dict(id="D101", title='PC-093 time 열 단위 없는 숫자 → 0 → TEST 60 s',
          decision="v1 과 같게 둔다(알려진 이상 동작·v1 사실)", reason='전수 목록 조사(pc)에서 발견: PC-093 time 열 단위 없는 숫자 → 0 → TEST 60 s',
          confirm=True, where="v2/ch12/spec/inv_pc.py"),
@@ -252,9 +255,10 @@ DECISIONS = [
     dict(id="D170", title='pending.xlsx 재합치기 없음',
          decision="v1 과 같게 둔다(알려진 이상 동작·v1 사실)", reason='전수 목록 조사(log/chat/app)에서 발견: pending.xlsx 재합치기 없음',
          confirm=True, where="v2/ch12/spec/inv_log.py"),
-    dict(id="D171", title="!! Calib CSV·엑셀·RGA CSV 정본을 G: 에 직접 씀(장비 사실 '로컬 먼저'와 다름)",
-         decision="v1 과 같게 둔다(알려진 이상 동작·v1 사실)", reason="전수 목록 조사(log/chat/app)에서 발견: !! Calib CSV·엑셀·RGA CSV 정본을 G: 에 직접 씀(장비 사실 '로컬 먼저'와 다름)",
-         confirm=True, where="v2/ch12/spec/inv_log.py"),
+    dict(id="D171", title="v1 은 Calib CSV·엑셀·RGA CSV 정본을 구글 공유 드라이브에 직접 씀",
+         decision="사용자 결정 2026-11-02: D07 로 정리 — Calib CSV·엑셀은 로컬 먼저 + NAS 사본, RGA CSV 는 NAS 직접 + 실패 시 로컬 폴백(D27·D350).",
+         reason="전수 목록 조사(log/chat/app)에서 발견. 사용자 결정 2026-11-02 로 구글 공유 드라이브를 NAS 같은 경로로 바꿈.",
+         confirm=False, where="v2/ch12/spec/inv_log.py"),
     dict(id="D172", title='엑셀 날짜 경합(미확인)',
          decision="v1 과 같게 둔다(알려진 이상 동작·v1 사실)", reason='전수 목록 조사(log/chat/app)에서 발견: 엑셀 날짜 경합(미확인)',
          confirm=True, where="v2/ch12/spec/inv_log.py"),
@@ -341,8 +345,19 @@ DECISIONS = [
          decision="기본값은 v1 이 실제로 쓰던 값(.py 값 — 지금은 json 값과 모두 같다). v2 에서는 공통 값이 실제로 채널에 쓰인다(구조로 문제를 없앰). "
                   "params 의 pending_confirm 으로 표시.", reason="지시 3장 (4) '채널 설정 import 시 복사' 문제를 구조로 없앤다.", confirm=True,
          where="v2/ch12/params/core.py; inv_cfg.py"),
-    dict(id="D11", title="범위 밖 설정값", decision="v1 은 히터·두께 값이 범위를 벗어나면 고쳐 썼다(clamp). v2 는 같은 범위를 min/max 로 두고 거부한다(설정 적용 전체 거부 — 기본값으로 조용히 돌지 않음).",
-         reason="챔버K ConfigStore 규칙(부분 적용 없음).", confirm=True, where="v2/ch12/params"),
+    dict(id="D11", title="범위 밖 설정값은 적용 자체를 거부 — 조용히 고쳐 쓰는(clamp) 길이 없다",
+         decision="사용자 결정 2026-11-02: 그대로(거부). v1 은 히터·두께 값이 범위를 벗어나면 래더 규칙으로 고쳐 쓰고 경고했다. v2 는 ① 파라미터 표의 min/max·열거·형식과 "
+                  "키 사이 규칙이 설정 적용(ConfigStore/ConfigApply/변환 도구) 때 버전 전체를 거부하고(부분 적용 없음), ② 읽는 쪽도 두 번째 문으로 "
+                  "ConfigRangeError 로 거부한다 — 히터 설정 읽기(heater_profile.load_heater_cfg)·"
+                  "두께 판정(thickness_judge.judge_params·process_steps)·두께 모니터(drivers/stm100.settings). "
+                  "점검에서 찾아 고친 어긋남: 두께 STALE_S 표 범위(0~600)가 읽기 범위(2~120)·4×읽기 주기보다 넓어 조용히 올려 쓰이던 것, "
+                  "두께 SLOW_POLL_S < POLL_INTERVAL_S, 히터 RUN_LOG_PERIOD_S 0 초과 2 미만, MFC_DELAY_MS 200 ms 미만(표 하한 0 → 200). "
+                  "코드 안의 max/min(상수, 설정값) 모양 전부는 상수가 표 범위 밖이 아님을 시험(test_config_ranges)이 AST 로 확인하고, "
+                  "예외 3곳은 명령 하나의 최소 대기·재시도 쉼(MFC 재시도 쉼 0.15 s, RF Pulse ON/OFF 응답 대기 2500 ms)이라 설정 값을 바꾸지 않는다. "
+                  "남긴 고쳐 쓰기 한 곳: 히터 목표 상한 recipe_check.heater_limit_c(SV ≤ 0 → 500, MAX_TEMP 가 0 이하거나 SV 보다 크면 SV) — 포털 TS 검사·골든과 맞춘 v1 규칙이라 두었고, "
+                  "표(SV·MAX 1~900, 규칙 CH01)가 그 값들을 먼저 거부해 정상 경로에서는 닿지 않는다(시험 확인). 지우려면 포털 TS·골든 사본을 함께 바꿔야 한다.",
+         reason="사용자 결정 2026-11-02. 챔버K ConfigStore 규칙(부분 적용 없음) + '기본값으로 조용히 돌지 않음'.",
+         confirm=False, where="v2/ch12/params; v2/ch12/heater_profile.py; v2/ch12/thickness_judge.py; v2/ch12/drivers/stm100.py; v2/tests/test_config_ranges.py"),
     dict(id="D12", title="두께 Factor·재료 json", decision="v2 설정 폴더의 데이터 파일로(v1 형식 그대로), 없으면 v1 기본 99종 목록을 만든다.",
          reason="척 × 건 표·재료 레코드는 스칼라 ParamDef 에 맞지 않고 v1 도 화면 창에서 이 파일을 원자적으로 저장했다.", confirm=False,
          where="v2/tools/convert_v1_config.py; v2/ch12/thickness.py"),
@@ -360,11 +375,20 @@ DECISIONS = [
     dict(id='D20', title='TSP SO_KEEPALIVE', decision='devices_v1facts 는 1 로 적었지만 v1 실제 값은 false(settings.json common 이 .py True 를 덮음, CFG-019) — v2 는 false.', reason="1단계 드라이버(TSP·STM·카메라) 작성 중 판단", confirm=True, where='v2/ch12/params/tsp.py'),
     dict(id='D21', title='OES daemon 응답을 명령 id 로 맞춤', decision='v1 은 out_csv 문자열로 맞춰 out_csv 없는 실패에 측정 시간+60 s 를 기다렸다 — v2 는 바로 실패하고 폴백.', reason="1단계 OES·RGA 워커 연결 작성 중 판단", confirm=True, where="v2/ch12/drivers/oes_link.py; rga_link.py; workers"),
     dict(id='D22', title='RGA 워커 상주', decision='v1 은 시도마다 새로 띄움. v2 는 상주하고 시간 초과·죽음이면 kill 후 다음 시도에 새로(인자 이름·값 같음).', reason="1단계 OES·RGA 워커 연결 작성 중 판단", confirm=True, where="v2/ch12/drivers/oes_link.py; rga_link.py; workers"),
-    dict(id='D23', title='RGA 계정을 코드에서 뺌', decision="v1 코드의 고정 계정 대신 비밀값 RGA_NET(기본 빈 값). 노트북에서 넣기 전까지 RGA 는 'RGA 계정 설정 없음'으로 실패(공정은 v1 처럼 다음 단계로).", reason="1단계 OES·RGA 워커 연결 작성 중 판단", confirm=True, where="v2/ch12/drivers/oes_link.py; rga_link.py; workers"),
+    dict(id='D23', title='RGA 장비 계정 — 설정 키 RGA_USER·RGA_PASSWORD(기본 admin/admin)',
+         decision="사용자 결정 2026-11-02: RGA100 tcpip 접속은 로그인이 필요하다. v1 처럼 admin/admin(장비 공장 기본 계정)을 설정 키 RGA_USER·RGA_PASSWORD 의 기본값으로 두고 "
+                  "바꿀 수 있게 한다(비밀값 처리 대상에서 뺌 — RGA_NET 비밀값 폐지). 워커에는 스캔 명령 줄(stdin)로 넘기고 프로세스 명령줄 인자에는 넣지 않으며, "
+                  "보낸 줄 기록에는 암호를 가린다. 계정 이름이 비면 측정하지 않고 'RGA 계정 없음' 실패(공정은 v1 처럼 다음 단계로).",
+         reason="사용자 결정 2026-11-02. 공장 기본 계정이라 비밀이 아니고, 코드 고정이 아니라 설정으로 바꿀 수 있어야 한다.",
+         confirm=False, where="v2/ch12/params/rga.py; v2/ch12/drivers/rga_link.py; v2/ch12/workers/rga_worker.py"),
     dict(id='D24', title='OES 워커 기준 폴더', decision='--dll_path 를 늘 넘기고 OES_WORKER_HOME 기본 = v1 DLL 폴더(oes_config.json 을 v1 위치 그대로) — 워커 log\\·stop\\ 도 그 폴더에.', reason="1단계 OES·RGA 워커 연결 작성 중 판단", confirm=True, where="v2/ch12/drivers/oes_link.py; rga_link.py; workers"),
     dict(id='D25', title='bench 에서 OES 초기화·측정·RGA 스캔 거부', decision='장비 설정을 보내거나 필라멘트를 켜므로 BENCH_READ_ONLY(더 안전한 쪽).', reason="1단계 OES·RGA 워커 연결 작성 중 판단", confirm=True, where="v2/ch12/drivers/oes_link.py; rga_link.py; workers"),
     dict(id='D26', title='OES 동시 측정 요청은 차례로', decision="v1 daemon 은 대기자를 덮어씀. one-shot 의 '이미 측정 중 → 무시'는 v1 그대로.", reason="1단계 OES·RGA 워커 연결 작성 중 판단", confirm=True, where="v2/ch12/drivers/oes_link.py; rga_link.py; workers"),
-    dict(id='D27', title='RGA CSV 정본 G: 직접 쓰기(D171) 와 로컬 먼저(D07) 충돌', decision='D07 을 따른다 — 로컬에 먼저 쓰고 G: 에는 사본(같은 경로·이름·형식).', reason="1단계 OES·RGA 워커 연결 작성 중 판단", confirm=True, where="v2/ch12/drivers/oes_link.py; rga_link.py; workers"),
+    dict(id='D27', title='RGA CSV 정본 — NAS 직접(v1 순서) + 실패 시 로컬 폴백',
+         decision="사용자 결정 2026-11-02: G 드라이브 폐지(D07)에 따라 RGA CSV 정본 경로는 NAS(\\\\VanaM_NAS\\VanaM_Sputter\\RGA\\Ch.n\\RGA_spectrums.csv)의 같은 경로. "
+                  "워커는 v1 과 같이 정본(NAS)에 직접 붙여 쓰고 실패하면 로컬 폴백(LOCAL_FALLBACK_RGA_DIR)에 쓴다(측정 결과는 잃지 않음 — D350).",
+         reason="사용자 결정 2026-11-02. 이전 D27 은 로컬 먼저를 적었으나 코드는 v1 순서(정본 직접 → 폴백)였다 — 코드와 결정을 일치시킴.",
+         confirm=True, where="v2/ch12/workers/rga_worker.py; v2/ch12/drivers/rga_link.py"),
     dict(id='D28', title='OES Ar 이상 감지 구글챗(D176)', decision='워커가 웹훅으로 직접 보내지 않고 메인으로 이벤트를 올려 포털이 같은 카드를 보낸다(챗은 포털이 보낸다 — 지시 3장 (7)). 중복 억제 없음은 v1 그대로.', reason="1단계 OES·RGA 워커 연결 작성 중 판단", confirm=True, where="v2/ch12/drivers/oes_link.py; rga_link.py; workers"),
     dict(id='D29', title='1초 기록 SQLite 와 log_sync', decision='log_sync 는 쓰는 중 파일도 복사 — 1초 기록은 LOG_ROOT_DIR(C:\\VanaM_Logs\\CH1&2) 밖 LOCAL_DATA_DIR 에 두고 NAS 사본은 v2 Recorder 가 일관된 사본으로(D14).', reason="1단계 OES·RGA 워커 연결 작성 중 판단", confirm=True, where="v2/ch12/drivers/oes_link.py; rga_link.py; workers"),
     dict(id='D30', title='자동 끝 정지를 덧붙이지 않는 경우', decision='장비를 건드리지 않는 블록(TEST·delay 행)만 있으면 덧붙이지 않음 — v1 TEST 행은 종료 절차 없이 DELAY 1단계(골든 ch2_test).', reason="3단계 레시피·블록 작성 중 판단(골든 435/435·10/10 같음)", confirm=True, where="v2/ch12/blocks.py; blocks_expand.py; recipe.py"),
@@ -379,7 +403,11 @@ DECISIONS = [
     dict(id='D39', title='MFC·IG 재연결 시점·SO_KEEPALIVE', decision='v1 감시 주기(1.5/2 s) 대신 끊기면 바로 백오프(1 s ×2, 최대 20 s). 공용 TcpTransport 는 SO_KEEPALIVE 를 늘 켬(v1 MFC·IG 0) — MFC/IG_TCP_KEEPALIVE 버림.', reason="1단계 MFC·IG 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/mfc.py; ig.py"),
     dict(id='D40', title='MFC 재전송·검증 경로', decision='호출 쪽이 기다리는 동안만 다시 보냄. enable_verify 경로(v1 운영에서 꺼짐 — DEV-096)는 만들지 않음, MFC_SP1_VERIFY_TOL 버림.', reason="1단계 MFC·IG 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/mfc.py; ig.py"),
     dict(id='D41', title='IG ON 실패 때 정리 없음(SIG 0 한 번)', decision='v1 return 이 try/finally 밖 — v1 과 같게(이상 동작).', reason="1단계 MFC·IG 드라이버 작성 중 판단", confirm=True, where="v2/ch12/drivers/mfc.py; ig.py"),
-    dict(id='D42', title='Calib CSV 로컬 먼저(D07) 세부', decision='로컬 정본(OUTPUT_LOCAL_FIRST_DIR) 뒤 사본 스레드가 v1 규칙으로 G: 에 — 실패면 30 s 마다·다음 기록 때 다시, 순서 지킴, 보낸 만큼만 pending 에서 지움. 엑셀은 G: 실패 시 v1 처럼 pending.xlsx(다시 보내지 않음).', reason="2단계 기록 출력 작성 중 판단(v1 실행 골든 바이트 동일)", confirm=True, where="v2/ch12/outputs"),
+    dict(id='D42', title='Calib CSV·엑셀 로컬 먼저(D07) 세부',
+         decision="사용자 결정 2026-11-02: 로컬 정본(OUTPUT_LOCAL_FIRST_DIR) 뒤 사본 스레드가 v1 규칙으로 NAS 의 같은 경로에 — 실패면 30 s 마다·다음 기록 때 다시, 순서 지킴, "
+                  "보낸 만큼만 pending 에서 지움. 엑셀은 NAS 실패 시 v1 처럼 pending.xlsx(다시 보내지 않음).",
+         reason="2단계 기록 출력 작성 중 판단(v1 실행 골든 바이트 동일). 사용자 결정 2026-11-02 로 G 드라이브를 NAS 로 바꿈.",
+         confirm=False, where="v2/ch12/outputs"),
     dict(id='D43', title='엑셀 날짜', decision='공정 시작 시각으로 고정(v1 경합 LOG-058 없앰). Arc 경고는 웹훅 대신 이벤트 → 포털.', reason="2단계 기록 출력 작성 중 판단(v1 실행 골든 바이트 동일)", confirm=True, where="v2/ch12/outputs"),
     dict(id='D44', title='PLC 코일 CSV 레지스터 실패 한 줄', decision="v1 'WARN PLC REG LOG' 한 줄 대신 요약 줄 숫자에만 셈.", reason="2단계 기록 출력 작성 중 판단(v1 실행 골든 바이트 동일)", confirm=True, where="v2/ch12/outputs"),
     dict(id='D45', title='asyncio·Qt 없음에 따른 기록 칸', decision="selfwatch tasks -1, 덤프 asyncio '(loop 없음)', ui 빈 분류. ERROR 로그에 asyncio·Qt 훅·태스크 크래시 억제 없음.", reason="2단계 기록 출력 작성 중 판단(v1 실행 골든 바이트 동일)", confirm=True, where="v2/ch12/outputs"),
@@ -473,7 +501,15 @@ DECISIONS = [
     dict(id='D316', title='레시피 파일 고르기 범위', decision='노트북 화면 파일 고르기는 PROCESS_LIST_START_DIR 밖으로 나갈 수 없음(v1 대화상자는 어디든) — 127.0.0.1 서버가 정한 폴더 아래만 보이게 한 안전 쪽.', reason="빠진 기능 구현 중 판단", confirm=True, where='v2/ch12/local_server.py'),
     dict(id='D317', title='의도적 종료 중 플라즈마 클리닝', decision='PC 를 붙잡고 PC RF 만 끔(rf_zero_off) — 가스·밸브 그대로(결정 4), 결과 실패 PROGRAM_EXIT(챔버와 같게). v1 은 공정 중 종료를 거부.', reason="종합 시나리오·7일 운전 중 판단", confirm=True, where='v2/ch12/plasma_cleaning.py; safety.py'),
     dict(id='D318', title='PC 가 CH1 GV 를 연 채 끝냄(v1 PC-077)', decision='닫지 않으면 다음 CH1 공정이 GATE_CHECK_FAILED·VACUUM_OFF 가 E301(v1 과 같음) — 운전 절차 확인 필요.', reason="종합 시나리오·7일 운전 중 판단", confirm=True, where='v2/ch12/pc_steps.py'),
-    dict(id='D319', title='자정 CSV 내보내기 부하', decision='하루치 1초 기록 CSV(약 130 MB)를 자정에 내보내는 동안 수 분 CPU 사용 — 윈도우 노트북에서 tick 지연 확인 필요.', reason="종합 시나리오·7일 운전 중 판단", confirm=True, where='v2/common/recorder.py'),
+    dict(id='D319', title='하루치 1초 기록 CSV 내보내기 — 공정·운전 중이 아닐 때만, 낮은 우선순위로 나눠서',
+         decision="사용자 결정 2026-11-02: 하루치 1초 기록 CSV(약 130 MB)는 공정·운전(CH1·CH2·플라즈마 클리닝·TSP — system.busy)이 없을 때만, 낮은 우선순위 스레드로 "
+                  "500행씩 나눠 쓰고 조각 사이에 50 ms 쉰다(tick 이 CPU 를 기다리지 않게). 공정 중이면 시작도 미루고 조각 사이에 공정이 시작돼도 멈춰 "
+                  "끝난 뒤 멈춘 자리에서 이어서 한다(1초 간격으로 확인). 프로그램이 꺼졌다 켜지면 CSV 가 없는 지난 날 DB 를 start() 가 다시 찾아 내보낸다. "
+                  "조각 크기·쉼은 설정으로 두지 않는 상수(recorder.EXPORT_CHUNK_ROWS·EXPORT_PAUSE_S). 시험: 공정 중 미룸·조각 사이 멈춤과 이어서·재시작 뒤 이어서·"
+                  "tick 모양 스레드 지연(< 0.25 s)·가상 시계 실제 조립으로 자정을 공정 중에 넘겨도 tick 을 하나도 놓치지 않음.",
+         reason="사용자 결정 2026-11-02. 이전에는 자정에 수 분 CPU 를 쓰는 내보내기가 공정 중에도 돌아 윈도우 노트북에서 tick 지연 위험이 있었다. 낮은 우선순위는 윈도우·리눅스에서 "
+                "스레드 우선순위를 낮추는 최선 노력(못 하는 OS 는 조각 쉼만)이라 장비 노트북 실측(bench·운전)에서 tick 지연을 확인한다.",
+         confirm=True, where="v2/common/recorder.py; v2/ch12/system.py; v2/tests/test_bus_recorder.py"),
     dict(id='D320', title='PLC 1초 묶음 나눠 읽기(양보)', decision="블록 하나 = PLC worker 요청 하나(우선순위 'low' — safety·write·read 뒤), 다음 블록은 명령 간격(150 ms) 뒤 not_before — 기다리는 요청이 있으면 블록 사이에서 먼저 돈다(v1 priority='low' _yield_to_priority 와 같음). 1초 행 마감(900 ms) 안에 못 든 뒤 블록은 그 tick 빈 칸, 첫 블록이 시작도 못 하면 그 tick stale(장비 실패 아님 — 묶기에서 EXPIRED 는 fail 이 아님). v1 은 양보 예산 PLC_COIL_LOG_BUDGET_S 4 s·코일 로그 주기 따로 — v2 는 1초 행 마감.", reason="9단계 — tick 앞부분의 짧은 마감 요청(PC GV 인터락 0.6 s E511·게이트·메인밸브 0.6 s)이 1초 묶음 뒤에서 시간 초과(실제 시간 약 10~20 %)", confirm=True, where='v2/ch12/drivers/plc_poll.py; v2/common/worker.py; v2/common/snapshot_bus.py'),
     dict(id="D321", title="exe 묶음과 감시 프로그램", decision="PyInstaller onedir 묶음(v2/tools/build_exe.py)의 제어 프로그램 exe 는 감시 프로그램 없이 돈다(감시 프로그램은 python -m 으로 자식을 켬). 자동 재시작·이어가기를 쓰려면 소스 실행(v2/run_ch12_v2.cmd)을 기본으로 한다(D01).",
          reason="D01 결정의 세부 — 두 방식 중 소스 실행을 기본으로.", confirm=True, where="v2/tools/build_exe.py; v2/run_ch12_v2.cmd"),
@@ -481,6 +517,12 @@ DECISIONS = [
          reason="sim 을 기본 설정으로 띄우면 저장소 루트에 'C:\\…' 이름 폴더가 생기던 것(최종 검증).", confirm=False, where="v2/common/winpaths.py; v2/ch12/app.py"),
     dict(id="D323", title="감시 프로그램 신호(리눅스·맥)", decision="SIGTERM·SIGINT·SIGHUP 을 받으면 자식에게 SIGTERM 을 넘기고 최대 30 s 기다린 뒤 kill, 자식 종료 코드로 끝나고 다시 켜지 않음. 리눅스에서는 터미널 Ctrl+C 와 kill -INT 를 구별할 수 없어 감시 프로그램 아래 Ctrl+C 는 공정 중에도 의도적 종료(파워만 끔)가 된다. 윈도우는 콘솔 그룹 신호를 자식도 받으므로 넘기지 않음.",
          reason="SIGTERM 에 자식이 고아로 남던 것(최종 검증).", confirm=True, where="v2/supervisor/supervisor.py"),
+    dict(id="D350", title="G 드라이브 폐지에 따른 세부 — 두께 CSV 폴더·RGA CSV·변환 도구",
+         decision="사용자 결정 2026-11-02(D07)의 세부: ① 두께 CSV 폴더가 NAS(\\\\ 로 시작)이면 v1 규칙(구글 공유 드라이브 경로면 기본값)처럼 기본값(로컬 C:\\VanaM_Logs\\CH1&2\\Thickness)으로 바꿔 쓴다 — "
+                  "NAS 반영은 log_sync. ② RGA CSV 는 v1 과 같은 순서(NAS 정본 직접 → 실패 시 로컬 폴백)라 NAS 가 꺼져 있으면 폴백 파일에만 쌓이고 "
+                  "나중에 NAS 로 합쳐 주지 않는다(v1 과 같음). ③ 변환 도구는 v1 settings.json 의 구글 공유 드라이브 경로 값을 NAS 같은 경로로 바꿔 옮기고 변환 기록 note 에 적는다.",
+         reason="사용자 결정 2026-11-02 결정 8) 이행 중 판단. ② 는 RGA 워커가 별도 프로세스라 로컬 먼저 + 사본 방식을 따로 만들지 않은 것 — 확인 필요.",
+         confirm=True, where="v2/ch12/outputs/paths.py; v2/ch12/workers/rga_worker.py; v2/tools/convert_v1_config.py"),
 ]
 
 DECISIONS += [

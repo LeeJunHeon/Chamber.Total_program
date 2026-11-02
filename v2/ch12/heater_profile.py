@@ -9,9 +9,9 @@
 [설정 — lib/heater_config.py:28-280]
   HeaterCfg 의 필드·기본값은 v1 HeaterConfig 와 같다(기본값은 v1 시험·에뮬레이터 기준값 — 운전값은 cfg 사전에서 온다).
   load_heater_cfg(cfg) 는 v1 load_heater_config 를 그대로 옮겼다 — 키는 v2 이름(CH2_ 접두어: CH2_SUPPORTS_HEATER,
-  CH2_HEATER_*). v2 파라미터 표(params/core_heater.py)가 범위 밖 값을 이미 거부하므로(결정 D11) 보통은 경고가 없지만,
-  v1 의 '호출 시점에 읽어 래더 규칙으로 고쳐 쓰기'(경고 문구 포함)는 그대로 남겨 둔다(같은 규칙을 두 군데서 다르게 들고
-  있지 않게 — PLC 래더와 같은 클램프). 예외를 던지지 않는다.
+  CH2_HEATER_*). 사용자 결정 2026-11-02(D11): v1 의 '호출 시점에 읽어 래더 규칙으로 고쳐 쓰기'는 없앴다 — 범위 밖·형식 오류는
+  ConfigRangeError 로 거부한다(파라미터 표·키 사이 규칙이 설정 적용 때 먼저 같은 범위를 거부하고, 이것은 표를 거치지 않은 값을 위한
+  두 번째 문). 값을 바꾸지 않는 경고(MV_MIN ≠ 래더 400)만 남는다.
 REAL(IEEE754 단정도) 2워드 변환은 drivers/heater.py(float_to_words·words_to_float).
 """
 from __future__ import annotations
@@ -19,6 +19,8 @@ from __future__ import annotations
 import math
 from dataclasses import dataclass, fields
 from typing import Any, List, Mapping, Tuple
+
+from v2.common.paramdef import ConfigRangeError
 
 # 래더 고정값/경계(lib/heater_config.py:16-25)
 LADDER_MV_MIN = 400
@@ -154,10 +156,18 @@ def _v2_key(key: str, prefix: str) -> str:
 
 
 def load_heater_cfg(cfg: Mapping[str, Any], prefix: str = "CH2_") -> Tuple[HeaterCfg, List[str]]:
-    """cfg 사전에서 히터 설정을 읽어 검증한다(v1 load_heater_config — lib/heater_config.py:105-280). (HeaterCfg, 경고 목록)."""
+    """cfg 사전에서 히터 설정을 읽어 검증한다(v1 load_heater_config — lib/heater_config.py:105-280). (HeaterCfg, 경고 목록).
+
+    사용자 결정 2026-11-02(D11): 범위 밖·형식 오류 값은 고쳐 쓰지 않고 ConfigRangeError 로 거부한다(v1 은 래더 규칙으로 고쳐 쓰며
+    경고했다). 파라미터 표(params/core_heater.py·outputs.py)와 키 사이 규칙이 설정 적용 때 먼저 같은 범위를 거부하므로 정상 경로에서는
+    여기서 거부될 일이 없다 — 여기는 표를 거치지 않고 들어온 값(시험대·직접 호출)을 위한 두 번째 문이다. 남는 경고는 값을 바꾸지 않는 것뿐.
+    """
     warns: List[str] = []
     d = HeaterCfg()
     missing = object()
+
+    def _bad(key: str, why: str):
+        raise ConfigRangeError(f"{prefix}{key}: {why} — 범위 밖 값은 고쳐 쓰지 않고 거부")
 
     def _get(key: str, default, cast):
         raw = cfg.get(_v2_key(key, prefix), missing) if hasattr(cfg, "get") else missing
@@ -169,135 +179,113 @@ def load_heater_cfg(cfg: Mapping[str, Any], prefix: str = "CH2_") -> Tuple[Heate
                 return bool(v)
             return cast(v)
         except Exception:
-            warns.append(f"{key}={None if raw is missing else raw!r} 형식 오류 → 기본값 {default!r}")
-            return default
+            _bad(key, f"형식 오류 {raw!r}")
 
-    def _clamp(name: str, v: float, lo: float, hi: float) -> float:
+    def _rng(name: str, v: float, lo: float, hi: float) -> float:
         if v < lo or v > hi:
-            nv = min(max(v, lo), hi)
-            warns.append(f"{name}={v:g} 범위({lo:g}~{hi:g}) 밖 → {nv:g}")
-            return nv
+            _bad(name, f"{v:g} 이(가) {lo:g}~{hi:g} 밖")
         return v
 
     enabled = _get("SUPPORTS_HEATER", False, bool)
     scale = _get("HEATER_TEMP_SCALE", d.temp_scale, float)
     if scale <= 0:
-        warns.append(f"HEATER_TEMP_SCALE={scale:g} → 0.1")
-        scale = 0.1
+        _bad("HEATER_TEMP_SCALE", f"{scale:g} ≤ 0")
     sv_lim = _get("HEATER_SV_LIMIT_C", d.sv_limit_c, float)
-    if sv_lim <= 0:
-        warns.append(f"HEATER_SV_LIMIT_C={sv_lim:g} ≤ 0 → 500"); sv_lim = 500.0
-    elif sv_lim > LADDER_SV_MAX_C:
-        warns.append(f"HEATER_SV_LIMIT_C={sv_lim:g} > {LADDER_SV_MAX_C:g} → {LADDER_SV_MAX_C:g}"); sv_lim = LADDER_SV_MAX_C
+    if sv_lim <= 0 or sv_lim > LADDER_SV_MAX_C:
+        _bad("HEATER_SV_LIMIT_C", f"{sv_lim:g} 이(가) 0 초과 {LADDER_SV_MAX_C:g} 이하가 아님")
     ot = _get("HEATER_OT_LIMIT_C", d.ot_limit_c, float)
-    if ot <= 0:
-        warns.append(f"HEATER_OT_LIMIT_C={ot:g} ≤ 0 → 550"); ot = 550.0
-    elif ot > LADDER_OT_MAX_C:
-        warns.append(f"HEATER_OT_LIMIT_C={ot:g} > {LADDER_OT_MAX_C:g} → {LADDER_OT_MAX_C:g}"); ot = LADDER_OT_MAX_C
+    if ot <= 0 or ot > LADDER_OT_MAX_C:
+        _bad("HEATER_OT_LIMIT_C", f"{ot:g} 이(가) 0 초과 {LADDER_OT_MAX_C:g} 이하가 아님")
     if ot <= sv_lim:
-        warns.append(f"HEATER_OT_LIMIT_C={ot:g} ≤ SV 상한 {sv_lim:g} → {sv_lim + 30:g} (래더와 같은 규칙)")
-        ot = sv_lim + 30.0
+        _bad("HEATER_OT_LIMIT_C", f"{ot:g} ≤ SV 상한 {sv_lim:g} (과온 트립은 SV 상한보다 커야 함)")
     max_temp = _get("HEATER_MAX_TEMP", d.max_temp, float)
     if max_temp <= 0 or max_temp > sv_lim:
-        warns.append(f"HEATER_MAX_TEMP={max_temp:g} → {sv_lim:g} (0 초과 SV 상한 이하)")
-        max_temp = sv_lim
+        _bad("HEATER_MAX_TEMP", f"{max_temp:g} 이(가) 0 초과 SV 상한 {sv_lim:g} 이하가 아님")
 
     mv_min = int(_get("HEATER_MV_MIN", d.mv_min, float))
     if mv_min != LADDER_MV_MIN:
         warns.append(f"HEATER_MV_MIN={mv_min} 이 래더 고정값 {LADDER_MV_MIN} 과 다름 — 표시·판정이 실제와 어긋날 수 있음")
     mv_abs = int(_get("HEATER_MV_ABS_MAX", d.mv_abs_max, float))
     if mv_abs > LADDER_MV_ABS_MAX:
-        warns.append(f"HEATER_MV_ABS_MAX={mv_abs} > {LADDER_MV_ABS_MAX} → {LADDER_MV_ABS_MAX}"); mv_abs = LADDER_MV_ABS_MAX
+        _bad("HEATER_MV_ABS_MAX", f"{mv_abs} > 래더 최대 {LADDER_MV_ABS_MAX}")
     if mv_abs < mv_min + 20:
-        warns.append(f"HEATER_MV_ABS_MAX={mv_abs} < MV_MIN+20 → {LADDER_MV_ABS_MAX}"); mv_abs = LADDER_MV_ABS_MAX
-    mv_lim = int(_clamp("HEATER_MV_LIMIT", float(_get("HEATER_MV_LIMIT", d.mv_limit, float)), mv_min + 20, mv_abs))
+        _bad("HEATER_MV_ABS_MAX", f"{mv_abs} < MV_MIN+20")
+    mv_lim = int(_rng("HEATER_MV_LIMIT", float(_get("HEATER_MV_LIMIT", d.mv_limit, float)), mv_min + 20, mv_abs))
 
     ramp = _get("HEATER_RAMP_RATE_C_PER_MIN", d.ramp_rate, float)
     if ramp < COUNTS_C_PER_MIN:
-        warns.append(f"HEATER_RAMP_RATE_C_PER_MIN={ramp:g} < 6 → 6 (래더 최소 1카운트/초)"); ramp = COUNTS_C_PER_MIN
+        _bad("HEATER_RAMP_RATE_C_PER_MIN", f"{ramp:g} < 6 (래더 최소 1카운트/초)")
     slow_rate = _get("HEATER_SLOW_RATE_C_PER_MIN", d.slow_rate, float)
     if slow_rate < COUNTS_C_PER_MIN:
-        warns.append(f"HEATER_SLOW_RATE_C_PER_MIN={slow_rate:g} < 6 → 6"); slow_rate = COUNTS_C_PER_MIN
+        _bad("HEATER_SLOW_RATE_C_PER_MIN", f"{slow_rate:g} < 6")
     slow_zone = _get("HEATER_SLOW_ZONE_C", d.slow_zone_c, float)
     if slow_zone < 0:
-        warns.append(f"HEATER_SLOW_ZONE_C={slow_zone:g} < 0 → 0"); slow_zone = 0.0
+        _bad("HEATER_SLOW_ZONE_C", f"{slow_zone:g} < 0")
     hb = _get("HEATER_HOLDBACK_C", d.holdback_c, float)
     if hb <= 0:
-        warns.append(f"HEATER_HOLDBACK_C={hb:g} ≤ 0 → 10"); hb = 10.0
+        _bad("HEATER_HOLDBACK_C", f"{hb:g} ≤ 0")
 
     kp = _get("HEATER_KP", d.kp, float)
     ti = _get("HEATER_TI_S", d.ti_s, float)
-    kp_ok = KP_MIN <= kp <= KP_MAX
-    ti_ok = TI_MIN <= ti <= TI_MAX
-    if not kp_ok:
-        warns.append(f"HEATER_KP={kp:g} 범위({KP_MIN:g}~{KP_MAX:g}) 밖 → 쓰지 않음(래더 기본값 3.0)")
-    if not ti_ok:
-        warns.append(f"HEATER_TI_S={ti:g} 범위({TI_MIN:g}~{TI_MAX:g}) 밖 → 쓰지 않음(래더 기본값 300)")
+    _rng("HEATER_KP", kp, KP_MIN, KP_MAX)
+    _rng("HEATER_TI_S", ti, TI_MIN, TI_MAX)
 
     zone = _get("HEATER_APPROACH_ZONE_C", d.approach_zone, float)
     if zone < 0:
-        warns.append(f"HEATER_APPROACH_ZONE_C={zone:g} < 0 → 0"); zone = 0.0
+        _bad("HEATER_APPROACH_ZONE_C", f"{zone:g} < 0")
     rmin = _get("HEATER_APPROACH_MIN_RATE_C_PER_MIN", d.approach_min_rate, float)
-    if rmin <= 0:
-        warns.append(f"HEATER_APPROACH_MIN_RATE_C_PER_MIN={rmin:g} ≤ 0 → 1.0"); rmin = 1.0
-    elif rmin > 6.0:
-        warns.append(f"HEATER_APPROACH_MIN_RATE_C_PER_MIN={rmin:g} > 6 → 6.0"); rmin = 6.0
+    if rmin <= 0 or rmin > 6.0:
+        _bad("HEATER_APPROACH_MIN_RATE_C_PER_MIN", f"{rmin:g} 이(가) 0 초과 6 이하가 아님")
     lead = _get("HEATER_APPROACH_LEAD_C", d.approach_lead, float)
     if lead < 0.2:
-        warns.append(f"HEATER_APPROACH_LEAD_C={lead:g} < 0.2 → 0.2"); lead = 0.2
+        _bad("HEATER_APPROACH_LEAD_C", f"{lead:g} < 0.2")
     soak = _get("HEATER_SOAK_TOLERANCE", d.soak_tol, float)
     if soak <= 0:
-        warns.append(f"HEATER_SOAK_TOLERANCE={soak:g} ≤ 0 → 2.0"); soak = 2.0
+        _bad("HEATER_SOAK_TOLERANCE", f"{soak:g} ≤ 0")
 
-    mode = str(_get("HEATER_HOLD_MODE", d.hold_mode, str)).strip().lower()
+    mode = str(_get("HEATER_HOLD_MODE", d.hold_mode, str))
     if mode not in ("off", "dac"):
-        warns.append(f"HEATER_HOLD_MODE={mode!r} 미지원(CH2 는 TC 1개) → 'dac'"); mode = "dac"
-    enter_tol = _clamp("HEATER_HOLD_MV_ENTER_TOL_C", _get("HEATER_HOLD_MV_ENTER_TOL_C", d.hold_enter_tol, float), 0.5, 20.0)
-    enter_sec = _clamp("HEATER_HOLD_MV_ENTER_SEC", _get("HEATER_HOLD_MV_ENTER_SEC", d.hold_enter_sec, float), 10.0, 600.0)
-    arrive = _clamp("HEATER_HOLD_MV_ARRIVE_TOL_C", _get("HEATER_HOLD_MV_ARRIVE_TOL_C", d.hold_arrive_tol, float), 0.2, 10.0)
-    dpv = _clamp("HEATER_HOLD_MV_DRIFT_PV_C", _get("HEATER_HOLD_MV_DRIFT_PV_C", d.hold_drift_pv, float), 0.1, 10.0)
-    dmv = _clamp("HEATER_HOLD_MV_DRIFT_MV", _get("HEATER_HOLD_MV_DRIFT_MV", d.hold_drift_mv, float), 3.0, 200.0)
+        _bad("HEATER_HOLD_MODE", f"{mode!r} 미지원(CH2 는 TC 1개 — off·dac 만)")
+    enter_tol = _rng("HEATER_HOLD_MV_ENTER_TOL_C", _get("HEATER_HOLD_MV_ENTER_TOL_C", d.hold_enter_tol, float), 0.5, 20.0)
+    enter_sec = _rng("HEATER_HOLD_MV_ENTER_SEC", _get("HEATER_HOLD_MV_ENTER_SEC", d.hold_enter_sec, float), 10.0, 600.0)
+    arrive = _rng("HEATER_HOLD_MV_ARRIVE_TOL_C", _get("HEATER_HOLD_MV_ARRIVE_TOL_C", d.hold_arrive_tol, float), 0.2, 10.0)
+    dpv = _rng("HEATER_HOLD_MV_DRIFT_PV_C", _get("HEATER_HOLD_MV_DRIFT_PV_C", d.hold_drift_pv, float), 0.1, 10.0)
+    dmv = _rng("HEATER_HOLD_MV_DRIFT_MV", _get("HEATER_HOLD_MV_DRIFT_MV", d.hold_drift_mv, float), 3.0, 200.0)
     sat = _get("HEATER_MV_SAT_SEC", d.sat_sec, float)
     if sat < 10:
-        warns.append(f"HEATER_MV_SAT_SEC={sat:g} < 10 → 10"); sat = 10.0
+        _bad("HEATER_MV_SAT_SEC", f"{sat:g} < 10")
 
-    soak_t = _clamp("HEATER_SOAK_TIME_SEC", _get("HEATER_SOAK_TIME_SEC", d.soak_time_s, float), 0.0, 3600.0)
-    wait_to = _clamp("HEATER_WAIT_TIMEOUT_SEC", _get("HEATER_WAIT_TIMEOUT_SEC", d.wait_timeout_s, float), 600.0, 43200.0)
-    hold_w = _clamp("HEATER_HOLD_WAIT_SEC", _get("HEATER_HOLD_WAIT_SEC", d.hold_wait_s, float), 60.0, 1800.0)
-    fail_act = str(_get("HEATER_HOLD_FAIL_ACTION", d.hold_fail_action, str)).strip().lower()
+    soak_t = _rng("HEATER_SOAK_TIME_SEC", _get("HEATER_SOAK_TIME_SEC", d.soak_time_s, float), 0.0, 3600.0)
+    wait_to = _rng("HEATER_WAIT_TIMEOUT_SEC", _get("HEATER_WAIT_TIMEOUT_SEC", d.wait_timeout_s, float), 600.0, 43200.0)
+    hold_w = _rng("HEATER_HOLD_WAIT_SEC", _get("HEATER_HOLD_WAIT_SEC", d.hold_wait_s, float), 60.0, 1800.0)
+    fail_act = str(_get("HEATER_HOLD_FAIL_ACTION", d.hold_fail_action, str))
     if fail_act not in ("force", "abort"):
-        warns.append(f"HEATER_HOLD_FAIL_ACTION={fail_act!r} 미지원 → 'force'"); fail_act = "force"
+        _bad("HEATER_HOLD_FAIL_ACTION", f"{fail_act!r} 미지원(force·abort 만)")
 
-    poll = _clamp("HEATER_POLL_INTERVAL_S", _get("HEATER_POLL_INTERVAL_S", d.poll_interval_s, float), 0.5, 5.0)
-    idle = _clamp("HEATER_POLL_IDLE_S", _get("HEATER_POLL_IDLE_S", d.poll_idle_s, float), poll, 10.0)
-    wd = _clamp("HEATER_WD_PERIOD_S", _get("HEATER_WD_PERIOD_S", d.wd_period_s, float), 1.0, 9.0)
+    poll = _rng("HEATER_POLL_INTERVAL_S", _get("HEATER_POLL_INTERVAL_S", d.poll_interval_s, float), 0.5, 5.0)
+    idle = _rng("HEATER_POLL_IDLE_S", _get("HEATER_POLL_IDLE_S", d.poll_idle_s, float), poll, 10.0)
+    wd = _rng("HEATER_WD_PERIOD_S", _get("HEATER_WD_PERIOD_S", d.wd_period_s, float), 1.0, 9.0)
     stale = _get("HEATER_STALE_SEC", d.stale_sec, float)
     if stale < 2 * idle:
-        warns.append(f"HEATER_STALE_SEC={stale:g} < 2×정지 폴링 {idle:g} → {2 * idle:g}"); stale = 2 * idle
-    log_period = _clamp("HEATER_LOG_PERIOD_S", _get("HEATER_LOG_PERIOD_S", d.log_period_s, float), 1.0, 60.0)
+        _bad("HEATER_STALE_SEC", f"{stale:g} < 2×정지 폴링 {idle:g}")
+    log_period = _rng("HEATER_LOG_PERIOD_S", _get("HEATER_LOG_PERIOD_S", d.log_period_s, float), 1.0, 60.0)
     run_log = _get("HEATER_RUN_LOG_PERIOD_S", d.run_log_period_s, float)
-    if run_log < 0:
-        warns.append(f"HEATER_RUN_LOG_PERIOD_S={run_log:g} < 0 → 0(끔)"); run_log = 0.0
-    elif run_log > 0:
-        run_log = _clamp("HEATER_RUN_LOG_PERIOD_S", run_log, 2.0, 600.0)
+    if run_log != 0:
+        _rng("HEATER_RUN_LOG_PERIOD_S", run_log, 2.0, 600.0)          # 0 = 끔, 그 밖은 2~600
 
-    nr_mv = int(_clamp("HEATER_NORESP_MV", float(_get("HEATER_NORESP_MV", d.noresp_mv, float)),
-                       LADDER_MV_MIN + 50, LADDER_MV_ABS_MAX))
-    nr_sec = _clamp("HEATER_NORESP_SEC", _get("HEATER_NORESP_SEC", d.noresp_sec, float), 60.0, 1800.0)
-    nr_rise = _clamp("HEATER_NORESP_RISE_C", _get("HEATER_NORESP_RISE_C", d.noresp_rise_c, float), 1.0, 50.0)
-    nr_lsec = _clamp("HEATER_NORESP_LOSS_SEC", _get("HEATER_NORESP_LOSS_SEC", d.noresp_loss_sec, float), 60.0, 1800.0)
-    nr_below = _clamp("HEATER_NORESP_LOSS_BELOW_C",
-                      _get("HEATER_NORESP_LOSS_BELOW_C", d.noresp_loss_below_c, float), 2.0, 200.0)
-    nr_fall = _clamp("HEATER_NORESP_LOSS_FALL_C",
-                     _get("HEATER_NORESP_LOSS_FALL_C", d.noresp_loss_fall_c, float), 0.5, 100.0)
+    nr_mv = int(_rng("HEATER_NORESP_MV", float(_get("HEATER_NORESP_MV", d.noresp_mv, float)),
+                     LADDER_MV_MIN + 50, LADDER_MV_ABS_MAX))
+    nr_sec = _rng("HEATER_NORESP_SEC", _get("HEATER_NORESP_SEC", d.noresp_sec, float), 60.0, 1800.0)
+    nr_rise = _rng("HEATER_NORESP_RISE_C", _get("HEATER_NORESP_RISE_C", d.noresp_rise_c, float), 1.0, 50.0)
+    nr_lsec = _rng("HEATER_NORESP_LOSS_SEC", _get("HEATER_NORESP_LOSS_SEC", d.noresp_loss_sec, float), 60.0, 1800.0)
+    nr_below = _rng("HEATER_NORESP_LOSS_BELOW_C",
+                    _get("HEATER_NORESP_LOSS_BELOW_C", d.noresp_loss_below_c, float), 2.0, 200.0)
+    nr_fall = _rng("HEATER_NORESP_LOSS_FALL_C",
+                   _get("HEATER_NORESP_LOSS_FALL_C", d.noresp_loss_fall_c, float), 0.5, 100.0)
 
     mreg = int(_get("HEATER_SESSION_MARK_REG", d.session_mark_reg, float))
-    if mreg and REG_HEATER_LOW <= mreg <= REG_HEATER_HIGH:
-        warns.append(f"HEATER_SESSION_MARK_REG=D{mreg} 가 히터 영역 D110~D149 와 겹침 → 0(마커 끔)"); mreg = 0
-    elif mreg and not (REG_HEATER_HIGH < mreg <= REG_BLOCK_LAST):
-        warns.append(f"HEATER_SESSION_MARK_REG=D{mreg} 가 블록 읽기 범위 D150~D160 밖 → 0(마커 끔)"); mreg = 0
-    elif mreg < 0:
-        mreg = 0
+    if mreg != 0 and not (REG_HEATER_HIGH < mreg <= REG_BLOCK_LAST):
+        _bad("HEATER_SESSION_MARK_REG", f"D{mreg} 이(가) 0(끔) 또는 블록 읽기 범위 D150~D160 밖(히터 영역 D110~D149 와 겹치면 안 됨)")
 
     out = HeaterCfg(
         enabled=bool(enabled), temp_scale=float(scale),
@@ -305,7 +293,7 @@ def load_heater_cfg(cfg: Mapping[str, Any], prefix: str = "CH2_") -> Tuple[Heate
         max_temp=float(max_temp), sv_limit_c=float(sv_lim), ot_limit_c=float(ot),
         ramp_rate=float(ramp), holdback_c=float(hb), slow_zone_c=float(slow_zone), slow_rate=float(slow_rate),
         mv_min=int(mv_min), mv_abs_max=int(mv_abs), mv_limit=int(mv_lim),
-        kp=float(kp), ti_s=float(ti), kp_valid=bool(kp_ok), ti_valid=bool(ti_ok),
+        kp=float(kp), ti_s=float(ti), kp_valid=True, ti_valid=True,
         push_config=bool(_get("HEATER_PUSH_CONFIG", d.push_config, bool)), session_mark_reg=int(mreg),
         approach_zone=float(zone), approach_min_rate=float(rmin), approach_lead=float(lead), soak_tol=float(soak),
         hold_mode=mode, hold_enter_tol=float(enter_tol), hold_enter_sec=float(enter_sec),

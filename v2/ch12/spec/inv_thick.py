@@ -158,7 +158,7 @@ ITEMS = [
     # ───────────────────────── 설정 ─────────────────────────
     dict(id="THK-031", area="thick",
          desc="연결 설정 읽기(호출 시점, 경고 후 안전 쪽): SUPPORTS_THICKNESS, HOST/PORT 가 올바르지 않으면(빈 host, port 1~65535 밖) 끔, POLL 0.25~5, SLOW_POLL POLL~60, "
-              "CMD_TIMEOUT 0.3~5, STALE ≥ max(2, 4×POLL), LOG_DIR 비면 기본·'G:' 면 거부하고 기본(구글드라이브 사라짐 문제), FACTOR_FILE 상대 경로는 exe 옆/프로젝트 루트 기준(비면 config/thickness_factors_ch{N}.json)",
+              "CMD_TIMEOUT 0.3~5, STALE ≥ max(2, 4×POLL), LOG_DIR 비면 기본·'구글 공유 드라이브(NAS)' 면 거부하고 기본(구글드라이브 사라짐 문제), FACTOR_FILE 상대 경로는 exe 옆/프로젝트 루트 기준(비면 config/thickness_factors_ch{N}.json)",
          v1="lib/thickness_config.py:15-26;lib/thickness_config.py:103-161", v2='v2/ch12/drivers/stm100.py; v2/ch12/params/stm100.py; v2/ch12/thickness_factors.py', test='v2/tests/test_stm100.py::test_settings_clamps_like_v1; v2/tests/test_outputs_csv.py::test_thickness_gdrive_dir_replaced_and_fallback; v2/tests/test_thickness_files.py::test_factor_file_location_in_settings_dir', status='done', note='FACTOR_FILE 상대 경로 = 설정 폴더 기준(v2 설정 폴더)'),
     dict(id="THK-032", area="thick",
          desc="판정 상수 읽기(범위 클램프·형식 오류 경고, bool 은 형식 오류): STALE 2~120, READY_FRESH 1~60, LIFE_WARN 0~100, MAX_TIME_RATIO 1~10, MARGIN 0~7200, ZERO_CONFIRM_NM 0.1~100, "

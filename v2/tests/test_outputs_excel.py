@@ -76,12 +76,12 @@ def test_excel_dev_mode_and_rules(tmp_path):
     assert rows[0]["G2 Target"] == "" and rows[0]["G3 Target"] == ""          # CH1 은 G2/G3 공백
     assert rows[0]["avg_load"] is None and rows[0]["avg_tune"] is None        # RF Avg Load/Tune 늘 빈칸(v1)
     assert str(Paths({"GDRIVE_LOG_DIR": "H:/x"}).excel_main_dir()) == str(X_main()) and \
-        str(Paths({}).excel_pc_dir()) == "G:/공유 드라이브/VanaM_Sputter/Process_log"
+        str(Paths({}).excel_pc_dir()) == r"\\VanaM_NAS\VanaM_Sputter\Process_log"
 
 
 def X_main():
-    from v2.ch12.outputs.paths import V1_GDRIVE_MAIN_DIR
-    return V1_GDRIVE_MAIN_DIR
+    from v2.ch12.outputs.paths import NAS_MAIN_DIR
+    return NAS_MAIN_DIR
 
 
 def test_excel_next_row_skips_phantom():

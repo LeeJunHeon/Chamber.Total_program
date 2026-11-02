@@ -210,7 +210,9 @@ def check_dc_pulse(p: Mapping[str, Any]) -> List[str]:
 def heater_limit_c(cfg: Mapping[str, Any]) -> float:
     """히터 목표 상한 = min(max_temp, sv_limit_c) — lib/heater_config.py:136-152 의 클램프(SV ≤0 → 500, MAX_TEMP 가 0 이하거나
     SV 상한보다 크면 SV 상한). 래더 상한(LADDER_SV_MAX_C) 클램프는 v2 파라미터 범위(params/core_heater.py ≤900)가 대신한다.
-    v2 키 CH2_HEATER_SV_LIMIT_C·CH2_HEATER_MAX_TEMP(기본 = 운영값 900·900, settings.json ch2)."""
+    v2 키 CH2_HEATER_SV_LIMIT_C·CH2_HEATER_MAX_TEMP(기본 = 운영값 900·900, settings.json ch2).
+    D11 예외(문서화): 이 고쳐 쓰기는 포털의 같은 검사(TS)와 골든(web_ch12_blocks.json)으로 맞춰져 있어 그대로 둔다 — 파라미터 표(SV·MAX 1~900,
+    규칙 CH01)가 설정 적용 때 이 값들을 이미 거부하므로 정상 경로에서는 바뀌는 값이 없다(test_config_ranges 가 같은 값으로 확인)."""
     sv = float(cfg.get("CH2_HEATER_SV_LIMIT_C", 900.0))
     if sv <= 0:
         sv = 500.0

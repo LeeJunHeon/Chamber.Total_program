@@ -9,6 +9,7 @@ import pytest
 
 from v2.ch12.drivers.heater import float_to_words, words_to_float
 from v2.ch12.heater_process import HeaterSoakWaiter, heater_wait_timeout_s
+from v2.common.paramdef import ConfigRangeError
 from v2.ch12.heater_profile import HeaterCfg, cfg_to_dict, load_heater_cfg, ramp_minutes
 from v2.ch12.heater_response import HeaterResponseGuard
 from v2.ch12.heater_saturation import HeaterSaturationGuard
@@ -242,11 +243,18 @@ def test_cfg_enabled_flag():
     assert _load(SUPPORTS_HEATER="on")[0].enabled is True and _load(SUPPORTS_HEATER="no")[0].enabled is False
 
 
-@pytest.mark.parametrize("sv,ot,exp_sv,exp_ot", [(0, 550, 500.0, 550.0), (1000, 950, 900.0, 950.0), (500, 0, 500.0, 550.0),
-                                                 (500, 1000, 500.0, 950.0), (600, 550, 600.0, 630.0), (500, 500, 500.0, 530.0)])
-def test_cfg_temp_limits(sv, ot, exp_sv, exp_ot):
-    c, w = _load(HEATER_SV_LIMIT_C=sv, HEATER_OT_LIMIT_C=ot)
-    assert (c.sv_limit_c, c.ot_limit_c) == (exp_sv, exp_ot) and w
+def _rej(**kv):
+    """범위 밖·형식 오류는 고쳐 쓰지 않고 거부(사용자 결정 2026-11-02, D11 — v1 은 래더 규칙으로 고쳐 쓰고 경고했다)."""
+    with pytest.raises(ConfigRangeError) as ei:
+        _load(**kv)
+    return str(ei.value)
+
+
+@pytest.mark.parametrize("sv,ot", [(0, 550), (1000, 950), (500, 0), (500, 1000), (600, 550), (500, 500)])
+def test_cfg_temp_limits(sv, ot):
+    """v1: SV 상한 ≤0·>900 / OT ≤0·>950 / OT ≤ SV 는 500·550·900·950·SV+30 으로 고쳐 썼다 → v2 는 거부."""
+    msg = _rej(HEATER_SV_LIMIT_C=sv, HEATER_OT_LIMIT_C=ot)
+    assert "HEATER_SV_LIMIT_C" in msg or "HEATER_OT_LIMIT_C" in msg
 
 
 def test_cfg_temp_limits_at_ladder_max_no_warning():
@@ -255,77 +263,80 @@ def test_cfg_temp_limits_at_ladder_max_no_warning():
 
 
 def test_cfg_mv_rules():
-    c, w = _load(HEATER_MV_ABS_MAX=2000, HEATER_MV_LIMIT=1800)
-    assert c.mv_abs_max == 1600 and c.mv_limit == 1600 and w
-    c, w = _load(HEATER_MV_LIMIT=300)
-    assert c.mv_limit == 420 and w
-    c, w = _load(HEATER_MV_MIN=350)
-    assert any("래더 고정값 400" in x for x in w)
+    assert "HEATER_MV_ABS_MAX" in _rej(HEATER_MV_ABS_MAX=2000, HEATER_MV_LIMIT=1800)       # v1: 1600 으로 고침
+    assert "HEATER_MV_LIMIT" in _rej(HEATER_MV_LIMIT=300)                                  # v1: MV_MIN+20=420 으로 고침
+    c, w = _load(HEATER_MV_MIN=350)                                                        # 값은 안 바꾸고 경고만(v1 도 경고만)
+    assert any("래더 고정값 400" in x for x in w) and c.mv_min == 350
 
 
 def test_cfg_ramp_holdback_rules():
-    c, w = _load(HEATER_RAMP_RATE_C_PER_MIN=3, HEATER_SLOW_RATE_C_PER_MIN=1, HEATER_SLOW_ZONE_C=-5, HEATER_HOLDBACK_C=0)
-    assert (c.ramp_rate, c.slow_rate, c.slow_zone_c, c.holdback_c) == (6.0, 6.0, 0.0, 10.0) and len(w) == 4
+    for kv in ({"HEATER_RAMP_RATE_C_PER_MIN": 3}, {"HEATER_SLOW_RATE_C_PER_MIN": 1}, {"HEATER_SLOW_ZONE_C": -5}, {"HEATER_HOLDBACK_C": 0}):
+        assert next(iter(kv)) in _rej(**kv)                                                # v1: 6·6·0·10 으로 고침
 
 
 def test_cfg_pid_out_of_range_marked_unused():
-    c, w = _load(HEATER_KP=60, HEATER_TI_S=5)
-    assert c.kp_valid is False and c.ti_valid is False and any("쓰지 않음" in x for x in w)
+    assert "HEATER_KP" in _rej(HEATER_KP=60)                                               # v1: 쓰지 않고 래더 기본(3.0)
+    assert "HEATER_TI_S" in _rej(HEATER_TI_S=5)
     c, w = _load(HEATER_KP=0.1, HEATER_TI_S=3000)
     assert c.kp_valid and c.ti_valid and w == []
 
 
 def test_cfg_max_temp_and_approach():
-    assert _load(HEATER_MAX_TEMP=900)[0].max_temp == 500.0
-    assert _load(HEATER_MAX_TEMP=0)[0].max_temp == 500.0
-    c, _ = _load(HEATER_APPROACH_ZONE_C=-1, HEATER_APPROACH_MIN_RATE_C_PER_MIN=0, HEATER_APPROACH_LEAD_C=0.05)
-    assert (c.approach_zone, c.approach_min_rate, c.approach_lead) == (0.0, 1.0, 0.2)
-    assert _load(HEATER_APPROACH_MIN_RATE_C_PER_MIN=9)[0].approach_min_rate == 6.0
+    assert "HEATER_MAX_TEMP" in _rej(HEATER_SV_LIMIT_C=500, HEATER_MAX_TEMP=900)           # v1: SV 상한으로
+    assert "HEATER_MAX_TEMP" in _rej(HEATER_MAX_TEMP=0)
+    for kv in ({"HEATER_APPROACH_ZONE_C": -1}, {"HEATER_APPROACH_MIN_RATE_C_PER_MIN": 0}, {"HEATER_APPROACH_LEAD_C": 0.05},
+               {"HEATER_APPROACH_MIN_RATE_C_PER_MIN": 9}):
+        assert next(iter(kv)) in _rej(**kv)                                                # v1: 0·1.0·0.2·6.0 으로 고침
 
 
 def test_cfg_hold_mode_tc2_becomes_dac():
-    c, w = _load(HEATER_HOLD_MODE="tc2")
-    assert c.hold_mode == "dac" and any("tc2" in x for x in w)
+    assert "HEATER_HOLD_MODE" in _rej(HEATER_HOLD_MODE="tc2")                              # v1: dac 로 고침
     c, w = _load(HEATER_HOLD_MODE="off")
     assert c.hold_mode == "off" and w == []
 
 
 def test_cfg_hold_and_period_clamps():
-    c, _ = _load(HEATER_HOLD_MV_ENTER_TOL_C=0.1, HEATER_HOLD_MV_ENTER_SEC=5, HEATER_HOLD_MV_ARRIVE_TOL_C=50,
-                 HEATER_HOLD_MV_DRIFT_PV_C=0, HEATER_HOLD_MV_DRIFT_MV=500, HEATER_MV_SAT_SEC=1)
-    assert (c.hold_enter_tol, c.hold_enter_sec, c.hold_arrive_tol, c.hold_drift_pv, c.hold_drift_mv, c.sat_sec) == \
-        (0.5, 10.0, 10.0, 0.1, 200.0, 10.0)
-    c, _ = _load(HEATER_POLL_INTERVAL_S=0.1, HEATER_POLL_IDLE_S=30, HEATER_WD_PERIOD_S=20, HEATER_STALE_SEC=1,
-                 HEATER_LOG_PERIOD_S=0)
-    assert (c.poll_interval_s, c.poll_idle_s, c.wd_period_s, c.stale_sec, c.log_period_s) == (0.5, 10.0, 9.0, 20.0, 1.0)
-    assert _load(HEATER_POLL_INTERVAL_S=2, HEATER_POLL_IDLE_S=1)[0].poll_idle_s == 2.0
+    for kv in ({"HEATER_HOLD_MV_ENTER_TOL_C": 0.1}, {"HEATER_HOLD_MV_ENTER_SEC": 5}, {"HEATER_HOLD_MV_ARRIVE_TOL_C": 50},
+               {"HEATER_HOLD_MV_DRIFT_PV_C": 0}, {"HEATER_HOLD_MV_DRIFT_MV": 500}, {"HEATER_MV_SAT_SEC": 1},
+               {"HEATER_POLL_INTERVAL_S": 0.1}, {"HEATER_POLL_IDLE_S": 30}, {"HEATER_WD_PERIOD_S": 20}, {"HEATER_STALE_SEC": 1},
+               {"HEATER_LOG_PERIOD_S": 0}):
+        assert next(iter(kv)) in _rej(**kv)                                                # v1: 각 범위 끝으로 고침
+    assert "HEATER_POLL_IDLE_S" in _rej(HEATER_POLL_INTERVAL_S=2, HEATER_POLL_IDLE_S=1)    # v1: 주기로 올림
 
 
-@pytest.mark.parametrize("val,expect,warned", [(None, 10.0, False), (0, 0.0, False), (1, 2.0, True),
-                                                (30, 30.0, False), (1000, 600.0, True), (-5, 0.0, True)])
-def test_cfg_run_log_period(val, expect, warned):
-    c, w = _load() if val is None else _load(HEATER_RUN_LOG_PERIOD_S=val)
-    assert c.run_log_period_s == expect and bool([x for x in w if "HEATER_RUN_LOG_PERIOD_S" in x]) is warned
+@pytest.mark.parametrize("val,ok", [(None, True), (0, True), (1, False), (30, True), (1000, False), (-5, False), (2, True), (600, True)])
+def test_cfg_run_log_period(val, ok):
+    """0 = 끔, 그 밖은 2~600 — v1 은 1→2·1000→600·-5→0 으로 고쳐 썼다."""
+    if ok:
+        c, w = _load() if val is None else _load(HEATER_RUN_LOG_PERIOD_S=val)
+        assert c.run_log_period_s == (10.0 if val is None else float(val)) and w == []
+    else:
+        assert "HEATER_RUN_LOG_PERIOD_S" in _rej(HEATER_RUN_LOG_PERIOD_S=val)
 
 
-@pytest.mark.parametrize("reg,expect", [(120, 0), (149, 0), (110, 0), (160, 160), (155, 155), (0, 0), (300, 0)])
-def test_cfg_marker_register_overlap(reg, expect):
-    c, w = _load(HEATER_SESSION_MARK_REG=reg)
-    assert c.session_mark_reg == expect
-    if reg not in (0, 155, 160):
-        assert w
+@pytest.mark.parametrize("reg,ok", [(120, False), (149, False), (110, False), (160, True), (155, True), (0, True), (300, False), (-3, False)])
+def test_cfg_marker_register_overlap(reg, ok):
+    """히터 영역 D110~D149 와 겹치거나 D150~D160 밖이면 v1 은 마커를 끄고(0) 계속했다 → v2 는 거부."""
+    if ok:
+        assert _load(HEATER_SESSION_MARK_REG=reg)[0].session_mark_reg == reg
+    else:
+        assert "HEATER_SESSION_MARK_REG" in _rej(HEATER_SESSION_MARK_REG=reg)
 
 
 def test_cfg_noresp_defaults_and_clamps():
     c, w = load_heater_cfg({})
     assert (c.noresp_enable, c.noresp_mv, c.noresp_sec, c.noresp_rise_c) == (True, 600, 300.0, 5.0)
     assert (c.noresp_loss_sec, c.noresp_loss_below_c, c.noresp_loss_fall_c) == (180.0, 10.0, 10.0)
-    c, w = _load(HEATER_NORESP_ENABLE="false", HEATER_NORESP_MV=300, HEATER_NORESP_SEC=5, HEATER_NORESP_RISE_C=0,
-                 HEATER_NORESP_LOSS_SEC=9999, HEATER_NORESP_LOSS_BELOW_C=1, HEATER_NORESP_LOSS_FALL_C=0)
+    c, w = _load(HEATER_NORESP_ENABLE="false")
     assert c.noresp_enable is False
-    assert (c.noresp_mv, c.noresp_sec, c.noresp_rise_c) == (450, 60.0, 1.0)
-    assert (c.noresp_loss_sec, c.noresp_loss_below_c, c.noresp_loss_fall_c) == (1800.0, 2.0, 0.5)
-    assert len([x for x in w if "HEATER_NORESP_" in x]) == 6
+    for kv in ({"HEATER_NORESP_MV": 300}, {"HEATER_NORESP_SEC": 5}, {"HEATER_NORESP_RISE_C": 0}, {"HEATER_NORESP_LOSS_SEC": 9999},
+               {"HEATER_NORESP_LOSS_BELOW_C": 1}, {"HEATER_NORESP_LOSS_FALL_C": 0}):
+        assert next(iter(kv)) in _rej(**kv)                                                # v1: 각 범위 끝으로 고침(경고 6건)
+
+
+def test_cfg_format_error_rejected_not_defaulted():
+    """형식 오류도 v1 처럼 기본값으로 바꿔 쓰지 않고 거부한다."""
+    assert "HEATER_KP" in _rej(HEATER_KP="abc")
 
 
 def test_cfg_v2_param_defaults_are_v1_runtime_values():

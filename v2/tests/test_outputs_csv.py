@@ -66,7 +66,7 @@ def test_calib_golden(tmp_path, name):
 
 
 def test_calib_pending_then_merge_d07(tmp_path):
-    """G: 가 막히면 행은 로컬 정본 + v1 pending 에, 풀리면 사본 스레드가 다음 회차에 보낸다(다음 기록을 기다리지 않음)."""
+    """NAS 가 막히면 행은 로컬 정본 + v1 pending 에, 풀리면 사본 스레드가 다음 회차에 보낸다(다음 기록을 기다리지 않음)."""
     root = make_root(tmp_path)
     write_pre(root, {"G/막힘": "x"})
     cfg = v2_cfg(root, SC.BASE_CFG, {"SPUTTER_CALIB_DB_DIR": "@/G/막힘/Database"})
@@ -190,7 +190,9 @@ def test_thickness_golden(tmp_path):
 
 def test_thickness_gdrive_dir_replaced_and_fallback(tmp_path):
     from v2.ch12.outputs.paths import Paths
-    assert Paths({"CH2_THICKNESS_LOG_DIR": r"G:\공유 드라이브\x"}).thickness_root(2) == r"C:\VanaM_Logs\CH1&2\Thickness"
+    nas = r"\\VanaM_NAS\VanaM_Sputter\Sputter\Logs\x"          # NAS 경로는 쓰지 않고 기본값(로컬) — 구글 공유 드라이브 규칙을 NAS 로(D350)
+    assert Paths({"CH2_THICKNESS_LOG_DIR": nas}).thickness_root(2) == r"C:\VanaM_Logs\CH1&2\Thickness"
+    assert Paths({"CH2_THICKNESS_LOG_DIR": r"D:\내 두께"}).thickness_root(2) == r"D:\내 두께"
     root = make_root(tmp_path)
     (root / "막힘").write_text("x", encoding="utf-8")
     cfg = v2_cfg(root, SC.BASE_CFG, {"THICKNESS_LOG_DIR": "@/막힘/Thickness"})

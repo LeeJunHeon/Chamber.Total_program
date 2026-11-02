@@ -17,6 +17,10 @@ from enum import Enum
 from typing import Any, Callable, Iterable, Mapping, Optional, Sequence
 
 
+class ConfigRangeError(ValueError):
+    """설정 값이 범위 밖·형식 오류 — 고쳐 쓰지 않고 거부한다(사용자 결정 2026-11-02, D11: 조용한 클램프 없음)."""
+
+
 class PType(str, Enum):
     INT = "int"
     FLOAT = "float"

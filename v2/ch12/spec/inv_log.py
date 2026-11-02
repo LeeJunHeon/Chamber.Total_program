@@ -1,11 +1,11 @@
 """v1 전수 목록 — 영역 log(기록 출력).
 
-이 영역이 덮는 것: v1 이 디스크(로컬 C:·G: 구글 드라이브·NAS)에 내는 모든 기록 출력의 경로·파일명 규칙·열(순서 그대로)·
-인코딩·주기·NAS/G: 사본 방식·실패 처리(폴백·pending·재시도). 공정 txt 로그, Sputter Calib CSV(Ch{n}_log.csv),
+이 영역이 덮는 것: v1 이 디스크(로컬 C:·구글 공유 드라이브(NAS))에 내는 모든 기록 출력의 경로·파일명 규칙·열(순서 그대로)·
+인코딩·주기·NAS/구글 공유 드라이브(NAS) 사본 방식·실패 처리(폴백·pending·재시도). 공정 txt 로그, Sputter Calib CSV(Ch{n}_log.csv),
 CH1/CH2 공정 엑셀(CH{n}.xlsx, Main Process·Plasma Cleaning 시트), PLC 코일 CSV(일별), 두께 연속 CSV, CH2 히터 운전 CSV,
 카메라 사진, selfwatch CSV·덤프, ERROR 일자 로그(시스템성 로그·faulthandler), SYSTEM 일자 로그, 런타임 덤프,
 util/ 의 공용 기록기(log_hub)와 그 밖의 util 모듈(재고 조회·파일 선택·자동 닫힘 팝업·설정 오류 창).
-함정: cv2.imwrite 대신 imencode+write_bytes(한글 경로), openpyxl max_row(서식만 있는 행) 회피, G: 는 열어 둔 파일을 안 올림.
+함정: cv2.imwrite 대신 imencode+write_bytes(한글 경로), openpyxl max_row(서식만 있는 행) 회피, 구글 공유 드라이브(NAS) 는 열어 둔 파일을 안 올림.
 제외: util/host_process_log.py(Robot_YYYYMMDD.csv — 로봇 영역), host/server.py 명령 CSV(로봇 영역),
 PC·TSP·서버 페이지 자체 로그(각 영역), OES·RGA CSV(app 영역 inv_app.py).
 
@@ -26,7 +26,7 @@ from __future__ import annotations
 ITEMS = [
     # ───────────────────────── 공통 경로·폴백 ─────────────────────────
     dict(id="LOG-001", area="log",
-         desc="로그 뿌리 LOG_ROOT_DIR 기본 C:\\VanaM_Logs\\CH1&2(로컬에만 씀, NAS 반영은 log_sync 워커). 코드 기본값은 G:\\공유 드라이브\\VanaM_Sputter\\Sputter\\Logs\\CH1&2 이지만 config 값이 우선",
+         desc="로그 뿌리 LOG_ROOT_DIR 기본 C:\\VanaM_Logs\\CH1&2(로컬에만 씀, NAS 반영은 log_sync 워커). 코드 기본값은 <구글 공유 드라이브>\\VanaM_Sputter\\Sputter\\Logs\\CH1&2 이지만 config 값이 우선",
          v1="lib/config_common.py:641-645; main.py:368-371", v2="v2/ch12/outputs/paths.py", test="", status="todo", note=""),
     dict(id="LOG-002", area="log",
          desc="로컬 폴백 뿌리 LOCAL_FALLBACK_ROOT = exe(소스 실행이면 저장소) 폴더\\Logs_LocalFallback, 하위 CH1·CH2·Server·PLC_Coil·Plasma_Cleaning·TSP·ERROR·RUNTIME_DUMP·RGA·SYSTEM. cwd 는 쓰지 않음(관리자 바로가기 시작 위치가 비면 System32)",
@@ -100,8 +100,8 @@ ITEMS = [
 
     # ───────────────────────── Sputter Calib CSV ─────────────────────────
     dict(id="LOG-023", area="log",
-         desc="Sputter Calib CSV 경로: SPUTTER_CALIB_DB_DIR(기본 G:\\공유 드라이브\\VanaM_Sputter\\Sputter\\Calib\\Database)\\Ch{n}_log.csv — 두 채널 같은 폴더, 파일명만 다름. G: 에 직접 씀(로컬 선기록 아님)",
-         v1="controller/data_logger.py:61-65,86-87; lib/config_common.py:726; runtime/chamber_runtime.py:601-609", v2="v2/ch12/outputs/calib_csv.py", test="", status="todo", note="v1 은 G: 직접 기록 — '로컬 먼저, 사본만' 원칙과 다름(결정 목록 후보)"),
+         desc="Sputter Calib CSV 경로: SPUTTER_CALIB_DB_DIR(기본 <구글 공유 드라이브>\\VanaM_Sputter\\Sputter\\Calib\\Database)\\Ch{n}_log.csv — 두 채널 같은 폴더, 파일명만 다름. 구글 공유 드라이브(NAS) 에 직접 씀(로컬 선기록 아님)",
+         v1="controller/data_logger.py:61-65,86-87; lib/config_common.py:726; runtime/chamber_runtime.py:601-609", v2="v2/ch12/outputs/calib_csv.py", test="", status="todo", note="v1 은 구글 공유 드라이브(NAS) 직접 기록 — '로컬 먼저, 사본만' 원칙과 다름(결정 목록 후보)"),
     dict(id="LOG-024", area="log",
          desc="Calib CSV 머리글(순서 그대로): Timestamp, Process Name, Result, Base Pressure, Main Shutter, Shutter Delay, Integration Time, Power Select, G1 Target, G2 Target, G3 Target, Ar flow, O2 flow, N2 flow, Working Pressure, Process Time, RF: For.P, RF: Ref. P, DC: V, DC: I, DC: P, DC2: V, DC2: I, DC2: P, RF Pulse: P, RF Pulse: Freq, RF Pulse: Duty Cycle, DC Pulse: P, DC Pulse: V, DC Pulse: I, DC Pulse: Freq, DC Pulse: Duty Cycle, DC Pulse: Off Time, RF Pulse: For.P, RF Pulse: Ref.P, Chuck Position",
          v1="controller/data_logger.py:131-145", v2="v2/ch12/outputs/calib_csv.py", test="", status="todo", note=""),
@@ -109,7 +109,7 @@ ITEMS = [
          desc="Calib CSV 뒤쪽 열: CH2 파일에만 'Heater: SV, Heater: PV Avg, Heater: PV Min, Heater: PV Max, Heater: MV Avg', 그 뒤 SUPPORTS_THICKNESS=true 채널만 'Thickness: End Mode, Target nm, Final nm, Avg Rate nm/s, Tooling %, Density, Z, Chuck, Gun, Fallback Reason, Jump Count, Material, Factor Source'",
          v1="controller/data_logger.py:16-23,146-149; runtime/chamber_runtime.py:608", v2="v2/ch12/outputs/calib_csv.py", test="", status="todo", note=""),
     dict(id="LOG-026", area="log",
-         desc="Calib CSV 인코딩 utf-8-sig, 기록 때만 열고 쓰고 바로 닫음(열어 두면 G: 가 올리지 않음 — 2026-10 확인), 쓰기 락",
+         desc="Calib CSV 인코딩 utf-8-sig, 기록 때만 열고 쓰고 바로 닫음(열어 두면 구글 공유 드라이브(NAS) 가 올리지 않음 — 2026-10 확인), 쓰기 락",
          v1="controller/data_logger.py:157-163,689,744-754", v2="v2/ch12/outputs/calib_csv.py", test="", status="todo", note=""),
     dict(id="LOG-027", area="log",
          desc="시작 때 머리글 업그레이드: 기존 파일 머리글이 새 머리글과 다르면 전 행을 DictReader 로 읽어 새 머리글로 .tmp 에 다시 쓰고 os.replace(새 열 공란, 옛 'Process Note' 값을 'Process Name' 으로 이관). 실패하면 tmp 삭제",
@@ -154,9 +154,9 @@ ITEMS = [
          desc="두께 열: End Mode, Target '{:g}', Final '%.2f', Avg Rate '%.4f', Tooling/Density/Z '{:g}', Chuck, Gun, Fallback Reason, Jump Count 정수, Material, Factor Source — 런타임이 공정 종료 때 set_thickness_record, 없으면 공란",
          v1="controller/data_logger.py:437-439,605-631; runtime/chamber_runtime.py:1873,6900-6910", v2="v2/ch12/outputs/calib_csv.py", test="", status="todo", note=""),
 
-    # ───────────────────────── CH1/CH2 엑셀(G:) ─────────────────────────
+    # ───────────────────────── CH1/CH2 엑셀(구글 공유 드라이브(NAS)) ─────────────────────────
     dict(id="LOG-041", area="log",
-         desc="공정 엑셀 경로: G:/공유 드라이브/VanaM_Sputter/Process_log/CH{n}.xlsx, 'Main Process' 시트에 행 append. 메인 공정 저장은 log_dir=None 이라 하드코딩 기본값을 쓰고 GDRIVE_LOG_DIR 설정은 무시됨(PC 시트만 GDRIVE_LOG_DIR 사용)",
+         desc="공정 엑셀 경로: <구글 공유 드라이브>/VanaM_Sputter/Process_log/CH{n}.xlsx, 'Main Process' 시트에 행 append. 메인 공정 저장은 log_dir=None 이라 하드코딩 기본값을 쓰고 GDRIVE_LOG_DIR 설정은 무시됨(PC 시트만 GDRIVE_LOG_DIR 사용)",
          v1="util/gdrive_logger.py:30,523,860; runtime/chamber_runtime.py:1916-1925; main.py:599-603", v2="v2/ch12/outputs/excel_log.py", test="", status="todo", note="알려진 이상 동작(GDRIVE_LOG_DIR 무시) — v1 과 같게, 결정 목록"),
     dict(id="LOG-042", area="log",
          desc="엑셀은 성공(ok=True) 공정만 저장(STOP·실패는 Calib CSV 에만), DEV_MODE 면 저장 전체 생략. 전용 1워커 풀(GDriveIO)에서 로드·저장, 모듈 전역 락, 예외는 밖으로 내지 않음",
@@ -198,11 +198,11 @@ ITEMS = [
          desc="엑셀 저장 실패 시 LOCAL_FALLBACK_ROOT\\CH{n}_pending.xlsx 에 같은 행 저장(나중에 본파일로 합치는 코드 없음). 기존 파일 로드가 예외면 <이름>.broken.xlsx 로 이름 바꾸고 새 파일 생성",
          v1="util/gdrive_logger.py:323-350,513-529,861", v2="v2/ch12/outputs/excel_log.py", test="", status="todo", note="알려진 이상 동작(pending.xlsx 미병합)"),
     dict(id="LOG-055", area="log",
-         desc="엑셀은 G: 에 직접 load→save(로컬 선기록 없음)",
+         desc="엑셀은 구글 공유 드라이브(NAS) 에 직접 load→save(로컬 선기록 없음)",
          v1="util/gdrive_logger.py:513-525", v2="v2/ch12/outputs/excel_log.py", test="", status="todo", note="'로컬 먼저, 사본만' 원칙과 다름 — 결정 목록"),
     dict(id="LOG-056", area="log",
-         desc="Plasma Cleaning 시트: PC 가 성공(ok and not stopped)일 때만 save_pc_only 1행(날짜=now, 담당자·비고·기판 빈칸, Process Name 기본 'Plasma Cleaning', base = IG 읽기 마지막 값, avg_load/tune None). 폴백은 <G: 폴더>\\LocalFallback\\CH{n}_pending.xlsx(같은 G: 아래). DEV_MODE 검사 없음",
-         v1="util/gdrive_logger.py:763-811; runtime/plasma_cleaning_runtime.py:1639-1650,2168-2187", v2="v2/ch12/outputs/excel_log.py", test="", status="todo", note="알려진 이상 동작(DEV_MODE 무시·폴백도 G:)"),
+         desc="Plasma Cleaning 시트: PC 가 성공(ok and not stopped)일 때만 save_pc_only 1행(날짜=now, 담당자·비고·기판 빈칸, Process Name 기본 'Plasma Cleaning', base = IG 읽기 마지막 값, avg_load/tune None). 폴백은 <구글 공유 드라이브(NAS) 폴더>\\LocalFallback\\CH{n}_pending.xlsx(같은 구글 공유 드라이브(NAS) 아래). DEV_MODE 검사 없음",
+         v1="util/gdrive_logger.py:763-811; runtime/plasma_cleaning_runtime.py:1639-1650,2168-2187", v2="v2/ch12/outputs/excel_log.py", test="", status="todo", note="알려진 이상 동작(DEV_MODE 무시·폴백도 구글 공유 드라이브(NAS))"),
     dict(id="LOG-057", area="log",
          desc="main.py 의 _save_pc_only_row·_save_merged_row(PC+Main 병합 저장)는 호출하는 곳이 없음",
          v1="main.py:1016-1052", v2="v2/ch12/outputs/excel_log.py", test="", status="na", note="죽은 코드 — 호출부 없음(grep _save_pc_only_row/_save_merged_row: 정의만 main.py:1016,1035)"),
@@ -212,7 +212,7 @@ ITEMS = [
 
     # ───────────────────────── PLC 코일 CSV ─────────────────────────
     dict(id="LOG-059", area="log",
-         desc="PLC 코일 CSV: 프로그램 부팅 때 PLC 연결 뒤 시작, 경로 PLC_COIL_LOG_NAS_DIR(설정 C:\\VanaM_Logs\\CH1&2\\CH1&2_PLC, 코드 기본 G:\\...\\CH1&2_PLC)\\YYYYMMDD.csv, 폴백 PLC_COIL_LOG_LOCAL_DIR(없으면 LOCAL_FALLBACK_ROOT\\PLC_Coil), utf-8-sig, 핸들 유지, NAS 재시도 10 s",
+         desc="PLC 코일 CSV: 프로그램 부팅 때 PLC 연결 뒤 시작, 경로 PLC_COIL_LOG_NAS_DIR(설정 C:\\VanaM_Logs\\CH1&2\\CH1&2_PLC, 코드 기본 구글 공유 드라이브(NAS)\\...\\CH1&2_PLC)\\YYYYMMDD.csv, 폴백 PLC_COIL_LOG_LOCAL_DIR(없으면 LOCAL_FALLBACK_ROOT\\PLC_Coil), utf-8-sig, 핸들 유지, NAS 재시도 10 s",
          v1="device/plc.py:1833-1881; lib/config_common.py:683-684; main.py:349-359", v2="v2/ch12/outputs/plc_coil_csv.py", test="", status="todo", note=""),
     dict(id="LOG-060", area="log",
          desc="PLC 코일 CSV 주기 PLC_COIL_LOG_INTERVAL_S 5.0 s(최소 0.5 s, 코드 기본 1.0), 주기는 작업 시간을 뺀 나머지를 잠",
@@ -229,7 +229,7 @@ ITEMS = [
 
     # ───────────────────────── 두께 연속 CSV ─────────────────────────
     dict(id="LOG-064", area="log",
-         desc="두께 연속 CSV: THICKNESS_LOG_DIR(기본 C:\\VanaM_Logs\\CH1&2\\Thickness)\\CH{n}\\Thickness_YYYYMMDD.csv, 그 채널 공정 중에만(set_recording) 1초 1행, 시작 즉시 1행. G: 경로는 쓰지 않고 기본값으로 바꿈(경고)",
+         desc="두께 연속 CSV: THICKNESS_LOG_DIR(기본 C:\\VanaM_Logs\\CH1&2\\Thickness)\\CH{n}\\Thickness_YYYYMMDD.csv, 그 채널 공정 중에만(set_recording) 1초 1행, 시작 즉시 1행. 구글 공유 드라이브(NAS) 경로는 쓰지 않고 기본값으로 바꿈(경고)",
          v1="lib/thickness_logger.py:1-9,73-94; controller/thickness_service.py:48,158-169,301-303; lib/config_common.py:526; lib/thickness_config.py:143-146", v2="v2/ch12/outputs/thickness_csv.py", test="", status="todo", note=""),
     dict(id="LOG-065", area="log",
          desc="두께 CSV 열: timestamp('YYYY-mm-dd HH:MM:SS'), connected(1/0/빈), thickness_nm('%.2f'), rate_nm_s('%.3f'), freq_hz(정수), life_pct('%.1f'), crystal_ok, stale, process_running(1/0), process_name",
@@ -385,7 +385,7 @@ _DONE = {
          "v2 는 경로 키를 모두 재시작 적용으로(같은 결과) — D167"),
     21: (_O + "system_log.py", _x(_OT, "test_system_log_golden"), "v2 는 쓰기 스레드에서(순서 같음)"),
     22: (_O + "system_log.py; " + _O + "process_txt.py", _TXT + "; " + _x(_OT, "test_system_log_golden"), ""),
-    23: (_O + "calib_csv.py; " + _O + "paths.py", _CAL + "; " + _x(_OPA, "test_v1_default_paths"), "D07·D42 — 로컬 정본 먼저, G: 에는 사본"),
+    23: (_O + "calib_csv.py; " + _O + "paths.py", _CAL + "; " + _x(_OPA, "test_v1_default_paths"), "D07·D42 — 로컬 정본 먼저, 구글 공유 드라이브(NAS) 에는 사본"),
     24: (_O + "calib_csv.py", _CAL, ""),
     25: (_O + "calib_csv.py", _CAL, ""),
     26: (_O + "calib_csv.py", _CAL + "; " + _x(_OC, "test_calib_record_does_not_block"), ""),
@@ -422,9 +422,9 @@ _DONE = {
     52: (_O + "excel_log.py", _XL + "; " + _x(_OX, "test_excel_dev_mode_and_rules"), ""),
     53: (_O + "excel_log.py", _x(_OX, "test_excel_dev_mode_and_rules"), "D169 그대로"),
     54: (_O + "excel_style.py; " + _O + "excel_log.py", _x(_OX, "test_excel_golden[excel_blocked]", "test_excel_golden[excel_broken]"), "D170 그대로"),
-    55: (_O + "excel_log.py; " + _O + "paths.py", _XL, "D07 — 로컬 정본(OUTPUT_LOCAL_FIRST_DIR) 먼저, G: 에는 사본(결과 파일 같음)"),
+    55: (_O + "excel_log.py; " + _O + "paths.py", _XL, "D07 — 로컬 정본(OUTPUT_LOCAL_FIRST_DIR) 먼저, 구글 공유 드라이브(NAS) 에는 사본(결과 파일 같음)"),
     56: (_O + "excel_log.py; v2/ch12/plasma_cleaning.py", _x(_OX, "test_excel_golden[excel_pc]") +
-         "; v2/tests/test_plasma_cleaning.py::test_excel_plasma_cleaning_sheet_values", "v1 이상 동작 그대로(DEV_MODE 무시·폴백도 G:)"),
+         "; v2/tests/test_plasma_cleaning.py::test_excel_plasma_cleaning_sheet_values", "v1 이상 동작 그대로(DEV_MODE 무시·폴백도 구글 공유 드라이브(NAS))"),
     58: (_O + "excel_log.py; " + _O + "run_stats.py", _x(_OX, "test_excel_golden[excel_ch2_multi]"),
          "v2 는 날짜를 RunStats.session_started_at(공정 시작)으로 고정 — v1 경합(저장 시각이 될 수 있음)은 없앰(결정 후보)"),
     59: (_O + "plc_coil_csv.py; " + _O + "row_feed.py", _x(_OC, "test_plc_coil_golden", "test_plc_coil_fallback_switch"), ""),

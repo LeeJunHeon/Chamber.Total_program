@@ -175,7 +175,7 @@ def test_out_folder_in_operational_dir_refused(tmp_path):
     code, out = b.run(tmp_path / "logs", cfg={"LOG_ROOT_DIR": str(tmp_path / "logs")})
     assert code == 4 and "기록 폴더 거부" in out
     assert all(s.connections == 0 for s in b.srv.values())                     # 장비에 연결하지도 않음
-    assert B.out_refused(B.Path(r"\\VanaM_NAS\x"), {}) and B.out_refused(B.Path("G:/공유 드라이브/x"), {})
+    assert B.out_refused(B.Path(r"\\VanaM_NAS\x"), {})
 
 
 def test_pulse_not_chosen_is_not_connected(tmp_path):

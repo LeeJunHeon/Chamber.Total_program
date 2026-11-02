@@ -24,7 +24,7 @@ r"""챔버12 bench 실측 도구 — 장비 노트북에서 v1 을 끈 상태로
   --set MFC_GAP_MS=100 처럼 바꿔 가며 응답 시간·오류율을 비교한다. MFC 는 R60·R5, IG 는 RDI, RF Pulse 는 162·165·166, DC Pulse 는
   PIV·SAT·ANT·AE·AF 를 매 tick 전부 읽는다(번갈아 읽기 없음 — 품질 stale 이 나오면 간격이 너무 큰 것).
 - 기록: 바탕화면\v2_bench_YYYYMMDD_HHMMSS — events.jsonl(처음부터), inventory.json, 스냅샷(SQLite·CSV), 통신 녹화 rec_<장비>.jsonl,
-  summary.txt. NAS·G:·운영 폴더(LOG_ROOT_DIR·LOCAL_DATA_DIR 등)에는 쓰지 않는다(그 아래를 --out 으로 주면 거부 — 종료 4).
+  summary.txt. NAS·운영 폴더(LOG_ROOT_DIR·LOCAL_DATA_DIR 등)에는 쓰지 않는다(그 아래를 --out 으로 주면 거부 — 종료 4).
   Ctrl+C 로 언제든 멈출 수 있고, 멈춰도 요약은 남긴다.
 종료 코드: 0 정상, 2 안전 확인에서 멈춤, 3 연결 실패, 4 기록 폴더 거부.
 """
@@ -88,12 +88,10 @@ def _norm(p: str) -> str:
 
 
 def out_refused(out: Path, cfg: Dict[str, Any]) -> Optional[str]:
-    """기록 폴더가 NAS·G:·운영 폴더 아래면 사유. bench 기록은 따로 둔다(운영 기록·동기화와 섞이지 않게)."""
+    """기록 폴더가 NAS·운영 폴더 아래면 사유. bench 기록은 따로 둔다(운영 기록·동기화와 섞이지 않게)."""
     s = _norm(str(out))
     if s.startswith("\\\\"):
         return f"NAS(UNC) 경로: {out}"
-    if s.startswith("g:"):
-        return f"G: 드라이브: {out}"
     for k in FORBIDDEN_OUT_KEYS:
         root = _norm(str(cfg.get(k) or ""))
         if root and (s == root or s.startswith(root + "\\")):

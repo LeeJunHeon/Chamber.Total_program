@@ -37,22 +37,22 @@ _PROC = Scope.PROCESS
 PARAMS = (
     # ── 공통 경로 ──
     _p("LOG_ROOT_DIR", "로그 뿌리 폴더", S, r"C:\VanaM_Logs\CH1&2", f"{_J}:289; {_CC}:645",
-       v1_default=r"G:\공유 드라이브\VanaM_Sputter\Sputter\Logs\CH1&2",
+       v1_default=r"\\VanaM_NAS\VanaM_Sputter\Sputter\Logs\CH1&2",
        note="공정 txt(CH1·CH2)·SYSTEM·ERROR·RUNTIME_DUMP·selfwatch·CH2_Heater 의 뿌리. NAS 반영은 v1 log_sync 워커"),
     _p("LOCAL_FALLBACK_ROOT", "로컬 폴백 뿌리", S, "", f"{_CC}:20-31",
        note="비우면 exe(소스 실행이면 저장소) 폴더\\Logs_LocalFallback — v1 은 settings.json 키가 아니라 계산값"),
-    _p("OUTPUT_LOCAL_FIRST_DIR", "G:·NAS 출력의 로컬 정본 폴더", S, r"C:\VanaM_Logs\CH1&2\LocalFirst", "v2",
-       note="D07: G: 로 가는 출력(Calib CSV·엑셀)을 여기에 먼저 쓰고 G: 에는 사본만 보낸다(아래 Calib·Process_log)"),
+    _p("OUTPUT_LOCAL_FIRST_DIR", "NAS 출력의 로컬 정본 폴더", S, r"C:\VanaM_Logs\CH1&2\LocalFirst", "v2",
+       note="D07: NAS 로 가는 출력(Calib CSV·엑셀)을 여기에 먼저 쓰고 NAS 에는 사본만 보낸다(아래 Calib·Process_log)"),
     _p("OUTPUT_COPY_RETRY_S", "사본 보내기 재시도 간격", F, 30.0, "v2", unit="s", lo=1.0, hi=3600.0, apply=_LIVE,
-       note="사본(G:·NAS) 실패는 이 간격으로 다시 — 정본은 로컬(D07). 값은 v1 HOST_LOG_RETRY_S 와 같게"),
+       note="사본(NAS) 실패는 이 간격으로 다시 — 정본은 로컬(D07). 값은 v1 HOST_LOG_RETRY_S 와 같게"),
     # ── Sputter Calib CSV ──
-    _p("SPUTTER_CALIB_DB_DIR", "Sputter Calib CSV 폴더", S, r"G:\공유 드라이브\VanaM_Sputter\Sputter\Calib\Database",
+    _p("SPUTTER_CALIB_DB_DIR", "Sputter Calib CSV 폴더", S, r"\\VanaM_NAS\VanaM_Sputter\Sputter\Calib\Database",
        f"{_J}:347; {_CC}:726; controller/data_logger.py:62-65"),
     # ── CH1/CH2 엑셀 ──
-    _p("GDRIVE_LOG_DIR", "Plasma Cleaning 엑셀 폴더", S, "G:/공유 드라이브/VanaM_Sputter/Process_log",
+    _p("GDRIVE_LOG_DIR", "Plasma Cleaning 엑셀 폴더", S, r"\\VanaM_NAS\VanaM_Sputter\Process_log",
        f"{_J}:445; {_CC}:831; main.py:599-603",
-       note="v1 은 PC 시트만 이 값을 쓰고 Main Process 시트는 하드코딩 G:/공유 드라이브/VanaM_Sputter/Process_log"
-            "(util/gdrive_logger.py:30,860 — log_dir=None) — v1 그대로(LOG-041)"),
+       note="v1 은 PC 시트만 이 값을 쓰고 Main Process 시트는 하드코딩 경로(구글 공유 드라이브 Process_log, "
+            "util/gdrive_logger.py:30,860 — log_dir=None)였다. v2 는 둘 다 NAS 의 같은 경로(\\\\VanaM_NAS\\VanaM_Sputter\\Process_log) — LOG-041, D07"),
     _p("GDRIVE_ARC_ALERT_THRESH", "Arc 강조·알림 기준", I, 5000, f"{_J}:446; {_CC}:832", unit="회", lo=0,
        apply=_LIVE, scope=_PROC, v1_default=5),
     _p("GDRIVE_REF_P_WARN_W", "Ref.P 경고 기준(받기만 함)", F, 20.0, f"{_J}:447; {_CC}:833", unit="W", lo=0.0,
@@ -61,16 +61,16 @@ PARAMS = (
     _p("PLC_COIL_LOG_INTERVAL_S", "PLC 코일 CSV 주기", F, 5.0, f"{_J}:266; {_CC}:664; device/plc.py:1856-1868",
        unit="s", lo=0.5, hi=3600.0, v1_default=1.0, note="v1 최소 0.5 s(max(0.5, 값)). v2 는 1초 행에서 이 주기마다 뽑아 씀"),
     _p("PLC_COIL_LOG_NAS_DIR", "PLC 코일 CSV 폴더", S, r"C:\VanaM_Logs\CH1&2\CH1&2_PLC", f"{_J}:288; {_CC}:683",
-       v1_default=r"G:\공유 드라이브\VanaM_Sputter\Sputter\Logs\CH1&2\CH1&2_PLC"),
+       v1_default=r"\\VanaM_NAS\VanaM_Sputter\Sputter\Logs\CH1&2\CH1&2_PLC"),
     _p("PLC_COIL_LOG_LOCAL_DIR", "PLC 코일 CSV 폴백 폴더", S, "", f"{_CC}:25; device/plc.py:1833-1840",
        note="비우면 LOCAL_FALLBACK_ROOT\\PLC_Coil"),
     _p("PLC_COIL_LOG_SUMMARY_S", "PLC 코일 CSV 건너뜀 요약 주기", F, 60.0, f"{_J}:269; {_CC}:667", unit="s",
        lo=1.0, apply=_LIVE),
     # ── 두께 연속 CSV(채널 구역) ──
     _p("CH1_THICKNESS_LOG_DIR", "CH1 두께 연속 CSV 폴더", S, r"C:\VanaM_Logs\CH1&2\Thickness",
-       f"{_J}:520; lib/thickness_config.py:143-146", note="G: 로 시작하면 기본값으로 바꾼다(v1 그대로)"),
+       f"{_J}:520; lib/thickness_config.py:143-146", note="NAS(\\\\ 로 시작) 경로면 기본값(로컬)으로 바꾼다 — v1 의 구글 공유 드라이브 규칙을 NAS 로 옮김(D350). 두께 CSV 는 로컬에 쓰고 NAS 반영은 log_sync"),
     _p("CH2_THICKNESS_LOG_DIR", "CH2 두께 연속 CSV 폴더", S, r"C:\VanaM_Logs\CH1&2\Thickness",
-       f"{_J}:651; lib/thickness_config.py:143-146", note="G: 로 시작하면 기본값으로 바꾼다(v1 그대로)"),
+       f"{_J}:651; lib/thickness_config.py:143-146", note="NAS(\\\\ 로 시작) 경로면 기본값(로컬)으로 바꾼다 — v1 의 구글 공유 드라이브 규칙을 NAS 로 옮김(D350). 두께 CSV 는 로컬에 쓰고 NAS 반영은 log_sync"),
     # ── CH2 히터 운전 CSV·공정 txt 히터 줄(ch2 구역) ──
     _p("CH2_HEATER_LOG_ENABLED", "히터 운전 CSV 기록", B, True, f"{_J}:621; lib/heater_config.py:273", apply=_LIVE,
        scope=_PROC),
@@ -79,7 +79,7 @@ PARAMS = (
     _p("CH2_HEATER_LOG_DIR", "히터 운전 CSV 폴더", S, "", f"{_J}:623; lib/heater_config.py:274",
        note="비우면 LOG_ROOT_DIR\\CH2_Heater"),
     _p("CH2_HEATER_RUN_LOG_PERIOD_S", "공정 txt 히터 상태 줄 간격", F, 10.0, f"{_J}:624; lib/heater_config.py:234-238",
-       unit="s", lo=0.0, hi=600.0, apply=_LIVE, scope=_PROC, note="0 = 끔, 0 초과는 2~600 으로 맞춤(v1 그대로)"),
+       unit="s", lo=0.0, hi=600.0, apply=_LIVE, scope=_PROC, note="0 = 끔, 그 밖은 2~600 s (v1 은 0 초과 2 미만·600 초과를 2~600 으로 고쳐 썼다 — v2 는 키 사이 규칙 CH07 이 거부, D11)"),
     # ── 카메라 사진 ──
     _p("CAMERA_LOG_ROOT", "카메라 사진 루트", S, r"C:\VanaM_Logs\Camera_Logs", f"{_J}:304; {_CC}:865"),
     _p("CAMERA_MIN_FREE_GB", "카메라 디스크 여유 하한", F, 20.0, f"{_J}:305; {_CC}:866", unit="GB", lo=0.0,

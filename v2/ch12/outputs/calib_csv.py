@@ -7,13 +7,13 @@
   Shutter Delay '%.3f', Process Time = str(float)(포맷 없음 — v1 그대로), 히터 '%.1f'/'%.0f', 두께 '{:g}'/'%.2f'/'%.4f'.
 
 파일 처리(v1 그대로 + D07)
-- 기록할 때만 열고 쓰고 바로 닫는다(열어 두면 G: 가 올리지 않는다 — data_logger.py:157-163).
+- 기록할 때만 열고 쓰고 바로 닫는다(열어 두면 NAS 동기화가 올리지 않는다 — data_logger.py:157-163).
 - 시작 때 한 번: 기존 파일 머리글이 새 머리글과 다르면 전 행을 새 머리글로 .tmp 에 다시 쓰고 os.replace(옛 'Process Note'
   값을 'Process Name' 으로). 실패하면 실제 파일 머리글 순서로 기록(새 열 값은 버려짐 — 'Sputter Calib CSV 머리글 갱신 실패 …').
 - 로컬 pending(LOCAL_FALLBACK_CH{n}_DIR\\Ch{n}_pending.csv, 머리글 = 새 머리글)을 본파일에 합친 뒤 지움, 실패하면 1회 재시도.
-- D07: v1 은 G: 본파일에 바로 썼다. v2 는 ① 로컬 정본(OUTPUT_LOCAL_FIRST_DIR\\Calib\\Ch{n}_log.csv)에 먼저 쓰고 ② 같은 행을 v1
-  pending 파일에 넣은 뒤 ③ 사본 스레드(CopySender)가 v1 병합 규칙으로 G: 본파일에 보낸다(바로 깨움). 실패하면 pending 에 남아
-  다음 회차·다음 기록 때 다시. G: 쪽 파일 바이트는 v1 과 같다(앞 행이 pending 에 남았을 때 v1 은 새 행을 먼저 쓸 수 있었지만
+- D07: v1 은 구글 공유 드라이브 본파일에 바로 썼다. v2 는 ① 로컬 정본(OUTPUT_LOCAL_FIRST_DIR\\Calib\\Ch{n}_log.csv)에 먼저 쓰고 ② 같은 행을 v1
+  pending 파일에 넣은 뒤 ③ 사본 스레드(CopySender)가 v1 병합 규칙으로 NAS 본파일에 보낸다(바로 깨움). 실패하면 pending 에 남아
+  다음 회차·다음 기록 때 다시. NAS 쪽 파일 바이트는 v1 과 같다(앞 행이 pending 에 남았을 때 v1 은 새 행을 먼저 쓸 수 있었지만
   v2 는 순서를 지킨다). 보낸 만큼만 pending 에서 지운다(중간 실패 때 v1 처럼 중복되지 않게).
 - 로그 문구(CH 로그 'CSV' 출처로 log_func 에): v1 문구 그대로.
 
@@ -247,13 +247,13 @@ class CalibCsv(Owned):
         self.thickness_columns = bool(thickness_columns)
         self._log_func = log_func
         self.header = header_for(self.ch, self.thickness_columns)
-        self.nas_file = self.paths.calib_file(self.ch)               # G: 본파일(v1 위치) — 시작 때 고정(LOG-020)
+        self.nas_file = self.paths.calib_file(self.ch)               # NAS 본파일(v1 위치) — 시작 때 고정(LOG-020)
         self.pending_file = self.paths.calib_pending(self.ch)
         self.local_file = self.paths.calib_local_first(self.ch)
         self._own_sender = sender is None
         self.sender = sender if sender is not None else CopySender(cfg, name=f"calib-copy-ch{self.ch}")
         self._lk = threading.Lock()               # pending 파일(쓰기 스레드 ↔ 사본 스레드)
-        self._fields: Optional[List[str]] = None  # G: 본파일의 실제 열(첫 보내기 때 한 번 — v1 시작 때 한 번)
+        self._fields: Optional[List[str]] = None  # NAS 본파일의 실제 열(첫 보내기 때 한 번 — v1 시작 때 한 번)
         self._failing = False                     # 실패 문구는 실패가 시작될 때 한 번(재시도마다 되풀이하지 않음)
         self.writer.put(self._startup_local)
         self.sender.submit(f"calib-ch{self.ch}", self._deliver)
@@ -308,7 +308,7 @@ class CalibCsv(Owned):
         # ③ 사본 보내기
         self.sender.submit(f"calib-ch{self.ch}", self._deliver)
 
-    # ── 사본 스레드: pending → G: 본파일(v1 _flush_pending_to_nas + 1회 재시도) ──
+    # ── 사본 스레드: pending → NAS 본파일(v1 _flush_pending_to_nas + 1회 재시도) ──
     def _read_pending(self) -> List[Dict[str, str]]:
         if not self.pending_file.exists():
             return []
@@ -331,7 +331,7 @@ class CalibCsv(Owned):
         os.replace(tmp, self.pending_file)
 
     def _deliver(self) -> bool:
-        if self._fields is None:              # v1: 시작 때 머리글 업그레이드 + 실제 열(G: 본파일)
+        if self._fields is None:              # v1: 시작 때 머리글 업그레이드 + 실제 열(NAS 본파일)
             try:
                 self.nas_file.parent.mkdir(parents=True, exist_ok=True)
             except Exception as e:

@@ -264,7 +264,7 @@ class App:
         self.hub = hub.attach(self.system)                 # 이벤트·1초 행 → 장비 메시지(로컬 화면·웹)
         config_apply.attach(self.system)                   # CONFIG_APPLY·CONFIG_ROLLBACK·idle 키 적용
         # 엔진 전부·안전·명령 처리(core — system.command)·로봇(RobotOps·내부 명령 API 127.0.0.1:ROBOT_API_PORT) — 시험대
-        # (sim.rig.Ch12FullRig)와 같은 조립. sim 은 v1 엑셀 메인 사본(G: 공유 드라이브)을 기록 폴더 아래로.
+        # (sim.rig.Ch12FullRig)와 같은 조립. sim 은 v1 엑셀 메인 사본(NAS)을 기록 폴더 아래로.
         xl = self.data_dir / "gdrive_main" if mode is RunMode.SIM else None
         self.assembly = build_engines(self.system, excel_main_dir=xl)
         self.hub.hello()                                   # 첫 메시지(장비 연결 이벤트보다 먼저)

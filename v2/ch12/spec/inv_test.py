@@ -60,12 +60,12 @@ ITEMS = [
     dict(
         id='TEST-004',
         area='test',
-        desc="Sputter Calib CSV(Ch1_log.csv/Ch2_log.csv)는 기록할 때만 열고 바로 닫음(시작·기록 뒤 is_open False, 백그라운드 스레드 기록도 닫힘) — G:(구글 드라이브)는 열린 파일을 안 올림. 로그 '1행 기록 완료 (NAS)'",
+        desc="Sputter Calib CSV(Ch1_log.csv/Ch2_log.csv)는 기록할 때만 열고 바로 닫음(시작·기록 뒤 is_open False, 백그라운드 스레드 기록도 닫힘) — 구글 공유 드라이브(NAS)(구글 드라이브)는 열린 파일을 안 올림. 로그 '1행 기록 완료 (NAS)'",
         v1='tests/test_calib_csv_release.py:36; controller/data_logger.py:472; controller/data_logger.py:156',
         v2='v2/ch12/outputs/calib_csv.py',
         test='v2/tests/test_inv_v1tests.py::test_t004_calib_csv_not_held_open; v2/tests/test_outputs_csv.py::test_calib_record_does_not_block',
         status='done',
-        note='test_not_held_open_at_start_or_after_write, test_background_write_closes_file ⟪v2: D07(로컬 정본 먼저 → 사본 스레드가 G:) — 두 파일 모두 기록 뒤 손잡이 닫힘⟫',
+        note='test_not_held_open_at_start_or_after_write, test_background_write_closes_file ⟪v2: D07(로컬 정본 먼저 → 사본 스레드가 구글 공유 드라이브(NAS)) — 두 파일 모두 기록 뒤 손잡이 닫힘⟫',
     ),
     dict(
         id='TEST-005',
@@ -75,7 +75,7 @@ ITEMS = [
         v2='v2/ch12/outputs/calib_csv.py',
         test='v2/tests/test_outputs_csv.py::test_calib_pending_then_merge_d07; v2/tests/test_outputs_csv.py::test_calib_golden',
         status='done',
-        note="test_write_failure_goes_to_pending_then_merges ⟪v2: D07 — G: 실패 행은 pending 에 남고 사본 스레드가 다음 회차에 병합('pending → NAS 병합 완료'), 순서 유지(v1 골든 calib_pending)⟫",
+        note="test_write_failure_goes_to_pending_then_merges ⟪v2: D07 — 구글 공유 드라이브(NAS) 실패 행은 pending 에 남고 사본 스레드가 다음 회차에 병합('pending → NAS 병합 완료'), 순서 유지(v1 골든 calib_pending)⟫",
     ),
     dict(
         id='TEST-006',
@@ -1010,7 +1010,7 @@ ITEMS = [
     dict(
         id='TEST-099',
         area='test',
-        desc='OES 측정 CSV 위치 — OES_LOCAL_DIR 기본 C:\\VanaM_Logs\\OES(아래 CH1·CH2), 우선순위 환경변수 > 설정(OESAsync 생성 시점 값) > 기본; LOG_SYNC_PAIRS 에 (C:\\VanaM_Logs\\CH1&2 → \\\\VanaM_NAS\\VanaM_Sputter\\Sputter\\Logs\\CH1&2) 와 (C:\\VanaM_Logs\\OES → \\\\VanaM_NAS\\VanaM_Sputter\\OES); OESAsync 가 CHn 폴더 생성; 워커는 G: 경로·robocopy 복사 없음(_copy_csv_to_nas → (False, None, None, False), 로컬 유지), 워커 기본 출력 C:\\VanaM_Logs\\OES\\CHn',
+        desc='OES 측정 CSV 위치 — OES_LOCAL_DIR 기본 C:\\VanaM_Logs\\OES(아래 CH1·CH2), 우선순위 환경변수 > 설정(OESAsync 생성 시점 값) > 기본; LOG_SYNC_PAIRS 에 (C:\\VanaM_Logs\\CH1&2 → \\\\VanaM_NAS\\VanaM_Sputter\\Sputter\\Logs\\CH1&2) 와 (C:\\VanaM_Logs\\OES → \\\\VanaM_NAS\\VanaM_Sputter\\OES); OESAsync 가 CHn 폴더 생성; 워커는 구글 공유 드라이브(NAS) 경로·robocopy 복사 없음(_copy_csv_to_nas → (False, None, None, False), 로컬 유지), 워커 기본 출력 C:\\VanaM_Logs\\OES\\CHn',
         v1='tests/test_oes_local_dir.py:38; device/oes.py:44; device/oes.py:149; lib/config_common.py:249; lib/config_common.py:881; apps/oes_service/oes_api.py:134; apps/oes_service/oes_api.py:1112; config/settings.json:318',
         v2='v2/ch12/drivers/oes_link.py; v2/ch12/outputs/paths.py; v2/ch12/workers/oes_common.py',
         test='v2/tests/test_outputs_paths.py::test_oes_env_override; v2/tests/test_outputs_paths.py::test_v1_default_paths; v2/tests/test_inv_app.py::test_v2_default_paths_fit_tools; v2/tests/test_inv_app.py::test_oes_async_default_and_channel_folder; v2/tests/test_inv_v1tests.py::test_t099_worker_never_copies_to_g_and_keeps_local',
@@ -1020,7 +1020,7 @@ ITEMS = [
     dict(
         id='TEST-100',
         area='test',
-        desc="OES 측정 완료 문구 — 새 워커: 'OES 측정 완료(로컬 저장)'·로컬 CSV 유지; 재빌드 전 옛 워커(G: 복사 성공·로컬 못 지움)면 'OES 측정 완료(NAS 저장)'·out_csv=G: 경로·로컬 삭제, NAS 실패면 'OES 측정 완료(로컬 저장, NAS 실패: robocopy failed rc=8)'",
+        desc="OES 측정 완료 문구 — 새 워커: 'OES 측정 완료(로컬 저장)'·로컬 CSV 유지; 재빌드 전 옛 워커(구글 공유 드라이브(NAS) 복사 성공·로컬 못 지움)면 'OES 측정 완료(NAS 저장)'·out_csv=구글 공유 드라이브(NAS) 경로·로컬 삭제, NAS 실패면 'OES 측정 완료(로컬 저장, NAS 실패: robocopy failed rc=8)'",
         v1='tests/test_oes_local_dir.py:118; device/oes.py:648; device/oes.py:1328',
         v2='v2/ch12/drivers/oes_link.py; v2/ch12/drivers/oes_oneshot.py',
         test='v2/tests/test_inv_v1tests.py::test_t100_daemon_finish_messages; v2/tests/test_oes_link.py::test_golden_v1_messages_and_argv',
@@ -1630,7 +1630,7 @@ ITEMS = [
     dict(
         id='TEST-161',
         area='test',
-        desc='두께 모니터 설정 load_thickness_config — 기본 꺼짐; 켜도 THICKNESS_TCP_PORT 미설정(0)이면 끔+경고; 포트 4008, poll 0.25 s·slow poll 0.25 s·stale 2.0 s·명령 타임아웃 5.0 s·log_dir 기본(DEFAULT_LOG_DIR)·factor_file = base_dir/config/thickness_factors_ch2.json; settings.json: ch1 끔, ch2 켬·4008·log_dir 이 G: 아님',
+        desc='두께 모니터 설정 load_thickness_config — 기본 꺼짐; 켜도 THICKNESS_TCP_PORT 미설정(0)이면 끔+경고; 포트 4008, poll 0.25 s·slow poll 0.25 s·stale 2.0 s·명령 타임아웃 5.0 s·log_dir 기본(DEFAULT_LOG_DIR)·factor_file = base_dir/config/thickness_factors_ch2.json; settings.json: ch1 끔, ch2 켬·4008·log_dir 이 구글 공유 드라이브(NAS) 아님',
         v1='tests/test_thickness_factors.py:95; lib/thickness_config.py:103; lib/thickness_config.py:15; lib/thickness_config.py:18; lib/config_common.py:521; config/settings.json:646',
         v2='v2/ch12/params/stm100.py; v2/ch12/drivers/stm100.py; v2/ch12/thickness_factors.py',
         test='v2/tests/test_stm100.py::test_fact_table_bytes_and_params; v2/tests/test_stm100.py::test_settings_clamps_like_v1; v2/tests/test_thickness_files.py::test_factor_file_location_in_settings_dir; v2/tests/test_convert_v1_config.py::test_thickness_files',
