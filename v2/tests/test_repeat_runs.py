@@ -16,7 +16,12 @@ import pytest
 from v2.common.commands import Source
 from v2.ch12 import process_states as PS
 from v2.ch12.sim import soak
-from v2.tests.test_sim_comprehensive import P1, P2, PC_UI, drive, ends, full, web
+from pathlib import Path
+
+from v2.common.clock import VirtualClock
+from v2.ch12.sim.rig import Ch12FullRig
+from v2.ch12.system import APP_RETENTION
+from v2.tests.test_sim_comprehensive import CFG, P1, P2, PC_UI, W0, drive, ends, web
 
 RUNS = int(__import__("os").environ.get("CH12_REPEAT_RUNS", "100"))
 GROWTH_MB = 3.0                       # 60~100회 사이 전용 메모리 증가 상한(7일 시험과 같은 종류의 기준)
@@ -55,7 +60,15 @@ def _one(rig, kind: str, i: int) -> None:
 
 @pytest.mark.slow
 def test_100_runs_threads_and_memory_flat(tmp_path):
-    rig = full(tmp_path)
+    # 실행 프로그램과 같은 보존(APP_RETENTION) — 시험 도우미 full() 의 행·메시지 보관(시험 확인용 목록)은 쓰지 않는다(그 목록이 쌓이는 것이
+    # 메모리 증가로 잡히므로)
+    c = VirtualClock(start_wall=W0)
+    c.register()
+    rig = Ch12FullRig(c, Path(tmp_path), cfg=dict(CFG), robot_api=False, schedules=False, retention=APP_RETENTION)
+    rig.sims["ch1.mfc"].sp[2] = 3.0 * 0.1
+    rig.sims["ch2.mfc"].sp[3] = 5.0 * 0.1
+    assert rig.start()
+    rig.loop.run(2)
     rows = []
     try:
         for i in range(RUNS):
