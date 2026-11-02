@@ -4,7 +4,8 @@ _power_off_sequence(772-886·888-976)와 _poll_loop(1487-1601)를 다시 쓴 것
 정지: 확인형 RF OFF 는 RFPULSE_OFF_DEADLINE_S(20 s) 안에서 RF_OFF(재시도 2)를 되풀이 — CSR 0 이면 확인, CSR ≠ 0 이면 162 로
   출력 꺼짐 확인, 아니면 0.5 s 뒤 다시. 끝내 못 하면 command_failed(RF_OFF, '출력 상태 미확인'). 켠 적 없는 출력은 RF_OFF 1회만
   (RFPULSE_UNUSED_OFF_WAIT_S 3 s) → power_off_finished(경고 없음), 기다리는 사이 RF ON 이 나갔으면 확인형으로.
-1초 읽기: 162 → 165 → 166(질의 사이 CMD_GAP_MS), 166 뒤 POLL_INTERVAL_MS 쉼. tick 마다 마감 안에 보낼 수 있는 다음 질의 하나.
+1초 읽기: 매 tick 162 → 165 → 166 전부(응답을 받는 대로 다음 질의 — CMD_GAP_MS 기본 0, 사용자 결정 2026-11-02 D50). FORP/REFP 판정·이벤트는
+v1 한 바퀴 주기(POLL_INTERVAL_MS 8 s)마다만.
 """
 from __future__ import annotations
 
@@ -178,55 +179,61 @@ class RfpStopPollMixin:
                 f"{b}.duty_pct": self.duty_pct, f"{b}.polling": self.polling}
 
     def source_read(self, session, seq: int) -> Dict[str, Any]:
+        """매 tick 162 → 165 → 166 을 모두 읽는다(사용자 결정 2026-11-02 D50 — 응답을 받는 대로 다음 질의, CMD_GAP_MS 기본 0).
+        FORP/REFP 판정·rf_status/power 이벤트·STATUS 문구는 v1 한 바퀴 주기(POLL_INTERVAL_MS)마다만 — 값은 매 tick 갱신."""
         out = self._state()
         if not self.polling or self._op is not None or self._off_op is not None:
             return out
-        due = max(self._ready_at, self._cycle_next) if self._poll_step == 0 else self._ready_at
-        if max(due, self.clock.monotonic()) + 0.1 > session.deadline:
-            return out                                          # 이번 tick 에는 보낼 차례가 아님(간격·쉼)
-        if due > self.clock.monotonic():
-            self.clock.sleep_until(due)
-        step = self._poll_step
-        cmd, tag = ((Q_STATUS, "[POLL WAKE]"), (Q_FWD, "[POLL FWD]"), (Q_REF, "[POLL REF]"))[step]
-        q_s = self._ms("POLL_QUERY_TIMEOUT_MS", int(self._c("QUERY_TIMEOUT_MS", 4500)))
         b = self.block
-        try:
-            data = self._transact(session, cmd, b"", q_s, session.deadline, tag, False)
-        except Exception:
-            self._poll_advance(step)
-            if step == 2:
-                self._judge()                                   # v1: 이번 바퀴가 실패해도 마지막 값으로 감시
-            raise
-        self._poll_advance(step)
-        if step == 0:
-            st = parse_status(data)
-            if st is None:
-                self._emit("status", "STATUS payload too short")
+        judge_due = self.clock.monotonic() >= self._cycle_next
+        q_s = self._ms("POLL_QUERY_TIMEOUT_MS", int(self._c("QUERY_TIMEOUT_MS", 4500)))
+        steps = ((Q_STATUS, "[POLL WAKE]"), (Q_FWD, "[POLL FWD]"), (Q_REF, "[POLL REF]"))
+        done = 0
+        for step, (cmd, tag) in enumerate(steps):
+            due = self._ready_at
+            if max(due, self.clock.monotonic()) + 0.1 > session.deadline:
+                break                                           # 이번 tick 마감 안에 더 못 넣음(간격 설정이 큰 경우)
+            if due > self.clock.monotonic():
+                self.clock.sleep_until(due)
+            try:
+                data = self._transact(session, cmd, b"", q_s, session.deadline, tag, False)
+            except Exception:
+                self._ready_at = self.clock.monotonic() + self._gap_s()
+                if step == 2 and judge_due:
+                    self._judge()                               # v1: 이번 바퀴가 실패해도 마지막 값으로 감시
+                    self._cycle_next = self.clock.monotonic() + self._ms("POLL_INTERVAL_MS", 8000)
+                if done == 0:
+                    raise
+                break
+            self._ready_at = self.clock.monotonic() + self._gap_s()
+            done += 1
+            if step == 0:
+                st = parse_status(data)
+                if st is None:
+                    if judge_due:
+                        self._emit("status", "STATUS payload too short")
+                else:
+                    self.last_status = st
+                    out.update({f"{b}.out_on": st["on"], f"{b}.itl_open": st["ilock"], f"{b}.status_raw": st["raw"].hex()})
+                    if judge_due:
+                        self._emit("rf_status", status_str(st), data=dict(st))
+                        for flag, msg in (("ilock", "STATUS: Interlock OPEN detected"), ("ot", "STATUS: Over-Temperature detected"),
+                                          ("xflt", "STATUS: Extended fault present")):
+                            if st[flag]:
+                                self._emit("status", msg)
+                        if st["req"] and not st["on"]:
+                            self._emit("status", "STATUS: RF requested but output not ON yet")
+                        self._emit("status", f"STATUS {status_str(st)}")
+            elif step == 1:
+                self.last_fwd = float(aebus.u16(data) if len(data) >= 2 else 0.0)
+                out[f"{b}.fwd_w"] = self.last_fwd
             else:
-                self.last_status = st
-                out.update({f"{b}.out_on": st["on"], f"{b}.itl_open": st["ilock"], f"{b}.status_raw": st["raw"].hex()})
-                self._emit("rf_status", status_str(st), data=dict(st))
-                for flag, msg in (("ilock", "STATUS: Interlock OPEN detected"), ("ot", "STATUS: Over-Temperature detected"),
-                                  ("xflt", "STATUS: Extended fault present")):
-                    if st[flag]:
-                        self._emit("status", msg)
-                if st["req"] and not st["on"]:
-                    self._emit("status", "STATUS: RF requested but output not ON yet")
-                self._emit("status", f"STATUS {status_str(st)}")
-        elif step == 1:
-            self.last_fwd = float(aebus.u16(data) if len(data) >= 2 else 0.0)
-            out[f"{b}.fwd_w"] = self.last_fwd
-        else:
-            self.last_ref = float(aebus.u16(data) if len(data) >= 2 else 0.0)
-            out[f"{b}.ref_w"] = self.last_ref
-            self._judge()
+                self.last_ref = float(aebus.u16(data) if len(data) >= 2 else 0.0)
+                out[f"{b}.ref_w"] = self.last_ref
+                if judge_due:
+                    self._judge()
+                    self._cycle_next = self.clock.monotonic() + self._ms("POLL_INTERVAL_MS", 8000)
         return out
-
-    def _poll_advance(self, step: int) -> None:
-        self._ready_at = self.clock.monotonic() + self._gap_s()
-        self._poll_step = (step + 1) % 3
-        if step == 2:
-            self._cycle_next = self.clock.monotonic() + self._ms("POLL_INTERVAL_MS", 1000)
 
     def _judge(self) -> None:
         if self._target_w > 0.0 and self.last_fwd is not None and self.last_ref is not None and not self._stop_requested:

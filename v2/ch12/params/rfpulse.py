@@ -37,8 +37,9 @@ PARAMS: tuple = (
     p("QUERY_TIMEOUT_MS", _G, "질의 응답 한도", "ms", I, 4500, 100, 60000, src=f"{_CC}:82"),
     p("POLL_QUERY_TIMEOUT_MS", _G, "폴링 질의 응답 한도", "ms", I, 9000, 100, 60000, src=f"{_CC}:432",
       desc="1초 읽기에서는 tick 마감이 더 짧아 그 안에서 끝난다"),
-    p("POLL_INTERVAL_MS", _G, "폴링 바퀴 사이 쉼", "ms", I, 5000, 0, 600000, src=f"{_CC}:431 · device/rf_pulse.py:1497",
-      desc="162→165→166 한 바퀴 뒤 쉼 — FORP/REFP 판정 주기(v1 그대로)"),
+    p("POLL_INTERVAL_MS", _G, "FORP/REFP 판정 주기", "ms", I, 8000, 0, 600000, src=f"{_CC}:431 · device/rf_pulse.py:1497",
+      desc="FORP/REFP 판정·STATUS 문구 주기. 읽기는 매 tick 162→165→166 전부(사용자 결정 2026-11-02 D50)이고, 판정만 v1 한 바퀴 "
+           "(질의 사이 1.5 s×2 + 쉼 5 s ≈ 8 s) 주기로 — v1 '3회 연속' 판정이 3 s 로 당겨지지 않게"),
     p("POLL_START_DELAY_AFTER_RF_ON_MS", _G, "RF ON 뒤 첫 폴링까지", "ms", I, 800, 0, 60000, src=f"{_CC}:433"),
     p("RFPULSE_RECONNECT_BACKOFF_START_MS", _G, "재연결 시작 간격", "ms", I, 2000, 200, 600000, safety=L, src=f"{_CC}:427"),
     p("RFPULSE_RECONNECT_BACKOFF_MAX_MS", _G, "재연결 최대 간격", "ms", I, 30000, 200, 600000, safety=L, src=f"{_CC}:428"),

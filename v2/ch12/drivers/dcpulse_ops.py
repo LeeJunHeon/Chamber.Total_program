@@ -432,6 +432,9 @@ class DcpOpsMixin:
     def _g_pulse_params(self, freq, off_time_us, duty, sync):
         """성공이면 (검사 주파수, 기대 Off raw), 실패면 False. 값 검사가 실패하면 장비에 아무것도 쓰지 않는다."""
         want_off_raw: Optional[int] = None
+        rb_on = bool(self._c("DCP_READBACK_ENABLED", True))               # 쓰기 되읽기 통일(D36)
+        rew = max(0, int(self._c("DCP_REWRITE_MAX", 3)))
+        rew_gap = int(self._c("DCP_REWRITE_GAP_MS", 500)) / 1000.0
         freq_given = freq is not None and not P.is_keep(freq)
         off_given = off_time_us is not None and not P.is_keep(off_time_us)
         if not off_given and freq_given and duty is not None and not P.is_keep(duty):
@@ -494,43 +497,48 @@ class DcpOpsMixin:
         if freq_given:
             want = int(round(f_chk))
             applied = False
-            for attempt in (1, 2):
-                got = yield from self._g_read_u16(P.R_FREQ, "write")
+            for attempt in range(1, rew + 2):
+                got = yield from self._g_read_u16(P.R_FREQ, "write") if rb_on else None
                 if got is None:
-                    self._emit("status", "[VERIFY] PULSE_FREQ read-back 실패(통신) → 검증 생략")
+                    if rb_on:
+                        self._emit("status", "[VERIFY] PULSE_FREQ read-back 실패(통신) → 검증 생략")
                     applied = True
                     break
                 self.freq_khz = int(got)
                 if int(got) == want:
                     applied = True
                     break
-                if attempt == 1:
-                    self._emit("status", f"[VERIFY] PULSE_FREQ 미적용 감지 (요청 {want}kHz ≠ 장비 {int(got)}kHz) → 0.5s 후 재기록")
-                    yield Sleep(0.5)
+                if attempt <= rew:
+                    self._emit("status", f"[VERIFY] PULSE_FREQ 미적용 감지 (요청 {want}kHz ≠ 장비 {int(got)}kHz) → "
+                                         f"{rew_gap:g}s 후 재기록 (다시 쓰기 {attempt}/{rew})")
+                    yield Sleep(rew_gap)
                     if not (yield from self._g_write(P.PULSE_FREQ, want, f"PULSE_FREQ({want}kHz)")):
                         break
-                    yield Sleep(0.5)
+                    yield Sleep(rew_gap)
             if not applied:
-                self._failed("PULSE_FREQ", f"쓰기 ACK 후에도 미적용 지속 (요청 {want}kHz) — 장비 마스터/패널 상태 점검 필요", phase="prepare")
+                self._failed("PULSE_FREQ", f"쓰기 ACK 후에도 미적용 지속 (요청 {want}kHz, 다시 쓰기 {rew}회) — 장비 마스터/패널 상태 점검 필요",
+                             phase="prepare", reason="READBACK_MISMATCH")
                 return False
         if want_off_raw is not None:
             off_applied, got_raw = False, None
-            for attempt in (1, 2):
-                got_raw = yield from self._g_read_u16(P.R_OFF, "write")
+            for attempt in range(1, rew + 2):
+                got_raw = yield from self._g_read_u16(P.R_OFF, "write") if rb_on else None
                 if got_raw is None:
-                    self._emit("status", "[VERIFY] OFF_TIME read-back 실패(통신) → 검증 생략")
+                    if rb_on:
+                        self._emit("status", "[VERIFY] OFF_TIME read-back 실패(통신) → 검증 생략")
                     off_applied = True
                     break
                 self.off_raw = int(got_raw)
                 if int(got_raw) == int(want_off_raw):
                     off_applied = True
                     break
-                if attempt == 1:
-                    self._emit("status", f"[VERIFY] OFF_TIME 미적용 감지 (요청 raw={want_off_raw} ≠ 장비 raw={got_raw}) → 0.5s 후 재기록")
-                    yield Sleep(0.5)
+                if attempt <= rew:
+                    self._emit("status", f"[VERIFY] OFF_TIME 미적용 감지 (요청 raw={want_off_raw} ≠ 장비 raw={got_raw}) → "
+                                         f"{rew_gap:g}s 후 재기록 (다시 쓰기 {attempt}/{rew})")
+                    yield Sleep(rew_gap)
                     if not (yield from self._g_write_off(want_off_raw)):
                         break
-                    yield Sleep(0.5)
+                    yield Sleep(rew_gap)
             if not off_applied:
                 yield from self._g_off_time_diag(want_off_raw, got_raw, f_chk)
                 return False

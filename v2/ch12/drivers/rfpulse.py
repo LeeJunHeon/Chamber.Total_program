@@ -3,16 +3,15 @@
 연결: CH1 192.168.1.50:4007(DC Pulse 와 같은 포트), CH2 4005 — 공정이 RF Pulse 를 고를 때만 pulse_port 가 Worker 를 붙인다.
   SO_KEEPALIVE 는 설정(RFP_TCP_KEEPALIVE)과 무관하게 늘 1(v1 rf_pulse.py:1057-1063 — pulse_port.tcp_transport_factory).
   무응답으로는 끊지 않는다(v1 은 쓰기 오류·EOF 때만 끊음 — fail_streak 아주 큼). 재연결 2 s 부터 ×2, 최대 30 s.
-명령 하나(v1 _cmd_worker_loop 1115-1306): 간격(CMD_GAP_MS 1500 — 앞 명령이 끝난 뒤 쉼, 보낸 시각 기준 간격 둘 다) → 보냄 →
+명령 하나(v1 _cmd_worker_loop 1115-1306): 간격(CMD_GAP_MS 기본 0 — v1 은 1500, 사용자 결정 2026-11-02 D50; 앞 명령이 끝난 뒤 쉼) → 보냄 →
   같은 주소·명령 프레임(ACK 06 은 건너뜀, NAK 15 면 실패, 체크섬 틀린 프레임은 버림). 설정 명령 성공 = CSR data[0] == 0.
   실패면 재시도(기본 3): 쉼 max(150 ms, 간격), CSR 5 면 max(간격 × 1.5, 1200 ms). CSR 1(HOST 아님) → 앞에 14(02) HOST 를 끼워 넣고
   다시, START 단계([START…])의 CSR 2(RF ON 중) → 앞에 RF_OFF 를 끼워 넣고 다시(이것도 재시도 하나를 쓴다).
   응답 한도: 설정 ACK_TIMEOUT_MS 2000(RF ON/OFF 는 2500), 질의 QUERY_TIMEOUT_MS 4500, 폴링 질의 POLL_QUERY_TIMEOUT_MS 9000.
   호출자 한도 = 응답 한도 + 2 s(v1 _exec_and_csr·_query_and_data) — 그 안에서만 재시도한다(아래 '다른 점').
 정지 뒤(_stop_requested)에는 RF_OFF·SET_ACTIVE_CTRL 외 설정 명령을 보내지 않는다(STOP_GUARD, v1 1908-1915).
-1초 읽기: v1 폴링 순서·간격 그대로(RF ON + 0.8 s 뒤부터): 162 STATUS → 165 FWD → 166 REF(질의 사이 1.5 s), REF 뒤 POLL_INTERVAL_MS
-  (5 s) 쉬고 다시. tick 마다 '지금 마감 안에 보낼 수 있는' 다음 질의 하나만 — 나머지 tick 은 장비 값 열 stale(자기 품질).
-  REF 를 읽을 때마다 FORP/REFP 감시(v1 1511-1589): FORP |fwd − 설정| ≥ 설정 × 5 % 를 3회 연속 → command_failed FORP_MONITOR 후
+1초 읽기(RF ON + 0.8 s 뒤부터): 매 tick 162 STATUS → 165 FWD → 166 REF 전부(응답을 받는 대로 다음 질의 — 사용자 결정 2026-11-02 D50,
+  번갈아 읽기·stale 없음). 판정·STATUS 문구는 v1 한 바퀴 주기(POLL_INTERVAL_MS 8 s)마다 REF 를 읽을 때만 FORP/REFP 감시(v1 1511-1589): FORP |fwd − 설정| ≥ 설정 × 5 % 를 3회 연속 → command_failed FORP_MONITOR 후
   카운터 0(그래서 계속 이탈이면 3회마다 다시 — v1 동작), REFP ≥ 20 W 3회 → REFP_MONITOR, REFP_WARN(채널 값, CH2 5 W)은 문구만.
 다른 점(v1 과): 호출자 한도가 지난 뒤 남은 재시도는 보내지 않는다(v1 은 큐에 남은 재시도를 늦게 보낼 수 있었다).
 """
@@ -83,11 +82,11 @@ def blocks(chamber: str = "ch1") -> list:
     ), desc="AE CESAR — AE Bus, MOXA NPort TCP")]
 
 
-BUDGET = dict(queries_per_tick=1, bytes_tx=3, bytes_rx=8, min_gap_ms=1500, fits_1s=False,
-              alternate="v1 폴링 그대로: 162 → (1.5 s) 165 → (1.5 s) 166 → 5 s 쉼, 한 바퀴 ≈ 8 s. tick 마다 마감 안에 보낼 수 있는 "
-                        "다음 질의 하나(값마다 자기 품질·나이)",
-              note="질의 3 B(HDR CMD CS), 응답 ACK 1 B + 프레임 4~7 B. CMD_GAP_MS 1500 이라 1초에 질의 하나도 못 넣는 tick 이 있다. "
-                   "RF ON 뒤에만 읽음(v1). 실측은 bench")
+BUDGET = dict(queries_per_tick=3, bytes_tx=9, bytes_rx=24, min_gap_ms=0, fits_1s=True, alternate=None,
+              note="매 tick 162(상태) → 165(순방향) → 166(반사) 전부, 응답을 받는 대로 다음 질의(CMD_GAP_MS 기본 0). 질의 3 B(HDR CMD CS)×3, "
+                   "응답 ACK 1 B + 프레임 4~7 B. 근거: CESAR 1310 매뉴얼 4-48~49(AE Bus: 호스트 명령 → ACK → 응답 프레임 → 호스트 ACK 주고받기, "
+                   "응답 100 ms 이내 — 질의 사이 최소 간격 규정 없음. 사용자 결정 2026-11-02 D50). 질의 3개 ≈ 3×(전송 + ≤100 ms) < 0.5 s. "
+                   "RF ON 뒤에만 읽음(v1). FORP/REFP 판정만 v1 한 바퀴 주기(POLL_INTERVAL_MS). 실측(응답 시간·NAK)은 bench")
 
 
 class RfPulseDriver(RfpStopPollMixin):
@@ -136,7 +135,7 @@ class RfPulseDriver(RfpStopPollMixin):
         return int(self._c("RFPULSE_ADDR", 1))
 
     def _gap_s(self) -> float:
-        return self._ms("CMD_GAP_MS", 1500)
+        return self._ms("CMD_GAP_MS", 0)
 
     def endpoint_key(self) -> str:
         return norm_endpoint(*endpoint(self.cfg, self.chamber, KIND))
@@ -415,16 +414,47 @@ class RfPulseDriver(RfpStopPollMixin):
         if stopped():
             return False
         if freq_hz is not None or duty is not None:
-            pr = yield from self._g_read_params()
-            if pr:
+            rb_on = bool(self._c("RFPULSE_READBACK_ENABLED", True))
+            rew = max(0, int(self._c("RFPULSE_REWRITE_MAX", 3))) if rb_on else 0
+            rew_gap = int(self._c("RFPULSE_REWRITE_GAP_MS", 100)) / 1000.0
+            mism = None
+            for attempt in range(rew + 1):
+                if attempt and rew_gap > 0:
+                    yield Sleep(rew_gap)
+                pr = yield from self._g_read_params()
+                if not pr:
+                    self._emit("status", "[VERIFY] RF Pulse 설정 read-back 실패(통신) → 검증 생략")
+                    mism = None
+                    break
                 got_hz = int(round(float(pr["freq_khz"]) * 1000.0))
                 self._emit("status", f"[VERIFY] RF Pulse f={got_hz} Hz, duty={pr['duty_pct']}%")
+                bad = []
                 if freq_hz is not None and got_hz != int(freq_hz):
-                    self._emit("status", f"[WARN] RF Pulse 주파수 불일치 (요청 {int(freq_hz)} Hz ≠ 장비 {got_hz} Hz)")
+                    bad.append(f"주파수 (요청 {int(freq_hz)} Hz ≠ 장비 {got_hz} Hz)")
                 if duty is not None and int(pr["duty_pct"]) != int(duty):
-                    self._emit("status", f"[WARN] RF Pulse 듀티 불일치 (요청 {int(duty)}% ≠ 장비 {pr['duty_pct']}%)")
-            else:
-                self._emit("status", "[VERIFY] RF Pulse 설정 read-back 실패(통신) → 검증 생략")
+                    bad.append(f"듀티 (요청 {int(duty)}% ≠ 장비 {pr['duty_pct']}%)")
+                if not bad:
+                    mism = None
+                    break
+                mism = ", ".join(bad)
+                if not rb_on:
+                    self._emit("status", f"[WARN] RF Pulse {mism} 불일치")          # 되읽기 확인을 끄면 v1 처럼 경고만
+                    mism = None
+                    break
+                if attempt < rew:
+                    self._emit("status", f"[VERIFY] RF Pulse {mism} 불일치 → 다시 쓰기 {attempt + 1}/{rew}")
+                    if duty is not None:
+                        ok, cb = yield from self._g_exec(SET_DUTY, dd, "[RE-WRITE DUTY]")
+                        if not ok:
+                            return fail("PULSE DUTY 다시 쓰기 실패" + csr_txt(cb[0] if cb else None))
+                    if freq_hz is not None:
+                        ok, cb = yield from self._g_exec(SET_FREQ, fd, "[RE-WRITE FREQ]")
+                        if not ok:
+                            return fail("PULSE FREQ 다시 쓰기 실패" + csr_txt(cb[0] if cb else None))
+            if mism is not None:
+                self._emit("command_failed", f"START_SEQUENCE: RF Pulse {mism} — 다시 쓰기 {rew}회 뒤에도 되읽기 불일치",
+                           reason="READBACK_MISMATCH", cmd="START_SEQUENCE")
+                return False
         if stopped():
             return False
         mode = int(self._c("RFPULSE_PULSE_MODE", 1))

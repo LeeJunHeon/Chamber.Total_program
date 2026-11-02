@@ -27,13 +27,13 @@ def _overrides(d: dict) -> dict:
 
 
 class Rig:
-    def __init__(self, chamber="ch1", writes=True, cfg=None, torr=5e-6, start=1.0):
+    def __init__(self, chamber="ch1", writes=True, cfg=None, torr=5e-6, start=1.0, readback=False):
         self.c = VirtualClock(start_wall=1_760_000_000.0)
         self.c.register()
         self.ch = Chamber("ch2" if chamber == "tsp" else chamber)
         self.ch.pressure = torr
         self.sim = IgSim(self.ch)
-        self.cfg = dict(CFG, **(cfg or {}))
+        self.cfg = dict(CFG, IG_READBACK_ENABLED=readback, **(cfg or {}))     # 되읽기는 기본 끔(v1 바이트 비교) — 전용 시험에서 켬
         self.events, self.wev = [], []
         self.w = G.make_worker(self.c, SimTransport(self.c, self.sim), self.cfg, chamber, writes, on_event=self.wev.append)
         self.d = G.IgDriver(self.c, self.w, self.cfg, writes, on_event=self.events.append, chamber=chamber)
@@ -197,6 +197,33 @@ def test_reignite_on_ig_off_in_sim():
     r.done()
 
 
+def test_default_gap_200ms_reads_every_tick_without_stale():
+    """사용자 결정 2026-11-02 D36 — IG_GAP_MS 기본 200 ms, 매 tick RDI(stale 없음)."""
+    assert CFG["IG_GAP_MS"] == 200 and G.BUDGET["fits_1s"]
+    r = Rig("ch1")
+    r.call(r.d.ensure_on)
+    r.c.wait_until(r.c.monotonic() + 6.0)
+    rows = r.run(12)
+    assert all(x["ch1.ig.pressure_torr.q"] == "ok" for x in rows[2:])
+    r.done()
+
+
+def test_ig_off_readback_confirms_and_fails_with_reason():
+    r = Rig("ch1", readback=True, cfg={"IG_REWRITE_MAX": 2, "IG_REWRITE_GAP_MS": 100})
+    r.call(r.d.ensure_on)
+    assert r.call(r.d.ensure_off)[1] is None
+    assert r.sim.commands_seen()[-2:] == ["SIG 0", "RDI"]
+    assert any("IG_OFF 되읽기 확인" in e.detail for e in r.kinds("status"))
+    r.done()
+    r = Rig("ch1", readback=True, cfg={"IG_REWRITE_MAX": 2, "IG_REWRITE_GAP_MS": 100})
+    r.call(r.d.ensure_on)
+    r.sim.rdi_script = ["1.0x10e-5"]                     # 장비가 꺼지지 않음(늘 압력 값)
+    res = r.call(r.d.ensure_off)
+    assert res[1] == "READBACK_MISMATCH" and "IG_OFF 되읽기 확인 실패" in res[2]
+    assert r.sim.commands_seen().count("SIG 0") == 3        # 쓰기 1 + 다시 쓰기 2
+    r.done()
+
+
 def test_bench_read_only():
     r = Rig("ch1", writes=False)
     assert r.call(r.d.wait_for_base_pressure, 1e-6)[1] == "BENCH_READ_ONLY"
@@ -247,4 +274,4 @@ def test_params_v1_values():
     assert CFG["CH1_IG_WAIT_TIMEOUT"] == 900.0 == GOLDEN["meta"]["ch1_IG_WAIT_TIMEOUT"]
     assert CFG["CH2_IG_WAIT_TIMEOUT"] == 900.0 == GOLDEN["meta"]["ch2_IG_WAIT_TIMEOUT"]
     assert json.loads(CFG["IG_REIGNITE_BACKOFF_MS"]) == [2000, 5000, 10000]
-    assert G.BUDGET["queries_per_tick"] == 1 and G.source_deadline_ms(CFG) == 3630
+    assert G.BUDGET["queries_per_tick"] == 1 and G.source_deadline_ms(CFG) == 3630 and G.BUDGET["fits_1s"]

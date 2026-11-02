@@ -142,7 +142,7 @@ def test_case_bytes_match_v1(case):
 
 
 # ───────── 1초 읽기 ─────────
-def test_reads_only_while_on_then_each_tick_with_ae_af_alternate():
+def test_reads_only_while_on_then_each_tick_with_ae_af_both():
     r = Rig()
     rows = r.rows(2)
     assert all(x["ch1.dcpulse.q"] == "ok" and x["ch1.dcpulse.p_w"] is None for x in rows)      # 출력 OFF — 읽지 않음
@@ -156,7 +156,8 @@ def test_reads_only_while_on_then_each_tick_with_ae_af_alternate():
     assert late                                                                                 # 점화 창 밖: AE/AF 읽음
     early = rows[2:20]                                                                          # 점화 창(30 s) 안: AE/AF 안 읽음
     assert all(x["ch1.dcpulse.arc_soft_rate"] is None for x in early)
-    assert any(x["ch1.dcpulse.arc_soft_rate.q"] == "stale" and x["ch1.dcpulse.arc_hard_rate.q"] == "ok" for x in rows[-6:])
+    # 사용자 결정 2026-11-02 D36 — 점화 창 밖에서는 AE·AF 를 번갈아 읽지 않고 매 tick 둘 다 읽는다(stale 없음)
+    assert all(x["ch1.dcpulse.arc_soft_rate.q"] == "ok" and x["ch1.dcpulse.arc_hard_rate.q"] == "ok" for x in rows[-6:])
     assert rows[-1]["ch1.dcpulse.out_on"] is True and rows[-1]["ch1.dcpulse.set_w"] == 100.0
     assert rows[-1]["ch1.dcpulse.freq_khz"] == 50 and rows[-1]["ch1.dcpulse.off_raw"] == 50
     r.done()
@@ -347,4 +348,21 @@ def test_unused_v1_setting_apis_bytes():
     want = [P.pack_write(0x0C, 50, 2), P.pack_write(0x0D, 20, 2), P.pack_write(0x0E, 600, 2),
             P.pack_write(0x0F, 100, 2), P.pack_write(0x10, 800, 2)]
     assert r.sent() == [w.hex(" ") for w in want]
+    r.done()
+
+
+def test_freq_readback_rewrites_up_to_configured_times_then_fails_with_reason():
+    """사용자 결정 2026-11-02 D36 — 쓰기 뒤 되읽기가 다르면 DCP_REWRITE_MAX 회까지 다시 쓰고, 그래도 다르면 READBACK_MISMATCH."""
+    assert CFG["DCP_REWRITE_MAX"] == 3 and CFG["DCP_READBACK_ENABLED"] is True
+    r = Rig()
+    r.sim.ignore_freq_n = 2                                          # 처음 2번은 ACK 만
+    assert r.start(100.0, freq=50, off_time_us=5.0) == (None, True)
+    assert sum(1 for t, d in r.sim.received if d[1:2] == bytes([P.PULSE_FREQ])) == 3     # 쓰기 1 + 다시 쓰기 2
+    r.done()
+    r = Rig(cfg={"DCP_REWRITE_MAX": 1})
+    r.sim.ignore_freq_n = 5
+    res = r.start(100.0, freq=50, off_time_us=5.0)
+    assert res[1] is False
+    fails = [e for e in r.ev("command_failed") if e.cmd == "PULSE_FREQ"]
+    assert fails and fails[-1].reason == "READBACK_MISMATCH" and "다시 쓰기 1회" in fails[-1].detail
     r.done()

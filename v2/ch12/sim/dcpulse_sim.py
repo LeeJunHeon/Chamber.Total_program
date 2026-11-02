@@ -47,6 +47,7 @@ class DcPulseSim(SimDevice):
         self.arc_rate_hard = 0.0
         self.ignore_off_once = False
         self.ignore_freq_once = False
+        self.ignore_freq_n = 0
         self.on_ignored = False
         self.off_err_n = 0
         self.i_override_a: Optional[float] = None
@@ -150,6 +151,9 @@ class DcPulseSim(SimDevice):
                 return False
             if self.ignore_freq_once:
                 self.ignore_freq_once = False
+                return True
+            if self.ignore_freq_n > 0:                  # 지정한 횟수만큼 ACK 만 하고 적용 안 함(되읽기·다시 쓰기 시험)
+                self.ignore_freq_n -= 1
                 return True
             self.freq_khz = v
             return True
