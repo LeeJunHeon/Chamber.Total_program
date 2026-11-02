@@ -37,10 +37,10 @@ MAX_BLOCKS = 500
 
 # 이어가기 전 다시 읽어 확인할 장비 상태(저널 기대 상태와 비교 — 확인 방법은 5단계 resume.py)
 RESUME_CHECKS: Dict[str, str] = {
-    "power_output": "파워 출력 — 이 구간에서 켠 DC·DC2·RF·DC Pulse·RF Pulse 가 켜져 있고 목표 근처(끈 것은 꺼져 있음)",
+    "power_output": "파워 출력 켜짐/꺼짐 — 이 구간에서 켠 DC·DC2·RF·DC Pulse·RF Pulse 가 켜져 있고 끈 것은 꺼져 있음(전력 값은 보지 않음 — 목표값은 저널대로 다시 씀)",
     "shutter": "셔터 — Main Shutter·건 셔터 열림/닫힘이 저널과 같음(PLC 코일)",
-    "gas": "가스 — 메인 밸브·가스 밸브(PLC)·MFC 유량 설정과 FLOW ON",
-    "pressure": "압력 — 선택된 SP·설정값(SP1·SP2·채널 SP)과 지금 압력이 범위 안",
+    "gas": "가스 — 메인 밸브·가스 밸브 코일(PLC)이 저널과 같음(유량 값은 보지 않음 — 유량 설정은 저널대로 다시 씀)",
+    "pressure": "압력 — 값 확인 없음(SP 설정은 다시 쓰고, 도달 대기·이탈 감시는 블록의 원래 로직이 판단)",
     "power_select": "Power Select 릴레이 — SW_RF_SELECT·SW_POWER_SELECT 가 저널과 같음",
     "heater_run": "CH2 히터 RUN·목표값이 저널과 같음",
     "watchdog": "CH2 히터 래더 워치독 이상(WD_ERR) 없음",
@@ -97,7 +97,7 @@ class BlockDef:
 
 P = BParam
 _GUNS = ("g1", "g2", "g3", "ms")
-_NOT_RESUMABLE_SET = "장비 설정 쓰기 — 재시작 뒤 이어가지 않음(안전 정지)"
+_NOT_RESUMABLE_SET = "장비 설정 쓰기 — 재시작 뒤 이 블록의 설정을 처음부터 다시 쓰고 이어감(사용자 결정 2026-11-02 D94)"
 
 BLOCK_DEFS: tuple = (
     BlockDef("heater_set", "히터 설정", (
@@ -117,7 +117,7 @@ BLOCK_DEFS: tuple = (
         P("target_torr", "float", "Torr", "cfg:PROCESS_DEFAULT_BASE_PRESSURE", label="목표 압력"),),
         "IG_CMD", "pc:2314-2318",
         skippable=True, skip_cleanup=("IG 대기·재점등 취소(cancel_ig)",),
-        desc="IG 점등·재점등·판정은 IG 드라이버가 돌린다 — 일시정지 없음, 재시작 뒤 이어가지 않음"),
+        desc="IG 점등·재점등·판정은 IG 드라이버가 돌린다 — 일시정지 없음, 재시작 뒤에는 이 블록 설정을 처음부터 다시 씀"),
     BlockDef("rga_scan", "RGA 스캔", (), "RGA_SCAN", "pc:2320-2324",
              skippable=True, skip_cleanup=("RGA 스캔 결과를 기다리지 않음(늦게 온 완료는 무시 — _rga_is_stale)",)),
     BlockDef("gas_prep", "가스 준비(Flow Off·밸브·영점)", (
@@ -165,7 +165,7 @@ BLOCK_DEFS: tuple = (
         "DC_POWER_SET · DC2_POWER_SET · DC_PULSE_START · [CH2 SW_POWER_SELECT ON] RF_PULSE_START · "
         "[RF Pulse 없으면 SW_POWER_SELECT OFF] RF_POWER_SET — 병렬 = (DC∨DC2)∧(RF∨RF Pulse)", "pc:2447-2550",
         pausable=True, pause="파워 램프 정지 — 지금 출력값 유지(목표 쓰기 멈춤), 재개하면 목표까지 램프 계속",
-        desc="램프 도중 재시작은 이어가지 않음. RF Pulse 뒤 Power Delay 는 뒤 대기 블록(PC_RF_PULSE_POST_ON_DELAY_MS)"),
+        desc="램프 도중 재시작은 이 블록 설정을 처음부터 다시 씀. RF Pulse 뒤 Power Delay 는 뒤 대기 블록(PC_RF_PULSE_POST_ON_DELAY_MS)"),
     BlockDef("wait", "대기", (
         P("sec", "float", "s", required=True, min=0.0, label="시간"),),
         "DELAY int(round(초×1000)) ms(문구 = label, polling 없음)", "pc:2437-2445·2552-2557·2609-2645",

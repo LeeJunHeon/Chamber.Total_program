@@ -1,7 +1,7 @@
 {
  "_설명": "챔버12 웹 검사 골든 — E230 행 값 검사·시작 전 값 검사(v2.tools.make_web_golden_ch12 가 만든다 — 손으로 고치지 않음). 모양은 생성기 머리말",
  "defsVersion": 1,
- "defsHash": "9ff48c5cdbad15c1e3228d1198b87ff26927a18a0fb6557b48d95dfdaabddb6d",
+ "defsHash": "8fb7c00c2938c1ce18f3f36f9c2e1990dc75c317a7c8955710ba4ec1d9b9eb43",
  "defs": {
   "version": 1,
   "blocks": {
@@ -48,7 +48,7 @@
      "pause": "",
      "resumable": false,
      "resumeChecks": [],
-     "desc": "장비 설정 쓰기 — 재시작 뒤 이어가지 않음(안전 정지)"
+     "desc": "장비 설정 쓰기 — 재시작 뒤 이 블록의 설정을 처음부터 다시 쓰고 이어감(사용자 결정 2026-11-02 D94)"
     },
     {
      "type": "heater_wait",
@@ -130,7 +130,7 @@
      "pause": "",
      "resumable": false,
      "resumeChecks": [],
-     "desc": "IG 점등·재점등·판정은 IG 드라이버가 돌린다 — 일시정지 없음, 재시작 뒤 이어가지 않음"
+     "desc": "IG 점등·재점등·판정은 IG 드라이버가 돌린다 — 일시정지 없음, 재시작 뒤에는 이 블록 설정을 처음부터 다시 씀"
     },
     {
      "type": "rga_scan",
@@ -206,7 +206,7 @@
      "pause": "",
      "resumable": false,
      "resumeChecks": [],
-     "desc": "장비 설정 쓰기 — 재시작 뒤 이어가지 않음(안전 정지)"
+     "desc": "장비 설정 쓰기 — 재시작 뒤 이 블록의 설정을 처음부터 다시 쓰고 이어감(사용자 결정 2026-11-02 D94)"
     },
     {
      "type": "gas_intro",
@@ -302,7 +302,7 @@
      "pause": "",
      "resumable": false,
      "resumeChecks": [],
-     "desc": "장비 설정 쓰기 — 재시작 뒤 이어가지 않음(안전 정지)"
+     "desc": "장비 설정 쓰기 — 재시작 뒤 이 블록의 설정을 처음부터 다시 쓰고 이어감(사용자 결정 2026-11-02 D94)"
     },
     {
      "type": "pressure_ctrl",
@@ -435,7 +435,7 @@
      "pause": "",
      "resumable": false,
      "resumeChecks": [],
-     "desc": "장비 설정 쓰기 — 재시작 뒤 이어가지 않음(안전 정지)"
+     "desc": "장비 설정 쓰기 — 재시작 뒤 이 블록의 설정을 처음부터 다시 쓰고 이어감(사용자 결정 2026-11-02 D94)"
     },
     {
      "type": "shutter",
@@ -487,7 +487,7 @@
      "pause": "",
      "resumable": false,
      "resumeChecks": [],
-     "desc": "장비 설정 쓰기 — 재시작 뒤 이어가지 않음(안전 정지)"
+     "desc": "장비 설정 쓰기 — 재시작 뒤 이 블록의 설정을 처음부터 다시 쓰고 이어감(사용자 결정 2026-11-02 D94)"
     },
     {
      "type": "power_select",
@@ -639,7 +639,7 @@
      "pause": "파워 램프 정지 — 지금 출력값 유지(목표 쓰기 멈춤), 재개하면 목표까지 램프 계속",
      "resumable": false,
      "resumeChecks": [],
-     "desc": "램프 도중 재시작은 이어가지 않음. RF Pulse 뒤 Power Delay 는 뒤 대기 블록(PC_RF_PULSE_POST_ON_DELAY_MS)"
+     "desc": "램프 도중 재시작은 이 블록 설정을 처음부터 다시 씀. RF Pulse 뒤 Power Delay 는 뒤 대기 블록(PC_RF_PULSE_POST_ON_DELAY_MS)"
     },
     {
      "type": "wait",
@@ -740,7 +740,7 @@
      "pause": "",
      "resumable": false,
      "resumeChecks": [],
-     "desc": "장비 설정 쓰기 — 재시작 뒤 이어가지 않음(안전 정지)"
+     "desc": "장비 설정 쓰기 — 재시작 뒤 이 블록의 설정을 처음부터 다시 쓰고 이어감(사용자 결정 2026-11-02 D94)"
     },
     {
      "type": "thickness_zero",
@@ -1267,10 +1267,10 @@
     "relay"
    ],
    "resumeChecks": {
-    "power_output": "파워 출력 — 이 구간에서 켠 DC·DC2·RF·DC Pulse·RF Pulse 가 켜져 있고 목표 근처(끈 것은 꺼져 있음)",
+    "power_output": "파워 출력 켜짐/꺼짐 — 이 구간에서 켠 DC·DC2·RF·DC Pulse·RF Pulse 가 켜져 있고 끈 것은 꺼져 있음(전력 값은 보지 않음 — 목표값은 저널대로 다시 씀)",
     "shutter": "셔터 — Main Shutter·건 셔터 열림/닫힘이 저널과 같음(PLC 코일)",
-    "gas": "가스 — 메인 밸브·가스 밸브(PLC)·MFC 유량 설정과 FLOW ON",
-    "pressure": "압력 — 선택된 SP·설정값(SP1·SP2·채널 SP)과 지금 압력이 범위 안",
+    "gas": "가스 — 메인 밸브·가스 밸브 코일(PLC)이 저널과 같음(유량 값은 보지 않음 — 유량 설정은 저널대로 다시 씀)",
+    "pressure": "압력 — 값 확인 없음(SP 설정은 다시 쓰고, 도달 대기·이탈 감시는 블록의 원래 로직이 판단)",
     "power_select": "Power Select 릴레이 — SW_RF_SELECT·SW_POWER_SELECT 가 저널과 같음",
     "heater_run": "CH2 히터 RUN·목표값이 저널과 같음",
     "watchdog": "CH2 히터 래더 워치독 이상(WD_ERR) 없음",
