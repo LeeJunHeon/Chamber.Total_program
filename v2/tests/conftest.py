@@ -61,6 +61,7 @@ def _mb(v) -> str:
 
 
 def pytest_configure(config):
+    config.addinivalue_line("markers", "allow_threads: 시험 뒤에 스레드가 남아도 되는 시험(쓰지 않는 것이 원칙 — 이유를 시험에 적는다)")
     config.addinivalue_line("markers", "slow: 오래 걸리는 시험(골든 하니스·전체 공정 sim 등) — 빠른 시험에서 뺀다")
 
 
@@ -87,8 +88,61 @@ def pytest_terminal_summary(terminalreporter):
     tr.write_line("파일 순서대로 끝난 뒤 전용 메모리(MB): " + " ".join(f"{v[1] / 1048576:.0f}" for v in _file_growth.values()))
 
 
+def _track_and_stop(monkeypatch, cls, init_name="__init__"):
+    """cls 로 시험 안에서 만든 인스턴스를 모아 두었다가 시험이 끝나면 stop()(없으면 close()) — 쓰기 스레드가 남지 않게."""
+    made = []
+    init = getattr(cls, init_name)
+
+    def tracked(self, *a, **k):
+        init(self, *a, **k)
+        made.append(self)
+    monkeypatch.setattr(cls, init_name, tracked)
+    return made
+
+
+def _stop_all(items):
+    for o in reversed(items):
+        for name in ("stop", "close"):
+            fn = getattr(o, name, None)
+            if callable(fn):
+                try:
+                    fn()
+                except Exception:
+                    pass
+                break
+
+
 @pytest.fixture(autouse=True)
-def _close_virtual_clocks(monkeypatch, _real_clock_threads_cleaned):    # 스레드 확인은 가상 시계를 닫은 뒤에
+def _writer_threads_stopped(monkeypatch, _threads_back_to_start):
+    """시험이 만든 기록 출력의 쓰기 스레드(out-*)·사본 보내기 스레드(*-copy-*·copy-sender)·기록기(recorder·nas-copy)를
+    시험이 끝날 때 멈춘다(사용자 결정 2026-11-02 자원 정리). 시험이 먼저 멈췄으면 그대로 둔다(stop 은 두 번 불러도 됨)."""
+    from v2.ch12.outputs import base as _base, paths as _paths
+    from v2.common import recorder as _rec
+    made = []
+    for cls in (_base.QueueWriter, _paths.CopySender, _rec.Recorder):
+        made += _track_and_stop(monkeypatch, cls)
+    yield
+    _stop_all(made)
+
+
+@pytest.fixture(autouse=True)
+def _threads_back_to_start(request):
+    """시험이 끝났을 때 살아 있는 스레드(비데몬·작업 스레드 모두)가 시작 때와 같아야 한다 — 최대 LEFT_THREAD_WAIT_S 기다림.
+    가상 시계·기록 출력을 닫는 픽스처가 이 픽스처에 의존해 뒤에 setup 되므로 먼저 teardown 된다(닫은 뒤에 검사)."""
+    before = set(threading.enumerate())
+    yield
+    t_end = time.monotonic() + LEFT_THREAD_WAIT_S
+    while True:
+        left = [t for t in threading.enumerate() if t not in before and t.is_alive()]
+        if not left or time.monotonic() >= t_end:
+            break
+        time.sleep(0.05)
+    if left and not request.node.get_closest_marker("allow_threads"):
+        pytest.fail(f"시험이 만든 스레드가 {LEFT_THREAD_WAIT_S:.0f} s 뒤에도 남음: {sorted(t.name for t in left)}")
+
+
+@pytest.fixture(autouse=True)
+def _close_virtual_clocks(monkeypatch, _real_clock_threads_cleaned, _threads_back_to_start):    # 스레드 확인은 가상 시계를 닫은 뒤에
     made = []
     init = _clock.VirtualClock.__init__
 
