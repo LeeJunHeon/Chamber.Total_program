@@ -1168,7 +1168,7 @@ ITEMS = [
          v2='v2/ch12/drivers/oes_link.py', test='', status='na',
          note="OES_DAEMON 기본 '1' 이라 initialize_device 는 daemon 기동 경로를 탄다(device/oes.py:219, device/oes.py:268-269) — 환경변수로만 켜지는 경로"),
     dict(id='DEV-230', area='dev',
-         desc="RGA 워커 실행: <메인 exe 폴더>\\apps\\rga_service\\rga_worker.exe(하드코딩, 없으면 FileNotFoundError 'rga_worker.exe not found (hardcoded) expected=… base_dir=… cwd=…'), 메인은 srsinst 를 import 하지 않음. 인자 '--ch N --timeout T [--csv <정본>] [--csv_fallback <폴백>]', stdin DEVNULL, Windows CREATE_NO_WINDOW. RGA 장비 IP CH1 192.168.1.20 / CH2 192.168.1.21(RGA_NET, 계정은 v1 설정값)",
+         desc="RGA 워커 실행: <메인 exe 폴더>\\apps\\rga_service\\rga_worker.exe(하드코딩, 없으면 FileNotFoundError 'rga_worker.exe not found (hardcoded) expected=… base_dir=… cwd=…'), 메인은 srsinst 를 import 하지 않음. 인자 '--ch N --timeout T [--csv <정본>] [--csv_fallback <폴백>]', stdin DEVNULL, Windows CREATE_NO_WINDOW. RGA 장비 IP CH1 192.168.1.20 / CH2 192.168.1.21(계정은 v1 코드 고정 admin/admin → v2 설정 키 RGA_USER·RGA_PASSWORD)",
          v1='device/rga.py:64-95;device/rga.py:180-239;lib/config_common.py:139-142',
          v2='v2/ch12/drivers/rga_link.py', test='v2/tests/test_rga_link.py::test_golden_scan_arguments_equal_v1_argv; v2/tests/test_inv_dev.py::test_rga_missing_worker_exe_fails_scan_without_device; v2/tests/test_rga_link.py::test_no_credentials_fails_without_touching_device', status='done',
          note='계정 값은 비밀값 취급 — v2 저장소에는 넣지 않고 설정 변환으로 옮김 / 워커 상주(D22)·계정 코드에서 뺌(D23)'),

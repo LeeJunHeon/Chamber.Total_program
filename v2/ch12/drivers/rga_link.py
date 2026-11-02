@@ -218,7 +218,7 @@ class RgaLink:
 
     # ───────── 스캔(v1 device/rga.py:158-405) ─────────
     def scan_command(self, cid: int, timeout_s: float, pri: str, fb: str) -> Dict[str, Any]:
-        """워커로 보내는 줄 — v1 명령줄 '--ch N --timeout T --csv P --csv_fallback F' 와 같은 이름·값 + 계정(비밀값)."""
+        """워커로 보내는 줄 — v1 명령줄 '--ch N --timeout T --csv P --csv_fallback F' 와 같은 이름·값 + 계정(RGA_USER·RGA_PASSWORD)."""
         user, password = self._creds()
         return {"v": 2, "id": cid, "cmd": "scan", "ch": self.ch, "timeout": timeout_s, "csv": pri, "csv_fallback": fb,
                 "user": user, "password": password}

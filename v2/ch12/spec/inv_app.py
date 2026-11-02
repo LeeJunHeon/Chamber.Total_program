@@ -339,7 +339,7 @@ _DONE = {
     54: ("v2/ch12/process_actions.py", _t("IA:test_engine_rga_result_handling"),
          "D178 — v2 는 rga_finished 를 한 번 부른다(v1 두 번째 호출은 이미 끝난 대기라 효과 없음)"),
     55: (_RGW, _t("RL:test_scan_ok_csv_and_srsinst_call_order", "RL:test_no_credentials_fails_without_touching_device"),
-         "D23 — 장비 IP 는 그대로, 계정은 코드 고정값 대신 비밀값 RGA_NET"),
+         "D23 — 장비 IP 는 그대로, 계정은 코드 고정값 대신 설정 키 RGA_USER·RGA_PASSWORD(기본 admin/admin — 공장 기본 계정, 비밀값 아님)"),
     56: (_RGW, _t("RL:test_scan_ok_csv_and_srsinst_call_order"), "필라멘트 OFF 두 번 그대로(D178)"),
     57: (_RGW, _t("RL:test_scan_ok_csv_and_srsinst_call_order", "RL:test_csv_fallback_and_csv_fail_keep_measurement"), ""),
     58: (_RGW, _t("IA:test_worker_dll_and_rga_fallback_paths", "RL:test_csv_fallback_and_csv_fail_keep_measurement"), ""),
