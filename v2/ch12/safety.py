@@ -119,6 +119,10 @@ class Ch12Safety:
         if self.tsp is not None:
             self._safe(lambda: self.tsp.stop(source=source))
             sent.append("tsp")
+        rs = getattr(self.sys, "resumer", None)
+        if rs is not None and not rs.done:                   # 재시작 이어가기 판단 중 — 이어가지 않고 정지 순서(D05)
+            self._safe(lambda: rs.request_stop_all(source, by))
+            sent.append("resume")
         self._emit("step", "S30", "ALL_STOP", "보냄: " + ", ".join(sent))
         return sent
 

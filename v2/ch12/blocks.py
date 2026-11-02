@@ -16,7 +16,8 @@
 - pausable / pause: 일시정지의 뜻. 못 멈추는 블록은 False(거부).
 - resumable / resume_checks: 프로그램 재시작 뒤 이어가기 가능 블록(상태 유지 블록만 — 대기·가스 안정화(압력 대기)·
   메인 증착·히터 유지·히터 도달 대기·TEST·delay 행). 그 블록의 holding 스텝(process_steps.ProcessStep.holding) 중일 때만.
-  진공·벤트·게이트·척·핀(로봇 시퀀스 — 블록 아님)·장비 설정 쓰기 도중·정지 순서는 False.
+  ※ 사용자 결정 2026-11-02(D94): 장비 설정 쓰기 도중은 그 블록 설정을 처음부터 다시 쓰고 이어가고(process_view resume_mode=rewrite),
+  정지 순서 도중은 정지 순서를 끝까지 한다 — 이 resumable 은 '기다리는 중 이어감' 후보만 뜻한다. 진공·벤트·게이트·척·핀(로봇 시퀀스 — 블록 아님)은 이어가지 않고 로봇에 E205.
   resume_checks = 이어가기 전에 다시 읽어 저널의 기대 상태와 맞는지 볼 것(RESUME_CHECKS 의 id).
 - 시퀀스 편집(edit_sequence): 아직 시작 안 한 블록만 추가·삭제·순서 변경, 편집마다 판 번호 +1·전체 재검사.
 """

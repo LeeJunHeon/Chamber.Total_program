@@ -9,15 +9,16 @@
   순서로 끄고 run_end error PROGRAM_RESTART(stop_from_journal).
   ① gap — 꺼져 있던 시간 ≤ RESUME_MAX_GAP_S(기본 30 s). 재부팅(벽시계−단조 시계가 다름 — BSOD·정전)은 늘 아님.
   ② first_restart — 이 공정에서 첫 재시작(저널 restarts == 0).
-  ③ 장비 상태가 저널의 기대 상태와 일치 — 블록 종류별 확인 목록(blocks.RESUME_CHECKS, 저널 state.resume_checks):
-     shutter·gas·power_select = 저널 때 1초 행의 PLC 코일과 같음(gas 는 + FLOW ON 이던 가스의 잰 유량이 설정 ±10 %,
-     최소 1 sccm), pressure = 지금 압력이 저널 때 압력과 SP 목표 사이(압력 제어가
-     목표로 가는 중) 또는 둘 중 하나의 MFC 허용 범위 안(mfc_ops.within — D79 와 같은 폭; 압력 제어 전·압력 도달 대기 스텝 중이면 확인 없음), power_output = 켜져 있던 전원이 켜져 있고 목표 ±10 %(최소 1 W — D79 와 같은 폭), 끈 것은 꺼짐,
-     heater_run·watchdog = 히터 엔진 resume_checks(RUN·목표·WD_ERR·FAULT), thickness = 두께 엔진 resume_checks.
-  ④ resumable — 지금 블록이 상태 유지 블록(블록 정의 resumable ∧ 지금 스텝 holding — 대기·가스 안정화·프리스퍼터·메인 증착·
-     히터 유지/도달 대기·TEST·delay 행). 진공·벤트·게이트·척·핀(로봇 — 블록 아님)·장비 설정 쓰기 도중·정지 순서·STOP 요청 중은 아님.
-     의도적 종료 표시가 있으면 아님.
-  ⑤ enabled — RESUME_ENABLED.
+  ③ 장비의 켜짐/꺼짐 상태가 저널의 기대 상태와 같음(사용자 결정 2026-11-02 D79·D93 — 값의 허용 폭은 보지 않는다: 파워·유량·압력은
+     맞춰지는 중일 수 있다): 파워 출력 ON/OFF·셔터·가스 밸브 코일·Power Select 릴레이·히터 RUN·인터락·장비 오류 없음(히터 워치독·
+     두께 모니터 응답). 목표값은 저널대로 다시 쓰고(쓰기→되읽기 확인) 그 뒤는 블록의 원래 로직(도달 대기·이탈 감시)이 판단한다.
+  ④ 이어가기 방식(사용자 결정 2026-11-02 D94 — CH1·CH2·플라즈마 클리닝·TSP 같은 규칙, 엔진 state_for_journal 의 resume_mode):
+     stop_sequence = 정지 순서 도중이었다 → 정지 순서를 처음부터 끝까지(STOP 과 같음, 사유 PROGRAM_RESTART) ·
+     hold = 기다리는 중(대기·가스 안정화·메인 증착·히터 유지/도달 대기·TEST·delay 행·클리닝 시간·TSP 사이클 간격) → 남은 만큼 이어감 ·
+     rewrite = 장비 설정 쓰기 도중 → 그 블록(단계)의 설정을 처음부터 다시 씀(③ 은 그 블록이 쓰는 장비를 뺀 나머지만) ·
+     none = 시작 전 단계·의도적 종료 표시 → 이어가지 않음. 예외는 로봇 이동 명령(진공·벤트·게이트·척·핀) 뿐 — 자동으로 다시 하지 않고
+     로봇에는 오류(D08 E205)로 끝낸다(robot_ops 는 저널에 없고 로봇 서버가 제어 프로그램 응답 없음 → E205).
+  ⑤ enabled — RESUME_ENABLED_CH1·CH2·PC·TSP.
   이어갈 때 엔진이: 설정값 다시 쓰기·되읽기 확인(실패면 안전 정지) → 이벤트 source process·kind=resumed {run_id, gap_s, name,
   block, checks} '복구됨(공백 N s)'(공정 txt·웹 — 카드 1장은 포털) → 남은 만큼 이어감. 1초 기록의 빈 구간은 채우지 않는다.
   이어가지 않으면 따로 이벤트 없이 run_end error PROGRAM_RESTART 하나(포털 카드 1장 — '❌ 공정 실패 이유' chat 은 내지 않는다).
@@ -41,17 +42,25 @@ import threading
 from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from v2.ch12 import journal as J
-from v2.ch12.drivers import mfc_ops
 
 Check = Tuple[str, bool, str]                 # (확인 id, 맞음, 문구)
 
 RESUME_ROWS = 3                               # 판단 전에 다시 읽을 1초 행 수
 RESUME_WAIT_S = 20.0                          # 장비 읽기를 기다리는 상한(펄스 포트 연결 포함)
 RESUME_FRESH_S = 5.0                          # 판단에 쓰는 값의 나이 상한(번갈아 읽는 값 포함)
-POWER_TOL_REL, POWER_TOL_ABS = 0.10, 1.0      # 파워 출력 확인 폭(D79 PC FWD ±10 % 와 같게, 최소 1 W)
 FORCE_DEADLINE_S = 3.5                        # 의도적 종료 — 파워 끄기 결과를 기다리는 상한(챔버K FORCE_DEADLINE_S)
 CHAMBER_PARTS = ("ch1", "ch2")
 DCV_NAMES = {0: "CH2 DC1", 1: "PC RF", 2: "CH2 RF", 3: "CH2 DC2"}
+ENABLED_KEY = {"ch1": "RESUME_ENABLED_CH1", "ch2": "RESUME_ENABLED_CH2", "pc": "RESUME_ENABLED_PC", "tsp": "RESUME_ENABLED_TSP"}
+# 켜짐/꺼짐 확인 항목 전체 — 설정 쓰기 도중(rewrite)이면 그 블록이 쓰는 항목은 뺀다(블록이 처음부터 다시 쓴다)
+ALL_CHECKS = ("power_output", "shutter", "gas", "power_select", "heater_run", "watchdog", "interlock", "thickness")
+BLOCK_WRITES: Dict[str, tuple] = {
+    "heater_set": ("heater_run",), "gas_prep": ("gas", "interlock"), "gas_intro": ("gas", "interlock"),
+    "pressure_ctrl": ("gas", "interlock"), "pressure_boost": ("gas", "interlock"), "pressure_set": (),
+    "shutter": ("shutter",), "power_select": ("power_select",), "power_on": ("power_output", "power_select"),
+    "pulse_set": ("power_output",), "main": ("power_output",), "thickness_zero": ("thickness",),
+    "end_stop": ("power_output", "shutter", "gas", "interlock", "power_select", "heater_run"),
+}
 
 
 # ───────────── 확인 목록 ─────────────
@@ -66,14 +75,6 @@ def norm_checks(items: Iterable[Any]) -> List[Check]:
     return out
 
 
-def _tol_ok(measured: Any, target: Any) -> bool:
-    try:
-        m, t = float(measured), float(target)
-    except (TypeError, ValueError):
-        return False
-    return abs(m - t) <= max(POWER_TOL_ABS, POWER_TOL_REL * abs(t))
-
-
 def bool_check(cid: str, expect: Dict[str, Any], now: Callable[[str], Any]) -> Check:
     """PLC 코일(장비 값)이 저널 때와 같은가. MFC 의 *_on·*_set_sccm 은 드라이버 표시(장비 값 아님)라 여기서 보지 않는다."""
     bad = []
@@ -86,29 +87,31 @@ def bool_check(cid: str, expect: Dict[str, Any], now: Callable[[str], Any]) -> C
     return (cid, not bad, "저널과 같음" if not bad else "; ".join(bad)[:400])
 
 
-def flow_checks(ch: str, expect: Dict[str, Any], now: Callable[[str], Any]) -> List[Check]:
-    """저널 때 FLOW ON 이던 가스 — 지금 잰 유량(R60)이 그때 설정 유량 ±10 %(최소 1 sccm) 안."""
-    out: List[Check] = []
-    for g in ("ar", "o2", "n2"):
-        b = f"{ch}.mfc.{g}_"
-        if not expect.get(b + "on"):
-            continue
-        tgt, got = expect.get(b + "set_sccm"), now(b + "sccm")
-        ok = got is not None and tgt is not None and abs(float(got) - float(tgt)) <= max(1.0, POWER_TOL_REL * float(tgt))
-        out.append((f"gas.{g}", bool(ok), f"{g.upper()} 유량 {got} sccm (설정 {tgt} sccm ±{POWER_TOL_REL:.0%}, 최소 1 sccm)"))
-    return out
+def interlock_check(ch: str, expect: Dict[str, Any], now: Callable[[str], Any]) -> Check:
+    """인터락·장비 오류 없음 — 켜져 있던 가스 밸브의 인터락 코일이 FALSE 로 바뀌지 않았고 PLC 를 읽을 수 있다."""
+    n = 1 if ch == "ch1" else 2
+    gas = expect or {}
+    bad = []
+    for col in (f"plc.main_{n}_gas_sw", f"plc.ar_{n}_gas_sw", f"plc.o2_{n}_gas_sw", f"plc.n2_{n}_gas_sw"):
+        if gas.get(col) is True:
+            il = col.replace("_gas_sw", "_gas_인터락")
+            if now(il) is False:
+                bad.append(f"{il} FALSE")
+    if now(f"plc.main_shutter_{n}_sw") is None:
+        bad.append("PLC 읽기 없음")
+    return ("interlock", not bad, "인터락 이상·장비 오류 없음" if not bad else "; ".join(bad))
 
 
 def power_checks(ch: str, expect: Dict[str, Any], now: Callable[[str], Any]) -> List[Check]:
+    """파워 출력 켜짐/꺼짐(값은 보지 않는다 — 램프·점화 중일 수 있음). 켜져 있던 것은 켜짐(RF Pulse·DC1·DC2·RF 는 장비 enable,
+    DC Pulse 는 드라이버 표시라 전력 > 0), 끈 연속 전원은 꺼짐."""
     out: List[Check] = []
     groups = []
     if ch == "ch2":
-        groups += [("DC1", "ch2.dc.dc1_enable", "ch2.dc.dc1_p", "ch2.dc.dc1_target_w"),
-                   ("DC2", "ch2.dc.dc2_enable", "ch2.dc.dc2_p", "ch2.dc.dc2_target_w"),
-                   ("RF", "ch2.rf.enable", "ch2.rf.fwd_w", "ch2.rf.target_w")]
-    groups += [("DC Pulse", f"{ch}.dcpulse.out_on", f"{ch}.dcpulse.p_w", f"{ch}.dcpulse.set_w"),
-               ("RF Pulse", f"{ch}.rfpulse.out_on", f"{ch}.rfpulse.fwd_w", f"{ch}.rfpulse.set_w")]
-    for lab, en, p, t in groups:
+        groups += [("DC1", "ch2.dc.dc1_enable", "ch2.dc.dc1_p"), ("DC2", "ch2.dc.dc2_enable", "ch2.dc.dc2_p"),
+                   ("RF", "ch2.rf.enable", "ch2.rf.fwd_w")]
+    groups += [("DC Pulse", f"{ch}.dcpulse.out_on", f"{ch}.dcpulse.p_w"), ("RF Pulse", f"{ch}.rfpulse.out_on", f"{ch}.rfpulse.fwd_w")]
+    for lab, en, p in groups:
         want = expect.get(en)
         if want is None:
             continue
@@ -117,13 +120,12 @@ def power_checks(ch: str, expect: Dict[str, Any], now: Callable[[str], Any]) -> 
                 got = now(en)
                 out.append((f"power_output.{lab}", got is not None and not got, f"{lab} 꺼짐 기대 · 읽음 {got}"))
             continue
-        tgt = expect.get(t)
         got_p = now(p)
-        ok = _tol_ok(got_p, tgt)
-        if lab != "DC Pulse":                              # DC Pulse 의 out_on 은 드라이버 표시(장비 값 아님) — 전력으로만
-            ok = ok and bool(now(en))
-        out.append((f"power_output.{lab}", ok, f"{lab} 켜짐 · {got_p} W (목표 {tgt} W ±{POWER_TOL_REL:.0%}, 최소 "
-                                               f"{POWER_TOL_ABS:g} W)"))
+        if lab == "DC Pulse":                              # out_on 은 드라이버 표시(장비 값 아님) — 전력으로만
+            ok = got_p is not None and float(got_p) > 0.0
+        else:
+            ok = bool(now(en))
+        out.append((f"power_output.{lab}", ok, f"{lab} 켜짐 기대 · 읽음 {'켜짐' if ok else '꺼짐/읽기 없음'} ({got_p} W)"))
     return out or [("power_output", True, "켜진 전원 없음")]
 
 
@@ -169,6 +171,22 @@ def adopt_outputs(system, ch: str, st: Dict[str, Any], expect: Dict[str, Any]) -
             d._out_on = True                               # 1초 읽기(전력)가 돌게 — 실제 출력은 다시 읽은 전력으로 확인
         done.append(kind)
     return done
+
+
+def rf_adopt(rf, clock, power_w: float, last_sent: Optional[float], cb) -> None:
+    """RF 연속(CH2 RF·플라즈마 클리닝 RF) — 램프를 다시 하지 않고 유지 상태로 넘겨받아 마지막 전송값(없으면 목표)을 다시 쓴다
+    (검증 쓰기). cb(None=성공 | 사유)."""
+    now = clock.monotonic()
+    rf._gen += 1
+    rf.enabled = rf.running = True
+    rf.state, rf.target_power = "MAINTAINING", float(power_w)
+    rf.ref_armed, rf.blind_start_ts, rf.blind_reach_ts = True, now, now
+    rf.low_power_n = rf.maintain_count = 0
+    rf.polling, rf._due = True, now
+    rf.current_step = float(last_sent if last_sent is not None else power_w)
+    rf.last_sent = None
+    if not rf._send(rf.current_step, after=lambda ok: cb(None if ok else "RF_WRITE_FAILED")):
+        cb(None)
 
 
 # ───────────── 파워만 끄기(챔버K 결정 4) ─────────────
@@ -270,6 +288,7 @@ class ResumeManager:
         self.rows = 0
         self.done = False
         self.closed = False
+        self.stop_all: Optional[str] = None            # 판단 중에 ALL STOP 이 왔다(safety.all_stop) — 사유(출처)
         self.error: Optional[str] = None
         self._thread = None
 
@@ -291,7 +310,7 @@ class ResumeManager:
             except OSError as e:
                 self.say(f"저널 재시작 횟수 쓰기 실패({part}): {e!r}")
             eng = self.sys.engine(J.ENGINE_OF[part])
-            if eng is not None and part in CHAMBER_PARTS:
+            if eng is not None:
                 eng._restart_pending = True
         h = J.heater_of(self.sys)
         hs = sh.get("heater")
@@ -317,6 +336,12 @@ class ResumeManager:
                 return None
             return x[0]
         return now
+
+    def request_stop_all(self, source: str = "web", by: Optional[str] = None) -> None:
+        """ALL STOP(S30, D05)이 재시작 판단 중에 왔다 — 아직 판단하지 않은 부분은 이어가지 않고 정지 순서로, 이미 이어간 부분은 판단이
+        끝나는 대로 STOP. (판단 중에는 엔진이 아직 돌지 않아 STOP 이 닿지 않으므로.)"""
+        self.stop_all = f"{source}{'·' + by if by else ''}"
+        self.clock.notify()
 
     def close(self) -> None:
         """조립 정지 — 판단을 기다리던 중이면 그만둔다(공정이 있던 부분은 다음 시작이 다시 판단 — 저널을 덮어쓰지 않았다)."""
@@ -368,56 +393,72 @@ class ResumeManager:
         for ch in CHAMBER_PARTS:
             if ch in self.active:
                 self._chamber(ch, self.active[ch], now, adopted.get(ch, []))
-        if "pc" in self.active:
-            self._stop_pc(self.active["pc"])
-        if "tsp" in self.active:
-            self._stop_tsp(self.active["tsp"])
+        for part in ("pc", "tsp"):
+            if part in self.active:
+                self._pc_tsp(part, self.active[part], now)
         if not self.active:
             self._residual(now)
+        self._stop_resumed_if_all_stop()
+
+    def _stop_resumed_if_all_stop(self) -> None:
+        """판단 도중 ALL STOP 이 왔는데 이미 이어간 부분은 지금 STOP(엔진이 돌고 있다)."""
+        if not self.stop_all:
+            return
+        src = self.stop_all
+        for part, dec in list(self.decisions.items()):
+            if dec.get("result") != "resumed":
+                continue
+            eng = self.sys.engine(J.ENGINE_OF[part])
+            try:
+                if part in CHAMBER_PARTS:
+                    eng.stop(source="web", by=src, user=True)
+                else:
+                    eng.stop(source="web")
+            except Exception as e:
+                self.say(f"ALL STOP — {part} STOP 실패: {e!r}")
 
     def conditions(self, part: str, doc: dict) -> Tuple[float, List[Check]]:
-        """①②④⑤ — (공백, 확인 목록)."""
+        """①②④⑤ — (공백, 확인 목록). 네 부분(ch1·ch2·pc·tsp) 같은 규칙."""
         gap, reboot = J.gap_of(doc, self.clock)
         mx = float(self.cfg.get("RESUME_MAX_GAP_S", 30.0))
         st = doc.get("state") or {}
         ex = doc.get("exit") or {}
+        mode = st.get("resume_mode")
         out: List[Check] = [
             ("gap", (not reboot) and gap <= mx, f"꺼져 있던 시간 {gap:.1f} s (한도 {mx:g} s)" + (" — 재부팅" if reboot else "")),
             ("first_restart", int(doc.get("restarts") or 0) == 0, f"이 공정 재시작 {int(doc.get('restarts') or 0) + 1}번째"),
-            ("resumable", bool(st.get("resumable")) and not ex.get("intentional"),
-             f"블록 {st.get('block_no')} {st.get('block_type')} · 스텝 {st.get('step_action')}"
-             f"{' holding' if st.get('step_holding') else ''}" + (" · 정지 순서 중" if st.get("shutdown") else "")
-             + (" · 의도적 종료 표시" if ex.get("intentional") else "")),
-            ("enabled", bool(self.cfg.get("RESUME_ENABLED", True)), "RESUME_ENABLED"),
         ]
+        if mode == "stop_sequence":
+            out.append(("stop_sequence", False, "정지 순서 도중이었음 — 정지 순서를 이어서 끝까지(처음부터 다시)"))
+        out.append(("resumable", mode in ("hold", "rewrite") and not ex.get("intentional"),
+                    f"방식 {mode or '-'} · 블록 {st.get('block_no')} {st.get('block_type')} · 스텝 {st.get('step_action')}"
+                    + (" · 기다리는 중" if mode == "hold" else (" · 설정 쓰기 도중 — 블록 설정을 처음부터 다시" if mode == "rewrite" else ""))
+                    + (" · 의도적 종료 표시" if ex.get("intentional") else "")))
+        out.append(("enabled", bool(self.cfg.get(ENABLED_KEY[part], True)), ENABLED_KEY[part]))
         return gap, out
 
     def device_checks(self, ch: str, doc: dict, now: Callable[[str], Any]) -> List[Check]:
-        """③ — 블록 종류별 확인 목록(저널 state.resume_checks)."""
+        """③ — 켜짐/꺼짐 확인(값 허용 폭 없음). 기다리는 중이면 블록 종류별 목록(저널 state.resume_checks) + 인터락,
+        설정 쓰기 도중이면 그 블록이 쓰는 항목을 뺀 전체."""
         st, exp = doc.get("state") or {}, doc.get("expect") or {}
         eng = self.sys.engine(J.ENGINE_OF[ch])
+        if st.get("resume_mode") == "rewrite":
+            skip = set(BLOCK_WRITES.get(str(st.get("block_type")), ALL_CHECKS))
+            ids = [c for c in ALL_CHECKS if c not in skip]
+        else:
+            ids = [c for c in (list(st.get("resume_checks") or []) + ["interlock"]) if c != "pressure"]   # 압력은 값 확인 없음
+        # 지난 저널 뒤에 쓰기를 한 블록이 쓰는 항목은 뺀다 — 기대 상태(1초 행)가 그 쓰기를 아직 못 담았을 수 있다
+        # (기다리는 중이면 지금 블록은 이미 쓰기를 마쳤으므로 지금 블록 자신은 빼지 않는다)
+        cur_t = st.get("block_type")
+        win = [t for t in (st.get("window_types") or []) if st.get("resume_mode") == "rewrite" or t != cur_t]
+        unreliable = {c for t in win for c in BLOCK_WRITES.get(t, ALL_CHECKS)}
+        ids = [c for c in ids if c not in unreliable or c == "interlock"]
         out: List[Check] = []
-        ids = list(st.get("resume_checks") or [])
         for cid in ids:
             if cid in ("shutter", "gas", "power_select"):
                 out.append(bool_check(cid, exp.get(cid) or {}, now))
-                if cid == "gas":
-                    out += flow_checks(ch, exp.get("gas") or {}, now)
-            elif cid == "pressure":
-                sp = (st.get("writes") or {}).get("sp_target")
-                pm = now(f"{ch}.mfc.pressure_mtorr")
-                if sp is None:
-                    out.append(("pressure", True, "압력 제어 전 — 확인 없음"))
-                elif str(st.get("step_message") or "").startswith("압력 도달 대기"):
-                    out.append(("pressure", True, f"압력 도달 대기 중(지금 {pm} mTorr) — 이어 가는 대기 스텝이 도달을 판정"))
-                else:
-                    was = (exp.get("pressure") or {}).get(f"{ch}.mfc.pressure_mtorr")
-                    ref = float(was) if was is not None else float(sp)
-                    m = self.sys.mfc[ch]
-                    lo, hi = min(ref, float(sp)), max(ref, float(sp))
-                    ok = pm is not None and (lo <= float(pm) <= hi or mfc_ops.within(m, ref, float(pm))
-                                             or mfc_ops.within(m, float(sp), float(pm)))
-                    out.append(("pressure", bool(ok), f"압력 {pm} mTorr · 저널 {was} mTorr(목표 {sp}, MFC 허용 범위)"))
+            elif cid == "interlock":
+                out.append(interlock_check(ch, exp.get("gas") or {}, now))
             elif cid == "power_output":
                 out += power_checks(ch, exp.get("power_output") or {}, now)
             elif cid == "thickness":
@@ -426,26 +467,30 @@ class ResumeManager:
                     out.append(("thickness", True, "두께 판정 없음"))
                 else:
                     out += norm_checks(th.resume_checks(doc["thickness"]))
-        if "heater_run" in ids or "watchdog" in ids:
+        want = {c for c in ("heater_run", "watchdog") if c in ids}
+        if want:
             h = getattr(eng, "heater", None)
             hs = (self.old.get("shared", {}).get("doc") or {}).get("heater")
             if h is None or hs is None:
                 out.append(("heater_run", True, "히터 없음"))
             else:
-                out += norm_checks(h.resume_checks(hs))
+                out += [c for c in norm_checks(h.resume_checks(hs)) if c[0] in want]      # 목표 온도 허용 폭 확인은 하지 않음
         return out
 
     def _chamber(self, ch: str, doc: dict, now: Callable[[str], Any], adopted: List[str]) -> None:
         eng = self.sys.engine(J.ENGINE_OF[ch])
         st = doc.get("state") or {}
         gap, checks = self.conditions(ch, doc)
+        if self.stop_all:
+            checks.append(("all_stop", False, f"ALL STOP({self.stop_all}) — 이어가지 않고 정지 순서"))
         if all(c[1] for c in checks):
             checks += self.device_checks(ch, doc, now)
         ok = all(c[1] for c in checks)
         sh = self.old.get("shared", {}).get("doc") or {}
         plan = {"reasons": checks, "expect": doc.get("expect"), "heater": sh.get("heater"), "thickness": doc.get("thickness"),
-                "adopted": adopted}
-        dec = {"part": ch, "run_id": doc.get("run_id"), "gap_s": gap, "checks": checks, "resume": ok, "adopted": adopted}
+                "adopted": adopted, "rewrite_block": st.get("resume_mode") == "rewrite"}
+        dec = {"part": ch, "run_id": doc.get("run_id"), "gap_s": gap, "checks": checks, "resume": ok, "adopted": adopted,
+               "mode": st.get("resume_mode")}
         self.decisions[ch] = dec
         if eng is None:
             dec.update(resume=False, result="no_engine")
@@ -456,7 +501,7 @@ class ResumeManager:
         why = eng.resume_from(st, gap_now, plan) if ok else None
         if ok and why is None:
             dec["result"] = "resumed"
-            self.say(f"{ch} 이어감 — 공백 {gap_now:.1f} s")
+            self.say(f"{ch} 이어감({st.get('resume_mode')}) — 공백 {gap_now:.1f} s")
             return
         if why:
             plan["reasons"] = checks + [("restore", False, f"{why}: {getattr(eng, 'reject_detail', '')}")]
@@ -486,13 +531,68 @@ class ResumeManager:
                       event={"run_id": run_id, "result": "error", "reason": "PROGRAM_RESTART",
                              "gap_s": None if gap is None else round(gap, 1)})
 
-    # ── 플라즈마 클리닝·TSP — 늘 안전 정지 ──
-    def _stop_pc(self, doc: dict) -> None:
+    # ── 플라즈마 클리닝·TSP — CH1·CH2 와 같은 규칙(D94) ──
+    def _pc_tsp(self, part: str, doc: dict, now: Callable[[str], Any]) -> None:
+        """조건(공백·첫 재시작·방식·RESUME_ENABLED_*) + 켜짐/꺼짐 확인이 맞으면 엔진 resume_from, 아니면 안전 정지(정지 순서)."""
         st = doc.get("state") or {}
-        gap, checks = self.conditions("pc", doc)
+        gap, checks = self.conditions(part, doc)
+        if self.stop_all:
+            checks.append(("all_stop", False, f"ALL STOP({self.stop_all}) — 이어가지 않고 정지 순서"))
+        if all(c[1] for c in checks):
+            checks += self.pc_checks(doc, now) if part == "pc" else self.tsp_checks(doc)
+        ok = all(c[1] for c in checks)
+        dec = {"part": part, "run_id": doc.get("run_id"), "gap_s": gap, "checks": checks, "resume": ok,
+               "mode": st.get("resume_mode")}
+        self.decisions[part] = dec
+        eng = self.sys.engine(part)
+        if ok and eng is not None:
+            gap_now, _ = J.gap_of(doc, self.clock)
+            hub = getattr(self.sys, "hub", None)
+            if hub is not None and doc.get("run_id"):
+                hub._open_runs[part] = doc["run_id"]          # 지난 실행이 보낸 run_start — run_end 를 run_end 로 내게
+            why = eng.resume_from(st, gap_now, {"reasons": checks})
+            if why is None:
+                dec["result"] = "resumed"
+                if part == "tsp":
+                    self.sys.emit("engine:tsp", "resumed", f"복구됨(공백 {gap_now:.0f} s)", level="warn", code="RESUMED",
+                                  event={"run_id": doc.get("run_id"), "gap_s": round(gap_now, 1), "name": "tsp",
+                                         "block": {"type": st.get("phase")}, "checks": [list(c) for c in checks]})
+                self.say(f"{part} 이어감({st.get('resume_mode')}) — 공백 {gap_now:.1f} s")
+                return
+            checks = checks + [("restore", False, f"{why}")]
+            dec.update(checks=checks, resume=False)
+        dec["result"] = "stopped"
+        (self._stop_pc if part == "pc" else self._stop_tsp)(doc, checks)
+
+    def pc_checks(self, doc: dict, now: Callable[[str], Any]) -> List[Check]:
+        """플라즈마 클리닝 켜짐/꺼짐 확인 — GV 인터락·장비 오류 없음, 클리닝 시간 대기 중이면 RF SET 켜짐(값 허용 폭 없음)."""
+        st = doc.get("state") or {}
+        ch = 2 if int(st.get("ch") or 1) == 2 else 1
+        if st.get("test_mode"):
+            return [("device", True, "TEST — 장비 확인 없음")]
+        begin = st.get("resume_begin")
+        bad = []
+        if now("plc.main_shutter_1_sw") is None:
+            bad.append("PLC 읽기 없음")
+        if begin != "gv_interlock" and now(f"plc.g_v_{ch}_인터락") is False:
+            bad.append(f"GV{ch} 인터락 FALSE")
+        out: List[Check] = [("interlock", not bad, "GV 인터락·장비 오류 없음" if not bad else "; ".join(bad))]
+        if st.get("resume_mode") == "hold":
+            en = now("pc.rf.enable")
+            out.append(("power_output.RF", en is True, f"PC RF SET 켜짐 기대 · 읽음 {en}"))
+        return out
+
+    def tsp_checks(self, doc: dict) -> List[Check]:
+        eng = self.sys.engine("tsp")
+        return norm_checks(eng.resume_checks(doc.get("state"))) if eng is not None else [("tsp", False, "TSP 엔진 없음")]
+
+    def _stop_pc(self, doc: dict, checks: Optional[List[Check]] = None) -> None:
+        st = doc.get("state") or {}
+        gap, base = self.conditions("pc", doc)
+        if checks is None:
+            checks = base + [("pc", False, "플라즈마 클리닝을 이어가지 않음")]
         self.decisions["pc"] = {"part": "pc", "run_id": doc.get("run_id"), "gap_s": gap, "resume": False,
-                                "checks": checks + [("pc", False, "플라즈마 클리닝은 이어가지 않음(상태 유지 블록 아님)")],
-                                "result": "stopped"}
+                                "checks": checks, "result": "stopped", "mode": st.get("resume_mode")}
         eng = self.sys.engine("pc")
         if eng is None:
             return self._fallback("pc", "PC 엔진 없음")
@@ -511,11 +611,12 @@ class ResumeManager:
             power_off_only(self.sys, "PROGRAM_RESTART", heater=False, pulses=False, plc_idx=[1], log=self.say)
         self._emit_end("pc", doc.get("run_id"), f"재시작(공백 {gap:.0f} s) — 플라즈마 클리닝 안전 정지", gap)
 
-    def _stop_tsp(self, doc: dict) -> None:
-        gap, checks = self.conditions("tsp", doc)
+    def _stop_tsp(self, doc: dict, checks: Optional[List[Check]] = None) -> None:
+        gap, base = self.conditions("tsp", doc)
+        if checks is None:
+            checks = base + [("tsp", False, "TSP 를 이어가지 않음")]
         self.decisions["tsp"] = {"part": "tsp", "run_id": doc.get("run_id"), "gap_s": gap, "resume": False,
-                                 "checks": checks + [("tsp", False, "TSP 는 이어가지 않음(상태 유지 블록 아님)")],
-                                 "result": "stopped"}
+                                 "checks": checks, "result": "stopped", "mode": (doc.get("state") or {}).get("resume_mode")}
         tsp = getattr(self.sys, "tsp", None)
 
         def call(submit, t=10.0):

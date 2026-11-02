@@ -79,11 +79,18 @@ PARAMS: tuple = (
     p("SNAPSHOT_RETENTION_DAYS", "record", "1초 기록 보관 기간", "일", I, 180, 7, 3650, safety=L, apply=RESTART),
     p("NAS_SYNC_PERIOD_SEC", "record", "NAS 사본 주기(지난 날 파일)", "s", I, 60, 10, 3600, safety=L, apply=RESTART),
     p("NAS_TODAY_COPY_SEC", "record", "NAS 오늘 DB 사본 주기", "s", I, 600, 60, 86400, safety=L, apply=RESTART),
-    p("RESUME_ENABLED", "resume", "재시작 뒤 공정 이어가기", "", B, True, apply=LIVE,
-      desc="제어 프로그램이 비정상 종료 후 다시 켜졌을 때 조건(공백·첫 재시작·장비 상태·블록 종류)이 모두 맞으면 이어간다. "
-           "끄면 늘 STOP 과 같은 정지 순서(사유 PROGRAM_RESTART) — 지시 3장 (6), 포털에서 변경 가능"),
+    p("RESUME_ENABLED_CH1", "resume", "CH1 재시작 뒤 공정 이어가기", "", B, True, apply=LIVE,
+      desc="제어 프로그램이 비정상 종료 후 다시 켜졌을 때 CH1 공정을 이어간다(사용자 결정 2026-11-02 D94 — CH1·CH2·플라즈마 클리닝·TSP 같은 규칙: "
+           "정지 순서 도중이면 정지 순서를 끝까지, 장비 설정 쓰기 도중이면 그 블록 설정을 처음부터 다시 쓰고, 기다리는 중이면 남은 만큼 이어감). "
+           "끄면 늘 STOP 과 같은 정지 순서(사유 PROGRAM_RESTART)"),
+    p("RESUME_ENABLED_CH2", "resume", "CH2 재시작 뒤 공정 이어가기", "", B, True, apply=LIVE,
+      desc="CH1 과 같은 규칙(CH2 히터 RUN·워치독 이상 없음 확인 포함). 끄면 늘 정지 순서(PROGRAM_RESTART)"),
+    p("RESUME_ENABLED_PC", "resume", "플라즈마 클리닝 재시작 뒤 이어가기", "", B, True, apply=LIVE,
+      desc="CH1·CH2 와 같은 규칙. 끄면 늘 안전 정지(RF 0 W·SET OFF·가스 정리, PROGRAM_RESTART)"),
+    p("RESUME_ENABLED_TSP", "resume", "TSP 재시작 뒤 이어가기", "", B, True, apply=LIVE,
+      desc="CH1·CH2 와 같은 규칙. 끄면 늘 안전 정지(TSP OFF·IG OFF, PROGRAM_RESTART)"),
     p("RESUME_MAX_GAP_S", "resume", "이어가기 허용 공백", "s", F, 30.0, 1.0, 600.0, apply=LIVE,
-      desc="꺼져 있던 시간이 이보다 길면 이어가지 않고 정지 순서 — 지시 3장 (6) 기본 30 s, 포털에서 변경 가능"),
+      desc="꺼져 있던 시간이 이보다 길면 이어가지 않고 정지 순서(CH1·CH2·플라즈마 클리닝·TSP 공통) — 지시 3장 (6) 기본 30 s, 포털에서 변경 가능"),
     p("COMMAND_SOURCES_LOCAL_ALL", "command", "로컬 화면에서도 모든 명령 허용(전환 기간)", "", B, True, safety=H,
       desc="true(전환 기간 기본): 명령 표에서 web 만 받던 명령(공정 시작·레시피·설정)도 로컬 화면(local)에서 받는다. "
            "false 면 명령 표의 출처 그대로('공정 시작·레시피·설정은 포털에서만') — 지시 3장 (4), 설정만 바꿔서 전환"),

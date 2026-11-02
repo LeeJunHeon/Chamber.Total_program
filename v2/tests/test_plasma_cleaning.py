@@ -586,14 +586,17 @@ def test_journal_and_resume_checks(tmp_path):
         eng.start(params=dict(UI, process_time="1"))
         ticks(r, lambda: eng.pc.step == "sp4_wait")
         st = eng.state_for_journal()
-        assert st["step"] == "sp4_wait" and eng.resume_checks(st)[0][1] is False
+        assert st["step"] == "sp4_wait" and st["resume_mode"] == "rewrite" and st["resume_begin"] == "sp4_set"   # 설정 쓰기 도중 — 그 묶음부터
+        assert eng.resume_checks(st)[0][1] is True
         ticks(r, lambda: eng.pc.step == "process")
         r.loop.run(3)
         st = eng.state_for_journal()
         assert st["step"] == "process" and st["params"]["rf_power_w"] == 100.0 and st["countdown_left"] is not None
         chk = dict((k, ok) for k, ok, _ in eng.resume_checks(st))
-        assert chk == {"resumable_step": True, "power_output": True, "gas": True, "pressure": True}, eng.resume_checks(st)
+        assert chk == {"resumable_step": True} and st["resume_mode"] == "hold" and st["resume_begin"] == "process"
         eng.stop()
+        st = eng.state_for_journal()
+        assert st["resume_mode"] == "stop_sequence"                       # 정지 순서 도중
         run_to_end(r, eng)
     finally:
         r.stop()

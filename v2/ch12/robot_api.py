@@ -16,6 +16,9 @@
 같은 명령 id 두 번(로봇 서버 재전송·재시작 뒤 중복): 처리한 id 와 결과를 기억해(최근 DEDUP_KEEP 개) 다시 실행하지 않고 같은 결과
 (+ "duplicate": true)를 돌려준다. 처리 중인 id 가 또 오면 끝날 때까지 기다렸다가 같은 결과. to_state()/from_state() 로 5단계 저널이
 이 기억을 저장·복원한다(재시작 뒤에도 같은 id 는 다시 실행하지 않는다).
+로봇 이동 명령(진공·벤트·게이트·척·핀)은 이어가기에서 예외(사용자 결정 2026-11-02 D94): 실행 도중 제어 프로그램이 죽었으면 그 id 는 '중단됨'으로
+저널에 남고(to_state.interrupted), 재시작 뒤 같은 id 가 다시 오면 자동으로 다시 하지 않고 오류 E205(RETRY)로 끝낸다. 로봇 서버는 재전송하지
+않지만(요청마다 새 id), 어떤 경로로든 같은 id 가 다시 와도 장비를 움직이지 않는다.
 로봇 요청 공정 카드(v1 notify_client_process): client_process_to_emit(emit) 를 RobotCsv.set_event_sink 에 꽂으면 kind='client_process'
 {kind started|finished, info} 이벤트(조립이 꽂는다).
 실패 보고(robot_ops on_report — v1 chat_host·팝업 자리): emit(source='robot', kind='error_event', 사용자 문구, level='warn', code,
@@ -123,6 +126,8 @@ class RobotApi:
         self._lk = threading.Lock()
         self._done: "collections.OrderedDict[str, Json]" = collections.OrderedDict()
         self._inflight: Dict[str, threading.Event] = {}
+        self._started: Dict[str, str] = {}          # 실행 중인 명령 id → 명령(저널의 '중단됨' 후보)
+        self._interrupted: Dict[str, str] = {}      # 지난 실행에서 실행 도중 죽은 명령 id → 명령(다시 하지 않는다)
         self.events: List[Json] = []                # 받은 로봇 서버 이벤트(시험·진단)
         self.executed = 0                           # 실제로 실행한 명령 수(중복 제외)
         if emit is not None and getattr(ops, "on_report", None) is None:
@@ -198,14 +203,31 @@ class RobotApi:
                         break
                 ev.wait()
         try:
-            out = self._run(cmd, obj)
+            with self._lk:
+                intr = self._interrupted.pop(rid, None) if rid else None
+                if rid:
+                    self._started[rid] = str(cmd).upper().strip()
+            out = self._run(cmd, obj) if intr is None else self._interrupted_reply(rid, str(cmd), intr)
         finally:
             if rid:
                 with self._lk:
                     ev = self._inflight.pop(rid, None)
+                    self._started.pop(rid, None)
                 if ev is not None:
                     ev.set()
         return 200, out
+
+    def _interrupted_reply(self, rid: str, cmd: str, was: str) -> Json:
+        """지난 실행에서 도중에 죽은 명령 — 다시 하지 않고 E205(RETRY). 같은 id 가 또 오면 같은 결과(duplicate)."""
+        c = str(cmd).upper().strip()
+        body = ER.build_error_payload_from_code("E205", detail=f"{c} 불가 — 제어 프로그램 재시작으로 중단됨(자동으로 다시 하지 않음)",
+                                                meta={"command": c})
+        out = {"reply_cmd": f"{c}_RESULT", "body": body, "log": []}
+        with self._lk:
+            self._done[rid] = out
+            while len(self._done) > self.keep:
+                self._done.popitem(last=False)
+        return out
 
     def _run(self, cmd: str, obj: Json) -> Json:
         clk = self.clock
@@ -252,7 +274,10 @@ class RobotApi:
     # ───────── 저널(5단계) ─────────
     def to_state(self) -> Json:
         with self._lk:
-            return {"version": 1, "done": [[k, v] for k, v in self._done.items()]}
+            intr = dict(self._interrupted)
+            intr.update({k: v for k, v in self._started.items() if k not in self._done})
+            return {"version": 1, "done": [[k, v] for k, v in self._done.items()],
+                    "interrupted": [[k, v] for k, v in intr.items()]}
 
     def from_state(self, state: Optional[Json]) -> int:
         """저장한 기억을 되살린다(지금 기억 뒤에 붙임). 되살린 수."""
@@ -266,6 +291,9 @@ class RobotApi:
                     n += 1
             while len(self._done) > self.keep:
                 self._done.popitem(last=False)
+            for item in state.get("interrupted") or []:
+                if isinstance(item, (list, tuple)) and len(item) == 2 and str(item[0]) not in self._done:
+                    self._interrupted[str(item[0])] = str(item[1])
         return n
 
     def seen(self, rid: str) -> bool:

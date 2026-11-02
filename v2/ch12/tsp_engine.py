@@ -35,7 +35,7 @@ STOP·전체 상한(PC-150 — v1 은 Python 버전마다 다름. v2 는 3.11 �
   TSPError('상태 확인 시간초과(target=on, last=2)') 등. 연결 실패의 v1 원문(OSError 계열)은 미확인 — ConnectionError(문구)).
 나눔: 사이클(컨트롤러)·기다림·v1 예외 모양·단계 표는 tsp_cycle(TspCycle — 섞어 씀), 로그 파일은 outputs/tsp_txt(TspTxtLog).
 v2 에서 더한 것: abort(reason)(안전 규칙 — 결과는 '[ERROR] 실행 실패: RuntimeError('abort: …')' 와 같은 예외 경로), 저널
-  (state_for_journal — TSP 는 이어가기 안 함: 어느 단계도 상태 유지 블록이 아니다, PHASES), 1초 행 tsp.proc.*·tsp.set.base_torr.
+  (state_for_journal·resume_from — 사용자 결정 2026-11-02 D94: CH1·CH2·PC 와 같은 규칙으로 이어간다, PHASES·resume.py), 1초 행 tsp.proc.*·tsp.set.base_torr.
   판정은 v1 주기의 자기 RDI 로(1초 행 값은 판정에 쓰지 않는다). 매일 예약(PC-143~146)은 tsp_schedule(engine.schedule).
 """
 from __future__ import annotations
@@ -63,6 +63,7 @@ class TspEngine(TspCycle):
         self.txt = TspTxtLog(cfg, writer=writer, now=self.now)
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
+        self._restart_pending = False     # 재시작 뒤 이어가기 판단(resume.py) 전 — busy, 새 시작을 받지 않는다
         self._running = False             # v1 _busy(실행 태스크 있음 — finally 첫머리에서 풀림)
         self._cancel: Optional[tuple] = None   # ("stop"|"timeout"|"abort", 사유)
         self._deadline: Optional[float] = None
@@ -159,7 +160,7 @@ class TspEngine(TspCycle):
     def busy(self) -> bool:
         """실행 스레드가 끝날 때까지(정리 포함) True — 설정 적용·프로그램 종료 판단용."""
         t = self._thread
-        return bool(self._running or (t is not None and t.is_alive()))
+        return bool(self._restart_pending or self._running or (t is not None and t.is_alive()))
 
     def _reject(self, reason: str, block: str) -> Dict[str, Any]:
         self.start_block_reason = block
@@ -300,25 +301,85 @@ class TspEngine(TspCycle):
                     "tsp.proc.paused": False, "tsp.set.base_torr": self.target}
 
     # ═══════════════════════ 저널·이어가기(5단계) ═══════════════════════
+    def _resume_mode(self, st: Dict[str, Any]) -> tuple:
+        """재시작 뒤 이어가기 방식(D94) — (방식, 남은 폴링 초). stop_sequence = 정리·종료 정리 도중 또는 STOP 요청 중 ·
+        hold = 사이클 폴링 대기 중 · rewrite = 장비 켜기·IG 켜기 쓰기 도중(그 단계를 처음부터) · none."""
+        if not st["busy"]:
+            return "none", None
+        ph = str(st["phase"])
+        if self._cancel is not None or PHASES.get(ph, {}).get("resume") == "stop":
+            return "stop_sequence", None
+        if ph in ("tsp_on", "tsp_off") and st.get("remain_s") is not None:
+            return "hold", float(st["remain_s"])
+        if PHASES.get(ph, {}).get("resume") == "rewrite":
+            return "rewrite", None
+        return "none", None
+
     def state_for_journal(self) -> Dict[str, Any]:
         st = self.state()
+        mode, remain = self._resume_mode(st)
         return {"kind": "tsp", "busy": st["busy"], "phase": st["phase"], "run_id": st["run_id"], "owner": st["owner"],
-                "target": st["target"], "cycles": st["cycles"], "cycle": st["cycle"], "cycles_done": st["cycles_done"],
+                "by": st["by"], "target": st["target"], "cycles": st["cycles"], "cycle": st["cycle"],
+                "cycles_done": st["cycles_done"], "inputs": st["inputs"], "log_file": st["log_file"],
                 "elapsed_s": None if self.started_t is None or not st["busy"] else self.clock.monotonic() - self.started_t,
-                "resumable": bool(PHASES.get(st["phase"], {}).get("resumable", False))}
+                "deadline_left_s": st["deadline_left_s"], "remain_s": remain,
+                "resume_mode": mode, "resumable": mode in ("hold", "rewrite")}
 
     def resume_checks(self, state: Optional[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        """이어가기 확인 [{name, ok, detail}] — TSP 운전 중이었으면 늘 ok=False(안전 정지: TSP OFF·IG OFF, PROGRAM_RESTART).
-        TSP 의 어느 단계(IG 켜기·TSP ON/OFF·사이클 대기)도 상태 유지 블록이 아니다(PHASES — 정의)."""
+        """이어가기 확인 [{name, ok, detail}] — 장비의 켜짐/꺼짐은 이어갈 때 다시 쓰므로(TSP ON/OFF·IG ON) 여기서는 방식만."""
         st = state or {}
         if not st.get("busy"):
             return []
         ph = str(st.get("phase") or "")
-        return [{"name": "tsp.phase", "ok": bool(PHASES.get(ph, {}).get("resumable", False)),
-                 "detail": f"TSP {PHASES.get(ph, {}).get('label', ph)} — 상태 유지 블록이 아님(이어가지 않음)"}]
+        mode = st.get("resume_mode")
+        return [{"name": "tsp.phase", "ok": mode in ("hold", "rewrite"),
+                 "detail": f"TSP {PHASES.get(ph, {}).get('label', ph)} — 방식 {mode}"}]
+
+    def resume_from(self, st: Dict[str, Any], gap_s: float, plan: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        """재시작 뒤 이어가기(ResumeManager 가 판단한 뒤) — 저널의 실행을 되살려 실행 스레드를 새로 만든다.
+        hold(폴링 대기 중)면 그 사이클·단계를 남은 시간(꺼져 있던 시간 뺀 만큼)으로, rewrite(쓰기 도중)면 그 단계를 처음부터
+        (IG ON 확인 → TSP ON/OFF 다시). 거절 사유 코드(BUSY·RESUME_STATE_MISMATCH) 또는 None."""
+        with self._lock:
+            if self._running or (self._thread is not None and self._thread.is_alive()):
+                return "BUSY"
+            self._running = True
+            self._restart_pending = False
+        try:
+            mode = st.get("resume_mode")
+            if st.get("target") is None or not st.get("cycles") or mode not in ("hold", "rewrite"):
+                self._unclaim(None)
+                return "RESUME_STATE_MISMATCH"
+            gap = max(0.0, float(gap_s))
+            self._refresh_from_config()
+            self.inputs = dict(st.get("inputs") or self.inputs)
+            self.display = {"now_cycle": str(st.get("cycles_done") or 0), "base_pressure": ""}
+            with self._lock:
+                self.run_id, self.owner, self.by = st.get("run_id"), st.get("owner"), st.get("by")
+                self.target, self.cycles = float(st["target"]), int(st["cycles"])
+                self.cycle, self.cycles_done = int(st.get("cycle") or 0), int(st.get("cycles_done") or 0)
+                self.last_pressure = math.nan
+                self._cancel = None
+                el = float(st.get("elapsed_s") or 0.0) + gap
+                self.started_t = self.clock.monotonic() - el
+                self._deadline = None
+            left = st.get("deadline_left_s")
+            dl = None if left is None else max(30.0, float(left) - gap)
+            ph = str(st.get("phase") or "")
+            if ph in ("tsp_on", "tsp_off") and self.cycle >= 1:
+                remain = None if st.get("remain_s") is None else max(0.0, float(st["remain_s"]) - gap)
+                resume = {"cycle": self.cycle, "phase": ph, "remain": remain}
+            else:                                   # prepare·ig_on — 처음부터 다시(IG ON → 첫 확인 → 사이클 1)
+                resume = {"cycle": max(1, self.cycles_done + 1), "phase": "tsp_on", "remain": None}
+            self._resume_plan = dict(plan or {}, gap_s=gap)
+            self._thread = self.clock.start_thread(lambda: self._run(self.target, self.cycles, resume, dl), "tsp-run")
+            return None
+        except BaseException:
+            self._unclaim(None)
+            raise
 
     # ═══════════════════════ 실행(tsp_runtime.py:509-705) ═══════════════════════
-    def _run(self, target: float, cycles: int) -> None:
+    def _run(self, target: float, cycles: int, resume: Optional[Dict[str, Any]] = None,
+             deadline_s: Optional[float] = None) -> None:
         self._refresh_from_config()
         s = self._s
         self._last_code = None
@@ -326,11 +387,11 @@ class TspEngine(TspCycle):
         used_tsp = held_ig = False
         try:
             rs = self.rs
-            if rs.is_running("chamber", 1) or rs.is_running("pc", 1):
+            if resume is None and (rs.is_running("chamber", 1) or rs.is_running("pc", 1)):
                 self._popup("실행 오류", "CH1는 이미 다른 공정이 실행 중입니다.")
                 self._finish_record("blocked", False, "CH1_PROCESS_RUNNING")
                 return
-            if rs.is_running("tsp"):
+            if resume is None and rs.is_running("tsp"):
                 self._popup("실행 오류", "다른 공정이 실행 중입니다.")
                 self._finish_record("blocked", False, "PROCESS_RUNNING")
                 return
@@ -343,15 +404,16 @@ class TspEngine(TspCycle):
             used_tsp = True
             path = self.txt.open_run(self._log)
             self.log_file = str(path)
-            self._log("=== TSP 공정 시작 === "
+            self._log(("=== TSP 공정 이어가기(재시작 뒤) === " if resume else "=== TSP 공정 시작 === ") +
                       f"host={s['host']} ig={s['ig_port']} tsp={s['tsp_port']} target={target} cycles={cycles} "
                       f"on={s['on']}s off={s['off']}s poll={s['poll']}s first_wait={s['first']}s")
-            self._card("started", {"params": {"process_note": f"TSP run: target={target:.3e}, cycles={cycles}",
-                                              "tsp_target": target, "tsp_cycles": cycles}, "run_id": self.run_id})
-            total = cycles * (s["on"] + s["off"]) + float(s["margin"])
+            if resume is None:
+                self._card("started", {"params": {"process_note": f"TSP run: target={target:.3e}, cycles={cycles}",
+                                                  "tsp_target": target, "tsp_cycles": cycles}, "run_id": self.run_id})
+            total = cycles * (s["on"] + s["off"]) + float(s["margin"]) if deadline_s is None else float(deadline_s)
             self.started_ctrl = self.clock.monotonic()
             self._deadline = self.started_ctrl + total
-            result = self._ctrl_run(target, cycles)
+            result = self._ctrl_run(target, cycles, resume)
             kind = (self._cancel or (None, None))[0]
             if kind == "stop":
                 raise _UserStop()

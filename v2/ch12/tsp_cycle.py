@@ -20,16 +20,18 @@ from typing import Any, Callable, Dict, List, Optional
 OWNER = "tsp"                        # 게이지 소유자 이름(shared.tsp_ig)
 FINALLY_WAIT_S = 60.0                # 정리 단계 장비 호출 하나를 기다리는 상한(v1 은 바이트마다 제한 — 끝없이 기다리지 않게)
 CLOSE_WAIT_S = 120.0
-# 단계 정의 — 어느 것도 상태 유지 블록이 아니다(장비 켜기·끄기·사이클 도중) → 재시작 뒤 이어가지 않는다(안전 정지)
+# 단계 정의 — 재시작 뒤 이어가기(사용자 결정 2026-11-02 D94, CH1·CH2·플라즈마 클리닝과 같은 규칙):
+#   resume = rewrite(장비 켜기·IG 켜기 쓰기 도중 — 그 단계를 처음부터 다시) · hold(사이클 폴링 대기 중 — 남은 시간만큼 이어감) ·
+#            stop(정리·종료 정리 = 정지 순서 도중 — 정지 순서를 끝까지) · none(대기)
 PHASES: Dict[str, Dict[str, Any]] = {
-    "idle": {"label": "대기", "resumable": False},
-    "prepare": {"label": "준비", "resumable": False},
-    "ig_on": {"label": "IG ON·첫 확인", "resumable": False},
-    "tsp_on": {"label": "TSP ON(승화)", "resumable": False},
-    "tsp_off": {"label": "TSP OFF(사이클 간격)", "resumable": False},
-    "cleanup": {"label": "정리", "resumable": False},
-    "finished": {"label": "정리 끝", "resumable": False},
-    "closing": {"label": "종료 정리(OFF·IG OFF)", "resumable": False},
+    "idle": {"label": "대기", "resumable": False, "resume": "none"},
+    "prepare": {"label": "준비", "resumable": True, "resume": "rewrite"},
+    "ig_on": {"label": "IG ON·첫 확인", "resumable": True, "resume": "rewrite"},
+    "tsp_on": {"label": "TSP ON(승화)", "resumable": True, "resume": "rewrite"},       # 폴링 대기 중(phase_end 있음)이면 hold
+    "tsp_off": {"label": "TSP OFF(사이클 간격)", "resumable": True, "resume": "rewrite"},
+    "cleanup": {"label": "정리", "resumable": False, "resume": "stop"},
+    "finished": {"label": "정리 끝", "resumable": False, "resume": "stop"},
+    "closing": {"label": "종료 정리(OFF·IG OFF)", "resumable": False, "resume": "stop"},
 }
 OWNERS = ("robot", "web", "local")
 
@@ -232,44 +234,57 @@ class TspCycle:
                 return False
             self._sleep(min(max(0.1, float(poll_sec)), max(0.0, deadline - now)))
 
-    def _ctrl_run(self, target: float, cycles: int) -> TspRunResult:
+    def _ctrl_run(self, target: float, cycles: int, resume: Optional[Dict[str, Any]] = None) -> TspRunResult:
+        """resume = {"cycle", "phase"(tsp_on·tsp_off), "remain"(남은 폴링 초 또는 None=처음부터)} — 재시작 뒤 이어가기."""
         s = self._s
         on_sec, off_sec = max(0.0, float(s["on"])), max(0.0, float(s["off"]))
         poll_sec, first = max(0.1, float(s["poll"])), max(0.0, float(s["first"]))
-        cycles_done = 0
+        cycles_done = int(self.cycles_done) if resume else 0
         self.last_pressure = math.nan
         if int(cycles) <= 0:
             return TspRunResult(False, 0, self.last_pressure, "invalid_cycles")
         self._in_ctrl = True
         try:
-            self._state("prepare")
-            self._log(f"[TSP] 공정 시작: target={target}, cycles={cycles}, on={on_sec}s, off={off_sec}s, "
-                      f"poll={poll_sec}s, first_wait={first}s")
-            self._state("ig_on")
-            self._ig_ensure_on()
-            self._log("[IG] ensure_on 완료")
-            with self._lock:
-                self.phase_end = self.clock.monotonic() + first
-            self._sleep(first)
-            try:
-                p0 = self._ig_read()
-                self._pressure(p0)
-                self._log(f"[IG] 초기 판정 P0={p0:.3e}")
-                if p0 <= target:
-                    return TspRunResult(True, cycles_done, self.last_pressure, "initial_below_target")
-            except Exception as e:
-                self._log(f"[IG] 초기 판정 RDI 실패: {e!r}")
-            for i in range(1, cycles + 1):
+            if resume is None:
+                self._state("prepare")
+                self._log(f"[TSP] 공정 시작: target={target}, cycles={cycles}, on={on_sec}s, off={off_sec}s, "
+                          f"poll={poll_sec}s, first_wait={first}s")
+                self._state("ig_on")
+                self._ig_ensure_on()
+                self._log("[IG] ensure_on 완료")
+                with self._lock:
+                    self.phase_end = self.clock.monotonic() + first
+                self._sleep(first)
+                try:
+                    p0 = self._ig_read()
+                    self._pressure(p0)
+                    self._log(f"[IG] 초기 판정 P0={p0:.3e}")
+                    if p0 <= target:
+                        return TspRunResult(True, cycles_done, self.last_pressure, "initial_below_target")
+                except Exception as e:
+                    self._log(f"[IG] 초기 판정 RDI 실패: {e!r}")
+                first_i, first_ph, first_rem = 1, "tsp_on", None
+            else:
+                self._log(f"[TSP] 재시작 뒤 이어감: cycle {resume['cycle']}/{cycles} {resume['phase']}"
+                          f"{'' if resume.get('remain') is None else ' 남은 %.0f s' % resume['remain']}")
+                self._state("ig_on")
+                self._ig_ensure_on()
+                self._log("[IG] ensure_on 완료")
+                first_i, first_ph, first_rem = int(resume["cycle"]), str(resume["phase"]), resume.get("remain")
+            for i in range(first_i, cycles + 1):
                 self.cycle = i
-                self._state("tsp_on")
-                self._log(f"[TSP] ON (cycle {i}/{cycles})")
-                self._tsp_switch(True)
-                if self._poll_until(target, on_sec, poll_sec):
-                    return TspRunResult(True, cycles_done, self.last_pressure, "reached_target_on")
+                if not (i == first_i and first_ph == "tsp_off"):
+                    self._state("tsp_on")
+                    self._log(f"[TSP] ON (cycle {i}/{cycles})")
+                    self._tsp_switch(True)
+                    dur = first_rem if (i == first_i and first_ph == "tsp_on" and first_rem is not None) else on_sec
+                    if self._poll_until(target, dur, poll_sec):
+                        return TspRunResult(True, cycles_done, self.last_pressure, "reached_target_on")
                 self._state("tsp_off")
                 self._log(f"[TSP] OFF (cycle {i}/{cycles})")
                 self._tsp_switch(False)
-                if self._poll_until(target, off_sec, poll_sec):
+                dur = first_rem if (i == first_i and first_ph == "tsp_off" and first_rem is not None) else off_sec
+                if self._poll_until(target, dur, poll_sec):
                     return TspRunResult(True, cycles_done, self.last_pressure, "reached_target_off")
                 cycles_done = i
                 self.cycles_done = i

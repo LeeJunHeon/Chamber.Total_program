@@ -24,7 +24,7 @@ STOP(stop — 1659-1688): 실행 중 아님/이미 종료 통지/이미 정지 �
 카드·팝업: 이벤트로 낸다(PcEvent kind 'card'·'popup' — 구글챗·창은 포털 몫, 같은 계기·같은 내용). 'log' 는 PC 로그창 한 줄.
 엔진 계약(system.register_engine): on_tick_start·on_row·snapshot_fields()(pc.proc.*·pc.set.*)·busy·close, 명령 start·stop·select_channel·
   state·host_start·load_recipe_rows·clear_error, 안전 규칙 abort(사유), 저널 state_for_journal()·resume_checks(상태).
-  이어가기: 상태를 유지하는 블록은 메인 클리닝 시간 대기(step 'process')뿐 — 그 단계만 이어가기 가능, 나머지는 불가.
+  이어가기(D94): 정지 순서 도중=안전 정지를 끝까지 · 기다리는 중(step 'process'·TEST)=남은 만큼 · 설정 쓰기 도중=그 묶음 처음부터(resume_from).
 """
 from __future__ import annotations
 
@@ -147,6 +147,10 @@ class PlasmaCleaning(StepIO, StopIO, PreflightIO, HostIO, EventIO, ViewIO):
         self._step_t0: Optional[float] = None
         self._last_step = ""
         self._resume_left: Optional[int] = None
+        self._restart_pending = False                 # 재시작 뒤 이어가기 판단(resume.py) 전 — busy, 새 시작을 받지 않는다
+        self._resume_begin: Optional[str] = None
+        self._resume_gap = 0.0
+        self._test_end_t: Optional[float] = None
         self._thread = None
         self.last_view = None
         self.last_final: Optional[Dict[str, Any]] = None
@@ -335,6 +339,8 @@ class PlasmaCleaning(StepIO, StopIO, PreflightIO, HostIO, EventIO, ViewIO):
 
     def _click_start(self, source: str, by: str, origin: str, origin_meta: Dict[str, Any]) -> StartResult:
         test_mode, test_dur = R.test_mode_of(self.loaded_row)
+        if self._restart_pending:
+            return self._reject("실행 오류", "재시작 뒤 이어가기 판단 중입니다.", "E205")
         if self.running:
             return self._reject("실행 중", "이미 Plasma Cleaning이 실행 중입니다.", "E205")
         ch = int(self.ch)
@@ -381,7 +387,12 @@ class PlasmaCleaning(StepIO, StopIO, PreflightIO, HostIO, EventIO, ViewIO):
                 self._idle()
 
     # ───────── TEST 모드(1297-1400) ─────────
-    def _run_test(self, ch: int, dur: float) -> None:
+    @property
+    def test_remaining_s(self) -> Optional[float]:
+        t = getattr(self, "_test_end_t", None)
+        return None if (t is None or not self.test_mode_active) else max(0.0, t - self.clock.monotonic())
+
+    def _run_test(self, ch: int, dur: float, resumed: bool = False) -> None:
         ok_final, stopped_final, final_reason = True, False, None
         try:
             self.pumps_off()
@@ -399,12 +410,15 @@ class PlasmaCleaning(StepIO, StopIO, PreflightIO, HostIO, EventIO, ViewIO):
             self._open_run_log(p)
             self.log("PC", "파일 로그 시작 (TEST MODE)")
             self._set_step("process")
+            if resumed:
+                self._emit_resumed(getattr(self, "_resume_gap", 0.0), [])
             try:
-                self.card("notify_process_started", payload={
-                    "process_note": "Plasma Cleaning (TEST)", "process_time": float(p.process_time_min),
-                    "use_rf_power": False, "rf_power": 0.0, "prefix": f"CH{self.ch} Plasma Cleaning (TEST)",
-                    "ch": self.ch}, flush=True)
-                end_t = self.clock.monotonic() + float(dur)
+                if not resumed:
+                    self.card("notify_process_started", payload={
+                        "process_note": "Plasma Cleaning (TEST)", "process_time": float(p.process_time_min),
+                        "use_rf_power": False, "rf_power": 0.0, "prefix": f"CH{self.ch} Plasma Cleaning (TEST)",
+                        "ch": self.ch}, flush=True)
+                end_t = self._test_end_t = self.clock.monotonic() + float(dur)
                 last = None
                 while True:
                     if self.stop_requested:
@@ -503,11 +517,16 @@ class PlasmaCleaning(StepIO, StopIO, PreflightIO, HostIO, EventIO, ViewIO):
         self.log("PC", "파일 로그 시작")
         self.stop_requested = False                      # [이상] 프리플라이트 중 STOP 은 여기서 지워진다(v1 1541)
         self.final_notified = False
+        self._run_controlled(ch, p)
+
+    def _run_controlled(self, ch: int, p: PcParams, resumed: bool = False) -> None:
+        """시작 카드 → 컨트롤러 → 판정 → 종료 정리·통지(v1 1402-1657 의 뒷부분). resumed(재시작 뒤 이어가기)면 시작 카드를 다시 내지 않는다."""
         ok_final, stopped_final, final_reason = False, False, None
         try:
-            self.card("notify_process_started", payload={
-                "process_note": "Plasma Cleaning", "process_time": float(p.process_time_min), "use_rf_power": True,
-                "rf_power": float(p.rf_power_w), "prefix": f"CH{self.ch} Plasma Cleaning", "ch": self.ch}, flush=True)
+            if not resumed:
+                self.card("notify_process_started", payload={
+                    "process_note": "Plasma Cleaning", "process_time": float(p.process_time_min), "use_rf_power": True,
+                    "rf_power": float(p.rf_power_w), "prefix": f"CH{self.ch} Plasma Cleaning", "ch": self.ch}, flush=True)
             self.pc.run(p, self)
             lr = str(self.pc.last_result or "").strip().lower()
             ls = str(self.pc.last_reason or "").strip()
@@ -546,6 +565,8 @@ class PlasmaCleaning(StepIO, StopIO, PreflightIO, HostIO, EventIO, ViewIO):
             self._idle()
 
     def _idle(self) -> None:
+        self._resume_begin = None
+        self._test_end_t = None
         self.phase = "idle"
         self._set_step("")
         self.countdown_left = None
@@ -586,6 +607,137 @@ class PlasmaCleaning(StepIO, StopIO, PreflightIO, HostIO, EventIO, ViewIO):
             x.save_pc(self.build_pc_params(p))
         except Exception:
             pass
+
+    # ───────── 재시작 뒤 이어가기(D94 — resume.py 가 판단한 뒤 부른다) ─────────
+    def resume_from(self, st: Mapping[str, Any], gap_s: float, plan: Optional[Dict[str, Any]] = None) -> Optional[str]:
+        """저널의 실행을 되살려 실행 스레드를 새로 만든다. hold(클리닝 시간 대기·TEST)는 남은 시간(꺼져 있던 시간 뺀 만큼),
+        rewrite(장비 설정 쓰기 도중)는 그 묶음을 처음부터. 거절 사유 코드(BUSY·RESUME_STATE_MISMATCH) 또는 None."""
+        if self.running:
+            return "BUSY"
+        mode, begin = st.get("resume_mode"), st.get("resume_begin")
+        test = bool(st.get("test_mode"))
+        if mode not in ("hold", "rewrite") or (not test and not st.get("params")) or (mode == "rewrite" and not begin):
+            return "RESUME_STATE_MISMATCH"
+        ch = 2 if int(st.get("ch") or 1) == 2 else 1
+        gap = max(0.0, float(gap_s))
+        self.dev.bind(ch)
+        self.ch = ch
+        self.ui.update({k: v for k, v in dict(st.get("ui") or {}).items()})
+        self.loaded_row = st.get("loaded_row")
+        self.cleanup_started = self.power_only = False
+        self.forced_fail, self.forced_fail_reason = False, None
+        self.rf_off_unconfirmed_reason = self.abort_reason = None
+        self.run_state.mark_started("pc", ch)
+        self.run_id, self.owner_src, self.by = st.get("run_id"), st.get("owner"), st.get("by") or ""
+        self.origin, self.origin_meta = st.get("origin") or "ui", {}
+        self.running, self.stop_requested, self.final_notified = True, False, False
+        self.phase = "test" if test else "run"
+        self._set_step("process" if test else str(begin or "process"))
+        self._resume_begin = str(begin or "process")
+        left = st.get("countdown_left")
+        self._resume_left = None if (mode == "rewrite" or left is None) else max(0, int(float(left) - gap))
+        if test:
+            body = lambda: self._run_test(ch, max(0.0, float(st.get("test_remaining_s") or 0.0) - gap), resumed=True)
+        else:
+            body = lambda: self._run_resumed(ch, st, gap, dict(plan or {}), mode)
+        self._thread = self.clock.start_thread(lambda: self._thread_main(body, ch), f"pc-resume-ch{ch}")
+        return None
+
+    @property
+    def resume_begin(self) -> Optional[str]:
+        return getattr(self, "_resume_begin", None)
+
+    def _run_resumed(self, ch: int, st: Mapping[str, Any], gap: float, plan: Dict[str, Any], mode: str) -> None:
+        """_run_real 의 프리플라이트를 건너뛴 이어가기 — 장비는 이미 그 상태. 설정값을 저널대로 다시 쓰고(되읽기 확인) 컨트롤러가 시작 묶음부터."""
+        self._host_run_begin()
+        self.run_state.set_running("pc", True, ch)
+        self.run_owner = f"pc{ch}"
+        self.mfc_release_done = False
+        self.run_state.begin_run_use(self.run_owner, [m.resource_key for m in self.mfc_targets()])
+        self.readings = {k: [] for k in self.readings}
+        self.process_name = str(st.get("process_name") or "")
+        try:                                           # 프리플라이트가 하던 것 중 이어가기에 필요한 것: MFC 폴링 마스크 분리·이벤트 펌프
+            g, pr = self.dev.mfc_gas, self.dev.mfc_pressure
+            if g is not None and pr is not None and g is not pr:
+                g.set_poll_mask(gas=True, pressure=False)
+                pr.set_poll_mask(gas=False, pressure=True)
+            self.pumps_on_now()
+        except Exception:
+            pass
+        try:
+            self.acquire_mfcs()
+            if self.dev.mfc_gas is not None:
+                self.dev.mfc_gas.set_process_status(True)
+            if self.dev.mfc_pressure is not None and self.dev.mfc_pressure is not self.dev.mfc_gas:
+                self.dev.mfc_pressure.set_process_status(True)
+        except Exception:
+            pass
+        p = PcParams(**dict(st.get("params") or {}))
+        self.params = p
+        self.gas_idx = st.get("gas_idx")
+        if self.gas_idx and self.dev.mfc_gas is not None:
+            self.dev.mfc_gas.gas_select(int(self.gas_idx), owner=self.mfc_owner())
+        self.last_process_time_min = st.get("last_process_time_min") or float(p.process_time_min)
+        self.set_state_text("Preparing…")
+        self._open_run_log(p)
+        self.log("PC", "파일 로그 시작 (재시작 뒤 이어가기)")
+        self.stop_requested = False
+        self.final_notified = False
+        gap_txt = f"공백 {gap:.0f} s"
+        self._resume_gap = gap
+        why = self._resume_rewrite(p, st, mode) if mode == "hold" else None
+        if why:
+            self.log("MAIN", f"[RESTART] 재시작({gap_txt}) — 이어가지 않고 안전 정지: setpoint_rewrite: {why}")
+            self.abort_reason = "PROGRAM_RESTART"
+        else:
+            if mode == "hold":
+                self.process_timer_active = True
+            self.log("MAIN", f"[RESTART] 복구됨({gap_txt}) — 단계 '{self.resume_begin}' 에서 이어감")
+            self._emit_resumed(gap, plan.get("reasons") or [])
+        self._run_controlled(ch, p, resumed=True)
+
+    def _emit_resumed(self, gap: float, checks) -> None:
+        """이벤트 kind=resumed '복구됨(공백 N s)' {run_id, gap_s, name, block, checks} — 포털 카드 1장(챔버 공정과 같은 모양)."""
+        self.emit(PcEvent("resumed", f"복구됨(공백 {gap:.0f} s)", reason="RESUMED", code="RESUMED", level="warn",
+                          data={"run_id": self.run_id, "gap_s": round(float(gap), 1), "name": "pc",
+                                "block": {"type": self.resume_begin}, "checks": [list(c) for c in checks]}))
+
+    def _resume_rewrite(self, p: PcParams, st: Mapping[str, Any], mode: str) -> Optional[str]:
+        """이어가기(hold) 전 설정값을 저널대로 다시 쓴다 — 유량 설정·SP4·RF 목표(켜져 있는 RF 는 램프 없이 그 값으로).
+        장비 쓰기가 끝나는 것만 확인하고 값의 도달(허용 폭)은 보지 않는다(D79). 실패 문구 또는 None."""
+        from v2.ch12.resume import rf_adopt
+        owner = self.mfc_owner()
+        jobs = []
+        gi = int(self.gas_idx or p.gas_idx or 3)
+        mg, mp = self.dev.mfc_gas, self.dev.mfc_pressure
+        if mg is not None and p.gas_flow_sccm > 0:
+            jobs.append(("MFC FLOW_SET %g" % p.gas_flow_sccm,
+                         lambda cb: mg.set_flow(gi, float(p.gas_flow_sccm), owner=owner, on_done=lambda k, r, d: cb(r))))
+        if mp is not None:
+            jobs.append(("MFC SP4_SET %g" % p.sp4_setpoint_mTorr,
+                         lambda cb: mp.sp_set(4, float(p.sp4_setpoint_mTorr), owner=owner, on_done=lambda k, r, d: cb(r))))
+        if self.dev.rf is not None:
+            jobs.append(("RF %g W" % p.rf_power_w, lambda cb: rf_adopt(self.dev.rf, self.clock, float(p.rf_power_w), None, cb)))
+        box: Dict[str, Any] = {}
+
+        def done(name):
+            def f(reason=None):
+                box[name] = reason
+                self.clock.notify()
+            return f
+        for name, start in jobs:
+            try:
+                start(done(name))
+            except Exception as e:
+                box[name] = repr(e)
+        ok = self.clock.wait_until(self.clock.monotonic() + 20.0, lambda: len(box) >= len(jobs))
+        for name, _ in jobs:
+            if name not in box:
+                return f"{name}: 확인 시간 초과(20s)" if not ok else f"{name}: 결과 없음"
+            if box[name] is not None:
+                return f"{name}: {box[name]}"
+            self.log("MAIN", f"[RESTART] 설정 다시 쓰기 확인: {name}")
+        return None
 
     # ───────── 종료 통지(2730-2852) ─────────
     def _notify_finish_once(self, ok: bool, reason: Optional[str], stopped: bool, ch: int) -> None:

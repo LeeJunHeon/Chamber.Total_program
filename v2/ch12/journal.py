@@ -43,6 +43,10 @@ CMD_STORES = ("web", "robot")       # 명령 기억 이름 → system 속성
 CMD_ATTR = {"web": "uplink", "robot": "robot_api"}
 
 
+# 플라즈마 클리닝 이어가기 확인(켜짐/꺼짐·인터락·장비 오류 없음)에 쓰는 1초 행 열 — 판단 때 새로 읽은 값을 본다
+PC_COLS = ("pc.rf.enable", "plc.g_v_1_인터락", "plc.g_v_2_인터락", "plc.main_shutter_1_sw")
+
+
 def heater_of(system) -> Any:
     """히터 엔진 — 조립은 HeaterHost(eng) 로 꽂는다(엔진 이름 heater)."""
     h = system.engine("heater") if hasattr(system, "engine") else None
@@ -199,7 +203,7 @@ class Journal:
         self.frozen = False                         # mark_exit 뒤 — 1초 쓰기 멈춤
         self.cache = FreshCache()
         self.cols = {ch: expect_columns(ch) for ch in ("ch1", "ch2")}
-        self._all_cols = sorted({c for d in self.cols.values() for cs in d.values() for c in cs})
+        self._all_cols = sorted({c for d in self.cols.values() for cs in d.values() for c in cs} | set(PC_COLS))
         self.seq = 0
         self.writes = 0
         self.errors = 0
