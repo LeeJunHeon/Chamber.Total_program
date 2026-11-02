@@ -8,7 +8,7 @@
 명령 바이트·순서·되읽기·재시도는 dcpulse_ops(동작)·dcpulse_proto(프레임)·dcpulse_monitor(출력 중 감시·아크) 참고.
 
 1초 읽기(source_read): v1 폴링 조건(연결·출력 ON·폴링 켜짐 — 시작 순서·OFF 중에는 폴링 off)일 때만 장비를 읽는다.
-  매 tick PIV(0x9A)·SAT(0x96)·ANT(0x99), 점화 창 밖에서는 AE(0xAE)/AF(0xAF) 를 번갈아(판정 tick 에는 둘 다 — 시간이 되면).
+  매 tick PIV(0x9A)·SAT(0x96)·ANT(0x99), 점화 창 밖에서는 AE(0xAE)·AF(0xAF) 도 매 tick 함께(사용자 결정 2026-11-02 — 번갈아 읽기 없음).
   판정(과전류·저전류·이탈·아크)은 v1 주기(점화 창 1 s, 그 밖 5 s)의 tick 에서만 — dcpulse_monitor. 판정 tick 의 PIV 가
   실패하면 v1 처럼 0.3 s 뒤 1회 다시. AUTO_STOP 이면 0x9E 를 읽어 사유에 붙이고 command_failed(AUTO_STOP) → 확인형 OFF.
   읽지 않는 tick 은 장비 값 열이 stale(자기 품질), 드라이버 값(set_w·out_on·polling·되읽은 주파수/Off)은 그대로.
