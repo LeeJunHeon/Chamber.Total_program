@@ -132,8 +132,9 @@ class ProcessViewMixin:
                                      if isinstance(self.cur_block, int) and 0 <= self.cur_block < len(self.blocks) else None)
         return bt, (BK.by_type().get(bt) if bt else None)
 
-    def _writes(self) -> Dict[str, Any]:
-        """지금 런에서 이미 보낸 설정값(공정 중 수정값 반영) — 이어갈 때 다시 쓰고 되읽을 것."""
+    def _writes(self, upto: Optional[int] = None) -> Dict[str, Any]:
+        """지금 런에서 이미 보낸 설정값(공정 중 수정값 반영) — 이어갈 때 다시 쓰고 되읽을 것.
+        upto 를 주면 그 스텝 앞까지만(이어가기 '설정 쓰기 도중' — 그 블록의 설정은 블록이 처음부터 다시 쓰므로 블록 앞까지)."""
         r = self.runner
         if not r.is_running or r.shutdown:
             return {}
@@ -143,7 +144,7 @@ class ProcessViewMixin:
         heater = None
         sp_target = None
         ov = self.overrides
-        for s in r.steps[:max(0, r.idx)]:
+        for s in r.steps[:max(0, r.idx if upto is None else upto)]:
             v = ov.get(s.ref, None) if s.ref else None
             a = s.action
             if a == "MFC_CMD":
@@ -190,6 +191,42 @@ class ProcessViewMixin:
                 o[k] = {"bound": d.worker is not None, "maybe_on": bool(d.off_needs_confirm())}
         return o
 
+    def _resume_mode(self, hold_ok: bool, delay_run: bool):
+        """재시작 뒤 이어가기 방식(사용자 결정 2026-11-02 D94 — CH1·CH2·플라즈마 클리닝·TSP 같은 규칙):
+        stop_sequence = 정지 순서 도중(정지 순서를 끝까지) · hold = 기다리는 중(남은 만큼 이어감) ·
+        rewrite = 장비 설정 쓰기 도중(그 블록의 설정을 처음부터 다시 씀 — rewrite_from = 다시 쓸 첫 스텝) · none = 시작 전 단계 등.
+        → (방식, rewrite_from)."""
+        r = self.runner
+        if delay_run:
+            return "hold", None
+        if not r.is_running:
+            return "none", None
+        if r.shutdown or r.stop_requested or r.failed:
+            return "stop_sequence", None
+        if hold_ok:
+            return "hold", None
+        cur = r.current
+        if cur is None or self.cur_inst is None or not (0 <= r.idx < len(r.steps)):
+            return "none", None
+        blk, i = r.steps[r.idx].block, r.idx
+        while i > 0 and r.steps[i - 1].block == blk and not r.steps[i - 1].holding:
+            i -= 1                                       # 기다리는 스텝 뒤의 설정 쓰기부터(기다림을 다시 하지 않는다)
+        return "rewrite", i
+
+    def _window_types(self, bt) -> list:
+        """지난 저널(1초 전)부터 지금까지 지나온 블록 종류 — 기대 상태(1초 행)에 아직 반영되지 않았을 수 있는 쓰기를 한 블록들
+        (이어가기 켜짐/꺼짐 확인에서 그 블록이 쓰는 항목은 뺀다)."""
+        prev, cur = getattr(self, "_jr_prev", None), self.cur_block
+        self._jr_prev = cur
+        n = len(self.blocks)
+        types: list = []
+        if isinstance(prev, int) and 0 <= prev < n:
+            hi = cur if isinstance(cur, int) and 0 <= cur < n else n - 1
+            types = [self.blocks[i]["type"] for i in range(prev, max(prev, hi) + 1)]
+        if bt and bt not in types:
+            types.append(bt)
+        return types
+
     def state_for_journal(self) -> Dict[str, Any]:
         """1초 저널 — 레시피 전체·판·런 목록·지금 블록·스텝·블록/메인 경과·카운트다운·수정값·보낸 설정값·실행 순서(JSON 값만)."""
         now = self.clock.monotonic()
@@ -202,12 +239,16 @@ class ProcessViewMixin:
         holding = bool(cur is not None and cur.holding and r.is_running and not r.shutdown and not r.stop_requested)
         resumable = bool(d is not None and d.resumable and ((inst is not None and not inst.auto and holding) or delay_run))
         cd = r.cd
+        mode, rw_from = self._resume_mode(resumable, delay_run)
+        win = self._window_types(bt)
         return {"chamber": self.ch, "run_id": self.run_id, "owner": self.owner, "state": self.state_name,
                 "running": r.is_running, "shutdown": r.shutdown, "stop_requested": r.stop_requested, "failed": r.failed,
                 "test_mode": r.test_mode, "recipe": self.seq.record() if self.seq else None, "recipe_name": self.recipe_name,
                 "rows": self.rows, "runs": [run_record(x) for x in self.runs], "run_idx": self.run_idx,
                 "run_kind": run.kind if run else None, "queue_mode": self.queue_mode, "block_index": self.cur_block,
                 "block_type": bt, "block_no": self.block_no(), "resumable": resumable,
+                "resume_mode": mode, "rewrite_from": rw_from, "window_types": win,
+                "writes_base": self._writes(rw_from) if mode == "rewrite" else None,
                 "resume_checks": list(d.resume_checks) if d is not None else [],
                 "step_index": r.idx, "step_action": cur.action if cur else None, "step_message": cur.message if cur else None,
                 "step_count": len(r.steps), "step_holding": bool(cur.holding) if cur else False,
@@ -365,7 +406,10 @@ class ProcessViewMixin:
             self._restart_event("stopped", plan)
             raise PF.StageCancelled()                      # → _stop_before_start: run_end error PROGRAM_RESTART                      # 시작 전 단계 — STOP 과 같은 정리 + run_end error
         if plan["mode"] == "resume":
-            why = self._rewrite_setpoints(st)
+            rw = bool(plan.get("rewrite_block"))
+            # 설정 쓰기 도중이면 그 블록의 설정은 블록이 처음부터 다시 쓴다 — 그 앞까지의 설정만 여기서 다시 쓰고 되읽는다
+            why = self._rewrite_setpoints(dict(st, writes=st.get("writes_base") or {}) if rw else st,
+                                          skip_heater=(rw and st.get("block_type") == "heater_set"))
             if why:
                 plan["mode"], plan["reason"] = "stop", "PROGRAM_RESTART"
                 plan["reasons"] = list(plan.get("reasons") or []) + [("setpoint_rewrite", False, why)]
@@ -396,8 +440,9 @@ class ProcessViewMixin:
         self._after_finish(run, res.ok, detail)
         return res.ok, bool(detail.get("stopped"))
 
-    def _rewrite_setpoints(self, st: Dict[str, Any]) -> Optional[str]:
-        """이어가기 전 설정값을 저널대로 다시 쓰고 되읽어 확인(드라이버 확인 경로) — 실패 문구 또는 None."""
+    def _rewrite_setpoints(self, st: Dict[str, Any], skip_heater: bool = False) -> Optional[str]:
+        """이어가기 전 설정값을 저널대로 다시 쓰고 되읽어 확인(드라이버 확인 경로) — 실패 문구 또는 None.
+        값이 맞춰지는 중이었을 수 있어 값의 허용 폭은 보지 않는다(사용자 결정 2026-11-02 D79·D93) — 쓰고 확인만, 도달은 블록 로직이 판단."""
         a, w, out = self.actions, st.get("writes") or {}, st.get("outputs") or {}
         jobs = []
         for ch, v in sorted((w.get("flow") or {}).items()):
@@ -420,8 +465,8 @@ class ProcessViewMixin:
                     v, pause_polling=True, on_done=lambda reason, ok: cb(None if ok else (reason or "FAILED")))))
         h = self.heater
         hs = getattr(h, "state_for_journal", None) and h.state_for_journal() if h is not None else None
-        if h is not None and hs and hs.get("run") and hs.get("owner") == "process" and not hs.get("ramp") \
-                and hs.get("target") is not None:
+        if h is not None and hs and not skip_heater and hs.get("run") and hs.get("owner") == "process" \
+                and not hs.get("ramp") and hs.get("target") is not None:
             jobs.append((f"히터 {float(hs['target']):g}°C", lambda cb, v=float(hs["target"]): h.apply_target(
                 v, owner="process", on_done=lambda ok, why="": cb(None if ok else (why or "FAILED")))))
         box: Dict[str, Any] = {}
@@ -447,23 +492,38 @@ class ProcessViewMixin:
 
     def _rf_adopt(self, power_w: float, out: Dict[str, Any], cb) -> None:
         """CH2 RF 연속 — 램프를 다시 하지 않고 유지 상태로 넘겨받아 마지막 전송값을 다시 쓴다(검증 쓰기)."""
-        rf, now = self.actions.rf, self.clock.monotonic()
-        last = out.get("last_sent")
-        rf._gen += 1
-        rf.enabled = rf.running = True
-        rf.state, rf.target_power = "MAINTAINING", float(power_w)
-        rf.ref_armed, rf.blind_start_ts, rf.blind_reach_ts = True, now, now
-        rf.low_power_n = rf.maintain_count = 0
-        rf.polling, rf._due = True, now
-        rf.current_step = float(last if last is not None else power_w)
-        rf.last_sent = None
-        if not rf._send(rf.current_step, after=lambda ok: cb(None if ok else "RF_WRITE_FAILED")):
-            cb(None)
+        from v2.ch12.resume import rf_adopt
+        rf_adopt(self.actions.rf, self.clock, power_w, out.get("last_sent"), cb)
 
     def _prepare_continue(self, st: Dict[str, Any], gap: float, plan: Dict[str, Any]) -> None:
         """지금 스텝을 남은 만큼으로 바꿔 러너가 그 스텝부터 다시 돌게 한다(꺼져 있던 시간도 경과)."""
         import dataclasses
         from datetime import datetime
+        r = self.runner
+        idx = r.idx
+        if plan.get("rewrite_block"):                  # 설정 쓰기 도중 — 그 블록의 설정을 처음부터(스텝은 그대로 다시 돈다)
+            self.log("MAIN", f"[RESTART] 설정 쓰기 도중 — 블록 {self.block_no()} 의 설정을 스텝 "
+                             f"{int(st.get('rewrite_from') or 0) + 1} 부터 다시 씀")
+            with self.lk:
+                r.idx = int(st.get("rewrite_from") or 0) - 1
+                if self.paused:
+                    r.pause_req = True
+        else:
+            self._continue_step(st, gap, plan)
+        self.stats.start(self.params)
+        self.stats.collecting = bool(st.get("stats_collecting"))
+        if self.thickness is not None and self.thickness.supported:
+            thc = self.sys.outputs.thickness.get(self.ch)
+            if thc is not None:
+                thc.set_recording(True, str(self.params.get("process_name") or ""), self.thickness.status(),
+                                  datetime.fromtimestamp(self.clock.wall()))
+        exp = (plan.get("expect") or {}).get("shutter") or {}
+        if exp.get(f"plc.main_shutter_{self.n}_sw"):
+            self.actions._camera(True)
+
+    def _continue_step(self, st: Dict[str, Any], gap: float, plan: Dict[str, Any]) -> None:
+        """기다리는 중이던 스텝을 남은 만큼으로 바꾸고 러너가 그 스텝부터 다시 돌게 한다."""
+        import dataclasses
         r = self.runner
         idx = r.idx
         step = r.steps[idx]
@@ -503,16 +563,6 @@ class ProcessViewMixin:
             r.idx = idx - 1
             if self.paused:
                 r.pause_req = True
-        self.stats.start(self.params)
-        self.stats.collecting = bool(st.get("stats_collecting"))
-        if self.thickness is not None and self.thickness.supported:
-            thc = self.sys.outputs.thickness.get(self.ch)
-            if thc is not None:
-                thc.set_recording(True, str(self.params.get("process_name") or ""), self.thickness.status(),
-                                  datetime.fromtimestamp(self.clock.wall()))
-        exp = (plan.get("expect") or {}).get("shutter") or {}
-        if exp.get(f"plc.main_shutter_{self.n}_sw"):
-            self.actions._camera(True)
 
     # ═══════════════════════ 의도적 종료(챔버K 결정 4 — 파워만 끄기는 부르는 쪽) ═══════════════════════
     def program_exit(self) -> bool:

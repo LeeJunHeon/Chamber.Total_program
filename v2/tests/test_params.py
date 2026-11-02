@@ -200,7 +200,8 @@ def test_my_defaults_equal_v1_effective(p):
 def test_v2_keys():
     d = defaults(T.params)
     assert d["EQUIPMENT_ID"] == "CH12" and d["RUN_MODE"] == "sim" and BY_KEY["EQUIPMENT_ID"].web_locked
-    assert d["RESUME_ENABLED"] is True and d["RESUME_MAX_GAP_S"] == 30.0 and BY_KEY["RESUME_MAX_GAP_S"].apply is Apply.LIVE
+    assert all(d[f"RESUME_ENABLED_{x}"] is True for x in ("CH1", "CH2", "PC", "TSP")) and "RESUME_ENABLED" not in d
+    assert d["RESUME_MAX_GAP_S"] == 30.0 and BY_KEY["RESUME_MAX_GAP_S"].apply is Apply.LIVE
     assert d["COMMAND_SOURCES_LOCAL_ALL"] is True
     assert d["ROBOT_API_PORT"] == 50071 and d["HOST_SERVER_PORT"] == 50070
     for k in ("TICK_DEADLINE_MS", "LOCAL_HMI_PORT", "UPLINK_INTERVAL_MS", "LOCAL_DATA_DIR", "NAS_COPY_DIR",
@@ -228,7 +229,7 @@ def test_bad_values_rejected(key, bad):
 
 
 @pytest.mark.parametrize("key,bad", [
-    ("RESUME_ENABLED", "false"),              # v1 은 문자열을 참으로 읽던 곳이 있었다
+    ("RESUME_ENABLED_CH1", "false"),              # v1 은 문자열을 참으로 읽던 곳이 있었다
     ("PC_DEFAULT_GAS_IDX", True),             # bool 은 int 로 받지 않는다
     ("CH2_HEATER_HOLD_MODE", "DAC"),          # v1 은 소문자로 고쳤다 — v2 는 정확히
     ("CH2_HEATER_HOLD_FAIL_ACTION", "stop"),

@@ -29,8 +29,11 @@ DECISIONS = [
          confirm=True, where="v2/ch12/blocks.py; v2/ch12/recipe.py"),
     dict(id="D05", title="ALL STOP — v1 에는 두 챔버를 함께 멈추는 버튼이 없음",
          decision="v1 의 CH1/CH2 Stop(request_stop_all — 그 챔버 Runner STOP: 대기 행·쿨다운·큐까지)은 챔버별 STOP 으로 그대로 두고, "
-                  "지시가 요구한 ALL STOP 은 'CH1 STOP + CH2 STOP + 플라즈마 클리닝 STOP + TSP STOP 을 한꺼번에'로 만든다(각각 v1 정지 순서 그대로, 새 판정 없음).",
-         reason="지시 3장 (7)·5장 4단계가 ALL STOP 을 요구. v1 정지 순서를 묶기만 한다.", confirm=True, where="v2/ch12/core.py; v2/ch12/safety_rules.py"),
+                  "지시가 요구한 ALL STOP 은 'CH1 STOP + CH2 STOP + 플라즈마 클리닝 STOP + TSP STOP 을 한꺼번에'로 만든다(각각 v1 정지 순서 그대로, 새 판정 없음). "
+                  "사용자 결정 2026-11-02: 그대로 확정. CH1·CH2·PC·TSP 가 동시에 돌 때(가드가 허용하는 짝 — CH1+CH2·CH1+PC2·CH2+PC1·CH2+TSP·PC2+TSP), "
+                  "하나가 정지 순서 중일 때, 재시작 이어가기 판단 중일 때(아직 판단하지 않은 부분은 이어가지 않고 정지 순서, 이미 이어간 부분은 판단이 끝나는 대로 STOP) "
+                  "ALL STOP 시험을 더했다(test_all_stop.py).",
+         reason="지시 3장 (7)·5장 4단계가 ALL STOP 을 요구. v1 정지 순서를 묶기만 한다.", confirm=False, where="v2/ch12/core.py; v2/ch12/safety_rules.py; v2/ch12/safety.py; v2/ch12/resume.py"),
     dict(id="D06", title="Power Select 코일",
          decision="v1 화면 Power Select 버튼은 SW_POWER_SELECT(코일 215 = M00137)를 쓴다(main.py:1241-1243, device/plc.py:145). 공정 스텝은 v1 대로. "
                   "지시의 'Power Select(SW_RF_SELECT)'와 이름이 다르다 — v1 코드를 따른다.",
@@ -413,7 +416,11 @@ DECISIONS = [
     dict(id='D76', title='PC RF 시작 실패 경로', decision="v1 은 asyncio 취소 경합으로 안쪽 안전 정지가 첫 대기에서 끊김 — v2 는 rf.stop() 요청 + 같은 로그('STOP during RF START …') 뒤 종료 정리가 정지 순서를 맡음.", reason="3단계 플라즈마 클리닝 엔진 작성 중 판단(시험 41)", confirm=True, where="v2/ch12/plasma_cleaning.py; pc_*.py"),
     dict(id='D77', title='PC 직접 OFF(≤100 W) cleanup 5 s 초과', decision='v2 드라이버는 10 s 마감까지 0 W 재시도를 계속(v1 은 끊음) — PLC 이상일 때만 차이.', reason="3단계 플라즈마 클리닝 엔진 작성 중 판단(시험 41)", confirm=True, where="v2/ch12/plasma_cleaning.py; pc_*.py"),
     dict(id='D78', title='PC 강제 0 W·SET OFF 우선순위', decision='worker safety 우선순위(램프다운 쓰기와 같은 줄 — 순서는 v1 FIFO 와 같고, 다른 사용자의 일반 쓰기보다 앞섬).', reason="3단계 플라즈마 클리닝 엔진 작성 중 판단(시험 41)", confirm=True, where="v2/ch12/plasma_cleaning.py; pc_*.py"),
-    dict(id='D79', title='이어가기 확인의 허용 오차(새 규칙)', decision="PC 이어가기 확인은 FWD 가 목표 ±10 %·MFC 압력이 압력 허용 범위 안. 사용자 지시 3장 (6) ③ '기대 상태와 일치'를 판정하려면 허용치가 필요해 정함 — 사용자 확인 필요.", reason="3단계 플라즈마 클리닝 엔진 작성 중 판단(시험 41)", confirm=True, where="v2/ch12/plasma_cleaning.py; pc_*.py"),
+    dict(id="D79", title="이어가기 확인 — 값 허용 오차를 두지 않음(사용자 결정 2026-11-02)",
+         decision="사용자 결정 2026-11-02: 재시작 시점에 파워·유량·압력은 맞춰지는 중일 수 있으므로 값의 허용폭(FWD ±10 %·압력 MFC 허용 범위 등)을 삭제한다. "
+                  "플라즈마 클리닝도 켜짐/꺼짐(RF SET)·GV 인터락·장비 오류 없음만 본다. 목표값(유량·SP4·RF)은 저널대로 다시 쓰고, 그 뒤는 단계의 원래 로직이 판단한다.",
+         reason="사용자 결정(이전: FWD 목표 ±10 %·MFC 압력 허용 범위 — 사용자 확인 필요였음).", confirm=False,
+         where="v2/ch12/resume.py; plasma_cleaning.py; pc_view.py"),
     dict(id='D80', title='PC 이상 동작 그대로', decision='프리플라이트 중 STOP 지워짐(v1 1541), TEST 종료 카드에 이전 실공정 error_* 실림, 강제 SET OFF 는 카메라를 놓지 않음, 프리플라이트 실패로 남은 호스트 기록키를 다음 TEST 종료가 마감할 수 있음.', reason="3단계 플라즈마 클리닝 엔진 작성 중 판단(시험 41)", confirm=True, where="v2/ch12/plasma_cleaning.py; pc_*.py"),
     dict(id='D81', title='cmd_result 를 내는 곳', decision='core 가 아니라 hub.run_command — 로컬 서버·웹 연결·로봇 API 가 같이 쓰는 길 하나. 사유 코드 CORE_NOT_READY·INTERNAL_ERROR 추가.', reason="7단계 웹 연결 작성 중 판단(챔버K 계약 호환)", confirm=False, where="v2/ch12/hub.py; uplink.py; web_schema.py"),
     dict(id='D82', title='챔버12 메시지 선택 필드', decision='hello.chambers, run_*.chamber·owner·recipeRev, event context.chamber·origin, state.chambers{ch1,ch2,pc,tsp}·state.engines, snapshot_summary.runIds — common/messages.py 계약은 그대로(모두 선택 필드). state 최상위 procState 는 BUSY/IDLE·runId null.', reason="7단계 웹 연결 작성 중 판단(챔버K 계약 호환)", confirm=False, where="v2/ch12/hub.py; uplink.py; web_schema.py"),
@@ -427,8 +434,21 @@ DECISIONS = [
     dict(id='D90', title='TSP 예약 저장', decision='v1 은 저장하지 않아 재시작하면 늘 05:00 — v2 는 설정 폴더 tsp_schedule.json 에 저장·복원(끈 예약은 꺼진 채).', reason="3·6단계 작성 중 판단", confirm=True, where="v2/ch12/tsp_schedule.py"),
     dict(id='D91', title='공정 모니터 판정 표본', decision="1초 행이 아니라 MFC 드라이버의 v1 주기(3 s) flow·pressure 이벤트로 판정 — 1초 행이면 '범위 밖 N회'가 v1 의 3배. 카드는 이벤트 monitor_card → 포털 MONITOR 웹훅(DEV_MODE 면 v1 처럼 로그만).", reason="3단계 공정 모니터·재고 DB 작성 중 판단", confirm=True, where="v2/ch12/process_monitor.py; inventory_db.py"),
     dict(id='D92', title='재고 DB 대기', decision='socket.setdefaulttimeout 전역을 바꾸지 않고 3 s 한도로 끊음, 값은 화면 칸 대신 큐 행 params 에. 밖 URL 접속은 prod 만(sim 은 127.0.0.1 가짜 서버, bench 끔).', reason="3단계 공정 모니터·재고 DB 작성 중 판단", confirm=True, where="v2/ch12/process_monitor.py; inventory_db.py"),
-    dict(id='D93', title='이어가기 확인 허용 폭(새 규칙)', decision='전력 목표 ±10 %(최소 1 W, D79 와 같은 폭), 가스: PLC 코일이 저널과 같고 FLOW ON 가스의 잰 유량이 설정 ±10 %(최소 1 sccm), 압력: 저널 때 압력과 SP 목표 사이이거나 둘 중 하나의 MFC 허용 범위 안(압력 제어 전·압력 도달 대기 중이면 안 봄 — sim 에서 압력이 바뀌는 중 오판이 나 넓힘). 사용자 확인 필요.', reason="5단계 저널·이어가기 작성 중 판단(합의된 변경 3장 (6))", confirm=True, where="v2/ch12/journal.py; resume.py; process_view.py"),
-    dict(id='D94', title='플라즈마 클리닝·TSP 는 재시작 뒤 늘 안전 정지', decision="지시 3장 (6) ④ 의 상태 유지 블록 목록에 없어서. pc_view 에는 'process' 단계 확인 함수가 남아 있다(쓰지 않음).", reason="5단계 저널·이어가기 작성 중 판단(합의된 변경 3장 (6))", confirm=True, where="v2/ch12/journal.py; resume.py; process_view.py"),
+    dict(id="D93", title="이어가기 확인 — 켜짐/꺼짐만(사용자 결정 2026-11-02)",
+         decision="사용자 결정 2026-11-02: 확인은 켜짐/꺼짐 상태만 — 파워 출력 ON/OFF·셔터·가스 밸브 코일·Power Select 릴레이·히터 RUN·인터락·장비 오류 없음(히터 워치독·"
+                  "두께 모니터 응답). 전력 ±10 %·가스 유량 ±10 %·압력 범위 확인은 삭제. 목표값은 저널대로 다시 쓰고(쓰기→되읽기 확인) 그 뒤는 블록의 원래 로직(도달 대기·이탈 감시)이 판단한다. "
+                  "지난 저널(1초 전) 뒤에 쓰기를 한 블록이 쓰는 항목은 기대 상태가 아직 못 담았을 수 있어 확인에서 뺀다(window_types).",
+         reason="사용자 결정(이전: 전력 ±10 %·유량 ±10 %·압력 범위 — 사용자 확인 필요였음).", confirm=False,
+         where="v2/ch12/resume.py; journal.py; process_view.py"),
+    dict(id="D94", title="이어가기 통일 — CH1·CH2·플라즈마 클리닝·TSP 같은 규칙(사용자 결정 2026-11-02)",
+         decision="사용자 결정 2026-11-02: 네 가지 모두 같은 규칙으로 이어간다. ① 정지 순서 도중이었다면 정지 순서를 이어서 끝까지(STOP 과 같은 정지 순서, run_end error PROGRAM_RESTART) "
+                  "② 장비 설정 쓰기 도중이었다면 그 블록(PC 는 묶음 gv→ig→가스→SP4→RF, TSP 는 IG/TSP 켜기 단계)의 설정을 처음부터 다시 쓴다 "
+                  "③ 기다리는 중(대기·가스 안정화·메인 증착·히터 유지/도달 대기·TEST·delay 행·클리닝 시간·TSP 사이클 폴링)이면 남은 만큼 이어간다 "
+                  "④ 예외는 로봇 이동 명령(진공·벤트·게이트·척·핀)뿐 — 자동으로 다시 하지 않고 로봇에 오류(D08 E205)로 끝낸다(로봇 서버는 제어 프로그램 응답 없음→E205, "
+                  "실행 도중 죽은 명령 id 는 저널에 '중단됨'으로 남아 같은 id 가 다시 와도 실행하지 않고 E205). 시작 전 단계(프리플라이트·쿨다운)·의도적 종료 표시는 이어가지 않는다. "
+                  "설정: RESUME_ENABLED_CH1·CH2·PC·TSP 와 RESUME_MAX_GAP_S(공통) — 파라미터 표(웹 설정 화면에 자동으로 보임). 크래시 시험을 모든 종류×블록으로 갱신(test_resume.py).",
+         reason="사용자 결정(이전: 플라즈마 클리닝·TSP 는 재시작 뒤 늘 안전 정지).", confirm=False,
+         where="v2/ch12/resume.py; journal.py; process_view.py; plasma_cleaning.py; pc_view.py; pc_steps.py; tsp_engine.py; tsp_cycle.py; robot_api.py; params/core.py"),
     dict(id='D95', title='이어가기 세부', decision="판단 중에는 그 챔버를 busy 로 보고 시작을 RESTART_PENDING 으로 거부. CH2 RF 연속은 램프를 다시 하지 않고 MAINTAINING 으로 받아 마지막 전송값을 다시 씀. RunStats 평균·OES 측정은 재시작 뒤 값만, 히터 SOAK 는 '남은 SOAK' 으로 다시(도달 판정 다시). 드라이버 private 속성을 직접 씀(D88 처럼).", reason="5단계 저널·이어가기 작성 중 판단(합의된 변경 3장 (6))", confirm=True, where="v2/ch12/journal.py; resume.py; process_view.py"),
     dict(id='D96', title='공정 없이 켜졌을 때 펄스 전원', decision='포트를 잡아야 읽히므로 보지 않는다(safety S31 과 같음) — PLC D/A 출력만 정리.', reason="5단계 저널·이어가기 작성 중 판단(합의된 변경 3장 (6))", confirm=True, where="v2/ch12/journal.py; resume.py; process_view.py"),
     dict(id='D97', title='공정 중 PLC 링크 끊김(S16)', decision='v1 그대로 바로 중단하지 않음 — 다음 PLC 명령 실패에서 멈춘다(새 규칙 없음).', reason="4단계 명령 처리·안전 규칙 작성 중 판단", confirm=True, where="v2/ch12/core.py; safety.py; safety_rules.py"),

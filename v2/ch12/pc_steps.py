@@ -28,6 +28,10 @@ from v2.ch12.drivers import mfc_ops
 from v2.ch12.drivers.mfc import GAS_MAP
 
 
+# 재시작 뒤 이어가기(D94) — 순서 안 단계 묶음. io.resume_begin 이 이 중 하나면 그 앞 묶음은 건너뛴다(장비는 이미 그 상태).
+SEQ_ORDER = ("gv_interlock", "ig_base", "gas_select", "sp4_set", "rf_start", "process")
+
+
 class PcCancelled(BaseException):
     """v1 asyncio.CancelledError 자리(일반 except Exception 에 잡히지 않는다)."""
 
@@ -171,7 +175,33 @@ class PcController:
 
     def _sequence(self, p, io) -> None:
         clk = self.clock
+        begin = getattr(io, "resume_begin", None)
+        b = SEQ_ORDER.index(begin) if begin in SEQ_ORDER else 0
+
+        def skip(name: str) -> bool:
+            return SEQ_ORDER.index(name) < b
+        if b:
+            self._log("PC", f"[RESTART] 재시작 뒤 이어감 — '{begin}' 묶음부터 (앞 묶음은 건너뜀)")
+        self._seq_body(p, io, skip)
+
+    def _seq_body(self, p, io, skip) -> None:
+        clk = self.clock
         # 1) GV 인터락 → OPEN_SW → 램프
+        if skip("gv_interlock"):
+            pass
+        else:
+            self._seq_gv(p, io, clk)
+        if not skip("ig_base"):
+            self._seq_ig(p, io)
+        if not skip("gas_select"):
+            self._seq_gas(p, io, clk)
+        if not skip("sp4_set"):
+            self._seq_sp4(p, io)
+        if not skip("rf_start"):
+            self._seq_rf(p, io)
+        self._seq_process(p, io, clk)
+
+    def _seq_gv(self, p, io, clk) -> None:
         self.step = "gv_interlock"
         self._log("PLC", "GV 인터락 확인")
         ok = io.plc_check_gv_interlock()
@@ -186,6 +216,8 @@ class PcController:
         self._log("PLC", f"GV OPEN_LAMP={lamp}")
         if not lamp:
             raise RuntimeError("GV OPEN_LAMP가 TRUE가 아님(오픈 실패?)")
+
+    def _seq_ig(self, p, io) -> None:
         # 2) IG base 대기
         self.step = "ig_base"
         interval_ms = int(p.ig_interval_ms or 10_000)
@@ -198,6 +230,8 @@ class PcController:
         if not box.value:
             raise RuntimeError("Base pressure not reached (IG API)")
         io.show_state("Base pressure OK")
+
+    def _seq_gas(self, p, io, clk) -> None:
         # 3) 가스·SP4
         self._log("STEP", "3: Gas/Pressure 설정 시작")
         self.step = "gas_select"
@@ -231,6 +265,8 @@ class PcController:
                 raise
         else:
             self._log("MFC", "FLOW_SET_ON 스킵(flow=0.0)")
+
+    def _seq_sp4(self, p, io) -> None:
         self.step = "sp4_set"
         self._log("MFC", f"SP4_SET -> {p.sp4_setpoint_mTorr:.2f} mTorr")
         try:
@@ -264,6 +300,8 @@ class PcController:
             self._log("MFC", msg)
             raise RuntimeError(msg)
         self._log("MFC", "SP4 작업압 안정화 완료")
+
+    def _seq_rf(self, p, io) -> None:
         # 4) RF
         self.step = "rf_start"
         self._log("RF", f"RF Power 적용: {p.rf_power_w:.1f} W")
@@ -277,6 +315,8 @@ class PcController:
             self._log("RF", f"RF START 실패: {e!r}")
             raise
         self._log("RF", "RF START OK")
+
+    def _seq_process(self, p, io, clk) -> None:
         # 5) 공정 카운트다운
         self.step = "process"
         io.show_state(f"PROCESS {p.process_time_min:.1f} min")
