@@ -372,21 +372,25 @@ def test_log_between_runs_goes_to_next_file(tmp_path):
 
 
 def test_abort_journal_and_snapshot_fields(env):
-    """abort(안전 규칙 — v2): 예외 경로 '[ERROR] 실행 실패: RuntimeError('abort: …')'·오류 카드. 저널: 운전 중 resumable False,
-    resume_checks 는 ok False(이어가기 안 함 — 상태 유지 블록 없음). snapshot_fields 는 1초 행 열(ENGINE_COLUMNS)만."""
+    """abort(안전 규칙 — v2): 예외 경로 '[ERROR] 실행 실패: RuntimeError('abort: …')'·오류 카드. 저널(사용자 결정 2026-11-02 D94): 운전 중
+    resume_mode — 켜기 쓰기 도중 rewrite·폴링 대기 중 hold·STOP/abort 요청 뒤나 정리 단계 stop_sequence. snapshot_fields 는 1초 행 열만."""
     c, rig, rs, eng = env
     assert eng.resume_checks(eng.state_for_journal()) == [] and not eng.abort("S99")
     rig.chambers["ch1"].pressure_override = 1.0e-5
     assert eng.start({"target": "2.5e-7", "cycles": "2"})["ok"]
     run_until(rig, lambda: eng.state()["phase"] == "tsp_on")
     j = eng.state_for_journal()
-    assert j["busy"] and j["phase"] == "tsp_on" and j["resumable"] is False and j["cycles"] == 2
+    assert j["busy"] and j["phase"] == "tsp_on" and j["cycles"] == 2
+    assert j["resume_mode"] in ("rewrite", "hold") and j["resumable"] is True       # 켜는 중(rewrite) 또는 폴링 대기 중(hold)
     chk = eng.resume_checks(j)
-    assert len(chk) == 1 and chk[0]["name"] == "tsp.phase" and chk[0]["ok"] is False
+    assert len(chk) == 1 and chk[0]["name"] == "tsp.phase" and chk[0]["ok"] is True
     f = eng.snapshot_fields()
     assert set(f) <= SF.ENGINE_COLUMNS and f["tsp.proc.block_no"] == 1 and f["tsp.proc.block_count"] == 2
-    assert all(TE.PHASES[p]["resumable"] is False for p in TE.PHASES)
+    assert {p: TE.PHASES[p]["resume"] for p in TE.PHASES} == {"idle": "none", "prepare": "rewrite", "ig_on": "rewrite",
+                                                              "tsp_on": "rewrite", "tsp_off": "rewrite", "cleanup": "stop",
+                                                              "finished": "stop", "closing": "stop"}
     assert eng.abort("S99 RF reflected")
+    assert eng.state_for_journal()["resume_mode"] == "stop_sequence"               # 중단 요청 뒤 — 정지 순서 도중
     run_until_idle(rig, eng)
     lg = logs(eng)
     assert lg[lg.index("[TSP] 이상 중단 요청: S99 RF reflected") + 1] == "[TSP] run() 취소됨"

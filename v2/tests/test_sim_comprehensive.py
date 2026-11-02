@@ -657,6 +657,7 @@ P_CH2 = dict(P2, process_time=0.5, process_note="rs2")
 
 
 def test_restart_resume_and_safe_stop(tmp_path):
+    """CH1(메인 대기 — 남은 만큼 이어감)·CH2(파워 켜기 쓰기 도중 — 그 블록 설정을 처음부터)가 같이 죽었다 살아난다."""
     rig = RR.boot(tmp_path)
     rig2 = None
     try:
@@ -688,14 +689,15 @@ def test_restart_resume_and_safe_stop(tmp_path):
         assert RR.ends(f1) == [("done", None)] and f1.last_result["actual_process_time_min"] == pytest.approx(1.0, abs=0.02)
         r = RR.resumed(f1)
         assert len(r) == 1 and r[0]["block"]["type"] == "main" and "복구됨(공백" in r[0]["detail"]
-        assert d2["result"] == "stopped" and {c[0] for c in d2["checks"] if not c[1]} == {"resumable"}, d2["checks"]
-        assert RR.ends(f2) == [("error", "PROGRAM_RESTART")] and f2.run_id == rid2 and not RR.resumed(f2)
+        # 사용자 결정 2026-11-02(D94): CH2 는 '파워 켜기' 블록의 장비 설정 쓰기 도중에 죽었다 — 그 블록의 설정을 처음부터 다시 써서 이어간다
+        assert d2["result"] == "resumed" and d2["mode"] == "rewrite" and f2.run_id == rid2, d2["checks"]
+        assert not [c for c in d2["checks"] if not c[1]]
+        assert RR.ends(f2) == [("done", None)] and len(RR.resumed(f2)) == 1
         v = rig2.journal.last_view
-        assert v.last("plc.main_shutter_2_sw") is False and v.last("plc.main_2_gas_sw") is False
+        assert v.last("plc.main_shutter_2_sw") is False and v.last("plc.main_2_gas_sw") is False      # 끝 정지가 닫음
         assert not rig2.sims["ch2.dcpulse"].out and not rig2.sims["ch1.rfpulse"].out
         ev = [m["data"] for m in rig2.hub.recent if m["type"] == "run_end"]
-        assert {(d["chamber"], d["result"], d["reasonCode"]) for d in ev} >= {("ch1", "done", None),
-                                                                              ("ch2", "error", "PROGRAM_RESTART")}
+        assert {(d["chamber"], d["result"], d["reasonCode"]) for d in ev} >= {("ch1", "done", None), ("ch2", "done", None)}
         f1.writer.flush(10)
         txts = sorted((tmp_path / "logs" / "CH1").glob("CH1_rs1_*.txt"))
         assert len(txts) == 1 and "[RESTART] 복구됨(공백" in txts[0].read_text(encoding="utf-8")

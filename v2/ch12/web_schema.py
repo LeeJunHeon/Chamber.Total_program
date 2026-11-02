@@ -40,6 +40,7 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
      benchOk), eventKinds 에 thickness/window(상세). state.spectra(OES 스펙트럼 — 묶음 정의 밖)는 hub.py.
   4  빠진 v1 설정(gap) — params 에 쓰기 한도 IG_DRAIN_TIMEOUT_S·MFC_DRAIN_TIMEOUT_S·DCP_DRAIN_TIMEOUT_S·RFPULSE_DRAIN_TIMEOUT_S
      (v1 writer.drain 한도 — 이전에는 crossRules.dropped)
+  5  사용자 결정 2026-11-02(D94) — params 에 RESUME_ENABLED_CH1·CH2·PC·TSP(RESUME_ENABLED 는 네 개로 나뉨) 추가, RESUME_MAX_GAP_S 설명(공통)
 """
 from __future__ import annotations
 
@@ -54,7 +55,7 @@ from v2.ch12 import snapshot_fields as SF
 from v2.ch12 import web_blocks as WB
 from v2.ch12.hub import optional_module
 
-EXPORT_VERSION = 4
+EXPORT_VERSION = 5
 
 # 웹이 받는 공정 이벤트(엔진이 system.emit(source="process:<c>", kind, event=data) 로 내는 것 — hub 가 run_* 메시지로 바꾼다)
 EVENTS: tuple = (
