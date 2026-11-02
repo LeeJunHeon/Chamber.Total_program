@@ -351,7 +351,7 @@ def bg_loop(g):
 
 def ensure_off(g):
     """IG_OFF 명령 — SIG 0 을 보낸 뒤 RDI 가 'IG OFF' 인지 되읽어 확인(사용자 결정 2026-11-02 D36). 다르면 SIG 0 을 다시
-    (IG_REWRITE_MAX 회), 그래도 다르면 OpFailed(READBACK_MISMATCH). IG_READBACK_ENABLED=false 면 v1 과 같게 보내기만."""
+    (IG_REWRITE_MAX 회), 그래도 다르면 OpFailed(VERIFY_MISMATCH). IG_READBACK_ENABLED=false 면 v1 과 같게 보내기만."""
     yield from off_best_effort(g, 300)
     if not bool(g.c("IG_READBACK_ENABLED", True)):
         return
@@ -370,7 +370,7 @@ def ensure_off(g):
         g.status(f"[IG_OFF 되읽기 불일치] 기대=IG OFF, 응답={line!r} (시도 {n + 1}/{rewrites + 1})")
         if n < rewrites:
             yield from off_best_effort(g, 300)
-    raise OpFailed("READBACK_MISMATCH", f"IG_OFF 되읽기 확인 실패 — 기대 IG OFF, 응답 {last!r} (다시 쓰기 {rewrites}회)")
+    raise OpFailed("VERIFY_MISMATCH", f"IG_OFF 되읽기 확인 실패 — 기대 IG OFF, 응답 {last!r} (다시 쓰기 {rewrites}회)")
 
 
 def ensure_on(g):

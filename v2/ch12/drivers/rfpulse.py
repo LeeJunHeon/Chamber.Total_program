@@ -453,7 +453,7 @@ class RfPulseDriver(RfpStopPollMixin):
                             return fail("PULSE FREQ 다시 쓰기 실패" + csr_txt(cb[0] if cb else None))
             if mism is not None:
                 self._emit("command_failed", f"START_SEQUENCE: RF Pulse {mism} — 다시 쓰기 {rew}회 뒤에도 되읽기 불일치",
-                           reason="READBACK_MISMATCH", cmd="START_SEQUENCE")
+                           reason="VERIFY_MISMATCH", cmd="START_SEQUENCE")
                 return False
         if stopped():
             return False

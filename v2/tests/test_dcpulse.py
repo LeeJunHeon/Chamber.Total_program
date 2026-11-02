@@ -352,7 +352,7 @@ def test_unused_v1_setting_apis_bytes():
 
 
 def test_freq_readback_rewrites_up_to_configured_times_then_fails_with_reason():
-    """사용자 결정 2026-11-02 D36 — 쓰기 뒤 되읽기가 다르면 DCP_REWRITE_MAX 회까지 다시 쓰고, 그래도 다르면 READBACK_MISMATCH."""
+    """사용자 결정 2026-11-02 D36 — 쓰기 뒤 되읽기가 다르면 DCP_REWRITE_MAX 회까지 다시 쓰고, 그래도 다르면 VERIFY_MISMATCH."""
     assert CFG["DCP_REWRITE_MAX"] == 3 and CFG["DCP_READBACK_ENABLED"] is True
     r = Rig()
     r.sim.ignore_freq_n = 2                                          # 처음 2번은 ACK 만
@@ -364,5 +364,5 @@ def test_freq_readback_rewrites_up_to_configured_times_then_fails_with_reason():
     res = r.start(100.0, freq=50, off_time_us=5.0)
     assert res[1] is False
     fails = [e for e in r.ev("command_failed") if e.cmd == "PULSE_FREQ"]
-    assert fails and fails[-1].reason == "READBACK_MISMATCH" and "다시 쓰기 1회" in fails[-1].detail
+    assert fails and fails[-1].reason == "VERIFY_MISMATCH" and "다시 쓰기 1회" in fails[-1].detail
     r.done()

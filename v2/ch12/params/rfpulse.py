@@ -30,7 +30,7 @@ PARAMS: tuple = (
     p("RFPULSE_READBACK_ENABLED", _G, "쓰기 되읽기 확인", "", B, True, src="v2(사용자 결정 2026-11-02 D50)",
       desc="값을 바꾸는 명령(SETPOINT·FREQ·DUTY·PULSING·제어 모드) 뒤 되읽기 질의(report)로 확인. 끄면 v1 과 같게 CSR 만"),
     p("RFPULSE_REWRITE_MAX", _G, "다시 쓰기 횟수", "회", I, 3, 0, 10, src="v2(사용자 결정 2026-11-02 D50)",
-      desc="되읽기가 기대와 다르면 다시 쓰는 최대 횟수. 그래도 다르면 사유 코드 READBACK_MISMATCH"),
+      desc="되읽기가 기대와 다르면 다시 쓰는 최대 횟수. 그래도 다르면 사유 코드 VERIFY_MISMATCH"),
     p("RFPULSE_REWRITE_GAP_MS", _G, "쓴 뒤 되읽기까지 간격", "ms", I, 100, 0, 5000, src="v2(사용자 결정 2026-11-02 D50)",
       desc="명령을 쓴 뒤 되읽기 질의까지(그리고 다시 쓰기 사이)"),
     p("ACK_TIMEOUT_MS", _G, "설정 명령 응답 한도", "ms", I, 2000, 100, 60000, src=f"{_CC}:81", desc="RF ON/OFF 는 max(이 값, 2500)"),

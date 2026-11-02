@@ -19,7 +19,7 @@ main 이 끈 경로라 v1 운영에서 보내지 않는다 — DEV-096).
   (사용자 결정 2026-11-02 D36 — 번갈아 읽기·stale 없음). 제어 동작(op)의 다음 입출력이 곧이거나 막 끝났으면(0.3 s) 양보한다
   (v1 폴링도 비-폴링 명령에 양보 — device/mfc.py:1554-1557) — 그때 행에는 제어가 읽은 R60·R5 가 1 s 안의 값이면 들어간다.
 쓰기 되읽기(D36): FLOW_SET(R6{4+ch})·FLOW_ON/OFF(R69 비트)·VALVE(R6 위치)·SPn_SET(R{n})·SPn_ON(R7) 은 쓴 뒤 MFC_REWRITE_GAP_MS 뒤 되읽어
-  확인하고, 다르면 MFC_REWRITE_MAX 회까지 다시 쓰며, 그래도 다르면 OpFailed(READBACK_MISMATCH). ZEROING(Z1·L{4+ch}1)은 되읽을 질의가 없어
+  확인하고, 다르면 MFC_REWRITE_MAX 회까지 다시 쓰며, 그래도 다르면 OpFailed(VERIFY_MISMATCH). ZEROING(Z1·L{4+ch}1)은 되읽을 질의가 없어
   v1 과 같게 보낸 것으로 확정. MFC_READBACK_ENABLED=false 면 v1 과 같게 확인 없이 확정.
   v1 의 '폴링' 판정(유량 이탈 경고·flow/pressure 이벤트 → 공정 기록·모니터)은 v1 주기(MFC_POLLING_INTERVAL_MS 3 s, 폴링 사용자가
   있을 때만, 가스/압력 마스크대로) 그대로 — 1초 읽기 값 중 그 주기에 처음 온 값을 쓴다.

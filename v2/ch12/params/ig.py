@@ -41,7 +41,7 @@ PARAMS: tuple = (
     _g("IG_READBACK_ENABLED", "IG 쓰기 되읽기 확인", "", B, True, src="v2(사용자 결정 2026-11-02 D36)",
        desc="SIG 0(소등) 뒤 RDI 로 'IG OFF' 를 되읽어 확인(SIG 1 은 장비 'OK' 응답이 확인). 끄면 v1 과 같게 확인 없이 끝"),
     _g("IG_REWRITE_MAX", "IG 다시 쓰기 횟수", "회", I, 3, 0, 10, src="v2(사용자 결정 2026-11-02 D36)",
-       desc="되읽기가 기대와 다르면 SIG 0 을 다시 쓰는 최대 횟수. 그래도 다르면 사유 코드 READBACK_MISMATCH"),
+       desc="되읽기가 기대와 다르면 SIG 0 을 다시 쓰는 최대 횟수. 그래도 다르면 사유 코드 VERIFY_MISMATCH"),
     _g("IG_REWRITE_GAP_MS", "IG 쓴 뒤 되읽기까지 간격", "ms", I, 500, 0, 10000, src="v2(사용자 결정 2026-11-02 D36)",
        desc="SIG 0 을 쓴 뒤 RDI 되읽기까지(그리고 다시 쓰기 사이)"),
     _g("IG_SKIP_ECHO", "IG 에코 줄 버림", "", B, True, src=f"{_S}:71;{_C}:150;device/ig.py:772", note=_W),

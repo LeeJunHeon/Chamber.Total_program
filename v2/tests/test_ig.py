@@ -219,7 +219,7 @@ def test_ig_off_readback_confirms_and_fails_with_reason():
     r.call(r.d.ensure_on)
     r.sim.rdi_script = ["1.0x10e-5"]                     # 장비가 꺼지지 않음(늘 압력 값)
     res = r.call(r.d.ensure_off)
-    assert res[1] == "READBACK_MISMATCH" and "IG_OFF 되읽기 확인 실패" in res[2]
+    assert res[1] == "VERIFY_MISMATCH" and "IG_OFF 되읽기 확인 실패" in res[2]
     assert r.sim.commands_seen().count("SIG 0") == 3        # 쓰기 1 + 다시 쓰기 2
     r.done()
 

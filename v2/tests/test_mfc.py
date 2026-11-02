@@ -204,10 +204,10 @@ def test_readback_mismatch_rewrites_then_fails_with_reason_code():
     r.sim.ignore_writes = {"Q1"}                                            # 장비가 값을 받지 않음
     t0 = r.c.monotonic()
     res = r.call(r.d.set_flow, 1, 10.0)
-    assert res[0] == "FLOW_SET" and res[1] == "READBACK_MISMATCH"
+    assert res[0] == "FLOW_SET" and res[1] == "VERIFY_MISMATCH"
     assert res[2].startswith("FLOW_SET ch1 되읽기 확인 실패 — 기대 10.00 %FS")
     assert r.sent(t0) == ["Q1 10.0", "R65", "Q1 10.0", "R65", "Q1 10.0", "R65"]   # 쓰기 1 + 다시 쓰기 2
-    assert r.kinds("command_failed")[-1].reason == "READBACK_MISMATCH"
+    assert r.kinds("command_failed")[-1].reason == "VERIFY_MISMATCH"
     assert sum("되읽기 불일치" in e.detail for e in r.kinds("status")) == 3
     assert r.d.last_setpoints[1] == 0.0                                     # 확정하지 않음
     r.done()

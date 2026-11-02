@@ -517,7 +517,7 @@ class DcpOpsMixin:
                     yield Sleep(rew_gap)
             if not applied:
                 self._failed("PULSE_FREQ", f"쓰기 ACK 후에도 미적용 지속 (요청 {want}kHz, 다시 쓰기 {rew}회) — 장비 마스터/패널 상태 점검 필요",
-                             phase="prepare", reason="READBACK_MISMATCH")
+                             phase="prepare", reason="VERIFY_MISMATCH")
                 return False
         if want_off_raw is not None:
             off_applied, got_raw = False, None

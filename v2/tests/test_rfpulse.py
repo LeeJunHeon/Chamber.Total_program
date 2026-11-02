@@ -143,7 +143,7 @@ def test_readback_of_freq_duty_rewrites_then_fails_with_reason():
     reason, ok = r.call(r.d.start_pulse_process, 100.0, 1000, 50)
     assert ok is False
     fails = [e for e in r.ev("command_failed") if e.cmd == "START_SEQUENCE"]
-    assert fails and fails[-1].reason == "READBACK_MISMATCH" and "다시 쓰기 2회" in fails[-1].detail
+    assert fails and fails[-1].reason == "VERIFY_MISMATCH" and "다시 쓰기 2회" in fails[-1].detail
     cmds = [bytes.fromhex(f)[1] for f in r.sent()]
     assert cmds.count(96) == 3 and cmds.count(93) == 3                            # DUTY·FREQ: 쓰기 1 + 다시 쓰기 2
     assert 2 not in cmds                                                          # RF ON 은 나가지 않음

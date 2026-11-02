@@ -13,7 +13,7 @@ import re
 
 from v2.ch12.drivers.line_ops import OpFailed, Sleep, Until
 
-READBACK_MISMATCH = "READBACK_MISMATCH"      # 사유 코드 — 되읽기가 끝내 기대와 다름(사용자 결정 2026-11-02 D36)
+VERIFY_MISMATCH = "VERIFY_MISMATCH"      # 사유 코드 — 되읽기가 끝내 기대와 다름(사용자 결정 2026-11-02 D36)
 
 PENDING = "_PENDING"                 # FLOW_ON: 결과는 안정화 작업이 낸다
 STAB_MAX_ATTEMPTS = 180              # device/mfc.py:1659 — 가스 안정화 최대 3분(채널별, 코드 고정값)
@@ -57,7 +57,7 @@ def readback_on(d) -> bool:
 def write_verified(d, cmd: str, tag: str, fail_prefix: str, verify: Optional[Verify], *, gap_ms=None,
                    min_confirm_s: float = 0.0, withdraw: bool = True, before_send: Optional[Callable[[], None]] = None):
     """값을 바꾸는 명령 공통(사용자 결정 2026-11-02 D36): 쓰기 → (확정 대기) → 되읽기 확인 → 다르면 다시 쓰기
-    (MFC_REWRITE_MAX 회, 쓴 뒤 MFC_REWRITE_GAP_MS 기다려 되읽기) → 그래도 다르면 OpFailed(READBACK_MISMATCH).
+    (MFC_REWRITE_MAX 회, 쓴 뒤 MFC_REWRITE_GAP_MS 기다려 되읽기) → 그래도 다르면 OpFailed(VERIFY_MISMATCH).
     되읽기 질의가 없는 명령은 verify=None — v1 과 같게 '실제로 보냈다'가 확정(devices.py READBACK_NONE)."""
     t_enq = d.clock.monotonic()
     if before_send:
@@ -84,7 +84,7 @@ def write_verified(d, cmd: str, tag: str, fail_prefix: str, verify: Optional[Ver
             r2 = yield d.send(cmd, f"[RE-{verify.label}]", gap_ms, withdraw)
             if r2[0] != "sent":
                 raise OpFailed(r2[2], f"{fail_prefix} {r2[1]}".strip())
-    raise OpFailed(READBACK_MISMATCH, f"{verify.label} 되읽기 확인 실패 — 기대 {verify.want}, 응답 {last!r} (다시 쓰기 {rewrites}회)")
+    raise OpFailed(VERIFY_MISMATCH, f"{verify.label} 되읽기 확인 실패 — 기대 {verify.want}, 응답 {last!r} (다시 쓰기 {rewrites}회)")
 
 
 _NUM = r"([+\-]?\d+(?:\.\d+)?)"

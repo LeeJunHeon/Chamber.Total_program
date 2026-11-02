@@ -79,7 +79,7 @@ def test_address_tables_match_v1():
 # ───────── v1 골든과 같은 PDU ─────────
 @pytest.mark.parametrize("case", SIMPLE, ids=[f"{c['name']}{c['args']}" for c in SIMPLE])
 def test_pdus_match_v1_golden(case):
-    r = PlcRig()
+    r = PlcRig(cfg={"PLC_READBACK_ENABLED": False})       # v1 PDU 와 같게 — 되읽기(FC3/FC1)는 아래 전용 시험
     r.sim.forced_regs.update(FORCED)
     r.sim.coils[203] = True
     t0 = r.c.monotonic()
@@ -477,4 +477,24 @@ def test_connect_failure_diag_classification():
     assert r.d.diag_text().startswith("접속 거부(RST, errno=111) 192.168.1.2:502")
     r.after(7.0)
     assert any(e.kind == "connect_failed" and "분류=접속 거부" in e.detail for e in r.events)
+    r.done()
+
+
+def test_power_write_readback_confirms_rewrites_and_fails_with_reason():
+    """사용자 결정 2026-11-02 D36 — DAC 레지스터·DCV_SET 코일 쓰기 뒤 되읽기, 다르면 PLC_REWRITE_MAX 회 다시 쓰기, 그래도 다르면 VERIFY_MISMATCH."""
+    r = PlcRig()
+    t0 = r.c.monotonic()
+    res = r.call(r.d.power_write, 100.0, write_idx=0)
+    assert res.status == Status.OK
+    assert [p.hex()[:2] for p in r.pdus(t0)] == ["06", "03"]                   # 쓰기 FC6 → 되읽기 FC3
+    t1 = r.c.monotonic()
+    assert r.call(r.d.power_enable, True, set_idx=0).status == Status.OK
+    assert [p.hex()[:2] for p in r.pdus(t1)] == ["05", "01"]                   # 쓰기 FC5 → 되읽기 FC1
+    r.done()
+    r = PlcRig(cfg={"PLC_REWRITE_MAX": 2})
+    r.sim.forced_regs.update({4: 7})                                           # 장비가 값을 받지 않고 7 을 돌려줌
+    t0 = r.c.monotonic()
+    res = r.call(r.d.power_write, 100.0, write_idx=0)
+    assert res.status == Status.FAIL and res.reason == "VERIFY_MISMATCH"
+    assert [p.hex()[:2] for p in r.pdus(t0)] == ["06", "03", "06", "03", "06", "03"]      # 쓰기 1 + 다시 쓰기 2
     r.done()

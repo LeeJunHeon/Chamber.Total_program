@@ -16,7 +16,7 @@ v1 device/ig.py(AsyncIG)를 끝까지 읽고 다시 쓴 것(import 하지 않음
 1초 읽기(합의된 변경): v1 은 공정 중·베이스 대기 중에만 10 s 마다 RDI. v2 는 매 tick RDI 하나 — 간격 IG_GAP_MS 기본 200 ms
   (사용자 결정 2026-11-02 D36: IG 기종·매뉴얼 미확인이라 v1 의 1000 ms 대신 매 tick 읽히는 값으로, bench 에서 확인 — stale 없음).
 쓰기 되읽기(D36): SIG 1 은 장비의 'OK' 응답이 확인이고, SIG 0(IG_OFF 명령) 은 쓴 뒤 IG_REWRITE_GAP_MS 뒤 RDI 가 'IG OFF' 인지 되읽어
-  확인한다(다르면 IG_REWRITE_MAX 회까지 SIG 0 을 다시, 그래도 다르면 READBACK_MISMATCH). 정리(cleanup)·베이스 대기 정리의 SIG 0 은
+  확인한다(다르면 IG_REWRITE_MAX 회까지 SIG 0 을 다시, 그래도 다르면 VERIFY_MISMATCH). 정리(cleanup)·베이스 대기 정리의 SIG 0 은
   최선 전송이라 v1 과 같게 되읽지 않는다.
   v1 판정(베이스 도달·재점등·시간 초과)과 pressure 이벤트는 v1 주기의 자기 RDI 로(worker 안 op). 상태를 바꾸는 명령(SIG 1·SIG 0)은
   v1 과 같은 계기에서만. 점등 뒤 첫 RDI 지연 동안은 1초 읽기도 보내지 않는다(품질 suppressed).

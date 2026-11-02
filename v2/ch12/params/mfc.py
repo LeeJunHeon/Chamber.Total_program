@@ -43,7 +43,7 @@ PARAMS: tuple = (
        desc="값을 바꾸는 명령(FLOW_SET·FLOW_ON/OFF·밸브·SPn_SET·SPn_ON) 뒤 되읽기 질의로 확인(꺼면 v1 과 같게 확인 없이 확정). "
             "R64~R69·R1~R4·R6·R7 응답 형식이 현장에서 다르면 bench 에서 끄고 보고"),
     _m("MFC_REWRITE_MAX", "MFC 다시 쓰기 횟수", "회", I, 3, 0, 10, src="v2(사용자 결정 2026-11-02 D36)",
-       desc="되읽기가 기대와 다르면 같은 명령을 다시 쓰는 최대 횟수. 그래도 다르면 사유 코드 READBACK_MISMATCH 로 실패"),
+       desc="되읽기가 기대와 다르면 같은 명령을 다시 쓰는 최대 횟수. 그래도 다르면 사유 코드 VERIFY_MISMATCH 로 실패"),
     _m("MFC_REWRITE_GAP_MS", "MFC 쓴 뒤 되읽기까지 간격", "ms", I, 300, 0, 5000, src="v2(사용자 결정 2026-11-02 D36)",
        desc="명령을 쓴 뒤 되읽기 질의까지(그리고 다시 쓰기 사이) 기다리는 시간 — 장비가 값을 반영할 시간"),
     _m("MFC_ALLOW_NO_REPLY_DRAIN_MS", "MFC 응답 없는 명령 뒤 흡수", "ms", I, 80, 0, 1000,

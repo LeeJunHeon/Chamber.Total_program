@@ -27,6 +27,11 @@ class CommandBlocked(Exception):
     reason = "COMMAND_BLOCKED"
 
 
+class VerifyMismatch(Exception):
+    """쓰기 뒤 되읽기가 다시 쓰기 뒤에도 기대와 다름(사용자 결정 2026-11-02 D36). 연결 이상이 아니다."""
+    reason = "VERIFY_MISMATCH"
+
+
 class ReadTimeout(Exception):
     def __init__(self, partial: bytes = b"") -> None:
         super().__init__(f"read timeout (partial {len(partial)} bytes)")
