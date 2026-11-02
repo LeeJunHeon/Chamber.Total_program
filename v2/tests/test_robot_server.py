@@ -517,7 +517,9 @@ def test_cli_runs_as_separate_program(tmp_path):
                    encoding="utf-8")
     p = subprocess.Popen([sys.executable, "-m", "v2.robot_server", "--config", str(cfg), "--port", str(port),
                           "--api-port", str(api_port), "--log-root", str(tmp_path / "logs"), "--fake-api"],
-                         cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8")
+                         cwd=str(ROOT), stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, encoding="utf-8",
+                         # 시험이 백그라운드(nohup … &)로 돌면 SIGINT 무시가 상속돼 자식 파이썬이 Ctrl+C 핸들러를 못 만든다 — 기본으로 복원
+                         preexec_fn=(lambda: signal.signal(signal.SIGINT, signal.SIG_DFL)) if hasattr(os, "fork") else None)
     try:
         s = None
         for _ in range(100):
