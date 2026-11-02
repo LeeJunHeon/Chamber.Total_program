@@ -65,11 +65,13 @@ def test_factor_and_material_save_reload(tmp_path):
 
 def test_load_warnings_logged_at_start(tmp_path):
     (tmp_path / "thickness_factors_ch2.json").write_text("{ broken", encoding="utf-8")
-    r = Rig(tmp_path, factors=False, cfg={"CH2_THICKNESS_DONE_CONSECUTIVE": 0})
+    from v2.common.paramdef import ConfigRangeError
+    with pytest.raises(ConfigRangeError):                      # 범위 밖(0)은 v1 처럼 1 로 고쳐 쓰지 않고 거부(D11)
+        Rig(tmp_path / "bad", factors=False, cfg={"CH2_THICKNESS_DONE_CONSECUTIVE": 0})
+    r = Rig(tmp_path, factors=False)
     side = [m for _s, m in r.side]
     assert side[0] == "⚠ Factor 파일: Factor 파일을 읽을 수 없음(thickness_factors_ch2.json) — 빈 표로 시작: " \
                       "JSONDecodeError('Expecting property name enclosed in double quotes: line 1 column 3 (char 2)')"
-    assert "⚠ 두께 판정 설정: THICKNESS_DONE_CONSECUTIVE=0 범위(1~10) 밖 → 1" in side
     assert (tmp_path / "thickness_materials.json").exists() and len(r.e.materials) == 99   # 없으면 v1 기본 99종 생성
 
 

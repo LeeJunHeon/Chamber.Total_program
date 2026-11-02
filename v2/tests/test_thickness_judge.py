@@ -72,12 +72,18 @@ def test_params_from_cfg_ch2_done_consecutive_is_2_and_ch1_is_1():
 
 
 def test_params_clamp_and_format_like_v1():
-    """lib/thickness_config.py:69-82 — bool·글자는 형식 오류(기본값), 범위 밖은 클램프, done_consecutive 정수."""
-    p, w = judge_params({"CH2_THICKNESS_DONE_CONSECUTIVE": 20, "CH2_THICKNESS_STALE_S": True,
-                         "CH2_THICKNESS_ZERO_CONFIRM_S": "x", "THICKNESS_JUMP_MIN_NM": 0.01}, "ch2")
+    """lib/thickness_config.py:69-82 — v1 은 bool·글자를 형식 오류(기본값), 범위 밖을 클램프했다. 사용자 결정 2026-11-02(D11): 둘 다 거부.
+    범위 안 값은 그대로 읽고 done_consecutive 는 정수."""
+    from v2.common.paramdef import ConfigRangeError
+    for bad in ({"CH2_THICKNESS_DONE_CONSECUTIVE": 20}, {"CH2_THICKNESS_STALE_S": True}, {"CH2_THICKNESS_ZERO_CONFIRM_S": "x"},
+                {"THICKNESS_JUMP_MIN_NM": 0.01}):
+        with pytest.raises(ConfigRangeError):
+            judge_params(bad, "ch2")
+    p, w = judge_params({"CH2_THICKNESS_DONE_CONSECUTIVE": 10, "CH2_THICKNESS_STALE_S": 20.0,
+                         "CH2_THICKNESS_ZERO_CONFIRM_S": 7, "THICKNESS_JUMP_MIN_NM": 0.1}, "ch2")
     assert p.done_consecutive == 10 and isinstance(p.done_consecutive, int)
-    assert p.stale_s == 10.0 and p.zero_confirm_s == 5.0 and p.jump_min_nm == 0.1     # 공통 키도 읽는다
-    assert len(w) == 4 and any("형식 오류" in x for x in w) and any("범위(1~10) 밖 → 10" in x for x in w)
+    assert p.stale_s == 20.0 and p.zero_confirm_s == 7.0 and p.jump_min_nm == 0.1     # 공통 키도 읽는다
+    assert w == []
 
 
 # ═══════════════════════ 종료 규칙(v1 :78-148) ═══════════════════════

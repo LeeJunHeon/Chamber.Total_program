@@ -93,6 +93,7 @@ class Recorder:
         self.export_pause_s = max(0.0, float(export_pause_s))
         self.export_busy_poll_s = max(0.01, float(export_busy_poll_s))
         self._deferred = threading.Event()                # 공정·운전 중이라 내보내기가 기다리는 중
+        self._bg = threading.local()                       # 내보내기 스레드 안에서만 '끝나는 중이면 멈춤'을 따른다(직접 부르는 export_csv 는 끝까지)
         self.export_deferrals = 0                         # 미룬 횟수(진단·시험)
         self.exported_days: "collections.deque[str]" = collections.deque(maxlen=ERRORS_KEEP)
         self.blackbox_files: "collections.deque[Path]" = collections.deque(maxlen=100)
@@ -215,6 +216,7 @@ class Recorder:
 
     def _export_old(self, day: str) -> None:
         _lower_thread_priority()                           # 낮은 우선순위(D319)
+        self._bg.on = True
         try:
             self.export_csv(day)
         except ExportStopped:
@@ -283,11 +285,13 @@ class Recorder:
                 self.export_deferrals += 1
                 first = False
             self._deferred.set()
-            if self._stop.wait(self.export_busy_poll_s):
+            if self._stop.wait(self.export_busy_poll_s) and getattr(self._bg, "on", False):
                 self._deferred.clear()
                 raise ExportStopped()
+            if self._stop.is_set() and not getattr(self._bg, "on", False):
+                time.sleep(self.export_busy_poll_s)                       # 직접 부른 내보내기는 끝까지(끝나는 중에도) — 공정 중이면 계속 기다림
         self._deferred.clear()
-        if self._stop.is_set():
+        if self._stop.is_set() and getattr(self._bg, "on", False):
             raise ExportStopped()
 
     def export_csv(self, day: str) -> Path:
@@ -316,7 +320,7 @@ class Recorder:
                     f.flush()                                                 # 미뤄진 동안 .tmp 에 지금까지가 보이게
                     last = rows[-1][0]
                     if self.export_pause_s:
-                        if self._stop.wait(self.export_pause_s):          # 조각 사이 양보(끝나는 중이면 바로 깨어남)
+                        if self._stop.wait(self.export_pause_s) and getattr(self._bg, "on", False):    # 조각 사이 양보(끝나는 중이면 바로 깨어남)
                             raise ExportStopped()
                     self._wait_idle()                                      # 다음 조각 전에 공정·운전이 시작됐으면 끝날 때까지 기다림
             os.replace(tmp, out)
