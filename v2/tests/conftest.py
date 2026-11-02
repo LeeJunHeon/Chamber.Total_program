@@ -21,6 +21,9 @@ import pytest
 from v2.common import clock as _clock
 
 LEFT_THREAD_WAIT_S = 2.0
+# 프로세스 수명 동안 하나 있는 자원 스레드 — 시험이 새는 것이 아니다. OES 워커 모듈(workers/oes_device.py)의 단일 스레드 실행기
+# ThreadPoolExecutor(thread_name_prefix="OES_DLL") 는 첫 호출 때 스레드를 만들고 워커 프로세스가 끝날 때까지 둔다(v1 도 같음).
+PROCESS_LIFETIME_THREAD_PREFIXES = ("OES_DLL",)
 _file_growth: "collections.OrderedDict[str, list]" = collections.OrderedDict()   # 파일 → [증가 합, 끝난 뒤 메모리]
 
 
@@ -118,11 +121,10 @@ def _writer_threads_stopped(monkeypatch, _threads_back_to_start):
     시험이 끝날 때 멈춘다(사용자 결정 2026-11-02 자원 정리). 시험이 먼저 멈췄으면 그대로 둔다(stop 은 두 번 불러도 됨)."""
     from v2.ch12.outputs import base as _base, paths as _paths
     from v2.common import recorder as _rec
-    made = []
-    for cls in (_base.QueueWriter, _paths.CopySender, _rec.Recorder):
-        made += _track_and_stop(monkeypatch, cls)
+    lists = [_track_and_stop(monkeypatch, cls) for cls in (_base.QueueWriter, _paths.CopySender, _rec.Recorder)]
     yield
-    _stop_all(made)
+    for made in lists:                  # (만든 순서의 반대로 — 사본 보내기·기록기를 먼저 멈추면 쓰기 스레드가 남은 것을 비운다)
+        _stop_all(made)
 
 
 @pytest.fixture(autouse=True)
@@ -133,7 +135,8 @@ def _threads_back_to_start(request):
     yield
     t_end = time.monotonic() + LEFT_THREAD_WAIT_S
     while True:
-        left = [t for t in threading.enumerate() if t not in before and t.is_alive()]
+        left = [t for t in threading.enumerate() if t not in before and t.is_alive()
+                and not t.name.startswith(PROCESS_LIFETIME_THREAD_PREFIXES)]
         if not left or time.monotonic() >= t_end:
             break
         time.sleep(0.05)
