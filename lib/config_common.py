@@ -526,6 +526,7 @@ THICKNESS_CMD_TIMEOUT_S = 1.0           # 명령 1회 응답 대기(초, 0.3~5).
 THICKNESS_LOG_DIR = r"C:\VanaM_Logs\CH1&2\Thickness"   # 연속 기록(그 아래 CH{n}\Thickness_YYYYMMDD.csv) — 공정 중에만 1초 1행. G: 는 쓰지 않는다
 THICKNESS_FACTOR_FILE = ""              # tooling·재료값 파일. 비우면 config/thickness_factors_ch{N}.json(exe 옆 config 폴더)
 # ── 공정 연동(2단계: Thickness 모드 = 레시피 thickness>0 + SUPPORTS_THICKNESS) — 판정 상수(lib/thickness_config.load_judge_params) ──
+#    Time 모드도 SUPPORTS_THICKNESS 채널이면 시작 전 Factor 적용 + 메인 셔터 전 영점(ZERO_CONFIRM_*) 후 기록(실패해도 시작은 막지 않음)
 THICKNESS_READY_FRESH_S = 5.0           # 시작 전: 최근 이 시간(초) 안에 정상 두께 값이 있어야 시작
 THICKNESS_LIFE_WARN_PCT = 10.0          # 시작 전: 크리스탈 수명(%)이 이보다 낮으면 경고만
 THICKNESS_MAX_TIME_RATIO = 2.0          # 최대 시간 상한 = max(예상 × 이 배수, 예상 + MARGIN). 예상 = thickness ÷ dep_rate. 도달하면 공정 실패(E848)

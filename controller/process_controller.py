@@ -324,7 +324,8 @@ class ActionType(str, Enum):
     HEATER_SET  = "HEATER_SET"    # 목표·램프 설정(공정 소유로 운전 시작 또는 목표 변경)
     HEATER_WAIT = "HEATER_WAIT"   # 목표 도달 + 안정(SOAK) 대기 — params=(SOAK 초,) 는 레시피 heater_soak 이 있을 때만
     HEATER_HOLD = "HEATER_HOLD"   # 작업 압력·플라즈마 조건에서 유지 모드(dac) 측정 대기
-    # 두께 모니터 — Thickness 모드(params thickness_mode=True)에서 메인 공정 DELAY 대신 들어간다
+    # 두께 모니터 — THICKNESS_ZERO 는 Thickness 모드와 Time 모드 두께 기록(params thickness_time_record=True)에,
+    #   THICKNESS_WAIT 는 Thickness 모드(params thickness_mode=True)에서만 메인 공정 DELAY 대신 들어간다
     THICKNESS_ZERO = "THICKNESS_ZERO"   # Shutter Delay 뒤·Main Shutter 열기 전: 영점(B) + 영점 확인(기준점). params=(확인 최대 초,)
     THICKNESS_WAIT = "THICKNESS_WAIT"   # 목표 두께 도달 대기. value=목표 nm, params=(예상 초, 상한 초)
 
@@ -1717,11 +1718,14 @@ class ProcessController:
     _ETA_CONFIRM_PREFIXES = ("Shutter Delay", "메인 공정 진행")
 
     def _eta_sum_delay_from(self, idx: int) -> float:
-        """idx(포함) 이후 모든 DELAY 스텝의 duration 합(초)."""
+        """idx(포함) 이후 모든 DELAY 스텝의 duration 합(초). THICKNESS_ZERO(Time 모드 두께 기록)는 확인 최대 초를 더한다
+        (끝 시각을 일찍 알리지 않게 — 보통은 그보다 빨리 끝난다)."""
         total_ms = 0
         for st in self.process_sequence[idx:]:
             if st.action is ActionType.DELAY and not st.no_wait and st.duration:
                 total_ms += int(st.duration)
+            elif st.action is ActionType.THICKNESS_ZERO and st.params:
+                total_ms += int(round(float(st.params[0]) * 1000.0))
         return total_ms / 1000.0
 
     def _try_confirm_eta(self, step: ProcessStep) -> None:
@@ -2644,8 +2648,9 @@ class ProcessController:
                     polling=False,
                 ))
 
-        # --- (두께 모니터 Thickness 모드) 메인 셔터를 열기 전에 영점(B)·확인 — use_ms=F 여도 같은 자리(메인 공정 직전) ---
-        if thickness_mode:
+        # --- (두께 모니터) 메인 셔터를 열기 전에 영점(B)·확인 — use_ms=F 여도 같은 자리(메인 공정 직전) ---
+        #     Thickness 모드, 또는 Time 모드 두께 기록(런타임이 Factor 적용에 성공했을 때만 params["thickness_time_record"]=True)
+        if thickness_mode or bool(params.get("thickness_time_record", False)):
             from lib.thickness_config import load_judge_params
             _zp, _ = load_judge_params(self._cfg)
             steps.append(ProcessStep(

@@ -5,6 +5,9 @@
 모드 판정(thickness_mode_of)은 이 한 곳에 둔다 — 런타임(시작·시퀀스)과 ETA 계산이 같은 규칙을 쓴다.
 
 순서(Thickness 모드): Shutter Delay → THICKNESS_ZERO(영점 B + ZeroConfirm) → Main Shutter 열기 → THICKNESS_WAIT(ThicknessEndJudge)
+순서(Time 모드, 두께 모니터 채널): 시작 전 Factor 적용 시도 → 성공하면 Shutter Delay → THICKNESS_ZERO → Main Shutter 열기 →
+  메인 공정 DELAY(레시피 시간으로 끝, 판정 없음). 최종 두께 = 메인 공정 구간 마지막 값 − 기준점(없으면 마지막 − 처음).
+  Factor 적용 실패·co-sputter·건 없음이면 장비 명령 없이 지금처럼 차이로 기록(사유는 Fallback Reason). 시작은 막지 않는다.
 
 ZeroConfirm.tick(status, now) → None | ZeroResult — 메인 셔터를 열기 전에 기준점을 정한다.
   - 영점 성공이면 영점 뒤 새 값 ≤ zero_confirm_nm(음수 포함)을 한 번 보면 영점 확인 → 기준점 0.

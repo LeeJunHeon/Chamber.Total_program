@@ -15,7 +15,8 @@ from lib import config_common as cfgc
 
 # CH2 히터 열 — 메인 공정 구간(폴링 중)의 표본으로 채운다. CH1 파일에는 넣지 않는다(맨 뒤에 붙임).
 HEATER_COLUMNS: List[str] = ["Heater: SV", "Heater: PV Avg", "Heater: PV Min", "Heater: PV Max", "Heater: MV Avg"]
-# 두께 모니터 열 — SUPPORTS_THICKNESS=true 채널 파일에만(맨 뒤에 붙임). Time 모드도 두께 모니터 값이 있으면 최종 두께·평균 증착률을 채운다.
+# 두께 모니터 열 — SUPPORTS_THICKNESS=true 채널 파일에만(맨 뒤에 붙임). Time 모드도 두께 모니터 값이 있으면 최종 두께·평균 증착률을 채운다
+# (Factor 적용 성공 런은 영점 기준점 기준 + Tooling·Density·Z·Material·Factor Source, 실패·co-sputter 는 차이 + Fallback Reason).
 THICKNESS_COLUMNS: List[str] = [
     "Thickness: End Mode", "Thickness: Target nm", "Thickness: Final nm", "Thickness: Avg Rate nm/s",
     "Thickness: Tooling %", "Thickness: Density", "Thickness: Z", "Thickness: Chuck", "Thickness: Gun",
