@@ -101,5 +101,5 @@ def test_real_app_signal_marks_journal_and_exits_0(tmp_path, sig):
     assert pr.wait(30.0) == 0, pr.text
     name = "SIGINT" if sig == signal.SIGINT else "SIGTERM"
     for part in ("ch1", "ch2", "shared"):
-        d = json.loads((tmp_path / "root" / "data" / "journal" / f"{part}.json").read_text(encoding="utf-8"))
+        d = json.loads((tmp_path / "sim_out" / "data" / "journal" / f"{part}.json").read_text(encoding="utf-8"))
         assert d["exit"] == {"intentional": True, "why": name, "t_wall": d["exit"]["t_wall"]} and d["active"] is False
