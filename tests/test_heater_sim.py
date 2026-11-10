@@ -178,12 +178,15 @@ def test_interlock_loss_recorded_in_csv(tmp_path):
         await sim.run(svc, plc, clk, 3)
     asyncio.run(go())
     files = sorted(tmp_path.glob("CH2_HEATER_*"))
-    assert len(files) == 1
+    assert len(files) == 1 and len(files[0].name) == len("CH2_HEATER_YYYYMMDD.csv")   # 하루 1개 파일
     with open(files[0], encoding="utf-8-sig", newline="") as fp:
         rows = list(csv.DictReader(fp))
     assert rows[0]["water_ok"] == "1" and rows[0]["vac_ok"] == "1"
-    last = rows[-1]
-    assert last["note"] == "운전 종료" and last["itl"] == "0" and last["water_ok"] == "1" and last["vac_ok"] == "0"
+    ends = [r for r in rows if r["note"] == "운전 종료"]
+    assert len(ends) == 1
+    last = ends[0]
+    assert last["itl"] == "0" and last["water_ok"] == "1" and last["vac_ok"] == "0" and last["run"] == "0"
+    assert rows[-1]["run"] == "0" and rows[-1]["elapsed_sec"] == "" and rows[-1]["owner"] == ""   # 정지 중에도 계속 기록
 
 
 def test_brief_interlock_drop_between_polls():

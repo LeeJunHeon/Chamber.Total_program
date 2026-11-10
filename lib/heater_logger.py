@@ -1,18 +1,26 @@
 # lib/heater_logger.py
 # -*- coding: utf-8 -*-
-"""CH2 히터 운전 구간 CSV — RUN 상승 엣지에 새 파일, 운전 중 LOG_PERIOD 마다 1행, 하강 엣지에 마지막 행 후 닫기.
+"""CH2 히터 CSV — 하루 1개 파일(CH2_HEATER_YYYYMMDD.csv)에 프로그램이 도는 동안 항상 기록.
+
+- 운전 중(RUN=1) HEATER_LOG_PERIOD_S(1초)마다 1행, 정지 중 HEATER_POLL_IDLE_S(3초)마다 1행(주기 판단은 heater_service).
+- RUN 상승/하강 폴링의 행은 note="운전 시작"/"운전 종료", 프로그램 종료 때 note="프로그램 종료" 1행.
+- PLC 를 못 읽은 폴링도 행을 남긴다(timestamp·note 만, 값 열은 전부 빈칸 — 옛 값을 반복해 쓰지 않는다).
+- 날짜는 행의 timestamp 기준, 자정이 지나면 다음 행부터 새 파일. 같은 날 다시 켜면 이어 쓴다(빈 파일일 때만 헤더).
+- 운전별 파일(CH2_HEATER_YYYYMMDD_HHMMSS.csv)은 더 만들지 않는다(옛 파일은 그대로 둔다).
 
 위치: HEATER_LOG_DIR(비면 config_common.LOG_ROOT_DIR\\CH2_Heater, 호출 시점에 읽음).
       만들 수 없으면 LOCAL_FALLBACK_ROOT\\CH2_Heater. (log_sync 워커가 LOG_ROOT_DIR 를 NAS 로 복사한다)
+파일 IO 는 util.log_hub.DailyCsvListAppender(keep-handle, 날짜 바뀌면 새 파일, primary 실패 시 fallback).
 로컬 디스크라 동기 쓰기를 허용한다(매 행 flush). 예외는 삼키고 경고 1회.
 """
 from __future__ import annotations
 
-import csv
 import datetime
 import time
 from pathlib import Path
 from typing import Callable, Optional
+
+from util.log_hub import DailyCsvListAppender
 
 COLUMNS = [
     "timestamp", "elapsed_sec", "owner",
@@ -35,24 +43,35 @@ def _fallback_dir() -> Path:
     return (Path(root) if root else Path.cwd() / "Logs_LocalFallback") / "CH2_Heater"
 
 
+def file_name(dt: datetime.datetime) -> str:
+    return f"CH2_HEATER_{dt:%Y%m%d}.csv"
+
+
 class HeaterCsvLogger:
     def __init__(self, log_dir: str = "", warn: Optional[Callable[[str], None]] = None,
-                 clock: Callable[[], float] = time.monotonic):
+                 clock: Callable[[], float] = time.monotonic,
+                 wall: Callable[[], datetime.datetime] = datetime.datetime.now):
         self._log_dir = str(log_dir or "")
         self._warn_cb = warn
-        self._now = clock
-        self._fp = None
-        self._writer = None
-        self._path: Optional[Path] = None
-        self._t0 = 0.0
+        self._now = clock                    # (호환) 단조 시계 — 경과 초는 호출부가 넘긴다
+        self._wall = wall                    # 벽시계 — 행 timestamp·파일 날짜(시험에서 주입)
+        self._app: Optional[DailyCsvListAppender] = None
         self._warned = False
 
+    # ───────── 상태 ─────────
     @property
     def path(self) -> Optional[Path]:
-        return self._path
+        """지금 열려 있는 파일(아직 한 행도 안 썼으면 None)."""
+        return self._app.current_path if self._app is not None else None
 
     def is_open(self) -> bool:
-        return self._fp is not None
+        return self.path is not None
+
+    def today_path(self) -> Path:
+        """지금 시각 기준으로 행이 들어갈 파일 경로(열지는 않는다)."""
+        app = self._ensure()
+        base = app._fallback_dir if app.state.using_fallback else app._primary_dir
+        return base / file_name(self._wall())
 
     def _warn(self, text: str) -> None:
         if self._warned:
@@ -64,66 +83,37 @@ class HeaterCsvLogger:
             except Exception:
                 pass
 
-    def _open_dir(self) -> Optional[Path]:
-        cands = [Path(self._log_dir)] if self._log_dir else [_default_dir()]
-        cands.append(_fallback_dir())
-        for i, d in enumerate(cands):
-            try:
-                d.mkdir(parents=True, exist_ok=True)
-                if i > 0:
-                    self._warn(f"히터 CSV 폴더({cands[0]})를 만들 수 없어 {d} 에 저장합니다")
-                return d
-            except Exception:
-                continue
-        return None
+    def _ensure(self) -> DailyCsvListAppender:
+        if self._app is None:
+            primary = Path(self._log_dir) if self._log_dir else _default_dir()
+            self._app = DailyCsvListAppender(
+                primary_dir=primary, fallback_dir=_fallback_dir(), filename_builder=file_name,
+                encoding="utf-8-sig", retry_primary_every_s=0.0)
+        return self._app
 
-    def start(self) -> Optional[Path]:
-        """새 CSV 를 열고 헤더를 쓴다. 이미 열려 있으면 그대로 둔다."""
-        if self._fp is not None:
-            return self._path
-        base = self._open_dir()
-        if base is None:
-            self._warn("히터 CSV 폴더를 만들 수 없어 기록하지 않습니다")
-            return None
-        stamp = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = base / f"CH2_HEATER_{stamp}.csv"
-        k = 1
-        while path.exists():
-            k += 1
-            path = base / f"CH2_HEATER_{stamp}_{k}.csv"
-        try:
-            fp = open(path, "w", encoding="utf-8-sig", newline="")
-            w = csv.writer(fp)
-            w.writerow(COLUMNS)
-            fp.flush()
-        except Exception as e:
-            self._warn(f"히터 CSV 열기 실패: {e!r}")
-            return None
-        self._fp, self._writer, self._path = fp, w, path
-        self._t0 = self._now()
-        return path
+    # ───────── 기록 ─────────
+    def write_row(self, st: Optional[dict], *, owner: str = "", note: str = "", hold=None,
+                  sat_clamp=None, ramp_target=None, elapsed: Optional[float] = None) -> None:
+        """한 행 기록. st=None 이면(PLC 를 못 읽음) timestamp·note 만 채우고 나머지는 빈칸."""
+        now = self._wall()
+        if st is None:
+            row = [now.strftime("%Y-%m-%d %H:%M:%S")] + [""] * (len(COLUMNS) - 2) + [note or ""]
+        else:
+            def _n(key, fmt="{:.1f}"):
+                v = st.get(key)
+                if v is None:
+                    return ""
+                try:
+                    return fmt.format(float(v))
+                except Exception:
+                    return ""
 
-    def write_row(self, st: dict, *, owner: str = "", note: str = "", hold=None,
-                  sat_clamp=None, ramp_target=None) -> None:
-        if self._fp is None or self._writer is None:
-            return
+            def _b(key):
+                return 1 if st.get(key) else 0
 
-        def _n(key, fmt="{:.1f}"):
-            v = st.get(key)
-            if v is None:
-                return ""
-            try:
-                return fmt.format(float(v))
-            except Exception:
-                return ""
-
-        def _b(key):
-            return 1 if st.get(key) else 0
-
-        try:
-            self._writer.writerow([
-                datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S"),
-                f"{self._now() - self._t0:.1f}", owner or "",
+            row = [
+                now.strftime("%Y-%m-%d %H:%M:%S"),
+                ("" if elapsed is None else f"{float(elapsed):.1f}"), owner or "",
                 _n("pv"), _n("sv"), _n("sv_ramp"), _n("cur_sv"),
                 _n("mv", "{:.0f}"), _n("mv_limit", "{:.0f}"), _n("mv_pct"), _n("pid_err", "{:.0f}"),
                 _n("ramp_rate", "{:.0f}"), _n("holdback"), _n("ot_limit"),
@@ -134,18 +124,19 @@ class HeaterCsvLogger:
                 ("" if sat_clamp is None else int(sat_clamp)),
                 ("" if ramp_target is None else f"{float(ramp_target):.1f}"),
                 note or "",
-            ])
-            self._fp.flush()
+            ]
+        try:
+            app = self._ensure()
+            app.append_row(dt=now, header=COLUMNS, row=row)
+            if app.consume_switched_flag():
+                self._warn(f"히터 CSV 폴더({app._primary_dir})에 쓸 수 없어 {app._fallback_dir} 에 저장합니다")
         except Exception as e:
             self._warn(f"히터 CSV 기록 실패(이후 경고 생략): {e!r}")
 
     def stop(self) -> None:
-        if self._fp is not None:
+        """파일을 닫는다(다음 기록 때 다시 연다 — 같은 날이면 이어 쓴다)."""
+        if self._app is not None:
             try:
-                self._fp.flush()
-                self._fp.close()
+                self._app.close()
             except Exception:
                 pass
-        self._fp = None
-        self._writer = None
-        self._path = None

@@ -10,8 +10,8 @@ write_coil). 접속·재접속은 기존 하트비트 몫이다 — 여기서는
 폴링 루프(성공한 폴링 한 번의 처리 순서):
   (1) 잔존 RUN 정리 → (2) 보류 OFF → (3) 세션 마커·설정 push/되읽기(실패는 첫 쓰기에서 멈추고 30초 백오프)
   → (4) FAULT 엣지 → RST 코일 고착 확인 → 리셋 결과 확인 → (5) 출력 죽음
-  → (6) RUN 엣지(CSV·챗, 종료 사유) → (7) 램프 tick → 포화 감시(도달 후 새 포화만 클램프, 도달 전은 승온 정체만)
-  → 유지 모드 + D118 요청 실행 → 출력 무응답 감시(판정되면 OFF·카드, 상태 noresp) → (8) CSV 행 → (9) 리스너
+  → (6) RUN 엣지(챗, 종료 사유) → (7) 램프 tick → 포화 감시(도달 후 새 포화만 클램프, 도달 전은 승온 정체만)
+  → 유지 모드 + D118 요청 실행 → 출력 무응답 감시(판정되면 OFF·카드, 상태 noresp) → (8) CSV 행(하루 1개 파일, 운전 1초·정지 3초, 엣지는 note) → (9) 리스너
 첫 성공 폴링 전의 '미연결'은 로그를 남기지 않는다(프로그램 시작 직후 PLC 접속 전).
 설정·세션 마커가 PLC 에 들어가기 전에는 ON 을 거부한다(is_ready).
 워치독 루프: WD_PERIOD 마다 RUN 이고 링크가 살아 있을 때만 D114 = (이전+1) & 0x7FFF.
@@ -459,8 +459,9 @@ class HeaterService:
             if not done:
                 self._log("⚠ 종료 시 히터 OFF 를 보내지 못함 — PLC 워치독이 30초 뒤 차단")
         try:
-            if self.csv.is_open():
-                self.csv.write_row(self._st, owner=self.owner or "", note="프로그램 종료")
+            if self.cfg.log_enabled:
+                st = self._st if self._last_ok_t is not None else None
+                self._csv_row(st, self._now(), note="프로그램 종료")
             self.csv.stop()
         except Exception:
             pass
@@ -753,9 +754,36 @@ class HeaterService:
             return                           # 쓰기 전 상태 — 새 정보가 없고 공정이 옛 RUN 으로 판정할 수 있다
         self._publish()
 
+    # ═══════════════════════ CSV(하루 1개 파일, 항상 기록) ═══════════════════════
+    def _csv_period(self, run: bool) -> float:
+        """운전 중 HEATER_LOG_PERIOD_S, 정지 중 HEATER_POLL_IDLE_S(기록 주기보다 짧아지지는 않게)."""
+        p = float(self.cfg.log_period_s)
+        return p if run else max(p, float(self.cfg.poll_idle_s))
+
+    def _csv_due(self, now: float, run: bool) -> bool:
+        """마지막 기록 후 '기록 주기 − 지금 폴링 주기의 절반' 이상 지났으면 기록 — 폴링 간격이 흔들려도 매 폴링 1행이 빠지지 않게.
+        (정지 중인데 1초 폴링일 때는 대략 3초마다 1행)"""
+        slack = 0.5 * self._next_interval()
+        return (now - self._csv_last_t) >= self._csv_period(run) - slack
+
+    def _csv_row(self, st: Optional[dict], now: float, *, note: str = "", owner: str = "",
+                 elapsed: Optional[float] = None, hold=None, sat_clamp=None, ramp_target=None) -> None:
+        self._csv_last_t = now
+        self.csv.write_row(st, owner=owner, note=note, elapsed=elapsed, hold=hold, sat_clamp=sat_clamp,
+                           ramp_target=ramp_target)
+
+    def _csv_fail_row(self, note: str) -> None:
+        """상태를 못 읽은 폴링 — 마지막으로 확인된 RUN 기준 주기로 timestamp·note 만 남긴다(옛 값을 반복해 쓰지 않는다)."""
+        if not self.cfg.log_enabled:
+            return
+        now = self._now()
+        if self._csv_due(now, bool(self._st.get("run"))):
+            self._csv_row(None, now, note=note)
+
     async def _poll_once(self) -> None:
         if not self._link_up():
             self._on_fail("PLC 미연결", quiet=self._last_ok_t is None)
+            self._csv_fail_row("PLC 미연결")
             return
         seq0 = self._write_seq               # 읽기 시작 시점의 쓰기 횟수(잠금을 잡은 뒤 비교)
         try:
@@ -769,6 +797,7 @@ class HeaterService:
             raise
         except Exception as e:
             self._on_fail(repr(e))
+            self._csv_fail_row("PLC 미연결(읽기 실패)")
             return
         now = self._now()
         if self._fail_since is not None:
@@ -820,9 +849,13 @@ class HeaterService:
         self._output_dead(st, now)
         # 상태 확정(램프·유지가 읽는다)
         self._st = st
-        # (6) RUN 엣지
+        # (6) RUN 엣지 — 하강 행(운전 종료)은 끝난 운전의 owner·경과·유지/클램프 상태를 정리 전 값으로 남긴다
+        csv_owner = OWNER_LABEL.get(self.owner, self.owner or "") if (st["run"] or fall) else ""
+        csv_elapsed = (now - self._run_since) if (st["run"] or fall) and self._run_since > 0 else None
+        fall_snap = (self.hold.log_tuple(), self.sat.clamped) if fall else None
         if rise:
             self._on_run_rise(st)
+            csv_owner = OWNER_LABEL.get(self.owner, self.owner or "")
         elif fall:
             await self._on_run_fall(st, now)
         self._run_prev = bool(st["run"])
@@ -847,12 +880,13 @@ class HeaterService:
                               clamped=self.sat.clamped is not None)
         if trip is not None:
             await self._on_no_response(st, trip)
-        # (8) CSV
-        if st["run"] and self.cfg.log_enabled and (now - self._csv_last_t) >= float(self.cfg.log_period_s):
-            self._csv_last_t = now
-            self.csv.write_row(st, owner=OWNER_LABEL.get(self.owner, self.owner or ""),
-                               hold=self.hold.log_tuple(), sat_clamp=self.sat.clamped,
-                               ramp_target=self.profiler.target())
+        # (8) CSV — 한 폴링에 최대 1행. 상승/하강 폴링은 주기와 상관없이 기록(note), 그 밖에는 운전 1초·정지 3초 주기
+        if self.cfg.log_enabled:
+            note = "운전 시작" if rise else ("운전 종료" if fall else "")
+            if note or self._csv_due(now, bool(st["run"])):
+                hold_t, clamp = fall_snap if fall_snap is not None else (self.hold.log_tuple(), self.sat.clamped)
+                self._csv_row(st, now, note=note, owner=csv_owner, elapsed=csv_elapsed, hold=hold_t,
+                              sat_clamp=clamp, ramp_target=self.profiler.target())
         self._first_poll = False
         return True
 
@@ -1114,8 +1148,12 @@ class HeaterService:
         if self.owner is None:
             self.owner = "external"
         c = self.cfg
-        path = self.csv.start() if c.log_enabled else None
-        self._csv_last_t = -1e9
+        path = None
+        if c.log_enabled:
+            try:
+                path = self.csv.today_path()     # 하루 1개 파일 — 이 폴링의 "운전 시작" 행은 _process (8) 이 쓴다
+            except Exception:
+                path = None
         tgt = self.profiler.target()
         tgt_txt = f"{tgt:.1f}°C(램프)" if tgt is not None else self._fmt(st.get("sv"))
         ramp_txt = f"{self.profiler.rate():g}°C/min" if self.profiler.is_active() else "없음(래더 램프만)"
@@ -1139,13 +1177,7 @@ class HeaterService:
         return "-" if v is None else f"{float(v):g}"
 
     async def _on_run_fall(self, st: dict, now: float) -> None:
-        try:
-            if self.csv.is_open():
-                self.csv.write_row(st, owner=OWNER_LABEL.get(self.owner, self.owner or ""),
-                                   hold=self.hold.log_tuple(), sat_clamp=self.sat.clamped, note="운전 종료")
-            self.csv.stop()
-        except Exception:
-            pass
+        # CSV "운전 종료" 행은 _process (8) 이 이 폴링의 유일한 행으로 쓴다(파일은 하루 단위라 닫지 않는다)
         if self.profiler.is_active():
             await self.profiler.stop(restore_rate=True)
         elif st.get("ramp_rate") is not None and float(st["ramp_rate"]) != self._ramp_c_per_min():

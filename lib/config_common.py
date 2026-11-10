@@ -467,7 +467,7 @@ SUPPORTS_THICKNESS = False      # 두께 모니터(Sycon STM-100). settings ch1/
 # ======================================================================
 HEATER_TEMP_SCALE = 0.1                 # 레지스터 1카운트 = 0.1°C
 HEATER_POLL_INTERVAL_S = 1.0            # 상태 폴링 주기(RUN·램프 중, 초)
-HEATER_POLL_IDLE_S = 3.0                # 상태 폴링 주기(정지 중, 초)
+HEATER_POLL_IDLE_S = 3.0                # 정지 중 폴링·CSV 기록 주기(초)
 HEATER_WD_PERIOD_S = 5.0                # 워치독(D114) 갱신 주기(초). 래더는 30초 무변화면 WD_ERR
 HEATER_STALE_SEC = 10.0                 # 이 시간 넘게 못 읽으면 '응답 없음'(초)
 HEATER_MAX_TEMP = 900.0                 # 화면 목표 입력 상한(°C). CH2 TC 는 기판보다 높게 읽혀 목표가 실제 기판 온도보다 높다(챔버K TC2 와 같은 이유)
@@ -499,8 +499,8 @@ HEATER_SOAK_TIME_SEC = 60               # 공정 승온 대기: 목표 ±SOAK_TO
 HEATER_WAIT_TIMEOUT_SEC = 5400          # 공정 승온 대기 기본 한도(초, 챔버K와 동일). 예상 승온 + 30분이 더 길면 그 값(최대 12시간)
 HEATER_HOLD_WAIT_SEC = 300              # 작업 압력·플라즈마 조건 유지 모드 측정 최대 대기(초) (HOLD_MODE=off 면 쓰지 않음)
 HEATER_HOLD_FAIL_ACTION = "force"       # 유지 측정 실패 시 "force"(강제 고정 후 진행) / "abort"(E833 중단) (HOLD_MODE=off 면 쓰지 않음)
-HEATER_LOG_ENABLED = True               # 운전 구간 CSV 기록
-HEATER_LOG_PERIOD_S = 3.0               # CSV 기록 주기(초)
+HEATER_LOG_ENABLED = True               # 히터 CSV 기록(하루 1개 파일, 프로그램이 도는 동안 항상)
+HEATER_LOG_PERIOD_S = 1.0               # 운전 중 CSV 기록 주기(초)
 HEATER_LOG_DIR = ""                     # 비우면 LOG_ROOT_DIR\CH2_Heater
 HEATER_RUN_LOG_PERIOD_S = 10.0          # 공정 로그(.txt)에 히터 상태 한 줄을 남기는 간격(초, 0 = 끔)
 # 출력 무응답 감시(EL-092) — MV 를 올려도 온도가 반응하지 않으면 히터 OFF(공정 중이면 E832 로 중단)
