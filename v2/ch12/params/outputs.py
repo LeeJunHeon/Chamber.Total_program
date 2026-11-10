@@ -68,6 +68,13 @@ PARAMS = (
        lo=1.0, apply=_LIVE),
     _p("TURBO_OFF_ALERT_S", "터보 꺼짐 지속 알림 시간", F, 3600.0, f"{_J}:272; {_CC}:671; lib/turbo_watch.py", unit="s", apply=_LIVE,
        note="CH1/CH2 터보가 이만큼 계속 꺼져 있으면 PLC 끊김 방으로 알림(다시 켜지면 1장 더). 0 이하 = 끔(v1 main a6e8d46)"),
+    # ── GPC3000(MFC) 압력·밸브 위치 상시 CSV(v1 main 3112ea5·3992a58) ──
+    _p("MFC_STATE_LOG_ENABLED", "MFC 압력·밸브 위치 CSV 기록", B, True, f"{_J}:+; {_CC}:+", apply=_LIVE,
+       v1_default=False, note="공정과 무관하게 1초마다 압력·밸브 위치(R5·R6)를 CH1·CH2 각각 {CH1|CH2}_YYYYMMDD.csv 로. v1 코드 기본은 끔이나 운영 settings.json 은 켬"),
+    _p("MFC_STATE_LOG_INTERVAL_S", "MFC 상태 CSV 주기", F, 1.0, f"{_J}:+; {_CC}:+", unit="s", lo=1.0, hi=3600.0, apply=_LIVE,
+       v1_default=1.0, note="v1 최소 0.2 s — v2 는 1초 행에서 뽑아 쓰므로 최소 1 s"),
+    _p("MFC_STATE_LOG_DIR", "MFC 상태 CSV 폴더", S, r"C:\VanaM_Logs\CH1&2\CH1&2_MFC", f"{_J}:+; {_CC}:+",
+       note="NAS 반영은 log_sync. 폴백 LOCAL_FALLBACK_ROOT\\CH1&2_MFC"),
     # ── 두께 연속 CSV(채널 구역) ──
     _p("CH1_THICKNESS_LOG_DIR", "CH1 두께 연속 CSV 폴더", S, r"C:\VanaM_Logs\CH1&2\Thickness",
        f"{_J}:520; lib/thickness_config.py:143-146", note="NAS(\\\\ 로 시작) 경로면 기본값(로컬)으로 바꾼다 — v1 의 구글 공유 드라이브 규칙을 NAS 로 옮김(D350). 두께 CSV 는 로컬에 쓰고 NAS 반영은 log_sync"),

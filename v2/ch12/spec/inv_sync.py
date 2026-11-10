@@ -129,4 +129,11 @@ ITEMS = [
          v2="v2/ch12/outputs/heater_csv.py; v2/ch12/heater_engine.py; v2/ch12/heater_edges.py; v2/ch12/heater_commands.py; v2/ch12/params/outputs.py",
          test="v2/tests/test_heater_engine.py::test_csv_daily_idle_3s_run_1s_blank_rows_when_disconnected_and_edges; v2/tests/test_outputs_csv.py::test_heater_golden; "
               "v2/tests/test_outputs_csv.py::test_heater_daily_file_header_once_midnight_split_and_restart_append; v2/tests/test_heater_engine.py::test_run_edges_csv_and_chat", status="done", note=""),
+    dict(id="SYNC-031", area="sync",
+         desc="GPC3000 압력·밸브 위치 상시 CSV(main 3112ea5·3992a58): {CH1|CH2}_YYYYMMDD.csv(MFC_STATE_LOG_DIR), 헤더 Timestamp,Pressure_mTorr,Valve_pct, Timestamp 밀리초, 빈 칸·둘 다 없으면 행 없음, 설정 MFC_STATE_LOG_ENABLED·INTERVAL_S·DIR(GAP_MS·TIMEOUT_MS 는 v2 가 따로 읽지 않아 버림). v2 는 1초 행의 mfc 값에서 뽑는다",
+         v1="controller/mfc_state_logger.py; device/mfc.py; config/settings.json", v2="v2/ch12/outputs/mfc_state_csv.py; v2/ch12/outputs/row_feed.py; v2/ch12/params/outputs.py",
+         test="v2/tests/test_mfc_state_csv.py::test_rows_ms_timestamp_blank_values_and_skip; v2/tests/test_mfc_state_csv.py::test_disabled_writes_nothing_and_sim_guard_forces_dir", status="done", note=""),
+    dict(id="SYNC-032", area="sync",
+         desc="히터 CSV '프로그램 종료' 행(f02f20a): 종료 순간 PLC 를 못 읽고 있었으면 값 열 빈칸, 읽고 있었으면 owner·경과·유지/클램프 포함",
+         v1="controller/heater_service.py", v2="v2/ch12/heater_commands.py", test="v2/tests/test_heater_engine.py::test_csv_daily_idle_3s_run_1s_blank_rows_when_disconnected_and_edges", status="done", note=""),
 ]

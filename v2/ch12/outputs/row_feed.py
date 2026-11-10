@@ -21,6 +21,7 @@ from v2.ch12.outputs.base import QueueWriter
 from v2.ch12.outputs.heater_csv import HeaterCsv
 from v2.ch12.params import outputs as P
 from v2.ch12.turbo_watch import TurboOffWatch, card_text
+from v2.ch12.outputs.mfc_state_csv import MfcStateCsv
 from v2.ch12.outputs.plc_coil_csv import REG_KEYS, PlcCoilCsv, v1_coil_keys
 from v2.ch12.outputs.selfwatch import SelfWatchLog
 from v2.ch12.outputs.thickness_csv import ThicknessCsv
@@ -66,6 +67,7 @@ class RowFeed:
         now = lambda: datetime.fromtimestamp(clock.wall())                      # noqa: E731
         self.plc_coil = PlcCoilCsv(cfg, writer=self.writer, log=lambda m: self._log("plc_coil_csv", m),
                                    monotonic=clock.monotonic)
+        self.mfc_state = MfcStateCsv(cfg, writer=self.writer, log=lambda m: self._log("mfc_state_csv", m), monotonic=clock.monotonic)
         self.selfwatch = SelfWatchLog(cfg, writer=self.writer, log=lambda m: self._log("selfwatch", m),
                                       on_event=on_selfwatch, now=now, monotonic=clock.monotonic, wall_time=clock.wall)
         self.stm = dict(thickness or {})                                         # ch → Stm100Driver(켜진 것만)
@@ -86,6 +88,7 @@ class RowFeed:
         ts = row_time(row)
         mono = self.clock.monotonic()
         for name, fn in (("plc_coil", lambda: self.plc_coil.on_tick(ts, mono=mono, **plc_coil_args(row, self.plc_connected()))),
+                         ("mfc_state", lambda: self.mfc_state.on_tick(ts, row, mono)),
                          ("selfwatch", lambda: self.selfwatch.on_tick(_selfwatch_state(row))),
                          ("turbo_watch", lambda: self._turbo(row, mono)),
                          ("thickness", lambda: self._thickness(ts)),
@@ -129,6 +132,7 @@ class RowFeed:
 
     def stop(self, timeout_s: float = 5.0) -> None:
         self.plc_coil.writer.put(self.plc_coil.appender.close)
+        self.mfc_state.stop()
         for t in self.thickness.values():
             self.writer.put(t.file.close)
         if self.heater.is_open():

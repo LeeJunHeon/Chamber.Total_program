@@ -276,8 +276,17 @@ class HeaterCommands:
                     self._log("⚠ 종료 시 히터 OFF 를 보내지 못함 — PLC 워치독이 30초 뒤 차단")
                 try:
                     if self.csv is not None and self.cfg.log_enabled:
-                        st = self._st if self._last_ok_t is not None else None
-                        self._csv_row(st, self._now(), note="프로그램 종료")
+                        now = self._now()
+                        # v1 f02f20a — 종료 순간 PLC 를 못 읽고 있었으면(한 번도 못 읽음·마지막 폴링 실패·지금 링크 끊김) 값 열 빈칸
+                        if self._last_ok_t is None or self._fail_since is not None or not self._link_up():
+                            self._csv_row(None, now, note="프로그램 종료")
+                        else:
+                            st = self._st
+                            running = bool(st.get("run"))
+                            self._csv_row(st, now, note="프로그램 종료",
+                                          owner=OWNER_LABEL.get(self.owner, self.owner or "") if running else "",
+                                          elapsed=(now - self._run_since) if (running and self._run_since > 0) else None,
+                                          hold=self.hold.log_tuple(), sat_clamp=self.sat.clamped, ramp_target=self.profiler.target())
                     if self.csv is not None:
                         self.csv.stop()
                 except Exception:

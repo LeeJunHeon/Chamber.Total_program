@@ -608,3 +608,11 @@ DECISIONS += [
          reason="사용자 지시 2026-11-09 E", confirm=True,
          where="v2/ch12/drivers/mfc.py; rfpulse.py; rfpulse_verify.py; spec/devices.py; params/rfpulse.py"),
 ]
+
+DECISIONS += [
+    dict(id="D406", title="2026-11-10 운영 v1 추가 4커밋(f02f20a·3112ea5·9cab3bf·3992a58) 반영 — 히터 종료 행·MFC 상태 CSV",
+         decision="main 에 작업 중 생긴 4커밋: 히터 CSV '프로그램 종료' 행의 값 열 규칙, GPC3000 압력·밸브 위치 상시 CSV({CH1|CH2}_YYYYMMDD.csv, 밀리초 Timestamp, 키 MFC_STATE_LOG_ENABLED·INTERVAL_S·DIR). "
+                  "v1 은 저우선 R5·R6 읽기를 따로 했지만 v2 는 1초 행의 mfc 값에서 뽑는다(질의를 더 보내지 않음) — GAP_MS·TIMEOUT_MS 는 버림. sim 은 MFC_STATE_LOG_DIR 도 sim_out 아래. V1_BASE 3992a58.",
+         reason="사용자 지시 2026-11-09 A('작업 중 main 에 커밋이 더 생기면 마지막에 다시 확인해 반영')", confirm=False,
+         where="v2/ch12/outputs/mfc_state_csv.py; heater_commands.py; params/outputs.py"),
+]

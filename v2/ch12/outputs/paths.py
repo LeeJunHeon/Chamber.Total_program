@@ -121,6 +121,10 @@ class Paths:
         return (Path(str(self._g("PLC_COIL_LOG_NAS_DIR"))),
                 Path(loc) if loc else self.fallback_root() / "PLC_Coil")
 
+    # ── MFC 압력·밸브 위치 상시 CSV(v1 main 3112ea5) ──
+    def mfc_state_dirs(self) -> "tuple[Path, Path]":
+        return Path(str(self._g("MFC_STATE_LOG_DIR"))), self.fallback_root() / "CH1&2_MFC"
+
     # ── 두께·히터 ──
     def thickness_root(self, ch: int) -> str:
         d = str(self._g(f"CH{int(ch)}_THICKNESS_LOG_DIR") or "").strip() or V1_THICKNESS_DEFAULT_DIR

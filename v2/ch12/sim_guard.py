@@ -44,6 +44,7 @@ FORCED: Dict[str, str] = {
     "CH2_THICKNESS_LOG_DIR": "thickness",
     "CH2_HEATER_LOG_DIR": "heater",
     "SELFWATCH_DIR": "selfwatch",
+    "MFC_STATE_LOG_DIR": "mfc_state",
     "CAMERA_LOG_ROOT": "camera",
     "HOST_LOG_NAS_DIR": "robot_nas",
     "HOST_LOG_LOCAL_DIR": "robot_local",

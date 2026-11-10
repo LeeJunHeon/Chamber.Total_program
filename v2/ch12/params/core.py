@@ -514,6 +514,10 @@ DROPPED: tuple = (
     Dropped("(code).PROCESS_GAS_INFO", "장비 배선 사실(가스 → MFC 채널: AR 1, O2 2, N2 3) — v2 공정 엔진 상수. "
             "settings.json 에 v1 기본과 다른 값이 있으면 변환 도구가 멈춘다", "lib/config_common.py:770",
             replaced_by="공정 엔진 상수 GAS_CHANNELS"),
+    Dropped("common.MFC_STATE_LOG_GAP_MS", "v2 는 기록용 읽기를 따로 하지 않는다 — 1초 행의 MFC 질의(MFC_GAP_MS 50)에서 뽑아 쓴다", "lib/config_common.py:+",
+            replaced_by="MFC_GAP_MS"),
+    Dropped("common.MFC_STATE_LOG_TIMEOUT_MS", "v2 는 기록용 읽기를 따로 하지 않는다 — 1초 행의 MFC 질의(MFC_TIMEOUT)에서 뽑아 쓴다", "lib/config_common.py:+",
+            replaced_by="MFC_TIMEOUT"),
     Dropped("(code).LOCAL_FALLBACK_CH1_DIR", _FB, "lib/config_common.py:22"),
     Dropped("(code).LOCAL_FALLBACK_CH2_DIR", _FB, "lib/config_common.py:23"),
     Dropped("(code).LOCAL_FALLBACK_SERVER_DIR", _FB, "lib/config_common.py:24"),
