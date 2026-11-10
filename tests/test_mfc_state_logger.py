@@ -245,7 +245,7 @@ def test_read_state_quiet_skips_when_normal_pending():
 def test_csv_rows_blank_on_failure_and_new_file_on_date_change(tmp_path, monkeypatch):
     async def go():
         m, dev, evs, tasks = _mfc()
-        wall = _Wall(_dt.datetime(2026, 11, 10, 23, 59, 59))
+        wall = _Wall(_dt.datetime(2026, 11, 10, 23, 59, 59, 250000))
         monkeypatch.setattr(MFCMOD, "datetime", SimpleNamespace(now=wall.now))
         lg = MfcStateLogger(m, "CH1", cfg=LOG_CFG, wall=wall.now, log_dir=str(tmp_path))
         lg.start(asyncio.get_running_loop())
@@ -254,7 +254,7 @@ def test_csv_rows_blank_on_failure_and_new_file_on_date_change(tmp_path, monkeyp
         n = lg.stats["rows"]
         await _until(lambda: lg.stats["rows"] >= n + 1 and lg.stats["partial"] >= 1, 3.0)
         dev.answer["R6"] = True
-        wall.dt = _dt.datetime(2026, 11, 11, 0, 0, 1)               # 자정 → 새 파일
+        wall.dt = _dt.datetime(2026, 11, 11, 0, 0, 1, 5000)         # 자정 → 새 파일
         n = lg.stats["rows"]
         await _until(lambda: lg.stats["rows"] >= n + 2, 3.0)
         await lg.stop()
@@ -264,10 +264,10 @@ def test_csv_rows_blank_on_failure_and_new_file_on_date_change(tmp_path, monkeyp
     assert files == ["CH1_20261110.csv", "CH1_20261111.csv"]
     r1 = _rows(tmp_path / "CH1_20261110.csv")
     assert list(r1[0].keys()) == HEADER
-    assert r1[0]["Timestamp"] == "2026-11-10 23:59:59" and r1[0]["Pressure_mTorr"] == "5.000" and r1[0]["Valve_pct"] == "35.2"
+    assert r1[0]["Timestamp"] == "2026-11-10 23:59:59.250" and r1[0]["Pressure_mTorr"] == "5.000" and r1[0]["Valve_pct"] == "35.2"
     assert any(r["Valve_pct"] == "" and r["Pressure_mTorr"] == "5.000" for r in r1)
     r2 = _rows(tmp_path / "CH1_20261111.csv")
-    assert r2 and r2[0]["Timestamp"].startswith("2026-11-11 00:00:01") and r2[0]["Valve_pct"] == "35.2"
+    assert r2 and r2[0]["Timestamp"] == "2026-11-11 00:00:01.005" and r2[0]["Valve_pct"] == "35.2"
 
 
 def test_csv_timestamp_is_r5_reply_time_not_tick_start(tmp_path, monkeypatch):
@@ -280,7 +280,7 @@ def test_csv_timestamp_is_r5_reply_time_not_tick_start(tmp_path, monkeypatch):
 
         def _advance(cmd):
             if cmd == "R5":
-                wall.dt = _dt.datetime(2026, 11, 10, 12, 0, 2)       # 응답이 오는 시점에는 2초 지났다
+                wall.dt = _dt.datetime(2026, 11, 10, 12, 0, 2, 234000)  # 응답이 오는 시점에는 2.234초 지났다
         dev.before_reply = _advance
         lg = MfcStateLogger(m, "CH2", cfg=LOG_CFG, wall=wall.now, log_dir=str(tmp_path))
         lg.start(asyncio.get_running_loop())
@@ -289,7 +289,7 @@ def test_csv_timestamp_is_r5_reply_time_not_tick_start(tmp_path, monkeypatch):
         await _stop(*tasks)
     asyncio.run(go())
     rows = _rows(next(tmp_path.glob("CH2_*.csv")))
-    assert rows[0]["Timestamp"] == "2026-11-10 12:00:02"
+    assert rows[0]["Timestamp"] == "2026-11-10 12:00:02.234"
 
 
 def test_csv_no_row_when_both_fail_or_disconnected(tmp_path):

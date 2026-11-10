@@ -5,7 +5,7 @@
 - 매 tick(MFC_STATE_LOG_INTERVAL_S): 연결돼 있으면 AsyncMFC.read_state_quiet()(R5·R6 를 low_priority·quiet 로) → CSV 1행.
   Timestamp 는 실제로 값을 읽은 시각(R5 응답을 받은 시각) — 공정 중에는 기록 읽기가 앞 명령의 1초 간격 뒤로 밀려
   tick 시작 시각과 측정 시각이 1초 이상 벌어질 수 있다.
-- CSV: MFC_STATE_LOG_DIR\\{label}_YYYYMMDD.csv, utf-8-sig, 헤더 Timestamp,Pressure_mTorr,Valve_pct.
+- CSV: MFC_STATE_LOG_DIR\\{label}_YYYYMMDD.csv, utf-8-sig, 헤더 Timestamp,Pressure_mTorr,Valve_pct. Timestamp 는 밀리초까지(YYYY-MM-DD HH:MM:SS.mmm).
   읽기 실패한 값은 빈 칸. 둘 다 실패했거나 연결 안 됨이면 그 초는 행을 쓰지 않는다.
   파일 쓰기는 PLC 코일 로거와 같이 util.log_hub.DailyCsvListAppender + asyncio.to_thread.
 - 연결 유지: MFC 가 내려가 있으면(워커·워치독이 안 돌고 cleanup 진행 중도 아님) 그 상태가 REVIVE_AFTER_S 이어질 때만
@@ -143,7 +143,7 @@ class MfcStateLogger:
         if p is None or v is None:
             self.stats["partial"] += 1
         dt = read_at or self._wall()
-        row = [dt.strftime("%Y-%m-%d %H:%M:%S"),
+        row = [dt.strftime("%Y-%m-%d %H:%M:%S.") + f"{dt.microsecond // 1000:03d}",   # 밀리초까지 — 읽기가 밀렸다 몰려도 같은 시각이 안 찍히게
                "" if p is None else f"{p:.3f}",
                "" if v is None else f"{v:.1f}"]
         app = self._appender()
