@@ -286,6 +286,77 @@ def test_shutdown_before_any_read_leaves_blank_row(tmp_path):
     assert all(rows[-1][c] == "" for c in VALUE_COLS)
 
 
+def _last_row_blank(tmp_path):
+    rows = _rows(_files(tmp_path)[0])
+    last = rows[-1]
+    assert last["note"] == "프로그램 종료" and sum(r["note"] == "프로그램 종료" for r in rows) == 1
+    return all(last[c] == "" for c in VALUE_COLS), last
+
+
+def test_shutdown_after_disconnected_poll_blank_values(tmp_path):
+    """a) 마지막 폴링이 PLC 미연결 — 읽은 적은 있어도 옛 값을 찍지 않는다."""
+    svc, plc, clk, logs = _mk(tmp_path)
+    _poll(svc, clk)
+    _poll(svc, clk)
+    plc.connected = False
+    _poll(svc, clk)
+    asyncio.run(svc.shutdown())
+    blank, _ = _last_row_blank(tmp_path)
+    assert blank and not svc.csv.is_open()
+
+
+def test_shutdown_after_read_failure_blank_values(tmp_path):
+    """b) 마지막 폴링이 읽기 실패(링크는 있음)."""
+    svc, plc, clk, logs = _mk(tmp_path)
+    _poll(svc, clk)
+
+    async def boom(*a, **k):
+        raise TimeoutError("timeout")
+    plc.read_regs_block = boom
+    _poll(svc, clk)
+    rows = _rows(_files(tmp_path)[0])
+    assert rows[-1]["note"] == "PLC 미연결(읽기 실패)"
+    asyncio.run(svc.shutdown())
+    blank, _ = _last_row_blank(tmp_path)
+    assert blank
+
+
+def test_shutdown_link_lost_after_good_poll_blank_values(tmp_path):
+    """c) 정상 읽기 직후 링크만 끊긴 상태(아직 실패 폴링 없음)."""
+    svc, plc, clk, logs = _mk(tmp_path)
+    _poll(svc, clk)
+    _poll(svc, clk)
+    plc.connected = False
+    asyncio.run(svc.shutdown())
+    blank, _ = _last_row_blank(tmp_path)
+    assert blank
+
+
+def test_shutdown_while_running_fills_owner_and_elapsed(tmp_path):
+    """d) 운전 중 정상 읽기 직후 shutdown — 값·owner·elapsed_sec 채움(RUN OFF 쓰기 순서도 그대로)."""
+    svc, plc, clk, logs = _mk(tmp_path)
+    _poll(svc, clk)
+    plc.bits[640] = True
+    for _ in range(4):
+        _poll(svc, clk)
+    asyncio.run(svc.shutdown())
+    blank, last = _last_row_blank(tmp_path)
+    assert not blank
+    assert last["owner"] == "외부" and last["elapsed_sec"] == "4.0" and last["pv_c"] != "" and last["run"] == "1"
+    assert ("wc", 640, False) in plc.writes()
+
+
+def test_shutdown_while_idle_fills_values_not_owner(tmp_path):
+    """e) 정지 중 정상 읽기 직후 shutdown — 값은 채우고 owner·elapsed 빈칸."""
+    svc, plc, clk, logs = _mk(tmp_path)
+    _poll(svc, clk)
+    _poll(svc, clk)
+    asyncio.run(svc.shutdown())
+    blank, last = _last_row_blank(tmp_path)
+    assert not blank
+    assert last["owner"] == "" and last["elapsed_sec"] == "" and last["pv_c"] != "" and last["run"] == "0"
+
+
 def test_write_failure_warns_once_and_keeps_polling(tmp_path):
     svc, plc, clk, logs = _mk(tmp_path)
     _poll(svc, clk)
