@@ -265,3 +265,54 @@ def test_poll_once_order():
     assert [bytes.fromhex(f)[1] for f in r.sent(n0)] == [162, 165, 166]
     assert any(e.detail.startswith("[ONCE] STATUS") for e in r.ev("status")) and r.ev("power")
     r.done()
+
+
+def test_setpoint_and_pulsing_are_read_back_after_write_164_177():
+    """2026-11-09 E2 — SET_SETPOINT(8)→164·SET_PULSING(27)→177 쓰기 뒤 되읽기. 맞으면 RF ON 까지 간다."""
+    r = Rig(control=6)
+    reason, ok = r.call(r.d.start_pulse_process, 100.0, 1000, 50)
+    assert ok is True, reason
+    cmds = [bytes.fromhex(f)[1] for f in r.sent()]
+    assert 164 in cmds and 177 in cmds and cmds.index(164) > cmds.index(8) and cmds.index(177) > cmds.index(27)
+    assert cmds.index(2) > cmds.index(177)                                          # RF ON 은 되읽기 확인 뒤
+    r.done()
+
+
+def test_setpoint_readback_mismatch_rewrites_then_verify_mismatch_and_no_rf_on():
+    r = Rig(control=6, cfg={"RFPULSE_REWRITE_MAX": 2})
+    r.sim.setpoint_readback_offset = 3
+    reason, ok = r.call(r.d.start_pulse_process, 100.0, 1000, 50)
+    assert ok is False
+    fails = [e for e in r.ev("command_failed") if e.reason == "VERIFY_MISMATCH"]
+    assert fails and "SETP" in fails[-1].detail and "다시 쓰기 2회" in fails[-1].detail
+    cmds = [bytes.fromhex(f)[1] for f in r.sent()]
+    assert cmds.count(8) == 3 and 2 not in cmds                                     # 쓰기 1 + 다시 쓰기 2, RF ON 안 나감
+    r.done()
+
+
+def test_run_setpoint_change_is_verified_too_and_readback_can_be_turned_off():
+    r = Rig(control=6)
+    reason, ok = r.call(r.d.start_pulse_process, 100.0, 1000, 50)
+    assert ok is True
+    n0 = len(r.sim.received)
+    reason, ok = r.call(r.d.set_reference_power, 120.0)
+    assert ok is True and [bytes.fromhex(f)[1] for f in r.sent(n0)][:2] == [8, 164]
+    r.d.cfg["RFPULSE_READBACK_ENABLED"] = False
+    n1 = len(r.sim.received)
+    r.call(r.d.set_reference_power, 130.0)
+    assert 164 not in [bytes.fromhex(f)[1] for f in r.sent(n1)]                       # 끄면 v1 처럼 CSR 만
+    r.done()
+
+
+def test_mode_readback_only_when_query_number_is_configured_155_is_not_regulation_mode():
+    r = Rig(control=6, cfg={"RFPULSE_Q_MODE": 154})
+    r.sim.mode_query = 154
+    reason, ok = r.call(r.d.start_pulse_process, 100.0, 1000, 50)
+    assert ok is True
+    assert 154 in [bytes.fromhex(f)[1] for f in r.sent()]
+    r2 = Rig(control=6)                                                             # 기본 0 — 읽지 않음(155 는 제어 모드)
+    r2.call(r2.d.start_pulse_process, 100.0, 1000, 50)
+    cmds = [bytes.fromhex(f)[1] for f in r2.sent()]
+    assert 154 not in cmds and cmds.count(155) == 1                                  # 155 는 시작 때 HOST 확인 한 번뿐
+    r.done()
+    r2.done()

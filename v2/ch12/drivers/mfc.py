@@ -46,6 +46,11 @@ CONNECT_RETRY_WINDOW_S = 2.0                     # device/mfc.py:1425 — 연결
 TICK_GAP_WAIT_S = 0.5                            # 1초 읽기가 명령 간격을 기다려 주는 최대(넘으면 이번 tick 은 안 읽음)
 IDLE_HOLD_S = 0.3                                # 제어 동작이 끝난 뒤 1초 읽기를 쉬는 시간(공정 엔진의 다음 명령 몫) — 간격 50 ms 라 짧게
 CACHE_FRESH_S = 1.0                              # 제어가 읽은 값을 1초 행에 쓰는 최대 나이
+# 매 tick 읽는 질의 — (명령, 응답 앞글자). 2026-11-09 E1: 밸브 위치(R6)·ON/OFF 비트(R69)·SP 값(R1~R4)·선택 SP(R7)도 매 tick 읽어
+# 기억값 대신 실제값으로(GPC3000 매뉴얼 p.73 R6 Valve Position Value). 앞 둘(R60·R5)은 v1 폴링 판정이 쓴다.
+TICK_QUERIES = (("R60", ("Q0",)), ("R5", ("P",)), ("R6", ("V",)), ("R69", ("L",)),
+                ("R1", ("S1",)), ("R2", ("S2",)), ("R3", ("S3",)), ("R4", ("S4",)), ("R7", ("M",)))
+TICK_CMDS = frozenset(c for c, _p in TICK_QUERIES)
 SKIP_IF_READ_WITHIN_S = 0.4                      # 제어(안정화 등)가 이만큼 안에 읽은 질의는 이번 tick 에 다시 보내지 않음
 
 # v1 lib/config_common.py:300-330 MFC_COMMANDS — 같은 글자(함수/문자열)
@@ -111,6 +116,20 @@ def parse_pressure(line: Optional[str]) -> Optional[float]:
         return float(nums[-1])
     except Exception:
         return None
+
+
+def parse_valve_pct(line: Optional[str]) -> Optional[float]:
+    """R6 'V+ppp.p' → 밸브 위치 % (GPC3000 매뉴얼 p.73 R6 Valve Position Value). v1 _parse_valve_ok 와 같은 모양('V' 은 있어도 없어도)."""
+    m = re.match(r"^(?:V\s*)?\+?([+\-]?\d+(?:\.\d+)?)$", (line or "").strip())
+    return float(m.group(1)) if m else None
+
+
+def parse_active_sp(line: Optional[str]) -> Optional[int]:
+    """R7 'M{n}…' → 선택된 SP 번호 n(0 = 선택 없음, v1 _verify_sp_on 은 'M' 뒤 첫 글자를 n 과 비교)."""
+    s = (line or "").strip().upper()
+    if s.startswith("M") and s[1:2].isdigit():
+        return int(s[1:2])
+    return None
 
 
 @dataclass(frozen=True)
@@ -264,7 +283,7 @@ class MfcDriver:
             self.reader.clear()
             raise                                                       # worker: 1회 → 연결 끊고 재연결(D182)
         self.ready_at = self.clock.monotonic() + self.ms("MFC_GAP_MS", 50)
-        if sent in ("R60", "R5"):
+        if sent in TICK_CMDS:
             self.latest[sent] = (self.clock.monotonic(), line)
         if item.tag:                                                    # 1초 읽기(tag 없음)는 이벤트를 내지 않는다
             self.emit("io", f"[RECV] {item.tag} ← {line}")
@@ -309,7 +328,7 @@ class MfcDriver:
         두 질의 사이는 MFC_GAP_MS(응답 뒤 다음 명령까지). 제어가 방금(0.4 s 안) 읽은 질의는 다시 보내지 않는다."""
         now = self.clock.monotonic()
         if self._idle(now) and self.ready_at <= now + TICK_GAP_WAIT_S:
-            for cmd, pre in (("R60", ("Q0",)), ("R5", ("P",))):
+            for cmd, pre in TICK_QUERIES:
                 last = self.latest.get(cmd)
                 if last is not None and self.clock.monotonic() - last[0] < SKIP_IF_READ_WITHIN_S:
                     continue
@@ -333,7 +352,28 @@ class MfcDriver:
                 out[f"{b}.pressure_mtorr"] = hw / float(self.c("MFC_PRESSURE_SCALE", 0.1))
         for ch, gas in GAS_MAP.items():
             out[f"{b}.{gas.lower()}_set_sccm"] = self.hw_to_ui(ch, self.last_setpoints[ch])
-            out[f"{b}.{gas.lower()}_on"] = self.flow_on_flags[ch]
+        r69 = self.latest.get("R69")                         # ON/OFF 는 기억값이 아니라 R69 실제값(못 읽은 tick 은 빈 값)
+        if r69 and now - r69[0] <= CACHE_FRESH_S:
+            bits = mfc_ops._r69_bits(r69[1])
+            for ch, gas in GAS_MAP.items():
+                if ch - 1 < len(bits):
+                    out[f"{b}.{gas.lower()}_on"] = bits[ch - 1] == "1"
+        r6 = self.latest.get("R6")
+        if r6 and now - r6[0] <= CACHE_FRESH_S:
+            pos = parse_valve_pct(r6[1])
+            if pos is not None:
+                out[f"{b}.valve_pct"] = pos
+        for n in (1, 2, 3, 4):                               # SP 값 — 실제 R1~R4(장비값 ÷ MFC_PRESSURE_SCALE = mTorr)
+            r = self.latest.get(f"R{n}")
+            if r and now - r[0] <= CACHE_FRESH_S:
+                hw = parse_pressure(r[1])
+                if hw is not None:
+                    out[f"{b}.sp{n}_mtorr"] = hw / float(self.c("MFC_PRESSURE_SCALE", 0.1))
+        r7 = self.latest.get("R7")
+        if r7 and now - r7[0] <= CACHE_FRESH_S:
+            sel = parse_active_sp(r7[1])
+            if sel is not None:
+                out[f"{b}.sp_active"] = sel
         out[f"{b}.polling"] = self.polling
         return out
 
@@ -564,18 +604,28 @@ def blocks(chamber: str) -> List[DeviceBlock]:
         g = gas.lower()
         f.append(FieldDef(f"{g}_set_sccm", FType.FLOAT, "sccm", f"{gas} 설정 유량", fmt=".2f", source="FLOW_SET 확정값",
                           detail=True))
-        f.append(FieldDef(f"{g}_on", FType.BOOL, "", f"{gas} ON", source="FLOW_ON/OFF", summary="any", detail=True))
+        f.append(FieldDef(f"{g}_on", FType.BOOL, "", f"{gas} ON", source="R69 'L0 bbbb' 비트(실제값)", own_quality=True, summary="any",
+                          detail=True))
+    f.append(FieldDef("valve_pct", FType.FLOAT, "%", "밸브 위치", fmt=".1f", source="R6 'V+ppp.p' (GPC3000 매뉴얼 p.73 Valve Position Value)",
+                      own_quality=True, summary="mean", desc="압력 조절 밸브 개도 — 0 닫힘 · 100 열림"))
+    for n in (1, 2, 3, 4):
+        f.append(FieldDef(f"sp{n}_mtorr", FType.FLOAT, "mTorr", f"SP{n} 값", fmt=".3f", source=f"R{n} ÷ MFC_PRESSURE_SCALE(실제값)",
+                          own_quality=True, detail=True))
+    f.append(FieldDef("sp_active", FType.INT, "", "선택된 SP", source="R7 'M{n}…'(실제값)", own_quality=True, detail=True,
+                      desc="0 = 선택 없음, n = SPn 로 압력 제어 중"))
     f.append(FieldDef("polling", FType.BOOL, "", "v1 폴링(공정 중)", source="set_process_status", summary="any", detail=True))
     return [DeviceBlock(f"{chamber}.mfc", f"{chamber.upper()} MFC", tuple(f), desc="MOXA NPort TCP ASCII")]
 
 
 # 1초 예산 — v1 근거 간격(MFC_GAP_MS 1000: 응답 뒤 1 s)으로 계산. 실측은 bench.
 BUDGET = dict(
-    queries_per_tick=2, bytes_tx=7, bytes_rx=35, min_gap_ms=50, fits_1s=True, alternate=None,
-    note="R60(4 B → 'Q0+aa.a+bb.b+cc.c+dd.d\\r\\n' 약 26 B)과 R5(3 B → 'P+x.xx\\r\\n' 약 9 B)를 매 tick 둘 다. 9600 bps 에서 전송 약 "
-         "7+35 B ≈ 44 ms + 장비 응답 시간 + 명령 간격 MFC_GAP_MS(기본 50 ms, 응답 뒤 다음 명령까지) ≈ 0.2 s. 근거: GPC3000 매뉴얼 p.72"
-         "(9600 8N1·CR 끝·최소 명령 간격 규정 없음 — 사용자 결정 2026-11-02 D36). 제어가 0.4 s 안에 읽은 질의는 다시 보내지 않고, "
-         "제어 명령이 곧 나갈 때는 양보. 마감은 MFC_TIMEOUT + 대기 0.5 s. 실측(응답 시간·오류율)은 bench",
+    queries_per_tick=9, bytes_tx=36, bytes_rx=98, min_gap_ms=50, fits_1s=True, alternate=None,
+    note="매 tick 9개 질의 — R60(4 B → 'Q0+aa.a+bb.b+cc.c+dd.d\\r\\n' 약 26 B)·R5(→ 'P+x.xx' 약 9 B)·R6(밸브 위치 → 'V+ppp.p' 9 B)·"
+         "R69(ON/OFF → 'L0 bbbb' 9 B)·R1~R4(SP 값 → 'S{n}+x.xx' 9 B)·R7(선택 SP → 'M{n}…' 약 8 B)를 모두(2026-11-09 E1 — 번갈아 읽기 없음). "
+         "9600 bps 에서 전송 약 36+98 B ≈ 140 ms + 장비 응답 시간 9회 + 명령 간격 MFC_GAP_MS(기본 50 ms, 응답 뒤) × 9 = 450 ms ≈ 0.6 s + 응답 시간. "
+         "근거: GPC3000 매뉴얼 p.72(9600 8N1·CR 끝·최소 명령 간격 규정 없음 — 사용자 결정 2026-11-02 D36)·p.73(R6 Valve Position Value). 제어가 0.4 s 안에 읽은 "
+         "질의는 다시 보내지 않고, 제어 명령이 곧 나갈 때는 양보. 마감은 MFC_TIMEOUT + 대기 0.5 s. ⚠ 장비 응답 시간 합이 0.4 s 를 넘으면 1 s 에 못 들어간다 — "
+         "실측(응답 시간·오류율)은 bench(bench_probe). 못 들어가면 SP 값·선택 SP 를 번갈아 읽는 쪽으로 바꾼다(결정 D405)",
 )
 
 

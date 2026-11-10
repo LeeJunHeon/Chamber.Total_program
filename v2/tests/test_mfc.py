@@ -396,5 +396,32 @@ def test_params_and_budget():
     assert CFG["CH1_MFC_TCP_PORT"] == 4003 and CFG["CH2_MFC_TCP_PORT"] == 4006
     assert (CFG["CH2_MFC_SCALE_FACTORS_2"], CFG["CH2_MFC_SCALE_FACTORS_3"]) == (10.0, 2.0)
     assert M.endpoint(CFG, "ch2") == ("192.168.1.50", 4006)
-    assert M.BUDGET["queries_per_tick"] == 2 and M.BUDGET["min_gap_ms"] == CFG["MFC_GAP_MS"] and M.BUDGET["fits_1s"]
+    assert M.BUDGET["queries_per_tick"] == 9 and M.BUDGET["min_gap_ms"] == CFG["MFC_GAP_MS"] and M.BUDGET["fits_1s"]
     assert M.source_deadline_ms(CFG) == 2600
+
+
+def test_valve_position_onoff_sp_values_and_active_sp_are_read_every_tick_as_actual_values():
+    """2026-11-09 E1 — GPC3000 R6(밸브 위치 %, 매뉴얼 p.73)·R69(ON/OFF 비트)·R1~R4(SP 값)·R7(선택 SP)을 매 tick 읽어 기억값 대신 실제값으로."""
+    r = Rig("ch1")
+    r.sim.valve_mode, r.sim.valve = "hold", 0.372                         # 장비 쪽 밸브가 37.2 % 에 있음(기억값이 아니라 장비 값)
+    r.sim.sp[1] = 4.5 * 0.1                                              # SP2(UI 4.5 mTorr → 장비 0.45)
+    r.call(r.d.set_flow, 1, 5.0)
+    r.call(r.d.flow_on, 1)
+    r.c.wait_until(r.c.monotonic() + 2.0)
+    t0 = r.c.monotonic()
+    rows = r.run(8)
+    last = rows[-1]
+    assert all(rows[k]["ch1.mfc.q"] == "ok" for k in range(2, 8))
+    assert last["ch1.mfc.valve_pct"] == pytest.approx(37.2, abs=0.2) and last["ch1.mfc.valve_pct.q"] == "ok"
+    assert last["ch1.mfc.sp2_mtorr"] == pytest.approx(4.5, abs=0.01) and last["ch1.mfc.ar_on"] is True
+    assert "ch1.mfc.sp_active" in last and last["ch1.mfc.sp_active"] in (0, 1, 2, 3, 4)
+    seq = r.sent(t0)
+    for cmd in ("R60", "R5", "R6", "R69", "R1", "R2", "R3", "R4", "R7"):
+        assert seq.count(cmd) >= 7, (cmd, seq[:40])                      # 9개 질의가 매 tick(번갈아 읽기 없음)
+    r.done()
+
+
+def test_parse_valve_and_active_sp():
+    assert M.parse_valve_pct("V+037.2") == 37.2 and M.parse_valve_pct("V-0.1") == -0.1 and M.parse_valve_pct("V+100.0") == 100.0
+    assert M.parse_valve_pct("37.2") == 37.2 and M.parse_valve_pct("garbage") is None and M.parse_valve_pct(None) is None
+    assert M.parse_active_sp("M3000") == 3 and M.parse_active_sp("M0") == 0 and M.parse_active_sp("X3") is None

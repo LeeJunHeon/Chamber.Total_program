@@ -595,3 +595,16 @@ DECISIONS += [
          reason="사용자 지시 2026-11-09 D", confirm=True,
          where="v2/robot_server/forward.py; cache.py; server.py; ch12/robot_api.py; robot_base.py; robot_vacuum.py; robot_status.py; assembly.py"),
 ]
+
+DECISIONS += [
+    dict(id="D405", title="2026-11-09 E 장비 통신 — MFC 밸브 위치·실제값 읽기, RF Pulse 되읽기 넓힘, 되읽기 없음의 근거",
+         decision="① GPC3000: R6(밸브 위치 %, 매뉴얼 p.73 Valve Position Value)를 매 tick 읽어 CH1·CH2 1초 기록·화면·웹 필드 valve_pct 로, R69(ON/OFF 비트)·R1~R4(SP 값 sp1~4_mtorr)·R7(선택 SP sp_active)도 매 tick 읽어 "
+                  "기억값 대신 실제값으로(못 읽은 tick 은 빈 값 — 기억으로 채우지 않음). 1초 예산 9개 질의 × 응답 시간 + 50 ms 간격 ≈ 0.6 s + 응답 시간 — ⚠ 장비 응답 시간 합이 1 s 에 들어가는지는 bench 에서 "
+                  "확인(못 들어가면 SP 값·선택 SP 를 번갈아 읽기 — 사용자 확인 필요). ② RF Pulse: SET_SETPOINT(8)→164·SET_PULSING(27)→177 쓰기 뒤 되읽기→다시 쓰기(RFPULSE_REWRITE_MAX)→VERIFY_MISMATCH "
+                  "(시작 시퀀스·공정 중 셋포인트 변경 둘 다, 통신 실패면 검증 생략·경고만 — freq·duty 와 같은 규칙, 번호는 사용자 지시·매뉴얼 쪽수 미확인). "
+                  "SET_MODE(3)→155 는 쓰지 않았다 — 155 는 v1·v2 가 이미 'READ_ACTIVE_CTRL'(제어 모드 HOST=2)로 쓰는 질의라 조절 모드(6)를 되읽으면 늘 불일치해 시작이 막힌다. 대신 설정 키 RFPULSE_Q_MODE(기본 0 = 읽지 않음)에 "
+                  "매뉴얼의 '조절 모드 보고' 번호를 적으면 같은 방식으로 되읽는다(사용자 확인 필요 — 번호). ③ DC Pulse REF_LEVEL(0x83)·REGULATION(0x81): EnerPulse 읽기 코드를 확인할 수 없어 READBACK_NONE "
+                  "(+0x40 규칙은 추정이라 장비로 시험 삼아 보내지 않음), PLC 스위치 코일: 래더가 다시 쓰는 코일이라 '쓴 값 = 읽은 값'이 보장되지 않아 FC5 에코 + 상태 코일 인터락 확인 — 근거를 장비 사실 표 READBACK_NONE 에.",
+         reason="사용자 지시 2026-11-09 E", confirm=True,
+         where="v2/ch12/drivers/mfc.py; rfpulse.py; rfpulse_verify.py; spec/devices.py; params/rfpulse.py"),
+]

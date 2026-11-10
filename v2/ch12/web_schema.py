@@ -46,6 +46,9 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
   7  사용자 결정 2026-11-02(D07·D11·D23) — RGA_NET(비밀값) 폐지 → RGA_USER·RGA_PASSWORD(설치값, 기본 admin/admin), G 드라이브 경로 기본값 → NAS 같은 경로,
      범위 밖 거부 정리(두께 STALE_S 범위 2~120, 키 사이 규칙 CH2_STM2·CH1_STM2·STM1·CH07, MFC_DELAY_MS 하한 200)
   8  사용자 결정 2026-11-02(D79·D93·D94) — 블록 정의의 이어가기 문구(확인은 켜짐/꺼짐만·장비 설정 쓰기 블록은 처음부터 다시 씀)
+  9  2026-11-09 검토 반영 — eventKinds 에 plc turbo_off_long·turbo_back_on(터보 꺼짐 지속 카드), params 에 TURBO_OFF_ALERT_S(공통)·HOST_SERVER_SIM_PORT(설치)·
+     RFPULSE_Q_MODE 추가·ROBOT_API_STATUS_TIMEOUT_S·ROBOT_API_TIMEOUT_MARGIN_S 삭제(로봇 서버는 끝까지 기다림), 스냅샷 필드 mfc 밸브 위치(valve_pct)·SP 값
+     (sp1~4_mtorr)·선택 SP(sp_active)·ON/OFF 가 R69 실제값(CH1·CH2 — 1초 기록·화면·웹)
 """
 from __future__ import annotations
 
@@ -60,7 +63,7 @@ from v2.ch12 import snapshot_fields as SF
 from v2.ch12 import web_blocks as WB
 from v2.ch12.hub import optional_module
 
-EXPORT_VERSION = 8
+EXPORT_VERSION = 9
 
 # 웹이 받는 공정 이벤트(엔진이 system.emit(source="process:<c>", kind, event=data) 로 내는 것 — hub 가 run_* 메시지로 바꾼다)
 EVENTS: tuple = (

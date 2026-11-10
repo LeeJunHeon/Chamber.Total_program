@@ -7,7 +7,7 @@ CSR(가정 포함): Host 가 아니면 설정 명령에 1, RF ON 중 3 에 2(14 
   인터록 열림이면 RF ON 에 5. 응답 지연 = PROCESS_S + (요청 + ACK + 응답) 바이트 × 11 비트 / 9600(8O1 가정).
 플라즈마(가정 모델): RF ON 이면 순방향 = 셋포인트(1차 지연 0.3 s), 반사 = 순방향 × (점화 0.02 / 점화 전 0.6) + ref_inject_w.
   공용 챔버의 rfp_w 에 순방향을 넣는다.
-시험용: csr_once{명령: CSR}(한 번만 그 CSR — 목록이면 차례로), readback_offset(193 되읽기를 틀리게), interlock_open, fwd_scale.
+시험용: setpoint_readback_offset(164 되읽기를 틀리게), mode_query, csr_once{명령: CSR}(한 번만 그 CSR — 목록이면 차례로), readback_offset(193 되읽기를 틀리게), interlock_open, fwd_scale.
 """
 from __future__ import annotations
 
@@ -42,6 +42,8 @@ class RfPulseSim(SimDevice):
         self.ref_inject_w = 0.0
         self.csr_once: Dict[int, Union[int, List[int]]] = {}
         self.readback_offset = 0
+        self.setpoint_readback_offset = 0          # 164 되읽기를 틀리게(시험용)
+        self.mode_query = 0                        # 조절 모드 보고 번호(0 = 없음 — 시험이 154 등으로)
         self.t = self.chamber.t
         self.received = sim_log()
 
@@ -97,6 +99,12 @@ class RfPulseSim(SimDevice):
             return bytes([self._set(cmd, d)])
         if cmd == 155:
             return bytes([self.control])
+        if cmd == 164:                                          # 셋포인트 보고(가정 — 2026-11-09 사용자 지시 번호)
+            return le(int(self.setpoint) + self.setpoint_readback_offset, 2)
+        if cmd == 177:                                          # 펄싱 모드 보고(가정)
+            return bytes([self.pulsing])
+        if cmd == self.mode_query and self.mode_query:          # 조절 모드 보고(번호 미확인 — 시험이 정함)
+            return bytes([self.reg_mode])
         if cmd == 162:
             return self.status()
         if cmd == 165:

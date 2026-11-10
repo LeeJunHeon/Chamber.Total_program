@@ -110,4 +110,16 @@ ITEMS = [
          desc="E208(CSV 공정 데이터 없음) 거절 줄의 레시피 이름·행 수 칸을 v1 과 같게(거절 전에 호스트 로그 갱신 — 이름·행 수 0·공정 이름 빈 칸). PLC 무응답 detail 을 v1 pymodbus 3.11.2 문구와 같게(나머지는 differences X05)",
          v1="runtime/chamber_runtime.py:8085-8101; device/plc.py:1215-1250", v2="v2/ch12/assembly.py; v2/ch12/robot_base.py",
          test="v2/tests/test_robot_ops.py::test_e208_refusal_updates_host_log_recipe_name_and_zero_rows_like_v1; v2/tests/test_robot_ops.py::test_plc_timeout_detail_is_v1_pymodbus_3_11_text", status="done", note=""),
+    dict(id="SYNC-400", area="sync",
+         desc="GPC3000 밸브 위치 R6 를 매 tick 읽어 1초 기록·화면·웹에(CH1·CH2, 단위 %, 매뉴얼 p.73 Valve Position Value), R69(ON/OFF)·R1~R4(SP 값)·R7(선택 SP)도 매 tick 읽어 기억값 대신 실제값으로, 1초 예산 9개 질의·50 ms 간격",
+         v1="device/mfc.py:1694-1847; lib/config_common.py:309-317", v2="v2/ch12/drivers/mfc.py; v2/ch12/spec/devices.py",
+         test="v2/tests/test_mfc.py::test_valve_position_onoff_sp_values_and_active_sp_are_read_every_tick_as_actual_values; v2/tests/test_mfc.py::test_parse_valve_and_active_sp; v2/tests/test_mfc.py::test_params_and_budget", status="done", note=""),
+    dict(id="SYNC-401", area="sync",
+         desc="RF Pulse SET_SETPOINT(8)·SET_PULSING(27) 쓰기 뒤 되읽기(164·177) → 다시 쓰기 → VERIFY_MISMATCH(시작 시퀀스·공정 중 셋포인트 변경), SET_MODE(3)는 번호 설정 RFPULSE_Q_MODE(155 는 제어 모드라 불가 — 기본 읽지 않음)",
+         v1="device/rf_pulse.py", v2="v2/ch12/drivers/rfpulse_verify.py; v2/ch12/drivers/rfpulse.py; v2/ch12/params/rfpulse.py",
+         test="v2/tests/test_rfpulse.py::test_setpoint_and_pulsing_are_read_back_after_write_164_177; v2/tests/test_rfpulse.py::test_setpoint_readback_mismatch_rewrites_then_verify_mismatch_and_no_rf_on; "
+              "v2/tests/test_rfpulse.py::test_run_setpoint_change_is_verified_too_and_readback_can_be_turned_off; v2/tests/test_rfpulse.py::test_mode_readback_only_when_query_number_is_configured_155_is_not_regulation_mode", status="done", note=""),
+    dict(id="SYNC-402", area="sync",
+         desc="DC Pulse REF_LEVEL(0x83)·REGULATION(0x81)·PLC 스위치 코일의 되읽기 없음(READBACK_NONE)과 그 근거를 장비 사실 표에 분명히",
+         v1="device/dc_pulse.py; device/plc.py", v2="v2/ch12/spec/devices.py", test="v2/tests/test_devices.py::test_readback_table_matches_params_and_lists_commands_without_readback", status="done", note=""),
 ]

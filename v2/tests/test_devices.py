@@ -76,7 +76,7 @@ def test_alternate_for_devices_not_fitting_1s():
     by = {t.device: t for t in D.TICK_PLAN}
     assert all(by[d].budget["fits_1s"] and not by[d].budget.get("alternate") for d in ("mfc", "ig", "rfpulse", "dcpulse"))
     assert (by["mfc"].budget["queries_per_tick"], by["rfpulse"].budget["queries_per_tick"],
-            by["dcpulse"].budget["queries_per_tick"]) == (2, 3, 5)
+            by["dcpulse"].budget["queries_per_tick"]) == (9, 3, 5)
     assert all(len(r) == 7 for r in D.budget_table())
 
 

@@ -22,6 +22,7 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 from v2.ch12.drivers.pulse_port import IO, OpRunner, Sleep, chan_get, endpoint, norm_endpoint
 from v2.ch12.drivers.rfpulse_poll import CSR_CODES, RfpStopPollMixin, parse_status, status_str
+from v2.ch12.drivers.rfpulse_verify import Q_PULSING, Q_SETPOINT, RfpVerifyMixin
 from v2.common import aebus
 from v2.common.snapshot import DeviceBlock, FieldDef, FType
 from v2.common.transport import ReadTimeout
@@ -89,7 +90,7 @@ BUDGET = dict(queries_per_tick=3, bytes_tx=9, bytes_rx=24, min_gap_ms=0, fits_1s
                    "RF ON 뒤에만 읽음(v1). FORP/REFP 판정만 v1 한 바퀴 주기(POLL_INTERVAL_MS). 실측(응답 시간·NAK)은 bench")
 
 
-class RfPulseDriver(RfpStopPollMixin):
+class RfPulseDriver(RfpStopPollMixin, RfpVerifyMixin):
     KIND = KIND
 
     def __init__(self, clock, worker, cfg: Dict[str, Any], writes_allowed: bool,
@@ -368,13 +369,20 @@ class RfPulseDriver(RfpStopPollMixin):
         yield Sleep(0.2)
         if stopped():
             return False
-        ok, _ = yield from self._g_exec(SET_MODE, bytes([MODE_FWD]), "[START MODE FWD]")
+        qmode = int(self._c("RFPULSE_Q_MODE", 0) or 0)
+        ok, _, mism = yield from self._g_write_verified(SET_MODE, bytes([MODE_FWD]), "[START MODE FWD]", qmode,
+                                                        self.match_byte(MODE_FWD), "MODE")
+        if mism:
+            return False
         if not ok:
             return fail("MODE=FWD 실패")
         if stopped():
             return False
         sp = int(round(float(target_w)))
-        ok, _ = yield from self._g_exec(SET_SETPOINT, bytes([sp & 0xFF, (sp >> 8) & 0xFF]), f"[START SETP {sp}W]")
+        ok, _, mism = yield from self._g_write_verified(SET_SETPOINT, bytes([sp & 0xFF, (sp >> 8) & 0xFF]), f"[START SETP {sp}W]",
+                                                        Q_SETPOINT, self.match_setpoint(sp), "SETP")
+        if mism:
+            return False
         if not ok:
             return fail("SETP 실패")
         if freq_hz is not None and duty is not None:
@@ -460,7 +468,10 @@ class RfPulseDriver(RfpStopPollMixin):
         mode = int(self._c("RFPULSE_PULSE_MODE", 1))
         if mode not in PULSING_MODES:
             return fail(f"PULSING 모드 범위 오류: {mode} (허용: {list(PULSING_MODES)})")
-        ok, _ = yield from self._g_exec(SET_PULSING, bytes([mode]), f"[START PULSING {mode}]")
+        ok, _, mism = yield from self._g_write_verified(SET_PULSING, bytes([mode]), f"[START PULSING {mode}]", Q_PULSING,
+                                                        self.match_byte(mode), "PULSING")
+        if mism:
+            return False
         if not ok:
             return fail("PULSING 설정 실패")
         if stopped():
@@ -534,7 +545,12 @@ class RfPulseDriver(RfpStopPollMixin):
             was = self.polling
             if pause_polling and was:
                 self.polling = False
-            ok, cb = yield from self._g_exec(SET_SETPOINT, bytes([sp & 0xFF, (sp >> 8) & 0xFF]), f"[RUN SETP {sp}W]")
+            ok, cb, mism = yield from self._g_write_verified(SET_SETPOINT, bytes([sp & 0xFF, (sp >> 8) & 0xFF]), f"[RUN SETP {sp}W]",
+                                                             Q_SETPOINT, self.match_setpoint(sp), "SETP")
+            if mism:
+                if pause_polling and was:
+                    self.polling = True
+                return False
             if ok:
                 self._target_w = float(sp)
                 self._forp_n = self._refp_n = 0
