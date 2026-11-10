@@ -258,7 +258,9 @@ def test_robot_server_sim_listens_only_on_loopback_test_port_and_writes_under_si
     base = tmp_path / "base"
     port, api = free_port(), free_port()
     p = subprocess.Popen([sys.executable, "-m", "v2.robot_server", "--sim", "--port", str(port), "--api-port", str(api), "--fake-api"],
-                         cwd=str(ROOT), text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=_env(tmp_path, base))
+                         cwd=str(ROOT), text=True, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, env=_env(tmp_path, base),
+                         # 시험을 백그라운드(&)로 돌리면 SIGINT 가 무시 상태로 상속된다 → 자식은 기본 동작으로 되돌려 둔다
+                         preexec_fn=(None if sys.platform == "win32" else (lambda: signal.signal(signal.SIGINT, signal.SIG_DFL))))
     try:
         import socket as so
         t0 = time.time()
