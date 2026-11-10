@@ -146,6 +146,16 @@ def test_every_block_kind_random_time(tmp_path, scen, btype):
     if d.resumable and btype not in INSTANT:
         assert hold, "기다리는 블록을 holding 스텝에서 죽였다"
     # 사용자 결정 2026-11-02 D94: 정지 순서 도중이 아니면 모두 이어간다(기다리는 중 = 남은 만큼, 설정 쓰기 도중 = 그 블록 설정을 처음부터)
+    if btype == "end_stop":                                           # 11-09 C1: 정상 끝 정지 도중 — 설정을 다시 쓰지 않고 끄기만 끝까지
+        assert st["resume_mode"] == "stop_sequence" and st["stop_kind"] == "end", st
+        rig2, e2, dec = revive(tmp_path, rig, 3.0, ch=e.ch)
+        try:
+            assert dec["result"] == "stopped" and "stop_sequence" in failed(dec) and not dec["resume"]
+            assert RR.ends(e2) == [("done", None)] and [r["code"] for r in RR.resumed(e2)] == ["RESUMED_STOP"]   # 실패가 아니라 정상 종료
+            assert e2.last_result["restart_note"] == "정상 종료(재시작 후 정지 이어감)" and no_fail_chat(e2)
+        finally:
+            RR.finish(rig2)
+        return
     assert st["resume_mode"] in ("hold", "rewrite") and st["rewrite_from"] is None if hold else st["resume_mode"] == "rewrite", st
     rig2, e2, dec = revive(tmp_path, rig, 3.0, ch=e.ch)
     try:
@@ -337,13 +347,21 @@ def test_residual_dc_power_without_process_is_turned_off(tmp_path):
     plc = rig.sims["plc"]
     plc.coils[PM.resolve("DCV_SET_0")] = True
     plc.regs[PM.REG_MAP["DCV_WRITE_0"]] = 400
+    from v2.ch12 import resume as RS
+    calls = []
+    real = RS.power_off_only
+    RS.power_off_only = lambda *a, **k: (calls.append(1), real(*a, **k))[1]          # 이 모듈의 남은 파워 정리가 돌면 센다(11-09 C5)
     rig2 = RR.reboot(tmp_path, rig, 2.0)
     try:
         RR.drive(rig2, lambda: rig2.resumer.done and not rig2.journal.last_view.last("plc.dcv_set_0"), 60)
+        RR.drive(rig2, lambda: False, 20)                                      # 한참 더 돌려도 두 번째 정리가 없다
         v = rig2.journal.last_view
         assert not v.last("plc.dcv_set_0") and not v.last("plc.dcv_write_0")
         assert rig2.resumer.residual is None and rig2.safety.residual          # S31 이 끔(이 모듈은 겹쳐 끄지 않음)
+        assert calls == [] and len(rig2.safety.residual) == 1                  # 하나로 — resume 쪽 정리는 돌지 않고 S31 이 한 번만
+        assert not [x for x in rig2.events if x.source == "resume" and x.kind == "residual_power_off"]
     finally:
+        RS.power_off_only = real
         RR.finish(rig2)
 
 
@@ -774,3 +792,91 @@ def test_robot_move_in_flight_is_not_repeated_after_restart(tmp_path):
         assert out["body"]["client_action"] == "RETRY" and "자동으로 다시 하지 않음" in out["body"]["detail"]
     finally:
         RR.finish(rig2)
+
+
+# ───────────── 11-09 C1: 끝 정지(end_stop) 각 단계에서 죽였다 살려도 파워·가스·셔터가 다시 켜지지 않음 ─────────────
+_RF_ONLY = dict(P_CH2, use_dc_power=False, use_rf_pulse=False, use_rf_power=True, rf_power=100, use_heater=False, use_power_select=True)
+_DCP = dict(base_pressure=1e-5, working_pressure=3, process_time=0.5, shutter_delay=0.2, use_ar=True, ar_flow=20,
+            use_dc_pulse=True, dc_pulse_power=80, dc_pulse_freq=20, dc_pulse_off_time=10, use_ms=True, use_g1=True)
+END_SCEN = {"ch1_rfp": ("ch1", P_CH1), "ch1_dcp": ("ch1", _DCP), "ch2_dc_rfp_heater": ("ch2", P_CH2),
+            "ch2_rf": ("ch2", _RF_ONLY), "ch2_dcp": ("ch2", dict(_DCP))}
+
+
+def _plc_state(rig) -> dict:
+    """꺼짐 단조 감시용 — 장비 시뮬레이터의 PLC 코일 전부·DC 쓰기 값·펄스 전원 출력."""
+    plc = rig.sims["plc"]
+    out = {f"coil:{c[0]}": bool(plc.coil(c[0])) for c in PM.COILS}
+    for n in range(4):
+        out[f"dcv_write_{n}"] = float(plc.reg(f"DCV_WRITE_{n}") or 0)
+    for ch in ("ch1", "ch2"):
+        for k in ("rfpulse", "dcpulse"):
+            sim = rig.sims.get(f"{ch}.{k}")
+            if sim is not None:
+                out[f"{ch}.{k}.out"] = bool(getattr(sim, "out", False))
+    return out
+
+
+@pytest.mark.slow
+@pytest.mark.parametrize("scen", list(END_SCEN))
+def test_end_stop_crash_at_every_step_never_turns_anything_back_on(tmp_path, scen):
+    ch, params = END_SCEN[scen]
+    n_steps = None
+    k = 0
+    while n_steps is None or k < n_steps:
+        tmp = tmp_path / f"k{k}"
+        rig = RR.boot(tmp)
+        RR.drive(rig, lambda: rig.resumer.done, 30)
+        e = rig.eng[ch]
+        assert e.start(params=dict(params, process_note=scen), owner="local", source="local") is None
+        RR.drive(rig, lambda: e.runner.is_running and bool(e.cur_steps), 600)
+        steps = e.cur_steps
+        endi = max(s.block for s in steps)
+        idxs = [i for i, s in enumerate(steps) if s.block == endi]
+        n_steps = len(idxs)
+        box: dict = {}
+        target = idxs[k]
+
+        orig = e.on_step
+
+        def on_step(idx, step, shutdown, e=e, target=target, box=box, rig=rig, orig=orig):
+            orig(idx, step, shutdown)
+            if "t" not in box and idx == target:                   # 그 스텝이 시작되는 순간 — 러너 스레드에서 저널을 쓰고 죽인다
+                box["t"] = RR.kill(rig)
+        e.on_step = on_step
+        RR.drive(rig, lambda: "t" in box or not e.busy, 1500)
+        if "t" not in box:
+            RR.finish(rig)
+            pytest.fail(f"끝 정지 단계 {k} 에서 죽이지 못함")
+        st = journal_of(tmp, e.ch)["state"]
+        assert st["resume_mode"] == "stop_sequence" and st["block_type"] == "end_stop", st
+        rig2 = RR.reboot(tmp, rig, 3.0)
+        e2 = rig2.eng[ch]
+        seen_off: set = set()
+        prev: dict = {}
+        viol: list = []
+
+        def hook(t):
+            cur = _plc_state(rig2)
+            for key, v in cur.items():
+                was = prev.get(key)
+                if isinstance(v, bool):
+                    if v is False:
+                        seen_off.add(key)
+                    elif key in seen_off:
+                        viol.append((t, key, "꺼졌다 다시 켜짐"))
+                elif was is not None and v > was + 1e-6:
+                    viol.append((t, key, f"값이 올라감 {was} → {v}"))
+            prev.update(cur)
+        try:
+            RR.drive(rig2, lambda: rig2.resumer.done and not e2.busy, 1500, hooks=[hook])
+            dec = rig2.resumer.decisions.get(ch)
+            assert dec["result"] == "stopped" and "stop_sequence" in failed(dec)
+            assert RR.ends(e2) == [("done", None)] and [r["code"] for r in RR.resumed(e2)] == ["RESUMED_STOP"], RR.ends(e2)
+            assert not viol, (k, viol[:5])
+            v = rig2.journal.last_view
+            n = e2.n
+            assert v.last(f"plc.main_shutter_{n}_sw") is False and v.last(f"plc.main_{n}_gas_sw") is False
+            assert not rig2.sims[f"{ch}.rfpulse"].out and not rig2.sims[f"{ch}.dcpulse"].out
+        finally:
+            RR.finish(rig2)
+        k += 1

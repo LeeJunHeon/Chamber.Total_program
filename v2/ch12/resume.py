@@ -59,8 +59,7 @@ BLOCK_WRITES: Dict[str, tuple] = {
     "pressure_ctrl": ("gas", "interlock"), "pressure_boost": ("gas", "interlock"), "pressure_set": (),
     "shutter": ("shutter",), "power_select": ("power_select",), "power_on": ("power_output", "power_select"),
     "pulse_set": ("power_output",), "main": ("power_output",), "thickness_zero": ("thickness",),
-    "end_stop": ("power_output", "shutter", "gas", "interlock", "power_select", "heater_run"),
-}
+}   # end_stop 은 없다 — 끝 정지 도중 재시작은 설정 쓰기 도중이 아니라 정지 순서 이어가기(process_view._resume_mode, 11-09 C1)
 
 
 # ───────────── 확인 목록 ─────────────
@@ -641,9 +640,9 @@ class ResumeManager:
     # ── 공정이 없을 때 남은 파워 ──
     def _residual(self, now: Callable[[str], Any]) -> None:
         sf = getattr(self.sys, "safety", None)
-        if sf is not None and (hasattr(sf, "power_off_only") or hasattr(sf, "first_read")):
-            if hasattr(sf, "first_read") and not hasattr(sf, "power_off_only"):
-                return                                     # 안전 규칙의 첫 읽기 정리(S51 류)가 한다 — 겹치지 않게
+        if sf is not None and hasattr(sf, "first_read"):
+            return                                         # 안전 규칙 S31(첫 정상 PLC 행 — 공정·운전이 없으면 그 전원만 끔)이 한다 —
+            #                                               하나로(11-09 C5: 이전엔 안전 규칙이 있어도 여기서 한 번 더 돌아 두 번 껐다)
         idx = residual_indices(self.sys, now)
         if idx:
             self.say(f"공정 없음 · 남은 파워 {[DCV_NAMES[k] for k in idx]} — 파워만 끔")

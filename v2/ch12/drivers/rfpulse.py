@@ -493,6 +493,29 @@ class RfPulseDriver(RfpStopPollMixin):
             return True
         self._run("read_params", gen(), lambda r, ok: on_done(r, box.get("v")))
 
+    # ───────── 일시정지(11-09 C3) ─────────
+    def hold_power(self, on_done: Optional[Callable[[Optional[str], bool], None]] = None) -> bool:
+        """파워 일시정지 — 지금 측정 출력(마지막 FORP)으로 셋포인트(8)를 내려 고정(set_reference_power — 쓰기 되읽기 확인 경로 그대로).
+        출력 중이 아니거나 측정값이 없거나 이미 고정이면 False. 폴링·FORP/REFP 판정은 계속. 원래 목표는 release_power 가 되돌린다.
+        ⚠ 장비 하드웨어 램프 도중 셋포인트를 바꿨을 때의 동작은 bench 확인 대기(결정 D403)."""
+        meas, tgt = self.last_fwd, float(self._target_w or 0.0)
+        if not self._output_maybe_on or self._stop_requested or getattr(self, "_held_ref", None) is not None or meas is None or tgt <= 0.0:
+            return False
+        self._held_ref = tgt
+        self._emit("status", f"[HOLD] 일시정지 — 목표 {tgt:.0f} W → 지금 출력 {meas:.0f} W 로 고정")
+        self.set_reference_power(min(float(meas), tgt), pause_polling=True, on_done=on_done)
+        return True
+
+    def release_power(self, on_done: Optional[Callable[[Optional[str], bool], None]] = None) -> bool:
+        """재개 — 원래 목표 셋포인트를 다시 쓴다(램프 계속). 고정 중이 아니면 False."""
+        tgt = getattr(self, "_held_ref", None)
+        if tgt is None:
+            return False
+        self._held_ref = None
+        self._emit("status", f"[HOLD] 재개 — 목표 {tgt:.0f} W 로 램프 계속")
+        self.set_reference_power(tgt, pause_polling=True, on_done=on_done)
+        return True
+
     def set_reference_power(self, target_w: float, pause_polling: bool = True,
                             on_done: Optional[Callable[[Optional[str], bool], None]] = None) -> None:
         """RF ON 중 셋포인트(8)만 바꾸기(v1 671-727). START 태그가 아니라 CSR 2 에 RF_OFF 를 끼워 넣지 않는다."""

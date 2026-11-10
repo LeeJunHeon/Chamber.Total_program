@@ -458,6 +458,42 @@ class ProcessActions(ProcessEventsMixin):
             except Exception:
                 pass
 
+    # ═══════════════════════ 파워 일시정지(11-09 C3) ═══════════════════════
+    def hold_power(self) -> list:
+        """파워 램프 일시정지 — 켜져 있는 DC·DC2·RF·DC Pulse·RF Pulse 의 목표를 지금 측정 출력으로 고정. 고정한 장비 이름 목록.
+        (안전 규칙·이탈 감시는 그대로 돈다 — 드라이버 감시와 안전 엔진 모두 목표 고정과 무관.)"""
+        held = []
+        for unit, d in sorted(self.dc.items()):
+            if d is not None and d.hold() is not None:
+                held.append(f"DC{unit}")
+        if self.rf is not None and self.rf.hold() is not None:
+            held.append("RF")
+        for name, d in (("DC Pulse", self.dcp), ("RF Pulse", self.rfp)):
+            if d is not None and d.worker is not None and d.hold_power(on_done=self._hold_done(name, "고정")):
+                held.append(name)
+        self._held_power = held
+        return held
+
+    def release_power(self) -> list:
+        """재개 — 고정했던 장비를 원래 목표로 되돌려 램프 계속."""
+        out = []
+        for unit, d in sorted(self.dc.items()):
+            if d is not None and d.release() is not None:
+                out.append(f"DC{unit}")
+        if self.rf is not None and self.rf.release() is not None:
+            out.append("RF")
+        for name, d in (("DC Pulse", self.dcp), ("RF Pulse", self.rfp)):
+            if d is not None and d.worker is not None and d.release_power(on_done=self._hold_done(name, "재개")):
+                out.append(name)
+        self._held_power = []
+        return out
+
+    def _hold_done(self, name: str, what: str):
+        def done(reason, ok) -> None:
+            if not ok:
+                self.e.log("Process", f"[PAUSE] {name} 파워 {what} 실패({reason or 'FAILED'}) — 목표 쓰기 되읽기 실패")
+        return done
+
     # ═══════════════════════ 폴링 ═══════════════════════
     def polling_targets(self, active: bool, params: Dict[str, Any]) -> Dict[str, bool]:
         if not active:

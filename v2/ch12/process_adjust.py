@@ -18,6 +18,7 @@
 from __future__ import annotations
 
 import copy
+import math
 from typing import Any, Dict, Optional
 
 from v2.ch12 import blocks as BK
@@ -34,6 +35,7 @@ class AdjustMixin:
         self.reject_detail = ""
         self._abort_code: Optional[str] = None
         self._stop_user = True
+        self._stopping = False                  # STOP·이상 중단이 시작됨(정지 순서가 끝나고 런이 정리될 때까지) — 시퀀스 편집 거부
 
     # ───────── 공통 ─────────
     def _active_run(self) -> bool:
@@ -86,6 +88,12 @@ class AdjustMixin:
             self._rec(device, item, None, value, source, "rejected", "PROCESS_NOT_RUNNING", by)
             return "PROCESS_NOT_RUNNING"
         e = BK._check_param(ai.param, value)
+        if not e and ai.param.type in ("float", "int") and not math.isfinite(float(value)):
+            e = "유한한 숫자여야 함"
+        if not e:                                           # 장비 최대(11-09 C2, D11 — 고쳐 쓰지 않고 거부)
+            lim = self.adjust_max(ai)
+            if lim is not None and float(value) > lim:
+                e = f"{value:g} > {lim:g} ({ai.label} 최대 — {self.adjust_max_key(ai)})"
         if e:
             self.reject_detail = e
             why = "BAD_ARGS" if ("숫자" in e or "true/false" in e) else "ADJUST_OUT_OF_RANGE"
@@ -118,6 +126,27 @@ class AdjustMixin:
         self._rec(device, item, old, v, source, "applied" if live else "scheduled", None, by)
         return None
 
+    # 장비 최대 — 공정 시작(start)이 목표를 자르던 한도(v1 설정)와 같은 것. 파워는 이 값을 넘으면 거부한다(고쳐 쓰지 않음).
+    # RF Pulse 는 v1 에 펄스 전용 최대가 없어 RF 계열 최대(RF_MAX_POWER)를 쓴다(결정 D402 — 사용자 확인 필요).
+    _MAX_KEYS = {"dc.power": "DC_MAX_POWER", "dc2.power": "DC_MAX_POWER", "rf.power": "RF_MAX_POWER",
+                 "dcp.power": "DCP_MAX_POWER_W", "rfp.power": "RF_MAX_POWER"}
+
+    def adjust_max_key(self, ai) -> str:
+        return "CH2_HEATER_MAX_TEMP·CH2_HEATER_SV_LIMIT_C" if ai.key == "heater.target" else self._MAX_KEYS.get(ai.key, "")
+
+    def adjust_max(self, ai) -> Optional[float]:
+        """그 항목의 설정 최대(없으면 None — 유량·압력·시간은 레시피 검증과 같은 범위: 0 이상)."""
+        if ai.key == "heater.target":
+            from v2.ch12.recipe_check import heater_limit_c
+            return float(heater_limit_c(self.cfg))
+        k = self._MAX_KEYS.get(ai.key)
+        if k is None:
+            return None
+        try:
+            return float(self.cfg[k])
+        except Exception:
+            return None
+
     def _apply_live(self, ai, v: float, old: Any, source: str, by: Optional[str]) -> bool:
         a, key = self.actions, ai.key
 
@@ -133,9 +162,7 @@ class AdjustMixin:
             d = a.dc.get(1 if key == "dc.power" else 2) if key != "rf.power" else a.rf
             if d is None or not getattr(d, "running", False):
                 return False
-            d.target_power = float(v)
-            if hasattr(d, "sent_target_reached"):
-                d.sent_target_reached = False
+            d.retarget(float(v))                           # start() 와 같은 제한·카운터·과전류 한계(제한된 목표 기준)
             return True
         if key in ("dcp.power", "rfp.power"):
             d = a.dcp if key == "dcp.power" else a.rfp
@@ -170,7 +197,7 @@ class AdjustMixin:
             recipe = self._step_value((past or fut)[-1] if past else fut[0]) if (past or fut) else None
             val = self.runner.remaining_s() if scope == "live" and ai.key == "process.main_remaining" else \
                 self.overrides.get(ai.key, recipe)
-            out.append({"device": ai.device, "item": ai.item, "value": val, "recipe": recipe, "scope": scope,
+            out.append({"device": ai.device, "item": ai.item, "value": val, "recipe": recipe, "scope": scope, "max": self.adjust_max(ai),
                         "adjusted": dict(self.adjusted[ai.key]) if ai.key in self.adjusted else None})
         return out
 
@@ -236,6 +263,10 @@ class AdjustMixin:
                 return "PAUSE_NOT_AVAILABLE"
             self.pause_kind = "timer" if inst.type in _TIMER_BLOCKS else "power_hold"
             self.runner.set_pause(True)
+            if self.pause_kind == "power_hold":             # 램프 도중이면 목표를 지금 측정 출력으로 고정(11-09 C3)
+                held = self.actions.hold_power()
+                if held:
+                    self.log("Process", f"[PAUSE] 파워 램프 고정: {', '.join(held)} (목표 → 지금 출력)")
         else:
             self.pause_kind = "timer"
         self.paused = True
@@ -248,6 +279,10 @@ class AdjustMixin:
         if not self.paused:
             return "NOT_PAUSED"
         self.paused = False
+        if self.pause_kind == "power_hold":
+            rel = self.actions.release_power()
+            if rel:
+                self.log("Process", f"[PAUSE] 파워 목표 복원: {', '.join(rel)} (램프 계속)")
         self.runner.set_pause(False)
         self.log("Process", f"[PAUSE] 재개 (출처 {source})")
         self.emit("pause", "resumed", data={"on": False, "source": source, "by": by, "block_no": self.block_no()})
@@ -267,9 +302,13 @@ class AdjustMixin:
     def edit_sequence(self, op: Dict[str, Any], source: str = "web", by: Optional[str] = None) -> Optional[str]:
         if self.seq is None:
             return "NO_RECIPE"
-        if self.runner.is_running and (self.runner.shutdown or self.runner.stop_requested):
-            return "PROCESS_NOT_RUNNING"
         with self.lk:
+            # 정지와의 경쟁(11-09 C4) — 확인과 편집이 같은 잠금 안이라 그 사이에 정지가 시작될 수 없다. STOP 요청(engine.stop)·이상 중단
+            # (abort)은 이 잠금 안에서 _stopping 을 세우므로 러너가 아직 shutdown 을 세우기 전에 온 정지도 막는다.
+            r = self.runner
+            if self._stopping or (r.is_running and (r.shutdown or r.stop_requested or r.failed)):
+                self.reject_detail = "정지가 시작되어 편집할 수 없음"
+                return "PROCESS_NOT_RUNNING"
             k = self.started_upto()
             res = self.seq.edit(op, k, self.cfg, self.n, caps=self.caps, origin=source)
             if not res.ok:

@@ -130,6 +130,7 @@ class DcPower:
             return
         self.target_power = float(max(0.0, min(float(self._c("DC_MAX_POWER")), float(target_power))))
         self.low_power_streak = self.low_current_streak = self.overcurrent_streak = 0
+        self._held = None
         self._arm_status()
         self._gen += 1
         g = self._gen
@@ -162,6 +163,41 @@ class DcPower:
                 done(None)
             self._write(self.target_power, sent, guard=self._guard(g))
         self.plc.power_enable(True, family="DCV", set_idx=self.u["set_idx"], source=self.source, on_done=set_done)
+
+    def retarget(self, target_power: float) -> float:
+        """공정 중 새 목표(PROCESS_ADJUST 지금 블록) — start() 와 같은 제한(0~DC_MAX_POWER)·카운터 0·과전류 한계 문구(제한된 목표 기준).
+        적용한 목표를 돌려준다. 보정·램프가 새 목표를 따라간다."""
+        self.target_power = float(max(0.0, min(float(self._c("DC_MAX_POWER")), float(target_power))))
+        self.low_power_streak = self.low_current_streak = self.overcurrent_streak = 0
+        self.sent_target_reached = False
+        self._held = None
+        self._arm_status()
+        return self.target_power
+
+    # ───────── 일시정지(11-09 C3) ─────────
+    def hold(self) -> Optional[float]:
+        """파워 램프 일시정지 — 그 순간 측정 출력으로 목표를 고정(보정·램프·도달 이벤트 멈춤. 저전력·저전류·과전류 감시는 계속).
+        원래 목표는 release() 가 되돌린다. 돌 때가 아니거나 이미 멈춘 상태면 None."""
+        if not self.running or getattr(self, "_held", None) is not None:
+            return None
+        self._held = float(self.target_power)
+        meas = float(max(0.0, min(float(self._c("DC_MAX_POWER")), float(self.power_w or 0.0))))
+        self.target_power = meas
+        self._status(f"[HOLD] 일시정지 — 목표 {self._held:.1f} W → 지금 출력 {meas:.1f} W 로 고정")
+        return meas
+
+    def release(self) -> Optional[float]:
+        """재개 — 원래 목표로 램프 계속(보정이 다시 움직이고 도달하면 target_reached). 고정 중이 아니면 None."""
+        held = getattr(self, "_held", None)
+        if held is None:
+            return None
+        self._held = None
+        self.target_power = float(held)
+        self.sent_target_reached = False
+        self.low_power_streak = self.low_current_streak = self.overcurrent_streak = 0
+        self._status(f"[HOLD] 재개 — 목표 {held:.1f} W 로 램프 계속")
+        self._arm_status()
+        return float(held)
 
     def _arm_status(self) -> None:
         if not bool(self._c("DC_OVERCURRENT_ENABLE_CONT")):
@@ -283,7 +319,7 @@ class DcPower:
 
     def _adjust_once(self) -> None:
         """유지 보정(device/dc_power.py:513-550). 쓰기는 실행 때 정지됐으면 건너뛴다(v1 cleanup 의 보정 취소)."""
-        if not self.running:
+        if not self.running or getattr(self, "_held", None) is not None:      # 일시정지 중에는 보정·램프·도달 이벤트 없음
             return
         error = float(self.target_power) - float(self.power_w)
         if abs(error) <= float(self._c("DC_TOLERANCE_POWER")):
@@ -316,6 +352,7 @@ class DcPower:
         """정지(cleanup): 0 W 확인 → SET OFF. on_done(None)=완료, 'POWER_OFF_UNCONFIRMED'=0 W 미확인."""
         done = on_done or (lambda r: None)
         self._gen += 1
+        self._held = None
         self.running = False
         self.polling = False
         self._due = None

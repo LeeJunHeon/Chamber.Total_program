@@ -203,6 +203,8 @@ class ProcessViewMixin:
             return "none", None
         if r.shutdown or r.stop_requested or r.failed:
             return "stop_sequence", None
+        if self._cur_block_def()[0] == "end_stop":      # 정상 끝 정지 블록 도중 — 설정을 다시 쓰지 않고 끄기만 끝까지(11-09 C1)
+            return "stop_sequence", None
         if hold_ok:
             return "hold", None
         cur = r.current
@@ -248,6 +250,7 @@ class ProcessViewMixin:
                 "run_kind": run.kind if run else None, "queue_mode": self.queue_mode, "block_index": self.cur_block,
                 "block_type": bt, "block_no": self.block_no(), "resumable": resumable,
                 "resume_mode": mode, "rewrite_from": rw_from, "window_types": win,
+                "stop_kind": ("user" if r.stop_requested else "abort" if r.failed else "end") if mode == "stop_sequence" else None,
                 "writes_base": self._writes(rw_from) if mode == "rewrite" else None,
                 "resume_checks": list(d.resume_checks) if d is not None else [],
                 "step_index": r.idx, "step_action": cur.action if cur else None, "step_message": cur.message if cur else None,
@@ -381,6 +384,18 @@ class ProcessViewMixin:
                              "label": inst.label if inst else None},
                       checks=[list(x) for x in plan.get("reasons") or []])
             return text
+        kind = str((plan.get("state") or {}).get("stop_kind") or "")
+        if result == "stopped" and kind in ("end", "user"):
+            what = "정상 끝 정지" if kind == "end" else "STOP 정지 순서"
+            text = f"복구됨(공백 {gap:.0f} s) — {what} 도중이라 설정은 다시 쓰지 않고 끄기만 이어서 끝냄"
+            self.log("MAIN", f"[RESTART] {text}")
+            inst = self.cur_inst
+            self.emit("resumed", text, "RESUMED_STOP", level="warn", run_id=self.run_id, gap_s=round(gap, 1),
+                      name=str(self.params.get("process_name") or self.recipe_name or ""),
+                      block={"no": self.block_no(), "type": inst.type if inst else None,
+                             "label": inst.label if inst else None},
+                      checks=[list(x) for x in plan.get("reasons") or []])
+            return text
         why = "; ".join(f"{x[0]}: {x[2]}" for x in reasons) or str(plan.get("detail") or "")
         text = f"재시작(공백 {gap:.0f} s) — 이어가지 않고 안전 정지: {why}"[:480]
         self.log("MAIN", f"[RESTART] {text}")
@@ -419,11 +434,18 @@ class ProcessViewMixin:
             self._prepare_continue(st, gap, plan)
         else:
             text = self._restart_event("stopped", plan)
+            kind = str(st.get("stop_kind") or "")
             with self.lk:
-                self._abort_code = str(plan.get("reason") or "PROGRAM_RESTART")
-                r.failed = True                            # failures 는 비움 — '공정 실패 이유' chat 을 내지 않게
-                r.err = {"code": self._abort_code, "source": "RESTART", "detail": text,
-                         "meta": {"checks": [list(x) for x in plan.get("reasons") or []]}}
+                if kind == "end":                          # 정상 끝 정지 도중 — 실패가 아니라 정상 종료(재시작 후 정지 이어감)
+                    self._abort_code = None
+                elif kind == "user":                       # 사용자 STOP 정지 순서 도중 — 사용자 중단 그대로
+                    self._abort_code, self._stop_user = None, True
+                    r.stop_requested = True
+                else:
+                    self._abort_code = str(plan.get("reason") or "PROGRAM_RESTART")
+                    r.failed = True                        # failures 는 비움 — '공정 실패 이유' chat 을 내지 않게
+                    r.err = {"code": self._abort_code, "source": "RESTART", "detail": text,
+                             "meta": {"checks": [list(x) for x in plan.get("reasons") or []]}}
             r._start_shutdown()
         try:
             r._loop()
@@ -438,6 +460,8 @@ class ProcessViewMixin:
         if plan["mode"] == "stop":                         # 카드는 run_end PROGRAM_RESTART 하나 — '공정 실패 이유' chat 을 내지 않게
             detail["shutdown_errors"], detail["errors"] = list(detail.get("errors") or []), []
             detail.pop("reason", None)
+            if str(st.get("stop_kind") or "") == "end":
+                detail["restart_note"] = "정상 종료(재시작 후 정지 이어감)"
         self._after_finish(run, res.ok, detail)
         return res.ok, bool(detail.get("stopped"))
 

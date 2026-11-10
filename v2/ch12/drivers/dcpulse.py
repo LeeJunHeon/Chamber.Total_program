@@ -304,6 +304,30 @@ class DcPulseDriver(DcpMonitorMixin, DcpOpsMixin):
                     self._start_polling(keep_judge=True)
         self._run("set_power", gen(), on_done)
 
+    # ───────── 일시정지(11-09 C3) ─────────
+    def hold_power(self, on_done: Optional[Callable[[Optional[str], bool], None]] = None) -> bool:
+        """파워 일시정지 — 지금 측정 출력(마지막 PIV 의 P)으로 REF_POWER 를 내려 고정(쓰기 되읽기 확인 경로 그대로 — set_reference_power).
+        출력 중이 아니거나 측정값이 없거나 이미 고정이면 하지 않고 False. 폴링·아크·과전류 감시는 계속(set_reference_power 가 폴링을 이어 켬).
+        원래 목표는 release_power 가 되돌린다. ⚠ 장비의 하드웨어 램프 도중 REF 를 바꿨을 때의 동작은 bench 확인 대기(결정 D403)."""
+        meas = getattr(self, "last_p_w", None)
+        ref = getattr(self, "_last_ref_power_w", None)
+        if not self._out_on or getattr(self, "_held_ref", None) is not None or meas is None or ref is None:
+            return False
+        self._held_ref = float(ref)
+        self._emit("status", f"[HOLD] 일시정지 — 목표 {ref:.0f} W → 지금 출력 {meas:.0f} W 로 고정")
+        self.set_reference_power(min(float(meas), float(ref)), pause_polling=True, on_done=on_done)
+        return True
+
+    def release_power(self, on_done: Optional[Callable[[Optional[str], bool], None]] = None) -> bool:
+        """재개 — 원래 목표 REF_POWER 를 다시 쓴다(램프 계속). 고정 중이 아니면 False."""
+        ref = getattr(self, "_held_ref", None)
+        if ref is None:
+            return False
+        self._held_ref = None
+        self._emit("status", f"[HOLD] 재개 — 목표 {ref:.0f} W 로 램프 계속")
+        self.set_reference_power(ref, pause_polling=True, on_done=on_done)
+        return True
+
     def read_actual_pulse_params(self, on_done: Callable[[Optional[str], Optional[dict]], None]) -> None:
         """0xA6 + 0xA7 → {"freq_khz", "off_time_us"(DC 면 None), "duty_pct"} (v1 read_actual_pulse_params)."""
         box: dict = {}
@@ -477,6 +501,8 @@ class DcPulseDriver(DcpMonitorMixin, DcpOpsMixin):
             res = {"raw": raw, "eng": self._scale(raw)}
             e = res["eng"]
             out.update({f"{b}.p_w": e["P_W"], f"{b}.v_v": e["V_V"], f"{b}.i_a": e["I_A"]})
+            if e["P_W"] is not None:
+                self.last_p_w = float(e["P_W"])                  # 일시정지(hold_power)가 쓰는 마지막 측정 출력
         soft = P.u16_tail(self._q(session, P.R_ARC_SOFT)) if self._room(session) else None
         hard = P.u16_tail(self._q(session, P.R_ARC_HARD)) if self._room(session) else None
         out[f"{b}.arc_soft"], out[f"{b}.arc_hard"] = soft, hard

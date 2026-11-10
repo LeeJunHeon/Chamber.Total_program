@@ -68,4 +68,26 @@ ITEMS = [
     dict(id="SYNC-104", area="sync",
          desc="v1 open_sputter.json·Robot CSV(NAS)·기록 폴더를 둔 채 sim 을 켜도 그 파일·폴더가 바뀌지 않고, sim 실행 중 열린 쓰기 경로 전부가 기준 폴더 아래(감사 훅으로 확인)",
          v1="(v2)", v2="v2/ch12/sim_guard.py", test="v2/tests/test_sim_isolation.py::test_sim_with_v1_files_present_touches_nothing_outside_and_closes_ports", status="done", note=""),
+    dict(id="SYNC-200", area="sync",
+         desc="정상 끝 정지(end_stop 블록) 도중 재시작: 설정값을 다시 쓰지 않고 끄는 순서를 처음부터 끝까지(끄기만 하므로 안전), 결과는 실패가 아니라 '정상 종료(재시작 후 정지 이어감)'(run_end done·이벤트 RESUMED_STOP), "
+              "STOP 정지 순서 도중은 사용자 중단 그대로, 이상 중단 정지는 PROGRAM_RESTART. BLOCK_WRITES 에서 end_stop 항목 정리",
+         v1="(v2 — 지시 3장 (6))", v2="v2/ch12/process_view.py; v2/ch12/resume.py",
+         test="v2/tests/test_resume.py::test_every_block_kind_random_time; v2/tests/test_resume.py::test_end_stop_crash_at_every_step_never_turns_anything_back_on", status="done", note=""),
+    dict(id="SYNC-201", area="sync",
+         desc="공정 중 값 수정 상한: 파워(dc·dc2·rf·dcp·rfp)는 장비 최대(DC_MAX_POWER·RF_MAX_POWER·DCP_MAX_POWER_W)를 넘으면 거부(D11), 히터 목표는 상한, inf·NaN·음수 유량 거부, "
+              "지금 블록에 바로 쓸 때도 driver.retarget(start() 와 같은 제한·카운터·과전류 한계 — 제한된 목표 기준)",
+         v1="(v2)", v2="v2/ch12/process_adjust.py; v2/ch12/drivers/dc.py; v2/ch12/drivers/rf.py",
+         test="v2/tests/test_process_safety_1109.py::test_adjust_power_above_equipment_max_is_rejected_not_clamped; v2/tests/test_process_safety_1109.py::test_adjust_dc_live_goes_through_start_path_limit_and_overcurrent_basis; "
+              "v2/tests/test_process_safety_1109.py::test_adjust_pulse_and_rf_and_heater_limits", status="done", note=""),
+    dict(id="SYNC-202", area="sync",
+         desc="파워 램프 블록 일시정지: 그 순간 측정 출력으로 목표 고정(DC·RF·DC Pulse·RF Pulse 드라이버 hold), 재개하면 원래 목표로 램프 계속, 고정 중에도 드라이버 감시·안전 규칙은 계속",
+         v1="(v2 — 지시 3장 (3))", v2="v2/ch12/process_adjust.py; v2/ch12/process_actions.py; v2/ch12/drivers/dc.py; v2/ch12/drivers/rf.py; v2/ch12/drivers/dcpulse.py; v2/ch12/drivers/rfpulse.py",
+         test="v2/tests/test_process_safety_1109.py::test_pause_power_on_holds_target_at_measured_and_resume_restores", status="done", note=""),
+    dict(id="SYNC-203", area="sync",
+         desc="시퀀스 편집과 정지 경쟁: 잠금 안에서 shutdown·stop_requested·failed·_stopping 을 다시 확인하고 정지가 시작됐으면 편집 거부",
+         v1="(v2)", v2="v2/ch12/process_adjust.py; v2/ch12/process_engine.py",
+         test="v2/tests/test_process_safety_1109.py::test_sequence_edit_rejected_once_stop_started_even_before_runner_flags", status="done", note=""),
+    dict(id="SYNC-204", area="sync",
+         desc="공정이 없을 때 남은 파워 정리를 하나로 — 안전 규칙 S31 이 있으면 이어가기 모듈은 하지 않는다(두 번 도는 것 정리)",
+         v1="(v2)", v2="v2/ch12/resume.py; v2/ch12/safety.py", test="v2/tests/test_resume.py::test_residual_dc_power_without_process_is_turned_off", status="done", note=""),
 ]

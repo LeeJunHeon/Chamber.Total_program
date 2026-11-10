@@ -184,6 +184,42 @@ class RfPower:
             after(res)
         self._write_raw(self.xform_write(power_w), cb, kind="safety")
 
+    def retarget(self, target_power: float) -> float:
+        """공정 중 새 목표(PROCESS_ADJUST 지금 블록) — start() 와 같은 제한(0~RF_MAX_POWER)·반사파 감시 시작 조건·카운터 0. 적용한 목표를 돌려준다."""
+        self.target_power = float(max(0.0, min(self.c("RF_MAX_POWER"), float(target_power))))
+        self.low_power_n = 0
+        self.blind_reach_ts = None
+        th = self.c("RF_BLIND_RAMP_FWD_THRESHOLD_W")
+        self.ref_armed = self.direct or th <= 0.0 or self.target_power <= th
+        if hasattr(self, "sent_target_reached"):
+            self.sent_target_reached = False
+        self._held = None
+        return self.target_power
+
+    # ───────── 일시정지(11-09 C3) ─────────
+    def hold(self) -> Optional[float]:
+        """파워 램프 일시정지 — 그 순간 측정 출력(Forward)으로 목표를 고정(램프·보정·도달 이벤트 멈춤. 저출력·반사파 감시는 계속)."""
+        if not self.running or getattr(self, "_held", None) is not None:
+            return None
+        self._held = (float(self.target_power), self.state)
+        meas = float(max(0.0, min(self.c("RF_MAX_POWER"), float(self.forward_w or 0.0))))
+        self.target_power = meas
+        self._status(f"[HOLD] 일시정지 — 목표 {self._held[0]:.1f} W → 지금 출력 {meas:.1f} W 로 고정")
+        return meas
+
+    def release(self) -> Optional[float]:
+        """재개 — 원래 목표·상태로 램프 계속. 고정 중이 아니면 None."""
+        held = getattr(self, "_held", None)
+        if held is None:
+            return None
+        self._held = None
+        self.target_power = float(held[0])
+        if held[1] in ("RAMPING_UP", "BLIND_SETTLE") and self.state == "MAINTAINING":
+            self.state = held[1]
+        self.low_power_n = 0
+        self._status(f"[HOLD] 재개 — 목표 {held[0]:.1f} W 로 램프 계속")
+        return float(held[0])
+
     # ───────── 시작 ─────────
     def start(self, target_power: float, on_done: Optional[Callable[[Optional[str]], None]] = None) -> None:
         done = on_done or (lambda r: None)
@@ -192,6 +228,7 @@ class RfPower:
             done("STATE_NOT_ALLOWED")
             return
         self.target_power = float(max(0.0, min(self.c("RF_MAX_POWER"), float(target_power))))
+        self._held = None
         self.current_step = INITIAL_STEP_W
         self.last_sent = None
         self.low_power_n = 0
@@ -351,8 +388,8 @@ class RfPower:
         self._adjust_once()
 
     def _adjust_once(self) -> None:
-        if not self.running or self.state == "REF_P_WAITING":
-            return
+        if not self.running or self.state == "REF_P_WAITING" or getattr(self, "_held", None) is not None:
+            return                                           # 일시정지 중에는 램프·보정·도달 이벤트 없음
         last = self.last_sent
         if self.state == "RAMPING_UP":
             th = self.c("RF_BLIND_RAMP_FWD_THRESHOLD_W")
@@ -424,6 +461,7 @@ class RfPower:
         if self.ramping_down and not self.running:
             return
         self._status("정지 신호 수신됨.")
+        self._held = None
         self.running = False
         self._gen += 1
         self.polling, self._due = False, None

@@ -328,6 +328,7 @@ class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, Process
             single_run_defaults(params, self.n, datetime.fromtimestamp(self.clock.wall()).isoformat(timespec="seconds"),
                                 int(self.clock.monotonic() * 1e9))
         with self.lk:
+            self._stopping = False
             self.owner = owner if owner in OWNERS else "local"
             self.origin, self.origin_meta = origin, origin_meta
             self.error = None
@@ -380,6 +381,7 @@ class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, Process
             finally:
                 with self.lk:
                     self._cmd = None
+                    self._stopping = False
                     self.state_name = "IDLE"
                     self.lk.notify_all()
 
@@ -535,6 +537,7 @@ class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, Process
         self.log("MAIN", f"[Runner] STOP 요청(user={user}) state={self.state_name}")
         self._stop_user = bool(user)
         with self.lk:
+            self._stopping = True                          # 시퀀스 편집 거부(11-09 C4) — 러너가 shutdown 을 세우기 전 틈도 막는다
             self.queue_mode = False
             self.paused = False
             if self.runner.is_running:
@@ -555,6 +558,7 @@ class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, Process
         """안전 규칙·장비 이상 중단 — 공정 중이면 v1 _step_failed 와 같은 경로(정지 순서 첫 단계 Main Shutter 닫기),
         시작 전 단계면 STOP 과 같은 정리. run_end error, 사유 코드 = reason."""
         with self.lk:
+            self._stopping = True
             self._abort_code = reason
             self.queue_mode = False
             self.paused = False

@@ -563,3 +563,22 @@ DECISIONS += [
          reason="사용자 지시 2026-11-09 B(치명 — v1 운영 파일·NAS 오염 방지)", confirm=True,
          where="v2/ch12/sim_guard.py; app.py; robot_server/app.py; workers/oes_common.py; outputs/paths.py"),
 ]
+
+DECISIONS += [
+    dict(id="D402", title="2026-11-09 C 안전 — 값 수정 상한·정지 경쟁·남은 파워 정리 하나로",
+         decision="① 공정 중 값 수정(PROCESS_ADJUST): 파워는 장비 최대(DC_MAX_POWER·RF_MAX_POWER·DCP_MAX_POWER_W, 히터는 min(HEATER_MAX_TEMP, SV 상한))를 넘으면 ADJUST_OUT_OF_RANGE 로 거부(D11 — 고쳐 쓰지 않음), "
+                  "inf·NaN 은 BAD_ARGS, 음수 유량·압력·시간은 레시피 검증과 같은 범위(0 이상). RF Pulse 는 v1 에 펄스 전용 최대가 없어 RF 계열 최대(RF_MAX_POWER)를 쓴다 — 사용자 확인 필요. "
+                  "adjust_state 에 항목별 max 를 싣는다(웹 묶음 정의 밖). 지금 블록에 바로 쓸 때 DC·DC2·RF 는 드라이버 retarget(start() 와 같은 제한·카운터 0·과전류 한계 문구 — 제한된 목표 기준). "
+                  "② 시퀀스 편집: 확인과 편집을 같은 잠금 안에서(정지 요청·이상 중단이 잠금 안에서 _stopping 을 세워 러너 플래그 전 틈도 막음). "
+                  "③ 공정이 없을 때 남은 파워 정리는 안전 규칙 S31 하나만(이어가기 모듈의 _residual 은 안전 규칙이 없을 때만).",
+         reason="사용자 지시 2026-11-09 C2·C4·C5", confirm=True,
+         where="v2/ch12/process_adjust.py; drivers/dc.py; drivers/rf.py; process_engine.py; resume.py"),
+    dict(id="D403", title="2026-11-09 C 안전 — 정상 끝 정지 도중 재시작·파워 램프 일시정지",
+         decision="① 끝 정지(end_stop) 블록 도중 재시작은 설정 쓰기 도중(rewrite)이 아니라 정지 순서 이어가기(stop_sequence, stop_kind end) — 설정값을 다시 쓰지 않고 끄는 순서를 처음부터 끝까지, "
+                  "결과는 실패가 아니라 '정상 종료(재시작 후 정지 이어감)'(run_end done, 이벤트 resumed 코드 RESUMED_STOP — 포털 카드 1장). 사용자 STOP 정지 순서 도중이면 사용자 중단 그대로(USER_STOP), "
+                  "이상 중단 정지 도중이면 PROGRAM_RESTART(error). 재현 시험: CH1·CH2 끝 정지의 모든 단계에서 죽였다 살려 PLC 코일·DC 쓰기 값·펄스 출력이 꺼진 뒤 다시 올라가지 않음(5 시나리오). "
+                  "② 파워 램프(power_on) 일시정지: DC·DC2·RF 는 목표를 지금 측정 출력으로 고정(램프·보정·도달 이벤트 멈춤, 저전력·저전류·과전류·반사파 감시는 계속), 재개하면 원래 목표로 램프 계속. "
+                  "DC Pulse·RF Pulse 는 REF_POWER·셋포인트를 마지막 측정 출력으로 내려 고정(되읽기 확인 경로)·재개 때 원래 값 — ⚠ 장비의 하드웨어 램프 도중 설정값을 바꿨을 때의 동작은 bench 확인 대기(UNVERIFIED).",
+         reason="사용자 지시 2026-11-09 C1·C3", confirm=True,
+         where="v2/ch12/process_view.py; resume.py; process_adjust.py; process_actions.py; drivers/dc.py; rf.py; dcpulse.py; rfpulse.py"),
+]
