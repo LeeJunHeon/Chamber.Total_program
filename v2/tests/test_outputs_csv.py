@@ -218,7 +218,7 @@ def test_heater_golden(tmp_path):
             clock.set(ev[1])
             clock.mono = ev[2]
         elif ev[0] == "start":
-            h.start()
+            h.today_path()                 # 하루 1개 파일(v1 main 9cde7c4) — start() 없음
         elif ev[0] == "row":
             h.write_row(ev[1], **ev[2])
         elif ev[0] == "stop":
@@ -227,25 +227,32 @@ def test_heater_golden(tmp_path):
     assert_same_tree(root, GOLDEN / "heater" / "files", _KEEP)
 
 
-def test_heater_on_tick_edges_and_suffix(tmp_path):
-    """RUN 상승 엣지 → 새 파일(같은 초면 _2), 주기 3 s, 하강 엣지 → '운전 종료' 행 후 닫기."""
+def test_heater_daily_file_header_once_midnight_split_and_restart_append(tmp_path):
+    """v1 main 9cde7c4 — 하루 1개 파일(CH2_HEATER_YYYYMMDD.csv), 자정이 지나면 다음 행부터 새 파일, 같은 날 다시 켜면 이어 쓴다(헤더 한 번)."""
     root = make_root(tmp_path)
     cfg = v2_cfg(root, SC.BASE_CFG)
-    clock = Clock("2026-10-30T10:00:00")
+    clock = Clock("2026-10-30T23:59:58")
+    d = root / "로컬" / "VanaM_Logs" / "CH1&2" / "CH2_Heater"
     w = QueueWriter("t")
     h = HeaterCsv(cfg, writer=w, monotonic=clock.monotonic, now=clock.now)
-    for i in range(8):                       # 0~7 s RUN
-        h.on_tick({"run": True, "pv": 20 + i}, owner_label="공정")
+    assert h.today_path() == d / "CH2_HEATER_20261030.csv" and not h.is_open()
+    for i in range(4):                                   # 23:59:58·23:59:59·00:00:00·00:00:01
+        h.write_row({"run": i % 2 == 0, "pv": 20 + i}, owner="공정" if i % 2 == 0 else "", elapsed=float(i))
         clock.advance(1.0)
-    h.on_tick({"run": False, "pv": 30}, owner_label="공정")
-    h.on_tick({"run": True, "pv": 31})       # 10:00:08 새 파일
-    h.on_tick({"run": False, "pv": 31})
-    h.on_tick({"run": True, "pv": 32})       # 같은 초에 다시 RUN → _2
-    h.on_tick({"run": False, "pv": 32})
-    h.shutdown()
+    h.write_row(None, note="PLC 미연결")                  # 못 읽은 폴링 — timestamp·note 만
+    h.shutdown({"run": False, "pv": 25})                  # 프로그램 종료 행 + 닫기
     w.stop()
-    d = root / "로컬" / "VanaM_Logs" / "CH1&2" / "CH2_Heater"
-    f1, f2 = d / "CH2_HEATER_20261030_100000.csv", d / "CH2_HEATER_20261030_100008_2.csv"
-    lines = f1.read_text(encoding="utf-8-sig").splitlines()
-    assert [x.split(",")[3] for x in lines[1:]] == ["20.0", "23.0", "26.0", "30.0"]
-    assert lines[-1].endswith(",운전 종료") and (d / "CH2_HEATER_20261030_100008.csv").exists() and f2.exists()
+    f1, f2 = d / "CH2_HEATER_20261030.csv", d / "CH2_HEATER_20261031.csv"
+    l1, l2 = f1.read_text(encoding="utf-8-sig").splitlines(), f2.read_text(encoding="utf-8-sig").splitlines()
+    assert [x for x in l1 if x.startswith("timestamp")] == [l1[0]] and len(l1) == 3
+    assert l2[0].startswith("timestamp") and len(l2) == 1 + 4                   # 00:00:00·00:00:01·PLC 미연결·프로그램 종료
+    assert l2[3].endswith(",".join([""] * 29) + ",PLC 미연결") and l2[-1].endswith(",프로그램 종료")
+    assert not list(d.glob("CH2_HEATER_2026*_??????.csv"))                      # 운전별 파일은 만들지 않는다
+    clock2 = Clock("2026-10-31T09:00:00")
+    w = QueueWriter("t")
+    h2 = HeaterCsv(cfg, writer=w, monotonic=clock2.monotonic, now=clock2.now)     # 같은 날 다시 켬
+    h2.write_row({"run": False, "pv": 26})
+    h2.stop()
+    w.stop()
+    l3 = f2.read_text(encoding="utf-8-sig").splitlines()
+    assert len(l3) == len(l2) + 1 and sum(x.startswith("timestamp") for x in l3) == 1

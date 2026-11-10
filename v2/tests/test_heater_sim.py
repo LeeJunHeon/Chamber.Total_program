@@ -136,8 +136,8 @@ def test_interlock_loss_recorded_in_csv(tmp_path):
     with open(files[0], encoding="utf-8-sig", newline="") as fp:
         rows = list(csv.DictReader(fp))
     assert rows[0]["water_ok"] == "1" and rows[0]["vac_ok"] == "1"
-    last = rows[-1]
-    assert last["note"] == "운전 종료" and last["itl"] == "0" and last["water_ok"] == "1" and last["vac_ok"] == "0"
+    last = next(r for r in rows if r["note"] == "운전 종료")          # v1 main 9cde7c4 — 끝에는 '프로그램 종료' 행이 더 붙는다
+    assert last["itl"] == "0" and last["water_ok"] == "1" and last["vac_ok"] == "0"
 
 
 def test_brief_interlock_drop_between_polls():

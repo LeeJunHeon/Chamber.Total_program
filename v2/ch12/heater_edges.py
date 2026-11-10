@@ -117,9 +117,10 @@ class HeaterEdges:
         c = self.cfg
         path = None
         if c.log_enabled and self.csv is not None:
-            r = self.csv.start()
-            path = r or getattr(self.csv, "path", None) or "기록 시작"
-        self._csv_last_t = -1e9
+            try:
+                path = self.csv.today_path()     # 하루 1개 파일 — 이 폴링의 "운전 시작" 행은 _process 의 CSV 단계가 쓴다
+            except Exception:
+                path = None
         tgt = self.profiler.target()
         tgt_txt = f"{tgt:.1f}°C(램프)" if tgt is not None else self._fmt(st.get("sv"))
         ramp_txt = f"{self.profiler.rate():g}°C/min" if self.profiler.is_active() else "없음(래더 램프만)"
@@ -137,14 +138,7 @@ class HeaterEdges:
         self._card("시작", self._run_ctx, "INFO", fields)
 
     def _on_run_fall(self, st: dict, now: float) -> None:
-        try:
-            if self.csv is not None and self.csv.is_open():
-                self.csv.write_row(st, owner=OWNER_LABEL.get(self.owner, self.owner or ""),
-                                   hold=self.hold.log_tuple(), sat_clamp=self.sat.clamped, note="운전 종료")
-            if self.csv is not None:
-                self.csv.stop()
-        except Exception:
-            pass
+        # CSV "운전 종료" 행은 _process 의 CSV 단계가 이 폴링의 유일한 행으로 쓴다(파일은 하루 단위라 닫지 않는다)
         if self.profiler.is_active():
             self.profiler.stop(restore_rate=True)
         elif st.get("ramp_rate") is not None and float(st["ramp_rate"]) != self._ramp_c_per_min() and self.writes_allowed:

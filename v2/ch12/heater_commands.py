@@ -275,8 +275,9 @@ class HeaterCommands:
                 if run and not done:
                     self._log("⚠ 종료 시 히터 OFF 를 보내지 못함 — PLC 워치독이 30초 뒤 차단")
                 try:
-                    if self.csv is not None and self.csv.is_open():
-                        self.csv.write_row(self._st, owner=self.owner or "", note="프로그램 종료")
+                    if self.csv is not None and self.cfg.log_enabled:
+                        st = self._st if self._last_ok_t is not None else None
+                        self._csv_row(st, self._now(), note="프로그램 종료")
                     if self.csv is not None:
                         self.csv.stop()
                 except Exception:

@@ -543,7 +543,7 @@ DECISIONS += [
 # ═══════════════ 2026-11-09 검토 반영 ═══════════════
 DECISIONS += [
     dict(id="D400", title="2026-11-09 검토 반영 A — 운영 v1 최신(66efc7b → 2f968be) 커밋 3개를 v2 에 옮김",
-         decision="a6e8d46 터보 꺼짐 지속 알림(판정기 그대로·1초 행에서 읽기 성공 행마다 판정·카드는 포털이 PLC 웹훅으로, 설정 TURBO_OFF_ALERT_S), "
+         decision="(+ 2026-11-10 확인 때 새로 생긴 9cde7c4 히터 CSV 하루 1개 파일·항상 기록 — SYNC-030, V1_BASE 9cde7c4) a6e8d46 터보 꺼짐 지속 알림(판정기 그대로·1초 행에서 읽기 성공 행마다 판정·카드는 포털이 PLC 웹훅으로, 설정 TURBO_OFF_ALERT_S), "
                   "984556e TSP 실행 로그 [FILAMENT](671·206 읽기 전용, 시작 1번·종료 1번), 2f968be 두께 Time 모드 Factor 적용·THICKNESS_ZERO·기록·ETA. "
                   "골든·v1 비교 기준 V1_BASE 를 2f968be 로 갱신(process_combos 의 Time 두께 기록 steps_time_record·eta 합 추가). "
                   "Time 모드 영점 스텝은 블록 목록을 바꾸지 않고(템플릿·웹 골든 그대로) 시작 전 점검이 성공한 런에서만 Main Shutter 열기(없으면 메인, 그것도 없으면 끝 정지) 블록의 첫 스텝으로 "

@@ -317,6 +317,32 @@ class HeaterEngine(HeaterNotify, HeaterPush, HeaterEdges, HeaterCommands, Heater
                 self._log(f"상태 리스너 예외: {e!r}")
         self._proc_on_status(dict(snap))
 
+    # ═══════════════════════ CSV(하루 1개 파일, 항상 기록 — v1 main 9cde7c4) ═══════════════════════
+    def _csv_period(self, run: bool) -> float:
+        """운전 중 HEATER_LOG_PERIOD_S, 정지 중 HEATER_POLL_IDLE_S(기록 주기보다 짧아지지는 않게)."""
+        p = float(self.cfg.log_period_s)
+        return p if run else max(p, float(self.cfg.poll_idle_s))
+
+    def _csv_due(self, now: float, run: bool) -> bool:
+        """마지막 기록 후 '기록 주기 − 지금 폴링 주기의 절반' 이상 지났으면 기록 — 폴링 간격이 흔들려도 매 폴링 1행이 빠지지 않게."""
+        slack = 0.5 * self._next_interval()
+        return (now - self._csv_last_t) >= self._csv_period(run) - slack
+
+    def _csv_row(self, st: Optional[dict], now: float, *, note: str = "", owner: str = "", elapsed: Optional[float] = None,
+                 hold=None, sat_clamp=None, ramp_target=None) -> None:
+        if self.csv is None:
+            return
+        self._csv_last_t = now
+        self.csv.write_row(st, owner=owner, note=note, elapsed=elapsed, hold=hold, sat_clamp=sat_clamp, ramp_target=ramp_target)
+
+    def _csv_fail_row(self, note: str) -> None:
+        """상태를 못 읽은 폴링 — 마지막으로 확인된 RUN 기준 주기로 timestamp·note 만 남긴다(옛 값을 반복해 쓰지 않는다)."""
+        if not self.cfg.log_enabled or self.csv is None:
+            return
+        now = self._now()
+        if self._csv_due(now, bool(self._st.get("run"))):
+            self._csv_row(None, now, note=note)
+
     def _next_interval(self) -> float:
         st = self._st
         busy = (st.get("run") or self.profiler.is_active() or self._pending_off
@@ -365,6 +391,7 @@ class HeaterEngine(HeaterNotify, HeaterPush, HeaterEdges, HeaterCommands, Heater
             now = self._now()
             if not self._link_up():
                 self._on_fail("PLC 미연결", quiet=self._last_ok_t is None)
+                self._csv_fail_row("PLC 미연결")
                 self._poll_finished()
                 return
             rd = self.drv.take()
@@ -375,6 +402,7 @@ class HeaterEngine(HeaterNotify, HeaterPush, HeaterEdges, HeaterCommands, Heater
             self._last_event_t = now
             if isinstance(rd, HeaterReadFail):
                 self._on_fail(rd.why)
+                self._csv_fail_row("PLC 미연결(읽기 실패)")
                 self._poll_finished()
                 return
             self._poll_busy = True
@@ -391,6 +419,7 @@ class HeaterEngine(HeaterNotify, HeaterPush, HeaterEdges, HeaterCommands, Heater
                     self._log(f"⚠ 히터 폴링 처리 예외: {res.error}")
                 elif res.status in (Status.LINK_DOWN,):
                     self._on_fail("PLC 미연결", quiet=self._last_ok_t is None)
+                    self._csv_fail_row("PLC 미연결")
             self._poll_finished()
         self._flush()
 
@@ -455,8 +484,13 @@ class HeaterEngine(HeaterNotify, HeaterPush, HeaterEdges, HeaterCommands, Heater
             self._run_since = now
         self._output_dead(st, now)
         self._st = st
+        # 하강 행(운전 종료)은 끝난 운전의 owner·경과·유지/클램프 상태를 정리 전 값으로 남긴다
+        csv_owner = OWNER_LABEL.get(self.owner, self.owner or "") if (st["run"] or fall) else ""
+        csv_elapsed = (now - self._run_since) if (st["run"] or fall) and self._run_since > 0 else None
+        fall_snap = (self.hold.log_tuple(), self.sat.clamped) if fall else None
         if rise:
             self._on_run_rise(st)
+            csv_owner = OWNER_LABEL.get(self.owner, self.owner or "")
         elif fall:
             self._on_run_fall(st, now)
         self._run_prev = bool(st["run"])
@@ -473,10 +507,12 @@ class HeaterEngine(HeaterNotify, HeaterPush, HeaterEdges, HeaterCommands, Heater
                               clamped=self.sat.clamped is not None)
         if trip is not None:
             self._on_no_response(st, trip)
-        if st["run"] and self.cfg.log_enabled and self.csv is not None and (now - self._csv_last_t) >= float(self.cfg.log_period_s):
-            self._csv_last_t = now
-            self.csv.write_row(st, owner=OWNER_LABEL.get(self.owner, self.owner or ""),
-                               hold=self.hold.log_tuple(), sat_clamp=self.sat.clamped,
-                               ramp_target=self.profiler.target())
+        # CSV — 한 폴링에 최대 1행. 상승/하강 폴링은 주기와 상관없이 기록(note), 그 밖에는 운전 1초·정지 3초 주기
+        if self.cfg.log_enabled and self.csv is not None:
+            note = "운전 시작" if rise else ("운전 종료" if fall else "")
+            if note or self._csv_due(now, bool(st["run"])):
+                hold_t, clamp = fall_snap if fall_snap is not None else (self.hold.log_tuple(), self.sat.clamped)
+                self._csv_row(st, now, note=note, owner=csv_owner, elapsed=csv_elapsed, hold=hold_t, sat_clamp=clamp,
+                              ramp_target=self.profiler.target())
         self._first_poll = False
         return True

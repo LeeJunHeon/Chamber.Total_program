@@ -32,7 +32,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 GOLDEN = ROOT / "v2" / "tests" / "golden"
 FILES = GOLDEN / "recipe_files"
-V1_BASE = "2f968beb1f2168462b30ad2482f3e076b215a13a"   # 2026-11-09 갱신(이전 66efc7b — 터보·TSP 필라멘트·두께 Time 기록 3커밋 이후)
+V1_BASE = "9cde7c42e60efdaeb770b9352099a844d4702bd6"   # 2026-11-10 갱신(이전 66efc7b → 2f968be → 9cde7c4 — 터보·TSP 필라멘트·두께 Time 기록·히터 CSV 하루 파일)
 
 
 def _v1():

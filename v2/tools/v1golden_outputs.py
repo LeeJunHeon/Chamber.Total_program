@@ -387,6 +387,9 @@ def gen_plc_coil() -> None:
         def _note_coil_plan_result(self, *a):
             pass
 
+        def _turbo_watch_feed(self, snap):         # v1 main a6e8d46 — 터보 꺼짐 지속 판정(코일 CSV 출력과 무관, 발송기 없음)
+            pass
+
         def _coil_ranges_for_plan(self, addrs, idx):
             return [], [1, 2]
 
@@ -474,13 +477,13 @@ def gen_thickness_heater() -> None:
     clock = Clock(scen["t0"])
     cfg = set_cfg(root, dict(SC.BASE_CFG, **scen["cfg"]))
     patch_dt(hl, clock, as_module=True)
-    h = hl.HeaterCsvLogger("", clock=lambda: clock.mono)
+    h = hl.HeaterCsvLogger("", clock=lambda: clock.mono, wall=lambda: clock.t)     # v1 main 9cde7c4 — 벽시계 주입(하루 파일명·행 시각)
     for ev in scen["events"]:
         if ev[0] == "t":
             clock.set(ev[1])
             clock.mono = ev[2]
         elif ev[0] == "start":
-            h.start()
+            h.today_path()                 # v1 main 9cde7c4 — 하루 1개 파일이라 start() 가 없다(오늘 경로만)
         elif ev[0] == "row":
             h.write_row(ev[1], **ev[2])
         elif ev[0] == "stop":

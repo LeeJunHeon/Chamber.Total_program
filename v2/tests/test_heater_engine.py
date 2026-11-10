@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from typing import List
 
+import re
 import pytest
 
 from v2.common.worker import Request, Result, Status
@@ -443,7 +444,10 @@ def test_run_edges_csv_and_chat(tmp_path):
     files = [f for f in tmp_path.iterdir() if f.name.startswith("CH2_HEATER_")]
     assert len(files) == 1
     lines = files[0].read_text(encoding="utf-8-sig").strip().splitlines()
-    assert lines[0].startswith("timestamp,elapsed_sec,owner,pv_c") and len(lines) >= 3 and "운전 종료" in lines[-1]
+    assert lines[0].startswith("timestamp,elapsed_sec,owner,pv_c") and len(lines) >= 3
+    notes = [x.split(",")[-1] for x in lines[1:]]
+    assert notes.count("운전 시작") == 1 and notes.count("운전 종료") == 1 and notes[-1] == "프로그램 종료"      # v1 main 9cde7c4
+    assert re.fullmatch(r"CH2_HEATER_\d{8}\.csv", files[0].name)                                          # 하루 1개 파일(운전별 파일 아님)
 
 
 def test_push_stops_on_first_failure_backoff_and_recovery():
@@ -631,3 +635,44 @@ def test_long_read_fail_after_turn_on_publishes_stale_then_waiter_fails_as_befor
     assert min(p[0] for p in pub) - t0 <= r.eng.cfg.stale_sec + 2
     fails = [x for x in r.eng.take_process_results() if x[0] == "failed"]
     assert len(fails) == 1 and "PLC 응답 없음" in fails[0][2]
+
+
+def test_csv_daily_idle_3s_run_1s_blank_rows_when_disconnected_and_edges(tmp_path):
+    """v1 main 9cde7c4(tests/test_heater_csv_daily.py) — 하루 1개 파일에 항상 기록: 정지 3초·운전 1초, 운전 시작·종료 행(note), PLC 미연결 행(값 빈칸)."""
+    import csv as _csv
+    from datetime import datetime, timedelta
+    from v2.ch12.outputs.heater_csv import HeaterCsv
+    c = HeaterCfg(enabled=True, log_enabled=True, log_dir=str(tmp_path), log_period_s=1.0, poll_idle_s=3.0, poll_interval_s=1.0)
+    clk = FakeClock()
+    d = cfg_to_dict(c)
+    base = datetime(2026, 11, 10, 12, 0, 0)
+    sink = HeaterCsv(d, monotonic=clk.monotonic, now=lambda: base + timedelta(seconds=clk.t))
+    plc = _DumbPlc(clk)
+    evs = []
+    eng = HeaterEngine(clk, H.HeaterDriver(clk, plc, d, True, on_event=evs.append), d, on_event=evs.append, csv=sink)
+    for _ in range(4):                                    # 정지 — 폴링도 3초 주기(HEATER_POLL_IDLE_S)
+        _poll(eng, plc, clk, dt=3.0)
+    plc.connected = False
+    for _ in range(2):                                    # PLC 미연결(마지막 RUN 기준 주기 — 정지라 3초)
+        _poll(eng, plc, clk, dt=3.0)
+    plc.connected = True
+    plc.bits[640] = True
+    for _ in range(6):                                    # 운전 6 s
+        _poll(eng, plc, clk)
+    plc.bits[640] = False
+    for _ in range(4):
+        _poll(eng, plc, clk)
+    sink.shutdown()
+    files = [f for f in tmp_path.iterdir() if f.name.startswith("CH2_HEATER_")]
+    assert [f.name for f in files] == ["CH2_HEATER_20261110.csv"]
+    rows = list(_csv.DictReader(open(files[0], encoding="utf-8-sig", newline="")))
+    notes = [r["note"] for r in rows]
+    assert notes.count("운전 시작") == 1 and notes.count("운전 종료") == 1 and notes[-1] == "프로그램 종료"
+    miss = [r for r in rows if r["note"].startswith("PLC 미연결")]
+    assert miss and all(all(r[k] == "" for k in ("pv_c", "sv_c", "run", "itl", "mv", "owner", "elapsed_sec")) for r in miss)
+    idle = [r for r in rows[:4]]
+    stamps = [datetime.strptime(r["timestamp"], "%Y-%m-%d %H:%M:%S") for r in idle]
+    assert all((b - a).total_seconds() == 3.0 for a, b in zip(stamps, stamps[1:]))            # 정지 중 3초 간격
+    run_rows = [r for r in rows if r["run"] == "1"]
+    assert len(run_rows) >= 5 and all(r["owner"] != "" and r["elapsed_sec"] != "" for r in run_rows)
+    assert all(r["elapsed_sec"] == "" and r["owner"] == "" for r in rows if r["run"] == "0" and r["note"] == "")

@@ -418,7 +418,7 @@ ITEMS = [
          desc="히터 운전 CSV: 위치 HEATER_LOG_DIR(비면 LOG_ROOT_DIR(C:\\VanaM_Logs\\CH1&2)\\CH2_Heater), 만들 수 없으면 LOCAL_FALLBACK_ROOT\\CH2_Heater(경고 1회), "
               "파일명 CH2_HEATER_YYYYMMDD_HHMMSS.csv(있으면 _2, _3 …), utf-8-sig, RUN 상승 엣지에 새 파일·하강 때 마지막 행 후 닫기, 매 행 flush, 실패 경고 1회",
          v1="lib/heater_logger.py:1-8;lib/heater_logger.py:27-35;lib/heater_logger.py:57-104;lib/heater_logger.py:142-151;lib/config_common.py:645",
-         v2="v2/ch12/outputs/heater_csv.py", test="v2/tests/test_outputs_csv.py::test_heater_golden; v2/tests/test_outputs_csv.py::test_heater_on_tick_edges_and_suffix; v2/tests/test_heater_engine.py::test_run_edges_csv_and_chat", status="done", note=""),
+         v2="v2/ch12/outputs/heater_csv.py", test="v2/tests/test_outputs_csv.py::test_heater_golden; v2/tests/test_outputs_csv.py::test_heater_daily_file_header_once_midnight_split_and_restart_append; v2/tests/test_heater_engine.py::test_run_edges_csv_and_chat", status="done", note=""),
     dict(id="HEAT-088", area="heat",
          desc="히터 CSV 열: timestamp(YYYY-MM-DD HH:MM:SS), elapsed_sec(.1f), owner(수동/공정/외부), pv_c, sv_c, ramp_sv_c(D119), cur_sv_c(.1f), mv, mv_limit(.0f), mv_pct(.1f), "
               "pid_err(.0f), ramp_rate_c_per_min(.0f), holdback_c, ot_limit_c, run, itl, fault, ot, tc_err, wd_err, tc_ok, da_ok, water_ok, vac_ok, pid_run, output_dead(0/1), "
@@ -427,7 +427,7 @@ ITEMS = [
     dict(id="HEAT-089", area="heat",
          desc="히터 CSV 행 주기: RUN 이고 HEATER_LOG_ENABLED 일 때 HEATER_LOG_PERIOD_S(3초)마다 1행, RUN 상승 직후 첫 행은 바로. 하강 행 note '운전 종료', 종료 행 note '프로그램 종료'",
          v1="controller/heater_service.py:850-855;controller/heater_service.py:1117-1118;controller/heater_service.py:1142-1146;controller/heater_service.py:461-464",
-         v2="v2/ch12/outputs/heater_csv.py; v2/ch12/heater_edges.py", test="v2/tests/test_outputs_csv.py::test_heater_on_tick_edges_and_suffix; v2/tests/test_heater_engine.py::test_run_edges_csv_and_chat; v2/tests/test_inv_heat.py::test_heat036_shutdown_turns_run_off_and_closes_csv", status="done", note="1초 스냅샷에서 만들어도 됨(같은 주기·열)"),
+         v2="v2/ch12/outputs/heater_csv.py; v2/ch12/heater_edges.py", test="v2/tests/test_outputs_csv.py::test_heater_daily_file_header_once_midnight_split_and_restart_append; v2/tests/test_heater_engine.py::test_run_edges_csv_and_chat; v2/tests/test_inv_heat.py::test_heat036_shutdown_turns_run_off_and_closes_csv", status="done", note="1초 스냅샷에서 만들어도 됨(같은 주기·열)"),
     dict(id="HEAT-090", area="heat",
          desc="공정 로그(.txt) 히터 상태 줄: 공정 진행 중·로그 파일 열림·RUN 일 때 HEATER_RUN_LOG_PERIOD_S(10초)마다 "
               "'히터 상태 — PV x°C · SV(D119) x°C · 목표 x°C · MV a/b · 유지(DAC 상한 v)|램프|제어 · 주체'(TC 이상이면 PV --.-). 기록 실패는 1회 경고",

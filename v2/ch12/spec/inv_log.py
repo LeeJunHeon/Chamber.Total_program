@@ -438,9 +438,9 @@ _DONE = {
     66: (_O + "thickness_csv.py", _x(_OC, "test_thickness_golden", "test_thickness_gdrive_dir_replaced_and_fallback"), ""),
     67: (_O + "thickness_csv.py; v2/ch12/process_records.py", _x(_OC, "test_thickness_golden") + "; " +
          _x(_IL, "test_engine_thickness_csv_records_process_name"), ""),
-    68: (_O + "heater_csv.py", _x(_OC, "test_heater_golden", "test_heater_on_tick_edges_and_suffix"), ""),
+    68: (_O + "heater_csv.py", _x(_OC, "test_heater_golden", "test_heater_daily_file_header_once_midnight_split_and_restart_append"), ""),
     69: (_O + "heater_csv.py", _x(_OC, "test_heater_golden"), ""),
-    70: (_O + "heater_csv.py", _x(_OC, "test_heater_golden", "test_heater_on_tick_edges_and_suffix"), ""),
+    70: (_O + "heater_csv.py", _x(_OC, "test_heater_golden", "test_heater_daily_file_header_once_midnight_split_and_restart_append"), ""),
     71: (_O + "camera_photos.py", _x(_OM, "test_camera_golden_korean_path", "test_camera_root_fallback") +
          "; v2/tests/test_inv_app.py::test_camera_photos_match_rf_worker_rules", ""),
     72: ("v2/ch12/drivers/camera.py; " + _O + "camera_photos.py", _x(_CAM, "test_real_cv2_backend_encode_and_rotate_if_available",

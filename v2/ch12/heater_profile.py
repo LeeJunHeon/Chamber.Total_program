@@ -125,7 +125,7 @@ class HeaterCfg:
     hold_wait_s: float = 300.0
     hold_fail_action: str = "force"
     log_enabled: bool = True
-    log_period_s: float = 3.0
+    log_period_s: float = 1.0
     log_dir: str = ""
     run_log_period_s: float = 10.0
     noresp_enable: bool = True

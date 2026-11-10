@@ -22,9 +22,9 @@ def _heater(tmp_path, over):
     clock = Clock("2026-10-30T10:00:00")
     w = QueueWriter("t")
     h = HeaterCsv(cfg, writer=w, warn=warns.append, monotonic=clock.monotonic, now=clock.now)
-    h.start()
+    h.today_path()
     h.write_row({"run": True, "pv": 25.0})
-    h.start()                                    # 같은 로거 — 경고는 1번만
+    h.write_row({"run": True, "pv": 25.0})       # 같은 로거 — 경고는 1번만
     h.stop()
     w.stop()
     return root, warns
@@ -35,15 +35,15 @@ def test_heater_csv_folder_fallback_and_none_warn_once(tmp_path):
     '히터 CSV 폴더를 만들 수 없어 기록하지 않습니다' — 로거 인스턴스당 1회, 공정을 막지 않음."""
     root, warns = _heater(tmp_path / "a", lambda r: {"CH2_HEATER_LOG_DIR": str(r / "막힘" / "H")})
     fb = root / "exe 폴더" / "Logs_LocalFallback" / "CH2_Heater"
-    assert warns == [f"히터 CSV 폴더({root / '막힘' / 'H'})를 만들 수 없어 {fb} 에 저장합니다"]
+    assert warns == [f"히터 CSV 폴더({root / '막힘' / 'H'})에 쓸 수 없어 {fb} 에 저장합니다"]
     assert len(list(fb.glob("CH2_HEATER_*.csv"))) == 1
     root, warns = _heater(tmp_path / "b", lambda r: {"CH2_HEATER_LOG_DIR": str(r / "막힘" / "H"),
                                                      "LOCAL_FALLBACK_ROOT": str(r / "막힘" / "F")})
-    assert warns == ["히터 CSV 폴더를 만들 수 없어 기록하지 않습니다"]
+    assert len(warns) == 1 and warns[0].startswith("히터 CSV 기록 실패(이후 경고 생략)")           # 둘 다 못 쓰면(v1 main 9cde7c4: 기록 실패 1회)
 
 
 def test_heater_csv_open_and_write_failures(tmp_path, monkeypatch):
-    """GAPA-013 — 파일 열기 실패 '히터 CSV 열기 실패: {e!r}', 행 쓰기 실패 '히터 CSV 기록 실패(이후 경고 생략): {e!r}'."""
+    """GAPA-013 — 파일을 못 열거나 행 쓰기가 실패하면 '히터 CSV 기록 실패(이후 경고 생략): {e!r}' 1회(v1 main 9cde7c4 — 열기 실패 문구는 기록 실패로 합쳐짐)."""
     import builtins
     root = make_root(tmp_path)
     cfg = v2_cfg(root, SC.BASE_CFG)
@@ -58,21 +58,21 @@ def test_heater_csv_open_and_write_failures(tmp_path, monkeypatch):
     monkeypatch.setattr(builtins, "open", bad_open)
     w = QueueWriter("t")
     h = HeaterCsv(cfg, writer=w, warn=warns.append, monotonic=clock.monotonic, now=clock.now)
-    h.start()
+    h.write_row({"run": True, "pv": 25.0})
+    h.write_row({"run": True, "pv": 26.0})
     h.stop()
     w.stop()
     monkeypatch.setattr(builtins, "open", real_open)
-    assert warns == ["히터 CSV 열기 실패: PermissionError('잠김')"]
+    assert len(warns) == 1 and warns[0].startswith("히터 CSV 기록 실패(이후 경고 생략): ")
     warns2 = []
     w = QueueWriter("t")
     h = HeaterCsv(cfg, writer=w, warn=warns2.append, monotonic=clock.monotonic, now=clock.now)
-    h.start()
+    h._app = type("A", (), {"append_row": lambda self, **k: (_ for _ in ()).throw(OSError("디스크")),
+                            "consume_switched_flag": lambda self: False, "close": lambda self: None})()
+    h._do_write(clock.now(), ["x"])
+    h._do_write(clock.now(), ["y"])
     w.stop()
-    h._writer = type("W", (), {"writerow": lambda self, row: (_ for _ in ()).throw(OSError("디스크"))})()
-    h._do_write(["x"])
-    h._do_write(["y"])
     assert warns2 == ["히터 CSV 기록 실패(이후 경고 생략): OSError('디스크')"]
-    h._do_stop()
 
 
 def test_thickness_csv_open_and_write_failures_retry_after_60s(tmp_path):

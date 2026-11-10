@@ -122,4 +122,11 @@ ITEMS = [
     dict(id="SYNC-402", area="sync",
          desc="DC Pulse REF_LEVEL(0x83)·REGULATION(0x81)·PLC 스위치 코일의 되읽기 없음(READBACK_NONE)과 그 근거를 장비 사실 표에 분명히",
          v1="device/dc_pulse.py; device/plc.py", v2="v2/ch12/spec/devices.py", test="v2/tests/test_devices.py::test_readback_table_matches_params_and_lists_commands_without_readback", status="done", note=""),
+    dict(id="SYNC-030", area="sync",
+         desc="CH2 히터 CSV(main 9cde7c4): 하루 1개 파일 CH2_HEATER_YYYYMMDD.csv 에 프로그램이 도는 동안 항상 기록(운전 중 HEATER_LOG_PERIOD_S 1초·정지 중 HEATER_POLL_IDLE_S 3초, 폴링 간격 흔들림 보정 slack), "
+              "운전 시작·종료 행(note, 종료 행은 정리 전 owner·경과·유지/클램프), 프로그램 종료 행, PLC 미연결 행(timestamp·note 만, 값 빈칸 — 마지막 RUN 기준 주기), 날짜는 행 시각 기준(자정 새 파일), 같은 날 이어 쓰기(헤더 한 번), 운전별 파일 없음, 기본 주기 3.0 → 1.0",
+         v1="lib/heater_logger.py; controller/heater_service.py:757-880; config/settings.json:587-623",
+         v2="v2/ch12/outputs/heater_csv.py; v2/ch12/heater_engine.py; v2/ch12/heater_edges.py; v2/ch12/heater_commands.py; v2/ch12/params/outputs.py",
+         test="v2/tests/test_heater_engine.py::test_csv_daily_idle_3s_run_1s_blank_rows_when_disconnected_and_edges; v2/tests/test_outputs_csv.py::test_heater_golden; "
+              "v2/tests/test_outputs_csv.py::test_heater_daily_file_header_once_midnight_split_and_restart_append; v2/tests/test_heater_engine.py::test_run_edges_csv_and_chat", status="done", note=""),
 ]
