@@ -131,9 +131,9 @@ def test_process_sim_uplink_hello_state_command_round_trip(tmp_path):
     assert code == A.EXIT_OK, "\n".join(lines)
     out = "\n".join(lines)
     assert "웹 연결 127.0.0.1(http)" in out and "https 가 아님" in out
-    log = (tmp_path / "root" / "data" / "logs" / "ch12_v2.log").read_text(encoding="utf-8")
+    log = (tmp_path / "sim_out" / "data" / "logs" / "ch12_v2.log").read_text(encoding="utf-8")
     msgs = json.dumps(web.messages(), ensure_ascii=False)
-    spool = "".join(f.read_text(encoding="utf-8") for f in (tmp_path / "root" / "data" / "uplink").glob("*"))
+    spool = "".join(f.read_text(encoding="utf-8") for f in (tmp_path / "sim_out" / "data" / "uplink").glob("*"))
     for text in (out, log, msgs, spool):
         assert web.token not in text and "/dev/ch12" not in text
 
@@ -181,7 +181,7 @@ def test_journal_command_memory_bound_before_uplink_starts(tmp_path, monkeypatch
     from v2.ch12 import uplink as U
     web = FakeWeb(keepalive_s=0.5).up()
     app, _lines = _in_process(tmp_path, web)
-    jdir = tmp_path / "root" / "data" / "journal"
+    jdir = tmp_path / "sim_out" / "data" / "journal"
     jdir.mkdir(parents=True)
     old = {"cmdId": "w-old", "kind": "PROCESS_STOP", "status": "accepted", "source": "web", "by": "op@web"}
     doc = {"v": 1, "part": "shared", "seq": 1, "saved_wall": _t.time() - 5.0, "saved_mono": 0.0, "boot": 0.0,

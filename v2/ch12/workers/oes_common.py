@@ -158,13 +158,18 @@ _CYUSB_IFACE_GUID = "{AE18AA60-7F6A-11D4-97DD-00010229B959}"  # spusb3.sys(CyUSB
 _CM_LIST_RETRIES = 5              # CM_Get_Device_Interface_ListW 가 CR_BUFFER_SMALL 일 때 재시도 횟수
 _LINK_WAIT_AT_START_S = 10.0      # 측정 시작 시 목록이 기준과 다르면 기준으로 돌아오기를 기다리는 최대 시간(초)
 _LINK_SETTLE_S = 2.0              # 목록이 기준으로 돌아온 뒤 재초기화 전에 기다리는 시간(초)
+def _mutex_name(suffix: str) -> str:
+    """뮤텍스 이름 — 기본 Local\\VanaM_OES_<suffix>(v1 과 같음). sim 은 환경변수 OES_MUTEX_PREFIX(CH12SIM_)로 v1 것과 다르게(sim_guard)."""
+    return "Local\\" + (os.environ.get("OES_MUTEX_PREFIX") or "") + "VanaM_OES_" + suffix
+
+
 _LINK_STATUS_EVERY_S = 30.0       # 끊김이 이어질 때 '재연결 대기 중' 상태를 남기는 간격(초)
 _LINK_POLL_S = 0.5                # 시작 대기·재초기화 뮤텍스 대기 중 확인 간격(초)
 _REINIT_RETRY_S = 30.0            # 재초기화 실패 후 다음 시도까지, 연속 읽기 실패 재초기화의 최소 간격(초)
 _READ_FAIL_RESET_AT = 3           # 연속 읽기 실패 이 횟수째에 포트 리셋(spSetupGivenChannel) 1회
 _READ_FAIL_REINIT_AT = 10         # 연속 읽기 실패 이 횟수째에 재초기화
 _RESET_CALL_TIMEOUT_S = 4.0       # 포트 리셋 호출 타임아웃(초). 넘으면 읽기 타임아웃과 같은 hard_abort
-_REINIT_MUTEX_NAME = "Local\\VanaM_OES_REINIT"  # 두 워커가 동시에 재초기화하지 않도록 잡는 뮤텍스
+_REINIT_MUTEX_NAME = _mutex_name("REINIT")  # 두 워커가 동시에 재초기화하지 않도록 잡는 뮤텍스
 _REINIT_MUTEX_WAIT_S = 30.0       # 재초기화 뮤텍스 최대 대기(초). 못 잡으면 다음 기회에
 _DEV_INFO_BUF = 512               # spDevInfo 모델명/일련번호 버퍼 크기(바이트)
 

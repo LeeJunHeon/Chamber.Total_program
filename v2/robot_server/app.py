@@ -2,6 +2,8 @@
 
 설정: --config 는 JSON 파일(평평한 {키: 값} 이나 v2 설정 저장소의 config_active.json({"values": {...}}) 둘 다 받는다).
 로봇 서버는 자기 키(v2/ch12/params/robot.py PARAMS·SHARED_USES)만 읽는다. 명령줄 값이 파일 값보다 우선.
+--sim: v1 이 켜진 PC 에서 함께 띄우는 시험용 — 127.0.0.1:HOST_SERVER_SIM_PORT(기본 50170)만 듣고(v1 의 0.0.0.0:50070 은 열지 않는다),
+  로그·캐시는 C:\\CH12_v2\\sim_out 아래(sim_guard — 검사에 걸리면 종료 코드 2). --port 가 50070 이면 거부.
 --fake-api: 127.0.0.1:ROBOT_API_PORT 에 가짜 내부 API(모든 명령 success)를 같이 띄운다(sim·수동 점검용).
 종료: Ctrl+C(콘솔 닫기) → 서버 닫기('Host closed') → 로그 flush. 종료 코드 0.
 """
@@ -83,12 +85,28 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     ap.add_argument("--api-port", type=int)
     ap.add_argument("--log-root")
     ap.add_argument("--fake-api", action="store_true")
+    ap.add_argument("--sim", action="store_true")
     a = ap.parse_args(argv)
     cfg = load_cfg(a.config)
     for k, v in (("HOST_SERVER_HOST", a.host), ("HOST_SERVER_PORT", a.port), ("ROBOT_API_PORT", a.api_port),
                  ("LOG_ROOT_DIR", a.log_root)):
         if v is not None:
             cfg[k] = v
+    if a.sim:
+        from v2.common import winpaths
+        from v2.ch12 import sim_guard
+        asked = {k: v for k, v in (("HOST_SERVER_HOST", a.host), ("HOST_SERVER_PORT", a.port)) if v is not None}   # 명령줄 요청은 검사로 거른다(조용히 고치지 않음). 설정 파일의 host·port 는 sim 값이 이긴다
+        cfg["RUN_MODE"] = "sim"
+        sim_guard.enforce(cfg)                          # 쓰는 곳 sim_out·host 127.0.0.1·port = HOST_SERVER_SIM_PORT
+        cfg.update(asked)
+        winpaths.map_values(cfg)
+        bad = sim_guard.check(cfg)
+        if bad:
+            print("[중지] sim 격리 검사 실패 — 시작 거부:", flush=True)
+            for b in bad:
+                print(f"  - {b}", flush=True)
+            return 2
+        sim_guard.apply_env()
     try:
         return asyncio.run(_run(cfg, a.fake_api))
     except KeyboardInterrupt:

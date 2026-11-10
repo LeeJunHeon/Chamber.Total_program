@@ -551,3 +551,15 @@ DECISIONS += [
          reason="사용자 지시 2026-11-09 A", confirm=False,
          where="v2/ch12/turbo_watch.py; tsp_engine.py; drivers/tsp.py; thickness.py; blocks_expand.py; process_preflight.py; tools/v1golden_process_steps.py"),
 ]
+
+DECISIONS += [
+    dict(id="D401", title="2026-11-09 검토 반영 B — v1 이 켜진 장비 PC 에서 sim 을 함께 띄워도 운영에 영향이 없게(sim 격리)",
+         decision="sim(RUN_MODE=sim)은 설정값과 무관하게 모든 쓰는 곳을 C:\\CH12_v2\\sim_out 아래로 덮어 쓴다(v2/ch12/sim_guard.py FORCED 표 — 설정 표의 경로 키를 빠짐없이 덮는지 시험이 본다). "
+                  "NAS·UNC 는 쓰지 않는다(NAS 사본 끔·log_sync 쌍 비움·레시피 폴더도 sim_out\\recipes). OES 가짜 데몬 뮤텍스는 Local\\CH12SIM_VanaM_OES_USB{n}, 정지 플래그·CSV 폴더는 환경변수로 sim_out 아래(PC 에 v1 용 환경변수가 있어도 덮음), "
+                  "가짜 워커(OES·RGA)만 쓴다. 시작 자기 검사에 걸리면(쓰기 대상이 C:\\CH12_v2 밖·UNC·설정 폴더가 밖·0.0.0.0·50070) 사유를 출력하고 종료 코드 2. "
+                  "포트는 127.0.0.1 만 — 로봇 서버는 --sim(127.0.0.1:HOST_SERVER_SIM_PORT 50170, --port 50070·--host 0.0.0.0 은 거부). 실행 스크립트 run_ch12_sim.cmd(설정 폴더 C:\\CH12_v2\\sim_config, 감시 프로그램 없음)·run_ch12_sim_robot_server.cmd. "
+                  "시험: 실제 하위 프로세스(+OES·RGA 가짜 워커)를 파이썬 감사 훅으로 감시해 쓰기 열기·폴더 만들기·SQLite·소켓 주소 전부가 기준 폴더 아래·127.0.0.1 인지, 기존 v1 open_sputter.json·Robot CSV(NAS)·기록 폴더가 바뀌지 않는지. "
+                  "시험 전용: 환경변수 CH12_SIM_BASE 로 기준 폴더(C:\\CH12_v2)를 바꾼다(conftest 가 시험마다 tmp 로).",
+         reason="사용자 지시 2026-11-09 B(치명 — v1 운영 파일·NAS 오염 방지)", confirm=True,
+         where="v2/ch12/sim_guard.py; app.py; robot_server/app.py; workers/oes_common.py; outputs/paths.py"),
+]

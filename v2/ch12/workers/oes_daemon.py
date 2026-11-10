@@ -23,7 +23,7 @@ from typing import Optional
 
 from v2.ch12.workers import oes_common as C
 from v2.ch12.workers.oes_common import (
-    OES_AVG_COUNT, _WinMutex, _copy_csv_to_nas, _default_out_dir, _errlog, _errlog_exc, _find_ar_index,
+    OES_AVG_COUNT, _WinMutex, _mutex_name, _copy_csv_to_nas, _default_out_dir, _errlog, _errlog_exc, _find_ar_index,
     _make_default_filename, _mutex_timeout_ms, _post_anomaly_webhook, _report_anomaly, _print_json, _status, _stop_dir, _env_float,
 )
 from v2.ch12.workers.oes_device import OESAsync
@@ -307,7 +307,7 @@ async def _daemon_measure_once(
 
 async def cmd_daemon(ch: int, usb: int, dll_path: Optional[str], out_dir: Optional[Path]) -> int:
     """OES를 1회 initialize 후 살아있는 상태로 유지하는 daemon."""
-    mtx = _WinMutex(f"Local\\VanaM_OES_USB{int(usb)}")
+    mtx = _WinMutex(_mutex_name(f"USB{int(usb)}"))
     mutex_ms = _mutex_timeout_ms()
 
     _status(f"[worker] daemon: acquiring mutex name={mtx.name} timeout_ms={mutex_ms}")

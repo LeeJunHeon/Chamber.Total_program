@@ -53,6 +53,7 @@ from v2.common import winpaths
 from v2.common.clock import RealClock
 from v2.common.config_store import ConfigError
 from v2.common.mode import RunMode, policy, resolve_mode
+from v2.ch12 import sim_guard
 from v2.ch12.local_server import LocalServer, bind_socket
 from v2.ch12.system import APP_RETENTION, TRANSIENT_KINDS, Ch12System, new_store, tcp_transports
 
@@ -155,6 +156,7 @@ class App:
         self.journal = None
         self.resumer = None
         self._resume_thread: Optional[threading.Thread] = None
+        self.require_sim = False                                   # --sim: 설정이 sim 이 아니면 거부
         self._before_uplink_start: List[Callable[[], None]] = []    # 웹 연결을 만든 뒤·시작하기 전(명령을 받기 전)에 부를 것
 
     # ───────── 1 설정 ─────────
@@ -167,8 +169,22 @@ class App:
         except (ConfigError, ValueError, ParamsError) as e:
             self.say(f"[중지] 설정을 쓸 수 없음 — 시작 거부: {e}")
             return False
+        sim = RunMode(self.cfg["RUN_MODE"]) is RunMode.SIM
+        if self.require_sim and not sim:
+            self.say(f"[중지] --sim 인데 설정 RUN_MODE 가 {self.cfg['RUN_MODE']} — 시작 거부(sim 설정 폴더에서만 sim 을 띄운다)")
+            return False
+        if sim:        # v1 과 함께 켜도 운영에 닿지 않게(sim_guard) — 모든 쓰는 곳을 C:\CH12_v2\sim_out 아래로 강제(설정값과 무관)
+            sim_guard.enforce(self.cfg)
         # 실행 값만 바꾼다(self.cfg 는 복사본 — 저장된 설정·웹에 보이는 설정 값은 그대로). 윈도우에서는 아무것도 안 함
         self._winpath_keys += winpaths.map_values(self.cfg)
+        if sim:
+            bad = sim_guard.check(self.cfg, self.config_dir)
+            if bad:
+                self.say("[중지] sim 격리 검사 실패 — 시작 거부(운영 v1 파일·NAS·포트를 건드릴 수 있음):")
+                for b in bad:
+                    self.say(f"  - {b}")
+                return False
+            sim_guard.apply_env()
         if (self.uplink_wanted() and RunMode(self.cfg["RUN_MODE"]) is RunMode.SIM
                 and not str(self.cfg["EQUIPMENT_ID"]).endswith(SIM_ID_SUFFIX)):
             self.say(f"[중지] UPLINK_IN_SIM(sim 웹 연결)인데 EQUIPMENT_ID {self.cfg['EQUIPMENT_ID']} 가 {SIM_ID_SUFFIX} 으로 끝나지 않음 "
@@ -227,7 +243,9 @@ class App:
         c, st = self.cfg, self.store
         mode = RunMode(c["RUN_MODE"])
         nas = c.get("NAS_COPY_DIR") if policy(mode).nas_copy and c.get("NAS_COPY_DIR") else "끔"
-        return [f"챔버12 v2 — 모드 {mode.value} · 장비 {c['EQUIPMENT_ID']} · 버전 {self.version}",
+        iso = [f"sim 격리 — 모든 출력은 {sim_guard.sim_out()} 아래 · 127.0.0.1 만 · 로봇 서버 시험 포트 {c.get('HOST_SERVER_PORT')}"] \
+            if mode is RunMode.SIM else []
+        return iso + [f"챔버12 v2 — 모드 {mode.value} · 장비 {c['EQUIPMENT_ID']} · 버전 {self.version}",
                 f"설정 버전 {st.version}({st.source}) · 설정 폴더 {self.config_dir}",
                 f"1초 기록 {self.data_dir} · 로그 {self.data_dir / 'logs'} · v1 기록 {c['LOG_ROOT_DIR']} · NAS 사본 {nas}",
                 f"로컬 화면 http://127.0.0.1:{c['LOCAL_HMI_PORT']}/ · 화면 파일 {self.hmi_dir}",
@@ -522,5 +540,12 @@ def main(argv=None) -> int:
     ap = argparse.ArgumentParser(prog="python -m v2.ch12", description="챔버12 v2 실행 프로그램")
     ap.add_argument("--config-dir", default=DEFAULT_CONFIG_DIR,
                     help="config_active.json·config_prev.json·local_override.json·config_history.jsonl 폴더")
+    ap.add_argument("--sim", action="store_true",
+                    help="v1 이 켜진 PC 에서 함께 띄우는 sim — 설정 폴더 기본값 C:\\CH12_v2\\sim_config, RUN_MODE 는 sim 이어야 함(아니면 거부)")
     a = ap.parse_args(argv)
-    return App(a.config_dir, print_fn=lambda s: print(s, flush=True)).run()
+    cd = a.config_dir
+    if a.sim and cd == DEFAULT_CONFIG_DIR:
+        cd = sim_guard._join(sim_guard.sim_base(), "sim_config")
+    app = App(cd, print_fn=lambda s: print(s, flush=True))
+    app.require_sim = bool(a.sim)
+    return app.run()

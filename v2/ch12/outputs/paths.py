@@ -106,7 +106,8 @@ class Paths:
 
     # ── 엑셀 ──
     def excel_main_dir(self) -> Path:
-        return NAS_MAIN_DIR
+        root = str(self.cfg.get("SIM_OUT_ROOT") or "")        # sim 격리(sim_guard) — NAS 하드코딩 대신 sim_out 아래
+        return Path(root) / "Process_log_main" if root else NAS_MAIN_DIR
 
     def excel_pc_dir(self) -> Path:
         return Path(str(self._g("GDRIVE_LOG_DIR")))
@@ -142,6 +143,8 @@ class Paths:
         return Path(str(self._g("CAMERA_LOG_ROOT")))
 
     def camera_fallback(self) -> Path:
+        if str(self.cfg.get("SIM_OUT_ROOT") or ""):          # sim 격리 — exe 폴더 대신 sim_out 아래 폴백
+            return self.fallback_root() / "Camera_Logs"
         return exe_base_dir() / "Logs_LocalFallback" / "Camera_Logs"
 
     # ── Robot CSV ──

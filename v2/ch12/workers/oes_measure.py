@@ -19,7 +19,7 @@ from typing import Optional
 
 from v2.ch12.workers import oes_common as C
 from v2.ch12.workers.oes_common import (
-    _WinMutex, _copy_csv_to_nas, _default_out_dir, _env_float, _errlog, _errlog_exc, _find_ar_index,
+    _WinMutex, _mutex_name, _copy_csv_to_nas, _default_out_dir, _env_float, _errlog, _errlog_exc, _find_ar_index,
     _make_default_filename, _mutex_timeout_ms, _post_anomaly_webhook, _report_anomaly, _print_json, _status, _stop_dir,
 )
 from v2.ch12.workers.oes_device import OESAsync, _resolve_oes_dll_path
@@ -27,7 +27,7 @@ from v2.ch12.workers.oes_guard import _LinkGuard, _ResetCallTimeout, _acquire_fi
 
 
 async def cmd_init(ch: int, usb: int, dll_path: Optional[str], out_dir: Optional[Path], out_csv: Optional[Path]) -> int:
-    mtx = _WinMutex(f"Local\\VanaM_OES_USB{int(usb)}")
+    mtx = _WinMutex(_mutex_name(f"USB{int(usb)}"))
     mutex_ms = _mutex_timeout_ms()
 
     _status(f"[worker] init: acquiring mutex name={mtx.name} timeout_ms={mutex_ms}")
@@ -132,7 +132,7 @@ async def cmd_measure(
     out_csv: Optional[Path],
     dll_path: Optional[str],
 ) -> int:
-    mtx = _WinMutex(f"Local\\VanaM_OES_USB{int(usb)}")
+    mtx = _WinMutex(_mutex_name(f"USB{int(usb)}"))
     mutex_ms = _mutex_timeout_ms()
 
     _status(f"[worker] measure: acquiring mutex name={mtx.name} timeout_ms={mutex_ms}")

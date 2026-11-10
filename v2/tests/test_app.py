@@ -89,9 +89,9 @@ def test_sim_runs_and_exits_0_on_signal(tmp_path, sig):
     assert code == A.EXIT_OK, pr.text
     out = pr.text
     assert "모드 sim" in out and "장비 연결: plc 준비" in out and "종료" in out.splitlines()[-1]
-    root = tmp_path / "root"
+    root = tmp_path / "sim_out"                                               # sim 격리 — 모든 출력은 sim_out 아래(sim_guard)
     assert rows_in(root) >= 2                                                 # 1초 기록
-    assert list((root / "logs" / "CH1&2_PLC").glob("*.csv"))                  # v1 PLC 코일 CSV
+    assert list((root / "plc_coil").glob("*.csv"))                  # v1 PLC 코일 CSV
     log = (root / "data" / "logs" / "ch12_v2.log").read_text(encoding="utf-8")
     assert "정상 종료 시작" in log and "PLC 연결 끊김" not in log              # 종료가 하트비트 실패로 보이지 않음
 
@@ -100,7 +100,7 @@ def test_bad_config_exit_2(tmp_path):
     cfg = config(tmp_path, NO_SUCH_KEY=1)
     pr = Proc(cfg)
     assert pr.wait(60.0) == A.EXIT_CONFIG
-    assert "시작 거부" in pr.text and rows_in(tmp_path / "root") == 0
+    assert "시작 거부" in pr.text and rows_in(tmp_path / "sim_out") == 0
 
 
 def test_already_running_exit_3_without_opening_devices(tmp_path):
@@ -114,14 +114,14 @@ def test_already_running_exit_3_without_opening_devices(tmp_path):
         assert pr.wait(60.0) == A.EXIT_RUNNING
     finally:
         hold.close()
-    assert "이미 실행 중" in pr.text and not (tmp_path / "root" / "data").exists()
+    assert "이미 실행 중" in pr.text and not (tmp_path / "sim_out" / "data").exists()
 
 
 def test_start_failure_exit_4(tmp_path):
-    bad = tmp_path / "root" / "data_is_a_file"
+    bad = tmp_path / "sim_out" / "data"                                       # 데이터 폴더 자리에 파일 — 설정값은 sim 이 덮어쓰므로 자리로 막는다
     bad.parent.mkdir(parents=True)
     bad.write_text("x", encoding="utf-8")
-    cfg = config(tmp_path, LOCAL_DATA_DIR=str(bad))
+    cfg = config(tmp_path)
     pr = Proc(cfg)
     assert pr.wait(60.0) == A.EXIT_START
     assert "시작 실패" in pr.text
@@ -150,10 +150,12 @@ def test_default_windows_paths_not_created_in_cwd(tmp_path):
     work.mkdir()
     base = home / ".ch12_v2" / "winpaths"
     cfg = base / "C" / "CH12_v2" / "config"                                  # 기본 --config-dir 이 바뀐 곳
+    sim_base_env = dict(os.environ)
+    sim_base_env.pop("CH12_SIM_BASE", None)                                  # 이 시험은 진짜 기본 기준(C:\\CH12_v2 → 홈 아래)으로
     cfg.mkdir(parents=True)
     vals = {"LOCAL_HMI_PORT": free_port(), "ROBOT_API_PORT": free_port()}
     (cfg / "local_override.json").write_text(json.dumps({"values": vals}), encoding="utf-8")
-    env = dict(os.environ, HOME=str(home), PYTHONPATH=os.pathsep.join(p for p in (str(ROOT), os.environ.get("PYTHONPATH")) if p))
+    env = dict(sim_base_env, HOME=str(home), PYTHONPATH=os.pathsep.join(p for p in (str(ROOT), os.environ.get("PYTHONPATH")) if p))
     pr = Proc(None, cwd=work, env=env)
     try:
         assert pr.running.wait(60.0), pr.text
@@ -165,5 +167,5 @@ def test_default_windows_paths_not_created_in_cwd(tmp_path):
             pr.p.kill()
     bad = [p.name for p in work.iterdir() if p.name[:2].endswith(":") or p.name.startswith("\\")]
     assert not bad, (bad, pr.text)                                           # 작업 폴더에 'C:…'·'\\…' 없음
-    assert (base / "C" / "CH12_v2" / "data" / "logs" / "ch12_v2.log").is_file()   # LOCAL_DATA_DIR 'C:\\CH12_v2\\data'
+    assert (base / "C" / "CH12_v2" / "sim_out" / "data" / "logs" / "ch12_v2.log").is_file()   # sim 은 C:\\CH12_v2\\sim_out\\data
     assert "윈도우 경로" in pr.text and str(base) in pr.text                 # 시작 로그 한 줄

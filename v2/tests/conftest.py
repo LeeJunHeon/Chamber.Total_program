@@ -180,3 +180,9 @@ def _real_clock_threads_cleaned(request, monkeypatch):
         time.sleep(0.05)
     if left:
         pytest.fail(f"시험이 만든 스레드가 {LEFT_THREAD_WAIT_S:.0f} s 뒤에도 남음: {sorted(t.name for t in left)}")
+
+
+@pytest.fixture(autouse=True)
+def _sim_base(tmp_path, monkeypatch):
+    """sim 격리(v2/ch12/sim_guard.py)의 기준 폴더를 시험마다 tmp 로 — sim 이 쓰는 모든 곳은 <tmp>/sim_out 아래, 설정 폴더도 <tmp> 아래여야 한다."""
+    monkeypatch.setenv("CH12_SIM_BASE", str(tmp_path))
