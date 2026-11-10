@@ -458,6 +458,23 @@ class MainWindow(QWidget):
         )
         self.mfc2.resource_key = "MFC2"
 
+        # ── GPC3000(MFC) 압력·밸브 위치 상시 CSV 기록 — MFC_STATE_LOG_ENABLED(common) 가 true 일 때만 만들고 시작.
+        #    false 면 아무것도 만들지 않아 MFC 명령 대기열·간격·연결이 기존과 완전히 같다.
+        self.mfc_state_loggers: list = []
+        try:
+            if bool(getattr(cfgc, "MFC_STATE_LOG_ENABLED", False)):
+                from controller.mfc_state_logger import MfcStateLogger
+                for _m, _lb in ((self.mfc1, "CH1"), (self.mfc2, "CH2")):
+                    _lg = MfcStateLogger(_m, _lb)
+                    _lg.start(self._loop)
+                    self.mfc_state_loggers.append(_lg)
+                _iv = float(getattr(cfgc, "MFC_STATE_LOG_INTERVAL_S", 1.0))
+                self._broadcast_log("MFC", f"MFC 상태 CSV 기록 시작 ({_iv:g}s, {self.mfc_state_loggers[0].log_dir})")
+            else:
+                self._broadcast_log("MFC", "MFC 상태 CSV 기록 꺼짐")
+        except Exception as e:
+            self._broadcast_log("MFC", f"MFC 상태 CSV 기록 시작 실패: {e!r}")
+
         self.ig1: AsyncIG = _new_ig(
             host=getattr(config_ch1, "IG_TCP_HOST", getattr(cfgc, "IG_TCP_HOST", "192.168.1.50")),
             port=getattr(config_ch1, "IG_TCP_PORT", 4001),
@@ -1412,6 +1429,11 @@ class MainWindow(QWidget):
         # 3) PLC COIL CSV logger 종료
         with contextlib.suppress(asyncio.CancelledError, Exception):
             await asyncio.wait_for(self.plc.stop_plc_coil_csv_logger(), timeout=3.0)
+
+        # 3-1) MFC 상태 CSV 기록기 종료 — 런타임의 MFC cleanup 보다 먼저(안 그러면 기록기가 연결을 다시 올린다)
+        for _lg in list(getattr(self, "mfc_state_loggers", None) or []):
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await asyncio.wait_for(_lg.stop(), timeout=3.0)
 
         # 4) 런타임 종료
         for rt in (

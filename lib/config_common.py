@@ -685,6 +685,15 @@ HOST_LOG_LOCK_STALE_S = 120      # 이 시간보다 오래된 잠금 파일은 �
 PLC_COIL_LOG_NAS_DIR = r"C:\VanaM_Logs\CH1&2\CH1&2_PLC"
 # PLC_COIL_LOG_LOCAL_DIR = r"C:\...\Logs\CH1&2\CH1&2_PLC"   # 필요 시
 
+# --- GPC3000(MFC) 압력·쓰로틀 밸브 위치 상시 CSV 기록 (controller/mfc_state_logger.py) ---
+# CH1·CH2 공통(common 에서만 읽는다). 공정과 무관하게 1초마다 저우선(low_priority)·조용한 읽기(R5/R6)로 기록.
+# 끄면(False) 기록기를 만들지 않아 MFC 명령 대기열·간격·연결이 기존과 완전히 같다.
+MFC_STATE_LOG_ENABLED = False                      # 기본 끔(키가 없으면 기존과 동일). settings.json common 에서 켠다
+MFC_STATE_LOG_INTERVAL_S = 1.0                     # 기록 주기(초)
+MFC_STATE_LOG_GAP_MS = 100                         # 기록용 읽기 뒤에만 쓰는 명령 간격(ms, MFC_GAP_MS 와 별개)
+MFC_STATE_LOG_TIMEOUT_MS = 500                     # 기록용 읽기 응답 대기(ms, MFC_TIMEOUT 과 별개). 재시도·재연결 없음
+MFC_STATE_LOG_DIR = r"C:\VanaM_Logs\CH1&2\CH1&2_MFC"  # {CH1|CH2}_YYYYMMDD.csv (NAS 반영은 log_sync 워커)
+
 # ======================================================================
 # PLC (Calibration / Scaling)  - UI에서 수정 가능
 # ======================================================================

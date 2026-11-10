@@ -288,6 +288,12 @@
     "HOST_LOG_LOCK_STALE_S": 120,              // 오래된 잠금 파일 판정 기준 (초)
     "PLC_COIL_LOG_NAS_DIR": "C:\\VanaM_Logs\\CH1&2\\CH1&2_PLC",   // 로컬 (NAS 반영은 log_sync 워커)
     "LOG_ROOT_DIR": "C:\\VanaM_Logs\\CH1&2",                     // 로컬 (NAS 반영은 log_sync 워커)
+    // ── GPC3000(MFC) 압력·쓰로틀 밸브 위치 상시 CSV 기록 (CH1·CH2 공통, 여기 common 에서만 읽음) ──
+    "MFC_STATE_LOG_ENABLED": true,         // 공정과 무관하게 1초마다 압력·밸브 위치를 CSV 로 기록. false 면 기록기를 만들지 않아 기존과 완전히 동일(바꾼 뒤 프로그램 재시작)
+    "MFC_STATE_LOG_INTERVAL_S": 1.0,       // 기록 주기 (초)
+    "MFC_STATE_LOG_GAP_MS": 100,           // 기록용 읽기 뒤에만 쓰는 명령 간격 (ms, MFC_GAP_MS 와 별개)
+    "MFC_STATE_LOG_TIMEOUT_MS": 500,       // 기록용 읽기 응답 대기 (ms, MFC_TIMEOUT 과 별개). 재시도·재연결 없음
+    "MFC_STATE_LOG_DIR": "C:\\VanaM_Logs\\CH1&2\\CH1&2_MFC",   // {CH1|CH2}_YYYYMMDD.csv 저장 폴더 (NAS 반영은 log_sync 워커)
     // ── 구글챗 전송 폭주 보호 ──
     "CHAT_POST_CONCURRENCY": 4,            // 동시 POST 상한
     "CHAT_PENDING_MAX": 200,               // 대기 전송 태스크 상한 (초과 카드는 드롭, 다음 카드에 건수 표기) — urgent 카드는 통과

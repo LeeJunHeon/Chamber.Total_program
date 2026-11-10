@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from collections import deque
 from typing import Optional, Deque, Callable, AsyncGenerator, Literal
 import asyncio, re, time, contextlib, socket
+from datetime import datetime
 
 from lib import config_common as cfgc
 cfg_default = cfgc  # AsyncMFC 기본 cfg (원하면 ch1/ch2 모듈을 넘겨서 채널별 파라미터 사용)
@@ -57,6 +58,8 @@ class Command:
     done: Optional["asyncio.Future[bool]"] = None # no-reply 전송 결과: True=실제 전송됨, False=전송 전 폐기/실패
     enq_mono: float = 0.0
     sent_mono: float = 0.0
+    low_priority: bool = False                    # 상시 기록용 읽기: 일반 명령이 있으면 뒤로 밀리고, 타임아웃에 재시도·재연결 없음
+    quiet: bool = False                           # [SEND]/[RECV]/[TIMEOUT] status 이벤트를 내지 않음
 
 
 # no-reply 명령(가스 ON/OFF·설정·밸브·Zeroing)의 '실제 전송' 확인 최대 대기(초).
@@ -891,6 +894,64 @@ class AsyncMFC:
             return None
         return self._emit_pressure_from_line_sync(line.strip())
 
+    # ---- 상시 기록용(저우선·조용한) 읽기 ----
+    def _parse_valve_pct(self, line: str) -> Optional[float]:
+        """R6 응답 "V+35.2" → 35.2 (밸브 열림률 %, _parse_valve_ok 와 같은 형식)."""
+        m = re.match(r'^(?:V\s*)?\+?([+\-]?\d+(?:\.\d+)?)$', (line or "").strip())
+        try:
+            return float(m.group(1)) if m else None
+        except Exception:
+            return None
+
+    async def _read_low_priority_line(self, cmd_str: str, *, tag: str, timeout_ms: int, gap_ms: int,
+                                      expect_prefixes: tuple[str, ...]) -> Optional[str]:
+        """low_priority·quiet 읽기 1건. 응답 없으면 None(재시도·재연결·status 이벤트 없음).
+        대기열에서 밀려 제때 못 나가면 조용히 철회한다(쌓이지 않게)."""
+        fut: asyncio.Future[Optional[str]] = asyncio.get_running_loop().create_future()
+
+        def _cb(line: Optional[str]):
+            if not fut.done():
+                fut.set_result(None if line is None else (line or "").strip())
+
+        cmd = self._enqueue(cmd_str, _cb, timeout_ms=int(timeout_ms), gap_ms=int(gap_ms), tag=tag,
+                            retries_left=0, allow_no_reply=False, expect_prefixes=expect_prefixes,
+                            low_priority=True, quiet=True)
+        try:
+            return await asyncio.wait_for(fut, timeout=(int(timeout_ms) / 1000.0) + 2.0)
+        except asyncio.TimeoutError:
+            self._drop_queued(cmd)
+            return None
+
+    async def read_state_quiet(self, *, timeout_ms: int = 500, gap_ms: int = 100
+                               ) -> tuple[Optional[float], Optional[float], Optional[datetime]]:
+        """압력(UI 단위, mTorr)·쓰로틀 밸브 열림률(%)을 저우선·조용히 읽는다
+        → (pressure_ui | None, valve_pct | None, read_at | None). read_at 은 실제로 값을 읽은 벽시계 시각
+        (R5 응답을 받은 시각, R5 가 실패했으면 R6 응답 시각) — 기록 읽기가 앞 명령 뒤로 밀려도 측정 시각이 맞게.
+        R5, R6 를 하나씩 보내되 각 읽기 전에 일반 명령이 대기/진행 중이면 그 읽기는 건너뛴다(None).
+        pressure/status 이벤트를 내지 않는다(공정 CSV 평균·공정 모니터·공정 로그에 섞이지 않게)."""
+        pressure_ui: Optional[float] = None
+        valve_pct: Optional[float] = None
+        read_at: Optional[datetime] = None
+        if not self.is_connected():
+            return None, None, None
+        if not (self._has_pending_normal_cmds() or self._has_pending_low_cmds()):
+            line = await self._read_low_priority_line(self._mk_cmd("READ_PRESSURE"), tag="[LOG R5]",
+                                                      timeout_ms=timeout_ms, gap_ms=gap_ms, expect_prefixes=("P",))
+            if line:
+                val_hw = self._parse_pressure_value(line)
+                if val_hw is not None:
+                    scale = self._cfg_float("MFC_PRESSURE_SCALE", 0.1)
+                    pressure_ui = float(val_hw) / (float(scale) if scale else 1.0)
+                    read_at = datetime.now()
+        if self.is_connected() and not (self._has_pending_normal_cmds() or self._has_pending_low_cmds()):
+            line = await self._read_low_priority_line(self._mk_cmd("READ_VALVE_POSITION"), tag="[LOG R6]",
+                                                      timeout_ms=timeout_ms, gap_ms=gap_ms, expect_prefixes=("V",))
+            if line:
+                valve_pct = self._parse_valve_pct(line)
+                if valve_pct is not None and read_at is None:
+                    read_at = datetime.now()
+        return pressure_ui, valve_pct, read_at
+
     async def wait_for_pressure_reached(
         self,
         target_pressure: float,
@@ -1353,10 +1414,11 @@ class AsyncMFC:
                 await asyncio.sleep(0.05)
                 continue
 
-            cmd = self._cmd_q.popleft()
+            cmd = self._pop_next_cmd()
             self._inflight = cmd
             sent_txt = cmd.cmd_str.strip()
-            await self._emit_status(f"[SEND] {sent_txt} {('('+cmd.tag+')' if cmd.tag else '')}".strip())
+            if not cmd.quiet:
+                await self._emit_status(f"[SEND] {sent_txt} {('('+cmd.tag+')' if cmd.tag else '')}".strip())
             
             # ★ 전송 직전 유휴/세션 프리플라이트
             await self._reopen_if_inactive()
@@ -1417,8 +1479,17 @@ class AsyncMFC:
                     expect_prefixes=cmd.expect_prefixes
                 )
             except asyncio.TimeoutError:
-                await self._emit_status(f"[TIMEOUT] {cmd.tag} {sent_txt}")
+                if not cmd.quiet:
+                    await self._emit_status(f"[TIMEOUT] {cmd.tag} {sent_txt}")
                 self._inflight = None
+
+                if cmd.low_priority:
+                    # 상시 기록용 읽기: 재시도·재연결 없음(기록 때문에 공정 중 재연결이 일어나면 안 된다).
+                    # 늦게 오는 응답이 다음 명령 응답에 섞이지 않게 짧게 흡수한 뒤 이 명령의 gap 만큼만 쉰다.
+                    self._safe_callback(cmd.callback, None)
+                    await self._absorb_late_lines(100)
+                    await asyncio.sleep(cmd.gap_ms / 1000.0)
+                    continue
 
                 if cmd.retries_left > 0 and (time.monotonic() - self._last_connect_mono) < 2.0:
                     cmd.retries_left -= 1
@@ -1437,7 +1508,8 @@ class AsyncMFC:
                 continue
             # ✅ 여기부터가 "성공" 경로 (누락분)
             recv_txt = (line or "").strip()
-            await self._emit_status(f"[RECV] {cmd.tag} ← {recv_txt}")
+            if not cmd.quiet:
+                await self._emit_status(f"[RECV] {cmd.tag} ← {recv_txt}")
             self._safe_callback(cmd.callback, recv_txt)
             self._inflight = None
             await asyncio.sleep(cmd.gap_ms / 1000.0)
@@ -1973,7 +2045,7 @@ class AsyncMFC:
                 *, timeout_ms: Optional[int] = None, gap_ms: Optional[int] = None,
                 tag: str = "", retries_left: int = 5, allow_no_reply: bool = False,
                 expect_prefixes: tuple[str, ...] = (), owner: Optional[str] = None,
-                track: bool = False) -> Command:
+                track: bool = False, low_priority: bool = False, quiet: bool = False) -> Command:
 
         if timeout_ms is None:
             timeout_ms = self._cfg_int("MFC_TIMEOUT", 2000)
@@ -1984,7 +2056,7 @@ class AsyncMFC:
             cmd_str += self._tx_eol_str
         cmd = Command(
             cmd_str, on_reply, timeout_ms, gap_ms, tag, retries_left, allow_no_reply,
-            expect_prefixes=expect_prefixes, owner=owner
+            expect_prefixes=expect_prefixes, owner=owner, low_priority=low_priority, quiet=quiet
         )
         cmd.enq_mono = time.monotonic()
         if track:
@@ -2245,19 +2317,52 @@ class AsyncMFC:
         return (tag or "").startswith("[POLL ")
 
     def _has_pending_non_poll_cmds(self) -> bool:
-        if self._inflight and not self._is_poll_read_cmd(self._inflight.cmd_str, self._inflight.tag):
+        # 상시 기록용(low_priority) 읽기는 세지 않는다 — 공정 폴링이 기록에 양보하면 안 된다
+        if self._inflight and not self._inflight.low_priority \
+                and not self._is_poll_read_cmd(self._inflight.cmd_str, self._inflight.tag):
             return True
         for c in self._cmd_q:
-            if not self._is_poll_read_cmd(c.cmd_str, c.tag):
+            if not c.low_priority and not self._is_poll_read_cmd(c.cmd_str, c.tag):
                 return True
         return False
-    
+
     def _has_pending_poll_reads(self) -> bool:
         """인플라이트/큐에 폴링 읽기(R60/R5)가 있으면 True."""
-        if self._inflight and self._is_poll_read_cmd(self._inflight.cmd_str, self._inflight.tag):
+        if self._inflight and not self._inflight.low_priority \
+                and self._is_poll_read_cmd(self._inflight.cmd_str, self._inflight.tag):
             return True
         for c in self._cmd_q:
-            if self._is_poll_read_cmd(c.cmd_str, c.tag):
+            if not c.low_priority and self._is_poll_read_cmd(c.cmd_str, c.tag):
+                return True
+        return False
+
+    def _has_pending_normal_cmds(self) -> bool:
+        """인플라이트/큐에 일반(low_priority 아닌) 명령이 하나라도 있으면 True(폴링 읽기 포함)."""
+        if self._inflight is not None and not self._inflight.low_priority:
+            return True
+        return any(not c.low_priority for c in self._cmd_q)
+
+    def _has_pending_low_cmds(self) -> bool:
+        if self._inflight is not None and self._inflight.low_priority:
+            return True
+        return any(c.low_priority for c in self._cmd_q)
+
+    def _pop_next_cmd(self) -> Command:
+        """다음에 보낼 명령: 일반 명령이 있으면 그중 가장 앞의 것(일반 명령끼리 순서 불변),
+        일반 명령이 하나도 없을 때만 low_priority 명령. low_priority 가 없으면 popleft 와 같다."""
+        for i, c in enumerate(self._cmd_q):
+            if not c.low_priority:
+                if i == 0:
+                    return self._cmd_q.popleft()
+                del self._cmd_q[i]
+                return c
+        return self._cmd_q.popleft()
+
+    def _drop_queued(self, cmd: Command) -> bool:
+        """아직 보내지 않은 cmd 를 조용히 대기열에서 뺀다(이벤트 없음). 인플라이트면 False."""
+        for i, c in enumerate(self._cmd_q):
+            if c is cmd:
+                del self._cmd_q[i]
                 return True
         return False
 
