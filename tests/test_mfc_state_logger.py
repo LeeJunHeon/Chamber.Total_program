@@ -95,8 +95,10 @@ def _status(evs):
 
 # ───────────────────────── 1) 끔 = 기존과 동일 ─────────────────────────
 def test_disabled_by_default_and_normal_queue_unchanged():
-    from lib import config_common as cfgc
-    assert getattr(cfgc, "MFC_STATE_LOG_ENABLED") is False      # 키가 없거나 false 면 main 이 기록기를 만들지 않는다
+    # 소스 기본값은 False(키가 없거나 false 면 main 이 기록기를 만들지 않는다).
+    # 모듈 속성이 아니라 소스를 보는 이유: 다른 테스트가 settings.json(true)을 config 모듈에 적용한 채 남길 수 있다.
+    src = (Path(_ROOT) / "lib" / "config_common.py").read_text(encoding="utf-8")
+    assert "MFC_STATE_LOG_ENABLED = False" in src
 
     async def go():
         m, dev, evs, tasks = _mfc()
