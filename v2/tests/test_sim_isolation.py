@@ -274,8 +274,16 @@ def test_robot_server_sim_listens_only_on_loopback_test_port_and_writes_under_si
             s = so.socket()
             s.settimeout(1)
             s.connect(("192.0.2.1", port))
-        p.send_signal(signal.SIGINT)
-        p.communicate(timeout=20)
+        done = False
+        for _ in range(4):                                                  # 부하로 기동이 늦으면 첫 SIGINT 가 핸들러 설치 전에 들어갈 수 있다 → 재전송
+            p.send_signal(signal.SIGINT)
+            try:
+                p.communicate(timeout=8)
+                done = True
+                break
+            except subprocess.TimeoutExpired:
+                continue
+        assert done, "서버가 SIGINT 에 종료하지 않음"
     finally:
         if p.poll() is None:
             p.kill()
