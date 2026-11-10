@@ -28,11 +28,13 @@ DIFFERENCES += [
 
 DIFFERENCES += [
     dict(id="X05", what="로봇 명령 응답의 PLC 통신 오류 문구(E401·E402·E403 detail)",
-         v1="pymodbus 예외 문구('PLC 응답 없음/프레임 오류: ModbusIOException: Modbus Error: [Input/Output] ..')",
-         v2="v2 PLC 드라이버 문구('PLC 요청 실패(timeout): PLC 응답 없음/프레임 오류: ReadTimeout: .. (op=read_coil, addr=N)')"
-            " — 코드·메시지(제목)·필드·순서·응답 시점은 같다",
-         why="pymodbus 를 쓰지 않음(X02) — 예외 문구가 라이브러리 것이라 같을 수 없다. 시험(test_robot_ops)은 자리표로 가림",
-         agreed="D02"),
+         v1="pymodbus 예외 문구('PLC 응답 없음/프레임 오류: ModbusIOException: Modbus Error: [Input/Output] ..' — 라이브러리가 정하는 문구)",
+         v2="무응답(E402·timeout)은 v1(pymodbus 3.11.2·retries=0)과 같은 문구 'PLC 응답 없음/프레임 오류: ModbusIOException: Modbus Error: [Input/Output] "
+            "No response received after 0 retries, continue with next request'(2026-11-09 D6 — v1 의 '(op=, addr=)' 꼬리도 없다). 그 밖(연결 오류 E401·프레임 불일치·"
+            "Modbus 거절 E403)은 pymodbus 가 만드는 예외 문구(연결 끊김 종류·transaction id 불일치 문구 등)를 같게 만들 수 없어 v2 드라이버 문구 — "
+            "코드·메시지(제목)·필드·순서·응답 시점은 같다",
+         why="pymodbus 를 쓰지 않음(X02) — 무응답만 라이브러리 문구를 알 수 있어 맞추고(v1 requirements pymodbus==3.11.2 소스 확인), 나머지는 같을 수 없다. "
+             "시험(test_robot_ops)은 골든 비교에서 자리표로 가리고 무응답 문구는 따로 확인", agreed="D02; 사용자 지시 2026-11-09 D6"),
     dict(id="X06", what="로봇 명령의 시작 가드 대기 위치",
          v1="ChamberRuntime·PlasmaCleaningRuntime.start_with_recipe_string 안(asyncio.wait_for)",
          v2="robot_ops(robot_status._wait_chamber_start·_wait_pc_start) — 엔진은 on_preflight(ok, code, detail) 로 결과만. "
@@ -51,7 +53,8 @@ DIFFERENCES += [
          v2="레시피 = 블록 목록(v1 행은 기본 템플릿 — 같은 스텝), PROCESS_ADJUST·건너뛰기·일시정지·시퀀스 편집", why="지시 3장 (3)", agreed="지시 3장 (3)"),
     dict(id="X10", what="명령 경로·출처 표", v1="화면 버튼·로봇 핸들러가 각자 장비를 부름", v2="웹·로컬·로봇 명령이 core.command 한 곳을 지나고 명령마다 받는 출처를 표에",
          why="지시 3장 (4)", agreed="지시 3장 (4)"),
-    dict(id="X11", what="로봇 서버 분리", v1="메인 프로그램 안 서버(0.0.0.0:50070)", v2="별도 프로그램 v2/robot_server(판단 없이 내부 API 로 전달, 꺼짐 때 캐시 응답 D08)",
+    dict(id="X11", what="로봇 서버 분리", v1="메인 프로그램 안 서버(0.0.0.0:50070)", v2="별도 프로그램 v2/robot_server(판단 없이 내부 API 로 전달 — 응답이 느리면 끝까지 기다림, 연결 불가·진행 중 끊김일 때만 E205·GET_SPUTTER_STATUS 마지막 실제 상태 "
+            "그대로(센서 값은 캐시하지 않고 E205 — 2026-11-09 D1~D3, D08 수정))",
          why="지시 3장 (5)", agreed="지시 3장 (5); D08; D09"),
     dict(id="X12", what="화면·구글챗", v1="PySide6 화면, 프로그램이 웹훅으로 직접 보냄", v2="포털 화면 + 같은 화면의 노트북 local 빌드, 카드는 포털이 보냄(재시작·이어가기 카드 1장 추가)",
          why="지시 3장 (7)", agreed="지시 3장 (7)"),

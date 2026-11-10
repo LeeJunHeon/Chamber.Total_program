@@ -72,16 +72,14 @@ class VacuumOps(StatusOps):
                         self.write_switch("L_R_P_SW", False)
                 st["cleanup_done"] = True
 
-            busy = self._fail_if_loadlock_transition_busy("VACUUM_ON")
+            busy = self._try_loadlock_transition("VACUUM_ON", "VACUUM_ON")     # 확인과 획득을 한 번에(11-09 D5)
             if busy is not None:
                 return busy
             try:
-                with self._loadlock_transition_lock:
-                    self._loadlock_transition_tag = "VACUUM_ON"
-                    try:
-                        return self._vacuum_on_body(timeout_s, st, stop_roughing)
-                    finally:
-                        self._loadlock_transition_tag = None
+                try:
+                    return self._vacuum_on_body(timeout_s, st, stop_roughing)
+                finally:
+                    self._loadlock_transition_lock.release()
             except Exception as e:
                 return self._fail(e)
             finally:
@@ -292,16 +290,14 @@ class VacuumOps(StatusOps):
         timeout_s = float(data.get("timeout_s", 240.0))
         with self._plc_command("VACUUM_OFF"):
             st = {"success": False}
-            busy = self._fail_if_loadlock_transition_busy("VACUUM_OFF")
+            busy = self._try_loadlock_transition("VACUUM_OFF", "VACUUM_OFF")   # 확인과 획득을 한 번에(11-09 D5)
             if busy is not None:
                 return busy
             try:
-                with self._loadlock_transition_lock:
-                    self._loadlock_transition_tag = "VACUUM_OFF"
-                    try:
-                        return self._vacuum_off_body(timeout_s, st)
-                    finally:
-                        self._loadlock_transition_tag = None
+                try:
+                    return self._vacuum_off_body(timeout_s, st)
+                finally:
+                    self._loadlock_transition_lock.release()
             except Exception as e:
                 return self._fail(e)
             finally:

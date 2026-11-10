@@ -17,6 +17,7 @@ from __future__ import annotations
 
 import contextlib
 import contextvars
+import threading
 import datetime as _dt
 import json
 from dataclasses import dataclass, field
@@ -56,9 +57,17 @@ def plc_error_code(res) -> str:
 
 
 def plc_error_text(code: str, res, op: str, addr: int) -> str:
-    """PLCError 문구 — v2 드라이버가 남긴 오류(시험은 이 함수를 바꿔 자리표로 가린다)."""
+    """PLCError 문구 — v1 device/plc.py:1215-1250(_to_plc_error)의 모양: 'PLC 응답 없음/프레임 오류: ModbusIOException: ..'. 무응답(E402·timeout)은
+    v1 pymodbus 3.11.2·retries=0 의 문구를 그대로('Modbus Error: [Input/Output] No response received after 0 retries, continue with next
+    request' — transaction.py:151). 그 밖(연결 오류·프레임 불일치·거절)은 pymodbus 문구가 라이브러리 안에서 정해져 같게 만들 수 없어 v2 드라이버 문구
+    (differences X05). v1 문구에는 '(op=, addr=)' 꼬리가 없다 — op·addr 는 PLCError 속성."""
     why = res.error or res.reason or res.status
-    return f"PLC 요청 실패({res.status}): {why} (op={op}, addr={addr})"
+    if code == "E402" and res.status in (Status.TIMEOUT, Status.EXPIRED):
+        return ("PLC 응답 없음/프레임 오류: ModbusIOException: Modbus Error: [Input/Output] "
+                "No response received after 0 retries, continue with next request")
+    if code == "E401":
+        return f"PLC 연결 오류: {why}"
+    return f"PLC 요청 실패({res.status}): {why}"
 
 
 # ───────────────────────── 시계 잠금 ─────────────────────────
@@ -68,6 +77,7 @@ class ClockLock:
     def __init__(self, clock, name: str = "") -> None:
         self.clock, self.name = clock, name
         self._held = False
+        self.owner = ""                 # try_acquire 로 잡은 쪽이 남긴 이름(v1 loadlock_transition_tag)
 
     def locked(self) -> bool:
         return self._held
@@ -77,9 +87,20 @@ class ClockLock:
             self.clock.wait_until(None, lambda: not self._held)
             self._held = True
 
+    def try_acquire(self, owner: str = "") -> bool:
+        """기다리지 않는 획득 — 확인과 획득이 한 번에 일어난다(11-09 D5). 실패하면 False. v1 은 asyncio 한 스레드라 locked() 확인과
+        `async with` 사이에 다른 요청이 끼어들 수 없었다 — v2 는 스레드라 확인 뒤 획득으로 나누면 둘이 같이 통과해 하나가 기다리게 된다."""
+        with self.clock.cond:
+            if self._held:
+                return False
+            self._held = True
+            self.owner = owner
+            return True
+
     def release(self) -> None:
         with self.clock.cond:
             self._held = False
+            self.owner = ""
             self.clock.cond.notify_all()
 
     def __enter__(self) -> "ClockLock":
@@ -137,6 +158,7 @@ class RobotBase:
         self._loadlock_transition_lock = ClockLock(clock, "loadlock_transition")
         self._loadlock_transition_tag: Optional[str] = None
         self._loadlock_gate_lock = ClockLock(clock, "loadlock_gate")
+        self._pc_start_lk = threading.Lock()      # E206 확인·표시를 한 번에(11-09 D5)
         self._pc_start_pending = False            # v1 PlasmaCleaningRuntime._host_start_future 대기 중(E206)
         self._req_scope: Dict[int, Tuple[Scope, Optional[str]]] = {}   # 진행 중 PLC 요청 → (요청 범위, 태그)
         self._tap_driver_log(getattr(plc_link, "plc", None))
@@ -383,6 +405,21 @@ class RobotBase:
             tag = self._loadlock_transition_tag or "LOADLOCK_TRANSITION"
             return self._fail(f"{action} 불가 — {tag} 진행 중", code="E321")
         return None
+
+    def _try_loadlock_transition(self, action: str, tag: str) -> Optional[Json]:
+        """로드락 전환 잠금을 기다리지 않고 한 번에 잡는다 — 못 잡으면 v1 busy 오류(E321 '{진행 중인 태그} 진행 중'), 잡았으면 None
+        (호출한 쪽이 끝에 _loadlock_transition_lock.release())."""
+        if self._loadlock_transition_lock.try_acquire(tag):
+            return None
+        return self._fail(f"{action} 불가 — {self._loadlock_transition_tag or 'LOADLOCK_TRANSITION'} 진행 중", code="E321")
+
+    @property
+    def _loadlock_transition_tag(self) -> Optional[str]:
+        return self._loadlock_transition_lock.owner or None
+
+    @_loadlock_transition_tag.setter
+    def _loadlock_transition_tag(self, v: Optional[str]) -> None:
+        self._loadlock_transition_lock.owner = v or ""
 
     def chamber_status(self, ch: int) -> str:
         """GET_SPUTTER_STATUS 의 Chamber_n(v1 _ch_state, host/handlers.py:543-584)."""

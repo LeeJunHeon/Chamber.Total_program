@@ -58,10 +58,11 @@ def dispatch_robot(ops, cmd: str, data: Any, raw: Any = None, peer: str = "", re
     if core is None or c not in _ROBOT_KINDS:
         return ops.handle(cmd, data, raw, peer, received_at, request_id)
     from v2.common.commands import Source
-    rid = request_id if request_id is not None else (raw.get("request_id") if isinstance(raw, dict) else None)
+    # v1 host/server.py:270 — req_id = str(obj.get("request_id", "")) (숫자 id 도 글자로: Robot CSV 기록키·명령 id 가 같은 모양)
+    rid = str(request_id) if request_id is not None else (str(raw.get("request_id", "")) if isinstance(raw, dict) else "")
     res = core.command(f"ROBOT_{c}", {"data": data if isinstance(data, dict) else {}, "raw": raw, "peer": peer,
                                       "received_at": received_at, "request_id": rid}, source=Source.ROBOT,
-                       cid=rid, by="robot")
+                       cid=rid or None, by="robot")
     if res.ok and isinstance(res.value, tuple) and len(res.value) == 3:
         return res.value
     body = ER.build_error_payload_from_code("E205", detail=f"{c} 불가 — {res.reason}" + (f": {res.detail}" if res.detail else ""),

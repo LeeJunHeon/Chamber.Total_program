@@ -27,9 +27,9 @@ from pathlib import Path
 import pytest
 
 from v2.robot_server import protocol
-from v2.robot_server.cache import ReplyCache, as_busy
+from v2.robot_server.cache import ReplyCache
 from v2.robot_server.fake_api import FakeApi
-from v2.robot_server.forward import COMMANDS, Forwarder, parse_log_entries, reply_timeout_s
+from v2.robot_server.forward import COMMANDS, Forwarder, parse_log_entries
 from v2.robot_server.log import CommandCsv, ServerLog, format_line
 from v2.robot_server.server import RobotServer
 
@@ -291,23 +291,6 @@ def test_command_csv_fallback_marker(tmp_path):
 
 # ───────────────────────── 응답 한도 ─────────────────────────
 
-def test_reply_timeouts_from_v1_timing():
-    assert reply_timeout_s("GET_SPUTTER_STATUS", {}) == 5.0
-    assert reply_timeout_s("GET_LOADING_2_SENSOR", {}) == 5.0
-    assert reply_timeout_s("GET_RECIPE", {}) == 20.0 + 30.0
-    assert reply_timeout_s("START_SPUTTER", {}) == 30.0 + 20.0 + 30.0
-    assert reply_timeout_s("START_PLASMA_CLEANING", {}) == 30.0 + 20.0 + 30.0
-    assert reply_timeout_s("VACUUM_ON", {}) == pytest.approx(660.0 + 35.3 + 30.0)
-    assert reply_timeout_s("VACUUM_ON", {"timeout_s": 100}) == pytest.approx(100.0 + 35.3 + 30.0)
-    assert reply_timeout_s("VACUUM_OFF", {}) == 240.0 + 5.0 + 30.0
-    assert reply_timeout_s("4PIN_UP", {}) == pytest.approx(5.0 + 20.0 + 0.18 + 30.0)
-    assert reply_timeout_s("CH2_GATE_OPEN", {"wait_s": "x"}) == pytest.approx(0.18 + 5.0 + 30.0)
-    assert reply_timeout_s("CH1_CHUCK_UP", {}) == pytest.approx(90.0 + 0.2 + 90.0 + 30.0)
-    assert reply_timeout_s("CH2_CHUCK_DOWN", {"wait_s": 10}) == pytest.approx(0.2 + 10.0 + 30.0)
-    assert reply_timeout_s("START_SPUTTER", {}, {"CHAMBER_HOST_START_WAIT_TIMEOUT_S": 40.0,
-                                                  "ROBOT_API_TIMEOUT_MARGIN_S": 5.0}) == 75.0
-
-
 # ───────────────────────── 제어 프로그램 꺼짐 ─────────────────────────
 
 STATUS_BODY = {"result": "success", "message": "OK", "Chamber_1": "idle", "Chamber_2": "error",
@@ -324,10 +307,8 @@ def _respond(req):
 
 
 def _busy_status():
-    want = json.loads(json.dumps(STATUS_BODY))
-    want.update(Chamber_1="running", Chamber_2="running", Loadlock_Chamber="running")
-    want["eta"] = {"CH1": {"remaining_s": None}, "CH2": {"remaining_s": None}}
-    return want
+    """제어 프로그램 연결 불가 때 마지막 실제 상태 — v1 형식 그대로(값을 바꾸지 않는다, 11-09 D3)."""
+    return json.loads(json.dumps(STATUS_BODY))
 
 
 def test_down_keeps_connection_and_uses_cache(tmp_path):
@@ -341,7 +322,8 @@ def test_down_keeps_connection_and_uses_cache(tmp_path):
             assert m == {"request_id": "s2", "command": "GET_SPUTTER_STATUS_RESULT", "data": _busy_status()}
             assert list(m["data"]) == list(STATUS_BODY)
             (h, m), = await rig.ask(r, w, protocol.pack_request("GET_LOADING_1_SENSOR", {}, "l1"))
-            assert m["data"] == GOLDEN["down_payloads"]["GET_LOADING_1_SENSOR"]
+            assert m["data"] == GOLDEN["down_payloads"]["GET_LOADING_1_SENSOR"]            # 센서 값은 캐시하지 않는다 — E205(11-09 D2)
+            assert m["data"]["error_code"] == "E205"
             (h, m), = await rig.ask(r, w, protocol.pack_request("GET_RECIPE", {"folder": "ch2"}, "g1"))
             assert m["data"]["error_code"] == "E227"
             for cmd in COMMANDS[4:]:
@@ -414,25 +396,76 @@ def test_broken_cache_file_is_ignored(tmp_path):
     assert c.put("GET_SPUTTER_STATUS", {}, STATUS_BODY) is False          # 같으면 다시 쓰지 않음
     assert c.put("GET_SPUTTER_STATUS", {}, {"result": "fail"}) is False   # 실패 응답은 캐시 안 함
     assert ReplyCache(p).get("GET_SPUTTER_STATUS")["body"] == STATUS_BODY
-    assert as_busy("GET_LOADING_1_SENSOR", {"result": "success", "message": "OK", "value": True})["value"] is True
+    assert c.put("GET_LOADING_1_SENSOR", {}, {"result": "success", "message": "OK", "value": True}) is False   # 센서 값은 저장하지 않음
 
 
-def test_api_timeout_then_recovery_same_connection(tmp_path):
+def test_slow_control_program_is_waited_for_not_e205(tmp_path):
+    """11-09 D1·D3 — 응답이 느릴 뿐이면 시간 한도로 E205·캐시 응답을 내지 않고 실제 결과를 끝까지 기다린다."""
     async def run():
-        async with Rig(tmp_path, _respond, cfg={"ROBOT_API_STATUS_TIMEOUT_S": 0.3}) as rig:
+        async with Rig(tmp_path, _respond) as rig:
             r, w, _ = await rig.connect()
-            await rig.ask(r, w, protocol.pack_request("GET_SPUTTER_STATUS", {}, "a"))
-            rig.api.delay_s = 1.0
+            await rig.ask(r, w, protocol.pack_request("GET_SPUTTER_STATUS", {}, "a"))      # 캐시에 지난 상태가 있어도
+            rig.api.delay_s = 1.5
             t0 = time.monotonic()
             (h, m), = await rig.ask(r, w, protocol.pack_request("GET_SPUTTER_STATUS", {}, "b"))
-            assert time.monotonic() - t0 < 0.9
-            assert m["data"]["Chamber_1"] == "running"
-            await asyncio.sleep(1.0)
+            assert time.monotonic() - t0 >= 1.4
+            assert m["data"] == STATUS_BODY and not any("unreachable" in x for _, x in rig.lines) and rig.srv.down_count == 0
+            (h, m), = await rig.ask(r, w, protocol.pack_request("VACUUM_ON", {}, "c"))
+            assert m["data"]["result"] == "success"
             rig.api.delay_s = 0.0
-            (h, m), = await rig.ask(r, w, protocol.pack_request("GET_SPUTTER_STATUS", {}, "c"))
-            assert m["data"] == STATUS_BODY                      # 다시 살아나면 그대로 전달
             w.close()
     asyncio.run(run())
+
+
+def test_connection_dropped_mid_request_is_e205_and_loading_sensor_never_cached(tmp_path):
+    """진행 중 연결이 끊기면 그때 E205 — GET_LOADING_n_SENSOR 는 캐시 값이 아니라 E205, GET_SPUTTER_STATUS 는 마지막 실제 상태 그대로(나이는 로그에만)."""
+    import threading
+    srv_sock = None
+
+    async def run():
+        nonlocal srv_sock
+        async with Rig(tmp_path, _respond) as rig:
+            r, w, _ = await rig.connect()
+            (h, m), = await rig.ask(r, w, protocol.pack_request("GET_LOADING_1_SENSOR", {}, "l0"))
+            assert m["data"]["result"] == "success"
+            await rig.ask(r, w, protocol.pack_request("GET_SPUTTER_STATUS", {}, "s0"))
+            rig.api.stop()
+            drop = socket.socket()
+            drop.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            drop.bind(("127.0.0.1", rig.srv.forwarder.port))          # 받자마자 끊는 가짜 내부 API
+            drop.listen(5)
+            srv_sock = drop
+
+            def eat():
+                for _ in range(2):
+                    try:
+                        c, _a = drop.accept()
+                        c.recv(65536)
+                        c.close()                                      # 응답 없이 끊음 = 진행 중 연결 끊김
+                    except OSError:
+                        return
+            threading.Thread(target=eat, daemon=True).start()
+            (h, m), = await rig.ask(r, w, protocol.pack_request("GET_LOADING_1_SENSOR", {}, "l1"))
+            assert m["data"]["error_code"] == "E205" and "value" not in m["data"]
+            (h, m), = await rig.ask(r, w, protocol.pack_request("GET_SPUTTER_STATUS", {}, "s1"))
+            assert m["data"] == STATUS_BODY                           # 값을 running 으로 바꾸지 않음
+            assert any(t == "NET" and "last reply age=" in x for t, x in rig.lines)
+            w.close()
+    try:
+        asyncio.run(run())
+    finally:
+        if srv_sock is not None:
+            srv_sock.close()
+
+
+def test_old_disk_cache_sensor_values_are_ignored(tmp_path):
+    p = tmp_path / "c.json"
+    p.write_text(json.dumps({"version": 1, "replies": {
+        "GET_LOADING_1_SENSOR": {"body": {"result": "success", "value": True}, "at": "2026-11-01T00:00:00"},
+        "GET_SPUTTER_STATUS": {"body": STATUS_BODY, "at": "2026-11-01T00:00:00"}}}), encoding="utf-8")
+    c = ReplyCache(p)
+    assert c.get("GET_LOADING_1_SENSOR") is None and c.get("GET_SPUTTER_STATUS")["body"] == STATUS_BODY
+    assert c.down_reply("GET_LOADING_1_SENSOR", {})[1]["error_code"] == "E205"
 
 
 def test_api_500_or_bad_shape_is_down(tmp_path):
@@ -547,3 +580,31 @@ def test_cli_runs_as_separate_program(tmp_path):
     log = (tmp_path / "logs" / "CH1&2_Server" / f"server_page_{datetime.now():%Y%m%d}.log").read_text(encoding="utf-8")
     assert "[PLC_HOST] [REQ] peer=('127.0.0.1', " in log and "cmd=CH1_GATE_OPEN_RESULT" in log
     assert (tmp_path / "logs" / "CH1&2_Server" / f"remote_cmd_{datetime.now():%Y%m%d}.csv").exists()
+
+
+def test_two_connections_slow_command_and_status_run_in_parallel_without_e205(tmp_path):
+    """11-09 D — 동시 연결 2개: 한쪽이 오래 걸리는 명령을 기다리는 동안 다른 쪽 상태 질의는 실제 값으로 바로 답하고, 오래 걸려도 E205 가 아니다."""
+    def respond(req):
+        if req["cmd"] == "VACUUM_ON":
+            time.sleep(1.2)
+        return _respond(req)
+
+    async def run():
+        async with Rig(tmp_path, respond) as rig:
+            r1, w1, _ = await rig.connect()
+            r2, w2, _ = await rig.connect()
+            w1.write(protocol.pack_request("VACUUM_ON", {}, "slow"))
+            await w1.drain()
+            await asyncio.sleep(0.2)
+            t0 = time.monotonic()
+            (h, m), = await rig.ask(r2, w2, protocol.pack_request("GET_SPUTTER_STATUS", {}, "st"))
+            assert time.monotonic() - t0 < 0.8 and m["data"] == STATUS_BODY
+            buf = b""
+            while len(frames(buf)) < 1:
+                buf += await asyncio.wait_for(r1.read(65536), timeout=5.0)
+            got = json.loads(frames(buf)[0][1])
+            assert got["request_id"] == "slow" and got["data"]["result"] == "success"          # 오래 걸려도 실제 결과
+            assert rig.srv.down_count == 0
+            w1.close()
+            w2.close()
+    asyncio.run(run())

@@ -247,10 +247,14 @@ class EngineAdapter:
             e.log(src, msg)
         if r.code == "E230":
             raise RuntimeError(r.message)               # v1: '레시피 오류 N건' RuntimeError(코드 없음 — 핸들러가 E230)
-        if not r.ok:
-            raise CodedRuntimeError(r.message, r.code or "E209")
         key = str((request_meta or {}).get("key") or "")
         hl = self.a.robot_csv
+        if not r.ok:
+            if r.code == "E208" and hl is not None and key:
+                # v1(chamber_runtime.py:8085-8101): 검증 통과 직후 호스트 로그 갱신(레시피 이름·행 수 0·공정 이름 빈 칸)이 E208 거절보다 먼저
+                hl.update(key, recipe_name=os.path.basename(s), row_count=len(r.rows or []),
+                          process_names=" / ".join(str(x.get("Process_name", "") or "").strip() for x in (r.rows or [])))
+            raise CodedRuntimeError(r.message, r.code or "E209")
         if hl is not None and key:
             hl.update(key, recipe_name=os.path.basename(s), row_count=len(r.rows),
                       process_names=" / ".join(str(x.get("Process_name", "") or "").strip() for x in r.rows))

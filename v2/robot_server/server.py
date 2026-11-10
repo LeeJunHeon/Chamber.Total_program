@@ -20,7 +20,7 @@ v1 과 다른 것
 - 실패 보고(notify_* — E102·E104·E105·E107·E110·E111, 서버 자체 예외 E999)는 서버 로그('ERROR/HOST' 줄) 뒤 제어 프로그램의
   내부 명령 API POST /robot/v1/event 로 넘긴다(결정 D09 — 구글챗 카드는 포털, 팝업은 노트북 화면이 같은 문구로). 보내기는 별도
   태스크라 응답 바이트·순서·로그 줄은 v1 그대로이고, 제어 프로그램이 꺼져 있으면 보내지 못한 채 로그만 남는다(다시 보내지 않음).
-- 제어 프로그램이 꺼져 있으면 cache.py 규칙대로 응답(연결 유지).
+- 제어 프로그램에 연결할 수 없을 때(연결 거부·끊김)만 cache.py 규칙대로 응답(연결 유지) — 응답이 느릴 때는 끝까지 기다린다(2026-11-09 D1).
 """
 from __future__ import annotations
 
@@ -167,8 +167,9 @@ class RobotServer:
             self.down_count += 1
             reply_cmd, body, used = self.cache.down_reply(c, data)
             with contextlib.suppress(Exception):
+                age = self.cache.age_s(c, data) if used else None
                 self.log("NET", f"[WARN] control program unreachable: cmd={c} reason={e} -> "
-                                f"{'last reply (busy)' if used else body.get('error_code')}")
+                                f"{('last reply age=%.0fs' % age) if used and age is not None else ('last reply' if used else body.get('error_code'))}")
             if body.get("result") == "fail":
                 with contextlib.suppress(Exception):
                     self.log("ERROR/HOST", report_log_text(body))

@@ -258,7 +258,8 @@ async def _main() -> dict:
     from v2.robot_server.cache import DOWN_DETAIL, NO_CACHE_CODE, BUSY_CODE
     from v2.robot_server.protocol import ERROR_DEFS
     down = {}
-    for cmd, code in list(NO_CACHE_CODE.items()) + [("START_SPUTTER", BUSY_CODE), ("VACUUM_ON", BUSY_CODE)]:
+    for cmd, code in list(NO_CACHE_CODE.items()) + [("GET_LOADING_1_SENSOR", BUSY_CODE), ("GET_LOADING_2_SENSOR", BUSY_CODE),
+                                                    ("START_SPUTTER", BUSY_CODE), ("VACUUM_ON", BUSY_CODE)]:
         down[cmd] = err_payload.build_error_payload_from_code(code, detail=DOWN_DETAIL.format(cmd=cmd))
     defs = {}
     for code in ERROR_DEFS:

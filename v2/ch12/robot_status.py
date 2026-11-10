@@ -264,9 +264,10 @@ class StatusOps(RobotBase):
 
     def _wait_pc_start(self, sel: int, recipe: str, key: str) -> None:
         """v1 PlasmaCleaningRuntime.start_with_recipe_string 의 E206·결과 대기(plasma_cleaning_runtime.py:3207-3214·3275-3301)."""
-        if self._pc_start_pending:
-            raise CodedRuntimeError("다른 Plasma Cleaning start 요청이 이미 처리 중입니다.", "E206")
-        self._pc_start_pending = True
+        with self._pc_start_lk:                           # 확인과 표시를 한 번에(11-09 D5 — 두 요청이 같이 통과하지 않게)
+            if self._pc_start_pending:
+                raise CodedRuntimeError("다른 Plasma Cleaning start 요청이 이미 처리 중입니다.", "E206")
+            self._pc_start_pending = True
         try:
             box = _Preflight(self.clock)
             self.engines.start_pc(sel, recipe, self.request_meta(key), box)
@@ -281,5 +282,6 @@ class StatusOps(RobotBase):
                     raise CodedRuntimeError(reason or "Plasma Cleaning start failed", code)
                 raise RuntimeError(reason or "Plasma Cleaning start failed")
         finally:
-            self._pc_start_pending = False
+            with self._pc_start_lk:
+                self._pc_start_pending = False
 

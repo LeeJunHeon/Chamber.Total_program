@@ -582,3 +582,16 @@ DECISIONS += [
          reason="사용자 지시 2026-11-09 C1·C3", confirm=True,
          where="v2/ch12/process_view.py; resume.py; process_adjust.py; process_actions.py; drivers/dc.py; rf.py; dcpulse.py; rfpulse.py"),
 ]
+
+DECISIONS += [
+    dict(id="D404", title="2026-11-09 D 로봇 서버 — 끝까지 기다림·센서 값 캐시 금지·마지막 실제 상태 그대로·원자적 잠금·E208 줄·PLC 문구",
+         decision="① 응답 시간 한도로 E205 를 내지 않는다 — 내부 명령 API 응답을 v1 처럼 끝까지 기다린다(ROBOT_API_STATUS_TIMEOUT_S·ROBOT_API_TIMEOUT_MARGIN_S 폐지). E205 는 내부 API 연결 자체가 안 될 때(연결 거부·"
+                  "ROBOT_API_CONNECT_TIMEOUT_S 접속 시간 초과)와 진행 중 연결이 끊겼을 때만(D08 수정 — 느린 응답을 '꺼짐'으로 보고 지난 상태로 답하던 것을 없앰). "
+                  "② GET_LOADING_1/2_SENSOR 는 캐시 값을 절대 보내지 않는다(연결 불가면 E205, 디스크 캐시에서 센서 값 제거·옛 파일의 센서 값은 읽지 않음). "
+                  "③ GET_SPUTTER_STATUS 는 연결 불가일 때만 마지막 실제 상태를 v1 형식 그대로(값을 running·null 로 바꾸지 않음) — 나이는 서버 로그에만. GET_RECIPE 는 마지막 정상 응답 그대로·없으면 E227(지난 목록이 틀릴 수 있어 사용자 확인 필요). "
+                  "④ request_id 는 str(). ⑤ VACUUM_ON/OFF 로드락 전환 잠금은 기다리지 않는 획득(확인·획득 한 번에 — 실패 = E321 busy), PC 시작 중복 E206 확인·표시도 한 번에. "
+                  "⑥ START_SPUTTER E208 거절은 v1 처럼 호스트 로그를 먼저 갱신(레시피 이름·행 수 0·공정 이름 빈 칸). PLC 무응답 detail 은 v1 pymodbus 3.11.2 문구와 같게, 나머지는 differences X05. "
+                  "시험: 위 각 항목 + 동시 연결 2개(긴 명령 + 상태 질의가 서로 기다리지 않고 E205 도 없음).",
+         reason="사용자 지시 2026-11-09 D", confirm=True,
+         where="v2/robot_server/forward.py; cache.py; server.py; ch12/robot_api.py; robot_base.py; robot_vacuum.py; robot_status.py; assembly.py"),
+]

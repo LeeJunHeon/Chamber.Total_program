@@ -16,20 +16,10 @@
   (v1 챗·팝업 문구 _build_user_text), "level": "warn", "src": "HOST", "title": "오류(HOST, E###)"(v1 팝업 제목),
   "payload": {실패 data}} → 200 {"ok": true}. send_event 는 실패해도 예외 없이 False(제어 프로그램이 꺼져 있으면 로그만).
 
-응답 한도(명령마다, v1 응답 시점 = robot_v1facts.COMMANDS[*]['reply_timing'] 근거, 여유 ROBOT_API_TIMEOUT_MARGIN_S 30 s)
-- GET_SPUTTER_STATUS·GET_LOADING_1/2_SENSOR: ROBOT_API_STATUS_TIMEOUT_S 5 s(즉시 응답 — 메모리 판정 + PLC 1비트)
-- GET_RECIPE: RECIPE_SCAN_TIMEOUT_S 20 + 여유
-- START_SPUTTER: CSV 로드 30 s(chamber_runtime.py:8059-8065) + CHAMBER_HOST_START_WAIT_TIMEOUT_S 20 + 여유
-- START_PLASMA_CLEANING: CSV 로드 30 s(plasma_cleaning_runtime.py:3249-3255) + PC_HOST_START_WAIT_TIMEOUT_S 20 + 여유
-- VACUUM_ON: timeout_s(기본 660) + 뒤처리 최대 35 s(READY 뒤 러핑 OFF 확인 5 + 재정리 5+10 + finally 5 + 시작 펌프 5 s
-  + 0.3) + 여유  (handlers.py:1205-1676)
-- VACUUM_OFF: timeout_s(기본 240) + 앞 정리 5 s(handlers.py:1678-1774) + 여유
-- 4PIN_UP/DOWN: settle_s(5) + wait_s(20) + 펄스 0.18 + 여유 (handlers.py:1777-1886)
-- CHx_GATE_OPEN/CLOSE: 펄스 0.18 + wait_s(5) + 여유 (handlers.py:1889-2142)
-- CHx_CHUCK_UP: CHUCK_POSITION_RESOLVE_TIMEOUT_S 90 + 0.2 + wait_s(90) + 여유 (handlers.py:2195-2327)
-- CHx_CHUCK_DOWN: 0.2 + wait_s(90) + 여유
-  요청 data 의 timeout_s·wait_s·settle_s 가 숫자면 그 값으로 계산한다(v1 핸들러가 그 값을 쓰므로). 다른 명령이 같은 잠금
-  (lock_ch·게이트 잠금)을 쥐고 있어 기다리는 시간은 넣지 않았다 — 여유 30 s 를 넘는 잠금 대기는 '응답 없음'이 된다.
+응답을 기다리는 시간(11-09 D1): 한도를 두지 않는다 — v1 처럼 실제 결과를 끝까지 기다린다(상태 질의·긴 시퀀스 모두). 시간 한도로 E205 를 내면
+  제어 프로그램이 아직 일하는 중인데 로봇이 '실패'로 알고 다시 보내 같은 동작이 겹칠 수 있다. E205(제어 프로그램 응답 없음)는 내부 API 에
+  연결 자체가 안 될 때(연결 거부·접속 시간 초과 ROBOT_API_CONNECT_TIMEOUT_S)와 진행 중 연결이 끊겼을 때(HTTP 중간 끊김·비정상 응답)만.
+  (각 명령이 걸리는 시간은 v1 응답 시점 — robot_v1facts.COMMANDS[*]['reply_timing'] — 그대로이고 로봇이 자기 한도로 기다린다.)
 """
 from __future__ import annotations
 
@@ -54,50 +44,11 @@ API_PATH = "/robot/v1/command"
 EVENT_PATH = "/robot/v1/event"
 EVENT_TIMEOUT_S = 3.0          # 실패 보고 한 건의 한도(응답·로그를 막지 않는 별도 태스크)
 API_HOST = "127.0.0.1"
-_PULSE_S = 0.18      # PLC_CMD_PULSE_MS 180 (lib/config_common.py:636)
 _LOG_RE = re.compile(r"^\[(?P<tag>[A-Za-z0-9_/]+)\] ?(?P<text>.*)$", re.DOTALL)
 
 
 class ForwardDown(Exception):
     """제어 프로그램에 닿지 못함(연결 거부·시간 초과·잘못된 응답)."""
-
-
-def _num(data: Json, key: str, default: float) -> float:
-    try:
-        v = data.get(key, default)
-        if isinstance(v, bool):
-            return default
-        return float(v)
-    except Exception:
-        return default
-
-
-def reply_timeout_s(cmd: str, data: Json, cfg: Optional[dict] = None) -> float:
-    """명령별 응답 한도(초) — 모듈 독스트링 표."""
-    c = robot_cfg(cfg)
-    margin = float(c["ROBOT_API_TIMEOUT_MARGIN_S"])
-    data = data if isinstance(data, dict) else {}
-    if cmd in ("GET_SPUTTER_STATUS", "GET_LOADING_1_SENSOR", "GET_LOADING_2_SENSOR"):
-        return float(c["ROBOT_API_STATUS_TIMEOUT_S"])
-    if cmd == "GET_RECIPE":
-        return float(c["RECIPE_SCAN_TIMEOUT_S"]) + margin
-    if cmd == "START_SPUTTER":
-        return 30.0 + float(c["CHAMBER_HOST_START_WAIT_TIMEOUT_S"]) + margin
-    if cmd == "START_PLASMA_CLEANING":
-        return 30.0 + float(c["PC_HOST_START_WAIT_TIMEOUT_S"]) + margin
-    if cmd == "VACUUM_ON":
-        return _num(data, "timeout_s", 660.0) + 35.3 + margin
-    if cmd == "VACUUM_OFF":
-        return _num(data, "timeout_s", 240.0) + 5.0 + margin
-    if cmd in ("4PIN_UP", "4PIN_DOWN"):
-        return _num(data, "settle_s", 5.0) + _num(data, "wait_s", 20.0) + _PULSE_S + margin
-    if cmd.endswith("_GATE_OPEN") or cmd.endswith("_GATE_CLOSE"):
-        return _PULSE_S + _num(data, "wait_s", 5.0) + margin
-    if cmd.endswith("_CHUCK_UP"):
-        return float(c["CHUCK_POSITION_RESOLVE_TIMEOUT_S"]) + 0.2 + _num(data, "wait_s", 90.0) + margin
-    if cmd.endswith("_CHUCK_DOWN"):
-        return 0.2 + _num(data, "wait_s", 90.0) + margin
-    return float(c["ROBOT_API_STATUS_TIMEOUT_S"]) + margin
 
 
 def parse_log_entries(entries: Any) -> List[Tuple[str, str]]:
@@ -124,20 +75,20 @@ class Forwarder:
         self.port = int(self.cfg["ROBOT_API_PORT"])
         self.connect_timeout_s = float(self.cfg["ROBOT_API_CONNECT_TIMEOUT_S"])
 
-    def timeout_for(self, cmd: str, data: Json) -> float:
-        return reply_timeout_s(cmd, data, self.cfg)
-
     async def forward(self, cmd: str, data: Json, raw: Any, peer: str, received_at: str,
                       timeout_s: Optional[float] = None) -> Tuple[str, Any, List[Tuple[str, str]]]:
+        """timeout_s 는 시험·진단용(기본 None = 끝까지 기다림 — 11-09 D1)."""
         req = {"id": uuid.uuid4().hex, "cmd": cmd, "data": data, "raw": raw, "peer": peer, "received_at": received_at}
         body = json.dumps(req, ensure_ascii=False, default=str).encode("utf-8")
-        t = self.timeout_for(cmd, data) if timeout_s is None else float(timeout_s)
         try:
-            status, resp = await asyncio.wait_for(self._post(body), timeout=t)
+            if timeout_s is None:
+                status, resp = await self._post(body)
+            else:
+                status, resp = await asyncio.wait_for(self._post(body), timeout=float(timeout_s))
         except ForwardDown:
             raise
         except asyncio.TimeoutError:
-            raise ForwardDown(f"응답 시간 초과({t:.1f}s)")
+            raise ForwardDown(f"응답 시간 초과({float(timeout_s or 0):.1f}s)")
         except (OSError, ConnectionError) as e:
             raise ForwardDown(f"연결 실패: {e!r}")
         except Exception as e:

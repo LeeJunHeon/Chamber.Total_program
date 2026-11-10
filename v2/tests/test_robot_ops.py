@@ -128,3 +128,109 @@ def test_clock_lock_waits_on_virtual_clock():
         assert lk.locked() and order == []
     c.wait_until(c.monotonic() + 1.0, lambda: bool(order))
     assert order == [("b", 2.0)]
+
+
+# ───────────────────────── 11-09 D 로봇 서버·명령 처리 ─────────────────────────
+def test_try_lock_is_atomic_two_requests_only_one_passes_other_is_busy_e321(tmp_path):
+    """D5 — 확인과 획득이 한 번에: 같이 들어온 VACUUM_ON·VACUUM_OFF 중 하나만 잡고, 다른 하나는 기다리지 않고 v1 busy 오류(E321)."""
+    import threading
+    rig = RR.RobotRig(out_dir=tmp_path)
+    try:
+        for _ in range(200):
+            res, gate = [], threading.Barrier(2)
+
+            def go(tag):
+                gate.wait()
+                res.append((tag, rig.ops._try_loadlock_transition(tag, tag)))
+            ts = [threading.Thread(target=go, args=(t,)) for t in ("VACUUM_ON", "VACUUM_OFF")]
+            for t in ts:
+                t.start()
+            for t in ts:
+                t.join()
+            won = [(t, r) for t, r in res if r is None]
+            lost = [(t, r) for t, r in res if r is not None]
+            assert len(won) == 1 and len(lost) == 1
+            body = lost[0][1]
+            assert body["error_code"] == "E321" and body["detail"] == f"{lost[0][0]} 불가 — {won[0][0]} 진행 중"
+            rig.ops._loadlock_transition_lock.release()
+            assert rig.ops._loadlock_transition_tag is None
+    finally:
+        rig.done()
+
+
+def test_pc_start_duplicate_e206_is_atomic(tmp_path):
+    import threading
+    from v2.ch12.errors import CodedRuntimeError
+    rig = RR.RobotRig(out_dir=tmp_path)
+    try:
+        for _ in range(100):
+            out, gate = [], threading.Barrier(2)
+
+            def go():
+                gate.wait()
+                with rig.ops._pc_start_lk:
+                    if rig.ops._pc_start_pending:
+                        out.append("E206")
+                        return
+                    rig.ops._pc_start_pending = True
+                    out.append("ok")
+            ts = [threading.Thread(target=go) for _ in range(2)]
+            for t in ts:
+                t.start()
+            for t in ts:
+                t.join()
+            assert sorted(out) == ["E206", "ok"]
+            rig.ops._pc_start_pending = False
+    finally:
+        rig.done()
+
+
+def test_plc_timeout_detail_is_v1_pymodbus_3_11_text():
+    """D6 — 무응답(E402·timeout)의 detail 은 v1(pymodbus 3.11.2·retries=0)과 같은 문구. 그 밖은 differences X05."""
+    from v2.common.worker import Status
+
+    class Res:
+        status, error, reason = Status.TIMEOUT, "ReadTimeout", None
+    assert robot_base.plc_error_text("E402", Res, "read_coil", 12) == (
+        "PLC 응답 없음/프레임 오류: ModbusIOException: Modbus Error: [Input/Output] "
+        "No response received after 0 retries, continue with next request")
+
+
+def test_request_id_is_str_like_v1():
+    from v2.ch12.robot_api import dispatch_robot
+
+    class Core:
+        seen = []
+
+        def command(self, kind, args, source=None, cid=None, by=None):
+            Core.seen.append((args["request_id"], cid))
+
+            class R:
+                ok, value = True, ("X_RESULT", {"result": "success"}, [])
+            return R
+    ops = type("O", (), {"core": Core()})()
+    dispatch_robot(ops, "GET_SPUTTER_STATUS", {}, {"request_id": 17, "command": "GET_SPUTTER_STATUS"}, "127.0.0.1:1", None)
+    dispatch_robot(ops, "GET_SPUTTER_STATUS", {}, {"command": "GET_SPUTTER_STATUS"}, "127.0.0.1:1", None)
+    assert Core.seen == [("17", "17"), ("", None)] and isinstance(Core.seen[0][0], str)
+
+
+def test_e208_refusal_updates_host_log_recipe_name_and_zero_rows_like_v1(tmp_path):
+    """D6 — v1 은 E208 거절 전에 호스트 로그를 갱신(레시피 이름·행 수 0·공정 이름 빈 칸)한다."""
+    from v2.ch12 import assembly as AS
+    updates = []
+
+    class HL:
+        def update(self, key, **kw):
+            updates.append((key, kw))
+
+    class R:
+        ok, code, message, rows, logs = False, "E208", "CSV에 공정 데이터가 없습니다.", [], []
+    adapter = AS.EngineAdapter.__new__(AS.EngineAdapter)
+    adapter._load_file = lambda path: R
+    adapter._eng = lambda ch: type("E", (), {"log": lambda *a: None})()
+    adapter.a = type("A", (), {"robot_csv": HL()})()
+    from v2.ch12.errors import CodedRuntimeError
+    with pytest.raises(CodedRuntimeError) as ei:
+        adapter.start_sputter(1, "/r/empty.csv", {"key": "k-1"}, lambda *a: None)
+    assert ei.value.code == "E208"
+    assert updates == [("k-1", {"recipe_name": "empty.csv", "row_count": 0, "process_names": ""})]
