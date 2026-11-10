@@ -53,7 +53,8 @@ def local_paths(root: Path) -> Dict[str, str]:
             "CH1_RGA_CSV_PATH": str(r / "rga" / "Ch.1" / "RGA_spectrums.csv"),
             "CH2_RGA_CSV_PATH": str(r / "rga" / "Ch.2" / "RGA_spectrums.csv"),
             "RF_READER_STATE_DIR": str(r / "camera" / "_state"), "RF_READER_CSV_DIR": str(r / "camera" / "_csv"),
-            "LOG_SYNC_STATE_DIR": str(r / "_sync_state"), "ROBOT_CACHE_PATH": str(r / "state" / "robot_last_replies.json")}
+            "LOG_SYNC_STATE_DIR": str(r / "_sync_state"), "MFC_STATE_LOG_DIR": str(r / "mfc_state"),
+            "ROBOT_CACHE_PATH": str(r / "state" / "robot_last_replies.json")}
 
 
 def make_sims(start: float = 0.0, cfg: Optional[Dict[str, Any]] = None,
