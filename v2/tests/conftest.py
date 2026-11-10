@@ -11,6 +11,7 @@
 - 실제 시계를 쓰는 시험(RealClock 을 만들었거나 test_app)은 끝난 뒤 그 시험이 만든 스레드가 남으면(최대 2 s 기다림) 실패
   — 앱·로컬 서버·SSE·숨은 창(WM_ENDSESSION) 스레드가 정리되는지.
 """
+import os
 import collections
 import sys
 import threading
@@ -186,3 +187,12 @@ def _real_clock_threads_cleaned(request, monkeypatch):
 def _sim_base(tmp_path, monkeypatch):
     """sim 격리(v2/ch12/sim_guard.py)의 기준 폴더를 시험마다 tmp 로 — sim 이 쓰는 모든 곳은 <tmp>/sim_out 아래, 설정 폴더도 <tmp> 아래여야 한다."""
     monkeypatch.setenv("CH12_SIM_BASE", str(tmp_path))
+    # sim_guard.apply_env 가 os.environ 에 직접 넣는 값이 다음 시험으로 새지 않게(없던 값은 지우고 있던 값은 되돌린다)
+    keys = ("OES_LOCAL_BASE", "OES_STOP_DIR", "OES_MUTEX_PREFIX", "OES_FAKE_LOG", "RGA_FAKE_LOG")
+    saved = {k: os.environ.get(k) for k in keys}
+    yield
+    for k, v in saved.items():
+        if v is None:
+            os.environ.pop(k, None)
+        else:
+            os.environ[k] = v

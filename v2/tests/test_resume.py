@@ -483,7 +483,7 @@ def test_real_process_killed_and_resumed_under_supervisor(tmp_path):
     th = threading.Thread(target=lambda: res.update(code=sup.run()), daemon=True)
     try:
         th.start()
-        jdir = tmp_path / "root" / "data" / "journal"
+        jdir = tmp_path / "sim_out" / "data" / "journal"
 
         def jr():
             try:
@@ -509,7 +509,7 @@ def test_real_process_killed_and_resumed_under_supervisor(tmp_path):
         assert res.get("code") == 0 and sup.starts == 2 and not sup.gave_up
         d3 = jr()
         assert d3["exit"]["intentional"] is True and d3["active"] is False
-        log = (tmp_path / "root" / "data" / "logs" / "ch12_v2.log").read_text(encoding="utf-8")
+        log = (tmp_path / "sim_out" / "data" / "logs" / "ch12_v2.log").read_text(encoding="utf-8")
         assert "복구됨(공백" in log or "RESUMED" in log
     finally:
         sup.stop_requested = True

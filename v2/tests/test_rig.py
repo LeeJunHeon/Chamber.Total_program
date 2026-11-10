@@ -88,9 +88,13 @@ def test_disconnect_and_reconnect_show_in_rows(tmp_path):
     rows = run(r, 55)
     q = {b: [rows[n][f"{b}.q"] for n in range(55)] for b in ("plc", "ch1.mfc", "ch2.mfc", "ch2.ig", "ch2.stm100", "ch2.dc")}
     # CH1 MFC: 끊김 → 백오프(1·2·4 s) 동안 fail(마지막 값의 나이가 늘어남) → 재연결 뒤 ok. CH2 MFC 는 그대로.
-    assert all(v == "fail" for v in q["ch1.mfc"][10:15]) and q["ch1.mfc"][9] == "ok" and q["ch1.mfc"][-1] == "ok"
+    assert all(v == "fail" for v in q["ch1.mfc"][10:15]) and q["ch1.mfc"][8] == "ok" and q["ch1.mfc"][-1] == "ok"
+    # 9쿼리(시간 예산 ~0.5 s)라 10.5 s 끊김이 9번 행 조회 끝에 걸릴 수 있다 → 첫 fail 은 9 또는 10번 행
+    first_fail = next(n for n in range(8, 12) if q["ch1.mfc"][n] == "fail")
+    assert first_fail in (9, 10)
     first_ok = next(n for n in range(15, 55) if q["ch1.mfc"][n] == "ok")
-    assert [rows[n]["ch1.mfc.age_s"] for n in range(10, first_ok)] == [float(k) for k in range(1, first_ok - 9)]
+    last_fail = max(n for n in range(first_fail, first_ok) if q["ch1.mfc"][n] == "fail")
+    assert [rows[n]["ch1.mfc.age_s"] for n in range(first_fail, last_fail + 2)] == [float(k) for k in range(1, last_fail - first_fail + 3)]
     assert set(q["ch2.mfc"]) == {"ok"}
     # PLC: 끊김 → plc 와 PLC 해독 블록(ch2.dc)이 같이 fail → 재연결(5 s 백오프) 뒤 ok
     assert q["plc"] == q["ch2.dc"] and "fail" in q["plc"][19:23] and q["plc"][30] == "ok"

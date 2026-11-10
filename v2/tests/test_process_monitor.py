@@ -407,8 +407,10 @@ def test_rig_run_flow_deviation_card_and_shutter_summary(tmp_path):
     assert bumped
     cards = [lg for lg in rig.events if lg.kind == "monitor_card"]
     first = [lg for lg in cards if lg.event["phase"] == "first"]
-    assert first and first[0].detail.startswith("⚠️ CH1 Ar flow 편차\n세팅: 20.00 sccm → 실측: ")
-    assert first[0].source == "process:ch1" and first[0].event["run_id"] == e.run_id
+    # Ar 유량을 1.2배로 틀면 압력도 같이 벗어나 압력 카드가 먼저 올 수 있다 → Ar 카드가 'first' 중에 있으면 된다
+    ar = [lg for lg in first if lg.event["item"] == "Ar"]
+    assert ar and ar[0].detail.startswith("⚠️ CH1 Ar flow 편차\n세팅: 20.00 sccm → 실측: ")
+    assert ar[0].source == "process:ch1" and ar[0].event["run_id"] == e.run_id
     assert any(lg.event["phase"] in ("flush", "recovered") for lg in cards)
     assert any("셔터 닫힐 때까지 계속" in lg.detail for lg in cards)
     assert R.has_log(e, "Ar flow 편차")
