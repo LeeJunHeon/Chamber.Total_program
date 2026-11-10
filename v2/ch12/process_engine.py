@@ -502,6 +502,9 @@ class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, Process
             raise self._preflight_exception(params, ex)
         if not pf_ok:
             return False, False
+        if params.get("thickness_time_record"):            # Time 모드 두께 기록 — Factor 적용 성공한 런만 영점 스텝(v1 main 2f968be)
+            steps, insts = BK.expand(run.blocks(self.blocks), self.cfg, self.n, caps=self.caps, time_zero=True)
+            self.cur_steps, self.cur_insts = steps, insts
         self.run_id = uuid.uuid4().hex[:12]
         self.run_warnings = list(self.run_warnings)
         self._run_started(params)

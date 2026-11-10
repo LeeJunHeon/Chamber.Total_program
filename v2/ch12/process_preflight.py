@@ -369,6 +369,17 @@ class PreflightMixin:
             if code:
                 return self._thickness_reject(params, code, msg)
             params["thickness_mode"] = True
+        elif self.thickness is not None and self.thickness.supported and not params.get("test_mode"):
+            # Time 모드(두께 모니터가 붙은 채널) — Factor 적용만 시도(실패해도 시작은 막지 않음, v1 _thickness_time_prepare)
+            box2: dict = {}
+            self.thickness.time_prepare(params, bool(chuck), lambda: (box2.setdefault("r", True), self.clock.notify()))
+            self.clock.wait_until(self.clock.monotonic() + 30.0, lambda: "r" in box2 or self.stage_cancelled())
+            if self.stage_cancelled():
+                raise StageCancelled()
+            if "r" not in box2:
+                params.pop("thickness_time_record", None)
+                params["thickness_record_note"] = "재료값 쓰기 응답 없음 — Factor 미적용"
+                self.log("THICKNESS", "⚠ Time 모드 두께 기록 — 재료값 쓰기 응답 없음 → 영점 없이 두께 차이로 기록")
         self.log("MAIN", "장비 연결 확인 완료 → 공정 시작")
         if self.heater is not None:
             self.heater.process_started(bool(params.get("use_heater")))

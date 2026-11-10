@@ -92,6 +92,7 @@ EVENT_KINDS: tuple = (
     ("safety", "fired", "안전 규칙 발동", _M), ("safety", "released", "안전 규칙 해제", _M),
     ("heater", "log", "히터 기록", _D), ("heater", "card", "히터 알림 카드", _M),
     ("plc", "link_up", "PLC 연결 복구", _M), ("plc", "link_down", "PLC 연결 끊김", _M),
+    ("plc", "turbo_off_long", "터보 꺼짐 지속", _M), ("plc", "turbo_back_on", "터보 다시 켜짐", _M),
     ("plc", "conn_change", "PLC 연결 상태", _D), ("plc", "coil_plan", "코일 읽기 계획", _D), ("plc", "log", "PLC 기록", _D),
     ("plc", "read", "PLC 읽기", _D),
     ("mfc", "command_confirmed", "명령 확인", _D), ("mfc", "command_failed", "명령 실패", _M), ("mfc", "flow", "유량", _D),

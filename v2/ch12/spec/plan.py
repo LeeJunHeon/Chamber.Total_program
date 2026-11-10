@@ -144,6 +144,9 @@ BASE_COMMITS = {
     "Chamber.K_program/rewrite/v2": "de8e946b14fa5fe4bff61e671df2b72ac637f072",
 }
 
+# 2026-11-09 검토 반영 — 비교 기준을 main 최신으로 올렸다(v1 파일은 rewrite/v2 에서 수정하지 않고, 골든 도구는 main 최신 사본에서 돌려 만든다)
+V1_BASE_20261109 = "2f968beb1f2168462b30ad2482f3e076b215a13a"
+
 # v2 모듈 배치(계획 — 전수 목록의 v2 담당 칸이 이 이름을 쓴다)
 MODULES = {
     "v2/common/": "장비 공통(챔버K 복사) + modbus_tcp.py(PLC 직결) + transport.TcpTransport(NPort)",

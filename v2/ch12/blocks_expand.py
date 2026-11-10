@@ -148,17 +148,38 @@ def _block_steps(t: str, p: Dict[str, Any], label: str, sc: ps.StepCfg, ctx: dic
     raise ValueError(f"모르는 블록 {t!r}")
 
 
-def expand(blocks: List[dict], cfg: Mapping[str, Any], chamber: int, *, caps: Optional[Caps] = None) -> tuple:
+def _zero_target(blocks: List[dict], sc) -> Optional[int]:
+    """Time 모드 두께 기록의 THICKNESS_ZERO 자리 — Main Shutter 열기 블록(없으면 메인 블록) 바로 앞(v1: Shutter Delay 뒤·Main
+    Shutter 앞, use_ms=F 여도 메인 직전). 그런 블록이 없으면 끝 정지 블록 앞."""
+    for i, b in enumerate(blocks):
+        if b["type"] == "main":
+            return i
+        if b["type"] == "shutter":
+            p = resolved_params(b, sc)
+            if p.get("action") == "open" and list(p.get("targets") or ()) == ["ms"]:
+                return i
+    for i, b in enumerate(blocks):                 # 메인·Main Shutter 열기가 없으면 종료 절차 앞(v1 도 영점은 넣는다)
+        if b["type"] == "end_stop":
+            return i
+    return len(blocks)                             # 종료 절차 블록이 없으면 자동 끝 정지 블록 앞
+
+
+def expand(blocks: List[dict], cfg: Mapping[str, Any], chamber: int, *, caps: Optional[Caps] = None,
+           time_zero: bool = False) -> tuple:
+    """time_zero=True — Time 모드 두께 기록(params thickness_time_record): 영점 스텝을 Main Shutter 열기(또는 메인) 블록의 첫 스텝으로."""
     sc = ps.step_cfg(cfg, chamber)
+    zero_at = _zero_target(blocks, sc) if (time_zero and not any(b["type"] == "thickness_zero" for b in blocks)) else None
     defs = by_type()
     steps: List[ProcessStep] = []
     insts: List[BlockInst] = []
     ctx: dict = {}
     seg: List[dict] = []
 
-    def one(b: Mapping[str, Any], no: str, auto: bool = False) -> None:
+    def one(b: Mapping[str, Any], no: str, auto: bool = False, zero: bool = False) -> None:
         p = resolved_params(b, sc)
         out = _block_steps(b["type"], p, b.get("label") or "", sc, ctx, seg)
+        if zero:
+            out = ps.thickness_zero_steps(sc) + out
         inst = BlockInst(len(insts), no, b["type"], b.get("label") or "", p, b.get("row"), auto, len(steps), len(out))
         for s in out:
             s.block = inst.index
@@ -166,13 +187,14 @@ def expand(blocks: List[dict], cfg: Mapping[str, Any], chamber: int, *, caps: Op
         steps.extend(out)
 
     for i, b in enumerate(blocks, 1):
-        one(b, str(i))
+        one(b, str(i), zero=(zero_at == i - 1))
         if b["type"] == "end_stop":
             seg = []
         else:
             seg.append(b)
     if (not blocks or blocks[-1]["type"] != "end_stop") and any(defs[b["type"]].touches for b in seg):
-        one({"type": "end_stop", "params": {}, "label": AUTO_END_STOP_LABEL}, str(len(blocks) + 1), auto=True)
+        one({"type": "end_stop", "params": {}, "label": AUTO_END_STOP_LABEL}, str(len(blocks) + 1), auto=True,
+            zero=(zero_at == len(blocks)))
     return steps, insts
 
 

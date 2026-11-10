@@ -367,7 +367,8 @@ class Ch12System:
                                thickness={ch: d for ch, d in self.stm.items() if d.enabled},
                                log=lambda src, msg: self.emit(src, "log", msg),
                                on_selfwatch=lambda kind, ch, text: self.emit("selfwatch", "selfwatch", text,
-                                                                             level="warn", code="SELFWATCH"))
+                                                                             level="warn", code="SELFWATCH"),
+                               on_turbo=self._turbo_event)
         self._scenario_hook = scenario_hook
         self.loop = TickLoop(clock, self.bus, [self.recorder.put_row, self._safety_row, self._on_row],
                              tick_hooks=[self._tick], extra_fn=self._extra)
@@ -463,6 +464,13 @@ class Ch12System:
             self._log(Logged(self.clock.wall(), str(src), kind, str(getattr(e, "detail", "") or ""), reason, code,
                              str(level), e))
         return on
+
+    def _turbo_event(self, kind: str, text: str, ev: Dict[str, Any]) -> None:
+        """터보 꺼짐 지속·다시 켜짐(v1 PLC 끊김 전용 방 카드) — 포털이 data.card 로 PLC 웹훅에 보낸다."""
+        from v2.ch12.turbo_watch import card_text
+        title, sub, status = card_text(ev)
+        self.emit("plc", f"turbo_{kind}", text, level="warn" if kind == "off_long" else "info",
+                  event=dict(ev, card=dict(title=title, subtitle=sub, status=status, urgent=True)))
 
     def emit(self, source: str, kind: str, detail: str = "", level: str = "info", code: Optional[str] = None,
              reason: Optional[str] = None, event: Any = None) -> None:

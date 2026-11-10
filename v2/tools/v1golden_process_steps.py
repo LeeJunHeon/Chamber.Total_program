@@ -32,7 +32,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 GOLDEN = ROOT / "v2" / "tests" / "golden"
 FILES = GOLDEN / "recipe_files"
-V1_BASE = "66efc7b1d079dfb137dd487c4b444160744fc9cb"
+V1_BASE = "2f968beb1f2168462b30ad2482f3e076b215a13a"   # 2026-11-09 갱신(이전 66efc7b — 터보·TSP 필라멘트·두께 Time 기록 3커밋 이후)
 
 
 def _v1():
@@ -198,6 +198,14 @@ def run_row(m, ch: int, raw: dict, caps: dict, thk: bool) -> dict:
         pc.process_sequence = seq
         out["validate"] = list(pc.validate_process_sequence())
         out["estimated_ms"] = pc.get_estimated_duration()
+        out["eta_sum0"] = pc._eta_sum_delay_from(0)
+        if not test and thk and not norm.get("thickness_mode"):
+            # Time 모드 두께 기록(main 2f968be) — 런타임이 Factor 적용에 성공하면 params["thickness_time_record"]=True: 영점 스텝이 들어간다
+            pc2 = _controller(m, ch, caps)
+            seq2 = pc2._create_process_sequence(dict(norm, thickness_time_record=True))
+            pc2.process_sequence = seq2
+            out["steps_time_record"] = _rows(seq2)
+            out["eta_sum0_time_record"] = pc2._eta_sum_delay_from(0)
         out["logs"] = logs + _drain(pc)
         pc.current_params = dict(norm)
         out["emergency"] = _rows(pc._create_emergency_shutdown_sequence())

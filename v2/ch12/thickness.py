@@ -181,10 +181,9 @@ class ThicknessEngine(ThicknessOpsMixin):
         return TM.find_material(self.materials, name)
 
     # ═══════════════════════ 시작 전 점검·재료값 ═══════════════════════
-    def check_basic(self, params: Mapping[str, Any]) -> Tuple[str, str]:
-        """Chuck 이동 전 점검 — (코드, 문구), 통과면 ("", "")(runtime/chamber_runtime.py:6621-6650)."""
-        from v2.ch12.process_sequence import thickness_conflict
-        from v2.ch12.process_steps import caps_from_cfg
+    def check_link(self) -> Tuple[str, str]:
+        """두께 모니터 통신·크리스탈·최근 값 점검 — (코드, 문구), 통과면 ("", "")(v1 _thickness_check_link, 2026-11 main 2f968be:
+        Thickness 모드 시작 전 점검(check_basic)과 Time 모드 기록 준비(time_prepare)가 같이 쓴다)."""
         jp = self.params()
         sup = self.driver is not None
         st = self.status() if sup else {}
@@ -199,6 +198,15 @@ class ThicknessEngine(ThicknessOpsMixin):
             return "E841", "두께 모니터 XTAL FAIL(크리스탈 이상) — 크리스탈을 확인하십시오"
         if not fresh:
             return "E840", f"두께 값 없음(통신은 정상) — 최근 {jp.ready_fresh_s:g}초 안 정상 두께 값이 필요합니다{age}"
+        return "", ""
+
+    def check_basic(self, params: Mapping[str, Any]) -> Tuple[str, str]:
+        """Chuck 이동 전 점검 — (코드, 문구), 통과면 ("", "")(runtime/chamber_runtime.py:6621-6650)."""
+        from v2.ch12.process_sequence import thickness_conflict
+        from v2.ch12.process_steps import caps_from_cfg
+        code, msg = self.check_link()
+        if code:
+            return code, msg
         dep, thk = params.get("dep_rate"), params.get("thickness")
         try:
             dep_v, thk_v = float(dep or 0), float(thk or 0)
@@ -216,10 +224,11 @@ class ThicknessEngine(ThicknessOpsMixin):
         return "", ""
 
     def apply_material(self, params: Dict[str, Any], chuck_ok: bool, on_done: Callable[[Tuple[str, str]], None],
-                       actual_chuck: Optional[str] = None) -> None:
+                       actual_chuck: Optional[str] = None, *, time_mode: bool = False) -> None:
         """Chuck 확정 뒤 Factor 확인 → 장비에 density/Z/tooling 쓰기(되읽기 확인, 1회 재시도) → on_done((코드, 문구)).
         chuck_ok=False 이고 actual_chuck(PLC 로 다시 읽은 위치)을 주면 그 위치 기준(runtime/chamber_runtime.py:6652-6725).
-        통과하면 params 에 thickness_mode·thickness_expected_s·thickness_limit_s·thickness_factor_note 를 넣는다(4073-4078)."""
+        통과하면 params 에 thickness_mode·thickness_expected_s·thickness_limit_s·thickness_factor_note 를 넣는다(4073-4078).
+        time_mode=True(Time 모드 두께 기록, v1 main 2f968be) — 같은 동작, 로그 머리만 다르고(목표 없음) thickness_mode·예상·상한은 넣지 않는다."""
         chuck = str(params.get("chuck_position") or "").strip().lower()
         if not chuck_ok and actual_chuck is not None:
             if actual_chuck != chuck:
@@ -286,10 +295,14 @@ class ThicknessEngine(ThicknessOpsMixin):
                 warn = f"크리스탈 수명 {float(life):.1f}% (경고 기준 {jp.life_warn_pct:g}% 미만) — 교체 준비"
                 self._log("THICKNESS", f"⚠ {warn}")
                 self.record.warnings.append(warn)
-            self._log("THICKNESS", f"Thickness 모드 — 목표 {float(params.get('thickness')):g} nm · {gun} · chuck {chuck} · "
+            head = "Time 모드(두께 기록) — " if time_mode else f"Thickness 모드 — 목표 {float(params.get('thickness')):g} nm · "
+            self._log("THICKNESS", f"{head}{gun} · chuck {chuck} · "
                                    f"tooling {float(got.get('tooling')):g} % {_src(src_t, f'Factor {chuck}×{gun}')} · "
                                    f"density {float(got.get('density')):g} {_src(src_d, mat_txt)} · "
                                    f"Z {float(got.get('z_factor')):.3f} {_src(src_z, mat_txt)}")
+            if time_mode:
+                on_done(("", ""))
+                return
             params["thickness_mode"] = True
             try:
                 exp = expected_seconds(float(params["thickness"]), float(params["dep_rate"]))
@@ -300,6 +313,44 @@ class ThicknessEngine(ThicknessOpsMixin):
             on_done(("", ""))
         self.driver.set_material(float(density), float(z_factor), float(tooling),
                                  material=used_mat.name if used_mat is not None else "", on_done=done)
+
+    def time_prepare(self, params: Dict[str, Any], chuck_ok: bool, on_done: Callable[[], None],
+                     actual_chuck: Optional[str] = None) -> None:
+        """Time 모드(두께 모니터가 붙은 채널) — Thickness 모드와 같은 Factor 적용을 시도한다. 시작은 막지 않는다
+        (v1 _thickness_time_prepare, main 2f968be). 성공: params["thickness_time_record"]=True → 엔진이 Shutter Delay 뒤·
+        Main Shutter 앞에 THICKNESS_ZERO 를 넣고 기록은 영점 기준점 기준 + Factor 열. 실패·co-sputter·건 없음: 장비에 쓰지 않고
+        영점도 없음 — 기록은 마지막−처음, 사유는 THICKNESS 로그 1줄 + 이번 런 경고 + Fallback Reason(params["thickness_record_note"]).
+        끝나면 on_done() — 항상 부른다."""
+        params.pop("thickness_time_record", None)
+        params.pop("thickness_record_note", None)
+
+        def fail(reason: str) -> None:
+            with self._lock:
+                self._pre = None
+            params["thickness_record_note"] = reason
+            self._log("THICKNESS", f"⚠ Time 모드 두께 기록 — {reason} → 영점 없이 메인 공정 구간 두께 차이로 기록")
+            self.record.warnings.append(f"두께 기록: {reason}")
+            on_done()
+
+        def applied(r: Tuple[str, str]) -> None:
+            code, msg = r
+            if code:
+                fail(f"[{code}] {msg} — Factor 미적용")
+                return
+            params["thickness_time_record"] = True
+            on_done()
+        try:
+            guns = [g for g in GUNS if params.get(f"use_{g.lower()}")]
+            if len(guns) != 1:
+                fail(("co-sputter(" + "+".join(guns) + ") — Factor 미적용") if guns else "사용 건 없음 — Factor 미적용")
+                return
+            code, msg = self.check_link()
+            if code:
+                fail(f"[{code}] {msg} — Factor 미적용")
+                return
+            self.apply_material(params, chuck_ok, applied, actual_chuck, time_mode=True)
+        except Exception as e:
+            fail(f"Factor 적용 예외({e!r}) — Factor 미적용")
 
     def reject_texts(self, code: str, msg: str, params: Mapping[str, Any]) -> Tuple[str, str]:
         """(공정 로그 MAIN, 챗 장비 오류 카드 문구) — runtime/chamber_runtime.py:6729-6734."""
@@ -356,6 +407,8 @@ class ThicknessEngine(ThicknessOpsMixin):
             self._zero_info = None
             if self.driver is None:
                 self._zero_info = {"base": None, "reset0": 0}
+                if self._time_rec():
+                    self.record.rec["zero_base"] = None
                 self._later(on_done, ZeroDone(None))
             else:
                 now = self.clock.monotonic()
@@ -364,6 +417,10 @@ class ThicknessEngine(ThicknessOpsMixin):
                               "budget_t": now + float(confirm_s) + ZERO_STEP_SLACK_S}
                 self.driver.zero("B", on_done=lambda d, g=gen: self._zero_cmd_done(d, g), why="메인 셔터 열기 전 영점")
         self._flush()
+
+    def _time_rec(self) -> bool:
+        rec = self.record.rec
+        return isinstance(rec, dict) and rec.get("mode") == "Time"
 
     def _zero_cmd_done(self, d, gen: int) -> None:
         with self._lock:
@@ -374,7 +431,7 @@ class ThicknessEngine(ThicknessOpsMixin):
                 self._log("THICKNESS", f"⚠ 영점 명령 실패(영점 실패: {_exc_text(d.detail)})")
             st = self.status()
             z["zc"] = ZeroConfirm(self.params(), start_t=self.clock.monotonic(), seq0=st.get("seq"), zero_ok=bool(d.ok))
-            self.record.set_view("Thickness", "—", 0.0, "영점 확인 중")
+            self.record.set_view("Time" if self._time_rec() else "Thickness", "—", 0.0, "영점 확인 중")
             self._zero_tick(st, self.clock.monotonic())
         self._flush()
 
@@ -390,6 +447,8 @@ class ThicknessEngine(ThicknessOpsMixin):
                 if r.warning:
                     self.record.warnings.append(r.warning)
                 self._zero_info = {"base": r.base, "reset0": z["reset0"]}
+                if self._time_rec():
+                    self.record.rec["zero_base"] = r.base           # Time 모드 두께 기록 — 기준점은 기록에만 쓴다
                 if not z["answered"]:
                     self._later(z["on_done"], ZeroDone(r.base, log=r.log, warning=r.warning))
                 return

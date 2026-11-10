@@ -66,6 +66,8 @@ PARAMS = (
        note="비우면 LOCAL_FALLBACK_ROOT\\PLC_Coil"),
     _p("PLC_COIL_LOG_SUMMARY_S", "PLC 코일 CSV 건너뜀 요약 주기", F, 60.0, f"{_J}:269; {_CC}:667", unit="s",
        lo=1.0, apply=_LIVE),
+    _p("TURBO_OFF_ALERT_S", "터보 꺼짐 지속 알림 시간", F, 3600.0, f"{_J}:272; {_CC}:671; lib/turbo_watch.py", unit="s", apply=_LIVE,
+       note="CH1/CH2 터보가 이만큼 계속 꺼져 있으면 PLC 끊김 방으로 알림(다시 켜지면 1장 더). 0 이하 = 끔(v1 main a6e8d46)"),
     # ── 두께 연속 CSV(채널 구역) ──
     _p("CH1_THICKNESS_LOG_DIR", "CH1 두께 연속 CSV 폴더", S, r"C:\VanaM_Logs\CH1&2\Thickness",
        f"{_J}:520; lib/thickness_config.py:143-146", note="NAS(\\\\ 로 시작) 경로면 기본값(로컬)으로 바꾼다 — v1 의 구글 공유 드라이브 규칙을 NAS 로 옮김(D350). 두께 CSV 는 로컬에 쓰고 NAS 반영은 log_sync"),

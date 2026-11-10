@@ -142,7 +142,13 @@ def estimate_min_total_s(rows: Optional[List[Any]], cfg: Mapping[str, Any], cham
 
 def sum_delay_from(steps: List[Any], idx: int) -> float:
     """idx(포함) 이후 DELAY(no_wait 아님) duration 합(초) — _eta_sum_delay_from."""
-    return sum(int(s.duration) for s in steps[idx:] if s.action == "DELAY" and not s.no_wait and s.duration) / 1000.0
+    total_ms = 0
+    for s in steps[idx:]:
+        if s.action == "DELAY" and not s.no_wait and s.duration:
+            total_ms += int(s.duration)
+        elif s.action == "THICKNESS_ZERO" and s.params:      # Time 모드 두께 기록 — 확인 최대 초(끝 시각을 일찍 알리지 않게)
+            total_ms += int(round(float(s.params[0]) * 1000.0))
+    return total_ms / 1000.0
 
 
 class EtaClock:

@@ -63,7 +63,12 @@ def run_until(rig, pred, max_ticks=300):
 
 
 def logs(eng):
-    return [e.detail for e in eng.events if e.kind == "log"]
+    """[FILAMENT] 줄(v1 main 984556e — 시작 1번·종료 1번)은 따로 본다(fil_logs, test_tsp_filament_log) — 기존 순서 단언은 그대로."""
+    return [e.detail for e in eng.events if e.kind == "log" and not e.detail.startswith("[FILAMENT]")]
+
+
+def fil_logs(eng):
+    return [e.detail for e in eng.events if e.kind == "log" and e.detail.startswith("[FILAMENT]")]
 
 
 def cards(eng, name="finished"):
@@ -144,7 +149,7 @@ def test_target_reached_during_on_and_initial_below(tmp_path):
         n0 = len(eng.events)
         assert eng.start({"target": "2.5e-7", "cycles": "3"})["ok"]          # 쿨다운 0
         run_until_idle(rig, eng)
-        lg = [e.detail for e in list(eng.events)[n0:] if e.kind == "log"]
+        lg = [e.detail for e in list(eng.events)[n0:] if e.kind == "log" and not e.detail.startswith("[FILAMENT]")]
         assert "[IG] 초기 판정 P0=1.000e-07" in lg and not any(x.startswith("[TSP] ON") for x in lg)
         assert lg[-1] == "=== RESULT === ok=True final_P=1.000e-07 cycles_done=0 reason=initial_below_target"
         assert tsp_frames(rig) == [OFF_FRAME, OFF_FRAME]
@@ -175,7 +180,7 @@ def test_ig_failures(tmp_path):
         n0 = len(eng.events)
         assert eng.start({"target": "2.5e-7", "cycles": "1"})["ok"]
         run_until_idle(rig, eng)
-        lg = [e.detail for e in list(eng.events)[n0:] if e.kind == "log"]
+        lg = [e.detail for e in list(eng.events)[n0:] if e.kind == "log" and not e.detail.startswith("[FILAMENT]")]
         assert "[IG] 초기 판정 RDI 실패: RuntimeError(\"parse error: 'IG OFF'\")" in lg
         assert "[IG] 압력 읽기 오류: RuntimeError(\"parse error: 'IG OFF'\")" in lg
         assert lg[-1] == "=== RESULT === ok=False final_P=NaN cycles_done=1 reason=cycles_exhausted"
@@ -202,7 +207,7 @@ def test_tsp_no_response_and_interlock_codes(tmp_path):
         n0 = len(eng.events)
         assert eng.start({"target": "2.5e-7", "cycles": "2"})["ok"]
         run_until_idle(rig, eng)
-        lg = [e.detail for e in list(eng.events)[n0:] if e.kind == "log"]
+        lg = [e.detail for e in list(eng.events)[n0:] if e.kind == "log" and not e.detail.startswith("[FILAMENT]")]
         assert "[TSP] 예외: TSPError('상태 확인 시간초과(target=on, last=2)')" in lg
         fin = cards(eng)[-1]
         assert fin["code"] == "E808" and fin["ok"] is False and eng.state()["result"]["code"] == "E808"

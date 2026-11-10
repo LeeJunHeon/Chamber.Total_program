@@ -318,7 +318,8 @@ class ProcessViewMixin:
         if not 0 <= ri < len(runs):
             raise ValueError(f"런 위치 {ri} 없음")
         run = runs[ri]
-        steps, insts = BK.expand(run.blocks(blocks), self.cfg, self.n, caps=self.caps)
+        steps, insts = BK.expand(run.blocks(blocks), self.cfg, self.n, caps=self.caps,
+                                 time_zero=bool((st.get("params") or {}).get("thickness_time_record")))
         ov = dict(st.get("overrides") or {})
         for s in steps:
             if s.ref in ov and s.ref != "process.main_remaining":

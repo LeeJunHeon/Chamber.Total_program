@@ -19,6 +19,8 @@ from typing import Any, Callable, Dict, Mapping, Optional
 from v2.ch12.drivers import plc_map as PM
 from v2.ch12.outputs.base import QueueWriter
 from v2.ch12.outputs.heater_csv import HeaterCsv
+from v2.ch12.params import outputs as P
+from v2.ch12.turbo_watch import TurboOffWatch, card_text
 from v2.ch12.outputs.plc_coil_csv import REG_KEYS, PlcCoilCsv, v1_coil_keys
 from v2.ch12.outputs.selfwatch import SelfWatchLog
 from v2.ch12.outputs.thickness_csv import ThicknessCsv
@@ -53,8 +55,11 @@ def plc_coil_args(row: Mapping[str, Any], connected: bool) -> Dict[str, Any]:
 class RowFeed:
     def __init__(self, cfg: Mapping[str, Any], clock, *, plc_connected: Callable[[], bool],
                  thickness: Optional[Dict[str, Any]] = None, log: Optional[Callable[[str, str], None]] = None,
-                 on_selfwatch: Optional[Callable[[str, str, str], None]] = None) -> None:
+                 on_selfwatch: Optional[Callable[[str, str, str], None]] = None,
+                 on_turbo: Optional[Callable[[str, str, Dict[str, Any]], None]] = None) -> None:
         self.cfg, self.clock = cfg, clock
+        self.on_turbo = on_turbo                                                 # (kind, 한 줄 문구, 이벤트 dict)
+        self.turbo = TurboOffWatch(lambda: float(P.get(self.cfg, "TURBO_OFF_ALERT_S") or 0.0), wall=clock.wall)
         self.writer = QueueWriter("v1-outputs")
         self._log = log or (lambda src, msg: None)
         self.plc_connected = plc_connected
@@ -82,6 +87,7 @@ class RowFeed:
         mono = self.clock.monotonic()
         for name, fn in (("plc_coil", lambda: self.plc_coil.on_tick(ts, mono=mono, **plc_coil_args(row, self.plc_connected()))),
                          ("selfwatch", lambda: self.selfwatch.on_tick(_selfwatch_state(row))),
+                         ("turbo_watch", lambda: self._turbo(row, mono)),
                          ("thickness", lambda: self._thickness(ts)),
                          ("heater", self._heater)):
             try:
@@ -89,6 +95,19 @@ class RowFeed:
             except Exception as e:                  # 출력 하나의 오류가 다른 출력·tick 을 막지 않는다
                 self.errors += 1
                 self._log("outputs", f"{name}: {e!r}")
+
+    def _turbo(self, row: Mapping[str, Any], mono: float) -> None:
+        """터보 꺼짐 지속(v1 _turbo_watch_feed) — 읽기가 성공한 행(plc.q == ok)에서만, 판정값 = TURBO_n_SW and TURBO_n_인터락."""
+        if row.get("plc.q") != "ok":
+            return
+        for ch in (1, 2):
+            sw, il = row.get(f"plc.turbo_{ch}_sw"), row.get(f"plc.turbo_{ch}_인터락")
+            ev = self.turbo.update(ch, None if (sw is None or il is None) else bool(sw and il), mono)
+            if ev:
+                title, sub, _st = card_text(ev)
+                self._log("plc", f"TURBO WATCH: {title} — {sub}")
+                if self.on_turbo is not None:
+                    self.on_turbo(str(ev["kind"]), f"{title} — {sub}", ev)
 
     def _thickness(self, ts: datetime) -> None:
         for ch, t in self.thickness.items():

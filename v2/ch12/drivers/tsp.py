@@ -45,6 +45,10 @@ STX, ETX = 0x02, 0x03
 ADDR_RS232 = 0x80
 WIN_ONOFF = "011"
 WIN_STATUS = "205"
+WIN_ACTIVE_FILAMENT = "671"        # Active filament: 0 = Mini Ti-Ball, 1/2/3 = TSP filament 1/2/3 (읽기만 — v1 main 984556e)
+WIN_ERROR_CODE = "206"             # Error code: 0 없음 … 5 단락(ERROR_LABELS)
+ERROR_LABELS = {0: "없음", 1: "과열", 2: "Mini Ti-Ball 끊김", 3: "TSP 필라멘트 끊김", 4: "TSP 필라멘트 전체 소진", 5: "단락"}   # 매뉴얼 Tab.10
+READ_VALUE_TIMEOUT_S = 3.0         # v1 tsp_runtime._FIL_READ_TIMEOUT_S
 ACK, NACK = 0x06, 0x15
 ERR_UNKNOWN_WIN, ERR_DATA_TYPE, ERR_OUT_OF_RANGE, ERR_WIN_DISABLED = 0x32, 0x33, 0x34, 0x35
 SIMPLE_RESP_CODES = frozenset({ACK, NACK, ERR_UNKNOWN_WIN, ERR_DATA_TYPE, ERR_OUT_OF_RANGE, ERR_WIN_DISABLED})
@@ -146,6 +150,30 @@ def build_frame(win3: str, write: bool, data_ascii: Optional[str], *, addr: int 
     body += bytes([ETX])
     crc = f"{xor_bytes(body):02X}".encode("ascii")
     return bytes([STX]) + body + crc
+
+
+def decode_ascii_strict(s: Optional[str]) -> Optional[int]:
+    """숫자 칸만 정수로(빈 값·숫자 아님 → None). 필라멘트·에러 코드처럼 0 이 뜻을 가진 칸에 쓴다(v1 _decode_ascii_strict)."""
+    t = (s or "").strip()
+    return int(t) if t.isdigit() else None
+
+
+def filament_label(n: Optional[int]) -> str:
+    """671 Active filament 표시 — 0 Mini Ti-Ball, 1~3 필라멘트 n(v1 filament_label)."""
+    if n is None:
+        return "읽기 실패"
+    if n == 0:
+        return "Mini Ti-Ball"
+    if n in (1, 2, 3):
+        return f"필라멘트 {n}"
+    return f"알 수 없음({n})"
+
+
+def error_label(code: Optional[int]) -> str:
+    """206 Error code 표시(매뉴얼 Tab.10, v1 error_label)."""
+    if code is None:
+        return "읽기 실패"
+    return ERROR_LABELS.get(int(code), f"알 수 없음({code})")
 
 
 def decode_ascii_numeric(s: str) -> int:
@@ -304,6 +332,7 @@ class TspDone:
     code: Optional[str] = None
     detail: str = ""
     status: Optional[int] = None   # 마지막으로 읽은 205
+    value: Optional[int] = None    # read_value 로 읽은 숫자(필라멘트·에러 코드) — 응답 없음·숫자 아님이면 None
 
 
 class TspDriver:
@@ -484,6 +513,34 @@ class TspDriver:
             self._finish_simple("status", res, on_done)
         self.worker.submit(Request("read", fn, deadline=self.clock.monotonic() + EXEC_TIMEOUT_S, on_done=done,
                                    name="tsp:status", exec_timeout_s=EXEC_TIMEOUT_S))
+
+    def read_value(self, win3: str, on_done: Optional[Callable[[TspDone], None]] = None,
+                   timeout_s: float = READ_VALUE_TIMEOUT_S) -> None:
+        """창 하나 읽기(읽기만 — 장비에 쓰지 않음, v1 get_active_filament·get_error_code). 결과 값은 TspDone.value(숫자 아님 None).
+        시간 안에 응답이 없으면 연결을 끊는다(늦은 응답이 다음 명령에 섞이지 않게 — v1 aclose, 다음 호출이 다시 연결)."""
+        def fn(session):
+            def rd():
+                return decode_ascii_strict(self._read_win(session, win3))
+            try:
+                return self._guarded(session, rd)
+            except BaseException:
+                tr = session.transport
+                if isinstance(tr, OnDemandTransport):
+                    tr.close_link()
+                raise
+
+        def done(res: Result) -> None:
+            if res.status == Status.OK:
+                v = res.value
+                if on_done:
+                    on_done(TspDone(v is not None, "read_value", None if v is not None else "NO_VALUE", None,
+                                    "" if v is not None else "응답 없음 또는 숫자 아님", self.last_status, v))
+                return
+            exc = _ExcText(res)
+            if on_done:
+                on_done(TspDone(False, "read_value", exc.reason, exc.code, str(exc), self.last_status, None))
+        self.worker.submit(Request("read", fn, deadline=self.clock.monotonic() + timeout_s, on_done=done,
+                                   name=f"tsp:read_{win3}", exec_timeout_s=timeout_s))
 
     def close(self, on_done: Optional[Callable[[TspDone], None]] = None) -> None:
         """연결 닫기(v1 aclose). 포트에 아무것도 보내지 않는다 — bench 에서도 허용(읽기 요청)."""

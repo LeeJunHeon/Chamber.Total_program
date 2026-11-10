@@ -386,10 +386,11 @@ def check_blocks(blocks: Any, cfg: Mapping[str, Any], chamber: int, *, caps: Opt
     return (None if errs else out), errs, warns
 
 
-def expand(blocks: List[dict], cfg: Mapping[str, Any], chamber: int, *, caps: Optional[Caps] = None) -> tuple:
-    """블록 → (스텝 목록, 블록 실행 목록). 본체는 blocks_expand.expand."""
+def expand(blocks: List[dict], cfg: Mapping[str, Any], chamber: int, *, caps: Optional[Caps] = None,
+           time_zero: bool = False) -> tuple:
+    """블록 → (스텝 목록, 블록 실행 목록). 본체는 blocks_expand.expand. time_zero = Time 모드 두께 기록의 영점 스텝."""
     from v2.ch12.blocks_expand import expand as _f
-    return _f(blocks, cfg, chamber, caps=caps)
+    return _f(blocks, cfg, chamber, caps=caps, time_zero=time_zero)
 
 
 def template_blocks(p: Mapping[str, Any], chamber: int, cfg: Mapping[str, Any], *, caps: Optional[Caps] = None) -> tuple:

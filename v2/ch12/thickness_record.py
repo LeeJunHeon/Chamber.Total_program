@@ -32,16 +32,22 @@ class RunRecord:
             self.rec = {}
             return
         thk_mode = bool((params or {}).get("thickness_mode"))
+        time_rec = (not thk_mode) and bool((params or {}).get("thickness_time_record"))   # Time 모드 + Factor 적용 성공
         rec = {"end": END_THICKNESS if thk_mode else END_TIME, "mode": "Thickness" if thk_mode else "Time",
                "target": (params or {}).get("thickness") if thk_mode else None,
                "first": None, "last": None, "seq": None}
-        if thk_mode and isinstance(pre, Mapping):
+        if (thk_mode or time_rec) and isinstance(pre, Mapping):
             rec.update(pre)
+        if time_rec:
+            rec["time_record"] = True                   # 영점(THICKNESS_ZERO) 기준점으로 최종 두께
+        elif not thk_mode and (params or {}).get("thickness_record_note"):
+            rec["fallback_reason"] = str(params.get("thickness_record_note"))
         self.rec = rec
         if thk_mode:
             self.set_view("Thickness", f"{float(rec['target']):.1f} nm", 0.0, "공정 시작 — 메인 공정 대기")
         else:
-            self.set_view("Time", "—", None, "Time 모드 공정(두께는 기록만)")
+            self.set_view("Time", "—", None, "Time 모드 공정(영점·Factor 적용 후 두께 기록)" if time_rec
+                          else "Time 모드 공정(두께는 기록만)")
 
     # ── 메인 공정 창 두께(_thk_record) ──
     def sample(self, st: Mapping[str, Any], now: float, main_polling: bool, running: bool) -> None:
@@ -108,8 +114,12 @@ class RunRecord:
         if rec.get("mode") == "Time":
             f, l = rec.get("first"), rec.get("last")
             if f is None or l is None:
+                if rec.get("time_record") or rec.get("fallback_reason"):   # Factor 열·사유는 남긴다
+                    rec["end"] = END_TIME
+                    return rec
                 return {"end": END_TIME}
-            final = l[0] - f[0]
+            base = rec.get("zero_base") if rec.get("time_record") else None
+            final = (l[0] - float(base)) if base is not None else (l[0] - f[0])   # 영점 기준점이 있으면 기준점 기준
             span = l[1] - f[1]
             rec["final_nm"] = final
             rec["avg_rate"] = (final / span) if span > 0 else None

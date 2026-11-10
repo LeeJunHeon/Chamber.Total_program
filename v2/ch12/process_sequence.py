@@ -156,7 +156,7 @@ def build_sequence(params: Mapping[str, Any], chamber: int, cfg: Mapping[str, An
                 steps += delay_steps(p2, f'Shutter Delay (변경 후) {p2 / 60.0:.2f}분')
         else:
             steps += delay_steps(sd_sec, f'Shutter Delay {sd_min}분')
-    if thk:
+    if thk or bool(params.get("thickness_time_record", False)):   # Time 모드 두께 기록(main 2f968be): Factor 적용 성공 런도 같은 자리
         steps += thickness_zero_steps(sc)
     if info["use_ms"]:
         steps += shutter_steps(sc, "open", ["ms"])

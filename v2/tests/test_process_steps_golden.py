@@ -154,6 +154,12 @@ def test_combo(case):
     assert _j(ps.to_golden(steps)) == v1["steps"]
     assert _j(ps.to_golden(build_sequence(dict(rt.params), ch, CFG, caps=caps))) == v1["steps"]
     assert _j(rt.logs) == v1["logs"]
+    if "steps_time_record" in v1:                              # Time 모드 두께 기록(main 2f968be) — 영점 스텝·ETA 합
+        zsteps, _zi = expand(rt.blocks, CFG, ch, caps=caps, time_zero=True)
+        assert _j(ps.to_golden(zsteps)) == v1["steps_time_record"]
+        assert _j(ps.to_golden(build_sequence(dict(rt.params, thickness_time_record=True), ch, CFG, caps=caps))) == v1["steps_time_record"]
+        from v2.ch12.eta import sum_delay_from
+        assert sum_delay_from(steps, 0) == v1["eta_sum0"] and sum_delay_from(zsteps, 0) == v1["eta_sum0_time_record"]
     assert list(validate_sequence(steps)) == v1["validate"]
     assert estimated_duration_ms(steps) == v1["estimated_ms"]
     sc = ps.step_cfg(CFG, ch)

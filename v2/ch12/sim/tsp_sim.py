@@ -67,6 +67,8 @@ class TspSim(SimDevice):
         self.interlock = False
         self.fail = False
         self.nack = False
+        self.active_filament = 1                   # 671(가정값 — 0 Mini Ti-Ball, 1~3 필라멘트)
+        self.error_code = 0                        # 206(가정값 — 0 없음 … 5 단락)
         self.script: Optional[List] = list(script) if script is not None else None
         self.frames: List[bytes] = []              # 받은 프레임(시험용)
         self._killed = False                       # 장비가 이번 연결을 끊음(다음 열기까지)
@@ -129,4 +131,8 @@ class TspSim(SimDevice):
             return self._code(ACK)
         if win == "205" and com == b"0":
             return status_frame(self.status, self.addr)
+        if win == "671" and com == b"0":
+            return data_frame("671", f"{self.active_filament:06d}", self.addr)
+        if win == "206" and com == b"0":
+            return data_frame("206", f"{self.error_code:06d}", self.addr)
         return self._code(ERR_UNKNOWN_WIN)

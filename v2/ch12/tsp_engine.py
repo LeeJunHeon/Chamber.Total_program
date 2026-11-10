@@ -47,6 +47,7 @@ import uuid
 from datetime import datetime
 from typing import Any, Callable, Dict, List, Optional
 
+from v2.ch12.drivers.tsp import WIN_ACTIVE_FILAMENT, WIN_ERROR_CODE, READ_VALUE_TIMEOUT_S, error_label, filament_label
 from v2.ch12.outputs.tsp_txt import TspTxtLog
 from v2.ch12.tsp_cycle import (CLOSE_WAIT_S, OWNER, OWNERS, PHASES, TspCycle, TspEngineEvent, TspRunResult, _UserStop, _txt,
                                parse_cycles, parse_target)
@@ -63,6 +64,7 @@ class TspEngine(TspCycle):
         self.txt = TspTxtLog(cfg, writer=writer, now=self.now)
         self._lock = threading.Lock()
         self._thread: Optional[threading.Thread] = None
+        self._fil_logged, self._fil_start = False, None
         self._restart_pending = False     # 재시작 뒤 이어가기 판단(resume.py) 전 — busy, 새 시작을 받지 않는다
         self._running = False             # v1 _busy(실행 태스크 있음 — finally 첫머리에서 풀림)
         self._cancel: Optional[tuple] = None   # ("stop"|"timeout"|"abort", 사유)
@@ -384,6 +386,7 @@ class TspEngine(TspCycle):
         s = self._s
         self._last_code = None
         self.started_ctrl = None
+        self._fil_logged, self._fil_start = False, None     # 시작 필라멘트를 읽었으면 종료 때도 읽는다(v1 fil_logged)
         used_tsp = held_ig = False
         try:
             rs = self.rs
@@ -407,6 +410,8 @@ class TspEngine(TspCycle):
             self._log(("=== TSP 공정 이어가기(재시작 뒤) === " if resume else "=== TSP 공정 시작 === ") +
                       f"host={s['host']} ig={s['ig_port']} tsp={s['tsp_port']} target={target} cycles={cycles} "
                       f"on={s['on']}s off={s['off']}s poll={s['poll']}s first_wait={s['first']}s")
+            self._fil_logged = True                            # 사용 중 필라멘트(671) — 시작 1번, 실패해도 시작을 막지 않는다
+            self._fil_start = self._log_filament_start()
             if resume is None:
                 self._card("started", {"params": {"process_note": f"TSP run: target={target:.3e}, cycles={cycles}",
                                                   "tsp_target": target, "tsp_cycles": cycles}, "run_id": self.run_id})
@@ -436,6 +441,53 @@ class TspEngine(TspCycle):
             self._finish_record("error", False, str(e), code=self._last_code)
         finally:
             self._closing(used_tsp, held_ig)
+
+    # ── 사용 중 필라멘트(671)·에러 코드(206) — 시작·종료 때 1번씩 읽어 로그에만 남긴다(v1 main 984556e, 장비에 쓰지 않음) ──
+    @staticmethod
+    def _fil_txt(n: Optional[int]) -> str:
+        return f"{n}번" if n in (1, 2, 3) else filament_label(n)
+
+    def _fil_read(self, win: str) -> tuple:
+        """(값, 실패 사유) — 짧은 한도·예외 삼킴(v1 _fil_read)."""
+        try:
+            (done,) = self._call(lambda cb: self.tsp.read_value(win, on_done=cb), False)
+        except Exception as e:
+            return None, (f"{READ_VALUE_TIMEOUT_S:g}초 응답 없음" if isinstance(e, TimeoutError) else f"{e!r}")
+        if done.value is None:
+            if done.reason in (None, "NO_VALUE"):
+                return None, "응답 없음 또는 숫자 아님"
+            if "TIMEOUT" in str(done.reason).upper() or "NO_RESPONSE" in str(done.reason).upper():
+                return None, f"{READ_VALUE_TIMEOUT_S:g}초 응답 없음"
+            return None, str(done.detail or done.reason)
+        return int(done.value), ""
+
+    def _log_filament_start(self) -> Optional[int]:
+        try:
+            n, why = self._fil_read(WIN_ACTIVE_FILAMENT)
+        except Exception as e:
+            n, why = None, f"{e!r}"
+        if n is None:
+            self._log(f"[FILAMENT] 시작 시 필라멘트 번호 읽기 실패({why})")
+        else:
+            self._log(f"[FILAMENT] 시작 시 사용 중 필라멘트: {self._fil_txt(n)}")
+        return n
+
+    def _log_filament_end(self, start: Optional[int]) -> None:
+        n, why = self._fil_read(WIN_ACTIVE_FILAMENT)
+        code, cwhy = self._fil_read(WIN_ERROR_CODE)
+        err = f"에러 코드 {code} = {error_label(code)}" if code is not None else f"에러 코드 읽기 실패({cwhy})"
+        if n is None:
+            self._log(f"[FILAMENT] 종료 시 필라멘트 번호 읽기 실패({why}) ({err})")
+        else:
+            self._log(f"[FILAMENT] 종료 시 사용 중 필라멘트: {self._fil_txt(n)} ({err})")
+        if start is not None and n is not None:
+            if start != n:
+                self._log(f"[FILAMENT] 실행 중 필라멘트 변경: {self._fil_txt(start)} → {self._fil_txt(n)} "
+                          f"(컨트롤러 자동 전환 추정, {err})")
+            else:
+                self._log("[FILAMENT] 실행 중 필라멘트 변경 없음")
+        if code == 4:
+            self._log("[FILAMENT] ⚠ TSP 카트리지 필라멘트 전체 소진 — 카트리지 교체 필요")
 
     def _result_card(self, r: TspRunResult) -> None:
         reason_str = (r.reason or "").lower() if isinstance(r.reason, str) else str(r.reason)
@@ -477,6 +529,8 @@ class TspEngine(TspCycle):
         self._set_phase("closing")
         if used_tsp:
             self._quiet(lambda: self._tsp_switch(False))
+            if self._fil_logged:                               # 종료 필라멘트·에러 코드 1번(정상·중단·오류 모두, 시작을 읽은 런만)
+                self._quiet(lambda: self._log_filament_end(self._fil_start))
             self.tsp.end_use(close=False)
             self._quiet(lambda: self._call(lambda cb: self.tsp.close(on_done=cb), False))
         self.txt.close_run()

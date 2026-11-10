@@ -104,7 +104,7 @@ OWNERS: dict = {
         "ch2.THICKNESS_RATE_ZERO_WARN_S", "ch2.THICKNESS_RATE_SPIKE_K",
     ),
     "outputs": (
-        "common.PLC_COIL_LOG_INTERVAL_S", "common.PLC_COIL_LOG_SUMMARY_S", "common.HOST_LOG_ENABLED",
+        "common.PLC_COIL_LOG_INTERVAL_S", "common.PLC_COIL_LOG_SUMMARY_S", "common.TURBO_OFF_ALERT_S", "common.HOST_LOG_ENABLED",
         "common.HOST_LOG_NAS_DIR", "common.HOST_LOG_LOCAL_DIR", "common.HOST_LOG_RETRY_S",
         "common.HOST_LOG_LOCK_STALE_S", "common.PLC_COIL_LOG_NAS_DIR", "common.LOG_ROOT_DIR",
         "common.SELFWATCH_ENABLE", "common.SELFWATCH_INTERVAL_S", "common.SELFWATCH_DIR",
