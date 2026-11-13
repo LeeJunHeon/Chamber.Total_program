@@ -81,7 +81,7 @@ PARAM_GROUPS: tuple = (
     ("eta", "남은 시간(ETA)"), ("stop", "정지 순서"), ("resume", "재시작 이어가기"), ("command", "명령"),
     ("robot", "로봇"), ("robot_server", "로봇 서버"), ("camera", "카메라"), ("oes", "OES"), ("rga", "RGA"),
     ("outputs", "v1 기록 출력"), ("record", "기록"), ("uplink", "웹 연결"), ("chat", "구글챗"), ("monitor", "감시"),
-    ("apps", "보조 프로그램"), ("debug", "디버그"),
+    ("apps", "보조 프로그램"), ("debug", "디버그"), ("supervisor", "감시 프로그램·진단"),
 )
 
 # event 메시지 (context.source, context.kind) → (화면 이름, level). hub.origin_of 가 정하는 source:

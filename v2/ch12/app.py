@@ -39,6 +39,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import logging.handlers
 import signal
 import socket
@@ -153,6 +154,7 @@ class App:
         self.server: Optional[LocalServer] = None
         self.uplink = None
         self.assembly = None
+        self.beacon = None
         self.journal = None
         self.resumer = None
         self._resume_thread: Optional[threading.Thread] = None
@@ -335,6 +337,7 @@ class App:
             self.say(msg)
             (self.log.info if ok else self.log.warning)(msg)
             self._tick_thread = self.clock.start_thread(s.loop.run, "tick")
+            self.start_health(s)
             self.attach_server(s)
             self.say(RUNNING_LINE)
         except Exception as e:
@@ -360,6 +363,17 @@ class App:
                               name="resume", daemon=True)
         self._resume_thread = th
         th.start()
+
+    def start_health(self, s: Ch12System) -> None:
+        """감시 프로그램 아래(환경 변수 CH12_HEARTBEAT_FILE)에서만 — 건강 확인 파일·멈춤 덤프(health_beacon, D408)."""
+        hb = os.environ.get("CH12_HEARTBEAT_FILE")
+        if not hb:
+            return
+        from v2.ch12.health_beacon import HealthBeacon
+        dump = os.environ.get("CH12_HANG_DUMP_FILE")
+        core = getattr(self.assembly, "core", None)
+        self.beacon = HealthBeacon(s.cfg, lambda: s.loop.rows, getattr(core, "_lock", None), Path(hb), Path(dump) if dump else None)
+        self.beacon.start()
 
     def start_uplink(self, s: Ch12System) -> None:
         """웹 연결 — 정책이 연결일 때만(prod·bench, sim 은 UPLINK_IN_SIM). 실패해도 웹 없이 운전(공정·안전은 그대로)."""
@@ -500,6 +514,8 @@ class App:
 
     def _teardown(self) -> None:
         self._done.set()
+        if getattr(self, "beacon", None) is not None:
+            self.beacon.stop()
         s = self.system
         if s is not None and (s.started or self.assembly is not None):
             s.stop()                                       # tick 멈춤 → 엔진 close(로봇 API·저널 등) → worker 정지 → 출력·기록 flush
