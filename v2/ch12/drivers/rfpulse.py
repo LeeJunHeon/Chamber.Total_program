@@ -369,7 +369,7 @@ class RfPulseDriver(RfpStopPollMixin, RfpVerifyMixin):
         yield Sleep(0.2)
         if stopped():
             return False
-        qmode = int(self._c("RFPULSE_Q_MODE", 0) or 0)
+        qmode = int(self._c("RFPULSE_Q_MODE", 154) or 0)
         ok, _, mism = yield from self._g_write_verified(SET_MODE, bytes([MODE_FWD]), "[START MODE FWD]", qmode,
                                                         self.match_byte(MODE_FWD), "MODE")
         if mism:

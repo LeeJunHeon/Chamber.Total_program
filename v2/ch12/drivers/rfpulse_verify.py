@@ -1,8 +1,8 @@
 """RF Pulse 설정 명령 쓰기 → 되읽기 확인 → 다시 쓰기 → VERIFY_MISMATCH(2026-11-09 E2 — D50 통일을 SETPOINT·MODE·PULSING 으로 넓힘).
 
 되읽기 질의(AE Bus 보고 명령): SET_SETPOINT(8) → 164(셋포인트 W, u16 LE) · SET_PULSING(27) → 177(펄싱 모드 1 B) · SET_MODE(3) → 설정 키
-RFPULSE_Q_MODE(기본 0 = 읽지 않음). ⚠ 155 는 v1·v2 가 이미 'READ_ACTIVE_CTRL'(제어 모드 — HOST 확인, 값 2)로 쓰는 질의라 조절 모드(6 FWD)를 되읽을 수 없다
-(읽으면 늘 불일치) — 조절 모드 보고 번호는 매뉴얼이 이 저장소에 없어 확인하지 못했다(UNVERIFIED, bench 에서 확인한 뒤 RFPULSE_Q_MODE 에 적는다).
+RFPULSE_Q_MODE(기본 154 — 2026-11-13 D407: CESAR 1310 매뉴얼 Table 4-16 '154 Reports regulation mode, 1 byte: 6 Forward · 7 Load · 8 External(DC Bias), set with
+command 3'. 0 = 끔). ⚠ 155 는 v1·v2 가 이미 'READ_ACTIVE_CTRL'(제어 모드 — HOST 확인, 값 2)로 쓰는 질의라 조절 모드(6 FWD)를 되읽을 수 없다(읽으면 늘 불일치).
 164·177 도 사용자 지시 2026-11-09 의 번호이고 매뉴얼 쪽수는 미확인 — 응답이 오지 않으면(통신 실패) 검증을 생략하고 경고만(freq·duty 되읽기와 같은 규칙),
 되읽은 값이 다르면 RFPULSE_REWRITE_MAX 회까지 다시 쓰고 그래도 다르면 command_failed VERIFY_MISMATCH.
 RFPULSE_READBACK_ENABLED=false 면 v1 처럼 CSR 만.

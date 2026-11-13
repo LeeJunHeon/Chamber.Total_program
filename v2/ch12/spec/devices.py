@@ -11,7 +11,7 @@ r"""챔버12 장비 사실 표(사용자 지시 0단계 'spec 표: 장비 사실
 - LAN            : 랜 공유(PLC·RGA 2대·NPort 가 노트북 유선 랜 하나)
 - DEVICES        : 장비마다 명령(이름·바이트 형식·응답 형식·v1 근거 파일:줄)·간격·타임아웃·메모
 - TICK_PLAN      : 1초 예산(드라이버 BUDGET) + 근거 · ALTERNATE: 1초에 못 들어가거나 번갈아 읽는 장비(사용자 결정 2026-11-02 D36·D50 뒤
-                   MFC·IG·RF Pulse·DC Pulse 는 모두 매 tick 전부 읽어 여기 없다)
+                   IG·RF Pulse·DC Pulse 는 매 tick 전부 읽어 여기 없다 — MFC 는 2026-11-13 D407 로 기본 split(R60·R5·R6 매 tick + 6개 돌아가며))
 - INTERVALS      : 장비별 '응답 뒤 다음 명령까지' 간격 설정 키·기본값·매뉴얼 근거(문서·쪽) — 사용자 결정 2026-11-02
 - READBACK       : 값을 바꾸는 명령의 되읽기 질의·비교·설정 키 / READBACK_NONE: 되읽기 질의가 없는 명령(v1 과 같게 응답/전송 확인으로 확정)
 - PC_DEAD        : PC(제어 프로그램)가 죽었을 때 출력이 어떻게 되는지 — RF/DC 파워는 PLC 인터락이 없어 소프트웨어가 꺼야 함,
@@ -216,7 +216,7 @@ TICK_PLAN: tuple = (
     TickPlan("rf", "v2.ch12.drivers.rf", rf.BUDGET, "PLC 1초 묶음에 포함(D54)"),
     TickPlan("heater", "v2.ch12.drivers.heater", heater.BUDGET,
              "PLC 1초 묶음 D110..D160·코일 640..658 에 포함(controller/heater_service.py:37-48), 워치독 D114 5 s(lib/config_common.py:471)"),
-    TickPlan("mfc", "v2.ch12.drivers.mfc", mfc.BUDGET, "MFC_GAP_MS 50 = 응답 뒤 다음 명령까지(v1 1000, lib/config_common.py:266) — GPC3000 매뉴얼 p.72(9600 8N1·CR 끝, 최소 간격 규정 없음) → R60·R5 를 매 tick 둘 다(D36, 사용자 결정 2026-11-02), 2026-11-09 E1: R6(밸브 위치, 매뉴얼 p.73)·R69·R1~R4·R7 도 매 tick(9개)"),
+    TickPlan("mfc", "v2.ch12.drivers.mfc", mfc.BUDGET, "MFC_GAP_MS 50 = 응답 뒤 다음 명령까지(v1 1000, lib/config_common.py:266) — GPC3000 매뉴얼 p.72(9600 8N1·CR 끝, 최소 간격 규정 없음) → R60·R5 를 매 tick 둘 다(D36, 사용자 결정 2026-11-02), 2026-11-09 E1: R6(밸브 위치, 매뉴얼 p.73)·R69·R1~R4·R7 도 매 tick(9개) → 2026-11-13 D407: 기본 split = R60·R5·R6 매 tick + R69·R1~R4·R7 은 tick 마다 1개씩 돌아가며(4질의/tick, MFC_READ_MODE=all 이면 9개)"),
     TickPlan("ig", "v2.ch12.drivers.ig", ig.BUDGET, "IG_GAP_MS 200(v1 1000) + 흡수 30 ms(device/ig.py:687-760) — IG 기종·매뉴얼 없음(근거 문서 없음, bench 확인), 매 tick RDI(D36, 사용자 결정 2026-11-02)"),
     TickPlan("dcpulse", "v2.ch12.drivers.dcpulse", dcpulse.BUDGET, "DCP_GAP_MS 150(lib/config_common.py:383, EnerPulse 매뉴얼 100 ms 이상) — 출력 ON 중만(D48), 매 tick PIV·SAT·ANT·AE·AF 전부(D36)"),
     TickPlan("rfpulse", "v2.ch12.drivers.rfpulse", rfpulse.BUDGET, "CMD_GAP_MS 0(v1 1500, lib/config_common.py:84) — CESAR 1310 매뉴얼 4-48~49(AE Bus ACK→응답→호스트 ACK, 응답 100 ms 이내): 응답을 받는 대로 다음 질의, 162·165·166 매 tick 전부(D50, 사용자 결정 2026-11-02)"),
@@ -248,7 +248,7 @@ class Interval:
 INTERVALS: tuple = (
     Interval("mfc", "MFC_GAP_MS", 50, 1000,
              "GPC3000 매뉴얼 p.72: RS-232 9600 8N1·명령 끝 CR — 최소 명령 간격 규정 없음(v1 1000 ms 는 RS-232 안정화용)",
-             "R60·R5·R6(밸브 위치 %)·R69(ON/OFF)·R1~R4(SP 값)·R7(선택 SP) 9개를 매 tick 전부(2026-11-09 E1 — 번갈아 읽기 없음)"),
+             "기본 split(2026-11-13 D407): R60·R5·R6(밸브 위치 %)을 매 tick + R69(ON/OFF)·R1~R4(SP 값)·R7(선택 SP)은 tick 마다 1개씩 돌아가며 — MFC_READ_MODE=all 이면 9개 매 tick(2026-11-09 E1)"),
     Interval("ig", "IG_GAP_MS", 200, 1000,
              "IG 기종 미확인·매뉴얼 없음 — 근거 문서 없음(사용자 지정 기본 200 ms, bench 에서 응답 시간·오류율 확인)",
              "RDI 매 tick"),
@@ -298,10 +298,10 @@ READBACK: tuple = (
     Readback("rfpulse", "SET_SETPOINT 8 · SET_PULSING 27", "164(셋포인트 W u16) · 177(펄싱 모드 1 B)", "= 쓴 W / 모드",
              "RFPULSE_READBACK_ENABLED·RFPULSE_REWRITE_MAX·RFPULSE_REWRITE_GAP_MS",
              "v2 신설(2026-11-09 E2 — 질의 번호는 사용자 지시, 매뉴얼 쪽수는 미확인·UNVERIFIED). 시작 시퀀스와 공정 중 셋포인트 변경 모두"),
-    Readback("rfpulse", "SET_CTRL_MODE 3(조절 모드)", "RFPULSE_Q_MODE(기본 0 = 읽지 않음)", "= 쓴 모드(6 FWD)",
+    Readback("rfpulse", "SET_CTRL_MODE 3(조절 모드)", "154(조절 모드 1 B — RFPULSE_Q_MODE, 0 = 끔)", "= 쓴 모드(6 FWD)",
              "RFPULSE_Q_MODE·RFPULSE_READBACK_ENABLED",
-             "v2 신설 — 번호가 설정이어야 하는 이유: 155 는 v1·v2 가 'READ_ACTIVE_CTRL'(제어 모드 HOST=2)로 이미 쓰는 질의라 조절 모드를 되읽을 수 없다. "
-             "조절 모드 보고 번호는 매뉴얼이 저장소에 없어 확인 못 함 — bench 에서 확인해 설정"),
+             "v2 신설(2026-11-13 D407) — 근거: CESAR 1310 매뉴얼 Table 4-16 '154 Reports regulation mode — 1 byte: 6 Forward, 7 Load, 8 External(DC Bias), "
+             "Set with command 3'(CH1 dressler CESAR·CH2 AE CESAR). 155 는 제어 모드(HOST=2) 질의라 쓸 수 없다. 번호는 설정 RFPULSE_Q_MODE(0 = 끔)"),
     Readback("plc", "DAC 레지스터 D4~D7 (FC6)", "FC3 같은 주소", "= 쓴 DAC 코드",
              "PLC_READBACK_ENABLED·PLC_REWRITE_MAX·PLC_REWRITE_GAP_MS", "v2 신설(v1 은 FC6 에코만)"),
     Readback("plc", "래치 DCV_SET_0~3 코일 (FC5)", "FC1 같은 주소", "= 쓴 ON/OFF",
@@ -316,8 +316,8 @@ READBACK_NONE: tuple = (
     ("dcpulse", "MASTER ONOFF/REFER/MODE · REG_POWER · REF_POWER · PULSE_SYNC",
      "ACK(06) 응답 확인형. 해당 값을 되읽는 질의가 장비 사실 표에 없다(읽기 목록 90 91 96 99 9a 9c 9e a5 a6 a7 ae af bb bc bd 중 REF_POWER·REG_POWER 없음)"),
     ("dcpulse", "OUTPUT ON/OFF 0x80", "ACK 가 없으면 상태 플래그(0x9A)로 확인하는 기존 경로(device/dc_pulse.py:1219-1338) — 출력 켜짐/꺼짐 확인이 그것"),
-    ("rfpulse", "SET_CTRL_MODE 3 (RFPULSE_Q_MODE = 0 일 때)",
-     "조절 모드 보고 질의 번호를 확인하지 못해 기본은 CSR(명령 상태 응답) 0 이 확인 — 155 는 제어 모드 질의라 쓸 수 없다(UNVERIFIED, 번호를 알면 RFPULSE_Q_MODE)"),
+    ("rfpulse", "SET_CTRL_MODE 3 (RFPULSE_Q_MODE = 0 으로 끈 때만)",
+     "기본은 154 로 되읽는다(D407). 끄면 CSR(명령 상태 응답) 0 이 확인 — 155 는 제어 모드 질의라 쓸 수 없다"),
     ("dcpulse", "REF_LEVEL 0x83 · REGULATION 0x81",
      "ACK(06) 응답 확인형 — EnerPulse 읽기 코드가 이 저장소에 없다: v1 device/dc_pulse.py·v2 dcpulse_proto 의 읽기 코드는 90 91 96 99 9a 9c 9e a5 a6 a7 ae af bb bc bd 뿐이고 "
      "(PULSE_SYNC 65→a5·PULSE_FREQ 66→a6·OFF_TIME 67→a7·MASTER 7b~7d→bb~bd 는 쓰기+0x40 규칙이지만) 0x83→0xC3·0x81→0xC1 로의 확장은 추정일 뿐 "
@@ -401,7 +401,7 @@ UNVERIFIED: tuple = (
     Unverified("plc", "트랜잭션 왕복 시간·1초 묶음 5블록 소요", "명령 간격 150 ms 로 계산 600 ms + 응답", "bench_probe 응답 p50/p99·놓친 tick"),
     Unverified("plc", "PC 워치독 래더 유무·PLC STOP 때 D/A 출력", "v1 코드에 근거 없음(히터 D114 워치독만)", "XG5000 프로젝트·모듈 매뉴얼"),
     Unverified("plc", "히터 D 영역이 래치(정전 유지)인지", "세션 마커 D160 으로 재기동 감지(v1)", "PLC 프로젝트"),
-    Unverified("mfc", "응답 시간·MFC_GAP_MS 50 ms 에서의 오류율(매뉴얼 p.72 는 최소 간격 규정 없음)", "간격 50 ms, R60·R5·R6·R69·R1~R4·R7 9개 매 tick(합이 1 s 에 들어가는지)",
+    Unverified("mfc", "응답 시간·MFC_GAP_MS 50 ms 에서의 오류율(매뉴얼 p.72 는 최소 간격 규정 없음)", "간격 50 ms, 기본 split = 4질의/tick(합 ≤ 0.6 s 면 1 s 에 들어감). MFC_READ_MODE=all 은 9질의/tick(합 ≤ 0.4 s 여야 — 위험)",
                "bench_probe — 설정 키 간격으로 R 질의 응답 p50/p99·오류율"),
     Unverified("mfc", "되읽기 응답 형식 R65~R67(설정)·R69(ON/OFF)·R6(밸브)·R7(시스템)·R1~R4(SP)", "v1 검증 경로(꺼져 있던) 파서 그대로, sim 가정",
                "bench_probe 설정 읽기 원문 — 다르면 MFC_READBACK_ENABLED 끄고 보고"),

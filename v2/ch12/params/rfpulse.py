@@ -33,9 +33,9 @@ PARAMS: tuple = (
       desc="되읽기가 기대와 다르면 다시 쓰는 최대 횟수. 그래도 다르면 사유 코드 VERIFY_MISMATCH"),
     p("RFPULSE_REWRITE_GAP_MS", _G, "쓴 뒤 되읽기까지 간격", "ms", I, 100, 0, 5000, src="v2(사용자 결정 2026-11-02 D50)",
       desc="명령을 쓴 뒤 되읽기 질의까지(그리고 다시 쓰기 사이)"),
-    p("RFPULSE_Q_MODE", _G, "조절 모드 되읽기 질의 번호", "", I, 0, 0, 255, safety=H, src="v2(2026-11-09 E2)",
-      desc="SET_MODE(3) 뒤 되읽을 AE Bus 보고 명령 번호. 0 = 읽지 않음(기본). 155 는 제어 모드(HOST) 질의라 쓸 수 없다 — 매뉴얼에서 조절 모드 보고 번호를 "
-           "확인해(bench) 적는다"),
+    p("RFPULSE_Q_MODE", _G, "조절 모드 되읽기 질의 번호", "", I, 154, 0, 255, safety=H, src="v2(2026-11-09 E2 → 2026-11-13 D407)",
+      desc="SET_MODE(3) 뒤 되읽을 AE Bus 보고 명령 번호. 기본 154 = CESAR 1310 매뉴얼 Table 4-16 '154 Reports regulation mode — 1 byte: 6 Forward, 7 Load, "
+           "8 External(DC Bias), Set with command 3'(CH1 dressler CESAR·CH2 AE CESAR 공통). 0 = 읽지 않음(끔). 155 는 제어 모드(HOST) 질의라 쓸 수 없다"),
     p("ACK_TIMEOUT_MS", _G, "설정 명령 응답 한도", "ms", I, 2000, 100, 60000, src=f"{_CC}:81", desc="RF ON/OFF 는 max(이 값, 2500)"),
     p("QUERY_TIMEOUT_MS", _G, "질의 응답 한도", "ms", I, 4500, 100, 60000, src=f"{_CC}:82"),
     p("POLL_QUERY_TIMEOUT_MS", _G, "폴링 질의 응답 한도", "ms", I, 9000, 100, 60000, src=f"{_CC}:432",

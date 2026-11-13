@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from v2.common.snapshot import DeviceBlock, FieldDef, FType
 from v2.common.transport import ReadTimeout, TcpSettings
@@ -51,6 +51,34 @@ CACHE_FRESH_S = 1.0                              # 제어가 읽은 값을 1초 
 TICK_QUERIES = (("R60", ("Q0",)), ("R5", ("P",)), ("R6", ("V",)), ("R69", ("L",)),
                 ("R1", ("S1",)), ("R2", ("S2",)), ("R3", ("S3",)), ("R4", ("S4",)), ("R7", ("M",)))
 TICK_CMDS = frozenset(c for c, _p in TICK_QUERIES)
+# 1초 기록의 '읽은 뒤 나이'(s) 칸 — 돌아가며 읽는 값은 값이 비었을 때 '아직 못 읽음'과 '오래됨'을 가르려고(2026-11-13 D407)
+AGE_FIELDS = (("valve_age_s", "R6"), ("on_age_s", "R69"), ("sp1_age_s", "R1"), ("sp2_age_s", "R2"), ("sp3_age_s", "R3"),
+              ("sp4_age_s", "R4"), ("sp_active_age_s", "R7"))
+TICK_PREFIX = dict(TICK_QUERIES)                  # 질의 → 응답 앞글자
+ROTATE_DEFAULT = ("R69", "R1", "R2", "R3", "R4", "R7")
+EVERY_DEFAULT = ("R60", "R5", "R6")
+
+
+def parse_tick_list(text: Any) -> Tuple[str, ...]:
+    """설정 글자 'R60,R5,R6' → 허용 목록 안의 질의 튜플(중복·허용 밖은 버린다 — 값 범위 검사는 설정 쪽에서 거부, D11)."""
+    out: List[str] = []
+    for tok in str(text or "").replace(" ", "").split(","):
+        if tok in TICK_PREFIX and tok not in out:
+            out.append(tok)
+    return tuple(out)
+
+
+def tick_plan(cfg: Dict[str, Any]) -> Tuple[Tuple[str, ...], Tuple[str, ...]]:
+    """(매 tick 질의, 돌아가며 읽는 질의). all = 9개 전부 매 tick(2026-11-09 E1 — 이전 동작), split(기본) = EVERY 는 매 tick,
+    ROTATE 는 tick 마다 1개씩 차례로(2026-11-13 D407). R60·R5 는 v1 폴링 판정이 쓰므로 split 에서도 늘 매 tick."""
+    if str(cfg.get("MFC_READ_MODE", "split")) == "all":
+        return tuple(c for c, _p in TICK_QUERIES), ()
+    every = list(parse_tick_list(cfg.get("MFC_TICK_EVERY", ",".join(EVERY_DEFAULT))))
+    for must in ("R5", "R60"):                          # 앞에 R60, R5 순으로 끼운다
+        if must not in every:
+            every.insert(0, must)
+    rot = tuple(c for c in parse_tick_list(cfg.get("MFC_TICK_ROTATE", ",".join(ROTATE_DEFAULT))) if c not in every)
+    return tuple(every), rot
 SKIP_IF_READ_WITHIN_S = 0.4                      # 제어(안정화 등)가 이만큼 안에 읽은 질의는 이번 tick 에 다시 보내지 않음
 
 # v1 lib/config_common.py:300-330 MFC_COMMANDS — 같은 글자(함수/문자열)
@@ -185,6 +213,7 @@ class MfcDriver:
         self.poll_pressure = True
         self._poll_next = 0.0
         self._poll_stage: Optional[str] = None
+        self._rot_i = 0                                          # 돌아가며 읽기 — 다음 차례 위치
         self.latest: Dict[str, tuple] = {}                       # "R60"/"R5" → (시각, 줄)
         worker.on_connect = self._on_connect
 
@@ -328,52 +357,76 @@ class MfcDriver:
         두 질의 사이는 MFC_GAP_MS(응답 뒤 다음 명령까지). 제어가 방금(0.4 s 안) 읽은 질의는 다시 보내지 않는다."""
         now = self.clock.monotonic()
         if self._idle(now) and self.ready_at <= now + TICK_GAP_WAIT_S:
-            for cmd, pre in TICK_QUERIES:
+            every, rot = tick_plan(self.cfg)
+            todo = list(every)
+            if rot:                                              # 이번 tick 의 돌아가기 차례 1개(밀린 tick 은 차례를 넘기지 않는다)
+                self._rot_i %= len(rot)
+                todo.append(rot[self._rot_i])
+                self._rot_i = (self._rot_i + 1) % len(rot)
+            for cmd in todo:
                 last = self.latest.get(cmd)
                 if last is not None and self.clock.monotonic() - last[0] < SKIP_IF_READ_WITHIN_S:
                     continue
-                self.io_query(session, Query(cmd, self.ms("MFC_TIMEOUT", 2000), 0.0, pre, 1, ""))
+                self.io_query(session, Query(cmd, self.ms("MFC_TIMEOUT", 2000), 0.0, TICK_PREFIX[cmd], 1, ""))
             self._v1_poll(self.clock.monotonic())
         return self._fields(self.clock.monotonic())
+
+    def valid_s(self, cmd: str) -> float:
+        """질의 cmd 의 마지막 읽은 값을 쓸 수 있는 시간 — 매 tick 질의는 CACHE_FRESH_S(1 s), 돌아가며 읽는 질의는 (돌아가기 개수 + 1) s.
+        기억값(쓴 값)으로 채우지 않는다 — 넘으면 빈 값."""
+        every, rot = tick_plan(self.cfg)
+        return float(len(rot) + 1) if cmd in rot else CACHE_FRESH_S
+
+    def _last(self, cmd: str, now: float) -> Optional[str]:
+        r = self.latest.get(cmd)
+        return r[1] if r and now - r[0] <= self.valid_s(cmd) else None
+
+    def _age(self, cmd: str, now: float) -> Optional[float]:
+        r = self.latest.get(cmd)
+        return round(max(0.0, now - r[0]), 1) if r else None
 
     def _fields(self, now: float) -> Dict[str, Any]:
         b = self.block
         out: Dict[str, Any] = {}
-        r60 = self.latest.get("R60")
-        if r60 and now - r60[0] <= CACHE_FRESH_S:
-            vals = parse_r60(r60[1]) or []
+        line = self._last("R60", now)
+        if line is not None:
+            vals = parse_r60(line) or []
             for ch, gas in GAS_MAP.items():
                 if ch - 1 < len(vals):
                     out[f"{b}.{gas.lower()}_sccm"] = self.hw_to_ui(ch, vals[ch - 1])
-        r5 = self.latest.get("R5")
-        if r5 and now - r5[0] <= CACHE_FRESH_S:
-            hw = parse_pressure(r5[1])
+        line = self._last("R5", now)
+        if line is not None:
+            hw = parse_pressure(line)
             if hw is not None:
                 out[f"{b}.pressure_mtorr"] = hw / float(self.c("MFC_PRESSURE_SCALE", 0.1))
         for ch, gas in GAS_MAP.items():
             out[f"{b}.{gas.lower()}_set_sccm"] = self.hw_to_ui(ch, self.last_setpoints[ch])
-        r69 = self.latest.get("R69")                         # ON/OFF 는 기억값이 아니라 R69 실제값(못 읽은 tick 은 빈 값)
-        if r69 and now - r69[0] <= CACHE_FRESH_S:
-            bits = mfc_ops._r69_bits(r69[1])
+        line = self._last("R69", now)                        # ON/OFF 는 기억값이 아니라 R69 실제값(못 읽은 tick 은 빈 값)
+        if line is not None:
+            bits = mfc_ops._r69_bits(line)
             for ch, gas in GAS_MAP.items():
                 if ch - 1 < len(bits):
                     out[f"{b}.{gas.lower()}_on"] = bits[ch - 1] == "1"
-        r6 = self.latest.get("R6")
-        if r6 and now - r6[0] <= CACHE_FRESH_S:
-            pos = parse_valve_pct(r6[1])
+        line = self._last("R6", now)
+        if line is not None:
+            pos = parse_valve_pct(line)
             if pos is not None:
                 out[f"{b}.valve_pct"] = pos
         for n in (1, 2, 3, 4):                               # SP 값 — 실제 R1~R4(장비값 ÷ MFC_PRESSURE_SCALE = mTorr)
-            r = self.latest.get(f"R{n}")
-            if r and now - r[0] <= CACHE_FRESH_S:
-                hw = parse_pressure(r[1])
+            line = self._last(f"R{n}", now)
+            if line is not None:
+                hw = parse_pressure(line)
                 if hw is not None:
                     out[f"{b}.sp{n}_mtorr"] = hw / float(self.c("MFC_PRESSURE_SCALE", 0.1))
-        r7 = self.latest.get("R7")
-        if r7 and now - r7[0] <= CACHE_FRESH_S:
-            sel = parse_active_sp(r7[1])
+        line = self._last("R7", now)
+        if line is not None:
+            sel = parse_active_sp(line)
             if sel is not None:
                 out[f"{b}.sp_active"] = sel
+        for key, cmd in AGE_FIELDS:                          # 마지막으로 실제 읽은 뒤 지난 시간(값이 비어도 — 못 읽음과 오래됨을 가른다)
+            age = self._age(cmd, now)
+            if age is not None:
+                out[f"{b}.{key}"] = age
         out[f"{b}.polling"] = self.polling
         return out
 
@@ -613,19 +666,22 @@ def blocks(chamber: str) -> List[DeviceBlock]:
                           own_quality=True, detail=True))
     f.append(FieldDef("sp_active", FType.INT, "", "선택된 SP", source="R7 'M{n}…'(실제값)", own_quality=True, detail=True,
                       desc="0 = 선택 없음, n = SPn 로 압력 제어 중"))
+    for key, cmd in AGE_FIELDS:
+        f.append(FieldDef(key, FType.FLOAT, "s", f"{cmd} 읽은 뒤 나이", fmt=".1f", source=f"{cmd} 마지막 실제 읽기 이후(돌아가며 읽기 — D407)",
+                          detail=True, desc="값 칸이 비었을 때 '아직 못 읽음'(칸 없음)과 '유효 시간을 넘김'(나이 > 유효 시간)을 가른다"))
     f.append(FieldDef("polling", FType.BOOL, "", "v1 폴링(공정 중)", source="set_process_status", summary="any", detail=True))
     return [DeviceBlock(f"{chamber}.mfc", f"{chamber.upper()} MFC", tuple(f), desc="MOXA NPort TCP ASCII")]
 
 
-# 1초 예산 — v1 근거 간격(MFC_GAP_MS 1000: 응답 뒤 1 s)으로 계산. 실측은 bench.
+# 1초 예산 — 기본 split(2026-11-13 D407): 매 tick R60·R5·R6 + 돌아가며 1개 = 4질의. all 은 9질의(이전 동작, 예산 위험).
 BUDGET = dict(
-    queries_per_tick=9, bytes_tx=36, bytes_rx=98, min_gap_ms=50, fits_1s=True, alternate=None,
-    note="매 tick 9개 질의 — R60(4 B → 'Q0+aa.a+bb.b+cc.c+dd.d\\r\\n' 약 26 B)·R5(→ 'P+x.xx' 약 9 B)·R6(밸브 위치 → 'V+ppp.p' 9 B)·"
-         "R69(ON/OFF → 'L0 bbbb' 9 B)·R1~R4(SP 값 → 'S{n}+x.xx' 9 B)·R7(선택 SP → 'M{n}…' 약 8 B)를 모두(2026-11-09 E1 — 번갈아 읽기 없음). "
-         "9600 bps 에서 전송 약 36+98 B ≈ 140 ms + 장비 응답 시간 9회 + 명령 간격 MFC_GAP_MS(기본 50 ms, 응답 뒤) × 9 = 450 ms ≈ 0.6 s + 응답 시간. "
-         "근거: GPC3000 매뉴얼 p.72(9600 8N1·CR 끝·최소 명령 간격 규정 없음 — 사용자 결정 2026-11-02 D36)·p.73(R6 Valve Position Value). 제어가 0.4 s 안에 읽은 "
-         "질의는 다시 보내지 않고, 제어 명령이 곧 나갈 때는 양보. 마감은 MFC_TIMEOUT + 대기 0.5 s. ⚠ 장비 응답 시간 합이 0.4 s 를 넘으면 1 s 에 못 들어간다 — "
-         "실측(응답 시간·오류율)은 bench(bench_probe). 못 들어가면 SP 값·선택 SP 를 번갈아 읽는 쪽으로 바꾼다(결정 D405)",
+    queries_per_tick=4, bytes_tx=16, bytes_rx=52, min_gap_ms=50, fits_1s=True, alternate="MFC_READ_MODE=split(돌아가며 읽기 R69·R1~R4·R7 — tick 마다 1개)",
+    note="split(기본) — 매 tick 4개 질의: R60(4 B → 'Q0+aa.a+bb.b+cc.c+dd.d\\r\\n' 약 26 B)·R5(→ 'P+x.xx' 약 9 B)·R6(밸브 위치 → 'V+ppp.p' 9 B) + 돌아가며 1개"
+         "(R69 'L0 bbbb'·R1~R4 'S{n}+x.xx'·R7 'M{n}…' 약 9 B). 9600 bps 에서 전송 약 16+52 B ≈ 70 ms + 장비 응답 시간 4회 + 명령 간격 MFC_GAP_MS(기본 50 ms, 응답 뒤) × 4 = 200 ms "
+         "→ 응답 시간 합이 0.6 s 까지 1 s 에 들어간다(9개일 때는 0.4 s). 돌아가는 6개 값은 (6 + 1) s 까지 마지막 실제 값을 쓰고 읽은 뒤 나이(…_age_s)를 1초 기록에 남긴다. "
+         "all 모드 = 9질의 매 tick: 전송 약 140 ms + 응답 시간 9회 + 간격 450 ms ≈ 0.6 s + 응답 시간 — 응답 시간 합이 0.4 s 를 넘으면 1 s 에 못 들어간다(Unverified, bench 로 확인). "
+         "근거: GPC3000 매뉴얼 p.72(9600 8N1·CR 끝·최소 명령 간격 규정 없음 — 사용자 결정 2026-11-02 D36)·p.73(R6 Valve Position Value). 제어가 0.4 s 안에 읽은 질의는 다시 보내지 않고, "
+         "제어 명령이 곧 나갈 때는 양보. 마감은 MFC_TIMEOUT + 대기 0.5 s",
 )
 
 

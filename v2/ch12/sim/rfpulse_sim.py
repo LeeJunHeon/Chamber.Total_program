@@ -43,7 +43,9 @@ class RfPulseSim(SimDevice):
         self.csr_once: Dict[int, Union[int, List[int]]] = {}
         self.readback_offset = 0
         self.setpoint_readback_offset = 0          # 164 되읽기를 틀리게(시험용)
-        self.mode_query = 0                        # 조절 모드 보고 번호(0 = 없음 — 시험이 154 등으로)
+        self.mode_query_value = None               # 154 가 보고할 값(None = 실제 reg_mode — 시험이 어긋난 값으로)
+        self.silent_cmds = set()                   # 응답하지 않을 명령 번호(시험용 — 통신 실패)
+        self.mode_query = 154                      # 조절 모드 보고 번호(154 = Table 4-16 — 0 이면 응답 없음 시험)
         self.t = self.chamber.t
         self.received = sim_log()
 
@@ -78,6 +80,8 @@ class RfPulseSim(SimDevice):
         if xor(data) != 0:
             return [(now + PROCESS_S + (len(data) + 1) * BIT_S, bytes([NAK]))]
         cmd, n = data[1], data[0] & 0x07
+        if cmd in self.silent_cmds:
+            return []
         payload = data[3:3 + data[2]] if n == 7 else data[2:2 + n]
         frame = bytes([ACK]) + build(self.addr, cmd, self._handle(cmd, payload))
         if self._active("garbage", now):
@@ -104,7 +108,7 @@ class RfPulseSim(SimDevice):
         if cmd == 177:                                          # 펄싱 모드 보고(가정)
             return bytes([self.pulsing])
         if cmd == self.mode_query and self.mode_query:          # 조절 모드 보고(번호 미확인 — 시험이 정함)
-            return bytes([self.reg_mode])
+            return bytes([self.reg_mode if self.mode_query_value is None else self.mode_query_value])
         if cmd == 162:
             return self.status()
         if cmd == 165:

@@ -396,13 +396,14 @@ def test_params_and_budget():
     assert CFG["CH1_MFC_TCP_PORT"] == 4003 and CFG["CH2_MFC_TCP_PORT"] == 4006
     assert (CFG["CH2_MFC_SCALE_FACTORS_2"], CFG["CH2_MFC_SCALE_FACTORS_3"]) == (10.0, 2.0)
     assert M.endpoint(CFG, "ch2") == ("192.168.1.50", 4006)
-    assert M.BUDGET["queries_per_tick"] == 9 and M.BUDGET["min_gap_ms"] == CFG["MFC_GAP_MS"] and M.BUDGET["fits_1s"]
+    assert M.BUDGET["queries_per_tick"] == 4 and M.BUDGET["min_gap_ms"] == CFG["MFC_GAP_MS"] and M.BUDGET["fits_1s"]
     assert M.source_deadline_ms(CFG) == 2600
 
 
 def test_valve_position_onoff_sp_values_and_active_sp_are_read_every_tick_as_actual_values():
-    """2026-11-09 E1 — GPC3000 R6(밸브 위치 %, 매뉴얼 p.73)·R69(ON/OFF 비트)·R1~R4(SP 값)·R7(선택 SP)을 매 tick 읽어 기억값 대신 실제값으로."""
-    r = Rig("ch1")
+    """2026-11-09 E1 — GPC3000 R6(밸브 위치 %, 매뉴얼 p.73)·R69(ON/OFF 비트)·R1~R4(SP 값)·R7(선택 SP)을 매 tick 읽어 기억값 대신 실제값으로.
+    (2026-11-13 D407 — 이 동작은 MFC_READ_MODE=all. 기본 split 은 아래 시험)"""
+    r = Rig("ch1", cfg={"MFC_READ_MODE": "all"})
     r.sim.valve_mode, r.sim.valve = "hold", 0.372                         # 장비 쪽 밸브가 37.2 % 에 있음(기억값이 아니라 장비 값)
     r.sim.sp[1] = 4.5 * 0.1                                              # SP2(UI 4.5 mTorr → 장비 0.45)
     r.call(r.d.set_flow, 1, 5.0)
@@ -425,3 +426,81 @@ def test_parse_valve_and_active_sp():
     assert M.parse_valve_pct("V+037.2") == 37.2 and M.parse_valve_pct("V-0.1") == -0.1 and M.parse_valve_pct("V+100.0") == 100.0
     assert M.parse_valve_pct("37.2") == 37.2 and M.parse_valve_pct("garbage") is None and M.parse_valve_pct(None) is None
     assert M.parse_active_sp("M3000") == 3 and M.parse_active_sp("M0") == 0 and M.parse_active_sp("X3") is None
+
+
+# ───────── 2026-11-13 D407 — MFC 나눠 읽기(split) ─────────
+def _split_rig(readback=False, **cfg):
+    r = Rig("ch1", cfg=cfg or None, readback=readback)
+    r.sim.valve_mode, r.sim.valve = "hold", 0.372
+    r.sim.sp[1] = 4.5 * 0.1
+    return r
+
+
+def test_split_default_reads_three_every_tick_and_rotates_the_other_six_one_per_tick():
+    assert CFG["MFC_READ_MODE"] == "split" and CFG["MFC_TICK_EVERY"] == "R60,R5,R6"
+    assert CFG["MFC_TICK_ROTATE"] == "R69,R1,R2,R3,R4,R7"
+    r = _split_rig()
+    t0 = r.c.monotonic()
+    rows = r.run(14)
+    seq = r.sent(t0)
+    for cmd in ("R60", "R5", "R6"):
+        assert seq.count(cmd) >= 13, (cmd, seq)
+    rot = [c for c in seq if c in ("R69", "R1", "R2", "R3", "R4", "R7")]
+    assert rot[:12] == ["R69", "R1", "R2", "R3", "R4", "R7"] * 2 or rot[:6] == ["R69", "R1", "R2", "R3", "R4", "R7"], rot    # 차례대로 1개씩
+    assert all(len(rot) >= 12 for _ in [0]) and max(rot.count(c) for c in set(rot)) - min(rot.count(c) for c in set(rot)) <= 1
+    last = rows[-1]
+    assert last["ch1.mfc.q"] == "ok" and last["ch1.mfc.valve_pct"] == pytest.approx(37.2, abs=0.2)
+    # 돌아가며 읽는 값도 유효 시간((6 + 1) s) 안이라 매 tick 값이 있다 + 나이 칸
+    assert last["ch1.mfc.sp2_mtorr"] == pytest.approx(4.5, abs=0.01) and "ch1.mfc.sp_active" in last
+    ages = [last[f"ch1.mfc.{k}"] for k in ("on_age_s", "sp1_age_s", "sp2_age_s", "sp3_age_s", "sp4_age_s", "sp_active_age_s")]
+    assert all(0.0 <= a <= 6.0 for a in ages) and len(set(ages)) > 1            # 읽은 시점이 서로 다름(돌아가기)
+    r.done()
+
+
+def test_rotated_value_expires_after_rotate_count_plus_one_seconds_and_is_never_filled_with_remembered_value():
+    r = _split_rig()
+    r.run(10)
+    r.d.cfg["MFC_TICK_ROTATE"] = "R69"                                            # R1 읽기를 멈춤(설정으로 — 재시작 없이)
+    assert r.d.valid_s("R69") == 2.0 and r.d.valid_s("R60") == 1.0
+    rows = r.run(6)
+    last = rows[-1]
+    assert last["ch1.mfc.sp1_mtorr"] is None and last["ch1.mfc.sp1_mtorr.q"] == "stale"   # 유효 시간 안에 못 읽어 빈 값 — 기억값 없음
+    assert last["ch1.mfc.sp1_age_s"] > 2.0 and last["ch1.mfc.valve_pct"] == pytest.approx(37.2, abs=0.2)
+    r.done()
+
+
+def test_all_mode_reads_nine_every_tick():
+    r = _split_rig(MFC_READ_MODE="all")
+    every, rot = M.tick_plan(r.cfg)
+    assert len(every) == 9 and rot == ()
+    t0 = r.c.monotonic()
+    r.run(8)
+    seq = r.sent(t0)
+    assert all(seq.count(c) >= 7 for c in ("R60", "R5", "R6", "R69", "R1", "R2", "R3", "R4", "R7"))
+    r.done()
+
+
+def test_write_readback_reads_the_register_immediately_regardless_of_rotation():
+    r = _split_rig(readback=True)
+    r.run(3)
+    t0 = r.c.monotonic()
+    k, reason, _ = r.call(r.d.sp_set, 2, 4.5)
+    seq = r.sent(t0)
+    assert "R2" in seq                                                                # 되읽기 질의 R2 가 차례와 무관하게 바로 나감
+    r.done()
+
+
+def test_tick_lists_reject_out_of_allowlist_and_require_r60_r5():
+    from v2.common.paramdef import check_config, check_value
+    by = {x.key: x for x in P.PARAMS}
+    assert check_value(by["MFC_TICK_EVERY"], "R60,R5,R6,R99") is not None            # 허용 목록 밖(D11 — 고치지 않고 거부)
+    assert check_value(by["MFC_TICK_ROTATE"], "R69,Rx") is not None
+    assert check_value(by["MFC_TICK_ROTATE"], "") is None                              # 비우면 돌아가기 없음
+    assert check_value(by["MFC_READ_MODE"], "fast") is not None
+    bad = dict(CFG, MFC_TICK_EVERY="R60,R6")
+    assert any("R60" in str(e) for e in check_config(P.PARAMS, P.CROSS_RULES, bad) or [])
+    dup = dict(CFG, MFC_TICK_EVERY="R60,R5,R6,R7", MFC_TICK_ROTATE="R69,R7")
+    assert check_config(P.PARAMS, P.CROSS_RULES, dup)
+    assert M.parse_tick_list("R60, R5,R5,Rx,R7") == ("R60", "R5", "R7")
+    every, rot = M.tick_plan(dict(MFC_TICK_EVERY="R6", MFC_TICK_ROTATE="R69,R6"))     # 방어: R60·R5 는 늘 매 tick, 중복은 매 tick 쪽
+    assert every == ("R60", "R5", "R6") and rot == ("R69",)

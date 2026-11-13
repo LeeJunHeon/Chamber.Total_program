@@ -484,8 +484,7 @@ def test_ch2_heater_process(tmp_path):
         assert any("공정이 히터를 끕니다 — 공정 종료" in x for x in logs)
         st = rig.hub.state_data(rig.rows[-1])
         assert st["heater"] and st["heater"]["run"] is False
-        bad = [r["ch2.heater.q"] for r in list(rig.rows)[-50:] if r["ch2.heater.q"] != "ok"]
-        assert len(bad) <= 3, bad                                                                  # 11-09 E1: MFC 9질의가 tick 을 채워 드물게 한 행 late·stale 가능(D405 — bench 에서 예산 확인)
+        assert all(r["ch2.heater.q"] == "ok" for r in list(rig.rows)[-50:])                          # 11-13 D407: MFC 나눠 읽기(4질의/tick)로 원래 단언 복구
         assert rig.internal_errors == 0
     finally:
         finish(rig)

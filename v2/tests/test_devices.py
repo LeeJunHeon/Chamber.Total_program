@@ -72,11 +72,13 @@ def test_alternate_for_devices_not_fitting_1s():
         if not t.budget["fits_1s"]:
             assert D.ALTERNATE.get(t.device), t.device
     # 사용자 결정 2026-11-02 D36·D50 — MFC·IG·RF Pulse·DC Pulse 는 모두 매 tick 전부 읽어 번갈아 읽기·1초 밖 목록에 없다
-    assert not ({"mfc", "ig", "rfpulse", "dcpulse"} & set(D.ALTERNATE))
+    # 2026-11-13 D407: MFC 는 기본 split — 매 tick 3개(R60·R5·R6) + 6개는 tick 마다 1개씩 돌아가며(번갈아 읽는 장비 목록에 든다)
+    assert not ({"ig", "rfpulse", "dcpulse"} & set(D.ALTERNATE)) and "mfc" in D.ALTERNATE
     by = {t.device: t for t in D.TICK_PLAN}
-    assert all(by[d].budget["fits_1s"] and not by[d].budget.get("alternate") for d in ("mfc", "ig", "rfpulse", "dcpulse"))
+    assert all(by[d].budget["fits_1s"] and not by[d].budget.get("alternate") for d in ("ig", "rfpulse", "dcpulse"))
+    assert by["mfc"].budget["fits_1s"] and "split" in by["mfc"].budget["alternate"]
     assert (by["mfc"].budget["queries_per_tick"], by["rfpulse"].budget["queries_per_tick"],
-            by["dcpulse"].budget["queries_per_tick"]) == (9, 3, 5)
+            by["dcpulse"].budget["queries_per_tick"]) == (4, 3, 5)
     assert all(len(r) == 7 for r in D.budget_table())
 
 

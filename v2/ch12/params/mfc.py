@@ -7,15 +7,36 @@ v2 는 공통 키 하나로 둔다(채널마다 다르게 쓰던 키는 ch1/ch2 
 """
 from __future__ import annotations
 
-from v2.ch12.params._base import Dropped, F, I, B, IDLE, L, LIVE, M, RESTART, S, inst, p
+from v2.ch12.params._base import Dropped, E, F, I, B, IDLE, L, LIVE, M, RESTART, S, inst, need, p, rule
 
 _S = "config/settings.json"
 _C = "lib/config_common.py"
 _W = "(⚠ common json 값은 효과 없음 — 채널 모듈의 .py 기본값이 쓰임, 지금은 같은 값)"
 
 
-def _m(key, label, unit, type_, default, lo=None, hi=None, *, src, desc="", apply=IDLE, safety=M, note=""):
-    return p(key, "mfc", label, unit, type_, default, lo, hi, src=src, desc=desc, apply=apply, safety=safety, note=note)
+_T = r"R(?:60|5|6|69|1|2|3|4|7)"
+_TICKS = rf"{_T}(?:,{_T})*"
+_TICKS_OPT = rf"(?:{_T}(?:,{_T})*)?"
+
+
+def _tick_rule(v):
+    ev = [t for t in str(v["MFC_TICK_EVERY"]).split(",") if t]
+    ro = [t for t in str(v["MFC_TICK_ROTATE"]).split(",") if t]
+    if "R60" not in ev or "R5" not in ev:
+        return need(False, "MFC_TICK_EVERY 에 R60·R5 가 꼭 있어야 한다(v1 폴링 판정이 씀)")
+    if len(set(ev)) != len(ev) or len(set(ro)) != len(ro):
+        return need(False, "같은 질의가 한 목록에 두 번 있다")
+    return need(not (set(ev) & set(ro)), "같은 질의가 MFC_TICK_EVERY 와 MFC_TICK_ROTATE 양쪽에 있다")
+
+
+CROSS_RULES: tuple = (
+    rule("MFC01", ("MFC_TICK_EVERY", "MFC_TICK_ROTATE"), "매 tick 목록에 R60·R5 포함, 두 목록에 중복 없음", _tick_rule),
+)
+
+
+def _m(key, label, unit, type_, default, lo=None, hi=None, *, src, desc="", apply=IDLE, safety=M, note="", enum=None, pattern=None):
+    return p(key, "mfc", label, unit, type_, default, lo, hi, src=src, desc=desc, apply=apply, safety=safety, note=note,
+             enum=enum, pattern=pattern)
 
 
 PARAMS: tuple = (
@@ -39,6 +60,15 @@ PARAMS: tuple = (
        desc="응답을 받은 뒤(응답 없는 명령은 보낸 뒤) 다음 명령까지. SPn_SET·SPn_ON 확정 대기에도 쓴다. "
             "사용자 결정 2026-11-02(D36): v1 의 1000 ms 는 RS-232 안정화용이었고 GPC3000 매뉴얼(p.72: 9600 8N1·CR 끝)에 최소 간격 규정이 없어 "
             "R60·R5 를 매 tick 읽을 수 있는 50 ms 로 — 현장 bench 에서 응답 시간·오류율로 확인", note=_W),
+    _m("MFC_READ_MODE", "MFC 1초 읽기 방식", "", E, "split",
+       src="v2(사용자 결정 2026-11-13 D407 — D405 개정)", apply=IDLE,
+       desc="split(기본) = MFC_TICK_EVERY 는 매 tick, MFC_TICK_ROTATE 는 tick 마다 1개씩 차례로. all = 9개(R60·R5·R6·R69·R1~R4·R7)를 매 tick 전부(2026-11-09 E1 — 1초 예산 위험, bench 로 확인)",
+       enum=("split", "all")),
+    _m("MFC_TICK_EVERY", "MFC 매 tick 읽는 질의", "", S, "R60,R5,R6", src="v2(사용자 결정 2026-11-13 D407)", apply=IDLE, pattern=_TICKS,
+       desc="split 일 때 매 tick 읽는 질의(쉼표). 허용: R60(유량)·R5(압력)·R6(밸브 위치)·R69(ON/OFF)·R1~R4(SP 값)·R7(선택 SP). R60·R5 는 꼭 넣는다(v1 폴링 판정이 씀)"),
+    _m("MFC_TICK_ROTATE", "MFC 돌아가며 읽는 질의", "", S, "R69,R1,R2,R3,R4,R7", src="v2(사용자 결정 2026-11-13 D407)", apply=IDLE, pattern=_TICKS_OPT,
+       desc="split 일 때 tick 마다 1개씩 차례로 읽는 질의(쉼표, 비우면 없음). 마지막 읽은 실제 값은 (개수 + 1) 초까지 유효 — 넘으면 빈 값(기억값으로 채우지 않음). "
+            "값마다 읽은 뒤 나이(…_age_s)가 1초 기록에 남는다. 쓰기 직후 되읽기는 차례와 무관하게 즉시"),
     _m("MFC_READBACK_ENABLED", "MFC 쓰기 되읽기 확인", "", B, True, src="v2(사용자 결정 2026-11-02 D36)",
        desc="값을 바꾸는 명령(FLOW_SET·FLOW_ON/OFF·밸브·SPn_SET·SPn_ON) 뒤 되읽기 질의로 확인(꺼면 v1 과 같게 확인 없이 확정). "
             "R64~R69·R1~R4·R6·R7 응답 형식이 현장에서 다르면 bench 에서 끄고 보고"),

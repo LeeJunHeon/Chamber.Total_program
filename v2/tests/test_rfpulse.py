@@ -304,15 +304,33 @@ def test_run_setpoint_change_is_verified_too_and_readback_can_be_turned_off():
     r.done()
 
 
-def test_mode_readback_only_when_query_number_is_configured_155_is_not_regulation_mode():
-    r = Rig(control=6, cfg={"RFPULSE_Q_MODE": 154})
-    r.sim.mode_query = 154
+def test_mode_readback_154_by_default_and_off_with_zero_155_is_not_regulation_mode():
+    r = Rig(control=6)                                                              # 기본 154(Table 4-16 조절 모드 보고)
     reason, ok = r.call(r.d.start_pulse_process, 100.0, 1000, 50)
     assert ok is True
-    assert 154 in [bytes.fromhex(f)[1] for f in r.sent()]
-    r2 = Rig(control=6)                                                             # 기본 0 — 읽지 않음(155 는 제어 모드)
-    r2.call(r2.d.start_pulse_process, 100.0, 1000, 50)
-    cmds = [bytes.fromhex(f)[1] for f in r2.sent()]
-    assert 154 not in cmds and cmds.count(155) == 1                                  # 155 는 시작 때 HOST 확인 한 번뿐
+    cmds = [bytes.fromhex(f)[1] for f in r.sent()]
+    assert 154 in cmds and cmds.count(155) == 1 and cmds.index(3) < cmds.index(154)   # 모드 쓰기(3) 뒤 154, 155 는 시작 때 HOST 확인 한 번뿐
     r.done()
+    r2 = Rig(control=6, cfg={"RFPULSE_Q_MODE": 0})                                  # 0 = 끔
+    r2.call(r2.d.start_pulse_process, 100.0, 1000, 50)
+    assert 154 not in [bytes.fromhex(f)[1] for f in r2.sent()]
     r2.done()
+
+
+def test_mode_readback_mismatch_retries_then_verify_mismatch():
+    r = Rig(control=6)
+    r.sim.mode_query_value = 8                                                      # 장비가 External 로 보고(쓴 6 FWD 와 다름)
+    reason, ok = r.call(r.d.start_pulse_process, 100.0, 1000, 50)
+    assert ok is False
+    cmds = [bytes.fromhex(f)[1] for f in r.sent()]
+    assert cmds.count(154) == 4 and cmds.count(3) == 4                              # 처음 + 다시 쓰기 3회(RFPULSE_REWRITE_MAX)
+    assert any(getattr(e, "reason", "") == "VERIFY_MISMATCH" for e in r.events if e.kind == "command_failed")
+    r.done()
+
+
+def test_mode_readback_comm_failure_skips_verification():
+    r = Rig(control=6)
+    r.sim.silent_cmds.add(154)                                                      # 154 에 응답 없음 → 통신 실패로 검증 생략
+    reason, ok = r.call(r.d.start_pulse_process, 100.0, 1000, 50)
+    assert ok is True
+    r.done()
