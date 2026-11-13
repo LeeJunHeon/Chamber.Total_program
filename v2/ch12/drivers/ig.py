@@ -30,6 +30,7 @@ from typing import Any, Callable, Dict, List, Optional
 
 from v2.common.snapshot import DeviceBlock, FieldDef, FType
 from v2.common.transport import ReadTimeout, TcpSettings, TransportError
+from v2.common import timing_stats as TS
 from v2.common.worker import Worker
 from v2.ch12.drivers.line_ops import LineReader, OpRunner, Query, Send
 from v2.ch12.drivers import ig_ops
@@ -158,7 +159,7 @@ class IgDriver:
 
     def io_query(self, session, item: Query, retries_left: Optional[int] = None) -> Any:
         sent = item.cmd
-        self._write(session, sent, item.tag)
+        t_send = self._write(session, sent, item.tag)
         tick = item.tag == TICK_TAG
         if not tick:
             self.emit("io", f"[SEND] {sent} (tag={item.tag})")
@@ -171,10 +172,12 @@ class IgDriver:
                     continue
                 break
         except ReadTimeout:
+            TS.rec(self.block, sent, self.clock.monotonic() - t_send, timeout=True)       # 응답 시간 기록(D409)
             self.status(f"[TIMEOUT] {item.tag} {sent} / 재시도 소진")
             self.reader.clear()
             self.ready_at = self.clock.monotonic() + gap
             return None
+        TS.rec(self.block, sent, self.clock.monotonic() - t_send)
         self.ready_at = self.clock.monotonic() + gap
         if sent == "RDI":
             self.latest = (self.clock.monotonic(), line)

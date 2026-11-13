@@ -25,7 +25,8 @@ from typing import Any, Callable, Dict, Optional, Tuple
 
 from v2.common.modbus_rtu import (READ_COILS, READ_REGS, WRITE_FUNCS, FrameError, ModbusException,
                                   ReadOnlyViolation)
-from v2.common.modbus_tcp import MBAP_LEN, ModbusTcpClient, parse_pdu
+from v2.common.modbus_tcp import FUNC_NAMES, MBAP_LEN, ModbusTcpClient, parse_pdu
+from v2.common import timing_stats as TS
 from v2.common.transport import Cancelled, ReadTimeout, Transport, TransportError
 
 
@@ -263,11 +264,17 @@ class _Client(ModbusTcpClient):
         dl = min(self.s.deadline, clock.monotonic() + self.txn_timeout_s)
         tid = self.next_tid()
         req = struct.pack(">HHHB", tid, 0, len(pdu) + 1, self.unit) + pdu
+        t_send = clock.monotonic()
         self.s.write(req)
         if self.on_frame:
             self.on_frame("tx", req)
+        name = FUNC_NAMES.get(function, f"fc{function}")
         while True:
-            head = self.s.read_until(size=MBAP_LEN, deadline=dl)
+            try:
+                head = self.s.read_until(size=MBAP_LEN, deadline=dl)
+            except ReadTimeout:
+                TS.rec(self.timing_name, name, clock.monotonic() - t_send, timeout=True)   # 응답 시간 기록(D409)
+                raise
             rtid, proto, ln, unit = struct.unpack(">HHHB", head)
             if proto != 0 or not 2 <= ln <= 254:
                 raise FrameError(f"MBAP 머리 이상: {head.hex(' ')}")
@@ -278,6 +285,7 @@ class _Client(ModbusTcpClient):
                 break                     # 다르면 늦게 온 앞 응답 — 버리고 다시(pymodbus 도 tid 로 거른다)
         if unit != self.unit:
             raise FrameError(f"유닛 {unit} ≠ {self.unit}")
+        TS.rec(self.timing_name, name, clock.monotonic() - t_send)
         self.transactions += 1
         if function in (READ_COILS, READ_REGS):
             return parse_read(body, function, count, pad)

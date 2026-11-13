@@ -25,6 +25,7 @@ from v2.ch12.drivers.dcpulse_ops import DcpOpsMixin
 from v2.ch12.drivers.pulse_port import IO, OpRunner, WaitLink, chan_get, endpoint, norm_endpoint, wait_then
 from v2.common.snapshot import DeviceBlock, FieldDef, FType
 from v2.common.transport import ReadTimeout
+from v2.common import timing_stats as TS
 
 KIND = "dcpulse"
 JUDGE_SLACK_S = 0.05            # 판정 주기 비교 여유(tick 지터)
@@ -211,6 +212,9 @@ class DcPulseDriver(DcpMonitorMixin, DcpOpsMixin):
                 self._emit("status", self.parser.notes.popleft())
         return self._tokens.popleft()
 
+    def _timing_name(self) -> str:
+        return f"{self.chamber}.dcpulse"
+
     def _xfer(self, s, payload: bytes, label: str, is_read: bool) -> bytes:
         """v1 _cmd_worker_loop 한 명령: 간격 → (연결 직후 조용히) → 보냄 → '자기 응답'만 인정.
         쓰기 = 1 B ACK/ERR, 읽기 = 같은 CMD 프레임 또는 ERR. 시간 초과는 ReadTimeout(→ worker 가 세션 재시작)."""
@@ -232,13 +236,20 @@ class DcPulseDriver(DcpMonitorMixin, DcpOpsMixin):
         s.write(payload)
         dl = now + self._timeout_s() + 2.0 + self._extra_s()
         exp = payload[1]
+        name = label.split("[", 1)[0].strip() or f"0x{exp:02X}"
         while True:
-            tok = self._token(s, dl)
+            try:
+                tok = self._token(s, dl)
+            except ReadTimeout:
+                TS.rec(self._timing_name(), name, self.clock.monotonic() - now, timeout=True)     # 응답 시간 기록(D409)
+                raise
             if not is_read:
                 if len(tok) == 1 and tok[0] in (P.ACK, P.ERR):
+                    TS.rec(self._timing_name(), name, self.clock.monotonic() - now)
                     return tok
                 continue
             if (len(tok) == 1 and tok[0] == P.ERR) or tok[0] == exp:
+                TS.rec(self._timing_name(), name, self.clock.monotonic() - now)
                 return tok
 
     def _q(self, s, code: int) -> Optional[bytes]:

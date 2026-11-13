@@ -38,6 +38,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from v2.common.snapshot import DeviceBlock, FieldDef, FType
 from v2.common.transport import ReadTimeout, TcpSettings
 from v2.common.worker import Worker
+from v2.common import timing_stats as TS
 from v2.ch12.drivers.line_ops import RETRY, LineReader, OpRunner, Query, Send, echo_queue
 from v2.ch12.drivers import mfc_ops
 
@@ -292,12 +293,13 @@ class MfcDriver:
 
     def io_query(self, session, item: Query, retries_left: Optional[int] = None) -> Any:
         sent = item.cmd
-        self._write(session, sent)
+        t_send = self._write(session, sent)
         if item.tag:                                                    # v1 '[SEND] R60 ([STAB R60 ch1])'(device/mfc.py:1359)
             self.emit("io", f"[SEND] {sent} ({item.tag})")
         try:
             line = self._read_reply(session, sent, item.prefixes, item.timeout_s)
         except ReadTimeout:
+            TS.rec(self.block, sent, self.clock.monotonic() - t_send, timeout=True)       # 응답 시간 기록(D409)
             left = item.retries if retries_left is None else retries_left
             if (left > 0 and self.connected_at is not None
                     and self.clock.monotonic() - self.connected_at < CONNECT_RETRY_WINDOW_S):
@@ -311,6 +313,7 @@ class MfcDriver:
             self.status(f"[TIMEOUT] {item.tag} {sent}".replace("  ", " "))
             self.reader.clear()
             raise                                                       # worker: 1회 → 연결 끊고 재연결(D182)
+        TS.rec(self.block, sent, self.clock.monotonic() - t_send)
         self.ready_at = self.clock.monotonic() + self.ms("MFC_GAP_MS", 50)
         if sent in TICK_CMDS:
             self.latest[sent] = (self.clock.monotonic(), line)

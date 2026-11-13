@@ -26,6 +26,7 @@ from v2.ch12.drivers.rfpulse_verify import Q_PULSING, Q_SETPOINT, RfpVerifyMixin
 from v2.common import aebus
 from v2.common.snapshot import DeviceBlock, FieldDef, FType
 from v2.common.transport import ReadTimeout
+from v2.common import timing_stats as TS
 
 KIND = "rfpulse"
 RF_OFF, RF_ON, SET_MODE, SET_SETPOINT, SET_ACTIVE_CTRL, SET_PULSING, SET_FREQ, SET_DUTY = 1, 2, 3, 8, 14, 27, 93, 96
@@ -167,6 +168,9 @@ class RfPulseDriver(RfpStopPollMixin, RfpVerifyMixin):
     def _failed(self, cmd: str, why: str) -> None:
         self._emit("command_failed", why, reason="RFP_OFF_UNCONFIRMED" if cmd == "RF_OFF" else "RFP_COMMAND_FAILED", cmd=cmd)
 
+    def _timing_name(self) -> str:
+        return f"{self.chamber}.rfpulse"
+
     # ───────── 한 번 주고받기(worker 스레드) ─────────
     def _transact(self, s, cmd: int, data: bytes, timeout_s: float, until: float, tag: str, is_exec: bool) -> bytes:
         """보내고 같은 주소·명령 프레임의 data 를 돌려준다. NAK → RfpNak, 시간 초과 → ReadTimeout."""
@@ -189,6 +193,13 @@ class RfPulseDriver(RfpStopPollMixin, RfpVerifyMixin):
         self._last_send = now
         s.write(pkt)
         dl = min(now + timeout_s, until)
+        try:
+            return self._read_reply(s, cmd, dl, raw, now)
+        except ReadTimeout:
+            TS.rec(self._timing_name(), cmd_label(cmd), self.clock.monotonic() - now, timeout=True)   # 응답 시간 기록(D409)
+            raise
+
+    def _read_reply(self, s, cmd: int, dl: float, raw: bool, t_send: float) -> bytes:
         while True:
             b = s.read_until(size=1, deadline=dl)
             if b[0] == aebus.ACK:
@@ -211,6 +222,7 @@ class RfPulseDriver(RfpStopPollMixin, RfpVerifyMixin):
                 self._emit("status", f"[RFP][RAW][RX] FRAME addr={a_addr} cmd={cmd_label(a_cmd)} len={len(payload)} "
                                      f"raw={' '.join(f'{x:02X}' for x in frame)}")
             if a_addr == self.addr and a_cmd == cmd:
+                TS.rec(self._timing_name(), cmd_label(cmd), self.clock.monotonic() - t_send)
                 return payload
 
     def _raw_on(self, tag: str) -> bool:

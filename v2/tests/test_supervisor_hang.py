@@ -186,3 +186,34 @@ def test_beacon_dumps_thread_stacks_when_progress_stops(tmp_path):
         assert "Thread" in txt and "most recent call first" in txt
     finally:
         b.stop()
+
+
+@pytest.mark.skipif(sys.platform == "win32", reason="POSIX 신호로 끝냄 — 윈도우는 콘솔 이벤트(윈도우 확인 필요)")
+def test_real_app_writes_heartbeat_under_supervision_env(tmp_path):
+    """실제 제어 프로그램(sim)이 CH12_HEARTBEAT_FILE 이 있으면 건강 확인 파일을 쓰고, tick·cmd 번호가 움직인다."""
+    import os
+    import signal
+    from v2.tests import test_app as TA
+    cfg = TA.config(tmp_path)
+    hb, dump = tmp_path / "sup" / "heartbeat.json", tmp_path / "sup" / "hang_dump.log"
+    env = dict(os.environ, CH12_HEARTBEAT_FILE=str(hb), CH12_HANG_DUMP_FILE=str(dump))
+    pr = TA.Proc(cfg, env=env)
+    try:
+        assert pr.running.wait(60.0), pr.text
+        deadline = time.time() + 20
+        seen = []
+        while time.time() < deadline and len(seen) < 3:
+            try:
+                d = json.loads(hb.read_text(encoding="utf-8"))
+            except (OSError, ValueError):
+                d = None
+            if d and d.get("ready") and (not seen or (d["tick"], d["cmd"]) != (seen[-1]["tick"], seen[-1]["cmd"])):
+                seen.append(d)
+            time.sleep(0.5)
+        assert len(seen) >= 3, (seen, pr.text[-500:])
+        assert seen[-1]["tick"] > seen[0]["tick"] and seen[-1]["cmd"] > seen[0]["cmd"] and seen[-1]["pid"] == pr.p.pid
+        assert seen[0]["enabled"] is True and seen[0]["timeout"] == 60.0 and seen[0]["interval"] == 10.0
+        assert dump.exists()                                                         # 덤프 파일을 열어 둠(내용은 멈출 때만)
+    finally:
+        pr.p.send_signal(signal.SIGTERM)
+        pr.wait(30.0)

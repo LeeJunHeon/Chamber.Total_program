@@ -29,6 +29,7 @@ from v2.common.paramdef import ConfigRangeError
 from v2.common.snapshot import DeviceBlock, FieldDef, FType
 from v2.common.snapshot_bus import Source
 from v2.common.transport import Cancelled, ReadTimeout, TcpSettings, TcpTransport, TransportError
+from v2.common import timing_stats as TS
 from v2.common.worker import Request, Result, Status, Worker
 from v2.ch12.drivers.cache_source import CacheWorker
 from v2.ch12.drivers.stm100_proto import (
@@ -438,14 +439,17 @@ class Stm100Driver:
                 self._wait(session, RETRY_GAP_S)
             try:
                 session.transport.reset_input()        # 늦게 온 앞 응답을 이 명령의 응답으로 읽지 않게
+                t_send = session.clock.monotonic()
                 session.write(frame)
             except TransportError as e:
                 raise StmLinkLost(f"송신 실패 {cmd!r}: {e!r}") from e
             try:
                 payload = self._read_frame(session, tmo)
             except (StmTimeout, StmChecksumError) as e:
+                TS.rec(self.block, cmd, session.clock.monotonic() - t_send, timeout=isinstance(e, StmTimeout))   # 응답 시간 기록(D409)
                 last = e
                 continue
+            TS.rec(self.block, cmd, session.clock.monotonic() - t_send)
             code = payload[:1]
             if code not in CODE_MEANING:
                 last = StmFrameError(f"모르는 응답 코드 {payload!r} (명령 {cmd!r})")

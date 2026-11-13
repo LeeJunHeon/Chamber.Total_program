@@ -22,6 +22,8 @@ from v2.ch12.outputs.heater_csv import HeaterCsv
 from v2.ch12.params import outputs as P
 from v2.ch12.turbo_watch import TurboOffWatch, card_text
 from v2.ch12.outputs.mfc_state_csv import MfcStateCsv
+from v2.ch12.outputs.device_timing_csv import DeviceTimingCsv
+from v2.common import timing_stats
 from v2.ch12.outputs.plc_coil_csv import REG_KEYS, PlcCoilCsv, v1_coil_keys
 from v2.ch12.outputs.selfwatch import SelfWatchLog
 from v2.ch12.outputs.thickness_csv import ThicknessCsv
@@ -68,6 +70,7 @@ class RowFeed:
         self.plc_coil = PlcCoilCsv(cfg, writer=self.writer, log=lambda m: self._log("plc_coil_csv", m),
                                    monotonic=clock.monotonic)
         self.mfc_state = MfcStateCsv(cfg, writer=self.writer, log=lambda m: self._log("mfc_state_csv", m), monotonic=clock.monotonic)
+        self.timing = DeviceTimingCsv(cfg, writer=self.writer, log=lambda m: self._log("device_timing_csv", m))   # 장비 응답 시간 1분 집계(D409)
         self.selfwatch = SelfWatchLog(cfg, writer=self.writer, log=lambda m: self._log("selfwatch", m),
                                       on_event=on_selfwatch, now=now, monotonic=clock.monotonic, wall_time=clock.wall)
         self.stm = dict(thickness or {})                                         # ch → Stm100Driver(켜진 것만)
@@ -82,6 +85,7 @@ class RowFeed:
 
     def start(self) -> None:
         self.selfwatch.start()
+        timing_stats.install(self.timing.stats)             # 드라이버가 낸 응답 시간을 모은다(꺼져 있으면 on_tick 이 비운다)
 
     def on_row(self, row: Mapping[str, Any]) -> None:
         self.rows += 1
@@ -89,6 +93,7 @@ class RowFeed:
         mono = self.clock.monotonic()
         for name, fn in (("plc_coil", lambda: self.plc_coil.on_tick(ts, mono=mono, **plc_coil_args(row, self.plc_connected()))),
                          ("mfc_state", lambda: self.mfc_state.on_tick(ts, row, mono)),
+                         ("device_timing", lambda: self.timing.on_tick(ts, row, mono)),
                          ("selfwatch", lambda: self.selfwatch.on_tick(_selfwatch_state(row))),
                          ("turbo_watch", lambda: self._turbo(row, mono)),
                          ("thickness", lambda: self._thickness(ts)),
@@ -133,6 +138,7 @@ class RowFeed:
     def stop(self, timeout_s: float = 5.0) -> None:
         self.plc_coil.writer.put(self.plc_coil.appender.close)
         self.mfc_state.stop()
+        timing_stats.uninstall(self.timing.stats)
         for t in self.thickness.values():
             self.writer.put(t.file.close)
         if self.heater.is_open():

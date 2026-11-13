@@ -38,6 +38,7 @@ from typing import Any, Callable, Dict, List, Optional, Tuple
 from v2.common.snapshot import DeviceBlock, FieldDef, FType
 from v2.common.snapshot_bus import Source
 from v2.common.transport import Cancelled, ReadTimeout, TcpSettings, TcpTransport, Transport, TransportError
+from v2.common import timing_stats as TS
 from v2.common.worker import SEQ_DONE, Request, Result, Sequence, Status, Worker
 
 # ── 프로토콜 상수(v1 device/tsp.py:25-48) ──
@@ -464,16 +465,23 @@ class TspDriver:
         crc = session.read_until(size=2, deadline=session.clock.monotonic() + self._io_s())
         return bytes(buf) + crc
 
-    def _exchange(self, session, frame: bytes) -> Tuple[str, Optional[str]]:
+    def _exchange(self, session, frame: bytes, label: str = "") -> Tuple[str, Optional[str]]:
         tr = session.transport
         if isinstance(tr, OnDemandTransport):
             tr.ensure_open()                                  # v1 ensure_open — 실패면 TransportError → TspLinkError
+        t_send = session.clock.monotonic()
         session.write(frame)
         self._wait(session, self._post_s())
-        return parse_response(self._recv_any(session))
+        try:
+            raw = self._recv_any(session)
+        except ReadTimeout:
+            TS.rec("tsp", label or "frame", session.clock.monotonic() - t_send, timeout=True)   # 응답 시간 기록(D409 — 보낸 뒤 대기 20 ms 포함)
+            raise
+        TS.rec("tsp", label or "frame", session.clock.monotonic() - t_send)
+        return parse_response(raw)
 
     def _read_win(self, session, win3: str) -> Optional[str]:
-        kind, data = self._exchange(session, build_frame(win3, False, None, addr=self._addr()))
+        kind, data = self._exchange(session, build_frame(win3, False, None, addr=self._addr()), f"R {win3}")
         if kind == "DATA":
             return data
         if kind == "NACK":
@@ -483,7 +491,7 @@ class TspDriver:
         return None                                           # ACK·RAW → 값 없음(v1 그대로)
 
     def _write_win_logic(self, session, win3: str, on: bool) -> None:
-        kind, data = self._exchange(session, build_frame(win3, True, "1" if on else "0", addr=self._addr()))
+        kind, data = self._exchange(session, build_frame(win3, True, "1" if on else "0", addr=self._addr()), f"W {win3}")
         if kind == "ACK":
             return
         if kind == "NACK":

@@ -17,6 +17,10 @@ from v2.common.modbus_rtu import (READ_COILS, READ_REGS, WRITE_COIL, WRITE_COILS
                                   FrameError, ModbusException, ReadOnlyViolation, req_read_coils, req_read_regs,
                                   req_write_coil, req_write_coils, req_write_reg, req_write_regs)
 from v2.common.transport import ReadTimeout
+from v2.common import timing_stats as TS
+
+FUNC_NAMES = {READ_COILS: "read_coils", READ_REGS: "read_regs", WRITE_COIL: "write_coil", WRITE_REG: "write_reg",
+              WRITE_COILS: "write_coils", WRITE_REGS: "write_regs"}
 
 MBAP_LEN = 7
 
@@ -82,7 +86,7 @@ class ModbusTcpClient:
     """Session(worker) 위에서 한 번 주고받기 — modbus_rtu.ModbusClient 와 같은 모양(드라이버가 둘을 바꿔 쓸 수 있게)."""
 
     def __init__(self, session, unit: int = 1, txn_timeout_s: float = 1.0, retries: int = 1,
-                 retry_delay_s: float = 0.05, read_only: bool = False, on_frame=None) -> None:
+                 retry_delay_s: float = 0.05, read_only: bool = False, on_frame=None, timing_name: str = "plc") -> None:
         self.s = session
         self.unit = unit
         self.txn_timeout_s = txn_timeout_s
@@ -90,6 +94,7 @@ class ModbusTcpClient:
         self.retry_delay_s = retry_delay_s
         self.read_only = read_only
         self.on_frame = on_frame
+        self.timing_name = timing_name                      # 응답 시간 기록의 장비 이름(D409)
         self.transactions = 0
         self._tid = 0
 
@@ -102,11 +107,17 @@ class ModbusTcpClient:
         dl = min(self.s.deadline, clock.monotonic() + self.txn_timeout_s)
         tid = self.next_tid()
         req = mbap(tid, self.unit, pdu)
+        t_send = clock.monotonic()
         self.s.write(req)
         if self.on_frame:
             self.on_frame("tx", req)
+        name = FUNC_NAMES.get(function, f"fc{function}")
         while True:
-            head = self.s.read_until(size=MBAP_LEN, deadline=dl)
+            try:
+                head = self.s.read_until(size=MBAP_LEN, deadline=dl)
+            except ReadTimeout:
+                TS.rec(self.timing_name, name, clock.monotonic() - t_send, timeout=True)   # 응답 시간 기록(D409)
+                raise
             rtid, proto, ln, unit = struct.unpack(">HHHB", head)
             if proto != 0 or not 2 <= ln <= 254:
                 raise FrameError(f"MBAP 머리 이상: {head.hex(' ')}")
@@ -118,6 +129,7 @@ class ModbusTcpClient:
             break
         if unit != self.unit:
             raise FrameError(f"유닛 {unit} ≠ {self.unit}")
+        TS.rec(self.timing_name, name, clock.monotonic() - t_send)
         self.transactions += 1
         out = parse_pdu(body, function, count)
         if function in WRITE_FUNCS and out != struct.unpack(">HH", pdu[1:5]):

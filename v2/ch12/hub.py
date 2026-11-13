@@ -425,6 +425,9 @@ class MessageHub:
                 "step": step, "remainS": g("remain_s"), "etaRemainingS": g("eta_remaining_s"), "minTotalS": g("min_total_s"),
                 "paused": g("paused"), "alarms": [a for a in str(al).split(",") if a] if al else []}
 
+    def _device_timing(self) -> Any:
+        return _timing_of(self.sys)
+
     def state_data(self, row: Dict[str, Any]) -> dict:
         s = self.sys
         chambers = {c: self.chamber_state(c, row) for c in CONTEXTS}
@@ -454,7 +457,13 @@ class MessageHub:
                                   if st is not None and (st.pending_idle or st.pending_restart) else None),
                 "snapshot": row, "left": {}, "stopping": getattr(safety, "stopping", None) or None,
                 "spectra": dict(self.spectra),
-                "uplink": up.status() if up is not None else {"enabled": False}}
+                "uplink": up.status() if up is not None else {"enabled": False},
+                "deviceTiming": self._device_timing()}
+
+
+def _timing_of(s) -> Any:
+    tm = getattr(getattr(s, "outputs", None), "timing", None)
+    return tm.web_summary() if tm is not None else None
 
 
 def config_version(s) -> int:
