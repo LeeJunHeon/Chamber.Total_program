@@ -24,7 +24,7 @@ from typing import Optional
 from v2.ch12.workers import oes_common as C
 from v2.ch12.workers.oes_common import (
     OES_AVG_COUNT, _WinMutex, _mutex_name, _copy_csv_to_nas, _default_out_dir, _errlog, _errlog_exc, _find_ar_index,
-    _make_default_filename, _mutex_timeout_ms, _post_anomaly_webhook, _report_anomaly, _print_json, _status, _stop_dir, _env_float,
+    _make_default_filename, _mutex_timeout_ms, _post_anomaly_webhook, _report_anomaly, _print_json, _runlog, _status, _stop_dir, _env_float,
 )
 from v2.ch12.workers.oes_device import OESAsync
 from v2.ch12.workers.oes_guard import _LinkGuard, _ResetCallTimeout, _acquire_first_frame, _daemon_reset_device
@@ -115,12 +115,60 @@ async def _daemon_measure_once(
     with contextlib.suppress(Exception):
         await oes._call(oes._apply_device_settings_blocking, int(oes.sChannel), int(integration_ms))
 
+    _runlog(f"[daemon] measure start ch={ch} usb={usb} integration_ms={integration_ms} "
+            f"duration_s={duration_s} avg_count={avg_count}")
+
     # ✅ (5) CSV open + header + 첫 프레임
     _print_json({"kind": "status", "message": f"[daemon] open csv: {out_csv_final}"})
     f = open(str(out_csv_final), "w", newline="", encoding="utf-8")
     w = csv.writer(f)
 
-    x, y = await _acquire_first_frame(oes, guard=guard)
+    t_ff = time.time()
+    try:
+        x, y = await _acquire_first_frame(oes, guard=guard)
+    except TimeoutError as e:
+        # ✅ DLL 호출이 executor 스레드(max_workers=1)에 갇힘 → reset/cleanup 은 그 뒤에 줄을 설 뿐이다.
+        #    측정 루프의 read timeout 과 같은 방식으로 끝낸다(finished 출력 → daemon 하드 종료, 메인이 재기동/폴백) — v1 main 8603d5b
+        is_reset = isinstance(e, _ResetCallTimeout)
+        msg = str(e) if is_reset else f"OES {e} (daemon ch={ch} usb={usb})"
+        _errlog(msg)
+        _runlog(f"[daemon] first frame 실패(timeout) elapsed={time.time() - t_ff:.2f}s → exit 125")
+        with contextlib.suppress(Exception):
+            f.close()
+        f = None
+        with contextlib.suppress(Exception):
+            if out_csv_final.stat().st_size == 0:
+                out_csv_final.unlink()
+        payload = {
+            "kind": "finished",
+            "ok": False,
+            "stopped": True,
+            "stop_reason": "reset_timeout" if is_reset else "first_frame_timeout",
+            "ch": int(ch),
+            "usb": int(usb),
+            "out_csv": str(out_csv_final),
+            "nas_ok": False,
+            "nas_csv": None,
+            "nas_error": "first frame timeout (no data)",
+            "local_deleted": False,
+            "rows": int(rows),
+            "elapsed_s": float(time.time() - t0),
+        }
+        payload.update(guard.payload())
+        payload["error"] = msg
+        _print_json(payload)
+        for p in (stop_flag_usb_local, stop_flag_csv, stop_flag_usb_global):
+            with contextlib.suppress(Exception):
+                p.unlink()
+        os._exit(125)
+    except BaseException:
+        # 타임아웃이 아닌 실패는 지금처럼 호출부(cmd_daemon)로 올리되, 열린 CSV 핸들은 닫는다
+        with contextlib.suppress(Exception):
+            f.close()
+        f = None
+        raise
+    _runlog(f"[daemon] first frame ok elapsed={time.time() - t_ff:.2f}s")
+    last_ok_read = time.time()
     x_list = x.tolist() if hasattr(x, "tolist") else list(x)
     y_list = y.tolist() if hasattr(y, "tolist") else list(y)
 
@@ -184,17 +232,24 @@ async def _daemon_measure_once(
             continue
 
         read_timeout_s = _env_float("OES_READ_TIMEOUT_S", 2.0)
+        t_read = time.time()
         try:
             x2, y2 = await asyncio.wait_for(oes._call(oes._acquire_one_slice_avg), timeout=read_timeout_s)
         except asyncio.TimeoutError:
             msg = f"OES read timeout after {read_timeout_s}s (daemon ch={ch} usb={usb})"
             _errlog(msg)
+            _runlog(f"[daemon] read timeout rows={rows} since_last_ok={time.time() - last_ok_read:.1f}s")
             hard_abort = True
             hard_abort_error = msg
             hard_abort_exit_code = 125
             stopped = True
             stop_reason = "read_timeout"
             break
+        dt_read = time.time() - t_read
+        if dt_read >= 1.0:
+            _runlog(f"[daemon] slow read {dt_read:.2f}s rows={rows}")
+        if x2 is not None and y2 is not None:
+            last_ok_read = time.time()
 
         # ✅ 읽은 직후 목록 재확인(바뀌었으면 버림) + 연속 실패 복구(리셋/재초기화)
         try:
@@ -256,6 +311,7 @@ async def _daemon_measure_once(
                 pass
 
     elapsed = time.time() - t0
+    _runlog(f"[daemon] measure end rows={rows} elapsed={elapsed:.1f}s stop_reason={stop_reason}")
 
     # ✅ 파일 flush/close
     with contextlib.suppress(Exception):
@@ -380,6 +436,16 @@ async def cmd_daemon(ch: int, usb: int, dll_path: Optional[str], out_dir: Option
         # ✅ 측정 동시 실행 방지
         measure_lock = asyncio.Lock()
 
+        def _exit_if_reset_timeout() -> None:
+            # reset 의 cleanup/init 타임아웃 = DLL 스레드가 갇힘 → 이후 모든 호출이 같은 자리에서 막힌다.
+            # 결과 JSON 을 낸 뒤 호출되며, 뮤텍스를 놓고 하드 종료한다(메인이 재기동/폴백) — v1 main 8603d5b
+            if not getattr(oes, "_reset_timeout", False):
+                return
+            _errlog(f"[daemon] reset timeout → daemon exit 125 (ch={ch} usb={usb})")
+            with contextlib.suppress(Exception):
+                mtx.release()
+            os._exit(125)
+
         STATE["state"] = "idle"
         while True:
             C.set_command_id(None)
@@ -405,6 +471,7 @@ async def cmd_daemon(ch: int, usb: int, dll_path: Optional[str], out_dir: Option
                 _status("[daemon] reset requested")
                 ok_reset = await _daemon_reset_device(oes, ch=int(ch), usb=int(usb))
                 _print_json({"kind": "reset", "ok": bool(ok_reset), "ch": int(ch), "usb": int(usb)})
+                _exit_if_reset_timeout()
                 continue
 
             if cmd == "measure":
@@ -445,12 +512,14 @@ async def cmd_daemon(ch: int, usb: int, dll_path: Optional[str], out_dir: Option
                             with contextlib.suppress(Exception):
                                 ok_reset = await _daemon_reset_device(oes, ch=int(ch), usb=int(usb))
                                 _status(f"[daemon] auto-reset after measure rc={rc} ok={ok_reset}")
+                            _exit_if_reset_timeout()
                     except Exception as e:
                         _errlog_exc(f"[daemon] measure exception: {type(e).__name__}: {e}")
                         _print_json({"kind": "finished", "ok": False, "ch": int(ch), "usb": int(usb), "error": f"{type(e).__name__}: {e}", "trace": traceback.format_exc()})
                         with contextlib.suppress(Exception):
                             ok_reset = await _daemon_reset_device(oes, ch=int(ch), usb=int(usb))
                             _status(f"[daemon] auto-reset after exception ok={ok_reset}")
+                        _exit_if_reset_timeout()
                     finally:
                         STATE["state"] = "idle"
                 continue

@@ -118,7 +118,7 @@ ITEMS = [
          desc="RF Pulse SET_SETPOINT(8)·SET_PULSING(27) 쓰기 뒤 되읽기(164·177) → 다시 쓰기 → VERIFY_MISMATCH(시작 시퀀스·공정 중 셋포인트 변경), SET_MODE(3)는 번호 설정 RFPULSE_Q_MODE(155 는 제어 모드라 불가 — 기본 읽지 않음)",
          v1="device/rf_pulse.py", v2="v2/ch12/drivers/rfpulse_verify.py; v2/ch12/drivers/rfpulse.py; v2/ch12/params/rfpulse.py",
          test="v2/tests/test_rfpulse.py::test_setpoint_and_pulsing_are_read_back_after_write_164_177; v2/tests/test_rfpulse.py::test_setpoint_readback_mismatch_rewrites_then_verify_mismatch_and_no_rf_on; "
-              "v2/tests/test_rfpulse.py::test_run_setpoint_change_is_verified_too_and_readback_can_be_turned_off; v2/tests/test_rfpulse.py::test_mode_readback_only_when_query_number_is_configured_155_is_not_regulation_mode", status="done", note=""),
+              "v2/tests/test_rfpulse.py::test_run_setpoint_change_is_verified_too_and_readback_can_be_turned_off; v2/tests/test_rfpulse.py::test_mode_readback_154_by_default_and_off_with_zero_155_is_not_regulation_mode", status="done", note=""),
     dict(id="SYNC-402", area="sync",
          desc="DC Pulse REF_LEVEL(0x83)·REGULATION(0x81)·PLC 스위치 코일의 되읽기 없음(READBACK_NONE)과 그 근거를 장비 사실 표에 분명히",
          v1="device/dc_pulse.py; device/plc.py", v2="v2/ch12/spec/devices.py", test="v2/tests/test_devices.py::test_readback_table_matches_params_and_lists_commands_without_readback", status="done", note=""),
@@ -136,4 +136,44 @@ ITEMS = [
     dict(id="SYNC-032", area="sync",
          desc="히터 CSV '프로그램 종료' 행(f02f20a): 종료 순간 PLC 를 못 읽고 있었으면 값 열 빈칸, 읽고 있었으면 owner·경과·유지/클램프 포함",
          v1="controller/heater_service.py", v2="v2/ch12/heater_commands.py", test="v2/tests/test_heater_engine.py::test_csv_daily_idle_3s_run_1s_blank_rows_when_disconnected_and_edges", status="done", note=""),
+    dict(id="SYNC-500", area="sync",
+         desc="MFC 나눠 읽기(D407): MFC_READ_MODE split/all·MFC_TICK_EVERY·MFC_TICK_ROTATE(허용 목록·R60/R5 필수), 돌아가며 읽는 값 유효 (개수+1) s·읽은 뒤 나이 칸·기억값 없음, 쓰기 되읽기는 즉시",
+         v1="(v2 신설 — v1 은 R60·R5 만 폴링)", v2="v2/ch12/drivers/mfc.py; v2/ch12/params/mfc.py",
+         test="v2/tests/test_mfc.py::test_split_default_reads_three_every_tick_and_rotates_the_other_six_one_per_tick; "
+              "v2/tests/test_mfc.py::test_rotated_value_expires_after_rotate_count_plus_one_seconds_and_is_never_filled_with_remembered_value; "
+              "v2/tests/test_mfc.py::test_write_readback_reads_the_register_immediately_regardless_of_rotation; v2/tests/test_mfc.py::test_tick_lists_reject_out_of_allowlist_and_require_r60_r5; "
+              "v2/tests/test_mfc.py::test_all_mode_reads_nine_every_tick", status="done", note=""),
+    dict(id="SYNC-501", area="sync",
+         desc="RF Pulse 조절 모드 되읽기 RFPULSE_Q_MODE 기본 154(CESAR 1310 Table 4-16): SET_MODE(3) → 154 되읽기 → 다시 쓰기 → VERIFY_MISMATCH, 통신 실패는 검증 생략, 0 이면 끔",
+         v1="device/rf_pulse.py(v1 은 되읽기 없음)", v2="v2/ch12/drivers/rfpulse.py; v2/ch12/drivers/rfpulse_verify.py; v2/ch12/params/rfpulse.py",
+         test="v2/tests/test_rfpulse.py::test_mode_readback_154_by_default_and_off_with_zero_155_is_not_regulation_mode; v2/tests/test_rfpulse.py::test_mode_readback_mismatch_retries_then_verify_mismatch; "
+              "v2/tests/test_rfpulse.py::test_mode_readback_comm_failure_skips_verification", status="done", note=""),
+    dict(id="SYNC-502", area="sync",
+         desc="멈춤 감지 재시작(D408): 건강 확인 파일(tick·cmd·준비·설정)·faulthandler 스레드 덤프·감시 프로그램 강제 종료·재시작 한도 포함·시작 준비 시간·끄기",
+         v1="apps/recovery_service(메인이 쓰지 않아 동작 안 함)", v2="v2/supervisor/supervisor.py; v2/ch12/health_beacon.py; v2/ch12/app.py",
+         test="v2/tests/test_supervisor_hang.py::test_hung_child_is_dumped_killed_and_restarted; v2/tests/test_supervisor_hang.py::test_healthy_child_is_not_restarted; "
+              "v2/tests/test_supervisor_hang.py::test_command_core_stall_alone_is_a_hang_even_when_ticks_move; v2/tests/test_supervisor_hang.py::test_hang_check_off_by_option_and_by_setting_in_the_file; "
+              "v2/tests/test_supervisor_hang.py::test_real_app_writes_heartbeat_under_supervision_env", status="done", note=""),
+    dict(id="SYNC-503", area="sync",
+         desc="장비 응답 시간 1분 집계 CSV(D409): 모든 직렬 장비·PLC 의 명령별 응답 시간, 개수·최소·평균·최대·p95·시간 초과, data/device_timing(sim_out), 통신 경로 무영향, 웹 상태 deviceTiming",
+         v1="(v2 신설)", v2="v2/common/timing_stats.py; v2/ch12/outputs/device_timing_csv.py; v2/ch12/outputs/row_feed.py; v2/ch12/hub.py",
+         test="v2/tests/test_device_timing.py::test_summarize_count_min_avg_max_p95_and_timeouts; v2/tests/test_device_timing.py::test_csv_every_interval_header_once_and_retention; "
+              "v2/tests/test_device_timing.py::test_full_rig_records_every_device_into_sim_data_dir; v2/tests/test_device_timing.py::test_mfc_driver_records_latency_and_timeout", status="done", note=""),
+    dict(id="SYNC-504", area="sync",
+         desc="간격·읽기 설정이 재시작 없이(공정 중이 아니면 바로) 적용(MFC_GAP_MS 0·20·50 비교)과 MFC·IG 1초 읽기 상수 설정화(D410)",
+         v1="(v2 신설)", v2="v2/ch12/drivers/mfc.py; v2/ch12/drivers/ig.py; v2/ch12/params/mfc.py; v2/ch12/params/ig.py",
+         test="v2/tests/test_mfc.py::test_mfc_gap_ms_0_20_50_changes_real_spacing_and_applies_live; v2/tests/test_config_apply.py::test_device_gap_and_mfc_read_settings_apply_without_restart_when_idle", status="done", note=""),
+    dict(id="SYNC-505", area="sync",
+         desc="통신 속도 사실 표 BAUD(D411): 장비별 범위·매뉴얼 근거·바꾸는 곳, 공유 포트 메모", v1="(문서)", v2="v2/ch12/spec/devices.py",
+         test="v2/tests/test_devices.py::test_baud_facts_cover_every_serial_device_with_basis", status="done", note=""),
+    dict(id="SYNC-510", area="sync",
+         desc="DC Power 저전류 감시 기준(main 2fc00c4): 설정 파워 ≤ DC_LOW_CURRENT_LOWP_MAX_W(50 W)이면 DC_LOW_CURRENT_LOWP_THRESH_A(0.01 A), 판정마다 적용, 런 시작 기준 1줄, DC_OVERCURRENT_I1_A 1.5",
+         v1="device/dc_power.py; lib/power_limits.py; lib/config_common.py:215-216; config/settings.json", v2="v2/ch12/drivers/dc.py; v2/ch12/params/dc.py",
+         test="v2/tests/test_dc.py::test_low_current_threshold_pure_function_cases; v2/tests/test_dc.py::test_low_power_target_does_not_trip_at_0_023a_but_60w_target_trips_at_0_040a; "
+              "v2/tests/test_dc.py::test_low_current_lowp_can_be_turned_off_and_uses_live_cfg; v2/tests/test_dc.py::test_overcurrent_limit_and_dac", status="done", note=""),
+    dict(id="SYNC-511", area="sync",
+         desc="OES 워커(main 8603d5b): 읽기 버퍼 후보 최댓값 이상, 첫 프레임·reset 타임아웃 → finished(ok=False) 후 os._exit(125), 설정 rc·측정 진단 기록",
+         v1="apps/oes_service/oes_api.py", v2="v2/ch12/workers/oes_device.py; v2/ch12/workers/oes_guard.py; v2/ch12/workers/oes_measure.py; v2/ch12/workers/oes_daemon.py",
+         test="v2/tests/test_oes_link.py::test_read_buffer_is_always_at_least_the_largest_candidate_but_returns_first_npix; "
+              "v2/tests/test_oes_worker_hang_exit.py::test_measure_first_frame_timeout_prints_finished_and_exits_125_without_waiting_for_cleanup", status="done", note=""),
 ]

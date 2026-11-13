@@ -284,7 +284,10 @@ class OESAsync:
 
     def _read_pixels(self, ch: int, npix: int) -> Tuple[int, Optional[np.ndarray]]:
         assert self.sp_dll is not None
-        buf = (ctypes.c_int32 * npix)()
+        # ✅ 버퍼는 항상 검출기 전체 픽셀 수 이상(제조사 매뉴얼) — 재시도 경로가 작은 후보(1024·512)를 넘겨도
+        #    DLL 이 버퍼 밖에 쓰지 않게 후보 최댓값 이상으로 잡고, 반환은 지금처럼 앞에서 npix 칸만 자른다(v1 main 8603d5b)
+        nbuf = max(int(npix), max(CANDIDATE_PIXELS))
+        buf = (ctypes.c_int32 * nbuf)()
         r = self.sp_dll.spReadDataEx(buf, ctypes.c_int16(ch))  # type: ignore
         if r < 0:
             return int(r), None
@@ -357,15 +360,25 @@ class OESAsync:
         #     with contextlib.suppress(Exception):
         #         self._auto_dark(ctypes.c_int16(ch))
 
+        # 진단 기록: 각 설정 호출의 반환값(rc)·예외를 run 로그에 남긴다(호출·예외 무시 동작은 그대로 — v1 main 8603d5b)
         if self._set_trg:
-            with contextlib.suppress(Exception):
-                self._set_trg(ctypes.c_int16(11), ctypes.c_int16(ch))
+            try:
+                rc = self._set_trg(ctypes.c_int16(11), ctypes.c_int16(ch))
+                _runlog(f"[settings] spSetTrgEx rc={rc} ch={ch} mode=11")
+            except Exception as e:
+                _runlog(f"[settings] spSetTrgEx 예외: {type(e).__name__}: {e} ch={ch}")
         if self._set_tec:
-            with contextlib.suppress(Exception):
-                self._set_tec(ctypes.c_int32(1), ctypes.c_int16(ch))
+            try:
+                rc = self._set_tec(ctypes.c_int32(1), ctypes.c_int16(ch))
+                _runlog(f"[settings] spSetTEC rc={rc} ch={ch} on=1")
+            except Exception as e:
+                _runlog(f"[settings] spSetTEC 예외: {type(e).__name__}: {e} ch={ch}")
         if self._set_dbl_int:
-            with contextlib.suppress(Exception):
-                self._set_dbl_int(ctypes.c_double(float(integration_ms)), ctypes.c_int16(ch))
+            try:
+                rc = self._set_dbl_int(ctypes.c_double(float(integration_ms)), ctypes.c_int16(ch))
+                _runlog(f"[settings] spSetDblIntEx rc={rc} ch={ch} integration_ms={integration_ms}")
+            except Exception as e:
+                _runlog(f"[settings] spSetDblIntEx 예외: {type(e).__name__}: {e} ch={ch}")
 
     async def initialize_device(self) -> bool:
         info = {

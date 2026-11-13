@@ -31,6 +31,37 @@ BUDGET = dict(queries_per_tick=0, bytes_tx=0, bytes_rx=0, min_gap_ms=150, fits_1
               note="읽기는 PLC 1초 묶음(D0..D11)에 포함. 쓰기만 PLC worker 로(측정 5 s 마다 최대 1회)")
 
 
+def dc_low_current_lowp_cfg(cfg: Dict[str, Any]):
+    """저파워 구간 저전류 기준 설정 (max_w, thresh_a). 기능 끔(max_w <= 0)·비정상 값이면 None. 예외를 내지 않는다
+    (v1 lib/power_limits.py dc_low_current_lowp_cfg — main 2fc00c4, 매 호출 때 설정을 읽는다)."""
+    try:
+        max_w = float(cfg.get("DC_LOW_CURRENT_LOWP_MAX_W", 50.0))
+        thr_a = float(cfg.get("DC_LOW_CURRENT_LOWP_THRESH_A", 0.01))
+    except Exception:
+        return None
+    if not math.isfinite(max_w) or max_w <= 0.0:
+        return None
+    if not math.isfinite(thr_a) or thr_a < 0.0:
+        return None
+    return max_w, thr_a
+
+
+def dc_low_current_thresh_a(cfg: Dict[str, Any], p_set_w, base_a: float) -> float:
+    """DC Power 저전류 감시 기준(A) — 설정 파워가 낮으면 정상 전류 자체가 작으므로 기준을 낮춘다(v1 main 2fc00c4).
+        0 < p_set_w <= DC_LOW_CURRENT_LOWP_MAX_W  → DC_LOW_CURRENT_LOWP_THRESH_A
+        그 외(파워 초과, None/0/음수/NaN, 설정값 비정상, 기능 끔) → base_a 그대로. 순수 함수 — 예외를 내지 않는다."""
+    try:
+        lowp = dc_low_current_lowp_cfg(cfg)
+        if lowp is None or p_set_w is None:
+            return base_a
+        p = float(p_set_w)
+        if not math.isfinite(p) or p <= 0.0:
+            return base_a
+        return lowp[1] if p <= lowp[0] else base_a
+    except Exception:
+        return base_a
+
+
 def dc_overcurrent_limit_a(cfg: Dict[str, Any], p_set_w) -> float:
     """세트포인트 W 에 대한 전류 상한(lib/power_limits.py:20-55) — 순수 함수, 비정상 인자는 I1."""
     try:
@@ -200,6 +231,22 @@ class DcPower:
         return float(held)
 
     def _arm_status(self) -> None:
+        self._arm_oc_status()
+        self._low_current_status()                       # 이번 런에 적용되는 저전류 감시 기준 1줄(v1 main 2fc00c4)
+
+    def _low_current_status(self) -> None:
+        try:
+            thr = dc_low_current_thresh_a(self.cfg, self.target_power, float(self._c("DC_LOW_CURRENT_THRESH_A")))
+            tp = float(self.target_power or 0.0)
+            lowp = dc_low_current_lowp_cfg(self.cfg)
+            if lowp is not None and 0.0 < tp <= lowp[0]:
+                self._status(f"저전류 감시 기준: {thr:.3f} A (설정 {tp:.1f} W ≤ {lowp[0]:.1f} W 저파워 구간)")
+            else:
+                self._status(f"저전류 감시 기준: {thr:.3f} A")
+        except Exception:
+            pass                                          # 로그 실패가 공정을 막지 않는다
+
+    def _arm_oc_status(self) -> None:
         if not bool(self._c("DC_OVERCURRENT_ENABLE_CONT")):
             self._status("[overcurrent] ⚠ 인터락 OFF (settings.json common.DC_OVERCURRENT_ENABLE_CONT=false) — 과전류로 정지하지 않음")
             return
@@ -303,7 +350,8 @@ class DcPower:
     def _check_low_current(self) -> bool:
         if not self.sent_target_reached:
             return False
-        ia, th = float(self.current_a or 0.0), float(self._c("DC_LOW_CURRENT_THRESH_A"))
+        ia = float(self.current_a or 0.0)
+        th = dc_low_current_thresh_a(self.cfg, self.target_power, float(self._c("DC_LOW_CURRENT_THRESH_A")))   # 매 판정마다 설정 파워 기준
         n = max(1, int(self._c("DC_LOW_CURRENT_STREAK_N")))
         if ia > th:
             self.low_current_streak = 0

@@ -149,7 +149,7 @@ def test_dll_call_order_and_args_are_v1(rigs):
     assert compact == [
         ("spTestAllChannels", [0]), ("spDevInfo", ["<buf 512>", "<buf 512>", 0]), ("spSetupGivenChannel", [0]),
         ("spInitGivenChannel", [2, 0]), ("spInitGivenChannel", [3, 0]), ("spInitGivenChannel", [0, 0]),
-        ("spReadDataEx", ["<buf 2080>", 0]), ("spGetWLTable", ["<buf 2080>", 0]),
+        ("spReadDataEx", ["<buf 4096>", 0]), ("spGetWLTable", ["<buf 2080>", 0]),     # 읽기 버퍼는 항상 후보 최댓값(4096) 이상(v1 main 8603d5b)
     ]
     assert [(c["fn"], c["args"]) for c in calls[first:first + 3]] == [
         ("spSetTrgEx", [11, 0]), ("spSetTEC", [1, 0]), ("spSetDblIntEx", [70.0, 0])]
@@ -329,3 +329,23 @@ def test_one_second_row_status_only():
     assert rows[-1]["ch2.oes.q"] == "ok" and rows[-1]["ch2.oes.running"] is False
     assert rows[-1]["ch2.oes.measuring"] is False and rows[-1]["ch2.oes.sample_age_s"] is None
     assert ol.BUDGET["fits_1s"] and ol.BUDGET["queries_per_tick"] == 0
+
+
+def test_read_buffer_is_always_at_least_the_largest_candidate_but_returns_first_npix(monkeypatch):
+    """v1 main 8603d5b — 재시도 경로가 작은 후보(1024·512)를 넘겨도 DLL 이 버퍼 밖에 쓰지 않게 버퍼는 후보 최댓값 이상, 반환은 앞 npix 칸."""
+    import ctypes
+    from v2.ch12.workers import oes_device as OD
+    seen = []
+
+    class Dll:
+        def spReadDataEx(self, buf, ch):
+            seen.append(len(buf))
+            for i in range(len(buf)):
+                buf[i] = i
+            return 0
+    o = OD.OESAsync.__new__(OD.OESAsync)
+    o.sp_dll = Dll()
+    rc, arr = o._read_pixels(0, 512)
+    assert seen == [max(OD.CANDIDATE_PIXELS)] and rc == 0 and len(arr) == 512 and arr[-1] == 511.0
+    rc, arr = o._read_pixels(0, 2080)
+    assert seen[-1] == max(OD.CANDIDATE_PIXELS) and len(arr) == 2080

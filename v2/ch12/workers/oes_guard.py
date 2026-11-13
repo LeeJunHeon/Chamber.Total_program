@@ -220,7 +220,9 @@ async def _acquire_first_frame(oes: OESAsync, retries: int = 20, delay_s: float 
             if x is not None and y is not None:
                 return x, y
         except asyncio.TimeoutError as e:
-            # ✅ 이건 DLL 스레드 hang 가능성이 높으니 즉시 상위로 올려서 워커가 '자가 종료' 루트로 가게 함
+            # ✅ 이건 DLL 스레드 hang 가능성이 높으니 즉시 상위로 올린다.
+            #    호출부(cmd_measure / _daemon_measure_once)가 이 TimeoutError 를 직접 잡아
+            #    DLL cleanup 을 기다리지 않고 finished(ok=False) 출력 후 os._exit(125) 로 끝낸다.
             raise TimeoutError(f"first frame timeout after {call_timeout_s}s") from e
         except Exception as e:
             last_err = e
@@ -236,15 +238,21 @@ async def _acquire_first_frame(oes: OESAsync, retries: int = 20, delay_s: float 
 
 
 async def _daemon_reset_device(oes: OESAsync, *, ch: int, usb: int) -> bool:
-    """cleanup + initialize_device 재시도. (daemon 내부 복구용)"""
+    """cleanup + initialize_device 재시도. (daemon 내부 복구용)
+
+    cleanup/initialize_device 가 타임아웃이면 oes._reset_timeout=True 를 남기고 False 를 돌려준다
+    (DLL 스레드가 갇혔다는 뜻 → cmd_daemon 이 이 표시를 보고 하드 종료). 그 밖의 실패는 표시 없이 False. (v1 main 8603d5b)
+    """
     cleanup_timeout_s = _env_float("OES_CLEANUP_TIMEOUT_S", 5.0)
     init_timeout_s = _env_float("OES_INIT_TIMEOUT_S", 25.0)
+    oes._reset_timeout = False  # type: ignore[attr-defined]
 
     # cleanup
     try:
         await asyncio.wait_for(oes.cleanup(), timeout=cleanup_timeout_s)
     except asyncio.TimeoutError:
         _errlog(f"[daemon] reset cleanup timeout after {cleanup_timeout_s}s (ch={ch} usb={usb})")
+        oes._reset_timeout = True  # type: ignore[attr-defined]
         return False
     except Exception:
         pass
@@ -255,6 +263,7 @@ async def _daemon_reset_device(oes: OESAsync, *, ch: int, usb: int) -> bool:
         return bool(ok)
     except asyncio.TimeoutError:
         _errlog(f"[daemon] reset init timeout after {init_timeout_s}s (ch={ch} usb={usb})")
+        oes._reset_timeout = True  # type: ignore[attr-defined]
         return False
     except Exception as e:
         _errlog_exc(f"[daemon] reset init exception: {type(e).__name__}: {e} (ch={ch} usb={usb})")

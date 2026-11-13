@@ -131,7 +131,8 @@ OWNERS: dict = {
     "dc": (
         "common.DC_MAX_POWER", "common.DC_INTERVAL_MS", "common.DC_RAMP_STEP", "common.DC_MAINTAIN_STEP",
         "common.DC_TOLERANCE_POWER", "common.DC_LOW_W_THRESH", "common.DC_LOW_STREAK_N",
-        "common.DC_LOW_CURRENT_THRESH_A", "common.DC_LOW_CURRENT_STREAK_N", "common.DC_OVERCURRENT_ENABLE_CONT",
+        "common.DC_LOW_CURRENT_THRESH_A", "common.DC_LOW_CURRENT_STREAK_N", "common.DC_LOW_CURRENT_LOWP_MAX_W",
+        "common.DC_LOW_CURRENT_LOWP_THRESH_A", "common.DC_OVERCURRENT_ENABLE_CONT",
         "common.DC_OVERCURRENT_P1_W", "common.DC_OVERCURRENT_I1_A", "common.DC_OVERCURRENT_P2_W",
         "common.DC_OVERCURRENT_I2_A", "common.DC_OVERCURRENT_STREAK_N", "common.DC_OVERCURRENT_EXTRAPOLATE",
         "common.DC_WATT_DEADBAND", "common.DC_PARAM_WATT_TO_DAC", "common.DC_OFFSET_WATT_TO_DAC",

@@ -133,9 +133,51 @@ def test_dc2_channel_registers():
 def test_overcurrent_limit_and_dac():
     cfg = PlcRig.__init__.__globals__["BASE_CFG"]
     lim = lambda p: DC.dc_overcurrent_limit_a(cfg, p)
-    assert lim(None) == 1.0 and lim(300) == 1.0 and lim(450) == pytest.approx(1.5) and lim(600) == pytest.approx(2.0)
-    assert lim(900) == pytest.approx(3.0)
-    assert lim(-5) == 1.0
+    # 2026-11-13 v1 main 2fc00c4 — 장비 노트북 값 DC_OVERCURRENT_I1_A 1.0 → 1.5(P1 300 W 이하 한계)
+    assert lim(None) == 1.5 and lim(300) == 1.5 and lim(450) == pytest.approx(1.75) and lim(600) == pytest.approx(2.0)
+    assert lim(900) == pytest.approx(2.5)
+    assert lim(-5) == 1.5
     g = {tuple(c["args"]): c["value"] for c in GOLDEN["plc"]["cases"] if c["name"] == "power_write"}
     for (w, _idx), code in g.items():
         assert dac_code(cfg, w) == code
+
+
+# ───────── 2026-11-13 v1 main 2fc00c4 — 저전류 감시 기준(설정 파워가 낮으면 낮은 기준) ─────────
+def test_low_current_threshold_pure_function_cases():
+    base = dict(DC_LOW_CURRENT_LOWP_MAX_W=50.0, DC_LOW_CURRENT_LOWP_THRESH_A=0.01)
+    th = lambda cfg, p: DC.dc_low_current_thresh_a(cfg, p, 0.05)
+    assert th(base, 35.0) == 0.01 and th(base, 50.0) == 0.01 and th(base, 50.01) == 0.05          # 경계: 50 W 이하만 저파워 구간
+    for bad in (None, 0.0, -3.0, float("nan"), float("inf")):
+        assert th(base, bad) == 0.05                                                                # 파워 없음·비정상은 기존 기준
+    assert th(dict(base, DC_LOW_CURRENT_LOWP_MAX_W=0.0), 35.0) == 0.05                              # 0 이하 = 끔
+    assert th(dict(base, DC_LOW_CURRENT_LOWP_THRESH_A=-1.0), 35.0) == 0.05                          # 기준값 비정상 — 기존 기준
+    assert th(dict(base, DC_LOW_CURRENT_LOWP_MAX_W="x"), 35.0) == 0.05 and th({}, 35.0) == 0.01     # 값 없으면 기본(50 W·0.01 A)
+    assert DC.dc_low_current_lowp_cfg(dict(base, DC_LOW_CURRENT_LOWP_MAX_W=0)) is None
+    assert DC.dc_low_current_lowp_cfg(base) == (50.0, 0.01)
+
+
+def _low_current_run(target, meas_i_raw, v_raw=3000, n=6, **cfg):
+    r = PlcRig(dc=True, cfg=dict({"CH2_SUPPORTS_HEATER": False}, **cfg))
+    run_script(r, r.dc1, target, [(v_raw, meas_i_raw)] * n, (0, 1))
+    return norm_v2(r.pevents)
+
+
+def test_low_power_target_does_not_trip_at_0_023a_but_60w_target_trips_at_0_040a():
+    """CH2 'Si_35W' 오탐 재현 — 35 W 설정·0.0234 A(≤ 기존 0.050 A)는 저파워 구간 기준 0.010 A 라 중단하지 않고,
+    60 W 설정(저파워 구간 밖)·0.0399 A 는 기존 기준 0.050 A 로 3회 연속 중단한다. 런 시작에 적용 기준 1줄."""
+    ev = _low_current_run(35.0, 24)
+    txt = [d for k, d in ev if k == "status"]
+    assert "저전류 감시 기준: 0.010 A (설정 35.0 W ≤ 50.0 W 저파워 구간)" in txt
+    assert not any("저전류 감시(목표 도달 후)" in t for t in txt) and not any(k == "target_failed" for k, _d in ev)
+    ev = _low_current_run(60.0, 41)
+    txt = [d for k, d in ev if k == "status"]
+    assert "저전류 감시 기준: 0.050 A" in txt
+    assert any("저전류 감시(목표 도달 후): 3/3 (meas=0.040A ≤ 0.050A)" in t for t in txt)
+    assert [d for k, d in ev if k == "target_failed"] == ["저전류 연속 3/3 (meas=0.040A ≤ 0.050A)"]
+
+
+def test_low_current_lowp_can_be_turned_off_and_uses_live_cfg():
+    ev = _low_current_run(35.0, 24, DC_LOW_CURRENT_LOWP_MAX_W=0.0)                   # 끔 — 35 W 도 기존 0.050 A 기준
+    assert [d for k, d in ev if k == "target_failed"] == ["저전류 연속 3/3 (meas=0.023A ≤ 0.050A)"]
+    ev = _low_current_run(35.0, 10, v_raw=7000)                                       # 34.3 W·0.0097 A ≤ 0.010 → 저파워 구간 기준으로도 중단
+    assert [d for k, d in ev if k == "target_failed"] == ["저전류 연속 3/3 (meas=0.010A ≤ 0.010A)"]

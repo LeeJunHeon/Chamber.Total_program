@@ -110,8 +110,8 @@ def test_schema_hash_and_secrets():
 
 
 # ───────────── v1 키 담당 표 ─────────────
-def test_ownership_covers_all_536_v1_keys():
-    assert len(facts.KEYS) == 536
+def test_ownership_covers_all_538_v1_keys():
+    assert len(facts.KEYS) == 538
     assert set(own.V1_KEY_OWNER) == set(FACT)
     assert set(own.V1_KEY_OWNER.values()) | set(own.V1_CODE_ONLY_OWNER.values()) <= set(own.EXPECTED_FRAGMENTS)
 

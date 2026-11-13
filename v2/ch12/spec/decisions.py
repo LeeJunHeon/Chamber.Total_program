@@ -616,3 +616,49 @@ DECISIONS += [
          reason="사용자 지시 2026-11-09 A('작업 중 main 에 커밋이 더 생기면 마지막에 다시 확인해 반영')", confirm=False,
          where="v2/ch12/outputs/mfc_state_csv.py; heater_commands.py; params/outputs.py"),
 ]
+
+
+DECISIONS += [
+    dict(id="D407", title="2026-11-13 MFC 나눠 읽기(split) — D405 개정, RF Pulse 조절 모드 되읽기 154",
+         decision="MFC 1초 읽기를 설정으로: MFC_READ_MODE split(기본)/all, MFC_TICK_EVERY(기본 R60,R5,R6 — 매 tick)·MFC_TICK_ROTATE(기본 R69,R1,R2,R3,R4,R7 — tick 마다 1개씩 차례로). "
+                  "허용 목록(R60·R5·R6·R69·R1~R4·R7) 밖은 거부(D11), R60·R5 는 EVERY 에 꼭 있어야 하고(v1 폴링 판정이 씀) 두 목록에 같은 질의 금지. "
+                  "돌아가며 읽는 값은 마지막으로 실제 읽은 값을 (ROTATE 개수 + 1) 초까지 쓰고 넘으면 빈 값(기억값으로 채우지 않음) — 1초 기록에 값마다 읽은 뒤 나이 칸(valve_age_s·on_age_s·sp1~4_age_s·sp_active_age_s)을 두어 "
+                  "'읽지 않은 값'과 구분. 쓰기 직후 되읽기는 차례와 무관하게 즉시(그 값으로 갱신). all 은 이전 동작(9질의 매 tick)으로 예산 위험을 Unverified 에. "
+                  "test_ch2_heater_process 의 히터 행 단언을 원래대로(전부 ok) 되돌렸다 — 4질의로 줄어 통과(완화 없음). "
+                  "RF Pulse RFPULSE_Q_MODE 기본 154: CESAR 1310 매뉴얼 Table 4-16 '154 Reports regulation mode — 1 byte: 6 Forward, 7 Load, 8 External(DC Bias), Set with command 3'"
+                  "(CH1 dressler CESAR·CH2 AE CESAR 공통). SET_MODE(3) 뒤 154 되읽기 → 다르면 다시 쓰기 → VERIFY_MISMATCH(164·177 과 같은 규칙), 응답이 없으면(통신 실패) 검증 생략·경고, 0 이면 끔. 155 는 제어 모드라 그대로.",
+         reason="사용자 지시 2026-11-13 1·2장", confirm=True,
+         where="v2/ch12/drivers/mfc.py; params/mfc.py; drivers/rfpulse.py; rfpulse_verify.py; params/rfpulse.py; spec/devices.py"),
+    dict(id="D408", title="2026-11-13 멈춤 감지 재시작(감시 프로그램)",
+         decision="꺼지지 않고 멈춘 제어 프로그램을 되살린다(로봇 서버는 끝까지 기다리므로 로봇도 멈추던 문제). 제어 프로그램(health_beacon)이 1 s 마다 건강 확인 파일(감시 프로그램이 준 CH12_HEARTBEAT_FILE)에 "
+                  "1초 tick 번호(닫은 행 수)·명령 코어 확인 횟수(Ch12Core 잠금을 0.5 s 안에 잡았을 때만 증가)·준비 표시·설정을 쓴다. 감시 프로그램이 SUPERVISOR_HEALTH_INTERVAL_S(10)마다 파일을 읽어 tick 또는 cmd 가 "
+                  "SUPERVISOR_HANG_TIMEOUT_S(60) 동안 움직이지 않으면 멈춤 — 스레드 덤프(자식의 faulthandler.dump_traceback_later 가 진행이 없으면 GIL 을 잡은 채여도 써 둔 CH12_HANG_DUMP_FILE 끝)를 supervisor.log 에 옮기고 → kill → "
+                  "비정상 종료와 같게 재시작(재시작 한도 계산에 포함, 사유 '멈춤'). 시작 직후 SUPERVISOR_START_GRACE_S(300) 동안은 준비 표시가 나올 때까지 판단하지 않고, 그 뒤에도 준비 표시가 없으면 멈춤으로 본다. "
+                  "SUPERVISOR_HANG_ENABLED(켬)·모든 한도는 웹에서 바꾼다(LIVE — 파일에 실려 감시 프로그램이 읽음). 종료 신호 뒤(의도적 종료 중)에는 감지하지 않는다. 명령줄 --hang-timeout·--health-interval·--no-hang-check 로 설정 대신 고정(시험용). "
+                  "로봇 서버는 진행 중 연결이 끊기면 지금 규칙대로 E205, 공정은 이어가기 규칙대로.",
+         reason="사용자 지시 2026-11-13 3장", confirm=True,
+         where="v2/supervisor/supervisor.py; v2/ch12/health_beacon.py; v2/ch12/app.py; params/supervision.py"),
+    dict(id="D409", title="2026-11-13 장비 응답 시간 1분 집계 기록",
+         decision="모든 직렬 장비(MFC·IG·RF Pulse·DC Pulse·TSP·STM-100)와 PLC(Modbus 트랜잭션)의 명령별 응답 시간(보냄 → 응답 끝)을 v2.common.timing_stats 모음통(deque.append — 통신 경로를 늦추지 않음)에 모으고, "
+                  "1초 행 구독자(outputs/device_timing_csv)가 DEVICE_TIMING_LOG_INTERVAL_S(60)마다 비워 기록 스레드가 data/device_timing/timing_YYYYMMDD.csv(sim 은 sim_out 아래)에 장비·명령별 "
+                  "개수·최소·평균·최대·p95·시간 초과 수를 한 줄씩(헤더 Timestamp,Device,Cmd,Count,Min_ms,Avg_ms,Max_ms,P95_ms,Timeouts). DEVICE_TIMING_LOG_ENABLED(켬)·보관 DEVICE_TIMING_RETENTION_DAYS(14). "
+                  "웹 상태 메시지에 deviceTiming(최근 집계를 장비별로 줄인 것)을 실어 진단 화면에서 본다. 간격 설정(MFC_GAP_MS 0·20·50 등)은 apply=idle 이라 재시작 없이 공정 중이 아닐 때 바로 적용 — 시험으로 확인.",
+         reason="사용자 지시 2026-11-13 4장", confirm=False,
+         where="v2/common/timing_stats.py; v2/ch12/outputs/device_timing_csv.py; v2/ch12/outputs/row_feed.py; v2/ch12/hub.py; params/supervision.py"),
+    dict(id="D410", title="2026-11-13 MFC·IG 1초 읽기 상수를 설정으로",
+         decision="코드에 박혀 있던 1초 읽기 상수를 bench 에서 맞출 수 있게 설정으로: MFC_TICK_GAP_WAIT_MS(500, 재시작)·MFC_IDLE_HOLD_MS(300)·MFC_CACHE_FRESH_S(1.0)·MFC_SKIP_IF_READ_WITHIN_MS(400), "
+                  "IG_TICK_GAP_WAIT_MS(500, 재시작)·IG_CACHE_FRESH_S(1.0)·IG_PRE_SEND_ABSORB_MS(30). 기존 장비 간격·응답 제한 설정은 전부 params 표에 있어 웹에서 수정 가능함을 점검(설치 키는 재시작 대기).",
+         reason="사용자 지시 2026-11-13 5장", confirm=False, where="v2/ch12/drivers/mfc.py; drivers/ig.py; params/mfc.py; params/ig.py"),
+    dict(id="D411", title="2026-11-13 통신 속도는 코드가 정하지 않는다 — 장비 사실 표 BAUD",
+         decision="속도는 장비 패널 + MOXA NPort 포트 설정이다(코드 변경 없음). 장비별 근거를 spec/devices.py BAUD 에: GPC3000 9600~115200(매뉴얼 p.54 System Setup→BaudRate, 8N1 고정), "
+                  "CESAR 1310 9600~115200(4-44, 패널 또는 명령 69·되읽기 212, Odd 패리티), TSP 600~38400(명령 108), EnerPulse 속도 설정 항목 없음(5.5.5), IG·STM-100 미확인. "
+                  "CH1 4007(RF Pulse·DC Pulse 공유)·CH2 4005(바꿔 씀)는 한 포트를 두 장비가 쓰므로 DC Pulse 고정 속도에 묶인다(메모).",
+         reason="사용자 지시 2026-11-13 5장", confirm=True, where="v2/ch12/spec/devices.py"),
+    dict(id="D412", title="2026-11-13 운영 v1 추가 2커밋 반영 — DC 저전류 저파워 기준(2fc00c4)·OES 워커 하드 종료(8603d5b)",
+         decision="2fc00c4: 설정 파워가 DC_LOW_CURRENT_LOWP_MAX_W(50 W) 이하면 저전류 기준을 DC_LOW_CURRENT_LOWP_THRESH_A(0.01 A)로(0 이하 = 끔, 판정마다 설정 읽음), 런 시작에 '저전류 감시 기준: x A' 1줄, "
+                  "DC_OVERCURRENT_I1_A 설정 기본 1.0 → 1.5(장비 노트북 값, 코드 기본은 1.0 — v1_default). 8603d5b: OES 읽기 버퍼를 후보 최댓값(4096) 이상으로, 첫 프레임 TimeoutError 면 CSV 닫기(0 바이트 삭제) → "
+                  "finished(ok=False, stop_reason first_frame_timeout·reset_timeout) → os._exit(125), daemon reset 의 cleanup/init 타임아웃이면 결과 뒤 뮤텍스를 놓고 os._exit(125), 설정 3개 rc·측정 시작·첫 프레임·1초 이상 읽기·종료 진단 기록. "
+                  "골든 dev_plc.json 을 main 8603d5b 에서 다시 만들었다. V1_BASE 8603d5b.",
+         reason="사용자 지시 2026-11-13('작업 중 main 에 새 커밋이 생기면 마지막에 확인해 반영')", confirm=False,
+         where="v2/ch12/drivers/dc.py; params/dc.py; workers/oes_device.py·oes_guard.py·oes_measure.py·oes_daemon.py"),
+]

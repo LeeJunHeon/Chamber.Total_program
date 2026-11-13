@@ -49,6 +49,10 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
   9  2026-11-09 검토 반영 — eventKinds 에 plc turbo_off_long·turbo_back_on(터보 꺼짐 지속 카드), params 에 TURBO_OFF_ALERT_S(공통)·HOST_SERVER_SIM_PORT(설치)·
      RFPULSE_Q_MODE 추가·ROBOT_API_STATUS_TIMEOUT_S·ROBOT_API_TIMEOUT_MARGIN_S 삭제(로봇 서버는 끝까지 기다림), 스냅샷 필드 mfc 밸브 위치(valve_pct)·SP 값
      (sp1~4_mtorr)·선택 SP(sp_active)·ON/OFF 가 R69 실제값(CH1·CH2 — 1초 기록·화면·웹)
+  10 2026-11-13 4차 수정(D407~D412) — params: MFC_READ_MODE·MFC_TICK_EVERY·MFC_TICK_ROTATE(MFC 나눠 읽기)·MFC_TICK_GAP_WAIT_MS·MFC_IDLE_HOLD_MS·MFC_CACHE_FRESH_S·MFC_SKIP_IF_READ_WITHIN_MS·
+     IG_TICK_GAP_WAIT_MS·IG_CACHE_FRESH_S·IG_PRE_SEND_ABSORB_MS, 새 묶음 supervisor(감시 프로그램·진단: SUPERVISOR_HANG_ENABLED·HEALTH_INTERVAL_S·HANG_TIMEOUT_S·START_GRACE_S,
+     DEVICE_TIMING_LOG_ENABLED·INTERVAL_S·RETENTION_DAYS), RFPULSE_Q_MODE 기본 154, DC_LOW_CURRENT_LOWP_MAX_W·THRESH_A(v1 2fc00c4)·DC_OVERCURRENT_I1_A 기본 1.5, 키 사이 규칙 MFC01.
+     스냅샷 필드: mfc 읽은 뒤 나이(valve_age_s·on_age_s·sp1~4_age_s·sp_active_age_s — CH1·CH2). state.deviceTiming(장비별 응답 시간 최근 집계 — 진단 화면).
 """
 from __future__ import annotations
 
@@ -63,7 +67,7 @@ from v2.ch12 import snapshot_fields as SF
 from v2.ch12 import web_blocks as WB
 from v2.ch12.hub import optional_module
 
-EXPORT_VERSION = 9
+EXPORT_VERSION = 10
 
 # 웹이 받는 공정 이벤트(엔진이 system.emit(source="process:<c>", kind, event=data) 로 내는 것 — hub 가 run_* 메시지로 바꾼다)
 EVENTS: tuple = (

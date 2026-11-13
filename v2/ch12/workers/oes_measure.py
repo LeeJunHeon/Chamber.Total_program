@@ -20,7 +20,7 @@ from typing import Optional
 from v2.ch12.workers import oes_common as C
 from v2.ch12.workers.oes_common import (
     _WinMutex, _mutex_name, _copy_csv_to_nas, _default_out_dir, _env_float, _errlog, _errlog_exc, _find_ar_index,
-    _make_default_filename, _mutex_timeout_ms, _post_anomaly_webhook, _report_anomaly, _print_json, _status, _stop_dir,
+    _make_default_filename, _mutex_timeout_ms, _post_anomaly_webhook, _report_anomaly, _print_json, _runlog, _status, _stop_dir,
 )
 from v2.ch12.workers.oes_device import OESAsync, _resolve_oes_dll_path
 from v2.ch12.workers.oes_guard import _LinkGuard, _ResetCallTimeout, _acquire_first_frame
@@ -276,11 +276,55 @@ async def cmd_measure(
         with contextlib.suppress(Exception):
             await oes._call(oes._apply_device_settings_blocking, int(oes.sChannel), int(integration_ms))
 
+        _runlog(f"[measure] start ch={ch} usb={usb} integration_ms={integration_ms} "
+                f"duration_s={duration_s} avg_count={avg_count}")
+
         _print_json({"kind": "status", "message": f"[worker] open csv: {out_csv}"})
         f = open(str(out_csv), "w", newline="", encoding="utf-8")
         w = csv.writer(f)
 
-        x, y = await _acquire_first_frame(oes, guard=guard)
+        t_ff = time.time()
+        try:
+            x, y = await _acquire_first_frame(oes, guard=guard)
+        except TimeoutError as e:
+            # ✅ DLL 호출이 executor 스레드에 갇힘 → cleanup 은 그 뒤에 줄을 설 뿐이므로 기다리지 않고
+            #    측정 루프의 read timeout 과 같은 방식으로 끝낸다(finished 출력 → 하드 종료) — v1 main 8603d5b
+            is_reset = isinstance(e, _ResetCallTimeout)
+            msg = str(e) if is_reset else f"OES {e} (ch={ch}, usb={usb})"
+            _errlog(msg)
+            _runlog(f"[measure] first frame 실패(timeout) elapsed={time.time() - t_ff:.2f}s → exit 125")
+            with contextlib.suppress(Exception):
+                f.close()
+            f = None
+            with contextlib.suppress(Exception):
+                if Path(out_csv).stat().st_size == 0:
+                    Path(out_csv).unlink()
+            payload = {
+                "kind": "finished",
+                "ok": False,
+                "stopped": True,
+                "stop_reason": "reset_timeout" if is_reset else "first_frame_timeout",
+                "ch": int(ch),
+                "usb": int(usb),
+                "out_csv": str(out_csv),
+                "nas_ok": False,
+                "nas_csv": None,
+                "nas_error": "first frame timeout (no data)",
+                "local_deleted": False,
+                "rows": int(rows),
+                "elapsed_s": float(time.time() - t0),
+            }
+            payload.update(guard.payload())
+            payload["error"] = msg
+            _print_json(payload)
+            for p in (stop_flag_usb, stop_flag_csv, stop_flag_usb_global):
+                if p is not None:
+                    with contextlib.suppress(Exception):
+                        p.unlink()
+            _release_mutex_once()
+            os._exit(125)
+        _runlog(f"[measure] first frame ok elapsed={time.time() - t_ff:.2f}s")
+        last_ok_read = time.time()
         x_list = x.tolist() if hasattr(x, "tolist") else list(x)
         y_list = y.tolist() if hasattr(y, "tolist") else list(y)
 
@@ -344,11 +388,13 @@ async def cmd_measure(
                 continue
 
             read_timeout_s = _env_float("OES_READ_TIMEOUT_S", 2.0)
+            t_read = time.time()
             try:
                 x2, y2 = await asyncio.wait_for(oes._call(oes._acquire_one_slice_avg), timeout=read_timeout_s)
             except asyncio.TimeoutError:
                 msg = f"OES read timeout after {read_timeout_s}s (ch={ch}, usb={usb})"
                 _errlog(msg)
+                _runlog(f"[measure] read timeout rows={rows} since_last_ok={time.time() - last_ok_read:.1f}s")
 
                 # ✅ DLL hang 의심: 이후 DLL cleanup await는 더 위험 → cleanup 스킵하고 파일/NAS 처리 후 자가 종료 루트로
                 hard_abort = True
@@ -357,6 +403,11 @@ async def cmd_measure(
                 stopped = True
                 stop_reason = "read_timeout"
                 break
+            dt_read = time.time() - t_read
+            if dt_read >= 1.0:
+                _runlog(f"[measure] slow read {dt_read:.2f}s rows={rows}")
+            if x2 is not None and y2 is not None:
+                last_ok_read = time.time()
 
             # ✅ 읽은 직후 목록 재확인(바뀌었으면 버림) + 연속 실패 복구(리셋/재초기화)
             try:
@@ -418,6 +469,7 @@ async def cmd_measure(
                     pass
 
         elapsed = time.time() - t0
+        _runlog(f"[measure] end rows={rows} elapsed={elapsed:.1f}s stop_reason={stop_reason}")
 
         with contextlib.suppress(Exception):
             if f:
