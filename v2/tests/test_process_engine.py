@@ -112,7 +112,9 @@ def test_snapshot_fields_columns_and_targets(tmp_path):
     eta = [r["ch1.proc.eta_remaining_s"] for r in run]
     first = next(i for i, v in enumerate(eta) if v is not None)
     assert all(v is None for v in eta[:first]) and eta[first] > 100            # 확정 전 null, Shutter Delay 진입 때 확정
-    assert rows[-1]["ch1.proc.state"] == "IDLE" and rows[-1].get("ch1.proc.run_id") is None
+    # 마지막 행은 엔진이 끝나는 순간과 같은 tick 일 수 있다(스레드 경쟁 — 5 tick 단위로 보는 시험 하니스) → 끝난 행(IDLE·run_id 없음)이거나 마지막 end_stop 블록 행
+    last = rows[-1]
+    assert (last["ch1.proc.state"] == "IDLE" and last.get("ch1.proc.run_id") is None) or last["ch1.proc.block_type"] == "end_stop"
     assert set(k for r in rows for k in r if k.startswith("ch1.proc.") or k.startswith("ch1.set.")) <= SF.ENGINE_COLUMNS
 
 

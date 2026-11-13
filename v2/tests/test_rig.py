@@ -94,7 +94,9 @@ def test_disconnect_and_reconnect_show_in_rows(tmp_path):
     assert first_fail in (9, 10)
     first_ok = next(n for n in range(15, 55) if q["ch1.mfc"][n] == "ok")
     last_fail = max(n for n in range(first_fail, first_ok) if q["ch1.mfc"][n] == "fail")
-    assert [rows[n]["ch1.mfc.age_s"] for n in range(first_fail, last_fail + 2)] == [float(k) for k in range(1, last_fail - first_fail + 3)]
+    # 끊긴 동안 마지막 값의 나이가 1 s 씩 늘고, 재연결 직후 한두 행은 stale·late 일 수 있다(재연결 타이밍) — 그 뒤 ok
+    assert [rows[n]["ch1.mfc.age_s"] for n in range(first_fail, last_fail + 1)] == [float(k) for k in range(1, last_fail - first_fail + 2)]
+    assert all(q["ch1.mfc"][n] in ("ok", "stale", "late") for n in range(last_fail + 1, first_ok + 1))
     assert set(q["ch2.mfc"]) == {"ok"}
     # PLC: 끊김 → plc 와 PLC 해독 블록(ch2.dc)이 같이 fail → 재연결(5 s 백오프) 뒤 ok
     assert q["plc"] == q["ch2.dc"] and "fail" in q["plc"][19:23] and q["plc"][30] == "ok"
