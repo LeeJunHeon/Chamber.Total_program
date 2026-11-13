@@ -22,6 +22,7 @@ from typing import Optional, Callable, Awaitable, AsyncGenerator, Literal, Any
 
 from lib import config_common as cfgc  # ✅ "모듈"로 import (값 고정 방지)
 from lib.power_limits import dc_overcurrent_limit_a   # DC 과전류 인터락 상한(세트포인트 기준)
+from lib.power_limits import dc_low_current_thresh_a, dc_low_current_lowp_cfg   # 저전류 감시 기준(저파워 구간 분리)
 
 # ========= 이벤트 모델 =========
 EventKind = Literal[
@@ -173,6 +174,8 @@ class DCPowerAsync:
         self._overcurrent_streak = 0  # ★ 과전류 카운터 리셋
         # 런 시작 시 과전류 인터락 상태(ON/OFF·한계값) 1줄 — 목표 전력 확정 직후
         await self._emit_overcurrent_arm_status()
+        # 이번 런에 적용되는 저전류 감시 기준 1줄 (설정 파워가 낮으면 저파워 구간 기준)
+        await self._emit_low_current_thresh_status()
 
         if not self._toggle_enable:
             await self._emit_status("DCV SET ON 실패: toggle_enable 콜백이 없습니다.")
@@ -303,6 +306,22 @@ class DCPowerAsync:
         except Exception:
             pass
 
+    async def _emit_low_current_thresh_status(self) -> None:
+        """런 시작(목표 전력 확정 직후) 저전류 감시 기준 1줄. 로그 실패가 공정을 막지 않는다."""
+        try:
+            base = self._dc_low_current_thresh_a
+            thr = dc_low_current_thresh_a(self.target_power, base)
+            tp = float(self.target_power or 0.0)
+            lowp = dc_low_current_lowp_cfg()
+            if lowp is not None and 0.0 < tp <= lowp[0]:
+                await self._emit_status(
+                    f"저전류 감시 기준: {thr:.3f} A (설정 {tp:.1f} W ≤ {lowp[0]:.1f} W 저파워 구간)"
+                )
+            else:
+                await self._emit_status(f"저전류 감시 기준: {thr:.3f} A")
+        except Exception:
+            pass
+
     async def _check_overcurrent(self) -> bool:
         """세트포인트(target_power) 기준 전류 상한 초과 판정. 차단이면 status + target_failed 를 내고 True.
         (호출부가 cleanup() 을 띄우고 루프를 끝낸다 — 저전류 감시와 같은 경로)"""
@@ -393,25 +412,27 @@ class DCPowerAsync:
                         try:
                             if self._sent_target_reached:
                                 ia = float(self.current_a or 0.0)
-                                if ia <= self._dc_low_current_thresh_a:
+                                # 설정 파워 기준으로 매 판정마다 기준을 구한다(저파워 구간은 낮은 기준)
+                                thr = dc_low_current_thresh_a(self.target_power, self._dc_low_current_thresh_a)
+                                if ia <= thr:
                                     self._low_current_streak += 1
                                     await self._emit_status(
                                         f"저전류 감시(목표 도달 후): "
                                         f"{self._low_current_streak}/{self._dc_low_current_streak_n} "
-                                        f"(meas={ia:.3f}A ≤ {self._dc_low_current_thresh_a:.3f}A)"
+                                        f"(meas={ia:.3f}A ≤ {thr:.3f}A)"
                                     )
                                     if self._low_current_streak >= self._dc_low_current_streak_n:
                                         await self._emit_status(
                                             f"DC 전류가 목표 도달 후 "
                                             f"{self._dc_low_current_streak_n}회 연속 ≤ "
-                                            f"{self._dc_low_current_thresh_a:.3f}A → 공정 중단"
+                                            f"{thr:.3f}A → 공정 중단"
                                         )
                                         self._ev_nowait(DCPowerEvent(
                                             kind="target_failed",
                                             message=(
                                                 f"저전류 연속 {self._low_current_streak}/"
                                                 f"{self._dc_low_current_streak_n} "
-                                                f"(meas={ia:.3f}A ≤ {self._dc_low_current_thresh_a:.3f}A)"
+                                                f"(meas={ia:.3f}A ≤ {thr:.3f}A)"
                                             ),
                                         ))
                                         asyncio.create_task(self.cleanup())

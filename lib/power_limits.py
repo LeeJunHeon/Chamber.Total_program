@@ -53,3 +53,40 @@ def dc_overcurrent_limit_a(p_set_w, *, p1: Optional[float] = None, i1: Optional[
     if not math.isfinite(lim) or lim <= 0.0:
         return _i1
     return lim
+
+
+def dc_low_current_lowp_cfg():
+    """저파워 구간 저전류 기준 설정 (max_w, thresh_a). 기능 끔(max_w <= 0)·비정상 값이면 None. 예외를 내지 않는다.
+
+    config_common 의 DC_LOW_CURRENT_LOWP_* 를 매 호출 때 직접 읽는다(런타임 변경 반영,
+    config_ch1/ch2 는 import 시점 복사본이라 보지 않는다).
+    """
+    try:
+        max_w = float(getattr(cfgc, "DC_LOW_CURRENT_LOWP_MAX_W", 50.0))
+        thr_a = float(getattr(cfgc, "DC_LOW_CURRENT_LOWP_THRESH_A", 0.01))
+    except Exception:
+        return None
+    if not math.isfinite(max_w) or max_w <= 0.0:
+        return None
+    if not math.isfinite(thr_a) or thr_a < 0.0:
+        return None
+    return max_w, thr_a
+
+
+def dc_low_current_thresh_a(p_set_w, base_a) -> float:
+    """DC Power 저전류 감시 기준(A) — 설정 파워가 낮으면 정상 전류 자체가 작으므로 기준을 낮춘다.
+
+        0 < p_set_w <= DC_LOW_CURRENT_LOWP_MAX_W  → DC_LOW_CURRENT_LOWP_THRESH_A
+        그 외(파워 초과, None/0/음수/NaN, 설정값 비정상, 기능 끔) → base_a 그대로
+    순수 함수 — 예외를 내지 않는다.
+    """
+    try:
+        lowp = dc_low_current_lowp_cfg()
+        if lowp is None or p_set_w is None:
+            return base_a
+        p = float(p_set_w)
+        if not math.isfinite(p) or p <= 0.0:
+            return base_a
+        return lowp[1] if p <= lowp[0] else base_a
+    except Exception:
+        return base_a

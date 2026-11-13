@@ -212,6 +212,8 @@ DC_LOW_W_THRESH = 1.0               # W 이하이면 '사실상 0W'로 간주
 DC_LOW_STREAK_N = 3                 # 연속 N회 기준
 DC_LOW_CURRENT_THRESH_A = 0.05      # A 이하를 "전류 거의 0"으로 간주
 DC_LOW_CURRENT_STREAK_N = 3         # 연속 N회 기준
+DC_LOW_CURRENT_LOWP_MAX_W    = 50.0   # 설정 파워가 이 값 이하이면 아래 기준을 쓴다 (0 이하 = 기능 끔, 항상 기존 기준)
+DC_LOW_CURRENT_LOWP_THRESH_A = 0.01   # 저파워 구간의 저전류 기준 (A)
 DC_WATT_DEADBAND = 0.5              # 연속 전송 억제 데드밴드(W) (init 기본값과 통일)
 
 # --- DC 과전류 인터락 (DC Pulse / DC Power 공용) ---
