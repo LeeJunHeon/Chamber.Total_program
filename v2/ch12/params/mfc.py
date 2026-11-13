@@ -69,6 +69,14 @@ PARAMS: tuple = (
     _m("MFC_TICK_ROTATE", "MFC 돌아가며 읽는 질의", "", S, "R69,R1,R2,R3,R4,R7", src="v2(사용자 결정 2026-11-13 D407)", apply=IDLE, pattern=_TICKS_OPT,
        desc="split 일 때 tick 마다 1개씩 차례로 읽는 질의(쉼표, 비우면 없음). 마지막 읽은 실제 값은 (개수 + 1) 초까지 유효 — 넘으면 빈 값(기억값으로 채우지 않음). "
             "값마다 읽은 뒤 나이(…_age_s)가 1초 기록에 남는다. 쓰기 직후 되읽기는 차례와 무관하게 즉시"),
+    _m("MFC_TICK_GAP_WAIT_MS", "MFC 1초 읽기 간격 대기 한도", "ms", I, 500, 100, 2000, src="v2(사용자 지시 2026-11-13 D410 — 코드 상수 TICK_GAP_WAIT_S 를 설정으로)",
+       apply=RESTART, desc="1초 읽기가 명령 간격(MFC_GAP_MS)이 끝나기를 기다려 주는 최대 시간. 넘으면 이번 tick 은 읽지 않는다(그 tick 마감 = 이 값 + MFC_TIMEOUT + 100 ms 라 재시작 뒤 적용)"),
+    _m("MFC_IDLE_HOLD_MS", "MFC 제어 동작 뒤 1초 읽기 쉼", "ms", I, 300, 0, 2000, src="v2(사용자 지시 2026-11-13 D410 — 코드 상수 IDLE_HOLD_S)",
+       desc="공정 엔진의 제어 명령(쓰기·확인)이 끝난 뒤 1초 읽기가 쉬는 시간(엔진의 다음 명령에 길을 양보)"),
+    _m("MFC_CACHE_FRESH_S", "MFC 읽은 값 유효 시간(매 tick 질의)", "s", F, 1.0, 0.5, 10.0, src="v2(사용자 지시 2026-11-13 D410 — 코드 상수 CACHE_FRESH_S)",
+       desc="매 tick 읽는 질의(R60·R5·R6)의 마지막 값을 1초 행에 쓸 수 있는 최대 나이. 돌아가며 읽는 질의는 (개수 + 1) s"),
+    _m("MFC_SKIP_IF_READ_WITHIN_MS", "MFC 제어가 방금 읽은 질의 건너뜀", "ms", I, 400, 0, 2000, src="v2(사용자 지시 2026-11-13 D410 — 코드 상수 SKIP_IF_READ_WITHIN_S)",
+       desc="제어(안정화 등)가 이 시간 안에 읽은 질의는 이번 tick 에 다시 보내지 않는다"),
     _m("MFC_READBACK_ENABLED", "MFC 쓰기 되읽기 확인", "", B, True, src="v2(사용자 결정 2026-11-02 D36)",
        desc="값을 바꾸는 명령(FLOW_SET·FLOW_ON/OFF·밸브·SPn_SET·SPn_ON) 뒤 되읽기 질의로 확인(꺼면 v1 과 같게 확인 없이 확정). "
             "R64~R69·R1~R4·R6·R7 응답 형식이 현장에서 다르면 bench 에서 끄고 보고"),

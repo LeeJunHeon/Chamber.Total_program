@@ -162,3 +162,31 @@ def test_attach_without_store_or_hub(tmp_path):
         assert ca.apply({"version": 1, "values": vals, "schemaHash": param_schema_hash()}, "w") is None and ca.acks == 1
     finally:
         r.outputs.stop()
+
+
+# ───────── 2026-11-13 D407·D410 — 장비 간격·읽기 방식 설정은 재시작 없이(공정 중이 아니면 바로) 적용 ─────────
+def test_device_gap_and_mfc_read_settings_apply_without_restart_when_idle(tmp_path):
+    keys = {"MFC_GAP_MS": 0, "IG_GAP_MS": 100, "CMD_GAP_MS": 20, "DCP_GAP_MS": 100, "MFC_READ_MODE": "all",
+            "MFC_TICK_EVERY": "R60,R5", "MFC_TICK_ROTATE": "R6,R69,R1", "MFC_IDLE_HOLD_MS": 100, "MFC_SKIP_IF_READ_WITHIN_MS": 100,
+            "MFC_CACHE_FRESH_S": 2.0, "IG_CACHE_FRESH_S": 2.0, "IG_PRE_SEND_ABSORB_MS": 10, "TSP_POST_SEND_DELAY_MS": 10}
+    b = Box(tmp_path)
+    assert b.apply(1, **keys) is None
+    a = b.acks[-1]
+    assert a["status"] == "applied" and sorted(a["appliedKeys"]) == sorted(keys) and not a["pendingKeys"]
+    assert all(b.cfg[k] == v for k, v in keys.items())                               # 같은 사전에 바로 — 드라이버가 다음 질의부터 읽는다
+    # 재시작이 필요한 것(1초 읽기 간격 대기 한도 — tick 마감에 들어감)은 대기
+    assert b.apply(2, MFC_TICK_GAP_WAIT_MS=300) is None
+    assert b.acks[-1]["pendingKeys"] == ["MFC_TICK_GAP_WAIT_MS"] and b.cfg["MFC_TICK_GAP_WAIT_MS"] == 500
+
+
+def test_supervisor_and_timing_settings_are_live_and_out_of_range_is_rejected(tmp_path):
+    b = Box(tmp_path)
+    ch = {"SUPERVISOR_HANG_TIMEOUT_S": 120.0, "SUPERVISOR_HEALTH_INTERVAL_S": 5.0, "SUPERVISOR_HANG_ENABLED": False,
+          "DEVICE_TIMING_LOG_ENABLED": False, "DEVICE_TIMING_LOG_INTERVAL_S": 30.0, "RFPULSE_Q_MODE": 0}
+    # RFPULSE_Q_MODE 는 H 등급(공정 중 변경 금지) — idle 일 때만 바로
+    assert b.apply(1, **ch) is None and b.acks[-1]["status"] == "applied" and not b.acks[-1]["pendingKeys"]
+    assert all(b.cfg[k] == v for k, v in ch.items())
+    r = b.apply(2, SUPERVISOR_HANG_TIMEOUT_S=5.0)                                       # 하한 10 s 밖 — 고쳐 쓰지 않고 거부(D11)
+    assert r is not None and b.cfg["SUPERVISOR_HANG_TIMEOUT_S"] == 120.0
+    r = b.apply(3, MFC_TICK_EVERY="R60,R5,R99")
+    assert r is not None

@@ -16,6 +16,7 @@ r"""챔버12 장비 사실 표(사용자 지시 0단계 'spec 표: 장비 사실
 - READBACK       : 값을 바꾸는 명령의 되읽기 질의·비교·설정 키 / READBACK_NONE: 되읽기 질의가 없는 명령(v1 과 같게 응답/전송 확인으로 확정)
 - PC_DEAD        : PC(제어 프로그램)가 죽었을 때 출력이 어떻게 되는지 — RF/DC 파워는 PLC 인터락이 없어 소프트웨어가 꺼야 함,
                    가스 밸브 인터락은 PLC
+- BAUD           : 통신 속도(장비별 범위·매뉴얼 근거·바꾸는 곳) — 코드가 정하지 않고 장비 패널 + MOXA NPort 포트 설정(2026-11-13 D411)
 - UNVERIFIED     : 미확인 목록(무엇을·어떻게 확인 — bench 항목)
 이 파일은 import 만으로 아무 일도 하지 않는다(데이터 + 드라이버 BUDGET import).
 """
@@ -385,6 +386,30 @@ CORRECTIONS: tuple = (
     ("MFC·IG 연결", "v1 cleanup 이 TCP 를 닫음", "v2 는 1초 읽기 때문에 유지(60 s 무통신 끊김도 없어짐)", "D37"),
     ("DC Pulse Regulation", "v1 독스트링 0x82", "실제 전송 0x81 data 3", "D184"),
     ("두께 모니터 포트", "4008", "settings 주석상 임시값 — 실제 MOXA 포트 미확인", "D152·D191"),
+)
+
+
+# ═════════════ 통신 속도(2026-11-13 D411 — 코드가 정하지 않는다) ═════════════
+@dataclass(frozen=True)
+class Baud:
+    device: str
+    range: str            # 장비가 받는 속도·프레임
+    basis: str            # 매뉴얼 근거(문서·쪽·명령)
+    how: str              # 어디서 바꾸는가
+    note: str = ""
+
+
+BAUD: tuple = (
+    Baud("mfc", "9600 ~ 115200 bps, 8N1 고정", "GPC3000 매뉴얼 p.54 System Setup → BaudRate(p.72 는 9600 8N1·CR 끝 — 기본 9600)",
+         "장비 패널(System Setup → BaudRate) + MOXA NPort 해당 포트의 시리얼 설정을 같은 값으로", "CH1 4003 · CH2 4006"),
+    Baud("rfpulse", "9600 ~ 115200 bps, Odd 패리티", "CESAR 1310 매뉴얼 4-44(속도 선택 — 패널 또는 명령 69, 되읽기 명령 212)",
+         "장비 패널 또는 AE Bus 명령 69 + MOXA NPort 포트 설정(Odd 패리티)", "CH1 4007 · CH2 4005 — 아래 공유 포트 메모 참고"),
+    Baud("tsp", "600 ~ 38400 bps", "TSP 컨트롤러 명령 108(통신 속도)", "명령 108 또는 컨트롤러 설정 + MOXA NPort 포트 설정", "TSP 포트 TSP_TCP_PORT"),
+    Baud("dcpulse", "속도 설정 항목 없음", "EnerPulse 매뉴얼 5.5.5(통신 설정에 속도 선택이 없다 — 장비 고정값)",
+         "장비에서 바꿀 수 없다 — MOXA NPort 포트를 장비 고정 속도에 맞춘다",
+         "⚠ CH1 4007(RF Pulse·DC Pulse 공유)·CH2 4005(RF Pulse·DC Pulse 를 바꿔 씀, pulse_port)는 한 NPort 포트를 두 장비가 쓰므로 속도·패리티는 DC Pulse 고정 속도에 묶인다"),
+    Baud("ig", "미확인", "IG 기종·매뉴얼이 이 저장소에 없다(근거 문서 없음)", "미확인 — 현장에서 장비·NPort 설정 확인", "UNVERIFIED"),
+    Baud("stm100", "미확인", "STM-100 매뉴얼이 이 저장소에 없다(근거 문서 없음)", "미확인 — 현장에서 장비·NPort 설정 확인", "UNVERIFIED"),
 )
 
 

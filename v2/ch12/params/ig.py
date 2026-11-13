@@ -7,7 +7,7 @@
 """
 from __future__ import annotations
 
-from v2.ch12.params._base import Dropped, F, I, B, IDLE, L, LIVE, M, S, inst, p
+from v2.ch12.params._base import Dropped, F, I, B, IDLE, L, LIVE, M, RESTART, S, inst, p
 
 _S = "config/settings.json"
 _C = "lib/config_common.py"
@@ -21,6 +21,12 @@ def _g(key, label, unit, type_, default, lo=None, hi=None, *, src, desc="", appl
 
 
 PARAMS: tuple = (
+    _g("IG_TICK_GAP_WAIT_MS", "IG 1초 읽기 간격 대기 한도", "ms", I, 500, 100, 2000, src="v2(사용자 지시 2026-11-13 D410 — 코드 상수 TICK_GAP_WAIT_S)",
+       apply=RESTART, desc="1초 읽기(RDI)가 명령 간격(IG_GAP_MS)이 끝나기를 기다려 주는 최대 시간. 넘으면 이번 tick 은 읽지 않는다(마감에 포함돼 재시작 뒤 적용)"),
+    _g("IG_CACHE_FRESH_S", "IG 읽은 값 유효 시간", "s", F, 1.0, 0.5, 10.0, src="v2(사용자 지시 2026-11-13 D410 — 코드 상수 CACHE_FRESH_S)",
+       desc="RDI 마지막 값을 1초 행에 쓸 수 있는 최대 나이"),
+    _g("IG_PRE_SEND_ABSORB_MS", "IG 보내기 전 늦은 줄 흡수", "ms", I, 30, 0, 1000, src="v2(사용자 지시 2026-11-13 D410 — v1 device/ig.py:709 의 고정 30 ms)",
+       desc="명령을 보내기 전에 앞 명령의 늦은 응답 줄을 비우려고 기다리는 시간"),
     inst("IG_TCP_HOST", "ig", "IG MOXA 주소", S, "192.168.1.50", pattern=r"[0-9A-Za-z.\-]{1,64}",
          src=f"{_S}:70;{_C}:148;main.py:440", note=_W),
     inst("CH1_IG_TCP_PORT", "ig", "CH1 IG 포트", I, 4001, lo=1, hi=65535, src=f"{_S}:493;lib/config_ch1.py:13;main.py:441"),

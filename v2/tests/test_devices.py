@@ -137,3 +137,15 @@ def test_readback_table_matches_params_and_lists_commands_without_readback():
         assert r.command and r.query and r.compare and r.source
     assert {n[0] for n in D.READBACK_NONE} >= {"mfc", "ig", "dcpulse", "rfpulse", "plc"}
     assert all(len(n) == 3 and n[2] for n in D.READBACK_NONE)
+
+
+def test_baud_facts_cover_every_serial_device_with_basis():
+    by = {b.device: b for b in D.BAUD}
+    assert set(by) == {"mfc", "rfpulse", "tsp", "dcpulse", "ig", "stm100"}
+    assert "p.54" in by["mfc"].basis and "9600" in by["mfc"].range and "115200" in by["mfc"].range
+    assert "4-44" in by["rfpulse"].basis and "212" in by["rfpulse"].basis and "Odd" in by["rfpulse"].range
+    assert "108" in by["tsp"].basis and "600" in by["tsp"].range and "38400" in by["tsp"].range
+    assert "5.5.5" in by["dcpulse"].basis and "없음" in by["dcpulse"].range
+    assert "4007" in by["dcpulse"].note and "4005" in by["dcpulse"].note              # 공유 포트가 DC Pulse 속도에 묶임
+    assert by["ig"].range == "미확인" and by["stm100"].range == "미확인"
+    assert all(b.how and b.basis for b in D.BAUD)

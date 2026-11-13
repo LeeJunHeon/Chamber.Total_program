@@ -141,7 +141,7 @@ class IgDriver:
             raise PermissionError(f"bench — 보내지 않음: {cmd}")
         if self.ready_at > self.clock.monotonic():
             self.clock.sleep_until(self.ready_at)
-        self.clock.sleep_until(self.clock.monotonic() + PRE_SEND_ABSORB_S)       # 늦은 줄 흡수
+        self.clock.sleep_until(self.clock.monotonic() + self.ms("IG_PRE_SEND_ABSORB_MS", PRE_SEND_ABSORB_S * 1000))       # 늦은 줄 흡수
         session.transport.reset_input()
         self.reader.clear()
         try:
@@ -186,7 +186,7 @@ class IgDriver:
         return line
 
     def exec_timeout_s(self, item) -> float:
-        return self.ms("IG_GAP_MS", 200) + 0.2 + PRE_SEND_ABSORB_S + self.ms("IG_TIMEOUT_MS", 3000) + 1.0
+        return self.ms("IG_GAP_MS", 200) + 0.2 + self.ms("IG_PRE_SEND_ABSORB_MS", PRE_SEND_ABSORB_S * 1000) + self.ms("IG_TIMEOUT_MS", 3000) + 1.0
 
     def query(self, cmd: str, tag: str) -> Query:
         """v1 _send_and_wait_line 한 시도 — 워커 재시도 0, 호출 쪽 대기 = 한도 + 0.5 s."""
@@ -212,13 +212,13 @@ class IgDriver:
     # ───────── 1초 읽기 ─────────
     def _idle(self, now: float) -> bool:
         bu = self.runner.busy_until()
-        return bu is None or bu >= now + self.ms("IG_GAP_MS", 200) + TICK_GAP_WAIT_S + 0.2
+        return bu is None or bu >= now + self.ms("IG_GAP_MS", 200) + self.ms("IG_TICK_GAP_WAIT_MS", TICK_GAP_WAIT_S * 1000) + 0.2
 
     def source_read(self, session, seq: int) -> Dict[str, Any]:
         now = self.clock.monotonic()
         if now < self.read_block_until:
             raise IgSkip("점등 직후 첫 RDI 지연 — 보내지 않음")
-        if self._idle(now) and self.ready_at <= now + TICK_GAP_WAIT_S:
+        if self._idle(now) and self.ready_at <= now + self.ms("IG_TICK_GAP_WAIT_MS", TICK_GAP_WAIT_S * 1000):
             line = self.io_query(session, Query("RDI", self.ms("IG_TIMEOUT_MS", 3000), 0.0, (), 0, TICK_TAG))
             if line is None:
                 raise IgNoReply("RDI 무응답")
@@ -227,7 +227,7 @@ class IgDriver:
     def _fields(self, now: float) -> Dict[str, Any]:
         b = self.block
         out: Dict[str, Any] = {f"{b}.waiting": self.waiting_active, f"{b}.target_torr": self.target_pressure or None}
-        if self.latest and now - self.latest[0] <= CACHE_FRESH_S:
+        if self.latest and now - self.latest[0] <= float(self.c("IG_CACHE_FRESH_S", CACHE_FRESH_S)):
             p, st = parse_rdi(self.latest[1])
             out[f"{b}.pressure_torr"] = p
             out[f"{b}.state"] = st
@@ -312,7 +312,7 @@ BUDGET = dict(
 
 
 def source_deadline_ms(cfg: Dict[str, Any]) -> int:
-    return int((TICK_GAP_WAIT_S + PRE_SEND_ABSORB_S) * 1000 + float(cfg.get("IG_TIMEOUT_MS", 3000)) + 100)
+    return int(float(cfg.get("IG_TICK_GAP_WAIT_MS", TICK_GAP_WAIT_S * 1000)) + float(cfg.get("IG_PRE_SEND_ABSORB_MS", PRE_SEND_ABSORB_S * 1000)) + float(cfg.get("IG_TIMEOUT_MS", 3000)) + 100)
 
 
 def endpoint(cfg: Dict[str, Any], chamber: str) -> tuple:

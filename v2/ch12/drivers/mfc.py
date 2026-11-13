@@ -353,13 +353,13 @@ class MfcDriver:
         bu = self.runner.busy_until()
         gap = self.ms("MFC_GAP_MS", 50)
         return ((bu is None or bu >= now + 2 * gap + 0.35)
-                and now - self.runner.last_end >= IDLE_HOLD_S and not self.runner.ghosts)
+                and now - self.runner.last_end >= self.ms("MFC_IDLE_HOLD_MS", IDLE_HOLD_S * 1000) and not self.runner.ghosts)
 
     def source_read(self, session, seq: int) -> Dict[str, Any]:
         """매 tick R60(유량)과 R5(압력)를 모두 읽는다(사용자 결정 2026-11-02 D36 — 번갈아 읽기·stale 없음).
         두 질의 사이는 MFC_GAP_MS(응답 뒤 다음 명령까지). 제어가 방금(0.4 s 안) 읽은 질의는 다시 보내지 않는다."""
         now = self.clock.monotonic()
-        if self._idle(now) and self.ready_at <= now + TICK_GAP_WAIT_S:
+        if self._idle(now) and self.ready_at <= now + self.ms("MFC_TICK_GAP_WAIT_MS", TICK_GAP_WAIT_S * 1000):
             every, rot = tick_plan(self.cfg)
             todo = list(every)
             if rot:                                              # 이번 tick 의 돌아가기 차례 1개(밀린 tick 은 차례를 넘기지 않는다)
@@ -368,7 +368,7 @@ class MfcDriver:
                 self._rot_i = (self._rot_i + 1) % len(rot)
             for cmd in todo:
                 last = self.latest.get(cmd)
-                if last is not None and self.clock.monotonic() - last[0] < SKIP_IF_READ_WITHIN_S:
+                if last is not None and self.clock.monotonic() - last[0] < self.ms("MFC_SKIP_IF_READ_WITHIN_MS", SKIP_IF_READ_WITHIN_S * 1000):
                     continue
                 self.io_query(session, Query(cmd, self.ms("MFC_TIMEOUT", 2000), 0.0, TICK_PREFIX[cmd], 1, ""))
             self._v1_poll(self.clock.monotonic())
@@ -378,7 +378,7 @@ class MfcDriver:
         """질의 cmd 의 마지막 읽은 값을 쓸 수 있는 시간 — 매 tick 질의는 CACHE_FRESH_S(1 s), 돌아가며 읽는 질의는 (돌아가기 개수 + 1) s.
         기억값(쓴 값)으로 채우지 않는다 — 넘으면 빈 값."""
         every, rot = tick_plan(self.cfg)
-        return float(len(rot) + 1) if cmd in rot else CACHE_FRESH_S
+        return float(len(rot) + 1) if cmd in rot else float(self.c("MFC_CACHE_FRESH_S", CACHE_FRESH_S))
 
     def _last(self, cmd: str, now: float) -> Optional[str]:
         r = self.latest.get(cmd)
@@ -690,7 +690,7 @@ BUDGET = dict(
 
 def source_deadline_ms(cfg: Dict[str, Any]) -> int:
     """스냅샷 Source.deadline_ms — 간격 대기(TICK_GAP_WAIT_S) + v1 응답 한도 MFC_TIMEOUT + 여유."""
-    return int(TICK_GAP_WAIT_S * 1000 + float(cfg.get("MFC_TIMEOUT", 2000)) + 100)
+    return int(float(cfg.get("MFC_TICK_GAP_WAIT_MS", TICK_GAP_WAIT_S * 1000)) + float(cfg.get("MFC_TIMEOUT", 2000)) + 100)
 
 
 def endpoint(cfg: Dict[str, Any], chamber: str) -> tuple:

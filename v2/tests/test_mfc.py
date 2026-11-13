@@ -504,3 +504,25 @@ def test_tick_lists_reject_out_of_allowlist_and_require_r60_r5():
     assert M.parse_tick_list("R60, R5,R5,Rx,R7") == ("R60", "R5", "R7")
     every, rot = M.tick_plan(dict(MFC_TICK_EVERY="R6", MFC_TICK_ROTATE="R69,R6"))     # 방어: R60·R5 는 늘 매 tick, 중복은 매 tick 쪽
     assert every == ("R60", "R5", "R6") and rot == ("R69",)
+
+
+def _query_spacing_ms(gap_ms: int, change_to=None):
+    """R60→R5 같은 연속 질의 사이(보냄 시각 차이)의 중앙값(ms) — 간격 설정이 실제 전송 간격에 반영되는지."""
+    r = Rig("ch1", cfg={"MFC_GAP_MS": gap_ms})
+    r.run(2)
+    if change_to is not None:
+        r.d.cfg["MFC_GAP_MS"] = change_to                                          # 재시작 없이 바꿈(설정 적용이 하는 일)
+    t0 = r.c.monotonic()
+    r.run(6)
+    ts = sorted(t for t, d in r.sim.received if t >= t0)
+    gaps = sorted((b - a) * 1000.0 for a, b in zip(ts, ts[1:]) if (b - a) < 0.5)
+    r.done()
+    return gaps[len(gaps) // 2]
+
+
+def test_mfc_gap_ms_0_20_50_changes_real_spacing_and_applies_live():
+    s0, s20, s50 = _query_spacing_ms(0), _query_spacing_ms(20), _query_spacing_ms(50)
+    assert s0 < s20 < s50
+    assert s20 - s0 == pytest.approx(20.0, abs=8.0) and s50 - s0 == pytest.approx(50.0, abs=8.0)     # 간격 설정만큼 늘어난다
+    live = _query_spacing_ms(50, change_to=0)                                          # 50 → 0 으로 도중에 바꾸면 바로 줄어듦
+    assert live == pytest.approx(s0, abs=8.0)
