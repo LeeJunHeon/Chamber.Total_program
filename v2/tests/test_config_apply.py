@@ -186,7 +186,69 @@ def test_supervisor_and_timing_settings_are_live_and_out_of_range_is_rejected(tm
     # RFPULSE_Q_MODE 는 H 등급(공정 중 변경 금지) — idle 일 때만 바로
     assert b.apply(1, **ch) is None and b.acks[-1]["status"] == "applied" and not b.acks[-1]["pendingKeys"]
     assert all(b.cfg[k] == v for k, v in ch.items())
-    r = b.apply(2, SUPERVISOR_HANG_TIMEOUT_S=5.0)                                       # 하한 10 s 밖 — 고쳐 쓰지 않고 거부(D11)
+    r = b.apply(2, SUPERVISOR_HANG_TIMEOUT_S=5.0)                                       # 하한 60 s 밖 — 고쳐 쓰지 않고 거부(D11·D413)
     assert r is not None and b.cfg["SUPERVISOR_HANG_TIMEOUT_S"] == 120.0
     r = b.apply(3, MFC_TICK_EVERY="R60,R5,R99")
     assert r is not None
+
+
+def test_supervisor_ranges_d413_boundaries_and_sup01(tmp_path):
+    """D413(D408 보완) — 멈춤 판단 한도 60~3600 s(화면 레시피·PC CSV 읽기가 코어 잠금을 최대 30 s 잡는다 — 그 2배),
+    확인 주기 1~30 s(늘 한도의 절반 이하). 범위 밖은 고쳐 쓰지 않고 버전 전체 거부(D11 — CONFIG_INVALID, 값은 그대로).
+    SUP01: 한도 ≥ 2 × PLC 명령 실행 상한(cmd_grace_s — 히터 패널 명령이 코어 잠금 안에서 히터 엔진 잠금을 그만큼 기다린다)."""
+    from v2.ch12.drivers.plc_conv import cmd_grace_s
+    b = Box(tmp_path)
+    assert (b.cfg["SUPERVISOR_HANG_TIMEOUT_S"], b.cfg["SUPERVISOR_HEALTH_INTERVAL_S"]) == (60.0, 10.0)   # 기본값 그대로
+    assert cmd_grace_s(b.cfg) == 10.5                                                    # 기본 PLC 설정 — 2배 21 s ≤ 60 s
+    v = 0
+    for key, bad, good in (("SUPERVISOR_HANG_TIMEOUT_S", 59.0, 60.0), ("SUPERVISOR_HANG_TIMEOUT_S", 3601.0, 3600.0),
+                           ("SUPERVISOR_HEALTH_INTERVAL_S", 31.0, 30.0), ("SUPERVISOR_HEALTH_INTERVAL_S", 0.5, 1.0)):
+        before = b.cfg[key]
+        v += 1
+        assert b.apply(v, **{key: bad}) == "CONFIG_INVALID", (key, bad)
+        assert b.cfg[key] == before and b.acks[-1]["status"] == "rejected" and any(key in e for e in b.acks[-1]["errors"])
+        v += 1
+        assert b.apply(v, **{key: good}) is None and b.cfg[key] == good, (key, good)
+    # SUP01 — PLC 응답 제한을 늘리면(설치 키) 명령 실행 상한도 늘어난다: 20 s → 20×4 + 0.5×3 + 1 = 82.5 s, 2배 165 s
+    b2 = Box(tmp_path / "b2")
+    assert cmd_grace_s(dict(b2.cfg, PLC_TIMEOUT_S=20.0)) == 82.5
+    r = b2.apply(1, PLC_TIMEOUT_S=20.0)
+    a = b2.acks[-1]
+    assert r == "CONFIG_INVALID" and a["status"] == "rejected" and any("SUP01" in e for e in a["errors"])
+    assert b2.store.stored()["PLC_TIMEOUT_S"] == 2.0
+    assert b2.apply(2, PLC_TIMEOUT_S=20.0, SUPERVISOR_HANG_TIMEOUT_S=164.0) == "CONFIG_INVALID"         # 2배에 못 미침
+    assert b2.apply(3, PLC_TIMEOUT_S=20.0, SUPERVISOR_HANG_TIMEOUT_S=165.0) is None                    # 한도를 같이 올리면 받음
+    assert b2.store.stored()["PLC_TIMEOUT_S"] == 20.0 and b2.cfg["SUPERVISOR_HANG_TIMEOUT_S"] == 165.0
+
+
+def _resave(path, **change):
+    """저장된 설정 파일의 값을 바꿔 다시 쓴다(파일 해시도 맞게) — 예전 범위에서 저장된 파일 흉내."""
+    from v2.common.config_store import _content_hash
+    obj = json.loads(path.read_text(encoding="utf-8"))
+    obj["values"].update(change)
+    obj["contentHash"] = _content_hash(obj["version"], obj["schemaHash"], obj["values"])
+    path.write_text(json.dumps(obj), encoding="utf-8")
+
+
+@pytest.mark.parametrize("key,old", [("SUPERVISOR_HANG_TIMEOUT_S", 30.0), ("SUPERVISOR_HANG_TIMEOUT_S", 10.0),
+                                     ("SUPERVISOR_HEALTH_INTERVAL_S", 60.0), ("SUPERVISOR_HEALTH_INTERVAL_S", 600.0)])
+def test_saved_values_out_of_new_supervisor_range_are_rejected_not_clamped_d11(tmp_path, key, old):
+    """D413 — 예전 범위(한도 10~3600·주기 1~600)에서 저장된 값이 새 범위 밖이면 D11 그대로: 읽을 때 고쳐 쓰지 않고 그 파일을 거부한다.
+    직전 버전(config_prev)이 맞으면 그것으로(notes 에 사유), 둘 다 범위 밖이면 ConfigError — 시작 거부(app 종료 코드 2,
+    감시 프로그램은 다시 켜지 않음)."""
+    from v2.common.config_store import ConfigError
+    from v2.ch12 import app as APP
+    from v2.supervisor import supervisor as SUP
+    d = tmp_path / "config"
+    b = Box(tmp_path)
+    assert b.apply(1, SUPERVISOR_HANG_TIMEOUT_S=90.0) is None
+    assert b.apply(2, SUPERVISOR_HANG_TIMEOUT_S=120.0) is None                         # active = 버전 2, prev = 버전 1
+    _resave(d / "config_active.json", **{key: old})
+    st = new_store(d)
+    vals = st.load()
+    assert st.source == "prev" and st.version == 1 and vals["SUPERVISOR_HANG_TIMEOUT_S"] == 90.0
+    assert vals[key] != old and any("config_active.json 사용 불가" in n and key in n for n in st.notes)
+    _resave(d / "config_prev.json", **{key: old})                                      # 직전 버전도 범위 밖
+    with pytest.raises(ConfigError, match="시작 거부"):
+        new_store(d).load()
+    assert APP.EXIT_CONFIG == 2 and APP.EXIT_CONFIG in SUP.NO_RESTART_CODES

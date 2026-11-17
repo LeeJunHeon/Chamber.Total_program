@@ -53,6 +53,8 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
      IG_TICK_GAP_WAIT_MS·IG_CACHE_FRESH_S·IG_PRE_SEND_ABSORB_MS, 새 묶음 supervisor(감시 프로그램·진단: SUPERVISOR_HANG_ENABLED·HEALTH_INTERVAL_S·HANG_TIMEOUT_S·START_GRACE_S,
      DEVICE_TIMING_LOG_ENABLED·INTERVAL_S·RETENTION_DAYS), RFPULSE_Q_MODE 기본 154, DC_LOW_CURRENT_LOWP_MAX_W·THRESH_A(v1 2fc00c4)·DC_OVERCURRENT_I1_A 기본 1.5, 키 사이 규칙 MFC01.
      스냅샷 필드: mfc 읽은 뒤 나이(valve_age_s·on_age_s·sp1~4_age_s·sp_active_age_s — CH1·CH2). state.deviceTiming(장비별 응답 시간 최근 집계 — 진단 화면).
+  11 2026-11-16 4차 보완(D413) — params: SUPERVISOR_HANG_TIMEOUT_S 범위 60~3600(이전 10~3600)·SUPERVISOR_HEALTH_INTERVAL_S 범위 1~30(이전 1~600)과 두 설명(코어 잠금 최대 30 s 근거),
+     키 사이 규칙 SUP01(멈춤 판단 한도 ≥ 2 × PLC 명령 실행 상한 — SUPERVISOR_HANG_TIMEOUT_S·PLC_TIMEOUT_S·PLC_RECONNECT_RETRY·PLC_RECONNECT_DELAY_S).
 """
 from __future__ import annotations
 
@@ -67,7 +69,7 @@ from v2.ch12 import snapshot_fields as SF
 from v2.ch12 import web_blocks as WB
 from v2.ch12.hub import optional_module
 
-EXPORT_VERSION = 10
+EXPORT_VERSION = 11
 
 # 웹이 받는 공정 이벤트(엔진이 system.emit(source="process:<c>", kind, event=data) 로 내는 것 — hub 가 run_* 메시지로 바꾼다)
 EVENTS: tuple = (

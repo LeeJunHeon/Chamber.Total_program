@@ -103,11 +103,11 @@ class RfPulseSim(SimDevice):
             return bytes([self._set(cmd, d)])
         if cmd == 155:
             return bytes([self.control])
-        if cmd == 164:                                          # 셋포인트 보고(가정 — 2026-11-09 사용자 지시 번호)
+        if cmd == 164:                                          # 셋포인트 보고(CESAR 1310 Table 4-16 — D413)
             return le(int(self.setpoint) + self.setpoint_readback_offset, 2)
-        if cmd == 177:                                          # 펄싱 모드 보고(가정)
+        if cmd == 177:                                          # 펄싱 모드 보고(Table 4-16 — D413)
             return bytes([self.pulsing])
-        if cmd == self.mode_query and self.mode_query:          # 조절 모드 보고(번호 미확인 — 시험이 정함)
+        if cmd == self.mode_query and self.mode_query:          # 조절 모드 보고(기본 154 = Table 4-16, 시험이 바꿈)
             return bytes([self.reg_mode if self.mode_query_value is None else self.mode_query_value])
         if cmd == 162:
             return self.status()

@@ -17,6 +17,9 @@ v1 그대로(챔버마다 하나 — main 이 ch1=…/ch2=None, parallel=False �
   같은 키 이름. 복원(restore): 예약이면 시각 검사(형식 'HH:MM'·범위) 후 start_daily + 'PreSputter CHn 예약 복원: 매일 HH:MM',
   레시피 파일이 없어도 경로는 유지(표시 '(파일 없음)').
 시각은 clock.wall()(로컬) — 가상 시계 시험 가능. 대기는 러너 스레드 하나(clock.start_thread)에서 clock.wait_until.
+레시피 지정(PRESPUTTER_RECIPE — 명령 코어 잠금 안)의 파일 확인(exists — NAS stat)은 따로 스레드에서 최대 EXISTS_WAIT_S(3 s)만 기다린다
+(2026-11-16 D413 — v1 은 화면 스레드에서 제한 없이 불렀다. 넘으면 v1 시작 폴더 확인(3 s 넘으면 없음으로)처럼 '(파일 없음)' 으로 두고,
+늦게 답이 오면 경로가 그대로일 때 그 값으로 바꾼다). 부팅 복원(restore)은 v1 처럼 바로 1회.
 """
 from __future__ import annotations
 
@@ -24,11 +27,13 @@ import collections
 import json
 import os
 import re
+import threading
 from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, Callable, Dict, Optional
 
 START_CONFIRM_TIMEOUT_S = 60.0
+EXISTS_WAIT_S = 3.0                # 레시피 지정 때 파일 확인 기다림(D413 — v1 시작 폴더 확인 3 s, plasma_cleaning_runtime.py:3114-3121)
 SETTINGS_FILE = "presputter.json"
 LINES_KEEP = 5000                  # PC 로그창에 보낸 줄 사본(오래 켜 두어도 늘지 않게 — PC 로그창 UI_LOG_MAX 와 같은 상한)
 
@@ -142,9 +147,38 @@ class PreSputter:
     def set_recipe_path(self, path: Optional[str]) -> None:
         self.recipe_path = path or None
         self.save()
-        self._disp = self.recipe_display()                # v1 _update_presputter_recipe_cache — exists() 1회
+        self._refresh_display()                           # v1 _update_presputter_recipe_cache — exists() 1회(최대 EXISTS_WAIT_S)
         if self.recipe_path:
             self._auto(f"PreSputter CH{self.e.n} 레시피 지정: {self.recipe_path}")
+
+    def _refresh_display(self) -> None:
+        """레시피 표시 갱신 — exists()(NAS stat)를 따로 스레드에서 최대 EXISTS_WAIT_S. 넘으면 '(파일 없음)', 늦은 답은 경로가 그대로면 반영."""
+        p = self.recipe_path
+        if not p:
+            self._disp = self.recipe_display()
+            return
+        clk = self.clock
+        box: Dict[str, Any] = {}
+        lk = threading.Lock()
+
+        def run() -> None:
+            try:
+                d = basename(p) if os.path.exists(p) else f"{basename(p)} (파일 없음)"
+            except Exception:                              # noqa: BLE001 — v1 contextlib.suppress → 없음
+                d = f"{basename(p)} (파일 없음)"
+            with lk:
+                box["v"] = d
+                if box.get("late") and self.recipe_path == p:
+                    self._disp = d
+            clk.notify()
+        clk.start_thread(run, f"PreSputter.exists.{self.label}")
+        clk.wait_until(clk.monotonic() + EXISTS_WAIT_S, lambda: "v" in box)
+        with lk:
+            if "v" in box:
+                self._disp = box["v"]
+            else:
+                box["late"] = True
+                self._disp = f"{basename(p)} (파일 없음)"
 
     def _auto(self, msg: str) -> None:
         """v1 main._broadcast_log("Auto", …) 자리(main.py:1690-1758) — PC 로그창 길(log_sink)로 '[HH:MM:SS] Auto: …'."""

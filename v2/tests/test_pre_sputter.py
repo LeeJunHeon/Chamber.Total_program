@@ -5,6 +5,8 @@
 """
 from datetime import datetime, timedelta
 
+import pytest
+
 from v2.common.clock import VirtualClock
 from v2.ch12 import pre_sputter as PS
 
@@ -208,4 +210,46 @@ def test_recipe_path_goes_through_core_start_guard(tmp_path):
         assert any(ln.endswith("CH1 [PreSputter] CH1 완료") for ln in p.lines), list(p.lines)[-5:]
     finally:
         rig.stop()
+        c.close()
+
+
+def test_recipe_path_exists_check_waits_at_most_3s_and_late_answer_is_applied_d413(tmp_path, monkeypatch):
+    """D413 — PRESPUTTER_RECIPE 는 명령 코어 잠금 안이라 파일 확인(exists — NAS stat)을 최대 EXISTS_WAIT_S(3 s)만 기다린다.
+    넘으면 '(파일 없음)'(v1 시작 폴더 확인 3 s 처럼), 늦게 온 답은 경로가 그대로면 반영 — 그새 다른 경로를 고르면 버린다. 경로 저장은 그대로."""
+    import os
+    c = _clock()
+    e = FakeEng(c)
+    p = PS.PreSputter(c, e, settings_dir=tmp_path)
+    gate: list = []
+    real = os.path.exists
+
+    def slow(x):
+        if str(x).startswith("\\\\NAS"):
+            c.wait_until(None, lambda: bool(gate))
+            return True
+        return real(x)
+    monkeypatch.setattr(PS.os.path, "exists", slow)
+    try:
+        t0 = c.monotonic()
+        p.set_recipe_path(r"\\NAS\slow.csv")
+        assert c.monotonic() - t0 == pytest.approx(PS.EXISTS_WAIT_S) and PS.EXISTS_WAIT_S == 3.0
+        assert p.state()["recipe_display"] == "slow.csv (파일 없음)" and p._read()["presputter/recipe_ch1"] == r"\\NAS\slow.csv"
+        gate.append(1)
+        c.notify()
+        c.wait_until(c.monotonic() + 1.0, lambda: p.state()["recipe_display"] == "slow.csv")
+        assert p.state()["recipe_display"] == "slow.csv"                       # 늦은 답 반영
+        gate.clear()
+        p.set_recipe_path(r"\\NAS\old.csv")                                    # 느린 확인 중에
+        local = tmp_path / "local.csv"
+        local.write_text("x\n", encoding="utf-8")
+        p.set_recipe_path(str(local))                                         # 다른 경로를 고름 — 바로 확인됨
+        assert p.state()["recipe_display"] == "local.csv"
+        gate.append(1)
+        c.notify()
+        c.wait_until(c.monotonic() + 1.0)
+        assert p.state()["recipe_display"] == "local.csv"                      # 옛 경로의 늦은 답은 버림
+    finally:
+        gate.append(1)
+        c.notify()
+        p.close()
         c.close()

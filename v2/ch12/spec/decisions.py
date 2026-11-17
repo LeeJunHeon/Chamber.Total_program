@@ -536,7 +536,7 @@ DECISIONS += [
          where="v2/ch12/spec/devices.py(READBACK·READBACK_NONE); drivers/mfc_ops.py; ig_ops.py; dcpulse_ops.py; rfpulse.py; plc_cmds.py"),
     dict(id="D331", title="되읽기 응답 형식·RF Pulse 설정값 되읽기 질의 번호는 현장 확인 대기",
          decision="MFC R65~R67·R69·R6·R7·R1~R4 응답 형식은 v1 의 꺼져 있던 검증 경로 파서 그대로(sim 가정), RF Pulse Setpoint/Regulation/Pulsing 되읽기 질의는 "
-                  "번호·쪽수를 확인하지 못해 두지 않았다(CSR 로만 확인). 둘 다 UNVERIFIED 에 올렸고 bench 에서 확인한다.",
+                  "번호·쪽수를 확인하지 못해 두지 않았다(CSR 로만 확인). 둘 다 UNVERIFIED 에 올렸고 bench 에서 확인한다. (+ RF Pulse 쪽은 뒤에 풀림: 2026-11-09 D405 에서 164·177 되읽기를 넣고, 154(D407)·164·177(D413)을 CESAR 1310 매뉴얼 Table 4-16 으로 확인 — UNVERIFIED 에서 뺐다. 남은 것은 MFC 응답 형식)",
          reason="매뉴얼이 이 저장소에 없다", confirm=True, where="v2/ch12/spec/devices.py(UNVERIFIED)"),
 ]
 
@@ -601,7 +601,7 @@ DECISIONS += [
          decision="① GPC3000: R6(밸브 위치 %, 매뉴얼 p.73 Valve Position Value)를 매 tick 읽어 CH1·CH2 1초 기록·화면·웹 필드 valve_pct 로, R69(ON/OFF 비트)·R1~R4(SP 값 sp1~4_mtorr)·R7(선택 SP sp_active)도 매 tick 읽어 "
                   "기억값 대신 실제값으로(못 읽은 tick 은 빈 값 — 기억으로 채우지 않음). 1초 예산 9개 질의 × 응답 시간 + 50 ms 간격 ≈ 0.6 s + 응답 시간 — ⚠ 장비 응답 시간 합이 1 s 에 들어가는지는 bench 에서 "
                   "확인(못 들어가면 SP 값·선택 SP 를 번갈아 읽기 — 사용자 확인 필요). sim 종합 시험(test_ch2_heater_process)에서 마지막 50행 중 히터 행 1~2개가 late·stale 로 나와 '전부 ok' 단언을 '3개 이하'로 완화했다 — 9질의가 tick 을 채운 영향으로 보이며 같은 확인이 bench 에 필요하다. ② RF Pulse: SET_SETPOINT(8)→164·SET_PULSING(27)→177 쓰기 뒤 되읽기→다시 쓰기(RFPULSE_REWRITE_MAX)→VERIFY_MISMATCH "
-                  "(시작 시퀀스·공정 중 셋포인트 변경 둘 다, 통신 실패면 검증 생략·경고만 — freq·duty 와 같은 규칙, 번호는 사용자 지시·매뉴얼 쪽수 미확인). "
+                  "(시작 시퀀스·공정 중 셋포인트 변경 둘 다, 통신 실패면 검증 생략·경고만 — freq·duty 와 같은 규칙, 번호는 사용자 지시 — + 2026-11-16 D413: CESAR 1310 매뉴얼 Table 4-16(154 와 같은 표)으로 확인). "
                   "SET_MODE(3)→155 는 쓰지 않았다 — 155 는 v1·v2 가 이미 'READ_ACTIVE_CTRL'(제어 모드 HOST=2)로 쓰는 질의라 조절 모드(6)를 되읽으면 늘 불일치해 시작이 막힌다. 대신 설정 키 RFPULSE_Q_MODE(기본 0 = 읽지 않음)에 "
                   "매뉴얼의 '조절 모드 보고' 번호를 적으면 같은 방식으로 되읽는다(사용자 확인 필요 — 번호). ③ DC Pulse REF_LEVEL(0x83)·REGULATION(0x81): EnerPulse 읽기 코드를 확인할 수 없어 READBACK_NONE "
                   "(+0x40 규칙은 추정이라 장비로 시험 삼아 보내지 않음), PLC 스위치 코일: 래더가 다시 쓰는 코일이라 '쓴 값 = 읽은 값'이 보장되지 않아 FC5 에코 + 상태 코일 인터락 확인 — 근거를 장비 사실 표 READBACK_NONE 에.",
@@ -661,4 +661,31 @@ DECISIONS += [
                   "골든 dev_plc.json 을 main 8603d5b 에서 다시 만들었다. V1_BASE 8603d5b.",
          reason="사용자 지시 2026-11-13('작업 중 main 에 새 커밋이 생기면 마지막에 확인해 반영')", confirm=False,
          where="v2/ch12/drivers/dc.py; params/dc.py; workers/oes_device.py·oes_guard.py·oes_measure.py·oes_daemon.py"),
+]
+
+
+DECISIONS += [
+    dict(id="D413", title="2026-11-16 멈춤 감지 설정 범위 — 코어 잠금을 오래 잡는 곳 전수 확인(D408 보완), RF Pulse 164·177 매뉴얼 확인",
+         decision="범위: SUPERVISOR_HANG_TIMEOUT_S 10~3600 → 60~3600 s(기본 60 그대로), SUPERVISOR_HEALTH_INTERVAL_S 1~600 → 1~30 s(기본 10 그대로) — 주기가 늘 한도의 절반 이하라 "
+                  "두 값을 비교하는 규칙은 두지 않는다. 근거 = 명령 코어 잠금(Ch12Core._lock — 명령 처리 번호는 이 잠금을 0.5 s 안에 잡을 때만 오른다) 전수 확인(LOCK_FREE 가 아닌 처리기 전부): "
+                  "① RECIPE_LOAD path(화면 레시피 읽기) NAS 최대 30 s(UI_RECIPE_LOAD_TIMEOUT_S). "
+                  "② PC_START·PC_RECIPE_LOAD path(PC CSV 첫 행 읽기)는 잠금 안에서 제한 없이 NAS 를 읽고 있었다(v1 은 executor 30 s — v2 에서 빠짐, PC-087 은 done 이었음) → 같은 30 s "
+                  "(core._read_pc_csv — 넘으면 'CSV 로드 30초 timeout (NAS 응답 지연): 경로' 로그, 명령 결과 E227, 적재·시작 안 함). "
+                  "③ PRESPUTTER_RECIPE 의 레시피 파일 exists()(NAS stat)도 제한 없음(v1 도 화면 스레드에서 제한 없음) → 따로 스레드에서 최대 3 s(pre_sputter.EXISTS_WAIT_S — v1 PC 시작 폴더 확인 3 s), "
+                  "넘으면 '(파일 없음)' 표시 후 늦은 답을 경로가 그대로일 때 반영(X43). "
+                  "④ HEATER_ONOFF·APPLY·RESET 은 히터 엔진 잠금을 기다린다 — PLC worker 가 히터 요청(쓰기·폴링·워치독)을 실행하는 동안 잡으므로 최대 PLC 명령 실행 상한 "
+                  "cmd_grace_s = PLC_TIMEOUT_S×(PLC_RECONNECT_RETRY+2)+PLC_RECONNECT_DELAY_S×(PLC_RECONNECT_RETRY+1)+1 = 기본 10.5 s(PLC 설치값 최대면 471 s). 하한을 올리는 대신 "
+                  "키 사이 규칙 SUP01(SUPERVISOR_HANG_TIMEOUT_S ≥ 2 × cmd_grace_s — 기본 21 s ≤ 60 s, 어기면 설정 적용 거부 D11). "
+                  "⑤ 그 밖(PROCESS_START·RECIPE_LOAD rows/blocks·RECIPE_CLEAR·PROCESS_ADJUST·BLOCK_SKIP·PAUSE·RESUME·SEQUENCE_EDIT·오류 해제·프리스퍼터 예약/취소·PC_START params·PC_SELECT_CH·"
+                  "TSP_START·TSP_SCHEDULE·두께 영점/Factor/재료/창·PLC_BUTTON·BUZZ_STOP·POWER_SELECT·RUNTIME_DUMP·LOG_CLEAR·CONFIG_APPLY/ROLLBACK·PROCESS_ABORT·NOTIFY)은 메모리 상태·"
+                  "worker 요청 넣기(비동기)·스레드 띄우기·로컬 설정 폴더 파일(설정 저장소·presputter.json·tsp_schedule.json·두께 Factor/재료, 덤프 폴더 만들기 — LOG_ROOT_DIR 기본 로컬, 쓰기는 덤프 스레드)·"
+                  "사건 구독자(허브·Robot CSV — 메모리·쓰기 큐) — ms 단위. 잠금 밖: 정지 5종·ROBOT_* — 호스트 START_SPUTTER 의 CSV 30 s·시작 대기 CHAMBER_HOST_START_WAIT_TIMEOUT_S 10 s 는 "
+                  "로봇 명령 스레드에서 기다리고 잠금 안은 start_chamber 시작 가드뿐이라 명령 처리 번호를 멈추지 않는다. "
+                  "따라서 정상 최대 잠금 = 30 s(①②) → 하한 60 s = 2배(비콘 확인 틈 약 1.5 s·확인 주기 위상을 넣어도 멈춤으로 잡히지 않음 — 시험), 60 s 를 넘을 수 있는 곳(④의 PLC 설정 확대)은 SUP01. "
+                  "저장된 값이 새 범위 밖이면 D11 그대로 — 고쳐 쓰지 않고 그 설정 파일을 거부(직전 버전이 맞으면 그것, 둘 다 밖이면 시작 거부·종료 코드 2·감시 프로그램은 다시 켜지 않음 — 시험). "
+                  "감시 프로그램(v2/supervisor)은 설정 파일을 직접 읽지 않고 건강 확인 파일의 값(검사를 지난 cfg)을 쓴다 — 범위를 따로 검사하는 곳이 없어 맞출 것 없음(명령줄 --hang-timeout·--health-interval 은 시험용). "
+                  "RF Pulse: 164(셋포인트)·177(펄싱 모드) 되읽기 번호를 154 와 같은 CESAR 1310 매뉴얼 Table 4-16 으로 확인 — '매뉴얼 쪽수 미확인' 문구 정리(rfpulse_verify·장비 사실 표 READBACK·sim 주석·D405·D331·SYNC-401), "
+                  "UNVERIFIED 의 'Report Setpoint·Regulation Mode·Pulsing 질의 번호와 쪽수' 를 뺌(코드 동작 변경 없음). 웹 묶음 11.",
+         reason="사용자 지시 2026-11-16 1·2장", confirm=True,
+         where="v2/ch12/params/supervision.py; core.py; pre_sputter.py; v2/supervisor/supervisor.py; drivers/rfpulse_verify.py; spec/devices.py"),
 ]

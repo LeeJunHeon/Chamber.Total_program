@@ -115,10 +115,10 @@ ITEMS = [
          v1="device/mfc.py:1694-1847; lib/config_common.py:309-317", v2="v2/ch12/drivers/mfc.py; v2/ch12/spec/devices.py",
          test="v2/tests/test_mfc.py::test_valve_position_onoff_sp_values_and_active_sp_are_read_every_tick_as_actual_values; v2/tests/test_mfc.py::test_parse_valve_and_active_sp; v2/tests/test_mfc.py::test_params_and_budget", status="done", note=""),
     dict(id="SYNC-401", area="sync",
-         desc="RF Pulse SET_SETPOINT(8)·SET_PULSING(27) 쓰기 뒤 되읽기(164·177) → 다시 쓰기 → VERIFY_MISMATCH(시작 시퀀스·공정 중 셋포인트 변경), SET_MODE(3)는 번호 설정 RFPULSE_Q_MODE(155 는 제어 모드라 불가 — 기본 읽지 않음)",
+         desc="RF Pulse SET_SETPOINT(8)·SET_PULSING(27) 쓰기 뒤 되읽기(164·177 — CESAR 1310 매뉴얼 Table 4-16, 154 와 같은 표) → 다시 쓰기 → VERIFY_MISMATCH(시작 시퀀스·공정 중 셋포인트 변경), SET_MODE(3)는 번호 설정 RFPULSE_Q_MODE(155 는 제어 모드라 불가 — 기본 154, SYNC-501)",
          v1="device/rf_pulse.py", v2="v2/ch12/drivers/rfpulse_verify.py; v2/ch12/drivers/rfpulse.py; v2/ch12/params/rfpulse.py",
          test="v2/tests/test_rfpulse.py::test_setpoint_and_pulsing_are_read_back_after_write_164_177; v2/tests/test_rfpulse.py::test_setpoint_readback_mismatch_rewrites_then_verify_mismatch_and_no_rf_on; "
-              "v2/tests/test_rfpulse.py::test_run_setpoint_change_is_verified_too_and_readback_can_be_turned_off; v2/tests/test_rfpulse.py::test_mode_readback_154_by_default_and_off_with_zero_155_is_not_regulation_mode", status="done", note=""),
+              "v2/tests/test_rfpulse.py::test_run_setpoint_change_is_verified_too_and_readback_can_be_turned_off; v2/tests/test_rfpulse.py::test_mode_readback_154_by_default_and_off_with_zero_155_is_not_regulation_mode", status="done", note="2026-11-16 D413: 164·177 번호를 CESAR 1310 매뉴얼 Table 4-16 으로 확인(매뉴얼 쪽수 미확인 문구 정리, 장비 사실 표 UNVERIFIED 에서 뺌 — 코드 동작 변경 없음)"),
     dict(id="SYNC-402", area="sync",
          desc="DC Pulse REF_LEVEL(0x83)·REGULATION(0x81)·PLC 스위치 코일의 되읽기 없음(READBACK_NONE)과 그 근거를 장비 사실 표에 분명히",
          v1="device/dc_pulse.py; device/plc.py", v2="v2/ch12/spec/devices.py", test="v2/tests/test_devices.py::test_readback_table_matches_params_and_lists_commands_without_readback", status="done", note=""),
@@ -176,4 +176,18 @@ ITEMS = [
          v1="apps/oes_service/oes_api.py", v2="v2/ch12/workers/oes_device.py; v2/ch12/workers/oes_guard.py; v2/ch12/workers/oes_measure.py; v2/ch12/workers/oes_daemon.py",
          test="v2/tests/test_oes_link.py::test_read_buffer_is_always_at_least_the_largest_candidate_but_returns_first_npix; "
               "v2/tests/test_oes_worker_hang_exit.py::test_measure_first_frame_timeout_prints_finished_and_exits_125_without_waiting_for_cleanup", status="done", note=""),
+    dict(id="SYNC-520", area="sync",
+         desc="멈춤 감지 설정 범위(D413 — D408 보완): SUPERVISOR_HANG_TIMEOUT_S 60~3600 s(코어 잠금 최대 30 s — 화면 레시피·PC CSV 읽기 — 의 2배), "
+              "SUPERVISOR_HEALTH_INTERVAL_S 1~30 s(한도 하한의 절반), 키 사이 규칙 SUP01(한도 ≥ 2 × PLC 명령 실행 상한 — 히터 패널 대기), "
+              "범위 밖 저장값은 고쳐 쓰지 않고 거부(D11 — 직전 버전, 둘 다 밖이면 시작 거부), 감시 프로그램은 범위를 따로 검사하지 않음",
+         v1="(v2 신설)", v2="v2/ch12/params/supervision.py; v2/ch12/core.py; v2/supervisor/supervisor.py",
+         test="v2/tests/test_config_apply.py::test_supervisor_ranges_d413_boundaries_and_sup01; "
+              "v2/tests/test_config_apply.py::test_saved_values_out_of_new_supervisor_range_are_rejected_not_clamped_d11; "
+              "v2/tests/test_supervisor_hang.py::test_longest_core_lock_hold_is_not_a_hang_at_the_range_limits_d413", status="done", note=""),
+    dict(id="SYNC-521", area="sync",
+         desc="코어 잠금 안 NAS 파일 접근 시간 제한(D413): PC CSV 읽기(PC_RECIPE_LOAD·PC_START path) 30 s('CSV 로드 30초 timeout (NAS 응답 지연): 경로' → E227 — v1 executor 30 s, v2 에서 빠져 있던 것), "
+              "프리스퍼터 레시피 지정의 파일 확인 3 s('(파일 없음)' 뒤 늦은 답 반영)",
+         v1="runtime/plasma_cleaning_runtime.py:3141-3150; main.py:1639-1654", v2="v2/ch12/core.py; v2/ch12/pre_sputter.py",
+         test="v2/tests/test_core.py::test_pc_csv_path_is_read_and_nas_stall_is_limited_to_30s_d413; "
+              "v2/tests/test_pre_sputter.py::test_recipe_path_exists_check_waits_at_most_3s_and_late_answer_is_applied_d413", status="done", note=""),
 ]

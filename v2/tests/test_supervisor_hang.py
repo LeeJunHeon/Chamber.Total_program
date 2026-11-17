@@ -138,6 +138,54 @@ def test_check_health_unit_with_fake_clock(tmp_path):
     assert s._read_hb() is None
 
 
+def _stall_run(tmp_path, stall_s, interval_s, timeout_s, phase_s, total_s=200.0):
+    """가짜 시계로 감시 확인을 흉내 — 비콘은 1 s 마다 tick·cmd 를 쓰고, cmd 는 40 s 부터 stall_s 동안 멈춘다(코어 잠금을 잡은 명령).
+    감시는 phase_s 부터 interval_s 마다 check_health. 처음 나온 멈춤 사유(없으면 None)."""
+    t = [0.0]
+
+    class C:
+        pid = 77
+    s = Supervisor(["x"], tmp_path, hang_timeout_s=timeout_s, start_grace_s=300.0, health_interval_s=interval_s,
+                   hb_now=lambda: t[0], say=lambda m: None)
+    s.child = C()
+    s._hb_reset()
+    nxt, cmd, step = phase_s, 0, 0.25
+    while t[0] <= total_s:
+        if abs(t[0] - round(t[0])) < 1e-9:                                     # 1 s 마다 비콘
+            if not (40.0 <= t[0] < 40.0 + stall_s):
+                cmd += 1
+            (tmp_path / "heartbeat.json").write_text(json.dumps(dict(pid=77, ready=True, tick=int(t[0]), cmd=cmd)), encoding="utf-8")
+        if t[0] >= nxt:
+            why = s.check_health()
+            if why:
+                return why
+            nxt += interval_s
+        t[0] = round(t[0] + step, 6)
+    return None
+
+
+def test_longest_core_lock_hold_is_not_a_hang_at_the_range_limits_d413(tmp_path):
+    """D413 — 코어 잠금을 정상으로 가장 오래 잡는 화면 레시피·PC CSV 읽기(최대 30 s) + 비콘 확인 틈(잠금 대기 0.5 s·주기 1 s)이
+    가장 짧은 한도(60 s)·가장 긴 확인 주기(30 s)에서 어느 위상이든 멈춤이 아니다. 한도 + 확인 주기만큼 멈추면 어느 위상이든 멈춤이다
+    (기준 시각은 감시가 마지막으로 바뀐 번호를 본 확인 시각 — 감지는 한도 뒤 한 주기 안)."""
+    from v2.ch12 import core as CORE
+    from v2.ch12.drivers.plc_conv import cmd_grace_s
+    from v2.ch12.params import PARAMS
+    from v2.common.paramdef import defaults
+    P = {x.key: x for x in PARAMS}
+    lo_timeout, hi_interval = P["SUPERVISOR_HANG_TIMEOUT_S"].min, P["SUPERVISOR_HEALTH_INTERVAL_S"].max
+    assert (lo_timeout, hi_interval) == (60.0, 30.0)
+    assert 2 * CORE.UI_RECIPE_LOAD_TIMEOUT_S <= lo_timeout and 2 * hi_interval <= lo_timeout
+    assert 2 * cmd_grace_s(defaults(PARAMS)) <= P["SUPERVISOR_HANG_TIMEOUT_S"].default         # 히터 패널(기본 PLC 설정 10.5 s)
+    hold = CORE.UI_RECIPE_LOAD_TIMEOUT_S + 1.5
+    for i, phase in enumerate((0.0, 0.25, 7.5, 10.0, 15.0, 22.5, 29.75)):
+        (tmp_path / f"p{i}").mkdir()
+        assert _stall_run(tmp_path / f"p{i}", hold, hi_interval, lo_timeout, phase) is None, phase
+        (tmp_path / f"q{i}").mkdir()
+        why = _stall_run(tmp_path / f"q{i}", lo_timeout + hi_interval + 2.0, hi_interval, lo_timeout, phase)
+        assert why is not None and "명령 처리(코어 잠금)" in why, phase
+
+
 # ───────── 자식 쪽 비콘 ─────────
 class FakeLock:
     def __init__(self):

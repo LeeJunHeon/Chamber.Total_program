@@ -202,3 +202,36 @@ def test_panel_and_plc_commands_reach_engines(rig):
     assert rig.command("THICKNESS_ZERO", {"ch": 1}, source=HMI).reason == "BAD_ARGS"       # CH2 만(ch 2)
     assert rig.command("LOG_CLEAR", {"target": "ch1"}, source=HMI).ok
     assert rig.command("RUNTIME_DUMP", {"reason": "manual_button"}, source=HMI).ok
+
+
+def test_pc_csv_path_is_read_and_nas_stall_is_limited_to_30s_d413(rig, tmp_path, monkeypatch):
+    """D413 — PC 'CSV 불러오기'(PC_RECIPE_LOAD·PC_START path)는 코어 잠금 안에서 NAS 파일을 읽는다 — v1 처럼 30 s 제한
+    (plasma_cleaning_runtime.py:3141-3150 executor + wait_for 30 s). 넘으면 로그 'CSV 로드 30초 timeout (NAS 응답 지연): 경로' 후
+    적재·시작 안 함(명령 결과 E227). 멈춤 감지 한도 하한 60 s 의 근거(코어 잠금 최대 30 s)."""
+    from v2.ch12 import pc_recipe as PR
+    f = tmp_path / "pc.csv"
+    f.write_text("process_name,base_pressure,gas_flow,working_pressure,rf_power,process_time\nPCX,5e-6,10,2,100,1\n",
+                 encoding="utf-8")
+    pc = rig.asm.pc
+    assert rig.command("PC_RECIPE_LOAD", {"path": str(f)}, source=HMI).ok
+    assert pc.ui["process_name"] == "PCX" and pc.loaded_row["process_name"] == "PCX"
+    gate: list = []
+    real = PR.read_first_row
+
+    def stalled(path, log=None):                       # NAS 무응답 — 풀어 줄 때까지
+        rig.clock.wait_until(None, lambda: bool(gate))
+        return real(path, log)
+    monkeypatch.setattr(PR, "read_first_row", stalled)
+    msg = f"CSV 로드 30초 timeout (NAS 응답 지연): {f}"
+    try:
+        for kind in ("PC_RECIPE_LOAD", "PC_START"):
+            n = len(pc.ui_log)
+            t0 = rig.clock.monotonic()
+            r = rig.command(kind, {"path": str(f)}, source=HMI)
+            assert rig.clock.monotonic() - t0 == pytest.approx(30.0), kind
+            assert (r.ok, r.reason, r.detail) == (False, "E227", msg), kind
+            assert any(ln.endswith(f"File: {msg}") for ln in list(pc.ui_log)[n:]), kind
+            assert not pc.running
+    finally:
+        gate.append(1)
+        rig.clock.notify()

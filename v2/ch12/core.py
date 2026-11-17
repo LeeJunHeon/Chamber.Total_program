@@ -7,7 +7,11 @@ command(kind, args, source, cid, by) → CmdResult(.ok·.reason·.detail·.value
 - 엔진이 문구와 함께 거부하면(reject_detail·StartResult.message·TSP message) 그 문구를 detail 로(300자) — 챔버K _why 와 같다.
 - cmd_result 메시지는 core 가 내지 않는다(결정 D81 — hub.run_command). system.command = core.command.
 - 여러 스레드(로컬 서버·웹 연결·로봇 API·시험)가 동시에 불러도 잠금 하나로 하나씩(검사와 실행 사이에 다른 명령이 끼지 않게).
-  처리는 큐에 넣기·상태 바꾸기·스레드 띄우기뿐이라 짧다. 정지 명령(PROCESS_STOP·PC_STOP·TSP_STOP·ALL_STOP·POWER_OFF_ONLY)은 잠금을
+  처리는 큐에 넣기·상태 바꾸기·스레드 띄우기뿐이라 짧다. 잠금 안에서 오래 기다리는 것(2026-11-16 D413 전수 확인 — 멈춤 감지 한도
+  SUPERVISOR_HANG_TIMEOUT_S 하한 60 s 의 근거): 화면 레시피 읽기(RECIPE_LOAD path)·PC CSV 읽기(PC_START·PC_RECIPE_LOAD path)는 NAS 응답을
+  최대 UI_RECIPE_LOAD_TIMEOUT_S(30 s) 기다린다(v1 executor 30 s — 넘으면 'CSV 로드 30초 timeout (NAS 응답 지연)'), 프리스퍼터 레시피 지정
+  (PRESPUTTER_RECIPE)의 파일 확인은 최대 pre_sputter.EXISTS_WAIT_S(3 s), 히터 패널(HEATER_ONOFF·APPLY·RESET)은 히터 엔진 잠금을
+  PLC 명령 실행 상한(cmd_grace_s — 기본 10.5 s, 키 사이 규칙 SUP01)까지. 그 밖은 메모리·로컬 설정 폴더 파일·요청 넣기(ms). 정지 명령(PROCESS_STOP·PC_STOP·TSP_STOP·ALL_STOP·POWER_OFF_ONLY)은 잠금을
   기다리지 않는다(엔진 stop 이 자기 잠금으로 안전). 로봇 명령(ROBOT_*)도 잠금 밖 — RobotOps 가 v1 잠금(lock_ch·PLC 구간)을 가지고
   초 단위로 기다리므로(게이트·척·진공 시퀀스) 그동안 STOP 이 막히지 않게. 로봇 START_SPUTTER 의 시작 가드는 어댑터가
   start_chamber 를 불러(잠금 안) 웹 시작과 같은 판단을 한다.
@@ -202,25 +206,54 @@ class Ch12Core:
                 e.popup("실행 오류", "공정 시작 준비 중 내부 오류가 발생했습니다.\n로그를 확인하세요.", level="error")
                 raise Rejected("INTERNAL_ERROR", f"exception: {ex!r}")
 
+    def _read_limited(self, work: Callable[[], Any], name: str) -> Dict[str, Any]:
+        """파일 읽기(NAS)를 따로 스레드에서 — 코어 잠금을 최대 UI_RECIPE_LOAD_TIMEOUT_S(30 s)까지만 잡는다(v1 run_in_executor +
+        asyncio.wait_for(…, 30.0)). 끝났으면 {"v": 값}, 시간 안에 끝나지 않으면 {}(스레드는 v1 executor 처럼 남아 끝까지 돈다).
+        work 의 예외는 부른 스레드에서 다시 낸다(30 s 를 기다리지 않음)."""
+        clk = self.clock
+        box: Dict[str, Any] = {}
+
+        def run() -> None:
+            try:
+                box["v"] = work()
+            except BaseException as ex:                     # noqa: BLE001 — 부른 쪽에서 다시 낸다
+                box["e"] = ex
+            finally:
+                clk.notify()
+        clk.start_thread(run, name)
+        clk.wait_until(clk.monotonic() + UI_RECIPE_LOAD_TIMEOUT_S, lambda: "v" in box or "e" in box)
+        if "e" in box:
+            raise box["e"]
+        return box
+
     def _load_recipe_ui(self, e, path: str):
         """화면 Process List 파일 열기(_handle_process_list_clicked_async 3395-3438) — NAS 지연 대비 30 s 제한(넘으면 로그
         'CSV 로드 30초 timeout (NAS 응답 지연): …' 후 적재 안 함). 그 밖 예외 문구는 load_recipe_file('파일 처리 오류: …')."""
         from v2.ch12.recipe import RecipeLoad, load_recipe_file
-        clk = self.clock
-        box: Dict[str, Any] = {}
 
-        def work() -> None:
+        def work():
             try:
-                box["v"] = load_recipe_file(path, origin="ui")
+                return load_recipe_file(path, origin="ui")
             except Exception as ex:                         # noqa: BLE001
-                box["v"] = RecipeLoad(path, logs=[("File", f"파일 처리 오류: {ex}")], code="E209", message=f"파일 처리 오류: {ex}")
-            clk.notify()
-        clk.start_thread(work, "recipe-load-ui")
-        clk.wait_until(clk.monotonic() + UI_RECIPE_LOAD_TIMEOUT_S, lambda: "v" in box)
+                return RecipeLoad(path, logs=[("File", f"파일 처리 오류: {ex}")], code="E209", message=f"파일 처리 오류: {ex}")
+        box = Ch12Core._read_limited(self, work, "recipe-load-ui")
         if "v" not in box:
             msg = f"CSV 로드 30초 timeout (NAS 응답 지연): {path}"
             e.log("File", msg)
             return RecipeLoad(path, code="E227", message=msg)
+        return box["v"]
+
+    def _read_pc_csv(self, path: str):
+        """PC 'CSV 불러오기'(plasma_cleaning_runtime.py:3141-3150) — 첫 데이터 행 읽기를 executor 처럼 30 s 제한. 넘으면 로그
+        'CSV 로드 30초 timeout (NAS 응답 지연): {경로}' 후 적재 안 함(v1 은 그냥 return — v2 는 명령 결과 E227 로 거부).
+        읽기 실패('CSV 읽기 실패: …' 로그)·행 없음은 None(부르는 쪽이 '데이터 행이 없습니다.')."""
+        from v2.ch12 import pc_recipe as PR
+        pc = self.pc
+        box = Ch12Core._read_limited(self, lambda: PR.read_first_row(path, pc.log), "pc-csv-load-ui")
+        if "v" not in box:
+            msg = f"CSV 로드 30초 timeout (NAS 응답 지연): {path}"
+            pc.log("File", msg)
+            raise Rejected("E227", msg)
         return box["v"]
 
     def presputter_start_ui(self, ch: str) -> bool:
@@ -350,9 +383,8 @@ class Ch12Core:
             if isinstance(a.get("rows"), list):
                 return a["rows"], str(a.get("path") or "")
             if a.get("path"):
-                from v2.ch12 import pc_recipe as PR
                 p = str(a["path"])
-                row = PR.read_first_row(p, self.pc.log)
+                row = self._read_pc_csv(p)                       # NAS — 최대 30 s(v1 executor 30 s, D413)
                 return ([row] if row else []), p
             return None, ""
 

@@ -298,7 +298,8 @@ READBACK: tuple = (
              "device/rf_pulse.py(v1 은 불일치를 경고만) → 다시 쓰기 + VERIFY_MISMATCH"),
     Readback("rfpulse", "SET_SETPOINT 8 · SET_PULSING 27", "164(셋포인트 W u16) · 177(펄싱 모드 1 B)", "= 쓴 W / 모드",
              "RFPULSE_READBACK_ENABLED·RFPULSE_REWRITE_MAX·RFPULSE_REWRITE_GAP_MS",
-             "v2 신설(2026-11-09 E2 — 질의 번호는 사용자 지시, 매뉴얼 쪽수는 미확인·UNVERIFIED). 시작 시퀀스와 공정 중 셋포인트 변경 모두"),
+             "v2 신설(2026-11-09 E2 — 질의 번호는 사용자 지시, CESAR 1310 매뉴얼 Table 4-16(154 와 같은 표)으로 확인 — 2026-11-16 D413). "
+             "시작 시퀀스와 공정 중 셋포인트 변경 모두"),
     Readback("rfpulse", "SET_CTRL_MODE 3(조절 모드)", "154(조절 모드 1 B — RFPULSE_Q_MODE, 0 = 끔)", "= 쓴 모드(6 FWD)",
              "RFPULSE_Q_MODE·RFPULSE_READBACK_ENABLED",
              "v2 신설(2026-11-13 D407) — 근거: CESAR 1310 매뉴얼 Table 4-16 '154 Reports regulation mode — 1 byte: 6 Forward, 7 Load, 8 External(DC Bias), "
@@ -439,8 +440,6 @@ UNVERIFIED: tuple = (
     Unverified("dcpulse", "1초 PIV·SAT·ANT 읽기 때 NAK 증가·응답 지연", "v1 은 5 s(점화 1 s) 주기(D48)", "bench_probe --ch1-pulse dcpulse"),
     Unverified("rfpulse", "NPort 시리얼 설정·응답 지연·CMD_GAP_MS 0 에서 162·165·166 매 tick 의 NAK·오류율", "간격 0(응답을 받는 대로)",
                "bench_probe --ch1-pulse rfpulse"),
-    Unverified("rfpulse", "Report Setpoint·Regulation Mode·Pulsing 질의 번호와 쪽수", "v1 미사용 — 되읽기 질의 없이 CSR 로만 확인",
-               "CESAR 1310 매뉴얼 4-48~49 AE Bus 명령표"),
     Unverified("rfpulse", "128·130·152·198 질의 응답(기종·용량·자동 차단·판)", "v1 미사용 — 챔버K CESAR 매뉴얼 근거", "bench_probe 설정 읽기"),
     Unverified("pulse", "지금 4007·4005 에 어느 펄스 장비가 꽂혀 있는가", "공정이 고른 쪽만 연결(v1)", "현장 확인 후 bench_probe 선택"),
     Unverified("tsp", "205 응답 데이터 길이·형식·주소 0x80 외 응답", "v1 해석이 받는 모양(sim 가정)", "bench_probe 205 원문"),
