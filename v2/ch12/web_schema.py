@@ -55,10 +55,15 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
      스냅샷 필드: mfc 읽은 뒤 나이(valve_age_s·on_age_s·sp1~4_age_s·sp_active_age_s — CH1·CH2). state.deviceTiming(장비별 응답 시간 최근 집계 — 진단 화면).
   11 2026-11-16 4차 보완(D413) — params: SUPERVISOR_HANG_TIMEOUT_S 범위 60~3600(이전 10~3600)·SUPERVISOR_HEALTH_INTERVAL_S 범위 1~30(이전 1~600)과 두 설명(코어 잠금 최대 30 s 근거),
      키 사이 규칙 SUP01(멈춤 판단 한도 ≥ 2 × PLC 명령 실행 상한 — SUPERVISOR_HANG_TIMEOUT_S·PLC_TIMEOUT_S·PLC_RECONNECT_RETRY·PLC_RECONNECT_DELAY_S).
+  12 2026-11-18 웹 화면 다시 만들기(D414·D415) — eventKinds 에 공정 진행 줄(process block·skip·pause·resume·edit·adjust·recipe_loaded·popup·chat·
+     state(PC 결과)·result(TSP 결과) — main, card·schedule_restore — detail), process block 사건 data 에 total·elapsed_s(끝),
+     params 에 SIM_MFC_START_SP_MTORR(sim 가상 MFC 시작 SP1~SP5, 기본 0,0,2,2,0 mTorr — 묶음 debug),
+     snapshot 필드 fmt 를 format spec 으로 통일('{:.2f}' → '.2f' — 두께 모니터·히터 등 12개).
 """
 from __future__ import annotations
 
 import dataclasses
+import re
 import hashlib
 import json
 from typing import Any, Dict, Mapping, Optional
@@ -69,7 +74,7 @@ from v2.ch12 import snapshot_fields as SF
 from v2.ch12 import web_blocks as WB
 from v2.ch12.hub import optional_module
 
-EXPORT_VERSION = 11
+EXPORT_VERSION = 12
 
 # 웹이 받는 공정 이벤트(엔진이 system.emit(source="process:<c>", kind, event=data) 로 내는 것 — hub 가 run_* 메시지로 바꾼다)
 EVENTS: tuple = (
@@ -145,6 +150,13 @@ EVENT_KINDS: tuple = (
     ("ui", "log_clear", "화면 로그 지우기", _D), ("heater", "panel_result", "히터 패널 결과", _M),
     ("thickness", "panel_result", "두께 패널 결과", _M), ("robot_api", "bind_failed", "내부 명령 API 포트 실패", _M),
     ("thickness", "window", "두께 Factor·재료 창 값", _D),
+    # 2026-11-18 D414 — 공정 진행 줄을 평소 보기(main)로: 공정 단계(블록) 시작·끝·건너뛰기·일시정지·재개·순서 고침·공정 중 값 바꾸기·
+    #   레시피 적재·알림창·챗 경고, 플라즈마 클리닝 결과(PcEvent state)·TSP 결과(TspEngineEvent result). 구글챗 카드 자리·TSP 예약 복원은 상세
+    ("process", "block", "공정 단계", _M), ("process", "skip", "블록 건너뜀", _M), ("process", "pause", "일시정지·재개", _M),
+    ("process", "resume", "재개", _M), ("process", "edit", "순서 고침", _M), ("process", "adjust", "공정 중 값 바꾸기", _M),
+    ("process", "recipe_loaded", "레시피 적재", _M), ("process", "popup", "알림창", _M), ("process", "chat", "챗 알림", _M),
+    ("process", "state", "공정 결과", _M), ("process", "result", "TSP 결과", _M),
+    ("process", "card", "챗 카드", _D), ("process", "schedule_restore", "예약 복원", _D),
 ) + tuple(x for w in _WORKERS for x in (
     (w, "connected", "장비 연결됨", _D), (w, "connect_failed", "연결 실패", _D), (w, "disconnected", "장비 연결 끊김", _M),
     (w, "long_outage", "장비 연결 오래 끊김", _M), (w, "timeout", "응답 없음", _D),
@@ -192,8 +204,14 @@ def _param(p, values: Optional[Mapping[str, Any]], pending: Mapping[str, Any],
             "webLocked": p.web_locked, "desc": p.desc, "note": p.note}
 
 
+def _web_fmt(fmt: str) -> str:
+    """묶음 fmt 는 파이썬 format spec('.2f') — 장비 필드 정의가 '{:.2f}' 꼴이면 spec 만(D414 — 웹이 자릿수를 못 읽어 1.9000000000000001 로 보이던 것)"""
+    m = re.fullmatch(r"\{:([^{}]*)\}", fmt or "")
+    return m.group(1) if m else (fmt or "")
+
+
 def _field(f, column: str) -> dict:
-    return {"column": column, "name": f.name, "type": f.type.value, "unit": f.unit, "label": f.label, "fmt": f.fmt,
+    return {"column": column, "name": f.name, "type": f.type.value, "unit": f.unit, "label": f.label, "fmt": _web_fmt(f.fmt),
             "summary": f.summary, "ownQuality": f.own_quality, "detail": f.detail, "desc": f.desc,
             "enumLabels": dict(f.enum_labels) if f.enum_labels else None,
             "stateColumn": f"{column.rsplit('.', 1)[0]}.{f.state}" if f.state else None}

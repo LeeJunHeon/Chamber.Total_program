@@ -432,6 +432,8 @@ UNVERIFIED: tuple = (
     Unverified("mfc", "되읽기 응답 형식 R65~R67(설정)·R69(ON/OFF)·R6(밸브)·R7(시스템)·R1~R4(SP)", "v1 검증 경로(꺼져 있던) 파서 그대로, sim 가정",
                "bench_probe 설정 읽기 원문 — 다르면 MFC_READBACK_ENABLED 끄고 보고"),
     Unverified("mfc", "R61~R63·R65~R67·R69·R6·R7 응답 형식", "v1 운영 미사용(검증 경로 — DEV-096)", "bench_probe 설정 읽기 원문"),
+    Unverified("mfc", "실장비 패널에 저장된 압력 제어 설정점 SP3(CH1)·SP4(CH2) 값", "v1 은 패널 값을 R3·R4 로 읽어 압력 대기 기준으로 씀(0 이면 '읽기 실패'). "
+               "sim 은 설정 SIM_MFC_START_SP_MTORR 기본 2 mTorr(D415 — 실장비 값과 같은지 모름)", "bench_probe R3·R4 원문·장비 패널 확인"),
     Unverified("ig", "기종·RDI 응답 시간·IG_GAP_MS 200 ms 에서의 오류율(근거 문서 없음)", "응답 3000 ms 한도, 간격 200 ms 매 tick",
                "bench_probe RDI 응답 분포·오류율"),
     Unverified("ig", "SIG 0 뒤 RDI 가 'IG OFF' 를 돌려주는 시간", "v1 은 'IG OFF' 로 재점등을 판정(device/ig.py:843-891)",

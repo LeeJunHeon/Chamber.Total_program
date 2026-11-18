@@ -57,6 +57,15 @@ def local_paths(root: Path) -> Dict[str, str]:
             "ROBOT_CACHE_PATH": str(r / "state" / "robot_last_replies.json")}
 
 
+def start_sp_of(cfg: Optional[Dict[str, Any]]) -> list:
+    """가상 MFC 의 시작 SP1~SP5 장비값(= mTorr × PRESSURE_SCALE) — 설정 SIM_MFC_START_SP_MTORR('0,0,2,2,0' mTorr).
+    실장비는 패널에 저장된 SP 를 쓴다(이 설정은 sim 시뮬레이터만 읽는다 — D415). 형식이 틀리면 설정 검사(D11)가 먼저 거부한다."""
+    from v2.ch12.sim.mfc_sim import PRESSURE_SCALE
+    raw = str((cfg or {}).get("SIM_MFC_START_SP_MTORR", "0,0,2,2,0"))
+    vals = [float(x) for x in raw.split(",")][:5]
+    return [v * PRESSURE_SCALE for v in vals + [0.0] * (5 - len(vals))]
+
+
 def make_sims(start: float = 0.0, cfg: Optional[Dict[str, Any]] = None,
               log_keep: Optional[int] = None) -> Tuple[Dict[str, Chamber], Dict[str, Any]]:
     """(챔버 모델 {ch1, ch2}, {장비 이름: 시뮬레이터}). 장비 이름은 1초 행 블록 이름과 같다(plc·ch1.mfc·…·tsp·tsp.ig).
@@ -68,6 +77,7 @@ def make_sims(start: float = 0.0, cfg: Optional[Dict[str, Any]] = None,
     for n in CHAMBERS:
         scale = tuple(float(c.get(f"{n.upper()}_MFC_SCALE_FACTORS_{i}", 1.0)) for i in (1, 2, 3))
         sims[f"{n}.mfc"] = MfcSim(ch[n], scale=scale, name=f"{n}.mfc")
+        sims[f"{n}.mfc"].sp = start_sp_of(c)            # 가상 MFC 시작 SP1~SP5(설정 SIM_MFC_START_SP_MTORR — sim 에만, D415)
         sims[f"{n}.ig"] = IgSim(ch[n], name=f"{n}.ig")
         sims[f"{n}.dcpulse"] = DcPulseSim(ch[n])
         sims[f"{n}.rfpulse"] = RfPulseSim(ch[n], control=2)

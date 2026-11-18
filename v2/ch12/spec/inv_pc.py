@@ -517,7 +517,7 @@ ITEMS = [
     dict(id="PC-115", area="pc",
          desc="프리스퍼터 화면 라우팅: preSputter_useChamber1/2_radio(기본 CH1)로 Start(예약)·Stop(취소) 버튼을 선택 챔버 런타임에만, 라디오 전환 시 표시·SetTime 동기화, 'Remaining Time' 라벨을 'Reservation' 으로, 상태→preSputter_remainigTime_edit·남은 시간→preSputter_LeftTime_edit(같은 내용이면 다시 쓰지 않음)",
          v1="main.py:519-540; main.py:1604-1627; main.py:1790-1826",
-         v2="v2/ch12/pre_sputter.py; v2/ch12/assembly.py; vanam-process components/ops2/ch12/Ch12Chamber.tsx", test="v2/tests/test_inv_pc.py::test_pc109_115_116_presputter_format_state_and_recipe_log; v2/tests/test_core.py::test_panel_and_plc_commands_reach_engines", status="done", note="화면은 포털(ui 영역과 겹침) — 챔버별 예약·취소 명령(PRESPUTTER_RESERVE/CANCEL ch) — 라디오 대신 챔버 칸. 상태·남은 시간·레시피 표시는 proc.chN web_state.presputter(이번에 더함)"),
+         v2="v2/ch12/pre_sputter.py; v2/ch12/assembly.py; vanam-process components/ops2/ch12/Ch12Run.tsx", test="v2/tests/test_inv_pc.py::test_pc109_115_116_presputter_format_state_and_recipe_log; v2/tests/test_core.py::test_panel_and_plc_commands_reach_engines", status="done", note="화면은 포털(ui 영역과 겹침) — 챔버별 예약·취소 명령(PRESPUTTER_RESERVE/CANCEL ch) — 라디오 대신 챔버 칸. 상태·남은 시간·레시피 표시는 proc.chN web_state.presputter(이번에 더함)"),
     dict(id="PC-116", area="pc",
          desc="프리스퍼터 전용 레시피: 동적 'Recipe' 버튼·읽기 전용 표시칸(기본 'UI 현재값 사용'), 파일 선택 'CH{n} Pre-Sputter 레시피 선택'·'Recipe Files (*.csv *.xlsx);;CSV Files (*.csv);;Excel Files (*.xlsx);;All Files (*.*)', 파일명 표시(없으면 ' (파일 없음)'), 로그 'PreSputter CH{n} 레시피 지정: ..', QSettings('VanaM','CH1_2_Program') 'presputter/recipe_ch{n}' 저장·부팅 시 복원(파일 없으면 'PreSputter 레시피 파일 없음: ..')",
          v1="main.py:1633-1758",

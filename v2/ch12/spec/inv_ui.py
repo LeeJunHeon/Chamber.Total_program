@@ -164,13 +164,13 @@ ITEMS = [
          desc="챔버 로그창 줄 형식 화면 '[HH:MM:SS] [CHn:src] msg', 파일 '[YYYY-MM-DD HH:MM:SS] [CHn:src] msg'. 공정 로그 파일이 없으면 프리스타트 버퍼"
               "(최대 1000줄)와 SYSTEM 일자 로그에 남김",
          v1="runtime/chamber_runtime.py:7186-7202; runtime/chamber_runtime.py:562",
-         v2="v2/ch12/outputs/process_txt.py; vanam-process components/ops2/ch12/Ch12Chamber.tsx", test="v2/tests/test_outputs_text.py::test_process_txt_golden; v2/tests/test_outputs_text.py::test_process_txt_fallback_and_rules; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-log", status="done",
+         v2="v2/ch12/outputs/process_txt.py; vanam-process components/ops2/ch12/Ch12Run.tsx", test="v2/tests/test_outputs_text.py::test_process_txt_golden; v2/tests/test_outputs_text.py::test_process_txt_fallback_and_rules; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-log", status="done",
          note="log 영역과 겹침(파일 쪽) / 파일 줄 형식은 process_txt(v1 바이트 같음), 화면 줄은 장비 시각+종류+글(포털 EventFeed)"),
     dict(id="UI-021", area="ui",
          desc="챔버 로그창 갱신: QTimer 100 ms 마다 버퍼(deque 최대 5000, 넘치면 오래된 것 버림)에서 최대 200줄씩 한 번에 붙인다. 창 최대 2000줄, Undo 끔. "
               "사용자가 바닥(최대값-2 이내)을 보고 있을 때만 바닥으로 자동 스크롤, 아니면 스크롤 위치 유지",
          v1="runtime/chamber_runtime.py:581-598; runtime/chamber_runtime.py:3331-3332; runtime/chamber_runtime.py:7226-7308",
-         v2="vanam-process components/ops2/ch12/Ch12Chamber.tsx; vanam-process components/ops2/chk/Chk2Logs.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-log", status="done",
+         v2="vanam-process components/ops2/ch12/Ch12Run.tsx; vanam-process components/ops2/chk/Chk2Logs.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-log", status="done",
          note="포털 EventFeed — 최근 사건 FEED_KEEP 개, 바닥을 보고 있을 때만 자동 스크롤(stick). 100 ms 묶음·5000/2000 줄 수치는 화면 부품 몫(X12) — 자동 스크롤은 DOM 동작이라 렌더 확인만"),
     dict(id="UI-022", area="ui",
          desc="화면 전용 로그(append_side_log): 화면과 SYSTEM 일자 로그에만, 공정 로그 파일·프리스타트 버퍼에는 넣지 않음(두께 모니터 연결·오류 문구용)",
@@ -204,7 +204,7 @@ ITEMS = [
     dict(id="UI-027", area="ui",
          desc="모든 QPlainTextEdit/QTextEdit 에서 Tab/Shift+Tab 이 다음/이전 칸 이동(setTabChangesFocus, StrongFocus). 탭 순서는 .ui 의 setTabOrder 목록",
          v1="main.py:200-201; main.py:1828-1839; ui/main_window.py:786-890",
-         v2="vanam-process components/ops2/ch12/Ch12Controls.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:presputter; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:heater-panel", status="done",
+         v2="vanam-process components/ops2/ch12/Ch12Aux.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:presputter; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:heater-panel", status="done",
          note="창 생성 초기에 한 번만 — 뒤에 만든 위젯(Pre-Sputter Recipe 칸·서버 페이지)은 대상 아님 / 브라우저 입력 칸 — Tab 이 다음 칸으로(기본 동작, 여러 줄 입력칸 없음). 화면 그리기(X12)"),
     dict(id="UI-028", area="ui",
          desc="CH1/CH2 'Integration Time [ms]' 칸을 'Process Name' 칸으로 재활용(라벨 변경, 툴팁 '공정명(로그/구글챗/CSV Process Note에 기록). Integration Time은 "
@@ -227,7 +227,7 @@ ITEMS = [
          desc="라디오 묶음: Pre-Sputter(buttonGroup)·PC 챔버(buttonGroup_2) 라디오는 autoExclusive=False 이지만 그룹을 setExclusive(True) 로 고정. "
               "펄스 라디오(RF Pulse/DC Pulse)는 그룹 없음(둘 다 해제 가능)",
          v1="ui/main_window.py:229-262; ui/main_window.py:338-345; main.py:819-823; runtime/chamber_runtime.py:3088-3093",
-         v2="vanam-process components/ops2/ch12/Ch12Controls.tsx; vanam-process components/ops2/ch12/Ch12Aux.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:pc-panel; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:presputter", status="done",
+         v2="vanam-process components/ops2/ch12/Ch12Aux.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:pc-panel; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:presputter", status="done",
          note="라디오 대신 채널 선택 칸(ch 1|2 — 하나만)·펄스는 레시피 use_rf_pulse/use_dc_pulse"),
 
     # ───────────────────────────── Power Select ─────────────────────────────
@@ -333,7 +333,7 @@ ITEMS = [
          desc="Pre-Sputter 챔버 라디오(기본 CH1)로 고른 챔버에만 Reserve/Cancel 이 작동. 라디오를 바꾸면 그 챔버 상태·남은 시간·레시피 표시를 다시 그리고, "
               "그 챔버에 살아 있는 예약이 있으면 HH:MM 칸을 그 예약 시각으로 바꾼다(예약 없으면 칸을 건드리지 않음)",
          v1="main.py:520-539; main.py:1596-1602; main.py:1793-1826",
-         v2="v2/ch12/pre_sputter.py; v2/ch12/core.py; vanam-process components/ops2/ch12/Ch12Chamber.tsx", test="v2/tests/test_core.py::test_panel_and_plc_commands_reach_engines; v2/tests/test_inv_pc.py::test_pc109_115_116_presputter_format_state_and_recipe_log; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:presputter", status="done",
+         v2="v2/ch12/pre_sputter.py; v2/ch12/core.py; vanam-process components/ops2/ch12/Ch12Run.tsx", test="v2/tests/test_core.py::test_panel_and_plc_commands_reach_engines; v2/tests/test_inv_pc.py::test_pc109_115_116_presputter_format_state_and_recipe_log; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:presputter", status="done",
          note="라디오 대신 챔버마다 예약 칸(그 챔버 상태·남은 시간·레시피 표시 — proc.chN web_state.presputter)"),
     dict(id="UI-048", area="ui",
          desc="'Reserve' → HH:MM 칸을 읽어 그 챔버 매일 예약 등록/갱신. 형식 정규식 ^\\s*(\\d{1,2})\\s*(?::|시)\\s*(\\d{1,2}) ('8시30분' 허용), 0~23/0~59. "
@@ -356,7 +356,7 @@ ITEMS = [
          desc="예약 표시: 라벨 'Remaining Time' 을 'Reservation' 으로 바꿔 preSputter_remainigTime_edit=상태 문구, preSputter_LeftTime_edit=남은 시간 HH:MM:SS. "
               "1 s 마다 갱신, 같은 글자면 다시 쓰지 않음, 갱신 경로에서 파일 stat 금지",
          v1="main.py:541-543; main.py:1604-1628; runtime/pre_sputter_runtime.py:256-273; ui/main_window.py:142-148",
-         v2="v2/ch12/pre_sputter.py; vanam-process components/ops2/ch12/Ch12Chamber.tsx", test="v2/tests/test_inv_pc.py::test_pc109_115_116_presputter_format_state_and_recipe_log; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:presputter", status="done",
+         v2="v2/ch12/pre_sputter.py; vanam-process components/ops2/ch12/Ch12Run.tsx", test="v2/tests/test_inv_pc.py::test_pc109_115_116_presputter_format_state_and_recipe_log; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:presputter", status="done",
          note="상태 문구·남은 시간은 PreSputter.state(1 s 갱신, 레시피 표시는 정할 때 한 번 본 값 — stat 안 함)"),
     dict(id="UI-052", area="ui",
          desc="예약 시각 도달: 남은 시간 '00:00:00'. 그 챔버가 바쁘면(is_busy) 이번 회 PASS — 로그 '[PreSputter] 해당 챔버가 이미 공정 중 → 이번 예약 PASS', "
@@ -397,7 +397,7 @@ ITEMS = [
     dict(id="UI-058", area="ui",
          desc="Pre-Sputter 전용 레시피 위젯을 코드로 추가: 'Recipe' 버튼(560,350,91×31), 읽기 전용 표시칸(560,385,201×31) 기본 'UI 현재값 사용'",
          v1="main.py:545-546; main.py:1668-1685",
-         v2="v2/ch12/commands.py; vanam-process components/ops2/ch12/Ch12Controls.tsx", test="v2/tests/test_commands.py::test_every_command_has_sources_states_args_target; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:bundle-kinds", status="done",
+         v2="v2/ch12/commands.py; vanam-process components/ops2/ch12/Ch12Aux.tsx", test="v2/tests/test_commands.py::test_every_command_has_sources_states_args_target; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:bundle-kinds", status="done",
          note="PRESPUTTER_RECIPE {ch, path}(비우면 'UI 현재값 사용') — 명령 칸"),
     dict(id="UI-059", area="ui",
          desc="'Recipe' → 선택 챔버의 레시피 파일 선택(공용 파일 열기, 제목 'CH{n} Pre-Sputter 레시피 선택', 시작 폴더 = 현재 경로의 폴더, 필터 "
@@ -409,7 +409,7 @@ ITEMS = [
     dict(id="UI-060", area="ui",
          desc="레시피 표시: 경로 없음 'UI 현재값 사용', 있으면 파일명, 파일이 없으면 '파일명 (파일 없음)'. 존재 확인(os.path.exists)은 부팅 1회와 새로 고른 직후만(NAS stat 이 UI 를 막지 않게)",
          v1="main.py:1639-1666",
-         v2="v2/ch12/pre_sputter.py; vanam-process components/ops2/ch12/Ch12Chamber.tsx", test="v2/tests/test_pre_sputter.py::test_settings_saved_with_v1_keys_and_restored; v2/tests/test_inv_pc.py::test_pc109_115_116_presputter_format_state_and_recipe_log", status="done",
+         v2="v2/ch12/pre_sputter.py; vanam-process components/ops2/ch12/Ch12Run.tsx", test="v2/tests/test_pre_sputter.py::test_settings_saved_with_v1_keys_and_restored; v2/tests/test_inv_pc.py::test_pc109_115_116_presputter_format_state_and_recipe_log", status="done",
          note=""),
     dict(id="UI-061", area="ui",
          desc="QSettings(조직 'VanaM', 앱 'CH1_2_Program') 키: presputter/recipe_ch1·_ch2(경로), presputter/reserved_ch1·_ch2(bool), presputter/reserve_hhmm_ch1·_ch2('HH:MM'). "
@@ -433,7 +433,7 @@ ITEMS = [
     dict(id="UI-064", area="ui",
          desc="CH 페이지 버튼 연결: START→시작 처리, STOP→정지, 'Select File'(processList)→레시피 파일 선택(분리 태스크). Dep.Rate/Thickness 칸 글자 바뀜→Process Time 자동 계산",
          v1="runtime/chamber_runtime.py:3316-3342; runtime/chamber_runtime.py:814",
-         v2="v2/ch12/core.py; v2/ch12/commands.py; vanam-process components/ops2/ch12/Ch12Chamber.tsx", test="v2/tests/test_core.py::test_state_rejected_and_start_guard_interlocks; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-idle; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-running; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:bundle-kinds", status="done",
+         v2="v2/ch12/core.py; v2/ch12/commands.py; vanam-process components/ops2/ch12/Ch12Run.tsx", test="v2/tests/test_core.py::test_state_rejected_and_start_guard_interlocks; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-idle; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-running; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:bundle-kinds", status="done",
          note="START=PROCESS_START·STOP=PROCESS_STOP·Select File=RECIPE_LOAD path, Process Time 자동 계산은 UI-065"),
     dict(id="UI-065", area="ui",
          desc="Process Time 자동 계산: dep>0 이고 thickness>0 이면 Process Time[min] = thickness[nm] / dep[nm/s] / 60 을 소수 3자리로(같은 값이면 안 씀). START 때도 한 번 강제 계산",
@@ -443,7 +443,7 @@ ITEMS = [
     dict(id="UI-066", area="ui",
          desc="START/STOP 버튼은 상태와 무관하게 항상 활성(공정 상태 바뀔 때마다 다시 setEnabled(True))",
          v1="runtime/chamber_runtime.py:3249-3256",
-         v2="vanam-process components/ops2/ch12/Ch12Chamber.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-running; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-idle", status="done",
+         v2="vanam-process components/ops2/ch12/Ch12Run.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-running; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-idle", status="done",
          note="STOP 은 상태와 무관하게 늘 눌림(정지 쪽은 막지 않음), 시작 버튼은 대기 때"),
     dict(id="UI-067", area="ui",
          desc="START 가드 알림창(경고, 5 s 자동 닫힘): 쿨다운 60 s '대기 필요'/'이전 공정 종료 후 1분 대기 필요합니다.\\n{초}초 후에 시작하십시오.'(올림), 정리 미완료 "
@@ -470,7 +470,7 @@ ITEMS = [
     dict(id="UI-070", area="ui",
          desc="STOP → 어떤 상태든 러너에 STOP(user_initiated=True) 명령(공정 중이 아니어도 막지 않음)",
          v1="runtime/chamber_runtime.py:4497-4498; runtime/chamber_runtime.py:4517-4523",
-         v2="v2/ch12/core.py; v2/ch12/process_engine.py; vanam-process components/ops2/ch12/Ch12Chamber.tsx", test="v2/tests/test_core.py::test_system_command_is_core_and_unknown; v2/tests/test_process_stop.py::test_engine_stop_during_main_closes_shutter_and_valves; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-idle", status="done",
+         v2="v2/ch12/core.py; v2/ch12/process_engine.py; vanam-process components/ops2/ch12/Ch12Run.tsx", test="v2/tests/test_core.py::test_system_command_is_core_and_unknown; v2/tests/test_process_stop.py::test_engine_stop_during_main_closes_shutter_and_valves; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-idle", status="done",
          note=""),
     dict(id="UI-071", area="ui",
          desc="CH1 단일 공정 화면 검사: 가스(Ar/O2) 하나 이상 '선택 오류'/'가스를 하나 이상 선택해야 합니다.', 유량 숫자·0 이상 '입력값 확인'/'가스 유량 입력을 확인하세요.', "
@@ -518,7 +518,7 @@ ITEMS = [
          desc="CH2 잠금: RF Pulse 미지원이면 RF 라디오 비활성(DC Pulse 도 미지원일 때만 rfPulse* 칸까지), DC Pulse 미지원이면 DC 라디오 비활성, DC2 미지원(SUPPORTS_HEATER 와 배타)이면 "
               "DC2 체크·칸 비활성·툴팁 'DC2 미사용 — D/A CH3 는 CH2 히터 출력'",
          v1="runtime/chamber_runtime.py:7864-7891; runtime/chamber_runtime.py:533",
-         v2="v2/ch12/web_schema.py; v2/ch12/params/core.py; vanam-process components/ops2/ch12/Ch12Chamber.tsx", test="v2/tests/test_web_schema.py::test_chambers_definitions_and_supports; v2/tests/test_heater_records.py::test_dc2_only_without_heater; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-values", status="done",
+         v2="v2/ch12/web_schema.py; v2/ch12/params/core.py; vanam-process components/ops2/ch12/Ch12Run.tsx", test="v2/tests/test_web_schema.py::test_chambers_definitions_and_supports; v2/tests/test_heater_records.py::test_dc2_only_without_heater; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-values", status="done",
          note="지원 장비(supports)를 묶음 chambers 로 — 없는 장비 칸·명령은 그리지 않고 장비가 NOT_SUPPORTED"),
     dict(id="UI-078", area="ui",
          desc="CH 화면 기본값(시작·공정 후 리셋): 공통 Working 2·Ar 20·O2 0·N2 0·DC 130·DC2 0·DC Pulse 200(라디오 끔)·RF Pulse 100(라디오 끔)·RF 끔 0. "
@@ -564,7 +564,7 @@ ITEMS = [
     dict(id="UI-084", area="ui",
          desc="위젯 값 쓰기 규칙(_set): setChecked 있으면 bool, setValue 있으면 숫자, 아니면 setPlainText/setText(str). 실패는 '_set(leaf) 실패' UI 로그",
          v1="runtime/chamber_runtime.py:3595-3619",
-         v2="vanam-process components/ops2/ch12/Ch12Controls.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:presputter; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:heater-panel", status="done",
+         v2="vanam-process components/ops2/ch12/Ch12Aux.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:presputter; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:heater-panel", status="done",
          note="위젯 값 쓰기 규칙 — 포털 입력 칸(형식별 parseArg). 화면 그리기"),
     dict(id="UI-085", area="ui",
          desc="공용 파일 열기 창(pick_open_file): Qt 자체 창(네이티브 아님), ExistingFile, ReadOnly(이름 바꾸기·삭제·새 폴더 막음), 모든 뷰 드래그 앤 드롭 끔(열기 전·후 2회), "
@@ -589,7 +589,7 @@ ITEMS = [
     dict(id="UI-088", area="ui",
          desc="공정 실패 알림창: 제목 'CH{n} 공정 실패', 본문 '{공정명|(process)}\\n\\n사유: {사유|process failed}\\n\\n확인을 누르면 상태 표시가 Idle로 변경됩니다.'(닫으면 idle)",
          v1="runtime/chamber_runtime.py:2071-2093",
-         v2="v2/ch12/process_records.py; vanam-process components/ops2/ch12/Ch12Chamber.tsx", test="v2/tests/test_inv_chat.py::test_chat_fail_reason_text_only_for_real_failure; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:popup-line; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-idle", status="done",
+         v2="v2/ch12/process_records.py; vanam-process components/ops2/ch12/Ch12Run.tsx", test="v2/tests/test_inv_chat.py::test_chat_fail_reason_text_only_for_real_failure; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:popup-line; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-idle", status="done",
          note="'CHn 공정 실패' popup 사건(process_records), 확인 = 오류 해제"),
     dict(id="UI-089", area="ui",
          desc="펄스 공유 장비 점유 충돌: 경고창 '공유 장비 사용 중'/'{DC-Pulse|RF-Pulse} 시작 불가: 동일 주소(ip:port) 장비를 CH{m}({종류}) 공정이 사용 중입니다.'",
@@ -618,7 +618,7 @@ ITEMS = [
          desc="공정 상태칸(processState_edit): 컨트롤러 'state' 이벤트 글자를 그대로(같은 글자면 생략). 카운트다운은 1 s 마다 '{기본 문구} (남은 시간: m분 s초)'"
               "(1분 미만 's초', 올림). 그 밖 '대기 중', '공정 완료'/'공정 중단됨'",
          v1="runtime/chamber_runtime.py:1695-1696; runtime/chamber_runtime.py:3292-3311; controller/process_controller.py:829; controller/process_controller.py:1663-1675; controller/process_controller.py:2107",
-         v2="v2/ch12/process_view.py; v2/ch12/snapshot_fields.py; vanam-process components/ops2/ch12/Ch12Chamber.tsx", test="v2/tests/test_snapshot_fields.py::test_context_and_target_fields; v2/tests/test_process_list.py::test_delay_test_and_cooldown_rows; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-running", status="done",
+         v2="v2/ch12/process_view.py; v2/ch12/snapshot_fields.py; vanam-process components/ops2/ch12/Ch12Run.tsx", test="v2/tests/test_snapshot_fields.py::test_context_and_target_fields; v2/tests/test_process_list.py::test_delay_test_and_cooldown_rows; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-running", status="done",
          note="상태 글은 엔진 web_state.text + 1초 행 proc.state·남은 시간(블록·ETA)"),
     dict(id="UI-094", area="ui",
          desc="런타임이 직접 쓰는 상태 문구: 'Chuck {UP|MID|DOWN} 이동 중…', '정리 지연(취소 타임아웃). STOP을 한 번 더 눌러 복구를 시도하세요.', "
@@ -631,7 +631,7 @@ ITEMS = [
          desc="파워 값 표시: RF For.P/Ref.P 소수 2자리, DC Power/Voltage 1자리·Current 3자리. DC2 가 있으면 'DC1|DC2' 병기(P·V 0자리, I 2자리, 값 없으면 '-'). 값이 비면 "
               "'for.p/ref.p 비어있음'·'P/V/I 비어있음' 로그",
          v1="runtime/chamber_runtime.py:3050-3086",
-         v2="v2/ch12/process_events.py; vanam-process components/ops2/ch12/Ch12Chamber.tsx", test="v2/tests/test_inv_proc.py::test_proc_166_158_159_dc_target_failed_and_off; v2/tests/test_inv_proc.py::test_proc_169_170_dc_pulse_events; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-values", status="done",
+         v2="v2/ch12/process_events.py; vanam-process components/ops2/ch12/Ch12Run.tsx", test="v2/tests/test_inv_proc.py::test_proc_166_158_159_dc_target_failed_and_off; v2/tests/test_inv_proc.py::test_proc_169_170_dc_pulse_events; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-values", status="done",
          note="1초 값 칸(묶음 field 단위·자리수), 측정 로그 줄은 엔진"),
     dict(id="UI-096", area="ui",
          desc="타겟명 자동 채움(재고 DB fetch_gun_targets): 생성 때·레시피 행에 타겟명이 없을 때·공정 후 리셋 때. 비어 있는 칸만 채우고 툴팁도 같은 값. CH1 은 G1 하나, "
@@ -645,7 +645,7 @@ ITEMS = [
          desc="RGA 그래프(CHn rgaGraph): x 'Atomic Mass' 0~65(눈금 14, '%d'), y 'Partial Pressure' 로그축 1e-11~1e-5 Torr('%.0e', 보조 눈금 없음), 빨간 점(크기 6)+"
               "빨간 세로선(ymin→값). 비유한값·x 범위 밖·y≤0 점 버림, 점 없으면 갱신 안 함. 선 시리즈는 풀로 재사용",
          v1="controller/graph_controller.py:50-102; controller/graph_controller.py:170-258",
-         v2="v2/ch12/drivers/rga_link.py; vanam-process components/ops2/ch12/Ch12Spectra.tsx; vanam-process components/ops2/ch12/Ch12Chamber.tsx", test="v2/tests/test_rga_link.py::test_scan_ok_csv_and_srsinst_call_order; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:rga-chart", status="done",
+         v2="v2/ch12/drivers/rga_link.py; vanam-process components/ops2/ch12/Ch12Spectra.tsx; vanam-process components/ops2/ch12/Ch12Run.tsx", test="v2/tests/test_rga_link.py::test_scan_ok_csv_and_srsinst_call_order; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:rga-chart", status="done",
          note="장비 rga data 사건(mass_axis·pressures, 스캔마다) → 포털 RGA 그래프(v1 축·점 거르기 그대로, 마지막 스캔)"),
     dict(id="UI-098", area="ui",
          desc="OES 그래프: x 'Wavelength (nm)' 100~1200(100 간격 고정), y 'Intensity' 0~16000(눈금 9, '%d'), 빨간 선 굵기 1. OES_PLOT_MIN_INTERVAL_S(0.5 s) 안 연속 호출은 건너뜀, "
@@ -911,21 +911,21 @@ ITEMS = [
               "Pre-Sputter 묶음(CH1/CH2 라디오·HH:MM·Waiting...·Remaining Time·Reserve·Cancel), Plasma Cleaning 묶음(CH1/CH2·Process Name·Base Pressure·Gas Flow·Working Pressure·"
               "RF Power·Process Time·For.P/Ref.P/Bias V/Temp/Hum 읽기 전용·START/STOP·'File\\nPath'), 로그창(10,650,1061×301)",
          v1="ui/main_window.py:30-293; ui/main_window.py:901-944",
-         v2="vanam-process components/ops2/ch12/Ch12Aux.tsx; vanam-process components/ops2/ch12/Ch12Chamber.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:pc-panel; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:tsp-panel; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:presputter", status="done",
+         v2="vanam-process components/ops2/ch12/Ch12Aux.tsx; vanam-process components/ops2/ch12/Ch12Run.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:pc-panel; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:tsp-panel; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:presputter", status="done",
          note="PC·TSP 버튼 동작은 pc/tsp 영역 / PC 페이지 위젯 → 포털 PC·TSP·프리스퍼터 칸(배치는 화면 그리기, X12)"),
     dict(id="UI-140", area="ui",
          desc="CH1 페이지 위젯: 'CH.1 Sputtering', Base Pressure, Process Name, M.S. Open, P.W. Select, Gun Target Name(1칸), Ar/O2 체크·유량, Working Pressure, RF Pulse/DC Pulse 라디오, "
               "펄스 파워·'RF/DC Pulse Freq [kHz]'·'Duty [%] / Off Time [µs]', Shutter Delay [min], Dep.Rate[nm/s], Thickness[nm], Process Time [min], For.P/Ref.P/Power/Voltage/Current "
               "읽기 전용, Process List 'Select File', START/STOP, 상태칸(230,0,841×61), RGA(230,90,841×311)·OES(230,420,841×351) 그래프, 로그창(230,800,841×200)",
          v1="ui/main_window.py:295-538; ui/main_window.py:945-978",
-         v2="vanam-process components/ops2/ch12/Ch12Chamber.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-running; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-values; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-log", status="done",
+         v2="vanam-process components/ops2/ch12/Ch12Run.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-running; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-values; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-log", status="done",
          note="CH1 페이지 위젯 → 포털 챔버 칸(값·조작·로그). 그래프는 UI-097·098 결정 후보"),
     dict(id="UI-141", area="ui",
          desc="CH2 페이지 위젯: 'CH.2 Sputtering', Base Pressure, Process Name, M.S. Open, P.W. Select, G1/G2/G3 체크·타겟명 3칸, Ar/O2/N2 체크·유량, Working Pressure, RF/DC Pulse 라디오·"
               "공유 펄스 칸 3개, DC1/DC2/RF 체크·파워 칸, Shutter Delay, Dep.Rate, Thickness, Process Time, For.P/Ref.P/Power/Voltage/Current 읽기 전용, Select File, START/STOP, 상태칸, "
               "그래프 2개, 로그창",
          v1="ui/main_window.py:540-785; ui/main_window.py:979-1019",
-         v2="vanam-process components/ops2/ch12/Ch12Chamber.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-idle; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-values; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-log", status="done",
+         v2="vanam-process components/ops2/ch12/Ch12Run.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-idle; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-values; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-log", status="done",
          note="CH2 페이지 위젯 → 포털 챔버 칸. 그래프는 UI-097·098 결정 후보"),
 
     # ───────────────────────────── 알려진 이상 동작(v1 그대로) ─────────────────────────────

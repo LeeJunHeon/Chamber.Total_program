@@ -689,3 +689,35 @@ DECISIONS += [
          reason="사용자 지시 2026-11-16 1·2장", confirm=True,
          where="v2/ch12/params/supervision.py; core.py; pre_sputter.py; v2/supervisor/supervisor.py; drivers/rfpulse_verify.py; spec/devices.py"),
 ]
+
+
+DECISIONS += [
+    dict(id="D414", title="2026-11-18 웹 로그 평소 보기 — 공정 진행 줄을 main 으로, 블록 사건 data·fmt 정리",
+         decision="웹 묶음 eventKinds 에 엔진 사건을 더한다: process block(공정 단계 시작·끝)·skip·pause·resume·edit·adjust·recipe_loaded·popup·chat·"
+                  "state(플라즈마 클리닝 결과)·result(TSP 결과) = main, card(챗 카드 자리)·schedule_restore = detail — 이전에는 묶음에 없어 웹 기본 보기에서 빠졌다"
+                  "(공정 중에도 기본 로그가 비던 것). process block 사건 data 에 total(전체 블록 수)·elapsed_s(끝 — 걸린 시간)를 더한다(화면 줄 '2/5 Ar 가스 시작'·"
+                  "'2 Ar 가스 끝 — 정상, 1:30' — 기록 executed 에는 넣지 않음, 마지막 블록의 끝은 run_end 가 대신한다). 묶음 snapshot 필드 fmt 를 format spec 으로 통일"
+                  "('{:.2f}' → '.2f' — 두께 모니터 두께 1.9000000000000001 로 보이던 것, 1초 CSV 는 그대로). 같은 글이 한 줄에 두 번 붙던 것('STATUS on=1 … STATUS STATUS on=1 …' — "
+                  "상세 보기에서 글과 원시 줄이 같은 문구를 다시 붙임)은 웹 쪽 줄 만들기에서 고친다(장비 문구는 v1 그대로). 화면을 연 직후 최근 줄은 지금처럼 "
+                  "연결 때 첫 묶음(노트북 허브 최근 메시지 500·웹 최근 사건 100)으로 — 이제 그 안의 공정 진행 줄이 평소 보기에 보인다. 웹 묶음 12.",
+         reason="사용자 지시 2026-11-18 3장", confirm=False,
+         where="v2/ch12/web_schema.py(EVENT_KINDS·_web_fmt); v2/ch12/process_view.py(block data); vanam-process components/ops2/ch12/Ch12Logs.tsx"),
+    dict(id="D415", title="2026-11-18 sim 가상 MFC 시작 설정점 — SIM_MFC_START_SP_MTORR(기본 SP3·SP4 = 2 mTorr)",
+         decision="sim 가상 MFC 가 SP1~SP5 = 0 으로 켜져 sim 공정이 압력 대기(CH1 SP3·CH2 SP4 setpoint 읽기 실패 — 5회 뒤 SP_READ_FAILED)에서 모두 멈추던 것을 "
+                  "설정 SIM_MFC_START_SP_MTORR('0,0,2,2,0' mTorr — 쉼표 5개, 형식 밖은 D11 거부, 설치값·재시작)로 sim 시작 값을 넣는다. 읽는 곳은 sim/rig.make_sims 하나"
+                  "(app 은 RUN_MODE sim 일 때만 부른다) — 드라이버·엔진·실장비 연결은 읽지 않는다(시험 test_sim_mfc_start_sp). 실장비 패널에 저장된 SP3·SP4 값은 "
+                  "미확인 — 장비 사실 표 UNVERIFIED 에 올렸다. 확인: sim 프로그램에서 CH1·CH2 동시 공정이 압력 제어를 지나 메인 공정까지 감.",
+         reason="사용자 지시 2026-11-18 4장", confirm=True,
+         where="v2/ch12/params/mfc.py; v2/ch12/sim/rig.py; v2/ch12/spec/devices.py(UNVERIFIED)"),
+    dict(id="D416", title="2026-11-18 챔버12 웹 화면을 챔버K v2(W-10·W-11) 틀로 — 포털 쪽 결정",
+         decision="상태 띠·탭(웹 운전·HMI·레시피·기록·설정 / 노트북 운전·HMI·기록, ?tab=)·잠금(챔버K lockOf 순서·문구)·확인창·알림·상세 토글을 챔버K 와 같게, "
+                  "챔버K 부품(kit·Chk2Adjust·Chk2Trend·Chk2Config·CommandLog·RunList)을 그대로 쓰고 챔버12 전용은 components/ops2/ch12. 공용 부품은 기본값을 지킨 "
+                  "선택 인자만 더함(useChk2 trendCols·Chk2Trend defs·title — 챔버K 추세 카드 HTML 이전과 같음 확인). 입력칸은 명령 인자를 그대로 그리지 않는다: "
+                  "플라즈마 클리닝 = 채널(CH1/CH2)·PC 레시피 목록(웹 저장 kind pc 새로 — v1 PC CSV 첫 행 열, 범위는 묶음 PC_DEFAULT_*)·시작·정지·오류 해제, "
+                  "TSP = 목표 압력(Torr, 지수 표기)·사이클 수(묶음 범위)·매일 예약 켜기/끄기 + 시각 고르기, 프리스퍼터 = 시각 고르기, 히터 = 목표 °C(0~CH2_HEATER_MAX_TEMP·SV 상한), "
+                  "Power Select 켜기·끄기·런타임 덤프 사유(선택) — 범위 밖은 보내기 전에 막는다. 노트북 화면도 PLC 버튼을 보낸다(장비가 HMI 에서도 PLC_BUTTON 을 받음 — "
+                  "챔버K 는 웹만) — 웹과 같은 잠금·확인창. 로봇 연결 카드는 장비 engines.robot(받는 중·처리한 명령 수·처리 중·마지막 명령). 코일·레지스터 원래 이름·"
+                  "명령 이름·블록 설명은 '상세'에서만.",
+         reason="사용자 지시 2026-11-18 1·2·4장", confirm=False,
+         where="vanam-process components/ops2/ch12/*; lib/ops2/ch12/pc.ts; scripts/ops2-ch12-ui-check.mjs; v2/hmi(노트북 화면 빌드)"),
+]

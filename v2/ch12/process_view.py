@@ -44,13 +44,15 @@ class ProcessViewMixin:
                "label": (inst.label if inst else (b or {}).get("label", "")), "auto": bool(inst and inst.auto),
                "start_t": self.clock.wall(), "result": None}
         self.executed.append(rec)
-        self.emit("block", f"{rec['no']} {rec['type']} 시작", data=dict(rec, phase="start", run_id=self.run_id))
+        # total·elapsed_s 는 화면 로그 줄용(D414 — '2/5 Ar 가스 시작'·'2 Ar 가스 끝 — 정상, 1:30') — 기록(executed)에는 넣지 않는다
+        self.emit("block", f"{rec['no']} {rec['type']} 시작", data=dict(rec, phase="start", run_id=self.run_id, total=len(self.blocks)))
 
     def _block_end(self, result: str) -> None:
         if self.executed and self.executed[-1]["result"] is None:
             rec = self.executed[-1]
             rec["result"], rec["end_t"] = result, self.clock.wall()
-            self.emit("block", f"{rec['no']} {rec['type']} {result}", data=dict(rec, phase="end", run_id=self.run_id))
+            self.emit("block", f"{rec['no']} {rec['type']} {result}", data=dict(rec, phase="end", run_id=self.run_id, total=len(self.blocks),
+                                                                          elapsed_s=round(rec["end_t"] - rec["start_t"], 1)))
 
     def block_no(self) -> Optional[int]:
         if self.cur_block is None:

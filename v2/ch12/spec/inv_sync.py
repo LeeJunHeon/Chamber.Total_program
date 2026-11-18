@@ -190,4 +190,22 @@ ITEMS = [
          v1="runtime/plasma_cleaning_runtime.py:3141-3150; main.py:1639-1654", v2="v2/ch12/core.py; v2/ch12/pre_sputter.py",
          test="v2/tests/test_core.py::test_pc_csv_path_is_read_and_nas_stall_is_limited_to_30s_d413; "
               "v2/tests/test_pre_sputter.py::test_recipe_path_exists_check_waits_at_most_3s_and_late_answer_is_applied_d413", status="done", note=""),
+    dict(id="SYNC-530", area="sync",
+         desc="웹 로그 평소 보기(D414): 공정 진행 줄(process block·skip·pause·resume·edit·adjust·recipe_loaded·popup·chat·state·result)이 묶음 eventKinds main, "
+              "block 사건 data total·elapsed_s, snapshot fmt format spec 통일, 화면 연 직후 최근 줄(연결 때 첫 묶음)",
+         v1="(v2 신설 — v1 로그 창은 모든 줄)", v2="v2/ch12/web_schema.py; v2/ch12/process_view.py",
+         test="v2/tests/test_web_log_main.py::test_process_progress_kinds_are_main_and_chat_cards_are_detail; "
+              "v2/tests/test_web_log_main.py::test_block_events_carry_total_and_elapsed_and_are_replayed_to_a_new_viewer; "
+              "vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:log-main", status="done", note=""),
+    dict(id="SYNC-531", area="sync",
+         desc="sim 가상 MFC 시작 설정점(D415): SIM_MFC_START_SP_MTORR 기본 0,0,2,2,0 mTorr — sim 압력 대기가 setpoint 읽기 실패로 멈추지 않음, 실장비 경로 영향 없음",
+         v1="(v1 sim 없음 — 실장비는 패널 값)", v2="v2/ch12/params/mfc.py; v2/ch12/sim/rig.py",
+         test="v2/tests/test_sim_mfc_start_sp.py::test_full_rig_reads_sp3_sp4_from_the_virtual_mfc; v2/tests/test_sim_mfc_start_sp.py::test_only_the_sim_reads_the_setting; "
+              "v2/tests/test_sim_mfc_start_sp.py::test_bad_format_is_rejected_by_config_check_not_fixed_up", status="done", note=""),
+    dict(id="SYNC-532", area="sync",
+         desc="챔버12 웹 화면 챔버K 틀(D416): 상태 띠·탭·운전(CH1·CH2 나란히)·HMI 계통도·기록·입력칸(이름·단위·범위, 범위 밖 막음)·잠금 순서·노트북 PLC 버튼·로봇 연결 실제 상태·개발용 글 숨김",
+         v1="(v2 신설)", v2="vanam-process components/ops2/ch12/Ch12Page.tsx",
+         test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:status-band; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:tabs-locks; "
+              "vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:hmi-map; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:inputs-range; "
+              "vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:no-dev-text; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:pc-recipe", status="done", note=""),
 ]

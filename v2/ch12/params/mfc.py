@@ -124,6 +124,12 @@ PARAMS: tuple = (
        desc="v1 은 확인 간격의 합으로 잰다(읽는 시간은 넣지 않음)", note=_W),
     _m("MFC_PRESSURE_CHECK_INTERVAL_SEC", "압력 확인 간격", "s", F, 1.0, 0.1, 60.0, src=f"{_S}:178;{_C}:296;device/mfc.py:910", note=_W),
     _m("MFC_PRESSURE_READ_FAIL_STREAK_MAX", "압력 읽기 연속 실패 한도", "회", I, 3, 1, 100, src=f"{_S}:179;{_C}:297;device/mfc.py:914", note=_W),
+    # ───────── sim 전용(2026-11-18 D415) ─────────
+    inst("SIM_MFC_START_SP_MTORR", "debug", "sim 가상 MFC 시작 설정점 SP1~SP5", S, "0,0,2,2,0",
+         pattern=r"\s*\d+(\.\d+)?\s*(,\s*\d+(\.\d+)?\s*){4}", unit="mTorr", safety=L, src="v2(사용자 지시 2026-11-18 4장 D415)",
+         desc="sim 에서만 — 가상 MFC(sim/mfc_sim)가 켜질 때 들고 있는 SP1~SP5(mTorr, 쉼표 5개). 실장비는 장비 패널에 저장된 값을 R1~R4 로 읽어 쓰고 "
+              "이 값은 쓰지 않는다. 기본 SP3·SP4 = 2 mTorr(CH1 압력 제어 SP3·CH2 SP4 — 실장비 패널 값은 미확인, UNVERIFIED). 0 이면 압력 대기가 "
+              "'setpoint 읽기 실패'로 멈춘다"),
 )
 
 DROPPED: tuple = (
