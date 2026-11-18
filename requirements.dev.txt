@@ -1,0 +1,4 @@
+-r requirements.build.txt
+
+# test
+pytest==9.2.0

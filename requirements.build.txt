@@ -5,13 +5,13 @@ pymodbus==3.11.2
 openpyxl==3.1.5
 opencv-python==4.12.0.88          # camera_recorder + rf_worker
 onnxruntime==1.27.0               # rf_worker 전용 (ONNX 추론)
+pytesseract==0.3.13               # camera_recorder (OCR)
 
 # RGA (핵심)
 srsinst==0.0.2
 srsinst.rga==0.3.8
-
-# (선택) tools/export_error_codes_from_docx.py 쓸 때만 필요
-python-docx==1.2.0
+matplotlib==3.10.8                # srsinst.rga/srsgui 가 쓰지만 의존성 선언이 없음
+scipy==1.14.1                     # srsinst.rga 가 쓰지만 의존성 선언이 없음, 1.15 에서 ricker 삭제 → 1.14.1 고정
 
 # build
 pyinstaller==6.14.2
