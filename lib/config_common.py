@@ -298,6 +298,11 @@ MFC_PRESSURE_TIMEOUT_SEC = 60.0
 MFC_PRESSURE_CHECK_INTERVAL_SEC = 1.0
 MFC_PRESSURE_READ_FAIL_STREAK_MAX = 3
 
+# ✅ 가스 도달 판정 — R60 유량이 목표 ±FLOW_ERROR_TOLERANCE 안에 이 횟수만큼 연속(MFC_STABILIZATION_INTERVAL_MS 간격) 들어와야 FLOW_ON 확정
+#    범위 밖·읽기 실패면 0 부터 다시 센다. 1 이상 정수가 아니면 FLOW_ON 을 설정 오류로 실패 처리
+#    (mfc1/mfc2 는 채널 모듈(config_ch1/ch2)을 먼저 읽으므로 settings.json 에서는 ch1·ch2 구역에서 바꾼다)
+MFC_FLOW_STABLE_COUNT = 3
+
 # 장비 ASCII 명령 템플릿(장비 레이어에서 사용)
 MFC_COMMANDS = {
     'SET_ONOFF_MASK': lambda bits: f"L0{bits}",
@@ -785,6 +790,10 @@ PROCESS_GAS_INFO = {
     "O2": {"channel": 2},
     "N2": {"channel": 3},
 }
+
+# 가스 단계 설정: {가스 이름: [거쳐 갈 중간 유량(sccm), ...]} — 레시피 목표보다 작은 값만 작은 순서대로 먼저 설정·도달(3회 연속) 후 다음 단계
+# 키는 PROCESS_GAS_INFO 의 가스 이름, 값은 0 보다 큰 숫자 오름차순(중복 없음). 어기면 공정 시작 거부. 비우면({}) 단계 없음(CH1 기본)
+PROCESS_GAS_STEP_LEVELS = {}
 
 PROCESS_DEFAULT_BASE_PRESSURE = 1e-5
 PROCESS_DEFAULT_OES_INTEGRATION_MS = 60

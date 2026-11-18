@@ -2154,6 +2154,48 @@ class ProcessController:
             'req_dcp': req_dc_pulse, 'req_rfp': req_rf_pulse,
         }
 
+    def _gas_step_levels(self, gas_info: Dict[str, Any]) -> Dict[str, List[float]]:
+        """채널 설정 PROCESS_GAS_STEP_LEVELS 검사 → {가스 이름: [중간 유량(float), ...]}.
+        dict · 키는 PROCESS_GAS_INFO 의 가스 이름 · 값은 0 보다 큰 숫자 목록(오름차순·중복 없음).
+        어기면 고쳐 쓰지 않고 AppError(E211)로 공정 시작을 막는다."""
+        raw = getattr(self._cfg, "PROCESS_GAS_STEP_LEVELS", {})
+        if raw is None:
+            raw = {}
+
+        def _bad(why: str) -> AppError:
+            return AppError(
+                code="E211",
+                detail=f"설정 오류(PROCESS_GAS_STEP_LEVELS): {why} — 현재 값 {raw!r}",
+                meta={"ch": self._ch, "key": "PROCESS_GAS_STEP_LEVELS"},
+            )
+
+        if not isinstance(raw, dict):
+            raise _bad("{가스 이름: [유량, ...]} 형태여야 합니다")
+        out: Dict[str, List[float]] = {}
+        for gas, levels in raw.items():
+            if gas not in gas_info:
+                raise _bad(f"알 수 없는 가스 이름 {gas!r} (가능: {', '.join(map(str, gas_info))})")
+            if not isinstance(levels, (list, tuple)):
+                raise _bad(f"{gas} 값은 숫자 목록이어야 합니다")
+            vals: List[float] = []
+            for v in levels:
+                if isinstance(v, bool) or not isinstance(v, (int, float)) or not (float(v) > 0):
+                    raise _bad(f"{gas} 값 {v!r} — 0 보다 큰 숫자여야 합니다")
+                vals.append(float(v))
+            if any(b <= a for a, b in zip(vals, vals[1:])):
+                raise _bad(f"{gas} 값은 작은 순서(오름차순)·중복 없이 적어야 합니다")
+            out[gas] = vals
+        return out
+
+    def gas_step_levels_error(self) -> str:
+        """런타임 시작 전 점검용 — PROCESS_GAS_STEP_LEVELS 가 잘못됐으면 오류 문구(E211 detail), 정상이면 ""."""
+        gas_info = dict(getattr(self._cfg, "PROCESS_GAS_INFO", self._gas_info) or self._gas_info)
+        try:
+            self._gas_step_levels(gas_info)
+        except AppError as e:
+            return e.detail
+        return ""
+
     def _create_process_sequence(self, params: Dict[str, Any]) -> List[ProcessStep]:
         # ------------------------------------------------------------
         # TEST MODE : 실제 장비 제어 없이 시간만 흘려보내기
@@ -2190,6 +2232,9 @@ class ProcessController:
         # ✅ 키 누락 대비: 항상 존재하는 맵으로 폴백
         gas_info      = common_info.get('gas_info') or self._gas_info
         gun_shutters  = common_info.get('gun_shutters', [])
+
+        # 가스 단계 설정 검사(잘못되면 고쳐 쓰지 않고 시작 거부)
+        step_levels = self._gas_step_levels(gas_info)
 
         default_base_pressure = float(getattr(self._cfg, "PROCESS_DEFAULT_BASE_PRESSURE", 1e-5))
         base_pressure = float(params.get("base_pressure", default_base_pressure))
@@ -2360,21 +2405,39 @@ class ProcessController:
         for gas, info in gas_info.items():
             if params.get(f"use_{gas.lower()}", False):
                 flow_value = float(params.get(f"{gas.lower()}_flow", 0))
-                steps.extend([
-                    ProcessStep(
-                        action=ActionType.PLC_CMD, params=(gas, True, self._ch), message=f'{gas} 밸브 열기'
-                    ),
-                    ProcessStep(
-                        action=ActionType.MFC_CMD,
-                        params=('FLOW_SET', {'channel': info["channel"], 'value': flow_value}),
-                        message=f'Ch{info["channel"]}({gas}) GAS {flow_value}sccm 설정'
-                    ),
-                    ProcessStep(
-                        action=ActionType.MFC_CMD,
-                        params=('FLOW_ON', {'channel': info["channel"]}),
-                        message=f'Ch{info["channel"]}({gas}) GAS 공급 시작'
-                    )
-                ])
+                steps.append(ProcessStep(
+                    action=ActionType.PLC_CMD, params=(gas, True, self._ch), message=f'{gas} 밸브 열기'
+                ))
+                # 단계 설정(PROCESS_GAS_STEP_LEVELS): 목표보다 작은 중간값만 작은 순서대로 먼저 거친다.
+                # 각 단계는 FLOW_SET → FLOW_ON(같은 채널 L{ch}1 재전송 → 새 목표로 안정화 재시작, 3회 연속 도달 후 다음 단계)
+                mids = [lv for lv in step_levels.get(gas, []) if lv < flow_value]
+                if not mids:
+                    steps.extend([
+                        ProcessStep(
+                            action=ActionType.MFC_CMD,
+                            params=('FLOW_SET', {'channel': info["channel"], 'value': flow_value}),
+                            message=f'Ch{info["channel"]}({gas}) GAS {flow_value}sccm 설정'
+                        ),
+                        ProcessStep(
+                            action=ActionType.MFC_CMD,
+                            params=('FLOW_ON', {'channel': info["channel"]}),
+                            message=f'Ch{info["channel"]}({gas}) GAS 공급 시작'
+                        )
+                    ])
+                else:
+                    levels = mids + [flow_value]
+                    for i, lv in enumerate(levels, start=1):
+                        steps.append(ProcessStep(
+                            action=ActionType.MFC_CMD,
+                            params=('FLOW_SET', {'channel': info["channel"], 'value': lv}),
+                            message=f'Ch{info["channel"]}({gas}) GAS {lv}sccm 설정 (단계 {i}/{len(levels)})'
+                        ))
+                        steps.append(ProcessStep(
+                            action=ActionType.MFC_CMD,
+                            params=('FLOW_ON', {'channel': info["channel"]}),
+                            message=(f'Ch{info["channel"]}({gas}) GAS 공급 시작 ({lv}sccm 도달 대기)' if i == 1
+                                     else f'Ch{info["channel"]}({gas}) GAS {lv}sccm 도달 대기')
+                        ))
 
         # --- 압력 제어 시작 (채널별 config) ---
         sp_on_cmd = getattr(

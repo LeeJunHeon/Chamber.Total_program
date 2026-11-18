@@ -511,6 +511,7 @@
     // ── MFC 유량 스케일 (CH1 전용) ──
     // CH1은 모든 가스 채널이 1:1 스케일
     "MFC_SCALE_FACTORS": {"1": 1.0, "2": 1.0, "3": 1.0},
+    "MFC_FLOW_STABLE_COUNT": 3,            // 가스 도달 판정: 목표 ±5% 안에 연속 몇 번(1초 간격) 들어와야 FLOW_ON 확정. 범위 밖·읽기 실패면 0 부터 다시
 
     // ── 공정 파라미터 (CH1 전용) ──
     "PROCESS_GUN_SHUTTERS": [],                        // 사용하는 건 셔터 목록 (CH1은 없음)
@@ -586,6 +587,7 @@
     // ── MFC 유량 스케일 (CH2 전용) ──
     // CH2 2번 가스(O2)는 x10, 3번 가스(N2)는 x2
     "MFC_SCALE_FACTORS": {"1": 1.0, "2": 10.0, "3": 2.0},
+    "MFC_FLOW_STABLE_COUNT": 3,            // 가스 도달 판정: 목표 ±5% 안에 연속 몇 번(1초 간격) 들어와야 FLOW_ON 확정. 범위 밖·읽기 실패면 0 부터 다시
 
     // ── 장비 지원 플래그 (CH2 전용) ──
     "SUPPORTS_RF_CONT": true,              // CH2는 RF Continuous 사용
@@ -645,6 +647,7 @@
     "PROCESS_PRESSURE_CONTROL_SP_ON_CMD": "SP4_ON",  // 압력 제어 Set-Point 명령
     "PROCESS_PRESSURE_CONTROL_SP_LABEL": "SP4",      // 압력 제어 Set-Point 표시 이름
     "PROCESS_PRESSURE_CONTROL_SP_INDEX": 4,          // 압력 제어 Set-Point 번호
+    "PROCESS_GAS_STEP_LEVELS": {"O2": [9.0, 9.5]},   // 가스 단계 설정: 목표가 이 값보다 크면 이 값을 먼저 거쳐 감, 단위 sccm, 각 단계는 3회 연속 도달 후 다음 (작은 순서, 중복 없음)
 
     "PC_RF_PULSE_POST_ON_DELAY_MS": 30000,           // RF Pulse ON 후 안정화 대기 (ms). CH1과 달리 30초로 설정
     "RFPULSE_REFP_WARN_WATTS": 5.0,                  // REFP가 이 값 이상이면 즉시 챗 경고 알림 (공정은 계속 진행)

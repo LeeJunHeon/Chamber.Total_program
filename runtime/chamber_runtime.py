@@ -4055,6 +4055,11 @@ class ChamberRuntime:
                 if _code:
                     await self._thickness_reject(params, _code, _msg)
 
+            # 가스 단계 설정(PROCESS_GAS_STEP_LEVELS) 검사 — 잘못되면 Chuck 이동 전에 시작 거부(E211). 시퀀스 생성에서도 같은 검사로 막는다
+            _gs_err = self.process_controller.gas_step_levels_error()
+            if _gs_err:
+                await self._gas_step_reject(params, _gs_err)
+
             # ★ 추가: 공정 시작 직전 Chuck 위치 선행 설정
             self._run_chuck_position = str(params.get("chuck_position") or "").strip().lower()
             self._run_warnings = []
@@ -6789,6 +6794,24 @@ class ChamberRuntime:
             runtime_state.set_error("chamber", self.ch, f"thickness check failed [{code}]: {msg}")
             runtime_state.mark_finished("chamber", self.ch)
         raise CodedRuntimeError(f"thickness check failed [{code}]: {msg}", code)
+
+    async def _gas_step_reject(self, params, msg: str) -> None:
+        """가스 단계 설정(PROCESS_GAS_STEP_LEVELS) 오류 — 두께 점검 실패와 같은 거부 흐름(장비 정리 → 오류 상태 → 예외, E211)."""
+        code = "E211"
+        self.append_log("MAIN", f"[CH{self.ch}] 가스 단계 설정 오류 [{code}] {msg} → 공정 시작 차단")
+        if self.chat:
+            with contextlib.suppress(Exception):
+                _note = params.get("process_note") or params.get("Process_name") or "알 수 없음"
+                self.chat.notify_error_event(f"CH{self.ch}", code, f"{msg} → 공정 시작 차단 (공정: {_note})")
+                self.chat.flush()
+        self._auto_connect_enabled = False
+        with contextlib.suppress(Exception):
+            await self._stop_device_watchdogs(light=False)
+        self._on_process_status_changed(False)
+        with contextlib.suppress(Exception):
+            runtime_state.set_error("chamber", self.ch, f"gas step config error [{code}]: {msg}")
+            runtime_state.mark_finished("chamber", self.ch)
+        raise CodedRuntimeError(f"gas step config error [{code}]: {msg}", code)
 
     def _thk_run_started(self, params) -> None:
         """공정 시작 이벤트 — 이번 런 두께 기록 초기화(두께 모니터가 붙은 채널만)."""

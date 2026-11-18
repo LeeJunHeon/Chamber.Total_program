@@ -74,7 +74,8 @@ class _StabJob:
     target_hw: float
     owner: Optional[str]
     created_mono: float
-    attempts: int = 0
+    attempts: int = 0                             # 확정되지 않은 회차 수(범위 안이지만 연속 횟수 미달인 회차 포함) — 180 이면 시간 초과
+    consec: int = 0                               # 목표 ±허용오차 안에 연속으로 들어온 횟수(범위 밖·읽기 실패면 0)
 
 # =============== Async 컨트롤러 ===============
 def mfc_resource_key(mfc) -> str:
@@ -1697,11 +1698,31 @@ class AsyncMFC:
                 n += 1
         return n
 
+    def _flow_stable_need(self) -> Optional[int]:
+        """MFC_FLOW_STABLE_COUNT(가스 도달 판정에 필요한 연속 횟수). 1 이상 정수가 아니면 None(설정 오류 — 고쳐 쓰지 않는다)."""
+        v = self._cfg_get("MFC_FLOW_STABLE_COUNT", 3)
+        if isinstance(v, bool) or not isinstance(v, int) or v < 1:
+            return None
+        return v
+
     async def _stabilization_loop(self):
-        """등록된 채널별 안정화 작업을 R60 한 번 읽기로 함께 판정한다(채널마다 목표/주체/시도 횟수 별도)."""
+        """등록된 채널별 안정화 작업을 R60 한 번 읽기로 함께 판정한다(채널마다 목표/주체/시도 횟수/연속 횟수 별도).
+        목표 ±FLOW_ERROR_TOLERANCE 안에 MFC_FLOW_STABLE_COUNT 회 연속 들어와야 확정(압력 도달 판정과 같은 방식).
+        범위 밖·읽기 실패면 연속 횟수를 0 으로 되돌린다. 확정되지 않은 회차가 180 이면 시간 초과(채널당 약 3분)."""
         me = asyncio.current_task()
         try:
             while self._stab_jobs:
+                need = self._flow_stable_need()
+                if need is None:
+                    bad = self._cfg_get("MFC_FLOW_STABLE_COUNT", None)
+                    for ch in sorted(self._stab_jobs.keys()):
+                        job = self._stab_jobs.pop(ch, None)
+                        if job is not None:
+                            await self._emit_failed(
+                                "FLOW_ON",
+                                f"설정 오류(MFC_FLOW_STABLE_COUNT={bad!r}) — 1 이상의 정수여야 합니다",
+                                owner=job.owner, channel=ch)
+                    break
                 chs = sorted(self._stab_jobs.keys())
                 t_read = time.monotonic()
                 vals = await self._read_r60_values(tag=f"[STAB R60 ch{','.join(str(c) for c in chs)}]")
@@ -1716,17 +1737,20 @@ class AsyncMFC:
                         actual_hw = float(vals[ch - 1])              # %FS(HW)
                     actual_ui = None if actual_hw is None else self._hw_to_ui(ch, actual_hw)  # sccm
                     tol = job.target_hw * tol_ratio
+                    in_range = (actual_hw is not None) and (abs(actual_hw - job.target_hw) <= tol)
+                    consec = (job.consec + 1) if in_range else 0     # 범위 밖·읽기 실패면 연속이 끊긴다
                     await self._emit_status(
                         f"GAS 확인... ch{ch} (목표: {self._hw_to_ui(ch, job.target_hw):.2f}sccm, "
-                        f"현재: {(-1 if actual_ui is None else actual_ui):.2f}sccm)",
+                        f"현재: {(-1 if actual_ui is None else actual_ui):.2f}sccm) [연속 {consec}/{need}]",
                         owner=job.owner, channel=ch)
                     if self._stab_jobs.get(ch) is not job:
                         continue
-                    if (actual_hw is not None) and (abs(actual_hw - job.target_hw) <= tol):
+                    job.consec = consec
+                    if job.consec >= need:
                         self._stab_jobs.pop(ch, None)
                         await self._emit_confirmed("FLOW_ON", owner=job.owner, channel=ch)
                         continue
-                    # 목표 미도달이면 시도 횟수 증가
+                    # 확정 안 된 회차(범위 밖·읽기 실패·연속 횟수 미달)면 시도 횟수 증가
                     job.attempts += 1
                     if job.attempts >= 180:  # 가스 안정화 최대 3분 대기(채널별)
                         self._stab_jobs.pop(ch, None)
