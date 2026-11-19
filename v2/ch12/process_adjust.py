@@ -118,6 +118,11 @@ class AdjustMixin:
         old = self.overrides.get(ai.key)
         if old is None:
             old = self._step_value((past or fut)[-1] if past else fut[0])
+        why = self._gas_step_conflict(ai, fut, v)
+        if why:
+            self.reject_detail = why
+            self._rec(device, item, old, v, source, "rejected", "ADJUST_GAS_STEP", by)
+            return "ADJUST_GAS_STEP"
         for s in fut:
             self._set_step_value(s, v)
         self.overrides[ai.key] = v
@@ -125,6 +130,24 @@ class AdjustMixin:
         live = bool(past) and self._apply_live(ai, v, old, source, by)
         self._rec(device, item, old, v, source, "applied" if live else "scheduled", None, by)
         return None
+
+    def _gas_step_conflict(self, ai, fut: list, v: float) -> str:
+        """아직 안 한 가스 주입의 목표 유량을 바꿀 때 — 가스 단계 설정(PROCESS_GAS_STEP_LEVELS, v1 main 27decba)의 '목표보다 작은
+        중간값' 구성이 바뀌면 거부(D417). 펼친 중간 단계(FLOW_SET·FLOW_ON)는 설정 값 그대로라 목표만 바꾸면 v1 규칙(작은 순서로
+        올라감)이 깨진다(예 10 → 9.2 면 9.0 → 9.5 → 9.2). 구성이 같으면(10 → 12) 목표만 바꾼다. 이미 지난 가스 주입은 해당 없음."""
+        if ai.device != "mfc" or ai.item not in _CH or not fut:
+            return ""
+        from v2.ch12.process_steps import GAS_INFO_DEFAULT, gas_step_cfg
+        gas = next((g for g in GAS_INFO_DEFAULT if g.lower() == ai.item[:-len("_flow")]), "")
+        levels, err = gas_step_cfg(self.cfg, self.n)
+        lv = levels.get(gas, ()) if not err else ()
+        for s in fut:
+            cur = float(self._step_value(s) or 0.0)
+            a, b = [x for x in lv if x < cur], [x for x in lv if x < v]
+            if a != b:
+                return (f"{gas} {cur:g} → {v:g} sccm: 가스 단계 설정 {list(lv)} 의 중간값이 {a} → {b} 로 바뀜 — "
+                        "아직 안 한 가스 주입은 단계가 같은 범위에서만 바꿀 수 있음(레시피를 고쳐 다시 시작)")
+        return ""
 
     # 장비 최대 — 공정 시작(start)이 목표를 자르던 한도(v1 설정)와 같은 것. 파워는 이 값을 넘으면 거부한다(고쳐 쓰지 않음).
     # RF Pulse 는 v1 에 펄스 전용 최대가 없어 RF 계열 최대(RF_MAX_POWER)를 쓴다(결정 D402 — 사용자 확인 필요).

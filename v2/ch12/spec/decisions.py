@@ -721,3 +721,59 @@ DECISIONS += [
          reason="사용자 지시 2026-11-18 1·2·4장", confirm=False,
          where="vanam-process components/ops2/ch12/*; lib/ops2/ch12/pc.ts; scripts/ops2-ch12-ui-check.mjs; v2/hmi(노트북 화면 빌드)"),
 ]
+
+
+DECISIONS += [
+    dict(id="D417", title="2026-11-19 운영 v1 main 27decba 반영 — 가스 도달 판정 연속 N 회(MFC_FLOW_STABLE_COUNT)·가스 단계 설정(PROCESS_GAS_STEP_LEVELS)",
+         decision="① MFC 안정화(drivers/mfc_ops.stab_loop): 목표 ±FLOW_ERROR_TOLERANCE 안에 연속 N 회(기본 3) 들어와야 FLOW_ON 확정, 범위 밖·읽기 실패면 연속 0, "
+                  "확정 안 된 회차(연속 미달 포함)가 180 이면 'GAS 안정화 시간 초과', 상태 문구 끝 '[연속 n/N]', 1 이상 정수가 아니면 읽지 않고 그 FLOW_ON 을 "
+                  "'설정 오류(MFC_FLOW_STABLE_COUNT=…) — 1 이상의 정수여야 합니다'(사유 코드 STAB_CONFIG)로 실패 — v1 과 같음. 설정은 v1 처럼 채널마다 "
+                  "CH1_·CH2_MFC_FLOW_STABLE_COUNT(v1 settings.json ch1·ch2 구역, 공통 키 없음), 범위 1~180(v1 은 상한 없음 — 180 넘으면 늘 시간 초과라 D11 범위로, 실시간 적용). "
+                  "② 가스 주입 펼치기(process_steps.gas_intro_steps): 목표보다 작은 중간값만 작은 순서대로 FLOW_SET → FLOW_ON(문구 '(단계 i/n)'·'(… 도달 대기)'), "
+                  "중간값이 없으면 예전과 글자 하나까지 같음, 머무는 시간 없음, 도달 못 하면 예전처럼 공정 중단. 설정 CH1·CH2_PROCESS_GAS_STEP_LEVELS(JSON, "
+                  "CH1 {}·CH2 {\"O2\": [9.0, 9.5]} — v1 config_common·config_ch2). 잘못된 값(모르는 가스·0 이하·숫자 아님·오름차순 아님·중복·dict 아님)은 "
+                  "고쳐 쓰지 않는다: 파라미터 표 키 사이 규칙 C05·C06 이 저장 때 거부(D11), 표를 거치지 않은 값은 시작 전 단계에서 두께 점검 다음·Chuck 이동 전에 "
+                  "E211 거부(로그 '[CHn] 가스 단계 설정 오류 [E211] … → 공정 시작 차단'·챗 장비 오류·run_end E211 — v1 _gas_step_reject 와 같은 흐름, 문구는 v1 "
+                  "_gas_step_levels 를 실제로 부른 골든 gas_step_levels.json 과 같음). v1 은 시퀀스 생성에서도 같은 검사로 막지만 v2 는 펼치기가 시작 전 단계보다 "
+                  "먼저 돌기 때문에 펼치기는 잘못된 값을 단계 없이 펼치고(시작은 위 검사가 막음) — 결과(시작 거부 E211)는 같다. ETA 는 DELAY 단계만 세므로 바뀌지 않음(v1 과 같음). "
+                  "③ v2 에만 있는 공정 중 값 바꾸기: 단계가 있는 가스는 마지막(목표) FLOW_SET 에만 ref — 중간값은 설정 값 그대로. 아직 안 한 가스 주입의 목표를 바꿀 때 "
+                  "중간값 구성이 바뀌면(예 10 → 9.2 = [9.0, 9.5] → [9.0]) ADJUST_GAS_STEP 으로 거부(구성이 같으면 10 → 12 처럼 목표만), 이미 지난 가스 주입은 해당 없음 — "
+                  "v1 규칙(작은 순서로 올라감)이 공정 중 수정으로 깨지지 않게 하는 v2 규칙이라 사용자 확인 필요. "
+                  "④ acf3d96(v1 requirements.build/dev 만): v2 코드는 pytesseract·matplotlib·scipy·python-docx 를 쓰지 않음(검색 0) — 코드 영향 없음, "
+                  "RGA 워커 환경 메모(matplotlib·scipy 1.14.1 고정)만 v2/requirements.txt 주석에. "
+                  "⑤ V1_BASE 27decba(v1golden_process_steps.V1_BASE). 골든: main 27decba 사본에서 v1 골든 도구 17개를 다시 돌려 내용이 바뀐 것만 넣음 — "
+                  "process_combos.json(가스 단계 경우 10개 추가 — CH2 O2 10·9.6·9.5·9.2·9.0·2·'10.0'·12+N2·15+히터, CH1 O2 10, cfg 에 PROCESS_GAS_STEP_LEVELS), "
+                  "gas_step_levels.json(새 — v1 검사 42 경우), dev_mfc.json(FLOW_ON 뒤 R60 3회), recipe_check·recipe_files(머리 v1_base 만), "
+                  "independent_tools.json(CH2 히터 CSV 하루 파일 이름 — 9cde7c4 반영분이 이전 사본에 빠져 있던 것). dev_dcpulse·dev_rfpulse·dev_plc·robot_server_frames·"
+                  "runtime_dump·xlsx 는 다시 만들면 걸린 시간(수 ms)·임시 포트·생성 날짜·zip 시각만 달라 기존 사본 유지(v1 해당 코드 변경 없음).",
+         reason="사용자 지시 2026-11-19 4장", confirm=True,
+         where="v2/ch12/drivers/mfc_ops.py; v2/ch12/process_steps.py; v2/ch12/process_preflight.py; v2/ch12/process_adjust.py; v2/ch12/params/mfc.py; "
+               "v2/ch12/params/core.py; v2/ch12/spec/settings_v1facts.py; v2/tools/v1golden_process_steps.py; v2/tests/golden"),
+    dict(id="D418", title="2026-11-19 화면을 다시 열면 로그가 사라지던 것 — 기본 보기 줄 챔버별 보관(장비 허브·웹 첫 묶음·화면 로그 목록), 메시지 양 측정",
+         decision="장비 허브(hub.py): 기본 보기에 나오는 메시지 — 묶음 eventKinds 의 main(D414 정의 그대로 web_schema.EVENT_KINDS)·경고·오류(warn·error·critical)·"
+                  "run_start·run_end·cmd_result·config_ack — 를 최근 링(500)과 따로 챔버별(ch1·ch2·pc·tsp·shared) 링에 HUB_KEEP_MAIN 개(설치값 기본 300, 50~5000, "
+                  "범위 밖 거부·재시작 뒤 적용)씩 보관, 소비자가 붙으면 hello·state 다음에 최근 링에서 밀려난 보관 줄을 시간 순서로 먼저, 그다음 최근 링(같은 것은 한 번). "
+                  "uplink 가 느린 소비자로 끊겨 last_seq 로 다시 붙을 때도 그 뒤의 보관 줄을 다시 보냄(웹은 msg_id 로 한 번만 저장). 나머지 메시지·v1 txt 파일 로그는 그대로. "
+                  "웹(vanam-process): 브라우저 첫 묶음은 '최근 사건 100'(종류 무관)이라 같은 문제 — 챔버12 만 챔버별 기본 보기 줄(장비 묶음 eventKinds main·경고·오류, "
+                  "최근 12 시간 안 챔버마다 100)을 더 읽어 합침(lib/ops2/ch12/firstEvents.ts, 챔버K 는 그대로). 화면 로그 목록(useChk2)은 최근 300 개만 남겼는데 "
+                  "챔버12 는 기본 보기 줄을 상세 줄과 따로 1500 개(300 × 챔버 5)까지 남김(공용 useChk2 의 선택 인자 mainKeep — 기본 0 이면 챔버K 그대로). "
+                  "측정(sim 실시간 474 s, CH1 RF Pulse + CH2 RF 연속 300 W·O2 10 sccm 동시, 로컬 /api/v1/stream): 평균 5.5 개/s, 1초 최대 32, 10초 창 최대 13.6 개/s, "
+                  "CH2 RF 램프 구간 약 6~8 개/s(PLC 쓰기 기록 2·RF 상태 1·DISPLAY 1 + MFC IO), 메시지 1건 약 330 B(약 1.9 KiB/s), 기본 보기 줄은 65/2593(2.5 %), "
+                  "많은 종류 plc log 637·rf display 422·rf status 306·mfc flow 288·mfc io 278. 지시의 '초당 약 120 개'는 이 sim·기본 설정에서 재현되지 않음"
+                  "(RF 측정은 1초 PLC 묶음에서 받아 CHAMBER_RF_CONT_POLL_INTERVAL_MS 를 50 ms 로 줄여도 같음). 고치기 전 재현: 공정 시작 약 4분 뒤 새로 붙은 화면 첫 묶음 "
+                  "504 개(약 92 초 분량)에 기본 보기 줄 0 개. 포털 부담 판단: uplink 는 hello·state 를 뺀 전부를 보내고 포털은 ops2_event 에 전부 저장(보관 기한 없음) — "
+                  "공정 중 시간당 약 2만 행·약 7 MB(JSON), 두 챔버가 하루 12 시간 돌면 약 85 MB/일 수준이라 지금은 줄이지 않음('상세' 보기 정보 유지). "
+                  "초당 120 개 수준(약 40 KiB/s·시간당 약 140 MB)이 실제로 생기면 '상세'에서만 보는 고빈도 줄(IO·DISPLAY·램프 쓰기)을 묶거나 솎는 것을 다음 후보로 — "
+                  "그때 무엇을 줄였는지 이 결정에 더 적는다. ops2_event 보관 기한(오래된 상세 줄 정리)은 포털 운영 결정 후보.",
+         reason="사용자 지시 2026-11-19 1장", confirm=False,
+         where="v2/ch12/hub.py; v2/ch12/params/core.py(HUB_KEEP_MAIN); vanam-process app/api/ops2/[equipment]/v1/stream/route.ts; lib/ops2/ch12/firstEvents.ts; "
+               "components/ops2/chk/useChk2.ts(mainKeep); components/ops2/ch12/Ch12Page.tsx"),
+    dict(id="D419", title="2026-11-19 화면 보완 — 추세 라벨 겹침(공용 Chk2Trend)·HMI 사각 버튼 글자",
+         decision="추세 그래프 오른쪽 라벨: 간격 14 px → 글자 줄 높이(FSPX.small × 1.25 = 15 px) + 1 px. 띠 안에 다 못 들어가면 같은 선의 지금 값·목표가 같은 글이면 "
+                  "한 줄('20 · 목표 20'), 그래도 모자라면 띠를 그림 아래까지, 그래도 모자라면 그림 높이를 늘림(라벨은 그대로 축 밖 띠 + 지시선). 챔버K 도 같은 부품 — "
+                  "겹침이 없던 경우는 이전·지금 HTML 이 같음(10/10), 겹치던 경우 6/6 고침. Chk2Trend.tsx 하나만 바꾼 별도 커밋 vanam-process 5f59385(chk2-web 으로 옮길 수 있게). "
+                  "HMI 사각 버튼(도어·게이트·4핀·진공 준비)의 상태 글은 켜짐/꺼짐(챔버K Chk2Hmi 도어 버튼과 같은 규칙) — 게이트만 열림/닫힘으로 읽어 "
+                  "'게이트 닫기 … 열림' 처럼 거꾸로 보이던 것. 다른 사각 버튼은 이미 켜짐/꺼짐이었음(전부 확인 — ui:hmi-buttons).",
+         reason="사용자 지시 2026-11-19 2·3장", confirm=False,
+         where="vanam-process components/ops2/chk/Chk2Trend.tsx; components/ops2/ch12/Ch12Hmi.tsx; scripts/ops2-ch12-ui-check.mjs"),
+]

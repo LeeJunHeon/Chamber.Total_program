@@ -101,6 +101,14 @@ PARAMS: tuple = (
        desc="공정 중(폴링 사용자 있음) 유량 이탈 감시·flow/pressure 이벤트 주기(1초 읽기는 이와 별개로 늘)", note=_W),
     _m("MFC_STABILIZATION_INTERVAL_MS", "MFC 유량 안정화 확인 주기", "ms", I, 1000, 100, 10000,
        src=f"{_S}:160;{_C}:272;device/mfc.py:1665", desc="FLOW_ON 뒤 R60 확인 간격(최대 180회 — 코드 고정값)", note=_W),
+    # 가스 도달 판정 연속 횟수(v1 main 27decba) — v1 은 settings.json ch1·ch2 구역에 두고 채널 모듈에서 읽는다(채널마다 따로)
+    _m("CH1_MFC_FLOW_STABLE_COUNT", "CH1 가스 도달 판정 연속 횟수", "회", I, 3, 1, 180, apply=LIVE,
+       src="config/settings.json(ch1) MFC_FLOW_STABLE_COUNT;lib/config_common.py MFC_FLOW_STABLE_COUNT;device/mfc.py _flow_stable_need(main 27decba)",
+       desc="FLOW_ON 뒤 R60 유량이 목표 ±FLOW_ERROR_TOLERANCE 안에 이 횟수만큼 연속(확인 주기마다) 들어와야 확정. "
+            "범위 밖·읽기 실패면 0 부터 다시, 확정 안 된 회차가 180 이면 시간 초과(그래서 상한 180). 1 이상 정수(v1 — 아니면 FLOW_ON 설정 오류)"),
+    _m("CH2_MFC_FLOW_STABLE_COUNT", "CH2 가스 도달 판정 연속 횟수", "회", I, 3, 1, 180, apply=LIVE,
+       src="config/settings.json(ch2) MFC_FLOW_STABLE_COUNT;lib/config_common.py MFC_FLOW_STABLE_COUNT;device/mfc.py _flow_stable_need(main 27decba)",
+       desc="CH1 과 같은 규칙 — CH2 MFC(플라즈마 클리닝이 CH2 MFC 를 쓸 때 포함)"),
     # ───────── 환산·판정 ─────────
     _m("CH1_MFC_SCALE_FACTORS_1", "CH1 ch1(Ar) 유량 스케일", "%FS/sccm", F, 1.0, 0.0, 1000.0,
        src=f"{_S}:504;lib/config_ch1.py:20", desc="장비값(%FS) = sccm × 스케일"),

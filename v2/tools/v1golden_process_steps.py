@@ -32,7 +32,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[2]
 GOLDEN = ROOT / "v2" / "tests" / "golden"
 FILES = GOLDEN / "recipe_files"
-V1_BASE = "3992a5879d079a7fc4fbc2c7b2ce5909a75d11d4"   # 2026-11-10 갱신(이전 66efc7b → 2f968be → 9cde7c4 — 터보·TSP 필라멘트·두께 Time 기록·히터 CSV 하루 파일)
+V1_BASE = "27decba2ca5db784d7d73730664e48ab226cd369"   # 2026-11-19 갱신(66efc7b → 2f968be → 9cde7c4 → 3992a58 → 27decba — 가스 도달 판정 3회 연속·O2 단계 설정)
 
 
 def _v1():
@@ -59,7 +59,7 @@ CH_KEYS = ("PROCESS_GAS_INFO", "PROCESS_GUN_SHUTTERS", "PROCESS_PRESSURE_CONTROL
            "PC_POWER_SELECT_SETTLE_MS", "THICKNESS_ZERO_CONFIRM_S", "THICKNESS_ZERO_CONFIRM_NM", "THICKNESS_MAX_TIME_RATIO",
            "THICKNESS_MAX_TIME_MARGIN_S", "RFPULSE_FREQ_MAX_HZ", "SUPPORTS_DC_CONT", "SUPPORTS_DC", "SUPPORTS_DC_CONT2",
            "SUPPORTS_DC2", "SUPPORTS_RF_CONT", "SUPPORTS_DC_PULSE", "SUPPORTS_DCPULSE", "SUPPORTS_RFPULSE",
-           "SUPPORTS_RF_PULSE", "SUPPORTS_HEATER", "SUPPORTS_THICKNESS")
+           "SUPPORTS_RF_PULSE", "SUPPORTS_HEATER", "SUPPORTS_THICKNESS", "PROCESS_GAS_STEP_LEVELS")
 
 
 def v2_cfg(m) -> dict:
@@ -311,7 +311,43 @@ def combos() -> list:
     add(2, "ch2_nodcp", caps_over={"dcp": False}, **{**POWERS["dcp_num"], "gun1": T, **TIMES[0]})
     add(1, "ch1_norfp", caps_over={"rfp": False}, **{**POWERS["rfp"], **TIMES[0]})
     add(2, "ch2_blank_all", **{k: "" for k in ("Ar", "Ar_flow", "base_pressure")})
+    # 가스 단계 설정(v1 main 27decba — CH2 PROCESS_GAS_STEP_LEVELS {"O2": [9.0, 9.5]}): 목표보다 작은 중간값만 작은 순서대로
+    for fv in (10, 9.6, 9.5, 9.2, 9.0, 2, "10.0"):
+        add(2, f"ch2_o2step_{fv}", **{**POWERS["dc"], "gun1": T, **TIMES[0], "O2": T, "O2_flow": fv})
+    add(2, "ch2_o2step_ar_n2", **{**POWERS["rf"], "gun2": T, **TIMES[1], "O2": T, "O2_flow": 12, "N2": T, "N2_flow": 5})
+    add(2, "ch2_o2step_heater", **{**POWERS["rfp"], "gun1": T, **TIMES[0], **HEATERS[0], "O2": T, "O2_flow": 15})
+    add(1, "ch1_o2_10_nostep", **{**POWERS["dcp_num"], **TIMES[0], "O2": T, "O2_flow": 10})
     return cases
+
+
+# ───────────── 가스 단계 설정 검사(v1 main 27decba ProcessController._gas_step_levels) ─────────────
+GAS_STEP_RAWS = [
+    {}, None, {"O2": [9.0, 9.5]}, {"O2": [9, 9.5]}, {"AR": [5.0], "N2": [1.0, 2.0]}, {"O2": []},
+    [9.0], "O2", {"Ar": [1.0]}, {"XE": [1.0]}, {"O2": 9.0}, {"O2": "9.0"}, {"O2": [0]}, {"O2": [-1.0]},
+    {"O2": [True]}, {"O2": ["9"]}, {"O2": [9.5, 9.0]}, {"O2": [9.0, 9.0]}, {"O2": [9.0, None]}, {"O2": (9.0, 9.5)},
+]
+
+
+def build_gas_steps(m) -> dict:
+    """v1 _gas_step_levels 를 실제로 부른다(ProcessController 는 __init__ 없이 — 이 함수가 쓰는 _cfg·_ch 만 채움).
+    결과: 통과면 levels(가스 → 실수 목록), 거부면 AppError(E211).code·detail. gas_step_levels_error() 도 함께."""
+    out = []
+    for ch, mod in ((1, m.c1), (2, m.c2)):
+        gas_info = dict(getattr(mod, "PROCESS_GAS_INFO", None) or m.cc.PROCESS_GAS_INFO)
+        for raw in GAS_STEP_RAWS + [getattr(mod, "PROCESS_GAS_STEP_LEVELS", None)]:
+            pc = object.__new__(m.pc.ProcessController)
+            pc._cfg = types.SimpleNamespace(PROCESS_GAS_STEP_LEVELS=copy.deepcopy(raw), PROCESS_GAS_INFO=gas_info)
+            pc._ch = ch
+            pc._gas_info = gas_info
+            rec = {"ch": ch, "raw": raw if not isinstance(raw, tuple) else {"__tuple__": list(raw)}, "raw_repr": repr(raw)}
+            try:
+                rec["levels"] = pc._gas_step_levels(gas_info)
+                rec["code"] = None
+            except Exception as e:                      # AppError(E211)
+                rec["code"], rec["detail"] = getattr(e, "code", type(e).__name__), getattr(e, "detail", str(e))
+            rec["error_text"] = pc.gas_step_levels_error()
+            out.append(rec)
+    return {"v1_base": V1_BASE, "cases": out}
 
 
 def build_combos(m) -> dict:
@@ -471,7 +507,7 @@ def main() -> None:
     m = _v1()
     GOLDEN.mkdir(parents=True, exist_ok=True)
     for name, fn in (("process_combos.json", build_combos), ("recipe_check.json", build_check),
-                     ("recipe_files.json", build_files)):
+                     ("recipe_files.json", build_files), ("gas_step_levels.json", build_gas_steps)):
         data = fn(m)
         with open(GOLDEN / name, "w", encoding="utf-8", newline="\n") as f:
             if "cases" in data:                       # 큰 파일 — 경우 하나가 한 줄

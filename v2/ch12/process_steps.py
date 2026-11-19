@@ -25,6 +25,7 @@ v1 근거(기준 커밋 66efc7b)
 """
 from __future__ import annotations
 
+import copy
 import json
 import re
 from dataclasses import dataclass, field
@@ -176,6 +177,58 @@ class StepCfg:
     zero_confirm_nm: float
     max_time_ratio: float
     max_time_margin_s: float
+    gas_steps: Dict[str, tuple] = field(default_factory=dict)   # 가스 단계 설정(PROCESS_GAS_STEP_LEVELS) — 검사 통과한 값만
+    gas_steps_error: str = ""                                   # 설정이 잘못됐으면 v1 E211 detail(시작 전 검사가 거부) — 펼치기는 단계 없이
+
+
+GAS_STEP_KEY = "PROCESS_GAS_STEP_LEVELS"
+GAS_STEP_DEFAULT = {1: {}, 2: {"O2": [9.0, 9.5]}}      # v1 main 27decba — config_common {} · config_ch2 {"O2": [9.0, 9.5]}
+
+
+def gas_step_levels(raw: Any, gas_info: Mapping[str, Any]) -> tuple:
+    """v1 ProcessController._gas_step_levels(main 27decba) → ({가스 이름: (중간 유량 float, …)}, 오류 문구).
+    dict · 키는 PROCESS_GAS_INFO 의 가스 이름(대소문자 그대로 — 'AR'·'O2'·'N2') · 값은 0 보다 큰 숫자 목록(오름차순·중복 없음).
+    어기면 고쳐 쓰지 않고 오류 문구(v1 AppError(E211).detail 그대로)를 돌려준다 — 시작 전 검사가 E211 로 막는다.
+    v2 설정은 JSON 글자로 담는다(파라미터 표 S 키) — 글자면 JSON 으로 읽고, 못 읽으면 형태 오류(v1 의 dict 아님과 같은 문구)."""
+    if raw is None:
+        raw = {}
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw) if raw.strip() else {}
+        except Exception:
+            pass
+
+    def bad(why: str) -> tuple:
+        return {}, f"설정 오류(PROCESS_GAS_STEP_LEVELS): {why} — 현재 값 {raw!r}"
+    if not isinstance(raw, dict):
+        return bad("{가스 이름: [유량, ...]} 형태여야 합니다")
+    out: Dict[str, tuple] = {}
+    for gas, levels in raw.items():
+        if gas not in gas_info:
+            return bad(f"알 수 없는 가스 이름 {gas!r} (가능: {', '.join(map(str, gas_info))})")
+        if not isinstance(levels, (list, tuple)):
+            return bad(f"{gas} 값은 숫자 목록이어야 합니다")
+        vals: List[float] = []
+        for v in levels:
+            if isinstance(v, bool) or not isinstance(v, (int, float)) or not (float(v) > 0):
+                return bad(f"{gas} 값 {v!r} — 0 보다 큰 숫자여야 합니다")
+            vals.append(float(v))
+        if any(b <= a for a, b in zip(vals, vals[1:])):
+            return bad(f"{gas} 값은 작은 순서(오름차순)·중복 없이 적어야 합니다")
+        out[gas] = tuple(vals)
+    return out, ""
+
+
+def gas_step_cfg(cfg: Mapping[str, Any], chamber: int, gas_info: Optional[Mapping[str, Any]] = None) -> tuple:
+    """채널 키 CHn_PROCESS_GAS_STEP_LEVELS → 공통 키 → v1 코드 기본값 → gas_step_levels 결과."""
+    ch = int(chamber)
+    raw = cfg.get(_ck(ch, GAS_STEP_KEY))
+    if raw is None:
+        raw = cfg.get(GAS_STEP_KEY)
+    if raw is None:
+        raw = copy.deepcopy(GAS_STEP_DEFAULT.get(ch, {}))
+    gi = dict(gas_info) if gas_info is not None else dict(_cget(cfg, ch, "PROCESS_GAS_INFO", GAS_INFO_DEFAULT))
+    return gas_step_levels(raw, gi)
 
 
 def _judge(cfg: Mapping[str, Any], chamber: int, key: str, default: float, lo: float, hi: float, warns: list) -> float:
@@ -196,6 +249,7 @@ def _judge(cfg: Mapping[str, Any], chamber: int, key: str, default: float, lo: f
 def step_cfg(cfg: Mapping[str, Any], chamber: int) -> StepCfg:
     ch = int(chamber)
     w: list = []
+    gs, gs_err = gas_step_cfg(cfg, ch)
     return StepCfg(
         chamber=ch,
         gas_info=dict(_cget(cfg, ch, "PROCESS_GAS_INFO", GAS_INFO_DEFAULT)),
@@ -213,6 +267,7 @@ def step_cfg(cfg: Mapping[str, Any], chamber: int) -> StepCfg:
         zero_confirm_nm=_judge(cfg, ch, "THICKNESS_ZERO_CONFIRM_NM", 2.0, 0.1, 100.0, w),
         max_time_ratio=_judge(cfg, ch, "THICKNESS_MAX_TIME_RATIO", 2.0, 1.0, 10.0, w),
         max_time_margin_s=_judge(cfg, ch, "THICKNESS_MAX_TIME_MARGIN_S", 300.0, 0.0, 7200.0, w),
+        gas_steps=gs, gas_steps_error=gs_err,
     )
 
 
@@ -373,10 +428,23 @@ def gas_intro_steps(sc: StepCfg, used: Mapping[str, bool], flows: Mapping[str, f
         if used.get(gas.upper(), False):
             fv = float(flows.get(gas.upper(), 0))
             c = info["channel"]
-            out += [S("PLC_CMD", f'{gas} 밸브 열기', params=(gas, True, ch)),
-                    S("MFC_CMD", f'Ch{c}({gas}) GAS {fv}sccm 설정', params=('FLOW_SET', {'channel': c, 'value': fv}),
-                      ref=f"mfc.{gas.lower()}_flow"),
-                    S("MFC_CMD", f'Ch{c}({gas}) GAS 공급 시작', params=('FLOW_ON', {'channel': c}))]
+            out.append(S("PLC_CMD", f'{gas} 밸브 열기', params=(gas, True, ch)))
+            # 단계 설정(PROCESS_GAS_STEP_LEVELS, v1 main 27decba): 목표보다 작은 중간값만 작은 순서대로 먼저 거친다. 각 단계는
+            # FLOW_SET → FLOW_ON(같은 채널 L{ch}1 재전송 → 새 목표로 안정화 재시작, 연속 N 회 도달 후 다음 단계). 머무는 시간 없음.
+            # 공정 중 값 바꾸기(ref)는 마지막(목표) FLOW_SET 에만 — 중간값은 설정 값 그대로(D417).
+            mids = [lv for lv in sc.gas_steps.get(gas, ()) if lv < fv]
+            if not mids:
+                out += [S("MFC_CMD", f'Ch{c}({gas}) GAS {fv}sccm 설정', params=('FLOW_SET', {'channel': c, 'value': fv}),
+                          ref=f"mfc.{gas.lower()}_flow"),
+                        S("MFC_CMD", f'Ch{c}({gas}) GAS 공급 시작', params=('FLOW_ON', {'channel': c}))]
+                continue
+            levels = mids + [fv]
+            for i, lv in enumerate(levels, start=1):
+                last = i == len(levels)
+                out += [S("MFC_CMD", f'Ch{c}({gas}) GAS {lv}sccm 설정 (단계 {i}/{len(levels)})',
+                          params=('FLOW_SET', {'channel': c, 'value': lv}), ref=f"mfc.{gas.lower()}_flow" if last else None),
+                        S("MFC_CMD", (f'Ch{c}({gas}) GAS 공급 시작 ({lv}sccm 도달 대기)' if i == 1
+                                      else f'Ch{c}({gas}) GAS {lv}sccm 도달 대기'), params=('FLOW_ON', {'channel': c}))]
     return out
 
 

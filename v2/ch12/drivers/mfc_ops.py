@@ -27,8 +27,9 @@ class StabJob:
     target_hw: float
     owner: Optional[str]
     created: float
-    attempts: int = 0
+    attempts: int = 0                    # 확정 안 된 회차 수(범위 안이지만 연속 횟수 미달인 회차 포함) — 180 이면 시간 초과
     on_done: Optional[Callable] = None
+    consec: int = 0                      # 목표 ±허용오차 안에 연속으로 들어온 횟수(범위 밖·읽기 실패면 0) — v1 main 27decba _StabJob.consec
 
 
 def _mk(d, key, **kw) -> str:
@@ -432,10 +433,30 @@ def cancel_all_stab(d, reason: str, notify: bool) -> int:
     return sum(1 for ch in list(d.stab_jobs) if cancel_stab_job(d, ch, reason, notify))
 
 
+def flow_stable_need(d) -> Optional[int]:
+    """MFC_FLOW_STABLE_COUNT(가스 도달 판정에 필요한 연속 횟수, v1 main 27decba _flow_stable_need) — 1 이상 정수가 아니면 None
+    (설정 오류 — 고쳐 쓰지 않는다). 파라미터 표가 설정 적용 때 먼저 같은 값을 거부하고(D11), 이것은 표를 거치지 않은 값의 두 번째 문."""
+    v = d.c("MFC_FLOW_STABLE_COUNT", 3)
+    if isinstance(v, bool) or not isinstance(v, int) or v < 1:
+        return None
+    return v
+
+
 def stab_loop(d):
-    """_stabilization_loop(device/mfc.py:1631-1669) — R60 한 번으로 등록된 채널을 함께 판정, MFC_STABILIZATION_INTERVAL_MS 마다."""
+    """_stabilization_loop(device/mfc.py:1631-1669 + v1 main 27decba) — R60 한 번으로 등록된 채널을 함께 판정,
+    MFC_STABILIZATION_INTERVAL_MS 마다. 목표 ±FLOW_ERROR_TOLERANCE 안에 MFC_FLOW_STABLE_COUNT 회 연속 들어와야 확정(압력 도달
+    판정과 같은 방식) — 범위 밖·읽기 실패면 연속 0, 확정 안 된 회차(연속 횟수 미달 포함)가 180 이면 시간 초과(채널당 약 3분).
+    연속 횟수 설정이 1 이상 정수가 아니면 읽지 않고 등록된 작업을 모두 '설정 오류' 로 실패(v1 문구)."""
     from v2.ch12.drivers.mfc import parse_r60
     while d.stab_jobs:
+        need = flow_stable_need(d)
+        if need is None:
+            bad = d.c("MFC_FLOW_STABLE_COUNT", None)
+            for ch in sorted(d.stab_jobs):
+                job = d.stab_jobs.pop(ch, None)
+                if job is not None:
+                    _job_end(d, job, "STAB_CONFIG", f"설정 오류(MFC_FLOW_STABLE_COUNT={bad!r}) — 1 이상의 정수여야 합니다")
+            break
         chs = sorted(d.stab_jobs)
         t_read = d.clock.monotonic()
         line = yield d.query("R60", ("Q0",), f"[STAB R60 ch{','.join(str(c) for c in chs)}]")
@@ -447,15 +468,19 @@ def stab_loop(d):
                 continue
             actual_hw = float(vals[ch - 1]) if vals and (ch - 1) < len(vals) else None
             actual_ui = None if actual_hw is None else d.hw_to_ui(ch, actual_hw)
+            in_range = actual_hw is not None and abs(actual_hw - job.target_hw) <= job.target_hw * tol_ratio
+            consec = (job.consec + 1) if in_range else 0                  # 범위 밖·읽기 실패면 연속이 끊긴다
             d.status(f"GAS 확인... ch{ch} (목표: {d.hw_to_ui(ch, job.target_hw):.2f}sccm, "
-                     f"현재: {(-1 if actual_ui is None else actual_ui):.2f}sccm)", owner=job.owner, channel=ch)
+                     f"현재: {(-1 if actual_ui is None else actual_ui):.2f}sccm) [연속 {consec}/{need}]",
+                     owner=job.owner, channel=ch)
             if d.stab_jobs.get(ch) is not job:
                 continue
-            if actual_hw is not None and abs(actual_hw - job.target_hw) <= job.target_hw * tol_ratio:
+            job.consec = consec
+            if job.consec >= need:
                 d.stab_jobs.pop(ch, None)
                 _job_end(d, job, None, "")
                 continue
-            job.attempts += 1
+            job.attempts += 1                                              # 확정 안 된 회차(범위 밖·읽기 실패·연속 미달)
             if job.attempts >= STAB_MAX_ATTEMPTS:
                 d.stab_jobs.pop(ch, None)
                 _job_end(d, job, "STAB_TIMEOUT", "GAS 안정화 시간 초과")

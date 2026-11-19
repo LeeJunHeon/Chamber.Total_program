@@ -97,6 +97,7 @@ CFG_PLAIN_KEYS: tuple = (
 def _step_cfg_defaults(ch: int) -> Dict[str, Any]:
     d = dataclasses.asdict(PS.step_cfg({}, ch))
     d["gun_shutters"] = list(d["gun_shutters"])
+    d["gas_steps"] = {k: list(v) for k, v in d["gas_steps"].items()}       # JSON 목록(가스 단계 설정 — 웹은 쓰지 않음, 정보)
     return d
 
 

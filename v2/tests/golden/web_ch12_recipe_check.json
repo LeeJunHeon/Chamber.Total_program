@@ -1,7 +1,7 @@
 {
  "_설명": "챔버12 웹 검사 골든 — E230 행 값 검사·시작 전 값 검사(v2.tools.make_web_golden_ch12 가 만든다 — 손으로 고치지 않음). 모양은 생성기 머리말",
  "defsVersion": 1,
- "defsHash": "8fb7c00c2938c1ce18f3f36f9c2e1990dc75c317a7c8955710ba4ec1d9b9eb43",
+ "defsHash": "a4acc54be8577a0cba5387d017627ff34ee513b6b35a62dbc5db7c816fde1da2",
  "defs": {
   "version": 1,
   "blocks": {
@@ -291,8 +291,8 @@
        "desc": ""
       }
      ],
-     "steps": "PLC MV ON · 가스마다 PLC 밸브 ON · FLOW_SET · FLOW_ON",
-     "v1": "pc:2352-2373",
+     "steps": "PLC MV ON · 가스마다 PLC 밸브 ON · FLOW_SET · FLOW_ON(가스 단계 설정 PROCESS_GAS_STEP_LEVELS 의 목표보다 작은 중간값을 작은 순서대로 먼저 FLOW_SET·FLOW_ON — 각 단계 연속 N 회 도달 후 다음)",
+     "v1": "pc:2352-2373·main 27decba",
      "touches": true,
      "chamber": null,
      "needs": "",
@@ -1704,7 +1704,9 @@
      "zero_confirm_s": 5.0,
      "zero_confirm_nm": 2.0,
      "max_time_ratio": 2.0,
-     "max_time_margin_s": 300.0
+     "max_time_margin_s": 300.0,
+     "gas_steps": {},
+     "gas_steps_error": ""
     },
     "2": {
      "chamber": 2,
@@ -1736,7 +1738,14 @@
      "zero_confirm_s": 5.0,
      "zero_confirm_nm": 2.0,
      "max_time_ratio": 2.0,
-     "max_time_margin_s": 300.0
+     "max_time_margin_s": 300.0,
+     "gas_steps": {
+      "O2": [
+       9.0,
+       9.5
+      ]
+     },
+     "gas_steps_error": ""
     }
    },
    "rfpFreqMaxHzDefault": 30000.0

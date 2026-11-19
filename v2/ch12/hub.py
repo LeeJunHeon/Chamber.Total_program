@@ -34,6 +34,11 @@ OES 스펙트럼(링크 이벤트 kind='spectrum' — oes_spectrum.payload, 0.5 
 (tick·worker 를 막지 않는다: 넣기는 put_nowait 뿐). 연결 때 최신 state 하나 + 최근 메시지(링 버퍼, last_seq 뒤부터).
 last_seq 가 없거나 지금 seq 보다 크면(지난 실행의 번호) 처음부터: 마지막 hello + 최신 state + 최근 메시지 전부.
 링 버퍼에서 이미 밀려난 메시지가 last_seq 뒤에 있으면 sub.gap = (첫 seq, 끝 seq).
+기본 보기 줄 따로 보관(2026-11-19 D418): 화면 기본 보기에 나오는 메시지 — 공정 진행 줄(웹 묶음 eventKinds 의 main, D414 와 같은 정의)·
+  경고·오류(level warn·error·critical)·run_start·run_end·cmd_result·config_ack — 는 최근 링과 별도로 챔버별(ch1·ch2·pc·tsp·shared)
+  링에 HUB_KEEP_MAIN 개(설정, 50~5000 — 범위 밖은 고쳐 쓰지 않고 거부)씩 더 보관하고, 연결 때 최근 링보다 앞에(시간 순서대로, 같은 것은
+  한 번만) 다시 보낸다. CH2 RF 램프처럼 상세 줄(IO·DISPLAY·램프 쓰기)이 몰려 최근 링(500)이 몇 초 만에 밀려도, 화면을 다시 열면 앞선
+  공정 진행 줄이 보인다. 나머지 메시지·파일 로그(v1 과 같은 txt)는 그대로.
 """
 from __future__ import annotations
 
@@ -50,6 +55,11 @@ from typing import Any, Dict, List, Optional, Tuple
 from v2.common.commands import Source
 
 RECENT_KEEP = 500                  # 최근 메시지(state 제외) 링 버퍼
+KEEP_MAIN_DEFAULT = 300            # 기본 보기 줄 챔버별 보관 개수(설정 HUB_KEEP_MAIN 이 없을 때)
+KEEP_MAIN_RANGE = (50, 5000)
+KEEP_CONTEXTS = ("ch1", "ch2", "pc", "tsp", "shared")
+MAIN_TYPES = ("run_start", "run_end", "cmd_result", "config_ack")
+ISSUE_LEVELS = ("warn", "error", "critical")
 SUB_QUEUE = 1000                   # 소비자 큐 길이 — 넘치면 그 소비자를 끊는다
 CLOSED = object()                  # 큐 끝 표시
 CONTEXTS = ("ch1", "ch2", "pc", "tsp")
@@ -60,6 +70,43 @@ _ORIGIN_CLASS = {"ProcEvent": "process", "SafetyEvent": "safety", "HeaterEvent":
 SPECTRUM_KIND = "spectrum"
 # 결과 value 를 사건으로도 내는 명령 → (context.source, context.kind, 챔버 인자 기본값)
 VALUE_EVENTS = {"THICKNESS_WINDOW": ("thickness", "window", 2)}
+
+
+_MAIN_KINDS: Optional[frozenset] = None
+
+
+def main_kinds() -> frozenset:
+    """웹 묶음 eventKinds 의 main (source, kind) — D414 와 같은 정의(web_schema.EVENT_KINDS 한 곳)."""
+    global _MAIN_KINDS
+    if _MAIN_KINDS is None:
+        from v2.ch12 import web_schema as WS
+        _MAIN_KINDS = frozenset((s_, k) for s_, k, _l, lv in WS.EVENT_KINDS if lv == "main")
+    return _MAIN_KINDS
+
+
+def main_context(env: dict) -> Optional[str]:
+    """화면 기본 보기에 나오는 메시지면 그 챔버(ch1·ch2·pc·tsp·shared), 아니면 None — 따로 보관할 것 고르기."""
+    t, d = env.get("type"), env.get("data") or {}
+    if t in MAIN_TYPES:
+        c = d.get("chamber") if t in ("run_start", "run_end") else None
+        return c if c in KEEP_CONTEXTS else SHARED
+    if t != "event":
+        return None
+    ctx = d.get("context") or {}
+    if d.get("level") in ISSUE_LEVELS or (ctx.get("source"), ctx.get("kind")) in main_kinds():
+        c = ctx.get("chamber")
+        return c if c in KEEP_CONTEXTS else SHARED
+    return None
+
+
+def keep_main_of(cfg) -> int:
+    """설정 HUB_KEEP_MAIN — 정수·범위 안만(D11 — 파라미터 표가 먼저 거부하고 이것은 표를 거치지 않은 값의 두 번째 문)."""
+    from v2.common.paramdef import ConfigRangeError
+    v = (cfg or {}).get("HUB_KEEP_MAIN", KEEP_MAIN_DEFAULT) if hasattr(cfg, "get") else KEEP_MAIN_DEFAULT
+    lo, hi = KEEP_MAIN_RANGE
+    if isinstance(v, bool) or not isinstance(v, int) or not (lo <= v <= hi):
+        raise ConfigRangeError(f"HUB_KEEP_MAIN={v!r}: {lo}~{hi} 정수가 아님 — 고쳐 쓰지 않고 거부")
+    return v
 
 
 @dataclass(frozen=True)
@@ -167,12 +214,14 @@ class Subscriber:
 
 
 class MessageHub:
-    def __init__(self, system, recent_keep: int = RECENT_KEEP) -> None:
+    def __init__(self, system, recent_keep: int = RECENT_KEEP, keep_main: Optional[int] = None) -> None:
         self.sys = system
         self._lock = threading.Lock()
         self.seq = 0
         self.instance = uuid.uuid4().hex
         self.recent: "collections.deque[dict]" = collections.deque(maxlen=recent_keep)
+        n_main = keep_main if keep_main is not None else keep_main_of(getattr(system, "cfg", None))
+        self.keep: Dict[str, "collections.deque[dict]"] = {c: collections.deque(maxlen=n_main) for c in KEEP_CONTEXTS}
         self.last_state: Optional[dict] = None
         self.last_hello: Optional[dict] = None
         self.evicted_seq = 0                         # 링 버퍼에서 밀려난 마지막 seq
@@ -217,6 +266,9 @@ class MessageHub:
                 if len(self.recent) == self.recent.maxlen:
                     self.evicted_seq = self.recent[0]["seq"]
                 self.recent.append(env)
+                c = main_context(env)
+                if c is not None:
+                    self.keep[c].append(env)                       # 기본 보기 줄 — 챔버별로 더 오래(최근 링이 밀려도)
             subs = list(self.subs)
         for s in subs:
             s.put(env)
@@ -236,17 +288,34 @@ class MessageHub:
         with self._lock:
             if last_seq is not None and last_seq > self.seq:
                 last_seq = None
-            first = []
-            if last_seq is None and self.last_hello is not None:
-                first.append(self.last_hello)                     # 링 버퍼에서 밀려났어도 hello 는 맨 앞에
-            if self.last_state is not None:
-                first.append(self.last_state)
-            first += [e for e in self.recent if (last_seq is None or e["seq"] > last_seq) and e is not self.last_hello]
+            first = self._first_locked(last_seq)
             if last_seq is not None and self.evicted_seq > last_seq:
                 sub.gap = (last_seq + 1, self.evicted_seq)
             sub.backlog.extend(first)
             self.subs.append(sub)
         return sub
+
+    def _first_locked(self, last_seq: Optional[int]) -> List[dict]:
+        """연결 때 먼저 보내는 것: [hello] + 최신 state + 최근 링에서 밀려난 기본 보기 줄(챔버별 보관, 오래된 것부터) + 최근 링."""
+        first: List[dict] = []
+        if last_seq is None and self.last_hello is not None:
+            first.append(self.last_hello)                         # 링 버퍼에서 밀려났어도 hello 는 맨 앞에
+        if self.last_state is not None:
+            first.append(self.last_state)
+        oldest = self.recent[0]["seq"] if self.recent else self.seq + 1
+        kept = sorted((e for dq in self.keep.values() for e in dq
+                       if e["seq"] < oldest and (last_seq is None or e["seq"] > last_seq) and e is not self.last_hello),
+                      key=lambda e: e["seq"])
+        first += kept
+        first += [e for e in self.recent if (last_seq is None or e["seq"] > last_seq) and e is not self.last_hello]
+        return first
+
+    def first_messages(self, last_seq: Optional[int] = None) -> List[dict]:
+        """새 소비자가 연결 때 받을 것(구독하지 않고 보기 — 시험·진단)."""
+        with self._lock:
+            if last_seq is not None and last_seq > self.seq:
+                last_seq = None
+            return self._first_locked(last_seq)
 
     def _drop(self, sub: Subscriber) -> None:
         with self._lock:
@@ -476,9 +545,9 @@ def param_hash() -> str:
     return table().schema_hash()
 
 
-def attach(system, recent_keep: int = RECENT_KEEP) -> MessageHub:
+def attach(system, recent_keep: int = RECENT_KEEP, keep_main: Optional[int] = None) -> MessageHub:
     """조립에 허브를 붙인다(system.hub·event_listeners·row_listeners)."""
-    return MessageHub(system, recent_keep).attach()
+    return MessageHub(system, recent_keep, keep_main).attach()
 
 
 def split(e) -> Tuple[str, str]:

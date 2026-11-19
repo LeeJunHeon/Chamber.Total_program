@@ -59,6 +59,9 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
      state(PC 결과)·result(TSP 결과) — main, card·schedule_restore — detail), process block 사건 data 에 total·elapsed_s(끝),
      params 에 SIM_MFC_START_SP_MTORR(sim 가상 MFC 시작 SP1~SP5, 기본 0,0,2,2,0 mTorr — 묶음 debug),
      snapshot 필드 fmt 를 format spec 으로 통일('{:.2f}' → '.2f' — 두께 모니터·히터 등 12개).
+  13 2026-11-19 보완(D417~D419) — params: CH1·CH2_MFC_FLOW_STABLE_COUNT(가스 도달 판정 연속 횟수 1~180, 기본 3 — v1 main 27decba)·
+     CH1·CH2_PROCESS_GAS_STEP_LEVELS(가스 단계 설정 JSON, CH2 기본 {"O2": [9.0, 9.5]})·키 사이 규칙 C05·C06(가스 단계 설정 검사 — v1 E211 과 같음)·
+     HUB_KEEP_MAIN(화면 연결 때 다시 보내는 기본 보기 줄, 챔버마다 300), 블록 gas_intro 설명(단계 설정), 거부 사유 ADJUST_GAS_STEP.
 """
 from __future__ import annotations
 
@@ -74,7 +77,7 @@ from v2.ch12 import snapshot_fields as SF
 from v2.ch12 import web_blocks as WB
 from v2.ch12.hub import optional_module
 
-EXPORT_VERSION = 12
+EXPORT_VERSION = 13
 
 # 웹이 받는 공정 이벤트(엔진이 system.emit(source="process:<c>", kind, event=data) 로 내는 것 — hub 가 run_* 메시지로 바꾼다)
 EVENTS: tuple = (

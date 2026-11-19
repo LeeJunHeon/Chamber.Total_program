@@ -31,6 +31,12 @@ _W = ('사용자 확인 필요: v1 은 settings.json common 값이 채널 모듈
 _MIX = ('사용자 확인 필요: v1 은 읽는 곳마다 출처가 달랐다(채널 모듈 경로는 common 값 무효, 나머지는 config_common) — 지금 값이 같아 동작 차이 없음, v2 는 키 하나')
 
 
+JSON_DICT = r"\{.*\}"          # v1 묶음 값(dict)을 JSON 글자로 담는 STR 키(변환 도구가 json.dumps 로 넣는다)
+_GAS_STEP_DESC = ("가스 단계 설정 {가스 이름: [거쳐 갈 중간 유량(sccm), …]} — 레시피 목표보다 작은 값만 작은 순서대로 먼저 FLOW_SET·FLOW_ON, "
+                  "각 단계는 연속 N 회(MFC_FLOW_STABLE_COUNT) 도달 후 바로 다음(머무는 시간 없음), 도달 못 하면 공정 중단. "
+                  "키는 AR·O2·N2, 값은 0 보다 큰 숫자 오름차순·중복 없음 — 어기면 저장 거부(D11), 표를 거치지 않은 값은 공정 시작 E211 거부. 비우면 {} = 단계 없음")
+
+
 PARAMS: tuple = (
     # ───────────── v2 설치값(install) — 웹 admin + 노트북 비상 덮어쓰기, 재시작 필요 ─────────────
     inst("EQUIPMENT_ID", "install", "장비 ID", S, "CH12", pattern=r"[A-Z0-9][A-Z0-9-]{1,15}", safety=H, locked=True,
@@ -42,6 +48,11 @@ PARAMS: tuple = (
          desc="켜면 sim 도 웹에 연결한다. 이때 EQUIPMENT_ID 가 -SIM 으로 끝나야 시작한다(챔버K 와 같음)"),
     inst("LOCAL_HMI_PORT", "install", "로컬 화면 포트", I, 8712, 1024, 65535, safety=L,
          desc="127.0.0.1 에서만 연다(챔버K local_server 와 같은 /api/v1). 챔버K(8710)와 한 PC 에서 sim 을 같이 띄워도 겹치지 않게 8712"),
+    inst("HUB_KEEP_MAIN", "install", "화면 연결 때 다시 보내는 기본 보기 줄(챔버마다)", I, 300, 50, 5000, unit="개", safety=L,
+         src="v2 — 사용자 지시 2026-11-19 1장(D418)",
+         desc="공정 진행 줄(묶음 eventKinds main)·경고·오류·공정 시작/끝·명령 결과를 최근 메시지 500 개와 따로 CH1·CH2·플라즈마 클리닝·TSP·공통 "
+              "마다 이 개수만큼 보관해 화면(로컬·웹 연결)이 붙을 때 먼저 다시 보낸다 — 상세 줄이 몰려 최근 메시지가 밀려도 앞선 공정 줄이 남게. "
+              "50~5000(범위 밖은 거부), 재시작 뒤 적용"),
     inst("LOCAL_HMI_STATIC_DIR", "install", "로컬 화면 파일 폴더", S, "", pattern=ANY, safety=L,
          desc="로컬 서버가 / 로 내주는 폴더. 비면 이 저장소의 v2\\hmi(프로그램 위치 기준)"),
     inst("LOCAL_DATA_DIR", "install", "로컬 기록 폴더(1초 스냅샷)", S, r"C:\CH12_v2\data", pattern=r".+", safety=L,
@@ -233,6 +244,14 @@ PARAMS: tuple = (
     inst("CH2_PROCESS_PRESSURE_CONTROL_SP_INDEX", "process", "CH2 압력 제어 Set-Point 번호", I, 4, 1, 4, safety=H,
        src="lib/config_ch2.py:27 · controller/process_controller.py:2388",
        desc="압력 제어 Set-Point 번호"),
+    # 가스 단계 설정(v1 main 27decba) — v1 은 채널 모듈 값(config_common {} · config_ch2 {"O2": [9.0, 9.5]}). JSON 글자로 담는다.
+    p("CH1_PROCESS_GAS_STEP_LEVELS", "process", "CH1 가스 단계 설정", "sccm", S, "{}", safety=H, pattern=JSON_DICT,
+      v1_key="(code).PROCESS_GAS_STEP_LEVELS",
+      src="lib/config_common.py PROCESS_GAS_STEP_LEVELS · controller/process_controller.py _gas_step_levels(main 27decba)",
+      desc=_GAS_STEP_DESC),
+    p("CH2_PROCESS_GAS_STEP_LEVELS", "process", "CH2 가스 단계 설정", "sccm", S, '{"O2": [9.0, 9.5]}', safety=H, pattern=JSON_DICT,
+      src="lib/config_ch2.py PROCESS_GAS_STEP_LEVELS · config/settings.json(ch2) · controller/process_controller.py _gas_step_levels(main 27decba)",
+      desc=_GAS_STEP_DESC),
     inst("PROCESS_LIST_START_DIR", "process", "공정 목록 파일 열기 시작 폴더", S, r"\\VanaM_NAS\VanaM_toShare", safety=L,
        pattern=ANY, pending=True, src="lib/config_common.py:725 · runtime/chamber_runtime.py:3362",
        desc="공정 목록(레시피) 파일 열기 시작 폴더",
@@ -473,6 +492,14 @@ PARAMS: tuple = (
 
 
 # ───────────── 키 사이 규칙 ─────────────
+def _gas_steps_rule(key: str):
+    def check(v: Mapping[str, Any]):
+        from v2.ch12.process_steps import GAS_INFO_DEFAULT, gas_step_levels
+        _lv, err = gas_step_levels(v[key], GAS_INFO_DEFAULT)
+        return need(not err, err)
+    return check
+
+
 def _ports(v: Mapping[str, Any]) -> bool:
     ps = [v["HOST_SERVER_PORT"], v["ROBOT_API_PORT"], v["LOCAL_HMI_PORT"]]
     return len(ps) == len(set(ps))
@@ -490,6 +517,10 @@ CROSS_RULES: tuple = (
                         "ETA_TAIL_MIN_S > ETA_TAIL_S")),
     rule("C04", ("CHAT_PENDING_MAX", "CHAT_PENDING_HARD_MAX"), "챗 대기 상한 ≤ 하드 상한",
          lambda v: need(v["CHAT_PENDING_MAX"] <= v["CHAT_PENDING_HARD_MAX"], "PENDING_MAX > PENDING_HARD_MAX")),
+    rule("C05", ("CH1_PROCESS_GAS_STEP_LEVELS",), "CH1 가스 단계 설정: {가스 이름(AR·O2·N2): [0 보다 큰 유량, …]} 오름차순·중복 없음(v1 E211 과 같은 검사)",
+         _gas_steps_rule("CH1_PROCESS_GAS_STEP_LEVELS")),
+    rule("C06", ("CH2_PROCESS_GAS_STEP_LEVELS",), "CH2 가스 단계 설정: {가스 이름(AR·O2·N2): [0 보다 큰 유량, …]} 오름차순·중복 없음(v1 E211 과 같은 검사)",
+         _gas_steps_rule("CH2_PROCESS_GAS_STEP_LEVELS")),
 )
 
 

@@ -1,5 +1,5 @@
 {
- "v1_base": "9cde7c42e60efdaeb770b9352099a844d4702bd6",
+ "v1_base": "27decba2ca5db784d7d73730664e48ab226cd369",
  "cfg": {
   "CH1_PROCESS_GAS_INFO": {
    "AR": {
@@ -34,6 +34,7 @@
   "CH1_SUPPORTS_RFPULSE": true,
   "CH1_SUPPORTS_HEATER": false,
   "CH1_SUPPORTS_THICKNESS": false,
+  "CH1_PROCESS_GAS_STEP_LEVELS": {},
   "CH2_PROCESS_GAS_INFO": {
    "AR": {
     "channel": 1
@@ -71,6 +72,12 @@
   "CH2_SUPPORTS_RFPULSE": true,
   "CH2_SUPPORTS_HEATER": true,
   "CH2_SUPPORTS_THICKNESS": true,
+  "CH2_PROCESS_GAS_STEP_LEVELS": {
+   "O2": [
+    9.0,
+    9.5
+   ]
+  },
   "CH2_HEATER_MAX_TEMP": 900.0,
   "CH2_HEATER_SV_LIMIT_C": 900.0
  },

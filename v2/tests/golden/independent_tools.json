@@ -1,7 +1,7 @@
 {
  "meta": {
   "tool": "v2/tools/v1golden_independent.py",
-  "python": "3.13.17",
+  "python": "3.13.18",
   "v1": [
    "apps/rf_service/rf_worker.py",
    "apps/log_sync_service/log_sync.py",
@@ -21,7 +21,7 @@
   "log_root": [
    "CH1&2_PLC/20261030.csv",
    "CH1/CH1_ITO_100nm_20261030_091520_000.txt",
-   "CH2_Heater/CH2_HEATER_20261030_091531.csv",
+   "CH2_Heater/CH2_HEATER_20261030.csv",
    "RUNTIME_DUMP/runtime_dump_20261030_091520_manual_button_pid<pid>.txt",
    "SYSTEM/20261030.log",
    "Thickness/CH1/Thickness_20261030.csv",
@@ -143,7 +143,7 @@
    "NAS/Sputter/Logs/CH1&2": [
     "CH1&2_PLC/20261030.csv",
     "CH1/CH1_ITO_100nm_20261030_091520_000.txt",
-    "CH2_Heater/CH2_HEATER_20261030_091531.csv",
+    "CH2_Heater/CH2_HEATER_20261030.csv",
     "Camera_Logs/CH1/CH1_20261030_100000.csv",
     "Camera_Logs/CH1/CH1_20261030_235959.csv",
     "RUNTIME_DUMP/runtime_dump_20261030_091520_manual_button_pid<pid>.txt",

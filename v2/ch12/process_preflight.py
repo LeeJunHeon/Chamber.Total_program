@@ -5,7 +5,7 @@
 worker 가 돌 때까지 CHAMBER_PULSE_RECONNECT_TIMEOUT_S 2 s, 넘으면 시작 실패) → 장비 기동 순서 PLC → MFC → IG → DC Pulse → RF Pulse
 (GAPB-001 — v2 는 PLC·MFC·IG 가 상시 연결이라 '이미 연결' 이면 'already connected → skip', 펄스는 점유가 곧 연결) →
 연결 확인(PLC·MFC·IG + 고른 펄스, 0.2 s 간격, 8 s·펄스 10 s, 1초마다 '연결 대기 중: …') → Gate(닫힘일 때만) → Main Valve
-(SW ∧ 인터락) → [두께 기본 점검] → Chuck 위치(실패해도 계속 — 경고 목록) → [두께 재료값] → 시작.
+(SW ∧ 인터락) → [두께 기본 점검] → [가스 단계 설정 검사(E211, v1 main 27decba)] → Chuck 위치(실패해도 계속 — 경고 목록) → [두께 재료값] → 시작.
 Gate·Main Valve 판정(4단계 안전 규칙 표의 S 항목이 될 것)과 Chuck 이동(6단계 robot_ops 와 같은 동작)은 v1 코드를 그대로 여기
 두었다 — 4·6단계가 같은 함수를 부르거나 엔진의 hooks 로 바꿔 끼운다(engine.preflight_hooks).
 모든 대기는 엔진 러너 스레드에서 clock.wait_until — 취소(STOP)는 cancelled() 로 바로 끝난다(StageCancelled).
@@ -15,6 +15,7 @@ from __future__ import annotations
 from typing import Any, Callable, List, Optional, Tuple
 
 from v2.common.worker import Status
+from v2.ch12.process_steps import gas_step_cfg
 
 
 class StageCancelled(Exception):
@@ -348,6 +349,11 @@ class PreflightMixin:
             code, msg = self.thickness.check_basic(params)
             if code:
                 return self._thickness_reject(params, code, msg)
+        # 가스 단계 설정(PROCESS_GAS_STEP_LEVELS) 검사 — 잘못되면 Chuck 이동 전에 시작 거부(E211, v1 main 27decba
+        # chamber_runtime._gas_step_reject — 두께 점검 거부와 같은 흐름). 펼치기(process_steps)는 잘못된 값을 단계 없이 펼친다.
+        _gs, gs_err = gas_step_cfg(self.cfg, self.n)
+        if gs_err:
+            return self._gas_step_reject(params, gs_err)
         self.run_warnings = []
         pos = str(params.get("chuck_position") or "").strip().lower()     # v1 _run_chuck_position — 이동 전 레시피 값(4051)
         chuck = self.preflight_hooks["chuck"](self, params)
@@ -423,6 +429,14 @@ class PreflightMixin:
         self.log("MAIN", log_txt)
         self.emit("chat", chat_txt, code, level="error")
         return self._start_fail(msg, code)
+
+    def _gas_step_reject(self, params, msg: str) -> bool:
+        """runtime/chamber_runtime.py _gas_step_reject(v1 main 27decba) — 로그·챗 장비 오류 카드(E211) → 장비 정리 → 오류 끝."""
+        code = "E211"
+        note = params.get("process_note") or params.get("Process_name") or "알 수 없음"
+        self.log("MAIN", f"[CH{self.n}] 가스 단계 설정 오류 [{code}] {msg} → 공정 시작 차단")
+        self.emit("chat", f"{msg} → 공정 시작 차단 (공정: {note})", code, level="error")
+        return self._start_fail(f"gas step config error [{code}]: {msg}", code)
 
     def _start_fail(self, why: str, code: str, cleanup: bool = True) -> bool:
         self._host(False, why)

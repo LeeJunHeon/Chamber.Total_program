@@ -5,4 +5,5 @@ lxml>=5                # openpyxl 이 엑셀 xml 을 v1 운영과 같은 바이�
 numpy==2.2.6           # OES 워커(v1 apps/oes_service 와 같음 — v2/ch12/workers)
 # opencv-python==4.12.0.88   # 카메라(v2/ch12/drivers/camera.py) — 장비 노트북에서만, 시험은 없이도 돈다
 # srsinst==0.0.2 / srsinst.rga==0.3.8   # RGA 워커 — 장비 노트북에서만
+# matplotlib==3.10.8 / scipy==1.14.1     # RGA 워커 환경에 함께(v1 main acf3d96 — srsinst.rga 가 선언 없이 씀, scipy 1.15 에서 ricker 삭제 → 1.14.1 고정)
 pytest>=8              # 시험

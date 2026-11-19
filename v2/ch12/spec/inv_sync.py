@@ -2,6 +2,7 @@
 
 a6e8d46 터보 꺼짐 지속 알림 / 984556e CH1 TSP 실행 로그의 사용 중 필라멘트·에러 코드 / 2f968be 두께 Time 모드 Factor·영점·기록.
 작업 중 main 에 커밋이 더 생기면 마지막에 다시 확인해 여기에 더한다.
+그 뒤 반영: 3112ea5·3992a58·9cab3bf·f02f20a(11-10), 2fc00c4·8603d5b(11-13), acf3d96·27decba(11-19 — 가스 도달 판정 3회 연속·O2 단계 설정, V1_BASE 27decba).
 """
 from __future__ import annotations
 
@@ -208,4 +209,51 @@ ITEMS = [
          test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:status-band; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:tabs-locks; "
               "vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:hmi-map; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:inputs-range; "
               "vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:no-dev-text; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:pc-recipe", status="done", note=""),
+    dict(id="SYNC-540", area="sync",
+         desc="가스 도달 판정 연속 N 회(main 27decba): 목표 ±FLOW_ERROR_TOLERANCE 안 연속 MFC_FLOW_STABLE_COUNT(기본 3) 회 → FLOW_ON 확정, 범위 밖·읽기 실패면 0, "
+              "확정 안 된 회차 180 → 시간 초과, 상태 문구 '[연속 n/N]', 1 이상 정수 아님 → 'FLOW_ON 설정 오류'",
+         v1="device/mfc.py _flow_stable_need·_stabilization_loop; lib/config_common.py; config/settings.json(ch1·ch2)",
+         v2="v2/ch12/drivers/mfc_ops.py; v2/ch12/params/mfc.py",
+         test="v2/tests/test_mfc_flow_stable_count.py::test_in_in_out_in_in_in_confirms_on_6th_read; "
+              "v2/tests/test_mfc_flow_stable_count.py::test_in_but_short_of_streak_counts_as_attempt; "
+              "v2/tests/test_mfc_flow_stable_count.py::test_bad_stable_count_fails_flow_on; "
+              "v2/tests/test_mfc_flow_stable_count.py::test_chamber_flow_on_needs_three_and_reflow_on_restarts", status="done", note=""),
+    dict(id="SYNC-541", area="sync",
+         desc="가스 단계 설정(main 27decba): 목표보다 작은 중간값만 작은 순서대로 FLOW_SET→FLOW_ON('(단계 i/n)'·'(… 도달 대기)'), 중간값 없으면 예전과 같음, "
+              "도달 실패면 다음 단계 없이 중단",
+         v1="controller/process_controller.py _create_process_sequence; lib/config_ch2.py; config/settings.json(ch2)",
+         v2="v2/ch12/process_steps.py; v2/ch12/params/core.py",
+         test="v2/tests/test_gas_step_levels.py::test_ch2_o2_steps_follow_table; v2/tests/test_gas_step_levels.py::test_no_mid_levels_identical_to_before; "
+              "v2/tests/test_gas_step_levels.py::test_runner_sends_steps_in_order; v2/tests/test_gas_step_levels.py::test_mid_step_failure_aborts_before_next_step; "
+              "v2/tests/test_process_steps_golden.py::test_combo", status="done", note=""),
+    dict(id="SYNC-542", area="sync",
+         desc="가스 단계 설정 검사(main 27decba): 모르는 가스·0 이하·숫자 아님·오름차순 아님·중복·dict 아님 → 고쳐 쓰지 않고 E211 시작 거부(Chuck 이동 전, "
+              "로그·챗 장비 오류), v2 는 저장 때도 거부(D11 — C05·C06)",
+         v1="controller/process_controller.py _gas_step_levels·gas_step_levels_error; runtime/chamber_runtime.py _gas_step_reject",
+         v2="v2/ch12/process_steps.py; v2/ch12/process_preflight.py; v2/ch12/params/core.py",
+         test="v2/tests/test_gas_step_levels.py::test_levels_check_matches_v1; v2/tests/test_gas_step_levels.py::test_bad_levels_block_start_before_chuck_e211; "
+              "v2/tests/test_gas_step_levels.py::test_bad_levels_rejected_by_param_table_and_ignored_by_expand", status="done", note=""),
+    dict(id="SYNC-543", area="sync",
+         desc="설정 키 ch1·ch2.MFC_FLOW_STABLE_COUNT·ch2.PROCESS_GAS_STEP_LEVELS(+ 코드 기본값 {}) — v2 CH1_·CH2_ 키, 변환 도구·담당 표",
+         v1="config/settings.json; lib/config_common.py; lib/config_ch2.py",
+         v2="v2/ch12/params/mfc.py; v2/ch12/params/core.py; v2/ch12/spec/settings_v1facts.py; v2/ch12/params/ownership.py",
+         test="v2/tests/test_params.py::test_ownership_covers_all_542_v1_keys; v2/tests/test_params.py::test_my_defaults_equal_v1_effective; "
+              "v2/tests/test_mfc_flow_stable_count.py::test_default_stable_count_is_three_and_channel_keys", status="done", note=""),
+    dict(id="SYNC-544", area="sync",
+         desc="v1 requirements 정리(main acf3d96 — pytesseract·matplotlib·scipy 1.14.1 추가, python-docx 삭제, requirements.dev.txt)",
+         v1="requirements.build.txt; requirements.dev.txt", v2="v2/requirements.txt",
+         test="", status="na", note="v1 빌드 venv 전용 — v2 코드는 그 패키지를 쓰지 않음(검색 0). RGA 워커 환경 메모만 v2/requirements.txt 주석에(D417 ④)"),
+    dict(id="SYNC-550", area="sync",
+         desc="화면을 다시 열어도 앞선 공정 진행 줄(D418): 허브 기본 보기 줄 챔버별 보관(HUB_KEEP_MAIN)·연결 때 먼저 다시 보냄, 웹 첫 묶음 챔버별 main·경고·오류, "
+              "화면 로그 목록 기본 보기 줄 따로 남김",
+         v1="(v2 신설 — v1 은 한 화면 로그 창)", v2="v2/ch12/hub.py; v2/ch12/params/core.py",
+         test="v2/tests/test_hub_keep_main.py::test_main_lines_survive_thousands_of_detail_lines_and_come_first_in_order; "
+              "v2/tests/test_hub_keep_main.py::test_full_rig_new_viewer_sees_earlier_block_lines_after_a_detail_flood; "
+              "v2/tests/test_hub_keep_main.py::test_keep_count_setting_range_rejected_not_fixed; "
+              "vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:first-events", status="done", note=""),
+    dict(id="SYNC-551", area="sync",
+         desc="추세 라벨 겹침 없음(D419 — 공용 Chk2Trend: 간격 = 글자 줄 높이 + 여유, 같은 값 한 줄·띠 늘림)·HMI 사각 버튼 상태 글 켜짐/꺼짐",
+         v1="(v2 신설)", v2="v2/hmi",
+         test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:trend-labels; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:hmi-buttons",
+         status="done", note=""),
 ]

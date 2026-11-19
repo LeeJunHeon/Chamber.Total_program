@@ -58,6 +58,7 @@ CH12_REASONS: tuple = (
     Reason("ADJUST_NOT_USED", "공정 중 수정: 이번 공정에서 쓰지 않는 장비·항목", "reject"),
     Reason("ADJUST_OUT_OF_RANGE", "공정 중 수정: 범위 밖", "reject"),
     Reason("ADJUST_NOT_APPLICABLE", "공정 중 수정: 지금 블록에 해당 없음", "reject"),
+    Reason("ADJUST_GAS_STEP", "공정 중 수정: 가스 단계 설정(PROCESS_GAS_STEP_LEVELS) 중간값 구성이 바뀌는 유량 — 아직 안 한 가스 주입", "reject"),
     Reason("EDIT_BAD_OP", "시퀀스 편집 형식 오류", "reject"),
     Reason("EDIT_STARTED_BLOCK", "이미 시작한 블록은 편집 불가", "reject"),
     Reason("EDIT_INVALID", "편집 뒤 레시피 검사 실패", "reject"),

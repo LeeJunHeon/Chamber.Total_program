@@ -129,7 +129,8 @@ BLOCK_DEFS: tuple = (
         P("ar", "bool", default=False, label="Ar"), P("ar_flow", "float", "sccm", None, min=0.0, label="Ar 유량"),
         P("o2", "bool", default=False, label="O2"), P("o2_flow", "float", "sccm", None, min=0.0, label="O2 유량"),
         P("n2", "bool", default=False, label="N2"), P("n2_flow", "float", "sccm", None, min=0.0, label="N2 유량")),
-        "PLC MV ON · 가스마다 PLC 밸브 ON · FLOW_SET · FLOW_ON", "pc:2352-2373", desc=_NOT_RESUMABLE_SET),
+        "PLC MV ON · 가스마다 PLC 밸브 ON · FLOW_SET · FLOW_ON(가스 단계 설정 PROCESS_GAS_STEP_LEVELS 의 목표보다 작은 중간값을 "
+        "작은 순서대로 먼저 FLOW_SET·FLOW_ON — 각 단계 연속 N 회 도달 후 다음)", "pc:2352-2373·main 27decba", desc=_NOT_RESUMABLE_SET),
     BlockDef("pressure_ctrl", "압력 제어(채널 SP)", (
         P("target", "float", "mTorr", required=True, label="작업 압력", desc="SP 읽기 실패 때 쓰는 목표(v1 working_pressure)"),
         P("timeout_sec", "float", "s", "cfg:PC_PRESSURE_WAIT_TIMEOUT_S", min=0.0, min_exclusive=True, label="최대 대기")),

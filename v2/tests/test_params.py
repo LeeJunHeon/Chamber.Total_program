@@ -110,8 +110,9 @@ def test_schema_hash_and_secrets():
 
 
 # ───────────── v1 키 담당 표 ─────────────
-def test_ownership_covers_all_538_v1_keys():
-    assert len(facts.KEYS) == 538
+def test_ownership_covers_all_542_v1_keys():
+    # 542 = 538 + v1 main 27decba 의 ch1·ch2.MFC_FLOW_STABLE_COUNT·ch2.PROCESS_GAS_STEP_LEVELS·(code).PROCESS_GAS_STEP_LEVELS(2026-11-19)
+    assert len(facts.KEYS) == 542
     assert set(own.V1_KEY_OWNER) == set(FACT)
     assert set(own.V1_KEY_OWNER.values()) | set(own.V1_CODE_ONLY_OWNER.values()) <= set(own.EXPECTED_FRAGMENTS)
 
@@ -191,7 +192,7 @@ def test_my_defaults_equal_v1_effective(p):
     if p.key.endswith("THICKNESS_FACTOR_FILE"):      # "" = 설정 폴더의 thickness_factors_chN.json(v1 기본 ""와 같은 파일)
         assert p.default == "" and FACT.get(path, (None, None, ""))[2] == ""
         return
-    got = json.loads(p.default) if p.pattern == r"\[.*\]" else p.default
+    got = json.loads(p.default) if p.pattern in (r"\[.*\]", r"\{.*\}") else p.default
     assert conv._same(got, want), (path, got, want)
     if conv._effect(path) == "dead_common":           # ⚠ v1 이상 동작 — 사용자 확인 필요로 표시
         assert p.pending_confirm and "사용자 확인 필요" in p.note
