@@ -598,7 +598,9 @@ def test_pc_every_step_crash(tmp_path, step, mode, begin):
             assert dec["result"] == "resumed" and dec["mode"] == mode, dec["checks"]
             assert e2.last_final["ok"] is True and e2.last_final["status"] == "success", (e2.last_final, list(e2.ui_log)[-8:])
             assert runs and runs[-1]["result"] == "done" and runs[-1]["runId"] == doc["run_id"]
-            ev = [m for m in rig2.hub.recent if m["type"] == "event" and m["data"]["context"].get("kind") == "resumed"
+            # 이어간 공정이 길면(가스 도달 3회 연속 — D417) RESUMED 가 최근 링(500)에서 밀려날 수 있다 — 화면이 연결 때 받는 것
+            # (최근 링 + 챔버별 기본 보기 줄 보관 — D418)에서 찾는다. 'resumed' 는 기본 보기(main) 종류라 보관된다
+            ev = [m for m in rig2.hub.first_messages(None) if m["type"] == "event" and m["data"]["context"].get("kind") == "resumed"
                   and m["data"]["context"]["origin"] == "pc"]
             assert len(ev) == 1 and ev[0]["data"]["code"] == "RESUMED"
             if mode == "rewrite":
