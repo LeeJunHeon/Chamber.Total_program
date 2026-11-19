@@ -2,28 +2,28 @@
  "what": "챔버12(CH1&2) v2 노트북 로컬 화면(vanam-process hmi/ch12.tsx — 8단계)",
  "target": "ch12",
  "vanamProcess": {
-  "commit": "10027652a01cb796ffec5bdbed4eb86491533e6e",
+  "commit": "43fe421e87e296972aaa315144f5d1c44beffc62",
   "branch": "ch12-web",
   "clean": true
  },
- "builtAt": "2026-11-19T03:45:32.033Z",
+ "builtAt": "2026-11-19T07:03:09.856Z",
  "esbuild": "0.28.2",
  "tailwindcss": "4.3.3",
  "files": [
   {
-   "path": "assets/app-EB32020C.css",
-   "bytes": 35456,
-   "sha256": "eb32020c1f15c1815f54cb610862a93628378c48ae55ad989f4a0fc582ce30ad"
+   "path": "assets/app-5DDB46D9.css",
+   "bytes": 35540,
+   "sha256": "5ddb46d94c96eda41639cb1f705d13d67ef2992f31fb15e97139766f57d082c4"
   },
   {
-   "path": "assets/app-RYIY4K5J.js",
-   "bytes": 508651,
-   "sha256": "594d2776ed8a21a763d5624cb3281a78a8da9e0a7d010e9f8ebbcbe40c7b4875"
+   "path": "assets/app-QLW4O7D6.js",
+   "bytes": 509325,
+   "sha256": "995a5281926119996cd6e7ce1fc55e635c61b4c4c9391e48a592ada06f975071"
   },
   {
    "path": "index.html",
    "bytes": 358,
-   "sha256": "9347b59b1f802391459097a97ce71f7afd1a464b76dd285b175a3f143eb8c02a"
+   "sha256": "f268fb46e6941f53802dd0d9595e978f563124b6cc381fbd7c72f35c11314b72"
   }
  ]
 }
