@@ -263,6 +263,8 @@ class ProcessViewMixin:
                 "countdown": None if cd is None else {"total_ms": cd.total_ms, "elapsed_s": cd.elapsed_s(now),
                                                       "paused": cd.paused_at is not None, "msg": cd.msg},
                 "remain_s": r.remaining_s(), "overrides": dict(self.overrides), "adjusted": dict(self.adjusted),
+                "gas_plan": self.gas_plan_record(),                 # 규칙 C — 다시 펼친 가스 묶음(재시작 뒤 같은 스텝 목록을 만들기 위해)
+                "gas_steps": [dict(text=st["text"], gas=st["gas"]) for st in self.gas_steps.values()],   # 흐르는 중 단계 진행(재시작 확인)
                 "paused": self.paused, "pause_kind": self.pause_kind, "params": dict(self.params),
                 "executed": list(self.executed), "origin": self.origin, "origin_meta": self.origin_meta,
                 "txt_path": str(self.txt.path) if self.txt.path is not None else None,
@@ -326,6 +328,8 @@ class ProcessViewMixin:
         steps, insts = BK.expand(run.blocks(blocks), self.cfg, self.n, caps=self.caps,
                                  time_zero=bool((st.get("params") or {}).get("thickness_time_record")))
         ov = dict(st.get("overrides") or {})
+        plan = self.gas_plan_from(st.get("gas_plan"))
+        steps = self.apply_gas_plan(steps, insts, plan)            # 규칙 C — 그때 다시 펼친 가스 묶음 모양 그대로(D420)
         for s in steps:
             if s.ref in ov and s.ref != "process.main_remaining":
                 self._set_step_value(s, ov[s.ref])
@@ -345,6 +349,7 @@ class ProcessViewMixin:
             self.run_id, self.owner = st.get("run_id"), st.get("owner") or "local"
             self.origin, self.origin_meta = st.get("origin") or "ui", st.get("origin_meta")
             self.overrides, self.adjusted = ov, dict(st.get("adjusted") or {})
+            self.gas_plan, self.gas_steps = plan, {}
             self.executed = [dict(x) for x in st.get("executed") or []]
             self.error, self._cancel, self._stop_user, self._abort_code = None, False, False, None
             self.cur_block = st.get("block_index")

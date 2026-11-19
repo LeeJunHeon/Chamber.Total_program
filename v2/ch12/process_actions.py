@@ -545,6 +545,7 @@ class ProcessActions(ProcessEventsMixin):
             self.log("MFC", f"다른 공정이 MFC 사용 중({', '.join(sorted(others))}) → mfc 폴링/상태 리셋 생략(공유 자원 보호), "
                             f"이 챔버 몫만 정리")
             self.mfc.release_owner(self.owner, "cleanup")
+            self.mfc.release_owner(f"{self.owner}:step", "cleanup")     # 공정 중 가스 단계(규칙 C — process_gas_steps.STEP_OWNER_SUFFIX)
         else:
             self.mfc.on_process_cleanup()
         if self.mfc_polling or self.owner in mp.users:

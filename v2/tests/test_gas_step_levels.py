@@ -5,19 +5,17 @@ v1 tests/test_gas_step_levels.py 와 같은 경우를 v2 로 옮겼다.
 - 설정 검사: v1 _gas_step_levels 를 실제로 부른 골든(v2/tests/golden/gas_step_levels.json)과 결과·문구가 같음, 파라미터 표가 저장 때 거부(D11).
 - 시작 거부: 잘못된 설정이면 Chuck 이동 전에 E211(로그·챗·결과), O2 를 안 쓰는 레시피도 막음(설정 자체가 잘못됨).
 - 실행(시험대): CH2 O2 10 sccm → MFC 에 'Q2 90.0'·L21·'Q2 95.0'·L21·'Q2 100.0'·L21 순서, 중간 단계 도달 실패면 다음 단계 없이 중단.
-- 공정 중 값 바꾸기: 아직 안 한 가스 주입은 중간값 구성이 같은 범위에서만(D417).
+- 공정 중 값 바꾸기: 규칙 C(D420 — 거부하지 않고 같은 규칙으로 다시 펼침·단계 진행) — 경우별 시험은 test_gas_step_rule_c.
 """
 from __future__ import annotations
 
 import json
 from pathlib import Path
-from types import SimpleNamespace
 
 import pytest
 
 from v2.ch12 import blocks as BK
 from v2.ch12 import process_steps as ps
-from v2.ch12.process_adjust import AdjustMixin
 from v2.ch12.process_sequence import build_sequence
 from v2.tests import proc_rig as R
 
@@ -91,7 +89,7 @@ def test_ch2_o2_steps_follow_table(o2):
     i = names.index("O2 밸브 열기")                                # O2 밸브 열기 바로 뒤에 단계들이 붙는다
     assert names[i + 1:i + 1 + len(TABLE[o2])] == [t[0] for t in TABLE[o2]]
     sets = [s for s in seq if s.action == "MFC_CMD" and s.params[0] == "FLOW_SET" and s.params[1]["channel"] == 2]
-    assert [s.ref for s in sets] == [None] * (len(sets) - 1) + ["mfc.o2_flow"]   # 공정 중 값 바꾸기는 목표 FLOW_SET 에만
+    assert [s.ref for s in sets] == [""] * (len(sets) - 1) + ["mfc.o2_flow"]     # 공정 중 값 바꾸기는 목표 FLOW_SET 에만(중간값 ref 없음)
 
 
 @pytest.mark.parametrize("o2", [8.0, 9.0])
@@ -276,18 +274,15 @@ def test_mid_step_failure_aborts_before_next_step(tmp_path):
         pass
 
 
-# ───────────────────────── 공정 중 값 바꾸기(D417) ─────────────────────────
-def test_future_flow_adjust_only_within_same_mid_levels():
-    """아직 안 한 가스 주입의 O2 목표를 바꿀 때 중간값 구성이 바뀌면 거부(10 → 9.2 = [9.0, 9.5] → [9.0]), 같으면 허용(10 → 12)."""
-    ai = BK.adjust_item("mfc", "o2_flow")
-    steps = _seq(2, _cfg(2, O2_LV), _recipe(use_o2=True, o2_flow=10.0))
-    fut = [s for s in steps if s.ref == "mfc.o2_flow"]
-    assert len(fut) == 1 and fut[0].params[1]["value"] == 10.0
-    me = SimpleNamespace(cfg=_cfg(2, O2_LV), n=2, _step_value=AdjustMixin._step_value)
-    assert AdjustMixin._gas_step_conflict(me, ai, fut, 12.0) == ""
-    assert AdjustMixin._gas_step_conflict(me, ai, fut, 9.6) == ""
-    why = AdjustMixin._gas_step_conflict(me, ai, fut, 9.2)
-    assert "O2 10 → 9.2 sccm" in why and "[9.0, 9.5] → [9.0]" in why
-    assert AdjustMixin._gas_step_conflict(me, ai, fut, 8.0)
-    assert AdjustMixin._gas_step_conflict(me, ai, [], 8.0) == ""                    # 이미 지난 가스 주입은 해당 없음(live)
-    assert AdjustMixin._gas_step_conflict(me, BK.adjust_item("mfc", "ar_flow"), fut, 5.0) == ""   # AR 은 단계 없음
+# ───────────────────────── 공정 중 값 바꾸기 — 규칙 C(D420, D417 ③ 대체: 거부하지 않고 같은 규칙) ─────────────────────────
+def test_live_up_levels_table_rule_c():
+    """흐르는 중 올릴 때 거칠 중간값 = 지금 설정값 < 중간값 < 새 값(작은 순서), 내리거나 같으면 [](바로). 경우별 실제 동작은 test_gas_step_rule_c."""
+    lv = (9.0, 9.5)
+    assert ps.gas_up_levels(lv, 8.0, 10.0) == [9.0, 9.5]
+    assert ps.gas_up_levels(lv, 9.2, 10.0) == [9.5]
+    assert ps.gas_up_levels(lv, 10.0, 12.0) == []
+    assert ps.gas_up_levels(lv, 10.0, 8.0) == [] and ps.gas_up_levels(lv, 9.5, 9.5) == []
+    assert ps.gas_up_levels(lv, 8.0, 9.5) == [9.0] and ps.gas_up_levels(lv, 9.0, 9.5) == []
+    assert ps.gas_up_levels((), 8.0, 10.0) == []                                   # 단계 없는 가스(Ar)
+    sc = ps.step_cfg({}, 2)
+    assert ps.gas_of_key(sc, "mfc.o2_flow") == ("O2", 2) and ps.gas_of_key(sc, "mfc.wp") is None

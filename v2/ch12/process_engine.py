@@ -38,6 +38,7 @@ from v2.ch12.outputs.process_txt import ProcessTxtLog
 from v2.ch12.outputs.run_stats import RunStats
 from v2.ch12.process_actions import ProcessActions
 from v2.ch12.process_adjust import AdjustMixin
+from v2.ch12.process_gas_steps import GasStepMixin
 from v2.ch12.process_records import ProcessRecordsMixin
 from v2.ch12.process_view import ProcessViewMixin
 from v2.ch12.process_list import USE_KEYS, RunPlan, derive_params, plan_runs, raw_rows_from, stop_uses
@@ -63,7 +64,7 @@ class ProcEvent:
     level: str = "info"
 
 
-class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, ProcessViewMixin):
+class ProcessEngine(AdjustMixin, GasStepMixin, PF.PreflightMixin, ProcessRecordsMixin, ProcessViewMixin):
     def __init__(self, system, chamber: str, *, heater=None, thickness=None, excel_main_dir=None,
                  outputs: bool = True) -> None:
         self.sys, self.clock, self.lk = system, system.clock, system.clock.cond
@@ -138,6 +139,7 @@ class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, Process
         self.last_result: Optional[dict] = None
         self.traces: "collections.deque[list]" = collections.deque(maxlen=50)   # 런마다 실행한 스텝(시험·기록)
         self._init_adjust()
+        self._init_gas_steps()
 
     # ═══════════════════════ 공통 ═══════════════════════
     def cget(self, key: str, default: Any = None) -> Any:
@@ -496,6 +498,7 @@ class ProcessEngine(AdjustMixin, PF.PreflightMixin, ProcessRecordsMixin, Process
         self.state_name = "PREFLIGHT"
         steps, insts = BK.expand(run.blocks(self.blocks), self.cfg, self.n, caps=self.caps)
         self.cur_steps, self.cur_insts = steps, insts
+        self.gas_plan, self.gas_steps = {}, {}             # 규칙 C — 다시 펼친 묶음·단계 진행은 런마다
         try:
             pf_ok = self._preflight(run, params)
         except PF.StageCancelled:

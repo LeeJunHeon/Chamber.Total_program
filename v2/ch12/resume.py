@@ -434,6 +434,10 @@ class ResumeManager:
                     + (" · 기다리는 중" if mode == "hold" else (" · 설정 쓰기 도중 — 블록 설정을 처음부터 다시" if mode == "rewrite" else ""))
                     + (" · 의도적 종료 표시" if ex.get("intentional") else "")))
         out.append(("enabled", bool(self.cfg.get(ENABLED_KEY[part], True)), ENABLED_KEY[part]))
+        gs = [x.get("text") or x.get("gas") for x in (st.get("gas_steps") or []) if isinstance(x, dict)]
+        if gs:                                              # 규칙 C(D420) — 공정 중 가스 단계가 진행 중이었으면 이어가지 않음
+            out.append(("gas_step", False, f"가스 단계 진행 중({', '.join(map(str, gs))})에 재시작 — 이어가지 않고 정지"
+                                           "(값 확인 없이 이어가면 중간값에 멈춘 채 계속될 수 있음)"))
         return gap, out
 
     def device_checks(self, ch: str, doc: dict, now: Callable[[str], Any]) -> List[Check]:

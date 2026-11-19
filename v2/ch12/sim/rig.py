@@ -58,10 +58,10 @@ def local_paths(root: Path) -> Dict[str, str]:
 
 
 def start_sp_of(cfg: Optional[Dict[str, Any]]) -> list:
-    """가상 MFC 의 시작 SP1~SP5 장비값(= mTorr × PRESSURE_SCALE) — 설정 SIM_MFC_START_SP_MTORR('0,0,2,2,0' mTorr).
+    """가상 MFC 의 시작 SP1~SP5 장비값(= mTorr × PRESSURE_SCALE) — 설정 SIM_MFC_START_SP_MTORR('0,0,30,30,0' mTorr — D421).
     실장비는 패널에 저장된 SP 를 쓴다(이 설정은 sim 시뮬레이터만 읽는다 — D415). 형식이 틀리면 설정 검사(D11)가 먼저 거부한다."""
     from v2.ch12.sim.mfc_sim import PRESSURE_SCALE
-    raw = str((cfg or {}).get("SIM_MFC_START_SP_MTORR", "0,0,2,2,0"))
+    raw = str((cfg or {}).get("SIM_MFC_START_SP_MTORR", "0,0,30,30,0"))
     vals = [float(x) for x in raw.split(",")][:5]
     return [v * PRESSURE_SCALE for v in vals + [0.0] * (5 - len(vals))]
 

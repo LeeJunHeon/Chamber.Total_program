@@ -738,7 +738,8 @@ DECISIONS += [
                   "먼저 돌기 때문에 펼치기는 잘못된 값을 단계 없이 펼치고(시작은 위 검사가 막음) — 결과(시작 거부 E211)는 같다. ETA 는 DELAY 단계만 세므로 바뀌지 않음(v1 과 같음). "
                   "③ v2 에만 있는 공정 중 값 바꾸기: 단계가 있는 가스는 마지막(목표) FLOW_SET 에만 ref — 중간값은 설정 값 그대로. 아직 안 한 가스 주입의 목표를 바꿀 때 "
                   "중간값 구성이 바뀌면(예 10 → 9.2 = [9.0, 9.5] → [9.0]) ADJUST_GAS_STEP 으로 거부(구성이 같으면 10 → 12 처럼 목표만), 이미 지난 가스 주입은 해당 없음 — "
-                  "v1 규칙(작은 순서로 올라감)이 공정 중 수정으로 깨지지 않게 하는 v2 규칙이라 사용자 확인 필요. "
+                  "v1 규칙(작은 순서로 올라감)이 공정 중 수정으로 깨지지 않게 하는 v2 규칙이라 사용자 확인 필요"
+                  " → 2026-11-19 사용자 결정 규칙 C 로 대체(D420 — 거부하지 않고 같은 규칙으로 다시 펼침·흐르는 중 단계 진행). "
                   "④ acf3d96(v1 requirements.build/dev 만): v2 코드는 pytesseract·matplotlib·scipy·python-docx 를 쓰지 않음(검색 0) — 코드 영향 없음, "
                   "RGA 워커 환경 메모(matplotlib·scipy 1.14.1 고정)만 v2/requirements.txt 주석에. "
                   "⑤ V1_BASE 27decba(v1golden_process_steps.V1_BASE). 골든: main 27decba 사본에서 v1 골든 도구 17개를 다시 돌려 내용이 바뀐 것만 넣음 — "
@@ -746,7 +747,7 @@ DECISIONS += [
                   "gas_step_levels.json(새 — v1 검사 42 경우), dev_mfc.json(FLOW_ON 뒤 R60 3회), recipe_check·recipe_files(머리 v1_base 만), "
                   "independent_tools.json(CH2 히터 CSV 하루 파일 이름 — 9cde7c4 반영분이 이전 사본에 빠져 있던 것). dev_dcpulse·dev_rfpulse·dev_plc·robot_server_frames·"
                   "runtime_dump·xlsx 는 다시 만들면 걸린 시간(수 ms)·임시 포트·생성 날짜·zip 시각만 달라 기존 사본 유지(v1 해당 코드 변경 없음).",
-         reason="사용자 지시 2026-11-19 4장", confirm=True,
+         reason="사용자 지시 2026-11-19 4장 (③ 은 사용자 결정 2026-11-19 규칙 C — D420)", confirm=False,
          where="v2/ch12/drivers/mfc_ops.py; v2/ch12/process_steps.py; v2/ch12/process_preflight.py; v2/ch12/process_adjust.py; v2/ch12/params/mfc.py; "
                "v2/ch12/params/core.py; v2/ch12/spec/settings_v1facts.py; v2/tools/v1golden_process_steps.py; v2/tests/golden"),
     dict(id="D418", title="2026-11-19 화면을 다시 열면 로그가 사라지던 것 — 기본 보기 줄 챔버별 보관(장비 허브·웹 첫 묶음·화면 로그 목록), 메시지 양 측정",
@@ -776,4 +777,47 @@ DECISIONS += [
                   "'게이트 닫기 … 열림' 처럼 거꾸로 보이던 것. 다른 사각 버튼은 이미 켜짐/꺼짐이었음(전부 확인 — ui:hmi-buttons).",
          reason="사용자 지시 2026-11-19 2·3장", confirm=False,
          where="vanam-process components/ops2/chk/Chk2Trend.tsx; components/ops2/ch12/Ch12Hmi.tsx; scripts/ops2-ch12-ui-check.mjs"),
+]
+
+
+DECISIONS += [
+    dict(id="D420", title="2026-11-19 가스 단계 규칙 C — 공정 중 값 바꾸기에서도 같은 규칙(사용자 결정, D417 ③ 대체)",
+         decision="원칙: 단계 설정(PROCESS_GAS_STEP_LEVELS)이 있는 가스는 레시피 시작이든 공정 중 변경이든 올라갈 때 중간값을 작은 순서대로 거치고 "
+                  "내릴 때는 바로. ① 아직 안 한 가스 주입(그 가스 묶음의 첫 스텝이 아직 안 옴)의 목표를 바꾸면 거부하지 않고 새 목표 기준으로 묶음(FLOW_SET→"
+                  "FLOW_ON 단계들)을 다시 펼친다 — 레시피에 그 값이 있었던 것과 같은 결과(process_steps.restep_gas = gas_flow_steps): 10 → 9.2 는 [9.0] → 9.2, "
+                  "10 → 12 는 9.0 → 9.5 → 12, 10 → 8 은 8. ② 이미 흐르는 중(묶음이 지남) 올리면 지금 설정값 < 중간값 < 새 값 인 중간값을 작은 순서대로 "
+                  "FLOW_SET → FLOW_ON(가스 주입과 같은 도달 판정 — MFC_FLOW_STABLE_COUNT 회 연속·180 회 시간 초과) 뒤 마지막 새 값도 같은 판정: 8 → 10 = "
+                  "9.0 → 9.5 → 10, 9.2 → 10 = 9.5 → 10. 중간값이 없으면(10 → 12) 또는 내리면(10 → 8) 예전처럼 바로(FLOW_SET 확인 — 단계 없는 가스와 같음). "
+                  "단계 명령은 MFC 에 소유자 'chamberN:step' 으로 보낸다(확인 사건이 러너가 기다리는 다른 가스의 FLOW_SET/ON 과 섞이지 않게 — MFC 사건은 소유자가 "
+                  "같을 때만 러너로 감), 공정 끝 정리에서 함께 푼다. ③ 실패: 중간이든 마지막이든 도달 못 하거나 FLOW_SET 되읽기가 끝내 다르면 가스 주입 실패와 같이 "
+                  "러너 step_failed('MFC', 드라이버 문구 — '[MFC - GAS 안정화 시간 초과]')로 공정 중단, 정지·끝 정지가 시작되면 단계를 멈춤(그때의 취소 결과는 실패 아님). "
+                  "④ 같은 가스의 단계 진행 중·그 가스 주입 묶음을 러너가 돌리는 중의 새 변경은 ADJUST_GAS_STEP 거부('O2 단계 진행 중(…) — 끝난 뒤 다시'), 다른 가스는 받음. "
+                  "⑤ 보이기: 단계마다 공정 진행 줄(process adjust result stepping 'O2 9.0 → 9.5 → 10 진행 중 2/3' — 설정 중간값은 소수 한 자리, 목표는 그대로), "
+                  "화면 '공정 중 값 바꾸기' 항목 stepping {levels, i, n, text}(운전 탭에 '가스 단계 · …' 줄), 끝나면 confirmed, 실패면 failed. "
+                  "⑥ 겹칠 때: 일시정지 중에도 단계는 계속(사람이 준 값 바꾸기 — 일시정지는 블록 타이머·파워 명령만 멈춤). 건너뛰기 — 가스 주입 블록은 건너뛸 수 없는 블록이라 "
+                  "묶음 도중에 끊기지 않고, 다른 블록 건너뛰기는 단계와 무관. 시퀀스 편집 — 지난·지금 블록의 가스 묶음은 그때 다시 펼친 모양 그대로(런마다 gas_plan "
+                  "[(블록 순번, 항목)] = 값), 남은 블록은 수정값으로 다시 펼침(process_steps.apply_overrides — 스텝 수·지난 스텝 일치). 재시작 뒤 이어가기 — 저널에 "
+                  "gas_plan 을 남겨 다시 펼친 스텝 목록이 저널과 같고, 단계 진행 중이었으면(gas_steps) 재시작 확인 gas_step 이 실패해 이어가지 않고 정지 — 이어가기 가스 "
+                  "확인은 켜짐/꺼짐만 보므로 값이 중간에 멈춘 채 계속되지 않게(가장 단순한 쪽). 잘못된 단계 설정은 지금처럼 저장 때 거부(C05·C06)·시작 전 E211. "
+                  "중간값 사이 부등호는 엄격(9.0 → 9.5 로 올릴 때 9.0 은 지금 값이라 다시 거치지 않음). 공정 모니터(가스 편차 경고)의 기준은 예전처럼 레시피 값(바뀌지 않음).",
+         reason="사용자 결정 2026-11-19(지시 2장)", confirm=False,
+         where="v2/ch12/process_gas_steps.py; v2/ch12/process_steps.py(gas_flow_steps·restep_gas·apply_overrides·gas_up_levels); v2/ch12/process_adjust.py; "
+               "v2/ch12/process_view.py(gas_plan·gas_steps 저널); v2/ch12/resume.py(gas_step); v2/ch12/process_actions.py; "
+               "vanam-process components/ops2/ch12/Ch12Run.tsx·Ch12Logs.tsx"),
+    dict(id="D421", title="2026-11-19 sim 가상 MFC 시작 설정점 SP3·SP4 = 30 mTorr(D415 의 2 mTorr 를 바꿈)",
+         decision="SIM_MFC_START_SP_MTORR 기본 '0,0,30,30,0' mTorr — 사용자 기억 30, 챔버K 같은 GPC3000 의 SP4 자연 흡입 압력 약 30 mTorr 기록과 일치. "
+                  "실장비 패널 값은 여전히 미확인(장비 사실 표 UNVERIFIED 유지), sim 시뮬레이터만 읽음(시험 그대로). sim 압력 모델(압력 = 유량 × 1e-4 Torr ÷ "
+                  "스로틀 유효 개방 0.02~1)로 30 mTorr 가 일반 레시피에서 잡힘 — Ar 20 sccm 단독 스로틀 약 5 %, Ar+O2 합 21.5·30 sccm 약 5.5·8 % — 모델은 고치지 않음. "
+                  "확인(시험대): CH1 Ar 20·CH1 Ar 20 + O2 1.5·CH2 Ar 20 + O2 10 모두 압력 제어(SP setpoint 30 도달) → SP2 부스트(10 mTorr 도달) → SP1(작업 압력) → "
+                  "메인 공정. 이전 2 mTorr 에서 CH2 Ar 20 + O2 10(30 sccm — 스로틀을 다 열어도 3 mTorr)이 압력 대기에서 멈추던 것도 없어짐.",
+         reason="사용자 지시 2026-11-19 3장", confirm=False,
+         where="v2/ch12/params/mfc.py; v2/ch12/sim/rig.py; v2/ch12/spec/devices.py(UNVERIFIED)"),
+    dict(id="D422", title="2026-11-19 추세 라벨 겹침 마무리 — 위·아래 양쪽에 라벨 쌍(공용 Chk2Trend)",
+         decision="라벨이 위쪽 2개(Ar 20·목표 20 — 그래프 맨 위)·아래쪽 2개(O2 1.5·목표 1.5)이면 spread() 가 아래 끝을 넘어 전체를 끌어올리며 lo 에서 잘라 "
+                  "'20' 과 '20 목표' 가 6.75 px 차이로 겹쳤다. 그 결과에 겹침이 있을 때만 위→아래로 벌린 값에서 아래→위로 한 번 더 맞춤(뒤에서부터 "
+                  "y[i] = min(y[i], y[i+1] − 간격), 맨 아래 hi) — 띠에 다 들어가는 한 모든 간격이 지켜짐, 안 들어가면 같은 값 한 줄 → 띠 늘림 → 그림 높이 그대로. "
+                  "챔버K 겹침 없던 경우 이전·지금 HTML 22/22 같음, 겹치던 위·아래 쌍 4/4 고침. Chk2Trend.tsx 하나만 바꾼 별도 커밋 vanam-process 3d31d32"
+                  "(앞 5f59385 와 함께 chk2-web 으로 옮길 수 있게). 좌표 시험(위·아래 쌍 2+2·3+1·1+3·2+1·1+2)과 sim 화면 실제 글자 상자(getBoundingClientRect) 겹침 0.",
+         reason="사용자 지시 2026-11-19 1장", confirm=False,
+         where="vanam-process components/ops2/chk/Chk2Trend.tsx; scripts/ops2-ch12-ui-check.mjs(ui:trend-labels)"),
 ]

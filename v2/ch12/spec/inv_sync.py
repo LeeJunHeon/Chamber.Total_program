@@ -199,7 +199,7 @@ ITEMS = [
               "v2/tests/test_web_log_main.py::test_block_events_carry_total_and_elapsed_and_are_replayed_to_a_new_viewer; "
               "vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:log-main", status="done", note=""),
     dict(id="SYNC-531", area="sync",
-         desc="sim 가상 MFC 시작 설정점(D415): SIM_MFC_START_SP_MTORR 기본 0,0,2,2,0 mTorr — sim 압력 대기가 setpoint 읽기 실패로 멈추지 않음, 실장비 경로 영향 없음",
+         desc="sim 가상 MFC 시작 설정점(D415→D421): SIM_MFC_START_SP_MTORR 기본 0,0,30,30,0 mTorr — sim 압력 대기가 setpoint 읽기 실패로 멈추지 않음, 실장비 경로 영향 없음",
          v1="(v1 sim 없음 — 실장비는 패널 값)", v2="v2/ch12/params/mfc.py; v2/ch12/sim/rig.py",
          test="v2/tests/test_sim_mfc_start_sp.py::test_full_rig_reads_sp3_sp4_from_the_virtual_mfc; v2/tests/test_sim_mfc_start_sp.py::test_only_the_sim_reads_the_setting; "
               "v2/tests/test_sim_mfc_start_sp.py::test_bad_format_is_rejected_by_config_check_not_fixed_up", status="done", note=""),
@@ -256,4 +256,26 @@ ITEMS = [
          v1="(v2 신설)", v2="v2/hmi",
          test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:trend-labels; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:hmi-buttons",
          status="done", note=""),
+    dict(id="SYNC-560", area="sync",
+         desc="가스 단계 규칙 C(D420): 공정 중 값 바꾸기도 같은 규칙 — 아직 안 한 가스 주입은 새 목표로 다시 펼침, 흐르는 중 올리면 중간값을 작은 순서대로"
+              "(각 도달 판정) 뒤 새 값, 내리면 바로, 도달 실패 → 공정 중단, 단계 진행 중 재요청 거부, 시퀀스 편집·재시작 뒤에도 같은 모양",
+         v1="(v2 신설 — v1 은 공정 중 수정 없음, 단계 규칙은 main 27decba)", v2="v2/ch12/process_gas_steps.py; v2/ch12/process_steps.py; v2/ch12/process_adjust.py",
+         test="v2/tests/test_gas_step_rule_c.py::test_future_10_to_9p2_restep_9_then_9p2; v2/tests/test_gas_step_rule_c.py::test_future_10_to_12_restep_9_9p5_12; "
+              "v2/tests/test_gas_step_rule_c.py::test_future_10_to_8_no_mid_levels; v2/tests/test_gas_step_rule_c.py::test_live_8_to_10_goes_9_9p5_10_each_reached; "
+              "v2/tests/test_gas_step_rule_c.py::test_live_9p2_to_10_goes_9p5_then_10; v2/tests/test_gas_step_rule_c.py::test_live_10_to_12_direct; "
+              "v2/tests/test_gas_step_rule_c.py::test_live_lowering_10_to_8_is_direct; v2/tests/test_gas_step_rule_c.py::test_live_mid_step_not_reached_aborts_like_gas_injection; "
+              "v2/tests/test_gas_step_rule_c.py::test_rerequest_during_stepping_is_rejected_with_reason; v2/tests/test_gas_step_rule_c.py::test_ar_without_levels_is_unchanged_direct; "
+              "v2/tests/test_gas_step_rule_c.py::test_edit_sequence_after_future_restep_keeps_shape_and_steps_match; "
+              "v2/tests/test_gas_step_rule_c.py::test_journal_restores_restepped_shape_and_stepping_blocks_resume; "
+              "v2/tests/test_gas_step_rule_c.py::test_pause_does_not_stop_stepping_and_gas_intro_cannot_be_skipped; "
+              "vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:gas-stepping", status="done", note=""),
+    dict(id="SYNC-561", area="sync",
+         desc="sim 시작 설정점 SP3·SP4 30 mTorr(D421) — 일반 레시피가 압력 제어 30 → SP2 부스트 10 → SP1 → 메인 공정",
+         v1="(v1 sim 없음)", v2="v2/ch12/params/mfc.py; v2/ch12/sim/rig.py",
+         test="v2/tests/test_sim_mfc_start_sp.py::test_default_is_sp3_sp4_30_mtorr_as_device_values; "
+              "v2/tests/test_sim_mfc_start_sp.py::test_default_sp30_is_reached_then_sp2_boost_and_sp1_then_main", status="done", note=""),
+    dict(id="SYNC-562", area="sync",
+         desc="추세 라벨 위·아래 양쪽 쌍 겹침 없음(D422 — 공용 Chk2Trend 아래→위 맞춤)",
+         v1="(v2 신설)", v2="v2/hmi",
+         test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:trend-labels", status="done", note=""),
 ]

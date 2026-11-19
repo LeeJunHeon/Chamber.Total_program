@@ -421,30 +421,119 @@ def gas_prep_steps(sc: StepCfg, used: Mapping[str, bool]) -> List[ProcessStep]:
     return out
 
 
+def gas_flow_steps(sc: StepCfg, gas: str, c: int, fv: float) -> List[ProcessStep]:
+    """가스 하나의 FLOW_SET → FLOW_ON 묶음. 단계 설정(PROCESS_GAS_STEP_LEVELS, v1 main 27decba): 목표보다 작은 중간값만 작은 순서대로 먼저
+    거친다 — 각 단계는 FLOW_SET → FLOW_ON(같은 채널 L{ch}1 재전송 → 새 목표로 안정화 재시작, 연속 N 회 도달 후 다음 단계), 머무는 시간 없음.
+    공정 중 값 바꾸기(ref)는 마지막(목표) FLOW_SET 에만 — 아직 안 한 가스 주입의 목표를 바꾸면 이 함수로 새 목표 기준 묶음을 다시 만든다
+    (restep_gas — 규칙 C, 2026-11-19 D420: 레시피에 그 값이 있었던 것과 같은 결과)."""
+    key = f"mfc.{gas.lower()}_flow"
+    mids = [lv for lv in sc.gas_steps.get(gas, ()) if lv < fv]
+    if not mids:
+        return [S("MFC_CMD", f'Ch{c}({gas}) GAS {fv}sccm 설정', params=('FLOW_SET', {'channel': c, 'value': fv}), ref=key),
+                S("MFC_CMD", f'Ch{c}({gas}) GAS 공급 시작', params=('FLOW_ON', {'channel': c}))]
+    levels = mids + [fv]
+    out: List[ProcessStep] = []
+    for i, lv in enumerate(levels, start=1):
+        last = i == len(levels)
+        out += [S("MFC_CMD", f'Ch{c}({gas}) GAS {lv}sccm 설정 (단계 {i}/{len(levels)})',
+                  params=('FLOW_SET', {'channel': c, 'value': lv}), ref=key if last else ""),
+                S("MFC_CMD", (f'Ch{c}({gas}) GAS 공급 시작 ({lv}sccm 도달 대기)' if i == 1
+                              else f'Ch{c}({gas}) GAS {lv}sccm 도달 대기'), params=('FLOW_ON', {'channel': c}))]
+    return out
+
+
 def gas_intro_steps(sc: StepCfg, used: Mapping[str, bool], flows: Mapping[str, float]) -> List[ProcessStep]:
     ch = sc.chamber
     out = [S("PLC_CMD", '메인 밸브 열기', params=('MV', True, ch))]
     for gas, info in sc.gas_info.items():
         if used.get(gas.upper(), False):
             fv = float(flows.get(gas.upper(), 0))
-            c = info["channel"]
             out.append(S("PLC_CMD", f'{gas} 밸브 열기', params=(gas, True, ch)))
-            # 단계 설정(PROCESS_GAS_STEP_LEVELS, v1 main 27decba): 목표보다 작은 중간값만 작은 순서대로 먼저 거친다. 각 단계는
-            # FLOW_SET → FLOW_ON(같은 채널 L{ch}1 재전송 → 새 목표로 안정화 재시작, 연속 N 회 도달 후 다음 단계). 머무는 시간 없음.
-            # 공정 중 값 바꾸기(ref)는 마지막(목표) FLOW_SET 에만 — 중간값은 설정 값 그대로(D417).
-            mids = [lv for lv in sc.gas_steps.get(gas, ()) if lv < fv]
-            if not mids:
-                out += [S("MFC_CMD", f'Ch{c}({gas}) GAS {fv}sccm 설정', params=('FLOW_SET', {'channel': c, 'value': fv}),
-                          ref=f"mfc.{gas.lower()}_flow"),
-                        S("MFC_CMD", f'Ch{c}({gas}) GAS 공급 시작', params=('FLOW_ON', {'channel': c}))]
+            out += gas_flow_steps(sc, gas, info["channel"], fv)
+    return out
+
+
+# ───────────── 가스 단계 — 공정 중 값 바꾸기(규칙 C, 2026-11-19 D420) ─────────────
+def gas_of_key(sc: StepCfg, key: str) -> Optional[tuple]:
+    """공정 중 수정 항목 키('mfc.o2_flow') → (가스 이름 'O2', MFC 채널) — 가스 유량 항목이 아니면 None."""
+    if not (key.startswith("mfc.") and key.endswith("_flow")):
+        return None
+    name = key[4:-5].upper()
+    info = sc.gas_info.get(name)
+    return (name, int(info["channel"])) if info else None
+
+
+def gas_up_levels(levels, cur: float, new: float) -> List[float]:
+    """흐르는 중 값을 올릴 때 거칠 중간값 — 지금 설정값 < 중간값 < 새 값(작은 순서). 내리거나 같으면 [](바로)."""
+    return [float(lv) for lv in (levels or ()) if float(cur) < float(lv) < float(new)]
+
+
+def _gas_group(steps: List[ProcessStep], f: int, c: int) -> Optional[tuple]:
+    """목표 FLOW_SET(steps[f]) 이 속한 가스 묶음의 (처음, 끝+1) — 같은 블록·같은 채널의 ref 없는 FLOW_SET/FLOW_ON 들 + 목표 + 그 FLOW_ON."""
+    def flow(s, cmds=("FLOW_SET", "FLOW_ON")):
+        return s.action == "MFC_CMD" and s.params[0] in cmds and int(s.params[1].get("channel", -1)) == c
+    if not (0 <= f < len(steps) and flow(steps[f], ("FLOW_SET",))) or f + 1 >= len(steps) or not flow(steps[f + 1], ("FLOW_ON",)):
+        return None
+    g0 = f
+    while g0 - 1 >= 0 and flow(steps[g0 - 1]) and steps[g0 - 1].block == steps[f].block and not steps[g0 - 1].ref:
+        g0 -= 1
+    return g0, f + 2
+
+
+def restep_gas(steps: List[ProcessStep], insts: list, sc: StepCfg, key: str, value: float, start: int,
+               block: Optional[int] = None) -> tuple:
+    """아직 시작 안 한(처음 스텝 ≥ start) 가스 묶음을 새 목표 value 기준으로 다시 펼친다(규칙 C — 단계 설정이 있으면 중간값도 새로).
+    (새 스텝 목록, 바뀐 묶음 수). insts(BlockInst)의 first_step·n_steps 도 늘고 준 만큼 고친다. 이미 시작한 묶음은 건드리지 않는다.
+    block 을 주면 그 블록(BlockInst 순번)의 묶음만."""
+    gc = gas_of_key(sc, key)
+    if gc is None:
+        return steps, 0
+    gas, c = gc
+    out = list(steps)
+    changed = 0
+    f = len(out) - 1
+    while f >= max(0, start):
+        s = out[f]
+        if s.ref == key and s.action == "MFC_CMD" and s.params[0] == "FLOW_SET" and (block is None or s.block == block):
+            g = _gas_group(out, f, c)
+            if g is not None and g[0] >= start:
+                g0, g1 = g
+                new = gas_flow_steps(sc, gas, c, float(value))
+                for x in new:
+                    x.block = s.block
+                delta = len(new) - (g1 - g0)
+                out[g0:g1] = new
+                for inst in insts or ():
+                    if inst.first_step > g0:
+                        inst.first_step += delta
+                    elif inst.first_step <= g0 < inst.first_step + inst.n_steps:
+                        inst.n_steps += delta
+                changed += 1
+                f = g0 - 1
                 continue
-            levels = mids + [fv]
-            for i, lv in enumerate(levels, start=1):
-                last = i == len(levels)
-                out += [S("MFC_CMD", f'Ch{c}({gas}) GAS {lv}sccm 설정 (단계 {i}/{len(levels)})',
-                          params=('FLOW_SET', {'channel': c, 'value': lv}), ref=f"mfc.{gas.lower()}_flow" if last else None),
-                        S("MFC_CMD", (f'Ch{c}({gas}) GAS 공급 시작 ({lv}sccm 도달 대기)' if i == 1
-                                      else f'Ch{c}({gas}) GAS {lv}sccm 도달 대기'), params=('FLOW_ON', {'channel': c}))]
+        f -= 1
+    return out, changed
+
+
+def restep_gas_block(steps: List[ProcessStep], insts: list, sc: StepCfg, key: str, value: float, block: int) -> List[ProcessStep]:
+    """그 블록의 가스 묶음을 value 기준으로(지난 묶음 포함 — 시퀀스 편집·재시작 뒤 다시 펼칠 때 기억한 모양 그대로 만들기)."""
+    return restep_gas(steps, insts, sc, key, value, 0, block=block)[0]
+
+
+def apply_overrides(steps: List[ProcessStep], insts: list, sc: StepCfg, overrides: Mapping[str, Any], start: int,
+                    set_value) -> List[ProcessStep]:
+    """수정값(overrides)을 아직 안 온 스텝(≥ start)에 — 가스 유량은 묶음을 다시 펼치고(restep_gas), 그 밖은 ref 스텝 값만(set_value).
+    시퀀스 편집·재시작 뒤 이어가기(다시 펼치기)가 공정 중 값 바꾸기와 같은 결과가 되게 한 곳에서."""
+    out = steps
+    for key, v in (overrides or {}).items():
+        if key == "process.main_remaining":
+            continue
+        if gas_of_key(sc, key) is not None:
+            out, _n = restep_gas(out, insts, sc, key, float(v), start)
+            continue
+        for s in out[max(0, start):]:
+            if s.ref == key:
+                set_value(s, v)
     return out
 
 

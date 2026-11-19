@@ -22,6 +22,7 @@ import math
 from typing import Any, Dict, Optional
 
 from v2.ch12 import blocks as BK
+from v2.ch12 import process_steps as PS
 from v2.ch12.process_list import USE_KEYS, derive_params, plan_runs
 
 _CH = {"ar_flow": 1, "o2_flow": 2, "n2_flow": 3}
@@ -118,11 +119,25 @@ class AdjustMixin:
         old = self.overrides.get(ai.key)
         if old is None:
             old = self._step_value((past or fut)[-1] if past else fut[0])
-        why = self._gas_step_conflict(ai, fut, v)
-        if why:
-            self.reject_detail = why
-            self._rec(device, item, old, v, source, "rejected", "ADJUST_GAS_STEP", by)
-            return "ADJUST_GAS_STEP"
+        gas, c, levels = self.gas_levels_of(ai.key) if ai.device == "mfc" else (None, None, ())
+        if levels:                                          # 단계 설정이 있는 가스 — 규칙 C(D420, process_gas_steps)
+            busy = self._gas_busy(gas, c)
+            if busy:
+                self.reject_detail = busy
+                self._rec(device, item, old, v, source, "rejected", "ADJUST_GAS_STEP", by)
+                return "ADJUST_GAS_STEP"
+            if fut:
+                self.gas_restep_future(ai.key, v)          # 아직 안 한 가스 주입 — 새 목표로 묶음(중간값 포함) 다시 펼침
+            ups = PS.gas_up_levels(levels, float(old or 0.0), v) if past else []
+            self.overrides[ai.key] = v
+            self.adjusted[ai.key] = {"by": by, "t": self.clock.wall(), "source": source}
+            if ups:                                         # 흐르는 중 올림 — 중간값을 작은 순서대로(각 도달 판정) 뒤 새 값
+                self._rec(device, item, old, v, source, "applied", None, by)
+                self.gas_steps_start(ai, gas, c, ups, v, old, source, by)
+                return None
+            live = bool(past) and self._apply_live(ai, v, old, source, by)   # 내림·중간값 없음 — 바로(예전과 같음)
+            self._rec(device, item, old, v, source, "applied" if live else "scheduled", None, by)
+            return None
         for s in fut:
             self._set_step_value(s, v)
         self.overrides[ai.key] = v
@@ -130,24 +145,6 @@ class AdjustMixin:
         live = bool(past) and self._apply_live(ai, v, old, source, by)
         self._rec(device, item, old, v, source, "applied" if live else "scheduled", None, by)
         return None
-
-    def _gas_step_conflict(self, ai, fut: list, v: float) -> str:
-        """아직 안 한 가스 주입의 목표 유량을 바꿀 때 — 가스 단계 설정(PROCESS_GAS_STEP_LEVELS, v1 main 27decba)의 '목표보다 작은
-        중간값' 구성이 바뀌면 거부(D417). 펼친 중간 단계(FLOW_SET·FLOW_ON)는 설정 값 그대로라 목표만 바꾸면 v1 규칙(작은 순서로
-        올라감)이 깨진다(예 10 → 9.2 면 9.0 → 9.5 → 9.2). 구성이 같으면(10 → 12) 목표만 바꾼다. 이미 지난 가스 주입은 해당 없음."""
-        if ai.device != "mfc" or ai.item not in _CH or not fut:
-            return ""
-        from v2.ch12.process_steps import GAS_INFO_DEFAULT, gas_step_cfg
-        gas = next((g for g in GAS_INFO_DEFAULT if g.lower() == ai.item[:-len("_flow")]), "")
-        levels, err = gas_step_cfg(self.cfg, self.n)
-        lv = levels.get(gas, ()) if not err else ()
-        for s in fut:
-            cur = float(self._step_value(s) or 0.0)
-            a, b = [x for x in lv if x < cur], [x for x in lv if x < v]
-            if a != b:
-                return (f"{gas} {cur:g} → {v:g} sccm: 가스 단계 설정 {list(lv)} 의 중간값이 {a} → {b} 로 바뀜 — "
-                        "아직 안 한 가스 주입은 단계가 같은 범위에서만 바꿀 수 있음(레시피를 고쳐 다시 시작)")
-        return ""
 
     # 장비 최대 — 공정 시작(start)이 목표를 자르던 한도(v1 설정)와 같은 것. 파워는 이 값을 넘으면 거부한다(고쳐 쓰지 않음).
     # RF Pulse 는 v1 에 펄스 전용 최대가 없어 RF 계열 최대(RF_MAX_POWER)를 쓴다(결정 D402 — 사용자 확인 필요).
@@ -221,7 +218,8 @@ class AdjustMixin:
             val = self.runner.remaining_s() if scope == "live" and ai.key == "process.main_remaining" else \
                 self.overrides.get(ai.key, recipe)
             out.append({"device": ai.device, "item": ai.item, "value": val, "recipe": recipe, "scope": scope, "max": self.adjust_max(ai),
-                        "adjusted": dict(self.adjusted[ai.key]) if ai.key in self.adjusted else None})
+                        "adjusted": dict(self.adjusted[ai.key]) if ai.key in self.adjusted else None,
+                        "stepping": self.gas_stepping_state(ai.key)})          # 규칙 C — 흐르는 중 단계 진행(없으면 None)
         return out
 
     # ═══════════════════════ 블록 건너뛰기 ═══════════════════════
@@ -346,11 +344,19 @@ class AdjustMixin:
                 bl = run.blocks(self.blocks)
                 steps, insts = BK.expand(bl, self.cfg, self.n, caps=self.caps)
                 r = self.runner
+                # 규칙 C(D420): 지난·지금 블록의 가스 묶음은 그때 다시 펼친 모양 그대로(gas_plan), 남은 묶음은 수정값으로 다시 펼친다
+                upto = (r.steps[r.idx].block + 1) if 0 <= r.idx < len(r.steps) else 0
+                steps = self.apply_gas_plan(steps, insts, self.gas_plan, below_block=upto)
                 for s, old in zip(steps[:r.idx + 1], r.steps[:r.idx + 1]):
                     s.value, s.params, s.duration = old.value, old.params, old.duration   # 지난 스텝·수정값 유지
-                for s in steps[r.idx + 1:]:
-                    if s.ref in self.overrides and s.ref != "process.main_remaining":
-                        self._set_step_value(s, self.overrides[s.ref])
+                sc_now = self._sc_now()
+                before = {id(x) for x in steps}
+                steps = PS.apply_overrides(steps, insts, sc_now, self.overrides, r.idx + 1, self._set_step_value)
+                plan = {kb: v for kb, v in self.gas_plan.items() if kb[0] < upto}
+                for x in steps[r.idx + 1:]:
+                    if id(x) not in before and x.ref and PS.gas_of_key(sc_now, x.ref) is not None:
+                        plan[(x.block, x.ref)] = float(x.params[1]["value"])
+                self.gas_plan = plan
                 r.steps = steps
                 self.cur_steps, self.cur_insts = steps, insts
                 if self.cur_inst is not None and not self.cur_inst.auto:
