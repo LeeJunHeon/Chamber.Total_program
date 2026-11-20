@@ -848,5 +848,28 @@ DECISIONS += [
                   "1~5 mTorr 3.5~17 s, 시험대 CH1 Ar 20·CH1 Ar 20 + O2 1.5·CH2 Ar 20 + O2 10 각각 30 mTorr 대기 26.6~27.7 s·SP2 부스트 22.7 s, 메인 공정 압력 2.000 mTorr, "
                   "편차 카드 0. 실장비 경로 영향 없음 — 두 상수는 sim 패키지(sim/chamber.py·sim/mfc_sim.py)만 읽는다(시험이 확인). 가정값이지 장비 사실이 아님.",
          reason="사용자 지시 2026-11-20(sim 압력 모델 보정)", confirm=False,
-         where="v2/ch12/sim/chamber.py(TORR_PER_SCCM·THROTTLE_MIN); v2/tests/test_sim_pressure_model.py"),
+         where="v2/ch12/sim/chamber.py(TORR_PER_SCCM·THROTTLE_MIN); v2/tests/test_sim_pressure_model.py"),    dict(id="D425", title="2026-11-20 PLC 버튼 — 잠그지 않고 확인창·기록 강화(공정 중 빨간 줄·위험 두 갈래·누가·버튼마다 사건 하나)",
+         decision="사용자 결정: PLC 버튼은 공정 중에도 누를 수 있게 둔다(잠그지 않음). 대신 ① 확인창(웹·노트북 같은 부품 — 챔버12 확인창 Ch12Confirm, "
+                  "그 밖의 확인창은 챔버K 것 그대로): 그 버튼의 챔버가 공정 중이면 맨 위 빨간 줄 'CH1 공정 중 — 지금 블록 · 공정 이름'(챔버 = 묶음 "
+                  "plcButtons.procChamber — 챔버 버튼은 그 챔버, 공유 버튼 중 공정이 쓰는 건 셔터 G1~G3·Power Select(SW_RF_SELECT·SW_POWER_SELECT)는 "
+                  "그 장비를 쓰는 CH2, 로드락·부저는 없음 / 공정 이름 = 엔진 화면 상태 process_name — 장비 기록과 같은 값). 위험 표시를 넓혀 두 갈래로"
+                  "(묶음 hazard{on, off} — 켤 때·끌 때): 사람 위험 = 벤트·도어·게이트(여닫기 모두 — 손 끼임)·로드락 핀·척 모터(정지 빼고), 장비 위험 = "
+                  "터보·로터리(로드락 포함) 끄기, 포어라인·러핑(로드락 포함)·메인 밸브(여닫기 모두), Power Select(켜고 끄기 모두) — DC Pulse 출력 중"
+                  "(ch2.dcpulse.out_on) SW_RF_SELECT 켜기는 'RF 전용 릴레이' 문구를 하나 더. 문구는 장비 commands.HAZARD_TEXT(묶음 plcHazardText)가 원본. "
+                  "공정 중·위험이면 실행 버튼 빨강, 아래에 기록 안내(웹 = 로그인한 이름·계정, 노트북 = '노트북'). ② 누가: 웹은 로그인한 사람 이름 — "
+                  "웹 서버(명령 API)가 명령 정의가 by_name 인자를 선언한 명령(PLC_BUTTON 만)에 세션 이름을 넣는다(브라우저가 보낸 값은 버림 — 꾸밀 수 "
+                  "없게, 계정은 requestedBy), 노트북은 로그인이 없어 '노트북', 이름이 없으면 계정(이메일이면 @ 앞). ③ 장비: PLC 버튼마다 사건 하나 "
+                  "command/plc_button(plc_manual 대체 — 공정 중일 때만 남던 것을 늘) — data {버튼·코일·짧은 이름·켬/끔·by(계정)·by_name·origin(web·"
+                  "local)·who·결과(done·failed·rejected)·사유·위험·그 챔버 공정 상태(누른 순간 — busy·블록 번호·블록·공정 이름)}, 받은 명령은 PLC 쓰기가 "
+                  "끝날 때(성공·실패·시간 초과) 한 번, 받지 않은 명령(인자·bench·PLC 끊김)은 그 자리에서. 수준·코드: 실행 info PLC_BUTTON(공정 중 "
+                  "PLC_MANUAL_IN_PROCESS) · 쓰기 실패 warn PLC_BUTTON_FAILED · 거부 warn 거부 사유. 장비 로그(SYSTEM 일자 로그, 출처 PLC)에 늘, 공정 중이면 "
+                  "그 챔버 공정 로그(txt·화면 로그 — 출처 PLC)에도 한 줄: 'PLC 버튼 · CH1 터보 펌프 끔 · 홍길동(웹, 계정) (CH1 공정 중 · 블록 · 레시피 이름)'. "
+                  "④ 화면 로그: 'PLC 버튼 · CH1 벤트 켬 · 홍길동(웹)', 공정 중이면 '(CH1 공정 중 · 블록)', 거부·실패면 '— 거부: 이유'(장비 문구, 없으면 "
+                  "사유 이름), 그 챔버 탭(사건 chamber — 공유 버튼은 공정 챔버, 로드락·부저는 공통), 계정은 상세 원시 줄에만, 같은 일 두 줄 막기로 "
+                  "'PLC 버튼 — 받음' 명령 결과 줄은 상세에만. 챔버K 화면·로그 줄(chk/text·kit)은 그대로 — 챔버12 로그 줄(Ch12Logs)에서 처리. "
+                  "묶음 EXPORT_VERSION 15(plcButtons short·procChamber·hazard, plcHazardText, PLC_BUTTON 인자 by_name, eventKinds command/plc_button).",
+         reason="사용자 결정·지시 2026-11-20(PLC 버튼 — 잠그지 않고 확인창·기록 강화)", confirm=False,
+         where="v2/ch12/commands.py(PlcButton·HAZARD_TEXT·PLC_BUTTON by_name); v2/ch12/plc_button_log.py; v2/ch12/core.py(_plc_command); "
+               "v2/ch12/web_schema.py(15); v2/ch12/process_view.py(state_dict process_name); vanam-process components/ops2/ch12/Ch12Hmi.tsx·"
+               "Ch12Confirm.tsx·Ch12Logs.tsx·logic.ts, lib/ops2/commandArgs.ts, app/api/ops2/[equipment]/v1/command/route.ts"),
 ]

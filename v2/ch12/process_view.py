@@ -125,7 +125,9 @@ class ProcessViewMixin:
                 "block_count": len(self.blocks), "recipe_rev": self.seq.rev if self.seq else 0,
                 "queue": {"index": self.run_idx, "total": len(self.runs), "mode": self.queue_mode},
                 "eta_remaining_s": self.eta_remaining_s(), "min_total_s": self.min_total_s(), "error": self.error,
-                "adjust": self.adjust_state(), "last_result": self.last_result}
+                "adjust": self.adjust_state(), "last_result": self.last_result,
+                # 지금 공정 이름(공정 중일 때만 — PLC 버튼 확인창 'CH1 공정 중 — 블록 · 이름', 장비 기록과 같은 값 — D425)
+                "process_name": (str(self.params.get("process_name") or self.recipe_name or "") or None) if self.busy else None}
 
 
     # ═══════════════════════ 저널(journal.py 가 1초마다 싣는 값) ═══════════════════════

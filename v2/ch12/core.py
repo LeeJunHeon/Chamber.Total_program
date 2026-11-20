@@ -29,6 +29,7 @@ from v2.common.commands import Source
 from v2.common.worker import Status
 from v2.ch12 import commands as C
 from v2.ch12 import process_states as PS
+from v2.ch12.plc_button_log import PlcButtonLog
 
 LOCK_FREE = frozenset({"PROCESS_STOP", "PC_STOP", "TSP_STOP", "ALL_STOP", "POWER_OFF_ONLY"})
 SRC_WORD = {Source.WEB: "web", Source.HMI: "local", Source.ROBOT: "robot", Source.INTERNAL: "internal"}
@@ -69,6 +70,8 @@ class Ch12Core:
         self._lock = threading.RLock()
         self.last_ui_params: Dict[str, dict] = {}       # 마지막 화면 값(프리스퍼터 'UI 현재값' — v1 화면 칸 자리)
         self.counts: Dict[str, int] = {}
+        self.plc_log = PlcButtonLog(system, self.proc)   # PLC 버튼마다 사건 하나 + 장비 로그·공정 로그(D425)
+        self._plc_cur: Optional[dict] = None              # 지금 처리 중인 PLC 버튼(누른 순간 — 처리기가 쓰기 결과에 붙인다)
         self.handlers: Dict[str, Callable[[dict, Source, str], Any]] = self._handlers()
 
     @property
@@ -93,6 +96,11 @@ class Ch12Core:
             return CmdResult(False, "SOURCE_NOT_ALLOWED", f"출처 {source!r}")
         by = str(by) if by else self.default_by(src, a)
         self.counts[kind] = self.counts.get(kind, 0) + 1
+        if kind == "PLC_BUTTON":
+            return self._plc_command(a, src, by)
+        return self._command(kind, a, src, by)
+
+    def _command(self, kind: str, a: dict, src: Source, by: str) -> CmdResult:
         try:
             if kind in LOCK_FREE or kind.startswith("ROBOT_"):
                 value = self._run(kind, a, src, by)
@@ -105,6 +113,20 @@ class Ch12Core:
             self._emit("command", "internal_error", f"{kind}: {e!r}", "error", "INTERNAL_ERROR")
             return CmdResult(False, "INTERNAL_ERROR", repr(e)[:DETAIL_MAX])
         return CmdResult(True, None, "", value)
+
+    def _plc_command(self, a: dict, src: Source, by: str) -> CmdResult:
+        """PLC 버튼(D425) — 누른 순간(대상·누가·그 챔버 공정 상태)을 잡고, 받지 않으면(인자·상태·bench·PLC 끊김) 그 자리에서,
+        받으면 PLC 쓰기가 끝날 때(처리기 on_done) 사건 하나·장비 로그·(공정 중이면) 공정 로그."""
+        with self._lock:
+            data = self.plc_log.begin(a, src, by)
+            self._plc_cur = data
+            try:
+                r = self._command("PLC_BUTTON", a, src, by)
+            finally:
+                self._plc_cur = None
+        if not r.ok:
+            self.plc_log.finish(data, "rejected", r.reason, r.detail)
+        return r
 
     def _run(self, kind: str, a: dict, src: Source, by: str) -> Any:
         c = C.get(kind)
@@ -542,13 +564,17 @@ class Ch12Core:
         def plc_button(a, src, by):
             if not self._plc_up():
                 raise Rejected("LINK_DOWN", "PLC 연결 없음")
-            b = {x.target: x for x in C.PLC_BUTTONS}[a["target"]]
+            b = C.PLC_BY_TARGET[a["target"]]
             on = bool(a["on"])
-            busy = [ch for ch, e in self.proc.items() if e is not None and e.busy]
-            if busy:
-                self._emit("command", "plc_manual", f"공정 중 PLC 버튼 {b.name} → {on}({w[src]} {by}, 공정 {','.join(busy)})",
-                           "info", "PLC_MANUAL_IN_PROCESS")
-            self.sys.shared.plc.proxy(w[src].upper()).write_switch(b.name, on)
+            data = self._plc_cur if self._plc_cur is not None else self.plc_log.begin(a, src, by)
+
+            def done(res) -> None:                      # PLC 쓰기 끝(성공·실패·시간 초과) — 사건 하나(D425)
+                if getattr(res, "status", None) == Status.OK:
+                    self.plc_log.finish(data, "done")
+                else:
+                    self.plc_log.finish(data, "failed", str(getattr(res, "reason", None) or getattr(res, "status", "") or ""),
+                                        str(getattr(res, "error", None) or ""))
+            self.sys.shared.plc.proxy(w[src].upper()).write_switch(b.name, on, on_done=done)
         h["PLC_BUTTON"] = plc_button
 
         def buzz_stop(a, src, by):

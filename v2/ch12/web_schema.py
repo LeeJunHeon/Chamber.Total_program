@@ -9,7 +9,8 @@
                 v1 근거·설명·webLocked(웹에서 못 바꾸는 키 — RUN_MODE·EQUIPMENT_ID·UPLINK_IN_SIM)). 비밀값은 default·current·
                 stored·pending 모두 null. float 형식 설정값은 늘 float.
   crossRules    키 사이 규칙 설명 · dropped v2 에서 뺀 v1 키(이유·v1 근거·대체 키)
-  commands      명령(종류·출처·역할·허용 상태·인자·benchOk …) · preconditions · reasons(사유 코드) · plcButtons
+  commands      명령(종류·출처·역할·허용 상태·인자·benchOk …) · preconditions · reasons(사유 코드) · plcButtons ·
+                plcHazardText(PLC 버튼 확인창 위험 문구 — D425)
                 — 4단계 commands.py 의 public()(또는 COMMANDS 각 항목의 public()). 그 모듈이 아직 없으면 빈 목록.
   recipe        v1 행 레시피 열·E230 행 값 검사 표(web_blocks.definitions().recipe)
   blocks        블록 정의·값 사이 규칙·끝 정지 부분·시퀀스 편집·이어가기 확인(web_blocks.definitions().blocks) + version
@@ -64,6 +65,9 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
      HUB_KEEP_MAIN(화면 연결 때 다시 보내는 기본 보기 줄, 챔버마다 300), 블록 gas_intro 설명(단계 설정), 거부 사유 ADJUST_GAS_STEP.
   14 2026-11-19 마무리(D420·D421) — params: SIM_MFC_START_SP_MTORR 기본 0,0,30,30,0(sim SP3·SP4 30 mTorr), 거부 사유 ADJUST_GAS_STEP 문구
      (규칙 C — 같은 가스의 단계 진행 중·그 가스 주입 중), state 의 공정 중 값 바꾸기 항목에 stepping(묶음 정의 밖).
+  15 2026-11-20 PLC 버튼 확인창·기록(D425) — plcButtons 에 short(짧은 이름)·procChamber(닿는 공정 챔버 — 건 셔터·Power Select 는 CH2)·
+     hazard{on, off}(사람·장비 위험), plcHazardText(확인창 위험 문구 — 사람·장비·RF 전용 릴레이), PLC_BUTTON 인자 by_name(웹 서버가 넣는
+     로그인 이름), eventKinds command/plc_button(누를 때마다 하나 — plc_manual 대체), 사유 PLC_BUTTON·PLC_BUTTON_FAILED.
 """
 from __future__ import annotations
 
@@ -79,7 +83,7 @@ from v2.ch12 import snapshot_fields as SF
 from v2.ch12 import web_blocks as WB
 from v2.ch12.hub import optional_module
 
-EXPORT_VERSION = 14
+EXPORT_VERSION = 15
 
 # 웹이 받는 공정 이벤트(엔진이 system.emit(source="process:<c>", kind, event=data) 로 내는 것 — hub 가 run_* 메시지로 바꾼다)
 EVENTS: tuple = (
@@ -147,11 +151,12 @@ EVENT_KINDS: tuple = (
     ("uplink", "uplink_gap", "웹으로 올릴 메시지 놓침", _M), ("uplink", "uplink_spool_loaded", "지난 실행 메시지 이어 올림", _D),
     ("uplink", "uplink_bad_command", "웹 명령 형식 오류", _M), ("uplink", "uplink_spool_error", "보관함 쓰기 실패", _M),
     # 4단계 — 조립에 붙은 모듈이 내는 것(공정 모니터·OES 이상·로봇 요청 공정 기록·로봇 오류 보고·재시작 이어감·안전·명령)
+    # PLC 버튼(D425 — 누를 때마다 하나: 누가·켬/끔·결과·그 챔버 공정 상태, plc_manual 대체)
     ("process", "monitor_card", "공정 모니터 알림(유량·압력 편차·Arc·REFP)", _M), ("oes", "anomaly", "OES 이상", _M),
     ("robot", "client_process", "로봇 요청 공정 기록", _M), ("robot", "error_event", "로봇 명령 오류", _M),
     ("robot_server", "error_event", "로봇 서버 오류", _M), ("process", "resumed", "재시작 뒤 공정 이어감", _M),
     ("safety", "step", "안전 조치 단계", _D), ("safety", "error", "안전 조치 오류", _M),
-    ("command", "plc_manual", "공정 중 PLC 버튼", _M), ("command", "internal_error", "명령 처리 오류", _M),
+    ("command", "plc_button", "PLC 버튼", _M), ("command", "internal_error", "명령 처리 오류", _M),
     ("ui", "log_clear", "화면 로그 지우기", _D), ("heater", "panel_result", "히터 패널 결과", _M),
     ("thickness", "panel_result", "두께 패널 결과", _M), ("robot_api", "bind_failed", "내부 명령 API 포트 실패", _M),
     ("thickness", "window", "두께 Factor·재료 창 값", _D),
@@ -241,13 +246,13 @@ def _public(mod, name: str) -> Any:
 
 
 def commands_part() -> Dict[str, Any]:
-    out: Dict[str, Any] = {"commands": [], "preconditions": [], "reasons": [], "plcButtons": []}
+    out: Dict[str, Any] = {"commands": [], "preconditions": [], "reasons": [], "plcButtons": [], "plcHazardText": {}}
     C = optional_module("v2.ch12.commands")
     if C is None:
         return out
     got = _public(C, "COMMANDS")
     if isinstance(got, dict):
-        out.update({k: list(got.get(k) or []) for k in out})
+        out.update({k: (dict(got.get(k) or {}) if isinstance(out[k], dict) else list(got.get(k) or [])) for k in out})
     else:
         out["commands"] = list(got)
     return out
@@ -295,7 +300,7 @@ def definitions() -> Dict[str, Any]:
         "dropped": [{"key": d.key, "reason": d.reason, "v1Source": d.v1_source, "replacedBy": d.replaced_by}
                     for d in t.dropped],
         "commands": cmd["commands"], "preconditions": cmd["preconditions"], "reasons": cmd["reasons"],
-        "plcButtons": cmd["plcButtons"],
+        "plcButtons": cmd["plcButtons"], "plcHazardText": cmd["plcHazardText"],
         "recipe": wb["recipe"],
         "blocks": dict(wb["blocks"], version=wb["version"], cfg=wb["cfg"]),
         "adjust": wb["blocks"]["adjust"],

@@ -80,6 +80,8 @@ CH12_REASONS: tuple = (
     Reason("RESIDUAL_POWER_KEPT", "시작 때 파워가 남아 있으나 공정·운전 중이라 끄지 않음", "info"),
     Reason("POWER_OFF_ONLY", "의도적 종료 — 파워 출력만 끔(PLC 릴레이·MFC 그대로)", "info"),
     Reason("PLC_MANUAL_IN_PROCESS", "공정 중 PLC 버튼 실행(기록)", "info"),
+    Reason("PLC_BUTTON", "PLC 버튼 실행(기록 — 공정 중이 아닐 때)", "info"),
+    Reason("PLC_BUTTON_FAILED", "PLC 버튼 쓰기 실패(PLC 응답 오류·시간 초과)", "fail"),
     Reason("LOG_CLEAR", "화면 로그 지우기(장비 동작 없음)", "info"),
 )
 
@@ -130,10 +132,18 @@ class PlcButton:
     name: str              # plc_map.COIL_MAP 이름(write_switch)
     label: str
     chamber: str           # ch1 · ch2 · loadlock · shared
+    short: str = ""        # 로그·확인창 이름(코일 이름 없이 — 'CH1 벤트'·'건 셔터 G1'·'로드락 4핀 올림')
+    proc_chamber: Optional[str] = None   # 이 버튼이 닿는 공정 챔버(ch1·ch2 — 공유 버튼은 그 장비를 쓰는 챔버, 로드락·부저는 없음)
+    hazard_on: Optional[str] = None      # 켤 때 위험 분류 — person(사람)·equipment(장비)·None
+    hazard_off: Optional[str] = None     # 끌 때 위험 분류
+
+    def hazard(self, on: bool) -> Optional[str]:
+        return self.hazard_on if on else self.hazard_off
 
     def public(self) -> dict:
         return {"target": self.target, "name": self.name, "label": self.label, "chamber": self.chamber,
-                "coil": PM.COIL_MAP[self.name]}
+                "coil": PM.COIL_MAP[self.name], "short": self.short, "procChamber": self.proc_chamber,
+                "hazard": {"on": self.hazard_on, "off": self.hazard_off}}
 
 
 _WORDS = (("R_P_", "로터리 펌프"), ("R_V_", "러핑 밸브"), ("F_V_", "포어라인 밸브"), ("M_V_", "메인 밸브"),
@@ -165,8 +175,51 @@ def _button_chamber(name: str) -> str:
     return "shared"
 
 
-PLC_BUTTONS: tuple = tuple(PlcButton(n.lower(), n, _button_label(n), _button_chamber(n))
+def _button_short(name: str, chamber: str) -> str:
+    """코일 이름 없는 짧은 이름 — 챔버 버튼은 'CH1 벤트', 건 셔터는 번호('건 셔터 G1'), 나머지는 이름 그대로."""
+    base = _button_label(name).rsplit(" (", 1)[0]
+    if name.startswith("SHUTTER_"):
+        return f"건 셔터 G{name.split('_')[1]}"
+    return f"{chamber.upper()} {base}" if chamber in ("ch1", "ch2") else base
+
+
+def _button_proc_chamber(name: str, chamber: str) -> Optional[str]:
+    """공정 챔버 — 챔버 버튼은 그 챔버, 공유 버튼 중 공정이 쓰는 건 셔터(G1~G3)·Power Select(SW_RF_SELECT·SW_POWER_SELECT)는
+    그 장비를 쓰는 CH2(블록 정의 — 건 셔터는 CH2 건, Power Select 블록·파워 켜기 SW_POWER_SELECT 는 CH2), 로드락·부저는 없음."""
+    if chamber in ("ch1", "ch2"):
+        return chamber
+    if name.startswith("SHUTTER_") or name in ("SW_RF_SELECT", "SW_POWER_SELECT"):
+        return "ch2"
+    return None
+
+
+def _button_hazard(name: str) -> Tuple[Optional[str], Optional[str]]:
+    """(켤 때, 끌 때) 위험 분류(2026-11-20 D425). 사람 위험 = 벤트·도어·게이트(여닫기 모두 — 손 끼임)·로드락 핀·척 모터(정지 빼고),
+    장비 위험 = 터보·로터리 끄기, 포어라인·러핑·메인 밸브(여닫기 모두), Power Select(SW_RF_SELECT·SW_POWER_SELECT 켜고 끄기 모두)."""
+    if (name.startswith(("VENT_", "L_VENT", "DOOR_", "G_V_", "L_PIN_")) or
+            (name.startswith("Z_M_P_") and "_STOP" not in name)):
+        return "person", "person"
+    if name.startswith(("TURBO_", "R_P_", "L_R_P_")):
+        return None, "equipment"
+    if name.startswith(("F_V_", "R_V_", "M_V_", "L_R_V_")) or name in ("SW_RF_SELECT", "SW_POWER_SELECT"):
+        return "equipment", "equipment"
+    return None, None
+
+
+HAZARD_TEXT = {
+    "person": "사람 위험 — 벤트·도어·게이트·로드락 핀·척 모터는 사람이 다칠 수 있습니다. 장비 주변·챔버 안·로드락에 사람이 없는지 "
+              "반드시 확인하세요.",
+    "equipment": "장비 위험 — 터보·로터리 끄기, 포어라인·러핑·메인 밸브, Power Select 를 잘못 바꾸면 펌프·밸브·전원 장비가 손상될 수 "
+                 "있습니다. 지금 진공·전원 상태를 확인하세요.",
+    "rf_select_dcp": "지금 DC Pulse 사용 중 — SW_RF_SELECT 는 RF 전용 릴레이라 DC Pulse 사용 중에 켜면 특히 위험합니다. DC Pulse 를 먼저 "
+                     "끄세요.",
+}
+
+PLC_BUTTONS: tuple = tuple(PlcButton(n.lower(), n, _button_label(n), _button_chamber(n),
+                                     _button_short(n, _button_chamber(n)), _button_proc_chamber(n, _button_chamber(n)),
+                                     *_button_hazard(n))
                            for n in PM.COIL_MAP if n.endswith("_SW") or n.startswith("SW_"))
+PLC_BY_TARGET: Dict[str, "PlcButton"] = {b.target: b for b in PLC_BUTTONS}
 POWER_SELECT_COIL = "SW_POWER_SELECT"
 
 
@@ -307,8 +360,10 @@ COMMANDS: tuple = (
       "ui/thickness_factor_dialog.py:33-106·ui/thickness_material_dialog.py:20-90(창을 열 때 파일 읽기)"),
     # ── 공유·프로그램 ──
     C("PLC_BUTTON", "PLC 버튼", "shared", BOTH, (ANY,), ("PLC_LINK_UP",),
-      (_a("target", "enum", enum=tuple(b.target for b in PLC_BUTTONS)), _a("on", "bool")),
-      "v1 PLC 스위치 코일 쓰기(write_switch). 인터락은 PLC 래더. 공정 중 실행은 기록(PLC_MANUAL_IN_PROCESS)",
+      (_a("target", "enum", enum=tuple(b.target for b in PLC_BUTTONS)), _a("on", "bool"),
+       _a("by_name", "str", False, desc="웹 — 로그인한 사람 이름(웹 서버가 넣는다, 화면·기록용 — 계정은 requestedBy)")),
+      "v1 PLC 스위치 코일 쓰기(write_switch). 인터락은 PLC 래더(공정 중에도 누를 수 있음 — 사용자 결정 2026-11-20). "
+      "버튼마다 사건 plc_button 하나(버튼·켬/끔·누가·웹/노트북·결과·그 챔버 공정 상태 — D425), SYSTEM 일자 로그에 늘, 공정 중이면 그 챔버 공정 로그에도",
       "device/plc.py:1747-1830 PLC 명령(door·gate·shutter·vent·turbo·pin·gas·select …)"),
     C("BUZZ_STOP", "부저 정지", "shared", BOTH, (ANY,), ("PLC_LINK_UP",), (),
       "BUZZER_STOP_SW(M01000) 켬 — v1 PlcDriver.buzzer_stop 과 같은 동작(PLC_BUTTON buzzer_stop_sw 와 같은 코일)",
@@ -427,4 +482,5 @@ def public() -> Dict[str, Any]:
             "preconditions": [p.public() for p in PRECONDITIONS],
             "reasons": [{"code": r.code, "label": r.label, "category": r.category} for r in ALL_REASONS],
             "plcButtons": [b.public() for b in PLC_BUTTONS],
+            "plcHazardText": dict(HAZARD_TEXT),
             "localAllKey": LOCAL_ALL_KEY}
