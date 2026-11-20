@@ -173,10 +173,20 @@ class AdjustMixin:
         def confirm(reason: Optional[str]) -> None:
             self._rec(ai.device, ai.item, old, v, source, "confirmed" if reason is None else "failed", reason, by)
         if ai.device == "mfc":
+            # 공정 모니터(D423): 보낼 때 그 항목 판정 쉼 → 확정되면 기준 = 새 값(새 기준에 처음 들어올 때까지 미룸) / 실패면 그대로
+            mk = "pressure" if key == "mfc.wp" else self.mon_key_of_channel(_CH[ai.item])
+            self.mon_hold(mk, "공정 중 값 바꾸기")
+
+            def done(reason: Optional[str]) -> None:
+                if reason is None:
+                    self.mon_set(mk, v, "공정 중 값 바꾸기")
+                else:
+                    self.mon_release(mk)
+                confirm(reason)
             if key == "mfc.wp":
-                a.mfc.sp_set(1, v, owner=a.owner, on_done=lambda k, r, d: confirm(r))
+                a.mfc.sp_set(1, v, owner=a.owner, on_done=lambda k, r, d: done(r))
             else:
-                a.mfc.set_flow(_CH[ai.item], v, owner=a.owner, on_done=lambda k, r, d: confirm(r))
+                a.mfc.set_flow(_CH[ai.item], v, owner=a.owner, on_done=lambda k, r, d: done(r))
             return True
         if key in ("dc.power", "dc2.power", "rf.power"):
             d = a.dc.get(1 if key == "dc.power" else 2) if key != "rf.power" else a.rf

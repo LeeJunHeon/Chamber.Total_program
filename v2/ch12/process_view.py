@@ -24,6 +24,7 @@ from v2.ch12 import blocks as BK
 class ProcessViewMixin:
     # ───────── 블록 추적(StepRunner.on_step) ─────────
     def on_step(self, idx: int, step, shutdown: bool) -> None:
+        self.mon_on_step(idx, step, shutdown)              # 공정 모니터 기준 = 확정된 목표(D423 — monitor_targets)
         if shutdown:
             return
         run = self.runs[self.run_idx]

@@ -31,6 +31,16 @@ v2 방식(전송만 다름)
 - 엑셀 저장 Arc 경고(v1 gdrive_logger _send_arc_chat — 같은 MONITOR 웹훅, 텍스트 '⚠️ *CH{n} Arc 경고*…')도 monitor_card 로
   (attach 가 engine.excel.on_arc_alert 에 꽂는다 — 엑셀은 DEV_MODE 면 저장 자체를 생략, v1 그대로).
 
+기준 = 지금 장비에 확정된 목표(2026-11-19 D423 — v1 은 activate 의 레시피 값 하나): 가스 유량(Ar·O2·N2)·작업 압력(SP1) 기준은
+  공정이 실제로 확정한 값을 따라간다 — 러너가 가스 묶음(FLOW_SET → FLOW_ON 도달)·SP1_SET 을 마치면 그 값(레시피·예약한 공정 중 값·
+  시퀀스 편집·재시작 뒤 다시 펼친 스텝 모두 이 길 — 엔진 monitor_targets), 공정 중 바로 바꾸기·가스 단계(규칙 C)는 보낼 때부터 확정까지
+  판정을 쉬고(hold) 확정되면 새 값(set_target)·실패면 기준 그대로(release). 판정 중(셔터 열림)에 기준이 바뀌면 실제 값이 새 기준 안에
+  처음 들어올 때까지(또는 한도 — 압력 MFC_PRESSURE_TIMEOUT_SEC, 유량 180 × MFC_STABILIZATION_INTERVAL_MS) 판정을 미룬다(옮겨 가는 동안의
+  거짓 알림 막기 — 공정 중 바로 바꾼 값은 셔터 전이라도, 셔터 열기 전 레시피 길은 v1 처럼 바로). 가스 유량을 바꾸면(공정 중 바로
+  바꾸기는 언제나, 러너 스텝은 판정 중일 때) 압력도 잠깐 흔들리므로 그동안 압력 판정도 쉬고,
+  유량이 확정되면 압력은 기준 그대로 같은 방식으로 다시 판정(rearm). 기준이 바뀔 때 그 항목에 열린 편차 사건은 카드 없이 'Monitor'
+  로그 한 줄로 닫는다('O2 flow 기준 10 → 8 — 공정 중 값 바꾸기, 편차 사건 닫음'). 새 값에 도달한 뒤의 편차는 예전처럼 알림('세팅' = 새 값).
+
 붙이는 법(조립 — 엔진을 만든 뒤): mon = attach(system, engine). system.event_listeners 에 on_event, engine.shutter_listeners 에
   on_shutter, engine.excel.on_arc_alert 에 excel_arc_alert 를 넣는다(엔진은 Main Shutter 명령이 확인될 때 shutter_listeners 를
   부른다). detach() 로 뗀다.
@@ -155,6 +165,8 @@ class ProcessMonitor:
         self._targets: Dict[str, float] = {}
         self._active = False
         self._dev: Dict[str, _Excursion] = {}
+        self._hold: Dict[str, Dict[str, str]] = {}  # 판정 쉬는 항목 → {쉬게 한 쪽: 사유}(바꾸는 중 — D423)
+        self._arm: Dict[str, float] = {}            # 새 기준에 처음 들어올 때까지 판정을 미루는 항목 → 한도(단조 시각)
         self._lk = threading.RLock()
         self.sent = 0                     # 낸 알림 수(진단·시험)
 
@@ -187,6 +199,8 @@ class ProcessMonitor:
         with self._lk:
             self._targets.clear()
             self._dev.clear()
+            self._hold.clear()
+            self._arm.clear()
             self._active = False
             if not params.get("use_ms", False):
                 return
@@ -226,15 +240,97 @@ class ProcessMonitor:
     # ── 체크 ──
     def check_flow(self, gas: str, value: float) -> None:
         with self._lk:
-            if not self._active or gas not in self._targets:
+            if not self._active or gas not in self._targets or self._skip(gas, float(value), self._flow_tol()):
                 return
             self._observe(gas, f"{gas} flow", "sccm", 2, self._targets[gas], float(value), self._flow_tol())
 
     def check_pressure(self, value: float) -> None:
         with self._lk:
-            if not self._active or "pressure" not in self._targets:
+            if not self._active or "pressure" not in self._targets or self._skip("pressure", float(value), self._pressure_tol()):
                 return
             self._observe("pressure", "Pressure", "mTorr", 3, self._targets["pressure"], float(value), self._pressure_tol())
+
+    # ── 기준 = 지금 확정된 목표(D423) ──
+    @staticmethod
+    def label_of(key: str) -> str:
+        return "Pressure" if key == "pressure" else f"{key} flow"
+
+    def _skip(self, key: str, value: float, tol: float) -> bool:
+        """바꾸는 중(hold)이면 판정 쉼, 새 기준에 처음 들어오기 전(arm)이면 한도까지 미룸 — 들어오면 그때부터 판정."""
+        if self._hold.get(key):
+            return True
+        until = self._arm.get(key)
+        if until is None:
+            return False
+        if abs(value - self._targets[key]) < tol:
+            self._arm.pop(key, None)
+            return False
+        if self._now() < until:
+            return True
+        self._arm.pop(key, None)                    # 한도까지 못 들어옴 — 이제부터 편차로 판정
+        return False
+
+    def hold(self, key: str, why: str = "", *, by: str = "", only_active: bool = False) -> None:
+        """그 항목 판정을 쉼(바꾸는 명령을 보낸 뒤 확정까지·가스 단계 진행 중 전체). by = 쉬게 한 쪽(같은 항목을 여럿이 쉬게 할 수
+        있음 — 작업 압력 바꾸기와 가스 유량 바꾸기가 겹칠 때). only_active 면 지금 판정 중(셔터 열림)일 때만."""
+        with self._lk:
+            if only_active and not self._active:
+                return
+            self._hold.setdefault(key, {})[by or key] = why or "바꾸는 중"
+
+    def release(self, key: str, *, by: str = "") -> None:
+        """바꾸기 실패 — 기준은 그대로 두고 판정을 다시(실패 알림은 원래 경로)."""
+        with self._lk:
+            self._unhold(key, by)
+
+    def _unhold(self, key: str, by: str) -> bool:
+        h = self._hold.get(key)
+        if not h or (by or key) not in h:
+            return False
+        h.pop(by or key, None)
+        if not h:
+            self._hold.pop(key, None)
+        return True
+
+    def _arm_for(self, key: str, arm_s: float, always: bool = False) -> None:
+        # 판정 중이거나 공정 중 바로 바꾼 값(always)일 때만 미룸 — 셔터 열기 전 레시피 길은 v1 처럼 바로
+        if arm_s > 0 and (always or self._active):
+            self._arm[key] = max(self._arm.get(key, 0.0), self._now() + float(arm_s))
+        else:
+            self._arm.pop(key, None)
+
+    def rearm(self, key: str, arm_s: float, *, by: str, always: bool = False) -> None:
+        """다른 항목 바꾸기(가스 유량)가 확정됨 — by 가 쉬게 했던 이 항목(작업 압력)을 기준은 그대로 두고, 실제 값이 기준 안에 처음
+        들어올 때까지(최대 arm_s) 미룬 뒤 다시 판정(유량이 바뀌면 압력도 잠깐 흔들린다)."""
+        with self._lk:
+            if self._unhold(key, by) and key in self._targets:
+                self._arm_for(key, arm_s, always)
+
+    def set_target(self, key: str, value: float, why: str, *, arm_s: float = 0.0, by: str = "", always: bool = False) -> None:
+        """기준을 확정된 새 값으로. 열린 편차 사건은 카드 없이 로그 한 줄로 닫음. arm_s > 0 이고 판정 중(또는 always — 공정 중 바로
+        바꾼 값)이면 실제 값이 새 기준에 처음 들어올 때까지(최대 arm_s 초) 판정을 미룸(옮겨 가는 동안). 감시하지 않는 항목은 그대로 둠."""
+        with self._lk:
+            self._unhold(key, by)
+            old = self._targets.get(key)
+            if old is None:
+                return
+            v = float(value)
+            self._targets[key] = v
+            ex = self._dev.pop(key, None)
+            self._arm_for(key, arm_s, always)
+            if abs(old - v) > 1e-9 or ex is not None:
+                self._log(f"{self.label_of(key)} 기준 {old:g} → {v:g} — {why}" + (", 편차 사건 닫음" if ex is not None else ""))
+
+    def holding(self, key: str) -> bool:
+        with self._lk:
+            return bool(self._hold.get(key)) or key in self._arm
+
+    def _log(self, text: str) -> None:
+        if self._log_func is not None:
+            try:
+                self._log_func("Monitor", text)
+            except Exception:
+                pass
 
     def _observe(self, key: str, label: str, unit: str, nd: int, target: float, value: float, tol: float) -> None:
         diff = value - target
@@ -357,6 +453,41 @@ class EngineMonitor:
         a = getattr(self.engine, "actions", None)
         return bool(getattr(a, "mfc_polling", False))
 
+    # ── 기준 = 지금 확정된 목표(D423) — 엔진(monitor_targets)이 부른다 ──
+    def arm_s(self, key: str) -> float:
+        """공정 중 바로 바꾼 값 — 새 기준에 처음 들어올 때까지 미루는 한도: 압력 = MFC_PRESSURE_TIMEOUT_SEC(60 s),
+        유량 = 가스 안정화 한도(180 회 × MFC_STABILIZATION_INTERVAL_MS — 1 s 면 180 s)."""
+        c = self.sys.cfg
+        try:
+            if key == "pressure":
+                return float(c.get("MFC_PRESSURE_TIMEOUT_SEC", 60.0) or 60.0)
+            return 180.0 * float(c.get("MFC_STABILIZATION_INTERVAL_MS", 1000) or 1000) / 1000.0
+        except Exception:
+            return 60.0
+
+    def hold(self, key: str, why: str = "", *, by: str = "", only_active: bool = False) -> None:
+        self.mon.hold(key, why, by=by, only_active=only_active)
+
+    def release(self, key: str, *, by: str = "") -> None:
+        self.mon.release(key, by=by)
+
+    def rearm(self, key: str, *, by: str, live: bool = False) -> None:
+        self.mon.rearm(key, self.arm_s(key), by=by, always=live)
+
+    def set_target(self, key: str, value: float, why: str, *, live: bool = False) -> None:
+        self.mon.set_target(key, value, why, arm_s=self.arm_s(key), always=live)
+
+    def restore_after_resume(self) -> None:
+        """재시작 뒤 이어가기 — 공정 params 로 다시 켜고, 기준은 지금 런에서 이미 확정한 값(실행한 스텝 + 공정 중 값 — 엔진
+        monitor_baseline)으로, Main Shutter 가 열린 채였으면 감시도 다시(재시작 전과 같은 기준 — D423)."""
+        e = self.engine
+        self.mon.activate(getattr(e, "params", {}) or {})
+        base = e.monitor_baseline() if hasattr(e, "monitor_baseline") else {}
+        for key, v in (base.get("targets") or {}).items():
+            self.mon.set_target(key, v, "재시작 뒤 이어가기")
+        if base.get("shutter_open"):
+            self.mon.notify_shutter_open()
+
     # ── 연결부 ──
     def on_shutter(self, opened: bool) -> None:
         """Main Shutter 열림·닫힘 확인(chamber_runtime.py:998-1003)."""
@@ -378,6 +509,8 @@ class EngineMonitor:
                     self.mon.activate(d.get("params") or getattr(self.engine, "params", {}) or {})
                 elif k == "run_end":
                     self.mon.deactivate()
+                elif k == "resumed" and getattr(ev, "code", None) == "RESUMED":
+                    self.restore_after_resume()
             elif src.endswith(".mfc"):
                 if k == "flow" and self._polling():
                     self.mon.check_flow(str(getattr(ev, "gas", "") or ""), float(getattr(ev, "value", 0.0) or 0.0))

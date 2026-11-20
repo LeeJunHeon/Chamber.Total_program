@@ -820,4 +820,33 @@ DECISIONS += [
                   "(앞 5f59385 와 함께 chk2-web 으로 옮길 수 있게). 좌표 시험(위·아래 쌍 2+2·3+1·1+3·2+1·1+2)과 sim 화면 실제 글자 상자(getBoundingClientRect) 겹침 0.",
          reason="사용자 지시 2026-11-19 1장", confirm=False,
          where="vanam-process components/ops2/chk/Chk2Trend.tsx; scripts/ops2-ch12-ui-check.mjs(ui:trend-labels)"),
+    dict(id="D423", title="2026-11-19 공정 모니터 기준 = 지금 장비에 확정된 목표 — 공정 중 값 바꾸기 뒤 거짓 편차 알림 없앰(D420 끝 문장 대체)",
+         decision="문제: 공정 모니터(가스 유량·작업 압력 편차 → MONITOR 카드)의 기준이 run_start 의 레시피 값에 고정돼, 공정 중 값 바꾸기(바로·가스 단계)·"
+                  "뒤 블록 예약·시퀀스 편집 뒤에는 장비가 새 값으로 잘 따라가도 '세팅: 레시피 값 → 실측: 새 값' 카드가 나갔다(시험대: O2 10 → 8·8 → 10·작업 압력 "
+                  "3 → 4 각각 첫 알림 + 셔터 닫힘 요약 2장). 재시작 뒤 이어가기는 모니터를 다시 켜지 않았다. 규칙(어느 경로든 같음): 기준 = 지금 장비에 확정된 "
+                  "목표 — 가스 유량(Ar·O2·N2)·작업 압력(SP1). ① 러너 스텝(레시피·예약한 공정 중 값·시퀀스 편집·재시작 뒤 다시 펼친 스텝): 가스 묶음 FLOW_SET 이 "
+                  "시작되면 그 가스 판정 쉼(단계 중간값 포함), 목표 FLOW_SET 뒤 FLOW_ON 이 도달로 끝나면(러너가 다음 스텝으로) 기준 = 그 값. SP1_SET 시작 → 압력 쉼, "
+                  "끝나면 기준 = 그 값. ② 공정 중 바로 바꾸기(가스 FLOW_SET·작업 압력 SP1_SET): 보낼 때 쉼 → 확정(on_done 성공)이면 기준 = 새 값 / 실패면 기준 그대로 "
+                  "판정 다시. ③ 가스 단계(규칙 C): 시작부터 끝까지 쉼 → 마지막 단계 도달이면 기준 = 새 값 / 실패(공정 중단)·정지면 기준 그대로. "
+                  "④ 옮겨 가는 동안: 판정 중(Main Shutter 열림)에 바뀐 기준·공정 중 바로 바꾼 값은 실제 값이 새 기준 안에 처음 들어올 때까지(한도 — 압력 "
+                  "MFC_PRESSURE_TIMEOUT_SEC, 유량 180 × MFC_STABILIZATION_INTERVAL_MS) 판정을 미룸, 한도가 지나면 편차로 판정. 셔터 열기 전 레시피 길은 v1 처럼 바로. "
+                  "⑤ 가스 유량을 바꾸는 동안(공정 중 바로 바꾸기·가스 단계는 언제나, 러너 스텝은 판정 중일 때) 압력 판정도 쉬고 — 유량이 바뀌면 압력도 잠깐 흔들림 — "
+                  "확정·실패 뒤 압력은 기준 그대로 ④ 처럼 다시. 쉬게 한 쪽을 따로 셈(작업 압력 바꾸기와 가스 바꾸기가 겹쳐도 둘 다 끝나야 판정). "
+                  "⑥ 기준이 바뀔 때 그 항목에 열린 편차 사건은 카드 없이 'Monitor' 로그 한 줄로 닫음('O2 flow 기준 10 → 8 — 공정 중 값 바꾸기, 편차 사건 닫음'), "
+                  "값만 바뀌면 'O2 flow 기준 10 → 8 — 공정 중 값 바꾸기'(가스 단계는 '(가스 단계)', 예약 값은 '(예약)', 레시피·편집 스텝은 '공정 진행'). "
+                  "⑦ 재시작 뒤 이어가기(resumed RESUMED): 모니터를 params 로 다시 켜고 기준 = 이번 런에서 확정한 값(실행한 스텝 + 공정 중 값 — _writes), "
+                  "Main Shutter 가 열린 채였으면 감시도 다시('Ar flow 기준 20 → 22 — 재시작 뒤 이어가기'). ⑧ 새 값에 도달한 뒤의 진짜 편차는 예전처럼 카드 "
+                  "('세팅' = 새 값), 감시하지 않는 항목(레시피에 없는 가스)은 그대로 무시. D420 끝 문장('모니터 기준은 예전처럼 레시피 값')을 대체.",
+         reason="사용자 지시 2026-11-20(챔버12 v2 — 공정 중 값 바꾸기 뒤 거짓 편차 알림 없애기)", confirm=False,
+         where="v2/ch12/process_monitor.py(hold·release·rearm·set_target·arm, EngineMonitor.restore_after_resume); v2/ch12/monitor_targets.py; "
+               "v2/ch12/process_view.py(on_step); v2/ch12/process_adjust.py(_apply_live); v2/ch12/process_gas_steps.py"),    dict(id="D424", title="2026-11-19 sim 압력 모델 보정 — TORR_PER_SCCM 1e-4 → 1.5e-5, THROTTLE_MIN 0.02 → 0.002(sim 만, D421 의 '모델은 고치지 않음' 대체)",
+         decision="문제: 이전 상수로는 다 열어도 압력 = 총 유량 × 0.1 mTorr 라 30 sccm(CH2 Ar 20 + O2 10)이면 3 mTorr 아래로 못 내려가 작업 압력 2 mTorr 를 "
+                  "못 잡았다(메인 공정 내내 +1 mTorr — 압력 편차 카드). 45·60 sccm 은 3·5 mTorr 도, 5 sccm 은 30 mTorr(다 닫아도 25)도 못 잡았다. 고침: sim/chamber.py "
+                  "상수만 — 다 열면 압력 = 총 유량 × 0.015 mTorr(60 sccm → 0.9), 다 닫으면 그 500 배(5 sccm → 37.5) — 총 유량 5~60 sccm 에서 SP3·SP4 30 mTorr 와 "
+                  "작업 압력 1~5 mTorr 를 모두 정상 상태로 잡음(가상 MFC 밸브 제어 sim/mfc_sim.py 는 같은 상수를 가져다 씀 — 식 그대로). 압력 1차 지연 τ 5 s·밸브 τ 2 s "
+                  "그대로라 압력 대기는 수십 초: 모델 단위 ±0.3 mTorr 안 도달 30 mTorr 31~36 s(가스 주입 뒤 0.3 mTorr 에서)·10 mTorr 23.5~28.5 s·작업 압력(부스트 10 에서) "
+                  "1~5 mTorr 3.5~17 s, 시험대 CH1 Ar 20·CH1 Ar 20 + O2 1.5·CH2 Ar 20 + O2 10 각각 30 mTorr 대기 26.6~27.7 s·SP2 부스트 22.7 s, 메인 공정 압력 2.000 mTorr, "
+                  "편차 카드 0. 실장비 경로 영향 없음 — 두 상수는 sim 패키지(sim/chamber.py·sim/mfc_sim.py)만 읽는다(시험이 확인). 가정값이지 장비 사실이 아님.",
+         reason="사용자 지시 2026-11-20(sim 압력 모델 보정)", confirm=False,
+         where="v2/ch12/sim/chamber.py(TORR_PER_SCCM·THROTTLE_MIN); v2/tests/test_sim_pressure_model.py"),
 ]

@@ -39,6 +39,7 @@ from v2.ch12.outputs.run_stats import RunStats
 from v2.ch12.process_actions import ProcessActions
 from v2.ch12.process_adjust import AdjustMixin
 from v2.ch12.process_gas_steps import GasStepMixin
+from v2.ch12.monitor_targets import MonitorTargetMixin
 from v2.ch12.process_records import ProcessRecordsMixin
 from v2.ch12.process_view import ProcessViewMixin
 from v2.ch12.process_list import USE_KEYS, RunPlan, derive_params, plan_runs, raw_rows_from, stop_uses
@@ -64,7 +65,7 @@ class ProcEvent:
     level: str = "info"
 
 
-class ProcessEngine(AdjustMixin, GasStepMixin, PF.PreflightMixin, ProcessRecordsMixin, ProcessViewMixin):
+class ProcessEngine(AdjustMixin, GasStepMixin, MonitorTargetMixin, PF.PreflightMixin, ProcessRecordsMixin, ProcessViewMixin):
     def __init__(self, system, chamber: str, *, heater=None, thickness=None, excel_main_dir=None,
                  outputs: bool = True) -> None:
         self.sys, self.clock, self.lk = system, system.clock, system.clock.cond

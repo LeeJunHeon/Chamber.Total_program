@@ -88,7 +88,7 @@ def _row(**kw):
 ])
 def test_default_sp30_is_reached_then_sp2_boost_and_sp1_then_main(tmp_path, ch, name, gas):
     """기본 SP3·SP4 = 30 mTorr(D421)로 일반 레시피가 압력 제어(SP setpoint 30 기준 도달) → SP2 부스트(10 mTorr 도달) → SP1(작업 압력)을
-    지나 메인 공정에 들어간다 — sim 압력 모델(유량 × 1e-4 Torr ÷ 스로틀 유효 개방)로 30 mTorr 가 잡힌다(Ar 20 → 스로틀 약 5 %)."""
+    지나 메인 공정에 들어간다 — sim 압력 모델(유량 × 1.5e-5 Torr ÷ 스로틀 유효 개방 — D424)로 30 mTorr 가 잡힌다(Ar 20 → 스로틀 약 0.8 %)."""
     from v2.common.commands import Source
     from v2.ch12.recipe import TEMPLATE_COLUMNS  # noqa: F401
     c = VirtualClock(start_wall=1_760_000_000.0)

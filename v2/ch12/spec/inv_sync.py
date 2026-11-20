@@ -277,5 +277,14 @@ ITEMS = [
     dict(id="SYNC-562", area="sync",
          desc="추세 라벨 위·아래 양쪽 쌍 겹침 없음(D422 — 공용 Chk2Trend 아래→위 맞춤)",
          v1="(v2 신설)", v2="v2/hmi",
-         test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:trend-labels", status="done", note=""),
+         test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:trend-labels", status="done", note=""),    dict(id="SYNC-563", area="sync",
+         desc="공정 모니터 기준 = 지금 장비에 확정된 목표(D423): 공정 중 값 바꾸기(바로·가스 단계)·뒤 블록 예약·시퀀스 편집·재시작 이어가기 뒤 거짓 편차 카드 없음, "
+              "바꾸는 동안 판정 쉼·새 기준에 처음 들어올 때부터 판정·실패면 기준 그대로·열린 사건은 로그 한 줄로 닫음, 새 값 도달 뒤 진짜 편차는 카드",
+         v1="(v1 은 공정 중 값 바꾸기 없음 — 기준은 레시피 값, process_monitor.activate)", v2="v2/ch12/process_monitor.py; v2/ch12/monitor_targets.py",
+         test="v2/tests/test_monitor_targets.py::test_hold_skips_and_set_target_closes_open_excursion_with_one_log_line; v2/tests/test_monitor_targets.py::test_arm_waits_for_first_in_range_then_judges_or_judges_after_deadline; v2/tests/test_monitor_targets.py::test_release_keeps_baseline_rearm_and_several_holders; v2/tests/test_monitor_targets.py::test_only_active_hold_and_arm_before_shutter_open_is_v1_immediate; v2/tests/test_monitor_targets.py::test_live_lowering_o2_10_to_8_no_false_card_baseline_follows; v2/tests/test_monitor_targets.py::test_live_raising_o2_8_to_10_with_steps_no_false_card; v2/tests/test_monitor_targets.py::test_live_working_pressure_3_to_4_no_false_card; v2/tests/test_monitor_targets.py::test_real_deviation_after_change_one_card_with_new_setpoint; v2/tests/test_monitor_targets.py::test_live_change_failure_keeps_baseline; v2/tests/test_monitor_targets.py::test_mid_step_failure_keeps_baseline_then_aborts; v2/tests/test_monitor_targets.py::test_scheduled_value_for_later_block_is_baseline_there; v2/tests/test_monitor_targets.py::test_sequence_edit_inserted_pressure_block_is_baseline; v2/tests/test_monitor_targets.py::test_resume_keeps_changed_baseline_and_watch", status="done", note=""),
+    dict(id="SYNC-564", area="sync",
+         desc="sim 압력 모델 보정(D424): 총 유량 5~60 sccm 에서 SP3·SP4 30 mTorr·작업 압력 1~5 mTorr 를 잡음, 압력 대기 수십 초, 30 → SP2 10 → SP1 2 mTorr 레시피 "
+              "3 종 메인 공정 압력 ±0.3 안·편차 카드 0, 실장비 경로 영향 없음",
+         v1="(v1 sim 없음)", v2="v2/ch12/sim/chamber.py",
+         test="v2/tests/test_sim_pressure_model.py::test_constants_cover_5_to_60_sccm_for_30_and_1_to_5_mtorr; v2/tests/test_sim_pressure_model.py::test_every_flow_reaches_every_target_and_wait_is_tens_of_seconds; v2/tests/test_sim_pressure_model.py::test_old_constants_could_not_reach_2_mtorr_at_30_sccm; v2/tests/test_sim_pressure_model.py::test_only_the_sim_reads_the_model_constants; v2/tests/test_sim_pressure_model.py::test_recipe_30_boost_10_sp1_2_main_within_tolerance_no_monitor_card", status="done", note=""),
 ]

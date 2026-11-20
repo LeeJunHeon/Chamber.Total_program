@@ -124,6 +124,7 @@ class GasStepMixin:
               "item": ai.item, "old": old, "new": float(final), "source": source, "by": by, "text": ""}
         st["text"] = steps_text(gas, levels, 1, len(ups))
         self.gas_steps[gas] = st
+        self.mon_hold(self.mon_key_of_channel(c), "가스 단계 진행 중")      # 공정 모니터 — 단계 전체 동안 판정 쉼(D423)
         self._gas_step_next(st)
 
     def _gas_step_emit(self, st: dict, result: str, reason: Optional[str] = None) -> None:
@@ -138,11 +139,13 @@ class GasStepMixin:
             return
         if not self._active_run():
             self.gas_steps.pop(gas, None)
+            self.mon_release(self.mon_key_of_channel(st["channel"]))
             self.log("Process", f"[ADJUST] {gas} 단계 멈춤 — 공정 정지·끝 정지 시작({st['text']})")
             return
         i = st["i"]
         if i >= len(st["levels"]):
             self.gas_steps.pop(gas, None)
+            self.mon_set(self.mon_key_of_channel(st["channel"]), st["new"], "공정 중 값 바꾸기(가스 단계)")  # 마지막 단계 도달 확인됨
             self._rec(st["device"], st["item"], st["old"], st["new"], st["source"], "confirmed", None, st["by"])
             return
         lv = st["levels"][i]
@@ -174,6 +177,7 @@ class GasStepMixin:
         if self.gas_steps.get(gas) is not st:
             return
         self.gas_steps.pop(gas, None)
+        self.mon_release(self.mon_key_of_channel(st["channel"]))   # 바꾸기 실패 — 모니터 기준은 그대로(D423)
         if not self._active_run():                           # 정지·끝 정지가 안정화를 취소한 것 — 실패로 보지 않음
             self.log("Process", f"[ADJUST] {gas} 단계 멈춤 — {cmd} {detail or reason}(공정 정지 중)")
             return

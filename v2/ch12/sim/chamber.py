@@ -11,6 +11,7 @@
 
 압력(Torr) — 챔버K 와 같은 1차 모델:
   Vent 열림 → 760, τ 20 s · MV·Turbo → BASE + 총 유량 × TORR_PER_SCCM / 유효 배기, τ 5 s · 러핑 → 0.05, τ 10 s · 그 밖 그대로
+  (상수는 챔버12 레시피 범위에 맞춤 — D424: 유효 배기 = THROTTLE_MIN + (1 − THROTTLE_MIN) × 스로틀 개방)
 플라즈마: 가스 있음 + 압력 IGNITE_MIN~MAX mTorr 이면 출력(어느 전원이든) 이 있을 때 점화(ignited).
 증착: 점화 + 메인 셔터(ms) 열림이면 rate = 총 전력(W) × RATE_A_PER_W_S Å/s 로 두께가 쌓인다(STM-100 이 읽음).
 히터(CH2): temp_c 는 heater_mv(0~4000 count) 에 비례한 목표로 1차 지연(τ 120 s), 꺼지면 실온으로.
@@ -22,9 +23,11 @@ import math
 from typing import Dict, Optional
 
 BASE_TORR = 5e-7
-TORR_PER_SCCM = 1e-4
+# 압력 모델 상수(2026-11-19 D424 — sim 만): 다 열면 압력 = 총 유량 × 0.015 mTorr(60 sccm → 0.9), 다 닫으면 그 500 배(5 sccm → 37.5) —
+# 총 유량 5~60 sccm 에서 SP3·SP4 30 mTorr 와 작업 압력 1~5 mTorr 를 모두 잡는다. 이전 1e-4·0.02 는 30 sccm 이면 다 열어도 3 mTorr 였다.
+TORR_PER_SCCM = 1.5e-5
 ROUGH_TORR = 0.05
-THROTTLE_MIN = 0.02
+THROTTLE_MIN = 0.002
 ATM_TORR = 760.0
 IGNITE_MIN_MTORR = 0.5
 IGNITE_MAX_MTORR = 100.0
