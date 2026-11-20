@@ -2,11 +2,11 @@
  "what": "챔버12(CH1&2) v2 노트북 로컬 화면(vanam-process hmi/ch12.tsx — 8단계)",
  "target": "ch12",
  "vanamProcess": {
-  "commit": "7fd39ace544f5021f0c515b41927fe63bdc31464",
+  "commit": "df38bb2a658f9ff0fc704672283b29401e2a0863",
   "branch": "ch12-web",
   "clean": true
  },
- "builtAt": "2026-11-20T05:41:12.172Z",
+ "builtAt": "2026-11-20T08:27:00.200Z",
  "esbuild": "0.28.2",
  "tailwindcss": "4.3.3",
  "files": [
@@ -16,14 +16,14 @@
    "sha256": "5ddb46d94c96eda41639cb1f705d13d67ef2992f31fb15e97139766f57d082c4"
   },
   {
-   "path": "assets/app-OC6ETI5P.js",
-   "bytes": 509451,
-   "sha256": "dcf86e18eec53bc4a012d3605969e7aa0793c43a692b6674109a50d270fe983c"
+   "path": "assets/app-UOBH2FJI.js",
+   "bytes": 515294,
+   "sha256": "7b35ae97efa1c98de3ad303ccf98b217ebee6ddcd581a9e448579b650a2c89f6"
   },
   {
    "path": "index.html",
    "bytes": 358,
-   "sha256": "328214ed423918cf7763b9c5b975da063779e13ee201e8c151417fd294a48821"
+   "sha256": "ed29fc194026c513803157ede5f8aae941e643e18a04d80dd4749ae9e54caa48"
   }
  ]
 }
