@@ -292,4 +292,10 @@ ITEMS = [
               "노트북), 버튼마다 사건 하나(결과·그 챔버 공정 상태), 장비 로그 늘·공정 중이면 그 챔버 공정 로그, 화면 로그 줄·탭 분류",
          v1="(v1 은 PLC 버튼 기록 없음 — 화면 버튼은 확인 없이 바로)", v2="v2/ch12/plc_button_log.py; v2/ch12/commands.py; v2/ch12/core.py",
          test="v2/tests/test_plc_button_log.py::test_hazard_classes_by_direction; v2/tests/test_plc_button_log.py::test_proc_chamber_short_name_and_bundle; v2/tests/test_plc_button_log.py::test_who_and_line_text; v2/tests/test_plc_button_log.py::test_web_press_idle_one_event_system_log_no_process_line; v2/tests/test_plc_button_log.py::test_notebook_press_and_tabs_for_shared_and_loadlock; v2/tests/test_plc_button_log.py::test_in_process_press_goes_to_that_chambers_process_log; v2/tests/test_plc_button_log.py::test_rejections_are_one_event_each_with_reason; v2/tests/test_plc_button_log.py::test_write_failure_is_failed_event; v2/tests/test_plc_button_log.py::test_one_event_per_press_and_name_fallback; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:plc-confirm; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:plc-confirm-text; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:plc-log-line; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:plc-who", status="done", note=""),
+    dict(id="SYNC-566", area="sync",
+         desc="공정 txt 파일 이름(D426): 공정명에 점이 있어도 시각이 남음(점 하나·여러 개·끝 점·숫자만·한글), 같은 레시피를 두 번 돌리면 파일 둘",
+         v1="runtime/chamber_runtime.py:560,7323-7343(v1 은 with_suffix — 점이 든 이름에서 시각이 빠짐, 이번에 고치지 않음)",
+         v2="v2/ch12/outputs/process_txt.py",
+         test="v2/tests/test_outputs_text.py::test_process_txt_name_keeps_time_with_dots; v2/tests/test_outputs_text.py::test_process_txt_same_recipe_twice_two_files_and_similar_names_differ; v2/tests/test_outputs_text.py::test_process_txt_golden",
+         status="done", note=""),
 ]

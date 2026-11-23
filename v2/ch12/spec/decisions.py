@@ -872,4 +872,14 @@ DECISIONS += [
          where="v2/ch12/commands.py(PlcButton·HAZARD_TEXT·PLC_BUTTON by_name); v2/ch12/plc_button_log.py; v2/ch12/core.py(_plc_command); "
                "v2/ch12/web_schema.py(15); v2/ch12/process_view.py(state_dict process_name); vanam-process components/ops2/ch12/Ch12Hmi.tsx·"
                "Ch12Confirm.tsx·Ch12Logs.tsx·logic.ts, lib/ops2/commandArgs.ts, app/api/ops2/[equipment]/v1/command/route.ts"),
+    dict(id="D426", title="2026-11-23 공정 txt 파일 이름 — 이름 뒤에 '.txt' 를 붙인다(공정명에 점이 있어도 시각이 남게, v1 과 다름)",
+         decision="현상(sim): 공정명 'CH1 RFP Ar20 O2 1.5' → CH1_CH1_RFP_Ar20_O2_1.txt — 시각이 빠졌다. 원인: outputs/process_txt.open_run 의 "
+                  "(… / f'CH{ch}_{safe}_{ts}').with_suffix('.txt') 가 마지막 점 뒤('.5_20261120_…')를 확장자로 보고 바꿈 → 같은 레시피를 다시 돌리면 "
+                  "같은 파일에 이어 쓰고 '1.5'·'1.8' 레시피도 같은 파일. 고침: f'CH{ch}_{safe}_{ts}.txt'(공정명 글자 규칙 safe_process_name 은 그대로 — 점은 "
+                  "남김, 앞뒤 ' .' 은 원래대로 지움). 같은 방식 전수 확인(v2/ch12 의 with_suffix·파일 이름 f-문자열): 사람이 정한 이름이 파일 이름에 들어가는 "
+                  "출력은 공정 txt 하나 — TSP(TSP_{시각}, 점 없음)·OES(OES_Data_{시각})·엑셀(CH{n}.xlsx)·CSV(날짜·고정 이름)·PC 로그(PC_{시각}_CH{n})·카메라"
+                  "(시각 폴더)·두께·히터·로봇 CSV 는 이름이 없거나 이미 확장자가 있는 경로의 마지막 확장자만 바꿔 영향 없음. v1 runtime/chamber_runtime.py "
+                  "에도 같은 줄이 있으나 이번에 고치지 않음(v1 운영 — 보고만). v1 골든(공정 txt 이름 시나리오)에는 점이 남는 이름이 없어 그대로 같음.",
+         reason="사용자 지시 2026-11-23(공정 로그 파일 이름 버그)", confirm=False,
+         where="v2/ch12/outputs/process_txt.py(open_run); v2/tests/test_outputs_text.py"),
 ]

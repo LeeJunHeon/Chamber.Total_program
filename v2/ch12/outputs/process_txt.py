@@ -3,7 +3,9 @@
 v1 과 같은 것(LOG-007·009~017)
 - 경로 {LOG_ROOT_DIR}\\CH{n}\\CH{n}_{안전 공정명}_{YYYYmmdd_HHMMSS_mmm}.txt(충돌 검사 없음). 공정명: process_note →
   Process_name 순(소문자 process_name 은 보지 않음), 비면 Untitled; \\/:*?"<>| 묶음→'_', 연속 공백→' ', 공백→'_', 앞뒤 ' .'
-  제거, 60자, 비면 Untitled(chamber_runtime.py:7310-7341).
+  제거, 60자, 비면 Untitled(chamber_runtime.py:7310-7341). v1 과 다른 점 하나(2026-11-23 D426): 파일 이름은 이름 뒤에 '.txt' 를
+  붙인다 — v1 의 with_suffix('.txt') 는 공정명에 점이 있으면('… O2 1.5') 마지막 점 뒤를 확장자로 보고 바꿔 시각이 빠졌다(같은 레시피를
+  다시 돌리면 같은 파일에 이어 씀). 공정명 글자 규칙은 그대로(점은 남김).
 - 머리 줄 '# ==== Sputter Run ====' … '# ============================'(7348-7365), 그 뒤 프리스타트 버퍼(최대 1000줄), 그 뒤
   '[..] [CHn:Logger] 새 로그 파일 시작: <이름>'.
 - 본문 줄 '[YYYY-mm-dd HH:MM:SS] [CH{n}:{출처}] {메시지}\\n'. 파일이 열리기 전 줄은 프리스타트 버퍼 + SYSTEM 일자 로그(일부 중복은
@@ -151,7 +153,9 @@ class ProcessTxtLog(Owned):
         now_local = self.now()
         safe_name = safe_process_name(params)
         ts_ms = now_local.strftime("%Y%m%d_%H%M%S_%f")[:-3]
-        base = (self._log_dir / f"CH{self.ch}_{safe_name}_{ts_ms}").with_suffix(".txt")
+        # 이름 뒤에 '.txt' 를 붙인다(2026-11-23 D426). v1 의 with_suffix('.txt') 는 공정 이름의 마지막 점 뒤('…O2_1.5_2026…' 의 '.5_2026…')를
+        # 확장자로 보고 바꿔 시각이 빠졌다 — 같은 레시피를 다시 돌리면 같은 파일에 이어 썼다(v1 은 그대로 — 고치지 않음).
+        base = self._log_dir / f"CH{self.ch}_{safe_name}_{ts_ms}.txt"
         self._path = base
         name = (params.get("process_note") or params.get("Process_name") or f"Run CH{self.ch}")
         put = lambda s: self._enqueue(base, s)   # noqa: E731

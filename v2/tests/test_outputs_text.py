@@ -238,3 +238,56 @@ def test_selfwatch_interval_and_purge(tmp_path):
     w.stop()
     assert n == 3 and not old.exists()
     assert (d / "selfwatch_20261030.csv").read_text(encoding="utf-8").count("\n") == 4
+
+
+# ───────── 공정 txt 파일 이름 — 이름에 점이 있어도 시각이 남는다(2026-11-23 D426) ─────────
+# v1(runtime/chamber_runtime.py)·v2 이전: (… / f'CH{ch}_{safe}_{ts}').with_suffix('.txt') 가 이름의 마지막 점 뒤('.5_20261120…')를 확장자로
+# 보고 바꿔 시각이 빠졌다 — 'CH1 RFP Ar20 O2 1.5' → CH1_CH1_RFP_Ar20_O2_1.txt, 같은 레시피를 다시 돌리면 같은 파일에 이어 쓰고 '1.5'·'1.8' 도
+# 같은 파일. v2 는 이름 뒤에 '.txt' 를 붙인다(공정 이름 글자 규칙 safe_process_name 은 그대로 — 점은 남김).
+NAME_CASES = [
+    ("CH1 RFP Ar20 O2 1.5", "CH1_RFP_Ar20_O2_1.5"),          # 점 하나
+    ("ITO 1.5.2 v3.0", "ITO_1.5.2_v3.0"),                     # 점 여러 개
+    ("끝에 점.", "끝에_점"),                                     # 끝 점 — 글자 규칙(앞뒤 ' .' 지움) 그대로
+    ("12345", "12345"),                                       # 숫자만
+    ("1.5", "1.5"),                                           # 숫자와 점만
+    ("산화막 증착 2차", "산화막_증착_2차"),                        # 한글
+]
+
+
+def _open_names(tmp_path, names, times):
+    root = make_root(tmp_path)
+    cfg = v2_cfg(root, SC.BASE_CFG)
+    clock = Clock(times[0])
+    w = QueueWriter("t")
+    t = ProcessTxtLog(1, cfg, writer=w, now=clock.now)
+    paths = []
+    for nm, ts in zip(names, times):
+        clock.set(ts)
+        paths.append(t.open_run({"process_note": nm}))
+        t.log("Process", f"{nm} 한 줄")
+        t.close_run()
+    t.stop()
+    w.stop()
+    return root, paths
+
+
+@pytest.mark.parametrize("raw,safe", NAME_CASES)
+def test_process_txt_name_keeps_time_with_dots(tmp_path, raw, safe):
+    root, (p,) = _open_names(tmp_path, [raw], ["2026-11-20T16:13:56.754000"])
+    assert p.name == f"CH1_{safe}_20261120_161356_754.txt" and p.suffix == ".txt"
+    on_disk = sorted(x.name for x in (root / "로컬" / "VanaM_Logs" / "CH1&2" / "CH1").glob("*.txt"))
+    assert on_disk == [p.name]
+    assert (root / "로컬" / "VanaM_Logs" / "CH1&2" / "CH1" / p.name).read_text(encoding="utf-8").endswith(f"{raw} 한 줄\n# ==== END ====\n")
+
+
+def test_process_txt_same_recipe_twice_two_files_and_similar_names_differ(tmp_path):
+    names = ["CH1 RFP Ar20 O2 1.5", "CH1 RFP Ar20 O2 1.5", "CH1 RFP Ar20 O2 1.8"]
+    root, paths = _open_names(tmp_path, names, ["2026-11-20T16:13:56.754000", "2026-11-20T16:40:02.001000",
+                                               "2026-11-20T17:05:00.500000"])
+    assert [p.name for p in paths] == ["CH1_CH1_RFP_Ar20_O2_1.5_20261120_161356_754.txt",
+                                       "CH1_CH1_RFP_Ar20_O2_1.5_20261120_164002_001.txt",
+                                       "CH1_CH1_RFP_Ar20_O2_1.8_20261120_170500_500.txt"]
+    d = root / "로컬" / "VanaM_Logs" / "CH1&2" / "CH1"
+    assert sorted(x.name for x in d.glob("*.txt")) == sorted(p.name for p in paths)       # 파일 셋 — 이어 쓰지 않음
+    for p in paths:
+        assert (d / p.name).read_text(encoding="utf-8").count("# ==== Sputter Run ====") == 1     # 파일마다 머리 하나
