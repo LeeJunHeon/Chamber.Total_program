@@ -10,12 +10,21 @@
   그 밖: resource ru_maxrss)·살아 있는 스레드 수, 시험 파일별 메모리(전용 메모리) 증가 상위 5개, 파일 순서대로의 메모리.
 - 실제 시계를 쓰는 시험(RealClock 을 만들었거나 test_app)은 끝난 뒤 그 시험이 만든 스레드가 남으면(최대 2 s 기다림) 실패
   — 앱·로컬 서버·SSE·숨은 창(WM_ENDSESSION) 스레드가 정리되는지.
+
+저장소 안에 쓰지 않기(2026-11-23 D427 — 윈도우에서 저장소를 받지 못하게 한 'C:\\VanaM_Logs\\…' 찌꺼기 파일):
+- 설정 기본값의 윈도우 경로('C:\\VanaM_Logs\\CH1&2\\CH1&2_MFC' 등)는 리눅스에서 '이름에 역슬래시가 든 폴더 하나'인 상대 경로가 되어
+  현재 폴더(= 저장소)에 생긴다. 실행 프로그램(app)은 winpaths 로 바꿔 쓰지만, 시험은 조립·출력을 직접 만들어 그 길을 거치지 않는다.
+- 그래서 시험마다 현재 폴더·HOME 을 그 시험의 tmp 로 옮긴다(_cwd_home_in_tmp — 하위 프로세스가 v2 를 찾게 PYTHONPATH 에 저장소).
+- 시험이 끝났을 때 저장소 맨 위에 새 항목이 생겼으면 그 시험을 실패로(어느 시험이 만들었는지 바로 보이게).
+- 세션 끝: 시작 때와 비교해 git status 에 새 파일(무시 규칙에 걸린 것 포함, __pycache__ 빼고)이 생겼으면 세션 실패.
 """
 import os
 import collections
+import subprocess
 import sys
 import threading
 import time
+from pathlib import Path
 
 import pytest
 
@@ -196,3 +205,65 @@ def _sim_base(tmp_path, monkeypatch):
             os.environ.pop(k, None)
         else:
             os.environ[k] = v
+
+
+# ───────────── 저장소 안에 쓰지 않기(D427) ─────────────
+REPO = Path(__file__).resolve().parents[2]
+_IGNORE_TOP = {".pytest_cache", "__pycache__"}
+
+
+def _top_entries() -> set:
+    try:
+        return {n for n in os.listdir(REPO) if n not in _IGNORE_TOP}
+    except OSError:
+        return set()
+
+
+@pytest.fixture(autouse=True)
+def _cwd_home_in_tmp(tmp_path, tmp_path_factory, monkeypatch):
+    """현재 폴더는 이 시험의 tmp 안, HOME 은 tmp 밖의 따로 만든 임시 폴더로(sim 기준 폴더 CH12_SIM_BASE = tmp 와 겹치지 않게 —
+    sim 격리 검사는 'winpaths 로 바꾼 홈 아래 경로는 sim 기준 밖'을 본다). 끝나면 저장소 맨 위 새 항목 검사."""
+    before = _top_entries()
+    work = tmp_path / "_cwd"
+    home = tmp_path_factory.mktemp("home")
+    work.mkdir(exist_ok=True)
+    monkeypatch.chdir(work)
+    monkeypatch.setenv("HOME", str(home))
+    if os.name == "nt":
+        monkeypatch.setenv("USERPROFILE", str(home))
+    pp = os.environ.get("PYTHONPATH")
+    monkeypatch.setenv("PYTHONPATH", str(REPO) + (os.pathsep + pp if pp else ""))
+    yield
+    new = sorted(_top_entries() - before)
+    if new:
+        pytest.fail(f"시험이 저장소 맨 위에 새 항목을 만듦(저장소 안에 쓰면 안 됨 — D427): {new}", pytrace=False)
+
+
+def _git_status() -> set:
+    """git status(무시된 것까지, __pycache__·.pyc 빼고) — git 이 없거나 저장소가 아니면 None."""
+    try:
+        r = subprocess.run(["git", "status", "--porcelain", "--untracked-files=all", "--ignored"], cwd=REPO,
+                           capture_output=True, text=True, timeout=60)
+    except Exception:
+        return None
+    if r.returncode != 0:
+        return None
+    return {ln for ln in r.stdout.splitlines() if ln and "__pycache__" not in ln and not ln.rstrip().endswith(".pyc")}
+
+
+def pytest_sessionstart(session):
+    session.config._ch12_git_before = _git_status()
+
+
+def pytest_sessionfinish(session, exitstatus):
+    before = getattr(session.config, "_ch12_git_before", None)
+    if before is None:
+        return
+    after = _git_status()
+    if after is None:
+        return
+    new = sorted(after - before)
+    if new:
+        sys.stderr.write("\n[D427] 시험이 저장소 안에 새 파일을 만들었다(git status — 저장소 안에 쓰면 안 됨):\n" +
+                         "".join(f"  {x}\n" for x in new[:40]))
+        session.exitstatus = 1

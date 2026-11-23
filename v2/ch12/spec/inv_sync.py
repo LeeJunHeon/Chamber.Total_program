@@ -298,4 +298,9 @@ ITEMS = [
          v2="v2/ch12/outputs/process_txt.py",
          test="v2/tests/test_outputs_text.py::test_process_txt_name_keeps_time_with_dots; v2/tests/test_outputs_text.py::test_process_txt_same_recipe_twice_two_files_and_similar_names_differ; v2/tests/test_outputs_text.py::test_process_txt_golden",
          status="done", note=""),
+    dict(id="SYNC-567", area="sync",
+         desc="저장소를 윈도우에서 받을 수 있음(D427): 추적 경로에 윈도우 못 쓰는 글자·끝 점·끝 공백·예약 이름 없음, 시험이 저장소 안에 쓰면 실패",
+         v1="(v1 저장소 밖 — 시험 정리)", v2="v2/tests/conftest.py; v2/tests/test_repo_paths.py",
+         test="v2/tests/test_repo_paths.py::test_rule_catches_known_bad_names; v2/tests/test_repo_paths.py::test_every_tracked_path_is_windows_safe",
+         status="done", note=""),
 ]

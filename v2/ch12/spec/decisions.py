@@ -882,4 +882,20 @@ DECISIONS += [
                   "에도 같은 줄이 있으나 이번에 고치지 않음(v1 운영 — 보고만). v1 골든(공정 txt 이름 시나리오)에는 점이 남는 이름이 없어 그대로 같음.",
          reason="사용자 지시 2026-11-23(공정 로그 파일 이름 버그)", confirm=False,
          where="v2/ch12/outputs/process_txt.py(open_run); v2/tests/test_outputs_text.py"),
+    dict(id="D427", title="2026-11-23 저장소를 윈도우에서 받을 수 있게 — 시험 찌꺼기(윈도우 경로 이름 파일) 삭제·시험이 저장소 안에 쓰지 않게",
+         decision="현상: rewrite/v2 맨 위에 이름이 'C:\\VanaM_Logs\\CH1&2\\CH1&2_MFC/CH{1,2}_{20251009,20260921}.csv' 인 파일 4개가 커밋돼 장비 노트북"
+                  "(윈도우) git 의 clone·checkout·reset·archive 가 'invalid path' 로 멈췄다. 근본 원인: 설정 기본값의 윈도우 경로(MFC_STATE_LOG_DIR 등)는 "
+                  "리눅스에서 '이름에 역슬래시가 든 폴더 하나'인 상대 경로가 되어 현재 폴더(= 저장소)에 생긴다. 실행 프로그램은 winpaths 로 바꿔 쓰지만 시험은 "
+                  "조립·출력을 직접 만들어 그 길을 거치지 않는다. MFC 상태 CSV(3d6a3e0)를 넣을 때 시험대 경로 덮어쓰기(sim/rig.local_paths)에 "
+                  "MFC_STATE_LOG_DIR 가 빠져 전체 시험이 저장소 맨 위에 파일을 만들었고, bca11cb 가 지우고 덮어쓰기를 더했지만 그보다 먼저 시작한 전체 시험이 "
+                  "다시 만든 파일을 9ca2649 가 '전체 시험 실패 정리'와 함께 커밋했다(가상 시계 1_760_000_000·1_790_000_000 = 20251009·20260921, 짧은 시험 "
+                  "여러 개가 이어 쓴 모양). 같은 까닭의 무시된 찌꺼기 'C:\\VanaM_Logs\\CH1&2/CH1&2_Server/server_page_20261117.log'(로봇 서버, *.log 무시 규칙에 "
+                  "가려짐)도 디스크에서 지움. 고침: 4개 삭제, 시험 공통 설정(conftest)에서 시험마다 현재 폴더를 그 시험의 tmp 로·HOME 을 따로 만든 임시 폴더로"
+                  "(하위 프로세스가 v2 를 찾게 PYTHONPATH 에 저장소) — 윈도우 모양 기본 경로가 상대 경로로 떨어져도 tmp 안, 시험이 끝났을 때 저장소 맨 위에 새 "
+                  "항목이 생기면 그 시험 실패, 세션 끝에 시작 때보다 git status(무시된 것 포함, __pycache__ 빼고)에 새 파일이 있으면 세션 실패. 기본 설정으로 "
+                  "1초 행 출력을 직접 만들던 시험(test_turbo_watch)은 기록 경로를 모두 tmp 로(local_paths). 재발 방지 시험: git 이 추적하는 모든 경로의 조각에 "
+                  "\\ : * ? \" < > |·제어 글자·끝 점·끝 공백·예약 이름(CON·PRN·AUX·NUL·COM1~9·LPT1~9)이 없어야 함. 출력 경로 규칙(outputs/paths — v1 과 같은 "
+                  "윈도우 경로를 돌려줌, 시험이 확인)은 바꾸지 않음.",
+         reason="사용자 지시 2026-11-23(윈도우 장비 노트북 첫 sim 시험 — 저장소를 받을 수 없음)", confirm=False,
+         where="v2/tests/conftest.py(_cwd_home_in_tmp·pytest_sessionstart/finish); v2/tests/test_repo_paths.py; v2/tests/test_turbo_watch.py"),
 ]

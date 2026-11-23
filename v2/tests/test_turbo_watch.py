@@ -43,7 +43,10 @@ def test_card_text():
 def test_row_feed_emits_from_one_second_rows(tmp_path):
     from v2.common.paramdef import defaults
     from v2.ch12.params import PARAMS
-    cfg = dict(defaults(PARAMS), TURBO_OFF_ALERT_S=3.0, LOG_ROOT_DIR=str(tmp_path), PLC_COIL_LOG_NAS_DIR=str(tmp_path),
+    from v2.ch12.sim.rig import local_paths
+    # 기록 경로는 모두 tmp 아래(local_paths — MFC 상태 CSV 등 윈도우 기본 경로가 저장소에 생기지 않게, D427)
+    cfg = dict(defaults(PARAMS), **local_paths(tmp_path))
+    cfg.update(TURBO_OFF_ALERT_S=3.0, LOG_ROOT_DIR=str(tmp_path), PLC_COIL_LOG_NAS_DIR=str(tmp_path),
                PLC_COIL_LOG_LOCAL_DIR=str(tmp_path), LOCAL_FALLBACK_ROOT=str(tmp_path))
     c = VirtualClock(start_wall=1_760_000_000.0)
     c.register()
