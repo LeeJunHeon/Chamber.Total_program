@@ -104,7 +104,8 @@ class FakeServer:
         self.port = 0
 
     async def start(self) -> None:
-        self.server = await asyncio.start_server(self._handle, "127.0.0.1", 0)
+        from v2.common.netbind import listen_socket   # 공용 listen(D428 — 윈도우 SO_EXCLUSIVEADDRUSE)
+        self.server = await asyncio.start_server(self._handle, sock=listen_socket("127.0.0.1", 0, 100, name="v1 골든 가짜 TSP"))
         self.port = self.server.sockets[0].getsockname()[1]
 
     async def _handle(self, reader, writer) -> None:

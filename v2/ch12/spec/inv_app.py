@@ -141,7 +141,7 @@ ITEMS = [
          desc="OES finished JSON: kind finished, ok(=hard_abort 아님), stopped, stop_reason(stop_flag·read_timeout·reset_timeout·cleanup_timeout·pre_stop), ch, usb, out_csv, nas_ok(False), nas_csv(None), nas_error, local_deleted(False), rows, elapsed_s + 연결 감시 4개, 실패면 error(예외 경로는 trace 도)",
          v1="apps/oes_service/oes_api.py:1785-1802,1866-1883,2174-2190", v2="v2/ch12/workers/oes_worker.py", test="", status="todo", note=""),
     dict(id="APP-040", area="app",
-         desc="OES stop 플래그(워커가 봄): <out_dir>\\.stop_usb{U}.flag, <CSV>.stop, 전역 <워커 폴더>\\stop\\.stop_usb{U}.flag(OES_STOP_DIR, 만들 수 없으면 %TEMP%\\VanaM_OES_STOP). measure 시작 때 전역 플래그가 이미 있으면 측정 없이 ok/stopped/pre_stop 응답. 시작 때 로컬 플래그만 지우고 끝나면 셋 다 지움. daemon 은 READY 직후 전역 플래그 1회 정리",
+         desc="OES stop 플래그(워커가 봄): <out_dir>\\.stop_usb{U}.flag, <CSV>.stop, 전역 <워커 폴더>\\stop\\.stop_usb{U}.flag(OES_STOP_DIR, 만들 수 없으면 %TEMP%\\VanaM_OES_STOP — sim(OES_MUTEX_PREFIX 있음)은 예비로 가지 않고 오류, D428). measure 시작 때 전역 플래그가 이미 있으면 측정 없이 ok/stopped/pre_stop 응답. 시작 때 로컬 플래그만 지우고 끝나면 셋 다 지움. daemon 은 READY 직후 전역 플래그 1회 정리",
          v1="apps/oes_service/oes_api.py:1131-1140,1527-1566,1641-1662,2276-2280,1886-1897,2203-2206", v2="v2/ch12/workers/oes_worker.py", test="", status="todo", note="메인은 전역 플래그를 쓰지 않음(로컬 2개만)"),
     dict(id="APP-041", area="app",
          desc="OES 정리·자가 종료: 측정 뒤 cleanup(OES_CLEANUP_TIMEOUT_S 5 s — 연결 목록이 기준과 다르면 spCloseGivenChannel 생략, OES_DLL_UNLOAD=1 일 때만 FreeLibrary), hard_abort 면 cleanup 하지 않고 플래그·뮤텍스 정리 후 os._exit(125|126). init 시간 초과 os._exit(124), cleanup 시간 초과 126. __main__ 은 항상 os._exit(rc)(DLL 스레드가 걸려 있어도 좀비 방지)",

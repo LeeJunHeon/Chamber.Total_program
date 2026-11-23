@@ -14,7 +14,7 @@
 저장소 안에 쓰지 않기(2026-11-23 D427 — 윈도우에서 저장소를 받지 못하게 한 'C:\\VanaM_Logs\\…' 찌꺼기 파일):
 - 설정 기본값의 윈도우 경로('C:\\VanaM_Logs\\CH1&2\\CH1&2_MFC' 등)는 리눅스에서 '이름에 역슬래시가 든 폴더 하나'인 상대 경로가 되어
   현재 폴더(= 저장소)에 생긴다. 실행 프로그램(app)은 winpaths 로 바꿔 쓰지만, 시험은 조립·출력을 직접 만들어 그 길을 거치지 않는다.
-- 그래서 시험마다 현재 폴더·HOME 을 그 시험의 tmp 로 옮긴다(_cwd_home_in_tmp — 하위 프로세스가 v2 를 찾게 PYTHONPATH 에 저장소).
+- 그래서 시험마다 현재 폴더·HOME 을 따로 만든 임시 폴더로 옮긴다(_cwd_home_in_tmp — 하위 프로세스가 v2 를 찾게 PYTHONPATH 에 저장소).
 - 시험이 끝났을 때 저장소 맨 위에 새 항목이 생겼으면 그 시험을 실패로(어느 시험이 만들었는지 바로 보이게).
 - 세션 끝: 시작 때와 비교해 git status 에 새 파일(무시 규칙에 걸린 것 포함, __pycache__ 빼고)이 생겼으면 세션 실패.
 """
@@ -220,13 +220,13 @@ def _top_entries() -> set:
 
 
 @pytest.fixture(autouse=True)
-def _cwd_home_in_tmp(tmp_path, tmp_path_factory, monkeypatch):
-    """현재 폴더는 이 시험의 tmp 안, HOME 은 tmp 밖의 따로 만든 임시 폴더로(sim 기준 폴더 CH12_SIM_BASE = tmp 와 겹치지 않게 —
-    sim 격리 검사는 'winpaths 로 바꾼 홈 아래 경로는 sim 기준 밖'을 본다). 끝나면 저장소 맨 위 새 항목 검사."""
+def _cwd_home_in_tmp(tmp_path_factory, monkeypatch):
+    """현재 폴더·HOME 을 시험마다 따로 만든 임시 폴더로 — 둘 다 그 시험의 tmp_path 밖(시험이 tmp_path 의 파일 목록을 보므로, 그리고
+    sim 기준 폴더 CH12_SIM_BASE = tmp_path 와 겹치지 않게 — sim 격리 검사는 'winpaths 로 바꾼 홈 아래 경로는 sim 기준 밖'을 본다).
+    끝나면 저장소 맨 위 새 항목 검사."""
     before = _top_entries()
-    work = tmp_path / "_cwd"
+    work = tmp_path_factory.mktemp("cwd")
     home = tmp_path_factory.mktemp("home")
-    work.mkdir(exist_ok=True)
     monkeypatch.chdir(work)
     monkeypatch.setenv("HOME", str(home))
     if os.name == "nt":

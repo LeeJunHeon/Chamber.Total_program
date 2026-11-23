@@ -890,7 +890,7 @@ DECISIONS += [
                   "MFC_STATE_LOG_DIR 가 빠져 전체 시험이 저장소 맨 위에 파일을 만들었고, bca11cb 가 지우고 덮어쓰기를 더했지만 그보다 먼저 시작한 전체 시험이 "
                   "다시 만든 파일을 9ca2649 가 '전체 시험 실패 정리'와 함께 커밋했다(가상 시계 1_760_000_000·1_790_000_000 = 20251009·20260921, 짧은 시험 "
                   "여러 개가 이어 쓴 모양). 같은 까닭의 무시된 찌꺼기 'C:\\VanaM_Logs\\CH1&2/CH1&2_Server/server_page_20261117.log'(로봇 서버, *.log 무시 규칙에 "
-                  "가려짐)도 디스크에서 지움. 고침: 4개 삭제, 시험 공통 설정(conftest)에서 시험마다 현재 폴더를 그 시험의 tmp 로·HOME 을 따로 만든 임시 폴더로"
+                  "가려짐)도 디스크에서 지움. 고침: 4개 삭제, 시험 공통 설정(conftest)에서 시험마다 현재 폴더·HOME 을 따로 만든 임시 폴더로(그 시험의 tmp_path 밖)"
                   "(하위 프로세스가 v2 를 찾게 PYTHONPATH 에 저장소) — 윈도우 모양 기본 경로가 상대 경로로 떨어져도 tmp 안, 시험이 끝났을 때 저장소 맨 위에 새 "
                   "항목이 생기면 그 시험 실패, 세션 끝에 시작 때보다 git status(무시된 것 포함, __pycache__ 빼고)에 새 파일이 있으면 세션 실패. 기본 설정으로 "
                   "1초 행 출력을 직접 만들던 시험(test_turbo_watch)은 기록 경로를 모두 tmp 로(local_paths). 재발 방지 시험: git 이 추적하는 모든 경로의 조각에 "
@@ -898,4 +898,19 @@ DECISIONS += [
                   "윈도우 경로를 돌려줌, 시험이 확인)은 바꾸지 않음.",
          reason="사용자 지시 2026-11-23(윈도우 장비 노트북 첫 sim 시험 — 저장소를 받을 수 없음)", confirm=False,
          where="v2/tests/conftest.py(_cwd_home_in_tmp·pytest_sessionstart/finish); v2/tests/test_repo_paths.py; v2/tests/test_turbo_watch.py"),
+    dict(id="D428", title="2026-11-23 listen 포트는 윈도우에서도 한 프로그램만(SO_EXCLUSIVEADDRUSE) — 못 열면 어느 포트인지 분명한 오류, sim OES 정지 폴더는 예비로 가지 않음",
+         decision="현상: robot_api 의 ThreadingHTTPServer(127.0.0.1:ROBOT_API_PORT)는 http.server 기본 allow_reuse_address=1 → 윈도우 SO_REUSEADDR 라 "
+                  "이미 LISTEN 중인 포트에도 같이 열려(v1·다른 v2 가 쓰는 중이어도 조용히 성공) 요청이 어느 쪽으로 갈지 모른다. local_server 만 "
+                  "SO_EXCLUSIVEADDRUSE 였다. 고침: 공용 v2/common/netbind — 윈도우는 SO_REUSEADDR 를 켜지 않고 SO_EXCLUSIVEADDRUSE, 그 밖은 SO_REUSEADDR"
+                  "(TIME_WAIT 재사용 — LISTEN 중이면 여전히 실패). 못 열면 PortBusy(OSError 하위 — 기존 'except OSError' 그대로)에 이름·주소·포트·원인. v2 의 "
+                  "모든 listen 이 이것을 쓴다: 로컬 화면 서버(_Server·bind_socket), 로봇 내부 명령 API, 로봇 서버(asyncio.start_server(sock=…)), 가짜 내부 API, "
+                  "sim 장비 TCP·sim 재고 서버, v1 골든 도구(PLC·MFC·IG·STM100·TSP·RF·DC 펄스 — 포트 0). 조립은 내부 API 포트를 못 열면 bind_failed"
+                  "(ROBOT_NOT_READY) 문구에 어느 포트를 왜 — 로봇 명령을 받지 못함(공정·안전은 그대로). 로봇 서버(따로 도는 프로그램)는 로그 줄은 v1 그대로 "
+                  "'Host start failed: OSError(..)', 콘솔에 '[중지] 로봇 서버 포트 …' 한 줄·종료 코드 1. OES 워커 _stop_dir: OES_STOP_DIR 를 만들 수 없을 때 "
+                  "운영은 v1 과 같게 %TEMP%\\VanaM_OES_STOP 예비, sim(OES_MUTEX_PREFIX 있음 — sim_guard)은 예비로 가지 않고 StopDirError(그 폴더는 같은 "
+                  "PC 의 v1 워커가 보는 전역 정지 폴더 — sim 이 쓰거나 지우면 v1 측정이 멈추거나 정지를 놓침). 워커는 기존 처리대로 finished/fatal ok=False 로 알림.",
+         reason="사용자 지시 2026-11-23(윈도우 장비 노트북 첫 sim 시험 — 포트·폴더 보강)", confirm=False,
+         where="v2/common/netbind.py; v2/ch12/local_server.py; v2/ch12/robot_api.py; v2/ch12/assembly.py(bind_failed 문구); v2/robot_server/server.py·"
+               "app.py·fake_api.py; v2/ch12/sim/tcp_adapter.py·inventory_sim.py; v2/tools/v1golden_*.py(listen); v2/ch12/workers/oes_common.py"
+               "(_stop_dir·StopDirError); v2/tests/test_netbind.py"),
 ]

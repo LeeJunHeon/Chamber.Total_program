@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any, Optional, Sequence
 
 from v2.ch12.params.robot import robot_cfg
+from v2.common.netbind import PortBusy
 from v2.robot_server.cache import ReplyCache
 from v2.robot_server.forward import Forwarder
 from v2.robot_server.log import CommandCsv, ServerLog
@@ -63,7 +64,10 @@ async def _run(cfg: dict, fake_api: bool) -> int:
         try:
             await srv.start()
         except Exception as e:
-            slog.log("NET", f"Host start failed: {e!r}")
+            # 로그 줄은 v1 그대로('Host start failed: OSError(..)'), 콘솔에는 어느 포트를 왜 못 열었는지(netbind PortBusy — D428)
+            slog.log("NET", f"Host start failed: {(e.cause if isinstance(e, PortBusy) and e.cause else e)!r}")
+            if isinstance(e, PortBusy):
+                print(f"[중지] {e}", file=sys.stderr, flush=True)
             return 1
         started = True
         slog.log("NET", f"Host started on {srv.host}:{srv.port}")

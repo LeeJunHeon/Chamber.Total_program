@@ -12,15 +12,15 @@ import threading
 import time
 from typing import List, Optional, Tuple
 
+from v2.common.netbind import listen_socket
+
 
 class SimTcpServer:
     def __init__(self, device, origin: Optional[float] = None, port: int = 0) -> None:
         self.dev = device
         self.origin = time.monotonic() if origin is None else origin
-        self._srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        self._srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self._srv.bind(("127.0.0.1", port))
-        self._srv.listen(4)
+        # 윈도우에서 이미 쓰는 포트에 같이 열리지 않게(공용 netbind — D428)
+        self._srv = listen_socket("127.0.0.1", port, 4, name=f"sim {getattr(device, 'name', '장비')} TCP")
         self._srv.settimeout(0.05)
         self.port = self._srv.getsockname()[1]
         self.written: List[bytes] = []

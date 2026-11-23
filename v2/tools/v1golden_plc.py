@@ -23,7 +23,6 @@ import asyncio
 import importlib
 import json
 import os
-import socket
 import struct
 import sys
 import threading
@@ -36,6 +35,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
 from v2.common.modbus_tcp import mbap, split_request   # noqa: E402
+from v2.common.netbind import listen_socket   # noqa: E402
 
 
 # ───────── 가짜 Modbus TCP 서버 ─────────
@@ -49,10 +49,7 @@ class FakePlc:
         self.conn = 0
         self.t0 = time.monotonic()
         self.lock = threading.Lock()
-        self.srv = socket.socket()
-        self.srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.srv.bind(("127.0.0.1", 0))
-        self.srv.listen(8)
+        self.srv = listen_socket("127.0.0.1", 0, 8, name="v1 골든 가짜 PLC")   # 공용 netbind(D428)
         self.port = self.srv.getsockname()[1]
         threading.Thread(target=self._accept, daemon=True).start()
 

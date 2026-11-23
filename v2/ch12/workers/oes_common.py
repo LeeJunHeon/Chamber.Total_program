@@ -438,13 +438,22 @@ def _env_float(name: str, default: float) -> float:
         return float(default)
 
 
+class StopDirError(OSError):
+    """sim 정지 플래그 폴더를 만들 수 없음 — sim 은 v1 과 같은 %TEMP%\\VanaM_OES_STOP 예비로 가지 않는다(D428)."""
+
+
 def _stop_dir() -> Path:
     # ✅ 메인이 out_dir 몰라도 stop 보낼 수 있게 "고정" stop 폴더 사용
     base = Path(os.environ.get("OES_STOP_DIR", str(_worker_base_dir() / "stop")))
     try:
         base.mkdir(parents=True, exist_ok=True)
-    except Exception:
-        # 최후: TEMP
+    except Exception as e:
+        if os.environ.get("OES_MUTEX_PREFIX"):
+            # sim(sim_guard 가 OES_MUTEX_PREFIX·OES_STOP_DIR 를 sim_out 아래로 줌): 예비 %TEMP%\VanaM_OES_STOP 은 같은 PC 의
+            # v1(운영) 워커가 보는 전역 정지 폴더다 — sim 이 거기 플래그를 쓰거나 지우면 v1 측정이 멈추거나 정지를 놓친다. 오류로 끝(D428)
+            raise StopDirError(f"sim OES 정지 플래그 폴더 {base} 를 만들 수 없음 — sim 은 %TEMP%\\VanaM_OES_STOP(v1 운영 폴더)로 "
+                               f"가지 않습니다({type(e).__name__}: {e})") from e
+        # 최후: TEMP (운영 — v1 과 같음)
         base = Path(os.environ.get("TEMP", str(Path.home()))) / "VanaM_OES_STOP"
         base.mkdir(parents=True, exist_ok=True)
     return base

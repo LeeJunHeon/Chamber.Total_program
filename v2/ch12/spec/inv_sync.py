@@ -303,4 +303,17 @@ ITEMS = [
          v1="(v1 저장소 밖 — 시험 정리)", v2="v2/tests/conftest.py; v2/tests/test_repo_paths.py",
          test="v2/tests/test_repo_paths.py::test_rule_catches_known_bad_names; v2/tests/test_repo_paths.py::test_every_tracked_path_is_windows_safe",
          status="done", note=""),
+    dict(id="SYNC-568", area="sync",
+         desc="listen 포트 한 프로그램만(D428): 윈도우 SO_EXCLUSIVEADDRUSE·못 열면 PortBusy(이름·포트), 모든 listen 이 netbind, 내부 API 포트 충돌 → "
+              "bind_failed 문구, 로봇 서버 v1 로그 줄 그대로 + 콘솔 [중지], sim OES 정지 폴더 %TEMP% 예비 없음(운영은 v1 그대로)",
+         v1="(v1 — robot API 없음·로봇 서버 SO_REUSEADDR 기본, OES 워커 TEMP 예비)", v2="v2/common/netbind.py; v2/ch12/workers/oes_common.py",
+         test="v2/tests/test_netbind.py::test_listen_socket_twice_is_port_busy_with_clear_message; "
+              "v2/tests/test_netbind.py::test_windows_uses_exclusiveaddruse_not_reuseaddr; "
+              "v2/tests/test_netbind.py::test_windows_http_server_bind_sets_exclusive_and_no_reuse; "
+              "v2/tests/test_netbind.py::test_every_listen_in_v2_goes_through_netbind; "
+              "v2/tests/test_netbind.py::test_assembly_reports_busy_robot_api_port_and_keeps_running; "
+              "v2/tests/test_netbind.py::test_robot_server_busy_port_keeps_v1_log_line_and_prints_clear_message; "
+              "v2/tests/test_netbind.py::test_sim_oes_stop_dir_does_not_fall_back_to_temp; "
+              "v2/tests/test_netbind.py::test_production_oes_stop_dir_keeps_v1_temp_fallback",
+         status="done", note=""),
 ]

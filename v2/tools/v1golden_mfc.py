@@ -79,7 +79,8 @@ def _cfg_ns(mod) -> types.SimpleNamespace:
 
 async def _run_chamber(mfc_mod, cfg_mod, chamber: str, cases: list) -> list:
     dev = FakeMfc()
-    server = await asyncio.start_server(dev.handle, "127.0.0.1", 0)
+    from v2.common.netbind import listen_socket   # 공용 listen(D428 — 윈도우 SO_EXCLUSIVEADDRUSE)
+    server = await asyncio.start_server(dev.handle, sock=listen_socket("127.0.0.1", 0, 100, name="v1 골든 가짜 MFC"))
     port = server.sockets[0].getsockname()[1]
     cfg = _cfg_ns(cfg_mod)
     m = mfc_mod.AsyncMFC(host="127.0.0.1", port=port, enable_verify=False, enable_stabilization=True,

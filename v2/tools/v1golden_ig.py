@@ -69,7 +69,8 @@ def _cfg_ns(mod, extra: dict) -> types.SimpleNamespace:
 
 async def _case(ig_mod, cfg_mod, case: dict) -> dict:
     dev = FakeIg(case.get("rdi", []), case.get("sig1", "OK"))
-    server = await asyncio.start_server(dev.handle, "127.0.0.1", 0)
+    from v2.common.netbind import listen_socket   # 공용 listen(D428 — 윈도우 SO_EXCLUSIVEADDRUSE)
+    server = await asyncio.start_server(dev.handle, sock=listen_socket("127.0.0.1", 0, 100, name="v1 골든 가짜 IG"))
     port = server.sockets[0].getsockname()[1]
     if case.get("default_cfg"):
         ig = ig_mod.AsyncIG(host="127.0.0.1", port=port)          # TSP 런타임과 같게 cfg 없이

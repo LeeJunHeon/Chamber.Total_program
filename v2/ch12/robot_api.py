@@ -32,10 +32,11 @@ import json
 import threading
 from dataclasses import dataclass
 from datetime import datetime
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from typing import Any, Callable, Dict, List, Optional, Tuple
 
 from v2.ch12 import errors as ER
+from v2.common.netbind import ExclusiveHTTPServer
 
 Json = Dict[str, Any]
 API_HOST = "127.0.0.1"
@@ -181,8 +182,8 @@ class RobotApi:
                 except Exception:
                     pass
 
-        self._httpd = ThreadingHTTPServer((API_HOST, p), _H)
-        self._httpd.daemon_threads = True
+        # 윈도우에서 이미 쓰는 포트에 같이 열리지 않게(SO_EXCLUSIVEADDRUSE — 못 열면 PortBusy, 조립이 bind_failed 로 알림 — D428)
+        self._httpd = ExclusiveHTTPServer((API_HOST, p), _H, name="로봇 내부 명령 API")
         self.port = int(self._httpd.server_address[1])
         self._thread: Optional[threading.Thread] = None
 

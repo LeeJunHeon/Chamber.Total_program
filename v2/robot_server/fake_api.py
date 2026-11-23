@@ -10,7 +10,9 @@ from __future__ import annotations
 import json
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
+
+from v2.common.netbind import ExclusiveHTTPServer
 from typing import Any, Callable, Dict, List, Optional
 
 from v2.robot_server.forward import API_PATH, EVENT_PATH
@@ -71,8 +73,7 @@ class FakeApi:
                 except Exception:
                     pass
 
-        self._httpd = ThreadingHTTPServer(("127.0.0.1", port), _H)
-        self._httpd.daemon_threads = True
+        self._httpd = ExclusiveHTTPServer(("127.0.0.1", port), _H, name="가짜 내부 명령 API")   # D428
         self.port = int(self._httpd.server_address[1])
         self._thread: Optional[threading.Thread] = None
 

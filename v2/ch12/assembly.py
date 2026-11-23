@@ -512,7 +512,9 @@ def build(system, cfg: Optional[Dict[str, Any]] = None, *, settings_dir: Optiona
             else:
                 system.start_hooks.append(asm.robot_api.start)
         except OSError as ex:                       # 포트를 못 잡아도 공정·안전은 그대로(로봇 서버는 '응답 없음'으로 다룬다)
-            system.emit("robot_api", "bind_failed", f"내부 명령 API 포트 열기 실패: {ex}", level="error", code="ROBOT_NOT_READY")
+            # 윈도우도 이미 쓰는 포트에 같이 열지 않는다(netbind SO_EXCLUSIVEADDRUSE — D428) — 문구에 어느 포트·무엇 때문인지
+            system.emit("robot_api", "bind_failed", f"내부 명령 API 포트 열기 실패: {ex} — 로봇 명령을 받지 못함(공정·안전은 그대로)",
+                        level="error", code="ROBOT_NOT_READY")
 
     # 7 허브·설정 적용
     from v2.ch12 import config_apply as CA, hub as H

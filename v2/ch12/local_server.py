@@ -28,15 +28,15 @@ import json
 import mimetypes
 import os
 import socket
-import sys
 import threading
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
 from pathlib import Path
 from typing import Any, Optional
 from urllib.parse import parse_qs, unquote, urlsplit
 
 from v2.common.commands import Source
 from v2.common.messages import dumps_json
+from v2.common.netbind import ExclusiveHTTPServer, listen_socket
 from v2.ch12.hub import CLOSED
 
 HOST = "127.0.0.1"
@@ -62,30 +62,14 @@ def _dumps(obj: Any) -> bytes:
     return dumps_json(obj)
 
 
-class _Server(ThreadingHTTPServer):
-    daemon_threads = True
-    allow_reuse_address = sys.platform != "win32"   # Windows SO_REUSEADDR 는 같은 포트 두 번 바인드를 허용한다 — 끔
-
-    def server_bind(self) -> None:
-        if sys.platform == "win32" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
-            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-        super().server_bind()
+class _Server(ExclusiveHTTPServer):
+    """윈도우 SO_EXCLUSIVEADDRUSE·SO_REUSEADDR 끔(같은 포트 두 번 바인드 막기) — 공용 v2/common/netbind(D428)."""
+    name = "로컬 화면 서버"
 
 
 def bind_socket(port: int) -> socket.socket:
-    """한 번만 실행 — 127.0.0.1:port 를 잡아 listen 한 소켓(실패 = OSError, 이미 실행 중). LocalServer(sock=) 가 이어받는다."""
-    s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    try:
-        if sys.platform == "win32" and hasattr(socket, "SO_EXCLUSIVEADDRUSE"):
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
-        else:
-            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)   # TIME_WAIT 중에도 바로 다시(LISTEN 중이면 여전히 실패)
-        s.bind((HOST, int(port)))
-        s.listen(16)
-    except OSError:
-        s.close()
-        raise
-    return s
+    """한 번만 실행 — 127.0.0.1:port 를 잡아 listen 한 소켓(실패 = PortBusy(OSError), 이미 실행 중). LocalServer(sock=) 가 이어받는다."""
+    return listen_socket(HOST, int(port), 16, name="로컬 화면 서버")
 
 
 class LocalServer:

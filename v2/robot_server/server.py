@@ -31,6 +31,7 @@ import time
 from datetime import datetime
 from typing import Any, Callable, Dict, Optional
 
+from v2.common.netbind import listen_socket
 from v2.robot_server.cache import ReplyCache
 from v2.robot_server.forward import COMMANDS, Forwarder, ForwardDown
 from v2.robot_server.log import CommandCsv
@@ -72,7 +73,9 @@ class RobotServer:
 
     # ── 시작·종료 ──
     async def start(self) -> None:
-        self._server = await asyncio.start_server(self._handle, self.host, self.port)
+        # 윈도우에서 이미 쓰는 포트(v1 로봇 서버 등)에 같이 열리지 않게 — 공용 netbind 로 잡은 소켓을 넘긴다(D428, 못 열면 PortBusy)
+        sock = listen_socket(self.host, self.port, 100, name="로봇 서버")
+        self._server = await asyncio.start_server(self._handle, sock=sock)
         sock = next(iter(self._server.sockets or []), None)
         self.log("NET", f"Host started on {sock.getsockname() if sock else (self.host, self.port)}")
 

@@ -12,7 +12,9 @@ from __future__ import annotations
 import json
 import threading
 import time
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler
+
+from v2.common.netbind import ExclusiveHTTPServer
 from typing import Any, List, Optional
 
 PATH = "/inventory/api/chamber-slots"
@@ -58,8 +60,7 @@ class FakeInventoryServer:
                 except Exception:
                     pass
 
-        self._httpd = ThreadingHTTPServer(("127.0.0.1", int(port)), _H)
-        self._httpd.daemon_threads = True
+        self._httpd = ExclusiveHTTPServer(("127.0.0.1", int(port)), _H, name="sim 재고 서버")   # D428
         self.port = int(self._httpd.server_address[1])
         self.url = f"http://127.0.0.1:{self.port}{PATH}"
         self._thread: Optional[threading.Thread] = None

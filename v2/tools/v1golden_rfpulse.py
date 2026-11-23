@@ -110,7 +110,8 @@ async def run_case(m, name, call, args, state, pre_on) -> dict:
                         loop.call_later(max(0.0, t - now), lambda b=b: (not writer.is_closing()) and writer.write(b))
         finally:
             writer.close()
-    server = await asyncio.start_server(handle, "127.0.0.1", 0)
+    from v2.common.netbind import listen_socket   # 공용 listen(D428 — 윈도우 SO_EXCLUSIVEADDRUSE)
+    server = await asyncio.start_server(handle, sock=listen_socket("127.0.0.1", 0, 100, name="v1 골든 가짜 RF 펄스"))
     port = server.sockets[0].getsockname()[1]
     d = m.RFPulseAsync()
     d.set_endpoint("127.0.0.1", port)
