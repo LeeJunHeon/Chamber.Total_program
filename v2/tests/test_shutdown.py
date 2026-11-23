@@ -100,6 +100,9 @@ def test_real_app_signal_marks_journal_and_exits_0(tmp_path, sig):
     pr.p.send_signal(sig)
     assert pr.wait(30.0) == 0, pr.text
     name = "SIGINT" if sig == signal.SIGINT else "SIGTERM"
+    # 의도적 종료 줄은 콘솔에 한 번(INFO — 예전에는 같은 줄 + '[WARNING] 같은 줄' 두 번, D429)
+    ex = [ln for ln in pr.lines if "의도적 종료(" in ln]
+    assert len(ex) == 1 and ex[0].startswith(f"의도적 종료({name})") and "[WARNING]" not in pr.text, pr.text
     for part in ("ch1", "ch2", "shared"):
         d = json.loads((tmp_path / "sim_out" / "data" / "journal" / f"{part}.json").read_text(encoding="utf-8"))
         assert d["exit"] == {"intentional": True, "why": name, "t_wall": d["exit"]["t_wall"]} and d["active"] is False

@@ -913,4 +913,21 @@ DECISIONS += [
          where="v2/common/netbind.py; v2/ch12/local_server.py; v2/ch12/robot_api.py; v2/ch12/assembly.py(bind_failed 문구); v2/robot_server/server.py·"
                "app.py·fake_api.py; v2/ch12/sim/tcp_adapter.py·inventory_sim.py; v2/tools/v1golden_*.py(listen); v2/ch12/workers/oes_common.py"
                "(_stop_dir·StopDirError); v2/tests/test_netbind.py"),
+    dict(id="D429", title="2026-11-23 장비 노트북에서 띄우기 쉽게 — 꾸러미 zip·VERSION 버전·sim 낮은 우선순위·실행 cmd 파이썬 순서·콘솔 안내 한 번",
+         decision="꾸러미: python -m v2.tools.pack [--out 폴더] [--ref HEAD] — 그 커밋의 git 추적 v2 파일(git archive — 작업 폴더 변경은 담지 않고 알림만)에서 "
+                  "시험(v2/tests, 골든 포함)·v1 골든 도구(v1golden_*·robot_golden_cases·make_web_golden_*)를 빼고, 맨 위 VERSION(첫 줄 '브랜치@커밋7', 전체 커밋, "
+                  "만든 시각)을 넣은 zip(ch12_v2_<브랜치>_<커밋7>.zip, 기본 저장소의 상위 폴더 — 저장소 안에 만들지 않음). zip 안 경로는 윈도우 이름 규칙"
+                  "(v2/common/winnames — test_repo_paths 와 같은 규칙)을 어기면 만들지 않는다. 버전 표시(app.git_version): .git 이 있으면 지금처럼, 없으면(zip 을 "
+                  "푼 폴더) 맨 위 VERSION 첫 줄, 둘 다 없으면 unknown(예전에는 장비 노트북에서 'unknown'). sim 우선순위: v1 운영과 같은 PC 에서 돌므로 sim 제어 "
+                  "프로그램·sim 로봇 서버는 윈도우에서 스스로 BelowNormal(SetPriorityClass — 시작 줄 뒤·워커를 띄우기 전, 자식 워커는 CreateProcess 규칙으로 "
+                  "같은 우선순위를 물려받음). 실행 cmd 의 'start /belownormal /b' 는 콘솔 Ctrl+C 를 꺼서 쓰지 않는다. run_ch12_sim.cmd·"
+                  "run_ch12_sim_robot_server.cmd 파이썬 순서: C:\\CH12_v2\\venv\\Scripts\\python.exe → py -3.13 → py -3.11 → PATH 의 python(CRLF). 운영 "
+                  "run_ch12_v2.cmd·run_ch12_robot_server.cmd 는 그대로. 콘솔: 감시 창 준비·user32 로드됨·의도적 종료 결과 같은 안내는 콘솔 한 번·파일 INFO"
+                  "(예전 say + log.warning 이라 같은 줄 + '[WARNING] 같은 줄' 두 번), 실패만 '[WARNING]' 한 번. 이미 콘솔에 찍은 경고([재시작]·[종료 거부]·"
+                  "장비 연결 실패)는 파일에만 WARNING(warn_once — 콘솔 경고 처리기 건너뜀). 의도적 종료 중 S32 사건 'POWER_OFF_ONLY 의도적 종료(…) — 파워 출력만 끔' 은 파일에만(콘솔은 결과 한 줄 '의도적 종료(…) — S32 …', 웹·로컬 POWER_OFF_ONLY 명령 때는 그대로 콘솔에도). SIGTERM 의도적 종료는 감시 처리(exit_now)가 이미 했으면 원래 "
+                  "shutdown 이 파워만 끄기를 다시 하지 않아 줄이 두 번 나오지 않는다.",
+         reason="사용자 지시 2026-11-23(윈도우 장비 노트북 첫 sim 시험 — 띄우기 쉽게)", confirm=False,
+         where="v2/tools/pack.py; v2/common/winnames.py·winproc.py; v2/ch12/app.py(git_version·VERSION_FILE·note/warn·warn_once·_exit_done·"
+               "lower_priority); v2/ch12/winshell.py(warn); v2/robot_server/app.py(--sim 우선순위); v2/run_ch12_sim.cmd; "
+               "v2/run_ch12_sim_robot_server.cmd; v2/tests/test_pack.py·test_shutdown.py"),
 ]

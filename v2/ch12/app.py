@@ -50,7 +50,7 @@ from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 from urllib.parse import urlsplit
 
-from v2.common import winpaths
+from v2.common import winpaths, winproc
 from v2.common.clock import RealClock
 from v2.common.config_store import ConfigError
 from v2.common.mode import RunMode, policy, resolve_mode
@@ -109,10 +109,26 @@ def repo_root() -> Path:
     return Path(__file__).resolve().parents[2]
 
 
+VERSION_FILE = "VERSION"     # 꾸러미(python -m v2.tools.pack)가 zip 맨 위(v2 폴더 옆)에 넣는 '브랜치@커밋7'(D429)
+
+
 def git_version(root: Optional[Path] = None) -> str:
-    """.git 의 HEAD·ref 파일만 읽는다(git 명령 없음). 브랜치@SHA7, 분리 HEAD 면 SHA7, 못 읽으면 unknown."""
+    """.git 의 HEAD·ref 파일만 읽는다(git 명령 없음). 브랜치@SHA7, 분리 HEAD 면 SHA7.
+    .git 이 없으면(꾸러미 zip 을 푼 폴더 — 장비 노트북) 맨 위 VERSION 첫 줄, 그것도 없으면 unknown(D429)."""
+    r = root or repo_root()
+    v = _git_head_version(r)
+    if v != "unknown":
+        return v
     try:
-        g = (root or repo_root()) / ".git"
+        line = (r / VERSION_FILE).read_text(encoding="utf-8-sig").splitlines()[0].strip()
+    except (OSError, IndexError, UnicodeDecodeError):
+        return "unknown"
+    return line or "unknown"
+
+
+def _git_head_version(root: Path) -> str:
+    try:
+        g = root / ".git"
         if g.is_file():
             g = (g.parent / g.read_text(encoding="utf-8").split(":", 1)[1].strip()).resolve()
         head = (g / "HEAD").read_text(encoding="utf-8").strip()
@@ -159,6 +175,8 @@ class App:
         self.resumer = None
         self._resume_thread: Optional[threading.Thread] = None
         self.require_sim = False                                   # --sim: 설정이 sim 이 아니면 거부
+        self._exit_done = False                                    # 의도적 종료 처리를 이미 함(종료 줄 한 번 — D429)
+        self._exit_started = False                                 # 의도적 종료 처리 중(S32 사건 줄은 파일에만 — D429)
         self._before_uplink_start: List[Callable[[], None]] = []    # 웹 연결을 만든 뒤·시작하기 전(명령을 받기 전)에 부를 것
 
     # ───────── 1 설정 ─────────
@@ -233,6 +251,8 @@ class App:
 
         class _Console(logging.Handler):                  # 콘솔은 경고·오류만(시작 줄은 따로)
             def emit(self, rec):
+                if getattr(rec, "console_done", False):   # 이미 콘솔에 찍은 줄(warn_once) — 두 번 찍지 않음(D429)
+                    return
                 try:
                     say(f"[{rec.levelname}] {rec.getMessage()}")
                 except Exception:
@@ -240,6 +260,11 @@ class App:
         for h in (fh, _Console(logging.WARNING)):
             self.log.addHandler(h)
             self._log_handlers.append(h)
+
+    def warn_once(self, console_text: str, fmt: str, *args: Any) -> None:
+        """콘솔에 console_text 한 번 + 파일 WARNING(콘솔 경고 처리기는 건너뜀 — '[WARNING] …' 로 두 번 찍지 않게, D429)."""
+        self.say(console_text)
+        self.log.warning(fmt, *args, extra={"console_done": True})
 
     def _start_lines(self) -> List[str]:
         c, st = self.cfg, self.store
@@ -292,7 +317,10 @@ class App:
 
     def _log_event(self, e) -> None:
         lv = {"error": logging.ERROR, "warn": logging.WARNING}.get(e.level, logging.INFO)
-        self.log.log(lv, "%s %s %s", e.source, (e.code or e.reason or e.kind), e.detail)
+        # 의도적 종료 중 S32 'POWER_OFF_ONLY 의도적 종료(…) — 파워 출력만 끔' 은 파일에만 — 콘솔은 결과 한 줄(의도적 종료(…) — S32 …)
+        # 이 같은 일을 이미 알린다(예전에는 두 줄, D429). 웹·로컬 명령 POWER_OFF_ONLY 는 그대로 콘솔에도
+        quiet = self._exit_started and e.kind == "fired" and (e.code or e.reason) == "POWER_OFF_ONLY"
+        self.log.log(lv, "%s %s %s", e.source, (e.code or e.reason or e.kind), e.detail, extra={"console_done": quiet})
 
     def _debug_event(self, e) -> None:
         """DEBUG_PRINT(v1 common.DEBUG_PRINT, 운영값 false): 켜면 장비 이벤트를 콘솔에 한 줄씩 — v1 드라이버가 debug_print 일 때
@@ -321,6 +349,11 @@ class App:
             for line in self._start_lines():
                 self.say(line)
                 self.log.info(line)
+            if RunMode(self.cfg["RUN_MODE"]) is RunMode.SIM:   # sim 은 v1 운영보다 뒤(윈도우 BelowNormal — 워커를 띄우기 전, D429)
+                line = winproc.lower_priority()
+                if line:
+                    self.say(line)
+                    self.log.info(line)
             if self._winpath_keys:                         # 윈도우가 아닌 곳에서 윈도우 경로를 바꿔 썼으면 한 줄
                 line = winpaths.note(self._winpath_keys)
                 self.say(line)
@@ -334,8 +367,11 @@ class App:
             ok = s.start(ready_timeout_s=10.0)
             msg = "장비 연결: " + ", ".join(f"{k} {'준비' if w.ready else '연결 안 됨(재시도 중)'}"
                                          for k, w in s.workers.items() if s.enabled[k])
-            self.say(msg)
-            (self.log.info if ok else self.log.warning)(msg)
+            if ok:
+                self.say(msg)
+                self.log.info(msg)
+            else:
+                self.warn_once(msg, "%s", msg)
             self._tick_thread = self.clock.start_thread(s.loop.run, "tick")
             self.start_health(s)
             self.attach_server(s)
@@ -353,7 +389,7 @@ class App:
         (1초 행 몇 개를 다시 읽은 뒤 — 이어가기 또는 PROGRAM_RESTART 안전 정지). 웹 명령 기억은 웹 연결을 만든 뒤·
         uplink.start 전에 넣는다(_before_uplink_start)."""
         from v2.ch12 import resume as RS
-        say = lambda m: (self.say(f"[재시작] {m}"), self.log.warning("재시작: %s", m))   # noqa: E731
+        say = lambda m: self.warn_once(f"[재시작] {m}", "재시작: %s", m)   # noqa: E731 — 콘솔 한 번(D429)
         self.journal, self.resumer = RS.attach(s, log=say)
         for part, d in self.resumer.active.items():
             say(f"지난 실행의 {part} 공정(run {d.get('run_id')})이 저널에 '공정 중' — 장비를 다시 읽고 이어가기/안전 정지 판단")
@@ -414,13 +450,27 @@ class App:
         import os
         from v2.ch12 import resume as RS
         from v2.ch12 import winshell
-        say = lambda m: (self.say(m), self.log.warning("%s", m))                # noqa: E731
+        def note(m: str) -> None:
+            """안내(감시 창 준비·user32·의도적 종료 결과) — 콘솔 한 번(INFO 라 [WARNING] 없음)·파일 INFO(D429).
+            예전에는 say + log.warning 이라 콘솔 경고 처리기가 '[WARNING] …' 를 한 번 더 찍었다."""
+            self.say(m)
+            self.log.info("%s", m)
+
+        def warn(m: str) -> None:
+            """실패 — 콘솔 경고 처리기가 '[WARNING] …' 한 번(처리기가 아직 없으면 직접)·파일 WARNING."""
+            if not self._log_handlers:
+                self.say(f"[WARNING] {m}")
+            self.log.warning("%s", m)
 
         def exit_now(why: str):
             s = self.system
             if s is None:
                 return None
-            return RS.intentional_exit(s, getattr(self, "journal", None), why, log=say)
+            self._exit_started = True
+            res = RS.intentional_exit(s, getattr(self, "journal", None), why, log=note)
+            if res is not None:
+                self._exit_done = True                     # 원래 shutdown 의 SIGTERM 파워만 끄기를 두 번 하지 않게
+            return res
         orig_shutdown = self.shutdown
 
         def shutdown(why: str = "SIGINT") -> None:
@@ -443,7 +493,7 @@ class App:
                     h.flush()
             finally:
                 os._exit(EXIT_OK)
-        self.shell = winshell.install(on_console, say)
+        self.shell = winshell.install(on_console, note, warn)
 
     # ───────── 실행 ─────────
     def run(self) -> int:
@@ -493,8 +543,7 @@ class App:
     def on_ctrl_c(self) -> str:
         kind, msg = self.exit_check()
         if kind == "refuse":
-            self.say(f"[종료 거부] {msg}")
-            self.log.warning("종료 거부: %s", msg)
+            self.warn_once(f"[종료 거부] {msg}", "종료 거부: %s", msg)
             if self.system is not None and (getattr(self.system, "cfg", None) or {}).get("LOG_ROOT_DIR"):
                 # v1 종료 차단 때 덤프 1회(close_blocked_while_running — main.py:1500-1505). 기록 폴더가 정해진 조립에서만
                 from v2.ch12.runtime_dump_hook import dump_close_blocked
@@ -506,7 +555,8 @@ class App:
         self.say(f"종료 중({why}) — 포트 닫기·기록 정리")
         self.log.info("정상 종료 시작(%s)", why)
         s = self.system
-        if why == "SIGTERM" and s is not None and s.busy() and getattr(s, "safety", None) is not None:
+        if why == "SIGTERM" and not self._exit_done and s is not None and s.busy() and getattr(s, "safety", None) is not None:
+            self._exit_started = True
             res = s.safety.power_off_only("PROGRAM_EXIT")      # 의도적 종료 — 파워 출력만(챔버K 결정 4, safety S32)
             self.log.warning("의도적 종료(%s) — 파워만 끔: %s", why, res)
         self._teardown()

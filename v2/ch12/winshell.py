@@ -41,9 +41,11 @@ def user32_loaded() -> Optional[bool]:
 class WinShell:
     """콘솔 처리기 + 숨은 창. on_exit(이름) — 한 번만 부른다."""
 
-    def __init__(self, on_exit: Callable[[str], Any], log: Optional[Callable[[str], None]] = None) -> None:
+    def __init__(self, on_exit: Callable[[str], Any], log: Optional[Callable[[str], None]] = None,
+                 warn: Optional[Callable[[str], None]] = None) -> None:
         self.on_exit = on_exit
-        self.log = log or (lambda m: None)
+        self.log = log or (lambda m: None)                # 안내(감시 창 준비·user32 등) — 콘솔 한 번·INFO(D429)
+        self.warn = warn or self.log                       # 실패만 경고
         self._fired = threading.Lock()
         self._ctrl_ref = None
         self._wndproc = None
@@ -56,7 +58,7 @@ class WinShell:
         try:
             self.on_exit(why)
         except Exception as e:
-            self.log(f"종료 처리 오류: {e!r}")
+            self.warn(f"종료 처리 오류: {e!r}")
 
     # ── 콘솔 신호 ──
     def install_ctrl_handler(self) -> bool:
@@ -76,7 +78,7 @@ class WinShell:
             ctypes.WinDLL("kernel32").SetConsoleCtrlHandler(self._ctrl_ref, True)
             return True
         except Exception as e:
-            self.log(f"콘솔 닫기 처리기 설치 실패: {e!r}")
+            self.warn(f"콘솔 닫기 처리기 설치 실패: {e!r}")
             return False
 
     # ── 로그오프·윈도우 종료(숨은 창) ──
@@ -147,7 +149,7 @@ class WinShell:
             box["hwnd"] = hwnd
             ready.set()
             if not hwnd:
-                self.log(f"로그오프·윈도우 종료 감시 창을 만들지 못함({ctypes.get_last_error()})")
+                self.warn(f"로그오프·윈도우 종료 감시 창을 만들지 못함({ctypes.get_last_error()})")
                 return
             self.log("로그오프·윈도우 종료 감시 창(WM_ENDSESSION) 준비")
             msg = wintypes.MSG()
@@ -157,14 +159,15 @@ class WinShell:
             u.UnregisterClassW(CLASS_NAME, wc.hInstance)
         except Exception as e:
             ready.set()
-            self.log(f"로그오프·윈도우 종료 감시 실패: {e!r}")
+            self.warn(f"로그오프·윈도우 종료 감시 실패: {e!r}")
 
 
-def install(on_exit: Callable[[str], Any], log: Optional[Callable[[str], None]] = None) -> Optional[WinShell]:
-    """윈도우면 콘솔 처리기·숨은 창을 설치한 WinShell, 아니면 None."""
+def install(on_exit: Callable[[str], Any], log: Optional[Callable[[str], None]] = None,
+            warn: Optional[Callable[[str], None]] = None) -> Optional[WinShell]:
+    """윈도우면 콘솔 처리기·숨은 창을 설치한 WinShell, 아니면 None. log = 안내(한 번·INFO), warn = 실패(경고)."""
     if not is_windows():
         return None
-    sh = WinShell(on_exit, log)
+    sh = WinShell(on_exit, log, warn)
     sh.install_ctrl_handler()
     sh.start_session_window()
     log and log(f"user32 로드됨: {user32_loaded()} (참이면 로그오프·종료는 숨은 창으로 받음)")

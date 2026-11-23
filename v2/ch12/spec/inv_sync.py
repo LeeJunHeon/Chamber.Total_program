@@ -316,4 +316,13 @@ ITEMS = [
               "v2/tests/test_netbind.py::test_sim_oes_stop_dir_does_not_fall_back_to_temp; "
               "v2/tests/test_netbind.py::test_production_oes_stop_dir_keeps_v1_temp_fallback",
          status="done", note=""),
+    dict(id="SYNC-569", area="sync",
+         desc="장비 노트북 배포(D429): 꾸러미 zip(v2 만·시험/골든 제외·VERSION), .git 없으면 VERSION 버전, sim 윈도우 BelowNormal, sim cmd 파이썬 "
+              "venv→3.13→3.11→python, 콘솔 안내 INFO 한 번·의도적 종료 줄 한 번",
+         v1="(v1 — 소스 폴더 복사·버전 표시 없음)", v2="v2/tools/pack.py; v2/ch12/app.py; v2/common/winproc.py; v2/run_ch12_sim.cmd",
+         test="v2/tests/test_pack.py::test_pack_zip_has_v2_only_with_version; v2/tests/test_pack.py::test_version_from_version_file_when_no_git; "
+              "v2/tests/test_pack.py::test_lower_priority_sets_below_normal; v2/tests/test_pack.py::test_sim_cmd_python_order_and_crlf; "
+              "v2/tests/test_pack.py::test_shell_notices_are_info_once_and_failures_warning_once; "
+              "v2/tests/test_shutdown.py::test_real_app_signal_marks_journal_and_exits_0",
+         status="done", note=""),
 ]

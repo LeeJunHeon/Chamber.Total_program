@@ -111,6 +111,10 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
                 print(f"  - {b}", flush=True)
             return 2
         sim_guard.apply_env()
+        from v2.common.winproc import lower_priority      # sim 은 v1 운영보다 뒤(윈도우 BelowNormal — D429)
+        line = lower_priority()
+        if line:
+            print(line, flush=True)
     try:
         return asyncio.run(_run(cfg, a.fake_api))
     except KeyboardInterrupt:
