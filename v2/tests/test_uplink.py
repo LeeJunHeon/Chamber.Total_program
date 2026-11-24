@@ -307,6 +307,8 @@ def test_http_errors(tmp_path, rigs, monkeypatch):
     try:
         web.status, web.sse_status = 409, 409
         time.sleep(1.5)
+        # POST·SSE 각각 경고 한 번 — 부하가 큰 전체 시험에서 SSE 쪽 재연결이 늦을 수 있어 조건이 될 때까지(최대 5 s) 기다린다(단언은 같다)
+        web.wait(lambda: len(_codes(rig, "UPLINK_CONFLICT")) >= 2 and sum(1 for p in web.posts if p["code"] == 409) >= 3, 5)
         assert len(_codes(rig, "UPLINK_CONFLICT")) == 2 and sum(1 for p in web.posts if p["code"] == 409) >= 3
         web.status = web.sse_status = None
         assert web.wait(lambda: up.status()["lastError"] is None and up.status()["connected"], 3)
