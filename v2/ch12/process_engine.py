@@ -44,6 +44,7 @@ from v2.ch12.process_records import ProcessRecordsMixin
 from v2.ch12.process_view import ProcessViewMixin
 from v2.ch12.process_list import USE_KEYS, RunPlan, derive_params, plan_runs, raw_rows_from, stop_uses
 from v2.ch12.process_runner import StepRunner, delay_countdown, fmt_hms
+from v2.ch12.step_labels import step_label
 from v2.ch12.process_steps import caps_from_cfg, shutdown_steps, step_cfg
 from v2.ch12.recipe_check import check_norm_params
 
@@ -116,6 +117,7 @@ class ProcessEngine(AdjustMixin, GasStepMixin, MonitorTargetMixin, PF.PreflightM
         # 상태
         self.state_name = "IDLE"                # IDLE · PREFLIGHT · COOLDOWN · RUNNING · CLEANUP
         self.state_text = "대기 중"
+        self.step_label: Optional[str] = None   # 지금 스텝의 화면용 이름(step_labels — 묶음 16 ④). state_text 는 v1 스텝 문구 그대로
         self.run_id: Optional[str] = None
         self.owner: Optional[str] = None
         self.origin = "ui"
@@ -154,6 +156,13 @@ class ProcessEngine(AdjustMixin, GasStepMixin, MonitorTargetMixin, PF.PreflightM
 
     def state(self, text: str) -> None:
         self.state_text = str(text)
+
+    def on_step_shown(self, idx: int, total: int, step, shutdown: bool) -> None:
+        """StepRunner 가 스텝을 시작할 때 — 화면용 이름을 두고 상세 사건 process/step 하나(스텝 문구는 message 그대로 data 에)."""
+        self.step_label = step_label(step)
+        self.emit("step", self.step_label, data={"index": idx + 1, "total": total, "label": self.step_label,
+                                                  "message": step.message, "action": step.action, "shutdown": bool(shutdown),
+                                                  "run_id": self.run_id})
 
     def emit(self, kind: str, detail: str = "", code: Optional[str] = None, level: str = "info",
              data: Optional[dict] = None, **kw) -> ProcEvent:

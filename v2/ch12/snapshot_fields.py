@@ -255,6 +255,8 @@ def _ctx_fields(c: str) -> List[FieldDef]:
         FieldDef(p + "block_count", I, "", f"{lb} 단계 수", source="engine", detail=True),
         FieldDef(p + "block_type", S, "", f"{lb} 단계 종류", source="engine", detail=True, desc="blocks.BLOCK_DEFS 의 type"),
         FieldDef(p + "block_label", S, "", f"{lb} 단계 이름", source="engine", detail=True),
+        FieldDef(p + "step_label", S, "", f"{lb} 진행 중 동작", source="engine", detail=True,
+                 desc="지금 스텝의 화면용 이름(step_labels — 용어표, 묶음 16 ④). 스텝 문구(v1)는 공정 txt·엔진 text 그대로"),
         FieldDef(p + "block_elapsed_s", F, "s", f"{lb} 단계 경과", ".0f", source="engine", detail=True),
         FieldDef(p + "remain_s", F, "s", f"{lb} 단계 남은 시간", ".0f", source="engine", detail=True,
                  desc="지금 블록(대기·증착 등)의 남은 초 — 끝이 정해지지 않은 블록은 null"),

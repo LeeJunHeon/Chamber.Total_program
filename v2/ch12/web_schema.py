@@ -166,6 +166,7 @@ EVENT_KINDS: tuple = (
     ("thickness", "window", "두께 Factor·재료 창 값", _D),
     # 2026-11-18 D414 — 공정 진행 줄을 평소 보기(main)로: 공정 단계(블록) 시작·끝·건너뛰기·일시정지·재개·순서 고침·공정 중 값 바꾸기·
     #   레시피 적재·알림창·챗 경고, 플라즈마 클리닝 결과(PcEvent state)·TSP 결과(TspEngineEvent result). 구글챗 카드 자리·TSP 예약 복원은 상세
+    ("process", "step", "공정 동작", _D),
     ("process", "block", "공정 단계", _M), ("process", "skip", "단계 건너뜀", _M), ("process", "pause", "일시정지·재개", _M),
     ("process", "resume", "재개", _M), ("process", "edit", "순서 고침", _M), ("process", "adjust", "공정 중 값 바꾸기", _M),
     ("process", "recipe_loaded", "레시피 적재", _M), ("process", "popup", "알림창", _M), ("process", "chat", "구글챗 알림", _M),

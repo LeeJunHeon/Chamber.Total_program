@@ -73,6 +73,7 @@ class ProcessViewMixin:
                     c + "proc.recipe_rev": self.seq.rev if self.seq else 0, c + "proc.block_no": self.block_no(),
                     c + "proc.block_count": len(self.blocks), c + "proc.block_type": btype,
                     c + "proc.block_label": inst.label if inst else None,
+                    c + "proc.step_label": self.step_label if self.runner.is_running else None,
                     c + "proc.block_elapsed_s": None if self.block_t0 is None else round(self.clock.monotonic() - self.block_t0, 1),
                     c + "proc.remain_s": self.runner.remaining_s(), c + "proc.eta_remaining_s": self.eta_remaining_s(),
                     c + "proc.min_total_s": self.min_total_s()})
@@ -121,6 +122,7 @@ class ProcessViewMixin:
     # ═══════════════════════ 상태·저널(5단계 자리) ═══════════════════════
     def state_dict(self) -> Dict[str, Any]:
         return {"chamber": self.ch, "state": self.state_name, "text": self.state_text, "running": self.runner.is_running,
+                "step_label": self.step_label if self.runner.is_running else None,          # 화면용 단계 이름(묶음 16 ④)
                 "run_id": self.run_id, "owner": self.owner, "paused": self.paused, "block_no": self.block_no(),
                 "block_count": len(self.blocks), "recipe_rev": self.seq.rev if self.seq else 0,
                 "queue": {"index": self.run_idx, "total": len(self.runs), "mode": self.queue_mode},

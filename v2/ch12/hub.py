@@ -492,7 +492,8 @@ class MessageHub:
         al = g("alarms")
         return {"procState": g("state"), "runId": g("run_id"), "owner": g("owner"), "recipeRev": g("recipe_rev"),
                 "step": step, "remainS": g("remain_s"), "etaRemainingS": g("eta_remaining_s"), "minTotalS": g("min_total_s"),
-                "paused": g("paused"), "alarms": [a for a in str(al).split(",") if a] if al else []}
+                "paused": g("paused"), "alarms": [a for a in str(al).split(",") if a] if al else [],
+                "stepLabel": g("step_label")}                    # 진행 중 동작의 화면용 이름(묶음 16 ④)
 
     def _device_timing(self) -> Any:
         return _timing_of(self.sys)

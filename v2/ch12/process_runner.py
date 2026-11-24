@@ -280,6 +280,9 @@ class StepRunner:
                 if not self.shutdown:
                     self.eta.try_confirm(self.steps, self.idx, blocked=self.shutdown, log=self.h.log)
                 self.h.state(step.message)
+                shown = getattr(self.h, "on_step_shown", None)      # 화면용 단계 이름(묶음 16 ④ — 스텝 문구·로그는 그대로)
+                if shown is not None:
+                    shown(self.idx, len(self.steps), step, self.shutdown)
                 self._log(f"[{'종료절차' if self.shutdown else '공정'} {self.idx + 1}/{len(self.steps)}] {step.message}")
                 self.h.on_step(self.idx, step, self.shutdown)
                 par: List[ProcessStep] = []
