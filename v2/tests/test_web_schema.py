@@ -14,10 +14,10 @@ from v2.ch12 import web_schema as W
 from v2.ch12.params import PARAMS, table
 from v2.ch12.sim.rig import Ch12Rig
 
-PINNED = (16, "c67d6b466f7e4d57c8f249a11897b3fa052ea50aa047cc0cdffa4f16fd11f66c")
+PINNED = (16, "9445eb831e082ea1cd9d04e0b7f51fd99ac07b570e843e4c799cad7c67e620a0")
 TOP = ["version", "hash", "paramSchemaHash", "configVersion", "overriddenKeys", "params", "crossRules", "dropped", "commands",
        "preconditions", "reasons", "plcButtons", "plcHazardText", "recipe", "blocks", "adjust", "stopSequence", "states", "events",
-       "eventKinds", "paramGroups", "snapshot", "chambers"]
+       "eventKinds", "eventSources", "paramGroups", "snapshot", "chambers"]
 
 
 def test_version_and_hash_pinned():
@@ -114,7 +114,7 @@ def test_snapshot_definitions_match_hello_columns(tmp_path):
     by = {f["column"]: f for b in sn["blocks"] for f in b["fields"]}
     assert all("source" not in f for f in by.values()) and {f["type"] for f in by.values()} <= {"float", "int", "bool", "str"}
     proc = {f["column"]: f for f in sn["process"]}
-    assert proc["ch1.proc.owner"]["enumLabels"] == {"robot": "로봇", "web": "웹", "local": "로컬"}
+    assert proc["ch1.proc.owner"]["enumLabels"] == {"robot": "로봇", "web": "웹", "local": "노트북"}   # 묶음 16 용어표
     assert all(f["stateColumn"] is None or f["stateColumn"] in sn["columns"] for f in by.values())
 
 

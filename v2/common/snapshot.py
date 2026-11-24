@@ -51,6 +51,7 @@ class FieldDef:
     desc: str = ""            # 개발용 설명(레지스터 등) — 화면은 '상세'에서만
     enum_labels: Optional[tuple] = None   # str 값 → 화면용 이름 ((값, 이름), ...)
     state: str = ""           # 같은 블록의 상태 열 이름(5-14). 값이 비어 있고 상태가 ok 가 아니면 화면은 그 상태 이름을 보인다
+    help: str = ""            # 운전자용 설명(챔버12 묶음 16 ② — 챔버K 묶음 21 과 같은 3단: label 이름 · help 평소 보기 설명 · desc 상세)
 
 
 @dataclass(frozen=True)

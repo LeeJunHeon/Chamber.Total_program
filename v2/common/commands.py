@@ -62,6 +62,7 @@ class Reason:
     code: str
     label: str
     category: str              # reject / abort / fail / info
+    help: str = ""             # 운전자용 설명(챔버12 묶음 16 ②) — 비면 장비 패키지 표(ch12.commands.REASON_HELP)
 
 
 # 장비 공통 사유 코드 — 장비 패키지가 자기 코드를 더한다.

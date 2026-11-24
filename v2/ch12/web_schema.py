@@ -236,6 +236,7 @@ def _web_fmt(fmt: str) -> str:
 def _field(f, column: str) -> dict:
     return {"column": column, "name": f.name, "type": f.type.value, "unit": f.unit, "label": f.label, "fmt": _web_fmt(f.fmt),
             "summary": f.summary, "ownQuality": f.own_quality, "detail": f.detail, "desc": f.desc,
+            "help": f.help,                                              # 묶음 16 ② 운전자용 설명(평소 보기)
             "enumLabels": dict(f.enum_labels) if f.enum_labels else None,
             "stateColumn": f"{column.rsplit('.', 1)[0]}.{f.state}" if f.state else None}
 

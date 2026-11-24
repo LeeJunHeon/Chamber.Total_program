@@ -128,6 +128,84 @@ ENUM_LABEL: Dict[str, tuple] = {
                   ("WAIT_SUBLIM", "승화 대기"), ("SUBLIM", "승화")),
     "camera.mode": (("CH1", "CH1"), ("CH2", "CH2"), ("CLEANING", PL.PC), ("ALL", "전체")),
 }
+# 운전자용 설명(묶음 16 ② — 챔버K 묶음 21 FieldDef.help 와 같은 3단: label 이름 · help 평소 보기 설명 · desc 상세 보기).
+# 키는 FIELD_LABEL 과 같다(블록 종류.필드 또는 블록 이름.필드). 평소 보기(detail 아님) 필드는 모두 help 가 있거나 FIELD_NAME_ONLY 에 있다(시험).
+FIELD_HELP: Dict[str, str] = {
+    # MFC
+    "mfc.ar_sccm": "지금 흐르는 Ar 유량입니다.", "mfc.o2_sccm": "지금 흐르는 O₂ 유량입니다.",
+    "mfc.n2_sccm": "지금 흐르는 N₂ 유량입니다. CH1 에는 이 가스 줄이 없습니다.",
+    "mfc.pressure_mtorr": "MFC 압력 센서로 잰 챔버 압력입니다.",
+    "mfc.valve_pct": "MFC 압력 조절 밸브가 열린 정도입니다. 0 은 닫힘, 100 은 완전 열림입니다.",
+    # Ion Gauge
+    "ig.pressure_torr": "Ion Gauge 로 잰 고진공 압력입니다. 꺼져 있으면 값이 없습니다.",
+    "ig.state": "압력 값의 상태입니다. 정상이 아니면 값을 믿지 마세요.",
+    "tsp.ig.pressure_torr": "TSP 가 보는 Ion Gauge 압력입니다. 꺼져 있으면 값이 없습니다.",
+    "tsp.ig.state": "압력 값의 상태입니다. 정상이 아니면 값을 믿지 마세요.",
+    # DC Pulse
+    "dcpulse.p_w": "DC Pulse 가 잰 출력 파워입니다.", "dcpulse.v_v": "DC Pulse 가 잰 출력 전압입니다.",
+    "dcpulse.i_a": "DC Pulse 가 잰 출력 전류입니다.", "dcpulse.arc_run_soft": "이번 공정에서 센 Soft 아크 수입니다.",
+    "dcpulse.arc_run_hard": "이번 공정에서 센 Hard 아크 수입니다.", "dcpulse.set_w": "DC Pulse 의 지금 목표 파워입니다.",
+    "dcpulse.out_on": "DC Pulse 출력이 나오고 있으면 켜짐입니다.", "dcpulse.freq_khz": "DC Pulse 에서 읽은 펄스 주파수입니다.",
+    "dcpulse.off_raw": "DC Pulse 에서 읽은 Off Time 설정입니다.",
+    # RF Pulse
+    "rfpulse.fwd_w": "RF Pulse 가 내는 파워입니다.",
+    "rfpulse.ref_w": "되돌아오는 파워입니다. 상한을 넘은 채 이어지면 RF Pulse 를 끕니다.",
+    "rfpulse.out_on": "RF Pulse 출력이 나오고 있으면 켜짐입니다.",
+    "rfpulse.itl_open": "인터락이 열리면 켜집니다. 켜져 있으면 RF Pulse 출력이 나오지 않습니다.",
+    "rfpulse.set_w": "RF Pulse 의 지금 목표 파워입니다.", "rfpulse.freq_hz": "RF Pulse 에서 읽은 펄스 주파수입니다.",
+    "rfpulse.duty_pct": "RF Pulse 에서 읽은 펄스 듀티입니다.",
+    # 두께 모니터
+    "stm100.thickness_nm": "두께 모니터가 잰 지금 두께입니다.", "stm100.rate_nm_s": "두께 모니터가 잰 증착률입니다.",
+    "stm100.value_age_s": "마지막 두께 값을 받은 뒤 지난 시간입니다.",
+    "stm100.crystal_ok": "크리스탈이 정상이면 켜짐입니다. 꺼지면 크리스탈을 확인하세요.",
+    "stm100.life_pct": "크리스탈 남은 수명입니다. 낮으면 교체를 준비하세요.", "stm100.link_ok": "두께 모니터가 응답하면 켜짐입니다.",
+    # OES·RGA
+    "oes.running": "OES 측정 프로그램이 켜져 있으면 켜짐입니다.", "oes.measuring": "OES 가 측정 중이면 켜짐입니다.",
+    "oes.sample_age_s": "마지막 측정 값을 받은 뒤 지난 시간입니다.",
+    "rga.running": "RGA 측정 프로그램이 켜져 있으면 켜짐입니다.", "rga.measuring": "RGA 가 스캔 중이면 켜짐입니다.",
+    "rga.sample_age_s": "마지막 스캔을 받은 뒤 지난 시간입니다.",
+    # DC Power(CH2 DC1·DC2)
+    "dc.dc1_p": "DC1 의 출력 파워입니다. 전압과 전류로 계산합니다.", "dc.dc1_v": "DC1 이 잰 출력 전압입니다.",
+    "dc.dc1_i": "DC1 이 잰 출력 전류입니다.", "dc.dc1_set_w": "DC1 에 마지막으로 쓴 파워 값입니다.",
+    "dc.dc1_target_w": "DC1 의 지금 목표 파워입니다.", "dc.dc1_running": "DC1 이 켜져 있으면 켜짐입니다.",
+    "dc.dc2_p": "DC2 의 출력 파워입니다. 전압과 전류로 계산합니다.", "dc.dc2_v": "DC2 가 잰 출력 전압입니다.",
+    "dc.dc2_i": "DC2 가 잰 출력 전류입니다.", "dc.dc2_set_w": "DC2 에 마지막으로 쓴 파워 값입니다.",
+    "dc.dc2_target_w": "DC2 의 지금 목표 파워입니다.", "dc.dc2_running": "DC2 가 켜져 있으면 켜짐입니다.",
+    # RF Power(CH2·Plasma Cleaning)
+    "rf.fwd_w": "RF Power 가 내는 파워입니다.", "rf.ref_w": "되돌아오는 파워입니다. 높으면 정합 상태를 확인하세요.",
+    "rf.set_w": "보정을 적용한 내부 목표 파워입니다.", "rf.target_w": "RF Power 의 지금 목표 파워입니다.",
+    "rf.running": "RF Power 가 켜져 있으면 켜짐입니다.",
+    # 히터(CH2)
+    "heater.pv": "온도 센서로 잰 히터 쪽 지금 온도입니다.", "heater.sv": "PLC 가 맞추는 히터 목표 온도입니다.",
+    "heater.sv_ramp": "승온 중 PLC 가 지금 따라가는 중간 목표입니다.", "heater.cur_sv": "PLC 가 지금 적용 중인 목표 온도입니다.",
+    "heater.sv_limit": "목표 온도로 넣을 수 있는 가장 높은 값입니다.", "heater.ot_limit": "이 온도를 넘으면 PLC 가 히터를 끕니다.",
+    "heater.mv": "히터에 내는 출력입니다. 출력을 내도 온도가 오르지 않으면 히터를 확인하세요.",
+    "heater.mv_pct": "출력을 상한 대비 퍼센트로 보인 값입니다.", "heater.mv_limit": "히터 출력이 넘지 않도록 정한 상한입니다.",
+    "heater.pid_err": "PLC 가 알린 PID 오류 번호입니다. 0 이면 정상입니다.", "heater.ramp_rate": "PLC 가 목표까지 올리는 속도입니다.",
+    "heater.holdback": "온도가 목표보다 이만큼 뒤처지면 승온을 잠시 멈춥니다.", "heater.slow_zone": "목표에 이만큼 가까워지면 승온을 늦춥니다.",
+    "heater.slow_rate": "감속 구간에서 쓰는 느린 승온 속도입니다.", "heater.kp_act": "PLC PID 에 지금 적용된 비례 값입니다.",
+    "heater.ti_act": "PLC PID 에 지금 적용된 적분 시간입니다.", "heater.marker": "프로그램이 PLC 에 남긴 실행 표시입니다.",
+    "heater.wd": "프로그램이 살아 있음을 PLC 에 알리는 값입니다. 멈추면 히터가 꺼집니다.",
+    "heater.run": "히터 운전 상태입니다.", "heater.itl": "켜져 있어야 히터를 켤 수 있습니다.",
+    "heater.fault": "과온·TC·워치독 이상 중 하나가 생기면 켜집니다. 원인을 확인한 뒤 리셋하세요.",
+    "heater.rst": "이상을 지우는 리셋 출력입니다.", "heater.ot": "온도가 한계를 넘었습니다. 원인을 확인한 뒤 리셋하세요.",
+    "heater.tc_err": "온도 센서 값이 이상합니다. TC 연결을 확인하세요.",
+    "heater.wd_err": "프로그램 응답이 끊겨 PLC 가 히터를 껐습니다. 리셋한 뒤 다시 켜세요.",
+    "heater.pid_run": "PLC PID 가 출력을 계산하는 중이면 켜집니다.", "heater.dac_en": "히터 출력이 허용되어 있으면 켜집니다.",
+    "heater.tc_ok": "온도 센서가 정상이면 켜집니다.", "heater.da_ok": "출력 장치가 정상이면 켜집니다.",
+    "heater.water_ok": "냉각용 물의 흐름을 감지하면 켜집니다.", "heater.vac_ok": "진공 조건이 맞으면 켜집니다.",
+    # 두께 판정(CH2)
+    "thk.target_nm": "이번 공정의 목표 두께입니다.", "thk.eff_nm": "영점을 뺀 이번 공정의 두께입니다.",
+    "thk.remaining_nm": "목표까지 남은 두께입니다.", "thk.mode": "공정을 끝내는 방식입니다. 시간 또는 두께 기준입니다.",
+    "thk.done_n": "목표 이상인 값이 연속으로 나온 횟수입니다.", "thk.pct": "목표 두께 대비 진행률입니다.",
+    # TSP·카메라
+    "tsp.status": "TSP 가 알린 상태 번호입니다.", "tsp.state": "TSP 운전 상태입니다.",
+    "camera.running": "카메라가 촬영 중이면 켜짐입니다.", "camera.mode": "카메라가 찍는 대상입니다.",
+}
+# 이름만으로 충분해 help 를 비우는 평소 보기 필드(지금은 없음 — 생기면 이유와 함께 여기에)
+FIELD_NAME_ONLY: frozenset = frozenset()
+
+
 _DEV_IN_LABEL = re.compile(r"\(|\bD\d{3}|[A-Z]{2,}_|\bR\d+\b|v1|되읽기|raw|hex|is_ready|파이썬")
 
 
@@ -151,11 +229,13 @@ def _screen_names(b: DeviceBlock) -> DeviceBlock:
         desc = f.desc
         if new != f.label and _DEV_IN_LABEL.search(f.label):      # 옛 이름의 장비 표기(D112·되읽기 등)는 desc 로
             desc = f"{f.label} · {desc}" if desc else f.label
-        out.append(dataclasses.replace(f, label=new, enum_labels=enum, desc=desc))
+        hlp = FIELD_HELP.get(f"{b.name}.{f.name}") or FIELD_HELP.get(f"{k}.{f.name}") or f.help
+        out.append(dataclasses.replace(f, label=new, enum_labels=enum, desc=desc, help=hlp))
     return dataclasses.replace(b, label=BLOCK_LABEL.get(b.name, b.label), fields=tuple(out))
 
 
 # ───────── 공정 맥락(엔진이 채움) ─────────
+ETA_HELP = "공정이 끝날 때까지 남은 예상 시간입니다. 확정 전에는 비어 있습니다."
 CONTEXTS = ("ch1", "ch2", "pc", "tsp")
 CONTEXT_LABEL = {"ch1": "CH1", "ch2": "CH2", "pc": PL.PC, "tsp": "TSP"}
 OWNERS = ("robot", "web", "local")
@@ -179,7 +259,7 @@ def _ctx_fields(c: str) -> List[FieldDef]:
         FieldDef(p + "remain_s", F, "s", f"{lb} 단계 남은 시간", ".0f", source="engine", detail=True,
                  desc="지금 블록(대기·증착 등)의 남은 초 — 끝이 정해지지 않은 블록은 null"),
         FieldDef(p + "eta_remaining_s", F, "s", f"{lb} 공정 남은 시간", ".0f", source="engine(eta)",
-                 desc="ETA — eta.CHn.remaining_s, 확정 전 null(추정값을 보내지 않음)"),
+                 desc="ETA — eta.CHn.remaining_s, 확정 전 null(추정값을 보내지 않음)", help=ETA_HELP),
         FieldDef(p + "min_total_s", F, "s", f"{lb} 최소 총 시간", ".0f", source="engine(eta)", detail=True,
                  desc="min_total_s — 확정 전 null"),
         FieldDef(p + "paused", B, "", f"{lb} 일시정지", source="engine", summary="any", detail=True),
