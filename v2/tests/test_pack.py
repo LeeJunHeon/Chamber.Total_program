@@ -8,6 +8,7 @@
 """
 from __future__ import annotations
 
+import re
 import subprocess
 import zipfile
 from pathlib import Path
@@ -147,9 +148,16 @@ def test_sim_cmd_python_order_and_crlf(name):
     i_venv = t.index(r'if exist "C:\CH12_v2\venv\Scripts\python.exe"')
     i313, i311, ipy = t.index("py -3.13 -c"), t.index("py -3.11 -c"), t.index('python -c ""')
     assert i_venv < i313 < i311 < ipy
-    cmds = [ln.strip().lower() for ln in t.splitlines() if ln.strip() and not ln.strip().lower().startswith("rem")]
-    assert not [c for c in cmds if c.startswith("start ")]     # Ctrl+C 를 끄는 'start /belownormal /b' 는 쓰지 않음(프로그램이 낮춤)
-    assert ("-m v2.ch12 --sim" in t) if name == "run_ch12_sim.cmd" else ("-m v2.robot_server --sim" in t)
+    cmds = [ln.strip() for ln in t.splitlines() if ln.strip() and not ln.strip().lower().startswith("rem")]
+    assert not [c for c in cmds if "/belownormal" in c.lower()]   # Ctrl+C 를 끄는 'start /belownormal /b' 는 쓰지 않음(프로그램이 낮춤)
+    # D431 — 파이썬을 고른 뒤 새 cmd /k 창에 띄우고 배치는 끝난다(Ctrl+C 때 '일괄 작업을 끝내시겠습니까 (Y/N)?' 없음)
+    mod = "v2.ch12" if name == "run_ch12_sim.cmd" else "v2.robot_server"
+    starts = [c for c in cmds if c.lower().startswith("start ")]
+    assert len(starts) == 1 and starts[0] == cmds[-1], starts
+    s = starts[0]
+    assert ' cmd /v:on /k "chcp 65001 >nul & %PY% -X utf8 -m ' + mod + ' --sim %* & echo 종료 코드 !errorlevel!"' in s
+    assert re.match(r'start "[^"]+" cmd ', s) and "pause" not in [c.lower() for c in cmds[cmds.index(s):]]
+    assert cmds.index(s) > max(i for i, c in enumerate(cmds) if "set " in c and "PY" in c)        # 파이썬을 고른 뒤
 
 
 # ───────── 콘솔 안내 한 번 ─────────
@@ -196,3 +204,21 @@ def test_winshell_failures_go_to_warn():
     assert info == [] and warn and warn[0].startswith("종료 처리 오류")
     sh2 = winshell.WinShell(lambda why: None, info.append)      # warn 없으면 log 로(예전과 같음)
     assert sh2.warn == sh2.log
+
+
+def test_robot_server_prints_close_line_on_normal_exit(monkeypatch, capsys):
+    """D431 — 로봇 서버도 종료 코드 0 이면 마지막 줄 '정상 종료. 이 창을 닫아도 됩니다'(포트를 못 열어 1 이면 찍지 않음)."""
+    from v2.robot_server import app as RA
+
+    async def ok(cfg, fake):
+        return 0
+
+    async def busy(cfg, fake):
+        return 1
+    monkeypatch.setattr(RA, "_run", ok)
+    assert RA.main(["--port", "0"]) == 0
+    assert capsys.readouterr().out.rstrip().splitlines()[-1] == "정상 종료. 이 창을 닫아도 됩니다"
+    monkeypatch.setattr(RA, "_run", busy)
+    assert RA.main(["--port", "0"]) == 1
+    assert "정상 종료" not in capsys.readouterr().out
+    assert A.CLOSE_LINE == "정상 종료. 이 창을 닫아도 됩니다"

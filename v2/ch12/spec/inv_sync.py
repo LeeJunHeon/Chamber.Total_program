@@ -337,4 +337,11 @@ ITEMS = [
               "v2/tests/test_step_labels.py::test_step_events_snapshot_and_state_carry_screen_names; "
               "v2/tests/test_web_schema.py::test_config_saved_with_v15_schema_hash_keeps_values",
          status="done", note=""),
+    dict(id="SYNC-571", area="sync",
+         desc="sim 실행 cmd(D431): 파이썬을 고른 뒤 새 cmd /k 창에 띄우고 배치는 끝남(Ctrl+C 때 '일괄 작업을 끝내시겠습니까' 없음), "
+              "프로그램 끝 줄 '정상 종료. 이 창을 닫아도 됩니다'",
+         v1="(v1 — 실행 cmd 없음)", v2="v2/run_ch12_sim.cmd; v2/run_ch12_sim_robot_server.cmd; v2/ch12/app.py; v2/robot_server/app.py",
+         test="v2/tests/test_pack.py::test_sim_cmd_python_order_and_crlf; v2/tests/test_pack.py::test_robot_server_prints_close_line_on_normal_exit; "
+              "v2/tests/test_shutdown.py::test_real_app_signal_marks_journal_and_exits_0",
+         status="done", note="윈도우 창 동작은 노트북에서 확인"),
 ]

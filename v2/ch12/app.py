@@ -64,6 +64,7 @@ LOG_MAX_BYTES = 5_000_000
 LOG_BACKUPS = 10
 EXIT_OK, EXIT_CONFIG, EXIT_RUNNING, EXIT_START = 0, 2, 3, 4
 REFUSE_BUSY = "공정 중 — 로컬 화면·웹에서 STOP 먼저"
+CLOSE_LINE = "정상 종료. 이 창을 닫아도 됩니다"        # 끝 줄(종료 코드 0) — sim cmd 는 새 cmd /k 창이라 창이 남는다(D430)
 RUNNING_LINE = "실행 중 — 멈추려면 Ctrl+C"
 SIM_ID_SUFFIX = "-SIM"               # UPLINK_IN_SIM 일 때 장비 ID 끝
 REPO_HMI_DIR = Path(__file__).resolve().parents[1] / "hmi"   # LOCAL_HMI_STATIC_DIR 이 비면 — 이 저장소의 v2/hmi
@@ -614,4 +615,7 @@ def main(argv=None) -> int:
         cd = sim_guard._join(sim_guard.sim_base(), "sim_config")
     app = App(cd, print_fn=lambda s: print(s, flush=True))
     app.require_sim = bool(a.sim)
-    return app.run()
+    code = app.run()
+    if code == EXIT_OK:
+        print(CLOSE_LINE, flush=True)
+    return code

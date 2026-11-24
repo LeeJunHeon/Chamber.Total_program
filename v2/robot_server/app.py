@@ -116,10 +116,12 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         if line:
             print(line, flush=True)
     try:
-        return asyncio.run(_run(cfg, a.fake_api))
+        code = asyncio.run(_run(cfg, a.fake_api))
     except KeyboardInterrupt:
-        pass
-    return 0
+        code = 0
+    if code == 0:
+        print("정상 종료. 이 창을 닫아도 됩니다", flush=True)   # 끝 줄 — sim cmd 는 새 cmd /k 창(D430)
+    return code
 
 
 if __name__ == "__main__":

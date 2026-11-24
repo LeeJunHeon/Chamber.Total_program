@@ -950,4 +950,11 @@ DECISIONS += [
                "v2/ch12/commands.py(PLC_BUTTONS·HAZARD_TEXT·ROBOT_LABEL·REASON_HELP·사유); v2/common/snapshot.py·commands.py(help); "
                "v2/ch12/web_schema.py(16·eventSources); v2/ch12/process_states.py·blocks.py·blocks_expand.py·safety_rules.py·params/; "
                "v2/ch12/process_engine.py·process_runner.py·process_view.py·hub.py(step_label); v2/tests/test_web_labels.py"),
+    dict(id="D431", title="2026-11-24 sim 실행 cmd — 새 cmd /k 창에서 실행(Ctrl+C 때 '일괄 작업을 끝내시겠습니까' 없음)·끝 줄 '정상 종료'",
+         decision="run_ch12_sim.cmd·run_ch12_sim_robot_server.cmd 는 파이썬을 고른 뒤 start \"제목\" cmd /v:on /k \"chcp 65001 >nul & "
+                  "<파이썬> -X utf8 -m … --sim %* & echo 종료 코드 !errorlevel!\" 로 새 창에 띄우고 끝난다 — 배치 작업이 아니라 Ctrl+C 때 "
+                  "'일괄 작업을 끝내시겠습니까 (Y/N)?' 를 묻지 않는다. 프로그램(v2.ch12·v2.robot_server)은 종료 코드 0 으로 끝날 때 마지막 줄 "
+                  "'정상 종료. 이 창을 닫아도 됩니다'. venv 선택·우선순위(프로그램이 BelowNormal)·UTF-8 은 그대로. 윈도우에서만 확인된다.",
+         reason="사용자 지시 2026-11-24(⑦)", confirm=False,
+         where="v2/run_ch12_sim.cmd; v2/run_ch12_sim_robot_server.cmd; v2/ch12/app.py(CLOSE_LINE); v2/robot_server/app.py; v2/tests/test_pack.py"),
 ]
