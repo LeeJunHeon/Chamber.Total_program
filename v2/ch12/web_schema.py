@@ -69,9 +69,12 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
   15 2026-11-20 PLC 버튼 확인창·기록(D425) — plcButtons 에 short(짧은 이름)·procChamber(닿는 공정 챔버 — 건 셔터·Power Select 는 CH2)·
      hazard{on, off}(사람·장비 위험), plcHazardText(확인창 위험 문구 — 사람·장비·RF 전용 릴레이), PLC_BUTTON 인자 by_name(웹 서버가 넣는
      로그인 이름), eventKinds command/plc_button(누를 때마다 하나 — plc_manual 대체), 사유 PLC_BUTTON·PLC_BUTTON_FAILED.
-  16 2026-11-24 화면 글 용어표(챔버K 묶음 21 과 같은 용어) — 이름표: 스냅샷 필드(PLC 142개는 래더 이름 대신 용어표 이름, 래더 이름은 desc)·
-     블록·PLC 버튼(label = short = 필드 이름, 래더 이름은 desc)·명령·상태·블록 정의·정지 단계·사건 이름·설정 묶음·plcHazardText,
-     새 eventSources(사건 출처 이름). 식별자(code·kind·name·key·열 이름)·사건 message·v1 스텝 문구는 그대로.
+  16 2026-11-24 화면 글 용어표(챔버K 묶음 21 과 같은 용어, D430) — 이름표: 스냅샷 필드(PLC 142개는 래더 이름 대신 용어표 이름,
+     래더 이름은 desc)·블록·PLC 버튼(label = short = 필드 이름, 래더 이름은 desc)·명령·상태·블록 정의·정지 단계·사건 이름·설정 묶음·
+     설정 이름의 옛 말·plcHazardText, 새 eventSources(사건 출처 이름), snapshot 필드 help·reasons[].help(운전자용 설명 — label·help·desc
+     3단), 사유 이름(괄호 없이 26자), 새 열 <c>.proc.step_label·사건 process/step(진행 단계 화면 이름 — step_labels). 설정 이름이 바뀌어
+     paramSchemaHash 도 바뀜(저장된 설정 파일은 키가 같아 값 그대로 — 시험). 식별자(code·kind·name·key·열 이름)·사건 message·
+     v1 스텝 문구는 그대로.
 """
 from __future__ import annotations
 

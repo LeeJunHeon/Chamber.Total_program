@@ -930,4 +930,24 @@ DECISIONS += [
          where="v2/tools/pack.py; v2/common/winnames.py·winproc.py; v2/ch12/app.py(git_version·VERSION_FILE·note/warn·warn_once·_exit_done·"
                "lower_priority); v2/ch12/winshell.py(warn); v2/robot_server/app.py(--sim 우선순위); v2/run_ch12_sim.cmd; "
                "v2/run_ch12_sim_robot_server.cmd; v2/tests/test_pack.py·test_shutdown.py"),
+    dict(id="D430", title="2026-11-24 화면 글을 챔버K 묶음 21 과 같은 용어표로 — 묶음 16(이름표·운전자용 설명·사유·진행 단계 이름)",
+         decision="장비가 화면(웹·노트북)에 보내는 글을 용어표로 통일했다(식별자·사건 message·v1 스텝 문구·공정 txt·CSV·로봇 응답·구글챗 카드는 "
+                  "그대로). 용어: Rotary·Turbo·MV·RV·FV·Vent·Gate·Door·Loadlock·4Pin·Chuck·Ion Gauge·Forward·Reflected·Power Select·"
+                  "Plasma Cleaning·Water·DC Power·RF Power, 한글 히터·셔터·밸브·Main 셔터·Gun1 셔터·Ar/O₂/N₂ 밸브·MFC 밸브·인터락·워치독, "
+                  "값은 현재·목표·켜짐/꺼짐·열림/닫힘·연결 끊김·응답 없음, 진행은 공정·단계(블록은 레시피 편집에서만). ① 이름표: PLC 필드 142개는 "
+                  "래더 이름 대신 용어표 이름(plc_labels.COIL_LABEL — 래더 이름·코일은 desc 맨 앞), PLC 버튼 label = short = 그 필드 이름(래더 "
+                  "이름은 버튼 desc), 드라이버 필드 이름은 snapshot_fields.FIELD_LABEL 로 바꿔 싣는다(열·형식 그대로), 명령·상태·블록·정지 단계·"
+                  "사건 이름의 괄호 설명을 뺐다, 새 eventSources(사건 출처 이름), plcHazardText 를 용어표 글로, PLC 버튼 기록 글 '켬/끔' → '켜기/"
+                  "끄기', 설정(params)은 이름의 옛 말만(desc·이름의 주소 등은 다음 차례). ② FieldDef.help·Reason.help(묶음 snapshot 필드 help·"
+                  "reasons[].help) — 평소 보기 필드·사유 모두 help(70자, '…니다/…세요'). ③ 사유 78개 이름은 괄호·개발 표기 없이 26자 안. "
+                  "④ 진행 단계 화면 이름 step_labels.step_label(동작·인자에서 — 스텝 문구는 그대로): 스냅샷 <c>.proc.step_label, 엔진 화면 상태 "
+                  "step_label, 허브 stepLabel, 사건 process/step(상세). ⑥ EXPORT_VERSION 16 — 설정 이름이 바뀌어 paramSchemaHash 도 바뀐다"
+                  "(예전 해시로 저장한 설정 파일은 키가 같아 값 그대로 읽는다, 웹 CONFIG_APPLY 는 새 묶음을 받은 뒤). 새로 정한 말: Main 가스"
+                  "(MAIN_n_GAS)·RF Select(SW_RF_SELECT)·표시등(*_LAMP)·로딩 센서·Loadlock 배기 n단계(LP_STEPn)·Chuck 올림/내림/중간(CW·CCW·MID)·"
+                  "DC1·DC2(CH2 DC Power 두 대)·보정 목표·D/A 쓰기 값·출력 허용. 이름 길이는 챔버 구분 Loadlock·Plasma Cleaning 을 세 글자로 센다.",
+         reason="사용자 지시 2026-11-24(챔버12 v2 화면 글 용어표 — 묶음 16)", confirm=False,
+         where="v2/ch12/plc_labels.py·step_labels.py; v2/ch12/snapshot_fields.py(FIELD_LABEL·FIELD_HELP·BLOCK_LABEL·ENUM_LABEL); "
+               "v2/ch12/commands.py(PLC_BUTTONS·HAZARD_TEXT·ROBOT_LABEL·REASON_HELP·사유); v2/common/snapshot.py·commands.py(help); "
+               "v2/ch12/web_schema.py(16·eventSources); v2/ch12/process_states.py·blocks.py·blocks_expand.py·safety_rules.py·params/; "
+               "v2/ch12/process_engine.py·process_runner.py·process_view.py·hub.py(step_label); v2/tests/test_web_labels.py"),
 ]

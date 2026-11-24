@@ -325,4 +325,16 @@ ITEMS = [
               "v2/tests/test_pack.py::test_shell_notices_are_info_once_and_failures_warning_once; "
               "v2/tests/test_shutdown.py::test_real_app_signal_marks_journal_and_exits_0",
          status="done", note=""),
+    dict(id="SYNC-570", area="sync",
+         desc="화면 글 용어표(묶음 16, D430): 이름·help·값 이름·사건 이름·출처·사유에 옛 말 없음, PLC 버튼 이름 = 필드 이름, 이름 길이(필드 16·"
+              "상태 14·사건 18·명령 20·사유 26·help 70), 괄호·개발 표기 없음, 평소 보기 필드·사유 모두 help, 진행 단계 화면 이름(스텝 문구 그대로), "
+              "예전 paramSchemaHash 로 저장한 설정도 값 그대로",
+         v1="(v1 — 화면 글은 위젯에 흩어져 있음)", v2="v2/ch12/plc_labels.py; v2/ch12/step_labels.py; v2/ch12/snapshot_fields.py; v2/ch12/commands.py",
+         test="v2/tests/test_web_labels.py::test_old_terms_not_in_screen_names; v2/tests/test_web_labels.py::test_plc_buttons_same_name_as_fields; "
+              "v2/tests/test_web_labels.py::test_name_lengths_and_shapes; v2/tests/test_web_labels.py::test_no_parens_dev_marks_or_banned_wording; "
+              "v2/tests/test_web_labels.py::test_everyday_fields_have_help_and_reasons_have_help; "
+              "v2/tests/test_web_labels.py::test_step_screen_names_for_every_golden_step; "
+              "v2/tests/test_step_labels.py::test_step_events_snapshot_and_state_carry_screen_names; "
+              "v2/tests/test_web_schema.py::test_config_saved_with_v15_schema_hash_keeps_values",
+         status="done", note=""),
 ]

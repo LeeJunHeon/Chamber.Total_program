@@ -135,3 +135,31 @@ def test_every_param_reference_resolves_from_bundle_alone():
         if isinstance(dflt, str) and dflt.startswith("cfg:"):
             key = dflt[4:]
             assert key in cur or f"CH1_{key}" in cur or f"CH2_{key}" in cur, (where, dflt)
+
+
+# ───────── 묶음 16(2026-11-24 화면 글 용어표) — 설정 이름이 바뀌어 paramSchemaHash 가 달라짐. 예전 해시로 저장한 설정도 값 그대로 ─────────
+OLD_PARAM_SCHEMA_HASH_V15 = "026f8ad18b467dc71594d79be3142bc77d98674bd4eb18a4719d32f36d8965c8"   # 묶음 15(b0e287f)의 paramSchemaHash
+
+
+def test_config_saved_with_v15_schema_hash_keeps_values(tmp_path):
+    import json
+    from v2.common.config_store import ACTIVE, _content_hash
+    from v2.common.paramdef import Scope, defaults
+    from v2.ch12.params import PARAMS
+    from v2.ch12.system import new_store, param_schema_hash
+    assert param_schema_hash() != OLD_PARAM_SCHEMA_HASH_V15                   # 설정 이름(용어표)이 바뀌어 해시가 다르다
+    base = {p.key: v for p, v in ((p, defaults(PARAMS)[p.key]) for p in PARAMS) if p.scope is not Scope.SECRET}
+    vals = dict(base, CH2_MFC_FLOW_STABLE_COUNT=5, TURBO_OFF_ALERT_S=600.0, LOCAL_HMI_PORT=8799,
+                PC_DEFAULT_SP4_SETPOINT_MTORR=base["PC_DEFAULT_SP4_SETPOINT_MTORR"] + 1.0)
+    doc = {"version": 7, "schemaHash": OLD_PARAM_SCHEMA_HASH_V15, "savedAt": "2026-11-23T10:00:00",
+           "values": vals, "contentHash": _content_hash(7, OLD_PARAM_SCHEMA_HASH_V15, vals)}
+    (tmp_path / ACTIVE).write_text(json.dumps(doc, ensure_ascii=False), encoding="utf-8")
+    st = new_store(tmp_path)
+    got = st.load()
+    assert st.version == 7 and st.source.startswith("active")
+    assert {k: got[k] for k in vals} == vals                                   # 값은 하나도 바뀌지 않는다(키는 그대로라)
+    assert any("파라미터 정의가 바뀜" in n and "새 키 기본값 []" in n and "없어진 키 버림 []" in n for n in st.notes), st.notes
+    b = W.bundle_for(got, st, st.version)
+    assert b["paramSchemaHash"] == param_schema_hash() and b["version"] == 16
+    cur = {p["key"]: p["current"] for p in b["params"]}
+    assert cur["CH2_MFC_FLOW_STABLE_COUNT"] == 5 and cur["TURBO_OFF_ALERT_S"] == 600.0 and cur["LOCAL_HMI_PORT"] == 8799
