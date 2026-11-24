@@ -9,8 +9,9 @@
   수준·코드: 실행됨 info(공정 중 PLC_MANUAL_IN_PROCESS, 아니면 PLC_BUTTON) · 쓰기 실패 warn PLC_BUTTON_FAILED · 거부 warn 거부 사유.
 - 결과: 받은 명령은 PLC 쓰기가 끝날 때(on_done — 성공·실패·시간 초과) 한 번, 받지 않은 명령(인자·상태·bench·PLC 끊김)은 그 자리에서.
 - 장비 로그(SYSTEM 일자 로그, 출처 'PLC')에 늘 한 줄, 공정 중이면 그 챔버 공정 로그(txt·화면 로그)에도 한 줄('PLC' 출처).
-  글: 'PLC 버튼 · CH1 벤트 켬 · 홍길동(웹, hong@…) (CH1 공정 중 · 메인 공정(시간) · 레시피 R1)' + 실패·거부면 ' — 거부: 이유'.
-  화면 글(사건 data 로 포털이 만든다)은 계정 없이 이름만: 'PLC 버튼 · CH1 벤트 켬 · 홍길동(웹) (CH1 공정 중 · 메인 공정(시간))'.
+  글: 'PLC 버튼 · CH1 Vent 켜기 · 홍길동(웹, hong@…) (CH1 공정 중 · 시간 기준 메인 공정 · 레시피 R1)' + 실패·거부면 ' — 거부: 이유'.
+  화면 글(사건 data 로 포털이 만든다)은 계정 없이 이름만: 'PLC 버튼 · CH1 Vent 켜기 · 홍길동(웹) (CH1 공정 중 · 시간 기준 메인 공정)'.
+  (묶음 16 — '켬/끔' 대신 '켜기/끄기', 버튼 이름은 필드 이름과 같은 용어표 이름)
 """
 from __future__ import annotations
 
@@ -64,7 +65,7 @@ def process_of(engine: Any, ch: str) -> Dict[str, Any]:
 def line(data: Dict[str, Any], *, account: bool) -> str:
     """기록 한 줄(account = 계정까지 — 장비 로그·공정 로그·사건 문구). 화면 글은 포털이 같은 규칙으로(계정 없이) 만든다."""
     who = who_of(data["origin"], data["by"], data.get("by_name"), account=account)
-    t = f"PLC 버튼 · {data['short']} {'켬' if data['on'] else '끔'} · {who}"
+    t = f"PLC 버튼 · {data['short']} {'켜기' if data['on'] else '끄기'} · {who}"
     p = data.get("process") or {}
     if p.get("busy"):
         what = " · ".join(x for x in (p.get("block"), f"레시피 {p['recipe']}" if account and p.get("recipe") else None) if x)

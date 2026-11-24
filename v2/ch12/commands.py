@@ -24,6 +24,7 @@ from dataclasses import dataclass, replace
 from typing import Any, Dict, Mapping, Optional, Tuple
 
 from v2.common.commands import ArgDef, COMMON_REASONS, Reason, Source
+from v2.ch12 import plc_labels as PL
 from v2.ch12 import process_states as PS
 from v2.ch12.drivers import plc_map as PM
 
@@ -136,6 +137,7 @@ class PlcButton:
     proc_chamber: Optional[str] = None   # 이 버튼이 닿는 공정 챔버(ch1·ch2 — 공유 버튼은 그 장비를 쓰는 챔버, 로드락·부저는 없음)
     hazard_on: Optional[str] = None      # 켤 때 위험 분류 — person(사람)·equipment(장비)·None
     hazard_off: Optional[str] = None     # 끌 때 위험 분류
+    desc: str = ""                       # 상세 보기 — 래더 이름·코일 번호(이름표에는 넣지 않음, 묶음 16)
 
     def hazard(self, on: bool) -> Optional[str]:
         return self.hazard_on if on else self.hazard_off
@@ -143,25 +145,16 @@ class PlcButton:
     def public(self) -> dict:
         return {"target": self.target, "name": self.name, "label": self.label, "chamber": self.chamber,
                 "coil": PM.COIL_MAP[self.name], "short": self.short, "procChamber": self.proc_chamber,
-                "hazard": {"on": self.hazard_on, "off": self.hazard_off}}
-
-
-_WORDS = (("R_P_", "로터리 펌프"), ("R_V_", "러핑 밸브"), ("F_V_", "포어라인 밸브"), ("M_V_", "메인 밸브"),
-          ("VENT_", "벤트"), ("TURBO_", "터보 펌프"), ("DOOR_", "도어"), ("G_V_", "게이트 밸브"),
-          ("MAIN_SHUTTER_", "메인 셔터"), ("Ar_", "Ar 가스"), ("O2_", "O2 가스"), ("N2_", "N2 가스"), ("MAIN_", "메인 가스"),
-          ("L_R_P_", "로드락 로터리 펌프"), ("L_R_V_", "로드락 러핑 밸브"), ("L_PIN_UP", "로드락 4핀 올림"),
-          ("L_PIN_DOWN", "로드락 4핀 내림"), ("L_VENT", "로드락 벤트"), ("L_VAC_READY", "로드락 진공 준비"),
-          ("SW_RF_SELECT", "Power Select 릴레이(SW_RF_SELECT)"), ("SW_POWER_SELECT", "Power Select(SW_POWER_SELECT)"),
-          ("SHUTTER_", "건 셔터"), ("Z_M_P_", "척 모터"), ("BUZZER_STOP", "부저 정지"))
+                "hazard": {"on": self.hazard_on, "off": self.hazard_off}, "desc": self.desc}
 
 
 def _button_label(name: str) -> str:
-    base = next((w for p, w in _WORDS if name.startswith(p)), name)
-    tail = [ko for word, ko in (("OPEN", "열기"), ("CLOSE", "닫기"), ("_CCW", "역회전"), ("_CW", "정회전"), ("_STOP", "정지"),
-                                 ("_MID", "중간")) if word in name and not (word == "_CW" and "_CCW" in name)]
-    if name.startswith("BUZZER"):
-        tail = []
-    return " ".join([base] + tail) + f" ({name})"
+    """버튼 이름 = 그 코일의 스냅샷 필드 이름(plc_labels — 묶음 16 용어표). 래더 이름은 desc 로."""
+    return PL.label(name)
+
+
+def _button_desc(name: str) -> str:
+    return f"{name} · 코일 {PM.COIL_MAP[name]}"
 
 
 def _button_chamber(name: str) -> str:
@@ -176,11 +169,8 @@ def _button_chamber(name: str) -> str:
 
 
 def _button_short(name: str, chamber: str) -> str:
-    """코일 이름 없는 짧은 이름 — 챔버 버튼은 'CH1 벤트', 건 셔터는 번호('건 셔터 G1'), 나머지는 이름 그대로."""
-    base = _button_label(name).rsplit(" (", 1)[0]
-    if name.startswith("SHUTTER_"):
-        return f"건 셔터 G{name.split('_')[1]}"
-    return f"{chamber.upper()} {base}" if chamber in ("ch1", "ch2") else base
+    """로그·확인창 이름 = 버튼 이름 = 필드 이름(같은 대상 같은 이름 — 묶음 16). 예 'CH1 Vent'·'Gun1 셔터'·'Loadlock 4Pin 올림'."""
+    return _button_label(name)
 
 
 def _button_proc_chamber(name: str, chamber: str) -> Optional[str]:
@@ -207,17 +197,17 @@ def _button_hazard(name: str) -> Tuple[Optional[str], Optional[str]]:
 
 
 HAZARD_TEXT = {
-    "person": "사람 위험 — 벤트·도어·게이트·로드락 핀·척 모터는 사람이 다칠 수 있습니다. 장비 주변·챔버 안·로드락에 사람이 없는지 "
-              "반드시 확인하세요.",
-    "equipment": "장비 위험 — 터보·로터리 끄기, 포어라인·러핑·메인 밸브, Power Select 를 잘못 바꾸면 펌프·밸브·전원 장비가 손상될 수 "
-                 "있습니다. 지금 진공·전원 상태를 확인하세요.",
-    "rf_select_dcp": "지금 DC Pulse 사용 중 — SW_RF_SELECT 는 RF 전용 릴레이라 DC Pulse 사용 중에 켜면 특히 위험합니다. DC Pulse 를 먼저 "
-                     "끄세요.",
+    "person": "사람 위험: Vent·Door·Gate·Loadlock 4Pin·Chuck 은 사람이 다칠 수 있습니다. 장비 주변과 챔버·Loadlock 안에 "
+              "사람이 없는지 반드시 확인하세요.",
+    "equipment": "장비 위험: Turbo·Rotary 끄기, FV·RV·MV, Power Select·RF Select 를 잘못 바꾸면 펌프·밸브·파워 장비가 손상될 수 "
+                 "있습니다. 지금 진공과 파워 상태를 확인하세요.",
+    "rf_select_dcp": "지금 DC Pulse 사용 중입니다. RF Select 는 RF 전용 릴레이라 DC Pulse 를 쓰는 중에 켜면 특히 위험합니다. "
+                     "DC Pulse 를 먼저 끄세요.",
 }
 
 PLC_BUTTONS: tuple = tuple(PlcButton(n.lower(), n, _button_label(n), _button_chamber(n),
                                      _button_short(n, _button_chamber(n)), _button_proc_chamber(n, _button_chamber(n)),
-                                     *_button_hazard(n))
+                                     *_button_hazard(n), desc=_button_desc(n))
                            for n in PM.COIL_MAP if n.endswith("_SW") or n.startswith("SW_"))
 PLC_BY_TARGET: Dict[str, "PlcButton"] = {b.target: b for b in PLC_BUTTONS}
 POWER_SELECT_COIL = "SW_POWER_SELECT"
@@ -269,6 +259,15 @@ ROBOT_COMMANDS: Tuple[str, ...] = (
     "CH1_GATE_CLOSE", "CH2_GATE_CLOSE", "CH1_CHUCK_UP", "CH2_CHUCK_UP", "CH1_CHUCK_DOWN", "CH2_CHUCK_DOWN",
 )
 ROBOT_READS = ("GET_SPUTTER_STATUS", "GET_LOADING_1_SENSOR", "GET_LOADING_2_SENSOR", "GET_RECIPE")
+# 로봇 명령 화면 이름(묶음 16 — 명령 이름 GET_*·4PIN_* 는 kind·desc 에 그대로)
+ROBOT_LABEL: Dict[str, str] = {
+    "GET_SPUTTER_STATUS": "공정 상태 묻기", "GET_LOADING_1_SENSOR": "CH1 로딩 센서 읽기",
+    "GET_LOADING_2_SENSOR": "CH2 로딩 센서 읽기", "GET_RECIPE": "레시피 목록 읽기", "START_SPUTTER": "공정 시작",
+    "START_PLASMA_CLEANING": f"{PL.PC} 시작", "VACUUM_ON": "Loadlock 진공", "VACUUM_OFF": "Loadlock 대기압",
+    "4PIN_UP": "4Pin 올림", "4PIN_DOWN": "4Pin 내림", "CH1_GATE_OPEN": "CH1 Gate 열기", "CH2_GATE_OPEN": "CH2 Gate 열기",
+    "CH1_GATE_CLOSE": "CH1 Gate 닫기", "CH2_GATE_CLOSE": "CH2 Gate 닫기", "CH1_CHUCK_UP": "CH1 Chuck 올림",
+    "CH2_CHUCK_UP": "CH2 Chuck 올림", "CH1_CHUCK_DOWN": "CH1 Chuck 내림", "CH2_CHUCK_DOWN": "CH2 Chuck 내림",
+}
 _ROBOT_ARGS = (_a("data", "obj", False, desc="요청 data(정규화된 명령의 인자)"), _a("raw", "obj", False, desc="요청 JSON 전체"),
                _a("peer", "str", False), _a("received_at", "any", False), _a("request_id", "str", False))
 
@@ -280,7 +279,7 @@ COMMANDS: tuple = (
     C("ALL_STOP", "ALL STOP", "shared", (WEB, HMI, INT), (ANY,), (), (),
       "CH1 STOP + CH2 STOP + 플라즈마 클리닝 STOP + TSP STOP 을 한꺼번에(결정 D05 — 각각 v1 정지 순서 그대로, 새 판정 없음)",
       "v2(D05) — v1 은 챔버별 Stop 만"),
-    C("PC_STOP", "플라즈마 클리닝 STOP", "pc", BOTH, (ANY,), (), (), "실행 중이 아니면 무시(v1 '[STOP] 실행 중이 아님')",
+    C("PC_STOP", "Plasma Cleaning STOP", "pc", BOTH, (ANY,), (), (), "실행 중이 아니면 무시(v1 '[STOP] 실행 중이 아님')",
       "PC_Stop_button → plasma_cleaning_runtime.py _on_click_stop"),
     C("TSP_STOP", "TSP STOP", "tsp", BOTH, (ANY,), (), (), "예약은 건드리지 않음", "TSP_Stop_button → tsp_runtime.py on_stop_clicked"),
     # ── 챔버 공정 ──
@@ -297,10 +296,10 @@ COMMANDS: tuple = (
     C("PROCESS_ADJUST", "공정 중 값 수정", "chamber", BOTH, ACT, ("RUNNING",),
       (CH, _a("device", "enum", enum=ADJ_DEVICES), _a("item", "str"), _a("value", "any", desc="blocks.ADJUST_ITEMS 의 형식·범위")),
       "지금 블록이면 바로 쓰고 되읽어 확인, 뒤 블록은 예약(챔버K 같게) — 로봇 제외", "v2(지시 3장 (3))"),
-    C("BLOCK_SKIP", "블록 건너뛰기", "chamber", BOTH, ACT, ("RUNNING",), (CH,), "블록 정의 skippable 일 때만", "v2(지시 3장 (3))"),
+    C("BLOCK_SKIP", "지금 단계 건너뛰기", "chamber", BOTH, ACT, ("RUNNING",), (CH,), "블록 정의 skippable 일 때만", "v2(지시 3장 (3))"),
     C("PROCESS_PAUSE", "일시정지", "chamber", BOTH, ACT, ("RUNNING",), (CH,), "블록 정의 pausable 일 때만", "v2(지시 3장 (3))"),
-    C("PROCESS_RESUME", "일시정지 재개", "chamber", BOTH, ACT, ("RUNNING",), (CH,), "", "v2(지시 3장 (3))"),
-    C("SEQUENCE_EDIT", "시퀀스 편집", "chamber", BOTH, (ANY,), (),
+    C("PROCESS_RESUME", "재개", "chamber", BOTH, ACT, ("RUNNING",), (CH,), "", "v2(지시 3장 (3))"),
+    C("SEQUENCE_EDIT", "공정 순서 편집", "chamber", BOTH, (ANY,), (),
       (CH, _a("op", "obj", desc="{op: insert|delete|move, at·block / at / from·to} — 아직 시작 안 한 블록만")),
       "편집마다 레시피 판 +1·전체 재검사·원래 레시피와 실행 순서 기록", "v2(지시 3장 (3))", portal_only=True),
     C("CHAMBER_ERROR_CLEAR", "챔버 오류 표시 해제", "chamber", BOTH, (ANY,), (), (CH,),
@@ -312,17 +311,17 @@ COMMANDS: tuple = (
     C("PRESPUTTER_RECIPE", "프리스퍼터 레시피", "chamber", BOTH, (ANY,), (), (CH, _a("path", "str", False, desc="비우면 해제")),
       "예약 공정에 쓸 레시피 파일", "preSputter Recipe → main.py:1710-1758", portal_only=True),
     # ── 플라즈마 클리닝 ──
-    C("PC_START", "플라즈마 클리닝 시작", "pc", BOTH, ("pc.idle",), ("PC_START_GUARD",),
+    C("PC_START", "Plasma Cleaning 시작", "pc", BOTH, ("pc.idle",), ("PC_START_GUARD",),
       (_a("params", "obj", False, desc="화면 값(pc_recipe.UI_KEYS)"), _a("rows", "rows", False, desc="CSV 행"),
        _a("path", "str", False, desc="CSV 경로"), CH_OPT),
       "v1 Start 와 같은 가드(E205·쿨다운·같은 CH 챔버 바쁨)", "PC_Start_button → plasma_cleaning_runtime.py:1235-1275",
       portal_only=True),
-    C("PC_SELECT_CH", "플라즈마 클리닝 채널", "pc", BOTH, (ANY,), ("PC_IDLE",), (CH,),
+    C("PC_SELECT_CH", "Plasma Cleaning 채널", "pc", BOTH, (ANY,), ("PC_IDLE",), (CH,),
       "실행 중이면 거부·이전 선택 유지", "PC 라디오 → main.py:825-834·856-901"),
-    C("PC_RECIPE_LOAD", "플라즈마 클리닝 레시피 불러오기", "pc", BOTH, (ANY,), (),
+    C("PC_RECIPE_LOAD", "Plasma Cleaning 레시피 불러오기", "pc", BOTH, (ANY,), (),
       (_a("rows", "rows", False), _a("path", "str", False)), "첫 비어 있지 않은 행을 화면 값으로(시작하지 않음)",
       "PC_processList_button → PC-087", portal_only=True),
-    C("PC_ERROR_CLEAR", "플라즈마 클리닝 오류 표시 해제", "pc", BOTH, (ANY,), (), (CH_OPT,), "치명 팝업 닫기", "PC-086·TEST-088"),
+    C("PC_ERROR_CLEAR", "Plasma Cleaning 오류 표시 해제", "pc", BOTH, (ANY,), (), (CH_OPT,), "치명 팝업 닫기", "PC-086·TEST-088"),
     C("POWER_SELECT", "Power Select", "shared", BOTH, (ANY,), ("PLC_LINK_UP",), (_a("on", "bool"),),
       "SW_POWER_SELECT(코일 215) 쓰기 — 실패면 v1 문구로 LINK_DOWN", "Power_Select_button → main.py:1241-1255"),
     # ── TSP ──
@@ -333,7 +332,7 @@ COMMANDS: tuple = (
       (_a("on", "bool"), _a("time", "str", False, desc="HH:MM")), "켜기/끄기·시각 — 설정 폴더 tsp_schedule.json(D90)",
       "TSP 예약 체크박스·시각 → tsp_runtime.py:111-132"),
     # ── CH2 히터 패널 ──
-    C("HEATER_ONOFF", "히터 ON/OFF", "heater", BOTH, (ANY,), ("HEATER_SUPPORTED",), (_a("target", "any", False, desc="목표 °C"),),
+    C("HEATER_ONOFF", "히터 켜기·끄기", "heater", BOTH, (ANY,), ("HEATER_SUPPORTED",), (_a("target", "any", False, desc="목표 °C"),),
       "RUN 이면 끄기('정지(패널)'), 아니면 목표 검사 후 켜기", "ui/heater_panel.py:370-380"),
     C("HEATER_APPLY", "히터 목표 적용", "heater", BOTH, (ANY,), ("HEATER_SUPPORTED",), (_a("target", "any", desc="목표 °C"),),
       "공정 잠금 없이 목표만(v1 그대로 — HEAT-114)", "ui/heater_panel.py:382-387"),
@@ -370,7 +369,7 @@ COMMANDS: tuple = (
       "device/plc.py:1810-1811 buzzer_stop(v1 화면 버튼 없음 — PLC API)"),
     C("RUNTIME_DUMP", "런타임 덤프", "shared", BOTH, (ANY,), (), (_a("reason", "str", False),),
       "LOG_ROOT_DIR\\RUNTIME_DUMP 에 상태·스레드 덤프(동시에 1개)", "RuntimeDump_button → main.py:841-844·1170-1207"),
-    C("LOG_CLEAR", "로그 지우기(화면)", "shared", BOTH, (ANY,), (), (_a("target", "str", False),),
+    C("LOG_CLEAR", "화면 로그 지우기", "shared", BOTH, (ANY,), (), (_a("target", "str", False),),
       "화면 로그만 비움 — 장비·기록 동작 없음(이벤트로 화면에 알림)", "server_page 'Clear'(화면만)"),
     C("CONFIG_APPLY", "설정 적용", "system", (WEB,), (ANY,), (),
       (_a("version", "int", min=1), _a("values", "obj"), _a("schemaHash", "str")),
@@ -384,8 +383,8 @@ COMMANDS: tuple = (
       "의도적 종료 — DC·RF·DC Pulse·RF Pulse OFF, 히터 RUN=0, PLC 릴레이·MFC 그대로(챔버K 결정 4)", role="system"),
     C("RESIDUAL_POWER_OFF", "남은 파워 끄기", "shared", (INT,), (ANY,), (), (),
       "프로그램 시작 때 공정이 없는데 파워가 남아 있으면 파워만(S51)", role="system"),
-    C("NOTIFY", "이벤트·알람", "shared", (INT,), (ANY,), (), (_a("level", "str"), _a("code", "str")), role="system"),
-) + tuple(C(f"ROBOT_{c}", f"로봇 {c}", "robot", (ROBOT,), (ANY,), (), _ROBOT_ARGS,
+    C("NOTIFY", "사건·알람", "shared", (INT,), (ANY,), (), (_a("level", "str"), _a("code", "str")), role="system"),
+) + tuple(C(f"ROBOT_{c}", f"로봇 {ROBOT_LABEL[c]}", "robot", (ROBOT,), (ANY,), (), _ROBOT_ARGS,
             "RobotOps(v1 host/handlers.py 그대로) — 응답 body 는 v1 형식 그대로(CmdResult.value)",
             f"host/setup.py {c}", role="system") for c in ROBOT_COMMANDS)
 

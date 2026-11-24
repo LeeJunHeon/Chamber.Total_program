@@ -46,7 +46,7 @@ PARAMS: tuple = (
     inst("PLC_DC_V_SCALE", _G, "DC 전압 스케일(V/count)", F, 0.50316, 0.0, 10.0, safety=H, src="lib/config_common.py:698"),
     inst("PLC_DC_I_SCALE", _G, "DC 전류 스케일(A/count)", F, 0.00097405, 0.0, 1.0, safety=H, src="lib/config_common.py:699",
          note="v1 실측 미검증(lib/config_common.py:220-221) — 과전류 트립 시 raw 를 같이 남김"),
-    p("POWER_OFF_ZERO_DEADLINE_S", _G, "D/A 전원 OFF 0 W 확인 최대 시간", "s", F, 10.0, 0.5, 120.0, safety=H,
+    p("POWER_OFF_ZERO_DEADLINE_S", _G, "D/A 파워 끄기 0 W 확인 최대 시간", "s", F, 10.0, 0.5, 120.0, safety=H,
       src="lib/config_common.py:554 · device/dc_power.py:437-439 · device/rf_power.py:875-877",
       desc="DC1·DC2·RF 연속·PC RF OFF 때 0 W 쓰기를 0.5 s 간격으로 이 시간까지 재시도. 실패면 출력 상태 미확인"),
 )

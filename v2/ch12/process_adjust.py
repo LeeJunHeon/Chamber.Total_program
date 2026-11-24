@@ -94,7 +94,7 @@ class AdjustMixin:
         if not e:                                           # 장비 최대(11-09 C2, D11 — 고쳐 쓰지 않고 거부)
             lim = self.adjust_max(ai)
             if lim is not None and float(value) > lim:
-                e = f"{value:g} > {lim:g} ({ai.label} 최대 — {self.adjust_max_key(ai)})"
+                e = f"{value:g} > {lim:g} ({ai.label.replace('₂', '2')} 최대 — {self.adjust_max_key(ai)})"   # 거부 글은 묶음 16 전과 같게(O2·N2)
         if e:
             self.reject_detail = e
             why = "BAD_ARGS" if ("숫자" in e or "true/false" in e) else "ADJUST_OUT_OF_RANGE"

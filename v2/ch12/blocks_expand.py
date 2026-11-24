@@ -249,7 +249,7 @@ def template_blocks(p: Mapping[str, Any], chamber: int, cfg: Mapping[str, Any], 
     out.append(_B("pressure_ctrl", target=wp, timeout_sec=sc.pressure_wait_timeout_s))
     guns = [x.lower() for x in sc.gun_shutters if p.get(f"use_{x.lower()}", False)]
     if guns:
-        out.append(_B("shutter", "Gun Shutter 열기", action="open", targets=guns))
+        out.append(_B("shutter", "Gun 셔터 열기", action="open", targets=guns))
     if bool(p.get("use_power_select", False)) and sc.chamber == 2:
         out.append(_B("power_select"))
         ms = sc.power_select_settle_ms
@@ -287,7 +287,7 @@ def template_blocks(p: Mapping[str, Any], chamber: int, cfg: Mapping[str, Any], 
     if thk:
         out.append(_B("thickness_zero"))
     if info["use_ms"]:
-        out.append(_B("shutter", "Main Shutter 열기", action="open", targets=["ms"]))
+        out.append(_B("shutter", "Main 셔터 열기", action="open", targets=["ms"]))
     if thk:
         out.append(_B("thickness_main", target_nm=float(p.get("thickness") or 0.0), dep_rate=float(p.get("dep_rate") or 0.0),
                       integration_ms=ims))

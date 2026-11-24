@@ -1,7 +1,7 @@
 {
  "_설명": "챔버12 웹 검사 골든 — E230 행 값 검사·시작 전 값 검사(v2.tools.make_web_golden_ch12 가 만든다 — 손으로 고치지 않음). 모양은 생성기 머리말",
  "defsVersion": 1,
- "defsHash": "a4acc54be8577a0cba5387d017627ff34ee513b6b35a62dbc5db7c816fde1da2",
+ "defsHash": "59a9f11ad834428b74dfd46c45275cf5a91aab09c03c5f3904e4819fc7400535",
  "defs": {
   "version": 1,
   "blocks": {
@@ -33,7 +33,7 @@
        "max": 60.0,
        "minExclusive": true,
        "enum": null,
-       "label": "램프",
+       "label": "승온 속도",
        "desc": "비우면 히터 기본 램프 속도"
       }
      ],
@@ -77,8 +77,8 @@
        "max": 480.0,
        "minExclusive": false,
        "enum": null,
-       "label": "SOAK",
-       "desc": "도달 뒤 시간만 셈. 비우면 SOAK 없음"
+       "label": "유지 시간",
+       "desc": "SOAK — 도달 뒤 시간만 셈. 비우면 SOAK 없음"
       }
      ],
      "steps": "HEATER_WAIT",
@@ -101,7 +101,7 @@
     },
     {
      "type": "base_wait",
-     "label": "베이스 압력 대기(IG)",
+     "label": "베이스 압력 대기",
      "params": [
       {
        "name": "target_torr",
@@ -153,7 +153,7 @@
     },
     {
      "type": "gas_prep",
-     "label": "가스 준비(Flow Off·밸브·영점)",
+     "label": "가스 준비",
      "params": [
       {
        "name": "ar",
@@ -178,7 +178,7 @@
        "max": null,
        "minExclusive": false,
        "enum": null,
-       "label": "O2",
+       "label": "O₂",
        "desc": ""
       },
       {
@@ -191,7 +191,7 @@
        "max": null,
        "minExclusive": false,
        "enum": null,
-       "label": "N2",
+       "label": "N₂",
        "desc": "CH1 은 N2 라인 없음"
       }
      ],
@@ -248,7 +248,7 @@
        "max": null,
        "minExclusive": false,
        "enum": null,
-       "label": "O2",
+       "label": "O₂",
        "desc": ""
       },
       {
@@ -261,7 +261,7 @@
        "max": null,
        "minExclusive": false,
        "enum": null,
-       "label": "O2 유량",
+       "label": "O₂ 유량",
        "desc": ""
       },
       {
@@ -274,7 +274,7 @@
        "max": null,
        "minExclusive": false,
        "enum": null,
-       "label": "N2",
+       "label": "N₂",
        "desc": ""
       },
       {
@@ -287,7 +287,7 @@
        "max": null,
        "minExclusive": false,
        "enum": null,
-       "label": "N2 유량",
+       "label": "N₂ 유량",
        "desc": ""
       }
      ],
@@ -306,7 +306,7 @@
     },
     {
      "type": "pressure_ctrl",
-     "label": "압력 제어(채널 SP)",
+     "label": "압력 제어",
      "params": [
       {
        "name": "target",
@@ -420,7 +420,7 @@
        "max": null,
        "minExclusive": false,
        "enum": null,
-       "label": "SP1",
+       "label": "SP1 목표",
        "desc": ""
       }
      ],
@@ -491,7 +491,7 @@
     },
     {
      "type": "power_select",
-     "label": "Power Select(SW_RF_SELECT)",
+     "label": "RF Select 켜기",
      "params": [],
      "steps": "PLC SW_RF_SELECT ON(ch 인자 없음)",
      "v1": "pc:2431-2436",
@@ -624,7 +624,7 @@
        "max": null,
        "minExclusive": true,
        "enum": null,
-       "label": "RF 연속",
+       "label": "RF Power",
        "desc": ""
       }
      ],
@@ -725,8 +725,8 @@
        "max": null,
        "minExclusive": false,
        "enum": null,
-       "label": "폴링",
-       "desc": "메인 공정 중이면 true"
+       "label": "장비 값 읽기",
+       "desc": "폴링 — 메인 공정 중이면 true"
       }
      ],
      "steps": "DC_PULSE_SET(REF_POWER 확인) · RF_PULSE_SET(no_wait)",
@@ -761,7 +761,7 @@
     },
     {
      "type": "main",
-     "label": "메인 공정(시간)",
+     "label": "시간 기준 메인 공정",
      "params": [
       {
        "name": "min",
@@ -786,7 +786,7 @@
        "max": null,
        "minExclusive": false,
        "enum": null,
-       "label": "OES 적분",
+       "label": "OES 적분 시간",
        "desc": ""
       },
       {
@@ -871,7 +871,7 @@
     },
     {
      "type": "thickness_main",
-     "label": "메인 공정(두께)",
+     "label": "두께 기준 메인 공정",
      "params": [
       {
        "name": "target_nm",
@@ -909,7 +909,7 @@
        "max": null,
        "minExclusive": false,
        "enum": null,
-       "label": "OES 적분",
+       "label": "OES 적분 시간",
        "desc": ""
       }
      ],
@@ -967,7 +967,7 @@
     },
     {
      "type": "test",
-     "label": "TEST MODE",
+     "label": "TEST 모드",
      "params": [
       {
        "name": "sec",
@@ -1000,7 +1000,7 @@
     },
     {
      "type": "row_delay",
-     "label": "대기 행(delay)",
+     "label": "지연 대기",
      "params": [
       {
        "name": "sec",
@@ -1332,7 +1332,7 @@
       },
       "apply": "MFC FLOW_SET(ch 2) → 되읽기",
       "whenLive": "O2 FLOW_SET 이 끝났으면",
-      "label": "O2 유량"
+      "label": "O₂ 유량"
      },
      {
       "device": "mfc",
@@ -1353,7 +1353,7 @@
       },
       "apply": "MFC FLOW_SET(ch 3) → 되읽기(CH2 만)",
       "whenLive": "N2 FLOW_SET 이 끝났으면",
-      "label": "N2 유량"
+      "label": "N₂ 유량"
      },
      {
       "device": "mfc",

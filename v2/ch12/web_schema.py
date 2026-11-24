@@ -19,6 +19,7 @@
   stopSequence  STOP·이상 중단·끝 정지 순서 — 4단계 safety_rules.py 의 public()(없으면 {"fixed": true, "steps": []})
   states        공정 상태 이름(process_states.STATES — 3단계, 없으면 []) · events 웹이 받는 공정 이벤트(종류·data 키)
   eventKinds    event 메시지의 (context.source, context.kind) → 화면 이름·level(main 평소 로그 / detail 상세에서만).
+  eventSources  사건 출처(context.source) → 화면 이름(묶음 16).
                 warn·error 는 표와 상관없이 늘 보이고, 표에 없는 짝은 detail 로 본다. 챔버는 context.chamber(ch1·ch2·pc·tsp·shared)
   paramGroups   설정(params[].group) 묶음 key → 화면 이름(모든 group 이 있다 — 시험)
   snapshot      1초 스냅샷 열 정의 — tick·process(공정 맥락 <c>.proc.*·목표값 <c>.set.*·프로그램 상태 prog.*)·장비 블록(이름·라벨·
@@ -68,6 +69,9 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
   15 2026-11-20 PLC 버튼 확인창·기록(D425) — plcButtons 에 short(짧은 이름)·procChamber(닿는 공정 챔버 — 건 셔터·Power Select 는 CH2)·
      hazard{on, off}(사람·장비 위험), plcHazardText(확인창 위험 문구 — 사람·장비·RF 전용 릴레이), PLC_BUTTON 인자 by_name(웹 서버가 넣는
      로그인 이름), eventKinds command/plc_button(누를 때마다 하나 — plc_manual 대체), 사유 PLC_BUTTON·PLC_BUTTON_FAILED.
+  16 2026-11-24 화면 글 용어표(챔버K 묶음 21 과 같은 용어) — 이름표: 스냅샷 필드(PLC 142개는 래더 이름 대신 용어표 이름, 래더 이름은 desc)·
+     블록·PLC 버튼(label = short = 필드 이름, 래더 이름은 desc)·명령·상태·블록 정의·정지 단계·사건 이름·설정 묶음·plcHazardText,
+     새 eventSources(사건 출처 이름). 식별자(code·kind·name·key·열 이름)·사건 message·v1 스텝 문구는 그대로.
 """
 from __future__ import annotations
 
@@ -83,7 +87,7 @@ from v2.ch12 import snapshot_fields as SF
 from v2.ch12 import web_blocks as WB
 from v2.ch12.hub import optional_module
 
-EXPORT_VERSION = 15
+EXPORT_VERSION = 16
 
 # 웹이 받는 공정 이벤트(엔진이 system.emit(source="process:<c>", kind, event=data) 로 내는 것 — hub 가 run_* 메시지로 바꾼다)
 EVENTS: tuple = (
@@ -94,13 +98,13 @@ EVENTS: tuple = (
 # 설정(params[].group) → 화면 이름
 PARAM_GROUPS: tuple = (
     ("install", "설치·장비"), ("secret", "비밀값"), ("tick", "1초 읽기"), ("plc", "PLC"), ("chamber", "챔버 공통"),
-    ("mfc", "MFC"), ("ig", "이온 게이지"), ("dc", "DC 전원"), ("rf", "RF 전원"), ("dcpulse", "DC Pulse"),
-    ("rfpulse", "RF Pulse"), ("tsp", "TSP 장비"), ("tsp_run", "TSP 운전"), ("stm100", "두께 모니터(STM-100)"),
+    ("mfc", "MFC"), ("ig", "Ion Gauge"), ("dc", "DC Power"), ("rf", "RF Power"), ("dcpulse", "DC Pulse"),
+    ("rfpulse", "RF Pulse"), ("tsp", "TSP 장비"), ("tsp_run", "TSP 운전"), ("stm100", "두께 모니터"),
     ("thickness", "두께"), ("heater", "히터"), ("heater_plc", "히터 PLC 설정"), ("heater_ramp", "히터 승온"),
-    ("heater_hold", "히터 유지 모드"), ("heater_noresp", "히터 무응답"), ("process", "공정"), ("pc", "플라즈마 클리닝"),
-    ("eta", "남은 시간(ETA)"), ("stop", "정지 순서"), ("resume", "재시작 이어가기"), ("command", "명령"),
+    ("heater_hold", "히터 유지 모드"), ("heater_noresp", "히터 응답 없음"), ("process", "공정"), ("pc", "Plasma Cleaning"),
+    ("eta", "남은 시간"), ("stop", "정지 순서"), ("resume", "재시작 이어가기"), ("command", "명령"),
     ("robot", "로봇"), ("robot_server", "로봇 서버"), ("camera", "카메라"), ("oes", "OES"), ("rga", "RGA"),
-    ("outputs", "v1 기록 출력"), ("record", "기록"), ("uplink", "웹 연결"), ("chat", "구글챗"), ("monitor", "감시"),
+    ("outputs", "기록 출력"), ("record", "기록"), ("uplink", "웹 연결"), ("chat", "구글챗"), ("monitor", "감시"),
     ("apps", "보조 프로그램"), ("debug", "디버그"), ("supervisor", "감시 프로그램·진단"),
 )
 
@@ -115,19 +119,19 @@ EVENT_KINDS: tuple = (
     ("safety", "fired", "안전 규칙 발동", _M), ("safety", "released", "안전 규칙 해제", _M),
     ("heater", "log", "히터 기록", _D), ("heater", "card", "히터 알림 카드", _M),
     ("plc", "link_up", "PLC 연결 복구", _M), ("plc", "link_down", "PLC 연결 끊김", _M),
-    ("plc", "turbo_off_long", "터보 꺼짐 지속", _M), ("plc", "turbo_back_on", "터보 다시 켜짐", _M),
+    ("plc", "turbo_off_long", "Turbo 꺼짐 지속", _M), ("plc", "turbo_back_on", "Turbo 다시 켜짐", _M),
     ("plc", "conn_change", "PLC 연결 상태", _D), ("plc", "coil_plan", "코일 읽기 계획", _D), ("plc", "log", "PLC 기록", _D),
     ("plc", "read", "PLC 읽기", _D),
     ("mfc", "command_confirmed", "명령 확인", _D), ("mfc", "command_failed", "명령 실패", _M), ("mfc", "flow", "유량", _D),
     ("mfc", "pressure", "압력", _D), ("mfc", "read", "읽기", _D), ("mfc", "status", "상태", _D), ("mfc", "io", "입출력", _D),
     ("ig", "base_reached", "베이스 압력 도달", _M), ("ig", "base_failed", "베이스 압력 실패", _M),
     ("ig", "pressure", "압력", _D), ("ig", "read", "읽기", _D), ("ig", "status", "상태", _D), ("ig", "io", "입출력", _D),
-    ("dc", "target_reached", "DC 목표 도달", _M), ("dc", "target_failed", "DC 목표 실패", _M),
-    ("dc", "power_off_finished", "DC 꺼짐", _M), ("dc", "power_off_failed", "DC 끄기 실패", _M),
-    ("dc", "state_changed", "DC 상태", _D), ("dc", "display", "DC 표시", _D), ("dc", "status", "DC 상태", _D),
-    ("rf", "target_reached", "RF 목표 도달", _M), ("rf", "target_failed", "RF 목표 실패", _M),
-    ("rf", "power_off_finished", "RF 꺼짐", _M), ("rf", "power_off_failed", "RF 끄기 실패", _M),
-    ("rf", "state_changed", "RF 상태", _D), ("rf", "display", "RF 표시", _D), ("rf", "status", "RF 상태", _D),
+    ("dc", "target_reached", "DC Power 목표 도달", _M), ("dc", "target_failed", "DC Power 목표 실패", _M),
+    ("dc", "power_off_finished", "DC Power 꺼짐", _M), ("dc", "power_off_failed", "DC Power 끄기 실패", _M),
+    ("dc", "state_changed", "DC Power 상태", _D), ("dc", "display", "DC Power 표시", _D), ("dc", "status", "DC 상태", _D),
+    ("rf", "target_reached", "RF Power 목표 도달", _M), ("rf", "target_failed", "RF Power 목표 실패", _M),
+    ("rf", "power_off_finished", "RF Power 꺼짐", _M), ("rf", "power_off_failed", "RF Power 끄기 실패", _M),
+    ("rf", "state_changed", "RF Power 상태", _D), ("rf", "display", "RF Power 표시", _D), ("rf", "status", "RF Power 상태", _D),
     ("dcpulse", "command_confirmed", "명령 확인", _D), ("dcpulse", "command_failed", "명령 실패", _M),
     ("dcpulse", "arc_threshold_reached", "아크 기준 넘음", _M), ("dcpulse", "telemetry", "측정값", _D),
     ("dcpulse", "status", "상태", _D),
@@ -136,11 +140,11 @@ EVENT_KINDS: tuple = (
     ("rfpulse", "status", "상태", _D),
     ("tsp", "command_result", "TSP 명령 결과", _M), ("tsp", "link_closed", "TSP 연결 닫음", _D),
     ("stm100", "zero", "두께 0 맞춤", _M), ("stm100", "material_applied", "재료 적용", _M),
-    ("stm100", "unresponsive", "두께 모니터 무응답", _M),
+    ("stm100", "unresponsive", "두께 모니터 응답 없음", _M),
     ("stm100", "job_failed", "두께 작업 실패", _M), ("stm100", "config_warning", "두께 설정 경고", _M),
     ("stm100", "unavailable", "두께 모니터 없음", _M), ("stm100", "reset_flag", "리셋 표시", _D),
     ("stm100", "reset_ack_failed", "리셋 확인 실패", _D),
-    ("oes", "finished", "OES 측정 끝", _M), ("oes", "rejected", "OES 거부", _M), ("oes", "worker_exit", "OES 워커 종료", _M),
+    ("oes", "finished", "OES 측정 끝", _M), ("oes", "rejected", "OES 거부", _M), ("oes", "worker_exit", "OES 프로그램 종료", _M),
     ("oes", "status", "OES 상태", _D),
     ("rga", "finished", "RGA 측정 끝", _M), ("rga", "failed", "RGA 실패", _M), ("rga", "rejected", "RGA 거부", _M),
     ("rga", "data", "RGA 값", _D), ("rga", "status", "RGA 상태", _D),
@@ -152,27 +156,36 @@ EVENT_KINDS: tuple = (
     ("uplink", "uplink_bad_command", "웹 명령 형식 오류", _M), ("uplink", "uplink_spool_error", "보관함 쓰기 실패", _M),
     # 4단계 — 조립에 붙은 모듈이 내는 것(공정 모니터·OES 이상·로봇 요청 공정 기록·로봇 오류 보고·재시작 이어감·안전·명령)
     # PLC 버튼(D425 — 누를 때마다 하나: 누가·켬/끔·결과·그 챔버 공정 상태, plc_manual 대체)
-    ("process", "monitor_card", "공정 모니터 알림(유량·압력 편차·Arc·REFP)", _M), ("oes", "anomaly", "OES 이상", _M),
+    ("process", "monitor_card", "공정 편차 알림", _M), ("oes", "anomaly", "OES 이상", _M),
     ("robot", "client_process", "로봇 요청 공정 기록", _M), ("robot", "error_event", "로봇 명령 오류", _M),
     ("robot_server", "error_event", "로봇 서버 오류", _M), ("process", "resumed", "재시작 뒤 공정 이어감", _M),
     ("safety", "step", "안전 조치 단계", _D), ("safety", "error", "안전 조치 오류", _M),
     ("command", "plc_button", "PLC 버튼", _M), ("command", "internal_error", "명령 처리 오류", _M),
     ("ui", "log_clear", "화면 로그 지우기", _D), ("heater", "panel_result", "히터 패널 결과", _M),
-    ("thickness", "panel_result", "두께 패널 결과", _M), ("robot_api", "bind_failed", "내부 명령 API 포트 실패", _M),
+    ("thickness", "panel_result", "두께 패널 결과", _M), ("robot_api", "bind_failed", "로봇 내부 포트 실패", _M),
     ("thickness", "window", "두께 Factor·재료 창 값", _D),
     # 2026-11-18 D414 — 공정 진행 줄을 평소 보기(main)로: 공정 단계(블록) 시작·끝·건너뛰기·일시정지·재개·순서 고침·공정 중 값 바꾸기·
     #   레시피 적재·알림창·챗 경고, 플라즈마 클리닝 결과(PcEvent state)·TSP 결과(TspEngineEvent result). 구글챗 카드 자리·TSP 예약 복원은 상세
-    ("process", "block", "공정 단계", _M), ("process", "skip", "블록 건너뜀", _M), ("process", "pause", "일시정지·재개", _M),
+    ("process", "block", "공정 단계", _M), ("process", "skip", "단계 건너뜀", _M), ("process", "pause", "일시정지·재개", _M),
     ("process", "resume", "재개", _M), ("process", "edit", "순서 고침", _M), ("process", "adjust", "공정 중 값 바꾸기", _M),
-    ("process", "recipe_loaded", "레시피 적재", _M), ("process", "popup", "알림창", _M), ("process", "chat", "챗 알림", _M),
+    ("process", "recipe_loaded", "레시피 적재", _M), ("process", "popup", "알림창", _M), ("process", "chat", "구글챗 알림", _M),
     ("process", "state", "공정 결과", _M), ("process", "result", "TSP 결과", _M),
-    ("process", "card", "챗 카드", _D), ("process", "schedule_restore", "예약 복원", _D),
+    ("process", "card", "구글챗 카드", _D), ("process", "schedule_restore", "예약 복원", _D),
 ) + tuple(x for w in _WORKERS for x in (
     (w, "connected", "장비 연결됨", _D), (w, "connect_failed", "연결 실패", _D), (w, "disconnected", "장비 연결 끊김", _M),
     (w, "long_outage", "장비 연결 오래 끊김", _M), (w, "timeout", "응답 없음", _D),
     (w, "recovered", "다시 응답", _M if w == "stm100" else _D),
     (w, "COMMAND_BLOCKED", "명령 막힘", _M),
 ))
+
+# 사건 출처(context.source) → 화면 이름(묶음 16 — 챔버K 묶음 21 eventSources 와 같은 모양). eventKinds 의 source 는 모두 여기에 있다(시험)
+EVENT_SOURCES: tuple = (
+    ("process", "공정"), ("safety", "안전"), ("heater", "히터"), ("plc", "PLC"), ("mfc", "MFC"), ("ig", "Ion Gauge"),
+    ("dc", "DC Power"), ("rf", "RF Power"), ("dcpulse", "DC Pulse"), ("rfpulse", "RF Pulse"), ("tsp", "TSP"),
+    ("stm100", "두께 모니터"), ("oes", "OES"), ("rga", "RGA"), ("selfwatch", "프로그램 감시"), ("outputs", "기록 출력"),
+    ("uplink", "웹 연결"), ("robot", "로봇"), ("robot_server", "로봇 서버"), ("robot_api", "로봇 내부 API"),
+    ("command", "명령"), ("ui", "화면"), ("thickness", "두께"), ("camera", "카메라"),
+)
 
 # 챔버 구성(정의) — 지원 장비 지금 값(supports)은 bundle 에서 caps_from_cfg 로
 _SUPPORT_KEYS = {"dc": ("SUPPORTS_DC_CONT", "SUPPORTS_DC"), "dc2": ("SUPPORTS_DC_CONT2", "SUPPORTS_DC2"),
@@ -188,7 +201,7 @@ CHAMBERS: tuple = (
                  "ch2.oes", "ch2.rga"],
          shared=["plc", "camera"], heater=True,
          note="CH2 히터(VARITAP VSCD-30 + PLC PID, 래더 워치독) · DC·RF 연속은 PLC D/A(ch2.dc·ch2.rf) · DC2 는 히터 없을 때만"),
-    dict(id="pc", label="플라즈마 클리닝", kind="pc", channel=None, gases=["ar", "o2", "n2"], blocks=["pc.rf"],
+    dict(id="pc", label="Plasma Cleaning", kind="pc", channel=None, gases=["ar", "o2", "n2"], blocks=["pc.rf"],
          shared=["plc"], heater=False, note="PC RF 는 PLC D/A(pc.rf) — 채널(CH1·CH2)은 공정이 고른다"),
     dict(id="tsp", label="TSP", kind="tsp", channel=None, gases=[], blocks=["tsp", "tsp.ig"], shared=["ch1.ig"],
          heater=False, note="TSP 게이지는 CH1 IG worker 공유(D67)"),
@@ -308,6 +321,7 @@ def definitions() -> Dict[str, Any]:
         "states": states_part(),
         "events": [{"kind": k, "label": lab, "data": list(keys)} for k, lab, keys in EVENTS],
         "eventKinds": [{"source": s, "kind": k, "label": lab, "level": lv} for s, k, lab, lv in EVENT_KINDS],
+        "eventSources": [{"source": k, "label": lab} for k, lab in EVENT_SOURCES],
         "paramGroups": [{"key": k, "label": lab} for k, lab in PARAM_GROUPS],
         "snapshot": snapshot(),
         "chambers": chambers(None),

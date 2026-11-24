@@ -103,35 +103,35 @@ BLOCK_DEFS: tuple = (
     BlockDef("heater_set", "히터 설정", (
         P("target_c", "float", "°C", required=True, min=0.0, min_exclusive=True, label="목표 온도",
           desc="상한 min(HEATER_MAX_TEMP, HEATER_SV_LIMIT_C)"),
-        P("ramp_c_per_min", "float", "°C/min", None, min=0.0, max=60.0, min_exclusive=True, label="램프",
+        P("ramp_c_per_min", "float", "°C/min", None, min=0.0, max=60.0, min_exclusive=True, label="승온 속도",
           desc="비우면 히터 기본 램프 속도")),
         "HEATER_SET", "pc:2289-2306", chamber=2, needs="heater", desc=_NOT_RESUMABLE_SET),
     BlockDef("heater_wait", "히터 도달·안정 대기", (
         P("target_c", "float", "°C", None, min=0.0, min_exclusive=True, label="목표 온도", desc="비우면 앞 히터 설정 블록의 목표"),
-        P("soak_min", "float", "분", None, min=0.0, max=480.0, label="SOAK", desc="도달 뒤 시간만 셈. 비우면 SOAK 없음")),
+        P("soak_min", "float", "분", None, min=0.0, max=480.0, label="유지 시간", desc="SOAK — 도달 뒤 시간만 셈. 비우면 SOAK 없음")),
         "HEATER_WAIT", "pc:2307-2311", chamber=2, needs="heater",
         skippable=True, skip_cleanup=("히터 도달 대기 취소(cancel_heater) — 히터는 목표대로 계속 운전",),
         pausable=True, pause="대기 타이머(SOAK 경과) 정지 — 히터는 목표 유지", resumable=True,
         resume_checks=("heater_run", "watchdog")),
-    BlockDef("base_wait", "베이스 압력 대기(IG)", (
+    BlockDef("base_wait", "베이스 압력 대기", (
         P("target_torr", "float", "Torr", "cfg:PROCESS_DEFAULT_BASE_PRESSURE", label="목표 압력"),),
         "IG_CMD", "pc:2314-2318",
         skippable=True, skip_cleanup=("IG 대기·재점등 취소(cancel_ig)",),
         desc="IG 점등·재점등·판정은 IG 드라이버가 돌린다 — 일시정지 없음, 재시작 뒤에는 이 블록 설정을 처음부터 다시 씀"),
     BlockDef("rga_scan", "RGA 스캔", (), "RGA_SCAN", "pc:2320-2324",
              skippable=True, skip_cleanup=("RGA 스캔 결과를 기다리지 않음(늦게 온 완료는 무시 — _rga_is_stale)",)),
-    BlockDef("gas_prep", "가스 준비(Flow Off·밸브·영점)", (
-        P("ar", "bool", default=False, label="Ar"), P("o2", "bool", default=False, label="O2"),
-        P("n2", "bool", default=False, label="N2", desc="CH1 은 N2 라인 없음")),
+    BlockDef("gas_prep", "가스 준비", (
+        P("ar", "bool", default=False, label="Ar"), P("o2", "bool", default=False, label="O₂"),
+        P("n2", "bool", default=False, label="N₂", desc="CH1 은 N2 라인 없음")),
         "FLOW_OFF · VALVE_OPEN · PS_ZEROING · MFC_ZEROING — 고른 가스(하나도 안 고르면 전부, v1 use_any)", "pc:2326-2350",
         desc=_NOT_RESUMABLE_SET),
     BlockDef("gas_intro", "가스 주입", (
         P("ar", "bool", default=False, label="Ar"), P("ar_flow", "float", "sccm", None, min=0.0, label="Ar 유량"),
-        P("o2", "bool", default=False, label="O2"), P("o2_flow", "float", "sccm", None, min=0.0, label="O2 유량"),
-        P("n2", "bool", default=False, label="N2"), P("n2_flow", "float", "sccm", None, min=0.0, label="N2 유량")),
+        P("o2", "bool", default=False, label="O₂"), P("o2_flow", "float", "sccm", None, min=0.0, label="O₂ 유량"),
+        P("n2", "bool", default=False, label="N₂"), P("n2_flow", "float", "sccm", None, min=0.0, label="N₂ 유량")),
         "PLC MV ON · 가스마다 PLC 밸브 ON · FLOW_SET · FLOW_ON(가스 단계 설정 PROCESS_GAS_STEP_LEVELS 의 목표보다 작은 중간값을 "
         "작은 순서대로 먼저 FLOW_SET·FLOW_ON — 각 단계 연속 N 회 도달 후 다음)", "pc:2352-2373·main 27decba", desc=_NOT_RESUMABLE_SET),
-    BlockDef("pressure_ctrl", "압력 제어(채널 SP)", (
+    BlockDef("pressure_ctrl", "압력 제어", (
         P("target", "float", "mTorr", required=True, label="작업 압력", desc="SP 읽기 실패 때 쓰는 목표(v1 working_pressure)"),
         P("timeout_sec", "float", "s", "cfg:PC_PRESSURE_WAIT_TIMEOUT_S", min=0.0, min_exclusive=True, label="최대 대기")),
         "MFC SP3_ON(CH1)·SP4_ON(CH2) · WAIT_PRESSURE(그 SP setpoint 기준)", "pc:2375-2412",
@@ -145,13 +145,13 @@ BLOCK_DEFS: tuple = (
         resumable=True, resume_checks=("power_output", "gas", "pressure", "power_select", "heater_run", "watchdog"),
         desc="이어가기는 WAIT_PRESSURE 중일 때만"),
     BlockDef("pressure_set", "작업 압력(SP1)", (
-        P("value", "float", "mTorr", required=True, label="SP1"),),
+        P("value", "float", "mTorr", required=True, label="SP1 목표"),),
         "SP1_SET · SP1_ON", "pc:2586-2594", desc=_NOT_RESUMABLE_SET),
     BlockDef("shutter", "셔터", (
         P("action", "enum", "", required=True, enum=("open", "close"), label="동작"),
         P("targets", "list", "", required=True, enum=_GUNS, label="셔터", desc="g1~g3(CH2 건 셔터)·ms(Main Shutter)")),
         "PLC G1~G3·MS ON/OFF", "pc:2420-2429·2657-2663", desc=_NOT_RESUMABLE_SET),
-    BlockDef("power_select", "Power Select(SW_RF_SELECT)", (), "PLC SW_RF_SELECT ON(ch 인자 없음)", "pc:2431-2436",
+    BlockDef("power_select", "RF Select 켜기", (), "PLC SW_RF_SELECT ON(ch 인자 없음)", "pc:2431-2436",
              chamber=2, desc="안정화 대기는 뒤 대기 블록(기본 템플릿: PC_POWER_SELECT_SETTLE_MS)"),
     BlockDef("power_on", "파워 켜기", (
         P("dc_power", "float", "W", None, min=0.0, min_exclusive=True, label="DC1"),
@@ -162,7 +162,7 @@ BLOCK_DEFS: tuple = (
         P("rfp_power", "float", "W", None, min=0.0, min_exclusive=True, label="RF Pulse"),
         P("rfp_freq_khz", "float", "kHz", None, label="RF Pulse 주파수", desc="0.001~RFPULSE_FREQ_MAX_HZ/1000. 장비에는 Hz"),
         P("rfp_duty", "int", "%", None, min=1, max=99, label="RF Pulse 듀티"),
-        P("rf_power", "float", "W", None, min=0.0, min_exclusive=True, label="RF 연속")),
+        P("rf_power", "float", "W", None, min=0.0, min_exclusive=True, label="RF Power")),
         "DC_POWER_SET · DC2_POWER_SET · DC_PULSE_START · [CH2 SW_POWER_SELECT ON] RF_PULSE_START · "
         "[RF Pulse 없으면 SW_POWER_SELECT OFF] RF_POWER_SET — 병렬 = (DC∨DC2)∧(RF∨RF Pulse)", "pc:2447-2550",
         pausable=True, pause="파워 램프 정지 — 지금 출력값 유지(목표 쓰기 멈춤), 재개하면 목표까지 램프 계속",
@@ -175,13 +175,13 @@ BLOCK_DEFS: tuple = (
     BlockDef("pulse_set", "펄스 파워 변경", (
         P("kind", "enum", "", required=True, enum=("dc", "rf"), label="장비"),
         P("power", "float", "W", required=True, min=0.0, min_exclusive=True, label="파워"),
-        P("polling", "bool", default=False, label="폴링", desc="메인 공정 중이면 true")),
+        P("polling", "bool", default=False, label="장비 값 읽기", desc="폴링 — 메인 공정 중이면 true")),
         "DC_PULSE_SET(REF_POWER 확인) · RF_PULSE_SET(no_wait)", "pc:2609-2638", desc=_NOT_RESUMABLE_SET),
     BlockDef("thickness_zero", "두께 영점·확인", (), "THICKNESS_ZERO(THICKNESS_ZERO_CONFIRM_S)", "pc:2647-2655",
              needs="thickness", desc="Main Shutter 열기 전(use_ms=F 여도 같은 자리)"),
-    BlockDef("main", "메인 공정(시간)", (
+    BlockDef("main", "시간 기준 메인 공정", (
         P("min", "float", "분", required=True, min=0.0, min_exclusive=True, label="시간"),
-        P("integration_ms", "int", "ms", "cfg:PROCESS_DEFAULT_OES_INTEGRATION_MS", label="OES 적분"),
+        P("integration_ms", "int", "ms", "cfg:PROCESS_DEFAULT_OES_INTEGRATION_MS", label="OES 적분 시간"),
         P("change_after_sec", "float", "s", None, min=0.0, label="중간 변경 시점", desc="메인 시작부터. 비우면 변경 없음"),
         P("change_kind", "enum", "", None, enum=("dc", "rf"), label="변경 장비"),
         P("change_power", "float", "W", None, min=0.0, min_exclusive=True, label="변경 파워"),
@@ -190,21 +190,21 @@ BLOCK_DEFS: tuple = (
         skippable=True, skip_cleanup=("메인 타이머 끝냄 → 다음 블록(끝 정지가 셔터·파워를 끔)", "OES 측정 정지"),
         pausable=True, pause="메인 타이머 정지 — 파워·가스·셔터 그대로(증착은 계속됨). OES 측정 시간은 늘지 않음(미확인)",
         resumable=True, resume_checks=_ALL_RUN_CHECKS),
-    BlockDef("thickness_main", "메인 공정(두께)", (
+    BlockDef("thickness_main", "두께 기준 메인 공정", (
         P("target_nm", "float", "nm", required=True, min=0.0, min_exclusive=True, label="목표 두께"),
         P("dep_rate", "float", "nm/s", required=True, min=0.0, min_exclusive=True, label="증착률"),
-        P("integration_ms", "int", "ms", "cfg:PROCESS_DEFAULT_OES_INTEGRATION_MS", label="OES 적분")),
+        P("integration_ms", "int", "ms", "cfg:PROCESS_DEFAULT_OES_INTEGRATION_MS", label="OES 적분 시간")),
         "OES_RUN(상한 초, no_wait) · THICKNESS_WAIT(예상·상한)", "pc:2665-2686", needs="thickness",
         skippable=True, skip_cleanup=("두께 판정 중단(cancel_thickness)", "OES 측정 정지"),
         desc="두께 도달은 장비 값으로 판정 — 일시정지 없음", resumable=True, resume_checks=_ALL_RUN_CHECKS + ("thickness",)),
     BlockDef("heater_hold", "히터 유지 측정 대기", (), "HEATER_HOLD", "pc:2596-2602", chamber=2, needs="heater",
              skippable=True, skip_cleanup=("유지 모드 측정 대기 취소(cancel_heater)",),
              resumable=True, resume_checks=_ALL_RUN_CHECKS),
-    BlockDef("test", "TEST MODE", (P("sec", "float", "s", required=True, min=1.0, label="시간"),),
+    BlockDef("test", "TEST 모드", (P("sec", "float", "s", required=True, min=1.0, label="시간"),),
              "DELAY int(초×1000) ms 'TEST MODE (N s)'", "pc:2154-2175", touches=False,
              skippable=True, skip_cleanup=("대기만 끊음 — 종료 절차 없음(v1 TEST STOP)",), pausable=True, pause="타이머 정지",
              resumable=True),
-    BlockDef("row_delay", "대기 행(delay)", (
+    BlockDef("row_delay", "지연 대기", (
         P("sec", "float", "s", required=True, min=0.0, min_exclusive=True, label="시간", desc="1초씩 int(초) 번 센다"),
         P("label", "str", "", required=True, label="표시"), P("name", "str", "", required=True, label="이름")),
         "ROW_DELAY(러너 대기 — 장비 명령·새 로그 없음)", "rt:5127-5145", touches=False,
@@ -420,9 +420,9 @@ ADJUST_ITEMS: tuple = (
     AdjustItem("mfc", "ar_flow", "mfc.ar_flow", P("value", "float", "sccm", required=True, min=0.0),
                "MFC FLOW_SET(ch 1) → 되읽기(v1 device/mfc.py FLOW_SET 확인)", "Ar FLOW_SET 이 끝났으면", "Ar 유량"),
     AdjustItem("mfc", "o2_flow", "mfc.o2_flow", P("value", "float", "sccm", required=True, min=0.0),
-               "MFC FLOW_SET(ch 2) → 되읽기", "O2 FLOW_SET 이 끝났으면", "O2 유량"),
+               "MFC FLOW_SET(ch 2) → 되읽기", "O2 FLOW_SET 이 끝났으면", "O₂ 유량"),
     AdjustItem("mfc", "n2_flow", "mfc.n2_flow", P("value", "float", "sccm", required=True, min=0.0),
-               "MFC FLOW_SET(ch 3) → 되읽기(CH2 만)", "N2 FLOW_SET 이 끝났으면", "N2 유량"),
+               "MFC FLOW_SET(ch 3) → 되읽기(CH2 만)", "N2 FLOW_SET 이 끝났으면", "N₂ 유량"),
     AdjustItem("mfc", "wp", "mfc.wp", P("value", "float", "mTorr", required=True, min=0.0),
                "MFC SP1_SET → 되읽기", "SP1_SET 이 끝났으면", "작업 압력(SP1)"),
     AdjustItem("dc", "power", "dc.power", P("value", "float", "W", required=True, min=0.0, min_exclusive=True),

@@ -247,50 +247,50 @@ class SeqStep:
 _PART_SKIP = {p[0]: p[2] for p in PST.SHUTDOWN_PARTS}
 # 챔버 STOP·이상 중단(v1 _create_shutdown_sequence 순서 — process_steps.shutdown_steps 와 같다). 단계마다 '지금 구간에서 쓴 장비'일 때만.
 STOP_SEQUENCE: Tuple[SeqStep, ...] = (
-    SeqStep(1, "ms_close", "Main Shutter 닫기(항상)", "", _PART_SKIP["ms_close"], "PLC MS OFF"),
-    SeqStep(2, "power", "DC1 Power Off", "DC1 썼으면", False, "DC_POWER_STOP"),
-    SeqStep(3, "power", "DC2 Power Off", "DC2 썼으면", False, "DC2_POWER_STOP"),
-    SeqStep(4, "power", "RF Power Off(램프다운)", "RF 연속 썼으면", False, "RF_POWER_STOP"),
-    SeqStep(5, "power", "DC Pulse Off", "DC Pulse 썼으면", False, "DC_PULSE_STOP"),
-    SeqStep(6, "power", "RF Pulse Off(+CH2 SW_POWER_SELECT OFF)", "RF Pulse 썼으면", False, "RF_PULSE_STOP"),
-    SeqStep(7, "flow_off", "MFC Flow Off(쓴 가스, 없으면 전부)", "", _PART_SKIP["flow_off"], "MFC FLOW_OFF"),
-    SeqStep(8, "valve_open", "전체 MFC Valve Open", "", _PART_SKIP["valve_open"], "MFC VALVE_OPEN"),
-    SeqStep(9, "gun_close", "Gun Shutter 닫기", "쓴 건", _PART_SKIP["gun_close"], "PLC G1~G3 OFF"),
-    SeqStep(10, "relay", "Power Select OFF(SW_RF_SELECT)", "CH2 use_power_select", False, "PLC SW_RF_SELECT OFF"),
-    SeqStep(11, "gas_close", "PLC 가스 밸브 닫기(전부)", "", _PART_SKIP["gas_close"], "PLC Ar·O2·N2 OFF"),
-    SeqStep(12, "mv_close", "메인 밸브 닫기", "", _PART_SKIP["mv_close"], "PLC MV OFF"),
+    SeqStep(1, "ms_close", "Main 셔터 닫기", "", _PART_SKIP["ms_close"], "PLC MS OFF"),
+    SeqStep(2, "power", "DC1 끄기", "DC1 썼으면", False, "DC_POWER_STOP"),
+    SeqStep(3, "power", "DC2 끄기", "DC2 썼으면", False, "DC2_POWER_STOP"),
+    SeqStep(4, "power", "RF Power 천천히 끄기", "RF 연속 썼으면", False, "RF_POWER_STOP"),
+    SeqStep(5, "power", "DC Pulse 끄기", "DC Pulse 썼으면", False, "DC_PULSE_STOP"),
+    SeqStep(6, "power", "RF Pulse 끄기", "RF Pulse 썼으면", False, "RF_PULSE_STOP"),
+    SeqStep(7, "flow_off", "가스 흐름 끄기", "", _PART_SKIP["flow_off"], "MFC FLOW_OFF"),
+    SeqStep(8, "valve_open", "MFC 밸브 열기", "", _PART_SKIP["valve_open"], "MFC VALVE_OPEN"),
+    SeqStep(9, "gun_close", "Gun 셔터 닫기", "쓴 건", _PART_SKIP["gun_close"], "PLC G1~G3 OFF"),
+    SeqStep(10, "relay", "RF Select 끄기", "CH2 use_power_select", False, "PLC SW_RF_SELECT OFF"),
+    SeqStep(11, "gas_close", "가스 밸브 닫기", "", _PART_SKIP["gas_close"], "PLC Ar·O2·N2 OFF"),
+    SeqStep(12, "mv_close", "MV 닫기", "", _PART_SKIP["mv_close"], "PLC MV OFF"),
 )
 END_STOP_MUST_KEEP: Tuple[str, ...] = PST.SHUTDOWN_MUST_KEEP          # ("power", "relay") — 결정 D32
 
 # 플라즈마 클리닝 정지(v1 _safe_rf_stop·_shutdown_rest_devices·_final_cleanup — pc_stop.py)
 PC_STOP_SEQUENCE: Tuple[SeqStep, ...] = (
-    SeqStep(1, "rf", "RF 안전 정지(cleanup 5 s → 0 W 확인 15 s → 강제 0 W·SET OFF)", act="RfPower.stop"),
-    SeqStep(2, "flow_off", "선택 가스 FLOW OFF", act="MFC FLOW_OFF"),
-    SeqStep(3, "valve_open", "SP4 쪽 MFC VALVE OPEN", act="MFC VALVE_OPEN"),
-    SeqStep(4, "mfc_release", "MFC 소유권 해제(게이트 밸브는 닫지 않음)", act="release"),
+    SeqStep(1, "rf", "RF Power 안전 정지", act="RfPower.stop"),
+    SeqStep(2, "flow_off", "가스 흐름 끄기", act="MFC FLOW_OFF"),
+    SeqStep(3, "valve_open", "MFC 밸브 열기", act="MFC VALVE_OPEN"),
+    SeqStep(4, "mfc_release", "MFC 사용 끝", act="release"),
 )
 # TSP 정지(v1 tsp_controller finally·tsp_runtime finally — tsp_engine.py)
 TSP_STOP_SEQUENCE: Tuple[SeqStep, ...] = (
-    SeqStep(1, "tsp_off", "TSP OFF", act="TspDriver off"),
-    SeqStep(2, "ig_off", "IG OFF(SIG 0)", act="IgDriver"),
-    SeqStep(3, "release", "연결 닫기·게이지 놓기", act="end_use"),
+    SeqStep(1, "tsp_off", "TSP 끄기", act="TspDriver off"),
+    SeqStep(2, "ig_off", "Ion Gauge 끄기", act="IgDriver"),
+    SeqStep(3, "release", "연결 닫기", act="end_use"),
 )
 # ALL STOP(D05) — 넷을 한꺼번에(각자 자기 스레드에서 v1 정지 순서). 순서는 보내는 순서일 뿐 서로 기다리지 않는다
 ALL_STOP_SEQUENCE: Tuple[SeqStep, ...] = (
-    SeqStep(1, "ch1", "CH1 STOP(request_stop_all)", act="ProcessEngine.stop(ch1)"),
-    SeqStep(2, "ch2", "CH2 STOP(request_stop_all)", act="ProcessEngine.stop(ch2)"),
-    SeqStep(3, "pc", "플라즈마 클리닝 STOP", act="PlasmaCleaning.stop"),
+    SeqStep(1, "ch1", "CH1 STOP", act="ProcessEngine.stop(ch1)"),
+    SeqStep(2, "ch2", "CH2 STOP", act="ProcessEngine.stop(ch2)"),
+    SeqStep(3, "pc", "Plasma Cleaning STOP", act="PlasmaCleaning.stop"),
     SeqStep(4, "tsp", "TSP STOP", act="TspEngine.stop"),
 )
 # 의도적 종료 — 끄는 것과 남기는 것(챔버K 결정 4)
 POWER_OFF_ONLY: Tuple[SeqStep, ...] = (
-    SeqStep(1, "hold", "공정 멈춤(새 장비 명령 없음 — run_end PROGRAM_EXIT)", act="engine hold"),
-    SeqStep(2, "dc", "CH2 DC1·DC2 OFF(0 W → SET OFF)", act="DcPower.stop"),
-    SeqStep(3, "rf", "CH2 RF·PC RF OFF(0 W → SET OFF, 램프다운 없음)", act="RfPower 0 W·SET OFF"),
-    SeqStep(4, "dcpulse", "DC Pulse OUTPUT OFF(연결된 것)", act="DcPulseDriver.output_off"),
-    SeqStep(5, "rfpulse", "RF Pulse RF OFF(연결된 것)", act="RfPulseDriver.stop_process"),
-    SeqStep(6, "heater", "히터 RUN=0", act="HeaterEngine.shutdown"),
-    SeqStep(7, "tsp", "TSP 운전 중이면 이상 중단(TSP OFF)", act="TspEngine.abort"),
+    SeqStep(1, "hold", "공정 멈춤", act="engine hold"),
+    SeqStep(2, "dc", "CH2 DC1·DC2 끄기", act="DcPower.stop"),
+    SeqStep(3, "rf", "RF Power 끄기", act="RfPower 0 W·SET OFF"),
+    SeqStep(4, "dcpulse", "DC Pulse 끄기", act="DcPulseDriver.output_off"),
+    SeqStep(5, "rfpulse", "RF Pulse 끄기", act="RfPulseDriver.stop_process"),
+    SeqStep(6, "heater", "히터 끄기", act="HeaterEngine.shutdown"),
+    SeqStep(7, "tsp", "TSP 중단", act="TspEngine.abort"),
 )
 KEEP_ON_EXIT = ("PLC 릴레이(펌프·밸브·가스 차단밸브·셔터·게이트)", "MFC 유량·밸브", "IG 필라멘트")
 

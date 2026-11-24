@@ -107,7 +107,7 @@ def test_plc_buttons_cover_every_v1_switch_coil():
     assert {b.target for b in C.PLC_BUTTONS} == {n.lower() for n in want}
     by = {b.name: b for b in C.PLC_BUTTONS}
     assert by["SW_POWER_SELECT"].chamber == "shared" and by["VENT_2_SW"].chamber == "ch2"
-    assert by["L_PIN_UP_SW"].chamber == "loadlock" and "게이트 밸브" in by["G_V_1_OPEN_SW"].label
+    assert by["L_PIN_UP_SW"].chamber == "loadlock" and by["G_V_1_OPEN_SW"].label == "CH1 Gate 열기"   # 묶음 16 용어표 이름
 
 
 def test_reason_table_covers_engine_reasons():

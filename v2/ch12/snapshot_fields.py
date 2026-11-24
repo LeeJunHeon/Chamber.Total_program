@@ -19,12 +19,16 @@ from __future__ import annotations
 
 import gc
 import os
+import re
 import sys
 import threading
 from typing import Any, Dict, Iterable, List, Mapping, Optional
 
+import dataclasses
+
 from v2.common.snapshot import DeviceBlock, FieldDef, FType, Quality, row_columns
 from v2.ch12.drivers import camera, dc, dcpulse, heater, ig, mfc, oes_link, plc, rf, rfpulse, rga_link, stm100, tsp
+from v2.ch12 import plc_labels as PL
 from v2.ch12 import thickness_record
 
 F, I, B, S = FType.FLOAT, FType.INT, FType.BOOL, FType.STR
@@ -59,12 +63,101 @@ def device_blocks() -> List[DeviceBlock]:
     missing = [n for n in BLOCK_ORDER if n not in found]
     if missing:
         raise ValueError(f"드라이버 blocks() 에 없는 블록: {missing}")
-    return [found[n] for n in BLOCK_ORDER]
+    return [_screen_names(found[n]) for n in BLOCK_ORDER]
+
+
+# ───────── 화면 이름(2026-11-24 묶음 16 — 챔버K 묶음 21 용어표) ─────────
+# 드라이버가 정한 필드 이름(label)은 장비 쪽 표기(래더 이름·레지스터·되읽기 등)가 섞여 있다 — 화면에는 이 표의 이름을 싣는다.
+# 열 이름·형식·desc 는 그대로(래더 이름·주소처럼 이름에서 뺀 장비 표기는 desc 앞에 붙인다). 키 = 블록 종류.필드
+# (ch1.·ch2.·pc. 를 뗀 블록 이름 — 두 챔버 같은 이름) 또는 블록 이름 전체.필드(그쪽이 먼저).
+BLOCK_LABEL: Dict[str, str] = {
+    "ch1.ig": "CH1 Ion Gauge", "ch2.ig": "CH2 Ion Gauge", "tsp.ig": "TSP Ion Gauge",
+    "ch2.dc": "CH2 DC Power", "ch2.rf": "CH2 RF Power", "ch2.heater": "CH2 히터", "pc.rf": f"{PL.PC} RF Power",
+}
+FIELD_LABEL: Dict[str, str] = {
+    # MFC
+    "mfc.o2_sccm": "O₂ 유량", "mfc.n2_sccm": "N₂ 유량", "mfc.pressure_mtorr": "챔버 압력",
+    "mfc.ar_set_sccm": "Ar 목표", "mfc.o2_set_sccm": "O₂ 목표", "mfc.n2_set_sccm": "N₂ 목표",
+    "mfc.ar_on": "Ar 흐름", "mfc.o2_on": "O₂ 흐름", "mfc.n2_on": "N₂ 흐름", "mfc.valve_pct": "MFC 밸브 위치",
+    "mfc.sp1_mtorr": "SP1 장비 값", "mfc.sp2_mtorr": "SP2 장비 값", "mfc.sp3_mtorr": "SP3 장비 값",
+    "mfc.sp4_mtorr": "SP4 장비 값", "mfc.sp_active": "사용 중 SP",
+    "mfc.valve_age_s": "MFC 밸브 위치 나이", "mfc.on_age_s": "가스 흐름 나이", "mfc.sp1_age_s": "SP1 값 나이",
+    "mfc.sp2_age_s": "SP2 값 나이", "mfc.sp3_age_s": "SP3 값 나이", "mfc.sp4_age_s": "SP4 값 나이",
+    "mfc.sp_active_age_s": "사용 중 SP 나이", "mfc.polling": "공정 중 읽기",
+    # Ion Gauge(CH1·CH2·TSP)
+    "ig.pressure_torr": "Ion Gauge 압력", "ig.state": "압력 상태", "ig.target_torr": "베이스 압력 목표",
+    "tsp.ig.pressure_torr": "Ion Gauge 압력", "tsp.ig.state": "압력 상태", "tsp.ig.target_torr": "베이스 압력 목표",
+    # DC Pulse
+    "dcpulse.p_w": "파워", "dcpulse.v_v": "전압", "dcpulse.i_a": "전류", "dcpulse.arc_soft": "Soft 아크 누적",
+    "dcpulse.arc_hard": "Hard 아크 누적", "dcpulse.arc_soft_rate": "Soft 아크 표시값", "dcpulse.arc_hard_rate": "Hard 아크 표시값",
+    "dcpulse.arc_run_soft": "공정 Soft 아크", "dcpulse.arc_run_hard": "공정 Hard 아크", "dcpulse.set_w": "목표",
+    "dcpulse.out_on": "출력", "dcpulse.freq_khz": "펄스 주파수", "dcpulse.off_raw": "Off Time 장비 값",
+    # RF Pulse
+    "rfpulse.fwd_w": "Forward", "rfpulse.ref_w": "Reflected", "rfpulse.itl_open": "RF Pulse 인터락",
+    "rfpulse.status_raw": "상태 번호", "rfpulse.freq_hz": "펄스 주파수", "rfpulse.duty_pct": "듀티",
+    # 두께 모니터
+    "stm100.reset_seen": "전원 리셋 횟수", "stm100.density": "적용 밀도", "stm100.z_factor": "적용 Z-factor",
+    "stm100.tooling": "적용 Tooling",
+    # OES·RGA
+    "oes.running": "OES 프로그램 실행", "rga.running": "RGA 프로그램 실행",
+    # RF Power(CH2·Plasma Cleaning — PLC D/A)
+    "rf.fwd_w": "Forward", "rf.ref_w": "Reflected", "rf.set_w": "보정 목표", "rf.write_w": "D/A 쓰기 값", "rf.target_w": "목표",
+    "rf.state": "상태", "rf.running": "동작 중", "rf.enable": "출력 허용",
+    # DC Power(CH2 DC1·DC2 — PLC D/A)
+    "dc.dc1_p": "DC1 파워", "dc.dc1_set_w": "DC1 마지막 쓰기 값", "dc.dc1_enable": "DC1 출력 허용",
+    "dc.dc2_p": "DC2 파워", "dc.dc2_set_w": "DC2 마지막 쓰기 값", "dc.dc2_enable": "DC2 출력 허용",
+    # 히터(CH2 PLC PID)
+    "heater.pv": "현재 온도", "heater.sv": "목표 온도", "heater.sv_ramp": "승온 중간 목표", "heater.cur_sv": "승온 적용 목표",
+    "heater.sv_limit": "목표 상한", "heater.ot_limit": "과온 한계", "heater.mv": "출력", "heater.mv_pct": "출력 비율",
+    "heater.mv_limit": "출력 상한", "heater.pid_err": "PID 오류 번호", "heater.ramp_rate": "PLC 승온 속도",
+    "heater.holdback": "홀드백", "heater.slow_zone": "감속 구간", "heater.slow_rate": "감속 승온 속도", "heater.kp_act": "적용 Kp",
+    "heater.ti_act": "적용 Ti", "heater.marker": "세션 표시", "heater.wd": "워치독 카운터", "heater.run": "운전",
+    "heater.itl": "히터 인터락", "heater.dac_en": "출력 허용", "heater.water_ok": "Water", "heater.owner": "히터 제어 주체",
+    "heater.target": "최종 목표", "heater.ramp_active": "프로그램 승온 중", "heater.ramp_set_rate": "프로그램 승온 속도",
+    "heater.hold": "유지 모드", "heater.hold_value": "유지 출력 상한", "heater.sat_clamp": "포화 출력 상한",
+    "heater.phase": "공정 연동 단계", "heater.ready": "켤 수 있음", "heater.stale": "상태 오래됨",
+    # 두께 판정
+    "thk.text": "판정 문구",
+    # TSP·카메라
+    "tsp.status": "상태 번호", "tsp.link": "연결", "camera.frames": "촬영 장 수",
+}
+ENUM_LABEL: Dict[str, tuple] = {
+    "ig.state": (("ok", "정상"), ("off", "꺼짐"), ("invalid", "값 오류"), ("none", "응답 없음")),
+    "tsp.ig.state": (("ok", "정상"), ("off", "꺼짐"), ("invalid", "값 오류"), ("none", "응답 없음")),
+    "tsp.state": (("STOP", "정지"), ("FAIL", "이상"), ("WAIT_INTERLOCK", "인터락 대기"), ("RAMP", "승온"),
+                  ("WAIT_SUBLIM", "승화 대기"), ("SUBLIM", "승화")),
+    "camera.mode": (("CH1", "CH1"), ("CH2", "CH2"), ("CLEANING", PL.PC), ("ALL", "전체")),
+}
+_DEV_IN_LABEL = re.compile(r"\(|\bD\d{3}|[A-Z]{2,}_|\bR\d+\b|v1|되읽기|raw|hex|is_ready|파이썬")
+
+
+def _kind(block: str) -> str:
+    return block.split(".", 1)[1] if block.startswith(("ch1.", "ch2.", "pc.")) else block
+
+
+def _screen_names(b: DeviceBlock) -> DeviceBlock:
+    """드라이버 블록 → 화면 이름을 바꾼 블록(열·형식은 그대로)."""
+    out = []
+    for f in b.fields:
+        if b.name == "plc":
+            ladder = f.label
+            new = PL.COIL_PLAN_LABEL if f.name == "coil_plan" else PL.label(ladder)
+            desc = f.desc if f.name == "coil_plan" else f"{ladder} · {f.desc}"     # 래더 이름은 desc(상세 보기)로
+            out.append(dataclasses.replace(f, label=new, desc=desc))
+            continue
+        k = _kind(b.name)
+        new = FIELD_LABEL.get(f"{b.name}.{f.name}") or FIELD_LABEL.get(f"{k}.{f.name}") or f.label
+        enum = ENUM_LABEL.get(f"{b.name}.{f.name}") or ENUM_LABEL.get(f"{k}.{f.name}") or f.enum_labels
+        desc = f.desc
+        if new != f.label and _DEV_IN_LABEL.search(f.label):      # 옛 이름의 장비 표기(D112·되읽기 등)는 desc 로
+            desc = f"{f.label} · {desc}" if desc else f.label
+        out.append(dataclasses.replace(f, label=new, enum_labels=enum, desc=desc))
+    return dataclasses.replace(b, label=BLOCK_LABEL.get(b.name, b.label), fields=tuple(out))
 
 
 # ───────── 공정 맥락(엔진이 채움) ─────────
 CONTEXTS = ("ch1", "ch2", "pc", "tsp")
-CONTEXT_LABEL = {"ch1": "CH1", "ch2": "CH2", "pc": "플라즈마 클리닝", "tsp": "TSP"}
+CONTEXT_LABEL = {"ch1": "CH1", "ch2": "CH2", "pc": PL.PC, "tsp": "TSP"}
 OWNERS = ("robot", "web", "local")
 
 
@@ -73,20 +166,20 @@ def _ctx_fields(c: str) -> List[FieldDef]:
     lb = CONTEXT_LABEL[c]
     return [
         FieldDef(p + "state", S, "", f"{lb} 공정 상태", source="engine", detail=True, desc="엔진 상태 이름(대기·진행·정지 순서 …)"),
-        FieldDef(p + "run_id", S, "", f"{lb} 공정 id", source="engine", detail=True),
-        FieldDef(p + "owner", S, "", f"{lb} 소유자", source="engine", detail=True, desc="robot / web / local",
-                 enum_labels=(("robot", "로봇"), ("web", "웹"), ("local", "로컬"))),
-        FieldDef(p + "recipe_rev", I, "", f"{lb} 레시피 판", source="engine", detail=True,
+        FieldDef(p + "run_id", S, "", f"{lb} 공정 ID", source="engine", detail=True),
+        FieldDef(p + "owner", S, "", f"{lb} 조작 주체", source="engine", detail=True, desc="robot / web / local",
+                 enum_labels=(("robot", "로봇"), ("web", "웹"), ("local", "노트북"))),
+        FieldDef(p + "recipe_rev", I, "", f"{lb} 순서 판", source="engine", detail=True,
                  desc="공정 중 시퀀스 편집마다 +1(3장 (3))"),
-        FieldDef(p + "block_no", I, "", f"{lb} 블록 번호", source="engine", detail=True, desc="1 부터"),
-        FieldDef(p + "block_count", I, "", f"{lb} 블록 수", source="engine", detail=True),
-        FieldDef(p + "block_type", S, "", f"{lb} 블록 종류", source="engine", detail=True, desc="blocks.BLOCK_DEFS 의 type"),
-        FieldDef(p + "block_label", S, "", f"{lb} 블록 이름", source="engine", detail=True),
-        FieldDef(p + "block_elapsed_s", F, "s", f"{lb} 블록 경과", ".0f", source="engine", detail=True),
-        FieldDef(p + "remain_s", F, "s", f"{lb} 블록 남은 시간", ".0f", source="engine", detail=True,
+        FieldDef(p + "block_no", I, "", f"{lb} 단계 번호", source="engine", detail=True, desc="1 부터"),
+        FieldDef(p + "block_count", I, "", f"{lb} 단계 수", source="engine", detail=True),
+        FieldDef(p + "block_type", S, "", f"{lb} 단계 종류", source="engine", detail=True, desc="blocks.BLOCK_DEFS 의 type"),
+        FieldDef(p + "block_label", S, "", f"{lb} 단계 이름", source="engine", detail=True),
+        FieldDef(p + "block_elapsed_s", F, "s", f"{lb} 단계 경과", ".0f", source="engine", detail=True),
+        FieldDef(p + "remain_s", F, "s", f"{lb} 단계 남은 시간", ".0f", source="engine", detail=True,
                  desc="지금 블록(대기·증착 등)의 남은 초 — 끝이 정해지지 않은 블록은 null"),
-        FieldDef(p + "eta_remaining_s", F, "s", f"{lb} 공정 남은 시간(ETA)", ".0f", source="engine(eta)",
-                 desc="eta.CHn.remaining_s — 확정 전 null(추정값을 보내지 않음)"),
+        FieldDef(p + "eta_remaining_s", F, "s", f"{lb} 공정 남은 시간", ".0f", source="engine(eta)",
+                 desc="ETA — eta.CHn.remaining_s, 확정 전 null(추정값을 보내지 않음)"),
         FieldDef(p + "min_total_s", F, "s", f"{lb} 최소 총 시간", ".0f", source="engine(eta)", detail=True,
                  desc="min_total_s — 확정 전 null"),
         FieldDef(p + "paused", B, "", f"{lb} 일시정지", source="engine", summary="any", detail=True),
@@ -96,14 +189,14 @@ def _ctx_fields(c: str) -> List[FieldDef]:
 
 # ───────── 목표값(엔진이 채움) ─────────
 _T = {  # 이름 → (형식, 단위, 이름표)
-    "dcpulse_w": (F, "W", "DC Pulse 설정 파워"), "dcpulse_freq_khz": (I, "kHz", "DC Pulse 주파수"),
+    "dcpulse_w": (F, "W", "DC Pulse 목표"), "dcpulse_freq_khz": (I, "kHz", "DC Pulse 주파수"),
     "dcpulse_duty_pct": (F, "%", "DC Pulse 듀티"),
-    "rfpulse_w": (F, "W", "RF Pulse 설정 파워"), "rfpulse_freq_hz": (I, "Hz", "RF Pulse 주파수"),
+    "rfpulse_w": (F, "W", "RF Pulse 목표"), "rfpulse_freq_hz": (I, "Hz", "RF Pulse 주파수"),
     "rfpulse_duty_pct": (F, "%", "RF Pulse 듀티"),
-    "dc_w": (F, "W", "DC 설정 파워"), "dc2_w": (F, "W", "DC2 설정 파워"), "rf_w": (F, "W", "RF 설정 파워"),
-    "ar_sccm": (F, "sccm", "Ar 설정 유량"), "o2_sccm": (F, "sccm", "O₂ 설정 유량"), "n2_sccm": (F, "sccm", "N₂ 설정 유량"),
-    "pressure_mtorr": (F, "mTorr", "공정 압력 설정"), "base_torr": (F, "Torr", "베이스 압력 목표"),
-    "heater_c": (F, "°C", "히터 목표 온도"), "thickness_nm": (F, "nm", "목표 두께"), "time_s": (F, "s", "공정 시간 설정"),
+    "dc_w": (F, "W", "DC1 목표"), "dc2_w": (F, "W", "DC2 목표"), "rf_w": (F, "W", "RF Power 목표"),
+    "ar_sccm": (F, "sccm", "Ar 목표"), "o2_sccm": (F, "sccm", "O₂ 목표"), "n2_sccm": (F, "sccm", "N₂ 목표"),
+    "pressure_mtorr": (F, "mTorr", "압력 목표"), "base_torr": (F, "Torr", "베이스 압력 목표"),
+    "heater_c": (F, "°C", "히터 목표 온도"), "thickness_nm": (F, "nm", "목표 두께"), "time_s": (F, "s", "공정 시간 목표"),
 }
 TARGETS: Dict[str, tuple] = {
     # CH1 가스는 Ar·O2 만(4장), 전원은 DC Pulse·RF Pulse(PLC 의 DC·RF 연속은 CH2 결선 — dc.py·rf.py)
@@ -136,15 +229,15 @@ PROGRAM_FIELDS: tuple = (
     FieldDef("prog.threads", I, "", "스레드 수", source="threading.active_count()", summary="max", detail=True),
     FieldDef("prog.os_threads", I, "", "OS 스레드 수", source="/proc/self/status Threads — 리눅스만", summary="max",
              detail=True),
-    FieldDef("prog.gc0", I, "", "gc 0세대", source="gc.get_count()", detail=True),
-    FieldDef("prog.gc1", I, "", "gc 1세대", source="gc.get_count()", detail=True),
-    FieldDef("prog.gc2", I, "", "gc 2세대", source="gc.get_count()", detail=True),
+    FieldDef("prog.gc0", I, "", "GC 0세대", source="gc.get_count()", detail=True),
+    FieldDef("prog.gc1", I, "", "GC 1세대", source="gc.get_count()", detail=True),
+    FieldDef("prog.gc2", I, "", "GC 2세대", source="gc.get_count()", detail=True),
     FieldDef("prog.uptime_s", F, "s", "실행 시간", ".0f", "clock", detail=True),
-    FieldDef("prog.rec_pending", I, "", "1초 기록 큐", source="Recorder", summary="max", detail=True),
+    FieldDef("prog.rec_pending", I, "", "1초 기록 대기", source="Recorder", summary="max", detail=True),
     FieldDef("prog.rec_dropped", I, "", "1초 기록 버린 수", source="Recorder", summary="max", detail=True),
-    FieldDef("prog.out_pending", I, "", "v1 기록 출력 큐", source="outputs QueueWriter", summary="max", detail=True),
-    FieldDef("prog.events", I, "", "내부 이벤트 링 버퍼", source="system.events", detail=True),
-    FieldDef("prog.engines", S, "", "꽂힌 엔진", source="system.register_engine", detail=True),
+    FieldDef("prog.out_pending", I, "", "기록 출력 대기", source="outputs QueueWriter", summary="max", detail=True),
+    FieldDef("prog.events", I, "", "내부 사건 수", source="system.events", detail=True),
+    FieldDef("prog.engines", S, "", "실행 엔진", source="system.register_engine", detail=True),
 )
 
 EXTRA_FIELDS: tuple = tuple(

@@ -50,12 +50,12 @@ def test_proc_chamber_short_name_and_bundle():
         assert (_b(t).chamber, _b(t).proc_chamber) == ("shared", "ch2"), t                 # 공정이 쓰는 공유 버튼 → 그 챔버(CH2)
     assert _b("buzzer_stop_sw").proc_chamber is None and _b("l_pin_up_sw").proc_chamber is None
     assert [_b(t).short for t in ("vent_1_sw", "door_2_open_sw", "shutter_1_sw", "l_pin_up_sw", "sw_rf_select")] == \
-        ["CH1 벤트", "CH2 도어 열기", "건 셔터 G1", "로드락 4핀 올림", "Power Select 릴레이(SW_RF_SELECT)"]
+        ["CH1 Vent", "CH2 Door 열기", "Gun1 셔터", "Loadlock 4Pin 올림", "RF Select"]   # 묶음 16 — 필드 이름과 같음
     pub = C.public()
     v = next(b for b in pub["plcButtons"] if b["target"] == "turbo_1_sw")
-    assert v["short"] == "CH1 터보 펌프" and v["procChamber"] == "ch1" and v["hazard"] == {"on": None, "off": "equipment"}
+    assert v["short"] == v["label"] == "CH1 Turbo" and v["desc"] == "TURBO_1_SW · 코일 197" and v["procChamber"] == "ch1" and v["hazard"] == {"on": None, "off": "equipment"}
     t = pub["plcHazardText"]
-    assert t["person"].startswith("사람 위험 — ") and t["equipment"].startswith("장비 위험 — ")
+    assert t["person"].startswith("사람 위험: ") and t["equipment"].startswith("장비 위험: ")
     assert "RF 전용 릴레이" in t["rf_select_dcp"] and "DC Pulse" in t["rf_select_dcp"]
     arg = next(a for a in C.get("PLC_BUTTON").args if a.name == "by_name")
     assert arg.type == "str" and not arg.required
@@ -64,12 +64,12 @@ def test_proc_chamber_short_name_and_bundle():
 def test_who_and_line_text():
     assert who_of("web", HONG, "홍길동") == "홍길동(웹)" and who_of("web", HONG, "홍길동", account=True) == f"홍길동(웹, {HONG})"
     assert who_of("web", HONG, None) == "hong(웹)" and who_of("local", "local", None) == "노트북"
-    d = dict(short="CH1 벤트", on=True, origin="web", by=HONG, by_name="홍길동", result="done",
-             process={"chamber": "ch1", "busy": True, "block": "메인 공정(시간)", "recipe": "R1"})
-    assert line(d, account=False) == "PLC 버튼 · CH1 벤트 켬 · 홍길동(웹) (CH1 공정 중 · 메인 공정(시간))"
-    assert line(d, account=True) == f"PLC 버튼 · CH1 벤트 켬 · 홍길동(웹, {HONG}) (CH1 공정 중 · 메인 공정(시간) · 레시피 R1)"
+    d = dict(short="CH1 Vent", on=True, origin="web", by=HONG, by_name="홍길동", result="done",
+             process={"chamber": "ch1", "busy": True, "block": "시간 기준 메인 공정", "recipe": "R1"})
+    assert line(d, account=False) == "PLC 버튼 · CH1 Vent 켜기 · 홍길동(웹) (CH1 공정 중 · 시간 기준 메인 공정)"
+    assert line(d, account=True) == f"PLC 버튼 · CH1 Vent 켜기 · 홍길동(웹, {HONG}) (CH1 공정 중 · 시간 기준 메인 공정 · 레시피 R1)"
     r = dict(d, on=False, origin="local", by="local", result="rejected", reason="LINK_DOWN", detail="PLC 연결 없음", process=None)
-    assert line(r, account=True) == "PLC 버튼 · CH1 벤트 끔 · 노트북 — 거부: PLC 연결 없음"
+    assert line(r, account=True) == "PLC 버튼 · CH1 Vent 끄기 · 노트북 — 거부: PLC 연결 없음"
 
 
 # ───────────────────────── 시험대(실제 조립) ─────────────────────────
@@ -121,14 +121,14 @@ def test_web_press_idle_one_event_system_log_no_process_line(rig):
     assert rig.sims["plc"].coil("VENT_1_SW")
     ev = _evs(rig)
     assert len(ev) == 1 and (ev[0].source, ev[0].level, ev[0].code) == ("command:ch1", "info", "PLC_BUTTON")
-    assert ev[0].detail == f"PLC 버튼 · CH1 벤트 켬 · 홍길동(웹, {HONG})"
+    assert ev[0].detail == f"PLC 버튼 · CH1 Vent 켜기 · 홍길동(웹, {HONG})"
     h = _hub(rig)[-1]
     cx, d = h["context"], h["context"]["data"]
     assert (cx["chamber"], cx["source"], h["code"]) == ("ch1", "command", "PLC_BUTTON")
     assert (d["target"], d["name"], d["on"], d["by"], d["by_name"], d["origin"], d["who"], d["result"], d["hazard"]) == \
         ("vent_1_sw", "VENT_1_SW", True, HONG, "홍길동", "web", "홍길동(웹)", "done", "person")
     assert d["process"]["busy"] is False and d["process"]["chamber"] == "ch1"
-    assert _syslog(rig)[-1].endswith(f"[PLC] PLC 버튼 · CH1 벤트 켬 · 홍길동(웹, {HONG})")
+    assert _syslog(rig)[-1].endswith(f"[PLC] PLC 버튼 · CH1 Vent 켜기 · 홍길동(웹, {HONG})")
     assert _proc_lines(rig, "ch1") == [] and _proc_lines(rig, "ch2") == []          # 공정 중이 아니면 공정 로그에는 없음
 
 
@@ -139,8 +139,8 @@ def test_notebook_press_and_tabs_for_shared_and_loadlock(rig):
     h = _hub(rig)
     assert [(x["context"]["chamber"], x["context"]["data"]["who"], x["context"]["data"]["origin"]) for x in h] == \
         [("ch2", "노트북", "local"), ("shared", "노트북", "local"), ("shared", "노트북", "local")]
-    assert [e.detail for e in _evs(rig)] == ["PLC 버튼 · 건 셔터 G1 켬 · 노트북", "PLC 버튼 · 로드락 4핀 올림 끔 · 노트북",
-                                             "PLC 버튼 · 부저 정지 켬 · 노트북"]
+    assert [e.detail for e in _evs(rig)] == ["PLC 버튼 · Gun1 셔터 켜기 · 노트북", "PLC 버튼 · Loadlock 4Pin 올림 끄기 · 노트북",
+                                             "PLC 버튼 · 부저 정지 켜기 · 노트북"]
     assert [e.source for e in _evs(rig)] == ["command:ch2", "command", "command"]
     assert len(_syslog(rig)) == 3
 
@@ -154,18 +154,18 @@ def test_in_process_press_goes_to_that_chambers_process_log(rig):
     assert _press(rig, "vent_2_sw", True, src=HMI, by_name=None).ok              # CH2 는 공정 중 아님 — CH1 공정 로그에 없음
     ev = _evs(rig)
     assert [(e.code, e.detail) for e in ev] == [
-        ("PLC_MANUAL_IN_PROCESS", f"PLC 버튼 · CH1 터보 펌프 끔 · 홍길동(웹, {HONG}) (CH1 공정 중 · TEST MODE · 레시피 T1)"),
-        ("PLC_BUTTON", "PLC 버튼 · CH2 벤트 켬 · 노트북")]
+        ("PLC_MANUAL_IN_PROCESS", f"PLC 버튼 · CH1 Turbo 끄기 · 홍길동(웹, {HONG}) (CH1 공정 중 · TEST 모드 · 레시피 T1)"),
+        ("PLC_BUTTON", "PLC 버튼 · CH2 Vent 켜기 · 노트북")]
     p = _hub(rig)[0]["context"]["data"]["process"]
-    assert (p["busy"], p["block"], p["recipe"], p["block_no"]) == (True, "TEST MODE", "T1", 1)
+    assert (p["busy"], p["block"], p["recipe"], p["block_no"]) == (True, "TEST 모드", "T1", 1)
     assert _hub(rig)[0]["context"]["data"]["hazard"] == "equipment"
     pl = _proc_lines(rig, "ch1")
-    assert len(pl) == 1 and pl[0].endswith(f"[CH1:PLC] PLC 버튼 · CH1 터보 펌프 끔 · 홍길동(웹, {HONG}) (CH1 공정 중 · TEST MODE · 레시피 T1)")
+    assert len(pl) == 1 and pl[0].endswith(f"[CH1:PLC] PLC 버튼 · CH1 Turbo 끄기 · 홍길동(웹, {HONG}) (CH1 공정 중 · TEST 모드 · 레시피 T1)")
     assert _proc_lines(rig, "ch2") == []
     e1 = rig.core.proc["ch1"]
     e1.writer.flush(5)
     txt = Path(e1.txt._path).read_text(encoding="utf-8")
-    assert "[CH1:PLC] PLC 버튼 · CH1 터보 펌프 끔 · 홍길동(웹" in txt                    # 공정 txt 파일에도
+    assert "[CH1:PLC] PLC 버튼 · CH1 Turbo 끄기 · 홍길동(웹" in txt                    # 공정 txt 파일에도
     assert len(_syslog(rig)) == 2                                                    # 장비 로그는 늘
     # 화면 확인창 'CH1 공정 중 — 블록 · 공정 이름' 의 이름 = 엔진 화면 상태 process_name(장비 기록과 같은 값), 공정 중일 때만
     assert rig.core.proc["ch1"].state_dict()["process_name"] == "T1" and rig.core.proc["ch2"].state_dict()["process_name"] is None
@@ -180,9 +180,9 @@ def test_rejections_are_one_event_each_with_reason(rig, monkeypatch):
     assert _press(rig, "m_v_2_sw", False).reason == "BENCH_READ_ONLY"
     ev = _evs(rig)
     assert [(e.level, e.code) for e in ev] == [("warn", "BAD_ARGS"), ("warn", "LINK_DOWN"), ("warn", "BENCH_READ_ONLY")]
-    assert ev[0].detail.startswith(f"PLC 버튼 · nope 켬 · 홍길동(웹, {HONG}) — 거부: target 'nope'")
-    assert ev[1].detail == "PLC 버튼 · CH1 도어 열기 켬 · 노트북 — 거부: PLC 연결 없음"
-    assert ev[2].detail.startswith(f"PLC 버튼 · CH2 메인 밸브 끔 · 홍길동(웹, {HONG}) — 거부: bench 모드")
+    assert ev[0].detail.startswith(f"PLC 버튼 · nope 켜기 · 홍길동(웹, {HONG}) — 거부: target 'nope'")
+    assert ev[1].detail == "PLC 버튼 · CH1 Door 열기 켜기 · 노트북 — 거부: PLC 연결 없음"
+    assert ev[2].detail.startswith(f"PLC 버튼 · CH2 MV 끄기 · 홍길동(웹, {HONG}) — 거부: bench 모드")
     d = [x["context"]["data"] for x in _hub(rig)]
     assert [(x["result"], x["reason"]) for x in d] == [("rejected", "BAD_ARGS"), ("rejected", "LINK_DOWN"),
                                                         ("rejected", "BENCH_READ_ONLY")]
@@ -200,7 +200,7 @@ def test_write_failure_is_failed_event(rig, monkeypatch):
     assert _press(rig, "r_v_1_sw", True).ok                                         # 명령은 받음 — 쓰기가 실패
     ev = _evs(rig)
     assert len(ev) == 1 and (ev[0].level, ev[0].code) == ("warn", "PLC_BUTTON_FAILED")
-    assert ev[0].detail == f"PLC 버튼 · CH1 러핑 밸브 켬 · 홍길동(웹, {HONG}) — 실패: PLC 응답 없음"
+    assert ev[0].detail == f"PLC 버튼 · CH1 RV 켜기 · 홍길동(웹, {HONG}) — 실패: PLC 응답 없음"
     d = _hub(rig)[-1]["context"]["data"]
     assert (d["result"], d["reason"], d["hazard"]) == ("failed", "TIMEOUT", "equipment")
 
@@ -210,9 +210,9 @@ def test_one_event_per_press_and_name_fallback(rig):
         assert _press(rig, "ar_1_gas_sw", on, by_name=None).ok
     ev = _evs(rig)
     assert len(ev) == 3 and rig.core.plc_log.count == 3
-    assert [e.detail for e in ev] == ["PLC 버튼 · CH1 Ar 가스 켬 · hong(웹, hong@vanam.co.kr)",
-                                      "PLC 버튼 · CH1 Ar 가스 끔 · hong(웹, hong@vanam.co.kr)",
-                                      "PLC 버튼 · CH1 Ar 가스 켬 · hong(웹, hong@vanam.co.kr)"]
+    assert [e.detail for e in ev] == ["PLC 버튼 · CH1 Ar 밸브 켜기 · hong(웹, hong@vanam.co.kr)",
+                                      "PLC 버튼 · CH1 Ar 밸브 끄기 · hong(웹, hong@vanam.co.kr)",
+                                      "PLC 버튼 · CH1 Ar 밸브 켜기 · hong(웹, hong@vanam.co.kr)"]
     assert _hub(rig)[-1]["context"]["data"]["who"] == "hong(웹)"
     long = "가" * 100
     assert _press(rig, "ar_1_gas_sw", False, by_name="  " + long + "  ").ok
