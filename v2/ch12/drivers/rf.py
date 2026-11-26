@@ -53,7 +53,11 @@ def blocks(mode: str = "ch2") -> List[DeviceBlock]:
          FieldDef("target_w", FType.FLOAT, "W", "RF 목표", fmt=".1f", source="driver"),
          FieldDef("state", FType.STR, "", "RF 상태", source="driver", detail=True),
          FieldDef("running", FType.BOOL, "", "RF 동작 중", source="driver", summary="any"),
-         FieldDef("enable", FType.BOOL, "", "RF SET 래치", source=f"plc:FC1 {m['set_coil']}", summary="any", detail=True))
+         FieldDef("enable", FType.BOOL, "", "RF SET 래치", source=f"plc:FC1 {m['set_coil']}", summary="any", detail=True),
+         # W-21·22 대조 B — 화면 표시용(기록·안전 판정은 fwd_w·ref_w 읽은 값 그대로)
+         FieldDef("cmd_on", FType.BOOL, "", "RF 명령 출력", source="driver(SET 래치 · 쓰기값 > 0 또는 모름)", summary="any"),
+         FieldDef("uncommanded", FType.BOOL, "", "명령 없는 RF 출력", source="driver(cmd_on 아님 · Forward ≥ RF_UNCOMMANDED_FWD_W)",
+                  summary="any"))
     return [DeviceBlock(m["block"], "RF 연속(PLC)" if mode == "ch2" else "플라즈마 클리닝 RF(PLC)", f)]
 
 
@@ -84,6 +88,7 @@ class RfPower:
         self.blind_start_ts: Optional[float] = None
         self.ref_wait_start: Optional[float] = None
         self._ref_wait_open = False          # 반사파 대기 사건 시작을 냈고 끝을 아직 안 냄(W-21·22 A — 시작·끝 한 번씩)
+        self._uncmd = False                  # 명령 없는 RF 출력 사건 시작을 냈음(W-21·22 B — 시작·끝 한 번씩)
         self.output_off_unconfirmed = False
         self.polling = True
         self._due: Optional[float] = None
@@ -326,12 +331,20 @@ class RfPower:
                                f"{b}.write_w": None if self.last_sent is None else round(self.xform_write(self.last_sent), 3),
                                f"{b}.target_w": self.target_power if self.running else None, f"{b}.state": self.state,
                                f"{b}.running": self.running, f"{b}.enable": poll.coils.get(self.m["set_coil"])}
+        # 명령 출력(W-21·22 대조 B): SET 래치 켜짐 그리고 (드라이버 쓰기값 > 0 또는 쓰기값 모름 — 다시 시작 직후·읽기 전용이라 이 프로그램이 쓴 적 없음)
+        latch = poll.coils.get(self.m["set_coil"])
+        cmd_on = None if latch is None else (bool(latch) and (self.last_sent is None or self.xform_write(self.last_sent) > 0.0))
+        out[f"{b}.cmd_on"] = cmd_on
         if fr is None or rr is None:
-            out.update({f"{b}.fwd_w": None, f"{b}.ref_w": None})
+            out.update({f"{b}.fwd_w": None, f"{b}.ref_w": None, f"{b}.uncommanded": None})
             return out
         zero = None if self.mode == "pc" else bool(self._g("CHAMBER_RF_CONT_ZEROING", False))
         meas = rf_scale(self.cfg, fr, rr, self.rf_ch, zero)
         out.update({f"{b}.fwd_w": meas["forward"], f"{b}.ref_w": meas["reflected"]})
+        th_u = float(self._g("RF_UNCOMMANDED_FWD_W", 5.0) or 5.0)
+        unc = None if cmd_on is None else (not cmd_on and float(meas["forward"]) >= th_u)
+        out[f"{b}.uncommanded"] = unc
+        self._uncommanded_track(unc, meas["forward"], th_u)
         if self.running and self.polling and self._due is not None and poll.t_tick >= self._due - 1e-6:
             self._due = poll.t_tick + max(50.0, self.p("poll_ms")) / 1000.0 - 0.5
             self._now = poll.t_tick
@@ -341,6 +354,19 @@ class RfPower:
             finally:
                 self._now = None
         return out
+
+    def _uncommanded_track(self, unc: Optional[bool], fwd: float, th: float) -> None:
+        """명령 없는 RF 출력 사건(W-21·22 B) — 시작(warn)·끝(info) 한 번씩. 모름(None)이면 지금 상태를 유지."""
+        if unc is None or bool(unc) == self._uncmd or not self.on_event:
+            return
+        self._uncmd = bool(unc)
+        name = "Plasma Cleaning RF" if self.mode == "pc" else "RF Power"
+        if unc:
+            self.on_event(PowerEvent("rf_uncommanded", f"{name} 가 명령 없이 출력 중 · Forward {fwd:g} W(기준 {th:g} W) — RF 전원 앞면(LOCAL)에서 켰는지 확인",
+                                     None, None, dict(forward=fwd, threshold=th, mode=self.mode), level="warn"))
+        else:
+            self.on_event(PowerEvent("rf_uncommanded_end", f"{name} 명령 없는 출력 끝 · Forward {fwd:g} W", None, None,
+                                     dict(forward=fwd, mode=self.mode), level="info"))
 
     def _mono(self) -> float:
         return self.clock.monotonic() if self._now is None else self._now

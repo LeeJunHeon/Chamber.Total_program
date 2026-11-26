@@ -102,7 +102,7 @@ FIELD_LABEL: Dict[str, str] = {
     "oes.running": "OES 프로그램 실행", "rga.running": "RGA 프로그램 실행",
     # RF Power(CH2·Plasma Cleaning — PLC D/A)
     "rf.fwd_w": "Forward", "rf.ref_w": "Reflected", "rf.set_w": "보정 목표", "rf.write_w": "D/A 쓰기 값", "rf.target_w": "목표",
-    "rf.state": "상태", "rf.running": "동작 중", "rf.enable": "출력 허용",
+    "rf.state": "상태", "rf.running": "동작 중", "rf.enable": "출력 허용", "rf.cmd_on": "명령 출력", "rf.uncommanded": "명령 없는 출력",
     # DC Power(CH2 DC1·DC2 — PLC D/A)
     "dc.dc1_p": "DC1 파워", "dc.dc1_set_w": "DC1 마지막 쓰기 값", "dc.dc1_enable": "DC1 출력 허용",
     "dc.dc2_p": "DC2 파워", "dc.dc2_set_w": "DC2 마지막 쓰기 값", "dc.dc2_enable": "DC2 출력 허용",
@@ -175,6 +175,8 @@ FIELD_HELP: Dict[str, str] = {
     "rf.fwd_w": "RF Power 가 내는 파워입니다.", "rf.ref_w": "되돌아오는 파워입니다. 높으면 정합 상태를 확인하세요.",
     "rf.set_w": "보정을 적용한 내부 목표 파워입니다.", "rf.target_w": "RF Power 의 지금 목표 파워입니다.",
     "rf.running": "RF Power 가 켜져 있으면 켜짐입니다.",
+    "rf.cmd_on": "프로그램이 RF 출력을 켜 둔 상태면 켜짐입니다. 꺼져 있으면 화면은 0 W 로 보입니다.",
+    "rf.uncommanded": "프로그램이 켜지 않았는데 RF 출력이 나오면 켜짐입니다. 전원 장치 앞면을 확인하세요.",
     # 히터(CH2)
     "heater.pv": "온도 센서로 잰 히터 쪽 지금 온도입니다.", "heater.sv": "PLC 가 맞추는 히터 목표 온도입니다.",
     "heater.sv_ramp": "승온 중 PLC 가 지금 따라가는 중간 목표입니다.", "heater.cur_sv": "PLC 가 지금 적용 중인 목표 온도입니다.",

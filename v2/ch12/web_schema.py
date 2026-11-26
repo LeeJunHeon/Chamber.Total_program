@@ -79,6 +79,8 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
      (step_label·정지 단계 12 'Main 가스 닫기'·블록 설명). 아래 줄(A·B·C)이 같은 판에 더해진다.
      A: 반사파 대기 여유 폭 — params RF_REFLECTED_HYST_W(1.0 W)·RFPULSE_REFP_HYST_W(1.0 W), eventKinds rf/ref_wait(대기 시작·끝 한 번씩 —
      data phase·ref_w·threshold·max_s / why 풀림·시간 초과·RF 끔·waited_s). 공정 txt 의 v1 문구는 그대로(횟수만 줄어듦).
+     B: RF 꺼짐 표시 — snapshot {ch2,pc}.rf.cmd_on(SET 래치 · 쓰기값 > 0 또는 모름)·uncommanded(cmd_on 아님 · Forward ≥
+     RF_UNCOMMANDED_FWD_W 5 W), eventKinds rf/rf_uncommanded(warn)·rf_uncommanded_end(info) 시작·끝 한 번씩, params RF_UNCOMMANDED_FWD_W.
 """
 from __future__ import annotations
 
@@ -140,6 +142,7 @@ EVENT_KINDS: tuple = (
     ("rf", "power_off_finished", "RF Power 꺼짐", _M), ("rf", "power_off_failed", "RF Power 끄기 실패", _M),
     ("rf", "state_changed", "RF Power 상태", _D), ("rf", "display", "RF Power 표시", _D), ("rf", "status", "RF Power 상태", _D),
     ("rf", "ref_wait", "Reflected 대기", _M),                 # W-21·22 A — 대기 시작 1번·끝 1번(풀림·시간 초과·RF 끔)
+    ("rf", "rf_uncommanded", "명령 없는 RF 출력", _M), ("rf", "rf_uncommanded_end", "명령 없는 RF 출력 끝", _M),   # W-21·22 B
     ("dcpulse", "command_confirmed", "명령 확인", _D), ("dcpulse", "command_failed", "명령 실패", _M),
     ("dcpulse", "arc_threshold_reached", "아크 기준 넘음", _M), ("dcpulse", "telemetry", "측정값", _D),
     ("dcpulse", "status", "상태", _D),

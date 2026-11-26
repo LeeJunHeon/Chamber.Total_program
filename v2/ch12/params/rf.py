@@ -22,6 +22,10 @@ PARAMS: tuple = (
     p("RF_REFLECTED_THRESHOLD_W", _G, "RF Reflected 감시 임계", "W", F, 50.0, 0.0, 600.0, safety=H, v1_default=20.0,
       src="config/settings.json:94 · device/rf_power.py:187", desc="REF 감시 중 반사 > 이 값이면 Ref.p 안정화 대기"),
     p("RF_REFLECTED_WAIT_TIMEOUT_S", _G, "Ref.p 안정화 최대 대기", "s", F, 60.0, 1.0, 3600.0, safety=H, src="lib/config_common.py:184"),
+    p("RF_UNCOMMANDED_FWD_W", _G, "RF 명령 없는 출력 기준", "W", F, 5.0, 0.5, 100.0, safety=M,
+      src="v2(W-21·22 대조 B — 챔버K 실장비 시험 2026-11-25)",
+      desc="CH2 RF·Plasma Cleaning RF 가 명령 출력(SET 래치 켜짐 그리고 쓰기값 > 0 또는 모름)이 아닌데 Forward 가 이 값 이상이면 '명령 없는 RF 출력'"
+           "(스냅샷 rf.uncommanded·사건 시작/끝 한 번씩). 화면은 명령 출력도 명령 없는 출력도 아니면 Forward·Reflected 를 0 W·꺼짐으로 보인다"),
     p("RF_REFLECTED_HYST_W", _G, "Ref.p 대기 여유 폭", "W", F, 1.0, 0.0, 50.0, safety=M, src="v2(W-21·22 대조 A — 챔버K 실장비 시험 2026-11-25)",
       desc="Ref.p 안정화 대기는 REF > 감시 임계면 시작하고 'REF ≤ 임계 − 이 값' 이어야 풀린다. 그 사이면 대기를 이어 가고 시간은 대기 시작부터 "
            "이어서 센다(임계를 오가도 시간 초과가 난다). 0 = v1 그대로(임계 이하면 곧바로 풀림)"),
