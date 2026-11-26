@@ -2522,6 +2522,23 @@ class ProcessController:
         if ci.get('req_dcp') and not use_dc_pulse:  self._emit_log("Process", "주의: 이 챔버는 DC Pulse 미지원 → Pulse 단계 스킵")
         if ci.get('req_rfp') and not use_rf_pulse:  self._emit_log("Process", "주의: 이 챔버는 RF Pulse 미지원 → Pulse 단계 스킵")
 
+        # RF 연속을 가장 먼저 — 램프업이 가장 오래 걸린다(도달 후 다음 전원을 켜도록 parallel=False)
+        if use_rf:
+            # RF 연속 사용 전에 POWER_SELECT = False
+            # ⚠ RF Pulse와 동시 사용 시에는 릴레이를 펄스 경로(ON)로 유지 — 배선 확인 후 필요 시 조정
+            if not use_rf_pulse:
+                steps.append(ProcessStep(
+                    action=ActionType.PLC_CMD,
+                    params=("SW_POWER_SELECT", False),
+                    message="Power Select OFF (SW_POWER_SELECT)",
+                ))
+
+            steps.append(ProcessStep(
+                action=ActionType.RF_POWER_SET, value=rf_power,
+                message=f'RF Power {rf_power}W 설정',
+                parallel=False, polling=False,
+            ))
+
         # DC 연속
         if use_dc:
             steps.append(ProcessStep(
@@ -2597,22 +2614,6 @@ class ProcessController:
                 action=ActionType.RF_PULSE_START, value=rf_pulse_power,
                 params=(rf_pulse_freq_hz, rf_pulse_duty),  # 장치에는 Hz, %
                 message=f'RF Pulse 설정 및 ON (P={rf_pulse_power}W, f={f_txt}, duty={d_txt})',
-                parallel=want_parallel, polling=False,
-            ))
-
-        if use_rf:
-            # RF 연속 사용 전에 POWER_SELECT = False
-            # ⚠ RF Pulse와 동시 사용 시에는 릴레이를 펄스 경로(ON)로 유지 — 배선 확인 후 필요 시 조정
-            if not use_rf_pulse:
-                steps.append(ProcessStep(
-                    action=ActionType.PLC_CMD,
-                    params=("SW_POWER_SELECT", False),
-                    message="Power Select OFF (SW_POWER_SELECT)",
-                ))
-
-            steps.append(ProcessStep(
-                action=ActionType.RF_POWER_SET, value=rf_power,
-                message=f'RF Power {rf_power}W 설정',
                 parallel=want_parallel, polling=False,
             ))
 

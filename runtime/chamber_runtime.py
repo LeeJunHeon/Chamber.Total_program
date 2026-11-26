@@ -8944,8 +8944,8 @@ class ChamberRuntime:
 
         else:
             checked = int(p.get("use_g1", False)) + int(p.get("use_g2", False)) + int(p.get("use_g3", False))
-            if checked == 0 or checked == 3:
-                errs.append("G1~G3 중 1개 또는 2개만 선택")
+            if checked == 0:
+                errs.append("G1~G3 중 1개 이상 선택")
 
             use_rf_pulse = bool(p.get("use_rf_pulse"))
             use_dc_pulse = bool(p.get("use_dc_pulse"))
@@ -8966,6 +8966,10 @@ class ChamberRuntime:
                     if p.get("dc_pulse_power", 0) <= 0:
                         errs.append("DC Pulse Target Power(W)는 0보다 커야 합니다.")
                     errs.extend(self._validate_dc_pulse_params(p))
+
+            # RF 연속 + RF Pulse 동시 사용 금지 (기준은 process_controller 의 req_rf_cont 와 같다)
+            if use_rf_pulse and bool(p.get("use_rf_power")) and float(p.get("rf_power", 0) or 0) > 0:
+                errs.append("RF Power와 RF Pulse는 동시에 사용할 수 없습니다")
 
             # CH2는 (연속 DC/RF) 또는 (Pulse DC/RF) 중 하나 이상은 필요
             if not (p.get("use_dc_power") or p.get("use_dc_power2") or p.get("use_rf_power") or use_dc_pulse or use_rf_pulse):

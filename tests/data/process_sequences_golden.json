@@ -805,16 +805,6 @@
    false
   ],
   [
-   "DC_POWER_SET",
-   "DC1 Power 100.0W 설정",
-   100.0,
-   "None",
-   null,
-   true,
-   false,
-   false
-  ],
-  [
    "PLC_CMD",
    "Power Select OFF (SW_POWER_SELECT)",
    null,
@@ -828,6 +818,16 @@
    "RF_POWER_SET",
    "RF Power 150.0W 설정",
    150.0,
+   "None",
+   null,
+   false,
+   false,
+   false
+  ],
+  [
+   "DC_POWER_SET",
+   "DC1 Power 100.0W 설정",
+   100.0,
    "None",
    null,
    true,
