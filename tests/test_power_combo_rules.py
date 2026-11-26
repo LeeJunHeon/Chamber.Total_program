@@ -166,3 +166,65 @@ def test_ch1_rf_power_flag_not_rejected():
 
 if __name__ == "__main__":
     sys.exit(pytest.main([__file__, "-q"]))
+
+
+# ───────────────────────── 종료 절차: RF 연속을 가장 나중에 끈다 ─────────────────────────
+_OFF = ("DC_POWER_STOP", "DC2_POWER_STOP", "RF_POWER_STOP", "DC_PULSE_STOP", "RF_PULSE_STOP")
+
+
+def _shutdown_part(seq):
+    """시퀀스에서 마지막 'Main Shutter 닫기 (항상)' 이후(그 단계 포함) 구간."""
+    msgs = [s.message for s in seq]
+    i = len(msgs) - 1 - msgs[::-1].index("Main Shutter 닫기 (항상)")
+    return seq[i:]
+
+
+def _off_order(steps):
+    return [s.action.name for s in steps if s.action.name in _OFF]
+
+
+_ALLOWED_OFF = [
+    ((_RF, _DC1), ["DC_POWER_STOP", "RF_POWER_STOP"]),
+    ((_RF, _DCP), ["DC_PULSE_STOP", "RF_POWER_STOP"]),
+    ((_RF, _DC1, _DCP), ["DC_POWER_STOP", "DC_PULSE_STOP", "RF_POWER_STOP"]),
+    ((_DC1, _DCP), ["DC_POWER_STOP", "DC_PULSE_STOP"]),
+    ((_DC1, _RFP), ["DC_POWER_STOP", "RF_PULSE_STOP"]),
+    ((_RF,), ["RF_POWER_STOP"]),
+    ((_DC1,), ["DC_POWER_STOP"]),
+    ((_DCP,), ["DC_PULSE_STOP"]),
+    ((_RFP,), ["RF_PULSE_STOP"]),
+]
+
+
+@pytest.mark.parametrize("parts, expect", _ALLOWED_OFF)
+def test_ch2_power_off_order(parts, expect):
+    p = dict(_BASE)
+    for d in parts:
+        p.update(d)
+    sd = _shutdown_part(_seq(2, **p))
+    assert _off_order(sd) == expect
+    names = [s.action.name for s in sd]
+    if "RF_POWER_STOP" in names:
+        i = names.index("RF_POWER_STOP")
+        assert not any(n in _OFF for n in names[i + 1:])               # 전원 OFF 중 마지막
+        nxt = sd[i + 1]
+        assert nxt.action.name == "MFC_CMD" and nxt.params[0] == "FLOW_OFF"
+        assert nxt.message == "Ch1(AR) Flow Off"
+
+
+def test_three_guns_three_powers_shutdown_order():
+    sd = _shutdown_part(_seq(2, **_BASE, **_RF, **_DC1, **_DCP, use_g2=True, use_g3=True))
+    assert [s.message for s in sd[:9]] == [
+        "Main Shutter 닫기 (항상)", "DC1 Power Off", "DC Pulse Off", "RF Power Off", "Ch1(AR) Flow Off",
+        "전체 MFC Valve Open", "Gun Shutter G1 닫기", "Gun Shutter G2 닫기", "Gun Shutter G3 닫기",
+    ]
+
+
+def test_force_all_shutdown_order():
+    async def go():
+        return _pc(2)._create_shutdown_sequence(dict(_BASE), force_all=True)
+    sd = asyncio.run(go())
+    assert [s.message for s in sd[:8]] == [
+        "Main Shutter 닫기 (항상)", "DC1 Power Off", "DC2 Power Off", "DC Pulse Off", "RF Pulse Off",
+        "Power Select OFF (SW_POWER_SELECT)", "RF Power Off", "Ch1(AR) Flow Off",
+    ]

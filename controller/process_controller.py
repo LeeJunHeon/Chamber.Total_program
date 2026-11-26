@@ -2833,12 +2833,6 @@ class ProcessController:
                 message='DC2 Power Off'
             ))
 
-        if use_rf:        
-            steps.append(ProcessStep(
-                action=ActionType.RF_POWER_STOP, 
-                message='RF Power Off'
-            ))
-
         if use_dc_pulse:  
             steps.append(ProcessStep(
                 action=ActionType.DC_PULSE_STOP, 
@@ -2858,6 +2852,13 @@ class ProcessController:
                     params=("SW_POWER_SELECT", False),
                     message="Power Select OFF (SW_POWER_SELECT)"
                 ))
+
+        # RF 연속은 1 W/s 로 내려 오래 걸리므로 전원 OFF 중 가장 나중에 끈다(그동안 다른 전원이 켜진 채 기다리지 않게)
+        if use_rf:        
+            steps.append(ProcessStep(
+                action=ActionType.RF_POWER_STOP, 
+                message='RF Power Off'
+            ))
 
         use_any = any(params.get(k, False) for k in ("use_ar", "use_o2", "use_n2"))
 
