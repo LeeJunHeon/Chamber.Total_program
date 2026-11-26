@@ -65,9 +65,11 @@ def test_defaults():
 
 
 def test_mode_and_limits():
-    assert thickness_mode_of("100", True) and thickness_mode_of(50.0, True)
-    assert not thickness_mode_of("100", False)          # 채널이 두께 모니터를 안 씀(CH1 등)
-    for v in (None, "", "0", 0, -5, "abc"):
+    # 첫 인자는 use_thickness(bool 또는 T/F 문자열) — thickness 값으로는 판정하지 않는다
+    for v in ("T", "t", "TRUE", "1", "Y", "yes", True):
+        assert thickness_mode_of(v, True)
+    assert not thickness_mode_of("T", False)            # 채널이 두께 모니터를 안 씀(CH1 등)
+    for v in (None, "", "F", "0", False, "N", "100", 50.0, "abc"):
         assert not thickness_mode_of(v, True)
     assert expected_seconds(100, 0.05) == pytest.approx(2000)
     assert max_time_s(2000, P) == 4000                  # max(×2, +300)

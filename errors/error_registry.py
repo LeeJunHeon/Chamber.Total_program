@@ -1636,7 +1636,7 @@ ERROR_REGISTRY: Dict[str, ErrorDefinition] = {
         fix="HEATER_MV_LIMIT 여유와 HEATER_HOLD_WAIT_SEC 를 확인하십시오. 강제 고정으로 계속하려면 HEATER_HOLD_FAIL_ACTION=force.",
     ),
     # -----------------------------------------------------------------
-    # E84x : 두께 모니터(STM-100) Thickness 모드 — 시작 전 점검(장비 동작 전 거부, Gate·Main Valve 점검과 같은 정책)
+    # E84x : 두께 모니터(STM-100) Thickness 모드(use_thickness=T) — 시작 전 점검(장비 동작 전 거부, Gate·Main Valve 점검과 같은 정책)
     # -----------------------------------------------------------------
     "E840": ErrorDefinition(
         code="E840",
@@ -1644,10 +1644,10 @@ ERROR_REGISTRY: Dict[str, ErrorDefinition] = {
         category="THICKNESS",
         client_action=ACTION_STOP,
         severity=SEV_ERROR,
-        cause="Thickness 모드 레시피(thickness>0)인데 두께 모니터가 연결돼 있지 않거나 최근 THICKNESS_READY_FRESH_S(기본 5초) "
+        cause="Thickness 모드 레시피(use_thickness=T)인데 두께 모니터가 연결돼 있지 않거나 최근 THICKNESS_READY_FRESH_S(기본 5초) "
               "안에 정상 두께 값을 받지 못했습니다.",
         fix="두께 모니터 패널의 연결·응답 램프와 마지막 오류를 확인하십시오(MOXA 포트 THICKNESS_TCP_PORT, 케이블, 장비 전원). "
-            "시간으로 끝내려면 레시피 thickness 를 비우고 process_time 을 쓰십시오.",
+            "시간으로 끝내려면 use_thickness 를 F(체크 해제)로 두고 process_time 을 쓰십시오.",
     ),
     "E841": ErrorDefinition(
         code="E841",
@@ -1674,7 +1674,7 @@ ERROR_REGISTRY: Dict[str, ErrorDefinition] = {
         client_action=ACTION_STOP,
         severity=SEV_ERROR,
         cause="Thickness 모드는 건 1개만 쓸 수 있습니다 — 2개 이상(co-sputter)이거나 사용 건이 없습니다(tooling 을 건별로 적용).",
-        fix="건을 1개만 선택하거나, co-sputter 는 thickness 를 비우고 시간(process_time)으로 진행하십시오.",
+        fix="건을 1개만 선택하거나, co-sputter 는 use_thickness 를 F(체크 해제)로 두고 시간(process_time)으로 진행하십시오.",
     ),
     "E844": ErrorDefinition(
         code="E844",
@@ -1683,7 +1683,7 @@ ERROR_REGISTRY: Dict[str, ErrorDefinition] = {
         client_action=ACTION_STOP,
         severity=SEV_ERROR,
         cause="중간 펄스 전력 변경 시점(power_change_time)이 메인 공정 구간에 있습니다. Thickness 모드는 메인 구간 길이가 정해지지 않아 함께 쓸 수 없습니다.",
-        fix="변경 시점을 Shutter Delay 안으로 옮기거나, 중간 변경을 쓰려면 thickness 를 비우고 시간으로 진행하십시오.",
+        fix="변경 시점을 Shutter Delay 안으로 옮기거나, 중간 변경을 쓰려면 use_thickness 를 F(체크 해제)로 두고 시간으로 진행하십시오.",
     ),
     "E845": ErrorDefinition(
         code="E845",
@@ -1723,6 +1723,17 @@ ERROR_REGISTRY: Dict[str, ErrorDefinition] = {
         severity=SEV_ERROR,
         cause="THICKNESS_WAIT 단계의 값(목표·예상·상한)이 올바르지 않습니다(프로그램 내부 오류).",
         fix="로그를 개발 담당에게 전달하십시오.",
+    ),
+    "E849": ErrorDefinition(
+        code="E849",
+        title="Thickness 모드를 쓸 수 없는 채널",
+        category="THICKNESS",
+        client_action=ACTION_STOP,
+        severity=SEV_ERROR,
+        cause="use_thickness=T(두께 모니터로 종료)인데 이 채널은 두께 모니터를 쓰지 않습니다 — settings.json SUPPORTS_THICKNESS=false 이거나,"
+              " 설정은 켜져 있지만 두께 모니터 서비스가 시작되지 않았습니다. 조용히 시간으로 바꾸지 않고 시작을 거절합니다.",
+        fix="두께 모니터가 없는 채널이면 use_thickness 를 F(체크 해제)로 두십시오 — 시간(process_time, 비우면 thickness ÷ dep_rate)으로 진행합니다."
+            " 설정이 켜져 있는데 거절되면 프로그램 시작 때 THICKNESS 로그를 확인하십시오.",
     ),
     # -----------------------------------------------------------------
     # E9xx : LOGGING / UI / INTERNAL / FALLBACK

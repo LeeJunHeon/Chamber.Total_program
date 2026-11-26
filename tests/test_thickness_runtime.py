@@ -285,7 +285,7 @@ def test_time_mode_ignores_recipe_factor_columns():
         svc = FakeSvc()
         rt, _pc, _ = _rt(svc)
         p = _params(thickness=None, tooling=120.0, density=3.0, z_factor=0.5)
-        assert not thickness_mode_of(p.get("thickness"), rt._thickness_supported())
+        assert not thickness_mode_of(p.get("use_thickness"), rt._thickness_supported())
         rt._thk_pre = None
         rt._thk_run_started(p)
         assert rt._thk_rec["mode"] == "Time" and "factor_source" not in rt._thk_rec and svc.mat_calls == []

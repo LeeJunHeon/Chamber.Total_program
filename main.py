@@ -1333,7 +1333,7 @@ class MainWindow(QWidget):
     def _init_thickness(self, ch: int) -> None:
         """두께 모니터(STM-100) 상시 읽기 서비스 생성. SUPPORTS_THICKNESS 가 꺼진 채널은 아무것도 하지 않는다.
         패널은 CH2 만(히터 패널 밑 — 위치는 _layout_side_panels). CH1 은 서비스만 켤 수 있는 구조로 둔다.
-        서비스는 그 채널 런타임에 붙인다(attach_thickness — 레시피 thickness>0 이면 Thickness 모드)."""
+        서비스는 그 채널 런타임에 붙인다(attach_thickness — use_thickness 켜짐(체크·레시피 T)이면 Thickness 모드)."""
         cfg_mod = config_ch1 if ch == 1 else config_ch2
         rt = self.ch1 if ch == 1 else self.ch2
         try:
@@ -1368,9 +1368,16 @@ class MainWindow(QWidget):
                 panel.show()
                 svc.add_listener(panel.update_status)
                 self.thickness_panels[ch] = panel
+                try:                             # 런타임이 _u("useThickness_checkbox") 로 쓰도록 화면 객체에 등록(ui 없으면 건너뜀)
+                    ui = getattr(self, "ui", None)
+                    if ui is not None:
+                        setattr(ui, f"ch{ch}_useThickness_checkbox", panel.use_checkbox)
+                except Exception as e:
+                    with contextlib.suppress(Exception):
+                        rt.append_side_log("THICKNESS", f"⚠ use_thickness 체크박스 등록 실패: {e!r}")
             svc.start(self._loop)
             self.thickness_services[ch] = svc
-            try:                                 # 2단계: 레시피 thickness>0 → Thickness 모드(목표 두께 도달 시 종료)
+            try:                                 # 2단계: use_thickness 켜짐 → Thickness 모드(목표 두께 도달 시 종료)
                 rt.attach_thickness(svc)
                 if ch in self.thickness_panels:
                     rt.set_thickness_view(self.thickness_panels[ch].set_process_view)

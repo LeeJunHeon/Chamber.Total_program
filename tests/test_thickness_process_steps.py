@@ -86,15 +86,20 @@ def test_time_mode_steps_and_eta_equal_before_change():
 
 
 def test_thickness_supported_but_time_rows_unchanged():
-    """두께 모니터가 붙은 채널이라도 thickness 가 없는 행의 ETA 하한은 그대로, thickness 행은 메인 공정을 빼고 하한."""
+    """두께 모니터가 붙은 채널이라도 Time 행의 ETA 하한은 그대로, use_thickness=T 행은 메인 공정을 빼고 하한.
+    thickness 값만 있는 행(use_thickness 없음)은 시간 기준(thickness ÷ dep_rate)."""
     rows_time = ETA_ROWS[:2]
     pc = _pc_of(ProcessController, 2, thickness_supported=lambda: True)
     assert pc.estimate_min_total_s(rows_time) == _pc_of(ProcessController, 2).estimate_min_total_s(rows_time)
-    assert eta_row_min_seconds(ETA_ROWS[2], True) == 60.0                       # shutter_delay 만
-    assert eta_row_min_seconds(ETA_ROWS[2], False) == pytest.approx((1 + 100 / 0.05 / 60) * 60)
-    full = pc.estimate_min_total_s(ETA_ROWS)
-    assert full == round(eta_min_total_seconds(ETA_ROWS, 90.0, True)) == round((5 + 10) * 60 + 1200 + 60 + 120 + 90)
-    assert full < _pc_of(ProcessController, 2).estimate_min_total_s(ETA_ROWS)   # 하한은 더 작아진다(빨리 끝날 수 있음)
+    thk_row = dict(ETA_ROWS[2], use_thickness="T")
+    assert eta_row_min_seconds(thk_row, True) == 60.0                           # shutter_delay 만
+    assert eta_row_min_seconds(thk_row, False) == pytest.approx((1 + 100 / 0.05 / 60) * 60)
+    assert eta_row_min_seconds(ETA_ROWS[2], True) == pytest.approx((1 + 100 / 0.05 / 60) * 60)   # thickness 값만 → 시간
+    assert pc.estimate_min_total_s(ETA_ROWS) == _pc_of(ProcessController, 2).estimate_min_total_s(ETA_ROWS)
+    rows_thk = ETA_ROWS[:2] + [dict(r, use_thickness="T") for r in ETA_ROWS[2:]]
+    full = pc.estimate_min_total_s(rows_thk)
+    assert full == round(eta_min_total_seconds(rows_thk, 90.0, True)) == round((5 + 10) * 60 + 1200 + 60 + 120 + 90)
+    assert full < _pc_of(ProcessController, 2).estimate_min_total_s(rows_thk)   # 하한은 더 작아진다(빨리 끝날 수 있음)
 
 
 # ═══════════════════════ Thickness 모드 스텝 ═══════════════════════

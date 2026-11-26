@@ -4,6 +4,7 @@
 
 리스너로 받은 상태 dict(st)로만 화면을 그린다. 스타일시트는 값이 바뀔 때만 다시 넣는다.
 버튼: [영점](공정 중·미연결·응답 없음이면 비활성 — 회색) / [Factor 설정](항상 활성).
+맨 아래 체크박스 use_checkbox = use_thickness(공정에 사용 — 목표 두께에서 종료). 기본 해제, 공정 중 비활성.
 진행 영역: 공정이 없으면 '공정 없음' 한 줄(막대는 비움), 공정 중에는 종료 방식·목표·진행률·상태 문구(런타임이 set_process_view),
 공정이 끝나면 다음 공정 전까지 마지막 결과를 그대로 둔다.
 아래 빨간 줄은 연결된 채 응답이 없을 때만(응답 없음 n초 + 마지막 오류) — 연결 상태는 위 램프로만 보여 준다.
@@ -15,10 +16,10 @@ import contextlib
 from typing import Any, Optional
 
 from PySide6.QtCore import QRect, Qt
-from PySide6.QtWidgets import QFrame, QLabel, QMessageBox, QProgressBar, QPushButton, QWidget
+from PySide6.QtWidgets import QCheckBox, QFrame, QLabel, QMessageBox, QProgressBar, QPushButton, QWidget
 
 PANEL_W = 240
-PANEL_H = 344
+PANEL_H = 366
 IDLE_TEXT = "공정 없음"
 _BTN_CSS = ("QPushButton {background: #ebebe9; color: black; border-radius: 4px; border: 1px solid #cccccc;}"
             "QPushButton:disabled {background: #f3f4f6; color: #b0b7be; border: 1px solid #e0e3e7;}")
@@ -168,6 +169,14 @@ class ThicknessPanel(QFrame):
         self.zero_button.clicked.connect(self._on_zero_clicked)
         self.factor_button.clicked.connect(self._on_factor_clicked)
 
+        # ── 공정에 사용(use_thickness) — 런타임이 ch{N}_useThickness_checkbox 로 읽고 쓴다(main._init_thickness 가 등록) ──
+        self.use_checkbox = QCheckBox("공정에 사용 (목표 두께에서 종료)", self)
+        self.use_checkbox.setGeometry(QRect(10, 338, 220, 20))
+        self.use_checkbox.setChecked(False)
+        self.use_checkbox.setToolTip("체크: Dep.Rate·Thickness 가 필수이고 두께 모니터가 목표 두께에서 공정을 끝냅니다.\n"
+                                     "해제: 시간으로 종료합니다(Process Time, 비우면 Thickness ÷ Dep.Rate 로 계산).")
+        self.use_checkbox.setStyleSheet("QCheckBox {border: none; color: #333333; font-size: 8.5pt;}")
+
         self.set_idle()
         self.update_status({"stale": True, "connected": False})
 
@@ -260,6 +269,7 @@ class ThicknessPanel(QFrame):
         can_zero = not device_write_block(st) and not self._busy
         self.zero_button.setEnabled(can_zero)
         self.zero_button.setToolTip("공정 중에는 쓸 수 없음" if process else "두께·타이머 영점(B). 공정 중에는 쓸 수 없음")
+        self.use_checkbox.setEnabled(not process)
 
     def _material_tag(self, name: str) -> str:
         """적용값 줄 앞에 붙일 재료 표시 — 재료 목록에 있으면 기호(예: Al2O3), 없으면 이름."""

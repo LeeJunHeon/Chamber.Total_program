@@ -54,7 +54,7 @@ def test_csv_and_xlsx_columns_match(wb):
     assert xlsx == rows[0] and all(len(r) == len(rows[0]) for r in rows)
     assert xlsx[-4:] == ["use_heater", "heater_temp", "heater_ramp", "heater_soak"]
     i = xlsx.index("process_time")
-    assert xlsx[i + 1:i + 6] == ["dep_rate", "thickness", "tooling", "density", "z_factor"]
+    assert xlsx[i + 1:i + 7] == ["use_thickness", "dep_rate", "thickness", "tooling", "density", "z_factor"]
     j = xlsx.index("rf_pulse_duty_cycle")
     assert xlsx[j + 1:j + 3] == ["power_change_time", "change_power_value"]
 
@@ -73,6 +73,7 @@ def test_every_column_has_comment_and_validation(wb):
 def test_heater_and_special_validations(wb):
     ws = wb["Recipe"]
     assert (_dv(ws, "use_heater").type, _dv(ws, "use_heater").formula1) == ("list", '"T,F"')
+    assert (_dv(ws, "use_thickness").type, _dv(ws, "use_thickness").formula1) == ("list", '"T,F"')
     t = _dv(ws, "heater_temp")
     assert (t.type, t.formula1, t.formula2) == ("decimal", "1", "900")
     r = _dv(ws, "heater_ramp")
@@ -103,14 +104,20 @@ def test_thickness_and_power_change_columns(wb):
     v = _dv(ws, "change_power_value")
     assert (v.type, v.operator, v.formula1) == ("decimal", "greaterThan", "0")
     last = _last_row(ws)
-    for name in ("dep_rate", "thickness", "power_change_time", "change_power_value"):
+    for name in ("use_thickness", "dep_rate", "thickness", "power_change_time", "change_power_value"):
         assert all(ws.cell(r, cols[name]).value is None for r in range(2, last + 1)), name   # 예시 행은 비움
     drow = {desc.cell(r, 1).value: r for r in range(5, desc.max_row + 1)}
     assert "Thickness 모드" in desc.cell(drow["thickness"], 3).value
+    # use_thickness — T=Thickness 모드, F·공란=시간, 미지원 채널에서 T 면 E849(메모·입력 안내·설명 모두)
+    for t in (ws.cell(1, cols["use_thickness"]).comment.text, _dv(ws, "use_thickness").prompt,
+              desc.cell(drow["use_thickness"], 3).value):
+        assert "Thickness 모드" in t and "E849" in t and "process_time" in t, t
+    for name in ("dep_rate", "thickness"):
+        assert "use_thickness=T" in _dv(ws, name).prompt and "use_thickness=T" in desc.cell(drow[name], 3).value
     assert "E844" in desc.cell(drow["power_change_time"], 3).value + str(desc.cell(drow["power_change_time"], 4).value)
     # CSV 예시 행도 새 칸은 비어 있다(기존 예시 공정이 Thickness 모드로 바뀌지 않게)
     rows = _csv_rows()
-    for name in ("dep_rate", "thickness", "power_change_time", "change_power_value"):
+    for name in ("use_thickness", "dep_rate", "thickness", "power_change_time", "change_power_value"):
         k = rows[0].index(name)
         assert all(r[k] == "" for r in rows[1:]), name
 
@@ -159,7 +166,7 @@ def test_freeze_panes_keep_horizontal_scroll(wb):
     assert pane.state == "frozen" and (pane.xSplit or 0) <= 2 and pane.ySplit == 1
     panes = [s.pane for s in ws.sheet_view.selection]
     assert len(panes) == len(set(panes)), panes                      # 같은 pane 의 selection 이 겹쳐 쌓이지 않게
-    assert ws.max_column == 48 and all(ws.cell(1, c).comment is not None for c in range(1, 49))
+    assert ws.max_column == 49 and all(ws.cell(1, c).comment is not None for c in range(1, 50))
 
 
 def test_comment_boxes_not_shrunk():

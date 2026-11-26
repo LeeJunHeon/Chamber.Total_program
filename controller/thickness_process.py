@@ -3,6 +3,7 @@
 """두께 모니터 공정 연동 — Qt·asyncio 비의존 순수 판정. HeaterSoakWaiter 처럼 상태 dict 를 받아 tick() 한다.
 
 모드 판정(thickness_mode_of)은 이 한 곳에 둔다 — 런타임(시작·시퀀스)과 ETA 계산이 같은 규칙을 쓴다.
+Thickness 모드 = use_thickness 켜짐(체크·레시피 열 T) + 그 채널이 두께 모니터를 씀. 꺼짐(F·공란·열 없음)이면 Time 모드.
 
 순서(Thickness 모드): Shutter Delay → THICKNESS_ZERO(영점 B + ZeroConfirm) → Main Shutter 열기 → THICKNESS_WAIT(ThicknessEndJudge)
 순서(Time 모드, 두께 모니터 채널): 시작 전 Factor 적용 시도 → 성공하면 Shutter Delay → THICKNESS_ZERO → Main Shutter 열기 →
@@ -63,11 +64,19 @@ def xtal_fail(st: dict) -> bool:
     return st.get("crystal_ok") is False and bool(link)
 
 
-def thickness_mode_of(thickness: Any, supported: bool) -> bool:
-    """Thickness 모드 판정 — thickness > 0 이고 그 채널이 두께 모니터를 쓴다(SUPPORTS_THICKNESS=true + 서비스 붙음).
-    아니면 Time 모드(지금 그대로: thickness 가 있으면 process_time 역산 → 시간 종료).
-    process_time 칸이 비었는지는 보지 않는다(UI 가 thickness 입력 때 processTime 을 채운다)."""
-    return bool(supported) and _f(thickness) > 0.0
+def use_thickness_on(v: Any) -> bool:
+    """use_thickness 값 해석 — bool 이면 그대로, 문자열이면 T/TRUE/1/Y/YES(대소문자 무시)만 켜짐. 그 외·None·공란 = 꺼짐."""
+    if isinstance(v, bool):
+        return v
+    if v is None:
+        return False
+    return str(v).strip().upper() in ("T", "TRUE", "1", "Y", "YES")
+
+
+def thickness_mode_of(use_thickness: Any, supported: bool) -> bool:
+    """Thickness 모드 판정 — use_thickness 켜짐이고 그 채널이 두께 모니터를 쓴다(SUPPORTS_THICKNESS=true + 서비스 붙음).
+    아니면 Time 모드(process_time, 비어 있으면 thickness ÷ dep_rate 역산 → 시간 종료). thickness 값만으로는 Thickness 모드가 되지 않는다."""
+    return bool(supported) and use_thickness_on(use_thickness)
 
 
 def expected_seconds(thickness_nm: float, dep_rate_nm_s: float) -> float:

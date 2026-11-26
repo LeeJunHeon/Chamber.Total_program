@@ -143,13 +143,13 @@ ZERO_STEP_SLACK_S = 30.0   # THICKNESS_ZERO 끝 토큰 대기 한도 = 확인 �
 
 def eta_row_min_seconds(row: dict, thickness_supported: bool = False) -> float:
     """행 1개의 최소 소요 초. delay 행이면 대기 초만, 아니면 (shutter_delay + process_time) x 60.
-    thickness_supported(그 채널 SUPPORTS_THICKNESS + 두께 서비스)이고 행이 Thickness 모드면(thickness_mode_of — 런타임과 같은 규칙)
+    thickness_supported(그 채널 SUPPORTS_THICKNESS + 두께 서비스)이고 행이 Thickness 모드면(use_thickness 켜짐, thickness_mode_of — 런타임과 같은 규칙)
     메인 공정은 목표 두께에 닿는 순간 끝나 예상보다 빠를 수 있다 → 하한에는 shutter_delay 만 넣는다(확정값처럼 보내지 않음)."""
     row = row or {}
     d = eta_delay_seconds(row)
     if d > 0:
         return d
-    if thickness_mode_of(row.get("thickness"), thickness_supported):
+    if thickness_mode_of(row.get("use_thickness"), thickness_supported):
         return _eta_f(row.get("shutter_delay", 0)) * 60.0
     return (_eta_f(row.get("shutter_delay", 0)) + eta_row_process_time_min(row)) * 60.0
 

@@ -58,7 +58,8 @@ from controller.runtime_state import runtime_state
 from controller.process_controller import ProcessController, eta_delay_seconds
 from controller.heater_process import HeaterSoakWaiter, HeaterHoldWaiter, heater_wait_timeout_s, itl_missing_text
 from controller.thickness_process import (END_ABORT, END_FALLBACK, END_LIMIT, END_THICKNESS, END_TIME, ThicknessEndJudge,
-                                          ZeroConfirm, expected_seconds, max_time_s, thickness_mode_of)
+                                          ZeroConfirm, expected_seconds, max_time_s, thickness_mode_of,
+                                          use_thickness_on)
 from lib.thickness_config import load_judge_params
 from errors.app_error import CodedRuntimeError   # 호스트 START 레시피 파일 오류에 응답 코드(E207/E208/E209/E227)를 싣는다
 
@@ -115,6 +116,7 @@ RawParams = TypedDict('RawParams', {
     'heater_temp': float | str,
     'heater_ramp': float | str,
     'heater_soak': float | str,
+    'use_thickness': Literal['T','F'] | bool,   # 두께 모니터로 종료(Thickness 모드) — 공란이면 사용 안 함
 }, total=False)
 
 NormParams = TypedDict('NormParams', {
@@ -155,6 +157,7 @@ NormParams = TypedDict('NormParams', {
     'heater_temp': float | None,      # °C
     'heater_ramp': float | None,      # °C/min (None = HEATER_RAMP_RATE_C_PER_MIN)
     'heater_soak': float | None,      # 분 — 도달 확인 뒤 SOAK(시간만 셈). None = 없음
+    'use_thickness': bool,            # 두께 모니터로 종료(Thickness 모드)
 }, total=False)
 
 # 폴링 타깃도 명확히 분리
@@ -3348,7 +3351,9 @@ class ChamberRuntime:
         self._set_default_ui_values()
 
     def _recalc_process_time(self) -> None:
-        """Dep.Rate 또는 Thickness 변경 시 Process Time 자동계산."""
+        """Dep.Rate 또는 Thickness 변경 시 Process Time 자동계산.
+        Process Time 칸이 비었거나 0 이하이거나, 프로그램이 마지막으로 넣은 글자(_pt_auto_text)일 때만 계산값을 넣는다
+        — 사람이 직접 넣은 값은 덮어쓰지 않는다."""
         try:
             dep   = float(self._get_text("depRate_edit")   or 0)
             thick = float(self._get_text("thickness_edit") or 0)
@@ -3357,8 +3362,15 @@ class ChamberRuntime:
                 # 시그널 루프 방지: processTime_edit 값이 이미 같으면 갱신 안 함
                 current = self._get_text("processTime_edit")
                 new_val = f"{t_min:.3f}"
+                try:
+                    _empty = (not current) or float(current) <= 0
+                except Exception:
+                    _empty = False
+                if not (_empty or current == getattr(self, "_pt_auto_text", None)):
+                    return
                 if current != new_val:
                     self._set("processTime_edit", new_val)
+                self._pt_auto_text = new_val
         except Exception:
             pass
 
@@ -3565,11 +3577,16 @@ class ChamberRuntime:
         _dep_rate_val = str(params.get('dep_rate', '') or params.get('dep.rate', '') or '')
         _set("depRate_edit",   _dep_rate_val)
         _set("thickness_edit", str(params.get('thickness', '') or ''))
-        # ✅ processTime_edit: 명시적 값이 있을 때만 덮어씀
-        #    (없으면 위 thickness_edit textChanged → _recalc_process_time이 계산한 값 유지)
+        # ✅ processTime_edit: 행에 값이 있으면 그 값(입력한 값 취급), 없으면 칸을 비우고 dep_rate·thickness 계산값
+        #    (화면 표시가 실제로 쓰는 시간과 같게 — 직전 칸에 사람이 넣은 값이 남아 있지 않게)
         _pt = params.get('process_time', 0)
         if float(_pt or 0) > 0:
             _set("processTime_edit", _pt)
+        else:
+            _set("processTime_edit", "")
+            self._recalc_process_time()
+        # 두께 모니터 사용(use_thickness) — CH2 두께 패널 체크박스(없으면 무시)
+        _set("useThickness_checkbox", _is_true(params.get('use_thickness', 'F')))
 
         _set("G1_checkbox", params.get('gun1', 'F') == 'T')
         _set("G2_checkbox", params.get('gun2', 'F') == 'T')
@@ -4048,8 +4065,15 @@ class ChamberRuntime:
             # 두께 모니터 Thickness 모드 — 장비 동작(Chuck 이동) 전에 거부할 수 있는 것부터 본다.
             # Time 모드(두께 모니터가 붙은 채널)는 Chuck 위치가 정해진 뒤 Factor 적용을 시도만 한다(실패해도 시작은 막지 않음).
             self._thk_pre = None
-            _thk_mode = thickness_mode_of(params.get("thickness"), self._thickness_supported())
+            _thk_mode, _code, _msg = self._thickness_start_plan(params)
+            if _code:
+                await self._thickness_reject(params, _code, _msg)
             _thk_time = (not _thk_mode) and self._thickness_supported()
+            if _thk_time:
+                with contextlib.suppress(Exception):
+                    if float(params.get("thickness") or 0) > 0:
+                        self.append_log("THICKNESS", f"use_thickness=F → 두께 모니터로 끝내지 않고 시간(process_time "
+                                                     f"{float(params.get('process_time') or 0):g}분)으로 종료합니다(두께는 기록만)")
             if _thk_mode:
                 _code, _msg = self._thickness_check_basic(params)
                 if _code:
@@ -4461,6 +4485,11 @@ class ChamberRuntime:
 
             self._recalc_process_time()   # ← 추가: 위젯 자동계산 강제 반영
             process_time = float(self._get_text("processTime_edit") or 0.0)
+            _ut_w = self._u("useThickness_checkbox")           # CH2 두께 패널 체크박스 — 없으면(CH1) 미사용
+            try:
+                _use_thickness = bool(_ut_w.isChecked()) if _ut_w is not None else False
+            except Exception:
+                _use_thickness = False
             process_name = (self._get_text("integrationTime_edit") or "").strip()
             process_note = process_name if process_name else f"Single CH{self.ch}"
 
@@ -4472,6 +4501,7 @@ class ChamberRuntime:
                 "process_time": process_time,
                 "dep_rate":    _dep_rate,      
                 "thickness":   _thickness,      
+                "use_thickness": _use_thickness,
                 "process_note": process_note,
                 "Process_name": process_note,  # (다른 코드 참조가 있어 유지)
                 **vals,
@@ -6382,6 +6412,7 @@ class ChamberRuntime:
             "heater_temp":       _opt_float_from_keys("heater_temp"),
             "heater_ramp":       _opt_float_from_keys("heater_ramp"),
             "heater_soak":       _opt_float_from_keys("heater_soak"),
+            "use_thickness":     tf(raw.get("use_thickness", "F")),   # 두께 모니터로 종료(Thickness 모드) — 공란·열 없음 = 미사용
             # 두께 모니터 Thickness 모드 — 값별로 레시피 우선, 비우면 Factor 팝업 값(Time 모드는 쓰지 않음)
             "tooling":           _opt_float_from_keys("tooling"),
             "density":           _opt_float_from_keys("density"),
@@ -6632,6 +6663,24 @@ class ChamberRuntime:
             return bool(self.cfg._get("SUPPORTS_THICKNESS", False))
         except Exception:
             return False
+
+    def _thickness_start_plan(self, params) -> tuple[bool, str, str]:
+        """시작 때 두께 모니터 사용 판정 — (Thickness 모드, 거절 코드, 거절 문구). 거절 없음이면 코드·문구는 "".
+        use_thickness 켜짐인데 이 채널이 두께 모니터를 쓰지 않으면 시간으로 바꾸지 않고 거절한다(E849)."""
+        supported = self._thickness_supported()
+        if use_thickness_on((params or {}).get("use_thickness")) and not supported:
+            try:
+                cfg_on = bool(self.cfg._get("SUPPORTS_THICKNESS", False))
+            except Exception:
+                cfg_on = False
+            if not cfg_on:
+                msg = (f"CH{self.ch} 은 두께 모니터를 쓰지 않는 채널입니다(settings.json SUPPORTS_THICKNESS=false) — "
+                       f"use_thickness 를 F(체크 해제)로 두면 시간으로 진행합니다")
+            else:
+                msg = (f"CH{self.ch} 두께 모니터 서비스가 시작되지 않았습니다(프로그램 시작 때 THICKNESS 로그 확인) — "
+                       f"use_thickness 를 F(체크 해제)로 두면 시간으로 진행합니다")
+            return False, "E849", msg
+        return thickness_mode_of((params or {}).get("use_thickness"), supported), "", ""
 
     def _thickness_check_link(self) -> tuple[str, str]:
         """두께 모니터 통신·크리스탈·최근 값 점검 — (코드, 문구), 통과면 ("", ""). Thickness 모드 시작 전 점검과 Time 모드 기록 준비 공용."""
@@ -7898,6 +7947,9 @@ class ChamberRuntime:
         _set("rfPower_checkbox", False)
         _set("rfPower_edit", "0")
 
+        # 두께 모니터 사용(use_thickness) — 기본 미사용(공정이 끝나면 다시 해제)
+        _set("useThickness_checkbox", False)
+
         # ← 추가: 챔버별 기본 체크
         try:
             if self.ch == 1:
@@ -7917,6 +7969,7 @@ class ChamberRuntime:
                 _set("mainShutter_checkbox", True)            # ★ 추가: main_shutter=T
                 _set("shutterDelay_edit", "5")                # 5 초
                 _set("processTime_edit", "25")                # ★ 변경: 주석 해제, 25분 기본값
+                self._pt_auto_text = "25"                     # 프로그램이 넣은 값 — Dep.Rate·Thickness 를 넣으면 계산값으로 바뀐다
             elif self.ch == 2:
                 _set("basePressure_edit", "9e-6")
                 _set("G2_checkbox", True)             # CH2: G2 사용
@@ -8701,7 +8754,7 @@ class ChamberRuntime:
         "use_rf_power", "use_dc_power", "use_dc_power2",
         "Ar", "O2", "N2",
         "main_shutter", "power_select",
-        "use_heater",
+        "use_heater", "use_thickness",
     )
     # tf() 가 True 로 인정하는 값 + 명시적 False 값 (그 외는 오탈자로 간주)
     _TF_TRUE_TOKENS = ("T", "TRUE", "1", "Y", "YES")
