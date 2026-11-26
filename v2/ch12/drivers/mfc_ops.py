@@ -269,6 +269,31 @@ def zeroing(d, ch: Optional[int], owner):
     yield from noreply(d, "", cmd, tag, owner, ch, gap_ms=zgap, after_send_s=zgap / 1000.0)
 
 
+def zeroing_guarded(d, ch: Optional[int], owner):
+    """영점 보호(W-21·22 대조 C — 챔버K 실장비 시험): 영점(Z1·L{4+ch}1)을 보내기 전에 그 챔버에서 모든 채널 유량 꺼짐(R69)·MFC 밸브 열림(R6)이
+    ZERO_MIN_IDLE_SEC 이상 · PLC 가스 밸브 닫힘(d.zero_check). 조건은 맞는데 시간만 모자라면 남은 만큼 기다렸다(Sleep — 다른 명령은 막지 않음)
+    다시 보고 보낸다(11). 다른 조건이 안 맞거나 기다린 뒤에도 안 되면 그 영점만 건너뛰고 경고(zero_skipped — 걸린 조건)를 남긴다 — 공정은
+    계속(command_confirmed). 기다리는 동안 대기열 폐기(정지)가 오면 보내지 않는다(PURGED). 공정 밖에서 부르는 길도 같은 함수."""
+    what = "압력 센서 영점" if ch is None else f"Ch{ch}({ {1: 'Ar', 2: 'O2', 3: 'N2'}.get(ch, ch)}) 영점"
+    key = "PS_ZEROING" if ch is None else "MFC_ZEROING"
+    epoch = d.zero_epoch
+    for attempt in (0, 1):
+        verdict, left, why = d.zero_check(d.clock.monotonic())
+        if verdict == "ok":
+            break
+        if verdict == "wait" and attempt == 0:
+            d.status(f"[ZERO_WAIT] {what} 전 {left:.1f} s 더 기다림({why})")
+            d.emit("zero_wait", f"{what} 전 {left:.0f} s 기다림 — {why}", cmd=key, owner=owner, channel=ch, value=round(left, 1))
+            yield Sleep(left + 0.05)
+            if d.zero_epoch != epoch or d.shutdown:
+                raise OpFailed("PURGED", "전송 전에 대기열에서 폐기됨(정지)")
+            continue
+        d.status(f"[ZERO_SKIPPED] {what} 건너뜀 — {why}")
+        d.emit("zero_skipped", f"{what} 건너뜀 — {why}", cmd=key, owner=owner, channel=ch, level="warn")
+        return None
+    yield from zeroing(d, ch, owner)
+
+
 # ───────── 읽기 ─────────
 def read_pressure(d, emit_fail: bool, tag: str, owner):
     """v1 read_pressure(device/mfc.py:878-892) — R5 → pressure 이벤트 + UI 값(없으면 None)."""
@@ -491,6 +516,7 @@ def stab_loop(d):
 
 # ───────── 정리 ─────────
 def _purge(d, label: str) -> int:
+    d.zero_epoch += 1                                    # 기다리던 영점(zeroing_guarded)은 깨어나도 보내지 않음(W-21·22 대조 C)
     tags = d.runner.purge(keep=lambda op: op is d.stab_op)
     if tags:
         d.status(f"대기 중 명령 {len(tags)}개 폐기 ({label}) tags={tags!r}")

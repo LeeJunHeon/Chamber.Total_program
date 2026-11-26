@@ -81,6 +81,7 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
      data phase·ref_w·threshold·max_s / why 풀림·시간 초과·RF 끔·waited_s). 공정 txt 의 v1 문구는 그대로(횟수만 줄어듦).
      B: RF 꺼짐 표시 — snapshot {ch2,pc}.rf.cmd_on(SET 래치 · 쓰기값 > 0 또는 모름)·uncommanded(cmd_on 아님 · Forward ≥
      RF_UNCOMMANDED_FWD_W 5 W), eventKinds rf/rf_uncommanded(warn)·rf_uncommanded_end(info) 시작·끝 한 번씩, params RF_UNCOMMANDED_FWD_W.
+     C: 영점 보호 — params ZERO_MIN_IDLE_SEC(10 s), eventKinds mfc/zero_skipped(warn — 걸린 조건)·mfc/zero_wait(남은 시간 기다림, 상세).
 """
 from __future__ import annotations
 
@@ -133,6 +134,7 @@ EVENT_KINDS: tuple = (
     ("plc", "read", "PLC 읽기", _D),
     ("mfc", "command_confirmed", "명령 확인", _D), ("mfc", "command_failed", "명령 실패", _M), ("mfc", "flow", "유량", _D),
     ("mfc", "pressure", "압력", _D), ("mfc", "read", "읽기", _D), ("mfc", "status", "상태", _D), ("mfc", "io", "입출력", _D),
+    ("mfc", "zero_skipped", "영점 건너뜀", _M), ("mfc", "zero_wait", "영점 전 기다림", _D),        # W-21·22 C 영점 보호
     ("ig", "base_reached", "베이스 압력 도달", _M), ("ig", "base_failed", "베이스 압력 실패", _M),
     ("ig", "pressure", "압력", _D), ("ig", "read", "읽기", _D), ("ig", "status", "상태", _D), ("ig", "io", "입출력", _D),
     ("dc", "target_reached", "DC Power 목표 도달", _M), ("dc", "target_failed", "DC Power 목표 실패", _M),

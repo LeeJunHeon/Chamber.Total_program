@@ -173,6 +173,7 @@ class MfcEvent:
     value: Optional[float] = None
     text: Optional[str] = None
     code: Optional[str] = None     # v1 오류 코드(E###) — v1 장비 계층은 붙이지 않았다(공정 쪽이 붙임)
+    level: Optional[str] = None    # 사건 수준(없으면 system 이 reason·kind 로) — 영점 건너뜀 warn(W-21·22 대조 C)
 
 
 class MfcReadOnly(Exception):
@@ -216,6 +217,14 @@ class MfcDriver:
         self._poll_stage: Optional[str] = None
         self._rot_i = 0                                          # 돌아가며 읽기 — 다음 차례 위치
         self.latest: Dict[str, tuple] = {}                       # "R60"/"R5" → (시각, 줄)
+        # 영점 보호(W-21·22 대조 C) — 읽을 때마다 갱신: 채널 유량 상태(R69 — None 모름·True 켜짐·False 꺼짐)와 꺼진 때, MFC 밸브(R6) 열린 때.
+        # 끄기(FLOW_OFF)는 켜져 있던(또는 모르던) 채널을 실제로 껐을 때만 그때부터 센다 — 이미 꺼진 채널에 다시 보내도 시간을 다시 세지 않음(10)
+        self.zero_flow: Dict[int, Optional[bool]] = {1: None, 2: None, 3: None}
+        self.zero_off_since: Dict[int, Optional[float]] = {1: None, 2: None, 3: None}
+        self.zero_valve_pos: Optional[float] = None
+        self.zero_valve_since: Optional[float] = None
+        self.zero_plc: Optional[Callable[[], Tuple[Optional[bool], str]]] = None   # 조립이 넣음 — (PLC 가스 밸브 모두 닫힘?, 열린 것 이름)
+        self.zero_epoch = 0                                       # 대기열 폐기(정지)마다 +1 — 기다리던 영점은 보내지 않음
         worker.on_connect = self._on_connect
 
     # ───────── 설정 ─────────
@@ -317,6 +326,8 @@ class MfcDriver:
         self.ready_at = self.clock.monotonic() + self.ms("MFC_GAP_MS", 50)
         if sent in TICK_CMDS:
             self.latest[sent] = (self.clock.monotonic(), line)
+            if sent in ("R69", "R6"):
+                self._zero_track(sent, line, self.clock.monotonic())
         if item.tag:                                                    # 1초 읽기(tag 없음)는 이벤트를 내지 않는다
             self.emit("io", f"[RECV] {item.tag} ← {line}")
         return line
@@ -383,6 +394,58 @@ class MfcDriver:
     def _last(self, cmd: str, now: float) -> Optional[str]:
         r = self.latest.get(cmd)
         return r[1] if r and now - r[0] <= self.valid_s(cmd) else None
+
+    # ───────── 영점 보호(W-21·22 대조 C) ─────────
+    def _zero_track(self, cmd: str, line: str, now: float) -> None:
+        if cmd == "R69":
+            bits = mfc_ops._r69_bits(line)
+            if len(bits) < 3:
+                return
+            for ch in (1, 2, 3):
+                on = bits[ch - 1] == "1"
+                if on:
+                    self.zero_off_since[ch] = None
+                elif self.zero_off_since[ch] is None:           # 꺼진 것을 처음 본 때(이미 꺼져 있던 동안은 그대로)
+                    self.zero_off_since[ch] = now
+                self.zero_flow[ch] = on
+            return
+        pos = parse_valve_pct(line)
+        if pos is None:
+            return
+        self.zero_valve_pos = pos
+        if pos > 99.0:                                           # VALVE_OPEN 확인과 같은 기준(mfc_ops.verify_valve)
+            if self.zero_valve_since is None:
+                self.zero_valve_since = now
+        else:
+            self.zero_valve_since = None
+
+    def zero_check(self, now: float) -> Tuple[str, float, str]:
+        """영점을 보내도 되나 — ('ok'|'wait'|'skip', 더 기다릴 s, 이유). 조건: 모든 채널 유량 꺼짐(R69)·MFC 밸브 열림(R6)이
+        ZERO_MIN_IDLE_SEC 이상 이어짐 · 공정이 여닫는 PLC 가스 밸브(Ar·O₂·N₂·Main 가스) 닫힘. 조건은 맞는데 시간만 모자라면 'wait'(11)."""
+        need = max(0.0, float(self.c("ZERO_MIN_IDLE_SEC", 10.0) or 0.0))
+        bad: List[str] = []
+        for ch in (1, 2, 3):
+            st = self.zero_flow[ch]
+            if st is None or self.zero_off_since[ch] is None:
+                bad.append(f"{GAS_MAP[ch]} 유량 {'켜짐' if st else '상태 모름'}")
+        if self.zero_valve_since is None:
+            bad.append("MFC 밸브 위치 모름" if self.zero_valve_pos is None else f"MFC 밸브 열림 아님({self.zero_valve_pos:.1f} %)")
+        if self.zero_plc is not None:
+            try:
+                closed, names = self.zero_plc()
+            except Exception:
+                closed, names = None, ""
+            if closed is None:
+                bad.append("PLC 가스 밸브 상태 모름")
+            elif not closed:
+                bad.append(f"PLC 가스 밸브 열림: {names}")
+        if bad:
+            return "skip", 0.0, " · ".join(bad)
+        since = max([s for s in self.zero_off_since.values() if s is not None] + [self.zero_valve_since or 0.0])
+        left = since + need - now
+        if left <= 1e-6:
+            return "ok", 0.0, ""
+        return "wait", left, f"유량 꺼짐·MFC 밸브 열림 {max(0.0, now - since):.1f} s < {need:g} s"
 
     def _age(self, cmd: str, now: float) -> Optional[float]:
         r = self.latest.get(cmd)
@@ -558,7 +621,16 @@ class MfcDriver:
         self._run("FLOW_ON", mfc_ops.flow_on(self, int(channel), owner, on_done), on_done, owner, int(channel))
 
     def flow_off(self, channel: int, owner: Optional[str] = None, on_done=None) -> None:
-        self._run("FLOW_OFF", mfc_ops.flow_off(self, int(channel), owner), on_done, owner, int(channel))
+        ch = int(channel)
+        was_off = self.zero_flow.get(ch) is False and self.zero_off_since.get(ch) is not None
+
+        def done(key, reason, detail):
+            # 영점 보호(10): 켜져 있던(또는 모르던) 채널을 실제로 껐을 때만 그때부터 센다 — 이미 꺼진 채널에 다시 보내면 그대로
+            if reason is None and not was_off:
+                self.zero_flow[ch], self.zero_off_since[ch] = False, self.clock.monotonic()
+            if on_done:
+                on_done(key, reason, detail)
+        self._run("FLOW_OFF", mfc_ops.flow_off(self, ch, owner), done, owner, ch)
 
     def gas_select(self, gas_idx: int, owner: Optional[str] = None) -> None:
         """device/mfc.py:526-533 — 플라즈마 클리닝 선택 가스(없는 채널은 ValueError)."""
@@ -603,10 +675,10 @@ class MfcDriver:
                   on_done, owner)
 
     def ps_zeroing(self, owner: Optional[str] = None, on_done=None) -> None:
-        self._run("PS_ZEROING", mfc_ops.zeroing(self, None, owner), on_done, owner)
+        self._run("PS_ZEROING", mfc_ops.zeroing_guarded(self, None, owner), on_done, owner)
 
     def mfc_zeroing(self, channel: int, owner: Optional[str] = None, on_done=None) -> None:
-        self._run("MFC_ZEROING", mfc_ops.zeroing(self, int(channel), owner), on_done, owner, int(channel))
+        self._run("MFC_ZEROING", mfc_ops.zeroing_guarded(self, int(channel), owner), on_done, owner, int(channel))
 
     def wait_pressure(self, target: float, timeout_sec: Optional[float] = None, use_sp_target: bool = False,
                       sp_index: Optional[int] = None, owner: Optional[str] = None, on_done=None) -> None:

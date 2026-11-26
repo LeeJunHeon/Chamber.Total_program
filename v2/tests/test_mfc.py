@@ -23,7 +23,7 @@ SCALE = {"ch1": (1.0, 1.0, 1.0), "ch2": (1.0, 10.0, 2.0)}
 
 
 class Rig:
-    def __init__(self, chamber="ch1", writes=True, cfg=None, flow_tau_s=0.0, start=1.5, readback=False):
+    def __init__(self, chamber="ch1", writes=True, cfg=None, flow_tau_s=0.0, start=1.5, readback=False, zero_ready=True):
         self.c = VirtualClock(start_wall=1_760_000_000.0)
         self.c.register()
         self.ch = Chamber(chamber)
@@ -35,6 +35,14 @@ class Rig:
         self.d = M.MfcDriver(self.c, self.w, self.cfg, writes, on_event=self.events.append, chamber=chamber)
         self.w.start()
         self.c.wait_until(start)
+        if zero_ready:
+            self.ready_zero()
+
+    def ready_zero(self):
+        """영점 보호(W-21·22 대조 C) 조건을 오래전부터 만족한 상태로 — v1 바이트 비교는 1초 읽기 없이 명령만 보낸다"""
+        self.d.zero_flow = {1: False, 2: False, 3: False}
+        self.d.zero_off_since = {1: -1e9, 2: -1e9, 3: -1e9}
+        self.d.zero_valve_pos, self.d.zero_valve_since = 100.0, -1e9
 
     def call(self, fn, *a, **kw):
         box = []
@@ -193,6 +201,7 @@ def test_readback_confirms_each_write_kind():
     assert r.call(r.d.sp_on, 1)[1] is None
     assert r.sent(t5) == ["D1", "R7"]
     t6 = r.c.monotonic()
+    r.ready_zero()                                                          # 위에서 밸브를 닫았다 — 영점 보호 조건은 이 시험의 대상이 아님
     assert r.call(r.d.ps_zeroing)[1] is None
     assert r.sent(t6) == ["Z1"]                                             # 되읽을 질의 없음 — v1 과 같게
     assert any("되읽기 확인" in e.detail for e in r.kinds("status"))

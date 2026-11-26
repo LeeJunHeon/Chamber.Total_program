@@ -288,6 +288,7 @@ class Ch12System:
             w = self.workers[f"{ch}.mfc"] = M.make_worker(clock, g(f"{ch}.mfc", fx[f"{ch}.mfc"]), c, ch, wr,
                                                           on_event=self._ev_for(f"{ch}.mfc"))
             self.mfc[ch] = M.MfcDriver(clock, w, c, wr, on_event=self._ev_for(f"{ch}.mfc"), chamber=ch)
+            self.mfc[ch].zero_plc = (lambda n=int(ch[-1]): self.gas_valves_closed(n))       # 영점 보호(W-21·22 대조 C)
             sources.append(Source(f"{ch}.mfc", w, self.mfc[ch].source_read, (f"{ch}.mfc",), M.source_deadline_ms(c)))
             w = self.workers[f"{ch}.ig"] = G.make_worker(clock, g(f"{ch}.ig", fx[f"{ch}.ig"]), c, ch, wr,
                                                          on_event=self._ev_for(f"{ch}.ig"))
@@ -452,6 +453,25 @@ class Ch12System:
             self._call("row_listener", f, row)
 
     # ───────── 내부 이벤트 ─────────
+    def gas_valves_closed(self, n: int) -> tuple:
+        """영점 보호(W-21·22 대조 C) — 챔버 n 의 공정이 여닫는 PLC 가스 밸브(Ar·O₂·N₂(CH2)·Main 가스 MAIN_n_GAS_SW)가 모두 닫혔나.
+        (True, "") · (False, '열린 것 이름') · (None, "") = PLC 값 모름(읽기 없음·5 s 넘게 오래됨)."""
+        plc = getattr(self, "plc", None)
+        p = getattr(plc, "last_poll", None) if plc is not None else None
+        if p is None or self.clock.monotonic() - float(p.t_mono) > 5.0:
+            return None, ""
+        names = [("ar", "Ar 밸브"), ("o2", "O₂ 밸브")] + ([("n2", "N₂ 밸브")] if n == 2 else []) + [("main", "Main 가스")]
+        opened, unknown = [], False
+        for g, label in names:
+            v = p.values.get(f"plc.{g}_{n}_gas_sw")
+            if v is None:
+                unknown = True
+            elif bool(v):
+                opened.append(label)
+        if opened:
+            return False, "·".join(opened)
+        return (None, "") if unknown else (True, "")
+
     def _ev_for(self, source: str) -> Callable[[Any], None]:
         self._ev_sources.add(source)
 
