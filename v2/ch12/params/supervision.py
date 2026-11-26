@@ -14,12 +14,16 @@ from __future__ import annotations
 
 from v2.ch12.drivers.plc_conv import cmd_grace_s
 
-from ._base import B, F, LIVE, L, M, p, rule, need
+from ._base import B, E, F, LIVE, L, M, p, rule, need
 
 _G = "supervisor"
 _D = "v2(사용자 지시 2026-11-13"
 
 PARAMS: tuple = (
+    p("KEEP_AWAKE", _G, "윈도우 절전 막기", "", E, "always", enum=("always", "run", "off"), safety=M, apply=LIVE,
+      src="v2(G 절전 막기 — 사용자 결정 2026-11-26)",
+      desc="always = 프로그램이 켜져 있는 동안(로봇 요청을 늘 받음) · run = 공정·Plasma Cleaning·TSP·히터 운전 중만 · off = 막지 않음. "
+           "화면 꺼짐은 막지 않습니다"),
     p("SUPERVISOR_HANG_ENABLED", _G, "멈춤 감지 재시작 사용", "", B, True, safety=M, apply=LIVE, src=f"{_D} 3장 D408)",
       desc="켜면 감시 프로그램이 제어 프로그램의 핵심 루프(1초 tick 번호·명령 처리)가 SUPERVISOR_HANG_TIMEOUT_S 동안 진행이 없을 때 "
            "스레드 덤프를 남기고 강제 종료 → 다시 켠다(재시작 한도에 포함, 사유 '멈춤'). 끄면 꺼질 때만 재시작(이전 동작)"),

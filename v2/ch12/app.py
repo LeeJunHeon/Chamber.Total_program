@@ -172,6 +172,7 @@ class App:
         self.uplink = None
         self.assembly = None
         self.beacon = None
+        self.keep_awake = None
         self.journal = None
         self.resumer = None
         self._resume_thread: Optional[threading.Thread] = None
@@ -375,6 +376,7 @@ class App:
                 self.warn_once(msg, "%s", msg)
             self._tick_thread = self.clock.start_thread(s.loop.run, "tick")
             self.start_health(s)
+            self.start_keep_awake(s)
             self.attach_server(s)
             self.say(RUNNING_LINE)
         except Exception as e:
@@ -411,6 +413,13 @@ class App:
         core = getattr(self.assembly, "core", None)
         self.beacon = HealthBeacon(s.cfg, lambda: s.loop.rows, getattr(core, "_lock", None), Path(hb), Path(dump) if dump else None)
         self.beacon.start()
+
+    def start_keep_awake(self, s: Ch12System) -> None:
+        """윈도우 절전 막기(G — keep_awake.py). 윈도우가 아니면 아무것도 하지 않는다. 종료(_teardown) 때 같은 스레드가 푼다."""
+        from v2.ch12.keep_awake import KeepAwake, windows_api
+        self.keep_awake = KeepAwake(s.cfg, s.busy, lambda kind, detail: s.emit("selfwatch", kind, detail, level="info"),
+                                    api=windows_api())
+        self.keep_awake.start()
 
     def start_uplink(self, s: Ch12System) -> None:
         """웹 연결 — 정책이 연결일 때만(prod·bench, sim 은 UPLINK_IN_SIM). 실패해도 웹 없이 운전(공정·안전은 그대로)."""
@@ -567,6 +576,8 @@ class App:
         self._done.set()
         if getattr(self, "beacon", None) is not None:
             self.beacon.stop()
+        if getattr(self, "keep_awake", None) is not None:
+            self.keep_awake.stop()                         # 절전 막기 풀기(걸었던 스레드가 푼다)
         s = self.system
         if s is not None and (s.started or self.assembly is not None):
             s.stop()                                       # tick 멈춤 → 엔진 close(로봇 API·저널 등) → worker 정지 → 출력·기록 flush

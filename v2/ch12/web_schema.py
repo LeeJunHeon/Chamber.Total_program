@@ -85,6 +85,7 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
   18 2026-11-26 통신 끊김 중단·절전 막기·작은 고침(F·G·H) — F: 안전 규칙 S37 통신 끊김 공정 중단(v1 에 없음 — 사용자 결정 2026-11-26)·
      S38 PLC 재연결 뒤 남은 파워 정리, params PLC_COMM_LOSS_ABORT_SEC(15 s)·MFC_COMM_LOSS_ABORT_SEC(30 s), 사유 PLC_COMM_LOST·MFC_COMM_LOSS
      (safety fired S37 warn 한 번 · run_end 사유). 아래 줄(G·H)이 같은 판에 더해진다.
+     G: 윈도우 절전 막기 — params KEEP_AWAKE(always·run·off, 기본 always), eventKinds selfwatch/keep_awake_on·keep_awake_off(상세).
 """
 from __future__ import annotations
 
@@ -164,7 +165,8 @@ EVENT_KINDS: tuple = (
     ("oes", "status", "OES 상태", _D),
     ("rga", "finished", "RGA 측정 끝", _M), ("rga", "failed", "RGA 실패", _M), ("rga", "rejected", "RGA 거부", _M),
     ("rga", "data", "RGA 값", _D), ("rga", "status", "RGA 상태", _D),
-    ("selfwatch", "selfwatch", "프로그램 자기 감시", _M), ("outputs", "internal_error", "기록 출력 오류", _M),
+    ("selfwatch", "selfwatch", "프로그램 자기 감시", _M),
+    ("selfwatch", "keep_awake_on", "절전 막기 시작", _D), ("selfwatch", "keep_awake_off", "절전 막기 끝", _D), ("outputs", "internal_error", "기록 출력 오류", _M),
     ("uplink", "uplink_down", "웹 연결 끊김", _M), ("uplink", "uplink_up", "웹 연결 다시 됨", _M),
     ("uplink", "uplink_auth_failed", "웹 토큰 거부", _M), ("uplink", "uplink_conflict", "웹이 이 실행을 받지 않음", _M),
     ("uplink", "uplink_too_large", "웹이 받지 않는 큰 메시지", _M), ("uplink", "uplink_spool_full", "웹 보관함 가득", _M),
