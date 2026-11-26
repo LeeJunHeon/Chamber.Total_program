@@ -52,7 +52,7 @@ EMPTY_PAGE = """<!doctype html>
 <html lang="ko"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1">
 <title>챔버12 v2</title></head>
 <body style="font-family:sans-serif;margin:2rem">
-<h1>로컬 화면 파일 없음 — 웹 단계에서 넣음</h1>
+<h1>노트북 화면 파일 없음 — 웹 단계에서 넣음</h1>
 <p><a href="/api/v1/hello">/api/v1/hello</a></p>
 </body></html>
 """
@@ -64,12 +64,12 @@ def _dumps(obj: Any) -> bytes:
 
 class _Server(ExclusiveHTTPServer):
     """윈도우 SO_EXCLUSIVEADDRUSE·SO_REUSEADDR 끔(같은 포트 두 번 바인드 막기) — 공용 v2/common/netbind(D428)."""
-    name = "로컬 화면 서버"
+    name = "노트북 화면 서버"
 
 
 def bind_socket(port: int) -> socket.socket:
     """한 번만 실행 — 127.0.0.1:port 를 잡아 listen 한 소켓(실패 = PortBusy(OSError), 이미 실행 중). LocalServer(sock=) 가 이어받는다."""
-    return listen_socket(HOST, int(port), 16, name="로컬 화면 서버")
+    return listen_socket(HOST, int(port), 16, name="노트북 화면 서버")
 
 
 class LocalServer:

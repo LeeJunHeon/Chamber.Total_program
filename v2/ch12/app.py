@@ -63,7 +63,7 @@ DEFAULT_CONFIG_DIR = r"C:\CH12_v2\config"
 LOG_MAX_BYTES = 5_000_000
 LOG_BACKUPS = 10
 EXIT_OK, EXIT_CONFIG, EXIT_RUNNING, EXIT_START = 0, 2, 3, 4
-REFUSE_BUSY = "공정 중 — 로컬 화면·웹에서 STOP 먼저"
+REFUSE_BUSY = "공정 중 — 노트북 화면·웹에서 STOP 먼저"
 CLOSE_LINE = "정상 종료. 이 창을 닫아도 됩니다"        # 끝 줄(종료 코드 0) — sim cmd 는 새 cmd /k 창이라 창이 남는다(D430)
 RUNNING_LINE = "실행 중 — 멈추려면 Ctrl+C"
 SIM_ID_SUFFIX = "-SIM"               # UPLINK_IN_SIM 일 때 장비 ID 끝
@@ -277,7 +277,7 @@ class App:
         return iso + [f"챔버12 v2 — 모드 {mode.value} · 장비 {c['EQUIPMENT_ID']} · 버전 {self.version}",
                 f"설정 버전 {st.version}({st.source}) · 설정 폴더 {self.config_dir}",
                 f"1초 기록 {self.data_dir} · 로그 {self.data_dir / 'logs'} · v1 기록 {c['LOG_ROOT_DIR']} · NAS 사본 {nas}",
-                f"로컬 화면 http://127.0.0.1:{c['LOCAL_HMI_PORT']}/ · 화면 파일 {self.hmi_dir}",
+                f"노트북 화면 http://127.0.0.1:{c['LOCAL_HMI_PORT']}/ · 화면 파일 {self.hmi_dir}",
                 f"웹 연결 {self._uplink_line()}"]
 
     def _uplink_line(self) -> str:

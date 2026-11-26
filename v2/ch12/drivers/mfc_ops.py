@@ -270,27 +270,45 @@ def zeroing(d, ch: Optional[int], owner):
 
 
 def zeroing_guarded(d, ch: Optional[int], owner):
-    """영점 보호(W-21·22 대조 C — 챔버K 실장비 시험): 영점(Z1·L{4+ch}1)을 보내기 전에 그 챔버에서 모든 채널 유량 꺼짐(R69)·MFC 밸브 열림(R6)이
-    ZERO_MIN_IDLE_SEC 이상 · PLC 가스 밸브 닫힘(d.zero_check). 조건은 맞는데 시간만 모자라면 남은 만큼 기다렸다(Sleep — 다른 명령은 막지 않음)
-    다시 보고 보낸다(11). 다른 조건이 안 맞거나 기다린 뒤에도 안 되면 그 영점만 건너뛰고 경고(zero_skipped — 걸린 조건)를 남긴다 — 공정은
-    계속(command_confirmed). 기다리는 동안 대기열 폐기(정지)가 오면 보내지 않는다(PURGED). 공정 밖에서 부르는 길도 같은 함수."""
+    """영점 보호(W-21·22 대조 C·H2 — 챔버K W-23 과 같게): 영점(Z1·L{4+ch}1)을 보내기 전에 그 챔버에서 모든 채널 유량 꺼짐(R69)·MFC 밸브
+    열림(R6)이 ZERO_MIN_IDLE_SEC 이상 · PLC 가스 밸브 닫힘(d.zero_check). 시간만 모자라면 남은 만큼 기다렸다 보낸다(11). 다른 조건이 안 맞거나
+    상태를 모르면 바로 건너뛰지 않고 ZERO_WAIT_MAX_SEC(30 s)까지 1 s 마다 다시 보고(Sleep — 다른 명령은 막지 않음), 그래도 안 되면 그 영점만
+    건너뛰고 걸린 조건을 경고(zero_skipped)로 남긴다 — 공정은 계속(command_confirmed). 한도를 넘긴 블록의 다음 영점은 다시 기다리지 않는다
+    (d.zero_gaveup — 다음 블록의 FLOW_OFF·밸브 명령·대기열 폐기에서 풀림, 경고도 블록당 한 번). 기다리는 동안 대기열 폐기(정지)가 오면 보내지
+    않는다(PURGED). 조건이 이미 맞으면 기다리지 않는다. 공정 밖에서 부르는 길도 같은 함수."""
     what = "압력 센서 영점" if ch is None else f"Ch{ch}({ {1: 'Ar', 2: 'O2', 3: 'N2'}.get(ch, ch)}) 영점"
     key = "PS_ZEROING" if ch is None else "MFC_ZEROING"
     epoch = d.zero_epoch
-    for attempt in (0, 1):
-        verdict, left, why = d.zero_check(d.clock.monotonic())
+    lim = max(0.0, float(d.c("ZERO_WAIT_MAX_SEC", 30.0) or 0.0))
+    t0 = d.clock.monotonic()
+    told = False
+    while True:
+        now = d.clock.monotonic()
+        verdict, left, why = d.zero_check(now)
         if verdict == "ok":
             break
-        if verdict == "wait" and attempt == 0:
-            d.status(f"[ZERO_WAIT] {what} 전 {left:.1f} s 더 기다림({why})")
-            d.emit("zero_wait", f"{what} · {left:.0f} s · {why}", cmd=key, owner=owner, channel=ch, value=round(left, 1))
-            yield Sleep(left + 0.05)
-            if d.zero_epoch != epoch or d.shutdown:
-                raise OpFailed("PURGED", "전송 전에 대기열에서 폐기됨(정지)")
-            continue
-        d.status(f"[ZERO_SKIPPED] {what} 건너뜀 — {why}")
-        d.emit("zero_skipped", f"{what} · {why}", cmd=key, owner=owner, channel=ch, level="warn")     # 화면 줄: MFC | 영점 건너뜀 | 이 글
-        return None
+        if verdict == "skip" and (d.zero_gaveup == epoch or now - t0 >= lim - 1e-6):
+            if d.zero_gaveup == epoch:                       # 이 블록은 이미 한도를 넘김 — 다시 기다리지·경고하지 않는다
+                d.status(f"[ZERO_SKIPPED] {what} 건너뜀 — {why}(이 블록은 이미 대기 한도를 넘김)")
+                return None
+            d.zero_gaveup = epoch
+            d.status(f"[ZERO_SKIPPED] {what} 건너뜀 — {why}({now - t0:.0f} s 기다림)")
+            d.emit("zero_skipped", f"{what} · {why}", cmd=key, owner=owner, channel=ch, level="warn")     # 화면 줄: MFC | 영점 건너뜀 | 이 글
+            return None
+        if verdict == "wait":
+            nap = left + 0.05
+            if not told:
+                d.status(f"[ZERO_WAIT] {what} 전 {left:.1f} s 더 기다림({why})")
+                d.emit("zero_wait", f"{what} · {left:.0f} s · {why}", cmd=key, owner=owner, channel=ch, value=round(left, 1))
+        else:
+            nap = max(0.05, min(1.0, lim - (now - t0) + 0.05))
+            if not told:
+                d.status(f"[ZERO_WAIT] {what} 전 조건 기다림(최대 {lim:g} s — {why})")
+                d.emit("zero_wait", f"{what} · 최대 {lim:g} s · {why}", cmd=key, owner=owner, channel=ch, value=round(lim, 1))
+        told = True
+        yield Sleep(nap)
+        if d.zero_epoch != epoch or d.shutdown:
+            raise OpFailed("PURGED", "전송 전에 대기열에서 폐기됨(정지)")
     yield from zeroing(d, ch, owner)
 
 

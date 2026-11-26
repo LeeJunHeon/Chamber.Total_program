@@ -86,6 +86,8 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
      S38 PLC 재연결 뒤 남은 파워 정리, params PLC_COMM_LOSS_ABORT_SEC(15 s)·MFC_COMM_LOSS_ABORT_SEC(30 s), 사유 PLC_COMM_LOST·MFC_COMM_LOSS
      (safety fired S37 warn 한 번 · run_end 사유). 아래 줄(G·H)이 같은 판에 더해진다.
      G: 윈도우 절전 막기 — params KEEP_AWAKE(always·run·off, 기본 always), eventKinds selfwatch/keep_awake_on·keep_awake_off(상세).
+     H: snapshot {ch2,pc}.rf.cmd_on — 래치를 못 읽은 tick(명령 양보)은 마지막 래치 값을 3 s 까지, 명령으로 끈 뒤 5 s 는 uncommanded 아님
+     (A/D 가 내려가는 중), params ZERO_WAIT_MAX_SEC(영점 조건 기다림 한도 30 s — mfc/zero_wait·zero_skipped 그대로).
 """
 from __future__ import annotations
 

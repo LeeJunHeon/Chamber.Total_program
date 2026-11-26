@@ -170,9 +170,9 @@ def test_stream_backlog_live_resume_keepalive_and_limit(env):
 def test_static_files_and_empty_page(env):
     r, srv, static = env
     code, ctype, raw = _req(srv, "GET", "/")
-    assert code == 200 and "로컬 화면 파일 없음" in raw.decode() and ctype.startswith("text/html")
+    assert code == 200 and "노트북 화면 파일 없음" in raw.decode() and ctype.startswith("text/html")
     (static / ".gitkeep").write_text("")
-    assert "로컬 화면 파일 없음" in _req(srv, "GET", "/index.html")[2].decode()
+    assert "노트북 화면 파일 없음" in _req(srv, "GET", "/index.html")[2].decode()
     (static / "index.html").write_text("<h1>CH12</h1>", encoding="utf-8")
     (static / "app").mkdir()
     (static / "app" / "x.js").write_text("let a=1", encoding="utf-8")

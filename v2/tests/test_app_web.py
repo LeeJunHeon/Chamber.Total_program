@@ -111,7 +111,7 @@ def test_process_sim_uplink_hello_state_command_round_trip(tmp_path):
         assert code == 200 and lh["instance"] == h["instance"] and lh["webSchemaHash"] == h["webSchemaHash"]
         code, raw = _get(port, "/api/v1/schema")
         assert code == 200 and json.loads(raw)["hash"] == h["webSchemaHash"]
-        assert b"\xeb\xa1\x9c\xec\xbb\xac" in _get(port, "/")[1]                     # "로컬" — 빈 화면 폴더 안내 페이지
+        assert "노트북 화면".encode() in _get(port, "/")[1]                    # 빈 화면 폴더 안내 페이지(H3)
         code, out = _post(port, "/api/v1/command", {"id": "l-1", "kind": "PROCESS_STOP"})
         assert code == 200 and out["id"] == "l-1" and set(out) == {"id", "ok", "reason", "detail"}
         assert web.wait(lambda: [m for m in web.messages("cmd_result") if m["data"]["cmdId"] == "l-1"], 10)

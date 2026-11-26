@@ -245,12 +245,17 @@ def test_cmd_on_and_uncommanded_fields_and_events():
             r.c, r.d, r.cfg, True, r.pevents.append, mode="pc")
         b = "ch2.rf" if mode == "ch2" else "pc.rf"
         raw_noise = 0                                                     # A/D 0 → 보정식 오프셋만(CH2 0 W, PC 3.1−4 → 0)
-        def dec(latch, f_raw):
+        t = [100.0]
+
+        def dec(latch, f_raw, dt=1.0):
+            t[0] += dt
             regs = {fr: f_raw, fr + 1: 0}
-            return ctl._decode(PlcPoll(0.0, r.c.monotonic(), {} if latch is None else {coil: latch}, regs, {}))
+            return ctl._decode(PlcPoll(0.0, t[0], {} if latch is None else {coil: latch}, regs, {}))
         o = dec(False, raw_noise)
         assert o[f"{b}.cmd_on"] is False and o[f"{b}.uncommanded"] is False
-        o = dec(None, raw_noise)                                           # 래치를 못 읽음 → 모름
+        o = dec(None, raw_noise, dt=3.0)                                   # 양보한 tick(래치 못 읽음) — 3 s 까지 마지막 값(H1)
+        assert o[f"{b}.cmd_on"] is False and o[f"{b}.enable"] is None
+        o = dec(None, raw_noise, dt=0.5)                                   # 3 s 넘게 모름 → 모름
         assert o[f"{b}.cmd_on"] is None and o[f"{b}.uncommanded"] is None
         o = dec(True, raw_noise)                                           # 다시 시작 직후 — 쓰기값 모름 + 래치 켜짐 → 명령 출력으로 봄
         assert ctl.last_sent is None and o[f"{b}.cmd_on"] is True and o[f"{b}.uncommanded"] is False
@@ -258,11 +263,14 @@ def test_cmd_on_and_uncommanded_fields_and_events():
         assert dec(True, raw_noise)[f"{b}.cmd_on"] is False
         ctl.last_sent = 50.0
         assert dec(True, raw_noise)[f"{b}.cmd_on"] is True
+        assert dec(None, raw_noise)[f"{b}.cmd_on"] is True                # 공정 중 양보한 tick 도 켜짐 그대로(깜빡이지 않음)
         ctl.last_sent = None
         f_hi = 400 if mode == "ch2" else 300                               # 명령 없이 Forward ≥ 5 W(CH2 59.6 W, PC 44.2 W)
         n0 = len(r.pevents)
+        o = dec(False, f_hi)                                               # 명령으로 끈 직후(5 s 안) — 내려가는 중, 경고 없음
+        assert o[f"{b}.cmd_on"] is False and o[f"{b}.uncommanded"] is False
         for _ in range(3):
-            o = dec(False, f_hi)
+            o = dec(False, f_hi, dt=2.0)
         assert o[f"{b}.uncommanded"] is True and o[f"{b}.fwd_w"] >= 5.0
         for _ in range(2):
             o = dec(False, raw_noise)

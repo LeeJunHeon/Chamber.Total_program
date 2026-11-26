@@ -225,6 +225,7 @@ class MfcDriver:
         self.zero_valve_since: Optional[float] = None
         self.zero_plc: Optional[Callable[[], Tuple[Optional[bool], str]]] = None   # 조립이 넣음 — (PLC 가스 밸브 모두 닫힘?, 열린 것 이름)
         self.zero_epoch = 0                                       # 대기열 폐기(정지)마다 +1 — 기다리던 영점은 보내지 않음
+        self.zero_gaveup: Optional[int] = None                    # H2 — 대기 한도를 넘긴 블록(그때 zero_epoch). 다음 FLOW_OFF·밸브 명령에서 풀림
         worker.on_connect = self._on_connect
 
     # ───────── 설정 ─────────
@@ -622,6 +623,7 @@ class MfcDriver:
 
     def flow_off(self, channel: int, owner: Optional[str] = None, on_done=None) -> None:
         ch = int(channel)
+        self.zero_gaveup = None                                   # 새 블록(gas_prep 첫 단계) — 영점 대기 한도를 다시 센다(H2)
         was_off = self.zero_flow.get(ch) is False and self.zero_off_since.get(ch) is not None
 
         def done(key, reason, detail):
@@ -655,9 +657,11 @@ class MfcDriver:
         self.flow_off(self._require_selected(), owner, on_done)
 
     def valve_open(self, owner: Optional[str] = None, on_done=None) -> None:
+        self.zero_gaveup = None
         self._run("VALVE_OPEN", mfc_ops.valve(self, "VALVE_OPEN", owner), on_done, owner)
 
     def valve_close(self, owner: Optional[str] = None, on_done=None) -> None:
+        self.zero_gaveup = None
         self._run("VALVE_CLOSE", mfc_ops.valve(self, "VALVE_CLOSE", owner), on_done, owner)
 
     def sp_set(self, n: int, ui_value: float, owner: Optional[str] = None, on_done=None) -> None:

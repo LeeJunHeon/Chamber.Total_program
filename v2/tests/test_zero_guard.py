@@ -1,7 +1,8 @@
 """영점 보호(W-21·22 대조 C — 챔버K 실장비 시험 2026-11-25, 추가 지시 10·11).
 
 압력 센서·MFC 영점(Z1·L{4+ch}1)을 보내기 전에 그 챔버에서 모든 채널 유량 꺼짐(R69)·MFC 밸브 열림(R6)이 ZERO_MIN_IDLE_SEC(10 s) 이상 ·
-PLC 가스 밸브(Ar·O₂·N₂·Main 가스) 닫힘. 시간만 모자라면 남은 만큼 기다렸다 보내고(11), 다른 조건이면 걸린 조건을 적어 건너뛴다(공정은 계속).
+PLC 가스 밸브(Ar·O₂·N₂·Main 가스) 닫힘. 시간만 모자라면 남은 만큼 기다렸다 보내고(11), 다른 조건이 안 맞거나 상태를 모르면
+ZERO_WAIT_MAX_SEC(30 s)까지 기다렸다가 그래도 안 되면 걸린 조건을 적어 건너뛴다(H2 — 공정은 계속, 그 블록의 다음 영점은 다시 기다리지 않음).
 이미 꺼진 채널에 끄기(FLOW_OFF)를 다시 보내도 시간을 다시 세지 않는다(10). 기다리는 동안 대기열 폐기(정지)가 오면 보내지 않는다.
 드라이버 시험대는 test_mfc.Rig(가상 시계 + MFC 시뮬레이터, 1초 읽기 TickLoop) — zero_ready=False 로 조건을 실제 읽기에서 만든다.
 """
@@ -59,25 +60,66 @@ def test_zero_waits_only_for_missing_time_after_valve_reopen():
     r.done()
 
 
-def test_zero_skipped_names_actual_condition_flow_on_and_plc_open():
+def test_zero_waits_up_to_limit_then_skips_naming_condition_and_rest_of_block_does_not_wait():
+    """H2 — 조건이 안 맞으면 ZERO_WAIT_MAX_SEC(30 s)까지 기다렸다 건너뛰고 걸린 조건을 경고. 한도를 넘긴 블록의 다음 영점은 다시 기다리지 않는다."""
     r = _rig()
     _bus_run(r, 15)
     r.call(r.d.flow_on, 1)
     _bus_run(r, 7)                                                            # R69 를 다시 읽어 Ar 켜짐
     res, took, sent = _zero(r, r.d.ps_zeroing)
-    assert res[1] is None and "Z1" not in sent and took < 2.0                 # 건너뜀 — 공정은 계속(확인 사건)
-    s = r.kinds("zero_skipped")
+    assert res[1] is None and "Z1" not in sent and 29.0 <= took <= 32.0        # 30 s 기다린 뒤 건너뜀 — 공정은 계속(확인 사건)
+    s, w = r.kinds("zero_skipped"), r.kinds("zero_wait")
     assert len(s) == 1 and s[0].level == "warn" and "Ar 유량 켜짐" in s[0].detail and "압력 센서 영점" in s[0].detail
-    r.call(r.d.flow_off, 1)
+    assert len(w) == 1 and "최대 30 s" in w[0].detail
+    res, took, sent = _zero(r, r.d.mfc_zeroing, 1)                            # 같은 블록 — 기다리지 않고 건너뜀, 경고도 한 번뿐
+    assert "L51" not in sent and took < 2.0 and len(r.kinds("zero_skipped")) == 1 and len(r.kinds("zero_wait")) == 1
+    r.call(r.d.flow_off, 1)                                                   # 다음 블록(gas_prep 은 FLOW_OFF 로 시작)
     _bus_run(r, 12)
     r.d.zero_plc = lambda: (False, "Ar 밸브·Main 가스")
-    res, _t, sent = _zero(r, r.d.mfc_zeroing, 1)
+    res, took, sent = _zero(r, r.d.mfc_zeroing, 1)
     s = r.kinds("zero_skipped")
-    assert "L51" not in sent and len(s) == 2 and "PLC 가스 밸브 열림: Ar 밸브·Main 가스" in s[1].detail
+    assert "L51" not in sent and len(s) == 2 and "PLC 가스 밸브 열림: Ar 밸브·Main 가스" in s[1].detail and took >= 29.0
     assert "유량" not in s[1].detail                                           # 실제로 걸린 조건만
+    r.call(r.d.valve_open)
     r.d.zero_plc = lambda: (None, "")
     _zero(r, r.d.ps_zeroing)
     assert "PLC 가스 밸브 상태 모름" in r.kinds("zero_skipped")[-1].detail
+    r.done()
+
+
+def test_zero_condition_met_while_waiting_sends():
+    """H2 — 상태를 모르거나 안 맞아도 바로 건너뛰지 않는다: 기다리는 동안 맞으면 보낸다(건너뜀 없음)."""
+    r = _rig()
+    _bus_run(r, 15)
+    t_close = r.c.monotonic() + 8.0
+    r.d.zero_plc = lambda: (True, "") if r.c.monotonic() >= t_close else (None, "")
+    res, took, sent = _zero(r, r.d.ps_zeroing)
+    assert res[1] is None and "Z1" in sent and 7.0 <= took <= 10.0 and not r.kinds("zero_skipped")
+    assert len(r.kinds("zero_wait")) == 1
+    r.done()
+
+
+def test_stop_while_waiting_for_condition_does_not_send():
+    r = _rig()
+    _bus_run(r, 15)
+    r.d.zero_plc = lambda: (False, "Ar 밸브")
+    box = []
+    t0 = r.c.monotonic()
+    r.d.ps_zeroing(on_done=lambda k, rs, t: box.append((k, rs, t)))
+    r.c.wait_until(t0 + 3.0)
+    assert r.kinds("zero_wait") and not box
+    r.d.on_process_finished(False, reason="STOP")                             # 정지 — 대기열 폐기, 바로 듣는다
+    r.c.wait_until(t0 + 6.0)
+    assert box and box[0][1] == "PURGED" and "Z1" not in r.sent(t0) and not r.kinds("zero_skipped")
+    r.done()
+
+
+def test_zero_wait_max_zero_skips_at_once():
+    r = _rig(ZERO_WAIT_MAX_SEC=0.0)
+    _bus_run(r, 15)
+    r.d.zero_plc = lambda: (False, "Ar 밸브")
+    res, took, sent = _zero(r, r.d.ps_zeroing)
+    assert "Z1" not in sent and took < 2.0 and len(r.kinds("zero_skipped")) == 1
     r.done()
 
 
