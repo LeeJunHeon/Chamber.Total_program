@@ -32,7 +32,7 @@ PARAMS: tuple = (
       desc="하트비트 실패 뒤 conn_change(끊김) 를 내기까지. 0 = 첫 실패 즉시"),
     p("PLC_COMM_LOSS_ABORT_SEC", _G, "PLC 통신 끊김 공정 중단", "s", F, 15.0, 0.0, 60.0, safety=H,
       src="v2(F 통신 끊김 중단 — 사용자 결정 2026-11-26, v1 에 없음 · 규칙 S37)",
-      desc="공정이 전원을 켠 뒤 PLC 가 이 시간 넘게 읽히지 않으면 그 챔버 공정과 Plasma Cleaning 을 멈춥니다. 0 = 끔"),
+      desc="공정이 전원을 켠 뒤 PLC 가 이 시간 넘게 읽히지 않으면 그 챔버 공정과 Plasma Cleaning 을 멈춥니다. 0 이면 쓰지 않습니다"),
     inst("PLC_WATCHDOG_INTERVAL_S", _G, "PLC 하트비트 기준 주기", F, 8.0, 1.0, 60.0, unit="s",
          src="lib/config_common.py:621 · device/plc.py:533 · device/plc.py:1125",
          desc="실제 하트비트 주기 = max(1, 이 값 × 0.75) = 6 s(PLC FEnet 수신 타임아웃 15 s 안에 2회)"),

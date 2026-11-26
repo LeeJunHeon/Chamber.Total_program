@@ -241,7 +241,7 @@ class Ch12Safety:
             code, dev, secs, lim = hit
             self._comm_fired[key] = code
             who = "Plasma Cleaning" if key == "pc" else key.upper()
-            detail = f"{who} — {dev} 가 {secs:.0f} s 동안 읽히지 않아 공정을 멈춥니다(기준 {lim:g} s)"
+            detail = f"{who} · {dev} 가 {secs:.0f} s 동안 읽히지 않아 공정을 멈춥니다(기준 {lim:g} s)"
             self._emit("fired", "S37", code, detail, "warn")
             try:
                 if key == "pc":
@@ -308,7 +308,7 @@ class Ch12Safety:
         if self.any_busy() or self.bench:
             return
         for name, drv, kind, txt, fwd in self.residual_found(view):
-            self._emit("fired", "S38", "RESIDUAL_POWER_OFF", f"PLC 재연결 뒤 {name} 출력이 남아 있음({txt}) — 파워만 끔", "warn")
+            self._emit("fired", "S38", "RESIDUAL_POWER_OFF", f"PLC 재연결 뒤 {name} 출력이 남아 있어 파워만 끕니다({txt})", "warn")
             self._residual_off("S38", name, drv, kind, fwd)
 
     # ───────── S32 의도적 종료 — 파워 출력만 ─────────

@@ -67,7 +67,7 @@ PARAMS: tuple = (
        apply=LIVE, desc="영점 조건이 될 때까지 기다리는 가장 긴 시간입니다. 넘으면 그 영점만 건너뛰고 걸린 조건을 경고로 남긴 뒤 공정을 이어 갑니다."),
     _m("MFC_COMM_LOSS_ABORT_SEC", "MFC 통신 끊김 공정 중단", "s", F, 30.0, 0.0, 120.0, safety=H,
        src="v2(F 통신 끊김 중단 — 사용자 결정 2026-11-26, v1 에 없음 · 규칙 S37)",
-       desc="공정이 전원을 켠 뒤 그 챔버 MFC 가 이 시간 넘게 읽히지 않으면 공정을 멈춥니다. 0 = 끔"),
+       desc="공정이 전원을 켠 뒤 그 챔버 MFC 가 이 시간 넘게 읽히지 않으면 공정을 멈춥니다. 0 이면 쓰지 않습니다"),
     _m("MFC_READ_MODE", "MFC 1초 읽기 방식", "", E, "split",
        src="v2(사용자 결정 2026-11-13 D407 — D405 개정)", apply=IDLE,
        desc="split(기본) = MFC_TICK_EVERY 는 매 tick, MFC_TICK_ROTATE 는 tick 마다 1개씩 차례로. all = 9개(R60·R5·R6·R69·R1~R4·R7)를 매 tick 전부(2026-11-09 E1 — 1초 예산 위험, bench 로 확인)",
