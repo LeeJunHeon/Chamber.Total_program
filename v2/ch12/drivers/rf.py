@@ -149,13 +149,13 @@ class RfPower:
         th, wait_to = self.c("RF_REFLECTED_THRESHOLD_W"), self.c("RF_REFLECTED_WAIT_TIMEOUT_S")
         ref = round(float(self.reflected_w or 0.0), 1)
         if phase == "start":
-            text = f"RF Reflected {ref:g} W 가 기준 {th:g} W 를 넘어 대기 시작(최대 {int(wait_to)} s)"
+            text = f"{ref:g} W 가 기준 {th:g} W 를 넘어 대기 시작 · 최대 {int(wait_to)} s"     # 화면 줄: RF Power | Reflected 대기 | 이 글
             data = dict(phase="start", ref_w=ref, threshold=th, max_s=wait_to)
             self.on_event(PowerEvent("ref_wait", text, None, None, dict(data, mode=self.mode), level="warn"))
             return
         st = self.ref_wait_start
         waited = None if st is None else round(max(0.0, self._mono() - st), 1)
-        text = f"RF Reflected 대기 끝 · {why}" + (f"({ref:g} W, {waited:g} s)" if waited is not None else "")
+        text = f"끝 · {why} · {ref:g} W" + (f" · {waited:g} s 대기" if waited is not None else "")
         data = dict(phase="end", why=why, ref_w=ref, waited_s=waited)
         self.on_event(PowerEvent("ref_wait", text, None, None, dict(data, mode=self.mode),
                                  level="warn" if why == "시간 초과" else "info"))
@@ -360,12 +360,12 @@ class RfPower:
         if unc is None or bool(unc) == self._uncmd or not self.on_event:
             return
         self._uncmd = bool(unc)
-        name = "Plasma Cleaning RF" if self.mode == "pc" else "RF Power"
+        pre = "Plasma Cleaning · " if self.mode == "pc" else ""          # 화면 줄: RF Power | 명령 없는 RF 출력 | 이 글(같은 말 반복 없이)
         if unc:
-            self.on_event(PowerEvent("rf_uncommanded", f"{name} 가 명령 없이 출력 중 · Forward {fwd:g} W(기준 {th:g} W) — RF 전원 앞면(LOCAL)에서 켰는지 확인",
+            self.on_event(PowerEvent("rf_uncommanded", f"{pre}Forward {fwd:g} W · 기준 {th:g} W — 전원 장치 앞면(LOCAL)에서 켰는지 확인",
                                      None, None, dict(forward=fwd, threshold=th, mode=self.mode), level="warn"))
         else:
-            self.on_event(PowerEvent("rf_uncommanded_end", f"{name} 명령 없는 출력 끝 · Forward {fwd:g} W", None, None,
+            self.on_event(PowerEvent("rf_uncommanded_end", f"{pre}Forward {fwd:g} W", None, None,
                                      dict(forward=fwd, mode=self.mode), level="info"))
 
     def _mono(self) -> float:

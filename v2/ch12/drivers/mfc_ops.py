@@ -283,13 +283,13 @@ def zeroing_guarded(d, ch: Optional[int], owner):
             break
         if verdict == "wait" and attempt == 0:
             d.status(f"[ZERO_WAIT] {what} 전 {left:.1f} s 더 기다림({why})")
-            d.emit("zero_wait", f"{what} 전 {left:.0f} s 기다림 — {why}", cmd=key, owner=owner, channel=ch, value=round(left, 1))
+            d.emit("zero_wait", f"{what} · {left:.0f} s · {why}", cmd=key, owner=owner, channel=ch, value=round(left, 1))
             yield Sleep(left + 0.05)
             if d.zero_epoch != epoch or d.shutdown:
                 raise OpFailed("PURGED", "전송 전에 대기열에서 폐기됨(정지)")
             continue
         d.status(f"[ZERO_SKIPPED] {what} 건너뜀 — {why}")
-        d.emit("zero_skipped", f"{what} 건너뜀 — {why}", cmd=key, owner=owner, channel=ch, level="warn")
+        d.emit("zero_skipped", f"{what} · {why}", cmd=key, owner=owner, channel=ch, level="warn")     # 화면 줄: MFC | 영점 건너뜀 | 이 글
         return None
     yield from zeroing(d, ch, owner)
 

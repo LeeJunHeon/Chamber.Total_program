@@ -269,5 +269,5 @@ def test_cmd_on_and_uncommanded_fields_and_events():
         assert o[f"{b}.uncommanded"] is False
         ev = [e for e in r.pevents[n0:] if e.kind.startswith("rf_uncommanded")]
         assert [e.kind for e in ev] == ["rf_uncommanded", "rf_uncommanded_end"] and ev[0].level == "warn" and ev[1].level == "info"
-        assert "RF 전원 앞면(LOCAL)" in ev[0].detail
+        assert "전원 장치 앞면(LOCAL)" in ev[0].detail and "RF" not in ev[0].detail        # 화면 줄 출처·이름과 같은 말 없이
         r.done()

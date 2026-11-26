@@ -158,19 +158,19 @@ ITEMS = [
          desc="방송 로그(_broadcast_log): SYSTEM 일자 로그 + 시스템 로그(레벨 판정 classify_log_level(출처, 본문), WARNING 이상만 '[src] msg') + "
               "CH1·CH2·PC 로그창 모두",
          v1="main.py:767-805",
-         v2="v2/ch12/outputs/system_log.py; v2/ch12/outputs/app_log.py; v2/ch12/hub.py", test="v2/tests/test_outputs_text.py::test_system_log_golden; v2/tests/test_outputs_text.py::test_app_log_golden; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-log", status="done",
+         v2="v2/ch12/outputs/system_log.py; v2/ch12/outputs/app_log.py; v2/ch12/hub.py", test="v2/tests/test_outputs_text.py::test_system_log_golden; v2/tests/test_outputs_text.py::test_app_log_golden; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:run-alerts", status="done",
          note="SYSTEM 일자 로그·ERROR 로그(WARNING 이상 classify_log_level), 화면은 공유(shared) 사건 로그"),
     dict(id="UI-020", area="ui",
          desc="챔버 로그창 줄 형식 화면 '[HH:MM:SS] [CHn:src] msg', 파일 '[YYYY-MM-DD HH:MM:SS] [CHn:src] msg'. 공정 로그 파일이 없으면 프리스타트 버퍼"
               "(최대 1000줄)와 SYSTEM 일자 로그에 남김",
          v1="runtime/chamber_runtime.py:7186-7202; runtime/chamber_runtime.py:562",
-         v2="v2/ch12/outputs/process_txt.py; vanam-process components/ops2/ch12/Ch12Run.tsx", test="v2/tests/test_outputs_text.py::test_process_txt_golden; v2/tests/test_outputs_text.py::test_process_txt_fallback_and_rules; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-log", status="done",
+         v2="v2/ch12/outputs/process_txt.py; vanam-process components/ops2/ch12/Ch12Run.tsx", test="v2/tests/test_outputs_text.py::test_process_txt_golden; v2/tests/test_outputs_text.py::test_process_txt_fallback_and_rules; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:run-alerts", status="done",
          note="log 영역과 겹침(파일 쪽) / 파일 줄 형식은 process_txt(v1 바이트 같음), 화면 줄은 장비 시각+종류+글(포털 EventFeed)"),
     dict(id="UI-021", area="ui",
          desc="챔버 로그창 갱신: QTimer 100 ms 마다 버퍼(deque 최대 5000, 넘치면 오래된 것 버림)에서 최대 200줄씩 한 번에 붙인다. 창 최대 2000줄, Undo 끔. "
               "사용자가 바닥(최대값-2 이내)을 보고 있을 때만 바닥으로 자동 스크롤, 아니면 스크롤 위치 유지",
          v1="runtime/chamber_runtime.py:581-598; runtime/chamber_runtime.py:3331-3332; runtime/chamber_runtime.py:7226-7308",
-         v2="vanam-process components/ops2/ch12/Ch12Run.tsx; vanam-process components/ops2/chk/Chk2Logs.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-log", status="done",
+         v2="vanam-process components/ops2/ch12/Ch12Run.tsx; vanam-process components/ops2/chk/Chk2Logs.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:run-alerts", status="done",
          note="포털 EventFeed — 최근 사건 FEED_KEEP 개, 바닥을 보고 있을 때만 자동 스크롤(stick). 100 ms 묶음·5000/2000 줄 수치는 화면 부품 몫(X12) — 자동 스크롤은 DOM 동작이라 렌더 확인만"),
     dict(id="UI-022", area="ui",
          desc="화면 전용 로그(append_side_log): 화면과 SYSTEM 일자 로그에만, 공정 로그 파일·프리스타트 버퍼에는 넣지 않음(두께 모니터 연결·오류 문구용)",
@@ -185,7 +185,7 @@ ITEMS = [
     dict(id="UI-024", area="ui",
          desc="PC 페이지 로그창(pc_logMessage_edit) 붙이기: 다른 스레드/루프에서 오면 루프 스레드로 넘김, 바닥을 보고 있을 때만 자동 스크롤(0 ms 뒤 재보정, 중복 예약 방지)",
          v1="main.py:1979-2045",
-         v2="vanam-process components/ops2/ch12/Ch12Aux.tsx; vanam-process components/ops2/chk/Chk2Logs.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:pc-panel; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-log", status="done",
+         v2="vanam-process components/ops2/ch12/Ch12Aux.tsx; vanam-process components/ops2/chk/Chk2Logs.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:pc-panel; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:run-alerts", status="done",
          note="PC 사건은 chamber pc(공유 로그) — 자동 스크롤 규칙은 EventFeed stick"),
 
     # ───────────────────────────── 창·페이지·공통 위젯 ─────────────────────────────
@@ -918,14 +918,14 @@ ITEMS = [
               "펄스 파워·'RF/DC Pulse Freq [kHz]'·'Duty [%] / Off Time [µs]', Shutter Delay [min], Dep.Rate[nm/s], Thickness[nm], Process Time [min], For.P/Ref.P/Power/Voltage/Current "
               "읽기 전용, Process List 'Select File', START/STOP, 상태칸(230,0,841×61), RGA(230,90,841×311)·OES(230,420,841×351) 그래프, 로그창(230,800,841×200)",
          v1="ui/main_window.py:295-538; ui/main_window.py:945-978",
-         v2="vanam-process components/ops2/ch12/Ch12Run.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-running; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-values; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-log", status="done",
+         v2="vanam-process components/ops2/ch12/Ch12Run.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-running; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-values; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:run-alerts", status="done",
          note="CH1 페이지 위젯 → 포털 챔버 칸(값·조작·로그). 그래프는 UI-097·098 결정 후보"),
     dict(id="UI-141", area="ui",
          desc="CH2 페이지 위젯: 'CH.2 Sputtering', Base Pressure, Process Name, M.S. Open, P.W. Select, G1/G2/G3 체크·타겟명 3칸, Ar/O2/N2 체크·유량, Working Pressure, RF/DC Pulse 라디오·"
               "공유 펄스 칸 3개, DC1/DC2/RF 체크·파워 칸, Shutter Delay, Dep.Rate, Thickness, Process Time, For.P/Ref.P/Power/Voltage/Current 읽기 전용, Select File, START/STOP, 상태칸, "
               "그래프 2개, 로그창",
          v1="ui/main_window.py:540-785; ui/main_window.py:979-1019",
-         v2="vanam-process components/ops2/ch12/Ch12Run.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-idle; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-values; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-log", status="done",
+         v2="vanam-process components/ops2/ch12/Ch12Run.tsx", test="vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-idle; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:chamber-values; vanam-process/scripts/ops2-ch12-ui-check.mjs::ui:run-alerts", status="done",
          note="CH2 페이지 위젯 → 포털 챔버 칸. 그래프는 UI-097·098 결정 후보"),
 
     # ───────────────────────────── 알려진 이상 동작(v1 그대로) ─────────────────────────────
