@@ -334,3 +334,31 @@ def test_mode_readback_comm_failure_skips_verification():
     reason, ok = r.call(r.d.start_pulse_process, 100.0, 1000, 50)
     assert ok is True
     r.done()
+
+
+def test_refp_hysteresis_w21():
+    """W-21·22 대조 A — REFP 연속 횟수는 'REFP < 한도 − 여유 폭(RFPULSE_REFP_HYST_W)' 일 때만 0, 그 사이면 그대로. 경고 풀림도 같은 여유 폭.
+    여유 폭 0 이면 v1 그대로(한도 아래면 곧바로 0 — 한도를 ±0.5 W 오가면 3회 연속이 되지 않음)."""
+    for hyst, n_fail in ((1.0, 2), (0.0, 0)):
+        r = Rig(chamber="ch2", cfg={"RFPULSE_REFP_HYST_W": hyst})
+        assert r.call(r.d.start_pulse_process, 100.0) == (None, True)
+        d = r.d
+        n0 = len([e for e in r.ev("command_failed") if e.cmd == "REFP_MONITOR"])
+        for i in range(11):                                         # 한도 20 W 를 20.5 / 19.5 로 오감(FWD 는 목표 그대로) — 5·11 번째에 3회
+            d.last_fwd, d.last_ref = 100.0, (20.5 if i % 2 == 0 else 19.5)
+            d._judge()
+        fails = [e for e in r.ev("command_failed") if e.cmd == "REFP_MONITOR"][n0:]
+        assert len(fails) == n_fail, (hyst, len(fails))
+        # 경고(CH2 5 W): 5.5 → 켜짐, 4.5(여유 폭 안) → 그대로, 3.5 → 풀림(먼저 0 W 로 경고를 풀어 둠)
+        d.last_fwd, d.last_ref = 100.0, 0.0
+        d._judge()
+        w0 = len([e for e in r.ev("status") if "REFP_WARN" in e.detail or "REFP 정상 복귀" in e.detail])
+        for ref in (5.5, 4.5, 5.5, 3.5):
+            d.last_fwd, d.last_ref = 100.0, ref
+            d._judge()
+        ws = [e.detail for e in r.ev("status") if "REFP_WARN" in e.detail or "REFP 정상 복귀" in e.detail][w0:]
+        if hyst:
+            assert len(ws) == 2 and ws[0].startswith("⚠ REFP_WARN") and ws[1].startswith("REFP 정상 복귀: REFP=3.5W")
+        else:
+            assert len(ws) == 4                                     # 켜짐·풀림·켜짐·풀림(v1)
+        r.done()

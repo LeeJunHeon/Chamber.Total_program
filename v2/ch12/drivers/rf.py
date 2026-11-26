@@ -83,6 +83,7 @@ class RfPower:
         self.blind_reach_ts: Optional[float] = None
         self.blind_start_ts: Optional[float] = None
         self.ref_wait_start: Optional[float] = None
+        self._ref_wait_open = False          # 반사파 대기 사건 시작을 냈고 끝을 아직 안 냄(W-21·22 A — 시작·끝 한 번씩)
         self.output_off_unconfirmed = False
         self.polling = True
         self._due: Optional[float] = None
@@ -135,6 +136,29 @@ class RfPower:
 
     def _status(self, msg: str) -> None:
         self._emit("status", msg)
+
+    def _ref_wait_event(self, phase: str, why: str = "") -> None:
+        """반사파 대기 웹 사건(W-21·22 A) — 대기 시작 1번·끝 1번(풀림·시간 초과·RF 끔). 공정 txt 의 v1 문구(status)와 따로."""
+        if not self.on_event:
+            return
+        th, wait_to = self.c("RF_REFLECTED_THRESHOLD_W"), self.c("RF_REFLECTED_WAIT_TIMEOUT_S")
+        ref = round(float(self.reflected_w or 0.0), 1)
+        if phase == "start":
+            text = f"RF Reflected {ref:g} W 가 기준 {th:g} W 를 넘어 대기 시작(최대 {int(wait_to)} s)"
+            data = dict(phase="start", ref_w=ref, threshold=th, max_s=wait_to)
+            self.on_event(PowerEvent("ref_wait", text, None, None, dict(data, mode=self.mode), level="warn"))
+            return
+        st = self.ref_wait_start
+        waited = None if st is None else round(max(0.0, self._mono() - st), 1)
+        text = f"RF Reflected 대기 끝 · {why}" + (f"({ref:g} W, {waited:g} s)" if waited is not None else "")
+        data = dict(phase="end", why=why, ref_w=ref, waited_s=waited)
+        self.on_event(PowerEvent("ref_wait", text, None, None, dict(data, mode=self.mode),
+                                 level="warn" if why == "시간 초과" else "info"))
+
+    def _ref_wait_end(self, why: str) -> None:
+        if self._ref_wait_open:
+            self._ref_wait_open = False
+            self._ref_wait_event("end", why)
 
     def _after(self, delay_s: float, fn: Callable[[], None]) -> None:
         """delay_s 뒤 fn — worker 큐의 빈 요청(safety)으로 시각을 맞춘다(정지 램프 간격)."""
@@ -358,20 +382,28 @@ class RfPower:
                 self.stop()
                 return
         th, wait_to = self.c("RF_REFLECTED_THRESHOLD_W"), self.c("RF_REFLECTED_WAIT_TIMEOUT_S")
+        # 여유 폭(W-21·22 A): 대기는 REF > 기준이면 시작하고 'REF ≤ 기준 − RF_REFLECTED_HYST_W' 일 때만 풀린다. 그 사이면 대기를 이어 가고
+        # 시간은 대기 시작부터 이어서 센다(기준을 오가도 시간 초과가 난다). 0 이면 v1 그대로(기준 이하면 곧바로 풀림)
+        hyst = max(0.0, float(self._g("RF_REFLECTED_HYST_W", 1.0) or 0.0))
         if self.ref_armed:
-            if self.reflected_w > th:
-                if self.state != "REF_P_WAITING":
+            waiting = self.state == "REF_P_WAITING"
+            if self.reflected_w > th or (waiting and self.reflected_w > th - hyst):
+                if not waiting:
                     self.previous_state, self.state = self.state, "REF_P_WAITING"
                     self.ref_wait_start = now
                     self._status(f"Ref.p({self.reflected_w:.1f}W) 안정화 대기 시작 (최대 {int(wait_to)}초)")
+                    self._ref_wait_open = True
+                    self._ref_wait_event("start")
                 elif now - (self.ref_wait_start or 0.0) > wait_to:
                     self._status("Ref.p 안정화 시간 초과. 즉시 중단합니다.")
+                    self._ref_wait_end("시간 초과")
                     self._emit("target_failed", f"Ref.p(REF) 안정화 시간({int(wait_to)}s) 초과: REF={self.reflected_w:.1f}W "
                                                 f"> TH={th:.1f}W", reason="RF_REF_TIMEOUT")
                     self.stop()
                 return
-            if self.state == "REF_P_WAITING":
+            if waiting:
                 self._status(f"Ref.p 안정화 완료({self.reflected_w:.1f}W). 공정 재개")
+                self._ref_wait_end("풀림")
                 self.state, self.ref_wait_start = self.previous_state, None
         if self.target_power > 0.0:
             lo, n = self.c("RF_LOW_POWER_THRESH_W"), int(self.c("RF_LOW_POWER_COUNT_MAX_N"))
@@ -461,6 +493,7 @@ class RfPower:
         if self.ramping_down and not self.running:
             return
         self._status("정지 신호 수신됨.")
+        self._ref_wait_end("RF 끔")                 # 대기 중에 멈추면 끝 사건 한 번(W-21·22 A)
         self._held = None
         self.running = False
         self._gen += 1

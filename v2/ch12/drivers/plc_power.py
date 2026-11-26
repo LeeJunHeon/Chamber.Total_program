@@ -28,6 +28,7 @@ class PowerEvent:
     reason: Optional[str] = None
     code: Optional[str] = None
     data: Dict[str, Any] = field(default_factory=dict)
+    level: Optional[str] = None          # 사건 수준(없으면 system 이 reason·kind 로 정함) — 반사파 대기 끝 '풀림' 은 info(W-21·22 A)
 
 
 def err_text(res: Result) -> str:

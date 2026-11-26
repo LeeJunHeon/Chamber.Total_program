@@ -7,7 +7,7 @@ RFPULSE_REFP_WARN_WATTS 는 CH1 0.0(꺼짐 — .py 기본값), CH2 5.0(settings.
 """
 from __future__ import annotations
 
-from ._base import B, F, H, I, L, S, Dropped, inst, p
+from ._base import B, F, H, I, L, M, S, Dropped, inst, p
 
 _G = "rfpulse"
 _CC = "lib/config_common.py"
@@ -52,6 +52,9 @@ PARAMS: tuple = (
     p("RFPULSE_FORP_CONSECUTIVE_LIMIT", _G, "Forward 이탈 연속 횟수", "회", I, 3, 1, 100, safety=H, src=f"{_CC}:438"),
     p("RFPULSE_REFP_LIMIT_WATTS", _G, "Reflected 상한", "W", F, 20.0, 0.0, 1000.0, safety=H, src=f"{_CC}:439"),
     p("RFPULSE_REFP_CONSECUTIVE_LIMIT", _G, "Reflected 초과 연속 횟수", "회", I, 3, 1, 100, safety=H, src=f"{_CC}:440"),
+    p("RFPULSE_REFP_HYST_W", _G, "Reflected 판정 여유 폭", "W", F, 1.0, 0.0, 50.0, safety=M, src="v2(W-21·22 대조 A — 챔버K 실장비 시험 2026-11-25)",
+      desc="Reflected 초과 연속 횟수는 'REFP < 상한 − 이 값' 일 때만 0 으로 돌아가고 그 사이면 그대로 둔다. Reflected 경고 풀림도 같은 여유 폭. "
+           "0 = v1 그대로(상한 아래면 곧바로 0)"),
     p("RFPULSE_REFP_WARN_WATTS", _G, "Reflected 경고(문구만, CH1)", "W", F, 0.0, 0.0, 1000.0, src=f"{_CC}:441", desc="0 = 끔"),
     p("CH2_RFPULSE_REFP_WARN_WATTS", _G, "CH2 Reflected 경고(문구만)", "W", F, 5.0, 0.0, 1000.0, src="config/settings.json:641"),
     p("RFPULSE_FREQ_MAX_HZ", _G, "펄스 주파수 상한(레시피 검사)", "Hz", I, 30000, 1, 100000, safety=H, src=f"{_CC}:379",

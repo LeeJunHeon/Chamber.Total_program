@@ -248,7 +248,12 @@ class RfpStopPollMixin:
                 self._emit("command_failed", f"FORP가 setpoint에서 {pct:.1f}% 이상 이탈({n_f}회 연속)",
                            reason="RFP_FORP", cmd="FORP_MONITOR")
                 self._forp_n = 0
-            self._refp_n = self._refp_n + 1 if self.last_ref >= lim_w else 0
+            # 여유 폭(W-21·22 A — RFPULSE_REFP_HYST_W): 연속 횟수는 'REFP < 한도 − 여유 폭' 일 때만 0, 그 사이면 그대로. 0 이면 v1 그대로
+            hyst = max(0.0, float(self._c("RFPULSE_REFP_HYST_W", 1.0) or 0.0))
+            if self.last_ref >= lim_w:
+                self._refp_n += 1
+            elif self.last_ref < lim_w - hyst:
+                self._refp_n = 0
             if self._refp_n >= n_r:
                 self._emit("status", f"REFP 과다 반사: meas={self.last_ref:.1f}W, limit={lim_w:.1f}W ({self._refp_n}회 연속)")
                 self._emit("command_failed", f"REFP가 {lim_w:.1f}W 이상 ({n_r}회 연속)", reason="RFP_REFP", cmd="REFP_MONITOR")
@@ -257,7 +262,7 @@ class RfpStopPollMixin:
                 if self.last_ref >= warn_w and not self._refp_warn_active:
                     self._emit("status", f"⚠ REFP_WARN: REFP={self.last_ref:.1f}W ≥ {warn_w:.1f}W (공정은 계속 진행)")
                     self._refp_warn_active = True
-                elif self.last_ref < warn_w and self._refp_warn_active:
+                elif self.last_ref < warn_w - hyst and self._refp_warn_active:          # 풀림도 같은 여유 폭
                     self._emit("status", f"REFP 정상 복귀: REFP={self.last_ref:.1f}W < {warn_w:.1f}W")
                     self._refp_warn_active = False
         if self.last_fwd is not None and self.last_ref is not None:

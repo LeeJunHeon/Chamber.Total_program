@@ -161,3 +161,76 @@ def test_bench_rejects_start():
     r.wait(lambda: bool(box), 5.0)
     assert box == ["BENCH_READ_ONLY"] and r.sim.write_pdus() == [] and not r.rf.running
     r.done()
+
+
+# ───────── W-21·22 대조 A — 반사파 대기 여유 폭(RF_REFLECTED_HYST_W) ─────────
+def _raw_for(w, a=0.12940, b=-0.267):
+    return int(round((w - b) / a))
+
+
+def _osc_run(hyst, secs=75):
+    """REF 가 임계 50 W 의 ±0.5 W 를 측정마다 오간다(FWD 5.4 W, 목표 10 W — 처음부터 REF 감시)."""
+    r = PlcRig(rf=True, cfg={"RF_REFLECTED_HYST_W": hyst})
+    box = []
+    r.rf.start(10.0, on_done=box.append)
+    hi, lo = _raw_for(50.5), _raw_for(49.6)
+    t0 = r.c.monotonic()
+    for i in range(secs):
+        r.sim.forced_regs[8], r.sim.forced_regs[9] = 40, (hi if i % 2 == 0 else lo)
+        r.second()
+        if not r.rf.running:
+            break
+    return r, r.c.monotonic() - t0
+
+
+def test_ref_wait_hysteresis_times_out_when_ref_hovers_around_threshold():
+    r, took = _osc_run(1.0)
+    msgs = [e.detail for e in r.pevents if e.kind in ("status", "target_failed")]
+    assert sum(m.startswith("Ref.p(") and "안정화 대기 시작" in m for m in msgs) == 1          # v1 문구 그대로, 한 번만
+    assert not any(m.startswith("Ref.p 안정화 완료") for m in msgs)
+    assert "Ref.p 안정화 시간 초과. 즉시 중단합니다." in msgs and not r.rf.running and 60 <= took <= 66
+    fails = [e for e in r.pevents if e.kind == "target_failed"]
+    assert fails and fails[-1].reason == "RF_REF_TIMEOUT"
+    ws = [e for e in r.pevents if e.kind == "ref_wait"]
+    assert [e.data["phase"] for e in ws] == ["start", "end"] and ws[1].data["why"] == "시간 초과" and ws[1].level == "warn"
+    assert ws[0].level == "warn" and ws[0].data["threshold"] == 50.0 and ws[0].data["max_s"] == 60.0
+    r.done()
+
+
+def test_ref_wait_hysteresis_zero_is_v1_behaviour():
+    r, _ = _osc_run(0.0, secs=75)
+    msgs = [e.detail for e in r.pevents if e.kind in ("status", "target_failed")]
+    starts = sum("안정화 대기 시작" in m for m in msgs)
+    assert starts >= 30 and sum(m.startswith("Ref.p 안정화 완료") for m in msgs) >= 30         # 오갈 때마다 시작·완료(v1)
+    assert "Ref.p 안정화 시간 초과. 즉시 중단합니다." not in msgs and r.rf.running             # 시간 초과가 나지 않음(v1 문제 그대로)
+    ws = [e for e in r.pevents if e.kind == "ref_wait"]
+    assert len(ws) == 2 * starts or len(ws) == 2 * starts - 1                                # 대기 하나마다 시작·끝 한 번씩
+    r.done()
+
+
+def test_ref_wait_released_below_threshold_minus_hyst_and_end_on_stop():
+    r = PlcRig(rf=True, cfg={"RF_REFLECTED_HYST_W": 1.0})
+    box = []
+    r.rf.start(10.0, on_done=box.append)
+    r.wait(lambda: bool(box), 10.0)
+    for raw in (_raw_for(55.0), _raw_for(49.6), _raw_for(49.6), _raw_for(48.0)):         # 시작 → 여유 폭 안(유지) → 풀림
+        r.sim.forced_regs[8], r.sim.forced_regs[9] = 40, raw
+        n0 = r.rf.polls
+        for _ in range(5):
+            r.second()
+            if r.rf.polls > n0:
+                break
+    ws = [e for e in r.pevents if e.kind == "ref_wait"]
+    assert [e.data["phase"] for e in ws] == ["start", "end"] and ws[1].data["why"] == "풀림" and ws[1].level == "info"
+    msgs = [e.detail for e in r.pevents if e.kind == "status"]
+    assert sum(m.startswith("Ref.p 안정화 완료(48.0W)") for m in msgs) == 1
+    r.sim.forced_regs[9] = _raw_for(60.0)                                                  # 다시 대기 → 정지
+    for _ in range(3):
+        r.second()
+    stop = []
+    r.rf.stop(on_done=stop.append)
+    for _ in range(30):
+        r.second()
+    ws = [e for e in r.pevents if e.kind == "ref_wait"]
+    assert [(e.data["phase"], e.data.get("why")) for e in ws][2:] == [("start", None), ("end", "RF 끔")]
+    r.done()

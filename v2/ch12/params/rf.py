@@ -22,6 +22,9 @@ PARAMS: tuple = (
     p("RF_REFLECTED_THRESHOLD_W", _G, "RF Reflected 감시 임계", "W", F, 50.0, 0.0, 600.0, safety=H, v1_default=20.0,
       src="config/settings.json:94 · device/rf_power.py:187", desc="REF 감시 중 반사 > 이 값이면 Ref.p 안정화 대기"),
     p("RF_REFLECTED_WAIT_TIMEOUT_S", _G, "Ref.p 안정화 최대 대기", "s", F, 60.0, 1.0, 3600.0, safety=H, src="lib/config_common.py:184"),
+    p("RF_REFLECTED_HYST_W", _G, "Ref.p 대기 여유 폭", "W", F, 1.0, 0.0, 50.0, safety=M, src="v2(W-21·22 대조 A — 챔버K 실장비 시험 2026-11-25)",
+      desc="Ref.p 안정화 대기는 REF > 감시 임계면 시작하고 'REF ≤ 임계 − 이 값' 이어야 풀린다. 그 사이면 대기를 이어 가고 시간은 대기 시작부터 "
+           "이어서 센다(임계를 오가도 시간 초과가 난다). 0 = v1 그대로(임계 이하면 곧바로 풀림)"),
     p("RF_BLIND_RAMP_FWD_THRESHOLD_W", _G, "Blind ramp FWD 임계", "W", F, 70.0, 0.0, 600.0, safety=H,
       src="lib/config_common.py:187", desc="FWD 가 이 값에 닿기 전까지 REF 감시 OFF. 0 이거나 목표 ≤ 이 값이면 처음부터 감시"),
     p("RF_BLIND_RAMP_SETTLE_S", _G, "Blind ramp 안정화 대기", "s", F, 60.0, 0.0, 3600.0, safety=H, src="lib/config_common.py:188"),
