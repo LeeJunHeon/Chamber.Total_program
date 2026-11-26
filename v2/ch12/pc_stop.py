@@ -1,7 +1,8 @@
 """플라즈마 클리닝 정지·정리 — v1 runtime/plasma_cleaning_runtime.py 의 _safe_rf_stop·_force_rf_zero_then_set_off·
 _force_finalize_rf_stop·_note_rf_off_unconfirmed·_shutdown_rest_devices·_release_mfcs_and_finalize·_final_cleanup(PC-071~078).
 
-RF 안전 정지(_safe_rf_stop, 1790-1832) — 모든 종료 경로 공통
+RF 안전 정지(_safe_rf_stop, 1790-1832) — 모든 종료 경로 공통(S37 PLC 통신 끊김 중단이고 PLC 링크가 끊겨 있으면 rf.stop 만 보내고 0 W 확인을
+  기다리지 않고 나머지 장치로 — F, 다시 연결되면 S38 이 남은 파워를 끈다)
   공정 타이머 끔 → rf.cleanup()(= RfPower.stop) PC_RF_CLEANUP_TIMEOUT_S 5 s → wait_power_off PC_RF_WAIT_POWER_OFF_TIMEOUT_S 15 s
   → 0 W 확인 완료 신호가 없으면: RF 안쪽 동작(램프다운·보정·측정) 먼저 멈춤 → '강제 0W/SET OFF' → RF 상태 강제 초기화 → 나머지 장치.
   v1 cleanup() 은 kick 램프다운(목표 > PC_RF_RAMP_KICK_THRESHOLD_W)이면 램프다운을 띄우고 바로 돌아오고, 그 밖(직접 OFF)은 0 W 확인까지
@@ -118,6 +119,16 @@ class StopIO:
             except Exception:
                 pass
 
+    def plc_comm_lost_now(self) -> bool:
+        """S37 PLC 통신 끊김 중단(abort_reason PLC_COMM_LOST)이고 지금 PLC 링크가 끊겨 있는가."""
+        plc = self.dev.plc
+        if str(getattr(self, "abort_reason", "") or "") != "PLC_COMM_LOST" or plc is None:
+            return False
+        try:
+            return not bool(plc.connected)
+        except Exception:
+            return False
+
     def safe_rf_stop(self) -> None:
         self.process_timer_active = False
         rf = self.dev.rf
@@ -128,8 +139,14 @@ class StopIO:
         wait_to = self._cfgf("PC_RF_WAIT_POWER_OFF_TIMEOUT_S", 15.0)
         early = rf.ramping_down and not rf.running             # v1 cleanup 첫 줄 — 이미 내리는 중이면 바로 돌아옴
         inline = (not early) and rf.direct and rf.target_power <= rf.p("kick_th")
+        lost = self.plc_comm_lost_now()
         box = Box(self.clock)
         rf.stop(on_done=box.set)
+        if lost:                                               # S37 PLC 통신 끊김 중단(F) — 0 W 확인을 기다리지 않는다
+            self.log("RF", "PLC 통신 끊김 — RF 0 W 확인을 기다리지 않고 나머지 장치로(다시 연결되면 남은 파워 정리)")
+            self.note_rf_off_unconfirmed("PLC 통신 끊김 — 0W 확인 못 함")
+            self.shutdown_rest_devices()
+            return
         ok_done = lambda: box.done and box.value is None        # noqa: E731 — 0 W 확인 완료 신호
         if inline:
             self.clock.wait_until(self.clock.monotonic() + cleanup_to, lambda: box.done)

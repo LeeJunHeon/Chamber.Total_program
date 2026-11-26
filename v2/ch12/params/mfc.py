@@ -7,7 +7,7 @@ v2 는 공통 키 하나로 둔다(채널마다 다르게 쓰던 키는 ch1/ch2 
 """
 from __future__ import annotations
 
-from v2.ch12.params._base import Dropped, E, F, I, B, IDLE, L, LIVE, M, RESTART, S, inst, need, p, rule
+from v2.ch12.params._base import Dropped, E, F, H, I, B, IDLE, L, LIVE, M, RESTART, S, inst, need, p, rule
 
 _S = "config/settings.json"
 _C = "lib/config_common.py"
@@ -63,6 +63,9 @@ PARAMS: tuple = (
     _m("ZERO_MIN_IDLE_SEC", "영점 전 가스 멈춤 시간", "s", F, 10.0, 0.0, 600.0, src="v2(W-21·22 대조 C — 챔버K 실장비 시험 2026-11-25)",
        apply=LIVE, desc="압력 센서·MFC 영점을 보내기 전에 그 챔버의 모든 채널 유량 꺼짐(R69)·MFC 밸브 열림(R6)이 이 시간 이상 이어지고 PLC 가스 밸브"
        "(Ar·O₂·N₂·Main 가스)가 닫혀 있어야 한다. 시간만 모자라면 남은 만큼 기다렸다 보내고, 다른 조건이 안 맞으면 그 영점만 건너뛰고 경고. 0 = 시간 조건 없음"),
+    _m("MFC_COMM_LOSS_ABORT_SEC", "MFC 통신 끊김 공정 중단", "s", F, 30.0, 0.0, 120.0, safety=H,
+       src="v2(F 통신 끊김 중단 — 사용자 결정 2026-11-26, v1 에 없음 · 규칙 S37)",
+       desc="공정이 전원을 켠 뒤 그 챔버 MFC 가 이 시간 넘게 읽히지 않으면 공정을 멈춥니다. 0 = 끔"),
     _m("MFC_READ_MODE", "MFC 1초 읽기 방식", "", E, "split",
        src="v2(사용자 결정 2026-11-13 D407 — D405 개정)", apply=IDLE,
        desc="split(기본) = MFC_TICK_EVERY 는 매 tick, MFC_TICK_ROTATE 는 tick 마다 1개씩 차례로. all = 9개(R60·R5·R6·R69·R1~R4·R7)를 매 tick 전부(2026-11-09 E1 — 1초 예산 위험, bench 로 확인)",

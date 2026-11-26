@@ -35,7 +35,7 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
 버전 히스토리
   1  첫 판(7단계 — 챔버K 묶음 버전 12 의 필드 의미 그대로 + chambers, 챔버별 공정 맥락)
   2  4단계 — commands(명령 표 58+·portalOnly·webOnly·target·PLC 버튼 51·사유 표)·stopSequence(safety_rules.public — 챔버 정지 순서·
-     끝 정지 금지 단계·PC/TSP 정지·allStopSequence·powerOffOnly·규칙 S1~S36)·states(process_states.STATES), 1초 행 블록
+     끝 정지 금지 단계·PC/TSP 정지·allStopSequence·powerOffOnly·규칙 S1~S38)·states(process_states.STATES), 1초 행 블록
      ch2.heater(PLC 히터 해독 + 엔진 열)·ch2.thk(두께 판정 — 엔진 열) 추가(chambers.ch2.blocks 에도), eventKinds 에
      monitor_card·anomaly·client_process·error_event·resumed·safety step/error·command·ui·패널 결과·robot_api
   3  화면 빠진 기능(UI-098·118~127) — 명령 THICKNESS_WINDOW(두께 Factor·재료 창 값 읽기 — 결과 value 를 사건 thickness/window 로,
@@ -82,6 +82,9 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
      B: RF 꺼짐 표시 — snapshot {ch2,pc}.rf.cmd_on(SET 래치 · 쓰기값 > 0 또는 모름)·uncommanded(cmd_on 아님 · Forward ≥
      RF_UNCOMMANDED_FWD_W 5 W), eventKinds rf/rf_uncommanded(warn)·rf_uncommanded_end(info) 시작·끝 한 번씩, params RF_UNCOMMANDED_FWD_W.
      C: 영점 보호 — params ZERO_MIN_IDLE_SEC(10 s), eventKinds mfc/zero_skipped(warn — 걸린 조건)·mfc/zero_wait(남은 시간 기다림, 상세).
+  18 2026-11-26 통신 끊김 중단·절전 막기·작은 고침(F·G·H) — F: 안전 규칙 S37 통신 끊김 공정 중단(v1 에 없음 — 사용자 결정 2026-11-26)·
+     S38 PLC 재연결 뒤 남은 파워 정리, params PLC_COMM_LOSS_ABORT_SEC(15 s)·MFC_COMM_LOSS_ABORT_SEC(30 s), 사유 PLC_COMM_LOST·MFC_COMM_LOSS
+     (safety fired S37 warn 한 번 · run_end 사유). 아래 줄(G·H)이 같은 판에 더해진다.
 """
 from __future__ import annotations
 
@@ -97,7 +100,7 @@ from v2.ch12 import snapshot_fields as SF
 from v2.ch12 import web_blocks as WB
 from v2.ch12.hub import optional_module
 
-EXPORT_VERSION = 17
+EXPORT_VERSION = 18
 
 # 웹이 받는 공정 이벤트(엔진이 system.emit(source="process:<c>", kind, event=data) 로 내는 것 — hub 가 run_* 메시지로 바꾼다)
 EVENTS: tuple = (

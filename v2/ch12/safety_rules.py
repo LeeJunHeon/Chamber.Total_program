@@ -5,7 +5,9 @@ v2/chk/safety_rules.py 와 같은 모양(Rule·Act·SeqStep, 평가 위치·종�
 DC Pulse AUTO_STOP·RF Pulse FORP/REFP·IG 실패·MFC 실패·두께 E848·히터 E830~E833 …)은 엔진·드라이버가 v1 처럼 이미 처리하므로
 표에는 그 위치만 적는다(impl — safety.IMPLEMENTED_IN 과 같은 값). 안전 엔진(safety.Ch12Safety)이 직접 실행하는 것은 v1 의 상위
 동작과 합의된 변경뿐이다: ALL STOP(D05), 프로그램 시작 때 남은 파워 정리(지시 3장 (6) — 챔버K S51), 의도적 종료 때 파워 출력만 끄기
-(챔버K 결정 4). 가스 밸브는 PLC 래더 인터락이라 소프트웨어 규칙 없음(지시 4장), RF/DC 파워는 PLC 인터락이 없어 소프트웨어가 끈다.
+(챔버K 결정 4), 통신 끊김 공정 중단(S37)·PLC 재연결 뒤 남은 파워 정리(S38).
+'새 판정 규칙 금지'의 예외: S37·S38 은 v1 에 없는 새 규칙이다(사용자 결정 2026-11-26 — 메인 증착 중 PLC·MFC 가 끊겨도 공정이 시간 끝까지
+가고, PLC 로 끄는 전원이 켜진 채 남던 것). 설정 이름은 챔버K 와 같다(PLC_COMM_LOSS_ABORT_SEC·MFC_COMM_LOSS_ABORT_SEC, 0 = 끔). 가스 밸브는 PLC 래더 인터락이라 소프트웨어 규칙 없음(지시 4장), RF/DC 파워는 PLC 인터락이 없어 소프트웨어가 끈다.
 
 평가 위치(where): plc250(PLC 빠른 폴링 — 챔버12 v1 에는 없음) · tick(1초 행) · event:<이름> · state:<상태> · command · config · worker
 종류(kind): trip(조건 → 중단·OFF) · reject(명령·시작 거부) · notify(알림만) · recover(복구·시작 때 안전 상태) · maintain(늘 하는 동작) ·
@@ -222,11 +224,26 @@ RULES: Tuple[Rule, ...] = (
     R("S36", "로봇 명령 인터락", "reject", "command",
       "게이트 상태·busy·챔버 잠금·Main Valve·로드락 전환 중 판정 — v1 handlers 그대로(E301·E302·E205·E70x …)", "robot",
       "robot_ops(robot_base·robot_status·robot_vacuum·robot_motion)", "host/handlers.py (ROB-*)"),
+    # ── 통신 끊김(v1 에 없음 — 사용자 결정 2026-11-26) ──
+    R("S37", "통신 끊김 공정 중단", "trip", "tick",
+      "챔버 공정이 전원을 켠 뒤(DC1·DC2·DC Pulse·RF Pulse·RF 켜기 단계 시작)부터 정지 순서가 시작되기 전까지, PLC 또는 그 챔버 MFC 의 "
+      "1초 행 품질(plc.q·chN.mfc.q)이 fail(또는 링크가 끊긴 채 stale)인 시간이 설정 이상이면 그 챔버 공정 중단(지금 abort 경로 — 정지 "
+      "순서, 끊긴 장치 단계가 실패해도 끝까지). Plasma Cleaning 도 RF 가 켜진 동안 같은 규칙(PC 가 쓰는 챔버 MFC). ok·late 행이 오면 "
+      "0 으로, 명령에 양보해 건너뛴 stale(링크 살아 있음)·suppressed 행은 세지 않는다. 전원을 켜기 전 단계는 판정하지 않는다. 0 = 끔",
+      "chamber", "safety.Ch12Safety.comm_loss", "v1 에 없음 — 사용자 결정 2026-11-26(F · 챔버K 와 같은 설정 이름)",
+      ("PLC_COMM_LOSS_ABORT_SEC", "MFC_COMM_LOSS_ABORT_SEC"), "PLC 15 s · MFC 30 s", states=RUN,
+      actions=(_abort("PLC_COMM_LOST"), _abort("MFC_COMM_LOSS"), _note("warn", "PLC_COMM_LOST")), reason="PLC_COMM_LOST"),
+    R("S38", "PLC 재연결 뒤 남은 파워 정리", "recover", "event:plc_reconnect",
+      "PLC 링크가 끊겼다가 다시 연결된 뒤 공정·운전(챔버·PC·TSP)이 없는 첫 정상 PLC 행에서 S31 과 같은 남은 전원 확인 — PLC D/A "
+      "전원(CH2 DC1·DC2·CH2 RF·PC RF)이 켜져 있으면 그 전원만 끈다. 공정·운전 중이면 아무것도 하지 않는다(알림 없음 — 모두 대기가 될 "
+      "때까지 미룸). bench 는 쓰지 않는다",
+      "shared", "safety.Ch12Safety.reconnect_read", "v1 에 없음 — 사용자 결정 2026-11-26(F)",
+      actions=(Act("RESIDUAL_POWER_OFF"), _note("warn", "RESIDUAL_POWER_OFF")), reason="RESIDUAL_POWER_OFF"),
 )
 
 # 엔진·드라이버가 v1 처럼 이미 처리하는 규칙 — 실행 위치(시험이 표와 같은지 본다)
 IMPLEMENTED_IN: Dict[str, str] = {r.id: r.impl for r in RULES}
-ENGINE_RULES: Tuple[str, ...] = ("S30", "S31", "S32")     # 안전 엔진(safety.py)이 직접 실행
+ENGINE_RULES: Tuple[str, ...] = ("S30", "S31", "S32", "S37", "S38")     # 안전 엔진(safety.py)이 직접 실행
 
 
 # ───────────── 정지 순서 ─────────────

@@ -11,6 +11,9 @@ from typing import Any, Dict, List, Optional, Tuple
 from v2.ch12.process_steps import ProcessStep
 
 HARD_WAIT = ("RF_POWER_STOP", "DC_POWER_STOP", "DC2_POWER_STOP", "RF_PULSE_STOP", "DC_PULSE_STOP")
+# PLC D/A 로 끄는 전원 — S37 PLC 통신 끊김 중단 때 PLC 링크가 끊겨 있으면 정지 순서가 이 단계 확인을 기다리지 않는다(F — 살아 있는
+# 장치 끄기가 판정 뒤 20 s 안에 나가게. 끄기 명령은 보내고 드라이버가 뒤에서 계속, 다시 연결되면 S38 이 남은 파워를 끈다)
+PLC_POWER_STOP = ("DC_POWER_STOP", "DC2_POWER_STOP", "RF_POWER_STOP")
 ZERO_STEP_SLACK_S = 30.0          # process_controller.py:141
 # 장치 실패 source → 그 스텝이 만드는 토큰 종류(_device_token_kinds 3033-3051)
 SOURCE_TOKENS = {"DCPulse": ("DC_PULSE_TARGET", "DC_PULSE_SET", "DCPULSE_OFF"), "RFPulse": ("RF_TARGET", "RFPULSE_OFF"),

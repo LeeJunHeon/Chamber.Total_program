@@ -206,6 +206,14 @@ class ProcessEngine(AdjustMixin, GasStepMixin, MonitorTargetMixin, PF.PreflightM
         total = len(self.runs) if self.queue_mode else 0
         return process_context(self.params.get("process_name", ""), max(0, self.run_idx), total)
 
+    def plc_down(self) -> bool:
+        """PLC 링크가 끊겼는가(S37 정지 순서 — 러너가 PLC 전원 끄기 확인을 기다리지 않을 때)."""
+        p = getattr(self.sys, "plc", None)
+        try:
+            return p is not None and not bool(p.connected)
+        except Exception:
+            return False
+
     def shutdown_steps(self) -> list:
         """STOP·이상 중단 정지 순서 — 지금 구간 장비(v1 _create_shutdown_sequence(current_params))."""
         run = self.runs[self.run_idx] if 0 <= self.run_idx < len(self.runs) else None

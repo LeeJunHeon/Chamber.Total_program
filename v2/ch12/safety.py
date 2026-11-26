@@ -13,6 +13,15 @@ S31 시작 때 남은 파워(지시 3장 (6), 챔버K S51): 프로그램이 켜�
   0 W 확인 → SET OFF, RF 는 v1 STOP 과 같은 램프다운). 펌프·밸브·셔터·가스는 건드리지 않는다. 공정 중이면 알림만. bench 는 쓰지 않는다.
   DC Pulse·RF Pulse 는 포트를 공정이 고를 때만 열어(v1 GAPB-001) 시작 때 읽지 않는다 — 확인 못 함('사용자 확인 필요' 후보).
   히터 남은 RUN 은 히터 엔진 첫 폴링(S21)이 정리한다.
+S37 통신 끊김 공정 중단(v1 에 없음 — 사용자 결정 2026-11-26): comm_track 이 1초 행마다 PLC·chN.mfc 의 '정상으로 읽히지 않은 시간'을
+  센다 — 행 품질 fail(또는 링크가 끊긴 채 stale)인 행이면 앞 행부터의 시간만큼 늘고, ok·late 행이면 0, 명령에 양보해 건너뛴 stale(링크
+  살아 있음)·suppressed·off 행은 그대로(세지도 지우지도 않음 — 로봇 PLC 명령이 길게 이어져도 중단 안 됨). comm_loss 는 챔버 공정이
+  전원 켜기 단계(POWER_ON_ACTIONS)를 시작한 뒤·정지 순서 전(power_armed)에만 PLC ≥ PLC_COMM_LOSS_ABORT_SEC 또는 그 챔버 MFC ≥
+  MFC_COMM_LOSS_ABORT_SEC 면 경고 사건 1번 + engine.abort(PLC_COMM_LOST·MFC_COMM_LOSS) — 지금 abort 경로(정지 순서) 그대로.
+  Plasma Cleaning 은 PC RF 가 켜진 동안(pc_armed) 같은 규칙(PC 가 쓰는 챔버 MFC) → pc.abort. 0 = 끔.
+S38 PLC 재연결 뒤 남은 파워(v1 에 없음 — 같은 결정): PLC 링크가 끊긴 행(fail 이고 링크 끊김)을 본 뒤, 공정·운전이 없는 첫 정상 PLC
+  행에서 S31 과 같은 확인으로 남은 PLC D/A 전원만 끈다(reconnect_read). 공정·운전 중이면 아무것도 하지 않고(알림 없음) 모두 대기가
+  될 때까지 미룬다(S37 중단 뒤 정지 정리 중에 PLC 가 돌아온 경우 — PC RF 가 켜진 채 남지 않게).
 S32 의도적 종료(챔버K 결정 4): power_off_only(reason) — 챔버 공정을 멈추고(새 장비 명령을 보내지 않게 붙잡음 — 정지 순서를 돌리지 않음:
   돌리면 MV·가스 밸브를 닫는다, run_end error PROGRAM_EXIT), 확인을 기다리지 않는 OFF 를 먼저 다 보낸 뒤 deadline_s 까지 결과를 기다린다:
   DC1·DC2 OFF · RF(CH2·PC) 0 W → SET OFF(램프다운 없음) · 연결된 DC Pulse OUTPUT OFF · RF Pulse RF OFF · 히터 RUN=0 ·
@@ -30,6 +39,8 @@ from v2.common.safety_engine import SafetyEvent
 from v2.ch12 import process_states as PS
 
 FRESH = ("ok", "late")
+POWER_ON_ACTIONS = frozenset({"DC_POWER_SET", "DC2_POWER_SET", "DC_PULSE_START", "RF_PULSE_START", "RF_POWER_SET"})
+COMM_DEVS = ("plc", "ch1.mfc", "ch2.mfc")
 FORCE_DEADLINE_S = 4.0            # 의도적 종료 — 콘솔 창 닫기는 약 5 s 안에 끝나야 한다(챔버K 와 같은 여유)
 DC_UNITS = ((1, "ch2.dc.dc1_enable", "plc.dcv_write_0"), (2, "ch2.dc.dc2_enable", "plc.dcv_write_3"))
 RF_UNITS = (("ch2", "ch2.rf.enable", "plc.dcv_write_2", "ch2.rf.fwd_w"), ("pc", "pc.rf.enable", "plc.dcv_write_1", "pc.rf.fwd_w"))
@@ -47,6 +58,14 @@ def rf_zero_off(drv, on_done: Callable[[Optional[str]], None]) -> None:
     drv._finish_power_off(lambda ok: drv._end(ok, msg="RF 파워 즉시 OFF(프로그램 종료)", idle=True))
 
 
+def power_armed(e) -> bool:
+    """S37 판정 구간 — 이번 공정(행)이 전원 켜기 단계를 시작했고 정지 순서는 아직(러너가 돌고 shutdown·실패·STOP 요청 없음)."""
+    r = getattr(e, "runner", None)
+    if r is None or not r.is_running or r.shutdown or r.failed or r.stop_requested:
+        return False
+    return any(t[2] in POWER_ON_ACTIONS and not t[4] for t in list(r.trace))
+
+
 class Ch12Safety:
     def __init__(self, system, proc: Dict[str, Any], pc=None, tsp=None, heater=None) -> None:
         self.sys, self.clock, self.cfg = system, system.clock, system.cfg
@@ -62,6 +81,10 @@ class Ch12Safety:
         self.forced: Optional[dict] = None
         self._forced_lk = threading.Lock()
         self._held: set = set()
+        self.comm_lost_s: Dict[str, float] = {k: 0.0 for k in COMM_DEVS}   # S37 — 정상으로 읽히지 않은 시간(s)
+        self._comm_prev_t: Optional[float] = None
+        self._comm_fired: Dict[str, str] = {}      # 대상(ch1·ch2·pc) → 사유 — 판정 구간마다 한 번
+        self._plc_was_down = False                 # S38 — PLC 링크가 끊긴 행을 봄
 
     # ───────── 이벤트 ─────────
     def _emit(self, kind: str, rule: str, code: str, detail: str, level: str = "info") -> SafetyEvent:
@@ -140,10 +163,93 @@ class Ch12Safety:
 
     # ───────── 1초 행 ─────────
     def on_row(self, view) -> None:
+        self.comm_track(view)
         if not self.first_done and view.q("plc") in FRESH:
             self.first_done = True
+            self._plc_was_down = False
             self.first_read(view)
+        elif self._plc_was_down and view.q("plc") in FRESH and not self.any_busy():
+            self._plc_was_down = False                # 공정·운전 중이면 기다림(아무것도 하지 않음) — 모두 대기인 첫 정상 행에서
+            self.reconnect_read(view)
+        self.comm_loss(view)
         self._all_stop_tick()
+
+    # ───────── S37 통신 끊김 공정 중단 ─────────
+    def _link_up(self, dev: str) -> Optional[bool]:
+        d = getattr(self.sys, "plc", None) if dev == "plc" else (getattr(self.sys, "mfc", {}) or {}).get(dev.split(".")[0])
+        w = getattr(d, "worker", None)
+        try:
+            return None if w is None else bool(w.connected)
+        except Exception:
+            return None
+
+    def comm_track(self, view) -> None:
+        """1초 행 품질로 장치마다 '정상으로 읽히지 않은 시간'을 센다(머리말 S37)."""
+        now = self.clock.monotonic()
+        dt = 0.0 if self._comm_prev_t is None else max(0.0, now - self._comm_prev_t)
+        self._comm_prev_t = now
+        for dev in COMM_DEVS:
+            q = view.q(dev)
+            if q in FRESH:
+                self.comm_lost_s[dev] = 0.0
+            elif q == "fail" or (q == "stale" and self._link_up(dev) is False):
+                self.comm_lost_s[dev] += dt
+                if dev == "plc" and self._link_up("plc") is False:
+                    self._plc_was_down = True
+
+    def _comm_limit(self, key: str) -> float:
+        try:
+            return max(0.0, float(self.cfg.get(key, 0.0) or 0.0))
+        except Exception:
+            return 0.0
+
+    def _comm_hit(self, ch: Optional[str]) -> Optional[tuple]:
+        """(사유, 장치 이름, 끊긴 시간, 기준) 또는 None — PLC 먼저."""
+        lim = self._comm_limit("PLC_COMM_LOSS_ABORT_SEC")
+        if lim > 0 and self.comm_lost_s["plc"] >= lim:
+            return "PLC_COMM_LOST", "PLC", self.comm_lost_s["plc"], lim
+        lim = self._comm_limit("MFC_COMM_LOSS_ABORT_SEC")
+        dev = f"{ch}.mfc"
+        if ch and lim > 0 and dev in self.comm_lost_s and self.comm_lost_s[dev] >= lim:
+            return "MFC_COMM_LOSS", f"{ch.upper()} MFC", self.comm_lost_s[dev], lim
+        return None
+
+    def pc_armed(self) -> Optional[str]:
+        """Plasma Cleaning 이 돌고(정지 요청 없음) PC RF 가 켜져 있으면 PC 가 쓰는 챔버(ch1·ch2), 아니면 None."""
+        pc = self.pc
+        if pc is None or not getattr(pc, "running", False) or getattr(pc, "stop_requested", False) \
+                or getattr(pc, "abort_reason", None):
+            return None
+        d = (getattr(self.sys, "rf", {}) or {}).get("pc")
+        if d is None or not getattr(d, "running", False) or getattr(d, "ramping_down", False):
+            return None
+        return f"ch{int(getattr(pc, 'ch', 1) or 1)}"
+
+    def comm_loss(self, view=None) -> None:
+        targets = [(ch, e, ch if power_armed(e) else None) for ch, e in self.proc.items() if e is not None]
+        if self.pc is not None:
+            targets.append(("pc", self.pc, self.pc_armed()))
+        for key, eng, mfc_ch in targets:
+            if mfc_ch is None:
+                self._comm_fired.pop(key, None)
+                continue
+            if key in self._comm_fired:
+                continue
+            hit = self._comm_hit(mfc_ch)
+            if hit is None:
+                continue
+            code, dev, secs, lim = hit
+            self._comm_fired[key] = code
+            who = "Plasma Cleaning" if key == "pc" else key.upper()
+            detail = f"{who} — {dev} 가 {secs:.0f} s 동안 읽히지 않아 공정을 멈춥니다(기준 {lim:g} s)"
+            self._emit("fired", "S37", code, detail, "warn")
+            try:
+                if key == "pc":
+                    eng.abort(code)
+                else:
+                    eng.abort(code, detail, source="SAFETY")
+            except Exception as ex:
+                self._emit("error", "S37", "INTERNAL_ERROR", f"{who}: {ex!r}", "error")
 
     # ───────── S31 시작 때 남은 파워 ─────────
     def residual_found(self, view) -> List[tuple]:
@@ -181,17 +287,29 @@ class Ch12Safety:
                 self._emit("fired", "S31", "RESIDUAL_POWER_OFF", f"{name} {txt} — bench(읽기 전용)라 보내지 않음", "info")
                 continue
             self._emit("fired", "S31", "RESIDUAL_POWER_OFF", f"시작 때 {name} 출력이 남아 있음({txt}) — 파워만 끔", "warn")
-            self.residual.append((name, kind))
-            done = (lambda r, n=name: self._emit("released", "S31", "RESIDUAL_POWER_OFF",
-                                                  f"{n} 꺼짐" if r is None else f"{n} 끄기 확인 실패({r})",
-                                                  "info" if r is None else "error"))
-            try:
-                drv.enabled = True                    # 이번 실행에 켜지 않았어도 0 W → SET OFF 까지
-                if kind == "rf":
-                    drv.last_sent = max(0.0, float(fwd or 0.0))   # v1 STOP 과 같은 램프다운(측정 W 부터)
-                drv.stop(on_done=done)
-            except Exception as e:
-                self._emit("error", "S31", "INTERNAL_ERROR", f"{name}: {e!r}", "error")
+            self._residual_off("S31", name, drv, kind, fwd)
+
+    def _residual_off(self, rule: str, name: str, drv, kind: str, fwd) -> None:
+        self.residual.append((name, kind))
+        done = (lambda r, n=name: self._emit("released", rule, "RESIDUAL_POWER_OFF",
+                                              f"{n} 꺼짐" if r is None else f"{n} 끄기 확인 실패({r})",
+                                              "info" if r is None else "error"))
+        try:
+            drv.enabled = True                    # 이번 실행에 켜지 않았어도 0 W → SET OFF 까지
+            if kind == "rf":
+                drv.last_sent = max(0.0, float(fwd or 0.0))   # v1 STOP 과 같은 램프다운(측정 W 부터)
+            drv.stop(on_done=done)
+        except Exception as e:
+            self._emit("error", rule, "INTERNAL_ERROR", f"{name}: {e!r}", "error")
+
+    # ───────── S38 PLC 재연결 뒤 남은 파워 ─────────
+    def reconnect_read(self, view) -> None:
+        """PLC 가 다시 연결된 뒤 첫 정상 행 — 공정·운전이 없을 때만 S31 과 같은 확인으로 남은 D/A 전원만 끈다(있으면 알림 없음)."""
+        if self.any_busy() or self.bench:
+            return
+        for name, drv, kind, txt, fwd in self.residual_found(view):
+            self._emit("fired", "S38", "RESIDUAL_POWER_OFF", f"PLC 재연결 뒤 {name} 출력이 남아 있음({txt}) — 파워만 끔", "warn")
+            self._residual_off("S38", name, drv, kind, fwd)
 
     # ───────── S32 의도적 종료 — 파워 출력만 ─────────
     def hold_process(self, e, reason: str) -> bool:
@@ -296,4 +414,5 @@ class Ch12Safety:
     # ───────── 보기 ─────────
     def public_state(self) -> dict:
         return {"stopping": self.stopping, "allStops": self.all_stops, "residual": [list(x) for x in self.residual],
-                "forced": self.forced, "firstRead": self.first_done}
+                "forced": self.forced, "firstRead": self.first_done,
+                "commLostS": {k: round(v, 1) for k, v in self.comm_lost_s.items()}}

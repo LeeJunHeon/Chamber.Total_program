@@ -22,7 +22,7 @@ from typing import Any, Dict, List, Optional, Tuple
 from v2.ch12.eta import EtaClock
 from v2.ch12.process_steps import ProcessStep
 
-from v2.ch12.process_tokens import (HARD_WAIT, SOURCE_TOKENS, ZERO_STEP_SLACK_S, Countdown, Expect, RunResult,  # noqa: F401
+from v2.ch12.process_tokens import (HARD_WAIT, PLC_POWER_STOP, SOURCE_TOKENS, ZERO_STEP_SLACK_S, Countdown, Expect, RunResult,  # noqa: F401
                                     StepFailure, _cfg, _ms, _norm_err, delay_countdown, fmt_hms,
                                     rf_power_stop_timeout_ms, tokens_for)
 
@@ -379,7 +379,15 @@ class StepRunner:
                           _ms(self.cfg, "SHUTDOWN_STEP_TIMEOUT_MS", 2500))
                 if a == "RF_POWER_STOP":
                     lim = rf_power_stop_timeout_ms(self.cfg, self.n, lim)
-                got = self._wait(lambda: ex.over, lim / 1000.0)
+                lost = self._plc_lost_skip(a)
+                got = self._wait(lambda: ex.over or lost(), lim / 1000.0)
+                if got and not ex.over and lost():
+                    self._log(f"PLC 통신 끊김 — {a} 확인을 기다리지 않고 다음 단계로(다시 연결되면 남은 파워 정리)")
+                    with self.lk:
+                        if self.expect is ex:
+                            ex.cancel("plc-comm-lost")
+                            self.expect = None
+                    return
                 if not got:
                     self.step_failed("Shutdown", f"{a} timeout ({lim / 1000:.0f}s)")
             else:
@@ -407,6 +415,13 @@ class StepRunner:
             if not ex.over and self.expect is ex:
                 ex.cancel("abort")
                 self.expect = None
+
+    def _plc_lost_skip(self, action: str):
+        """S37 PLC 통신 끊김 중단(사유 PLC_COMM_LOST)의 정지 순서에서 PLC 로 끄는 전원 단계면 'PLC 링크 끊김' 판정 함수, 아니면 늘 False."""
+        if action not in PLC_POWER_STOP or self.err.get("code") != "PLC_COMM_LOST":
+            return lambda: False
+        f = getattr(self.h, "plc_down", None)
+        return f if callable(f) else (lambda: False)
 
     # ═══════════════════════ 대기·카운트다운(1633-1708) ═══════════════════════
     def _countdown(self, duration_ms: int, msg: str) -> None:
