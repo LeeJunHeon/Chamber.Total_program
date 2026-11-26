@@ -4,13 +4,16 @@
 'Power Select OFF (SW_POWER_SELECT)'). 운전 화면에는 이 함수가 용어표로 쓴 이름을 따로 싣는다(스냅샷 <c>.proc.step_label·
 엔진 화면 상태 step_label·사건 process/step). 이름은 동작(action)·인자(params)에서 만들고, 숫자는 스텝 문구에서 읽는다.
 모르는 동작은 스텝 문구를 그대로 돌려준다(시험이 골든의 모든 동작이 이름을 갖는지 본다). 순수 함수 — 장비·기록에 닿지 않는다.
+대상 'MV'(v1 문구 '메인 밸브 열기/닫기')는 진공 MV(M_V_n_SW)가 아니라 가스 Main 밸브 MAIN_n_GAS_SW(PLC 이름 'Main 가스')를 여닫는다
+(process_actions — W-21·22 대조 E) → 화면 이름 'Main 가스 열기/닫기'. v1 문구와 진공 MV 이름(PLC 버튼 'CHn MV')은 그대로.
 """
 from __future__ import annotations
 
 import re
 from typing import Any, Optional
 
-_GAS_PLC = {"AR": "Ar 밸브", "O2": "O₂ 밸브", "N2": "N₂ 밸브"}
+_GAS_PLC = {"AR": "Ar 밸브", "O2": "O₂ 밸브", "N2": "N₂ 밸브", "MAIN": "Main 가스"}
+_MAIN_GAS = "Main 가스"           # 대상 'MV' = MAIN_n_GAS_SW(PLC 버튼 이름 'CHn Main 가스') — 진공 MV 가 아님
 _GAS_CH = {1: "Ar", 2: "O₂", 3: "N₂"}
 _GUN = {"G1": "Gun1 셔터", "G2": "Gun2 셔터", "G3": "Gun3 셔터"}
 _POWER_SET = {"DC_POWER_SET": "DC1", "DC2_POWER_SET": "DC2", "RF_POWER_SET": "RF Power"}
@@ -39,7 +42,7 @@ def _plc(params: tuple, msg: str) -> Optional[str]:
     open_close = "열기" if on else "닫기"
     on_off = "켜기" if on else "끄기"
     if tgt == "MV":
-        name = f"MV {open_close}"
+        name = f"{_MAIN_GAS} {open_close}"
     elif tgt == "MS":
         name = f"Main 셔터 {open_close}"
     elif tgt in _GUN:

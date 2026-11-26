@@ -35,13 +35,33 @@ def test_step_events_snapshot_and_state_carry_screen_names(tmp_path):
         assert x.detail == x.data["label"] == step_label(s) and x.data["action"] == s.action
         assert x.data["message"] == s.message                                     # v1 스텝 문구 그대로(data 에)
     labels = [x.data["label"] for x in ev]
-    assert "MV 열기" in labels and "Main 셔터 열기" in labels and "RF Pulse 켜기 120 W" in labels and "MV 닫기" in labels
+    assert "Main 가스 열기" in labels and "Main 셔터 열기" in labels and "RF Pulse 켜기 120 W" in labels and "Main 가스 닫기" in labels
+    assert not any(x.startswith("MV ") for x in labels)          # 대상 'MV' 는 가스 Main 밸브(MAIN_n_GAS_SW) — 진공 MV 이름을 쓰지 않음
     assert all(1 <= x.data["index"] <= x.data["total"] for x in ev) and ev[0].data["run_id"] == e.run_id
     # 1초 행·엔진 화면 상태에 같은 이름, 엔진 text 는 v1 스텝 문구(또는 카운트다운 문구)
     assert seen and all(snap == lab and st == lab for lab, (snap, st, _t) in seen.items())
     assert any(t == "메인 밸브 열기" for _s, _st, t in seen.values()) or "메인 밸브 열기" in [s.message for s in steps]
     # 공정 로그는 v1 문구 그대로 — 화면 이름은 로그에 들어가지 않는다
     logs = "\n".join(R.logs(e))
-    assert "[공정 " in logs and "메인 밸브 열기" in logs and "MV 열기" not in logs
+    assert "[공정 " in logs and "메인 밸브 열기" in logs and "MV 열기" not in logs and "Main 가스 열기" not in logs   # 공정 txt 는 v1 문구 그대로
     # 끝나면 비운다
     assert e.state_dict()["step_label"] is None and e.snapshot_fields().get("ch1.proc.step_label") is None
+
+
+def test_main_gas_step_name_w21():
+    """W-21·22 대조 E — 공정 단계 대상 'MV'(v1 '메인 밸브 열기/닫기')는 MAIN_n_GAS_SW 를 여닫는다: 화면 이름 'Main 가스', 정지 단계 12 도 같음.
+    v1 스텝 문구·진공 MV(M_V_n_SW) 버튼 이름은 그대로."""
+    import inspect
+    from v2.ch12 import process_actions as PA, safety_rules as SR, step_labels as SL
+    from v2.ch12.process_steps import S
+    src = inspect.getsource(PA)
+    assert 'if nname == "MV":' in src and 'write_switch(f"MAIN_{self.n}_GAS_SW"' in src
+    assert SL.step_label(S("PLC_CMD", "메인 밸브 열기", params=("MV", True, 1))) == "Main 가스 열기"
+    assert SL.step_label(S("PLC_CMD", "[긴급] 메인 밸브 즉시 닫기", params=("MV", False, 2), no_wait=True)) == "긴급 Main 가스 닫기"
+    st12 = [s for s in SR.STOP_SEQUENCE if s.part == "mv_close"][0]
+    assert st12.label == "Main 가스 닫기" and "MAIN_n_GAS_SW" in st12.act
+    assert S("PLC_CMD", "메인 밸브 열기", params=("MV", True, 1)).message == "메인 밸브 열기"
+    from v2.ch12.web_schema import bundle
+    b = bundle({})
+    names = {x["target"].lower(): x["label"] for x in b["plcButtons"]}
+    assert names["m_v_1_sw"] == "CH1 MV" and names["main_1_gas_sw"] == "CH1 Main 가스"

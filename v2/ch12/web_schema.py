@@ -75,6 +75,8 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
      3단), 사유 이름(괄호 없이 26자), 새 열 <c>.proc.step_label·사건 process/step(진행 단계 화면 이름 — step_labels). 설정 이름이 바뀌어
      paramSchemaHash 도 바뀜(저장된 설정 파일은 키가 같아 값 그대로 — 시험). 식별자(code·kind·name·key·열 이름)·사건 message·
      v1 스텝 문구는 그대로.
+  17 2026-11-26 챔버K 실장비 시험(W-21·W-22) 대조 — E: 공정 단계 대상 'MV'(MAIN_n_GAS_SW) 화면 이름 'Main 가스 열기/닫기'
+     (step_label·정지 단계 12 'Main 가스 닫기'·블록 설명). 아래 줄(A·B·C)이 같은 판에 더해진다.
 """
 from __future__ import annotations
 
@@ -90,7 +92,7 @@ from v2.ch12 import snapshot_fields as SF
 from v2.ch12 import web_blocks as WB
 from v2.ch12.hub import optional_module
 
-EXPORT_VERSION = 16
+EXPORT_VERSION = 17
 
 # 웹이 받는 공정 이벤트(엔진이 system.emit(source="process:<c>", kind, event=data) 로 내는 것 — hub 가 run_* 메시지로 바꾼다)
 EVENTS: tuple = (

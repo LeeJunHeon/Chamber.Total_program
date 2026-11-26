@@ -258,7 +258,7 @@ STOP_SEQUENCE: Tuple[SeqStep, ...] = (
     SeqStep(9, "gun_close", "Gun 셔터 닫기", "쓴 건", _PART_SKIP["gun_close"], "PLC G1~G3 OFF"),
     SeqStep(10, "relay", "RF Select 끄기", "CH2 use_power_select", False, "PLC SW_RF_SELECT OFF"),
     SeqStep(11, "gas_close", "가스 밸브 닫기", "", _PART_SKIP["gas_close"], "PLC Ar·O2·N2 OFF"),
-    SeqStep(12, "mv_close", "MV 닫기", "", _PART_SKIP["mv_close"], "PLC MV OFF"),
+    SeqStep(12, "mv_close", "Main 가스 닫기", "", _PART_SKIP["mv_close"], "PLC MAIN_n_GAS_SW OFF"),          # 키 mv_close = v1 '메인 밸브'(가스 Main 밸브)
 )
 END_STOP_MUST_KEEP: Tuple[str, ...] = PST.SHUTDOWN_MUST_KEEP          # ("power", "relay") — 결정 D32
 

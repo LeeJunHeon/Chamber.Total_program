@@ -39,7 +39,7 @@ MAX_BLOCKS = 500
 RESUME_CHECKS: Dict[str, str] = {
     "power_output": "파워 출력 켜짐/꺼짐 — 이 구간에서 켠 DC·DC2·RF·DC Pulse·RF Pulse 가 켜져 있고 끈 것은 꺼져 있음(전력 값은 보지 않음 — 목표값은 저널대로 다시 씀)",
     "shutter": "셔터 — Main Shutter·건 셔터 열림/닫힘이 저널과 같음(PLC 코일)",
-    "gas": "가스 — 메인 밸브·가스 밸브 코일(PLC)이 저널과 같음(유량 값은 보지 않음 — 유량 설정은 저널대로 다시 씀)",
+    "gas": "가스 — Main 가스·가스 밸브 코일(PLC)이 저널과 같음(유량 값은 보지 않음 — 유량 설정은 저널대로 다시 씀)",
     "pressure": "압력 — 값 확인 없음(SP 설정은 다시 쓰고, 도달 대기·이탈 감시는 블록의 원래 로직이 판단)",
     "power_select": "Power Select 릴레이 — SW_RF_SELECT·SW_POWER_SELECT 가 저널과 같음",
     "heater_run": "CH2 히터 RUN·목표값이 저널과 같음",
@@ -129,7 +129,7 @@ BLOCK_DEFS: tuple = (
         P("ar", "bool", default=False, label="Ar"), P("ar_flow", "float", "sccm", None, min=0.0, label="Ar 유량"),
         P("o2", "bool", default=False, label="O₂"), P("o2_flow", "float", "sccm", None, min=0.0, label="O₂ 유량"),
         P("n2", "bool", default=False, label="N₂"), P("n2_flow", "float", "sccm", None, min=0.0, label="N₂ 유량")),
-        "PLC MV ON · 가스마다 PLC 밸브 ON · FLOW_SET · FLOW_ON(가스 단계 설정 PROCESS_GAS_STEP_LEVELS 의 목표보다 작은 중간값을 "
+        "PLC Main 가스(MAIN_n_GAS_SW) ON · 가스마다 PLC 밸브 ON · FLOW_SET · FLOW_ON(가스 단계 설정 PROCESS_GAS_STEP_LEVELS 의 목표보다 작은 중간값을 "
         "작은 순서대로 먼저 FLOW_SET·FLOW_ON — 각 단계 연속 N 회 도달 후 다음)", "pc:2352-2373·main 27decba", desc=_NOT_RESUMABLE_SET),
     BlockDef("pressure_ctrl", "압력 제어", (
         P("target", "float", "mTorr", required=True, label="작업 압력", desc="SP 읽기 실패 때 쓰는 목표(v1 working_pressure)"),
@@ -213,7 +213,7 @@ BLOCK_DEFS: tuple = (
         P("skip", "parts", "", None, enum=SHUTDOWN_SKIPPABLE, label="뺄 단계",
           desc="ms_close·flow_off·valve_open·gun_close·gas_close·mv_close 만. 파워 끄기(power)·릴레이(relay)는 뺄 수 없음"),),
         "v1 정상 종료 절차(구간 장비) — MS 닫기 · 파워 OFF · Flow Off · MFC Valve Open · 건 셔터 닫기 · SW_RF_SELECT OFF · "
-        "PLC 가스 닫기 · MV 닫기", "pc:2737-2832", desc="정지 순서 — 건너뛰기·일시정지·이어가기 없음"),
+        "PLC 가스 닫기 · Main 가스(MAIN_n_GAS_SW) 닫기", "pc:2737-2832", desc="정지 순서 — 건너뛰기·일시정지·이어가기 없음"),
 )
 
 

@@ -194,9 +194,9 @@ def test_step_screen_names_for_every_golden_step():
         assert st.message == m                                    # 스텝 문구는 그대로(이름만 따로)
     assert bad == [], bad[:10]
     pick = {m: step_label(st) for (a, m), st in steps.items()}
-    assert pick["메인 밸브 열기"] == "MV 열기" and pick["Power Select OFF (SW_POWER_SELECT)"] == "Power Select 끄기"
+    assert pick["메인 밸브 열기"] == "Main 가스 열기" and pick["Power Select OFF (SW_POWER_SELECT)"] == "Power Select 끄기"
     assert pick["Power_select: Power Select ON (SW_RF_SELECT)"] == "RF Select 켜기"
-    assert pick["[긴급] 메인 밸브 즉시 닫기"] == "긴급 MV 닫기"
+    assert pick["[긴급] 메인 밸브 즉시 닫기"] == "긴급 Main 가스 닫기"
 
 
 def test_same_word_not_twice_in_one_line():
