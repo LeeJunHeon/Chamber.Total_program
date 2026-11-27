@@ -226,6 +226,7 @@ class MfcDriver:
         self.zero_plc: Optional[Callable[[], Tuple[Optional[bool], str]]] = None   # 조립이 넣음 — (PLC 가스 밸브 모두 닫힘?, 열린 것 이름)
         self.zero_epoch = 0                                       # 대기열 폐기(정지)마다 +1 — 기다리던 영점은 보내지 않음
         self.zero_gaveup: Optional[int] = None                    # H2 — 대기 한도를 넘긴 블록(그때 zero_epoch). 다음 FLOW_OFF·밸브 명령에서 풀림
+        self.zero_wait: Optional[Tuple[float, int]] = None        # Z — 영점 조건 기다리는 중(시작 monotonic, 그때 zero_epoch). 끝나면 None
         worker.on_connect = self._on_connect
 
     # ───────── 설정 ─────────
@@ -419,6 +420,15 @@ class MfcDriver:
                 self.zero_valve_since = now
         else:
             self.zero_valve_since = None
+
+    def zero_wait_text(self, now: Optional[float] = None) -> Optional[str]:
+        """영점 조건을 기다리는 중이면 '영점 대기 n s'(기다린 초 — 챔버K state.run.waitText 와 같은 뜻), 아니면 None.
+        정지(대기열 폐기 — zero_epoch 가 바뀜)·종료면 기다리던 명령이 깨기 전에도 바로 None(Z)."""
+        zw = self.zero_wait
+        if zw is None or zw[1] != self.zero_epoch or self.shutdown:
+            return None
+        now = self.clock.monotonic() if now is None else now
+        return f"영점 대기 {max(0, int(now - zw[0]))} s"
 
     def zero_check(self, now: float) -> Tuple[str, float, str]:
         """영점을 보내도 되나 — ('ok'|'wait'|'skip', 더 기다릴 s, 이유). 조건: 모든 채널 유량 꺼짐(R69)·MFC 밸브 열림(R6)이

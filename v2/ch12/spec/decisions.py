@@ -1030,4 +1030,13 @@ DECISIONS += [
          reason="사용자 지시 2026-11-27(C)", confirm=False,
          where="v2/ch12(app·resume·safety·safety_rules·pc_stop·plasma_cleaning·process_view·drivers/rf·heater·stm100·heater_setup·heater_profile·"
                "blocks·commands·recipe·process_steps·params/*); v2/tests/test_wording_c.py; golden web_ch12_*.json(columnDoc)"),
+    dict(id="D439", title="2026-11-27 영점 대기 표시 — 챔버 상태에 '영점 대기 n s'(Z, 챔버K state.run.waitText 와 같은 뜻)",
+         decision="MFC 영점 보호(zeroing_guarded)가 조건을 기다리는 동안 드라이버 zero_wait=(시작 시각, 그때 zero_epoch). "
+                  "zero_wait_text() = '영점 대기 n s'(기다린 초, 내림) — 기다림이 끝나면(보냄·건너뜀·폐기 — finally) 바로 None, 대기열 폐기"
+                  "(정지 — zero_epoch 가 바뀜)·종료면 기다리던 명령이 깨기 전에도 None. 공정 화면 상태: 1초 행 chN.proc.wait_text(CH1·CH2 만)·"
+                  "엔진 state_dict wait_text·웹 state chambers.chN.waitText — 공정이 돌 때만(STOP 요청·정지 순서면 바로 None). 기다리지 않는 "
+                  "공정은 늘 null(화면이 지금과 같음). 웹·노트북 화면은 단계 표시 옆에 보인다. 묶음 20.",
+         reason="사용자 지시 2026-11-27(Z)", confirm=False,
+         where="v2/ch12/drivers/mfc.py(zero_wait·zero_wait_text); drivers/mfc_ops.py(zeroing_guarded); process_view.py(wait_text); "
+               "snapshot_fields.py; hub.py(waitText); web_schema.py; v2/tests/test_zero_wait_text.py"),
 ]

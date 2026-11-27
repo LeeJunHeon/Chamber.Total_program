@@ -282,33 +282,37 @@ def zeroing_guarded(d, ch: Optional[int], owner):
     lim = max(0.0, float(d.c("ZERO_WAIT_MAX_SEC", 30.0) or 0.0))
     t0 = d.clock.monotonic()
     told = False
-    while True:
-        now = d.clock.monotonic()
-        verdict, left, why = d.zero_check(now)
-        if verdict == "ok":
-            break
-        if verdict == "skip" and (d.zero_gaveup == epoch or now - t0 >= lim - 1e-6):
-            if d.zero_gaveup == epoch:                       # 이 블록은 이미 한도를 넘김 — 다시 기다리지·경고하지 않는다
-                d.status(f"[ZERO_SKIPPED] {what} 건너뜀 — {why}(이 블록은 이미 대기 한도를 넘김)")
+    try:
+        while True:
+            now = d.clock.monotonic()
+            verdict, left, why = d.zero_check(now)
+            if verdict == "ok":
+                break
+            if verdict == "skip" and (d.zero_gaveup == epoch or now - t0 >= lim - 1e-6):
+                if d.zero_gaveup == epoch:                       # 이 블록은 이미 한도를 넘김 — 다시 기다리지·경고하지 않는다
+                    d.status(f"[ZERO_SKIPPED] {what} 건너뜀 — {why}(이 블록은 이미 대기 한도를 넘김)")
+                    return None
+                d.zero_gaveup = epoch
+                d.status(f"[ZERO_SKIPPED] {what} 건너뜀 — {why}({now - t0:.0f} s 기다림)")
+                d.emit("zero_skipped", f"{what} · {why}", cmd=key, owner=owner, channel=ch, level="warn")     # 화면 줄: MFC | 영점 건너뜀 | 이 글
                 return None
-            d.zero_gaveup = epoch
-            d.status(f"[ZERO_SKIPPED] {what} 건너뜀 — {why}({now - t0:.0f} s 기다림)")
-            d.emit("zero_skipped", f"{what} · {why}", cmd=key, owner=owner, channel=ch, level="warn")     # 화면 줄: MFC | 영점 건너뜀 | 이 글
-            return None
-        if verdict == "wait":
-            nap = left + 0.05
-            if not told:
-                d.status(f"[ZERO_WAIT] {what} 전 {left:.1f} s 더 기다림({why})")
-                d.emit("zero_wait", f"{what} · {left:.0f} s · {why}", cmd=key, owner=owner, channel=ch, value=round(left, 1))
-        else:
-            nap = max(0.05, min(1.0, lim - (now - t0) + 0.05))
-            if not told:
-                d.status(f"[ZERO_WAIT] {what} 전 조건 기다림(최대 {lim:g} s — {why})")
-                d.emit("zero_wait", f"{what} · 최대 {lim:g} s · {why}", cmd=key, owner=owner, channel=ch, value=round(lim, 1))
-        told = True
-        yield Sleep(nap)
-        if d.zero_epoch != epoch or d.shutdown:
-            raise OpFailed("PURGED", "전송 전에 대기열에서 폐기됨(정지)")
+            if verdict == "wait":
+                nap = left + 0.05
+                if not told:
+                    d.status(f"[ZERO_WAIT] {what} 전 {left:.1f} s 더 기다림({why})")
+                    d.emit("zero_wait", f"{what} · {left:.0f} s · {why}", cmd=key, owner=owner, channel=ch, value=round(left, 1))
+            else:
+                nap = max(0.05, min(1.0, lim - (now - t0) + 0.05))
+                if not told:
+                    d.status(f"[ZERO_WAIT] {what} 전 조건 기다림(최대 {lim:g} s — {why})")
+                    d.emit("zero_wait", f"{what} · 최대 {lim:g} s · {why}", cmd=key, owner=owner, channel=ch, value=round(lim, 1))
+            told = True
+            d.zero_wait = (t0, epoch)                            # Z — 화면 '영점 대기 n s'(d.zero_wait_text)
+            yield Sleep(nap)
+            if d.zero_epoch != epoch or d.shutdown:
+                raise OpFailed("PURGED", "전송 전에 대기열에서 폐기됨(정지)")
+    finally:
+        d.zero_wait = None                                       # 기다림 끝(보냄·건너뜀·폐기) — 바로 지움
     yield from zeroing(d, ch, owner)
 
 

@@ -493,7 +493,8 @@ class MessageHub:
         return {"procState": g("state"), "runId": g("run_id"), "owner": g("owner"), "recipeRev": g("recipe_rev"),
                 "step": step, "remainS": g("remain_s"), "etaRemainingS": g("eta_remaining_s"), "minTotalS": g("min_total_s"),
                 "paused": g("paused"), "alarms": [a for a in str(al).split(",") if a] if al else [],
-                "stepLabel": g("step_label")}                    # 진행 중 동작의 화면용 이름(묶음 16 ④)
+                "stepLabel": g("step_label"),                    # 진행 중 동작의 화면용 이름(묶음 16 ④)
+                "waitText": g("wait_text")}                      # 영점 대기 n s(Z — 챔버K state.run.waitText 와 같은 뜻)
 
     def _device_timing(self) -> Any:
         return _timing_of(self.sys)

@@ -104,6 +104,8 @@ EXPORT_VERSION 을 올리고 아래 히스토리에 무엇이 바뀌었는지 �
      이름·글, 시작 줄 없음)(D437).
      C: 화면 글의 '끔·켬·안 함·못 함'을 바꿈 — 설정 설명·메모(0 = 사용하지 않음 등)·이름 CHAT_ERR_DEDUP_S, 키 사이 규칙 CH06·CH07, 명령
      PLC_BUTTON·BUZZ_STOP 설명, 블록 main skip 정리 글, 레시피 열 chuck_position 빈 값, 안전 규칙 S4·S18·S37·S39 글, 뺀 설정 사유(D438).
+     Z: 새 열 <c>.proc.wait_text(영점 조건을 기다리는 동안 '영점 대기 n s' — 챔버K runState.waitText 와 같은 뜻, 아니면 null) ·
+     state chambers.<c>.waitText(D439).
 """
 from __future__ import annotations
 

@@ -74,11 +74,24 @@ class ProcessViewMixin:
                     c + "proc.block_count": len(self.blocks), c + "proc.block_type": btype,
                     c + "proc.block_label": inst.label if inst else None,
                     c + "proc.step_label": self.step_label if self.runner.is_running else None,
+                    c + "proc.wait_text": self.wait_text(),
                     c + "proc.block_elapsed_s": None if self.block_t0 is None else round(self.clock.monotonic() - self.block_t0, 1),
                     c + "proc.remain_s": self.runner.remaining_s(), c + "proc.eta_remaining_s": self.eta_remaining_s(),
                     c + "proc.min_total_s": self.min_total_s()})
         out.update(self._targets(c))
         return out
+
+    def wait_text(self) -> Optional[str]:
+        """지금 단계 안의 기다림 글(Z — 챔버K state.run.waitText 와 같은 뜻) — 이 챔버 MFC 가 영점 조건을 기다리는 동안 '영점 대기 n s'.
+        공정이 돌 때만(정지 순서·끝나면 None), 기다림이 끝나거나 STOP(대기열 폐기)이면 바로 None."""
+        r = self.runner
+        if not r.is_running or r.shutdown or r.stop_requested or self.state_name in ("STOPPING", "IDLE"):
+            return None
+        f = getattr(getattr(self.actions, "mfc", None), "zero_wait_text", None)
+        try:
+            return f() if callable(f) else None
+        except Exception:
+            return None
 
     def _targets(self, c: str) -> Dict[str, Any]:
         p = self.params or {}
@@ -123,6 +136,7 @@ class ProcessViewMixin:
     def state_dict(self) -> Dict[str, Any]:
         return {"chamber": self.ch, "state": self.state_name, "text": self.state_text, "running": self.runner.is_running,
                 "step_label": self.step_label if self.runner.is_running else None,          # 화면용 단계 이름(묶음 16 ④)
+                "wait_text": self.wait_text(),                                                # 영점 대기 n s(Z)
                 "run_id": self.run_id, "owner": self.owner, "paused": self.paused, "block_no": self.block_no(),
                 "block_count": len(self.blocks), "recipe_rev": self.seq.rev if self.seq else 0,
                 "queue": {"index": self.run_idx, "total": len(self.runs), "mode": self.queue_mode},

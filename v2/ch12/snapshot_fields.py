@@ -259,6 +259,9 @@ def _ctx_fields(c: str) -> List[FieldDef]:
         FieldDef(p + "block_label", S, "", f"{lb} 단계 이름", source="engine", detail=True),
         FieldDef(p + "step_label", S, "", f"{lb} 진행 중 동작", source="engine", detail=True,
                  desc="지금 스텝의 화면용 이름(step_labels — 용어표, 묶음 16 ④). 스텝 문구(v1)는 공정 txt·엔진 text 그대로"),
+        *([FieldDef(p + "wait_text", S, "", f"{lb} 기다림", source="engine", detail=True,             # Z — 영점은 챔버 공정에만
+                    desc="지금 단계 안의 기다림 글 — 영점 조건을 기다리는 동안 '영점 대기 n s'(기다린 초), 기다리지 않으면 비어 있음",
+                    help="영점을 보내기 전에 유량 꺼짐과 밸브 조건을 기다린 시간입니다.")] if c in ("ch1", "ch2") else []),
         FieldDef(p + "block_elapsed_s", F, "s", f"{lb} 단계 경과", ".0f", source="engine", detail=True),
         FieldDef(p + "remain_s", F, "s", f"{lb} 단계 남은 시간", ".0f", source="engine", detail=True,
                  desc="지금 블록(대기·증착 등)의 남은 초 — 끝이 정해지지 않은 블록은 null"),
